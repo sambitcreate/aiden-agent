@@ -61,10 +61,7 @@ export function WorkspaceToolLauncher({
   const terminalShortcut = useShortcutLabel("terminal.toggle");
   const [more, setMore] = React.useState(false);
   return (
-    <div
-      className="h-full overflow-y-auto p-5 @container"
-      aria-label="Workspace tools"
-    >
+    <div className="h-full overflow-y-auto p-5 @container" aria-label="Workspace tools">
       <form
         className="mb-7"
         onSubmit={(event) => {
@@ -123,15 +120,11 @@ export function WorkspaceToolLauncher({
               <span className="min-w-0 flex-1">
                 <span className="block">{label}</span>
                 {unavailable ? (
-                  <span className="block text-mini font-normal text-tertiary">
-                    {unavailable}
-                  </span>
+                  <span className="block text-mini font-normal text-tertiary">{unavailable}</span>
                 ) : null}
               </span>
               {id === "terminal" ? (
-                <span className="text-mini text-tertiary">
-                  {terminalShortcut}
-                </span>
+                <span className="text-mini text-tertiary">{terminalShortcut}</span>
               ) : null}
             </Button>
           );

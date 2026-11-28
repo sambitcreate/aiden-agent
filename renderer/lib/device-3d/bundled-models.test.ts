@@ -54,10 +54,7 @@ test("every bundled model is recorded with its source and provenance", () => {
     "ipad-pro-13-m5-magic-keyboard",
     "iphone-duo",
   ];
-  assert.deepEqual(
-    sources.models.map((model) => model.id).sort(),
-    [...ids].sort(),
-  );
+  assert.deepEqual(sources.models.map((model) => model.id).sort(), [...ids].sort());
   for (const model of sources.models) {
     assert.equal(model.file, `${model.id}.glb`);
     assert.match(model.sourceUrl, /^https:\/\/www\.apple\.com\//u);
@@ -71,7 +68,9 @@ for (const id of ["iphone-18-pro", "iphone-18-pro-max", "ipad-pro-13-m5"] as con
     const model = await parseQuietly(`${id}.glb`);
     const texture = new Texture();
     const phone = createModelPhoneScene(model.asset, texture, phoneDisplayLayout(null, 1206, 2622));
-    const display = new Box3().setFromObject(model.asset.getObjectByName("device-screen")!).getSize(new Vector3());
+    const display = new Box3()
+      .setFromObject(model.asset.getObjectByName("device-screen")!)
+      .getSize(new Vector3());
     assert.ok(Math.abs(display.y - 2.2) < 1e-3, `display height ${display.y}`);
     // The body surrounds the display.
     assert.ok(phone.width > display.x && phone.height > display.y);
@@ -90,7 +89,8 @@ test("the Magic Keyboard accessory parses with finite, non-empty bounds", async 
 
 test("iphone-duo.glb exposes the hinge rig and three displays, and folds them face to face", async () => {
   const model = await parseQuietly("iphone-duo.glb");
-  for (const name of ["left-half", "right-half"]) assert.ok(model.asset.getObjectByName(name), name);
+  for (const name of ["left-half", "right-half"])
+    assert.ok(model.asset.getObjectByName(name), name);
   const left = model.asset.getObjectByName("left-half")!;
   const right = model.asset.getObjectByName("right-half")!;
   const display = (name: string) => {
@@ -109,13 +109,21 @@ test("iphone-duo.glb exposes the hinge rig and three displays, and folds them fa
   assert.ok(under(innerLeft, left) && under(cover, left) && under(innerRight, right));
   const scene = createDuoScene(model.asset, { 1: new Texture(), 3: new Texture() });
   const normal = (mesh: Mesh) =>
-    new Vector3().fromBufferAttribute(mesh.geometry.getAttribute("normal"), 0).transformDirection(mesh.matrixWorld);
+    new Vector3()
+      .fromBufferAttribute(mesh.geometry.getAttribute("normal"), 0)
+      .transformDirection(mesh.matrixWorld);
   scene.setAngle(180);
   scene.root.updateMatrixWorld(true);
-  assert.ok(normal(innerLeft).dot(normal(innerRight)) > 0.99, "open: both inner halves face the same way");
+  assert.ok(
+    normal(innerLeft).dot(normal(innerRight)) > 0.99,
+    "open: both inner halves face the same way",
+  );
   scene.setAngle(0);
   scene.root.updateMatrixWorld(true);
-  assert.ok(normal(innerLeft).dot(normal(innerRight)) < -0.99, "closed: the inner halves face each other");
+  assert.ok(
+    normal(innerLeft).dot(normal(innerRight)) < -0.99,
+    "closed: the inner halves face each other",
+  );
   assert.equal(scene.restFrames(1)[0]?.face, "cover");
   scene.dispose();
   model.dispose();

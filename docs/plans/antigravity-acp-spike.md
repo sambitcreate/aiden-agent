@@ -12,11 +12,11 @@ Aiden's pin moved from 1.3.0 to **1.4.3**, the registry's current version. Googl
   - The probe container has no IPv6, so it ran with `--enforce_kernel_ipv6_support=false`; normal hosts do not need that flag.
 - **Still open.** A signed-in chat on 1.4.3 (models list, file routing, resume) has not been checked yet.
 
-| Platform | Archive | Server | Harness |
-| --- | ---: | ---: | ---: |
-| darwin-arm64 | 114.1 MB | 282.4 MB | 123.0 MB |
+| Platform      |  Archive |   Server |  Harness |
+| ------------- | -------: | -------: | -------: |
+| darwin-arm64  | 114.1 MB | 282.4 MB | 123.0 MB |
 | darwin-x86_64 | 119.8 MB | 286.7 MB | 127.6 MB |
-| linux-x86_64 | 336.8 MB | 927.7 MB | 133.9 MB |
+| linux-x86_64  | 336.8 MB | 927.7 MB | 133.9 MB |
 | linux-aarch64 | 322.9 MB | 932.7 MB | 127.5 MB |
 
 ## Runtime 1.3.0 supersedes the plan's sizing
@@ -25,14 +25,15 @@ The ACP registry (`agentclientprotocol/registry`, `antigravity-acp/agent.json`) 
 
 The archive is no longer a large PyInstaller one-file bundle:
 
-| Platform | Archive | Server | Harness |
-| --- | ---: | ---: | ---: |
-| darwin-arm64 | 111.5 MB | 278.5 MB | 118.6 MB |
+| Platform      |  Archive |   Server |  Harness |
+| ------------- | -------: | -------: | -------: |
+| darwin-arm64  | 111.5 MB | 278.5 MB | 118.6 MB |
 | darwin-x86_64 | 117.2 MB | 282.8 MB | 124.2 MB |
-| linux-x86_64 | 333.7 MB | 926.5 MB | 130.4 MB |
+| linux-x86_64  | 333.7 MB | 926.5 MB | 130.4 MB |
 | linux-aarch64 | 321.7 MB | 930.8 MB | 123.2 MB |
 
 **Hash provenance.**
+
 - The darwin-arm64 archive was downloaded from `dl.google.com`. Its SHA-256 (`7cd97045…5aa5b88`) and every member size match the Ed25519-signed catalog in `pi-antigravity-acp-provider`, and that catalog's signature verified with the package's embedded public key.
 - The other platforms are pinned from the same verified catalog. The installer re-checks hash, sizes and live identity before activation.
 

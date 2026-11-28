@@ -13,9 +13,16 @@ test("the restore image pin is a fixed https URL on Apple's update CDN with a si
   assert.equal(url.protocol, "https:");
   assert.equal(url.hostname, "updates.cdn-apple.com");
   assert.equal(url.search, "");
-  assert.ok(url.pathname.endsWith(`_${BOT_COMPUTER_RESTORE_IMAGE.version}_${BOT_COMPUTER_RESTORE_IMAGE.build}_Restore.ipsw`));
+  assert.ok(
+    url.pathname.endsWith(
+      `_${BOT_COMPUTER_RESTORE_IMAGE.version}_${BOT_COMPUTER_RESTORE_IMAGE.build}_Restore.ipsw`,
+    ),
+  );
   assert.match(BOT_COMPUTER_RESTORE_IMAGE.sha256, /^[0-9a-f]{64}$/u);
-  assert.ok(Number.isSafeInteger(BOT_COMPUTER_RESTORE_IMAGE.bytes) && BOT_COMPUTER_RESTORE_IMAGE.bytes > 10_000_000_000);
+  assert.ok(
+    Number.isSafeInteger(BOT_COMPUTER_RESTORE_IMAGE.bytes) &&
+      BOT_COMPUTER_RESTORE_IMAGE.bytes > 10_000_000_000,
+  );
   assert.ok(Object.isFrozen(BOT_COMPUTER_RESTORE_IMAGE));
 });
 

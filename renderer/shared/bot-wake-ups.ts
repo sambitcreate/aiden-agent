@@ -22,9 +22,12 @@ export const BOT_WAKE_UP_LIMITS = {
 } as const;
 
 function dayKey(timestamp: number, zone: string | undefined): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(
-    new Date(timestamp),
-  );
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: zone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(timestamp));
 }
 
 /**
@@ -33,12 +36,18 @@ function dayKey(timestamp: number, zone: string | undefined): string {
  * when a daylight-saving change or the clock moved).
  */
 export function botWakeUpWhen(fireAt: number, now: number, zone?: string): string {
-  const clock = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" }).format(
-    new Date(fireAt),
-  );
+  const clock = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(fireAt));
   const day = dayKey(fireAt, zone);
   if (day === dayKey(now, zone)) return `at ${clock}`;
   if (day === dayKey(now + 24 * 60 * 60 * 1_000, zone)) return `tomorrow at ${clock}`;
-  const date = new Intl.DateTimeFormat("en-US", { timeZone: zone, month: "short", day: "numeric" }).format(new Date(fireAt));
+  const date = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    month: "short",
+    day: "numeric",
+  }).format(new Date(fireAt));
   return `on ${date} at ${clock}`;
 }

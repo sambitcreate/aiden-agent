@@ -121,7 +121,14 @@ export function FloatingPlayerFrame({
   };
   const begin = (event: React.PointerEvent<HTMLElement>, edge: DeviceMiniPlayerEdge | null) => {
     if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
-    gesture.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, frame, edge, moved: false };
+    gesture.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      frame,
+      edge,
+      moved: false,
+    };
     event.currentTarget.setPointerCapture(event.pointerId);
     event.stopPropagation();
   };
@@ -141,13 +148,21 @@ export function FloatingPlayerFrame({
     const start = gesture.current;
     if (start?.pointerId !== event.pointerId) return;
     gesture.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
     if (start.moved && live) commit(start.edge ? live : snapDeviceMiniPlayer(live, container));
     setLive(null);
   };
   const onHandleKey = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (event.target !== event.currentTarget || event.metaKey || event.altKey || event.ctrlKey) return;
-    const next = keyboardDeviceMiniPlayer({ key: event.key, shiftKey: event.shiftKey, frame, source, container });
+    if (event.target !== event.currentTarget || event.metaKey || event.altKey || event.ctrlKey)
+      return;
+    const next = keyboardDeviceMiniPlayer({
+      key: event.key,
+      shiftKey: event.shiftKey,
+      frame,
+      source,
+      container,
+    });
     if (!next) return;
     event.preventDefault();
     commit(next);
@@ -181,7 +196,8 @@ export function FloatingPlayerFrame({
       }}
     >
       <span id={hintId} className="sr-only">
-        Drag the header or use the arrow keys on it to move the player, plus or minus to resize, and Escape to put it back in its tab.
+        Drag the header or use the arrow keys on it to move the player, plus or minus to resize, and
+        Escape to put it back in its tab.
       </span>
       <div
         className="flex h-9 shrink-0 cursor-grab touch-none select-none items-center gap-1 rounded-t-sheet pl-2 pr-1 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring active:cursor-grabbing"
@@ -199,10 +215,24 @@ export function FloatingPlayerFrame({
           {title}
         </Text>
         {actions}
-        <Button variant="transparent" size="small" iconOnly aria-label={dock.label} title={dock.title} onClick={dock.onDock}>
+        <Button
+          variant="transparent"
+          size="small"
+          iconOnly
+          aria-label={dock.label}
+          title={dock.title}
+          onClick={dock.onDock}
+        >
           <PanelRight aria-hidden />
         </Button>
-        <Button variant="transparent" size="small" iconOnly aria-label={close.label} title={close.title} onClick={close.onClose}>
+        <Button
+          variant="transparent"
+          size="small"
+          iconOnly
+          aria-label={close.label}
+          title={close.title}
+          onClick={close.onClose}
+        >
           <X aria-hidden />
         </Button>
       </div>
@@ -236,9 +266,20 @@ export interface DeviceMiniPlayerProps {
  * A resizable, draggable device player over the chat (`FloatingPlayerFrame`).
  * The screen takes touches and keys like the full viewer.
  */
-export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: DeviceMiniPlayerProps) {
+export function DeviceMiniPlayer({
+  device,
+  title,
+  active,
+  onDock,
+  onClose,
+}: DeviceMiniPlayerProps) {
   const geometry = useDeviceMiniPlayerGeometry();
-  const stream = useDeviceStream({ hostId: device.hostId, deviceId: device.id, platform: device.platform, active });
+  const stream = useDeviceStream({
+    hostId: device.hostId,
+    deviceId: device.id,
+    platform: device.platform,
+    active,
+  });
   const android = device.platform === "android";
   // A portrait framebuffer reporting landscape is drawn turned, as in the full viewer.
   const displayRotation = deviceDisplayRotation(device.platform, stream.screen);
@@ -257,7 +298,9 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
       geometry={geometry}
       onGeometryChange={(next) => deviceWorkspace.setGeometry(next)}
       roleDescription="floating device"
-      data={{ "data-device-mini-player": deviceTabKey({ hostId: device.hostId, deviceId: device.id }) }}
+      data={{
+        "data-device-mini-player": deviceTabKey({ hostId: device.hostId, deviceId: device.id }),
+      }}
       dock={{ label: "Dock device in its tab", title: "Dock in tab", onDock }}
       close={{ label: "Close floating device", title: "Close floating device", onClose }}
       actions={
@@ -322,7 +365,10 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
         <div
           className="device-viewer-screen device-mini-player-screen"
           data-typing-surface="device"
-          style={{ ...DEVICE_SCREEN_CONTAINER_STYLE, ...fittedScreenStyle(source.width / source.height) }}
+          style={{
+            ...DEVICE_SCREEN_CONTAINER_STYLE,
+            ...fittedScreenStyle(source.width / source.height),
+          }}
           tabIndex={0}
           role="application"
           aria-roledescription="simulator screen"
@@ -336,8 +382,15 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
           onBlur={stream.releaseKeys}
           onContextMenu={(event) => event.preventDefault()}
         >
-          <canvas ref={stream.canvasRef} hidden={Boolean(stream.mjpegUrl)} style={mediaStyle} aria-hidden />
-          {stream.mjpegUrl ? <img ref={stream.attachImage} alt="" draggable={false} style={mediaStyle} /> : null}
+          <canvas
+            ref={stream.canvasRef}
+            hidden={Boolean(stream.mjpegUrl)}
+            style={mediaStyle}
+            aria-hidden
+          />
+          {stream.mjpegUrl ? (
+            <img ref={stream.attachImage} alt="" draggable={false} style={mediaStyle} />
+          ) : null}
           {stream.status === "error" ? (
             <div className="device-viewer-overlay">
               <Text variant="small" color="secondary">
@@ -387,9 +440,13 @@ export function DeviceMiniPlayerHost({
         )
       : undefined;
   const device = target
-    ? state?.devices.find((candidate) => candidate.hostId === target.hostId && candidate.id === target.deviceId)
+    ? state?.devices.find(
+        (candidate) => candidate.hostId === target.hostId && candidate.id === target.deviceId,
+      )
     : undefined;
-  const ended = Boolean(state && chatId && floatingKey && (!session || state.hostStatus === "disabled"));
+  const ended = Boolean(
+    state && chatId && floatingKey && (!session || state.hostStatus === "disabled"),
+  );
   React.useEffect(() => {
     if (ended && chatId) deviceWorkspace.setFloating(chatId, null);
   }, [chatId, ended]);

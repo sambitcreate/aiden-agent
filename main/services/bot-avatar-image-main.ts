@@ -28,7 +28,8 @@ export function createNativeBotAvatarNormalizer(): BotAvatarNormalizer {
         throw new BotAvatarInputError("Bot photo normalization is unavailable.");
       }
       const decoded = nativeImage.createFromBuffer(source.bytes, { scaleFactor: 1 });
-      if (decoded.isEmpty()) throw new BotAvatarInputError("Aiden could not decode that Bot photo.");
+      if (decoded.isEmpty())
+        throw new BotAvatarInputError("Aiden could not decode that Bot photo.");
       const decodedSize = decoded.getSize(1);
       if (decodedSize.width !== dimensions.width || decodedSize.height !== dimensions.height) {
         throw new BotAvatarInputError("The Bot photo container has inconsistent dimensions.");
@@ -36,8 +37,11 @@ export function createNativeBotAvatarNormalizer(): BotAvatarNormalizer {
       const target = normalizedSize(dimensions);
       const resized = decoded.resize({ ...target, quality: "best" });
       const resizedSize = resized.getSize(1);
-      if (resized.isEmpty() || resizedSize.width < BOT_AVATAR_CANONICAL_EDGE ||
-          resizedSize.height < BOT_AVATAR_CANONICAL_EDGE) {
+      if (
+        resized.isEmpty() ||
+        resizedSize.width < BOT_AVATAR_CANONICAL_EDGE ||
+        resizedSize.height < BOT_AVATAR_CANONICAL_EDGE
+      ) {
         throw new BotAvatarInputError("Aiden could not normalize that Bot photo.");
       }
       const cropped = resized.crop({

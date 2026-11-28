@@ -84,7 +84,10 @@ export function StreamingMarkdownReveal({
       setFadeDone(false);
       return;
     }
-    const timer = window.setTimeout(() => setFadeDone(true), reducedMotion ? 0 : STREAMING_REVEAL_FADE_MS);
+    const timer = window.setTimeout(
+      () => setFadeDone(true),
+      reducedMotion ? 0 : STREAMING_REVEAL_FADE_MS,
+    );
     return () => window.clearTimeout(timer);
   }, [complete, reducedMotion]);
 
@@ -93,10 +96,12 @@ export function StreamingMarkdownReveal({
   // blocks. Blocks keep their elements as the text grows, so the finished
   // reply settles in place.
   // A tail the deadline released shows as written, even unfinished.
-  const visibleEnd = reducedMotion ? released.length : Math.min(
-    released.length,
-    Math.max(streamingRevealVisibleEnd(blocks, Number.POSITIVE_INFINITY), gate.flushed),
-  );
+  const visibleEnd = reducedMotion
+    ? released.length
+    : Math.min(
+        released.length,
+        Math.max(streamingRevealVisibleEnd(blocks, Number.POSITIVE_INFINITY), gate.flushed),
+      );
   const source = complete ? content : content.slice(0, Math.max(visibleEnd, replayedTextLength));
 
   const handoffNotified = React.useRef(false);
@@ -117,9 +122,16 @@ export function StreamingMarkdownReveal({
   return (
     <div
       className={`streaming-reveal ${MARKDOWN_CLASSNAME}`}
-      data-streaming={fadeDone || (replayedTextLength > 0 && source.length <= replayedTextLength) ? undefined : ""}
+      data-streaming={
+        fadeDone || (replayedTextLength > 0 && source.length <= replayedTextLength) ? undefined : ""
+      }
     >
-      <MarkdownContent content={source} richLinks={richLinks} streaming={!complete} imageScope={imageScope} />
+      <MarkdownContent
+        content={source}
+        richLinks={richLinks}
+        streaming={!complete}
+        imageScope={imageScope}
+      />
     </div>
   );
 }

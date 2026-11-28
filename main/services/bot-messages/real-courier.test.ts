@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
+import {
+  fauxAssistantMessage,
+  fauxToolCall,
+  type FauxResponseStep,
+} from "@earendil-works/pi-ai/providers/faux";
 import { ToolTask } from "@earendil-works/pi-durable";
 import {
   createBotSessionService,
@@ -17,7 +21,11 @@ import {
   type BotMessageStatusEntryData,
 } from "../../../renderer/shared/bot-messages.js";
 import { createBotApprovals } from "../bot-runtime/bot-approvals.js";
-import { recordingDeps, countingTool, blockingUntilAborted } from "../bot-runtime/test-support/fixtures.js";
+import {
+  recordingDeps,
+  countingTool,
+  blockingUntilAborted,
+} from "../bot-runtime/test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor } from "../bot-runtime/test-support/faux.js";
 import { createBotMessageCourier, type BotMessageCourierDeps } from "./courier.js";
 import { createBotMessageLedger } from "./ledger.js";
@@ -44,7 +52,9 @@ async function setup(
   spendingRefusal?: BotSessionServiceDeps["spendingRefusal"],
 ) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "real-bot-courier-"));
-  const models = new Map(Object.entries(responses).map(([id, steps]) => [id, createFauxModels(steps)]));
+  const models = new Map(
+    Object.entries(responses).map(([id, steps]) => [id, createFauxModels(steps)]),
+  );
   const errors: unknown[] = [];
   const stateChanges = new Set<(botId: string) => void>();
   const approvals = createBotApprovals({ publish: () => undefined });
@@ -114,7 +124,11 @@ async function setup(
     },
     awaitReply: async (botId, submissionId, signal) => {
       const key = `${botId}:${submissionId}`;
-      assert.equal(activeWaits.has(key), false, "courier has one wait per actual submission across deliveries");
+      assert.equal(
+        activeWaits.has(key),
+        false,
+        "courier has one wait per actual submission across deliveries",
+      );
       activeWaits.add(key);
       waitCount++;
       try {
@@ -301,7 +315,9 @@ for (const [outcome, readDelayMs] of [
     }
     const sent = await f.post();
     await waitFor(
-      async () => (await f.ledger.get(sent.deliveryId))?.outcome === outcome && !(await f.ledger.open()).length,
+      async () =>
+        (await f.ledger.get(sent.deliveryId))?.outcome === outcome &&
+        !(await f.ledger.open()).length,
     );
     // Every effect is acknowledged on disk, so nothing may write from here on.
     const inode = (await stat(f.file)).ino;
@@ -349,7 +365,11 @@ test("real durable tool settlement collects its receipt before display pruning",
         }),
         replay: "safe",
         bind: (call) => ({
-          ...createMessageBotTool(botId, { post: f.courier.post, roster: async () => [] }, { ...call, taskId }),
+          ...createMessageBotTool(
+            botId,
+            { post: f.courier.post, roster: async () => [] },
+            { ...call, taskId },
+          ),
           execute: async (...args) => {
             assert.ok(call.taskId, "the adapter supplies the real durable tool task identity");
             taskId = call.taskId;
@@ -365,7 +385,11 @@ test("real durable tool settlement collects its receipt before display pruning",
                 ),
               BACKGROUND_CONTEXT,
             );
-            assert.ok(tasks.items.some((task) => String(task.id) === taskId && task.state.status === "running"));
+            assert.ok(
+              tasks.items.some(
+                (task) => String(task.id) === taskId && task.state.status === "running",
+              ),
+            );
             const tool = createMessageBotTool(
               botId,
               { post: f.courier.post, roster: async () => [] },
@@ -388,7 +412,10 @@ test("real durable tool settlement collects its receipt before display pruning",
   };
   assert.equal(JSON.stringify(saved.receipts).includes("private tool message"), false);
   await waitFor(async () => (await f.ledger.get(deliveryId))?.status === "answered");
-  assert.ok(await f.ledger.receipt(deliveryId), "unsettled tool remains replayable after the delivery settles");
+  assert.ok(
+    await f.ledger.receipt(deliveryId),
+    "unsettled tool remains replayable after the delivery settles",
+  );
   release();
   await waitFor(async () => !(await f.ledger.receipt(deliveryId)));
   assert.ok(await f.ledger.get(deliveryId), "display retention is independent");
@@ -401,10 +428,18 @@ test("a real ConversationBusy admission race remains pending and wakes on the co
   t.after(busy.release);
   const f = await setup(t, {
     A: [fauxAssistantMessage("For person")],
-    B: [fauxAssistantMessage("Ready"), async () => {
-      await busy.response();
-      return fauxAssistantMessage([fauxToolCall("person_action", { text: "winning person's action" })], { stopReason: "toolUse" });
-    }, fauxAssistantMessage("Person complete"), fauxAssistantMessage("B answer")],
+    B: [
+      fauxAssistantMessage("Ready"),
+      async () => {
+        await busy.response();
+        return fauxAssistantMessage(
+          [fauxToolCall("person_action", { text: "winning person's action" })],
+          { stopReason: "toolUse" },
+        );
+      },
+      fauxAssistantMessage("Person complete"),
+      fauxAssistantMessage("B answer"),
+    ],
   });
   const conversation = await f.runtime.conversation("B");
   const admissionErrors: string[] = [];
@@ -435,13 +470,17 @@ test("a real ConversationBusy admission race remains pending and wakes on the co
     }
     const ordinary = await tools(bot, turn);
     return turn.requestId?.startsWith("bot:") || turn.requestId?.startsWith("botreply:")
-      ? ordinary : [...ordinary, { tool: personTool, replay: "unsafe" as const }];
+      ? ordinary
+      : [...ordinary, { tool: personTool, replay: "unsafe" as const }];
   };
   // Pi Durable 1.5 starts a run with the inventory installed when it is admitted.
   // B has run before, so its earlier preparation installed the attended set the
   // competing person's run starts with.
   const warm = await f.runtime.send("B", { text: "warm up", requestId: "warm-up" });
-  assert.equal((await f.runtime.awaitReply("B", warm.submissionId, new AbortController().signal)).kind, "completed");
+  assert.equal(
+    (await f.runtime.awaitReply("B", warm.submissionId, new AbortController().signal)).kind,
+    "completed",
+  );
   armed = true;
   const sent = await f.post();
   await waitFor(() => f.models.get("B")!.calls() === 2 && f.activeWaits.size === 1);
@@ -451,19 +490,28 @@ test("a real ConversationBusy admission race remains pending and wakes on the co
   await waitFor(() => f.deliveries.length === 1);
   assert.equal(f.sends.length, 2);
   assert.deepEqual(admissionErrors, ["ConversationBusy"]);
-  assert.deepEqual(personTool.executions, [{ text: "winning person's action" }], "the person who wins admission keeps the attended inventory");
+  assert.deepEqual(
+    personTool.executions,
+    [{ text: "winning person's action" }],
+    "the person who wins admission keeps the attended inventory",
+  );
   assert.deepEqual(f.errors, []);
 });
 
 for (const unavailable of ["needs_model", "model_error"] as const) {
   test(`a real ${unavailable} sender keeps the saved reply and the courier becomes quiescent`, async (t) => {
-    const f = await setup(t, { A: [], B: [fauxAssistantMessage("Saved answer")] }, undefined, async (id) => {
-      if (id === "A") {
-        if (unavailable === "model_error") throw new Error("Sign-in expired");
-        return null;
-      }
-      return FAUX_MODEL_REF;
-    });
+    const f = await setup(
+      t,
+      { A: [], B: [fauxAssistantMessage("Saved answer")] },
+      undefined,
+      async (id) => {
+        if (id === "A") {
+          if (unavailable === "model_error") throw new Error("Sign-in expired");
+          return null;
+        }
+        return FAUX_MODEL_REF;
+      },
+    );
     const accepted = await f.post();
     await waitFor(async () => (await f.ledger.open()).length === 0);
     const view = await (await f.runtime.conversation("A")).context(BACKGROUND_CONTEXT);
@@ -475,7 +523,10 @@ for (const unavailable of ["needs_model", "model_error"] as const) {
     assert.equal(saved[0]!.text, "Saved answer");
     assert.equal(f.models.get("A")!.calls(), 0);
     assert.equal(f.sends.length, 1);
-    assert.ok((await f.ledger.get(accepted.deliveryId))!.effects.find((e) => e.kind === "reply")!.acknowledgedAt);
+    assert.ok(
+      (await f.ledger.get(accepted.deliveryId))!.effects.find((e) => e.kind === "reply")!
+        .acknowledgedAt,
+    );
     await waitFor(f.workersStopped);
     const counts = f.counts();
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -488,7 +539,10 @@ for (const outcome of ["failed", "stopped"] as const) {
   test(`a real ${outcome} reply turn preserves the received answer without a replacement turn`, async (t) => {
     const reply =
       outcome === "failed"
-        ? fauxAssistantMessage("", { stopReason: "error", errorMessage: "401 Unauthorized: invalid API key" })
+        ? fauxAssistantMessage("", {
+            stopReason: "error",
+            errorMessage: "401 Unauthorized: invalid API key",
+          })
         : fauxAssistantMessage([fauxToolCall("hold", { text: "wait" })], { stopReason: "toolUse" });
     const f = await setup(t, { A: [reply], B: [fauxAssistantMessage("Saved target result")] });
     const hold = countingTool("hold", (_params, signal) => blockingUntilAborted(signal));
@@ -535,6 +589,9 @@ test("a real spending refusal preserves the reply immediately without running th
   assert.equal(rows[0]!.text, "Saved budget result");
   assert.equal(f.models.get("A")!.calls(), 0);
   assert.equal(f.sends.length, 1);
-  assert.ok((await f.ledger.get(accepted.deliveryId))!.effects.find((e) => e.kind === "reply")!.acknowledgedAt);
+  assert.ok(
+    (await f.ledger.get(accepted.deliveryId))!.effects.find((e) => e.kind === "reply")!
+      .acknowledgedAt,
+  );
   assert.deepEqual(f.errors, []);
 });

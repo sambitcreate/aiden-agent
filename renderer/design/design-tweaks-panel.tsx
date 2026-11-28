@@ -4,9 +4,29 @@
 // them, sends them to Aiden, copies them, makes them the page's defaults or
 // resets them. Changes stay on the frame until Make default.
 
-import { ChevronRight, Copy, Dices, LayoutGrid, MessageSquarePlus, Plus, RotateCcw, Stamp, X } from "lucide-react";
+import {
+  ChevronRight,
+  Copy,
+  Dices,
+  LayoutGrid,
+  MessageSquarePlus,
+  Plus,
+  RotateCcw,
+  Stamp,
+  X,
+} from "lucide-react";
 import * as React from "react";
-import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, toast } from "../components/ui";
+import {
+  Button,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Switch,
+  toast,
+} from "../components/ui";
 import { Segmented } from "../components/ui-primitives";
 import { cn } from "../lib/ui-utils";
 import { DESIGN_CANVAS_LIMITS, type DesignFrame } from "../shared/design-canvas/schema";
@@ -29,7 +49,11 @@ import {
 } from "../shared/design-canvas/tweaks";
 import { useFrameSource, type DesignLoadedSource, type DesignReadSource } from "./frame-source";
 import type { DesignFramePatch } from "./nodes/design-node-context";
-import { DESIGN_TWEAK_V1, forgetDesignTweakVersionPicture, useDesignTweakVersionPicture } from "./tweak-versions";
+import {
+  DESIGN_TWEAK_V1,
+  forgetDesignTweakVersionPicture,
+  useDesignTweakVersionPicture,
+} from "./tweak-versions";
 
 /** What the Tweaks controls ask of the canvas. */
 export type DesignTweakOps = {
@@ -68,13 +92,21 @@ export function useDesignTweakControls(
   return { source, controls };
 }
 
-export function DesignTweakDark({ frame, ops }: { frame: DesignFrame; ops: Pick<DesignTweakOps, "update"> }) {
+export function DesignTweakDark({
+  frame,
+  ops,
+}: {
+  frame: DesignFrame;
+  ops: Pick<DesignTweakOps, "update">;
+}) {
   return (
     <TweakRow label="Dark">
       <Switch
         aria-label="Dark"
         checked={frame.dark === true}
-        onCheckedChange={(checked) => ops.update(frame.id, { dark: checked ? true : undefined }, { record: true })}
+        onCheckedChange={(checked) =>
+          ops.update(frame.id, { dark: checked ? true : undefined }, { record: true })
+        }
       />
     </TweakRow>
   );
@@ -91,7 +123,11 @@ export function DesignTweaksEditor({
   ops: DesignTweakOps;
 }) {
   const set = (control: DesignTweakControl, value: DesignTweakValue) =>
-    ops.update(frame.id, { tweaks: withDesignTweak(frame.tweaks, control, value) }, { record: true });
+    ops.update(
+      frame.id,
+      { tweaks: withDesignTweak(frame.tweaks, control, value) },
+      { record: true },
+    );
   const press = (control: DesignTweakControl) => {
     if (!ops.action(frame.id, control.id)) toast("Select the page so it runs, then try again.");
   };
@@ -104,7 +140,9 @@ export function DesignTweaksEditor({
       maxChars: DESIGN_CANVAS_LIMITS.noteChars,
       ...(showing ? { version: showing.name } : {}),
     });
-  const canShuffle = controls.some((control) => control.type !== "text" && control.type !== "action");
+  const canShuffle = controls.some(
+    (control) => control.type !== "text" && control.type !== "action",
+  );
   const renderControl = (control: DesignTweakControl) => (
     <TweakControl
       key={control.id}
@@ -153,7 +191,13 @@ export function DesignTweaksEditor({
           variant="muted"
           disabled={!canShuffle}
           title="Try random values"
-          onClick={() => ops.update(frame.id, { tweaks: shuffleDesignTweaks(controls, frame.tweaks) }, { record: true })}
+          onClick={() =>
+            ops.update(
+              frame.id,
+              { tweaks: shuffleDesignTweaks(controls, frame.tweaks) },
+              { record: true },
+            )
+          }
         >
           <Dices aria-hidden />
           Shuffle
@@ -182,7 +226,9 @@ export function DesignTweaksEditor({
           Reset tweaks
         </Button>
       </div>
-      <p className="text-small text-secondary">Tweaks change only this frame until you choose Make default.</p>
+      <p className="text-small text-secondary">
+        Tweaks change only this frame until you choose Make default.
+      </p>
     </div>
   );
 }
@@ -192,7 +238,10 @@ export function DesignTweaksEditor({
 type Folder = { name: string; controls: DesignTweakControl[] };
 
 /** Controls without a folder come first, then each folder in the order the page first names it. */
-function intoFolders(controls: readonly DesignTweakControl[]): { loose: DesignTweakControl[]; folders: Folder[] } {
+function intoFolders(controls: readonly DesignTweakControl[]): {
+  loose: DesignTweakControl[];
+  folders: Folder[];
+} {
   const loose: DesignTweakControl[] = [];
   const folders: Folder[] = [];
   for (const control of controls) {
@@ -220,7 +269,8 @@ function readClosedFolders(): Record<string, string[]> {
     if (saved && typeof saved === "object" && !Array.isArray(saved)) {
       const closed: Record<string, string[]> = {};
       for (const [path, names] of Object.entries(saved as Record<string, unknown>)) {
-        if (Array.isArray(names)) closed[path] = names.filter((name): name is string => typeof name === "string");
+        if (Array.isArray(names))
+          closed[path] = names.filter((name): name is string => typeof name === "string");
       }
       return closed;
     }
@@ -247,7 +297,15 @@ function rememberFolder(path: string, name: string, open: boolean): void {
 }
 
 /** A folder of controls, open unless the person closed it on this page before. */
-function TweakFolder({ path, name, children }: { path: string; name: string; children: React.ReactNode }) {
+function TweakFolder({
+  path,
+  name,
+  children,
+}: {
+  path: string;
+  name: string;
+  children: React.ReactNode;
+}) {
   const [open, setOpen] = React.useState(() => !(readClosedFolders()[path] ?? []).includes(name));
   const id = React.useId();
   return (
@@ -264,7 +322,10 @@ function TweakFolder({ path, name, children }: { path: string; name: string; chi
       >
         <ChevronRight
           aria-hidden
-          className={cn("size-3.5 shrink-0 transition-transform duration-(--motion-duration) ease-standard motion-reduce:transition-none", open && "rotate-90")}
+          className={cn(
+            "size-3.5 shrink-0 transition-transform duration-(--motion-duration) ease-standard motion-reduce:transition-none",
+            open && "rotate-90",
+          )}
         />
         <span className="min-w-0 flex-1 truncate text-left">{name}</span>
       </button>
@@ -311,14 +372,27 @@ function TweakVersions({ frame, ops }: { frame: DesignFrame; ops: DesignTweakOps
       <div className="flex items-center gap-1">
         <span className="min-w-0 flex-1 text-small-strong text-secondary">Versions</span>
         {versions.length > 0 ? (
-          <Button size="small" variant="transparent" title="Lay out every version side by side" onClick={() => ops.showAll(frame.id)}>
+          <Button
+            size="small"
+            variant="transparent"
+            title="Lay out every version side by side"
+            onClick={() => ops.showAll(frame.id)}
+          >
             <LayoutGrid aria-hidden />
             Show all
           </Button>
         ) : null}
       </div>
       <div role="group" aria-label="Versions" className="flex flex-wrap gap-1.5">
-        <VersionChip frameId={frame.id} stamp={stamp} versionId={V1} name="V1" title="The page as its file says" active={showingV1} onShow={() => show({ id: V1 })} />
+        <VersionChip
+          frameId={frame.id}
+          stamp={stamp}
+          versionId={V1}
+          name="V1"
+          title="The page as its file says"
+          active={showingV1}
+          onShow={() => show({ id: V1 })}
+        />
         {versions.map((version) => (
           <VersionChip
             key={version.id}
@@ -336,7 +410,13 @@ function TweakVersions({ frame, ops }: { frame: DesignFrame; ops: DesignTweakOps
           variant="transparent"
           className="px-2"
           disabled={saved || full}
-          title={full ? "This page has as many versions as it can keep." : saved ? "This look is already saved." : "Save this look as a version"}
+          title={
+            full
+              ? "This page has as many versions as it can keep."
+              : saved
+                ? "This look is already saved."
+                : "Save this look as a version"
+          }
           onClick={save}
         >
           <Plus aria-hidden />
@@ -382,7 +462,12 @@ function VersionChip({
         onClick={onShow}
       >
         {picture ? (
-          <img src={picture} alt="" className="h-5 w-8 rounded-sm bg-well object-cover object-top" draggable={false} />
+          <img
+            src={picture}
+            alt=""
+            className="h-5 w-8 rounded-sm bg-well object-cover object-top"
+            draggable={false}
+          />
         ) : (
           <span aria-hidden className="w-0.5" />
         )}
@@ -405,7 +490,15 @@ function VersionChip({
 
 // ---- Controls ---------------------------------------------------------------
 
-export function TweakRow({ label, id, children }: { label: string; id?: string; children: React.ReactNode }) {
+export function TweakRow({
+  label,
+  id,
+  children,
+}: {
+  label: string;
+  id?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex min-h-7 min-w-0 items-center gap-2">
       <span id={id} className="min-w-0 flex-1 truncate text-small">
@@ -436,7 +529,8 @@ function TweakControl({
         </TweakRow>
       );
     case "choice":
-      return control.options.length <= 3 && control.options.every((option) => option.length <= 10) ? (
+      return control.options.length <= 3 &&
+        control.options.every((option) => option.length <= 10) ? (
         <div className="flex flex-col gap-1">
           <span id={id} className="text-small">
             {control.label}
@@ -453,7 +547,12 @@ function TweakControl({
         <TweakRow label={control.label} id={id}>
           <Select value={String(value)} onValueChange={onChange}>
             {/* Named by its label and the option it shows. */}
-            <SelectTrigger size="small" id={`${id}-value`} aria-labelledby={`${id} ${id}-value`} className="w-36">
+            <SelectTrigger
+              size="small"
+              id={`${id}-value`}
+              aria-labelledby={`${id} ${id}-value`}
+              className="w-36"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -467,7 +566,14 @@ function TweakControl({
         </TweakRow>
       );
     case "number":
-      return <TweakNumber label={control.label} axis={control} value={Number(value)} onCommit={onChange} />;
+      return (
+        <TweakNumber
+          label={control.label}
+          axis={control}
+          value={Number(value)}
+          onCommit={onChange}
+        />
+      );
     case "color":
       return <TweakColor label={control.label} value={String(value)} onCommit={onChange} />;
     case "text":
@@ -589,7 +695,15 @@ function TweakNumber({
 }
 
 /** A colour well; the page changes once the picker closes. */
-function TweakColor({ label, value, onCommit }: { label: string; value: string; onCommit(value: string): void }) {
+function TweakColor({
+  label,
+  value,
+  onCommit,
+}: {
+  label: string;
+  value: string;
+  onCommit(value: string): void;
+}) {
   const commitRef = React.useRef(onCommit);
   React.useLayoutEffect(() => {
     commitRef.current = onCommit;
@@ -618,7 +732,15 @@ function TweakColor({ label, value, onCommit }: { label: string; value: string; 
 }
 
 /** Words for the page; they change once Enter is pressed or the field is left. */
-function TweakText({ label, value, onCommit }: { label: string; value: string; onCommit(value: string): void }) {
+function TweakText({
+  label,
+  value,
+  onCommit,
+}: {
+  label: string;
+  value: string;
+  onCommit(value: string): void;
+}) {
   const [draft, setDraft] = React.useState(value);
   React.useEffect(() => setDraft(value), [value]);
   const commit = () => {
@@ -680,9 +802,13 @@ function TweakPad({
     if (!rect || rect.width <= 0 || rect.height <= 0) return latest.current;
     const fx = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
     const fy = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height));
-    return { x: snap(xAxis, xAxis.min + fx * (xAxis.max - xAxis.min)), y: snap(yAxis, yAxis.min + fy * (yAxis.max - yAxis.min)) };
+    return {
+      x: snap(xAxis, xAxis.min + fx * (xAxis.max - xAxis.min)),
+      y: snap(yAxis, yAxis.min + fy * (yAxis.max - yAxis.min)),
+    };
   };
-  const fraction = (axis: DesignTweakAxis, n: number) => (axis.max === axis.min ? 0 : (n - axis.min) / (axis.max - axis.min));
+  const fraction = (axis: DesignTweakAxis, n: number) =>
+    axis.max === axis.min ? 0 : (n - axis.min) / (axis.max - axis.min);
   const description = describeDesignTweak(control, draft);
   return (
     <div className="flex flex-col gap-1.5">
@@ -696,7 +822,9 @@ function TweakPad({
           dragging.current = true;
           event.currentTarget.setPointerCapture(event.pointerId);
           setDraft(at(event));
-          padRef.current?.querySelector<HTMLElement>("[role=slider]")?.focus({ preventScroll: true });
+          padRef.current
+            ?.querySelector<HTMLElement>("[role=slider]")
+            ?.focus({ preventScroll: true });
         }}
         onPointerMove={(event) => {
           if (dragging.current) setDraft(at(event));
@@ -713,8 +841,14 @@ function TweakPad({
           setDraft(value);
         }}
       >
-        <span aria-hidden className="pointer-events-none absolute inset-x-0 top-1/2 h-px bg-separator" />
-        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-1/2 w-px bg-separator" />
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-1/2 h-px bg-separator"
+        />
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 left-1/2 w-px bg-separator"
+        />
         <span
           role="slider"
           tabIndex={0}
@@ -725,14 +859,21 @@ function TweakPad({
           aria-valuetext={description}
           aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown"
           className="absolute size-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-fill-accent shadow-control outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-well"
-          style={{ left: `${fraction(xAxis, draft.x) * 100}%`, top: `${fraction(yAxis, draft.y) * 100}%` }}
+          style={{
+            left: `${fraction(xAxis, draft.x) * 100}%`,
+            top: `${fraction(yAxis, draft.y) * 100}%`,
+          }}
           onKeyDown={(event) => {
             const steps = event.shiftKey ? 10 : 1;
             let next: DesignTweakPoint | null = null;
-            if (event.key === "ArrowLeft") next = { ...draft, x: snap(xAxis, draft.x - steps * xAxis.step) };
-            else if (event.key === "ArrowRight") next = { ...draft, x: snap(xAxis, draft.x + steps * xAxis.step) };
-            else if (event.key === "ArrowUp") next = { ...draft, y: snap(yAxis, draft.y - steps * yAxis.step) };
-            else if (event.key === "ArrowDown") next = { ...draft, y: snap(yAxis, draft.y + steps * yAxis.step) };
+            if (event.key === "ArrowLeft")
+              next = { ...draft, x: snap(xAxis, draft.x - steps * xAxis.step) };
+            else if (event.key === "ArrowRight")
+              next = { ...draft, x: snap(xAxis, draft.x + steps * xAxis.step) };
+            else if (event.key === "ArrowUp")
+              next = { ...draft, y: snap(yAxis, draft.y - steps * yAxis.step) };
+            else if (event.key === "ArrowDown")
+              next = { ...draft, y: snap(yAxis, draft.y + steps * yAxis.step) };
             if (!next) return;
             // The canvas's own arrow keys would move the selected frame.
             event.preventDefault();
@@ -745,11 +886,21 @@ function TweakPad({
       </div>
       <span className="flex min-w-0 items-center gap-2 text-small">
         <span className="min-w-0 flex-1 truncate text-secondary">{xAxis.label}</span>
-        <NumberEntry label={`${control.label} ${xAxis.label}`} axis={xAxis} value={draft.x} onCommit={(x) => onCommit({ ...draft, x })} />
+        <NumberEntry
+          label={`${control.label} ${xAxis.label}`}
+          axis={xAxis}
+          value={draft.x}
+          onCommit={(x) => onCommit({ ...draft, x })}
+        />
       </span>
       <span className="flex min-w-0 items-center gap-2 text-small">
         <span className="min-w-0 flex-1 truncate text-secondary">{yAxis.label}</span>
-        <NumberEntry label={`${control.label} ${yAxis.label}`} axis={yAxis} value={draft.y} onCommit={(y) => onCommit({ ...draft, y })} />
+        <NumberEntry
+          label={`${control.label} ${yAxis.label}`}
+          axis={yAxis}
+          value={draft.y}
+          onCommit={(y) => onCommit({ ...draft, y })}
+        />
       </span>
     </div>
   );
@@ -782,7 +933,9 @@ function passesUndo(event: React.KeyboardEvent): boolean {
 }
 
 function isTextEntry(target: EventTarget): boolean {
-  return target instanceof HTMLElement && (target.isContentEditable || target.matches("input, textarea"));
+  return (
+    target instanceof HTMLElement && (target.isContentEditable || target.matches("input, textarea"))
+  );
 }
 
 /**
@@ -829,7 +982,10 @@ export const DesignTweaksFloat = React.memo(function DesignTweaksFloat({
       >
         <ChevronRight
           aria-hidden
-          className={cn("size-3.5 shrink-0 transition-transform duration-(--motion-duration) ease-standard motion-reduce:transition-none", open && "rotate-90")}
+          className={cn(
+            "size-3.5 shrink-0 transition-transform duration-(--motion-duration) ease-standard motion-reduce:transition-none",
+            open && "rotate-90",
+          )}
         />
         <span className="min-w-0 flex-1 truncate text-left">Tweaks</span>
         <span className="min-w-0 max-w-32 truncate text-small text-secondary">{frame.title}</span>

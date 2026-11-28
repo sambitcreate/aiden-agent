@@ -1,12 +1,32 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cloudLanguageHint, effectiveLanguage, effectiveTask, normalizeLanguageIntent } from "./voice-language.js";
+import {
+  cloudLanguageHint,
+  effectiveLanguage,
+  effectiveTask,
+  normalizeLanguageIntent,
+} from "./voice-language.js";
 
-const parakeetV3 = { languages: ["en", "de", "fr", "uk"], capabilities: { autoDetect: true, translateToEnglish: false } };
-const parakeetV2 = { languages: ["en"], capabilities: { autoDetect: false, translateToEnglish: false } };
-const canary = { languages: ["en", "de", "es", "fr"], capabilities: { autoDetect: false, translateToEnglish: true } };
-const whisper = { languages: ["en", "no", "tl", "he", "id", "zh", "yue"], capabilities: { autoDetect: true, translateToEnglish: false } };
-const frenchOnly = { languages: ["fr"], capabilities: { autoDetect: false, translateToEnglish: false } };
+const parakeetV3 = {
+  languages: ["en", "de", "fr", "uk"],
+  capabilities: { autoDetect: true, translateToEnglish: false },
+};
+const parakeetV2 = {
+  languages: ["en"],
+  capabilities: { autoDetect: false, translateToEnglish: false },
+};
+const canary = {
+  languages: ["en", "de", "es", "fr"],
+  capabilities: { autoDetect: false, translateToEnglish: true },
+};
+const whisper = {
+  languages: ["en", "no", "tl", "he", "id", "zh", "yue"],
+  capabilities: { autoDetect: true, translateToEnglish: false },
+};
+const frenchOnly = {
+  languages: ["fr"],
+  capabilities: { autoDetect: false, translateToEnglish: false },
+};
 
 test("auto lets detecting models choose and pins the rest", () => {
   assert.deepEqual(effectiveLanguage(parakeetV3, "auto"), { language: null, fallback: null });

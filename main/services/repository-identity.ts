@@ -25,8 +25,7 @@ function canonicalPath(raw: string): string | undefined {
   const last = segments.length - 1;
   segments[last] = segments[last]!.replace(/\.git$/u, "");
   if (
-    segments.some((segment) =>
-      segment === "." || segment === ".." || !PATH_SEGMENT.test(segment))
+    segments.some((segment) => segment === "." || segment === ".." || !PATH_SEGMENT.test(segment))
   ) {
     return undefined;
   }

@@ -180,10 +180,25 @@ export interface AidenPageActionCall extends AidenPageActionRequest {
 }
 
 export type AidenPageActionResult =
-  | { status: "done"; checked?: boolean | "mixed"; expanded?: boolean; opened?: boolean; moved?: boolean }
+  | {
+      status: "done";
+      checked?: boolean | "mixed";
+      expanded?: boolean;
+      opened?: boolean;
+      moved?: boolean;
+    }
   | { status: "you" }
   | { status: "confirm"; inDialog: boolean }
-  | { status: "gone" | "disabled" | "readonly" | "unsupported" | "no_option" | "content" | "external" };
+  | {
+      status:
+        | "gone"
+        | "disabled"
+        | "readonly"
+        | "unsupported"
+        | "no_option"
+        | "content"
+        | "external";
+    };
 
 export const AIDEN_PAGE_ACTION_SOURCE = String.raw`function (request) {
   var el = this;

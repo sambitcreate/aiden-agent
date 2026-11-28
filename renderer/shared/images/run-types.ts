@@ -22,7 +22,14 @@ export type RunScope =
 export type RunState = "running" | "succeeded" | "partial" | "failed" | "cancelled" | "interrupted";
 
 /** Lifecycle of one node attempt within a run. */
-export type AttemptState = "queued" | "running" | "succeeded" | "failed" | "skipped" | "cancelled" | "interrupted";
+export type AttemptState =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "skipped"
+  | "cancelled"
+  | "interrupted";
 
 /** Whether the provider reported a cost for an attempt. */
 export type AttemptCostStatus = "reported" | "unavailable";

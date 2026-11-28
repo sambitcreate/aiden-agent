@@ -6,11 +6,22 @@
 // Main validates every trigger with `parseScheduledTaskTrigger`; renderer and
 // phone input is never trusted as-is.
 
-import { BOT_WATCH_LIMITS, formatBotWatchInterval, parseBotWatchUrl, watchAddressLabel } from "./bot-routine-trigger.js";
-import { BOT_CONNECTOR_WATCH_LIMITS, type BotConnectorWatchCondition, type BotConnectorWatchInterval } from "./bot-connector-watches.js";
+import {
+  BOT_WATCH_LIMITS,
+  formatBotWatchInterval,
+  parseBotWatchUrl,
+  watchAddressLabel,
+} from "./bot-routine-trigger.js";
+import {
+  BOT_CONNECTOR_WATCH_LIMITS,
+  type BotConnectorWatchCondition,
+  type BotConnectorWatchInterval,
+} from "./bot-connector-watches.js";
 
 /** A watch checks one https address (http only to this computer) or one script from `.aiden/scripts`. */
-export type ScheduledTaskWatchSource = { type: "url"; url: string } | { type: "script"; script: string };
+export type ScheduledTaskWatchSource =
+  | { type: "url"; url: string }
+  | { type: "script"; script: string };
 
 export type ScheduledTaskWatchTrigger = {
   kind: "watch";
@@ -47,7 +58,11 @@ export type ScheduledTaskLinkTrigger = {
 };
 
 /** What the person picked in Find sources: names to show, never the account or tool identities. */
-export type ScheduledTaskConnectorSourceLabels = { providerLabel: string; accountLabel: string; resourceLabel: string };
+export type ScheduledTaskConnectorSourceLabels = {
+  providerLabel: string;
+  accountLabel: string;
+  resourceLabel: string;
+};
 
 /**
  * A connected app checked every 15, 30 or 60 minutes (a local Mail mailbox
@@ -65,9 +80,13 @@ export type ScheduledTaskConnectorTrigger = {
 };
 
 /** What a connected-app task that is on but has no source bound shows (it never checks). */
-export const TASK_CONNECTOR_NEEDS_SOURCE = "Needs its source: open the task, choose Find sources and save it.";
+export const TASK_CONNECTOR_NEEDS_SOURCE =
+  "Needs its source: open the task, choose Find sources and save it.";
 
-export type ScheduledTaskTrigger = ScheduledTaskWatchTrigger | ScheduledTaskLinkTrigger | ScheduledTaskConnectorTrigger;
+export type ScheduledTaskTrigger =
+  | ScheduledTaskWatchTrigger
+  | ScheduledTaskLinkTrigger
+  | ScheduledTaskConnectorTrigger;
 
 export type ScheduledTaskTriggerKind = ScheduledTaskTrigger["kind"];
 
@@ -111,8 +130,16 @@ export const SCHEDULED_TASK_WATCH_INTERVALS = [5, 10, 15, 30, 60, 120, 360, 720,
 
 function scriptName(value: unknown): string | undefined {
   const script = typeof value === "string" ? value.trim() : "";
-  if (!script || script.length > 255 || script === "." || script === ".." ||
-    script.includes("/") || script.includes("\\") || script.includes("\0")) return undefined;
+  if (
+    !script ||
+    script.length > 255 ||
+    script === "." ||
+    script === ".." ||
+    script.includes("/") ||
+    script.includes("\\") ||
+    script.includes("\0")
+  )
+    return undefined;
   return script;
 }
 
@@ -127,34 +154,58 @@ function jsonPath(value: unknown): string | undefined {
   if (!path || path.length > SCHEDULED_TASK_LINK_LIMITS.pathChars) return undefined;
   const parts = path.split(".");
   if (!parts.every((part) => /^[A-Za-z0-9_$@-]+$/u.test(part))) return undefined;
-  if (parts.some((part) => part === "__proto__" || part === "constructor" || part === "prototype")) return undefined;
+  if (parts.some((part) => part === "__proto__" || part === "constructor" || part === "prototype"))
+    return undefined;
   return path;
 }
 
 function parseLinkTrigger(record: Record<string, unknown>): ScheduledTaskLinkTrigger {
-  const allowed = new Set(["kind", "gapMinutes", "signatureHeader", "filters", "dedupePath", "includeFields"]);
+  const allowed = new Set([
+    "kind",
+    "gapMinutes",
+    "signatureHeader",
+    "filters",
+    "dedupePath",
+    "includeFields",
+  ]);
   if (!Object.keys(record).every((key) => allowed.has(key))) return invalid();
   const gap = record.gapMinutes;
-  if (typeof gap !== "number" || !Number.isInteger(gap) ||
-    gap < SCHEDULED_TASK_LINK_LIMITS.minGapMinutes || gap > SCHEDULED_TASK_LINK_LIMITS.maxGapMinutes) {
+  if (
+    typeof gap !== "number" ||
+    !Number.isInteger(gap) ||
+    gap < SCHEDULED_TASK_LINK_LIMITS.minGapMinutes ||
+    gap > SCHEDULED_TASK_LINK_LIMITS.maxGapMinutes
+  ) {
     throw new Error("A link runs the task at most once every 1 to 60 minutes.");
   }
   const trigger: ScheduledTaskLinkTrigger = { kind: "webhook", gapMinutes: gap };
   if (record.signatureHeader !== undefined) {
-    const header = typeof record.signatureHeader === "string" ? record.signatureHeader.trim().toLowerCase() : "";
-    if (!/^[a-z0-9][a-z0-9-]{0,63}$/u.test(header) || ["host", "content-type", "content-length", "authorization", "cookie"].includes(header)) {
+    const header =
+      typeof record.signatureHeader === "string" ? record.signatureHeader.trim().toLowerCase() : "";
+    if (
+      !/^[a-z0-9][a-z0-9-]{0,63}$/u.test(header) ||
+      ["host", "content-type", "content-length", "authorization", "cookie"].includes(header)
+    ) {
       throw new Error("Name the header that carries the signature, like x-signature-256.");
     }
     trigger.signatureHeader = header;
   }
   if (record.filters !== undefined) {
-    if (!Array.isArray(record.filters) || record.filters.length > SCHEDULED_TASK_LINK_LIMITS.filters) {
+    if (
+      !Array.isArray(record.filters) ||
+      record.filters.length > SCHEDULED_TASK_LINK_LIMITS.filters
+    ) {
       throw new Error(`A link has at most ${SCHEDULED_TASK_LINK_LIMITS.filters} filters.`);
     }
     const filters = record.filters.map((filter): ScheduledTaskLinkFilter => {
       if (!filter || typeof filter !== "object" || Array.isArray(filter)) return invalid();
       const row = filter as Record<string, unknown>;
-      if (Object.keys(row).length !== 2 || typeof row.equals !== "string" || row.equals.length > 500) return invalid();
+      if (
+        Object.keys(row).length !== 2 ||
+        typeof row.equals !== "string" ||
+        row.equals.length > 500
+      )
+        return invalid();
       const path = jsonPath(row.path);
       if (!path) throw new Error("A filter names a field like action or pull_request.state.");
       return { path, equals: row.equals };
@@ -167,7 +218,10 @@ function parseLinkTrigger(record: Record<string, unknown>): ScheduledTaskLinkTri
     trigger.dedupePath = path;
   }
   if (record.includeFields !== undefined) {
-    if (!Array.isArray(record.includeFields) || record.includeFields.length > SCHEDULED_TASK_LINK_LIMITS.includeFields) {
+    if (
+      !Array.isArray(record.includeFields) ||
+      record.includeFields.length > SCHEDULED_TASK_LINK_LIMITS.includeFields
+    ) {
       throw new Error(`A link passes at most ${SCHEDULED_TASK_LINK_LIMITS.includeFields} fields.`);
     }
     const fields = record.includeFields.map((field) => jsonPath(field) ?? invalid());
@@ -190,7 +244,13 @@ function parseConnectorCondition(value: unknown): BotConnectorWatchCondition {
   if (!value || typeof value !== "object" || Array.isArray(value)) return invalid();
   const record = value as Record<string, unknown>;
   if (record.kind === "email") {
-    if (!Object.keys(record).every((key) => ["kind", "unreadOnly", "sender", "subject"].includes(key)) || typeof record.unreadOnly !== "boolean") return invalid();
+    if (
+      !Object.keys(record).every((key) =>
+        ["kind", "unreadOnly", "sender", "subject"].includes(key),
+      ) ||
+      typeof record.unreadOnly !== "boolean"
+    )
+      return invalid();
     const condition: BotConnectorWatchCondition = { kind: "email", unreadOnly: record.unreadOnly };
     for (const key of ["sender", "subject"] as const) {
       if (record[key] === undefined || record[key] === "") continue;
@@ -203,8 +263,12 @@ function parseConnectorCondition(value: unknown): BotConnectorWatchCondition {
   if (record.kind === "calendar") {
     if (Object.keys(record).sort().join(",") !== "kind,lookAheadMinutes,timezone") return invalid();
     const ahead = record.lookAheadMinutes;
-    if (typeof ahead !== "number" || !Number.isInteger(ahead) ||
-      ahead < BOT_CONNECTOR_WATCH_LIMITS.lookAheadMinMinutes || ahead > BOT_CONNECTOR_WATCH_LIMITS.lookAheadMaxMinutes) {
+    if (
+      typeof ahead !== "number" ||
+      !Number.isInteger(ahead) ||
+      ahead < BOT_CONNECTOR_WATCH_LIMITS.lookAheadMinMinutes ||
+      ahead > BOT_CONNECTOR_WATCH_LIMITS.lookAheadMaxMinutes
+    ) {
       throw new Error("Look ahead between 15 minutes and one day.");
     }
     const timezone = label(record.timezone, BOT_CONNECTOR_WATCH_LIMITS.timezoneChars);
@@ -220,14 +284,24 @@ function parseConnectorCondition(value: unknown): BotConnectorWatchCondition {
 }
 
 function parseConnectorTrigger(record: Record<string, unknown>): ScheduledTaskConnectorTrigger {
-  if (!Object.keys(record).every((key) => ["kind", "everyMinutes", "condition", "source", "sourceChoiceId"].includes(key))) return invalid();
-  if (!SCHEDULED_TASK_CONNECTOR_INTERVALS.includes(record.everyMinutes as 15)) throw new Error("A connected app is checked every 15, 30 or 60 minutes.");
+  if (
+    !Object.keys(record).every((key) =>
+      ["kind", "everyMinutes", "condition", "source", "sourceChoiceId"].includes(key),
+    )
+  )
+    return invalid();
+  if (!SCHEDULED_TASK_CONNECTOR_INTERVALS.includes(record.everyMinutes as 15))
+    throw new Error("A connected app is checked every 15, 30 or 60 minutes.");
   const condition = parseConnectorCondition(record.condition);
   const source = record.source;
-  if (!source || typeof source !== "object" || Array.isArray(source)) throw new Error("Find a source for this task first.");
+  if (!source || typeof source !== "object" || Array.isArray(source))
+    throw new Error("Find a source for this task first.");
   const fields = source as Record<string, unknown>;
-  if (Object.keys(fields).sort().join(",") !== "accountLabel,providerLabel,resourceLabel") return invalid();
-  const labels = (["providerLabel", "accountLabel", "resourceLabel"] as const).map((key) => label(fields[key], BOT_CONNECTOR_WATCH_LIMITS.labelChars));
+  if (Object.keys(fields).sort().join(",") !== "accountLabel,providerLabel,resourceLabel")
+    return invalid();
+  const labels = (["providerLabel", "accountLabel", "resourceLabel"] as const).map((key) =>
+    label(fields[key], BOT_CONNECTOR_WATCH_LIMITS.labelChars),
+  );
   if (labels.some((value) => value === undefined)) return invalid();
   const trigger: ScheduledTaskConnectorTrigger = {
     kind: "connector",
@@ -236,7 +310,8 @@ function parseConnectorTrigger(record: Record<string, unknown>): ScheduledTaskCo
     source: { providerLabel: labels[0]!, accountLabel: labels[1]!, resourceLabel: labels[2]! },
   };
   if (record.sourceChoiceId !== undefined) {
-    if (typeof record.sourceChoiceId !== "string" || !CHOICE_ID.test(record.sourceChoiceId)) return invalid();
+    if (typeof record.sourceChoiceId !== "string" || !CHOICE_ID.test(record.sourceChoiceId))
+      return invalid();
     trigger.sourceChoiceId = record.sourceChoiceId.toLowerCase();
   }
   return trigger;
@@ -249,12 +324,24 @@ export function parseScheduledTaskTrigger(value: unknown): ScheduledTaskTrigger 
   if (record.kind === "webhook") return parseLinkTrigger(record);
   if (record.kind === "connector") return parseConnectorTrigger(record);
   if (record.kind !== "watch") return invalid();
-  if (!Object.keys(record).every((key) => key === "kind" || key === "source" || key === "everyMinutes" || key === "agentProposed")) return invalid();
+  if (
+    !Object.keys(record).every(
+      (key) =>
+        key === "kind" || key === "source" || key === "everyMinutes" || key === "agentProposed",
+    )
+  )
+    return invalid();
   if (record.agentProposed !== undefined && record.agentProposed !== true) return invalid();
   const every = record.everyMinutes;
-  if (typeof every !== "number" || !Number.isInteger(every) ||
-    every < BOT_WATCH_LIMITS.minMinutes || every > BOT_WATCH_LIMITS.maxMinutes) {
-    throw new Error(`A watch checks every ${BOT_WATCH_LIMITS.minMinutes} to ${BOT_WATCH_LIMITS.maxMinutes} minutes.`);
+  if (
+    typeof every !== "number" ||
+    !Number.isInteger(every) ||
+    every < BOT_WATCH_LIMITS.minMinutes ||
+    every > BOT_WATCH_LIMITS.maxMinutes
+  ) {
+    throw new Error(
+      `A watch checks every ${BOT_WATCH_LIMITS.minMinutes} to ${BOT_WATCH_LIMITS.maxMinutes} minutes.`,
+    );
   }
   const source = record.source;
   if (!source || typeof source !== "object" || Array.isArray(source)) return invalid();
@@ -263,7 +350,12 @@ export function parseScheduledTaskTrigger(value: unknown): ScheduledTaskTrigger 
   if (fields.type === "url") {
     const url = parseBotWatchUrl(fields.url);
     if (!url) throw new Error("Watch an https address, or http only on this computer.");
-    return { kind: "watch", source: { type: "url", url }, everyMinutes: every, ...(record.agentProposed === true ? { agentProposed: true as const } : {}) };
+    return {
+      kind: "watch",
+      source: { type: "url", url },
+      everyMinutes: every,
+      ...(record.agentProposed === true ? { agentProposed: true as const } : {}),
+    };
   }
   if (fields.type === "script") {
     const script = scriptName(fields.script);
@@ -301,11 +393,21 @@ function privateIpv4(host: string): boolean {
   const parts = host.split(".");
   if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/u.test(part))) return false;
   const [a, b, c] = parts.map(Number) as [number, number, number, number];
-  return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) ||
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 100 && b >= 64 && b <= 127) ||
     // IETF protocol assignments, benchmarking, documentation, multicast, reserved and broadcast.
-    (a === 192 && b === 0 && (c === 0 || c === 2)) || (a === 198 && (b === 18 || b === 19)) ||
-    (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113) || a >= 224;
+    (a === 192 && b === 0 && (c === 0 || c === 2)) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    (a === 198 && b === 51 && c === 100) ||
+    (a === 203 && b === 0 && c === 113) ||
+    a >= 224
+  );
 }
 
 /** The IPv4 address two hex groups spell (`7f00:1` is 127.0.0.1). */
@@ -328,11 +430,13 @@ function privateIpv6(raw: string): boolean {
   const embedded = /^(?:::ffff:|::|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/u.exec(ip);
   if (embedded) return privateIpv4(ipv4FromGroups(embedded[1]!, embedded[2]!));
   if (ip.startsWith("64:ff9b:1:")) return true; // Local-use NAT64.
-  return /^f[cd][0-9a-f]{0,2}:/u.test(ip) || // Unique local.
+  return (
+    /^f[cd][0-9a-f]{0,2}:/u.test(ip) || // Unique local.
     /^fe[89ab][0-9a-f]?:/u.test(ip) || // Link-local.
     /^fe[c-f][0-9a-f]?:/u.test(ip) || // Site-local (deprecated).
     /^ff[0-9a-f]{0,2}:/u.test(ip) || // Multicast.
-    /^2001:db8:/u.test(ip); // Documentation.
+    /^2001:db8:/u.test(ip)
+  ); // Documentation.
 }
 
 /**
@@ -346,7 +450,8 @@ export function isPrivateIpAddress(value: string): boolean {
 }
 
 /** Names that only mean something on a local network. */
-const LOCAL_NAME = /\.(?:localhost|local|internal|home\.arpa|lan|home|corp|intranet|private|localdomain|box|router)$/u;
+const LOCAL_NAME =
+  /\.(?:localhost|local|internal|home\.arpa|lan|home|corp|intranet|private|localdomain|box|router)$/u;
 
 /**
  * Whether a watch address points at this computer or a private network: a

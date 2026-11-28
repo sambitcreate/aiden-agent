@@ -74,7 +74,9 @@ export function peerBotSessionCompat(value: unknown): unknown {
     delete session.blocked;
   }
   if (Array.isArray(session.entries))
-    session.entries = session.entries.filter((entry) => parses(parseAidenRemoteBotSessionEntry, entry));
+    session.entries = session.entries.filter((entry) =>
+      parses(parseAidenRemoteBotSessionEntry, entry),
+    );
   for (const [key, parse] of [
     ["question", parseAidenRemoteBotQuestion],
     ["approval", parseAidenRemoteBotApproval],
@@ -82,7 +84,11 @@ export function peerBotSessionCompat(value: unknown): unknown {
     if (session[key] !== null && !parses(parse, session[key])) session[key] = null;
   }
   // A hand-off this client cannot read is left for the host's own window.
-  if (has(session, "handoff") && session.handoff !== null && !parses(parseAidenRemoteBotHandoff, session.handoff)) {
+  if (
+    has(session, "handoff") &&
+    session.handoff !== null &&
+    !parses(parseAidenRemoteBotHandoff, session.handoff)
+  ) {
     session.handoff = null;
   }
   // A folder request or plan card this client cannot read is answered on the host.
@@ -90,7 +96,8 @@ export function peerBotSessionCompat(value: unknown): unknown {
     ["accessRequest", parseAidenRemoteBotAccessRequest],
     ["plan", parseAidenRemoteBotPlan],
   ] as const) {
-    if (has(session, key) && session[key] !== null && !parses(parse, session[key])) session[key] = null;
+    if (has(session, key) && session[key] !== null && !parses(parse, session[key]))
+      session[key] = null;
   }
   if (
     has(session, "activity") &&
@@ -98,14 +105,18 @@ export function peerBotSessionCompat(value: unknown): unknown {
     !parses(parseAidenRemoteBotSessionActivity, session.activity)
   )
     delete session.activity;
-  if (has(session, "queued") && !parses(parseAidenRemoteBotQueuedList, session.queued)) delete session.queued;
+  if (has(session, "queued") && !parses(parseAidenRemoteBotQueuedList, session.queued))
+    delete session.queued;
   return session;
 }
 
 /** One page of older entries as this client can read it: an entry it cannot read is left out. */
 export function peerBotSessionPageCompat(value: unknown): unknown {
   if (!isRecord(value) || !Array.isArray(value.entries)) return value;
-  return { ...value, entries: value.entries.filter((entry) => parses(parseAidenRemoteBotSessionEntry, entry)) };
+  return {
+    ...value,
+    entries: value.entries.filter((entry) => parses(parseAidenRemoteBotSessionEntry, entry)),
+  };
 }
 
 /**
@@ -117,7 +128,8 @@ export function peerBotSessionPageCompat(value: unknown): unknown {
 export function peerBotSessionPageCursor(value: unknown): string | undefined {
   if (!isRecord(value) || !Array.isArray(value.entries)) return undefined;
   for (const entry of value.entries) {
-    if (isRecord(entry) && parses(parseAidenRemoteBotSessionEntryId, entry.id)) return entry.id as string;
+    if (isRecord(entry) && parses(parseAidenRemoteBotSessionEntryId, entry.id))
+      return entry.id as string;
   }
   return undefined;
 }
@@ -134,7 +146,9 @@ export interface PeerBotSessionResync {
  * Parses one stream frame. A frame whose envelope is sound but whose content
  * is newer than this client becomes a resync; a malformed envelope still throws.
  */
-export function parsePeerBotSessionEvent(value: unknown): AidenRemoteBotSessionEvent | PeerBotSessionResync {
+export function parsePeerBotSessionEvent(
+  value: unknown,
+): AidenRemoteBotSessionEvent | PeerBotSessionResync {
   try {
     return parseAidenRemoteBotSessionEvent(value);
   } catch (error) {

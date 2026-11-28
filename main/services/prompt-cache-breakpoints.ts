@@ -21,7 +21,14 @@
  * calls that replay the chat's request place the same breakpoints. Pi's
  * session-resource cleanup (chat delete) forgets a chat's head.
  */
-import { registerSessionResourceCleanup, type Api, type AssistantMessageEventStream, type Model, type ProviderStreams, type SimpleStreamOptions } from "@earendil-works/pi-ai";
+import {
+  registerSessionResourceCleanup,
+  type Api,
+  type AssistantMessageEventStream,
+  type Model,
+  type ProviderStreams,
+  type SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 
 type StreamSimple = ProviderStreams["streamSimple"];
 
@@ -73,7 +80,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function countKey(value: unknown, key: string): number {
-  if (Array.isArray(value)) return value.reduce<number>((total, item) => total + countKey(item, key), 0);
+  if (Array.isArray(value))
+    return value.reduce<number>((total, item) => total + countKey(item, key), 0);
   if (!isRecord(value)) return 0;
   let total = key in value ? 1 : 0;
   for (const [name, child] of Object.entries(value)) {
@@ -98,10 +106,25 @@ export function bedrockCachePoints(payload: unknown): number {
  * separated it from the tail, so the two blocks concatenate to the original
  * system text byte for byte.
  */
-export function withStableHeadBreakpoint(payload: unknown, stableHead: string | undefined): Record<string, unknown> | undefined {
-  if (!stableHead || !isRecord(payload) || !Array.isArray(payload.system) || payload.system.length !== 1) return undefined;
+export function withStableHeadBreakpoint(
+  payload: unknown,
+  stableHead: string | undefined,
+): Record<string, unknown> | undefined {
+  if (
+    !stableHead ||
+    !isRecord(payload) ||
+    !Array.isArray(payload.system) ||
+    payload.system.length !== 1
+  )
+    return undefined;
   const [block] = payload.system as unknown[];
-  if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string" || !isRecord(block.cache_control)) return undefined;
+  if (
+    !isRecord(block) ||
+    block.type !== "text" ||
+    typeof block.text !== "string" ||
+    !isRecord(block.cache_control)
+  )
+    return undefined;
   if (anthropicCacheBreakpoints(payload) >= MAX_ANTHROPIC_CACHE_BREAKPOINTS) return undefined;
   const boundary = `${stableHead}\n\n`;
   if (!block.text.startsWith(boundary) || block.text.length === boundary.length) return undefined;
@@ -131,13 +154,20 @@ export function withBedrockToolsCachePoint(
   model: Pick<Model<Api>, "id" | "name">,
 ): Record<string, unknown> | undefined {
   if (!isBedrockClaudeModel(model)) return undefined;
-  if (!isRecord(payload) || !isRecord(payload.toolConfig) || !Array.isArray(payload.toolConfig.tools)) return undefined;
+  if (
+    !isRecord(payload) ||
+    !isRecord(payload.toolConfig) ||
+    !Array.isArray(payload.toolConfig.tools)
+  )
+    return undefined;
   const tools = payload.toolConfig.tools as unknown[];
   if (!tools.some((tool) => isRecord(tool) && "toolSpec" in tool)) return undefined;
   if (tools.some((tool) => isRecord(tool) && "cachePoint" in tool)) return undefined;
   const system = Array.isArray(payload.system) ? (payload.system as unknown[]) : [];
-  const systemPoint = system.find((block): block is { cachePoint: Record<string, unknown> } =>
-    isRecord(block) && isRecord(block.cachePoint));
+  const systemPoint = system.find(
+    (block): block is { cachePoint: Record<string, unknown> } =>
+      isRecord(block) && isRecord(block.cachePoint),
+  );
   const anyPoint = bedrockCachePoints(payload) > 0;
   if (!anyPoint || bedrockCachePoints(payload) >= MAX_BEDROCK_CACHE_POINTS) return undefined;
   const cachePoint = systemPoint ? { ...systemPoint.cachePoint } : { type: "default" };
@@ -161,8 +191,15 @@ export function withPromptCacheBreakpointsPayload(
  * payload hook the caller passed, which then sees the final payload. Takes a
  * provider stream or a model registry's, which accepts an unnormalized context.
  */
-export function withPromptCacheBreakpoints<TContext = Parameters<StreamSimple>[1], TOptions extends SimpleStreamOptions = SimpleStreamOptions>(
-  streamFn: (model: Model<Api>, context: TContext, options?: TOptions) => AssistantMessageEventStream,
+export function withPromptCacheBreakpoints<
+  TContext = Parameters<StreamSimple>[1],
+  TOptions extends SimpleStreamOptions = SimpleStreamOptions,
+>(
+  streamFn: (
+    model: Model<Api>,
+    context: TContext,
+    options?: TOptions,
+  ) => AssistantMessageEventStream,
 ): (model: Model<Api>, context: TContext, options?: TOptions) => AssistantMessageEventStream {
   return (model, context, options) => {
     if (model.api !== "anthropic-messages" && model.api !== "bedrock-converse-stream") {
@@ -173,7 +210,12 @@ export function withPromptCacheBreakpoints<TContext = Parameters<StreamSimple>[1
     return streamFn(model, context, {
       ...options,
       onPayload: async (payload, payloadModel) => {
-        const rewritten = withPromptCacheBreakpointsPayload(payload, payloadModel.api, stableHead, payloadModel);
+        const rewritten = withPromptCacheBreakpointsPayload(
+          payload,
+          payloadModel.api,
+          stableHead,
+          payloadModel,
+        );
         const current = rewritten ?? payload;
         const hostReplacement = await hostOnPayload?.(current, payloadModel);
         return hostReplacement ?? rewritten;

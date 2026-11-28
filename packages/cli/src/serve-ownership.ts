@@ -20,10 +20,15 @@ export type ServeStopStart = "signal" | "clear_stale" | "refuse_aiden" | "refuse
 /** Only a verified daemon is ever signalled. */
 export function decideServeStopStart(owner: ServeOwnerObservation): ServeStopStart {
   switch (owner) {
-    case "daemon": return "signal";
-    case "gone": case "foreign": return "clear_stale";
-    case "aiden": return "refuse_aiden";
-    case "unknown": return "refuse_unverified";
+    case "daemon":
+      return "signal";
+    case "gone":
+    case "foreign":
+      return "clear_stale";
+    case "aiden":
+      return "refuse_aiden";
+    case "unknown":
+      return "refuse_unverified";
   }
 }
 
@@ -33,7 +38,10 @@ export type ServeStopDeadline = "stopped" | "clear_stale" | "force" | "unconfirm
  * The grace period ended. Force needs the same owner and a verified daemon, because
  * the PID may no longer be ours. A failed check here proves nothing about exit.
  */
-export function decideServeStopDeadline(owner: ServeOwnerObservation, sameOwner: boolean): ServeStopDeadline {
+export function decideServeStopDeadline(
+  owner: ServeOwnerObservation,
+  sameOwner: boolean,
+): ServeStopDeadline {
   if (!sameOwner) return "stopped";
   if (owner === "daemon") return "force";
   return owner === "gone" || owner === "foreign" ? "clear_stale" : "unconfirmed";

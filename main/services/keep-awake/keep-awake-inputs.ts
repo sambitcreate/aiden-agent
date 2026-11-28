@@ -56,9 +56,13 @@ export function hostRunKeepAwakeInput(sources: {
     read(now) {
       const farWaits = new Map<string, number>();
       for (const wait of sources.waits()) {
-        if (wait.owner.kind !== "chat" || wait.nextTryAt - now <= KEEP_AWAKE_USAGE_LIMIT_WINDOW_MS) continue;
+        if (wait.owner.kind !== "chat" || wait.nextTryAt - now <= KEEP_AWAKE_USAGE_LIMIT_WINDOW_MS)
+          continue;
         const soonest = farWaits.get(wait.owner.id);
-        farWaits.set(wait.owner.id, soonest === undefined ? wait.nextTryAt : Math.min(soonest, wait.nextTryAt));
+        farWaits.set(
+          wait.owner.id,
+          soonest === undefined ? wait.nextTryAt : Math.min(soonest, wait.nextTryAt),
+        );
       }
       const reasons: KeepAwakeReason[] = [];
       let recheckAt: number | undefined;
@@ -78,7 +82,9 @@ export function hostRunKeepAwakeInput(sources: {
 }
 
 /** A provider usage-limit wait (chat or Bot) that ends within 10 minutes. */
-export function usageLimitKeepAwakeInput(waits: () => readonly KeepAwakeUsageLimitWait[]): KeepAwakeInput {
+export function usageLimitKeepAwakeInput(
+  waits: () => readonly KeepAwakeUsageLimitWait[],
+): KeepAwakeInput {
   return {
     read(now) {
       const reasons: KeepAwakeReason[] = [];
@@ -108,7 +114,9 @@ export function backgroundJobKeepAwakeInput(jobs: () => readonly KeepAwakeJob[])
     read() {
       return {
         reasons: jobs()
-          .filter((job) => job.state === "running" && job.origin !== "command" && !(job.ports?.length))
+          .filter(
+            (job) => job.state === "running" && job.origin !== "command" && !job.ports?.length,
+          )
           .map((job) => ({ kind: "job" as const, id: job.id })),
       };
     },

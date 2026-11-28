@@ -7,10 +7,18 @@ import {
   parseAidenRemoteChatContextPressure,
   projectAidenRemoteContextPressure,
 } from "./aiden-remote-protocol.js";
-import { BOT_AVATAR_COLORS, BOT_AVATAR_COLOR_HEX, BOT_AVATAR_FACE_HEX } from "../../renderer/shared/bots.js";
+import {
+  BOT_AVATAR_COLORS,
+  BOT_AVATAR_COLOR_HEX,
+  BOT_AVATAR_FACE_HEX,
+} from "../../renderer/shared/bots.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import { hostInboxPlacement, type HostInboxSignals } from "../../renderer/shared/inbox-state.js";
-import { BOT_ACTIVITY_PHASES, botActivityDisplay, botElapsedLabel } from "../../renderer/shared/bot-activity.js";
+import {
+  BOT_ACTIVITY_PHASES,
+  botActivityDisplay,
+  botElapsedLabel,
+} from "../../renderer/shared/bot-activity.js";
 import {
   parseAidenRemoteBotSession,
   parseAidenRemoteBotIssue,
@@ -156,19 +164,39 @@ test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsaf
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
   // The shared fixture tracks the host's revision; the number lives only in the protocol module.
   assert.equal(fixture.contractRevision, AIDEN_REMOTE_CONTRACT_REVISION);
-  assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
+  assert.match(
+    JSON.stringify(fixture.events),
+    /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u,
+  );
   const fixtureTimeline = fixture.events.find((event) => event.type === "timeline");
-  const parsedTimeline = parseGenerationTimeline(record(fixtureTimeline?.payload, "timeline payload").timeline);
-  const recapStep = parsedTimeline?.steps.find((step) => step.kind === "tool" && step.questionnaire);
+  const parsedTimeline = parseGenerationTimeline(
+    record(fixtureTimeline?.payload, "timeline payload").timeline,
+  );
+  const recapStep = parsedTimeline?.steps.find(
+    (step) => step.kind === "tool" && step.questionnaire,
+  );
   assert.ok(recapStep?.kind === "tool", "the fixture timeline carries a questionnaire recap");
   assert.equal(recapStep.toolName, "ask_user_question");
   assert.equal(recapStep.status, "completed");
   assert.equal(recapStep.questionnaire?.outcome, "answered");
-  assert.deepEqual(recapStep.questionnaire?.items.map((item) => [item.kind, item.answers]), [["option", ["Plain text"]], ["skipped", []]]);
+  assert.deepEqual(
+    recapStep.questionnaire?.items.map((item) => [item.kind, item.answers]),
+    [
+      ["option", ["Plain text"]],
+      ["skipped", []],
+    ],
+  );
   const extractStep = parsedTimeline?.steps.find((step) => step.kind === "tool" && step.extraction);
   assert.ok(extractStep?.kind === "tool", "the fixture timeline carries a web page extract recap");
   assert.equal(extractStep.toolName, "web_fetch");
-  assert.deepEqual(extractStep.extraction?.fields.map((field) => [field.name, field.status]), [["pro_monthly", "extracted"], ["team_yearly", "uncertain"], ["enterprise", "null"]]);
+  assert.deepEqual(
+    extractStep.extraction?.fields.map((field) => [field.name, field.status]),
+    [
+      ["pro_monthly", "extracted"],
+      ["team_yearly", "uncertain"],
+      ["enterprise", "null"],
+    ],
+  );
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
   assert.deepEqual(fixture.server.serverCapabilities, MOBILE_CAPABILITIES);
@@ -176,12 +204,21 @@ test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsaf
   assert.equal(record(fixture.chat, "fixture chat").botId, "bot_fixture_01");
   assert.equal(fixture.server.features.includes("chat-run-input-v1"), true);
   assert.equal(fixture.server.features.includes("speech-request-gzip-v1"), true);
-  assert.deepEqual(fixture.streamInput.request, { mode: "queue", text: "Also add a regression test." });
+  assert.deepEqual(fixture.streamInput.request, {
+    mode: "queue",
+    text: "Also add a regression test.",
+  });
   assert.equal(fixture.streamInput.response.status, "admitted");
   assert.equal(fixture.streamInput.response.queue, "follow-up");
   assert.equal(fixture.streamInput.response.committed, true);
-  assert.equal(record(fixture.speechStatus, "fixture speech status").selectedModelId, "parakeet-v3");
-  assert.equal(record(fixture.speechTranscription, "fixture speech transcription").modelId, "parakeet-v3");
+  assert.equal(
+    record(fixture.speechStatus, "fixture speech status").selectedModelId,
+    "parakeet-v3",
+  );
+  assert.equal(
+    record(fixture.speechTranscription, "fixture speech transcription").modelId,
+    "parakeet-v3",
+  );
   assert.equal(
     fixture.botCapabilityCatalog.fileScopes.some((scope) => scope.kind === "full_mac"),
     true,
@@ -190,7 +227,8 @@ test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsaf
     new Set(fixture.events.map((event) => event.type)),
     new Set(
       AIDEN_REMOTE_EVENT_TYPES.filter(
-        (type) => type !== "task_update" && type !== "agents_update" && type !== "app_controls_changed",
+        (type) =>
+          type !== "task_update" && type !== "agents_update" && type !== "app_controls_changed",
       ),
     ),
   );
@@ -212,23 +250,27 @@ test("shared manual pairing vector decrypts with the frozen cross-platform const
   assert.equal(bootstrap.protocolVersion, 1);
   assert.match(String(bootstrap.sessionId), /^pairing_[A-Za-z0-9_-]{32}$/u);
 
-  const key = Buffer.from(hkdfSync(
-    "sha256",
-    Buffer.from(code, "ascii"),
-    Buffer.from(String(bootstrap.salt), "base64url"),
-    Buffer.from(`aiden-manual-pairing-v1\n${String(bootstrap.sessionId)}`, "utf8"),
-    32,
-  ));
+  const key = Buffer.from(
+    hkdfSync(
+      "sha256",
+      Buffer.from(code, "ascii"),
+      Buffer.from(String(bootstrap.salt), "base64url"),
+      Buffer.from(`aiden-manual-pairing-v1\n${String(bootstrap.sessionId)}`, "utf8"),
+      32,
+    ),
+  );
   const decipher = createDecipheriv(
     "aes-256-gcm",
     key,
     Buffer.from(String(bootstrap.nonce), "base64url"),
     { authTagLength: 16 },
   );
-  decipher.setAAD(Buffer.from(
-    `aiden-manual-pairing-v1\n${String(bootstrap.sessionId)}\n${String(bootstrap.expiresAt)}`,
-    "utf8",
-  ));
+  decipher.setAAD(
+    Buffer.from(
+      `aiden-manual-pairing-v1\n${String(bootstrap.sessionId)}\n${String(bootstrap.expiresAt)}`,
+      "utf8",
+    ),
+  );
   decipher.setAuthTag(Buffer.from(String(bootstrap.tag), "base64url"));
   const plaintext = Buffer.concat([
     decipher.update(Buffer.from(String(bootstrap.ciphertext), "base64url")),
@@ -283,7 +325,9 @@ test("agent interrupt fixture stops one current-turn agent and rejects rosters t
 
   const unadvertised = structuredClone(raw);
   const server = record(unadvertised.server, "server");
-  server.features = (server.features as string[]).filter((feature) => feature !== "chat-agent-interrupt-v1");
+  server.features = (server.features as string[]).filter(
+    (feature) => feature !== "chat-agent-interrupt-v1",
+  );
   assert.throws(() => parseAidenRemoteContractFixture(unadvertised), /chat agent interrupt/u);
 });
 
@@ -327,7 +371,10 @@ test("revision 19 fixtures carry host health, host feed, run stream and run cont
   );
   assert.throws(
     mutate((copy) => {
-      snapshotWorkspace(copy).repository = { canonicalKey: "github.com/example/aiden-fixture", relativePath: "../escape" };
+      snapshotWorkspace(copy).repository = {
+        canonicalKey: "github.com/example/aiden-fixture",
+        relativePath: "../escape",
+      };
     }),
     /inside the repository/u,
   );
@@ -368,9 +415,21 @@ test("revision 19 fixtures carry host health, host feed, run stream and run cont
   assert.equal(fixture.messagesWindow?.title, "Fixture review chat");
   assert.equal(fixture.messagesWindow?.modelId, "model_fixture");
   const window = (copy: Record<string, unknown>) => record(copy.messagesWindow, "messagesWindow");
-  assert.throws(mutate((copy) => { delete window(copy).title; }));
-  assert.throws(mutate((copy) => { delete window(copy).modelId; }));
-  assert.throws(mutate((copy) => { window(copy).updatedAt = "2026-08-18T18:00:00.000Z"; }));
+  assert.throws(
+    mutate((copy) => {
+      delete window(copy).title;
+    }),
+  );
+  assert.throws(
+    mutate((copy) => {
+      delete window(copy).modelId;
+    }),
+  );
+  assert.throws(
+    mutate((copy) => {
+      window(copy).updatedAt = "2026-08-18T18:00:00.000Z";
+    }),
+  );
   // A revision-22 window predates the metadata, so it may not carry it.
   assert.throws(
     mutate((copy) => {
@@ -389,7 +448,11 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   assert.equal(section.feature, "pairing-requests-v1");
   assert.deepEqual(
     section.status.map((status) => [status.state, status.envelope !== undefined]),
-    [["pending", false], ["approved", true], ["denied", false]],
+    [
+      ["pending", false],
+      ["approved", true],
+      ["denied", false],
+    ],
   );
   assert.ok(section.matchCodeVectors.every((vector) => /^[0-9]{6}$/u.test(vector.matchCode)));
 
@@ -413,7 +476,8 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   );
   assert.throws(
     mutate((copy) => {
-      record(statuses(copy)[1]!.envelope, "envelope").requestId = "pairreq_BgsQFRofJCkuMzg9QkdMUVZbYGVqb3R5";
+      record(statuses(copy)[1]!.envelope, "envelope").requestId =
+        "pairreq_BgsQFRofJCkuMzg9QkdMUVZbYGVqb3R5";
     }),
     /bound to its request/u,
   );
@@ -451,7 +515,10 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   revision19.contractRevision = 19;
   record(revision19.hostHealth, "hostHealth").contractRevision = 19;
   // The messages window's metadata is revision 23, so the older fixture omits it.
-  const { chatId, revision, messages, hasOlder } = record(revision19.messagesWindow, "messagesWindow");
+  const { chatId, revision, messages, hasOlder } = record(
+    revision19.messagesWindow,
+    "messagesWindow",
+  );
   revision19.messagesWindow = { chatId, revision, messages, hasOlder };
   delete revision19.chatFork;
   delete revision19.spending;
@@ -467,7 +534,13 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   delete revision19.botHandoffs;
   delete revision19.botAccessRequests;
   delete revision19.botPlans;
-  delete revision19.botAllowed; delete revision19.voiceInput; delete revision19.stoppedSteps; delete revision19.backgroundJobsChatSettled; delete revision19.continueInNewChat; delete revision19.streamRecovery; delete revision19.agentSlider;
+  delete revision19.botAllowed;
+  delete revision19.voiceInput;
+  delete revision19.stoppedSteps;
+  delete revision19.backgroundJobsChatSettled;
+  delete revision19.continueInNewChat;
+  delete revision19.streamRecovery;
+  delete revision19.agentSlider;
   // Bot issues on phones are revision 42.
   delete revision19.botIssues;
   // Schedule approval cards are revision 39.
@@ -477,7 +550,8 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   // Browser recordings are revision 46.
   delete revision19.browserRecordings;
   // Message visuals are revision 28.
-  for (const message of record(revision19.chat, "chat").messages as Record<string, unknown>[]) delete message.visuals;
+  for (const message of record(revision19.chat, "chat").messages as Record<string, unknown>[])
+    delete message.visuals;
   assert.throws(() => parseAidenRemoteContractFixture(revision19), /require contract revision 20/u);
   delete revision19.pairingRequests;
   assert.equal(parseAidenRemoteContractFixture(revision19).pairingRequests, undefined);
@@ -489,7 +563,10 @@ test("phone run fixtures carry the phone approval projection and arrive in revis
   const approvals = (fixture.phoneRunEvents ?? [])
     .filter((event) => event.type === "approval_required")
     .map((event) => event.payload as Record<string, unknown>);
-  assert.deepEqual(approvals.map((approval) => approval.canAllow), [true, false]);
+  assert.deepEqual(
+    approvals.map((approval) => approval.canAllow),
+    [true, false],
+  );
   for (const approval of approvals) {
     assert.equal("details" in approval, false);
     assert.equal("detailsOmitted" in approval, false);
@@ -501,8 +578,9 @@ test("phone run fixtures carry the phone approval projection and arrive in revis
     return parseAidenRemoteContractFixture(copy);
   };
   const phoneApproval = (copy: Record<string, unknown>) =>
-    (copy.phoneRunEvents as Array<{ type: string; payload: Record<string, unknown> }>)
-      .filter((event) => event.type === "approval_required");
+    (copy.phoneRunEvents as Array<{ type: string; payload: Record<string, unknown> }>).filter(
+      (event) => event.type === "approval_required",
+    );
   assert.throws(
     mutate((copy) => {
       phoneApproval(copy)[0]!.payload.details = { kind: "scheduled-task" };
@@ -527,37 +605,31 @@ test("phone run fixtures carry the phone approval projection and arrive in revis
 test("agent roster historical turn selectors are bounded, newest-first, and current-turn-free", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
   const roster = fixture.agentRoster;
-  assert.deepEqual(roster.previousTurns?.map((turn) => turn.turnId), [
-    "turn_fixture_previous_02",
-    "turn_fixture_previous_01",
-  ]);
+  assert.deepEqual(
+    roster.previousTurns?.map((turn) => turn.turnId),
+    ["turn_fixture_previous_02", "turn_fixture_previous_01"],
+  );
 
   const currentTurn = structuredClone(roster);
   currentTurn.previousTurns![0]!.turnId = roster.turnId!;
-  assert.throws(
-    () => parseAidenRemoteChatAgentRoster(currentTurn),
-    /exclude the current turn/u,
-  );
+  assert.throws(() => parseAidenRemoteChatAgentRoster(currentTurn), /exclude the current turn/u);
 
   const unordered = structuredClone(roster);
   [unordered.previousTurns![0], unordered.previousTurns![1]] = [
     unordered.previousTurns![1]!,
     unordered.previousTurns![0]!,
   ];
-  assert.throws(
-    () => parseAidenRemoteChatAgentRoster(unordered),
-    /newest-first/u,
-  );
+  assert.throws(() => parseAidenRemoteChatAgentRoster(unordered), /newest-first/u);
 
   const tooMany = structuredClone(roster);
-  tooMany.previousTurns = Array.from({ length: AIDEN_REMOTE_CHAT_MAX_PREVIOUS_TURNS + 1 }, (_, index) => ({
-    turnId: `turn_previous_${index}`,
-    startedAt: "2026-08-18T18:00:00.000Z",
-  }));
-  assert.throws(
-    () => parseAidenRemoteChatAgentRoster(tooMany),
-    /bounded array/u,
+  tooMany.previousTurns = Array.from(
+    { length: AIDEN_REMOTE_CHAT_MAX_PREVIOUS_TURNS + 1 },
+    (_, index) => ({
+      turnId: `turn_previous_${index}`,
+      startedAt: "2026-08-18T18:00:00.000Z",
+    }),
   );
+  assert.throws(() => parseAidenRemoteChatAgentRoster(tooMany), /bounded array/u);
 });
 
 test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics", async () => {
@@ -741,7 +813,10 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);
-  const securitySchemes = record(record(document.components, "components").securitySchemes, "security schemes");
+  const securitySchemes = record(
+    record(document.components, "components").securitySchemes,
+    "security schemes",
+  );
   assert.deepEqual(securitySchemes.protocolVersion, {
     type: "apiKey",
     in: "header",
@@ -753,12 +828,26 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     record(schemas.PairingExchangeRequest, "PairingExchangeRequest").properties,
     "PairingExchangeRequest properties",
   );
-  assert.deepEqual(record(pairingRequestProperties.deviceType, "deviceType").enum, ["iphone", "ipad", "android", "mac", "linux"]);
-  assert.deepEqual(record(pairingRequestProperties.acceptsBotCapabilities, "acceptsBotCapabilities"), {
-    type: "boolean",
-    description: "Explicitly accepts the Bot capability vocabulary and the additive serverCapabilities projection. Bot grants are never issued when this field is absent or false.",
-  });
-  assert.equal(record(pairingRequestProperties.acceptsProgressCapabilities, "acceptsProgressCapabilities").type, "boolean");
+  assert.deepEqual(record(pairingRequestProperties.deviceType, "deviceType").enum, [
+    "iphone",
+    "ipad",
+    "android",
+    "mac",
+    "linux",
+  ]);
+  assert.deepEqual(
+    record(pairingRequestProperties.acceptsBotCapabilities, "acceptsBotCapabilities"),
+    {
+      type: "boolean",
+      description:
+        "Explicitly accepts the Bot capability vocabulary and the additive serverCapabilities projection. Bot grants are never issued when this field is absent or false.",
+    },
+  );
+  assert.equal(
+    record(pairingRequestProperties.acceptsProgressCapabilities, "acceptsProgressCapabilities")
+      .type,
+    "boolean",
+  );
   const pairingResponseCapabilities = record(
     record(
       record(schemas.PairingExchangeResponse, "PairingExchangeResponse").properties,
@@ -766,12 +855,17 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     ).capabilities,
     "PairingExchangeResponse capabilities",
   );
-  assert.deepEqual(record(pairingResponseCapabilities.items, "pairing capability items").enum, PAIRING_CAPABILITIES);
+  assert.deepEqual(
+    record(pairingResponseCapabilities.items, "pairing capability items").enum,
+    PAIRING_CAPABILITIES,
+  );
   assert.deepEqual(
     record(
       record(
-        record(record(schemas.DeviceCapabilitiesUpdateRequest, "update request").properties, "update request properties")
-          .accepts,
+        record(
+          record(schemas.DeviceCapabilitiesUpdateRequest, "update request").properties,
+          "update request properties",
+        ).accepts,
         "accepts",
       ).items,
       "accepts items",
@@ -782,7 +876,8 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   // the event types and run states the host emits.
   const hostFeedEvent = record(schemas.HostFeedEvent, "HostFeedEvent");
   assert.deepEqual(
-    record(record(hostFeedEvent.properties, "HostFeedEvent properties").type, "host feed type").enum,
+    record(record(hostFeedEvent.properties, "HostFeedEvent properties").type, "host feed type")
+      .enum,
     AIDEN_REMOTE_HOST_FEED_EVENT_TYPES,
   );
   const runEvent = record(schemas.RunEvent, "RunEvent");
@@ -807,16 +902,19 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     );
   }
   const serverSchema = record(schemas.Server, "Server");
-  const serverProperties = record(
-    serverSchema.properties,
-    "Server properties",
-  );
+  const serverProperties = record(serverSchema.properties, "Server properties");
   assert.deepEqual(
-    record(record(serverProperties.capabilities, "device capabilities").items, "device capability items").enum,
+    record(
+      record(serverProperties.capabilities, "device capabilities").items,
+      "device capability items",
+    ).enum,
     AIDEN_REMOTE_CAPABILITIES,
   );
   assert.deepEqual(
-    record(record(serverProperties.serverCapabilities, "server capabilities").items, "server capability items").enum,
+    record(
+      record(serverProperties.serverCapabilities, "server capabilities").items,
+      "server capability items",
+    ).enum,
     AIDEN_REMOTE_CAPABILITIES,
   );
   assert.equal((serverSchema.required as unknown[]).includes("serverCapabilities"), false);
@@ -878,24 +976,30 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   assert.equal(progressEventsGet["x-aiden-capability"], "chat:read");
   assert.deepEqual(
     record(
-      record(record(schemas.ChatTaskProgress, "ChatTaskProgress").properties, "ChatTaskProgress properties")
-        .availability,
+      record(
+        record(schemas.ChatTaskProgress, "ChatTaskProgress").properties,
+        "ChatTaskProgress properties",
+      ).availability,
       "task availability",
     ).enum,
     ["ready", "unavailable"],
   );
   assert.equal(
     record(
-      record(record(schemas.ChatAgentRoster, "ChatAgentRoster").properties, "ChatAgentRoster properties")
-        .agents,
+      record(
+        record(schemas.ChatAgentRoster, "ChatAgentRoster").properties,
+        "ChatAgentRoster properties",
+      ).agents,
       "roster agents",
     ).maxItems,
     64,
   );
   assert.equal(
     record(
-      record(record(schemas.ChatAgentRoster, "ChatAgentRoster").properties, "ChatAgentRoster properties")
-        .previousTurns,
+      record(
+        record(schemas.ChatAgentRoster, "ChatAgentRoster").properties,
+        "ChatAgentRoster properties",
+      ).previousTurns,
       "roster previousTurns",
     ).maxItems,
     AIDEN_REMOTE_CHAT_MAX_PREVIOUS_TURNS,
@@ -905,8 +1009,14 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   const chatProperties = record(record(schemas.Chat, "Chat").properties, "Chat properties");
   assert.equal(record(chatProperties.botId, "Chat botId").maxLength, 160);
   const providerSchema = record(schemas.Provider, "Provider schema");
-  const providerModels = record(record(providerSchema.properties, "Provider properties").models, "Provider models");
-  const modelProperties = record(record(record(providerModels.items, "Provider model").properties, "Provider model properties"), "Provider model properties");
+  const providerModels = record(
+    record(providerSchema.properties, "Provider properties").models,
+    "Provider models",
+  );
+  const modelProperties = record(
+    record(record(providerModels.items, "Provider model").properties, "Provider model properties"),
+    "Provider model properties",
+  );
   assert.deepEqual(Object.keys(modelProperties), [
     "id",
     "label",
@@ -937,7 +1047,9 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/pairing/requests/{requestId}",
   ]);
   for (const [route, pathValue] of Object.entries(paths)) {
-    const operations = Object.entries(record(pathValue, route)).filter(([method]) => methods.has(method));
+    const operations = Object.entries(record(pathValue, route)).filter(([method]) =>
+      methods.has(method),
+    );
     const publicOperations = operations.filter(
       ([, operationValue]) => JSON.stringify(record(operationValue, route).security) === "[]",
     );
@@ -947,8 +1059,12 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
       `${route} must be either entirely public pairing/readiness or entirely authenticated`,
     );
     if (!unauthenticatedRoutes.has(route)) {
-      const inherited = (record(pathValue, route).parameters as Array<Record<string, unknown>> | undefined) ?? [];
-      assert(inherited.some((parameter) => parameter.$ref === "#/components/parameters/ProtocolVersion"), `${route} must require the exact protocol-version header`);
+      const inherited =
+        (record(pathValue, route).parameters as Array<Record<string, unknown>> | undefined) ?? [];
+      assert(
+        inherited.some((parameter) => parameter.$ref === "#/components/parameters/ProtocolVersion"),
+        `${route} must require the exact protocol-version header`,
+      );
     }
     for (const [method, operationValue] of operations) {
       const operationRecord = record(operationValue, `${method} ${route}`);
@@ -979,7 +1095,11 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
       if (key === "$ref") {
         if (typeof child !== "string") throw new Error("OpenAPI $ref must be a string.");
-        assert.notEqual(resolveLocalReference(child), undefined, `Unresolved OpenAPI reference ${child}`);
+        assert.notEqual(
+          resolveLocalReference(child),
+          undefined,
+          `Unresolved OpenAPI reference ${child}`,
+        );
       } else {
         inspectReferences(child);
       }
@@ -999,12 +1119,17 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     const responses = record(operation(route, method).responses, `${method} ${route} responses`);
     const response = record(responses[status], `${method} ${route} ${status}`);
     const content = record(response.content, `${method} ${route} ${status} content`);
-    return record(record(content["application/json"], "application/json").schema, "response schema").$ref;
+    return record(record(content["application/json"], "application/json").schema, "response schema")
+      .$ref;
   };
   const requestSchemaRef = (route: string, method: string) => {
-    const requestBody = record(operation(route, method).requestBody, `${method} ${route} requestBody`);
+    const requestBody = record(
+      operation(route, method).requestBody,
+      `${method} ${route} requestBody`,
+    );
     const content = record(requestBody.content, `${method} ${route} request content`);
-    return record(record(content["application/json"], "application/json").schema, "request schema").$ref;
+    return record(record(content["application/json"], "application/json").schema, "request schema")
+      .$ref;
   };
 
   const botIdQuery = record(parameters.BotIdQuery, "BotIdQuery");
@@ -1021,15 +1146,12 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     { $ref: "#/components/parameters/BotIdQuery" },
   ]);
 
-  assert.deepEqual(
-    record(document["x-aiden-json-response-emission"], "JSON response emission"),
-    {
-      maximumUtf8Bytes: AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
-      overflowStatus: 413,
-      overflowErrorCode: "payload_too_large",
-      atomic: true,
-    },
-  );
+  assert.deepEqual(record(document["x-aiden-json-response-emission"], "JSON response emission"), {
+    maximumUtf8Bytes: AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
+    overflowStatus: 413,
+    overflowErrorCode: "payload_too_large",
+    atomic: true,
+  });
   const privateResponseFields = record(
     document["x-aiden-context-private-response-fields"],
     "context-private response fields",
@@ -1048,25 +1170,87 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   );
   assert.deepEqual(privateResponseFields.allowedSchemaProperties, ["BotDetail.instructions"]);
   assert.deepEqual(privateResponseFields.chatSummaryOnlyForbiddenNormalizedNames, [
-    "messages", "attachments", "htmlartifacts", "outcome", "timeline", "reasoning",
-    "botid", "providerid", "modelid", "preview",
+    "messages",
+    "attachments",
+    "htmlartifacts",
+    "outcome",
+    "timeline",
+    "reasoning",
+    "botid",
+    "providerid",
+    "modelid",
+    "preview",
   ]);
   assert.deepEqual(privateResponseFields.forbiddenNormalizedNames, [
-    "credential", "credentials", "secret", "secrets", "apikey", "token",
-    "accesstoken", "refreshtoken", "header", "headers", "endpoint", "path",
-    "prompt", "instructions", "openinggreeting", "argument", "arguments", "args",
-    "toolargument", "toolarguments", "toolargs", "result", "results", "toolresult",
-    "toolresults", "reasoning", "reasoningcontent", "authorization",
-    "credentialdigest", "providerfingerprint", "mcpserverbindings", "folderpath",
-    "repositorypath", "worktreepath", "worktreegitdir", "ownershiptoken",
-    "worktreedevice", "worktreeinode", "createdfromhead", "canonicalpath",
-    "absolutepath", "scriptpath", "managedhomepath", "managedworkspacepath",
-    "workspacepath", "bothomepath", "systemprompt", "skillcontent", "skillcontents",
-    "skillpath", "skillpaths", "providercredential", "mcpcredential",
-    "connectioncredential", "authorizationheader", "providerheaders", "mcpheaders",
-    "connectionheaders", "providerapikey", "mcpapikey", "connectionapikey",
-    "credentialmaterial", "assetfilename", "avatarassetfilename", "temporaryasseturl",
-    "temporaryurl", "environment", "stdout", "stderr",
+    "credential",
+    "credentials",
+    "secret",
+    "secrets",
+    "apikey",
+    "token",
+    "accesstoken",
+    "refreshtoken",
+    "header",
+    "headers",
+    "endpoint",
+    "path",
+    "prompt",
+    "instructions",
+    "openinggreeting",
+    "argument",
+    "arguments",
+    "args",
+    "toolargument",
+    "toolarguments",
+    "toolargs",
+    "result",
+    "results",
+    "toolresult",
+    "toolresults",
+    "reasoning",
+    "reasoningcontent",
+    "authorization",
+    "credentialdigest",
+    "providerfingerprint",
+    "mcpserverbindings",
+    "folderpath",
+    "repositorypath",
+    "worktreepath",
+    "worktreegitdir",
+    "ownershiptoken",
+    "worktreedevice",
+    "worktreeinode",
+    "createdfromhead",
+    "canonicalpath",
+    "absolutepath",
+    "scriptpath",
+    "managedhomepath",
+    "managedworkspacepath",
+    "workspacepath",
+    "bothomepath",
+    "systemprompt",
+    "skillcontent",
+    "skillcontents",
+    "skillpath",
+    "skillpaths",
+    "providercredential",
+    "mcpcredential",
+    "connectioncredential",
+    "authorizationheader",
+    "providerheaders",
+    "mcpheaders",
+    "connectionheaders",
+    "providerapikey",
+    "mcpapikey",
+    "connectionapikey",
+    "credentialmaterial",
+    "assetfilename",
+    "avatarassetfilename",
+    "temporaryasseturl",
+    "temporaryurl",
+    "environment",
+    "stdout",
+    "stderr",
   ]);
 
   const conjunctiveCapabilities = new Map<string, readonly AidenRemoteCapability[]>([
@@ -1121,14 +1305,22 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   ] as const) {
     const conditions = record(schemas[schemaName], schemaName).allOf as unknown[];
     const condition = record(conditions[index], `${schemaName} ${field} implication`);
-    const whenProperties = record(record(condition.if, "implication if").properties, "implication if properties");
-    const thenProperties = record(record(condition.then, "implication then").properties, "implication then properties");
+    const whenProperties = record(
+      record(condition.if, "implication if").properties,
+      "implication if properties",
+    );
+    const thenProperties = record(
+      record(condition.then, "implication then").properties,
+      "implication then properties",
+    );
     assert.equal(
-      record(record(whenProperties[field], `${field} write`).contains, `${field} write contains`).const,
+      record(record(whenProperties[field], `${field} write`).contains, `${field} write contains`)
+        .const,
       "bot:write",
     );
     assert.equal(
-      record(record(thenProperties[field], `${field} read`).contains, `${field} read contains`).const,
+      record(record(thenProperties[field], `${field} read`).contains, `${field} read contains`)
+        .const,
       "bot:read",
     );
   }
@@ -1139,12 +1331,15 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     maxLength: 160,
     pattern: "^[A-Za-z0-9._:-]+$",
   });
-  assert.deepEqual(record(record(parameters.AssetRevision, "AssetRevision").schema, "AssetRevision schema"), {
-    type: "string",
-    minLength: 1,
-    maxLength: 128,
-    pattern: "^[A-Za-z0-9._:-]+$",
-  });
+  assert.deepEqual(
+    record(record(parameters.AssetRevision, "AssetRevision").schema, "AssetRevision schema"),
+    {
+      type: "string",
+      minLength: 1,
+      maxLength: 128,
+      pattern: "^[A-Za-z0-9._:-]+$",
+    },
+  );
 
   const closedBotSchemas = [
     "BotAvatarAsset",
@@ -1184,13 +1379,13 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   for (const name of closedBotSchemas) {
     // A schema composed with allOf closes over everything it evaluates instead.
     const schema = record(schemas[name], name);
-    assert.equal(schema.additionalProperties ?? schema.unevaluatedProperties, false, `${name} must be closed`);
+    assert.equal(
+      schema.additionalProperties ?? schema.unevaluatedProperties,
+      false,
+      `${name} must be closed`,
+    );
   }
-  for (const name of [
-    "BotAccessView",
-    "BotAccessUpdateRequest",
-    "BotChatCreateRequest",
-  ]) {
+  for (const name of ["BotAccessView", "BotAccessUpdateRequest", "BotChatCreateRequest"]) {
     const variants = record(schemas[name], name).oneOf;
     assert(Array.isArray(variants));
     assert.equal(variants.length, 2);
@@ -1202,77 +1397,192 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.deepEqual(avatarSchema.required, ["version", "shape", "color"]);
   assert.equal(avatarSchema.additionalProperties, false);
   const avatarProperties = record(avatarSchema.properties, "BotSemanticAvatar properties");
-  assert.deepEqual(record(avatarProperties.color, "avatar color").enum, [...AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES]);
+  assert.deepEqual(record(avatarProperties.color, "avatar color").enum, [
+    ...AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES,
+  ]);
   assert.equal((record(avatarProperties.color, "avatar color").enum as unknown[]).length, 12);
 
   const botSummary = record(schemas.BotSummary, "BotSummary");
   const botSummaryProperties = record(botSummary.properties, "BotSummary properties");
-  assert.deepEqual(botSummary.required, ["id", "name", "purpose", "avatar", "health", "createdAt", "updatedAt", "revision"]);
-  assert.equal("instructions" in botSummaryProperties, false, "Bot summaries must not expose instructions");
+  assert.deepEqual(botSummary.required, [
+    "id",
+    "name",
+    "purpose",
+    "avatar",
+    "health",
+    "createdAt",
+    "updatedAt",
+    "revision",
+  ]);
+  assert.equal(
+    "instructions" in botSummaryProperties,
+    false,
+    "Bot summaries must not expose instructions",
+  );
   assert.equal(record(botSummaryProperties.id, "BotSummary id").maxLength, 160);
   assert.equal(record(botSummaryProperties.purpose, "BotSummary purpose").maxLength, 280);
   assert.equal(botSummary["x-aiden-updated-at-not-before-created-at"], true);
-  assert.deepEqual(record(schemas.BotHealth, "BotHealth").enum, ["ready", "degraded", "unavailable"]);
+  assert.deepEqual(record(schemas.BotHealth, "BotHealth").enum, [
+    "ready",
+    "degraded",
+    "unavailable",
+  ]);
   for (const name of ["BotSummary", "BotDetail"]) {
-    assert.equal("archivedAt" in record(record(schemas[name], name).properties, name), false, `${name} carries no archivedAt`);
+    assert.equal(
+      "archivedAt" in record(record(schemas[name], name).properties, name),
+      false,
+      `${name} carries no archivedAt`,
+    );
   }
-  const botListProperties = record(record(schemas.BotList, "BotList").properties, "BotList properties");
+  const botListProperties = record(
+    record(schemas.BotList, "BotList").properties,
+    "BotList properties",
+  );
   assert.equal(record(botListProperties.bots, "Bot list items").maxItems, 256);
   assert.equal(record(botListProperties.maxBots, "Bot list maximum").const, 256);
 
-  const botDetailProperties = record(record(schemas.BotDetail, "BotDetail").properties, "BotDetail properties");
-  assert.equal(record(schemas.BotDetail, "BotDetail")["x-aiden-updated-at-not-before-created-at"], true);
+  const botDetailProperties = record(
+    record(schemas.BotDetail, "BotDetail").properties,
+    "BotDetail properties",
+  );
+  assert.equal(
+    record(schemas.BotDetail, "BotDetail")["x-aiden-updated-at-not-before-created-at"],
+    true,
+  );
   assert.equal(record(botDetailProperties.instructions, "instructions").maxLength, 32_000);
   // Revision 27 retired the greeting: never emitted, accepted and ignored in requests.
   assert.equal("openingGreeting" in botDetailProperties, false);
-  assert.equal(record(botDetailProperties.access, "Bot access").$ref, "#/components/schemas/BotAccessView");
+  assert.equal(
+    record(botDetailProperties.access, "Bot access").$ref,
+    "#/components/schemas/BotAccessView",
+  );
   const botModelSelection = record(botDetailProperties.modelSelection, "Bot model selection");
   assert.deepEqual(botModelSelection.required, ["providerId", "modelId"]);
   const createRequest = record(schemas.BotCreateRequest, "BotCreateRequest");
   assert.equal(createRequest["x-aiden-provider-model-must-be-currently-available"], true);
   assert.deepEqual(createRequest.required, ["name", "avatar"]);
-  assert.deepEqual(Object.keys(record(createRequest.properties, "BotCreateRequest properties")), ["name", "purpose", "openingGreeting", "instructions", "avatar", "access"]);
+  assert.deepEqual(Object.keys(record(createRequest.properties, "BotCreateRequest properties")), [
+    "name",
+    "purpose",
+    "openingGreeting",
+    "instructions",
+    "avatar",
+    "access",
+  ]);
   assert.equal(
-    record(record(createRequest.properties, "BotCreateRequest properties").access, "create access").$ref,
+    record(record(createRequest.properties, "BotCreateRequest properties").access, "create access")
+      .$ref,
     "#/components/schemas/BotAccessUpdateRequest",
   );
   const identityPatch = record(schemas.BotIdentityPatch, "BotIdentityPatch");
   assert.equal(identityPatch.minProperties, 1);
-  assert.deepEqual(Object.keys(record(identityPatch.properties, "BotIdentityPatch properties")), ["name", "purpose", "openingGreeting", "instructions", "avatar", "chatActivity", "botMessaging"]);
+  assert.deepEqual(Object.keys(record(identityPatch.properties, "BotIdentityPatch properties")), [
+    "name",
+    "purpose",
+    "openingGreeting",
+    "instructions",
+    "avatar",
+    "chatActivity",
+    "botMessaging",
+  ]);
 
-  const conversationPageProperties = record(record(schemas.BotConversationPage, "BotConversationPage").properties, "BotConversationPage properties");
+  const conversationPageProperties = record(
+    record(schemas.BotConversationPage, "BotConversationPage").properties,
+    "BotConversationPage properties",
+  );
   assert.equal(record(conversationPageProperties.conversations, "conversations").maxItems, 50);
-  const conversationProperties = record(record(schemas.BotConversationItem, "BotConversationItem").properties, "BotConversationItem properties");
-  assert.equal(record(schemas.BotConversationItem, "BotConversationItem")["x-aiden-updated-at-not-before-created-at"], true);
+  const conversationProperties = record(
+    record(schemas.BotConversationItem, "BotConversationItem").properties,
+    "BotConversationItem properties",
+  );
+  assert.equal(
+    record(schemas.BotConversationItem, "BotConversationItem")[
+      "x-aiden-updated-at-not-before-created-at"
+    ],
+    true,
+  );
   assert.equal(record(conversationProperties.preview, "preview").maxLength, 500);
-  assert.deepEqual(record(conversationProperties.activityState, "activityState").enum, ["idle", "queued", "running", "waiting_for_approval", "reconciling"]);
-  const approvalCondition = record((record(schemas.BotConversationItem, "BotConversationItem").allOf as unknown[])[0], "approval response condition");
-  const approvalConditionProperties = record(record(approvalCondition.if, "approval condition").properties, "approval condition properties");
-  const approvalConsequenceProperties = record(record(approvalCondition.then, "approval consequence").properties, "approval consequence properties");
-  assert.equal(record(approvalConditionProperties.canRespondToApproval, "canRespondToApproval condition").const, true);
-  assert.equal(record(approvalConsequenceProperties.activityState, "activityState consequence").const, "waiting_for_approval");
-  const conversationParameters = operation("/bot-conversations", "get").parameters as Array<Record<string, unknown>>;
-  const queryParameter = (name: string) => record(conversationParameters.find((parameter) => parameter.name === name), `${name} parameter`);
+  assert.deepEqual(record(conversationProperties.activityState, "activityState").enum, [
+    "idle",
+    "queued",
+    "running",
+    "waiting_for_approval",
+    "reconciling",
+  ]);
+  const approvalCondition = record(
+    (record(schemas.BotConversationItem, "BotConversationItem").allOf as unknown[])[0],
+    "approval response condition",
+  );
+  const approvalConditionProperties = record(
+    record(approvalCondition.if, "approval condition").properties,
+    "approval condition properties",
+  );
+  const approvalConsequenceProperties = record(
+    record(approvalCondition.then, "approval consequence").properties,
+    "approval consequence properties",
+  );
+  assert.equal(
+    record(approvalConditionProperties.canRespondToApproval, "canRespondToApproval condition")
+      .const,
+    true,
+  );
+  assert.equal(
+    record(approvalConsequenceProperties.activityState, "activityState consequence").const,
+    "waiting_for_approval",
+  );
+  const conversationParameters = operation("/bot-conversations", "get").parameters as Array<
+    Record<string, unknown>
+  >;
+  const queryParameter = (name: string) =>
+    record(
+      conversationParameters.find((parameter) => parameter.name === name),
+      `${name} parameter`,
+    );
   assert.equal(record(queryParameter("query").schema, "query schema").maxLength, 200);
   assert.equal(record(queryParameter("botId").schema, "botId schema").maxLength, 160);
-  assert.deepEqual(record(queryParameter("limit").schema, "limit schema"), { type: "integer", minimum: 1, maximum: 50, default: 30 });
+  assert.deepEqual(record(queryParameter("limit").schema, "limit schema"), {
+    type: "integer",
+    minimum: 1,
+    maximum: 50,
+    default: 30,
+  });
 
-  const catalogProperties = record(record(schemas.BotCapabilityCatalog, "BotCapabilityCatalog").properties, "BotCapabilityCatalog properties");
-  assert.deepEqual(Object.keys(catalogProperties), ["revision", "providers", "fileScopes", "shellAvailable", "connections", "skillsEnabled", "skills", "otherCapabilities"]);
-  assert.equal(record(catalogProperties.providers, "providers").maxItems, 64);
-  assert.equal(
-    record(catalogProperties.providers, "providers")["x-aiden-max-total-models"],
-    512,
+  const catalogProperties = record(
+    record(schemas.BotCapabilityCatalog, "BotCapabilityCatalog").properties,
+    "BotCapabilityCatalog properties",
   );
+  assert.deepEqual(Object.keys(catalogProperties), [
+    "revision",
+    "providers",
+    "fileScopes",
+    "shellAvailable",
+    "connections",
+    "skillsEnabled",
+    "skills",
+    "otherCapabilities",
+  ]);
+  assert.equal(record(catalogProperties.providers, "providers").maxItems, 64);
+  assert.equal(record(catalogProperties.providers, "providers")["x-aiden-max-total-models"], 512);
   assert.equal(record(catalogProperties.connections, "connections").maxItems, 128);
   assert.equal(record(catalogProperties.skills, "skills").maxItems, 256);
   assert.equal(record(catalogProperties.skillsEnabled, "skillsEnabled").type, "boolean");
   assert.equal(record(catalogProperties.skillsEnabled, "skillsEnabled").default, true);
   const customSelection = record(schemas.BotCustomSelection, "BotCustomSelection");
-  assert.deepEqual(customSelection.required, ["providerId", "modelId", "fileScopeIds", "shellEnabled", "connectionIds", "skillIds", "otherCapabilityIds"]);
+  assert.deepEqual(customSelection.required, [
+    "providerId",
+    "modelId",
+    "fileScopeIds",
+    "shellEnabled",
+    "connectionIds",
+    "skillIds",
+    "otherCapabilityIds",
+  ]);
   const customProperties = record(customSelection.properties, "BotCustomSelection properties");
   for (const field of ["fileScopeIds", "connectionIds", "skillIds", "otherCapabilityIds"]) {
-    assert.equal(record(record(customProperties[field], field).items, `${field} items`).pattern, "^[A-Za-z0-9._:-]+$");
+    assert.equal(
+      record(record(customProperties[field], field).items, `${field} items`).pattern,
+      "^[A-Za-z0-9._:-]+$",
+    );
   }
   for (const name of ["BotCapabilityOption", "BotFileScopeOption"]) {
     const optionProperties = record(record(schemas[name], name).properties, `${name} properties`);
@@ -1281,11 +1591,19 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   const botAccessVariants = record(schemas.BotAccessView, "BotAccessView").oneOf as unknown[];
   const fullAccess = record(botAccessVariants[0], "full BotAccessView");
   const customAccess = record(botAccessVariants[1], "custom BotAccessView");
-  assert.equal(record(record(fullAccess.properties, "full access properties").accessMode, "full mode").const, "full");
+  assert.equal(
+    record(record(fullAccess.properties, "full access properties").accessMode, "full mode").const,
+    "full",
+  );
   assert.equal("custom" in record(fullAccess.properties, "full access properties"), false);
-  assert.equal(record(record(customAccess.properties, "custom access properties").accessMode, "custom mode").const, "custom");
+  assert.equal(
+    record(record(customAccess.properties, "custom access properties").accessMode, "custom mode")
+      .const,
+    "custom",
+  );
   assert((customAccess.required as unknown[]).includes("custom"));
-  const botUpdateVariants = record(schemas.BotAccessUpdateRequest, "BotAccessUpdateRequest").oneOf as unknown[];
+  const botUpdateVariants = record(schemas.BotAccessUpdateRequest, "BotAccessUpdateRequest")
+    .oneOf as unknown[];
   assert.deepEqual(record(botUpdateVariants[0], "full Bot update").required, [
     "accessMode",
     "catalogRevision",
@@ -1300,25 +1618,52 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     "catalogRevision",
     "custom",
   ]);
-  const botChatCreateVariants = record(schemas.BotChatCreateRequest, "BotChatCreateRequest").oneOf as unknown[];
-  assert.equal(record(schemas.BotChatCreateRequest, "BotChatCreateRequest")["x-aiden-provider-model-must-be-currently-available"], true);
+  const botChatCreateVariants = record(schemas.BotChatCreateRequest, "BotChatCreateRequest")
+    .oneOf as unknown[];
+  assert.equal(
+    record(schemas.BotChatCreateRequest, "BotChatCreateRequest")[
+      "x-aiden-provider-model-must-be-currently-available"
+    ],
+    true,
+  );
   assert.equal(record(botChatCreateVariants[0], "inherited Bot chat create").maxProperties, 0);
   assert.deepEqual(record(botChatCreateVariants[1], "selected Bot chat create").required, [
     "providerId",
     "modelId",
   ]);
-  const avatarAssetProperties = record(record(schemas.BotAvatarAsset, "BotAvatarAsset").properties, "BotAvatarAsset properties");
+  const avatarAssetProperties = record(
+    record(schemas.BotAvatarAsset, "BotAvatarAsset").properties,
+    "BotAvatarAsset properties",
+  );
   assert.equal(record(avatarAssetProperties.mimeType, "avatar MIME").const, "image/png");
   assert.equal(record(avatarAssetProperties.width, "avatar width").const, 512);
   assert.equal(record(avatarAssetProperties.height, "avatar height").const, 512);
   assert.equal(record(avatarAssetProperties.byteSize, "avatar bytes").maximum, 4_194_304);
-  const avatarUploadProperties = record(record(schemas.BotAvatarUploadRequest, "BotAvatarUploadRequest").properties, "BotAvatarUploadRequest properties");
+  const avatarUploadProperties = record(
+    record(schemas.BotAvatarUploadRequest, "BotAvatarUploadRequest").properties,
+    "BotAvatarUploadRequest properties",
+  );
   assert.equal(record(avatarUploadProperties.data, "avatar data").maxLength, 5_592_408);
-  const avatarContent = record(record(operation("/bots/{botId}/avatar/{assetRevision}", "get").responses, "avatar responses")["200"], "avatar 200");
+  const avatarContent = record(
+    record(operation("/bots/{botId}/avatar/{assetRevision}", "get").responses, "avatar responses")[
+      "200"
+    ],
+    "avatar 200",
+  );
   const avatarHeaders = record(avatarContent.headers, "avatar headers");
   assert.deepEqual(Object.keys(record(avatarContent.content, "avatar content")), ["image/png"]);
-  assert.equal(record(record(avatarHeaders["Cache-Control"], "Cache-Control").schema, "Cache-Control schema").const, "no-store");
-  assert.equal(record(record(avatarHeaders["X-Content-Type-Options"], "X-Content-Type-Options").schema, "nosniff schema").const, "nosniff");
+  assert.equal(
+    record(record(avatarHeaders["Cache-Control"], "Cache-Control").schema, "Cache-Control schema")
+      .const,
+    "no-store",
+  );
+  assert.equal(
+    record(
+      record(avatarHeaders["X-Content-Type-Options"], "X-Content-Type-Options").schema,
+      "nosniff schema",
+    ).const,
+    "nosniff",
+  );
 
   const chatSchema = record(schemas.Chat, "Chat");
   const chatProperties = record(chatSchema.properties, "Chat properties");
@@ -1328,7 +1673,10 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.equal(record(chatProperties.title, "Chat title").maxLength, 1_024);
   assert.equal(record(chatProperties.providerId, "Chat providerId").maxLength, 256);
   assert.equal(record(chatProperties.modelId, "Chat modelId").maxLength, 512);
-  assert.equal(record(chatProperties.messages, "Chat messages").maxItems, AIDEN_REMOTE_MAX_CHAT_MESSAGES);
+  assert.equal(
+    record(chatProperties.messages, "Chat messages").maxItems,
+    AIDEN_REMOTE_MAX_CHAT_MESSAGES,
+  );
   assert.equal(chatSchema["x-aiden-max-json-response-bytes"], AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES);
   assert.equal(chatSchema["x-aiden-updated-at-not-before-created-at"], true);
   assert.deepEqual(chatSchema.dependentRequired, {
@@ -1338,13 +1686,30 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   });
   const botChatCreateResponse = record(schemas.BotChatCreateResponse, "BotChatCreateResponse");
   const botChatCreateResponseParts = botChatCreateResponse.allOf as unknown[];
-  assert.equal(record(botChatCreateResponseParts[0], "Bot chat response Chat").$ref, "#/components/schemas/Chat");
-  assert.deepEqual(record(botChatCreateResponseParts[1], "Bot chat response identity").required, ["botId"]);
-  assert.equal(operation("/bots", "post")["x-aiden-provider-model-must-be-currently-available"], true);
-  assert.equal(operation("/bots/{botId}/chats", "post")["x-aiden-provider-model-must-be-currently-available"], true);
+  assert.equal(
+    record(botChatCreateResponseParts[0], "Bot chat response Chat").$ref,
+    "#/components/schemas/Chat",
+  );
+  assert.deepEqual(record(botChatCreateResponseParts[1], "Bot chat response identity").required, [
+    "botId",
+  ]);
+  assert.equal(
+    operation("/bots", "post")["x-aiden-provider-model-must-be-currently-available"],
+    true,
+  );
+  assert.equal(
+    operation("/bots/{botId}/chats", "post")["x-aiden-provider-model-must-be-currently-available"],
+    true,
+  );
   assert.equal(operation("/bots/{botId}/chats", "post")["x-aiden-canonical-chat-per-bot"], true);
-  assert.equal(operation("/bots/{botId}/chats", "post")["x-aiden-provider-model-required-only-when-creating"], true);
-  const messageProperties = record(record(schemas.Message, "Message").properties, "Message properties");
+  assert.equal(
+    operation("/bots/{botId}/chats", "post")["x-aiden-provider-model-required-only-when-creating"],
+    true,
+  );
+  const messageProperties = record(
+    record(schemas.Message, "Message").properties,
+    "Message properties",
+  );
   assert.equal(record(messageProperties.id, "Message id").minLength, 1);
   assert.equal(record(messageProperties.id, "Message id").maxLength, 128);
 
@@ -1399,7 +1764,12 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bots/{botId}/connection-requests", "post", "200", "BotConnectionRequestReceipt"],
     ["/bots/{botId}/memory", "get", "200", "BotMemory"],
     ["/bots/{botId}/memory/edits", "post", "200", "BotMemoryEditResponse"],
-    ["/bots/{botId}/routine-proposals/{proposalId}/respond", "post", "200", "BotRoutineProposalRespondResult"],
+    [
+      "/bots/{botId}/routine-proposals/{proposalId}/respond",
+      "post",
+      "200",
+      "BotRoutineProposalRespondResult",
+    ],
     ["/bots/{botId}/routine-suggestions", "get", "200", "BotRoutineSuggestionList"],
     ["/bots/routine-notifications", "get", "200", "BotRoutineNotificationList"],
   ] as const) {
@@ -1505,7 +1875,11 @@ test("wire schemas are allowlists and pairing requires pinned HTTPS identity", a
     "ScheduledTask",
     "ErrorEnvelope",
   ]) {
-    assert.equal(record(schemas[name], name).additionalProperties, false, `${name} must be an allowlist`);
+    assert.equal(
+      record(schemas[name], name).additionalProperties,
+      false,
+      `${name} must be an allowlist`,
+    );
   }
   for (const name of [
     "PairingBootstrap",
@@ -1518,7 +1892,11 @@ test("wire schemas are allowlists and pairing requires pinned HTTPS identity", a
     "GitComparisonDiffRequest",
     "GitCreateWorktreeRequest",
   ]) {
-    assert.equal(record(schemas[name], name).additionalProperties, false, `${name} must be an allowlist`);
+    assert.equal(
+      record(schemas[name], name).additionalProperties,
+      false,
+      `${name} must be an allowlist`,
+    );
   }
   const attachmentUploadVariants = record(schemas.AttachmentUpload, "AttachmentUpload").oneOf;
   assert(Array.isArray(attachmentUploadVariants));
@@ -1542,11 +1920,17 @@ test("wire schemas are allowlists and pairing requires pinned HTTPS identity", a
   assert.equal(pairing.serverSpkiSha256, bootstrap.serverSpkiSha256);
   assert.equal(record(schemas.PairingBootstrap, "PairingBootstrap").additionalProperties, false);
   const pairingBootstrapEndpointPattern = record(
-    record(record(schemas.PairingBootstrap, "PairingBootstrap").properties, "PairingBootstrap properties").endpoint,
+    record(
+      record(schemas.PairingBootstrap, "PairingBootstrap").properties,
+      "PairingBootstrap properties",
+    ).endpoint,
     "PairingBootstrap endpoint",
   ).pattern;
   const pairingExchangeEndpointPattern = record(
-    record(record(schemas.PairingExchangeResponse, "PairingExchangeResponse").properties, "PairingExchangeResponse properties").endpoint,
+    record(
+      record(schemas.PairingExchangeResponse, "PairingExchangeResponse").properties,
+      "PairingExchangeResponse properties",
+    ).endpoint,
     "PairingExchangeResponse endpoint",
   ).pattern;
   for (const pattern of [pairingBootstrapEndpointPattern, pairingExchangeEndpointPattern]) {
@@ -1561,22 +1945,40 @@ test("wire schemas are allowlists and pairing requires pinned HTTPS identity", a
     }
     assert.equal(endpoint.test("https://user:secret@aiden.example.test/api/aiden/v1"), false);
   }
-  assert.deepEqual(record(schemas.WorkspacePatch, "WorkspacePatch").required, ["confirmedForeground"]);
-  assert.deepEqual(record(schemas.MemorySettingsMutation, "MemorySettingsMutation").required, ["enabled", "confirmedForeground"]);
-  assert.deepEqual(record(schemas.ScheduleSettingsMutation, "ScheduleSettingsMutation").required, ["confirmedForeground"]);
-  const messageRoles = record(record(record(schemas.Message, "Message").properties, "Message properties").role, "Message role").enum;
+  assert.deepEqual(record(schemas.WorkspacePatch, "WorkspacePatch").required, [
+    "confirmedForeground",
+  ]);
+  assert.deepEqual(record(schemas.MemorySettingsMutation, "MemorySettingsMutation").required, [
+    "enabled",
+    "confirmedForeground",
+  ]);
+  assert.deepEqual(record(schemas.ScheduleSettingsMutation, "ScheduleSettingsMutation").required, [
+    "confirmedForeground",
+  ]);
+  const messageRoles = record(
+    record(record(schemas.Message, "Message").properties, "Message properties").role,
+    "Message role",
+  ).enum;
   assert(Array.isArray(messageRoles));
   assert.equal(messageRoles.includes("system"), false);
   assert.equal(record(schemas.ErrorDetails, "ErrorDetails").additionalProperties, false);
   const streamEvent = record(schemas.StreamEvent, "StreamEvent");
-  assert.equal(streamEvent.additionalProperties, true, "SSE envelopes must remain additively extensible");
+  assert.equal(
+    streamEvent.additionalProperties,
+    true,
+    "SSE envelopes must remain additively extensible",
+  );
   const streamEventVariants = streamEvent.allOf;
   assert(Array.isArray(streamEventVariants));
-  const conditionalForType = (type: string) => streamEventVariants.find((variant) => {
-    const condition = record(record(record(variant, "StreamEvent conditional").if, "if").properties, "if properties");
-    const typeCondition = record(condition.type, "type condition");
-    return typeCondition.const === type;
-  });
+  const conditionalForType = (type: string) =>
+    streamEventVariants.find((variant) => {
+      const condition = record(
+        record(record(variant, "StreamEvent conditional").if, "if").properties,
+        "if properties",
+      );
+      const typeCondition = record(condition.type, "type condition");
+      return typeCondition.const === type;
+    });
   for (const [type, terminal] of [
     ["heartbeat", false],
     ["done", true],
@@ -1584,25 +1986,56 @@ test("wire schemas are allowlists and pairing requires pinned HTTPS identity", a
     ["cancelled", true],
   ] as const) {
     const conditional = record(conditionalForType(type), `${type} conditional`);
-    const thenProperties = record(record(conditional.then, `${type} then`).properties, `${type} then properties`);
+    const thenProperties = record(
+      record(conditional.then, `${type} then`).properties,
+      `${type} then properties`,
+    );
     assert.equal(record(thenProperties.terminal, `${type} terminal`).const, terminal);
   }
   const unknownConditional = streamEventVariants.find((variant) => {
-    const condition = record(record(record(variant, "unknown conditional").if, "if").properties, "if properties");
+    const condition = record(
+      record(record(variant, "unknown conditional").if, "if").properties,
+      "if properties",
+    );
     const typeCondition = record(condition.type, "unknown type condition");
     return "not" in typeCondition;
   });
-  const unknownThen = record(record(record(unknownConditional, "unknown conditional").then, "unknown then").properties, "unknown then properties");
+  const unknownThen = record(
+    record(record(unknownConditional, "unknown conditional").then, "unknown then").properties,
+    "unknown then properties",
+  );
   assert.equal(record(unknownThen.terminal, "unknown terminal").const, false);
-  const streamStates = record(record(record(schemas.StreamStatus, "StreamStatus").properties, "StreamStatus properties").state, "StreamStatus state").enum;
+  const streamStates = record(
+    record(record(schemas.StreamStatus, "StreamStatus").properties, "StreamStatus properties")
+      .state,
+    "StreamStatus state",
+  ).enum;
   assert(Array.isArray(streamStates));
   assert(streamStates.includes("reconciling"));
   const statusConditional = record(conditionalForType("status"), "status conditional");
-  const statusThenProperties = record(record(statusConditional.then, "status then").properties, "status then properties");
-  const statusPayloadStates = record(record(record(statusThenProperties.payload, "status payload").properties, "status payload properties").state, "status payload state").enum;
-  assert.deepEqual(statusPayloadStates, ["queued", "running", "waiting_for_approval", "reconciling"]);
+  const statusThenProperties = record(
+    record(statusConditional.then, "status then").properties,
+    "status then properties",
+  );
+  const statusPayloadStates = record(
+    record(
+      record(statusThenProperties.payload, "status payload").properties,
+      "status payload properties",
+    ).state,
+    "status payload state",
+  ).enum;
+  assert.deepEqual(statusPayloadStates, [
+    "queued",
+    "running",
+    "waiting_for_approval",
+    "reconciling",
+  ]);
   assert.deepEqual(record(schemas.ErrorCode, "ErrorCode").enum, AIDEN_REMOTE_ERROR_CODES);
-  const remotePattern = record(record(record(schemas.GitPushRequest, "GitPushRequest").properties, "GitPushRequest properties").remote, "Git remote").pattern;
+  const remotePattern = record(
+    record(record(schemas.GitPushRequest, "GitPushRequest").properties, "GitPushRequest properties")
+      .remote,
+    "Git remote",
+  ).pattern;
   assert.equal(typeof remotePattern, "string");
   const safeRemote = new RegExp(remotePattern as string);
   assert.equal(safeRemote.test("origin"), true);
@@ -1614,26 +2047,46 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
   const clone = () => structuredClone(source);
   const bootstrapWithExtraField = clone();
   record(bootstrapWithExtraField.pairingBootstrap, "bootstrap").unexpected = true;
-  assert.throws(() => parseAidenRemoteContractFixture(bootstrapWithExtraField), /unsupported field/);
+  assert.throws(
+    () => parseAidenRemoteContractFixture(bootstrapWithExtraField),
+    /unsupported field/,
+  );
   const exchangeWithExtraField = clone();
   record(exchangeWithExtraField.pairingExchange, "exchange").unexpected = true;
   assert.throws(() => parseAidenRemoteContractFixture(exchangeWithExtraField), /unsupported field/);
   const errorEnvelopeWithExtraField = clone();
   record(errorEnvelopeWithExtraField.error, "error envelope").unexpected = true;
-  assert.throws(() => parseAidenRemoteContractFixture(errorEnvelopeWithExtraField), /unsupported field/);
+  assert.throws(
+    () => parseAidenRemoteContractFixture(errorEnvelopeWithExtraField),
+    /unsupported field/,
+  );
   const errorBodyWithExtraField = clone();
   record(record(errorBodyWithExtraField.error, "error envelope").error, "error").unexpected = true;
-  assert.throws(() => parseAidenRemoteContractFixture(errorBodyWithExtraField), /unsupported field/);
+  assert.throws(
+    () => parseAidenRemoteContractFixture(errorBodyWithExtraField),
+    /unsupported field/,
+  );
   const errorDetailsWithExtraField = clone();
-  record(record(errorDetailsWithExtraField.error, "error envelope").error, "error").details = { unexpected: true };
-  assert.throws(() => parseAidenRemoteContractFixture(errorDetailsWithExtraField), /unsupported field/);
+  record(record(errorDetailsWithExtraField.error, "error envelope").error, "error").details = {
+    unexpected: true,
+  };
+  assert.throws(
+    () => parseAidenRemoteContractFixture(errorDetailsWithExtraField),
+    /unsupported field/,
+  );
 
   const oversizedBootstrapInstance = clone();
   record(oversizedBootstrapInstance.pairingBootstrap, "bootstrap").instanceId = "i".repeat(129);
-  assert.throws(() => parseAidenRemoteContractFixture(oversizedBootstrapInstance), /instanceId.*128/);
+  assert.throws(
+    () => parseAidenRemoteContractFixture(oversizedBootstrapInstance),
+    /instanceId.*128/,
+  );
   const oversizedExchangeInstance = clone();
   record(oversizedExchangeInstance.pairingExchange, "exchange").instanceId = "i".repeat(129);
-  assert.throws(() => parseAidenRemoteContractFixture(oversizedExchangeInstance), /instanceId.*128/);
+  assert.throws(
+    () => parseAidenRemoteContractFixture(oversizedExchangeInstance),
+    /instanceId.*128/,
+  );
   const oversizedDeviceId = clone();
   record(oversizedDeviceId.pairingExchange, "exchange").deviceId = "d".repeat(129);
   assert.throws(() => parseAidenRemoteContractFixture(oversizedDeviceId), /deviceId.*128/);
@@ -1643,14 +2096,20 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
   assert.throws(() => parseAidenRemoteContractFixture(oversizedUtf8Endpoint), /UTF-8 bytes/);
 
   const weakSecret = clone();
-  record(weakSecret.pairingBootstrap, "bootstrap").secret = "predictable-secret-that-is-long-enough";
+  record(weakSecret.pairingBootstrap, "bootstrap").secret =
+    "predictable-secret-that-is-long-enough";
   assert.throws(() => parseAidenRemoteContractFixture(weakSecret), /32 random bytes/);
   const wrongExchange = clone();
-  record(wrongExchange.pairingExchange, "exchange").endpoint = "https://other.example.test/api/aiden/v1";
+  record(wrongExchange.pairingExchange, "exchange").endpoint =
+    "https://other.example.test/api/aiden/v1";
   assert.throws(() => parseAidenRemoteContractFixture(wrongExchange), /does not match bootstrap/);
   const userInfoEndpoint = clone();
-  record(userInfoEndpoint.pairingBootstrap, "bootstrap").endpoint = "https://user:secret@aiden-fixture.example.test/api/aiden/v1";
-  assert.throws(() => parseAidenRemoteContractFixture(userInfoEndpoint), /canonical HTTPS Aiden v1 URL/);
+  record(userInfoEndpoint.pairingBootstrap, "bootstrap").endpoint =
+    "https://user:secret@aiden-fixture.example.test/api/aiden/v1";
+  assert.throws(
+    () => parseAidenRemoteContractFixture(userInfoEndpoint),
+    /canonical HTTPS Aiden v1 URL/,
+  );
   for (const endpoint of [
     "https://:443/api/aiden/v1",
     "https://aiden-fixture.example.test:0/api/aiden/v1",
@@ -1668,7 +2127,10 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
   ]) {
     const nonCanonicalPath = clone();
     record(nonCanonicalPath.pairingBootstrap, "bootstrap").endpoint = endpoint;
-    assert.throws(() => parseAidenRemoteContractFixture(nonCanonicalPath), /canonical HTTPS Aiden v1 URL/);
+    assert.throws(
+      () => parseAidenRemoteContractFixture(nonCanonicalPath),
+      /canonical HTTPS Aiden v1 URL/,
+    );
   }
   const longLived = clone();
   record(longLived.pairingBootstrap, "bootstrap").expiresAt = "2026-08-18T19:06:00.000Z";
@@ -1685,11 +2147,17 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
   for (const invalidFeature of ["Uppercase", "future:feature", `f${"x".repeat(64)}`]) {
     const malformedFeature = clone();
     record(malformedFeature.server, "server").features = ["chat-summaries-v1", invalidFeature];
-    assert.throws(() => parseAidenRemoteContractFixture(malformedFeature), /server feature is invalid/);
+    assert.throws(
+      () => parseAidenRemoteContractFixture(malformedFeature),
+      /server feature is invalid/,
+    );
   }
   const unknownCapability = clone();
   record(unknownCapability.pairingExchange, "exchange").capabilities = ["admin:everything"];
-  assert.throws(() => parseAidenRemoteContractFixture(unknownCapability), /Unknown pairing capability/);
+  assert.throws(
+    () => parseAidenRemoteContractFixture(unknownCapability),
+    /Unknown pairing capability/,
+  );
   const unknownServerCapability = clone();
   record(unknownServerCapability.server, "server").serverCapabilities = ["admin:everything"];
   assert.throws(
@@ -1715,23 +2183,68 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
     /bot:write capability requires bot:read/,
   );
   const unsafeDetails = clone();
-  record(record(unsafeDetails.error, "error envelope").error, "error").details = { absolutePath: "/private/secret" };
+  record(record(unsafeDetails.error, "error envelope").error, "error").details = {
+    absolutePath: "/private/secret",
+  };
   assert.throws(() => parseAidenRemoteContractFixture(unsafeDetails), /unsupported field/);
 
   // The new progress projections are bounded public surfaces: private or
   // additive unknown fields fail closed at every level, not only on legacy
   // transcript shapes.
   for (const [mutate, label] of [
-    [(draft: Record<string, unknown>) => { record(draft.taskProgress, "taskProgress").absolutePath = "/private/secret"; }, "taskProgress root"],
-    [(draft: Record<string, unknown>) => { record((record(draft.taskProgress, "taskProgress").tasks as unknown[])[0], "task").childTranscript = ["secret"]; }, "taskProgress task"],
-    [(draft: Record<string, unknown>) => { record(draft.agentRoster, "agentRoster").providerCredential = "secret"; }, "agentRoster root"],
-    [(draft: Record<string, unknown>) => { record((record(draft.agentRoster, "agentRoster").agents as unknown[])[0], "agent").childResult = "secret"; }, "agentRoster agent"],
-    [(draft: Record<string, unknown>) => { record((draft.chatProgressEvents as unknown[])[0], "event").payload = { ...record(record((draft.chatProgressEvents as unknown[])[0], "event").payload, "payload"), hiddenPrompt: "secret" }; }, "chatProgressEvents payload"],
-    [(draft: Record<string, unknown>) => { record(draft.deviceCapabilitiesUpdate, "deviceCapabilitiesUpdate").sessionId = "private"; }, "deviceCapabilitiesUpdate"],
+    [
+      (draft: Record<string, unknown>) => {
+        record(draft.taskProgress, "taskProgress").absolutePath = "/private/secret";
+      },
+      "taskProgress root",
+    ],
+    [
+      (draft: Record<string, unknown>) => {
+        record(
+          (record(draft.taskProgress, "taskProgress").tasks as unknown[])[0],
+          "task",
+        ).childTranscript = ["secret"];
+      },
+      "taskProgress task",
+    ],
+    [
+      (draft: Record<string, unknown>) => {
+        record(draft.agentRoster, "agentRoster").providerCredential = "secret";
+      },
+      "agentRoster root",
+    ],
+    [
+      (draft: Record<string, unknown>) => {
+        record(
+          (record(draft.agentRoster, "agentRoster").agents as unknown[])[0],
+          "agent",
+        ).childResult = "secret";
+      },
+      "agentRoster agent",
+    ],
+    [
+      (draft: Record<string, unknown>) => {
+        record((draft.chatProgressEvents as unknown[])[0], "event").payload = {
+          ...record(record((draft.chatProgressEvents as unknown[])[0], "event").payload, "payload"),
+          hiddenPrompt: "secret",
+        };
+      },
+      "chatProgressEvents payload",
+    ],
+    [
+      (draft: Record<string, unknown>) => {
+        record(draft.deviceCapabilitiesUpdate, "deviceCapabilitiesUpdate").sessionId = "private";
+      },
+      "deviceCapabilitiesUpdate",
+    ],
   ] as const) {
     const mutated = clone();
     mutate(mutated);
-    assert.throws(() => parseAidenRemoteContractFixture(mutated), /Forbidden private Bot wire key|private child field|unsupported field|unsupported key/i, label);
+    assert.throws(
+      () => parseAidenRemoteContractFixture(mutated),
+      /Forbidden private Bot wire key|private child field|unsupported field|unsupported key/i,
+      label,
+    );
   }
   for (const requiredField of ["message", "requestId", "retryable"]) {
     const malformed = clone();
@@ -1746,33 +2259,117 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
   ] as const) {
     const malformed = clone();
     record(record(malformed.error, "error envelope").error, "error").details = { [field]: value };
-    assert.throws(() => parseAidenRemoteContractFixture(malformed), new RegExp(`Error detail ${field} is invalid`));
+    assert.throws(
+      () => parseAidenRemoteContractFixture(malformed),
+      new RegExp(`Error detail ${field} is invalid`),
+    );
   }
 
   const event = record((source.events as unknown[])[0], "event");
-  assert.throws(() => parseAidenRemoteStreamEvent({ ...event, payload: { ...record(event.payload, "payload"), hiddenPrompt: "secret" } }), /unsupported field/);
-  assert.throws(() => parseAidenRemoteStreamEvent({ ...event, payload: { chatId: "chat_fixture_01" } }), /missing required field/);
-  assert.throws(() => parseAidenRemoteStreamEvent({ ...event, payload: { chatId: "chat_fixture_01", turnId: "turn_fixture_01", nextSequence: "2" } }), /must be positive/);
-  assert.throws(() => parseAidenRemoteStreamEvent({ ...event, protocolVersion: 2 }), /unsupported protocolVersion/);
+  assert.throws(
+    () =>
+      parseAidenRemoteStreamEvent({
+        ...event,
+        payload: { ...record(event.payload, "payload"), hiddenPrompt: "secret" },
+      }),
+    /unsupported field/,
+  );
+  assert.throws(
+    () => parseAidenRemoteStreamEvent({ ...event, payload: { chatId: "chat_fixture_01" } }),
+    /missing required field/,
+  );
+  assert.throws(
+    () =>
+      parseAidenRemoteStreamEvent({
+        ...event,
+        payload: { chatId: "chat_fixture_01", turnId: "turn_fixture_01", nextSequence: "2" },
+      }),
+    /must be positive/,
+  );
+  assert.throws(
+    () => parseAidenRemoteStreamEvent({ ...event, protocolVersion: 2 }),
+    /unsupported protocolVersion/,
+  );
   assert.throws(() => parseAidenRemoteStreamEvent({ ...event, streamId: "" }), /non-empty string/);
   assert.throws(() => parseAidenRemoteStreamEvent({ ...event, sequence: 0 }), /positive/);
   assert.throws(
     () => parseAidenRemoteStreamEvent({ ...event, timestamp: "August 18, 2026 19:01:01 GMT" }),
     /strict RFC 3339/,
   );
-  assert.doesNotThrow(() => parseAidenRemoteStreamEvent({ ...event, futureEnvelopeMetadata: { ignored: true } }));
-  assert.doesNotThrow(() => parseAidenRemoteStreamEvent({ ...event, type: "status", payload: { state: "reconciling" } }));
-  assert.throws(() => parseAidenRemoteStreamEvent({ ...event, type: "status", payload: { state: "done" } }), /status state is invalid/);
-  assert.doesNotThrow(() => parseAidenRemoteStreamEvent({ ...event, type: "error", terminal: true, payload: { code: "idempotency_capacity", message: "Retry later." } }));
-  assert.doesNotThrow(() => parseAidenRemoteStreamEvent({ ...event, type: "error", terminal: true, payload: { code: "idempotency_in_flight", message: "Still reconciling." } }));
-  assert.doesNotThrow(() => parseAidenRemoteStreamEvent({ ...event, type: "error", terminal: true, payload: { code: "handle_capacity", message: "Browse again later." } }));
-  assert.equal(parseAidenRemoteStreamEvent({ ...event, type: "future_progress", terminal: false, payload: {}, futureEnvelopeMetadata: true }), null);
-  assert.throws(() => parseAidenRemoteStreamEvent({ ...event, type: "future_progress", terminal: false, payload: undefined }), /payload must be an object/);
+  assert.doesNotThrow(() =>
+    parseAidenRemoteStreamEvent({ ...event, futureEnvelopeMetadata: { ignored: true } }),
+  );
+  assert.doesNotThrow(() =>
+    parseAidenRemoteStreamEvent({ ...event, type: "status", payload: { state: "reconciling" } }),
+  );
   assert.throws(
-    () => parseAidenRemoteStreamEvent({ ...event, type: "future_progress", terminal: false, payload: { absolutePath: "/private/secret" } }),
+    () => parseAidenRemoteStreamEvent({ ...event, type: "status", payload: { state: "done" } }),
+    /status state is invalid/,
+  );
+  assert.doesNotThrow(() =>
+    parseAidenRemoteStreamEvent({
+      ...event,
+      type: "error",
+      terminal: true,
+      payload: { code: "idempotency_capacity", message: "Retry later." },
+    }),
+  );
+  assert.doesNotThrow(() =>
+    parseAidenRemoteStreamEvent({
+      ...event,
+      type: "error",
+      terminal: true,
+      payload: { code: "idempotency_in_flight", message: "Still reconciling." },
+    }),
+  );
+  assert.doesNotThrow(() =>
+    parseAidenRemoteStreamEvent({
+      ...event,
+      type: "error",
+      terminal: true,
+      payload: { code: "handle_capacity", message: "Browse again later." },
+    }),
+  );
+  assert.equal(
+    parseAidenRemoteStreamEvent({
+      ...event,
+      type: "future_progress",
+      terminal: false,
+      payload: {},
+      futureEnvelopeMetadata: true,
+    }),
+    null,
+  );
+  assert.throws(
+    () =>
+      parseAidenRemoteStreamEvent({
+        ...event,
+        type: "future_progress",
+        terminal: false,
+        payload: undefined,
+      }),
+    /payload must be an object/,
+  );
+  assert.throws(
+    () =>
+      parseAidenRemoteStreamEvent({
+        ...event,
+        type: "future_progress",
+        terminal: false,
+        payload: { absolutePath: "/private/secret" },
+      }),
     /Forbidden Aiden Remote wire key/,
   );
-  assert.throws(() => parseAidenRemoteStreamEvent({ ...event, type: "future_terminal", terminal: true, payload: {} }), /Unknown terminal/);
+  assert.throws(
+    () =>
+      parseAidenRemoteStreamEvent({
+        ...event,
+        type: "future_terminal",
+        terminal: true,
+        payload: {},
+      }),
+    /Unknown terminal/,
+  );
 
   const progressHeartbeat = clone();
   const progressEvents = progressHeartbeat.chatProgressEvents;
@@ -1841,67 +2438,90 @@ test("OpenAPI and runtime stream sequence bounds stay at the JSON safe-integer m
   }
 
   const schemas = record(record(document.components, "components").schemas, "schemas");
-  const streamStatusProperties = record(record(schemas.StreamStatus, "StreamStatus").properties, "StreamStatus properties");
-  assert.equal(record(streamStatusProperties.lastSequence, "lastSequence").maximum, Number.MAX_SAFE_INTEGER);
+  const streamStatusProperties = record(
+    record(schemas.StreamStatus, "StreamStatus").properties,
+    "StreamStatus properties",
+  );
+  assert.equal(
+    record(streamStatusProperties.lastSequence, "lastSequence").maximum,
+    Number.MAX_SAFE_INTEGER,
+  );
   assert.equal(Object.prototype.hasOwnProperty.call(streamStatusProperties, "approval"), false);
   const pendingApproval = record(schemas.PendingApproval, "PendingApproval");
   assert.deepEqual(pendingApproval.required, [
-    "approvalId", "streamId", "chatId", "summary", "toolCallId", "toolName", "expiresAt", "canAllow",
+    "approvalId",
+    "streamId",
+    "chatId",
+    "summary",
+    "toolCallId",
+    "toolName",
+    "expiresAt",
+    "canAllow",
   ]);
   const approvalSnapshot = record(schemas.StreamApprovalSnapshot, "StreamApprovalSnapshot");
   assert.deepEqual(approvalSnapshot.required, ["approval"]);
   const streamEvent = record(schemas.StreamEvent, "StreamEvent");
   const streamEventVariants = streamEvent.allOf as Array<Record<string, unknown>>;
-  const streamEventBaseProperties = record(
-    streamEvent.properties,
-    "StreamEvent base properties",
+  const streamEventBaseProperties = record(streamEvent.properties, "StreamEvent base properties");
+  assert.equal(
+    record(streamEventBaseProperties.sequence, "sequence").maximum,
+    Number.MAX_SAFE_INTEGER,
   );
-  assert.equal(record(streamEventBaseProperties.sequence, "sequence").maximum, Number.MAX_SAFE_INTEGER);
   const snapshotConditional = streamEventVariants.find((variant) => {
-    const condition = record(record(variant.if, "snapshot if").properties, "snapshot if properties");
+    const condition = record(
+      record(variant.if, "snapshot if").properties,
+      "snapshot if properties",
+    );
     return record(condition.type, "snapshot type").const === "snapshot";
   });
   assert(snapshotConditional, "missing snapshot conditional");
   const snapshotPayload = record(
-    record(record(snapshotConditional.then, "snapshot then").properties, "snapshot then properties").payload,
+    record(record(snapshotConditional.then, "snapshot then").properties, "snapshot then properties")
+      .payload,
     "snapshot payload",
   );
-  const snapshotProperties = record(
-    snapshotPayload.properties,
-    "snapshot payload properties",
+  const snapshotProperties = record(snapshotPayload.properties, "snapshot payload properties");
+  assert.equal(
+    record(snapshotProperties.nextSequence, "nextSequence").maximum,
+    Number.MAX_SAFE_INTEGER,
   );
-  assert.equal(record(snapshotProperties.nextSequence, "nextSequence").maximum, Number.MAX_SAFE_INTEGER);
 
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
   const event = record(fixture.events[0], "event");
-  assert.doesNotThrow(() => parseAidenRemoteStreamEvent({
-    ...event,
-    sequence: Number.MAX_SAFE_INTEGER,
-  }));
-  assert.throws(
-    () => parseAidenRemoteStreamEvent({
+  assert.doesNotThrow(() =>
+    parseAidenRemoteStreamEvent({
       ...event,
-      sequence: 9007199254740992,
+      sequence: Number.MAX_SAFE_INTEGER,
     }),
+  );
+  assert.throws(
+    () =>
+      parseAidenRemoteStreamEvent({
+        ...event,
+        sequence: 9007199254740992,
+      }),
     /safe integer/,
   );
-  assert.doesNotThrow(() => parseAidenRemoteStreamEvent({
-    ...event,
-    payload: {
-      chatId: "chat_fixture_01",
-      turnId: "turn_fixture_01",
-      nextSequence: Number.MAX_SAFE_INTEGER,
-    },
-  }));
-  assert.throws(
-    () => parseAidenRemoteStreamEvent({
+  assert.doesNotThrow(() =>
+    parseAidenRemoteStreamEvent({
       ...event,
       payload: {
         chatId: "chat_fixture_01",
         turnId: "turn_fixture_01",
-        nextSequence: 9007199254740992,
+        nextSequence: Number.MAX_SAFE_INTEGER,
       },
     }),
+  );
+  assert.throws(
+    () =>
+      parseAidenRemoteStreamEvent({
+        ...event,
+        payload: {
+          chatId: "chat_fixture_01",
+          turnId: "turn_fixture_01",
+          nextSequence: 9007199254740992,
+        },
+      }),
     /positive/,
   );
 });
@@ -1966,28 +2586,32 @@ test("Chat text keeps scalar bounds, validates UTF-16 timeline offsets, and reje
     id: "chat-unicode",
     workspaceId: "workspace-unicode",
     title: `${"t".repeat(1_023)}😀`,
-    messages: [{
-      id: "message-unicode",
-      role: "assistant",
-      text: "😀",
-      createdAt: "2026-08-23T00:00:00.000Z",
-      timeline: {
-        version: 3,
-        generationId: "generation-unicode",
-        status: "completed",
-        startedAt: 1,
-        finishedAt: 2,
-        steps: [{
-          id: "think-1",
-          order: 0,
-          kind: "thinking",
+    messages: [
+      {
+        id: "message-unicode",
+        role: "assistant",
+        text: "😀",
+        createdAt: "2026-08-23T00:00:00.000Z",
+        timeline: {
+          version: 3,
+          generationId: "generation-unicode",
+          status: "completed",
           startedAt: 1,
-          updatedAt: 2,
           finishedAt: 2,
-          contentOffset: 2,
-        }],
+          steps: [
+            {
+              id: "think-1",
+              order: 0,
+              kind: "thinking",
+              startedAt: 1,
+              updatedAt: 2,
+              finishedAt: 2,
+              contentOffset: 2,
+            },
+          ],
+        },
       },
-    }],
+    ],
     createdAt: "2026-08-23T00:00:00.000Z",
     updatedAt: "2026-08-23T00:00:00.000Z",
     revision: "revision-unicode",
@@ -2010,21 +2634,42 @@ test("Chat text keeps scalar bounds, validates UTF-16 timeline offsets, and reje
 
 test("chat parser limits reasoning to regular assistants and 100,000 UTF-16 units", () => {
   const projection = {
-    id: "chat-1", workspaceId: "workspace-1", title: "Chat",
-    messages: [{ id: "message-1", role: "assistant", text: "Done", reasoning: "visible",
-      createdAt: "2026-08-23T00:00:00.000Z" }],
+    id: "chat-1",
+    workspaceId: "workspace-1",
+    title: "Chat",
+    messages: [
+      {
+        id: "message-1",
+        role: "assistant",
+        text: "Done",
+        reasoning: "visible",
+        createdAt: "2026-08-23T00:00:00.000Z",
+      },
+    ],
     createdAt: "2026-08-23T00:00:00.000Z",
-    updatedAt: "2026-08-23T00:00:00.000Z", revision: "revision-1",
+    updatedAt: "2026-08-23T00:00:00.000Z",
+    revision: "revision-1",
   };
   assert.equal(parseAidenRemoteChatProjection(projection).messages[0]?.reasoning, "visible");
-  assert.throws(() => parseAidenRemoteChatProjection({ ...projection, botId: "bot-1" }),
-    /regular-assistant-only/u);
-  assert.throws(() => parseAidenRemoteChatProjection({ ...projection,
-    messages: [{ ...projection.messages[0], reasoning: "😀".repeat(60_000) }],
-  }), /UTF-16/u);
-  assert.equal(parseAidenRemoteChatProjection({ ...projection,
-    messages: [{ ...projection.messages[0], reasoning: "😀".repeat(50_000) }],
-  }).messages[0]?.reasoning?.length, 100_000);
+  assert.throws(
+    () => parseAidenRemoteChatProjection({ ...projection, botId: "bot-1" }),
+    /regular-assistant-only/u,
+  );
+  assert.throws(
+    () =>
+      parseAidenRemoteChatProjection({
+        ...projection,
+        messages: [{ ...projection.messages[0], reasoning: "😀".repeat(60_000) }],
+      }),
+    /UTF-16/u,
+  );
+  assert.equal(
+    parseAidenRemoteChatProjection({
+      ...projection,
+      messages: [{ ...projection.messages[0], reasoning: "😀".repeat(50_000) }],
+    }).messages[0]?.reasoning?.length,
+    100_000,
+  );
 });
 
 test("SSE framing resumes by id, ignores duplicates and unknown nonterminal events, and reconciles gaps", async () => {
@@ -2044,26 +2689,85 @@ test("SSE framing resumes by id, ignores duplicates and unknown nonterminal even
     () => parseAidenSseFrames(`id: 1\ndata: ${"x".repeat(AIDEN_REMOTE_MAX_SSE_FRAME_BYTES)}\n\n`),
     /exceeds the byte limit/,
   );
-  assert.deepEqual(reconcileAidenSseFrames(frames, 0, first.streamId), { events: [first, second], reconcileRequired: false });
-  assert.deepEqual(reconcileAidenSseFrames(frames, 1, first.streamId), { events: [second], reconcileRequired: false });
-  assert.equal(reconcileAidenSseFrames([{ ...frames[1], id: "3" }], 1, first.streamId).reconcileRequired, true);
-  assert.equal(reconcileAidenSseFrames([{ ...frames[1], data: { ...record(frames[1].data, "data"), sequence: 3 } }], 1, first.streamId).reconcileRequired, true);
-  const future = { ...record(frames[0].data, "data"), type: "future_progress", terminal: false, payload: {} };
-  assert.deepEqual(reconcileAidenSseFrames([{ id: "1", data: future }], 0, first.streamId), { events: [], reconcileRequired: false });
-  const futureBetween = { ...future, sequence: 2 };
-  const third = { ...second, sequence: 3 };
-  assert.deepEqual(reconcileAidenSseFrames([{ id: "1", data: first }, { id: "2", data: futureBetween }, { id: "3", data: third }], 0, first.streamId), { events: [first, third], reconcileRequired: false });
-  const terminal = { ...first, sequence: 1, type: "done", terminal: true, payload: { messageId: "message-terminal" } };
-  const afterTerminal = { ...second, sequence: 2, type: "heartbeat", terminal: false, payload: {} };
-  const terminalResult = reconcileAidenSseFrames([{ id: "1", data: terminal }, { id: "2", data: afterTerminal }], 0, first.streamId);
-  assert.equal(terminalResult.reconcileRequired, true);
-  assert.deepEqual(terminalResult.events.map((event) => event.type), ["done"]);
+  assert.deepEqual(reconcileAidenSseFrames(frames, 0, first.streamId), {
+    events: [first, second],
+    reconcileRequired: false,
+  });
+  assert.deepEqual(reconcileAidenSseFrames(frames, 1, first.streamId), {
+    events: [second],
+    reconcileRequired: false,
+  });
   assert.equal(
-    reconcileAidenSseFrames([{ id: "1", data: { ...first, streamId: "stream_other" } }], 0, first.streamId).reconcileRequired,
+    reconcileAidenSseFrames([{ ...frames[1], id: "3" }], 1, first.streamId).reconcileRequired,
     true,
   );
   assert.equal(
-    reconcileAidenSseFrames([{ id: "1", data: { ...future, streamId: "stream_other" } }], 0, first.streamId).reconcileRequired,
+    reconcileAidenSseFrames(
+      [{ ...frames[1], data: { ...record(frames[1].data, "data"), sequence: 3 } }],
+      1,
+      first.streamId,
+    ).reconcileRequired,
+    true,
+  );
+  const future = {
+    ...record(frames[0].data, "data"),
+    type: "future_progress",
+    terminal: false,
+    payload: {},
+  };
+  assert.deepEqual(reconcileAidenSseFrames([{ id: "1", data: future }], 0, first.streamId), {
+    events: [],
+    reconcileRequired: false,
+  });
+  const futureBetween = { ...future, sequence: 2 };
+  const third = { ...second, sequence: 3 };
+  assert.deepEqual(
+    reconcileAidenSseFrames(
+      [
+        { id: "1", data: first },
+        { id: "2", data: futureBetween },
+        { id: "3", data: third },
+      ],
+      0,
+      first.streamId,
+    ),
+    { events: [first, third], reconcileRequired: false },
+  );
+  const terminal = {
+    ...first,
+    sequence: 1,
+    type: "done",
+    terminal: true,
+    payload: { messageId: "message-terminal" },
+  };
+  const afterTerminal = { ...second, sequence: 2, type: "heartbeat", terminal: false, payload: {} };
+  const terminalResult = reconcileAidenSseFrames(
+    [
+      { id: "1", data: terminal },
+      { id: "2", data: afterTerminal },
+    ],
+    0,
+    first.streamId,
+  );
+  assert.equal(terminalResult.reconcileRequired, true);
+  assert.deepEqual(
+    terminalResult.events.map((event) => event.type),
+    ["done"],
+  );
+  assert.equal(
+    reconcileAidenSseFrames(
+      [{ id: "1", data: { ...first, streamId: "stream_other" } }],
+      0,
+      first.streamId,
+    ).reconcileRequired,
+    true,
+  );
+  assert.equal(
+    reconcileAidenSseFrames(
+      [{ id: "1", data: { ...future, streamId: "stream_other" } }],
+      0,
+      first.streamId,
+    ).reconcileRequired,
     true,
   );
 });
@@ -2071,27 +2775,90 @@ test("SSE framing resumes by id, ignores duplicates and unknown nonterminal even
 test("produced-file OpenAPI constraints agree with runtime path and provenance validation", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
   const { parseProducedFile } = await import("../../renderer/shared/produced-file.js");
-  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
   const ajv = new Ajv2020({ strict: false });
-  const validate = ajv.compile({ $ref: "#/components/schemas/GenerationToolStep", components: spec.components });
-  const base = { id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "write_file", label: "Write file", status: "completed", startedAt: 1, updatedAt: 1 };
-  for (const relativePath of [...["\u2028", "\u2029"].flatMap((separator) => [`a/${separator}/b`, `a/${separator}/../b`, `a/${separator}/./b`, `a/${separator}//b`, `a/${separator}/`]), "out/report.txt", "foo:bar.txt", "a:b/c.txt", "K:/secret", "😀".repeat(121), "😀".repeat(241), "/abs", "../secret", "a/../b", "a/./b", "a\\b", "a//b", "a/", "~file", "C:/secret", "bad\nname"]) {
+  const validate = ajv.compile({
+    $ref: "#/components/schemas/GenerationToolStep",
+    components: spec.components,
+  });
+  const base = {
+    id: "tool-1",
+    order: 0,
+    kind: "tool",
+    toolCallId: "call-1",
+    toolName: "write_file",
+    label: "Write file",
+    status: "completed",
+    startedAt: 1,
+    updatedAt: 1,
+  };
+  for (const relativePath of [
+    ...["\u2028", "\u2029"].flatMap((separator) => [
+      `a/${separator}/b`,
+      `a/${separator}/../b`,
+      `a/${separator}/./b`,
+      `a/${separator}//b`,
+      `a/${separator}/`,
+    ]),
+    "out/report.txt",
+    "foo:bar.txt",
+    "a:b/c.txt",
+    "K:/secret",
+    "😀".repeat(121),
+    "😀".repeat(241),
+    "/abs",
+    "../secret",
+    "a/../b",
+    "a/./b",
+    "a\\b",
+    "a//b",
+    "a/",
+    "~file",
+    "C:/secret",
+    "bad\nname",
+  ]) {
     const file = { relativePath, operation: "written", bytes: 12 };
-    assert.equal(validate({ ...base, producedFile: file }), Boolean(parseProducedFile(file, "write_file")), relativePath);
+    assert.equal(
+      validate({ ...base, producedFile: file }),
+      Boolean(parseProducedFile(file, "write_file")),
+      relativePath,
+    );
   }
   const producedFile = { relativePath: "report.txt", operation: "written", bytes: 12 };
   assert.equal(validate({ ...base, producedFile, status: "failed" }), false);
   assert.equal(validate({ ...base, producedFile, toolName: "mcp_write" }), false);
   assert.equal(validate({ ...base, producedFile, toolName: "edit_file" }), false);
-  assert.equal(validate({ ...base, producedFile: { ...producedFile, operation: "edited" }, toolName: "edit_file" }), true);
+  assert.equal(
+    validate({
+      ...base,
+      producedFile: { ...producedFile, operation: "edited" },
+      toolName: "edit_file",
+    }),
+    true,
+  );
 });
 
 test("questionnaire recap OpenAPI constraints agree with the runtime timeline parser", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
   const ajv = new Ajv2020({ strict: false });
-  const validateTimeline = ajv.compile({ $ref: "#/components/schemas/GenerationTimeline", components: spec.components });
-  const step = { id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "ask_user_question", label: "Ask a question", status: "completed", startedAt: 1, updatedAt: 1, finishedAt: 1, contentOffset: 0 };
+  const validateTimeline = ajv.compile({
+    $ref: "#/components/schemas/GenerationTimeline",
+    components: spec.components,
+  });
+  const step = {
+    id: "tool-1",
+    order: 0,
+    kind: "tool",
+    toolCallId: "call-1",
+    toolName: "ask_user_question",
+    label: "Ask a question",
+    status: "completed",
+    startedAt: 1,
+    updatedAt: 1,
+    finishedAt: 1,
+    contentOffset: 0,
+  };
   const timeline = (questionnaire: unknown, overrides: Record<string, unknown> = {}) => ({
     version: 3,
     generationId: "gen-1",
@@ -2100,20 +2867,69 @@ test("questionnaire recap OpenAPI constraints agree with the runtime timeline pa
     finishedAt: 1,
     steps: [{ ...step, ...overrides, questionnaire }],
   });
-  const item = (kind: string, answers: string[], question = "Which format?", header = "Format") => ({ question, header, kind, answers });
+  const item = (
+    kind: string,
+    answers: string[],
+    question = "Which format?",
+    header = "Format",
+  ) => ({ question, header, kind, answers });
   const answered = (...items: unknown[]) => ({ version: 1, outcome: "answered", items });
   const cases: Array<[name: string, candidate: Record<string, unknown>, expected: boolean]> = [
-    ["option and skipped", timeline(answered(item("option", ["Plain text"]), item("skipped", []))), true],
-    ["multi and multi-line custom", timeline(answered(item("multi", ["A", "B"]), item("custom", ["line one\n\tline two"]))), true],
-    ["dismissed, all skipped", timeline({ version: 1, outcome: "dismissed", items: [item("skipped", [])] }), true],
-    ["expired, all skipped", timeline({ version: 1, outcome: "expired", items: [item("skipped", []), item("skipped", [])] }), true],
-    ["four items", timeline(answered(...Array.from({ length: 4 }, () => item("skipped", [])))), true],
-    ["60 astral code points in a label", timeline(answered(item("option", ["😀".repeat(60)]))), true],
+    [
+      "option and skipped",
+      timeline(answered(item("option", ["Plain text"]), item("skipped", []))),
+      true,
+    ],
+    [
+      "multi and multi-line custom",
+      timeline(answered(item("multi", ["A", "B"]), item("custom", ["line one\n\tline two"]))),
+      true,
+    ],
+    [
+      "dismissed, all skipped",
+      timeline({ version: 1, outcome: "dismissed", items: [item("skipped", [])] }),
+      true,
+    ],
+    [
+      "expired, all skipped",
+      timeline({
+        version: 1,
+        outcome: "expired",
+        items: [item("skipped", []), item("skipped", [])],
+      }),
+      true,
+    ],
+    [
+      "four items",
+      timeline(answered(...Array.from({ length: 4 }, () => item("skipped", [])))),
+      true,
+    ],
+    [
+      "60 astral code points in a label",
+      timeline(answered(item("option", ["😀".repeat(60)]))),
+      true,
+    ],
     ["61 code points in a label", timeline(answered(item("option", ["x".repeat(61)]))), false],
-    ["1000 astral code points of custom text", timeline(answered(item("custom", ["😀".repeat(1000)]))), true],
-    ["1001 code points of custom text", timeline(answered(item("custom", ["x".repeat(1001)]))), false],
-    ["16 astral code points in a header", timeline(answered(item("skipped", [], "Which?", "😀".repeat(16)))), true],
-    ["17 code points in a header", timeline(answered(item("skipped", [], "Which?", "x".repeat(17)))), false],
+    [
+      "1000 astral code points of custom text",
+      timeline(answered(item("custom", ["😀".repeat(1000)]))),
+      true,
+    ],
+    [
+      "1001 code points of custom text",
+      timeline(answered(item("custom", ["x".repeat(1001)]))),
+      false,
+    ],
+    [
+      "16 astral code points in a header",
+      timeline(answered(item("skipped", [], "Which?", "😀".repeat(16)))),
+      true,
+    ],
+    [
+      "17 code points in a header",
+      timeline(answered(item("skipped", [], "Which?", "x".repeat(17)))),
+      false,
+    ],
     ["line separator in a question", timeline(answered(item("skipped", [], "a b"))), true],
     ["duplicate multi labels", timeline(answered(item("multi", ["A", "A"]))), false],
     ["six multi labels", timeline(answered(item("multi", ["A", "B", "C", "D", "E", "F"]))), false],
@@ -2121,53 +2937,122 @@ test("questionnaire recap OpenAPI constraints agree with the runtime timeline pa
     ["two option labels", timeline(answered(item("option", ["A", "B"]))), false],
     ["two custom answers", timeline(answered(item("custom", ["A", "B"]))), false],
     ["skipped with an answer", timeline(answered(item("skipped", ["A"]))), false],
-    ["dismissed with an option answer", timeline({ version: 1, outcome: "dismissed", items: [item("option", ["A"])] }), false],
-    ["expired with a custom answer", timeline({ version: 1, outcome: "expired", items: [item("custom", ["A"])] }), false],
+    [
+      "dismissed with an option answer",
+      timeline({ version: 1, outcome: "dismissed", items: [item("option", ["A"])] }),
+      false,
+    ],
+    [
+      "expired with a custom answer",
+      timeline({ version: 1, outcome: "expired", items: [item("custom", ["A"])] }),
+      false,
+    ],
     ["bell in a question", timeline(answered(item("skipped", [], "ring\u0007"))), false],
     ["carriage return in an answer", timeline(answered(item("custom", ["a\rb"]))), false],
     ["DEL in a header", timeline(answered(item("skipped", [], "Which?", "Fo\u007Frmat"))), false],
     ["blank question", timeline(answered(item("skipped", [], " \n\t "))), false],
     ["no-break-space header", timeline(answered(item("skipped", [], "Which?", " ﻿"))), false],
     ["blank option label", timeline(answered(item("option", ["  "]))), false],
-    ["five items", timeline(answered(...Array.from({ length: 5 }, () => item("skipped", [])))), false],
+    [
+      "five items",
+      timeline(answered(...Array.from({ length: 5 }, () => item("skipped", [])))),
+      false,
+    ],
     ["no items", timeline(answered()), false],
-    ["unknown recap version", timeline({ version: 2, outcome: "answered", items: [item("skipped", [])] }), false],
-    ["unknown outcome", timeline({ version: 1, outcome: "cancelled", items: [item("skipped", [])] }), false],
+    [
+      "unknown recap version",
+      timeline({ version: 2, outcome: "answered", items: [item("skipped", [])] }),
+      false,
+    ],
+    [
+      "unknown outcome",
+      timeline({ version: 1, outcome: "cancelled", items: [item("skipped", [])] }),
+      false,
+    ],
     ["unknown kind", timeline(answered(item("text", ["A"]))), false],
-    ["wrong tool", timeline(answered(item("option", ["A"])), { toolName: "read_file", label: "Read file" }), false],
+    [
+      "wrong tool",
+      timeline(answered(item("option", ["A"])), { toolName: "read_file", label: "Read file" }),
+      false,
+    ],
     ["failed step", timeline(answered(item("option", ["A"])), { status: "failed" }), false],
-    ["running step", timeline(answered(item("option", ["A"])), { status: "running", finishedAt: undefined }), false],
+    [
+      "running step",
+      timeline(answered(item("option", ["A"])), { status: "running", finishedAt: undefined }),
+      false,
+    ],
   ];
   const { contentOffset: _offset, ...versionTwoStep } = step;
   cases.push([
     "version 2 timeline",
-    { version: 2, generationId: "gen-1", status: "completed", startedAt: 1, finishedAt: 1, steps: [{ ...versionTwoStep, questionnaire: answered(item("option", ["A"])) }] },
+    {
+      version: 2,
+      generationId: "gen-1",
+      status: "completed",
+      startedAt: 1,
+      finishedAt: 1,
+      steps: [{ ...versionTwoStep, questionnaire: answered(item("option", ["A"])) }],
+    },
     false,
   ]);
   for (const [name, candidate, expected] of cases) {
     const wire = JSON.parse(JSON.stringify(candidate)) as Record<string, unknown>;
-    assert.equal(validateTimeline(wire), expected, `schema: ${name} ${JSON.stringify(validateTimeline.errors)}`);
+    assert.equal(
+      validateTimeline(wire),
+      expected,
+      `schema: ${name} ${JSON.stringify(validateTimeline.errors)}`,
+    );
     assert.equal(Boolean(parseGenerationTimeline(wire)), expected, `runtime: ${name}`);
   }
   // Without the recap, the base step is valid on both sides, so each rejection
   // above comes from the questionnaire rule rather than the surrounding step.
-  const { questionnaire: _q, ...bare } = record((timeline(undefined).steps as unknown[])[0], "step");
-  for (const overrides of [{}, { toolName: "read_file", label: "Read file" }, { status: "failed" }]) {
+  const { questionnaire: _q, ...bare } = record(
+    (timeline(undefined).steps as unknown[])[0],
+    "step",
+  );
+  for (const overrides of [
+    {},
+    { toolName: "read_file", label: "Read file" },
+    { status: "failed" },
+  ]) {
     const plain = { ...timeline(undefined), steps: [{ ...bare, ...overrides }] };
     assert.equal(validateTimeline(plain), true, JSON.stringify(overrides));
     assert.ok(parseGenerationTimeline(plain), JSON.stringify(overrides));
   }
-  const versionTwo = { version: 2, generationId: "gen-1", status: "completed", startedAt: 1, finishedAt: 1, steps: [versionTwoStep] };
+  const versionTwo = {
+    version: 2,
+    generationId: "gen-1",
+    status: "completed",
+    startedAt: 1,
+    finishedAt: 1,
+    steps: [versionTwoStep],
+  };
   assert.equal(validateTimeline(versionTwo), true);
   assert.ok(parseGenerationTimeline(versionTwo));
 });
 
 test("web page extract recap OpenAPI constraints agree with the runtime timeline parser", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
   const ajv = new Ajv2020({ strict: false });
-  const validateTimeline = ajv.compile({ $ref: "#/components/schemas/GenerationTimeline", components: spec.components });
-  const step = { id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "web_fetch", label: "Fetch web page", status: "completed", startedAt: 1, updatedAt: 1, finishedAt: 1, contentOffset: 0, detail: "acme.example" };
+  const validateTimeline = ajv.compile({
+    $ref: "#/components/schemas/GenerationTimeline",
+    components: spec.components,
+  });
+  const step = {
+    id: "tool-1",
+    order: 0,
+    kind: "tool",
+    toolCallId: "call-1",
+    toolName: "web_fetch",
+    label: "Fetch web page",
+    status: "completed",
+    startedAt: 1,
+    updatedAt: 1,
+    finishedAt: 1,
+    contentOffset: 0,
+    detail: "acme.example",
+  };
   const timeline = (extraction: unknown, overrides: Record<string, unknown> = {}) => ({
     version: 3,
     generationId: "gen-1",
@@ -2176,47 +3061,136 @@ test("web page extract recap OpenAPI constraints agree with the runtime timeline
     finishedAt: 1,
     steps: [{ ...step, ...overrides, extraction }],
   });
-  const read = { name: "pro_monthly", status: "extracted", value: "20", confidence: 0.97, sourceLine: "Pro is $20 per month." };
-  const recap = (fields: unknown[], extra: Record<string, unknown> = {}) => ({ version: 1, host: "acme.example", cut: false, fields, ...extra });
+  const read = {
+    name: "pro_monthly",
+    status: "extracted",
+    value: "20",
+    confidence: 0.97,
+    sourceLine: "Pro is $20 per month.",
+  };
+  const recap = (fields: unknown[], extra: Record<string, unknown> = {}) => ({
+    version: 1,
+    host: "acme.example",
+    cut: false,
+    fields,
+    ...extra,
+  });
   const cases: Array<[name: string, candidate: Record<string, unknown>, expected: boolean]> = [
-    ["extracted, uncertain and null", timeline(recap([read, { name: "seats", status: "uncertain", value: "50", confidence: 0.4, sourceLine: "Up to 50 seats." }, { name: "enterprise", status: "null" }])), true],
-    ["a guess that is not on the page", timeline(recap([{ name: "team", status: "uncertain", value: "1399", notFound: true }])), true],
-    ["an uncertain field with nothing to show", timeline(recap([{ name: "team", status: "uncertain" }])), true],
+    [
+      "extracted, uncertain and null",
+      timeline(
+        recap([
+          read,
+          {
+            name: "seats",
+            status: "uncertain",
+            value: "50",
+            confidence: 0.4,
+            sourceLine: "Up to 50 seats.",
+          },
+          { name: "enterprise", status: "null" },
+        ]),
+      ),
+      true,
+    ],
+    [
+      "a guess that is not on the page",
+      timeline(recap([{ name: "team", status: "uncertain", value: "1399", notFound: true }])),
+      true,
+    ],
+    [
+      "an uncertain field with nothing to show",
+      timeline(recap([{ name: "team", status: "uncertain" }])),
+      true,
+    ],
     ["cut page", timeline(recap([read], { cut: true })), true],
     ["failed extraction", timeline(recap([], { error: "quota" })), true],
-    ["sixteen fields", timeline(recap(Array.from({ length: 16 }, (_, index) => ({ name: `f${index}`, status: "null" })))), true],
-    ["200 astral code points in a value", timeline(recap([{ ...read, value: "😀".repeat(200) }])), true],
-    ["201 code points in a source line", timeline(recap([{ ...read, sourceLine: "x".repeat(201) }])), false],
-    ["seventeen fields", timeline(recap(Array.from({ length: 17 }, (_, index) => ({ name: `f${index}`, status: "null" })))), false],
+    [
+      "sixteen fields",
+      timeline(
+        recap(Array.from({ length: 16 }, (_, index) => ({ name: `f${index}`, status: "null" }))),
+      ),
+      true,
+    ],
+    [
+      "200 astral code points in a value",
+      timeline(recap([{ ...read, value: "😀".repeat(200) }])),
+      true,
+    ],
+    [
+      "201 code points in a source line",
+      timeline(recap([{ ...read, sourceLine: "x".repeat(201) }])),
+      false,
+    ],
+    [
+      "seventeen fields",
+      timeline(
+        recap(Array.from({ length: 17 }, (_, index) => ({ name: `f${index}`, status: "null" }))),
+      ),
+      false,
+    ],
     ["no fields and no error", timeline(recap([])), false],
     ["an error with fields", timeline(recap([read], { error: "quota" })), false],
     ["unknown error", timeline(recap([], { error: "teapot" })), false],
-    ["extracted without its page line", timeline(recap([{ name: "pro", status: "extracted", value: "20", confidence: 0.9 }])), false],
-    ["extracted without confidence", timeline(recap([{ name: "pro", status: "extracted", value: "20", sourceLine: "Pro is $20." }])), false],
+    [
+      "extracted without its page line",
+      timeline(recap([{ name: "pro", status: "extracted", value: "20", confidence: 0.9 }])),
+      false,
+    ],
+    [
+      "extracted without confidence",
+      timeline(
+        recap([{ name: "pro", status: "extracted", value: "20", sourceLine: "Pro is $20." }]),
+      ),
+      false,
+    ],
     ["extracted marked not found", timeline(recap([{ ...read, notFound: true }])), false],
     ["null with a value", timeline(recap([{ name: "pro", status: "null", value: "20" }])), false],
-    ["notFound false", timeline(recap([{ name: "pro", status: "uncertain", notFound: false }])), false],
+    [
+      "notFound false",
+      timeline(recap([{ name: "pro", status: "uncertain", notFound: false }])),
+      false,
+    ],
     ["confidence above one", timeline(recap([{ ...read, confidence: 1.2 }])), false],
     ["field name with a space", timeline(recap([{ name: "pro monthly", status: "null" }])), false],
-    ["field name starting with a digit", timeline(recap([{ name: "1price", status: "null" }])), false],
+    [
+      "field name starting with a digit",
+      timeline(recap([{ name: "1price", status: "null" }])),
+      false,
+    ],
     ["newline in a source line", timeline(recap([{ ...read, sourceLine: "Pro is\n$20" }])), false],
     ["double space in a value", timeline(recap([{ ...read, value: "20  USD" }])), false],
     ["trailing space in the host", timeline(recap([read], { host: "acme.example " })), false],
     ["no-break space in a value", timeline(recap([{ ...read, value: "20 USD" }])), false],
     ["unknown status", timeline(recap([{ name: "pro", status: "maybe" }])), false],
     ["unknown recap version", timeline({ ...recap([read]), version: 2 }), false],
-    ["wrong tool", timeline(recap([read]), { toolName: "web_search", label: "Search the web" }), false],
+    [
+      "wrong tool",
+      timeline(recap([read]), { toolName: "web_search", label: "Search the web" }),
+      false,
+    ],
     ["failed step", timeline(recap([read]), { status: "failed" }), false],
   ];
   const { contentOffset: _offset, ...versionTwoStep } = step;
   cases.push([
     "version 2 timeline",
-    { version: 2, generationId: "gen-1", status: "completed", startedAt: 1, finishedAt: 1, steps: [{ ...versionTwoStep, extraction: recap([read]) }] },
+    {
+      version: 2,
+      generationId: "gen-1",
+      status: "completed",
+      startedAt: 1,
+      finishedAt: 1,
+      steps: [{ ...versionTwoStep, extraction: recap([read]) }],
+    },
     false,
   ]);
   for (const [name, candidate, expected] of cases) {
     const wire = JSON.parse(JSON.stringify(candidate)) as Record<string, unknown>;
-    assert.equal(validateTimeline(wire), expected, `schema: ${name} ${JSON.stringify(validateTimeline.errors)}`);
+    assert.equal(
+      validateTimeline(wire),
+      expected,
+      `schema: ${name} ${JSON.stringify(validateTimeline.errors)}`,
+    );
     assert.equal(Boolean(parseGenerationTimeline(wire)), expected, `runtime: ${name}`);
   }
   // The wire refuses keys it does not name; the runtime parser rebuilds the
@@ -2229,7 +3203,11 @@ test("web page extract recap OpenAPI constraints agree with the runtime timeline
   // Without the recap the base step is valid on both sides, so each rejection
   // above comes from the extraction rule rather than the surrounding step.
   const { extraction: _e, ...bare } = record((timeline(undefined).steps as unknown[])[0], "step");
-  for (const overrides of [{}, { toolName: "web_search", label: "Search the web" }, { status: "failed" }]) {
+  for (const overrides of [
+    {},
+    { toolName: "web_search", label: "Search the web" },
+    { status: "failed" },
+  ]) {
     const plain = { ...timeline(undefined), steps: [{ ...bare, ...overrides }] };
     assert.equal(validateTimeline(plain), true, JSON.stringify(overrides));
     assert.ok(parseGenerationTimeline(plain), JSON.stringify(overrides));
@@ -2238,22 +3216,35 @@ test("web page extract recap OpenAPI constraints agree with the runtime timeline
 
 test("approval scope schemas accept the shared fixture and only allow-with-scope requests", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as {
+  const spec = (await json("openapi.json")) as {
     components: { schemas: Record<string, object> };
-    paths: Record<string, { post: { requestBody: { content: Record<string, { schema: object }> } } }>;
+    paths: Record<
+      string,
+      { post: { requestBody: { content: Record<string, { schema: object }> } } }
+    >;
   };
-  const fixture = await json("fixtures/contract.json") as { streamApproval: { approval: Record<string, unknown> } };
+  const fixture = (await json("fixtures/contract.json")) as {
+    streamApproval: { approval: Record<string, unknown> };
+  };
   const ajv = new Ajv2020({ strict: false });
-  const pending = ajv.compile({ $ref: "#/components/schemas/PendingApproval", components: spec.components });
+  const pending = ajv.compile({
+    $ref: "#/components/schemas/PendingApproval",
+    components: spec.components,
+  });
   const request = ajv.compile({
-    ...spec.paths["/approvals/{approvalId}/respond"]!.post.requestBody.content["application/json"]!.schema,
+    ...spec.paths["/approvals/{approvalId}/respond"]!.post.requestBody.content["application/json"]!
+      .schema,
     components: spec.components,
   });
   const approval = fixture.streamApproval.approval;
   assert.equal(pending(approval), true);
   const { scopes: _scopes, ...legacy } = approval;
   assert.equal(pending(legacy), true, "revision 16 servers omit scopes");
-  assert.equal(pending({ ...approval, scopes: ["once"] }), false, "a once-only offer is omitted, not listed");
+  assert.equal(
+    pending({ ...approval, scopes: ["once"] }),
+    false,
+    "a once-only offer is omitted, not listed",
+  );
   assert.equal(pending({ ...approval, scopes: ["once", "forever"] }), false);
 
   assert.equal(request({ decision: "allow" }), true);
@@ -2264,9 +3255,9 @@ test("approval scope schemas accept the shared fixture and only allow-with-scope
 
 test("schedule card schemas accept the shared fixture and turn away every structurally malformed card", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
   type Labeled = { label: string; schedule: unknown };
-  const { scheduleCards } = await json("fixtures/contract.json") as {
+  const { scheduleCards } = (await json("fixtures/contract.json")) as {
     scheduleCards: {
       streamApproval: { approval: Record<string, unknown> };
       phoneRunEvents: Array<{ type: string; payload: Record<string, unknown> }>;
@@ -2275,13 +3266,24 @@ test("schedule card schemas accept the shared fixture and turn away every struct
     };
   };
   const ajv = new Ajv2020({ strict: false });
-  const pending = ajv.compile({ $ref: "#/components/schemas/PendingApproval", components: spec.components });
-  const runEvent = ajv.compile({ $ref: "#/components/schemas/RunEvent", components: spec.components });
-  const card = ajv.compile({ $ref: "#/components/schemas/ApprovalSchedule", components: spec.components });
+  const pending = ajv.compile({
+    $ref: "#/components/schemas/PendingApproval",
+    components: spec.components,
+  });
+  const runEvent = ajv.compile({
+    $ref: "#/components/schemas/RunEvent",
+    components: spec.components,
+  });
+  const card = ajv.compile({
+    $ref: "#/components/schemas/ApprovalSchedule",
+    components: spec.components,
+  });
 
   assert.equal(pending(scheduleCards.streamApproval.approval), true);
   for (const event of scheduleCards.phoneRunEvents) assert.equal(runEvent(event), true, event.type);
-  const carded = scheduleCards.phoneRunEvents.filter((event) => event.payload.schedule !== undefined);
+  const carded = scheduleCards.phoneRunEvents.filter(
+    (event) => event.payload.schedule !== undefined,
+  );
   assert.ok(carded.length > 0);
   for (const event of carded) assert.equal(card(event.payload.schedule), true);
   for (const { label, schedule } of scheduleCards.cards) assert.equal(card(schedule), true, label);
@@ -2297,11 +3299,12 @@ test("schedule card schemas accept the shared fixture and turn away every struct
 
 test("pairing request OpenAPI schemas accept the shared fixture and keep phones and stray envelopes out", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
   const section = fixture.pairingRequests!;
   const ajv = new Ajv2020({ strict: false });
-  const schema = (name: string) => ajv.compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
+  const schema = (name: string) =>
+    ajv.compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
   const create = schema("PairingRequestCreate");
   const created = schema("PairingRequestCreated");
   const status = schema("PairingRequestStatus");
@@ -2317,7 +3320,11 @@ test("pairing request OpenAPI schemas accept the shared fixture and keep phones 
   const approved = section.status.find((entry) => entry.state === "approved")!;
   const { envelope, ...withoutEnvelope } = approved;
   assert.equal(status(withoutEnvelope), false, "approved always carries its envelope");
-  assert.equal(status({ ...withoutEnvelope, state: "denied", envelope }), false, "a denial never carries a credential");
+  assert.equal(
+    status({ ...withoutEnvelope, state: "denied", envelope }),
+    false,
+    "a denial never carries a credential",
+  );
 });
 
 test("stream input contracts reject unknown modes, oversized text, and unknown reasons", () => {
@@ -2346,47 +3353,55 @@ test("stream input contracts reject unknown modes, oversized text, and unknown r
   });
   assert.equal(rejected.reason, "capacity");
 
-  assert.throws(
-    () => parseAidenRemoteStreamInputRequest({ mode: "read", text: "x" }),
-    /mode/u,
-  );
+  assert.throws(() => parseAidenRemoteStreamInputRequest({ mode: "read", text: "x" }), /mode/u);
   assert.throws(
     () => parseAidenRemoteStreamInputRequest({ mode: "steer", text: "x".repeat(200_001) }),
     /text/u,
   );
   assert.throws(
-    () => parseAidenRemoteStreamInputResult({
-      streamId: "stream_1",
-      chatId: "chat_1",
-      turnId: "turn_1",
-      mode: "queue",
-      status: "rejected",
-      reason: "violence",
-      committed: false,
-    }),
+    () =>
+      parseAidenRemoteStreamInputResult({
+        streamId: "stream_1",
+        chatId: "chat_1",
+        turnId: "turn_1",
+        mode: "queue",
+        status: "rejected",
+        reason: "violence",
+        committed: false,
+      }),
     /reason/u,
   );
   // Admitted receipts must name the queue lane; rejected receipts must not.
   assert.throws(
-    () => parseAidenRemoteStreamInputResult({
-      streamId: "stream_1",
-      chatId: "chat_1",
-      turnId: "turn_1",
-      mode: "steer",
-      status: "admitted",
-      committed: true,
-    }),
+    () =>
+      parseAidenRemoteStreamInputResult({
+        streamId: "stream_1",
+        chatId: "chat_1",
+        turnId: "turn_1",
+        mode: "steer",
+        status: "admitted",
+        committed: true,
+      }),
     /queue/u,
   );
 });
 
 test("provider creation schemas accept the shared keyless fixture and reject unsafe credential shapes", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
-  const fixture = await json("fixtures/contract.json") as { providerCreation: Record<string, unknown>; providerCreationReceipt: Record<string, unknown> };
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
+  const fixture = (await json("fixtures/contract.json")) as {
+    providerCreation: Record<string, unknown>;
+    providerCreationReceipt: Record<string, unknown>;
+  };
   const ajv = new Ajv2020({ strict: false });
-  const request = ajv.compile({ $ref: "#/components/schemas/ProviderCreation", components: spec.components });
-  const receipt = ajv.compile({ $ref: "#/components/schemas/ProviderCreationReceipt", components: spec.components });
+  const request = ajv.compile({
+    $ref: "#/components/schemas/ProviderCreation",
+    components: spec.components,
+  });
+  const receipt = ajv.compile({
+    $ref: "#/components/schemas/ProviderCreationReceipt",
+    components: spec.components,
+  });
   assert.equal(request(fixture.providerCreation), true, JSON.stringify(request.errors));
   assert.equal(receipt(fixture.providerCreationReceipt), true, JSON.stringify(receipt.errors));
   assert.equal(request({ ...fixture.providerCreation, apiKey: "unneeded-key" }), false);
@@ -2420,23 +3435,31 @@ test("fork lineage parses on chats and rows, and a prefill only follows a fork b
   );
   // A fork response always names its source.
   const { forkedFrom: _lineage, ...plainChat } = forkChat();
-  assert.throws(() => parseAidenRemoteChatForkResult({ chat: plainChat }), /must carry forkedFrom/u);
+  assert.throws(
+    () => parseAidenRemoteChatForkResult({ chat: plainChat }),
+    /must carry forkedFrom/u,
+  );
   // A prefill is one turn, which holds at most ten attachments.
   const prefill = clone(record(editFork.prefill, "prefill"));
   const attachment = (prefill.attachments as unknown[])[0];
   assert.throws(
-    () => parseAidenRemoteChatForkResult({
-      ...clone(editFork),
-      prefill: { ...prefill, attachments: Array.from({ length: 11 }, () => attachment) },
-    }),
+    () =>
+      parseAidenRemoteChatForkResult({
+        ...clone(editFork),
+        prefill: { ...prefill, attachments: Array.from({ length: 11 }, () => attachment) },
+      }),
     /at most 10/u,
   );
   // The next turn redeems restaged attachments by their upload ID.
   assert.throws(
-    () => parseAidenRemoteChatForkResult({
-      ...clone(editFork),
-      prefill: { ...prefill, attachments: [{ ...record(attachment, "attachment"), id: "attachment_1" }] },
-    }),
+    () =>
+      parseAidenRemoteChatForkResult({
+        ...clone(editFork),
+        prefill: {
+          ...prefill,
+          attachments: [{ ...record(attachment, "attachment"), id: "attachment_1" }],
+        },
+      }),
     /uploaded attachment ID/u,
   );
   for (const change of [
@@ -2464,9 +3487,14 @@ test("fork lineage parses on chats and rows, and a prefill only follows a fork b
   }
 
   // Rows show lineage for the sidebar glyph but never carry the summary.
-  const row = clone(record((record(fixture.chatSummaries, "chatSummaries").summaries as unknown[])[0], "row"));
+  const row = clone(
+    record((record(fixture.chatSummaries, "chatSummaries").summaries as unknown[])[0], "row"),
+  );
   const { summary: _summary, ...rowLineage } = lineage();
-  assert.deepEqual(parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: rowLineage }).forkedFrom, rowLineage);
+  assert.deepEqual(
+    parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: rowLineage }).forkedFrom,
+    rowLineage,
+  );
   assert.equal(parseAidenRemoteChatSummaryProjection(row).forkedFrom, undefined);
   assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: lineage() }));
 });
@@ -2479,7 +3507,10 @@ test("mobile simulator fixtures pin the phone viewer's listing, input and MJPEG 
   // The listing carries a running Android emulator and a stopped AVD (listed by
   // its AVD name), both shown on a phone as "Open on your Mac to view".
   assert.deepEqual(
-    (section.listing.devices as Array<{ id: string; platform: string }>).map(({ id, platform }) => [id, platform]),
+    (section.listing.devices as Array<{ id: string; platform: string }>).map(({ id, platform }) => [
+      id,
+      platform,
+    ]),
     [
       ["5A0C1F3E-0000-4000-8000-000000000001", "ios"],
       ["5A0C1F3E-0000-4000-8000-000000000002", "ios"],
@@ -2496,10 +3527,12 @@ test("mobile simulator fixtures pin the phone viewer's listing, input and MJPEG 
     change(copy);
     return parseAidenRemoteContractFixture(copy);
   };
-  const mobile = (copy: Record<string, unknown>) => record(copy.mobileSimulators, "mobileSimulators");
+  const mobile = (copy: Record<string, unknown>) =>
+    record(copy.mobileSimulators, "mobileSimulators");
   assert.throws(
     mutate((copy) => {
-      delete (record(mobile(copy).listing, "listing").devices as Array<Record<string, unknown>>)[2]!.platform;
+      delete (record(mobile(copy).listing, "listing").devices as Array<Record<string, unknown>>)[2]!
+        .platform;
     }),
     /missing platform/u,
   );
@@ -2507,7 +3540,8 @@ test("mobile simulator fixtures pin the phone viewer's listing, input and MJPEG 
   for (const id of [".hidden", "../hub/admin", "a b", "x".repeat(129)]) {
     assert.throws(
       mutate((copy) => {
-        (record(mobile(copy).listing, "listing").devices as Array<Record<string, unknown>>)[3]!.id = id;
+        (record(mobile(copy).listing, "listing").devices as Array<Record<string, unknown>>)[3]!.id =
+          id;
       }),
       /device 3 id is invalid/u,
       id,
@@ -2560,13 +3594,25 @@ test("chat visuals arrive in revision 28 and a malformed visual never costs its 
   const raw = await json("fixtures/contract.json");
   const fixture = parseAidenRemoteContractFixture(raw);
   const message = fixture.chat.messages.find((entry) => entry.visuals?.length);
-  assert.deepEqual(message?.visuals?.map((visual) => [visual.kind, visual.toolCallId]), [["html", "call-1"], ["ui", "call-2"]]);
+  assert.deepEqual(
+    message?.visuals?.map((visual) => [visual.kind, visual.toolCallId]),
+    [
+      ["html", "call-1"],
+      ["ui", "call-2"],
+    ],
+  );
   // Every snapshot names an image attachment on the same message.
   for (const visual of message?.visuals ?? []) {
-    assert.equal(message?.attachments?.find((attachment) => attachment.id === visual.snapshotAttachmentId)?.kind, "image");
+    assert.equal(
+      message?.attachments?.find((attachment) => attachment.id === visual.snapshotAttachmentId)
+        ?.kind,
+      "image",
+    );
   }
 
-  const chat = structuredClone(record(raw, "fixture").chat) as { messages: Record<string, unknown>[] };
+  const chat = structuredClone(record(raw, "fixture").chat) as {
+    messages: Record<string, unknown>[];
+  };
   const target = chat.messages.find((entry) => Array.isArray(entry.visuals))!;
   const [html, ui] = target.visuals as Record<string, unknown>[];
   target.visuals = [
@@ -2580,7 +3626,10 @@ test("chat visuals arrive in revision 28 and a malformed visual never costs its 
   const parsed = parseAidenRemoteChatProjection(chat);
   const kept = parsed.messages.find((entry) => entry.id === target.id);
   assert.equal(kept?.text, target.text);
-  assert.deepEqual(kept?.visuals?.map((visual) => visual.id), ["ui_fixture_01"]);
+  assert.deepEqual(
+    kept?.visuals?.map((visual) => visual.id),
+    ["ui_fixture_01"],
+  );
 
   // A revision-27 Mac (Bot memory, no visuals) cannot carry them.
   const revision27 = structuredClone(raw) as Record<string, unknown>;
@@ -2605,16 +3654,24 @@ test("failed-turn entries parse strictly, with and without a message to retry", 
 });
 
 test("Bot sessions carry the waiting approval, and approval frames parse strictly", async () => {
-  const raw = (await json("fixtures/contract.json")) as { botSession: Record<string, unknown>; botSessionEvents: unknown[] };
+  const raw = (await json("fixtures/contract.json")) as {
+    botSession: Record<string, unknown>;
+    botSessionEvents: unknown[];
+  };
   const events = raw.botSessionEvents.map(parseAidenRemoteBotSessionEvent);
   assert.deepEqual(events, raw.botSessionEvents, "every fixture frame round-trips");
-  const approvals = events.flatMap((event) => (event.type === "approval" ? [event.payload.approval] : []));
+  const approvals = events.flatMap((event) =>
+    event.type === "approval" ? [event.payload.approval] : [],
+  );
   assert.equal(approvals.length, 2);
   assert.equal(approvals[0]?.canAllow, true);
   assert.equal(approvals[1], null, "a settled approval clears");
 
   const waiting = approvals[0]!;
-  assert.deepEqual(parseAidenRemoteBotSession({ ...raw.botSession, approval: waiting }).approval, waiting);
+  assert.deepEqual(
+    parseAidenRemoteBotSession({ ...raw.botSession, approval: waiting }).approval,
+    waiting,
+  );
   const { approval: _approval, ...missing } = raw.botSession;
   assert.throws(() => parseAidenRemoteBotSession(missing), /approval is required/u);
   for (const invalid of [
@@ -2630,7 +3687,10 @@ test("Bot sessions carry the waiting approval, and approval frames parse strictl
 test("the shared Bot avatar palette fixture is exactly the desktop colour table", async () => {
   const raw = (await json("fixtures/contract.json")) as { botAvatarPalette?: unknown };
   // iOS and Android test their palettes against this same fixture.
-  assert.deepEqual(raw.botAvatarPalette, { face: BOT_AVATAR_FACE_HEX, colors: BOT_AVATAR_COLOR_HEX });
+  assert.deepEqual(raw.botAvatarPalette, {
+    face: BOT_AVATAR_FACE_HEX,
+    colors: BOT_AVATAR_COLOR_HEX,
+  });
   assert.deepEqual(Object.keys(BOT_AVATAR_COLOR_HEX), [...BOT_AVATAR_COLORS]);
   for (const value of [BOT_AVATAR_FACE_HEX, ...Object.values(BOT_AVATAR_COLOR_HEX)]) {
     assert.match(value, /^#[0-9A-F]{6}$/u);
@@ -2640,19 +3700,33 @@ test("the shared Bot avatar palette fixture is exactly the desktop colour table"
 test("Bot attachment references arrive in revision 33 and only where the host announces them", async () => {
   const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const section = parseAidenRemoteContractFixture(raw).botAttachments!;
-  assert.deepEqual(section.send.request.attachmentIds, raw.botAttachments.send.request.attachmentIds);
+  assert.deepEqual(
+    section.send.request.attachmentIds,
+    raw.botAttachments.send.request.attachmentIds,
+  );
   assert.equal(section.attachmentsOnly.text, "", "attachments make the words optional");
   assert.throws(
-    () => parseAidenRemoteBotMessageRequest(raw.botAttachments.send.request, { allowWhenBusy: true }),
+    () =>
+      parseAidenRemoteBotMessageRequest(raw.botAttachments.send.request, { allowWhenBusy: true }),
     /unsupported field attachmentIds/u,
   );
   for (const sample of raw.botAttachments.rejectedSends) {
-    assert.throws(() => parseAidenRemoteBotMessageRequest(sample, { allowAttachments: true }), Error, JSON.stringify(sample));
+    assert.throws(
+      () => parseAidenRemoteBotMessageRequest(sample, { allowAttachments: true }),
+      Error,
+      JSON.stringify(sample),
+    );
   }
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider;
+  delete older.botAllowed;
+  delete older.voiceInput;
+  delete older.stoppedSteps;
+  delete older.backgroundJobsChatSettled;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   older.contractRevision = 32;
   record(older.hostHealth, "hostHealth").contractRevision = 32;
   assert.throws(() => parseAidenRemoteContractFixture(older), /require contract revision 33/u);
@@ -2668,10 +3742,18 @@ test("Bot activity frames carry only the §11 allow-list, and every privacy samp
   const section = fixture.botActivity!;
   assert.deepEqual(section.session, raw.botActivity.session, "the activity session round-trips");
   assert.deepEqual(section.events, raw.botActivity.events, "every activity frame round-trips");
-  const shown = [section.session.activity, ...section.events.flatMap((event) => (event.type === "activity" ? [event.payload.activity] : []))];
+  const shown = [
+    section.session.activity,
+    ...section.events.flatMap((event) =>
+      event.type === "activity" ? [event.payload.activity] : [],
+    ),
+  ];
   for (const activity of shown) {
     if (activity === null || activity === undefined) continue;
-    assert.deepEqual(Object.keys(activity).filter((key) => !["phase", "app", "startedAt"].includes(key)), []);
+    assert.deepEqual(
+      Object.keys(activity).filter((key) => !["phase", "app", "startedAt"].includes(key)),
+      [],
+    );
   }
   for (const sample of raw.botActivityPrivacy.rejectedActivities) {
     assert.throws(() => parseAidenRemoteBotSessionActivity(sample), Error, JSON.stringify(sample));
@@ -2680,68 +3762,143 @@ test("Bot activity frames carry only the §11 allow-list, and every privacy samp
   }
   // A few samples are pinned to their reason, so a TypeError can never pass for a refusal.
   const refusedWith = (field: string, pattern: RegExp) => {
-    const sample = raw.botActivityPrivacy.rejectedActivities.find((candidate: Record<string, unknown>) => field in candidate);
+    const sample = raw.botActivityPrivacy.rejectedActivities.find(
+      (candidate: Record<string, unknown>) => field in candidate,
+    );
     assert.throws(() => parseAidenRemoteBotSessionActivity(sample), pattern, field);
   };
   refusedWith("detail", /unsupported field detail/u);
   refusedWith("step", /unsupported field step/u);
   refusedWith("query", /unsupported field query/u);
   for (const sample of raw.botActivityPrivacy.rejectedQueued) {
-    assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: [sample] }), Error, JSON.stringify(sample));
+    assert.throws(
+      () => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: [sample] }),
+      Error,
+      JSON.stringify(sample),
+    );
   }
   const [duplicateIds, twentyOneItems] = raw.botActivityPrivacy.rejectedQueuedLists;
   assert.equal(duplicateIds.length, 2);
   assert.equal(twentyOneItems.length, 21);
-  assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: duplicateIds }), /ids must be unique/u);
-  assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: twentyOneItems }), /at most 20/u);
-  assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: "not a list" }), /must be an array/u);
+  assert.throws(
+    () => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: duplicateIds }),
+    /ids must be unique/u,
+  );
+  assert.throws(
+    () => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: twentyOneItems }),
+    /at most 20/u,
+  );
+  assert.throws(
+    () => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: "not a list" }),
+    /must be an array/u,
+  );
   const repeated = ({ unit, count }: { unit: string; count: number }) => unit.repeat(count);
   const bounds = raw.botActivityPrivacy.textBounds;
-  const queuedWith = (text: string) => ({ ...raw.botActivity.session, queued: [{ submissionId: "18", mode: "queue", text }] });
+  const queuedWith = (text: string) => ({
+    ...raw.botActivity.session,
+    queued: [{ submissionId: "18", mode: "queue", text }],
+  });
   for (const sample of bounds.queuedText.rejected) {
-    assert.throws(() => parseAidenRemoteBotSession(queuedWith(repeated(sample))), /characters/u, `${sample.count} x ${sample.unit}`);
+    assert.throws(
+      () => parseAidenRemoteBotSession(queuedWith(repeated(sample))),
+      /characters/u,
+      `${sample.count} x ${sample.unit}`,
+    );
   }
   for (const sample of bounds.queuedText.accepted) {
-    assert.equal(parseAidenRemoteBotSession(queuedWith(repeated(sample))).queued![0]!.text, repeated(sample));
+    assert.equal(
+      parseAidenRemoteBotSession(queuedWith(repeated(sample))).queued![0]!.text,
+      repeated(sample),
+    );
   }
   const appWith = (app: string) => ({ phase: "app", app, startedAt: 1_760_450_000_000 });
   for (const sample of bounds.app.rejected) {
-    assert.throws(() => parseAidenRemoteBotSessionActivity(appWith(repeated(sample))), /characters/u, `${sample.count} x ${sample.unit}`);
+    assert.throws(
+      () => parseAidenRemoteBotSessionActivity(appWith(repeated(sample))),
+      /characters/u,
+      `${sample.count} x ${sample.unit}`,
+    );
   }
   for (const sample of bounds.app.accepted) {
-    assert.equal(parseAidenRemoteBotSessionActivity(appWith(repeated(sample))).app, repeated(sample));
+    assert.equal(
+      parseAidenRemoteBotSessionActivity(appWith(repeated(sample))).app,
+      repeated(sample),
+    );
   }
   for (const sample of raw.botActivityPrivacy.rejectedChatActivity) {
-    assert.throws(() => parseAidenRemoteBotDetail({ ...raw.botActivity.detail, chatActivity: sample }), Error, JSON.stringify(sample));
-    assert.throws(() => parseAidenRemoteBotIdentityPatchRequest({ chatActivity: sample }, { allowChatActivity: true }));
+    assert.throws(
+      () => parseAidenRemoteBotDetail({ ...raw.botActivity.detail, chatActivity: sample }),
+      Error,
+      JSON.stringify(sample),
+    );
+    assert.throws(() =>
+      parseAidenRemoteBotIdentityPatchRequest(
+        { chatActivity: sample },
+        { allowChatActivity: true },
+      ),
+    );
   }
 });
 
 test("an optional Bot activity key sent as the literal null is refused, never read as absent", async () => {
   const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const { activities, sessions, events, entries } = raw.botActivityPrivacy.rejectedNullLiterals;
-  assert.deepEqual(activities.map((sample: Record<string, unknown>) => sample.app), [null]);
-  assert.deepEqual(sessions.map((sample: Record<string, unknown>) => sample.queued), [null]);
-  assert.deepEqual(events.map((sample: Record<string, any>) => sample.payload.queued), [null]);
-  assert.deepEqual(entries.map((sample: Record<string, unknown>) => [sample.label, sample.submissionId]), [[null, "17"]]);
+  assert.deepEqual(
+    activities.map((sample: Record<string, unknown>) => sample.app),
+    [null],
+  );
+  assert.deepEqual(
+    sessions.map((sample: Record<string, unknown>) => sample.queued),
+    [null],
+  );
+  assert.deepEqual(
+    events.map((sample: Record<string, any>) => sample.payload.queued),
+    [null],
+  );
+  assert.deepEqual(
+    entries.map((sample: Record<string, unknown>) => [sample.label, sample.submissionId]),
+    [[null, "17"]],
+  );
   for (const sample of activities) {
-    assert.throws(() => parseAidenRemoteBotSessionActivity(sample), /app must be/u, JSON.stringify(sample));
+    assert.throws(
+      () => parseAidenRemoteBotSessionActivity(sample),
+      /app must be/u,
+      JSON.stringify(sample),
+    );
     const { app: _app, ...withoutApp } = sample;
-    assert.deepEqual(parseAidenRemoteBotSessionActivity(withoutApp), withoutApp, "the same activity without the key is fine");
+    assert.deepEqual(
+      parseAidenRemoteBotSessionActivity(withoutApp),
+      withoutApp,
+      "the same activity without the key is fine",
+    );
   }
   for (const sample of sessions) {
     assert.throws(() => parseAidenRemoteBotSession(sample), /queued messages must be an array/u);
     const { queued: _queued, ...withoutQueued } = sample;
-    assert.equal("queued" in parseAidenRemoteBotSession(withoutQueued), false, "an absent list stays absent");
+    assert.equal(
+      "queued" in parseAidenRemoteBotSession(withoutQueued),
+      false,
+      "an absent list stays absent",
+    );
   }
   for (const sample of events) {
-    assert.throws(() => parseAidenRemoteBotSessionEvent(sample), /queued messages must be an array/u);
+    assert.throws(
+      () => parseAidenRemoteBotSessionEvent(sample),
+      /queued messages must be an array/u,
+    );
   }
   for (const sample of entries) {
-    assert.throws(() => parseAidenRemoteBotSessionEntry(sample), /Only the person's message can carry a submissionId/u);
+    assert.throws(
+      () => parseAidenRemoteBotSessionEntry(sample),
+      /Only the person's message can carry a submissionId/u,
+    );
     const { label: _label, ...withoutLabel } = sample;
     const entry = parseAidenRemoteBotSessionEntry(withoutLabel);
-    assert.equal(entry.type === "message" && entry.submissionId, "17", "the same bubble without the key keeps its id");
+    assert.equal(
+      entry.type === "message" && entry.submissionId,
+      "17",
+      "the same bubble without the key keeps its id",
+    );
   }
 });
 
@@ -2754,7 +3911,10 @@ test("the person's own message carries its submissionId for bot:activity devices
   // The queued message 18 was placed in the turn: its bubble now carries the same id.
   assert.deepEqual(section.entryEvent, raw.botActivity.entryEvent, "the entry frame round-trips");
   const placed = section.entryEvent.type === "entry" ? section.entryEvent.payload.entry : undefined;
-  assert.equal(placed?.type === "message" && placed.submissionId, raw.botActivity.session.queued[0].submissionId);
+  assert.equal(
+    placed?.type === "message" && placed.submissionId,
+    raw.botActivity.session.queued[0].submissionId,
+  );
 
   // What a device without bot:activity is sent for the same session and frame: no new key anywhere.
   const { nonHolder } = raw.botActivityPrivacy;
@@ -2768,19 +3928,36 @@ test("the person's own message carries its submissionId for bot:activity devices
     const { submissionId: _submissionId, ...rest } = entry;
     return rest;
   };
-  assert.deepEqual(legacy.entries, raw.botActivity.session.entries.map(withoutId), "the same messages, without their ids");
+  assert.deepEqual(
+    legacy.entries,
+    raw.botActivity.session.entries.map(withoutId),
+    "the same messages, without their ids",
+  );
   assert.equal(legacyFrame.seq, raw.botActivity.entryEvent.seq, "the same seq");
-  assert.deepEqual(nonHolder.entryEvent.payload.entry, withoutId(raw.botActivity.entryEvent.payload.entry));
+  assert.deepEqual(
+    nonHolder.entryEvent.payload.entry,
+    withoutId(raw.botActivity.entryEvent.payload.entry),
+  );
 
   for (const sample of raw.botActivityPrivacy.rejectedSubmissionIdEntries) {
     assert.throws(() => parseAidenRemoteBotSessionEntry(sample), Error, JSON.stringify(sample));
   }
   const [assistantWithId, routineWithId] = raw.botActivityPrivacy.rejectedSubmissionIdEntries;
-  assert.throws(() => parseAidenRemoteBotSessionEntry(assistantWithId), /Only the person's message can carry a submissionId/u);
+  assert.throws(
+    () => parseAidenRemoteBotSessionEntry(assistantWithId),
+    /Only the person's message can carry a submissionId/u,
+  );
   assert.equal(routineWithId.label, "Morning brief", "a routine's input");
-  assert.throws(() => parseAidenRemoteBotSessionEntry(routineWithId), /Only the person's message can carry a submissionId/u);
+  assert.throws(
+    () => parseAidenRemoteBotSessionEntry(routineWithId),
+    /Only the person's message can carry a submissionId/u,
+  );
   const { submissionId: _routineId, ...routine } = routineWithId;
-  assert.deepEqual(parseAidenRemoteBotSessionEntry(routine), routine, "the same routine bubble without an id is fine");
+  assert.deepEqual(
+    parseAidenRemoteBotSessionEntry(routine),
+    routine,
+    "the same routine bubble without an id is fine",
+  );
 });
 
 test("whenBusy and chatActivity are refused unless the host wires bot-activity-v1", async () => {
@@ -2788,11 +3965,24 @@ test("whenBusy and chatActivity are refused unless the host wires bot-activity-v
   const send = raw.botActivity.send.request;
   assert.throws(() => parseAidenRemoteBotMessageRequest(send), /unsupported field whenBusy/u);
   assert.deepEqual(parseAidenRemoteBotMessageRequest(send, { allowWhenBusy: true }), send);
-  assert.deepEqual(parseAidenRemoteBotMessageRequest({ text: "Hi" }, { allowWhenBusy: true }), { text: "Hi" });
-  assert.throws(() => parseAidenRemoteBotMessageRequest({ text: "Hi", whenBusy: "followUp" }, { allowWhenBusy: true }));
+  assert.deepEqual(parseAidenRemoteBotMessageRequest({ text: "Hi" }, { allowWhenBusy: true }), {
+    text: "Hi",
+  });
+  assert.throws(() =>
+    parseAidenRemoteBotMessageRequest(
+      { text: "Hi", whenBusy: "followUp" },
+      { allowWhenBusy: true },
+    ),
+  );
   const patch = raw.botActivity.identityPatch.request;
-  assert.throws(() => parseAidenRemoteBotIdentityPatchRequest(patch), /unsupported field chatActivity/u);
-  assert.deepEqual(parseAidenRemoteBotIdentityPatchRequest(patch, { allowChatActivity: true }), patch);
+  assert.throws(
+    () => parseAidenRemoteBotIdentityPatchRequest(patch),
+    /unsupported field chatActivity/u,
+  );
+  assert.deepEqual(
+    parseAidenRemoteBotIdentityPatchRequest(patch, { allowChatActivity: true }),
+    patch,
+  );
 });
 
 test("the shared phase table is the one the Mac draws, and an unknown phase reads as Working", async () => {
@@ -2803,14 +3993,28 @@ test("the shared phase table is the one the Mac draws, and an unknown phase read
     app: { app: string; word: string };
     elapsed: Array<{ startedAt: number; now: number; label: string | null }>;
   };
-  assert.deepEqual(phases.map((phase) => phase.id), [...BOT_ACTIVITY_PHASES]);
+  assert.deepEqual(
+    phases.map((phase) => phase.id),
+    [...BOT_ACTIVITY_PHASES],
+  );
   for (const phase of phases) {
-    assert.deepEqual(botActivityDisplay(phase.id, "follows"), { phase: phase.id, word: phase.word, mark: phase.mark });
-    assert.equal(botActivityDisplay(phase.id, "thinking").phase, thinkingKeeps.includes(phase.id) ? phase.id : "thinking");
+    assert.deepEqual(botActivityDisplay(phase.id, "follows"), {
+      phase: phase.id,
+      word: phase.word,
+      mark: phase.mark,
+    });
+    assert.equal(
+      botActivityDisplay(phase.id, "thinking").phase,
+      thinkingKeeps.includes(phase.id) ? phase.id : "thinking",
+    );
   }
   assert.equal(botActivityDisplay("app", "follows", app.app).word, app.word);
-  assert.deepEqual(botActivityDisplay("teleporting", "follows"), botActivityDisplay("working", "follows"));
-  for (const row of elapsed) assert.equal(botElapsedLabel(row.startedAt, row.now), row.label, JSON.stringify(row));
+  assert.deepEqual(
+    botActivityDisplay("teleporting", "follows"),
+    botActivityDisplay("working", "follows"),
+  );
+  for (const row of elapsed)
+    assert.equal(botElapsedLabel(row.startedAt, row.now), row.label, JSON.stringify(row));
 });
 
 // ---------------------------------------------------------------------------
@@ -2823,12 +4027,18 @@ test("hand-off frames and pause round-trip for holders, and a legacy device neve
   assert.equal(section.capability, "bot:handoffs");
   assert.deepEqual(section.session, raw.botHandoffs.session, "the waiting session round-trips");
   assert.deepEqual(section.events, raw.botHandoffs.events, "every holder frame round-trips");
-  assert.deepEqual(section.legacy.events, raw.botHandoffs.legacy.events, "every legacy frame round-trips");
+  assert.deepEqual(
+    section.legacy.events,
+    raw.botHandoffs.legacy.events,
+    "every legacy frame round-trips",
+  );
   assert.deepEqual(section.pausedSummary, raw.botHandoffs.pausedSummary);
   assert.deepEqual(section.pausedDetail, raw.botHandoffs.pausedDetail);
 
   // The card opens and then settles; every route answers for the same wait.
-  const cards = section.events.flatMap((event) => (event.type === "handoff" ? [event.payload.handoff] : []));
+  const cards = section.events.flatMap((event) =>
+    event.type === "handoff" ? [event.payload.handoff] : [],
+  );
   assert.deepEqual(cards, [section.session.handoff, null]);
   const waitId = section.session.handoff!.waitId;
   assert.equal(section.answer.response.waitId, waitId);
@@ -2843,7 +4053,10 @@ test("hand-off frames and pause round-trip for holders, and a legacy device neve
   assert.deepEqual(seqs(section.events), [41, 42, 43, 44]);
   // The answer is the person's own message, the same entry for both views.
   const answerEntry = (events: typeof section.events) =>
-    events.find((event) => event.type === "entry" && event.payload.entry.id === "entry_handoff:call_fixture_36");
+    events.find(
+      (event) =>
+        event.type === "entry" && event.payload.entry.id === "entry_handoff:call_fixture_36",
+    );
   assert.deepEqual(answerEntry(section.legacy.events), answerEntry(section.events));
 
   // A legacy device reads the hand-off as one assistant line and a pause as unavailable.
@@ -2862,9 +4075,18 @@ test("hand-off, answer and paused-flag parsers refuse what a closed decoder woul
   const card = raw.botHandoffs.session.handoff as Record<string, unknown>;
   assert.deepEqual(parseAidenRemoteBotHandoff(card), card);
   const { why: _why, open: _open, ...bare } = card;
-  assert.deepEqual(parseAidenRemoteBotHandoff({ ...bare, kind: "sign_in" }), { ...bare, kind: "sign_in" });
-  assert.deepEqual(parseAidenRemoteBotHandoff({ ...card, takesNote: false }), { ...card, takesNote: false });
-  assert.deepEqual(parseAidenRemoteBotHandoff(raw.botHandoffs.noNoteHandoff), raw.botHandoffs.noNoteHandoff);
+  assert.deepEqual(parseAidenRemoteBotHandoff({ ...bare, kind: "sign_in" }), {
+    ...bare,
+    kind: "sign_in",
+  });
+  assert.deepEqual(parseAidenRemoteBotHandoff({ ...card, takesNote: false }), {
+    ...card,
+    takesNote: false,
+  });
+  assert.deepEqual(
+    parseAidenRemoteBotHandoff(raw.botHandoffs.noNoteHandoff),
+    raw.botHandoffs.noNoteHandoff,
+  );
   for (const invalid of [
     { ...card, extra: true },
     { ...card, takesNote: true },
@@ -2881,7 +4103,9 @@ test("hand-off, answer and paused-flag parsers refuse what a closed decoder woul
     assert.throws(() => parseAidenRemoteBotHandoff(invalid), Error, JSON.stringify(invalid));
   }
 
-  assert.deepEqual(parseAidenRemoteBotHandoffAnswerRequest({ outcome: "skipped" }), { outcome: "skipped" });
+  assert.deepEqual(parseAidenRemoteBotHandoffAnswerRequest({ outcome: "skipped" }), {
+    outcome: "skipped",
+  });
   for (const invalid of [
     { outcome: "later" },
     { outcome: "done", note: "  " },
@@ -2889,9 +4113,15 @@ test("hand-off, answer and paused-flag parsers refuse what a closed decoder woul
     { outcome: "done", waitId: card.waitId },
     {},
   ]) {
-    assert.throws(() => parseAidenRemoteBotHandoffAnswerRequest(invalid), Error, JSON.stringify(invalid));
+    assert.throws(
+      () => parseAidenRemoteBotHandoffAnswerRequest(invalid),
+      Error,
+      JSON.stringify(invalid),
+    );
   }
-  assert.throws(() => parseAidenRemoteBotHandoffOpenOnMacReceipt({ waitId: card.waitId, opened: "yes" }));
+  assert.throws(() =>
+    parseAidenRemoteBotHandoffOpenOnMacReceipt({ waitId: card.waitId, opened: "yes" }),
+  );
 
   // `paused` and the `paused` session state always travel together; a summary sends the flag only as true.
   const summary = raw.botHandoffs.pausedSummary as Record<string, unknown>;
@@ -2900,15 +4130,22 @@ test("hand-off, answer and paused-flag parsers refuse what a closed decoder woul
   const { paused: _flag, ...unflagged } = summary;
   assert.throws(() => parseAidenRemoteBotSummary(unflagged), /agree/u);
   const detail = raw.botHandoffs.pausedDetail as Record<string, unknown>;
-  assert.equal(parseAidenRemoteBotDetail({ ...detail, sessionState: "idle", paused: false }).paused, false);
+  assert.equal(
+    parseAidenRemoteBotDetail({ ...detail, sessionState: "idle", paused: false }).paused,
+    false,
+  );
   assert.throws(() => parseAidenRemoteBotDetail({ ...detail, paused: false }), /agree/u);
   assert.throws(() => parseAidenRemoteBotDetail({ ...detail, sessionState: "running" }), /agree/u);
 
   // A session's hand-off is nullable and closed; a frame carries it wrapped.
-  assert.throws(() => parseAidenRemoteBotSession({ ...raw.botHandoffs.session, handoff: { ...card, extra: 1 } }));
+  assert.throws(() =>
+    parseAidenRemoteBotSession({ ...raw.botHandoffs.session, handoff: { ...card, extra: 1 } }),
+  );
   const [opened] = raw.botHandoffs.events as Array<Record<string, any>>;
   assert.throws(() => parseAidenRemoteBotSessionEvent({ ...opened, payload: card }));
-  assert.throws(() => parseAidenRemoteBotSessionEvent({ ...opened, payload: { handoff: card, approval: null } }));
+  assert.throws(() =>
+    parseAidenRemoteBotSessionEvent({ ...opened, payload: { handoff: card, approval: null } }),
+  );
 });
 
 test("Bot hand-off fixtures require their own revision, and an older fixture parses without them", async () => {
@@ -2916,9 +4153,16 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider;
+  delete older.botAllowed;
+  delete older.voiceInput;
+  delete older.stoppedSteps;
+  delete older.backgroundJobsChatSettled;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   older.contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
-  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision =
+    AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   delete older.scheduleCards;
   delete older.botImages;
   delete older.browserRecordings;
@@ -2941,9 +4185,14 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   leaky.botHandoffs.legacy.pausedSummary = raw.botHandoffs.pausedSummary;
   assert.throws(() => parseAidenRemoteContractFixture(leaky), /must not carry paused/u);
   const leakySnapshot = structuredClone(raw);
-  const settled = leakySnapshot.botHandoffs.legacy.events.find((event: { type: string }) => event.type === "snapshot");
+  const settled = leakySnapshot.botHandoffs.legacy.events.find(
+    (event: { type: string }) => event.type === "snapshot",
+  );
   settled.payload.session.handoff = null;
-  assert.throws(() => parseAidenRemoteContractFixture(leakySnapshot), /must not carry hand-off or paused/u);
+  assert.throws(
+    () => parseAidenRemoteContractFixture(leakySnapshot),
+    /must not carry hand-off or paused/u,
+  );
   const wrongCode = structuredClone(raw);
   wrongCode.botHandoffs.legacy.pausedError.error.code = "bot_paused";
   assert.throws(() => parseAidenRemoteContractFixture(wrongCode), /operation_stale/u);
@@ -2953,14 +4202,25 @@ test("new worktree fixtures need their own revision, and a moved chat has no mes
   const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const fixture = parseAidenRemoteContractFixture(raw).chatNewWorktree!;
   assert.equal(fixture.response.branch, "aiden/fix-the-login-bug");
-  assert.notEqual(fixture.response.chat.workspaceId, raw.chat.workspaceId, "the chat is in the worktree's workspace");
+  assert.notEqual(
+    fixture.response.chat.workspaceId,
+    raw.chat.workspaceId,
+    "the chat is in the worktree's workspace",
+  );
 
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider;
+  delete older.botAllowed;
+  delete older.voiceInput;
+  delete older.stoppedSteps;
+  delete older.backgroundJobsChatSettled;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   older.contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
-  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision =
+    AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
   assert.throws(
     () => parseAidenRemoteContractFixture(older),
     new RegExp(`require contract revision ${AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION}\\b`, "u"),
@@ -2969,15 +4229,31 @@ test("new worktree fixtures need their own revision, and a moved chat has no mes
   assert.equal(parseAidenRemoteContractFixture(older).chatNewWorktree, undefined);
 
   assert.deepEqual(parseAidenRemoteChatNewWorktreeRequest({ text: "Fix it" }), { text: "Fix it" });
-  for (const request of [{}, { text: "   " }, { text: "x".repeat(4_001) }, { text: "Fix it", branch: "mine" }]) {
-    assert.throws(() => parseAidenRemoteChatNewWorktreeRequest(request), Error, JSON.stringify(request).slice(0, 40));
+  for (const request of [
+    {},
+    { text: "   " },
+    { text: "x".repeat(4_001) },
+    { text: "Fix it", branch: "mine" },
+  ]) {
+    assert.throws(
+      () => parseAidenRemoteChatNewWorktreeRequest(request),
+      Error,
+      JSON.stringify(request).slice(0, 40),
+    );
   }
   const response = raw.chatNewWorktree.response;
   assert.throws(
-    () => parseAidenRemoteChatNewWorktreeResponse({ ...response, chat: { ...response.chat, messages: raw.chat.messages } }),
+    () =>
+      parseAidenRemoteChatNewWorktreeResponse({
+        ...response,
+        chat: { ...response.chat, messages: raw.chat.messages },
+      }),
     /no messages yet/u,
   );
-  assert.throws(() => parseAidenRemoteChatNewWorktreeResponse({ ...response, path: "/Users/sam/x" }), /unsupported field/u);
+  assert.throws(
+    () => parseAidenRemoteChatNewWorktreeResponse({ ...response, path: "/Users/sam/x" }),
+    /unsupported field/u,
+  );
   const wrongCode = structuredClone(raw);
   wrongCode.chatNewWorktree.notEmpty.error.code = "invalid_request";
   assert.throws(() => parseAidenRemoteContractFixture(wrongCode), /operation_stale/u);
@@ -2993,12 +4269,22 @@ test("spending fixtures need their own revision, parse strictly, and refuse with
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider;
+  delete older.botAllowed;
+  delete older.voiceInput;
+  delete older.stoppedSteps;
+  delete older.backgroundJobsChatSettled;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   older.contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
-  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision =
+    AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
   assert.throws(
     () => parseAidenRemoteContractFixture(older),
-    new RegExp(`require contract revision ${AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION}\\b`, "u"),
+    new RegExp(
+      `require contract revision ${AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION}\\b`,
+      "u",
+    ),
   );
   delete older.spending;
   delete older.backgroundJobs;
@@ -3013,13 +4299,46 @@ test("spending fixtures need their own revision, parse strictly, and refuse with
     return () => parseAidenRemoteSpendingStatus(copy);
   };
   assert.deepEqual(parseAidenRemoteSpendingStatus(status), status);
-  assert.throws(bad((copy) => { copy.spending.costUsd = 1; }), /unsupported field/u);
-  assert.throws(bad((copy) => { copy.spending.state = "over"; }));
-  assert.throws(bad((copy) => { copy.spending.limitUsd = 0; }), /positive/u);
-  assert.throws(bad((copy) => { copy.spending.spentUsd = -1; }));
-  assert.throws(bad((copy) => { copy.spending.allowedUsd = 1; }), /below the limit/u);
-  assert.throws(bad((copy) => { delete copy.spending.periodEnd; }), /month/u);
-  assert.throws(bad((copy) => { copy.spending.period = "chat"; }), /month/u);
+  assert.throws(
+    bad((copy) => {
+      copy.spending.costUsd = 1;
+    }),
+    /unsupported field/u,
+  );
+  assert.throws(
+    bad((copy) => {
+      copy.spending.state = "over";
+    }),
+  );
+  assert.throws(
+    bad((copy) => {
+      copy.spending.limitUsd = 0;
+    }),
+    /positive/u,
+  );
+  assert.throws(
+    bad((copy) => {
+      copy.spending.spentUsd = -1;
+    }),
+  );
+  assert.throws(
+    bad((copy) => {
+      copy.spending.allowedUsd = 1;
+    }),
+    /below the limit/u,
+  );
+  assert.throws(
+    bad((copy) => {
+      delete copy.spending.periodEnd;
+    }),
+    /month/u,
+  );
+  assert.throws(
+    bad((copy) => {
+      copy.spending.period = "chat";
+    }),
+    /month/u,
+  );
 
   const wrongCode = structuredClone(raw);
   wrongCode.spending.refusal.error.code = "spending_limit";
@@ -3042,11 +4361,18 @@ test("raw upload fixtures need their own revision, and every client spells a pic
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider;
+  delete older.botAllowed;
+  delete older.voiceInput;
+  delete older.stoppedSteps;
+  delete older.backgroundJobsChatSettled;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   // Sections from later revisions leave with the downgrade, so only this one is refused.
   delete older.chatNewWorktree;
   older.contractRevision = AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION - 1;
-  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision =
+    AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION - 1;
   assert.throws(
     () => parseAidenRemoteContractFixture(older),
     new RegExp(`require contract revision ${AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION}\\b`, "u"),
@@ -3059,40 +4385,80 @@ test("raw upload fixtures need their own revision, and every client spells a pic
     change(copy.rawUploads);
     return () => parseAidenRemoteContractFixture(copy);
   };
-  assert.throws(bad((copy) => { copy.request.encodedName = encodeURIComponent("Café photo.png").replace("%20", "+"); }), /percent-encoded/u);
-  assert.throws(bad((copy) => { copy.request.contentLength += 1; }), /exact length/u);
-  assert.throws(bad((copy) => { copy.request.contentType = "image/gif"; }), /PNG or JPEG/u);
-  assert.throws(bad((copy) => { copy.response.size += 1; }), /describes the picture/u);
-  assert.throws(bad((copy) => { copy.withoutGrant.error.code = "forbidden"; }));
+  assert.throws(
+    bad((copy) => {
+      copy.request.encodedName = encodeURIComponent("Café photo.png").replace("%20", "+");
+    }),
+    /percent-encoded/u,
+  );
+  assert.throws(
+    bad((copy) => {
+      copy.request.contentLength += 1;
+    }),
+    /exact length/u,
+  );
+  assert.throws(
+    bad((copy) => {
+      copy.request.contentType = "image/gif";
+    }),
+    /PNG or JPEG/u,
+  );
+  assert.throws(
+    bad((copy) => {
+      copy.response.size += 1;
+    }),
+    /describes the picture/u,
+  );
+  assert.throws(
+    bad((copy) => {
+      copy.withoutGrant.error.code = "forbidden";
+    }),
+  );
 });
 
 test("background job fixtures need their own revision, and the parser and schema refuse what a phone cannot show", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
   const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const fixture = parseAidenRemoteContractFixture(raw).backgroundJobs!;
   assert.equal(fixture.list.jobs.filter((job) => job.state === "running").length, 2);
-  assert.equal(fixture.stop.response.jobs.find((job) => job.id === fixture.stop.jobId)?.state, "stopped");
+  assert.equal(
+    fixture.stop.response.jobs.find((job) => job.id === fixture.stop.jobId)?.state,
+    "stopped",
+  );
   assert.equal(fixture.notFound.error.code, "not_found");
 
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider;
+  delete older.botAllowed;
+  delete older.voiceInput;
+  delete older.stoppedSteps;
+  delete older.backgroundJobsChatSettled;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   // Sections from later revisions leave with the downgrade, so only this one is refused.
   delete older.chatNewWorktree;
   older.contractRevision = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION - 1;
-  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision =
+    AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION - 1;
   assert.throws(
     () => parseAidenRemoteContractFixture(older),
-    new RegExp(`require contract revision ${AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION}\\b`, "u"),
+    new RegExp(
+      `require contract revision ${AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION}\\b`,
+      "u",
+    ),
   );
   delete older.backgroundJobs;
   delete older.rawUploads;
   assert.equal(parseAidenRemoteContractFixture(older).backgroundJobs, undefined);
 
   const ajv = new Ajv2020({ strict: false });
-  const schema = ajv.compile({ $ref: "#/components/schemas/BackgroundJobs", components: spec.components });
+  const schema = ajv.compile({
+    $ref: "#/components/schemas/BackgroundJobs",
+    components: spec.components,
+  });
   for (const body of [raw.backgroundJobs.list, raw.backgroundJobs.stop.response]) {
     assert.ok(schema(body), JSON.stringify(schema.errors));
     assert.deepEqual(parseAidenRemoteBackgroundJobs(body), body);
@@ -3122,11 +4488,12 @@ test("background job fixtures need their own revision, and the parser and schema
 
 test("Bot hand-off OpenAPI schemas accept the shared fixture and refuse what the parsers refuse", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
   const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const section = raw.botHandoffs;
   const ajv = new Ajv2020({ strict: false });
-  const schema = (name: string) => ajv.compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
+  const schema = (name: string) =>
+    ajv.compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
   // BotSession composes BotSessionState with allOf, which plain JSON Schema
   // validators read as closed, so the session's hand-off is checked on its own.
   const handoff = schema("BotHandoff");
@@ -3159,12 +4526,15 @@ test("Bot hand-off OpenAPI schemas accept the shared fixture and refuse what the
   assert.equal(answer({ outcome: "done", note: "" }), false);
   assert.equal(summary({ ...section.pausedSummary, paused: false }), false);
   assert.equal(handoff({ ...section.session.handoff, extra: true }), false);
-  assert.equal(handoff({ ...section.session.handoff, open: { url: "http://bank.example.com" } }), false);
+  assert.equal(
+    handoff({ ...section.session.handoff, open: { url: "http://bank.example.com" } }),
+    false,
+  );
 });
 
 test("Bot shared images need their own revision, and the schema and parser accept the fixture and refuse inline bytes", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
   const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const fixture = parseAidenRemoteContractFixture(raw).botImages!;
   assert.equal(fixture.capability, "bot:images");
@@ -3172,9 +4542,16 @@ test("Bot shared images need their own revision, and the schema and parser accep
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider;
+  delete older.botAllowed;
+  delete older.voiceInput;
+  delete older.stoppedSteps;
+  delete older.backgroundJobsChatSettled;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   older.contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
-  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision =
+    AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
   delete older.browserRecordings;
   assert.throws(
     () => parseAidenRemoteContractFixture(older),
@@ -3188,7 +4565,10 @@ test("Bot shared images need their own revision, and the schema and parser accep
   assert.equal(parseAidenRemoteContractFixture(older).botImages, undefined);
 
   const ajv = new Ajv2020({ strict: false });
-  const entry = ajv.compile({ $ref: "#/components/schemas/BotSessionEntry", components: spec.components });
+  const entry = ajv.compile({
+    $ref: "#/components/schemas/BotSessionEntry",
+    components: spec.components,
+  });
   for (const sample of [raw.botImages.entry, raw.botImages.legacyEntry]) {
     assert.equal(entry(sample), true, JSON.stringify(entry.errors));
   }
@@ -3206,7 +4586,7 @@ test("Bot shared images need their own revision, and the schema and parser accep
 
 test("browser recordings need their own revision, and a recording step carries only a playable recap", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
   const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const fixture = parseAidenRemoteContractFixture(raw).browserRecordings!;
   assert.ok(fixture.recordingPath.endsWith(raw.browserRecordings.step.recording.id));
@@ -3214,12 +4594,22 @@ test("browser recordings need their own revision, and a recording step carries o
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider;
+  delete older.botAllowed;
+  delete older.voiceInput;
+  delete older.stoppedSteps;
+  delete older.backgroundJobsChatSettled;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   older.contractRevision = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
-  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision =
+    AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
   assert.throws(
     () => parseAidenRemoteContractFixture(older),
-    new RegExp(`require contract revision ${AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION}\\b`, "u"),
+    new RegExp(
+      `require contract revision ${AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION}\\b`,
+      "u",
+    ),
   );
   delete older.browserRecordings;
   delete older.spending;
@@ -3229,10 +4619,16 @@ test("browser recordings need their own revision, and a recording step carries o
   assert.equal(parseAidenRemoteContractFixture(older).browserRecordings, undefined);
 
   const ajv = new Ajv2020({ strict: false });
-  const step = ajv.compile({ $ref: "#/components/schemas/GenerationToolStep", components: spec.components });
+  const step = ajv.compile({
+    $ref: "#/components/schemas/GenerationToolStep",
+    components: spec.components,
+  });
   const sample = raw.browserRecordings.step;
   assert.equal(step(sample), true, JSON.stringify(step.errors));
-  const withPath = { ...sample, recording: { ...sample.recording, path: "/Users/me/recording.mp4" } };
+  const withPath = {
+    ...sample,
+    recording: { ...sample.recording, path: "/Users/me/recording.mp4" },
+  };
   const gif = { ...sample, recording: { ...sample.recording, mimeType: "image/gif" } };
   const otherTool = { ...sample, toolName: "browser_screenshot" };
   const running = { ...sample, status: "running" };
@@ -3240,13 +4636,19 @@ test("browser recordings need their own revision, and a recording step carries o
     assert.equal(step(refused), false, JSON.stringify(refused).slice(0, 120));
     // The shared timeline parser keeps the step but never the recap.
     const parsed = parseGenerationTimeline({
-      version: 3, generationId: "g", status: "completed", startedAt: 0, finishedAt: 0, steps: [refused],
+      version: 3,
+      generationId: "g",
+      status: "completed",
+      startedAt: 0,
+      finishedAt: 0,
+      steps: [refused],
     });
     assert.equal((parsed?.steps[0] as { recording?: unknown } | undefined)?.recording, undefined);
   }
 
   const mismatched = structuredClone(raw);
-  mismatched.browserRecordings.recordingPath = "/chats/chat_fixture_01/recordings/recording-11111111-2222-4333-8444-555555555555";
+  mismatched.browserRecordings.recordingPath =
+    "/chats/chat_fixture_01/recordings/recording-11111111-2222-4333-8444-555555555555";
   assert.throws(() => parseAidenRemoteContractFixture(mismatched), /must name the recording/u);
 });
 
@@ -3273,7 +4675,10 @@ test("Bot issue fixtures round-trip, and every misuse is refused", async () => {
   assert.equal(section.notification.notifications[0]?.status, undefined);
   assert.equal(section.act.response.result, "done");
   assert.equal(section.notOpen.result, "not_open");
-  assert.equal(section.events.some((event) => event.type === "issues"), true);
+  assert.equal(
+    section.events.some((event) => event.type === "issues"),
+    true,
+  );
 
   const issue = section.session.issues![1]!;
   for (const bad of [
@@ -3290,10 +4695,7 @@ test("Bot issue fixtures round-trip, and every misuse is refused", async () => {
   ]) {
     assert.throws(() => parseAidenRemoteBotIssue(bad), JSON.stringify(bad).slice(0, 120));
   }
-  assert.throws(
-    () => parseAidenRemoteBotIssueList([noAction, noAction]),
-    /ids must be unique/u,
-  );
+  assert.throws(() => parseAidenRemoteBotIssueList([noAction, noAction]), /ids must be unique/u);
   assert.throws(
     () =>
       parseAidenRemoteBotIssueList(
@@ -3318,7 +4720,10 @@ test("Bot issue fixtures round-trip, and every misuse is refused", async () => {
   ]) {
     assert.throws(() => parseAidenRemoteBotIssueActRequest(bad), JSON.stringify(bad));
   }
-  assert.throws(() => parseAidenRemoteBotIssueActReceipt({ result: "later" }), /Bot issue act result/u);
+  assert.throws(
+    () => parseAidenRemoteBotIssueActReceipt({ result: "later" }),
+    /Bot issue act result/u,
+  );
   assert.equal(parseAidenRemoteBotIssueActReceipt({ result: "not_open" }).result, "not_open");
 
   // A session carries issues only for a holder; the parser accepts both shapes
@@ -3334,11 +4739,12 @@ test("Bot issue fixtures round-trip, and every misuse is refused", async () => {
 
 test("Bot issue OpenAPI schemas accept the shared fixture and refuse what the parsers refuse", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
   const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const section = raw.botIssues;
   const ajv = new Ajv2020({ strict: false });
-  const schema = (name: string) => ajv.compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
+  const schema = (name: string) =>
+    ajv.compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
   const issue = schema("BotIssue");
   const event = schema("BotSessionEvent");
   const summary = schema("BotSummary");
@@ -3360,7 +4766,10 @@ test("Bot issue OpenAPI schemas accept the shared fixture and refuse what the pa
     assert.equal(event(frame), true, `${frame.type} ${frame.seq}: ${JSON.stringify(event.errors)}`);
   }
   assert.equal(issue({ ...section.session.issues[1], kind: "surprise" }), false);
-  assert.equal(issue({ ...section.session.issues[1], actions: [{ kind: "open_settings", section: "model" }] }), false);
+  assert.equal(
+    issue({ ...section.session.issues[1], actions: [{ kind: "open_settings", section: "model" }] }),
+    false,
+  );
   assert.equal(issue({ ...section.session.issues[1], resolved: true }), false);
   assert.equal(request({ action: { kind: "open_settings", section: "model" } }), false);
   assert.equal(receipt({ result: "later" }), false);
@@ -3377,12 +4786,15 @@ test("Bot issue OpenAPI schemas accept the shared fixture and refuse what the pa
 
 test("context pressure crosses the wire as counts only, and schema and parser refuse the same shapes", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
-  const { chatContextPressure } = await json("fixtures/contract.json") as {
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
+  const { chatContextPressure } = (await json("fixtures/contract.json")) as {
     chatContextPressure: { chatId: string; pressure: Record<string, unknown> };
   };
   const ajv = new Ajv2020({ strict: false });
-  const schema = ajv.compile({ $ref: "#/components/schemas/ChatContextPressure", components: spec.components });
+  const schema = ajv.compile({
+    $ref: "#/components/schemas/ChatContextPressure",
+    components: spec.components,
+  });
   const accepts = (value: unknown) => {
     try {
       parseAidenRemoteChatContextPressure(value);
@@ -3399,9 +4811,13 @@ test("context pressure crosses the wire as counts only, and schema and parser re
   assert.deepEqual(parseAidenRemoteChatContextPressure(unknown), unknown);
 
   const pressure = chatContextPressure.pressure;
-  const without = (key: string) => Object.fromEntries(Object.entries(pressure).filter(([name]) => name !== key));
+  const without = (key: string) =>
+    Object.fromEntries(Object.entries(pressure).filter(([name]) => name !== key));
   const refused: Record<string, unknown> = {
-    "a breakdown": { ...pressure, breakdown: { categories: [{ id: "mcp-tools", tokens: 18_000 }], deferred: [] } },
+    "a breakdown": {
+      ...pressure,
+      breakdown: { categories: [{ id: "mcp-tools", tokens: 18_000 }], deferred: [] },
+    },
     "a prompt cache": { ...pressure, promptCache: { ttlMs: 300_000, lastRequestAt: 1 } },
     "history detail": { ...pressure, compressibleHistoryMessages: 4 },
     "a negative count": { ...pressure, messageTokens: -1 },
@@ -3413,7 +4829,11 @@ test("context pressure crosses the wire as counts only, and schema and parser re
   };
   for (const [label, candidate] of Object.entries(refused)) {
     assert.equal(schema({ chatId: chatContextPressure.chatId, pressure: candidate }), false, label);
-    assert.equal(accepts({ chatId: chatContextPressure.chatId, pressure: candidate }), false, label);
+    assert.equal(
+      accepts({ chatId: chatContextPressure.chatId, pressure: candidate }),
+      false,
+      label,
+    );
   }
   for (const [label, envelope] of Object.entries({
     "no pressure key": { chatId: chatContextPressure.chatId },
@@ -3424,7 +4844,10 @@ test("context pressure crosses the wire as counts only, and schema and parser re
     assert.equal(accepts(envelope), false, label);
   }
   // JSON cannot carry a non-finite number, so only the parser sees one.
-  assert.equal(accepts({ chatId: "chat-1", pressure: { ...pressure, percentOfWindow: Number.NaN } }), false);
+  assert.equal(
+    accepts({ chatId: "chat-1", pressure: { ...pressure, percentOfWindow: Number.NaN } }),
+    false,
+  );
 });
 
 test("the host's full context projection is reduced to the documented counts", () => {
@@ -3445,7 +4868,14 @@ test("the host's full context projection is reduced to the documented counts", (
     computedAt: 1_787_166_120_000,
     breakdown: {
       categories: [{ id: "mcp-tools", tokens: 6_000 }],
-      deferred: [{ id: "mcp-tools", tokens: 400, count: 1, servers: [{ name: "Acme internal tracker", count: 1, tokens: 400 }] }],
+      deferred: [
+        {
+          id: "mcp-tools",
+          tokens: 400,
+          count: 1,
+          servers: [{ name: "Acme internal tracker", count: 1, tokens: 400 }],
+        },
+      ],
     },
     promptCache: { ttlMs: 300_000, lastRequestAt: 1_787_166_000_000 },
   };
@@ -3495,21 +4925,27 @@ test("revision 52 fixtures carry Inbox signals, and a stray or malformed signal 
   const beforeSnoozeEnds = Date.parse(pinned!.snoozedUntil!) - 60_000;
   for (const row of [waiting!, pinned!]) {
     const placed = hostInboxPlacement(
-      Object.fromEntries(Object.entries({
-        rowState: row.rowState!,
-        unread: row.unread === true,
-        failed: row.lastRunFailed === true,
-        updatedAt: Date.parse(row.updatedAt),
-        lastAssistantAt: at(row.lastAssistantAt),
-        attentionSince: at(row.attentionSince),
-        runStartedAt: at(row.runStartedAt),
-        pinnedAt: at(row.pinnedAt),
-        doneAt: at(row.doneAt),
-        snoozedUntil: at(row.snoozedUntil),
-      }).filter(([, value]) => value !== undefined)) as unknown as HostInboxSignals,
+      Object.fromEntries(
+        Object.entries({
+          rowState: row.rowState!,
+          unread: row.unread === true,
+          failed: row.lastRunFailed === true,
+          updatedAt: Date.parse(row.updatedAt),
+          lastAssistantAt: at(row.lastAssistantAt),
+          attentionSince: at(row.attentionSince),
+          runStartedAt: at(row.runStartedAt),
+          pinnedAt: at(row.pinnedAt),
+          doneAt: at(row.doneAt),
+          snoozedUntil: at(row.snoozedUntil),
+        }).filter(([, value]) => value !== undefined),
+      ) as unknown as HostInboxSignals,
       beforeSnoozeEnds,
     );
-    assert.deepEqual([row.inboxBucket, row.inboxSortAt], [placed.bucket, new Date(placed.sortAt).toISOString()], row.id);
+    assert.deepEqual(
+      [row.inboxBucket, row.inboxSortAt],
+      [placed.bucket, new Date(placed.sortAt).toISOString()],
+      row.id,
+    );
   }
 
   const mutate = (change: (copy: Record<string, unknown>) => void) => {
@@ -3525,90 +4961,225 @@ test("revision 52 fixtures carry Inbox signals, and a stray or malformed signal 
     const page = record(copy.chatSummaries, "chatSummaries");
     return (page.summaries as Record<string, unknown>[]).find((row) => row.id === id)!;
   };
-  assert.throws(mutate((copy) => { runState(copy).state = "working"; }), /belongs to a waiting run/u);
-  assert.throws(mutate((copy) => { runState(copy).attentionSummary = " Allow a write operation?"; }), /must be trimmed/u);
-  assert.throws(mutate((copy) => { runState(copy).attentionSummary = "x".repeat(201); }));
-  assert.throws(mutate((copy) => { delete summary(copy, "chat_fixture_summary_01").triageRevision; }), /triage times need a triageRevision/u);
-  assert.throws(mutate((copy) => { summary(copy, "chat_fixture_summary_02").attentionSince = "yesterday"; }));
+  assert.throws(
+    mutate((copy) => {
+      runState(copy).state = "working";
+    }),
+    /belongs to a waiting run/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      runState(copy).attentionSummary = " Allow a write operation?";
+    }),
+    /must be trimmed/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      runState(copy).attentionSummary = "x".repeat(201);
+    }),
+  );
+  assert.throws(
+    mutate((copy) => {
+      delete summary(copy, "chat_fixture_summary_01").triageRevision;
+    }),
+    /triage times need a triageRevision/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      summary(copy, "chat_fixture_summary_02").attentionSince = "yesterday";
+    }),
+  );
   // A waiting run with no ask is still a waiting run.
-  assert.doesNotThrow(mutate((copy) => { delete runState(copy).attentionSummary; }));
+  assert.doesNotThrow(
+    mutate((copy) => {
+      delete runState(copy).attentionSummary;
+    }),
+  );
 });
 
-
 test("Bot messaging fixtures use revision 54, strict switch shapes and bounded capability vocabulary", async () => {
-  const {AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION, AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES, parseAidenRemoteBotMessagingSettings, parseAidenRemoteBotRoutineNotificationList} = await import("./aiden-remote-protocol.js");
+  const {
+    AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION,
+    AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES,
+    parseAidenRemoteBotMessagingSettings,
+    parseAidenRemoteBotRoutineNotificationList,
+  } = await import("./aiden-remote-protocol.js");
   const raw = record(await json("fixtures/contract.json"), "fixtures");
   const fixture = parseAidenRemoteContractFixture(raw);
   assert.equal(AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION, 54);
   assert.equal(fixture.contractRevision, AIDEN_REMOTE_CONTRACT_REVISION);
-  assert.deepEqual(parseAidenRemoteBotDetail(raw.botMessagingDetail).botMessaging, {receive: true, send: true});
-  assert.deepEqual(parseAidenRemoteBotIdentityPatchRequest(raw.botMessagingPatch, {allowBotMessaging: true}), {botMessaging: {receive: false}});
-  assert.deepEqual(parseAidenRemoteBotMessagingSettings(raw.botMessagingSettings), {enabled: false});
-  assert.equal(parseAidenRemoteBotRoutineNotificationList({notifications: [raw.botMessageNotification], now: "2026-11-03T12:00:00.000Z"}).notifications[0]?.kind, "message");
+  assert.deepEqual(parseAidenRemoteBotDetail(raw.botMessagingDetail).botMessaging, {
+    receive: true,
+    send: true,
+  });
+  assert.deepEqual(
+    parseAidenRemoteBotIdentityPatchRequest(raw.botMessagingPatch, { allowBotMessaging: true }),
+    { botMessaging: { receive: false } },
+  );
+  assert.deepEqual(parseAidenRemoteBotMessagingSettings(raw.botMessagingSettings), {
+    enabled: false,
+  });
+  assert.equal(
+    parseAidenRemoteBotRoutineNotificationList({
+      notifications: [raw.botMessageNotification],
+      now: "2026-11-03T12:00:00.000Z",
+    }).notifications[0]?.kind,
+    "message",
+  );
   assert.deepEqual(AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES, ["bot:messaging"]);
   assert.ok(AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES.includes("bot:messaging"));
   assert.equal(new Set(AIDEN_REMOTE_CAPABILITIES).size, AIDEN_REMOTE_CAPABILITIES.length);
-  for (const botMessaging of [{}, {receive: "false"}, {send: null}, {receive: true, extra: false}, null]) assert.throws(() => parseAidenRemoteBotIdentityPatchRequest({botMessaging}, {allowBotMessaging: true}));
-  assert.throws(() => parseAidenRemoteBotIdentityPatchRequest({botMessaging: {send: false}}));
-  assert.throws(() => parseAidenRemoteBotDetail({...raw.botMessagingDetail as object, botMessaging: {receive: true}}));
+  for (const botMessaging of [
+    {},
+    { receive: "false" },
+    { send: null },
+    { receive: true, extra: false },
+    null,
+  ])
+    assert.throws(() =>
+      parseAidenRemoteBotIdentityPatchRequest({ botMessaging }, { allowBotMessaging: true }),
+    );
+  assert.throws(() => parseAidenRemoteBotIdentityPatchRequest({ botMessaging: { send: false } }));
+  assert.throws(() =>
+    parseAidenRemoteBotDetail({
+      ...(raw.botMessagingDetail as object),
+      botMessaging: { receive: true },
+    }),
+  );
 });
-
 
 test("Bot messaging OpenAPI accepts fixtures and rejects malformed switch and notification payloads", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as {components: {schemas: Record<string, object>}};
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
   const raw = record(await json("fixtures/contract.json"), "fixtures");
-  const ajv = new Ajv2020({strict: false});
-  const schema = (name: string) => ajv.compile({$ref: `#/components/schemas/${name}`, components: spec.components});
-  const detail = schema("BotDetail"), patch = schema("BotIdentityPatch"), settings = schema("BotMessagingSettings"), feed = schema("BotRoutineNotificationList");
+  const ajv = new Ajv2020({ strict: false });
+  const schema = (name: string) =>
+    ajv.compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
+  const detail = schema("BotDetail"),
+    patch = schema("BotIdentityPatch"),
+    settings = schema("BotMessagingSettings"),
+    feed = schema("BotRoutineNotificationList");
   assert.equal(detail(raw.botMessagingDetail), true, JSON.stringify(detail.errors));
   assert.equal(patch(raw.botMessagingPatch), true);
   assert.equal(settings(raw.botMessagingSettings), true);
-  assert.equal(feed({notifications: [raw.botMessageNotification], now: "2026-11-03T12:00:00.000Z"}), true);
-  for (const botMessaging of [{}, {receive: "false"}, {send: null}, {receive: true, extra: false}]) assert.equal(patch({botMessaging}), false);
-  for (const sample of [{}, {enabled: "false"}, {enabled: false, extra: true}]) assert.equal(settings(sample), false);
-  for (const extra of [{routineId: "routine"}, {status: "succeeded"}]) assert.equal(feed({notifications: [{...raw.botMessageNotification as object, ...extra}], now: "2026-11-03T12:00:00.000Z"}), false);
+  assert.equal(
+    feed({ notifications: [raw.botMessageNotification], now: "2026-11-03T12:00:00.000Z" }),
+    true,
+  );
+  for (const botMessaging of [
+    {},
+    { receive: "false" },
+    { send: null },
+    { receive: true, extra: false },
+  ])
+    assert.equal(patch({ botMessaging }), false);
+  for (const sample of [{}, { enabled: "false" }, { enabled: false, extra: true }])
+    assert.equal(settings(sample), false);
+  for (const extra of [{ routineId: "routine" }, { status: "succeeded" }])
+    assert.equal(
+      feed({
+        notifications: [{ ...(raw.botMessageNotification as object), ...extra }],
+        now: "2026-11-03T12:00:00.000Z",
+      }),
+      false,
+    );
 });
 
 test("revision 55 access fixtures and strict public DTOs reject private fields and invalid choices", async () => {
-  const { parseAidenRemoteBotAccessRequest: card, parseAidenRemoteBotAccessAnswerRequest: answer, parseAidenRemoteBotAccessAnswerReceipt: receipt } = await import("./aiden-remote-protocol.js");
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const {
+    parseAidenRemoteBotAccessRequest: card,
+    parseAidenRemoteBotAccessAnswerRequest: answer,
+    parseAidenRemoteBotAccessAnswerReceipt: receipt,
+  } = await import("./aiden-remote-protocol.js");
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const section = parseAidenRemoteContractFixture(raw).botAccessRequests!;
   assert.deepEqual(section, raw.botAccessRequests);
   assert.equal(section.folder.place, "~/Documents/Reports");
   assert.deepEqual(section.wholeMac.choices, ["not_now", "once"]);
-  assert.throws(() => parseAidenRemoteBotIssue({...section.issue,kind:"run_stalled",actions:[{kind:"dismiss_access"}]}));
+  assert.throws(() =>
+    parseAidenRemoteBotIssue({
+      ...section.issue,
+      kind: "run_stalled",
+      actions: [{ kind: "dismiss_access" }],
+    }),
+  );
   assert.deepEqual(receipt({ answered: true }), { answered: true });
-  assert.deepEqual(receipt({ answered: true, savedForFuture: true }), { answered: true, savedForFuture: true });
-  for (const savedForFuture of [false, null, "true", 1]) assert.throws(() => receipt({ answered: true, savedForFuture }));
-  for (const choice of ["once", "always", "not_now"]) assert.deepEqual(answer({ choice }), { choice });
-  for (const sample of [{}, { choice: "all" }, { choice: "once", folderPath: "/private" }]) assert.throws(() => answer(sample));
-  for (const sample of [{ answered: false }, { answered: true, waitId: "other" }]) assert.throws(() => receipt(sample));
-  for (const extra of [{ authorization: {} }, { botId: "bot_fixture_01" }, { root: "/private" }, { toolCallId: "call" }]) assert.throws(() => card({ ...section.folder, ...extra }));
-  for (const change of [{ label: "x".repeat(121) }, { why: "x".repeat(401) }, { place: "x".repeat(513) }, { why: " " }, { label: "Bad\u0000" }, { place: "relative/path" }, { waitId: "bad_id" }, { choices: ["once", "always", "not_now"] }, { choices: ["not_now", "once", "once"] }]) assert.throws(() => card({ ...section.folder, ...change }));
+  assert.deepEqual(receipt({ answered: true, savedForFuture: true }), {
+    answered: true,
+    savedForFuture: true,
+  });
+  for (const savedForFuture of [false, null, "true", 1])
+    assert.throws(() => receipt({ answered: true, savedForFuture }));
+  for (const choice of ["once", "always", "not_now"])
+    assert.deepEqual(answer({ choice }), { choice });
+  for (const sample of [{}, { choice: "all" }, { choice: "once", folderPath: "/private" }])
+    assert.throws(() => answer(sample));
+  for (const sample of [{ answered: false }, { answered: true, waitId: "other" }])
+    assert.throws(() => receipt(sample));
+  for (const extra of [
+    { authorization: {} },
+    { botId: "bot_fixture_01" },
+    { root: "/private" },
+    { toolCallId: "call" },
+  ])
+    assert.throws(() => card({ ...section.folder, ...extra }));
+  for (const change of [
+    { label: "x".repeat(121) },
+    { why: "x".repeat(401) },
+    { place: "x".repeat(513) },
+    { why: " " },
+    { label: "Bad\u0000" },
+    { place: "relative/path" },
+    { waitId: "bad_id" },
+    { choices: ["once", "always", "not_now"] },
+    { choices: ["not_now", "once", "once"] },
+  ])
+    assert.throws(() => card({ ...section.folder, ...change }));
   assert.throws(() => card({ ...section.wholeMac, choices: ["not_now", "always", "once"] }));
   assert.throws(() => card({ ...section.wholeMac, place: "~/Reports" }));
-  const older = structuredClone(raw); delete older.botPlans; delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider; older.contractRevision = 54; older.hostHealth.contractRevision = 54;
+  const older = structuredClone(raw);
+  delete older.botPlans;
+  delete older.botAllowed;
+  delete older.voiceInput;
+  delete older.stoppedSteps;
+  delete older.backgroundJobsChatSettled;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
+  older.contractRevision = 54;
+  older.hostHealth.contractRevision = 54;
   assert.throws(() => parseAidenRemoteContractFixture(older), /require revision 55/u);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider;
+  delete older.botAllowed;
+  delete older.voiceInput;
+  delete older.stoppedSteps;
+  delete older.backgroundJobsChatSettled;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   assert.equal(parseAidenRemoteContractFixture(older).botAccessRequests, undefined);
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
-  const validate = new Ajv2020({ strict: false }).compile({ $ref: "#/components/schemas/BotAccessRequest", components: spec.components });
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
+  const validate = new Ajv2020({ strict: false }).compile({
+    $ref: "#/components/schemas/BotAccessRequest",
+    components: spec.components,
+  });
   assert.equal(validate(section.folder), true, JSON.stringify(validate.errors));
   assert.equal(validate(section.wholeMac), true, JSON.stringify(validate.errors));
   assert.equal(validate({ ...section.folder, authorization: {} }), false);
-  const receiptSchema = new Ajv2020({ strict: false }).compile({ $ref: "#/components/schemas/BotAccessAnswerReceipt", components: spec.components });
-  assert.equal(receiptSchema({answered:true}),true);
-  assert.equal(receiptSchema({answered:true,savedForFuture:true}),true);
-  assert.equal(receiptSchema({answered:true,savedForFuture:false}),false);
-  assert.equal(receiptSchema({answered:true,authorization:{}}),false);
+  const receiptSchema = new Ajv2020({ strict: false }).compile({
+    $ref: "#/components/schemas/BotAccessAnswerReceipt",
+    components: spec.components,
+  });
+  assert.equal(receiptSchema({ answered: true }), true);
+  assert.equal(receiptSchema({ answered: true, savedForFuture: true }), true);
+  assert.equal(receiptSchema({ answered: true, savedForFuture: false }), false);
+  assert.equal(receiptSchema({ answered: true, authorization: {} }), false);
 });
 
 test("the access fixture refuses a holder field in a legacy snapshot or event", async () => {
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const leaked = structuredClone(raw);
   leaked.botAccessRequests.legacy.session.accessRequest = null;
   assert.throws(() => parseAidenRemoteContractFixture(leaked), /must not carry holder fields/u);
@@ -3619,7 +5190,7 @@ test("the access fixture refuses a holder field in a legacy snapshot or event", 
 
 test("revision 56 plans decode strictly, preserve absent versus null, and exclude private identities", async () => {
   const protocol = await import("./aiden-remote-protocol.js");
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const section = protocol.parseAidenRemoteContractFixture(raw).botPlans!;
   assert.deepEqual(section, raw.botPlans);
   assert.equal(protocol.AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION, 56);
@@ -3627,31 +5198,89 @@ test("revision 56 plans decode strictly, preserve absent versus null, and exclud
   assert.equal(section.pending.status, "pending");
   assert.equal(section.active.steps[0].status, "done");
   const parse = protocol.parseAidenRemoteBotPlan;
-  for (const change of [{ botId: "private" }, { revision: 1 }, { authorization: {} }, { requestIds: [] }, { title: "x".repeat(81) }, { why: "x".repeat(301) }, { from: null }, { expiresAt: null }, { title: "Bad\u202e" }, { steps: [{ text: "x", status: "unknown" }] }, { items: [{ line: "x", details: [], used: 1 }] }, { items: [{ line: "x", details: [], max: 26, used: 0 }] }, { items: [{ line: "x", details: [], used: 6, max: 5 }] }, { items: [{ id: "private", line: "x", details: [] }] }]) assert.throws(() => parse({ ...section.pending, ...change }));
-  for (const input of [{}, { decision: "allow" }, { decision: "approve", planId: "private" }]) assert.throws(() => protocol.parseAidenRemoteBotPlanRespondRequest(input));
-  for (const decision of ["approve", "not_now", "stop"]) assert.deepEqual(protocol.parseAidenRemoteBotPlanRespondRequest({ decision }), { decision });
+  for (const change of [
+    { botId: "private" },
+    { revision: 1 },
+    { authorization: {} },
+    { requestIds: [] },
+    { title: "x".repeat(81) },
+    { why: "x".repeat(301) },
+    { from: null },
+    { expiresAt: null },
+    { title: "Bad\u202e" },
+    { steps: [{ text: "x", status: "unknown" }] },
+    { items: [{ line: "x", details: [], used: 1 }] },
+    { items: [{ line: "x", details: [], max: 26, used: 0 }] },
+    { items: [{ line: "x", details: [], used: 6, max: 5 }] },
+    { items: [{ id: "private", line: "x", details: [] }] },
+  ])
+    assert.throws(() => parse({ ...section.pending, ...change }));
+  for (const input of [{}, { decision: "allow" }, { decision: "approve", planId: "private" }])
+    assert.throws(() => protocol.parseAidenRemoteBotPlanRespondRequest(input));
+  for (const decision of ["approve", "not_now", "stop"])
+    assert.deepEqual(protocol.parseAidenRemoteBotPlanRespondRequest({ decision }), { decision });
   assert.equal(protocol.parseAidenRemoteBotSession(section.legacy.session).plan, undefined);
-  assert.equal(protocol.parseAidenRemoteBotSession({ ...section.legacy.session, plan: null }).plan, null);
-  assert.throws(() => protocol.parseAidenRemoteBotSession({ ...section.legacy.session, plan: undefined }));
-  assert.throws(() => protocol.parseAidenRemoteBotSessionEvent({ ...section.events[1], payload: {} }));
-  const leaked = structuredClone(raw); leaked.botPlans.legacy.session.plan = null;
+  assert.equal(
+    protocol.parseAidenRemoteBotSession({ ...section.legacy.session, plan: null }).plan,
+    null,
+  );
+  assert.throws(() =>
+    protocol.parseAidenRemoteBotSession({ ...section.legacy.session, plan: undefined }),
+  );
+  assert.throws(() =>
+    protocol.parseAidenRemoteBotSessionEvent({ ...section.events[1], payload: {} }),
+  );
+  const leaked = structuredClone(raw);
+  leaked.botPlans.legacy.session.plan = null;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(leaked));
-  const older = structuredClone(raw); delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider; older.contractRevision = 55; older.hostHealth.contractRevision = 55;
+  const older = structuredClone(raw);
+  delete older.botAllowed;
+  delete older.voiceInput;
+  delete older.stoppedSteps;
+  delete older.backgroundJobsChatSettled;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
+  older.contractRevision = 55;
+  older.hostHealth.contractRevision = 55;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 56/u);
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider;
+  delete older.botAllowed;
+  delete older.voiceInput;
+  delete older.stoppedSteps;
+  delete older.backgroundJobsChatSettled;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   assert.equal(protocol.parseAidenRemoteContractFixture(older).botPlans, undefined);
 });
 
 test("Bot plan OpenAPI validates canonical payloads and rejects unknown or missing members", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
-  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
-  const schema = (name: string) => new Ajv2020({ strict: false, validateFormats: false }).compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const spec = (await json("openapi.json")) as { components: { schemas: Record<string, object> } };
+  const schema = (name: string) =>
+    new Ajv2020({ strict: false, validateFormats: false }).compile({
+      $ref: `#/components/schemas/${name}`,
+      components: spec.components,
+    });
   const card = schema("BotPlan");
-  for (const plan of [raw.botPlans.pending, raw.botPlans.active]) assert.equal(card(plan), true, JSON.stringify(card.errors));
-  for (const change of [{ planId: "bad_id" }, { revision: 1 }, { title: "" }, { steps: [] }, { items: [{ line: "x", details: [], used: 0 }] }, { from: null }, { expiresAt: null }]) assert.equal(card({ ...raw.botPlans.pending, ...change }), false);
-  assert.equal(card({ ...raw.botPlans.pending, items: [{ line: "x", details: [], used: 6, max: 5 }] }), false);
+  for (const plan of [raw.botPlans.pending, raw.botPlans.active])
+    assert.equal(card(plan), true, JSON.stringify(card.errors));
+  for (const change of [
+    { planId: "bad_id" },
+    { revision: 1 },
+    { title: "" },
+    { steps: [] },
+    { items: [{ line: "x", details: [], used: 0 }] },
+    { from: null },
+    { expiresAt: null },
+  ])
+    assert.equal(card({ ...raw.botPlans.pending, ...change }), false);
+  assert.equal(
+    card({ ...raw.botPlans.pending, items: [{ line: "x", details: [], used: 6, max: 5 }] }),
+    false,
+  );
   assert.equal(card({ ...raw.botPlans.pending, title: "Read\ncarefully" }), true);
   const request = schema("BotPlanRespondRequest");
   assert.equal(request(raw.botPlans.respond.request), true);
@@ -3661,17 +5290,20 @@ test("Bot plan OpenAPI validates canonical payloads and rejects unknown or missi
   assert.equal(receipt(raw.botPlans.respond.response), true);
   assert.equal(receipt({ planId: "x", status: "pending" }), false);
   const event = schema("BotSessionEvent");
-  for (const frame of raw.botPlans.events) assert.equal(event(frame), true, JSON.stringify(event.errors));
+  for (const frame of raw.botPlans.events)
+    assert.equal(event(frame), true, JSON.stringify(event.errors));
   assert.equal(event({ ...raw.botPlans.events[1], payload: {} }), false);
   assert.equal(event({ ...raw.botPlans.events[1], payload: { plan: null, raw: true } }), false);
 });
 
 test("plan collection and string bounds reject oversize payloads without weakening legacy sessions", async () => {
   const { parseAidenRemoteBotPlan: parse } = await import("./aiden-remote-protocol.js");
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const plan = raw.botPlans.pending;
   for (const change of [
-    { planId: "p".repeat(65) }, { title: " " }, { from: "😀".repeat(121) },
+    { planId: "p".repeat(65) },
+    { title: " " },
+    { from: "😀".repeat(121) },
     { steps: Array.from({ length: 11 }, () => ({ text: "x", status: "pending" })) },
     { steps: [{ text: "😀".repeat(201), status: "pending" }] },
     { items: Array.from({ length: 9 }, () => ({ line: "x", details: [] })) },
@@ -3680,75 +5312,161 @@ test("plan collection and string bounds reject oversize payloads without weakeni
     { items: [{ line: "x", details: Array.from({ length: 7 }, () => "x") }] },
     { items: [{ line: "x", details: [], used: null, max: null }] },
     { items: [{ line: "x", details: [], used: 0.5, max: 1 }] },
-    { expiresAt: "tomorrow" }, { planId: "x/y" },
-  ]) assert.throws(() => parse({ ...plan, ...change }));
-  const maximum = parse({ ...plan, title: "😀".repeat(80), why: "😀".repeat(300), from: "😀".repeat(120), steps: [{ text: "😀".repeat(200), status: "done" }], items: [{ line: "😀".repeat(120), details: ["😀".repeat(160)], used: 25, max: 25 }] });
+    { expiresAt: "tomorrow" },
+    { planId: "x/y" },
+  ])
+    assert.throws(() => parse({ ...plan, ...change }));
+  const maximum = parse({
+    ...plan,
+    title: "😀".repeat(80),
+    why: "😀".repeat(300),
+    from: "😀".repeat(120),
+    steps: [{ text: "😀".repeat(200), status: "done" }],
+    items: [{ line: "😀".repeat(120), details: ["😀".repeat(160)], used: 25, max: 25 }],
+  });
   assert.equal([...maximum.title].length, 80);
   assert.equal(maximum.items[0]!.used, 25);
 });
 
 test("canonical phone plan fixtures identify enforced folders, modes and temporary grant lifetime", async () => {
   const protocol = await import("./aiden-remote-protocol.js");
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const plans = protocol.parseAidenRemoteContractFixture(raw).botPlans!;
   const files = [
-    { line: "Files · change /Volumes/Backup/Family Photos for this plan", details: ["/Volumes/Backup/Family Photos", "Read and change · allowed once, for this plan only"] },
+    {
+      line: "Files · change /Volumes/Backup/Family Photos for this plan",
+      details: [
+        "/Volumes/Backup/Family Photos",
+        "Read and change · allowed once, for this plan only",
+      ],
+    },
     { line: "Files · read ~/Documents/Tax Records", details: ["~/Documents/Tax Records"] },
   ];
-  for (const plan of [plans.pending, plans.active, plans.session.plan, ...plans.events.flatMap(event => event.type === "snapshot" ? [event.payload.session.plan] : event.type === "plan" && event.payload.plan ? [event.payload.plan] : [])]) {
+  for (const plan of [
+    plans.pending,
+    plans.active,
+    plans.session.plan,
+    ...plans.events.flatMap((event) =>
+      event.type === "snapshot"
+        ? [event.payload.session.plan]
+        : event.type === "plan" && event.payload.plan
+          ? [event.payload.plan]
+          : [],
+    ),
+  ]) {
     assert.ok(plan);
     assert.deepEqual(plan.items.slice(2), files);
-    assert.equal(plan.items.filter(item => item.line.endsWith(" for this plan")).length, 1);
+    assert.equal(plan.items.filter((item) => item.line.endsWith(" for this plan")).length, 1);
   }
   assert.ok(raw.botPlans.readOnlyFolderPlan);
   const readOnly = protocol.parseAidenRemoteBotPlan(raw.botPlans.readOnlyFolderPlan);
-  assert.deepEqual(readOnly.items, [{ line: "Files · read /Volumes/Archive/Tax Records for this plan", details: ["/Volumes/Archive/Tax Records", "Read only · allowed once, for this plan only"] }]);
+  assert.deepEqual(readOnly.items, [
+    {
+      line: "Files · read /Volumes/Archive/Tax Records for this plan",
+      details: ["/Volumes/Archive/Tax Records", "Read only · allowed once, for this plan only"],
+    },
+  ]);
 });
 
 test("revision 57 allowed fixture is strict and exposes only bounded public list and count vocabulary", async () => {
   const protocol = await import("./aiden-remote-protocol.js");
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const section = protocol.parseAidenRemoteContractFixture(raw).botAllowed!;
   assert.deepEqual(section, raw.botAllowed);
-  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 70);
+  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 70);
   const all = [...section.paginated.firstPage.entries, ...section.paginated.nextPage.entries];
-  assert.equal(all.length, 53); assert.equal(all.filter(e => e.kind === "rule").length, 50); assert.equal(all.filter(e => e.kind === "folder").length, 3);
-  assert.equal(new Set(all.map(e => e.id)).size, 53);
+  assert.equal(all.length, 53);
+  assert.equal(all.filter((e) => e.kind === "rule").length, 50);
+  assert.equal(all.filter((e) => e.kind === "folder").length, 3);
+  assert.equal(new Set(all.map((e) => e.id)).size, 53);
   const parse = protocol.parseAidenRemoteBotAllowedList;
-  for (const extra of [{ target: {} }, { botId: "private" }, { authorizationFingerprint: "private" }, { operationId: "private" }]) assert.throws(() => parse({ ...section.list, entries: [{ ...section.list.entries[0], ...extra }] }));
-  for (const change of [{ entries: Array.from({ length: 51 }, () => section.list.entries[0]) }, { nextCursor: null }, { nextCursor: "" }, { entries: [{ ...section.list.entries[0], uses: -1 }] }, { entries: [{ ...section.list.entries[2], uses: 0 }] }, { entries: [{ ...section.list.entries[0], lastUsedAt: null }] }, { entries: [{ ...section.list.entries[0], what: "😀".repeat(201) }] }]) assert.throws(() => parse({ ...section.list, ...change }));
+  for (const extra of [
+    { target: {} },
+    { botId: "private" },
+    { authorizationFingerprint: "private" },
+    { operationId: "private" },
+  ])
+    assert.throws(() =>
+      parse({ ...section.list, entries: [{ ...section.list.entries[0], ...extra }] }),
+    );
+  for (const change of [
+    { entries: Array.from({ length: 51 }, () => section.list.entries[0]) },
+    { nextCursor: null },
+    { nextCursor: "" },
+    { entries: [{ ...section.list.entries[0], uses: -1 }] },
+    { entries: [{ ...section.list.entries[2], uses: 0 }] },
+    { entries: [{ ...section.list.entries[0], lastUsedAt: null }] },
+    { entries: [{ ...section.list.entries[0], what: "😀".repeat(201) }] },
+  ])
+    assert.throws(() => parse({ ...section.list, ...change }));
   assert.equal(protocol.parseAidenRemoteBotApproval(section.approval).alwaysCount, 3);
   assert.equal(protocol.parseAidenRemoteBotAccessRequest(section.accessRequest).approvalCount, 3);
   for (const count of [null, undefined, 2, 21, 3.5, "3"]) {
-    assert.throws(() => protocol.parseAidenRemoteBotApproval({ ...section.legacyApproval, alwaysCount: count }));
-    assert.throws(() => protocol.parseAidenRemoteBotAccessRequest({ ...section.legacyAccessRequest, approvalCount: count }));
+    assert.throws(() =>
+      protocol.parseAidenRemoteBotApproval({ ...section.legacyApproval, alwaysCount: count }),
+    );
+    assert.throws(() =>
+      protocol.parseAidenRemoteBotAccessRequest({
+        ...section.legacyAccessRequest,
+        approvalCount: count,
+      }),
+    );
   }
-  assert.throws(() => protocol.parseAidenRemoteBotApproval({ ...section.approval, canAllow: false }));
-  const older = structuredClone(raw); delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider; older.contractRevision = 56; older.hostHealth.contractRevision = 56;
-  assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 57/u); delete older.botAllowed;
+  assert.throws(() =>
+    protocol.parseAidenRemoteBotApproval({ ...section.approval, canAllow: false }),
+  );
+  const older = structuredClone(raw);
+  delete older.voiceInput;
+  delete older.stoppedSteps;
+  delete older.backgroundJobsChatSettled;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
+  older.contractRevision = 56;
+  older.hostHealth.contractRevision = 56;
+  assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 57/u);
+  delete older.botAllowed;
   assert.equal(protocol.parseAidenRemoteContractFixture(older).botAllowed, undefined);
 });
 
 test("D allowed OpenAPI accepts public fixtures, counts and pages and refuses private or unsupported fields", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const raw = await json("fixtures/contract.json") as Record<string, any>, spec = await json("openapi.json") as { components: object };
-  const schema = (name: string) => new Ajv2020({ strict: false, validateFormats: false }).compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
-  const section = raw.botAllowed, list = schema("BotAllowedList"), approval = schema("BotApproval"), access = schema("BotAccessRequest");
-  for (const page of [section.list, ...Object.values(section.paginated), section.remove.response]) assert.equal(list(page), true, JSON.stringify(list.errors));
-  assert.equal(list({ ...section.list, entries: [{ ...section.list.entries[0], target: {} }] }), false);
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>,
+    spec = (await json("openapi.json")) as { components: object };
+  const schema = (name: string) =>
+    new Ajv2020({ strict: false, validateFormats: false }).compile({
+      $ref: `#/components/schemas/${name}`,
+      components: spec.components,
+    });
+  const section = raw.botAllowed,
+    list = schema("BotAllowedList"),
+    approval = schema("BotApproval"),
+    access = schema("BotAccessRequest");
+  for (const page of [section.list, ...Object.values(section.paginated), section.remove.response])
+    assert.equal(list(page), true, JSON.stringify(list.errors));
+  assert.equal(
+    list({ ...section.list, entries: [{ ...section.list.entries[0], target: {} }] }),
+    false,
+  );
   assert.equal(list({ ...section.list, nextCursor: null }), false);
-  assert.equal(list({ ...section.list, entries: [{ ...section.list.entries[2], uses: 0 }] }), false);
-  assert.equal(approval(section.approval), true, JSON.stringify(approval.errors)); assert.equal(approval(section.legacyApproval), true);
+  assert.equal(
+    list({ ...section.list, entries: [{ ...section.list.entries[2], uses: 0 }] }),
+    false,
+  );
+  assert.equal(approval(section.approval), true, JSON.stringify(approval.errors));
+  assert.equal(approval(section.legacyApproval), true);
   assert.equal(approval({ ...section.approval, canAllow: false }), false);
   assert.equal(approval({ ...section.approval, alwaysCount: 2 }), false);
-  assert.equal(access(section.accessRequest), true, JSON.stringify(access.errors)); assert.equal(access(section.legacyAccessRequest), true);
+  assert.equal(access(section.accessRequest), true, JSON.stringify(access.errors));
+  assert.equal(access(section.legacyAccessRequest), true);
   assert.equal(access({ ...section.accessRequest, approvalCount: 21 }), false);
   assert.equal(access({ ...section.accessRequest, choices: ["not_now", "once"] }), false);
 });
 
 test("revision 63 lets a stopped job say it stopped after the chat went quiet, and earlier fixtures may not", async () => {
   const protocol = await import("./aiden-remote-protocol.js");
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const fixture = protocol.parseAidenRemoteContractFixture(raw).backgroundJobsChatSettled;
   assert.ok(fixture);
   const reasons = new Map(fixture.list.jobs.map((job) => [job.id, job.endReason]));
@@ -3756,76 +5474,132 @@ test("revision 63 lets a stopped job say it stopped after the chat went quiet, a
   assert.equal(reasons.get("job_6a7b8c9d"), "person");
 
   const older = structuredClone(raw);
-  delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   older.contractRevision = protocol.AIDEN_REMOTE_BACKGROUND_JOBS_CHAT_SETTLED_CONTRACT_REVISION - 1;
   older.hostHealth.contractRevision = older.contractRevision;
   assert.throws(
     () => protocol.parseAidenRemoteContractFixture(older),
-    new RegExp(`Chat-settled background job fixtures require contract revision ${protocol.AIDEN_REMOTE_BACKGROUND_JOBS_CHAT_SETTLED_CONTRACT_REVISION}\\b`, "u"),
+    new RegExp(
+      `Chat-settled background job fixtures require contract revision ${protocol.AIDEN_REMOTE_BACKGROUND_JOBS_CHAT_SETTLED_CONTRACT_REVISION}\\b`,
+      "u",
+    ),
   );
   delete older.backgroundJobsChatSettled;
-  assert.equal(protocol.parseAidenRemoteContractFixture(older).backgroundJobsChatSettled, undefined);
+  assert.equal(
+    protocol.parseAidenRemoteContractFixture(older).backgroundJobsChatSettled,
+    undefined,
+  );
 
   const withoutSettled = structuredClone(raw);
-  withoutSettled.backgroundJobsChatSettled.list.jobs = withoutSettled.backgroundJobsChatSettled.list.jobs.filter(
-    (job: { endReason?: string }) => job.endReason !== "chat-settled",
+  withoutSettled.backgroundJobsChatSettled.list.jobs =
+    withoutSettled.backgroundJobsChatSettled.list.jobs.filter(
+      (job: { endReason?: string }) => job.endReason !== "chat-settled",
+    );
+  assert.throws(
+    () => protocol.parseAidenRemoteContractFixture(withoutSettled),
+    /stopped after the chat went quiet/u,
   );
-  assert.throws(() => protocol.parseAidenRemoteContractFixture(withoutSettled), /stopped after the chat went quiet/u);
 
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: object };
-  const schema = new Ajv2020({ strict: false }).compile({ $ref: "#/components/schemas/BackgroundJobs", components: spec.components });
+  const spec = (await json("openapi.json")) as { components: object };
+  const schema = new Ajv2020({ strict: false }).compile({
+    $ref: "#/components/schemas/BackgroundJobs",
+    components: spec.components,
+  });
   assert.equal(schema(raw.backgroundJobsChatSettled.list), true, JSON.stringify(schema.errors));
-  assert.deepEqual(protocol.parseAidenRemoteBackgroundJobs(raw.backgroundJobsChatSettled.list), raw.backgroundJobsChatSettled.list);
+  assert.deepEqual(
+    protocol.parseAidenRemoteBackgroundJobs(raw.backgroundJobsChatSettled.list),
+    raw.backgroundJobsChatSettled.list,
+  );
   const settled = raw.backgroundJobsChatSettled.list.jobs[0];
-  assert.throws(() => protocol.parseAidenRemoteBackgroundJobs({ jobs: [{ ...settled, state: "exited" }] }), Error, "only a stopped job says why");
+  assert.throws(
+    () => protocol.parseAidenRemoteBackgroundJobs({ jobs: [{ ...settled, state: "exited" }] }),
+    Error,
+    "only a stopped job says why",
+  );
   const unlisted = { jobs: [{ ...settled, endReason: "chat-idle" }] };
-  assert.throws(() => protocol.parseAidenRemoteBackgroundJobs(unlisted), Error, "reasons come from the list");
+  assert.throws(
+    () => protocol.parseAidenRemoteBackgroundJobs(unlisted),
+    Error,
+    "reasons come from the list",
+  );
   assert.equal(schema(unlisted), false, "reasons come from the list");
 });
 
 test("revision 60 marks only user messages Aiden Live sent by voice, and clients drop values they do not know", async () => {
   const protocol = await import("./aiden-remote-protocol.js");
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   assert.equal(protocol.AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION, 60);
   const fixture = protocol.parseAidenRemoteContractFixture(raw).voiceInput;
   assert.ok(fixture);
   const byId = new Map(fixture.chat.messages.map((message) => [message.id, message.inputSource]));
   assert.equal(byId.get("message_fixture_voice_user"), "voice");
-  assert.equal(byId.get("message_fixture_voice_assistant"), undefined, "assistant replies never carry the label");
-  assert.equal(byId.get("message_fixture_voice_unknown"), undefined, "an unknown source reads as typed");
+  assert.equal(
+    byId.get("message_fixture_voice_assistant"),
+    undefined,
+    "assistant replies never carry the label",
+  );
+  assert.equal(
+    byId.get("message_fixture_voice_unknown"),
+    undefined,
+    "an unknown source reads as typed",
+  );
 
   // A fixture that claims a different marked set than the parser yields is refused.
   const wrong = structuredClone(raw);
-  wrong.voiceInput.voiceMessageIds = ["message_fixture_voice_user", "message_fixture_voice_assistant"];
+  wrong.voiceInput.voiceMessageIds = [
+    "message_fixture_voice_user",
+    "message_fixture_voice_assistant",
+  ];
   assert.throws(() => protocol.parseAidenRemoteContractFixture(wrong), /marks different messages/u);
   const older = structuredClone(raw);
-  delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   older.contractRevision = 59;
   older.hostHealth.contractRevision = 59;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 60/u);
 
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: object };
-  const message = new Ajv2020({ strict: false, validateFormats: false }).compile({ $ref: "#/components/schemas/Message", components: spec.components });
+  const spec = (await json("openapi.json")) as { components: object };
+  const message = new Ajv2020({ strict: false, validateFormats: false }).compile({
+    $ref: "#/components/schemas/Message",
+    components: spec.components,
+  });
   const [voiceUser] = raw.voiceInput.chat.messages;
   assert.equal(message(voiceUser), true, JSON.stringify(message.errors));
   const { inputSource: _dropped, ...typed } = voiceUser;
   assert.equal(message(typed), true, "the field is optional, so older hosts stay valid");
-  assert.equal(message({ ...voiceUser, inputSource: "dictation" }), false, "hosts send only the voice marker");
+  assert.equal(
+    message({ ...voiceUser, inputSource: "dictation" }),
+    false,
+    "hosts send only the voice marker",
+  );
 });
 
 test("revision 62 reads only the steps Stop cancelled as stopped, and every other cancelled step stays an issue", async () => {
   const protocol = await import("./aiden-remote-protocol.js");
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   assert.equal(protocol.AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION, 62);
   assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 70);
   const fixture = protocol.parseAidenRemoteContractFixture(raw).stoppedSteps;
   assert.ok(fixture);
   assert.deepEqual(fixture.stoppedStepIds, ["tool-3"]);
-  assert.deepEqual(fixture.issueStepIds, ["tool-2", "tool-4"], "a step cancelled before Stop is still an issue");
-  const flags = fixture.timeline.steps.map((step) => step.kind === "tool" ? step.stoppedByUser : undefined);
-  assert.deepEqual(flags, [undefined, undefined, true, undefined], "the mark survives the shared timeline parser");
+  assert.deepEqual(
+    fixture.issueStepIds,
+    ["tool-2", "tool-4"],
+    "a step cancelled before Stop is still an issue",
+  );
+  const flags = fixture.timeline.steps.map((step) =>
+    step.kind === "tool" ? step.stoppedByUser : undefined,
+  );
+  assert.deepEqual(
+    flags,
+    [undefined, undefined, true, undefined],
+    "the mark survives the shared timeline parser",
+  );
 
   // A fixture that claims a different stopped set than the parser yields is refused.
   const wrong = structuredClone(raw);
@@ -3840,63 +5614,138 @@ test("revision 62 reads only the steps Stop cancelled as stopped, and every othe
   older.contractRevision = 61;
   older.hostHealth.contractRevision = 61;
   delete older.backgroundJobsChatSettled;
-  delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 62/u);
   delete older.stoppedSteps;
   assert.equal(protocol.parseAidenRemoteContractFixture(older).stoppedSteps, undefined);
 
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: object };
-  const step = new Ajv2020({ strict: false, validateFormats: false }).compile({ $ref: "#/components/schemas/GenerationToolStep", components: spec.components });
+  const spec = (await json("openapi.json")) as { components: object };
+  const step = new Ajv2020({ strict: false, validateFormats: false }).compile({
+    $ref: "#/components/schemas/GenerationToolStep",
+    components: spec.components,
+  });
   const [, cancelled, stopped, failed] = raw.stoppedSteps.timeline.steps;
   assert.equal(step(stopped), true, JSON.stringify(step.errors));
   assert.equal(step(cancelled), true, "the field is optional, so older hosts stay valid");
-  assert.equal(step({ ...failed, stoppedByUser: true }), false, "only a cancelled step can carry the mark");
+  assert.equal(
+    step({ ...failed, stoppedByUser: true }),
+    false,
+    "only a cancelled step can carry the mark",
+  );
   assert.equal(step({ ...stopped, status: "completed" }), false);
-  assert.equal(step({ ...stopped, stoppedByUser: false }), false, "hosts send only the true marker");
+  assert.equal(
+    step({ ...stopped, stoppedByUser: false }),
+    false,
+    "hosts send only the true marker",
+  );
 
   // The mark is a version 3 field: the schema and the desktop parser agree
   // that an older timeline carrying it is invalid, and valid without it.
-  const validateTimeline = new Ajv2020({ strict: false, validateFormats: false }).compile({ $ref: "#/components/schemas/GenerationTimeline", components: spec.components });
+  const validateTimeline = new Ajv2020({ strict: false, validateFormats: false }).compile({
+    $ref: "#/components/schemas/GenerationTimeline",
+    components: spec.components,
+  });
   const { contentOffset: _offset, ...olderStopped } = stopped;
   const { stoppedByUser: _mark, ...olderPlain } = olderStopped;
-  const timelineOf = (version: number, stepValue: unknown) => ({ version, generationId: "gen-1", status: "cancelled", startedAt: 1, finishedAt: 2, steps: [{ ...(stepValue as object), order: 0 }] });
-  assert.equal(validateTimeline(timelineOf(3, stopped)), true, JSON.stringify(validateTimeline.errors));
+  const timelineOf = (version: number, stepValue: unknown) => ({
+    version,
+    generationId: "gen-1",
+    status: "cancelled",
+    startedAt: 1,
+    finishedAt: 2,
+    steps: [{ ...(stepValue as object), order: 0 }],
+  });
+  assert.equal(
+    validateTimeline(timelineOf(3, stopped)),
+    true,
+    JSON.stringify(validateTimeline.errors),
+  );
   assert.ok(parseGenerationTimeline(timelineOf(3, stopped)));
   for (const version of [1, 2]) {
-    assert.equal(validateTimeline(timelineOf(version, olderStopped)), false, `schema: version ${version} with the mark`);
-    assert.equal(parseGenerationTimeline(timelineOf(version, olderStopped)), undefined, `runtime: version ${version} with the mark`);
-    assert.equal(validateTimeline(timelineOf(version, olderPlain)), true, `schema: version ${version} without the mark ${JSON.stringify(validateTimeline.errors)}`);
-    assert.ok(parseGenerationTimeline(timelineOf(version, olderPlain)), `runtime: version ${version} without the mark`);
+    assert.equal(
+      validateTimeline(timelineOf(version, olderStopped)),
+      false,
+      `schema: version ${version} with the mark`,
+    );
+    assert.equal(
+      parseGenerationTimeline(timelineOf(version, olderStopped)),
+      undefined,
+      `runtime: version ${version} with the mark`,
+    );
+    assert.equal(
+      validateTimeline(timelineOf(version, olderPlain)),
+      true,
+      `schema: version ${version} without the mark ${JSON.stringify(validateTimeline.errors)}`,
+    );
+    assert.ok(
+      parseGenerationTimeline(timelineOf(version, olderPlain)),
+      `runtime: version ${version} without the mark`,
+    );
   }
 });
 
 test("revision 64 tells a capable phone why a chat's folder is gone and lets it continue the whole chat elsewhere", async () => {
   const protocol = await import("./aiden-remote-protocol.js");
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   assert.equal(protocol.AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION, 64);
   const section = protocol.parseAidenRemoteContractFixture(raw).continueInNewChat;
   assert.ok(section);
   assert.deepEqual(section, raw.continueInNewChat);
-  assert.deepEqual(section.refused.error.details, { reason: "folder_missing", canContinueInNewChat: true });
-  assert.equal(section.plainRefusal.error.details, undefined, "an older phone hears only the sentence");
-  assert.deepEqual(protocol.parseAidenRemoteDeviceCapabilitiesUpdateRequest({ accepts: ["chat:continue-in-new-chat"] }).accepts, ["chat:continue-in-new-chat"], "a phone can negotiate it");
+  assert.deepEqual(section.refused.error.details, {
+    reason: "folder_missing",
+    canContinueInNewChat: true,
+  });
+  assert.equal(
+    section.plainRefusal.error.details,
+    undefined,
+    "an older phone hears only the sentence",
+  );
+  assert.deepEqual(
+    protocol.parseAidenRemoteDeviceCapabilitiesUpdateRequest({
+      accepts: ["chat:continue-in-new-chat"],
+    }).accepts,
+    ["chat:continue-in-new-chat"],
+    "a phone can negotiate it",
+  );
 
   const refused = (change: (copy: Record<string, any>) => void, pattern: RegExp) => {
     const copy = structuredClone(raw);
     change(copy.continueInNewChat);
     assert.throws(() => protocol.parseAidenRemoteContractFixture(copy), pattern);
   };
-  refused((c) => { c.refused.error.message = "The folder /Users/me/project is missing."; }, /must not name a path/u);
-  refused((c) => { c.plainRefusal.error.details = { reason: "folder_missing" }; }, /plainRefusal must carry no details/u);
-  refused((c) => { c.refused.error.details.reason = "folder_renamed"; }, /reason/u);
-  refused((c) => { c.refused.error.details.canContinueInNewChat = "yes"; }, /canContinueInNewChat/u);
-  refused((c) => { c.refused.error.code = "operation_in_progress"; }, /workspace_unavailable/u);
-  refused((c) => { delete c.refused.error.details.canContinueInNewChat; }, /reason and canContinueInNewChat/u);
-  refused((c) => { c.response.chat.workspaceId = "workspace_fixture_03"; }, /chosen workspace/u);
-  refused((c) => { c.response.chat.forkedFrom.position = "before"; }, /newest reply/u);
-  refused((c) => { c.request.continueIn.workspaceId = "../workspace"; }, /workspaceId is invalid/u);
-  refused((c) => { c.request.continueIn.path = "/Users/me"; }, /continueIn/u);
+  refused((c) => {
+    c.refused.error.message = "The folder /Users/me/project is missing.";
+  }, /must not name a path/u);
+  refused((c) => {
+    c.plainRefusal.error.details = { reason: "folder_missing" };
+  }, /plainRefusal must carry no details/u);
+  refused((c) => {
+    c.refused.error.details.reason = "folder_renamed";
+  }, /reason/u);
+  refused((c) => {
+    c.refused.error.details.canContinueInNewChat = "yes";
+  }, /canContinueInNewChat/u);
+  refused((c) => {
+    c.refused.error.code = "operation_in_progress";
+  }, /workspace_unavailable/u);
+  refused((c) => {
+    delete c.refused.error.details.canContinueInNewChat;
+  }, /reason and canContinueInNewChat/u);
+  refused((c) => {
+    c.response.chat.workspaceId = "workspace_fixture_03";
+  }, /chosen workspace/u);
+  refused((c) => {
+    c.response.chat.forkedFrom.position = "before";
+  }, /newest reply/u);
+  refused((c) => {
+    c.request.continueIn.workspaceId = "../workspace";
+  }, /workspaceId is invalid/u);
+  refused((c) => {
+    c.request.continueIn.path = "/Users/me";
+  }, /continueIn/u);
   // The new detail keys mean nothing on another error.
   const otherCode = structuredClone(raw);
   otherCode.continueInNewChat.refused.error.code = "invalid_request";
@@ -3906,26 +5755,52 @@ test("revision 64 tells a capable phone why a chat's folder is gone and lets it 
   older.contractRevision = 63;
   older.hostHealth.contractRevision = 63;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 64/u);
-  delete older.continueInNewChat; delete older.streamRecovery; delete older.agentSlider;
+  delete older.continueInNewChat;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   assert.equal(protocol.parseAidenRemoteContractFixture(older).continueInNewChat, undefined);
 
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: object };
-  const schema = (name: string) => new Ajv2020({ strict: false, validateFormats: false }).compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
-  const envelope = schema("ErrorEnvelope"), forkRequest = schema("ChatForkRequest"), forkResult = schema("ChatForkResult");
+  const spec = (await json("openapi.json")) as { components: object };
+  const schema = (name: string) =>
+    new Ajv2020({ strict: false, validateFormats: false }).compile({
+      $ref: `#/components/schemas/${name}`,
+      components: spec.components,
+    });
+  const envelope = schema("ErrorEnvelope"),
+    forkRequest = schema("ChatForkRequest"),
+    forkResult = schema("ChatForkResult");
   assert.equal(envelope(raw.continueInNewChat.refused), true, JSON.stringify(envelope.errors));
   assert.equal(envelope(raw.continueInNewChat.plainRefusal), true, JSON.stringify(envelope.errors));
-  assert.equal(envelope({ error: { ...raw.continueInNewChat.refused.error, details: { reason: "moved" } } }), false);
-  assert.equal(forkRequest(raw.continueInNewChat.request), true, JSON.stringify(forkRequest.errors));
-  assert.equal(forkRequest({ messageId: "message_fixture_01", position: "after" }), true, "the message fork body still validates");
-  assert.equal(forkRequest({ ...raw.continueInNewChat.request, messageId: "message_fixture_01", position: "after" }), false);
+  assert.equal(
+    envelope({ error: { ...raw.continueInNewChat.refused.error, details: { reason: "moved" } } }),
+    false,
+  );
+  assert.equal(
+    forkRequest(raw.continueInNewChat.request),
+    true,
+    JSON.stringify(forkRequest.errors),
+  );
+  assert.equal(
+    forkRequest({ messageId: "message_fixture_01", position: "after" }),
+    true,
+    "the message fork body still validates",
+  );
+  assert.equal(
+    forkRequest({
+      ...raw.continueInNewChat.request,
+      messageId: "message_fixture_01",
+      position: "after",
+    }),
+    false,
+  );
   assert.equal(forkRequest({ continueIn: {} }), false);
   assert.equal(forkResult(raw.continueInNewChat.response), true, JSON.stringify(forkResult.errors));
 });
 
 test("revision 65 distinguishes gap recovery snapshots from provider resets and gates stream:snapshot-reasons", async () => {
   const protocol = await import("./aiden-remote-protocol.js");
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   assert.equal(protocol.AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION, 65);
   assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 70);
   const parsedFixture = protocol.parseAidenRemoteContractFixture(raw);
@@ -3934,7 +5809,9 @@ test("revision 65 distinguishes gap recovery snapshots from provider resets and 
   assert.deepEqual(section, raw.streamRecovery);
   assert.equal(section.capability, "stream:snapshot-reasons");
   assert.deepEqual(
-    protocol.parseAidenRemoteDeviceCapabilitiesUpdateRequest({ accepts: ["stream:snapshot-reasons"] }).accepts,
+    protocol.parseAidenRemoteDeviceCapabilitiesUpdateRequest({
+      accepts: ["stream:snapshot-reasons"],
+    }).accepts,
     ["stream:snapshot-reasons"],
   );
 
@@ -3942,21 +5819,31 @@ test("revision 65 distinguishes gap recovery snapshots from provider resets and 
   // jumping to earliest - 1, while still rejecting provider-reset gaps, non-snapshot gaps, and bad nextSequence.
   assert.doesNotThrow(() => protocol.assertOrderedAidenRemoteEvents(section.gapEvents));
   assert.doesNotThrow(() =>
-    protocol.assertOrderedAidenRemoteEvents([section.legacyGapSnapshot, ...section.gapEvents.slice(1)]),
+    protocol.assertOrderedAidenRemoteEvents([
+      section.legacyGapSnapshot,
+      ...section.gapEvents.slice(1),
+    ]),
   );
   assert.doesNotThrow(() => protocol.assertOrderedAidenRemoteEvents(section.resetEvents));
 
   assert.throws(
     () =>
       protocol.assertOrderedAidenRemoteEvents([
-        { ...section.resetEvents[1], sequence: 5, payload: { ...section.resetEvents[1].payload, nextSequence: 6 } },
+        {
+          ...section.resetEvents[1],
+          sequence: 5,
+          payload: { ...section.resetEvents[1].payload, nextSequence: 6 },
+        },
       ]),
     /expected sequence 1, received 5/u,
   );
   assert.throws(
     () =>
       protocol.assertOrderedAidenRemoteEvents([
-        { ...section.gapEvents[0], payload: { ...section.gapEvents[0].payload, nextSequence: 4099 } },
+        {
+          ...section.gapEvents[0],
+          payload: { ...section.gapEvents[0].payload, nextSequence: 4099 },
+        },
       ]),
     /nextSequence must equal sequence \+ 1/u,
   );
@@ -3984,11 +5871,12 @@ test("revision 65 distinguishes gap recovery snapshots from provider resets and 
   older.contractRevision = 64;
   older.hostHealth.contractRevision = 64;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 65/u);
-  delete older.streamRecovery; delete older.agentSlider;
+  delete older.streamRecovery;
+  delete older.agentSlider;
   assert.equal(protocol.parseAidenRemoteContractFixture(older).streamRecovery, undefined);
 
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: object };
+  const spec = (await json("openapi.json")) as { components: object };
   const streamEvent = new Ajv2020({ strict: false, validateFormats: false }).compile({
     $ref: "#/components/schemas/StreamEvent",
     components: spec.components,
@@ -4007,7 +5895,7 @@ test("revision 65 distinguishes gap recovery snapshots from provider resets and 
 
 test("revision 66 host feed Bot rows carry a one-line preview and refuse anything else", async () => {
   const protocol = await import("./aiden-remote-protocol.js");
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   assert.equal(protocol.AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION, 66);
   const fixture = protocol.parseAidenRemoteContractFixture(raw);
   const upsert = fixture.hostFeedEvents?.find((event) => event.type === "bot.upsert");
@@ -4016,10 +5904,15 @@ test("revision 66 host feed Bot rows carry a one-line preview and refuse anythin
   assert.equal(upsert.payload.needsYou, true);
   assert.equal(upsert.payload.summarized, true);
 
-  const row = (raw.hostFeedEvents as { type: string; payload: Record<string, unknown> }[])
-    .find((event) => event.type === "bot.upsert")!.payload;
-  const parse = (change: Record<string, unknown>) => () => protocol.parseAidenRemoteHostFeedBot({ ...row, ...change });
-  assert.doesNotThrow(parse({ preview: "😀".repeat(140) }), "the limit counts characters, not UTF-16 units");
+  const row = (raw.hostFeedEvents as { type: string; payload: Record<string, unknown> }[]).find(
+    (event) => event.type === "bot.upsert",
+  )!.payload;
+  const parse = (change: Record<string, unknown>) => () =>
+    protocol.parseAidenRemoteHostFeedBot({ ...row, ...change });
+  assert.doesNotThrow(
+    parse({ preview: "😀".repeat(140) }),
+    "the limit counts characters, not UTF-16 units",
+  );
   assert.throws(parse({ preview: "x".repeat(141) }));
   assert.throws(parse({ preview: "" }));
   assert.throws(parse({ preview: " leading space" }), /one trimmed plain line/u);
@@ -4036,10 +5929,13 @@ test("revision 66 host feed Bot rows carry a one-line preview and refuse anythin
   // The OpenAPI contract describes the same row.
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
   const { default: addFormats } = await import("ajv-formats");
-  const spec = await json("openapi.json") as { components: object };
+  const spec = (await json("openapi.json")) as { components: object };
   const ajv = new Ajv2020({ strict: false });
   addFormats(ajv);
-  const feedBot = ajv.compile({ $ref: "#/components/schemas/HostFeedBot", components: spec.components });
+  const feedBot = ajv.compile({
+    $ref: "#/components/schemas/HostFeedBot",
+    components: spec.components,
+  });
   assert.equal(feedBot(row), true, JSON.stringify(feedBot.errors));
   assert.equal(feedBot({ ...row, preview: "x".repeat(141) }), false);
   assert.equal(feedBot({ ...row, summarized: false }), false);
@@ -4049,36 +5945,66 @@ test("revision 67 session pages and queued withdraw receipts decode strictly and
   const protocol = await import("./aiden-remote-protocol.js");
   assert.equal(protocol.AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION, 67);
   assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 70);
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const entries = (raw.botSession.entries as unknown[]).slice(0, 2);
-  const page = { botId: raw.botSession.botId, epoch: raw.botSession.epoch, entries, hasOlder: true };
+  const page = {
+    botId: raw.botSession.botId,
+    epoch: raw.botSession.epoch,
+    entries,
+    hasOlder: true,
+  };
   assert.deepEqual(protocol.parseAidenRemoteBotSessionEntriesPage(page), page);
-  assert.throws(() => protocol.parseAidenRemoteBotSessionEntriesPage({ ...page, seq: 3 }), /unsupported field/u);
-  assert.throws(() => protocol.parseAidenRemoteBotSessionEntriesPage({ ...page, entries: [entries[0], entries[0]] }), /unique/u);
-  assert.throws(() => protocol.parseAidenRemoteBotSessionEntriesPage({ ...page, hasOlder: undefined }));
+  assert.throws(
+    () => protocol.parseAidenRemoteBotSessionEntriesPage({ ...page, seq: 3 }),
+    /unsupported field/u,
+  );
+  assert.throws(
+    () =>
+      protocol.parseAidenRemoteBotSessionEntriesPage({
+        ...page,
+        entries: [entries[0], entries[0]],
+      }),
+    /unique/u,
+  );
+  assert.throws(() =>
+    protocol.parseAidenRemoteBotSessionEntriesPage({ ...page, hasOlder: undefined }),
+  );
   const receipt = { submissionId: "42", outcome: "started" };
   assert.deepEqual(protocol.parseAidenRemoteBotQueuedWithdrawReceipt(receipt), receipt);
-  assert.throws(() => protocol.parseAidenRemoteBotQueuedWithdrawReceipt({ ...receipt, outcome: "cancelled" }));
-  assert.throws(() => protocol.parseAidenRemoteBotQueuedWithdrawReceipt({ ...receipt, submissionId: "a/b" }));
+  assert.throws(() =>
+    protocol.parseAidenRemoteBotQueuedWithdrawReceipt({ ...receipt, outcome: "cancelled" }),
+  );
+  assert.throws(() =>
+    protocol.parseAidenRemoteBotQueuedWithdrawReceipt({ ...receipt, submissionId: "a/b" }),
+  );
 
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
   const { default: addFormats } = await import("ajv-formats");
-  const spec = await json("openapi.json") as { components: object; paths: Record<string, any> };
+  const spec = (await json("openapi.json")) as { components: object; paths: Record<string, any> };
   const ajv = new Ajv2020({ strict: false });
   addFormats(ajv);
-  const pageSchema = ajv.compile({ $ref: "#/components/schemas/BotSessionEntriesPage", components: spec.components });
+  const pageSchema = ajv.compile({
+    $ref: "#/components/schemas/BotSessionEntriesPage",
+    components: spec.components,
+  });
   assert.equal(pageSchema(page), true, JSON.stringify(pageSchema.errors));
   assert.equal(pageSchema({ ...page, seq: 3 }), false);
-  const receiptSchema = ajv.compile({ $ref: "#/components/schemas/BotQueuedWithdrawReceipt", components: spec.components });
+  const receiptSchema = ajv.compile({
+    $ref: "#/components/schemas/BotQueuedWithdrawReceipt",
+    components: spec.components,
+  });
   assert.equal(receiptSchema(receipt), true);
   assert.equal(receiptSchema({ ...receipt, outcome: "cancelled" }), false);
   assert.equal(spec.paths["/bots/{botId}/session/entries"].get.operationId, "getBotSessionEntries");
-  assert.equal(spec.paths["/bots/{botId}/queued/{submissionId}/withdraw"].post.operationId, "withdrawBotQueuedMessage");
+  assert.equal(
+    spec.paths["/bots/{botId}/queued/{submissionId}/withdraw"].post.operationId,
+    "withdrawBotQueuedMessage",
+  );
 });
 
 test("revision 70 carries the Agent Slider on /models and the chat's own level, and gates chat:agent-slider", async () => {
   const protocol = await import("./aiden-remote-protocol.js");
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   assert.equal(protocol.AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION, 70);
   assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 70);
   const section = protocol.parseAidenRemoteContractFixture(raw).agentSlider;
@@ -4087,14 +6013,17 @@ test("revision 70 carries the Agent Slider on /models and the chat's own level, 
   assert.deepEqual(section.models.agentSlider, raw.agentSlider.models.agentSlider);
   assert.equal(section.chat.thinkingLevel, "high");
   assert.deepEqual(
-    protocol.parseAidenRemoteDeviceCapabilitiesUpdateRequest({ accepts: ["chat:agent-slider"] }).accepts,
+    protocol.parseAidenRemoteDeviceCapabilitiesUpdateRequest({ accepts: ["chat:agent-slider"] })
+      .accepts,
     ["chat:agent-slider"],
   );
 
   const slider = raw.agentSlider.models.agentSlider;
   const stop = (index: number, patch: Record<string, unknown>) => ({
     ...slider,
-    stops: slider.stops.map((entry: Record<string, unknown>, at: number) => (at === index ? { ...entry, ...patch } : entry)),
+    stops: slider.stops.map((entry: Record<string, unknown>, at: number) =>
+      at === index ? { ...entry, ...patch } : entry,
+    ),
   });
   const without = (index: number, key: string) => ({
     ...slider,
@@ -4106,24 +6035,47 @@ test("revision 70 carries the Agent Slider on /models and the chat's own level, 
   });
   const refused: [string, unknown][] = [
     ["two stops", { ...slider, stops: slider.stops.slice(0, 2) }],
-    ["eight stops", { ...slider, stops: [...slider.stops, ...slider.stops.slice(0, 3)].map((entry: object, at: number) => ({ ...entry, id: `stop_${at}` })) }],
+    [
+      "eight stops",
+      {
+        ...slider,
+        stops: [...slider.stops, ...slider.stops.slice(0, 3)].map((entry: object, at: number) => ({
+          ...entry,
+          id: `stop_${at}`,
+        })),
+      },
+    ],
     ["repeated id", stop(1, { id: slider.stops[0].id })],
     ["home outside the stops", { ...slider, homeStopId: "stop_ffffffff" }],
     ["provider without model", without(1, "modelId")],
     ["level without model", stop(5, { thinkingLevel: "low" })],
     ["model on an unassigned stop", stop(1, { availability: "unassigned" })],
     ["ready without a model", stop(5, { availability: "ready" })],
-    ["ids on an unavailable stop", stop(3, { providerId: "provider_fixture_other", modelId: "model_fixture_other" })],
+    [
+      "ids on an unavailable stop",
+      stop(3, { providerId: "provider_fixture_other", modelId: "model_fixture_other" }),
+    ],
     ["level on an unavailable stop", stop(3, { thinkingLevel: "max" })],
     ["ids on a computer-only stop", stop(4, { providerId: "antigravity", modelId: "agent" })],
     ["labels on a computer-only stop", stop(4, { providerLabel: "Agent Provider" })],
     ["provider label on an unassigned stop", stop(5, { providerLabel: "Fixture Provider" })],
     ["model label on a model-missing stop", stop(3, { availability: "model-missing" })],
-    ["provider label on a provider-missing stop", {
-      ...slider,
-      stops: slider.stops.map((entry: Record<string, unknown>, at: number) =>
-        at === 3 ? { id: entry.id, label: entry.label, providerLabel: "Other Provider", availability: "provider-missing" } : entry),
-    }],
+    [
+      "provider label on a provider-missing stop",
+      {
+        ...slider,
+        stops: slider.stops.map((entry: Record<string, unknown>, at: number) =>
+          at === 3
+            ? {
+                id: entry.id,
+                label: entry.label,
+                providerLabel: "Other Provider",
+                availability: "provider-missing",
+              }
+            : entry,
+        ),
+      },
+    ],
     ["provider label over 256 characters", stop(0, { providerLabel: "x".repeat(257) })],
     ["empty model label", stop(0, { modelLabel: "" })],
     ["unknown availability", stop(0, { availability: "busy" })],
@@ -4138,39 +6090,79 @@ test("revision 70 carries the Agent Slider on /models and the chat's own level, 
   }
 
   // The turn sends exactly a ready stop's selection, and the chat keeps that selection.
-  const withSection = (patch: Record<string, unknown>) => ({ ...raw, agentSlider: { ...raw.agentSlider, ...patch } });
+  const withSection = (patch: Record<string, unknown>) => ({
+    ...raw,
+    agentSlider: { ...raw.agentSlider, ...patch },
+  });
   assert.throws(
-    () => protocol.parseAidenRemoteContractFixture(withSection({ turnRequest: { ...raw.agentSlider.turnRequest, thinkingLevel: "low" } })),
+    () =>
+      protocol.parseAidenRemoteContractFixture(
+        withSection({ turnRequest: { ...raw.agentSlider.turnRequest, thinkingLevel: "low" } }),
+      ),
     /exactly a ready stop/u,
   );
   assert.throws(
     () =>
       protocol.parseAidenRemoteContractFixture(
-        withSection({ turnRequest: { text: "x", providerId: "provider_fixture_other", modelId: "model_fixture_other", saveSelection: true } }),
+        withSection({
+          turnRequest: {
+            text: "x",
+            providerId: "provider_fixture_other",
+            modelId: "model_fixture_other",
+            saveSelection: true,
+          },
+        }),
       ),
     /exactly a ready stop/u,
   );
   const { saveSelection: _save, ...unsaved } = raw.agentSlider.turnRequest;
-  assert.throws(() => protocol.parseAidenRemoteContractFixture(withSection({ turnRequest: unsaved })), /saveSelection/u);
+  assert.throws(
+    () => protocol.parseAidenRemoteContractFixture(withSection({ turnRequest: unsaved })),
+    /saveSelection/u,
+  );
   // Unavailable stops name what to fix in words only; a computer-only stop names nothing.
   const parsedStops = section.models.agentSlider.stops;
-  assert.deepEqual(parsedStops.find((entry) => entry.availability === "not-signed-in"), {
-    id: "stop_3d4e5f6a", label: "Elsewhere", providerLabel: "Other Provider", modelLabel: "Other Model", availability: "not-signed-in",
-  });
-  assert.deepEqual(parsedStops.find((entry) => entry.availability === "computer-only"), {
-    id: "stop_5f6a7b8c", label: "Agent", availability: "computer-only",
-  });
+  assert.deepEqual(
+    parsedStops.find((entry) => entry.availability === "not-signed-in"),
+    {
+      id: "stop_3d4e5f6a",
+      label: "Elsewhere",
+      providerLabel: "Other Provider",
+      modelLabel: "Other Model",
+      availability: "not-signed-in",
+    },
+  );
+  assert.deepEqual(
+    parsedStops.find((entry) => entry.availability === "computer-only"),
+    {
+      id: "stop_5f6a7b8c",
+      label: "Agent",
+      availability: "computer-only",
+    },
+  );
   assert.throws(
-    () => protocol.parseAidenRemoteContractFixture(withSection({ chat: { ...raw.agentSlider.chat, thinkingLevel: "medium" } })),
+    () =>
+      protocol.parseAidenRemoteContractFixture(
+        withSection({ chat: { ...raw.agentSlider.chat, thinkingLevel: "medium" } }),
+      ),
     /sent stop's selection/u,
   );
 
   // A chat's level rides only with its model, never on a Bot chat.
   const chat = raw.agentSlider.chat;
   const { providerId: _p, modelId: _m, ...modelless } = chat;
-  assert.throws(() => protocol.parseAidenRemoteChatProjection(modelless), /thinkingLevel needs a model/u);
-  assert.throws(() => protocol.parseAidenRemoteChatProjection({ ...chat, botId: "bot_fixture_01" }), /regular-chat-only/u);
-  assert.throws(() => protocol.parseAidenRemoteChatProjection({ ...chat, thinkingLevel: "turbo" }), /thinkingLevel is invalid/u);
+  assert.throws(
+    () => protocol.parseAidenRemoteChatProjection(modelless),
+    /thinkingLevel needs a model/u,
+  );
+  assert.throws(
+    () => protocol.parseAidenRemoteChatProjection({ ...chat, botId: "bot_fixture_01" }),
+    /regular-chat-only/u,
+  );
+  assert.throws(
+    () => protocol.parseAidenRemoteChatProjection({ ...chat, thinkingLevel: "turbo" }),
+    /thinkingLevel is invalid/u,
+  );
   const { thinkingLevel: _level, ...legacyChat } = chat;
   assert.equal(protocol.parseAidenRemoteChatProjection(legacyChat).thinkingLevel, undefined);
 
@@ -4182,7 +6174,7 @@ test("revision 70 carries the Agent Slider on /models and the chat's own level, 
   assert.equal(protocol.parseAidenRemoteContractFixture(older).agentSlider, undefined);
 
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
-  const spec = await json("openapi.json") as { components: object; paths: Record<string, any> };
+  const spec = (await json("openapi.json")) as { components: object; paths: Record<string, any> };
   const ajv = new Ajv2020({ strict: false, validateFormats: false });
   const models = ajv.compile({
     ...spec.paths["/models"].get.responses["200"].content["application/json"].schema,
@@ -4191,23 +6183,87 @@ test("revision 70 carries the Agent Slider on /models and the chat's own level, 
   assert.equal(models(raw.agentSlider.models), true, JSON.stringify(models.errors));
   const { agentSlider: _slider, ...legacyModels } = raw.agentSlider.models;
   assert.equal(models(legacyModels), true, "a host without a slider still validates");
-  assert.equal(models({ ...raw.agentSlider.models, agentSlider: stop(0, { availability: "busy" }) }), false);
+  assert.equal(
+    models({ ...raw.agentSlider.models, agentSlider: stop(0, { availability: "busy" }) }),
+    false,
+  );
   assert.equal(models({ ...raw.agentSlider.models, agentSlider: without(1, "modelId") }), false);
-  assert.equal(models({ ...raw.agentSlider.models, agentSlider: stop(4, { providerId: "antigravity", modelId: "agent" }) }), false, "ids only on ready stops");
-  assert.equal(models({ ...raw.agentSlider.models, defaults: { ...raw.agentSlider.models.defaults, thinkingLevel: "turbo" } }), false);
-  const chatSchema = ajv.compile({ $ref: "#/components/schemas/Chat", components: spec.components });
+  assert.equal(
+    models({
+      ...raw.agentSlider.models,
+      agentSlider: stop(4, { providerId: "antigravity", modelId: "agent" }),
+    }),
+    false,
+    "ids only on ready stops",
+  );
+  assert.equal(
+    models({
+      ...raw.agentSlider.models,
+      defaults: { ...raw.agentSlider.models.defaults, thinkingLevel: "turbo" },
+    }),
+    false,
+  );
+  const chatSchema = ajv.compile({
+    $ref: "#/components/schemas/Chat",
+    components: spec.components,
+  });
   assert.equal(chatSchema(chat), true, JSON.stringify(chatSchema.errors));
   assert.equal(chatSchema(modelless), false, "a level without a model is refused");
-  assert.equal(chatSchema({ ...chat, botId: "bot_fixture_01" }), false, "a Bot chat carries no level");
-  assert.equal(chatSchema({ ...legacyChat, botId: "bot_fixture_01" }), true, JSON.stringify(chatSchema.errors));
-  const windowSchema = ajv.compile({ $ref: "#/components/schemas/ChatMessagesWindow", components: spec.components });
-  const { id: chatId, messages: windowMessages, workspaceId, title, providerId, modelId, thinkingLevel, createdAt, updatedAt, revision } = chat;
-  const window = { chatId, revision, messages: windowMessages, hasOlder: false, workspaceId, title, providerId, modelId, thinkingLevel, createdAt, updatedAt };
+  assert.equal(
+    chatSchema({ ...chat, botId: "bot_fixture_01" }),
+    false,
+    "a Bot chat carries no level",
+  );
+  assert.equal(
+    chatSchema({ ...legacyChat, botId: "bot_fixture_01" }),
+    true,
+    JSON.stringify(chatSchema.errors),
+  );
+  const windowSchema = ajv.compile({
+    $ref: "#/components/schemas/ChatMessagesWindow",
+    components: spec.components,
+  });
+  const {
+    id: chatId,
+    messages: windowMessages,
+    workspaceId,
+    title,
+    providerId,
+    modelId,
+    thinkingLevel,
+    createdAt,
+    updatedAt,
+    revision,
+  } = chat;
+  const window = {
+    chatId,
+    revision,
+    messages: windowMessages,
+    hasOlder: false,
+    workspaceId,
+    title,
+    providerId,
+    modelId,
+    thinkingLevel,
+    createdAt,
+    updatedAt,
+  };
   assert.equal(windowSchema(window), true, JSON.stringify(windowSchema.errors));
-  assert.equal(windowSchema({ ...window, botId: "bot_fixture_01" }), false, "a Bot chat's window carries no level");
+  assert.equal(
+    windowSchema({ ...window, botId: "bot_fixture_01" }),
+    false,
+    "a Bot chat's window carries no level",
+  );
   const { thinkingLevel: _windowLevel, ...levellessWindow } = window;
-  assert.equal(windowSchema({ ...levellessWindow, botId: "bot_fixture_01" }), true, JSON.stringify(windowSchema.errors));
-  const turnSchema = ajv.compile({ $ref: "#/components/schemas/TurnStartRequest", components: spec.components });
+  assert.equal(
+    windowSchema({ ...levellessWindow, botId: "bot_fixture_01" }),
+    true,
+    JSON.stringify(windowSchema.errors),
+  );
+  const turnSchema = ajv.compile({
+    $ref: "#/components/schemas/TurnStartRequest",
+    components: spec.components,
+  });
   assert.equal(turnSchema(raw.agentSlider.turnRequest), true, JSON.stringify(turnSchema.errors));
   assert.equal(turnSchema({ ...raw.agentSlider.turnRequest, saveSelection: "yes" }), false);
 });
@@ -4216,22 +6272,40 @@ test("revision 68 Bot summaries carry needsYou only as true, and the opt-in is n
   const protocol = await import("./aiden-remote-protocol.js");
   assert.equal(protocol.AIDEN_REMOTE_BOT_NEEDS_YOU_CONTRACT_REVISION, 68);
   assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 70);
-  assert.ok((protocol.AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES as readonly string[]).includes("bot:needs-you"));
-  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  assert.ok(
+    (protocol.AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES as readonly string[]).includes("bot:needs-you"),
+  );
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const bot = raw.botList.bots[0] as Record<string, unknown>;
-  assert.equal(protocol.parseAidenRemoteBotSummary(bot).needsYou, undefined, "absent unless the host says so");
+  assert.equal(
+    protocol.parseAidenRemoteBotSummary(bot).needsYou,
+    undefined,
+    "absent unless the host says so",
+  );
   assert.equal(protocol.parseAidenRemoteBotSummary({ ...bot, needsYou: true }).needsYou, true);
-  assert.throws(() => protocol.parseAidenRemoteBotSummary({ ...bot, needsYou: false }), /needsYou/u);
-  assert.throws(() => protocol.parseAidenRemoteBotSummary({ ...bot, needsYou: "yes" }), /needsYou/u);
+  assert.throws(
+    () => protocol.parseAidenRemoteBotSummary({ ...bot, needsYou: false }),
+    /needsYou/u,
+  );
+  assert.throws(
+    () => protocol.parseAidenRemoteBotSummary({ ...bot, needsYou: "yes" }),
+    /needsYou/u,
+  );
 
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
   const { default: addFormats } = await import("ajv-formats");
-  const spec = await json("openapi.json") as { components: Record<string, any> };
+  const spec = (await json("openapi.json")) as { components: Record<string, any> };
   const ajv = new Ajv2020({ strict: false });
   addFormats(ajv);
-  const summary = ajv.compile({ $ref: "#/components/schemas/BotSummary", components: spec.components });
+  const summary = ajv.compile({
+    $ref: "#/components/schemas/BotSummary",
+    components: spec.components,
+  });
   assert.equal(summary({ ...bot, needsYou: true }), true, JSON.stringify(summary.errors));
   assert.equal(summary({ ...bot, needsYou: false }), false);
-  const update = ajv.compile({ $ref: "#/components/schemas/DeviceCapabilitiesUpdateRequest", components: spec.components });
+  const update = ajv.compile({
+    $ref: "#/components/schemas/DeviceCapabilitiesUpdateRequest",
+    components: spec.components,
+  });
   assert.equal(update({ accepts: ["bot:needs-you"] }), true, JSON.stringify(update.errors));
 });

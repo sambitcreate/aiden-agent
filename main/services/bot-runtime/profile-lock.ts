@@ -25,40 +25,63 @@ const reservedProfiles = new Set<string>();
 function parseLockRecord(raw: string): LockRecord | null {
   try {
     const value = JSON.parse(raw) as Partial<LockRecord>;
-    if (typeof value.pid === "number" && Number.isSafeInteger(value.pid) && value.pid > 0 &&
-        typeof value.startedAt === "number" && typeof value.token === "string") {
-      return { pid: value.pid, startedAt: value.startedAt, token: value.token,
-        ...(value.protocol === "flock-v1" ? { protocol: "flock-v1" as const } : {}) };
+    if (
+      typeof value.pid === "number" &&
+      Number.isSafeInteger(value.pid) &&
+      value.pid > 0 &&
+      typeof value.startedAt === "number" &&
+      typeof value.token === "string"
+    ) {
+      return {
+        pid: value.pid,
+        startedAt: value.startedAt,
+        token: value.token,
+        ...(value.protocol === "flock-v1" ? { protocol: "flock-v1" as const } : {}),
+      };
     }
-  } catch { /* malformed legacy metadata */ }
+  } catch {
+    /* malformed legacy metadata */
+  }
   return null;
 }
 
 function processIsAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 async function readRecord(file: string): Promise<LockRecord | null> {
-  try { return parseLockRecord(await fs.readFile(file, "utf8")); }
-  catch (error) {
+  try {
+    return parseLockRecord(await fs.readFile(file, "utf8"));
+  } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
 }
 
 /** Acquire before any Bot session database is opened. */
-export async function acquireBotProfileLock(dir: string, leaseHelperPath = desktopLeaseHelperPath()): Promise<ProfileLockResult> {
+export async function acquireBotProfileLock(
+  dir: string,
+  leaseHelperPath = desktopLeaseHelperPath(),
+): Promise<ProfileLockResult> {
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const canonical = await fs.realpath(dir);
   const file = path.join(canonical, BOT_PROFILE_LOCK_FILE);
-  if (reservedProfiles.has(canonical)) return { ok: false, reason: "held_by_live_process", pid: process.pid };
+  if (reservedProfiles.has(canonical))
+    return { ok: false, reason: "held_by_live_process", pid: process.pid };
   reservedProfiles.add(canonical);
   let releaseGuard: (() => void) | null = null;
   let published = false;
   let replacedLegacy = false;
   try {
-    releaseGuard = tryAcquireProcessLifetimeLock(path.join(canonical, BOT_PROFILE_GUARD_FILE), leaseHelperPath);
+    releaseGuard = tryAcquireProcessLifetimeLock(
+      path.join(canonical, BOT_PROFILE_GUARD_FILE),
+      leaseHelperPath,
+    );
     if (!releaseGuard) {
       const owner = await readRecord(file);
       return { ok: false, reason: "held_by_live_process", pid: owner?.pid ?? 0 };
@@ -71,7 +94,12 @@ export async function acquireBotProfileLock(dir: string, leaseHelperPath = deskt
     }
     await fs.rm(file, { force: true });
     replacedLegacy = true;
-    const record: LockRecord = { protocol: "flock-v1", pid: process.pid, startedAt: Date.now(), token: randomUUID() };
+    const record: LockRecord = {
+      protocol: "flock-v1",
+      pid: process.pid,
+      startedAt: Date.now(),
+      token: randomUUID(),
+    };
     await writeFileAtomic(file, `${JSON.stringify(record)}\n`, { exclusive: true, mode: 0o600 });
     published = true;
     let released: Promise<void> | null = null;
@@ -93,8 +121,9 @@ export async function acquireBotProfileLock(dir: string, leaseHelperPath = deskt
     };
   } finally {
     if (!published) {
-      try { if (replacedLegacy) await fs.rm(file, { force: true }); }
-      finally {
+      try {
+        if (replacedLegacy) await fs.rm(file, { force: true });
+      } finally {
         releaseGuard?.();
         reservedProfiles.delete(canonical);
       }

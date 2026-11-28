@@ -8,11 +8,15 @@ export function requestAssistantAutomationComposer(draft = ASSISTANT_AUTOMATION_
   window.dispatchEvent(new CustomEvent(ASSISTANT_AUTOMATION_COMPOSE_EVENT, { detail: draft }));
 }
 
-export function onAssistantAutomationComposerRequested(handler: (draft: string) => void): () => void {
-  const listener = (event: Event) => handler(
-    event instanceof CustomEvent && typeof event.detail === "string"
-      ? event.detail : ASSISTANT_AUTOMATION_DRAFT,
-  );
+export function onAssistantAutomationComposerRequested(
+  handler: (draft: string) => void,
+): () => void {
+  const listener = (event: Event) =>
+    handler(
+      event instanceof CustomEvent && typeof event.detail === "string"
+        ? event.detail
+        : ASSISTANT_AUTOMATION_DRAFT,
+    );
   window.addEventListener(ASSISTANT_AUTOMATION_COMPOSE_EVENT, listener);
   return () => window.removeEventListener(ASSISTANT_AUTOMATION_COMPOSE_EVENT, listener);
 }

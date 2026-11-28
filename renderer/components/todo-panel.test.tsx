@@ -8,10 +8,17 @@ import { ScrollArea } from "./ui.js";
 const source = readFileSync(new URL("./todo-panel.tsx", import.meta.url), "utf8");
 
 test("storage-disabled tracking stays hidden because it requires no user action", () => {
-  const html = renderToStaticMarkup(<TodoPanel snapshot={{
-    version: 1, chatId: "chat", availability: "unavailable",
-    unavailableReason: "storage_not_enabled", tasks: [],
-  }} />);
+  const html = renderToStaticMarkup(
+    <TodoPanel
+      snapshot={{
+        version: 1,
+        chatId: "chat",
+        availability: "unavailable",
+        unavailableReason: "storage_not_enabled",
+        tasks: [],
+      }}
+    />,
+  );
   assert.equal(html, "");
   assert.doesNotMatch(source, /Task tracking not enabled|cannot save or update a task list here/u);
 });

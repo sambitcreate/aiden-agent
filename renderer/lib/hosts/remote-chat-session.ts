@@ -174,7 +174,10 @@ export class RemoteChatSession {
     this.queue = this.queue
       .then(() => (this.disposed ? undefined : task()))
       .catch((error: unknown) => {
-        if (!this.disposed) this.update({ error: error instanceof Error ? error.message : "The request to that computer failed." });
+        if (!this.disposed)
+          this.update({
+            error: error instanceof Error ? error.message : "The request to that computer failed.",
+          });
       });
     return this.queue;
   }
@@ -205,7 +208,11 @@ export class RemoteChatSession {
     this.update({ status, stale: status.availability !== "online" });
     // A reconnect may have missed turns: reread the newest window. The first
     // known status is not a reconnect; `start` reads the window after it.
-    if (previous.generation >= 0 && previous.availability !== "online" && status.availability === "online")
+    if (
+      previous.generation >= 0 &&
+      previous.availability !== "online" &&
+      status.availability === "online"
+    )
       this.requestRefresh();
   }
 

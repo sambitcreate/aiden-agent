@@ -10,8 +10,15 @@ import {
   McpSessionExpiredError,
   McpTimeoutError,
 } from "@earendil-works/pi-mcp";
-import { OAuthError, OAuthIssuerMismatchError, OAuthRegistrationError } from "@earendil-works/pi-mcp/oauth";
-import { registerMcpControlHandlers, type McpControlDependencies } from "../handlers/mcp-controls.js";
+import {
+  OAuthError,
+  OAuthIssuerMismatchError,
+  OAuthRegistrationError,
+} from "@earendil-works/pi-mcp/oauth";
+import {
+  registerMcpControlHandlers,
+  type McpControlDependencies,
+} from "../handlers/mcp-controls.js";
 import { createDiagnosticEvent, type DiagnosticEventInput } from "./diagnostics-contract.js";
 import { connectMcpClient, createMcpClient } from "./mcp-client.js";
 import {
@@ -21,7 +28,10 @@ import {
   type McpDiagnosticServer,
 } from "./mcp-failure-diagnostics.js";
 import { McpOAuthCancelledError } from "./mcp-oauth-operation.js";
-import { McpOAuthRefreshUnavailableError, McpOAuthSignInRequiredError } from "./mcp-oauth-provider-core.js";
+import {
+  McpOAuthRefreshUnavailableError,
+  McpOAuthSignInRequiredError,
+} from "./mcp-oauth-provider-core.js";
 import { McpOAuthCallbackError } from "./mcp-oauth-session.js";
 import { McpStdioApprovalRequiredError } from "./mcp-stdio-approvals.js";
 import { createMcpStdioTransport } from "./mcp-stdio-transport.js";
@@ -33,7 +43,11 @@ function withCause<T extends Error>(error: T, cause: unknown): T {
   return error;
 }
 
-const remote: McpDiagnosticServer = { id: "linear", transport: "http", url: "https://mcp.linear.app/mcp" };
+const remote: McpDiagnosticServer = {
+  id: "linear",
+  transport: "http",
+  url: "https://mcp.linear.app/mcp",
+};
 const local: McpDiagnosticServer = { id: "files", transport: "stdio" };
 
 /** What the journal would store: the input after the contract's allowlist. */
@@ -50,7 +64,10 @@ async function refusedFetch(): Promise<unknown> {
 }
 
 test("classifies Pi transport errors with HTTP status", () => {
-  const unavailable = classifyMcpFailure(new McpHttpError(503, "MCP HTTP request failed with status 503", "upstream down"), "http");
+  const unavailable = classifyMcpFailure(
+    new McpHttpError(503, "MCP HTTP request failed with status 503", "upstream down"),
+    "http",
+  );
   assert.equal(unavailable.failure, "http-5xx");
   assert.equal(unavailable.httpStatus, 503);
   assert.equal(unavailable.code, "service-unavailable");
@@ -58,14 +75,32 @@ test("classifies Pi transport errors with HTTP status", () => {
 
   assert.equal(classifyMcpFailure(new McpHttpError(404, "not found"), "http").failure, "http-4xx");
   // Pi raises McpHttpError for a 2xx it cannot use.
-  const accepted = classifyMcpFailure(new McpHttpError(200, "MCP server returned unsupported content type"), "http");
-  assert.deepEqual([accepted.failure, accepted.httpStatus, accepted.code], ["protocol", 200, "contract-rejected"]);
-  const unauthorized = classifyMcpFailure(new McpAuthRequiredError(new Response(null, { status: 401 })), "http");
-  assert.deepEqual([unauthorized.failure, unauthorized.httpStatus, unauthorized.errorClass], ["auth-required", 401, "McpAuthRequiredError"]);
-  const forbidden = classifyMcpFailure(new McpHttpError(403, "MCP HTTP request failed with status 403"), "http");
+  const accepted = classifyMcpFailure(
+    new McpHttpError(200, "MCP server returned unsupported content type"),
+    "http",
+  );
+  assert.deepEqual(
+    [accepted.failure, accepted.httpStatus, accepted.code],
+    ["protocol", 200, "contract-rejected"],
+  );
+  const unauthorized = classifyMcpFailure(
+    new McpAuthRequiredError(new Response(null, { status: 401 })),
+    "http",
+  );
+  assert.deepEqual(
+    [unauthorized.failure, unauthorized.httpStatus, unauthorized.errorClass],
+    ["auth-required", 401, "McpAuthRequiredError"],
+  );
+  const forbidden = classifyMcpFailure(
+    new McpHttpError(403, "MCP HTTP request failed with status 403"),
+    "http",
+  );
   assert.deepEqual([forbidden.failure, forbidden.code], ["auth-rejected", "authentication-failed"]);
   assert.equal(classifyMcpFailure(new McpSessionExpiredError(), "http").failure, "session-expired");
-  assert.equal(classifyMcpFailure(new McpError(-32601, "Method not found"), "http").failure, "protocol");
+  assert.equal(
+    classifyMcpFailure(new McpError(-32601, "Method not found"), "http").failure,
+    "protocol",
+  );
 });
 
 test("classifies a real refused connection with its errno", async () => {
@@ -77,16 +112,31 @@ test("classifies a real refused connection with its errno", async () => {
   assert.equal(classified.errorClass, "TypeError");
   // An unavailable refresh keeps its own class and still records the cause's errno.
   const refresh = classifyMcpFailure(new McpOAuthRefreshUnavailableError(error as Error), "http");
-  assert.deepEqual([refresh.failure, refresh.errno, refresh.errorClass], ["auth-refresh-unavailable", "ECONNREFUSED", "McpOAuthRefreshUnavailableError"]);
+  assert.deepEqual(
+    [refresh.failure, refresh.errno, refresh.errorClass],
+    ["auth-refresh-unavailable", "ECONNREFUSED", "McpOAuthRefreshUnavailableError"],
+  );
 });
 
 test("classifies TLS and timeout causes behind fetch's TypeError", () => {
-  const tls = withCause(new TypeError("fetch failed"), Object.assign(new Error("certificate has expired"), { code: "CERT_HAS_EXPIRED" }));
-  assert.deepEqual([classifyMcpFailure(tls, "http").failure, classifyMcpFailure(tls, "http").errno], ["tls", "CERT_HAS_EXPIRED"]);
-  const connectTimeout = withCause(new TypeError("fetch failed"), Object.assign(new Error("Connect Timeout Error"), { code: "UND_ERR_CONNECT_TIMEOUT" }));
+  const tls = withCause(
+    new TypeError("fetch failed"),
+    Object.assign(new Error("certificate has expired"), { code: "CERT_HAS_EXPIRED" }),
+  );
+  assert.deepEqual(
+    [classifyMcpFailure(tls, "http").failure, classifyMcpFailure(tls, "http").errno],
+    ["tls", "CERT_HAS_EXPIRED"],
+  );
+  const connectTimeout = withCause(
+    new TypeError("fetch failed"),
+    Object.assign(new Error("Connect Timeout Error"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+  );
   assert.equal(classifyMcpFailure(connectTimeout, "http").failure, "timeout");
   assert.equal(classifyMcpFailure(new McpTimeoutError(30_000), "http").failure, "timeout");
-  assert.equal(classifyMcpFailure(asMcpDeadlineError(new McpTimeoutError(30_000)), "http").failure, "timeout");
+  assert.equal(
+    classifyMcpFailure(asMcpDeadlineError(new McpTimeoutError(30_000)), "http").failure,
+    "timeout",
+  );
   assert.equal(classifyMcpFailure(new McpAbortError(), "http").failure, "cancelled");
   assert.equal(classifyMcpFailure(new McpOAuthCancelledError(), "http").failure, "cancelled");
 });
@@ -94,9 +144,15 @@ test("classifies TLS and timeout causes behind fetch's TypeError", () => {
 test("classifies real platform aborts and timeouts", async () => {
   const controller = new AbortController();
   controller.abort();
-  const aborted = await fetch("http://127.0.0.1:9/mcp", { signal: controller.signal }).then(() => undefined, (error: unknown) => error);
+  const aborted = await fetch("http://127.0.0.1:9/mcp", { signal: controller.signal }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
   assert.ok(aborted instanceof DOMException);
-  assert.deepEqual([classifyMcpFailure(aborted, "http").failure, classifyMcpFailure(aborted, "http").errorClass], ["cancelled", "AbortError"]);
+  assert.deepEqual(
+    [classifyMcpFailure(aborted, "http").failure, classifyMcpFailure(aborted, "http").errorClass],
+    ["cancelled", "AbortError"],
+  );
   const timedOut = await new Promise<unknown>((resolve) => {
     const signal = AbortSignal.timeout(1);
     // AbortSignal.timeout's timer doesn't keep the event loop alive, so hold it open until the abort fires.
@@ -111,42 +167,109 @@ test("classifies real platform aborts and timeouts", async () => {
     );
   });
   const classified = classifyMcpFailure(timedOut, "http");
-  assert.deepEqual([classified.failure, classified.code, classified.errorClass], ["timeout", "timed-out", "TimeoutError"]);
+  assert.deepEqual(
+    [classified.failure, classified.code, classified.errorClass],
+    ["timeout", "timed-out", "TimeoutError"],
+  );
   // A wrapper whose cause is the platform abort.
-  assert.equal(classifyMcpFailure(withCause(new Error("Bot inventory stopped"), aborted), "http").failure, "cancelled");
+  assert.equal(
+    classifyMcpFailure(withCause(new Error("Bot inventory stopped"), aborted), "http").failure,
+    "cancelled",
+  );
 });
 
 test("classifies OAuth failures with the registered error code", () => {
-  const grant = classifyMcpFailure(new OAuthError("invalid_grant", "Refresh token expired"), "http");
-  assert.deepEqual([grant.failure, grant.oauthError, grant.code], ["oauth-error", "invalid_grant", "authentication-failed"]);
+  const grant = classifyMcpFailure(
+    new OAuthError("invalid_grant", "Refresh token expired"),
+    "http",
+  );
+  assert.deepEqual(
+    [grant.failure, grant.oauthError, grant.code],
+    ["oauth-error", "invalid_grant", "authentication-failed"],
+  );
   // A server-invented code is never recorded verbatim.
-  assert.equal(classifyMcpFailure(new OAuthError("tenant_acme_blocked", "no"), "http").oauthError, "other");
-  const registration = classifyMcpFailure(new OAuthRegistrationError(403, JSON.stringify({ error: "invalid_client_metadata", error_description: "redirect not allowed" })), "http");
-  assert.deepEqual([registration.failure, registration.httpStatus, registration.oauthError], ["oauth-registration-rejected", 403, "invalid_client_metadata"]);
-  assert.equal(classifyMcpFailure(new OAuthRegistrationError(403, "<html>Forbidden</html>"), "http").oauthError, undefined);
-  assert.equal(classifyMcpFailure(new OAuthIssuerMismatchError("https://a.example", "https://b.example"), "http").failure, "oauth-issuer-mismatch");
-  assert.equal(classifyMcpFailure(new McpOAuthCallbackError("access_denied"), "http").oauthError, "access_denied");
-  assert.equal(classifyMcpFailure(new McpOAuthSignInRequiredError(), "http").failure, "auth-required");
+  assert.equal(
+    classifyMcpFailure(new OAuthError("tenant_acme_blocked", "no"), "http").oauthError,
+    "other",
+  );
+  const registration = classifyMcpFailure(
+    new OAuthRegistrationError(
+      403,
+      JSON.stringify({
+        error: "invalid_client_metadata",
+        error_description: "redirect not allowed",
+      }),
+    ),
+    "http",
+  );
+  assert.deepEqual(
+    [registration.failure, registration.httpStatus, registration.oauthError],
+    ["oauth-registration-rejected", 403, "invalid_client_metadata"],
+  );
+  assert.equal(
+    classifyMcpFailure(new OAuthRegistrationError(403, "<html>Forbidden</html>"), "http")
+      .oauthError,
+    undefined,
+  );
+  assert.equal(
+    classifyMcpFailure(
+      new OAuthIssuerMismatchError("https://a.example", "https://b.example"),
+      "http",
+    ).failure,
+    "oauth-issuer-mismatch",
+  );
+  assert.equal(
+    classifyMcpFailure(new McpOAuthCallbackError("access_denied"), "http").oauthError,
+    "access_denied",
+  );
+  assert.equal(
+    classifyMcpFailure(new McpOAuthSignInRequiredError(), "http").failure,
+    "auth-required",
+  );
 });
 
 test("classifies stdio launch and exit failures from the real transport", async () => {
-  const spawnError = await createMcpStdioTransport({ command: "/nonexistent-aiden-dir/server" }).start().then(() => undefined, (error: unknown) => error);
+  const spawnError = await createMcpStdioTransport({ command: "/nonexistent-aiden-dir/server" })
+    .start()
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    );
   const spawn = classifyMcpFailure(spawnError, "stdio");
-  assert.deepEqual([spawn.failure, spawn.errno, spawn.code], ["stdio-spawn", "ENOENT", "launch-failed"]);
+  assert.deepEqual(
+    [spawn.failure, spawn.errno, spawn.code],
+    ["stdio-spawn", "ENOENT", "launch-failed"],
+  );
 
   const exitError = await connectMcpClient(
     createMcpClient("aiden-test"),
     createMcpStdioTransport({ command: process.execPath, args: ["-e", "process.exit(3)"] }),
     { timeoutMs: 10_000 },
-  ).then(() => undefined, (error: unknown) => error);
+  ).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
   assert.equal(classifyMcpFailure(exitError, "stdio").failure, "stdio-exit");
-  assert.equal(classifyMcpFailure(new McpConnectionClosedError(), "http").failure, "connection-closed");
-  assert.equal(classifyMcpFailure(new McpStdioApprovalRequiredError("Files"), "stdio").failure, "stdio-approval");
-  assert.equal(classifyMcpFailure(new Error("MCP stdio message exceeds 1048576 bytes"), "stdio").failure, "oversized");
+  assert.equal(
+    classifyMcpFailure(new McpConnectionClosedError(), "http").failure,
+    "connection-closed",
+  );
+  assert.equal(
+    classifyMcpFailure(new McpStdioApprovalRequiredError("Files"), "stdio").failure,
+    "stdio-approval",
+  );
+  assert.equal(
+    classifyMcpFailure(new Error("MCP stdio message exceeds 1048576 bytes"), "stdio").failure,
+    "oversized",
+  );
 });
 
 test("recorded MCP failure events carry the classification, host and transport", () => {
-  const event = recorded(mcpFailureEvent("mcp-degraded", remote, new McpHttpError(502, "bad gateway"), { phase: "mcp-prewarm" }));
+  const event = recorded(
+    mcpFailureEvent("mcp-degraded", remote, new McpHttpError(502, "bad gateway"), {
+      phase: "mcp-prewarm",
+    }),
+  );
   assert.equal(event.event, "mcp-degraded");
   assert.equal(event.code, "service-unavailable");
   assert.equal(event.fields?.mcpFailure, "http-5xx");
@@ -157,17 +280,23 @@ test("recorded MCP failure events carry the classification, host and transport",
   assert.equal(event.fields?.errorType, "McpHttpError");
   assert.equal(event.fields?.failurePhase, "mcp-prewarm");
 
-  const stdio = recorded(mcpFailureEvent("mcp-degraded", local, new McpStdioApprovalRequiredError("Files"), { phase: "mcp-tool-discovery" }));
+  const stdio = recorded(
+    mcpFailureEvent("mcp-degraded", local, new McpStdioApprovalRequiredError("Files"), {
+      phase: "mcp-tool-discovery",
+    }),
+  );
   assert.equal(stdio.fields?.failurePhase, "mcp-stdio-approval");
   assert.equal(stdio.fields?.serverHost, undefined);
   assert.equal(stdio.fields?.transport, "stdio");
 });
 
 test("caller extras never replace the classification", () => {
-  const event = recorded(mcpFailureEvent("mcp-degraded", remote, new McpHttpError(503, "down"), {
-    phase: "mcp-prewarm",
-    extra: { mcpFailure: "unknown", failurePhase: "mcp-sign-in", backoffMs: 500 },
-  }));
+  const event = recorded(
+    mcpFailureEvent("mcp-degraded", remote, new McpHttpError(503, "down"), {
+      phase: "mcp-prewarm",
+      extra: { mcpFailure: "unknown", failurePhase: "mcp-sign-in", backoffMs: 500 },
+    }),
+  );
   assert.equal(event.fields?.mcpFailure, "http-5xx");
   assert.equal(event.fields?.failurePhase, "mcp-prewarm");
   assert.equal(event.fields?.backoffMs, 500);
@@ -188,55 +317,124 @@ test("hosts outside the bundled connectors are recorded only as a category", () 
     ["https://acme.mcp.linear.app/mcp", "custom"],
   ];
   for (const [url, kind] of cases) {
-    const event = recorded(mcpFailureEvent("mcp-degraded", { id: "custom", transport: "http", url }, new McpTimeoutError(1), { phase: "mcp-prewarm" }));
+    const event = recorded(
+      mcpFailureEvent(
+        "mcp-degraded",
+        { id: "custom", transport: "http", url },
+        new McpTimeoutError(1),
+        { phase: "mcp-prewarm" },
+      ),
+    );
     assert.equal(event.fields?.serverHostKind, kind, url);
     assert.equal(event.fields?.serverHost, undefined, url);
     const serialized = JSON.stringify(event);
-    for (const fragment of ["192.168", "10.0.0.5", "100.101", "fd00", "localhost", "127.0.0.1", "::1", "203.0.113", "jdoe", "ts.net", "acme"]) {
+    for (const fragment of [
+      "192.168",
+      "10.0.0.5",
+      "100.101",
+      "fd00",
+      "localhost",
+      "127.0.0.1",
+      "::1",
+      "203.0.113",
+      "jdoe",
+      "ts.net",
+      "acme",
+    ]) {
       assert.ok(!serialized.includes(fragment), `${fragment} leaked for ${url}`);
     }
   }
   // A bundled connector's own public endpoint is named.
-  const linear = recorded(mcpFailureEvent("mcp-degraded", remote, new McpTimeoutError(1), { phase: "mcp-prewarm" }));
+  const linear = recorded(
+    mcpFailureEvent("mcp-degraded", remote, new McpTimeoutError(1), { phase: "mcp-prewarm" }),
+  );
   assert.equal(linear.fields?.serverHost, "mcp.linear.app");
   assert.equal(linear.fields?.serverHostKind, undefined);
 });
 
 test("recorded events never contain URLs, paths, tokens, client secrets or stdio arguments", async () => {
   // The port is matched with its colon: bare digits also occur by chance in the random serverRef hash.
-  const secrets = ["user-SECRET", "pw-SECRET", "SECRETPATH", "SECRET-QUERY", "SECRET-FRAGMENT", ":8443", "SECRET-CLIENT", "SECRET-BODY", "SECRET-URI", "SECRET-ARG", "SECRET-ENV", "secret-bin", "SECRET-DATA", "example.com"];
+  const secrets = [
+    "user-SECRET",
+    "pw-SECRET",
+    "SECRETPATH",
+    "SECRET-QUERY",
+    "SECRET-FRAGMENT",
+    ":8443",
+    "SECRET-CLIENT",
+    "SECRET-BODY",
+    "SECRET-URI",
+    "SECRET-ARG",
+    "SECRET-ENV",
+    "secret-bin",
+    "SECRET-DATA",
+    "example.com",
+  ];
   const server: McpDiagnosticServer = {
     id: "custom-SECRETPATH",
     transport: "http",
     url: "https://user-SECRET:pw-SECRET@mcp.example.com:8443/v1/SECRETPATH?access_token=SECRET-QUERY#SECRET-FRAGMENT",
   };
-  const stdioServer: McpDiagnosticServer & { command: string; args: string[]; env: Record<string, string> } = {
+  const stdioServer: McpDiagnosticServer & {
+    command: string;
+    args: string[];
+    env: Record<string, string>;
+  } = {
     id: "local",
     transport: "stdio",
     command: "/Users/someone/secret-bin/server",
     args: ["--api-key", "SECRET-ARG"],
     env: { TOKEN: "SECRET-ENV" },
   };
-  const spawnError = await createMcpStdioTransport(stdioServer).start().then(() => undefined, (error: unknown) => error);
+  const spawnError = await createMcpStdioTransport(stdioServer)
+    .start()
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    );
   // The real spawn error carries the command and its arguments.
   assert.ok(JSON.stringify(spawnError).includes("SECRET-ARG"));
 
   const errors: Array<[McpDiagnosticServer, unknown]> = [
-    [server, new OAuthError("invalid_client", "client_secret=SECRET-CLIENT was rejected", "https://auth.example/SECRET-URI")],
-    [server, new OAuthRegistrationError(400, JSON.stringify({ error: "invalid_client_metadata", error_description: "SECRET-BODY" }))],
+    [
+      server,
+      new OAuthError(
+        "invalid_client",
+        "client_secret=SECRET-CLIENT was rejected",
+        "https://auth.example/SECRET-URI",
+      ),
+    ],
+    [
+      server,
+      new OAuthRegistrationError(
+        400,
+        JSON.stringify({ error: "invalid_client_metadata", error_description: "SECRET-BODY" }),
+      ),
+    ],
     [server, new McpHttpError(500, `POST ${server.url} failed`, "SECRET-BODY")],
     [server, new McpError(-32000, "SECRET-DATA", { token: "SECRET-DATA" })],
-    [server, withCause(new TypeError(`Could not reach ${server.url}`), Object.assign(new Error("SECRETPATH"), { code: "ECONNREFUSED" }))],
+    [
+      server,
+      withCause(
+        new TypeError(`Could not reach ${server.url}`),
+        Object.assign(new Error("SECRETPATH"), { code: "ECONNREFUSED" }),
+      ),
+    ],
     [stdioServer, spawnError],
   ];
   for (const [target, error] of errors) {
     for (const event of ["mcp-degraded", "mcp-failed"] as const) {
-      const serialized = JSON.stringify(recorded(mcpFailureEvent(event, target, error, { phase: "mcp-sign-in" })));
-      for (const secret of secrets) assert.ok(!serialized.includes(secret), `${secret} leaked into ${serialized}`);
+      const serialized = JSON.stringify(
+        recorded(mcpFailureEvent(event, target, error, { phase: "mcp-sign-in" })),
+      );
+      for (const secret of secrets)
+        assert.ok(!serialized.includes(secret), `${secret} leaked into ${serialized}`);
       assert.doesNotMatch(serialized, /https?:|\/v1\//u);
     }
   }
-  const remoteEvent = recorded(mcpFailureEvent("mcp-degraded", server, errors[0]![1], { phase: "mcp-prewarm" }));
+  const remoteEvent = recorded(
+    mcpFailureEvent("mcp-degraded", server, errors[0]![1], { phase: "mcp-prewarm" }),
+  );
   assert.equal(remoteEvent.fields?.serverHost, undefined);
   assert.equal(remoteEvent.fields?.serverHostKind, "custom");
   assert.equal(remoteEvent.fields?.oauthError, "invalid_client");
@@ -246,10 +444,14 @@ test("identical failures within the window become one line with a repeat count",
   mock.timers.enable({ apis: ["setTimeout"] });
   t.after(() => mock.timers.reset());
   const written: DiagnosticEventInput[] = [];
-  const reporter = new McpDiagnosticsReporter({ write: (event) => written.push(event), windowMs: 60_000 });
+  const reporter = new McpDiagnosticsReporter({
+    write: (event) => written.push(event),
+    windowMs: 60_000,
+  });
   const failure = () => new McpHttpError(503, "unavailable");
 
-  for (let index = 0; index < 5; index += 1) reporter.degraded(remote, failure(), { phase: "mcp-tool-discovery" });
+  for (let index = 0; index < 5; index += 1)
+    reporter.degraded(remote, failure(), { phase: "mcp-tool-discovery" });
   assert.equal(written.length, 1);
   assert.equal(written[0]!.fields?.suppressed, undefined);
 
@@ -276,15 +478,28 @@ test("a server alternating between failures writes one line per failure per wind
   const written: DiagnosticEventInput[] = [];
   const reporter = new McpDiagnosticsReporter({ write: (event) => written.push(event) });
   const timeout = () => new McpTimeoutError(30_000);
-  const network = () => withCause(new TypeError("fetch failed"), Object.assign(new Error("refused"), { code: "ECONNREFUSED" }));
+  const network = () =>
+    withCause(
+      new TypeError("fetch failed"),
+      Object.assign(new Error("refused"), { code: "ECONNREFUSED" }),
+    );
 
-  for (let index = 0; index < 6; index += 1) reporter.degraded(remote, index % 2 ? network() : timeout(), { phase: "mcp-prewarm" });
-  assert.deepEqual(written.map((event) => event.fields?.mcpFailure), ["timeout", "network"]);
+  for (let index = 0; index < 6; index += 1)
+    reporter.degraded(remote, index % 2 ? network() : timeout(), { phase: "mcp-prewarm" });
+  assert.deepEqual(
+    written.map((event) => event.fields?.mcpFailure),
+    ["timeout", "network"],
+  );
 
   reporter.recovered(remote);
   reporter.recovered(remote);
-  const tail = written.slice(2).map((event) => [event.event, event.fields?.mcpFailure, event.fields?.suppressed]);
-  assert.deepEqual(tail.slice(0, 2).sort(), [["mcp-degraded", "network", 2], ["mcp-degraded", "timeout", 2]]);
+  const tail = written
+    .slice(2)
+    .map((event) => [event.event, event.fields?.mcpFailure, event.fields?.suppressed]);
+  assert.deepEqual(tail.slice(0, 2).sort(), [
+    ["mcp-degraded", "network", 2],
+    ["mcp-degraded", "timeout", 2],
+  ]);
   assert.deepEqual(tail.slice(2), [["mcp-recovered", undefined, undefined]]);
   const recovery = recorded(written[written.length - 1]!);
   assert.equal(recovery.outcome, "recovered");
@@ -292,7 +507,10 @@ test("a server alternating between failures writes one line per failure per wind
   // The reference matches the degraded lines and differs between servers.
   assert.equal(recovery.fields?.serverRef, recorded(written[0]!).fields?.serverRef);
   reporter.degraded(local, timeout(), { phase: "mcp-prewarm" });
-  assert.notEqual(recorded(written[written.length - 1]!).fields?.serverRef, recovery.fields?.serverRef);
+  assert.notEqual(
+    recorded(written[written.length - 1]!).fields?.serverRef,
+    recovery.fields?.serverRef,
+  );
 
   // Nothing is pending after recovery: no timer writes later.
   mock.timers.tick(5 * 60_000);
@@ -311,7 +529,10 @@ test("shutdown writes pending counts and stops every timer", (t) => {
   reporter.degraded(remote, new McpHttpError(503, "unavailable"), { phase: "mcp-prewarm" });
   reporter.degraded(remote, new McpHttpError(503, "unavailable"), { phase: "mcp-prewarm" });
   reporter.shutdown();
-  assert.deepEqual(written.map((event) => event.fields?.suppressed), [undefined, 1]);
+  assert.deepEqual(
+    written.map((event) => event.fields?.suppressed),
+    [undefined, 1],
+  );
   mock.timers.tick(10 * 60_000);
   assert.equal(written.length, 2);
   // After shutdown each failure is written as it comes, without a window.
@@ -326,15 +547,22 @@ test("a failed Authorize from Settings records a classified sign-in failure", as
   const handlers = new Map<string, (event: string, ...args: unknown[]) => unknown>();
   const written: DiagnosticEventInput[] = [];
   const reporter = new McpDiagnosticsReporter({ write: (event) => written.push(event) });
-  const unused = () => { throw new Error("unused"); };
+  const unused = () => {
+    throw new Error("unused");
+  };
   let signedIn = false;
   const deps: McpControlDependencies<string> = {
-    handle: (channel, handler) => { handlers.set(channel, handler); },
+    handle: (channel, handler) => {
+      handlers.set(channel, handler);
+    },
     owner: () => ({ isDestroyed: () => false }),
     configured: async () => undefined,
     authorize: async () => {
       if (signedIn) return { authorized: true };
-      throw new OAuthRegistrationError(403, JSON.stringify({ error: "invalid_client_metadata", client_secret: "SECRET-CLIENT" }));
+      throw new OAuthRegistrationError(
+        403,
+        JSON.stringify({ error: "invalid_client_metadata", client_secret: "SECRET-CLIENT" }),
+      );
     },
     reportAuthorizeFailure: (server, error) => reporter.signInFailed(server, error),
     reportAuthorizeSuccess: (server) => reporter.recovered(server),
@@ -353,8 +581,18 @@ test("a failed Authorize from Settings records a classified sign-in failure", as
     openMacApp: unused,
   };
   registerMcpControlHandlers(deps);
-  const server = { id: "custom-acme", name: "Acme", transport: "http", url: "https://mcp.acme.test/v1?key=SECRET-QUERY", oauth: true, enabled: true };
-  await assert.rejects(Promise.resolve().then(() => handlers.get("mcp:authorize")!("settings", server)), OAuthRegistrationError);
+  const server = {
+    id: "custom-acme",
+    name: "Acme",
+    transport: "http",
+    url: "https://mcp.acme.test/v1?key=SECRET-QUERY",
+    oauth: true,
+    enabled: true,
+  };
+  await assert.rejects(
+    Promise.resolve().then(() => handlers.get("mcp:authorize")!("settings", server)),
+    OAuthRegistrationError,
+  );
   assert.equal(written.length, 1);
   const event = recorded(written[0]!);
   assert.equal(event.event, "mcp-failed");
@@ -367,9 +605,16 @@ test("a failed Authorize from Settings records a classified sign-in failure", as
   assert.doesNotMatch(JSON.stringify(event), /SECRET|acme/u);
 
   // A background failure, then a successful Authorize: recovery is written once.
-  reporter.degraded(server as McpDiagnosticServer, new McpAuthRequiredError(new Response(null, { status: 401 })), { phase: "mcp-prewarm" });
+  reporter.degraded(
+    server as McpDiagnosticServer,
+    new McpAuthRequiredError(new Response(null, { status: 401 })),
+    { phase: "mcp-prewarm" },
+  );
   signedIn = true;
   assert.deepEqual(await handlers.get("mcp:authorize")!("settings", server), { authorized: true });
-  assert.deepEqual(written.slice(1).map((line) => line.event), ["mcp-degraded", "mcp-recovered"]);
+  assert.deepEqual(
+    written.slice(1).map((line) => line.event),
+    ["mcp-degraded", "mcp-recovered"],
+  );
   reporter.shutdown();
 });

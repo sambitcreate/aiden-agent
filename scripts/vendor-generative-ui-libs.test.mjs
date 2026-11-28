@@ -14,10 +14,7 @@ test("vendor sources stay inside node_modules and write into resources/generativ
     vendorSourcePath(root, GENERATIVE_UI_VENDOR_SOURCES["chart.umd.min.js"]),
     path.join(root, "node_modules", "chart.js", "dist", "chart.umd.min.js"),
   );
-  assert.equal(
-    vendorDestinationDirectory(root),
-    path.join(root, "resources", "generative-ui"),
-  );
+  assert.equal(vendorDestinationDirectory(root), path.join(root, "resources", "generative-ui"));
   for (const segments of Object.values(GENERATIVE_UI_VENDOR_SOURCES)) {
     const source = vendorSourcePath(root, segments);
     assert.ok(source.startsWith(path.join(root, "node_modules") + path.sep));

@@ -35,7 +35,11 @@ import {
   type DeviceHostReady,
 } from "./device-host.js";
 import { readDeviceSettings, runDeviceAction } from "./device-actions.js";
-import { isEmulatorSerial, readAndroidDeviceSettings, runAndroidDeviceAction } from "./android-device-actions.js";
+import {
+  isEmulatorSerial,
+  readAndroidDeviceSettings,
+  runAndroidDeviceAction,
+} from "./android-device-actions.js";
 import type { DeviceHubProxy, DeviceHubTarget } from "./device-hub-proxy.js";
 import {
   MOBILE_SIMULATOR_REFUSAL,
@@ -103,8 +107,18 @@ export interface DeviceServiceDeps {
   ): Promise<DeviceHubProxy>;
   fetch(
     url: string,
-    init: { method: "GET" | "POST"; headers?: Record<string, string>; body?: string; signal: AbortSignal },
-  ): Promise<{ ok: boolean; status: number; headers: { get(name: string): string | null }; arrayBuffer(): Promise<ArrayBuffer> }>;
+    init: {
+      method: "GET" | "POST";
+      headers?: Record<string, string>;
+      body?: string;
+      signal: AbortSignal;
+    },
+  ): Promise<{
+    ok: boolean;
+    status: number;
+    headers: { get(name: string): string | null };
+    arrayBuffer(): Promise<ArrayBuffer>;
+  }>;
   /** SSH device hosts. Absent in tests that only cover this Mac and paired Macs. */
   ssh?: DeviceSshPort;
   /** Standalone Node override for the local agent-device shim and tool maintenance. */
@@ -190,7 +204,11 @@ export interface DeviceService {
    * Starts agent-device and pins it to one chat's device. Needs agent access;
    * never installs, since installing happens only when the user grants access.
    */
-  agentTarget(input: { chatId: string; hostId: string; deviceId: string }): Promise<{ command: string; args: string[] }>;
+  agentTarget(input: {
+    chatId: string;
+    hostId: string;
+    deviceId: string;
+  }): Promise<{ command: string; args: string[] }>;
   /** The `agent-device` shim directory while agent access holds, for `run_command`'s PATH. */
   agentShimDir(): string | null;
   /** A per-chat directory for screenshots a text-only model cannot view. Removed with the chat. */
@@ -255,7 +273,10 @@ function deviceKind(deviceTypeIdentifier: string, name: string): DeviceKind {
 }
 
 /** Parses `xcrun simctl list devices --json`: available iOS simulators only, booted first. */
-export function parseSimctlDevices(stdout: string, hostId: string = LOCAL_DEVICE_HOST_ID): DeviceSummary[] {
+export function parseSimctlDevices(
+  stdout: string,
+  hostId: string = LOCAL_DEVICE_HOST_ID,
+): DeviceSummary[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
@@ -274,7 +295,8 @@ export function parseSimctlDevices(stdout: string, hostId: string = LOCAL_DEVICE
       if (entry?.isAvailable !== true) continue;
       if (typeof entry.udid !== "string" || typeof entry.name !== "string") continue;
       if (!entry.udid || !entry.name) continue;
-      const typeIdentifier = typeof entry.deviceTypeIdentifier === "string" ? entry.deviceTypeIdentifier : "";
+      const typeIdentifier =
+        typeof entry.deviceTypeIdentifier === "string" ? entry.deviceTypeIdentifier : "";
       devices.push({
         hostId,
         id: entry.udid,
@@ -318,9 +340,16 @@ export function parseAndroidDevices(
   const emulators = (hubList as HubDeviceList | null)?.emulators;
   const devices: DeviceSummary[] = [];
   for (const entry of Array.isArray(emulators) ? (emulators as Record<string, unknown>[]) : []) {
-    if (typeof entry !== "object" || entry === null || entry.platform !== "android" || entry.physical === true) continue;
+    if (
+      typeof entry !== "object" ||
+      entry === null ||
+      entry.platform !== "android" ||
+      entry.physical === true
+    )
+      continue;
     const { id, name, version, booted } = entry;
-    if (typeof id !== "string" || !DEVICE_ID_PATTERN.test(id) || typeof name !== "string" || !name) continue;
+    if (typeof id !== "string" || !DEVICE_ID_PATTERN.test(id) || typeof name !== "string" || !name)
+      continue;
     if (devices.some((device) => device.id === id)) continue;
     devices.push({
       hostId,
@@ -335,7 +364,15 @@ export function parseAndroidDevices(
   for (const line of listAvds.split(/\r?\n/u)) {
     const name = line.trim();
     if (!DEVICE_ID_PATTERN.test(name) || devices.some((device) => device.name === name)) continue;
-    devices.push({ hostId, id: name, name, platform: "android", version: "Android", booted: false, kind: "other" });
+    devices.push({
+      hostId,
+      id: name,
+      name,
+      platform: "android",
+      version: "Android",
+      booted: false,
+      kind: "other",
+    });
   }
   return devices.sort((left, right) =>
     left.booted !== right.booted ? (left.booted ? -1 : 1) : left.name.localeCompare(right.name),
@@ -346,7 +383,8 @@ export type DeviceBootFailure = "disk_space" | "timeout" | "launch_failed";
 
 /** Adapted from t3code DeviceService `boot` @ a6ec88f7 (MIT): what the hub's boot error means. */
 export function classifyBootFailure(error: string): DeviceBootFailure {
-  if (/insufficient.*(?:disk|space)|not enough.*(?:disk|space)|no space left/iu.test(error)) return "disk_space";
+  if (/insufficient.*(?:disk|space)|not enough.*(?:disk|space)|no space left/iu.test(error))
+    return "disk_space";
   if (/timed? out|timeout/iu.test(error)) return "timeout";
   return "launch_failed";
 }
@@ -354,7 +392,8 @@ export function classifyBootFailure(error: string): DeviceBootFailure {
 const BOOT_FAILURE_MESSAGES: Record<DeviceBootFailure, string> = {
   disk_space: "There is not enough free disk space on this Mac.",
   timeout: "The device did not become ready in time.",
-  launch_failed: "The simulator or emulator could not start. Check its configuration in Xcode or Android Studio.",
+  launch_failed:
+    "The simulator or emulator could not start. Check its configuration in Xcode or Android Studio.",
 };
 
 interface HubResult {
@@ -375,7 +414,12 @@ class HubRefusedError extends Error {
   }
 }
 
-const NO_CONSENT: DeviceConsent = { streaming: false, agentAccess: false, peerSharing: false, mobileSharing: false };
+const NO_CONSENT: DeviceConsent = {
+  streaming: false,
+  agentAccess: false,
+  peerSharing: false,
+  mobileSharing: false,
+};
 
 function parseConsent(text: string): DeviceConsent {
   try {
@@ -394,7 +438,10 @@ function parseConsent(text: string): DeviceConsent {
 }
 
 const STREAMING_OFF = "Set up simulator streaming first.";
-const SSH_IDLE: DeviceHostState = { status: "stopped", detail: "Not connected. Aiden connects only when you ask." };
+const SSH_IDLE: DeviceHostState = {
+  status: "stopped",
+  detail: "Not connected. Aiden connects only when you ask.",
+};
 const NO_SSH_CONSENT: SshHostToolConsent = { hub: false, agent: false };
 /** Tunnels close at once; the remote cleanup gets this long before a revoke or quit moves on. */
 const SSH_STOP_BUDGET_MS = 5_000;
@@ -415,13 +462,14 @@ function withinBudget(work: Promise<unknown>, ms: number): Promise<void> {
     );
   });
 }
-const AGENT_ACCESS_OFF = "Agent access to simulators is off. Ask the user to allow it in the Simulator tab.";
+const AGENT_ACCESS_OFF =
+  "Agent access to simulators is off. Ask the user to allow it in the Simulator tab.";
 /** The revoke counters an install was approved under, taken when the user asked for it. */
 interface InstallApproval {
   streaming: number;
   agent: number;
 }
-const chatKey =(chatId: string) => createHash("sha256").update(chatId).digest("hex").slice(0, 24);
+const chatKey = (chatId: string) => createHash("sha256").update(chatId).digest("hex").slice(0, 24);
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -444,12 +492,18 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   let peerRefresh: Promise<void> | null = null;
   /** Bumped whenever the peer list is forgotten, so an in-flight refresh or open cannot repopulate it. */
   let peerEpoch = 0;
-  const SHARE_AUDIENCES = ["desktop", "mobile"] as const satisfies readonly AidenRemoteSimulatorAudience[];
+  const SHARE_AUDIENCES = [
+    "desktop",
+    "mobile",
+  ] as const satisfies readonly AidenRemoteSimulatorAudience[];
   const sharingListeners: Record<AidenRemoteSimulatorAudience, Set<(sharing: boolean) => void>> = {
     desktop: new Set(),
     mobile: new Set(),
   };
-  const sharingWas: Record<AidenRemoteSimulatorAudience, boolean> = { desktop: false, mobile: false };
+  const sharingWas: Record<AidenRemoteSimulatorAudience, boolean> = {
+    desktop: false,
+    mobile: false,
+  };
   let sessions: DeviceSession[] = [];
   /** Bumped per session and per chat by every close, so an open still booting never undoes one. */
   const closes = new Map<string, number>();
@@ -457,7 +511,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     JSON.stringify([chatId, hostId, deviceId]);
   const chatCloseKey = (chatId: string) => JSON.stringify([chatId]);
   const closeCount = (chatId: string, hostId: string, deviceId: string) =>
-    (closes.get(sessionKey(chatId, hostId, deviceId)) ?? 0) + (closes.get(chatCloseKey(chatId)) ?? 0);
+    (closes.get(sessionKey(chatId, hostId, deviceId)) ?? 0) +
+    (closes.get(chatCloseKey(chatId)) ?? 0);
   const bumpClose = (key: string) => closes.set(key, (closes.get(key) ?? 0) + 1);
   let loaded: Promise<void> | null = null;
   let starting: Promise<DeviceHostReady | null> | null = null;
@@ -482,7 +537,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   /** This Mac's helper versions, read from disk only. */
   let localTools: DeviceToolVersions | undefined;
   let localToolsError: string | undefined;
-  const localNodePath = async () => deps.nodePath ?? host.current()?.nodePath ?? await requireDeviceNode();
+  const localNodePath = async () =>
+    deps.nodePath ?? host.current()?.nodePath ?? (await requireDeviceNode());
   const maintain = deps.runMaintenance ?? ((input) => runToolMaintenance(input));
 
   const sshInfo = (entry: SshEntry): DeviceHostInfo => {
@@ -507,7 +563,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       ...(localToolsError ? { toolInspectionError: localToolsError } : {}),
       ...(platforms ? { platforms: platforms.map((entry) => ({ ...entry })) } : {}),
     },
-    ...[...peers].map(([id, entry]): DeviceHostInfo => ({ id, kind: "peer", name: entry.name, ...entry.state })),
+    ...[...peers].map(
+      ([id, entry]): DeviceHostInfo => ({ id, kind: "peer", name: entry.name, ...entry.state }),
+    ),
     ...[...ssh.values()].map(sshInfo),
   ];
   const allDevices = (): DeviceSummary[] => [
@@ -518,7 +576,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
 
   const snapshot = (): DeviceServiceState => ({
     hostStatus: hostState.status,
-    hostStatuses: Object.fromEntries(hostList().map(({ id, status, detail }) => [id, detail ? { status, detail } : { status }])),
+    hostStatuses: Object.fromEntries(
+      hostList().map(({ id, status, detail }) => [id, detail ? { status, detail } : { status }]),
+    ),
     hosts: hostList(),
     consent: { ...consent },
     devices: allDevices().map((device) => ({ ...device })),
@@ -530,7 +590,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
 
   /** Each audience has its own consent, and both build on streaming. */
   const sharingFor = (audience: AidenRemoteSimulatorAudience) =>
-    consent.streaming && (audience === "mobile" ? consent.mobileSharing === true : consent.peerSharing);
+    consent.streaming &&
+    (audience === "mobile" ? consent.mobileSharing === true : consent.peerSharing);
 
   const emit = () => {
     const state = snapshot();
@@ -551,7 +612,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
 
   host.onHealth((health, detail) => {
     if (!consent.streaming) return;
-    if (health === "restarting") setHost({ status: "starting", detail: "Restarting the device hub…" });
+    if (health === "restarting")
+      setHost({ status: "starting", detail: "Restarting the device hub…" });
     else if (health === "ready") setHost({ status: "ready" });
     else setHost({ status: "error", ...(detail ? { detail } : {}) });
   });
@@ -581,8 +643,16 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       agent: null,
     };
     return {
-      hub: { requiredVersion: DEVICE_HUB.version, installedVersions: hub, runningVersion: running.hub },
-      agent: { requiredVersion: AGENT_DEVICE.version, installedVersions: agent, runningVersion: running.agent },
+      hub: {
+        requiredVersion: DEVICE_HUB.version,
+        installedVersions: hub,
+        runningVersion: running.hub,
+      },
+      agent: {
+        requiredVersion: AGENT_DEVICE.version,
+        installedVersions: agent,
+        runningVersion: running.agent,
+      },
     };
   }
 
@@ -608,7 +678,13 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       }
       // After a relaunch the shim from the earlier grant still pins agent-device for run_command.
       const shim = path.join(deps.baseDir, "bin");
-      if (consent.agentAccess && (await access(path.join(shim, "agent-device")).then(() => true, () => false))) {
+      if (
+        consent.agentAccess &&
+        (await access(path.join(shim, "agent-device")).then(
+          () => true,
+          () => false,
+        ))
+      ) {
         shimDir = shim;
       }
     })();
@@ -619,7 +695,11 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   function saveConsent(): Promise<void> {
     const next = saving.then(async () => {
       await mkdir(deps.baseDir, { recursive: true });
-      await writeJsonAtomic(consentPath, { version: 1, ...consent }, { space: 2, trailingNewline: true });
+      await writeJsonAtomic(
+        consentPath,
+        { version: 1, ...consent },
+        { space: 2, trailingNewline: true },
+      );
     });
     saving = next.catch(() => undefined);
     return next;
@@ -663,8 +743,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         if (error instanceof DeviceToolsMissingError) {
           const idle = await idleStatus();
           if (currentConsent()) setHost(idle);
-        }
-        else if (error instanceof DeviceHostUnavailableError) setHost({ status: "unavailable" }, error.reason);
+        } else if (error instanceof DeviceHostUnavailableError)
+          setHost({ status: "unavailable" }, error.reason);
         else setHost({ status: "error", detail: errorMessage(error) });
         return null;
       } finally {
@@ -694,7 +774,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   }
 
   async function listDevices(ready: DeviceHostReady): Promise<void> {
-    const [ios, android] = await Promise.all([host.platformAvailability("ios"), host.platformAvailability("android")]);
+    const [ios, android] = await Promise.all([
+      host.platformAvailability("ios"),
+      host.platformAvailability("android"),
+    ]);
     const next: DeviceSummary[] = [];
     let androidState = android;
     if (ios.available) {
@@ -702,7 +785,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         timeoutMs: SIMCTL_LIST_TIMEOUT_MS,
       });
       if (result.code !== 0) {
-        throw new Error("Could not list simulators. Open Xcode once to finish its setup, then try again.");
+        throw new Error(
+          "Could not list simulators. Open Xcode once to finish its setup, then try again.",
+        );
       }
       next.push(...parseSimctlDevices(result.stdout, host.id));
     }
@@ -711,13 +796,19 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         next.push(...(await listAndroid(ready)));
       } catch (error) {
         // iOS keeps working when Android discovery fails; the tab says why emulators are missing.
-        androidState = { platform: "android", available: false, reason: `Could not list Android emulators. ${errorMessage(error)}` };
+        androidState = {
+          platform: "android",
+          available: false,
+          reason: `Could not list Android emulators. ${errorMessage(error)}`,
+        };
       }
     }
     platforms = [ios, androidState];
     devices = next;
     const known = new Set(devices.map((device) => device.id));
-    sessions = sessions.filter((session) => session.hostId !== host.id || known.has(session.deviceId));
+    sessions = sessions.filter(
+      (session) => session.hostId !== host.id || known.has(session.deviceId),
+    );
     emit();
   }
 
@@ -740,7 +831,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   function setPeerDevices(hostId: string, entry: PeerEntry, next: DeviceSummary[]): void {
     entry.devices = next;
     const known = new Set(next.map((device) => device.id));
-    sessions = sessions.filter((session) => session.hostId !== hostId || known.has(session.deviceId));
+    sessions = sessions.filter(
+      (session) => session.hostId !== hostId || known.has(session.deviceId),
+    );
   }
 
   async function refreshLocalHost(): Promise<void> {
@@ -785,7 +878,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     const current = () => epoch === peerEpoch && consent.streaming;
     let run: Promise<void> | null = null;
     run = (async () => {
-      const wasReady = new Set([...peers].filter(([, entry]) => entry.state.status === "ready").map(([id]) => id));
+      const wasReady = new Set(
+        [...peers].filter(([, entry]) => entry.state.status === "ready").map(([id]) => id),
+      );
       try {
         const hosts = await port.hosts().catch(() => []);
         if (!current()) return;
@@ -798,7 +893,11 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         }
         await Promise.all(
           hosts.map(async (peer) => {
-            const entry = peers.get(peer.id) ?? { name: peer.name, state: { status: "starting" }, devices: [] };
+            const entry = peers.get(peer.id) ?? {
+              name: peer.name,
+              state: { status: "starting" },
+              devices: [],
+            };
             entry.name = peer.name;
             try {
               const listing = await port.list(peer.id);
@@ -811,11 +910,16 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
               }
               peers.set(peer.id, entry);
               if (!listing.sharing) {
-                entry.state = { status: "needs-consent", detail: `Simulator sharing is off on ${peer.name}.` };
+                entry.state = {
+                  status: "needs-consent",
+                  detail: `Simulator sharing is off on ${peer.name}.`,
+                };
                 setPeerDevices(peer.id, entry, []);
                 return;
               }
-              entry.state = listing.detail ? { status: listing.status, detail: listing.detail } : { status: listing.status };
+              entry.state = listing.detail
+                ? { status: listing.status, detail: listing.detail }
+                : { status: listing.status };
               setPeerDevices(
                 peer.id,
                 entry,
@@ -860,13 +964,21 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         );
       } catch (error) {
         const detail = error instanceof HubRefusedError ? error.detail : errorMessage(error);
-        const failure = error instanceof HubRefusedError ? classifyBootFailure(detail) : "launch_failed";
-        throw new Error(`${device.name} failed to boot. ${BOOT_FAILURE_MESSAGES[failure]}${detail ? ` (${detail})` : ""}`);
+        const failure =
+          error instanceof HubRefusedError ? classifyBootFailure(detail) : "launch_failed";
+        throw new Error(
+          `${device.name} failed to boot. ${BOOT_FAILURE_MESSAGES[failure]}${detail ? ` (${detail})` : ""}`,
+        );
       }
       const bootedId = [result.serial, result.id].find(
-        (candidate): candidate is string => typeof candidate === "string" && DEVICE_ID_PATTERN.test(candidate),
+        (candidate): candidate is string =>
+          typeof candidate === "string" && DEVICE_ID_PATTERN.test(candidate),
       );
-      attached = { ...device, id: device.platform === "android" ? (bootedId ?? device.id) : device.id, booted: true };
+      attached = {
+        ...device,
+        id: device.platform === "android" ? (bootedId ?? device.id) : device.id,
+        booted: true,
+      };
       if (device.platform === "android") {
         await listDevices(ready).catch(() => undefined);
         attached = devices.find((candidate) => candidate.id === attached.id) ?? attached;
@@ -879,7 +991,12 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     // The iOS stream helper must be attached even when the simulator was already booted.
     // serve-emu attaches to a running emulator lazily, when the viewer's socket connects.
     if (attached.platform === "ios") {
-      await postHubJson(ready, "/vendor/serve-sim/grid/api/start", { udid: attached.id }, HUB_REQUEST_TIMEOUT_MS);
+      await postHubJson(
+        ready,
+        "/vendor/serve-sim/grid/api/start",
+        { udid: attached.id },
+        HUB_REQUEST_TIMEOUT_MS,
+      );
     }
     return attached;
   }
@@ -914,17 +1031,27 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         { platform: "android", id: device.id, name: device.name },
         ANDROID_SHUTDOWN_TIMEOUT_MS,
       );
-      devices = devices.map((candidate) => (candidate.id === deviceId ? { ...candidate, booted: false } : candidate));
+      devices = devices.map((candidate) =>
+        candidate.id === deviceId ? { ...candidate, booted: false } : candidate,
+      );
       // The serial goes back to the AVD name; a failed re-list must not fail an accepted shutdown.
       await listDevices(ready).catch(() => undefined);
       return;
     }
-    const result = await ready.run("xcrun", ["simctl", "shutdown", deviceId], { timeoutMs: SIMCTL_SHUTDOWN_TIMEOUT_MS });
+    const result = await ready.run("xcrun", ["simctl", "shutdown", deviceId], {
+      timeoutMs: SIMCTL_SHUTDOWN_TIMEOUT_MS,
+    });
     if (result.code !== 0) throw new Error("The simulator did not shut down.");
-    devices = devices.map((device) => (device.id === deviceId ? { ...device, booted: false } : device));
+    devices = devices.map((device) =>
+      device.id === deviceId ? { ...device, booted: false } : device,
+    );
   }
 
-  async function localAction(ready: DeviceHostReady, device: DeviceSummary, input: DeviceActionInput) {
+  async function localAction(
+    ready: DeviceHostReady,
+    device: DeviceSummary,
+    input: DeviceActionInput,
+  ) {
     if (!deviceActionSupported(device.platform, input)) {
       throw new Error(
         device.platform === "android"
@@ -938,7 +1065,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   }
 
   const localSettings = (ready: DeviceHostReady, device: DeviceSummary) =>
-    device.platform === "android" ? readAndroidDeviceSettings(ready, device.id) : readDeviceSettings(ready, device.id);
+    device.platform === "android"
+      ? readAndroidDeviceSettings(ready, device.id)
+      : readDeviceSettings(ready, device.id);
 
   function requireSharing(audience: AidenRemoteSimulatorAudience): DeviceHostReady {
     if (!sharingFor(audience)) throw new Error("Simulator sharing is off.");
@@ -980,7 +1109,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         if (options?.chatId === undefined) {
           const ready = host.current() ?? (await start(false));
           if (ready) {
-            await listDevices(ready).catch((error) => setHost({ status: "error", detail: errorMessage(error) }));
+            await listDevices(ready).catch((error) =>
+              setHost({ status: "error", detail: errorMessage(error) }),
+            );
           }
         }
         const listed = sharing() ? devices.map(({ hostId: _hostId, ...device }) => device) : [];
@@ -988,8 +1119,12 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
           sharing: sharing(),
           status: hostState.status,
           devices: listed,
-          ...(options?.chatId === undefined ? {} : { chatDeviceIds: chatDeviceIds(options.chatId, listed) }),
-          ...(audience === "mobile" ? { toolVersions: { hub: DEVICE_HUB.version, agent: AGENT_DEVICE.version } } : {}),
+          ...(options?.chatId === undefined
+            ? {}
+            : { chatDeviceIds: chatDeviceIds(options.chatId, listed) }),
+          ...(audience === "mobile"
+            ? { toolVersions: { hub: DEVICE_HUB.version, agent: AGENT_DEVICE.version } }
+            : {}),
         };
       },
       async open(deviceId) {
@@ -1016,7 +1151,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       async action(input) {
         const ready = requireSharing(audience);
         // The relay refuses phone actions first; this keeps the share host safe on its own.
-        if (audience === "mobile") throw new AidenRemoteServiceError("capability_denied", MOBILE_SIMULATOR_REFUSAL, 403);
+        if (audience === "mobile")
+          throw new AidenRemoteServiceError("capability_denied", MOBILE_SIMULATOR_REFUSAL, 403);
         const local = { ...input, hostId: host.id };
         return localAction(ready, requireKnownDevice(host.id, local.deviceId), local);
       },
@@ -1051,7 +1187,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
 
   /** Actions only reach simulators the last listing reported, and only booted ones. */
   function requireKnownDevice(hostId: string, deviceId: string): DeviceSummary {
-    const device = allDevices().find((candidate) => candidate.hostId === hostId && candidate.id === deviceId);
+    const device = allDevices().find(
+      (candidate) => candidate.hostId === hostId && candidate.id === deviceId,
+    );
     if (!device) throw new Error("That simulator is no longer available.");
     if (!device.booted) throw new Error("Open the simulator before changing its settings.");
     return device;
@@ -1086,7 +1224,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   }
 
   /** Starts agent-device and writes the shim. Callers publish `shimDir` only after rechecking consent. */
-  async function prepareAgent(allowInstall: boolean, onPhase?: Parameters<DeviceHost["ensureAgentReady"]>[0]) {
+  async function prepareAgent(
+    allowInstall: boolean,
+    onPhase?: Parameters<DeviceHost["ensureAgentReady"]>[0],
+  ) {
     const ready = await host.ensureAgentReady(onPhase, { allowInstall });
     const shim = await ensureAgentDeviceShim({
       baseDir: deps.baseDir,
@@ -1110,7 +1251,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     consent = kind === "streaming" ? { ...NO_CONSENT } : { ...consent, agentAccess: false };
     if (kind === "streaming") forgetPeers();
     if (kind === "streaming") await disconnectSsh({ forgetToolConsent: true });
-    else await Promise.all([...ssh.values()].map((entry) => entry.host.stopAgent().catch(() => undefined)));
+    else
+      await Promise.all(
+        [...ssh.values()].map((entry) => entry.host.stopAgent().catch(() => undefined)),
+      );
     shimDir = null;
     await saveConsent();
     // Sharing ends before the hub stops, so relays close first.
@@ -1118,7 +1262,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     if (kind === "streaming") await stopHost();
     else await host.stopAgent();
     // The per-host configs hold the daemon token.
-    await rm(path.join(deps.baseDir, "hosts"), { recursive: true, force: true }).catch(() => undefined);
+    await rm(path.join(deps.baseDir, "hosts"), { recursive: true, force: true }).catch(
+      () => undefined,
+    );
     setHost(await idleStatus());
     return snapshot();
   }
@@ -1163,11 +1309,15 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     };
     entry.unsubscribe = entry.host.onHealth((health, detail) => {
       if (!consent.streaming || ssh.get(config.id) !== entry) return;
-      if (health === "restarting") setSsh(entry, { status: "starting", detail: detail ?? `Reconnecting to ${config.label}…` });
+      if (health === "restarting")
+        setSsh(entry, { status: "starting", detail: detail ?? `Reconnecting to ${config.label}…` });
       else if (health === "ready") setSsh(entry, { status: "ready" });
       else {
         dropSshDevices(entry);
-        setSsh(entry, { status: "error", detail: detail ?? `Lost the connection to ${config.label}.` });
+        setSsh(entry, {
+          status: "error",
+          detail: detail ?? `Lost the connection to ${config.label}.`,
+        });
       }
     });
     ssh.set(config.id, entry);
@@ -1179,7 +1329,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     if (ssh.get(entry.config.id) === entry) ssh.delete(entry.config.id);
     dropSshDevices(entry);
     await withinBudget(entry.host.stop(), SSH_STOP_BUDGET_MS);
-    await rm(agentDeviceConfigPath(deps.baseDir, entry.config.id), { force: true }).catch(() => undefined);
+    await rm(agentDeviceConfigPath(deps.baseDir, entry.config.id), { force: true }).catch(
+      () => undefined,
+    );
   }
 
   /** Tears every tunnel down and stops the helpers Aiden started on each host. */
@@ -1203,9 +1355,11 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     if (!entry) throw new Error(`Unknown device host ${hostId}.`);
     const ready = entry.host.current();
     if (entry.state.status !== "ready" || !ready) {
-      throw new Error(entry.state.detail && entry.state.status !== "stopped"
-        ? entry.state.detail
-        : `Connect ${entry.config.label} first.`);
+      throw new Error(
+        entry.state.detail && entry.state.status !== "stopped"
+          ? entry.state.detail
+          : `Connect ${entry.config.label} first.`,
+      );
     }
     return { entry, ready };
   }
@@ -1215,11 +1369,15 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       timeoutMs: SIMCTL_LIST_TIMEOUT_MS,
     });
     if (result.code !== 0) {
-      throw new Error(`Could not list simulators on ${entry.config.label}. Open Xcode there once, then try again.`);
+      throw new Error(
+        `Could not list simulators on ${entry.config.label}. Open Xcode there once, then try again.`,
+      );
     }
     entry.devices = parseSimctlDevices(result.stdout, entry.config.id);
     const known = new Set(entry.devices.map((device) => device.id));
-    sessions = sessions.filter((session) => session.hostId !== entry.config.id || known.has(session.deviceId));
+    sessions = sessions.filter(
+      (session) => session.hostId !== entry.config.id || known.has(session.deviceId),
+    );
   }
 
   /**
@@ -1227,13 +1385,20 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
    * approval for this host, a missing or outdated pinned helper is installed
    * here, with progress; without it, the host asks for Install.
    */
-  async function connectSsh(entry: SshEntry, options: { allowInstall?: boolean } = {}): Promise<void> {
+  async function connectSsh(
+    entry: SshEntry,
+    options: { allowInstall?: boolean } = {},
+  ): Promise<void> {
     if (!consent.streaming) throw new Error(STREAMING_OFF);
     const id = entry.config.id;
     const epoch = sshEpoch;
     const live = () => epoch === sshEpoch && consent.streaming && ssh.get(id) === entry;
     setSsh(entry, { status: "starting", detail: `Connecting to ${entry.config.label}…` });
-    if (await sshPort().isLocalTarget(entry.config).catch(() => false)) {
+    if (
+      await sshPort()
+        .isLocalTarget(entry.config)
+        .catch(() => false)
+    ) {
       dropSshDevices(entry);
       setSsh(entry, {
         status: "unavailable",
@@ -1287,7 +1452,14 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   async function reclaimLocal(specs: ToolMaintenanceSpec[]): Promise<void> {
     // Keeps the newest previous install as a fallback; never touches a version a running helper uses.
     await localNodePath()
-      .then((nodePath) => maintain({ nodePath, toolsRoot: path.join(deps.baseDir, "tools"), specs, policy: "reclaim" }))
+      .then((nodePath) =>
+        maintain({
+          nodePath,
+          toolsRoot: path.join(deps.baseDir, "tools"),
+          specs,
+          policy: "reclaim",
+        }),
+      )
       .catch(() => undefined);
   }
 
@@ -1315,14 +1487,22 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     requireInstallConsent(tool, approval);
     setHost({
       status: "installing",
-      detail: deviceToolInstallMessage(tool === "hub" ? "the device hub" : "agent tools", before[tool]),
+      detail: deviceToolInstallMessage(
+        tool === "hub" ? "the device hub" : "agent tools",
+        before[tool],
+      ),
     });
     try {
       await host.installTool(tool);
     } catch (error) {
       await refreshLocalTools();
-      if (error instanceof DeviceHostUnavailableError) setHost({ status: "error", detail: error.reason });
-      else setHost({ status: "error", detail: `Updating ${spec.name} failed: ${errorMessage(error)}` });
+      if (error instanceof DeviceHostUnavailableError)
+        setHost({ status: "error", detail: error.reason });
+      else
+        setHost({
+          status: "error",
+          detail: `Updating ${spec.name} failed: ${errorMessage(error)}`,
+        });
       throw error instanceof DeviceHostUnavailableError ? new Error(error.reason) : error;
     }
     // A daemon an older agent-device started must not keep serving; the next agent call starts the new one.
@@ -1352,7 +1532,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     if (consent.agentAccess && toolNeedsUpdate(localTools?.agent)) {
       await installLocalTool("agent", approval).catch(() => undefined);
     }
-    await listDevices(ready).catch((error) => setHost({ status: "error", detail: errorMessage(error) }));
+    await listDevices(ready).catch((error) =>
+      setHost({ status: "error", detail: errorMessage(error) }),
+    );
     await refreshLocalTools();
     emit();
   }
@@ -1380,7 +1562,12 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     } finally {
       agentStarts.delete(preparing);
     }
-    if (epoch !== consentEpoch || !consent.streaming || !consent.agentAccess || ssh.get(input.hostId) !== entry) {
+    if (
+      epoch !== consentEpoch ||
+      !consent.streaming ||
+      !consent.agentAccess ||
+      ssh.get(input.hostId) !== entry
+    ) {
       await entry.host.stopAgent().catch(() => undefined);
       throw new Error(AGENT_ACCESS_OFF);
     }
@@ -1395,7 +1582,12 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     await writeAgentDeviceConfig(config, ready.agentDevice);
     return {
       command: shim.command,
-      args: ["--config", config, "--session", agentDeviceSession(input.chatId, input.hostId, input.deviceId)],
+      args: [
+        "--config",
+        config,
+        "--session",
+        agentDeviceSession(input.chatId, input.hostId, input.deviceId),
+      ],
     };
   }
 
@@ -1485,7 +1677,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       if (epoch !== consentEpoch) return snapshot();
       if (kind === "streaming") {
         const ready = await start(true);
-        if (ready) await listDevices(ready).catch((error) => setHost({ status: "error", detail: errorMessage(error) }));
+        if (ready)
+          await listDevices(ready).catch((error) =>
+            setHost({ status: "error", detail: errorMessage(error) }),
+          );
       }
       return snapshot();
     },
@@ -1520,8 +1715,13 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
           shimDir = null;
           await refreshLocalTools();
           setHost(await idleStatus());
-          const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
-          if (failed) throw new Error(`Some simulator tool files could not be deleted: ${errorMessage(failed.reason)}`);
+          const failed = results.find(
+            (result): result is PromiseRejectedResult => result.status === "rejected",
+          );
+          if (failed)
+            throw new Error(
+              `Some simulator tool files could not be deleted: ${errorMessage(failed.reason)}`,
+            );
           return snapshot();
         } finally {
           removing = null;
@@ -1568,15 +1768,25 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         if (closeCount(input.chatId, hostId, input.deviceId) !== closed) {
           throw new Error("The simulator was closed while it was opening.");
         }
-        entry.devices = entry.devices.map((candidate) => (candidate.id === attached.id ? attached : candidate));
+        entry.devices = entry.devices.map((candidate) =>
+          candidate.id === attached.id ? attached : candidate,
+        );
         const existing = sessions.find(
-          (session) => session.chatId === input.chatId && session.hostId === hostId && session.deviceId === device.id,
+          (session) =>
+            session.chatId === input.chatId &&
+            session.hostId === hostId &&
+            session.deviceId === device.id,
         );
         if (existing) {
           emit();
           return { ...existing };
         }
-        const session: DeviceSession = { chatId: input.chatId, hostId, deviceId: device.id, openedBy: input.openedBy };
+        const session: DeviceSession = {
+          chatId: input.chatId,
+          hostId,
+          deviceId: device.id,
+          openedBy: input.openedBy,
+        };
         sessions = [...sessions, session];
         emit();
         return { ...session };
@@ -1603,17 +1813,29 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
           isEmulatorSerial(opened.id) &&
           !entry.devices.some((device) => device.id === opened.id);
         if (opened.id !== input.deviceId && !renamedAvd) {
-          throw new Error("The paired Mac answered with a different device. Refresh and try again.");
+          throw new Error(
+            "The paired Mac answered with a different device. Refresh and try again.",
+          );
         }
-        entry.devices = entry.devices.map((device) => (device.id === input.deviceId ? { ...opened, hostId } : device));
+        entry.devices = entry.devices.map((device) =>
+          device.id === input.deviceId ? { ...opened, hostId } : device,
+        );
         const existing = sessions.find(
-          (session) => session.chatId === input.chatId && session.hostId === hostId && session.deviceId === opened.id,
+          (session) =>
+            session.chatId === input.chatId &&
+            session.hostId === hostId &&
+            session.deviceId === opened.id,
         );
         if (existing) {
           emit();
           return { ...existing };
         }
-        const session: DeviceSession = { chatId: input.chatId, hostId, deviceId: opened.id, openedBy: input.openedBy };
+        const session: DeviceSession = {
+          chatId: input.chatId,
+          hostId,
+          deviceId: opened.id,
+          openedBy: input.openedBy,
+        };
         sessions = [...sessions, session];
         emit();
         return { ...session };
@@ -1621,10 +1843,14 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       const ready = requireReady(hostId);
       const epoch = streamingEpoch;
       const closed = closeCount(input.chatId, hostId, input.deviceId);
-      let device = devices.find((candidate) => candidate.hostId === hostId && candidate.id === input.deviceId);
+      let device = devices.find(
+        (candidate) => candidate.hostId === hostId && candidate.id === input.deviceId,
+      );
       if (!device) {
         await listDevices(ready);
-        device = devices.find((candidate) => candidate.hostId === hostId && candidate.id === input.deviceId);
+        device = devices.find(
+          (candidate) => candidate.hostId === hostId && candidate.id === input.deviceId,
+        );
       }
       if (!device) throw new Error("That simulator is no longer available.");
       const attached = await attach(ready, device);
@@ -1638,13 +1864,20 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       // Looked up after the boot, so concurrent opens share one session and a close meanwhile sticks.
       const existing = sessions.find(
         (session) =>
-          session.chatId === input.chatId && session.hostId === hostId && session.deviceId === attached.id,
+          session.chatId === input.chatId &&
+          session.hostId === hostId &&
+          session.deviceId === attached.id,
       );
       if (existing) {
         emit();
         return { ...existing };
       }
-      const session: DeviceSession = { chatId: input.chatId, hostId, deviceId: attached.id, openedBy: input.openedBy };
+      const session: DeviceSession = {
+        chatId: input.chatId,
+        hostId,
+        deviceId: attached.id,
+        openedBy: input.openedBy,
+      };
       sessions = [...sessions, session];
       emit();
       return { ...session };
@@ -1654,7 +1887,11 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       bumpClose(sessionKey(input.chatId, input.hostId, input.deviceId));
       sessions = sessions.filter(
         (session) =>
-          !(session.chatId === input.chatId && session.hostId === input.hostId && session.deviceId === input.deviceId),
+          !(
+            session.chatId === input.chatId &&
+            session.hostId === input.hostId &&
+            session.deviceId === input.deviceId
+          ),
       );
       if (input.shutdown && ssh.has(input.hostId)) {
         const { entry, ready } = requireSsh(input.hostId);
@@ -1673,7 +1910,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         );
       } else if (input.shutdown) {
         const ready = requireReady(input.hostId);
-        const device = devices.find((candidate) => candidate.hostId === input.hostId && candidate.id === input.deviceId);
+        const device = devices.find(
+          (candidate) => candidate.hostId === input.hostId && candidate.id === input.deviceId,
+        );
         if (device?.platform === "android") {
           await shutdownLocal(ready, input.deviceId);
         } else {
@@ -1682,16 +1921,19 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
           });
           if (result.code !== 0) throw new Error("The simulator did not shut down.");
           devices = devices.map((candidate) =>
-            candidate.hostId === input.hostId && candidate.id === input.deviceId ? { ...candidate, booted: false } : candidate,
+            candidate.hostId === input.hostId && candidate.id === input.deviceId
+              ? { ...candidate, booted: false }
+              : candidate,
           );
         }
       }
       emit();
     },
     closeChat(chatId) {
-      void rm(path.join(deps.baseDir, "screenshots", chatKey(chatId)), { recursive: true, force: true }).catch(
-        () => undefined,
-      );
+      void rm(path.join(deps.baseDir, "screenshots", chatKey(chatId)), {
+        recursive: true,
+        force: true,
+      }).catch(() => undefined);
       bumpClose(chatCloseKey(chatId));
       const remaining = sessions.filter((session) => session.chatId !== chatId);
       if (remaining.length === sessions.length) return;
@@ -1721,20 +1963,30 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     async screenshot(input) {
       await load();
       if (input.hostId !== host.id && !ssh.has(input.hostId)) {
-        const platform = requirePeer(input.hostId).devices.find((device) => device.id === input.deviceId)?.platform;
+        const platform = requirePeer(input.hostId).devices.find(
+          (device) => device.id === input.deviceId,
+        )?.platform;
         return peerPort().screenshot(input.hostId, input.deviceId, platform ?? "ios");
       }
       const ready = requireReady(input.hostId);
       const android =
-        devices.find((device) => device.hostId === input.hostId && device.id === input.deviceId)?.platform === "android";
+        devices.find((device) => device.hostId === input.hostId && device.id === input.deviceId)
+          ?.platform === "android";
       const response = android
         ? await deps.fetch(
             `${ready.hub.origin}/vendor/serve-emu/api/screenshot?${new URLSearchParams({ device: input.deviceId })}`,
             { method: "GET", signal: AbortSignal.timeout(HUB_REQUEST_TIMEOUT_MS) },
           )
-        : await postHub(ready, "/vendor/serve-sim/api/screenshot", { udid: input.deviceId }, HUB_REQUEST_TIMEOUT_MS);
+        : await postHub(
+            ready,
+            "/vendor/serve-sim/api/screenshot",
+            { udid: input.deviceId },
+            HUB_REQUEST_TIMEOUT_MS,
+          );
       if (!response.ok || !(response.headers.get("content-type") ?? "").startsWith("image/png")) {
-        throw new Error(android ? "The emulator screenshot failed." : "The simulator screenshot failed.");
+        throw new Error(
+          android ? "The emulator screenshot failed." : "The simulator screenshot failed.",
+        );
       }
       return Buffer.from(await response.arrayBuffer());
     },
@@ -1742,7 +1994,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       await load();
       if (input.hostId !== host.id) throw new Error("This works only with simulators on this Mac.");
       const ready = requireReady(input.hostId);
-      const device = devices.find((candidate) => candidate.hostId === input.hostId && candidate.id === input.deviceId);
+      const device = devices.find(
+        (candidate) => candidate.hostId === input.hostId && candidate.id === input.deviceId,
+      );
       if (!device) throw new Error("That simulator is no longer available.");
       if (input.booted && !device.booted) throw new Error("Open the simulator first.");
       return { ready, device: { ...device } };
@@ -1763,18 +2017,24 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     async streamGrant() {
       await load();
       const localReady = consent.streaming && host.current() !== null;
-      const peerReady = consent.streaming && [...peers.values()].some((entry) => entry.state.status === "ready");
-      const sshReady = consent.streaming && [...ssh.values()].some((entry) => entry.state.status === "ready");
+      const peerReady =
+        consent.streaming && [...peers.values()].some((entry) => entry.state.status === "ready");
+      const sshReady =
+        consent.streaming && [...ssh.values()].some((entry) => entry.state.status === "ready");
       if (!localReady && !peerReady && !sshReady) requireReady(host.id);
       proxy ??= deps.startProxy((hostId) => {
-        if (hostId === host.id) return consent.streaming ? (host.current()?.hub.origin ?? null) : null;
+        if (hostId === host.id)
+          return consent.streaming ? (host.current()?.hub.origin ?? null) : null;
         // An SSH host's hub is reached through its forwarded loopback port, never directly.
         const sshEntry = ssh.get(hostId);
         if (sshEntry) {
-          return consent.streaming && sshEntry.state.status === "ready" ? (sshEntry.host.current()?.hub.origin ?? null) : null;
+          return consent.streaming && sshEntry.state.status === "ready"
+            ? (sshEntry.host.current()?.hub.origin ?? null)
+            : null;
         }
         // A paired Mac is reachable only after a refresh reported it ready.
-        if (!consent.streaming || peers.get(hostId)?.state.status !== "ready" || !deps.peers) return null;
+        if (!consent.streaming || peers.get(hostId)?.state.status !== "ready" || !deps.peers)
+          return null;
         return deps.peers.upstream(hostId);
       });
       try {
@@ -1818,7 +2078,12 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       await writeAgentDeviceConfig(config, prepared.ready.agentDevice);
       return {
         command: prepared.shim.command,
-        args: ["--config", config, "--session", agentDeviceSession(input.chatId, input.hostId, input.deviceId)],
+        args: [
+          "--config",
+          config,
+          "--session",
+          agentDeviceSession(input.chatId, input.hostId, input.deviceId),
+        ],
       };
     },
     agentShimDir: () => (consent.streaming && consent.agentAccess ? shimDir : null),
@@ -1873,8 +2138,12 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       if (!entry) throw new Error(`Unknown device host ${hostId}.`);
       // Pressing Install or Update on an SSH host is the approval to install there.
       const approved = sshConsent(hostId);
-      const nextConsent: SshHostToolConsent = tool === "hub" ? { ...approved, hub: true } : { hub: true, agent: true };
-      await saveSshStore({ ...sshStored, toolConsent: { ...sshStored.toolConsent, [hostId]: nextConsent } });
+      const nextConsent: SshHostToolConsent =
+        tool === "hub" ? { ...approved, hub: true } : { hub: true, agent: true };
+      await saveSshStore({
+        ...sshStored,
+        toolConsent: { ...sshStored.toolConsent, [hostId]: nextConsent },
+      });
       try {
         requireInstallConsent(tool, approval);
       } catch (error) {
@@ -1886,7 +2155,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         throw error;
       }
       // connectSsh rechecks streaming itself right before a hub install.
-      if (tool === "hub" || entry.state.status !== "ready") await connectSsh(entry, { allowInstall: true });
+      if (tool === "hub" || entry.state.status !== "ready")
+        await connectSsh(entry, { allowInstall: true });
       if (tool === "agent" && ssh.get(hostId) === entry && entry.state.status === "ready") {
         requireInstallConsent("agent", approval);
         try {
@@ -1957,7 +2227,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       const entry = ssh.get(hostId);
       if (!entry) throw new Error(`Unknown device host ${hostId}.`);
       const { [hostId]: _dropped, ...toolConsent } = sshStored.toolConsent;
-      await saveSshStore({ hosts: sshStored.hosts.filter((saved) => saved.id !== hostId), toolConsent });
+      await saveSshStore({
+        hosts: sshStored.hosts.filter((saved) => saved.id !== hostId),
+        toolConsent,
+      });
       await forgetSshEntry(entry);
       emit();
       return snapshot();
@@ -1994,7 +2267,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       for (const entry of entries) entry.unsubscribe();
       ssh.clear();
       // Every tunnel closes immediately; each host's own helpers get a bounded chance to stop.
-      await withinBudget(Promise.all(entries.map((entry) => entry.host.stop())), SSH_STOP_BUDGET_MS);
+      await withinBudget(
+        Promise.all(entries.map((entry) => entry.host.stop())),
+        SSH_STOP_BUDGET_MS,
+      );
       for (const audience of SHARE_AUDIENCES) {
         for (const listener of sharingListeners[audience]) listener(false);
         sharingListeners[audience].clear();

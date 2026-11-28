@@ -75,16 +75,27 @@ export function isChatTriagePatch(value: unknown): value is ChatTriagePatch {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
-  if (keys.length === 0 || keys.some((key) => key !== "pinned" && key !== "done" && key !== "snoozeUntil" && key !== "restoreDoneAt")) {
+  if (
+    keys.length === 0 ||
+    keys.some(
+      (key) =>
+        key !== "pinned" && key !== "done" && key !== "snoozeUntil" && key !== "restoreDoneAt",
+    )
+  ) {
     return false;
   }
-  if ("restoreDoneAt" in record && (record.done !== true || !isWhole(record.restoreDoneAt))) return false;
+  if ("restoreDoneAt" in record && (record.done !== true || !isWhole(record.restoreDoneAt)))
+    return false;
   if ("pinned" in record && typeof record.pinned !== "boolean") return false;
   if ("done" in record && typeof record.done !== "boolean") return false;
   if (
     "snoozeUntil" in record &&
     record.snoozeUntil !== null &&
-    !(typeof record.snoozeUntil === "number" && Number.isSafeInteger(record.snoozeUntil) && record.snoozeUntil > 0)
+    !(
+      typeof record.snoozeUntil === "number" &&
+      Number.isSafeInteger(record.snoozeUntil) &&
+      record.snoozeUntil > 0
+    )
   ) {
     return false;
   }
@@ -106,7 +117,9 @@ export function inverseTriagePatch(
   const inverse: ChatTriagePatch = {};
   if (patch.pinned !== undefined) inverse.pinned = before?.pinnedAt !== undefined;
   if (patch.done !== undefined) {
-    inverse.done = before?.doneAt !== undefined && (lastAssistantAt ?? Number.NEGATIVE_INFINITY) <= before.doneAt;
+    inverse.done =
+      before?.doneAt !== undefined &&
+      (lastAssistantAt ?? Number.NEGATIVE_INFINITY) <= before.doneAt;
     if (inverse.done && before) inverse.restoreDoneAt = before.doneAt;
   }
   if (patch.snoozeUntil !== undefined) inverse.snoozeUntil = before?.snoozedUntil ?? null;
@@ -130,7 +143,15 @@ export const SNOOZE_PRESET_LABELS: Readonly<Record<SnoozePreset, string>> = {
 };
 
 function atLocal(base: Date, dayOffset: number, hour: number): number {
-  const at = new Date(base.getFullYear(), base.getMonth(), base.getDate() + dayOffset, hour, 0, 0, 0);
+  const at = new Date(
+    base.getFullYear(),
+    base.getMonth(),
+    base.getDate() + dayOffset,
+    hour,
+    0,
+    0,
+    0,
+  );
   return at.getTime();
 }
 
@@ -145,14 +166,25 @@ const SNOOZE_HOUR_MS = 60 * 60 * 1_000;
  */
 export function snoozeOptions(now: Date): SnoozeOption[] {
   const hour = now.getTime() + SNOOZE_HOUR_MS;
-  const options: SnoozeOption[] = [{ preset: "hour", label: SNOOZE_PRESET_LABELS.hour, until: hour }];
+  const options: SnoozeOption[] = [
+    { preset: "hour", label: SNOOZE_PRESET_LABELS.hour, until: hour },
+  ];
   const evening = atLocal(now, 0, 18);
-  if (evening > hour) options.push({ preset: "evening", label: SNOOZE_PRESET_LABELS.evening, until: evening });
-  options.push({ preset: "tomorrow", label: SNOOZE_PRESET_LABELS.tomorrow, until: atLocal(now, 1, 9) });
+  if (evening > hour)
+    options.push({ preset: "evening", label: SNOOZE_PRESET_LABELS.evening, until: evening });
+  options.push({
+    preset: "tomorrow",
+    label: SNOOZE_PRESET_LABELS.tomorrow,
+    until: atLocal(now, 1, 9),
+  });
   // Monday is day 1. The next Monday strictly after tomorrow.
-  const nextMonday = ((8 - now.getDay()) % 7) || 7;
+  const nextMonday = (8 - now.getDay()) % 7 || 7;
   const daysToMonday = nextMonday < 2 ? nextMonday + 7 : nextMonday;
-  options.push({ preset: "next_week", label: SNOOZE_PRESET_LABELS.next_week, until: atLocal(now, daysToMonday, 9) });
+  options.push({
+    preset: "next_week",
+    label: SNOOZE_PRESET_LABELS.next_week,
+    until: atLocal(now, daysToMonday, 9),
+  });
   return options;
 }
 

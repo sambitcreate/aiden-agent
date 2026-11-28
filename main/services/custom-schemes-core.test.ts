@@ -38,7 +38,9 @@ test("no custom scheme can bypass CSP, run service workers, or be fetched cross-
 
 test("aiden-design is privileged only with design mode on, and like the others cannot bypass CSP or be fetched", () => {
   assert.equal(
-    customSchemePrivileges({ studioAssets: false, designMode: false }).some(({ scheme }) => scheme === "aiden-design"),
+    customSchemePrivileges({ studioAssets: false, designMode: false }).some(
+      ({ scheme }) => scheme === "aiden-design",
+    ),
     false,
   );
   const schemes = customSchemePrivileges({ studioAssets: false, designMode: true });

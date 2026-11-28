@@ -35,16 +35,26 @@ export function startBotBubbleService(): BotBubbleService {
   const bubbles = botBubbleService();
   stopObserving ??= onBroadcast((channel, botId) => {
     if (channel === "bots:changed") {
-      void bubbles.botsChanged(botId).catch((error: unknown) => logger.warn("bot-bubbles", "Could not check a changed Bot.", error));
+      void bubbles
+        .botsChanged(botId)
+        .catch((error: unknown) =>
+          logger.warn("bot-bubbles", "Could not check a changed Bot.", error),
+        );
     } else if (channel === "app:config-externally-changed") {
       // A hand edit may have flipped a bubble switch.
       void configStore
         .getSettings()
         .then((settings) => bubbles.syncSettings(settings))
-        .catch((error: unknown) => logger.warn("bot-bubbles", "Could not re-read the Bot bubble settings.", error));
+        .catch((error: unknown) =>
+          logger.warn("bot-bubbles", "Could not re-read the Bot bubble settings.", error),
+        );
     }
   });
-  void bubbles.ready().catch((error: unknown) => logger.warn("bot-bubbles", "Could not load the Bot bubbles.", error));
+  void bubbles
+    .ready()
+    .catch((error: unknown) =>
+      logger.warn("bot-bubbles", "Could not load the Bot bubbles.", error),
+    );
   return bubbles;
 }
 

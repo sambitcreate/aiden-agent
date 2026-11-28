@@ -7,7 +7,12 @@ import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentTools, type ToolCall } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
+import {
+  Harness,
+  MemoryStorage,
+  ToolResultEntry,
+  type Conversation,
+} from "@earendil-works/pi-durable";
 import type { BotTranscriptEntry } from "../../../renderer/shared/bot-live.js";
 import {
   BUILT_IN_BROWSER_PROFILES,
@@ -19,9 +24,16 @@ import {
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
 import { createBotComputerControl } from "../bot-computers/control.js";
-import { createBotBrowserHandoffOpener, type BotBrowserHandoffService } from "./bot-browser-handoff.js";
+import {
+  createBotBrowserHandoffOpener,
+  type BotBrowserHandoffService,
+} from "./bot-browser-handoff.js";
 import { createBotComputerHandoffOpener } from "./bot-computer-handoff.js";
-import { BOT_BROWSER_HELD_TAB_TITLE, createBotBrowser, type BotBrowserService } from "./bot-browser-tools.js";
+import {
+  BOT_BROWSER_HELD_TAB_TITLE,
+  createBotBrowser,
+  type BotBrowserService,
+} from "./bot-browser-tools.js";
 import { createBotRegistry, type BotRegistry } from "./bot-extension.js";
 import { openBotHandoff } from "./bot-handoff-open.js";
 import { createBotHandoffs, type BotHandoffs } from "./bot-handoffs.js";
@@ -36,7 +48,11 @@ import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./te
 import { SIGN_IN_ARGS, SIGN_IN_TOOL_NAME, signInEntries } from "./test-support/handoff-fixtures.js";
 
 const ctx = BACKGROUND_CONTEXT;
-const scenarioFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "test-support", "handoff-scenario.ts");
+const scenarioFile = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "test-support",
+  "handoff-scenario.ts",
+);
 const roots: string[] = [];
 function tempProfile(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), "aiden-bot-sign-in-"));
@@ -53,7 +69,12 @@ const SIGNED_IN_TEXT =
 const SKIPPED_TEXT =
   "The person chose not to do this: Sign in to github.com. Do not try another way to do it; say what you will do instead.";
 
-type ToolResultModel = { isError: boolean; toolName: string; toolCallId: string; content: Array<{ text?: string }> };
+type ToolResultModel = {
+  isError: boolean;
+  toolName: string;
+  toolCallId: string;
+  content: Array<{ text?: string }>;
+};
 
 async function signInResults(conversation: Conversation): Promise<ToolResultModel[]> {
   const view = await conversation.context(ctx);
@@ -67,22 +88,40 @@ const textOf = (result: { content: Array<{ type?: string; text?: string }> }) =>
   result.content.map((part) => part.text ?? "").join("");
 
 /** What the chat shows on the person's side for their answers. */
-async function answerRows(conversation: Conversation): Promise<Array<Extract<BotTranscriptEntry, { type: "handoff_result" }>>> {
+async function answerRows(
+  conversation: Conversation,
+): Promise<Array<Extract<BotTranscriptEntry, { type: "handoff_result" }>>> {
   const view = await conversation.context(ctx);
-  return projectBotTranscript(view.entries).flatMap((entry) => (entry.type === "handoff_result" ? [entry] : []));
+  return projectBotTranscript(view.entries).flatMap((entry) =>
+    entry.type === "handoff_result" ? [entry] : [],
+  );
 }
 
-async function memoryHarness(botId: string, handoffs: BotHandoffs, fauxModels: FauxModels, deps: BotSignInDeps = {}) {
+async function memoryHarness(
+  botId: string,
+  handoffs: BotHandoffs,
+  fauxModels: FauxModels,
+  deps: BotSignInDeps = {},
+) {
   const extension = recordingDeps({ tools: signInEntries(handoffs, botId, deps) });
   const registry: BotRegistry = createBotRegistry(botId, extension);
   await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
+  const harness = await Harness.open(
+    new MemoryStorage(),
+    { models: fauxModels.models, registry },
+    ctx,
+  );
   registry.attachHarness(harness);
   const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
   return { harness, root };
 }
 
-async function profileHost(profile: string, botId: string, handoffs: BotHandoffs, fauxModels: FauxModels) {
+async function profileHost(
+  profile: string,
+  botId: string,
+  handoffs: BotHandoffs,
+  fauxModels: FauxModels,
+) {
   const deps = recordingDeps({ tools: signInEntries(handoffs, botId) });
   let registry: BotRegistry | undefined;
   const host = (await createBotHarnessHost({
@@ -96,7 +135,9 @@ async function profileHost(profile: string, botId: string, handoffs: BotHandoffs
 }
 
 const signInOnce = (args: unknown = SIGN_IN_ARGS) =>
-  fauxAssistantMessage([fauxToolCall(SIGN_IN_TOOL_NAME, args as ToolCall["arguments"])], { stopReason: "toolUse" });
+  fauxAssistantMessage([fauxToolCall(SIGN_IN_TOOL_NAME, args as ToolCall["arguments"])], {
+    stopReason: "toolUse",
+  });
 
 test("a Bot asks the person to sign in, waits, and I'm signed in becomes one tool result and one line on their side", async () => {
   const offered: string[][] = [];
@@ -110,12 +151,22 @@ test("a Bot asks the person to sign in, waits, and I'm signed in becomes one too
   const handoffs = createBotHandoffs();
   const { harness, root } = await memoryHarness("bot-s", handoffs, fauxModels);
   try {
-    const settled = (await root.submit({ type: "input", content: "triage my GitHub issues" }, ctx)).wait(ctx);
+    const settled = (
+      await root.submit({ type: "input", content: "triage my GitHub issues" }, ctx)
+    ).wait(ctx);
     await waitFor(() => handoffs.pending("bot-s").length === 1, { what: "the sign-in card" });
     const [card] = handoffs.pending("bot-s");
     assert.ok(offered[0]!.includes(SIGN_IN_TOOL_NAME));
     assert.deepEqual(
-      { kind: card!.kind, source: card!.source, action: card!.action, origin: card!.origin, open: card!.open, target: card!.target, why: card!.why },
+      {
+        kind: card!.kind,
+        source: card!.source,
+        action: card!.action,
+        origin: card!.origin,
+        open: card!.open,
+        target: card!.target,
+        why: card!.why,
+      },
       {
         kind: "sign_in",
         source: "tool",
@@ -137,7 +188,15 @@ test("a Bot asks the person to sign in, waits, and I'm signed in becomes one too
     const rows = await answerRows(root);
     assert.deepEqual(
       rows.map(({ id, kind, outcome, action, origin }) => ({ id, kind, outcome, action, origin })),
-      [{ id: `handoff:${card!.toolCallId}`, kind: "sign_in", outcome: "done", action: "Sign in to github.com", origin: "https://github.com" }],
+      [
+        {
+          id: `handoff:${card!.toolCallId}`,
+          kind: "sign_in",
+          outcome: "done",
+          action: "Sign in to github.com",
+          origin: "https://github.com",
+        },
+      ],
     );
     assert.equal(fauxModels.calls(), 2, "the model continues once, after the answer");
   } finally {
@@ -146,7 +205,10 @@ test("a Bot asks the person to sign in, waits, and I'm signed in becomes one too
 });
 
 test("Skip tells the model not to find another way in, and reads as skipped on the person's side", async () => {
-  const fauxModels = createFauxModels([signInOnce({ site: "github.com" }), fauxAssistantMessage("Okay, I'll work from what you paste.")]);
+  const fauxModels = createFauxModels([
+    signInOnce({ site: "github.com" }),
+    fauxAssistantMessage("Okay, I'll work from what you paste."),
+  ]);
   const handoffs = createBotHandoffs();
   const { harness, root } = await memoryHarness("bot-skip", handoffs, fauxModels);
   try {
@@ -154,11 +216,20 @@ test("Skip tells the model not to find another way in, and reads as skipped on t
     await waitFor(() => handoffs.pending("bot-skip").length === 1, { what: "the sign-in card" });
     const [card] = handoffs.pending("bot-skip");
     assert.equal(card!.why, undefined);
-    assert.equal(handoffs.answer("bot-skip", card!.waitId, { outcome: "skipped", note: "Use the public page." }), "answered");
+    assert.equal(
+      handoffs.answer("bot-skip", card!.waitId, {
+        outcome: "skipped",
+        note: "Use the public page.",
+      }),
+      "answered",
+    );
     assert.equal((await settled).status, "done");
     const [result] = await signInResults(root);
     assert.equal(textOf(result!), `${SKIPPED_TEXT}\nTheir note: Use the public page.`);
-    assert.deepEqual((await answerRows(root)).map((row) => [row.kind, row.outcome, row.note]), [["sign_in", "skipped", "Use the public page."]]);
+    assert.deepEqual(
+      (await answerRows(root)).map((row) => [row.kind, row.outcome, row.note]),
+      [["sign_in", "skipped", "Use the public page."]],
+    );
   } finally {
     await harness.close(ctx);
   }
@@ -180,8 +251,14 @@ test("a site that isn't a public https site, or a computer the Bot doesn't have,
   const fauxModels = createFauxModels([
     fauxAssistantMessage(
       [
-        ...sites.map((site, index) => fauxToolCall(SIGN_IN_TOOL_NAME, { site }, { id: `bad-${index}` })),
-        fauxToolCall(SIGN_IN_TOOL_NAME, { site: "github.com", where: "computer" }, { id: "computer" }),
+        ...sites.map((site, index) =>
+          fauxToolCall(SIGN_IN_TOOL_NAME, { site }, { id: `bad-${index}` }),
+        ),
+        fauxToolCall(
+          SIGN_IN_TOOL_NAME,
+          { site: "github.com", where: "computer" },
+          { id: "computer" },
+        ),
         fauxToolCall(SIGN_IN_TOOL_NAME, { site: `${"a".repeat(150)}.com` }, { id: "long" }),
       ],
       { stopReason: "toolUse" },
@@ -191,12 +268,20 @@ test("a site that isn't a public https site, or a computer the Bot doesn't have,
   const handoffs = createBotHandoffs();
   let shown = 0;
   handoffs.onChange(() => (shown += handoffs.pending().length));
-  const { harness, root } = await memoryHarness("bot-bad", handoffs, fauxModels, { botName: async () => "Ada" });
+  const { harness, root } = await memoryHarness("bot-bad", handoffs, fauxModels, {
+    botName: async () => "Ada",
+  });
   try {
-    assert.equal((await (await root.submit({ type: "input", content: "sign in" }, ctx)).wait(ctx)).status, "done");
+    assert.equal(
+      (await (await root.submit({ type: "input", content: "sign in" }, ctx)).wait(ctx)).status,
+      "done",
+    );
     const results = await signInResults(root);
     assert.equal(results.length, sites.length + 2);
-    assert.ok(results.every((result) => result.isError), "each bad call failed");
+    assert.ok(
+      results.every((result) => result.isError),
+      "each bad call failed",
+    );
     const byId = new Map(results.map((result) => [result.toolCallId, textOf(result)]));
     for (const [index, site] of sites.entries()) {
       assert.match(byId.get(`bad-${index}`)!, /Use an https site name like github\.com\./u, site);
@@ -234,8 +319,13 @@ test("quitting while a sign-in waits withdraws it; Resume shows it again under t
     assert.equal(again!.waitId, asked!.waitId);
     assert.equal(again!.kind, "sign_in");
     assert.equal(handoffs.answer("bot-quit", asked!.waitId, { outcome: "done" }), "answered");
-    assert.equal((await (await reopened.harness.submission(placed!.id, ctx))!.wait(ctx)).status, "done");
-    const answered = (await signInResults(reopened.conversation)).filter((result) => !result.isError);
+    assert.equal(
+      (await (await reopened.harness.submission(placed!.id, ctx))!.wait(ctx)).status,
+      "done",
+    );
+    const answered = (await signInResults(reopened.conversation)).filter(
+      (result) => !result.isError,
+    );
     assert.deepEqual(answered.map(textOf), [SIGNED_IN_TEXT]);
     assert.equal(fauxModels.calls(), 1, "the sign-in is not re-generated, only the follow-up");
   } finally {
@@ -245,18 +335,30 @@ test("quitting while a sign-in waits withdraws it; Resume shows it again under t
 
 test("after SIGKILL while a sign-in waits, Resume shows it under the same waitId and applies one answer", async () => {
   const profile = tempProfile();
-  const child = spawnHarnessChild("scenario", [scenarioFile, JSON.stringify({ profileDir: profile, botId: "bot-s-kill", signIn: true })]);
+  const child = spawnHarnessChild("scenario", [
+    scenarioFile,
+    JSON.stringify({ profileDir: profile, botId: "bot-s-kill", signIn: true }),
+  ]);
   const childWaitId = await child.waitFor("HANDOFF");
   await child.kill();
 
   const handoffs = createBotHandoffs();
   const fauxModels = createFauxModels([fauxAssistantMessage("Thanks, I'll carry on.")]);
-  const { host, harness, conversation } = await profileHost(profile, "bot-s-kill", handoffs, fauxModels);
+  const { host, harness, conversation } = await profileHost(
+    profile,
+    "bot-s-kill",
+    handoffs,
+    fauxModels,
+  );
   try {
     const [placed] = (await harness.inspect(ctx)).submissions;
     harness.resume();
     await waitFor(() => handoffs.pending("bot-s-kill").length === 1, { what: "the re-shown card" });
-    assert.equal(handoffs.pending("bot-s-kill")[0]!.waitId, childWaitId, "the card keeps its waitId");
+    assert.equal(
+      handoffs.pending("bot-s-kill")[0]!.waitId,
+      childWaitId,
+      "the card keeps its waitId",
+    );
     assert.equal(handoffs.answer("bot-s-kill", childWaitId, { outcome: "done" }), "answered");
     assert.equal(handoffs.answer("bot-s-kill", childWaitId, { outcome: "skipped" }), "not_waiting");
     assert.equal((await (await harness.submission(placed!.id, ctx))!.wait(ctx)).status, "done");
@@ -282,9 +384,24 @@ const WINDOW: RendererDocumentOwner = {
 
 function browserTab(id: string, url: string): BrowserTab {
   return {
-    id, workspaceId: WORKSPACE, profileId: "bot:bot-tab", url, title: `Page ${id}`, loading: false, canGoBack: true,
-    canGoForward: false, crashed: false, audible: false, muted: false, viewport: { mode: "fill", width: 1280, height: 720 },
-    appearance: "system", zoom: 1, recording: false, agentControlling: false, floating: false, visible: true,
+    id,
+    workspaceId: WORKSPACE,
+    profileId: "bot:bot-tab",
+    url,
+    title: `Page ${id}`,
+    loading: false,
+    canGoBack: true,
+    canGoForward: false,
+    crashed: false,
+    audible: false,
+    muted: false,
+    viewport: { mode: "fill", width: 1280, height: 720 },
+    appearance: "system",
+    zoom: 1,
+    recording: false,
+    agentControlling: false,
+    floating: false,
+    visible: true,
   };
 }
 
@@ -296,9 +413,16 @@ function fakeBotBrowser() {
   const tabs: BrowserTab[] = [browserTab("tab-1", "https://github.com/issues")];
   const holds = new Map<string, string>();
   const state = (): BrowserState => ({
-    workspaceId: WORKSPACE, revision: 1, tabs: structuredClone(tabs), activeTabId: tabs[tabs.length - 1]?.id ?? null,
-    profiles: structuredClone(BUILT_IN_BROWSER_PROFILES), defaults: structuredClone(DEFAULT_BROWSER_SETTINGS),
-    agentAccessOverride: "inherit", agentAccessAllowed: true, history: [], servers: [],
+    workspaceId: WORKSPACE,
+    revision: 1,
+    tabs: structuredClone(tabs),
+    activeTabId: tabs[tabs.length - 1]?.id ?? null,
+    profiles: structuredClone(BUILT_IN_BROWSER_PROFILES),
+    defaults: structuredClone(DEFAULT_BROWSER_SETTINGS),
+    agentAccessOverride: "inherit",
+    agentAccessAllowed: true,
+    history: [],
+    servers: [],
   });
   const opened: BrowserCommand[] = [];
   const service: BotBrowserHandoffService & BotBrowserService = {
@@ -326,7 +450,13 @@ function fakeBotBrowser() {
         delete tab.heldForPerson;
       }
     },
-    getApprovalTarget: (workspaceId, tabId) => ({ workspaceId, tabId: tabId ?? "tab-1", url: "https://github.com/issues", documentRevision: "doc:1", controlRevision: 0 }),
+    getApprovalTarget: (workspaceId, tabId) => ({
+      workspaceId,
+      tabId: tabId ?? "tab-1",
+      url: "https://github.com/issues",
+      documentRevision: "doc:1",
+      controlRevision: 0,
+    }),
     probeAgentTarget: async () => undefined,
     closeBotTabs: () => undefined,
   };
@@ -370,7 +500,13 @@ test("Open sign-in holds a new tab of the Bot's browser for the person; the Bot 
   const fauxModels = createFauxModels([signInOnce(), fauxAssistantMessage("Signed in.")]);
   const { harness, root } = await memoryHarness("bot-tab", handoffs, fauxModels);
   const bot = createBotBrowser({ service: async () => browser.service, mintOwner: () => WINDOW });
-  const tools = await bot.candidates("bot-tab", { workspaceId: WORKSPACE, chatId: "chat-1", generationId: "gen-1", supportsImages: true, botName: "Ada" });
+  const tools = await bot.candidates("bot-tab", {
+    workspaceId: WORKSPACE,
+    chatId: "chat-1",
+    generationId: "gen-1",
+    supportsImages: true,
+    botName: "Ada",
+  });
   const status = tools.find(({ tool }) => tool.name === "browser_status")!.tool;
   const gateway = tools.find(({ tool }) => tool.name === "browser")!.tool;
   try {
@@ -380,22 +516,40 @@ test("Open sign-in holds a new tab of the Bot's browser for the person; the Bot 
     const open = macOpen(browser, handoffs);
 
     assert.equal(await open("bot-tab", card!.waitId), "browser");
-    assert.deepEqual(browser.opened, [{ action: "create", url: "https://github.com", show: true }], "a new tab, at the site's origin");
+    assert.deepEqual(
+      browser.opened,
+      [{ action: "create", url: "https://github.com", show: true }],
+      "a new tab, at the site's origin",
+    );
     assert.equal(browser.holds.get("tab-2"), card!.waitId, "held under the card's wait id");
     assert.deepEqual(browser.tabs[1]!.heldForPerson, { reason: "sign_in" });
 
     // The person moves through the sign-in; the Bot can't follow it.
-    browser.browse("tab-2", "https://github.com/sessions/two-factor?return_to=%2Fissues", "Two-factor authentication");
-    const seen = JSON.parse(textOf(await status.execute("status-1", { tabId: "tab-2" }))) as { url: string; title: string };
+    browser.browse(
+      "tab-2",
+      "https://github.com/sessions/two-factor?return_to=%2Fissues",
+      "Two-factor authentication",
+    );
+    const seen = JSON.parse(textOf(await status.execute("status-1", { tabId: "tab-2" }))) as {
+      url: string;
+      title: string;
+    };
     assert.deepEqual([seen.url, seen.title], ["", BOT_BROWSER_HELD_TAB_TITLE]);
     const listing = textOf(await gateway.execute("gateway-1", {}));
-    assert.equal(listing.includes("two-factor"), false, "the gateway lists the tab without its address");
+    assert.equal(
+      listing.includes("two-factor"),
+      false,
+      "the gateway lists the tab without its address",
+    );
     assert.equal(listing.includes("Two-factor authentication"), false);
     assert.match(listing, /"usedByThePerson":true/u);
 
     // Open again brings the same tab back rather than opening another.
     assert.equal(await open("bot-tab", card!.waitId), "browser");
-    assert.deepEqual(browser.opened[browser.opened.length - 1], { action: "select", tabId: "tab-2" });
+    assert.deepEqual(browser.opened[browser.opened.length - 1], {
+      action: "select",
+      tabId: "tab-2",
+    });
     assert.equal(browser.tabs.length, 2);
 
     browser.browse("tab-2", "https://github.com/issues", "Issues");
@@ -403,7 +557,10 @@ test("Open sign-in holds a new tab of the Bot's browser for the person; the Bot 
     assert.equal((await settled).status, "done");
     await settledRelease();
     assert.equal(browser.tabs[1]!.heldForPerson, undefined, "the Bot has the tab back");
-    const after = JSON.parse(textOf(await status.execute("status-2", { tabId: "tab-2" }))) as { url: string; title: string };
+    const after = JSON.parse(textOf(await status.execute("status-2", { tabId: "tab-2" }))) as {
+      url: string;
+      title: string;
+    };
     assert.deepEqual([after.url, after.title], ["https://github.com/issues", "Issues"]);
   } finally {
     await harness.close(ctx);
@@ -427,7 +584,10 @@ test("Stop while the person is signing in withdraws the card and gives the Bot i
     await settledRelease();
     assert.equal(browser.tabs[1]!.heldForPerson, undefined);
     assert.equal(browser.holds.size, 0);
-    assert.ok((await signInResults(root)).every((result) => result.isError), "no answer was recorded");
+    assert.ok(
+      (await signInResults(root)).every((result) => result.isError),
+      "no answer was recorded",
+    );
     assert.deepEqual(await answerRows(root), []);
   } finally {
     await harness.close(ctx);
@@ -438,8 +598,16 @@ test("a Bot with its own computer and no browser signs in on the computer: Open 
   const fauxModels = createFauxModels([
     fauxAssistantMessage(
       [
-        fauxToolCall(SIGN_IN_TOOL_NAME, { site: "github.com", where: "browser" }, { id: "browser" }),
-        fauxToolCall(SIGN_IN_TOOL_NAME, { site: "github.com", why: "I need your GitHub account." }, { id: "computer" }),
+        fauxToolCall(
+          SIGN_IN_TOOL_NAME,
+          { site: "github.com", where: "browser" },
+          { id: "browser" },
+        ),
+        fauxToolCall(
+          SIGN_IN_TOOL_NAME,
+          { site: "github.com", why: "I need your GitHub account." },
+          { id: "computer" },
+        ),
       ],
       { stopReason: "toolUse" },
     ),
@@ -451,7 +619,12 @@ test("a Bot with its own computer and no browser signs in on the computer: Open 
   const opener = createBotComputerHandoffOpener({
     host: {
       computer: async () => ({ state: "stopped" }) as never,
-      ensureRunning: async () => ({ vmName: "aiden-bot-pc", ip: "192.168.64.5", vnc: { host: "127.0.0.1", port: 5901, password: "vnc-secret" }, ssh: { host: "192.168.64.5", user: "lume" } }),
+      ensureRunning: async () => ({
+        vmName: "aiden-bot-pc",
+        ip: "192.168.64.5",
+        vnc: { host: "127.0.0.1", port: 5901, password: "vnc-secret" },
+        ssh: { host: "192.168.64.5", user: "lume" },
+      }),
       runGuestCommand: async (_botId, command) => {
         guest.push(command);
         return { exitCode: 0, stdout: "", stderr: "", truncated: false, timedOut: false };
@@ -468,7 +641,9 @@ test("a Bot with its own computer and no browser signs in on the computer: Open 
     targets: { browser: false, computer: true },
   });
   try {
-    const settled = (await root.submit({ type: "input", content: "triage my GitHub issues" }, ctx)).wait(ctx);
+    const settled = (
+      await root.submit({ type: "input", content: "triage my GitHub issues" }, ctx)
+    ).wait(ctx);
     await waitFor(() => handoffs.pending("bot-pc").length === 1, { what: "the sign-in card" });
     const [card] = handoffs.pending("bot-pc");
     assert.equal(card!.target, "computer", "a Bot without a browser signs in on its computer");
@@ -480,8 +655,15 @@ test("a Bot with its own computer and no browser signs in on the computer: Open 
       botComputer: opener,
     });
     assert.equal(opened, "computer");
-    assert.equal(control.controller("bot-pc"), "person", "the person has the computer while they sign in");
-    assert.ok(guest.some((command) => command.includes("https://github.com")), "the site opened in the computer");
+    assert.equal(
+      control.controller("bot-pc"),
+      "person",
+      "the person has the computer while they sign in",
+    );
+    assert.ok(
+      guest.some((command) => command.includes("https://github.com")),
+      "the site opened in the computer",
+    );
 
     assert.equal(handoffs.answer("bot-pc", card!.waitId, { outcome: "done" }), "answered");
     assert.equal((await settled).status, "done");
@@ -490,7 +672,10 @@ test("a Bot with its own computer and no browser signs in on the computer: Open 
     assert.equal(byId.get("browser")!.isError, true);
     assert.match(textOf(byId.get("browser")!), /Ada has no browser to sign in in/u);
     assert.equal(byId.get("computer")!.isError, false);
-    assert.match(textOf(byId.get("computer")!), /Check with a fresh computer capture; never ask for or type their password\./u);
+    assert.match(
+      textOf(byId.get("computer")!),
+      /Check with a fresh computer capture; never ask for or type their password\./u,
+    );
   } finally {
     await harness.close(ctx);
   }
@@ -513,7 +698,9 @@ test("sign-in is offered only with the Browser in the Bot's access, and refused 
       sources: {
         facts: async () =>
           ({
-            authority: { otherCapabilities: capabilities.map((kind) => ({ kind })) } as unknown as BotRuntimeEffectiveAuthority,
+            authority: {
+              otherCapabilities: capabilities.map((kind) => ({ kind })),
+            } as unknown as BotRuntimeEffectiveAuthority,
             mcpTools: async () => new Map(),
             skillToolNames: async () => new Set(),
           }) as unknown as BotToolFacts,
@@ -522,23 +709,53 @@ test("sign-in is offered only with the Browser in the Bot's access, and refused 
     });
   const withBrowser = assemblyFor(["browser"]);
   const names = async (requestId?: string) =>
-    (await withBrowser.currentTools("bot-gate", requestId === undefined ? {} : { requestId })).map((entry) => entry.tool.name);
+    (await withBrowser.currentTools("bot-gate", requestId === undefined ? {} : { requestId })).map(
+      (entry) => entry.tool.name,
+    );
 
   assert.deepEqual(await names("desk-1"), [SIGN_IN_TOOL_NAME]);
-  assert.deepEqual(await names("remote:device:key"), [SIGN_IN_TOOL_NAME], "a phone's turn can ask: the card shows Finish on your Mac");
+  assert.deepEqual(
+    await names("remote:device:key"),
+    [SIGN_IN_TOOL_NAME],
+    "a phone's turn can ask: the card shows Finish on your Mac",
+  );
   // Declared on every turn (a fixed tool list), refused below where nobody can sign in.
   assert.deepEqual(await names("routine:task-1:2026-10-07T09:00:00.000Z"), [SIGN_IN_TOOL_NAME]);
   assert.deepEqual(await names("tg:1:2:0:3"), [SIGN_IN_TOOL_NAME]);
-  assert.deepEqual((await assemblyFor([]).currentTools("bot-gate", { requestId: "desk-1" })).map((entry) => entry.tool.name), []);
+  assert.deepEqual(
+    (await assemblyFor([]).currentTools("bot-gate", { requestId: "desk-1" })).map(
+      (entry) => entry.tool.name,
+    ),
+    [],
+  );
 
   const call = { callId: "c1", args: { site: "github.com" }, signal: new AbortController().signal };
-  assert.deepEqual(await withBrowser.checkPolicy("bot-gate", SIGN_IN_TOOL_NAME, { ...call, requestIds: ["desk-1"] }), { allowed: true });
-  for (const requestIds of [["routine:task-1:2026-10-07T09:00:00.000Z"], ["tg:1:2:0:3"], ["desk-1", "tg:1:2:0:3"]]) {
-    const decision = await withBrowser.checkPolicy("bot-gate", SIGN_IN_TOOL_NAME, { ...call, requestIds });
+  assert.deepEqual(
+    await withBrowser.checkPolicy("bot-gate", SIGN_IN_TOOL_NAME, {
+      ...call,
+      requestIds: ["desk-1"],
+    }),
+    { allowed: true },
+  );
+  for (const requestIds of [
+    ["routine:task-1:2026-10-07T09:00:00.000Z"],
+    ["tg:1:2:0:3"],
+    ["desk-1", "tg:1:2:0:3"],
+  ]) {
+    const decision = await withBrowser.checkPolicy("bot-gate", SIGN_IN_TOOL_NAME, {
+      ...call,
+      requestIds,
+    });
     assert.equal(decision.allowed, false, `refused at call time for ${requestIds.join(", ")}`);
   }
-  assert.deepEqual(await assemblyFor([]).checkPolicy("bot-gate", SIGN_IN_TOOL_NAME, { ...call, requestIds: ["desk-1"] }), {
-    allowed: false,
-    reason: "Sign-in needs the Browser or a computer in this Bot's access.",
-  });
+  assert.deepEqual(
+    await assemblyFor([]).checkPolicy("bot-gate", SIGN_IN_TOOL_NAME, {
+      ...call,
+      requestIds: ["desk-1"],
+    }),
+    {
+      allowed: false,
+      reason: "Sign-in needs the Browser or a computer in this Bot's access.",
+    },
+  );
 });

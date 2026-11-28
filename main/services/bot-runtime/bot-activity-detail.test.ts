@@ -19,7 +19,8 @@ test("a file step names only the file's base name", () => {
 
 test("a command step shows only its description, bounded and redacted; the command never appears", () => {
   const noDescription = botStepDescriptor("run_command", {
-    command: "curl -H 'X-Api-Key: hunter2hunter2' https://x.test && mysql -u root -pS3cretPass && cat ~/.ssh/id_rsa && ls /Taxes2025",
+    command:
+      "curl -H 'X-Api-Key: hunter2hunter2' https://x.test && mysql -u root -pS3cretPass && cat ~/.ssh/id_rsa && ls /Taxes2025",
   });
   assert.deepEqual(noDescription, { kind: "command", label: "Ran a command" });
   const secret = botStepDescriptor("run_command", {
@@ -29,20 +30,33 @@ test("a command step shows only its description, bounded and redacted; the comma
   assert.ok(secret.detail);
   assert.doesNotMatch(secret.detail, /sk-live/u);
   assert.doesNotMatch(secret.detail, /\/Users\/sam/u);
-  const long = botStepDescriptor("run_command", { command: "ls", description: "Tidy the notes and ".repeat(20) }).detail ?? "";
+  const long =
+    botStepDescriptor("run_command", {
+      command: "ls",
+      description: "Tidy the notes and ".repeat(20),
+    }).detail ?? "";
   assert.ok([...long].length <= BOT_STEP_DETAIL_CHARS);
   assert.ok(long.endsWith("…"));
-  assert.equal(botStepDescriptor("run_command", { command: "ls -la", description: "List the folder" }).detail, "List the folder");
+  assert.equal(
+    botStepDescriptor("run_command", { command: "ls -la", description: "List the folder" }).detail,
+    "List the folder",
+  );
 });
 
 test("invisible format characters are stripped, and a secret-shaped search query is redacted", () => {
-  const spoofed = botStepDescriptor("web_search", { query: "invoice\u202Egpj.exe \u200Bnow" }).detail;
+  const spoofed = botStepDescriptor("web_search", {
+    query: "invoice\u202Egpj.exe \u200Bnow",
+  }).detail;
   assert.equal(spoofed, "invoicegpj.exe now");
-  const leaky = botStepDescriptor("web_search", { query: "why does token=sk-live1234567890abcdef fail" }).detail;
+  const leaky = botStepDescriptor("web_search", {
+    query: "why does token=sk-live1234567890abcdef fail",
+  }).detail;
   assert.ok(leaky);
   assert.doesNotMatch(leaky, /sk-live/u);
   // A secret far past the shown length cannot leak through a long query either.
-  const far = botStepDescriptor("web_search", { query: `${"word ".repeat(5_000)}sk-live1234567890abcdef` }).detail ?? "";
+  const far =
+    botStepDescriptor("web_search", { query: `${"word ".repeat(5_000)}sk-live1234567890abcdef` })
+      .detail ?? "";
   assert.doesNotMatch(far, /sk-live/u);
   assert.ok([...far].length <= BOT_STEP_DETAIL_CHARS);
 });
@@ -54,15 +68,24 @@ test("a search step shows its query; a connection step names the app and shows n
     detail: "lisbon trains",
   });
   const NOTION = { id: "srv-1", name: "Notion" };
-  const notion = mcpAgentToolName(NOTION, "search_pages", { configured: [NOTION], inventory: ["search_pages"] });
+  const notion = mcpAgentToolName(NOTION, "search_pages", {
+    configured: [NOTION],
+    inventory: ["search_pages"],
+  });
   assert.deepEqual(botStepDescriptor(notion, { query: "private plans" }), {
     kind: "app",
     label: "Used Notion",
     app: "Notion",
   });
-  assert.deepEqual(botStepDescriptor("ask_user_question", {}), { kind: "waiting", label: "Asked you a question" });
+  assert.deepEqual(botStepDescriptor("ask_user_question", {}), {
+    kind: "waiting",
+    label: "Asked you a question",
+  });
   assert.deepEqual(
-    botStepDescriptor("hand_off", { action: "Enter the 2FA code", open: { url: "https://bank.example/verify" } }),
+    botStepDescriptor("hand_off", {
+      action: "Enter the 2FA code",
+      open: { url: "https://bank.example/verify" },
+    }),
     { kind: "waiting", label: "Handed you a step" },
     "a hand-off is not a question, and its card already shows what it asks",
   );
@@ -72,33 +95,59 @@ test("a search step shows its query; a connection step names the app and shows n
     "a sign-in reads as what it asked, and its card already names the site",
   );
   assert.deepEqual(
-    botStepDescriptor("codemode", { code: "return await tools.notion__search({ query: \"private plans\" });" }),
+    botStepDescriptor("codemode", {
+      code: 'return await tools.notion__search({ query: "private plans" });',
+    }),
     { kind: "working", label: "Ran a script" },
     "a codemode script reads as one step and never shows its code",
   );
-  assert.deepEqual(botStepDescriptor("read_file", "not an object"), { kind: "reading", label: "Read 1 file" });
+  assert.deepEqual(botStepDescriptor("read_file", "not an object"), {
+    kind: "reading",
+    label: "Read 1 file",
+  });
 });
 
 test("a step in the Bot's own computer shows its intent, never the text it types", () => {
-  assert.deepEqual(botStepDescriptor("computer", { action: "click", coordinate: [10, 20], intent: "Click Place order" }), {
-    kind: "app",
-    label: "Used its computer",
-    detail: "Click Place order",
-    app: "its computer",
+  assert.deepEqual(
+    botStepDescriptor("computer", {
+      action: "click",
+      coordinate: [10, 20],
+      intent: "Click Place order",
+    }),
+    {
+      kind: "app",
+      label: "Used its computer",
+      detail: "Click Place order",
+      app: "its computer",
+    },
+  );
+  const typed = botStepDescriptor("computer", {
+    action: "type",
+    text: "hunter2 my password",
+    intent: "Type the search terms",
   });
-  const typed = botStepDescriptor("computer", { action: "type", text: "hunter2 my password", intent: "Type the search terms" });
   assert.equal(typed.detail, "Type the search terms");
   assert.doesNotMatch(JSON.stringify(typed), /hunter2/u);
-  assert.deepEqual(botStepDescriptor("computer", { action: "capture" }), { kind: "app", label: "Used its computer", app: "its computer" });
+  assert.deepEqual(botStepDescriptor("computer", { action: "capture" }), {
+    kind: "app",
+    label: "Used its computer",
+    app: "its computer",
+  });
   assert.deepEqual(
-    botStepDescriptor("computer_shell", { command: "brew install ffmpeg", description: "Install ffmpeg" }),
+    botStepDescriptor("computer_shell", {
+      command: "brew install ffmpeg",
+      description: "Install ffmpeg",
+    }),
     { kind: "command", label: "Ran a command", detail: "Install ffmpeg" },
   );
 });
 
 test("an argument of thousands of spaces is cut without stalling the main process", () => {
   const started = performance.now();
-  const padded = botStepDescriptor("web_search", { query: `tofu${" ".repeat(15_990)}alpha beta gamma delta epsilon` }).detail ?? "";
+  const padded =
+    botStepDescriptor("web_search", {
+      query: `tofu${" ".repeat(15_990)}alpha beta gamma delta epsilon`,
+    }).detail ?? "";
   const blank = botStepDescriptor("web_search", { query: `${" ".repeat(20_000)}tofu` }).detail;
   const elapsed = performance.now() - started;
   assert.ok(elapsed < 250, `took ${elapsed.toFixed(0)} ms`);
@@ -107,10 +156,17 @@ test("an argument of thousands of spaces is cut without stalling the main proces
   assert.ok(blank === undefined || [...blank].length <= BOT_STEP_DETAIL_CHARS);
 });
 
-test('message_bot shows the peer but never message contents',()=>{
- assert.deepEqual(botStepDescriptor('message_bot',{bot:'COS',message:'private'}),{kind:'helper',label:'Messaged COS',app:'COS'});
+test("message_bot shows the peer but never message contents", () => {
+  assert.deepEqual(botStepDescriptor("message_bot", { bot: "COS", message: "private" }), {
+    kind: "helper",
+    label: "Messaged COS",
+    app: "COS",
+  });
 });
 
-test('the message_bot list action reads as a check, not a sent message',()=>{
- assert.deepEqual(botStepDescriptor('message_bot',{action:'list'}),{kind:'helper',label:'Checked which Bots to message'});
+test("the message_bot list action reads as a check, not a sent message", () => {
+  assert.deepEqual(botStepDescriptor("message_bot", { action: "list" }), {
+    kind: "helper",
+    label: "Checked which Bots to message",
+  });
 });

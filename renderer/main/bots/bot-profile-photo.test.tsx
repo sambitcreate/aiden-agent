@@ -49,18 +49,25 @@ function photoIpc(initial: BotRendererCanonicalPhoto | null) {
       return undefined;
     },
   });
-  return { calls, avatarSrc: () => document.querySelector<HTMLImageElement>("img")?.getAttribute("src") ?? null };
+  return {
+    calls,
+    avatarSrc: () => document.querySelector<HTMLImageElement>("img")?.getAttribute("src") ?? null,
+  };
 }
 
 /** Opens the look popover at the top of the Bot's settings and returns its photo buttons. */
 async function openPhotoMenu() {
   fireEvent.click(await screen.findByRole("button", { name: "Change Planner’s look" }));
   const popover = await screen.findByRole("dialog", { name: "Planner’s look" });
-  return within(popover).getAllByRole("button").filter((button) => /photo/u.test(button.textContent ?? ""));
+  return within(popover)
+    .getAllByRole("button")
+    .filter((button) => /photo/u.test(button.textContent ?? ""));
 }
 
 function pickFile(file: File) {
-  const input = document.querySelector<HTMLInputElement>('[data-bot-settings-header] input[type="file"]');
+  const input = document.querySelector<HTMLInputElement>(
+    '[data-bot-settings-header] input[type="file"]',
+  );
   assert.ok(input, "the photo picker is mounted");
   fireEvent.change(input, { target: { files: [file] } });
 }
@@ -71,7 +78,10 @@ test("Choose photo sends the picked PNG to the Bot and the avatar shows it", asy
   await waitFor(() => assert.equal(ipc.avatarSrc(), null));
 
   const items = await openPhotoMenu();
-  assert.deepEqual(items.map((item) => item.textContent), ["Choose photo", "Remove photo"]);
+  assert.deepEqual(
+    items.map((item) => item.textContent),
+    ["Choose photo", "Remove photo"],
+  );
   fireEvent.click(screen.getByRole("button", { name: "Choose photo" }));
   pickFile(new File([PNG_BYTES], "planner.png", { type: "image/png" }));
 
@@ -91,7 +101,10 @@ test("Remove photo removes the Bot's photo and the avatar falls back to its face
 
   await waitFor(() => assert.equal(ipc.avatarSrc(), null));
   const removals = ipc.calls.filter((call) => call.channel === "bots:photo:remove");
-  assert.deepEqual(removals.map((call) => call.args), [["bot-1"]]);
+  assert.deepEqual(
+    removals.map((call) => call.args),
+    [["bot-1"]],
+  );
   assert.equal(ipc.calls.filter((call) => call.channel === "bots:photo:set").length, 0);
 });
 

@@ -1,5 +1,8 @@
 import { parseCompactionModelOverrides } from "../../../renderer/shared/compaction.js";
-import type { CompactionEngine, CompactionModelOverrides } from "../../../renderer/shared/compaction.js";
+import type {
+  CompactionEngine,
+  CompactionModelOverrides,
+} from "../../../renderer/shared/compaction.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import type { SubagentRuntimeTransform } from "./subagent-runtime-authority.js";
 import type { WorkspacePermission } from "../types.js";
@@ -72,10 +75,7 @@ import type {
   SubagentMcpMutationBindingV2,
   SubagentMcpMutationGateV2,
 } from "./subagent-mcp-mutation.js";
-import type {
-  SubagentShellGateV2,
-  SubagentShellToolBindingV2,
-} from "./subagent-shell.js";
+import type { SubagentShellGateV2, SubagentShellToolBindingV2 } from "./subagent-shell.js";
 
 /** The one tool result a Bot reply gets once its helpers' 60 minutes are spent. */
 export const BOT_SUBAGENT_LIMIT_REACHED_RESULT =
@@ -154,9 +154,7 @@ export interface PreparedSubagentRun {
    * Publish a terminal result only if control has not already made `stopped`
    * canonical. A stopped disposition fences every late child settlement.
    */
-  complete(
-    result: SubagentTaskResult,
-  ): "accepted" | "stopped" | Promise<"accepted" | "stopped">;
+  complete(result: SubagentTaskResult): "accepted" | "stopped" | Promise<"accepted" | "stopped">;
 }
 
 export type SubagentTranscriptFactory = (input: {
@@ -172,7 +170,9 @@ export type SubagentTranscriptFactory = (input: {
 export const SUBAGENT_TRANSCRIPT_TURN_END_WAIT_MS = 250;
 
 /** A stopped or timed-out helper's open steps were cancelled, not failed. */
-export function transcriptStatus(status: SubagentTaskResult["status"]): SubagentTranscriptFinishStatus {
+export function transcriptStatus(
+  status: SubagentTaskResult["status"],
+): SubagentTranscriptFinishStatus {
   if (status === "completed") return "completed";
   if (status === "interrupted" || status === "timed_out") return "cancelled";
   return "failed";
@@ -209,7 +209,11 @@ export class SubagentTranscriptRecordings {
       let recorder: SubagentTranscriptRecorder | undefined;
       try {
         recorder = input.runId
-          ? this.transcripts({ runId: input.runId, chatId: input.authority.chatId, task: input.request.task })
+          ? this.transcripts({
+              runId: input.runId,
+              chatId: input.authority.chatId,
+              task: input.request.task,
+            })
           : undefined;
       } catch {
         recorder = undefined;
@@ -239,7 +243,11 @@ export class SubagentTranscriptRecordings {
     while (this.pending.size > 0) await Promise.allSettled([...this.pending]);
   }
 
-  private settleRecorder(runId: string, recorder: SubagentTranscriptRecorder, status: SubagentTranscriptFinishStatus): void {
+  private settleRecorder(
+    runId: string,
+    recorder: SubagentTranscriptRecorder,
+    status: SubagentTranscriptFinishStatus,
+  ): void {
     if (this.live.get(runId) === recorder) this.live.delete(runId);
     // The recorder reports its own save failures; finish never rejects in
     // practice, but a throw here must not reach the child's result.
@@ -327,10 +335,7 @@ export interface SubagentSupervisorInput {
 }
 
 function unionCapabilities(authorities: readonly SubagentAuthorityV2[]) {
-  const scopes = new Map<
-    string,
-    SubagentAuthorityV2["capabilities"]["mcp"][number]
-  >();
+  const scopes = new Map<string, SubagentAuthorityV2["capabilities"]["mcp"][number]>();
   for (const authority of authorities) {
     for (const scope of authority.capabilities.mcp) {
       const key = `${scope.serverId}\0${scope.connectionFingerprint}`;
@@ -339,21 +344,14 @@ function unionCapabilities(authorities: readonly SubagentAuthorityV2[]) {
         scopes.set(key, structuredClone(scope));
         continue;
       }
-      const tools = new Map(
-        existing.tools.map((tool) => [JSON.stringify(tool), tool]),
-      );
-      for (const tool of scope.tools)
-        tools.set(JSON.stringify(tool), structuredClone(tool));
+      const tools = new Map(existing.tools.map((tool) => [JSON.stringify(tool), tool]));
+      for (const tool of scope.tools) tools.set(JSON.stringify(tool), structuredClone(tool));
       scopes.set(key, { ...existing, tools: [...tools.values()] });
     }
   }
   return {
-    workspaceRead: authorities.some(
-      ({ capabilities }) => capabilities.workspaceRead,
-    ),
-    workspaceWrite: authorities.some(
-      ({ capabilities }) => capabilities.workspaceWrite,
-    ),
+    workspaceRead: authorities.some(({ capabilities }) => capabilities.workspaceRead),
+    workspaceWrite: authorities.some(({ capabilities }) => capabilities.workspaceWrite),
     shell: authorities.some(({ capabilities }) => capabilities.shell),
     web: authorities.some(({ capabilities }) => capabilities.web),
     delegation: authorities.some(({ capabilities }) => capabilities.delegation),
@@ -377,9 +375,9 @@ function logicalToolCeiling(authority: SubagentAuthorityV2): string[] {
   ].sort();
 }
 
-function childModelBinding(
-  model: SubagentChildModel<ResolvedModelRuntime> | undefined,
-): { childModel?: SubagentChildModelBinding } {
+function childModelBinding(model: SubagentChildModel<ResolvedModelRuntime> | undefined): {
+  childModel?: SubagentChildModelBinding;
+} {
   return model
     ? { childModel: { runtime: model.runtime, thinkingLevel: model.selection.effort } }
     : {};
@@ -442,10 +440,7 @@ function withPartialWork(
   };
 }
 
-function safeInterruptedResult(
-  request: SubagentTaskRequest,
-  reason?: unknown,
-): SubagentTaskResult {
+function safeInterruptedResult(request: SubagentTaskRequest, reason?: unknown): SubagentTaskResult {
   return {
     role: request.role,
     label: request.label,
@@ -486,10 +481,7 @@ function truncateResultSection(text: string, maximum: number): string {
   return `${text.slice(0, head)}${marker}${text.slice(-(available - head))}`;
 }
 
-function fairSectionBudgets(
-  lengths: readonly number[],
-  total: number,
-): number[] {
+function fairSectionBudgets(lengths: readonly number[], total: number): number[] {
   const budgets = new Array<number>(lengths.length).fill(0);
   const remaining = new Set(lengths.map((_length, index) => index));
   let available = Math.max(0, total);
@@ -509,9 +501,7 @@ function fairSectionBudgets(
   return budgets;
 }
 
-function modelResultLines(
-  model: SubagentChildModel<ResolvedModelRuntime> | undefined,
-): string[] {
+function modelResultLines(model: SubagentChildModel<ResolvedModelRuntime> | undefined): string[] {
   if (!model) return [];
   const { selection } = model;
   return [
@@ -583,9 +573,7 @@ export class SubagentSupervisor {
   private readonly cancellationGraceMs: number;
   private readonly launchBudget: number;
   private readonly recordings: SubagentTranscriptRecordings | undefined;
-  private readonly runChild: (
-    input: RunSubagentChildInput,
-  ) => Promise<SubagentTaskResult>;
+  private readonly runChild: (input: RunSubagentChildInput) => Promise<SubagentTaskResult>;
   private readonly randomUUID: () => string;
   private readonly terminalHealthRuns = new Set<string>();
   /** Children whose SubagentStop hooks already fired. */
@@ -596,23 +584,25 @@ export class SubagentSupervisor {
   private pendingUserGuidance?: () => boolean;
 
   constructor(private readonly input: SubagentSupervisorInput) {
-    this.input = { ...input, compactionModelOverrides: input.compactionModelOverrides
-      ? parseCompactionModelOverrides(input.compactionModelOverrides) : undefined };
+    this.input = {
+      ...input,
+      compactionModelOverrides: input.compactionModelOverrides
+        ? parseCompactionModelOverrides(input.compactionModelOverrides)
+        : undefined,
+    };
     this.now = input.now ?? (() => performance.now());
     this.timeLimit = input.policy?.timeLimit ?? "chat";
     this.clock = input.policy?.replyClock ?? new SubagentReplyClock();
-    this.childDeadlineMs =
-      input.policy?.childDeadlineMs ?? SUBAGENT_TIME_LIMIT_MS[this.timeLimit];
-    this.treeDeadlineMs =
-      input.policy?.treeDeadlineMs ?? SUBAGENT_TIME_LIMIT_MS[this.timeLimit];
+    this.childDeadlineMs = input.policy?.childDeadlineMs ?? SUBAGENT_TIME_LIMIT_MS[this.timeLimit];
+    this.treeDeadlineMs = input.policy?.treeDeadlineMs ?? SUBAGENT_TIME_LIMIT_MS[this.timeLimit];
     this.cancellationGraceMs =
-      input.policy?.cancellationGraceMs ??
-      DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS;
-    this.launchBudget =
-      input.policy?.launchBudget ?? MAX_SUBAGENT_LAUNCHES_PER_GENERATION;
+      input.policy?.cancellationGraceMs ?? DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS;
+    this.launchBudget = input.policy?.launchBudget ?? MAX_SUBAGENT_LAUNCHES_PER_GENERATION;
     this.randomUUID = input.randomUUID ?? randomUUID;
     if (!input.runChild) throw new Error("A subagent child runner must be injected.");
-    this.recordings = input.transcripts ? new SubagentTranscriptRecordings(input.transcripts) : undefined;
+    this.recordings = input.transcripts
+      ? new SubagentTranscriptRecordings(input.transcripts)
+      : undefined;
     this.runChild = this.recordings ? this.recordings.wrap(input.runChild) : input.runChild;
     if (
       (this.timeLimit !== "chat" && this.timeLimit !== "bot") ||
@@ -645,7 +635,10 @@ export class SubagentSupervisor {
    * saves carry on afterwards, while run snapshots are always awaited.
    */
   async flush(options: { transcriptWaitMs?: number } = {}): Promise<void> {
-    await Promise.all([this.input.projector?.flush(), this.flushTranscripts(options.transcriptWaitMs)]);
+    await Promise.all([
+      this.input.projector?.flush(),
+      this.flushTranscripts(options.transcriptWaitMs),
+    ]);
   }
 
   private async flushTranscripts(waitMs: number | undefined): Promise<void> {
@@ -699,7 +692,9 @@ export class SubagentSupervisor {
       // No model policy here: a requested model or effort would otherwise be
       // dropped silently, so the batch fails before any child launches.
       if (tasks.some((task) => task.model !== undefined || task.effort !== undefined)) {
-        throw new Error("Subagent model and effort overrides are not available for this response; omit them to use the current model.");
+        throw new Error(
+          "Subagent model and effort overrides are not available for this response; omit them to use the current model.",
+        );
       }
       return tasks.map(() => inheritFrom);
     }
@@ -722,19 +717,20 @@ export class SubagentSupervisor {
     this.input.projector?.finish(runId, result);
     if (!this.stoppedRuns.has(runId)) {
       this.stoppedRuns.add(runId);
-      this.input.stopHooks?.observe("SubagentStop", {
-        stop_hook_active: false,
-        agent_id: runId,
-        agent_type: result.role,
-        aiden_label: result.label,
-        aiden_status: result.status,
-        last_assistant_message: result.summary.slice(0, SUBAGENT_STOP_HOOK_SUMMARY_CHARS),
-      }, { idempotencyKey: `SubagentStop:${this.input.generationId}:${runId}` });
+      this.input.stopHooks?.observe(
+        "SubagentStop",
+        {
+          stop_hook_active: false,
+          agent_id: runId,
+          agent_type: result.role,
+          aiden_label: result.label,
+          aiden_status: result.status,
+          last_assistant_message: result.summary.slice(0, SUBAGENT_STOP_HOOK_SUMMARY_CHARS),
+        },
+        { idempotencyKey: `SubagentStop:${this.input.generationId}:${runId}` },
+      );
     }
-    if (
-      result.status !== "interrupted" &&
-      !this.terminalHealthRuns.has(runId)
-    ) {
+    if (result.status !== "interrupted" && !this.terminalHealthRuns.has(runId)) {
       this.terminalHealthRuns.add(runId);
       try {
         this.input.healthMetrics?.terminal(result.status);
@@ -745,18 +741,11 @@ export class SubagentSupervisor {
   }
 
   private allocateSafeRunIdentity(): { runId: string; childId: string } {
-    for (
-      let attempt = 0;
-      attempt < MAX_SUBAGENT_IDENTIFIER_ALLOCATION_ATTEMPTS;
-      attempt += 1
-    ) {
+    for (let attempt = 0; attempt < MAX_SUBAGENT_IDENTIFIER_ALLOCATION_ATTEMPTS; attempt += 1) {
       const nonce = this.randomUUID();
       const runId = `run-${nonce}`;
       const childId = `child-${nonce}`;
-      if (
-        isSafeSubagentIdentifier(runId) &&
-        isSafeSubagentIdentifier(childId)
-      ) {
+      if (isSafeSubagentIdentifier(runId) && isSafeSubagentIdentifier(childId)) {
         return { runId, childId };
       }
     }
@@ -782,9 +771,7 @@ export class SubagentSupervisor {
         input.forkContext.mode !== "fork" ||
         input.forkContext.chatId !== this.input.chatId
       ) {
-        throw new Error(
-          "Nested fork context was not captured at the parent tool boundary.",
-        );
+        throw new Error("Nested fork context was not captured at the parent tool boundary.");
       }
     } else if (input.forkContext) {
       throw new Error("Fresh nested context cannot carry a fork capture.");
@@ -797,19 +784,14 @@ export class SubagentSupervisor {
       liveParent.execution !== "foreground" ||
       liveParent.capabilities.delegation !== true
     ) {
-      throw new Error(
-        "Nested subagent parent authority was revoked before launch.",
-      );
+      throw new Error("Nested subagent parent authority was revoked before launch.");
     }
-    if (!this.input.prepareRun)
-      throw new Error("Nested V2 persistence is unavailable.");
+    if (!this.input.prepareRun) throw new Error("Nested V2 persistence is unavailable.");
     const liveDeadlineMs = Math.floor(
       Math.min(input.deadlineMs, input.parentAuthority.expiresAt - Date.now()),
     );
     if (liveDeadlineMs <= 0) {
-      throw new Error(
-        "Nested subagent parent authority expired before launch.",
-      );
+      throw new Error("Nested subagent parent authority expired before launch.");
     }
     const childModels = await this.resolveChildModels(
       request.tasks,
@@ -824,9 +806,7 @@ export class SubagentSupervisor {
     });
     const controllers = request.tasks.map(() => new AbortController());
     const signals = controllers.map((controller) =>
-      input.signal
-        ? AbortSignal.any([input.signal, controller.signal])
-        : controller.signal,
+      input.signal ? AbortSignal.any([input.signal, controller.signal]) : controller.signal,
     );
     const context =
       request.context === "fork"
@@ -843,10 +823,7 @@ export class SubagentSupervisor {
           this.input.prepareRun!({
             identity: identities[index]!,
             task,
-            requestedCapabilities: effectiveSubagentTaskCapabilities(
-              request,
-              task,
-            ),
+            requestedCapabilities: effectiveSubagentTaskCapabilities(request, task),
             contextMode: context.mode,
             contextRevision: context.revisionHash,
             deadlineMs: liveDeadlineMs,
@@ -854,25 +831,20 @@ export class SubagentSupervisor {
             parentAuthority: input.parentAuthority,
             ...childModelBinding(childModels[index]),
             stop: (reason = new Error("Nested subagent run stopped.")) => {
-              if (!controllers[index]!.signal.aborted)
-                controllers[index]!.abort(reason);
+              if (!controllers[index]!.signal.aborted) controllers[index]!.abort(reason);
               input.lease.cancelRun(identities[index]!.runId, reason);
             },
           }),
         ),
       );
       preparationResults.forEach((result, index) => {
-        if (result.status === "fulfilled")
-          prepared.set(identities[index]!.runId, result.value);
+        if (result.status === "fulfilled") prepared.set(identities[index]!.runId, result.value);
       });
       const failed = preparationResults.find(
-        (result): result is PromiseRejectedResult =>
-          result.status === "rejected",
+        (result): result is PromiseRejectedResult => result.status === "rejected",
       );
       if (failed) throw failed.reason;
-      const authorities = identities.map(
-        ({ runId }) => prepared.get(runId)?.authority,
-      );
+      const authorities = identities.map(({ runId }) => prepared.get(runId)?.authority);
       if (authorities.some((authority) => !authority)) {
         throw new Error("Nested V2 authority preparation was incomplete.");
       }
@@ -916,8 +888,7 @@ export class SubagentSupervisor {
           request.tasks.map((task, index) => ({
             node: nodes[index]!,
             deployment:
-              (childModels[index]?.runtime ?? this.input.runtime).provider
-                .deployment === "local"
+              (childModels[index]?.runtime ?? this.input.runtime).provider.deployment === "local"
                 ? "local"
                 : "hosted",
             cancelledResult: safeInterruptedResult(task),
@@ -930,12 +901,9 @@ export class SubagentSupervisor {
                 const authority = await preparedRun.revalidateAuthority?.();
                 if (
                   !authority ||
-                  JSON.stringify(authority) !==
-                    JSON.stringify(authorities[index])
+                  JSON.stringify(authority) !== JSON.stringify(authorities[index])
                 ) {
-                  throw new Error(
-                    "Nested authority changed before provider dispatch.",
-                  );
+                  throw new Error("Nested authority changed before provider dispatch.");
                 }
                 const dispatchDeadlineMs = Math.floor(
                   Math.min(
@@ -945,9 +913,7 @@ export class SubagentSupervisor {
                   ),
                 );
                 if (dispatchDeadlineMs <= 0) {
-                  throw new Error(
-                    "Nested subagent authority expired before provider dispatch.",
-                  );
+                  throw new Error("Nested subagent authority expired before provider dispatch.");
                 }
                 result = await this.runChild({
                   authority: {
@@ -970,11 +936,7 @@ export class SubagentSupervisor {
                   currentV2Authority: preparedRun.currentAuthority,
                   consumeNetworkOperation: preparedRun.consumeNetworkOperation
                     ? (currentAuthority) => {
-                        if (
-                          preparedRun.consumeNetworkOperation?.(
-                            currentAuthority,
-                          ) !== true
-                        ) {
+                        if (preparedRun.consumeNetworkOperation?.(currentAuthority) !== true) {
                           return false;
                         }
                         try {
@@ -998,10 +960,8 @@ export class SubagentSupervisor {
                       }
                     : undefined,
                   prepareOutboundApproval: preparedRun.prepareOutboundApproval,
-                  prepareWorkspaceWriteApproval:
-                    preparedRun.prepareWorkspaceWriteApproval,
-                  prepareMcpMutationApproval:
-                    preparedRun.prepareMcpMutationApproval,
+                  prepareWorkspaceWriteApproval: preparedRun.prepareWorkspaceWriteApproval,
+                  prepareMcpMutationApproval: preparedRun.prepareMcpMutationApproval,
                   prepareShellApproval: preparedRun.prepareShellApproval,
                   context: {
                     mode: context.mode,
@@ -1017,13 +977,14 @@ export class SubagentSupervisor {
                     deadlineMs: dispatchDeadlineMs,
                     timeLimit: this.timeLimit,
                     cancellationGraceMs: this.cancellationGraceMs,
-                    maxTurns: Math.min(task.maxTurns ?? MAX_SUBAGENT_CHILD_TURNS, authority.budgets.maxTurns),
+                    maxTurns: Math.min(
+                      task.maxTurns ?? MAX_SUBAGENT_CHILD_TURNS,
+                      authority.budgets.maxTurns,
+                    ),
                   },
                   telemetry: {
-                    starting: () =>
-                      this.input.projector?.starting(identity.runId),
-                    running: () =>
-                      this.input.projector?.running(identity.runId),
+                    starting: () => this.input.projector?.starting(identity.runId),
+                    running: () => this.input.projector?.running(identity.runId),
                     turnStarted: () => {
                       try {
                         input.ledger.consumeUsage({
@@ -1060,10 +1021,7 @@ export class SubagentSupervisor {
                             : new Error("Subagent tree budget exhausted."),
                         );
                       }
-                      this.input.projector?.toolStarted(
-                        identity.runId,
-                        toolName,
-                      );
+                      this.input.projector?.toolStarted(identity.runId, toolName);
                     },
                     textDelta: (delta) => {
                       try {
@@ -1165,17 +1123,14 @@ export class SubagentSupervisor {
                   : safeFailedResult(task);
               }
               const disposition = await preparedRun.complete(result);
-              if (disposition !== "stopped")
-                this.finishRun(identity.runId, result);
+              if (disposition !== "stopped") this.finishRun(identity.runId, result);
               return result;
             },
           })),
         );
       } catch (error) {
         const reason =
-          error instanceof Error
-            ? error
-            : new Error("Nested subagent reservation failed.");
+          error instanceof Error ? error : new Error("Nested subagent reservation failed.");
         throw reason;
       }
       try {
@@ -1196,23 +1151,15 @@ export class SubagentSupervisor {
         releaseStart();
       } catch (error) {
         const reason =
-          error instanceof Error
-            ? error
-            : new Error("Nested projection durability failed.");
+          error instanceof Error ? error : new Error("Nested projection durability failed.");
         rejectStart(reason);
         input.abortTree(reason);
         await Promise.allSettled([nestedExecution]);
         throw reason;
       }
-      return formatResults(
-        (await nestedExecution) as SubagentTaskResult[],
-        childModels,
-      );
+      return formatResults((await nestedExecution) as SubagentTaskResult[], childModels);
     } catch (error) {
-      const reason =
-        error instanceof Error
-          ? error
-          : new Error("Nested subagent launch failed.");
+      const reason = error instanceof Error ? error : new Error("Nested subagent launch failed.");
       await Promise.allSettled(
         identities
           .map((identity, index) => ({
@@ -1220,17 +1167,13 @@ export class SubagentSupervisor {
             task: request.tasks[index]!,
             prepared: prepared.get(identity.runId),
           }))
-          .filter(
-            ({ identity, prepared }) =>
-              projected.has(identity.runId) && prepared,
-          )
+          .filter(({ identity, prepared }) => projected.has(identity.runId) && prepared)
           .map(async ({ identity, task, prepared }) => {
             const result = input.signal?.aborted
               ? safeInterruptedResult(task)
               : safeFailedResult(task);
             const disposition = await prepared!.complete(result);
-            if (disposition !== "stopped")
-              this.finishRun(identity.runId, result);
+            if (disposition !== "stopped") this.finishRun(identity.runId, result);
           }),
       );
       await Promise.allSettled(
@@ -1242,10 +1185,7 @@ export class SubagentSupervisor {
     }
   }
 
-  async execute(
-    input: SubagentToolRequest | unknown,
-    signal?: AbortSignal,
-  ): Promise<string> {
+  async execute(input: SubagentToolRequest | unknown, signal?: AbortSignal): Promise<string> {
     if (signal?.aborted) {
       throw signal.reason instanceof Error
         ? signal.reason
@@ -1290,9 +1230,7 @@ export class SubagentSupervisor {
     // boundary so an otherwise valid launch cannot fail before admission.
     // The reply's clock starts at its first helper launch.
     const replyStartedAt = this.clock.start(this.now());
-    const remainingTreeMs = Math.floor(
-      this.treeDeadlineMs - (this.now() - replyStartedAt),
-    );
+    const remainingTreeMs = Math.floor(this.treeDeadlineMs - (this.now() - replyStartedAt));
     if (remainingTreeMs <= 0) {
       this.clock.expire();
       if (this.timeLimit === "bot") return BOT_SUBAGENT_LIMIT_REACHED_RESULT;
@@ -1303,12 +1241,8 @@ export class SubagentSupervisor {
       }
       // Preserve the legacy deterministic timeout result when no run lifecycle
       // exists, while sealing the tree against repeated unbounded calls.
-      const results = request.tasks.map((task) =>
-        safeTimedOutResult(task, this.timeLimit),
-      );
-      results.forEach((result, index) =>
-        this.finishRun(identities[index]!.runId, result),
-      );
+      const results = request.tasks.map((task) => safeTimedOutResult(task, this.timeLimit));
+      results.forEach((result, index) => this.finishRun(identities[index]!.runId, result));
       return formatResults(results);
     }
     const deadlineMs = Math.min(this.childDeadlineMs, remainingTreeMs);
@@ -1350,10 +1284,7 @@ export class SubagentSupervisor {
       }
     };
     let resolveSettlementSeal:
-      | ((value: {
-          kind: "sealed";
-          state: "timed_out" | "interrupted";
-        }) => void)
+      | ((value: { kind: "sealed"; state: "timed_out" | "interrupted" }) => void)
       | undefined;
     const settlementSeal = new Promise<{
       kind: "sealed";
@@ -1377,21 +1308,14 @@ export class SubagentSupervisor {
     // race this sentinel. Keep the rejection observed while retaining it as a
     // fail-fast branch for capture and pre-admission checks.
     void executionCancelled.catch(() => undefined);
-    const abortExecution = (
-      kind: "timed_out" | "interrupted",
-      reason: Error,
-    ) => {
+    const abortExecution = (kind: "timed_out" | "interrupted", reason: Error) => {
       cancellationKind ??= kind;
-      if (!executionController.signal.aborted)
-        executionController.abort(reason);
+      if (!executionController.signal.aborted) executionController.abort(reason);
       treeScheduler?.cancel(reason);
       if (settlementTimer) return;
       // A child drains for up to the same grace before it hands over partial
       // work, so the seal waits a little longer and does not drop that work.
-      const sealMarginMs = Math.min(
-        1_000,
-        Math.max(50, Math.ceil(this.cancellationGraceMs / 4)),
-      );
+      const sealMarginMs = Math.min(1_000, Math.max(50, Math.ceil(this.cancellationGraceMs / 4)));
       settlementTimer = setTimeout(
         () =>
           resolveSettlementSeal?.({
@@ -1431,16 +1355,12 @@ export class SubagentSupervisor {
               (async () => {
                 const load = this.input.loadPersistedChatForFork;
                 if (!load) {
-                  throw new Error(
-                    "Forked subagent context is unavailable for this generation.",
-                  );
+                  throw new Error("Forked subagent context is unavailable for this generation.");
                 }
                 const persisted = await load(executionController.signal);
                 const captured = capturePersistedSubagentContext(persisted);
                 if (captured.chatId !== this.input.chatId) {
-                  throw new Error(
-                    "Forked subagent context does not belong to this chat.",
-                  );
+                  throw new Error("Forked subagent context does not belong to this chat.");
                 }
                 return captured;
               })(),
@@ -1465,10 +1385,7 @@ export class SubagentSupervisor {
             this.input.prepareRun!({
               identity: identities[index]!,
               task,
-              requestedCapabilities: effectiveSubagentTaskCapabilities(
-                request,
-                task,
-              ),
+              requestedCapabilities: effectiveSubagentTaskCapabilities(request, task),
               contextMode: contextCapture.mode,
               contextRevision: contextCapture.revisionHash,
               deadlineMs,
@@ -1483,8 +1400,7 @@ export class SubagentSupervisor {
           ),
         );
         const preparationFailure = preparations.find(
-          (preparation): preparation is PromiseRejectedResult =>
-            preparation.status === "rejected",
+          (preparation): preparation is PromiseRejectedResult => preparation.status === "rejected",
         );
         preparations.forEach((preparation, index) => {
           if (preparation.status === "fulfilled") {
@@ -1501,9 +1417,7 @@ export class SubagentSupervisor {
               ? preparationFailure.reason
               : executionController.signal.reason instanceof Error
                 ? executionController.signal.reason
-                : new Error(
-                    "A prepared subagent run was stopped before launch.",
-                  );
+                : new Error("A prepared subagent run was stopped before launch.");
           throw reason;
         }
       }
@@ -1516,11 +1430,7 @@ export class SubagentSupervisor {
       // settled, then await the canonical initial durability barrier.
       for (const [index, task] of request.tasks.entries()) {
         const identity = identities[index]!;
-        this.input.projector?.begin(
-          identity,
-          task,
-          childModelProjection(childModels[index]),
-        );
+        this.input.projector?.begin(identity, task, childModelProjection(childModels[index]));
         projectedRunIds.add(identity.runId);
       }
       // Once projection starts, do not let cancellation race past this exact
@@ -1529,7 +1439,8 @@ export class SubagentSupervisor {
       // same cancellation immediately after the initial write settles.
       await this.input.projector?.flush();
       childrenLaunched = true;
-      for (const task of request.tasks) reportAnalyticsEvent("subagent_launched", { role: task.role });
+      for (const task of request.tasks)
+        reportAnalyticsEvent("subagent_launched", { role: task.role });
       this.liveBatchStops.add(stopLiveForGuidance);
       if (this.pendingUserGuidance?.()) {
         stopLiveForGuidance(new SubagentUserGuidanceStop());
@@ -1563,12 +1474,9 @@ export class SubagentSupervisor {
             if (
               preparedRun?.authority &&
               (!revalidated ||
-                JSON.stringify(revalidated) !==
-                  JSON.stringify(preparedRun.authority))
+                JSON.stringify(revalidated) !== JSON.stringify(preparedRun.authority))
             ) {
-              throw new Error(
-                "Subagent authority changed before provider dispatch.",
-              );
+              throw new Error("Subagent authority changed before provider dispatch.");
             }
             // A Bot helper that waited for a free slot gets only what is left
             // of the reply, so its report reserve lands before the reply limit.
@@ -1593,10 +1501,9 @@ export class SubagentSupervisor {
               groupId,
               runtime: childModels[index]?.runtime ?? this.input.runtime,
               transformRuntime: this.input.transformRuntime,
-              thinkingLevel:
-                childModels[index]?.selection.effort ?? this.input.thinkingLevel,
+              thinkingLevel: childModels[index]?.selection.effort ?? this.input.thinkingLevel,
               compactionEngine: this.input.compactionEngine,
-                  compactionModelOverrides: this.input.compactionModelOverrides,
+              compactionModelOverrides: this.input.compactionModelOverrides,
               workspaceRoot: this.input.workspaceRoot,
               permission: this.input.permission,
               inheritedCeiling: this.input.inheritedCeiling,
@@ -1604,11 +1511,7 @@ export class SubagentSupervisor {
               currentV2Authority: preparedRun?.currentAuthority,
               consumeNetworkOperation: preparedRun?.consumeNetworkOperation
                 ? (currentAuthority) => {
-                    if (
-                      preparedRun.consumeNetworkOperation?.(
-                        currentAuthority,
-                      ) !== true
-                    ) {
+                    if (preparedRun.consumeNetworkOperation?.(currentAuthority) !== true) {
                       return false;
                     }
                     try {
@@ -1633,10 +1536,8 @@ export class SubagentSupervisor {
                   }
                 : undefined,
               prepareOutboundApproval: preparedRun?.prepareOutboundApproval,
-              prepareWorkspaceWriteApproval:
-                preparedRun?.prepareWorkspaceWriteApproval,
-              prepareMcpMutationApproval:
-                preparedRun?.prepareMcpMutationApproval,
+              prepareWorkspaceWriteApproval: preparedRun?.prepareWorkspaceWriteApproval,
+              prepareMcpMutationApproval: preparedRun?.prepareMcpMutationApproval,
               prepareShellApproval: preparedRun?.prepareShellApproval,
               executeNested:
                 tree && preparedRun?.authority?.capabilities.delegation === true
@@ -1651,8 +1552,7 @@ export class SubagentSupervisor {
                         lease: tree.lease,
                         ledger: tree.ledger,
                         deadlineMs: dispatchDeadlineMs,
-                        abortTree: (reason) =>
-                          abortExecution("interrupted", reason),
+                        abortTree: (reason) => abortExecution("interrupted", reason),
                       })
                   : undefined,
               nestedModelOptions: this.input.modelOptions,
@@ -1692,9 +1592,7 @@ export class SubagentSupervisor {
                     this.treeBudgetExhausted = true;
                     abortExecution(
                       "interrupted",
-                      error instanceof Error
-                        ? error
-                        : new Error("Subagent tree budget exhausted."),
+                      error instanceof Error ? error : new Error("Subagent tree budget exhausted."),
                     );
                   }
                   this.input.projector?.turnStarted(identity.runId);
@@ -1712,9 +1610,7 @@ export class SubagentSupervisor {
                     this.treeBudgetExhausted = true;
                     abortExecution(
                       "interrupted",
-                      error instanceof Error
-                        ? error
-                        : new Error("Subagent tree budget exhausted."),
+                      error instanceof Error ? error : new Error("Subagent tree budget exhausted."),
                     );
                   }
                   this.input.projector?.toolStarted(identity.runId, toolName);
@@ -1732,9 +1628,7 @@ export class SubagentSupervisor {
                     this.treeBudgetExhausted = true;
                     abortExecution(
                       "interrupted",
-                      error instanceof Error
-                        ? error
-                        : new Error("Subagent tree budget exhausted."),
+                      error instanceof Error ? error : new Error("Subagent tree budget exhausted."),
                     );
                   }
                   this.input.projector?.textDelta(identity.runId, delta);
@@ -1752,9 +1646,7 @@ export class SubagentSupervisor {
                     this.treeBudgetExhausted = true;
                     abortExecution(
                       "interrupted",
-                      error instanceof Error
-                        ? error
-                        : new Error("Subagent tree budget exhausted."),
+                      error instanceof Error ? error : new Error("Subagent tree budget exhausted."),
                     );
                   }
                 },
@@ -1771,9 +1663,7 @@ export class SubagentSupervisor {
                     this.treeBudgetExhausted = true;
                     abortExecution(
                       "interrupted",
-                      error instanceof Error
-                        ? error
-                        : new Error("Subagent tree budget exhausted."),
+                      error instanceof Error ? error : new Error("Subagent tree budget exhausted."),
                     );
                   }
                 },
@@ -1790,9 +1680,7 @@ export class SubagentSupervisor {
                     this.treeBudgetExhausted = true;
                     abortExecution(
                       "interrupted",
-                      error instanceof Error
-                        ? error
-                        : new Error("Subagent tree budget exhausted."),
+                      error instanceof Error ? error : new Error("Subagent tree budget exhausted."),
                     );
                   }
                 },
@@ -1809,9 +1697,7 @@ export class SubagentSupervisor {
                     this.treeBudgetExhausted = true;
                     abortExecution(
                       "interrupted",
-                      error instanceof Error
-                        ? error
-                        : new Error("Subagent tree budget exhausted."),
+                      error instanceof Error ? error : new Error("Subagent tree budget exhausted."),
                     );
                   }
                   this.input.projector?.usage(identity.runId, message);
@@ -1824,8 +1710,7 @@ export class SubagentSupervisor {
               !executionController.signal.aborted &&
               !signal?.aborted &&
               !cancellationKind &&
-              (!childStop?.aborted ||
-                childStop.reason instanceof SubagentUserGuidanceStop);
+              (!childStop?.aborted || childStop.reason instanceof SubagentUserGuidanceStop);
           } catch {
             result =
               cancellationKind === "timed_out"
@@ -1841,15 +1726,9 @@ export class SubagentSupervisor {
         const outcome = await Promise.race([childOperation, settlementSeal]);
         settledChildren.add(index);
         if (outcome.kind === "sealed") recordCleanupFailure(identity.runId);
-        if (
-          !cancellationKind &&
-          this.now() - replyStartedAt >= this.treeDeadlineMs
-        ) {
+        if (!cancellationKind && this.now() - replyStartedAt >= this.treeDeadlineMs) {
           this.clock.expire();
-          abortExecution(
-            "timed_out",
-            new Error("Subagent tree deadline elapsed."),
-          );
+          abortExecution("timed_out", new Error("Subagent tree deadline elapsed."));
         }
         // A stopped or timed-out child still hands over the partial work its
         // runner settled (already filtered for the parent), marked unverified.
@@ -1878,14 +1757,9 @@ export class SubagentSupervisor {
         return result;
       };
 
-      const authorities = identities.map(
-        ({ runId }) => preparedRuns.get(runId)?.authority,
-      );
+      const authorities = identities.map(({ runId }) => preparedRuns.get(runId)?.authority);
       if (
-        authorities.every(
-          (authority): authority is SubagentAuthorityV2 =>
-            authority !== undefined,
-        )
+        authorities.every((authority): authority is SubagentAuthorityV2 => authority !== undefined)
       ) {
         const first = authorities[0]!;
         if (
@@ -1902,9 +1776,7 @@ export class SubagentSupervisor {
               authority.depth !== 1,
           )
         ) {
-          throw new Error(
-            "Prepared subagent tree ceilings do not share one exact root.",
-          );
+          throw new Error("Prepared subagent tree ceilings do not share one exact root.");
         }
         const root = createSubagentTreeRootV2({
           treeRootId: first.treeRootId,
@@ -1928,16 +1800,11 @@ export class SubagentSupervisor {
             context: {
               mode: first.context,
               revision: first.contextRevision,
-              maxInputTokens: Math.max(
-                1,
-                this.input.runtime.model.contextWindow ?? 1_000_000,
-              ),
+              maxInputTokens: Math.max(1, this.input.runtime.model.contextWindow ?? 1_000_000),
             },
           },
           capabilities: unionCapabilities(authorities),
-          toolNames: [
-            ...new Set(authorities.flatMap(logicalToolCeiling)),
-          ].sort(),
+          toolNames: [...new Set(authorities.flatMap(logicalToolCeiling))].sort(),
         });
         const nodes = authorities.map((authority) =>
           createSubagentTreeDescendantV2(root, {
@@ -1951,24 +1818,27 @@ export class SubagentSupervisor {
           this.launchBudget - this.launches,
         );
         const remainingTokens =
-          Math.min(...authorities.map(({ budgets }) => budgets.maxTokens)) -
-          this.v2TokensUsed;
+          Math.min(...authorities.map(({ budgets }) => budgets.maxTokens)) - this.v2TokensUsed;
         const remainingToolCalls =
           Math.min(...authorities.map(({ budgets }) => budgets.maxToolCalls)) -
           this.v2ToolCallsUsed;
         const remainingOutputChars =
-          Math.min(
-            ...authorities.map(({ budgets }) => budgets.maxOutputChars),
-          ) - this.v2OutputCharsUsed;
+          Math.min(...authorities.map(({ budgets }) => budgets.maxOutputChars)) -
+          this.v2OutputCharsUsed;
         // Every admitted child contributes its own bounded turn ceiling. A
         // sibling with the default 24 must not silently clamp a 72-turn scout.
-        const nextTurnAllowance = this.v2TurnAllowance +
+        const nextTurnAllowance =
+          this.v2TurnAllowance +
           authorities.reduce((total, authority) => total + authority.budgets.maxTurns, 0);
         const remainingTurns = nextTurnAllowance - this.v2TurnsUsed;
         // Network operations accumulate the same way: each admitted child may
         // spend its own authority's operations, so siblings do not share one.
-        const nextNetworkOperationAllowance = this.v2NetworkOperationAllowance +
-          authorities.reduce((total, authority) => total + authority.budgets.maxNetworkOperations, 0);
+        const nextNetworkOperationAllowance =
+          this.v2NetworkOperationAllowance +
+          authorities.reduce(
+            (total, authority) => total + authority.budgets.maxNetworkOperations,
+            0,
+          );
         const remainingNetworkOperations =
           nextNetworkOperationAllowance - this.v2NetworkOperationsUsed;
         const needsNetworkOperations = authorities.some(
@@ -1991,12 +1861,8 @@ export class SubagentSupervisor {
         const ledger = new SubagentTreeBudgetLedgerV2(first.treeRootId, {
           maxDepth: 2,
           maxLaunches: remainingLaunches,
-          maxActive: Math.min(
-            ...authorities.map(({ budgets }) => budgets.maxActive),
-          ),
-          maxQueued: Math.min(
-            ...authorities.map(({ budgets }) => budgets.maxQueued),
-          ),
+          maxActive: Math.min(...authorities.map(({ budgets }) => budgets.maxActive)),
+          maxQueued: Math.min(...authorities.map(({ budgets }) => budgets.maxQueued)),
           maxTokens: remainingTokens,
           maxToolCalls: remainingToolCalls,
           maxTurns: remainingTurns,
@@ -2023,8 +1889,7 @@ export class SubagentSupervisor {
             request.tasks.map((task, index) => ({
               node: nodes[index]!,
               deployment:
-                (childModels[index]?.runtime ?? this.input.runtime).provider
-                  .deployment === "local"
+                (childModels[index]?.runtime ?? this.input.runtime).provider.deployment === "local"
                   ? "local"
                   : "hosted",
               cancelledResult: safeInterruptedResult(task),
@@ -2056,9 +1921,7 @@ export class SubagentSupervisor {
       }
     } catch (error) {
       const reason =
-        error instanceof Error
-          ? error
-          : new Error("Subagent launch preflight failed.");
+        error instanceof Error ? error : new Error("Subagent launch preflight failed.");
       await Promise.allSettled(
         identities
           .map((identity, index) => ({
@@ -2066,10 +1929,7 @@ export class SubagentSupervisor {
             task: request.tasks[index]!,
             prepared: preparedRuns.get(identity.runId),
           }))
-          .filter(
-            ({ identity, prepared }) =>
-              projectedRunIds.has(identity.runId) && prepared,
-          )
+          .filter(({ identity, prepared }) => projectedRunIds.has(identity.runId) && prepared)
           .map(async ({ identity, task, prepared }) => {
             const result =
               cancellationKind === "timed_out"
@@ -2078,8 +1938,7 @@ export class SubagentSupervisor {
                   ? safeInterruptedResult(task)
                   : safeFailedResult(task);
             const disposition = await prepared!.complete(result);
-            if (disposition !== "stopped")
-              this.finishRun(identity.runId, result);
+            if (disposition !== "stopped") this.finishRun(identity.runId, result);
           }),
       );
       await Promise.allSettled(

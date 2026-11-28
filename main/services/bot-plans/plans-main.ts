@@ -28,11 +28,13 @@ function currentService(): BotPlans {
 
 export const botPlans: BotPlans = {
   request: (request) => currentService().request(request),
-  grantFreshAccess: (botId, planId, apply) => currentService().grantFreshAccess(botId, planId, apply),
+  grantFreshAccess: (botId, planId, apply) =>
+    currentService().grantFreshAccess(botId, planId, apply),
   respond: (botId, planId, decision) => currentService().respond(botId, planId, decision),
   cover: (botId, check) => currentService().cover(botId, check),
   admit: (permit, start) => currentService().admit(permit, start),
-  markStep: (botId, requestIds, step, status) => currentService().markStep(botId, requestIds, step, status),
+  markStep: (botId, requestIds, step, status) =>
+    currentService().markStep(botId, requestIds, step, status),
   endRuns: (botId, reason) => currentService().endRuns(botId, reason),
   current: (botId, planId) => currentService().current(botId, planId),
   onChange: (listener) => currentService().onChange(listener),

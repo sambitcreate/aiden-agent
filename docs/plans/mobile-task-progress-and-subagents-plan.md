@@ -25,15 +25,15 @@ This is follow-on work to `rpiv-todo-integration-plan.md` and `subagent-orchestr
 
 This table and its evidence anchors describe the pre-implementation audit. Current implementation and validation are recorded in [the evidence report](../testing/aiden-on-the-go/mobile-task-progress-and-subagents.md).
 
-| Capability | Desktop | iOS / iPadOS | Android |
-| --- | --- | --- | --- |
-| Parent tool/thinking activity | Implemented | Typed timeline and activity disclosure implemented | Typed timeline and activity disclosure implemented |
-| Durable todo list and current-step chip | Implemented for eligible attended desktop chats | No typed task snapshot or task-progress UI | No typed task snapshot or task-progress UI |
-| Todo on phone-started generations | Not enabled by current runtime eligibility | Missing | Missing |
-| Separate agent count, roster, status, and detail | Implemented on desktop | Deliberately excluded from Remote projection | Deliberately excluded from Remote projection |
-| Delegation during phone-started work | Eligible remote turns may execute parent and children on the Mac | Host enables model delegation, subject to workspace/Bot eligibility; no explicit mobile child-start action | Same server behavior |
-| Files and Git/diff browsing | Implemented | Existing native surfaces | Existing native surfaces |
-| Skills | Desktop command/skill invocation exists | Bot capability selection exists; screenshot-style composer invocation is separate work | Bot capability selection exists; screenshot-style composer invocation is separate work |
+| Capability                                       | Desktop                                                          | iOS / iPadOS                                                                                               | Android                                                                                |
+| ------------------------------------------------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Parent tool/thinking activity                    | Implemented                                                      | Typed timeline and activity disclosure implemented                                                         | Typed timeline and activity disclosure implemented                                     |
+| Durable todo list and current-step chip          | Implemented for eligible attended desktop chats                  | No typed task snapshot or task-progress UI                                                                 | No typed task snapshot or task-progress UI                                             |
+| Todo on phone-started generations                | Not enabled by current runtime eligibility                       | Missing                                                                                                    | Missing                                                                                |
+| Separate agent count, roster, status, and detail | Implemented on desktop                                           | Deliberately excluded from Remote projection                                                               | Deliberately excluded from Remote projection                                           |
+| Delegation during phone-started work             | Eligible remote turns may execute parent and children on the Mac | Host enables model delegation, subject to workspace/Bot eligibility; no explicit mobile child-start action | Same server behavior                                                                   |
+| Files and Git/diff browsing                      | Implemented                                                      | Existing native surfaces                                                                                   | Existing native surfaces                                                               |
+| Skills                                           | Desktop command/skill invocation exists                          | Bot capability selection exists; screenshot-style composer invocation is separate work                     | Bot capability selection exists; screenshot-style composer invocation is separate work |
 
 Tool timeline steps are execution events, not the durable todo plan. Never derive “Step 1 / 3” from tool-call counts or assistant prose. Likewise, a parent reply that incorporates delegated work is not a mobile agent roster.
 

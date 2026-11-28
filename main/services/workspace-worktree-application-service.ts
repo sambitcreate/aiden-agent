@@ -56,7 +56,11 @@ export interface WorkspaceWorktreeApplicationDependencies {
     },
   ): Promise<GitCreatedWorktree>;
   /** Validate a chosen base branch. Required only by `createFromBase`. */
-  resolveWorktreeBase?(folderPath: string, baseRef: string, signal?: AbortSignal): Promise<GitWorktreeBase>;
+  resolveWorktreeBase?(
+    folderPath: string,
+    baseRef: string,
+    signal?: AbortSignal,
+  ): Promise<GitWorktreeBase>;
   /** Fetch one base branch and return its tracking commit. Required only by `createFromBase`. */
   fetchWorktreeBase?(
     folderPath: string,
@@ -92,7 +96,11 @@ export interface WorkspaceWorktreeApplicationDependencies {
   workspacePathExists(worktreePath: string): Promise<boolean>;
   checkoutBytes(folderPath: string, commit?: string): Promise<number>;
   checkCreateCapacity(worktreeRoot: string, estimatedBytes: number): Promise<unknown>;
-  checkWorktreeAllocation(worktreeRoot: string, commonDirectory: string, estimatedBytes: number): Promise<void>;
+  checkWorktreeAllocation(
+    worktreeRoot: string,
+    commonDirectory: string,
+    estimatedBytes: number,
+  ): Promise<void>;
   checkSnapshotCapacity(snapshotRoot: string, estimatedBytes: number): Promise<unknown>;
   provisionIncludedFiles(options: {
     sourceRoot: string;
@@ -265,7 +273,10 @@ function workspaceApprovalFields(source: Workspace): Pick<Workspace, "approvalMo
 function sameApprovalFields(left: Workspace, right: Workspace): boolean {
   const a = workspaceApprovalFields(left);
   const b = workspaceApprovalFields(right);
-  const grants = (fields: typeof a) => Object.keys(fields.macGrants ?? {}).sort().join(",");
+  const grants = (fields: typeof a) =>
+    Object.keys(fields.macGrants ?? {})
+      .sort()
+      .join(",");
   return a.approvalMode === b.approvalMode && grants(a) === grants(b);
 }
 
@@ -281,7 +292,9 @@ async function fileExists(target: string): Promise<boolean> {
 class ManagedWorktreeSnapshotCleanupError extends Error {
   declare readonly cause: unknown;
   constructor(cause: unknown) {
-    super("A failed managed worktree snapshot left artifacts requiring review; deletion was stopped.");
+    super(
+      "A failed managed worktree snapshot left artifacts requiring review; deletion was stopped.",
+    );
     this.name = "ManagedWorktreeSnapshotCleanupError";
     this.cause = cause;
   }
@@ -314,7 +327,11 @@ export function createWorkspaceWorktreeApplicationService(
     try {
       await dependencies.onWorktreeCreated(event);
     } catch (error) {
-      dependencies.logError("hooks", "A WorktreeSetup hook could not finish; the worktree was kept.", error);
+      dependencies.logError(
+        "hooks",
+        "A WorktreeSetup hook could not finish; the worktree was kept.",
+        error,
+      );
     }
   };
 
@@ -414,7 +431,8 @@ export function createWorkspaceWorktreeApplicationService(
         },
         removeWorkspaceRecord: async (savedWorkspace) => {
           await dependencies.removeWorkspace(savedWorkspace.id);
-          if (savedWorkspace.folderPath) dependencies.designGrants?.revokeRoot(savedWorkspace.folderPath);
+          if (savedWorkspace.folderPath)
+            dependencies.designGrants?.revokeRoot(savedWorkspace.folderPath);
         },
         rollbackWorktree: () =>
           dependencies.rollbackWorktree(resolved.folderPath, worktree, {
@@ -446,11 +464,10 @@ export function createWorkspaceWorktreeApplicationService(
     sourceWorkspaceId: string,
     branch: string,
     requestedName?: string,
-  ): Promise<Workspace> => dependencies.environment.run(
-    owner,
-    sourceWorkspaceId,
-    (resolved, signal) => createIn(resolved, signal, sourceWorkspaceId, branch, requestedName),
-  );
+  ): Promise<Workspace> =>
+    dependencies.environment.run(owner, sourceWorkspaceId, (resolved, signal) =>
+      createIn(resolved, signal, sourceWorkspaceId, branch, requestedName),
+    );
 
   /**
    * Create a managed worktree from a chosen base, optionally fetching it from
@@ -479,15 +496,25 @@ export function createWorkspaceWorktreeApplicationService(
         let branch = request.branchName;
         if (branch === undefined) {
           branch = uniqueBranchName(autoWorktreeBranchName(request.autoName!.seed), existing);
-          if (!branch) throw new Error("Aiden could not find a free branch name for the new worktree.");
+          if (!branch)
+            throw new Error("Aiden could not find a free branch name for the new worktree.");
         } else if (uniqueBranchName(branch, existing, 1) !== branch) {
           // Refuse before anything is recorded, so a caller never associates an
           // existing branch (or another worktree on it) with this attempt.
           throw new Error(`Branch “${branch}” already exists.`);
         }
         if (signal.aborted) throw new Error("The worktree was cancelled before it was created.");
-        const identity = { workspaceId: dependencies.createWorkspaceId(), ownershipToken: randomUUID() };
-        await request.onBranchResolved?.({ branch, ...identity, baseCommit: start.commit, startPoint, baseSource });
+        const identity = {
+          workspaceId: dependencies.createWorkspaceId(),
+          ownershipToken: randomUUID(),
+        };
+        await request.onBranchResolved?.({
+          branch,
+          ...identity,
+          baseCommit: start.commit,
+          startPoint,
+          baseSource,
+        });
         request.onProgress?.({ phase: "creating", branch, startPoint });
         const workspace = await createIn(
           resolved,
@@ -546,13 +573,23 @@ export function createWorkspaceWorktreeApplicationService(
           return await finalizeFromBase({ point: commit, commit }, remoteName, "fetched", existing);
         }
         const existing = await localBranchNames(resolved.folderPath, signal);
-        return await finalizeFromBase({ point: base.commit, commit: base.commit }, base.name, "no-upstream", existing);
+        return await finalizeFromBase(
+          { point: base.commit, commit: base.commit },
+          base.name,
+          "no-upstream",
+          existing,
+        );
       }
       const [base, existing] = await runPaired(
         (pairedSignal) => resolveWorktreeBase(resolved.folderPath, request.baseRef, pairedSignal),
         (pairedSignal) => localBranchNames(resolved.folderPath, pairedSignal),
       );
-      return await finalizeFromBase({ point: base.commit, commit: base.commit }, base.name, "local", existing);
+      return await finalizeFromBase(
+        { point: base.commit, commit: base.commit },
+        base.name,
+        "local",
+        existing,
+      );
     });
   };
 
@@ -567,9 +604,16 @@ export function createWorkspaceWorktreeApplicationService(
     attempt: Pick<WorktreeFromBaseAttempt, "branch" | "ownershipToken" | "baseCommit">,
   ): Promise<"absent" | "rolled-back"> => {
     const { rollbackOwnedWorktree } = dependencies;
-    if (!rollbackOwnedWorktree) throw new Error("Recovering an interrupted worktree is unavailable.");
+    if (!rollbackOwnedWorktree)
+      throw new Error("Recovering an interrupted worktree is unavailable.");
     return dependencies.environment.run(owner, sourceWorkspaceId, async (resolved) =>
-      rollbackOwnedWorktree(resolved.folderPath, attempt.branch, attempt.ownershipToken, attempt.baseCommit));
+      rollbackOwnedWorktree(
+        resolved.folderPath,
+        attempt.branch,
+        attempt.ownershipToken,
+        attempt.baseCommit,
+      ),
+    );
   };
 
   const remove = async (
@@ -577,31 +621,34 @@ export function createWorkspaceWorktreeApplicationService(
     workspaceId: string,
     validateWorkspace: (workspace: Workspace) => void = () => undefined,
     options?: { force?: boolean },
-  ): Promise<GitDeleteWorktreeResult> => dependencies.environment.runRecord(
-    owner,
-    workspaceId,
-    async (workspace, signal) => {
+  ): Promise<GitDeleteWorktreeResult> =>
+    dependencies.environment.runRecord(owner, workspaceId, async (workspace, signal) => {
       validateWorkspace(workspace);
       const managed = workspace.managedWorktree;
       if (!managed) throw new Error("This workspace is not an Aiden-managed worktree.");
       const finishMutation = dependencies.beginWorkspaceMutation(workspaceId);
-      const followThroughChange: { finish?: FinishWorkspaceFollowThrough | void; committed: boolean } = { committed: false };
+      const followThroughChange: {
+        finish?: FinishWorkspaceFollowThrough | void;
+        committed: boolean;
+      } = { committed: false };
       try {
         await dependencies.cancelWorkspaceOperations(workspaceId, signal);
         const result = await withWorkspaceScheduleRestoration(
           {
             restoreOnExit: workspace.permission !== "none",
             resume: () => dependencies.resumeWorkspaceSchedules(workspaceId),
-            onResumeError: (error) => dependencies.logError(
-              "schedule",
-              "Could not restore scheduled tasks after managed worktree deletion failed.",
-              error,
-            ),
+            onResumeError: (error) =>
+              dependencies.logError(
+                "schedule",
+                "Could not restore scheduled tasks after managed worktree deletion failed.",
+                error,
+              ),
           },
           async ({ keepPaused }) => {
             await dependencies.closeWorkspaceTerminals(workspaceId);
             await dependencies.cancelWorkspaceGeneration(workspaceId);
-            followThroughChange.finish = await dependencies.closeWorkspaceFollowThrough?.(workspaceId);
+            followThroughChange.finish =
+              await dependencies.closeWorkspaceFollowThrough?.(workspaceId);
             await dependencies.cancelWorkspaceSchedules(workspaceId);
 
             // Deletion policy classification. This advisory read happens before
@@ -627,8 +674,7 @@ export function createWorkspaceWorktreeApplicationService(
                 dirty.ignoredPaths,
               );
               unknownIgnored =
-                expanded === undefined ||
-                expanded.some((entry) => !provisionedSet.has(entry));
+                expanded === undefined || expanded.some((entry) => !provisionedSet.has(entry));
             }
             const needsSnapshot = dirty.uncommitted > 0 || dirty.ignored > 0;
 
@@ -640,9 +686,7 @@ export function createWorkspaceWorktreeApplicationService(
               let blobBytes = 64 * 1024;
               for (const relativePath of provisionedIgnored) {
                 try {
-                  blobBytes += (await fs.lstat(
-                    path.join(managed.worktreePath, relativePath),
-                  )).size;
+                  blobBytes += (await fs.lstat(path.join(managed.worktreePath, relativePath))).size;
                 } catch {
                   // A provisioned file the user already removed needs no blob.
                 }
@@ -657,10 +701,7 @@ export function createWorkspaceWorktreeApplicationService(
               const [{ commonDir }, [objectBytes, indexBytes]] = await Promise.all([
                 dependencies.repositoryPaths(managed.repositoryPath),
                 Promise.all([
-                  dependencies.snapshotContentBytes(
-                    managed.repositoryPath,
-                    managed.worktreePath,
-                  ),
+                  dependencies.snapshotContentBytes(managed.repositoryPath, managed.worktreePath),
                   managed.worktreeGitDir === undefined
                     ? Promise.resolve(64 * 1024)
                     : fs
@@ -672,10 +713,7 @@ export function createWorkspaceWorktreeApplicationService(
               await Promise.all([
                 dependencies.checkSnapshotCapacity(snapshotRoot, blobBytes),
                 dependencies.checkSnapshotCapacity(commonDir, objectBytes),
-                dependencies.checkSnapshotCapacity(
-                  os.tmpdir(),
-                  indexBytes + 64 * 1024,
-                ),
+                dependencies.checkSnapshotCapacity(os.tmpdir(), indexBytes + 64 * 1024),
               ]);
               await fs.mkdir(path.join(snapshotDir, "files"), {
                 recursive: true,
@@ -684,16 +722,11 @@ export function createWorkspaceWorktreeApplicationService(
               for (const relativePath of provisionedIgnored) {
                 if (!(await fileExists(path.join(managed.worktreePath, relativePath)))) continue;
                 provisioned.push(
-                  await captureProvisionedFile(
-                    snapshotDir,
-                    managed.worktreePath,
-                    relativePath,
-                    {
-                      path: managed.worktreePath,
-                      device: String(managed.worktreeDevice),
-                      inode: String(managed.worktreeInode),
-                    },
-                  ),
+                  await captureProvisionedFile(snapshotDir, managed.worktreePath, relativePath, {
+                    path: managed.worktreePath,
+                    device: String(managed.worktreeDevice),
+                    inode: String(managed.worktreeInode),
+                  }),
                 );
               }
               const capture = await dependencies.captureWorktreeSnapshot(
@@ -805,7 +838,8 @@ export function createWorkspaceWorktreeApplicationService(
               },
               removeWorkspaceRecord: async () => {
                 await dependencies.removeWorkspace(workspaceId);
-                if (workspace.folderPath) dependencies.designGrants?.revokeRoot(workspace.folderPath);
+                if (workspace.folderPath)
+                  dependencies.designGrants?.revokeRoot(workspace.folderPath);
               },
               reconciledResult: () => ({ branchDeleted: false }),
             });
@@ -826,8 +860,7 @@ export function createWorkspaceWorktreeApplicationService(
         // Local and Remote deletions both land here.
         dependencies.closeWorkspaceGitWatcher?.(workspaceId);
       }
-    },
-  );
+    });
 
   const restore = async (
     owner: WorkspaceOperationDocumentOwner,
@@ -869,7 +902,10 @@ export function createWorkspaceWorktreeApplicationService(
             repositoryPaths: dependencies.repositoryPaths,
             snapshotCommit: dependencies.snapshotRefCommit,
             checkCapacity: async (root, state) => {
-              const payloadBytes = snapshot.provisionedFiles.reduce((sum, file) => sum + file.size, 0);
+              const payloadBytes = snapshot.provisionedFiles.reduce(
+                (sum, file) => sum + file.size,
+                0,
+              );
               // After snapshot application, only private files remain. Do not
               // reread checkout policy or require space on the Git volume.
               if (state === "snapshot_applied") {
@@ -882,12 +918,24 @@ export function createWorkspaceWorktreeApplicationService(
                   : Promise.resolve(0),
                 dependencies.checkoutBytes(snapshot.repositoryPath, snapshot.snapshotCommit),
               ]);
-              await dependencies.checkWorktreeAllocation(root, target.commonDir, baseBytes + snapshotBytes + payloadBytes);
+              await dependencies.checkWorktreeAllocation(
+                root,
+                target.commonDir,
+                baseBytes + snapshotBytes + payloadBytes,
+              );
             },
             restoreCheckout: dependencies.restoreManagedCheckout,
             resumeCheckout: dependencies.resumeManagedCheckout,
             applySnapshot: dependencies.applyWorktreeSnapshot,
-            managedWorktreeUsable: (repositoryPath, worktreePath, branch, gitDir, token, device, inode) =>
+            managedWorktreeUsable: (
+              repositoryPath,
+              worktreePath,
+              branch,
+              gitDir,
+              token,
+              device,
+              inode,
+            ) =>
               dependencies.managedWorktreeUsable({
                 repositoryPath,
                 worktreePath,
@@ -966,11 +1014,18 @@ export function createWorkspaceWorktreeApplicationService(
       const finishMutation = dependencies.beginWorkspaceMutation(workspaceId);
       try {
         const managed = workspace.managedWorktree;
-        if (!managed || !managed.worktreeGitDir || !managed.ownershipToken || !workspace.folderPath) {
+        if (
+          !managed ||
+          !managed.worktreeGitDir ||
+          !managed.ownershipToken ||
+          !workspace.folderPath
+        ) {
           throw new Error("This workspace is not a worktree Aiden can restore.");
         }
         if (workspace.permission === "none") {
-          throw new Error("This workspace has no folder access, so Aiden can't restore its worktree.");
+          throw new Error(
+            "This workspace has no folder access, so Aiden can't restore its worktree.",
+          );
         }
         if (await dependencies.workspacePathExists(managed.worktreePath)) {
           throw new Error("The worktree folder is already there.");
@@ -1020,14 +1075,22 @@ export function createWorkspaceWorktreeApplicationService(
         } catch (error) {
           // The checkout is back either way; a missing local file is easier
           // to notice and fix than a worktree that stays gone.
-          dependencies.logError("git", "Aiden could not copy every .worktreeinclude file into a restored worktree.", error);
+          dependencies.logError(
+            "git",
+            "Aiden could not copy every .worktreeinclude file into a restored worktree.",
+            error,
+          );
         }
         if (provisionedFiles.length) {
           try {
             saved = await dependencies.saveWorkspace(record(worktree, provisionedFiles));
           } catch (error) {
             // Unrecorded copies only make a later Remove ask before deleting them.
-            dependencies.logError("git", "Aiden could not record the files copied into a restored worktree.", error);
+            dependencies.logError(
+              "git",
+              "Aiden could not record the files copied into a restored worktree.",
+              error,
+            );
           }
         }
         dependencies.notifyChanged();

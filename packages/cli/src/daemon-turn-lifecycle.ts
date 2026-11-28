@@ -4,7 +4,10 @@
  * what only the daemon knows: its intake, its chat capacity, and the generation a
  * lease hands off to. See docs/state-machines/serve-daemon.md.
  */
-import type { ChatTurnAdmission, ChatTurnLease } from "../../../main/services/chat-turn-admission.js";
+import type {
+  ChatTurnAdmission,
+  ChatTurnLease,
+} from "../../../main/services/chat-turn-admission.js";
 import type { GenerationCancellationOrigin } from "../../../renderer/shared/generation-timeline.js";
 
 /**
@@ -27,7 +30,10 @@ export type DaemonChatEvent =
   | { readonly type: "generation_released" };
 
 /** `undefined` is idle. An event that does not apply leaves custody unchanged. */
-export function transitionDaemonChat(custody: DaemonChatCustody | undefined, event: DaemonChatEvent): DaemonChatCustody | undefined {
+export function transitionDaemonChat(
+  custody: DaemonChatCustody | undefined,
+  event: DaemonChatEvent,
+): DaemonChatCustody | undefined {
   switch (event.type) {
     case "reserved":
       return custody ?? { holder: "lease", preparation: "pending" };
@@ -38,14 +44,17 @@ export function transitionDaemonChat(custody: DaemonChatCustody | undefined, eve
       if (custody?.holder !== "lease") return custody;
       return custody.preparation === "settled" ? undefined : { holder: "settling" };
     case "generation_registered":
-      return custody?.holder === "lease" && custody.preparation === "settled" ? { holder: "generation" } : custody;
+      return custody?.holder === "lease" && custody.preparation === "settled"
+        ? { holder: "generation" }
+        : custody;
     case "generation_released":
       return custody?.holder === "generation" ? undefined : custody;
   }
 }
 
 /** Live reservations and generations share one limit. Settling work starts nothing. */
-export const takesDaemonCapacity = (custody: DaemonChatCustody): boolean => custody.holder !== "settling";
+export const takesDaemonCapacity = (custody: DaemonChatCustody): boolean =>
+  custody.holder !== "settling";
 
 /** How a turn's answer ended up on disk. A terminal event alone never proves this. */
 export type DaemonGenerationPersistence = "none" | "final_saved" | "partial_saved" | "partial_lost";
@@ -54,7 +63,9 @@ export type DaemonGenerationPersistence = "none" | "final_saved" | "partial_save
  * One registered generation. Stop request, persistence and physical release are
  * independent: a stopped run still owns its session until `settled` resolves.
  */
-export class DaemonGenerationRun<Session extends { abort(): Promise<void> } = { abort(): Promise<void> }> {
+export class DaemonGenerationRun<
+  Session extends { abort(): Promise<void> } = { abort(): Promise<void> },
+> {
   readonly abort = new AbortController();
   session?: Session;
   /** Set by the first stop that names one. A timeout or a lost owner names none. */
@@ -70,10 +81,14 @@ export class DaemonGenerationRun<Session extends { abort(): Promise<void> } = { 
     this.streamId = identity.streamId;
     this.ownerId = identity.ownerId;
     this.workspaceId = identity.workspaceId;
-    this.settled = new Promise((resolve) => { this.markSettled = resolve; });
+    this.settled = new Promise((resolve) => {
+      this.markSettled = resolve;
+    });
   }
 
-  get stopRequested(): boolean { return this.abort.signal.aborted; }
+  get stopRequested(): boolean {
+    return this.abort.signal.aborted;
+  }
 
   /** Withdraws authority first, so any awaited check that resumes afterwards sees the stop. */
   async requestStop(origin?: GenerationCancellationOrigin): Promise<void> {
@@ -83,10 +98,14 @@ export class DaemonGenerationRun<Session extends { abort(): Promise<void> } = { 
   }
 
   /** For a caller with nowhere to report a failed session abort. */
-  requestStopQuietly(origin?: GenerationCancellationOrigin): void { void this.requestStop(origin).catch(() => {}); }
+  requestStopQuietly(origin?: GenerationCancellationOrigin): void {
+    void this.requestStop(origin).catch(() => {});
+  }
 
   /** Physical release is complete. Only the turn owner calls this. */
-  markReleased(): void { this.markSettled(); }
+  markReleased(): void {
+    this.markSettled();
+  }
 }
 
 interface ChatEntry<Run> {
@@ -102,19 +121,33 @@ export interface DaemonTurnOwnerOptions {
 }
 
 /** The single writer of daemon chat custody. Every busy, capacity and idle answer reads it. */
-export class DaemonTurnOwner<Run extends { readonly streamId: string; readonly ownerId: string; readonly settled: Promise<void> }> {
+export class DaemonTurnOwner<
+  Run extends {
+    readonly streamId: string;
+    readonly ownerId: string;
+    readonly settled: Promise<void>;
+  },
+> {
   private readonly chats = new Map<string, ChatEntry<Run>>();
   private readonly idleWaiters = new Map<string, Set<() => void>>();
   private readonly options: DaemonTurnOwnerOptions;
   private intake: "open" | "closed" = "open";
 
-  constructor(options: DaemonTurnOwnerOptions) { this.options = options; }
+  constructor(options: DaemonTurnOwnerOptions) {
+    this.options = options;
+  }
 
-  get accepting(): boolean { return this.intake === "open"; }
+  get accepting(): boolean {
+    return this.intake === "open";
+  }
 
-  isBusy(chatId: string): boolean { return this.chats.has(chatId); }
+  isBusy(chatId: string): boolean {
+    return this.chats.has(chatId);
+  }
 
-  run(chatId: string): Run | undefined { return this.chats.get(chatId)?.run; }
+  run(chatId: string): Run | undefined {
+    return this.chats.get(chatId)?.run;
+  }
 
   findRun(matches: (run: Run) => boolean): { chatId: string; run: Run } | undefined {
     for (const [chatId, { run }] of this.chats) if (run && matches(run)) return { chatId, run };
@@ -125,7 +158,10 @@ export class DaemonTurnOwner<Run extends { readonly streamId: string; readonly o
     // A lease that lost the chat to a newer entry keeps calling back; only the current entry moves.
     if (this.chats.get(chatId) !== entry) return;
     const next = transitionDaemonChat(entry.custody, event);
-    if (next) { entry.custody = next; return; }
+    if (next) {
+      entry.custody = next;
+      return;
+    }
     this.chats.delete(chatId);
     this.wake(chatId);
   }
@@ -143,12 +179,26 @@ export class DaemonTurnOwner<Run extends { readonly streamId: string; readonly o
   }
 
   begin(chatId: string, turnId: string, ownerId: string): ChatTurnLease | null {
-    if (!this.accepting || this.options.isDeleting(chatId) || this.held() >= (this.options.maxChats ?? 3)) return null;
-    const lease = this.options.admission.tryBegin(chatId, turnId, ownerId, this.run(chatId) !== undefined);
+    if (
+      !this.accepting ||
+      this.options.isDeleting(chatId) ||
+      this.held() >= (this.options.maxChats ?? 3)
+    )
+      return null;
+    const lease = this.options.admission.tryBegin(
+      chatId,
+      turnId,
+      ownerId,
+      this.run(chatId) !== undefined,
+    );
     if (!lease) return null;
-    const entry: ChatEntry<Run> = { custody: transitionDaemonChat(undefined, { type: "reserved" })! };
+    const entry: ChatEntry<Run> = {
+      custody: transitionDaemonChat(undefined, { type: "reserved" })!,
+    };
     this.chats.set(chatId, entry);
-    lease.onReleased(() => { this.commit(chatId, entry, { type: "lease_revoked" }); });
+    lease.onReleased(() => {
+      this.commit(chatId, entry, { type: "lease_revoked" });
+    });
     const settle = lease.settleAsyncWork;
     lease.settleAsyncWork = (options) => {
       settle(options);
@@ -163,7 +213,13 @@ export class DaemonTurnOwner<Run extends { readonly streamId: string; readonly o
    * Registers `run` and releases the matching lease as one synchronous step, so
    * nothing can observe the chat as free between them. `register` runs inside it.
    */
-  handoff(chatId: string, turnId: string, ownerId: string, run: Run, register: () => void): boolean {
+  handoff(
+    chatId: string,
+    turnId: string,
+    ownerId: string,
+    run: Run,
+    register: () => void,
+  ): boolean {
     return this.options.admission.handoff(chatId, turnId, ownerId, () => {
       const entry = this.chats.get(chatId);
       if (!entry) throw new Error("The chat's reservation is unavailable.");
@@ -185,10 +241,12 @@ export class DaemonTurnOwner<Run extends { readonly streamId: string; readonly o
     while (this.isBusy(chatId)) {
       const running = this.run(chatId);
       if (running) await running.settled;
-      else await new Promise<void>((resolve) => {
-        const waiters = this.idleWaiters.get(chatId) ?? new Set();
-        waiters.add(resolve); this.idleWaiters.set(chatId, waiters);
-      });
+      else
+        await new Promise<void>((resolve) => {
+          const waiters = this.idleWaiters.get(chatId) ?? new Set();
+          waiters.add(resolve);
+          this.idleWaiters.set(chatId, waiters);
+        });
     }
   }
 

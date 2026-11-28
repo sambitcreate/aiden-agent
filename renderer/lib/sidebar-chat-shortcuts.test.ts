@@ -86,12 +86,7 @@ test("uses the requested half-second shortcut hint delay", () => {
 
 test("derives hint reveal modifiers from customized chat bindings", () => {
   assert.deepEqual(
-    chatShortcutRevealModifierSets([
-      "Control+1",
-      "Alt+2",
-      "Command+Shift+3",
-      null,
-    ], "darwin"),
+    chatShortcutRevealModifierSets(["Control+1", "Alt+2", "Command+Shift+3", null], "darwin"),
     [["Control"], ["Alt"], ["Meta", "Shift"]],
   );
 });

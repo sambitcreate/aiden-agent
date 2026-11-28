@@ -1,7 +1,11 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Page } from "@playwright/test";
-import type { BrowserCommand, BrowserCommandResult, BrowserState } from "../../renderer/shared/browser";
+import type {
+  BrowserCommand,
+  BrowserCommandResult,
+  BrowserState,
+} from "../../renderer/shared/browser";
 import { E2E_WORKSPACE_ID, expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 test.use({ workspaceSeed: true });
@@ -173,15 +177,24 @@ async function startFixtureServer() {
   const server = createServer((request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     if (request.url === "/next") {
-      response.end("<!doctype html><html><head><title>Next page</title></head><body><h1>Next</h1></body></html>");
+      response.end(
+        "<!doctype html><html><head><title>Next page</title></head><body><h1>Next</h1></body></html>",
+      );
       return;
     }
     if (request.url === "/frames") {
-      response.end(FRAMES_FIXTURE_HTML.replace("CROSS_ORIGIN_SRC", `http://localhost:${(server.address() as AddressInfo).port}/cross-frame`));
+      response.end(
+        FRAMES_FIXTURE_HTML.replace(
+          "CROSS_ORIGIN_SRC",
+          `http://localhost:${(server.address() as AddressInfo).port}/cross-frame`,
+        ),
+      );
       return;
     }
     if (request.url === "/cross-frame") {
-      response.end(`<!doctype html><html><body style="margin:0"><button id="cross-cta" style="width:100%;height:60px">Cross</button>${FRAME_CLICK_COUNTER}</body></html>`);
+      response.end(
+        `<!doctype html><html><body style="margin:0"><button id="cross-cta" style="width:100%;height:60px">Cross</button>${FRAME_CLICK_COUNTER}</body></html>`,
+      );
       return;
     }
     response.end(FIXTURE_HTML);
@@ -227,10 +240,9 @@ test("grabbing a React element attaches an inspectable chip, masks secrets, and 
     await expect(surface.getByRole("button", { name: /Annotate/u })).toBeVisible();
 
     await grabButton.click();
-    await expect(surface.getByRole("button", { name: "Stop grabbing", exact: true })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    await expect(
+      surface.getByRole("button", { name: "Stop grabbing", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
     await expect(surface.getByText(/Click an element to grab for chat/u)).toBeVisible();
     await expect
       .poll(() =>
@@ -288,7 +300,9 @@ test("grabbing a React element attaches an inspectable chip, masks secrets, and 
     const chipTrigger = page.locator("[data-grabbed-element-trigger]").first();
     await expect(chipTrigger).toBeVisible();
     await expect(chipTrigger).toContainText("<LandingHeroClient />");
-    await expect(page.getByRole("button", { name: /^Remove LandingHeroClient\.png$/u })).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: /^Remove LandingHeroClient\.png$/u }),
+    ).toHaveCount(0);
 
     // Click to pin the inspection popover and inspect thumbnail, hierarchy, and details.
     await chipTrigger.click();
@@ -327,7 +341,9 @@ test("grabbing a React element attaches an inspectable chip, masks secrets, and 
     const prompt = "Tighten the CTA padding";
     await page.locator("textarea").first().fill(prompt);
     await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.getByText("Deterministic E2E response received.", { exact: true }).first()).toBeVisible({
+    await expect(
+      page.getByText("Deterministic E2E response received.", { exact: true }).first(),
+    ).toBeVisible({
       timeout: 30_000,
     });
 
@@ -336,12 +352,19 @@ test("grabbing a React element attaches an inspectable chip, masks secrets, and 
       .find((req) => req.url === "/v1/chat/completions");
     expect(completion).toBeDefined();
     const body = completion!.body as {
-      messages: Array<{ role: string; content: string | Array<{ type: string; text?: string; image_url?: { url: string } }> }>;
+      messages: Array<{
+        role: string;
+        content: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
+      }>;
     };
     const lastUser = [...body.messages].reverse().find((msg) => msg.role === "user");
     expect(lastUser).toBeDefined();
     expect(Array.isArray(lastUser!.content)).toBe(true);
-    const parts = lastUser!.content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
+    const parts = lastUser!.content as Array<{
+      type: string;
+      text?: string;
+      image_url?: { url: string };
+    }>;
     const textPart = parts
       .filter((part) => part.type === "text")
       .map((part) => part.text ?? "")
@@ -352,9 +375,11 @@ test("grabbing a React element attaches an inspectable chip, masks secrets, and 
     expect(textPart).toContain("- Thumbnail: attached cropped screenshot");
     expect(textPart).toContain(prompt);
     expect(textPart).not.toContain("sk-secret-value-12345678901234567890");
-    expect(parts.some((part) => part.type === "image_url" && part.image_url?.url.startsWith("data:image/"))).toBe(
-      true,
-    );
+    expect(
+      parts.some(
+        (part) => part.type === "image_url" && part.image_url?.url.startsWith("data:image/"),
+      ),
+    ).toBe(true);
 
     // Sent user message renders the read-only chip with popover and no Remove button.
     const transcriptTrigger = page.getByRole("button", {
@@ -452,8 +477,20 @@ test("shortcut, unstoppable Escape, Shift+Click multi-grab, DevTools-open captur
       guest.focus();
       guest.sendInputEvent({ type: "mouseMove", ...point });
       await new Promise((resolve) => setTimeout(resolve, 40));
-      guest.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, modifiers: ["shift"], ...point });
-      guest.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, modifiers: ["shift"], ...point });
+      guest.sendInputEvent({
+        type: "mouseDown",
+        button: "left",
+        clickCount: 1,
+        modifiers: ["shift"],
+        ...point,
+      });
+      guest.sendInputEvent({
+        type: "mouseUp",
+        button: "left",
+        clickCount: 1,
+        modifiers: ["shift"],
+        ...point,
+      });
     }, fixture.url);
 
     await expect(page.locator("[data-grabbed-element-trigger]")).toHaveCount(1);
@@ -570,12 +607,23 @@ test("grabbing inside same-origin and cross-origin frames captures the element a
     const crossUrl = `http://localhost:${new URL(fixture.url).port}/cross-frame`;
     await expect
       .poll(() =>
-        app.evaluate(async ({ webContents }, { pageUrl, crossUrl }) => {
-          const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === pageUrl);
-          const cross = guest?.mainFrame.framesInSubtree.find((frame) => frame.url === crossUrl);
-          const same = await guest?.executeJavaScript("document.getElementById('same-frame').contentDocument?.getElementById('frame-cta') ? true : false");
-          return Boolean(cross && same && (await cross.executeJavaScript("typeof globalThis.frameClicks")) === "number");
-        }, { pageUrl, crossUrl }),
+        app.evaluate(
+          async ({ webContents }, { pageUrl, crossUrl }) => {
+            const guest = webContents
+              .getAllWebContents()
+              .find((contents) => contents.getURL() === pageUrl);
+            const cross = guest?.mainFrame.framesInSubtree.find((frame) => frame.url === crossUrl);
+            const same = await guest?.executeJavaScript(
+              "document.getElementById('same-frame').contentDocument?.getElementById('frame-cta') ? true : false",
+            );
+            return Boolean(
+              cross &&
+              same &&
+              (await cross.executeJavaScript("typeof globalThis.frameClicks")) === "number",
+            );
+          },
+          { pageUrl, crossUrl },
+        ),
       )
       .toBe(true);
 
@@ -586,7 +634,8 @@ test("grabbing inside same-origin and cross-origin frames captures the element a
       same: "document.getElementById('same-frame')",
       shadow: "document.getElementById('shadow-host').shadowRoot.getElementById('shadow-frame')",
       late: "document.getElementById('late-host').shadowRoot.getElementById('late-frame')",
-      stationary: "document.getElementById('stationary-host').shadowRoot.getElementById('stationary-frame')",
+      stationary:
+        "document.getElementById('stationary-host').shadowRoot.getElementById('stationary-frame')",
     } as const;
     const BUTTON_IDS = {
       same: "frame-cta",
@@ -597,20 +646,37 @@ test("grabbing inside same-origin and cross-origin frames captures the element a
     type FrameName = keyof typeof SAME_ORIGIN_FRAMES;
 
     const clickAt = (selector: FrameName | "cross", shift: boolean) =>
-      app.evaluate(async ({ webContents }, { pageUrl, selector, shift, frames, buttons }) => {
-        const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === pageUrl)!;
-        const point = (await guest.executeJavaScript(
-          selector === "cross"
-            ? "(() => { const el = document.getElementById('cross-frame'); el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()"
-            : `(() => { const element = ${frames[selector]}; element.scrollIntoView({ block: 'center' }); const frame = element.getBoundingClientRect(); const r = element.contentDocument.getElementById('${buttons[selector]}').getBoundingClientRect(); return { x: Math.round(frame.x + r.x + r.width / 2), y: Math.round(frame.y + r.y + r.height / 2) }; })()`,
-        )) as { x: number; y: number };
-        const modifiers: Array<"shift"> = shift ? ["shift"] : [];
-        guest.focus();
-        guest.sendInputEvent({ type: "mouseMove", ...point });
-        await new Promise((resolve) => setTimeout(resolve, 40));
-        guest.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, modifiers, ...point });
-        guest.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, modifiers, ...point });
-      }, { pageUrl, selector, shift, frames: SAME_ORIGIN_FRAMES, buttons: BUTTON_IDS });
+      app.evaluate(
+        async ({ webContents }, { pageUrl, selector, shift, frames, buttons }) => {
+          const guest = webContents
+            .getAllWebContents()
+            .find((contents) => contents.getURL() === pageUrl)!;
+          const point = (await guest.executeJavaScript(
+            selector === "cross"
+              ? "(() => { const el = document.getElementById('cross-frame'); el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()"
+              : `(() => { const element = ${frames[selector]}; element.scrollIntoView({ block: 'center' }); const frame = element.getBoundingClientRect(); const r = element.contentDocument.getElementById('${buttons[selector]}').getBoundingClientRect(); return { x: Math.round(frame.x + r.x + r.width / 2), y: Math.round(frame.y + r.y + r.height / 2) }; })()`,
+          )) as { x: number; y: number };
+          const modifiers: Array<"shift"> = shift ? ["shift"] : [];
+          guest.focus();
+          guest.sendInputEvent({ type: "mouseMove", ...point });
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          guest.sendInputEvent({
+            type: "mouseDown",
+            button: "left",
+            clickCount: 1,
+            modifiers,
+            ...point,
+          });
+          guest.sendInputEvent({
+            type: "mouseUp",
+            button: "left",
+            clickCount: 1,
+            modifiers,
+            ...point,
+          });
+        },
+        { pageUrl, selector, shift, frames: SAME_ORIGIN_FRAMES, buttons: BUTTON_IDS },
+      );
 
     await surface.getByRole("button", { name: "Grab element", exact: true }).click();
     await expect
@@ -626,10 +692,15 @@ test("grabbing inside same-origin and cross-origin frames captures the element a
     // Frames added inside shadow trees after the grab started are shielded too:
     // one in a shadow root the grab already knew, one in a zero-padding root entered directly.
     const evaluateGuest = (script: string) =>
-      app.evaluate(async ({ webContents }, { pageUrl, script }) => {
-        const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === pageUrl)!;
-        return guest.executeJavaScript(script);
-      }, { pageUrl, script });
+      app.evaluate(
+        async ({ webContents }, { pageUrl, script }) => {
+          const guest = webContents
+            .getAllWebContents()
+            .find((contents) => contents.getURL() === pageUrl)!;
+          return guest.executeJavaScript(script);
+        },
+        { pageUrl, script },
+      );
     expect(await evaluateGuest(ADD_SHADOW_FRAMES_SCRIPT)).toBe(true);
     await expect
       .poll(() =>
@@ -649,16 +720,21 @@ test("grabbing inside same-origin and cross-origin frames captures the element a
     // Stationary pointer: park pointer over #stationary-host BEFORE its shadow root or
     // iframe exists, attach the shadow-root iframe right underneath it, then click with
     // zero intervening mouseMove events.
-    const stationaryPoint = await app.evaluate(async ({ webContents }, { pageUrl }) => {
-      const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === pageUrl)!;
-      const point = (await guest.executeJavaScript(
-        "(() => { const host = document.getElementById('stationary-host'); host.scrollIntoView({ block: 'center' }); const r = host.getBoundingClientRect(); return { x: Math.round(r.x + 16 + 80), y: Math.round(r.y + 16 + 20) }; })()",
-      )) as { x: number; y: number };
-      guest.focus();
-      guest.sendInputEvent({ type: "mouseMove", ...point });
-      await new Promise((resolve) => setTimeout(resolve, 40));
-      return point;
-    }, { pageUrl });
+    const stationaryPoint = await app.evaluate(
+      async ({ webContents }, { pageUrl }) => {
+        const guest = webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL() === pageUrl)!;
+        const point = (await guest.executeJavaScript(
+          "(() => { const host = document.getElementById('stationary-host'); host.scrollIntoView({ block: 'center' }); const r = host.getBoundingClientRect(); return { x: Math.round(r.x + 16 + 80), y: Math.round(r.y + 16 + 20) }; })()",
+        )) as { x: number; y: number };
+        guest.focus();
+        guest.sendInputEvent({ type: "mouseMove", ...point });
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return point;
+      },
+      { pageUrl },
+    );
     expect(await evaluateGuest(ADD_STATIONARY_FRAME_SCRIPT)).toBe(true);
     await expect
       .poll(() =>
@@ -667,12 +743,29 @@ test("grabbing inside same-origin and cross-origin frames captures the element a
         ),
       )
       .toBe(true);
-    await app.evaluate(async ({ webContents }, { pageUrl, point }) => {
-      const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === pageUrl)!;
-      guest.focus();
-      guest.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, modifiers: ["shift"], ...point });
-      guest.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, modifiers: ["shift"], ...point });
-    }, { pageUrl, point: stationaryPoint });
+    await app.evaluate(
+      async ({ webContents }, { pageUrl, point }) => {
+        const guest = webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL() === pageUrl)!;
+        guest.focus();
+        guest.sendInputEvent({
+          type: "mouseDown",
+          button: "left",
+          clickCount: 1,
+          modifiers: ["shift"],
+          ...point,
+        });
+        guest.sendInputEvent({
+          type: "mouseUp",
+          button: "left",
+          clickCount: 1,
+          modifiers: ["shift"],
+          ...point,
+        });
+      },
+      { pageUrl, point: stationaryPoint },
+    );
     await expect(chips).toHaveCount(4);
     await expect(chips.nth(3)).toContainText("button#stationary-cta");
 
@@ -686,18 +779,25 @@ test("grabbing inside same-origin and cross-origin frames captures the element a
 
     // No frame saw any pointerover/pointermove/pointerdown/mousedown/mouseup/click event,
     // and the frames are clickable again afterwards.
-    const counts = await app.evaluate(async ({ webContents }, { pageUrl, crossUrl, frames }) => {
-      const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === pageUrl)!;
-      const cross = guest.mainFrame.framesInSubtree.find((frame) => frame.url === crossUrl)!;
-      const sameOrigin = `[${Object.values(frames).join(", ")}]`;
-      return {
-        same: await guest.executeJavaScript(`${sameOrigin}.map((frame) => frame.contentWindow.frameClicks)`),
-        cross: await cross.executeJavaScript("globalThis.frameClicks"),
-        restored: await guest.executeJavaScript(
-          `[...document.querySelectorAll('iframe'), ...${sameOrigin}].every((frame) => frame.style.pointerEvents === '')`,
-        ),
-      };
-    }, { pageUrl, crossUrl, frames: SAME_ORIGIN_FRAMES });
+    const counts = await app.evaluate(
+      async ({ webContents }, { pageUrl, crossUrl, frames }) => {
+        const guest = webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL() === pageUrl)!;
+        const cross = guest.mainFrame.framesInSubtree.find((frame) => frame.url === crossUrl)!;
+        const sameOrigin = `[${Object.values(frames).join(", ")}]`;
+        return {
+          same: await guest.executeJavaScript(
+            `${sameOrigin}.map((frame) => frame.contentWindow.frameClicks)`,
+          ),
+          cross: await cross.executeJavaScript("globalThis.frameClicks"),
+          restored: await guest.executeJavaScript(
+            `[...document.querySelectorAll('iframe'), ...${sameOrigin}].every((frame) => frame.style.pointerEvents === '')`,
+          ),
+        };
+      },
+      { pageUrl, crossUrl, frames: SAME_ORIGIN_FRAMES },
+    );
     expect(counts).toEqual({ same: [0, 0, 0, 0], cross: 0, restored: true });
 
     await command(page, { action: "close", tabId });

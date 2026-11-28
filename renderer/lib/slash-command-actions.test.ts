@@ -393,11 +393,22 @@ test("/until and /follow need a chat with folder access, and /until can be set w
   const follow = command("follow");
   for (const entry of [until, follow]) {
     assert.deepEqual(slashCommandAvailability(entry, context), { available: true });
-    assert.deepEqual(slashCommandAvailability(entry, { ...context, idle: false }), { available: true });
-    assert.match(slashCommandAvailability(entry, { ...context, hasWorkspace: false }).reason ?? "", /open a workspace/iu);
-    assert.match(slashCommandAvailability(entry, { ...context, hasChat: false }).reason ?? "", /send a message first/iu);
+    assert.deepEqual(slashCommandAvailability(entry, { ...context, idle: false }), {
+      available: true,
+    });
+    assert.match(
+      slashCommandAvailability(entry, { ...context, hasWorkspace: false }).reason ?? "",
+      /open a workspace/iu,
+    );
+    assert.match(
+      slashCommandAvailability(entry, { ...context, hasChat: false }).reason ?? "",
+      /send a message first/iu,
+    );
     assert.equal(
-      slashCommandAvailability(entry, { ...context, followThroughBlockedReason: "Turn on folder access for this workspace first." }).reason,
+      slashCommandAvailability(entry, {
+        ...context,
+        followThroughBlockedReason: "Turn on folder access for this workspace first.",
+      }).reason,
       "Turn on folder access for this workspace first.",
     );
   }
@@ -417,18 +428,39 @@ test("/until and /follow need a chat with folder access, and /until can be set w
   };
   assert.equal(executeSlashCommandAction(until, "  npm test -- --run  ", handlers), true);
   assert.equal(executeSlashCommandAction(follow, "", handlers), true);
-  assert.deepEqual(asked, [["until", "npm test -- --run"], ["follow", ""]]);
-  assert.equal(executeSlashCommandAction(until, "npm test", { ...handlers, followThrough: undefined }), false);
+  assert.deepEqual(asked, [
+    ["until", "npm test -- --run"],
+    ["follow", ""],
+  ]);
+  assert.equal(
+    executeSlashCommandAction(until, "npm test", { ...handlers, followThrough: undefined }),
+    false,
+  );
 });
 
 test("/goal works in a new chat and while an answer runs, only on this computer, and passes what follows it", () => {
   const goal = command("goal");
   assert.deepEqual(slashCommandAvailability(goal, context), { available: true });
-  assert.deepEqual(slashCommandAvailability(goal, { ...context, idle: false }), { available: true }, "pause and clear work mid-answer");
-  assert.deepEqual(slashCommandAvailability(goal, { ...context, hasWorkspace: false }), { available: true }, "chats without a folder can have goals");
-  assert.deepEqual(slashCommandAvailability(goal, { ...context, hasChat: false }), { available: true }, "the objective can be a new chat's first message");
+  assert.deepEqual(
+    slashCommandAvailability(goal, { ...context, idle: false }),
+    { available: true },
+    "pause and clear work mid-answer",
+  );
+  assert.deepEqual(
+    slashCommandAvailability(goal, { ...context, hasWorkspace: false }),
+    { available: true },
+    "chats without a folder can have goals",
+  );
+  assert.deepEqual(
+    slashCommandAvailability(goal, { ...context, hasChat: false }),
+    { available: true },
+    "the objective can be a new chat's first message",
+  );
   assert.equal(
-    slashCommandAvailability(goal, { ...context, goalBlockedReason: "Available in chats on this Mac." }).reason,
+    slashCommandAvailability(goal, {
+      ...context,
+      goalBlockedReason: "Available in chats on this Mac.",
+    }).reason,
     "Available in chats on this Mac.",
   );
   assert.equal(validateSlashCommandArgument(goal, "x".repeat(4_001)).valid, false);
@@ -454,13 +486,24 @@ test("/goal works in a new chat and while an answer runs, only on this computer,
 
 test("/design turns design mode on, /design off turns it off, and needs a chat that can use it", () => {
   const design = command("design");
-  assert.deepEqual(slashCommandAvailability(design, { ...context, designModeAvailable: true }), { available: true });
+  assert.deepEqual(slashCommandAvailability(design, { ...context, designModeAvailable: true }), {
+    available: true,
+  });
   // A No workspace chat can use design mode, and it can change while an answer runs.
   assert.deepEqual(
-    slashCommandAvailability(design, { ...context, designModeAvailable: true, hasWorkspace: false, idle: false }),
+    slashCommandAvailability(design, {
+      ...context,
+      designModeAvailable: true,
+      hasWorkspace: false,
+      idle: false,
+    }),
     { available: true },
   );
-  assert.equal(slashCommandAvailability(design, context).available, false, "not offered unless the chat can use it");
+  assert.equal(
+    slashCommandAvailability(design, context).available,
+    false,
+    "not offered unless the chat can use it",
+  );
 
   assert.deepEqual(validateSlashCommandArgument(design, ""), { valid: true });
   assert.deepEqual(validateSlashCommandArgument(design, " OFF "), { valid: true, value: "off" });
@@ -484,5 +527,8 @@ test("/design turns design mode on, /design off turns it off, and needs a chat t
   assert.equal(executeSlashCommandAction(design, "", handlers), true);
   assert.equal(executeSlashCommandAction(design, "off", handlers), true);
   assert.deepEqual(changes, [true, false]);
-  assert.equal(executeSlashCommandAction(design, "", { ...handlers, setDesignMode: undefined }), false);
+  assert.equal(
+    executeSlashCommandAction(design, "", { ...handlers, setDesignMode: undefined }),
+    false,
+  );
 });

@@ -11,7 +11,13 @@
 // its user turns. Prints JSON with each request, the summary total, the child
 // total, the modelled parent and the two shares.
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { createModels, type Api, type AssistantMessage, type Model, type UserMessage } from "@earendil-works/pi-ai";
+import {
+  createModels,
+  type Api,
+  type AssistantMessage,
+  type Model,
+  type UserMessage,
+} from "@earendil-works/pi-ai";
 import { createFauxCore, fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { SubagentRuntimeRegistry } from "../main/services/subagents/child-agent-runtime.ts";
 
@@ -20,29 +26,49 @@ const MODEL = "phase7-child";
 const SYSTEM_PROMPT = "Continue the fork faithfully.";
 const SUMMARY_REQUEST = /context summarization assistant/u;
 
-const user = (text: string): UserMessage => ({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
+const user = (text: string): UserMessage => ({
+  role: "user",
+  content: [{ type: "text", text }],
+  timestamp: Date.now(),
+});
 const assistantText = (text: string): AssistantMessage => ({
   role: "assistant",
   content: [{ type: "text", text }],
   api: "openai-completions",
   provider: PROVIDER,
   model: MODEL,
-  usage: { input: 950, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 960, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+  usage: {
+    input: 950,
+    output: 10,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 960,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  },
   stopReason: "stop",
   timestamp: Date.now(),
 });
 
 function historicalTurns(prefix: string, count: number, chars: number): AgentMessage[] {
   const messages: AgentMessage[] = [];
-  for (let i = 0; i < count; i++) messages.push(user(`${prefix}-request-${i}`), assistantText(`${prefix}-answer-${i}-${"x".repeat(chars)}`));
+  for (let i = 0; i < count; i++)
+    messages.push(
+      user(`${prefix}-request-${i}`),
+      assistantText(`${prefix}-answer-${i}-${"x".repeat(chars)}`),
+    );
   return messages;
 }
 
 const core = createFauxCore({ provider: PROVIDER, models: [{ id: MODEL, contextWindow: 32_768 }] });
-core.setResponses(Array.from({ length: 50 }, () => async (context: unknown) =>
-  SUMMARY_REQUEST.test(JSON.stringify(context))
-    ? fauxAssistantMessage("## Goal\nCHILD-909 summary")
-    : fauxAssistantMessage(`continued CHILD-909 ${"y".repeat(8_000)}`)));
+core.setResponses(
+  Array.from(
+    { length: 50 },
+    () => async (context: unknown) =>
+      SUMMARY_REQUEST.test(JSON.stringify(context))
+        ? fauxAssistantMessage("## Goal\nCHILD-909 summary")
+        : fauxAssistantMessage(`continued CHILD-909 ${"y".repeat(8_000)}`),
+  ),
+);
 
 const requests: Array<{ kind: "summary" | "turn"; promptTokens: number; order: number }> = [];
 let order = 0;
@@ -51,7 +77,11 @@ const streamSimple: typeof core.streamSimple = (model, context, options) => {
   const kind = SUMMARY_REQUEST.test(JSON.stringify(context)) ? "summary" : "turn";
   const index = order++;
   void stream.result().then((result) => {
-    requests.push({ kind, promptTokens: result.usage.input + result.usage.cacheRead + result.usage.cacheWrite, order: index });
+    requests.push({
+      kind,
+      promptTokens: result.usage.input + result.usage.cacheRead + result.usage.cacheWrite,
+      order: index,
+    });
   });
   return stream;
 };
@@ -59,13 +89,24 @@ const streamSimple: typeof core.streamSimple = (model, context, options) => {
 const model = core.getModel() as Model<Api>;
 const runtime = {
   models: createModels(),
-  provider: { id: model.provider, kind: "openai", label: "Replay provider", baseUrl: model.baseUrl, models: [model.id], needsKey: false, deployment: "hosted" },
+  provider: {
+    id: model.provider,
+    kind: "openai",
+    label: "Replay provider",
+    baseUrl: model.baseUrl,
+    models: [model.id],
+    needsKey: false,
+    deployment: "hosted",
+  },
   model,
   apiKey: undefined,
   headers: undefined,
   streams: { streamSimple },
 };
-const initialMessages = [...historicalTurns("child-surface", 10, 10_000), user("Child first task must preserve CHILD-909 before provider I/O")];
+const initialMessages = [
+  ...historicalTurns("child-surface", 10, 10_000),
+  user("Child first task must preserve CHILD-909 before provider I/O"),
+];
 
 const registry = new SubagentRuntimeRegistry();
 const child = registry.create({
@@ -89,14 +130,22 @@ for (const message of initialMessages) {
   chars += JSON.stringify((message as UserMessage | AssistantMessage).content).length;
   if (message.role === "user") parentTokens += Math.ceil(chars / 4);
 }
-const summaryTokens = requests.filter((request) => request.kind === "summary").reduce((total, request) => total + request.promptTokens, 0);
+const summaryTokens = requests
+  .filter((request) => request.kind === "summary")
+  .reduce((total, request) => total + request.promptTokens, 0);
 const childTokens = requests.reduce((total, request) => total + request.promptTokens, 0);
-console.log(JSON.stringify({
-  requests,
-  summaryTokens,
-  childTokens,
-  parentTokens,
-  sessionTokens: childTokens + parentTokens,
-  shareOfChild: summaryTokens / childTokens,
-  shareOfSession: summaryTokens / (childTokens + parentTokens),
-}, null, 2));
+console.log(
+  JSON.stringify(
+    {
+      requests,
+      summaryTokens,
+      childTokens,
+      parentTokens,
+      sessionTokens: childTokens + parentTokens,
+      shareOfChild: summaryTokens / childTokens,
+      shareOfSession: summaryTokens / (childTokens + parentTokens),
+    },
+    null,
+    2,
+  ),
+);

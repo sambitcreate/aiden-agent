@@ -19,7 +19,18 @@ function repository(t: { after: (fn: () => void) => void }): string {
   const dir = mkdtempSync(join(tmpdir(), "aiden-local-repo-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   git(dir, "init", "--quiet", "--initial-branch", "main");
-  git(dir, "-c", "user.name=Aiden", "-c", "user.email=aiden@example.test", "commit", "--quiet", "--allow-empty", "-m", "init");
+  git(
+    dir,
+    "-c",
+    "user.name=Aiden",
+    "-c",
+    "user.email=aiden@example.test",
+    "commit",
+    "--quiet",
+    "--allow-empty",
+    "-m",
+    "init",
+  );
   return dir;
 }
 
@@ -151,11 +162,14 @@ test("enterprise hosts count only when the host check accepts them", async (t) =
   const dir = repository(t);
   git(dir, "remote", "add", "origin", "https://git.corp.example/acme/app.git");
 
-  assert.deepEqual(await new LocalRepositoryResolver({ sshHostname: async () => undefined }).resolve(dir), {
-    ok: false,
-    availability: "not-github",
-    message: "This repository's remote is not hosted on GitHub.",
-  });
+  assert.deepEqual(
+    await new LocalRepositoryResolver({ sshHostname: async () => undefined }).resolve(dir),
+    {
+      ok: false,
+      availability: "not-github",
+      message: "This repository's remote is not hosted on GitHub.",
+    },
+  );
   const enterprise = await new LocalRepositoryResolver({
     isGitHubHost: async (host) => host === "git.corp.example",
   }).resolve(dir);
@@ -171,7 +185,12 @@ test("a folder outside git is not a repository", async (t) => {
 });
 
 test("remote URLs parse across git's URL forms without keeping credentials", () => {
-  assert.deepEqual(parseGitRemoteUrl("git@github.com:Acme/App.git"), { host: "github.com", owner: "acme", name: "app", ssh: true });
+  assert.deepEqual(parseGitRemoteUrl("git@github.com:Acme/App.git"), {
+    host: "github.com",
+    owner: "acme",
+    name: "app",
+    ssh: true,
+  });
   assert.deepEqual(parseGitRemoteUrl("ssh://git@ghe.example:2222/acme/app.git"), {
     host: "ghe.example",
     owner: "acme",

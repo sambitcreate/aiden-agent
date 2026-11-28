@@ -44,55 +44,99 @@ async function eventually(check: () => boolean, timeoutMs = 2_000): Promise<bool
   return check();
 }
 
-test("termination keeps escalating after the leader closes until a SIGTERM-ignoring descendant is gone", { skip: !posix }, async (t) => {
-  // The descendant ignores SIGTERM and does not hold the leader's pipes, so the
-  // leader closes on SIGTERM while the descendant survives it.
-  const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-process-group-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const ready = path.join(dir, "ready");
-  const child = spawnGroup(
-    `sh -c 'trap "" TERM; : > "${ready}"; while :; do sleep 0.05; done' >/dev/null 2>&1 &\necho $!\nwait`,
-  );
-  const descendant = Number(await firstLine(child));
-  t.after(() => { try { process.kill(descendant, "SIGKILL"); } catch { /* gone */ } });
-  assert.equal(await eventually(() => existsSync(ready)), true);
-  const terminator = createProcessGroupTerminator(child, { killGraceMs: 300 });
-  const closed = once(child, "close");
-  terminator.terminate();
-  await closed;
-  assert.equal(processRunning(descendant), true, "the descendant must outlive SIGTERM for this test to mean anything");
-  await terminator.finished();
-  assert.equal(await eventually(() => !processRunning(descendant)), true, "SIGKILL must still reach the group after the leader closed");
-  assert.equal(processGroupRunning(child.pid), false);
-});
+test(
+  "termination keeps escalating after the leader closes until a SIGTERM-ignoring descendant is gone",
+  { skip: !posix },
+  async (t) => {
+    // The descendant ignores SIGTERM and does not hold the leader's pipes, so the
+    // leader closes on SIGTERM while the descendant survives it.
+    const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-process-group-"));
+    t.after(() => rm(dir, { recursive: true, force: true }));
+    const ready = path.join(dir, "ready");
+    const child = spawnGroup(
+      `sh -c 'trap "" TERM; : > "${ready}"; while :; do sleep 0.05; done' >/dev/null 2>&1 &\necho $!\nwait`,
+    );
+    const descendant = Number(await firstLine(child));
+    t.after(() => {
+      try {
+        process.kill(descendant, "SIGKILL");
+      } catch {
+        /* gone */
+      }
+    });
+    assert.equal(await eventually(() => existsSync(ready)), true);
+    const terminator = createProcessGroupTerminator(child, { killGraceMs: 300 });
+    const closed = once(child, "close");
+    terminator.terminate();
+    await closed;
+    assert.equal(
+      processRunning(descendant),
+      true,
+      "the descendant must outlive SIGTERM for this test to mean anything",
+    );
+    await terminator.finished();
+    assert.equal(
+      await eventually(() => !processRunning(descendant)),
+      true,
+      "SIGKILL must still reach the group after the leader closed",
+    );
+    assert.equal(processGroupRunning(child.pid), false);
+  },
+);
 
-test("a finished termination means the group is gone, not that SIGKILL was sent", { skip: !posix }, async (t) => {
-  const child = spawnGroup(`trap "" TERM; echo ready; while :; do sleep 0.05; done`);
-  t.after(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* gone */ } });
-  await firstLine(child);
-  const terminator = createProcessGroupTerminator(child, { killGraceMs: 100 });
-  terminator.terminate();
-  assert.equal(await terminator.finished(), "exit_confirmed");
-  assert.equal(processGroupRunning(child.pid), false);
-});
+test(
+  "a finished termination means the group is gone, not that SIGKILL was sent",
+  { skip: !posix },
+  async (t) => {
+    const child = spawnGroup(`trap "" TERM; echo ready; while :; do sleep 0.05; done`);
+    t.after(() => {
+      try {
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {
+        /* gone */
+      }
+    });
+    await firstLine(child);
+    const terminator = createProcessGroupTerminator(child, { killGraceMs: 100 });
+    terminator.terminate();
+    assert.equal(await terminator.finished(), "exit_confirmed");
+    assert.equal(processGroupRunning(child.pid), false);
+  },
+);
 
-test("a group that outlives SIGKILL is reported unconfirmed, never stopped", { skip: !posix }, async (t) => {
-  const child = spawnGroup(`trap "" TERM; echo ready; while :; do sleep 0.05; done`);
-  t.after(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* gone */ } });
-  await firstLine(child);
-  // SIGKILL cannot be ignored, so the group is reported as stuck by the probe.
-  const terminator = createProcessGroupTerminator(child, {
-    killGraceMs: 50,
-    killConfirmMs: 100,
-    probe: { exists: () => true, stillRuns: async () => true },
-  });
-  terminator.terminate();
-  assert.equal(await terminator.finished(), "cleanup_unconfirmed");
-});
+test(
+  "a group that outlives SIGKILL is reported unconfirmed, never stopped",
+  { skip: !posix },
+  async (t) => {
+    const child = spawnGroup(`trap "" TERM; echo ready; while :; do sleep 0.05; done`);
+    t.after(() => {
+      try {
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {
+        /* gone */
+      }
+    });
+    await firstLine(child);
+    // SIGKILL cannot be ignored, so the group is reported as stuck by the probe.
+    const terminator = createProcessGroupTerminator(child, {
+      killGraceMs: 50,
+      killConfirmMs: 100,
+      probe: { exists: () => true, stillRuns: async () => true },
+    });
+    terminator.terminate();
+    assert.equal(await terminator.finished(), "cleanup_unconfirmed");
+  },
+);
 
 test("zombies nobody reaped do not count against a stopped group", { skip: !posix }, async (t) => {
   const child = spawnGroup(`trap "" TERM; echo ready; while :; do sleep 0.05; done`);
-  t.after(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* gone */ } });
+  t.after(() => {
+    try {
+      process.kill(-child.pid!, "SIGKILL");
+    } catch {
+      /* gone */
+    }
+  });
   await firstLine(child);
   const terminator = createProcessGroupTerminator(child, {
     killGraceMs: 50,
@@ -102,54 +146,92 @@ test("zombies nobody reaped do not count against a stopped group", { skip: !posi
   const started = Date.now();
   terminator.terminate();
   assert.equal(await terminator.finished(), "exit_confirmed");
-  assert.ok(Date.now() - started < 2_000, "a zombie-only group must not wait out the confirmation window");
+  assert.ok(
+    Date.now() - started < 2_000,
+    "a zombie-only group must not wait out the confirmation window",
+  );
 });
 
-test("a probe that never answers cannot stretch the wait after SIGKILL", { skip: !posix }, async (t) => {
-  const child = spawnGroup(`trap "" TERM; echo ready; while :; do sleep 0.05; done`);
-  t.after(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* gone */ } });
-  await firstLine(child);
-  const terminator = createProcessGroupTerminator(child, {
-    killGraceMs: 50,
-    killConfirmMs: 100,
-    probe: { exists: () => true, stillRuns: () => new Promise<boolean>(() => {}) },
-  });
-  terminator.terminate();
-  assert.equal(await terminator.finished(), "cleanup_unconfirmed");
-});
+test(
+  "a probe that never answers cannot stretch the wait after SIGKILL",
+  { skip: !posix },
+  async (t) => {
+    const child = spawnGroup(`trap "" TERM; echo ready; while :; do sleep 0.05; done`);
+    t.after(() => {
+      try {
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {
+        /* gone */
+      }
+    });
+    await firstLine(child);
+    const terminator = createProcessGroupTerminator(child, {
+      killGraceMs: 50,
+      killConfirmMs: 100,
+      probe: { exists: () => true, stillRuns: () => new Promise<boolean>(() => {}) },
+    });
+    terminator.terminate();
+    assert.equal(await terminator.finished(), "cleanup_unconfirmed");
+  },
+);
 
-test("termination finishes as soon as the group exits instead of waiting out the grace period", { skip: !posix }, async () => {
-  const child = spawnGroup("sleep 30");
-  const terminator = createProcessGroupTerminator(child, { killGraceMs: 10_000 });
-  const started = Date.now();
-  terminator.terminate();
-  terminator.terminate();
-  await terminator.finished();
-  assert.ok(Date.now() - started < 2_000);
-  assert.equal(terminator.requested, true);
-});
+test(
+  "termination finishes as soon as the group exits instead of waiting out the grace period",
+  { skip: !posix },
+  async () => {
+    const child = spawnGroup("sleep 30");
+    const terminator = createProcessGroupTerminator(child, { killGraceMs: 10_000 });
+    const started = Date.now();
+    terminator.terminate();
+    terminator.terminate();
+    await terminator.finished();
+    assert.ok(Date.now() - started < 2_000);
+    assert.equal(terminator.requested, true);
+  },
+);
 
-test("an unrequested termination is already finished and signals nothing", { skip: !posix }, async () => {
-  const child = spawnGroup("echo done");
-  const terminator = createProcessGroupTerminator(child, { killGraceMs: 10_000 });
-  await terminator.finished();
-  const completion = await waitForChildExit(child, { drainMs: 5_000 });
-  assert.deepEqual(completion, { code: 0, signal: null, pipesHeld: false });
-  assert.equal(terminator.requested, false);
-});
+test(
+  "an unrequested termination is already finished and signals nothing",
+  { skip: !posix },
+  async () => {
+    const child = spawnGroup("echo done");
+    const terminator = createProcessGroupTerminator(child, { killGraceMs: 10_000 });
+    await terminator.finished();
+    const completion = await waitForChildExit(child, { drainMs: 5_000 });
+    assert.deepEqual(completion, { code: 0, signal: null, pipesHeld: false });
+    assert.equal(terminator.requested, false);
+  },
+);
 
-test("a leader whose background job keeps stdout open settles after the drain window", { skip: !posix }, async (t) => {
-  const child = spawnGroup("sleep 30 &\necho $!\nexit 3");
-  const background = Number(await firstLine(child));
-  t.after(() => { try { process.kill(background, "SIGKILL"); } catch { /* gone */ } });
-  const terminator = createProcessGroupTerminator(child, { killGraceMs: 500 });
-  const started = Date.now();
-  const completion = await waitForChildExit(child, { drainMs: 200, onPipesHeld: () => terminator.terminate() });
-  assert.deepEqual(completion, { code: 3, signal: null, pipesHeld: true });
-  assert.ok(Date.now() - started < 5_000, "settling must not wait for the 30 s background job");
-  await terminator.finished();
-  assert.equal(await eventually(() => !processRunning(background)), true, "the job holding the pipe is stopped with its group");
-});
+test(
+  "a leader whose background job keeps stdout open settles after the drain window",
+  { skip: !posix },
+  async (t) => {
+    const child = spawnGroup("sleep 30 &\necho $!\nexit 3");
+    const background = Number(await firstLine(child));
+    t.after(() => {
+      try {
+        process.kill(background, "SIGKILL");
+      } catch {
+        /* gone */
+      }
+    });
+    const terminator = createProcessGroupTerminator(child, { killGraceMs: 500 });
+    const started = Date.now();
+    const completion = await waitForChildExit(child, {
+      drainMs: 200,
+      onPipesHeld: () => terminator.terminate(),
+    });
+    assert.deepEqual(completion, { code: 3, signal: null, pipesHeld: true });
+    assert.ok(Date.now() - started < 5_000, "settling must not wait for the 30 s background job");
+    await terminator.finished();
+    assert.equal(
+      await eventually(() => !processRunning(background)),
+      true,
+      "the job holding the pipe is stopped with its group",
+    );
+  },
+);
 
 test("a spawn failure rejects the exit wait", async () => {
   const child = spawn("/nonexistent/aiden-binary", [], { stdio: ["ignore", "pipe", "pipe"] });
@@ -372,7 +454,10 @@ test("Darwin lsof parser verifies anonymous PIPE and unix socketpairs and reject
     new Set([25, 27, 29, 31]),
     new Set([2001, 2002, 2003, 2004, 2005, 2006]),
   );
-  assert.deepEqual([...matched].sort((a, b) => a - b), [2001, 2002]);
+  assert.deepEqual(
+    [...matched].sort((a, b) => a - b),
+    [2001, 2002],
+  );
 });
 
 test("Darwin lsof parser accepts buffered anonymous pipes with cnt=N while rejecting named, zero, malformed, and unconnected endpoints", () => {
@@ -457,151 +542,205 @@ test("Darwin lsof parser accepts buffered anonymous pipes with cnt=N while rejec
     new Set([25, 26, 27, 28]),
     new Set([3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 3009]),
   );
-  assert.deepEqual([...matched].sort((a, b) => a - b), [3001, 3002]);
+  assert.deepEqual(
+    [...matched].sort((a, b) => a - b),
+    [3001, 3002],
+  );
 });
 
-test("captureProcessGroupSurvivors fails closed without proof and verifies pipe-inheriting survivors while rejecting unrelated leaderless groups", { skip: !posix }, async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-survivor-proof-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+test(
+  "captureProcessGroupSurvivors fails closed without proof and verifies pipe-inheriting survivors while rejecting unrelated leaderless groups",
+  { skip: !posix },
+  async (t) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-survivor-proof-"));
+    t.after(() => rm(dir, { recursive: true, force: true }));
 
-  // 1. Spawn a wrapper whose grandchild inherits our stdout/stderr pipes, then wrapper exits.
-  const ownedWrapper = spawn(
-    process.execPath,
-    [
-      "-e",
-      `const { spawn } = require("node:child_process");
+    // 1. Spawn a wrapper whose grandchild inherits our stdout/stderr pipes, then wrapper exits.
+    const ownedWrapper = spawn(
+      process.execPath,
+      [
+        "-e",
+        `const { spawn } = require("node:child_process");
 const g = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)"], { stdio: ["ignore", "inherit", "inherit"] });
 process.stdout.write(String(g.pid) + "\\n");
 process.exit(0);`,
-    ],
-    { detached: true, stdio: ["pipe", "pipe", "pipe"] },
-  );
-  const ownedGroup = ownedWrapper.pid!;
-  const ownedLeaderStartId = readProcessStartId(ownedGroup);
-  const ownedExited = once(ownedWrapper, "exit");
-  const ownedGrandchild = Number(await firstLine(ownedWrapper));
-  t.after(() => {
-    for (const pid of [ownedGroup, ownedGrandchild]) {
-      try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ }
-      try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
-    }
-    ownedWrapper.stdin?.destroy();
-    ownedWrapper.stdout?.destroy();
-    ownedWrapper.stderr?.destroy();
-  });
-  await ownedExited;
-  assert.equal(await eventually(() => !processRunning(ownedGroup)), true, "owned wrapper should be reaped");
-  assert.equal(processRunning(ownedGrandchild), true, "owned grandchild should still run");
+      ],
+      { detached: true, stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const ownedGroup = ownedWrapper.pid!;
+    const ownedLeaderStartId = readProcessStartId(ownedGroup);
+    const ownedExited = once(ownedWrapper, "exit");
+    const ownedGrandchild = Number(await firstLine(ownedWrapper));
+    t.after(() => {
+      for (const pid of [ownedGroup, ownedGrandchild]) {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          /* gone */
+        }
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* gone */
+        }
+      }
+      ownedWrapper.stdin?.destroy();
+      ownedWrapper.stdout?.destroy();
+      ownedWrapper.stderr?.destroy();
+    });
+    await ownedExited;
+    assert.equal(
+      await eventually(() => !processRunning(ownedGroup)),
+      true,
+      "owned wrapper should be reaped",
+    );
+    assert.equal(processRunning(ownedGrandchild), true, "owned grandchild should still run");
 
-  // 2. Spawn an unrelated same-UID leaderless group with stdio ignored (no shared transport pipe).
-  const foreignFile = path.join(dir, "foreign.pid");
-  const foreignWrapper = spawn(
-    process.execPath,
-    [
-      "-e",
-      `const { spawn } = require("node:child_process");
+    // 2. Spawn an unrelated same-UID leaderless group with stdio ignored (no shared transport pipe).
+    const foreignFile = path.join(dir, "foreign.pid");
+    const foreignWrapper = spawn(
+      process.execPath,
+      [
+        "-e",
+        `const { spawn } = require("node:child_process");
 const { writeFileSync } = require("node:fs");
 const g = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)"], { stdio: "ignore" });
 writeFileSync(${JSON.stringify(foreignFile)}, String(g.pid));
 process.exit(0);`,
-    ],
-    { detached: true, stdio: "ignore" },
-  );
-  const foreignGroup = foreignWrapper.pid!;
-  const foreignExited = once(foreignWrapper, "exit");
-  await foreignExited;
-  assert.equal(await eventually(() => existsSync(foreignFile)), true);
-  const foreignGrandchild = Number(
-    (await import("node:fs")).readFileSync(foreignFile, "utf8").trim(),
-  );
-  t.after(() => {
-    for (const pid of [foreignGroup, foreignGrandchild]) {
-      try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ }
-      try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
-    }
-  });
-  assert.equal(await eventually(() => !processRunning(foreignGroup)), true, "foreign wrapper should be reaped");
-  assert.equal(processRunning(foreignGrandchild), true, "foreign leaderless child should still run");
+      ],
+      { detached: true, stdio: "ignore" },
+    );
+    const foreignGroup = foreignWrapper.pid!;
+    const foreignExited = once(foreignWrapper, "exit");
+    await foreignExited;
+    assert.equal(await eventually(() => existsSync(foreignFile)), true);
+    const foreignGrandchild = Number(
+      (await import("node:fs")).readFileSync(foreignFile, "utf8").trim(),
+    );
+    t.after(() => {
+      for (const pid of [foreignGroup, foreignGrandchild]) {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          /* gone */
+        }
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* gone */
+        }
+      }
+    });
+    assert.equal(
+      await eventually(() => !processRunning(foreignGroup)),
+      true,
+      "foreign wrapper should be reaped",
+    );
+    assert.equal(
+      processRunning(foreignGrandchild),
+      true,
+      "foreign leaderless child should still run",
+    );
 
-  // Without pre-exit observation or transport FDs, BOTH leaderless groups MUST fail closed.
-  assert.deepEqual(
-    captureProcessGroupSurvivors(ownedGroup, { leaderStartId: ownedLeaderStartId }),
-    [],
-    "leaderless capture without pre-exit or transport-pipe proof must fail closed",
-  );
-  assert.deepEqual(
-    captureProcessGroupSurvivors(foreignGroup, { leaderStartId: ownedLeaderStartId }),
-    [],
-    "foreign same-UID leaderless group with newer startId must fail closed",
-  );
+    // Without pre-exit observation or transport FDs, BOTH leaderless groups MUST fail closed.
+    assert.deepEqual(
+      captureProcessGroupSurvivors(ownedGroup, { leaderStartId: ownedLeaderStartId }),
+      [],
+      "leaderless capture without pre-exit or transport-pipe proof must fail closed",
+    );
+    assert.deepEqual(
+      captureProcessGroupSurvivors(foreignGroup, { leaderStartId: ownedLeaderStartId }),
+      [],
+      "foreign same-UID leaderless group with newer startId must fail closed",
+    );
 
-  // Extract our open transport FDs from `ownedWrapper`.
-  const ownedFds = [ownedWrapper.stdin, ownedWrapper.stdout, ownedWrapper.stderr]
-    .map((stream) => (stream && !stream.destroyed ? (stream as unknown as { _handle?: { fd?: number } })._handle?.fd : undefined))
-    .filter((fd): fd is number => typeof fd === "number" && Number.isSafeInteger(fd) && fd >= 0);
-  assert.ok(ownedFds.length > 0, "expected at least one open stdio pipe FD held by owned grandchild");
+    // Extract our open transport FDs from `ownedWrapper`.
+    const ownedFds = [ownedWrapper.stdin, ownedWrapper.stdout, ownedWrapper.stderr]
+      .map((stream) =>
+        stream && !stream.destroyed
+          ? (stream as unknown as { _handle?: { fd?: number } })._handle?.fd
+          : undefined,
+      )
+      .filter((fd): fd is number => typeof fd === "number" && Number.isSafeInteger(fd) && fd >= 0);
+    assert.ok(
+      ownedFds.length > 0,
+      "expected at least one open stdio pipe FD held by owned grandchild",
+    );
 
-  // With our transport's open pipe FDs, the pipe-inheriting grandchild IS captured...
-  const capturedOwned = captureProcessGroupSurvivors(ownedGroup, {
-    leaderStartId: ownedLeaderStartId,
-    transportFds: ownedFds,
-  });
-  assert.equal(capturedOwned.length, 1);
-  assert.equal(capturedOwned[0]!.pid, ownedGrandchild);
-  assert.ok(capturedOwned[0]!.startId.length > 0);
-
-  // ...while the unrelated same-UID leaderless group (holding no pipe from ownedWrapper) is REJECTED!
-  assert.deepEqual(
-    captureProcessGroupSurvivors(foreignGroup, {
+    // With our transport's open pipe FDs, the pipe-inheriting grandchild IS captured...
+    const capturedOwned = captureProcessGroupSurvivors(ownedGroup, {
       leaderStartId: ownedLeaderStartId,
       transportFds: ownedFds,
-    }),
-    [],
-    "unrelated same-UID leaderless group without inherited transport pipe must be rejected",
-  );
-});
+    });
+    assert.equal(capturedOwned.length, 1);
+    assert.equal(capturedOwned[0]!.pid, ownedGrandchild);
+    assert.ok(capturedOwned[0]!.startId.length > 0);
 
-test("observePreExitProcessGroupMembers proves a stdio-ignored descendant before leader exit", { skip: !posix }, async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-preexit-proof-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const child = spawn(
-    process.execPath,
-    [
-      "-e",
-      `const { spawn } = require("node:child_process");
+    // ...while the unrelated same-UID leaderless group (holding no pipe from ownedWrapper) is REJECTED!
+    assert.deepEqual(
+      captureProcessGroupSurvivors(foreignGroup, {
+        leaderStartId: ownedLeaderStartId,
+        transportFds: ownedFds,
+      }),
+      [],
+      "unrelated same-UID leaderless group without inherited transport pipe must be rejected",
+    );
+  },
+);
+
+test(
+  "observePreExitProcessGroupMembers proves a stdio-ignored descendant before leader exit",
+  { skip: !posix },
+  async (t) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-preexit-proof-"));
+    t.after(() => rm(dir, { recursive: true, force: true }));
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        `const { spawn } = require("node:child_process");
 const g = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)"], { stdio: "ignore" });
 process.stdout.write(String(g.pid) + "\\n");
 process.stdin.resume();
 process.stdin.on("end", () => process.exit(0));`,
-    ],
-    { detached: true, stdio: ["pipe", "pipe", "pipe"] },
-  );
-  const pgid = child.pid!;
-  const leaderStartId = readProcessStartId(pgid);
-  const grandchild = Number(await firstLine(child));
-  t.after(() => {
-    for (const pid of [pgid, grandchild]) {
-      try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ }
-      try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
-    }
-  });
-  const preExitMembers = observePreExitProcessGroupMembers(pgid, leaderStartId);
-  assert.ok(
-    preExitMembers.some((member) => member.pid === grandchild && member.startId.length > 0),
-    `expected pre-exit observation of grandchild ${grandchild}, got ${JSON.stringify(preExitMembers)}`,
-  );
+      ],
+      { detached: true, stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const pgid = child.pid!;
+    const leaderStartId = readProcessStartId(pgid);
+    const grandchild = Number(await firstLine(child));
+    t.after(() => {
+      for (const pid of [pgid, grandchild]) {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          /* gone */
+        }
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* gone */
+        }
+      }
+    });
+    const preExitMembers = observePreExitProcessGroupMembers(pgid, leaderStartId);
+    assert.ok(
+      preExitMembers.some((member) => member.pid === grandchild && member.startId.length > 0),
+      `expected pre-exit observation of grandchild ${grandchild}, got ${JSON.stringify(preExitMembers)}`,
+    );
 
-  // Now let the leader exit and be reaped; grandchild has stdio: "ignore" (no shared pipes).
-  const exited = once(child, "exit");
-  child.stdin!.end();
-  await exited;
-  assert.equal(await eventually(() => !processRunning(pgid)), true);
-  assert.equal(processRunning(grandchild), true);
+    // Now let the leader exit and be reaped; grandchild has stdio: "ignore" (no shared pipes).
+    const exited = once(child, "exit");
+    child.stdin!.end();
+    await exited;
+    assert.equal(await eventually(() => !processRunning(pgid)), true);
+    assert.equal(processRunning(grandchild), true);
 
-  // Without pre-exit proof, capture fails closed.
-  assert.deepEqual(captureProcessGroupSurvivors(pgid, { leaderStartId }), []);
-  // With pre-exit proof captured alongside the verified live leader, grandchild IS captured.
-  const captured = captureProcessGroupSurvivors(pgid, { leaderStartId, preExitMembers });
-  assert.equal(captured.length, 1);
-  assert.equal(captured[0]!.pid, grandchild);
-});
+    // Without pre-exit proof, capture fails closed.
+    assert.deepEqual(captureProcessGroupSurvivors(pgid, { leaderStartId }), []);
+    // With pre-exit proof captured alongside the verified live leader, grandchild IS captured.
+    const captured = captureProcessGroupSurvivors(pgid, { leaderStartId, preExitMembers });
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0]!.pid, grandchild);
+  },
+);

@@ -18,7 +18,13 @@ export interface InputModalityKeyEvent {
 export function modalityFromKeydown(event: InputModalityKeyEvent): InputModality | null {
   // Bare modifiers and ⌘/Ctrl/Alt chords are shortcuts and clicks with a
   // modifier held, not navigation, so they keep whatever was in use.
-  if (event.key === "Meta" || event.key === "Control" || event.key === "Alt" || event.key === "Shift") return null;
+  if (
+    event.key === "Meta" ||
+    event.key === "Control" ||
+    event.key === "Alt" ||
+    event.key === "Shift"
+  )
+    return null;
   if (event.metaKey || event.ctrlKey || event.altKey) return null;
   return "keyboard";
 }
@@ -46,7 +52,8 @@ export function pointerMoveSteersFocus(event: InputModalityPointerMove): boolean
 export function installInputModality(doc: Document = document): () => void {
   const root = doc.documentElement;
   const set = (modality: InputModality) => {
-    if (root.getAttribute(INPUT_MODALITY_ATTRIBUTE) !== modality) root.setAttribute(INPUT_MODALITY_ATTRIBUTE, modality);
+    if (root.getAttribute(INPUT_MODALITY_ATTRIBUTE) !== modality)
+      root.setAttribute(INPUT_MODALITY_ATTRIBUTE, modality);
   };
   const onKeydown = (event: KeyboardEvent) => {
     const modality = modalityFromKeydown(event);

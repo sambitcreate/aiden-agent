@@ -21,7 +21,10 @@ import {
 
 /** The shared sprite contract every client draws from (iOS and Android read the same file). */
 const fixture = JSON.parse(
-  readFileSync(new URL("../../protocol/aiden-remote/v1/fixtures/contract.json", import.meta.url), "utf8"),
+  readFileSync(
+    new URL("../../protocol/aiden-remote/v1/fixtures/contract.json", import.meta.url),
+    "utf8",
+  ),
 ).botAvatarSprite as {
   gridSize: number;
   viewBox: number;
@@ -42,7 +45,8 @@ describe("bot sprite parity with the shared contract", () => {
 
   test("every shape's body bits and every colour's tones match", () => {
     assert.deepEqual(Object.keys(fixture.bodies).sort(), [...BOT_AVATAR_SHAPES].sort());
-    for (const shape of BOT_AVATAR_SHAPES) assert.equal(BOT_SPRITE_BODIES[shape], fixture.bodies[shape], shape);
+    for (const shape of BOT_AVATAR_SHAPES)
+      assert.equal(BOT_SPRITE_BODIES[shape], fixture.bodies[shape], shape);
     assert.deepEqual(Object.keys(fixture.tones).sort(), [...BOT_AVATAR_COLORS].sort());
     for (const color of BOT_AVATAR_COLORS) {
       const expected = Object.fromEntries(
@@ -87,7 +91,11 @@ describe("bot sprite parity with the shared contract", () => {
           }
         }
       }
-      assert.deepEqual(painted.map((row) => row.join("")), grid, shape);
+      assert.deepEqual(
+        painted.map((row) => row.join("")),
+        grid,
+        shape,
+      );
     }
   });
 });
@@ -113,7 +121,10 @@ describe("botAvatarTarget", () => {
   });
 
   test("anything waiting on the person wins over the turn's phase", () => {
-    assert.equal(botAvatarTarget({ session: "running", phase: "command", awaitingPerson: true }), "waiting");
+    assert.equal(
+      botAvatarTarget({ session: "running", phase: "command", awaitingPerson: true }),
+      "waiting",
+    );
     assert.equal(botAvatarTarget({ session: "idle", awaitingPerson: true }), "waiting");
     assert.equal(botAvatarTarget({ session: "model_error", awaitingPerson: true }), "waiting");
   });
@@ -129,7 +140,10 @@ describe("botAvatarTarget", () => {
 
   test("a turn that failed points at error once the session rests, but a new turn wins", () => {
     assert.equal(botAvatarTarget({ session: "idle", failed: true }), "error");
-    assert.equal(botAvatarTarget({ session: "running", phase: "writing", failed: true }), "writing");
+    assert.equal(
+      botAvatarTarget({ session: "running", phase: "writing", failed: true }),
+      "writing",
+    );
   });
 });
 
@@ -178,7 +192,9 @@ function fakeClock() {
   const advance = (ms: number) => {
     const until = now + ms;
     for (;;) {
-      const due = [...pending.entries()].filter(([, timer]) => timer.at <= until).sort((a, b) => a[1].at - b[1].at)[0];
+      const due = [...pending.entries()]
+        .filter(([, timer]) => timer.at <= until)
+        .sort((a, b) => a[1].at - b[1].at)[0];
       if (!due) break;
       pending.delete(due[0]);
       now = due[1].at;
@@ -192,7 +208,11 @@ function fakeClock() {
 function settlerHarness(initial?: BotAvatarState) {
   const clock = fakeClock();
   const shown: BotAvatarState[] = [];
-  const settler = createBotAvatarSettler({ timers: clock.timers, onChange: (state) => shown.push(state), initial });
+  const settler = createBotAvatarSettler({
+    timers: clock.timers,
+    onChange: (state) => shown.push(state),
+    initial,
+  });
   return { settler, shown, advance: clock.advance };
 }
 

@@ -30,7 +30,8 @@ export class BotComputerKeyError extends Error {
 const CONTROL_CHARACTER = "Control characters can't be typed; send Return or Tab with key.";
 
 function asKeyError(error: unknown, fallback: string): BotComputerKeyError {
-  if (error instanceof RangeError && error.message.startsWith("Control characters")) return new BotComputerKeyError(CONTROL_CHARACTER);
+  if (error instanceof RangeError && error.message.startsWith("Control characters"))
+    return new BotComputerKeyError(CONTROL_CHARACTER);
   return new BotComputerKeyError(error instanceof Error ? error.message : fallback);
 }
 
@@ -38,7 +39,9 @@ function asKeyError(error: unknown, fallback: string): BotComputerKeyError {
 export function botComputerTextStrokes(text: string): BotComputerKeyStroke[] {
   // The viewer's model types them as Return and Tab, which could submit a form the Bot meant only to fill.
   if (/[\n\r\t]/u.test(text)) {
-    throw new BotComputerKeyError("Typed text can't contain line breaks or tabs: type each line, then send Return or Tab with key.");
+    throw new BotComputerKeyError(
+      "Typed text can't contain line breaks or tabs: type each line, then send Return or Tab with key.",
+    );
   }
   try {
     return textKeyStrokes(text);
@@ -47,17 +50,28 @@ export function botComputerTextStrokes(text: string): BotComputerKeyStroke[] {
   }
 }
 
-const MODIFIER_ALIASES: Readonly<Record<string, string>> = { command: "cmd", control: "ctrl", alt: "option" };
+const MODIFIER_ALIASES: Readonly<Record<string, string>> = {
+  command: "cmd",
+  control: "ctrl",
+  alt: "option",
+};
 const MODIFIER_ORDER = ["ctrl", "option", "shift", "cmd"];
 
 /** Keysyms to hold for a click or drag's modifiers, in a fixed order. */
 export function botComputerModifierKeysyms(modifiers: readonly string[] | undefined): number[] {
   if (!modifiers || modifiers.length === 0) return [];
-  const names = [...new Set(modifiers.map((raw) => MODIFIER_ALIASES[raw.trim().toLowerCase()] ?? raw.trim().toLowerCase()))];
+  const names = [
+    ...new Set(
+      modifiers.map(
+        (raw) => MODIFIER_ALIASES[raw.trim().toLowerCase()] ?? raw.trim().toLowerCase(),
+      ),
+    ),
+  ];
   names.sort((left, right) => MODIFIER_ORDER.indexOf(left) - MODIFIER_ORDER.indexOf(right));
   return names.map((modifier) => {
     const keysym = MODIFIER_KEYSYMS[modifier];
-    if (keysym === undefined) throw new BotComputerKeyError(`The ${modifier} key can't be sent to a Bot computer.`);
+    if (keysym === undefined)
+      throw new BotComputerKeyError(`The ${modifier} key can't be sent to a Bot computer.`);
     return keysym;
   });
 }

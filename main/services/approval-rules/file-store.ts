@@ -20,20 +20,29 @@ import {
 } from "../../../renderer/shared/approval-rules.js";
 import type { ApprovalRuleStore } from "./store.js";
 
-export function fileApprovalRuleStore(root: () => string, now: () => Date = () => new Date()): ApprovalRuleStore {
+export function fileApprovalRuleStore(
+  root: () => string,
+  now: () => Date = () => new Date(),
+): ApprovalRuleStore {
   // Device-local and never portable: a rule is a consent on this Mac.
-  const store = new DataStore<ApprovalRulesDocument>(APPROVAL_RULES_FILE, emptyApprovalRulesDocument(), root, {
-    maxBytes: APPROVAL_RULES_MAX_BYTES,
-    fileMode: 0o600,
-    normalize: normalizeApprovalRulesDocument,
-    isSafe: isApprovalRulesDocumentSafe,
-    rejectCorruptWrite: true,
-    rejectUnsafeWrite: true,
-    preserveCorruptFile: true,
-    // Re-read before each change, so a rule removed by hand is never restored.
-    reloadBeforeWrite: true,
-  });
-  const readable = async () => !(await store.loadedFromCorruptFile()) && !(await store.loadedFromUnsafeFile());
+  const store = new DataStore<ApprovalRulesDocument>(
+    APPROVAL_RULES_FILE,
+    emptyApprovalRulesDocument(),
+    root,
+    {
+      maxBytes: APPROVAL_RULES_MAX_BYTES,
+      fileMode: 0o600,
+      normalize: normalizeApprovalRulesDocument,
+      isSafe: isApprovalRulesDocumentSafe,
+      rejectCorruptWrite: true,
+      rejectUnsafeWrite: true,
+      preserveCorruptFile: true,
+      // Re-read before each change, so a rule removed by hand is never restored.
+      reloadBeforeWrite: true,
+    },
+  );
+  const readable = async () =>
+    !(await store.loadedFromCorruptFile()) && !(await store.loadedFromUnsafeFile());
   return {
     load: () => store.load(),
     update: (mutation) => store.update(mutation),
@@ -46,9 +55,11 @@ export function fileApprovalRuleStore(root: () => string, now: () => Date = () =
       if (await readable()) return;
       const file = await store.path();
       const stamp = now().toISOString().replace(/[:.]/gu, "-");
-      await fs.rename(file, path.join(path.dirname(file), `${path.basename(file)}.unreadable-${stamp}`)).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== "ENOENT") throw error;
-      });
+      await fs
+        .rename(file, path.join(path.dirname(file), `${path.basename(file)}.unreadable-${stamp}`))
+        .catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") throw error;
+        });
       await store.reload();
     },
   };

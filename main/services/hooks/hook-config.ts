@@ -22,7 +22,14 @@ import {
   type HookScope,
 } from "./hook-types.js";
 
-export { aidenToolInput, aidenToolName, claudeToolInput, claudeToolName, toolInputFile, toolNameSpellings } from "./hook-aliases.js";
+export {
+  aidenToolInput,
+  aidenToolName,
+  claudeToolInput,
+  claudeToolName,
+  toolInputFile,
+  toolNameSpellings,
+} from "./hook-aliases.js";
 
 export const DEFAULT_HOOK_TIMEOUT_SECONDS = 30;
 export const MAX_HOOK_TIMEOUT_SECONDS = 120;
@@ -51,7 +58,15 @@ export const RESERVED_HOOK_ENV_NAMES: ReadonlySet<string> = new Set([
   "CLAUDE_PROJECT_DIR",
 ]);
 
-const HANDLER_KEYS = new Set(["type", "command", "timeout", "async", "failClosed", "envAllow", "statusMessage"]);
+const HANDLER_KEYS = new Set([
+  "type",
+  "command",
+  "timeout",
+  "async",
+  "failClosed",
+  "envAllow",
+  "statusMessage",
+]);
 const GROUP_KEYS = new Set(["matcher", "hooks"]);
 
 export function isHookEvent(value: unknown): value is HookEvent {
@@ -69,11 +84,17 @@ const SCOPE_PHRASES: Record<HookScope["kind"], string> = {
  * Why `event` never fires for a hook saved in `scope`, or undefined when it
  * can. See `HOOK_EVENT_SCOPE_KINDS`.
  */
-export function hookEventScopeProblem(event: HookEvent, scope: Pick<HookScope, "kind">): string | undefined {
+export function hookEventScopeProblem(
+  event: HookEvent,
+  scope: Pick<HookScope, "kind">,
+): string | undefined {
   const kinds = HOOK_EVENT_SCOPE_KINDS[event];
   if (kinds.includes(scope.kind)) return undefined;
   const where = kinds.filter((kind) => kind !== "global").map((kind) => SCOPE_PHRASES[kind]);
-  const list = where.length <= 1 ? where.join("") : `${where.slice(0, -1).join(", ")} or ${where[where.length - 1]}`;
+  const list =
+    where.length <= 1
+      ? where.join("")
+      : `${where.slice(0, -1).join(", ")} or ${where[where.length - 1]}`;
   return `${event} hooks never run for ${SCOPE_PHRASES[scope.kind]}; save it globally or for ${list}.`;
 }
 
@@ -84,7 +105,9 @@ export function normalizeWorkspaceRoot(root: string): string {
 }
 
 export function normalizeHookScope(scope: HookScope): HookScope {
-  return scope.kind === "workspace" ? { kind: "workspace", workspaceRoot: normalizeWorkspaceRoot(scope.workspaceRoot) } : scope;
+  return scope.kind === "workspace"
+    ? { kind: "workspace", workspaceRoot: normalizeWorkspaceRoot(scope.workspaceRoot) }
+    : scope;
 }
 
 /** Exact, stable key for persistence and digests. */
@@ -109,9 +132,14 @@ export function hookScopesEqual(a: HookScope, b: HookScope): boolean {
  * The scopes that apply to one run, in dispatch order global → workspace →
  * bot → chat. Callers pass this as `HookDispatchContext.scopes`.
  */
-export function hookScopesFor(input: { workspaceRoot?: string | null; botId?: string | null; chatId?: string | null }): HookScope[] {
+export function hookScopesFor(input: {
+  workspaceRoot?: string | null;
+  botId?: string | null;
+  chatId?: string | null;
+}): HookScope[] {
   const scopes: HookScope[] = [{ kind: "global" }];
-  if (input.workspaceRoot) scopes.push({ kind: "workspace", workspaceRoot: normalizeWorkspaceRoot(input.workspaceRoot) });
+  if (input.workspaceRoot)
+    scopes.push({ kind: "workspace", workspaceRoot: normalizeWorkspaceRoot(input.workspaceRoot) });
   if (input.botId) scopes.push({ kind: "bot", botId: input.botId });
   if (input.chatId) scopes.push({ kind: "chat", chatId: input.chatId });
   return scopes;
@@ -129,7 +157,8 @@ export function maxHookTimeoutSeconds(async: boolean | undefined): number {
 }
 
 export function clampHookTimeout(seconds: number | undefined, async?: boolean): number {
-  if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return DEFAULT_HOOK_TIMEOUT_SECONDS;
+  if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0)
+    return DEFAULT_HOOK_TIMEOUT_SECONDS;
   return Math.min(maxHookTimeoutSeconds(async), seconds);
 }
 
@@ -145,11 +174,20 @@ export function clampHookTimeout(seconds: number | undefined, async?: boolean): 
  * answer, but a retry with other arguments is a different call and is checked.
  */
 export function toolCallIdempotencyKey(prefix: string, toolCallId: string, args: unknown): string {
-  const inputHash = createHash("sha256").update(JSON.stringify(args) ?? "").digest("hex").slice(0, 16);
+  const inputHash = createHash("sha256")
+    .update(JSON.stringify(args) ?? "")
+    .digest("hex")
+    .slice(0, 16);
   return `${prefix}:${toolCallId}:${inputHash}`;
 }
 
-export function hookDigest(input: { event: string; matcher: string; handler: HookCommandHandler; scope: HookScope; configuredType?: string }): string {
+export function hookDigest(input: {
+  event: string;
+  matcher: string;
+  handler: HookCommandHandler;
+  scope: HookScope;
+  configuredType?: string;
+}): string {
   const canonical = JSON.stringify({
     v: 1,
     event: input.event,
@@ -165,7 +203,27 @@ export function hookDigest(input: { event: string; matcher: string; handler: Hoo
   return createHash("sha256").update(canonical).digest("hex");
 }
 
-const RUNNERS = new Set(["npx", "bunx", "node", "bun", "deno", "bash", "sh", "zsh", "python", "python3", "uv", "uvx", "ruby", "perl", "pnpm", "npm", "yarn", "exec", "env"]);
+const RUNNERS = new Set([
+  "npx",
+  "bunx",
+  "node",
+  "bun",
+  "deno",
+  "bash",
+  "sh",
+  "zsh",
+  "python",
+  "python3",
+  "uv",
+  "uvx",
+  "ruby",
+  "perl",
+  "pnpm",
+  "npm",
+  "yarn",
+  "exec",
+  "env",
+]);
 
 /** A short display name from the command: `~/.aiden/hooks/guard-shell.sh` → `guard-shell`. */
 /**
@@ -173,18 +231,30 @@ const RUNNERS = new Set(["npx", "bunx", "node", "bun", "deno", "bash", "sh", "zs
  * make a command or name read differently from what runs: the same set the
  * approval cards refuse.
  */
-// eslint-disable-next-line no-control-regex -- matching these characters is the point
-const UNSAFE_DISPLAY_CHARACTER = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]/u;
+/* eslint-disable no-control-regex -- matching these characters is the point */
+const UNSAFE_DISPLAY_CHARACTER =
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]/u;
+/* eslint-enable no-control-regex */
 
 function displayableName(name: string | undefined): string | undefined {
-  const cleaned = name?.replace(new RegExp(UNSAFE_DISPLAY_CHARACTER.source, "gu"), "").trim().slice(0, 60);
+  const cleaned = name
+    ?.replace(new RegExp(UNSAFE_DISPLAY_CHARACTER.source, "gu"), "")
+    .trim()
+    .slice(0, 60);
   return cleaned ? cleaned : undefined;
 }
 
 export function defaultHookName(command: string): string {
-  const tokens = command.trim().split(/\s+/u).map((token) => token.replace(/^["']|["']$/gu, ""));
+  const tokens = command
+    .trim()
+    .split(/\s+/u)
+    .map((token) => token.replace(/^["']|["']$/gu, ""));
   let token = tokens[0] ?? "";
-  for (let index = 0; index < tokens.length - 1 && (RUNNERS.has(path.basename(token)) || token.includes("=")); index += 1) {
+  for (
+    let index = 0;
+    index < tokens.length - 1 && (RUNNERS.has(path.basename(token)) || token.includes("="));
+    index += 1
+  ) {
     const next = tokens[index + 1];
     if (!next || next.startsWith("-")) break;
     token = next;
@@ -203,35 +273,57 @@ function describeType(value: unknown): string {
 }
 
 /** Validate one handler object. `maxTimeout` lets agent proposals use a lower ceiling. */
-export function validateHookHandler(raw: unknown, options: { maxTimeoutSeconds?: number } = {}): HandlerValidation {
+export function validateHookHandler(
+  raw: unknown,
+  options: { maxTimeoutSeconds?: number } = {},
+): HandlerValidation {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return { ok: false, reason: "The hook is not an object.", configuredType: "unknown", command: "" };
+    return {
+      ok: false,
+      reason: "The hook is not an object.",
+      configuredType: "unknown",
+      command: "",
+    };
   }
   const record = raw as Record<string, unknown>;
   const configuredType = describeType(record.type);
   const commandText = typeof record.command === "string" ? record.command : "";
-  const fail = (reason: string): HandlerValidation => ({ ok: false, reason, configuredType, command: commandText });
+  const fail = (reason: string): HandlerValidation => ({
+    ok: false,
+    reason,
+    configuredType,
+    command: commandText,
+  });
   if (record.type !== "command") {
     return fail(
       record.type === undefined
-        ? "The hook has no type; Aiden runs only \"command\" hooks."
+        ? 'The hook has no type; Aiden runs only "command" hooks.'
         : `"${configuredType}" hooks are not supported in Aiden; only "command" hooks run.`,
     );
   }
-  if (record.async !== undefined && typeof record.async !== "boolean") return fail("async must be true or false.");
+  if (record.async !== undefined && typeof record.async !== "boolean")
+    return fail("async must be true or false.");
   const isAsync = record.async === true;
   const unknown = Object.keys(record).filter((key) => !HANDLER_KEYS.has(key));
-  if (unknown.length > 0) return fail(`Unsupported field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}.`);
+  if (unknown.length > 0)
+    return fail(`Unsupported field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}.`);
   if (!commandText.trim()) return fail("The hook has no command.");
-  if (commandText.length > MAX_HOOK_COMMAND_LENGTH) return fail(`The command is longer than ${MAX_HOOK_COMMAND_LENGTH} characters.`);
+  if (commandText.length > MAX_HOOK_COMMAND_LENGTH)
+    return fail(`The command is longer than ${MAX_HOOK_COMMAND_LENGTH} characters.`);
   if (commandText.includes("\0")) return fail("The command contains a NUL character.");
   if (UNSAFE_DISPLAY_CHARACTER.test(commandText)) {
-    return fail("The command contains a control or text-direction character, which could hide what it runs.");
+    return fail(
+      "The command contains a control or text-direction character, which could hide what it runs.",
+    );
   }
   const warnings: string[] = [];
   let timeout: number | undefined;
   if (record.timeout !== undefined) {
-    if (typeof record.timeout !== "number" || !Number.isFinite(record.timeout) || record.timeout <= 0) {
+    if (
+      typeof record.timeout !== "number" ||
+      !Number.isFinite(record.timeout) ||
+      record.timeout <= 0
+    ) {
       return fail("The timeout must be a positive number of seconds.");
     }
     const maximum = maxHookTimeoutSeconds(isAsync);
@@ -241,20 +333,29 @@ export function validateHookHandler(raw: unknown, options: { maxTimeoutSeconds?:
     }
     timeout = Math.min(record.timeout, maximum);
     if (record.timeout > maximum) {
-      warnings.push(`The timeout was lowered to Aiden's maximum of ${maximum} seconds${isAsync ? " for async hooks" : ""}.`);
+      warnings.push(
+        `The timeout was lowered to Aiden's maximum of ${maximum} seconds${isAsync ? " for async hooks" : ""}.`,
+      );
     }
   }
-  if (record.failClosed !== undefined && typeof record.failClosed !== "boolean") return fail("failClosed must be true or false.");
-  if (isAsync && record.failClosed === true) return fail("An async hook can not be failClosed: Aiden does not wait for it.");
+  if (record.failClosed !== undefined && typeof record.failClosed !== "boolean")
+    return fail("failClosed must be true or false.");
+  if (isAsync && record.failClosed === true)
+    return fail("An async hook can not be failClosed: Aiden does not wait for it.");
   let envAllow: string[] | undefined;
   if (record.envAllow !== undefined) {
-    if (!Array.isArray(record.envAllow) || record.envAllow.some((name) => typeof name !== "string" || !ENV_NAME.test(name))) {
+    if (
+      !Array.isArray(record.envAllow) ||
+      record.envAllow.some((name) => typeof name !== "string" || !ENV_NAME.test(name))
+    ) {
       return fail("envAllow must be a list of environment variable names.");
     }
     const names = [...new Set(record.envAllow as string[])];
-    if (names.length > MAX_HOOK_ENV_ALLOW) return fail(`envAllow can name at most ${MAX_HOOK_ENV_ALLOW} variables.`);
+    if (names.length > MAX_HOOK_ENV_ALLOW)
+      return fail(`envAllow can name at most ${MAX_HOOK_ENV_ALLOW} variables.`);
     const reserved = names.filter((name) => RESERVED_HOOK_ENV_NAMES.has(name));
-    if (reserved.length > 0) return fail(`envAllow can not name variables Aiden sets: ${reserved.join(", ")}.`);
+    if (reserved.length > 0)
+      return fail(`envAllow can not name variables Aiden sets: ${reserved.join(", ")}.`);
     envAllow = names.sort();
   }
   const handler: HookCommandHandler = { type: "command", command: commandText };
@@ -292,16 +393,19 @@ function unknownEventReason(configuredEvent: string): string {
 export function parseHooksConfig(raw: unknown, options: ParseHooksOptions): ParsedHooksFile {
   const result: ParsedHooksFile = { hooks: [], problems: [], warnings: [] };
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    result.problems.push("The hooks file must be a JSON object with a \"hooks\" field.");
+    result.problems.push('The hooks file must be a JSON object with a "hooks" field.');
     return result;
   }
   const document = raw as Record<string, unknown>;
   const ignored = Object.keys(document).filter((key) => key !== "hooks" && key !== "$schema");
-  if (ignored.length > 0) result.warnings.push(`Ignored top-level field${ignored.length === 1 ? "" : "s"}: ${ignored.join(", ")}.`);
+  if (ignored.length > 0)
+    result.warnings.push(
+      `Ignored top-level field${ignored.length === 1 ? "" : "s"}: ${ignored.join(", ")}.`,
+    );
   const events = document.hooks;
   if (events === undefined) return result;
   if (!events || typeof events !== "object" || Array.isArray(events)) {
-    result.problems.push("\"hooks\" must be an object keyed by event name.");
+    result.problems.push('"hooks" must be an object keyed by event name.');
     return result;
   }
   const scope = normalizeHookScope(options.scope);
@@ -312,17 +416,24 @@ export function parseHooksConfig(raw: unknown, options: ParseHooksOptions): Pars
       continue;
     }
     groups.forEach((group, groupIndex) => {
-      const groupRecord = group && typeof group === "object" && !Array.isArray(group) ? (group as Record<string, unknown>) : undefined;
+      const groupRecord =
+        group && typeof group === "object" && !Array.isArray(group)
+          ? (group as Record<string, unknown>)
+          : undefined;
       const matcher = typeof groupRecord?.matcher === "string" ? groupRecord.matcher : "";
-      const handlers = Array.isArray(groupRecord?.hooks) ? (groupRecord.hooks as unknown[]) : undefined;
+      const handlers = Array.isArray(groupRecord?.hooks)
+        ? (groupRecord.hooks as unknown[])
+        : undefined;
       if (!groupRecord || !handlers) {
         result.problems.push(`"${configuredEvent}" group ${groupIndex + 1} needs a "hooks" list.`);
         return;
       }
       let groupReason: string | undefined;
-      if (groupRecord.matcher !== undefined && typeof groupRecord.matcher !== "string") groupReason = "The matcher must be a string.";
+      if (groupRecord.matcher !== undefined && typeof groupRecord.matcher !== "string")
+        groupReason = "The matcher must be a string.";
       const extraGroupKeys = Object.keys(groupRecord).filter((key) => !GROUP_KEYS.has(key));
-      if (!groupReason && extraGroupKeys.length > 0) groupReason = `Unsupported field${extraGroupKeys.length === 1 ? "" : "s"}: ${extraGroupKeys.join(", ")}.`;
+      if (!groupReason && extraGroupKeys.length > 0)
+        groupReason = `Unsupported field${extraGroupKeys.length === 1 ? "" : "s"}: ${extraGroupKeys.join(", ")}.`;
       if (!groupReason) {
         const compiled = compileHookMatcher(matcher);
         if (!compiled.ok) groupReason = compiled.reason;
@@ -330,7 +441,9 @@ export function parseHooksConfig(raw: unknown, options: ParseHooksOptions): Pars
       handlers.forEach((rawHandler, handlerIndex) => {
         if (result.hooks.length >= MAX_HOOKS_PER_FILE) {
           if (!result.problems.some((problem) => problem.startsWith("More than"))) {
-            result.problems.push(`More than ${MAX_HOOKS_PER_FILE} hooks; the rest were not loaded.`);
+            result.problems.push(
+              `More than ${MAX_HOOKS_PER_FILE} hooks; the rest were not loaded.`,
+            );
           }
           return;
         }
@@ -338,8 +451,11 @@ export function parseHooksConfig(raw: unknown, options: ParseHooksOptions): Pars
         const validation = validateHookHandler(rawHandler);
         const reason = !known
           ? unknownEventReason(configuredEvent)
-          : groupReason ?? (validation.ok ? hookEventScopeProblem(configuredEvent, scope) : validation.reason);
-        const handler: HookCommandHandler = validation.ok ? validation.handler : { type: "command", command: validation.command };
+          : (groupReason ??
+            (validation.ok ? hookEventScopeProblem(configuredEvent, scope) : validation.reason));
+        const handler: HookCommandHandler = validation.ok
+          ? validation.handler
+          : { type: "command", command: validation.command };
         const configuredType = validation.ok ? "command" : validation.configuredType;
         if (validation.ok) result.warnings.push(...validation.warnings);
         const listing: HookListing = {
@@ -369,7 +485,13 @@ export function parseHooksConfigText(text: string, options: ParseHooksOptions): 
   try {
     raw = JSON.parse(text);
   } catch (error) {
-    return { hooks: [], problems: [`The hooks file is not valid JSON: ${error instanceof Error ? error.message : String(error)}`], warnings: [] };
+    return {
+      hooks: [],
+      problems: [
+        `The hooks file is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      ],
+      warnings: [],
+    };
   }
   return parseHooksConfig(raw, options);
 }

@@ -3,18 +3,37 @@ import path from "node:path";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 import { migratePiSessionJournal } from "../../main/services/pi-session-migration";
 
-type StoredChat = { id: string; title: string; workspaceId?: string; botId?: string;
-  createdAt: number; updatedAt: number; messages: Array<{ role: string; content: string }> };
+type StoredChat = {
+  id: string;
+  title: string;
+  workspaceId?: string;
+  botId?: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: Array<{ role: string; content: string }>;
+};
 async function index(root: string): Promise<Omit<StoredChat, "messages">[]> {
-  try { return JSON.parse(await readFile(path.join(root, "chats", "index.json"), "utf8")); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+  try {
+    return JSON.parse(await readFile(path.join(root, "chats", "index.json"), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
 }
 async function regularChats(root: string): Promise<StoredChat[]> {
-  const metas = (await index(root)).filter((chat) => !chat.botId && chat.workspaceId !== "assistant");
-  return Promise.all(metas.map(async (chat) => JSON.parse(await readFile(path.join(root, "chats", `${chat.id}.json`), "utf8"))));
+  const metas = (await index(root)).filter(
+    (chat) => !chat.botId && chat.workspaceId !== "assistant",
+  );
+  return Promise.all(
+    metas.map(async (chat) =>
+      JSON.parse(await readFile(path.join(root, "chats", `${chat.id}.json`), "utf8")),
+    ),
+  );
 }
 
-test("abandoned drafts never persist; first send creates exactly one conversation and survives promotion", async ({ aiden }) => {
+test("abandoned drafts never persist; first send creates exactly one conversation and survives promotion", async ({
+  aiden,
+}) => {
   const { page, userDataDir } = aiden;
   await finishLmStudioOnboarding(page);
   expect(await regularChats(userDataDir)).toEqual([]);
@@ -35,9 +54,17 @@ test("abandoned drafts never persist; first send creates exactly one conversatio
   await page.locator("textarea").fill("First persisted draft message");
   await page.locator("textarea").press("Enter");
   await expect.poll(async () => (await regularChats(userDataDir)).length).toBe(1);
-  await expect.poll(async () => (await regularChats(userDataDir))[0]?.messages.some((message) => message.role === "assistant")).toBe(true);
+  await expect
+    .poll(async () =>
+      (await regularChats(userDataDir))[0]?.messages.some(
+        (message) => message.role === "assistant",
+      ),
+    )
+    .toBe(true);
   const [sent] = await regularChats(userDataDir);
-  expect(sent.messages.filter((message) => message.role === "user").map((message) => message.content)).toEqual(["First persisted draft message"]);
+  expect(
+    sent.messages.filter((message) => message.role === "user").map((message) => message.content),
+  ).toEqual(["First persisted draft message"]);
   await page.getByRole("button", { name: "New Agent", exact: true }).click();
   await page.locator("textarea").fill("Another abandoned draft");
   const reopened = await aiden.relaunch();
@@ -45,7 +72,9 @@ test("abandoned drafts never persist; first send creates exactly one conversatio
   expect((await regularChats(userDataDir)).map((chat) => chat.id)).toEqual([sent.id]);
 });
 
-test("Back from Settings reopens an empty new agent instead of a missing chat", async ({ aiden }) => {
+test("Back from Settings reopens an empty new agent instead of a missing chat", async ({
+  aiden,
+}) => {
   const { page, userDataDir } = aiden;
   await finishLmStudioOnboarding(page);
   const draftRow = page.locator("[data-sidebar] [data-draft-chat]");
@@ -65,76 +94,173 @@ test("Back from Settings reopens an empty new agent instead of a missing chat", 
   }
   await composer.fill("Sent after a trip to Settings");
   await composer.press("Enter");
-  await expect.poll(async () => (await regularChats(userDataDir)).map((chat) => chat.id)).toEqual([draftId]);
+  await expect
+    .poll(async () => (await regularChats(userDataDir)).map((chat) => chat.id))
+    .toEqual([draftId]);
 });
 
-test("startup migration removes legacy empty chats once and keeps sent conversations", async ({ aiden }) => {
+test("startup migration removes legacy empty chats once and keeps sent conversations", async ({
+  aiden,
+}) => {
   await finishLmStudioOnboarding(aiden.page);
   await aiden.page.locator("textarea").fill("Keep this real conversation");
   await aiden.page.locator("textarea").press("Enter");
-  await expect.poll(async () => (await regularChats(aiden.userDataDir))[0]?.messages.some((message) => message.role === "assistant")).toBe(true);
+  await expect
+    .poll(async () =>
+      (await regularChats(aiden.userDataDir))[0]?.messages.some(
+        (message) => message.role === "assistant",
+      ),
+    )
+    .toBe(true);
   const before = await index(aiden.userDataDir);
-  const workspaceId = before.find((chat) => !chat.botId && chat.workspaceId !== "assistant")!.workspaceId;
+  const workspaceId = before.find(
+    (chat) => !chat.botId && chat.workspaceId !== "assistant",
+  )!.workspaceId;
   const seed = async (id: string) => {
-    const chat: StoredChat = { id, workspaceId, title: "New chat", messages: [], createdAt: Date.now(), updatedAt: Date.now() };
+    const chat: StoredChat = {
+      id,
+      workspaceId,
+      title: "New chat",
+      messages: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
     await writeFile(path.join(aiden.userDataDir, "chats", `${id}.json`), JSON.stringify(chat));
     const { messages: _messages, ...meta } = chat;
-    await writeFile(path.join(aiden.userDataDir, "chats", "index.json"), JSON.stringify([...(await index(aiden.userDataDir)), meta]));
+    await writeFile(
+      path.join(aiden.userDataDir, "chats", "index.json"),
+      JSON.stringify([...(await index(aiden.userDataDir)), meta]),
+    );
   };
   const journalRoot = path.join(aiden.userDataDir, "pi-compaction-sessions");
   const journalPath = path.join(journalRoot, "private-empty.jsonl");
-  const journal = `${JSON.stringify({ type: "session", version: 3, id: "private-empty",
-    timestamp: "2026-08-31T12:00:00.000Z", cwd: journalRoot,
-    metadata: { kind: "aiden-chat-compaction-v1", chatId: "private-empty" } })}\n`;
-  const privateJournal = journal + `${JSON.stringify({ type: "message", id: "private-message", parentId: null,
-    timestamp: "2026-08-31T12:00:01.000Z", message: { role: "user", content: "Private journal history", timestamp: 1 } })}\n`;
+  const journal = `${JSON.stringify({
+    type: "session",
+    version: 3,
+    id: "private-empty",
+    timestamp: "2026-08-31T12:00:00.000Z",
+    cwd: journalRoot,
+    metadata: { kind: "aiden-chat-compaction-v1", chatId: "private-empty" },
+  })}\n`;
+  const privateJournal =
+    journal +
+    `${JSON.stringify({
+      type: "message",
+      id: "private-message",
+      parentId: null,
+      timestamp: "2026-08-31T12:00:01.000Z",
+      message: { role: "user", content: "Private journal history", timestamp: 1 },
+    })}\n`;
   const promotedPath = path.join(journalRoot, "promoted-empty.jsonl");
   let promotedReceiptPath!: string;
   const reopened = await aiden.relaunch(async () => {
     // Seed only after Electron has closed so shutdown cannot flush a stale
     // in-memory chat index over the migration fixture.
     await mkdir(journalRoot, { recursive: true });
-    for (const id of ["legacy-empty", "private-empty", "header-only-empty", "promoted-empty"]) await seed(id);
+    for (const id of ["legacy-empty", "private-empty", "header-only-empty", "promoted-empty"])
+      await seed(id);
     await writeFile(journalPath, privateJournal);
-    await writeFile(path.join(journalRoot, "header-only-empty.jsonl"), journal.replace(/private-empty/gu, "header-only-empty"));
+    await writeFile(
+      path.join(journalRoot, "header-only-empty.jsonl"),
+      journal.replace(/private-empty/gu, "header-only-empty"),
+    );
     await writeFile(promotedPath, journal.replace(/private-empty/gu, "promoted-empty"));
     const promoted = await migratePiSessionJournal(promotedPath, "promoted-empty");
     promotedReceiptPath = promoted.receiptPath;
     const journalIndexPath = path.join(journalRoot, "aiden-journal-index.json");
-    let journalIndex: { version: number; chats: Record<string, string[]> } = { version: 1, chats: {} };
-    try { journalIndex = JSON.parse(await readFile(journalIndexPath, "utf8")); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    journalIndex.chats["promoted-empty"] = [promotedPath, promoted.receipt.backupPath, promoted.receiptPath];
+    let journalIndex: { version: number; chats: Record<string, string[]> } = {
+      version: 1,
+      chats: {},
+    };
+    try {
+      journalIndex = JSON.parse(await readFile(journalIndexPath, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    journalIndex.chats["promoted-empty"] = [
+      promotedPath,
+      promoted.receipt.backupPath,
+      promoted.receiptPath,
+    ];
     await writeFile(journalIndexPath, JSON.stringify(journalIndex));
-    await rm(path.join(aiden.userDataDir, "empty-workspace-chats-migration-v1.json"), { force: true });
-    expect((await index(aiden.userDataDir)).map((chat) => chat.id)).toEqual(expect.arrayContaining(["legacy-empty", "private-empty", "header-only-empty", "promoted-empty"]));
+    await rm(path.join(aiden.userDataDir, "empty-workspace-chats-migration-v1.json"), {
+      force: true,
+    });
+    expect((await index(aiden.userDataDir)).map((chat) => chat.id)).toEqual(
+      expect.arrayContaining([
+        "legacy-empty",
+        "private-empty",
+        "header-only-empty",
+        "promoted-empty",
+      ]),
+    );
     expect(await readFile(journalPath, "utf8")).toBe(privateJournal);
   });
   await expect(reopened.locator("textarea")).toBeVisible();
   expect((await index(aiden.userDataDir)).some((chat) => chat.id === "legacy-empty")).toBe(false);
   expect((await index(aiden.userDataDir)).some((chat) => chat.id === "private-empty")).toBe(true);
   expect(await readFile(journalPath, "utf8")).toBe(privateJournal);
-  expect((await index(aiden.userDataDir)).some((chat) => chat.id === "header-only-empty")).toBe(false);
+  expect((await index(aiden.userDataDir)).some((chat) => chat.id === "header-only-empty")).toBe(
+    false,
+  );
   expect((await index(aiden.userDataDir)).some((chat) => chat.id === "promoted-empty")).toBe(false);
-  await expect.poll(async () => { try { await readFile(promotedReceiptPath); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } }).toBe(false);
-  expect((await regularChats(aiden.userDataDir)).some((chat) => chat.messages.some((message) => message.content === "Keep this real conversation"))).toBe(true);
-  await expect.poll(async () => JSON.parse(await readFile(path.join(aiden.userDataDir, "empty-workspace-chats-migration-v1.json"), "utf8")).complete).toBe(true);
+  await expect
+    .poll(async () => {
+      try {
+        await readFile(promotedReceiptPath);
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+        throw error;
+      }
+    })
+    .toBe(false);
+  expect(
+    (await regularChats(aiden.userDataDir)).some((chat) =>
+      chat.messages.some((message) => message.content === "Keep this real conversation"),
+    ),
+  ).toBe(true);
+  await expect
+    .poll(
+      async () =>
+        JSON.parse(
+          await readFile(
+            path.join(aiden.userDataDir, "empty-workspace-chats-migration-v1.json"),
+            "utf8",
+          ),
+        ).complete,
+    )
+    .toBe(true);
   await aiden.relaunch(async () => {
     await seed("later-remote-empty");
-    expect((await index(aiden.userDataDir)).some((chat) => chat.id === "later-remote-empty")).toBe(true);
+    expect((await index(aiden.userDataDir)).some((chat) => chat.id === "later-remote-empty")).toBe(
+      true,
+    );
   });
-  expect((await index(aiden.userDataDir)).some((chat) => chat.id === "later-remote-empty")).toBe(true);
+  expect((await index(aiden.userDataDir)).some((chat) => chat.id === "later-remote-empty")).toBe(
+    true,
+  );
 });
 
 test("failed first send retains its draft and retry commits once", async ({ aiden }) => {
   await finishLmStudioOnboarding(aiden.page);
   await aiden.app.evaluate(({ ipcMain }) => {
     // Test-only fault injection at the real IPC boundary, without a production seam.
-    const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown> })._invokeHandlers;
+    const handlers = (
+      ipcMain as unknown as {
+        _invokeHandlers: Map<
+          string,
+          (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown
+        >;
+      }
+    )._invokeHandlers;
     const original = handlers.get("chats:createWithFirstMessage")!;
     let fail = true;
     handlers.set("chats:createWithFirstMessage", (event, ...args) => {
-      if (fail) { fail = false; throw new Error("Test first-send storage failure"); }
+      if (fail) {
+        fail = false;
+        throw new Error("Test first-send storage failure");
+      }
       return original(event, ...args);
     });
   });
@@ -145,18 +271,39 @@ test("failed first send retains its draft and retry commits once", async ({ aide
   await expect(composer).toHaveValue("Recover this first message");
   expect(await regularChats(aiden.userDataDir)).toEqual([]);
   await composer.press("Enter");
-  await expect.poll(async () => (await regularChats(aiden.userDataDir))[0]?.messages.some((message) => message.role === "assistant")).toBe(true);
-  expect((await regularChats(aiden.userDataDir))).toHaveLength(1);
-  expect((await regularChats(aiden.userDataDir))[0].messages.filter((message) => message.role === "user")).toHaveLength(1);
+  await expect
+    .poll(async () =>
+      (await regularChats(aiden.userDataDir))[0]?.messages.some(
+        (message) => message.role === "assistant",
+      ),
+    )
+    .toBe(true);
+  expect(await regularChats(aiden.userDataDir)).toHaveLength(1);
+  expect(
+    (await regularChats(aiden.userDataDir))[0].messages.filter(
+      (message) => message.role === "user",
+    ),
+  ).toHaveLength(1);
 });
 
-test("late first-send receipt cannot navigate back or start a response in a different draft", async ({ aiden }) => {
+test("late first-send receipt cannot navigate back or start a response in a different draft", async ({
+  aiden,
+}) => {
   await finishLmStudioOnboarding(aiden.page);
   await aiden.app.evaluate(({ ipcMain }) => {
-    const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown> })._invokeHandlers;
+    const handlers = (
+      ipcMain as unknown as {
+        _invokeHandlers: Map<
+          string,
+          (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown
+        >;
+      }
+    )._invokeHandlers;
     const original = handlers.get("chats:createWithFirstMessage")!;
     let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     (globalThis as unknown as { releaseDraftReceipt: () => void }).releaseDraftReceipt = release;
     handlers.set("chats:createWithFirstMessage", async (event, ...args) => {
       const receipt = await original(event, ...args);
@@ -170,26 +317,46 @@ test("late first-send receipt cannot navigate back or start a response in a diff
   await aiden.page.getByRole("button", { name: "New Agent", exact: true }).click();
   await aiden.page.locator("textarea").fill("Keep the new draft here");
   const destination = aiden.page.url();
-  await aiden.app.evaluate(() => (globalThis as unknown as { releaseDraftReceipt: () => void }).releaseDraftReceipt());
+  await aiden.app.evaluate(() =>
+    (globalThis as unknown as { releaseDraftReceipt: () => void }).releaseDraftReceipt(),
+  );
   // The published sidebar receipt proves the late save completed without
   // selecting or generating the previously committed conversation.
-  await expect(aiden.page.locator("[data-sidebar]").getByRole("button", { name: /^Committed before navigating away/u })).toBeVisible();
+  await expect(
+    aiden.page
+      .locator("[data-sidebar]")
+      .getByRole("button", { name: /^Committed before navigating away/u }),
+  ).toBeVisible();
   expect(aiden.page.url()).toBe(destination);
   await expect(aiden.page.locator("textarea")).toHaveValue("Keep the new draft here");
   const [chat] = await regularChats(aiden.userDataDir);
   expect(chat.messages.map((message) => message.role)).toEqual(["user"]);
-  expect(aiden.lmStudio.requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(0);
+  expect(
+    aiden.lmStudio.requests.filter((request) => request.url.endsWith("/chat/completions")),
+  ).toHaveLength(0);
 });
 
-test("unreadable private history preserves candidates without leaving a future migration sweep", async ({ aiden }) => {
+test("unreadable private history preserves candidates without leaving a future migration sweep", async ({
+  aiden,
+}) => {
   await finishLmStudioOnboarding(aiden.page);
   const seed = async (id: string) => {
-    const chat: StoredChat = { id, workspaceId: "default", title: "New chat", messages: [], createdAt: Date.now(), updatedAt: Date.now() };
+    const chat: StoredChat = {
+      id,
+      workspaceId: "default",
+      title: "New chat",
+      messages: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
     const directory = path.join(aiden.userDataDir, "chats");
     await mkdir(directory, { recursive: true });
     await writeFile(path.join(directory, `${id}.json`), JSON.stringify(chat));
     const { messages: _messages, ...meta } = chat;
-    await writeFile(path.join(directory, "index.json"), JSON.stringify([...(await index(aiden.userDataDir)), meta]));
+    await writeFile(
+      path.join(directory, "index.json"),
+      JSON.stringify([...(await index(aiden.userDataDir)), meta]),
+    );
   };
   const journalRoot = path.join(aiden.userDataDir, "pi-compaction-sessions");
   const corruptJournal = path.join(journalRoot, "unreadable.jsonl.corrupt-test");
@@ -199,7 +366,9 @@ test("unreadable private history preserves candidates without leaving a future m
     await mkdir(journalRoot, { recursive: true });
     await writeFile(corruptJournal, "{broken header");
     await rm(marker, { force: true });
-    expect((await index(aiden.userDataDir)).some((chat) => chat.id === "uncertain-empty")).toBe(true);
+    expect((await index(aiden.userDataDir)).some((chat) => chat.id === "uncertain-empty")).toBe(
+      true,
+    );
     expect(await readFile(corruptJournal, "utf8")).toBe("{broken header");
   });
   await expect(reopened.locator("textarea")).toBeVisible();
@@ -208,24 +377,35 @@ test("unreadable private history preserves candidates without leaving a future m
   await aiden.relaunch(async () => {
     await rm(corruptJournal);
     await seed("created-after-migration");
-    expect((await index(aiden.userDataDir)).some((chat) => chat.id === "created-after-migration")).toBe(true);
+    expect(
+      (await index(aiden.userDataDir)).some((chat) => chat.id === "created-after-migration"),
+    ).toBe(true);
   });
-  expect((await index(aiden.userDataDir)).some((chat) => chat.id === "created-after-migration")).toBe(true);
+  expect(
+    (await index(aiden.userDataDir)).some((chat) => chat.id === "created-after-migration"),
+  ).toBe(true);
 });
 
 async function addWorkspace(page: import("@playwright/test").Page, name: string): Promise<string> {
   const created = await page.evaluate(async (workspaceName) => {
-    const bridge = (window as unknown as {
-      aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
-    }).aidenAPI.ipc;
-    return bridge.invoke<{ id: string }>("workspaces:create", { name: workspaceName, permission: "ask" });
+    const bridge = (
+      window as unknown as {
+        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+      }
+    ).aidenAPI.ipc;
+    return bridge.invoke<{ id: string }>("workspaces:create", {
+      name: workspaceName,
+      permission: "ask",
+    });
   }, name);
   await page.reload();
   await expect(page.locator("textarea")).toBeVisible();
   return created.id;
 }
 
-test("the sidebar + starts a draft in its workspace and reuses only an empty draft", async ({ aiden }) => {
+test("the sidebar + starts a draft in its workspace and reuses only an empty draft", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   const workspaceId = await addWorkspace(page, "Second workspace");
@@ -299,13 +479,18 @@ test("the sidebar + starts a draft in its workspace and reuses only an empty dra
   const [chat] = await regularChats(aiden.userDataDir);
   expect(chat.id).toBe(secondDraft);
   expect(chat.workspaceId).toBe(workspaceId);
-  expect(chat.messages.filter((message) => message.role === "user").map((message) => message.content))
-    .toEqual(["Started from the sidebar plus"]);
+  expect(
+    chat.messages.filter((message) => message.role === "user").map((message) => message.content),
+  ).toEqual(["Started from the sidebar plus"]);
   await expect(draftRows).toHaveCount(0);
-  await expect(sidebar.getByRole("button", { name: /^Started from the sidebar plus/u })).toBeVisible();
+  await expect(
+    sidebar.getByRole("button", { name: /^Started from the sidebar plus/u }),
+  ).toBeVisible();
 });
 
-test("New chat in… opens a draft in the chosen workspace from the chevron, the shortcut and the menu", async ({ aiden }) => {
+test("New chat in… opens a draft in the chosen workspace from the chevron, the shortcut and the menu", async ({
+  aiden,
+}) => {
   const { page, app } = aiden;
   await finishLmStudioOnboarding(page);
   const targetId = await addWorkspace(page, "Palette target");
@@ -386,14 +571,21 @@ test("New chat in… opens a typed path as a workspace and offers Clone", async 
   await expect(palette.getByText("The parent folder doesn't exist.")).toBeVisible();
   await expect(page.getByRole("option")).toHaveCount(0);
   await search.fill("~/palette-folder");
-  await expect(page.getByRole("option", { name: /^Open \/.*palette-folder/u })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("option", { name: /^Open \/.*palette-folder/u })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await page.keyboard.press("Enter");
   await expect(palette).toHaveCount(0);
   await expect(composer).toBeFocused();
-  await expect(page.locator("[data-new-chat-headline]")).toHaveText("What should we build in palette-folder?");
+  await expect(page.locator("[data-new-chat-headline]")).toHaveText(
+    "What should we build in palette-folder?",
+  );
 });
 
-test("New chat in… Open folder… lets the picker make a new folder and starts the chat there", async ({ aiden }) => {
+test("New chat in… Open folder… lets the picker make a new folder and starts the chat there", async ({
+  aiden,
+}) => {
   const { page, app } = aiden;
   const newFolder = path.join(aiden.rootDir, "brand-new-project");
   await finishLmStudioOnboarding(page);
@@ -413,10 +605,15 @@ test("New chat in… Open folder… lets the picker make a new folder and starts
   await page.keyboard.press("ControlOrMeta+Shift+N");
   await page.getByRole("option", { name: /^Open folder…/u }).click();
   await expect(page.locator("[data-command-palette-content]")).toHaveCount(0);
-  await expect(page.locator("[data-new-chat-headline]")).toHaveText("What should we build in brand-new-project?");
+  await expect(page.locator("[data-new-chat-headline]")).toHaveText(
+    "What should we build in brand-new-project?",
+  );
 
-  const asked = await app.evaluate(() =>
-    (globalThis as unknown as { folderPickerOptions: Electron.OpenDialogOptions[] }).folderPickerOptions);
+  const asked = await app.evaluate(
+    () =>
+      (globalThis as unknown as { folderPickerOptions: Electron.OpenDialogOptions[] })
+        .folderPickerOptions,
+  );
   expect(asked).toHaveLength(1);
   // createDirectory is what shows the New Folder button in the macOS picker.
   expect(asked[0].properties).toEqual(expect.arrayContaining(["openDirectory", "createDirectory"]));

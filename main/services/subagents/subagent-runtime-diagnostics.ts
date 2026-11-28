@@ -1,9 +1,25 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, constants as fsConstants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, renameSync, rmSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  fchmodSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { PROVIDER_FAILURE_CATEGORIES, type ProviderFailureCategoryV1 } from "../../../renderer/shared/provider-failure.js";
-import { redactMultilineCredentialBlocks, sanitizeSubagentText } from "../../../renderer/shared/subagent-safe-text.js";
+import {
+  PROVIDER_FAILURE_CATEGORIES,
+  type ProviderFailureCategoryV1,
+} from "../../../renderer/shared/provider-failure.js";
+import {
+  redactMultilineCredentialBlocks,
+  sanitizeSubagentText,
+} from "../../../renderer/shared/subagent-safe-text.js";
 import { redactDevLogSecrets } from "../dev-log.js";
 
 export const MAX_SUBAGENT_RUNTIME_LOG_BYTES = 2 * 1024 * 1024;
@@ -25,8 +41,12 @@ const RETENTION_SWEEP_INTERVAL_MS = 60 * 60 * 1_000;
 function ensurePrivateDiagnosticDirectory(directory: string): void {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const directoryMetadata = lstatSync(directory);
-  if (!directoryMetadata.isDirectory() || directoryMetadata.isSymbolicLink()) throw new Error("Invalid diagnostic directory.");
-  const directoryDescriptor = openSync(directory, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+  if (!directoryMetadata.isDirectory() || directoryMetadata.isSymbolicLink())
+    throw new Error("Invalid diagnostic directory.");
+  const directoryDescriptor = openSync(
+    directory,
+    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+  );
   try {
     const validatedDirectory = fstatSync(directoryDescriptor);
     if (!validatedDirectory.isDirectory()) throw new Error("Invalid diagnostic directory.");
@@ -37,18 +57,39 @@ function ensurePrivateDiagnosticDirectory(directory: string): void {
 }
 
 export const SUBAGENT_RUNTIME_DIAGNOSTIC_STAGES = [
-  "launch", "bootstrap", "protocol", "provider_hook", "provider", "runtime", "cleanup",
+  "launch",
+  "bootstrap",
+  "protocol",
+  "provider_hook",
+  "provider",
+  "runtime",
+  "cleanup",
 ] as const;
 export type SubagentRuntimeDiagnosticStage = (typeof SUBAGENT_RUNTIME_DIAGNOSTIC_STAGES)[number];
 
 export const SUBAGENT_RUNTIME_DIAGNOSTIC_CODES = [
-  "launch_failed", "pre_ready_exit", "worker_fatal", "invalid_message", "ipc_budget_exceeded",
-  "readiness_ack_failed", "terminal_ack_failed", "provider_hook_failed", "provider_failure",
-  "stream_reconstruction_failed", "worker_exit", "cleanup_failed", "unknown",
+  "launch_failed",
+  "pre_ready_exit",
+  "worker_fatal",
+  "invalid_message",
+  "ipc_budget_exceeded",
+  "readiness_ack_failed",
+  "terminal_ack_failed",
+  "provider_hook_failed",
+  "provider_failure",
+  "stream_reconstruction_failed",
+  "worker_exit",
+  "cleanup_failed",
+  "unknown",
 ] as const;
 export type SubagentRuntimeDiagnosticCode = (typeof SUBAGENT_RUNTIME_DIAGNOSTIC_CODES)[number];
 
-export const SUBAGENT_RUNTIME_FAILURES = ["inference-startup", "inference", "policy", "provider"] as const;
+export const SUBAGENT_RUNTIME_FAILURES = [
+  "inference-startup",
+  "inference",
+  "policy",
+  "provider",
+] as const;
 
 export interface SubagentProcessDiagnostic {
   stage: SubagentRuntimeDiagnosticStage;
@@ -91,10 +132,15 @@ export function sanitizeSubagentDiagnosticText(value: string): string {
     const controlSafe = redactMultilineCredentialBlocks(value.replace(ANSI_ESCAPE_PATTERN, ""));
     // Inspect control-bearing lines first so a sensitive line cannot erase
     // unrelated loader evidence. Then retain the full multiline assignment pass.
-    const inspected = controlSafe.split("\n").map((line) =>
-      line.replace(CONTROL_CHARACTER_PATTERN, " ") !== line ? sanitizeSubagentText(line) : line,
-    ).join("\n");
-    const normalized = redactDevLogSecrets(sanitizeSubagentText(inspected).replace(CONTROL_CHARACTER_PATTERN, " "));
+    const inspected = controlSafe
+      .split("\n")
+      .map((line) =>
+        line.replace(CONTROL_CHARACTER_PATTERN, " ") !== line ? sanitizeSubagentText(line) : line,
+      )
+      .join("\n");
+    const normalized = redactDevLogSecrets(
+      sanitizeSubagentText(inspected).replace(CONTROL_CHARACTER_PATTERN, " "),
+    );
     return normalized
       .replace(/\b(?:https?|wss?):\/\/[^\s"'<>]+/giu, "[REDACTED URL]")
       .replace(/\bfile:\/\/\/[^\s"'<>]+/giu, "[REDACTED PATH]")
@@ -143,7 +189,8 @@ export function initSubagentRuntimeDiagnostics(targetPath: string): void {
     ensurePrivateDiagnosticDirectory(directory);
     try {
       const metadata = lstatSync(targetPath);
-      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1) throw new Error("Invalid subagent journal.");
+      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1)
+        throw new Error("Invalid subagent journal.");
       if (metadata.size > MAX_SUBAGENT_RUNTIME_LOG_BYTES) {
         rmSync(targetPath, { force: true });
       } else if (metadata.size > 0) {
@@ -163,11 +210,16 @@ export function initSubagentRuntimeDiagnostics(targetPath: string): void {
         metadata.nlink !== 1 ||
         metadata.size > MAX_SUBAGENT_RUNTIME_LOG_BYTES ||
         metadata.mtimeMs < Date.now() - MAX_SUBAGENT_RUNTIME_LOG_AGE_MS
-      ) rmSync(previous, { force: true });
+      )
+        rmSync(previous, { force: true });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    const descriptor = openSync(targetPath, fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_NOFOLLOW, 0o600);
+    const descriptor = openSync(
+      targetPath,
+      fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_NOFOLLOW,
+      0o600,
+    );
     try {
       const metadata = fstatSync(descriptor);
       if (!metadata.isFile() || metadata.nlink !== 1) throw new Error("Invalid subagent journal.");
@@ -194,16 +246,14 @@ async function rotateBeforeAppend(target: string, incomingBytes: number): Promis
   let existingBytes = 0;
   try {
     const metadata = await fs.lstat(target);
-    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1) throw new Error("Invalid subagent journal.");
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1)
+      throw new Error("Invalid subagent journal.");
     existingBytes = metadata.size;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   const ageExpired = Date.now() - activeSegmentStartedAtMs >= MAX_SUBAGENT_RUNTIME_LOG_AGE_MS;
-  if (
-    existingBytes + incomingBytes <= MAX_SUBAGENT_RUNTIME_LOG_BYTES &&
-    !ageExpired
-  ) return;
+  if (existingBytes + incomingBytes <= MAX_SUBAGENT_RUNTIME_LOG_BYTES && !ageExpired) return;
 
   const previous = previousLogPath(target);
   if (ageExpired) {
@@ -257,17 +307,24 @@ export function writeSubagentRuntimeFailure(record: SubagentRuntimeFailureRecord
     .then(async () => {
       ensurePrivateDiagnosticDirectory(path.dirname(target));
       await rotateBeforeAppend(target, Buffer.byteLength(line));
-      const handle = await fs.open(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | fsConstants.O_NOFOLLOW, 0o600);
+      const handle = await fs.open(
+        target,
+        fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | fsConstants.O_NOFOLLOW,
+        0o600,
+      );
       try {
         const metadata = await handle.stat();
-        if (!metadata.isFile() || metadata.nlink !== 1) throw new Error("Invalid subagent journal.");
+        if (!metadata.isFile() || metadata.nlink !== 1)
+          throw new Error("Invalid subagent journal.");
         await handle.writeFile(line, "utf8");
         await handle.chmod(0o600);
       } finally {
         await handle.close();
       }
     })
-    .catch(() => { sinkFailed = true; });
+    .catch(() => {
+      sinkFailed = true;
+    });
 }
 
 export async function flushSubagentRuntimeDiagnostics(timeoutMs?: number): Promise<boolean> {
@@ -311,7 +368,8 @@ export function pruneSubagentRuntimeDiagnosticRetention(at = new Date()): Promis
           metadata.nlink !== 1 ||
           metadata.size > MAX_SUBAGENT_RUNTIME_LOG_BYTES ||
           (metadata.size > 0 && metadata.mtimeMs < cutoff)
-        ) await fs.rm(candidate, { force: true });
+        )
+          await fs.rm(candidate, { force: true });
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
@@ -329,7 +387,9 @@ export function pruneSubagentRuntimeDiagnosticRetention(at = new Date()): Promis
       await descriptor.close();
     }
   });
-  queue = sweep.catch(() => { sinkFailed = true; });
+  queue = sweep.catch(() => {
+    sinkFailed = true;
+  });
   return sweep;
 }
 
@@ -338,8 +398,13 @@ async function copySubagentFile(source: string, destination: string): Promise<bo
     const sourceHandle = await fs.open(source, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
     try {
       const metadata = await sourceHandle.stat();
-      if (!metadata.isFile() || metadata.nlink !== 1) throw new Error("Invalid subagent diagnostic source.");
-      const destinationHandle = await fs.open(destination, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, 0o600);
+      if (!metadata.isFile() || metadata.nlink !== 1)
+        throw new Error("Invalid subagent diagnostic source.");
+      const destinationHandle = await fs.open(
+        destination,
+        fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+        0o600,
+      );
       try {
         await destinationHandle.writeFile(await sourceHandle.readFile());
         await destinationHandle.chmod(0o600);
@@ -356,7 +421,10 @@ async function copySubagentFile(source: string, destination: string): Promise<bo
   }
 }
 
-export async function snapshotSubagentRuntimeDiagnostics(destinationDirectory: string, at = new Date()): Promise<string[]> {
+export async function snapshotSubagentRuntimeDiagnostics(
+  destinationDirectory: string,
+  at = new Date(),
+): Promise<string[]> {
   if (!diagnosticLogPath) return [];
   await pruneSubagentRuntimeDiagnosticRetention(at);
   const target = diagnosticLogPath;
@@ -369,7 +437,11 @@ export async function snapshotSubagentRuntimeDiagnostics(destinationDirectory: s
     }
     return copied;
   });
-  queue = snapshot.then(() => undefined).catch(() => { sinkFailed = true; });
+  queue = snapshot
+    .then(() => undefined)
+    .catch(() => {
+      sinkFailed = true;
+    });
   return snapshot;
 }
 
@@ -380,7 +452,9 @@ export async function deleteSubagentRuntimeDiagnostics(): Promise<void> {
     await fs.rm(target, { force: true });
     await fs.rm(previousLogPath(target), { force: true });
   });
-  queue = deletion.catch(() => { sinkFailed = true; });
+  queue = deletion.catch(() => {
+    sinkFailed = true;
+  });
   await deletion;
 }
 

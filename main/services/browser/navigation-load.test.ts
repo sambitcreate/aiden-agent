@@ -15,21 +15,32 @@ const NEW = "http://127.0.0.1:4000/held";
 class FakeGuest extends EventEmitter {
   loading = false;
   defersStart = false;
-  isLoadingMainFrame() { return this.loading; }
+  isLoadingMainFrame() {
+    return this.loading;
+  }
   loadURL(url: string, startsNavigation = !this.defersStart): Promise<void> {
     const native = new Promise<void>((resolve, reject) => {
       this.once("did-finish-load", () => resolve());
       this.once("did-fail-load", (_event, code: number, description: string, failedUrl: string) =>
-        reject(new Error(`${description} (${code}) loading '${failedUrl}'`)));
+        reject(new Error(`${description} (${code}) loading '${failedUrl}'`)),
+      );
       this.once("did-stop-loading", () =>
-        reject(Object.assign(new Error(`ERR_FAILED (-2) loading '${url}'`), { errno: -2 })));
+        reject(Object.assign(new Error(`ERR_FAILED (-2) loading '${url}'`), { errno: -2 })),
+      );
     });
     if (startsNavigation) this.emit("did-start-navigation", {}, url, false, true);
     return native;
   }
-  stopLoading() { this.loading = false; this.emit("did-stop-loading"); }
-  commit(url = NEW) { this.emit("did-navigate", {}, url, 200, "OK"); }
-  finish() { this.emit("did-finish-load", {}); }
+  stopLoading() {
+    this.loading = false;
+    this.emit("did-stop-loading");
+  }
+  commit(url = NEW) {
+    this.emit("did-navigate", {}, url, 200, "OK");
+  }
+  finish() {
+    this.emit("did-finish-load", {});
+  }
   fail(code: number, description: string, url: string, isMainFrame = true) {
     this.emit("did-fail-load", {}, code, description, url, isMainFrame);
   }
@@ -37,7 +48,14 @@ class FakeGuest extends EventEmitter {
 
 const outcome = async (promise: Promise<void>) => {
   let result: string = "pending";
-  promise.then(() => { result = "loaded"; }, (error: unknown) => { result = String(error); });
+  promise.then(
+    () => {
+      result = "loaded";
+    },
+    (error: unknown) => {
+      result = String(error);
+    },
+  );
   await new Promise((resolve) => setImmediate(resolve));
   return result;
 };
@@ -93,8 +111,16 @@ test("a replaced same-URL load that fails before the deferred start does not rej
 
 test("a deferred navigation that ends before it starts rejects on its stop and stops observing", async () => {
   const cases = [
-    { name: "cancelled after the replaced document finished", before: (guest: FakeGuest) => guest.finish(), error: `Error: ERR_FAILED (-2) loading '${NEW}'` },
-    { name: "the requested URL failed", before: (guest: FakeGuest) => guest.fail(-21, "ERR_NETWORK_CHANGED", NEW), error: `Error: ERR_NETWORK_CHANGED (-21) loading '${NEW}'` },
+    {
+      name: "cancelled after the replaced document finished",
+      before: (guest: FakeGuest) => guest.finish(),
+      error: `Error: ERR_FAILED (-2) loading '${NEW}'`,
+    },
+    {
+      name: "the requested URL failed",
+      before: (guest: FakeGuest) => guest.fail(-21, "ERR_NETWORK_CHANGED", NEW),
+      error: `Error: ERR_NETWORK_CHANGED (-21) loading '${NEW}'`,
+    },
   ];
   for (const { name, before, error } of cases) {
     const { guest, load } = deferredLoad();
@@ -130,7 +156,10 @@ test("a newer navigation supersedes the load, and subframe failures do not", asy
   guest.emit("did-start-navigation", {}, "http://127.0.0.1:4000/start#again", true, true);
   assert.equal(await outcome(load), "pending");
   guest.emit("did-start-navigation", {}, "http://127.0.0.1:4000/newer", false, true);
-  assert.equal(await outcome(load), "Error: ERR_ABORTED (-3) loading 'http://127.0.0.1:4000/newer'");
+  assert.equal(
+    await outcome(load),
+    "Error: ERR_ABORTED (-3) loading 'http://127.0.0.1:4000/newer'",
+  );
 });
 
 test("a same-document load finishes on its in-page commit", async () => {
@@ -152,8 +181,18 @@ test("a same-document load finishes on its in-page commit", async () => {
 test("a load that never starts reports Electron's own rejection, and the guest is left unobserved", async () => {
   const guest = new FakeGuest();
   guest.loadURL = () => Promise.reject(new Error("ERR_INVALID_URL (-300) loading 'bad'"));
-  assert.equal(await outcome(loadBrowserUrl(guest, "bad")), "Error: ERR_INVALID_URL (-300) loading 'bad'");
-  for (const event of ["did-start-navigation", "did-navigate", "did-fail-load", "did-finish-load", "did-stop-loading", "destroyed"])
+  assert.equal(
+    await outcome(loadBrowserUrl(guest, "bad")),
+    "Error: ERR_INVALID_URL (-300) loading 'bad'",
+  );
+  for (const event of [
+    "did-start-navigation",
+    "did-navigate",
+    "did-fail-load",
+    "did-finish-load",
+    "did-stop-loading",
+    "destroyed",
+  ])
     assert.equal(guest.listenerCount(event), 0, event);
 
   const destroyed = new FakeGuest();

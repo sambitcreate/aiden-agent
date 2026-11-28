@@ -52,7 +52,9 @@ const MAX_TRACKED = 512;
 const MAX_RETAINED_DIFF_CHARS = 8_000_000;
 const MAX_PATH = 4_096;
 
-export function activityStatus(status: ToolCallStatus | null | undefined): AcpActivityStatus | undefined {
+export function activityStatus(
+  status: ToolCallStatus | null | undefined,
+): AcpActivityStatus | undefined {
   switch (status) {
     case "pending":
       return "pending";
@@ -102,7 +104,9 @@ function diffLineChanges(
 function diffCreatesFile(content: readonly ToolCallContent[] | null | undefined): boolean {
   return (
     Array.isArray(content) &&
-    content.some((item) => item?.type === "diff" && (item.oldText === null || item.oldText === undefined))
+    content.some(
+      (item) => item?.type === "diff" && (item.oldText === null || item.oldText === undefined),
+    )
   );
 }
 
@@ -115,7 +119,10 @@ function diffPaths(content: readonly ToolCallContent[] | null | undefined): stri
 }
 
 /** Only activity metadata and output fingerprints survive a notification. */
-export type AcpToolCallState = Pick<ToolCallUpdate, "toolCallId" | "kind" | "status" | "title" | "locations"> & {
+export type AcpToolCallState = Pick<
+  ToolCallUpdate,
+  "toolCallId" | "kind" | "status" | "title" | "locations"
+> & {
   mcp: boolean;
   subagent: boolean;
   created: boolean;
@@ -175,22 +182,29 @@ export class AcpToolCallTracker {
     const previous = entry?.state;
     const paths = new Set((previous?.locations ?? []).map((location) => location.path));
     for (const location of update.locations ?? []) {
-      if (paths.size < MAX_LOCATIONS && location?.path && location.path.length <= MAX_PATH) paths.add(location.path);
+      if (paths.size < MAX_LOCATIONS && location?.path && location.path.length <= MAX_PATH)
+        paths.add(location.path);
     }
     for (const file of diffPaths(update.content)) {
       if (paths.size < MAX_LOCATIONS && file && file.length <= MAX_PATH) paths.add(file);
     }
     const next: AcpToolCallState = {
       toolCallId: id,
-      title: update.title == null ? previous?.title : cleanText(update.title, MAX_TITLE) || previous?.title,
+      title:
+        update.title == null
+          ? previous?.title
+          : cleanText(update.title, MAX_TITLE) || previous?.title,
       kind: update.kind ?? previous?.kind,
       status: update.status ?? previous?.status,
       // Raw arguments, arbitrary metadata, images and other opaque blocks are
       // not consumed by activity. Retain fingerprints of visible output only.
       textOutput: update.content == null ? previous?.textOutput : textFingerprint(update.content),
-      rawOutput: update.rawOutput === undefined ? previous?.rawOutput : outputFingerprint(update.rawOutput),
-      detail: (update as ToolCallUpdate & { detail?: unknown }).detail === undefined
-        ? previous?.detail : outputFingerprint((update as ToolCallUpdate & { detail?: unknown }).detail),
+      rawOutput:
+        update.rawOutput === undefined ? previous?.rawOutput : outputFingerprint(update.rawOutput),
+      detail:
+        (update as ToolCallUpdate & { detail?: unknown }).detail === undefined
+          ? previous?.detail
+          : outputFingerprint((update as ToolCallUpdate & { detail?: unknown }).detail),
       locations: [...paths].map((file) => ({ path: file })),
       mcp: previous?.mcp === true || update._meta?.is_mcp_tool_call === true,
       subagent: previous?.subagent ?? false,
@@ -204,11 +218,18 @@ export class AcpToolCallTracker {
       // Mirror the existing parser limit; oversized diffs must never be kept
       // just because parsing them was skipped. Copy only the counting fields.
       tracked.diffs = diffs.flatMap((item) => {
-        if (item.type !== "diff" || (item.oldText?.length ?? 0) + item.newText.length > MAX_DIFF_CHARS) return [];
+        if (
+          item.type !== "diff" ||
+          (item.oldText?.length ?? 0) + item.newText.length > MAX_DIFF_CHARS
+        )
+          return [];
         return [{ type: "diff" as const, path: "", oldText: item.oldText, newText: item.newText }];
       });
-      tracked.diffChars = tracked.diffs.reduce((total, item) =>
-        total + (item.type === "diff" ? (item.oldText?.length ?? 0) + item.newText.length : 0), 0);
+      tracked.diffChars = tracked.diffs.reduce(
+        (total, item) =>
+          total + (item.type === "diff" ? (item.oldText?.length ?? 0) + item.newText.length : 0),
+        0,
+      );
       this.retainedDiffChars += tracked.diffChars;
     }
     this.calls.set(id, tracked);
@@ -333,7 +354,10 @@ export function canonicalDisplayPath(target: string): string | undefined {
 }
 
 /** A workspace-relative display path, or undefined when outside every root. */
-export function relativeDisplayPath(absolute: string, roots: readonly AcpRoot[]): string | undefined {
+export function relativeDisplayPath(
+  absolute: string,
+  roots: readonly AcpRoot[],
+): string | undefined {
   const target = canonicalDisplayPath(absolute);
   if (!target) return undefined;
   for (const entry of roots) {

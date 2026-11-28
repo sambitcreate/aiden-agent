@@ -369,7 +369,11 @@ export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
       ? undefined
       : parseRequestedCapabilities(request.capabilities);
   const parsedTasks = request.tasks.map((entry) => {
-    const task = exactPlainDataRecord(entry, ["role", "label", "task"], ["capabilities", "maxTurns", "model", "effort"]);
+    const task = exactPlainDataRecord(
+      entry,
+      ["role", "label", "task"],
+      ["capabilities", "maxTurns", "model", "effort"],
+    );
     if (!task) throw new Error("Invalid subagent task fields.");
     if (typeof task.role !== "string" || !isSubagentRole(task.role)) {
       throw new Error("Unknown subagent role.");
@@ -378,11 +382,16 @@ export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
       throw new Error('Invalid subagent model. Use a model value from action "list".');
     }
     if (task.effort !== undefined && !isGenerationThinkingLevel(task.effort)) {
-      throw new Error(`Invalid subagent effort. Use one of: ${GENERATION_THINKING_LEVELS.join(", ")}.`);
+      throw new Error(
+        `Invalid subagent effort. Use one of: ${GENERATION_THINKING_LEVELS.join(", ")}.`,
+      );
     }
-    if (task.maxTurns !== undefined &&
-      (!Number.isInteger(task.maxTurns) || (task.maxTurns as number) < 1 ||
-        (task.maxTurns as number) > MAX_SUBAGENT_REQUESTED_TURNS)) {
+    if (
+      task.maxTurns !== undefined &&
+      (!Number.isInteger(task.maxTurns) ||
+        (task.maxTurns as number) < 1 ||
+        (task.maxTurns as number) > MAX_SUBAGENT_REQUESTED_TURNS)
+    ) {
       throw new Error("Invalid subagent turn budget.");
     }
     return {
@@ -407,19 +416,26 @@ export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
       ? { capabilities: suppliedCapabilities ?? inferredCapabilities }
       : {}),
     tasks: parsedTasks.map((task) => {
-      const taskCapabilities = task.capabilities ??
+      const taskCapabilities =
+        task.capabilities ??
         (task.role !== "implementer" && inferredCapabilities
           ? narrowToRoot(roleDefaultCapabilities(task.role), rootCapabilities)
           : undefined);
       if (task.capabilities) {
         assertTaskCapabilitiesNarrowRoot(rootCapabilities, task.capabilities);
       }
-      const effective = taskCapabilities ?? (task.role === "implementer"
-        ? narrowToRoot(roleDefaultCapabilities(task.role), rootCapabilities)
-        : rootCapabilities);
-      if (task.maxTurns !== undefined &&
-        (effective.workspaceWrite || effective.shell === true || effective.delegate === true ||
-          (effective.mcpMutations?.length ?? 0) > 0)) {
+      const effective =
+        taskCapabilities ??
+        (task.role === "implementer"
+          ? narrowToRoot(roleDefaultCapabilities(task.role), rootCapabilities)
+          : rootCapabilities);
+      if (
+        task.maxTurns !== undefined &&
+        (effective.workspaceWrite ||
+          effective.shell === true ||
+          effective.delegate === true ||
+          (effective.mcpMutations?.length ?? 0) > 0)
+      ) {
         throw new Error("An explicit subagent turn budget requires read-only capabilities.");
       }
       return {
@@ -440,8 +456,9 @@ export function effectiveSubagentTaskCapabilities(
   task: Pick<SubagentTaskRequest, "role" | "capabilities">,
 ): SubagentRequestedCapabilities {
   const root = request.capabilities ?? roleDefaultCapabilities(task.role);
-  const effective = structuredClone(task.capabilities ?? (task.role === "implementer"
-    ? narrowToRoot(roleDefaultCapabilities(task.role), root)
-    : root));
+  const effective = structuredClone(
+    task.capabilities ??
+      (task.role === "implementer" ? narrowToRoot(roleDefaultCapabilities(task.role), root) : root),
+  );
   return { ...effective, delegate: effective.delegate === true };
 }

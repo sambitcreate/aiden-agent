@@ -9,9 +9,7 @@ export class ShortcutPersistenceRollbackError extends Error {
     readonly rollbackError: unknown,
   ) {
     const persistenceMessage =
-      persistenceError instanceof Error
-        ? persistenceError.message
-        : String(persistenceError);
+      persistenceError instanceof Error ? persistenceError.message : String(persistenceError);
     const rollbackMessage =
       rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
     super(
@@ -39,17 +37,17 @@ export function createShortcutTransactionQueue<State, Applied>() {
     apply,
   }: {
     read: () => Promise<State>;
-    prepare: (
-      previous: State,
-    ) => Promise<{
-      next: State;
-      persist: () => Promise<void>;
-      value: Value;
-    }> | {
-      next: State;
-      persist: () => Promise<void>;
-      value: Value;
-    };
+    prepare: (previous: State) =>
+      | Promise<{
+          next: State;
+          persist: () => Promise<void>;
+          value: Value;
+        }>
+      | {
+          next: State;
+          persist: () => Promise<void>;
+          value: Value;
+        };
     apply: (state: State) => Promise<Applied>;
   }): Promise<{ applied: Applied; value: Value }> =>
     run(async () => {

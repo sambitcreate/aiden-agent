@@ -11,21 +11,21 @@ Port source (read-only): `.claude/worktrees/ref-create-images` @ `1e3b3909`
 
 ## 1. Facts verified on current main
 
-| Question | Answer (source) |
-|---|---|
-| Image entry point | `Models.generateImages(model, { input: (TextContent \| ImageContent)[] }, { signal, maxRetries, … })` resolves auth and **never rejects**. It returns `AssistantImages { output, usage?, stopReason: "stop" \| "error" \| "aborted", errorMessage?, responseId? }` (`pi-ai/dist/models.d.ts:190`, `types.d.ts:435-447`). |
-| Cancellable? | Yes. `ImagesOptions.signal` goes through `retryProviderRequest` and the OpenAI SDK fetch. An aborted request returns `stopReason: "aborted"` (`api/openrouter-images.js`). |
-| Hidden retries? | `retryProviderRequest` defaults to `maxRetries ?? 0`. The SDK is called with `maxRetries: 0`. The port still passes `maxRetries: 0` explicitly. |
-| Usage and cost | `usage` comes from OpenRouter token counts × catalog `cost`. It is often 0 or missing: FLUX, for example, is priced per megapixel and has catalog cost 0, so `costStatus` resolves to `"unavailable"`. |
-| Output bytes | Inline base64 `ImageContent { data, mimeType }`, taken from `message.images[]` `data:` URLs. There is no URL fetch. |
-| Request parameters | `ImagesContext` has **no** aspect ratio, size, count or MIME parameter. Only prompt text and reference images go to the provider. |
-| Catalog | 59 image models, **all `openrouter`** (`api: "openrouter-images"`), e.g. `google/gemini-3.1-flash-image` (Nano Banana 2), `openai/gpt-image-2`, `black-forest-labs/flux.2-pro`. The bundled `google` provider has **0** image models. |
+| Question                    | Answer (source)                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Image entry point           | `Models.generateImages(model, { input: (TextContent \| ImageContent)[] }, { signal, maxRetries, … })` resolves auth and **never rejects**. It returns `AssistantImages { output, usage?, stopReason: "stop" \| "error" \| "aborted", errorMessage?, responseId? }` (`pi-ai/dist/models.d.ts:190`, `types.d.ts:435-447`).                                                                                                                          |
+| Cancellable?                | Yes. `ImagesOptions.signal` goes through `retryProviderRequest` and the OpenAI SDK fetch. An aborted request returns `stopReason: "aborted"` (`api/openrouter-images.js`).                                                                                                                                                                                                                                                                        |
+| Hidden retries?             | `retryProviderRequest` defaults to `maxRetries ?? 0`. The SDK is called with `maxRetries: 0`. The port still passes `maxRetries: 0` explicitly.                                                                                                                                                                                                                                                                                                   |
+| Usage and cost              | `usage` comes from OpenRouter token counts × catalog `cost`. It is often 0 or missing: FLUX, for example, is priced per megapixel and has catalog cost 0, so `costStatus` resolves to `"unavailable"`.                                                                                                                                                                                                                                            |
+| Output bytes                | Inline base64 `ImageContent { data, mimeType }`, taken from `message.images[]` `data:` URLs. There is no URL fetch.                                                                                                                                                                                                                                                                                                                               |
+| Request parameters          | `ImagesContext` has **no** aspect ratio, size, count or MIME parameter. Only prompt text and reference images go to the provider.                                                                                                                                                                                                                                                                                                                 |
+| Catalog                     | 59 image models, **all `openrouter`** (`api: "openrouter-images"`), e.g. `google/gemini-3.1-flash-image` (Nano Banana 2), `openai/gpt-image-2`, `black-forest-labs/flux.2-pro`. The bundled `google` provider has **0** image models.                                                                                                                                                                                                             |
 | `registerImagesApiProvider` | It only feeds the static `generateImages()` in `images.js`. `Models.generateImages` dispatches through the **provider's** `images` map (`models.js:486`, `createProvider({ images })`). A direct Google path therefore means `models.setProvider(...)` with a provider that has image models. The precedent is `registerAidenBuiltinProviders` in `concentrate-provider.ts`. Registering the API alone is not enough, which corrects umbrella §6. |
-| Existing chat path | `createPiModelTools` (`pi-model-tools.ts:404-600`). The tools are `list_operation_models` → `getAvailableOfType("image")` and `generate_image`, with ≤4 references, 8 MiB per image, 40 MP total (`resolvePiModelImageInputs`), and output checks in the private `validImages` (≤4 images, 8 MiB, magic and dimension check). Wired in `llm-client.ts:1554`. Approval disclosure: `modelImageReferences.disclosure` at `llm-client.ts:3125`. |
-| Accounting | `modelOperationUsageRecord(record, providers, source)` → `usageStore.record`. `UsageRequestSource` and `REQUEST_SOURCES` live in `usage-store-core.ts:8,80`. |
-| SQLite precedent | `durable-jobs/store.ts` (DatabaseSync, `O_NOFOLLOW` + nlink/uid checks, `user_version`, WAL) has no production instance yet. `memory-store.ts` is the production `node:sqlite` user. |
-| Throttle | `createThrottledTrigger(run, ms)` in `portable-config-watch-core.ts:203` fires leading and trailing. Its `dispose()` drops a pending trailing call. |
-| e2e boundary fakes | Fakes sit at the process or HTTP edge: a test-owned LM Studio server, `agent-device-fake.mjs`, and the fetch-origin redirect in `tests/e2e/electron-test-bootstrap.cjs`. Product code has no mock branches. |
+| Existing chat path          | `createPiModelTools` (`pi-model-tools.ts:404-600`). The tools are `list_operation_models` → `getAvailableOfType("image")` and `generate_image`, with ≤4 references, 8 MiB per image, 40 MP total (`resolvePiModelImageInputs`), and output checks in the private `validImages` (≤4 images, 8 MiB, magic and dimension check). Wired in `llm-client.ts:1554`. Approval disclosure: `modelImageReferences.disclosure` at `llm-client.ts:3125`.      |
+| Accounting                  | `modelOperationUsageRecord(record, providers, source)` → `usageStore.record`. `UsageRequestSource` and `REQUEST_SOURCES` live in `usage-store-core.ts:8,80`.                                                                                                                                                                                                                                                                                      |
+| SQLite precedent            | `durable-jobs/store.ts` (DatabaseSync, `O_NOFOLLOW` + nlink/uid checks, `user_version`, WAL) has no production instance yet. `memory-store.ts` is the production `node:sqlite` user.                                                                                                                                                                                                                                                              |
+| Throttle                    | `createThrottledTrigger(run, ms)` in `portable-config-watch-core.ts:203` fires leading and trailing. Its `dispose()` drops a pending trailing call.                                                                                                                                                                                                                                                                                               |
+| e2e boundary fakes          | Fakes sit at the process or HTTP edge: a test-owned LM Studio server, `agent-device-fake.mjs`, and the fetch-origin redirect in `tests/e2e/electron-test-bootstrap.cjs`. Product code has no mock branches.                                                                                                                                                                                                                                       |
 
 ## 2. Decisions
 
@@ -34,33 +34,58 @@ Port source (read-only): `.claude/worktrees/ref-create-images` @ `1e3b3909`
 The port lives in `main/services/create-images/image-port.ts`, with Electron-free types in `renderer/shared/images/port.ts`.
 
 ```ts
-interface ImageModelOption { provider: string; providerLabel: string; model: string; label: string;
-  acceptsReferences: boolean; textOutput: boolean }
-interface ImageGenerationRequest { provider: string; model: string; prompt: string;
-  references: readonly { mimeType: string; bytes: Uint8Array }[]; signal: AbortSignal }
+interface ImageModelOption {
+  provider: string;
+  providerLabel: string;
+  model: string;
+  label: string;
+  acceptsReferences: boolean;
+  textOutput: boolean;
+}
+interface ImageGenerationRequest {
+  provider: string;
+  model: string;
+  prompt: string;
+  references: readonly { mimeType: string; bytes: Uint8Array }[];
+  signal: AbortSignal;
+}
 type ImageGenerationResult =
-  | { kind: "images"; images: { mimeType: string; bytes: Uint8Array; width: number; height: number }[];
-      text?: string; usage?: Usage; responseId?: string }
-  | { kind: "failed"; code: "aborted" | "unknown-model" | "references-unsupported" | "provider-error"
-      | "output-invalid"; message: string; usage?: Usage };
+  | {
+      kind: "images";
+      images: { mimeType: string; bytes: Uint8Array; width: number; height: number }[];
+      text?: string;
+      usage?: Usage;
+      responseId?: string;
+    }
+  | {
+      kind: "failed";
+      code:
+        | "aborted"
+        | "unknown-model"
+        | "references-unsupported"
+        | "provider-error"
+        | "output-invalid";
+      message: string;
+      usage?: Usage;
+    };
 interface ImageGenerationPort {
   listModels(signal?: AbortSignal): Promise<readonly ImageModelOption[]>;
   generate(request: ImageGenerationRequest): Promise<ImageGenerationResult>; // never throws provider outcomes
 }
 ```
 
-*Amended 2026-10-31:* `ImageModelOption` also carries `maxReferences` (the model's `inputLimits.images.maxPerRequest`, capped at 4), and the port gains `preflight(request)`, which runs every local check (registry load, unknown/disabled model, auto router, reference support and limits, 8 MiB / 40 MP) and returns either a failure or `send()`. The executor runs `preflight` before claiming the ledger request, so a refusal that never left the machine is not counted or shown as "may have been billed". `listModels` returns `[]` when the registry fails to load. Output items that are not PNG/JPEG/WebP are dropped before the 4-image cap, and a reply with no usable images shows the model's text (one line, at most 280 characters).
+_Amended 2026-10-31:_ `ImageModelOption` also carries `maxReferences` (the model's `inputLimits.images.maxPerRequest`, capped at 4), and the port gains `preflight(request)`, which runs every local check (registry load, unknown/disabled model, auto router, reference support and limits, 8 MiB / 40 MP) and returns either a failure or `send()`. The executor runs `preflight` before claiming the ledger request, so a refusal that never left the machine is not counted or shown as "may have been billed". `listModels` returns `[]` when the registry fails to load. Output items that are not PNG/JPEG/WebP are dropped before the 4-image cap, and a reply with no usable images shows the model's text (one line, at most 280 characters).
 
-*Amended 2026-11-02.* Generate reserves room for up to four images and 8 MiB across all running workflows that share the asset store. Each stored image reduces the outstanding reservation. Finishing or abandoning the attempt releases the balance. The port checks the selected model against the configured image providers in preflight. Its `send(claim)` callback records the ledger claim after Pi resolves the image credential and immediately before provider dispatch. Removing the key while the step is queued or preparing leaves the attempt unsent. A provider response, including an authentication error returned by the provider, keeps the submitted timestamp.
+_Amended 2026-11-02._ Generate reserves room for up to four images and 8 MiB across all running workflows that share the asset store. Each stored image reduces the outstanding reservation. Finishing or abandoning the attempt releases the balance. The port checks the selected model against the configured image providers in preflight. Its `send(claim)` callback records the ledger claim after Pi resolves the image credential and immediately before provider dispatch. Removing the key while the step is queued or preparing leaves the attempt unsent. A provider response, including an authentication error returned by the provider, keeps the submitted timestamp.
 
 - **Implementation.** `createPiImageGenerationPort({ models, providerLabel, onUsage })` takes `models: Pick<Models, "getAvailableOfType" | "getModelOfType" | "generateImages">`, the same `Pick` that `PiModelToolsHost` uses. Production passes `providerRegistry.models`.
 - **Shared validation.** Extract `validImages` from `pi-model-tools.ts` into an exported `parseGeneratedImages()` in `main/services/pi-model-image-output.ts`. This is a behavior-preserving move, and `generate_image` keeps using it. References reuse `resolvePiModelImageInputs` bounds through an `ImageContent` adapter.
 - **Usage.** Each provider call records exactly one usage entry through `modelOperationUsageRecord(..., "create-images")`. This adds `"create-images"` to `UsageRequestSource` / `REQUEST_SOURCES`. Status is `completed`, `failed` or `cancelled`, and the record carries no prompts or paths.
-- **Picker source.** *Reconciled 2026-10-13 ([#443](https://github.com/sambitcreate/aiden-agent/pull/443)): production now passes the dedicated image-generation registry (`imageGeneration.models`, `main/services/create-images/main.ts`) instead of `providerRegistry.models`, and the empty state points to Settings → Image Generation.* `getAvailableOfType("image")` returns only providers with complete auth, from last-known lists. The port **never** calls `models.refresh()`, so it adds no catalog network (AGENTS.md posture). It drops `openrouter/auto*`, because consent must name the real model. Without a configured provider, the picker shows "Add an OpenRouter key in Settings → Providers".
+- **Picker source.** _Reconciled 2026-10-13 ([#443](https://github.com/sambitcreate/aiden-agent/pull/443)): production now passes the dedicated image-generation registry (`imageGeneration.models`, `main/services/create-images/main.ts`) instead of `providerRegistry.models`, and the empty state points to Settings → Image Generation._ `getAvailableOfType("image")` returns only providers with complete auth, from last-known lists. The port **never** calls `models.refresh()`, so it adds no catalog network (AGENTS.md posture). It drops `openrouter/auto*`, because consent must name the real model. Without a configured provider, the picker shows "Add an OpenRouter key in Settings → Providers".
 - **Direct Google: defer to CI-2, conditional.** It needs a wrapped `google` provider with hand-maintained image models plus an `@google/genai` image implementation. `@google/genai` 2.24.0 is already a dependency. Credentials would follow the `tts/credentials.ts` explicit-source pattern: a saved Google key reused only after the user opts in, or `aiden-internal:images-api-key`, failing closed. That edits `provider-registry.ts`, a shared core, and would add a second unvalidated provider before the first real image exists, which is the old branch's failure mode. Include it in CI-1 only if the owner has no OpenRouter key (Q2).
 - **Test seam: no product mock.**
-  - *Unit and integration:* `createModels()` + `setProvider(createProvider({ id: "test-images", auth, models: [imageModel], images: { "test-images": { generateImages } } }))`. The fake counts calls, records signals and can return images, errors, 429s, late results and over-limit outputs. This exercises the real `Models` auth and dispatch path.
-  - *e2e:* a test-owned loopback server that speaks OpenRouter's chat-completions image response. The test-only bootstrap redirects only the `https://openrouter.ai` origin, extending the existing LM Studio redirect. A spec-scoped fake OpenRouter key is supplied through a fixture option. CI-1.9 verifies the env-versus-Settings key route.
+  - _Unit and integration:_ `createModels()` + `setProvider(createProvider({ id: "test-images", auth, models: [imageModel], images: { "test-images": { generateImages } } }))`. The fake counts calls, records signals and can return images, errors, 429s, late results and over-limit outputs. This exercises the real `Models` auth and dispatch path.
+  - _e2e:_ a test-owned loopback server that speaks OpenRouter's chat-completions image response. The test-only bootstrap redirects only the `https://openrouter.ai` origin, extending the existing LM Studio redirect. A spec-scoped fake OpenRouter key is supplied through a fixture option. CI-1.9 verifies the env-versus-Settings key route.
   - Nothing ships in `main/`.
 
 ### 2.2 Consent: separate from tool approval, enforced in main
@@ -68,15 +93,29 @@ interface ImageGenerationPort {
 Create Images runs are UI actions the user starts, not agent tool calls, so they do **not** go through `llm-client` `beforeToolCall` approvals. That system stays the gate for chat `generate_image`. The two share the disclosure facts: provider and model labels, plus reference count and bytes.
 
 ```ts
-interface ImageRunConsentPlan { consentId: string; workflowId: string; workflowRevision: number;
+interface ImageRunConsentPlan {
+  consentId: string;
+  workflowId: string;
+  workflowRevision: number;
   scope: { kind: "all" } | { kind: "from-node"; nodeId: string };
-  requests: { nodeId: string; variant: number; provider: string; providerLabel: string;
-    model: string; modelLabel: string; referenceCount: number; referenceBytes: number }[];
-  totalRequests: number; estimate: { kind: "unknown" };   // see Q4
-  createdAt: number; expiresAt: number }                  // expiresAt = createdAt + 5 min
+  requests: {
+    nodeId: string;
+    variant: number;
+    provider: string;
+    providerLabel: string;
+    model: string;
+    modelLabel: string;
+    referenceCount: number;
+    referenceBytes: number;
+  }[];
+  totalRequests: number;
+  estimate: { kind: "unknown" }; // see Q4
+  createdAt: number;
+  expiresAt: number;
+} // expiresAt = createdAt + 5 min
 ```
 
-*Amended 2026-10-31:* `prepare` and the start re-check refuse, with node-attributed issues and no consent, a plan whose references the model cannot accept (`references_unsupported`), whose worst-case reference count exceeds the model's or Aiden's limit (`too_many_references`; each earlier Generate in the run counts as up to 4 images, reported as `pendingReferenceCount` with `pendingReferenceSteps`), or whose known references exceed 8 MiB or 40 MP (`reference_bytes`, `reference_pixels`). At most 4 runs may be active across all workflows (`too_many_runs` / `too-many-runs`). Before a paid request the executor checks the asset store has room for a worst-case output, running one garbage collection before it refuses; a storage failure after a paid request is reported as `storage-full` or `storage-failed` (never `output-invalid`), and quit waits up to 1.5 s for provider cancels.
+_Amended 2026-10-31:_ `prepare` and the start re-check refuse, with node-attributed issues and no consent, a plan whose references the model cannot accept (`references_unsupported`), whose worst-case reference count exceeds the model's or Aiden's limit (`too_many_references`; each earlier Generate in the run counts as up to 4 images, reported as `pendingReferenceCount` with `pendingReferenceSteps`), or whose known references exceed 8 MiB or 40 MP (`reference_bytes`, `reference_pixels`). At most 4 runs may be active across all workflows (`too_many_runs` / `too-many-runs`). Before a paid request the executor checks the asset store has room for a worst-case output, running one garbage collection before it refuses; a storage failure after a paid request is reported as `storage-full` or `storage-failed` (never `output-invalid`), and quit waits up to 1.5 s for provider cancels.
 
 - **`prepare-run`** loads the **saved** document at `workflowRevision` and rejects a stale revision, so the renderer flushes autosave first. It builds the plan with the scheduler's planner. It stores the plan in an in-memory, single-use map keyed by a random `consentId` and bound to the requesting `rendererDocumentOwner`. It sends nothing to a provider.
 - **`start-run`** consumes the consent. It re-checks expiry, document owner, document revision, plan digest and model availability, then creates the run with `request_limit = totalRequests`.
@@ -89,17 +128,19 @@ interface ImageRunConsentPlan { consentId: string; workflowId: string; workflowR
   - If a model returns more than 4 images, the first 4 valid ones are kept and the attempt is flagged `truncated`. The paid attempt is not failed. This reflects the old branch's Gemini interim-image lesson.
   - `cancel-run` checks that the caller is an Aiden renderer document but is not bound to the document that started the run. Stopping can only reduce spend, and a reloaded or second Images window has a new document id yet must still be able to stop a run it shows.
 - **Quit.** `shutdownAndQuit` calls `imageRuns.shutdown()`: abort all, then mark `cancelled` with reason `app-quit` (since 2026-10-31 it then waits, bounded, for auto-saves; §2.11). This is a one-line orchestrator registration in the `main/index.ts` hotspot.
-  - *Adjustment:* CI-1 also adds a main-side in-flight check to `confirmProtectedAction` with honest copy: "N image requests in progress. Quitting cancels them; requests already sent may still be billed." CI-4 keeps only the copy polish.
+  - _Adjustment:_ CI-1 also adds a main-side in-flight check to `confirmProtectedAction` with honest copy: "N image requests in progress. Quitting cancels them; requests already sent may still be billed." CI-4 keeps only the copy polish.
 
 ### 2.3 Persistence
 
 **Workflow documents.**
+
 - One file per workflow at `userData/create-images/workflows/<id>.json`, plus `index.json` holding `{ id, title, revision, updatedAt }`. Both are written with `writeJsonAtomic`.
 - Schema **v1 only** (`schemaVersion: 1`), with no migration code. Documents hold no outputs or base64. The cap is 2 MiB.
 - Main serializes saves per workflow on a promise chain. Optimistic concurrency uses `baseRevision`: a mismatch returns `conflict`, and the renderer reloads.
 - Renderer autosave: 800 ms idle debounce, flushed on route leave and before `prepare-run`. A dirty or saving document sets the existing renderer close guard (`closeGuard.dirty` / `saving`).
 
 **Run ledger.**
+
 - File: `userData/create-images/runs-v1.sqlite`. It is opened in the reconcile chain before `openProcessStartupIpcAdmission()`. File-safety checks and `user_version` handling copy `durable-jobs/store.ts`.
 - Mode: `journal_mode=WAL`, `synchronous=NORMAL`. A commit survives an app crash. An OS crash can lose the last transactions, which only loses history, because restart never resubmits.
 
@@ -127,14 +168,15 @@ CREATE INDEX live_attempts ON attempts(state) WHERE state IN ('queued','running'
 - **Restart.** In the reconcile chain:
   - Run `UPDATE attempts SET state='interrupted' WHERE state IN ('queued','running')`, plus the matching `runs` update.
   - Attempts with `submitted_at` show "may have been billed". There is no resubmit.
-- **Retention.** Keep the 100 newest runs **plus**, for each workflow, the run holding each node's latest succeeded output. Pruning runs after each run finishes and once at startup. *Amended 2026-10-31:* the latest-output exemption applies only to nodes still in the workflow document (a deleted workflow keeps none; a workflow whose file exists but can't be read keeps all, since it is kept for repair), ordered by attempt id rather than `finished_at`. On open, Create Images reconciles its `images-*` holds against the ledger and documents, and a corrupt ledger is quarantined and recreated because it is history only.
-- *Amended 2026-10-31:* every open adds the `attempts.prompt` column and the `exports` table when missing (no `user_version` bump, no migration code); see §2.11.
+- **Retention.** Keep the 100 newest runs **plus**, for each workflow, the run holding each node's latest succeeded output. Pruning runs after each run finishes and once at startup. _Amended 2026-10-31:_ the latest-output exemption applies only to nodes still in the workflow document (a deleted workflow keeps none; a workflow whose file exists but can't be read keeps all, since it is kept for repair), ordered by attempt id rather than `finished_at`. On open, Create Images reconciles its `images-*` holds against the ledger and documents, and a corrupt ledger is quarantined and recreated because it is history only.
+- _Amended 2026-10-31:_ every open adds the `attempts.prompt` column and the `exports` table when missing (no `user_version` bump, no migration code); see §2.11.
 - **Assets** go to the shared store (ADR-F). Each output asset is retained by holder `images-run:<runId>`, and each Image Input asset by `images-workflow:<id>`. Prune and delete release holders. If ADR-F lands plain ref-counts, use one increment per output row. GC belongs to F.
 - **Perf target.** A synthetic 500-node run against a zero-latency fake port must spend **< 1 s total** inside ledger calls, measured by wrapping the ledger. It runs as a separate `test:create-images:perf` npm script filed into an existing CI lane (ADR-F: no new lanes), not in the default pretest chain. The old branch took 114 s.
 
 ### 2.4 Scheduler and coordinator (main)
 
 **`scheduler-core.ts`** is pure and Electron-free, with a target of ≤ 300 lines.
+
 - `planRun(doc, scope, priorOutputs)` uses `ports.ts` `validateWorkflowGraph` and `topologicalWorkflowOrder`. It yields ordered steps and the provider request list that feeds consent.
 - `runPlan(plan, { execute, concurrency, signal })` uses ready-set dispatch.
   - Local nodes (Prompt, Image Input, Output) resolve inline.
@@ -145,6 +187,7 @@ CREATE INDEX live_attempts ON attempts(state) WHERE state IN ('queued','running'
 **`run-coordinator.ts`** must stay under 600 lines and be provider-agnostic. It wires the ledger, `ImageGenerationPort`, studio assets, the consent counter and notifications.
 
 **Data flow between nodes:**
+
 - Values are `{ kind: "text"; text }` or `{ kind: "images"; assetIds: string[] }`.
 - Image bytes are read from the asset store only at the Generate boundary and then released. Bytes are never held for a whole run.
 - A Generate node takes 1 prompt and ≤ 4 references, which is the Pi bound. The old branch allowed 14.
@@ -161,23 +204,24 @@ CREATE INDEX live_attempts ON attempts(state) WHERE state IN ('queued','running'
 
 ### 2.6 Renderer architecture (`renderer/images/`, lazy route only)
 
-| Module | Role | Budget |
-|---|---|---|
-| `images-home.tsx` | Images home: the Workflows / All Images tabs (`?view=images`), new from Blank/Starter, rename/duplicate/delete dialogs | ≤ 300 |
-| `workflow-grid.tsx` | Workflow cards: newest image, image count, last image time, ⋯ menu | ≤ 250 |
+| Module                                                         | Role                                                                                                                                | Budget     |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `images-home.tsx`                                              | Images home: the Workflows / All Images tabs (`?view=images`), new from Blank/Starter, rename/duplicate/delete dialogs              | ≤ 300      |
+| `workflow-grid.tsx`                                            | Workflow cards: newest image, image count, last image time, ⋯ menu                                                                  | ≤ 250      |
 | `image-library.tsx`, `library-toolbar.tsx`, `library-grid.tsx` | All Images: day-sectioned grid, search, workflow/model filters with counts, sort, Save All, context menu, viewer with Open Workflow | ≤ 250 each |
-| `library-core.ts` | Electron-free search, facets, sort, day sections, Save All cap, grid arrow keys, workflow summaries | ≤ 250 |
-| `workflow-editor.tsx` | Composes `<StudioCanvas>` from `renderer/canvas/`, the tool rail and the panels | ≤ 400 |
-| `nodes/registry.ts` | `type → { definition (ports.ts), component, defaults, minSize }` | ≤ 120 |
-| `nodes/{prompt,image-input,generate-image,output}-node.tsx` | One file per node type, built on the kit's node chrome | ≤ 250 each |
-| `use-workflow-controller.ts` | Document state, `editor-core` history, connection rules, debounced autosave, close-guard flags | ≤ 400 |
-| `use-image-run.ts` | Snapshot subscription and run actions | ≤ 200 |
-| `run-panel.tsx` | Attempts list, Stop, cost and "may be billed" notes, retry-failed | ≤ 300 |
-| `consent-sheet.tsx` | Provider, model, request count, references and estimate; Cancel / Generate | ≤ 250 |
-| `model-picker.tsx` | Image models grouped by provider | ≤ 200 |
-| `images.css` | Tokens only; imported only by the lazy route | – |
+| `library-core.ts`                                              | Electron-free search, facets, sort, day sections, Save All cap, grid arrow keys, workflow summaries                                 | ≤ 250      |
+| `workflow-editor.tsx`                                          | Composes `<StudioCanvas>` from `renderer/canvas/`, the tool rail and the panels                                                     | ≤ 400      |
+| `nodes/registry.ts`                                            | `type → { definition (ports.ts), component, defaults, minSize }`                                                                    | ≤ 120      |
+| `nodes/{prompt,image-input,generate-image,output}-node.tsx`    | One file per node type, built on the kit's node chrome                                                                              | ≤ 250 each |
+| `use-workflow-controller.ts`                                   | Document state, `editor-core` history, connection rules, debounced autosave, close-guard flags                                      | ≤ 400      |
+| `use-image-run.ts`                                             | Snapshot subscription and run actions                                                                                               | ≤ 200      |
+| `run-panel.tsx`                                                | Attempts list, Stop, cost and "may be billed" notes, retry-failed                                                                   | ≤ 300      |
+| `consent-sheet.tsx`                                            | Provider, model, request count, references and estimate; Cancel / Generate                                                          | ≤ 250      |
+| `model-picker.tsx`                                             | Image models grouped by provider                                                                                                    | ≤ 200      |
+| `images.css`                                                   | Tokens only; imported only by the lazy route                                                                                        | –          |
 
 UI rules:
+
 - The shared squircle `Button` and the semantic tokens.
 - No bordered or accent selection cards.
 - Neutral focus ring on non-text controls; no ring on text inputs.
@@ -185,28 +229,28 @@ UI rules:
 
 ### 2.7 IPC (14 invoke channels plus 1 notification; ≤ 15 budget)
 
-| Channel | Request | Response |
-|---|---|---|
-| `imageWorkflows:list` | `{}` | `{ workflows: { id, title, revision, updatedAt }[] }` |
-| `imageWorkflows:create` | `{ template: "blank" \| "starter", title? }` | `{ workflow: WorkflowDocV1 }` |
-| `imageWorkflows:get` | `{ workflowId }` | `{ workflow, latestOutputs: Record<nodeId, OutputRef[]> }` |
-| `imageWorkflows:save` | `{ workflowId, baseRevision, document }` | `{ ok: true, revision } \| { ok: false, reason: "conflict" \| "invalid", issues? }` |
-| `imageWorkflows:mutate` | `{ op: "rename", workflowId, title } \| { op: "duplicate" \| "delete", workflowId }` | `{ ok, workflowId? }` |
-| `imageWorkflows:list-models` | `{}` | `{ models: ImageModelOption[] }` |
-| `imageWorkflows:import-image` | `{ source: "dialog" } \| { source: "bytes", name, mimeType, data: Uint8Array /* ≤ 8 MiB */ }` | `{ assetId, mimeType, width, height, bytes } \| { cancelled: true }` |
-| `imageWorkflows:prepare-run` | `{ workflowId, revision, scope }` | `{ plan: ImageRunConsentPlan } \| { issues: GraphIssue[] }` |
-| `imageWorkflows:start-run` | `{ consentId }` | `{ runId } \| { error: "expired" \| "stale" \| "model-unavailable" }` |
-| `imageWorkflows:cancel-run` | `{ runId }` | `{ ok }` |
-| `imageWorkflows:get-run` | `{ runId } \| { workflowId /* active or latest */ }` | `{ snapshot: RunSnapshot \| null }` |
-| `imageWorkflows:list-runs` | `{ workflowId, limit ≤ 50 }` | `{ runs: RunSummary[] }` |
-| `imageWorkflows:gallery` (amended 2026-10-31) | `{ workflowId? }` | `{ items: GalleryItem[] /* newest first, ≤ 2,000 */, saveFolderLabel }` |
+| Channel                                            | Request                                                                                                                                                                          | Response                                                                                                                           |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `imageWorkflows:list`                              | `{}`                                                                                                                                                                             | `{ workflows: { id, title, revision, updatedAt }[] }`                                                                              |
+| `imageWorkflows:create`                            | `{ template: "blank" \| "starter", title? }`                                                                                                                                     | `{ workflow: WorkflowDocV1 }`                                                                                                      |
+| `imageWorkflows:get`                               | `{ workflowId }`                                                                                                                                                                 | `{ workflow, latestOutputs: Record<nodeId, OutputRef[]> }`                                                                         |
+| `imageWorkflows:save`                              | `{ workflowId, baseRevision, document }`                                                                                                                                         | `{ ok: true, revision } \| { ok: false, reason: "conflict" \| "invalid", issues? }`                                                |
+| `imageWorkflows:mutate`                            | `{ op: "rename", workflowId, title } \| { op: "duplicate" \| "delete", workflowId }`                                                                                             | `{ ok, workflowId? }`                                                                                                              |
+| `imageWorkflows:list-models`                       | `{}`                                                                                                                                                                             | `{ models: ImageModelOption[] }`                                                                                                   |
+| `imageWorkflows:import-image`                      | `{ source: "dialog" } \| { source: "bytes", name, mimeType, data: Uint8Array /* ≤ 8 MiB */ }`                                                                                    | `{ assetId, mimeType, width, height, bytes } \| { cancelled: true }`                                                               |
+| `imageWorkflows:prepare-run`                       | `{ workflowId, revision, scope }`                                                                                                                                                | `{ plan: ImageRunConsentPlan } \| { issues: GraphIssue[] }`                                                                        |
+| `imageWorkflows:start-run`                         | `{ consentId }`                                                                                                                                                                  | `{ runId } \| { error: "expired" \| "stale" \| "model-unavailable" }`                                                              |
+| `imageWorkflows:cancel-run`                        | `{ runId }`                                                                                                                                                                      | `{ ok }`                                                                                                                           |
+| `imageWorkflows:get-run`                           | `{ runId } \| { workflowId /* active or latest */ }`                                                                                                                             | `{ snapshot: RunSnapshot \| null }`                                                                                                |
+| `imageWorkflows:list-runs`                         | `{ workflowId, limit ≤ 50 }`                                                                                                                                                     | `{ runs: RunSummary[] }`                                                                                                           |
+| `imageWorkflows:gallery` (amended 2026-10-31)      | `{ workflowId? }`                                                                                                                                                                | `{ items: GalleryItem[] /* newest first, ≤ 2,000 */, saveFolderLabel }`                                                            |
 | `imageWorkflows:image-action` (amended 2026-10-31) | `{ op: "view" \| "save-as" \| "copy" \| "reveal" \| "drag", assetId } \| { op: "save-all", assetIds /* 1–200 */ } \| { op: "reveal-saved", savedId } \| { op: "reveal-folder" }` | `{ ok: true, url?, count?, savedId? } \| { ok: false, reason: "cancelled" \| "not-found" \| "unsupported" \| "failed", message? }` |
-| `imageWorkflows:run-changed` (notify) | – | `RunSnapshot` |
+| `imageWorkflows:run-changed` (notify)              | –                                                                                                                                                                                | `RunSnapshot`                                                                                                                      |
 
 - All channels use `ipcMain.handle` with `main/shared/guards.ts` exact-key validators and the `rendererDocumentOwner` check.
 - Handlers live in `main/handlers/create-images/`.
 - Asset display URLs come from ADR-F's grant API. Create Images adds no asset channel and no paths cross IPC: the dialog runs in main.
-- *Amended 2026-10-31:* image actions name images by asset id only, and act only on a Generate output the ledger knows or an Image Input held by a workflow (`images-workflow:<id>`); anything else is `not-found`. Dialogs, the clipboard, the file manager and native drag stay in main. See §2.11.
+- _Amended 2026-10-31:_ image actions name images by asset id only, and act only on a Generate output the ledger knows or an Image Input held by a workflow (`images-workflow:<id>`); anything else is `not-found`. Dialogs, the clipboard, the file manager and native drag stay in main. See §2.11.
 
 ### 2.8 CI-1 node set (schema v1)
 
@@ -215,14 +259,15 @@ UI rules:
 - **Edge:** `{ id, source, sourcePort, target, targetPort }`.
 - **Port kinds:** `text`, `image`, `images`.
 
-| Node | `data` | Ports |
-|---|---|---|
-| `prompt` | `{ text: string /* ≤ 16 KiB, matches generate_image */ }` | out `text:text` |
-| `image-input` | `{ assetId?: sha256hex, label? }` | out `image:image` |
+| Node             | `data`                                                                                                             | Ports                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `prompt`         | `{ text: string /* ≤ 16 KiB, matches generate_image */ }`                                                          | out `text:text`                                                                      |
+| `image-input`    | `{ assetId?: sha256hex, label? }`                                                                                  | out `image:image`                                                                    |
 | `generate-image` | `{ model?: { provider, id }, count: 1 }` (CI-1 owner cap: 1 request per node; widen the union when batching lands) | in `prompt:text` (required, 1); `references:image/images` (≤ 4); out `images:images` |
-| `output` | `{ label? }`; inline mini-gallery shows `latestOutputs` from the ledger | in `images:images` (required, 1) |
+| `output`         | `{ label? }`; inline mini-gallery shows `latestOutputs` from the ledger                                            | in `images:images` (required, 1)                                                     |
 
 **Dropped from the old schema:**
+
 - schemaVersions 1–5 and all migrations; `assetRefs`, which is derived; `settings.defaultProviderId: "gemini"`.
 - `providerId: "gemini"`, `aspectRatio`, `imageSize` and `outputMime`. Pi has no such parameters. They return only through a justified per-API `onPayload` adapter.
 - Node `comment`, edge `breakpoint`, `text-list` and `metadata` ports.
@@ -231,20 +276,20 @@ UI rules:
 
 ### 2.9 Port, rewrite, drop (old paths)
 
-| Old path | Action | Notes |
-|---|---|---|
-| `renderer/shared/create-images/ports.ts` | **Port** (CI-1.1) | Trim to 4 node types and 3 port kinds; keep `validateWorkflowGraph` and `topologicalWorkflowOrder` with their tests |
-| `renderer/create-images/editor-core.ts`, `node-dimensions-core.ts` | **Port** (CI-1.1) | History, connection decisions, arrange, fit-to-media |
-| `renderer/shared/create-images/schema.ts` | **Rewrite** (CI-1.1) | v1 only, as in §2.8, using `guards.ts` |
-| `renderer/shared/create-images/templates.ts` | **Port**: Blank/Starter in CI-1, explorer in CI-3 | Remove "Gemini" copy |
-| `main/services/create-images/scheduler-core.ts` (1,219 lines) | **Port the core** | Keep plan and ready-set dispatch. Drop retry policy and jitter, the `remote` lane and job IDs, submission-prepared durability, the event cursor and reducer, renderer-disconnect handling and the 8 restart categories (replaced by one SQL sweep) |
-| `run-service.ts`, `run-journal-store.ts`, `workflow-manifest-store.ts`, `image-provider-execution-core.ts` | **Rewrite** | §2.2–2.4; the consent HMAC token and fingerprint are replaced by a main-held single-use `consentId` |
-| `main/handlers/create-images.ts`, `renderer/shared/create-images/ipc.ts`, `run-contract.ts` | **Rewrite** | §2.7 |
-| `workflow-canvas.tsx`, `create-images-view.tsx`, `workflow-node.tsx`, `run-ui.tsx` | **Rewrite as a split** | §2.6 |
-| `image-lightbox-core.ts`, `recent-output-core.ts`, `graph-fragment-core.ts` | **Port in CI-2** | |
-| `prompt-variables.ts`, `prompt-list.ts`, `node-banana-import.ts`, `archive.ts` | **Port in CI-3** (sub-flags) | Keep the hostile-ZIP tests |
-| `asset-image-validation-core.ts`, `asset-delivery-core.ts` | Ported **by Track F** | Not here |
-| `providers/gemini-*`, `gemini-provider-status-core.ts`, `mock-image-provider-core.ts`, `packaged-canvas-acceptance-*`, `renderer-egress-core.ts`, `mutation-rate-limit-core.ts`, `workspace-store.ts`, `macos-image-normalizer.ts`, `electron-asset-image-utility.ts`, `fixtures.ts`, `feature-surface.test.ts`, `retry-policy.ts`, `run-ambiguity-confirmation.tsx`, `run-degraded-discard-confirmation.tsx`, plus CSP edits, the global egress guard, the favicon exception, source fingerprints, stress routes and `sips` | **Drop** | Umbrella §6 drop list |
+| Old path                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Action                                            | Notes                                                                                                                                                                                                                                              |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `renderer/shared/create-images/ports.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | **Port** (CI-1.1)                                 | Trim to 4 node types and 3 port kinds; keep `validateWorkflowGraph` and `topologicalWorkflowOrder` with their tests                                                                                                                                |
+| `renderer/create-images/editor-core.ts`, `node-dimensions-core.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                           | **Port** (CI-1.1)                                 | History, connection decisions, arrange, fit-to-media                                                                                                                                                                                               |
+| `renderer/shared/create-images/schema.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | **Rewrite** (CI-1.1)                              | v1 only, as in §2.8, using `guards.ts`                                                                                                                                                                                                             |
+| `renderer/shared/create-images/templates.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | **Port**: Blank/Starter in CI-1, explorer in CI-3 | Remove "Gemini" copy                                                                                                                                                                                                                               |
+| `main/services/create-images/scheduler-core.ts` (1,219 lines)                                                                                                                                                                                                                                                                                                                                                                                                                                                                | **Port the core**                                 | Keep plan and ready-set dispatch. Drop retry policy and jitter, the `remote` lane and job IDs, submission-prepared durability, the event cursor and reducer, renderer-disconnect handling and the 8 restart categories (replaced by one SQL sweep) |
+| `run-service.ts`, `run-journal-store.ts`, `workflow-manifest-store.ts`, `image-provider-execution-core.ts`                                                                                                                                                                                                                                                                                                                                                                                                                   | **Rewrite**                                       | §2.2–2.4; the consent HMAC token and fingerprint are replaced by a main-held single-use `consentId`                                                                                                                                                |
+| `main/handlers/create-images.ts`, `renderer/shared/create-images/ipc.ts`, `run-contract.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                  | **Rewrite**                                       | §2.7                                                                                                                                                                                                                                               |
+| `workflow-canvas.tsx`, `create-images-view.tsx`, `workflow-node.tsx`, `run-ui.tsx`                                                                                                                                                                                                                                                                                                                                                                                                                                           | **Rewrite as a split**                            | §2.6                                                                                                                                                                                                                                               |
+| `image-lightbox-core.ts`, `recent-output-core.ts`, `graph-fragment-core.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | **Port in CI-2**                                  |                                                                                                                                                                                                                                                    |
+| `prompt-variables.ts`, `prompt-list.ts`, `node-banana-import.ts`, `archive.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                               | **Port in CI-3** (sub-flags)                      | Keep the hostile-ZIP tests                                                                                                                                                                                                                         |
+| `asset-image-validation-core.ts`, `asset-delivery-core.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Ported **by Track F**                             | Not here                                                                                                                                                                                                                                           |
+| `providers/gemini-*`, `gemini-provider-status-core.ts`, `mock-image-provider-core.ts`, `packaged-canvas-acceptance-*`, `renderer-egress-core.ts`, `mutation-rate-limit-core.ts`, `workspace-store.ts`, `macos-image-normalizer.ts`, `electron-asset-image-utility.ts`, `fixtures.ts`, `feature-surface.test.ts`, `retry-policy.ts`, `run-ambiguity-confirmation.tsx`, `run-degraded-discard-confirmation.tsx`, plus CSP edits, the global egress guard, the favicon exception, source fingerprints, stress routes and `sips` | **Drop**                                          | Umbrella §6 drop list                                                                                                                                                                                                                              |
 
 ### 2.10 Phase boundaries (confirmed, with adjustments)
 
@@ -279,20 +324,20 @@ Owner decisions: (a) keep each request's prompt locally so history can show it; 
 
 ## 3a. Original open questions (for the record)
 
-| # | Question | Recommendation |
-|---|---|---|
-| Q1 | Default model for new Generate nodes | `openrouter / google/gemini-3.1-flash-image` (Nano Banana 2): references plus text output, and catalog pricing present. If it is not available, use the first available model. Always shown in consent. |
-| Q2 | Do you have an OpenRouter key for CI-1.10, or should direct Google be in CI-1? | Use OpenRouter in CI-1 and direct Google in CI-2. Pull Google forward only if OpenRouter is not an option for you. |
-| Q3 | Caps | Concurrency default 2 and max 4; `count` ≤ 4 per node; **≤ 16 provider requests per run** in CI-1. Raise this with CI-3 batching. |
-| Q4 | Cost estimate | Show "Estimate unavailable" in CI-1, because catalog token pricing does not model per-image pricing, and show the reported cost after each attempt. In CI-2, consider "last reported cost for this model" from local usage history. |
-| Q5 | Where generated images live | userData asset store only in CI-1, with Download/Reveal in CI-2. No auto-export folder (the old branch's forced external folder and Finder sync are dropped). *Superseded 2026-10-31 by §2.11: every generated image is also auto-saved to `Pictures/Aiden/Create Images`.* |
-| Q6 | Aspect ratio | Leave it out of CI-1 and use prompt wording. Revisit only through a per-API `onPayload` adapter (OpenRouter `image_config`) if live use shows a need. |
+| #   | Question                                                                       | Recommendation                                                                                                                                                                                                                                                              |
+| --- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Q1  | Default model for new Generate nodes                                           | `openrouter / google/gemini-3.1-flash-image` (Nano Banana 2): references plus text output, and catalog pricing present. If it is not available, use the first available model. Always shown in consent.                                                                     |
+| Q2  | Do you have an OpenRouter key for CI-1.10, or should direct Google be in CI-1? | Use OpenRouter in CI-1 and direct Google in CI-2. Pull Google forward only if OpenRouter is not an option for you.                                                                                                                                                          |
+| Q3  | Caps                                                                           | Concurrency default 2 and max 4; `count` ≤ 4 per node; **≤ 16 provider requests per run** in CI-1. Raise this with CI-3 batching.                                                                                                                                           |
+| Q4  | Cost estimate                                                                  | Show "Estimate unavailable" in CI-1, because catalog token pricing does not model per-image pricing, and show the reported cost after each attempt. In CI-2, consider "last reported cost for this model" from local usage history.                                         |
+| Q5  | Where generated images live                                                    | userData asset store only in CI-1, with Download/Reveal in CI-2. No auto-export folder (the old branch's forced external folder and Finder sync are dropped). _Superseded 2026-10-31 by §2.11: every generated image is also auto-saved to `Pictures/Aiden/Create Images`._ |
+| Q6  | Aspect ratio                                                                   | Leave it out of CI-1 and use prompt wording. Revisit only through a per-API `onPayload` adapter (OpenRouter `image_config`) if live use shows a need.                                                                                                                       |
 
 ## 4. Risks
 
-| Risk | Mitigation |
-|---|---|
-| OpenRouter image output varies by model: interim images, text-only replies, missing usage | `parseGeneratedImages` validates the bytes; more than 4 images are truncated instead of failing a paid attempt; CI-1.10 records actual behavior |
-| A key-less e2e profile conflicts with the fake OpenRouter key | The key is scoped to the images spec through a fixture option; existing specs keep `assertNoPersistedProviderCredentials` |
-| `synchronous=NORMAL` loses the last transactions on an OS crash | Only history is affected; restart never resubmits, and the usage store holds the billing record |
-| Hotspots (`main/index.ts` quit and reconcile, `usage-store-core.ts`, `preload-channels.ts` prefix) | Orchestrator registration commits, per umbrella §5 |
+| Risk                                                                                               | Mitigation                                                                                                                                      |
+| -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenRouter image output varies by model: interim images, text-only replies, missing usage          | `parseGeneratedImages` validates the bytes; more than 4 images are truncated instead of failing a paid attempt; CI-1.10 records actual behavior |
+| A key-less e2e profile conflicts with the fake OpenRouter key                                      | The key is scoped to the images spec through a fixture option; existing specs keep `assertNoPersistedProviderCredentials`                       |
+| `synchronous=NORMAL` loses the last transactions on an OS crash                                    | Only history is affected; restart never resubmits, and the usage store holds the billing record                                                 |
+| Hotspots (`main/index.ts` quit and reconcile, `usage-store-core.ts`, `preload-channels.ts` prefix) | Orchestrator registration commits, per umbrella §5                                                                                              |

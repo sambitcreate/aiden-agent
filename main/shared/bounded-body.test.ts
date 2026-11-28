@@ -12,17 +12,20 @@ const errors: BoundedBodyErrors = {
 };
 
 function streamOf(chunks: unknown[], observed: { cancelled: boolean; pulls: number }) {
-  return new ReadableStream({
-    pull(controller) {
-      observed.pulls += 1;
-      const next = chunks.shift();
-      if (next === undefined) controller.close();
-      else controller.enqueue(next);
+  return new ReadableStream(
+    {
+      pull(controller) {
+        observed.pulls += 1;
+        const next = chunks.shift();
+        if (next === undefined) controller.close();
+        else controller.enqueue(next);
+      },
+      cancel() {
+        observed.cancelled = true;
+      },
     },
-    cancel() {
-      observed.cancelled = true;
-    },
-  }, { highWaterMark: 0 });
+    { highWaterMark: 0 },
+  );
 }
 
 // A bare response shape hands the stream through untouched, the way a
@@ -34,7 +37,9 @@ function responseOf(body: ReadableStream | null, headers: Record<string, string>
 test("reads chunked bodies up to and including the byte limit", async () => {
   const observed = { cancelled: false, pulls: 0 };
   const bytes = await readBoundedBody(
-    responseOf(streamOf([new Uint8Array([1, 2]), new Uint8Array([3]), new Uint8Array([4, 5])], observed)),
+    responseOf(
+      streamOf([new Uint8Array([1, 2]), new Uint8Array([3]), new Uint8Array([4, 5])], observed),
+    ),
     { maxBytes: 5, errors },
   );
   assert.deepEqual([...bytes], [1, 2, 3, 4, 5]);
@@ -43,7 +48,9 @@ test("reads chunked bodies up to and including the byte limit", async () => {
 
 test("rejects an oversized declared length before reading and cancels the body", async () => {
   const observed = { cancelled: false, pulls: 0 };
-  const response = responseOf(streamOf([new Uint8Array(1)], observed), { "content-length": "1000000" });
+  const response = responseOf(streamOf([new Uint8Array(1)], observed), {
+    "content-length": "1000000",
+  });
   await assert.rejects(readBoundedBody(response, { maxBytes: 10, errors }), TooLarge);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(observed.cancelled, true);
@@ -97,7 +104,6 @@ test("caller abort settles a stalled read and cancels the source", async () => {
   await assert.rejects(reading, (error) => error === reason);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(cancelled, true);
-
 
   const already = new AbortController();
   already.abort();

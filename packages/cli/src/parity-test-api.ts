@@ -31,7 +31,15 @@ export { PI_DEFAULT_MODEL_PER_PROVIDER } from "../../../main/services/pi-default
 export { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 export { liveMessages, resolveRuntimeFromContext } from "./pi-bridge/model-runtime.ts";
 
-export { mcpCommand, mcpLogin, validateMcpServer, createMcpExtension, mcpCredentialId, mcpCredentialSignature, cliMcpOAuthLoopback } from "./mcp.ts";
+export {
+  mcpCommand,
+  mcpLogin,
+  validateMcpServer,
+  createMcpExtension,
+  mcpCredentialId,
+  mcpCredentialSignature,
+  cliMcpOAuthLoopback,
+} from "./mcp.ts";
 export { mcpOAuthBindingForServer } from "../../../main/services/mcp-oauth-identity.js";
 export { startFakeOAuthServer } from "../../../main/services/mcp-oauth-test-server.js";
 
@@ -58,7 +66,10 @@ export { BOT_SUBAGENT_LIMIT_REACHED_RESULT } from "../../../main/services/subage
 
 export * from "./app-controls.ts";
 export { readAidenHelp } from "../../../main/services/aiden-app-knowledge.js";
-export { hookContextMessage, hookTurnContextText } from "../../../main/services/workspace-chat-hooks.js";
+export {
+  hookContextMessage,
+  hookTurnContextText,
+} from "../../../main/services/workspace-chat-hooks.js";
 export { fenceAsData } from "../../../renderer/shared/agent-notices.js";
 export { migrateAidenMcpConfig } from "./mcp-config-migration.ts";
 
@@ -75,11 +86,41 @@ export { cliDurableBotToolContext } from "./bot-durable.ts";
 export { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 export { capturePersistedSubagentContext } from "../../../main/services/subagents/forked-context.js";
 export { createAdvisorInlineExtension } from "./extensions/advisor.ts";
-export { LAUNCHD_LABEL, chooseNetwork, installService, launchdPlist, parseInstallFlags, reachableNetwork, releaseTailscaleRoute, runsUnderServiceManager, savedNetwork, serviceCommand, serviceFile, serviceStatus, systemdUnit, uninstallService } from "./service.ts";
-export { looksLikeCloudServer, networkQuestion, probeAidenHealth, readSystemTailscaleFacts, readTailscaleFacts, recommendNetwork, remoteCheckCommand, serverChecklist, tailscaleChecklist, tailscaleReady, waitForTailscaleAddress } from "./reachability.ts";
+export {
+  LAUNCHD_LABEL,
+  chooseNetwork,
+  installService,
+  launchdPlist,
+  parseInstallFlags,
+  reachableNetwork,
+  releaseTailscaleRoute,
+  runsUnderServiceManager,
+  savedNetwork,
+  serviceCommand,
+  serviceFile,
+  serviceStatus,
+  systemdUnit,
+  uninstallService,
+} from "./service.ts";
+export {
+  looksLikeCloudServer,
+  networkQuestion,
+  probeAidenHealth,
+  readSystemTailscaleFacts,
+  readTailscaleFacts,
+  recommendNetwork,
+  remoteCheckCommand,
+  serverChecklist,
+  tailscaleChecklist,
+  tailscaleReady,
+  waitForTailscaleAddress,
+} from "./reachability.ts";
 export { hooksCommand, hooksAdminCommand, startCliHooks, stopCliHooks } from "./hooks.ts";
 export { createCliChatForks } from "./daemon-forks.ts";
-export { AIDEN_REMOTE_LEGACY_CAPABILITIES, AIDEN_REMOTE_HOST_CAPABILITIES } from "../../../main/services/aiden-remote-protocol.js";
+export {
+  AIDEN_REMOTE_LEGACY_CAPABILITIES,
+  AIDEN_REMOTE_HOST_CAPABILITIES,
+} from "../../../main/services/aiden-remote-protocol.js";
 
 export { projectBotTranscript } from "../../../main/services/bot-runtime/live-projection.js";
 export { createCliBotSpending } from "./bot-spending.ts";
@@ -90,4 +131,7 @@ export { cliWorkspaceCodingTools } from "./workspace-coding-tools.ts";
 export * from "./server-visuals.ts";
 export { projectAidenRemoteChat } from "../../../main/services/aiden-remote-chats.js";
 
-export { createPromptCacheTelemetry, promptCacheWarmsSinceLastResponse } from "../../../main/services/pi-cache-telemetry.js";
+export {
+  createPromptCacheTelemetry,
+  promptCacheWarmsSinceLastResponse,
+} from "../../../main/services/pi-cache-telemetry.js";

@@ -5,7 +5,10 @@
 // them. They are the one wording every surface shares, so a Done from a phone
 // reads exactly like a Done on the Mac.
 
-import { normalizeBotHandoffAction, type BotHandoffTarget } from "../../../renderer/shared/bot-handoffs.js";
+import {
+  normalizeBotHandoffAction,
+  type BotHandoffTarget,
+} from "../../../renderer/shared/bot-handoffs.js";
 
 function noteLine(note: string | undefined): string {
   return note === undefined || !note.trim() ? "" : `\nTheir note: ${note.trim()}`;
@@ -25,8 +28,13 @@ export function handoffSkippedText(action: string, note?: string): string {
 }
 
 /** "I'm signed in" on a sign-in card; the check the Bot makes depends on where the person signed in. */
-export function signInDoneText(origin: string, note?: string, target: BotHandoffTarget = "browser"): string {
-  const check = target === "computer" ? "Check with a fresh computer capture" : "Check with browser_snapshot";
+export function signInDoneText(
+  origin: string,
+  note?: string,
+  target: BotHandoffTarget = "browser",
+): string {
+  const check =
+    target === "computer" ? "Check with a fresh computer capture" : "Check with browser_snapshot";
   return `The person says they signed in to ${origin}. ${check}; never ask for or type their password.${noteLine(note)}`;
 }
 

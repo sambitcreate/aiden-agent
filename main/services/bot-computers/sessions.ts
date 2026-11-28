@@ -79,7 +79,13 @@ function connectionKey(connection: BotComputerConnection): string {
  */
 export function createBotComputerSessions(
   deps: BotComputerSessionsDependencies,
-): BotComputerSessions & { screen(botId: string, signal?: AbortSignal, options?: { reason?: BotComputerStartReason }): Promise<BotComputerScreen> } {
+): BotComputerSessions & {
+  screen(
+    botId: string,
+    signal?: AbortSignal,
+    options?: { reason?: BotComputerStartReason },
+  ): Promise<BotComputerScreen>;
+} {
   let factory: BotComputerScreenFactory | undefined;
   const screens = new Map<string, CachedScreen>();
   const pointers = new Map<string, BotComputerPointer>();
@@ -98,7 +104,11 @@ export function createBotComputerSessions(
    * others (the Bot's `computer` call); it is cancelled only once every caller
    * that was waiting has gone.
    */
-  const join = (botId: string, cached: CachedScreen, signal?: AbortSignal): Promise<BotComputerScreen> => {
+  const join = (
+    botId: string,
+    cached: CachedScreen,
+    signal?: AbortSignal,
+  ): Promise<BotComputerScreen> => {
     if (cached.settled) return cached.screen;
     if (!signal) {
       cached.waiters = Number.POSITIVE_INFINITY;
@@ -144,7 +154,14 @@ export function createBotComputerSessions(
     if (signal?.aborted) return Promise.reject(screenOpenCancelled());
     const cancel = new AbortController();
     const opening = open(connection, cancel.signal);
-    const entry: CachedScreen = { key, screen: opening, cancel, waiters: 0, settled: false, abandoned: false };
+    const entry: CachedScreen = {
+      key,
+      screen: opening,
+      cancel,
+      waiters: 0,
+      settled: false,
+      abandoned: false,
+    };
     screens.set(botId, entry);
     opening.then(
       (screen) => {
@@ -164,9 +181,13 @@ export function createBotComputerSessions(
     const open = factory;
     if (!open) {
       const name = (await deps.botName?.(botId)) ?? "The Bot";
-      throw new BotComputerError("unsupported", `${name}'s computer screen isn't available in this build.`);
+      throw new BotComputerError(
+        "unsupported",
+        `${name}'s computer screen isn't available in this build.`,
+      );
     }
-    return (connection: BotComputerConnection, signal?: AbortSignal) => openFor(open, botId, connection, signal);
+    return (connection: BotComputerConnection, signal?: AbortSignal) =>
+      openFor(open, botId, connection, signal);
   };
 
   deps.host.onChange((botId) => {
@@ -192,9 +213,16 @@ export function createBotComputerSessions(
       for (const botId of [...screens.keys()]) drop(botId);
     },
 
-    async screen(botId: string, signal?: AbortSignal, options: { reason?: BotComputerStartReason } = {}) {
+    async screen(
+      botId: string,
+      signal?: AbortSignal,
+      options: { reason?: BotComputerStartReason } = {},
+    ) {
       const open = await opener(botId);
-      return open(await deps.host.ensureRunning(botId, { reason: options.reason ?? "tool", signal }), signal);
+      return open(
+        await deps.host.ensureRunning(botId, { reason: options.reason ?? "tool", signal }),
+        signal,
+      );
     },
 
     async runningScreen(botId, signal) {
@@ -207,7 +235,9 @@ export function createBotComputerSessions(
 
     recordPointer(botId, pointer) {
       const valid =
-        [pointer.x, pointer.y, pointer.width, pointer.height].every((value) => Number.isFinite(value)) &&
+        [pointer.x, pointer.y, pointer.width, pointer.height].every((value) =>
+          Number.isFinite(value),
+        ) &&
         pointer.width > 0 &&
         pointer.height > 0;
       if (valid) pointers.set(botId, { ...pointer });

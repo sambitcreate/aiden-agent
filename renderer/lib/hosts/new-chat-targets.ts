@@ -1,4 +1,9 @@
-import type { PeerFeedRow, PeerHostFeedSnapshot, PeerHostStatus, PeerHostView } from "../../shared/peer-host";
+import type {
+  PeerFeedRow,
+  PeerHostFeedSnapshot,
+  PeerHostStatus,
+  PeerHostView,
+} from "../../shared/peer-host";
 import { sidebarHosts, type SidebarHost } from "../sidebar-remote-groups";
 import type { HostChatCapability } from "./host-chat-adapter";
 import { hostControlRefusal, remoteHostCapabilities } from "./remote-host-adapter";
@@ -47,7 +52,13 @@ export function newChatMachines(
 ): NewChatMachine[] {
   const byId = new Map(views.map((view) => [view.id, view]));
   return sidebarHosts(views, statuses).map((host) => {
-    const disabledReason = unavailableReason(host, byId.get(host.id), "createChat", "start chats", platform);
+    const disabledReason = unavailableReason(
+      host,
+      byId.get(host.id),
+      "createChat",
+      "start chats",
+      platform,
+    );
     return disabledReason ? { ...host, disabledReason } : host;
   });
 }
@@ -79,7 +90,11 @@ export function remoteProjectChoices(
     .sort((a, b) => updatedAt(b) - updatedAt(a))
     .map((row) => {
       const detail = text(row, "repositoryName");
-      return { id: row.id, name: text(row, "name") ?? "Untitled project", ...(detail ? { detail } : {}) };
+      return {
+        id: row.id,
+        name: text(row, "name") ?? "Untitled project",
+        ...(detail ? { detail } : {}),
+      };
     });
   // A project this window just created is offered at once, before the host's feed reports it.
   const known = new Set(listed.map((project) => project.id));
@@ -108,7 +123,10 @@ export function createdProjects(hostId: string): CreatedProjects {
   return { hostId, pending: [], listed: new Set() };
 }
 
-export function reduceCreatedProjects(state: CreatedProjects, event: CreatedProjectsEvent): CreatedProjects {
+export function reduceCreatedProjects(
+  state: CreatedProjects,
+  event: CreatedProjectsEvent,
+): CreatedProjects {
   const current = event.hostId === state.hostId ? state : createdProjects(event.hostId);
   if (event.type === "created") {
     if (current.listed.has(event.project.id)) return current;
@@ -119,7 +137,11 @@ export function reduceCreatedProjects(state: CreatedProjects, event: CreatedProj
   if (rows.every((row) => current.listed.has(row.id)) && current === state) return state;
   const listed = new Set(current.listed);
   for (const row of rows) listed.add(row.id);
-  return { ...current, listed, pending: current.pending.filter((project) => !listed.has(project.id)) };
+  return {
+    ...current,
+    listed,
+    pending: current.pending.filter((project) => !listed.has(project.id)),
+  };
 }
 
 /** A Bot that lives on a paired host. */
@@ -175,38 +197,47 @@ export function remoteBotGroups(
     const feed = feeds.get(host.id);
     // A run the host reported before it went offline may have ended since.
     const hostOnline = host.availability === "online" && feed?.stale !== true;
-    const bots = (feed?.bots ?? [])
-      .map((row): RemoteBotChoice => {
-        const purpose = text(row, "purpose");
-        const semantic = (row.avatar as { semantic?: unknown } | null | undefined)?.semantic;
-        const { needsYou } = peerFeedBotAttention(row);
-        // The host already sends one plain line; it is still another computer's text.
-        const preview = clipPendingAttentionSummary(row.preview, REMOTE_BOT_PREVIEW_MAX);
-        const lastReplyAt = typeof row.lastReplyAt === "string" ? Date.parse(row.lastReplyAt) : Number.NaN;
-        const photo = remoteBotPhotoAsset(row);
-        return {
-          id: row.id,
-          name: text(row, "name") ?? "Untitled Bot",
-          ...(purpose ? { purpose } : {}),
-          ...(isBotAvatarAppearance(semantic) ? { avatar: semantic } : {}),
-          ...(hostOnline && row.sessionState === "running" ? { working: true as const } : {}),
-          ...(needsYou ? { needsYou: true as const } : {}),
-          ...(row.sessionState === "paused" || row.sessionState === "interrupted" || row.sessionState === "needs_model"
-            ? { status: row.sessionState as "paused" | "interrupted" | "needs_model" }
-            : {}),
-          ...(preview ? { preview } : {}),
-          ...(Number.isFinite(lastReplyAt) && lastReplyAt > 0 ? { lastReplyAt } : {}),
-          ...(photo ? { photo } : {}),
-          ...(row.summarized === true ? { summarized: true as const } : {}),
-        };
-      });
+    const bots = (feed?.bots ?? []).map((row): RemoteBotChoice => {
+      const purpose = text(row, "purpose");
+      const semantic = (row.avatar as { semantic?: unknown } | null | undefined)?.semantic;
+      const { needsYou } = peerFeedBotAttention(row);
+      // The host already sends one plain line; it is still another computer's text.
+      const preview = clipPendingAttentionSummary(row.preview, REMOTE_BOT_PREVIEW_MAX);
+      const lastReplyAt =
+        typeof row.lastReplyAt === "string" ? Date.parse(row.lastReplyAt) : Number.NaN;
+      const photo = remoteBotPhotoAsset(row);
+      return {
+        id: row.id,
+        name: text(row, "name") ?? "Untitled Bot",
+        ...(purpose ? { purpose } : {}),
+        ...(isBotAvatarAppearance(semantic) ? { avatar: semantic } : {}),
+        ...(hostOnline && row.sessionState === "running" ? { working: true as const } : {}),
+        ...(needsYou ? { needsYou: true as const } : {}),
+        ...(row.sessionState === "paused" ||
+        row.sessionState === "interrupted" ||
+        row.sessionState === "needs_model"
+          ? { status: row.sessionState as "paused" | "interrupted" | "needs_model" }
+          : {}),
+        ...(preview ? { preview } : {}),
+        ...(Number.isFinite(lastReplyAt) && lastReplyAt > 0 ? { lastReplyAt } : {}),
+        ...(photo ? { photo } : {}),
+        ...(row.summarized === true ? { summarized: true as const } : {}),
+      };
+    });
     const view = byId.get(host.id);
     if (bots.length === 0) {
       // A pairing made before this Mac could use another Mac's Bots holds no
       // Bot grants (they are fixed at pairing), so the feed lists none.
-      if (view && view.features.includes("bot-durable-session-v1") && !view.capabilities.includes("bot:read"))
+      if (
+        view &&
+        view.features.includes("bot-durable-session-v1") &&
+        !view.capabilities.includes("bot:read")
+      )
         groups.push({
-          host: { ...host, disabledReason: `To use ${host.label}'s Bots here, pair this ${localComputerNoun(platform)} with it again.` },
+          host: {
+            ...host,
+            disabledReason: `To use ${host.label}'s Bots here, pair this ${localComputerNoun(platform)} with it again.`,
+          },
           bots: [],
         });
       continue;

@@ -30,7 +30,9 @@ const stateDirFrom = (list) => {
 if (args[0] === "__daemon") {
   const stateDir = args[1];
   const server = createServer((request, response) => {
-    response.writeHead(request.url === "/health" ? 200 : 404, { "content-type": "application/json" });
+    response.writeHead(request.url === "/health" ? 200 : 404, {
+      "content-type": "application/json",
+    });
     response.end("{}");
   });
   server.listen(0, "127.0.0.1", () => {

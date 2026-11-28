@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { McpClient } from "@earendil-works/pi-mcp";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { ListToolsRequestSchema, type ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
+import {
+  ListToolsRequestSchema,
+  type ServerCapabilities,
+} from "@modelcontextprotocol/sdk/types.js";
 import { connectSdkServer } from "./mcp-test-support.js";
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
 import { GenerationBoundConnectionAttempts } from "./generation-bound-connection-cache.js";
@@ -19,22 +22,44 @@ async function fixture(capabilities: ServerCapabilities, fail = false) {
   }
   const client = new McpClient({ name: "status-test", version: "1" });
   await client.connect(await connectSdkServer(server));
-  return { client, requests: () => requests, close: async () => { await client.close(); await server.close(); } };
+  return {
+    client,
+    requests: () => requests,
+    close: async () => {
+      await client.close();
+      await server.close();
+    },
+  };
 }
 
 test("initialized capability extensions survive successful tool discovery without aliasing client state", async (t) => {
-  const capabilities = { tools: { listChanged: true }, resources: { subscribe: false }, extensions: { "vendor/feature": { nested: { version: 2 } } } };
+  const capabilities = {
+    tools: { listChanged: true },
+    resources: { subscribe: false },
+    extensions: { "vendor/feature": { nested: { version: 2 } } },
+  };
   const f = await fixture(capabilities);
   t.after(f.close);
   const status = await inspectInitializedMcpStatus(f.client, () => true);
-  assert.deepEqual(status, { connected: true, tools: ["read"], toolCount: 1, serverCapabilities: capabilities });
+  assert.deepEqual(status, {
+    connected: true,
+    tools: ["read"],
+    toolCount: 1,
+    serverCapabilities: capabilities,
+  });
   assert.equal(f.requests(), 1);
-  (f.client.serverCapabilities as { extensions: Record<string, unknown> }).extensions["vendor/feature"] = { changed: true };
+  (f.client.serverCapabilities as { extensions: Record<string, unknown> }).extensions[
+    "vendor/feature"
+  ] = { changed: true };
   assert.deepEqual(status.serverCapabilities, capabilities);
 });
 
 test("tool discovery failure retains this initialized server's advertised capabilities", async (t) => {
-  const capabilities = { tools: {}, extensions: { "vendor/feature": { enabled: true } }, experimental: { custom: {} } };
+  const capabilities = {
+    tools: {},
+    extensions: { "vendor/feature": { enabled: true } },
+    experimental: { custom: {} },
+  };
   const f = await fixture(capabilities, true);
   t.after(f.close);
   const status = await inspectInitializedMcpStatus(f.client, () => true);
@@ -50,7 +75,12 @@ test("resources-only and empty-capability servers do not receive unsupported too
     const f = await fixture(capabilities);
     t.after(f.close);
     const status = await inspectInitializedMcpStatus(f.client, () => true);
-    assert.deepEqual(status, { connected: true, toolCount: 0, tools: [], serverCapabilities: capabilities });
+    assert.deepEqual(status, {
+      connected: true,
+      toolCount: 0,
+      tools: [],
+      serverCapabilities: capabilities,
+    });
     assert.equal(f.requests(), 0);
   }
 });
@@ -58,24 +88,38 @@ test("resources-only and empty-capability servers do not receive unsupported too
 test("separate status clients never reuse capabilities from another server", async (t) => {
   const first = await fixture({ tools: {}, extensions: { "first/private": {} } }, true);
   const second = await fixture({});
-  t.after(first.close); t.after(second.close);
-  assert.ok((await inspectInitializedMcpStatus(first.client, () => true)).serverCapabilities?.extensions);
-  assert.deepEqual((await inspectInitializedMcpStatus(second.client, () => true)).serverCapabilities, {});
+  t.after(first.close);
+  t.after(second.close);
+  assert.ok(
+    (await inspectInitializedMcpStatus(first.client, () => true)).serverCapabilities?.extensions,
+  );
+  assert.deepEqual(
+    (await inspectInitializedMcpStatus(second.client, () => true)).serverCapabilities,
+    {},
+  );
 });
 
 test("revocation during successful or failed discovery never returns stale metadata", async () => {
   for (const fails of [false, true]) {
     let current = true;
     let release!: () => void;
-    const barrier = new Promise<void>((resolve) => { release = resolve; });
-    const pending = inspectInitializedMcpStatus({
-      serverCapabilities: { tools: {}, extensions: { "private/stale": {} } } as McpClient["serverCapabilities"],
-      request: (async () => {
-        await barrier;
-        if (fails) throw new Error("discovery failure");
-        return { tools: [] };
-      }) as never,
-    }, () => current);
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const pending = inspectInitializedMcpStatus(
+      {
+        serverCapabilities: {
+          tools: {},
+          extensions: { "private/stale": {} },
+        } as McpClient["serverCapabilities"],
+        request: (async () => {
+          await barrier;
+          if (fails) throw new Error("discovery failure");
+          return { tools: [] };
+        }) as never,
+      },
+      () => current,
+    );
     current = false;
     release();
     await assert.rejects(pending, /superseded/u);
@@ -86,22 +130,60 @@ test("generation-bound status disconnect rejects stale capabilities and permits 
   const attempts = new GenerationBoundConnectionAttempts<{ version: number }>();
   let release!: () => void;
   let entered!: () => void;
-  const barrier = new Promise<void>((resolve) => { release = resolve; });
-  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
   let closes = 0;
-  const stale = attempts.run("server", attempts.generation("server"), () => ({ version: 1 }), async () => {},
-    (_client, isCurrent) => inspectInitializedMcpStatus({
-      serverCapabilities: { tools: {}, extensions: { "private/stale": {} } } as McpClient["serverCapabilities"],
-      request: (async () => { entered(); await barrier; return { tools: [] }; }) as never,
-    }, isCurrent), async () => { closes += 1; });
+  const stale = attempts.run(
+    "server",
+    attempts.generation("server"),
+    () => ({ version: 1 }),
+    async () => {},
+    (_client, isCurrent) =>
+      inspectInitializedMcpStatus(
+        {
+          serverCapabilities: {
+            tools: {},
+            extensions: { "private/stale": {} },
+          } as McpClient["serverCapabilities"],
+          request: (async () => {
+            entered();
+            await barrier;
+            return { tools: [] };
+          }) as never,
+        },
+        isCurrent,
+      ),
+    async () => {
+      closes += 1;
+    },
+  );
   await started;
   await attempts.disconnect("server");
   release();
   await assert.rejects(stale, /superseded/u);
-  const replacement = await attempts.run("server", attempts.generation("server"), () => ({ version: 2 }), async () => {},
-    (_client, isCurrent) => inspectInitializedMcpStatus({
-      serverCapabilities: {}, request: (async () => { throw new Error("must not discover"); }) as never,
-    }, isCurrent), async () => { closes += 1; });
+  const replacement = await attempts.run(
+    "server",
+    attempts.generation("server"),
+    () => ({ version: 2 }),
+    async () => {},
+    (_client, isCurrent) =>
+      inspectInitializedMcpStatus(
+        {
+          serverCapabilities: {},
+          request: (async () => {
+            throw new Error("must not discover");
+          }) as never,
+        },
+        isCurrent,
+      ),
+    async () => {
+      closes += 1;
+    },
+  );
   assert.deepEqual(replacement.serverCapabilities, {});
   assert.ok(closes >= 2);
 });
@@ -114,12 +196,23 @@ test("status includes later pages and preserves capabilities when pagination is 
       if (failSecond) throw new Error("later page unavailable");
       return { tools: [{ name: "last", inputSchema: { type: "object" as const } }] };
     }
-    return { tools: [{ name: "first", inputSchema: { type: "object" as const } }], nextCursor: "next" };
+    return {
+      tools: [{ name: "first", inputSchema: { type: "object" as const } }],
+      nextCursor: "next",
+    };
   });
   const client = new McpClient({ name: "paged-test", version: "1" });
   await client.connect(await connectSdkServer(server));
-  t.after(async () => { await client.close(); await server.close(); });
-  assert.deepEqual(await inspectInitializedMcpStatus(client, () => true), { connected: true, tools: ["first", "last"], toolCount: 2, serverCapabilities: { tools: {} } });
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+  assert.deepEqual(await inspectInitializedMcpStatus(client, () => true), {
+    connected: true,
+    tools: ["first", "last"],
+    toolCount: 2,
+    serverCapabilities: { tools: {} },
+  });
   failSecond = true;
   const failed = await inspectInitializedMcpStatus(client, () => true);
   assert.equal(failed.connected, false);

@@ -59,7 +59,14 @@ export function contextSegments(pressure: ContextMeterPressure): ContextSegment[
         tokens: category.tokens,
         fill: CATEGORY_COLORS[category.id],
       }))
-    : [{ key: "static", label: "System prompt & tools", tokens: pressure.staticTokens, fill: FALLBACK_STATIC_COLOR }];
+    : [
+        {
+          key: "static",
+          label: "System prompt & tools",
+          tokens: pressure.staticTokens,
+          fill: FALLBACK_STATIC_COLOR,
+        },
+      ];
   // contextTokens can exceed the local itemization when the provider's reported
   // usage anchors the projection; show that excess instead of hiding it in Free.
   const unitemized: ContextSegment = {
@@ -94,7 +101,8 @@ export type ContextTile =
  */
 export function contextTiles(pressure: ContextMeterPressure): ContextTile[] {
   const window = pressure.contextWindow;
-  if (window <= 0) return Array.from({ length: CONTEXT_TILE_COUNT }, () => ({ kind: "free" }) as const);
+  if (window <= 0)
+    return Array.from({ length: CONTEXT_TILE_COUNT }, () => ({ kind: "free" }) as const);
   const segments = contextSegments(pressure);
   const usedTokens = segments.reduce((sum, segment) => sum + segment.tokens, 0);
   const share = (tokens: number) => (tokens / window) * CONTEXT_TILE_COUNT;
@@ -110,7 +118,11 @@ export function contextTiles(pressure: ContextMeterPressure): ContextTile[] {
   const order = exact
     .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
     .sort((left, right) => right.remainder - left.remainder);
-  for (let left = usedTiles - counts.reduce((sum, count) => sum + count, 0), i = 0; left > 0; left--, i++) {
+  for (
+    let left = usedTiles - counts.reduce((sum, count) => sum + count, 0), i = 0;
+    left > 0;
+    left--, i++
+  ) {
     counts[order[i % order.length].index]++;
   }
 
@@ -126,7 +138,9 @@ export function contextTiles(pressure: ContextMeterPressure): ContextTile[] {
 /** "Messages 46.3K, …, Free space 818.2K, Reserved for response 66.4K" for the grid's image label. */
 export function contextTilesLabel(pressure: ContextMeterPressure): string {
   return [
-    ...contextSegments(pressure).map((segment) => `${segment.label} ${formatContextTokenCount(segment.tokens)}`),
+    ...contextSegments(pressure).map(
+      (segment) => `${segment.label} ${formatContextTokenCount(segment.tokens)}`,
+    ),
     `Free space ${formatContextTokenCount(freeContextTokens(pressure))}`,
     `Reserved for response ${formatContextTokenCount(pressure.reservedTokens)}`,
   ].join(", ");
@@ -154,10 +168,21 @@ export function ContextTiles({
         <span
           key={index}
           data-tile={tile.kind}
-          title={tile.kind === "used" ? tile.segment.label : tile.kind === "reserved" ? "Reserved for response" : undefined}
+          title={
+            tile.kind === "used"
+              ? tile.segment.label
+              : tile.kind === "reserved"
+                ? "Reserved for response"
+                : undefined
+          }
           className="aspect-square rounded-[3px] transition-colors duration-(--motion-large-duration) ease-standard motion-reduce:transition-none"
           style={{
-            background: tile.kind === "used" ? tile.segment.fill : tile.kind === "reserved" ? RESERVED_FILL : FREE_COLOR,
+            background:
+              tile.kind === "used"
+                ? tile.segment.fill
+                : tile.kind === "reserved"
+                  ? RESERVED_FILL
+                  : FREE_COLOR,
           }}
         />
       ))}
@@ -179,7 +204,15 @@ export function percentOfWindowLabel(tokens: number, contextWindow: number): str
 }
 
 /** Ten pips, one per 10% of usable context; any usage lights the first. */
-export function ContextPips({ percent, warning, used = percent > 0 }: { percent: number; warning: boolean; used?: boolean }) {
+export function ContextPips({
+  percent,
+  warning,
+  used = percent > 0,
+}: {
+  percent: number;
+  warning: boolean;
+  used?: boolean;
+}) {
   const lit = used ? Math.min(10, Math.max(1, Math.round(percent / 10))) : 0;
   return (
     <span aria-hidden="true" data-lit={lit} className="inline-flex shrink-0 items-center gap-[2px]">

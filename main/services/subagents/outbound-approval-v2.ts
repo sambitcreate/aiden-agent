@@ -1,16 +1,7 @@
-import type {
-  BeforeToolCallContext,
-  BeforeToolCallResult,
-} from "@earendil-works/pi-agent-core";
+import type { BeforeToolCallContext, BeforeToolCallResult } from "@earendil-works/pi-agent-core";
 import type { ToolApprovalPrompt } from "../tool-approval.js";
-import {
-  SubagentApprovalLedgerV2,
-  type PrepareSubagentApprovalV2Input,
-} from "./approval-v2.js";
-import type {
-  SubagentAuthorityV2,
-  SubagentMcpToolScopeV2,
-} from "./authority-v2.js";
+import { SubagentApprovalLedgerV2, type PrepareSubagentApprovalV2Input } from "./approval-v2.js";
+import type { SubagentAuthorityV2, SubagentMcpToolScopeV2 } from "./authority-v2.js";
 
 export const SUBAGENT_EGRESS_APPROVAL_WINDOW_MS = 60_000;
 export const MAX_SUBAGENT_MCP_APPROVAL_ARGUMENT_BYTES = 8 * 1024;
@@ -47,11 +38,7 @@ export interface SubagentOutboundApprovalGateV2 {
     context: BeforeToolCallContext,
     signal?: AbortSignal,
   ): Promise<BeforeToolCallResult | undefined>;
-  consume(input: {
-    toolCallId: string;
-    toolName: string;
-    arguments: unknown;
-  }): void;
+  consume(input: { toolCallId: string; toolName: string; arguments: unknown }): void;
 }
 
 export function sameSubagentAuthorityBindingV2(
@@ -79,8 +66,7 @@ export function sameSubagentAuthorityBindingV2(
     current.context === expected.context &&
     current.thinkingLevel === expected.thinkingLevel &&
     current.expiresAt === expected.expiresAt &&
-    JSON.stringify(current.capabilities) ===
-      JSON.stringify(expected.capabilities) &&
+    JSON.stringify(current.capabilities) === JSON.stringify(expected.capabilities) &&
     JSON.stringify(current.budgets) === JSON.stringify(expected.budgets)
   );
 }
@@ -90,8 +76,7 @@ function authorityAllows(
   binding: SubagentOutboundToolBindingV2,
 ): boolean {
   if (authority.execution !== "foreground") return false;
-  if (binding.kind === "web")
-    return authority.capabilities.web && binding.mcp === undefined;
+  if (binding.kind === "web") return authority.capabilities.web && binding.mcp === undefined;
   if (!binding.mcp || binding.mcp.tool.effect !== "read") return false;
   return authority.capabilities.mcp.some(
     (scope) =>
@@ -123,14 +108,9 @@ function canonicalApprovalValue(value: unknown): unknown {
   if (typeof value !== "object") {
     throw new Error("Subagent approval arguments are not displayable.");
   }
-  const result: Record<string, unknown> = Object.create(null) as Record<
-    string,
-    unknown
-  >;
+  const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const key of Object.keys(value).sort()) {
-    result[key] = canonicalApprovalValue(
-      (value as Record<string, unknown>)[key],
-    );
+    result[key] = canonicalApprovalValue((value as Record<string, unknown>)[key]);
   }
   return result;
 }
@@ -139,10 +119,7 @@ export function subagentOutboundApprovalSummaryV2(
   binding: SubagentOutboundToolBindingV2,
   argumentsValue: unknown,
 ): string {
-  const args = canonicalApprovalValue(argumentsValue) as Record<
-    string,
-    unknown
-  >;
+  const args = canonicalApprovalValue(argumentsValue) as Record<string, unknown>;
   let summary: string;
   if (binding.kind === "web") {
     if (typeof args.query !== "string") {
@@ -155,16 +132,10 @@ export function subagentOutboundApprovalSummaryV2(
       `Results: ${JSON.stringify(resultCount)}`,
     ].join("\n");
   } else {
-    if (!binding.mcp)
-      throw new Error("Subagent MCP approval binding is invalid.");
+    if (!binding.mcp) throw new Error("Subagent MCP approval binding is invalid.");
     const canonicalArguments = JSON.stringify(args);
-    if (
-      Buffer.byteLength(canonicalArguments, "utf8") >
-      MAX_SUBAGENT_MCP_APPROVAL_ARGUMENT_BYTES
-    ) {
-      throw new Error(
-        "Subagent MCP approval arguments are too large to review safely.",
-      );
+    if (Buffer.byteLength(canonicalArguments, "utf8") > MAX_SUBAGENT_MCP_APPROVAL_ARGUMENT_BYTES) {
+      throw new Error("Subagent MCP approval arguments are too large to review safely.");
     }
     summary = [
       `Call server-declared read-only MCP tool ${binding.mcp.serverId}:${binding.mcp.tool.toolName}`,
@@ -198,10 +169,7 @@ export function createSubagentOutboundApprovalBrokerV2(
     tools.set(tool.toolName, tool);
   }
 
-  const authorized = new Map<
-    string,
-    { approvalId: string; expiresAt: number; toolName: string }
-  >();
+  const authorized = new Map<string, { approvalId: string; expiresAt: number; toolName: string }>();
 
   const beforeToolCall = async (
     context: BeforeToolCallContext,
@@ -219,10 +187,7 @@ export function createSubagentOutboundApprovalBrokerV2(
     if (!authorityAllows(authority, tool)) {
       return blocked("This subagent tool is no longer authorized.");
     }
-    const expiresAt = Math.min(
-      authority.expiresAt,
-      now() + SUBAGENT_EGRESS_APPROVAL_WINDOW_MS,
-    );
+    const expiresAt = Math.min(authority.expiresAt, now() + SUBAGENT_EGRESS_APPROVAL_WINDOW_MS);
     const exact = (): PrepareSubagentApprovalV2Input => ({
       treeRootId: authority.treeRootId,
       runId: authority.runId,
@@ -240,9 +205,7 @@ export function createSubagentOutboundApprovalBrokerV2(
     try {
       prepared = input.ledger.prepare(exact());
     } catch {
-      return blocked(
-        "This subagent action could not be prepared for approval.",
-      );
+      return blocked("This subagent action could not be prepared for approval.");
     }
 
     let summary: string;
@@ -286,17 +249,9 @@ export function createSubagentOutboundApprovalBrokerV2(
       return blocked("This subagent authority changed after approval.");
     }
     const current = exact();
-    if (
-      !input.ledger.authorize(
-        prepared.approvalId,
-        authority.ownerDocumentId,
-        current,
-      )
-    ) {
+    if (!input.ledger.authorize(prepared.approvalId, authority.ownerDocumentId, current)) {
       input.ledger.deny(prepared.approvalId, authority.ownerDocumentId);
-      return blocked(
-        "This subagent approval expired or no longer matches the action.",
-      );
+      return blocked("This subagent approval expired or no longer matches the action.");
     }
     authorized.set(context.toolCall.id, {
       approvalId: prepared.approvalId,
@@ -310,15 +265,11 @@ export function createSubagentOutboundApprovalBrokerV2(
     const pending = authorized.get(effect.toolCallId);
     authorized.delete(effect.toolCallId);
     if (!pending) {
-      throw new Error(
-        "This subagent action does not have a live one-shot approval.",
-      );
+      throw new Error("This subagent action does not have a live one-shot approval.");
     }
     if (pending.toolName !== effect.toolName) {
       input.ledger.deny(pending.approvalId, input.authority.ownerDocumentId);
-      throw new Error(
-        "This subagent action does not have a live one-shot approval.",
-      );
+      throw new Error("This subagent action does not have a live one-shot approval.");
     }
     const tool = tools.get(effect.toolName);
     const authority = input.currentAuthority(input.authority.runId);
@@ -343,9 +294,7 @@ export function createSubagentOutboundApprovalBrokerV2(
       !input.ledger.consume(pending.approvalId, current)
     ) {
       input.ledger.deny(pending.approvalId, input.authority.ownerDocumentId);
-      throw new Error(
-        "This subagent approval expired, changed, was revoked, or was already used.",
-      );
+      throw new Error("This subagent approval expired, changed, was revoked, or was already used.");
     }
   };
 

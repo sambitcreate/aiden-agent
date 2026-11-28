@@ -29,7 +29,8 @@ function saveStateOf(state: AutosaveState): SaveState {
   return state.dirty ? "unsaved" : "saved";
 }
 
-const message = (error: unknown) => (error instanceof Error ? error.message : "Something went wrong.");
+const message = (error: unknown) =>
+  error instanceof Error ? error.message : "Something went wrong.";
 
 export function useWorkflowController(workflowId: string) {
   const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
@@ -63,7 +64,8 @@ export function useWorkflowController(workflowId: string) {
       createAutosave({
         delayMs: 800,
         baseRevision,
-        save: (document, base) => createImagesIpc.save({ workflowId, baseRevision: base, document }),
+        save: (document, base) =>
+          createImagesIpc.save({ workflowId, baseRevision: base, document }),
         onState: (state) => {
           setSaveState(saveStateOf(state));
           // Each failure (re)shows its reason; repeats of the same state keep a dismissal.
@@ -71,7 +73,10 @@ export function useWorkflowController(workflowId: string) {
             lastSaveError.current = state.error;
             setSaveError(state.error);
           }
-          setRendererLifecycleGuard({ dirty: state.dirty, saving: state.saving }, { source: "images", label: title.current });
+          setRendererLifecycleGuard(
+            { dirty: state.dirty, saving: state.saving },
+            { source: "images", label: title.current },
+          );
         },
       }),
     [workflowId],
@@ -150,7 +155,12 @@ export function useWorkflowController(workflowId: string) {
       const offset = (doc.nodes.length % 6) * 32;
       apply({
         type: "add-node",
-        node: createWorkflowNode(type, crypto.randomUUID(), { x: 160 + offset, y: 120 + offset }, pickDefaultImageModel(models)),
+        node: createWorkflowNode(
+          type,
+          crypto.randomUUID(),
+          { x: 160 + offset, y: 120 + offset },
+          pickDefaultImageModel(models),
+        ),
       });
     },
     [apply, doc, models],
@@ -164,9 +174,16 @@ export function useWorkflowController(workflowId: string) {
           const result = await createImagesIpc.importImage({ source: "dialog" });
           if ("cancelled" in result) return;
           setAssetUrls((urls) => ({ ...urls, [result.assetId]: result.url }));
-          const node = latestSession.current?.history.present.nodes.find((candidate) => candidate.id === nodeId);
+          const node = latestSession.current?.history.present.nodes.find(
+            (candidate) => candidate.id === nodeId,
+          );
           const dimensions = fitNodeToMediaAspect(node?.dimensions, result.width, result.height);
-          apply({ type: "set-image", nodeId, assetId: result.assetId, ...(dimensions ? { dimensions } : {}) });
+          apply({
+            type: "set-image",
+            nodeId,
+            assetId: result.assetId,
+            ...(dimensions ? { dimensions } : {}),
+          });
         } catch (failure) {
           setSession((current) => (current ? { ...current, message: message(failure) } : current));
         }
@@ -182,9 +199,18 @@ export function useWorkflowController(workflowId: string) {
     (image: OutputRef, url: string | undefined, pane: { width: number; height: number }) => {
       const current = latestSession.current;
       if (!current) return;
-      if (url) setAssetUrls((urls) => (ownValue(urls, image.assetId) ? urls : { ...urls, [image.assetId]: url }));
+      if (url)
+        setAssetUrls((urls) =>
+          ownValue(urls, image.assetId) ? urls : { ...urls, [image.assetId]: url },
+        );
       const viewport = current.viewport ?? { x: 0, y: 0, zoom: 1 };
-      const node = imageInputNodeForAsset(image, crypto.randomUUID(), viewport, pane, current.history.present.nodes.length);
+      const node = imageInputNodeForAsset(
+        image,
+        crypto.randomUUID(),
+        viewport,
+        pane,
+        current.history.present.nodes.length,
+      );
       apply({ type: "add-node", node });
     },
     [apply],
@@ -263,7 +289,10 @@ export function useWorkflowController(workflowId: string) {
   const undo = React.useCallback(() => dispatch({ type: "undo" }), [dispatch]);
   const redo = React.useCallback(() => dispatch({ type: "redo" }), [dispatch]);
   const dismissMessage = React.useCallback(() => dispatch({ type: "dismiss" }), [dispatch]);
-  const setViewport = React.useCallback((viewport: WorkflowViewport) => dispatch({ type: "viewport", viewport }), [dispatch]);
+  const setViewport = React.useCallback(
+    (viewport: WorkflowViewport) => dispatch({ type: "viewport", viewport }),
+    [dispatch],
+  );
 
   return {
     status,

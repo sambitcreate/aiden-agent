@@ -44,8 +44,7 @@ export function truncatePathMiddle(
       const isAbsoluteUnix = parts[0] === "";
       const isWindowsDrive = /^[A-Za-z]:$/u.test(parts[0] ?? "");
       // Prefer `/Users/…/leaf` or `C:\Users\…\leaf` over bare `/…/leaf`.
-      const preferredLeft =
-        (isAbsoluteUnix || isWindowsDrive) && parts.length >= 3 ? 2 : 1;
+      const preferredLeft = (isAbsoluteUnix || isWindowsDrive) && parts.length >= 3 ? 2 : 1;
 
       let leftCount = preferredLeft;
       let rightCount = 1;

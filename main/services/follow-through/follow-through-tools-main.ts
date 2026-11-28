@@ -11,7 +11,12 @@ import { workspaceMutationGate } from "../workspace-mutation-gate.js";
 import type { WorkspacePermission } from "../types.js";
 import { createBackgroundJobTool } from "./background-job-tool.js";
 import { systemTimezone } from "../schedule-store-core.js";
-import { backgroundJobs, checkBacks, pullRequestFollows, resolvePullRequestTarget } from "./follow-through-main.js";
+import {
+  backgroundJobs,
+  checkBacks,
+  pullRequestFollows,
+  resolvePullRequestTarget,
+} from "./follow-through-main.js";
 import { createCheckBackTool } from "./check-back-tool.js";
 import { createPullRequestFollowTool } from "./pull-request-follow-tool.js";
 
@@ -34,7 +39,11 @@ export function createFollowThroughTools(context: FollowThroughToolContext): Age
       workspaceId: context.workspaceId,
       workspaceRoot: context.folderPath,
       jobs: backgroundJobs,
-      env: () => runCommandEnv(context.pathPrefix ? { pathPrefix: context.pathPrefix } : {}, agentShellCommandEnvironment()),
+      env: () =>
+        runCommandEnv(
+          context.pathPrefix ? { pathPrefix: context.pathPrefix } : {},
+          agentShellCommandEnvironment(),
+        ),
       revalidate: async (signal) => {
         if (!context.isCurrent()) throw new Error("This answer is no longer current.");
         const current = await configStore.getWorkspace(context.workspaceId);
@@ -53,7 +62,10 @@ export function createFollowThroughTools(context: FollowThroughToolContext): Age
     }),
     createPullRequestFollowTool({
       chatId: context.chatId,
-      resolve: (url) => resolvePullRequestTarget(context.chatId, url, (chatId) => chatPullRequestService.current(chatId)),
+      resolve: (url) =>
+        resolvePullRequestTarget(context.chatId, url, (chatId) =>
+          chatPullRequestService.current(chatId),
+        ),
       follows: pullRequestFollows,
     }),
   ];

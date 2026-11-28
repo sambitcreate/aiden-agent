@@ -7,7 +7,11 @@
 //   already removed) is a result with the current view, not a throw, so the
 //   page can show its message; malformed input throws.
 
-import { BOT_RULE_CHANNELS, type BotRulesUpdateResult, type BotRulesView } from "../../renderer/shared/bot-rules.js";
+import {
+  BOT_RULE_CHANNELS,
+  type BotRulesUpdateResult,
+  type BotRulesView,
+} from "../../renderer/shared/bot-rules.js";
 import type { BotRuleStore } from "../services/bot-rules/store.js";
 import { parseBotId, parseBotRulesUpdate } from "./bot-params.js";
 
@@ -29,9 +33,12 @@ export function registerBotRuleHandlers(dependencies: BotRuleHandlerDependencies
     return dependencies.rules.get(await knownBot(rawBotId));
   });
 
-  dependencies.handle(BOT_RULE_CHANNELS.update, async (_event, input): Promise<BotRulesUpdateResult> => {
-    const parsed = parseBotRulesUpdate(input);
-    await knownBot(parsed.botId);
-    return dependencies.rules.update(parsed.botId, parsed.revision, parsed.change);
-  });
+  dependencies.handle(
+    BOT_RULE_CHANNELS.update,
+    async (_event, input): Promise<BotRulesUpdateResult> => {
+      const parsed = parseBotRulesUpdate(input);
+      await knownBot(parsed.botId);
+      return dependencies.rules.update(parsed.botId, parsed.revision, parsed.change);
+    },
+  );
 }

@@ -25,16 +25,13 @@ test("fork labels read only a bounded prefix and preserve code points", () => {
 test("copy eligibility stops at the shared limit and keeps only searchable eligible turns", () => {
   const messages = Array.from({ length: MAX_VISIBLE_COPY_MESSAGES + 1 }, (_, index) => ({
     id: `m-${index}`,
-    role: index % 2 === 0 ? "user" as const : "assistant" as const,
+    role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
     content: `turn ${index}`,
     createdAt: index,
   })) satisfies ChatMessage[];
   const result = forkTurnEligibility(messages);
   assert.equal(result.cloneBlocked, true);
-  assert.equal(
-    result.turns[result.turns.length - 1]?.id,
-    `m-${MAX_VISIBLE_COPY_MESSAGES - 1}`,
-  );
+  assert.equal(result.turns[result.turns.length - 1]?.id, `m-${MAX_VISIBLE_COPY_MESSAGES - 1}`);
   assert.equal(filterForkTurnChoices(result.turns, "").length, 100);
   assert.equal(filterForkTurnChoices(result.turns, "1")[0]?.turnNumber, 1);
   assert.deepEqual(filterForkTurnChoices(result.turns, "x".repeat(257)), []);
@@ -51,7 +48,11 @@ test("each fork choice points Edit in fork at the prompt that opened its turn", 
   ]);
   assert.deepEqual(
     result.turns.map(({ id, userMessageId }) => [id, userMessageId]),
-    [["a1", "u1"], ["a1b", "u1"], ["a2", "u2"]],
+    [
+      ["a1", "u1"],
+      ["a1b", "u1"],
+      ["a2", "u2"],
+    ],
   );
 });
 
@@ -63,7 +64,10 @@ test("Bot chats offer no Edit in fork, including on their first prompt", () => {
     { id: "a2", role: "assistant", content: "two", createdAt: 4 },
   ];
   const result = forkTurnEligibility(messages, { editInFork: false });
-  assert.deepEqual(result.turns.map(({ id }) => id), ["a1", "a2"]);
+  assert.deepEqual(
+    result.turns.map(({ id }) => id),
+    ["a1", "a2"],
+  );
   assert.ok(result.turns.every((turn) => turn.userMessageId === undefined));
 });
 
@@ -79,7 +83,10 @@ test("a fork summary update replaces or clears only the cached chat's lineage", 
       summary: { state: "pending" as const, afterMessageId: "a1" },
     },
   };
-  const ready = { ...chat.forkedFrom, summary: { state: "ready" as const, afterMessageId: "a1", text: "Done." } };
+  const ready = {
+    ...chat.forkedFrom,
+    summary: { state: "ready" as const, afterMessageId: "a1", text: "Done." },
+  };
   const updated = withForkLineage(chat, ready);
   assert.deepEqual(updated, { id: "fork", title: "Fork", forkedFrom: ready });
   assert.equal(chat.forkedFrom.summary.state, "pending");

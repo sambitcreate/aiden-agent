@@ -35,8 +35,12 @@ export async function run(args: HandoffScenarioArgs, emit: Emit): Promise<void> 
     const [prompt] = handoffs.pending(botId);
     if (prompt) emit("HANDOFF", prompt.waitId);
   });
-  const deps = recordingDeps({ tools: args.signIn ? signInEntries(handoffs, args.botId) : handoffEntries(handoffs, args.botId) });
-  const call = args.signIn ? fauxToolCall(SIGN_IN_TOOL_NAME, SIGN_IN_ARGS) : fauxToolCall(HANDOFF_TOOL_NAME, HANDOFF_ARGS);
+  const deps = recordingDeps({
+    tools: args.signIn ? signInEntries(handoffs, args.botId) : handoffEntries(handoffs, args.botId),
+  });
+  const call = args.signIn
+    ? fauxToolCall(SIGN_IN_TOOL_NAME, SIGN_IN_ARGS)
+    : fauxToolCall(HANDOFF_TOOL_NAME, HANDOFF_ARGS);
   const { models } = createFauxModels([fauxAssistantMessage([call], { stopReason: "toolUse" })]);
   const registries = new Map<string, ReturnType<typeof createBotRegistry>>();
   const host = await createBotHarnessHost({
@@ -52,6 +56,9 @@ export async function run(args: HandoffScenarioArgs, emit: Emit): Promise<void> 
   const { conversation } = await host.open(args.botId);
   await registries.get(args.botId)!.refresh();
   await conversation.configure({ model: FAUX_MODEL_REF }, ctx);
-  const submission = await conversation.submit({ type: "input", content: "log in to my bank", requestId: "handoff" }, ctx);
+  const submission = await conversation.submit(
+    { type: "input", content: "log in to my bank", requestId: "handoff" },
+    ctx,
+  );
   emit("SUBMITTED", String(submission.id));
 }

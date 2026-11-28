@@ -25,16 +25,22 @@ export const NATIVE_C_HELPER_BUILDERS = Object.freeze([
   "build-subagent-shell-runner.mjs",
 ]);
 
-const results = await Promise.allSettled(NATIVE_C_HELPER_BUILDERS.map(async (builder) => {
-  const { stdout, stderr } = await executeFile(process.execPath, [path.join(scripts, builder)], {
-    maxBuffer: 4 * 1024 * 1024,
-  });
-  process.stdout.write(stdout);
-  process.stderr.write(stderr);
-}));
-const failures = results.flatMap((result, index) => result.status === "rejected"
-  ? [`${NATIVE_C_HELPER_BUILDERS[index]}: ${result.reason?.stderr || result.reason?.message || result.reason}`]
-  : []);
+const results = await Promise.allSettled(
+  NATIVE_C_HELPER_BUILDERS.map(async (builder) => {
+    const { stdout, stderr } = await executeFile(process.execPath, [path.join(scripts, builder)], {
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    process.stdout.write(stdout);
+    process.stderr.write(stderr);
+  }),
+);
+const failures = results.flatMap((result, index) =>
+  result.status === "rejected"
+    ? [
+        `${NATIVE_C_HELPER_BUILDERS[index]}: ${result.reason?.stderr || result.reason?.message || result.reason}`,
+      ]
+    : [],
+);
 if (failures.length > 0) {
   console.error(failures.join("\n"));
   process.exit(1);

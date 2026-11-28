@@ -15,7 +15,11 @@ import { DraftWorktreeSendStatus } from "./draft-worktree-send-view";
 import type { ActiveWorktreeSend } from "../lib/draft-worktree-send";
 import { AgentNoticeCard } from "./agent-notice-card";
 import type { ReadAloudActionProps } from "./read-aloud-button";
-import { ForkDisabledReasonContext, MessageForkContextMenu, type MessageForkAction } from "./fork-message-button";
+import {
+  ForkDisabledReasonContext,
+  MessageForkContextMenu,
+  type MessageForkAction,
+} from "./fork-message-button";
 import { MessageActions } from "./message-actions";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
 import { forkSummaryRows } from "../lib/chat-copy-view";
@@ -42,10 +46,18 @@ import { BrowserRecordingCard } from "./browser-recording-card";
 import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { GrabbedElementContextV1 } from "../shared/browser-element-grab";
-import type { ChatArtifactV1, ChatHtmlArtifactV1, HtmlArtifactLayout } from "../shared/chat-artifacts";
+import type {
+  ChatArtifactV1,
+  ChatHtmlArtifactV1,
+  HtmlArtifactLayout,
+} from "../shared/chat-artifacts";
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
 import { attachmentsShownWithVisuals } from "../shared/visual-snapshots";
-import { HtmlArtifactDraftFrame, HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
+import {
+  HtmlArtifactDraftFrame,
+  HtmlArtifactFrame,
+  type GuestPromptHandler,
+} from "./html-artifact-frame";
 import { AidenUiBlock } from "./aiden-ui/aiden-ui-block";
 import { useKeepVisualActions, useSendToCanvasActions } from "../lib/visual-menu-actions";
 import { AIDEN_UI_LIMITS, type ChatUiVisualV1 } from "../shared/aiden-ui/types";
@@ -234,7 +246,13 @@ function FollowUpAwareHtmlArtifactFrame(
   props: Omit<React.ComponentProps<typeof HtmlArtifactFrame>, "followUpBusy" | "actions">,
 ) {
   const actions = useSendToCanvasActions(props.chatId, props.artifact.mediaId);
-  return <HtmlArtifactFrame {...props} actions={actions} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
+  return (
+    <HtmlArtifactFrame
+      {...props}
+      actions={actions}
+      followUpBusy={React.useContext(VisualFollowUpBusyContext)}
+    />
+  );
 }
 
 function FollowUpAwareAidenUiBlock({
@@ -245,7 +263,13 @@ function FollowUpAwareAidenUiBlock({
   messageId?: string;
 }) {
   const actions = useKeepVisualActions(props.draft ? undefined : messageId, props.visual.id);
-  return <AidenUiBlock {...props} actions={actions} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
+  return (
+    <AidenUiBlock
+      {...props}
+      actions={actions}
+      followUpBusy={React.useContext(VisualFollowUpBusyContext)}
+    />
+  );
 }
 
 type RenderVisual = (
@@ -281,11 +305,18 @@ function AssistantResponse({
   uiDrafts = EMPTY_UI_DRAFTS,
   renderUiVisual,
 }: AssistantResponseProps) {
-  const imageGeneration = useImageGenerationSlots(timeline, attachments, imagePlacements, streaming);
+  const imageGeneration = useImageGenerationSlots(
+    timeline,
+    attachments,
+    imagePlacements,
+    streaming,
+  );
   const shownAttachments = React.useMemo(
     () =>
       imageGeneration.hiddenAttachmentIds.size && attachments
-        ? attachments.filter((attachment) => !imageGeneration.hiddenAttachmentIds.has(attachment.id))
+        ? attachments.filter(
+            (attachment) => !imageGeneration.hiddenAttachmentIds.has(attachment.id),
+          )
         : (attachments ?? []),
     [attachments, imageGeneration.hiddenAttachmentIds],
   );
@@ -305,7 +336,11 @@ function AssistantResponse({
   ) => (
     <>
       {placeholders?.map((slot) => (
-        <ImageScanPlaceholder key={slot.stepId} slot={slot} onRevealed={imageGeneration.onRevealed} />
+        <ImageScanPlaceholder
+          key={slot.stepId}
+          slot={slot}
+          onRevealed={imageGeneration.onRevealed}
+        />
       ))}
       {images?.length ? (
         <MessageAttachments attachments={images} role="assistant" imageActions={imageActions} />
@@ -338,8 +373,7 @@ function AssistantResponse({
       />
     )) ?? null;
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
-  const active =
-    streaming && !streamComplete && (reasoningActive || (!timeline && !content));
+  const active = streaming && !streamComplete && (reasoningActive || (!timeline && !content));
   const reasoningLabel = reasoningActivityLabel(timeline, active);
   // One action row closes the turn, after its last row. While the reply
   // streams it is laid out but hidden there, so a new paragraph never moves it.
@@ -360,7 +394,10 @@ function AssistantResponse({
       ? activityTimelineFragment(
           timeline,
           timeline.steps.filter(
-            (step) => isToolStep(step) && !isQuestionnaireStep(step) && !(subagentChips && isSubagentLaunchStep(step)),
+            (step) =>
+              isToolStep(step) &&
+              !isQuestionnaireStep(step) &&
+              !(subagentChips && isSubagentLaunchStep(step)),
           ),
         )
       : null;
@@ -371,16 +408,28 @@ function AssistantResponse({
       <>
         {null /* the chronological layout's leading subagent slot */}
         {[
-          <ActivityFeed key="activity" timeline={activityTimeline} animate={streaming} mode={workDetails} retainDetails={retainWorkDetails || (streaming && !streamComplete)} />,
-          ...(timeline?.steps.filter(isExtractionStep).map((step) => (
-            <WebExtractRecap key={`extraction-${step.id}`} recap={step.extraction} />
-          )) ?? []),
-          ...(timeline?.steps.filter(isRecordingStep).map((step) => (
-            <BrowserRecordingCard key={`recording-${step.id}`} recording={step.recording} />
-          )) ?? []),
-          ...(timeline?.steps.filter(isQuestionnaireStep).map((step) => (
-            <AskUserQuestionRecap key={`questionnaire-${step.id}`} recap={step.questionnaire} />
-          )) ?? []),
+          <ActivityFeed
+            key="activity"
+            timeline={activityTimeline}
+            animate={streaming}
+            mode={workDetails}
+            retainDetails={retainWorkDetails || (streaming && !streamComplete)}
+          />,
+          ...(timeline?.steps
+            .filter(isExtractionStep)
+            .map((step) => (
+              <WebExtractRecap key={`extraction-${step.id}`} recap={step.extraction} />
+            )) ?? []),
+          ...(timeline?.steps
+            .filter(isRecordingStep)
+            .map((step) => (
+              <BrowserRecordingCard key={`recording-${step.id}`} recording={step.recording} />
+            )) ?? []),
+          ...(timeline?.steps
+            .filter(isQuestionnaireStep)
+            .map((step) => (
+              <AskUserQuestionRecap key={`questionnaire-${step.id}`} recap={step.questionnaire} />
+            )) ?? []),
           subagentChips ? <React.Fragment key="subagents">{subagentChips}</React.Fragment> : null,
           showReasoning ? (
             <ReasoningBlock
@@ -433,7 +482,10 @@ function AssistantResponse({
               content={row.content}
               streaming={stepActive}
               active={stepActive}
-              label={reasoningActivityLabel(activityTimelineFragment(timeline, [row.step]), stepActive)}
+              label={reasoningActivityLabel(
+                activityTimelineFragment(timeline, [row.step]),
+                stepActive,
+              )}
             />
           );
         }
@@ -453,7 +505,9 @@ function AssistantResponse({
                 // The subagent card stands for its launch call, so the call is not listed again here.
                 timeline={activityTimelineFragment(
                   timeline,
-                  subagentChips ? row.steps.filter((step) => !isSubagentLaunchStep(step)) : row.steps,
+                  subagentChips
+                    ? row.steps.filter((step) => !isSubagentLaunchStep(step))
+                    : row.steps,
                 )}
                 animate={streaming}
                 mode={workDetails}
@@ -462,7 +516,10 @@ function AssistantResponse({
               {visualNodes(slots.byRowKey.get(row.key))}
               {draftNodes(slots.draftsByRowKey.get(row.key))}
               {imageSlots.byRowKey.has(row.key)
-                ? mediaNodes(imageSlots.byRowKey.get(row.key)?.slots, imageSlots.byRowKey.get(row.key)?.attachments)
+                ? mediaNodes(
+                    imageSlots.byRowKey.get(row.key)?.slots,
+                    imageSlots.byRowKey.get(row.key)?.attachments,
+                  )
                 : null}
               {uiNodes(uiSlots.byRowKey.get(row.key), false)}
               {uiNodes(uiSlots.draftsByRowKey.get(row.key), true)}
@@ -498,7 +555,10 @@ function AssistantResponse({
 }
 
 /** A reply with only attachments or activity still needs its fork action. */
-function proselessActions(footer: React.ReactNode, fork: MessageForkAction | undefined): React.ReactNode {
+function proselessActions(
+  footer: React.ReactNode,
+  fork: MessageForkAction | undefined,
+): React.ReactNode {
   if (!fork) return footer ?? null;
   return <MessageActions copyText="" footer={footer} fork={fork} />;
 }
@@ -590,7 +650,12 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     [message, renderSettledUiVisual],
   );
   const fork = React.useMemo<MessageForkAction | undefined>(() => {
-    if (!message || !onFork || (message.role !== "user" && message.role !== "assistant") || message.notice) {
+    if (
+      !message ||
+      !onFork ||
+      (message.role !== "user" && message.role !== "assistant") ||
+      message.notice
+    ) {
       return undefined;
     }
     const position: ChatForkPosition = message.role === "user" ? "before" : "after";
@@ -633,7 +698,13 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
       className={`${contained ? "transcript-settled-contained " : ""}${assistant ? "group/reply " : ""}flex min-w-0 flex-col gap-3`}
     >
       {live ? (
-        <AssistantResponse {...live} imageScope={imageScope} workDetails={workDetails} retainWorkDetails={retainWorkDetails} streaming />
+        <AssistantResponse
+          {...live}
+          imageScope={imageScope}
+          workDetails={workDetails}
+          retainWorkDetails={retainWorkDetails}
+          streaming
+        />
       ) : !message ? null : message.role === "assistant" ? (
         <>
           <AssistantResponse
@@ -662,13 +733,19 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             uiVisuals={uiVisuals}
             renderUiVisual={renderSettledUiVisual ? renderUiVisual : undefined}
           />
-          {message.appPanels?.map((panel) => <AppControlsPanel key={panel.id} panel={panel} chatId={chatId} />)}
+          {message.appPanels?.map((panel) => (
+            <AppControlsPanel key={panel.id} panel={panel} chatId={chatId} />
+          ))}
           {message.providerFailure ? (
             <ProviderFailureCallout failure={message.providerFailure} actions={failureActions} />
           ) : null}
         </>
       ) : message.notice ? (
-        <AgentNoticeCard notice={message.notice} content={message.content} imageScope={imageScope} />
+        <AgentNoticeCard
+          notice={message.notice}
+          content={message.content}
+          imageScope={imageScope}
+        />
       ) : (
         <>
           <SafeMessageBubble
@@ -679,10 +756,14 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             grabbedElements={message.grabbedElements}
             skill={message.skill}
             inputSource={message.inputSource}
-            {...(message.role === "user" && message.fromLeadChat && leadChatLabel ? { fromLeadChat: leadChatLabel } : {})}
+            {...(message.role === "user" && message.fromLeadChat && leadChatLabel
+              ? { fromLeadChat: leadChatLabel }
+              : {})}
             fork={fork}
           />
-          {message.role === "user" && message.hookBlocked ? <HookBlockedMark reason={message.hookBlocked.reason} /> : null}
+          {message.role === "user" && message.hookBlocked ? (
+            <HookBlockedMark reason={message.hookBlocked.reason} />
+          ) : null}
         </>
       )}
     </div>
@@ -705,7 +786,8 @@ function HookBlockedMark({ reason }: { reason: string }) {
         data-hook-blocked=""
         className="m-0 max-w-[80%] rounded-menu bg-status-red-surface px-2.5 py-1 whitespace-pre-line text-small text-status-red [overflow-wrap:anywhere]"
       >
-        Not sent: blocked by a hook.{"\n"}{reason}
+        Not sent: blocked by a hook.{"\n"}
+        {reason}
       </p>
     </div>
   );
@@ -797,7 +879,12 @@ export function ProviderFailureCallout({
             </Button>
           ) : null}
           {actions.onSwitchModel ? (
-            <Button variant="transparent" size="small" disabled={actions.busy} onClick={actions.onSwitchModel}>
+            <Button
+              variant="transparent"
+              size="small"
+              disabled={actions.busy}
+              onClick={actions.onSwitchModel}
+            >
               Switch model
             </Button>
           ) : null}
@@ -813,15 +900,26 @@ function stateKeysAreWireSafe(value: unknown, depth = 0): boolean {
   if (depth > 16) return false;
   if (Array.isArray(value)) return value.every((item) => stateKeysAreWireSafe(item, depth + 1));
   if (!value || typeof value !== "object") return true;
-  return Object.entries(value).every(([key, inner]) => isWireSafeKey(key) && stateKeysAreWireSafe(inner, depth + 1));
+  return Object.entries(value).every(
+    ([key, inner]) => isWireSafeKey(key) && stateKeysAreWireSafe(inner, depth + 1),
+  );
 }
 const pendingUiStateSaves = new Map<string, ReturnType<typeof setTimeout>>();
 
 /** Remember a visual's local state shortly after the user stops changing it. */
-function scheduleUiVisualStateSave(chatId: string, messageId: string, visualId: string, state: Record<string, unknown>) {
+function scheduleUiVisualStateSave(
+  chatId: string,
+  messageId: string,
+  visualId: string,
+  state: Record<string, unknown>,
+) {
   // State the store would refuse (too large, or holding a reserved key) stays local.
   const json = JSON.stringify(state);
-  if (new TextEncoder().encode(json).length > AIDEN_UI_LIMITS.stateBytes || !stateKeysAreWireSafe(state)) return;
+  if (
+    new TextEncoder().encode(json).length > AIDEN_UI_LIMITS.stateBytes ||
+    !stateKeysAreWireSafe(state)
+  )
+    return;
   const key = `${chatId}\u0000${messageId}\u0000${visualId}`;
   const pending = pendingUiStateSaves.get(key);
   if (pending) clearTimeout(pending);
@@ -958,13 +1056,13 @@ export function MessageList({
   );
   const streamingRowVisible = Boolean(
     timeline ||
-      liveSubagents.length > 0 ||
-      streamingReasoning ||
-      streamingText ||
-      liveAttachments.length > 0 ||
-      liveHtmlArtifacts.length > 0 ||
-      streamingUiVisuals.length > 0 ||
-      streamingUiDrafts.size > 0,
+    liveSubagents.length > 0 ||
+    streamingReasoning ||
+    streamingText ||
+    liveAttachments.length > 0 ||
+    liveHtmlArtifacts.length > 0 ||
+    streamingUiVisuals.length > 0 ||
+    streamingUiDrafts.size > 0,
   );
   const htmlArtifactPlan = React.useMemo(
     () => htmlArtifactTranscriptPlan(messages, liveHtmlArtifacts, streamingRowVisible),
@@ -987,10 +1085,17 @@ export function MessageList({
   React.useEffect(() => {
     previousArtifactsByAnchor.current = htmlArtifactsByAnchor;
   }, [htmlArtifactsByAnchor]);
-  const liveUiIds = React.useMemo(() => new Set(streamingUiVisuals.map((visual) => visual.id)), [streamingUiVisuals]);
+  const liveUiIds = React.useMemo(
+    () => new Set(streamingUiVisuals.map((visual) => visual.id)),
+    [streamingUiVisuals],
+  );
   const previousUiByMessage = React.useRef<Map<string, ChatUiVisualV1[]> | undefined>(undefined);
   const uiByMessage = React.useMemo(
-    () => reuseUnchangedUiLists(previousUiByMessage.current, uiVisualsByMessage(messages, liveUiIds, streamingRowVisible)),
+    () =>
+      reuseUnchangedUiLists(
+        previousUiByMessage.current,
+        uiVisualsByMessage(messages, liveUiIds, streamingRowVisible),
+      ),
     [liveUiIds, messages, streamingRowVisible],
   );
   React.useEffect(() => {
@@ -1105,7 +1210,6 @@ export function MessageList({
     }
   });
 
-
   const transcriptRows: React.ReactNode[] = [];
   // Streaming frames re-render the list without changing saved messages.
   const summaryRows = React.useMemo(
@@ -1113,7 +1217,10 @@ export function MessageList({
     [forkWithSummaryEnabled, messages],
   );
   const unforkablePromptId = React.useMemo(
-    () => (forkEnabled && !forkBeforeFirstPrompt ? messages.find((message) => message.role === "user")?.id : undefined),
+    () =>
+      forkEnabled && !forkBeforeFirstPrompt
+        ? messages.find((message) => message.role === "user")?.id
+        : undefined,
     [forkBeforeFirstPrompt, forkEnabled, messages],
   );
   // The persisted copy of the reply still on screen waits until the live row
@@ -1126,19 +1233,27 @@ export function MessageList({
   // it answers: the prompt it started from stays its key while steering
   // guidance or a queued prompt is saved before the handoff. A run whose
   // handoff has finished gives way to the next one.
-  if (!streamingRowVisible || (liveRunRef.current?.handoffId && liveRunRef.current.handoffId !== settlingMessageId)) {
+  if (
+    !streamingRowVisible ||
+    (liveRunRef.current?.handoffId && liveRunRef.current.handoffId !== settlingMessageId)
+  ) {
     liveRunRef.current = null;
   }
   const startedFrom = liveRunRef.current
     ? messages.find((message) => message.id === liveRunRef.current?.promptId)
     : undefined;
   const promptMessageForLiveRow =
-    startedFrom ?? (settlingIndex >= 0 ? messages[settlingIndex - 1] : messages[messages.length - 1]);
+    startedFrom ??
+    (settlingIndex >= 0 ? messages[settlingIndex - 1] : messages[messages.length - 1]);
   const showDraftWorktreeSend =
     messages.length === 0 && streamingText === null && Boolean(draftWorktreeSend);
   if (showDraftWorktreeSend) {
     draftPromptKeyActiveRef.current = true;
-  } else if (draftPromptKeyActiveRef.current && messages.length > 0 && messages[0]?.role === "user") {
+  } else if (
+    draftPromptKeyActiveRef.current &&
+    messages.length > 0 &&
+    messages[0]?.role === "user"
+  ) {
     // Hand the draft prompt's key to the persisted first user message so the
     // transcript settles in place without remounting the user's bubble.
     handedOffKeysRef.current.set(messages[0].id, "draft-prompt");
@@ -1195,7 +1310,10 @@ export function MessageList({
       key={liveKey}
       imageScope={`${chatId}:${liveKey}`}
       workDetails={workDetails}
-      retainWorkDetails={collapseTiming === "next-input" && (settlingIndex < 0 || settlingIndex >= latestExchangeStart)}
+      retainWorkDetails={
+        collapseTiming === "next-input" &&
+        (settlingIndex < 0 || settlingIndex >= latestExchangeStart)
+      }
       live={{
         content: streamingText ?? "",
         replayedTextLength,
@@ -1229,7 +1347,8 @@ export function MessageList({
       id: "draft-prompt",
       role: "user",
       content: draftWorktreeSend.text,
-      attachments: draftWorktreeSend.attachments.length > 0 ? [...draftWorktreeSend.attachments] : undefined,
+      attachments:
+        draftWorktreeSend.attachments.length > 0 ? [...draftWorktreeSend.attachments] : undefined,
       ...(draftWorktreeGrabbedElements?.length
         ? { grabbedElements: [...draftWorktreeGrabbedElements] }
         : {}),
@@ -1288,7 +1407,9 @@ export function MessageList({
 
   if (streamingRowVisible && settlingIndex < 0) transcriptRows.push(liveRow);
   if (interruptedReply && !streamingRowVisible) {
-    transcriptRows.push(<InterruptedReplyCallout key="interrupted-reply" actions={interruptedReply} />);
+    transcriptRows.push(
+      <InterruptedReplyCallout key="interrupted-reply" actions={interruptedReply} />,
+    );
   }
   React.useLayoutEffect(() => {
     settledReplyKeysRef.current = settledReplyKeys;
@@ -1308,12 +1429,17 @@ export function MessageList({
             data-subagent-chip-focus-scope="true"
             // Chat text is data, never instructions: Aiden Live sees only how many messages there are.
             data-live-content="chat"
-            data-draft-worktree-send={showDraftWorktreeSend ? draftWorktreeSend!.view.status : undefined}
+            data-draft-worktree-send={
+              showDraftWorktreeSend ? draftWorktreeSend!.view.status : undefined
+            }
           >
             {transcriptRows}
 
             {showDraftWorktreeSend && draftWorktreeSend ? (
-              <DraftWorktreeSendStatus view={draftWorktreeSend.view} onDecide={draftWorktreeSend.decide} />
+              <DraftWorktreeSendStatus
+                view={draftWorktreeSend.view}
+                onDecide={draftWorktreeSend.decide}
+              />
             ) : (
               <AgentActivityTransition
                 activity={agentActivity}
@@ -1359,7 +1485,8 @@ function AgentActivityTransition({
       current?.phase === activity?.phase &&
       current?.label === activity?.label &&
       current?.canRetryNow === activity?.canRetryNow
-    ) return;
+    )
+      return;
     const delay = activityPresentationDelay(
       current,
       activity,
@@ -1376,7 +1503,9 @@ function AgentActivityTransition({
   if (!current && !reserve) return null;
   const retry = current?.phase === "limited" && current.canRetryNow && onRetryUsageLimit;
   const shimmer =
-    current?.phase === "thinking" || current?.phase === "loading" || current?.phase === "visualizing";
+    current?.phase === "thinking" ||
+    current?.phase === "loading" ||
+    current?.phase === "visualizing";
   return (
     // One fixed-height slot: the label swaps on presentation timers, and a
     // wrapping label, or a line that came and went with each step, would move
@@ -1403,7 +1532,12 @@ function AgentActivityTransition({
             {current.label}
           </Text>
           {retry ? (
-            <Button variant="transparent" size="small" className="-my-0.5 shrink-0" onClick={onRetryUsageLimit}>
+            <Button
+              variant="transparent"
+              size="small"
+              className="-my-0.5 shrink-0"
+              onClick={onRetryUsageLimit}
+            >
               Retry now
             </Button>
           ) : null}

@@ -329,7 +329,11 @@ test("rerank-only models stay out while authoritative chat classifications overr
 });
 
 test("catalog details stay with the provider that answered for a shared model id", () => {
-  const hosted = provider({ id: "hosted", label: "Hosted", models: ["shared-model", "plain-model"] });
+  const hosted = provider({
+    id: "hosted",
+    label: "Hosted",
+    models: ["shared-model", "plain-model"],
+  });
   const local = provider({ id: "local", label: "Local", models: ["shared-model"] });
   const entries = createModelEntries(
     [hosted, local],
@@ -342,7 +346,11 @@ test("catalog details stay with the provider that answered for a shared model id
           matched: true,
         },
         // A stale answer for a model the provider no longer lists adds nothing.
-        "retired-model": { id: "retired-model", metadataSource: "models-dev" as const, matched: true },
+        "retired-model": {
+          id: "retired-model",
+          metadataSource: "models-dev" as const,
+          matched: true,
+        },
       },
     }),
   );
@@ -510,7 +518,9 @@ function routeEntry(
 
 test("model identity is the leaf of the catalog's canonical id, else of the model id", () => {
   assert.equal(
-    modelIdentityKey(routeEntry("openrouter", "OpenRouter", "openai/gpt-4o-latest", "OpenAI/GPT-4o")),
+    modelIdentityKey(
+      routeEntry("openrouter", "OpenRouter", "openai/gpt-4o-latest", "OpenAI/GPT-4o"),
+    ),
     "gpt-4o",
   );
   // Without a canonical id the text after the last slash is the identity, date stamp kept.
@@ -547,14 +557,14 @@ test("a canonical id links routes whose ids differ, including an uncatalogued ro
   // No catalog row: its leaf ("large-2") matches the canonical id's leaf.
   const custom = routeEntry("custom", "Custom", "acme/large-2");
   const siblings = modelSiblings([vendor, router, custom]);
-  assert.deepEqual(siblings.get(vendor.value)?.map((entry) => entry.providerLabel), [
-    "OpenRouter",
-    "Custom",
-  ]);
-  assert.deepEqual(siblings.get(custom.value)?.map((entry) => entry.providerLabel), [
-    "Acme",
-    "OpenRouter",
-  ]);
+  assert.deepEqual(
+    siblings.get(vendor.value)?.map((entry) => entry.providerLabel),
+    ["OpenRouter", "Custom"],
+  );
+  assert.deepEqual(
+    siblings.get(custom.value)?.map((entry) => entry.providerLabel),
+    ["Acme", "OpenRouter"],
+  );
 });
 
 test("a direct route without catalog data links to catalogued routers of the same model", () => {
@@ -562,14 +572,14 @@ test("a direct route without catalog data links to catalogued routers of the sam
   const router = routeEntry("openrouter", "OpenRouter", "openai/gpt-4o", "openai/gpt-4o");
   const azure = routeEntry("azure", "Azure", "gpt-4o", "openai/gpt-4o");
   const siblings = modelSiblings([direct, router, azure]);
-  assert.deepEqual(siblings.get(direct.value)?.map((entry) => entry.providerLabel), [
-    "OpenRouter",
-    "Azure",
-  ]);
-  assert.deepEqual(siblings.get(azure.value)?.map((entry) => entry.providerLabel), [
-    "OpenAI",
-    "OpenRouter",
-  ]);
+  assert.deepEqual(
+    siblings.get(direct.value)?.map((entry) => entry.providerLabel),
+    ["OpenRouter", "Azure"],
+  );
+  assert.deepEqual(
+    siblings.get(azure.value)?.map((entry) => entry.providerLabel),
+    ["OpenAI", "OpenRouter"],
+  );
 });
 
 test("two different canonical ids that share a leaf stay apart", () => {
@@ -579,11 +589,14 @@ test("two different canonical ids that share a leaf stay apart", () => {
   // An uncatalogued route with that leaf links to both; they still do not link to each other.
   const custom = routeEntry("custom", "Custom", "large");
   const siblings = modelSiblings([first, second, custom]);
-  assert.deepEqual(siblings.get(first.value)?.map((entry) => entry.providerLabel), ["Custom"]);
-  assert.deepEqual(siblings.get(custom.value)?.map((entry) => entry.providerLabel), [
-    "Acme",
-    "Globex",
-  ]);
+  assert.deepEqual(
+    siblings.get(first.value)?.map((entry) => entry.providerLabel),
+    ["Custom"],
+  );
+  assert.deepEqual(
+    siblings.get(custom.value)?.map((entry) => entry.providerLabel),
+    ["Acme", "Globex"],
+  );
 });
 
 test("models from the same provider are never siblings of each other", () => {
@@ -593,11 +606,14 @@ test("models from the same provider are never siblings of each other", () => {
   const alone = modelSiblings([flash, flashx]);
   assert.equal(alone.size, 0);
   const siblings = modelSiblings([flash, flashx, router]);
-  assert.deepEqual(siblings.get(flash.value)?.map((entry) => entry.providerLabel), ["OpenRouter"]);
-  assert.deepEqual(siblings.get(router.value)?.map((entry) => entry.value), [
-    flash.value,
-    flashx.value,
-  ]);
+  assert.deepEqual(
+    siblings.get(flash.value)?.map((entry) => entry.providerLabel),
+    ["OpenRouter"],
+  );
+  assert.deepEqual(
+    siblings.get(router.value)?.map((entry) => entry.value),
+    [flash.value, flashx.value],
+  );
   assert.equal(alsoViaLabel(siblings.get(router.value)), "Also via Z.AI");
 });
 
@@ -606,11 +622,20 @@ test("three-way groups list every other route, and only the entries passed in co
   const b = routeEntry("openrouter", "OpenRouter", "openai/gpt-4o");
   const c = routeEntry("azure", "Azure", "GPT-4o");
   const all = modelSiblings([a, b, c]);
-  assert.deepEqual(all.get(a.value)?.map((entry) => entry.providerLabel), ["OpenRouter", "Azure"]);
-  assert.deepEqual(all.get(c.value)?.map((entry) => entry.providerLabel), ["OpenAI", "OpenRouter"]);
+  assert.deepEqual(
+    all.get(a.value)?.map((entry) => entry.providerLabel),
+    ["OpenRouter", "Azure"],
+  );
+  assert.deepEqual(
+    all.get(c.value)?.map((entry) => entry.providerLabel),
+    ["OpenAI", "OpenRouter"],
+  );
 
   // Callers pass visible entries only, so a hidden route links nothing.
-  const visible = visibleModelEntries([a, b, c], { openrouter: ["openai/gpt-4o"], azure: ["GPT-4o"] });
+  const visible = visibleModelEntries([a, b, c], {
+    openrouter: ["openai/gpt-4o"],
+    azure: ["GPT-4o"],
+  });
   assert.equal(modelSiblings(visible).size, 0);
 });
 
@@ -626,4 +651,3 @@ test("the also-via label names one or two providers and counts the rest", () => 
   assert.equal(alsoViaProviders(four), "OpenRouter, Azure +2");
   assert.equal(alsoViaProviders([]), undefined);
 });
-

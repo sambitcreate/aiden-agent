@@ -40,10 +40,16 @@ export class LinuxDictationPortal {
   private pressed = false;
   constructor(
     private readonly callbacks: DictationPortalCallbacks,
-    private readonly spawnHelper: () => ChildProcess = () => spawn(resolveDictationPortalHelper(), ["bind"], { stdio: ["pipe", "pipe", "ignore"], env: linuxDesktopBusEnvironment() }),
+    private readonly spawnHelper: () => ChildProcess = () =>
+      spawn(resolveDictationPortalHelper(), ["bind"], {
+        stdio: ["pipe", "pipe", "ignore"],
+        env: linuxDesktopBusEnvironment(),
+      }),
     private readonly timeoutMs = 120_000,
   ) {}
-  get active(): boolean { return this.bound; }
+  get active(): boolean {
+    return this.bound;
+  }
 
   bind(): Promise<{ triggerDescription: string | null }> {
     this.close();
@@ -55,41 +61,85 @@ export class LinuxDictationPortal {
       const fail = (message: string) => {
         if (generation !== this.generation) return;
         const wasBound = this.bound;
-        if (!settled) { settled = true; reject(new Error(message)); }
+        if (!settled) {
+          settled = true;
+          reject(new Error(message));
+        }
         this.close();
         if (wasBound) this.callbacks.lost();
       };
       this.cancelPending = () => {
         clearTimeout(timer);
-        if (!settled) { settled = true; reject(new Error("Desktop shortcut setup was cancelled.")); }
+        if (!settled) {
+          settled = true;
+          reject(new Error("Desktop shortcut setup was cancelled."));
+        }
       };
       timer = setTimeout(() => fail("Desktop shortcut setup timed out."), this.timeoutMs);
       let child: ChildProcess;
-      try { child = this.spawnHelper(); } catch { fail("Desktop shortcuts are unavailable."); return; }
+      try {
+        child = this.spawnHelper();
+      } catch {
+        fail("Desktop shortcuts are unavailable.");
+        return;
+      }
       this.child = child;
       child.stdout?.setEncoding("utf8");
       child.stdout?.on("data", (chunk: string) => {
         if (generation !== this.generation) return;
         buffer += chunk;
-        if (buffer.length > 4096) { fail("Invalid desktop shortcut response."); return; }
+        if (buffer.length > 4096) {
+          fail("Invalid desktop shortcut response.");
+          return;
+        }
         let newline: number;
         while ((newline = buffer.indexOf("\n")) >= 0) {
-          const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+          const line = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
           let event: { type?: unknown; triggerDescription?: unknown };
-          try { event = JSON.parse(line); } catch { fail("Invalid desktop shortcut response."); return; }
-          if (!event || typeof event !== "object") { fail("Invalid desktop shortcut response."); return; }
+          try {
+            event = JSON.parse(line);
+          } catch {
+            fail("Invalid desktop shortcut response.");
+            return;
+          }
+          if (!event || typeof event !== "object") {
+            fail("Invalid desktop shortcut response.");
+            return;
+          }
           if (event.type === "bound" && !this.bound) {
-            if (typeof event.triggerDescription !== "string" || event.triggerDescription.length > 256) { fail("Desktop shortcut did not report its assigned trigger."); return; }
+            if (
+              typeof event.triggerDescription !== "string" ||
+              event.triggerDescription.length > 256
+            ) {
+              fail("Desktop shortcut did not report its assigned trigger.");
+              return;
+            }
             const triggerDescription = event.triggerDescription.trim() || null;
-            this.bound = true; settled = true; clearTimeout(timer);
+            this.bound = true;
+            settled = true;
+            clearTimeout(timer);
             resolve({ triggerDescription });
           } else if (event.type === "activated" && this.bound) {
-            if (!this.pressed) { this.pressed = true; this.callbacks.activated(); }
+            if (!this.pressed) {
+              this.pressed = true;
+              this.callbacks.activated();
+            }
           } else if (event.type === "deactivated" && this.bound) {
-            if (this.pressed) { this.pressed = false; this.callbacks.deactivated(); }
-          } else if (event.type === "bound" || event.type === "activated" || event.type === "deactivated" || event.type === "error" || event.type === "closed") {
+            if (this.pressed) {
+              this.pressed = false;
+              this.callbacks.deactivated();
+            }
+          } else if (
+            event.type === "bound" ||
+            event.type === "activated" ||
+            event.type === "deactivated" ||
+            event.type === "error" ||
+            event.type === "closed"
+          ) {
             // An explicit end, or a known event out of order, fails closed.
-            fail("Desktop shortcut session ended or became unavailable."); return;
+            fail("Desktop shortcut session ended or became unavailable.");
+            return;
           }
           // Any other event type is informational (a newer helper or portal); it must not drop the shortcut.
         }
@@ -101,14 +151,19 @@ export class LinuxDictationPortal {
   }
   close(): void {
     ++this.generation;
-    this.bound = false; this.pressed = false;
-    this.cancelPending?.(); this.cancelPending = null;
-    const child = this.child; this.child = null;
+    this.bound = false;
+    this.pressed = false;
+    this.cancelPending?.();
+    this.cancelPending = null;
+    const child = this.child;
+    this.child = null;
     if (child) {
       child.stdin?.end();
       if (child.exitCode === null && !child.killed) child.kill();
       if (child.exitCode === null) {
-        const escalation = setTimeout(() => { if (child.exitCode === null) child.kill("SIGKILL"); }, 1_000);
+        const escalation = setTimeout(() => {
+          if (child.exitCode === null) child.kill("SIGKILL");
+        }, 1_000);
         escalation.unref();
         child.once("exit", () => clearTimeout(escalation));
       }

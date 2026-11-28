@@ -21,7 +21,12 @@ function option(args: string[], name: string): string | undefined {
 test("every operation names Aiden's storage; clone names it as source and destination", () => {
   const commands: LumeCommand[] = [
     { op: "create", name: BOT_COMPUTER_BASE_VM, ipsw: "/tmp/restore.ipsw", unattended: "tahoe" },
-    { op: "run", name: botVm, vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/Users/person/Bots/ada/Computer" },
+    {
+      op: "run",
+      name: botVm,
+      vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
+      sharedDir: "/Users/person/Bots/ada/Computer",
+    },
     { op: "get", name: botVm },
     { op: "list" },
     { op: "stop", name: botVm },
@@ -40,7 +45,13 @@ test("every operation names Aiden's storage; clone names it as source and destin
 
 test("run is detached and headless with the shared folder tagged read-write", () => {
   const args = lumeArgs(
-    { op: "run", name: botVm, vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/Users/person/Bots/ada/Computer", logFile: "/tmp/ada.log" },
+    {
+      op: "run",
+      name: botVm,
+      vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
+      sharedDir: "/Users/person/Bots/ada/Computer",
+      logFile: "/tmp/ada.log",
+    },
     storage,
   );
   assert.ok(args.includes("--detach"));
@@ -51,19 +62,44 @@ test("run is detached and headless with the shared folder tagged read-write", ()
 
 test("delete always passes --force and ssh puts its options before the VM name", () => {
   assert.ok(lumeArgs({ op: "delete", name: botVm }, storage).includes("--force"));
-  const ssh = lumeArgs({ op: "ssh", name: botVm, command: "echo hi; ls ~", timeoutSeconds: 20 }, storage);
-  assert.deepEqual(ssh.slice(-2), [botVm, "echo hi; ls ~"], "the remote command is one argv element after the name");
+  const ssh = lumeArgs(
+    { op: "ssh", name: botVm, command: "echo hi; ls ~", timeoutSeconds: 20 },
+    storage,
+  );
+  assert.deepEqual(
+    ssh.slice(-2),
+    [botVm, "echo hi; ls ~"],
+    "the remote command is one argv element after the name",
+  );
   assert.equal(option(ssh, "--timeout"), "20");
 });
 
 test("a shared folder with a colon, a relative path or a foreign VM name is refused", () => {
   const refuse = (command: LumeCommand, store = storage) =>
-    assert.throws(() => lumeArgs(command, store), (error: unknown) => error instanceof BotComputerError && error.code === "invalid");
-  refuse({ op: "run", name: botVm, vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/Users/person/a:b/Computer" });
-  refuse({ op: "run", name: botVm, vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "relative/Computer" });
+    assert.throws(
+      () => lumeArgs(command, store),
+      (error: unknown) => error instanceof BotComputerError && error.code === "invalid",
+    );
+  refuse({
+    op: "run",
+    name: botVm,
+    vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
+    sharedDir: "/Users/person/a:b/Computer",
+  });
+  refuse({
+    op: "run",
+    name: botVm,
+    vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
+    sharedDir: "relative/Computer",
+  });
   refuse({ op: "get", name: "my-own-vm" });
   // A `name:tag` reaching `lume run` would make it pull from a registry.
-  refuse({ op: "run", name: "macos-sequoia:latest", vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/tmp/x" });
+  refuse({
+    op: "run",
+    name: "macos-sequoia:latest",
+    vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
+    sharedDir: "/tmp/x",
+  });
   refuse({ op: "create", name: BOT_COMPUTER_BASE_VM, ipsw: "latest", unattended: "tahoe" });
   refuse({ op: "list" }, "relative/vms");
   refuse({ op: "serve" } as unknown as LumeCommand);
@@ -98,12 +134,16 @@ test("the environment is an allowlist with privacy switches and an isolated home
   assert.equal(env.LUME_TELEMETRY_ENABLED, "false");
   assert.equal(env.LUME_UPDATE_CHECK, "false");
   assert.equal(env.DO_NOT_TRACK, "1");
-  assert.equal(env.HOME, "/Users/person/Library/Application Support/Aiden Agent/bot-computers/home");
+  assert.equal(
+    env.HOME,
+    "/Users/person/Library/Application Support/Aiden Agent/bot-computers/home",
+  );
   assert.ok(env.XDG_CONFIG_HOME?.startsWith(env.HOME));
   assert.equal(env.LANG, "en_GB.UTF-8");
   assert.equal(env.LC_ALL, "en_GB.UTF-8");
-  for (const leaked of ["SSH_AUTH_SOCK", "GITHUB_TOKEN", "NODE_OPTIONS"]) assert.equal(env[leaked], undefined, leaked);
-  for (const value of Object.values(env)) assert.equal(value.startsWith("/Users/person/.") , false);
+  for (const leaked of ["SSH_AUTH_SOCK", "GITHUB_TOKEN", "NODE_OPTIONS"])
+    assert.equal(env[leaked], undefined, leaked);
+  for (const value of Object.values(env)) assert.equal(value.startsWith("/Users/person/."), false);
 });
 
 test("runLume spawns the fixed invocation and returns a failing exit as a result", async () => {
@@ -117,16 +157,23 @@ test("runLume spawns the fixed invocation and returns a failing exit as a result
   );
   assert.equal(missing.exitCode, 1);
   assert.match(missing.stderr, /Virtual machine not found/u);
-  const [call] = readFileSync(logFile, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { args: string[]; env: Record<string, string> });
+  const [call] = readFileSync(logFile, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { args: string[]; env: Record<string, string> });
   assert.equal(call?.env.LUME_TELEMETRY_ENABLED, "false");
   assert.ok(call?.args.includes("--storage"));
 
   await assert.rejects(
-    runLume({ command: process.execPath, prefixArgs: [fake] }, { op: "list" }, {
-      storage: path.join(dir, "vms"),
-      env: { ...env, LUME_TELEMETRY_ENABLED: "true" },
-      timeoutMs: 10_000,
-    }),
+    runLume(
+      { command: process.execPath, prefixArgs: [fake] },
+      { op: "list" },
+      {
+        storage: path.join(dir, "vms"),
+        env: { ...env, LUME_TELEMETRY_ENABLED: "true" },
+        timeoutMs: 10_000,
+      },
+    ),
     /telemetry/u,
   );
 });
@@ -134,17 +181,29 @@ test("runLume spawns the fixed invocation and returns a failing exit as a result
 test("output past the cap ends the child, and a hung child is killed at its timeout", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "p8-bounded-"));
   const noisy = path.join(dir, "noisy.mjs");
-  writeFileSync(noisy, "process.stdout.write('x'.repeat(4 * 1024 * 1024)); setInterval(() => {}, 1000);\n");
+  writeFileSync(
+    noisy,
+    "process.stdout.write('x'.repeat(4 * 1024 * 1024)); setInterval(() => {}, 1000);\n",
+  );
   await assert.rejects(
-    runBoundedProcess(process.execPath, [noisy], { env: {}, timeoutMs: 10_000, maxStdoutBytes: 1024, overflow: "fail" }),
+    runBoundedProcess(process.execPath, [noisy], {
+      env: {},
+      timeoutMs: 10_000,
+      maxStdoutBytes: 1024,
+      overflow: "fail",
+    }),
     /too much output/u,
   );
-  const truncated = await runBoundedProcess(process.execPath, ["-e", "process.stdout.write('y'.repeat(5000))"], {
-    env: {},
-    timeoutMs: 10_000,
-    maxStdoutBytes: 100,
-    overflow: "truncate",
-  });
+  const truncated = await runBoundedProcess(
+    process.execPath,
+    ["-e", "process.stdout.write('y'.repeat(5000))"],
+    {
+      env: {},
+      timeoutMs: 10_000,
+      maxStdoutBytes: 100,
+      overflow: "truncate",
+    },
+  );
   assert.equal(truncated.stdout.length, 100);
   assert.equal(truncated.truncated, true);
 
@@ -156,9 +215,16 @@ test("output past the cap ends the child, and a hung child is killed at its time
   assert.ok(Date.now() - started < 8_000, "TERM then KILL ends a child that ignores TERM");
 
   const controller = new AbortController();
-  const pending = runBoundedProcess(process.execPath, [hung], { env: {}, timeoutMs: 60_000, signal: controller.signal });
+  const pending = runBoundedProcess(process.execPath, [hung], {
+    env: {},
+    timeoutMs: 60_000,
+    signal: controller.signal,
+  });
   controller.abort();
-  await assert.rejects(pending, (error: unknown) => error instanceof BotComputerError && error.code === "cancelled");
+  await assert.rejects(
+    pending,
+    (error: unknown) => error instanceof BotComputerError && error.code === "cancelled",
+  );
 });
 
 test("killOnAbort ends a cancelled child at once, so one that handles TERM does nothing more", async () => {
@@ -184,7 +250,10 @@ test("killOnAbort ends a cancelled child at once, so one that handles TERM does 
   });
   while (!existsSync(ready)) await new Promise((resolve) => setTimeout(resolve, 5));
   controller.abort();
-  await assert.rejects(pending, (error: unknown) => error instanceof BotComputerError && error.code === "cancelled");
+  await assert.rejects(
+    pending,
+    (error: unknown) => error instanceof BotComputerError && error.code === "cancelled",
+  );
   await new Promise((resolve) => setTimeout(resolve, 800));
   assert.equal(existsSync(launched), false, "the child never reached its next step");
 });
@@ -193,12 +262,19 @@ test("onSpawn hears that the executable started, and never fires for one that co
   const dir = mkdtempSync(path.join(tmpdir(), "p8-bounded-"));
   let spawned = 0;
   const onSpawn = () => void (spawned += 1);
-  const ran = await runBoundedProcess(process.execPath, ["-e", "process.exit(3)"], { env: {}, timeoutMs: 10_000, onSpawn });
+  const ran = await runBoundedProcess(process.execPath, ["-e", "process.exit(3)"], {
+    env: {},
+    timeoutMs: 10_000,
+    onSpawn,
+  });
   assert.equal(ran.exitCode, 3);
   assert.equal(spawned, 1, "a child that ran and failed still started");
   await assert.rejects(
     runBoundedProcess(path.join(dir, "missing-lume"), [], { env: {}, timeoutMs: 10_000, onSpawn }),
-    (error: unknown) => error instanceof BotComputerError && error.code === "lume_failed" && /is missing/u.test(error.message),
+    (error: unknown) =>
+      error instanceof BotComputerError &&
+      error.code === "lume_failed" &&
+      /is missing/u.test(error.message),
   );
   assert.equal(spawned, 1, "a missing executable never started");
 });

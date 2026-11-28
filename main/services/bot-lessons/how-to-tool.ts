@@ -4,13 +4,16 @@
 
 import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { BOT_LESSON_LEARNED_ENTRY_KIND, type BotLesson } from "../../../renderer/shared/bot-lessons.js";
+import {
+  BOT_LESSON_LEARNED_ENTRY_KIND,
+  type BotLesson,
+} from "../../../renderer/shared/bot-lessons.js";
 import type { BotLessonStore } from "./store.js";
 
 export const NOTE_HOW_TO_TOOL_NAME = "note_how_to";
 
 export const NOTE_HOW_TO_INSTRUCTIONS = [
-  "When the person corrects how the Bot did something (\"no, put the totals first\"), call note_how_to with when it applies (cue) and what to do (lesson).",
+  'When the person corrects how the Bot did something ("no, put the totals first"), call note_how_to with when it applies (cue) and what to do (lesson).',
   "Facts about the person go to user memory, not note_how_to.",
 ];
 
@@ -28,7 +31,9 @@ export function createNoteHowToTool(deps: {
       {
         cue: Type.String({ description: "When it applies." }),
         lesson: Type.String({ description: "What to do, in a few words." }),
-        component: Type.Optional(Type.Union([Type.Literal("output_format"), Type.Literal("procedure")])),
+        component: Type.Optional(
+          Type.Union([Type.Literal("output_format"), Type.Literal("procedure")]),
+        ),
       },
       { additionalProperties: false },
     ),
@@ -46,10 +51,17 @@ export function createNoteHowToTool(deps: {
       });
       if (added.ok) {
         await deps.recorded(deps.botId, added.lesson, added.retired);
-        await deps.appendEntry(deps.botId, BOT_LESSON_LEARNED_ENTRY_KIND, { lessonId: added.lesson.id, lesson: added.lesson.lesson });
+        await deps.appendEntry(deps.botId, BOT_LESSON_LEARNED_ENTRY_KIND, {
+          lessonId: added.lesson.id,
+          lesson: added.lesson.lesson,
+        });
       }
       const body = added.ok ? { ok: true } : { ok: false, code: added.code, error: added.error };
-      return { content: [{ type: "text", text: JSON.stringify(body) }], details: null, ...(added.ok ? {} : { isError: true }) } as AgentToolResult<null>;
+      return {
+        content: [{ type: "text", text: JSON.stringify(body) }],
+        details: null,
+        ...(added.ok ? {} : { isError: true }),
+      } as AgentToolResult<null>;
     },
   };
 }

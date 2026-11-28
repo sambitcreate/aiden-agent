@@ -8,8 +8,11 @@ test("missing durable storage never supplies state from which to admit the task 
     const result = await loadDurableTodoSnapshot("chat", undefined);
     assert.equal(result.state, undefined);
     assert.deepEqual(result.snapshot, {
-      version: 1, chatId: "chat", availability: "unavailable",
-      unavailableReason: "storage_not_enabled", tasks: [],
+      version: 1,
+      chatId: "chat",
+      availability: "unavailable",
+      unavailableReason: "storage_not_enabled",
+      tasks: [],
     });
   }
 });
@@ -22,7 +25,10 @@ test("durable empty storage can admit tasks and replay them on the next turn", a
   assert.ok(initial.state);
   const tool = createTodoExtension(initial.state).tools![0]!;
   const result = await tool.execute("call", { action: "create", subject: "Persist work" });
-  branch.push({ type: "message", message: { role: "toolResult", toolName: "todo", details: result.details } });
+  branch.push({
+    type: "message",
+    message: { role: "toolResult", toolName: "todo", details: result.details },
+  });
   const resumed = await loadDurableTodoSnapshot("chat", session);
   assert.equal(resumed.snapshot.tasks[0]?.subject, "Persist work");
   assert.equal(resumed.state?.nextId, 2);
@@ -30,9 +36,16 @@ test("durable empty storage can admit tasks and replay them on the next turn", a
 
 test("invalid newest snapshots stay empty and distinct from missing storage", async () => {
   const result = await loadDurableTodoSnapshot("chat", {
-    getBranch: async () => [{ type: "message", message: {
-      role: "toolResult", toolName: "todo", details: { private: "never export" },
-    } }],
+    getBranch: async () => [
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "todo",
+          details: { private: "never export" },
+        },
+      },
+    ],
   });
   assert.equal(result.state, undefined);
   assert.equal(result.snapshot.unavailableReason, "invalid_snapshot");
@@ -42,7 +55,12 @@ test("invalid newest snapshots stay empty and distinct from missing storage", as
 
 test("storage read errors propagate rather than being reported as snapshot corruption", async () => {
   const error = new Error("read failure");
-  await assert.rejects(loadDurableTodoSnapshot("chat", {
-    getBranch: async () => { throw error; },
-  }), (actual) => actual === error);
+  await assert.rejects(
+    loadDurableTodoSnapshot("chat", {
+      getBranch: async () => {
+        throw error;
+      },
+    }),
+    (actual) => actual === error,
+  );
 });

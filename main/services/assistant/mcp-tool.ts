@@ -58,7 +58,9 @@ export function assistantMcpServerInventory(
   configured: readonly McpServer[],
 ): AssistantMcpServerInventory {
   // Servers switched off for the model are not offered to automations either.
-  const enabledServers = configured.filter((server) => server.enabled && mcpServerOffersTools(server));
+  const enabledServers = configured.filter(
+    (server) => server.enabled && mcpServerOffersTools(server),
+  );
   const safeEnabledServers = enabledServers.flatMap((server) => {
     const id = safeIdentity(server.id, ASSISTANT_AUTOMATION_MCP_SERVER_ID_LIMIT);
     const name = safeIdentity(server.name, ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT);

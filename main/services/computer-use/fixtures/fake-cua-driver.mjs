@@ -36,13 +36,11 @@ const command = argv.includes("--bridge")
   ? "bridge"
   : controlPath
     ? "broker"
-    : argv.find((value) => explicitCommands.has(value)) ?? "unknown";
+    : (argv.find((value) => explicitCommands.has(value)) ?? "unknown");
 
 // The native bridge forwards only Aiden's allowlist, so the fake lists exactly
 // those tools in their 0.36.0 shapes and drops the upstream-only batch tools.
-const ALLOWED_TOOLS = Object.keys(TOOL_DEFINITIONS).filter(
-  (name) => !UNFORWARDED_TOOLS.has(name),
-);
+const ALLOWED_TOOLS = Object.keys(TOOL_DEFINITIONS).filter((name) => !UNFORWARDED_TOOLS.has(name));
 const driver = new FakeCuaDriver({
   hostBundleId: process.env.CUA_DRIVER_HOST_BUNDLE_ID,
 });
@@ -198,10 +196,7 @@ if (command === "hold-stdio") {
       const socket = net.createConnection(socketPath);
       const failed = (error) => {
         socket.destroy();
-        if (
-          Date.now() < deadline &&
-          (error.code === "ENOENT" || error.code === "ECONNREFUSED")
-        ) {
+        if (Date.now() < deadline && (error.code === "ENOENT" || error.code === "ECONNREFUSED")) {
           setTimeout(attempt, 10);
           return;
         }
@@ -233,11 +228,14 @@ if (command === "hold-stdio") {
         authenticated = true;
         clearTimeout(handshakeTimeout);
         log({ event: "bridge-authenticated", pid: process.pid, hasCallerIpc: process.connected });
-        setTimeout(() => {
-          writeFileSync(4, `${JSON.stringify({ type: "ready", protocolVersion: 2 })}\n`, "utf8");
-          closeSync(4);
-          startMcp();
-        }, Math.max(0, readyDelayMs));
+        setTimeout(
+          () => {
+            writeFileSync(4, `${JSON.stringify({ type: "ready", protocolVersion: 2 })}\n`, "utf8");
+            closeSync(4);
+            startMcp();
+          },
+          Math.max(0, readyDelayMs),
+        );
       });
       control.once("close", () => stopBridge("bridge-lost-broker"));
     });
@@ -330,7 +328,11 @@ if (command === "hold-stdio") {
           send({ jsonrpc: "2.0", id: message.id, result });
         };
         const delay =
-          name === "start_session" ? startSessionDelayMs : name === "health_report" ? toolDelayMs : 0;
+          name === "start_session"
+            ? startSessionDelayMs
+            : name === "health_report"
+              ? toolDelayMs
+              : 0;
         const timer = setTimeout(finish, Math.max(0, delay));
         pending.set(message.id, timer);
       } else if (message.method === "notifications/cancelled") {

@@ -7,12 +7,7 @@ import {
   MAX_WORKSPACE_ID_CHARS,
 } from "../../renderer/shared/chat-message-contract.js";
 
-const CHAT_CREATE_KEYS = new Set([
-  "model",
-  "providerId",
-  "title",
-  "workspaceId",
-]);
+const CHAT_CREATE_KEYS = new Set(["model", "providerId", "title", "workspaceId"]);
 const MAX_CREATE_TITLE_CHARS = 120;
 const MAX_CREATE_TITLE_BYTES = 480;
 
@@ -40,8 +35,7 @@ function exactRecord(
   for (const key in record) {
     if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
     count += 1;
-    if (count > allowed.size || !allowed.has(key))
-      throw new Error(`Invalid ${label}.`);
+    if (count > allowed.size || !allowed.has(key)) throw new Error(`Invalid ${label}.`);
   }
   return record;
 }
@@ -53,15 +47,10 @@ function optionalBoundedString(
   maxBytes: number,
 ): string | undefined {
   if (value === undefined) return undefined;
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > maxChars
-  ) {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxChars) {
     throw new Error(`Invalid ${label}.`);
   }
-  if (Buffer.byteLength(value, "utf8") > maxBytes)
-    throw new Error(`Invalid ${label}.`);
+  if (Buffer.byteLength(value, "utf8") > maxBytes) throw new Error(`Invalid ${label}.`);
   return value;
 }
 
@@ -85,19 +74,12 @@ function projectedCreate(record: Record<string, unknown>): ParsedChatCreate {
       MAX_PROVIDER_ID_CHARS,
       MAX_PROVIDER_ID_BYTES,
     ),
-    model: optionalBoundedString(
-      record.model,
-      "model id",
-      MAX_MODEL_ID_CHARS,
-      MAX_MODEL_ID_BYTES,
-    ),
+    model: optionalBoundedString(record.model, "model id", MAX_MODEL_ID_CHARS, MAX_MODEL_ID_BYTES),
   };
 }
 
 export function parseChatCreate(value: unknown): ParsedPublicChatCreate {
-  const projected = projectedCreate(
-    exactRecord(value, CHAT_CREATE_KEYS, "chat creation fields"),
-  );
+  const projected = projectedCreate(exactRecord(value, CHAT_CREATE_KEYS, "chat creation fields"));
   if (!projected.workspaceId) throw new Error("Invalid workspace id.");
   return { ...projected, workspaceId: projected.workspaceId };
 }

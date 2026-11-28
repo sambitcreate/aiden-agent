@@ -14,7 +14,13 @@ import { AccessRequestCard } from "../components/bots/access-request-card";
 import { HandoffCard, handoffNoNoteComposerText } from "../components/bots/handoff-card";
 import { PlanCard } from "../components/bots/plan-card";
 import { handoffTakenKey, useHandoffTaken } from "../components/bots/handoff-taken";
-import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../components/bots/needs-you-slot";
+import {
+  NeedsYouAnnouncer,
+  NeedsYouFocusScope,
+  NeedsYouHeader,
+  needsYouSlotState,
+  type NeedsYouItem,
+} from "../components/bots/needs-you-slot";
 import { Composer } from "../components/composer";
 import { MessageAttachmentPreviewProvider } from "../components/message-attachments";
 import {
@@ -40,18 +46,39 @@ import { useRemoteBotSession } from "../lib/hosts/use-remote-bot-session";
 import { browserApi, peerHostsApi } from "../lib/ipc";
 import type { Attachment } from "../lib/types";
 import type { AskUserQuestionResponseV1 } from "../shared/ask-user-question";
-import { DEFAULT_BOT_AVATAR, botChatActivityOnDevice, isBotAvatar, showsBotToolActivity, type BotAvatar } from "../shared/bots";
+import {
+  DEFAULT_BOT_AVATAR,
+  botChatActivityOnDevice,
+  isBotAvatar,
+  showsBotToolActivity,
+  type BotAvatar,
+} from "../shared/bots";
 import { useAppearancePreference } from "../lib/use-appearance-preference";
 import { useBots } from "../lib/queries";
-import { BOT_HANDOFF_NOTE_MAX_CHARS, botHandoffTakesNote, type BotHandoffOutcome } from "../shared/bot-handoffs";
+import {
+  BOT_HANDOFF_NOTE_MAX_CHARS,
+  botHandoffTakesNote,
+  type BotHandoffOutcome,
+} from "../shared/bot-handoffs";
 import type { BotAccessChoice, BotPendingAccessRequest } from "../shared/bot-access-requests";
 import type { BotPendingQuestion } from "../shared/bot-live";
 import type { BotPlanDecision, BotPlanView } from "../shared/bot-plans";
-import type { BotRoutineProposalDecision, BotRoutineProposalRespondResult } from "../shared/bot-routine-proposals";
+import type {
+  BotRoutineProposalDecision,
+  BotRoutineProposalRespondResult,
+} from "../shared/bot-routine-proposals";
 import { localComputerNoun } from "../shared/computer-noun";
-import { mintPeerIdempotencyKey, type PeerHostFeedSnapshot, type PeerHostView, type PeerOperationOutcome } from "../shared/peer-host";
+import {
+  mintPeerIdempotencyKey,
+  type PeerHostFeedSnapshot,
+  type PeerHostView,
+  type PeerOperationOutcome,
+} from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
-import type { AidenRemoteBotApproval, AidenRemoteBotHandoff } from "../../main/services/aiden-remote-protocol";
+import type {
+  AidenRemoteBotApproval,
+  AidenRemoteBotHandoff,
+} from "../../main/services/aiden-remote-protocol";
 import {
   BotInterruptedCard,
   BotPendingSendBubble,
@@ -89,7 +116,8 @@ function botName(feed: PeerHostFeedSnapshot | null | undefined, botId: string): 
 /** The Bot's character as the host's list draws it, for the header and the hand-off card's tile. */
 function botAvatar(feed: PeerHostFeedSnapshot | null | undefined, botId: string): BotAvatar {
   const avatar = feed?.bots.find((bot) => bot.id === botId)?.avatar;
-  const semantic = avatar && typeof avatar === "object" ? (avatar as { semantic?: unknown }).semantic : undefined;
+  const semantic =
+    avatar && typeof avatar === "object" ? (avatar as { semantic?: unknown }).semantic : undefined;
   return isBotAvatar(semantic) ? semantic : DEFAULT_BOT_AVATAR;
 }
 
@@ -122,18 +150,25 @@ type BusyOperation = "paused" | "answer" | "handoff" | "pause" | "retry" | "conn
  */
 function useBusyOperations() {
   const [counts, setCounts] = React.useState<Readonly<Partial<Record<BusyOperation, number>>>>({});
-  const run = React.useCallback(async <Result,>(operation: BusyOperation, work: () => Promise<Result>): Promise<Result> => {
-    setCounts((now) => ({ ...now, [operation]: (now[operation] ?? 0) + 1 }));
-    try {
-      return await work();
-    } finally {
-      setCounts((now) => ({ ...now, [operation]: Math.max(0, (now[operation] ?? 0) - 1) }));
-    }
-  }, []);
+  const run = React.useCallback(
+    async <Result,>(operation: BusyOperation, work: () => Promise<Result>): Promise<Result> => {
+      setCounts((now) => ({ ...now, [operation]: (now[operation] ?? 0) + 1 }));
+      try {
+        return await work();
+      } finally {
+        setCounts((now) => ({ ...now, [operation]: Math.max(0, (now[operation] ?? 0) - 1) }));
+      }
+    },
+    [],
+  );
   return { busy: (operation: BusyOperation) => (counts[operation] ?? 0) > 0, run };
 }
 
-function sameSend(pending: UnsettledBotSend, text: string, photos: readonly (readonly [string, string, string])[]): boolean {
+function sameSend(
+  pending: UnsettledBotSend,
+  text: string,
+  photos: readonly (readonly [string, string, string])[],
+): boolean {
   return (
     pending.text === text &&
     pending.photos.length === photos.length &&
@@ -146,7 +181,10 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   useReportGoalView(null);
   const navigate = useNavigate();
   const list = useQuery<PeerHostView[]>({ queryKey: hostQueryKeys.list(), queryFn: skipToken });
-  const feed = useQuery<PeerHostFeedSnapshot | null>({ queryKey: hostQueryKeys.feed(hostId), queryFn: skipToken });
+  const feed = useQuery<PeerHostFeedSnapshot | null>({
+    queryKey: hostQueryKeys.feed(hostId),
+    queryFn: skipToken,
+  });
   const host = list.data?.find((view) => view.id === hostId);
   const hostName = host?.name ?? "the other computer";
   const { platform } = useAppCapabilities();
@@ -162,7 +200,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const live = useRemoteBotSession(hostId, botId, shared);
   // The newest reply the chat shows is not unread when the person leaves. Only
   // what the session shows counts, never the feed alone (revision 52 hosts send `lastReplyAt`).
-  const feedReplyAt = typeof row?.lastReplyAt === "string" ? Date.parse(row.lastReplyAt) : Number.NaN;
+  const feedReplyAt =
+    typeof row?.lastReplyAt === "string" ? Date.parse(row.lastReplyAt) : Number.NaN;
   const shownReplyAt = remoteBotShownReplyAt(
     live.view?.snapshot.entries,
     Number.isFinite(feedReplyAt) ? feedReplyAt : undefined,
@@ -196,7 +235,9 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   // The Needs-you item the person moved to with Previous or Next, by key.
   const [needsYouChoice, setNeedsYouChoice] = React.useState<string | null>(null);
   const [handoffTaken, takeHandoff] = useHandoffTaken(
-    live.view?.handoff ? handoffTakenKey(`remote:${hostId}:${botId}`, live.view.handoff.waitId) : undefined,
+    live.view?.handoff
+      ? handoffTakenKey(`remote:${hostId}:${botId}`, live.view.handoff.waitId)
+      : undefined,
   );
   const shownHandoff = React.useRef<AidenRemoteBotHandoff | null>(null);
   shownHandoff.current = live.view?.handoff ?? null;
@@ -224,7 +265,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const running = state?.kind === "running";
   const features = new Set(host?.features ?? []);
   // Queued messages only show here when the host sends this Mac its activity frames.
-  const steerAndQueue = features.has("bot-activity-v1") && (host?.capabilities ?? []).includes("bot:activity");
+  const steerAndQueue =
+    features.has("bot-activity-v1") && (host?.capabilities ?? []).includes("bot:activity");
   const photos = features.has("bot-attachments-v1");
   const connections = features.has("bot-connection-requests-v1");
   // Revision 37: hand-off cards, the person's pause, and Pause and Resume from here.
@@ -232,10 +274,17 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const isPaused = view?.paused === true;
 
   /** One host operation; failures become a toast with the host's own words. */
-  const call = async (operation: PeerOperation, failure: string): Promise<PeerOperationOutcome & { ok: true }> => {
+  const call = async (
+    operation: PeerOperation,
+    failure: string,
+  ): Promise<PeerOperationOutcome & { ok: true }> => {
     const outcome = await peerHostsApi.call(hostId, operation);
     if (outcome.ok) return outcome;
-    toast.error(outcome.error.code === "outcome_unknown" ? `${hostName} may not have received that. Check the chat before trying again.` : outcome.error.message || failure);
+    toast.error(
+      outcome.error.code === "outcome_unknown"
+        ? `${hostName} may not have received that. Check the chat before trying again.`
+        : outcome.error.message || failure,
+    );
     throw Object.assign(new Error(outcome.error.message || failure), { code: outcome.error.code });
   };
 
@@ -247,7 +296,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     try {
       const outcome = await live.loadOlder();
       if (outcome.kind === "unsupported") setOlderOnHostOnly(true);
-      else if (outcome.kind === "failed") toast.error(outcome.message || "Aiden couldn’t load older messages.");
+      else if (outcome.kind === "failed")
+        toast.error(outcome.message || "Aiden couldn’t load older messages.");
     } finally {
       setLoadingOlder(false);
     }
@@ -257,7 +307,9 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const [removing, setRemoving] = React.useState<ReadonlySet<string>>(() => new Set());
   const removeQueued = async (submissionId: string, button: HTMLButtonElement) => {
     // The row leaves the page, so keyboard focus moves on first: the next Remove, else the composer.
-    const removes = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-bot-queued-remove]"));
+    const removes = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("[data-bot-queued-remove]"),
+    );
     const next = removes[removes.indexOf(button) + 1];
     (next ?? composerRef.current)?.focus();
     setRemoving((ids) => new Set(ids).add(submissionId));
@@ -270,7 +322,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
         body: {},
       });
       if (outcome.ok) {
-        if ((outcome.value as { outcome?: string }).outcome === "started") toast.info("That message already started, so it stays.");
+        if ((outcome.value as { outcome?: string }).outcome === "started")
+          toast.info("That message already started, so it stays.");
         if (live.stream !== "streaming") live.reload();
       } else if (outcome.error.status === 404) {
         toast.info(`Update Aiden on ${hostName} to remove a waiting message from here.`);
@@ -295,7 +348,12 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     run("pause", async () => {
       try {
         await call(
-          { operation: pause ? "botPause" : "botUnpause", resourceId: botId, idempotencyKey: mintPeerIdempotencyKey(), body: {} },
+          {
+            operation: pause ? "botPause" : "botUnpause",
+            resourceId: botId,
+            idempotencyKey: mintPeerIdempotencyKey(),
+            body: {},
+          },
           pause ? `Aiden couldn’t pause ${name}.` : `Aiden couldn’t resume ${name}.`,
         );
         // While the stream reconnects, read the session so the change shows now.
@@ -315,7 +373,13 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       title={
         <span className="flex min-w-0 items-center gap-2">
           <span aria-hidden="true" className="shrink-0">
-            <BotAvatarMark avatar={avatar} name={name} size="small" photoUrl={photoUrl} working={running} />
+            <BotAvatarMark
+              avatar={avatar}
+              name={name}
+              size="small"
+              photoUrl={photoUrl}
+              working={running}
+            />
           </span>
           <span className="truncate">{name}</span>
           <Text as="span" variant="small" color="tertiary" className="truncate">
@@ -325,7 +389,12 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       }
       actions={
         handoffs && snapshot ? (
-          <RemoteBotMenu name={name} paused={isPaused} disabled={busy("pause")} onPause={(pause) => void setPaused(pause)} />
+          <RemoteBotMenu
+            name={name}
+            paused={isPaused}
+            disabled={busy("pause")}
+            onPause={(pause) => void setPaused(pause)}
+          />
         ) : null
       }
       autoScrollToBottom
@@ -353,7 +422,9 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     </ScrollArea>
   );
 
-  const centered = (content: React.ReactNode) => <div className="flex min-h-full items-center justify-center">{content}</div>;
+  const centered = (content: React.ReactNode) => (
+    <div className="flex min-h-full items-center justify-center">{content}</div>
+  );
 
   if (list.data && !host) {
     return shell(
@@ -420,7 +491,11 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           />,
         )
       ) : (
-        <div role="status" aria-label="Loading chat" className="aiden-dock-inset chat-content-column flex flex-col gap-4 py-6">
+        <div
+          role="status"
+          aria-label="Loading chat"
+          className="aiden-dock-inset chat-content-column flex flex-col gap-4 py-6"
+        >
           <div className="ml-auto h-9 w-48 rounded-card bg-well motion-safe:animate-pulse" />
           <div className="h-16 w-72 max-w-full rounded-card bg-well motion-safe:animate-pulse" />
           <span className="sr-only">Loading…</span>
@@ -431,27 +506,42 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   if (state?.kind === "needs_model") {
     return shell(
       centered(
-        <EmptyState title={`${name} needs an AI model`} description={`Choose a model for ${name} on ${hostName}.`} />,
+        <EmptyState
+          title={`${name} needs an AI model`}
+          description={`Choose a model for ${name} on ${hostName}.`}
+        />,
       ),
     );
   }
 
-  const chatActivity = botChatActivityOnDevice(showsBotToolActivity(toolActivitySetting, localBots.data ?? []), undefined);
+  const chatActivity = botChatActivityOnDevice(
+    showsBotToolActivity(toolActivitySetting, localBots.data ?? []),
+    undefined,
+  );
   const activityPhase = snapshot.activity?.phase;
   const replyStreaming =
-    running && (snapshot.partial?.trim().length ?? 0) > 0 && (activityPhase === "writing" || activityPhase === "thinking");
-  const question = snapshot.question && snapshot.question !== settledQuestion ? snapshot.question : null;
+    running &&
+    (snapshot.partial?.trim().length ?? 0) > 0 &&
+    (activityPhase === "writing" || activityPhase === "thinking");
+  const question =
+    snapshot.question && snapshot.question !== settledQuestion ? snapshot.question : null;
   const approval = view.approval && view.approval !== settledApproval ? view.approval : null;
   const handoff = view.handoff && view.handoff !== settledHandoff ? view.handoff : null;
   // Revisions 55 and 56: only a host that granted `bot:access-requests` or `bot:plans` sends these.
-  const accessRequest = snapshot.accessRequest && snapshot.accessRequest !== settledAccess ? snapshot.accessRequest : null;
+  const accessRequest =
+    snapshot.accessRequest && snapshot.accessRequest !== settledAccess
+      ? snapshot.accessRequest
+      : null;
   const plan = snapshot.plan && snapshot.plan !== settledPlan ? snapshot.plan : null;
   const pendingPlan = plan?.status === "pending";
   // An echo leaves in the same frame its entry shows.
   const sendArrivals = matchBotPendingSends(pendingSends, snapshot);
   const shownSends = pendingSends.filter((send) => !sendArrivals.has(send.requestId));
   // A message just sent says "Getting ready" at once, before the host's state catches up.
-  const startingTurn = !running && !question && !handoff && !pendingPlan ? shownSends.find((send) => !send.queued) : undefined;
+  const startingTurn =
+    !running && !question && !handoff && !pendingPlan
+      ? shownSends.find((send) => !send.queued)
+      : undefined;
   const statusActivity =
     snapshot.activity && !replyStreaming
       ? snapshot.activity
@@ -468,10 +558,18 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   // A password-or-code card is answered on the card alone: whatever is typed here would reach the Bot.
   const noteRefused = handoff !== null && !botHandoffTakesNote(handoff);
 
-  const send = async (text: string, attachments: Attachment[], whenBusy?: "steer" | "followUp"): Promise<void> => {
-    const images = attachments.filter((attachment) => attachment.kind === "image" && attachment.data);
+  const send = async (
+    text: string,
+    attachments: Attachment[],
+    whenBusy?: "steer" | "followUp",
+  ): Promise<void> => {
+    const images = attachments.filter(
+      (attachment) => attachment.kind === "image" && attachment.data,
+    );
     // Throwing keeps the draft in the composer.
-    if (attachments.some((attachment) => attachment.kind !== "image" && attachment.kind !== "text")) {
+    if (
+      attachments.some((attachment) => attachment.kind !== "image" && attachment.kind !== "text")
+    ) {
       toast.error("Bots take photos and text files for now.");
       throw new Error("unsupported attachment");
     }
@@ -491,10 +589,14 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       accepted: false,
     };
     setPendingSends((current) => [...current, echo]);
-    const dropEcho = () => setPendingSends((current) => current.filter((send) => send.requestId !== echoId));
+    const dropEcho = () =>
+      setPendingSends((current) => current.filter((send) => send.requestId !== echoId));
     // The same draft sent again replays the unsettled request as it was, even
     // if the Bot has started running since and the composer now queues it.
-    const retry = unsettledSend.current && sameSend(unsettledSend.current, fullText, identity) ? unsettledSend.current : null;
+    const retry =
+      unsettledSend.current && sameSend(unsettledSend.current, fullText, identity)
+        ? unsettledSend.current
+        : null;
     unsettledSend.current = null;
     let key: string;
     let body: Record<string, unknown>;
@@ -521,14 +623,21 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       key = mintPeerIdempotencyKey();
       body = {
         text: fullText,
-        ...(whenBusy && steerAndQueue ? { whenBusy: whenBusy === "steer" ? "steer" : "queue" } : {}),
+        ...(whenBusy && steerAndQueue
+          ? { whenBusy: whenBusy === "steer" ? "steer" : "queue" }
+          : {}),
         ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
       };
     }
     try {
-      await call({ operation: "botSend", resourceId: botId, idempotencyKey: key, body }, `Aiden couldn’t send to ${name}.`);
+      await call(
+        { operation: "botSend", resourceId: botId, idempotencyKey: key, body },
+        `Aiden couldn’t send to ${name}.`,
+      );
       // The host has it: its entry replaces the echo, or the echo goes shortly if none shows.
-      setPendingSends((current) => current.map((send) => (send.requestId === echoId ? { ...send, accepted: true } : send)));
+      setPendingSends((current) =>
+        current.map((send) => (send.requestId === echoId ? { ...send, accepted: true } : send)),
+      );
       setTimeout(dropEcho, PENDING_SEND_SETTLE_MS);
       // While the stream reconnects, read the session so the sent message shows now, as Pause does.
       if (live.stream !== "streaming") live.reload();
@@ -542,9 +651,13 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   };
 
   const keyed = (operation: "botResume" | "botDismiss" | "botStop") =>
-    call({ operation, resourceId: botId, idempotencyKey: mintPeerIdempotencyKey(), body: {} }, `Aiden couldn’t reach ${name}.`);
+    call(
+      { operation, resourceId: botId, idempotencyKey: mintPeerIdempotencyKey(), body: {} },
+      `Aiden couldn’t reach ${name}.`,
+    );
 
-  const paused = (operation: "botResume" | "botDismiss") => run("paused", () => keyed(operation).catch(() => undefined));
+  const paused = (operation: "botResume" | "botDismiss") =>
+    run("paused", () => keyed(operation).catch(() => undefined));
 
   const stop = () => void keyed("botStop").catch(() => undefined);
 
@@ -583,7 +696,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     outcome: BotHandoffOutcome,
     note?: string,
   ): Promise<string | null> => {
-    if (answeringHandoff.current === pending.waitId) return "Your answer to this card is still on its way.";
+    if (answeringHandoff.current === pending.waitId)
+      return "Your answer to this card is still on its way.";
     const retry = unsettledHandoff.current;
     // The same answer after a lost acknowledgement goes again under its key, so the host records it once.
     const key =
@@ -632,7 +746,11 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
    * their words as the note. A throw keeps the draft in the composer, which
    * shows the error's message.
    */
-  const answerHandoffWithNote = async (pending: AidenRemoteBotHandoff, text: string, attachments: Attachment[]) => {
+  const answerHandoffWithNote = async (
+    pending: AidenRemoteBotHandoff,
+    text: string,
+    attachments: Attachment[],
+  ) => {
     if (!botHandoffTakesNote(pending)) throw new Error(handoffNoNoteComposerText(name));
     if (attachments.length > 0) {
       throw new Error(
@@ -643,7 +761,9 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     }
     const note = text.trim();
     if ([...note].length > BOT_HANDOFF_NOTE_MAX_CHARS) {
-      throw new Error(`Keep the note under ${BOT_HANDOFF_NOTE_MAX_CHARS.toLocaleString()} characters.`);
+      throw new Error(
+        `Keep the note under ${BOT_HANDOFF_NOTE_MAX_CHARS.toLocaleString()} characters.`,
+      );
     }
     const problem = await sendHandoffAnswer(pending, "done", note || undefined);
     if (problem) throw new Error(problem);
@@ -741,7 +861,13 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     decision: BotRoutineProposalDecision,
   ): Promise<BotRoutineProposalRespondResult | null> => {
     const outcome = await call(
-      { operation: "botRespondRoutineProposal", resourceId: botId, itemId: proposalId, idempotencyKey: mintPeerIdempotencyKey(), body: { decision } },
+      {
+        operation: "botRespondRoutineProposal",
+        resourceId: botId,
+        itemId: proposalId,
+        idempotencyKey: mintPeerIdempotencyKey(),
+        body: { decision },
+      },
       "Aiden couldn’t send that answer.",
     );
     const result = outcome.value as { status: "accepted" | "dismissed"; routineId?: string };
@@ -769,11 +895,18 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     await run("connect", async () => {
       try {
         const sent = await call(
-          { operation: "botConnectionRequest", resourceId: botId, idempotencyKey: mintPeerIdempotencyKey(), body: { pluginId } },
+          {
+            operation: "botConnectionRequest",
+            resourceId: botId,
+            idempotencyKey: mintPeerIdempotencyKey(),
+            body: { pluginId },
+          },
           "Aiden couldn’t ask for that connection.",
         );
         const label = (sent.value as { name?: unknown } | null)?.name;
-        toast.success(`Finish connecting ${typeof label === "string" ? label : "it"} on ${hostName}.`);
+        toast.success(
+          `Finish connecting ${typeof label === "string" ? label : "it"} on ${hostName}.`,
+        );
       } catch {
         // The toast said why.
       }
@@ -812,14 +945,25 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
         <BotApprovalCard
           key={approval.waitId}
           name={name}
-          prompt={{ botId, waitId: approval.waitId, toolCallId: approval.toolCallId, toolName: approval.toolName, summary: approval.summary }}
+          prompt={{
+            botId,
+            waitId: approval.waitId,
+            toolCallId: approval.toolCallId,
+            toolName: approval.toolName,
+            summary: approval.summary,
+          }}
           {...(approval.canAllow ? {} : { allowElsewhere: hostName })}
           keyboardShortcuts
           onAnswer={(decision) => {
             setSettledApproval(approval);
             approvalStatus.show({ decision });
             void call(
-              { operation: "respondApproval", resourceId: approval.waitId, idempotencyKey: mintPeerIdempotencyKey(), body: { decision } },
+              {
+                operation: "respondApproval",
+                resourceId: approval.waitId,
+                idempotencyKey: mintPeerIdempotencyKey(),
+                body: { decision },
+              },
               "Aiden couldn’t send that answer.",
             ).catch(() => {
               approvalStatus.clear();
@@ -850,7 +994,14 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     slotItems.push({
       key: `plan:${plan.planId}:${plan.revision}`,
       kind: "plan",
-      render: () => <PlanCard plan={plan} botName={name} avatar={avatar} onRespond={(decision) => respondPlan(plan, decision)} />,
+      render: () => (
+        <PlanCard
+          plan={plan}
+          botName={name}
+          avatar={avatar}
+          onRespond={(decision) => respondPlan(plan, decision)}
+        />
+      ),
     });
   }
   if (question) slotItems.push({ key: `question:${question.waitId}`, kind: "question" });
@@ -862,7 +1013,10 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     <NeedsYouFocusScope currentKey={slot.current?.key} className="flex flex-col">
       <NeedsYouAnnouncer slot={slot} />
       {slot.count > 0 || approvalStatus.status ? (
-        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2" data-needs-you-slot>
+        <div
+          className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2"
+          data-needs-you-slot
+        >
           <NeedsYouHeader slot={slot} />
           {slot.current?.render ? (
             <div key={slot.current.key} className="contents" data-needs-you-card>
@@ -893,33 +1047,46 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       ) : (
         <Composer
           key={`remote-bot:${hostId}:${botId}`}
-          ready={state?.kind !== "unavailable" && !isPaused && !signInElsewhere && !noteRefused && !questionElsewhere && !pendingPlan}
+          ready={
+            state?.kind !== "unavailable" &&
+            !isPaused &&
+            !signInElsewhere &&
+            !noteRefused &&
+            !questionElsewhere &&
+            !pendingPlan
+          }
           readinessMessage={
             pendingPlan
               ? slot.current?.kind === "plan"
                 ? "Answer the plan above, then send a message."
                 : "Answer the plan under Needs you, then send a message."
               : questionElsewhere
-              ? `Answer ${name}’s question first. It’s ${slot.count} of ${slot.count} above.`
-              : isPaused
-              ? botPausedText(name)
-              : signInElsewhere
-                ? `Finish signing in on ${hostName}, or skip it.`
-                : noteRefused
-                  ? handoffNoNoteComposerText(name)
-                  : state?.kind === "unavailable"
-                    ? unavailableText
-                    : undefined
+                ? `Answer ${name}’s question first. It’s ${slot.count} of ${slot.count} above.`
+                : isPaused
+                  ? botPausedText(name)
+                  : signInElsewhere
+                    ? `Finish signing in on ${hostName}, or skip it.`
+                    : noteRefused
+                      ? handoffNoNoteComposerText(name)
+                      : state?.kind === "unavailable"
+                        ? unavailableText
+                        : undefined
           }
           hasMessages={snapshot.entries.length > 0}
           historyEntries={composerHistory}
           chatId={`remote-bot:${hostId}:${botId}`}
-          placeholder={handoff && !noteRefused ? "Add a note and send to mark it done" : `Ask ${name}`}
-          onSend={(text, attachments) => (handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments))}
+          placeholder={
+            handoff && !noteRefused ? "Add a note and send to mark it done" : `Ask ${name}`
+          }
+          onSend={(text, attachments) =>
+            handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments)
+          }
           {...(steerAndQueue && !handoff
             ? {
-                onQueue: (text: string, attachments: Attachment[]) => send(text, attachments, "followUp"),
-                onSteer: (text: string, attachments: Attachment[]) => send(text, attachments, "steer"),
+                onQueue: (text: string, attachments: Attachment[]) =>
+                  send(text, attachments, "followUp"),
+                onSteer: (text: string, attachments: Attachment[]) =>
+                  send(text, attachments, "steer"),
               }
             : {})}
           onStop={stop}
@@ -944,7 +1111,10 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
 
   // A Bot's transcript is data, never instructions: Aiden Live sees only how many rows it has.
   return shell(
-    <div className="aiden-dock-inset chat-content-column flex flex-col gap-3 py-6" data-live-content="chat">
+    <div
+      className="aiden-dock-inset chat-content-column flex flex-col gap-3 py-6"
+      data-live-content="chat"
+    >
       {live.stream === "waiting" ? (
         <Text as="p" variant="small" color="tertiary" role="status" className="text-center">
           Reconnecting to {hostName}…
@@ -957,8 +1127,16 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           </Text>
         ) : (
           <div className="flex justify-center">
-            <Button variant="muted" size="small" disabled={loadingOlder} onClick={() => void loadOlder()} data-remote-load-older="true">
-              {loadingOlder ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : null}
+            <Button
+              variant="muted"
+              size="small"
+              disabled={loadingOlder}
+              onClick={() => void loadOlder()}
+              data-remote-load-older="true"
+            >
+              {loadingOlder ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              ) : null}
               Load older messages
             </Button>
           </div>
@@ -973,7 +1151,12 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           level={chatActivity.level}
           queued={snapshot.queued}
           removing={removing}
-          {...(steerAndQueue ? { onRemoveQueued: (id: string, button: HTMLButtonElement) => void removeQueued(id, button) } : {})}
+          {...(steerAndQueue
+            ? {
+                onRemoveQueued: (id: string, button: HTMLButtonElement) =>
+                  void removeQueued(id, button),
+              }
+            : {})}
           retrying={busy("retry")}
           onConnect={(pluginId) => void connect(pluginId)}
           connectLabel={`Finish on ${hostName}`}
@@ -987,17 +1170,33 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           onOpenMemory={() => toast.info(`Open ${name}’s memory on ${hostName}.`)}
         />
         {shownSends.map((send) => (
-          <BotPendingSendBubble key={send.requestId} send={send} onMorphEnd={() => undefined} onReply={reply} />
+          <BotPendingSendBubble
+            key={send.requestId}
+            send={send}
+            onMorphEnd={() => undefined}
+            onReply={reply}
+          />
         ))}
       </MessageAttachmentPreviewProvider>
       {statusActivity ? (
-        <BotStatusLine activity={statusActivity} wording={chatActivity.wording} onLayoutChange={setStatusLayout} />
+        <BotStatusLine
+          activity={statusActivity}
+          wording={chatActivity.wording}
+          onLayoutChange={setStatusLayout}
+        />
       ) : null}
       {/* A plan the person approved: its checklist, and Stop. */}
       {plan && !pendingPlan ? (
-        <PlanCard plan={plan} botName={name} avatar={avatar} onRespond={(decision) => respondPlan(plan, decision)} />
+        <PlanCard
+          plan={plan}
+          botName={name}
+          avatar={avatar}
+          onRespond={(decision) => respondPlan(plan, decision)}
+        />
       ) : null}
-      {isPaused ? <BotPausedNotice name={name} busy={busy("pause")} onResume={() => void setPaused(false)} /> : null}
+      {isPaused ? (
+        <BotPausedNotice name={name} busy={busy("pause")} onResume={() => void setPaused(false)} />
+      ) : null}
       {state?.kind === "interrupted" ? (
         <BotInterruptedCard
           name={name}
@@ -1031,7 +1230,13 @@ function RemoteBotMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button iconOnly variant="transparent" size="small" aria-label={`More for ${name}`} disabled={disabled}>
+        <Button
+          iconOnly
+          variant="transparent"
+          size="small"
+          aria-label={`More for ${name}`}
+          disabled={disabled}
+        >
           <Ellipsis />
         </Button>
       </DropdownMenuTrigger>

@@ -36,7 +36,7 @@ async function loadComposer() {
       export const Dialog=()=>null, AlertDialog=()=>null, DropdownMenu=()=>null, DropdownMenuContent=()=>null, DropdownMenuItem=()=>null, DropdownMenuTrigger=()=>null;
       export const toast=Object.fromEntries(['info','error','success'].map(level => [level, message => (globalThis.__composerToasts ??= []).push(message)]));`,
     "../lib/use-voice-recorder":
-      "export const useVoiceRecorder=()=>({liveTranscript:{committed:\"\",tentative:\"\"}});",
+      'export const useVoiceRecorder=()=>({liveTranscript:{committed:"",tentative:""}});',
     "../lib/queries":
       "export const useSettings=()=>({ data: globalThis.__composerSettings }); export const useProviders=()=>({ data: [] }); export const useDiscoveredSkills=(scope)=>{ (globalThis.__composerSkillScopes ??= []).push(scope ?? null); return {}; }; export const useWorkspaceFileIndex=()=>({});",
     "./workspace-settings-dialog": "export const openWorkspaceSettings=()=>{};",
@@ -128,8 +128,12 @@ function installDom() {
     document,
     localStorage: {
       getItem: (key: string) => stored.get(key) ?? null,
-      setItem: (key: string, value: string) => { stored.set(key, value); },
-      removeItem: (key: string) => { stored.delete(key); },
+      setItem: (key: string, value: string) => {
+        stored.set(key, value);
+      },
+      removeItem: (key: string) => {
+        stored.delete(key);
+      },
     },
     requestAnimationFrame: window.requestAnimationFrame,
     cancelAnimationFrame: window.cancelAnimationFrame,
@@ -394,7 +398,9 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
   const { createRoot } = await import("react-dom/client");
   const root = createRoot(mounted.container);
   const labels = () =>
-    Array.from(mounted.container.getElementsByTagName("button")).map((element) => element.getAttribute("aria-label"));
+    Array.from(mounted.container.getElementsByTagName("button")).map((element) =>
+      element.getAttribute("aria-label"),
+    );
   const render = (
     surfaces: React.ComponentProps<typeof Composer>["surfaces"],
     onSend: React.ComponentProps<typeof Composer>["onSend"],
@@ -419,9 +425,13 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
       ),
     );
   // A workspace with its own approval mode, so this Mac's composer shows the approvals chip.
-  const customized = { id: "ws", name: "Site", folderPath: "/tmp/site", permission: "ask", approvalMode: "ask" } as React.ComponentProps<
-    typeof Composer
-  >["workspace"];
+  const customized = {
+    id: "ws",
+    name: "Site",
+    folderPath: "/tmp/site",
+    permission: "ask",
+    approvalMode: "ask",
+  } as React.ComponentProps<typeof Composer>["workspace"];
   try {
     // This Mac's own chats keep the attachment button and the approvals chip.
     await render(LOCAL_COMPOSER_SURFACES, async () => {}, undefined, customized);
@@ -430,11 +440,19 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
 
     const sent: Array<{ text: string; attachments: number }> = [];
     const remoteCapabilities = new Set<HostChatCapability>(["send", "cancel", "respondApproval"]);
-    await render(composerSurfacesFor(remoteCapabilities), async (value, attachments) => {
-      sent.push({ text: value, attachments: attachments.length });
-    }, undefined, customized);
+    await render(
+      composerSurfacesFor(remoteCapabilities),
+      async (value, attachments) => {
+        sent.push({ text: value, attachments: attachments.length });
+      },
+      undefined,
+      customized,
+    );
     assert.equal(labels().includes("Attach files or images"), false);
-    assert.equal(labels().some((label) => label?.startsWith("Approvals:")), false);
+    assert.equal(
+      labels().some((label) => label?.startsWith("Approvals:")),
+      false,
+    );
     // A Finder drop is neither accepted nor read from this Mac.
     const dropZone = Array.from(mounted.container.getElementsByTagName("div")).find(
       (element) => handlers(element).onDrop,
@@ -461,7 +479,9 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
         },
         clipboardData: {
           getData: () => "",
-          items: [{ kind: "file", type: "image/png", getAsFile: () => ({ size: 1, type: "image/png" }) }],
+          items: [
+            { kind: "file", type: "image/png", getAsFile: () => ({ size: 1, type: "image/png" }) },
+          ],
         },
       });
     });
@@ -486,7 +506,10 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
       customized,
     );
     assert.ok(labels().includes("Attach files or images"));
-    assert.equal(labels().some((label) => label?.startsWith("Approvals:")), false);
+    assert.equal(
+      labels().some((label) => label?.startsWith("Approvals:")),
+      false,
+    );
     await React.act(async () => {
       await handlers(button(mounted.container, "Attach files or images")).onClick();
     });
@@ -507,14 +530,23 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
 
 test("mounted Composer reads this Mac's skills only for a local chat, and a remote chat's from its host", async () => {
   const mounted = installDom();
-  Object.assign(globalThis, { __composerAttachmentFixture: { api: {} }, __composerSkillScopes: [] });
-  const scopes = () => (globalThis as unknown as { __composerSkillScopes: Array<string | null> }).__composerSkillScopes;
+  Object.assign(globalThis, {
+    __composerAttachmentFixture: { api: {} },
+    __composerSkillScopes: [],
+  });
+  const scopes = () =>
+    (globalThis as unknown as { __composerSkillScopes: Array<string | null> })
+      .__composerSkillScopes;
   const loaded = await loadComposer();
   const { createRoot } = await import("react-dom/client");
   const root = createRoot(mounted.container);
-  const workspace = { id: "ws-local", name: "Local", permission: "ask", createdAt: 1, updatedAt: 1 } as React.ComponentProps<
-    typeof Composer
-  >["workspace"];
+  const workspace = {
+    id: "ws-local",
+    name: "Local",
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 1,
+  } as React.ComponentProps<typeof Composer>["workspace"];
   const render = (props: Partial<React.ComponentProps<typeof Composer>>, chatId: string) =>
     React.act(async () =>
       root.render(
@@ -534,12 +566,25 @@ test("mounted Composer reads this Mac's skills only for a local chat, and a remo
     );
   try {
     await render({ surfaces: LOCAL_COMPOSER_SURFACES }, "chat-local");
-    assert.ok(scopes().includes("ws-local"), "a local chat reads this Mac's catalog for its project");
+    assert.ok(
+      scopes().includes("ws-local"),
+      "a local chat reads this Mac's catalog for its project",
+    );
 
     scopes().length = 0;
-    const hostSkills = { scopeId: "host-b/ws-b", data: [], isError: false, isFetching: false, isLoading: false, refetch() {} };
+    const hostSkills = {
+      scopeId: "host-b/ws-b",
+      data: [],
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+      refetch() {},
+    };
     await render(
-      { surfaces: composerSurfacesFor(new Set<HostChatCapability>(["send", "skills"])), hostSkills },
+      {
+        surfaces: composerSurfacesFor(new Set<HostChatCapability>(["send", "skills"])),
+        hostSkills,
+      },
       "host-b/chat-1",
     );
     assert.ok(scopes().length > 0);
@@ -573,14 +618,28 @@ class AnsweringHost {
   send(_chatId: string, input: HostChatSendInput): Promise<HostChatTurnReceipt> {
     this.turns.push(input);
     // A same-key retry finds the turn the host already started.
-    if (this.turns.some((turn, index) => index < this.turns.length - 1 && turn.idempotencyKey === input.idempotencyKey)) {
+    if (
+      this.turns.some(
+        (turn, index) =>
+          index < this.turns.length - 1 && turn.idempotencyKey === input.idempotencyKey,
+      )
+    ) {
       return Promise.resolve({ turnId: "turn-1", streamId: "run-1" });
     }
     return new Promise((resolve, reject) => {
       this.answer = (outcome) => {
         if (outcome === "applied") resolve({ turnId: "turn-1", streamId: "run-1" });
-        else if (outcome === "lost") reject(new HostChatControlError({ code: "outcome_unknown", message: "The answer was lost." }));
-        else reject(new HostChatControlError({ code: "invalid_request", message: "That Mac refused the message." }));
+        else if (outcome === "lost")
+          reject(
+            new HostChatControlError({ code: "outcome_unknown", message: "The answer was lost." }),
+          );
+        else
+          reject(
+            new HostChatControlError({
+              code: "invalid_request",
+              message: "That Mac refused the message.",
+            }),
+          );
       };
     });
   }
@@ -636,11 +695,15 @@ test("a reopened remote chat's composer gets a message back only when the host r
       await mount(draftKey, earlier, "Tag the build");
       let pending: Promise<unknown> = Promise.resolve();
       await React.act(async () => {
-        pending = Promise.resolve(handlers(button(mounted.container, "Send message")).onClick()).catch(() => {});
+        pending = Promise.resolve(
+          handlers(button(mounted.container, "Send message")).onClick(),
+        ).catch(() => {});
       });
       if (outcome === "applied") {
         await React.act(async () => {
-          textarea().onChange({ target: { value: "Also bump the version", selectionStart: 21, selectionEnd: 21 } });
+          textarea().onChange({
+            target: { value: "Also bump the version", selectionStart: 21, selectionEnd: 21 },
+          });
         });
       }
 
@@ -659,7 +722,9 @@ test("a reopened remote chat's composer gets a message back only when the host r
         await pending;
       });
       await mount(draftKey, reopened);
-      const expected = { applied: "Also bump the version", lost: "", refused: "Tag the build" }[outcome];
+      const expected = { applied: "Also bump the version", lost: "", refused: "Tag the build" }[
+        outcome
+      ];
       assert.equal(textarea().value, expected, `${outcome}: the reopened draft`);
 
       if (outcome === "lost") {
@@ -698,7 +763,8 @@ test("a blocked Composer shows its readiness message exactly once", async () => 
   // Everything a reader or screen reader is offered: visible text plus the
   // textarea placeholder.
   const occurrences = (needle: string) => {
-    const placeholder = mounted.container.getElementsByTagName("textarea")[0]?.getAttribute("placeholder") ?? "";
+    const placeholder =
+      mounted.container.getElementsByTagName("textarea")[0]?.getAttribute("placeholder") ?? "";
     const surface = `${mounted.container.textContent ?? ""}\n${placeholder}`;
     return surface.split(needle).length - 1;
   };
@@ -721,7 +787,9 @@ test("a blocked Composer shows its readiness message exactly once", async () => 
       );
       assert.equal(occurrences(readinessMessage), 1, `${readinessMessage} should appear once`);
       const status = Array.from(mounted.container.getElementsByTagName("span")).find(
-        (element) => element.getAttribute("role") === "status" && element.textContent?.includes(readinessMessage),
+        (element) =>
+          element.getAttribute("role") === "status" &&
+          element.textContent?.includes(readinessMessage),
       );
       assert.ok(status, "the readiness message stays in the status region");
       assert.ok(mounted.container.getElementsByTagName("textarea")[0]?.getAttribute("placeholder"));
@@ -750,14 +818,21 @@ test("with Let Live use the open chat off, the composer and Send are the user's 
   const root = createRoot(mounted.container);
   // The guard main reads: the nearest data-live-guard on the element or an ancestor.
   const guardOf = (element: Element | undefined): string | null => {
-    for (let node: Element | null = element ?? null; node; node = node.parentNode as Element | null) {
+    for (
+      let node: Element | null = element ?? null;
+      node;
+      node = node.parentNode as Element | null
+    ) {
       const guard = node.getAttribute?.("data-live-guard");
       if (guard) return guard;
     }
     return null;
   };
   const composer = (chatAccess: boolean | undefined) => {
-    Object.assign(globalThis, { __composerSettings: chatAccess === undefined ? undefined : { aidenLiveChatAccess: chatAccess } });
+    Object.assign(globalThis, {
+      __composerSettings:
+        chatAccess === undefined ? undefined : { aidenLiveChatAccess: chatAccess },
+    });
     return (
       <loaded.Composer
         key={String(chatAccess)}
@@ -777,8 +852,16 @@ test("with Let Live use the open chat off, the composer and Send are the user's 
     assert.equal(guardOf(button(mounted.container, "Send message")), "you");
     for (const chatAccess of [true, undefined]) {
       await React.act(async () => root.render(composer(chatAccess)));
-      assert.equal(guardOf(mounted.container.getElementsByTagName("textarea")[0]), null, `chat access ${chatAccess}`);
-      assert.equal(guardOf(button(mounted.container, "Send message")), null, `chat access ${chatAccess}`);
+      assert.equal(
+        guardOf(mounted.container.getElementsByTagName("textarea")[0]),
+        null,
+        `chat access ${chatAccess}`,
+      );
+      assert.equal(
+        guardOf(button(mounted.container, "Send message")),
+        null,
+        `chat access ${chatAccess}`,
+      );
     }
   } finally {
     await React.act(async () => root.unmount());
@@ -838,9 +921,13 @@ test("mounted Composer fills in an argument command when picked and runs it from
           hasMessages
           freezeWhileSending={false}
           sessionChat={
-            { id: "slash-chat", title: "Chat", createdAt: 0, updatedAt: 0, messages: [] } as unknown as React.ComponentProps<
-              typeof Composer
-            >["sessionChat"]
+            {
+              id: "slash-chat",
+              title: "Chat",
+              createdAt: 0,
+              updatedAt: 0,
+              messages: [],
+            } as unknown as React.ComponentProps<typeof Composer>["sessionChat"]
           }
           inputRef={React.createRef<HTMLTextAreaElement>()}
           isGenerating={false}
@@ -933,7 +1020,8 @@ test("mounted Composer sets a /until goal only for a chat with folder access, an
   const root = createRoot(mounted.container);
   const sent: string[] = [];
   const toasts = () => ((globalThis as { __composerToasts?: string[] }).__composerToasts ??= []);
-  const calls = () => ((globalThis as { __composerFollowThrough?: unknown[][] }).__composerFollowThrough ??= []);
+  const calls = () =>
+    ((globalThis as { __composerFollowThrough?: unknown[][] }).__composerFollowThrough ??= []);
   const textarea = () => mounted.container.getElementsByTagName("textarea")[0];
   const draft = () => handlers(textarea()).value as unknown as string;
   const type = (value: string) =>
@@ -963,14 +1051,21 @@ test("mounted Composer sets a /until goal only for a chat with folder access, an
           hasMessages
           freezeWhileSending={false}
           sessionChat={
-            { id: "until-chat", title: "Chat", createdAt: 0, updatedAt: 0, messages: [] } as unknown as React.ComponentProps<
-              typeof Composer
-            >["sessionChat"]
+            {
+              id: "until-chat",
+              title: "Chat",
+              createdAt: 0,
+              updatedAt: 0,
+              messages: [],
+            } as unknown as React.ComponentProps<typeof Composer>["sessionChat"]
           }
           workspace={
-            { id: "workspace", name: "Workspace", folderPath: "/tmp/storefront", permission } as React.ComponentProps<
-              typeof Composer
-            >["workspace"]
+            {
+              id: "workspace",
+              name: "Workspace",
+              folderPath: "/tmp/storefront",
+              permission,
+            } as React.ComponentProps<typeof Composer>["workspace"]
           }
           inputRef={React.createRef<HTMLTextAreaElement>()}
           isGenerating={false}
@@ -987,7 +1082,10 @@ test("mounted Composer sets a /until goal only for a chat with folder access, an
     await pressEnter();
     assert.deepEqual(calls(), [], "no check is set without folder access");
     assert.deepEqual(sent, [], "and the command is not sent as chat text");
-    assert.ok(mounted.container.textContent?.includes("Turn on folder access for this chat first."), "the composer says why");
+    assert.ok(
+      mounted.container.textContent?.includes("Turn on folder access for this chat first."),
+      "the composer says why",
+    );
 
     await renderWith("full");
     await type("/until npm test");
@@ -1065,10 +1163,17 @@ test("queued design comments go with the next send as a text block and their pic
       });
     }
     assert.equal(sends.length, 2);
-    assert.equal(sends[0]!.text, "Please make the changes in my design comments.", "an empty message still sends the comments");
+    assert.equal(
+      sends[0]!.text,
+      "Please make the changes in my design comments.",
+      "an empty message still sends the comments",
+    );
     assert.deepEqual(
       sends[0]!.attachments.map((attachment) => [attachment.name, attachment.kind]),
-      [["Design comments.txt", "text"], ["Design comment 1.png", "image"]],
+      [
+        ["Design comments.txt", "text"],
+        ["Design comment 1.png", "image"],
+      ],
     );
     assert.equal(
       sends[0]!.attachments[0]!.text,
@@ -1080,7 +1185,11 @@ test("queued design comments go with the next send as a text block and their pic
       ["Design comments.txt"],
       "a model without images gets the words only",
     );
-    assert.equal(sends[1]!.attachments[0]!.text, tray.block({}), "and a block that names no picture");
+    assert.equal(
+      sends[1]!.attachments[0]!.text,
+      tray.block({}),
+      "and a block that names no picture",
+    );
     assert.deepEqual(
       events,
       ["marked c1,c2", "send", "done", "marked c1,c2", "send", "done"],
@@ -1144,7 +1253,11 @@ test("a failed send leaves design comments in the tray", async () => {
     await React.act(async () => {
       await handlers(button(mounted.container, "Send message")).onClick();
     });
-    assert.deepEqual(events, ["marked c1", "send", "undo"], "the comments marked sent go back to the tray");
+    assert.deepEqual(
+      events,
+      ["marked c1", "send", "undo"],
+      "the comments marked sent go back to the tray",
+    );
   } finally {
     await React.act(async () => root.unmount());
     await loaded.cleanup();
@@ -1204,9 +1317,16 @@ test("design comments that could not be saved hold the message back and keep the
     await React.act(async () => {
       await handlers(button(mounted.container, "Send message")).onClick();
     });
-    assert.deepEqual(events, ["marked c1"], "nothing is sent while Aiden would still read the comments as drafts");
+    assert.deepEqual(
+      events,
+      ["marked c1"],
+      "nothing is sent while Aiden would still read the comments as drafts",
+    );
     assert.equal(inputRef.current?.value, "Also tighten the spacing", "the typed message stays");
-    assert.match(mounted.container.textContent ?? "", /Couldn't save your design comments, so nothing was sent/);
+    assert.match(
+      mounted.container.textContent ?? "",
+      /Couldn't save your design comments, so nothing was sent/,
+    );
   } finally {
     await React.act(async () => root.unmount());
     await loaded.cleanup();

@@ -53,11 +53,18 @@ export function flattenIosAxTree(roots: readonly unknown[]): Omit<DeviceAxTree, 
   const screenHeight = Math.max(1, numberOr(rootFrame?.height, 1));
   const elements: DeviceAxElement[] = [];
   const visit = (node: unknown, path: string, depth: number) => {
-    if (elements.length >= DEVICE_AX_ELEMENT_LIMIT || depth > 64 || !isRecord(node) || !isRecord(node.frame)) return;
+    if (
+      elements.length >= DEVICE_AX_ELEMENT_LIMIT ||
+      depth > 64 ||
+      !isRecord(node) ||
+      !isRecord(node.frame)
+    )
+      return;
     const frame = node.frame;
     const width = numberOr(frame.width, 0);
     const height = numberOr(frame.height, 0);
-    const coversScreen = Math.abs(width - screenWidth) < 0.5 && Math.abs(height - screenHeight) < 0.5;
+    const coversScreen =
+      Math.abs(width - screenWidth) < 0.5 && Math.abs(height - screenHeight) < 0.5;
     if (!coversScreen && width > 0 && height > 0) {
       elements.push({
         id: typeof node.AXUniqueId === "string" && node.AXUniqueId ? node.AXUniqueId : path,
@@ -102,7 +109,8 @@ export function flattenAndroidAxSnapshot(snapshot: unknown): Omit<DeviceAxTree, 
     const top = numberOr(box.top, Number.NaN);
     const right = numberOr(box.right, Number.NaN);
     const bottom = numberOr(box.bottom, Number.NaN);
-    if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top) return null;
+    if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top)
+      return null;
     return { left, top, right, bottom };
   };
   const screenRecord = isRecord(snapshot) && isRecord(snapshot.screen) ? snapshot.screen : null;
@@ -122,9 +130,13 @@ export function flattenAndroidAxSnapshot(snapshot: unknown): Omit<DeviceAxTree, 
     if (elements.length >= DEVICE_AX_ELEMENT_LIMIT) break;
     const box = bounds(node);
     if (!box || !isRecord(node)) continue;
-    const coversScreen = box.left <= 0 && box.top <= 0 && box.right >= width && box.bottom >= height;
+    const coversScreen =
+      box.left <= 0 && box.top <= 0 && box.right >= width && box.bottom >= height;
     if (coversScreen) continue;
-    const resource = typeof node.resourceId === "string" ? node.resourceId.slice(node.resourceId.indexOf("/") + 1) : "";
+    const resource =
+      typeof node.resourceId === "string"
+        ? node.resourceId.slice(node.resourceId.indexOf("/") + 1)
+        : "";
     const label =
       (typeof node.text === "string" && node.text) ||
       (typeof node.contentDescription === "string" && node.contentDescription) ||
@@ -196,7 +208,10 @@ export function axRectToDisplay(
 }
 
 /** The smallest element under a displayed point, which is the one a tap there most likely hits. */
-export function hitTestAxElements<T extends DeviceAxRect>(elements: readonly T[], point: { x: number; y: number }): T | null {
+export function hitTestAxElements<T extends DeviceAxRect>(
+  elements: readonly T[],
+  point: { x: number; y: number },
+): T | null {
   let best: T | null = null;
   for (const element of elements) {
     const inside =
@@ -204,13 +219,17 @@ export function hitTestAxElements<T extends DeviceAxRect>(elements: readonly T[]
       point.x <= element.x + element.width &&
       point.y >= element.y &&
       point.y <= element.y + element.height;
-    if (inside && (!best || element.width * element.height < best.width * best.height)) best = element;
+    if (inside && (!best || element.width * element.height < best.width * best.height))
+      best = element;
   }
   return best;
 }
 
 export interface DeviceAxRuntime {
-  fetch(url: string, init: { signal: AbortSignal; credentials: "omit"; cache: "no-store" }): Promise<Response>;
+  fetch(
+    url: string,
+    init: { signal: AbortSignal; credentials: "omit"; cache: "no-store" },
+  ): Promise<Response>;
 }
 
 /** Reads the tree once through the token proxy. A helper error is reported, not thrown. */
@@ -223,7 +242,11 @@ export async function fetchDeviceAxTree(
   const path = android
     ? `/vendor/serve-emu/api/accessibility?${new URLSearchParams({ device: target.deviceId }).toString()}`
     : `/vendor/serve-sim/helper/${encodeURIComponent(target.deviceId)}/ax`;
-  const response = await runtime.fetch(deviceHubUrl(target, path, "http"), { signal, credentials: "omit", cache: "no-store" });
+  const response = await runtime.fetch(deviceHubUrl(target, path, "http"), {
+    signal,
+    credentials: "omit",
+    cache: "no-store",
+  });
   if (response.status === 401) throw new DeviceAxUnauthorizedError();
   let payload: unknown;
   try {
@@ -235,13 +258,21 @@ export async function fetchDeviceAxTree(
     // serve-emu answers `{ ok: false, error }` when `uiautomator dump` fails (an animation or a secure window).
     if (!isRecord(payload) || payload.ok !== true) {
       const error = isRecord(payload) && typeof payload.error === "string" ? payload.error : null;
-      return { elements: [], root: null, errors: [error ?? "The accessibility tree is unavailable."] };
+      return {
+        elements: [],
+        root: null,
+        errors: [error ?? "The accessibility tree is unavailable."],
+      };
     }
     return { ...flattenAndroidAxSnapshot(payload), errors: [] };
   }
   if (!Array.isArray(payload)) {
     const error = isRecord(payload) && typeof payload.message === "string" ? payload.message : null;
-    return { elements: [], root: null, errors: [error ?? "The accessibility tree is unavailable."] };
+    return {
+      elements: [],
+      root: null,
+      errors: [error ?? "The accessibility tree is unavailable."],
+    };
   }
   return { ...flattenIosAxTree(payload), errors: [] };
 }

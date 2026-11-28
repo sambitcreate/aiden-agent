@@ -28,7 +28,9 @@ export async function run(args: QuestionScenarioArgs, emit: Emit): Promise<void>
   });
   const deps = recordingDeps({ tools: questionEntries(questions, args.botId) });
   const { models } = createFauxModels([
-    fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], {
+      stopReason: "toolUse",
+    }),
   ]);
   const registries = new Map<string, ReturnType<typeof createBotRegistry>>();
   const host = await createBotHarnessHost({
@@ -44,6 +46,9 @@ export async function run(args: QuestionScenarioArgs, emit: Emit): Promise<void>
   const { conversation } = await host.open(args.botId);
   await registries.get(args.botId)!.refresh();
   await conversation.configure({ model: FAUX_MODEL_REF }, ctx);
-  const submission = await conversation.submit({ type: "input", content: "pick", requestId: "question" }, ctx);
+  const submission = await conversation.submit(
+    { type: "input", content: "pick", requestId: "question" },
+    ctx,
+  );
   emit("SUBMITTED", String(submission.id));
 }

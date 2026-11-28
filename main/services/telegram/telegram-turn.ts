@@ -61,10 +61,14 @@ export interface TelegramChatStore {
     botId?: string;
     providerId?: string;
     model?: string;
-  }): Promise<{ id: string; workspaceId?: string; botId?: string; title: string; updatedAt: number }>;
-  get(
-    id: string,
-  ): Promise<{
+  }): Promise<{
+    id: string;
+    workspaceId?: string;
+    botId?: string;
+    title: string;
+    updatedAt: number;
+  }>;
+  get(id: string): Promise<{
     id: string;
     workspaceId?: string;
     botId?: string;
@@ -77,13 +81,22 @@ export interface TelegramChatStore {
     id: string,
     message: { role: "user" | "assistant"; content: string; attachments?: Attachment[] },
     meta?: { providerId?: string; model?: string },
-  ): Promise<{ id: string; workspaceId?: string; botId?: string; title: string; updatedAt: number }>;
+  ): Promise<{
+    id: string;
+    workspaceId?: string;
+    botId?: string;
+    title: string;
+    updatedAt: number;
+  }>;
 }
 
 export interface TelegramTurnDeps {
   llmClient: TelegramLlmClient;
   chatStore: TelegramChatStore;
-  resolveProvider(providerId?: string, model?: string): Promise<{
+  resolveProvider(
+    providerId?: string,
+    model?: string,
+  ): Promise<{
     providerId: string;
     model: string;
     provider: Pick<
@@ -168,7 +181,11 @@ export function createTelegramBackgroundOwner(
 }
 
 /** Persistent chat id for a Telegram owner and optional project workspace. */
-export function telegramChatId(ownerUserId: number, workspaceId?: string, profile?: string): string {
+export function telegramChatId(
+  ownerUserId: number,
+  workspaceId?: string,
+  profile?: string,
+): string {
   // Keep the default profile's historical id so existing installations retain
   // their transcript. Named profiles get an explicit namespace, preventing
   // the same owner paired to two Telegram tokens from sharing Pi state.
@@ -195,11 +212,12 @@ export async function ensureTelegramChat(
   const chatId = binding?.backingChatId ?? telegramChatId(ownerUserId, workspaceId, profile);
   const existing = await deps.chatStore.get(chatId);
   if (existing) {
-    if (binding && (
-      existing.botId !== binding.botId ||
-      existing.workspaceId !== binding.backingWorkspaceId ||
-      workspaceId !== binding.backingWorkspaceId
-    )) {
+    if (
+      binding &&
+      (existing.botId !== binding.botId ||
+        existing.workspaceId !== binding.backingWorkspaceId ||
+        workspaceId !== binding.backingWorkspaceId)
+    ) {
       throw new Error("The Telegram backing chat belongs to a different bot or workspace binding.");
     }
     deps.broadcastMetadata(existing);
@@ -263,19 +281,20 @@ export async function sendTelegramTurn(
   }
   const workspaceId =
     resolvedWorkspace.kind === "project" ? resolvedWorkspace.workspaceId : undefined;
-  const authoritativeBotChat = options?.binding
-    ? await deps.chatStore.get(chatId)
-    : undefined;
-  if (options?.binding && (
-    !authoritativeBotChat ||
-    authoritativeBotChat.id !== options.binding.backingChatId ||
-    authoritativeBotChat.botId !== options.binding.botId ||
-    authoritativeBotChat.workspaceId !== options.binding.backingWorkspaceId ||
-    workspaceId !== options.binding.backingWorkspaceId ||
-    !authoritativeBotChat.providerId ||
-    !authoritativeBotChat.model
-  )) {
-    throw new Error("This Bot's Telegram conversation no longer has its exact saved AI connection.");
+  const authoritativeBotChat = options?.binding ? await deps.chatStore.get(chatId) : undefined;
+  if (
+    options?.binding &&
+    (!authoritativeBotChat ||
+      authoritativeBotChat.id !== options.binding.backingChatId ||
+      authoritativeBotChat.botId !== options.binding.botId ||
+      authoritativeBotChat.workspaceId !== options.binding.backingWorkspaceId ||
+      workspaceId !== options.binding.backingWorkspaceId ||
+      !authoritativeBotChat.providerId ||
+      !authoritativeBotChat.model)
+  ) {
+    throw new Error(
+      "This Bot's Telegram conversation no longer has its exact saved AI connection.",
+    );
   }
   // A bound Bot owns its provider/model selection. Telegram's profile-wide
   // choice is only an ordinary-chat default and must never rewrite a Bot chat.
@@ -286,24 +305,23 @@ export async function sendTelegramTurn(
   if (!provider) {
     return {
       content: "",
-      error: "No Telegram provider or model is available. Choose one in Aiden → Settings → Connections → Telegram.",
+      error:
+        "No Telegram provider or model is available. Choose one in Aiden → Settings → Connections → Telegram.",
       ok: false,
     };
   }
-  if (authoritativeBotChat && (
-    provider.providerId !== authoritativeBotChat.providerId ||
-    provider.model !== authoritativeBotChat.model
-  )) {
+  if (
+    authoritativeBotChat &&
+    (provider.providerId !== authoritativeBotChat.providerId ||
+      provider.model !== authoritativeBotChat.model)
+  ) {
     throw new Error("This Bot's saved AI connection no longer resolves exactly.");
   }
   if (options?.binding) {
     const preflight = deps.preflightBotTurnAuthority;
     if (!preflight) throw new Error("Bot turn authority is unavailable.");
     await preflight({
-      audienceId: telegramBotNoticeAudienceId(
-        options.binding.profile,
-        options.binding.ownerUserId,
-      ),
+      audienceId: telegramBotNoticeAudienceId(options.binding.profile, options.binding.ownerUserId),
       botId: options.binding.botId,
       chatId,
       providerId: provider.providerId,
@@ -313,7 +331,8 @@ export async function sendTelegramTurn(
 
   const streamId = telegramStreamId();
   const thinkingLevel = await deps.resolveThinkingLevel?.();
-  if (options?.signal?.aborted) return { content: "", error: "The Telegram turn was stopped before it started.", ok: false };
+  if (options?.signal?.aborted)
+    return { content: "", error: "The Telegram turn was stopped before it started.", ok: false };
   const background = createTelegramBackgroundOwner(streamId, observer);
   const turn = deps.llmClient.beginChatTurn(chatId, streamId, background.owner.documentId);
   if (!turn) {
@@ -336,7 +355,8 @@ export async function sendTelegramTurn(
       turn.settleAsyncWork();
     }
 
-    if (options?.signal?.aborted) return { content: "", error: "The Telegram turn was stopped before it started.", ok: false };
+    if (options?.signal?.aborted)
+      return { content: "", error: "The Telegram turn was stopped before it started.", ok: false };
     const started = await deps.llmClient.start(
       streamId,
       {
@@ -348,7 +368,11 @@ export async function sendTelegramTurn(
         // existing unattended/automation mode contract unchanged.
         ...(options?.binding
           ? {}
-          : { mode: workspaceId ? "assistant-automation" as const : "assistant-unattended" as const }),
+          : {
+              mode: workspaceId
+                ? ("assistant-automation" as const)
+                : ("assistant-unattended" as const),
+            }),
         thinkingLevel,
         messages: [
           {
@@ -398,4 +422,3 @@ export async function sendTelegramTurn(
     background.destroy();
   }
 }
-

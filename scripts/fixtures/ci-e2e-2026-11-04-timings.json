@@ -1,9 +1,6 @@
 {
   "source": "GitHub Actions serial file windows from first test in one file to first test in the next file, or the success summary; each complete window rounded up. Cancelled terminal windows are separate lower bounds, never complete timings.",
-  "trainingRuns": [
-    41784199399,
-    41789418295
-  ],
+  "trainingRuns": [41784199399, 41789418295],
   "validationRun": 41778188548,
   "budget": {
     "jobSeconds": 1200,

@@ -81,7 +81,11 @@ test("a working batch reads as kicked off and a settled one as ran, with the lon
   const { rerender } = render(
     <SubagentChips
       runs={[
-        run("a", "gen-header", { state: "running", finishedAt: undefined, startedAt: Date.now() - 125_000 }),
+        run("a", "gen-header", {
+          state: "running",
+          finishedAt: undefined,
+          startedAt: Date.now() - 125_000,
+        }),
         run("b", "gen-header", { startedAt: 1_000, finishedAt: 6_000 }),
       ]}
       onOpen={(runId) => opened.push(runId)}
@@ -117,7 +121,10 @@ test("a working batch reads as kicked off and a settled one as ran, with the lon
 test("collapsing hides the rows, and the choice survives the saved message replacing the live group", async () => {
   const live = (
     <SubagentChips
-      runs={[run("a", "gen-collapse", { state: "running", finishedAt: undefined }), run("b", "gen-collapse")]}
+      runs={[
+        run("a", "gen-collapse", { state: "running", finishedAt: undefined }),
+        run("b", "gen-collapse"),
+      ]}
       onOpen={() => undefined}
     />
   );
@@ -155,18 +162,25 @@ test("collapsing hides the rows, and the choice survives the saved message repla
 test("the header names a role every run shares once; mixed roles keep a tag on each row", () => {
   const { rerender } = render(
     <SubagentChips
-      runs={[run("a", "gen-roles", { role: "implementer" }), run("b", "gen-roles", { role: "implementer" })]}
+      runs={[
+        run("a", "gen-roles", { role: "implementer" }),
+        run("b", "gen-roles", { role: "implementer" }),
+      ]}
       onOpen={() => undefined}
     />,
   );
   assert.match(header().textContent ?? "", /Ran 2 implementers/u);
   const rows = screen.getAllByRole("button", { name: /^Open Run/u });
   assert.equal(rows.length, 2);
-  for (const row of rows) assert.doesNotMatch(row.textContent ?? "", /Implementer/u, "the header already says it");
+  for (const row of rows)
+    assert.doesNotMatch(row.textContent ?? "", /Implementer/u, "the header already says it");
 
   rerender(
     <SubagentChips
-      runs={[run("a", "gen-roles", { role: "implementer" }), run("b", "gen-roles", { role: "reviewer" })]}
+      runs={[
+        run("a", "gen-roles", { role: "implementer" }),
+        run("b", "gen-roles", { role: "reviewer" }),
+      ]}
       onOpen={() => undefined}
     />,
   );
@@ -177,7 +191,9 @@ test("the header names a role every run shares once; mixed roles keep a tag on e
 });
 
 test("a single run is named in the singular", () => {
-  render(<SubagentChips runs={[run("a", "gen-one", { role: "planner" })]} onOpen={() => undefined} />);
+  render(
+    <SubagentChips runs={[run("a", "gen-one", { role: "planner" })]} onOpen={() => undefined} />,
+  );
   assert.ok(screen.getByRole("group", { name: "1 planner" }));
   assert.match(header().textContent ?? "", /Ran 1 planner/u);
 });

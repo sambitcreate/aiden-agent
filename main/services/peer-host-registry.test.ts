@@ -1,14 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  PeerHostRegistry,
-  type StoredPeerHost,
-  type PeerClient,
-} from "./peer-host-registry.js";
-import {
-  EncryptedPeerHostStorage,
-  type PeerEncryptedDocument,
-} from "./peer-host-storage.js";
+import { PeerHostRegistry, type StoredPeerHost, type PeerClient } from "./peer-host-registry.js";
+import { EncryptedPeerHostStorage, type PeerEncryptedDocument } from "./peer-host-storage.js";
 import { PeerTransportError, peerRequestUrl } from "./peer-transport.js";
 import { hostResourceKey } from "../../renderer/shared/peer-host.js";
 
@@ -87,7 +80,16 @@ test("disabled peers make no requests; views contain no trust or credential data
   const [view] = await store.list();
   assert.deepEqual(
     Object.keys(view!).sort(),
-    ["id", "name", "enabled", "state", "features", "capabilities", "routes", "hasSuppressedRoutes"].sort(),
+    [
+      "id",
+      "name",
+      "enabled",
+      "state",
+      "features",
+      "capabilities",
+      "routes",
+      "hasSuppressedRoutes",
+    ].sort(),
   );
 });
 
@@ -179,11 +181,9 @@ test("concurrent identity checks retain independent cancellation", async () => {
       json: (input) =>
         input.path === "/server"
           ? new Promise((resolve, reject) => {
-              input.signal?.addEventListener(
-                "abort",
-                () => reject(new Error("aborted")),
-                { once: true },
-              );
+              input.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+                once: true,
+              });
               checks.push(() =>
                 resolve({
                   protocolVersion: 1,
@@ -257,8 +257,7 @@ test("paired-host encrypted store rejects unavailable encryption and corrupt dat
     },
     {
       isEncryptionAvailable: () => available,
-      encryptString: (text) =>
-        Buffer.from(Buffer.from(text).map((byte) => byte ^ 0x55)),
+      encryptString: (text) => Buffer.from(Buffer.from(text).map((byte) => byte ^ 0x55)),
       decryptString: (bytes) =>
         Buffer.from(Buffer.from(bytes).map((byte) => byte ^ 0x55)).toString(),
     },
@@ -443,13 +442,22 @@ test("an answered client error keeps the peer connected; auth and transport fail
       throw new Error("Unexpected event request");
     },
   });
-  await assert.rejects(store.request("host_a", { method: "GET", path: "/simulators" }), PeerTransportError);
+  await assert.rejects(
+    store.request("host_a", { method: "GET", path: "/simulators" }),
+    PeerTransportError,
+  );
   assert.equal((await store.list())[0]?.state, "connected");
   failure = new PeerTransportError("authentication_required", 403);
-  await assert.rejects(store.request("host_a", { method: "GET", path: "/simulators" }), PeerTransportError);
+  await assert.rejects(
+    store.request("host_a", { method: "GET", path: "/simulators" }),
+    PeerTransportError,
+  );
   assert.equal((await store.list())[0]?.state, "unavailable");
   failure = new PeerTransportError("unavailable");
-  await assert.rejects(store.request("host_a", { method: "GET", path: "/simulators" }), PeerTransportError);
+  await assert.rejects(
+    store.request("host_a", { method: "GET", path: "/simulators" }),
+    PeerTransportError,
+  );
   assert.equal((await store.list())[0]?.state, "unavailable");
 });
 
@@ -537,10 +545,7 @@ test("verification persists refreshed grants and negotiates advertised host gran
   assert.ok((await store.list())[0]!.capabilities.includes("runs:observe"));
   // A reconnect in the same session re-verifies but never re-negotiates.
   await store.connect("host_a");
-  assert.equal(
-    requests.filter((request) => request.path === "/device/capabilities").length,
-    1,
-  );
+  assert.equal(requests.filter((request) => request.path === "/device/capabilities").length, 1);
   assert.equal(requests.filter((request) => request.path === "/server").length, 2);
 });
 
@@ -552,17 +557,27 @@ test("a Mac opts into a host's Bot activity frames only when the host serves the
         features,
         serverCapabilities: ["chat:read", "bot:read", "bot:write", "bot:activity"],
       },
-      (input) => (input.path === "/device/capabilities" ? { capabilities: ["chat:read", "bot:read", "bot:write", "bot:activity"] } : { ok: true }),
+      (input) =>
+        input.path === "/device/capabilities"
+          ? { capabilities: ["chat:read", "bot:read", "bot:write", "bot:activity"] }
+          : { ok: true },
     );
     await store.request("host_a", { path: "/bots" });
-    return requests.filter((request) => request.path === "/device/capabilities").map((request) => request.body);
+    return requests
+      .filter((request) => request.path === "/device/capabilities")
+      .map((request) => request.body);
   };
-  assert.deepEqual(await negotiated(["bot-durable-session-v1", "bot-activity-v1"]), [{ accepts: ["bot:activity"] }]);
+  assert.deepEqual(await negotiated(["bot-durable-session-v1", "bot-activity-v1"]), [
+    { accepts: ["bot:activity"] },
+  ]);
   assert.deepEqual(await negotiated(["bot-durable-session-v1"]), []);
 });
 
 test("a Mac asks for a host's Bot hand-offs in a call of its own, after the rest, only when the host lists them", async () => {
-  const negotiate = async (serverCapabilities: string[] | undefined, refuse: (accepts: string[]) => boolean = () => false) => {
+  const negotiate = async (
+    serverCapabilities: string[] | undefined,
+    refuse: (accepts: string[]) => boolean = () => false,
+  ) => {
     const held = new Set(["chat:read", "bot:read", "bot:write"]);
     const { store, requests, stored } = scripted(
       {
@@ -581,7 +596,9 @@ test("a Mac asks for a host's Bot hand-offs in a call of its own, after the rest
     );
     await store.request("host_a", { path: "/bots" });
     return {
-      bodies: requests.filter((request) => request.path === "/device/capabilities").map((request) => request.body),
+      bodies: requests
+        .filter((request) => request.path === "/device/capabilities")
+        .map((request) => request.body),
       grants: stored()[0]!.capabilities,
     };
   };
@@ -597,23 +614,40 @@ test("a Mac asks for a host's Bot hand-offs in a call of its own, after the rest
   assert.equal(refused.grants.includes("bot:handoffs"), false);
 
   // Hand-offs have no feature token: a host that does not list them, or lists nothing, is never asked.
-  assert.deepEqual((await negotiate(["chat:read", "bot:read", "bot:write", "bot:activity"])).bodies, [{ accepts: ["bot:activity"] }]);
+  assert.deepEqual(
+    (await negotiate(["chat:read", "bot:read", "bot:write", "bot:activity"])).bodies,
+    [{ accepts: ["bot:activity"] }],
+  );
   assert.deepEqual((await negotiate(undefined)).bodies, [{ accepts: ["bot:activity"] }]);
   // With nothing else to ask for, the hand-off call still goes alone.
-  assert.deepEqual((await negotiate(["chat:read", "bot:read", "bot:write", "bot:handoffs"])).bodies, [{ accepts: ["bot:handoffs"] }]);
+  assert.deepEqual(
+    (await negotiate(["chat:read", "bot:read", "bot:write", "bot:handoffs"])).bodies,
+    [{ accepts: ["bot:handoffs"] }],
+  );
 
   // Revision 40: a host that also lists bot:handoff-notes is asked for it the same way; a v0.61.0 host above never was.
   const notes = await negotiate([...lists, "bot:handoff-notes"]);
-  assert.deepEqual(notes.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }, { accepts: ["bot:handoff-notes"] }]);
+  assert.deepEqual(notes.bodies, [
+    { accepts: ["bot:activity"] },
+    { accepts: ["bot:handoffs"] },
+    { accepts: ["bot:handoff-notes"] },
+  ]);
   assert.ok(notes.grants.includes("bot:handoff-notes"));
 
   // Revision 45: a host that lists bot:images is asked for it alone too, so this Mac draws Bots' shared images.
   const images = await negotiate([...lists, "bot:images"]);
-  assert.deepEqual(images.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }, { accepts: ["bot:images"] }]);
+  assert.deepEqual(images.bodies, [
+    { accepts: ["bot:activity"] },
+    { accepts: ["bot:handoffs"] },
+    { accepts: ["bot:images"] },
+  ]);
   assert.ok(images.grants.includes("bot:images"));
 
   // The cards a Bot waits on or offers: each asked for alone, so a host that refuses one still grants the others.
-  const cards = await negotiate([...lists, "bot:cards", "bot:access-requests", "bot:plans"], (accepts) => accepts.includes("bot:access-requests"));
+  const cards = await negotiate(
+    [...lists, "bot:cards", "bot:access-requests", "bot:plans"],
+    (accepts) => accepts.includes("bot:access-requests"),
+  );
   assert.deepEqual(cards.bodies, [
     { accepts: ["bot:activity"] },
     { accepts: ["bot:handoffs"] },
@@ -626,9 +660,18 @@ test("a Mac asks for a host's Bot hand-offs in a call of its own, after the rest
 
   // Revision 50: attachments:raw has no feature token at all; a host that lists it is asked alone, last.
   const raw = await negotiate([...lists, "attachments:raw"]);
-  assert.deepEqual(raw.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }, { accepts: ["attachments:raw"] }]);
+  assert.deepEqual(raw.bodies, [
+    { accepts: ["bot:activity"] },
+    { accepts: ["bot:handoffs"] },
+    { accepts: ["attachments:raw"] },
+  ]);
   assert.ok(raw.grants.includes("attachments:raw"));
-  assert.deepEqual((await negotiate(undefined)).bodies.some((body) => JSON.stringify(body).includes("attachments:raw")), false);
+  assert.deepEqual(
+    (await negotiate(undefined)).bodies.some((body) =>
+      JSON.stringify(body).includes("attachments:raw"),
+    ),
+    false,
+  );
 });
 
 test("a lost opt-in answer is asked again on the next reconnect; a refusal is not", async () => {
@@ -654,8 +697,14 @@ test("a lost opt-in answer is asked again on the next reconnect; a refusal is no
       granted: (await store.list())[0]!.capabilities.includes("bot:activity"),
     };
   };
-  assert.deepEqual(await attempts(new PeerTransportError("unavailable")), { asked: 2, granted: true });
-  assert.deepEqual(await attempts(new PeerTransportError("request_failed", 403)), { asked: 1, granted: false });
+  assert.deepEqual(await attempts(new PeerTransportError("unavailable")), {
+    asked: 2,
+    granted: true,
+  });
+  assert.deepEqual(await attempts(new PeerTransportError("request_failed", 403)), {
+    asked: 1,
+    granted: false,
+  });
 
   // A credential the host no longer takes is neither: the call fails the way any other call would.
   let calls = 0;
@@ -674,17 +723,30 @@ test("a lost opt-in answer is asked again on the next reconnect; a refusal is no
   );
   await assert.rejects(
     store.request("host_a", { path: "/bots" }),
-    (error: unknown) => error instanceof PeerTransportError && error.code === "authentication_required",
+    (error: unknown) =>
+      error instanceof PeerTransportError && error.code === "authentication_required",
   );
-  assert.equal(requests.some((request) => request.path === "/bots"), false, "nothing is sent on a refused credential");
+  assert.equal(
+    requests.some((request) => request.path === "/bots"),
+    false,
+    "nothing is sent on a refused credential",
+  );
   await store.connect("host_a");
-  assert.equal(requests.filter((request) => request.path === "/device/capabilities").length, 2, "the next connection asks again");
+  assert.equal(
+    requests.filter((request) => request.path === "/device/capabilities").length,
+    2,
+    "the next connection asks again",
+  );
   assert.ok((await store.list())[0]!.capabilities.includes("bot:activity"));
 });
 
 test("a malformed route hint is ignored instead of failing the connection", async () => {
   const { store } = scripted(
-    { capabilities: ["chat:read"], features: ["peer-routes-v1"], peerRoutes: [{ endpoint: "not a url" }] },
+    {
+      capabilities: ["chat:read"],
+      features: ["peer-routes-v1"],
+      peerRoutes: [{ endpoint: "not a url" }],
+    },
     () => ({ ok: true }),
   );
   assert.deepEqual(await store.request("host_a", { path: "/chats" }), { ok: true });
@@ -744,8 +806,7 @@ test("streams have their own budget so live runs cannot starve unary operations"
         input.path === "/server"
           ? { protocolVersion: 1, instanceId: "host_a", capabilities: ["chat:read"] }
           : new Promise((resolve) => held.push(() => resolve({ ok: true }))),
-      events: () =>
-        new Promise((resolve) => held.push(() => resolve({ reason: "eof" }))),
+      events: () => new Promise((resolve) => held.push(() => resolve({ reason: "eof" }))),
     }),
   });
   const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
@@ -766,66 +827,146 @@ test("authenticated routes bootstrap LAN trust, fail over, suppress removal and 
   const { startPeerTestHost } = await import("./peer-pairing-test-host.js");
   const { peerRoute } = await import("./peer-routes.js");
   const fixture = await startPeerTestHost({ lanHostname: "route-fixture.local" });
-  const lan = { endpoint: fixture.lanEndpoint, serverSpkiSha256: fixture.serverSpkiSha256(), caCertificateDerBase64: fixture.caDerBase64, addresses: ["192.168.1.50"] };
-  const tailnet = { endpoint: "https://route-fixture.example.ts.net/api/aiden/v1", serverSpkiSha256: trust.serverSpkiSha256 };
+  const lan = {
+    endpoint: fixture.lanEndpoint,
+    serverSpkiSha256: fixture.serverSpkiSha256(),
+    caCertificateDerBase64: fixture.caDerBase64,
+    addresses: ["192.168.1.50"],
+  };
+  const tailnet = {
+    endpoint: "https://route-fixture.example.ts.net/api/aiden/v1",
+    serverSpkiSha256: trust.serverSpkiSha256,
+  };
   let now = 100_000;
   let stored: StoredPeerHost[] = [{ ...saved(), ...tailnet }];
   let failedLan: "unavailable" | "identity_changed" | "authentication_required" | undefined;
   let advertised = [lan, tailnet];
   const traffic: { endpoint: string; path: string; credential?: string }[] = [];
   const store = new PeerHostRegistry({
-    storage: { load: async () => structuredClone(stored), save: async (next) => { stored = structuredClone(next); } },
-    localInstanceId: async () => "self", deviceName: "Desktop", clientVersion: "1", platform: "mac", now: () => now,
+    storage: {
+      load: async () => structuredClone(stored),
+      save: async (next) => {
+        stored = structuredClone(next);
+      },
+    },
+    localInstanceId: async () => "self",
+    deviceName: "Desktop",
+    clientVersion: "1",
+    platform: "mac",
+    now: () => now,
     client: (routeTrust) => ({
       json: async (request) => {
-        traffic.push({ endpoint: routeTrust.endpoint, path: request.path, credential: request.credential });
+        traffic.push({
+          endpoint: routeTrust.endpoint,
+          path: request.path,
+          credential: request.credential,
+        });
         if (routeTrust.endpoint === lan.endpoint) {
-          assert.equal(routeTrust.caCertificateDerBase64, fixture.caDerBase64, "LAN must carry the CA delivered by the authenticated host");
+          assert.equal(
+            routeTrust.caCertificateDerBase64,
+            fixture.caDerBase64,
+            "LAN must carry the CA delivered by the authenticated host",
+          );
           if (failedLan) throw new PeerTransportError(failedLan);
         }
-        if (request.path === "/server") return { protocolVersion: 1, instanceId: "host_a", capabilities: ["chat:read"], features: ["peer-routes-v1"], peerRoutes: advertised };
+        if (request.path === "/server")
+          return {
+            protocolVersion: 1,
+            instanceId: "host_a",
+            capabilities: ["chat:read"],
+            features: ["peer-routes-v1"],
+            peerRoutes: advertised,
+          };
         return { reached: routeTrust.endpoint };
-      }, events: async () => {},
+      },
+      events: async () => {},
     }),
   });
   try {
     assert.equal((await store.connect("host_a")).activeRouteKind, "tailscale");
-    assert.equal(stored[0]!.routes?.find((route) => route.kind === "lan")?.caCertificateDerBase64, fixture.caDerBase64);
-    assert.equal(await store.preferReachableRoute("host_a"), false, "preference cooldown prevents flapping");
+    assert.equal(
+      stored[0]!.routes?.find((route) => route.kind === "lan")?.caCertificateDerBase64,
+      fixture.caDerBase64,
+    );
+    assert.equal(
+      await store.preferReachableRoute("host_a"),
+      false,
+      "preference cooldown prevents flapping",
+    );
     now += 30_000;
     assert.equal(await store.preferReachableRoute("host_a"), true);
     assert.equal((await store.connect("host_a")).activeRouteKind, "lan");
     assert.deepEqual(await store.request("host_a", { path: "/chats" }), { reached: lan.endpoint });
     failedLan = "unavailable";
-    assert.equal((await store.connect("host_a")).activeRouteKind, "tailscale", "dead active route bypasses preference cooldown");
+    assert.equal(
+      (await store.connect("host_a")).activeRouteKind,
+      "tailscale",
+      "dead active route bypasses preference cooldown",
+    );
     failedLan = "identity_changed";
-    assert.equal((await store.connect("host_a")).activeRouteKind, "tailscale", "a bad learned route cannot block a trusted fallback");
+    assert.equal(
+      (await store.connect("host_a")).activeRouteKind,
+      "tailscale",
+      "a bad learned route cannot block a trusted fallback",
+    );
     failedLan = "authentication_required";
     const before = traffic.length;
-    await assert.rejects(store.connect("host_a"), (error: unknown) => error instanceof PeerTransportError && error.code === "authentication_required");
-    assert.equal(traffic.slice(before).some((request) => request.endpoint === tailnet.endpoint), false, "revocation must stop all route attempts");
+    await assert.rejects(
+      store.connect("host_a"),
+      (error: unknown) =>
+        error instanceof PeerTransportError && error.code === "authentication_required",
+    );
+    assert.equal(
+      traffic.slice(before).some((request) => request.endpoint === tailnet.endpoint),
+      false,
+      "revocation must stop all route attempts",
+    );
     failedLan = undefined;
     const routeId = peerRoute(lan, "learned").id;
     await store.removeRoute("host_a", routeId);
     assert.equal((await store.connect("host_a")).activeRouteKind, "tailscale");
-    assert.ok(stored[0]!.suppressedRoutes?.includes(routeId), "refresh cannot re-add a removed learned route");
-    assert.equal((await store.list())[0]!.routes?.some((route) => route.id === routeId), false);
+    assert.ok(
+      stored[0]!.suppressedRoutes?.includes(routeId),
+      "refresh cannot re-add a removed learned route",
+    );
+    assert.equal(
+      (await store.list())[0]!.routes?.some((route) => route.id === routeId),
+      false,
+    );
     await store.restoreRoutes("host_a");
     assert.equal((await store.connect("host_a")).activeRouteKind, "lan");
     advertised = [tailnet];
     await store.connect("host_a");
-    assert.equal((await store.list())[0]!.routes?.length, 2, "an omitted optional observation cannot erase validated route trust");
-    assert.equal((await store.connect("host_a")).activeRouteKind, "lan", "the previously learned route remains usable after an incomplete advertisement");
+    assert.equal(
+      (await store.list())[0]!.routes?.length,
+      2,
+      "an omitted optional observation cannot erase validated route trust",
+    );
+    assert.equal(
+      (await store.connect("host_a")).activeRouteKind,
+      "lan",
+      "the previously learned route remains usable after an incomplete advertisement",
+    );
     await store.removeRoute("host_a", routeId);
-    assert.equal((await store.connect("host_a")).activeRouteKind, "tailscale", "explicit removal still suppresses the retained route");
+    assert.equal(
+      (await store.connect("host_a")).activeRouteKind,
+      "tailscale",
+      "explicit removal still suppresses the retained route",
+    );
     assert.equal(JSON.stringify(await store.list()).includes("192.168.1.50"), false);
     assert.equal(JSON.stringify(await store.list()).includes(fixture.caDerBase64), false);
-  } finally { store.close(); await fixture.close(); }
+  } finally {
+    store.close();
+    await fixture.close();
+  }
 });
 
 test("route parsing rejects public hints and enforces route-specific trust", async () => {
   const { parsePeerRoutes } = await import("./peer-routes.js");
-  const route = { endpoint: "https://route.example.ts.net/api/aiden/v1", serverSpkiSha256: trust.serverSpkiSha256 };
+  const route = {
+    endpoint: "https://route.example.ts.net/api/aiden/v1",
+    serverSpkiSha256: trust.serverSpkiSha256,
+  };
   assert.deepEqual(parsePeerRoutes([route])[0]?.kind, "tailscale");
   for (const candidate of [
     { ...route, endpoint: "http://route.example.ts.net/api/aiden/v1" },
@@ -833,8 +974,11 @@ test("route parsing rejects public hints and enforces route-specific trust", asy
     { ...route, endpoint: "https://route.local/api/aiden/v1" },
     { ...route, addresses: ["8.8.8.8"] },
     { ...route, endpoint: "https://attacker.example/api/aiden/v1" },
-  ]) assert.throws(() => parsePeerRoutes([candidate]));
-  const injected = parsePeerRoutes([{ ...route, credential: "not-a-route-field", enabled: false }])[0]!;
+  ])
+    assert.throws(() => parsePeerRoutes([candidate]));
+  const injected = parsePeerRoutes([
+    { ...route, credential: "not-a-route-field", enabled: false },
+  ])[0]!;
   assert.equal("credential" in injected, false);
   assert.equal("enabled" in injected, false);
   assert.throws(() => parsePeerRoutes([route, route]));
@@ -842,43 +986,100 @@ test("route parsing rejects public hints and enforces route-specific trust", asy
 
 test("saved retry admission rejects an earlier pairing before sending credentials", async () => {
   let calls = 0;
-  const store = registry([saved()], { json: async () => { calls++; return {}; }, events: async () => {} });
+  const store = registry([saved()], {
+    json: async () => {
+      calls++;
+      return {};
+    },
+    events: async () => {},
+  });
   try {
-    await assert.rejects(store.request("host_a", { method: "POST", path: "/chats/chat-1/turns", idempotencyKey: "saved-key-12345678", body: { message: "Once" } }, undefined, { credentialIdentity: "old-device" }), /earlier pairing/u);
+    await assert.rejects(
+      store.request(
+        "host_a",
+        {
+          method: "POST",
+          path: "/chats/chat-1/turns",
+          idempotencyKey: "saved-key-12345678",
+          body: { message: "Once" },
+        },
+        undefined,
+        { credentialIdentity: "old-device" },
+      ),
+      /earlier pairing/u,
+    );
     assert.equal(calls, 0);
-    await store.request("host_a", { path: "/chats" }, undefined, { credentialIdentity: "device_a" });
+    await store.request("host_a", { path: "/chats" }, undefined, {
+      credentialIdentity: "device_a",
+    });
     assert.equal(calls, 1);
-  } finally { store.close(); }
+  } finally {
+    store.close();
+  }
 });
 
 test("LAN-paired peers learn system-trusted Tailscale and safely renew only that route's pin", async () => {
   const { startPeerTestHost } = await import("./peer-pairing-test-host.js");
   const fixture = await startPeerTestHost({ lanHostname: "lan-first.local" });
-  const lan = { endpoint: fixture.lanEndpoint, serverSpkiSha256: fixture.serverSpkiSha256(), caCertificateDerBase64: fixture.caDerBase64 };
-  const tailnet = { endpoint: "https://lan-first.example.ts.net/api/aiden/v1", serverSpkiSha256: trust.serverSpkiSha256 };
+  const lan = {
+    endpoint: fixture.lanEndpoint,
+    serverSpkiSha256: fixture.serverSpkiSha256(),
+    caCertificateDerBase64: fixture.caDerBase64,
+  };
+  const tailnet = {
+    endpoint: "https://lan-first.example.ts.net/api/aiden/v1",
+    serverSpkiSha256: trust.serverSpkiSha256,
+  };
   const renewedPin = `sha256/${Buffer.alloc(32, 9).toString("base64")}`;
   let stored = [{ ...saved(), ...lan }];
   let lanOffline = false;
   let renew = false;
   const store = new PeerHostRegistry({
-    storage: { load: async () => structuredClone(stored), save: async (next) => { stored = structuredClone(next) as typeof stored; } },
-    localInstanceId: async () => "self", deviceName: "Desktop", clientVersion: "1", platform: "mac",
+    storage: {
+      load: async () => structuredClone(stored),
+      save: async (next) => {
+        stored = structuredClone(next) as typeof stored;
+      },
+    },
+    localInstanceId: async () => "self",
+    deviceName: "Desktop",
+    clientVersion: "1",
+    platform: "mac",
     bootstrap: ({ endpoint, mode }) => {
       assert.equal(endpoint, tailnet.endpoint);
       assert.equal(mode, "webpki");
-      return { observedSpki: renewedPin, json: async () => ({ protocolVersion: 1, instanceId: "host_a" }) };
+      return {
+        observedSpki: renewedPin,
+        json: async () => ({ protocolVersion: 1, instanceId: "host_a" }),
+      };
     },
     client: (routeTrust) => ({
       json: async (request) => {
-        if (routeTrust.endpoint === lan.endpoint && lanOffline) throw new PeerTransportError("unavailable");
+        if (routeTrust.endpoint === lan.endpoint && lanOffline)
+          throw new PeerTransportError("unavailable");
         if (routeTrust.endpoint === tailnet.endpoint) {
-          assert.equal(routeTrust.caCertificateDerBase64, undefined, "the LAN CA must not contaminate system trust");
-          if (renew && routeTrust.serverSpkiSha256 !== renewedPin) throw new PeerTransportError("identity_changed");
+          assert.equal(
+            routeTrust.caCertificateDerBase64,
+            undefined,
+            "the LAN CA must not contaminate system trust",
+          );
+          if (renew && routeTrust.serverSpkiSha256 !== renewedPin)
+            throw new PeerTransportError("identity_changed");
         }
         return request.path === "/server"
-          ? { protocolVersion: 1, instanceId: "host_a", capabilities: ["chat:read"], features: ["peer-routes-v1"], peerRoutes: [lan, { ...tailnet, serverSpkiSha256: renew ? renewedPin : tailnet.serverSpkiSha256 }] }
+          ? {
+              protocolVersion: 1,
+              instanceId: "host_a",
+              capabilities: ["chat:read"],
+              features: ["peer-routes-v1"],
+              peerRoutes: [
+                lan,
+                { ...tailnet, serverSpkiSha256: renew ? renewedPin : tailnet.serverSpkiSha256 },
+              ],
+            }
           : { endpoint: routeTrust.endpoint };
-      }, events: async () => {},
+      },
+      events: async () => {},
     }),
   });
   try {
@@ -886,28 +1087,47 @@ test("LAN-paired peers learn system-trusted Tailscale and safely renew only that
     lanOffline = true;
     renew = true;
     assert.equal((await store.connect("host_a")).activeRouteKind, "tailscale");
-    assert.deepEqual(await store.request("host_a", { path: "/chats" }), { endpoint: tailnet.endpoint });
+    assert.deepEqual(await store.request("host_a", { path: "/chats" }), {
+      endpoint: tailnet.endpoint,
+    });
     assert.equal((await store.relayTarget("host_a"))?.trust.serverSpkiSha256, renewedPin);
-    assert.equal(stored[0]!.caCertificateDerBase64, fixture.caDerBase64, "renewing the alternate must retain the paired LAN trust");
+    assert.equal(
+      stored[0]!.caCertificateDerBase64,
+      fixture.caDerBase64,
+      "renewing the alternate must retain the paired LAN trust",
+    );
     const { parseStoredPeerHosts } = await import("./peer-host-registry.js");
     const restored = parseStoredPeerHosts(stored);
-    assert.equal(restored[0]!.routes?.find((route) => route.endpoint === tailnet.endpoint)?.serverSpkiSha256, renewedPin);
-  } finally { store.close(); await fixture.close(); }
+    assert.equal(
+      restored[0]!.routes?.find((route) => route.endpoint === tailnet.endpoint)?.serverSpkiSha256,
+      renewedPin,
+    );
+  } finally {
+    store.close();
+    await fixture.close();
+  }
 });
 
 test("route advertisements exclude loopback, virtual bridges, tunnels and public interfaces", async () => {
   const { peerLanInterfaceAddresses } = await import("./peer-routes.js");
-  const entry = (address: string, internal = false, family = "IPv4") => ({ address, internal, family });
-  assert.deepEqual(peerLanInterfaceAddresses({
-    en0: [entry("192.168.1.7"), entry("fe80::123", false, "IPv6")],
-    eth0: [entry("10.1.0.2"), entry("192.168.1.7")],
-    lo0: [entry("127.0.0.1", true)],
-    bridge100: [entry("192.168.64.1")],
-    docker0: [entry("172.17.0.1")],
-    utun3: [entry("10.20.0.4")],
-    tailscale0: [entry("100.64.0.1")],
-    en1: [entry("203.0.113.4")],
-  }), ["192.168.1.7", "10.1.0.2"]);
+  const entry = (address: string, internal = false, family = "IPv4") => ({
+    address,
+    internal,
+    family,
+  });
+  assert.deepEqual(
+    peerLanInterfaceAddresses({
+      en0: [entry("192.168.1.7"), entry("fe80::123", false, "IPv6")],
+      eth0: [entry("10.1.0.2"), entry("192.168.1.7")],
+      lo0: [entry("127.0.0.1", true)],
+      bridge100: [entry("192.168.64.1")],
+      docker0: [entry("172.17.0.1")],
+      utun3: [entry("10.20.0.4")],
+      tailscale0: [entry("100.64.0.1")],
+      en1: [entry("203.0.113.4")],
+    }),
+    ["192.168.1.7", "10.1.0.2"],
+  );
 });
 
 test("a paired private-CA .local host marks a real mDNS TLS collision retryable without leaking bytes, then recovers with unchanged trust", async (t) => {
@@ -1031,7 +1251,11 @@ test("a paired private-CA .local host marks a real mDNS TLS collision retryable 
     return true;
   });
   assert.equal(intruderHttpRequests, 0, "the colliding responder receives no HTTP request");
-  assert.equal(intruderDecryptedBytes, 0, "the colliding responder receives no credential or body bytes");
+  assert.equal(
+    intruderDecryptedBytes,
+    0,
+    "the colliding responder receives no credential or body bytes",
+  );
   assert.deepEqual(
     {
       endpoint: saved[0]!.endpoint,
@@ -1046,7 +1270,9 @@ test("a paired private-CA .local host marks a real mDNS TLS collision retryable 
   colliding = false;
   const view = await reloaded.connect(genuine.instanceId);
   assert.equal(view.state, "connected");
-  const server = (await reloaded.request(genuine.instanceId, { path: "/server" })) as { instanceId: string };
+  const server = (await reloaded.request(genuine.instanceId, { path: "/server" })) as {
+    instanceId: string;
+  };
   assert.equal(server.instanceId, genuine.instanceId);
 });
 
@@ -1066,10 +1292,17 @@ test("route-aware recovery fails over on paired .local TLS collisions but keeps 
     {
       ...saved(),
       ...lan,
-      routes: [{ ...tailnet, id: "route_tailscale_12345678", kind: "tailscale", origin: "learned" }],
+      routes: [
+        { ...tailnet, id: "route_tailscale_12345678", kind: "tailscale", origin: "learned" },
+      ],
     },
   ];
-  let lanBehavior: "ok" | "tls_collision" | "instance_mismatch" | "revoked" | "unclassified_identity" = "tls_collision";
+  let lanBehavior:
+    | "ok"
+    | "tls_collision"
+    | "instance_mismatch"
+    | "revoked"
+    | "unclassified_identity" = "tls_collision";
   let tailnetBehavior: "ok" | "tls_captive_portal" = "ok";
   let serverInstanceId = "host_a";
   const attempted: string[] = [];
@@ -1088,7 +1321,9 @@ test("route-aware recovery fails over on paired .local TLS collisions but keeps 
     bootstrap: () => ({
       observedSpki: undefined,
       json: async () => {
-        throw new PeerTransportError("identity_changed", undefined, undefined, "tls", { identitySource: "tls" });
+        throw new PeerTransportError("identity_changed", undefined, undefined, "tls", {
+          identitySource: "tls",
+        });
       },
     }),
     client: (routeTrust) => ({
@@ -1096,7 +1331,9 @@ test("route-aware recovery fails over on paired .local TLS collisions but keeps 
         attempted.push(`${routeTrust.endpoint}${request.path}`);
         if (routeTrust.endpoint === lan.endpoint) {
           if (lanBehavior === "tls_collision") {
-            throw new PeerTransportError("identity_changed", undefined, undefined, "tls", { identitySource: "tls" });
+            throw new PeerTransportError("identity_changed", undefined, undefined, "tls", {
+              identitySource: "tls",
+            });
           }
           if (lanBehavior === "revoked") {
             throw new PeerTransportError("authentication_required", 401);
@@ -1105,11 +1342,18 @@ test("route-aware recovery fails over on paired .local TLS collisions but keeps 
             throw new PeerTransportError("identity_changed");
           }
           if (lanBehavior === "instance_mismatch") {
-            return { protocolVersion: 1, instanceId: "replacement_host", capabilities: ["chat:read"], features: [] };
+            return {
+              protocolVersion: 1,
+              instanceId: "replacement_host",
+              capabilities: ["chat:read"],
+              features: [],
+            };
           }
         }
         if (routeTrust.endpoint === tailnet.endpoint && tailnetBehavior === "tls_captive_portal") {
-          throw new PeerTransportError("identity_changed", undefined, undefined, "tls", { identitySource: "tls" });
+          throw new PeerTransportError("identity_changed", undefined, undefined, "tls", {
+            identitySource: "tls",
+          });
         }
         return {
           protocolVersion: 1,
@@ -1146,13 +1390,19 @@ test("route-aware recovery fails over on paired .local TLS collisions but keeps 
       assert.equal(error.retryableIdentity, false);
       return true;
     });
-    assert.deepEqual(attempted, [`${lan.endpoint}/server`], "instance mismatch never tries alternate routes");
+    assert.deepEqual(
+      attempted,
+      [`${lan.endpoint}/server`],
+      "instance mismatch never tries alternate routes",
+    );
 
     // Revocation stops route failover immediately too.
     attempted.length = 0;
     lanBehavior = "revoked";
-    await assert.rejects(store.connect("host_a"), (error: unknown) =>
-      error instanceof PeerTransportError && error.code === "authentication_required",
+    await assert.rejects(
+      store.connect("host_a"),
+      (error: unknown) =>
+        error instanceof PeerTransportError && error.code === "authentication_required",
     );
     assert.deepEqual(attempted, [`${lan.endpoint}/server`]);
 
@@ -1180,8 +1430,16 @@ test("route-aware recovery fails over on paired .local TLS collisions but keeps 
 
     // Non-eligible routes (IP literal with private CA, .local without CA, paired Tailscale) stay non-retryable.
     for (const nonEligible of [
-      { ...saved("host_ip"), endpoint: "https://127.0.0.1:7319/api/aiden/v1", caCertificateDerBase64: fixture.caDerBase64 },
-      { ...saved("host_nocert"), endpoint: "https://nocert.local:7319/api/aiden/v1", caCertificateDerBase64: undefined },
+      {
+        ...saved("host_ip"),
+        endpoint: "https://127.0.0.1:7319/api/aiden/v1",
+        caCertificateDerBase64: fixture.caDerBase64,
+      },
+      {
+        ...saved("host_nocert"),
+        endpoint: "https://nocert.local:7319/api/aiden/v1",
+        caCertificateDerBase64: undefined,
+      },
       { ...saved("host_ts"), endpoint: tailnet.endpoint, caCertificateDerBase64: undefined },
     ]) {
       const single = new PeerHostRegistry({
@@ -1193,12 +1451,16 @@ test("route-aware recovery fails over on paired .local TLS collisions but keeps 
         bootstrap: () => ({
           observedSpki: undefined,
           json: async () => {
-            throw new PeerTransportError("identity_changed", undefined, undefined, "tls", { identitySource: "tls" });
+            throw new PeerTransportError("identity_changed", undefined, undefined, "tls", {
+              identitySource: "tls",
+            });
           },
         }),
         client: () => ({
           json: async () => {
-            throw new PeerTransportError("identity_changed", undefined, undefined, "tls", { identitySource: "tls" });
+            throw new PeerTransportError("identity_changed", undefined, undefined, "tls", {
+              identitySource: "tls",
+            });
           },
           events: async () => {},
         }),

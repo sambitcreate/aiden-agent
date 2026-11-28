@@ -8,8 +8,16 @@ import { fileURLToPath } from "node:url";
 
 import { CUA_DRIVER_ALLOWED_TOOLS, CuaDriverError } from "../computer-use/contract.js";
 import { ComputerUseController } from "../computer-use/controller.js";
-import { createGuestCuaDriverHostFactory, guestDriverSshBridge, type GuestDriverBridgeCommand } from "./guest-driver.js";
-import { guestDriverPermissions, guestDriverReady, probeGuestDriver } from "./guest-driver-readiness.js";
+import {
+  createGuestCuaDriverHostFactory,
+  guestDriverSshBridge,
+  type GuestDriverBridgeCommand,
+} from "./guest-driver.js";
+import {
+  guestDriverPermissions,
+  guestDriverReady,
+  probeGuestDriver,
+} from "./guest-driver-readiness.js";
 import { guestSshPaths } from "./ssh.js";
 
 const FIXTURE = fileURLToPath(new URL("./fixtures/guest-cua-driver.mjs", import.meta.url));
@@ -26,7 +34,9 @@ function fixtureBridge(...args: string[]): GuestDriverBridgeCommand {
 
 async function host(t: test.TestContext, ...args: string[]) {
   const abort = new AbortController();
-  const driverHost = await createGuestCuaDriverHostFactory({ bridge: () => fixtureBridge(...args) })(abort.signal);
+  const driverHost = await createGuestCuaDriverHostFactory({
+    bridge: () => fixtureBridge(...args),
+  })(abort.signal);
   t.after(() => driverHost.shutdown());
   return driverHost;
 }
@@ -49,27 +59,40 @@ test("a guest session speaks MCP over the bridge child and keeps only Aiden's al
     return error instanceof CuaDriverError && error.code === "unsupported_tool";
   });
 
-  const apps = (await session.callTool("list_apps", {})) as { structuredContent?: { apps?: unknown[] } };
+  const apps = (await session.callTool("list_apps", {})) as {
+    structuredContent?: { apps?: unknown[] };
+  };
   assert.ok((apps.structuredContent?.apps?.length ?? 0) > 0);
   // start_session ran first, with Aiden's own session id on every call that declares one.
   const calls = logged(log);
   assert.equal(calls[0].name, "start_session");
   assert.equal(calls[calls.length - 1]?.name, "list_apps");
-  assert.equal(calls.some((call) => call.name === "run_script"), false, "a refused tool never reaches the guest");
+  assert.equal(
+    calls.some((call) => call.name === "run_script"),
+    false,
+    "a refused tool never reaches the guest",
+  );
 });
 
 test("a guest driver with another tool schema is refused before any call", async (t) => {
   const log = path.join(scratch(t), "calls.jsonl");
   writeFileSync(log, "");
-  await assert.rejects((await host(t, "--schema-version", "2", "--log", log)).createSession(), (error: unknown) => {
-    return error instanceof CuaDriverError && error.code === "incompatible_driver";
-  });
+  await assert.rejects(
+    (await host(t, "--schema-version", "2", "--log", log)).createSession(),
+    (error: unknown) => {
+      return error instanceof CuaDriverError && error.code === "incompatible_driver";
+    },
+  );
   assert.equal(readFileSync(log, "utf8"), "", "not even start_session");
 });
 
 test("a bridge whose daemon never came up fails to connect, with the guest's own words", async (t) => {
   await assert.rejects((await host(t, "--exit", "69")).createSession(), (error: unknown) => {
-    return error instanceof CuaDriverError && error.code === "connection_failed" && /no Cua Driver daemon/u.test(error.message);
+    return (
+      error instanceof CuaDriverError &&
+      error.code === "connection_failed" &&
+      /no Cua Driver daemon/u.test(error.message)
+    );
   });
 });
 
@@ -91,27 +114,40 @@ test("a host shut down while a session's bridge is still resolving starts no bri
   assert.equal(spawned, 0, "no ssh child outlives the host");
 });
 
-test("a host stopping mid-connect ends the connect even while the caller still waits", { timeout: 10_000 }, async (t) => {
-  const log = path.join(scratch(t), "calls.jsonl");
-  const abort = new AbortController();
-  const driverHost = await createGuestCuaDriverHostFactory({ bridge: () => fixtureBridge("--hang-on", "start_session", "--log", log) })(
-    abort.signal,
-  );
-  t.after(() => driverHost.shutdown());
-  const caller = new AbortController();
-  const creating = driverHost.createSession(caller.signal);
-  while (!existsSync(log) || !readFileSync(log, "utf8").includes("start_session")) await new Promise((resolve) => setTimeout(resolve, 20));
-  abort.abort();
-  await assert.rejects(creating);
-  assert.equal(caller.signal.aborted, false);
-});
+test(
+  "a host stopping mid-connect ends the connect even while the caller still waits",
+  { timeout: 10_000 },
+  async (t) => {
+    const log = path.join(scratch(t), "calls.jsonl");
+    const abort = new AbortController();
+    const driverHost = await createGuestCuaDriverHostFactory({
+      bridge: () => fixtureBridge("--hang-on", "start_session", "--log", log),
+    })(abort.signal);
+    t.after(() => driverHost.shutdown());
+    const caller = new AbortController();
+    const creating = driverHost.createSession(caller.signal);
+    while (!existsSync(log) || !readFileSync(log, "utf8").includes("start_session"))
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    abort.abort();
+    await assert.rejects(creating);
+    assert.equal(caller.signal.aborted, false);
+  },
+);
 
 test("the Computer Use controller drives a guest window through the guest host", async (t) => {
   const abort = new AbortController();
   t.after(() => abort.abort());
-  const controller = new ComputerUseController("guest-test", true, createGuestCuaDriverHostFactory({ bridge: () => fixtureBridge() }));
+  const controller = new ComputerUseController(
+    "guest-test",
+    true,
+    createGuestCuaDriverHostFactory({ bridge: () => fixtureBridge() }),
+  );
   t.after(() => controller.close());
-  const captured = await controller.execute("call-1", { action: "capture", mode: "som", app: "Safari" }, abort.signal);
+  const captured = await controller.execute(
+    "call-1",
+    { action: "capture", mode: "som", app: "Safari" },
+    abort.signal,
+  );
   const payload = JSON.parse((captured.content[0] as { text: string }).text) as {
     ok: boolean;
     elements: Array<{ index: number; role?: string; label?: string }>;
@@ -147,10 +183,18 @@ test("asking for the grants prompts in the guest; checking never does", async (t
   const permissions = path.join(dir, "permissions.json");
   const log = path.join(dir, "calls.jsonl");
   writeFileSync(permissions, JSON.stringify({ accessibility: false, screen_recording: false }));
-  const session = await (await host(t, "--permissions-file", permissions, "--grant-on-prompt", "--log", log)).createSession();
+  const session = await (
+    await host(t, "--permissions-file", permissions, "--grant-on-prompt", "--log", log)
+  ).createSession();
 
-  assert.deepEqual(await guestDriverPermissions(session, { prompt: false }), { accessibility: false, screenRecording: false });
-  assert.deepEqual(await guestDriverPermissions(session, { prompt: true }), { accessibility: true, screenRecording: true });
+  assert.deepEqual(await guestDriverPermissions(session, { prompt: false }), {
+    accessibility: false,
+    screenRecording: false,
+  });
+  assert.deepEqual(await guestDriverPermissions(session, { prompt: true }), {
+    accessibility: true,
+    screenRecording: true,
+  });
   const checks = logged(log).filter((call) => call.name === "check_permissions");
   assert.deepEqual(
     checks.map((call) => call.args.prompt),

@@ -66,10 +66,7 @@ export async function mountWithBotRouter(
   return { router: harness.router, queryClient: harness.queryClient };
 }
 
-function createBotRouterHarness(
-  children: React.ReactNode,
-  options: BotRouterOptions = {},
-) {
+function createBotRouterHarness(children: React.ReactNode, options: BotRouterOptions = {}) {
   const queryClient = options.queryClient ?? createBotTestQueryClient();
   // As in the app: the Bot panel's state outlives route changes, and a sidebar
   // (when a test passes one) stays mounted beside the routed page.
@@ -104,7 +101,9 @@ function createBotRouterHarness(
     queryClient,
     router,
     element: options.capabilities ? (
-      <AppCapabilitiesProvider capabilities={options.capabilities}>{routed}</AppCapabilitiesProvider>
+      <AppCapabilitiesProvider capabilities={options.capabilities}>
+        {routed}
+      </AppCapabilitiesProvider>
     ) : (
       routed
     ),

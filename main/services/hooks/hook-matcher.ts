@@ -23,16 +23,23 @@ const MAX_MATCHER_LENGTH = 512;
 export function compileHookMatcher(matcher: string | undefined): HookMatcherCompileResult {
   const value = (matcher ?? "").trim();
   if (value === "" || value === "*") return { ok: true, matcher: { kind: "all" } };
-  if (value.length > MAX_MATCHER_LENGTH) return { ok: false, reason: `The matcher is longer than ${MAX_MATCHER_LENGTH} characters.` };
+  if (value.length > MAX_MATCHER_LENGTH)
+    return { ok: false, reason: `The matcher is longer than ${MAX_MATCHER_LENGTH} characters.` };
   if (EXACT_LIST.test(value)) {
-    const names = value.split(/[|,]/u).map((name) => name.trim()).filter(Boolean);
+    const names = value
+      .split(/[|,]/u)
+      .map((name) => name.trim())
+      .filter(Boolean);
     if (names.length === 0) return { ok: true, matcher: { kind: "all" } };
     return { ok: true, matcher: { kind: "list", names: new Set(names) } };
   }
   try {
     return { ok: true, matcher: { kind: "regex", regex: new RegExp(`^(?:${value})$`) } };
   } catch (error) {
-    return { ok: false, reason: `The matcher is not a valid regular expression: ${error instanceof Error ? error.message : String(error)}` };
+    return {
+      ok: false,
+      reason: `The matcher is not a valid regular expression: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
 }
 
@@ -53,7 +60,10 @@ export function matcherMatchesTool(matcher: CompiledHookMatcher, toolName: strin
 }
 
 /** Does `matcher` select a plain value (a SessionStart source, a PreCompact trigger)? */
-export function matcherMatchesValue(matcher: CompiledHookMatcher, value: string | undefined): boolean {
+export function matcherMatchesValue(
+  matcher: CompiledHookMatcher,
+  value: string | undefined,
+): boolean {
   if (matcher.kind === "all") return true;
   if (value === undefined) return false;
   return matchesValue(matcher, value);

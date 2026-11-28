@@ -149,8 +149,14 @@ test("explicit arguments beat configured defaults, which beat the parent", () =>
   };
   assert.equal(selected({ role: "scout" }, policy(settings)).modelId, "gpt-mini");
   const reviewer = selected({ role: "reviewer" }, policy(settings));
-  assert.deepEqual([reviewer.modelId, reviewer.effort, reviewer.modelSource], ["claude-haiku", "medium", "configured"]);
-  const explicit = selected({ role: "reviewer", model: "anthropic/claude-sonnet" }, policy(settings));
+  assert.deepEqual(
+    [reviewer.modelId, reviewer.effort, reviewer.modelSource],
+    ["claude-haiku", "medium", "configured"],
+  );
+  const explicit = selected(
+    { role: "reviewer", model: "anthropic/claude-sonnet" },
+    policy(settings),
+  );
   assert.deepEqual([explicit.modelId, explicit.effort], ["claude-sonnet", "high"]);
 });
 
@@ -158,8 +164,14 @@ test("a locked role applies last and overrides explicit arguments with a visible
   const settings: SubagentModelSettings = {
     roles: { implementer: { model: "openai/gpt-mini", effort: "low", locked: true } },
   };
-  const value = selected({ role: "implementer", model: "anthropic/claude-haiku", effort: "high" }, policy(settings));
-  assert.deepEqual([value.modelId, value.effort, value.modelSource], ["gpt-mini", "low", "role_locked"]);
+  const value = selected(
+    { role: "implementer", model: "anthropic/claude-haiku", effort: "high" },
+    policy(settings),
+  );
+  assert.deepEqual(
+    [value.modelId, value.effort, value.modelSource],
+    ["gpt-mini", "low", "role_locked"],
+  );
   assert.match(value.warnings.join(" "), /locked/);
 });
 
@@ -185,20 +197,37 @@ test("a disconnected configured model is reported and the parent is used", () =>
 
 test("the effort ceiling refuses explicit picks and caps configured ones", () => {
   const settings: SubagentModelSettings = { maxEffort: "medium", defaultEffort: "high" };
-  assert.match(rejected({ role: "scout", effort: "high" }, policy(settings)), /exceeds the subagent effort ceiling \(medium\)/);
-  assert.equal(selected({ role: "scout", model: "openai/gpt-mini" }, policy(settings)).effort, "medium");
+  assert.match(
+    rejected({ role: "scout", effort: "high" }, policy(settings)),
+    /exceeds the subagent effort ceiling \(medium\)/,
+  );
+  assert.equal(
+    selected({ role: "scout", model: "openai/gpt-mini" }, policy(settings)).effort,
+    "medium",
+  );
   const configured = selected({ role: "scout" }, policy(settings));
   assert.equal(configured.effort, "medium");
   assert.match(configured.warnings.join(" "), /ceiling/);
 });
 
 test("an agent cannot pick a costlier hosted model unless settings allow it", () => {
-  const settings: SubagentModelSettings = { allowedModels: ["openai/gpt-large", "ollama/qwen", "openai/gpt-mini"] };
-  assert.match(rejected({ role: "scout", model: "openai/gpt-large" }, policy(settings)), /costs more than the current model/);
-  assert.equal(selected({ role: "scout", model: "openai/gpt-mini" }, policy(settings)).modelId, "gpt-mini");
+  const settings: SubagentModelSettings = {
+    allowedModels: ["openai/gpt-large", "ollama/qwen", "openai/gpt-mini"],
+  };
+  assert.match(
+    rejected({ role: "scout", model: "openai/gpt-large" }, policy(settings)),
+    /costs more than the current model/,
+  );
+  assert.equal(
+    selected({ role: "scout", model: "openai/gpt-mini" }, policy(settings)).modelId,
+    "gpt-mini",
+  );
   assert.equal(selected({ role: "scout", model: "ollama/qwen" }, policy(settings)).modelId, "qwen");
   assert.equal(
-    selected({ role: "scout", model: "openai/gpt-large" }, policy({ ...settings, allowCostlierModels: true })).modelId,
+    selected(
+      { role: "scout", model: "openai/gpt-large" },
+      policy({ ...settings, allowCostlierModels: true }),
+    ).modelId,
     "gpt-large",
   );
 });
@@ -229,7 +258,11 @@ test("the listed set stays small, starts with the parent, and hides when only th
   assert.equal(subagentModelKey(listed[0]!), "anthropic/claude-sonnet");
   assert.equal(subagentModelToolOptions({ ...policy(), candidates: [sonnet] }), undefined);
   assert.equal(subagentModelToolOptions(policy({ allowedModels: [] })), undefined);
-  assert.deepEqual(subagentModelToolOptions(policy({ maxEffort: "medium" }))?.efforts, ["off", "low", "medium"]);
+  assert.deepEqual(subagentModelToolOptions(policy({ maxEffort: "medium" }))?.efforts, [
+    "off",
+    "low",
+    "medium",
+  ]);
 });
 
 test("model settings parsing drops invalid fields instead of rejecting the whole object", () => {
@@ -257,7 +290,12 @@ test("model settings parsing drops invalid fields instead of rejecting the whole
   assert.equal(parseSubagentModelSettings("nope"), undefined);
 });
 
-const runtime = (providerId: string, modelId: string, reasoning: boolean, deployment?: "local") => ({
+const runtime = (
+  providerId: string,
+  modelId: string,
+  reasoning: boolean,
+  deployment?: "local",
+) => ({
   provider: { id: providerId, ...(deployment ? { deployment } : {}) },
   model: {
     id: modelId,
@@ -294,18 +332,29 @@ test("the child resolver resolves each distinct model once and reuses the parent
   const second = await resolve({ role: "planner", model: "openai/gpt-mini" }, signal);
   assert.equal(first.runtime, second.runtime);
   assert.deepEqual(resolved, ["openai/gpt-mini"]);
-  await assert.rejects(resolve({ role: "scout", model: "openai/gpt-mini", effort: "high" }, signal), /Supported efforts: off/);
+  await assert.rejects(
+    resolve({ role: "scout", model: "openai/gpt-mini", effort: "high" }, signal),
+    /Supported efforts: off/,
+  );
 });
 
 test("ACP models cannot be offered, requested, or selected by saved child defaults", () => {
   const providers = [
     {
-      id: "openai", label: "OpenAI", needsKey: true, hasKey: true,
-      models: ["gpt-mini"], defaultModel: "gpt-mini",
+      id: "openai",
+      label: "OpenAI",
+      needsKey: true,
+      hasKey: true,
+      models: ["gpt-mini"],
+      defaultModel: "gpt-mini",
     },
     {
-      id: "antigravity", label: "Antigravity", needsKey: true, hasKey: true,
-      models: ["gemini-3-flash"], defaultModel: "gemini-3-flash",
+      id: "antigravity",
+      label: "Antigravity",
+      needsKey: true,
+      hasKey: true,
+      models: ["gemini-3-flash"],
+      defaultModel: "gemini-3-flash",
     },
   ];
   const acpKey = "antigravity/gemini-3-flash";
@@ -317,27 +366,43 @@ test("ACP models cannot be offered, requested, or selected by saved child defaul
   const candidates = subagentModelCandidatesFromSettings(providers, settings);
   assert.deepEqual(candidates.map(subagentModelKey), ["openai/gpt-mini"]);
   const current: SubagentModelPolicy = {
-    parent: { ...mini, effort: "off" }, candidates, overridesAllowed: true, settings,
+    parent: { ...mini, effort: "off" },
+    candidates,
+    overridesAllowed: true,
+    settings,
   };
   assert.deepEqual(requestableSubagentModels(current).map(subagentModelKey), ["openai/gpt-mini"]);
   const stalePolicy = {
     ...current,
-    candidates: [...candidates, {
-      providerId: "antigravity", providerLabel: "Antigravity",
-      modelId: "gemini-3-flash", modelLabel: "Gemini 3 Flash",
-    }],
+    candidates: [
+      ...candidates,
+      {
+        providerId: "antigravity",
+        providerLabel: "Antigravity",
+        modelId: "gemini-3-flash",
+        modelLabel: "Gemini 3 Flash",
+      },
+    ],
   };
-  assert.deepEqual(requestableSubagentModels(stalePolicy).map(subagentModelKey), ["openai/gpt-mini"]);
+  assert.deepEqual(requestableSubagentModels(stalePolicy).map(subagentModelKey), [
+    "openai/gpt-mini",
+  ]);
   const requested = planSubagentModel(current, { role: "scout", model: acpKey });
   assert.equal(requested.ok, false);
   assert.match(requested.ok ? "" : requested.error, /overrides are not available/u);
   const staleDefault = planSubagentModel(stalePolicy, { role: "scout" });
-  assert.equal(staleDefault.ok && subagentModelKey(staleDefault.value.candidate), "openai/gpt-mini");
+  assert.equal(
+    staleDefault.ok && subagentModelKey(staleDefault.value.candidate),
+    "openai/gpt-mini",
+  );
   for (const role of ["scout", "planner"] as const) {
     const configured = planSubagentModel(current, { role });
     assert.equal(configured.ok, true);
     assert.equal(configured.ok && subagentModelKey(configured.value.candidate), "openai/gpt-mini");
-    assert.match(configured.ok ? configured.value.warnings.join(" ") : "", /cannot run as a subagent/u);
+    assert.match(
+      configured.ok ? configured.value.warnings.join(" ") : "",
+      /cannot run as a subagent/u,
+    );
   }
 });
 
@@ -462,5 +527,8 @@ test("a full allowlist does not drop a connected locked role model", () => {
   assert.equal(planned.ok, true);
   assert.equal(planned.ok && planned.value.modelSource, "role_locked");
   assert.equal(planned.ok && subagentModelKey(planned.value.candidate), roleKey);
-  assert.equal(planned.ok && planned.value.warnings.some((warning) => /not connected/u.test(warning)), false);
+  assert.equal(
+    planned.ok && planned.value.warnings.some((warning) => /not connected/u.test(warning)),
+    false,
+  );
 });

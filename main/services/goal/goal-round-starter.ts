@@ -38,7 +38,10 @@ export interface WindowRoundPayload {
   outcome?: StartTurnResult;
 }
 
-export type GoalRoundLease = Pick<ChatTurnLease, "isActive" | "reserveAppendPayload" | "settleAsyncWork" | "release">;
+export type GoalRoundLease = Pick<
+  ChatTurnLease,
+  "isActive" | "reserveAppendPayload" | "settleAsyncWork" | "release"
+>;
 
 export interface GoalRoundStarterDependencies {
   /** Offers the round to a focused window that shows the chat (`GoalWindowRounds.offer`). */
@@ -50,7 +53,12 @@ export interface GoalRoundStarterDependencies {
   appendMessage(
     chatId: string,
     message: { role: "user"; content: string; notice: AgentNoticeV1 },
-    options: { providerId: string; model: string; expectedWorkspaceId?: string; isCurrent: () => boolean },
+    options: {
+      providerId: string;
+      model: string;
+      expectedWorkspaceId?: string;
+      isCurrent: () => boolean;
+    },
   ): Promise<{ messages: ReadonlyArray<{ id?: string }> }>;
   start(
     streamId: string,
@@ -111,7 +119,9 @@ export function createGoalRoundStarter(deps: GoalRoundStarterDependencies): Goal
           {
             providerId: context.providerId,
             model: context.model,
-            ...(context.workspaceId !== undefined ? { expectedWorkspaceId: context.workspaceId } : {}),
+            ...(context.workspaceId !== undefined
+              ? { expectedWorkspaceId: context.workspaceId }
+              : {}),
             isCurrent: () => lease.isActive() && isCurrent(),
           },
         );
@@ -121,13 +131,21 @@ export function createGoalRoundStarter(deps: GoalRoundStarterDependencies): Goal
       lease.settleAsyncWork();
       if (!isCurrent()) {
         lease.release();
-        return { kind: "unavailable", reason: "The goal changed before the round began.", ...(messageId ? { messageId } : {}) };
+        return {
+          kind: "unavailable",
+          reason: "The goal changed before the round began.",
+          ...(messageId ? { messageId } : {}),
+        };
       }
       const request = goalRoundStartRequest(chatId, context, streamId);
       const started = await deps.start(streamId, request.params, owner, request.options);
       if (!started) {
         lease.release();
-        return { kind: "unavailable", reason: "The round stopped before it began.", ...(messageId ? { messageId } : {}) };
+        return {
+          kind: "unavailable",
+          reason: "The round stopped before it began.",
+          ...(messageId ? { messageId } : {}),
+        };
       }
       return { kind: "started", streamId, ...(messageId ? { messageId } : {}) };
     } catch (error) {
@@ -151,10 +169,16 @@ export function createGoalRoundStarter(deps: GoalRoundStarterDependencies): Goal
     const payload: WindowRoundPayload = { context, round, isCurrent };
     const inWindow = await deps.offer(chatId, payload);
     if (inWindow !== "no-window") {
-      return payload.outcome ?? (inWindow === "busy" ? { kind: "busy" } : { kind: "unavailable", reason: "The round could not start." });
+      return (
+        payload.outcome ??
+        (inWindow === "busy"
+          ? { kind: "busy" }
+          : { kind: "unavailable", reason: "The round could not start." })
+      );
     }
     // The offer can wait up to 5 seconds for a window: the person may have paused meanwhile.
-    if (!isCurrent()) return { kind: "unavailable", reason: "The goal changed before the round began." };
+    if (!isCurrent())
+      return { kind: "unavailable", reason: "The goal changed before the round began." };
     return startAttendedRound(chatId, context, round, undefined, isCurrent);
   }
 

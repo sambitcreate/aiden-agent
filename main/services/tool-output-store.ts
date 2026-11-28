@@ -25,14 +25,20 @@ export function toolOutputScope(value: unknown): string {
 
 /** Ciphertext-only authority evidence; conservatively invalidates on any key/token update. */
 export async function toolOutputCredentialFingerprint(root: string): Promise<string[]> {
-  return Promise.all(["provider-keys.json", "mcp-oauth.json", "pi-provider-credentials.json"].map(async (filename) => {
-    try {
-      return createHash("sha256").update(await readRegularFile(join(root, filename), 4_000_000)).digest("hex");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
-      throw new Error("Tool output credential authority is unavailable.");
-    }
-  }));
+  return Promise.all(
+    ["provider-keys.json", "mcp-oauth.json", "pi-provider-credentials.json"].map(
+      async (filename) => {
+        try {
+          return createHash("sha256")
+            .update(await readRegularFile(join(root, filename), 4_000_000))
+            .digest("hex");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+          throw new Error("Tool output credential authority is unavailable.");
+        }
+      },
+    ),
+  );
 }
 
 function normalize(value: unknown): StoredOutput[] {
@@ -40,11 +46,21 @@ function normalize(value: unknown): StoredOutput[] {
   let total = 0;
   const seen = new Set<string>();
   return value.filter((entry): entry is StoredOutput => {
-    if (!entry || typeof entry !== "object" || !HANDLE.test(entry.handle) ||
-      !HASH.test(entry.chat) || !HASH.test(entry.scope) || typeof entry.tool !== "string" ||
-      entry.tool.length > 160 || typeof entry.text !== "string" ||
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      !HANDLE.test(entry.handle) ||
+      !HASH.test(entry.chat) ||
+      !HASH.test(entry.scope) ||
+      typeof entry.tool !== "string" ||
+      entry.tool.length > 160 ||
+      typeof entry.text !== "string" ||
       entry.text.length > MAX_STORED_TOOL_OUTPUT_CHARS ||
-      !Number.isSafeInteger(entry.createdAt) || entry.createdAt < 0 || seen.has(entry.handle)) return false;
+      !Number.isSafeInteger(entry.createdAt) ||
+      entry.createdAt < 0 ||
+      seen.has(entry.handle)
+    )
+      return false;
     total += entry.text.length;
     if (total > MAX_TOTAL_CHARS) return false;
     seen.add(entry.handle);
@@ -55,14 +71,31 @@ function normalize(value: unknown): StoredOutput[] {
 /** Private bounded text snapshots. Handles carry no authority without their host scope. */
 export class ToolOutputStore {
   private readonly data: DataStore<StoredOutput[]>;
-  constructor(root?: () => string, private readonly now = Date.now, filename = "tool-output-spills.json") {
+  constructor(
+    root?: () => string,
+    private readonly now = Date.now,
+    filename = "tool-output-spills.json",
+  ) {
     this.data = new DataStore(filename, [], root, {
-      fileMode: 0o600, maxBytes: 32_000_000, normalize,
+      fileMode: 0o600,
+      maxBytes: 32_000_000,
+      normalize,
     });
   }
 
-  async put(chatId: string, scope: string, tool: string, text: string, isCurrent: () => boolean): Promise<string> {
-    if (!HASH.test(scope) || !tool || tool.length > 160 || text.length > MAX_STORED_TOOL_OUTPUT_CHARS) {
+  async put(
+    chatId: string,
+    scope: string,
+    tool: string,
+    text: string,
+    isCurrent: () => boolean,
+  ): Promise<string> {
+    if (
+      !HASH.test(scope) ||
+      !tool ||
+      tool.length > 160 ||
+      text.length > MAX_STORED_TOOL_OUTPUT_CHARS
+    ) {
       throw new Error("Tool output cannot be retained.");
     }
     const handle = randomUUID();
@@ -73,18 +106,45 @@ export class ToolOutputStore {
       while (retained.length >= MAX_RECORDS || total + text.length > MAX_TOTAL_CHARS) {
         total -= retained.shift()!.text.length;
       }
-      retained.push({ handle, chat: toolOutputScope(chatId), scope, tool, text, createdAt: this.now() });
+      retained.push({
+        handle,
+        chat: toolOutputScope(chatId),
+        scope,
+        tool,
+        text,
+        createdAt: this.now(),
+      });
       rows.splice(0, rows.length, ...retained);
     }, isCurrent);
     return handle;
   }
 
-  async read(chatId: string, scope: string, tools: ReadonlySet<string>, handle: string, offset: number, length: number): Promise<string> {
-    if (!HANDLE.test(handle) || !Number.isSafeInteger(offset) || offset < 0 ||
-      !Number.isSafeInteger(length) || length < 1 || length > 8_000) throw new Error("Invalid output window.");
-    const row = (await this.data.load()).find((item) => item.handle === handle &&
-      item.chat === toolOutputScope(chatId) && item.scope === scope && tools.has(item.tool) &&
-      item.createdAt > this.now() - RETENTION_MS && item.createdAt <= this.now());
+  async read(
+    chatId: string,
+    scope: string,
+    tools: ReadonlySet<string>,
+    handle: string,
+    offset: number,
+    length: number,
+  ): Promise<string> {
+    if (
+      !HANDLE.test(handle) ||
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      !Number.isSafeInteger(length) ||
+      length < 1 ||
+      length > 8_000
+    )
+      throw new Error("Invalid output window.");
+    const row = (await this.data.load()).find(
+      (item) =>
+        item.handle === handle &&
+        item.chat === toolOutputScope(chatId) &&
+        item.scope === scope &&
+        tools.has(item.tool) &&
+        item.createdAt > this.now() - RETENTION_MS &&
+        item.createdAt <= this.now(),
+    );
     if (!row) throw new Error("This output is unavailable or its access has changed.");
     if (offset > row.text.length) throw new Error("Output offset exceeds retained text.");
     const end = Math.min(row.text.length, offset + length);
@@ -94,7 +154,9 @@ export class ToolOutputStore {
   async deleteByChat(chatId: string): Promise<void> {
     const chat = toolOutputScope(chatId);
     await this.data.update((rows) => {
-      const kept = rows.filter((row) => row.chat !== chat && row.createdAt > this.now() - RETENTION_MS);
+      const kept = rows.filter(
+        (row) => row.chat !== chat && row.createdAt > this.now() - RETENTION_MS,
+      );
       rows.splice(0, rows.length, ...kept);
     });
   }
@@ -102,14 +164,18 @@ export class ToolOutputStore {
   async reconcileChats(validChatIds: ReadonlySet<string>): Promise<void> {
     const valid = new Set([...validChatIds].map((id) => toolOutputScope(id)));
     await this.data.update((rows) => {
-      const retained = rows.filter((row) => valid.has(row.chat) && row.createdAt > this.now() - RETENTION_MS);
+      const retained = rows.filter(
+        (row) => valid.has(row.chat) && row.createdAt > this.now() - RETENTION_MS,
+      );
       rows.splice(0, rows.length, ...retained);
     });
   }
 
   async pruneExpired(): Promise<void> {
     await this.data.update((rows) => {
-      const kept = rows.filter((row) => row.createdAt > this.now() - RETENTION_MS && row.createdAt <= this.now());
+      const kept = rows.filter(
+        (row) => row.createdAt > this.now() - RETENTION_MS && row.createdAt <= this.now(),
+      );
       rows.splice(0, rows.length, ...kept);
     });
   }

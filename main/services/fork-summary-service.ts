@@ -1,8 +1,4 @@
-import {
-  generateBranchSummary,
-  TODO_CONTEXT,
-  withAbortSignal,
-} from "./pi-legacy-harness.js";
+import { generateBranchSummary, TODO_CONTEXT, withAbortSignal } from "./pi-legacy-harness.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   MAX_FORK_SUMMARY_FILES,
@@ -23,7 +19,10 @@ export interface ForkSummaryServiceDeps {
   getChat(chatId: string): Promise<Chat | null>;
   updateForkSummary(
     chatId: string,
-    next: (summary: ChatForkSummaryV1 | undefined, chat: Chat) => ChatForkSummaryV1 | undefined | null,
+    next: (
+      summary: ChatForkSummaryV1 | undefined,
+      chat: Chat,
+    ) => ChatForkSummaryV1 | undefined | null,
   ): Promise<Chat | null>;
   /** Source journal entries after a copied message, when the journal can prove that boundary. */
   journalEntriesAfter(chatId: string, messageId: string): Promise<PiSessionEntry[] | undefined>;
@@ -45,7 +44,8 @@ export interface ForkSummaryServiceDeps {
 class ForkSummaryFailure extends Error {}
 
 /** pi frames a branch summary as a detour; a fork's card and context say what it really is. */
-const PI_BRANCH_PREAMBLE = /^The user explored a different conversation branch before returning here\.\nSummary of that exploration:\n\n/u;
+const PI_BRANCH_PREAMBLE =
+  /^The user explored a different conversation branch before returning here\.\nSummary of that exploration:\n\n/u;
 const PI_FILE_SECTIONS = /(?:\n\n<(read-files|modified-files)>\n[\s\S]*?\n<\/\1>)+$/u;
 
 function boundedFailure(message: string): string {
@@ -56,7 +56,9 @@ function boundedFailure(message: string): string {
 }
 
 function boundedPaths(paths: readonly string[]): string[] {
-  return paths.filter((item) => item.length > 0 && item.length <= 1_024).slice(0, MAX_FORK_SUMMARY_FILES);
+  return paths
+    .filter((item) => item.length > 0 && item.length <= 1_024)
+    .slice(0, MAX_FORK_SUMMARY_FILES);
 }
 
 /**
@@ -74,7 +76,10 @@ export function sourceMessagesAfterCut(
   return { lastCopiedId: source.messages[start - 1]?.id, after: source.messages.slice(start) };
 }
 
-function visibleEntries(visible: readonly ChatMessage[], runtime: ResolvedModelRuntime): PiSessionEntry[] {
+function visibleEntries(
+  visible: readonly ChatMessage[],
+  runtime: ResolvedModelRuntime,
+): PiSessionEntry[] {
   const messages = withoutHookBlockedPrompts(visible);
   return messages.map((message, index) => ({
     type: "message",
@@ -93,7 +98,10 @@ function visibleEntries(visible: readonly ChatMessage[], runtime: ResolvedModelR
  * fork `failed` so its held sends wait for Retry or Continue without summary.
  */
 export class ForkSummaryService {
-  private readonly running = new Map<string, { controller: AbortController; done: Promise<void> }>();
+  private readonly running = new Map<
+    string,
+    { controller: AbortController; done: Promise<void> }
+  >();
 
   constructor(private readonly deps: ForkSummaryServiceDeps) {}
 
@@ -106,11 +114,13 @@ export class ForkSummaryService {
     const existing = this.running.get(chatId);
     if (existing) return existing.done;
     const controller = new AbortController();
-    const done = this.attempt(chatId, controller.signal).catch((error) => {
-      this.deps.reportFailure?.(error);
-    }).finally(() => {
-      if (this.running.get(chatId)?.controller === controller) this.running.delete(chatId);
-    });
+    const done = this.attempt(chatId, controller.signal)
+      .catch((error) => {
+        this.deps.reportFailure?.(error);
+      })
+      .finally(() => {
+        if (this.running.get(chatId)?.controller === controller) this.running.delete(chatId);
+      });
     this.running.set(chatId, { controller, done });
     return done;
   }
@@ -228,18 +238,28 @@ export class ForkSummaryService {
     const result = await generateBranchSummary(
       entries,
       {
-        models: createPiCompactionModels(runtime, (message) => this.deps.recordUsage?.(message, runtime)),
+        models: createPiCompactionModels(runtime, (message) =>
+          this.deps.recordUsage?.(message, runtime),
+        ),
         model: runtime.model,
-        ...(lineage.summary.instructions ? { customInstructions: lineage.summary.instructions } : {}),
+        ...(lineage.summary.instructions
+          ? { customInstructions: lineage.summary.instructions }
+          : {}),
       },
       withAbortSignal(signal, TODO_CONTEXT),
     );
     signal.throwIfAborted();
     if (!result.ok) throw new ForkSummaryFailure(result.error.message);
-    const text = result.value.summary.replace(PI_BRANCH_PREAMBLE, "").replace(PI_FILE_SECTIONS, "").trim();
+    const text = result.value.summary
+      .replace(PI_BRANCH_PREAMBLE, "")
+      .replace(PI_FILE_SECTIONS, "")
+      .trim();
     if (!text) throw new ForkSummaryFailure(FAILURES.empty);
     return {
-      text: text.length > MAX_FORK_SUMMARY_TEXT_CHARS ? `${text.slice(0, MAX_FORK_SUMMARY_TEXT_CHARS - 1)}…` : text,
+      text:
+        text.length > MAX_FORK_SUMMARY_TEXT_CHARS
+          ? `${text.slice(0, MAX_FORK_SUMMARY_TEXT_CHARS - 1)}…`
+          : text,
       files: {
         read: boundedPaths(result.value.readFiles),
         modified: boundedPaths(result.value.modifiedFiles),

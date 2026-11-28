@@ -29,7 +29,8 @@ export interface ImageViewerProps {
 }
 
 const isTextEntry = (target: EventTarget | null) =>
-  target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+  target instanceof HTMLElement &&
+  (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
 
 const stageAlt = (item: GalleryItem, index: number) => {
   const prompt = item.prompt?.trim();
@@ -86,14 +87,25 @@ export function ImageViewer({
   React.useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || isTextEntry(event.target)) return;
+      if (
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        isTextEntry(event.target)
+      )
+        return;
       const { active: current, count, onIndexChange: change } = navigation.current;
       const next =
-        event.key === "ArrowLeft" ? stepIndex(current, -1, count)
-        : event.key === "ArrowRight" ? stepIndex(current, 1, count)
-        : event.key === "Home" ? 0
-        : event.key === "End" ? count - 1
-        : null;
+        event.key === "ArrowLeft"
+          ? stepIndex(current, -1, count)
+          : event.key === "ArrowRight"
+            ? stepIndex(current, 1, count)
+            : event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? count - 1
+                : null;
       if (next === null) return;
       event.preventDefault();
       if (next !== current) change(next);
@@ -123,14 +135,38 @@ export function ImageViewer({
               onDragOut={() => actions.drag(item.assetId)}
               onZoomState={setZoom}
             />
-            <div role="toolbar" aria-label="Viewer" className="flex items-center justify-center gap-1">
-              <Button size="small" variant="transparent" iconOnly aria-label="Previous image" disabled={active === 0} onClick={() => onIndexChange(active - 1)}>
+            <div
+              role="toolbar"
+              aria-label="Viewer"
+              className="flex items-center justify-center gap-1"
+            >
+              <Button
+                size="small"
+                variant="transparent"
+                iconOnly
+                aria-label="Previous image"
+                disabled={active === 0}
+                onClick={() => onIndexChange(active - 1)}
+              >
                 <ChevronLeft aria-hidden="true" />
               </Button>
-              <Button size="small" variant="transparent" iconOnly aria-label="Next image" disabled={active >= items.length - 1} onClick={() => onIndexChange(active + 1)}>
+              <Button
+                size="small"
+                variant="transparent"
+                iconOnly
+                aria-label="Next image"
+                disabled={active >= items.length - 1}
+                onClick={() => onIndexChange(active + 1)}
+              >
                 <ChevronRight aria-hidden="true" />
               </Button>
-              <Button size="small" variant="transparent" aria-pressed={zoom?.actual ?? false} disabled={!zoom || (!zoom.actual && !zoom.zoomable)} onClick={() => zoom?.toggle()}>
+              <Button
+                size="small"
+                variant="transparent"
+                aria-pressed={zoom?.actual ?? false}
+                disabled={!zoom || (!zoom.actual && !zoom.zoomable)}
+                onClick={() => zoom?.toggle()}
+              >
                 {zoom?.actual ? "Fit to Window" : "Actual Size"}
               </Button>
             </div>

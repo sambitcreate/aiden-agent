@@ -17,30 +17,38 @@ function deferred(): {
   return { promise, reject, resolve };
 }
 
-test("concurrent waiters follow a replacement without settling the obsolete task", { timeout: 1_000 }, async () => {
-  const gate = createSupersedingTaskGate();
-  const second = deferred();
-  const firstToken = gate.replace(new Promise<void>(() => undefined));
-  const firstWaiter = gate.wait();
-  const secondWaiter = gate.wait();
-  const secondToken = gate.replace(second.promise);
+test(
+  "concurrent waiters follow a replacement without settling the obsolete task",
+  { timeout: 1_000 },
+  async () => {
+    const gate = createSupersedingTaskGate();
+    const second = deferred();
+    const firstToken = gate.replace(new Promise<void>(() => undefined));
+    const firstWaiter = gate.wait();
+    const secondWaiter = gate.wait();
+    const secondToken = gate.replace(second.promise);
 
-  assert.equal(gate.isCurrent(firstToken), false);
-  assert.equal(gate.isCurrent(secondToken), true);
+    assert.equal(gate.isCurrent(firstToken), false);
+    assert.equal(gate.isCurrent(secondToken), true);
 
-  second.resolve();
-  await Promise.all([firstWaiter, secondWaiter]);
-});
+    second.resolve();
+    await Promise.all([firstWaiter, secondWaiter]);
+  },
+);
 
-test("clearing the gate releases every waiter without settling the current task", { timeout: 1_000 }, async () => {
-  const gate = createSupersedingTaskGate();
-  gate.replace(new Promise<void>(() => undefined));
-  const firstWaiter = gate.wait();
-  const secondWaiter = gate.wait();
+test(
+  "clearing the gate releases every waiter without settling the current task",
+  { timeout: 1_000 },
+  async () => {
+    const gate = createSupersedingTaskGate();
+    gate.replace(new Promise<void>(() => undefined));
+    const firstWaiter = gate.wait();
+    const secondWaiter = gate.wait();
 
-  gate.clear();
-  await Promise.all([firstWaiter, secondWaiter]);
-});
+    gate.clear();
+    await Promise.all([firstWaiter, secondWaiter]);
+  },
+);
 
 test("a stale rejection cannot displace the replacement", async () => {
   const gate = createSupersedingTaskGate();
@@ -114,9 +122,6 @@ test("retryFailed never restarts work that is still loading or already loaded", 
 
 test("main destroys a window only when the failed recovery still owns loading", () => {
   const main = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
-  assert.match(
-    main,
-    /if \(!mainWindowLoads\.isCurrent\(recovery\)\) return;/u,
-  );
+  assert.match(main, /if \(!mainWindowLoads\.isCurrent\(recovery\)\) return;/u);
   assert.match(main, /await mainWindowLoads\.wait\(\)/u);
 });

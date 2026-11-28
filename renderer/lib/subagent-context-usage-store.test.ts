@@ -132,5 +132,8 @@ test("only runs that are still active keep their reading", () => {
     readings,
   );
   assert.deepEqual([...shown.keys()].sort(), ["running", "waiting"]);
-  assert.equal(activeSubagentContextUsage([{ runId: "finished", state: "completed" }], readings).size, 0);
+  assert.equal(
+    activeSubagentContextUsage([{ runId: "finished", state: "completed" }], readings).size,
+    0,
+  );
 });

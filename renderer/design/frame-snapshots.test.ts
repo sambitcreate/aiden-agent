@@ -2,15 +2,12 @@
 import { installBotTestIpc } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  DESIGN_SNAPSHOT_LIMIT,
-  FrameSnapshotCache,
-  captureFrameSnapshot,
-} from "./frame-snapshots";
+import { DESIGN_SNAPSHOT_LIMIT, FrameSnapshotCache, captureFrameSnapshot } from "./frame-snapshots";
 
 test("the cache keeps the 60 most recently used snapshots", () => {
   const cache = new FrameSnapshotCache();
-  for (let index = 0; index < DESIGN_SNAPSHOT_LIMIT; index += 1) cache.set(`f${index}`, 0, `data:${index}`);
+  for (let index = 0; index < DESIGN_SNAPSHOT_LIMIT; index += 1)
+    cache.set(`f${index}`, 0, `data:${index}`);
   // Reading f0 makes it the most recently used, so f1 is the oldest now.
   assert.equal(cache.get("f0", 0), "data:0");
   cache.set("extra", 0, "data:extra");
@@ -45,7 +42,12 @@ test("capturing asks main for the frame's rectangle and stores the picture", asy
     "designCanvas:capture": () => ({ dataUrl: "data:image/png;base64,AAAA" }),
   });
   const cache = new FrameSnapshotCache();
-  const url = await captureFrameSnapshot(cache, "page", 2, { x: 10.4, y: 20, width: 300, height: 200 });
+  const url = await captureFrameSnapshot(cache, "page", 2, {
+    x: 10.4,
+    y: 20,
+    width: 300,
+    height: 200,
+  });
   assert.equal(url, "data:image/png;base64,AAAA");
   assert.equal(cache.get("page", 2), url);
   const capture = calls.find((call) => call.channel === "designCanvas:capture");
@@ -56,13 +58,19 @@ test("a failed capture keeps the snapshot the frame already had", async () => {
   const cache = new FrameSnapshotCache();
   cache.set("page", 2, "data:kept");
   installBotTestIpc({ "designCanvas:capture": () => ({ error: "unavailable" }) });
-  assert.equal(await captureFrameSnapshot(cache, "page", 2, { x: 0, y: 0, width: 10, height: 10 }), undefined);
+  assert.equal(
+    await captureFrameSnapshot(cache, "page", 2, { x: 0, y: 0, width: 10, height: 10 }),
+    undefined,
+  );
   installBotTestIpc({
     "designCanvas:capture": () => {
       throw new Error("window closed");
     },
   });
-  assert.equal(await captureFrameSnapshot(cache, "page", 2, { x: 0, y: 0, width: 10, height: 10 }), undefined);
+  assert.equal(
+    await captureFrameSnapshot(cache, "page", 2, { x: 0, y: 0, width: 10, height: 10 }),
+    undefined,
+  );
   assert.equal(cache.get("page", 2), "data:kept");
 });
 
@@ -79,7 +87,10 @@ test("a capture still on its way when the frame's picture is forgotten is not ke
 
   // A capture that starts after the edit is kept as usual.
   installBotTestIpc({ "designCanvas:capture": () => ({ dataUrl: "data:after-the-edit" }) });
-  assert.equal(await captureFrameSnapshot(cache, "page", 2, { x: 0, y: 0, width: 10, height: 10 }), "data:after-the-edit");
+  assert.equal(
+    await captureFrameSnapshot(cache, "page", 2, { x: 0, y: 0, width: 10, height: 10 }),
+    "data:after-the-edit",
+  );
   assert.equal(cache.get("page", 2), "data:after-the-edit");
 });
 
@@ -97,7 +108,9 @@ test("a capture that ends after a later picture was kept leaves that picture in 
 
 test("of two captures on their way at once, the picture from the one that started last is kept", async () => {
   const answers: Array<(value: { dataUrl: string }) => void> = [];
-  installBotTestIpc({ "designCanvas:capture": () => new Promise((resolve) => answers.push(resolve)) });
+  installBotTestIpc({
+    "designCanvas:capture": () => new Promise((resolve) => answers.push(resolve)),
+  });
   const rect = { x: 0, y: 0, width: 10, height: 10 };
 
   // The earlier capture comes back first: the later one still replaces it.

@@ -13,7 +13,9 @@ test.describe("Device tool", () => {
     await expect(aiden.page.locator("#environment-devices-panel")).toHaveCount(0);
   });
 
-  test("opens from the launcher, supports keyboard tab navigation, and respects the kill switch", async ({ aiden }) => {
+  test("opens from the launcher, supports keyboard tab navigation, and respects the kill switch", async ({
+    aiden,
+  }) => {
     test.skip(process.platform !== "darwin", "iOS Simulator devices are macOS-only");
     let page = aiden.page;
     await finishLmStudioOnboarding(page);
@@ -21,19 +23,27 @@ test.describe("Device tool", () => {
     await page.mouse.move(1, 1);
     await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
     const tools = () => page.getByRole("complementary", { name: "Environment work surface" });
-    const tab = (name: string) => tools().getByRole("tablist", { name: "Environment views" }).getByRole("tab", { name, exact: true });
+    const tab = (name: string) =>
+      tools()
+        .getByRole("tablist", { name: "Environment views" })
+        .getByRole("tab", { name, exact: true });
     await page.locator("[data-environment-toggle]").click();
     await tools().getByRole("button", { name: "More tools…", exact: true }).click();
     await tools().getByRole("button", { name: "Device", exact: true }).click();
     for (const width of [900, 560]) {
-      await aiden.app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 800), width);
+      await aiden.app.evaluate(
+        ({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 800),
+        width,
+      );
       await tools().getByRole("button", { name: "New workspace tab" }).click();
       await expect(tab("New tab")).toBeFocused();
       await page.keyboard.press("ArrowLeft");
       await expect(tab("Device")).toBeFocused();
       const devicesPanel = page.locator("#environment-devices-panel");
       await expect(devicesPanel).toBeVisible();
-      await expect(devicesPanel.getByRole("button", { name: "Set up simulator streaming" })).toBeEnabled();
+      await expect(
+        devicesPanel.getByRole("button", { name: "Set up simulator streaming" }),
+      ).toBeEnabled();
       await expect(devicesPanel).toContainText("node-datachannel");
     }
     page = await aiden.relaunch();

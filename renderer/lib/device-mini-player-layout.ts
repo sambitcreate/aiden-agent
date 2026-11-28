@@ -121,7 +121,10 @@ export function snapDeviceMiniPlayer(
 
 /** What a frame stores: its width and position, never the clamped height. */
 export function deviceMiniPlayerGeometry(frame: DeviceMiniPlayerFrame): DeviceMiniPlayerGeometry {
-  return { width: Math.round(frame.width), position: { x: Math.round(frame.x), y: Math.round(frame.y) } };
+  return {
+    width: Math.round(frame.width),
+    position: { x: Math.round(frame.x), y: Math.round(frame.y) },
+  };
 }
 
 /**
@@ -144,8 +147,19 @@ export function keyboardDeviceMiniPlayer(input: {
     ArrowDown: { x: 0, y: step },
   };
   const delta = moves[input.key];
-  if (delta) return moveDeviceMiniPlayer({ start: input.frame, delta, source: input.source, container: input.container });
-  const grow = input.key === "+" || input.key === "=" ? step : input.key === "-" || input.key === "_" ? -step : 0;
+  if (delta)
+    return moveDeviceMiniPlayer({
+      start: input.frame,
+      delta,
+      source: input.source,
+      container: input.container,
+    });
+  const grow =
+    input.key === "+" || input.key === "="
+      ? step
+      : input.key === "-" || input.key === "_"
+        ? -step
+        : 0;
   if (!grow) return null;
   return resizeDeviceMiniPlayer({
     start: input.frame,

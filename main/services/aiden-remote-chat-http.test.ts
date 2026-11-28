@@ -63,15 +63,20 @@ async function projectionReadServer(
     appVersion: "0.30.0",
     devices: {
       acquireDeviceAuthorization: () => () => undefined,
-      authenticate: async (credential) => credential === "a".repeat(43)
-        ? {
-            id: "device-1",
-            revoked: false,
-            capabilities: new Set(["chat:read"] as const),
-          }
-        : null,
+      authenticate: async (credential) =>
+        credential === "a".repeat(43)
+          ? {
+              id: "device-1",
+              revoked: false,
+              capabilities: new Set(["chat:read"] as const),
+            }
+          : null,
     },
-    pairing: { exchange: async () => { throw new Error("unused"); } },
+    pairing: {
+      exchange: async () => {
+        throw new Error("unused");
+      },
+    },
     chats,
     streams,
     connectionMode: () => "lan",
@@ -93,9 +98,10 @@ async function projectionReadServer(
     setChats(chats: Chat[]) {
       current = structuredClone(chats);
     },
-    close: () => new Promise<void>((resolve, reject) => {
-      server.close((error) => error ? reject(error) : resolve());
-    }),
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
   };
 }
 
@@ -122,12 +128,14 @@ test("HTTP Chat projections reject invalid stored fields before success headers"
       {
         chat: {
           ...baseChat,
-          messages: [{
-            id: "i".repeat(129),
-            role: "user",
-            content: "Hello",
-            createdAt: 1_500,
-          }],
+          messages: [
+            {
+              id: "i".repeat(129),
+              role: "user",
+              content: "Hello",
+              createdAt: 1_500,
+            },
+          ],
         },
         forbidden: "i".repeat(129),
       },
@@ -138,12 +146,14 @@ test("HTTP Chat projections reject invalid stored fields before success headers"
       {
         chat: {
           ...baseChat,
-          messages: [{
-            id: "message-invalid-text",
-            role: "assistant",
-            content: "private-text-\udc00-tail",
-            createdAt: 1_500,
-          }],
+          messages: [
+            {
+              id: "message-invalid-text",
+              role: "assistant",
+              content: "private-text-\udc00-tail",
+              createdAt: 1_500,
+            },
+          ],
         },
         forbidden: "private-text",
       },
@@ -168,38 +178,41 @@ test("HTTP Chat projections reject invalid stored fields before success headers"
 
     app.setChat({
       ...baseChat,
-      messages: [{
-        id: "message-emoji-timeline",
-        role: "assistant",
-        content: "😀",
-        createdAt: 1_500,
-        timeline: {
-          version: 3,
-          generationId: "generation-emoji-timeline",
-          status: "completed",
-          startedAt: 1_000,
-          finishedAt: 1_500,
-          steps: [{
-            id: "think-1",
-            order: 0,
-            kind: "thinking",
+      messages: [
+        {
+          id: "message-emoji-timeline",
+          role: "assistant",
+          content: "😀",
+          createdAt: 1_500,
+          timeline: {
+            version: 3,
+            generationId: "generation-emoji-timeline",
+            status: "completed",
             startedAt: 1_000,
-            updatedAt: 1_500,
             finishedAt: 1_500,
-            contentOffset: 2,
-          }],
+            steps: [
+              {
+                id: "think-1",
+                order: 0,
+                kind: "thinking",
+                startedAt: 1_000,
+                updatedAt: 1_500,
+                finishedAt: 1_500,
+                contentOffset: 2,
+              },
+            ],
+          },
         },
-      }],
+      ],
     });
     const emojiTimeline = await fetch(`${app.base}/chats`, { headers });
     assert.equal(emojiTimeline.status, 200);
-    const emojiBody = await emojiTimeline.json() as {
-      chats: Array<{ messages: Array<{ timeline?: { steps: Array<{ contentOffset?: number }> } }> }>;
+    const emojiBody = (await emojiTimeline.json()) as {
+      chats: Array<{
+        messages: Array<{ timeline?: { steps: Array<{ contentOffset?: number }> } }>;
+      }>;
     };
-    assert.equal(
-      emojiBody.chats[0]?.messages[0]?.timeline?.steps[0]?.contentOffset,
-      2,
-    );
+    assert.equal(emojiBody.chats[0]?.messages[0]?.timeline?.steps[0]?.contentOffset, 2);
 
     const projectedPrefix = "x".repeat(200_000);
     app.setChats([
@@ -208,28 +221,32 @@ test("HTTP Chat projections reject invalid stored fields before success headers"
         ...baseChat,
         id: "chat-over-limit-timeline",
         title: "Over-limit timeline",
-        messages: [{
-          id: "message-over-limit-timeline",
-          role: "assistant",
-          content: `${projectedPrefix}private-tail`,
-          createdAt: 1_500,
-          timeline: {
-            version: 3,
-            generationId: "generation-over-limit-timeline",
-            status: "completed",
-            startedAt: 1_000,
-            finishedAt: 1_500,
-            steps: [{
-              id: "think-1",
-              order: 0,
-              kind: "thinking",
+        messages: [
+          {
+            id: "message-over-limit-timeline",
+            role: "assistant",
+            content: `${projectedPrefix}private-tail`,
+            createdAt: 1_500,
+            timeline: {
+              version: 3,
+              generationId: "generation-over-limit-timeline",
+              status: "completed",
               startedAt: 1_000,
-              updatedAt: 1_500,
               finishedAt: 1_500,
-              contentOffset: projectedPrefix.length + 1,
-            }],
+              steps: [
+                {
+                  id: "think-1",
+                  order: 0,
+                  kind: "thinking",
+                  startedAt: 1_000,
+                  updatedAt: 1_500,
+                  finishedAt: 1_500,
+                  contentOffset: projectedPrefix.length + 1,
+                },
+              ],
+            },
           },
-        }],
+        ],
       },
     ]);
     const overLimitTimeline = await fetch(`${app.base}/chats`, { headers });
@@ -238,10 +255,10 @@ test("HTTP Chat projections reject invalid stored fields before success headers"
     const overLimitBody = JSON.parse(overLimitSerialized) as {
       chats: Array<{ id: string; messages: Array<{ text: string; timeline?: unknown }> }>;
     };
-    assert.deepEqual(overLimitBody.chats.map(({ id }) => id), [
-      "chat-1",
-      "chat-over-limit-timeline",
-    ]);
+    assert.deepEqual(
+      overLimitBody.chats.map(({ id }) => id),
+      ["chat-1", "chat-over-limit-timeline"],
+    );
     const truncated = overLimitBody.chats[1]?.messages[0];
     assert.equal(truncated?.text, projectedPrefix);
     assert.equal(truncated?.timeline, undefined);
@@ -264,7 +281,10 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
   };
   let turnNumber = 0;
   let appendCount = 0;
-  const ownerByStream = new Map<string, { send(channel: "chat:delta" | "chat:approval" | "chat:done", payload: unknown): void }>();
+  const ownerByStream = new Map<
+    string,
+    { send(channel: "chat:delta" | "chat:approval" | "chat:done", payload: unknown): void }
+  >();
   const approvalToStream = new Map<string, string>();
 
   const streams = new AidenRemoteStreamService({
@@ -293,7 +313,7 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
   const chats = new AidenRemoteChatService({
     application: {
       list: async () => [structuredClone(chat)],
-      listRegular: async () => chat.botId === undefined ? [structuredClone(chat)] : [],
+      listRegular: async () => (chat.botId === undefined ? [structuredClone(chat)] : []),
       get: async () => ({
         chat: structuredClone(chat),
         imageArtifactRecoveryPending: false,
@@ -375,15 +395,20 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
     appVersion: "0.30.0",
     devices: {
       acquireDeviceAuthorization: () => () => undefined,
-      authenticate: async (credential) => credential === "a".repeat(43)
-        ? {
-            id: "device-1",
-            revoked: false,
-            capabilities: new Set(["chat:read", "chat:write", "approval:respond"] as const),
-          }
-        : null,
+      authenticate: async (credential) =>
+        credential === "a".repeat(43)
+          ? {
+              id: "device-1",
+              revoked: false,
+              capabilities: new Set(["chat:read", "chat:write", "approval:respond"] as const),
+            }
+          : null,
     },
-    pairing: { exchange: async () => { throw new Error("unused"); } },
+    pairing: {
+      exchange: async () => {
+        throw new Error("unused");
+      },
+    },
     chats,
     streams,
     models: { list: async () => ({ providers: [], defaults: {} }) },
@@ -428,7 +453,7 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
       }),
     });
     assert.equal(uploadedResponse.status, 201);
-    const uploaded = await uploadedResponse.json() as { id: string; name: string };
+    const uploaded = (await uploadedResponse.json()) as { id: string; name: string };
     assert.match(uploaded.id, /^att_[A-Za-z0-9_-]{43}$/u);
     assert.equal(uploaded.name, "proof.png");
     assert.equal(JSON.stringify(uploaded).includes("contents"), false);
@@ -444,7 +469,7 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
       }),
     });
     assert.equal(discardedResponse.status, 201);
-    const discarded = await discardedResponse.json() as { id: string };
+    const discarded = (await discardedResponse.json()) as { id: string };
     const removed = await fetch(`${base}/chats/chat-1/attachments/${discarded.id}`, {
       method: "DELETE",
       headers,
@@ -454,9 +479,10 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
     const first = await start("Approve this", "turn-http-key-000001", [uploaded.id]);
     const replay = await start("Approve this", "turn-http-key-000001", [uploaded.id]);
     assert.deepEqual(replay, first);
-    assert.deepEqual(first.message.attachments?.map(({ id, name }) => ({ id, name })), [
-      { id: uploaded.id, name: "proof.png" },
-    ]);
+    assert.deepEqual(
+      first.message.attachments?.map(({ id, name }) => ({ id, name })),
+      [{ id: uploaded.id, name: "proof.png" }],
+    );
     const attachmentContent = await fetch(
       `${base}/chats/chat-1/attachments/${uploaded.id}/content`,
       { headers },
@@ -479,11 +505,17 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
 
     const allowed = await fetch(`${base}/approvals/approval-1/respond`, {
       method: "POST",
-      headers: { ...headers, "content-type": "application/json", "idempotency-key": "allow-http-key-000001" },
+      headers: {
+        ...headers,
+        "content-type": "application/json",
+        "idempotency-key": "allow-http-key-000001",
+      },
       body: JSON.stringify({ decision: "allow" }),
     });
     assert.equal(allowed.status, 200);
-    const firstEvents = await fetch(`${base}/streams/${first.streamId}/events?after=1`, { headers });
+    const firstEvents = await fetch(`${base}/streams/${first.streamId}/events?after=1`, {
+      headers,
+    });
     const firstReplay = await firstEvents.text();
     assert.match(firstReplay, /event: approval_required/u);
     assert.match(firstReplay, /event: done/u);
@@ -497,7 +529,11 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
     const second = await start("Deny this", "turn-http-key-000002");
     const denied = await fetch(`${base}/approvals/approval-2/respond`, {
       method: "POST",
-      headers: { ...headers, "content-type": "application/json", "idempotency-key": "deny-http-key-000001" },
+      headers: {
+        ...headers,
+        "content-type": "application/json",
+        "idempotency-key": "deny-http-key-000001",
+      },
       body: JSON.stringify({ decision: "deny" }),
     });
     assert.equal(denied.status, 200);
@@ -512,7 +548,9 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
     assert.equal(streams.status("device-1", third.streamId).state, "cancelled");
     assert.equal(appendCount, 3);
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
   }
 });
 
@@ -529,14 +567,25 @@ test("HTTP attachment content serves a stored chat image by hash and revalidates
       model: "model-1",
       createdAt: 1_000,
       updatedAt: 2_000,
-      messages: [{
-        id: "message-1",
-        role: "assistant",
-        content: "Here it is",
-        createdAt: 1_500,
-        // As the desktop stores it: the hash of the image file, no inline bytes.
-        attachments: [{ id: "image-1", name: "result.png", mimeType: "image/png", kind: "image", size: bytes.length, sha256 }],
-      }],
+      messages: [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "Here it is",
+          createdAt: 1_500,
+          // As the desktop stores it: the hash of the image file, no inline bytes.
+          attachments: [
+            {
+              id: "image-1",
+              name: "result.png",
+              mimeType: "image/png",
+              kind: "image",
+              size: bytes.length,
+              sha256,
+            },
+          ],
+        },
+      ],
     },
     async (hash, size) => {
       reads.push(hash);
@@ -560,13 +609,21 @@ test("HTTP attachment content serves a stored chat image by hash and revalidates
     assert.equal(again.status, 304);
     assert.equal((await again.arrayBuffer()).byteLength, 0);
 
-    const stale = await fetch(url, { headers: { ...headers, "if-none-match": `"${"0".repeat(64)}"` } });
+    const stale = await fetch(url, {
+      headers: { ...headers, "if-none-match": `"${"0".repeat(64)}"` },
+    });
     assert.equal(stale.status, 200);
     assert.deepEqual(Buffer.from(await stale.arrayBuffer()), bytes);
 
-    const chat = await (await fetch(`${app.base}/chats/chat-1`, { headers })).json() as Chat;
+    const chat = (await (await fetch(`${app.base}/chats/chat-1`, { headers })).json()) as Chat;
     assert.deepEqual(chat.messages[0]?.attachments, [
-      { id: "image-1", name: "result.png", mimeType: "image/png", kind: "image", size: bytes.length },
+      {
+        id: "image-1",
+        name: "result.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: bytes.length,
+      },
     ]);
     assert.ok(reads.length >= 3);
   } finally {

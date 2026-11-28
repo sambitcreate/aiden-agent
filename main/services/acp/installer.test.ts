@@ -43,7 +43,11 @@ interface Recorder {
   validations: number;
 }
 
-function deps(archive: Buffer, recorder: Recorder, overrides: Partial<AcpInstallerDependencies> = {}): AcpInstallerDependencies {
+function deps(
+  archive: Buffer,
+  recorder: Recorder,
+  overrides: Partial<AcpInstallerDependencies> = {},
+): AcpInstallerDependencies {
   return {
     fetch: async () => {
       recorder.fetches += 1;
@@ -57,10 +61,19 @@ function deps(archive: Buffer, recorder: Recorder, overrides: Partial<AcpInstall
   };
 }
 
-function setup(archive = goodArchive(), overrides: Partial<AcpInstallerDependencies> = {}, releaseValue = release(archive)) {
+function setup(
+  archive = goodArchive(),
+  overrides: Partial<AcpInstallerDependencies> = {},
+  releaseValue = release(archive),
+) {
   const dir = tempDir();
   const recorder: Recorder = { fetches: 0, validations: 0 };
-  const installer = new AcpRuntimeInstaller(releaseValue, "darwin-arm64", dir, deps(archive, recorder, overrides));
+  const installer = new AcpRuntimeInstaller(
+    releaseValue,
+    "darwin-arm64",
+    dir,
+    deps(archive, recorder, overrides),
+  );
   return { dir, recorder, installer, releaseValue };
 }
 
@@ -76,7 +89,12 @@ test("a supported platform starts not installed and states the download and spac
 });
 
 test("a platform without a pinned build is unsupported", async () => {
-  const installer = new AcpRuntimeInstaller(release(goodArchive()), "linux-x64", tempDir(), deps(goodArchive(), { fetches: 0, validations: 0 }));
+  const installer = new AcpRuntimeInstaller(
+    release(goodArchive()),
+    "linux-x64",
+    tempDir(),
+    deps(goodArchive(), { fetches: 0, validations: 0 }),
+  );
   assert.equal((await installer.load()).status, "unsupported");
   await assert.rejects(installer.install());
 });
@@ -85,7 +103,8 @@ test("install verifies, validates and activates the exact pinned members", async
   const { installer, recorder } = setup();
   const phases: string[] = [];
   installer.onChange((state) => {
-    if (state.status === "installing" && phases[phases.length - 1] !== state.progress.phase) phases.push(state.progress.phase);
+    if (state.status === "installing" && phases[phases.length - 1] !== state.progress.phase)
+      phases.push(state.progress.phase);
   });
   await installer.install();
   assert.equal(recorder.validations, 1);
@@ -128,13 +147,19 @@ test("archives with unexpected, missing or resized members are refused", async (
     { name: "server", data: server },
     { name: "../helper", data: helper },
   ]);
-  await assert.rejects(setup(traversal, {}, release(traversal)).installer.install(), /unexpected|could not be extracted/u);
+  await assert.rejects(
+    setup(traversal, {}, release(traversal)).installer.install(),
+    /unexpected|could not be extracted/u,
+  );
 
   const resized = storedZip([
     { name: "server", data: server },
     { name: "helper", data: Buffer.from("different length helper\n") },
   ]);
-  await assert.rejects(setup(resized, {}, release(resized)).installer.install(), /unexpected files/u);
+  await assert.rejects(
+    setup(resized, {}, release(resized)).installer.install(),
+    /unexpected files/u,
+  );
 });
 
 test("low disk space is reported before anything is downloaded", async () => {
@@ -191,12 +216,22 @@ test("removal waits for running processes, and a restart recognises an intact in
   await assert.rejects(installer.remove(), /Stop running chats/u);
   lease.release();
 
-  const reopened = new AcpRuntimeInstaller(releaseValue, "darwin-arm64", dir, deps(goodArchive(), { fetches: 0, validations: 0 }));
+  const reopened = new AcpRuntimeInstaller(
+    releaseValue,
+    "darwin-arm64",
+    dir,
+    deps(goodArchive(), { fetches: 0, validations: 0 }),
+  );
   assert.equal((await reopened.load()).status, "installed");
   const runtimeDir = reopened.acquire();
   rmSync(path.join(runtimeDir.runtimeDir, "helper"));
   runtimeDir.release();
-  const damaged = new AcpRuntimeInstaller(releaseValue, "darwin-arm64", dir, deps(goodArchive(), { fetches: 0, validations: 0 }));
+  const damaged = new AcpRuntimeInstaller(
+    releaseValue,
+    "darwin-arm64",
+    dir,
+    deps(goodArchive(), { fetches: 0, validations: 0 }),
+  );
   assert.equal((await damaged.load()).status, "not_installed");
 
   await installer.remove();
@@ -212,7 +247,15 @@ test("a pin newer than the installed runtime offers an update", async () => {
     { name: "helper", data: helper },
   ]);
   const next = new AcpRuntimeInstaller(
-    { ...release(newer, { members: [{ name: "server", bytes: 19 }, { name: "helper", bytes: helper.length }] }), version: "2.1.0" },
+    {
+      ...release(newer, {
+        members: [
+          { name: "server", bytes: 19 },
+          { name: "helper", bytes: helper.length },
+        ],
+      }),
+      version: "2.1.0",
+    },
     "darwin-arm64",
     dir,
     deps(newer, { fetches: 0, validations: 0 }),

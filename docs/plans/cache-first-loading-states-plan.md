@@ -3,6 +3,7 @@
 Status: Approved (2026-10-17); in progress. Decisions are recorded at the end.
 
 Progress:
+
 - 2026-10-17: I1 (iOS Home and Recents) and the cache-hit half of I2 implemented on the plan PR: saved workspace list in `AidenChatCache` (seeded on connect, purged on unpair), Home hydrates saved Recents before the connection guard, `AidenReadPresentation` with `AidenChatListSkeleton`, quiet connecting hint, Usage skeleton sheet, Scheduled Tasks enabled from cache, New chat waits for the connection, cache-first open of Recents rows, and top-five transcript prefetch (off in Low Data Mode). Needs a simulator build and test run on the Mac. Remaining iOS work: cold-cache transcript skeleton in the chat view, usage disk cache, I3 onward.
 
 ## Problem
@@ -27,14 +28,14 @@ Reduce Motion: skeletons hold still (no shimmer), matching Android's `AidenBotSe
 
 ## Shared foundations (one per platform, built first)
 
-| Piece | Android (exists) | iOS (new) | Desktop (new) |
-| --- | --- | --- | --- |
-| Read presentation decision | `AidenReadPresentation.of(hasContent, isFetching, hasSettled, failed)` | `AidenReadPresentation` enum + `of(...)` in `Features/Shared`, generalising `aidenBotsHomeContentState` / `aidenBotUsesColdLoadingPlaceholder` | `useReadPresentation(query)` in `renderer/lib/` over React Query state (`data`, `isPending`, `isFetching`, `isError`) |
-| Revalidation gate | `AidenRevalidation.isDue` (60 s) | Same 60 s gate, applied on scene activation and connect | React Query `staleTime` already does this |
-| Small snapshot cache | `AidenReadSnapshotCache` (per installation, 2 MiB/entry, 64 entries, purged on unpair) | `AidenReadSnapshotCache` in `Persistence/`, same limits and purge from `purgeInstallationDataUnlocked` | Main-process `ReadSnapshotStore` under userData, exposed over IPC, used to seed React Query at startup (see Desktop) |
-| Skeleton primitives | `AidenSkeletonBlock`, `AidenSkeletonListRow`, `AidenSkeletonList` | Promote `AidenBotSkeletonBlock` to `AidenSkeletonBlock` / `AidenSkeletonListRow` / `AidenSkeletonList` in `Features/Shared` | `renderer/components/ui/skeleton.tsx` (`Skeleton`, `SkeletonRows`), replacing the hand-written `bg-control animate-pulse` spans |
-| Quiet connection hint | `AidenBotConnectionHintRow`, top-bar status dot | Toolbar status dot + one-line hint; no overlay | Sidebar host row status (exists) |
-| Capability fallback | `installation.serverFeatures` used only for bot activity | Persist last `/server` capabilities per installation | n/a |
+| Piece                      | Android (exists)                                                                       | iOS (new)                                                                                                                                      | Desktop (new)                                                                                                                   |
+| -------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Read presentation decision | `AidenReadPresentation.of(hasContent, isFetching, hasSettled, failed)`                 | `AidenReadPresentation` enum + `of(...)` in `Features/Shared`, generalising `aidenBotsHomeContentState` / `aidenBotUsesColdLoadingPlaceholder` | `useReadPresentation(query)` in `renderer/lib/` over React Query state (`data`, `isPending`, `isFetching`, `isError`)           |
+| Revalidation gate          | `AidenRevalidation.isDue` (60 s)                                                       | Same 60 s gate, applied on scene activation and connect                                                                                        | React Query `staleTime` already does this                                                                                       |
+| Small snapshot cache       | `AidenReadSnapshotCache` (per installation, 2 MiB/entry, 64 entries, purged on unpair) | `AidenReadSnapshotCache` in `Persistence/`, same limits and purge from `purgeInstallationDataUnlocked`                                         | Main-process `ReadSnapshotStore` under userData, exposed over IPC, used to seed React Query at startup (see Desktop)            |
+| Skeleton primitives        | `AidenSkeletonBlock`, `AidenSkeletonListRow`, `AidenSkeletonList`                      | Promote `AidenBotSkeletonBlock` to `AidenSkeletonBlock` / `AidenSkeletonListRow` / `AidenSkeletonList` in `Features/Shared`                    | `renderer/components/ui/skeleton.tsx` (`Skeleton`, `SkeletonRows`), replacing the hand-written `bg-control animate-pulse` spans |
+| Quiet connection hint      | `AidenBotConnectionHintRow`, top-bar status dot                                        | Toolbar status dot + one-line hint; no overlay                                                                                                 | Sidebar host row status (exists)                                                                                                |
+| Capability fallback        | `installation.serverFeatures` used only for bot activity                               | Persist last `/server` capabilities per installation                                                                                           | n/a                                                                                                                             |
 
 Both phones should also persist the last `/server` answer (capability flags) per installation. Gates like `serverInfo?.supportsBotDurableSession` are false while connecting, which sends durable-session Macs down legacy paths and makes rows pop in late. Reading the saved flags until `/server` answers, as `aidenBotActivitySupported` already does on Android, fixes that everywhere.
 

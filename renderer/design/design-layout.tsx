@@ -124,7 +124,11 @@ export function DesignModeBannerSlot() {
 export function DesignChatBody({ children }: React.PropsWithChildren) {
   const hidden = useDesignChatBodyHidden();
   return (
-    <div className={hidden ? "contents invisible" : "contents"} inert={hidden} aria-hidden={hidden || undefined}>
+    <div
+      className={hidden ? "contents invisible" : "contents"}
+      inert={hidden}
+      aria-hidden={hidden || undefined}
+    >
       {children}
     </div>
   );
@@ -226,7 +230,10 @@ export function DesignLayout({
     },
     [chatId],
   );
-  const paneState = React.useMemo<DesignPaneState>(() => ({ stacked, pane, setPane }), [pane, setPane, stacked]);
+  const paneState = React.useMemo<DesignPaneState>(
+    () => ({ stacked, pane, setPane }),
+    [pane, setPane, stacked],
+  );
   const expand = windowPolicy.expand;
   const expandAvailable = on && expand.available;
   const toggleExpanded = React.useCallback(() => expand.setExpanded(!expand.expanded), [expand]);
@@ -494,32 +501,38 @@ function useDesignWindowPolicy(
     }
   }, [active, collapsed]);
 
-  const setExpanded = React.useCallback(
-    (next: boolean) => {
-      const current = sidebarRef.current;
-      if (!activeRef.current || !current || current.overlaid) return;
-      writeDesignExpanded(next);
-      if (!next) {
-        writeSidebarCollapsedByDesign(null);
-        current.setCollapsed(false);
-        return;
+  const setExpanded = React.useCallback((next: boolean) => {
+    const current = sidebarRef.current;
+    if (!activeRef.current || !current || current.overlaid) return;
+    writeDesignExpanded(next);
+    if (!next) {
+      writeSidebarCollapsedByDesign(null);
+      current.setCollapsed(false);
+      return;
+    }
+    if (!current.collapsed) {
+      // Marked as design mode's own collapse, so Minimize and leaving design mode reopen it.
+      if (readSidebarCollapsedByDesign() === null) {
+        writeSidebarCollapsedByDesign(current.reservedWidth || FALLBACK_SIDEBAR_WIDTH);
       }
-      if (!current.collapsed) {
-        // Marked as design mode's own collapse, so Minimize and leaving design mode reopen it.
-        if (readSidebarCollapsedByDesign() === null) {
-          writeSidebarCollapsedByDesign(current.reservedWidth || FALLBACK_SIDEBAR_WIDTH);
-        }
-        current.setCollapsed(true);
-      }
-    },
-    [],
-  );
+      current.setCollapsed(true);
+    }
+  }, []);
   const expand = React.useMemo<DesignExpandState>(
     // A narrow window's sidebar slides over the content, so there is nothing to expand into.
-    () => ({ available: active && sidebar !== null && !sidebar.overlaid, expanded: active && collapsed, setExpanded }),
+    () => ({
+      available: active && sidebar !== null && !sidebar.overlaid,
+      expanded: active && collapsed,
+      setExpanded,
+    }),
     [active, collapsed, setExpanded, sidebar],
   );
 
   const dismiss = React.useCallback(() => setDismissed(true), []);
-  return { bannerVisible: stacked && canWiden && !dismissed && !widenFailed, widen, dismiss, expand };
+  return {
+    bannerVisible: stacked && canWiden && !dismissed && !widenFailed,
+    widen,
+    dismiss,
+    expand,
+  };
 }

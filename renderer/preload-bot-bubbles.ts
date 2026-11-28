@@ -6,7 +6,8 @@ import { contextBridge, ipcRenderer } from "electron";
 import { createBotBubblesPreloadApi } from "./bot-bubbles-preload-core.js";
 
 const api = createBotBubblesPreloadApi({
-  invoke: <T>(channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args) as Promise<T>,
+  invoke: <T>(channel: string, ...args: unknown[]) =>
+    ipcRenderer.invoke(channel, ...args) as Promise<T>,
   onNotification: (channel: string, callback: (payload: unknown) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
     ipcRenderer.on(channel, listener);

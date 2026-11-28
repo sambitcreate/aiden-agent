@@ -14,7 +14,9 @@ import {
 class Owner implements WorkspaceOperationDocumentOwner {
   private destroyed = false;
   private listeners = new Set<() => void>();
-  isDestroyed(): boolean { return this.destroyed; }
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
   onInvalidated(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -41,7 +43,7 @@ test("workspace environment operations share persisted resolution and owner canc
   const mutationGate = new WorkspaceMutationGate();
   const operationRegistry = new WorkspaceOperationRegistry();
   const service = createWorkspaceEnvironmentApplicationService({
-    configStore: { getWorkspace: async (id) => id === workspace.id ? workspace : undefined },
+    configStore: { getWorkspace: async (id) => (id === workspace.id ? workspace : undefined) },
     workspaceMutationGate: mutationGate,
     workspaceOperationRegistry: operationRegistry,
     assertManagedWorktreeAdmission: async () => undefined,
@@ -57,7 +59,9 @@ test("workspace environment operations share persisted resolution and owner canc
 
     const cancellableOwner = new Owner();
     let markStarted!: () => void;
-    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
     const pending = service.run(cancellableOwner, workspace.id, async (_context, signal) => {
       markStarted();
       await new Promise<void>((_resolve, reject) => {

@@ -1,5 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
-import { toToolDeclaration, type CacheRetention, type Message, type SystemMessage, type Usage } from "@earendil-works/pi-ai";
+import {
+  toToolDeclaration,
+  type CacheRetention,
+  type Message,
+  type SystemMessage,
+  type Usage,
+} from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
 
@@ -34,7 +40,14 @@ export const PROMPT_CACHE_MISS_NOISE_FLOOR_TOKENS = 1024;
  * (`system:base` is the base prompt text); `unknown` means every hashed
  * section matched and the cache had not expired.
  */
-export type PromptCacheMissSource = "model" | "retention" | "tools" | `system:${string}` | "messages" | "ttl" | "unknown";
+export type PromptCacheMissSource =
+  | "model"
+  | "retention"
+  | "tools"
+  | `system:${string}`
+  | "messages"
+  | "ttl"
+  | "unknown";
 
 export interface PromptCacheModelRef {
   provider: string;
@@ -48,7 +61,9 @@ export interface PromptCacheResponse {
   provider: string;
   model: string;
   timestamp: number;
-  usage: Pick<Usage, "input" | "cacheRead" | "cacheWrite"> & { cost: Pick<Usage["cost"], "input" | "cacheRead" | "cacheWrite"> };
+  usage: Pick<Usage, "input" | "cacheRead" | "cacheWrite"> & {
+    cost: Pick<Usage["cost"], "input" | "cacheRead" | "cacheWrite">;
+  };
 }
 
 export interface PromptCacheMissMeasurement {
@@ -78,12 +93,20 @@ export function measurePromptCacheMiss(
 ): PromptCacheMissMeasurement | undefined {
   const usage = message.usage;
   const promptTokens = promptTokensOf(usage);
-  if (!previous || promptTokens <= 0 || (usage.cacheRead + usage.cacheWrite === 0 && !previous.reportedCache)) return undefined;
+  if (
+    !previous ||
+    promptTokens <= 0 ||
+    (usage.cacheRead + usage.cacheWrite === 0 && !previous.reportedCache)
+  )
+    return undefined;
   const missedTokens = Math.min(previous.promptTokens, promptTokens) - usage.cacheRead;
   if (missedTokens <= PROMPT_CACHE_MISS_NOISE_FLOOR_TOKENS) return undefined;
   const paidTokens = usage.input + usage.cacheWrite;
   const paidPerToken = paidTokens > 0 ? (usage.cost.input + usage.cost.cacheWrite) / paidTokens : 0;
-  const readPerToken = usage.cacheRead > 0 ? usage.cost.cacheRead / usage.cacheRead : (catalogCacheReadPerMillion ?? 0) / 1_000_000;
+  const readPerToken =
+    usage.cacheRead > 0
+      ? usage.cost.cacheRead / usage.cacheRead
+      : (catalogCacheReadPerMillion ?? 0) / 1_000_000;
   return {
     missedTokens,
     missedCost: missedTokens * Math.max(0, paidPerToken - readPerToken),
@@ -135,7 +158,7 @@ const HASH_SALT = randomBytes(16);
 function shortHash(value: unknown): string {
   return createHash("sha256")
     .update(HASH_SALT)
-    .update(typeof value === "string" ? value : JSON.stringify(value) ?? "")
+    .update(typeof value === "string" ? value : (JSON.stringify(value) ?? ""))
     .digest("hex")
     .slice(0, 12);
 }
@@ -156,7 +179,10 @@ function messageHash(message: Message): string {
 
 /** Section names can carry a per-generation nonce; a label keeps only the stable stem. */
 export function promptSectionLabel(name: string): string {
-  return name.replace(/-?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu, "") || "section";
+  return (
+    name.replace(/-?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu, "") ||
+    "section"
+  );
 }
 
 function systemWireShape(message: SystemMessage): unknown {
@@ -178,7 +204,13 @@ function messageWireShape(message: Message): unknown {
     case "assistant":
       return { role: "assistant", content: message.content };
     case "toolResult":
-      return { role: "toolResult", toolCallId: message.toolCallId, toolName: message.toolName, isError: message.isError, content: message.content };
+      return {
+        role: "toolResult",
+        toolCallId: message.toolCallId,
+        toolName: message.toolName,
+        isError: message.isError,
+        content: message.content,
+      };
     default:
       return message;
   }
@@ -196,7 +228,10 @@ export function fingerprintPromptPrefix(input: {
   const system = leading
     ? [
         { name: "base", hash: shortHash(leading.content) },
-        ...Object.entries(leading.sections ?? {}).map(([name, value]) => ({ name: promptSectionLabel(name), hash: shortHash(value) })),
+        ...Object.entries(leading.sections ?? {}).map(([name, value]) => ({
+          name: promptSectionLabel(name),
+          hash: shortHash(value),
+        })),
       ]
     : [];
   return {
@@ -209,16 +244,34 @@ export function fingerprintPromptPrefix(input: {
 }
 
 /** The first section, in cache order, where `current` stopped extending `previous`. */
-export function diffPromptPrefix(previous: PromptPrefixFingerprint, current: PromptPrefixFingerprint): PromptPrefixDifference | undefined {
-  if (previous.model !== current.model) return { source: "model", previousHash: shortHash(previous.model), currentHash: shortHash(current.model) };
-  if (previous.retention !== current.retention) return { source: "retention", previousHash: previous.retention, currentHash: current.retention };
-  if (previous.tools !== current.tools) return { source: "tools", previousHash: previous.tools, currentHash: current.tools };
+export function diffPromptPrefix(
+  previous: PromptPrefixFingerprint,
+  current: PromptPrefixFingerprint,
+): PromptPrefixDifference | undefined {
+  if (previous.model !== current.model)
+    return {
+      source: "model",
+      previousHash: shortHash(previous.model),
+      currentHash: shortHash(current.model),
+    };
+  if (previous.retention !== current.retention)
+    return {
+      source: "retention",
+      previousHash: previous.retention,
+      currentHash: current.retention,
+    };
+  if (previous.tools !== current.tools)
+    return { source: "tools", previousHash: previous.tools, currentHash: current.tools };
   const sections = Math.max(previous.system.length, current.system.length);
   for (let index = 0; index < sections; index += 1) {
     const before = previous.system[index];
     const after = current.system[index];
     if (before?.name === after?.name && before?.hash === after?.hash) continue;
-    return { source: `system:${(after ?? before)!.name}`, previousHash: before?.hash ?? "", currentHash: after?.hash ?? "" };
+    return {
+      source: `system:${(after ?? before)!.name}`,
+      previousHash: before?.hash ?? "",
+      currentHash: after?.hash ?? "",
+    };
   }
   const offset = current.system.length > 0 || previous.system.length > 0 ? 1 : 0;
   for (let index = 0; index < previous.messages.length; index += 1) {
@@ -227,7 +280,13 @@ export function diffPromptPrefix(previous: PromptPrefixFingerprint, current: Pro
     // A request that ends earlier still reuses the shared prefix.
     if (!after) break;
     if (before.hash === after.hash) continue;
-    return { source: "messages", messageIndex: index + offset, messageRole: after.role, previousHash: before.hash, currentHash: after.hash };
+    return {
+      source: "messages",
+      messageIndex: index + offset,
+      messageRole: after.role,
+      previousHash: before.hash,
+      currentHash: after.hash,
+    };
   }
   return undefined;
 }
@@ -245,8 +304,10 @@ export interface PromptCacheMissReport extends PromptCacheMissMeasurement {
 /** One log line of labels, hashes and counts. Never content. */
 export function formatPromptCacheMissLog(report: PromptCacheMissReport): string {
   const parts = [`source=${report.source}`];
-  if (report.messageIndex !== undefined) parts.push(`index=${report.messageIndex}`, `role=${report.messageRole ?? "?"}`);
-  if (report.previousHash !== undefined) parts.push(`hash=${report.previousHash || "-"}->${report.currentHash || "-"}`);
+  if (report.messageIndex !== undefined)
+    parts.push(`index=${report.messageIndex}`, `role=${report.messageRole ?? "?"}`);
+  if (report.previousHash !== undefined)
+    parts.push(`hash=${report.previousHash || "-"}->${report.currentHash || "-"}`);
   parts.push(`missed=${report.missedTokens}`, `idleMs=${report.idleMs}`);
   if (report.modelChanged) parts.push("modelChanged");
   return `Prompt cache miss: ${parts.join(" ")}`;
@@ -292,7 +353,9 @@ export interface PromptCacheTelemetry {
 
 const DEFAULT_MAX_CHATS = 256;
 
-export function createPromptCacheTelemetry(options: { now?: () => number; maxChats?: number } = {}): PromptCacheTelemetry {
+export function createPromptCacheTelemetry(
+  options: { now?: () => number; maxChats?: number } = {},
+): PromptCacheTelemetry {
   const now = options.now ?? Date.now;
   const maxChats = options.maxChats ?? DEFAULT_MAX_CHATS;
   const chats = new Map<string, ChatState>();
@@ -311,7 +374,8 @@ export function createPromptCacheTelemetry(options: { now?: () => number; maxCha
     beginRequest(chatKey, request) {
       const fingerprint = fingerprintPromptPrefix(request);
       const catalogCacheRead = request.model.cost?.cacheRead;
-      const ttlMs = request.cacheTtlMs && request.cacheTtlMs > 0 ? request.cacheTtlMs : PROMPT_CACHE_TTL_MS;
+      const ttlMs =
+        request.cacheTtlMs && request.cacheTtlMs > 0 ? request.cacheTtlMs : PROMPT_CACHE_TTL_MS;
       let completed = false;
       return {
         complete(message) {
@@ -321,12 +385,18 @@ export function createPromptCacheTelemetry(options: { now?: () => number; maxCha
           const measured = measurePromptCacheMiss(state.previous, message, catalogCacheRead);
           let report: PromptCacheMissReport | undefined;
           if (measured) {
-            const difference = state.fingerprint ? diffPromptPrefix(state.fingerprint, fingerprint) : undefined;
+            const difference = state.fingerprint
+              ? diffPromptPrefix(state.fingerprint, fingerprint)
+              : undefined;
             report = {
               ...measured,
               source: difference?.source ?? (measured.idleMs >= ttlMs ? "ttl" : "unknown"),
-              ...(difference?.messageIndex !== undefined ? { messageIndex: difference.messageIndex, messageRole: difference.messageRole } : {}),
-              ...(difference ? { previousHash: difference.previousHash, currentHash: difference.currentHash } : {}),
+              ...(difference?.messageIndex !== undefined
+                ? { messageIndex: difference.messageIndex, messageRole: difference.messageRole }
+                : {}),
+              ...(difference
+                ? { previousHash: difference.previousHash, currentHash: difference.currentHash }
+                : {}),
               at: now(),
             };
             state.lastMiss = report;
@@ -348,7 +418,12 @@ export function createPromptCacheTelemetry(options: { now?: () => number; maxCha
       if (promptTokens <= 0) return;
       const state = stateFor(chatKey);
       if (state.previous && message.timestamp <= state.previous.timestamp) return;
-      state.previous = { promptTokens, modelKey: `${message.provider}/${message.model}`, timestamp: message.timestamp, reportedCache: true };
+      state.previous = {
+        promptTokens,
+        modelKey: `${message.provider}/${message.model}`,
+        timestamp: message.timestamp,
+        reportedCache: true,
+      };
     },
     reset(chatKey) {
       const state = chats.get(chatKey);
@@ -382,13 +457,22 @@ export interface PromptCacheSessionEntry {
  * response or compaction, oldest first, as `observeWarm` takes them. Earlier
  * warms were superseded by a later request in Pi's own scan.
  */
-export function promptCacheWarmsSinceLastResponse(entries: readonly PromptCacheSessionEntry[]): PromptCacheResponse[] {
+export function promptCacheWarmsSinceLastResponse(
+  entries: readonly PromptCacheSessionEntry[],
+): PromptCacheResponse[] {
   const warms: PromptCacheResponse[] = [];
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index]!;
     if (entry.type === "compaction" || entry.type === "branch_summary") break;
     if (entry.type === "message" && entry.message?.role === "assistant") break;
-    if (entry.type !== "usage" || entry.kind !== "cache_warm" || !entry.usage || !entry.provider || !entry.model) continue;
+    if (
+      entry.type !== "usage" ||
+      entry.kind !== "cache_warm" ||
+      !entry.usage ||
+      !entry.provider ||
+      !entry.model
+    )
+      continue;
     const timestamp = Date.parse(entry.timestamp ?? "");
     if (!Number.isFinite(timestamp)) continue;
     warms.push({ provider: entry.provider, model: entry.model, timestamp, usage: entry.usage });
@@ -433,7 +517,8 @@ export function withPromptCacheTelemetry(
           const hadMiss = options.telemetry.lastMiss(options.chatKey) !== undefined;
           const miss = pending.complete(message);
           if (miss) options.onMiss?.(miss);
-          else if (hadMiss && options.telemetry.lastMiss(options.chatKey) === undefined) options.onMissCleared?.();
+          else if (hadMiss && options.telemetry.lastMiss(options.chatKey) === undefined)
+            options.onMissCleared?.();
         })
         .catch((error: unknown) => options.onError?.(error));
     }

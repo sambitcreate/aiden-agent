@@ -10,47 +10,118 @@ import { createScratchWorkspaceDirectory } from "../../../main/services/scratch-
 import { JsonStore } from "./state.ts";
 import type { CliWorkspace } from "./workspaces.ts";
 
-export function createCliWorkspaceApplication(agentDir: string, operations: {
-  cancelGeneration(workspaceId: string): Promise<void>;
-  cancelSchedules(workspaceId: string): Promise<void>;
-  resumeSchedules(workspaceId: string): Promise<void>;
-  assertManagedWorktreeAdmission?(workspace: Workspace): Promise<void>;
-}) {
+export function createCliWorkspaceApplication(
+  agentDir: string,
+  operations: {
+    cancelGeneration(workspaceId: string): Promise<void>;
+    cancelSchedules(workspaceId: string): Promise<void>;
+    resumeSchedules(workspaceId: string): Promise<void>;
+    assertManagedWorktreeAdmission?(workspace: Workspace): Promise<void>;
+  },
+) {
   const records = new JsonStore<CliWorkspace[]>(join(agentDir, "workspaces.json"), []);
-  const project = (record: CliWorkspace): Workspace => ({ id: record.id, name: record.name, folderPath: record.folderPath || undefined, permission: record.access,
-    createdAt: record.createdAt ?? 0, updatedAt: record.updatedAt ?? 0, memoryEnabled: record.memoryEnabled, managedWorktree: record.managedWorktree });
+  const project = (record: CliWorkspace): Workspace => ({
+    id: record.id,
+    name: record.name,
+    folderPath: record.folderPath || undefined,
+    permission: record.access,
+    createdAt: record.createdAt ?? 0,
+    updatedAt: record.updatedAt ?? 0,
+    memoryEnabled: record.memoryEnabled,
+    managedWorktree: record.managedWorktree,
+  });
   const changeListeners = new Set<() => void>();
-  const changed = () => { for (const listener of changeListeners) listener(); };
-  const configStore = {
-    async listWorkspaces() { return (await records.load()).map(project); },
-    async getWorkspace(id: string) { const record = (await records.load()).find((record) => record.id === id); return record ? project(record) : undefined; },
-    async saveWorkspace(workspace: Workspace) {
-      return records.update((entries) => {
-        const index = entries.findIndex((entry) => entry.id === workspace.id);
-        const record = { ...workspace, folderPath: workspace.folderPath ?? "", access: workspace.permission };
-        if (index === -1) entries.push(record); else entries[index] = record;
-        return workspace;
-      }).finally(changed);
-    },
-    async removeWorkspace(id: string) { await records.update((entries) => { const index = entries.findIndex((entry) => entry.id === id); if (index >= 0) entries.splice(index, 1); }).finally(changed); },
-    /** A workspace was saved or removed (the paired desktops' `/host/events` feed listens). */
-    onWorkspacesChanged(listener: () => void) { changeListeners.add(listener); return () => { changeListeners.delete(listener); }; },
+  const changed = () => {
+    for (const listener of changeListeners) listener();
   };
-  const mutationGate = new WorkspaceMutationGate(), operationRegistry = new WorkspaceOperationRegistry();
-  const application = createWorkspaceApplicationService({ configStore,
+  const configStore = {
+    async listWorkspaces() {
+      return (await records.load()).map(project);
+    },
+    async getWorkspace(id: string) {
+      const record = (await records.load()).find((record) => record.id === id);
+      return record ? project(record) : undefined;
+    },
+    async saveWorkspace(workspace: Workspace) {
+      return records
+        .update((entries) => {
+          const index = entries.findIndex((entry) => entry.id === workspace.id);
+          const record = {
+            ...workspace,
+            folderPath: workspace.folderPath ?? "",
+            access: workspace.permission,
+          };
+          if (index === -1) entries.push(record);
+          else entries[index] = record;
+          return workspace;
+        })
+        .finally(changed);
+    },
+    async removeWorkspace(id: string) {
+      await records
+        .update((entries) => {
+          const index = entries.findIndex((entry) => entry.id === id);
+          if (index >= 0) entries.splice(index, 1);
+        })
+        .finally(changed);
+    },
+    /** A workspace was saved or removed (the paired desktops' `/host/events` feed listens). */
+    onWorkspacesChanged(listener: () => void) {
+      changeListeners.add(listener);
+      return () => {
+        changeListeners.delete(listener);
+      };
+    },
+  };
+  const mutationGate = new WorkspaceMutationGate(),
+    operationRegistry = new WorkspaceOperationRegistry();
+  const application = createWorkspaceApplicationService({
+    configStore,
     llmClient: { cancelWorkspaceAndSettle: operations.cancelGeneration },
-    scheduleService: { cancelWorkspace: operations.cancelSchedules, resumeWorkspace: operations.resumeSchedules },
+    scheduleService: {
+      cancelWorkspace: operations.cancelSchedules,
+      resumeWorkspace: operations.resumeSchedules,
+    },
     terminalService: { closeForWorkspace() {} }, // CLI daemon does not own persistent terminals.
-    workspaceMutationGate: mutationGate, workspaceOperationRegistry: operationRegistry,
-    createScratchWorkspaceDirectory: () => createScratchWorkspaceDirectory(join(agentDir, "scratch")),
-    realpath, stat, removeEmptyDirectory: rmdir, createId: () => `w-${randomUUID()}`, now: Date.now,
+    workspaceMutationGate: mutationGate,
+    workspaceOperationRegistry: operationRegistry,
+    createScratchWorkspaceDirectory: () =>
+      createScratchWorkspaceDirectory(join(agentDir, "scratch")),
+    realpath,
+    stat,
+    removeEmptyDirectory: rmdir,
+    createId: () => `w-${randomUUID()}`,
+    now: Date.now,
     logError: (area, message) => process.stderr.write(`aiden: ${area}: ${message}\n`),
   });
-  const environment = createWorkspaceEnvironmentApplicationService({ configStore, workspaceMutationGate: mutationGate, workspaceOperationRegistry: operationRegistry, realpath, stat,
-    assertManagedWorktreeAdmission: operations.assertManagedWorktreeAdmission ?? (async (workspace) => { if (workspace.managedWorktree) throw new Error("Managed worktree authority is unavailable."); }),
+  const environment = createWorkspaceEnvironmentApplicationService({
+    configStore,
+    workspaceMutationGate: mutationGate,
+    workspaceOperationRegistry: operationRegistry,
+    realpath,
+    stat,
+    assertManagedWorktreeAdmission:
+      operations.assertManagedWorktreeAdmission ??
+      (async (workspace) => {
+        if (workspace.managedWorktree)
+          throw new Error("Managed worktree authority is unavailable.");
+      }),
   });
-  return { application, environment, configStore, mutationGate, operationRegistry,
-    async ensureWorktreeRoot() { const root = join(agentDir, "worktrees"); await mkdir(root, { recursive: true, mode: 0o700 }); return root; },
-    async ensureSnapshotRoot() { const root = join(agentDir, "worktree-snapshots"); await mkdir(root, { recursive: true, mode: 0o700 }); return root; },
+  return {
+    application,
+    environment,
+    configStore,
+    mutationGate,
+    operationRegistry,
+    async ensureWorktreeRoot() {
+      const root = join(agentDir, "worktrees");
+      await mkdir(root, { recursive: true, mode: 0o700 });
+      return root;
+    },
+    async ensureSnapshotRoot() {
+      const root = join(agentDir, "worktree-snapshots");
+      await mkdir(root, { recursive: true, mode: 0o700 });
+      return root;
+    },
   };
 }

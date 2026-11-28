@@ -7,8 +7,7 @@ import { build } from "esbuild";
 import playwrightTest from "@playwright/test";
 import type * as PlaywrightTestModule from "@playwright/test";
 
-const { expect, test } =
-  playwrightTest as unknown as typeof PlaywrightTestModule;
+const { expect, test } = playwrightTest as unknown as typeof PlaywrightTestModule;
 
 // Deliberately no Aiden/Playwright Electron fixture: its CDP target attachment
 // rejects when a guest crashes before the first commit, masking native recovery.

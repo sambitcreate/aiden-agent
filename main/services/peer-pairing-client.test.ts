@@ -36,8 +36,7 @@ function scriptedHost(polls: Reply[], options: { commitment?: string; create?: R
             requestId: REQUEST_ID,
             pollSecret: "s".repeat(43),
             expiresAt: EXPIRES_AT,
-            hostCommitment:
-              options.commitment ?? pairingRequestCommitment(REQUEST_ID, hostNonce),
+            hostCommitment: options.commitment ?? pairingRequestCommitment(REQUEST_ID, hostNonce),
           },
           request,
         );
@@ -51,7 +50,11 @@ function scriptedHost(polls: Reply[], options: { commitment?: string; create?: R
   return { session, sent, polls: () => sent.filter((entry) => !entry.method) };
 }
 
-function run(host: ReturnType<typeof scriptedHost>, clock = { now: START }, signal = new AbortController().signal) {
+function run(
+  host: ReturnType<typeof scriptedHost>,
+  clock = { now: START },
+  signal = new AbortController().signal,
+) {
   const codes: string[] = [];
   const pending = requestPeerPairing({
     session: host.session,
@@ -94,7 +97,10 @@ test("a host whose nonce breaks its commitment shows no code and the request is 
 
 test("a decision on the other device ends the wait with its own outcome", async () => {
   for (const state of ["denied", "expired", "cancelled"] as const) {
-    const host = scriptedHost([{ requestId: REQUEST_ID, state: "pending" }, { requestId: REQUEST_ID, state }]);
+    const host = scriptedHost([
+      { requestId: REQUEST_ID, state: "pending" },
+      { requestId: REQUEST_ID, state },
+    ]);
     const { codes, pending } = run(host);
     assert.deepEqual(await outcome(pending), { status: state });
     assert.match(codes[0] ?? "", /^\d{6}$/u);
@@ -108,7 +114,12 @@ test("brief outages are retried, a purged request reads as expired, and a lastin
   assert.deepEqual(await outcome(run(recovered).pending), { status: "expired" });
   assert.equal(recovered.polls().length, 3);
 
-  const lasting = scriptedHost([outage(), outage(), outage(), { requestId: REQUEST_ID, state: "approved" }]);
+  const lasting = scriptedHost([
+    outage(),
+    outage(),
+    outage(),
+    { requestId: REQUEST_ID, state: "approved" },
+  ]);
   assert.equal((await outcome(run(lasting).pending)).status, "failed");
   assert.equal(lasting.polls().length, 3, "the third consecutive failure ends the wait");
   assert.equal(deleted(lasting), 1);

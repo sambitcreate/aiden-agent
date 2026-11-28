@@ -3,15 +3,17 @@ import { InboxDockBadgeSetting, SidebarViewPicker } from "./sidebar-view-picker"
 import { LinksSettings } from "./links-settings";
 import { QuickChatSettings } from "./quick-chat-settings";
 import * as React from "react";
-import {
-  Check,
-  Monitor,
-  Moon,
-  Sun,
-} from "lucide-react";
+import { Check, Monitor, Moon, Sun } from "lucide-react";
 import {
   Button,
-  Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch,
+  Field,
+  FieldSet,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Switch,
   toast,
 } from "../ui";
 import { isInlineVisualsMode, type InlineVisualsMode } from "../../shared/appearance";
@@ -64,7 +66,13 @@ const INLINE_VISUALS_LABELS: Record<InlineVisualsMode, string> = {
   off: "Off",
 };
 
-function ChatPreferenceField<Value extends string>({ label, description, value, labels, onChange }: {
+function ChatPreferenceField<Value extends string>({
+  label,
+  description,
+  value,
+  labels,
+  onChange,
+}: {
   label: string;
   description: string;
   value: Value;
@@ -73,11 +81,22 @@ function ChatPreferenceField<Value extends string>({ label, description, value, 
 }) {
   return (
     <Field label={label} description={description}>
-      <Select value={value} onValueChange={(next) => {
-        if (Object.prototype.hasOwnProperty.call(labels, next)) onChange(next as Value);
-      }}>
-        <SelectTrigger size="small" aria-label={label}><SelectValue>{labels[value]}</SelectValue></SelectTrigger>
-        <SelectContent>{Object.entries<string>(labels).map(([id, text]) => <SelectItem key={id} value={id}>{text}</SelectItem>)}</SelectContent>
+      <Select
+        value={value}
+        onValueChange={(next) => {
+          if (Object.prototype.hasOwnProperty.call(labels, next)) onChange(next as Value);
+        }}
+      >
+        <SelectTrigger size="small" aria-label={label}>
+          <SelectValue>{labels[value]}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {Object.entries<string>(labels).map(([id, text]) => (
+            <SelectItem key={id} value={id}>
+              {text}
+            </SelectItem>
+          ))}
+        </SelectContent>
       </Select>
     </Field>
   );
@@ -101,17 +120,36 @@ function ThemeModePreview({ mode, config }: { mode: AppearanceMode; config: Appe
   return (
     <span className={`appearance-mode-preview appearance-mode-preview-${mode}`} aria-hidden="true">
       {schemes.map((scheme) => (
-        <span key={scheme} className="appearance-mode-scene" data-preview-scheme={scheme} style={previewStyle(config[scheme], scheme)}>
+        <span
+          key={scheme}
+          className="appearance-mode-scene"
+          data-preview-scheme={scheme}
+          style={previewStyle(config[scheme], scheme)}
+        >
           <span className="appearance-mode-preview-toolbar" />
           <span className="appearance-mode-preview-sidebar" />
-          <span className="appearance-mode-preview-content"><i /><i /><i /></span>
+          <span className="appearance-mode-preview-content">
+            <i />
+            <i />
+            <i />
+          </span>
         </span>
       ))}
     </span>
   );
 }
 
-function ThemeModePicker({ value, config, disabled, onChange }: { value: AppearanceMode; config: AppearanceConfig; disabled?: boolean; onChange: (mode: AppearanceMode) => void }) {
+function ThemeModePicker({
+  value,
+  config,
+  disabled,
+  onChange,
+}: {
+  value: AppearanceMode;
+  config: AppearanceConfig;
+  disabled?: boolean;
+  onChange: (mode: AppearanceMode) => void;
+}) {
   const options: Array<{ value: AppearanceMode; label: string; icon: React.ReactNode }> = [
     { value: "system", label: "System", icon: <Monitor /> },
     { value: "light", label: "Light", icon: <Sun /> },
@@ -142,10 +180,20 @@ function ThemeModePicker({ value, config, disabled, onChange }: { value: Appeara
   );
 }
 
-function ChatWidthPicker({ value, onChange }: { value: ChatWidthPreference; onChange: (width: ChatWidthPreference) => void }) {
+function ChatWidthPicker({
+  value,
+  onChange,
+}: {
+  value: ChatWidthPreference;
+  onChange: (width: ChatWidthPreference) => void;
+}) {
   const options = CHAT_WIDTH_OPTIONS.map((option) => ({ value: option.id, label: option.label }));
   return (
-    <div className="appearance-width-picker" role="radiogroup" aria-labelledby="appearance-chat-width-title">
+    <div
+      className="appearance-width-picker"
+      role="radiogroup"
+      aria-labelledby="appearance-chat-width-title"
+    >
       {options.map((option, index) => (
         <button
           key={option.value}
@@ -157,8 +205,16 @@ function ChatWidthPicker({ value, onChange }: { value: ChatWidthPreference; onCh
           onClick={() => onChange(option.value)}
           onKeyDown={(event) => handleRadioNavigation(event, index, options, onChange)}
         >
-          <span className="appearance-width-preview" data-chat-width={option.value} aria-hidden="true">
-            <span className="appearance-width-preview-column"><i /><i /><i /></span>
+          <span
+            className="appearance-width-preview"
+            data-chat-width={option.value}
+            aria-hidden="true"
+          >
+            <span className="appearance-width-preview-column">
+              <i />
+              <i />
+              <i />
+            </span>
           </span>
           <span className="appearance-width-option-label">{option.label}</span>
         </button>
@@ -225,7 +281,9 @@ function ThemeTile({
         Aa
         <span className="appearance-tile-accent" style={{ backgroundColor: palette.accent }} />
         {selected ? (
-          <span className="appearance-tile-check"><Check strokeWidth={3} /></span>
+          <span className="appearance-tile-check">
+            <Check strokeWidth={3} />
+          </span>
         ) : null}
       </span>
       <span className="appearance-tile-label">{preset.label}</span>
@@ -269,7 +327,10 @@ function usesSystemTitleBar(preference: LinuxTitleBarPreference, current: Window
   return preference === "auto" ? current === "system" : preference === "system";
 }
 
-function systemTitleBarDescription(preference: LinuxTitleBarPreference, current: WindowChrome): string {
+function systemTitleBarDescription(
+  preference: LinuxTitleBarPreference,
+  current: WindowChrome,
+): string {
   const base = "Show your desktop's own title bar and menu bar instead of Aiden's window buttons.";
   return usesSystemTitleBar(preference, current) === (current === "system")
     ? base
@@ -279,7 +340,9 @@ function systemTitleBarDescription(preference: LinuxTitleBarPreference, current:
 export function AppearanceSettings() {
   const capabilities = useAppCapabilities();
   const windowChrome = useWindowChrome();
-  const [config, setConfig] = React.useState<AppearanceConfig>(() => readCachedAppearance() ?? createDefaultAppearanceConfig());
+  const [config, setConfig] = React.useState<AppearanceConfig>(
+    () => readCachedAppearance() ?? createDefaultAppearanceConfig(),
+  );
   // Until it is set, the switch reads as the Bot chats do: on if a Bot was Detailed.
   const bots = useBots(false, config.showToolActivity === undefined);
   const showToolActivity = showsBotToolActivity(config.showToolActivity, bots.data ?? []);
@@ -312,19 +375,13 @@ export function AppearanceSettings() {
       if (!isCurrent()) return;
       try {
         await settingsApi.set({ appearance: next });
-        if (
-          isCurrent() &&
-          pendingSaveRef.current?.revision === revision
-        ) {
+        if (isCurrent() && pendingSaveRef.current?.revision === revision) {
           pendingSaveRef.current = null;
           dirtyRef.current = false;
           if (mountedRef.current) setSaveError(null);
         }
       } catch (error) {
-        if (
-          isCurrent() &&
-          pendingSaveRef.current?.revision === revision
-        ) {
+        if (isCurrent() && pendingSaveRef.current?.revision === revision) {
           dirtyRef.current = true;
           if (mountedRef.current) {
             setSaveError(errorMessage(error, "Aiden could not save appearance settings."));
@@ -334,15 +391,18 @@ export function AppearanceSettings() {
     });
   }, []);
 
-  const scheduleSave = React.useCallback((next: AppearanceConfig, revision: number) => {
-    pendingSaveRef.current = { config: next, revision };
-    dirtyRef.current = true;
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      saveTimerRef.current = null;
-      queueSave(next, revision);
-    }, 220);
-  }, [queueSave]);
+  const scheduleSave = React.useCallback(
+    (next: AppearanceConfig, revision: number) => {
+      pendingSaveRef.current = { config: next, revision };
+      dirtyRef.current = true;
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => {
+        saveTimerRef.current = null;
+        queueSave(next, revision);
+      }, 220);
+    },
+    [queueSave],
+  );
 
   const apply = React.useCallback((next: AppearanceConfig) => {
     const nativeInfo = nativeInfoRef.current;
@@ -353,24 +413,27 @@ export function AppearanceSettings() {
     );
   }, []);
 
-  const update = React.useCallback((
-    updater: (current: AppearanceConfig) => AppearanceConfig,
-    revision = beginAppearanceIntent(),
-  ) => {
-    const next = normalizeAppearanceConfig(updater(configRef.current));
-    configRef.current = next;
-    setConfig(next);
-    apply(next);
-    if (appearanceSafetyIssues(next).length === 0) {
-      // Keep hidden/reused auxiliary windows on the live preview while the
-      // durable settings write remains intentionally debounced.
-      void settingsApi.previewAppearance(next).catch(() => {});
-      scheduleSave(next, revision);
-    } else if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-  }, [apply, scheduleSave]);
+  const update = React.useCallback(
+    (
+      updater: (current: AppearanceConfig) => AppearanceConfig,
+      revision = beginAppearanceIntent(),
+    ) => {
+      const next = normalizeAppearanceConfig(updater(configRef.current));
+      configRef.current = next;
+      setConfig(next);
+      apply(next);
+      if (appearanceSafetyIssues(next).length === 0) {
+        // Keep hidden/reused auxiliary windows on the live preview while the
+        // durable settings write remains intentionally debounced.
+        void settingsApi.previewAppearance(next).catch(() => {});
+        scheduleSave(next, revision);
+      } else if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    },
+    [apply, scheduleSave],
+  );
 
   React.useEffect(() => {
     mountedRef.current = true;
@@ -379,8 +442,8 @@ export function AppearanceSettings() {
     const hydrationRevision = readAppearanceIntentRevision();
     void (async () => {
       const appearanceState = await settingsApi.getAppearanceState();
-      const nativeInfo = await nativeRevision.readStable(
-        () => window.aidenAPI.nativeTheme.getInfo(),
+      const nativeInfo = await nativeRevision.readStable(() =>
+        window.aidenAPI.nativeTheme.getInfo(),
       );
       if (cancelled) return;
       nativeInfoRef.current = nativeInfo;
@@ -397,7 +460,11 @@ export function AppearanceSettings() {
         pendingSaveRef.current = null;
         dirtyRef.current = false;
       }
-      applyAppearanceConfig(next, nativeInfo.shouldUseDarkColors, nativeInfo.shouldUseHighContrastColors === true);
+      applyAppearanceConfig(
+        next,
+        nativeInfo.shouldUseDarkColors,
+        nativeInfo.shouldUseHighContrastColors === true,
+      );
       setHydrated(true);
     })().catch((error: unknown) => {
       if (!cancelled) {
@@ -442,9 +509,7 @@ export function AppearanceSettings() {
       };
     };
     const handleIntentFailure = (event: Event) => {
-      const failedRevision = (
-        event as CustomEvent<{ revision?: unknown }>
-      ).detail?.revision;
+      const failedRevision = (event as CustomEvent<{ revision?: unknown }>).detail?.revision;
       if (typeof failedRevision !== "number") return;
       const pending = pendingSaveRef.current;
       const rebasedRevision = rebaseAppearanceIntentAfterFailure(
@@ -496,7 +561,12 @@ export function AppearanceSettings() {
         apply(configRef.current);
       } catch (error) {
         if (isCurrent()) {
-          toast.error(errorMessage(error, "The theme changed, but Aiden could not refresh the system appearance state."));
+          toast.error(
+            errorMessage(
+              error,
+              "The theme changed, but Aiden could not refresh the system appearance state.",
+            ),
+          );
         }
       }
     }).finally(() => {
@@ -525,7 +595,8 @@ export function AppearanceSettings() {
       ? config.light.preset
       : null;
   // A Light or Dark choice still on its way to the system already shows on the tiles.
-  const tileScheme: AppearanceScheme = requestedMode === "light" || requestedMode === "dark" ? requestedMode : appliedScheme;
+  const tileScheme: AppearanceScheme =
+    requestedMode === "light" || requestedMode === "dark" ? requestedMode : appliedScheme;
   const currentThemeLabel = selectedPreset
     ? (THEME_PRESETS.find((preset) => preset.id === selectedPreset)?.label ?? "Custom")
     : "Custom";
@@ -534,12 +605,18 @@ export function AppearanceSettings() {
     <div className="appearance-page" aria-busy={!hydrated} inert={!hydrated ? true : undefined}>
       <div className="settings-page-heading appearance-heading">
         <h1>Appearance</h1>
-        <p>Pick a theme, choose when Aiden uses its light or dark look, and set how wide conversations read.</p>
+        <p>
+          Pick a theme, choose when Aiden uses its light or dark look, and set how wide
+          conversations read.
+        </p>
       </div>
 
       {saveError ? (
         <div className="appearance-page-status" data-kind="error" role="alert">
-          <div><strong>Appearance changes are not saved.</strong><div>{saveError}</div></div>
+          <div>
+            <strong>Appearance changes are not saved.</strong>
+            <div>{saveError}</div>
+          </div>
           <Button
             variant="transparent"
             size="small"
@@ -557,7 +634,12 @@ export function AppearanceSettings() {
 
       <section className="appearance-theme-section" aria-labelledby="appearance-theme-title">
         <h2 id="appearance-theme-title">Theme</h2>
-        <ThemeModePicker config={config} value={requestedMode ?? config.mode} disabled={hasSafetyIssues} onChange={changeMode} />
+        <ThemeModePicker
+          config={config}
+          value={requestedMode ?? config.mode}
+          disabled={hasSafetyIssues}
+          onChange={changeMode}
+        />
         <ThemeTileGrid value={selectedPreset} scheme={tileScheme} onChange={changeTheme} />
         <p className="appearance-current-theme">Current theme: {currentThemeLabel}</p>
       </section>
@@ -566,14 +648,18 @@ export function AppearanceSettings() {
         <ChatPreferenceField
           label="Work details"
           description="Choose how much tool activity to show. Verbose keeps it open in history. Thinking always stays one line until you open it."
-          value={config.workDetails} labels={WORK_DETAILS_LABELS}
+          value={config.workDetails}
+          labels={WORK_DETAILS_LABELS}
           onChange={(workDetails) => update((current) => ({ ...current, workDetails }))}
         />
         <ChatPreferenceField
           label="When to collapse work details"
           description="Choose when to automatically collapse work previews. Verbose keeps them open; manual choices always take priority."
-          value={config.workDetailsCollapseTiming} labels={COLLAPSE_TIMING_LABELS}
-          onChange={(workDetailsCollapseTiming) => update((current) => ({ ...current, workDetailsCollapseTiming }))}
+          value={config.workDetailsCollapseTiming}
+          labels={COLLAPSE_TIMING_LABELS}
+          onChange={(workDetailsCollapseTiming) =>
+            update((current) => ({ ...current, workDetailsCollapseTiming }))
+          }
         />
         <Field
           label="Show tool activity"
@@ -581,7 +667,9 @@ export function AppearanceSettings() {
         >
           <Switch
             checked={showToolActivity}
-            onCheckedChange={(checked) => update((current) => ({ ...current, showToolActivity: checked }))}
+            onCheckedChange={(checked) =>
+              update((current) => ({ ...current, showToolActivity: checked }))
+            }
             aria-label="Show tool activity"
           />
         </Field>
@@ -589,13 +677,26 @@ export function AppearanceSettings() {
         <ChatPreferenceField
           label="Send behavior while busy"
           description="Enter and the Send button use this default while a response runs. Cmd/Ctrl+Enter uses the other action. Steer accepts text only."
-          value={config.busySendBehavior} labels={BUSY_SEND_LABELS}
+          value={config.busySendBehavior}
+          labels={BUSY_SEND_LABELS}
           onChange={(busySendBehavior) => update((current) => ({ ...current, busySendBehavior }))}
         />
-        <Field label="Show context usage in composer" description="Show the token meter beside your message. Context details remain available in the workspace panel.">
-          <Switch checked={config.showComposerContextUsage} onCheckedChange={(checked) => update((current) => ({ ...current, showComposerContextUsage: checked }))} aria-label="Show context usage in composer" />
+        <Field
+          label="Show context usage in composer"
+          description="Show the token meter beside your message. Context details remain available in the workspace panel."
+        >
+          <Switch
+            checked={config.showComposerContextUsage}
+            onCheckedChange={(checked) =>
+              update((current) => ({ ...current, showComposerContextUsage: checked }))
+            }
+            aria-label="Show context usage in composer"
+          />
         </Field>
-        <Field label="Inline visuals" description="Let Aiden draw charts, diagrams, and interactive explainers in the chat.">
+        <Field
+          label="Inline visuals"
+          description="Let Aiden draw charts, diagrams, and interactive explainers in the chat."
+        >
           <Select
             value={config.inlineVisuals}
             onValueChange={(inlineVisuals) => {
@@ -608,7 +709,9 @@ export function AppearanceSettings() {
             </SelectTrigger>
             <SelectContent>
               {(["automatic", "on_request", "off"] as const).map((mode) => (
-                <SelectItem key={mode} value={mode}>{INLINE_VISUALS_LABELS[mode]}</SelectItem>
+                <SelectItem key={mode} value={mode}>
+                  {INLINE_VISUALS_LABELS[mode]}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -623,21 +726,32 @@ export function AppearanceSettings() {
           >
             <Switch
               checked={usesSystemTitleBar(config.linuxTitleBar, windowChrome)}
-              onCheckedChange={(checked) => update((current) => ({ ...current, linuxTitleBar: checked ? "system" : "aiden" }))}
+              onCheckedChange={(checked) =>
+                update((current) => ({ ...current, linuxTitleBar: checked ? "system" : "aiden" }))
+              }
               aria-label="Use system title bar"
             />
           </Field>
         </FieldSet>
       ) : null}
-      <section className="appearance-theme-section appearance-layout-section" aria-labelledby="appearance-chat-width-title">
+      <section
+        className="appearance-theme-section appearance-layout-section"
+        aria-labelledby="appearance-chat-width-title"
+      >
         <h2 id="appearance-chat-width-title">Chat width</h2>
-        <p className="appearance-section-description">Sets how wide messages and the composer can grow in the conversation.</p>
+        <p className="appearance-section-description">
+          Sets how wide messages and the composer can grow in the conversation.
+        </p>
         <ChatWidthPicker value={config.chatWidth} onChange={changeChatWidth} />
       </section>
-      <section className="appearance-theme-section appearance-layout-section" aria-labelledby="appearance-sidebar-title">
+      <section
+        className="appearance-theme-section appearance-layout-section"
+        aria-labelledby="appearance-sidebar-title"
+      >
         <h2 id="appearance-sidebar-title">Sidebar</h2>
         <p className="appearance-section-description">
-          Chooses how the sidebar lists chats. The sidebar’s Organize menu switches the same setting.
+          Chooses how the sidebar lists chats. The sidebar’s Organize menu switches the same
+          setting.
         </p>
         <SidebarViewPicker labelledBy="appearance-sidebar-title" />
         <InboxDockBadgeSetting />

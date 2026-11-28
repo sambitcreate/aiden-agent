@@ -207,7 +207,8 @@ export function ShortcutSettings() {
           : "Shortcut updated",
       );
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "The shortcut could not be updated.";
+      const message =
+        reason instanceof Error ? reason.message : "The shortcut could not be updated.";
       setError(message);
       if ("binding" in mutation && message.includes("already used by")) {
         setPendingReplacement({
@@ -246,9 +247,7 @@ export function ShortcutSettings() {
       queryClient.setQueryData(queryKeys.shortcuts, snapshot);
     } catch (reason) {
       const message =
-        reason instanceof Error
-          ? reason.message
-          : "Global shortcuts could not be restored.";
+        reason instanceof Error ? reason.message : "Global shortcuts could not be restored.";
       setError(message);
       toast.error(message);
     }
@@ -288,28 +287,26 @@ export function ShortcutSettings() {
   }
 
   const normalizedQuery = query.trim().toLocaleLowerCase();
-  const visible = COMMANDS.filter(
-    (command) => {
-      const binding = shortcuts.data.effective[command.id];
-      const searchText = [
-        command.title,
-        command.description,
-        command.category,
-        ...command.keywords,
-        binding,
-        prettyAccelerator(binding),
-        ariaKeyShortcut(binding),
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLocaleLowerCase();
-      return (
-        command.showInSettings &&
-        (!command.requiresCapability || capabilities[command.requiresCapability]) &&
-        (!normalizedQuery || searchText.includes(normalizedQuery))
-      );
-    },
-  );
+  const visible = COMMANDS.filter((command) => {
+    const binding = shortcuts.data.effective[command.id];
+    const searchText = [
+      command.title,
+      command.description,
+      command.category,
+      ...command.keywords,
+      binding,
+      prettyAccelerator(binding),
+      ariaKeyShortcut(binding),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLocaleLowerCase();
+    return (
+      command.showInSettings &&
+      (!command.requiresCapability || capabilities[command.requiresCapability]) &&
+      (!normalizedQuery || searchText.includes(normalizedQuery))
+    );
+  });
   const sheetBinding = shortcuts.data.effective["shortcuts.show"];
   const builtIn = BUILT_IN_KEYS.filter((entry) => {
     if (entry.requiresCapability && !capabilities[entry.requiresCapability]) return false;
@@ -335,8 +332,8 @@ export function ShortcutSettings() {
           Keyboard shortcuts
         </Text>
         <Text as="p" color="secondary" className="mt-1 max-w-[42rem]">
-          One command map powers the app, command palette, menus, and these controls.
-          Global shortcuts work while Aiden is in the background.
+          One command map powers the app, command palette, menus, and these controls. Global
+          shortcuts work while Aiden is in the background.
         </Text>
       </div>
 
@@ -379,9 +376,7 @@ export function ShortcutSettings() {
         </Callout>
       ) : null}
       <div className="sr-only" aria-live="polite">
-        {recordingId
-          ? `Recording ${COMMANDS.find((item) => item.id === recordingId)?.title}`
-          : ""}
+        {recordingId ? `Recording ${COMMANDS.find((item) => item.id === recordingId)?.title}` : ""}
       </div>
 
       {groups.map((group) =>

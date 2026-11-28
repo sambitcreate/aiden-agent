@@ -11,9 +11,15 @@ const transport: RemoteBotSessionTransport = {
   subscribe: (hostId, botId) => peerHostsApi.botSessionSubscribe(hostId, botId),
   unsubscribe: (subscriptionId) => peerHostsApi.botSessionUnsubscribe(subscriptionId),
   onMessage: (handler) => peerHostsApi.onBotSession(handler),
-  read: (hostId, botId) => peerHostsApi.call(hostId, { operation: "botSession", resourceId: botId }),
+  read: (hostId, botId) =>
+    peerHostsApi.call(hostId, { operation: "botSession", resourceId: botId }),
   older: (hostId, botId, before, limit) =>
-    peerHostsApi.call(hostId, { operation: "botSessionEntries", resourceId: botId, before, ...(limit === undefined ? {} : { limit }) }),
+    peerHostsApi.call(hostId, {
+      operation: "botSessionEntries",
+      resourceId: botId,
+      before,
+      ...(limit === undefined ? {} : { limit }),
+    }),
 };
 
 const IDLE: RemoteBotSessionState = { view: null, stream: "waiting", failed: null, gone: false };
@@ -35,14 +41,16 @@ export function useRemoteBotSession(
     next.start();
     return () => next.stop();
   }, [hostId, botId, enabled]);
-  const current = follower && follower.hostId === hostId && follower.botId === botId ? follower : null;
+  const current =
+    follower && follower.hostId === hostId && follower.botId === botId ? follower : null;
   const state = React.useSyncExternalStore(
     current?.subscribe ?? noSubscribe,
     current?.getState ?? idleState,
   );
   const reload = React.useCallback(() => current?.reload(), [current]);
   const loadOlder = React.useCallback(
-    (): Promise<RemoteBotOlderOutcome> => current?.loadOlder() ?? Promise.resolve({ kind: "loaded" }),
+    (): Promise<RemoteBotOlderOutcome> =>
+      current?.loadOlder() ?? Promise.resolve({ kind: "loaded" }),
     [current],
   );
   return React.useMemo(() => ({ ...state, reload, loadOlder }), [state, reload, loadOlder]);

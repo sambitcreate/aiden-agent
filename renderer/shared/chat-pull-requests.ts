@@ -14,8 +14,7 @@ export const MAX_CHAT_PULL_REQUEST_REPOSITORY_CHARS = 200;
 export type ChatPullRequestSource = "created" | "manual" | "branch-discovered";
 export type ChatPullRequestState = "open" | "closed" | "merged";
 export type ChatPullRequestChecksState = "passing" | "failing" | "pending";
-export type ChatPullRequestReviewDecision =
-  "approved" | "changes-requested" | "review-required";
+export type ChatPullRequestReviewDecision = "approved" | "changes-requested" | "review-required";
 
 /** Canonical identity of a linked pull request: (host, repository, number). */
 export interface ChatPullRequestRef {
@@ -168,9 +167,7 @@ function boundedText(value: unknown, maxLength: number): string | undefined {
 }
 
 /** Lowercase and normalize a GitHub `owner/repo` identity, dropping `.git`. */
-export function normalizeGitHubRepositoryIdentity(
-  value: unknown,
-): string | undefined {
+export function normalizeGitHubRepositoryIdentity(value: unknown): string | undefined {
   const text = boundedText(value, MAX_CHAT_PULL_REQUEST_REPOSITORY_CHARS);
   if (!text) return undefined;
   const lowered = text
@@ -181,8 +178,7 @@ export function normalizeGitHubRepositoryIdentity(
   if (slash <= 0 || slash !== lowered.lastIndexOf("/")) return undefined;
   const owner = lowered.slice(0, slash);
   const repo = lowered.slice(slash + 1);
-  if (!GITHUB_OWNER_PATTERN.test(owner) || !GITHUB_REPO_PATTERN.test(repo))
-    return undefined;
+  if (!GITHUB_OWNER_PATTERN.test(owner) || !GITHUB_REPO_PATTERN.test(repo)) return undefined;
   return `${owner}/${repo}`;
 }
 
@@ -193,12 +189,8 @@ export function normalizeGitHubHost(value: unknown): string | undefined {
   return HOSTNAME_PATTERN.test(lowered) ? lowered : undefined;
 }
 
-export function normalizeGitHubPullRequestNumber(
-  value: unknown,
-): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
-    ? value
-    : undefined;
+export function normalizeGitHubPullRequestNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 function normalizeBranch(value: unknown): string | undefined {
@@ -207,17 +199,14 @@ function normalizeBranch(value: unknown): string | undefined {
 }
 
 export function normalizeSha(value: unknown): string | undefined {
-  return typeof value === "string" && SHA_PATTERN.test(value)
-    ? value.toLowerCase()
-    : undefined;
+  return typeof value === "string" && SHA_PATTERN.test(value) ? value.toLowerCase() : undefined;
 }
 
 /** Supplied expectations must never degrade to branch-only matching. */
 export function parseExpectedHeadSha(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   const sha = normalizeSha(value);
-  if (!sha)
-    throw new Error("expectedHeadSha must be a hexadecimal commit SHA.");
+  if (!sha) throw new Error("expectedHeadSha must be a hexadecimal commit SHA.");
   return sha;
 }
 
@@ -226,9 +215,7 @@ export function parseExpectedHeadSha(value: unknown): string | undefined {
  * Only http(s) URLs without credentials are accepted; the returned repository
  * identity is normalized (lowercase, no `.git`).
  */
-export function parseGitHubPullRequestUrl(
-  value: unknown,
-): ChatPullRequestRef | undefined {
+export function parseGitHubPullRequestUrl(value: unknown): ChatPullRequestRef | undefined {
   const text = boundedText(value, MAX_CHAT_PULL_REQUEST_STRING_CHARS);
   if (!text) return undefined;
   let url: URL;
@@ -237,18 +224,12 @@ export function parseGitHubPullRequestUrl(
   } catch {
     return undefined;
   }
-  if (
-    (url.protocol !== "https:" && url.protocol !== "http:") ||
-    url.username ||
-    url.password
-  ) {
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
     return undefined;
   }
   const host = normalizeGitHubHost(url.hostname);
   if (!host) return undefined;
-  const segments = url.pathname
-    .split("/")
-    .filter((segment) => segment.length > 0);
+  const segments = url.pathname.split("/").filter((segment) => segment.length > 0);
   if (segments.length !== 4) return undefined;
   const [owner, repo, marker, rawNumber] = segments;
   if (marker !== "pull" && marker !== "pulls") return undefined;
@@ -269,31 +250,20 @@ export function pullRequestRefKey(ref: ChatPullRequestRef): string {
   return `${ref.host}/${ref.repository}#${ref.number}`;
 }
 
-export function samePullRequestRef(
-  a: ChatPullRequestRef,
-  b: ChatPullRequestRef,
-): boolean {
+export function samePullRequestRef(a: ChatPullRequestRef, b: ChatPullRequestRef): boolean {
   return pullRequestRefKey(a) === pullRequestRefKey(b);
 }
 
-export function normalizePullRequestRef(
-  value: unknown,
-): ChatPullRequestRef | undefined {
+export function normalizePullRequestRef(value: unknown): ChatPullRequestRef | undefined {
   if (!isRecord(value)) return undefined;
   const host = normalizeGitHubHost(value.host);
   const repository = normalizeGitHubRepositoryIdentity(value.repository);
   const number = normalizeGitHubPullRequestNumber(value.number);
-  return host && repository && number
-    ? { host, repository, number }
-    : undefined;
+  return host && repository && number ? { host, repository, number } : undefined;
 }
 
-export function normalizeChatPullRequestSource(
-  value: unknown,
-): ChatPullRequestSource {
-  return value === "created" ||
-    value === "manual" ||
-    value === "branch-discovered"
+export function normalizeChatPullRequestSource(value: unknown): ChatPullRequestSource {
+  return value === "created" || value === "manual" || value === "branch-discovered"
     ? value
     : "manual";
 }
@@ -306,9 +276,7 @@ export function normalizeChatPullRequestSnapshot(
   const headBranch = normalizeBranch(value.headBranch);
   const baseBranch = normalizeBranch(value.baseBranch);
   const syncedAt =
-    typeof value.syncedAt === "number" &&
-    Number.isFinite(value.syncedAt) &&
-    value.syncedAt > 0
+    typeof value.syncedAt === "number" && Number.isFinite(value.syncedAt) && value.syncedAt > 0
       ? Math.floor(value.syncedAt)
       : undefined;
   if (!title || !headBranch || !baseBranch || !syncedAt) return undefined;
@@ -351,16 +319,12 @@ export function normalizeChatPullRequestSnapshot(
  * Tolerant reader for a stored link record: drops records that cannot be
  * normalized, and drops only the snapshot when just the snapshot is malformed.
  */
-export function normalizeChatPullRequestLink(
-  value: unknown,
-): ChatPullRequestLink | undefined {
+export function normalizeChatPullRequestLink(value: unknown): ChatPullRequestLink | undefined {
   if (!isRecord(value)) return undefined;
   const ref = normalizePullRequestRef(value);
   if (!ref) return undefined;
   const linkedAt =
-    typeof value.linkedAt === "number" &&
-    Number.isFinite(value.linkedAt) &&
-    value.linkedAt > 0
+    typeof value.linkedAt === "number" && Number.isFinite(value.linkedAt) && value.linkedAt > 0
       ? Math.floor(value.linkedAt)
       : 0;
   if (!linkedAt) return undefined;
@@ -450,11 +414,8 @@ export function normalizeChatPullRequestCreateIntent(
 }
 
 /** Credential-free GitHub selector from the exact endpoint used by a push. */
-export function pullRequestRepositoryFromPushEndpoint(
-  endpoint: string,
-): string | undefined {
-  if (endpoint !== endpoint.trim() || /[\p{Cc}\s]/u.test(endpoint))
-    return undefined;
+export function pullRequestRepositoryFromPushEndpoint(endpoint: string): string | undefined {
+  if (endpoint !== endpoint.trim() || /[\p{Cc}\s]/u.test(endpoint)) return undefined;
   let host: string | undefined;
   let repository: string | undefined;
   const scp = /^git@([^:]+):([^/]+\/[^/]+)$/u.exec(endpoint);
@@ -474,9 +435,7 @@ export function pullRequestRepositoryFromPushEndpoint(
       )
         return undefined;
       host = normalizeGitHubHost(url.hostname);
-      repository = normalizeGitHubRepositoryIdentity(
-        url.pathname.replace(/^\//u, ""),
-      );
+      repository = normalizeGitHubRepositoryIdentity(url.pathname.replace(/^\//u, ""));
     } catch {
       return undefined;
     }
@@ -486,8 +445,7 @@ export function pullRequestRepositoryFromPushEndpoint(
 
 export function parsePullRequestRepository(value: unknown): string | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "string")
-    throw new Error("The pull request repository is invalid.");
+  if (typeof value !== "string") throw new Error("The pull request repository is invalid.");
   const [host, owner, name, extra] = value.split("/");
   const normalizedHost = normalizeGitHubHost(host);
   const repository = normalizeGitHubRepositoryIdentity(`${owner}/${name}`);

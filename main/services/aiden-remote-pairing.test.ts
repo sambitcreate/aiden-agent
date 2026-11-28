@@ -22,13 +22,15 @@ import {
 const endpoint = "https://aiden.example.test/api/aiden/v1";
 const fingerprint = `sha256/${Buffer.alloc(32, 4).toString("base64")}`;
 
-function fixture(options: {
-  devices?: Array<{ type: string; revokedAt?: number }>;
-  issueFails?: boolean;
-  beforeDeviceList?: () => Promise<void>;
-  botCapabilitiesSupported?: boolean;
-  hostCapabilitiesSupported?: boolean;
-} = {}) {
+function fixture(
+  options: {
+    devices?: Array<{ type: string; revokedAt?: number }>;
+    issueFails?: boolean;
+    beforeDeviceList?: () => Promise<void>;
+    botCapabilitiesSupported?: boolean;
+    hostCapabilitiesSupported?: boolean;
+  } = {},
+) {
   let now = 1_000;
   let issued = 0;
   let issuedAcceptsBotCapabilities: boolean | undefined;
@@ -57,7 +59,10 @@ function fixture(options: {
         };
       },
       revokeDevice: async () => true,
-      listDevices: async () => { await options.beforeDeviceList?.(); return (options.devices ?? []) as never; },
+      listDevices: async () => {
+        await options.beforeDeviceList?.();
+        return (options.devices ?? []) as never;
+      },
     },
     {
       now: () => now,
@@ -103,7 +108,10 @@ test("Mac and Linux pairing keep the existing grants without implicit host-wide 
   for (const deviceType of ["mac", "linux"] as const) {
     const pairing = fixture();
     const opened = pairing.service.begin(endpoint, fingerprint);
-    const result = await pairing.service.exchange({ ...exchange(opened.bootstrap.secret), deviceType }, "desktop");
+    const result = await pairing.service.exchange(
+      { ...exchange(opened.bootstrap.secret), deviceType },
+      "desktop",
+    );
     assert.deepEqual(result.capabilities, AIDEN_REMOTE_LEGACY_CAPABILITIES);
   }
 });
@@ -154,8 +162,7 @@ test("pairing opens for exactly five minutes and consumes its 256-bit secret onc
   await assert.rejects(
     pairing.service.exchange(exchange(bootstrap.secret), "lan:phone"),
     (error: unknown) =>
-      error instanceof AidenRemoteServiceError &&
-      error.code === "pairing_already_used",
+      error instanceof AidenRemoteServiceError && error.code === "pairing_already_used",
   );
   assert.equal(pairing.issued(), 1);
 });
@@ -173,18 +180,19 @@ test("manual setup code decrypts the canonical payload without crossing the wire
   const code = normalizeAidenManualPairingCode(opened.manualCode);
   const salt = Buffer.from(sealed.salt, "base64url");
   const nonce = Buffer.from(sealed.nonce, "base64url");
-  const key = Buffer.from(hkdfSync(
-    "sha256",
-    Buffer.from(code, "ascii"),
-    salt,
-    Buffer.from(`aiden-manual-pairing-v1\n${sealed.sessionId}`, "utf8"),
-    32,
-  ));
+  const key = Buffer.from(
+    hkdfSync(
+      "sha256",
+      Buffer.from(code, "ascii"),
+      salt,
+      Buffer.from(`aiden-manual-pairing-v1\n${sealed.sessionId}`, "utf8"),
+      32,
+    ),
+  );
   const decipher = createDecipheriv("aes-256-gcm", key, nonce, { authTagLength: 16 });
-  decipher.setAAD(Buffer.from(
-    `aiden-manual-pairing-v1\n${sealed.sessionId}\n${sealed.expiresAt}`,
-    "utf8",
-  ));
+  decipher.setAAD(
+    Buffer.from(`aiden-manual-pairing-v1\n${sealed.sessionId}\n${sealed.expiresAt}`, "utf8"),
+  );
   decipher.setAuthTag(Buffer.from(sealed.tag, "base64url"));
   const plaintext = Buffer.concat([
     decipher.update(Buffer.from(sealed.ciphertext, "base64url")),
@@ -200,10 +208,7 @@ test("manual setup code decrypts the canonical payload without crossing the wire
 });
 
 test("manual bootstrap follows pairing expiry, replacement, consumption, and exact code grammar", async () => {
-  assert.equal(
-    normalizeAidenManualPairingCode("0123-4567-89AB-CDEF-GHJK"),
-    "0123456789ABCDEFGHJK",
-  );
+  assert.equal(normalizeAidenManualPairingCode("0123-4567-89AB-CDEF-GHJK"), "0123456789ABCDEFGHJK");
   for (const invalid of [
     "0123-4567-89AB-CDEF-GHJI",
     "0123-4567-89AB-CDEF-GHJＫ",
@@ -211,7 +216,8 @@ test("manual bootstrap follows pairing expiry, replacement, consumption, and exa
   ]) {
     assert.throws(
       () => normalizeAidenManualPairingCode(invalid),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "invalid_request",
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "invalid_request",
     );
   }
 
@@ -229,7 +235,8 @@ test("manual bootstrap follows pairing expiry, replacement, consumption, and exa
   await pairing.service.exchange(exchange(second.bootstrap.secret), "phone");
   assert.throws(
     () => pairing.service.manualBootstrap(),
-    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "pairing_already_used",
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError && error.code === "pairing_already_used",
   );
 
   const expiring = fixture();
@@ -238,7 +245,8 @@ test("manual bootstrap follows pairing expiry, replacement, consumption, and exa
   expiring.advance(5 * 60_000);
   assert.throws(
     () => expiring.service.manualBootstrap(),
-    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "pairing_expired",
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError && error.code === "pairing_expired",
   );
 });
 
@@ -323,7 +331,10 @@ test("pairing grants progress authority only to clients that explicitly accept i
         !(AIDEN_REMOTE_OPT_IN_CAPABILITIES as readonly string[]).includes(capability),
     ),
   );
-  assert.equal((fullResult.capabilities as readonly string[]).includes("simulators:control"), false);
+  assert.equal(
+    (fullResult.capabilities as readonly string[]).includes("simulators:control"),
+    false,
+  );
 });
 
 test("Linux host policy narrows a Bot-aware pairing request to legacy authority", async () => {
@@ -344,16 +355,14 @@ test("an expired, closed, or invalid pairing window fails with stable safe codes
   const pairing = fixture();
   await assert.rejects(
     pairing.service.exchange(exchange("x".repeat(43)), "source"),
-    (error: unknown) =>
-      error instanceof AidenRemoteServiceError && error.code === "pairing_closed",
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "pairing_closed",
   );
   const opened = pairing.service.begin(endpoint, fingerprint);
   const { bootstrap } = opened;
   await assert.rejects(
     pairing.service.exchange(exchange("x".repeat(43)), "source"),
     (error: unknown) =>
-      error instanceof AidenRemoteServiceError &&
-      error.code === "authentication_required",
+      error instanceof AidenRemoteServiceError && error.code === "authentication_required",
   );
   pairing.advance(5 * 60_000);
   assert.equal(pairing.service.status()?.state, "expired");
@@ -375,8 +384,7 @@ test("pairing persistence failure still burns the one-time secret", async () => 
   await assert.rejects(
     pairing.service.exchange(exchange(bootstrap.secret), "source"),
     (error: unknown) =>
-      error instanceof AidenRemoteServiceError &&
-      error.code === "pairing_already_used",
+      error instanceof AidenRemoteServiceError && error.code === "pairing_already_used",
   );
   assert.equal(pairing.issued(), 1);
   assert.equal(pairing.service.status()?.state, "failed");
@@ -397,8 +405,12 @@ test("closing or replacing a consumed window fences deferred credential issuance
     let randomCounter = 0;
     let releaseIssuance: (() => void) | undefined;
     let issuanceStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => { issuanceStarted = resolve; });
-    const release = new Promise<void>((resolve) => { releaseIssuance = resolve; });
+    const started = new Promise<void>((resolve) => {
+      issuanceStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseIssuance = resolve;
+    });
     let committed = 0;
     const service = new AidenRemotePairingService(
       "instance-1",
@@ -446,7 +458,8 @@ test("closing or replacing a consumed window fences deferred credential issuance
     releaseIssuance?.();
     await assert.rejects(
       pending,
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "pairing_closed",
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "pairing_closed",
     );
     assert.equal(committed, 0);
     if (action === "close") assert.equal(service.status(), undefined);
@@ -493,7 +506,8 @@ test("a window closed while the device record is being written leaves no working
     };
     await assert.rejects(
       service.exchange(exchange(opened.bootstrap.secret), "phone"),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "pairing_closed",
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "pairing_closed",
     );
     assert.deepEqual(revoked, ["device-late"]);
   }
@@ -555,32 +569,32 @@ test("pairing DTOs are exact and per-source attempts are rate limited", async ()
       error instanceof AidenRemoteServiceError && error.code === "invalid_request",
   );
   assert.throws(
-    () => parseAidenRemotePairingExchangeInput({
-      ...exchange("x".repeat(43)),
-      acceptsBotCapabilities: "yes",
-    }),
+    () =>
+      parseAidenRemotePairingExchangeInput({
+        ...exchange("x".repeat(43)),
+        acceptsBotCapabilities: "yes",
+      }),
     (error: unknown) =>
       error instanceof AidenRemoteServiceError && error.code === "invalid_request",
   );
   const pairing = fixture();
   pairing.service.begin(endpoint, fingerprint);
   for (let index = 0; index < 10; index += 1) {
-    await assert.rejects(
-      pairing.service.exchange(exchange("x".repeat(43)), "attacker"),
-    );
+    await assert.rejects(pairing.service.exchange(exchange("x".repeat(43)), "attacker"));
   }
   await assert.rejects(
     pairing.service.exchange(exchange("x".repeat(43)), "attacker"),
-    (error: unknown) =>
-      error instanceof AidenRemoteServiceError && error.code === "rate_limited",
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "rate_limited",
   );
 });
-
 
 test("Android pairs as a phone without desktop authority", async () => {
   const pairing = fixture({ hostCapabilitiesSupported: true });
   const opened = pairing.service.begin(endpoint, fingerprint);
-  const result = await pairing.service.exchange({ ...exchange(opened.bootstrap.secret, true, true, true), deviceType: "android" }, "android");
+  const result = await pairing.service.exchange(
+    { ...exchange(opened.bootstrap.secret, true, true, true), deviceType: "android" },
+    "android",
+  );
   assert.equal(result.capabilities.includes("host:events"), false);
   assert.equal(result.capabilities.includes("simulators:control"), false);
 });
@@ -588,30 +602,58 @@ test("Android pairs as a phone without desktop authority", async () => {
 test("a paired phone counts once with its route and the phones in use; a desktop or a failed issue does not", async (t) => {
   const sent = captureAnalyticsEvents(t);
   const failed = fixture({ issueFails: true });
-  await assert.rejects(failed.service.exchange(exchange(failed.service.begin(endpoint, fingerprint).bootstrap.secret), "phone"));
+  await assert.rejects(
+    failed.service.exchange(
+      exchange(failed.service.begin(endpoint, fingerprint).bootstrap.secret),
+      "phone",
+    ),
+  );
 
   const desktop = fixture();
   const opened = desktop.service.begin(endpoint, fingerprint);
-  await desktop.service.exchange({ ...exchange(opened.bootstrap.secret), deviceType: "mac" }, "desktop");
+  await desktop.service.exchange(
+    { ...exchange(opened.bootstrap.secret), deviceType: "mac" },
+    "desktop",
+  );
   await analyticsSettled();
   assert.deepEqual(sent, []);
 
-  const phone = fixture({ devices: [{ type: "iphone" }, { type: "android" }, { type: "ipad", revokedAt: 5 }, { type: "mac" }] });
-  await phone.service.exchange(exchange(phone.service.begin(endpoint, fingerprint, "tailscale").bootstrap.secret), "phone");
+  const phone = fixture({
+    devices: [
+      { type: "iphone" },
+      { type: "android" },
+      { type: "ipad", revokedAt: 5 },
+      { type: "mac" },
+    ],
+  });
+  await phone.service.exchange(
+    exchange(phone.service.begin(endpoint, fingerprint, "tailscale").bootstrap.secret),
+    "phone",
+  );
   await analyticsSettled();
-  assert.deepEqual(sent, [{ event: "phone_paired", props: { transport: "tailscale", device_count: "2-3" } }]);
+  assert.deepEqual(sent, [
+    { event: "phone_paired", props: { transport: "tailscale", device_count: "2-3" } },
+  ]);
 });
-
 
 test("phone count metadata cannot move an earlier pairing to a new analytics sender", async (t) => {
   const previous = captureAnalyticsEvents(t);
   let release!: () => void;
-  const held = new Promise<void>((resolve) => { release = resolve; });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const phone = fixture({ beforeDeviceList: () => held });
-  await phone.service.exchange(exchange(phone.service.begin(endpoint, fingerprint).bootstrap.secret), "phone");
+  await phone.service.exchange(
+    exchange(phone.service.begin(endpoint, fingerprint).bootstrap.secret),
+    "phone",
+  );
   const current = captureAnalyticsEvents(t);
   release();
   await analyticsSettled();
   assert.deepEqual(previous, []);
-  assert.deepEqual(current, [], "the earlier pairing cannot be attributed to the replacement sender");
+  assert.deepEqual(
+    current,
+    [],
+    "the earlier pairing cannot be attributed to the replacement sender",
+  );
 });

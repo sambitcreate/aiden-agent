@@ -28,7 +28,9 @@ export const RESULT_CHECK_MAX_WORK = 1_000_000;
 /** Characters of string that count as one more value of size. */
 const STRING_CHARS_PER_UNIT = 64;
 
-export type ResultSchemaCheck = { ok: true; validate: ValidateFunction; cost: number } | { ok: false; error: string };
+export type ResultSchemaCheck =
+  | { ok: true; validate: ValidateFunction; cost: number }
+  | { ok: false; error: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -61,7 +63,10 @@ function disallowedReference(value: unknown, depth = 0): string | undefined {
   }
   if (!isRecord(value)) return undefined;
   for (const [key, child] of Object.entries(value)) {
-    if (REFERENCE_KEYWORDS.has(key) && (typeof child !== "string" || !LOCAL_REFERENCE.test(child))) {
+    if (
+      REFERENCE_KEYWORDS.has(key) &&
+      (typeof child !== "string" || !LOCAL_REFERENCE.test(child))
+    ) {
       return typeof child === "string" ? child.slice(0, 200) : "(not a string)";
     }
     const found = disallowedReference(child, depth + 1);
@@ -110,7 +115,8 @@ function hasNonFiniteNumber(value: unknown, depth = 0): boolean {
   if (depth > MAX_DEPTH) return true;
   if (typeof value === "number") return !Number.isFinite(value);
   if (Array.isArray(value)) return value.some((item) => hasNonFiniteNumber(item, depth + 1));
-  if (isRecord(value)) return Object.values(value).some((child) => hasNonFiniteNumber(child, depth + 1));
+  if (isRecord(value))
+    return Object.values(value).some((child) => hasNonFiniteNumber(child, depth + 1));
   return false;
 }
 
@@ -120,14 +126,37 @@ export const RESULT_SCHEMA_MAX_COST = 10_000;
 export const RESULT_SCHEMA_MAX_REFS = 256;
 
 /** Keywords that apply one subschema. */
-const ONE_SCHEMA = ["not", "if", "then", "else", "additionalItems", "additionalProperties", "contains", "propertyNames", "unevaluatedItems", "unevaluatedProperties"];
+const ONE_SCHEMA = [
+  "not",
+  "if",
+  "then",
+  "else",
+  "additionalItems",
+  "additionalProperties",
+  "contains",
+  "propertyNames",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+];
 /** Keywords that apply a list of subschemas. */
 const SCHEMA_LIST = ["anyOf", "oneOf", "allOf", "prefixItems"];
 /** Keywords that apply a map of subschemas. */
 const SCHEMA_MAP = ["properties", "patternProperties", "dependentSchemas", "dependencies"];
 /** Keys that would change what a reference points at. */
-const RESOURCE_KEYS: ReadonlySet<string> = new Set(["$id", "id", "$anchor", "$dynamicAnchor", "$recursiveAnchor"]);
-const SCALAR_TYPES: ReadonlySet<string> = new Set(["string", "number", "integer", "boolean", "null"]);
+const RESOURCE_KEYS: ReadonlySet<string> = new Set([
+  "$id",
+  "id",
+  "$anchor",
+  "$dynamicAnchor",
+  "$recursiveAnchor",
+]);
+const SCALAR_TYPES: ReadonlySet<string> = new Set([
+  "string",
+  "number",
+  "integer",
+  "boolean",
+  "null",
+]);
 
 /** One more unit of cost per this many bytes of data a keyword compares against. */
 const DATA_BYTES_PER_UNIT = 64;
@@ -146,7 +175,8 @@ function dataCost(node: Record<string, unknown>): number {
   if (Array.isArray(node.required)) extra += node.required.length;
   for (const key of ["dependentRequired", "dependencies"]) {
     const map = node[key];
-    if (isRecord(map)) for (const names of Object.values(map)) if (Array.isArray(names)) extra += names.length;
+    if (isRecord(map))
+      for (const names of Object.values(map)) if (Array.isArray(names)) extra += names.length;
   }
   return extra;
 }
@@ -160,7 +190,9 @@ function dataCost(node: Record<string, unknown>): number {
  * not loop, and `uniqueItems` needs items of a plain type: comparing objects
  * or arrays pairwise is quadratic in the result's length.
  */
-function schemaCost(root: Record<string, unknown>): { ok: true; cost: number } | { ok: false; error: string } {
+function schemaCost(
+  root: Record<string, unknown>,
+): { ok: true; cost: number } | { ok: false; error: string } {
   const memo = new Map<unknown, number>();
   const visiting = new Set<unknown>();
   let references = 0;
@@ -186,7 +218,9 @@ function schemaCost(root: Record<string, unknown>): { ok: true; cost: number } |
     }
     visiting.add(node);
     let total = 1 + dataCost(node);
-    const add = (child: unknown) => { total = Math.min(over, total + cost(child, false)); };
+    const add = (child: unknown) => {
+      total = Math.min(over, total + cost(child, false));
+    };
     for (const key of Object.keys(node)) {
       if (!top && RESOURCE_KEYS.has(key)) {
         problem = `result_schema can't use "${key}" inside the schema.`;
@@ -209,18 +243,25 @@ function schemaCost(root: Record<string, unknown>): { ok: true; cost: number } |
       add(resolved);
     }
     for (const key of ONE_SCHEMA) if (key in node) add(node[key]);
-    for (const key of SCHEMA_LIST) if (Array.isArray(node[key])) for (const child of node[key] as unknown[]) add(child);
+    for (const key of SCHEMA_LIST)
+      if (Array.isArray(node[key])) for (const child of node[key] as unknown[]) add(child);
     for (const key of SCHEMA_MAP) {
       const map = node[key];
-      if (isRecord(map)) for (const child of Object.values(map)) if (typeof child === "boolean" || isRecord(child)) add(child);
+      if (isRecord(map))
+        for (const child of Object.values(map))
+          if (typeof child === "boolean" || isRecord(child)) add(child);
     }
     const items = node.items;
     if (Array.isArray(items)) for (const child of items) add(child);
     else if (items !== undefined) add(items);
     if (node.uniqueItems === true) {
       const types = isRecord(items) ? (Array.isArray(items.type) ? items.type : [items.type]) : [];
-      if (!types.length || !types.every((type) => typeof type === "string" && SCALAR_TYPES.has(type))) {
-        problem = "result_schema's uniqueItems needs items with a plain type (string, number, integer, boolean or null).";
+      if (
+        !types.length ||
+        !types.every((type) => typeof type === "string" && SCALAR_TYPES.has(type))
+      ) {
+        problem =
+          "result_schema's uniqueItems needs items with a plain type (string, number, integer, boolean or null).";
         return over;
       }
     }
@@ -232,7 +273,11 @@ function schemaCost(root: Record<string, unknown>): { ok: true; cost: number } |
   const total = cost(root, true);
   if (problem) return { ok: false, error: problem };
   if (total > RESULT_SCHEMA_MAX_COST) {
-    return { ok: false, error: "result_schema could take too long to check: its anyOf, oneOf or allOf branches multiply through references, or its enum, const or required lists are too long for them. Use fewer branches, shorter lists or a flatter shape." };
+    return {
+      ok: false,
+      error:
+        "result_schema could take too long to check: its anyOf, oneOf or allOf branches multiply through references, or its enum, const or required lists are too long for them. Use fewer branches, shorter lists or a flatter shape.",
+    };
   }
   return { ok: true, cost: total };
 }
@@ -249,7 +294,10 @@ const compiledSchemas = new Map<string, Extract<ResultSchemaCheck, { ok: true }>
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (isRecord(value)) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
   }
   return JSON.stringify(value) ?? "null";
 }
@@ -262,15 +310,23 @@ function schemaKey(schema: Record<string, unknown>): string {
 export function compileResultSchema(schema: unknown): ResultSchemaCheck {
   if (!isRecord(schema)) return { ok: false, error: "result_schema must be a JSON Schema object." };
   if (byteLength(schema) > RESULT_SCHEMA_MAX_BYTES) {
-    return { ok: false, error: `result_schema is larger than ${RESULT_SCHEMA_MAX_BYTES / 1024} KB.` };
+    return {
+      ok: false,
+      error: `result_schema is larger than ${RESULT_SCHEMA_MAX_BYTES / 1024} KB.`,
+    };
   }
   const reference = disallowedReference(schema);
-  if (reference === TOO_DEEP) return { ok: false, error: `result_schema is nested more than ${MAX_DEPTH} levels deep.` };
+  if (reference === TOO_DEEP)
+    return { ok: false, error: `result_schema is nested more than ${MAX_DEPTH} levels deep.` };
   if (reference) {
-    return { ok: false, error: `result_schema may only refer to "#", "#/$defs/<name>" or "#/definitions/<name>"; ${reference} isn't one of those.` };
+    return {
+      ok: false,
+      error: `result_schema may only refer to "#", "#/$defs/<name>" or "#/definitions/<name>"; ${reference} isn't one of those.`,
+    };
   }
   const regex = regexKeyword(schema);
-  if (regex === TOO_DEEP) return { ok: false, error: `result_schema is nested more than ${MAX_DEPTH} levels deep.` };
+  if (regex === TOO_DEEP)
+    return { ok: false, error: `result_schema is nested more than ${MAX_DEPTH} levels deep.` };
   if (regex) {
     return {
       ok: false,
@@ -278,7 +334,11 @@ export function compileResultSchema(schema: unknown): ResultSchemaCheck {
     };
   }
   if (hasNonFiniteNumber(schema)) {
-    return { ok: false, error: "result_schema has a number too large to write as JSON (such as 1e400). Use a smaller one." };
+    return {
+      ok: false,
+      error:
+        "result_schema has a number too large to write as JSON (such as 1e400). Use a smaller one.",
+    };
   }
   const key = schemaKey(schema);
   const cached = compiledSchemas.get(key);
@@ -296,12 +356,20 @@ export function compileResultSchema(schema: unknown): ResultSchemaCheck {
     // a ref-free entry is copied into every place that refers to it, and
     // ajv's generated code (and compile time) grows with every copy.
     const ajv = new Ajv({ strict: false, validateFormats: false, inlineRefs: false });
-    const compiled: ResultSchemaCheck = { ok: true, validate: ajv.compile(schema), cost: cost.cost };
+    const compiled: ResultSchemaCheck = {
+      ok: true,
+      validate: ajv.compile(schema),
+      cost: cost.cost,
+    };
     compiledSchemas.set(key, compiled);
-    if (compiledSchemas.size > COMPILED_SCHEMAS_KEPT) compiledSchemas.delete(compiledSchemas.keys().next().value!);
+    if (compiledSchemas.size > COMPILED_SCHEMAS_KEPT)
+      compiledSchemas.delete(compiledSchemas.keys().next().value!);
     return compiled;
   } catch (error) {
-    const reason = error instanceof Error ? error.message.split("\n")[0]!.slice(0, 200) : "it is not a valid JSON Schema";
+    const reason =
+      error instanceof Error
+        ? error.message.split("\n")[0]!.slice(0, 200)
+        : "it is not a valid JSON Schema";
     return { ok: false, error: `result_schema doesn't compile: ${reason}.` };
   }
 }
@@ -311,7 +379,10 @@ function describe(error: ErrorObject): string {
   if (error.keyword === "required" && typeof error.params.missingProperty === "string") {
     return `${error.instancePath || ""}/${error.params.missingProperty} is required`;
   }
-  if (error.keyword === "additionalProperties" && typeof error.params.additionalProperty === "string") {
+  if (
+    error.keyword === "additionalProperties" &&
+    typeof error.params.additionalProperty === "string"
+  ) {
     return `${error.instancePath || ""}/${error.params.additionalProperty} is not allowed`;
   }
   return `${where} ${error.message ?? "is invalid"}`;
@@ -332,9 +403,16 @@ function resultSize(value: unknown): { ok: true; size: number } | { ok: false; e
     const next = stack.pop()!;
     values += 1;
     if (values > RESULT_MAX_VALUES) {
-      return { ok: false, error: `The result holds more than ${RESULT_MAX_VALUES.toLocaleString("en-US")} values; send a shorter one.` };
+      return {
+        ok: false,
+        error: `The result holds more than ${RESULT_MAX_VALUES.toLocaleString("en-US")} values; send a shorter one.`,
+      };
     }
-    if (next.depth > RESULT_MAX_DEPTH) return { ok: false, error: `The result is nested more than ${RESULT_MAX_DEPTH} levels deep.` };
+    if (next.depth > RESULT_MAX_DEPTH)
+      return {
+        ok: false,
+        error: `The result is nested more than ${RESULT_MAX_DEPTH} levels deep.`,
+      };
     if (typeof next.value === "string") chars += next.value.length;
     else if (Array.isArray(next.value)) {
       for (const item of next.value) stack.push({ value: item, depth: next.depth + 1 });
@@ -350,18 +428,23 @@ function resultSize(value: unknown): { ok: true; size: number } | { ok: false; e
 }
 
 /** Checks a submitted result against its schema, naming the fields that fail. */
-export function checkResult(schema: unknown, value: unknown): { ok: true } | { ok: false; error: string } {
+export function checkResult(
+  schema: unknown,
+  value: unknown,
+): { ok: true } | { ok: false; error: string } {
   if (value === undefined) return { ok: false, error: "submit_result needs a result." };
   // Measured before anything serializes it, so a deep value can't overflow the stack.
   const size = resultSize(value);
   if (!size.ok) return size;
-  if (byteLength(value) > RESULT_MAX_BYTES) return { ok: false, error: `The result is larger than ${RESULT_MAX_BYTES / 1024} KB.` };
+  if (byteLength(value) > RESULT_MAX_BYTES)
+    return { ok: false, error: `The result is larger than ${RESULT_MAX_BYTES / 1024} KB.` };
   const compiled = compileResultSchema(schema);
   if (!compiled.ok) return compiled;
   if (compiled.cost * size.size > RESULT_CHECK_MAX_WORK) {
     return {
       ok: false,
-      error: "The result is too large to check against this schema, whose branches make every value costly to check. Send a shorter result (fewer items, shorter text).",
+      error:
+        "The result is too large to check against this schema, whose branches make every value costly to check. Send a shorter result (fewer items, shorter text).",
     };
   }
   if (compiled.validate(value)) return { ok: true };

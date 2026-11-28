@@ -1,6 +1,9 @@
 import { parseSamplingParamsByThinkingLevel } from "../../renderer/shared/custom-model-options.js";
 import type { Api, Model, ModelsStoreEntry, Provider } from "@earendil-works/pi-ai";
-import { GOOGLE_PROVIDER_ID, isSelectableGoogleCatalogModel } from "../../renderer/shared/google-provider.js";
+import {
+  GOOGLE_PROVIDER_ID,
+  isSelectableGoogleCatalogModel,
+} from "../../renderer/shared/google-provider.js";
 import { readBoundedBody } from "../shared/bounded-body.js";
 
 const DEFAULT_CATALOG_BASE_URL = "https://pi.dev";
@@ -32,7 +35,10 @@ interface PersistedRemoteCatalog extends ModelsStoreEntry {
   lastModified?: number;
 }
 
-const remoteCatalogFreshness = new WeakMap<Provider, (entry: ModelsStoreEntry | undefined) => boolean>();
+const remoteCatalogFreshness = new WeakMap<
+  Provider,
+  (entry: ModelsStoreEntry | undefined) => boolean
+>();
 
 export function isPiRemoteCatalogProvider(provider: Provider): boolean {
   return remoteCatalogFreshness.has(provider);
@@ -66,24 +72,46 @@ function catalogEntries(value: unknown): unknown[] | undefined {
 }
 
 function safePositiveInteger(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) > 0 && (value as number) <= MAX_TOKEN_LIMIT;
+  return (
+    Number.isSafeInteger(value) && (value as number) > 0 && (value as number) <= MAX_TOKEN_LIMIT
+  );
 }
 
 function safeCost(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) &&
-    (value === UNKNOWN_COST_SENTINEL || (value >= 0 && value <= MAX_COST_RATE));
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    (value === UNKNOWN_COST_SENTINEL || (value >= 0 && value <= MAX_COST_RATE))
+  );
 }
 
 function safeCostRecord(value: unknown): value is Model<Api>["cost"] {
   const cost = record(value);
-  if (!cost || !safeCost(cost.input) || !safeCost(cost.output) || !safeCost(cost.cacheRead) || !safeCost(cost.cacheWrite)) {
+  if (
+    !cost ||
+    !safeCost(cost.input) ||
+    !safeCost(cost.output) ||
+    !safeCost(cost.cacheRead) ||
+    !safeCost(cost.cacheWrite)
+  ) {
     return false;
   }
   if (cost.tiers === undefined) return true;
-  return Array.isArray(cost.tiers) && cost.tiers.length <= 16 && cost.tiers.every((tier) => {
-    const item = record(tier);
-    return item !== undefined && safePositiveInteger(item.inputTokensAbove) && safeCost(item.input) && safeCost(item.output) && safeCost(item.cacheRead) && safeCost(item.cacheWrite);
-  });
+  return (
+    Array.isArray(cost.tiers) &&
+    cost.tiers.length <= 16 &&
+    cost.tiers.every((tier) => {
+      const item = record(tier);
+      return (
+        item !== undefined &&
+        safePositiveInteger(item.inputTokensAbove) &&
+        safeCost(item.input) &&
+        safeCost(item.output) &&
+        safeCost(item.cacheRead) &&
+        safeCost(item.cacheWrite)
+      );
+    })
+  );
 }
 
 function safeThinkingLevelMap(value: unknown): boolean {
@@ -91,8 +119,10 @@ function safeThinkingLevelMap(value: unknown): boolean {
   const map = record(value);
   if (!map) return false;
   const levels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-  return Object.entries(map).every(([key, entry]) =>
-    levels.has(key) && (entry === null || (typeof entry === "string" && entry.length > 0 && entry.length <= 64)),
+  return Object.entries(map).every(
+    ([key, entry]) =>
+      levels.has(key) &&
+      (entry === null || (typeof entry === "string" && entry.length > 0 && entry.length <= 64)),
   );
 }
 
@@ -105,12 +135,18 @@ function safeCompat(value: unknown): boolean {
     if (entry === null || typeof entry === "boolean") return true;
     if (typeof entry === "number") return Number.isFinite(entry);
     if (typeof entry === "string") return entry.length <= 1_024 && !/[\r\n]/u.test(entry);
-    if (Array.isArray(entry)) return entry.length <= 64 && entry.every((item) => visit(item, depth + 1));
+    if (Array.isArray(entry))
+      return entry.length <= 64 && entry.every((item) => visit(item, depth + 1));
     const object = record(entry);
     if (!object || Object.keys(object).length > 64) return false;
-    return Object.entries(object).every(([key, item]) =>
-      key.length > 0 && key.length <= 128 && key !== "__proto__" && key !== "prototype" &&
-      key !== "constructor" && visit(item, depth + 1),
+    return Object.entries(object).every(
+      ([key, item]) =>
+        key.length > 0 &&
+        key.length <= 128 &&
+        key !== "__proto__" &&
+        key !== "prototype" &&
+        key !== "constructor" &&
+        visit(item, depth + 1),
     );
   };
   return visit(value, 0);
@@ -121,8 +157,12 @@ function safeBaseUrl(value: unknown, policy: CatalogPolicy): value is string {
   if (typeof value !== "string" || value.length > 2_048) return false;
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && url.username === "" && url.password === "" &&
-      (policy.allowedOrigins === undefined || policy.allowedOrigins.has(url.origin));
+    return (
+      url.protocol === "https:" &&
+      url.username === "" &&
+      url.password === "" &&
+      (policy.allowedOrigins === undefined || policy.allowedOrigins.has(url.origin))
+    );
   } catch {
     return false;
   }
@@ -139,14 +179,21 @@ function safeHeaders(value: unknown): value is Record<string, string> {
     "x-api-key",
     "x-auth-token",
   ]);
-  return Object.entries(headers).every(([name, entry]) =>
-    /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/u.test(name) &&
-    !forbidden.has(name.toLowerCase()) &&
-    typeof entry === "string" && entry.length <= 1_024 && !/[\r\n]/u.test(entry),
+  return Object.entries(headers).every(
+    ([name, entry]) =>
+      /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/u.test(name) &&
+      !forbidden.has(name.toLowerCase()) &&
+      typeof entry === "string" &&
+      entry.length <= 1_024 &&
+      !/[\r\n]/u.test(entry),
   );
 }
 
-function normalizeModel(providerId: string, value: unknown, policy: CatalogPolicy): Model<Api> | undefined {
+function normalizeModel(
+  providerId: string,
+  value: unknown,
+  policy: CatalogPolicy,
+): Model<Api> | undefined {
   const model = record(value);
   if (!model) return undefined;
   const id = typeof model.id === "string" ? model.id.trim() : "";
@@ -154,14 +201,27 @@ function normalizeModel(providerId: string, value: unknown, policy: CatalogPolic
   const api = typeof model.api === "string" ? model.api : "";
   const input = model.input;
   const compat = model.compat;
-  if (!id || id.length > MAX_MODEL_ID_LENGTH || !name || name.length > MAX_MODEL_NAME_LENGTH || !api ||
+  if (
+    !id ||
+    id.length > MAX_MODEL_ID_LENGTH ||
+    !name ||
+    name.length > MAX_MODEL_NAME_LENGTH ||
+    !api ||
     (policy.allowedApis !== undefined && !policy.allowedApis.has(api)) ||
-    !safeBaseUrl(model.baseUrl, policy) || typeof model.reasoning !== "boolean" ||
-    !Array.isArray(input) || input.length === 0 || input.length > 2 || new Set(input).size !== input.length ||
-    !input.every((entry) => entry === "text" || entry === "image") || !safeCostRecord(model.cost) ||
-    !safePositiveInteger(model.contextWindow) || !safePositiveInteger(model.maxTokens) ||
-    !safeThinkingLevelMap(model.thinkingLevelMap) || !safeCompat(compat) ||
-    !safeHeaders(model.headers)) {
+    !safeBaseUrl(model.baseUrl, policy) ||
+    typeof model.reasoning !== "boolean" ||
+    !Array.isArray(input) ||
+    input.length === 0 ||
+    input.length > 2 ||
+    new Set(input).size !== input.length ||
+    !input.every((entry) => entry === "text" || entry === "image") ||
+    !safeCostRecord(model.cost) ||
+    !safePositiveInteger(model.contextWindow) ||
+    !safePositiveInteger(model.maxTokens) ||
+    !safeThinkingLevelMap(model.thinkingLevelMap) ||
+    !safeCompat(compat) ||
+    !safeHeaders(model.headers)
+  ) {
     return undefined;
   }
   return {
@@ -171,8 +231,16 @@ function normalizeModel(providerId: string, value: unknown, policy: CatalogPolic
     provider: providerId,
     baseUrl: model.baseUrl,
     reasoning: model.reasoning,
-    ...(model.thinkingLevelMap === undefined ? {} : { thinkingLevelMap: structuredClone(model.thinkingLevelMap) }),
-    ...(model.samplingParamsByThinkingLevel === undefined ? {} : { samplingParamsByThinkingLevel: parseSamplingParamsByThinkingLevel(model.samplingParamsByThinkingLevel) }),
+    ...(model.thinkingLevelMap === undefined
+      ? {}
+      : { thinkingLevelMap: structuredClone(model.thinkingLevelMap) }),
+    ...(model.samplingParamsByThinkingLevel === undefined
+      ? {}
+      : {
+          samplingParamsByThinkingLevel: parseSamplingParamsByThinkingLevel(
+            model.samplingParamsByThinkingLevel,
+          ),
+        }),
     input: [...input],
     cost: structuredClone(model.cost),
     contextWindow: model.contextWindow,
@@ -182,7 +250,11 @@ function normalizeModel(providerId: string, value: unknown, policy: CatalogPolic
   } as Model<Api>;
 }
 
-export function parsePiRemoteCatalog(providerId: string, value: unknown, policy: CatalogPolicy = {}): Model<Api>[] {
+export function parsePiRemoteCatalog(
+  providerId: string,
+  value: unknown,
+  policy: CatalogPolicy = {},
+): Model<Api>[] {
   const entries = catalogEntries(value);
   if (!entries || entries.length > MAX_CATALOG_MODELS) {
     throw new Error(`Invalid model catalog for provider "${providerId}".`);
@@ -205,7 +277,10 @@ export function parsePiRemoteCatalog(providerId: string, value: unknown, policy:
   return models;
 }
 
-function mergeModels(baseline: readonly Model<Api>[], dynamic: readonly Model<Api>[]): Model<Api>[] {
+function mergeModels(
+  baseline: readonly Model<Api>[],
+  dynamic: readonly Model<Api>[],
+): Model<Api>[] {
   const merged = [...baseline];
   for (const model of dynamic) {
     const index = merged.findIndex((entry) => entry.id === model.id);
@@ -248,7 +323,10 @@ async function readBoundedJson(response: Response): Promise<unknown> {
 }
 
 /** Adds a durable, credential-free pi.dev overlay to a static built-in provider. */
-export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalogOptions = {}): Provider {
+export function withPiRemoteCatalog(
+  provider: Provider,
+  options: PiRemoteCatalogOptions = {},
+): Provider {
   const baseline = provider.getModels();
   const allowedApis = new Set([
     ...baseline.map((model) => model.api),
@@ -258,7 +336,11 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
     [provider.baseUrl, ...baseline.map((model) => model.baseUrl)]
       .filter((value): value is string => typeof value === "string")
       .flatMap((value) => {
-        try { return [new URL(value).origin]; } catch { return []; }
+        try {
+          return [new URL(value).origin];
+        } catch {
+          return [];
+        }
       }),
   );
   const policy = {
@@ -279,9 +361,13 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
     if (!entry) return undefined;
     const persisted = entry as PersistedRemoteCatalog;
     const acceptedAt = persisted.checkedAt;
-    if (persisted.lastModified === undefined || persisted.lastModified <= localGeneratedAt ||
+    if (
+      persisted.lastModified === undefined ||
+      persisted.lastModified <= localGeneratedAt ||
       !Number.isSafeInteger(acceptedAt) ||
-      persisted.lastModified > acceptedAt! + MAX_CATALOG_CLOCK_SKEW_MS) return undefined;
+      persisted.lastModified > acceptedAt! + MAX_CATALOG_CLOCK_SKEW_MS
+    )
+      return undefined;
     try {
       return {
         models: parsePiRemoteCatalog(provider.id, entry.models, policy),
@@ -294,31 +380,43 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
   const cacheIsFresh = (entry: ModelsStoreEntry | undefined): boolean => {
     if (!entry || !Number.isSafeInteger(entry.checkedAt)) return false;
     const checkedNow = now();
-    if (entry.checkedAt! > checkedNow + MAX_CATALOG_CLOCK_SKEW_MS ||
-      checkedNow - entry.checkedAt! >= PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS) return false;
+    if (
+      entry.checkedAt! > checkedNow + MAX_CATALOG_CLOCK_SKEW_MS ||
+      checkedNow - entry.checkedAt! >= PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS
+    )
+      return false;
     const persisted = entry as PersistedRemoteCatalog;
     if (restoredCatalog(entry)) return true;
     // A 404/501 is a valid negative cache entry. It is deliberately distinct
     // from a malformed catalog and from a poisoned future generation.
-    return entry.models.length === 0 && persisted.lastModified === undefined && persisted.etag === undefined;
+    return (
+      entry.models.length === 0 &&
+      persisted.lastModified === undefined &&
+      persisted.etag === undefined
+    );
   };
 
   const wrapped: Provider = {
     ...provider,
-    getModels: () => mergeModels(baseline, dynamicModels).filter(
-      (model) => provider.id !== GOOGLE_PROVIDER_ID || isSelectableGoogleCatalogModel(model.id),
-    ),
+    getModels: () =>
+      mergeModels(baseline, dynamicModels).filter(
+        (model) => provider.id !== GOOGLE_PROVIDER_ID || isSelectableGoogleCatalogModel(model.id),
+      ),
     refreshModels: async (context) => {
       const stored = context.stored as PersistedRemoteCatalog | undefined;
       const restored = restoredCatalog(stored);
       dynamicModels = restored?.models ?? [];
       if (!context.allowNetwork || context.signal?.aborted) return;
       if (!context.force && cacheIsFresh(stored)) return;
-      if (activeNetworkRefresh && !activeNetworkRefresh.signal.aborted) return activeNetworkRefresh.task;
+      if (activeNetworkRefresh && !activeNetworkRefresh.signal.aborted)
+        return activeNetworkRefresh.task;
 
       const task = (async () => {
         const validator = restored ? stored?.etag : undefined;
-        const url = new URL(`/api/models/providers/${encodeURIComponent(provider.id)}`, catalogBaseUrl);
+        const url = new URL(
+          `/api/models/providers/${encodeURIComponent(provider.id)}`,
+          catalogBaseUrl,
+        );
         const response = await fetchImpl(url, {
           headers: {
             accept: "application/json",
@@ -345,9 +443,7 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
           await response.body?.cancel().catch(() => undefined);
           const retained: PersistedRemoteCatalog = {
             ...(restored && stored ? stored : { models: [] }),
-            checkedAt: restored && stored
-              ? Math.max(stored.checkedAt ?? 0, checkedAt)
-              : checkedAt,
+            checkedAt: restored && stored ? Math.max(stored.checkedAt ?? 0, checkedAt) : checkedAt,
             etag: undefined,
           };
           await context.publish({
@@ -365,9 +461,15 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
         const minimum = response.headers.get("x-pi-model-catalog-minimum-version");
         if (!catalogVersionSupported(minimum)) {
           await response.body?.cancel().catch(() => undefined);
-          throw new Error(`${provider.id} model catalog requires Pi ${minimum ?? "a newer version"}.`);
+          throw new Error(
+            `${provider.id} model catalog requires Pi ${minimum ?? "a newer version"}.`,
+          );
         }
-        const refreshed = parsePiRemoteCatalog(provider.id, await readBoundedJson(response), policy);
+        const refreshed = parsePiRemoteCatalog(
+          provider.id,
+          await readBoundedJson(response),
+          policy,
+        );
         if (context.signal?.aborted) return;
         const lastModified = Date.parse(response.headers.get("last-modified") ?? "");
         if (Number.isNaN(lastModified) || lastModified <= localGeneratedAt) {
@@ -375,7 +477,9 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
         }
         const remoteModified = lastModified;
         if (remoteModified > checkedAt + MAX_CATALOG_CLOCK_SKEW_MS) {
-          throw new Error(`${provider.id} model catalog has an invalid future generation timestamp.`);
+          throw new Error(
+            `${provider.id} model catalog has an invalid future generation timestamp.`,
+          );
         }
         if (restored && remoteModified < restored.lastModified) {
           throw new Error(`${provider.id} model catalog is older than the cached generation.`);
@@ -395,7 +499,11 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
       })();
       const active = { task, signal: context.signal };
       activeNetworkRefresh = active;
-      try { await task; } finally { if (activeNetworkRefresh === active) activeNetworkRefresh = null; }
+      try {
+        await task;
+      } finally {
+        if (activeNetworkRefresh === active) activeNetworkRefresh = null;
+      }
     },
   };
   remoteCatalogFreshness.set(wrapped, cacheIsFresh);

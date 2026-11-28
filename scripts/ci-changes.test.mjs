@@ -70,11 +70,20 @@ test("changed-area classification is conservative and table-driven", () => {
     ["renderer/shared/image-generation/aspect-ratio.ts", allTrue],
     ["renderer/shared/image-generation/placeholder-spec.ts", allTrue],
     ["main/services/chat.ts", select("desktop", "catalog", "cli", "linux")],
-    ["main/services/aiden-remote-router.ts", select("desktop", "catalog", "cli", "linux", "ios", "android")],
-    ["main/handlers/aiden-remote.ts", select("desktop", "catalog", "cli", "linux", "ios", "android")],
+    [
+      "main/services/aiden-remote-router.ts",
+      select("desktop", "catalog", "cli", "linux", "ios", "android"),
+    ],
+    [
+      "main/handlers/aiden-remote.ts",
+      select("desktop", "catalog", "cli", "linux", "ios", "android"),
+    ],
     ["native/apple-foundation-models/Package.swift", select("desktop", "catalog", "apple")],
     ["native/worktree-file-io/main.c", select("desktop", "catalog", "cli", "linux")],
-    ["protocol/aiden-remote/v1/fixtures/contract.json", select("desktop", "catalog", "cli", "ios", "android")],
+    [
+      "protocol/aiden-remote/v1/fixtures/contract.json",
+      select("desktop", "catalog", "cli", "ios", "android"),
+    ],
     ["protocol/aiden-appearance-v1.json", select("desktop", "catalog", "cli", "ios", "android")],
     ["packages/cli/src/commands.ts", select("desktop", "catalog", "cli")],
     ["packages/cli/package.json", select("desktop", "catalog", "cli")],
@@ -86,6 +95,7 @@ test("changed-area classification is conservative and table-driven", () => {
     ["package.json", allTrue],
     ["package-lock.json", allTrue],
     ["vite.config.ts", allTrue],
+    [".oxfmtrc.json", allTrue],
     ["unknown/new-file.bin", allTrue],
     ["marketing/rive/aiden/scene.rml", allFalse],
     ["marketing/rive/tools/render.py", allFalse],
@@ -98,10 +108,15 @@ test("changed-area classification is conservative and table-driven", () => {
     assert.deepEqual(classifyChangedPath(path), expected, path);
     assert.deepEqual(decideChangedAreas([path]), expected, path);
   }
+  assert.equal(analyzeChangedPaths([".oxfmtrc.json"]).reason, "changed-paths");
+  assert.equal(analyzeChangedPaths(["unknown/new-file.bin"]).reason, "unknown-path");
 });
 
 test("scoped paths never select mobile or Apple jobs for desktop-only server changes", () => {
-  const desktopServer = decideChangedAreas(["main/services/chat.ts", "renderer/components/chat.tsx"]);
+  const desktopServer = decideChangedAreas([
+    "main/services/chat.ts",
+    "renderer/components/chat.tsx",
+  ]);
   assert.equal(desktopServer.ios, false);
   assert.equal(desktopServer.android, false);
   assert.equal(desktopServer.apple, false);
@@ -109,11 +124,17 @@ test("scoped paths never select mobile or Apple jobs for desktop-only server cha
   // A protocol change and a Remote server change together still reach every
   // contract consumer.
   assert.deepEqual(
-    decideChangedAreas(["protocol/aiden-remote/v1/fixtures/contract.json", "main/services/aiden-remote-router.ts"]),
+    decideChangedAreas([
+      "protocol/aiden-remote/v1/fixtures/contract.json",
+      "main/services/aiden-remote-router.ts",
+    ]),
     select("desktop", "catalog", "cli", "linux", "ios", "android"),
   );
   // A CLI-only change keeps the desktop lanes, which run the CLI package tests.
-  assert.deepEqual(decideChangedAreas(["packages/cli/src/commands.ts", ".memory/cli.md"]), select("desktop", "catalog", "cli"));
+  assert.deepEqual(
+    decideChangedAreas(["packages/cli/src/commands.ts", ".memory/cli.md"]),
+    select("desktop", "catalog", "cli"),
+  );
 });
 
 test("public Remote parser and DTO edits select both native clients without a server-file change", () => {
@@ -165,7 +186,11 @@ test("host-only shared helpers still avoid unrelated native and Apple jobs", () 
     "renderer/shared/model-visibility.ts",
     "renderer/shared/subagent-safe-text.ts",
   ]) {
-    assert.deepEqual(decideChangedAreas([path]), select("desktop", "catalog", "cli", "linux"), path);
+    assert.deepEqual(
+      decideChangedAreas([path]),
+      select("desktop", "catalog", "cli", "linux"),
+      path,
+    );
   }
 });
 
@@ -202,7 +227,10 @@ test("documentation-only decisions are restricted to the explicit safe paths", (
   assert.equal(isSafeDocumentationPath("renderer/AGENTS.md"), false);
   assert.equal(isSafeDocumentationPath("docs/../main/service.ts"), false);
 
-  assert.deepEqual(decideChangedAreas(["docs/guide.md", "android/app/build.gradle"]), select("android"));
+  assert.deepEqual(
+    decideChangedAreas(["docs/guide.md", "android/app/build.gradle"]),
+    select("android"),
+  );
   assert.deepEqual(decideChangedAreas(["README.md", "unknown/new-file.bin"]), allTrue);
   assert.deepEqual(
     analyzeChangedPaths([
@@ -232,21 +260,34 @@ test("documentation-only decisions are restricted to the explicit safe paths", (
 });
 
 test("marketing assets skip every check only when nothing else changed", () => {
-  assert.deepEqual(analyzeChangedPaths(["marketing/rive/exports/aiden.riv", "marketing/rive/README.md", "docs/guide.md"]), {
-    ...allFalse,
-    areas: allFalse,
-    changedCount: 3,
-    safeDocsOnly: false,
-    reason: "marketing-only",
-  });
-  assert.deepEqual(analyzeChangedPaths(["marketing/rive/aiden/scene.rml", "renderer/components/chat.tsx"]), {
-    ...desktopOnly,
-    areas: desktopOnly,
-    changedCount: 2,
-    safeDocsOnly: false,
-    reason: "changed-paths",
-  });
-  assert.deepEqual(decideChangedAreas(["marketing/rive/tools/render.py", "scripts/ci-changes.mjs"]), allTrue);
+  assert.deepEqual(
+    analyzeChangedPaths([
+      "marketing/rive/exports/aiden.riv",
+      "marketing/rive/README.md",
+      "docs/guide.md",
+    ]),
+    {
+      ...allFalse,
+      areas: allFalse,
+      changedCount: 3,
+      safeDocsOnly: false,
+      reason: "marketing-only",
+    },
+  );
+  assert.deepEqual(
+    analyzeChangedPaths(["marketing/rive/aiden/scene.rml", "renderer/components/chat.tsx"]),
+    {
+      ...desktopOnly,
+      areas: desktopOnly,
+      changedCount: 2,
+      safeDocsOnly: false,
+      reason: "changed-paths",
+    },
+  );
+  assert.deepEqual(
+    decideChangedAreas(["marketing/rive/tools/render.py", "scripts/ci-changes.mjs"]),
+    allTrue,
+  );
 
   const directory = mkdtempSync(join(tmpdir(), "ci-changes-"));
   try {
@@ -254,14 +295,19 @@ test("marketing assets skip every check only when nothing else changed", () => {
     writeChangedAreaOutputs(analyzeChangedPaths(["marketing/rive/exports/aiden.riv"]), outputPath);
     const output = readFileSync(outputPath, "utf8");
     assert.match(output, /^decision_reason=marketing-only$/mu);
-    assert.match(output, /^summary=CI changed-area decision: marketing-only \(1 changed paths\)\.$/mu);
+    assert.match(
+      output,
+      /^summary=CI changed-area decision: marketing-only \(1 changed paths\)\.$/mu,
+    );
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
 test("NUL-delimited changed paths preserve rename, deletion, and newline names", () => {
-  const paths = parseChangedPaths(Buffer.from("android/old.txt\0android/new.txt\0renderer/line\nname.ts\0"));
+  const paths = parseChangedPaths(
+    Buffer.from("android/old.txt\0android/new.txt\0renderer/line\nname.ts\0"),
+  );
   assert.deepEqual(paths, ["android/old.txt", "android/new.txt", "renderer/line\nname.ts"]);
   assert.deepEqual(decideChangedAreas(paths), select("android", "desktop", "catalog"));
   assert.deepEqual(decideChangedAreas(parseChangedPaths("ios/deleted.swift\0")), select("ios"));
@@ -356,10 +402,7 @@ test("git-backed detection reads only NUL-safe output and fails open", () => {
       headSha: invalid.headSha,
       spawn: fake.spawn,
     });
-    assert.deepEqual(
-      areasOf(invalidResult),
-      allTrue,
-    );
+    assert.deepEqual(areasOf(invalidResult), allTrue);
   }
 });
 
@@ -400,8 +443,13 @@ function manifestPullRequest(base, head, extraFiles = {}) {
 
 test("a root manifest change skips the native jobs only when it touches host npm scripts alone", () => {
   const hostAreas = select("desktop", "catalog", "cli", "linux");
-  const manifest = (fields) => JSON.stringify({ name: "aiden", version: "1.0.0", ...fields }, null, 2);
-  const scripts = { "test:foo": "tsx --test a.ts", "test:ios-release": "ruby a.rb", "test:native": "swift test" };
+  const manifest = (fields) =>
+    JSON.stringify({ name: "aiden", version: "1.0.0", ...fields }, null, 2);
+  const scripts = {
+    "test:foo": "tsx --test a.ts",
+    "test:ios-release": "ruby a.rb",
+    "test:native": "swift test",
+  };
 
   const added = manifestPullRequest(
     manifest({ scripts }),
@@ -412,11 +460,20 @@ test("a root manifest change skips the native jobs only when it touches host npm
   for (const [name, head] of [
     ["a dependency", manifest({ dependencies: { left: "1.0.0" }, scripts })],
     ["the version", manifest({ scripts, version: "1.0.1" })],
-    ["the iOS job's script", manifest({ scripts: { ...scripts, "test:ios-release": "ruby b.rb" } })],
+    [
+      "the iOS job's script",
+      manifest({ scripts: { ...scripts, "test:ios-release": "ruby b.rb" } }),
+    ],
     ["the Apple job's script", manifest({ scripts: { ...scripts, "test:native": "swift build" } })],
     ["a removed native script", manifest({ scripts: { "test:foo": scripts["test:foo"] } })],
-    ["a new hook before the Apple job", manifest({ scripts: { ...scripts, "pretest:native": "node a.mjs" } })],
-    ["a new hook after the iOS job", manifest({ scripts: { ...scripts, "posttest:ios-release": "node a.mjs" } })],
+    [
+      "a new hook before the Apple job",
+      manifest({ scripts: { ...scripts, "pretest:native": "node a.mjs" } }),
+    ],
+    [
+      "a new hook after the iOS job",
+      manifest({ scripts: { ...scripts, "posttest:ios-release": "node a.mjs" } }),
+    ],
     ["an unparsable manifest", "{"],
     ["a non-object manifest", "[]"],
   ]) {
@@ -424,27 +481,50 @@ test("a root manifest change skips the native jobs only when it touches host npm
   }
 
   // A script the Apple job reaches through `npm run` counts, along with its hooks.
-  const nested = { ...scripts, helper: "node a.mjs", "test:native": "npm run helper && swift test" };
+  const nested = {
+    ...scripts,
+    helper: "node a.mjs",
+    "test:native": "npm run helper && swift test",
+  };
   for (const [name, change] of [
     ["the nested script", { helper: "node b.mjs" }],
     ["the nested script's hook", { prehelper: "node b.mjs" }],
   ]) {
     assert.deepEqual(
-      areasOf(manifestPullRequest(manifest({ scripts: nested }), manifest({ scripts: { ...nested, ...change } }))),
+      areasOf(
+        manifestPullRequest(
+          manifest({ scripts: nested }),
+          manifest({ scripts: { ...nested, ...change } }),
+        ),
+      ),
       allTrue,
       name,
     );
   }
-  for (const command of ["npm run-script helper", "npm run --silent helper", "npm run-script --silent helper"]) {
+  for (const command of [
+    "npm run-script helper",
+    "npm run --silent helper",
+    "npm run-script --silent helper",
+  ]) {
     const spelled = { ...nested, "test:native": `${command} && swift test` };
     assert.deepEqual(
-      areasOf(manifestPullRequest(manifest({ scripts: spelled }), manifest({ scripts: { ...spelled, helper: "node b.mjs" } }))),
+      areasOf(
+        manifestPullRequest(
+          manifest({ scripts: spelled }),
+          manifest({ scripts: { ...spelled, helper: "node b.mjs" } }),
+        ),
+      ),
       allTrue,
       command,
     );
   }
   assert.deepEqual(
-    areasOf(manifestPullRequest(manifest({ scripts: nested }), manifest({ scripts: { ...nested, unrelated: "node c.mjs" } }))),
+    areasOf(
+      manifestPullRequest(
+        manifest({ scripts: nested }),
+        manifest({ scripts: { ...nested, unrelated: "node c.mjs" } }),
+      ),
+    ),
     hostAreas,
   );
 
@@ -459,9 +539,17 @@ test("a root manifest change skips the native jobs only when it touches host npm
 
 test("a root manifest that cannot be compared keeps every job", () => {
   const options = { baseSha: "base", env: {}, eventName: "pull_request", headSha: "head" };
-  for (const failure of [{ mergeBaseStatus: 1 }, { mergeBaseOutput: "not a sha\n" }, { showStatus: 1 }]) {
+  for (const failure of [
+    { mergeBaseStatus: 1 },
+    { mergeBaseOutput: "not a sha\n" },
+    { showStatus: 1 },
+  ]) {
     const fake = fakeGit({ diffOutput: "package.json\0", ...failure });
-    assert.deepEqual(areasOf(detectChangedAreas({ ...options, spawn: fake.spawn })), allTrue, JSON.stringify(failure));
+    assert.deepEqual(
+      areasOf(detectChangedAreas({ ...options, spawn: fake.spawn })),
+      allTrue,
+      JSON.stringify(failure),
+    );
   }
 
   // Main pushes never read the manifest: they keep the path decision.
@@ -480,8 +568,14 @@ test("unknown changed paths force all checks even when a known area is also chan
 
 test("FORCE_FULL applies to main pushes while pull requests keep path selection", () => {
   assert.deepEqual(decideChangedAreas(["docs/guide.md"], { forceFull: true }), allTrue);
-  assert.deepEqual(decideChangedAreas(["docs/guide.md"], { eventName: "merge_group", forceFull: true }), allTrue);
-  assert.deepEqual(decideChangedAreas(["docs/guide.md"], { eventName: "pull_request", forceFull: true }), allFalse);
+  assert.deepEqual(
+    decideChangedAreas(["docs/guide.md"], { eventName: "merge_group", forceFull: true }),
+    allTrue,
+  );
+  assert.deepEqual(
+    decideChangedAreas(["docs/guide.md"], { eventName: "pull_request", forceFull: true }),
+    allFalse,
+  );
   assert.equal(analyzeChangedPaths(["docs/guide.md"], { forceFull: true }).reason, "forced-full");
 
   const push = fakeGit({ diffOutput: "docs/guide.md\0" });
@@ -522,7 +616,11 @@ test("a catalog-only push selects only the model catalog area", () => {
   assert.equal(catalog.safeDocsOnly, false);
 
   // Any other path in the same push restores the full main validation.
-  for (const extra of ["docs/guide.md", "renderer/components/chat.tsx", "resources/generative-ui/runtime.js"]) {
+  for (const extra of [
+    "docs/guide.md",
+    "renderer/components/chat.tsx",
+    "resources/generative-ui/runtime.js",
+  ]) {
     const mixed = fakeGit({ diffOutput: `resources/model-capabilities.json\0${extra}\0` });
     const result = detectChangedAreas({
       baseSha: "base",
@@ -578,7 +676,13 @@ test("a catalog-only push selects only the model catalog area", () => {
 test("empty change results select full validation rather than skipping every lane", () => {
   assert.deepEqual(decideChangedAreas([]), allTrue);
   const empty = fakeGit({ diffOutput: "" });
-  const result = detectChangedAreas({ baseSha: "base", headSha: "head", eventName: "pull_request", env: {}, spawn: empty.spawn });
+  const result = detectChangedAreas({
+    baseSha: "base",
+    headSha: "head",
+    eventName: "pull_request",
+    env: {},
+    spawn: empty.spawn,
+  });
   assert.deepEqual(result.areas, allTrue);
 });
 
@@ -586,12 +690,18 @@ test("workflow outputs expose every area the CI jobs read", () => {
   const directory = mkdtempSync(join(tmpdir(), "ci-changes-"));
   try {
     const outputPath = join(directory, "output");
-    writeChangedAreaOutputs(analyzeChangedPaths(["resources/model-capabilities.json"], { forceFull: true }), outputPath);
+    writeChangedAreaOutputs(
+      analyzeChangedPaths(["resources/model-capabilities.json"], { forceFull: true }),
+      outputPath,
+    );
     const outputs = Object.fromEntries(
-      readFileSync(outputPath, "utf8").trim().split("\n").map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
+      readFileSync(outputPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const separator = line.indexOf("=");
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
     );
     for (const name of Object.keys(allFalse)) {
       assert.equal(outputs[name], name === "catalog" ? "true" : "false", name);

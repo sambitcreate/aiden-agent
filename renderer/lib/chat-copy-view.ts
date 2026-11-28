@@ -68,10 +68,7 @@ export function filterForkTurnChoices(
   const exactTurn = turns.find((turn) => String(turn.turnNumber) === query);
   if (exactTurn) return [exactTurn];
   const matches = query
-    ? turns.filter(
-        (turn) =>
-          turn.label.toLocaleLowerCase().includes(query),
-      )
+    ? turns.filter((turn) => turn.label.toLocaleLowerCase().includes(query))
     : turns;
   return matches.slice(Math.max(0, matches.length - MAX_VISIBLE_FORK_CHOICES));
 }

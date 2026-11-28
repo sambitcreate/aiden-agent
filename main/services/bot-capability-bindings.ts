@@ -1,6 +1,11 @@
 import { createHmac } from "node:crypto";
 import { types as utilTypes } from "node:util";
-import { botConnectionCapabilityIdentity, isComposioServiceCapability, parseBotConnectionAccessIdentity, type BotConnectionAccessIdentity } from "./bot-connection-capability-identity.js";
+import {
+  botConnectionCapabilityIdentity,
+  isComposioServiceCapability,
+  parseBotConnectionAccessIdentity,
+  type BotConnectionAccessIdentity,
+} from "./bot-connection-capability-identity.js";
 import {
   BOT_CAPABILITY_LIMITS,
   BOT_FILE_SCOPE_SELECTION_GUIDANCE,
@@ -407,11 +412,12 @@ function storedProviderOption(value: unknown): Omit<BotProviderOption, "models">
 }
 
 function storedModelOption(value: unknown): BotModelOption {
-  const model = storedRecord(value, "Bot bound model", [
-    "id",
-    "label",
-    "available",
-  ], ["supportsImages"]);
+  const model = storedRecord(
+    value,
+    "Bot bound model",
+    ["id", "label", "available"],
+    ["supportsImages"],
+  );
   if (
     !isPathSafeBotCapabilityId(model.id) ||
     !isBoundedBotText(model.label, 160) ||
@@ -424,9 +430,7 @@ function storedModelOption(value: unknown): BotModelOption {
     id: model.id,
     label: model.label,
     available: true,
-    ...(model.supportsImages === undefined
-      ? {}
-      : { supportsImages: model.supportsImages }),
+    ...(model.supportsImages === undefined ? {} : { supportsImages: model.supportsImages }),
   };
 }
 
@@ -488,9 +492,7 @@ export function parseBoundBotProviderModel(value: unknown): BoundBotProviderMode
   return parseBoundProvider(value);
 }
 
-export function cloneBoundBotProviderModel(
-  value: BoundBotProviderModel,
-): BoundBotProviderModel {
+export function cloneBoundBotProviderModel(value: BoundBotProviderModel): BoundBotProviderModel {
   return parseBoundProvider(value);
 }
 
@@ -699,14 +701,19 @@ function parseBoundTool(
 
 function parseBoundConnection(value: unknown, index: number): BoundBotConnection {
   const label = `Bot bound connection ${index}`;
-  const connection = storedRecord(value, label, [
-    "option",
-    "sourceId",
-    "connectionFingerprint",
-    "toolsetFingerprint",
-    "exactFingerprint",
-    "tools",
-  ], ["accessIdentity"]);
+  const connection = storedRecord(
+    value,
+    label,
+    [
+      "option",
+      "sourceId",
+      "connectionFingerprint",
+      "toolsetFingerprint",
+      "exactFingerprint",
+      "tools",
+    ],
+    ["accessIdentity"],
+  );
   const option = storedOption(connection.option, `${label} option`, { description: true });
   const sourceId = storedSourceIdentity(connection.sourceId, label);
   const connectionFingerprint = storedFingerprint(
@@ -728,7 +735,10 @@ function parseBoundConnection(value: unknown, index: number): BoundBotConnection
     tools.map(({ name, exactFingerprint }) => ({ name, exactFingerprint })),
     `${label} toolset fingerprint`,
   );
-  const accessIdentity = parseBotConnectionAccessIdentity(connection.accessIdentity, { sourceId, tools });
+  const accessIdentity = parseBotConnectionAccessIdentity(connection.accessIdentity, {
+    sourceId,
+    tools,
+  });
   const exactFingerprint = exactFacts(
     storedFingerprint(connection.exactFingerprint, `${label} exact fingerprint`),
     { connectionFingerprint, toolsetFingerprint, ...(accessIdentity ? { accessIdentity } : {}) },
@@ -979,7 +989,13 @@ export function assertBoundBotCustomSelectionOpaqueIds(
       binding.provider.modelOption.id,
     ) &&
     binding.fileScopes.every((scope) =>
-      opaqueIdMatchesMint(mintOpaqueId, "file", scope.sourceId, scope.exactFingerprint, scope.option.id),
+      opaqueIdMatchesMint(
+        mintOpaqueId,
+        "file",
+        scope.sourceId,
+        scope.exactFingerprint,
+        scope.option.id,
+      ),
     ) &&
     binding.connections.every((connection) =>
       opaqueIdMatchesMint(
@@ -1101,19 +1117,20 @@ export function bindBotProviderModel(input: {
       "Bot capability choices changed. Review the current choices and try again.",
     );
   }
-  const binding = bindProvider({
-    providerId: input.providerId,
-    modelId: input.modelId,
-    fileScopeIds: [],
-    shellEnabled: false,
-    connectionIds: [],
-    skillIds: [],
-    otherCapabilityIds: [],
-  }, input.snapshot);
+  const binding = bindProvider(
+    {
+      providerId: input.providerId,
+      modelId: input.modelId,
+      fileScopeIds: [],
+      shellEnabled: false,
+      connectionIds: [],
+      skillIds: [],
+      otherCapabilityIds: [],
+    },
+    input.snapshot,
+  );
   if (input.requireImages === true && binding.modelOption.supportsImages !== true) {
-    throw new BotCapabilityValidationError(
-      "The companion model must support image input.",
-    );
+    throw new BotCapabilityValidationError("The companion model must support image input.");
   }
   return binding;
 }
@@ -1163,9 +1180,10 @@ export function bindBotCustomSelection(input: {
     selection.connectionIds,
     "connection",
   );
-  const skills = input.snapshot.catalog.skillsEnabled === false
-    ? (retained?.skills ?? []).filter(({ option }) => selection.skillIds.includes(option.id))
-    : byOptionId(input.snapshot.resources.skills, selection.skillIds, "skill");
+  const skills =
+    input.snapshot.catalog.skillsEnabled === false
+      ? (retained?.skills ?? []).filter(({ option }) => selection.skillIds.includes(option.id))
+      : byOptionId(input.snapshot.resources.skills, selection.skillIds, "skill");
   const otherCapabilities = byOptionId(
     input.snapshot.resources.otherCapabilities,
     selection.otherCapabilityIds,
@@ -1351,35 +1369,33 @@ export function botCustomSelectionDrift(
   }
   for (const bound of binding.fileScopes) {
     const found = findByIdOrSource(current.resources.fileScopes, bound.option.id, bound.sourceId);
-    const foundIssue = found?.sourceId !== bound.sourceId
-      ? issue("file_scope", bound.option.id, "changed_or_removed")
-      : resourceIssue("file_scope", bound.option.id, bound.exactFingerprint, found);
+    const foundIssue =
+      found?.sourceId !== bound.sourceId
+        ? issue("file_scope", bound.option.id, "changed_or_removed")
+        : resourceIssue("file_scope", bound.option.id, bound.exactFingerprint, found);
     if (foundIssue) issues.push(foundIssue);
   }
   for (const bound of binding.connections) {
-    const found = findByIdOrSource(
-      current.resources.connections,
-      bound.option.id,
-      bound.sourceId,
-    );
-    const foundIssue = found?.sourceId !== bound.sourceId
-      ? issue("connection", bound.option.id, "changed_or_removed")
-      : resourceIssue("connection", bound.option.id, bound.exactFingerprint, found);
+    const found = findByIdOrSource(current.resources.connections, bound.option.id, bound.sourceId);
+    const foundIssue =
+      found?.sourceId !== bound.sourceId
+        ? issue("connection", bound.option.id, "changed_or_removed")
+        : resourceIssue("connection", bound.option.id, bound.exactFingerprint, found);
     if (foundIssue) issues.push(foundIssue);
   }
   if ((options.skillsEnabled ?? current.catalog.skillsEnabled) !== false) {
     for (const bound of binding.skills) {
       const found = findByIdOrSource(current.resources.skills, bound.option.id, bound.sourceId);
-      const foundIssue = found?.sourceId !== bound.sourceId
-        ? issue("skill", bound.option.id, "changed_or_removed")
-        : resourceIssue("skill", bound.option.id, bound.exactFingerprint, found);
+      const foundIssue =
+        found?.sourceId !== bound.sourceId
+          ? issue("skill", bound.option.id, "changed_or_removed")
+          : resourceIssue("skill", bound.option.id, bound.exactFingerprint, found);
       if (foundIssue) issues.push(foundIssue);
     }
   }
   for (const bound of binding.otherCapabilities) {
     const found = current.resources.otherCapabilities.find(
-      (capability) =>
-        capability.option.id === bound.option.id || capability.kind === bound.kind,
+      (capability) => capability.option.id === bound.option.id || capability.kind === bound.kind,
     );
     const foundIssue = resourceIssue(
       "other_capability",
@@ -1494,16 +1510,32 @@ export function withBotCapabilityTombstones(
       // Old per-tool access must not become an available service selection on
       // an unrelated Custom save. Keep every retained old id, even when several
       // Bots retained different legacy ids for this same connection.
-      const serviceMigration = !isComposioServiceCapability(connection)
-        && resources.connections.some((item) => item.sourceId === connection.sourceId && isComposioServiceCapability(item));
+      const serviceMigration =
+        !isComposioServiceCapability(connection) &&
+        resources.connections.some(
+          (item) => item.sourceId === connection.sourceId && isComposioServiceCapability(item),
+        );
       if (serviceMigration) {
-        const existing = resources.connections.find((item) => item.option.id === connection.option.id);
-        if (existing && (existing.sourceId !== connection.sourceId || isComposioServiceCapability(existing))) {
+        const existing = resources.connections.find(
+          (item) => item.option.id === connection.option.id,
+        );
+        if (
+          existing &&
+          (existing.sourceId !== connection.sourceId || isComposioServiceCapability(existing))
+        ) {
           throw new Error("Bot connection opaque id collision detected.");
         }
-        const option = { ...unavailableOption(connection.option), label: "Previous Composio access" };
+        const option = {
+          ...unavailableOption(connection.option),
+          label: "Previous Composio access",
+        };
         if (existing) existing.option = option;
-        else resources.connections.push({ ...connection, option, tools: connection.tools.map((tool) => ({ ...tool })) });
+        else
+          resources.connections.push({
+            ...connection,
+            option,
+            tools: connection.tools.map((tool) => ({ ...tool })),
+          });
         continue;
       }
       appendResource(
@@ -1514,7 +1546,8 @@ export function withBotCapabilityTombstones(
           tools: connection.tools.map((tool) => ({ ...tool })),
         },
         "connection",
-        (item) => botConnectionCapabilityIdentity(item) === botConnectionCapabilityIdentity(connection),
+        (item) =>
+          botConnectionCapabilityIdentity(item) === botConnectionCapabilityIdentity(connection),
       );
     }
     for (const skill of binding.skills) {
@@ -1557,7 +1590,9 @@ export function withBotCapabilityTombstones(
   resources.skills.sort((left, right) => compareText(left.option.id, right.option.id));
   resources.otherCapabilities.sort((left, right) => compareText(left.option.id, right.option.id));
   const catalog = finalizeBotCapabilityCatalog({
-    ...(current.catalog.skillsEnabled === undefined ? {} : { skillsEnabled: current.catalog.skillsEnabled }),
+    ...(current.catalog.skillsEnabled === undefined
+      ? {}
+      : { skillsEnabled: current.catalog.skillsEnabled }),
     providers: resources.providers.map(({ option }) => structuredClone(option)),
     fileScopes: resources.fileScopes.map(({ option }) => ({ ...option })),
     shellAvailable: resources.shell.available,

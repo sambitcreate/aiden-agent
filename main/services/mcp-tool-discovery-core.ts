@@ -191,11 +191,16 @@ export interface McpLateDiscovery {
 export const NO_LATE_MCP_DISCOVERY: McpLateDiscovery = Object.freeze({
   tools: () => [],
   pending: () => 0,
-  settled: async (signal?: AbortSignal) => { signal?.throwIfAborted(); },
+  settled: async (signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+  },
 });
 
 function waitFor(pending: Promise<unknown>, signal: AbortSignal | undefined): Promise<void> {
-  const settled = pending.then(() => undefined, () => undefined);
+  const settled = pending.then(
+    () => undefined,
+    () => undefined,
+  );
   if (!signal) return settled;
   if (signal.aborted) return Promise.reject(abortReason(signal));
   return new Promise<void>((resolve, reject) => {
@@ -228,7 +233,9 @@ export async function admitMcpServerDiscovery<S extends { readonly name: string 
     awaitServer?: (server: S) => boolean;
   },
 ): Promise<{ tools: AgentTool[]; late: McpLateDiscovery }> {
-  const results: (PromiseSettledResult<McpServerDiscoveryResult> | undefined)[] = servers.map(() => undefined);
+  const results: (PromiseSettledResult<McpServerDiscoveryResult> | undefined)[] = servers.map(
+    () => undefined,
+  );
   let admitted = false;
   const accepted: AgentTool[] = [];
   const late: AgentTool[] = [];
@@ -248,38 +255,49 @@ export async function admitMcpServerDiscovery<S extends { readonly name: string 
       options.budgetMs,
       `MCP server "${server.name}"`,
       options.signal,
-    ).then(
-      (value) => ({ status: "fulfilled", value }) as const,
-      (reason: unknown) => ({ status: "rejected", reason }) as const,
-    ).then((result) => {
-      results[index] = result;
-      if (admitted) {
-        pending -= 1;
-        acceptLate(server, result);
-      }
-    }),
+    )
+      .then(
+        (value) => ({ status: "fulfilled", value }) as const,
+        (reason: unknown) => ({ status: "rejected", reason }) as const,
+      )
+      .then((result) => {
+        results[index] = result;
+        if (admitted) {
+          pending -= 1;
+          acceptLate(server, result);
+        }
+      }),
   );
   const all = Promise.all(racing);
-  const awaited = Promise.all(racing.filter((_, index) => options.awaitServer?.(servers[index]!) === true));
+  const awaited = Promise.all(
+    racing.filter((_, index) => options.awaitServer?.(servers[index]!) === true),
+  );
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const window = new Promise<void>((resolve) => { timer = setTimeout(resolve, options.windowMs); });
+  const window = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, options.windowMs);
+  });
   await Promise.race([all, Promise.all([window, awaited])]);
   clearTimeout(timer);
   admitted = true;
   const readyIndexes = results.flatMap((result, index) => (result ? [index] : []));
   pending = servers.length - readyIndexes.length;
-  accepted.push(...mergeMcpServerDiscovery(
-    readyIndexes.map((index) => servers[index]!),
-    readyIndexes.map((index) => results[index]!),
-    { onUnavailable: options.onUnavailable },
-  ));
+  accepted.push(
+    ...mergeMcpServerDiscovery(
+      readyIndexes.map((index) => servers[index]!),
+      readyIndexes.map((index) => results[index]!),
+      { onUnavailable: options.onUnavailable },
+    ),
+  );
   return {
     tools: accepted,
-    late: pending === 0 ? NO_LATE_MCP_DISCOVERY : {
-      tools: () => [...late],
-      pending: () => pending,
-      settled: (signal) => waitFor(all, signal),
-    },
+    late:
+      pending === 0
+        ? NO_LATE_MCP_DISCOVERY
+        : {
+            tools: () => [...late],
+            pending: () => pending,
+            settled: (signal) => waitFor(all, signal),
+          },
   };
 }
 
@@ -292,7 +310,10 @@ export const MCP_RECENT_FAILURE_MS = 45_000;
  * at once; explicit `clear` covers servers that never connected.
  */
 export class McpRecentFailures {
-  private readonly failures = new Map<string, { generation: number; until: number; error: unknown }>();
+  private readonly failures = new Map<
+    string,
+    { generation: number; until: number; error: unknown }
+  >();
 
   constructor(
     private readonly ttlMs: number = MCP_RECENT_FAILURE_MS,
@@ -331,12 +352,16 @@ export class McpRecentFailures {
  * (its configuration lease). Anything else rebuilds.
  */
 export class McpBuiltToolsMemo<T> {
-  private readonly entries = new Map<string, { dependencies: readonly unknown[]; isCurrent: () => boolean; value: T }>();
+  private readonly entries = new Map<
+    string,
+    { dependencies: readonly unknown[]; isCurrent: () => boolean; value: T }
+  >();
 
   get(id: string, dependencies: readonly unknown[]): T | undefined {
     const entry = this.entries.get(id);
     if (!entry) return undefined;
-    const same = entry.dependencies.length === dependencies.length &&
+    const same =
+      entry.dependencies.length === dependencies.length &&
       entry.dependencies.every((dependency, index) => Object.is(dependency, dependencies[index]));
     if (same && entry.isCurrent()) return entry.value;
     this.entries.delete(id);
@@ -373,16 +398,29 @@ export class McpPrewarmer {
   constructor(private readonly isShutDown: () => boolean) {}
 
   /** Start `discover` unless one is already running; resolves when it settles. */
-  start(id: string, discover: () => Promise<unknown>, onFailure: (error: unknown) => void): Promise<void> {
+  start(
+    id: string,
+    discover: () => Promise<unknown>,
+    onFailure: (error: unknown) => void,
+  ): Promise<void> {
     const existing = this.running.get(id);
     if (existing) return existing;
     if (this.isShutDown()) return Promise.resolve();
     const run = Promise.resolve()
       .then(discover)
-      .then(() => undefined, (error: unknown) => {
-        try { onFailure(error); } catch { /* diagnostics never fail a prewarm */ }
-      })
-      .finally(() => { if (this.running.get(id) === run) this.running.delete(id); });
+      .then(
+        () => undefined,
+        (error: unknown) => {
+          try {
+            onFailure(error);
+          } catch {
+            /* diagnostics never fail a prewarm */
+          }
+        },
+      )
+      .finally(() => {
+        if (this.running.get(id) === run) this.running.delete(id);
+      });
     this.running.set(id, run);
     return run;
   }
@@ -442,8 +480,7 @@ export class McpConnectionActivity {
   idle(ids: Iterable<string>, idleMs: number): string[] {
     const now = this.now();
     return [...ids].filter(
-      (id) =>
-        !this.inFlight.has(id) && now - (this.lastActive.get(id) ?? now) >= idleMs,
+      (id) => !this.inFlight.has(id) && now - (this.lastActive.get(id) ?? now) >= idleMs,
     );
   }
 

@@ -8,27 +8,32 @@ import { atomicJson, readJson, acquireLease } from "../state.ts";
 import { join } from "node:path";
 
 export interface AidenCliSettings {
-	memoryEnabled?: boolean;
-	skillsEnabled?: boolean;
-	appControlPolicy?: "disabled" | "ask" | "safe";
+  memoryEnabled?: boolean;
+  skillsEnabled?: boolean;
+  appControlPolicy?: "disabled" | "ask" | "safe";
 }
 
 export function aidenSettingsPath(agentDir: string): string {
-	return join(agentDir, "aiden.json");
+  return join(agentDir, "aiden.json");
 }
 
 function normalizeSettings(value: unknown): AidenCliSettings {
-	if (typeof value !== "object" || value === null) return {};
-	const source = value as Record<string, unknown>;
-	const settings: AidenCliSettings = {};
-	// Strict-shape normalization, mirroring the desktop's portable config
-	// handling: wrong-typed values are ignored rather than half-applied.
-	if (typeof source.memoryEnabled === "boolean") {
-		settings.memoryEnabled = source.memoryEnabled;
-	}
-	if (typeof source.skillsEnabled === "boolean") settings.skillsEnabled = source.skillsEnabled;
-	if (source.appControlPolicy !== undefined) settings.appControlPolicy = ["disabled", "ask", "safe"].includes(String(source.appControlPolicy)) ? source.appControlPolicy as AidenCliSettings["appControlPolicy"] : "disabled";
-	return settings;
+  if (typeof value !== "object" || value === null) return {};
+  const source = value as Record<string, unknown>;
+  const settings: AidenCliSettings = {};
+  // Strict-shape normalization, mirroring the desktop's portable config
+  // handling: wrong-typed values are ignored rather than half-applied.
+  if (typeof source.memoryEnabled === "boolean") {
+    settings.memoryEnabled = source.memoryEnabled;
+  }
+  if (typeof source.skillsEnabled === "boolean") settings.skillsEnabled = source.skillsEnabled;
+  if (source.appControlPolicy !== undefined)
+    settings.appControlPolicy = ["disabled", "ask", "safe"].includes(
+      String(source.appControlPolicy),
+    )
+      ? (source.appControlPolicy as AidenCliSettings["appControlPolicy"])
+      : "disabled";
+  return settings;
 }
 
 export function readAidenSettings(agentDir: string): AidenCliSettings {
@@ -36,7 +41,14 @@ export function readAidenSettings(agentDir: string): AidenCliSettings {
 }
 
 export function writeAidenSettings(agentDir: string, settings: AidenCliSettings): void {
-  const file = aidenSettingsPath(agentDir), release = acquireLease(file);
-  try { atomicJson(file, { ...readJson<Record<string, unknown>>(file, {}), ...normalizeSettings(settings) }); }
-  finally { release(); }
+  const file = aidenSettingsPath(agentDir),
+    release = acquireLease(file);
+  try {
+    atomicJson(file, {
+      ...readJson<Record<string, unknown>>(file, {}),
+      ...normalizeSettings(settings),
+    });
+  } finally {
+    release();
+  }
 }

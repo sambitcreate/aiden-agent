@@ -24,7 +24,9 @@ test("macOS ignores a router-assigned Unix name such as Mac-995.lan", async () =
 
 test("macOS falls back to the Unix host name when the Bonjour name is unreadable or invalid", async () => {
   for (const readLocalHostName of [
-    async () => { throw new Error("scutil: no such key"); },
+    async () => {
+      throw new Error("scutil: no such key");
+    },
     async () => "",
     async () => "bad name.with dots",
   ]) {
@@ -41,7 +43,9 @@ test("Linux keeps the Unix host name and never runs scutil", async () => {
   const names = await aidenRemoteLanHostnames({
     platform: "linux",
     osHostname: () => "workstation",
-    readLocalHostName: async () => { throw new Error("must not be called"); },
+    readLocalHostName: async () => {
+      throw new Error("must not be called");
+    },
   });
   assert.deepEqual(names, { endpoint: "workstation", certificate: ["workstation"] });
 });

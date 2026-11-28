@@ -62,7 +62,11 @@ function legendLabels(): string[] {
 
 test("headline percentage matches the composer meter", () => {
   render(<ContextBreakdown pressure={pressure()} />);
-  assert.ok(screen.getByText((_, element) => element?.tagName === "SPAN" && element.textContent === "31% used"));
+  assert.ok(
+    screen.getByText(
+      (_, element) => element?.tagName === "SPAN" && element.textContent === "31% used",
+    ),
+  );
 });
 
 test("legend lists messages, then categories largest first, then reserve, free space and deferred", () => {
@@ -91,7 +95,10 @@ test("the deferred row shows its tokens and is not counted toward the window", (
   assert.ok(deferred);
   assert.ok(within(deferred).getByText("61.4K"));
   assert.ok(within(deferred).getByText("not counted"));
-  assert.match(screen.getByRole("note").textContent ?? "", /Deferred tools load through tool search and aren't counted until used\./u);
+  assert.match(
+    screen.getByRole("note").textContent ?? "",
+    /Deferred tools load through tool search and aren't counted until used\./u,
+  );
 });
 
 test("MCP tools by server starts folded and opens to list each server", () => {
@@ -107,7 +114,8 @@ test("MCP tools by server starts folded and opens to list each server", () => {
   const servers = screen.getByRole("list", { name: "MCP tools by server" });
   const rows = within(servers).getAllByRole("listitem");
   assert.equal(rows.length, 4);
-  for (const name of ["Figma", "Notion", "Playwright", "Linear"]) assert.ok(within(servers).getByText(name));
+  for (const name of ["Figma", "Notion", "Playwright", "Linear"])
+    assert.ok(within(servers).getByText(name));
   assert.ok(within(servers).getByText("47 tools"));
 });
 
@@ -132,18 +140,33 @@ test("the tile grid's image label names every segment", () => {
 
 test("without a breakdown the legend falls back to messages and system prompt & tools", () => {
   render(<ContextBreakdown pressure={pressure({ breakdown: undefined })} />);
-  assert.deepEqual(legendLabels(), ["Messages", "System prompt & tools", "Reserved for response", "Free space"]);
+  assert.deepEqual(legendLabels(), [
+    "Messages",
+    "System prompt & tools",
+    "Reserved for response",
+    "Free space",
+  ]);
   assert.equal(screen.queryByRole("button", { name: /MCP tools by server/u }), null);
   assert.doesNotMatch(screen.getByRole("note").textContent ?? "", /Deferred tools/u);
 });
 
 test("the note says Aiden will compact when the runtime rule trips", () => {
-  render(<ContextBreakdown pressure={pressure({ shouldCompact: true, percentOfUsableInput: 101 })} />);
-  assert.match(screen.getByRole("note").textContent ?? "", /^Aiden will compact context before the next request\./u);
+  render(
+    <ContextBreakdown pressure={pressure({ shouldCompact: true, percentOfUsableInput: 101 })} />,
+  );
+  assert.match(
+    screen.getByRole("note").textContent ?? "",
+    /^Aiden will compact context before the next request\./u,
+  );
 });
 
 test("a running compaction leads the note, even when the runtime rule has tripped", () => {
-  render(<ContextBreakdown pressure={pressure({ shouldCompact: true, percentOfUsableInput: 101 })} compacting />);
+  render(
+    <ContextBreakdown
+      pressure={pressure({ shouldCompact: true, percentOfUsableInput: 101 })}
+      compacting
+    />,
+  );
   const note = screen.getByRole("note").textContent ?? "";
   assert.match(note, /^Compacting context…/u);
   assert.doesNotMatch(note, /will compact|Healthy/u);
@@ -155,7 +178,10 @@ test("a running compaction leads the note, even when the runtime rule has trippe
 
 test("the note reports how many earlier messages compaction could remove", () => {
   render(<ContextBreakdown pressure={pressure()} />);
-  assert.match(screen.getByRole("note").textContent ?? "", /43 earlier messages could be compacted later\./u);
+  assert.match(
+    screen.getByRole("note").textContent ?? "",
+    /43 earlier messages could be compacted later\./u,
+  );
 });
 
 // A real provider-anchored projection: the provider reported far more input than
@@ -241,23 +267,46 @@ test("used tiles split by category always add up to the used share", () => {
   const tiles = contextTiles(pressure());
   const perCategory = new Map<string, number>();
   for (const tile of tiles) {
-    if (tile.kind === "used") perCategory.set(tile.segment.label, (perCategory.get(tile.segment.label) ?? 0) + 1);
+    if (tile.kind === "used")
+      perCategory.set(tile.segment.label, (perCategory.get(tile.segment.label) ?? 0) + 1);
   }
-  assert.equal([...perCategory.values()].reduce((sum, count) => sum + count, 0), 30);
+  assert.equal(
+    [...perCategory.values()].reduce((sum, count) => sum + count, 0),
+    30,
+  );
   // Each category gets its exact share of the 30 used tiles, rounded down or up.
-  for (const [label, tokens] of [["Messages", 273_400], ["Built-in tools", 11_800], ["System prompt", 6_200]] as const) {
+  for (const [label, tokens] of [
+    ["Messages", 273_400],
+    ["Built-in tools", 11_800],
+    ["System prompt", 6_200],
+  ] as const) {
     const exact = (tokens / 299_800) * 30;
     const got = perCategory.get(label) ?? 0;
-    assert.ok(got === Math.floor(exact) || got === Math.ceil(exact), `${label}: ${got} tiles for ${exact.toFixed(2)}`);
+    assert.ok(
+      got === Math.floor(exact) || got === Math.ceil(exact),
+      `${label}: ${got} tiles for ${exact.toFixed(2)}`,
+    );
   }
 });
 
 test("a tiny context still lights one tile, and an over-budget one eats into the reserve", () => {
-  const tiny = contextTiles(pressure({ contextTokens: 1_200, messageTokens: 1_000, staticTokens: 200, breakdown: undefined }));
+  const tiny = contextTiles(
+    pressure({
+      contextTokens: 1_200,
+      messageTokens: 1_000,
+      staticTokens: 200,
+      breakdown: undefined,
+    }),
+  );
   assert.equal(tiny.filter((tile) => tile.kind === "used").length, 1);
 
   const over = contextTiles(
-    pressure({ contextTokens: 990_000, messageTokens: 963_600, staticTokens: 26_400, shouldCompact: true }),
+    pressure({
+      contextTokens: 990_000,
+      messageTokens: 963_600,
+      staticTokens: 26_400,
+      shouldCompact: true,
+    }),
   );
   assert.equal(over.length, 100);
   assert.equal(over.filter((tile) => tile.kind === "used").length, 99);
@@ -284,7 +333,9 @@ test("the composer popover warns as soon as its meter does, before compaction is
 });
 
 test("a reserve under half a tile still gets one tile", () => {
-  const kinds = contextTiles(pressure({ reservedTokens: 4_000, inputBudgetTokens: 996_000 })).map((tile) => tile.kind);
+  const kinds = contextTiles(pressure({ reservedTokens: 4_000, inputBudgetTokens: 996_000 })).map(
+    (tile) => tile.kind,
+  );
   assert.equal(kinds.filter((kind) => kind === "reserved").length, 1);
 });
 
@@ -305,11 +356,18 @@ test("a window too small for Aiden's own prompt says so instead of promising com
       })}
     />,
   );
-  assert.ok(screen.getByText((_, element) => element?.tagName === "SPAN" && element.textContent === ">999% used"));
+  assert.ok(
+    screen.getByText(
+      (_, element) => element?.tagName === "SPAN" && element.textContent === ">999% used",
+    ),
+  );
   const note = screen.getByRole("note").textContent ?? "";
   assert.match(note, /context window is too small/u);
   assert.doesNotMatch(note, /will compact/u);
-  assert.equal(tileKinds().every((kind) => kind === "used"), true);
+  assert.equal(
+    tileKinds().every((kind) => kind === "used"),
+    true,
+  );
 });
 
 test("a category that rounds to nothing in a huge window still reads as present", () => {
@@ -325,16 +383,27 @@ test("a category that rounds to nothing in a huge window still reads as present"
 test("a little context in a huge window reads as under 1%, not 0%", () => {
   render(
     <ContextBreakdown
-      pressure={pressure({ contextWindow: 2_000_000, inputBudgetTokens: 1_883_600, contextTokens: 8_600, percentOfUsableInput: 0.4 })}
+      pressure={pressure({
+        contextWindow: 2_000_000,
+        inputBudgetTokens: 1_883_600,
+        contextTokens: 8_600,
+        percentOfUsableInput: 0.4,
+      })}
     />,
   );
-  assert.ok(screen.getByText((_, element) => element?.tagName === "SPAN" && element.textContent === "<1% used"));
+  assert.ok(
+    screen.getByText(
+      (_, element) => element?.tagName === "SPAN" && element.textContent === "<1% used",
+    ),
+  );
 });
 
 test("the prompt cache countdown runs from the last cached request and says when it has lapsed", () => {
   const lastRequestAt = 1_000_000;
   const promptCache = { ttlMs: 300_000, lastRequestAt };
-  const warm = render(<ContextBreakdown pressure={pressure({ promptCache })} now={lastRequestAt + 72_000} />);
+  const warm = render(
+    <ContextBreakdown pressure={pressure({ promptCache })} now={lastRequestAt + 72_000} />,
+  );
   const group = screen.getByRole("group", { name: "Prompt cache" });
   assert.ok(within(group).getByText("3:48 left"));
   assert.ok(within(group).getByText("Kept for 5 min after each request."));

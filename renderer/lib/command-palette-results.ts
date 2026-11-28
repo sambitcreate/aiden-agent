@@ -44,11 +44,15 @@ export function rankPaletteResults<T extends { result: PaletteResult }>(
  * the current one while it is still there and enabled, else the first enabled
  * ordinary row, else the first enabled force-mounted one (a Retry).
  */
-export function reconcilePaletteResult(selected: string, visible: readonly PaletteResult[]): string {
+export function reconcilePaletteResult(
+  selected: string,
+  visible: readonly PaletteResult[],
+): string {
   const ordinary = visible.filter((result) => !result.disabled && !result.forceMount);
-  const candidates = ordinary.length > 0
-    ? ordinary
-    : visible.filter((result) => !result.disabled && result.forceMount);
+  const candidates =
+    ordinary.length > 0
+      ? ordinary
+      : visible.filter((result) => !result.disabled && result.forceMount);
   if (candidates.some((result) => result.identity === selected)) return selected;
   return candidates[0]?.identity ?? "";
 }

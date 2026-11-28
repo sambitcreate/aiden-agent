@@ -1,7 +1,10 @@
 import { secrets } from "./secrets.js";
 import { configStore } from "./config-store.js";
 import type { McpServer } from "./types.js";
-import { mcpRuntimeConnectionSnapshot, sameMcpRuntimeConnection } from "./mcp-credential-cleanup-core.js";
+import {
+  mcpRuntimeConnectionSnapshot,
+  sameMcpRuntimeConnection,
+} from "./mcp-credential-cleanup-core.js";
 import {
   createMcpProviderAuthenticatedFetch,
   MCP_PROVIDER_KEY_SHARING_KEY,
@@ -50,16 +53,30 @@ let sharingWrites: Promise<unknown> = Promise.resolve();
  * records the fingerprint of the provider's current saved API key; only that
  * key is ever shared. Sign-in credentials are refused.
  */
-export function setMcpProviderKeySharing(providerId: string, allowed: boolean, isCurrent: () => boolean): Promise<void> {
+export function setMcpProviderKeySharing(
+  providerId: string,
+  allowed: boolean,
+  isCurrent: () => boolean,
+): Promise<void> {
   const write = sharingWrites.then(async () => {
     const fingerprint = allowed
-      ? (await resolveMcpProviderSharedKey(providerId, await providerCredentialSource(), { checkSharing: false })).fingerprint
+      ? (
+          await resolveMcpProviderSharedKey(providerId, await providerCredentialSource(), {
+            checkSharing: false,
+          })
+        ).fingerprint
       : undefined;
     const sharing = await readKeySharing();
     if (fingerprint) sharing.set(providerId, fingerprint);
     else if (!sharing.delete(providerId)) return;
-    if (!isCurrent()) throw new Error("Provider changes must come from the active application document.");
-    await secrets.setInternalKey(MCP_PROVIDER_KEY_SHARING_KEY, serializeMcpProviderKeySharing(sharing), 32_768, isCurrent);
+    if (!isCurrent())
+      throw new Error("Provider changes must come from the active application document.");
+    await secrets.setInternalKey(
+      MCP_PROVIDER_KEY_SHARING_KEY,
+      serializeMcpProviderKeySharing(sharing),
+      32_768,
+      isCurrent,
+    );
   });
   sharingWrites = write.catch(() => undefined);
   return write;
@@ -67,25 +84,45 @@ export function setMcpProviderKeySharing(providerId: string, allowed: boolean, i
 
 export async function hasMcpProviderAuthGrant(server: McpServer): Promise<boolean> {
   if (!server.authProvider) return false;
-  return await secrets.getKeyStrict(mcpProviderGrantKey(server.id)) === mcpProviderGrantBinding(server);
+  return (
+    (await secrets.getKeyStrict(mcpProviderGrantKey(server.id))) === mcpProviderGrantBinding(server)
+  );
 }
 
 /** Called only by the explicit active-renderer consent action, inside the MCP publication lock. */
-export async function setMcpProviderAuthGrant(server: McpServer, allowed: boolean, isCurrent: () => boolean): Promise<void> {
+export async function setMcpProviderAuthGrant(
+  server: McpServer,
+  allowed: boolean,
+  isCurrent: () => boolean,
+): Promise<void> {
   const binding = mcpProviderGrantBinding(server);
-  if (!allowed) { await secrets.deleteKey(mcpProviderGrantKey(server.id), isCurrent); return; }
+  if (!allowed) {
+    await secrets.deleteKey(mcpProviderGrantKey(server.id), isCurrent);
+    return;
+  }
   await resolveMcpProviderSharedKey(server.authProvider!, await providerCredentialSource());
   await secrets.setInternalKey(mcpProviderGrantKey(server.id), binding, 1024, isCurrent);
 }
 
-export function mcpProviderAuthenticatedFetch(server: McpServer, isCurrent: () => boolean, fetch: typeof globalThis.fetch): typeof fetch {
+export function mcpProviderAuthenticatedFetch(
+  server: McpServer,
+  isCurrent: () => boolean,
+  fetch: typeof globalThis.fetch,
+): typeof fetch {
   const expected = mcpRuntimeConnectionSnapshot(server);
   return createMcpProviderAuthenticatedFetch({
-    server, fetch,
-    assertCurrent() { if (!isCurrent()) throw new Error("This MCP connection is no longer current."); },
+    server,
+    fetch,
+    assertCurrent() {
+      if (!isCurrent()) throw new Error("This MCP connection is no longer current.");
+    },
     async readGrant() {
       const current = (await configStore.listMcpServers()).find((item) => item.id === server.id);
-      if (!current?.enabled || !sameMcpRuntimeConnection(expected, mcpRuntimeConnectionSnapshot(current))) throw new Error("MCP provider authentication configuration changed.");
+      if (
+        !current?.enabled ||
+        !sameMcpRuntimeConnection(expected, mcpRuntimeConnectionSnapshot(current))
+      )
+        throw new Error("MCP provider authentication configuration changed.");
       return secrets.getKeyStrict(mcpProviderGrantKey(server.id));
     },
     async resolveToken(providerId) {

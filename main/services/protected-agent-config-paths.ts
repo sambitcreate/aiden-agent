@@ -79,7 +79,9 @@ export function setProtectedAgentConfigRoots(roots: readonly string[]): void {
     const resolved = path.resolve(root);
     const variants = [resolved];
     try {
-      variants.push(path.join(realpathSync.native(path.dirname(resolved)), path.basename(resolved)));
+      variants.push(
+        path.join(realpathSync.native(path.dirname(resolved)), path.basename(resolved)),
+      );
     } catch {
       // A parent that does not exist yet has no other spelling.
     }
@@ -95,7 +97,8 @@ function underProtectedRoot(candidate: string): boolean {
   if (protectedRoots.length === 0 || !path.isAbsolute(candidate)) return false;
   const segments = foldedSegments(candidate);
   return protectedRoots.some(
-    (root) => root.length <= segments.length && root.every((segment, index) => segments[index] === segment),
+    (root) =>
+      root.length <= segments.length && root.every((segment, index) => segments[index] === segment),
   );
 }
 

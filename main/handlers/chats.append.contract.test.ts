@@ -99,18 +99,23 @@ async function fixture(
   t.after(() => admission.releaseAll());
   const owner = rendererOwner();
   const llmClient = {
-    requiresAppendReconciliation: (ownerId: string) => admission.requiresAppendReconciliation(ownerId),
+    requiresAppendReconciliation: (ownerId: string) =>
+      admission.requiresAppendReconciliation(ownerId),
     beginChatTurn: (chatId: string, turnId: string, ownerId: string) =>
       admission.tryBegin(chatId, turnId, ownerId, false),
-    markAppendReconciliationRequired: (ownerId: string) => admission.markAppendReconciliationRequired(ownerId),
-    clearAppendReconciliationRequired: (ownerId: string) => admission.clearAppendReconciliationRequired(ownerId),
+    markAppendReconciliationRequired: (ownerId: string) =>
+      admission.markAppendReconciliationRequired(ownerId),
+    clearAppendReconciliationRequired: (ownerId: string) =>
+      admission.clearAppendReconciliationRequired(ownerId),
   };
   const storeForCallers = options.wrapStore ? options.wrapStore(chatStore) : chatStore;
   const chatApplicationService = createChatApplicationService({
     chatStore: storeForCallers,
     configStore: {
       getWorkspace: async (id: string) =>
-        id === "workspace-1" ? { id, name: "Workspace", permission: "ask", createdAt: 1, updatedAt: 1 } : null,
+        id === "workspace-1"
+          ? { id, name: "Workspace", permission: "ask", createdAt: 1, updatedAt: 1 }
+          : null,
     },
     llmClient: {
       ...llmClient,
@@ -145,7 +150,9 @@ async function fixture(
   const handlers = createRendererChatMutationHandlers({
     chatStore: storeForCallers,
     chatApplicationService,
-    chatTitleService: { renameWithFoundationModels: async () => assert.fail("no title is generated here") },
+    chatTitleService: {
+      renameWithFoundationModels: async () => assert.fail("no title is generated here"),
+    },
     botApplicationService: { deleteChat: async () => assert.fail("no Bot chat is deleted here") },
     hostPlatformCapabilities: () => ({ bots: false }),
     closeDeviceSessionsForChat: () => undefined,
@@ -170,7 +177,12 @@ test("renderer channels return the visible chat and never private Pi protocol", 
   const stored = JSON.stringify(await f.chatStore.get("chat-1"));
   assert.ok(stored.includes(PRIVATE_RESPONSE_ID), "the private protocol is persisted");
 
-  const appended = await f.handlers.appendMessage(event, "chat-1", userMessage("Next question"), meta("turn-1"));
+  const appended = await f.handlers.appendMessage(
+    event,
+    "chat-1",
+    userMessage("Next question"),
+    meta("turn-1"),
+  );
   assert.deepEqual(
     appended?.messages.map((message) => [message.role, message.content]),
     [
@@ -190,10 +202,16 @@ test("renderer channels return the visible chat and never private Pi protocol", 
   const copied = await f.chatStore.copyVisibleHistory({ sourceChatId: "chat-1" });
   for (const visible of [appended, read, created, copied]) {
     const serialized = JSON.stringify(visible);
-    assert.ok(!serialized.includes(PRIVATE_RESPONSE_ID), "private response id leaked to the renderer");
+    assert.ok(
+      !serialized.includes(PRIVATE_RESPONSE_ID),
+      "private response id leaked to the renderer",
+    );
     assert.ok(!serialized.includes(PRIVATE_THINKING), "private thinking leaked to the renderer");
   }
-  assert.ok(JSON.stringify(await f.chatStore.get("chat-1")).includes(PRIVATE_RESPONSE_ID), "projection does not delete it");
+  assert.ok(
+    JSON.stringify(await f.chatStore.get("chat-1")).includes(PRIVATE_RESPONSE_ID),
+    "projection does not delete it",
+  );
 });
 
 test("renderer appends cannot author private or main-owned message fields", async (t) => {
@@ -216,7 +234,9 @@ test("an owner that needs append reconciliation is fenced from create and append
   f.admission.markAppendReconciliationRequired(f.owner.documentId);
   const before = await f.chatStore.list();
 
-  assert.throws(() => f.handlers.appendMessage(event, "chat-2", userMessage(), meta("turn-1")), { message: blocked });
+  assert.throws(() => f.handlers.appendMessage(event, "chat-2", userMessage(), meta("turn-1")), {
+    message: blocked,
+  });
   await assert.rejects(
     f.chatApplicationService.create({ workspaceId: "workspace-1", title: "New" }, f.owner),
     { message: blocked },
@@ -238,20 +258,25 @@ test("an append whose durability is indeterminate fences the document until it i
     }),
   });
 
-  await assert.rejects(
-    f.handlers.appendMessage(event, "chat-2", userMessage(), meta("turn-1")),
-    { message: appendReconciliationFailureMessage("current") },
-  );
+  await assert.rejects(f.handlers.appendMessage(event, "chat-2", userMessage(), meta("turn-1")), {
+    message: appendReconciliationFailureMessage("current"),
+  });
   assert.equal(f.admission.requiresAppendReconciliation(f.owner.documentId), true);
   assert.equal(f.admission.isAdmitted("chat-2"), false, "the failed turn released its lease");
-  assert.throws(() => f.handlers.appendMessage(event, "chat-2", userMessage(), meta("turn-2")), { message: blocked });
+  assert.throws(() => f.handlers.appendMessage(event, "chat-2", userMessage(), meta("turn-2")), {
+    message: blocked,
+  });
   await assert.rejects(
     f.chatApplicationService.create({ workspaceId: "workspace-1", title: "New" }, f.owner),
     { message: blocked },
   );
 
   f.owner.invalidate();
-  assert.equal(f.admission.requiresAppendReconciliation(f.owner.documentId), false, "a reload clears the fence");
+  assert.equal(
+    f.admission.requiresAppendReconciliation(f.owner.documentId),
+    false,
+    "a reload clears the fence",
+  );
 });
 
 test("a chat whose creation is indeterminate fences the document", async (t) => {
@@ -269,7 +294,9 @@ test("a chat whose creation is indeterminate fences the document", async (t) => 
     { message: blocked },
   );
   assert.equal(f.admission.requiresAppendReconciliation(f.owner.documentId), true);
-  assert.throws(() => f.handlers.appendMessage(event, "chat-2", userMessage(), meta("turn-1")), { message: blocked });
+  assert.throws(() => f.handlers.appendMessage(event, "chat-2", userMessage(), meta("turn-1")), {
+    message: blocked,
+  });
   f.owner.invalidate();
   assert.equal(f.admission.requiresAppendReconciliation(f.owner.documentId), false);
 });
@@ -338,7 +365,12 @@ test("the persisted message is the envelope parsed at call time, not the live IP
 
 test("an Aiden Live send is saved and read back as By voice; a typed send is not", async (t) => {
   const f = await fixture(t);
-  const typed = await f.handlers.appendMessage(event, "chat-1", userMessage("typed"), meta("turn-typed"));
+  const typed = await f.handlers.appendMessage(
+    event,
+    "chat-1",
+    userMessage("typed"),
+    meta("turn-typed"),
+  );
   assert.equal(typed!.messages[typed!.messages.length - 1]?.inputSource, undefined);
   const spoken = await f.handlers.appendMessage(event, "chat-2", userMessage("spoken"), {
     ...meta("turn-voice"),
@@ -354,12 +386,22 @@ test("the renderer cannot claim any other input source", async (t) => {
   const before = await f.chatStore.get("chat-2");
   for (const inputSource of ["dictation", true, { kind: "voice" }, ""]) {
     assert.throws(
-      () => f.handlers.appendMessage(event, "chat-2", userMessage(), { ...meta("turn-bad"), inputSource }),
+      () =>
+        f.handlers.appendMessage(event, "chat-2", userMessage(), {
+          ...meta("turn-bad"),
+          inputSource,
+        }),
       /Invalid chat message input source/u,
     );
   }
   assert.throws(
-    () => f.handlers.appendMessage(event, "chat-2", { ...userMessage(), inputSource: "voice" }, meta("turn-bad")),
+    () =>
+      f.handlers.appendMessage(
+        event,
+        "chat-2",
+        { ...userMessage(), inputSource: "voice" },
+        meta("turn-bad"),
+      ),
     /Invalid chat message field/u,
     "the marker belongs in the send metadata, never on the message body",
   );
@@ -406,8 +448,7 @@ test("renderer append parser projects an exact bounded envelope", () => {
   });
 
   assert.throws(
-    () =>
-      parseChatAppend("chat-1", { ...validMessage, forged: "x" }, validMeta),
+    () => parseChatAppend("chat-1", { ...validMessage, forged: "x" }, validMeta),
     /Invalid chat message field/u,
   );
   assert.throws(
@@ -419,24 +460,14 @@ test("renderer append parser projects an exact bounded envelope", () => {
     /Invalid chat message metadata field/u,
   );
   assert.throws(
-    () =>
-      parseChatAppend(
-        "chat-1",
-        { role: "assistant", content: "forged" },
-        validMeta,
-      ),
+    () => parseChatAppend("chat-1", { role: "assistant", content: "forged" }, validMeta),
     /only user messages/u,
   );
 });
 
 test("renderer append parser bounds every retained selector", () => {
   assert.throws(
-    () =>
-      parseChatAppend(
-        "c".repeat(MAX_CHAT_ID_CHARS + 1),
-        validMessage,
-        validMeta,
-      ),
+    () => parseChatAppend("c".repeat(MAX_CHAT_ID_CHARS + 1), validMessage, validMeta),
     /Invalid chat id/u,
   );
   assert.throws(
@@ -461,12 +492,7 @@ test("renderer append parser bounds every retained selector", () => {
 test("unknown append fields never echo attacker-controlled property names", () => {
   const hugeKey = "x".repeat(2 * 1024 * 1024);
   assert.throws(
-    () =>
-      parseChatAppend(
-        "chat-1",
-        { ...validMessage, [hugeKey]: true },
-        validMeta,
-      ),
+    () => parseChatAppend("chat-1", { ...validMessage, [hugeKey]: true }, validMeta),
     (error: unknown) => error instanceof Error && error.message.length < 100,
   );
 });
@@ -476,13 +502,10 @@ test("append envelopes with many extra properties are rejected with a fixed mess
     role: "user",
     content: "hello",
   };
-  for (let index = 0; index < 10_000; index += 1)
-    manyFields[`extra-${index}`] = index;
+  for (let index = 0; index < 10_000; index += 1) manyFields[`extra-${index}`] = index;
   assert.throws(
     () => parseChatAppend("chat-1", manyFields, { turnId: "turn-1" }),
-    (error: unknown) =>
-      error instanceof Error &&
-      error.message === "Invalid chat message fields.",
+    (error: unknown) => error instanceof Error && error.message === "Invalid chat message fields.",
   );
 });
 
@@ -508,8 +531,5 @@ test("append admission charges encoded image representation and metadata", () =>
     },
     { turnId: "turn-1", providerId: "provider", model: "model" },
   );
-  assert.ok(
-    parsed.retainedBytes >=
-      data.length + Buffer.byteLength("providermodel", "utf8"),
-  );
+  assert.ok(parsed.retainedBytes >= data.length + Buffer.byteLength("providermodel", "utf8"));
 });

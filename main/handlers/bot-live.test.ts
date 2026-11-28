@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BotLiveEvent, BotLiveSnapshot } from "../../renderer/shared/bot-live.js";
 import type { BotLiveProjection, BotLiveSink } from "../services/bot-runtime/live-projection.js";
-import { isBotChatInFront, registerBotLiveHandlers, type BotChatFrontInput, type BotLiveOwner } from "./bot-live.js";
+import {
+  isBotChatInFront,
+  registerBotLiveHandlers,
+  type BotChatFrontInput,
+  type BotLiveOwner,
+} from "./bot-live.js";
 
 class FakeDocument implements BotLiveOwner {
   readonly received: Array<{ channel: string; event: BotLiveEvent }> = [];
@@ -96,7 +101,8 @@ function registerWithProbe(projection: BotLiveProjection) {
   });
   return {
     live,
-    invoke: (channel: string, document: FakeDocument, ...args: unknown[]) => handlers.get(channel)!(document, ...args),
+    invoke: (channel: string, document: FakeDocument, ...args: unknown[]) =>
+      handlers.get(channel)!(document, ...args),
   };
 }
 
@@ -140,7 +146,10 @@ test("unsubscribe and a reload both end the document's subscriptions", async () 
   fake.push("bot:a", 9);
   assert.equal(first.received.length, 0);
   assert.equal(second.received.length, 1);
-  await assert.rejects(invoke("bots:live:subscribe", first, "bot:a") as Promise<unknown>, /document changed/u);
+  await assert.rejects(
+    invoke("bots:live:subscribe", first, "bot:a") as Promise<unknown>,
+    /document changed/u,
+  );
 });
 
 test("the list summary comes from the projection", async () => {
@@ -210,8 +219,14 @@ test("two windows on one Bot each get the events, and one leaving keeps the othe
   fake.push("bot:a", 2);
   await invoke("bots:live:unsubscribe", first, "bot:a");
   fake.push("bot:a", 3);
-  assert.deepEqual(first.received.map(({ event }) => event.seq), [2]);
-  assert.deepEqual(second.received.map(({ event }) => event.seq), [2, 3]);
+  assert.deepEqual(
+    first.received.map(({ event }) => event.seq),
+    [2],
+  );
+  assert.deepEqual(
+    second.received.map(({ event }) => event.seq),
+    [2, 3],
+  );
 });
 
 test("a Bot's chat is in front only while a focused document is subscribed to that Bot", async () => {
@@ -263,12 +278,32 @@ test("a bubble overlay counts as in front only for its open mini chat's Bot; the
   };
   assert.equal(isBotChatInFront("bot:b", focusedOverlay), true);
   assert.equal(isBotChatInFront("bot:a", focusedOverlay), false, "a closed head");
-  assert.equal(isBotChatInFront("bot:b", { ...focusedOverlay, openBubbleBotId: null }), false, "chat tucked away");
-  assert.equal(isBotChatInFront("bot:b", { ...focusedOverlay, focusedWebContentsId: 1 }), false, "another app window is focused");
-  assert.equal(isBotChatInFront("bot:b", { ...focusedOverlay, focusedWebContentsId: null }), false, "another app is focused");
-  assert.equal(isBotChatInFront("bot:b", { ...focusedOverlay, idleState: "idle" }), false, "the person is away");
+  assert.equal(
+    isBotChatInFront("bot:b", { ...focusedOverlay, openBubbleBotId: null }),
+    false,
+    "chat tucked away",
+  );
+  assert.equal(
+    isBotChatInFront("bot:b", { ...focusedOverlay, focusedWebContentsId: 1 }),
+    false,
+    "another app window is focused",
+  );
+  assert.equal(
+    isBotChatInFront("bot:b", { ...focusedOverlay, focusedWebContentsId: null }),
+    false,
+    "another app is focused",
+  );
+  assert.equal(
+    isBotChatInFront("bot:b", { ...focusedOverlay, idleState: "idle" }),
+    false,
+    "the person is away",
+  );
 
-  const main: BotChatFrontInput = { ...focusedOverlay, isBubbleOverlay: false, openBubbleBotId: null };
+  const main: BotChatFrontInput = {
+    ...focusedOverlay,
+    isBubbleOverlay: false,
+    openBubbleBotId: null,
+  };
   assert.equal(isBotChatInFront("bot:a", main), true, "the main window's rule is unchanged");
   assert.equal(isBotChatInFront("bot:a", { ...main, minimized: true }), false);
   assert.equal(isBotChatInFront("bot:a", { ...main, visible: false }), false);
@@ -278,10 +313,17 @@ test("a bubble overlay stops getting a Bot's events once its head moves to anoth
   const fake = fakeProjection();
   const invoke = register(fake.projection);
   const heads = { left: new Set(["bot:a"]), right: new Set<string>() };
-  const left = Object.assign(new FakeDocument("overlay-left"), { mayFollow: (botId: string) => heads.left.has(botId) });
-  const right = Object.assign(new FakeDocument("overlay-right"), { mayFollow: (botId: string) => heads.right.has(botId) });
+  const left = Object.assign(new FakeDocument("overlay-left"), {
+    mayFollow: (botId: string) => heads.left.has(botId),
+  });
+  const right = Object.assign(new FakeDocument("overlay-right"), {
+    mayFollow: (botId: string) => heads.right.has(botId),
+  });
   await invoke("bots:live:subscribe", left, "bot:a");
-  await assert.rejects(Promise.resolve().then(() => invoke("bots:live:subscribe", right, "bot:a")), /no longer shows that Bot/);
+  await assert.rejects(
+    Promise.resolve().then(() => invoke("bots:live:subscribe", right, "bot:a")),
+    /no longer shows that Bot/,
+  );
   fake.push("bot:a", 2);
   // The head is dragged to the right-hand display; the left page never unsubscribes.
   heads.left.delete("bot:a");
@@ -290,7 +332,13 @@ test("a bubble overlay stops getting a Bot's events once its head moves to anoth
   fake.push("bot:a", 3);
   await Promise.resolve();
   fake.push("bot:a", 4);
-  assert.deepEqual(left.received.map(({ event }) => event.seq), [2]);
-  assert.deepEqual(right.received.map(({ event }) => event.seq), [3, 4]);
+  assert.deepEqual(
+    left.received.map(({ event }) => event.seq),
+    [2],
+  );
+  assert.deepEqual(
+    right.received.map(({ event }) => event.seq),
+    [3, 4],
+  );
   assert.equal(fake.live(), 1, "the left page's feed ended");
 });

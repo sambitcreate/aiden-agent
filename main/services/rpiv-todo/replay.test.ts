@@ -118,42 +118,56 @@ test("only the last checkpoint is authoritative across adversarial snapshot orde
 
 test("a newer full empty checkpoint supersedes corrupt and populated snapshots", async () => {
   const empty = { ...details("Unused"), action: "clear", tasks: [], nextId: 1 };
-  assert.deepEqual(await replayTodoState({
-    getBranch: async () => [result(details("Old")), result({}), result(empty)],
-  }), { tasks: [], nextId: 1 });
+  assert.deepEqual(
+    await replayTodoState({
+      getBranch: async () => [result(details("Old")), result({}), result(empty)],
+    }),
+    { tasks: [], nextId: 1 },
+  );
 });
 
 test("error-only and non-checkpoint branches initialize empty state", async () => {
   const checkpoint = result(details("Ignored"));
-  assert.deepEqual(await replayTodoState({
-    getBranch: async () => [
-      null,
-      [],
-      { type: "compaction", message: checkpoint.message },
-      { type: "message", message: { ...checkpoint.message, role: "assistant" } },
-      { type: "message", message: { ...checkpoint.message, isError: true } },
-      { type: "message", message: { ...checkpoint.message, isError: true, details: {} } },
-    ],
-  }), { tasks: [], nextId: 1 });
+  assert.deepEqual(
+    await replayTodoState({
+      getBranch: async () => [
+        null,
+        [],
+        { type: "compaction", message: checkpoint.message },
+        { type: "message", message: { ...checkpoint.message, role: "assistant" } },
+        { type: "message", message: { ...checkpoint.message, isError: true } },
+        { type: "message", message: { ...checkpoint.message, isError: true, details: {} } },
+      ],
+    }),
+    { tasks: [], nextId: 1 },
+  );
 });
 
 test("branch read failures propagate unchanged", async () => {
   const failure = new Error("journal read failed");
-  await assert.rejects(replayTodoState({
-    getBranch: async () => { throw failure; },
-  }), (error) => error === failure);
+  await assert.rejects(
+    replayTodoState({
+      getBranch: async () => {
+        throw failure;
+      },
+    }),
+    (error) => error === failure,
+  );
 });
 
 test("iterator failures propagate before interpreting any candidate checkpoint", async () => {
   for (const candidate of [undefined, result(details("Valid")), result({})]) {
     const failure = new Error("journal iteration failed");
-    await assert.rejects(replayTodoState({
-      getBranch: async () => ({
-        *[Symbol.iterator]() {
-          if (candidate) yield candidate;
-          throw failure;
-        },
+    await assert.rejects(
+      replayTodoState({
+        getBranch: async () => ({
+          *[Symbol.iterator]() {
+            if (candidate) yield candidate;
+            throw failure;
+          },
+        }),
       }),
-    }), (error) => error === failure);
+      (error) => error === failure,
+    );
   }
 });

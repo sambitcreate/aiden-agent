@@ -11,7 +11,11 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { syncDirectory as syncDirectoryPath, syncFile as syncFilePath, writeFileAtomic } from "./durable-fs.js";
+import {
+  syncDirectory as syncDirectoryPath,
+  syncFile as syncFilePath,
+  writeFileAtomic,
+} from "./durable-fs.js";
 
 export const CHAT_IMAGES_DIRECTORY = "images";
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
@@ -126,7 +130,11 @@ export function createChatImageStore(
     await ensureDurableDirectory(await imagesDirectory());
     await ensureDurableDirectory(shard);
     try {
-      await writeFileAtomic(target, bytes, { exclusive: true, mode: 0o600, io: { syncFile, syncDirectory } });
+      await writeFileAtomic(target, bytes, {
+        exclusive: true,
+        mode: 0o600,
+        io: { syncFile, syncDirectory },
+      });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       // Another process published the same bytes first, or a damaged file
@@ -135,7 +143,11 @@ export function createChatImageStore(
         await makeDurable(target, shard);
       } else {
         await fs.rm(target, { force: true });
-        await writeFileAtomic(target, bytes, { exclusive: true, mode: 0o600, io: { syncFile, syncDirectory } });
+        await writeFileAtomic(target, bytes, {
+          exclusive: true,
+          mode: 0o600,
+          io: { syncFile, syncDirectory },
+        });
       }
     }
     durableImages.add(sha256);
@@ -260,7 +272,11 @@ export function createChatImageStore(
           }
           if (image) durableImages.delete(name);
           const removal = fs.rm(target, { force: true });
-          if (image) removals.set(name, removal.catch(() => undefined));
+          if (image)
+            removals.set(
+              name,
+              removal.catch(() => undefined),
+            );
           try {
             await removal;
           } finally {

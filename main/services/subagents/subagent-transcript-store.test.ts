@@ -55,7 +55,11 @@ test("a recorded helper run saves to disk and reloads exactly", async (t) => {
       published.push(update);
     },
   });
-  const recorder = factory({ runId: "run-1", chatId: "chat-1", task: "Find where the retry limit is read." })!;
+  const recorder = factory({
+    runId: "run-1",
+    chatId: "chat-1",
+    task: "Find where the retry limit is read.",
+  })!;
   recorder.messageStarted();
   recorder.textDelta("I will read the config files.");
   recorder.messageEnded("I will read the config files.");
@@ -101,7 +105,10 @@ test("a read never returns another chat's helper or a damaged file", async (t) =
   assert.equal(await store.read("chat-1", "run-1"), null);
 
   // A file holding a different run's conversation is not handed out under this id.
-  await fs.writeFile(path.join(root, SUBAGENT_TRANSCRIPTS_DIRECTORY, file!), JSON.stringify(transcript("run-9")));
+  await fs.writeFile(
+    path.join(root, SUBAGENT_TRANSCRIPTS_DIRECTORY, file!),
+    JSON.stringify(transcript("run-9")),
+  );
   assert.equal(await store.read("chat-1", "run-1"), null);
 
   await assert.rejects(store.write("chat-1", { ...transcript("run-1"), runId: "../escape" }));
@@ -136,7 +143,11 @@ test("a temporary file left by a crashed save is removed once it is stale", asyn
   await store.write("chat-1", transcript("run-2"));
   const names = await fs.readdir(directory);
   assert.equal(names.includes(path.basename(leftover)), false, "the stale leftover is gone");
-  assert.equal(names.includes(path.basename(recent)), true, "a save that may still be running is left alone");
+  assert.equal(
+    names.includes(path.basename(recent)),
+    true,
+    "a save that may still be running is left alone",
+  );
   assert.ok(await store.read("chat-1", "run-1"));
   assert.ok(await store.read("chat-1", "run-2"));
 });
@@ -220,7 +231,10 @@ test("helper conversations are removed after a crash in the middle of a chat del
     },
   });
   await flaky.initialize();
-  await assert.rejects(reconcilePendingChatDeletions(flaky, async () => {}), /disk busy/u);
+  await assert.rejects(
+    reconcilePendingChatDeletions(flaky, async () => {}),
+    /disk busy/u,
+  );
   assert.deepEqual([...tombstones], ["chat-1"]);
 
   // The start after that finishes the job with a fresh store.

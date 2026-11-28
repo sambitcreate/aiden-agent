@@ -9,23 +9,39 @@ import { AidenLiveVoiceAndLookFields } from "../settings/aiden-live-voice-settin
 import { idleLiveController } from "./assistant-live-test-fixture";
 import { LiveRibbon, LiveRibbonMenuItems } from "./live-ribbon";
 import { AssistantDockPresentation } from "./assistant-dock";
-import { liveCornerClearance, measureLiveRibbonFootprint, placeLiveRibbon } from "./use-live-ribbon-placement";
+import {
+  liveCornerClearance,
+  measureLiveRibbonFootprint,
+  placeLiveRibbon,
+} from "./use-live-ribbon-placement";
 import { useLiveVoiceEnding, waitForLivePlayback } from "./live-ribbon-session";
 import type { AidenLiveMarkState } from "./aiden-live-mark";
-import { createLivePreferenceSaver, type AidenLivePreferencesPatch } from "./use-aiden-live-preferences";
+import {
+  createLivePreferenceSaver,
+  type AidenLivePreferencesPatch,
+} from "./use-aiden-live-preferences";
 import type { AppSettings } from "../../lib/types";
 import type { AssistantLiveController } from "./use-assistant-live";
 
 afterEach(cleanup);
 
 const PREFERENCES = { voice: "Puck", speed: 1 as const, ribbonColors: "spectrum" as const };
-const openLive: AssistantLiveController = { ...idleLiveController, active: true, state: "open", microphoneActive: true };
+const openLive: AssistantLiveController = {
+  ...idleLiveController,
+  active: true,
+  state: "open",
+  microphoneActive: true,
+};
 
 function renderRibbon({
   live = openLive,
   markState = "listening",
   activity = null,
-}: { live?: AssistantLiveController; markState?: AidenLiveMarkState; activity?: LiveActivity | null } = {}) {
+}: {
+  live?: AssistantLiveController;
+  markState?: AidenLiveMarkState;
+  activity?: LiveActivity | null;
+} = {}) {
   return render(
     <LiveRibbon
       live={live}
@@ -168,7 +184,10 @@ test("every control on the ribbon sits inside the region Live may never press", 
   renderRibbon();
   const listening = screen.getByRole("region", { name: "Aiden Live" });
   for (const name of ["Mute microphone", "End Live"]) {
-    assert.ok(within(listening).getByRole("button", { name }).closest('[data-live-guard="you"]'), name);
+    assert.ok(
+      within(listening).getByRole("button", { name }).closest('[data-live-guard="you"]'),
+      name,
+    );
   }
 });
 
@@ -259,7 +278,9 @@ test("the voice list offers every Live voice with its character, checks the curr
   assert.equal(items.length, 30);
   assert.equal(items[0]!.textContent, "PuckUpbeat");
   assert.deepEqual(
-    items.filter((item) => item.getAttribute("aria-checked") === "true").map((item) => item.textContent),
+    items
+      .filter((item) => item.getAttribute("aria-checked") === "true")
+      .map((item) => item.textContent),
     ["KoreFirm"],
   );
   assert.ok(screen.getByText("New voice starts next time"));
@@ -277,7 +298,10 @@ test("Settings shows Voice, Speaking speed and Ribbon colours with the saved cho
   assert.ok(screen.getByText("Voice and look"));
   assert.equal(screen.getByRole("combobox", { name: "Live voice" }).textContent, "Kore · Firm");
   assert.equal(screen.getByRole("combobox", { name: "Live speaking speed" }).textContent, "1.5×");
-  assert.equal(screen.getByRole("combobox", { name: "Live ribbon colours" }).textContent, "Theme accent");
+  assert.equal(
+    screen.getByRole("combobox", { name: "Live ribbon colours" }).textContent,
+    "Theme accent",
+  );
   assert.ok(screen.getByText("How Live sounds. A new voice starts the next time you start Live."));
 });
 
@@ -319,7 +343,11 @@ test("a quick run of menu choices saves in order and ends on the last one", asyn
   pending[1]!.resolve();
   await second;
   assert.equal(speed(), 2);
-  assert.equal((stored as unknown as { aidenLiveSpeed: number }).aidenLiveSpeed, 2, "the last choice is what was saved");
+  assert.equal(
+    (stored as unknown as { aidenLiveSpeed: number }).aidenLiveSpeed,
+    2,
+    "the last choice is what was saved",
+  );
   assert.equal(reloads + errors, 0);
 
   const failing = createLivePreferenceSaver({
@@ -356,8 +384,14 @@ test("a ribbon dragged to a window edge keeps its captions and approval cards in
   const anchor = { centerX: 500, bottom: 120 };
   // Dragged far up and left: the cards' top and the captions' left edge stay on screen.
   const placed = placeLiveRibbon(anchor, { x: -2_000, y: -2_000 }, footprint, viewport);
-  assert.ok(placed.left - footprint.width / 2 >= 0, `left edge at ${placed.left - footprint.width / 2}`);
-  assert.ok(placed.bottom + footprint.height <= viewport.height, `top edge at ${viewport.height - placed.bottom - footprint.height}`);
+  assert.ok(
+    placed.left - footprint.width / 2 >= 0,
+    `left edge at ${placed.left - footprint.width / 2}`,
+  );
+  assert.ok(
+    placed.bottom + footprint.height <= viewport.height,
+    `top edge at ${viewport.height - placed.bottom - footprint.height}`,
+  );
   // Dragged far down and right: the pill's bottom and the captions' right edge stay on screen.
   const corner = placeLiveRibbon(anchor, { x: 2_000, y: 2_000 }, footprint, viewport);
   assert.ok(corner.left + footprint.width / 2 <= viewport.width);
@@ -371,21 +405,34 @@ test("the corner Live pill rises above a chat composer it would cover, and stays
   const dock = { left: 600, right: 690, height: 32 };
   // Over the composer's Send end: the pill's bottom edge sits above the composer's top edge.
   const lifted = liveCornerClearance({ composer, dock, container });
-  assert.ok(container.bottom - lifted < composer.top, `pill bottom at y ${container.bottom - lifted}`);
+  assert.ok(
+    container.bottom - lifted < composer.top,
+    `pill bottom at y ${container.bottom - lifted}`,
+  );
   assert.ok(lifted - (container.bottom - composer.top) <= 16, "and only just above it");
   // A pill to the right of the composer's card, or no chat on screen, keeps the usual corner.
-  assert.equal(liveCornerClearance({ composer, dock: { ...dock, left: 720, right: 800 }, container }), 0);
+  assert.equal(
+    liveCornerClearance({ composer, dock: { ...dock, left: 720, right: 800 }, container }),
+    0,
+  );
   assert.equal(liveCornerClearance({ composer: null, dock, container }), 0);
   // A floating tools panel over the corner keeps the slot below it, so the pill stays there
   // rather than rising into the panel.
-  assert.equal(liveCornerClearance({ composer, dock, container, floatingPanel: { left: 560, right: 888 } }), 0);
+  assert.equal(
+    liveCornerClearance({ composer, dock, container, floatingPanel: { left: 560, right: 888 } }),
+    0,
+  );
 });
 
 test("a composer too tall to clear never pushes the corner Live pill out of the window", () => {
   // A short 400 px window whose composer has grown past its top edge.
   const container = { top: 0, bottom: 400 };
   const dock = { left: 600, right: 690, height: 120 }; // the pill with error details above it
-  const clearance = liveCornerClearance({ composer: { left: 300, right: 700, top: -40 }, dock, container });
+  const clearance = liveCornerClearance({
+    composer: { left: 300, right: 700, top: -40 },
+    dock,
+    container,
+  });
   const dockTop = container.bottom - clearance - dock.height;
   assert.ok(dockTop >= container.top, `dock top at y ${dockTop}`);
   assert.ok(clearance > 0, "still as high as it fits");
@@ -393,7 +440,10 @@ test("a composer too tall to clear never pushes the corner Live pill out of the 
 
 // ---- The Live shortcut while a session runs ----
 
-function renderDockWithShortcut(live: AssistantLiveController, activity: LiveActivity | null = null) {
+function renderDockWithShortcut(
+  live: AssistantLiveController,
+  activity: LiveActivity | null = null,
+) {
   let shortcut: (() => void) | null = null;
   const useCommand = ((_id: string, handler: () => void) => {
     shortcut = handler;
@@ -484,7 +534,15 @@ function endingFixture(maxWaitMs?: number, extra: { answerPending?: () => boolea
   render(
     <EndingHarness
       live={live}
-      options={{ bus, activity, goodbyeStartMs: 120, settleMs: 60, pollMs: 10, ...(maxWaitMs ? { maxWaitMs } : {}), ...extra }}
+      options={{
+        bus,
+        activity,
+        goodbyeStartMs: 120,
+        settleMs: 60,
+        pollMs: 10,
+        ...(maxWaitMs ? { maxWaitMs } : {}),
+        ...extra,
+      }}
     />,
   );
   return { bus, activity, audio, results, stops: () => stops };
@@ -535,7 +593,13 @@ test("an end phrase inside a longer sentence, or while an approval or confirmati
   await tick(150);
   assert.equal(fixture.stops(), 0);
 
-  fixture.activity.set("chat-approvals", { kind: "confirm", id: "c1", label: "Delete", confirm: () => undefined, cancel: () => undefined });
+  fixture.activity.set("chat-approvals", {
+    kind: "confirm",
+    id: "c1",
+    label: "Delete",
+    confirm: () => undefined,
+    cancel: () => undefined,
+  });
   fixture.bus.publishVoiceInput("bye");
   await tick(150);
   assert.equal(fixture.stops(), 0);
@@ -552,24 +616,51 @@ test("neither bye nor Live's end tool ends Live while any request waits on the u
   fixture.bus.publishVoiceInput("bye");
   await tick(250);
   assert.equal(fixture.stops(), 0, "the dock's Computer Use approval is waiting");
-  await fixture.bus.runToolRequest({ sessionId: "s1", requestId: "r1", name: "end_session", args: {} });
+  await fixture.bus.runToolRequest({
+    sessionId: "s1",
+    requestId: "r1",
+    name: "end_session",
+    args: {},
+  });
   assert.deepEqual(fixture.results[fixture.results.length - 1], {
     ok: false,
     error: { code: "answer_pending", message: "Answer the waiting request first." },
   });
 
   legacyApproval = false;
-  fixture.activity.set("chat-approvals", { kind: "confirm", id: "c1", label: "Delete", confirm: () => undefined, cancel: () => undefined });
-  await fixture.bus.runToolRequest({ sessionId: "s1", requestId: "r2", name: "end_session", args: {} });
+  fixture.activity.set("chat-approvals", {
+    kind: "confirm",
+    id: "c1",
+    label: "Delete",
+    confirm: () => undefined,
+    cancel: () => undefined,
+  });
+  await fixture.bus.runToolRequest({
+    sessionId: "s1",
+    requestId: "r2",
+    name: "end_session",
+    args: {},
+  });
   assert.equal(fixture.results[fixture.results.length - 1]?.ok, false);
   assert.equal(fixture.stops(), 0);
 
   // A request that appears while the goodbye plays also keeps Live running.
   fixture.activity.set("chat-approvals", null);
   fixture.audio.state.idle = false;
-  const ending = fixture.bus.runToolRequest({ sessionId: "s1", requestId: "r3", name: "end_session", args: {} });
+  const ending = fixture.bus.runToolRequest({
+    sessionId: "s1",
+    requestId: "r3",
+    name: "end_session",
+    args: {},
+  });
   await tick(30);
-  fixture.activity.set("chat-approvals", { kind: "confirm", id: "c2", label: "Delete", confirm: () => undefined, cancel: () => undefined });
+  fixture.activity.set("chat-approvals", {
+    kind: "confirm",
+    id: "c2",
+    label: "Delete",
+    confirm: () => undefined,
+    cancel: () => undefined,
+  });
   fixture.audio.state.idle = true;
   await ending;
   assert.deepEqual(fixture.results[fixture.results.length - 1]?.error, {
@@ -582,7 +673,12 @@ test("neither bye nor Live's end tool ends Live while any request waits on the u
 test("Live's end tool lets the goodbye finish playing, then ends the session", async () => {
   const fixture = endingFixture();
   fixture.audio.state.idle = false;
-  void fixture.bus.runToolRequest({ sessionId: "s1", requestId: "r1", name: "end_session", args: {} });
+  void fixture.bus.runToolRequest({
+    sessionId: "s1",
+    requestId: "r1",
+    name: "end_session",
+    args: {},
+  });
   await tick(250);
   assert.equal(fixture.stops(), 0, "still saying goodbye");
   fixture.audio.state.idle = true;
@@ -593,14 +689,27 @@ test("Live's end tool lets the goodbye finish playing, then ends the session", a
 test("talking over the goodbye cancels the end, and a goodbye that never finishes is cut off at the limit", async () => {
   const fixture = endingFixture(400);
   fixture.audio.state.idle = false;
-  void fixture.bus.runToolRequest({ sessionId: "s1", requestId: "r1", name: "end_session", args: {} });
+  void fixture.bus.runToolRequest({
+    sessionId: "s1",
+    requestId: "r1",
+    name: "end_session",
+    args: {},
+  });
   await tick(150);
   fixture.audio.state.bargeIns += 1; // barge-in flushed playback
   await tick(150);
   assert.equal(fixture.stops(), 0);
-  assert.deepEqual(fixture.results[fixture.results.length - 1], { ok: false, error: { code: "cancelled", message: "The user kept talking." } });
+  assert.deepEqual(fixture.results[fixture.results.length - 1], {
+    ok: false,
+    error: { code: "cancelled", message: "The user kept talking." },
+  });
 
-  void fixture.bus.runToolRequest({ sessionId: "s1", requestId: "r2", name: "end_session", args: {} });
+  void fixture.bus.runToolRequest({
+    sessionId: "s1",
+    requestId: "r2",
+    name: "end_session",
+    args: {},
+  });
   await tick(250);
   assert.equal(fixture.stops(), 0);
   await tick(300);
@@ -621,16 +730,25 @@ test("a Theme accent ribbon redraws in the new accent when the appearance change
   const stops: string[] = [];
   const gradient = { addColorStop: (_offset: number, color: string) => stops.push(color) };
   const context = new Proxy({} as Record<string, unknown>, {
-    get: (target, key) => (key in target ? target[key as string] : key === "createLinearGradient" ? () => gradient : () => undefined),
+    get: (target, key) =>
+      key in target
+        ? target[key as string]
+        : key === "createLinearGradient"
+          ? () => gradient
+          : () => undefined,
     set: (target, key, value) => ((target[key as string] = value), true),
   });
-  const canvasPrototype = Object.getPrototypeOf(document.createElement("canvas")) as HTMLCanvasElement;
+  const canvasPrototype = Object.getPrototypeOf(
+    document.createElement("canvas"),
+  ) as HTMLCanvasElement;
   const original = canvasPrototype.getContext;
   canvasPrototype.getContext = (() => context) as unknown as typeof original;
   const root = document.documentElement;
   root.dataset.reduceMotion = "true";
   try {
-    const { container } = render(<LiveRibbonWave motion="listening" level={() => 0} colors="accent" width={200} height={40} />);
+    const { container } = render(
+      <LiveRibbonWave motion="listening" level={() => 0} colors="accent" width={200} height={40} />,
+    );
     const canvas = container.querySelector("canvas")!;
     assert.ok(!stops.includes("#D6336C"));
     stops.length = 0;

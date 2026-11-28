@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildAssistantSystemPrompt, withTelegramAgentContract } from "./system-prompt.js";
-import {
-  PI_CHAT_SYSTEM_PROMPT,
-  RESPONSE_FORMAT_GUIDANCE,
-} from "../response-format-guidance.js";
+import { PI_CHAT_SYSTEM_PROMPT, RESPONSE_FORMAT_GUIDANCE } from "../response-format-guidance.js";
 
 const base = {
   settingsPages: ["Providers", "Appearance (Links)"],
@@ -231,4 +228,3 @@ test("an unattended MCP automation must use approved tools and report only verif
     assert.doesNotMatch(unrelated, /MCP servers the user approved/u);
   }
 });
-

@@ -12,7 +12,12 @@ import { DesignModeControlsContext } from "../lib/design-mode";
 import { queryKeys } from "../lib/queries";
 import type { Chat, ChatMeta, Workspace } from "../lib/types";
 import { ariaKeyShortcut, effectiveBindings, prettyAccelerator } from "../shared/keybindings";
-import { ChatTitleMenu, DesignModeToggle, WorkspaceToolButtons, type FoldableToolbarAction } from "./chat-top-bar";
+import {
+  ChatTitleMenu,
+  DesignModeToggle,
+  WorkspaceToolButtons,
+  type FoldableToolbarAction,
+} from "./chat-top-bar";
 import { EnvironmentPanelContext, type EnvironmentPanelContextValue } from "./environment-panel";
 
 const WORKSPACE: Workspace = {
@@ -25,8 +30,23 @@ const WORKSPACE: Workspace = {
 };
 
 const CHATS: Chat[] = [
-  { id: "plain-chat", title: "Plain", workspaceId: "site", createdAt: 1, updatedAt: 5, messages: [] },
-  { id: "bot-chat", title: "Bot", workspaceId: "site", botId: "bot-1", createdAt: 1, updatedAt: 5, messages: [] },
+  {
+    id: "plain-chat",
+    title: "Plain",
+    workspaceId: "site",
+    createdAt: 1,
+    updatedAt: 5,
+    messages: [],
+  },
+  {
+    id: "bot-chat",
+    title: "Bot",
+    workspaceId: "site",
+    botId: "bot-1",
+    createdAt: 1,
+    updatedAt: 5,
+    messages: [],
+  },
 ];
 
 let queryClient: QueryClient;
@@ -38,7 +58,11 @@ beforeEach(() => {
   saved = [];
   heldSaves = [];
   installBotTestIpc({
-    "shortcut:get": () => ({ overrides: { version: 1, commands: {} }, effective: effectiveBindings(undefined), global: [] }),
+    "shortcut:get": () => ({
+      overrides: { version: 1, commands: {} },
+      effective: effectiveBindings(undefined),
+      global: [],
+    }),
     "workspaces:list": () => [WORKSPACE],
     "chats:get": (id) => ({
       chat: CHATS.find((entry) => entry.id === id) ?? null,
@@ -78,7 +102,9 @@ async function renderTopBar(props: { chatId: string; barChatId?: string }, desig
   await act(async () => {
     render(
       <QueryClientProvider client={queryClient}>
-        <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: "darwin", designMode }}>
+        <AppCapabilitiesProvider
+          capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: "darwin", designMode }}
+        >
           <CommandSystemProvider>
             <TopBar {...props} />
           </CommandSystemProvider>
@@ -182,7 +208,10 @@ function renderToolbarAt(width: number, selected: string[], designOn = true) {
                   hasFolder
                   hasFolderAccess
                   isRepo={false}
-                  foldable={[action("quick-view", "Show Quick View"), action("terminal", "Show terminal")]}
+                  foldable={[
+                    action("quick-view", "Show Quick View"),
+                    action("terminal", "Show terminal"),
+                  ]}
                 />
               </div>
             </EnvironmentPanelContext.Provider>
@@ -199,14 +228,25 @@ function renderToolbarAt(width: number, selected: string[], designOn = true) {
 test("a tight header in design mode, like its chat column, moves Quick View and Terminal into the tools menu", async () => {
   const selected: string[] = [];
   renderToolbarAt(1000, selected);
-  assert.ok(screen.getByRole("button", { name: "Show Quick View" }), "a roomy header keeps both buttons");
+  assert.ok(
+    screen.getByRole("button", { name: "Show Quick View" }),
+    "a roomy header keeps both buttons",
+  );
   assert.ok(screen.getByRole("button", { name: "Show terminal" }));
   cleanup();
 
   // 360 px of header: the design column at its narrowest.
   renderToolbarAt(360, selected);
-  assert.equal(screen.queryByRole("button", { name: "Show Quick View" }) === null, true, "Quick View folds away");
-  assert.equal(screen.queryByRole("button", { name: "Show terminal" }) === null, true, "Terminal folds away");
+  assert.equal(
+    screen.queryByRole("button", { name: "Show Quick View" }) === null,
+    true,
+    "Quick View folds away",
+  );
+  assert.equal(
+    screen.queryByRole("button", { name: "Show terminal" }) === null,
+    true,
+    "Terminal folds away",
+  );
   const menu = screen.getByRole("button", { name: "More workspace tools" });
   await act(async () => {
     fireEvent.keyDown(menu, { key: "Enter" });
@@ -225,7 +265,10 @@ test("a tight header in design mode, like its chat column, moves Quick View and 
 
   // Outside design mode a narrow window keeps both buttons in the header.
   renderToolbarAt(360, selected, false);
-  assert.ok(screen.getByRole("button", { name: "Show Quick View" }), "Quick View stays without design mode");
+  assert.ok(
+    screen.getByRole("button", { name: "Show Quick View" }),
+    "Quick View stays without design mode",
+  );
   assert.ok(screen.getByRole("button", { name: "Show terminal" }));
 });
 
@@ -241,8 +284,16 @@ test("a truncated chat title keeps its full text as the name and on hover", () =
         duplicateDisabledReason={null}
       />,
     );
-    if (persisted) assert.ok(screen.getByRole("button", { name: title }), "the menu button is named by the whole title");
-    assert.equal(container.querySelector(`[title="${title}"]`)?.textContent, title, "hovering the title shows all of it");
+    if (persisted)
+      assert.ok(
+        screen.getByRole("button", { name: title }),
+        "the menu button is named by the whole title",
+      );
+    assert.equal(
+      container.querySelector(`[title="${title}"]`)?.textContent,
+      title,
+      "hovering the title shows all of it",
+    );
     cleanup();
   }
 });

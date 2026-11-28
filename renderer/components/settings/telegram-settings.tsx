@@ -100,7 +100,8 @@ export function TelegramSettings() {
 
   const connect = async () => {
     if (connecting) return;
-    setConnecting(true); setConnectionError(null);
+    setConnecting(true);
+    setConnectionError(null);
     try {
       await telegramApi.setEnabled(true);
       await invalidate();
@@ -108,14 +109,18 @@ export function TelegramSettings() {
       toast.success("Telegram enabled. Check its connection status below.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to connect.";
-      setConnectionError(message); toast.error(message);
+      setConnectionError(message);
+      toast.error(message);
       await invalidate();
-    } finally { setConnecting(false); }
+    } finally {
+      setConnecting(false);
+    }
   };
 
   const disconnect = async () => {
     if (disconnecting) return;
-    setDisconnecting(true); setConnectionError(null);
+    setDisconnecting(true);
+    setConnectionError(null);
     try {
       await telegramApi.setEnabled(false);
       toast.success("Telegram turned off.");
@@ -269,397 +274,471 @@ export function TelegramSettings() {
 
   return (
     <>
-    <FieldSet title="1. Connect Telegram">
-      <Field
-        label="Bot token"
-        description={
-          hasToken
-            ? "A token is saved. Enter a new value to replace it."
-            : "Create a bot via @BotFather in Telegram, then paste the token here. Stored encrypted on this device."
-        }
-      >
-        <div className="flex gap-2">
-          <Input
-            type="password"
-            value={keyDraft}
-            onChange={(e) => setKeyDraft(e.target.value)}
-            placeholder={hasToken ? "••••••••••••" : "Paste your bot token from @BotFather"}
-          />
-          <Button
-            size="medium"
-            variant={!keyDraft.trim() && hasToken ? "destructive" : "filled"}
-            onClick={saveKey}
-            disabled={!keyDraft.trim() && !hasToken}
-          >
-            {keyDraft.trim() ? (hasToken ? "Replace" : "Save") : "Remove"}
-          </Button>
-        </div>
-      </Field>
-      {telegram.data ? (
-        <Field orientation="vertical" className="justify-center">
-          <Disclosure key={String(hasToken)} title="How to connect" defaultOpen={!hasToken}>
-            <ol className="text-secondary list-decimal space-y-1 py-2 pl-6 text-regular">
-              <li>
-                Open Telegram and message <strong>@BotFather</strong>.
-              </li>
-              <li>
-                Send <code>/newbot</code> and follow the prompts to create a bot.
-              </li>
-              <li>Copy the bot token and paste it above, then Save.</li>
-              <li>
-                If you want workspace topics, enable Threaded Mode for the bot in{" "}
-                <strong>@BotFather</strong>.
-              </li>
-              <li>Choose a provider under Review model and access (or set one up in Settings → Providers).</li>
-              <li>
-                Choose Connect under Connect and pair your account, review access, then send <code>/start</code> to your bot from Telegram to pair.
-              </li>
-            </ol>
-          </Disclosure>
-        </Field>
-      ) : null}
-    </FieldSet>
-    <FieldSet title="2. Review model and access">
-      <Field
-        label="Workspace"
-        description="Project automation runs only in this folder. Assistant-only mode cannot access project files or tools."
-      >
-        <Select
-          value={telegramWorkspaceId ?? TELEGRAM_ASSISTANT_ONLY_VALUE}
-          onValueChange={(workspaceId) => void saveWorkspace(workspaceId)}
+      <FieldSet title="1. Connect Telegram">
+        <Field
+          label="Bot token"
+          description={
+            hasToken
+              ? "A token is saved. Enter a new value to replace it."
+              : "Create a bot via @BotFather in Telegram, then paste the token here. Stored encrypted on this device."
+          }
         >
-          <SelectTrigger size="small" aria-label="Telegram workspace">
-            <SelectValue placeholder="Assistant-only mode" />
-          </SelectTrigger>
-          <SelectContent>
-            {workspaceOptions.map((workspace) => (
-              <SelectItem
-                key={workspace.value}
-                value={workspace.value}
-                disabled={workspace.unavailable}
-              >
-                {workspace.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {folderWorkspaceCount === 0 && (
-          <p className="text-secondary text-regular">
-            Add a folder workspace from the sidebar to enable project automation.
-          </p>
-        )}
-      </Field>
-
-      <Field
-        label="Provider"
-        description={
-          usableProviders.length > 0
-            ? "The AI provider and model used for Telegram turns."
-            : "No providers configured. Go to Settings → Providers to add one."
-        }
-      >
-        {usableProviders.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            <Select
-              value={telegramProviderId}
-              onValueChange={(pid) => {
-                const provider = usableProviders.find((p) => p.id === pid);
-                if (!provider) return;
-                const models = visibleModelsForProvider(provider);
-                const model =
-                  provider.defaultModel && models.includes(provider.defaultModel)
-                    ? provider.defaultModel
-                    : models[0];
-                if (model) void saveProvider(pid, model);
-              }}
+          <div className="flex gap-2">
+            <Input
+              type="password"
+              value={keyDraft}
+              onChange={(e) => setKeyDraft(e.target.value)}
+              placeholder={hasToken ? "••••••••••••" : "Paste your bot token from @BotFather"}
+            />
+            <Button
+              size="medium"
+              variant={!keyDraft.trim() && hasToken ? "destructive" : "filled"}
+              onClick={saveKey}
+              disabled={!keyDraft.trim() && !hasToken}
             >
-              <SelectTrigger size="small" aria-label="Telegram provider">
-                <SelectValue placeholder="Choose a provider…" />
-              </SelectTrigger>
-              <SelectContent>
-                {selectableProviders.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selectedProvider &&
-              visibleModels.length > 0 &&
-              (visibleModels.length > 1 || Boolean(currentHiddenModel)) && (
-                <Select
-                  value={selectedModel}
-                  onValueChange={(model) => void saveProvider(telegramProviderId, model)}
+              {keyDraft.trim() ? (hasToken ? "Replace" : "Save") : "Remove"}
+            </Button>
+          </div>
+        </Field>
+        {telegram.data ? (
+          <Field orientation="vertical" className="justify-center">
+            <Disclosure key={String(hasToken)} title="How to connect" defaultOpen={!hasToken}>
+              <ol className="text-secondary list-decimal space-y-1 py-2 pl-6 text-regular">
+                <li>
+                  Open Telegram and message <strong>@BotFather</strong>.
+                </li>
+                <li>
+                  Send <code>/newbot</code> and follow the prompts to create a bot.
+                </li>
+                <li>Copy the bot token and paste it above, then Save.</li>
+                <li>
+                  If you want workspace topics, enable Threaded Mode for the bot in{" "}
+                  <strong>@BotFather</strong>.
+                </li>
+                <li>
+                  Choose a provider under Review model and access (or set one up in Settings →
+                  Providers).
+                </li>
+                <li>
+                  Choose Connect under Connect and pair your account, review access, then send{" "}
+                  <code>/start</code> to your bot from Telegram to pair.
+                </li>
+              </ol>
+            </Disclosure>
+          </Field>
+        ) : null}
+      </FieldSet>
+      <FieldSet title="2. Review model and access">
+        <Field
+          label="Workspace"
+          description="Project automation runs only in this folder. Assistant-only mode cannot access project files or tools."
+        >
+          <Select
+            value={telegramWorkspaceId ?? TELEGRAM_ASSISTANT_ONLY_VALUE}
+            onValueChange={(workspaceId) => void saveWorkspace(workspaceId)}
+          >
+            <SelectTrigger size="small" aria-label="Telegram workspace">
+              <SelectValue placeholder="Assistant-only mode" />
+            </SelectTrigger>
+            <SelectContent>
+              {workspaceOptions.map((workspace) => (
+                <SelectItem
+                  key={workspace.value}
+                  value={workspace.value}
+                  disabled={workspace.unavailable}
                 >
-                  <SelectTrigger size="small" aria-label="Telegram model">
-                    <SelectValue placeholder="Choose a model…">
-                      {currentHiddenModel ? (
-                        <>
-                          {currentHiddenModel} <InlineMetadata>· Hidden</InlineMetadata>
-                        </>
-                      ) : undefined}
-                    </SelectValue>
+                  {workspace.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {folderWorkspaceCount === 0 && (
+            <p className="text-secondary text-regular">
+              Add a folder workspace from the sidebar to enable project automation.
+            </p>
+          )}
+        </Field>
+
+        <Field
+          label="Provider"
+          description={
+            usableProviders.length > 0
+              ? "The AI provider and model used for Telegram turns."
+              : "No providers configured. Go to Settings → Providers to add one."
+          }
+        >
+          {usableProviders.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              <Select
+                value={telegramProviderId}
+                onValueChange={(pid) => {
+                  const provider = usableProviders.find((p) => p.id === pid);
+                  if (!provider) return;
+                  const models = visibleModelsForProvider(provider);
+                  const model =
+                    provider.defaultModel && models.includes(provider.defaultModel)
+                      ? provider.defaultModel
+                      : models[0];
+                  if (model) void saveProvider(pid, model);
+                }}
+              >
+                <SelectTrigger size="small" aria-label="Telegram provider">
+                  <SelectValue placeholder="Choose a provider…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectableProviders.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedProvider &&
+                visibleModels.length > 0 &&
+                (visibleModels.length > 1 || Boolean(currentHiddenModel)) && (
+                  <Select
+                    value={selectedModel}
+                    onValueChange={(model) => void saveProvider(telegramProviderId, model)}
+                  >
+                    <SelectTrigger size="small" aria-label="Telegram model">
+                      <SelectValue placeholder="Choose a model…">
+                        {currentHiddenModel ? (
+                          <>
+                            {currentHiddenModel} <InlineMetadata>· Hidden</InlineMetadata>
+                          </>
+                        ) : undefined}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {visibleModels.map((m) => (
+                        <SelectItem key={m} value={m}>
+                          {m}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              {selectedProvider && visibleModels.length === 0 && currentHiddenModel ? (
+                <p className="text-secondary text-regular">
+                  {currentHiddenModel} is hidden. Show a model in Provider Settings before changing
+                  this bot's model.
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-secondary text-regular">
+              Configure at least one provider in Settings → Providers, then return here to select it
+              for Telegram.
+            </p>
+          )}
+        </Field>
+      </FieldSet>
+      <FieldSet title="3. Connect and pair your account">
+        {hasToken && (
+          <Field
+            label="Connection"
+            description="Keep Aiden running on this device. After connecting, send /start to your bot from your own Telegram account."
+          >
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                size="medium"
+                variant="filled"
+                onClick={() => {
+                  setConnectionError(null);
+                  setConnectionReview(true);
+                }}
+                disabled={polling || connecting || disconnecting}
+              >
+                Connect
+              </Button>
+              <Button
+                ref={disconnectRef}
+                size="medium"
+                variant="muted"
+                onClick={disconnect}
+                disabled={!enabled || disconnecting}
+              >
+                Disconnect
+              </Button>
+              <span className="min-w-0 break-words text-secondary text-regular">
+                {lastError
+                  ? "Needs attention"
+                  : polling
+                    ? allowedUserId !== undefined
+                      ? "● Connected"
+                      : "Pair your Telegram account"
+                    : "○ Disconnected"}
+                {queuedCount > 0 ? ` · ${queuedCount} queued` : ""}
+              </span>
+            </div>
+          </Field>
+        )}
+
+        {!hasToken ? (
+          <Text as="p" variant="small" color="secondary" className="p-4">
+            Save your bot token in section 1 to connect.
+          </Text>
+        ) : null}
+        {connectionError ? (
+          <Callout color="red" role="alert">
+            {connectionError}
+          </Callout>
+        ) : null}
+        {allowedUserId !== undefined && (
+          <Field
+            label="Paired owner"
+            description="The Telegram account currently authorized to control Aiden."
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-secondary text-regular">User ID: {allowedUserId}</span>
+              <Button
+                size="small"
+                variant="muted"
+                onClick={() => {
+                  pairingResetRef.current = false;
+                  setResetPairingOpen(true);
+                }}
+              >
+                Reset pairing
+              </Button>
+            </div>
+          </Field>
+        )}
+
+        {lastError && (
+          <Field label="Last error">
+            <p className="text-red text-regular">{lastError}</p>
+          </Field>
+        )}
+
+        <Field
+          label="⚠ Security notice"
+          description="Telegram turns run with full unattended authority — no approval prompts. Only the paired owner can trigger turns. Disconnect to stop immediately."
+        >
+          <p className="text-secondary text-regular">
+            This is the same trust boundary as scheduled tasks: the paired owner can run mutating
+            tools silently from their phone. Keep the bot private.
+          </p>
+        </Field>
+      </FieldSet>
+      <Disclosure title="Advanced Telegram settings" className="mb-7" contentClassName="pl-0">
+        <FieldSet className="mt-2 mb-0">
+          <Field
+            label="Bot profile"
+            description="Keep separate Telegram bots and their access settings in separate profiles."
+          >
+            <div className="flex flex-col gap-2">
+              <div className="flex gap-2">
+                <Select
+                  value={activeProfile}
+                  onValueChange={(profile) => void selectProfile(profile)}
+                >
+                  <SelectTrigger size="small" aria-label="Telegram bot profile">
+                    <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {visibleModels.map((m) => (
-                      <SelectItem key={m} value={m}>
-                        {m}
+                    {profiles.map((profile) => (
+                      <SelectItem key={profile.name} value={profile.name}>
+                        {profile.name}
+                        {profile.status.status === "polling" ? (
+                          <>
+                            {" "}
+                            <InlineMetadata>· connected</InlineMetadata>
+                          </>
+                        ) : null}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-              )}
-            {selectedProvider && visibleModels.length === 0 && currentHiddenModel ? (
-              <p className="text-secondary text-regular">
-                {currentHiddenModel} is hidden. Show a model in Provider Settings before changing
-                this bot's model.
-              </p>
-            ) : null}
-          </div>
-        ) : (
-          <p className="text-secondary text-regular">
-            Configure at least one provider in Settings → Providers, then return here to select it
-            for Telegram.
-          </p>
-        )}
-      </Field>
+                {activeProfile !== "default" && (
+                  <Button
+                    size="small"
+                    variant="destructive"
+                    onClick={() => setDeleteProfileOpen(true)}
+                  >
+                    Delete
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  value={profileDraft}
+                  onChange={(event) => setProfileDraft(event.target.value)}
+                  placeholder="New profile name"
+                  aria-label="New Telegram profile name"
+                />
+                <Button
+                  size="small"
+                  variant="muted"
+                  onClick={() => void createProfile()}
+                  disabled={!profileDraft.trim()}
+                >
+                  Add profile
+                </Button>
+              </div>
+            </div>
+          </Field>
 
-    </FieldSet>
-    <FieldSet title="3. Connect and pair your account">
-      {hasToken && (
-        <Field
-          label="Connection"
-          description="Keep Aiden running on this device. After connecting, send /start to your bot from your own Telegram account."
-        >
-          <div className="flex flex-wrap items-center gap-3">
-            <Button size="medium" variant="filled" onClick={() => { setConnectionError(null); setConnectionReview(true); }} disabled={polling || connecting || disconnecting}>
-              Connect
-            </Button>
-            <Button ref={disconnectRef} size="medium" variant="muted" onClick={disconnect} disabled={!enabled || disconnecting}>
-              Disconnect
-            </Button>
-            <span className="min-w-0 break-words text-secondary text-regular">
-              {lastError ? "Needs attention" : polling ? (allowedUserId !== undefined ? "● Connected" : "Pair your Telegram account") : "○ Disconnected"}
-              {queuedCount > 0 ? ` · ${queuedCount} queued` : ""}
-            </span>
-          </div>
-        </Field>
-      )}
-
-      {!hasToken ? <Text as="p" variant="small" color="secondary" className="p-4">Save your bot token in section 1 to connect.</Text> : null}
-      {connectionError ? <Callout color="red" role="alert">{connectionError}</Callout> : null}
-      {allowedUserId !== undefined && (
-        <Field
-          label="Paired owner"
-          description="The Telegram account currently authorized to control Aiden."
-        >
-          <div className="flex items-center gap-3">
-            <span className="text-secondary text-regular">User ID: {allowedUserId}</span>
-            <Button size="small" variant="muted" onClick={() => { pairingResetRef.current = false; setResetPairingOpen(true); }}>
-              Reset pairing
-            </Button>
-          </div>
-        </Field>
-      )}
-
-      {lastError && (
-        <Field label="Last error">
-          <p className="text-red text-regular">{lastError}</p>
-        </Field>
-      )}
-
-      <Field
-        label="⚠ Security notice"
-        description="Telegram turns run with full unattended authority — no approval prompts. Only the paired owner can trigger turns. Disconnect to stop immediately."
-      >
-        <p className="text-secondary text-regular">
-          This is the same trust boundary as scheduled tasks: the paired owner can run mutating
-          tools silently from their phone. Keep the bot private.
-        </p>
-      </Field>
-    </FieldSet>
-    <Disclosure title="Advanced Telegram settings" className="mb-7" contentClassName="pl-0">
-      <FieldSet className="mt-2 mb-0">
-      <Field
-        label="Bot profile"
-        description="Keep separate Telegram bots and their access settings in separate profiles."
-      >
-        <div className="flex flex-col gap-2">
-          <div className="flex gap-2">
-            <Select value={activeProfile} onValueChange={(profile) => void selectProfile(profile)}>
-              <SelectTrigger size="small" aria-label="Telegram bot profile">
+          <Field
+            label="Thinking level"
+            description="Reasoning effort for Telegram turns. The selected model safely normalizes unsupported levels."
+          >
+            <Select
+              value={thinkingLevel}
+              onValueChange={(value) =>
+                void saveExperience({ thinkingLevel: value as GenerationThinkingLevel })
+              }
+            >
+              <SelectTrigger size="small" aria-label="Telegram thinking level">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {profiles.map((profile) => (
-                  <SelectItem key={profile.name} value={profile.name}>
-                    {profile.name}
-                    {profile.status.status === "polling" ? (
-                      <>
-                        {" "}
-                        <InlineMetadata>· connected</InlineMetadata>
-                      </>
-                    ) : null}
+                {GENERATION_THINKING_LEVELS.map((level) => (
+                  <SelectItem key={level} value={level}>
+                    {level}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            {activeProfile !== "default" && (
-              <Button size="small" variant="destructive" onClick={() => setDeleteProfileOpen(true)}>
-                Delete
-              </Button>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <Input
-              value={profileDraft}
-              onChange={(event) => setProfileDraft(event.target.value)}
-              placeholder="New profile name"
-              aria-label="New Telegram profile name"
+          </Field>
+
+          <Field
+            label="Live answer drafts"
+            description="Stream structurally complete Telegram-native Rich Drafts while Aiden answers; the persisted final reply completes the preview lifecycle."
+          >
+            <Switch
+              aria-label="Live answer drafts"
+              checked={draftPreviews}
+              onCheckedChange={(checked) => void saveExperience({ draftPreviews: checked })}
             />
-            <Button
-              size="small"
-              variant="muted"
-              onClick={() => void createProfile()}
-              disabled={!profileDraft.trim()}
+          </Field>
+
+          <Field
+            label="Assistant rendering"
+            description="Native Rich Markdown preserves Telegram formatting; HTML remains a compatibility fallback."
+          >
+            <Select
+              value={rendering}
+              onValueChange={(value) =>
+                void saveExperience({ rendering: value as typeof rendering })
+              }
             >
-              Add profile
-            </Button>
-          </div>
-        </div>
-      </Field>
+              <SelectTrigger size="small" aria-label="Telegram assistant rendering">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="rich">Native Rich Markdown</SelectItem>
+                <SelectItem value="html">Legacy HTML</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
 
-      <Field
-        label="Thinking level"
-        description="Reasoning effort for Telegram turns. The selected model safely normalizes unsupported levels."
+          <Field
+            label="Voice replies"
+            description="Hidden sends voice only when explicitly requested. Mirror follows voice input; Always replaces automatic text replies with voice when synthesis succeeds and falls back to text on failure."
+          >
+            <Select
+              value={voiceMode}
+              onValueChange={(value) =>
+                void saveExperience({ voiceMode: value as typeof voiceMode })
+              }
+            >
+              <SelectTrigger size="small" aria-label="Telegram voice reply policy">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="hidden">Hidden / explicit only</SelectItem>
+                <SelectItem value="mirror">Mirror voice input</SelectItem>
+                <SelectItem value="always">Always</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+
+          <Field
+            label="Private-chat threads"
+            description="Create one Telegram topic per configured Aiden workspace and route each topic only to that workspace. Enable Threaded Mode for the bot in @BotFather first."
+          >
+            <Switch
+              aria-label="Private-chat threads"
+              checked={threadedMode}
+              onCheckedChange={(checked) => void saveExperience({ threadedMode: checked })}
+            />
+          </Field>
+
+          <Field
+            label="Technical activity"
+            description="Choose whether Telegram shows provider reasoning, completed tool activity, both, or neither."
+          >
+            <Select
+              value={activity}
+              onValueChange={(value) => void saveExperience({ activity: value as typeof activity })}
+            >
+              <SelectTrigger size="small" aria-label="Telegram technical activity">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="quiet">Quiet</SelectItem>
+                <SelectItem value="thinking">Thinking</SelectItem>
+                <SelectItem value="tools">Tools</SelectItem>
+                <SelectItem value="verbose">Thinking and tools</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+
+          {(telegram.data?.recentDiagnostics.length ?? 0) > 0 && (
+            <Field
+              label="Recent diagnostics"
+              description="Redacted, process-local transport and recovery events for this profile."
+            >
+              <div className="space-y-1 text-regular text-secondary">
+                {telegram.data?.recentDiagnostics
+                  .slice(-5)
+                  .reverse()
+                  .map((event) => (
+                    <p key={`${event.at}-${event.message}`}>
+                      [{event.level}] {event.message}
+                    </p>
+                  ))}
+              </div>
+            </Field>
+          )}
+        </FieldSet>
+      </Disclosure>
+      <Dialog
+        open={connectionReview}
+        onOpenChange={setConnectionReview}
+        title="Connect Telegram?"
+        confirmLabel="Enable and connect"
+        busy={connecting}
+        onConfirm={connect}
+        description="Aiden will connect this bot and keep checking for messages while the app is running. Send /start from your own account to pair it. Keep the bot private."
       >
-        <Select
-          value={thinkingLevel}
-          onValueChange={(value) =>
-            void saveExperience({ thinkingLevel: value as GenerationThinkingLevel })
-          }
-        >
-          <SelectTrigger size="small" aria-label="Telegram thinking level">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {GENERATION_THINKING_LEVELS.map((level) => (
-              <SelectItem key={level} value={level}>
-                {level}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
-
-      <Field
-        label="Live answer drafts"
-        description="Stream structurally complete Telegram-native Rich Drafts while Aiden answers; the persisted final reply completes the preview lifecycle."
-      >
-        <Switch
-          aria-label="Live answer drafts"
-          checked={draftPreviews}
-          onCheckedChange={(checked) => void saveExperience({ draftPreviews: checked })}
-        />
-      </Field>
-
-      <Field
-        label="Assistant rendering"
-        description="Native Rich Markdown preserves Telegram formatting; HTML remains a compatibility fallback."
-      >
-        <Select
-          value={rendering}
-          onValueChange={(value) => void saveExperience({ rendering: value as typeof rendering })}
-        >
-          <SelectTrigger size="small" aria-label="Telegram assistant rendering">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="rich">Native Rich Markdown</SelectItem>
-            <SelectItem value="html">Legacy HTML</SelectItem>
-          </SelectContent>
-        </Select>
-      </Field>
-
-      <Field
-        label="Voice replies"
-        description="Hidden sends voice only when explicitly requested. Mirror follows voice input; Always replaces automatic text replies with voice when synthesis succeeds and falls back to text on failure."
-      >
-        <Select
-          value={voiceMode}
-          onValueChange={(value) => void saveExperience({ voiceMode: value as typeof voiceMode })}
-        >
-          <SelectTrigger size="small" aria-label="Telegram voice reply policy">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="hidden">Hidden / explicit only</SelectItem>
-            <SelectItem value="mirror">Mirror voice input</SelectItem>
-            <SelectItem value="always">Always</SelectItem>
-          </SelectContent>
-        </Select>
-      </Field>
-
-      <Field
-        label="Private-chat threads"
-        description="Create one Telegram topic per configured Aiden workspace and route each topic only to that workspace. Enable Threaded Mode for the bot in @BotFather first."
-      >
-        <Switch
-          aria-label="Private-chat threads"
-          checked={threadedMode}
-          onCheckedChange={(checked) => void saveExperience({ threadedMode: checked })}
-        />
-      </Field>
-
-      <Field
-        label="Technical activity"
-        description="Choose whether Telegram shows provider reasoning, completed tool activity, both, or neither."
-      >
-        <Select
-          value={activity}
-          onValueChange={(value) => void saveExperience({ activity: value as typeof activity })}
-        >
-          <SelectTrigger size="small" aria-label="Telegram technical activity">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="quiet">Quiet</SelectItem>
-            <SelectItem value="thinking">Thinking</SelectItem>
-            <SelectItem value="tools">Tools</SelectItem>
-            <SelectItem value="verbose">Thinking and tools</SelectItem>
-          </SelectContent>
-        </Select>
-      </Field>
-
-      {(telegram.data?.recentDiagnostics.length ?? 0) > 0 && (
-        <Field
-          label="Recent diagnostics"
-          description="Redacted, process-local transport and recovery events for this profile."
-        >
-          <div className="space-y-1 text-regular text-secondary">
-            {telegram.data?.recentDiagnostics
-              .slice(-5)
-              .reverse()
-              .map((event) => (
-                <p key={`${event.at}-${event.message}`}>
-                  [{event.level}] {event.message}
-                </p>
-              ))}
-          </div>
+        <Text as="p" variant="small" color="secondary">
+          Messages go through Telegram and your selected AI service. Workspace tasks run unattended:
+          they can edit files and run commands without asking. Only the paired owner can trigger
+          them.
+        </Text>
+        <Field label="Profile">
+          <Text>{activeProfile}</Text>
         </Field>
-      )}
-
-      </FieldSet>
-    </Disclosure>
-    <Dialog open={connectionReview} onOpenChange={setConnectionReview}
-      title="Connect Telegram?" confirmLabel="Enable and connect" busy={connecting} onConfirm={connect}
-      description="Aiden will connect this bot and keep checking for messages while the app is running. Send /start from your own account to pair it. Keep the bot private.">
-      <Text as="p" variant="small" color="secondary">Messages go through Telegram and your selected AI service. Workspace tasks run unattended: they can edit files and run commands without asking. Only the paired owner can trigger them.</Text>
-      <Field label="Profile"><Text>{activeProfile}</Text></Field>
-      <Field label="Model"><Text>{selectedProvider?.label ?? "Not configured"} · {selectedModel || "Choose a model before chatting"}</Text></Field>
-      <Field label="Workspace"><Text>{workspaceOptions.find((option) => option.value === telegramWorkspaceId)?.label ?? "Assistant-only — no project files or tools"}</Text></Field>
-      {connectionError ? <Callout color="red" role="alert">{connectionError}</Callout> : null}
-    </Dialog>
+        <Field label="Model">
+          <Text>
+            {selectedProvider?.label ?? "Not configured"} ·{" "}
+            {selectedModel || "Choose a model before chatting"}
+          </Text>
+        </Field>
+        <Field label="Workspace">
+          <Text>
+            {workspaceOptions.find((option) => option.value === telegramWorkspaceId)?.label ??
+              "Assistant-only — no project files or tools"}
+          </Text>
+        </Field>
+        {connectionError ? (
+          <Callout color="red" role="alert">
+            {connectionError}
+          </Callout>
+        ) : null}
+      </Dialog>
       <AlertDialog
         open={deleteProfileOpen}
         onOpenChange={setDeleteProfileOpen}

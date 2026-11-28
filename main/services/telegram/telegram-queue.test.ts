@@ -163,7 +163,6 @@ test("FIFO ordering within the default lane", () => {
   assert.equal(queue.dequeue()?.text, "d3");
 });
 
-
 test("queue bounds reject excess work without dropping accepted prompts", () => {
   const queue = createTelegramQueue(makeDeps());
   for (let i = 0; i < 20; i++) queue.enqueue(turn("default", `prompt-${i}`));
@@ -189,7 +188,10 @@ test("oversized queue edits preserve the old prompt and position", () => {
   const queue = createTelegramQueue(makeDeps());
   const first = queue.enqueue(turn("default", "first"));
   queue.enqueue(turn("default", "second"));
-  assert.throws(() => queue.replace(first.id!, { ...first, text: "x".repeat(32 * 1024 * 1024) }), /queue is full/);
+  assert.throws(
+    () => queue.replace(first.id!, { ...first, text: "x".repeat(32 * 1024 * 1024) }),
+    /queue is full/,
+  );
   assert.equal(queue.dequeue()?.text, "first");
   assert.equal(queue.dequeue()?.text, "second");
 });

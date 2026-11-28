@@ -35,11 +35,20 @@ export interface DaemonSessionWarming {
 }
 
 /** A boolean switch in the profile's aiden.json; anything but `true`, or an unreadable file, is off. */
-function profileSwitch(agentDir: string, key: "cacheWarmingEnabled" | "longPromptCacheRetention"): boolean {
+function profileSwitch(
+  agentDir: string,
+  key: "cacheWarmingEnabled" | "longPromptCacheRetention",
+): boolean {
   try {
     const settings = readJson<unknown>(join(agentDir, "aiden.json"), {});
-    return !!settings && typeof settings === "object" && (settings as Record<string, unknown>)[key] === true;
-  } catch { return false; }
+    return (
+      !!settings &&
+      typeof settings === "object" &&
+      (settings as Record<string, unknown>)[key] === true
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Whether the profile's aiden.json opts in to cache warming. */
@@ -53,10 +62,17 @@ export function profileKeepsLongPromptCache(agentDir: string): boolean {
 }
 
 /** The settings a daemon AgentSession reads: Pi's own, with warming set by the profile and the run, and Codex's transport. */
-export function daemonSettingsManager(cwd: string, agentDir: string, warming: DaemonSessionWarming): SettingsManager {
+export function daemonSettingsManager(
+  cwd: string,
+  agentDir: string,
+  warming: DaemonSessionWarming,
+): SettingsManager {
   const settings = SettingsManager.create(cwd, agentDir);
   // Read once per session, so a changed setting reaches the next turn.
-  const mode = warming.attended && !warming.longRetention && profileWarmsCaches(agentDir) ? "streaming" : "off";
+  const mode =
+    warming.attended && !warming.longRetention && profileWarmsCaches(agentDir)
+      ? "streaming"
+      : "off";
   settings.getCacheWarmingMode = () => mode;
   const transport = inProcessCodexTransport(settings.getTransport());
   settings.getTransport = () => transport;

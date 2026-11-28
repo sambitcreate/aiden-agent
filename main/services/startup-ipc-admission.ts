@@ -18,9 +18,7 @@ export interface StartupIpcAdmission {
   isOpen(): boolean;
 }
 
-export function installStartupIpcAdmission(
-  target: InvokeHandlerTarget,
-): StartupIpcAdmission {
+export function installStartupIpcAdmission(target: InvokeHandlerTarget): StartupIpcAdmission {
   let opened = false;
   let release: () => void = () => undefined;
   const admitted = new Promise<void>((resolve) => {
@@ -29,9 +27,7 @@ export function installStartupIpcAdmission(
   const handle = target.handle.bind(target);
   target.handle = (channel, listener) => {
     handle(channel, (event, ...args) =>
-      opened
-        ? listener(event, ...args)
-        : admitted.then(() => listener(event, ...args)),
+      opened ? listener(event, ...args) : admitted.then(() => listener(event, ...args)),
     );
   };
   return {
@@ -47,9 +43,7 @@ export function installStartupIpcAdmission(
 let processAdmission: StartupIpcAdmission | null = null;
 
 /** Install the process-wide admission once, before the app registers handlers. */
-export function installProcessStartupIpcAdmission(
-  target: InvokeHandlerTarget,
-): void {
+export function installProcessStartupIpcAdmission(target: InvokeHandlerTarget): void {
   processAdmission ??= installStartupIpcAdmission(target);
 }
 

@@ -17,7 +17,11 @@ export function asString(value: unknown, name: string): string {
  */
 export function pcm16FromIpc(value: unknown, maxSamples: number = MAX_PCM_SAMPLES): Int16Array {
   const bytes =
-    value instanceof ArrayBuffer ? new Uint8Array(value) : value instanceof Uint8Array ? value : null;
+    value instanceof ArrayBuffer
+      ? new Uint8Array(value)
+      : value instanceof Uint8Array
+        ? value
+        : null;
   if (!bytes || bytes.byteLength === 0 || bytes.byteLength % 2 !== 0) {
     throw new Error("Invalid on-device audio.");
   }

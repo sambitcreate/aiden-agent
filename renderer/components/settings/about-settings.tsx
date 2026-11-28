@@ -22,10 +22,16 @@ function formatMegabytes(bytes: number): string {
   return `${(bytes / (1_024 * 1_024)).toFixed(1)} MB`;
 }
 
-type UpdateCapabilities = Pick<AppCapabilities, "platform" | "appUpdates" | "appUpdateNeedsPassword">;
+type UpdateCapabilities = Pick<
+  AppCapabilities,
+  "platform" | "appUpdates" | "appUpdateNeedsPassword"
+>;
 
 /** What the Software update row says for this install and update state. */
-export function softwareUpdateDescription(snapshot: AppUpdateSnapshot, capabilities: UpdateCapabilities): string {
+export function softwareUpdateDescription(
+  snapshot: AppUpdateSnapshot,
+  capabilities: UpdateCapabilities,
+): string {
   if (capabilities.platform !== "darwin" && !capabilities.appUpdates) {
     return capabilities.platform === "linux"
       ? "Install updates through your package manager, or download the newest Linux package from GitHub Releases."
@@ -150,9 +156,11 @@ export function AboutSettings() {
           appInfo ? `Aiden Agent ${appInfo.version} is up to date.` : "Aiden Agent is up to date.",
         );
       } else if (result.outcome === "unavailable") {
-        toast.info(capabilities.platform === "linux"
-          ? "Automatic updates need the Aiden .deb or .rpm package, or a writable Aiden AppImage."
-          : "Automatic updates are available in signed production builds.");
+        toast.info(
+          capabilities.platform === "linux"
+            ? "Automatic updates need the Aiden .deb or .rpm package, or a writable Aiden AppImage."
+            : "Automatic updates are available in signed production builds.",
+        );
       }
     } catch {
       toast.error("Aiden could not start an update check.");
@@ -242,40 +250,40 @@ export function AboutSettings() {
               </a>
             </Button>
           ) : (
-          <div className="flex flex-col items-end gap-2 max-[540px]:items-start">
-            {updateSnapshot.status === "downloading" && updateSnapshot.percent !== null ? (
-              <Progress
-                className="max-w-48"
-                label="Update download progress"
-                value={updateSnapshot.percent}
-              />
-            ) : null}
-            <Button
-              size="small"
-              variant={updateSnapshot.status === "ready" ? "accent" : "filled"}
-              disabled={updateActionBusy || updateInProgress}
-              onClick={() =>
-                void (updateSnapshot.status === "ready" ? restartToUpdate() : checkForUpdates())
-              }
-            >
-              {updateActionBusy || updateInProgress ? (
-                <Loader2 className="animate-spin" />
-              ) : updateSnapshot.status === "ready" ? (
-                <Download />
-              ) : (
-                <RefreshCw />
-              )}
-              {updateSnapshot.status === "ready"
-                ? "Update and restart"
-                : updateSnapshot.status === "checking"
-                  ? "Checking…"
-                  : updateSnapshot.status === "downloading"
-                    ? "Downloading…"
-                    : updateSnapshot.status === "error"
-                      ? "Try again"
-                      : "Check for updates"}
-            </Button>
-          </div>
+            <div className="flex flex-col items-end gap-2 max-[540px]:items-start">
+              {updateSnapshot.status === "downloading" && updateSnapshot.percent !== null ? (
+                <Progress
+                  className="max-w-48"
+                  label="Update download progress"
+                  value={updateSnapshot.percent}
+                />
+              ) : null}
+              <Button
+                size="small"
+                variant={updateSnapshot.status === "ready" ? "accent" : "filled"}
+                disabled={updateActionBusy || updateInProgress}
+                onClick={() =>
+                  void (updateSnapshot.status === "ready" ? restartToUpdate() : checkForUpdates())
+                }
+              >
+                {updateActionBusy || updateInProgress ? (
+                  <Loader2 className="animate-spin" />
+                ) : updateSnapshot.status === "ready" ? (
+                  <Download />
+                ) : (
+                  <RefreshCw />
+                )}
+                {updateSnapshot.status === "ready"
+                  ? "Update and restart"
+                  : updateSnapshot.status === "checking"
+                    ? "Checking…"
+                    : updateSnapshot.status === "downloading"
+                      ? "Downloading…"
+                      : updateSnapshot.status === "error"
+                        ? "Try again"
+                        : "Check for updates"}
+              </Button>
+            </div>
           )}
         </Field>
       </FieldSet>
@@ -304,7 +312,6 @@ export function AboutSettings() {
           </div>
         </Field>
       </FieldSet>
-
 
       <AlertDialog
         open={confirmReset}

@@ -37,9 +37,7 @@ function snapshot(overrides: Partial<SubagentRunSnapshotV2> = {}): SubagentRunSn
 
 function registration(
   run = snapshot(),
-  hooks: Partial<
-    Omit<SubagentControlMainRegistrationV2, "snapshot" | "ownerDocumentId">
-  > = {},
+  hooks: Partial<Omit<SubagentControlMainRegistrationV2, "snapshot" | "ownerDocumentId">> = {},
 ): SubagentControlMainRegistrationV2 {
   return {
     snapshot: run,
@@ -179,7 +177,12 @@ test("projector updates reuse private registration authority", () => {
   controls.register(registration());
   const updated = controls.update(
     "run-one",
-    snapshot({ revision: 2, state: "running", activity: "Reviewing workspace context", updatedAt: 150 }),
+    snapshot({
+      revision: 2,
+      state: "running",
+      activity: "Reviewing workspace context",
+      updatedAt: 150,
+    }),
   );
   assert.equal(updated.state, "running");
   assert.throws(
@@ -191,10 +194,15 @@ test("projector updates reuse private registration authority", () => {
 test("trusted chat-scoped stop reaches the owning run without exposing its document", async () => {
   let stopped = 0;
   const controls = new SubagentControlMainV2({ now: () => 200 });
-  controls.register(registration(snapshot({ state: "running" }), { stop: () => void (stopped += 1) }));
+  controls.register(
+    registration(snapshot({ state: "running" }), { stop: () => void (stopped += 1) }),
+  );
   const chatScope = { chatId: "chat-one", workspaceId: "workspace-one" };
 
-  assert.equal(await controls.stopForChat({ ...chatScope, chatId: "chat-two" }, "run-one"), undefined);
+  assert.equal(
+    await controls.stopForChat({ ...chatScope, chatId: "chat-two" }, "run-one"),
+    undefined,
+  );
   assert.equal(
     await controls.stopForChat({ ...chatScope, workspaceId: "workspace-two" }, "run-one"),
     undefined,
@@ -272,7 +280,10 @@ test("retry preparation is installed once and fresh registration precedes start"
     ),
     start: () => void (started += 1),
   }));
-  assert.throws(() => controls.installRetryPreparation(() => Promise.reject()), /already installed/u);
+  assert.throws(
+    () => controls.installRetryPreparation(() => Promise.reject()),
+    /already installed/u,
+  );
   const result = await controls.executeForDocument(scope, {
     version: 2,
     action: "retry",

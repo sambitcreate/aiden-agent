@@ -13,7 +13,15 @@ test("extension registry owns commands and namespaced callbacks", () => {
   const callbackData = telegramExtensionCallbackData("weather", "refresh");
   const unregister = registerTelegramExtension({
     id: "weather",
-    commands: [{ name: "forecast", description: "Forecast", async handler() { return "sunny"; } }],
+    commands: [
+      {
+        name: "forecast",
+        description: "Forecast",
+        async handler() {
+          return "sunny";
+        },
+      },
+    ],
     sections: [{ id: "main", label: "Weather", callbackData }],
   });
   assert.equal(getTelegramExtensions()[0]?.id, "weather");
@@ -27,12 +35,16 @@ test("extension registry rejects collisions and foreign callback namespaces", ()
     id: "one",
     commands: [{ name: "shared", description: "One", async handler() {} }],
   });
-  assert.throws(() => registerTelegramExtension({
-    id: "two",
-    commands: [{ name: "shared", description: "Two", async handler() {} }],
-  }));
-  assert.throws(() => registerTelegramExtension({
-    id: "bad",
-    sections: [{ id: "x", label: "Bad", callbackData: "ext:other:x" }],
-  }));
+  assert.throws(() =>
+    registerTelegramExtension({
+      id: "two",
+      commands: [{ name: "shared", description: "Two", async handler() {} }],
+    }),
+  );
+  assert.throws(() =>
+    registerTelegramExtension({
+      id: "bad",
+      sections: [{ id: "x", label: "Bad", callbackData: "ext:other:x" }],
+    }),
+  );
 });

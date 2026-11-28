@@ -39,7 +39,9 @@ test("Ogg/Opus decodes to 16 kHz mono with channels averaged", async () => {
 test("a chained file decodes each stream to its exact length", async () => {
   const first = new Uint8Array(await readFile(fixture));
   // 0.5 s of 880 Hz, mono, its own stream serial.
-  const second = new Uint8Array(await readFile(new URL("./fixtures/voice-note-880hz-half-second.ogg", import.meta.url)));
+  const second = new Uint8Array(
+    await readFile(new URL("./fixtures/voice-note-880hz-half-second.ogg", import.meta.url)),
+  );
   const chained = new Uint8Array(first.length + second.length);
   chained.set(first);
   chained.set(second, first.length);
@@ -90,7 +92,10 @@ function concatBytes(parts: readonly Uint8Array[]): Uint8Array {
   return joined;
 }
 
-function oggPage(packets: readonly Uint8Array[], page: { serial: number; sequence: number; granule: bigint; headerType: number }): Uint8Array {
+function oggPage(
+  packets: readonly Uint8Array[],
+  page: { serial: number; sequence: number; granule: bigint; headerType: number },
+): Uint8Array {
   const segments: number[] = [];
   for (const packet of packets) {
     let remaining = packet.length;
@@ -140,9 +145,19 @@ function opusTags(): Uint8Array {
  * `declareGranules` false every page carries granule -1 (unknown), so the
  * decoder cannot learn the length from the container.
  */
-function silenceOggOpus({ packetCount, serial = 1, declareGranules = true }: { packetCount: number; serial?: number; declareGranules?: boolean }): Uint8Array {
+function silenceOggOpus({
+  packetCount,
+  serial = 1,
+  declareGranules = true,
+}: {
+  packetCount: number;
+  serial?: number;
+  declareGranules?: boolean;
+}): Uint8Array {
   const pages: Uint8Array[] = [];
-  pages.push(oggPage([opusHead(1, PRE_SKIP_48K)], { serial, sequence: 0, granule: 0n, headerType: 0x02 }));
+  pages.push(
+    oggPage([opusHead(1, PRE_SKIP_48K)], { serial, sequence: 0, granule: 0n, headerType: 0x02 }),
+  );
   pages.push(oggPage([opusTags()], { serial, sequence: 1, granule: 0n, headerType: 0x00 }));
   let sequence = 2;
   for (let first = 0; first < packetCount; first += PACKETS_PER_PAGE) {
@@ -151,12 +166,15 @@ function silenceOggOpus({ packetCount, serial = 1, declareGranules = true }: { p
     // Ogg Opus granules count every sample from the start, pre-skip included.
     const granule = declareGranules ? BigInt((first + count) * PACKET_48K_SAMPLES) : -1n;
     pages.push(
-      oggPage(Array.from({ length: count }, () => SILENCE_PACKET), {
-        serial,
-        sequence,
-        granule,
-        headerType: last ? 0x04 : 0x00,
-      }),
+      oggPage(
+        Array.from({ length: count }, () => SILENCE_PACKET),
+        {
+          serial,
+          sequence,
+          granule,
+          headerType: last ? 0x04 : 0x00,
+        },
+      ),
     );
     sequence += 1;
   }
@@ -175,7 +193,8 @@ function shiftOggGranules(bytes: Uint8Array, offset: bigint): Uint8Array {
   const view = new DataView(out.buffer);
   let at = 0;
   while (at + 27 <= out.length) {
-    if (String.fromCharCode(...out.subarray(at, at + 4)) !== "OggS") throw new Error(`no Ogg page at ${at}`);
+    if (String.fromCharCode(...out.subarray(at, at + 4)) !== "OggS")
+      throw new Error(`no Ogg page at ${at}`);
     const segmentCount = out[at + 26]!;
     let bodyLength = 0;
     for (let index = 0; index < segmentCount; index += 1) bodyLength += out[at + 27 + index]!;
@@ -200,7 +219,10 @@ test("a note whose granules start at a positive offset still decodes to its real
   const reference = await decodeOggOpusToPcm16k(original);
   const samples = await decodeOggOpusToPcm16k(shifted);
   assert.equal(reference.length, 16_000);
-  assert.ok(samples.length >= 15_000 && samples.length <= 17_000, `shifted length ${samples.length}`);
+  assert.ok(
+    samples.length >= 15_000 && samples.length <= 17_000,
+    `shifted length ${samples.length}`,
+  );
   // The offset may leave end padding untrimmed, but it must never cut real audio.
   assert.deepEqual(samples.subarray(0, reference.length), reference);
 });

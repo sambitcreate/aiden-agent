@@ -27,7 +27,15 @@ export const AIDEN_UI_RENDER_BUDGET = {
 
 export type AidenUiBinaryOperator = "+" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "&&" | "||";
 
-export type AidenUiFunctionName = "fmt" | "len" | "sum" | "max" | "min" | "round" | "filter" | "sort";
+export type AidenUiFunctionName =
+  | "fmt"
+  | "len"
+  | "sum"
+  | "max"
+  | "min"
+  | "round"
+  | "filter"
+  | "sort";
 
 export type AidenUiExprV1 =
   | { op: "lit"; v: string | number | boolean | null }

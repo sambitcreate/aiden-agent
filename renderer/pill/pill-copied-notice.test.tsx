@@ -47,9 +47,14 @@ test("other copy results keep their plain message without a Secure Input warning
 });
 
 test("unconfirmed delivery asks the user to inspect the field without pasting twice", () => {
-  const text = visibleText(renderToStaticMarkup(
-    <PillCopiedNotice reason="paste-unavailable" message="Check the field — transcript copied." />,
-  ));
+  const text = visibleText(
+    renderToStaticMarkup(
+      <PillCopiedNotice
+        reason="paste-unavailable"
+        message="Check the field — transcript copied."
+      />,
+    ),
+  );
   assert.equal(text, "Check the field — transcript copied.");
   assert.doesNotMatch(text, /⌘V|press|blocked|couldn.t paste/i);
 });

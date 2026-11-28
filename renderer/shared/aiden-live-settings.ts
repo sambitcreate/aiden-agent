@@ -83,9 +83,13 @@ export function isAidenLiveRibbonColors(value: unknown): value is AidenLiveRibbo
 }
 
 /** Reads stored settings into preferences, falling back field by field. */
-export function aidenLivePreferences(settings: AidenLiveSettingsFields | null | undefined): AidenLivePreferences {
+export function aidenLivePreferences(
+  settings: AidenLiveSettingsFields | null | undefined,
+): AidenLivePreferences {
   return {
-    voice: isAidenLiveVoice(settings?.aidenLiveVoice) ? settings.aidenLiveVoice : AIDEN_LIVE_DEFAULT_VOICE,
+    voice: isAidenLiveVoice(settings?.aidenLiveVoice)
+      ? settings.aidenLiveVoice
+      : AIDEN_LIVE_DEFAULT_VOICE,
     speed: isAidenLiveSpeed(settings?.aidenLiveSpeed) ? settings.aidenLiveSpeed : 1,
     ribbonColors: isAidenLiveRibbonColors(settings?.aidenLiveRibbonColors)
       ? settings.aidenLiveRibbonColors
@@ -108,7 +112,9 @@ const BOOLEAN_KEYS = [
  * Validates a settings patch's Live fields. Returns only the fields present;
  * throws on a wrong type or an unknown voice, speed or colour choice.
  */
-export function parseAidenLiveSettingsPatch(patch: Record<string, unknown>): AidenLiveSettingsFields {
+export function parseAidenLiveSettingsPatch(
+  patch: Record<string, unknown>,
+): AidenLiveSettingsFields {
   const next: AidenLiveSettingsFields = {};
   if (patch.aidenLiveVoice !== undefined) {
     if (!isAidenLiveVoice(patch.aidenLiveVoice)) throw new Error("Invalid Aiden Live voice.");

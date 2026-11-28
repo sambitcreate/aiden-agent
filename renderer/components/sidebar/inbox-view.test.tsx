@@ -7,7 +7,13 @@ import { createPortal } from "react-dom";
 import { TooltipProvider } from "../ui";
 import { ChatRow } from "./chat-row";
 import { InboxView, type InboxRowContext, type InboxViewHandle } from "./inbox-view";
-import { botInboxRows, inboxRowAction, inboxShortcutTargets, resolveInboxEntry, type InboxEntry } from "../../lib/sidebar-inbox-view";
+import {
+  botInboxRows,
+  inboxRowAction,
+  inboxShortcutTargets,
+  resolveInboxEntry,
+  type InboxEntry,
+} from "../../lib/sidebar-inbox-view";
 import { botFixture } from "../../main/bots/test-fixtures";
 import type { InboxSignals } from "../../lib/sidebar-inbox";
 import { projectOrderKey } from "../../lib/sidebar-organization";
@@ -27,8 +33,18 @@ afterEach(() => {
   writeSidebarPreferences({ workingShelfCollapsed: false });
 });
 
-function entry(id: string, signals: Partial<InboxSignals> = {}, pending?: ChatPendingAttention): InboxEntry {
-  const chat: ChatMeta = { id, title: `Chat ${id}`, workspaceId: "ws-1", createdAt: NOW - 2 * HOUR, updatedAt: NOW - HOUR };
+function entry(
+  id: string,
+  signals: Partial<InboxSignals> = {},
+  pending?: ChatPendingAttention,
+): InboxEntry {
+  const chat: ChatMeta = {
+    id,
+    title: `Chat ${id}`,
+    workspaceId: "ws-1",
+    createdAt: NOW - 2 * HOUR,
+    updatedAt: NOW - HOUR,
+  };
   return {
     key: projectOrderKey("local", id),
     title: `Chat ${id}`,
@@ -89,12 +105,16 @@ function view(
     <TooltipProvider>
       <InboxView
         entries={entries}
-        {...(extra.unlisted ? { unlisted: new Map(extra.unlisted.map((item) => [item.key, item] as const)) } : {})}
+        {...(extra.unlisted
+          ? { unlisted: new Map(extra.unlisted.map((item) => [item.key, item] as const)) }
+          : {})}
         now={clock}
         searching={extra.searching ?? false}
         shelfHost={extra.shelfHost ?? null}
         renderRow={extra.renderRow ?? renderRow(extra.onMarkRead)}
-        {...(extra.onShortcutOrderChange ? { onShortcutOrderChange: extra.onShortcutOrderChange } : {})}
+        {...(extra.onShortcutOrderChange
+          ? { onShortcutOrderChange: extra.onShortcutOrderChange }
+          : {})}
         {...(extra.activeKey !== undefined ? { activeKey: extra.activeKey } : {})}
         {...(extra.handleRef ? { handleRef: extra.handleRef } : {})}
       />
@@ -117,17 +137,22 @@ function section(name: string): HTMLElement {
 function rowTitles(container: HTMLElement): string[] {
   return within(container)
     .queryAllByRole("button")
-    .filter((button) => button.hasAttribute("data-roving-item") && button.dataset.inboxShowMore === undefined)
+    .filter(
+      (button) =>
+        button.hasAttribute("data-roving-item") && button.dataset.inboxShowMore === undefined,
+    )
     .map((button) => button.querySelector("[data-inbox-title]")?.textContent ?? "");
 }
 
 test("rows sort into Needs you, Updates, Earlier and the Working shelf, each a labelled group", () => {
-  render(view([
-    entry("approval", { rowState: "needs_approval", attentionSince: NOW - 3 * MINUTE }),
-    entry("news", { unread: true, lastAssistantAt: NOW - 10 * MINUTE }),
-    entry("quiet"),
-    entry("busy", { rowState: "working", runStartedAt: NOW - 4 * MINUTE }),
-  ]));
+  render(
+    view([
+      entry("approval", { rowState: "needs_approval", attentionSince: NOW - 3 * MINUTE }),
+      entry("news", { unread: true, lastAssistantAt: NOW - 10 * MINUTE }),
+      entry("quiet"),
+      entry("busy", { rowState: "working", runStartedAt: NOW - 4 * MINUTE }),
+    ]),
+  );
   assert.deepEqual(rowTitles(section("Needs you")), ["Chat approval"]);
   assert.deepEqual(rowTitles(section("Updates")), ["Chat news"]);
   assert.deepEqual(rowTitles(section("Earlier")), ["Chat quiet"]);
@@ -137,14 +162,24 @@ test("rows sort into Needs you, Updates, Earlier and the Working shelf, each a l
 });
 
 test("pinned rows get their own group between Needs you and Updates; done and snoozed rows hide", () => {
-  render(view([
-    entry("approval", { rowState: "needs_approval", attentionSince: NOW - 3 * MINUTE, pinnedAt: NOW - HOUR }),
-    entry("old-pin", { pinnedAt: NOW - 2 * HOUR }),
-    entry("new-pin", { pinnedAt: NOW - MINUTE, unread: true, lastAssistantAt: NOW - 5 * MINUTE }),
-    entry("news", { unread: true, lastAssistantAt: NOW - 10 * MINUTE }),
-    entry("done", { unread: true, lastAssistantAt: NOW - 10 * MINUTE, doneAt: NOW - 5 * MINUTE }),
-    entry("snoozed", { unread: true, lastAssistantAt: NOW - 10 * MINUTE, snoozedUntil: NOW + HOUR }),
-  ]));
+  render(
+    view([
+      entry("approval", {
+        rowState: "needs_approval",
+        attentionSince: NOW - 3 * MINUTE,
+        pinnedAt: NOW - HOUR,
+      }),
+      entry("old-pin", { pinnedAt: NOW - 2 * HOUR }),
+      entry("new-pin", { pinnedAt: NOW - MINUTE, unread: true, lastAssistantAt: NOW - 5 * MINUTE }),
+      entry("news", { unread: true, lastAssistantAt: NOW - 10 * MINUTE }),
+      entry("done", { unread: true, lastAssistantAt: NOW - 10 * MINUTE, doneAt: NOW - 5 * MINUTE }),
+      entry("snoozed", {
+        unread: true,
+        lastAssistantAt: NOW - 10 * MINUTE,
+        snoozedUntil: NOW + HOUR,
+      }),
+    ]),
+  );
   const groups = screen.getAllByRole("group").map((group) => group.getAttribute("aria-label"));
   assert.deepEqual(groups.slice(0, 3), ["Needs you", "Pinned", "Updates"]);
   // A pinned chat that needs you still shows in Needs you; the newest pin leads.
@@ -156,19 +191,39 @@ test("pinned rows get their own group between Needs you and Updates; done and sn
 });
 
 test("a search lists Done and snoozed matches, each saying so", () => {
-  render(view([
-    entry("done", { unread: true, lastAssistantAt: NOW - 10 * MINUTE, doneAt: NOW - 5 * MINUTE }),
-    entry("snoozed", { snoozedUntil: NOW + HOUR }),
-    entry("quiet"),
-  ], { searching: true }));
+  render(
+    view(
+      [
+        entry("done", {
+          unread: true,
+          lastAssistantAt: NOW - 10 * MINUTE,
+          doneAt: NOW - 5 * MINUTE,
+        }),
+        entry("snoozed", { snoozedUntil: NOW + HOUR }),
+        entry("quiet"),
+      ],
+      { searching: true },
+    ),
+  );
   const row = (title: string) =>
-    screen.getAllByRole("button").find((button) =>
-      button.hasAttribute("data-roving-item") && button.querySelector("[data-inbox-title]")?.textContent === title)!;
+    screen
+      .getAllByRole("button")
+      .find(
+        (button) =>
+          button.hasAttribute("data-roving-item") &&
+          button.querySelector("[data-inbox-title]")?.textContent === title,
+      )!;
   assert.equal(row("Chat done").querySelector("[data-inbox-status]")?.textContent, "Done");
   // The row shows the short form, so the workspace keeps its room; its name says it in full.
-  assert.match(row("Chat snoozed").querySelector("[data-inbox-status]")?.textContent ?? "", /^Until \S/u);
+  assert.match(
+    row("Chat snoozed").querySelector("[data-inbox-status]")?.textContent ?? "",
+    /^Until \S/u,
+  );
   assert.match(row("Chat snoozed").getAttribute("aria-label") ?? "", /, Snoozed until \S/u);
-  assert.doesNotMatch(row("Chat quiet").querySelector("[data-inbox-status]")?.textContent ?? "", /Done|Snoozed/u);
+  assert.doesNotMatch(
+    row("Chat quiet").querySelector("[data-inbox-status]")?.textContent ?? "",
+    /Done|Snoozed/u,
+  );
 });
 
 test("Undo's restored row goes back to its own slot in a list that is in use", () => {
@@ -190,7 +245,11 @@ test("Undo's restored row goes back to its own slot in a list that is in use", (
     cleanup();
     return titles;
   };
-  assert.deepEqual(restore(false), ["Chat a", "Chat c", "Chat b"], "a frozen list adds an untouched arrival at the end");
+  assert.deepEqual(
+    restore(false),
+    ["Chat a", "Chat c", "Chat b"],
+    "a frozen list adds an untouched arrival at the end",
+  );
   assert.deepEqual(restore(true), ["Chat a", "Chat b", "Chat c"]);
 });
 
@@ -201,7 +260,11 @@ test("after Done on the open chat, ⇧⌘[ and ⇧⌘] step from the rows around
   };
   const rows = (doneB: boolean) => [
     entry("a", { updatedAt: NOW - MINUTE }),
-    entry("b", { updatedAt: NOW - 2 * MINUTE, isOpen: true, ...(doneB ? { doneAt: NOW - MINUTE, lastAssistantAt: NOW - 2 * MINUTE } : {}) }),
+    entry("b", {
+      updatedAt: NOW - 2 * MINUTE,
+      isOpen: true,
+      ...(doneB ? { doneAt: NOW - MINUTE, lastAssistantAt: NOW - 2 * MINUTE } : {}),
+    }),
     entry("c", { updatedAt: NOW - 3 * MINUTE }),
     entry("d", { updatedAt: NOW - 4 * MINUTE }),
   ];
@@ -210,7 +273,11 @@ test("after Done on the open chat, ⇧⌘[ and ⇧⌘] step from the rows around
   const before = reported;
   rerender(view(rows(true), { onShortcutOrderChange, activeKey: active }));
   assert.deepEqual(rowTitles(section("Earlier")), ["Chat a", "Chat c", "Chat d"]);
-  const listed = new Map(rows(true).filter((item) => item.key !== active).map((item) => [item.key, item] as const));
+  const listed = new Map(
+    rows(true)
+      .filter((item) => item.key !== active)
+      .map((item) => [item.key, item] as const),
+  );
   const resolve = resolveInboxEntry(listed, new Map());
   const targets = inboxShortcutTargets(reported, resolve, active, before);
   assert.equal(targets.previous?.title, "Chat a");
@@ -220,11 +287,13 @@ test("after Done on the open chat, ⇧⌘[ and ⇧⌘] step from the rows around
 });
 
 test("a done chat comes back with new output, and a snoozed one when it wakes or needs you", () => {
-  const { rerender } = render(view([
-    entry("done", { unread: true, lastAssistantAt: NOW + MINUTE, doneAt: NOW - MINUTE }),
-    entry("snoozed", { snoozedUntil: NOW + HOUR }),
-    entry("asks", { rowState: "needs_input", attentionSince: NOW, snoozedUntil: NOW + HOUR }),
-  ]));
+  const { rerender } = render(
+    view([
+      entry("done", { unread: true, lastAssistantAt: NOW + MINUTE, doneAt: NOW - MINUTE }),
+      entry("snoozed", { snoozedUntil: NOW + HOUR }),
+      entry("asks", { rowState: "needs_input", attentionSince: NOW, snoozedUntil: NOW + HOUR }),
+    ]),
+  );
   assert.deepEqual(rowTitles(section("Updates")), ["Chat done"]);
   assert.deepEqual(rowTitles(section("Needs you")), ["Chat asks"]);
   assert.equal(screen.queryByText("Chat snoozed"), null);
@@ -234,22 +303,38 @@ test("a done chat comes back with new output, and a snoozed one when it wakes or
 });
 
 test("Needs you rows name their reason and wait, and carry the request only as a description", () => {
-  render(view([
-    entry(
-      "approval",
-      { rowState: "needs_approval", attentionSince: NOW - 3 * MINUTE },
-      { chatId: "approval", kind: "approval", summary: "rm -rf build", since: NOW - 3 * MINUTE, count: 1 },
-    ),
-    entry("question", { rowState: "needs_input", attentionSince: NOW - 5 * MINUTE }),
-    entry("failed", { failed: true, unread: true, lastAssistantAt: NOW - 20 * MINUTE }),
-    entry("detached", { attention: "detached", attentionSince: NOW - 2 * MINUTE }),
-    entry("interrupted", { attention: "interrupted", attentionSince: NOW - 8 * MINUTE }),
-  ]));
+  render(
+    view([
+      entry(
+        "approval",
+        { rowState: "needs_approval", attentionSince: NOW - 3 * MINUTE },
+        {
+          chatId: "approval",
+          kind: "approval",
+          summary: "rm -rf build",
+          since: NOW - 3 * MINUTE,
+          count: 1,
+        },
+      ),
+      entry("question", { rowState: "needs_input", attentionSince: NOW - 5 * MINUTE }),
+      entry("failed", { failed: true, unread: true, lastAssistantAt: NOW - 20 * MINUTE }),
+      entry("detached", { attention: "detached", attentionSince: NOW - 2 * MINUTE }),
+      entry("interrupted", { attention: "interrupted", attentionSince: NOW - 8 * MINUTE }),
+    ]),
+  );
   const needsYou = section("Needs you");
-  const statuses = [...needsYou.querySelectorAll<HTMLElement>("[data-inbox-status]")].map((node) => node.textContent);
+  const statuses = [...needsYou.querySelectorAll<HTMLElement>("[data-inbox-status]")].map(
+    (node) => node.textContent,
+  );
   // Approval, then Question, then Failed, then the prompts that can't be answered
   // here, longest wait first.
-  assert.deepEqual(statuses, ["Approval3m", "Question5m", "Failed20m", "Interrupted8m", "Unavailable2m"]);
+  assert.deepEqual(statuses, [
+    "Approval3m",
+    "Question5m",
+    "Failed20m",
+    "Interrupted8m",
+    "Unavailable2m",
+  ]);
 
   const approval = within(needsYou).getByRole("button", { name: /Chat approval/u });
   assert.equal(approval.getAttribute("aria-description"), "Approve: rm -rf build");
@@ -258,23 +343,32 @@ test("Needs you rows name their reason and wait, and carry the request only as a
 });
 
 test("only Failed rows in Needs you get a hover icon, and it acknowledges", () => {
-  render(view([
-    entry("approval", { rowState: "needs_approval", attentionSince: NOW - MINUTE }),
-    entry("question", { rowState: "needs_input", attentionSince: NOW - MINUTE }),
-    entry("failed", { failed: true, unread: true, lastAssistantAt: NOW - MINUTE }),
-  ]));
+  render(
+    view([
+      entry("approval", { rowState: "needs_approval", attentionSince: NOW - MINUTE }),
+      entry("question", { rowState: "needs_input", attentionSince: NOW - MINUTE }),
+      entry("failed", { failed: true, unread: true, lastAssistantAt: NOW - MINUTE }),
+    ]),
+  );
   const needsYou = section("Needs you");
-  const actions = [...needsYou.querySelectorAll<HTMLElement>("[data-inbox-action]")].map((node) => node.getAttribute("aria-label"));
+  const actions = [...needsYou.querySelectorAll<HTMLElement>("[data-inbox-action]")].map((node) =>
+    node.getAttribute("aria-label"),
+  );
   assert.deepEqual(actions, ["Acknowledge: Chat failed"]);
 });
 
 test("Mark read shows on unread Updates rows only and reaches the caller", () => {
   const marked: string[] = [];
-  render(view([
-    entry("news", { unread: true, lastAssistantAt: NOW - 10 * MINUTE }),
-    entry("quiet"),
-    entry("busy", { rowState: "working", unread: true }),
-  ], { onMarkRead: (key) => marked.push(key) }));
+  render(
+    view(
+      [
+        entry("news", { unread: true, lastAssistantAt: NOW - 10 * MINUTE }),
+        entry("quiet"),
+        entry("busy", { rowState: "working", unread: true }),
+      ],
+      { onMarkRead: (key) => marked.push(key) },
+    ),
+  );
   assert.equal(within(section("Earlier")).queryByRole("button", { name: /^Mark read/u }), null);
   assert.equal(within(section("Working")).queryByRole("button", { name: /^Mark read/u }), null);
   fireEvent.click(within(section("Updates")).getByRole("button", { name: "Mark read: Chat news" }));
@@ -282,7 +376,12 @@ test("Mark read shows on unread Updates rows only and reaches the caller", () =>
 });
 
 test("an Inbox with nothing waiting says so, even while a run is working", () => {
-  render(view([entry("busy", { rowState: "working" }), entry("old", { updatedAt: NOW - 30 * 24 * HOUR })]));
+  render(
+    view([
+      entry("busy", { rowState: "working" }),
+      entry("old", { updatedAt: NOW - 30 * 24 * HOUR }),
+    ]),
+  );
   const empty = screen.getByRole("status");
   assert.match(empty.textContent ?? "", /Nothing needs you/u);
   assert.equal(screen.queryByRole("group", { name: "Earlier" }), null);
@@ -291,7 +390,8 @@ test("an Inbox with nothing waiting says so, even while a run is working", () =>
 
 test("Earlier lists 20 rows, then Show more; the count holds the frozen list while it's in use", () => {
   const earlier = Array.from({ length: 25 }, (_, index) =>
-    entry(`old-${String(index).padStart(2, "0")}`, { updatedAt: NOW - (index + 1) * HOUR }));
+    entry(`old-${String(index).padStart(2, "0")}`, { updatedAt: NOW - (index + 1) * HOUR }),
+  );
   const { rerender, container } = render(view(earlier));
   assert.equal(rowTitles(section("Earlier")).length, 20);
   assert.ok(screen.getByRole("button", { name: "Show 5 more" }));
@@ -316,10 +416,9 @@ test("Earlier lists 20 rows, then Show more; the count holds the frozen list whi
 });
 
 test("a resolved approval holds its slot while the list is in use, then moves on release", () => {
-  const { rerender, container } = render(view([
-    entry("a", { rowState: "needs_approval", attentionSince: NOW - MINUTE }),
-    entry("b"),
-  ]));
+  const { rerender, container } = render(
+    view([entry("a", { rowState: "needs_approval", attentionSince: NOW - MINUTE }), entry("b")]),
+  );
   const root = container.querySelector<HTMLElement>("[data-inbox-view]")!;
   fireEvent.pointerOver(root);
   rerender(view([entry("a"), entry("b")]));
@@ -333,7 +432,9 @@ test("a resolved approval holds its slot while the list is in use, then moves on
 });
 
 test("a row that leaves Needs you lingers 400ms before it moves", () => {
-  const { rerender } = render(view([entry("a", { rowState: "needs_approval", attentionSince: NOW - MINUTE })]));
+  const { rerender } = render(
+    view([entry("a", { rowState: "needs_approval", attentionSince: NOW - MINUTE })]),
+  );
   rerender(view([entry("a")]));
   assert.deepEqual(rowTitles(section("Needs you")), ["Chat a"]);
   nowMs = NOW + 450;
@@ -346,12 +447,14 @@ test("a row that leaves Needs you lingers 400ms before it moves", () => {
 function botRows(state: { needsYou?: boolean; lastReplyAt?: number | null; seenAt?: number }) {
   return botInboxRows({
     platform: "darwin",
-    bots: [{
-      bot: botFixture({ id: "b1", name: "Trip Planner" }),
-      activityAt: NOW - 5 * MINUTE,
-      needsYou: state.needsYou ?? false,
-      lastReplyAt: state.lastReplyAt ?? null,
-    }],
+    bots: [
+      {
+        bot: botFixture({ id: "b1", name: "Trip Planner" }),
+        activityAt: NOW - 5 * MINUTE,
+        needsYou: state.needsYou ?? false,
+        lastReplyAt: state.lastReplyAt ?? null,
+      },
+    ],
     openBotId: null,
     unread: (_botId, lastReplyAt) => lastReplyAt !== null && lastReplyAt > (state.seenAt ?? 0),
   });
@@ -369,7 +472,11 @@ test("a Bot read elsewhere while the pointer is on the list stays put, read, unt
   assert.equal(read.listed.length, 0);
   rerender(view(read.listed, { unlisted: read.unlisted }));
   assert.deepEqual(rowTitles(section("Updates")), ["Trip Planner"]);
-  assert.doesNotMatch(botRow().getAttribute("aria-label") ?? "", /Unread/u, "it shows its live, read state");
+  assert.doesNotMatch(
+    botRow().getAttribute("aria-label") ?? "",
+    /Unread/u,
+    "it shows its live, read state",
+  );
 
   fireEvent.pointerOver(document.body);
   assert.equal(screen.queryByRole("button", { name: /^Trip Planner,/u }), null);
@@ -382,11 +489,15 @@ test("⌘N opens the Nth row on screen, a Bot lingering in Needs you after it wa
   };
   const chats = [entry("u", { unread: true, updatedAt: NOW - MINUTE }), entry("a")];
   const waiting = botRows({ needsYou: true });
-  const { rerender } = render(view([...chats, ...waiting.listed], { unlisted: waiting.unlisted, onShortcutOrderChange }));
+  const { rerender } = render(
+    view([...chats, ...waiting.listed], { unlisted: waiting.unlisted, onShortcutOrderChange }),
+  );
   // Answered from the Bot list or its chat: the Bot no longer qualifies, but lingers 400ms.
   const answered = botRows({});
   assert.equal(answered.listed.length, 0);
-  rerender(view([...chats, ...answered.listed], { unlisted: answered.unlisted, onShortcutOrderChange }));
+  rerender(
+    view([...chats, ...answered.listed], { unlisted: answered.unlisted, onShortcutOrderChange }),
+  );
 
   // The sidebar's lookup, listed rows first, then Bots that no longer qualify.
   const listed = new Map(chats.map((item) => [item.key, item] as const));
@@ -395,7 +506,11 @@ test("⌘N opens the Nth row on screen, a Bot lingering in Needs you after it wa
   const onScreen = rowTitles(inboxRoot());
   assert.deepEqual(onScreen, ["Trip Planner", "Chat u", "Chat a"]);
   const targets = inboxShortcutTargets(reported, resolve, null);
-  assert.deepEqual(targets.jump.map((item) => item?.title), onScreen, "⌘1 opens the lingering Bot, ⌘2 the row labelled ⌘2");
+  assert.deepEqual(
+    targets.jump.map((item) => item?.title),
+    onScreen,
+    "⌘1 opens the lingering Bot, ⌘2 the row labelled ⌘2",
+  );
   assert.equal(targets.next?.title, "Trip Planner");
 
   const fromChat = inboxShortcutTargets(reported, resolve, chats[0]!.key);
@@ -418,7 +533,11 @@ test("a Bot answered elsewhere lingers 400ms in Needs you; a deleted one goes at
   nowMs = NOW;
   const again = render(view(waiting.listed, { unlisted: waiting.unlisted }));
   again.rerender(view([], { unlisted: [] }));
-  assert.equal(screen.queryByRole("group", { name: "Needs you" }), null, "a Bot that no longer exists doesn't linger");
+  assert.equal(
+    screen.queryByRole("group", { name: "Needs you" }),
+    null,
+    "a Bot that no longer exists doesn't linger",
+  );
 });
 
 test("the Working shelf collapses to its header and drops its rows from the list", () => {
@@ -523,20 +642,34 @@ function stubRowLayout() {
   proto.getBoundingClientRect = function (this: HTMLElement) {
     const rows = [...document.querySelectorAll("[data-inbox-row]")];
     const top = this.hasAttribute("data-inbox-row") ? rows.indexOf(this) * 32 : 0;
-    return { top, bottom: top + 32, left: 0, right: 200, width: 200, height: 32, x: 0, y: top, toJSON: () => ({}) };
+    return {
+      top,
+      bottom: top + 32,
+      left: 0,
+      right: 200,
+      width: 200,
+      height: 32,
+      x: 0,
+      y: top,
+      toJSON: () => ({}),
+    };
   };
   proto.animate = function (this: HTMLElement, keyframes: Keyframe[]) {
     const slide: Slide = {
       row: this.dataset.inboxRow ?? "",
       from: String(keyframes[0]?.transform),
       cancelled: false,
-      cancel: () => { slide.cancelled = true; },
+      cancel: () => {
+        slide.cancelled = true;
+      },
     };
     slides.push(slide);
     return slide as unknown as Animation;
   } as typeof proto.animate;
   proto.getAnimations = function (this: HTMLElement) {
-    return slides.filter((slide) => !slide.cancelled && slide.row === this.dataset.inboxRow) as unknown as Animation[];
+    return slides.filter(
+      (slide) => !slide.cancelled && slide.row === this.dataset.inboxRow,
+    ) as unknown as Animation[];
   };
   return {
     slides,
@@ -553,20 +686,31 @@ test("a reorder slides the moved rows, and a re-render that moves nothing leaves
   try {
     const a = projectOrderKey("local", "a");
     const b = projectOrderKey("local", "b");
-    const { rerender } = render(view([entry("a", { updatedAt: NOW - MINUTE }), entry("b", { updatedAt: NOW - HOUR })]));
+    const { rerender } = render(
+      view([entry("a", { updatedAt: NOW - MINUTE }), entry("b", { updatedAt: NOW - HOUR })]),
+    );
     assert.equal(layout.slides.length, 0);
 
     // b becomes the newer chat: the two swap, each sliding from its old place.
-    rerender(view([entry("a", { updatedAt: NOW - HOUR }), entry("b", { updatedAt: NOW - MINUTE })]));
+    rerender(
+      view([entry("a", { updatedAt: NOW - HOUR }), entry("b", { updatedAt: NOW - MINUTE })]),
+    );
     assert.deepEqual(rowTitles(section("Earlier")), ["Chat b", "Chat a"]);
     assert.deepEqual(
       layout.slides.map(({ row, from }) => [row, from]).sort(),
-      [[a, "translateY(-32px)"], [b, "translateY(32px)"]].sort(),
+      [
+        [a, "translateY(-32px)"],
+        [b, "translateY(32px)"],
+      ].sort(),
     );
 
     // Re-renders that move nothing (a streaming update, the parent taking the shortcut order).
-    rerender(view([entry("a", { updatedAt: NOW - HOUR }), entry("b", { updatedAt: NOW - MINUTE })]));
-    rerender(view([entry("a", { updatedAt: NOW - HOUR }), entry("b", { updatedAt: NOW - MINUTE })]));
+    rerender(
+      view([entry("a", { updatedAt: NOW - HOUR }), entry("b", { updatedAt: NOW - MINUTE })]),
+    );
+    rerender(
+      view([entry("a", { updatedAt: NOW - HOUR }), entry("b", { updatedAt: NOW - MINUTE })]),
+    );
     assert.equal(layout.slides.length, 2);
     assert.ok(layout.slides.every((slide) => !slide.cancelled));
   } finally {

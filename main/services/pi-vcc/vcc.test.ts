@@ -231,9 +231,14 @@ test("projection omits hidden reasoning, signatures, binary data and credentials
 });
 
 test("compaction keeps prose heading blocks and still hides a multi-line secret's first line", () => {
-  const prose = "Findings:\nAuthentication:\n  The login flow uses OAuth.\n  Tests cover it.\nKeyboard:\n  Shortcuts work.\nNext steps.";
+  const prose =
+    "Findings:\nAuthentication:\n  The login flow uses OAuth.\n  Tests cover it.\nKeyboard:\n  Shortcuts work.\nNext steps.";
   assert.equal(compilerMessage({ role: "user", content: prose, timestamp: 1 })?.content, prose);
-  const secret = compilerMessage({ role: "user", content: "PASSWORD:\n  first-hunter2\nDone.", timestamp: 1 });
+  const secret = compilerMessage({
+    role: "user",
+    content: "PASSWORD:\n  first-hunter2\nDone.",
+    timestamp: 1,
+  });
   assert.doesNotMatch(JSON.stringify(secret), /first-hunter2/u);
 });
 

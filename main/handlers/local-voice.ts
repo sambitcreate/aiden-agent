@@ -118,7 +118,9 @@ export function registerLocalVoiceHandlers(): void {
               status,
             }),
           )
-          .catch((error: unknown) => logger.warn("local-speech", "Could not record voice usage.", error));
+          .catch((error: unknown) =>
+            logger.warn("local-speech", "Could not record voice usage.", error),
+          );
       };
       try {
         const transcript = await transcribeLocalPcm16(samples, parsedModelId, controller.signal);
@@ -148,7 +150,11 @@ export function registerLocalVoiceHandlers(): void {
       event,
       () => new Error("Live dictation text must come from the active application document."),
     );
-    localLivePreviews.push(owner, asString(sessionId, "sessionId"), pcm16FromIpc(pcm, MAX_LIVE_PREVIEW_PUSH_SAMPLES));
+    localLivePreviews.push(
+      owner,
+      asString(sessionId, "sessionId"),
+      pcm16FromIpc(pcm, MAX_LIVE_PREVIEW_PUSH_SAMPLES),
+    );
   });
   ipcMain.handle("voice:localLiveStop", (event, sessionId: unknown) => {
     const owner = rendererDocumentOwner(

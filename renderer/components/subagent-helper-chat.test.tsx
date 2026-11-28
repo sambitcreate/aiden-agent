@@ -4,7 +4,10 @@ import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { AgentStep } from "../shared/generation-timeline";
 import type { SubagentRunSnapshotV2 } from "../shared/subagent-runs";
-import type { SubagentTranscriptUpdateV1, SubagentTranscriptV1 } from "../shared/subagent-transcript";
+import type {
+  SubagentTranscriptUpdateV1,
+  SubagentTranscriptV1,
+} from "../shared/subagent-transcript";
 import { loadComposerDraft } from "../lib/composer-draft-store";
 import type { SubagentRunView } from "../lib/subagent-view-state";
 import {
@@ -209,13 +212,21 @@ test("a helper's approval queued behind others says how many the main chat shows
         now={4_000}
       />,
     );
-    const found = screen.getByRole("article", { name: "Code scout" }).querySelector<HTMLElement>("[data-subagent-helper-approval]");
+    const found = screen
+      .getByRole("article", { name: "Code scout" })
+      .querySelector<HTMLElement>("[data-subagent-helper-approval]");
     assert.ok(found);
     return found;
   };
-  assert.equal(row(1).querySelector("p")?.textContent, "Needs your approval in the main chat, after 1 other request.");
+  assert.equal(
+    row(1).querySelector("p")?.textContent,
+    "Needs your approval in the main chat, after 1 other request.",
+  );
   const queued = row(3);
-  assert.equal(queued.querySelector("p")?.textContent, "Needs your approval in the main chat, after 3 other requests.");
+  assert.equal(
+    queued.querySelector("p")?.textContent,
+    "Needs your approval in the main chat, after 3 other requests.",
+  );
   // The main chat shows someone else's request first, so the button does not promise this one.
   assert.equal(within(queued).queryByRole("button", { name: "Go to approval" }), null);
   fireEvent.click(within(queued).getByRole("button", { name: "Go to main chat" }));
@@ -315,7 +326,11 @@ test("a helper without a saved conversation falls back to its summary", () => {
     />,
   );
   assert.ok(asked.includes("run-1"));
-  assert.deepEqual(fetched, [], "a finished helper's summary is already saved; nothing is read again");
+  assert.deepEqual(
+    fetched,
+    [],
+    "a finished helper's summary is already saved; nothing is read again",
+  );
   assert.equal(screen.queryByRole("article", { name: "Code scout" }), null);
   assert.ok(screen.getAllByText("What it was asked").length > 0);
   assert.ok(screen.getAllByText(/The parser lives in src\/parser\.ts\./u).length > 0);
@@ -329,7 +344,13 @@ test("Ask the main chat to retry puts the request in the message box once, witho
   store.expand("run-1", null);
   render(
     <SubagentHelperChat
-      run={helper({ chatId, state: "failed", activity: undefined, finishedAt: 3_000, error: "Disk full" })}
+      run={helper({
+        chatId,
+        state: "failed",
+        activity: undefined,
+        finishedAt: 3_000,
+        error: "Disk full",
+      })}
       transcript={conversation(3, [{ text: "Trying.", steps: [readStep("completed")] }])}
       onAskRetry={(text) => askMainChatToRetrySubagent(store, chatId, text)}
     />,
@@ -418,8 +439,13 @@ test("the side panel's chat closes the panel, shows a refresh problem with a ret
       now={4_000}
     />,
   );
-  const spoken = [...document.querySelectorAll("[aria-live]")].map((region) => region.textContent ?? "");
-  assert.equal(spoken.some((text) => /Code scout|Done/u.test(text)), false);
+  const spoken = [...document.querySelectorAll("[aria-live]")].map(
+    (region) => region.textContent ?? "",
+  );
+  assert.equal(
+    spoken.some((text) => /Code scout|Done/u.test(text)),
+    false,
+  );
 });
 
 function ExpandedHarness({
@@ -446,7 +472,10 @@ function ExpandedHarness({
     <TooltipProvider>
       <SubagentHelperChatStoreContext.Provider value={store}>
         <EnvironmentPanelContext.Provider value={panel}>
-          <button type="button" onClick={(event) => store.expand(snapshot.runId, event.currentTarget)}>
+          <button
+            type="button"
+            onClick={(event) => store.expand(snapshot.runId, event.currentTarget)}
+          >
             Open Code scout
           </button>
           <ExpandedSubagentHelperChat chatId="chat-1" />
@@ -505,7 +534,12 @@ test("a window that joins late shows the saved conversation plus what streamed s
     revision: 4,
     trimmed: false,
     entryCount: 3,
-    changes: [{ index: 2, entry: { kind: "message", text: "Found it in src/parser.ts.", steps: [], startedAt: 2_000 } }],
+    changes: [
+      {
+        index: 2,
+        entry: { kind: "message", text: "Found it in src/parser.ts.", steps: [], startedAt: 2_000 },
+      },
+    ],
   };
   act(() => {
     store.syncLive("chat-1", new Map([["run-1", update]]));
@@ -537,7 +571,9 @@ test("a gap in the streamed updates makes the expanded chat read the saved copy 
     revision: 6,
     trimmed: false,
     entryCount: 4,
-    changes: [{ index: 3, entry: { kind: "message", text: "Later.", steps: [], startedAt: 3_000 } }],
+    changes: [
+      { index: 3, entry: { kind: "message", text: "Later.", steps: [], startedAt: 3_000 } },
+    ],
   };
   act(() => {
     store.syncLive("chat-1", new Map([["run-1", update]]));
@@ -584,19 +620,37 @@ test("while expanded, an approval that is not this helper's shows a bar that goe
 
   // This helper's own approvals, however many, are answered inside its chat: no bar.
   act(() => {
-    store.syncApprovals("chat-1", [runGrant("run-1", "own"), runGrant("run-1", "own-2")], null, () => undefined);
+    store.syncApprovals(
+      "chat-1",
+      [runGrant("run-1", "own"), runGrant("run-1", "own-2")],
+      null,
+      () => undefined,
+    );
   });
   assert.equal(bar(), null);
-  assert.equal(document.querySelector("[data-subagent-helper-approval]")?.getAttribute("data-subagent-helper-approval"), "full");
+  assert.equal(
+    document
+      .querySelector("[data-subagent-helper-approval]")
+      ?.getAttribute("data-subagent-helper-approval"),
+    "full",
+  );
 
   act(() => {
-    store.syncApprovals("chat-1", [runGrant("run-1", "own"), runGrant("run-other", "main")], null, () => undefined);
+    store.syncApprovals(
+      "chat-1",
+      [runGrant("run-1", "own"), runGrant("run-other", "main")],
+      null,
+      () => undefined,
+    );
   });
   const waiting = bar();
   assert.ok(waiting, "an approval that is not this helper's shows the bar");
   assert.equal(waiting.getAttribute("role"), "note");
   assert.match(waiting.textContent ?? "", /The main chat needs your approval\./u);
-  assert.ok(document.querySelector("[data-subagent-helper-approval]"), "the helper's own approval still works");
+  assert.ok(
+    document.querySelector("[data-subagent-helper-approval]"),
+    "the helper's own approval still works",
+  );
 
   await act(async () => {
     fireEvent.click(within(waiting).getByRole("button", { name: "Go to approval" }));
@@ -636,15 +690,25 @@ test("the side panel shows a placeholder for the helper that fills the main chat
       selectedRunId="run-1"
       active
       helperChat={{
-        transcriptFor: () => ({ transcript: conversation(2, [{ text: "Looking around." }]), complete: true }),
+        transcriptFor: () => ({
+          transcript: conversation(2, [{ text: "Looking around." }]),
+          complete: true,
+        }),
         expandedRunId: "run-1",
         onCollapse: () => collapsed.push("collapse"),
       }}
     />,
   );
-  assert.equal(screen.queryByRole("article", { name: "Code scout" }), null, "the chat is shown once, not twice");
+  assert.equal(
+    screen.queryByRole("article", { name: "Code scout" }),
+    null,
+    "the chat is shown once, not twice",
+  );
   const heading = screen.getByRole("heading", { name: "Showing in the main chat" });
-  assert.match(heading.parentElement?.textContent ?? "", /“Code scout” is open in the main chat\./u);
+  assert.match(
+    heading.parentElement?.textContent ?? "",
+    /“Code scout” is open in the main chat\./u,
+  );
   // The expanded chat's own footer is the one way back; the placeholder adds no second one.
   assert.equal(screen.queryByRole("button", { name: "Back to main chat" }), null);
   assert.deepEqual(collapsed, []);
@@ -667,7 +731,9 @@ test("a running helper opened before anything streamed to this window reads its 
     },
   };
   const { rerender } = render(<SubagentsPanel {...props} />);
-  rerender(<SubagentsPanel {...props} runs={[view(helper({ revision: 2, activity: "Still reading" }))]} />);
+  rerender(
+    <SubagentsPanel {...props} runs={[view(helper({ revision: 2, activity: "Still reading" }))]} />,
+  );
   assert.deepEqual(fetched, [["run-1", "join"]]);
 });
 
@@ -688,12 +754,16 @@ test("a window that does not run the chat reads the saved conversation again as 
   const { rerender } = render(<SubagentsPanel {...props} runs={[view(helper({ revision: 2 }))]} />);
   rerender(<SubagentsPanel {...props} runs={[view(helper({ revision: 2 }))]} />);
   assert.equal(fetched.length, 1, "the same run state is read once");
-  rerender(<SubagentsPanel {...props} runs={[view(helper({ revision: 3, activity: "Still reading" }))]} />);
+  rerender(
+    <SubagentsPanel {...props} runs={[view(helper({ revision: 3, activity: "Still reading" }))]} />,
+  );
   assert.equal(fetched.length, 2, "a new revision is read again");
   rerender(
     <SubagentsPanel
       {...props}
-      runs={[view(helper({ revision: 4, state: "completed", activity: undefined, finishedAt: 5_000 }))]}
+      runs={[
+        view(helper({ revision: 4, state: "completed", activity: undefined, finishedAt: 5_000 })),
+      ]}
     />,
   );
   assert.equal(fetched.length, 3, "the end of the run is read again");
@@ -706,7 +776,11 @@ test("a window that does not run the chat reads the saved conversation again as 
     <SubagentsPanel
       {...props}
       runs={[view(helper({ revision: 3 }))]}
-      helperChat={{ ...props.helperChat, streamingHere: () => true, onTranscriptIncomplete: (_runId, reason) => streamed.push(reason) }}
+      helperChat={{
+        ...props.helperChat,
+        streamingHere: () => true,
+        onTranscriptIncomplete: (_runId, reason) => streamed.push(reason),
+      }}
     />,
   );
   assert.deepEqual(streamed, []);
@@ -715,27 +789,30 @@ test("a window that does not run the chat reads the saved conversation again as 
 test("when reading a helper's saved conversation fails, the side panel says so and offers Try again", () => {
   // A window that joined late has nothing to show yet; one that missed updates shows its older copy.
   for (const transcript of [null, conversation(2, [{ text: "Looking around." }])]) {
-  cleanup();
-  const retried: string[] = [];
-  render(
-    <SubagentsPanel
-      chatId="chat-1"
-      workspaceId="workspace-1"
-      runs={[view(helper())]}
-      selectedRunId="run-1"
-      active
-      helperChat={{
-        transcriptFor: () => ({ transcript, complete: true }),
-        streamingHere: () => false,
-        onTranscriptIncomplete: () => undefined,
-        transcriptRefreshFailed: (runId) => runId === "run-1",
-        onRetryTranscript: (runId) => retried.push(runId),
-      }}
-    />,
-  );
-  const refresh = document.querySelector<HTMLElement>("[data-subagent-helper-refresh-error]");
-  assert.ok(refresh, `the failed read is shown, not swallowed (${transcript ? "older copy" : "nothing yet"})`);
-  fireEvent.click(within(refresh).getByRole("button", { name: "Try again" }));
-  assert.deepEqual(retried, ["run-1"]);
+    cleanup();
+    const retried: string[] = [];
+    render(
+      <SubagentsPanel
+        chatId="chat-1"
+        workspaceId="workspace-1"
+        runs={[view(helper())]}
+        selectedRunId="run-1"
+        active
+        helperChat={{
+          transcriptFor: () => ({ transcript, complete: true }),
+          streamingHere: () => false,
+          onTranscriptIncomplete: () => undefined,
+          transcriptRefreshFailed: (runId) => runId === "run-1",
+          onRetryTranscript: (runId) => retried.push(runId),
+        }}
+      />,
+    );
+    const refresh = document.querySelector<HTMLElement>("[data-subagent-helper-refresh-error]");
+    assert.ok(
+      refresh,
+      `the failed read is shown, not swallowed (${transcript ? "older copy" : "nothing yet"})`,
+    );
+    fireEvent.click(within(refresh).getByRole("button", { name: "Try again" }));
+    assert.deepEqual(retried, ["run-1"]);
   }
 });

@@ -43,7 +43,12 @@ export const DESIGN_OFFLINE_SANDBOX_POLICY = "sandbox allow-scripts allow-same-o
  */
 export const GENERATIVE_UI_OFFLINE_SANDBOX_POLICY = "sandbox allow-scripts";
 
-const ALLOWED_SCHEMES = new Set([`${DESIGN_SCHEME}:`, `${GENERATIVE_UI_PROTOCOL_SCHEME}:`, "data:", "about:"]);
+const ALLOWED_SCHEMES = new Set([
+  `${DESIGN_SCHEME}:`,
+  `${GENERATIVE_UI_PROTOCOL_SCHEME}:`,
+  "data:",
+  "about:",
+]);
 
 /** Whether the window may make this request: only Aiden's own local schemes, inline data and blobs made from them. */
 export function designOfflineRequestAllowed(url: string): boolean {
@@ -57,15 +62,23 @@ export function designOfflineRequestAllowed(url: string): boolean {
     // A blob's address names the origin that made it.
     return designOfflineRequestAllowed(url.slice("blob:".length));
   }
-  if (parsed.protocol === "about:") return parsed.pathname === "blank" || parsed.pathname === "srcdoc";
+  if (parsed.protocol === "about:")
+    return parsed.pathname === "blank" || parsed.pathname === "srcdoc";
   return ALLOWED_SCHEMES.has(parsed.protocol);
 }
 
 /** The same response with an offline sandbox policy (the design one unless named) added beside its own. */
-export function withDesignOfflineSandbox(response: Response, policy: string = DESIGN_OFFLINE_SANDBOX_POLICY): Response {
+export function withDesignOfflineSandbox(
+  response: Response,
+  policy: string = DESIGN_OFFLINE_SANDBOX_POLICY,
+): Response {
   const headers = new Headers(response.headers);
   headers.append("content-security-policy", policy);
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 /**
@@ -79,7 +92,9 @@ export function isDesignOfflineNotice(message: string): boolean {
   return (
     /^Ignored call to '[^']*'\. The document is sandboxed/u.test(message) ||
     message.startsWith("Unrecognized Content-Security-Policy directive 'webrtc'") ||
-    message.startsWith("An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing")
+    message.startsWith(
+      "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing",
+    )
   );
 }
 
@@ -89,7 +104,11 @@ export function isDesignOfflineNotice(message: string): boolean {
  * import, so inspect reads the session's answers instead. The page's own
  * address is left out: a page that is not there fails the inspect itself.
  */
-export function designOfflineMissingFile(details: { url: string; statusCode: number; resourceType: string }): string | null {
+export function designOfflineMissingFile(details: {
+  url: string;
+  statusCode: number;
+  resourceType: string;
+}): string | null {
   if (details.statusCode < 400 || details.resourceType === "mainFrame") return null;
   return details.url.startsWith(`${DESIGN_SCHEME}://`) ? details.url : null;
 }

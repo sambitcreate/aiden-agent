@@ -31,7 +31,11 @@ export interface AgentNoticePost {
 export type AgentNoticeOutcome =
   | { kind: "queued"; messageId: string }
   | { kind: "woke"; messageId: string; streamId: string }
-  | { kind: "recorded"; messageId: string; reason: "not-waking" | "wake-budget" | "wake-unavailable" }
+  | {
+      kind: "recorded";
+      messageId: string;
+      reason: "not-waking" | "wake-budget" | "wake-unavailable";
+    }
   /** Not delivered. `gone`: the chat itself no longer exists, so a retry never could be. */
   | { kind: "dropped"; reason: string; gone?: true };
 
@@ -131,10 +135,12 @@ export class NoticeDelivery {
   /** Delivers after any earlier notice for the same chat. Never rejects. */
   post(post: AgentNoticePost): Promise<AgentNoticeOutcome> {
     const previous = this.chains.get(post.chatId) ?? Promise.resolve();
-    const next = previous.then(() => this.deliver(post)).catch((error: unknown): AgentNoticeOutcome => {
-      this.deps.onError?.(error);
-      return { kind: "dropped", reason: error instanceof Error ? error.message : String(error) };
-    });
+    const next = previous
+      .then(() => this.deliver(post))
+      .catch((error: unknown): AgentNoticeOutcome => {
+        this.deps.onError?.(error);
+        return { kind: "dropped", reason: error instanceof Error ? error.message : String(error) };
+      });
     this.chains.set(post.chatId, next);
     void next.finally(() => {
       if (this.chains.get(post.chatId) === next) this.chains.delete(post.chatId);
@@ -196,7 +202,8 @@ export class NoticeDelivery {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
       const queued = await this.deps.queueIntoRun(post);
       const outlasted = this.outlasted.get(post.chatId);
-      if (outlasted !== undefined && (queued.kind !== "busy" || queued.holder !== outlasted)) this.outlasted.delete(post.chatId);
+      if (outlasted !== undefined && (queued.kind !== "busy" || queued.holder !== outlasted))
+        this.outlasted.delete(post.chatId);
       if (queued.kind === "queued") return { kind: "queued", messageId: queued.messageId };
       if (queued.kind === "saved") {
         // Saved but the run had just ended: answer it with a turn of its own.
@@ -218,24 +225,32 @@ export class NoticeDelivery {
         }
         // Still held after the long wait: wait for that run to settle, for at
         // most a day, then only record; the news is too old to wake for.
-        const settled = await this.waitOnRun(post.chatId, (chatId) => this.deps.waitForRunToEnd(chatId));
+        const settled = await this.waitOnRun(post.chatId, (chatId) =>
+          this.deps.waitForRunToEnd(chatId),
+        );
         if (!settled && queued.holder !== undefined) this.outlasted.set(post.chatId, queued.holder);
         const recorded = await this.record(post, post.wake ? "wake-unavailable" : "not-waking");
         if (recorded.kind === "dropped" && !recorded.gone) {
-          this.deps.onError?.(new Error(settled
-            ? `A notice waited for another run in its chat to end, then could not be saved: ${recorded.reason}`
-            : "A notice waited a day for another run in its chat to end, and was dropped."));
+          this.deps.onError?.(
+            new Error(
+              settled
+                ? `A notice waited for another run in its chat to end, then could not be saved: ${recorded.reason}`
+                : "A notice waited a day for another run in its chat to end, and was dropped.",
+            ),
+          );
         }
         return recorded;
       }
       const round = post.wake ? await this.deps.startGoalRound?.(post.chatId, post) : undefined;
       if (round) {
-        if (round.kind === "started") return { kind: "woke", messageId: round.messageId ?? "", streamId: round.streamId };
+        if (round.kind === "started")
+          return { kind: "woke", messageId: round.messageId ?? "", streamId: round.streamId };
         if (round.kind === "busy") {
           await this.deps.waitForIdle(post.chatId);
           continue;
         }
-        if (round.messageId) return { kind: "recorded", messageId: round.messageId, reason: "wake-unavailable" };
+        if (round.messageId)
+          return { kind: "recorded", messageId: round.messageId, reason: "wake-unavailable" };
         return this.record(post, "wake-unavailable");
       }
       if (post.wake && this.wakesLeft(post.chatId) > 0) {
@@ -248,7 +263,8 @@ export class NoticeDelivery {
           await this.deps.waitForIdle(post.chatId);
           continue;
         }
-        if (started.messageId) return { kind: "recorded", messageId: started.messageId, reason: "wake-unavailable" };
+        if (started.messageId)
+          return { kind: "recorded", messageId: started.messageId, reason: "wake-unavailable" };
         return this.record(post, "wake-unavailable");
       }
       return this.record(post, post.wake ? "wake-budget" : "not-waking");
@@ -273,7 +289,8 @@ export class NoticeDelivery {
         return { kind: "woke", messageId, streamId: started.streamId };
       }
       // Busy means someone else's turn now reads the saved notice anyway.
-      if (started.kind === "busy") return { kind: "recorded", messageId, reason: "wake-unavailable" };
+      if (started.kind === "busy")
+        return { kind: "recorded", messageId, reason: "wake-unavailable" };
       break;
     }
     return { kind: "recorded", messageId, reason: "wake-unavailable" };
@@ -285,7 +302,8 @@ export class NoticeDelivery {
   ): Promise<AgentNoticeOutcome> {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
       const appended = await this.deps.append(post);
-      if (appended.kind === "appended") return { kind: "recorded", messageId: appended.messageId, reason };
+      if (appended.kind === "appended")
+        return { kind: "recorded", messageId: appended.messageId, reason };
       if (appended.kind === "gone") return { kind: "dropped", reason: appended.reason, gone: true };
       if (appended.kind === "failed") return { kind: "dropped", reason: appended.reason };
       // A turn started meanwhile: hand the notice to it instead.

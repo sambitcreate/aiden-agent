@@ -188,7 +188,8 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
     }
     prompt.push(...images, ...texts);
   }
-  if (prompt.length === 0) throw new AcpHarnessError("invalid_input", "The message has no content to send.");
+  if (prompt.length === 0)
+    throw new AcpHarnessError("invalid_input", "The message has no content to send.");
   return { prompt, messageCount: messages.length, reconstructed };
 }
 

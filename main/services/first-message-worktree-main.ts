@@ -21,7 +21,11 @@ export const firstMessageWorktrees = createFirstMessageWorktreeCoordinator({
   createFromBase: (owner, sourceWorkspaceId, request) =>
     workspaceWorktreeApplicationService.createFromBase(owner, sourceWorkspaceId, request),
   discardInterruptedWorktree: (owner, sourceWorkspaceId, attempt) =>
-    workspaceWorktreeApplicationService.discardInterruptedWorktree(owner, sourceWorkspaceId, attempt),
+    workspaceWorktreeApplicationService.discardInterruptedWorktree(
+      owner,
+      sourceWorkspaceId,
+      attempt,
+    ),
   getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
   logError: (message, error) => logger.error("git", message, error),
 });

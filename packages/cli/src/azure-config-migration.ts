@@ -6,12 +6,16 @@ import { acquireLease, atomicJson, readJson } from "./state.ts";
 
 const LEGACY = "azure-openai-responses";
 function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 function renameProvider(entries: Record<string, unknown>): void {
   if (!Object.hasOwn(entries, LEGACY)) return;
   if (Object.hasOwn(entries, "azure") && !isDeepStrictEqual(entries.azure, entries[LEGACY])) {
-    throw new Error("Both Azure provider identities contain different configuration. Reconcile azure and azure-openai-responses before continuing; neither endpoint was overwritten.");
+    throw new Error(
+      "Both Azure provider identities contain different configuration. Reconcile azure and azure-openai-responses before continuing; neither endpoint was overwritten.",
+    );
   }
   entries.azure = entries[LEGACY];
   delete entries[LEGACY];
@@ -59,8 +63,14 @@ export function migrateCliAzureConfig(agentDir: string, cwd = process.cwd()): vo
           releaseCredentials = acquireLease(`${authFile}.writer`);
           const auth = record(readJson<unknown>(authFile, {}));
           const credentials = auth?.version === 1 ? record(auth.entries) : auth;
-          if (credentials && Object.hasOwn(credentials, "azure") && (Object.hasOwn(credentials, LEGACY) || auth?.retiredAzureCredential !== undefined)) {
-            throw new Error("Both Azure credential identities exist for a legacy endpoint. Reconcile the Azure credentials and model configuration before continuing; the endpoint was not changed.");
+          if (
+            credentials &&
+            Object.hasOwn(credentials, "azure") &&
+            (Object.hasOwn(credentials, LEGACY) || auth?.retiredAzureCredential !== undefined)
+          ) {
+            throw new Error(
+              "Both Azure credential identities exist for a legacy endpoint. Reconcile the Azure credentials and model configuration before continuing; the endpoint was not changed.",
+            );
           }
         }
         if (providers) renameProvider(providers);
@@ -69,9 +79,13 @@ export function migrateCliAzureConfig(agentDir: string, cwd = process.cwd()): vo
         if (Object.hasOwn(data, LEGACY)) {
           if (!Object.hasOwn(data, "azure")) {
             const entry = record(data[LEGACY]);
-            data.azure = entry && Array.isArray(entry.models)
-              ? { ...entry, models: entry.models.map((model) => ({ ...record(model), provider: "azure" })) }
-              : data[LEGACY];
+            data.azure =
+              entry && Array.isArray(entry.models)
+                ? {
+                    ...entry,
+                    models: entry.models.map((model) => ({ ...record(model), provider: "azure" })),
+                  }
+                : data[LEGACY];
           }
           delete data[LEGACY];
         }
@@ -79,9 +93,19 @@ export function migrateCliAzureConfig(agentDir: string, cwd = process.cwd()): vo
         if (data.defaultProvider === LEGACY) data.defaultProvider = "azure";
         renameModelKeys(data.modelThinkingLevels);
         renameModelKeys(record(data.compaction)?.modelOverrides);
-        if (Array.isArray(data.enabledModels)) data.enabledModels = [...new Set(data.enabledModels.map((value: unknown) => typeof value === "string" ? modelKey(value) : value))];
+        if (Array.isArray(data.enabledModels))
+          data.enabledModels = [
+            ...new Set(
+              data.enabledModels.map((value: unknown) =>
+                typeof value === "string" ? modelKey(value) : value,
+              ),
+            ),
+          ];
       }
       if (JSON.stringify(data) !== before) atomicJson(file, data);
-    } finally { releaseCredentials?.(); release(); }
+    } finally {
+      releaseCredentials?.();
+      release();
+    }
   }
 }

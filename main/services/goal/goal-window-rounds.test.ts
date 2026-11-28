@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GOAL_WINDOW_ROUND_CLAIM_MS, GoalWindowRounds, type GoalWindowDocument, type GoalWindowRoundRequest } from "./goal-window-rounds.js";
+import {
+  GOAL_WINDOW_ROUND_CLAIM_MS,
+  GoalWindowRounds,
+  type GoalWindowDocument,
+  type GoalWindowRoundRequest,
+} from "./goal-window-rounds.js";
 
 function harness(options: { locked?: boolean } = {}) {
   const timers: Array<{ run: () => void; ms: number; cancelled: boolean }> = [];
@@ -17,18 +22,26 @@ function harness(options: { locked?: boolean } = {}) {
         timer.cancelled = true;
       };
     },
-    closedMidRound: ({ chatId, streamId, documentId }) => lost.push({ chatId, streamId, documentId }),
+    closedMidRound: ({ chatId, streamId, documentId }) =>
+      lost.push({ chatId, streamId, documentId }),
   });
-  const documents = new Map<string, { document: GoalWindowDocument; requests: GoalWindowRoundRequest[] }>();
+  const documents = new Map<
+    string,
+    { document: GoalWindowDocument; requests: GoalWindowRoundRequest[] }
+  >();
   const window = (documentId: string) => {
     const existing = documents.get(documentId);
     if (existing) return existing;
     const requests: GoalWindowRoundRequest[] = [];
-    const entry = { document: { documentId, send: (request: GoalWindowRoundRequest) => requests.push(request) }, requests };
+    const entry = {
+      document: { documentId, send: (request: GoalWindowRoundRequest) => requests.push(request) },
+      requests,
+    };
     documents.set(documentId, entry);
     return entry;
   };
-  const show = (documentId: string, chatId: string | null, focused = true) => rounds.report(window(documentId).document, { chatId, focused });
+  const show = (documentId: string, chatId: string | null, focused = true) =>
+    rounds.report(window(documentId).document, { chatId, focused });
   return {
     rounds,
     timers,
@@ -52,7 +65,11 @@ test("a due round goes to the focused window showing the chat, which starts it",
   const [request] = h.requests("doc-b");
   assert.equal(request?.chatId, "chat-1");
 
-  assert.equal(h.rounds.claim(request!.token, "doc-a"), undefined, "another document can't take it");
+  assert.equal(
+    h.rounds.claim(request!.token, "doc-a"),
+    undefined,
+    "another document can't take it",
+  );
   const claim = h.rounds.claim(request!.token, "doc-b");
   assert.deepEqual(claim?.payload, { round: 2 });
   assert.equal(h.rounds.claim(request!.token, "doc-b"), undefined, "a round is taken once");
@@ -84,7 +101,11 @@ test("a window that declines, doesn't answer in time, or reports another chat le
   assert.equal(timer.ms, GOAL_WINDOW_ROUND_CLAIM_MS);
   timer.run();
   assert.equal(await silent, "no-window");
-  assert.equal(h.rounds.claim(h.requests("doc-a")[1]!.token, "doc-a"), undefined, "a late claim finds nothing");
+  assert.equal(
+    h.rounds.claim(h.requests("doc-a")[1]!.token, "doc-a"),
+    undefined,
+    "a late claim finds nothing",
+  );
 
   const moved = h.rounds.offer("chat-1", { round: 4 });
   h.show("doc-a", "chat-2");
@@ -105,7 +126,9 @@ test("the window closing or showing another chat mid-round stops that round; los
   const h = harness();
   h.show("doc-a", "chat-1");
   const first = h.rounds.offer("chat-1", { round: 2 });
-  h.rounds.claim(h.requests("doc-a")[0]!.token, "doc-a")!.settle({ kind: "started", streamId: "stream-1" });
+  h.rounds
+    .claim(h.requests("doc-a")[0]!.token, "doc-a")!
+    .settle({ kind: "started", streamId: "stream-1" });
   await first;
   h.show("doc-a", "chat-1", false);
   assert.deepEqual(h.lost, [], "Computer Use takes focus away; the round keeps going");
@@ -114,18 +137,30 @@ test("the window closing or showing another chat mid-round stops that round; los
 
   h.show("doc-a", "chat-1");
   const second = h.rounds.offer("chat-1", { round: 3 });
-  h.rounds.claim(h.requests("doc-a")[1]!.token, "doc-a")!.settle({ kind: "started", streamId: "stream-2" });
+  h.rounds
+    .claim(h.requests("doc-a")[1]!.token, "doc-a")!
+    .settle({ kind: "started", streamId: "stream-2" });
   await second;
   h.rounds.gone("doc-a");
-  assert.deepEqual(h.lost[h.lost.length - 1], { chatId: "chat-1", streamId: "stream-2", documentId: "doc-a" });
-  assert.equal(await h.rounds.offer("chat-1", { round: 4 }), "no-window", "a closed window is never asked again");
+  assert.deepEqual(h.lost[h.lost.length - 1], {
+    chatId: "chat-1",
+    streamId: "stream-2",
+    documentId: "doc-a",
+  });
+  assert.equal(
+    await h.rounds.offer("chat-1", { round: 4 }),
+    "no-window",
+    "a closed window is never asked again",
+  );
 });
 
 test("a round that settles is no longer the window's, so closing afterwards stops nothing", async () => {
   const h = harness();
   h.show("doc-a", "chat-1");
   const offered = h.rounds.offer("chat-1", { round: 2 });
-  h.rounds.claim(h.requests("doc-a")[0]!.token, "doc-a")!.settle({ kind: "started", streamId: "stream-1" });
+  h.rounds
+    .claim(h.requests("doc-a")[0]!.token, "doc-a")!
+    .settle({ kind: "started", streamId: "stream-1" });
   await offered;
   h.rounds.settled("stream-1");
   h.rounds.gone("doc-a");

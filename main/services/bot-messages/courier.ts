@@ -198,7 +198,9 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     return (
       unfinished(row) ||
       row.effects.some((e) => e.kind === "reply" && e.acknowledgedAt === undefined) ||
-      deps.approvals.pending().some((p) => p.owner?.inputs.some((i) => i.botMessage?.deliveryId === row.id))
+      deps.approvals
+        .pending()
+        .some((p) => p.owner?.inputs.some((i) => i.botMessage?.deliveryId === row.id))
     );
   }
   function arm(row: BotMessageDelivery) {
@@ -253,7 +255,11 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       return {
         ...r,
         status:
-          outcome === "expired" || outcome === "gave_up" ? "expired" : outcome === "silent" ? "answered" : "failed",
+          outcome === "expired" || outcome === "gave_up"
+            ? "expired"
+            : outcome === "silent"
+              ? "answered"
+              : "failed",
         outcome,
         settledAt: deps.now(),
         effects: [
@@ -265,7 +271,9 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       };
     });
     if (row?.parentDeliveryId && row.outcome === outcome) {
-      await deps.ledger.update(row.parentDeliveryId, (r) => (unfinished(r) ? { ...r, childOutcome: outcome } : r));
+      await deps.ledger.update(row.parentDeliveryId, (r) =>
+        unfinished(r) ? { ...r, childOutcome: outcome } : r,
+      );
       queue(row.parentDeliveryId);
     }
     if (row?.childDeliveryId) queue(row.childDeliveryId);
@@ -283,7 +291,10 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     }
     if (unfinished(row) && row.parentDeliveryId) {
       const parent = await deps.ledger.get(row.parentDeliveryId);
-      if (parent?.status === "answered" && (parent.outcome === "replied" || parent.outcome === "silent")) {
+      if (
+        parent?.status === "answered" &&
+        (parent.outcome === "replied" || parent.outcome === "silent")
+      ) {
         queue(id);
         return;
       }
@@ -300,7 +311,9 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
   async function ack(id: string, effectId: string, extra: Partial<BotMessageEffect> = {}) {
     await deps.ledger.update(id, (r) => ({
       ...r,
-      effects: r.effects.map((e) => (e.id === effectId ? { ...e, ...extra, acknowledgedAt: deps.now() } : e)),
+      effects: r.effects.map((e) =>
+        e.id === effectId ? { ...e, ...extra, acknowledgedAt: deps.now() } : e,
+      ),
     }));
   }
   async function answer(id: string, text: string): Promise<void> {
@@ -353,7 +366,11 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     if (saved?.childDeliveryId && !fromChild) queue(saved.childDeliveryId);
     queue(id);
   }
-  async function wait(botId: string, submissionId: string, signal: AbortSignal): Promise<BotReplyOutcome | undefined> {
+  async function wait(
+    botId: string,
+    submissionId: string,
+    signal: AbortSignal,
+  ): Promise<BotReplyOutcome | undefined> {
     if (signal.aborted || disposed) return;
     const key = JSON.stringify([botId, submissionId]);
     let shared = waits.get(key);
@@ -409,13 +426,15 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
   async function collectReceipts(): Promise<void> {
     if (disposed || !deps.sessions.awaitMessageTaskSettlement) return;
     for (const receipt of await deps.ledger.receipts()) {
-      if (!receipt.taskId || receiptWatches.has(receipt.id) || deleted.has(receipt.fromBotId)) continue;
+      if (!receipt.taskId || receiptWatches.has(receipt.id) || deleted.has(receipt.fromBotId))
+        continue;
       const controller = new AbortController();
       const taskId = receipt.taskId;
       const promise = deps.sessions
         .awaitMessageTaskSettlement(receipt.fromBotId, taskId, controller.signal)
         .then(async (settled) => {
-          if (settled && !disposed && !controller.signal.aborted) await deps.ledger.collectReceipt(receipt.id, taskId);
+          if (settled && !disposed && !controller.signal.aborted)
+            await deps.ledger.collectReceipt(receipt.id, taskId);
         })
         .catch((error) => {
           if (!controller.signal.aborted) report(error);
@@ -459,7 +478,9 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     }
     await deps.ledger.update(row.id, (r) => {
       if (!unfinished(r) || r.initialAnswer === undefined) return r;
-      const effects = notice(r, "replied_while_paused", r.initialAnswer).filter((e) => e.kind === "notice");
+      const effects = notice(r, "replied_while_paused", r.initialAnswer).filter(
+        (e) => e.kind === "notice",
+      );
       return {
         ...r,
         status: "answered",
@@ -476,7 +497,11 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     });
     queue(row.id);
   }
-  async function reply(row: BotMessageDelivery, effect: BotMessageEffect, signal: AbortSignal): Promise<void> {
+  async function reply(
+    row: BotMessageDelivery,
+    effect: BotMessageEffect,
+    signal: AbortSignal,
+  ): Promise<void> {
     if (!(await exists(effect.botId, row.id))) {
       if (!disposed) await ack(row.id, effect.id);
       return;
@@ -484,7 +509,9 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     if (deps.now() >= row.deadline) {
       return displayReply(row, effect, "expired");
     }
-    let submission = effect.submissionId ?? (await deps.sessions.submissionForRequest(effect.botId, effect.requestId!));
+    let submission =
+      effect.submissionId ??
+      (await deps.sessions.submissionForRequest(effect.botId, effect.requestId!));
     if (!submission) {
       const state = await deps.sessions.state(effect.botId);
       if ((state.kind !== "idle" && state.kind !== "running") || deps.now() >= row.deadline) {
@@ -515,11 +542,18 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
         ).submissionId;
       } catch (e) {
         if (reason(e) === "bot_busy")
-          return observeBusy(row.id, effect.botId, signal, () => displayReply(row, effect, "failed"));
+          return observeBusy(row.id, effect.botId, signal, () =>
+            displayReply(row, effect, "failed"),
+          );
         if (
-          ["bot_paused", "paused_by_person", "spending_limit", "needs_model", "model_error", "unavailable"].includes(
-            reason(e),
-          )
+          [
+            "bot_paused",
+            "paused_by_person",
+            "spending_limit",
+            "needs_model",
+            "model_error",
+            "unavailable",
+          ].includes(reason(e))
         ) {
           return displayReply(row, effect, "failed");
         }
@@ -527,25 +561,31 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       }
       await deps.ledger.update(row.id, (r) => ({
         ...r,
-        effects: r.effects.map((e) => (e.id === effect.id ? { ...e, submissionId: submission } : e)),
+        effects: r.effects.map((e) =>
+          e.id === effect.id ? { ...e, submissionId: submission } : e,
+        ),
       }));
     }
     const result = await wait(effect.botId, submission, signal);
     if (!result) return;
     if (result.kind === "interrupted" && !result.settled) return;
-    if (result.kind === "completed" && silent(result.text)) await deps.sessions.markSilent(effect.botId, submission);
+    if (result.kind === "completed" && silent(result.text))
+      await deps.sessions.markSilent(effect.botId, submission);
     // Child continuation satisfies the parent's obligation, never an independent origin delivery.
     if (row.parentDeliveryId) {
       if (result.kind === "completed" && !silent(result.text) && deps.now() < row.deadline) {
         const parent = await deps.ledger.get(row.parentDeliveryId);
-        if (parent && unfinished(parent)) await finalAnswer(parent.id, result.text.trim().slice(0, L.replyChars), true);
+        if (parent && unfinished(parent))
+          await finalAnswer(parent.id, result.text.trim().slice(0, L.replyChars), true);
       } else await quiet(row.parentDeliveryId, result.kind === "completed" ? "silent" : "failed");
       await deps.ledger.update(row.id, (r) => ({
         ...r,
         status: "answered",
         outcome: "replied",
         settledAt: deps.now(),
-        effects: r.effects.map((e) => (e.id === effect.id ? { ...e, acknowledgedAt: deps.now() } : e)),
+        effects: r.effects.map((e) =>
+          e.id === effect.id ? { ...e, acknowledgedAt: deps.now() } : e,
+        ),
       }));
     } else {
       if (result.kind !== "completed") return displayReply(row, effect, "failed");
@@ -574,7 +614,11 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     const task = (async () => {
       if (!(await exists(effect.botId, row.id))) return;
       // A child's answer belongs in its parent's chat, never a separate funnel delivery.
-      if (row.parentDeliveryId && effect.kind === "notification" && effect.data?.outcome === "replied_while_paused") {
+      if (
+        row.parentDeliveryId &&
+        effect.kind === "notification" &&
+        effect.data?.outcome === "replied_while_paused"
+      ) {
         await ack(row.id, effect.id);
         return;
       }
@@ -589,7 +633,10 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
           class: "bot_message",
           dedupeKey: effect.id,
           title: effect.data ? botMessageStatusLine(effect.data) : `${row.toName} replied`,
-          body: effect.text ?? effect.data?.text ?? (effect.data ? botMessageStatusLine(effect.data) : ""),
+          body:
+            effect.text ??
+            effect.data?.text ??
+            (effect.data ? botMessageStatusLine(effect.data) : ""),
           status: effect.data?.outcome === "failed" ? "failed" : "info",
         });
       await ack(row.id, effect.id);
@@ -614,7 +661,10 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
             const row = await deps.ledger.get(id);
             if (!row) return;
             for (const effect of row.effects)
-              if (effect.acknowledgedAt === undefined && (effect.kind === "notice" || effect.kind === "notification"))
+              if (
+                effect.acknowledgedAt === undefined &&
+                (effect.kind === "notice" || effect.kind === "notification")
+              )
                 await publish(row, effect);
           })(),
         );
@@ -629,7 +679,10 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     if (row.parentDeliveryId && unfinished(row)) {
       const parent = await deps.ledger.get(row.parentDeliveryId);
       if (!parent || !unfinished(parent)) {
-        if (parent?.status === "answered" && (parent.outcome === "replied" || parent.outcome === "silent")) {
+        if (
+          parent?.status === "answered" &&
+          (parent.outcome === "replied" || parent.outcome === "silent")
+        ) {
           await deps.ledger.update(id, (r) => ({
             ...r,
             status: "answered",
@@ -648,7 +701,8 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
           .pending()
           .filter((p) => p.owner?.inputs.some((i) => i.botMessage?.deliveryId === id));
         if (deps.now() >= row.deadline) {
-          for (const prompt of pending) deps.approvals.decide(prompt.waitId, "deny", undefined, "expiry");
+          for (const prompt of pending)
+            deps.approvals.decide(prompt.waitId, "deny", undefined, "expiry");
           if (pending.length) outcome = "gave_up";
           else if (outcome === "gave_up") outcome = "expired";
         } else if (outcome === "gave_up") outcome = "failed";
@@ -660,9 +714,13 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       const child = await deps.ledger.get(row.childDeliveryId);
       const outcome =
         child?.parentFallbackOutcome ??
-        (child?.outcome !== "replied" && child?.outcome !== "replied_while_paused" ? child?.outcome : undefined);
+        (child?.outcome !== "replied" && child?.outcome !== "replied_while_paused"
+          ? child?.outcome
+          : undefined);
       if (child && !unfinished(child) && outcome) {
-        row = await deps.ledger.update(id, (r) => (unfinished(r) ? { ...r, childOutcome: outcome } : r));
+        row = await deps.ledger.update(id, (r) =>
+          unfinished(r) ? { ...r, childOutcome: outcome } : r,
+        );
         if (!row || disposed || signal.aborted) return;
       }
     }
@@ -684,7 +742,8 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
           return;
         }
         let submission =
-          row.submissionId ?? (await deps.sessions.submissionForRequest(effect.botId, effect.requestId!));
+          row.submissionId ??
+          (await deps.sessions.submissionForRequest(effect.botId, effect.requestId!));
         if (!submission) {
           const state = await deps.sessions.state(effect.botId);
           if (disposed || signal.aborted) return;
@@ -814,9 +873,11 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
         ...extra,
       });
       try {
-        if (disposed || deleted.has(input.fromBotId)) return refuse("unavailable", "Bot messaging is unavailable.");
+        if (disposed || deleted.has(input.fromBotId))
+          return refuse("unavailable", "Bot messaging is unavailable.");
         const chain = botMessageChainOf(input.runRequestIds);
-        if (!chain.canSend) return refuse("chain_too_deep", "Messaging other Bots is off for this turn.");
+        if (!chain.canSend)
+          return refuse("chain_too_deep", "Messaging other Bots is off for this turn.");
         const message = typeof input.message === "string" ? input.message.trim() : "";
         if (
           !message ||
@@ -850,22 +911,32 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
           sender = roster.find((b) => b.id === input.fromBotId);
         const target = input.target.trim();
         const exact = roster.find((b) => b.id === target);
-        const matches = exact ? [exact] : roster.filter((b) => b.name.toLowerCase() === target.toLowerCase());
+        const matches = exact
+          ? [exact]
+          : roster.filter((b) => b.name.toLowerCase() === target.toLowerCase());
         if (matches.length !== 1)
           return refuse(
             matches.length ? "ambiguous_bot" : "unknown_bot",
-            matches.length ? "More than one Bot has that name. Use its id." : "That Bot is not available.",
+            matches.length
+              ? "More than one Bot has that name. Use its id."
+              : "That Bot is not available.",
             { bots: roster.map((b) => b.name) },
           );
         const to = matches[0]!;
         if (!sender) return refuse("unavailable", "The sending Bot no longer exists.");
         if (to.id === sender.id) return refuse("self", "Choose another Bot.");
-        if (chain.chain.includes(to.id)) return refuse("in_chain", "That Bot is already in this exchange.");
+        if (chain.chain.includes(to.id))
+          return refuse("in_chain", "That Bot is already in this exchange.");
         if (!(await deps.enabled()) || !sender.sendsMessages || !to.acceptsMessages)
           return refuse("switched_off", "Messaging is turned off for these Bots.");
         if (sender.unavailable || to.unavailable)
-          return refuse(sender.unavailable ?? to.unavailable!, "This Bot is not available for messaging.");
-        const parent = chain.parentDeliveryId ? await deps.ledger.get(chain.parentDeliveryId) : undefined;
+          return refuse(
+            sender.unavailable ?? to.unavailable!,
+            "This Bot is not available for messaging.",
+          );
+        const parent = chain.parentDeliveryId
+          ? await deps.ledger.get(chain.parentDeliveryId)
+          : undefined;
         if (
           chain.parentDeliveryId &&
           (!parent ||
@@ -917,7 +988,10 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
         };
       } catch (e) {
         report(e);
-        return refuse("unavailable", e instanceof Error ? e.message : "Bot messaging is unavailable.");
+        return refuse(
+          "unavailable",
+          e instanceof Error ? e.message : "Bot messaging is unavailable.",
+        );
       }
     },
     async start() {
@@ -938,7 +1012,9 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
                   const active = new Set(
                     deps.approvals
                       .pending()
-                      .filter((p) => p.owner?.inputs.some((i) => i.botMessage?.deliveryId === row.id))
+                      .filter((p) =>
+                        p.owner?.inputs.some((i) => i.botMessage?.deliveryId === row.id),
+                      )
                       .map((p) => p.waitId),
                   );
                   return {
@@ -949,7 +1025,8 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
                 if (saved) arm(saved);
               }
               for (const prompt of deps.approvals.pending(botId)) {
-                if (!deps.approvals.pending(botId).some((p) => p.waitId === prompt.waitId)) continue;
+                if (!deps.approvals.pending(botId).some((p) => p.waitId === prompt.waitId))
+                  continue;
                 const ids = prompt.owner?.inputs.map((i) => i.requestId) ?? [];
                 if (!ids.length) continue;
                 try {
@@ -983,7 +1060,8 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
         > => t.kind === "message" || t.kind === "reply",
       );
       if (!claimed.length) {
-        if (ids.some(isBotMessageRequestId)) throw new Error("Authoritative Bot message delivery is unavailable.");
+        if (ids.some(isBotMessageRequestId))
+          throw new Error("Authoritative Bot message delivery is unavailable.");
         return undefined;
       }
       let deadline = Infinity,
@@ -1006,9 +1084,14 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
                 waiting: [...r.waiting, { waitId, summary: summary.slice(0, 160), at: deps.now() }],
                 effects: [
                   ...r.effects,
-                  ...notice(r, "waiting_approval", undefined, waitId, summary.slice(0, 160), botId).filter(
-                    (e) => !r.effects.some((saved) => saved.id === e.id),
-                  ),
+                  ...notice(
+                    r,
+                    "waiting_approval",
+                    undefined,
+                    waitId,
+                    summary.slice(0, 160),
+                    botId,
+                  ).filter((e) => !r.effects.some((saved) => saved.id === e.id)),
                 ],
               },
         );
@@ -1025,7 +1108,9 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       for (const prompt of deps.approvals.pending()) {
         if (
           prompt.botId === botId ||
-          prompt.owner?.inputs.some((i) => i.botMessage?.botId === botId || deleted.has(i.botMessage?.botId ?? ""))
+          prompt.owner?.inputs.some(
+            (i) => i.botMessage?.botId === botId || deleted.has(i.botMessage?.botId ?? ""),
+          )
         )
           deps.approvals.decide(prompt.waitId, "deny", undefined, "expiry");
       }

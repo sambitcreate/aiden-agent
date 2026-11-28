@@ -1,4 +1,7 @@
-import { WORKSPACE_ARTIFACT_LIMITS, WORKSPACE_ARTIFACT_TOOL_NAME } from "../../../renderer/shared/workspace-artifacts.js";
+import {
+  WORKSPACE_ARTIFACT_LIMITS,
+  WORKSPACE_ARTIFACT_TOOL_NAME,
+} from "../../../renderer/shared/workspace-artifacts.js";
 import { VISUAL_ROUTING_SKILL_LINE } from "../visual-routing.js";
 
 /**

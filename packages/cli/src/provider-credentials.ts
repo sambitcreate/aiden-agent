@@ -14,40 +14,71 @@ export function createCliProviderCredentials(file: string): CredentialStore {
   const store = new EncryptedPiCredentialStore({ filePath: () => file, cipher });
   async function locked<T>(operation: () => Promise<T>): Promise<T> {
     const previous = writers.get(file) ?? Promise.resolve();
-    const next = previous.catch(() => {}).then(async () => {
-      const release = acquireLease(`${file}.writer`);
-      try {
-        const current = readJson<Record<string, unknown> | null>(file, null);
-        if (current === null) atomicJson(file, { version: 1, entries: {} });
-        else if (current.version !== 1 || !current.entries) {
-          const staged = join(dirname(file), `.auth-migration-${randomUUID()}.json`);
-          const migration = new EncryptedPiCredentialStore({ filePath: () => staged, cipher });
-          try {
-            // Validate every legacy entry before replacing the original file.
-            atomicJson(staged, { version: 1, entries: {} });
-            for (const [provider, value] of Object.entries(current).sort(([left], [right]) => Number(left === "azure-openai-responses") - Number(right === "azure-openai-responses"))) {
-              if (!value || typeof value !== "object" || !["api_key", "oauth"].includes(String((value as Credential).type))) throw new Error("Invalid legacy provider credential.");
-              await migration.modify(provider, async () => value as Credential);
+    const next = previous
+      .catch(() => {})
+      .then(async () => {
+        const release = acquireLease(`${file}.writer`);
+        try {
+          const current = readJson<Record<string, unknown> | null>(file, null);
+          if (current === null) atomicJson(file, { version: 1, entries: {} });
+          else if (current.version !== 1 || !current.entries) {
+            const staged = join(dirname(file), `.auth-migration-${randomUUID()}.json`);
+            const migration = new EncryptedPiCredentialStore({ filePath: () => staged, cipher });
+            try {
+              // Validate every legacy entry before replacing the original file.
+              atomicJson(staged, { version: 1, entries: {} });
+              for (const [provider, value] of Object.entries(current).sort(
+                ([left], [right]) =>
+                  Number(left === "azure-openai-responses") -
+                  Number(right === "azure-openai-responses"),
+              )) {
+                if (
+                  !value ||
+                  typeof value !== "object" ||
+                  !["api_key", "oauth"].includes(String((value as Credential).type))
+                )
+                  throw new Error("Invalid legacy provider credential.");
+                await migration.modify(provider, async () => value as Credential);
+              }
+              await rename(staged, file);
+            } finally {
+              await rm(staged, { force: true });
             }
-            await rename(staged, file);
-          } finally { await rm(staged, { force: true }); }
+          }
+          return await operation();
+        } finally {
+          release();
         }
-        return await operation();
-      } finally { release(); }
-    });
+      });
     writers.set(file, next);
-    try { return await next; }
-    finally { if (writers.get(file) === next) writers.delete(file); }
+    try {
+      return await next;
+    } finally {
+      if (writers.get(file) === next) writers.delete(file);
+    }
   }
   async function ready() {
     const current = readJson<Record<string, unknown> | null>(file, null);
-    if (!current || current.version !== 1 || !current.entries || Object.hasOwn(current.entries, "azure-openai-responses")) {
+    if (
+      !current ||
+      current.version !== 1 ||
+      !current.entries ||
+      Object.hasOwn(current.entries, "azure-openai-responses")
+    ) {
       await locked(() => store.list());
     }
   }
   return {
-    read: async (id, options) => { options?.signal?.throwIfAborted(); await ready(); return store.read(id, options); },
-    list: async (options) => { options?.signal?.throwIfAborted(); await ready(); return store.list(options); },
+    read: async (id, options) => {
+      options?.signal?.throwIfAborted();
+      await ready();
+      return store.read(id, options);
+    },
+    list: async (options) => {
+      options?.signal?.throwIfAborted();
+      await ready();
+      return store.list(options);
+    },
     modify: (id, update, options) => locked(() => store.modify(id, update, options)),
     delete: (id, options) => locked(() => store.delete(id, options)),
   };

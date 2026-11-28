@@ -32,14 +32,18 @@ const homeSkill: DiscoveredSkill = {
   path: "/home/.aiden/skills/meal-plan/SKILL.md",
 } as DiscoveredSkill;
 
-function inventory(approvals: ReturnType<typeof createBotSkillApprovals>, unapproved: string[] = []) {
+function inventory(
+  approvals: ReturnType<typeof createBotSkillApprovals>,
+  unapproved: string[] = [],
+) {
   return resolveBotRuntimeSkillBindings({
     loadIdentityKey: async () => KEY,
     listConfigured: async () => [],
     botId: "bot-a",
     loadBotHomePath: async () => "/home",
     discover: async (root) => (root ? [homeSkill] : []),
-    isHomeSkillApproved: (_id, fingerprint) => approvals.isApproved("bot-a", fingerprint, fingerprint),
+    isHomeSkillApproved: (_id, fingerprint) =>
+      approvals.isApproved("bot-a", fingerprint, fingerprint),
     onUnapprovedHomeSkills: (found) => unapproved.push(...found.map((skill) => skill.name)),
   });
 }
@@ -48,19 +52,37 @@ test("an unapproved home skill is not admitted; approving its content admits it;
   const root = tempRoot();
   const approvals = createBotSkillApprovals({ profileDir: () => root });
   const unapproved: string[] = [];
-  assert.deepEqual((await inventory(approvals, unapproved)).map((skill) => skill.label), []);
+  assert.deepEqual(
+    (await inventory(approvals, unapproved)).map((skill) => skill.label),
+    [],
+  );
   assert.deepEqual(unapproved, ["meal-plan"], "a hand-placed skill is reported for review");
   const fingerprint = botSkillContentFingerprint(homeSkill);
   await approvals.approve("bot-a", fingerprint, fingerprint);
-  assert.deepEqual((await inventory(approvals)).map((skill) => skill.label), ["meal-plan"]);
+  assert.deepEqual(
+    (await inventory(approvals)).map((skill) => skill.label),
+    ["meal-plan"],
+  );
   homeSkill.instructions = "List seven dinners and a dessert.";
-  assert.deepEqual((await inventory(approvals)).map((skill) => skill.label), [], "editing the file un-admits it");
+  assert.deepEqual(
+    (await inventory(approvals)).map((skill) => skill.label),
+    [],
+    "editing the file un-admits it",
+  );
   homeSkill.instructions = "List seven dinners.";
 });
 
 test("a Bot's file tools cannot write into a skill folder", async () => {
   const root = tempRoot();
-  for (const target of [".aiden/skills/x/SKILL.md", ".aiden/skill/x/SKILL.md", ".claude/skills/x/SKILL.md", ".agents/x/SKILL.md", ".claude/Skills/x/SKILL.md", ".Agents/x/SKILL.md", ".AIDEN/skills/x/SKILL.md"]) {
+  for (const target of [
+    ".aiden/skills/x/SKILL.md",
+    ".aiden/skill/x/SKILL.md",
+    ".claude/skills/x/SKILL.md",
+    ".agents/x/SKILL.md",
+    ".claude/Skills/x/SKILL.md",
+    ".Agents/x/SKILL.md",
+    ".AIDEN/skills/x/SKILL.md",
+  ]) {
     assert.equal(await writesIntoSkillDirectory(root, { path: target }), true, target);
   }
   assert.equal(await writesIntoSkillDirectory(root, { path: "notes/skills.md" }), false);
@@ -69,17 +91,33 @@ test("a Bot's file tools cannot write into a skill folder", async () => {
 test("validator messages name the problem", () => {
   const sources = new Map<string, "configured" | "workspace" | "global">([["standup", "global"]]);
   const errors = (input: Partial<{ name: string; description: string; instructions: string }>) => {
-    const result = validateBotSkillProposal({ name: "ok-name", description: "Use when x.", instructions: "Do y.", ...input }, { existingSources: sources });
+    const result = validateBotSkillProposal(
+      { name: "ok-name", description: "Use when x.", instructions: "Do y.", ...input },
+      { existingSources: sources },
+    );
     return result.ok ? [] : result.errors;
   };
   assert.match(errors({ name: "Bad Name" })[0]!, /lowercase letters, numbers and dashes/u);
-  assert.match(errors({ name: "standup" })[0]!, /A global skill is already named “standup”, so this one would be hidden/u);
+  assert.match(
+    errors({ name: "standup" })[0]!,
+    /A global skill is already named “standup”, so this one would be hidden/u,
+  );
   assert.match(errors({ description: "" })[0]!, /say when to use this skill/u);
-  assert.match(errors({ instructions: "x".repeat(17 * 1024) })[0]!, /Instructions are 17 KB; the limit is 16 KB/u);
+  assert.match(
+    errors({ instructions: "x".repeat(17 * 1024) })[0]!,
+    /Instructions are 17 KB; the limit is 16 KB/u,
+  );
 });
 
 test("a valid proposal round-trips through the skill loader", () => {
-  const result = validateBotSkillProposal({ name: "meal-plan", description: "Use when planning   meals.", instructions: "Step one.\nStep two." }, { existingSources: new Map() });
+  const result = validateBotSkillProposal(
+    {
+      name: "meal-plan",
+      description: "Use when planning   meals.",
+      instructions: "Step one.\nStep two.",
+    },
+    { existingSources: new Map() },
+  );
   assert.ok(result.ok);
   const parsed = parseSkillMd(result.file);
   assert.equal(parsed?.frontmatter.name, "meal-plan");
@@ -108,32 +146,69 @@ test("Add writes the file, approves that content, and a second pending proposal 
   const root = tempRoot();
   const home = tempRoot();
   const h = service(root, home);
-  const first = await h.proposals.propose("bot-a", { name: "meal-plan", description: "Use when planning meals.", instructions: "List seven dinners.", reason: "You asked twice." });
+  const first = await h.proposals.propose("bot-a", {
+    name: "meal-plan",
+    description: "Use when planning meals.",
+    instructions: "List seven dinners.",
+    reason: "You asked twice.",
+  });
   assert.ok(first.ok);
   assert.equal(h.entries[0]?.kind, "aiden.skill-proposal");
-  const second = await h.proposals.propose("bot-a", { name: "other", description: "Use when x.", instructions: "y" });
+  const second = await h.proposals.propose("bot-a", {
+    name: "other",
+    description: "Use when x.",
+    instructions: "y",
+  });
   assert.equal(!second.ok && second.code, "too_many_pending");
-  assert.deepEqual(await h.proposals.respond({ botId: "bot-a", proposalId: first.proposalId, decision: "add" }), { status: "added" });
+  assert.deepEqual(
+    await h.proposals.respond({ botId: "bot-a", proposalId: first.proposalId, decision: "add" }),
+    { status: "added" },
+  );
   const written = readFileSync(botHomeSkillFile(home, "meal-plan"), "utf8");
   const parsed = parseSkillMd(written)!;
-  const fingerprint = botSkillContentFingerprint({ name: parsed.frontmatter.name!, description: parsed.frontmatter.description!, instructions: parsed.body });
-  assert.equal(await h.approvals.isApproved("bot-a", fingerprint, fingerprint), true, "the file as the loader reads it is approved");
+  const fingerprint = botSkillContentFingerprint({
+    name: parsed.frontmatter.name!,
+    description: parsed.frontmatter.description!,
+    instructions: parsed.body,
+  });
+  assert.equal(
+    await h.approvals.isApproved("bot-a", fingerprint, fingerprint),
+    true,
+    "the file as the loader reads it is approved",
+  );
   assert.equal(h.invalidated(), 1);
   assert.equal(h.entries[h.entries.length - 1]?.kind, "aiden.skill-proposal-status");
 });
 
 test("answering a suggestion that is gone is a not_found result, not a throw; an answered one keeps its answer", async () => {
   const h = service(tempRoot(), tempRoot());
-  assert.deepEqual(await h.proposals.answer({ botId: "bot-a", proposalId: "no-such-suggestion", decision: "add" }), { ok: false, code: "not_found" });
-  await assert.rejects(h.proposals.respond({ botId: "bot-a", proposalId: "no-such-suggestion", decision: "add" }), /no longer available/u, "the desktop path still says so");
-  const proposed = await h.proposals.propose("bot-a", { name: "meal-plan", description: "Use when planning meals.", instructions: "List seven dinners." });
+  assert.deepEqual(
+    await h.proposals.answer({ botId: "bot-a", proposalId: "no-such-suggestion", decision: "add" }),
+    { ok: false, code: "not_found" },
+  );
+  await assert.rejects(
+    h.proposals.respond({ botId: "bot-a", proposalId: "no-such-suggestion", decision: "add" }),
+    /no longer available/u,
+    "the desktop path still says so",
+  );
+  const proposed = await h.proposals.propose("bot-a", {
+    name: "meal-plan",
+    description: "Use when planning meals.",
+    instructions: "List seven dinners.",
+  });
   assert.ok(proposed.ok);
   // Two devices answer at once: one wins, the other reads the settled answer.
   const [first, second] = await Promise.all([
     h.proposals.answer({ botId: "bot-a", proposalId: proposed.proposalId, decision: "dismiss" }),
     h.proposals.answer({ botId: "bot-a", proposalId: proposed.proposalId, decision: "add" }),
   ]);
-  assert.deepEqual([first, second], [{ ok: true, status: "dismissed" }, { ok: true, status: "dismissed" }]);
+  assert.deepEqual(
+    [first, second],
+    [
+      { ok: true, status: "dismissed" },
+      { ok: true, status: "dismissed" },
+    ],
+  );
   assert.equal(h.invalidated(), 0, "the losing Add wrote and approved nothing");
 });
 
@@ -142,13 +217,23 @@ test("an update to a huge current skill shows every proposed line on its card", 
   const h = service(tempRoot(), home);
   const file = botHomeSkillFile(home, "meal-plan");
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `---\nname: meal-plan\ndescription: "Use when planning meals."\n---\n\n${"x".repeat(70_000)}\n`);
-  const proposed = await h.proposals.propose("bot-a", { name: "meal-plan", description: "Use when planning meals.", instructions: "Only suggest vegetarian dinners." });
+  writeFileSync(
+    file,
+    `---\nname: meal-plan\ndescription: "Use when planning meals."\n---\n\n${"x".repeat(70_000)}\n`,
+  );
+  const proposed = await h.proposals.propose("bot-a", {
+    name: "meal-plan",
+    description: "Use when planning meals.",
+    instructions: "Only suggest vegetarian dinners.",
+  });
   assert.ok(proposed.ok);
   const card = botSkillProposalOf(h.entries[0]?.data);
   assert.ok(card);
   assert.equal(card.update, true);
-  assert.ok(card.preview.includes("Only suggest vegetarian dinners."), "the instructions Add would approve are on the card");
+  assert.ok(
+    card.preview.includes("Only suggest vegetarian dinners."),
+    "the instructions Add would approve are on the card",
+  );
 });
 
 test("a skill found in the folder becomes a review card; Use skill approves it without rewriting the file", async () => {

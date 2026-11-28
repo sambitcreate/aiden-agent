@@ -1,11 +1,24 @@
 /** POSIX protection for dedicated Aiden state directories. Never chmod ancestors. */
 import type { Stats } from "node:fs";
-import { constants, closeSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import {
+  constants,
+  closeSync,
+  fchmodSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 function unsafe(target: string): Error {
-  return new Error(`Aiden storage must be a private directory or single-link file owned by this user: ${target}`);
+  return new Error(
+    `Aiden storage must be a private directory or single-link file owned by this user: ${target}`,
+  );
 }
 
 function verifyOwner(info: Stats, target: string): void {
@@ -25,7 +38,12 @@ function verifyDirectoryChain(directory: string): void {
     const info = lstatSync(parent);
     // A sticky directory such as /tmp protects an owned child from other users.
     const foreignOwner = process.getuid && info.uid !== 0 && info.uid !== process.getuid();
-    if (!info.isDirectory() || foreignOwner || ((info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0)) throw unsafe(parent);
+    if (
+      !info.isDirectory() ||
+      foreignOwner ||
+      ((info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0)
+    )
+      throw unsafe(parent);
     const next = dirname(parent);
     if (next === parent) break;
     parent = next;
@@ -45,15 +63,22 @@ function verifyLexicalAliases(requested: string): void {
   let links = 0;
   while (queue.length > 0) {
     const part = queue.shift()!;
-    if (part === "..") { resolved = dirname(resolved); continue; }
+    if (part === "..") {
+      resolved = dirname(resolved);
+      continue;
+    }
     const candidate = join(resolved, part);
     let info: Stats;
-    try { info = lstatSync(candidate); }
-    catch (error) {
+    try {
+      info = lstatSync(candidate);
+    } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       return;
     }
-    if (!info.isSymbolicLink()) { resolved = candidate; continue; }
+    if (!info.isSymbolicLink()) {
+      resolved = candidate;
+      continue;
+    }
     if (++links > 40) throw unsafe(requested);
     if (process.getuid && info.uid !== 0 && info.uid !== process.getuid()) throw unsafe(candidate);
     // `resolved` is already free of links, so this checks the folder that really holds this one.
@@ -69,7 +94,10 @@ function verifyLexicalAliases(requested: string): void {
  * itself, the folder it sits in and the folder it points to all belong to this user. The
  * protection then applies to the folder the link points to.
  */
-export function ensurePrivateDirectory(target: string, existing: "harden" | "reject" = "harden"): void {
+export function ensurePrivateDirectory(
+  target: string,
+  existing: "harden" | "reject" = "harden",
+): void {
   const requested = resolve(target);
   if (requested === dirname(requested) || requested === resolve(homedir())) throw unsafe(target);
   mkdirSync(requested, { recursive: true, mode: 0o700 });
@@ -85,51 +113,87 @@ export function ensurePrivateDirectory(target: string, existing: "harden" | "rej
   if (!before.isDirectory() || before.isSymbolicLink()) throw unsafe(target);
   verifyOwner(before, target);
   const home = statSync(homedir());
-  const canonical = realpathSync(absolute), canonicalHome = realpathSync(homedir());
-  const sameHomePath = process.platform === "win32" ? canonical.toLowerCase() === canonicalHome.toLowerCase() : canonical === canonicalHome;
-  if (sameHomePath || (before.ino !== 0 && home.ino !== 0 && before.dev === home.dev && before.ino === home.ino)) throw unsafe(target);
+  const canonical = realpathSync(absolute),
+    canonicalHome = realpathSync(homedir());
+  const sameHomePath =
+    process.platform === "win32"
+      ? canonical.toLowerCase() === canonicalHome.toLowerCase()
+      : canonical === canonicalHome;
+  if (
+    sameHomePath ||
+    (before.ino !== 0 && home.ino !== 0 && before.dev === home.dev && before.ino === home.ino)
+  )
+    throw unsafe(target);
   verifyAncestors(absolute);
   const fd = openSync(absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
   try {
     const opened = fstatSync(fd);
     verifyOwner(opened, target);
-    if (!opened.isDirectory() || opened.dev !== before.dev || opened.ino !== before.ino) throw unsafe(target);
+    if (!opened.isDirectory() || opened.dev !== before.dev || opened.ino !== before.ino)
+      throw unsafe(target);
     if (process.platform !== "win32") {
       if (existing === "reject" && (opened.mode & 0o077) !== 0) throw unsafe(target);
       fchmodSync(fd, 0o700);
     }
     const after = lstatSync(absolute);
-    if (after.isSymbolicLink() || after.dev !== opened.dev || after.ino !== opened.ino) throw unsafe(target);
+    if (after.isSymbolicLink() || after.dev !== opened.dev || after.ino !== opened.ino)
+      throw unsafe(target);
     // A link retargeted while this ran must not leave the old folder treated as the root.
     if (absolute !== requested && realpathSync(requested) !== absolute) throw unsafe(target);
-  } finally { closeSync(fd); }
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Missing files are fine; symlinks, special files and foreign/hard-linked files are not. */
-export function hardenPrivateFile(target: string, ownedPublicationPaths: readonly string[] = []): void {
+export function hardenPrivateFile(
+  target: string,
+  ownedPublicationPaths: readonly string[] = [],
+): void {
   const validLinks = (info: Stats): boolean => {
     let expected = 1;
     for (const other of new Set(ownedPublicationPaths)) {
       if (resolve(other) === resolve(target)) continue;
       try {
         const alias = lstatSync(other);
-        if (alias.isFile() && !alias.isSymbolicLink() && alias.dev === info.dev && alias.ino === info.ino) expected++;
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        if (
+          alias.isFile() &&
+          !alias.isSymbolicLink() &&
+          alias.dev === info.dev &&
+          alias.ino === info.ino
+        )
+          expected++;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
     }
     return expected <= 2 && info.nlink === expected;
   };
   let before: Stats;
-  try { before = lstatSync(target); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+  try {
+    before = lstatSync(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
   if (!before.isFile() || before.isSymbolicLink() || !validLinks(before)) throw unsafe(target);
   verifyOwner(before, target);
   const fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const opened = fstatSync(fd);
     verifyOwner(opened, target);
-    if (!opened.isFile() || !validLinks(opened) || opened.dev !== before.dev || opened.ino !== before.ino) throw unsafe(target);
+    if (
+      !opened.isFile() ||
+      !validLinks(opened) ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino
+    )
+      throw unsafe(target);
     if (process.platform !== "win32") fchmodSync(fd, 0o600);
     const after = lstatSync(target);
-    if (after.dev !== opened.dev || after.ino !== opened.ino || !validLinks(after)) throw unsafe(target);
-  } finally { closeSync(fd); }
+    if (after.dev !== opened.dev || after.ino !== opened.ino || !validLinks(after))
+      throw unsafe(target);
+  } finally {
+    closeSync(fd);
+  }
 }

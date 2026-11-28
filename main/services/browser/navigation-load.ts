@@ -46,11 +46,14 @@ type LoadFailure = { errorCode: number; errorDescription: string; url: string };
 
 function loadError({ errorCode, errorDescription, url }: LoadFailure): Error {
   // Same text and fields as Electron's own loadURL rejection.
-  return Object.assign(new Error(`${errorDescription} (${errorCode}) loading '${url.slice(0, 2048)}'`), {
-    errno: errorCode,
-    code: errorDescription,
-    url,
-  });
+  return Object.assign(
+    new Error(`${errorDescription} (${errorCode}) loading '${url.slice(0, 2048)}'`),
+    {
+      errno: errorCode,
+      code: errorDescription,
+      url,
+    },
+  );
 }
 
 export function loadBrowserUrl(contents: BrowserLoadTarget, url: string): Promise<void> {
@@ -79,36 +82,50 @@ export function loadBrowserUrl(contents: BrowserLoadTarget, url: string): Promis
       else resolve();
     };
     const finish = () => settle(failure ? loadError(failure) : undefined);
-    listen("did-start-navigation", (_event, startedUrl: string, isSameDocument: boolean, isMainFrame: boolean) => {
-      if (!isMainFrame) return;
-      if (!started) {
-        // This call's own navigation is the first main-frame start after it.
-        started = true;
-        sameDocument = isSameDocument;
-        // Whatever failed before this start was the replaced document's.
-        heldFailure = undefined;
-        heldNative = undefined;
-      } else if (!isSameDocument) {
-        settle(loadError({ errorCode: ERR_ABORTED, errorDescription: "ERR_ABORTED", url: startedUrl }));
-      }
-    });
+    listen(
+      "did-start-navigation",
+      (_event, startedUrl: string, isSameDocument: boolean, isMainFrame: boolean) => {
+        if (!isMainFrame) return;
+        if (!started) {
+          // This call's own navigation is the first main-frame start after it.
+          started = true;
+          sameDocument = isSameDocument;
+          // Whatever failed before this start was the replaced document's.
+          heldFailure = undefined;
+          heldNative = undefined;
+        } else if (!isSameDocument) {
+          settle(
+            loadError({ errorCode: ERR_ABORTED, errorDescription: "ERR_ABORTED", url: startedUrl }),
+          );
+        }
+      },
+    );
     listen("did-navigate", () => {
       if (started && !sameDocument) committed = true;
     });
     listen("did-navigate-in-page", () => {
       if (started && sameDocument) finish();
     });
-    listen("did-fail-load", (_event, errorCode: number, errorDescription: string, validatedUrl: string, isMainFrame: boolean) => {
-      if (!isMainFrame) return;
-      if (holding()) {
-        heldFailure ??= { errorCode, errorDescription, url: validatedUrl };
-        return;
-      }
-      // The replaced document's load abort, delivered after this navigation began.
-      if (started && !sameDocument && !committed && errorCode === ERR_ABORTED) return;
-      failure ??= { errorCode, errorDescription, url: validatedUrl };
-      if (!started) finish();
-    });
+    listen(
+      "did-fail-load",
+      (
+        _event,
+        errorCode: number,
+        errorDescription: string,
+        validatedUrl: string,
+        isMainFrame: boolean,
+      ) => {
+        if (!isMainFrame) return;
+        if (holding()) {
+          heldFailure ??= { errorCode, errorDescription, url: validatedUrl };
+          return;
+        }
+        // The replaced document's load abort, delivered after this navigation began.
+        if (started && !sameDocument && !committed && errorCode === ERR_ABORTED) return;
+        failure ??= { errorCode, errorDescription, url: validatedUrl };
+        if (!started) finish();
+      },
+    );
     listen("did-finish-load", () => {
       if (holding()) return;
       // Before this navigation commits, a finished load is the replaced document's.

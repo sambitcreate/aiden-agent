@@ -61,7 +61,11 @@ export function findChatMatches(root: Node, query: string, limit = CHAT_FIND_MAT
   const ranges: Range[] = [];
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const haystack = foldCase(node.nodeValue ?? "");
-    for (let at = haystack.text.indexOf(needle); at >= 0; at = haystack.text.indexOf(needle, at + needle.length)) {
+    for (
+      let at = haystack.text.indexOf(needle);
+      at >= 0;
+      at = haystack.text.indexOf(needle, at + needle.length)
+    ) {
       const last = at + needle.length - 1;
       const range = document.createRange();
       range.setStart(node, haystack.starts ? haystack.starts[at]! : at);
@@ -99,7 +103,11 @@ export function clearChatMatches(): void {
 }
 
 /** "3 of 12", "1,000+ matches" past the limit, or "No matches". */
-export function chatFindStatus(count: number, current: number, limit = CHAT_FIND_MATCH_LIMIT): string {
+export function chatFindStatus(
+  count: number,
+  current: number,
+  limit = CHAT_FIND_MATCH_LIMIT,
+): string {
   if (count === 0) return "No matches";
   const total = count >= limit ? `${limit.toLocaleString()}+` : count.toLocaleString();
   return `${(current + 1).toLocaleString()} of ${total}`;

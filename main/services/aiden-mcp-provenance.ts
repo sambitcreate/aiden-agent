@@ -37,9 +37,11 @@ export function parseAidenMcpProvenanceDocument(
   value: unknown,
   limit = AIDEN_MCP_PROVENANCE_LIMIT,
 ): AidenMcpProvenanceDocument {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return emptyAidenMcpProvenanceDocument();
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return emptyAidenMcpProvenanceDocument();
   const record = value as { version?: unknown; entries?: unknown };
-  if (record.version !== 1 || !Array.isArray(record.entries)) return emptyAidenMcpProvenanceDocument();
+  if (record.version !== 1 || !Array.isArray(record.entries))
+    return emptyAidenMcpProvenanceDocument();
   const entries: AidenMcpProvenanceDocument["entries"] = [];
   for (const candidate of record.entries) {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;

@@ -23,7 +23,10 @@ import {
   summarizeAskUserQuestionResponse,
 } from "../../../renderer/shared/ask-user-question.js";
 import type { BotQuestionAnswerDetails } from "../../../renderer/shared/bot-live.js";
-import { askUserQuestionsSchema, formatAskUserQuestionResponse } from "../ask-user-question-extension.js";
+import {
+  askUserQuestionsSchema,
+  formatAskUserQuestionResponse,
+} from "../ask-user-question-extension.js";
 import type { BotQuestions } from "./bot-questions.js";
 import type { BotToolCandidate } from "./bot-tool-assembly.js";
 import type { BotToolCall } from "./tool-adapter.js";
@@ -58,8 +61,13 @@ export function botQuestionCandidate(botId: string, questions: BotQuestions): Bo
       ...schema,
       async execute(_toolCallId, params): Promise<AgentToolResult<BotQuestionAnswerDetails>> {
         const parsed = parseAskUserQuestions((params as { questions?: unknown }).questions);
-        if (!parsed) throw new Error("The questions are invalid: each needs 2-5 distinct options and a unique question.");
-        const memo = await call.memo<{ waitId: string }>(BOT_QUESTION_MEMO, { waitId: randomUUID() });
+        if (!parsed)
+          throw new Error(
+            "The questions are invalid: each needs 2-5 distinct options and a unique question.",
+          );
+        const memo = await call.memo<{ waitId: string }>(BOT_QUESTION_MEMO, {
+          waitId: randomUUID(),
+        });
         const response = await questions.request({
           botId,
           waitId: memo.waitId,

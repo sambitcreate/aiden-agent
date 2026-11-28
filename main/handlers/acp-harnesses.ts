@@ -51,7 +51,9 @@ export function registerAcpHarnessHandlers(): void {
         pending = false;
         void statusOf(providerId, entry)
           .then((status) => ipcMain.broadcast("providers:harness:changed", status))
-          .catch((error: unknown) => logger.warn("acp", "Could not publish harness status.", error));
+          .catch((error: unknown) =>
+            logger.warn("acp", "Could not publish harness status.", error),
+          );
       }, 150);
     });
   };

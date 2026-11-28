@@ -60,7 +60,11 @@ export interface AidenOpaqueHandleResolveOptions {
 }
 
 export interface AidenOpaqueHandleBatch {
-  issue(kind: AidenOpaqueHandleKind, claims: AidenOpaqueHandleClaims, options?: AidenOpaqueHandleIssueOptions): string;
+  issue(
+    kind: AidenOpaqueHandleKind,
+    claims: AidenOpaqueHandleClaims,
+    options?: AidenOpaqueHandleIssueOptions,
+  ): string;
   commit(): void;
   dispose(): void;
 }
@@ -109,7 +113,11 @@ export class AidenOpaqueHandleStore {
   private lastSweepAt = Number.NEGATIVE_INFINITY;
 
   constructor(
-    private readonly options: { maxEntries?: number; maxEntriesPerDevice?: number; now?: () => number } = {},
+    private readonly options: {
+      maxEntries?: number;
+      maxEntriesPerDevice?: number;
+      now?: () => number;
+    } = {},
   ) {}
 
   private get maxEntries(): number {
@@ -117,7 +125,10 @@ export class AidenOpaqueHandleStore {
   }
 
   private get maxEntriesPerDevice(): number {
-    return Math.min(this.maxEntries, Math.max(1, this.options.maxEntriesPerDevice ?? DEFAULT_MAX_ENTRIES_PER_DEVICE));
+    return Math.min(
+      this.maxEntries,
+      Math.max(1, this.options.maxEntriesPerDevice ?? DEFAULT_MAX_ENTRIES_PER_DEVICE),
+    );
   }
 
   private now(): number {
@@ -128,7 +139,11 @@ export class AidenOpaqueHandleStore {
     return Boolean(stored.protectedDocument) || (this.inFlightCounts.get(key) ?? 0) > 0;
   }
 
-  private deleteFromDeviceSet(index: Map<string, Set<string>>, deviceId: string, key: string): void {
+  private deleteFromDeviceSet(
+    index: Map<string, Set<string>>,
+    deviceId: string,
+    key: string,
+  ): void {
     const set = index.get(deviceId);
     if (!set) return;
     set.delete(key);
@@ -275,7 +290,11 @@ export class AidenOpaqueHandleStore {
     };
   }
 
-  issue(kind: AidenOpaqueHandleKind, claims: AidenOpaqueHandleClaims, options: AidenOpaqueHandleIssueOptions = {}): string {
+  issue(
+    kind: AidenOpaqueHandleKind,
+    claims: AidenOpaqueHandleClaims,
+    options: AidenOpaqueHandleIssueOptions = {},
+  ): string {
     const now = this.now();
     if (claims.expiresAt <= now) throw new AidenOpaqueHandleError("handle_expired");
     if (kind === "file" && !claims.workspaceId) throw new AidenOpaqueHandleError("handle_invalid");
@@ -382,10 +401,7 @@ export class AidenOpaqueHandleStore {
     this.remove(digest(token));
   }
 
-  claimsFor(
-    token: string,
-    expectedKind: AidenOpaqueHandleKind,
-  ): AidenOpaqueHandleClaims {
+  claimsFor(token: string, expectedKind: AidenOpaqueHandleKind): AidenOpaqueHandleClaims {
     if (!new RegExp(`^${expectedKind}_[A-Za-z0-9_-]{43}$`, "u").test(token)) {
       throw new AidenOpaqueHandleError("handle_invalid");
     }
@@ -423,7 +439,10 @@ export class AidenOpaqueHandleStore {
     if (claims.instanceId !== current.instanceId || claims.deviceId !== current.deviceId) {
       throw new AidenOpaqueHandleError("handle_wrong_device");
     }
-    if (expectedKind === "file" && (!claims.workspaceId || !current.workspaceId || claims.workspaceId !== current.workspaceId)) {
+    if (
+      expectedKind === "file" &&
+      (!claims.workspaceId || !current.workspaceId || claims.workspaceId !== current.workspaceId)
+    ) {
       throw new AidenOpaqueHandleError("root_policy_changed");
     }
     if (claims.rootId !== current.rootId || claims.policyRevision !== current.policyRevision) {
@@ -471,7 +490,9 @@ export class AidenOpaqueHandleStore {
   consumeSelection<T>(
     token: string,
     current: AidenOpaqueHandleClaims,
-    createWorkspaceSynchronously: (claims: AidenOpaqueHandleClaims) => T extends PromiseLike<unknown> ? never : T,
+    createWorkspaceSynchronously: (
+      claims: AidenOpaqueHandleClaims,
+    ) => T extends PromiseLike<unknown> ? never : T,
     now = Date.now(),
   ): T {
     if (current.kind !== "directory") throw new AidenOpaqueHandleError("handle_invalid");
@@ -491,7 +512,15 @@ export class AidenOpaqueHandleStore {
   }
 }
 
-export async function inspectAidenFilesystemIdentity(rootPath: string, candidatePath: string): Promise<Pick<AidenOpaqueHandleClaims, "canonicalRootPath" | "canonicalPath" | "filesystemDevice" | "filesystemInode" | "kind">> {
+export async function inspectAidenFilesystemIdentity(
+  rootPath: string,
+  candidatePath: string,
+): Promise<
+  Pick<
+    AidenOpaqueHandleClaims,
+    "canonicalRootPath" | "canonicalPath" | "filesystemDevice" | "filesystemInode" | "kind"
+  >
+> {
   // Drain both path lookups even when one fails so shared metadata admission
   // does not release its budget while a sibling lookup is still running.
   const [root, candidate] = await Promise.allSettled([realpath(rootPath), realpath(candidatePath)]);
@@ -499,11 +528,13 @@ export async function inspectAidenFilesystemIdentity(rootPath: string, candidate
   if (candidate.status === "rejected") throw candidate.reason;
   const canonicalRootPath = root.value;
   const canonicalPath = candidate.value;
-  if (!isPathInside(canonicalRootPath, canonicalPath)) throw new AidenOpaqueHandleError("path_outside_root");
+  if (!isPathInside(canonicalRootPath, canonicalPath))
+    throw new AidenOpaqueHandleError("path_outside_root");
   const identity = await stat(canonicalPath);
   // Another name for a multiply-linked regular file can live outside the root,
   // so the in-root name would expose or mutate that outside file.
-  if (identity.isFile() && identity.nlink !== 1) throw new AidenOpaqueHandleError("path_outside_root");
+  if (identity.isFile() && identity.nlink !== 1)
+    throw new AidenOpaqueHandleError("path_outside_root");
   return {
     canonicalRootPath,
     canonicalPath,
@@ -530,7 +561,10 @@ export async function rebindAidenFileHandleToSavedFile(
   let rebound = false;
   try {
     const stored = handles.claimsFor(token, "file");
-    const installed = await inspectAidenFilesystemIdentity(rootPath, path.join(rootPath, displayPath));
+    const installed = await inspectAidenFilesystemIdentity(
+      rootPath,
+      path.join(rootPath, displayPath),
+    );
     // Only the inode this save installed is adopted, never a file another app put there afterwards.
     if (
       installed.kind === "file" &&
@@ -539,7 +573,11 @@ export async function rebindAidenFileHandleToSavedFile(
       installed.filesystemDevice === saved.device &&
       installed.filesystemInode === saved.inode
     ) {
-      handles.updateReservedFileIdentity(token, installed.filesystemDevice, installed.filesystemInode);
+      handles.updateReservedFileIdentity(
+        token,
+        installed.filesystemDevice,
+        installed.filesystemInode,
+      );
       rebound = true;
     }
   } catch {

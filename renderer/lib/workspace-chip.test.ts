@@ -3,8 +3,14 @@ import test from "node:test";
 import { githubRepositoryUrl } from "./workspace-chip.js";
 
 test("github.com owner/name keys open the repository page", () => {
-  assert.equal(githubRepositoryUrl("github.com/sambitcreate/aiden-agent"), "https://github.com/sambitcreate/aiden-agent");
-  assert.equal(githubRepositoryUrl("github.com/Owner.Name/repo_1"), "https://github.com/Owner.Name/repo_1");
+  assert.equal(
+    githubRepositoryUrl("github.com/sambitcreate/aiden-agent"),
+    "https://github.com/sambitcreate/aiden-agent",
+  );
+  assert.equal(
+    githubRepositoryUrl("github.com/Owner.Name/repo_1"),
+    "https://github.com/Owner.Name/repo_1",
+  );
 });
 
 test("other hosts and non owner/name shapes have no GitHub link", () => {

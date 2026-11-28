@@ -110,8 +110,14 @@ function json(body: unknown, headers: Record<string, string> = {}): RequestInit 
   };
 }
 
-async function errorOf(response: Response): Promise<{ code: string; retryable: boolean; details?: Record<string, unknown> }> {
-  return ((await response.json()) as { error: { code: string; retryable: boolean; details?: Record<string, unknown> } }).error;
+async function errorOf(
+  response: Response,
+): Promise<{ code: string; retryable: boolean; details?: Record<string, unknown> }> {
+  return (
+    (await response.json()) as {
+      error: { code: string; retryable: boolean; details?: Record<string, unknown> };
+    }
+  ).error;
 }
 
 test("an approved request round-trips over HTTP and its credential authenticates /server", async () => {
@@ -123,11 +129,21 @@ test("an approved request round-trips over HTTP and its credential authenticates
     const keys = generatePairingRequestKeyPair();
     const createdResponse = await fetch(
       `${app.base}/pairing/requests`,
-      json({ deviceName: "Travel MacBook", deviceType: "mac", publicKey: keys.publicKey, clientVersion: "0.52.0" }),
+      json({
+        deviceName: "Travel MacBook",
+        deviceType: "mac",
+        publicKey: keys.publicKey,
+        clientVersion: "0.52.0",
+      }),
     );
     assert.equal(createdResponse.status, 201);
     const created = await createdResponse.json();
-    assert.deepEqual(Object.keys(created).sort(), ["expiresAt", "hostCommitment", "pollSecret", "requestId"]);
+    assert.deepEqual(Object.keys(created).sort(), [
+      "expiresAt",
+      "hostCommitment",
+      "pollSecret",
+      "requestId",
+    ]);
     assert.deepEqual(app.transports, ["lan"]);
     const secretHeader = { "aiden-pairing-secret": created.pollSecret };
 
@@ -148,7 +164,9 @@ test("an approved request round-trips over HTTP and its credential authenticates
     });
     assert.equal(app.requests.list()[0]?.matchCode, matchCode);
 
-    const polling = fetch(`${app.base}/pairing/requests/${created.requestId}`, { headers: secretHeader });
+    const polling = fetch(`${app.base}/pairing/requests/${created.requestId}`, {
+      headers: secretHeader,
+    });
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal((await app.requests.respond(created.requestId, "allow"))?.state, "approved");
     const pollResponse = await polling;
@@ -179,7 +197,9 @@ test("an approved request round-trips over HTTP and its credential authenticates
     for (const entry of requestLogs) {
       assert.equal(JSON.stringify(entry).includes(created.requestId), false);
     }
-    assert.ok(requestLogs.some((entry) => entry.routePath === "/pairing/requests/:requestId/reveal"));
+    assert.ok(
+      requestLogs.some((entry) => entry.routePath === "/pairing/requests/:requestId/reveal"),
+    );
   } finally {
     await app.close();
   }
@@ -203,9 +223,15 @@ test("request routes refuse phones, browsers, bad secrets and a closed host with
     assert.equal(browser.status, 403);
 
     const created = await (
-      await fetch(`${app.base}/pairing/requests`, json({ deviceName: "Mac", deviceType: "linux", publicKey }))
+      await fetch(
+        `${app.base}/pairing/requests`,
+        json({ deviceName: "Mac", deviceType: "linux", publicKey }),
+      )
     ).json();
-    const wrongSecrets: Array<Record<string, string>> = [{}, { "aiden-pairing-secret": randomBytes(32).toString("base64url") }];
+    const wrongSecrets: Array<Record<string, string>> = [
+      {},
+      { "aiden-pairing-secret": randomBytes(32).toString("base64url") },
+    ];
     for (const headers of wrongSecrets) {
       const poll = await fetch(`${app.base}/pairing/requests/${created.requestId}`, { headers });
       assert.equal(poll.status, 404);
@@ -228,12 +254,17 @@ test("request routes refuse phones, browsers, bad secrets and a closed host with
       headers: secretHeader,
     });
     assert.deepEqual(await cancelled.json(), { requestId: created.requestId, state: "cancelled" });
-    const after = await (await fetch(`${app.base}/pairing/requests/${created.requestId}`, { headers: secretHeader })).json();
+    const after = await (
+      await fetch(`${app.base}/pairing/requests/${created.requestId}`, { headers: secretHeader })
+    ).json();
     assert.equal(after.state, "cancelled");
     assert.equal("envelope" in after, false);
 
     app.setAccepting(false);
-    assert.equal((await (await fetch(`${app.base}/health?detail=host`)).json()).pairingRequests, false);
+    assert.equal(
+      (await (await fetch(`${app.base}/health?detail=host`)).json()).pairingRequests,
+      false,
+    );
     const refused = await fetch(
       `${app.base}/pairing/requests`,
       json({ deviceName: "Mac", deviceType: "mac", publicKey }),
@@ -281,7 +312,11 @@ test("requests through Tailscale Serve resolve the Tailscale identity", async ()
   try {
     const response = await fetch(
       `${app.base}/pairing/requests`,
-      json({ deviceName: "Mac", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey }),
+      json({
+        deviceName: "Mac",
+        deviceType: "mac",
+        publicKey: generatePairingRequestKeyPair().publicKey,
+      }),
     );
     assert.equal(response.status, 201);
     assert.deepEqual(app.transports, ["tailscale"]);
@@ -299,7 +334,14 @@ async function admissions(
   for (let index = 0; index < attempts; index += 1) {
     const response = await fetch(
       `${base}/pairing/requests`,
-      json({ deviceName: "Mac", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey }, headers),
+      json(
+        {
+          deviceName: "Mac",
+          deviceType: "mac",
+          publicKey: generatePairingRequestKeyPair().publicKey,
+        },
+        headers,
+      ),
     );
     statuses.push(response.status);
     await response.arrayBuffer();
@@ -324,7 +366,9 @@ test("forwarding headers sent straight to the LAN listener do not reset a source
   try {
     const statuses: number[] = [];
     for (let index = 0; index < 6; index += 1) {
-      statuses.push(...await admissions(app.base, { "x-forwarded-for": `198.51.100.${index}` }, 1));
+      statuses.push(
+        ...(await admissions(app.base, { "x-forwarded-for": `198.51.100.${index}` }, 1)),
+      );
     }
     assert.equal(statuses[statuses.length - 1], 429);
   } finally {
@@ -337,11 +381,18 @@ test("a host without the request service answers the routes as not found", async
   try {
     const response = await fetch(
       `${app.base}/pairing/requests`,
-      json({ deviceName: "Mac", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey }),
+      json({
+        deviceName: "Mac",
+        deviceType: "mac",
+        publicKey: generatePairingRequestKeyPair().publicKey,
+      }),
     );
     assert.equal(response.status, 404);
     assert.equal((await errorOf(response)).code, "not_found");
-    assert.equal((await (await fetch(`${app.base}/health?detail=host`)).json()).pairingRequests, false);
+    assert.equal(
+      (await (await fetch(`${app.base}/health?detail=host`)).json()).pairingRequests,
+      false,
+    );
   } finally {
     await app.close();
   }
@@ -352,7 +403,10 @@ test("a long-poll the requester abandons never counts as collecting the credenti
   try {
     const keys = generatePairingRequestKeyPair();
     const created = await (
-      await fetch(`${app.base}/pairing/requests`, json({ deviceName: "Mac", deviceType: "mac", publicKey: keys.publicKey }))
+      await fetch(
+        `${app.base}/pairing/requests`,
+        json({ deviceName: "Mac", deviceType: "mac", publicKey: keys.publicKey }),
+      )
     ).json();
     const secretHeader = { "aiden-pairing-secret": created.pollSecret };
     await (

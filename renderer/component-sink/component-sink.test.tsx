@@ -23,8 +23,10 @@ const NOT_IN_SINK: Record<string, string> = {
   ScrollAreaFooterStack: "part of the chat scroller",
   ErrorBoundary: "a wrapper; its fallback, ErrorBoundaryView, is shown",
   SettingsAnchorContext: "a React context, not a component",
-  SurfaceCovered: "a context wrapper that renders no element; it hides hover cards under an expanded helper chat",
-  DismissHoverSurfaces: "a context wrapper that renders no element; it closes hover cards when a side panel opens",
+  SurfaceCovered:
+    "a context wrapper that renders no element; it hides hover cards under an expanded helper chat",
+  DismissHoverSurfaces:
+    "a context wrapper that renders no element; it closes hover cards when a side panel opens",
 };
 
 const MODULES: Record<string, unknown>[] = [ui, uiPrimitives, infoHint, settingsPage];
@@ -36,7 +38,8 @@ function exportedComponents(): Map<unknown, string[]> {
     for (const [name, value] of Object.entries(module)) {
       if (!/^[A-Z]/u.test(name)) continue;
       const component =
-        typeof value === "function" || (typeof value === "object" && value !== null && "$$typeof" in value);
+        typeof value === "function" ||
+        (typeof value === "object" && value !== null && "$$typeof" in value);
       if (!component) continue;
       byValue.set(value, [...(byValue.get(value) ?? []), name]);
     }
@@ -47,14 +50,20 @@ function exportedComponents(): Map<unknown, string[]> {
 function sinkClaims(): Set<string> {
   const claims = new Set<string>();
   for (const element of document.querySelectorAll("[data-sink]")) {
-    for (const name of (element.getAttribute("data-sink") ?? "").split(/\s+/u)) if (name) claims.add(name);
+    for (const name of (element.getAttribute("data-sink") ?? "").split(/\s+/u))
+      if (name) claims.add(name);
   }
   return claims;
 }
 
 let savedAppearance: string | null = null;
 beforeEach(() => {
-  savedAppearance = JSON.stringify({ version: 1, mode: "light", light: { preset: "paper" }, dark: { preset: "aiden" } });
+  savedAppearance = JSON.stringify({
+    version: 1,
+    mode: "light",
+    light: { preset: "paper" },
+    dark: { preset: "aiden" },
+  });
   localStorage.setItem(APPEARANCE_STORAGE_KEY, savedAppearance);
 });
 afterEach(() => {
@@ -83,14 +92,31 @@ test("the sink renders each state it lists", () => {
   const buttons = within(document.querySelector('[data-sink="Button"]') as HTMLElement);
   // Nine variants, each at rest, disabled and loading.
   assert.equal(buttons.getAllByRole("button", { name: "Save" }).length, 18);
-  assert.equal(buttons.getAllByRole("button", { name: "Saving…" }).filter((button) => button.getAttribute("aria-busy") === "true").length, 9);
+  assert.equal(
+    buttons
+      .getAllByRole("button", { name: "Saving…" })
+      .filter((button) => button.getAttribute("aria-busy") === "true").length,
+    9,
+  );
 
-  assert.equal((screen.getByRole("textbox", { name: "Filled" }) as HTMLInputElement).value, "Weekly report");
-  assert.equal((screen.getByRole("textbox", { name: "Disabled" }) as HTMLInputElement).disabled, true);
-  assert.equal(screen.getByRole("textbox", { name: "Invalid" }).getAttribute("aria-invalid"), "true");
+  assert.equal(
+    (screen.getByRole("textbox", { name: "Filled" }) as HTMLInputElement).value,
+    "Weekly report",
+  );
+  assert.equal(
+    (screen.getByRole("textbox", { name: "Disabled" }) as HTMLInputElement).disabled,
+    true,
+  );
+  assert.equal(
+    screen.getByRole("textbox", { name: "Invalid" }).getAttribute("aria-invalid"),
+    "true",
+  );
   assert.equal(screen.getByRole("switch", { name: "On" }).getAttribute("aria-checked"), "true");
   assert.equal(screen.getByRole("switch", { name: "Disabled on" }).hasAttribute("disabled"), true);
-  assert.equal(screen.getByRole("checkbox", { name: "Toggle me" }).getAttribute("aria-checked"), "true");
+  assert.equal(
+    screen.getByRole("checkbox", { name: "Toggle me" }).getAttribute("aria-checked"),
+    "true",
+  );
   assert.equal(screen.getByRole("radio", { name: "Unavailable" }).hasAttribute("disabled"), true);
   const badges = within(document.querySelector('[data-sink="Badge"]') as HTMLElement);
   for (const color of ["gray", "green", "red", "blue", "warning"]) {
@@ -112,12 +138,31 @@ test("dialog and menu triggers open the real primitives", async () => {
   fireEvent.click(within(alert).getByRole("button", { name: "Cancel" }));
   await waitFor(() => assert.equal(screen.queryByRole("alertdialog"), null));
 
-  fireEvent.pointerDown(screen.getByRole("button", { name: "Open menu" }), { button: 0, pointerType: "mouse" });
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Open menu" }), {
+    button: 0,
+    pointerType: "mouse",
+  });
   const menu = await screen.findByRole("menu");
-  assert.equal(within(menu).getByRole("menuitem", { name: "Share (unavailable)" }).getAttribute("aria-disabled"), "true");
-  assert.equal(within(menu).getByRole("menuitemcheckbox", { name: /Pinned/u }).getAttribute("aria-checked"), "true");
-  assert.equal(within(menu).getByRole("menuitemradio", { name: "Recent first" }).getAttribute("aria-checked"), "true");
-  assert.equal(within(menu).getByRole("menuitem", { name: "Move to" }).getAttribute("aria-haspopup"), "menu");
+  assert.equal(
+    within(menu)
+      .getByRole("menuitem", { name: "Share (unavailable)" })
+      .getAttribute("aria-disabled"),
+    "true",
+  );
+  assert.equal(
+    within(menu)
+      .getByRole("menuitemcheckbox", { name: /Pinned/u })
+      .getAttribute("aria-checked"),
+    "true",
+  );
+  assert.equal(
+    within(menu).getByRole("menuitemradio", { name: "Recent first" }).getAttribute("aria-checked"),
+    "true",
+  );
+  assert.equal(
+    within(menu).getByRole("menuitem", { name: "Move to" }).getAttribute("aria-haspopup"),
+    "menu",
+  );
 });
 
 test("the toolbar applies a preset and scheme the way the app does, and keeps the app's cached appearance", async () => {
@@ -132,7 +177,10 @@ test("the toolbar applies a preset and scheme the way the app does, and keeps th
   await waitFor(() => assert.equal(root.dataset.appearanceScheme, "dark"));
   assert.equal(root.classList.contains("dark"), true);
 
-  fireEvent.pointerDown(screen.getByRole("button", { name: /^Theme preset:/u }), { button: 0, pointerType: "mouse" });
+  fireEvent.pointerDown(screen.getByRole("button", { name: /^Theme preset:/u }), {
+    button: 0,
+    pointerType: "mouse",
+  });
   const menu = await screen.findByRole("menu");
   act(() => {
     fireEvent.click(within(menu).getByRole("menuitemradio", { name: "Moss" }));

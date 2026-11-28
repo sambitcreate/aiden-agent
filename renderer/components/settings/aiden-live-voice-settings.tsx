@@ -9,7 +9,15 @@ import {
   useAidenLivePreferences,
   type AidenLivePreferencesPatch,
 } from "../assistant/use-aiden-live-preferences";
-import { Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui";
+import {
+  Field,
+  FieldSet,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../ui";
 
 const RIBBON_COLORS: ReadonlyArray<{ id: AidenLiveRibbonColors; label: string }> = [
   { id: "spectrum", label: "Spectrum" },
@@ -28,7 +36,10 @@ export function AidenLiveVoiceAndLookFields({
 }): React.ReactElement {
   return (
     <FieldSet title="Voice and look">
-      <Field label="Voice" description="How Live sounds. A new voice starts the next time you start Live.">
+      <Field
+        label="Voice"
+        description="How Live sounds. A new voice starts the next time you start Live."
+      >
         <Select
           value={preferences.voice}
           disabled={disabled}
@@ -46,7 +57,10 @@ export function AidenLiveVoiceAndLookFields({
           </SelectContent>
         </Select>
       </Field>
-      <Field label="Speaking speed" description="How fast Live talks. Its voice keeps the same pitch.">
+      <Field
+        label="Speaking speed"
+        description="How fast Live talks. Its voice keeps the same pitch."
+      >
         <Select
           value={String(preferences.speed)}
           disabled={disabled}
@@ -68,7 +82,9 @@ export function AidenLiveVoiceAndLookFields({
         <Select
           value={preferences.ribbonColors}
           disabled={disabled}
-          onValueChange={(colors) => onChange({ aidenLiveRibbonColors: colors as AidenLiveRibbonColors })}
+          onValueChange={(colors) =>
+            onChange({ aidenLiveRibbonColors: colors as AidenLiveRibbonColors })
+          }
         >
           <SelectTrigger size="small" className="w-48 max-w-full" aria-label="Live ribbon colours">
             <SelectValue />
@@ -89,6 +105,10 @@ export function AidenLiveVoiceAndLookFields({
 export function AidenLiveVoiceAndLook(): React.ReactElement {
   const { preferences, loaded, save } = useAidenLivePreferences();
   return (
-    <AidenLiveVoiceAndLookFields preferences={preferences} disabled={!loaded} onChange={(patch) => void save(patch)} />
+    <AidenLiveVoiceAndLookFields
+      preferences={preferences}
+      disabled={!loaded}
+      onChange={(patch) => void save(patch)}
+    />
   );
 }

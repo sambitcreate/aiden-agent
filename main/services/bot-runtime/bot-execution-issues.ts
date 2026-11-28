@@ -22,7 +22,11 @@ export type BotExecutionRetryResult =
 
 export interface BotExecutionIssueOptions {
   /** Resume the Bot's interrupted run once, as the person's Resume would. */
-  retry?(botId: string, claim: BotExecutionClaim, attempt: number): Promise<BotExecutionRetryResult>;
+  retry?(
+    botId: string,
+    claim: BotExecutionClaim,
+    attempt: number,
+  ): Promise<BotExecutionRetryResult>;
   setTimer?(fn: () => void, ms: number): { cancel(): void };
   onError?(botId: string, error: unknown): void;
 }
@@ -41,15 +45,37 @@ export function createBotExecutionIssues(
     retries.delete(claimId);
   }
 
-  async function raise(botId: string, claim: BotExecutionClaim, message: string, dispatchId?: string): Promise<void> {
+  async function raise(
+    botId: string,
+    claim: BotExecutionClaim,
+    message: string,
+    dispatchId?: string,
+  ): Promise<void> {
     // A cost decision and a blocked routine wait on the person. A chat run's
     // block is a heads-up: its "Interrupted" card with Resume is already there.
     const quiet = dispatchId === undefined && claim.routineId === undefined;
-    await issues.raise({ botId, kind: "preflight_failed", dedupeKey: dispatchId ? `execution-cost:${dispatchId}` : `execution:${claim.id}`, title: "Review this run before resuming", body: message, ...(claim.routineId ? { routineId: claim.routineId } : {}), actions: [{ kind: "open_chat" }], ...(quiet ? { quiet: true } : {}) });
+    await issues.raise({
+      botId,
+      kind: "preflight_failed",
+      dedupeKey: dispatchId ? `execution-cost:${dispatchId}` : `execution:${claim.id}`,
+      title: "Review this run before resuming",
+      body: message,
+      ...(claim.routineId ? { routineId: claim.routineId } : {}),
+      actions: [{ kind: "open_chat" }],
+      ...(quiet ? { quiet: true } : {}),
+    });
   }
 
-  async function blocked(botId: string, claim: BotExecutionClaim, message: string, kind: "spending_unknown" | "unavailable"): Promise<void> {
-    const pending = kind === "spending_unknown" ? await spending.pendingDispatch(botExecutionSpendingOwner(claim)) : undefined;
+  async function blocked(
+    botId: string,
+    claim: BotExecutionClaim,
+    message: string,
+    kind: "spending_unknown" | "unavailable",
+  ): Promise<void> {
+    const pending =
+      kind === "spending_unknown"
+        ? await spending.pendingDispatch(botExecutionSpendingOwner(claim))
+        : undefined;
     // An uncertain provider cost is the person's decision: it is never retried.
     if (pending || !options.retry || !options.setTimer) {
       forget(claim.id);
@@ -71,7 +97,10 @@ export function createBotExecutionIssues(
       delete state.timer;
       // A resume that blocks again re-enters `blocked()` on its own and so
       // counts as the next try there; it must not be counted twice here.
-      const untouched = () => retries.get(claim.id) === state && state.attempts === attempt + 1 && state.timer === undefined;
+      const untouched = () =>
+        retries.get(claim.id) === state &&
+        state.attempts === attempt + 1 &&
+        state.timer === undefined;
       void options.retry!(botId, claim, attempt + 1)
         .then((result) => {
           if (retries.get(claim.id) !== state) return;
@@ -91,8 +120,16 @@ export function createBotExecutionIssues(
 
   return {
     blocked,
-    async settled(botId: string, claim: BotExecutionClaim) { forget(claim.id); await issues.resolve(botId, `execution:${claim.id}`, "fixed"); },
-    async dismissed(botId: string, claim: BotExecutionClaim) { forget(claim.id); await issues.resolve(botId, `execution:${claim.id}`, "dismissed"); },
-    async acknowledged(botId: string, dispatchId: string) { await issues.resolve(botId, `execution-cost:${dispatchId}`, "fixed"); },
+    async settled(botId: string, claim: BotExecutionClaim) {
+      forget(claim.id);
+      await issues.resolve(botId, `execution:${claim.id}`, "fixed");
+    },
+    async dismissed(botId: string, claim: BotExecutionClaim) {
+      forget(claim.id);
+      await issues.resolve(botId, `execution:${claim.id}`, "dismissed");
+    },
+    async acknowledged(botId: string, dispatchId: string) {
+      await issues.resolve(botId, `execution-cost:${dispatchId}`, "fixed");
+    },
   };
 }

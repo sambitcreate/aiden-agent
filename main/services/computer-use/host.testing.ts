@@ -1,10 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { CuaDriverInvocation } from "./contract.js";
 import { CuaDriverError } from "./contract.js";
-import {
-  CuaDriverHost,
-  type CuaDriverHostOptions,
-} from "./host.js";
+import { CuaDriverHost, type CuaDriverHostOptions } from "./host.js";
 import { verifyCuaDriverBridgeProcess } from "./binary.js";
 
 export interface CuaDriverHostTestHooks {

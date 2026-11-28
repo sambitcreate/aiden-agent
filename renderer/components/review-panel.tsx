@@ -67,9 +67,7 @@ function useFileDiff(
   expectedReviewSnapshot?: string,
   comparison?: GitComparison,
 ) {
-  const requestKey = workspaceId && path
-    ? [workspaceId, path, snapshotKey].join("\u0000")
-    : null;
+  const requestKey = workspaceId && path ? [workspaceId, path, snapshotKey].join("\u0000") : null;
   const [state, setState] = React.useState<DiffLoadState>({
     data: null,
     error: null,
@@ -86,7 +84,8 @@ function useFileDiff(
     if (!comparison && !expectedReviewSnapshot) {
       setState({
         data: null,
-        error: "This review is too large to freeze safely. Refresh changes or open the file directly.",
+        error:
+          "This review is too large to freeze safely. Refresh changes or open the file directly.",
         loading: false,
         requestKey,
       });
@@ -163,7 +162,18 @@ export function parseUnifiedDiff(patch: string): DiffLine[] {
       result.push({ key: `${index}-hunk`, kind: "hunk", content: line });
       return;
     }
-    if (line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("new file ") || line.startsWith("deleted file ") || line.startsWith("similarity ") || line.startsWith("rename ") || line.startsWith("Binary ") || line === "\\ No newline at end of file") {
+    if (
+      line.startsWith("diff --git") ||
+      line.startsWith("index ") ||
+      line.startsWith("--- ") ||
+      line.startsWith("+++ ") ||
+      line.startsWith("new file ") ||
+      line.startsWith("deleted file ") ||
+      line.startsWith("similarity ") ||
+      line.startsWith("rename ") ||
+      line.startsWith("Binary ") ||
+      line === "\\ No newline at end of file"
+    ) {
       result.push({ key: `${index}-meta`, kind: "meta", content: line });
       return;
     }
@@ -200,7 +210,10 @@ function ReviewSkeleton() {
       {[72, 86, 64, 78].map((width, index) => (
         <div key={index} className="flex h-10 items-center gap-3 rounded-control bg-well px-3">
           <span className="size-5 animate-pulse rounded-md bg-control" />
-          <span className="h-2.5 animate-pulse rounded-pill bg-control" style={{ width: `${width}%` }} />
+          <span
+            className="h-2.5 animate-pulse rounded-pill bg-control"
+            style={{ width: `${width}%` }}
+          />
         </div>
       ))}
     </div>
@@ -255,7 +268,9 @@ function DiffViewer({ diff }: { diff: GitFileDiff }) {
             </span>
             <pre className="m-0 whitespace-pre px-3 text-primary">
               {line.kind === "addition" || line.kind === "deletion" ? (
-                <span className="sr-only">{line.kind === "addition" ? "Added line: " : "Deleted line: "}</span>
+                <span className="sr-only">
+                  {line.kind === "addition" ? "Added line: " : "Deleted line: "}
+                </span>
               ) : null}
               <span className="diff-line-marker" aria-hidden="true">
                 {line.kind === "addition" ? "+" : line.kind === "deletion" ? "−" : " "}
@@ -353,9 +368,12 @@ function ReviewFileContent({
                 {STATUS_LABEL[file.status]}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-small-strong text-primary">{fileName(file.path)}</span>
+                <span className="block truncate text-small-strong text-primary">
+                  {fileName(file.path)}
+                </span>
                 <span className="block truncate text-mini text-tertiary">
-                  {file.previousPath ? `${file.previousPath} → ` : ""}{parentPath(file.path) || "Workspace root"}
+                  {file.previousPath ? `${file.previousPath} → ` : ""}
+                  {parentPath(file.path) || "Workspace root"}
                 </span>
               </span>
               {file.binary ? <Binary className="size-3.5 shrink-0 text-tertiary" /> : null}
@@ -388,14 +406,22 @@ function ReviewFileContent({
           {diff.loading && !diff.data ? (
             <div className="space-y-2 p-4" aria-label="Loading diff">
               {[88, 70, 92, 56, 76, 82].map((width, index) => (
-                <div key={index} className="h-2 animate-pulse rounded-pill bg-control" style={{ width: `${width}%` }} />
+                <div
+                  key={index}
+                  className="h-2 animate-pulse rounded-pill bg-control"
+                  style={{ width: `${width}%` }}
+                />
               ))}
             </div>
           ) : diff.error && !diff.data ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
               <GitCompareArrows className="size-5 text-tertiary" />
-              <Text variant="small" color="secondary" as="p">{diff.error}</Text>
-              <Button size="small" onClick={() => setDiffRetryKey((value) => value + 1)}>Retry diff</Button>
+              <Text variant="small" color="secondary" as="p">
+                {diff.error}
+              </Text>
+              <Button size="small" onClick={() => setDiffRetryKey((value) => value + 1)}>
+                Retry diff
+              </Button>
             </div>
           ) : diff.data ? (
             <div className="flex h-full min-h-0 flex-col">
@@ -487,12 +513,16 @@ function WorkingChangesPanel({
         <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
           <AlertCircle className="size-5 text-red" />
           <div>
-            <Text variant="strong" as="p">Review unavailable</Text>
+            <Text variant="strong" as="p">
+              Review unavailable
+            </Text>
             <Text variant="small" color="secondary" as="p" className="mt-1 max-w-sm">
               {reviewError}
             </Text>
           </div>
-          <Button size="small" onClick={() => void review.refetch()}>Try again</Button>
+          <Button size="small" onClick={() => void review.refetch()}>
+            Try again
+          </Button>
         </div>
       ) : review.data && !review.data.isRepo ? (
         <EmptyState
@@ -505,7 +535,9 @@ function WorkingChangesPanel({
           <span className="grid size-9 place-items-center rounded-full bg-status-green-surface text-status-green">
             <Check className="size-4.5" />
           </span>
-          <Text variant="strong" as="p">Working tree is clean</Text>
+          <Text variant="strong" as="p">
+            Working tree is clean
+          </Text>
           <Text variant="small" color="secondary" as="p" className="max-w-sm">
             New edits will appear here without moving you away from the conversation.
           </Text>
@@ -537,7 +569,9 @@ interface ComparisonTarget {
   remote: boolean;
 }
 
-function comparisonTargets(branches: ReturnType<typeof useGitBranches>["data"]): ComparisonTarget[] {
+function comparisonTargets(
+  branches: ReturnType<typeof useGitBranches>["data"],
+): ComparisonTarget[] {
   if (!branches?.isRepo) return [];
   const local = branches.branches
     .filter((branch) => branch !== branches.current)
@@ -556,10 +590,13 @@ function suggestedComparisonTarget(
   defaultBranch: string | undefined,
 ): string | undefined {
   const upstreamTarget = upstream ? `refs/remotes/${upstream}` : undefined;
-  return targets.find((target) => target.value === upstreamTarget)?.value
-    ?? targets.find((target) => !target.remote && target.label === defaultBranch)?.value
-    ?? targets.find((target) => target.remote && target.label.endsWith(`/${defaultBranch ?? ""}`))?.value
-    ?? targets[0]?.value;
+  return (
+    targets.find((target) => target.value === upstreamTarget)?.value ??
+    targets.find((target) => !target.remote && target.label === defaultBranch)?.value ??
+    targets.find((target) => target.remote && target.label.endsWith(`/${defaultBranch ?? ""}`))
+      ?.value ??
+    targets[0]?.value
+  );
 }
 
 function CompareBranchPanel({
@@ -579,7 +616,9 @@ function CompareBranchPanel({
   React.useEffect(() => setTargetRef(undefined), [workspace?.id]);
   React.useEffect(() => {
     if (targetRef && targets.some((target) => target.value === targetRef)) return;
-    setTargetRef(suggestedComparisonTarget(targets, branches.data?.upstream, branches.data?.defaultBranch));
+    setTargetRef(
+      suggestedComparisonTarget(targets, branches.data?.upstream, branches.data?.defaultBranch),
+    );
   }, [branches.data?.defaultBranch, branches.data?.upstream, targetRef, targets]);
 
   const comparison = useGitComparison(workspace?.id, targetRef, active && available);
@@ -595,10 +634,22 @@ function CompareBranchPanel({
   };
 
   if (!workspace?.folderPath) {
-    return <EmptyState className="h-full" title="No workspace folder" description="Choose a local workspace to compare branches." />;
+    return (
+      <EmptyState
+        className="h-full"
+        title="No workspace folder"
+        description="Choose a local workspace to compare branches."
+      />
+    );
   }
   if (workspace.permission === "none") {
-    return <EmptyState className="h-full" title="File access is off" description="Enable workspace access before comparing branches." />;
+    return (
+      <EmptyState
+        className="h-full"
+        title="File access is off"
+        description="Enable workspace access before comparing branches."
+      />
+    );
   }
 
   return (
@@ -607,11 +658,17 @@ function CompareBranchPanel({
         <GitBranch className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
         <Text variant="small-strong" truncate className="min-w-0 max-w-[32%] shrink-0">
           {comparison.data
-            ? comparison.data.currentBranch ?? "Detached HEAD"
-            : branches.data?.current ?? workspace.name}
+            ? (comparison.data.currentBranch ?? "Detached HEAD")
+            : (branches.data?.current ?? workspace.name)}
         </Text>
-        <span className="text-small text-tertiary" aria-hidden="true">with</span>
-        <Select value={targetRef ?? ""} onValueChange={setTargetRef} disabled={targets.length === 0}>
+        <span className="text-small text-tertiary" aria-hidden="true">
+          with
+        </span>
+        <Select
+          value={targetRef ?? ""}
+          onValueChange={setTargetRef}
+          disabled={targets.length === 0}
+        >
           <SelectTrigger size="small" className="min-w-0 flex-1" aria-label="Comparison branch">
             <SelectValue placeholder="Choose branch" />
           </SelectTrigger>
@@ -632,14 +689,19 @@ function CompareBranchPanel({
           aria-label="Refresh branch comparison"
           title="Refresh local branch references"
         >
-          <RefreshCw className={cn((branches.isFetching || comparison.isFetching) && "animate-spin")} />
+          <RefreshCw
+            className={cn((branches.isFetching || comparison.isFetching) && "animate-spin")}
+          />
         </Button>
       </div>
 
       {comparison.data ? (
         <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-separator bg-well/50 px-3 text-small text-secondary">
           <span>Compared from merge base · no fetch</span>
-          <span className="shrink-0 font-mono tabular-nums" aria-label={`${comparison.data.ahead} commits ahead, ${comparison.data.behind} commits behind`}>
+          <span
+            className="shrink-0 font-mono tabular-nums"
+            aria-label={`${comparison.data.ahead} commits ahead, ${comparison.data.behind} commits behind`}
+          >
             ↑{comparison.data.ahead} ↓{comparison.data.behind}
           </span>
         </div>
@@ -657,25 +719,45 @@ function CompareBranchPanel({
         <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
           <AlertCircle className="size-5 text-support-red" aria-hidden="true" />
           <div>
-            <Text variant="strong" as="p">Branch list unavailable</Text>
-            <Text variant="small" color="secondary" as="p" className="mt-1 max-w-sm">{branchesError}</Text>
+            <Text variant="strong" as="p">
+              Branch list unavailable
+            </Text>
+            <Text variant="small" color="secondary" as="p" className="mt-1 max-w-sm">
+              {branchesError}
+            </Text>
           </div>
-          <Button size="small" onClick={() => void branches.refetch()}>Try again</Button>
+          <Button size="small" onClick={() => void branches.refetch()}>
+            Try again
+          </Button>
         </div>
       ) : branches.data && !branches.data.isRepo ? (
-        <EmptyState className="h-full" title="Not a Git workspace" description="Branch comparison is available for Git workspaces. Files remains usable." />
+        <EmptyState
+          className="h-full"
+          title="Not a Git workspace"
+          description="Branch comparison is available for Git workspaces. Files remains usable."
+        />
       ) : targets.length === 0 ? (
-        <EmptyState className="h-full" title="No branch to compare" description="Create another local branch or fetch one outside Aiden, then refresh. Aiden never fetches implicitly." />
+        <EmptyState
+          className="h-full"
+          title="No branch to compare"
+          description="Create another local branch or fetch one outside Aiden, then refresh. Aiden never fetches implicitly."
+        />
       ) : comparison.isLoading && !comparison.data ? (
         <ReviewSkeleton />
       ) : comparisonError && !comparison.data ? (
         <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
           <AlertCircle className="size-5 text-support-red" aria-hidden="true" />
           <div>
-            <Text variant="strong" as="p">Comparison unavailable</Text>
-            <Text variant="small" color="secondary" as="p" className="mt-1 max-w-sm">{comparisonError}</Text>
+            <Text variant="strong" as="p">
+              Comparison unavailable
+            </Text>
+            <Text variant="small" color="secondary" as="p" className="mt-1 max-w-sm">
+              {comparisonError}
+            </Text>
           </div>
-          <Button size="small" onClick={() => void comparison.refetch()}>Try again</Button>
+          <Button size="small" onClick={() => void comparison.refetch()}>
+            Try again
+          </Button>
         </div>
       ) : comparison.data && comparison.data.files.length === 0 ? (
         <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
@@ -683,7 +765,9 @@ function CompareBranchPanel({
             <Check className="size-4.5" aria-hidden="true" />
           </span>
           <Text variant="strong" as="p">
-            {comparison.data.ahead === 0 && comparison.data.behind === 0 ? "Branches are identical" : "No file differences"}
+            {comparison.data.ahead === 0 && comparison.data.behind === 0
+              ? "Branches are identical"
+              : "No file differences"}
           </Text>
           <Text variant="small" color="secondary" as="p" className="max-w-sm">
             {comparison.data.ahead === 0 && comparison.data.behind === 0
@@ -731,7 +815,11 @@ export function ReviewPanel({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-10 shrink-0 items-center border-b border-separator px-3">
-        <div className="flex items-center rounded-control bg-well p-0.5" role="tablist" aria-label="Review source">
+        <div
+          className="flex items-center rounded-control bg-well p-0.5"
+          role="tablist"
+          aria-label="Review source"
+        >
           {(["changes", "compare"] as const).map((nextMode, index, modes) => (
             <button
               key={nextMode}
@@ -745,13 +833,19 @@ export function ReviewPanel({
               onKeyDown={(event) => {
                 if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
                 event.preventDefault();
-                const nextIndex = event.key === "Home"
-                  ? 0
-                  : event.key === "End"
-                    ? modes.length - 1
-                    : (index + (event.key === "ArrowRight" ? 1 : -1) + modes.length) % modes.length;
+                const nextIndex =
+                  event.key === "Home"
+                    ? 0
+                    : event.key === "End"
+                      ? modes.length - 1
+                      : (index + (event.key === "ArrowRight" ? 1 : -1) + modes.length) %
+                        modes.length;
                 onModeChange(modes[nextIndex]);
-                requestAnimationFrame(() => document.querySelector<HTMLElement>(`#environment-review-${modes[nextIndex]}-tab`)?.focus());
+                requestAnimationFrame(() =>
+                  document
+                    .querySelector<HTMLElement>(`#environment-review-${modes[nextIndex]}-tab`)
+                    ?.focus(),
+                );
               }}
               className={cn(
                 "h-7 rounded-menu px-2.5 text-small-strong outline-none transition-colors focus-visible:outline-none",

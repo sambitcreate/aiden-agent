@@ -41,7 +41,11 @@ function fakePullRequest(entry: ReplayPullRequest): FakePullRequest {
     checks: [
       entry.checks === "pending"
         ? { name: "ci", status: "IN_PROGRESS" }
-        : { name: "ci", status: "COMPLETED", conclusion: entry.checks === "passing" ? "SUCCESS" : "FAILURE" },
+        : {
+            name: "ci",
+            status: "COMPLETED",
+            conclusion: entry.checks === "passing" ? "SUCCESS" : "FAILURE",
+          },
     ],
     createdAt: entry.number,
     updatedAt: entry.number,
@@ -59,7 +63,11 @@ test("a 30-minute session makes at least 70% fewer GitHub calls than the gh impl
     now: clock.now,
   });
   const recorded = recordingFetch((request, signal) => {
-    github.pullRequests.splice(0, Infinity, ...[...world.pullRequests.values()].map(fakePullRequest));
+    github.pullRequests.splice(
+      0,
+      Infinity,
+      ...[...world.pullRequests.values()].map(fakePullRequest),
+    );
     return github.responder(request, signal);
   });
   const api = new GitHubApi({
@@ -145,7 +153,9 @@ test("a 30-minute session makes at least 70% fewer GitHub calls than the gh impl
     },
   });
 
-  t.diagnostic(`GitHub calls: ${GH_BASELINE_CALLS} -> ${result.githubCalls}; notifications: ${GH_BASELINE_NOTIFICATIONS} -> ${result.notifications}`);
+  t.diagnostic(
+    `GitHub calls: ${GH_BASELINE_CALLS} -> ${result.githubCalls}; notifications: ${GH_BASELINE_NOTIFICATIONS} -> ${result.notifications}`,
+  );
   assert.ok(
     result.githubCalls <= GH_BASELINE_CALLS * 0.3,
     `expected at most ${Math.floor(GH_BASELINE_CALLS * 0.3)} calls, made ${result.githubCalls}`,

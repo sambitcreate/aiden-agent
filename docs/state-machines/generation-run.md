@@ -4,25 +4,25 @@ Inventory: `backend:M005`, `backend:M177`, and the terminal boundary of rank 8. 
 
 ## Axes
 
-| Axis | Values | Where it lives |
-|---|---|---|
-| Phase | initializing, running, settled | Which map holds the entry. `active.set` happens before `initializing.delete`, with no await between. Settled means neither map holds it. |
-| Stop | not requested, requested with first origin | `cancelRequested` and `cancellationOrigin` on the entry. A later origin never replaces the first. |
-| Renderer | attached, detached | `rendererDetached`. Detaching does not cancel work. |
-| Terminal report | failed, empty, finished | `decideGenerationTerminal`, from the runtime outcome and whether anything visible exists. |
-| Save outcome | saved, not saved | `persisted.error`. A finished reply that did not save reports `chat:error`, never `chat:done`. |
+| Axis            | Values                                     | Where it lives                                                                                                                           |
+| --------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase           | initializing, running, settled             | Which map holds the entry. `active.set` happens before `initializing.delete`, with no await between. Settled means neither map holds it. |
+| Stop            | not requested, requested with first origin | `cancelRequested` and `cancellationOrigin` on the entry. A later origin never replaces the first.                                        |
+| Renderer        | attached, detached                         | `rendererDetached`. Detaching does not cancel work.                                                                                      |
+| Terminal report | failed, empty, finished                    | `decideGenerationTerminal`, from the runtime outcome and whether anything visible exists.                                                |
+| Save outcome    | saved, not saved                           | `persisted.error`. A finished reply that did not save reports `chat:error`, never `chat:done`.                                           |
 
 ## Ending a run
 
-| Path | Who ends it | Terminal event |
-|---|---|---|
-| Registration throws inside `handoff` | `start`, after the lease is released | `start` rejects |
-| Preparation throws, Stop requested | Catch around `prepareGeneration` | `chat:done` with `cancelled`, `start` resolves `false` |
-| Preparation throws, no Stop | The same catch | `start` rejects |
-| Agent setup throws | Catch around setup, with or without Stop as above | As above |
-| Stop arrives just after promotion | `abandonPromotedRun` | `chat:done` with `cancelled`, `start` resolves `false` |
-| Anything else thrown before the completion task | `runAdmittedGeneration` through `escape.settle` | `start` rejects |
-| Runtime returns or throws | The completion task's `finally` | `chat:done` or `chat:error` |
+| Path                                            | Who ends it                                       | Terminal event                                         |
+| ----------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------ |
+| Registration throws inside `handoff`            | `start`, after the lease is released              | `start` rejects                                        |
+| Preparation throws, Stop requested              | Catch around `prepareGeneration`                  | `chat:done` with `cancelled`, `start` resolves `false` |
+| Preparation throws, no Stop                     | The same catch                                    | `start` rejects                                        |
+| Agent setup throws                              | Catch around setup, with or without Stop as above | As above                                               |
+| Stop arrives just after promotion               | `abandonPromotedRun`                              | `chat:done` with `cancelled`, `start` resolves `false` |
+| Anything else thrown before the completion task | `runAdmittedGeneration` through `escape.settle`   | `start` rejects                                        |
+| Runtime returns or throws                       | The completion task's `finally`                   | `chat:done` or `chat:error`                            |
 
 `settleGeneration` is the only exit. It runs once per entry, so paths may overlap safely. It runs every step even if one throws, and rethrows the first failure afterwards. It removes only its own entry from the map, so a replacement under the same stream ID stays. The order is: skill reservation, Bot authority, approved artifacts, map entry, owner listener, approvals, questionnaires, settled broadcast. The broadcast is last so `chats:settled` never reaches a client while the chat still looks busy.
 

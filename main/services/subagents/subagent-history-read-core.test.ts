@@ -128,7 +128,9 @@ test("history request IDs reject private encodings before store lookup", () => {
     `run-${base64url}-suffix`,
     splitEncoding(base64url),
     splitEncoding(base32("/Users/alice/private.txt")),
-    splitEncoding(Buffer.from("OPENAI_API_KEY=correct-horse-battery-staple", "utf8").toString("hex")),
+    splitEncoding(
+      Buffer.from("OPENAI_API_KEY=correct-horse-battery-staple", "utf8").toString("hex"),
+    ),
   ];
   for (const identifier of unsafe) {
     assert.throws(
@@ -218,37 +220,29 @@ test("an active exact owner can read its referenced snapshot", async () => {
 
 test("history detail remains owner-checked across bounded effect projection", async () => {
   const owner = fakeOwner();
-  const result = await readSubagentHistoryDetailForOwner(
-    owner.owner,
-    "chat-1",
-    "run-1",
-    {
-      getChat: async () => chat,
-      getSnapshot: async () => snapshot(),
-      getEffectActivity: async () => [{
+  const result = await readSubagentHistoryDetailForOwner(owner.owner, "chat-1", "run-1", {
+    getChat: async () => chat,
+    getSnapshot: async () => snapshot(),
+    getEffectActivity: async () => [
+      {
         version: 1,
         kind: "shell",
         state: "unknown",
         label: "Command outcome unknown. Check the workspace before retrying.",
         updatedAt: 3,
-      }],
-    },
-  );
+      },
+    ],
+  });
   assert.equal(result?.snapshot.runId, "run-1");
   assert.equal(result?.effects[0]?.state, "unknown");
 
   const invalidated = fakeOwner();
   const effects = deferred<[]>();
-  const reading = readSubagentHistoryDetailForOwner(
-    invalidated.owner,
-    "chat-1",
-    "run-1",
-    {
-      getChat: async () => chat,
-      getSnapshot: async () => snapshot(),
-      getEffectActivity: () => effects.promise,
-    },
-  );
+  const reading = readSubagentHistoryDetailForOwner(invalidated.owner, "chat-1", "run-1", {
+    getChat: async () => chat,
+    getSnapshot: async () => snapshot(),
+    getEffectActivity: () => effects.promise,
+  });
   await new Promise<void>((resolve) => setImmediate(resolve));
   invalidated.invalidate();
   effects.resolve([]);
@@ -302,7 +296,10 @@ test("history detail adds the saved conversation only for a run proven to belong
   const refusals = [
     { getChat: async () => ({ ...chat, id: "chat-2" }), getSnapshot: async () => snapshot() },
     { getChat: async () => chat, getSnapshot: async () => ({ ...snapshot(), chatId: "chat-2" }) },
-    { getChat: async () => chat, getSnapshot: async () => ({ ...snapshot(), workspaceId: "workspace-2" }) },
+    {
+      getChat: async () => chat,
+      getSnapshot: async () => ({ ...snapshot(), workspaceId: "workspace-2" }),
+    },
     { getChat: async () => ({ ...chat, messages: [] }), getSnapshot: async () => snapshot() },
   ];
   for (const dependencies of refusals) {

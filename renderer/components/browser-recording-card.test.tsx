@@ -51,7 +51,10 @@ test("Play loads that recording's video from this computer and shows a player", 
     assert.ok(element);
     return element;
   });
-  assert.deepEqual(calls.map((call) => [call.channel, ...call.args]), [["browser:recording", RECORDING.id]]);
+  assert.deepEqual(
+    calls.map((call) => [call.channel, ...call.args]),
+    [["browser:recording", RECORDING.id]],
+  );
   assert.equal(video.getAttribute("src"), "blob:recording");
   assert.equal(blobs[0]?.type, "video/mp4");
   assert.equal(screen.queryByRole("button", { name: "Play" }), null);
@@ -93,7 +96,10 @@ test("Show in Finder asks for that recording, and a missing file says so", async
   render(<BrowserRecordingCard recording={RECORDING} />);
   fireEvent.click(screen.getByRole("button", { name: /Show in (Finder|folder)/u }));
   assert.ok(await screen.findByText("This recording is no longer on this computer."));
-  assert.deepEqual(calls.map((call) => [call.channel, ...call.args]), [["browser:reveal-recording", RECORDING.id]]);
+  assert.deepEqual(
+    calls.map((call) => [call.channel, ...call.args]),
+    [["browser:reveal-recording", RECORDING.id]],
+  );
 });
 
 test("sizes read in KB below a megabyte and never as zero", () => {

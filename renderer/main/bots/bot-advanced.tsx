@@ -56,7 +56,11 @@ import {
 } from "../../lib/queries";
 import { settingsLocation } from "../../lib/settings-section";
 import { rebaseBotEditorAccessDraft } from "../../shared/bot-editor-save";
-import { BOT_THINKING_LEVEL_LABELS, effectiveBotThinkingLevel, type BotRoutineThinkingLevel } from "../../shared/bot-routine-models";
+import {
+  BOT_THINKING_LEVEL_LABELS,
+  effectiveBotThinkingLevel,
+  type BotRoutineThinkingLevel,
+} from "../../shared/bot-routine-models";
 import {
   BOT_FULL_ACCESS_NOTICE_VERSION,
   nextBotFileScopeIds,
@@ -132,16 +136,21 @@ function ThinkingField({
 }) {
   const effective = effectiveBotThinkingLevel(supported, requested);
   if (!effective) return null;
-  const description = supported.length === 1
-    ? effective === "off"
-      ? "This model answers without thinking first."
-      : `This model always thinks at ${BOT_THINKING_LEVEL_LABELS[effective]}.`
-    : effective === requested
-      ? "More thinking can help with harder work, but replies take longer and cost more."
-      : `This model can’t use ${BOT_THINKING_LEVEL_LABELS[requested]}, so it uses ${BOT_THINKING_LEVEL_LABELS[effective]}.`;
+  const description =
+    supported.length === 1
+      ? effective === "off"
+        ? "This model answers without thinking first."
+        : `This model always thinks at ${BOT_THINKING_LEVEL_LABELS[effective]}.`
+      : effective === requested
+        ? "More thinking can help with harder work, but replies take longer and cost more."
+        : `This model can’t use ${BOT_THINKING_LEVEL_LABELS[requested]}, so it uses ${BOT_THINKING_LEVEL_LABELS[effective]}.`;
   return (
     <Field label="Thinking" description={description}>
-      <Select value={effective} disabled={disabled || supported.length < 2} onValueChange={(next) => onChange(next as BotRoutineThinkingLevel)}>
+      <Select
+        value={effective}
+        disabled={disabled || supported.length < 2}
+        onValueChange={(next) => onChange(next as BotRoutineThinkingLevel)}
+      >
         <SelectTrigger size="small" className="w-36 max-w-full" aria-label="Thinking">
           <SelectValue />
         </SelectTrigger>
@@ -168,7 +177,11 @@ function ModelSection({
   catalog: BotCapabilityCatalog;
   draft: BotAccessDraft;
   /** The chosen model's levels (absent while loading or unknown) and the Bot's requested level. */
-  thinking: { supported: readonly BotRoutineThinkingLevel[] | null | undefined; requested: BotRoutineThinkingLevel; onChange(next: BotRoutineThinkingLevel): void };
+  thinking: {
+    supported: readonly BotRoutineThinkingLevel[] | null | undefined;
+    requested: BotRoutineThinkingLevel;
+    onChange(next: BotRoutineThinkingLevel): void;
+  };
   disabled: boolean;
   onChange(next: BotAccessDraft): void;
   onSetUpModel(): void;
@@ -177,12 +190,16 @@ function ModelSection({
   const usingRecommended = sameBotModelChoice(recommended, draft);
   const primary = findBotModel(catalog, draft.providerId, draft.modelId);
   const visionAvailable = catalog.providers.some(
-    (candidate) => candidate.available && candidate.models.some((item) => item.available && item.supportsImages),
+    (candidate) =>
+      candidate.available && candidate.models.some((item) => item.available && item.supportsImages),
   );
   if (!firstAvailableModel(catalog)) {
     return (
       <FieldSet title="Model">
-        <Field label="No AI model yet" description="Add one in Settings → Providers so this Bot can reply.">
+        <Field
+          label="No AI model yet"
+          description="Add one in Settings → Providers so this Bot can reply."
+        >
           <Button size="small" variant="filled" onClick={onSetUpModel}>
             Set up
           </Button>
@@ -192,21 +209,33 @@ function ModelSection({
   }
   return (
     <FieldSet title="Model">
-      <Field label="Model" description={primary ? botModelCapabilityLabel(primary.model.supportsImages) : undefined}>
+      <Field
+        label="Model"
+        description={primary ? botModelCapabilityLabel(primary.model.supportsImages) : undefined}
+      >
         <BotModelPicker
           catalog={catalog}
           label="AI model"
           providerId={draft.providerId}
           modelId={draft.modelId}
-          recommended={recommended.providerId && recommended.modelId
-            ? { providerId: recommended.providerId, modelId: recommended.modelId }
-            : undefined}
+          recommended={
+            recommended.providerId && recommended.modelId
+              ? { providerId: recommended.providerId, modelId: recommended.modelId }
+              : undefined
+          }
           disabled={disabled}
-          onSelect={(providerId, modelId) => onChange({ ...draft, ...chooseBotModel(catalog, draft, providerId, modelId) })}
+          onSelect={(providerId, modelId) =>
+            onChange({ ...draft, ...chooseBotModel(catalog, draft, providerId, modelId) })
+          }
         />
       </Field>
       {thinking.supported?.length ? (
-        <ThinkingField supported={thinking.supported} requested={thinking.requested} disabled={disabled} onChange={thinking.onChange} />
+        <ThinkingField
+          supported={thinking.supported}
+          requested={thinking.requested}
+          disabled={disabled}
+          onChange={thinking.onChange}
+        />
       ) : null}
       {primary && !primary.model.supportsImages ? (
         visionAvailable ? (
@@ -222,7 +251,8 @@ function ModelSection({
               modelId={draft.visionModelId}
               disabled={disabled}
               onSelect={(providerId, modelId) =>
-                onChange({ ...draft, ...chooseBotVisionModel(catalog, draft, providerId, modelId) })}
+                onChange({ ...draft, ...chooseBotVisionModel(catalog, draft, providerId, modelId) })
+              }
             />
           </Field>
         ) : (
@@ -232,7 +262,10 @@ function ModelSection({
           />
         )
       ) : null}
-      <Field label="Recommended" description="The first model you set up, plus an image model when it reads text only.">
+      <Field
+        label="Recommended"
+        description="The first model you set up, plus an image model when it reads text only."
+      >
         <Button
           size="small"
           variant="filled"
@@ -281,7 +314,12 @@ function ToggleFields({
 }
 
 /** Advanced → Tools' picker: one tool this Bot will no longer use. */
-function DisableToolDialog({ open, onOpenChange, tools, onPick }: {
+function DisableToolDialog({
+  open,
+  onOpenChange,
+  tools,
+  onPick,
+}: {
   open: boolean;
   onOpenChange(open: boolean): void;
   tools: readonly BotTool[];
@@ -290,7 +328,14 @@ function DisableToolDialog({ open, onOpenChange, tools, onPick }: {
   const groups = new Map<string, BotTool[]>();
   for (const tool of tools) groups.set(tool.group, [...(groups.get(tool.group) ?? []), tool]);
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} title="Disable a tool" description="This Bot won’t use it until you turn it back on." confirmHidden cancelLabel="Cancel">
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Disable a tool"
+      description="This Bot won’t use it until you turn it back on."
+      confirmHidden
+      cancelLabel="Cancel"
+    >
       <Command label="Tools" className="rounded-card bg-well">
         <CommandInput placeholder="Search tools" aria-label="Search tools" />
         <CommandList className="h-[min(260px,calc(100vh-16rem))]">
@@ -298,10 +343,16 @@ function DisableToolDialog({ open, onOpenChange, tools, onPick }: {
           {[...groups].map(([group, items]) => (
             <CommandGroup key={group} heading={group}>
               {items.map((tool) => (
-                <CommandItem key={`${tool.key}:${tool.id}`} value={`${tool.label} ${tool.group} ${tool.key}:${tool.id}`} onSelect={() => onPick(tool)}>
+                <CommandItem
+                  key={`${tool.key}:${tool.id}`}
+                  value={`${tool.label} ${tool.group} ${tool.key}:${tool.id}`}
+                  onSelect={() => onPick(tool)}
+                >
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate">{tool.label}</span>
-                    {tool.description ? <span className="truncate text-small text-secondary">{tool.description}</span> : null}
+                    {tool.description ? (
+                      <span className="truncate text-small text-secondary">{tool.description}</span>
+                    ) : null}
                   </span>
                 </CommandItem>
               ))}
@@ -339,29 +390,54 @@ function AccessSection({
       <FieldSet
         title="Tools"
         action={
-          <Button size="small" variant="transparent" disabled={disabled || on.length === 0} onClick={() => setPicking(true)}>
+          <Button
+            size="small"
+            variant="transparent"
+            disabled={disabled || on.length === 0}
+            onClick={() => setPicking(true)}
+          >
             Disable a tool
           </Button>
         }
       >
         <Field
-          description={full
-            ? `Everything Aiden can use on this ${computer}, including apps you connect later. Approvals and rules still apply.`
-            : "Everything except the tools below. Apps you connect later start off for this Bot."}
+          description={
+            full
+              ? `Everything Aiden can use on this ${computer}, including apps you connect later. Approvals and rules still apply.`
+              : "Everything except the tools below. Apps you connect later start off for this Bot."
+          }
         />
         {off.map((tool) => (
-          <Field key={`${tool.key}:${tool.id}`} label={tool.label} description={`${tool.group} · Off for this Bot`}>
+          <Field
+            key={`${tool.key}:${tool.id}`}
+            label={tool.label}
+            description={`${tool.group} · Off for this Bot`}
+          >
             <div className="flex justify-end">
-              <Button size="small" variant="transparent" disabled={disabled} aria-label={`Turn on ${tool.label}`} onClick={() => onChange(enableBotTool(draft, tool))}>
+              <Button
+                size="small"
+                variant="transparent"
+                disabled={disabled}
+                aria-label={`Turn on ${tool.label}`}
+                onClick={() => onChange(enableBotTool(draft, tool))}
+              >
                 Turn on
               </Button>
             </div>
           </Field>
         ))}
         {!full ? (
-          <Field label="Use everything" description="Turn every tool back on, including apps you connect later.">
+          <Field
+            label="Use everything"
+            description="Turn every tool back on, including apps you connect later."
+          >
             <div className="flex justify-end">
-              <Button size="small" variant="filled" disabled={disabled} onClick={() => onChange({ ...draft, usesFullAccess: true })}>
+              <Button
+                size="small"
+                variant="filled"
+                disabled={disabled}
+                onClick={() => onChange({ ...draft, usesFullAccess: true })}
+              >
                 Use everything
               </Button>
             </div>
@@ -374,7 +450,17 @@ function AccessSection({
             options={catalog.fileScopes}
             selected={draft.fileScopeIds}
             disabled={disabled}
-            onToggle={(id, checked) => onChange({ ...draft, fileScopeIds: nextBotFileScopeIds(draft.fileScopeIds, catalog.fileScopes, id, checked) })}
+            onToggle={(id, checked) =>
+              onChange({
+                ...draft,
+                fileScopeIds: nextBotFileScopeIds(
+                  draft.fileScopeIds,
+                  catalog.fileScopes,
+                  id,
+                  checked,
+                ),
+              })
+            }
           />
         </FieldSet>
       ) : null}
@@ -480,7 +566,11 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
         onConfirm={bind}
       >
         {targets.isLoading ? (
-          <div role="status" aria-label="Loading Telegram chats" className="h-8 w-full rounded-control bg-control motion-safe:animate-pulse" />
+          <div
+            role="status"
+            aria-label="Loading Telegram chats"
+            className="h-8 w-full rounded-control bg-control motion-safe:animate-pulse"
+          />
         ) : targets.isError ? (
           <Callout color="red" role="alert" className="flex-row items-center justify-between gap-3">
             <Text variant="small" color="red">
@@ -584,7 +674,10 @@ function ChevronRow({
       <span className="min-w-0 flex-1">
         <span className="block text-strong text-primary">{label}</span>
         {description ? (
-          <span id={value ? undefined : describedId} className="mt-0.5 block truncate text-small text-secondary">
+          <span
+            id={value ? undefined : describedId}
+            className="mt-0.5 block truncate text-small text-secondary"
+          >
             {description}
           </span>
         ) : null}
@@ -667,10 +760,20 @@ function IdentityHeader({
             aria-label={`Change ${bot.name}’s look`}
             className="shrink-0 rounded-card outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           >
-            <BotAvatar botId={bot.id} avatar={bot.avatar} name={shownName} photoLoading="immediate" size="large" />
+            <BotAvatar
+              botId={bot.id}
+              avatar={bot.avatar}
+              name={shownName}
+              photoLoading="immediate"
+              size="large"
+            />
           </button>
         </PopoverTrigger>
-        <PopoverContent align="start" aria-label={`${bot.name}’s look`} className="flex w-72 flex-col gap-3 p-3">
+        <PopoverContent
+          align="start"
+          aria-label={`${bot.name}’s look`}
+          className="flex w-72 flex-col gap-3 p-3"
+        >
           <BotLookPicker avatar={bot.avatar} onChange={saveLook} />
           <div className="flex flex-wrap gap-2">
             <Button
@@ -681,10 +784,20 @@ function IdentityHeader({
             >
               Default look
             </Button>
-            <Button size="small" variant="filled" disabled={photoBusy} onClick={() => photoInput.current?.click()}>
+            <Button
+              size="small"
+              variant="filled"
+              disabled={photoBusy}
+              onClick={() => photoInput.current?.click()}
+            >
               Choose photo
             </Button>
-            <Button size="small" variant="transparent" disabled={photoBusy} onClick={() => void removePhoto()}>
+            <Button
+              size="small"
+              variant="transparent"
+              disabled={photoBusy}
+              onClick={() => void removePhoto()}
+            >
               Remove photo
             </Button>
           </div>
@@ -745,7 +858,9 @@ function IdentityHeader({
 
 /** "Quiet 10:00 PM–7:00 AM", or "Off". */
 function quietHoursValue(value: BotInterruptions): string {
-  return value.quietHours.enabled ? `${clockLabel(value.quietHours.start)}–${clockLabel(value.quietHours.end)}` : "Off";
+  return value.quietHours.enabled
+    ? `${clockLabel(value.quietHours.start)}–${clockLabel(value.quietHours.end)}`
+    : "Off";
 }
 
 /** The daily limit "When it finishes or needs input" goes back to, per Bot, for this window. */
@@ -757,24 +872,47 @@ const lastDailyLimit = new Map<string, number>();
  * chat. Something only the person can fix still notifies, after quiet hours.
  * On puts back the limit it had, else the default.
  */
-function NotificationsSection({ bot, onOpenQuietHours }: { bot: BotDefinition; onOpenQuietHours(): void }) {
+function NotificationsSection({
+  bot,
+  onOpenQuietHours,
+}: {
+  bot: BotDefinition;
+  onOpenQuietHours(): void;
+}) {
   const qc = useQueryClient();
   const value = resolveBotInterruptions(bot.interruptions);
   const on = value.dailyLimit > 0;
   const change = (next: boolean) => {
     if (!next) lastDailyLimit.set(bot.id, value.dailyLimit);
-    const dailyLimit = next ? lastDailyLimit.get(bot.id) || DEFAULT_BOT_INTERRUPTIONS.dailyLimit : 0;
+    const dailyLimit = next
+      ? lastDailyLimit.get(bot.id) || DEFAULT_BOT_INTERRUPTIONS.dailyLimit
+      : 0;
     void updateBotIdentity(qc, bot.id, {
-      interruptions: { ...value, dailyLimit: Math.min(BOT_INTERRUPTIONS_MAX_DAILY_LIMIT, dailyLimit) },
-    }).catch((error: unknown) => toast.error(userFacingErrorMessage(error, `Aiden couldn’t save ${bot.name}’s notifications.`)));
+      interruptions: {
+        ...value,
+        dailyLimit: Math.min(BOT_INTERRUPTIONS_MAX_DAILY_LIMIT, dailyLimit),
+      },
+    }).catch((error: unknown) =>
+      toast.error(
+        userFacingErrorMessage(error, `Aiden couldn’t save ${bot.name}’s notifications.`),
+      ),
+    );
   };
   return (
     <FieldSet title="Notifications">
       <Field
         label="When it finishes or needs input"
-        description={on ? `Up to ${value.dailyLimit} a day. Anything only you can fix always arrives.` : "Results stay in the chat. Anything only you can fix still arrives."}
+        description={
+          on
+            ? `Up to ${value.dailyLimit} a day. Anything only you can fix always arrives.`
+            : "Results stay in the chat. Anything only you can fix still arrives."
+        }
       >
-        <Switch aria-label="When it finishes or needs input" checked={on} onCheckedChange={change} />
+        <Switch
+          aria-label="When it finishes or needs input"
+          checked={on}
+          onCheckedChange={change}
+        />
       </Field>
       <ChevronRow label="Quiet hours" value={quietHoursValue(value)} onClick={onOpenQuietHours} />
     </FieldSet>
@@ -782,7 +920,15 @@ function NotificationsSection({ bot, onOpenQuietHours }: { bot: BotDefinition; o
 }
 
 /** Quiet hours and the daily limit, saved as they change. */
-function QuietHoursDialog({ bot, open, onOpenChange }: { bot: BotDefinition; open: boolean; onOpenChange(open: boolean): void }) {
+function QuietHoursDialog({
+  bot,
+  open,
+  onOpenChange,
+}: {
+  bot: BotDefinition;
+  open: boolean;
+  onOpenChange(open: boolean): void;
+}) {
   const qc = useQueryClient();
   const change = (next: BotInterruptions) =>
     void updateBotIdentity(qc, bot.id, { interruptions: next }).catch((error: unknown) =>
@@ -797,7 +943,10 @@ function QuietHoursDialog({ bot, open, onOpenChange }: { bot: BotDefinition; ope
       confirmHidden
       cancelLabel="Done"
     >
-      <BotInterruptionsFields value={resolveBotInterruptions(bot.interruptions)} onChange={change} />
+      <BotInterruptionsFields
+        value={resolveBotInterruptions(bot.interruptions)}
+        onChange={change}
+      />
     </Dialog>
   );
 }
@@ -822,11 +971,15 @@ function PermissionsSection({ bot }: { bot: BotDefinition }) {
   const [saving, setSaving] = React.useState<"wakeUps" | "messaging" | null>(null);
   const [pairsOpen, setPairsOpen] = React.useState(false);
   const messagingAllowed = botMessagingEnabled(settings.data);
-  const save = async (key: "wakeUps" | "messaging", patch: Parameters<typeof updateBotIdentity>[2]) => {
+  const save = async (
+    key: "wakeUps" | "messaging",
+    patch: Parameters<typeof updateBotIdentity>[2],
+  ) => {
     setSaving(key);
     try {
       await updateBotIdentity(qc, bot.id, patch);
-      if (key === "wakeUps" && patch.selfWakeUps === false) void qc.invalidateQueries({ queryKey: botRoutinesKey(bot.id) });
+      if (key === "wakeUps" && patch.selfWakeUps === false)
+        void qc.invalidateQueries({ queryKey: botRoutinesKey(bot.id) });
     } catch (error) {
       toast.error(userFacingErrorMessage(error, "Aiden couldn’t save this setting."));
     } finally {
@@ -871,14 +1024,27 @@ function PermissionsSection({ bot }: { bot: BotDefinition }) {
         description={`What ${bot.name} may do without asking, in Settings`}
         onClick={() => void navigate(settingsLocation("approvals"))}
       />
-      {pairsOpen ? <BotPeerManagerDialog key={bot.id} botId={bot.id} botName={bot.name} onClose={() => setPairsOpen(false)} /> : null}
+      {pairsOpen ? (
+        <BotPeerManagerDialog
+          key={bot.id}
+          botId={bot.id}
+          botName={bot.name}
+          onClose={() => setPairsOpen(false)}
+        />
+      ) : null}
     </FieldSet>
   );
 }
 
 /** The first line of the instructions, as a one-line preview. */
 function instructionsPreview(instructions: string): string {
-  return instructions.trim().split(/\r?\n/u).find((line) => line.trim())?.trim() ?? "";
+  return (
+    instructions
+      .trim()
+      .split(/\r?\n/u)
+      .find((line) => line.trim())
+      ?.trim() ?? ""
+  );
 }
 
 /** Saves the access draft against the stored access, rebased over changes made elsewhere. */
@@ -888,7 +1054,10 @@ async function saveAccessDraft(
   current: BotAccessDraft,
   start: BotAccessDraft,
 ): Promise<BotAccessDraft> {
-  const [state, readCatalog] = await Promise.all([botsApi.getBotAccess(botId), botsApi.getCapabilityCatalog(botId)]);
+  const [state, readCatalog] = await Promise.all([
+    botsApi.getBotAccess(botId),
+    botsApi.getCapabilityCatalog(botId),
+  ]);
   if (!state) throw new Error("This Bot’s settings couldn’t be read.");
   let latestCatalog = readCatalog;
   const authoritative = accessDraftFromState(state, latestCatalog);
@@ -905,7 +1074,11 @@ async function saveAccessDraft(
   if (botAccessDiffers(update, state)) {
     // The answer is the saved access view alone: it takes the access query's
     // `access` now, and the model choices beside it reread in the background.
-    const saved = await botsApi.updateBotAccess({ botId, expectedRevision: state.access.revision, access: update });
+    const saved = await botsApi.updateBotAccess({
+      botId,
+      expectedRevision: state.access.revision,
+      access: update,
+    });
     qc.setQueryData<BotAccessState>(queryKeys.botAccess(botId), { ...state, access: saved });
     void qc.invalidateQueries({ queryKey: queryKeys.botAccess(botId) });
   } else {
@@ -919,7 +1092,13 @@ async function saveAccessDraft(
  * The Advanced tab. `sectionRequest` opens a spot in it from a link: the
  * instructions or quiet hours dialog, or the model section.
  */
-export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinition; sectionRequest?: BotPanelSectionRequest | null }) {
+export function BotAdvancedTab({
+  bot,
+  sectionRequest = null,
+}: {
+  bot: BotDefinition;
+  sectionRequest?: BotPanelSectionRequest | null;
+}) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const panel = useBotPanelActions();
@@ -930,10 +1109,16 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
   const kept = React.useRef(unsavedDrafts.get(bot.id));
   const [restored, setRestored] = React.useState(kept.current !== undefined);
   const [nameEdit, setNameEdit] = React.useState<string | null>(kept.current?.name ?? null);
-  const [descriptionEdit, setDescriptionEdit] = React.useState<string | null>(kept.current?.description ?? null);
-  const [thinkingEdit, setThinkingEdit] = React.useState<BotRoutineThinkingLevel | null>(kept.current?.thinking ?? null);
+  const [descriptionEdit, setDescriptionEdit] = React.useState<string | null>(
+    kept.current?.description ?? null,
+  );
+  const [thinkingEdit, setThinkingEdit] = React.useState<BotRoutineThinkingLevel | null>(
+    kept.current?.thinking ?? null,
+  );
   const [draft, setDraft] = React.useState<BotAccessDraft | null>(kept.current?.access ?? null);
-  const [baseline, setBaseline] = React.useState<BotAccessDraft | null>(kept.current?.accessBaseline ?? null);
+  const [baseline, setBaseline] = React.useState<BotAccessDraft | null>(
+    kept.current?.accessBaseline ?? null,
+  );
   const [saving, setSaving] = React.useState(false);
   const [nameError, setNameError] = React.useState<string | null>(null);
   const [instructionsOpen, setInstructionsOpen] = React.useState(false);
@@ -950,8 +1135,10 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
   }, [accessQuery.data, accessQuery.isSuccess, catalog, draft]);
 
   const nameDirty = nameEdit !== null && nameEdit.trim() !== bot.name;
-  const descriptionDirty = descriptionEdit !== null && descriptionEdit.trim() !== (bot.description ?? "").trim();
-  const accessChanged = draft !== null && baseline !== null && JSON.stringify(draft) !== JSON.stringify(baseline);
+  const descriptionDirty =
+    descriptionEdit !== null && descriptionEdit.trim() !== (bot.description ?? "").trim();
+  const accessChanged =
+    draft !== null && baseline !== null && JSON.stringify(draft) !== JSON.stringify(baseline);
   const storedThinking = bot.thinkingLevel ?? "off";
   const thinkingDirty = thinkingEdit !== null && thinkingEdit !== storedThinking;
   const dirty = nameDirty || descriptionDirty || thinkingDirty || accessChanged;
@@ -970,10 +1157,27 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
     } else {
       unsavedDrafts.delete(bot.id);
     }
-  }, [accessChanged, baseline, bot.id, descriptionDirty, descriptionEdit, dirty, draft, nameDirty, nameEdit, thinkingDirty, thinkingEdit]);
+  }, [
+    accessChanged,
+    baseline,
+    bot.id,
+    descriptionDirty,
+    descriptionEdit,
+    dirty,
+    draft,
+    nameDirty,
+    nameEdit,
+    thinkingDirty,
+    thinkingEdit,
+  ]);
 
   React.useEffect(() => {
-    if (!sectionRequest || sectionRequest.botId !== bot.id || handledRequest.current === sectionRequest.key) return;
+    if (
+      !sectionRequest ||
+      sectionRequest.botId !== bot.id ||
+      handledRequest.current === sectionRequest.key
+    )
+      return;
     handledRequest.current = sectionRequest.key;
     if (sectionRequest.section === "instructions") setInstructionsOpen(true);
     else if (sectionRequest.section === "quiet-hours") setQuietOpen(true);
@@ -1013,7 +1217,11 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
         setDraft(saved);
         setBaseline(saved);
       }
-      const patch: { name?: string; description?: string; thinkingLevel?: BotRoutineThinkingLevel } = {};
+      const patch: {
+        name?: string;
+        description?: string;
+        thinkingLevel?: BotRoutineThinkingLevel;
+      } = {};
       if (nameDirty) patch.name = nameEdit!.trim();
       if (descriptionDirty) patch.description = descriptionEdit!.trim();
       if (thinkingDirty) patch.thinkingLevel = thinkingEdit!;
@@ -1076,7 +1284,11 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
       </FieldSet>
       <div ref={modelRef} className="scroll-mt-4">
         {failed ? (
-          <Callout color="red" role="alert" className="mb-7 flex-row items-center justify-between gap-4">
+          <Callout
+            color="red"
+            role="alert"
+            className="mb-7 flex-row items-center justify-between gap-4"
+          >
             <div>
               <Text variant="small-strong" color="red">
                 The model and tools couldn’t be loaded
@@ -1104,10 +1316,16 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
           <ModelSection
             catalog={catalog}
             draft={draft}
-            thinking={{ supported: thinkingQuery.data, requested: thinkingEdit ?? storedThinking, onChange: setThinkingEdit }}
+            thinking={{
+              supported: thinkingQuery.data,
+              requested: thinkingEdit ?? storedThinking,
+              onChange: setThinkingEdit,
+            }}
             disabled={saving}
             onChange={setDraft}
-            onSetUpModel={() => void navigate({ to: "/settings", search: { section: "providers" } })}
+            onSetUpModel={() =>
+              void navigate({ to: "/settings", search: { section: "providers" } })
+            }
           />
         )}
         <FieldSet>
@@ -1124,10 +1342,17 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
       <PermissionsSection bot={bot} />
       <TelegramSection bot={bot} />
       <FieldSet title="Instructions">
-        <ChevronRow label="Instructions" description={preview || "No instructions yet"} onClick={() => setInstructionsOpen(true)} />
+        <ChevronRow
+          label="Instructions"
+          description={preview || "No instructions yet"}
+          onClick={() => setInstructionsOpen(true)}
+        />
       </FieldSet>
       <FieldSet title="How other Bots see it">
-        <Field label="Subtitle" description="A few words under its name. Other Bots read it to know what it helps with.">
+        <Field
+          label="Subtitle"
+          description="A few words under its name. Other Bots read it to know what it helps with."
+        >
           <Input
             aria-label="Subtitle"
             value={descriptionEdit ?? bot.description ?? ""}
@@ -1138,10 +1363,16 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
           />
         </Field>
       </FieldSet>
-      {catalog && draft ? <AccessSection catalog={catalog} draft={draft} disabled={saving} onChange={setDraft} /> : null}
+      {catalog && draft ? (
+        <AccessSection catalog={catalog} draft={draft} disabled={saving} onChange={setDraft} />
+      ) : null}
       <BotSpendingSection bot={bot} />
       <FieldSet title="Clear">
-        <ChevronRow label="Erase memory" description={`Opens Memory, where you can erase what ${bot.name} remembers.`} onClick={() => panel.show("memory")} />
+        <ChevronRow
+          label="Erase memory"
+          description={`Opens Memory, where you can erase what ${bot.name} remembers.`}
+          onClick={() => panel.show("memory")}
+        />
         <Field label="Delete Bot" description={`${bot.name}, its chat, memory and routines.`}>
           <Button size="small" variant="destructive" onClick={() => setDeleting(true)}>
             Delete Bot…

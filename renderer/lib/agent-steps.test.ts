@@ -49,7 +49,23 @@ function step(
 }
 
 test("all browser actions have readable activity labels", () => {
-  const expected = [["browser","Loading browser tools","Loaded browser tools"],["browser_status","Checking browser","Checked browser"],["browser_open","Opening browser","Opened browser"],["browser_navigate","Navigating browser","Navigated browser"],["browser_resize","Resizing browser","Resized browser"],["browser_set_appearance","Setting browser appearance","Set browser appearance"],["browser_snapshot","Inspecting browser","Inspected browser"],["browser_click","Clicking in browser","Clicked in browser"],["browser_type","Typing in browser","Typed in browser"],["browser_press","Pressing browser keys","Pressed browser keys"],["browser_scroll","Scrolling browser","Scrolled browser"],["browser_evaluate","Evaluating page","Evaluated page"],["browser_wait_for","Waiting for page","Waited for page"],["browser_recording_start","Starting browser recording","Started browser recording"],["browser_recording_stop","Stopping browser recording","Stopped browser recording"]];
+  const expected = [
+    ["browser", "Loading browser tools", "Loaded browser tools"],
+    ["browser_status", "Checking browser", "Checked browser"],
+    ["browser_open", "Opening browser", "Opened browser"],
+    ["browser_navigate", "Navigating browser", "Navigated browser"],
+    ["browser_resize", "Resizing browser", "Resized browser"],
+    ["browser_set_appearance", "Setting browser appearance", "Set browser appearance"],
+    ["browser_snapshot", "Inspecting browser", "Inspected browser"],
+    ["browser_click", "Clicking in browser", "Clicked in browser"],
+    ["browser_type", "Typing in browser", "Typed in browser"],
+    ["browser_press", "Pressing browser keys", "Pressed browser keys"],
+    ["browser_scroll", "Scrolling browser", "Scrolled browser"],
+    ["browser_evaluate", "Evaluating page", "Evaluated page"],
+    ["browser_wait_for", "Waiting for page", "Waited for page"],
+    ["browser_recording_start", "Starting browser recording", "Started browser recording"],
+    ["browser_recording_stop", "Stopping browser recording", "Stopped browser recording"],
+  ];
   for (const [name, active, complete] of expected) {
     assert.equal(activityLine(step(name, 0, name, "running")).verb, active);
     assert.equal(activityLine(step(name, 0, name, "completed")).verb, complete);
@@ -59,7 +75,10 @@ test("all browser actions have readable activity labels", () => {
 test("a Bot's own computer reads as its computer, not the person's Mac", () => {
   assert.equal(activityLine(step("c", 0, "computer", "running")).verb, "Using its computer");
   assert.equal(activityLine(step("c", 0, "computer", "completed")).verb, "Used its computer");
-  assert.equal(activityLine(step("s", 0, "computer_shell", "completed")).verb, "Ran in its computer");
+  assert.equal(
+    activityLine(step("s", 0, "computer_shell", "completed")).verb,
+    "Ran in its computer",
+  );
 });
 
 test("simulator device tools read as compact timeline rows", () => {
@@ -75,7 +94,9 @@ test("simulator device tools read as compact timeline rows", () => {
     assert.equal(activityLineText(step(name, 0, name, "failed", { label })), `${label} failed`);
   }
   assert.equal(
-    activityLineText(step("close", 0, "device_close", "awaiting_approval", { label: "Shut down simulator" })),
+    activityLineText(
+      step("close", 0, "device_close", "awaiting_approval", { label: "Shut down simulator" }),
+    ),
     "Shut down simulator needs approval",
   );
 });
@@ -146,7 +167,10 @@ test("splits a row into a verb and the object it acted on", () => {
 });
 
 test("a tool call whose arguments are still streaming reads as preparing, not as work", () => {
-  const preparing = step("read", 0, "read_file", "pending", { label: "Read file", target: "src/app.ts" });
+  const preparing = step("read", 0, "read_file", "pending", {
+    label: "Read file",
+    target: "src/app.ts",
+  });
   assert.equal(activityLineText(preparing), "Preparing Read file");
   assert.equal(activityLine(preparing).stage, "preparing");
   // Still in flight, so the turn keeps its live treatment.
@@ -190,16 +214,22 @@ test("an answered questionnaire becomes its own row and leaves the activity grou
   const recap = {
     version: 1 as const,
     outcome: "answered" as const,
-    items: [{ question: "Which database?", header: "Database", kind: "option" as const, answers: ["Postgres"] }],
+    items: [
+      {
+        question: "Which database?",
+        header: "Database",
+        kind: "option" as const,
+        answers: ["Postgres"],
+      },
+    ],
   };
-  const asked = step("ask", 1, "ask_user_question", "completed", { contentOffset: 7, questionnaire: recap });
+  const asked = step("ask", 1, "ask_user_question", "completed", {
+    contentOffset: 7,
+    questionnaire: recap,
+  });
   const rows = assistantPresentationRows(
     "Before.After.",
-    timeline("completed", [
-      positionedTool(0, 7),
-      asked,
-      positionedTool(2, 7, "grep"),
-    ]),
+    timeline("completed", [positionedTool(0, 7), asked, positionedTool(2, 7, "grep")]),
   );
   assert.deepEqual(
     rows?.map((row) =>
@@ -234,9 +264,20 @@ test("extracted values show as a card under their activity line, which stays in 
     version: 1 as const,
     host: "acme.example",
     cut: false,
-    fields: [{ name: "price", status: "extracted" as const, value: "20", confidence: 0.97, sourceLine: "Pro is $20 per month." }],
+    fields: [
+      {
+        name: "price",
+        status: "extracted" as const,
+        value: "20",
+        confidence: 0.97,
+        sourceLine: "Pro is $20 per month.",
+      },
+    ],
   };
-  const fetched = step("fetch", 1, "web_fetch", "completed", { contentOffset: 7, extraction: recap });
+  const fetched = step("fetch", 1, "web_fetch", "completed", {
+    contentOffset: 7,
+    extraction: recap,
+  });
   const rows = assistantPresentationRows(
     "Before.After.",
     timeline("completed", [positionedTool(0, 7), fetched, positionedTool(2, 7, "grep")]),
@@ -268,7 +309,10 @@ test("a browser recording shows as a card under its activity line, which stays i
     durationMs: 12_400,
     sizeBytes: 1_048_576,
   };
-  const stopped = step("stop", 1, "browser_recording_stop", "completed", { contentOffset: 7, recording });
+  const stopped = step("stop", 1, "browser_recording_stop", "completed", {
+    contentOffset: 7,
+    recording,
+  });
   const rows = assistantPresentationRows(
     "Before.After.",
     timeline("completed", [positionedTool(0, 7, "browser_recording_start"), stopped]),
@@ -308,19 +352,42 @@ test("unreadable thinking remains a chronological status row", () => {
 
 test("reasoning rows follow prose and tools in event order", () => {
   const steps: AgentStep[] = [
-    { ...thinking("think-1", 0, 500), contentOffset: 0, reasoningStartOffset: 0, reasoningEndOffset: 5 },
+    {
+      ...thinking("think-1", 0, 500),
+      contentOffset: 0,
+      reasoningStartOffset: 0,
+      reasoningEndOffset: 5,
+    },
     positionedTool(1, 0),
-    { ...thinking("think-2", 2, 600), contentOffset: 7, reasoningStartOffset: 7, reasoningEndOffset: 13 },
+    {
+      ...thinking("think-2", 2, 600),
+      contentOffset: 7,
+      reasoningStartOffset: 7,
+      reasoningEndOffset: 13,
+    },
   ];
-  const rows = assistantPresentationRows("Before.After.", timeline("completed", steps), "First\n\nSecond");
-  assert.deepEqual(rows?.map((row) => [row.kind, row.kind === "activity" ? row.steps[0]?.id : "content" in row ? row.content : row.step.id]), [
-    ["reasoning", "First"],
-    ["activity", "tool-2"],
-    ["text", "Before."],
-    ["reasoning", "Second"],
-    ["text", "After."],
-  ]);
-  assert.equal(assistantPresentationRows("", timeline("completed", steps), "First\n\nSecond"), null);
+  const rows = assistantPresentationRows(
+    "Before.After.",
+    timeline("completed", steps),
+    "First\n\nSecond",
+  );
+  assert.deepEqual(
+    rows?.map((row) => [
+      row.kind,
+      row.kind === "activity" ? row.steps[0]?.id : "content" in row ? row.content : row.step.id,
+    ]),
+    [
+      ["reasoning", "First"],
+      ["activity", "tool-2"],
+      ["text", "Before."],
+      ["reasoning", "Second"],
+      ["text", "After."],
+    ],
+  );
+  assert.equal(
+    assistantPresentationRows("", timeline("completed", steps), "First\n\nSecond"),
+    null,
+  );
 });
 
 test("assistant presentation fails closed for legacy or invalid offsets", () => {
@@ -349,7 +416,12 @@ test("assistant presentation fails closed for legacy or invalid offsets", () => 
 });
 
 test("a live reply keeps its chronological rows while streamed reasoning and text trail the timeline", () => {
-  const settled = { ...thinking("think-1", 0, 500), contentOffset: 0, reasoningStartOffset: 0, reasoningEndOffset: 11 };
+  const settled = {
+    ...thinking("think-1", 0, 500),
+    contentOffset: 0,
+    reasoningStartOffset: 0,
+    reasoningEndOffset: 11,
+  };
   const tool = positionedTool(1, 7);
   const next = { ...thinking("think-2", 2), contentOffset: 7, reasoningStartOffset: 13 };
   const kinds = (rows: ReturnType<typeof liveAssistantPresentationRows>) =>
@@ -362,13 +434,31 @@ test("a live reply keeps its chronological rows while streamed reasoning and tex
   );
   // A later step opened past the shown reasoning and the shown text.
   assert.deepEqual(
-    kinds(liveAssistantPresentationRows("Bef", timeline("running", [settled, tool, next]), "First")),
-    [["reasoning", "First"], ["text", "Bef"], ["activity", null], ["reasoning", ""]],
+    kinds(
+      liveAssistantPresentationRows("Bef", timeline("running", [settled, tool, next]), "First"),
+    ),
+    [
+      ["reasoning", "First"],
+      ["text", "Bef"],
+      ["activity", null],
+      ["reasoning", ""],
+    ],
   );
   // Once the deltas land, each row holds its own span.
   assert.deepEqual(
-    kinds(liveAssistantPresentationRows("Before.", timeline("running", [settled, tool, next]), "First think\n\nSecond")),
-    [["reasoning", "First think"], ["text", "Before."], ["activity", null], ["reasoning", "Second"]],
+    kinds(
+      liveAssistantPresentationRows(
+        "Before.",
+        timeline("running", [settled, tool, next]),
+        "First think\n\nSecond",
+      ),
+    ),
+    [
+      ["reasoning", "First think"],
+      ["text", "Before."],
+      ["activity", null],
+      ["reasoning", "Second"],
+    ],
   );
   // A stored reply is never repaired: offsets past its reasoning stay malformed.
   assert.equal(assistantPresentationRows("", timeline("completed", [settled]), "First"), null);
@@ -539,7 +629,10 @@ test("a call waiting for approval is not reported as running", () => {
   );
   assert.equal(
     summarizeActivity(
-      timeline("running", [step("read", 0, "read_file"), step("ask", 1, "edit_file", "awaiting_approval")]),
+      timeline("running", [
+        step("read", 0, "read_file"),
+        step("ask", 1, "edit_file", "awaiting_approval"),
+      ]),
     ),
     "Exploring 1 file",
   );
@@ -601,7 +694,11 @@ test("a call the person stopped is not an issue; other cancellations are", () =>
   assert.equal(activityIssueCount(mixed), 1);
   assert.equal(activityTrailNeedsAttention(mixed), true);
 
-  for (const origin of ["application_shutdown", "chat_deletion", "scheduled_task_cancel"] as const) {
+  for (const origin of [
+    "application_shutdown",
+    "chat_deletion",
+    "scheduled_task_cancel",
+  ] as const) {
     const unmarked = [steps[0]!, step("run", 1, "run_command", "cancelled")];
     const other = timeline("cancelled", unmarked, { cancellationOrigin: origin });
     assert.equal(isStoppedByUser(other, unmarked[1]!), false, origin);
@@ -618,9 +715,7 @@ test("a call the person stopped is not an issue; other cancellations are", () =>
 test("active thinking and named tool helpers match live timeline steps", () => {
   const liveThink = timeline("running", [thinking("think-1", 0)]);
   const doneThink = timeline("completed", [thinking("think-1", 0, 3_000)]);
-  const rendering = timeline("running", [
-    step("render", 0, "render_artifact", "running"),
-  ]);
+  const rendering = timeline("running", [step("render", 0, "render_artifact", "running")]);
   assert.equal(hasActiveThinkingStep(liveThink), true);
   assert.equal(hasActiveThinkingStep(doneThink), false);
   assert.equal(hasActiveThinkingStep(null), false);
@@ -632,18 +727,32 @@ test("active thinking and named tool helpers match live timeline steps", () => {
 test("agent-run activity changes tense like Aiden's own tools, with the same lines as both phone apps", () => {
   // Persisted labels as Google Antigravity steps record them; the expected lines
   // are mirrored in the iOS and Android presentation tests.
-  const expected: Array<[string, string, "running" | "completed", string | undefined, string | undefined, string]> = [
+  const expected: Array<
+    [string, string, "running" | "completed", string | undefined, string | undefined, string]
+  > = [
     ["delete_file", "Delete file", "running", "old.ts", undefined, "Deleting old.ts"],
     ["delete_file", "Delete file", "completed", "old.ts", undefined, "Deleted old.ts"],
     ["move_file", "Move file", "completed", "src/a.ts", undefined, "Moved src/a.ts"],
     ["web_fetch", "Fetch web page", "completed", undefined, undefined, "Fetched web page"],
     ["agent_subagents", "Run subagents", "completed", undefined, undefined, "Ran subagents"],
     ["agent_tool", "Use agent tool", "running", undefined, undefined, "Using an agent tool"],
-    ["agent_context_rebuilt", "Started a fresh agent session from this chat", "completed", undefined, undefined, "Started a fresh agent session"],
+    [
+      "agent_context_rebuilt",
+      "Started a fresh agent session from this chat",
+      "completed",
+      undefined,
+      undefined,
+      "Started a fresh agent session",
+    ],
     ["run_command", "Run command", "completed", undefined, "a command", "Ran a command"],
   ];
   for (const [toolName, label, status, target, detail, line] of expected) {
-    const row = { ...step(toolName, 0, toolName, status), label, ...(target ? { target } : {}), ...(detail ? { detail } : {}) };
+    const row = {
+      ...step(toolName, 0, toolName, status),
+      label,
+      ...(target ? { target } : {}),
+      ...(detail ? { detail } : {}),
+    };
     assert.equal(activityLineText(row), line);
   }
 });
@@ -670,8 +779,15 @@ test("an image generation row reads naturally and names its ratio once settled",
   );
   const { detail: _ratio, ...unshaped } = base;
   assert.equal(
-    activityLineText({ ...unshaped, status: "completed", target: "openrouter/google/gemini-2.5-flash-image" }),
+    activityLineText({
+      ...unshaped,
+      status: "completed",
+      target: "openrouter/google/gemini-2.5-flash-image",
+    }),
     "Generated image gemini-2.5-flash-image",
   );
-  assert.equal(activityLineText({ ...unshaped, status: "completed", target: "unknown/model" }), "Generated image");
+  assert.equal(
+    activityLineText({ ...unshaped, status: "completed", target: "unknown/model" }),
+    "Generated image",
+  );
 });

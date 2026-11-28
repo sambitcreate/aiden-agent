@@ -24,7 +24,9 @@ test("bold, italic, underline and links read as marked runs of words", () => {
     { text: " ", marks: {} },
     { text: "site", marks: { href: "https://example.com/x" } },
   ]);
-  assert.deepEqual(parseInline("***both***"), [{ text: "both", marks: { bold: true, italic: true } }]);
+  assert.deepEqual(parseInline("***both***"), [
+    { text: "both", marks: { bold: true, italic: true } },
+  ]);
   assert.deepEqual(parseInline("**bold *and italic***"), [
     { text: "bold ", marks: { bold: true } },
     { text: "and italic", marks: { bold: true, italic: true } },
@@ -40,10 +42,19 @@ test("what is not a mark stays as its words", () => {
 });
 
 test("a link to anything but http, https or mailto keeps only its words", () => {
-  for (const bad of ["javascript:alert(1)", "data:text/html,x", "file:///etc/passwd", "aiden-design://x/y", "vbscript:x"]) {
+  for (const bad of [
+    "javascript:alert(1)",
+    "data:text/html,x",
+    "file:///etc/passwd",
+    "aiden-design://x/y",
+    "vbscript:x",
+  ]) {
     assert.equal(safeLinkHref(bad), null, bad);
     const spans = parseInline(`[go](${bad})`);
-    assert.ok(spans.every((span) => span.marks.href === undefined), bad);
+    assert.ok(
+      spans.every((span) => span.marks.href === undefined),
+      bad,
+    );
   }
   assert.equal(safeLinkHref("mailto:a@b.co"), "mailto:a@b.co");
   assert.equal(linkFromInput("example.com/pricing"), "https://example.com/pricing");
@@ -84,21 +95,32 @@ test("writing back gives the same Markdown, and reading that gives the same docu
 
 test("marks wrap words, not the spaces around them", () => {
   const written = serializeRichText([
-    { type: "paragraph", spans: [{ text: "hello ", marks: { bold: true } }, { text: "world", marks: {} }] },
+    {
+      type: "paragraph",
+      spans: [
+        { text: "hello ", marks: { bold: true } },
+        { text: "world", marks: {} },
+      ],
+    },
   ]);
   assert.equal(written, "**hello** world");
 });
 
 test("the plain words drop every mark", () => {
-  assert.equal(richTextPlain("**Plan** for [the site](https://x.co)\n- *one*\n- two"), "Plan for the site\none\ntwo");
+  assert.equal(
+    richTextPlain("**Plan** for [the site](https://x.co)\n- *one*\n- two"),
+    "Plan for the site\none\ntwo",
+  );
 });
 
 test("the editor's starting HTML escapes every word and writes only its own tags", () => {
-  const html = richTextHtml('<img src=x onerror="alert(1)"> & **bold** [x](https://e.com/?a="b")\n- item');
+  const html = richTextHtml(
+    '<img src=x onerror="alert(1)"> & **bold** [x](https://e.com/?a="b")\n- item',
+  );
   assert.ok(!html.includes("<img"), html);
   assert.ok(html.includes("&lt;img"), html);
   assert.ok(html.includes("<b>bold</b>"), html);
-  assert.ok(html.includes('<ul><li>item</li></ul>'), html);
+  assert.ok(html.includes("<ul><li>item</li></ul>"), html);
   const tags = [...html.matchAll(/<\/?([a-z]+)/g)].map((match) => match[1]);
   assert.deepEqual([...new Set(tags)].sort(), ["a", "b", "div", "li", "ul"]);
   assert.equal(richTextHtml("a\n\nb"), "<div>a</div><div><br></div><div>b</div>");
@@ -133,7 +155,8 @@ test("any run of marked words, special characters included, survives writing and
     for (let index = 0; index < count; index += 1) {
       let text = "";
       const length = 1 + Math.floor(random() * 4);
-      for (let char = 0; char < length; char += 1) text += alphabet[Math.floor(random() * alphabet.length)];
+      for (let char = 0; char < length; char += 1)
+        text += alphabet[Math.floor(random() * alphabet.length)];
       const marks: Record<string, unknown> = {};
       if (random() < 0.4) marks.bold = true;
       if (random() < 0.4) marks.italic = true;
@@ -143,7 +166,9 @@ test("any run of marked words, special characters included, survives writing and
       if (last && JSON.stringify(last.marks) === JSON.stringify(marks)) last.text += text;
       else spans.push({ text, marks });
     }
-    const blocks = [{ type: "paragraph" as const, spans }] as Parameters<typeof serializeRichText>[0];
+    const blocks = [{ type: "paragraph" as const, spans }] as Parameters<
+      typeof serializeRichText
+    >[0];
     const written = serializeRichText(blocks);
     assert.deepEqual(parseRichText(written), blocks, written);
   }

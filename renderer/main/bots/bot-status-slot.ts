@@ -33,6 +33,8 @@ export const BOT_STATUS_PRIORITY: readonly BotStatusKind[] = [
 ];
 
 /** The one status to show from those that currently apply, or null. */
-export function pickBotStatus(applies: Partial<Record<BotStatusKind, boolean>>): BotStatusKind | null {
+export function pickBotStatus(
+  applies: Partial<Record<BotStatusKind, boolean>>,
+): BotStatusKind | null {
   return BOT_STATUS_PRIORITY.find((kind) => applies[kind] === true) ?? null;
 }

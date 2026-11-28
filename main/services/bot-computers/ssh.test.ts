@@ -39,7 +39,11 @@ test("system ssh ignores user config and agents and trusts only the pinned host 
   assert.deepEqual(args.slice(0, 2), ["-F", "/dev/null"]);
   assert.equal(args[args.indexOf("-i") + 1], paths.privateKey);
   const set = options(args);
-  assert.equal(set.get("UserKnownHostsFile"), `"${paths.knownHosts}"`, "quoted: userData has a space");
+  assert.equal(
+    set.get("UserKnownHostsFile"),
+    `"${paths.knownHosts}"`,
+    "quoted: userData has a space",
+  );
   assert.equal(set.get("GlobalKnownHostsFile"), "/dev/null");
   assert.equal(set.get("StrictHostKeyChecking"), "yes");
   assert.equal(set.get("HostKeyAlias"), BOT_COMPUTER_HOST_KEY_ALIAS);
@@ -49,11 +53,17 @@ test("system ssh ignores user config and agents and trusts only the pinned host 
   assert.equal(set.get("ClearAllForwardings"), "yes");
   assert.equal(set.get("IdentitiesOnly"), "yes");
   assert.deepEqual(args.slice(-2), ["--", "192.168.64.7"]);
-  assert.throws(() => guestSshArgs({ host: "evil.example -oProxyCommand=x", user: "lume" }, paths), BotComputerError);
+  assert.throws(
+    () => guestSshArgs({ host: "evil.example -oProxyCommand=x", user: "lume" }, paths),
+    BotComputerError,
+  );
 });
 
 test("the ssh environment drops the agent socket", () => {
-  const env = guestSshEnvironment({ SSH_AUTH_SOCK: "/tmp/agent", HOME: "/Users/person", LANG: "C", PATH: "/opt/bin" }, path.join(root, "home"));
+  const env = guestSshEnvironment(
+    { SSH_AUTH_SOCK: "/tmp/agent", HOME: "/Users/person", LANG: "C", PATH: "/opt/bin" },
+    path.join(root, "home"),
+  );
   assert.equal(env.SSH_AUTH_SOCK, undefined);
   assert.equal(env.HOME, path.join(root, "home"));
   assert.equal(env.PATH, "/usr/bin:/bin:/usr/sbin:/sbin");
@@ -65,17 +75,31 @@ test("the remote side runs under a perl alarm and survives hostile quoting", () 
   const remote = guestRemoteCommand(command, 2_500);
   assert.match(remote, /^perl -e 'alarm 3; exec @ARGV' \/bin\/sh -c '/u);
   // A POSIX shell (what sshd runs the command with) must hand sh the command unchanged.
-  const echoed = execFileSync("/bin/sh", ["-c", remote.replace(/^perl -e '[^']*' \/bin\/sh -c /u, "printf %s ")]).toString();
+  const echoed = execFileSync("/bin/sh", [
+    "-c",
+    remote.replace(/^perl -e '[^']*' \/bin\/sh -c /u, "printf %s "),
+  ]).toString();
   assert.equal(echoed, command);
 });
 
 test("a guest command passes secrets on stdin, bounds output, and reports the remote alarm as a timeout", async () => {
   const calls: { command: string; args: readonly string[]; options: BoundedProcessOptions }[] = [];
-  const run = async (command: string, args: readonly string[], runOptions: BoundedProcessOptions): Promise<BoundedProcessResult> => {
+  const run = async (
+    command: string,
+    args: readonly string[],
+    runOptions: BoundedProcessOptions,
+  ): Promise<BoundedProcessResult> => {
     calls.push({ command, args, options: runOptions });
     // The guest's alarm ends the command once its time is up.
     await new Promise((resolve) => setTimeout(resolve, 60));
-    return { exitCode: 142, signal: null, stdout: "partial", stderr: "", truncated: true, timedOut: false };
+    return {
+      exitCode: 142,
+      signal: null,
+      stdout: "partial",
+      stderr: "",
+      truncated: true,
+      timedOut: false,
+    };
   };
   const result = await runGuestCommand(
     { host: "192.168.64.7", user: "lume" },
@@ -83,27 +107,56 @@ test("a guest command passes secrets on stdin, bounds output, and reports the re
     { timeoutMs: 40, maxOutputBytes: 64, stdin: "secret\n" },
     { paths, env: { PATH: "/usr/bin" }, run },
   );
-  assert.deepEqual(result, { exitCode: 142, stdout: "partial", stderr: "", truncated: true, timedOut: true });
+  assert.deepEqual(result, {
+    exitCode: 142,
+    stdout: "partial",
+    stderr: "",
+    truncated: true,
+    timedOut: true,
+  });
   const [call] = calls;
   assert.equal(call?.command, "/usr/bin/ssh");
   assert.equal(call?.options.stdin, "secret\n");
   assert.equal(call?.options.maxStdoutBytes, 64);
   assert.equal(call?.options.overflow, "truncate");
-  assert.equal(call?.args.some((arg) => arg.includes("secret")), false);
+  assert.equal(
+    call?.args.some((arg) => arg.includes("secret")),
+    false,
+  );
   await assert.rejects(
-    runGuestCommand({ host: "192.168.64.7", user: "lume" }, "true", { timeoutMs: 0, maxOutputBytes: 64 }, { paths, env: {}, run }),
+    runGuestCommand(
+      { host: "192.168.64.7", user: "lume" },
+      "true",
+      { timeoutMs: 0, maxOutputBytes: 64 },
+      { paths, env: {}, run },
+    ),
     BotComputerError,
   );
 });
 
 test("whether a guest command timed out comes from Aiden's own clock, whatever exit status ssh reports", async () => {
   const target = { host: "192.168.64.7", user: "lume" } as const;
-  const ending = (afterMs: number, exitCode: number | null) => async (): Promise<BoundedProcessResult> => {
-    await new Promise((resolve) => setTimeout(resolve, afterMs));
-    return { exitCode, signal: exitCode === null ? "SIGALRM" : null, stdout: "", stderr: "", truncated: false, timedOut: false };
-  };
+  const ending =
+    (afterMs: number, exitCode: number | null) => async (): Promise<BoundedProcessResult> => {
+      await new Promise((resolve) => setTimeout(resolve, afterMs));
+      return {
+        exitCode,
+        signal: exitCode === null ? "SIGALRM" : null,
+        stdout: "",
+        stderr: "",
+        truncated: false,
+        timedOut: false,
+      };
+    };
   const timedOut = async (afterMs: number, exitCode: number | null) =>
-    (await runGuestCommand(target, "sleep 100", { timeoutMs: 40, maxOutputBytes: 64 }, { paths, env: {}, run: ending(afterMs, exitCode) })).timedOut;
+    (
+      await runGuestCommand(
+        target,
+        "sleep 100",
+        { timeoutMs: 40, maxOutputBytes: 64 },
+        { paths, env: {}, run: ending(afterMs, exitCode) },
+      )
+    ).timedOut;
   // The alarm's SIGALRM can surface as OpenSSH's 255 (the login shell exec'd perl) or as no exit status.
   assert.equal(await timedOut(60, 255), true);
   assert.equal(await timedOut(60, null), true);

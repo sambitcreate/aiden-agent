@@ -11,7 +11,8 @@ function webOrigin(value: string | undefined): string | undefined {
   if (!value) return undefined;
   try {
     const url = new URL(value);
-    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return undefined;
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password)
+      return undefined;
     return url.origin;
   } catch {
     return undefined;
@@ -20,11 +21,11 @@ function webOrigin(value: string | undefined): string | undefined {
 
 /** Guest pages receive no device, clipboard-read or background notification grants. */
 export function canGrantBrowserPermission(
-  context: BrowserPermissionContext & (
-    { kind: "check"; requestingOrigin: string } | { kind: "request" }
-  ),
+  context: BrowserPermissionContext &
+    ({ kind: "check"; requestingOrigin: string } | { kind: "request" }),
 ): boolean {
-  if (context.permission !== "clipboard-sanitized-write" || context.isMainFrame !== true) return false;
+  if (context.permission !== "clipboard-sanitized-write" || context.isMainFrame !== true)
+    return false;
   const origin = webOrigin(context.guestUrl);
   if (!origin || webOrigin(context.requestingUrl) !== origin) return false;
   return context.kind === "request" || webOrigin(context.requestingOrigin) === origin;
@@ -45,14 +46,23 @@ export function configureBrowserPermissionHandlers(
   };
   browserSession.setPermissionCheckHandler((contents, permission, requestingOrigin, details) =>
     canGrantBrowserPermission({
-      kind: "check", permission, requestingOrigin,
-      guestUrl: ownedUrl(contents), isMainFrame: details.isMainFrame, requestingUrl: details.requestingUrl,
+      kind: "check",
+      permission,
+      requestingOrigin,
+      guestUrl: ownedUrl(contents),
+      isMainFrame: details.isMainFrame,
+      requestingUrl: details.requestingUrl,
     }),
   );
   browserSession.setPermissionRequestHandler((contents, permission, callback, details) =>
-    callback(canGrantBrowserPermission({
-      kind: "request", permission,
-      guestUrl: ownedUrl(contents), isMainFrame: details.isMainFrame, requestingUrl: details.requestingUrl,
-    })),
+    callback(
+      canGrantBrowserPermission({
+        kind: "request",
+        permission,
+        guestUrl: ownedUrl(contents),
+        isMainFrame: details.isMainFrame,
+        requestingUrl: details.requestingUrl,
+      }),
+    ),
   );
 }

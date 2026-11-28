@@ -231,18 +231,30 @@ test("product help finds topics from everyday wording, not only exact words", ()
   const miss = readAidenHelp("unknown product topic");
   assert.deepEqual(miss.topics, []);
   assert.ok(miss.available.includes("changing-settings"));
-  assert.match(readAidenHelp("changing-settings").topics[0].text, /Everything else stays in Settings/u);
+  assert.match(
+    readAidenHelp("changing-settings").topics[0].text,
+    /Everything else stays in Settings/u,
+  );
 });
 test("app guidance only describes the app tools a chat really has", () => {
   const full = aidenAppGuidance(
-    new Set(["aiden_help", "aiden_get_state", "aiden_show_controls", "aiden_set_preference", "aiden_open"]),
+    new Set([
+      "aiden_help",
+      "aiden_get_state",
+      "aiden_show_controls",
+      "aiden_set_preference",
+      "aiden_open",
+    ]),
   );
   assert.match(full, /only settings you can change are the rows aiden_get_state returns/u);
   assert.match(full, /aiden_open/u);
   // A phone chat has help and panels only.
   const phone = aidenAppGuidance(new Set(["aiden_help", "aiden_show_controls"]));
   assert.doesNotMatch(phone, /aiden_get_state|aiden_set_preference|aiden_open/u);
-  assert.match(phone, /cannot read live values or change settings yourself in this chat; show the controls/u);
+  assert.match(
+    phone,
+    /cannot read live values or change settings yourself in this chat; show the controls/u,
+  );
   // Reading without changing: told to read live values, and only that it cannot change them.
   const readOnly = aidenAppGuidance(new Set(["aiden_help", "aiden_get_state"]));
   assert.match(readOnly, /aiden_get_state before stating a value/u);
@@ -284,7 +296,13 @@ test("authorization is rechecked after the durable intent and unknown policy fai
 test("new-chat model choices list ready, visible models with pinned and recent first", () => {
   const choices = newChatModelChoices(
     [
-      { id: "lmstudio", label: "LM Studio", models: ["qwen3-8b", "llama-4"], hasKey: false, needsKey: false },
+      {
+        id: "lmstudio",
+        label: "LM Studio",
+        models: ["qwen3-8b", "llama-4"],
+        hasKey: false,
+        needsKey: false,
+      },
       { id: "openai", label: "OpenAI", models: ["gpt-5.5"], hasKey: true, needsKey: true },
       { id: "anthropic", label: "Anthropic", models: ["claude-x"], hasKey: false, needsKey: true },
     ],
@@ -308,7 +326,12 @@ test("new-chat model choices leave out embedding and reranking models", async ()
       {
         id: "custom",
         label: "Custom",
-        models: ["chat-a", "text-embedding-nomic-embed-text-v1.5", "bge-reranker-v2-m3", "vision-x"],
+        models: [
+          "chat-a",
+          "text-embedding-nomic-embed-text-v1.5",
+          "bge-reranker-v2-m3",
+          "vision-x",
+        ],
         hasKey: true,
         needsKey: true,
         modelMetadata: { "vision-x": { type: "image" } },
@@ -317,7 +340,10 @@ test("new-chat model choices leave out embedding and reranking models", async ()
     {},
   );
   assert.deepEqual([...choices.selectable], ["custom::chat-a"]);
-  assert.deepEqual(choices.options.map((option) => option.value), ["custom::chat-a"]);
+  assert.deepEqual(
+    choices.options.map((option) => option.value),
+    ["custom::chat-a"],
+  );
   // And the control refuses one even when asked by value.
   const state: AppControlState = { settings: { appControlPolicy: "safe" }, newChatModels: choices };
   const service = new AppControlsService({
@@ -327,7 +353,12 @@ test("new-chat model choices leave out embedding and reranking models", async ()
     onChanged() {},
     commit: async () => assert.fail("a non-chat model must never be committed"),
   });
-  const user: AppControlContext = { actor: "user", target: "This desktop", humanGesture: true, isCurrent: () => true };
+  const user: AppControlContext = {
+    actor: "user",
+    target: "This desktop",
+    humanGesture: true,
+    isCurrent: () => true,
+  };
   await assert.rejects(
     service.apply(
       {
@@ -343,16 +374,23 @@ test("new-chat model choices leave out embedding and reranking models", async ()
 });
 
 test("theme and new-chat model controls: custom colors need a click, unknown models are refused, phones never see them", async () => {
-  const { getPresetVariant, normalizeAppearanceConfig } = await import("../../renderer/shared/appearance.js");
+  const { getPresetVariant, normalizeAppearanceConfig } =
+    await import("../../renderer/shared/appearance.js");
   const appearance = normalizeAppearanceConfig(undefined);
   const state: AppControlState = {
     settings: {
       appControlPolicy: "safe",
       lastProviderId: "lmstudio",
       lastModel: "qwen3-8b",
-      appearance: { ...appearance, light: { ...getPresetVariant("aiden", "light"), preset: "custom", accent: "#123456" } },
+      appearance: {
+        ...appearance,
+        light: { ...getPresetVariant("aiden", "light"), preset: "custom", accent: "#123456" },
+      },
     },
-    newChatModels: { options: [{ value: "lmstudio::qwen3-8b", label: "LM Studio · qwen3-8b" }], selectable: new Set(["lmstudio::qwen3-8b"]) },
+    newChatModels: {
+      options: [{ value: "lmstudio::qwen3-8b", label: "LM Studio · qwen3-8b" }],
+      selectable: new Set(["lmstudio::qwen3-8b"]),
+    },
   };
   let commits = 0;
   const service = new AppControlsService({
@@ -364,25 +402,49 @@ test("theme and new-chat model controls: custom colors need a click, unknown mod
       commits++;
     },
   });
-  const agent: AppControlContext = { actor: "agent", target: "This desktop", humanGesture: false, isCurrent: () => true };
+  const agent: AppControlContext = {
+    actor: "agent",
+    target: "This desktop",
+    humanGesture: false,
+    isCurrent: () => true,
+  };
   const appearanceRows = await service.snapshot("appearance", agent);
   const theme = appearanceRows.rows.find((row) => row.id === "appearance.theme")!;
   assert.equal(theme.value, "custom");
   assert.ok(theme.options?.some((option) => option.value === "moss"));
   await assert.rejects(
-    service.apply({ control: "appearance.theme", value: "moss", expectedRevision: theme.revision, operationId: "t" }, agent),
+    service.apply(
+      {
+        control: "appearance.theme",
+        value: "moss",
+        expectedRevision: theme.revision,
+        operationId: "t",
+      },
+      agent,
+    ),
     /foreground confirmation/u,
   );
   const model = (await service.snapshot("models", agent)).rows[0];
   assert.equal(model.value, "lmstudio::qwen3-8b");
   await assert.rejects(
-    service.apply({ control: "models.newChat", value: "openai::nope", expectedRevision: model.revision, operationId: "m" }, agent),
+    service.apply(
+      {
+        control: "models.newChat",
+        value: "openai::nope",
+        expectedRevision: model.revision,
+        operationId: "m",
+      },
+      agent,
+    ),
     /not available for new chats/u,
   );
   assert.equal(commits, 0);
   // Paired phones reject cards with rows they do not know, so they get the v1 rows only.
   const phone = await service.snapshot("appearance", { ...agent, remote: true });
-  assert.deepEqual(phone.rows.map((row) => row.id), ["appearance.mode", "appearance.chatWidth", "appearance.reduceMotion"]);
+  assert.deepEqual(
+    phone.rows.map((row) => row.id),
+    ["appearance.mode", "appearance.chatWidth", "appearance.reduceMotion"],
+  );
   assert.deepEqual((await service.snapshot("models", { ...agent, remote: true })).rows, []);
 });
 
@@ -393,8 +455,17 @@ function appTools(f: ReturnType<typeof fixture>, turn: { remote: boolean }) {
     service: f.service,
     context: { ...f.context, actor: "agent", humanGesture: false },
     liveState: !turn.remote,
-    ...(turn.remote ? {} : { open: async (destination: unknown) => { opened.push(destination); return { opened: true }; } }),
-    present: (panel) => { panels.push(panel); },
+    ...(turn.remote
+      ? {}
+      : {
+          open: async (destination: unknown) => {
+            opened.push(destination);
+            return { opened: true };
+          },
+        }),
+    present: (panel) => {
+      panels.push(panel);
+    },
   });
   const tool = (name: string) => tools.find((candidate) => candidate.name === name)!;
   return { tools, tool, panels, opened };
@@ -402,7 +473,13 @@ function appTools(f: ReturnType<typeof fixture>, turn: { remote: boolean }) {
 
 test("a chat declares the same app tools on this computer and from a paired device", () => {
   const declared = (remote: boolean) =>
-    JSON.stringify(appTools(fixture(), { remote }).tools.map(({ name, description, parameters }) => ({ name, description, parameters })));
+    JSON.stringify(
+      appTools(fixture(), { remote }).tools.map(({ name, description, parameters }) => ({
+        name,
+        description,
+        parameters,
+      })),
+    );
   assert.equal(declared(true), declared(false));
   assert.deepEqual(
     appTools(fixture(), { remote: true }).tools.map((tool) => tool.name),
@@ -417,20 +494,38 @@ test("from a paired device, settings reads, changes and other panels are refused
     remote.tool("aiden_set_preference").execute("c1", f.operation(), undefined, undefined),
     /not available in this turn: the request came from a paired device/u,
   );
-  await assert.rejects(remote.tool("aiden_get_state").execute("c2", { topic: "memory" }, undefined, undefined), /paired device/u);
-  await assert.rejects(remote.tool("aiden_open").execute("c3", { destination: "memory" }, undefined, undefined), /paired device/u);
-  await assert.rejects(remote.tool("aiden_show_controls").execute("c4", { topic: "models" }, undefined, undefined), /panels phones show|only these panels/u);
+  await assert.rejects(
+    remote.tool("aiden_get_state").execute("c2", { topic: "memory" }, undefined, undefined),
+    /paired device/u,
+  );
+  await assert.rejects(
+    remote.tool("aiden_open").execute("c3", { destination: "memory" }, undefined, undefined),
+    /paired device/u,
+  );
+  await assert.rejects(
+    remote.tool("aiden_show_controls").execute("c4", { topic: "models" }, undefined, undefined),
+    /panels phones show|only these panels/u,
+  );
   assert.equal(f.commits(), 0);
   assert.equal(f.state.settings.memoryEnabled, true);
   assert.equal(remote.panels.length, 0);
   // A panel phones show still works.
   await remote.tool("aiden_show_controls").execute("c5", { topic: "memory" }, undefined, undefined);
-  assert.deepEqual(remote.panels.map((panel) => panel.topic), ["memory"]);
+  assert.deepEqual(
+    remote.panels.map((panel) => panel.topic),
+    ["memory"],
+  );
   // The host refuses the same calls with the same reason before they reach a tool.
   const turn = { liveState: false, canOpen: false };
   assert.match(aidenAppToolUnavailableReason("aiden_set_preference", {}, turn)!, /paired device/u);
-  assert.match(aidenAppToolUnavailableReason("aiden_show_controls", { topic: "models" }, turn)!, /memory/u);
-  assert.equal(aidenAppToolUnavailableReason("aiden_show_controls", { topic: "memory" }, turn), undefined);
+  assert.match(
+    aidenAppToolUnavailableReason("aiden_show_controls", { topic: "models" }, turn)!,
+    /memory/u,
+  );
+  assert.equal(
+    aidenAppToolUnavailableReason("aiden_show_controls", { topic: "memory" }, turn),
+    undefined,
+  );
   assert.equal(aidenAppToolUnavailableReason("aiden_help", { query: "x" }, turn), undefined);
   assert.equal(aidenAppToolUnavailableReason("read_file", {}, turn), undefined);
 });
@@ -438,13 +533,21 @@ test("from a paired device, settings reads, changes and other panels are refused
 test("on this computer every app tool runs, and aiden_open needs a window that asked", async () => {
   const f = fixture();
   const local = appTools(f, { remote: false });
-  const result = await local.tool("aiden_set_preference").execute("c1", f.operation(), undefined, undefined);
+  const result = await local
+    .tool("aiden_set_preference")
+    .execute("c1", f.operation(), undefined, undefined);
   assert.match(JSON.stringify(result.content), /memory\.enabled|applied|ok/u);
   assert.equal(f.commits(), 1);
   await local.tool("aiden_open").execute("c2", { destination: "settings" }, undefined, undefined);
   assert.deepEqual(local.opened, ["settings"]);
   for (const name of ["aiden_get_state", "aiden_set_preference", "aiden_show_controls"]) {
-    assert.equal(aidenAppToolUnavailableReason(name, { topic: "models" }, { liveState: true, canOpen: true }), undefined);
+    assert.equal(
+      aidenAppToolUnavailableReason(name, { topic: "models" }, { liveState: true, canOpen: true }),
+      undefined,
+    );
   }
-  assert.match(aidenAppToolUnavailableReason("aiden_open", {}, { liveState: true, canOpen: false })!, /no Aiden window asked/u);
+  assert.match(
+    aidenAppToolUnavailableReason("aiden_open", {}, { liveState: true, canOpen: false })!,
+    /no Aiden window asked/u,
+  );
 });

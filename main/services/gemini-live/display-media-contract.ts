@@ -97,11 +97,14 @@ export function bindGeminiLiveDisplayMediaDocument(
       // On Linux, getDisplayMedia asks for "media" with no camera or microphone
       // types; the display handler then decides which screen, if any.
       const displayOnly =
-        permission === "media" && Array.isArray(details.mediaTypes) && details.mediaTypes.length === 0;
+        permission === "media" &&
+        Array.isArray(details.mediaTypes) &&
+        details.mediaTypes.length === 0;
       return (
         current() &&
         webContents === sender &&
-        (permission === "display-capture" || (permission === "media" && (audioOnly || displayOnly))) &&
+        (permission === "display-capture" ||
+          (permission === "media" && (audioOnly || displayOnly))) &&
         details.isMainFrame === true &&
         details.requestingUrl === requestingUrl
       );
@@ -111,20 +114,24 @@ export function bindGeminiLiveDisplayMediaDocument(
 
 interface DisplayMediaGuardSession {
   setPermissionCheckHandler(
-    handler: ((
-      webContents: Electron.WebContents | null,
-      permission: string,
-      requestingOrigin: string,
-      details: Electron.PermissionCheckHandlerHandlerDetails,
-    ) => boolean) | null,
+    handler:
+      | ((
+          webContents: Electron.WebContents | null,
+          permission: string,
+          requestingOrigin: string,
+          details: Electron.PermissionCheckHandlerHandlerDetails,
+        ) => boolean)
+      | null,
   ): void;
   setPermissionRequestHandler(
-    handler: ((
-      webContents: Electron.WebContents,
-      permission: string,
-      callback: (permissionGranted: boolean) => void,
-      details: Electron.PermissionRequest,
-    ) => void) | null,
+    handler:
+      | ((
+          webContents: Electron.WebContents,
+          permission: string,
+          callback: (permissionGranted: boolean) => void,
+          details: Electron.PermissionRequest,
+        ) => void)
+      | null,
   ): void;
   setDisplayMediaRequestHandler(
     handler:
@@ -186,42 +193,37 @@ export function installGeminiLiveDisplayMediaGuards(
       );
     },
   );
-  electronSession.setPermissionRequestHandler(
-    (webContents, permission, callback, details) => {
-      const mediaDetails = details as Electron.MediaAccessPermissionRequest;
-      callback(
-        getBindings().some((binding) =>
-          binding.allowsPermissionRequest(webContents, String(permission), {
-            isMainFrame: details.isMainFrame === true,
-            requestingUrl: details.requestingUrl ?? "",
-            mediaTypes: mediaDetails.mediaTypes,
-          }),
-        ),
-      );
-    },
-  );
-  electronSession.setDisplayMediaRequestHandler(
-    (request, callback) => {
-      // macOS shows its system picker and never dispatches here. Elsewhere a
-      // resolver may supply the source, but only for a bound Live document's
-      // own request, still bound once the source is known.
-      const binding = resolveSource
-        ? getBindings().find((candidate) => candidate.allowsDisplayRequest(request))
-        : undefined;
-      if (!resolveSource || !binding) {
-        callback({});
-        return;
-      }
-      resolveSource(binding).then(
-        (source) => {
-          const stillBound =
-            active && getBindings().includes(binding) && binding.allowsDisplayRequest(request);
-          callback(source && stillBound ? { video: source } : {});
-        },
-        () => callback({}),
-      );
-    },
-    GEMINI_LIVE_SYSTEM_PICKER_OPTIONS,
-  );
+  electronSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const mediaDetails = details as Electron.MediaAccessPermissionRequest;
+    callback(
+      getBindings().some((binding) =>
+        binding.allowsPermissionRequest(webContents, String(permission), {
+          isMainFrame: details.isMainFrame === true,
+          requestingUrl: details.requestingUrl ?? "",
+          mediaTypes: mediaDetails.mediaTypes,
+        }),
+      ),
+    );
+  });
+  electronSession.setDisplayMediaRequestHandler((request, callback) => {
+    // macOS shows its system picker and never dispatches here. Elsewhere a
+    // resolver may supply the source, but only for a bound Live document's
+    // own request, still bound once the source is known.
+    const binding = resolveSource
+      ? getBindings().find((candidate) => candidate.allowsDisplayRequest(request))
+      : undefined;
+    if (!resolveSource || !binding) {
+      callback({});
+      return;
+    }
+    resolveSource(binding).then(
+      (source) => {
+        const stillBound =
+          active && getBindings().includes(binding) && binding.allowsDisplayRequest(request);
+        callback(source && stillBound ? { video: source } : {});
+      },
+      () => callback({}),
+    );
+  }, GEMINI_LIVE_SYSTEM_PICKER_OPTIONS);
   return dispose;
 }

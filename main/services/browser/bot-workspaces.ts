@@ -9,7 +9,8 @@ const botsByWorkspace = new Map<string, string>();
 export function registerBotBrowserWorkspace(workspaceId: string, botId: string): void {
   if (!workspaceId || !botId) throw new Error("A Bot browser needs its Bot and workspace.");
   const current = botsByWorkspace.get(workspaceId);
-  if (current !== undefined && current !== botId) throw new Error("This browser workspace belongs to another Bot.");
+  if (current !== undefined && current !== botId)
+    throw new Error("This browser workspace belongs to another Bot.");
   botsByWorkspace.set(workspaceId, botId);
 }
 
@@ -20,9 +21,12 @@ export function botIdForBrowserWorkspace(workspaceId: string): string | undefine
 
 /** The browser workspaces registered for one Bot. */
 export function browserWorkspacesOfBot(botId: string): string[] {
-  return [...botsByWorkspace].flatMap(([workspaceId, owner]) => (owner === botId ? [workspaceId] : []));
+  return [...botsByWorkspace].flatMap(([workspaceId, owner]) =>
+    owner === botId ? [workspaceId] : [],
+  );
 }
 
 export function forgetBotBrowserWorkspace(botId: string): void {
-  for (const [workspaceId, owner] of botsByWorkspace) if (owner === botId) botsByWorkspace.delete(workspaceId);
+  for (const [workspaceId, owner] of botsByWorkspace)
+    if (owner === botId) botsByWorkspace.delete(workspaceId);
 }

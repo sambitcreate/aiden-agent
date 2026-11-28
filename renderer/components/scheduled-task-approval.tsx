@@ -18,12 +18,18 @@ import {
 } from "lucide-react";
 import { Badge, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
-import { formatScheduledTaskCadence, scheduledTaskEnabledAfterApproval } from "../shared/scheduled-task-presentation";
+import {
+  formatScheduledTaskCadence,
+  scheduledTaskEnabledAfterApproval,
+} from "../shared/scheduled-task-presentation";
 import type { ScheduleApprovalDetails } from "../shared/approval-card-model";
 import { localComputerNoun } from "../shared/computer-noun";
 import { useAppCapabilities } from "../lib/app-capabilities";
 
-export { scheduleApprovalHeadline, type ScheduleApprovalDetails } from "../shared/approval-card-model";
+export {
+  scheduleApprovalHeadline,
+  type ScheduleApprovalDetails,
+} from "../shared/approval-card-model";
 
 /** The card's footer for a schedule approval, naming this computer by its platform. */
 export function scheduleApprovalFooter(platform: string | null | undefined): string {
@@ -34,17 +40,27 @@ export function scheduleApprovalFooter(platform: string | null | undefined): str
 export function formatScheduleNextRun(timestamp: number, now = Date.now()): string {
   const at = new Date(timestamp);
   const time = at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  const day = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const day = (date: Date) =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
   const days = Math.round((day(at) - day(new Date(now))) / 86_400_000);
   if (days === 0) return `today at ${time}`;
   if (days === 1) return `tomorrow at ${time}`;
-  const date = at.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  const date = at.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
   return `${date} at ${time}`;
 }
 
 /** Whether the task will start on its own after this approval, so a next run is worth naming. */
 function runsOnItsOwn(details: ScheduleApprovalDetails): boolean {
-  if (!scheduledTaskEnabledAfterApproval(details) || !details.schedulerEnabled || details.nextRunAt <= 0) return false;
+  if (
+    !scheduledTaskEnabledAfterApproval(details) ||
+    !details.schedulerEnabled ||
+    details.nextRunAt <= 0
+  )
+    return false;
   return details.kind !== "scheduled-task" || details.action !== "remove";
 }
 
@@ -77,7 +93,11 @@ function Fact({
   );
 }
 
-function Note({ tone, icon: Icon, children }: {
+function Note({
+  tone,
+  icon: Icon,
+  children,
+}: {
   tone: "warning" | "neutral";
   icon: React.ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
   children: React.ReactNode;
@@ -87,7 +107,9 @@ function Note({ tone, icon: Icon, children }: {
       role="note"
       className={cn(
         "approval-well flex shrink-0 items-start gap-2 px-3.5 py-2.5 text-small",
-        tone === "warning" ? "bg-status-warning-surface text-status-warning" : "bg-well text-secondary",
+        tone === "warning"
+          ? "bg-status-warning-surface text-status-warning"
+          : "bg-well text-secondary",
       )}
     >
       <Icon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -112,20 +134,31 @@ export function ScheduledTaskApproval({
   now?: number;
 }) {
   const { platform } = useAppCapabilities();
-  const cadence = details.whenLabel ?? formatScheduledTaskCadence(details.cron, details.timezone, new Date(now));
-  const script = details.kind === "scheduled-task" && details.mode === "script" ? details.script : null;
+  const cadence =
+    details.whenLabel ?? formatScheduledTaskCadence(details.cron, details.timezone, new Date(now));
+  const script =
+    details.kind === "scheduled-task" && details.mode === "script" ? details.script : null;
   const body = script ?? details.prompt;
   const full = details.permission === "full";
   const removing = details.kind === "scheduled-task" && details.action === "remove";
   // Pausing says so in the question; "stays paused" is for a task saved or run while paused.
   const staysPaused =
-    !scheduledTaskEnabledAfterApproval(details) && !removing && !(details.kind === "scheduled-task" && details.action === "pause");
-  const connectors = details.mcpServerIds.map((id, index) => ({ id, name: details.mcpServerNames[index] ?? id }));
+    !scheduledTaskEnabledAfterApproval(details) &&
+    !removing &&
+    !(details.kind === "scheduled-task" && details.action === "pause");
+  const connectors = details.mcpServerIds.map((id, index) => ({
+    id,
+    name: details.mcpServerNames[index] ?? id,
+  }));
   const legacyGlobalMcp = details.kind === "scheduled-task" && details.legacyGlobalMcp;
   const postsIn = details.kind === "scheduled-task" ? details.postsIn : undefined;
 
   return (
-    <div id={descriptionId} className="mt-3 flex min-h-[min(7rem,12dvh)] flex-col gap-2 text-left" data-scheduled-task-approval="true">
+    <div
+      id={descriptionId}
+      className="mt-3 flex min-h-[min(7rem,12dvh)] flex-col gap-2 text-left"
+      data-scheduled-task-approval="true"
+    >
       {/* A tall review scrolls here, so the question, notes and buttons stay on screen above the composer.
           It keeps a few lines even in a cramped window; the card scrolls for the rest. */}
       <div
@@ -143,7 +176,12 @@ export function ScheduledTaskApproval({
               {cadence}
             </Text>
             {runsOnItsOwn(details) ? (
-              <Text variant="small" color="secondary" as="p" className="mt-1 flex items-center gap-1.5">
+              <Text
+                variant="small"
+                color="secondary"
+                as="p"
+                className="mt-1 flex items-center gap-1.5"
+              >
                 <Clock className="size-3.5 shrink-0" aria-hidden="true" />
                 Next run {formatScheduleNextRun(details.nextRunAt, now)}
               </Text>
@@ -152,7 +190,15 @@ export function ScheduledTaskApproval({
           <div className="@container mx-4 border-t border-separator py-3">
             <dl className="grid gap-x-6 gap-y-3 @md:grid-cols-2">
               <Fact
-                icon={details.workspaceName ? FolderOpen : connectors.length > 0 ? Plug : full ? Earth : Folder}
+                icon={
+                  details.workspaceName
+                    ? FolderOpen
+                    : connectors.length > 0
+                      ? Plug
+                      : full
+                        ? Earth
+                        : Folder
+                }
                 label="Runs in"
               >
                 {details.workspaceName ? (
@@ -204,7 +250,10 @@ export function ScheduledTaskApproval({
                 {details.timezone}
               </Fact>
               {postsIn ? (
-                <Fact icon={postsIn === "this_chat" ? MessageSquare : MessagesSquare} label="Posts in">
+                <Fact
+                  icon={postsIn === "this_chat" ? MessageSquare : MessagesSquare}
+                  label="Posts in"
+                >
                   {postsIn === "this_chat" ? "This chat" : "Its own chat"}
                 </Fact>
               ) : null}
@@ -232,7 +281,8 @@ export function ScheduledTaskApproval({
       </div>
       {!details.schedulerEnabled ? (
         <Note tone="warning" icon={TriangleAlert}>
-          Scheduling is off. This task will be saved but will not run automatically until you enable scheduling.
+          Scheduling is off. This task will be saved but will not run automatically until you enable
+          scheduling.
         </Note>
       ) : staysPaused ? (
         <Note tone="neutral" icon={CirclePause}>
@@ -241,7 +291,8 @@ export function ScheduledTaskApproval({
       ) : null}
       {legacyGlobalMcp ? (
         <Note tone="neutral" icon={Plug}>
-          This older task used every enabled connector. Approving limits it to the connectors listed here.
+          This older task used every enabled connector. Approving limits it to the connectors listed
+          here.
         </Note>
       ) : null}
     </div>

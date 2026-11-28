@@ -127,10 +127,7 @@ test("pending usage projections do not clone staged image payloads", async () =>
     artifact: artifact("image-1"),
     pixels: 1,
   });
-  const structuredCloneDescriptor = Object.getOwnPropertyDescriptor(
-    globalThis,
-    "structuredClone",
-  );
+  const structuredCloneDescriptor = Object.getOwnPropertyDescriptor(globalThis, "structuredClone");
   Object.defineProperty(globalThis, "structuredClone", {
     configurable: true,
     writable: true,
@@ -383,28 +380,41 @@ test("startup marks crash-recovered image generations as interrupted", async () 
   assert.match(recovery, /affected chats remain blocked/iu);
 });
 
-
 test("generated images use the existing staged-artifact recovery and dedup lifecycle", async () => {
   const root = await storageRoot();
   const store = new DisplayImageArtifactStore({ root: () => root, now: () => 42 });
   await store.initialize();
   const presented = new Set<string>();
-  const runtime = createDisplayImageExtensionRuntime({ workspaceRoot: root, artifactNamespace: "generated-turn",
+  const runtime = createDisplayImageExtensionRuntime({
+    workspaceRoot: root,
+    artifactNamespace: "generated-turn",
     onArtifact: async (artifact, dimensions) => {
       if (presented.has(artifact.attachment.id)) return false;
-      await store.stage({ chatId: "chat-generated", generationId: "generated-turn", model: "conversation-model", artifact, pixels: dimensions.width * dimensions.height });
+      await store.stage({
+        chatId: "chat-generated",
+        generationId: "generated-turn",
+        model: "conversation-model",
+        artifact,
+        pixels: dimensions.width * dimensions.height,
+      });
       presented.add(artifact.attachment.id);
       return true;
     },
   });
-  const image = { type: "image" as const, mimeType: "image/png", data: ONE_PIXEL_PNG.toString("base64") };
+  const image = {
+    type: "image" as const,
+    mimeType: "image/png",
+    data: ONE_PIXEL_PNG.toString("base64"),
+  };
   await runtime.presentGeneratedImage("paid-call", image);
   await runtime.presentGeneratedImage("paid-call", image);
   assert.equal((await store.pending()).length, 1);
   const recovered: RecoveredDisplayImageMessage[] = [];
   const restarted = new DisplayImageArtifactStore({ root: () => root });
   await restarted.initialize();
-  await restarted.recover([{ id: "chat-generated", messages: [] }], async (message) => { recovered.push(message); });
+  await restarted.recover([{ id: "chat-generated", messages: [] }], async (message) => {
+    recovered.push(message);
+  });
   assert.equal(recovered.length, 1);
   assert.equal(recovered[0]!.attachments.length, 1);
   assert.equal(recovered[0]!.attachments[0]!.data, image.data);

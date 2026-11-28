@@ -25,7 +25,11 @@ function plain(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-function shape(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
+function shape(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): Record<string, unknown> {
   if (!plain(value) || !hasExactKeys(value, required, optional)) invalid();
   return value;
 }
@@ -63,13 +67,23 @@ export function parseModelRef(value: unknown): ImageModelRef {
 export function parseSetModelEnabledRequest(value: unknown): ImageGenerationSetModelEnabledRequest {
   const request = shape(value, ["provider", "id", "enabled"]);
   if (typeof request.enabled !== "boolean") invalid();
-  return { provider: provider(request.provider), id: modelId(request.id), enabled: request.enabled };
+  return {
+    provider: provider(request.provider),
+    id: modelId(request.id),
+    enabled: request.enabled,
+  };
 }
 
 /** 1 to `maxBulkModelChanges` distinct models; a repeated model is rejected. */
-export function parseSetModelsEnabledRequest(value: unknown): ImageGenerationSetModelsEnabledRequest {
+export function parseSetModelsEnabledRequest(
+  value: unknown,
+): ImageGenerationSetModelsEnabledRequest {
   const { changes } = shape(value, ["changes"]);
-  if (!Array.isArray(changes) || changes.length === 0 || changes.length > IMAGE_GENERATION_LIMITS.maxBulkModelChanges) {
+  if (
+    !Array.isArray(changes) ||
+    changes.length === 0 ||
+    changes.length > IMAGE_GENERATION_LIMITS.maxBulkModelChanges
+  ) {
     invalid();
   }
   const seen = new Set<string>();
@@ -93,7 +107,11 @@ export function parseAddCustomModelRequest(value: unknown): ImageGenerationAddCu
     ["provider", "id"],
     ["name", "acceptsReferenceImages", "referenceField", "editEndpoint"],
   );
-  if (request.acceptsReferenceImages !== undefined && typeof request.acceptsReferenceImages !== "boolean") invalid();
+  if (
+    request.acceptsReferenceImages !== undefined &&
+    typeof request.acceptsReferenceImages !== "boolean"
+  )
+    invalid();
   return {
     provider: provider(request.provider),
     id: modelId(request.id),
@@ -103,7 +121,9 @@ export function parseAddCustomModelRequest(value: unknown): ImageGenerationAddCu
     ...(request.acceptsReferenceImages !== undefined
       ? { acceptsReferenceImages: request.acceptsReferenceImages as boolean }
       : {}),
-    ...(request.referenceField !== undefined ? { referenceField: boundedString(request.referenceField, 64) } : {}),
+    ...(request.referenceField !== undefined
+      ? { referenceField: boundedString(request.referenceField, 64) }
+      : {}),
     ...(request.editEndpoint !== undefined && request.editEndpoint !== ""
       ? { editEndpoint: modelId(request.editEndpoint) }
       : {}),

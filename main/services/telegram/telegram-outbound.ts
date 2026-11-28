@@ -85,13 +85,18 @@ function matchesButtonScope(
     return !exact;
   }
   if (!actual) return false;
-  if (stored.profile !== undefined && (actual.profile ?? "default") !== stored.profile) return false;
+  if (stored.profile !== undefined && (actual.profile ?? "default") !== stored.profile)
+    return false;
   if (exact && (stored.profile ?? "default") !== (actual.profile ?? "default")) return false;
   if (stored.chatId !== actual.chatId) return false;
   if (stored.threadId !== actual.threadId) return false;
   if (stored.ownerUserId !== actual.ownerUserId) return false;
   if ((stored.bindingKey ?? "unbound") !== (actual.bindingKey ?? "unbound")) return false;
-  if (exact ? stored.messageId !== actual.messageId : (stored.messageId !== undefined && stored.messageId !== actual.messageId)) {
+  if (
+    exact
+      ? stored.messageId !== actual.messageId
+      : stored.messageId !== undefined && stored.messageId !== actual.messageId
+  ) {
     return false;
   }
   return true;
@@ -104,7 +109,10 @@ export interface TelegramButtonStoreOptions {
 
 export type TelegramButtonStore = ReturnType<typeof createTelegramButtonStore>;
 
-export function createTelegramButtonStore(now: () => number, options: TelegramButtonStoreOptions = {}) {
+export function createTelegramButtonStore(
+  now: () => number,
+  options: TelegramButtonStoreOptions = {},
+) {
   const actions = new Map<string, StoredTelegramButtonAction>();
   const receipts = new Map<string, StoredTelegramCallbackReceipt>();
   const stopTargets = new Map<string, TelegramStopTargetReceipt>();
@@ -149,7 +157,13 @@ export function createTelegramButtonStore(now: () => number, options: TelegramBu
     });
     if (raw !== undefined) {
       const parsed = JSON.parse(raw) as Partial<ButtonStoreFile>;
-      if (parsed.version !== 1 || typeof parsed.actions !== "object" || parsed.actions === null || typeof parsed.receipts !== "object" || parsed.receipts === null) {
+      if (
+        parsed.version !== 1 ||
+        typeof parsed.actions !== "object" ||
+        parsed.actions === null ||
+        typeof parsed.receipts !== "object" ||
+        parsed.receipts === null
+      ) {
         throw new Error("Unreadable Telegram button state.");
       }
       for (const [id, stored] of Object.entries(parsed.actions)) {
@@ -234,7 +248,8 @@ export function createTelegramButtonStore(now: () => number, options: TelegramBu
         prune();
         const existing = receipts.get(callbackQueryId);
         if (existing) {
-          if (existing.token !== token || !matchesButtonScope(existing.scope, scope, true)) return undefined;
+          if (existing.token !== token || !matchesButtonScope(existing.scope, scope, true))
+            return undefined;
           return { action: toButtonAction(existing.action), alreadyCompleted: existing.completed };
         }
         const stored = actions.get(token);
@@ -279,7 +294,11 @@ export function createTelegramButtonStore(now: () => number, options: TelegramBu
         return found ? { ...found } : undefined;
       });
     },
-    recordStopTarget(stopIdentity: string, targetSubmissionId: string | null, stopped: boolean): Promise<void> {
+    recordStopTarget(
+      stopIdentity: string,
+      targetSubmissionId: string | null,
+      stopped: boolean,
+    ): Promise<void> {
       return locked(async () => {
         stopTargets.set(stopIdentity, { targetSubmissionId, stopped, updatedAt: now() });
         await persistToDisk();
@@ -300,38 +319,46 @@ export function planTelegramReply(
   const rows: TelegramInlineKeyboardMarkup["inline_keyboard"] = [];
   const attachments: TelegramOutboundAttachment[] = [];
   const voices: TelegramOutboundVoice[] = [];
-  const visible = markdown.replace(
-    /^<!--\s*(telegram_button|telegram_attach|telegram_voice)\s*:?[ \t]*(\{.*\}|(?:[A-Za-z_]\w*="[^"]*"\s*)+)\s*-->[ \t]*(?:\r?\n)?/gmu,
-    (_raw, command: string, source: string) => {
-      const payload = parsePayload(source.trim());
-      if (command === "telegram_attach") {
-        const path = stringValue(payload.path) ?? stringValue(payload.value);
-        if (path) attachments.push({ path, caption: stringValue(payload.caption) });
+  const visible = markdown
+    .replace(
+      /^<!--\s*(telegram_button|telegram_attach|telegram_voice)\s*:?[ \t]*(\{.*\}|(?:[A-Za-z_]\w*="[^"]*"\s*)+)\s*-->[ \t]*(?:\r?\n)?/gmu,
+      (_raw, command: string, source: string) => {
+        const payload = parsePayload(source.trim());
+        if (command === "telegram_attach") {
+          const path = stringValue(payload.path) ?? stringValue(payload.value);
+          if (path) attachments.push({ path, caption: stringValue(payload.caption) });
+          return "";
+        }
+        if (command === "telegram_voice") {
+          const text = stringValue(payload.text) ?? stringValue(payload.value);
+          const lang = stringValue(payload.lang);
+          const rate = stringValue(payload.rate);
+          if (text) voices.push({ text, ...(lang ? { lang } : {}), ...(rate ? { rate } : {}) });
+          return "";
+        }
+        const value = stringValue(payload.value);
+        const label = stringValue(payload.label) ?? value;
+        const prompt = stringValue(payload.prompt) ?? value;
+        const style = payload.selected_style;
+        const selectedStyle =
+          style === "primary" || style === "success" || style === "danger" ? style : undefined;
+        if (label && prompt) {
+          rows.push([
+            {
+              text: label.slice(0, 64),
+              callback_data: register({
+                label,
+                prompt,
+                ...(selectedStyle ? { selectedStyle } : {}),
+              }),
+            },
+          ]);
+        }
         return "";
-      }
-      if (command === "telegram_voice") {
-        const text = stringValue(payload.text) ?? stringValue(payload.value);
-        const lang = stringValue(payload.lang);
-        const rate = stringValue(payload.rate);
-        if (text) voices.push({ text, ...(lang ? { lang } : {}), ...(rate ? { rate } : {}) });
-        return "";
-      }
-      const value = stringValue(payload.value);
-      const label = stringValue(payload.label) ?? value;
-      const prompt = stringValue(payload.prompt) ?? value;
-      const style = payload.selected_style;
-      const selectedStyle = style === "primary" || style === "success" || style === "danger"
-        ? style
-        : undefined;
-      if (label && prompt) {
-        rows.push([{
-          text: label.slice(0, 64),
-          callback_data: register({ label, prompt, ...(selectedStyle ? { selectedStyle } : {}) }),
-        }]);
-      }
-      return "";
-    },
-  ).replace(/\n{3,}/gu, "\n\n").trim();
+      },
+    )
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
   return {
     markdown: visible || (rows.length ? "☑️ **Choose an option:**" : ""),
     attachments,
@@ -355,11 +382,13 @@ export function markTelegramButtonSelected(
   style: "primary" | "success" | "danger" = "primary",
 ): TelegramInlineKeyboardMarkup | undefined {
   let matched = false;
-  const inline_keyboard = markup.inline_keyboard.map((row) => row.map((button) => {
-    if (button.callback_data !== callbackData) return { ...button };
-    matched = true;
-    return { ...button, style };
-  }));
+  const inline_keyboard = markup.inline_keyboard.map((row) =>
+    row.map((button) => {
+      if (button.callback_data !== callbackData) return { ...button };
+      matched = true;
+      return { ...button, style };
+    }),
+  );
   return matched ? { inline_keyboard } : undefined;
 }
 
@@ -368,7 +397,7 @@ function parsePayload(source: string): Record<string, unknown> {
     try {
       const parsed: unknown = JSON.parse(source);
       return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? parsed as Record<string, unknown>
+        ? (parsed as Record<string, unknown>)
         : {};
     } catch {
       return {};

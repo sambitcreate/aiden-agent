@@ -18,7 +18,9 @@ function FoldGlyph({ posture }: { posture: AndroidFoldPosture }) {
       aria-hidden
     >
       <path d={posture === "closed" ? "M5 17h14M5 14h14" : "M3 15h8.4M12.6 15H21"} />
-      {posture === "opened" ? <circle cx="12" cy="15" r="0.9" fill="currentColor" stroke="none" /> : null}
+      {posture === "opened" ? (
+        <circle cx="12" cy="15" r="0.9" fill="currentColor" stroke="none" />
+      ) : null}
     </svg>
   );
 }
@@ -29,11 +31,21 @@ const ACTIONS: ReadonlyArray<{ posture: AndroidFoldPosture; label: string }> = [
 ];
 
 /** Fold and Unfold for an Android foldable emulator. Renders nothing for an emulator without a hinge. */
-export function DeviceAndroidFoldControls({ fold, enabled }: { fold: AndroidFoldView; enabled: boolean }) {
+export function DeviceAndroidFoldControls({
+  fold,
+  enabled,
+}: {
+  fold: AndroidFoldView;
+  enabled: boolean;
+}) {
   if (!fold.supported) return null;
   const posture = fold.fold?.posture ?? null;
   return (
-    <div className="device-duo-controls" aria-label="Android fold controls" aria-busy={fold.pending}>
+    <div
+      className="device-duo-controls"
+      aria-label="Android fold controls"
+      aria-busy={fold.pending}
+    >
       <div role="group" aria-label="Fold posture" className="device-duo-group">
         {ACTIONS.map((action) => (
           <Button

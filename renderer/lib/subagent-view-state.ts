@@ -558,7 +558,14 @@ const STATUS_LABELS: Record<SubagentRunViewState, string> = {
 };
 
 /** The six words in the order a summary lists them, most urgent first. */
-const STATUS_SUMMARY_ORDER = ["Waiting on you", "Running", "Queued", "Failed", "Stopped", "Done"] as const;
+const STATUS_SUMMARY_ORDER = [
+  "Waiting on you",
+  "Running",
+  "Queued",
+  "Failed",
+  "Stopped",
+  "Done",
+] as const;
 export type SubagentStatusWord = (typeof STATUS_SUMMARY_ORDER)[number];
 
 /**

@@ -83,10 +83,7 @@ test("packaged soak process ownership includes Electron helpers but excludes nei
     ),
     false,
   );
-  assert.equal(
-    isSubagentPackagedSoakPackageProcess(appPath, "/bin/sh -c helper"),
-    false,
-  );
+  assert.equal(isSubagentPackagedSoakPackageProcess(appPath, "/bin/sh -c helper"), false);
 });
 
 test("a normal cycle waits for a stable target-bundle process absence", async () => {
@@ -145,7 +142,10 @@ test("the failure path reaps lingering exact-bundle processes after the main pro
   const source = await readFile(new URL("./subagent-packaged-soak.mjs", import.meta.url), "utf8");
   const failureCleanup = source.slice(
     source.indexOf("if (!completed) {"),
-    source.indexOf("console.error(`Packaged subagent soak evidence was retained", source.indexOf("if (!completed) {")),
+    source.indexOf(
+      "console.error(`Packaged subagent soak evidence was retained",
+      source.indexOf("if (!completed) {"),
+    ),
   );
   assert.match(failureCleanup, /terminateTrackedProcess\(aidenProcess\)/u);
   assert.match(failureCleanup, /terminateLingeringSubagentPackagedSoakProcesses\(appPath\)/u);
@@ -262,7 +262,11 @@ test("packaged soak binds every launch and the final report to its staged artifa
   );
   assert.equal(verified, 1);
   assert.deepEqual(
-    await assertSubagentPackagedSoakArtifactStable("/private/Aiden Agent.app", artifact, dependencies),
+    await assertSubagentPackagedSoakArtifactStable(
+      "/private/Aiden Agent.app",
+      artifact,
+      dependencies,
+    ),
     artifact,
   );
   assert.equal(verified, 2);
@@ -292,10 +296,7 @@ test("packaged soak binds every launch and the final report to its staged artifa
 });
 
 test("loopback capability routes require exact high-entropy URL-safe tokens", () => {
-  assert.equal(
-    soakCapabilityBaseUrl(43123, nonce),
-    `http://127.0.0.1:43123/${nonce}/v1`,
-  );
+  assert.equal(soakCapabilityBaseUrl(43123, nonce), `http://127.0.0.1:43123/${nonce}/v1`);
   assert.equal(soakChatCompletionPath(nonce), `/${nonce}/v1/chat/completions`);
   assert.throws(() => soakCapabilityBaseUrl(43123, "guessable"), /256 bits/u);
 });
@@ -343,7 +344,10 @@ test("the fixture seeds current split config with a real eligible workspace", ()
   const provider = fixture.portableConfig.providers[0];
   assert.equal(provider?.id, SUBAGENT_PACKAGED_SOAK_PROVIDER_ID);
   assert.equal("models" in provider, false);
-  assert.equal(fixture.providerModelCache.byProvider[SUBAGENT_PACKAGED_SOAK_PROVIDER_ID]?.models?.[0], SUBAGENT_PACKAGED_SOAK_MODEL_ID);
+  assert.equal(
+    fixture.providerModelCache.byProvider[SUBAGENT_PACKAGED_SOAK_PROVIDER_ID]?.models?.[0],
+    SUBAGENT_PACKAGED_SOAK_MODEL_ID,
+  );
   assert.equal(
     fixture.providerModelCache.byProvider[SUBAGENT_PACKAGED_SOAK_PROVIDER_ID]?.modelMetadata?.[
       SUBAGENT_PACKAGED_SOAK_MODEL_ID
@@ -403,7 +407,11 @@ test("aggregate output retains only privacy-safe totals and verified package ide
     },
   });
   for (const [cycle, mode] of ["user_stop", "navigate", "quit"].entries()) {
-    const control = createSubagentPackagedSoakControl({ nonce: String(cycle).padStart(43, "x"), cycle: cycle + 1, mode });
+    const control = createSubagentPackagedSoakControl({
+      nonce: String(cycle).padStart(43, "x"),
+      cycle: cycle + 1,
+      mode,
+    });
     recordSubagentPackagedSoakCycle(aggregate, {
       receipt: createSubagentPackagedSoakReceipt(control, cleanMetrics),
       requestAborts: 1,

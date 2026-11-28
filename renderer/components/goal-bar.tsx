@@ -14,9 +14,20 @@ import { chatsApi } from "../lib/ipc";
 import { queryKeys, useChatGoal, useChatGoalProposal } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
 import { type GoalProposalView, type GoalView } from "../shared/goal";
-import { goalBarView, optimisticGoal, type GoalBarAction, type GoalBarTone } from "../lib/goal-bar-view";
+import {
+  goalBarView,
+  optimisticGoal,
+  type GoalBarAction,
+  type GoalBarTone,
+} from "../lib/goal-bar-view";
 
-export { GOAL_WINDOW_WANTED_DETAIL, goalBarView, optimisticGoal, type GoalBarAction, type GoalBarView } from "../lib/goal-bar-view";
+export {
+  GOAL_WINDOW_WANTED_DETAIL,
+  goalBarView,
+  optimisticGoal,
+  type GoalBarAction,
+  type GoalBarView,
+} from "../lib/goal-bar-view";
 
 const TONE_CLASS: Record<GoalBarTone, string> = {
   neutral: "bg-control text-secondary",
@@ -32,7 +43,12 @@ const ACTION_LABEL: Record<GoalBarAction, string> = {
   clear: "Clear",
 };
 
-const ICONS = { working: Repeat, paused: Pause, "needs-you": CircleAlert, done: CircleCheck } as const;
+const ICONS = {
+  working: Repeat,
+  paused: Pause,
+  "needs-you": CircleAlert,
+  done: CircleCheck,
+} as const;
 
 export function GoalBar({
   goal,
@@ -56,7 +72,13 @@ export function GoalBar({
         data-goal-status={goal.status}
         className="flex min-w-0 items-center gap-2.5 rounded-card bg-well px-3 py-2"
       >
-        <span aria-hidden="true" className={cn("grid size-7 shrink-0 place-items-center rounded-full [&_svg]:size-3.5", TONE_CLASS[view.tone])}>
+        <span
+          aria-hidden="true"
+          className={cn(
+            "grid size-7 shrink-0 place-items-center rounded-full [&_svg]:size-3.5",
+            TONE_CLASS[view.tone],
+          )}
+        >
           <Icon />
         </span>
         <div className="min-w-0 flex-1" aria-live="polite">
@@ -112,7 +134,13 @@ export function GoalProposalCard({
         data-goal-proposal=""
         className="flex min-w-0 items-start gap-2.5 rounded-card bg-well px-3 py-2"
       >
-        <span aria-hidden="true" className={cn("grid size-7 shrink-0 place-items-center rounded-full [&_svg]:size-3.5", TONE_CLASS.neutral)}>
+        <span
+          aria-hidden="true"
+          className={cn(
+            "grid size-7 shrink-0 place-items-center rounded-full [&_svg]:size-3.5",
+            TONE_CLASS.neutral,
+          )}
+        >
           <Repeat />
         </span>
         {/* Every character Start would send is shown: the objective wraps, never clips. */}
@@ -120,7 +148,13 @@ export function GoalProposalCard({
           <Text as="p" variant="small-strong">
             Keep going until:
           </Text>
-          <Text as="p" variant="small" color="secondary" className="whitespace-normal break-words" data-goal-proposal-objective="">
+          <Text
+            as="p"
+            variant="small"
+            color="secondary"
+            className="whitespace-normal break-words"
+            data-goal-proposal-objective=""
+          >
             {proposal.objective}
           </Text>
         </div>
@@ -169,7 +203,9 @@ export function ChatGoalBar({
         else await chatsApi.dismissGoalProposal(chatId);
       } catch (error) {
         queryClient.setQueryData(key, proposal);
-        toast.error(error instanceof Error ? error.message : "The suggestion could not be answered.");
+        toast.error(
+          error instanceof Error ? error.message : "The suggestion could not be answered.",
+        );
       } finally {
         setProposalPending(false);
       }
@@ -195,7 +231,11 @@ export function ChatGoalBar({
     setPending(action);
     try {
       if (action === "clear") await chatsApi.clearGoal(chatId);
-      else queryClient.setQueryData(key, action === "pause" ? await chatsApi.pauseGoal(chatId) : await chatsApi.resumeGoal(chatId));
+      else
+        queryClient.setQueryData(
+          key,
+          action === "pause" ? await chatsApi.pauseGoal(chatId) : await chatsApi.resumeGoal(chatId),
+        );
     } catch (error) {
       queryClient.setQueryData(key, before);
       toast.error(error instanceof Error ? error.message : "The goal could not be changed.");
@@ -205,5 +245,12 @@ export function ChatGoalBar({
     }
   };
 
-  return <GoalBar goal={goal} pending={pending} onAction={(action) => void act(action)} className={className} />;
+  return (
+    <GoalBar
+      goal={goal}
+      pending={pending}
+      onAction={(action) => void act(action)}
+      className={className}
+    />
+  );
 }

@@ -27,7 +27,11 @@ import {
   runSubagentChild,
   subagentPartialWorkNotes,
 } from "./subagent-child-runner.js";
-import { SubagentRuntimeRegistry, type SubagentChildSpec, type SubagentRuntimeChild } from "./child-agent-runtime.js";
+import {
+  SubagentRuntimeRegistry,
+  type SubagentChildSpec,
+  type SubagentRuntimeChild,
+} from "./child-agent-runtime.js";
 import {
   BOT_SUBAGENT_LIMIT_REACHED_RESULT,
   flushPendingSubagentTranscripts,
@@ -37,7 +41,10 @@ import {
 } from "./subagent-supervisor.js";
 import { chatSurfaceHooks } from "../agent-surface-hooks.js";
 import { SubagentTranscriptRecorder } from "./subagent-transcript-recorder.js";
-import type { SubagentTranscriptMessageEntry, SubagentTranscriptV1 } from "../../../renderer/shared/subagent-transcript.js";
+import type {
+  SubagentTranscriptMessageEntry,
+  SubagentTranscriptV1,
+} from "../../../renderer/shared/subagent-transcript.js";
 import { createForegroundSubagentPersistenceV2 } from "./subagent-foreground-persistence-v2.js";
 import type { ProductionSubagentRunStore } from "./subagent-run-store-production.js";
 import { createSubagentTool } from "./subagent-tool.js";
@@ -259,26 +266,40 @@ test("subagent model arguments are exact, bounded, and role constrained", () => 
     ...request(["One", "Two"]),
   });
   assert.equal(parseSubagentToolRequest({ ...request(), context: "fork" }).context, "fork");
-  const extended = { tasks: [{ role: "scout", label: "Survey", task: "Survey repository", maxTurns: 72 }] };
+  const extended = {
+    tasks: [{ role: "scout", label: "Survey", task: "Survey repository", maxTurns: 72 }],
+  };
   assert.equal(parseSubagentToolRequest(extended).tasks[0]?.maxTurns, 72);
   for (const maxTurns of [0, 129, 1.5, "72", null]) {
-    assert.throws(() => parseSubagentToolRequest({
-      tasks: [{ role: "scout", label: "Survey", task: "Survey repository", maxTurns }],
-    }), /turn budget/u);
+    assert.throws(
+      () =>
+        parseSubagentToolRequest({
+          tasks: [{ role: "scout", label: "Survey", task: "Survey repository", maxTurns }],
+        }),
+      /turn budget/u,
+    );
   }
-  assert.throws(() => parseSubagentToolRequest({
-    capabilities: { workspaceRead: true, workspaceWrite: true, web: false, mcp: [] },
-    tasks: [{ role: "scout", label: "Survey", task: "Survey repository", maxTurns: 72 }],
-  }), /read-only/u);
+  assert.throws(
+    () =>
+      parseSubagentToolRequest({
+        capabilities: { workspaceRead: true, workspaceWrite: true, web: false, mcp: [] },
+        tasks: [{ role: "scout", label: "Survey", task: "Survey repository", maxTurns: 72 }],
+      }),
+    /read-only/u,
+  );
   for (const restricted of [
     { shell: true },
     { delegate: true },
     { mcpMutations: [{ serverId: "docs", tools: ["publish"] }] },
   ]) {
-    assert.throws(() => parseSubagentToolRequest({
-      capabilities: { workspaceRead: true, web: false, mcp: [], ...restricted },
-      tasks: [{ role: "scout", label: "Survey", task: "Survey repository", maxTurns: 72 }],
-    }), /read-only/u);
+    assert.throws(
+      () =>
+        parseSubagentToolRequest({
+          capabilities: { workspaceRead: true, web: false, mcp: [], ...restricted },
+          tasks: [{ role: "scout", label: "Survey", task: "Survey repository", maxTurns: 72 }],
+        }),
+      /read-only/u,
+    );
   }
   for (const invalid of [
     {},
@@ -504,11 +525,16 @@ test("supervisor passes a requested read-only turn ceiling to its child", async 
       return completed(task.label);
     },
   });
-  await supervisor.execute({ tasks: [
-    { role: "scout", label: "Survey", task: "Survey source.", maxTurns: 72 },
-    { role: "scout", label: "Default", task: "Check a narrow source." },
-  ] });
-  assert.deepEqual(policies.sort((a, b) => (a ?? 0) - (b ?? 0)), [24, 72]);
+  await supervisor.execute({
+    tasks: [
+      { role: "scout", label: "Survey", task: "Survey source.", maxTurns: 72 },
+      { role: "scout", label: "Default", task: "Check a narrow source." },
+    ],
+  });
+  assert.deepEqual(
+    policies.sort((a, b) => (a ?? 0) - (b ?? 0)),
+    [24, 72],
+  );
 });
 
 test("V2 mixed read-only ceilings admit the extended child without losing the tree bound", async () => {
@@ -518,7 +544,9 @@ test("V2 mixed read-only ceilings admit the extended child without losing the tr
       selection: "v2",
       async reserveRun() {},
       releaseRunReservation() {},
-      async upsert(snapshot: unknown) { return snapshot as never; },
+      async upsert(snapshot: unknown) {
+        return snapshot as never;
+      },
     } as unknown as ProductionSubagentRunStore,
     generationId,
     chatId: TEST_SUPERVISOR_SCOPE.chatId,
@@ -557,23 +585,30 @@ test("V2 mixed read-only ceilings admit the extended child without losing the tr
       return completed(child.request.label);
     },
   });
-  const result = await supervisor.execute({ tasks: [
-    { role: "scout", label: "Extended", task: "Survey source.", maxTurns: 72 },
-    { role: "scout", label: "Default", task: "Check a narrow source." },
-  ] });
+  const result = await supervisor.execute({
+    tasks: [
+      { role: "scout", label: "Extended", task: "Survey source.", maxTurns: 72 },
+      { role: "scout", label: "Default", task: "Check a narrow source." },
+    ],
+  });
   assert.match(result, /## 1\. Extended[\s\S]*Status: completed/u);
   assert.match(result, /## 2\. Default[\s\S]*Status: completed/u);
-  assert.deepEqual(observed.sort((a, b) => a.policyTurns - b.policyTurns), [
-    { label: "Default", authorityTurns: 24, policyTurns: 24 },
-    { label: "Extended", authorityTurns: 72, policyTurns: 72 },
-  ]);
+  assert.deepEqual(
+    observed.sort((a, b) => a.policyTurns - b.policyTurns),
+    [
+      { label: "Default", authorityTurns: 24, policyTurns: 24 },
+      { label: "Extended", authorityTurns: 72, policyTurns: 72 },
+    ],
+  );
   await assert.rejects(
-    supervisor.execute({ tasks: Array.from({ length: 4 }, (_value, index) => ({
-      role: "scout" as const,
-      label: `Next ${index}`,
-      task: "One more.",
-      maxTurns: 128,
-    })) }),
+    supervisor.execute({
+      tasks: Array.from({ length: 4 }, (_value, index) => ({
+        role: "scout" as const,
+        label: `Next ${index}`,
+        task: "One more.",
+        maxTurns: 128,
+      })),
+    }),
     /generation tree budget exhausted.*new parent turn with narrower tasks/u,
   );
 });
@@ -585,7 +620,9 @@ test("V2 web siblings each spend their own network operation, in every batch of 
       selection: "v2",
       async reserveRun() {},
       releaseRunReservation() {},
-      async upsert(snapshot: unknown) { return snapshot as never; },
+      async upsert(snapshot: unknown) {
+        return snapshot as never;
+      },
     } as unknown as ProductionSubagentRunStore,
     generationId,
     chatId: TEST_SUPERVISOR_SCOPE.chatId,
@@ -625,21 +662,29 @@ test("V2 web siblings each spend their own network operation, in every batch of 
   });
   const web = { workspaceRead: true, web: true, mcp: [] };
 
-  const first = await supervisor.execute({ tasks: [
-    { role: "scout", label: "Search A", task: "Search A.", capabilities: web },
-    { role: "scout", label: "Search B", task: "Search B.", capabilities: web },
-  ] });
-  const second = await supervisor.execute({ tasks: [
-    { role: "scout", label: "Search C", task: "Search C.", capabilities: web },
-  ] });
+  const first = await supervisor.execute({
+    tasks: [
+      { role: "scout", label: "Search A", task: "Search A.", capabilities: web },
+      { role: "scout", label: "Search B", task: "Search B.", capabilities: web },
+    ],
+  });
+  const second = await supervisor.execute({
+    tasks: [{ role: "scout", label: "Search C", task: "Search C.", capabilities: web }],
+  });
 
-  assert.match(first, /## 1\. Search A[\s\S]*Status: completed[\s\S]*## 2\. Search B[\s\S]*Status: completed/u);
+  assert.match(
+    first,
+    /## 1\. Search A[\s\S]*Status: completed[\s\S]*## 2\. Search B[\s\S]*Status: completed/u,
+  );
   assert.match(second, /## 1\. Search C[\s\S]*Status: completed/u);
-  assert.deepEqual(searches.sort((a, b) => a.label.localeCompare(b.label)), [
-    { label: "Search A", allowed: true },
-    { label: "Search B", allowed: true },
-    { label: "Search C", allowed: true },
-  ]);
+  assert.deepEqual(
+    searches.sort((a, b) => a.label.localeCompare(b.label)),
+    [
+      { label: "Search A", allowed: true },
+      { label: "Search B", allowed: true },
+      { label: "Search C", allowed: true },
+    ],
+  );
 });
 
 test("V2 authority admission floors a high-resolution remaining deadline", async () => {
@@ -685,8 +730,19 @@ function secondRuntime(): ResolvedModelRuntime {
   const parent = runtime();
   return {
     ...parent,
-    provider: { ...parent.provider, id: "second-provider", label: "Second provider", models: ["second-model"] },
-    model: { ...parent.model, id: "second-model", name: "Second model", provider: "second-provider", contextWindow: 4_096 },
+    provider: {
+      ...parent.provider,
+      id: "second-provider",
+      label: "Second provider",
+      models: ["second-model"],
+    },
+    model: {
+      ...parent.model,
+      id: "second-model",
+      name: "Second model",
+      provider: "second-provider",
+      contextWindow: 4_096,
+    },
   };
 }
 
@@ -700,8 +756,18 @@ function modelPolicy(): SubagentModelPolicy {
       effort: "high",
     },
     candidates: [
-      { providerId: "phase2-provider", providerLabel: "Phase 2 provider", modelId: "phase2-model", modelLabel: "Phase 2 model" },
-      { providerId: "second-provider", providerLabel: "Second provider", modelId: "second-model", modelLabel: "Second model" },
+      {
+        providerId: "phase2-provider",
+        providerLabel: "Phase 2 provider",
+        modelId: "phase2-model",
+        modelLabel: "Phase 2 model",
+      },
+      {
+        providerId: "second-provider",
+        providerLabel: "Second provider",
+        modelId: "second-model",
+        modelLabel: "Second model",
+      },
     ],
     overridesAllowed: true,
   };
@@ -715,7 +781,9 @@ test("V2 siblings run their own approved models without sharing one runtime", as
       selection: "v2",
       async reserveRun() {},
       releaseRunReservation() {},
-      async upsert(snapshot: unknown) { return snapshot as never; },
+      async upsert(snapshot: unknown) {
+        return snapshot as never;
+      },
     } as unknown as ProductionSubagentRunStore,
     generationId,
     chatId: TEST_SUPERVISOR_SCOPE.chatId,
@@ -739,7 +807,17 @@ test("V2 siblings run their own approved models without sharing one runtime", as
     modelId: parentRuntime.model.id,
   });
   const resolved: string[] = [];
-  const observed = new Map<string, { model: string; thinking: ThinkingLevel; authorityThinking?: string; permission: string; root: string; capabilities: string }>();
+  const observed = new Map<
+    string,
+    {
+      model: string;
+      thinking: ThinkingLevel;
+      authorityThinking?: string;
+      permission: string;
+      root: string;
+      capabilities: string;
+    }
+  >();
   const supervisor = new SubagentSupervisor({
     generationId,
     ...TEST_SUPERVISOR_SCOPE,
@@ -771,10 +849,19 @@ test("V2 siblings run their own approved models without sharing one runtime", as
       return completed(child.request.label);
     },
   });
-  const result = await supervisor.execute(parseSubagentToolRequest({ tasks: [
-    { role: "scout", label: "Inherited", task: "Check the parent model." },
-    { role: "scout", label: "Other", task: "Check another model.", model: "second-provider/second-model" },
-  ] }));
+  const result = await supervisor.execute(
+    parseSubagentToolRequest({
+      tasks: [
+        { role: "scout", label: "Inherited", task: "Check the parent model." },
+        {
+          role: "scout",
+          label: "Other",
+          task: "Check another model.",
+          model: "second-provider/second-model",
+        },
+      ],
+    }),
+  );
 
   assert.deepEqual(resolved, ["second-provider/second-model"]);
   const inherited = observed.get("Inherited")!;
@@ -788,15 +875,31 @@ test("V2 siblings run their own approved models without sharing one runtime", as
   assert.equal(other.permission, inherited.permission);
   assert.equal(other.root, inherited.root);
   assert.equal(other.capabilities, inherited.capabilities);
-  assert.match(result, /## 1\. Inherited\nRole: scout\nModel: phase2-provider\/phase2-model \(effort high\)\nStatus: completed/u);
-  assert.match(result, /## 2\. Other\nRole: scout\nModel: second-provider\/second-model \(effort off\)\nStatus: completed/u);
+  assert.match(
+    result,
+    /## 1\. Inherited\nRole: scout\nModel: phase2-provider\/phase2-model \(effort high\)\nStatus: completed/u,
+  );
+  assert.match(
+    result,
+    /## 2\. Other\nRole: scout\nModel: second-provider\/second-model \(effort off\)\nStatus: completed/u,
+  );
   const snapshots = new Map(projector.snapshot().map((snapshot) => [snapshot.label, snapshot]));
   assert.deepEqual(
-    [snapshots.get("Inherited")?.providerId, snapshots.get("Inherited")?.modelId, snapshots.get("Inherited")?.thinkingLevel, snapshots.get("Inherited")?.modelSelection],
+    [
+      snapshots.get("Inherited")?.providerId,
+      snapshots.get("Inherited")?.modelId,
+      snapshots.get("Inherited")?.thinkingLevel,
+      snapshots.get("Inherited")?.modelSelection,
+    ],
     ["phase2-provider", "phase2-model", "high", "inherited"],
   );
   assert.deepEqual(
-    [snapshots.get("Other")?.providerId, snapshots.get("Other")?.modelId, snapshots.get("Other")?.thinkingLevel, snapshots.get("Other")?.modelSelection],
+    [
+      snapshots.get("Other")?.providerId,
+      snapshots.get("Other")?.modelId,
+      snapshots.get("Other")?.thinkingLevel,
+      snapshots.get("Other")?.modelSelection,
+    ],
     ["second-provider", "second-model", "off", "requested"],
   );
   const reparsed = parseSubagentRunSnapshotV1(JSON.parse(JSON.stringify(snapshots.get("Other"))));
@@ -836,7 +939,9 @@ test("generation token budget stays independent of a smaller-context child model
       selection: "v2",
       async reserveRun() {},
       releaseRunReservation() {},
-      async upsert(snapshot: unknown) { return snapshot as never; },
+      async upsert(snapshot: unknown) {
+        return snapshot as never;
+      },
     } as unknown as ProductionSubagentRunStore,
     generationId,
     chatId: TEST_SUPERVISOR_SCOPE.chatId,
@@ -877,32 +982,40 @@ test("generation token budget stays independent of a smaller-context child model
     },
   });
 
-  const first = await supervisor.execute(parseSubagentToolRequest({
-    tasks: [{ role: "scout", label: "Wide", task: "Use the parent model." }],
-  }));
+  const first = await supervisor.execute(
+    parseSubagentToolRequest({
+      tasks: [{ role: "scout", label: "Wide", task: "Use the parent model." }],
+    }),
+  );
   assert.match(first, /## 1\. Wide[\s\S]*Status: completed/u);
 
-  const second = await supervisor.execute(parseSubagentToolRequest({
-    tasks: [{
-      role: "scout",
-      label: "Narrow",
-      task: "Use a smaller context window.",
-      model: "second-provider/second-model",
-    }],
-  }));
+  const second = await supervisor.execute(
+    parseSubagentToolRequest({
+      tasks: [
+        {
+          role: "scout",
+          label: "Narrow",
+          task: "Use a smaller context window.",
+          model: "second-provider/second-model",
+        },
+      ],
+    }),
+  );
   assert.match(second, /## 1\. Narrow[\s\S]*Status: completed/u);
 
-  const mixed = await supervisor.execute(parseSubagentToolRequest({
-    tasks: [
-      { role: "scout", label: "Wide sibling", task: "Keep the parent model." },
-      {
-        role: "scout",
-        label: "Narrow sibling",
-        task: "Share the batch with a smaller context window.",
-        model: "second-provider/second-model",
-      },
-    ],
-  }));
+  const mixed = await supervisor.execute(
+    parseSubagentToolRequest({
+      tasks: [
+        { role: "scout", label: "Wide sibling", task: "Keep the parent model." },
+        {
+          role: "scout",
+          label: "Narrow sibling",
+          task: "Share the batch with a smaller context window.",
+          model: "second-provider/second-model",
+        },
+      ],
+    }),
+  );
   assert.match(mixed, /## 1\. Wide sibling[\s\S]*Status: completed/u);
   assert.match(mixed, /## 2\. Narrow sibling[\s\S]*Status: completed/u);
   assert.deepEqual(launched.slice(0, 2), ["Wide", "Narrow"]);
@@ -930,7 +1043,9 @@ test("a refused child model launches, prepares, and projects nothing", async () 
     projector,
     prepareRun: async ({ identity, contextRevision }) => {
       prepared += 1;
-      return phase6Prepared(phase6Authority({ runId: identity.runId, contextRevision, delegate: false }));
+      return phase6Prepared(
+        phase6Authority({ runId: identity.runId, contextRevision, delegate: false }),
+      );
     },
     selectChildModel: createSubagentChildModelResolver({
       policy: modelPolicy(),
@@ -944,10 +1059,14 @@ test("a refused child model launches, prepares, and projects nothing", async () 
     },
   });
   await assert.rejects(
-    supervisor.execute(parseSubagentToolRequest({ tasks: [
-      { role: "scout", label: "Fine", task: "Check." },
-      { role: "scout", label: "Unknown", task: "Check.", model: "missing/model" },
-    ] })),
+    supervisor.execute(
+      parseSubagentToolRequest({
+        tasks: [
+          { role: "scout", label: "Fine", task: "Check." },
+          { role: "scout", label: "Unknown", task: "Check.", model: "missing/model" },
+        ],
+      }),
+    ),
     /Model missing\/model is not available for subagents\. Available models: phase2-provider\/phase2-model, second-provider\/second-model\./u,
   );
   assert.equal(prepared, 0);
@@ -974,16 +1093,22 @@ test("a model or effort request with no model policy launches nothing", async ()
   });
   for (const extra of [{ model: "second-provider/second-model" }, { effort: "low" }]) {
     await assert.rejects(
-      supervisor.execute(parseSubagentToolRequest({ tasks: [
-        { role: "scout", label: "Fine", task: "Check." },
-        { role: "scout", label: "Chosen", task: "Check.", ...extra },
-      ] })),
+      supervisor.execute(
+        parseSubagentToolRequest({
+          tasks: [
+            { role: "scout", label: "Fine", task: "Check." },
+            { role: "scout", label: "Chosen", task: "Check.", ...extra },
+          ],
+        }),
+      ),
       /overrides are not available for this response/u,
     );
   }
   assert.equal(launched, 0);
   assert.match(
-    await supervisor.execute(parseSubagentToolRequest({ tasks: [{ role: "scout", label: "Plain", task: "Check." }] })),
+    await supervisor.execute(
+      parseSubagentToolRequest({ tasks: [{ role: "scout", label: "Plain", task: "Check." }] }),
+    ),
     /Status: completed/u,
   );
   assert.equal(launched, 1);
@@ -1023,7 +1148,12 @@ test("supervisor records only canonical non-interrupted terminal outcomes", asyn
 });
 
 test("a desktop chat's subagents each fire SubagentStop once with the chat's hooks and show their messages", async () => {
-  const dispatched: Array<{ event: string; payload: Record<string, unknown>; scopes: unknown; idempotencyKey?: string }> = [];
+  const dispatched: Array<{
+    event: string;
+    payload: Record<string, unknown>;
+    scopes: unknown;
+    idempotencyKey?: string;
+  }> = [];
   const reported: string[][] = [];
   const supervisor = new SubagentSupervisor({
     generationId: "subagent-stop",
@@ -1038,9 +1168,18 @@ test("a desktop chat's subagents each fire SubagentStop once with the chat's hoo
       () => ({
         hasHooks: (event) => event === "SubagentStop",
         dispatch: async (event, payload, context) => {
-          dispatched.push({ event, payload, scopes: context.scopes, idempotencyKey: context.idempotencyKey });
+          dispatched.push({
+            event,
+            payload,
+            scopes: context.scopes,
+            idempotencyKey: context.idempotencyKey,
+          });
           return payload.aiden_status === "failed"
-            ? { ranHooks: ["notify"], systemMessages: ["Subagent failed; paged you."], notices: ["Hook notify timed out."] }
+            ? {
+                ranHooks: ["notify"],
+                systemMessages: ["Subagent failed; paged you."],
+                notices: ["Hook notify timed out."],
+              }
             : { ranHooks: ["notify"] };
         },
       }),
@@ -1048,7 +1187,13 @@ test("a desktop chat's subagents each fire SubagentStop once with the chat's hoo
     ),
     runChild: async ({ request: task }) =>
       task.label === "Failed"
-        ? { role: task.role, label: task.label, status: "failed", summary: "", warning: "Not completed." }
+        ? {
+            role: task.role,
+            label: task.label,
+            status: "failed",
+            summary: "",
+            warning: "Not completed.",
+          }
         : completed(task.label, "Found the cause."),
   });
 
@@ -1056,13 +1201,25 @@ test("a desktop chat's subagents each fire SubagentStop once with the chat's hoo
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(
-    dispatched.map(({ event, payload }) => [event, payload.aiden_label, payload.aiden_status, payload.session_id, payload.cwd]).sort(),
+    dispatched
+      .map(({ event, payload }) => [
+        event,
+        payload.aiden_label,
+        payload.aiden_status,
+        payload.session_id,
+        payload.cwd,
+      ])
+      .sort(),
     [
       ["SubagentStop", "Done", "completed", "chat-test", "/workspace"],
       ["SubagentStop", "Failed", "failed", "chat-test", "/workspace"],
     ],
   );
-  assert.equal(dispatched.find((entry) => entry.payload.aiden_label === "Done")?.payload.last_assistant_message, "Found the cause.");
+  assert.equal(
+    dispatched.find((entry) => entry.payload.aiden_label === "Done")?.payload
+      .last_assistant_message,
+    "Found the cause.",
+  );
   assert.deepEqual(dispatched[0]?.scopes, [
     { kind: "global" },
     { kind: "workspace", workspaceRoot: "/workspace" },
@@ -1070,7 +1227,9 @@ test("a desktop chat's subagents each fire SubagentStop once with the chat's hoo
   ]);
   assert.equal(new Set(dispatched.map((entry) => entry.idempotencyKey)).size, 2);
   // Only the run whose hook had something to say reaches the person; the quiet one reports nothing.
-  assert.deepEqual(reported, [["Hook notify: Subagent failed; paged you.", "Hook notify timed out."]]);
+  assert.deepEqual(reported, [
+    ["Hook notify: Subagent failed; paged you.", "Hook notify timed out."],
+  ]);
 });
 
 test("a No workspace chat's subagents skip workspace hooks", async () => {
@@ -1373,7 +1532,11 @@ test("a Bot reply stops its helpers at the limit and refuses every later launch"
       runChild: async ({ request: task, signal }) => {
         launches += 1;
         await new Promise<never>((_resolve, reject) => {
-          signal?.addEventListener("abort", () => reject(new Error("Parent generation cancelled.")), { once: true });
+          signal?.addEventListener(
+            "abort",
+            () => reject(new Error("Parent generation cancelled.")),
+            { once: true },
+          );
         });
         return completed(task.label);
       },
@@ -1444,107 +1607,127 @@ test("a Bot reply stops its helpers at the limit and refuses every later launch"
 });
 
 for (const drains of [false, true]) {
-test(`stopping a helper that edited a file hands the parent its last message and changed files (${drains ? "clean stop" : "stop not finished"})`, async () => {
-  const stops: Array<(reason?: Error) => void> = [];
-  const wrote = deferred<void>();
-  let finishStopping = (): void => undefined;
-  let tools: AgentTool[] = [];
-  const control = fakeChild(async ({ emit }) => {
-    const write = tools.find((tool) => tool.name === "write_file")!;
-    await write.execute("write-1", { path: "cookbook.html", content: "<h1>Soup</h1>" });
-    const message = assistant("Added the soup section to cookbook.html; the salad section is next.");
-    await emit({ type: "message_start", message } as AgentEvent);
-    await emit({ type: "message_end", message: { ...message, stopReason: "toolUse" } } as AgentEvent);
-    wrote.resolve();
-    await new Promise<void>((resolve) => {
-      finishStopping = resolve;
-    });
-  }, () => {
-    if (drains) finishStopping();
-  });
-  const supervisor = new SubagentSupervisor({
-    generationId: "generation-phase6b",
-    ...TEST_SUPERVISOR_SCOPE,
-    runtime: runtime(),
-    thinkingLevel: "high",
-    workspaceRoot: "/workspace",
-    permission: "full",
-    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
-    policy: { cancellationGraceMs: 10 },
-    prepareRun: async ({ identity, contextRevision, stop }) => {
-      stops.push(stop);
-      return phase6Prepared(
-        phase6Authority({ runId: identity.runId, contextRevision, delegate: false }),
-      );
-    },
-    runChild: (input) =>
-      runSubagentChild({
-        ...input,
-        onCleanupFailure: () => {},
-        prepareWorkspaceWriteApproval: () => ({
-          beforeToolCall: async () => undefined,
-          execute: async () => ({
-            content: [{ type: "text", text: "The approved workspace file change was committed." }],
-            details: null,
+  test(`stopping a helper that edited a file hands the parent its last message and changed files (${drains ? "clean stop" : "stop not finished"})`, async () => {
+    const stops: Array<(reason?: Error) => void> = [];
+    const wrote = deferred<void>();
+    let finishStopping = (): void => undefined;
+    let tools: AgentTool[] = [];
+    const control = fakeChild(
+      async ({ emit }) => {
+        const write = tools.find((tool) => tool.name === "write_file")!;
+        await write.execute("write-1", { path: "cookbook.html", content: "<h1>Soup</h1>" });
+        const message = assistant(
+          "Added the soup section to cookbook.html; the salad section is next.",
+        );
+        await emit({ type: "message_start", message } as AgentEvent);
+        await emit({
+          type: "message_end",
+          message: { ...message, stopReason: "toolUse" },
+        } as AgentEvent);
+        wrote.resolve();
+        await new Promise<void>((resolve) => {
+          finishStopping = resolve;
+        });
+      },
+      () => {
+        if (drains) finishStopping();
+      },
+    );
+    const supervisor = new SubagentSupervisor({
+      generationId: "generation-phase6b",
+      ...TEST_SUPERVISOR_SCOPE,
+      runtime: runtime(),
+      thinkingLevel: "high",
+      workspaceRoot: "/workspace",
+      permission: "full",
+      inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+      policy: { cancellationGraceMs: 10 },
+      prepareRun: async ({ identity, contextRevision, stop }) => {
+        stops.push(stop);
+        return phase6Prepared(
+          phase6Authority({ runId: identity.runId, contextRevision, delegate: false }),
+        );
+      },
+      runChild: (input) =>
+        runSubagentChild({
+          ...input,
+          onCleanupFailure: () => {},
+          prepareWorkspaceWriteApproval: () => ({
+            beforeToolCall: async () => undefined,
+            execute: async () => ({
+              content: [
+                { type: "text", text: "The approved workspace file change was committed." },
+              ],
+              details: null,
+            }),
+            shutdown: async () => {},
           }),
-          shutdown: async () => {},
-        }),
-        dependencies: {
-          buildTools: async () => ({
-            tools: [
-              {
-                name: "write_file",
-                label: "Write File",
-                description: "Attended write.",
-                parameters: { type: "object" },
-                execute: async () => ({ content: [], details: null }),
-              } as unknown as AgentTool,
-            ],
-            outboundApprovalBindings: [],
-            workspaceWriteApprovalBindings: [
-              { toolName: "write_file" as const, operation: "write" as const },
-            ],
-            mcpMutationApprovalBindings: [],
-            shellApprovalBindings: [],
-          }),
-          createChild: (spec) => {
-            tools = spec.tools;
-            return control.child;
+          dependencies: {
+            buildTools: async () => ({
+              tools: [
+                {
+                  name: "write_file",
+                  label: "Write File",
+                  description: "Attended write.",
+                  parameters: { type: "object" },
+                  execute: async () => ({ content: [], details: null }),
+                } as unknown as AgentTool,
+              ],
+              outboundApprovalBindings: [],
+              workspaceWriteApprovalBindings: [
+                { toolName: "write_file" as const, operation: "write" as const },
+              ],
+              mcpMutationApprovalBindings: [],
+              shellApprovalBindings: [],
+            }),
+            createChild: (spec) => {
+              tools = spec.tools;
+              return control.child;
+            },
+            recordUsage: async () => {},
           },
-          recordUsage: async () => {},
-        },
-      }),
+        }),
+    });
+
+    const execution = supervisor.execute(request(["Cookbook"]));
+    await wrote.promise;
+    stops[0]?.(new Error("The person stopped this helper."));
+    const result = await execution;
+
+    assert.match(result, /## 1\. Cookbook[\s\S]*Status: interrupted/u);
+    assert.match(result, /Added the soup section to cookbook\.html; the salad section is next\./u);
+    assert.match(result, /Files it changed:\n> - cookbook\.html\n/u);
+    if (drains) {
+      // A helper that finished stopping cannot add a write, so its list is complete.
+      assert.doesNotMatch(result, /may be incomplete/u);
+    } else {
+      // This child never finishes stopping, so a gated write could still land.
+      assert.match(
+        result,
+        /- cookbook\.html\n> The helper had not finished stopping, so this list may be incomplete\./u,
+      );
+    }
+    assert.doesNotMatch(result, /ran commands/u);
+    assert.match(result, /incomplete, unverified partial findings/u);
   });
-
-  const execution = supervisor.execute(request(["Cookbook"]));
-  await wrote.promise;
-  stops[0]?.(new Error("The person stopped this helper."));
-  const result = await execution;
-
-  assert.match(result, /## 1\. Cookbook[\s\S]*Status: interrupted/u);
-  assert.match(result, /Added the soup section to cookbook\.html; the salad section is next\./u);
-  assert.match(result, /Files it changed:\n> - cookbook\.html\n/u);
-  if (drains) {
-    // A helper that finished stopping cannot add a write, so its list is complete.
-    assert.doesNotMatch(result, /may be incomplete/u);
-  } else {
-    // This child never finishes stopping, so a gated write could still land.
-    assert.match(result, /- cookbook\.html\n> The helper had not finished stopping, so this list may be incomplete\./u);
-  }
-  assert.doesNotMatch(result, /ran commands/u);
-  assert.match(result, /incomplete, unverified partial findings/u);
-});
 }
 
 test("changed-file notes keep each path whole even when names contain list separators", () => {
-  const paths = ["notes, drafts.md", "salt and pepper.html", ...Array.from({ length: 21 }, (_v, i) => `page-${i}.html`)];
+  const paths = [
+    "notes, drafts.md",
+    "salt and pepper.html",
+    ...Array.from({ length: 21 }, (_v, i) => `page-${i}.html`),
+  ];
   const [files] = subagentPartialWorkNotes(paths, 2, false);
   const lines = files!.split("\n");
   assert.equal(lines[0], "Files it changed:");
   assert.ok(lines.includes("- notes, drafts.md"));
   assert.ok(lines.includes("- salt and pepper.html"));
   // 20 listed paths, then the 3 unlisted paths plus 2 untracked ones.
-  assert.equal(lines.filter((line) => line.startsWith("- ") && !line.startsWith("- and ")).length, 20);
+  assert.equal(
+    lines.filter((line) => line.startsWith("- ") && !line.startsWith("- and ")).length,
+    20,
+  );
   assert.equal(lines[lines.length - 1], "- and 5 more");
 });
 
@@ -2158,14 +2341,17 @@ test("guidance that stops a helper with partial work still tells the parent to r
     inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
     runChild: async ({ request: task, signal }) => {
       started.resolve();
-      await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+      await new Promise<void>((resolve) =>
+        signal?.addEventListener("abort", () => resolve(), { once: true }),
+      );
       // The runner hands over settled work under a generic interrupted result.
       return {
         role: task.role,
         label: task.label,
         status: "interrupted",
         summary: "Read the soup and salad sections.",
-        warning: "The child was interrupted before completion. These are incomplete, unverified partial findings.",
+        warning:
+          "The child was interrupted before completion. These are incomplete, unverified partial findings.",
       };
     },
   });
@@ -2617,7 +2803,11 @@ test("child workspace-read prompt follows assembled tools even when the V2 grant
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-prompt-tools-"));
   t.after(() => fs.rm(workspaceRoot, { recursive: true, force: true }));
   for (const inheritedCeiling of [[], ["read_file"]] as const) {
-    const authority = phase6Authority({ runId: "prompt-tools", contextRevision: "d".repeat(64), delegate: false });
+    const authority = phase6Authority({
+      runId: "prompt-tools",
+      contextRevision: "d".repeat(64),
+      delegate: false,
+    });
     assert.equal(authority.capabilities.workspaceRead, true);
     let prompt = "";
     const control = fakeChild(async ({ emit }) => {
@@ -2626,19 +2816,34 @@ test("child workspace-read prompt follows assembled tools even when the V2 grant
       await emit({ type: "message_end", message } as AgentEvent);
     });
     const result = await runSubagentChild({
-      authority: TEST_CHILD_AUTHORITY, context: TEST_CHILD_CONTEXT,
-      v2Authority: authority, currentV2Authority: () => authority,
-      groupId: "prompt-tools", runtime: runtime(), thinkingLevel: "high",
-      workspaceRoot, permission: "ask", inheritedCeiling,
+      authority: TEST_CHILD_AUTHORITY,
+      context: TEST_CHILD_CONTEXT,
+      v2Authority: authority,
+      currentV2Authority: () => authority,
+      groupId: "prompt-tools",
+      runtime: runtime(),
+      thinkingLevel: "high",
+      workspaceRoot,
+      permission: "ask",
+      inheritedCeiling,
       request: { role: "reviewer", label: "Analyze", task: "Analyze the supplied evidence." },
       dependencies: {
         // This is the production workspace capability intersection, not an
         // invented empty tool builder. V2 authority must never override it.
-        buildTools: async (input) => buildSubagentCapabilityTools({
-          workspaceRoot: input.workspaceRoot, permission: input.permission,
-          capabilityProfile: { kind: "subagent", role: input.role, inheritedCeiling: input.inheritedCeiling },
-        }).tools,
-        createChild: (spec) => { prompt = spec.systemPrompt; return control.child; },
+        buildTools: async (input) =>
+          buildSubagentCapabilityTools({
+            workspaceRoot: input.workspaceRoot,
+            permission: input.permission,
+            capabilityProfile: {
+              kind: "subagent",
+              role: input.role,
+              inheritedCeiling: input.inheritedCeiling,
+            },
+          }).tools,
+        createChild: (spec) => {
+          prompt = spec.systemPrompt;
+          return control.child;
+        },
         recordUsage: async () => {},
       },
     });
@@ -2648,7 +2853,11 @@ test("child workspace-read prompt follows assembled tools even when the V2 grant
       assert.match(prompt, /You have no workspace read or mutation tools/);
       assert.doesNotMatch(prompt, /You have read-only workspace tools/);
     }
-    assert.equal(authority.capabilities.workspaceRead, true, "prompt correction cannot rewrite authority");
+    assert.equal(
+      authority.capabilities.workspaceRead,
+      true,
+      "prompt correction cannot rewrite authority",
+    );
   }
 });
 
@@ -3094,7 +3303,6 @@ test("child runner bounds non-cooperative deadlines and output-limit cancellatio
   assert.doesNotMatch(turnLimited.summary, /secret-value-here/u);
   assert.match(turnLimited.summary, /REDACTED/u);
   assert.equal(turnControl.cancelCount, 1);
-
 });
 
 test("oversized turn-limit findings stay failed and carry summary truncation provenance", async () => {
@@ -3102,7 +3310,10 @@ test("oversized turn-limit findings stay failed and carry summary truncation pro
     for (let index = 1; index <= 5; index += 1) {
       const message = assistant(`note-${index}: ${String(index).repeat(2_500)}`);
       await emit({ type: "turn_start" } as AgentEvent);
-      await emit({ type: "message_end", message: { ...message, stopReason: "toolUse" } } as AgentEvent);
+      await emit({
+        type: "message_end",
+        message: { ...message, stopReason: "toolUse" },
+      } as AgentEvent);
     }
     await emit({ type: "turn_start" } as AgentEvent);
   });
@@ -3125,7 +3336,11 @@ test("oversized turn-limit findings stay failed and carry summary truncation pro
   });
   assert.equal(result.status, "failed");
   assert.match(result.warning ?? "", /incomplete, unverified partial findings/u);
-  assert.equal(result.summaryTruncated, true, "the projector needs this flag to show report_truncated");
+  assert.equal(
+    result.summaryTruncated,
+    true,
+    "the projector needs this flag to show report_truncated",
+  );
   assert.equal(result.summary.length, MAX_SUBAGENT_SUMMARY_CHARS);
   assert.match(result.summary, /^note-1:/u);
   assert.match(result.summary, /5$/u);
@@ -3135,7 +3350,10 @@ test("oversized turn-limit findings stay failed and carry summary truncation pro
 test("turn-limit partial findings exclude text from aborted assistant messages", async () => {
   const control = fakeChild(async ({ emit }) => {
     const settled = assistant("Verified source path: /workspace/src/index.ts");
-    const aborted = { ...assistant("Unverified draft finding"), stopReason: "aborted" } as AssistantMessage;
+    const aborted = {
+      ...assistant("Unverified draft finding"),
+      stopReason: "aborted",
+    } as AssistantMessage;
     await emit({ type: "turn_start" } as AgentEvent);
     await emit({ type: "message_end", message: settled } as AgentEvent);
     await emit({ type: "turn_end", message: settled, toolResults: [] } as AgentEvent);
@@ -3170,11 +3388,13 @@ test("turn-limit partial findings exclude text from aborted assistant messages",
 test("turn-limit findings reaching the parent filter obfuscated and encoded credentials", async () => {
   const encoded = Buffer.from("OPENAI_API_KEY=encoded-secret-value").toString("base64");
   const control = fakeChild(async ({ emit }) => {
-    const message = assistant([
-      "Verified source path: /workspace/src/index.ts",
-      "OPENAI_API_KEY\u200b＝obfuscated-secret-value",
-      `Encoded credential: ${encoded}`,
-    ].join("\n"));
+    const message = assistant(
+      [
+        "Verified source path: /workspace/src/index.ts",
+        "OPENAI_API_KEY\u200b＝obfuscated-secret-value",
+        `Encoded credential: ${encoded}`,
+      ].join("\n"),
+    );
     await emit({ type: "turn_start" } as AgentEvent);
     await emit({ type: "message_end", message } as AgentEvent);
     await emit({ type: "turn_end", message, toolResults: [] } as AgentEvent);
@@ -3188,18 +3408,19 @@ test("turn-limit findings reaching the parent filter obfuscated and encoded cred
     workspaceRoot: "/workspace",
     permission: "full",
     inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
-    runChild: (input) => runSubagentChild({
-      ...input,
-      dependencies: {
-        buildTools: async () => [],
-        createChild: () => control.child,
-        recordUsage: async () => {},
-      },
-    }),
+    runChild: (input) =>
+      runSubagentChild({
+        ...input,
+        dependencies: {
+          buildTools: async () => [],
+          createChild: () => control.child,
+          recordUsage: async () => {},
+        },
+      }),
   });
-  const parentFacing = await supervisor.execute({ tasks: [
-    { role: "scout", label: "Bounded", task: "Investigate.", maxTurns: 1 },
-  ] });
+  const parentFacing = await supervisor.execute({
+    tasks: [{ role: "scout", label: "Bounded", task: "Investigate.", maxTurns: 1 }],
+  });
   assert.match(parentFacing, /\/workspace\/src\/index\.ts/u);
   assert.match(parentFacing, /\[REDACTED CREDENTIAL\]/u);
   assert.doesNotMatch(parentFacing, /obfuscated-secret-value|encoded-secret-value/u);
@@ -3226,18 +3447,19 @@ test("turn-limit findings redact line-split assignment keys before parent format
     workspaceRoot: "/workspace",
     permission: "full",
     inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
-    runChild: (input) => runSubagentChild({
-      ...input,
-      dependencies: {
-        buildTools: async () => [],
-        createChild: () => control.child,
-        recordUsage: async () => {},
-      },
-    }),
+    runChild: (input) =>
+      runSubagentChild({
+        ...input,
+        dependencies: {
+          buildTools: async () => [],
+          createChild: () => control.child,
+          recordUsage: async () => {},
+        },
+      }),
   });
-  const parentFacing = await supervisor.execute({ tasks: [
-    { role: "scout", label: "Split", task: "Investigate.", maxTurns: 2 },
-  ] });
+  const parentFacing = await supervisor.execute({
+    tasks: [{ role: "scout", label: "Split", task: "Investigate.", maxTurns: 2 }],
+  });
   assert.match(parentFacing, /\/workspace\/src\/index\.ts/u);
   assert.match(parentFacing, /\/workspace\/src\/other\.ts/u);
   assert.match(parentFacing, /\[REDACTED CREDENTIAL\]/u);
@@ -3248,8 +3470,10 @@ test("turn-limit findings retain safe reports beyond eight while filtering split
   const control = fakeChild(async ({ emit }) => {
     const reports = [
       "OPENAI_API_",
-      ...Array.from({ length: 7 }, (_value, index) =>
-        `Safe finding ${index}: /workspace/src/finding-${index}.ts`),
+      ...Array.from(
+        { length: 7 },
+        (_value, index) => `Safe finding ${index}: /workspace/src/finding-${index}.ts`,
+      ),
       "KEY=evicted-prefix-secret",
     ];
     for (const report of reports) {
@@ -3268,18 +3492,19 @@ test("turn-limit findings retain safe reports beyond eight while filtering split
     workspaceRoot: "/workspace",
     permission: "full",
     inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
-    runChild: (input) => runSubagentChild({
-      ...input,
-      dependencies: {
-        buildTools: async () => [],
-        createChild: () => control.child,
-        recordUsage: async () => {},
-      },
-    }),
+    runChild: (input) =>
+      runSubagentChild({
+        ...input,
+        dependencies: {
+          buildTools: async () => [],
+          createChild: () => control.child,
+          recordUsage: async () => {},
+        },
+      }),
   });
-  const parentFacing = await supervisor.execute({ tasks: [
-    { role: "scout", label: "Evicted", task: "Investigate.", maxTurns: 9 },
-  ] });
+  const parentFacing = await supervisor.execute({
+    tasks: [{ role: "scout", label: "Evicted", task: "Investigate.", maxTurns: 9 }],
+  });
   assert.match(parentFacing, /Status: failed/u);
   assert.match(parentFacing, /\[REDACTED CREDENTIAL\]/u);
   assert.match(parentFacing, /Safe finding 0: \/workspace\/src\/finding-0\.ts/u);
@@ -3790,7 +4015,10 @@ test("each foreground subagent counts once, and a batch over budget counts nothi
   });
   const batch = request(["1", "2"]);
   await supervisor.execute(batch);
-  assert.deepEqual(sent, batch.tasks.map((task) => ({ event: "subagent_launched", props: { role: task.role } })));
+  assert.deepEqual(
+    sent,
+    batch.tasks.map((task) => ({ event: "subagent_launched", props: { role: task.role } })),
+  );
 
   sent.length = 0;
   await assert.rejects(supervisor.execute(request(["3"])), /launch budget exceeded/i);
@@ -3802,7 +4030,9 @@ function transcriptSaves(options: { holdFinal?: boolean } = {}) {
   const saved: Array<{ transcript: SubagentTranscriptV1; final: boolean }> = [];
   let releaseFinal = () => {};
   const finalGate = options.holdFinal
-    ? new Promise<void>((resolve) => { releaseFinal = resolve; })
+    ? new Promise<void>((resolve) => {
+        releaseFinal = resolve;
+      })
     : Promise.resolve();
   return {
     saved,
@@ -3818,12 +4048,17 @@ function transcriptSaves(options: { holdFinal?: boolean } = {}) {
 }
 
 function transcriptMessages(transcript: SubagentTranscriptV1): SubagentTranscriptMessageEntry[] {
-  return transcript.entries.filter((entry): entry is SubagentTranscriptMessageEntry => entry.kind === "message");
+  return transcript.entries.filter(
+    (entry): entry is SubagentTranscriptMessageEntry => entry.kind === "message",
+  );
 }
 
 function toolStatuses(transcript: SubagentTranscriptV1): Array<[string | undefined, string]> {
   return transcriptMessages(transcript).flatMap((message) =>
-    message.steps.flatMap((step) => (step.kind === "tool" ? [[step.target, step.status] as [string | undefined, string]] : [])));
+    message.steps.flatMap((step) =>
+      step.kind === "tool" ? [[step.target, step.status] as [string | undefined, string]] : [],
+    ),
+  );
 }
 
 for (const hangs of [false, true]) {
@@ -3842,17 +4077,30 @@ for (const hangs of [false, true]) {
       permission: "full",
       inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
       policy: { treeDeadlineMs: 100, cancellationGraceMs: 10 },
-      transcripts: ({ runId, task }) => new SubagentTranscriptRecorder({ runId, task, sink: saves.sink }),
+      transcripts: ({ runId, task }) =>
+        new SubagentTranscriptRecorder({ runId, task, sink: saves.sink }),
       runChild: async ({ request: task, signal, transcript }) => {
         const message = assistant("Read the soup section.");
         transcript?.observe({ type: "message_start", message } as AgentEvent);
         transcript?.observe({
           type: "message_update",
           message,
-          assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Read the soup section. ", partial: message },
+          assistantMessageEvent: {
+            type: "text_delta",
+            contentIndex: 0,
+            delta: "Read the soup section. ",
+            partial: message,
+          },
         } as AgentEvent);
-        transcript?.observe({ type: "tool_execution_start", toolCallId: "read-1", toolName: "read_file", args: { path: "salad.md" } } as AgentEvent);
-        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+        transcript?.observe({
+          type: "tool_execution_start",
+          toolCallId: "read-1",
+          toolName: "read_file",
+          args: { path: "salad.md" },
+        } as AgentEvent);
+        await new Promise<void>((resolve) =>
+          signal?.addEventListener("abort", () => resolve(), { once: true }),
+        );
         // This runner ignores the stop past its grace period and never returns.
         if (hangs) return await new Promise<SubagentTaskResult>(() => {});
         return {
@@ -3874,10 +4122,15 @@ for (const hangs of [false, true]) {
     await supervisor.flush({ transcriptWaitMs: 20 });
     assert.equal(saves.finals().length, 0, "the capped wait returns before the slow save");
 
-    let flushed = false, quitWaitDone = false;
-    const fullFlush = supervisor.flush().then(() => { flushed = true; });
+    let flushed = false,
+      quitWaitDone = false;
+    const fullFlush = supervisor.flush().then(() => {
+      flushed = true;
+    });
     // Quitting waits for every chat's helper conversations, not one supervisor's.
-    const quitWait = flushPendingSubagentTranscripts().then(() => { quitWaitDone = true; });
+    const quitWait = flushPendingSubagentTranscripts().then(() => {
+      quitWaitDone = true;
+    });
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(flushed, false, "a full flush waits while the final save is held");
     assert.equal(quitWaitDone, false, "the quit wait waits while the final save is held");
@@ -3893,7 +4146,9 @@ for (const hangs of [false, true]) {
 
 test("a chat turn's capped wait for helper conversations still waits for the run store", async () => {
   let releaseRunStore = () => {};
-  const runStoreGate = new Promise<void>((resolve) => { releaseRunStore = resolve; });
+  const runStoreGate = new Promise<void>((resolve) => {
+    releaseRunStore = resolve;
+  });
   const supervisor = new SubagentSupervisor({
     generationId: "transcript-run-store-gate",
     ...TEST_SUPERVISOR_SCOPE,
@@ -3902,10 +4157,15 @@ test("a chat turn's capped wait for helper conversations still waits for the run
     workspaceRoot: "/workspace",
     permission: "full",
     inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
-    projector: { flush: () => runStoreGate, snapshot: () => [] } as unknown as SubagentEventProjector,
+    projector: {
+      flush: () => runStoreGate,
+      snapshot: () => [],
+    } as unknown as SubagentEventProjector,
   });
   let flushed = false;
-  const turnEnd = supervisor.flush({ transcriptWaitMs: 1 }).then(() => { flushed = true; });
+  const turnEnd = supervisor.flush({ transcriptWaitMs: 1 }).then(() => {
+    flushed = true;
+  });
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(flushed, false, "the capped wait applies to conversations only");
   releaseRunStore();
@@ -3917,26 +4177,62 @@ test("a helper's refused tool shows as blocked and a tool ending during its stop
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-subagent-transcript-"));
   try {
     const saves = transcriptSaves();
-    const recorder = new SubagentTranscriptRecorder({ runId: "run-refused", task: "Edit the cookbook.", sink: saves.sink });
+    const recorder = new SubagentTranscriptRecorder({
+      runId: "run-refused",
+      task: "Edit the cookbook.",
+      sink: saves.sink,
+    });
     const parent = new AbortController();
     let spec: SubagentChildSpec | undefined;
     const control = fakeChild(async ({ emit }) => {
       const message = assistant("Editing the cookbook.");
       await emit({ type: "message_start", message } as AgentEvent);
       await emit({ type: "message_end", message } as AgentEvent);
-      const toolCall = { type: "toolCall" as const, id: "write-1", name: "write_file", arguments: { path: "cookbook.html" } };
+      const toolCall = {
+        type: "toolCall" as const,
+        id: "write-1",
+        name: "write_file",
+        arguments: { path: "cookbook.html" },
+      };
       // Pi announces the call, then asks the child's gate; a refused call
       // still ends with an error result.
-      await emit({ type: "tool_execution_start", toolCallId: "write-1", toolName: "write_file", args: toolCall.arguments } as AgentEvent);
+      await emit({
+        type: "tool_execution_start",
+        toolCallId: "write-1",
+        toolName: "write_file",
+        args: toolCall.arguments,
+      } as AgentEvent);
       const decision = await spec!.beforeToolCall!(
-        { toolCall, args: toolCall.arguments, assistantMessage: message, context: { systemPrompt: "", messages: [], tools: [] } } as never,
+        {
+          toolCall,
+          args: toolCall.arguments,
+          assistantMessage: message,
+          context: { systemPrompt: "", messages: [], tools: [] },
+        } as never,
         undefined,
       );
       assert.equal(decision?.block, true);
-      await emit({ type: "tool_execution_end", toolCallId: "write-1", toolName: "write_file", isError: true, result: { content: [] } } as AgentEvent);
-      await emit({ type: "tool_execution_start", toolCallId: "read-1", toolName: "read_file", args: { path: "salad.md" } } as AgentEvent);
+      await emit({
+        type: "tool_execution_end",
+        toolCallId: "write-1",
+        toolName: "write_file",
+        isError: true,
+        result: { content: [] },
+      } as AgentEvent);
+      await emit({
+        type: "tool_execution_start",
+        toolCallId: "read-1",
+        toolName: "read_file",
+        args: { path: "salad.md" },
+      } as AgentEvent);
       parent.abort(new Error("The person stopped the chat."));
-      await emit({ type: "tool_execution_end", toolCallId: "read-1", toolName: "read_file", isError: true, result: { content: [] } } as AgentEvent);
+      await emit({
+        type: "tool_execution_end",
+        toolCallId: "read-1",
+        toolName: "read_file",
+        isError: true,
+        result: { content: [] },
+      } as AgentEvent);
     });
     await runSubagentChild({
       authority: TEST_CHILD_AUTHORITY,
@@ -3968,7 +4264,9 @@ test("a helper's refused tool shows as blocked and a tool ending during its stop
             } as unknown as AgentTool,
           ],
           outboundApprovalBindings: [],
-          workspaceWriteApprovalBindings: [{ toolName: "write_file" as const, operation: "write" as const }],
+          workspaceWriteApprovalBindings: [
+            { toolName: "write_file" as const, operation: "write" as const },
+          ],
           mcpMutationApprovalBindings: [],
           shellApprovalBindings: [],
         }),
@@ -3981,12 +4279,14 @@ test("a helper's refused tool shows as blocked and a tool ending during its stop
     }).catch(() => undefined);
     await recorder.finish("cancelled");
     const final = saves.finals()[0]!.transcript;
-    assert.deepEqual(toolStatuses(final), [["cookbook.html", "blocked"], ["salad.md", "cancelled"]]);
+    assert.deepEqual(toolStatuses(final), [
+      ["cookbook.html", "blocked"],
+      ["salad.md", "cancelled"],
+    ]);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
-
 
 test("parent cancellation during prepareRun aborts all fulfilled preparations without projecting or charging budget", async () => {
   const controller = new AbortController();

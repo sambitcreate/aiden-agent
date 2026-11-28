@@ -18,7 +18,10 @@ import { isEscapeKey } from "../lib/dismiss-key";
 const REFRESH_DELAY_MS = 120;
 
 function transcriptOf(element: HTMLElement | null): HTMLElement | null {
-  return element?.closest("[data-scroll-area]")?.querySelector<HTMLElement>("[data-scroll-content]") ?? null;
+  return (
+    element?.closest("[data-scroll-area]")?.querySelector<HTMLElement>("[data-scroll-content]") ??
+    null
+  );
 }
 
 function scrollportOf(transcript: HTMLElement | null): HTMLElement | null {
@@ -27,7 +30,10 @@ function scrollportOf(transcript: HTMLElement | null): HTMLElement | null {
 
 function scrolls(element: HTMLElement, axis: "x" | "y"): boolean {
   const overflow = getComputedStyle(element)[axis === "y" ? "overflowY" : "overflowX"];
-  const room = axis === "y" ? element.scrollHeight > element.clientHeight : element.scrollWidth > element.clientWidth;
+  const room =
+    axis === "y"
+      ? element.scrollHeight > element.clientHeight
+      : element.scrollWidth > element.clientWidth;
   return room && (overflow === "auto" || overflow === "scroll");
 }
 
@@ -64,7 +70,8 @@ export function ChatFindBar({ request, onClose }: { request: number; onClose(): 
 
   React.useLayoutEffect(() => {
     const active = document.activeElement;
-    if (active instanceof HTMLElement && !barRef.current?.contains(active)) returnFocusRef.current = active;
+    if (active instanceof HTMLElement && !barRef.current?.contains(active))
+      returnFocusRef.current = active;
     inputRef.current?.focus();
     inputRef.current?.select();
   }, [request]);
@@ -145,7 +152,11 @@ export function ChatFindBar({ request, onClose }: { request: number; onClose(): 
           if (event.key === "Enter") {
             event.preventDefault();
             step(event.shiftKey ? -1 : 1);
-          } else if (event.key.toLowerCase() === "g" && (event.metaKey || event.ctrlKey) && !event.altKey) {
+          } else if (
+            event.key.toLowerCase() === "g" &&
+            (event.metaKey || event.ctrlKey) &&
+            !event.altKey
+          ) {
             event.preventDefault();
             step(event.shiftKey ? -1 : 1);
           }

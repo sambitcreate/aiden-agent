@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { closeRendererBeforeShutdown, joinInFlight, type RendererQuitWindow, requireWithinDeadline, withDeadline } from "./quit-barrier.js";
+import {
+  closeRendererBeforeShutdown,
+  joinInFlight,
+  type RendererQuitWindow,
+  requireWithinDeadline,
+  withDeadline,
+} from "./quit-barrier.js";
 
 class FakeQuitWindow extends EventEmitter implements RendererQuitWindow {
   readonly webContents = new EventEmitter();
@@ -149,13 +155,17 @@ test("a call made while a run is in flight waits for that run's outcome", async 
     if (started) return;
     started = true;
     runs.push(settingsPrepared);
-    await new Promise<void>((resolve) => { release = resolve; });
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
     started = false; // the shutdown gave up and Aiden stayed open
   });
 
   const first = shutdown(false);
   let joinedSawStarted: boolean | undefined;
-  const joined = shutdown(true).then(() => { joinedSawStarted = started; });
+  const joined = shutdown(true).then(() => {
+    joinedSawStarted = started;
+  });
   await Promise.resolve();
   assert.equal(joinedSawStarted, undefined, "the second caller waits instead of returning at once");
   release();
@@ -173,9 +183,16 @@ test("a call made while a run is in flight waits for that run's outcome", async 
 test("requireWithinDeadline turns a write that never settles into a failure", async () => {
   assert.equal(await requireWithinDeadline(async () => 7, 50, "late"), 7);
   const failure = new Error("disk full");
-  await assert.rejects(requireWithinDeadline(() => Promise.reject(failure), 50, "late"), (error) => error === failure);
   await assert.rejects(
-    requireWithinDeadline(() => new Promise<never>(() => {}), 10, "Computer Use did not save in time"),
+    requireWithinDeadline(() => Promise.reject(failure), 50, "late"),
+    (error) => error === failure,
+  );
+  await assert.rejects(
+    requireWithinDeadline(
+      () => new Promise<never>(() => {}),
+      10,
+      "Computer Use did not save in time",
+    ),
     /Computer Use did not save in time/,
   );
 });

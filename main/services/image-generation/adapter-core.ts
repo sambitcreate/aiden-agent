@@ -65,7 +65,9 @@ export interface RequestScope {
 export function requestScope(options: ImagesOptions | undefined, deps: AdapterDeps): RequestScope {
   const limit = Math.min(
     IMAGE_REQUEST_TIMEOUT_MS,
-    typeof options?.timeoutMs === "number" && options.timeoutMs > 0 ? options.timeoutMs : IMAGE_REQUEST_TIMEOUT_MS,
+    typeof options?.timeoutMs === "number" && options.timeoutMs > 0
+      ? options.timeoutMs
+      : IMAGE_REQUEST_TIMEOUT_MS,
   );
   const timeout = AbortSignal.timeout(limit);
   const signal = options?.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
@@ -81,7 +83,9 @@ export function requestScope(options: ImagesOptions | undefined, deps: AdapterDe
  * The aspect ratio a caller asked for, carried as `options.metadata.aspectRatio`
  * (see `imageRequestOptions`). Anything other than a known ratio is ignored.
  */
-export function requestedAspectRatio(options: ImagesOptions | undefined): ImageAspectRatio | undefined {
+export function requestedAspectRatio(
+  options: ImagesOptions | undefined,
+): ImageAspectRatio | undefined {
   const value = options?.metadata?.aspectRatio;
   return isImageAspectRatio(value) ? value : undefined;
 }
@@ -152,7 +156,8 @@ export function imageFromDataUri(value: string, provider: string): ImageContent 
   const match = DATA_URI.exec(value);
   if (!match) throw new ImageAdapterError(`${provider} returned an image Aiden can't read.`);
   const data = match[2]!;
-  const mimeType = sniffImageMime(Buffer.from(data.slice(0, 24), "base64")) ?? match[1]!.toLowerCase();
+  const mimeType =
+    sniffImageMime(Buffer.from(data.slice(0, 24), "base64")) ?? match[1]!.toLowerCase();
   return { type: "image", data, mimeType };
 }
 
@@ -168,7 +173,8 @@ export async function readJson(
     errors: {
       tooLarge: () => new ImageAdapterError(`${provider} returned an oversized response.`),
       missingBody: () => new ImageAdapterError(`${provider} returned an empty response.`, true),
-      invalidChunk: () => new ImageAdapterError(`${provider} returned an unreadable response.`, true),
+      invalidChunk: () =>
+        new ImageAdapterError(`${provider} returned an unreadable response.`, true),
     },
   });
   try {
@@ -204,13 +210,21 @@ export function providerDetail(value: unknown): string | undefined {
     }
   }
   if (!text) return undefined;
-  // eslint-disable-next-line no-control-regex
-  const clean = text.replace(/[\u0000-\u001f\u007f]+/gu, " ").replace(/\s+/gu, " ").trim();
+  /* eslint-disable no-control-regex */
+  const clean = text
+    .replace(/[\u0000-\u001f\u007f]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  /* eslint-enable no-control-regex */
   return clean || undefined;
 }
 
 /** Friendly status mapping; never includes request headers or keys. */
-export async function httpFailure(response: Response, provider: string, signal: AbortSignal): Promise<ImageAdapterError> {
+export async function httpFailure(
+  response: Response,
+  provider: string,
+  signal: AbortSignal,
+): Promise<ImageAdapterError> {
   let detail: string | undefined;
   try {
     detail = providerDetail(await readJson(response, provider, signal, 64 * 1024));
@@ -218,14 +232,19 @@ export async function httpFailure(response: Response, provider: string, signal: 
     await response.body?.cancel().catch(() => undefined);
   }
   const status = response.status;
-  if (status === 401 || status === 403) return new ImageAdapterError(`The ${provider} image key was rejected.`);
+  if (status === 401 || status === 403)
+    return new ImageAdapterError(`The ${provider} image key was rejected.`);
   if (status === 402) {
-    return new ImageAdapterError(`${provider} needs billing set up or more credit on this account.`);
+    return new ImageAdapterError(
+      `${provider} needs billing set up or more credit on this account.`,
+    );
   }
-  if (status === 429) return new ImageAdapterError(`${provider} is rate limiting requests. Try again shortly.`, true);
+  if (status === 429)
+    return new ImageAdapterError(`${provider} is rate limiting requests. Try again shortly.`, true);
   if (status === 404) return new ImageAdapterError(`${provider} doesn't have this model.`);
   const suffix = detail ? `: ${detail}` : ".";
-  if (status >= 400 && status < 500) return new ImageAdapterError(`${provider} rejected the request${suffix}`);
+  if (status >= 400 && status < 500)
+    return new ImageAdapterError(`${provider} rejected the request${suffix}`);
   return new ImageAdapterError(`${provider} had a problem (${status})${suffix}`, status >= 500);
 }
 
@@ -249,7 +268,10 @@ export async function withPollRetries<T>(
     } catch (error) {
       const transient = error instanceof ImageAdapterError ? error.transient : true;
       if (scope.signal.aborted || !transient || failures >= MAX_POLL_RETRIES) throw error;
-      await sleep(Math.min(Math.max(1, baseDelayMs) * 2 ** failures, MAX_POLL_BACKOFF_MS), scope.signal);
+      await sleep(
+        Math.min(Math.max(1, baseDelayMs) * 2 ** failures, MAX_POLL_BACKOFF_MS),
+        scope.signal,
+      );
     }
   }
 }
@@ -260,7 +282,12 @@ export async function withPollRetries<T>(
  */
 export async function downloadImage(
   rawUrl: string,
-  options: { provider: string; allowHost(host: string): boolean; fetch: Fetch; signal: AbortSignal },
+  options: {
+    provider: string;
+    allowHost(host: string): boolean;
+    fetch: Fetch;
+    signal: AbortSignal;
+  },
 ): Promise<ImageContent> {
   let url: URL;
   try {
@@ -268,8 +295,15 @@ export async function downloadImage(
   } catch {
     throw new ImageAdapterError(`${options.provider} returned an invalid image address.`);
   }
-  if (url.protocol !== "https:" || url.username || url.password || !options.allowHost(url.hostname.toLowerCase())) {
-    throw new ImageAdapterError(`${options.provider} returned an image from an unexpected address.`);
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    !options.allowHost(url.hostname.toLowerCase())
+  ) {
+    throw new ImageAdapterError(
+      `${options.provider} returned an image from an unexpected address.`,
+    );
   }
   const response = await options.fetch(url.href, {
     method: "GET",
@@ -285,7 +319,8 @@ export async function downloadImage(
     maxBytes: MAX_GENERATED_IMAGE_BYTES,
     signal: options.signal,
     errors: {
-      tooLarge: () => new ImageAdapterError(`${options.provider} returned an image larger than 8 MiB.`),
+      tooLarge: () =>
+        new ImageAdapterError(`${options.provider} returned an image larger than 8 MiB.`),
       missingBody: () => new ImageAdapterError(`${options.provider} returned an empty image.`),
     },
   });
@@ -327,7 +362,9 @@ export function validatedOutput(images: ImageContent[], provider: string): Image
   try {
     return parseGeneratedImages(images, { overflow: "truncate" }).images;
   } catch (error) {
-    throw new ImageAdapterError(error instanceof Error ? error.message : `${provider} returned unusable images.`);
+    throw new ImageAdapterError(
+      error instanceof Error ? error.message : `${provider} returned unusable images.`,
+    );
   }
 }
 
@@ -364,7 +401,11 @@ export function redactAndTruncate(
   for (let changed = true; changed; ) {
     changed = false;
     for (const secret of ordered) {
-      for (let length = Math.min(secret.length - 1, out.length); length >= MIN_SECRET_FRAGMENT; length -= 1) {
+      for (
+        let length = Math.min(secret.length - 1, out.length);
+        length >= MIN_SECRET_FRAGMENT;
+        length -= 1
+      ) {
         if (out.endsWith(secret.slice(0, length))) {
           out = out.slice(0, out.length - length);
           changed = true;
@@ -404,7 +445,9 @@ export function failureResult(
 
 export function referenceLimitError(max: number): ImageAdapterError {
   return new ImageAdapterError(
-    max === 1 ? "This model accepts one reference image." : `This model accepts at most ${max} reference images.`,
+    max === 1
+      ? "This model accepts one reference image."
+      : `This model accepts at most ${max} reference images.`,
   );
 }
 

@@ -15,7 +15,9 @@ export const EMPTY_SELECTION: RangeSelection = { ids: [], anchor: null };
 
 /** `id` added, or removed when it was chosen, like ⌘-click. It becomes the anchor. */
 export function toggleSelection(selection: RangeSelection, id: string): RangeSelection {
-  const ids = selection.ids.includes(id) ? selection.ids.filter((item) => item !== id) : [...selection.ids, id];
+  const ids = selection.ids.includes(id)
+    ? selection.ids.filter((item) => item !== id)
+    : [...selection.ids, id];
   return { ids, anchor: { id, base: ids } };
 }
 
@@ -51,7 +53,10 @@ export function extendSelection(
  * Only the ids still listed. Returns `selection` itself when nothing left, so
  * a caller can skip a state update.
  */
-export function retainSelection(selection: RangeSelection, listed: ReadonlySet<string>): RangeSelection {
+export function retainSelection(
+  selection: RangeSelection,
+  listed: ReadonlySet<string>,
+): RangeSelection {
   const ids = selection.ids.filter((id) => listed.has(id));
   const anchorListed = selection.anchor === null || listed.has(selection.anchor.id);
   if (ids.length === selection.ids.length && anchorListed) return selection;

@@ -152,8 +152,7 @@ export type GeminiLiveProtocolEvent =
     }
   | {
       type: "reconnect_required";
-      reason:
-        "resumption_unavailable" | "resume_failed" | "unexpected_disconnect";
+      reason: "resumption_unavailable" | "resume_failed" | "unexpected_disconnect";
     };
 
 export interface GeminiLiveHistoryTurn {
@@ -181,10 +180,7 @@ export interface GeminiLiveConnectConfig extends LiveConnectConfig {
   historyConfig?: { initialHistoryInClientContent?: boolean };
 }
 
-export interface GeminiLiveConnectParameters extends Omit<
-  LiveConnectParameters,
-  "config"
-> {
+export interface GeminiLiveConnectParameters extends Omit<LiveConnectParameters, "config"> {
   config?: GeminiLiveConnectConfig;
 }
 
@@ -245,10 +241,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function hasOnlyKeys(
-  value: Record<string, unknown>,
-  allowed: ReadonlySet<string>,
-): boolean {
+function hasOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
   return Object.keys(value).every((key) => allowed.has(key));
 }
 
@@ -261,15 +254,12 @@ function interactionStatusDiagnostic(
   interactionStatus: unknown,
 ): GeminiLiveProtocolDiagnosticDetail {
   const status =
-    typeof interactionStatus === "string" &&
-    INTERACTION_STATUSES.has(interactionStatus)
+    typeof interactionStatus === "string" && INTERACTION_STATUSES.has(interactionStatus)
       ? "official"
       : "invalid";
   if (turnComplete === true) return "interaction_turn_true_status_invalid";
-  if (turnComplete === false)
-    return `interaction_turn_false_status_${status}`;
-  if (turnComplete === undefined)
-    return `interaction_turn_absent_status_${status}`;
+  if (turnComplete === false) return `interaction_turn_false_status_${status}`;
+  if (turnComplete === undefined) return `interaction_turn_absent_status_${status}`;
   return `interaction_turn_invalid_status_${status}`;
 }
 
@@ -304,13 +294,7 @@ const SERVER_PART_IGNORED_METADATA_KEYS = [
   "mediaResolution",
   "partMetadata",
 ] as const;
-const TRANSCRIPTION_KEYS = keys(
-  "text",
-  "finished",
-  "languageCode",
-  "speakerLabel",
-  "words",
-);
+const TRANSCRIPTION_KEYS = keys("text", "finished", "languageCode", "speakerLabel", "words");
 const TOOL_CALL_KEYS = keys("functionCalls");
 const FUNCTION_CALL_KEYS = keys("id", "name", "args");
 const TOOL_CANCELLATION_KEYS = keys("ids");
@@ -328,11 +312,7 @@ const USAGE_KEYS = keys(
   "trafficType",
   "serviceTier",
 );
-const RESUMPTION_KEYS = keys(
-  "resumable",
-  "newHandle",
-  "lastConsumedClientMessageIndex",
-);
+const RESUMPTION_KEYS = keys("resumable", "newHandle", "lastConsumedClientMessageIndex");
 const GO_AWAY_KEYS = keys("timeLeft");
 const VOICE_CONSENT_KEYS = keys("signature");
 // The Gemini Developer API sends the proto field `type`; the SDK renames it to
@@ -340,11 +320,7 @@ const VOICE_CONSENT_KEYS = keys("signature");
 const VOICE_ACTIVITY_KEYS = keys("type", "voiceActivityType", "audioOffset");
 const VAD_SIGNAL_KEYS = keys("vadSignalType");
 const WORD_INFO_KEYS = keys("word", "startOffset", "endOffset");
-const VOICE_ACTIVITY_TYPES = new Set([
-  "TYPE_UNSPECIFIED",
-  "ACTIVITY_START",
-  "ACTIVITY_END",
-]);
+const VOICE_ACTIVITY_TYPES = new Set(["TYPE_UNSPECIFIED", "ACTIVITY_START", "ACTIVITY_END"]);
 const VAD_SIGNAL_TYPES = new Set([
   "VAD_SIGNAL_TYPE_UNSPECIFIED",
   "VAD_SIGNAL_TYPE_SOS",
@@ -358,17 +334,11 @@ const INTERACTION_STATUSES = new Set([
 ]);
 
 function boundedOptionalString(value: unknown, maxBytes: number): boolean {
-  return (
-    value === undefined ||
-    (typeof value === "string" && utf8Bytes(value) <= maxBytes)
-  );
+  return value === undefined || (typeof value === "string" && utf8Bytes(value) <= maxBytes);
 }
 
 function validDuration(value: unknown): boolean {
-  return (
-    value === undefined ||
-    (typeof value === "string" && DURATION_PATTERN.test(value))
-  );
+  return value === undefined || (typeof value === "string" && DURATION_PATTERN.test(value));
 }
 
 function utf8Bytes(value: string): number {
@@ -391,9 +361,7 @@ function cloneJsonRecord(
 
 function finiteCount(value: unknown): number | null {
   if (value === undefined) return 0;
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : null;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 function boundedJsonBytes(value: unknown, maxBytes: number): number | null {
@@ -429,11 +397,7 @@ function validBase64(value: string): boolean {
 }
 
 function decodeBase64(value: unknown, maxBytes: number): Uint8Array | null {
-  if (
-    typeof value !== "string" ||
-    value.length > Math.ceil(maxBytes / 3) * 4 + 4
-  )
-    return null;
+  if (typeof value !== "string" || value.length > Math.ceil(maxBytes / 3) * 4 + 4) return null;
   if (!validBase64(value)) return null;
   const decoded = Buffer.from(value, "base64");
   if (decoded.length === 0 || decoded.length > maxBytes) return null;
@@ -442,10 +406,7 @@ function decodeBase64(value: unknown, maxBytes: number): Uint8Array | null {
 }
 
 function audioChunkDurationMs(bytes: number): number {
-  return (
-    (bytes * 1_000) /
-    (GEMINI_LIVE_INPUT_SAMPLE_RATE * GEMINI_LIVE_PCM_BYTES_PER_SAMPLE)
-  );
+  return (bytes * 1_000) / (GEMINI_LIVE_INPUT_SAMPLE_RATE * GEMINI_LIVE_PCM_BYTES_PER_SAMPLE);
 }
 
 function validJpeg(bytes: Uint8Array): boolean {
@@ -464,8 +425,7 @@ function copyBytes(bytes: Uint8Array): Uint8Array {
 }
 
 function safeHistory(turns: readonly GeminiLiveHistoryTurn[]): Content[] {
-  if (turns.length > MAX_HISTORY_TURNS)
-    throw new Error("Live history exceeds its turn limit.");
+  if (turns.length > MAX_HISTORY_TURNS) throw new Error("Live history exceeds its turn limit.");
   let totalBytes = 0;
   return turns.map((turn) => {
     if (turn.role !== "user" && turn.role !== "model") {
@@ -475,8 +435,7 @@ function safeHistory(turns: readonly GeminiLiveHistoryTurn[]): Content[] {
       throw new Error("Live history contains empty text.");
     }
     totalBytes += utf8Bytes(turn.text);
-    if (totalBytes > MAX_HISTORY_BYTES)
-      throw new Error("Live history exceeds its size limit.");
+    if (totalBytes > MAX_HISTORY_BYTES) throw new Error("Live history exceeds its size limit.");
     return { role: turn.role, parts: [{ text: turn.text }] };
   });
 }
@@ -504,7 +463,8 @@ function liveConnectConfig(
     tools?.some(
       (tool) =>
         "functionDeclarations" in tool &&
-        tool.functionDeclarations?.some((declaration) => declaration.name === "computer_use") === true,
+        tool.functionDeclarations?.some((declaration) => declaration.name === "computer_use") ===
+          true,
     ) === true;
   // Moving through Aiden's own window is not screen control: other apps stay off-limits.
   const hasAidenAppControl =
@@ -537,9 +497,7 @@ function liveConnectConfig(
       : extra
         ? { systemInstruction: extra }
         : {}),
-    ...(handle
-      ? {}
-      : { historyConfig: { initialHistoryInClientContent: true } }),
+    ...(handle ? {} : { historyConfig: { initialHistoryInClientContent: true } }),
     contextWindowCompression: { slidingWindow: {} },
     sessionResumption: handle ? { handle } : {},
     ...(tools && tools.length > 0 ? { tools } : {}),
@@ -602,8 +560,7 @@ export class GeminiLiveProtocol {
   }
 
   async start(history: readonly GeminiLiveHistoryTurn[] = []): Promise<void> {
-    if (this.phase !== "idle")
-      throw new Error("Live protocol has already started.");
+    if (this.phase !== "idle") throw new Error("Live protocol has already started.");
     safeHistory(history);
     if (this.options.signal?.aborted) {
       this.stop("cancelled");
@@ -612,8 +569,7 @@ export class GeminiLiveProtocol {
     if (this.options.signal) {
       const onAbort = () => this.stop("cancelled");
       this.options.signal.addEventListener("abort", onAbort, { once: true });
-      this.removeParentAbort = () =>
-        this.options.signal?.removeEventListener("abort", onAbort);
+      this.removeParentAbort = () => this.options.signal?.removeEventListener("abort", onAbort);
     }
     await this.openConnection(undefined, "connecting");
     this.seedHistory(history);
@@ -624,20 +580,14 @@ export class GeminiLiveProtocol {
     if (this.seeded) throw new Error("Live history may only be seeded once.");
     const content = safeHistory(turns);
     const params: LiveSendClientContentParameters =
-      content.length > 0
-        ? { turns: content, turnComplete: true }
-        : { turnComplete: true };
+      content.length > 0 ? { turns: content, turnComplete: true } : { turnComplete: true };
     this.dispatch(() => this.wire!.sendClientContent(params));
     this.seeded = true;
   }
 
   sendText(text: string): void {
     this.requireOpenAndSeeded();
-    if (
-      typeof text !== "string" ||
-      text.length === 0 ||
-      utf8Bytes(text) > MAX_TEXT_BYTES
-    ) {
+    if (typeof text !== "string" || text.length === 0 || utf8Bytes(text) > MAX_TEXT_BYTES) {
       throw new Error("Live text is empty or exceeds its size limit.");
     }
     const params: LiveSendRealtimeInputParameters = { text };
@@ -646,29 +596,18 @@ export class GeminiLiveProtocol {
 
   sendAudio(pcm: Uint8Array): void {
     this.requireOpenAndSeeded();
-    if (
-      !(pcm instanceof Uint8Array) ||
-      pcm.byteLength % GEMINI_LIVE_PCM_BYTES_PER_SAMPLE !== 0
-    ) {
+    if (!(pcm instanceof Uint8Array) || pcm.byteLength % GEMINI_LIVE_PCM_BYTES_PER_SAMPLE !== 0) {
       throw new Error("Live audio must be signed 16-bit PCM.");
     }
     const duration = audioChunkDurationMs(pcm.byteLength);
-    if (
-      duration < GEMINI_LIVE_MIN_AUDIO_CHUNK_MS ||
-      duration > GEMINI_LIVE_MAX_AUDIO_CHUNK_MS
-    ) {
-      throw new Error(
-        "Live audio chunks must be between 20 and 40 milliseconds.",
-      );
+    if (duration < GEMINI_LIVE_MIN_AUDIO_CHUNK_MS || duration > GEMINI_LIVE_MAX_AUDIO_CHUNK_MS) {
+      throw new Error("Live audio chunks must be between 20 and 40 milliseconds.");
     }
     const now = this.clock.now();
-    this.audioPackets = this.audioPackets.filter(
-      (packet) => packet.time > now - 1_000,
-    );
+    this.audioPackets = this.audioPackets.filter((packet) => packet.time > now - 1_000);
     if (
       this.audioPackets.length >= MAX_AUDIO_PACKETS_PER_SECOND ||
-      this.audioPackets.reduce((total, packet) => total + packet.bytes, 0) +
-        pcm.byteLength >
+      this.audioPackets.reduce((total, packet) => total + packet.bytes, 0) + pcm.byteLength >
         MAX_INPUT_AUDIO_BYTES_PER_SECOND
     ) {
       throw new Error("Live audio exceeded its packet-rate limit.");
@@ -697,10 +636,7 @@ export class GeminiLiveProtocol {
     }
     const next = copyBytes(frame);
     const now = this.clock.now();
-    if (
-      this.lastFrameAt === null ||
-      now - this.lastFrameAt >= GEMINI_LIVE_VIDEO_INTERVAL_MS
-    ) {
+    if (this.lastFrameAt === null || now - this.lastFrameAt >= GEMINI_LIVE_VIDEO_INTERVAL_MS) {
       this.sendFrameNow(next);
       return "sent";
     }
@@ -726,16 +662,10 @@ export class GeminiLiveProtocol {
 
   sendToolResult(result: GeminiLiveToolResult): void {
     this.requireOpenAndSeeded();
-    if (
-      !validToolIdentity(result.id, result.name) ||
-      !isRecord(result.response)
-    ) {
+    if (!validToolIdentity(result.id, result.name) || !isRecord(result.response)) {
       throw new Error("Live tool result has an invalid identity or response.");
     }
-    const safeResponse = cloneJsonRecord(
-      result.response,
-      MAX_TOOL_RESULT_BYTES,
-    );
+    const safeResponse = cloneJsonRecord(result.response, MAX_TOOL_RESULT_BYTES);
     if (!safeResponse) {
       throw new Error("Live tool result exceeds its size limit.");
     }
@@ -759,12 +689,7 @@ export class GeminiLiveProtocol {
   }
 
   stop(reason: "cancelled" | "user" = "user"): void {
-    if (
-      this.phase === "closed" ||
-      this.phase === "failed" ||
-      this.phase === "disconnected"
-    )
-      return;
+    if (this.phase === "closed" || this.phase === "failed" || this.phase === "disconnected") return;
     this.setState("closing");
     this.generation += 1;
     this.attemptController?.abort();
@@ -804,11 +729,7 @@ export class GeminiLiveProtocol {
           this.handleServerMessage(message);
         } catch (error) {
           if (error instanceof GeminiLiveProtocolFailure)
-            this.failTransport(
-              error.code,
-              error.diagnostic,
-              error.diagnosticDetail,
-            );
+            this.failTransport(error.code, error.diagnostic, error.diagnosticDetail);
           else this.failTransport("malformed_server_event");
         }
       },
@@ -829,9 +750,7 @@ export class GeminiLiveProtocol {
       onclose: () => {
         if (generation !== this.generation) return;
         if (!connected) {
-          rejectTransport(
-            new GeminiLiveProtocolFailure("unexpected_disconnect"),
-          );
+          rejectTransport(new GeminiLiveProtocolFailure("unexpected_disconnect"));
         } else {
           this.unexpectedDisconnect();
         }
@@ -860,12 +779,9 @@ export class GeminiLiveProtocol {
     const aborted = new Promise<never>((_resolve, reject) => {
       rejectAbort = reject;
     });
-    const onAbort = () =>
-      rejectAbort(new GeminiLiveProtocolFailure("cancelled"));
+    const onAbort = () => rejectAbort(new GeminiLiveProtocolFailure("cancelled"));
     controller.signal.addEventListener("abort", onAbort, { once: true });
-    const connecting = Promise.resolve().then(() =>
-      this.options.connector(params),
-    );
+    const connecting = Promise.resolve().then(() => this.options.connector(params));
     void connecting.then(
       (lateWire) => {
         if (generation !== this.generation || controller.signal.aborted) {
@@ -879,12 +795,7 @@ export class GeminiLiveProtocol {
       () => undefined,
     );
     try {
-      const wire = await Promise.race([
-        connecting,
-        transportFailure,
-        timeout,
-        aborted,
-      ]);
+      const wire = await Promise.race([connecting, transportFailure, timeout, aborted]);
       if (generation !== this.generation || controller.signal.aborted) {
         wire.close();
         throw new GeminiLiveProtocolFailure("cancelled");
@@ -897,10 +808,7 @@ export class GeminiLiveProtocol {
     } catch (error) {
       controller.abort();
       if (generation === this.generation && this.phase !== "closed") {
-        const code =
-          error instanceof GeminiLiveProtocolFailure
-            ? error.code
-            : "transport_error";
+        const code = error instanceof GeminiLiveProtocolFailure ? error.code : "transport_error";
         this.failTransport(code);
       }
       throw error;
@@ -922,17 +830,18 @@ export class GeminiLiveProtocol {
       this.admitServerEvent();
       return;
     }
-    if (
-      keys.some((key) => !SUPPORTED_SERVER_MESSAGE_KEYS.has(key))
-    ) {
-      writeDiagnosticEvent({ level: "warn", area: "voice", event: "legacy-log", fields: {
-        message: "Live rejected unsupported message fields",
-      } });
+    if (keys.some((key) => !SUPPORTED_SERVER_MESSAGE_KEYS.has(key))) {
+      writeDiagnosticEvent({
+        level: "warn",
+        area: "voice",
+        event: "legacy-log",
+        fields: {
+          message: "Live rejected unsupported message fields",
+        },
+      });
       this.malformed();
     }
-    const toolSnapshot = new Map(
-      [...this.toolCalls].map(([id, call]) => [id, { ...call }]),
-    );
+    const toolSnapshot = new Map([...this.toolCalls].map(([id, call]) => [id, { ...call }]));
     const resumptionSnapshot = this.resumptionHandle;
     const serverEventTimesSnapshot = [...this.serverEventTimes];
     const outputAudioTimesSnapshot = [...this.outputAudioTimes];
@@ -952,16 +861,10 @@ export class GeminiLiveProtocol {
           this.malformed();
         }
         if (
-          !boundedOptionalString(
-            message.setupComplete.sessionId,
-            MAX_PROVIDER_IDENTIFIER_BYTES,
-          ) ||
+          !boundedOptionalString(message.setupComplete.sessionId, MAX_PROVIDER_IDENTIFIER_BYTES) ||
           (message.setupComplete.voiceConsentSignature !== undefined &&
             (!isRecord(message.setupComplete.voiceConsentSignature) ||
-              !hasOnlyKeys(
-                message.setupComplete.voiceConsentSignature,
-                VOICE_CONSENT_KEYS,
-              ) ||
+              !hasOnlyKeys(message.setupComplete.voiceConsentSignature, VOICE_CONSENT_KEYS) ||
               !boundedOptionalString(
                 message.setupComplete.voiceConsentSignature.signature,
                 MAX_IGNORED_METADATA_BYTES,
@@ -969,10 +872,7 @@ export class GeminiLiveProtocol {
         ) {
           this.malformed();
         }
-        const setupBytes = boundedJsonBytes(
-          message.setupComplete,
-          MAX_IGNORED_METADATA_BYTES,
-        );
+        const setupBytes = boundedJsonBytes(message.setupComplete, MAX_IGNORED_METADATA_BYTES);
         if (setupBytes === null) this.malformed();
         this.chargeDecodedBytes(setupBytes ?? 0);
         this.markMeaningful();
@@ -1002,10 +902,7 @@ export class GeminiLiveProtocol {
         this.malformedStage = "go_away";
         this.handleGoAway(message.goAway);
       }
-      for (const field of [
-        "voiceActivity",
-        "voiceActivityDetectionSignal",
-      ] as const) {
+      for (const field of ["voiceActivity", "voiceActivityDetectionSignal"] as const) {
         const metadata: unknown = message[field];
         if (metadata === undefined) continue;
         this.malformedStage = "voice_activity";
@@ -1018,8 +915,7 @@ export class GeminiLiveProtocol {
             !hasOnlyKeys(metadata, VOICE_ACTIVITY_KEYS) ||
             [metadata.type, metadata.voiceActivityType].some(
               (type) =>
-                type !== undefined &&
-                (typeof type !== "string" || !VOICE_ACTIVITY_TYPES.has(type)),
+                type !== undefined && (typeof type !== "string" || !VOICE_ACTIVITY_TYPES.has(type)),
             ) ||
             !validDuration(metadata.audioOffset)
           )
@@ -1064,9 +960,7 @@ export class GeminiLiveProtocol {
     }
   }
 
-  private handleServerContent(
-    content: NonNullable<LiveServerMessage["serverContent"]>,
-  ): void {
+  private handleServerContent(content: NonNullable<LiveServerMessage["serverContent"]>): void {
     if (!isRecord(content) || !hasOnlyKeys(content, SERVER_CONTENT_KEYS)) {
       this.malformed();
       return;
@@ -1081,10 +975,7 @@ export class GeminiLiveProtocol {
     this.malformedStage = "server_content_metadata";
     for (const field of ["groundingMetadata", "urlContextMetadata"] as const) {
       if (content[field] === undefined) continue;
-      const bytes = boundedJsonBytes(
-        content[field],
-        MAX_IGNORED_METADATA_BYTES,
-      );
+      const bytes = boundedJsonBytes(content[field], MAX_IGNORED_METADATA_BYTES);
       if (bytes === null) this.malformed();
       this.chargeDecodedBytes(bytes ?? 0);
       this.markMeaningful();
@@ -1098,17 +989,12 @@ export class GeminiLiveProtocol {
         this.malformed();
       }
       this.chargeDecodedBytes(
-        typeof content.turnCompleteReason === "string"
-          ? utf8Bytes(content.turnCompleteReason)
-          : 0,
+        typeof content.turnCompleteReason === "string" ? utf8Bytes(content.turnCompleteReason) : 0,
       );
       this.markMeaningful();
     }
     this.malformedStage = "server_content_interrupted";
-    if (
-      content.interrupted !== undefined &&
-      typeof content.interrupted !== "boolean"
-    )
+    if (content.interrupted !== undefined && typeof content.interrupted !== "boolean")
       this.malformed();
     if (content.interrupted !== undefined) this.markMeaningful();
     if (content.interrupted === true) {
@@ -1125,11 +1011,7 @@ export class GeminiLiveProtocol {
         this.malformed();
       } else {
         const parts = modelTurn.parts;
-        if (
-          !Array.isArray(parts) ||
-          parts.length === 0 ||
-          parts.length > MAX_SERVER_PARTS
-        ) {
+        if (!Array.isArray(parts) || parts.length === 0 || parts.length > MAX_SERVER_PARTS) {
           this.malformed();
         } else {
           this.markMeaningful();
@@ -1141,11 +1023,7 @@ export class GeminiLiveProtocol {
     this.handleCaption("input", content.inputTranscription, true);
     this.handleCaption("output", content.outputTranscription, true);
     this.malformedStage = "server_content_completion_flags";
-    for (const field of [
-      "generationComplete",
-      "turnComplete",
-      "waitingForInput",
-    ] as const) {
+    for (const field of ["generationComplete", "turnComplete", "waitingForInput"] as const) {
       if (content[field] === undefined) continue;
       if (typeof content[field] !== "boolean") this.malformed();
       this.markMeaningful();
@@ -1157,12 +1035,7 @@ export class GeminiLiveProtocol {
         typeof content.interactionStatus !== "string" ||
         !INTERACTION_STATUSES.has(content.interactionStatus))
     ) {
-      this.malformed(
-        interactionStatusDiagnostic(
-          content.turnComplete,
-          content.interactionStatus,
-        ),
-      );
+      this.malformed(interactionStatusDiagnostic(content.turnComplete, content.interactionStatus));
     }
     if (content.generationComplete === true) {
       this.emit({ type: "turn", state: "generation_complete" });
@@ -1215,10 +1088,7 @@ export class GeminiLiveProtocol {
       if (
         typeof part.text !== "string" ||
         (part.text.length === 0 &&
-          !(
-            typeof part.thoughtSignature === "string" &&
-            part.thoughtSignature.length > 0
-          )) ||
+          !(typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0)) ||
         utf8Bytes(part.text) > MAX_TEXT_BYTES
       ) {
         this.malformed();
@@ -1229,36 +1099,24 @@ export class GeminiLiveProtocol {
       this.emit({ type: "model_text", text: part.text });
       return;
     }
-    if (
-      !isRecord(part.inlineData) ||
-      !hasOnlyKeys(part.inlineData, INLINE_DATA_KEYS)
-    ) {
+    if (!isRecord(part.inlineData) || !hasOnlyKeys(part.inlineData, INLINE_DATA_KEYS)) {
       this.malformed();
       return;
     }
     if (
       part.inlineData.displayName !== undefined &&
-      !boundedOptionalString(
-        part.inlineData.displayName,
-        MAX_PROVIDER_IDENTIFIER_BYTES,
-      )
+      !boundedOptionalString(part.inlineData.displayName, MAX_PROVIDER_IDENTIFIER_BYTES)
     ) {
       this.malformed();
       return;
     }
     if (typeof part.inlineData.displayName === "string")
       this.chargeDecodedBytes(utf8Bytes(part.inlineData.displayName));
-    if (
-      part.inlineData.mimeType !==
-      `audio/pcm;rate=${GEMINI_LIVE_OUTPUT_SAMPLE_RATE}`
-    ) {
+    if (part.inlineData.mimeType !== `audio/pcm;rate=${GEMINI_LIVE_OUTPUT_SAMPLE_RATE}`) {
       this.malformed();
       return;
     }
-    const pcm = decodeBase64(
-      part.inlineData.data,
-      MAX_OUTPUT_AUDIO_BYTES_PER_PART,
-    );
+    const pcm = decodeBase64(part.inlineData.data, MAX_OUTPUT_AUDIO_BYTES_PER_PART);
     if (!pcm || pcm.byteLength % GEMINI_LIVE_PCM_BYTES_PER_SAMPLE !== 0) {
       this.malformed();
       return;
@@ -1273,10 +1131,7 @@ export class GeminiLiveProtocol {
     ) {
       this.emit({
         type: "audio",
-        pcm: pcm.slice(
-          offset,
-          offset + GEMINI_LIVE_MAX_RENDERER_AUDIO_CHUNK_BYTES,
-        ),
+        pcm: pcm.slice(offset, offset + GEMINI_LIVE_MAX_RENDERER_AUDIO_CHUNK_BYTES),
         sampleRate: GEMINI_LIVE_OUTPUT_SAMPLE_RATE,
       });
     }
@@ -1293,8 +1148,7 @@ export class GeminiLiveProtocol {
       !isRecord(value) ||
       !hasOnlyKeys(value, TRANSCRIPTION_KEYS) ||
       (value.text !== undefined &&
-        (typeof value.text !== "string" ||
-          utf8Bytes(value.text) > MAX_TEXT_BYTES))
+        (typeof value.text !== "string" || utf8Bytes(value.text) > MAX_TEXT_BYTES))
     ) {
       this.malformed();
       return;
@@ -1312,8 +1166,7 @@ export class GeminiLiveProtocol {
         this.malformed();
         return;
       }
-      if (typeof value[field] === "string")
-        this.chargeDecodedBytes(utf8Bytes(value[field]));
+      if (typeof value[field] === "string") this.chargeDecodedBytes(utf8Bytes(value[field]));
     }
     if (value.words !== undefined) {
       if (
@@ -1342,8 +1195,7 @@ export class GeminiLiveProtocol {
       this.emit({
         type: "caption",
         direction,
-        final:
-          typeof value.finished === "boolean" ? value.finished : defaultFinal,
+        final: typeof value.finished === "boolean" ? value.finished : defaultFinal,
         text,
         ...(value.finished === true ? { finished: true as const } : {}),
       });
@@ -1359,10 +1211,7 @@ export class GeminiLiveProtocol {
       this.malformed();
       return;
     }
-    if (
-      value.functionCalls.length === 0 ||
-      value.functionCalls.length > MAX_TOOL_CALLS_PER_EVENT
-    ) {
+    if (value.functionCalls.length === 0 || value.functionCalls.length > MAX_TOOL_CALLS_PER_EVENT) {
       this.malformed();
       return;
     }
@@ -1383,9 +1232,7 @@ export class GeminiLiveProtocol {
         continue;
       }
       this.chargeDecodedBytes(
-        utf8Bytes(call.id) +
-          utf8Bytes(call.name as string) +
-          utf8Bytes(JSON.stringify(safeArgs)),
+        utf8Bytes(call.id) + utf8Bytes(call.name as string) + utf8Bytes(JSON.stringify(safeArgs)),
       );
       const id = call.id;
       const name = call.name as string;
@@ -1432,11 +1279,7 @@ export class GeminiLiveProtocol {
   }
 
   private handleUsage(value: unknown): void {
-    if (
-      !isRecord(value) ||
-      !hasOnlyKeys(value, USAGE_KEYS) ||
-      Object.keys(value).length === 0
-    ) {
+    if (!isRecord(value) || !hasOnlyKeys(value, USAGE_KEYS) || Object.keys(value).length === 0) {
       this.malformed();
       return;
     }
@@ -1450,11 +1293,7 @@ export class GeminiLiveProtocol {
     const promptTokens = finiteCount(value.promptTokenCount);
     const responseTokens = finiteCount(value.responseTokenCount);
     const totalTokens = finiteCount(value.totalTokenCount);
-    if (
-      promptTokens === null ||
-      responseTokens === null ||
-      totalTokens === null
-    ) {
+    if (promptTokens === null || responseTokens === null || totalTokens === null) {
       this.malformed();
       return;
     }
@@ -1471,9 +1310,7 @@ export class GeminiLiveProtocol {
       !isRecord(value) ||
       !hasOnlyKeys(value, RESUMPTION_KEYS) ||
       typeof value.resumable !== "boolean" ||
-      (!value.resumable &&
-        value.newHandle !== undefined &&
-        value.newHandle !== "")
+      (!value.resumable && value.newHandle !== undefined && value.newHandle !== "")
     ) {
       this.malformed();
       return;
@@ -1481,8 +1318,7 @@ export class GeminiLiveProtocol {
     if (
       value.lastConsumedClientMessageIndex !== undefined &&
       (typeof value.lastConsumedClientMessageIndex !== "string" ||
-        utf8Bytes(value.lastConsumedClientMessageIndex) >
-          MAX_PROVIDER_IDENTIFIER_BYTES)
+        utf8Bytes(value.lastConsumedClientMessageIndex) > MAX_PROVIDER_IDENTIFIER_BYTES)
     ) {
       this.malformed();
       return;
@@ -1520,8 +1356,7 @@ export class GeminiLiveProtocol {
       this.malformed();
       return;
     }
-    if (typeof timeLeft === "string")
-      this.chargeDecodedBytes(utf8Bytes(timeLeft));
+    if (typeof timeLeft === "string") this.chargeDecodedBytes(utf8Bytes(timeLeft));
     this.markMeaningful();
     this.emit({
       type: "go_away",
@@ -1585,8 +1420,7 @@ export class GeminiLiveProtocol {
   }
 
   private requireOpen(): void {
-    if (this.phase !== "open" || !this.wire)
-      throw new Error("Live connection is not open.");
+    if (this.phase !== "open" || !this.wire) throw new Error("Live connection is not open.");
   }
 
   private isClosed(): boolean {
@@ -1604,8 +1438,7 @@ export class GeminiLiveProtocol {
 
   private requireOpenAndSeeded(): void {
     this.requireOpen();
-    if (!this.seeded)
-      throw new Error("Live history must be seeded before realtime input.");
+    if (!this.seeded) throw new Error("Live history must be seeded before realtime input.");
   }
 
   private touchProviderActivity(): void {
@@ -1616,9 +1449,7 @@ export class GeminiLiveProtocol {
 
   private admitServerEvent(): void {
     const now = this.clock.now();
-    this.serverEventTimes = this.serverEventTimes.filter(
-      (time) => time > now - 1_000,
-    );
+    this.serverEventTimes = this.serverEventTimes.filter((time) => time > now - 1_000);
     if (this.serverEventTimes.length >= MAX_SERVER_EVENTS_PER_SECOND) {
       throw new GeminiLiveProtocolFailure("provider_rate_limit");
     }
@@ -1631,13 +1462,8 @@ export class GeminiLiveProtocol {
       throw new GeminiLiveProtocolFailure("provider_rate_limit");
     }
     const now = this.clock.now();
-    this.outputAudioTimes = this.outputAudioTimes.filter(
-      (entry) => entry.at > now - 1_000,
-    );
-    const recentBytes = this.outputAudioTimes.reduce(
-      (total, entry) => total + entry.bytes,
-      0,
-    );
+    this.outputAudioTimes = this.outputAudioTimes.filter((entry) => entry.at > now - 1_000);
+    const recentBytes = this.outputAudioTimes.reduce((total, entry) => total + entry.bytes, 0);
     if (recentBytes + bytes > MAX_OUTPUT_AUDIO_BYTES_PER_SECOND) {
       throw new GeminiLiveProtocolFailure("provider_rate_limit");
     }
@@ -1656,8 +1482,7 @@ export class GeminiLiveProtocol {
   }
 
   private deferTransactionEffect(effect: () => void): void {
-    if (!this.transactionEffects)
-      throw new Error("Live event transaction is unavailable.");
+    if (!this.transactionEffects) throw new Error("Live event transaction is unavailable.");
     this.transactionEffects.push(effect);
   }
 
@@ -1669,10 +1494,7 @@ export class GeminiLiveProtocol {
       () => {
         this.idleTimer = null;
         if (this.phase !== "open") return;
-        if (
-          this.clock.now() - this.lastProviderActivityAt <
-          this.idleTimeoutMs
-        ) {
+        if (this.clock.now() - this.lastProviderActivityAt < this.idleTimeoutMs) {
           this.armIdleDeadline();
           return;
         }
@@ -1712,12 +1534,7 @@ export class GeminiLiveProtocol {
     diagnostic?: GeminiLiveMalformedStage,
     diagnosticDetail?: GeminiLiveProtocolDiagnosticDetail,
   ): void {
-    if (
-      this.phase === "closed" ||
-      this.phase === "failed" ||
-      this.phase === "disconnected"
-    )
-      return;
+    if (this.phase === "closed" || this.phase === "failed" || this.phase === "disconnected") return;
     this.emitError(code, diagnostic, diagnosticDetail);
     this.stopForDisconnect("failed");
   }
@@ -1739,9 +1556,7 @@ export class GeminiLiveProtocol {
     this.setState(state);
   }
 
-  private malformed(
-    diagnosticDetail?: GeminiLiveProtocolDiagnosticDetail,
-  ): void {
+  private malformed(diagnosticDetail?: GeminiLiveProtocolDiagnosticDetail): void {
     throw new GeminiLiveProtocolFailure(
       "malformed_server_event",
       this.malformedStage,

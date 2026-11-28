@@ -78,9 +78,9 @@ function usePeerConnections() {
     queryFn: async () => {
       const incoming = await peerHostsApi.statuses();
       const ids = new Set(incoming.map((status) => status.hostId));
-      const kept = (queryClient.getQueryData<PeerHostStatus[]>(hostQueryKeys.statuses()) ?? []).filter(
-        (status) => ids.has(status.hostId),
-      );
+      const kept = (
+        queryClient.getQueryData<PeerHostStatus[]>(hostQueryKeys.statuses()) ?? []
+      ).filter((status) => ids.has(status.hostId));
       return incoming.reduce(mergePeerHostStatus, kept);
     },
     enabled: supervised && listening,
@@ -138,16 +138,27 @@ export function PeerHostRow({
     >
       <Laptop className="size-4 shrink-0 text-secondary" aria-hidden="true" />
       <div className="min-w-0 flex-1">
-        <Text variant="small-strong" truncate className="block">{host.name}</Text>
+        <Text variant="small-strong" truncate className="block">
+          {host.name}
+        </Text>
         {host.activeRouteKind ? (
           <Text variant="small" color="secondary" className="block">
-            {status?.state.kind === "connected" ? "Connected via" : "Last route:"} {host.activeRouteKind === "lan" ? "Local network" : "Tailscale"}
-            {host.routes?.length ? ` · ${host.routes.length} ${host.routes.length === 1 ? "route" : "routes"}` : ""}
+            {status?.state.kind === "connected" ? "Connected via" : "Last route:"}{" "}
+            {host.activeRouteKind === "lan" ? "Local network" : "Tailscale"}
+            {host.routes?.length
+              ? ` · ${host.routes.length} ${host.routes.length === 1 ? "route" : "routes"}`
+              : ""}
           </Text>
         ) : null}
-        {status?.lastSyncedAt ? <Text variant="small" color="secondary" className="block">Last synced {new Date(status.lastSyncedAt).toLocaleString()}</Text> : null}
+        {status?.lastSyncedAt ? (
+          <Text variant="small" color="secondary" className="block">
+            Last synced {new Date(status.lastSyncedAt).toLocaleString()}
+          </Text>
+        ) : null}
         {presentation.detail ? (
-          <Text variant="small" color="secondary" className="block break-words">{presentation.detail}</Text>
+          <Text variant="small" color="secondary" className="block break-words">
+            {presentation.detail}
+          </Text>
         ) : null}
       </div>
       <Badge color={presentation.tone}>{presentation.label}</Badge>
@@ -176,12 +187,23 @@ export function PeerHostRow({
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={onRename}>Rename locally…</DropdownMenuItem>
           <DropdownMenuItem onSelect={onRepair}>Re-pair…</DropdownMenuItem>
-          {host.routes?.filter(route => route.origin === "learned").map(route => (
-            <DropdownMenuItem key={route.id} disabled={busy} onSelect={() => onRemoveRoute?.(route.id)}>
-              Remove learned {route.kind === "lan" ? "local network" : "Tailscale"} route{route.active ? " (active)" : ""}…
+          {host.routes
+            ?.filter((route) => route.origin === "learned")
+            .map((route) => (
+              <DropdownMenuItem
+                key={route.id}
+                disabled={busy}
+                onSelect={() => onRemoveRoute?.(route.id)}
+              >
+                Remove learned {route.kind === "lan" ? "local network" : "Tailscale"} route
+                {route.active ? " (active)" : ""}…
+              </DropdownMenuItem>
+            ))}
+          {host.hasSuppressedRoutes ? (
+            <DropdownMenuItem disabled={busy} onSelect={onRestoreRoutes}>
+              Restore learned routes
             </DropdownMenuItem>
-          ))}
-          {host.hasSuppressedRoutes ? <DropdownMenuItem disabled={busy} onSelect={onRestoreRoutes}>Restore learned routes</DropdownMenuItem> : null}
+          ) : null}
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={onForget}>Forget…</DropdownMenuItem>
         </DropdownMenuContent>
@@ -190,13 +212,7 @@ export function PeerHostRow({
   );
 }
 
-function RenameDialog({
-  host,
-  onClose,
-}: {
-  host: PeerHostView | null;
-  onClose: () => void;
-}) {
+function RenameDialog({ host, onClose }: { host: PeerHostView | null; onClose: () => void }) {
   const [draft, setDraft] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [failure, setFailure] = React.useState<string | null>(null);
@@ -266,9 +282,14 @@ export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
   const byHost = new Map(statuses.map((status) => [status.hostId, status]));
   const now = useNow(statuses.some((status) => status.state.kind === "backoff"));
   const [busy, setBusy] = React.useState<string | null>(null);
-  const [sheet, setSheet] = React.useState<{ replaceHost?: { id: string; name: string } } | null>(null);
+  const [sheet, setSheet] = React.useState<{ replaceHost?: { id: string; name: string } } | null>(
+    null,
+  );
   const [renaming, setRenaming] = React.useState<PeerHostView | null>(null);
-  const [routeRemoval, setRouteRemoval] = React.useState<{ host: PeerHostView; routeId: string } | null>(null);
+  const [routeRemoval, setRouteRemoval] = React.useState<{
+    host: PeerHostView;
+    routeId: string;
+  } | null>(null);
   const [forgetting, setForgetting] = React.useState<PeerHostView | null>(null);
 
   const act = async (hostId: string, work: () => Promise<unknown>, fallback: string) => {
@@ -303,8 +324,12 @@ export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
           </div>
         ) : list.isError ? (
           <div role="alert" className="flex flex-wrap items-center justify-between gap-3 p-4">
-            <Text variant="small">Couldn't load paired computers. Your saved connections have not been removed.</Text>
-            <Button size="small" disabled={list.isFetching} onClick={() => void list.refetch()}>Try again</Button>
+            <Text variant="small">
+              Couldn't load paired computers. Your saved connections have not been removed.
+            </Text>
+            <Button size="small" disabled={list.isFetching} onClick={() => void list.refetch()}>
+              Try again
+            </Button>
           </div>
         ) : hosts.length === 0 ? (
           <EmptyState
@@ -321,7 +346,11 @@ export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
               now={now}
               busy={busy === host.id}
               onEnabledChange={(enabled) =>
-                void act(host.id, () => peerHostsApi.setEnabled(host.id, enabled), "Couldn't change this connection.")
+                void act(
+                  host.id,
+                  () => peerHostsApi.setEnabled(host.id, enabled),
+                  "Couldn't change this connection.",
+                )
               }
               onReconnect={() =>
                 void act(host.id, () => peerHostsApi.reconnect(host.id), "Couldn't reconnect.")
@@ -329,15 +358,21 @@ export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
               onRename={() => setRenaming(host)}
               onRepair={() => setSheet({ replaceHost: { id: host.id, name: host.name } })}
               onForget={() => setForgetting(host)}
-              onRemoveRoute={routeId => setRouteRemoval({ host, routeId })}
-              onRestoreRoutes={() => void act(host.id, () => peerHostsApi.restoreRoutes(host.id), "Couldn't restore routes.")}
+              onRemoveRoute={(routeId) => setRouteRemoval({ host, routeId })}
+              onRestoreRoutes={() =>
+                void act(
+                  host.id,
+                  () => peerHostsApi.restoreRoutes(host.id),
+                  "Couldn't restore routes.",
+                )
+              }
             />
           ))
         )}
       </FieldSet>
       <Text as="p" variant="small" color="secondary" className="-mt-4 mb-7 px-4">
-        The other computer decides what this {hostLabel} may do, and can remove its access at any time.
-        Nothing here changes who can control this {hostLabel}.
+        The other computer decides what this {hostLabel} may do, and can remove its access at any
+        time. Nothing here changes who can control this {hostLabel}.
       </Text>
 
       <PeerAddDeviceSheet
@@ -347,7 +382,7 @@ export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
       />
       <AlertDialog
         open={routeRemoval !== null}
-        onOpenChange={open => !open && setRouteRemoval(null)}
+        onOpenChange={(open) => !open && setRouteRemoval(null)}
         title="Remove learned route?"
         description="Aiden will stop using this route and won't learn it again until you choose Restore learned routes. Removing the active route may briefly interrupt this connection."
         confirmLabel="Remove route"
@@ -355,7 +390,14 @@ export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
         busy={routeRemoval !== null && busy === routeRemoval.host.id}
         onConfirm={async () => {
           if (!routeRemoval) return;
-          if (await act(routeRemoval.host.id, () => peerHostsApi.removeRoute(routeRemoval.host.id, routeRemoval.routeId), "Couldn't remove this route.")) setRouteRemoval(null);
+          if (
+            await act(
+              routeRemoval.host.id,
+              () => peerHostsApi.removeRoute(routeRemoval.host.id, routeRemoval.routeId),
+              "Couldn't remove this route.",
+            )
+          )
+            setRouteRemoval(null);
         }}
       />
       <RenameDialog host={renaming} onClose={() => setRenaming(null)} />
@@ -371,7 +413,10 @@ export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
         onConfirm={async () => {
           const host = forgetting;
           if (!host) return;
-          if (await act(host.id, () => peerHostsApi.remove(host.id), "Couldn't forget that computer.")) setForgetting(null);
+          if (
+            await act(host.id, () => peerHostsApi.remove(host.id), "Couldn't forget that computer.")
+          )
+            setForgetting(null);
         }}
       />
     </>

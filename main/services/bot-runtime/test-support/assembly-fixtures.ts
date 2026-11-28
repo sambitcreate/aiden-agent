@@ -7,7 +7,10 @@
 import type { BotPlans } from "../../bot-plans/plans.js";
 import { statSync } from "node:fs";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { BotCatalogConnectionResource, BotCatalogSkillResource } from "../../bot-capability-catalog-core.js";
+import type {
+  BotCatalogConnectionResource,
+  BotCatalogSkillResource,
+} from "../../bot-capability-catalog-core.js";
 import type {
   BotRuntimeEffectiveAuthority,
   BotRuntimeMcpToolAuthority,
@@ -148,15 +151,37 @@ export function testAuthority(options: AuthorityOptions): BotRuntimeEffectiveAut
     chatId: "chat-1",
     accessMode: options.mode,
     botPolicy: { revision: "1", epoch: "epoch:1" },
-    chatPolicy: { mode: options.mode === "custom" ? "custom" : "inherit", revision: "1", epoch: "epoch:1" },
+    chatPolicy: {
+      mode: options.mode === "custom" ? "custom" : "inherit",
+      revision: "1",
+      epoch: "epoch:1",
+    },
     catalogRevision: "catalog-1",
     provider,
-    ...(options.vision ? { visionProvider: { ...provider, sourceProviderId: "vision", sourceModelId: "vision-model" } } : {}),
-    files: { mode: options.botHome ? "scoped" : "off", botHome: options.botHome === true, approvedLocations: [] },
-    shell: options.shell ? { enabled: true, shellFingerprint: "s", exactFingerprint: "s" } : { enabled: false },
+    ...(options.vision
+      ? {
+          visionProvider: {
+            ...provider,
+            sourceProviderId: "vision",
+            sourceModelId: "vision-model",
+          },
+        }
+      : {}),
+    files: {
+      mode: options.botHome ? "scoped" : "off",
+      botHome: options.botHome === true,
+      approvedLocations: [],
+    },
+    shell: options.shell
+      ? { enabled: true, shellFingerprint: "s", exactFingerprint: "s" }
+      : { enabled: false },
     connections: options.connections ? [MAIL_CONNECTION] : [],
     skills: options.skills ? [NOTES_SKILL_GRANT] : [],
-    otherCapabilities: (options.other ?? []).map((kind) => ({ kind, capabilityFingerprint: kind, exactFingerprint: kind })),
+    otherCapabilities: (options.other ?? []).map((kind) => ({
+      kind,
+      capabilityFingerprint: kind,
+      exactFingerprint: kind,
+    })),
     managedHome: {
       botId: "bot-1",
       workspaceId: "bot-home-1",
@@ -176,10 +201,15 @@ function catalogConnection(): BotCatalogConnectionResource {
 }
 
 function catalogSkill(): BotCatalogSkillResource {
-  return { option: { available: true }, ...NOTES_SKILL_GRANT } as unknown as BotCatalogSkillResource;
+  return {
+    option: { available: true },
+    ...NOTES_SKILL_GRANT,
+  } as unknown as BotCatalogSkillResource;
 }
 
-export function notesSkillSnapshot(instructions = "Plan meals from the fridge."): SkillRegistrySnapshot {
+export function notesSkillSnapshot(
+  instructions = "Plan meals from the fridge.",
+): SkillRegistrySnapshot {
   const skill = {
     ...NOTES_SKILL_CANDIDATE,
     description: "Meal planning notes",
@@ -231,7 +261,10 @@ export interface AssemblyState {
   hasComputer?: boolean;
 }
 
-export function assemblyState(authority: BotRuntimeEffectiveAuthority, supportsImages = true): AssemblyState {
+export function assemblyState(
+  authority: BotRuntimeEffectiveAuthority,
+  supportsImages = true,
+): AssemblyState {
   return {
     authority,
     supportsImages,
@@ -307,21 +340,35 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
           catalog: async () => state.catalog,
           mcpTools: async () => state.builtMailTools ?? MAIL_BUILT_TOOLS,
           liveMcpTools: async () =>
-            new Map(state.liveMailTools.map((tool) => [mcpAgentToolName(MAIL_SERVER, tool.name, MAIL_INVENTORY), tool] as const)),
-          skills: async () => ({ snapshot: state.skillSnapshot, resolved: [resolvedNotesSkill(state.skillSnapshot)] }),
+            new Map(
+              state.liveMailTools.map(
+                (tool) => [mcpAgentToolName(MAIL_SERVER, tool.name, MAIL_INVENTORY), tool] as const,
+              ),
+            ),
+          skills: async () => ({
+            snapshot: state.skillSnapshot,
+            resolved: [resolvedNotesSkill(state.skillSnapshot)],
+          }),
         }),
       candidates: async (_botId, admission) => ({
         tools: options.candidates(admission.authority),
       }),
       ...(options.approvalFor === undefined
         ? {}
-        : { approvalFor: (_botId: string, toolName: string, call: BotToolCallCheck) => options.approvalFor!(toolName, call) }),
+        : {
+            approvalFor: (_botId: string, toolName: string, call: BotToolCallCheck) =>
+              options.approvalFor!(toolName, call),
+          }),
     },
     ...(options.rules === undefined ? {} : { rules: async () => options.rules!() }),
     ...(options.botName === undefined ? {} : { botName: async () => options.botName }),
-    ...(options.routinesGoAhead === undefined ? {} : { routinesGoAhead: async () => options.routinesGoAhead!() }),
+    ...(options.routinesGoAhead === undefined
+      ? {}
+      : { routinesGoAhead: async () => options.routinesGoAhead!() }),
     ...(options.pageRules === undefined ? {} : { pageRules: async () => options.pageRules!() }),
-    ...(options.approvalMode === undefined ? {} : { approvalMode: async () => options.approvalMode!() }),
+    ...(options.approvalMode === undefined
+      ? {}
+      : { approvalMode: async () => options.approvalMode!() }),
     ...(options.judge === undefined ? {} : { judge: options.judge }),
   });
   const deps: AssemblyDeps = {
@@ -330,14 +377,24 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
     handoffs: [],
     records: [],
     loadBot: async (botId) => fakeBot(botId),
-    systemSections: async (_bot, offered) => ["BASE", "PERSONA", "AUTHORITY", assembly.guidance("bot-1", offered.toolNames)],
+    systemSections: async (_bot, offered) => [
+      "BASE",
+      "PERSONA",
+      "AUTHORITY",
+      assembly.guidance("bot-1", offered.toolNames),
+    ],
     currentTools: (bot, turn) => assembly.currentTools(bot.id, turn),
     checkPolicy: (botId, toolName, call) => assembly.checkPolicy(botId, toolName, call),
     turnAllows: botIngressAllowsTool,
     requestApproval: async (request) => {
       deps.approvals.push(request);
       const answer = options.approve ? await options.approve(request) : "allow";
-      return { id: request.waitId, authorizationFingerprint: request.authorizationFingerprint, answer, source: "person" };
+      return {
+        id: request.waitId,
+        authorizationFingerprint: request.authorizationFingerprint,
+        answer,
+        source: "person",
+      };
     },
     ...(options.requestHandoff === undefined
       ? {}
@@ -349,7 +406,8 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
         }),
     // Idempotent per tool call, as production is.
     recordHandoff: async (record) => {
-      if (!deps.records.some((entry) => entry.toolCallId === record.toolCallId)) deps.records.push(record);
+      if (!deps.records.some((entry) => entry.toolCallId === record.toolCallId))
+        deps.records.push(record);
     },
     readmit: async () => ({ ok: true }),
     imageInput: async () => state.supportsImages,
@@ -379,22 +437,51 @@ export interface PlanReplayArgs {
   identity?: boolean;
 }
 
-export async function planReplayDeps(args: PlanReplayArgs, emit?: (tag: string, value: unknown) => void) {
+export async function planReplayDeps(
+  args: PlanReplayArgs,
+  emit?: (tag: string, value: unknown) => void,
+) {
   const { createBotPlans } = await import("../../bot-plans/plans.js");
   const { botPlanProposalFingerprint } = await import("../../bot-plans/validate.js");
   const { countingTool, blockingUntilAborted } = await import("./fixtures.js");
   const toolName = args.safe ? "web_search" : SEND_EMAIL_TOOL;
   const proposal: import("../../bot-plans/validate.js").BotPlanProposal = {
-    title: "Replay test", why: "Exercise durable execution admission", steps: ["Do the operation"],
-    items: args.safe ? [{ id: "i1", kind: "site", host: "search.example", max: 2 }] : [{
-      id: "i1", kind: "connector", app: "Mail", action: "send mail", max: 2,
-      tools: [{ modelName: SEND_EMAIL_TOOL, serverId: MAIL_SERVER.id, remoteName: "send_email", title: "Send mail" }],
-    }],
-    authorization: { policyRevision: "1", bindingRevision: "binding-1", proposalFingerprint: "", rules: [] },
+    title: "Replay test",
+    why: "Exercise durable execution admission",
+    steps: ["Do the operation"],
+    items: args.safe
+      ? [{ id: "i1", kind: "site", host: "search.example", max: 2 }]
+      : [
+          {
+            id: "i1",
+            kind: "connector",
+            app: "Mail",
+            action: "send mail",
+            max: 2,
+            tools: [
+              {
+                modelName: SEND_EMAIL_TOOL,
+                serverId: MAIL_SERVER.id,
+                remoteName: "send_email",
+                title: "Send mail",
+              },
+            ],
+          },
+        ],
+    authorization: {
+      policyRevision: "1",
+      bindingRevision: "binding-1",
+      proposalFingerprint: "",
+      rules: [],
+    },
   };
   proposal.authorization.proposalFingerprint = botPlanProposalFingerprint(proposal);
-  const plans = createBotPlans({ profileDir: args.profileDir, knownBot: async () => true,
-    revalidate: async () => undefined, revokeAccess() {} });
+  const plans = createBotPlans({
+    profileDir: args.profileDir,
+    knownBot: async () => true,
+    revalidate: async () => undefined,
+    revokeAccess() {},
+  });
   const tool = countingTool(toolName, async (_params, signal) => {
     if (!emit) return "recovered";
     emit("TOOL_RUNNING", toolName);
@@ -403,63 +490,142 @@ export async function planReplayDeps(args: PlanReplayArgs, emit?: (tag: string, 
   const state = assemblyState(testAuthority({ mode: "full", home: args.home, ...FULL_GRANTS }));
   let covers = 0;
   const deps = assemblyDeps(state, {
-    plans: { cover: (...input) => { covers++; return plans.cover(...input); }, admit: async (permit, start) => {
-      if (emit && args.phase === "reserved") { emit("RESERVED", permit.executionId); await new Promise<never>(() => undefined); }
-      return plans.admit(permit, start);
-    } },
+    plans: {
+      cover: (...input) => {
+        covers++;
+        return plans.cover(...input);
+      },
+      admit: async (permit, start) => {
+        if (emit && args.phase === "reserved") {
+          emit("RESERVED", permit.executionId);
+          await new Promise<never>(() => undefined);
+        }
+        return plans.admit(permit, start);
+      },
+    },
     candidates: () => [{ tool, mcp: !args.safe, replay: args.safe ? "safe" : "unsafe" }],
     // The harmless safe read deliberately gets a live host approval in this
     // fixture. No real mutating/MCP tool is relabelled replay-safe.
-    approvalFor: args.safe ? async () => ({ approval: { summary: "Read search results" },
-      action: { surface: "browser", tool: "browser_click", url: "https://search.example/results" } }) : args.phase === "before-intent" ? async () => ({
-      approval: { summary: "Send mail", onAllow: emit ? async () => { emit("BEFORE_INTENT", toolName); await new Promise<never>(() => undefined); } : undefined },
-      action: { surface: "mcp", modelName: SEND_EMAIL_TOOL, serverId: MAIL_SERVER.id, remoteName: "send_email", summary: "Send mail", destructive: "additive" },
-    }) : undefined,
+    approvalFor: args.safe
+      ? async () => ({
+          approval: { summary: "Read search results" },
+          action: {
+            surface: "browser",
+            tool: "browser_click",
+            url: "https://search.example/results",
+          },
+        })
+      : args.phase === "before-intent"
+        ? async () => ({
+            approval: {
+              summary: "Send mail",
+              onAllow: emit
+                ? async () => {
+                    emit("BEFORE_INTENT", toolName);
+                    await new Promise<never>(() => undefined);
+                  }
+                : undefined,
+            },
+            action: {
+              surface: "mcp",
+              modelName: SEND_EMAIL_TOOL,
+              serverId: MAIL_SERVER.id,
+              remoteName: "send_email",
+              summary: "Send mail",
+              destructive: "additive",
+            },
+          })
+        : undefined,
     approve: async () => "deny",
   });
   return { plans, proposal, deps, tool, state, covers: () => covers };
 }
 
 /** A replay-safe harmless read exposes only host identity observations to the test. */
-export async function inputIdentityDeps(args: PlanReplayArgs, observe: (ids: readonly string[]) => void, hold = false) {
+export async function inputIdentityDeps(
+  args: PlanReplayArgs,
+  observe: (ids: readonly string[]) => void,
+  hold = false,
+) {
   const { countingTool, blockingUntilAborted } = await import("./fixtures.js");
   const tool = countingTool("web_search");
   const state = assemblyState(testAuthority({ mode: "full", home: args.home, ...FULL_GRANTS }));
-  const deps = assemblyDeps(state, { candidates: () => [{ tool, replay: "safe", bind: call => ({ ...tool, async execute(...params) {
-    observe(await call.runInputIds!());
-    if (hold) await blockingUntilAborted(call.signal);
-    return tool.execute(...params);
-  } }) }] });
+  const deps = assemblyDeps(state, {
+    candidates: () => [
+      {
+        tool,
+        replay: "safe",
+        bind: (call) => ({
+          ...tool,
+          async execute(...params) {
+            observe(await call.runInputIds!());
+            if (hold) await blockingUntilAborted(call.signal);
+            return tool.execute(...params);
+          },
+        }),
+      },
+    ],
+  });
   return { deps, tool };
 }
 
 /** `kill-harness.mjs scenario` entry point; no test registration or provider I/O. */
-export async function run(args: PlanReplayArgs, emit: (tag: string, value: unknown) => void): Promise<void> {
+export async function run(
+  args: PlanReplayArgs,
+  emit: (tag: string, value: unknown) => void,
+): Promise<void> {
   const { BACKGROUND_CONTEXT } = await import("@earendil-works/chord/context");
-  const { fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
+  const { fauxAssistantMessage, fauxToolCall } =
+    await import("@earendil-works/pi-ai/providers/faux");
   const { createBotRegistry } = await import("../bot-extension.js");
   const { createBotHarnessHost } = await import("../harness-host.js");
   const { createFauxModels, FAUX_MODEL_REF } = await import("./faux.js");
   const replay = args.identity ? undefined : await planReplayDeps(args, emit);
-  const f = replay ?? await inputIdentityDeps(args, ids => emit("INPUT_IDS", ids), true);
+  const f = replay ?? (await inputIdentityDeps(args, (ids) => emit("INPUT_IDS", ids), true));
   if (replay) {
-    const wait = replay.plans.request({ botId: args.botId, planId: "replay-plan", toolCallId: "proposal", proposal: replay.proposal,
-      requestIds: ["replay-run"], signal: undefined });
+    const wait = replay.plans.request({
+      botId: args.botId,
+      planId: "replay-plan",
+      toolCallId: "proposal",
+      proposal: replay.proposal,
+      requestIds: ["replay-run"],
+      signal: undefined,
+    });
     await replay.plans.current(args.botId);
     await replay.plans.respond(args.botId, "replay-plan", "approve");
     await wait;
   }
-  const { models } = createFauxModels([fauxAssistantMessage([args.nested
-    ? fauxToolCall("codemode", { code: `text(await tools.${f.tool.name}({text:'test'}))` }, { id: "script-1" })
-    : fauxToolCall(f.tool.name, { text: "test" }, { id: "same-provider-id" })], { stopReason: "toolUse" })]);
+  const { models } = createFauxModels([
+    fauxAssistantMessage(
+      [
+        args.nested
+          ? fauxToolCall(
+              "codemode",
+              { code: `text(await tools.${f.tool.name}({text:'test'}))` },
+              { id: "script-1" },
+            )
+          : fauxToolCall(f.tool.name, { text: "test" }, { id: "same-provider-id" }),
+      ],
+      { stopReason: "toolUse" },
+    ),
+  ]);
   const registries = new Map<string, ReturnType<typeof createBotRegistry>>();
-  const host = await createBotHarnessHost({ profileDir: args.profileDir, models, buildRegistry: id => {
-    const registry = createBotRegistry(id, f.deps); registries.set(id, registry); return registry;
-  } });
+  const host = await createBotHarnessHost({
+    profileDir: args.profileDir,
+    models,
+    buildRegistry: (id) => {
+      const registry = createBotRegistry(id, f.deps);
+      registries.set(id, registry);
+      return registry;
+    },
+  });
   if ("unavailable" in host) throw new Error("Profile locked");
   const { conversation } = await host.open(args.botId);
   await registries.get(args.botId)!.refresh();
   await conversation.configure({ model: FAUX_MODEL_REF }, BACKGROUND_CONTEXT);
-  const submission = await conversation.submit({ type: "input", content: "go", ...(args.identity ? {} : { requestId: "replay-run" }) }, BACKGROUND_CONTEXT);
+  const submission = await conversation.submit(
+    { type: "input", content: "go", ...(args.identity ? {} : { requestId: "replay-run" }) },
+    BACKGROUND_CONTEXT,
+  );
   emit("SUBMITTED", String(submission.id));
 }

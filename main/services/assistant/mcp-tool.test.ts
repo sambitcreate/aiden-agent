@@ -106,7 +106,10 @@ test("Assistant MCP inventory never lists a connector the chat's workspace switc
     { id: "notion", name: "Notion", transport: "http", url: "https://example.test", enabled: true },
   ];
   const tool = createAssistantMcpServerTool(async () => servers, ["notion"]);
-  const listed = resultJson(await tool.execute("list", {})) as { servers: unknown; totalEnabledServers: number };
+  const listed = resultJson(await tool.execute("list", {})) as {
+    servers: unknown;
+    totalEnabledServers: number;
+  };
   assert.deepEqual(listed.servers, [{ id: "gmail", name: "Gmail" }]);
   assert.equal(listed.totalEnabledServers, 1);
 });

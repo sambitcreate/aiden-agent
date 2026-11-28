@@ -17,9 +17,14 @@ import { createTestRuntime, testCanvas } from "./viewer-test-support.js";
 const last = <T>(items: readonly T[]): T | undefined => items[items.length - 1];
 
 const close = (actual: number, expected: number, epsilon = 1e-6) =>
-  assert.ok(Math.abs(actual - expected) <= epsilon, `${actual} is not within ${epsilon} of ${expected}`);
+  assert.ok(
+    Math.abs(actual - expected) <= epsilon,
+    `${actual} is not within ${epsilon} of ${expected}`,
+  );
 
-function fixture(options: { profile?: DeviceShapeProfile; model?: DeviceModelId; reduced?: boolean } = {}) {
+function fixture(
+  options: { profile?: DeviceShapeProfile; model?: DeviceModelId; reduced?: boolean } = {},
+) {
   const test = createTestRuntime({ reduced: options.reduced ?? false });
   const canvas = testCanvas();
   const source = { width: 1206, height: 2622 } as HTMLCanvasElement;
@@ -36,7 +41,14 @@ function fixture(options: { profile?: DeviceShapeProfile; model?: DeviceModelId;
   // The stream's first decoded frame, as the viewport delivers it on mount.
   viewer.frameUpdated();
   test.draw();
-  return { ...test, viewer, canvas, source, state: test.renderers[0]!, unavailable: () => unavailable };
+  return {
+    ...test,
+    viewer,
+    canvas,
+    source,
+    state: test.renderers[0]!,
+    unavailable: () => unavailable,
+  };
 }
 
 test("resize and redraw commit together, keeping the scene, the body and the pose", () => {
@@ -163,7 +175,9 @@ test("the fold body takes a landscape inner display's width and keeps it through
   const { viewer, draw, source, state } = fixture({ profile: open });
   viewer.setFoldAngle(180);
   draw(0);
-  const portraitWidth = new Box3().setFromObject(last(state.frames)!.root!).getSize(new Vector3()).x;
+  const portraitWidth = new Box3()
+    .setFromObject(last(state.frames)!.root!)
+    .getSize(new Vector3()).x;
   source.width = 2208;
   source.height = 1840;
   viewer.setScreen({ width: 2208, height: 1840, orientation: "portrait" });
@@ -219,7 +233,10 @@ test("an unfinished hinge turn retargets from the angle on screen", () => {
 });
 
 test("with Reduce Motion a fold lands at once", () => {
-  const { viewer, draw, state, pendingFrames } = fixture({ profile: ANDROID_PHONE_SHAPE, reduced: true });
+  const { viewer, draw, state, pendingFrames } = fixture({
+    profile: ANDROID_PHONE_SHAPE,
+    reduced: true,
+  });
   viewer.setFoldAngle(180);
   draw(0);
   const moving = last(state.frames)!.root!.children[0]!.children[0]!;
@@ -307,7 +324,8 @@ test("a hardware model replaces the family body in place and survives rotation a
     if (object instanceof Mesh) geometries.push(object.geometry);
   });
   let released = 0;
-  for (const geometry of new Set(geometries)) geometry.addEventListener("dispose", () => void released++);
+  for (const geometry of new Set(geometries))
+    geometry.addEventListener("dispose", () => void released++);
   // A framebuffer turn and a native resolution change keep the model.
   source.width = 2622;
   source.height = 1206;

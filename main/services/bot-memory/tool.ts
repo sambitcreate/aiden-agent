@@ -43,7 +43,7 @@ const DESCRIPTION = [
   "",
   "SAVE: durable facts, standing preferences, commitments you made. SKIP: one-off requests, anything already in your instructions, passwords or other secrets, raw dumps, progress on the current task.",
   "",
-  "Write declarative facts (\"Prefers short answers.\"), never commands to yourself.",
+  'Write declarative facts ("Prefers short answers."), never commands to yourself.',
   "",
   `HOW: make every change in ONE call. List all operations; they apply together and the size and entry-count limits (at most ${BOT_MEMORY_LIMITS.maxEntries} entries per target) are checked only on the final result. 'replace' and 'remove' locate one entry by 'match' (its exact text, or a part of it that only that entry contains). For 'replace', 'content' is the WHOLE new entry.`,
   "",
@@ -60,13 +60,22 @@ const parameters = Type.Object({
     Type.Object({
       action: Type.Union([Type.Literal("add"), Type.Literal("replace"), Type.Literal("remove")]),
       content: Type.Optional(
-        Type.String({ description: "The entry text for 'add', or the WHOLE new entry for 'replace'." }),
+        Type.String({
+          description: "The entry text for 'add', or the WHOLE new entry for 'replace'.",
+        }),
       ),
       match: Type.Optional(
-        Type.String({ description: "For 'replace' and 'remove': the entry's text, or a part only that entry contains." }),
+        Type.String({
+          description:
+            "For 'replace' and 'remove': the entry's text, or a part only that entry contains.",
+        }),
       ),
     }),
-    { minItems: 1, maxItems: BOT_MEMORY_MAX_OPERATIONS, description: "Applied together, in order." },
+    {
+      minItems: 1,
+      maxItems: BOT_MEMORY_MAX_OPERATIONS,
+      description: "Applied together, in order.",
+    },
   ),
 });
 
@@ -96,7 +105,11 @@ function toOperations(raw: readonly RawOperation[]): BotMemoryOperation[] | stri
   return operations;
 }
 
-function resultOf(text: unknown, details: BotMemoryToolDetails, isError: boolean): AgentToolResult<BotMemoryToolDetails> {
+function resultOf(
+  text: unknown,
+  details: BotMemoryToolDetails,
+  isError: boolean,
+): AgentToolResult<BotMemoryToolDetails> {
   return {
     content: [{ type: "text", text: JSON.stringify(text) }],
     details,
@@ -105,10 +118,18 @@ function resultOf(text: unknown, details: BotMemoryToolDetails, isError: boolean
 }
 
 /** The model-facing JSON for an applied batch. */
-export function botMemoryToolResult(result: BotMemoryApplyResult): AgentToolResult<BotMemoryToolDetails> {
+export function botMemoryToolResult(
+  result: BotMemoryApplyResult,
+): AgentToolResult<BotMemoryToolDetails> {
   if (result.ok) {
     return resultOf(
-      { ok: true, target: result.target, changed: result.changed, usage: formatUsage(result.texts, result.target), entries: result.texts },
+      {
+        ok: true,
+        target: result.target,
+        changed: result.changed,
+        usage: formatUsage(result.texts, result.target),
+        entries: result.texts,
+      },
       { changed: result.changed, targets: result.changed > 0 ? [result.target] : [] },
       false,
     );
@@ -156,25 +177,44 @@ export function createBotMemoryTool(
     description: options.addOnly ? DESCRIPTION + ADD_ONLY_NOTE : DESCRIPTION,
     parameters,
     async execute(_toolCallId, params, signal) {
-      const { target, operations: raw } = params as { target: BotMemoryTarget; operations: RawOperation[] };
+      const { target, operations: raw } = params as {
+        target: BotMemoryTarget;
+        operations: RawOperation[];
+      };
       if (raw.length > BOT_MEMORY_MAX_OPERATIONS) {
         return resultOf(
-          { ok: false, code: "invalid", target, error: `At most ${BOT_MEMORY_MAX_OPERATIONS} operations per call.` },
+          {
+            ok: false,
+            code: "invalid",
+            target,
+            error: `At most ${BOT_MEMORY_MAX_OPERATIONS} operations per call.`,
+          },
           { changed: 0, targets: [] },
           true,
         );
       }
       const operations = toOperations(raw);
       if (typeof operations === "string") {
-        return resultOf({ ok: false, code: "invalid", target, error: operations }, { changed: 0, targets: [] }, true);
+        return resultOf(
+          { ok: false, code: "invalid", target, error: operations },
+          { changed: 0, targets: [] },
+          true,
+        );
       }
       if (
-        options.canSchedule
-        && operations.some((operation) => operation.action !== "remove" && botMemoryClaimsNoReachOut(operation.content, target))
+        options.canSchedule &&
+        operations.some(
+          (operation) =>
+            operation.action !== "remove" && botMemoryClaimsNoReachOut(operation.content, target),
+        ) &&
         // Unable to tell whether the Bot has routines: refuse, rather than save a note that may be false.
-        && await options.canSchedule().catch(() => true)
+        (await options.canSchedule().catch(() => true))
       ) {
-        return resultOf({ ok: false, code: "invalid", target, error: BOT_MEMORY_REACH_OUT_CLAIM_ERROR }, { changed: 0, targets: [] }, true);
+        return resultOf(
+          { ok: false, code: "invalid", target, error: BOT_MEMORY_REACH_OUT_CLAIM_ERROR },
+          { changed: 0, targets: [] },
+          true,
+        );
       }
       // A call aborted (its turn stopped, its review revoked) while its batch
       // waited or read is never published.
@@ -182,7 +222,12 @@ export function createBotMemoryTool(
         await options.assertCurrent?.();
         signal?.throwIfAborted();
       };
-      return botMemoryToolResult(await memory.apply(botId, target, operations, { addOnly: options.addOnly === true, assertCurrent }));
+      return botMemoryToolResult(
+        await memory.apply(botId, target, operations, {
+          addOnly: options.addOnly === true,
+          assertCurrent,
+        }),
+      );
     },
   };
 }
@@ -193,12 +238,25 @@ export function botMemoryToolEntry(
   memory: Pick<BotMemoryRuntime, "apply">,
   options: Pick<BotMemoryToolOptions, "canSchedule"> = {},
 ): BotToolEntry {
-  return { tool: createBotMemoryTool(botId, memory, options) as unknown as AgentTool, replay: "unsafe" };
+  return {
+    tool: createBotMemoryTool(botId, memory, options) as unknown as AgentTool,
+    replay: "unsafe",
+  };
 }
 
 /** Whether a run serving inputs with these request ids may save memory: never on routine or self-intro turns. */
 export function botMemoryAllowed(requestIds: readonly (string | undefined)[]): boolean {
-  return !botPeerIngress() && requestIds.length > 0 && !requestIds.some((id) => isBotMessageRequestId(id) || id?.startsWith("peer:") || id?.startsWith("routine:") || id?.startsWith(BOT_INTRO_REQUEST_PREFIX));
+  return (
+    !botPeerIngress() &&
+    requestIds.length > 0 &&
+    !requestIds.some(
+      (id) =>
+        isBotMessageRequestId(id) ||
+        id?.startsWith("peer:") ||
+        id?.startsWith("routine:") ||
+        id?.startsWith(BOT_INTRO_REQUEST_PREFIX),
+    )
+  );
 }
 
 /** Withhold memory writes and recall on Bot-message inputs; otherwise recall follows the base policy. */
@@ -207,7 +265,11 @@ export function withBotMemoryIngress(
 ): (name: string, requestIds: readonly (string | undefined)[]) => boolean {
   return (name, requestIds) => {
     if (name === BOT_MEMORY_TOOL_NAME) return botMemoryAllowed(requestIds);
-    if (name === "bot_recall" && (requestIds.length === 0 || requestIds.some(isBotMessageRequestId))) return false;
+    if (
+      name === "bot_recall" &&
+      (requestIds.length === 0 || requestIds.some(isBotMessageRequestId))
+    )
+      return false;
     return base(name, requestIds);
   };
 }

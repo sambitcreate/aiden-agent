@@ -14,16 +14,27 @@ import { scheduleService } from "./schedule-service.js";
 import { scheduleStore } from "./schedule-store.js";
 import { createScheduledTaskTriggers, taskCheckStateFile } from "./scheduled-task-triggers.js";
 import { taskConnectorTriggers } from "./scheduled-task-connector-main.js";
-import { TASK_CONNECTOR_NEEDS_SOURCE, type TaskConnectorSource } from "./scheduled-task-connector-trigger.js";
+import {
+  TASK_CONNECTOR_NEEDS_SOURCE,
+  type TaskConnectorSource,
+} from "./scheduled-task-connector-trigger.js";
 import type { BotConnectorWatchSourceList } from "../../renderer/shared/bot-connector-watches.js";
-import { SCHEDULED_TASK_TRIGGERS_FILE, createScheduledTaskTriggerStore, hashTaskLinkToken, type TaskLinkLogEntry } from "./scheduled-task-triggers-store.js";
+import {
+  SCHEDULED_TASK_TRIGGERS_FILE,
+  createScheduledTaskTriggerStore,
+  hashTaskLinkToken,
+  type TaskLinkLogEntry,
+} from "./scheduled-task-triggers-store.js";
 import { secrets } from "./secrets.js";
 
 /** Where a link task's signing secret lives; the agent and phones never see it. */
 const linkSecretKey = (taskId: string) => `aiden-internal:task-hook:${taskId}`;
 
 async function checkStateDir(): Promise<string> {
-  return path.join((await import("../platform.js")).app.getPath("userData"), "scheduled-task-check-state");
+  return path.join(
+    (await import("../platform.js")).app.getPath("userData"),
+    "scheduled-task-check-state",
+  );
 }
 
 const triggerStore = createScheduledTaskTriggerStore({
@@ -32,17 +43,27 @@ const triggerStore = createScheduledTaskTriggerStore({
   pauseTask: async (taskId, reason, afterFailures) => {
     await scheduleStore.updateRuntime(taskId, {
       enabled: false,
-      lastError: `${afterFailures ? "Paused after 3 failed checks" : "Paused"}${reason ? `: ${reason}` : "."}`.slice(0, 4_096),
+      lastError:
+        `${afterFailures ? "Paused after 3 failed checks" : "Paused"}${reason ? `: ${reason}` : "."}`.slice(
+          0,
+          4_096,
+        ),
     });
     ipcMain.broadcast("schedule:updated", { taskId });
   },
   // A task that stopped being a link or script task (or lost its trigger)
   // leaves no signing secret or script state file behind.
   released: (taskId) => {
-    void secrets.deleteKey(linkSecretKey(taskId)).catch((error: unknown) => logger.warn("schedule", "Could not remove a task link's secret.", error));
+    void secrets
+      .deleteKey(linkSecretKey(taskId))
+      .catch((error: unknown) =>
+        logger.warn("schedule", "Could not remove a task link's secret.", error),
+      );
     void checkStateDir()
       .then((dir) => fs.rm(taskCheckStateFile(dir, taskId), { force: true }))
-      .catch((error: unknown) => logger.warn("schedule", "Could not remove a task's check state.", error));
+      .catch((error: unknown) =>
+        logger.warn("schedule", "Could not remove a task's check state.", error),
+      );
   },
   now: Date.now,
 });
@@ -58,7 +79,8 @@ const triggers = createScheduledTaskTriggers({
   isActive: () => scheduleService.isActive(),
   runEvent: (taskId, event, runId) => scheduleService.runEvent(taskId, event, runId),
   findRun: (taskId, runId) => scheduleStore.runById(taskId, runId),
-  fetchUrl: (url, signal, options) => fetchBotWatchUrl(url, { signal, ...(options.publicOnly ? { fetch: publicOnlyFetch } : {}) }),
+  fetchUrl: (url, signal, options) =>
+    fetchBotWatchUrl(url, { signal, ...(options.publicOnly ? { fetch: publicOnlyFetch } : {}) }),
   resolveScript: async (task, script) => {
     if (task.permission !== "full") throw new Error("A script watch needs Full permission.");
     const folder = await scheduleExecution.taskWorkspaceFolder(task);
@@ -76,14 +98,20 @@ const triggers = createScheduledTaskTriggers({
       text: !afterFailures
         ? `Scheduled task "${task.name}" was paused: ${error || "its source couldn't be checked."} Then turn the task back on.`
         : `Scheduled task "${task.name}" was paused: its watch failed 3 times in a row${error ? ` (${error})` : ""}. ${
-          task.trigger?.kind === "connector" ? "Check the connected app in Settings → Connectors" : "Check the address or script"
-        }, then turn the task back on.`,
+            task.trigger?.kind === "connector"
+              ? "Check the connected app in Settings → Connectors"
+              : "Check the address or script"
+          }, then turn the task back on.`,
     });
   },
   needsSource: (task) => markTaskNeedsSource(task.id),
   dropped: async (task, card) => {
     // A card that wasn't saved throws, so its drop notice is kept and tried again.
-    await scheduleExecution.recordInLandingChat(task, { tone: "info", ...card }, { mustSave: true });
+    await scheduleExecution.recordInLandingChat(
+      task,
+      { tone: "info", ...card },
+      { mustSave: true },
+    );
   },
   changed: (taskId) => ipcMain.broadcast("schedule:updated", { taskId }),
   now: Date.now,
@@ -97,17 +125,25 @@ let started = false;
 export async function startScheduledTaskTriggers(): Promise<void> {
   if (started) return;
   started = true;
-  await triggers.start().catch((error: unknown) => logger.warn("schedule", "Could not arm task triggers.", error));
+  await triggers
+    .start()
+    .catch((error: unknown) => logger.warn("schedule", "Could not arm task triggers.", error));
 }
 
 /** Re-read the tasks after a save, removal or switch change. */
 export function rearmScheduledTaskTriggers(payload: Record<string, unknown> = {}): void {
   // A removed task's link secret goes with it.
   if (payload.removed === true && typeof payload.taskId === "string") {
-    void secrets.deleteKey(linkSecretKey(payload.taskId)).catch((error: unknown) => logger.warn("schedule", "Could not remove a task link's secret.", error));
+    void secrets
+      .deleteKey(linkSecretKey(payload.taskId))
+      .catch((error: unknown) =>
+        logger.warn("schedule", "Could not remove a task link's secret.", error),
+      );
   }
   if (!started) return;
-  void triggers.rearm().catch((error: unknown) => logger.warn("schedule", "Could not re-arm task triggers.", error));
+  void triggers
+    .rearm()
+    .catch((error: unknown) => logger.warn("schedule", "Could not re-arm task triggers.", error));
 }
 
 export function stopScheduledTaskTriggers(): void {
@@ -120,7 +156,7 @@ export function stopScheduledTaskTriggers(): void {
 async function listenerBase(): Promise<string | null> {
   const { getAidenRemoteService } = await import("./aiden-remote-service-main.js");
   const status = await (await getAidenRemoteService()).status().catch(() => undefined);
-  const base = status?.running ? status.tailscaleEndpoint ?? status.lanEndpoint : undefined;
+  const base = status?.running ? (status.tailscaleEndpoint ?? status.lanEndpoint) : undefined;
   return base ? base.replace(/\/+$/u, "") : null;
 }
 
@@ -131,7 +167,13 @@ export async function admitTaskTriggerWebhook(request: { token: string; contentT
 }
 
 /** `POST /hooks/tasks/<token>`, with the body (at most 256 KB) and the signature header. */
-export async function deliverTaskTriggerWebhook(request: { token: string; admission?: string; contentType?: string; signature?: string; body: Uint8Array }) {
+export async function deliverTaskTriggerWebhook(request: {
+  token: string;
+  admission?: string;
+  contentType?: string;
+  signature?: string;
+  body: Uint8Array;
+}) {
   if (!started) return { status: 404 as const };
   return triggers.webhook.deliver(request);
 }
@@ -146,9 +188,12 @@ export async function taskTriggerWebhookTooLarge(request: { token: string; admis
  * A new link for a link task, shown to the person once: the old link stops
  * working at once. A signed link also gets a new signing secret.
  */
-export async function rotateTaskTriggerLink(taskId: string): Promise<{ url: string; secret?: string }> {
+export async function rotateTaskTriggerLink(
+  taskId: string,
+): Promise<{ url: string; secret?: string }> {
   const task = await scheduleStore.get(taskId);
-  if (!task || task.trigger?.kind !== "webhook" || task.botId !== undefined) throw new Error("This task doesn't run from a link.");
+  if (!task || task.trigger?.kind !== "webhook" || task.botId !== undefined)
+    throw new Error("This task doesn't run from a link.");
   const base = await listenerBase();
   if (!base) throw new Error("Turn on Aiden On The Go in Settings to give this task a link.");
   const token = randomBytes(32).toString("base64url");
@@ -159,19 +204,32 @@ export async function rotateTaskTriggerLink(taskId: string): Promise<{ url: stri
   } else {
     await secrets.deleteKey(linkSecretKey(taskId));
   }
-  if (!(await triggerStore.setTokenHash(taskId, hashTaskLinkToken(token)))) throw new Error("This task doesn't run from a link.");
+  if (!(await triggerStore.setTokenHash(taskId, hashTaskLinkToken(token))))
+    throw new Error("This task doesn't run from a link.");
   ipcMain.broadcast("schedule:updated", { taskId });
   return { url: `${base}/hooks/tasks/${token}`, ...(secret ? { secret } : {}) };
 }
 
 /** Whether a link task has a link, whether the listener is on, and its recent calls (never the link). */
-export async function taskTriggerLinkState(taskId: string): Promise<{ hasLink: boolean; needsNewLink: boolean; listenerOn: boolean; log: TaskLinkLogEntry[] }> {
+export async function taskTriggerLinkState(taskId: string): Promise<{
+  hasLink: boolean;
+  needsNewLink: boolean;
+  listenerOn: boolean;
+  log: TaskLinkLogEntry[];
+}> {
   const state = await triggerStore.linkState(taskId);
-  return { hasLink: state?.hasLink ?? false, needsNewLink: state?.needsNewLink ?? false, listenerOn: (await listenerBase()) !== null, log: state?.log ?? [] };
+  return {
+    hasLink: state?.hasLink ?? false,
+    needsNewLink: state?.needsNewLink ?? false,
+    listenerOn: (await listenerBase()) !== null,
+    log: state?.log ?? [],
+  };
 }
 
 /** The foreground Find sources step of a connected-app task: lists sources through connections that are already open. */
-export function findTaskConnectorSources(signal: AbortSignal): Promise<BotConnectorWatchSourceList> {
+export function findTaskConnectorSources(
+  signal: AbortSignal,
+): Promise<BotConnectorWatchSourceList> {
   return taskConnectorTriggers.findSources(signal);
 }
 
@@ -182,7 +240,10 @@ export const taskConnectorChoices = {
 };
 
 /** Bind a saved connected-app task to its source; its first check then records a baseline. */
-export async function bindTaskConnectorSource(taskId: string, source: TaskConnectorSource): Promise<void> {
+export async function bindTaskConnectorSource(
+  taskId: string,
+  source: TaskConnectorSource,
+): Promise<void> {
   await triggers.bindConnectorSource(taskId, source);
   if ((await scheduleStore.get(taskId))?.lastError === TASK_CONNECTOR_NEEDS_SOURCE) {
     await scheduleStore.updateRuntime(taskId, { lastError: undefined });

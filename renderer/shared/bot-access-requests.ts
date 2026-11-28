@@ -153,9 +153,17 @@ export function botPendingAccessRequestOf(value: unknown): BotPendingAccessReque
   if (
     Object.keys(v).some(
       (key) =>
-        !["botId", "waitId", "toolCallId", "target", "label", "place", "why", "choices", "approvalCount"].includes(
-          key,
-        ),
+        ![
+          "botId",
+          "waitId",
+          "toolCallId",
+          "target",
+          "label",
+          "place",
+          "why",
+          "choices",
+          "approvalCount",
+        ].includes(key),
     )
   )
     return null;
@@ -191,8 +199,15 @@ export function botPendingAccessRequestOf(value: unknown): BotPendingAccessReque
     choices.some((choice, index) => choice !== suppliedChoices[index])
   )
     return null;
-  if (v.approvalCount !== undefined && (v.target !== "folder" || !choices.includes("always") ||
-      !Number.isInteger(v.approvalCount) || (v.approvalCount as number) < 3 || (v.approvalCount as number) > 20)) return null;
+  if (
+    v.approvalCount !== undefined &&
+    (v.target !== "folder" ||
+      !choices.includes("always") ||
+      !Number.isInteger(v.approvalCount) ||
+      (v.approvalCount as number) < 3 ||
+      (v.approvalCount as number) > 20)
+  )
+    return null;
   return {
     botId,
     waitId: v.waitId,
@@ -209,7 +224,9 @@ export function botPendingAccessRequestOf(value: unknown): BotPendingAccessReque
  * A whole-computer request's label, named for the computer the Bot runs on.
  * The `whole_mac` target keeps its name on every platform.
  */
-export function botWholeComputerLabel(platform: string | null | undefined = runtimeComputerPlatform()): string {
+export function botWholeComputerLabel(
+  platform: string | null | undefined = runtimeComputerPlatform(),
+): string {
   return `your whole ${localComputerNoun(platform)}`;
 }
 
@@ -222,9 +239,12 @@ export function botAccessCardTitle(
   botName: string,
   request: Pick<BotPendingAccessRequest, "target" | "label">,
 ): string {
-  const label = request.target !== "whole_mac"
-    ? request.label
-    : isBotWholeComputerLabel(request.label) ? request.label : botWholeComputerLabel();
+  const label =
+    request.target !== "whole_mac"
+      ? request.label
+      : isBotWholeComputerLabel(request.label)
+        ? request.label
+        : botWholeComputerLabel();
   return `${botName} wants to use ${label}`;
 }
 export function botAccessResultLine(details: BotAccessResultDetails): string {

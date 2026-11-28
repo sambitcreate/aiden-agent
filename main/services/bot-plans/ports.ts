@@ -10,14 +10,33 @@ export interface BotPlanAuthorization {
 
 export interface BotPlanBotTurnPort {
   originOf(requestIds: readonly (string | undefined)[]): { originBotId: string } | undefined;
-  announceWaiting(botId: string, requestIds: readonly (string | undefined)[], what: string, waitId: string): Promise<{ deadline: number; expired: boolean } | undefined>;
+  announceWaiting(
+    botId: string,
+    requestIds: readonly (string | undefined)[],
+    what: string,
+    waitId: string,
+  ): Promise<{ deadline: number; expired: boolean } | undefined>;
 }
 
 export interface BotPlanAccessPort {
-  scopeOf(botId: string, path: string, requiredAccess: "read" | "write"): Promise<{
-    kind: "inside" | "outside" | "invalid"; authorization?: BotAccessAuthorization;
+  scopeOf(
+    botId: string,
+    path: string,
+    requiredAccess: "read" | "write",
+  ): Promise<{
+    kind: "inside" | "outside" | "invalid";
+    authorization?: BotAccessAuthorization;
   }>;
-  allowOnce(botId: string, grant: { path: string; access: "read" | "write"; requestIds: readonly string[];
-    planId: string; expiresAt: number; authorization: BotAccessAuthorization }): Promise<void>;
+  allowOnce(
+    botId: string,
+    grant: {
+      path: string;
+      access: "read" | "write";
+      requestIds: readonly string[];
+      planId: string;
+      expiresAt: number;
+      authorization: BotAccessAuthorization;
+    },
+  ): Promise<void>;
   revokePlan(botId: string, planId: string): void;
 }

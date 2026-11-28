@@ -160,7 +160,11 @@ function SinkSection({ title, children }: React.PropsWithChildren<{ title: strin
  * One case. `covers` lists the shared exports it shows, space-separated, in
  * `data-sink`; the sink test checks it against the modules' real exports.
  */
-function SinkCase({ covers, title, children }: React.PropsWithChildren<{ covers: string; title: string }>) {
+function SinkCase({
+  covers,
+  title,
+  children,
+}: React.PropsWithChildren<{ covers: string; title: string }>) {
   return (
     <div data-sink={covers} className="flex min-w-0 flex-col gap-3 rounded-card bg-well p-4">
       <Text variant="small-strong" color="secondary">
@@ -198,7 +202,10 @@ function Toolbar({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuLabel>Theme preset</DropdownMenuLabel>
-            <DropdownMenuRadioGroup value={preset} onValueChange={(next) => onPreset(next as ThemePresetId)}>
+            <DropdownMenuRadioGroup
+              value={preset}
+              onValueChange={(next) => onPreset(next as ThemePresetId)}
+            >
               {THEME_PRESETS.map((entry) => (
                 <DropdownMenuRadioItem key={entry.id} value={entry.id}>
                   {entry.label}
@@ -234,7 +241,10 @@ function ButtonCases() {
                 Save
               </Button>
               <Button variant={variant} disabled aria-busy="true">
-                <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                <LoaderCircle
+                  className="animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
                 Saving…
               </Button>
             </React.Fragment>
@@ -284,7 +294,10 @@ function InputCases() {
           <Textarea aria-label="Invalid textarea" defaultValue="Too long" aria-invalid="true" />
         </div>
       </SinkCase>
-      <SinkCase covers="Select SelectTrigger SelectValue SelectContent SelectItem" title="Select: default, small, disabled">
+      <SinkCase
+        covers="Select SelectTrigger SelectValue SelectContent SelectItem"
+        title="Select: default, small, disabled"
+      >
         <div className="grid w-full grid-cols-1 gap-2">
           <Select value={select} onValueChange={setSelect}>
             <SelectTrigger aria-label="Thinking">
@@ -365,7 +378,13 @@ function ChoiceCases() {
             { value: "paused", label: "Paused" },
           ]}
         />
-        <Segmented aria-label="Disabled filter" disabled value="all" onValueChange={() => undefined} options={[{ value: "all", label: "Disabled" }]} />
+        <Segmented
+          aria-label="Disabled filter"
+          disabled
+          value="all"
+          onValueChange={() => undefined}
+          options={[{ value: "all", label: "Disabled" }]}
+        />
         <Tabs
           aria-label="Sections"
           value={tab}
@@ -378,7 +397,12 @@ function ChoiceCases() {
       </SinkCase>
       <SinkCase covers="Slider Progress" title="Slider, Progress">
         <div className="grid w-full grid-cols-1 gap-3">
-          <Slider label="Volume" value={slider} onValueChange={setSlider} valueLabel={`${slider}%`} />
+          <Slider
+            label="Volume"
+            value={slider}
+            onValueChange={setSlider}
+            valueLabel={`${slider}%`}
+          />
           <Slider label="Disabled" value={60} disabled onValueChange={() => undefined} />
           <Progress label="Download" value={65} />
           <Progress label="Preparing" indeterminate />
@@ -431,7 +455,10 @@ function StatusCases() {
         <Stat label="Tokens" value="12.4k" trend={0.12} caption="this week" />
         <Stat label="Errors" value="3" trend={-0.4} />
       </SinkCase>
-      <SinkCase covers="ErrorBoundaryView" title="ErrorBoundaryView (full-window crash screen, clipped)">
+      <SinkCase
+        covers="ErrorBoundaryView"
+        title="ErrorBoundaryView (full-window crash screen, clipped)"
+      >
         <div className="h-56 w-full overflow-hidden rounded-card bg-background [&>div]:h-full">
           <ErrorBoundaryView error={new Error("Example failure")} reset={() => undefined} />
         </div>
@@ -442,7 +469,10 @@ function StatusCases() {
 
 function TypeCases() {
   return (
-    <SinkCase covers="Text InlineMetadata Kbd Separator AidenIcon" title="Text, metadata, keys, separator, icon">
+    <SinkCase
+      covers="Text InlineMetadata Kbd Separator AidenIcon"
+      title="Text, metadata, keys, separator, icon"
+    >
       <div className="flex w-full flex-col gap-1">
         {(["heading1", "strong", "regular", "small", "small-strong"] as const).map((variant) => (
           <Text key={variant} variant={variant}>
@@ -450,11 +480,13 @@ function TypeCases() {
           </Text>
         ))}
         <div className="flex flex-wrap gap-3">
-          {(["primary", "secondary", "tertiary", "quaternary", "red", "status-red"] as const).map((color) => (
-            <Text key={color} color={color}>
-              {color}
-            </Text>
-          ))}
+          {(["primary", "secondary", "tertiary", "quaternary", "red", "status-red"] as const).map(
+            (color) => (
+              <Text key={color} color={color}>
+                {color}
+              </Text>
+            ),
+          )}
         </div>
         <InlineMetadata>Edited 2 minutes ago</InlineMetadata>
         <Separator className="my-2" />
@@ -476,7 +508,10 @@ function OverlayCases() {
   const [sort, setSort] = React.useState("recent");
   return (
     <>
-      <SinkCase covers="Tooltip InfoHint HoverCard HoverCardTrigger HoverCardContent" title="Tooltip, InfoHint, HoverCard">
+      <SinkCase
+        covers="Tooltip InfoHint HoverCard HoverCardTrigger HoverCardContent"
+        title="Tooltip, InfoHint, HoverCard"
+      >
         <Tooltip content="Copy link">
           <Button iconOnly aria-label="Copy link">
             <Copy aria-hidden="true" />
@@ -518,7 +553,11 @@ function OverlayCases() {
             <DropdownMenuLabel>Chat</DropdownMenuLabel>
             <DropdownMenuItem>Rename</DropdownMenuItem>
             <DropdownMenuItem disabled>Share (unavailable)</DropdownMenuItem>
-            <DropdownMenuCheckboxItem checked={pinned} onCheckedChange={setPinned} sublabel="Keeps it at the top">
+            <DropdownMenuCheckboxItem
+              checked={pinned}
+              onCheckedChange={setPinned}
+              sublabel="Keeps it at the top"
+            >
               Pinned
             </DropdownMenuCheckboxItem>
             <DropdownMenuSeparator />
@@ -565,7 +604,10 @@ function OverlayCases() {
           </ContextMenuContent>
         </ContextMenu>
       </SinkCase>
-      <SinkCase covers="Dialog AlertDialog" title="Dialog: plain, busy, confirm off; destructive alert">
+      <SinkCase
+        covers="Dialog AlertDialog"
+        title="Dialog: plain, busy, confirm off; destructive alert"
+      >
         <Button onClick={() => setDialog("plain")}>Open dialog</Button>
         <Button onClick={() => setDialog("busy")}>Busy dialog</Button>
         <Button onClick={() => setDialog("blocked")}>Confirm off</Button>
@@ -608,7 +650,10 @@ function OverlayCases() {
 function ListCases() {
   return (
     <>
-      <SinkCase covers="SidebarList SidebarListGroup SidebarListItem" title="Sidebar rows: rest, selected, trailing">
+      <SinkCase
+        covers="SidebarList SidebarListGroup SidebarListItem"
+        title="Sidebar rows: rest, selected, trailing"
+      >
         <SidebarList className="w-full px-0 pb-0">
           <SidebarListGroup title="Today">
             <SidebarListItem title="Selected chat" selected />
@@ -673,8 +718,14 @@ function SettingsCases() {
   const tabbedPage = SETTINGS_PAGES.find((page) => page.tabs.length > 1);
   const [section, setSection] = React.useState<SettingsSection | undefined>(tabbedPage?.tabs[0]);
   return (
-    <div data-sink="SettingsPage SettingsPageTabs FieldSet Field SettingsDisclosure" className="settings-responsive min-w-0">
-      <SettingsPage title="Settings page" description="The shared heading, grouped cards, rows and folds.">
+    <div
+      data-sink="SettingsPage SettingsPageTabs FieldSet Field SettingsDisclosure"
+      className="settings-responsive min-w-0"
+    >
+      <SettingsPage
+        title="Settings page"
+        description="The shared heading, grouped cards, rows and folds."
+      >
         {tabbedPage && section ? (
           <SettingsPageTabs page={tabbedPage} section={section} onSelect={setSection}>
             <InlineMetadata>Panel for {section}</InlineMetadata>
@@ -689,16 +740,26 @@ function SettingsCases() {
             </Button>
           }
         >
-          <Field label="Trailing switch" description="A row with a direct switch keeps it on the right.">
+          <Field
+            label="Trailing switch"
+            description="A row with a direct switch keeps it on the right."
+          >
             <Switch aria-label="Trailing switch" defaultChecked />
           </Field>
-          <Field label="Text field" hint={<InfoHint topic="text field">Hints sit beside the label.</InfoHint>}>
+          <Field
+            label="Text field"
+            hint={<InfoHint topic="text field">Hints sit beside the label.</InfoHint>}
+          >
             <Input aria-label="Text field" placeholder="Value" />
           </Field>
           <Field label="Disabled row" description="Controls show their disabled state.">
             <Switch aria-label="Disabled row" disabled />
           </Field>
-          <Field label="Vertical row" description="Editors and lists stack under the label." orientation="vertical">
+          <Field
+            label="Vertical row"
+            description="Editors and lists stack under the label."
+            orientation="vertical"
+          >
             <Textarea aria-label="Vertical row" placeholder="Notes" />
           </Field>
         </FieldSet>
@@ -707,7 +768,12 @@ function SettingsCases() {
             <Button size="small">Action</Button>
           </Field>
         </SettingsDisclosure>
-        <SettingsDisclosure title="Fold with a badge" summary="Opens by default" badge={<Badge color="warning">Needs attention</Badge>} defaultOpen>
+        <SettingsDisclosure
+          title="Fold with a badge"
+          summary="Opens by default"
+          badge={<Badge color="warning">Needs attention</Badge>}
+          defaultOpen
+        >
           <Field label="Visible row">
             <Switch aria-label="Visible row" />
           </Field>

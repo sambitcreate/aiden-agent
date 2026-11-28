@@ -60,7 +60,15 @@ export async function hideDmgSupportFiles(artifact) {
   let mounted = false;
 
   try {
-    await run("/usr/bin/hdiutil", ["convert", dmg, "-format", "UDRW", "-o", writableImage, "-quiet"]);
+    await run("/usr/bin/hdiutil", [
+      "convert",
+      dmg,
+      "-format",
+      "UDRW",
+      "-o",
+      writableImage,
+      "-quiet",
+    ]);
     await mkdir(mount);
     await run("/usr/bin/hdiutil", [
       "attach",

@@ -61,7 +61,10 @@ function objectShape(objects: readonly Record<string, unknown>[], depth: number)
   const fields = keys.slice(0, MAX_FIELDS).map((key) => {
     const present = objects.filter((object) => Object.prototype.hasOwnProperty.call(object, key));
     const optional = present.length < objects.length ? "?" : "";
-    return `${fieldName(key)}${optional}: ${shapeOf(present.map((object) => object[key]), depth + 1)}`;
+    return `${fieldName(key)}${optional}: ${shapeOf(
+      present.map((object) => object[key]),
+      depth + 1,
+    )}`;
   });
   if (keys.length > MAX_FIELDS) fields.push(`…${keys.length - MAX_FIELDS} more`);
   return `{${fields.join(", ")}}`;
@@ -84,7 +87,8 @@ function shapeOf(values: readonly unknown[], depth: number): string {
     // A list adds no level of its own: its items are read at the depth it sits.
     parts.push(items.length === 0 ? "array" : `array of ${shapeOf(items, depth)}`);
   }
-  if (objects.length) parts.push(depth >= MAX_DEPTH ? "object" : objectShape(objects.slice(0, ITEMS_READ), depth));
+  if (objects.length)
+    parts.push(depth >= MAX_DEPTH ? "object" : objectShape(objects.slice(0, ITEMS_READ), depth));
   if (primitives.has("null")) parts.push("null");
   if (parts.length === 0) return "unknown";
   return parts.length > MAX_ALTERNATIVES ? "mixed" : parts.join(" | ");
@@ -103,12 +107,17 @@ export function describeDataShape(value: unknown): string {
 
 /** A short sample of the data as JSON: the first items of a list, or the start of the value. */
 export function describeDataSample(value: unknown): string {
-  const sample = Array.isArray(value) && value.length > 2 ? [...value.slice(0, 2), `…${value.length - 2} more`] : value;
+  const sample =
+    Array.isArray(value) && value.length > 2
+      ? [...value.slice(0, 2), `…${value.length - 2} more`]
+      : value;
   return bounded(JSON.stringify(sample) ?? "null", MAX_SAMPLE_CHARS);
 }
 
 /** Shape and sample of a source result's stored JSON, or undefined when there is none to read. */
-export function describeSourceData(dataJson: string | undefined): { shape: string; sample: string } | undefined {
+export function describeSourceData(
+  dataJson: string | undefined,
+): { shape: string; sample: string } | undefined {
   if (dataJson === undefined) return undefined;
   let value: unknown;
   try {

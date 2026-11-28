@@ -4,7 +4,11 @@
 
 import * as React from "react";
 import { Button, Popover, PopoverContent, PopoverTrigger } from "./ui";
-import { CONTEXT_WINDOW_TOO_SMALL_NOTE, ContextStatus, contextWindowTooSmall } from "./context-breakdown";
+import {
+  CONTEXT_WINDOW_TOO_SMALL_NOTE,
+  ContextStatus,
+  contextWindowTooSmall,
+} from "./context-breakdown";
 import { ContextPips, ContextTiles, contextPercentLabel } from "./context-tiles";
 import { cn } from "../lib/ui-utils";
 import {
@@ -14,7 +18,11 @@ import {
 } from "../shared/context-pressure";
 
 export type ContextMeterPhase =
-  "normal" | "approaching" | "compaction-pending" | "compacting" | "compacted";
+  | "normal"
+  | "approaching"
+  | "compaction-pending"
+  | "compacting"
+  | "compacted";
 
 export function contextMeterPhase(
   pressure: ContextMeterPressure,
@@ -55,16 +63,16 @@ export function ContextMeter({
     phase !== "compacting" && contextWindowTooSmall(pressure)
       ? CONTEXT_WINDOW_TOO_SMALL_NOTE
       : phase === "compaction-pending"
-      ? "Aiden will compact context before the next request."
-      : phase === "compacting"
-        ? "Compacting context…"
-        : phase === "compacted"
-          ? "Context compacted."
-          : pressure.shouldCompact
-            ? "Aiden will compact context before the next request."
-            : phase === "approaching"
-              ? "Approaching the limit. Aiden compacts before a request would cross it."
-              : "Context healthy. No compaction needed before the next request.";
+        ? "Aiden will compact context before the next request."
+        : phase === "compacting"
+          ? "Compacting context…"
+          : phase === "compacted"
+            ? "Context compacted."
+            : pressure.shouldCompact
+              ? "Aiden will compact context before the next request."
+              : phase === "approaching"
+                ? "Approaching the limit. Aiden compacts before a request would cross it."
+                : "Context healthy. No compaction needed before the next request.";
   const warning = emphasized || phase === "approaching";
 
   return (
@@ -82,7 +90,9 @@ export function ContextMeter({
           title="Projected context for the next request"
         >
           <ContextPips percent={percent} warning={warning} used={pressure.contextTokens > 0} />
-          <span className="context-meter-percent text-mini tabular-nums">{contextPercentLabel(percent, pressure.contextTokens)}</span>
+          <span className="context-meter-percent text-mini tabular-nums">
+            {contextPercentLabel(percent, pressure.contextTokens)}
+          </span>
         </Button>
       </PopoverTrigger>
       <PopoverContent
@@ -90,7 +100,12 @@ export function ContextMeter({
         align="end"
         side="top"
         aria-label="Context usage"
-        onCloseAutoFocus={(event) => { if (detailsRequested.current) { event.preventDefault(); detailsRequested.current = false; } }}
+        onCloseAutoFocus={(event) => {
+          if (detailsRequested.current) {
+            event.preventDefault();
+            detailsRequested.current = false;
+          }
+        }}
       >
         <ContextMeterDetails
           pressure={pressure}
@@ -98,7 +113,20 @@ export function ContextMeter({
           emphasized={warning}
           stateText={stateText}
         />
-        {onViewDetails ? <Button variant="muted" size="small" className="mt-3 w-full" onClick={() => { detailsRequested.current = true; setOpen(false); onViewDetails(); }}>View context details</Button> : null}
+        {onViewDetails ? (
+          <Button
+            variant="muted"
+            size="small"
+            className="mt-3 w-full"
+            onClick={() => {
+              detailsRequested.current = true;
+              setOpen(false);
+              onViewDetails();
+            }}
+          >
+            View context details
+          </Button>
+        ) : null}
       </PopoverContent>
     </Popover>
   );

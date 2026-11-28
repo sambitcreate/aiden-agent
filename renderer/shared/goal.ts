@@ -151,11 +151,16 @@ export function parseGoalCommand(text: string): GoalCommand | undefined {
   return validateGoalObjective(rest);
 }
 
-export function validateGoalObjective(value: string): { kind: "set"; objective: string } | { kind: "invalid"; message: string } {
+export function validateGoalObjective(
+  value: string,
+): { kind: "set"; objective: string } | { kind: "invalid"; message: string } {
   const objective = value.trim();
   if (!objective) return { kind: "invalid", message: "Say what the goal is." };
   if ([...objective].length > MAX_GOAL_OBJECTIVE_CHARS) {
-    return { kind: "invalid", message: `A goal can be up to ${MAX_GOAL_OBJECTIVE_CHARS.toLocaleString("en-US")} characters.` };
+    return {
+      kind: "invalid",
+      message: `A goal can be up to ${MAX_GOAL_OBJECTIVE_CHARS.toLocaleString("en-US")} characters.`,
+    };
   }
   return { kind: "set", objective };
 }
@@ -166,28 +171,37 @@ export function validateGoalObjective(value: string): { kind: "set"; objective: 
  * zero-width spaces) are refused too, so the card shows what Start sends; the
  * zero-width joiner stays, for emoji.
  */
-export function validateGoalProposal(value: string): { kind: "set"; objective: string } | { kind: "invalid"; message: string } {
+export function validateGoalProposal(
+  value: string,
+): { kind: "set"; objective: string } | { kind: "invalid"; message: string } {
   const objective = value.trim();
   if (!objective) return { kind: "invalid", message: "Say what the goal is." };
-  if (/[\p{Cc}\u2028\u2029]/u.test(objective)) return { kind: "invalid", message: "A suggested goal must be one line." };
+  if (/[\p{Cc}\u2028\u2029]/u.test(objective))
+    return { kind: "invalid", message: "A suggested goal must be one line." };
   if (/(?!\u200D)\p{Cf}/u.test(objective)) {
     return { kind: "invalid", message: "A suggested goal can't contain invisible characters." };
   }
   if ([...objective].length > MAX_GOAL_PROPOSAL_CHARS) {
-    return { kind: "invalid", message: `A suggested goal can be up to ${MAX_GOAL_PROPOSAL_CHARS} characters.` };
+    return {
+      kind: "invalid",
+      message: `A suggested goal can be up to ${MAX_GOAL_PROPOSAL_CHARS} characters.`,
+    };
   }
   return { kind: "set", objective };
 }
 
 export function validateGoalCheck(command: string): GoalCheck | undefined {
   const trimmed = command.trim();
-  if (!trimmed || trimmed.length > MAX_DONE_WHEN_COMMAND_CHARS || /[\r\n\0]/u.test(trimmed)) return undefined;
+  if (!trimmed || trimmed.length > MAX_DONE_WHEN_COMMAND_CHARS || /[\r\n\0]/u.test(trimmed))
+    return undefined;
   return { command: trimmed };
 }
 
 /** The goal bar's progress line for an active goal, e.g. "round 3 of 50". */
 export function goalRoundLabel(goal: Pick<GoalRecordV1, "rounds" | "maxRounds" | "check">): string {
-  return goal.check ? `check ${goal.rounds} of ${goal.maxRounds}` : `round ${goal.rounds} of ${goal.maxRounds}`;
+  return goal.check
+    ? `check ${goal.rounds} of ${goal.maxRounds}`
+    : `round ${goal.rounds} of ${goal.maxRounds}`;
 }
 
 /**
@@ -214,7 +228,21 @@ export function goalRoundBucket(rounds: number): GoalRoundBucket {
 /** What the renderer is told about a chat's goal: the record without its loop bookkeeping. */
 export type GoalView = Pick<
   GoalRecordV1,
-  "id" | "chatId" | "objective" | "status" | "rounds" | "maxRounds" | "stalls" | "reason" | "cause" | "source" | "setAt" | "updatedAt" | "revision" | "check" | "windowWanted"
+  | "id"
+  | "chatId"
+  | "objective"
+  | "status"
+  | "rounds"
+  | "maxRounds"
+  | "stalls"
+  | "reason"
+  | "cause"
+  | "source"
+  | "setAt"
+  | "updatedAt"
+  | "revision"
+  | "check"
+  | "windowWanted"
 >;
 
 export function goalView(goal: GoalRecordV1): GoalView {
@@ -251,20 +279,44 @@ function count(value: unknown): value is number {
 /** Reads a goal view from IPC, or null for none; anything malformed is null too. */
 export function parseGoalView(value: unknown): GoalView | null {
   if (!isRecord(value)) return null;
-  const { id, chatId, objective, status, rounds, maxRounds, stalls, reason, cause, source, setAt, updatedAt, revision, check, windowWanted } = value;
-  if (typeof id !== "string" || typeof chatId !== "string" || typeof objective !== "string") return null;
-  if (!GOAL_STATUSES.includes(status as GoalStatus) || !GOAL_SOURCES.includes(source as GoalSource)) return null;
+  const {
+    id,
+    chatId,
+    objective,
+    status,
+    rounds,
+    maxRounds,
+    stalls,
+    reason,
+    cause,
+    source,
+    setAt,
+    updatedAt,
+    revision,
+    check,
+    windowWanted,
+  } = value;
+  if (typeof id !== "string" || typeof chatId !== "string" || typeof objective !== "string")
+    return null;
+  if (!GOAL_STATUSES.includes(status as GoalStatus) || !GOAL_SOURCES.includes(source as GoalSource))
+    return null;
   if (![rounds, maxRounds, stalls, setAt, updatedAt, revision].every(count)) return null;
   if (reason !== undefined && typeof reason !== "string") return null;
   if (cause !== undefined && !isGoalCause(cause)) return null;
   // A saved check goes into the round's prompt: it is held to the same rule as a new one.
   let goalCheck: GoalCheck | undefined;
   if (check !== undefined) {
-    goalCheck = isRecord(check) && typeof check.command === "string" ? validateGoalCheck(check.command) : undefined;
+    goalCheck =
+      isRecord(check) && typeof check.command === "string"
+        ? validateGoalCheck(check.command)
+        : undefined;
     if (!goalCheck) return null;
   }
   // The round limit is never above the limit a new goal gets, and at least 1.
-  const roundLimit = Math.min(Math.max(maxRounds as number, 1), goalCheck ? GOAL_CHECK_MAX_ROUNDS : GOAL_MAX_ROUNDS);
+  const roundLimit = Math.min(
+    Math.max(maxRounds as number, 1),
+    goalCheck ? GOAL_CHECK_MAX_ROUNDS : GOAL_MAX_ROUNDS,
+  );
   return {
     id,
     chatId,
@@ -297,14 +349,23 @@ export function parseGoalRecords(value: unknown): GoalRecordV1[] {
 
 function parseGoalRecord(entry: unknown): GoalRecordV1[] {
   const view = parseGoalView(entry);
-  if (!view || !isRecord(entry) || entry.version !== GOAL_VERSION || typeof entry.boot !== "string" || !count(entry.unusableReviews)) return [];
+  if (
+    !view ||
+    !isRecord(entry) ||
+    entry.version !== GOAL_VERSION ||
+    typeof entry.boot !== "string" ||
+    !count(entry.unusableReviews)
+  )
+    return [];
   return [
     {
       ...view,
       version: GOAL_VERSION,
       boot: entry.boot,
       unusableReviews: entry.unusableReviews,
-      ...(typeof entry.lastContinueReason === "string" ? { lastContinueReason: entry.lastContinueReason } : {}),
+      ...(typeof entry.lastContinueReason === "string"
+        ? { lastContinueReason: entry.lastContinueReason }
+        : {}),
       ...(count(entry.waitingSince) ? { waitingSince: entry.waitingSince } : {}),
     },
   ];
@@ -324,7 +385,8 @@ export interface GoalProposalView {
 export function parseGoalProposal(value: unknown): GoalProposalView | null {
   if (!isRecord(value)) return null;
   const { chatId, objective, proposedAt } = value;
-  if (typeof chatId !== "string" || !chatId || typeof objective !== "string" || !count(proposedAt)) return null;
+  if (typeof chatId !== "string" || !chatId || typeof objective !== "string" || !count(proposedAt))
+    return null;
   const valid = validateGoalProposal(objective);
   if (valid.kind === "invalid" || valid.objective !== objective) return null;
   return { chatId, objective, proposedAt };

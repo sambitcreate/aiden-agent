@@ -14,5 +14,13 @@ export function shouldSuppressOzoneWaylandVulkan(
 }
 
 export function disableVulkanFeature(existing: string): string {
-  return [...new Set([...existing.split(",").map((value) => value.trim()).filter(Boolean), "Vulkan"])].join(",");
+  return [
+    ...new Set([
+      ...existing
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean),
+      "Vulkan",
+    ]),
+  ].join(",");
 }

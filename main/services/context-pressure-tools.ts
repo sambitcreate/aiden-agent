@@ -9,10 +9,15 @@ export const MAX_AMBIENT_MCP_TOOLS = 512;
 let lane: AgentTool[] | undefined;
 /** The codemode and tool_search declarations a workspace turn adds; never executed. */
 function codemodeLaneTools(): AgentTool[] {
-  return lane ??= [
-    createPiCodemodeTool({ tools: () => [], executeTool: async () => { throw new Error("Estimate only."); } }),
+  return (lane ??= [
+    createPiCodemodeTool({
+      tools: () => [],
+      executeTool: async () => {
+        throw new Error("Estimate only.");
+      },
+    }),
     createPiToolDiscovery({ tools: () => [], isCallable: isPiCodemodeCallable }).toolSearch,
-  ];
+  ]);
 }
 
 /**
@@ -22,7 +27,10 @@ function codemodeLaneTools(): AgentTool[] {
  * "Always visible"); other turns declare the MCP tools directly. `mcpTools` are tools already built in this process (the
  * estimate never connects), capped at {@link MAX_AMBIENT_MCP_TOOLS}.
  */
-export function ambientRuntimeToolEstimate(input: { codemode: boolean; mcpTools: readonly AgentTool[] }): AgentTool[] {
+export function ambientRuntimeToolEstimate(input: {
+  codemode: boolean;
+  mcpTools: readonly AgentTool[];
+}): AgentTool[] {
   if (!input.codemode) return input.mcpTools.slice(0, MAX_AMBIENT_MCP_TOOLS);
   const declared = input.mcpTools.filter((tool) => (tool as PiRuntimeTool).alwaysDeclared === true);
   return [...codemodeLaneTools(), ...declared.slice(0, MAX_AMBIENT_MCP_TOOLS)];

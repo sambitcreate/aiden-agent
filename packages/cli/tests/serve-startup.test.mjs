@@ -13,10 +13,14 @@ const cli = join(pkg, "dist", "app", "cli.js");
 
 function sandbox(t) {
   const root = mkdtempSync(join(tmpdir(), "aiden-serve-startup-"));
-  const home = join(root, "home"), agentDir = join(root, "agent");
+  const home = join(root, "home"),
+    agentDir = join(root, "agent");
   mkdirSync(home, { recursive: true });
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  return { agentDir, env: { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
+  return {
+    agentDir,
+    env: { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
+  };
 }
 
 function runCli(args, env) {
@@ -32,8 +36,12 @@ function json(result) {
 async function startServing(t, command, args, env, ready) {
   const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
   const output = { stdout: "", stderr: "" };
-  child.stdout.setEncoding("utf8").on("data", (chunk) => { output.stdout += chunk; });
-  child.stderr.setEncoding("utf8").on("data", (chunk) => { output.stderr += chunk; });
+  child.stdout.setEncoding("utf8").on("data", (chunk) => {
+    output.stdout += chunk;
+  });
+  child.stderr.setEncoding("utf8").on("data", (chunk) => {
+    output.stderr += chunk;
+  });
   t.after(async () => {
     if (child.exitCode !== null || child.signalCode !== null) return;
     const exited = once(child, "exit");
@@ -44,8 +52,12 @@ async function startServing(t, command, args, env, ready) {
   });
   const deadline = Date.now() + 60_000;
   while (!ready.test(output.stdout + output.stderr)) {
-    if (child.exitCode !== null) throw new Error(`serve exited early (${child.exitCode}):\n${output.stdout}\n${output.stderr}`);
-    if (Date.now() > deadline) throw new Error(`serve did not become ready:\n${output.stdout}\n${output.stderr}`);
+    if (child.exitCode !== null)
+      throw new Error(
+        `serve exited early (${child.exitCode}):\n${output.stdout}\n${output.stderr}`,
+      );
+    if (Date.now() > deadline)
+      throw new Error(`serve did not become ready:\n${output.stdout}\n${output.stderr}`);
     await new Promise((resolveWait) => setTimeout(resolveWait, 100));
   }
   return { child, output };
@@ -54,10 +66,19 @@ async function startServing(t, command, args, env, ready) {
 function unauthenticatedRemoteRequest(agentDir, port) {
   const ca = readFileSync(join(agentDir, "remote-tls", "ca-certificate.pem"));
   return new Promise((resolveRequest, reject) => {
-    const request = httpsRequest({ hostname: "127.0.0.1", port, ca, path: "/api/aiden/v1/workspaces", headers: { "aiden-protocol-version": "1" } }, (response) => {
-      response.resume();
-      response.on("end", () => resolveRequest(response.statusCode));
-    });
+    const request = httpsRequest(
+      {
+        hostname: "127.0.0.1",
+        port,
+        ca,
+        path: "/api/aiden/v1/workspaces",
+        headers: { "aiden-protocol-version": "1" },
+      },
+      (response) => {
+        response.resume();
+        response.on("end", () => resolveRequest(response.statusCode));
+      },
+    );
     request.setTimeout(15_000, () => request.destroy(new Error("Remote request timed out")));
     request.on("error", reject);
     request.end();
@@ -66,13 +87,22 @@ function unauthenticatedRemoteRequest(agentDir, port) {
 
 test("aiden serve starts Remote by default, reports it, and opens no pairing window without a terminal", async (t) => {
   const { agentDir, env } = sandbox(t);
-  const { output } = await startServing(t, process.execPath, [cli, "serve"], env, /Aiden Remote listening/);
+  const { output } = await startServing(
+    t,
+    process.execPath,
+    [cli, "serve"],
+    env,
+    /Aiden Remote listening/,
+  );
 
   const status = json(runCli(["serve", "status"], env));
   assert.equal(status.running, true);
   assert.equal(status.remote.on, true);
   assert.ok(Number.isInteger(status.remote.lanPort), JSON.stringify(status.remote));
-  assert.match(status.remote.lanEndpoint, new RegExp(`^https://[^/]+:${status.remote.lanPort}/api/aiden/v1$`));
+  assert.match(
+    status.remote.lanEndpoint,
+    new RegExp(`^https://[^/]+:${status.remote.lanPort}/api/aiden/v1$`),
+  );
 
   // The listener is real and admits nobody without a paired credential.
   assert.equal(await unauthenticatedRemoteRequest(agentDir, status.remote.lanPort), 401);
@@ -84,7 +114,13 @@ test("aiden serve starts Remote by default, reports it, and opens no pairing win
 
 test("aiden serve --no-remote serves without Remote", async (t) => {
   const { env } = sandbox(t);
-  await startServing(t, process.execPath, [cli, "serve", "--no-remote"], env, /Aiden Remote is off/);
+  await startServing(
+    t,
+    process.execPath,
+    [cli, "serve", "--no-remote"],
+    env,
+    /Aiden Remote is off/,
+  );
 
   const status = json(runCli(["serve", "status"], env));
   assert.equal(status.running, true);
@@ -95,10 +131,15 @@ test("aiden serve --no-remote serves without Remote", async (t) => {
 });
 
 test("aiden serve --daemon passes the Remote choice to the background server", async (t) => {
-  for (const [args, on] of [[[], true], [["--no-remote"], false]]) {
+  for (const [args, on] of [
+    [[], true],
+    [["--no-remote"], false],
+  ]) {
     const { env } = sandbox(t);
     const started = json(runCli(["serve", "--daemon", ...args], env));
-    t.after(() => { runCli(["serve", "stop"], env); });
+    t.after(() => {
+      runCli(["serve", "stop"], env);
+    });
     assert.equal(started.remote.on, on, JSON.stringify(started));
     assert.equal(json(runCli(["serve", "status"], env)).remote.on, on);
     assert.equal(json(runCli(["serve", "stop"], env)).stopped, true);
@@ -123,45 +164,87 @@ test("aiden serve rejects contradictory pairing and Remote flags before starting
 });
 
 // util-linux `script` gives the CLI a real terminal; BSD/macOS `script` takes other arguments.
-const hasScript = process.platform === "linux" && spawnSync("script", ["--version"], { encoding: "utf8" }).status === 0;
+const hasScript =
+  process.platform === "linux" &&
+  spawnSync("script", ["--version"], { encoding: "utf8" }).status === 0;
 
-test("aiden serve in a terminal shows a LAN pairing code that the server is waiting on", { skip: !hasScript && "needs util-linux script for a pseudo-terminal" }, async (t) => {
-  const { env } = sandbox(t);
-  const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-  const { output } = await startServing(t, "script", ["-qfec", `${quote(process.execPath)} ${quote(cli)} serve`, "/dev/null"], env, /Setup code:\s+\S+/);
-  const text = output.stdout + output.stderr;
-  assert.match(text, /Nearby address:\r?\nhttps:\/\/[^/\s]+:\d+\/api\/aiden\/v1\r?\n/);
-  assert.match(text, /expires in [45]m/);
-  const pairing = json(runCli(["remote", "pair-status"], env));
-  assert.equal(pairing.state, "awaiting_scan");
-  assert.match(pairing.sessionId, /^pairing_/);
-});
+test(
+  "aiden serve in a terminal shows a LAN pairing code that the server is waiting on",
+  { skip: !hasScript && "needs util-linux script for a pseudo-terminal" },
+  async (t) => {
+    const { env } = sandbox(t);
+    const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+    const { output } = await startServing(
+      t,
+      "script",
+      ["-qfec", `${quote(process.execPath)} ${quote(cli)} serve`, "/dev/null"],
+      env,
+      /Setup code:\s+\S+/,
+    );
+    const text = output.stdout + output.stderr;
+    assert.match(text, /Nearby address:\r?\nhttps:\/\/[^/\s]+:\d+\/api\/aiden\/v1\r?\n/);
+    assert.match(text, /expires in [45]m/);
+    const pairing = json(runCli(["remote", "pair-status"], env));
+    assert.equal(pairing.state, "awaiting_scan");
+    assert.match(pairing.sessionId, /^pairing_/);
+  },
+);
 
-test("aiden serve --no-pair in a terminal serves Remote without minting a pairing code", { skip: !hasScript && "needs util-linux script for a pseudo-terminal" }, async (t) => {
-  const { env } = sandbox(t);
-  const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-  const { output } = await startServing(t, "script", ["-qfec", `${quote(process.execPath)} ${quote(cli)} serve --no-pair`, "/dev/null"], env, /Aiden Remote listening/);
-  // A window would open right after the server is ready; give it the time the default run needs to show one.
-  const settled = Date.now() + 2_000;
-  while (Date.now() < settled) {
-    assert.deepEqual(json(runCli(["remote", "pair-status"], env)), { state: "none" });
-    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
-  }
-  assert.doesNotMatch(output.stdout + output.stderr, /Setup code|aiden-pair:/);
-  assert.equal(json(runCli(["serve", "status"], env)).remote.on, true);
-});
+test(
+  "aiden serve --no-pair in a terminal serves Remote without minting a pairing code",
+  { skip: !hasScript && "needs util-linux script for a pseudo-terminal" },
+  async (t) => {
+    const { env } = sandbox(t);
+    const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+    const { output } = await startServing(
+      t,
+      "script",
+      ["-qfec", `${quote(process.execPath)} ${quote(cli)} serve --no-pair`, "/dev/null"],
+      env,
+      /Aiden Remote listening/,
+    );
+    // A window would open right after the server is ready; give it the time the default run needs to show one.
+    const settled = Date.now() + 2_000;
+    while (Date.now() < settled) {
+      assert.deepEqual(json(runCli(["remote", "pair-status"], env)), { state: "none" });
+      await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+    }
+    assert.doesNotMatch(output.stdout + output.stderr, /Setup code|aiden-pair:/);
+    assert.equal(json(runCli(["serve", "status"], env)).remote.on, true);
+  },
+);
 
 /** A Remote service double that records the transport operations Tailscale pairing performs. */
-function tailscalePairingDouble({ connectionMode = "lan", tailscaleConnected = false, node, connectError, deniedAfterConnect = false }) {
+function tailscalePairingDouble({
+  connectionMode = "lan",
+  tailscaleConnected = false,
+  node,
+  connectError,
+  deniedAfterConnect = false,
+}) {
   const calls = [];
-  let mode = connectionMode, connected = tailscaleConnected, denied = false;
+  let mode = connectionMode,
+    connected = tailscaleConnected,
+    denied = false;
   const service = {
-    async status() { return { connectionMode: mode, tailscaleConnected: connected, ...(denied ? { tailscaleErrorCode: "permission_denied" } : {}) }; },
-    async setConnectionMode(next) { calls.push(["mode", next]); mode = next; },
+    async status() {
+      return {
+        connectionMode: mode,
+        tailscaleConnected: connected,
+        ...(denied ? { tailscaleErrorCode: "permission_denied" } : {}),
+      };
+    },
+    async setConnectionMode(next) {
+      calls.push(["mode", next]);
+      mode = next;
+    },
     async connectTailscale() {
       calls.push(["connect"]);
       if (connectError) throw new Error(connectError);
-      if (deniedAfterConnect) { denied = true; return; }
+      if (deniedAfterConnect) {
+        denied = true;
+        return;
+      }
       connected = true;
     },
     async beginPairing(transport) {
@@ -170,14 +253,22 @@ function tailscalePairingDouble({ connectionMode = "lan", tailscaleConnected = f
       return { sessionId: "pairing_test", transport };
     },
   };
-  const tailscale = { async status() { calls.push(["node"]); return node ?? { installed: true, dnsName: "box.tail1234.ts.net", httpsAvailable: true }; } };
+  const tailscale = {
+    async status() {
+      calls.push(["node"]);
+      return node ?? { installed: true, dnsName: "box.tail1234.ts.net", httpsAvailable: true };
+    },
+  };
   return { service, tailscale, calls, mode: () => mode };
 }
 
 test("Tailscale pairing on a fresh LAN profile adds Tailscale and connects Serve before opening the window", async () => {
   const api = await import("../dist/parity-test-api.js");
   const fresh = tailscalePairingDouble({});
-  assert.deepEqual(await api.beginTailscalePairing(fresh.service, fresh.tailscale), { sessionId: "pairing_test", transport: "tailscale" });
+  assert.deepEqual(await api.beginTailscalePairing(fresh.service, fresh.tailscale), {
+    sessionId: "pairing_test",
+    transport: "tailscale",
+  });
   assert.deepEqual(fresh.calls, [["node"], ["mode", "both"], ["connect"], ["pair", "tailscale"]]);
   assert.equal(fresh.mode(), "both", "LAN keeps working next to Tailscale");
 
@@ -189,18 +280,34 @@ test("Tailscale pairing on a fresh LAN profile adds Tailscale and connects Serve
 test("Tailscale pairing leaves foreign routes alone and names the setup step instead of a bare retry", async () => {
   const api = await import("../dist/parity-test-api.js");
   const conflict = tailscalePairingDouble({ connectError: "tailscale_route_conflict" });
-  await assert.rejects(api.beginTailscalePairing(conflict.service, conflict.tailscale), /left it unchanged.*aiden remote mode both.*aiden remote tailscale-review.*aiden remote tailscale-takeover <token>/s);
-  assert.deepEqual(conflict.calls, [["node"], ["mode", "both"], ["connect"], ["mode", "lan"]], "no pairing window, and the added mode is put back");
+  await assert.rejects(
+    api.beginTailscalePairing(conflict.service, conflict.tailscale),
+    /left it unchanged.*aiden remote mode both.*aiden remote tailscale-review.*aiden remote tailscale-takeover <token>/s,
+  );
+  assert.deepEqual(
+    conflict.calls,
+    [["node"], ["mode", "both"], ["connect"], ["mode", "lan"]],
+    "no pairing window, and the added mode is put back",
+  );
 
   // Codes from an interrupted or contested route change each name their next step, and an unknown one never shows bare.
   for (const [code, message] of [
-    ["tailscale_route_outcome_unknown", /did not confirm.*aiden remote tailscale-reconcile.*aiden remote pair tailscale/s],
+    [
+      "tailscale_route_outcome_unknown",
+      /did not confirm.*aiden remote tailscale-reconcile.*aiden remote pair tailscale/s,
+    ],
     ["tailscale_route_verification_failed", /did not confirm.*aiden remote tailscale-reconcile/s],
     ["tailscale_route_recovery_failed", /did not confirm.*aiden remote tailscale-reconcile/s],
-    ["tailscale_route_busy", /changing the Tailscale route right now.*aiden remote pair tailscale/s],
+    [
+      "tailscale_route_busy",
+      /changing the Tailscale route right now.*aiden remote pair tailscale/s,
+    ],
     ["tailscale_ownership_commit_failed", /could not save.*writable.*aiden remote pair tailscale/s],
     ["tailscale_status_invalid_response", /could not read.*tailscale status/s],
-    ["tailscale_something_new", /did not finish \(tailscale_something_new\).*aiden remote check.*aiden remote pair lan/s],
+    [
+      "tailscale_something_new",
+      /did not finish \(tailscale_something_new\).*aiden remote check.*aiden remote pair lan/s,
+    ],
   ]) {
     const failed = tailscalePairingDouble({ connectError: code });
     await assert.rejects(api.beginTailscalePairing(failed.service, failed.tailscale), (error) => {
@@ -212,13 +319,22 @@ test("Tailscale pairing leaves foreign routes alone and names the setup step ins
   }
 
   const denied = tailscalePairingDouble({ deniedAfterConnect: true });
-  await assert.rejects(api.beginTailscalePairing(denied.service, denied.tailscale), /sudo tailscale set --operator=\$USER.*aiden remote pair tailscale/s);
+  await assert.rejects(
+    api.beginTailscalePairing(denied.service, denied.tailscale),
+    /sudo tailscale set --operator=\$USER.*aiden remote pair tailscale/s,
+  );
   assert.equal(denied.mode(), "lan");
 
   for (const [node, message] of [
-    [{ installed: false, errorCode: "not_installed" }, /not installed.*sudo tailscale up.*aiden remote pair tailscale/s],
+    [
+      { installed: false, errorCode: "not_installed" },
+      /not installed.*sudo tailscale up.*aiden remote pair tailscale/s,
+    ],
     [{ installed: true }, /sudo tailscale up.*aiden remote pair tailscale/s],
-    [{ installed: true, dnsName: "box.tail1234.ts.net", httpsAvailable: false }, /HTTPS.*aiden remote pair tailscale/s],
+    [
+      { installed: true, dnsName: "box.tail1234.ts.net", httpsAvailable: false },
+      /HTTPS.*aiden remote pair tailscale/s,
+    ],
   ]) {
     const blocked = tailscalePairingDouble({ node });
     await assert.rejects(api.beginTailscalePairing(blocked.service, blocked.tailscale), message);
@@ -227,29 +343,50 @@ test("Tailscale pairing leaves foreign routes alone and names the setup step ins
 });
 
 // Never let a test touch a developer's real Tailscale Serve configuration.
-const tailscaleInstalled = !!(await (await import("../dist/parity-test-api.js")).resolveTailscaleBinary());
+const tailscaleInstalled = !!(await (
+  await import("../dist/parity-test-api.js")
+).resolveTailscaleBinary());
 
-test("aiden serve --pair tailscale without Tailscale says how to set it up and keeps LAN mode", { skip: (!hasScript && "needs util-linux script for a pseudo-terminal") || (tailscaleInstalled && "Tailscale is installed on this host") }, async (t) => {
-  const { env } = sandbox(t);
-  const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-  const { output } = await startServing(t, "script", ["-qfec", `${quote(process.execPath)} ${quote(cli)} serve --pair tailscale`, "/dev/null"], env, /Could not open a Tailscale pairing window[^\n]*\n/);
-  const text = output.stdout + output.stderr;
-  assert.match(text, /Tailscale is not installed on this server\. Install it .*sudo tailscale up.*aiden remote pair tailscale/);
-  assert.doesNotMatch(text, /Setup code/);
-  const again = runCli(["remote", "pair", "tailscale"], env);
-  assert.notEqual(again.status, 0);
-  assert.match(again.stderr, /Tailscale is not installed on this server/);
-  const status = json(runCli(["remote", "status"], env));
-  assert.equal(status.connectionMode, "lan");
-  assert.deepEqual(json(runCli(["remote", "pair-status"], env)), { state: "none" });
-});
+test(
+  "aiden serve --pair tailscale without Tailscale says how to set it up and keeps LAN mode",
+  {
+    skip:
+      (!hasScript && "needs util-linux script for a pseudo-terminal") ||
+      (tailscaleInstalled && "Tailscale is installed on this host"),
+  },
+  async (t) => {
+    const { env } = sandbox(t);
+    const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+    const { output } = await startServing(
+      t,
+      "script",
+      ["-qfec", `${quote(process.execPath)} ${quote(cli)} serve --pair tailscale`, "/dev/null"],
+      env,
+      /Could not open a Tailscale pairing window[^\n]*\n/,
+    );
+    const text = output.stdout + output.stderr;
+    assert.match(
+      text,
+      /Tailscale is not installed on this server\. Install it .*sudo tailscale up.*aiden remote pair tailscale/,
+    );
+    assert.doesNotMatch(text, /Setup code/);
+    const again = runCli(["remote", "pair", "tailscale"], env);
+    assert.notEqual(again.status, 0);
+    assert.match(again.stderr, /Tailscale is not installed on this server/);
+    const status = json(runCli(["remote", "status"], env));
+    assert.equal(status.connectionMode, "lan");
+    assert.deepEqual(json(runCli(["remote", "pair-status"], env)), { state: "none" });
+  },
+);
 
 test("serve status reports Remote as unknown instead of waiting on a daemon that never answers", async () => {
   const api = await import("../dist/parity-test-api.js");
   const { createServer } = await import("node:net");
   const dir = mkdtempSync(join(tmpdir(), "aiden-serve-wedged-"));
   const held = [];
-  const server = createServer((socket) => { held.push(socket); });
+  const server = createServer((socket) => {
+    held.push(socket);
+  });
   try {
     server.listen(join(dir, "serve.sock"));
     await once(server, "listening");
@@ -279,36 +416,66 @@ async function fakeDaemon(answer) {
       const { command, args } = JSON.parse(buffer);
       asked.push([command, ...args].join(" "));
       const result = answer(command, args);
-      socket.end(JSON.stringify(result instanceof Error ? { error: result.message } : { result }) + "\n");
+      socket.end(
+        JSON.stringify(result instanceof Error ? { error: result.message } : { result }) + "\n",
+      );
     });
   });
   server.listen(join(dir, "serve.sock"));
   await once(server, "listening");
-  return { dir, asked, close: () => { server.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return {
+    dir,
+    asked,
+    close: () => {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
 }
 
 function sink() {
-  const stream = { text: "", write(chunk) { stream.text += chunk; return true; } };
+  const stream = {
+    text: "",
+    write(chunk) {
+      stream.text += chunk;
+      return true;
+    },
+  };
   return stream;
 }
 
 test("startup pairing on a Tailscale-only server pairs over Tailscale and reports a failed window", async () => {
   const api = await import("../dist/parity-test-api.js");
-  const pairing = { sessionId: "pairing_test", qrPayload: "aiden-pair:test", manualCode: "ABCD-1234", bootstrap: { expiresAt: new Date(Date.now() + 60_000).toISOString() } };
+  const pairing = {
+    sessionId: "pairing_test",
+    qrPayload: "aiden-pair:test",
+    manualCode: "ABCD-1234",
+    bootstrap: { expiresAt: new Date(Date.now() + 60_000).toISOString() },
+  };
   const daemon = await fakeDaemon((command, args) => {
     if (command === "serve") return { remote: { on: true, connectionMode: "tailscale" } };
     if (args[0] === "pair") return pairing;
     return { sessionId: "pairing_test", state: "failed" };
   });
-  const out = sink(), err = sink();
+  const out = sink(),
+    err = sink();
   try {
     const started = Date.now();
     await api.showStartupPairing(daemon.dir, undefined, new AbortController().signal, out, err);
-    assert.deepEqual(daemon.asked, ["serve status", "remote tailscale-prepare", "remote status", "remote pair tailscale", "remote pair-status"]);
+    assert.deepEqual(daemon.asked, [
+      "serve status",
+      "remote tailscale-prepare",
+      "remote status",
+      "remote pair tailscale",
+      "remote pair-status",
+    ]);
     assert.match(out.text, /^Setup code:\nABCD-1234$/m);
     assert.match(err.text, /Pairing failed\. Run `aiden remote pair tailscale` to try again/);
     assert.doesNotMatch(out.text, /expired/);
-    assert.ok(Date.now() - started < 10_000, "a failed window ends the wait instead of running out the clock");
+    assert.ok(
+      Date.now() - started < 10_000,
+      "a failed window ends the wait instead of running out the clock",
+    );
   } finally {
     daemon.close();
   }
@@ -323,14 +490,20 @@ const SGR = new RegExp(`${ESC}\\[[0-9;]*m`, "gu");
 function modulesFromRows(rows) {
   const grid = [];
   for (const row of rows) {
-    const top = [], bottom = [];
-    let foreground = 39, background = 49;
+    const top = [],
+      bottom = [];
+    let foreground = 39,
+      background = 49;
     for (const [, sgr, cell] of row.matchAll(SGR_OR_CELL)) {
       if (sgr) {
-        const fg = /38;5;(\d+)/u.exec(sgr), bg = /48;5;(\d+)/u.exec(sgr);
+        const fg = /38;5;(\d+)/u.exec(sgr),
+          bg = /48;5;(\d+)/u.exec(sgr);
         if (fg) foreground = Number(fg[1]);
         if (bg) background = Number(bg[1]);
-        if (sgr === "\x1b[0m") { foreground = 39; background = 49; }
+        if (sgr === "\x1b[0m") {
+          foreground = 39;
+          background = 49;
+        }
         continue;
       }
       // Only palette black (16) and white (231) may paint the code; anything else would follow the terminal theme.
@@ -348,16 +521,29 @@ function modulesFromRows(rows) {
 
 /** A QR finder pattern: a dark 7x7 ring, a light ring inside, a dark 3x3 centre. */
 function isFinder(grid, top, left) {
-  for (let r = 0; r < 7; r += 1) for (let c = 0; c < 7; c += 1) {
-    const ring = Math.max(Math.abs(r - 3), Math.abs(c - 3));
-    if (grid[top + r]?.[left + c] !== (ring !== 2)) return false;
-  }
+  for (let r = 0; r < 7; r += 1)
+    for (let c = 0; c < 7; c += 1) {
+      const ring = Math.max(Math.abs(r - 3), Math.abs(c - 3));
+      if (grid[top + r]?.[left + c] !== (ring !== 2)) return false;
+    }
   return true;
 }
 
 function pairingFor(endpoint, trust) {
-  const bootstrap = { protocolVersion: 1, instanceId: "8b0c1f4e-6a35-4bb1-9d0e-0f5f4d6c2a11", endpoint, serverSpkiSha256: "sha256/q5y0GfHk4X3kQm8p0bY2sV1yA5mJ8dW3nR7tC9eL2uY=", secret: "s".repeat(43), expiresAt: new Date(Date.now() + 300_000).toISOString() };
-  return { sessionId: "pairing_test", manualCode: "FF18-6D5S-23KW-ZHPS-CAF3", bootstrap, qrPayload: JSON.stringify({ kind: "aiden-pairing-v1", bootstrap, trust }) };
+  const bootstrap = {
+    protocolVersion: 1,
+    instanceId: "8b0c1f4e-6a35-4bb1-9d0e-0f5f4d6c2a11",
+    endpoint,
+    serverSpkiSha256: "sha256/q5y0GfHk4X3kQm8p0bY2sV1yA5mJ8dW3nR7tC9eL2uY=",
+    secret: "s".repeat(43),
+    expiresAt: new Date(Date.now() + 300_000).toISOString(),
+  };
+  return {
+    sessionId: "pairing_test",
+    manualCode: "FF18-6D5S-23KW-ZHPS-CAF3",
+    bootstrap,
+    qrPayload: JSON.stringify({ kind: "aiden-pairing-v1", bootstrap, trust }),
+  };
 }
 
 test("a Tailscale pairing code fits an 80-column terminal as a black-on-white QR code with its address alone on a line", async () => {
@@ -367,37 +553,72 @@ test("a Tailscale pairing code fits an 80-column terminal as a black-on-white QR
   const rows = api.renderQrRows(pairing.qrPayload);
   const width = [...rows[0].replace(SGR, "")].length;
   assert.ok(width <= 80, `${width} columns would wrap in an 80-column terminal`);
-  for (const row of rows) assert.ok(row.endsWith("\x1b[0m"), "each row resets its colors, so nothing bleeds past the code");
+  for (const row of rows)
+    assert.ok(
+      row.endsWith("\x1b[0m"),
+      "each row resets its colors, so nothing bleeds past the code",
+    );
   const grid = modulesFromRows(rows);
   // Where the symbol's dark modules start and end; the QR standard wants four light modules around it on every side.
-  const darkRows = grid.map((line, index) => line.some(Boolean) ? index : -1).filter((index) => index >= 0);
-  const darkColumns = [...Array(width).keys()].filter((column) => grid.some((line) => line[column]));
-  const [top, bottom] = [darkRows[0], darkRows.at(-1)], [left, right] = [darkColumns[0], darkColumns.at(-1)];
-  assert.ok(top >= 4 && left >= 4 && width - 1 - right >= 4 && grid.length - 1 - bottom >= 4, `quiet zone ${top}/${left}/${width - 1 - right}/${grid.length - 1 - bottom}`);
+  const darkRows = grid
+    .map((line, index) => (line.some(Boolean) ? index : -1))
+    .filter((index) => index >= 0);
+  const darkColumns = [...Array(width).keys()].filter((column) =>
+    grid.some((line) => line[column]),
+  );
+  const [top, bottom] = [darkRows[0], darkRows.at(-1)],
+    [left, right] = [darkColumns[0], darkColumns.at(-1)];
+  assert.ok(
+    top >= 4 && left >= 4 && width - 1 - right >= 4 && grid.length - 1 - bottom >= 4,
+    `quiet zone ${top}/${left}/${width - 1 - right}/${grid.length - 1 - bottom}`,
+  );
   assert.equal(bottom - top, right - left, "a square symbol");
-  for (const [row, column] of [[top, left], [top, right - 6], [bottom - 6, left]]) {
+  for (const [row, column] of [
+    [top, left],
+    [top, right - 6],
+    [bottom - 6, left],
+  ]) {
     assert.ok(isFinder(grid, row, column), `finder pattern at ${row},${column}`);
   }
-  assert.ok(!isFinder(grid, bottom - 6, right - 6), "no finder in the bottom-right corner, so the code is not mirrored");
+  assert.ok(
+    !isFinder(grid, bottom - 6, right - 6),
+    "no finder in the bottom-right corner, so the code is not mirrored",
+  );
 
   const text = await api.renderPairingTerminal(pairing, { columns: 100 });
   assert.match(text, /^Pair over Tailscale$/m);
   assert.match(text, new RegExp(`^Private address:\\n${endpoint.replace(/[.]/gu, "\\.")}$`, "m"));
   assert.match(text, /^Setup code:\nFF18-6D5S-23KW-ZHPS-CAF3$/m);
-  assert.match(text, /On iPhone or iPad, choose Add Computer\. Scan the QR code if shown, or enter the private address and setup code\./);
+  assert.match(
+    text,
+    /On iPhone or iPad, choose Add Computer\. Scan the QR code if shown, or enter the private address and setup code\./,
+  );
 });
 
 test("a pairing code too wide for the terminal is left out instead of wrapping into an unscannable code", async () => {
   const api = await import("../dist/parity-test-api.js");
-  const pairing = pairingFor("https://bitcreate1.local:49320/api/aiden/v1", { mode: "private-ca", caCertificateDerBase64: Buffer.alloc(420, 7).toString("base64") });
+  const pairing = pairingFor("https://bitcreate1.local:49320/api/aiden/v1", {
+    mode: "private-ca",
+    caCertificateDerBase64: Buffer.alloc(420, 7).toString("base64"),
+  });
   const text = await api.renderPairingTerminal(pairing, { columns: 80 });
   assert.match(text, /^Pair on this local network$/m);
-  assert.match(text, /needs a window at least \d+ characters wide, and this one is 80\. Widen the window and run `aiden remote pair lan`/);
+  assert.match(
+    text,
+    /needs a window at least \d+ characters wide, and this one is 80\. Widen the window and run `aiden remote pair lan`/,
+  );
   assert.ok(!text.includes("▀") && !text.includes(`${ESC}[48;5;`), "no QR cells in the output");
   assert.match(text, /^Nearby address:\nhttps:\/\/bitcreate1\.local:49320\/api\/aiden\/v1$/m);
-  assert.match(text, /On iPhone or iPad, choose Add Computer\. Scan the QR code if shown, or enter the nearby address and setup code\./);
+  assert.match(
+    text,
+    /On iPhone or iPad, choose Add Computer\. Scan the QR code if shown, or enter the nearby address and setup code\./,
+  );
   assert.match(text, /Your phone must be on the same network as this computer\./);
-  assert.match(await api.renderPairingTerminal(pairing, { columns: 200 }), /▀/u, "a wide window shows the code");
+  assert.match(
+    await api.renderPairingTerminal(pairing, { columns: 200 }),
+    /▀/u,
+    "a wide window shows the code",
+  );
 });
 
 test("startup pairing names both pair commands when the server's network is unknown and LAN fails", async () => {
@@ -407,11 +628,15 @@ test("startup pairing names both pair commands when the server's network is unkn
     if (args[0] === "pair") return new Error("Local-network access is not enabled.");
     return { state: "none" };
   });
-  const out = sink(), err = sink();
+  const out = sink(),
+    err = sink();
   try {
     await api.showStartupPairing(daemon.dir, undefined, new AbortController().signal, out, err);
     assert.deepEqual(daemon.asked, ["serve status", "remote pair lan"]);
-    assert.match(err.text, /Could not open a LAN pairing window\. Local-network access is not enabled\. Run `aiden remote pair lan` or `aiden remote pair tailscale` to try again\./);
+    assert.match(
+      err.text,
+      /Could not open a LAN pairing window\. Local-network access is not enabled\. Run `aiden remote pair lan` or `aiden remote pair tailscale` to try again\./,
+    );
   } finally {
     daemon.close();
   }
@@ -423,16 +648,32 @@ test("Linux discovery keeps retrying when avahi-publish-service exits, warns onc
   t.after(() => rmSync(bin, { recursive: true, force: true }));
   const runs = join(bin, "runs");
   // Exits at once, as the real publisher does while avahi-daemon is not running yet (at boot).
-  writeFileSync(join(bin, "avahi-publish-service"), `#!/bin/sh\necho run >> "${runs}"\nexit 1\n`, { mode: 0o755 });
+  writeFileSync(join(bin, "avahi-publish-service"), `#!/bin/sh\necho run >> "${runs}"\nexit 1\n`, {
+    mode: 0o755,
+  });
   const savedPath = process.env.PATH;
   process.env.PATH = `${bin}:${savedPath}`;
   let warnings = "";
   const write = process.stderr.write;
-  process.stderr.write = (chunk) => { warnings += chunk; return true; };
-  const count = () => { try { return readFileSync(runs, "utf8").split("\n").filter(Boolean).length; } catch { return 0; } };
+  process.stderr.write = (chunk) => {
+    warnings += chunk;
+    return true;
+  };
+  const count = () => {
+    try {
+      return readFileSync(runs, "utf8").split("\n").filter(Boolean).length;
+    } catch {
+      return 0;
+    }
+  };
   const publisher = bonjourPublisher(50, "linux");
   try {
-    await publisher.start({ instanceId: "i", displayName: "Aiden", port: 49320, hostname: "box.local" });
+    await publisher.start({
+      instanceId: "i",
+      displayName: "Aiden",
+      port: 49320,
+      hostname: "box.local",
+    });
     const deadline = Date.now() + 5_000;
     while (count() < 3 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
     assert.ok(count() >= 3, `the publisher is started again after it exits (ran ${count()} times)`);
@@ -445,5 +686,9 @@ test("Linux discovery keeps retrying when avahi-publish-service exits, warns onc
     process.stderr.write = write;
     process.env.PATH = savedPath;
   }
-  assert.equal(warnings.match(/avahi-publish-service exited/g)?.length, 1, "the exit is reported once, not on every retry");
+  assert.equal(
+    warnings.match(/avahi-publish-service exited/g)?.length,
+    1,
+    "the exit is reported once, not on every retry",
+  );
 });

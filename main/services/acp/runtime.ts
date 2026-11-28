@@ -109,7 +109,9 @@ interface Turn {
   abortRequested: boolean;
   failed?: boolean;
   /** Messages sent mid-turn that the agent must answer before the turn ends. */
-  followUp: { context: TranscriptContext; boundary: number; count: number; fingerprint: string } | undefined;
+  followUp:
+    | { context: TranscriptContext; boundary: number; count: number; fingerprint: string }
+    | undefined;
   /** Absolute paths the user approved writing to during this turn (Ask mode). */
   writeGrants: Set<string>;
   /** Approved edits whose request named no path; each allows one write. */
@@ -267,7 +269,8 @@ export class AcpHarnessRuntime {
     if (signal?.aborted) throw abortError();
     return this.tracked(
       () => this.launcher.launch(purpose, cwd),
-      (launched) => operation(new AcpConnection(launched.process, undefined, { fileSystem: false })),
+      (launched) =>
+        operation(new AcpConnection(launched.process, undefined, { fileSystem: false })),
       true,
     );
   }
@@ -375,7 +378,8 @@ export class AcpHarnessRuntime {
       const conversation = conversationMessages(context);
       if (
         conversation.length < binding.messageCount ||
-        messagesFingerprint(conversation.slice(0, binding.messageCount)) !== binding.historyFingerprint
+        messagesFingerprint(conversation.slice(0, binding.messageCount)) !==
+          binding.historyFingerprint
       ) {
         // Rewind, edit, fork or compaction: ACP history cannot be edited, so
         // start a fresh session that receives a bounded reconstruction.
@@ -386,7 +390,10 @@ export class AcpHarnessRuntime {
       }
       const instructions = this.instructionsFor(context);
       const instructionFingerprint = hostInstructionsFingerprint(instructions);
-      if (binding.messageCount > 0 && binding.hostInstructionsFingerprint !== instructionFingerprint) {
+      if (
+        binding.messageCount > 0 &&
+        binding.hostInstructionsFingerprint !== instructionFingerprint
+      ) {
         // ACP has no operation to replace host instructions in an existing
         // session. A new session receives the current instructions and history.
         this.sessions.remove(binding.chatId);
@@ -421,7 +428,9 @@ export class AcpHarnessRuntime {
         },
       });
       if (built.reconstructed && conversation.length > 1) {
-        host.notice?.(`${this.definition.label} started a fresh session with a summary of earlier messages.`);
+        host.notice?.(
+          `${this.definition.label} started a fresh session with a summary of earlier messages.`,
+        );
       }
       turn = {
         completion: new Promise<void>((resolve) => {
@@ -446,7 +455,10 @@ export class AcpHarnessRuntime {
       this.attachWriter(binding, writer, host, conversation);
       this.linkAbort(binding, turn, signal);
 
-      let response = await binding.connection.prompt({ sessionId: binding.sessionId, prompt: built.prompt });
+      let response = await binding.connection.prompt({
+        sessionId: binding.sessionId,
+        prompt: built.prompt,
+      });
       while (turn.followUp && !turn.abortRequested && response.stopReason === "end_turn") {
         const follow: NonNullable<Turn["followUp"]> = turn.followUp;
         turn.followUp = undefined;
@@ -457,7 +469,10 @@ export class AcpHarnessRuntime {
         binding.pendingContextCount = follow.count;
         binding.pendingContextFingerprint = follow.fingerprint;
         if (next.length === 0) continue;
-        const followed = await binding.connection.prompt({ sessionId: binding.sessionId, prompt: next });
+        const followed = await binding.connection.prompt({
+          sessionId: binding.sessionId,
+          prompt: next,
+        });
         response = { ...followed, usage: addUsage(response.usage, followed.usage) };
       }
       // With no stream attached (the last one ended with toolUse), the reply
@@ -475,11 +490,16 @@ export class AcpHarnessRuntime {
       this.persist(binding);
       if (turn.abortRequested || response.stopReason === "cancelled") {
         active.fail(abortError(), true);
-      } else if (response.stopReason === "max_tokens" || response.stopReason === "max_turn_requests") {
+      } else if (
+        response.stopReason === "max_tokens" ||
+        response.stopReason === "max_turn_requests"
+      ) {
         active.done("length");
       } else if (response.stopReason === "refusal") {
         turn.failed = true;
-        active.fail(new AcpHarnessError("protocol", `${this.definition.label} declined this request.`));
+        active.fail(
+          new AcpHarnessError("protocol", `${this.definition.label} declined this request.`),
+        );
       } else {
         active.done("stop");
       }
@@ -523,12 +543,17 @@ export class AcpHarnessRuntime {
   ): Promise<boolean> {
     const turn = binding.turn;
     const conversation = conversationMessages(context);
-    if (turn && binding.hostInstructionsFingerprint !== hostInstructionsFingerprint(this.instructionsFor(context))) {
+    if (
+      turn &&
+      binding.hostInstructionsFingerprint !==
+        hostInstructionsFingerprint(this.instructionsFor(context))
+    ) {
       // The host refreshed instructions while this ACP prompt was awaiting a
       // bridged tool. Do not feed its result back under the old instructions.
       cancelTools(binding, "Host instructions changed.");
       this.requestCancel(binding, turn);
-      if (!(await settlesWithin(turn.completion, this.options.cancelGraceMs))) await this.drop(binding);
+      if (!(await settlesWithin(turn.completion, this.options.cancelGraceMs)))
+        await this.drop(binding);
       this.sessions.remove(binding.chatId);
       await this.drop(binding);
       return false;
@@ -542,7 +567,8 @@ export class AcpHarnessRuntime {
       cancelTools(binding, "The tool result never came back.");
       if (turn) {
         this.requestCancel(binding, turn);
-        if (!(await settlesWithin(turn.completion, this.options.cancelGraceMs))) await this.drop(binding);
+        if (!(await settlesWithin(turn.completion, this.options.cancelGraceMs)))
+          await this.drop(binding);
       }
       return false;
     }
@@ -553,8 +579,11 @@ export class AcpHarnessRuntime {
     // A message sent mid-turn stays owed until the follow-up prompt sends it,
     // even if the agent makes further tool calls first. Keep the earliest
     // unanswered position and refresh everything else to the latest view.
-    const owedFrom = turn.followUp?.boundary ??
-      (conversation.slice(boundary).some((message) => message.role === "user") ? boundary : undefined);
+    const owedFrom =
+      turn.followUp?.boundary ??
+      (conversation.slice(boundary).some((message) => message.role === "user")
+        ? boundary
+        : undefined);
     if (owedFrom !== undefined) {
       turn.followUp = {
         context,
@@ -564,7 +593,12 @@ export class AcpHarnessRuntime {
       };
     }
     // While a message is owed, nothing from it onward counts as seen.
-    this.attachWriter(binding, writer, host, conversation.slice(0, turn.followUp?.boundary ?? boundary));
+    this.attachWriter(
+      binding,
+      writer,
+      host,
+      conversation.slice(0, turn.followUp?.boundary ?? boundary),
+    );
     this.linkAbort(binding, turn, signal);
     // Tools discovered mid-turn (tool_search) become callable right away.
     binding.bridge?.setTools(host.bridgeableTools(getCurrentTools(context.messages)));
@@ -588,7 +622,12 @@ export class AcpHarnessRuntime {
     return true;
   }
 
-  private attachWriter(binding: Binding, writer: PiEventWriter, host: AcpTurnHost, seen: readonly Message[]): void {
+  private attachWriter(
+    binding: Binding,
+    writer: PiEventWriter,
+    host: AcpTurnHost,
+    seen: readonly Message[],
+  ): void {
     binding.writer = writer;
     binding.lastWriter = writer;
     binding.host = host;
@@ -634,7 +673,12 @@ export class AcpHarnessRuntime {
     const existing = this.bindings.get(host.chatId);
     if (existing) {
       const binding = await existing.catch(() => undefined);
-      if (binding && !binding.closed && binding.launched.process.alive && binding.cwd === host.cwd) {
+      if (
+        binding &&
+        !binding.closed &&
+        binding.launched.process.alive &&
+        binding.cwd === host.cwd
+      ) {
         return binding;
       }
       if (binding) await this.drop(binding);
@@ -676,7 +720,11 @@ export class AcpHarnessRuntime {
     };
   }
 
-  private async create(host: AcpTurnHost, signal: AbortSignal | undefined, fresh: boolean): Promise<Binding> {
+  private async create(
+    host: AcpTurnHost,
+    signal: AbortSignal | undefined,
+    fresh: boolean,
+  ): Promise<Binding> {
     let binding: Binding | undefined;
     let signInLost = false;
     let pendingLaunch: AcpLaunchedProcess | undefined;
@@ -710,7 +758,8 @@ export class AcpHarnessRuntime {
           // Like writes, reads need a running turn: an idle agent between
           // turns gets no access to the chat's files.
           const current = binding?.host;
-          if (!binding?.turn || !current) throw new AcpHarnessError("unavailable", "No response is running.");
+          if (!binding?.turn || !current)
+            throw new AcpHarnessError("unavailable", "No response is running.");
           return readClientTextFile(request, {
             roots: current.roots,
             canWrite: () => false,
@@ -719,12 +768,14 @@ export class AcpHarnessRuntime {
         writeTextFile: async (request) => {
           const current = binding?.host;
           const turn = binding?.turn;
-          if (!binding || !current || !turn) throw new AcpHarnessError("unavailable", "No response is running.");
+          if (!binding || !current || !turn)
+            throw new AcpHarnessError("unavailable", "No response is running.");
           // Evaluate once: a one-time grant must not be consumed by the recheck.
           const allowed = writeAllowed(binding, turn, current, request.path);
           return writeClientTextFile(request, {
             roots: current.roots,
-            canWrite: () => allowed && (current.permission() === "full" || current.permission() === "ask"),
+            canWrite: () =>
+              allowed && (current.permission() === "full" || current.permission() === "ask"),
             onWrite: (file, before, after) => {
               const relativePath = relativeDisplayPath(file, current.roots);
               if (relativePath) {
@@ -745,7 +796,10 @@ export class AcpHarnessRuntime {
     let bridge: AcpMcpBridge | undefined;
     try {
       const initialize = await connection.initialize(signal);
-      const reason = this.definition.validateInitialize(initialize, this.definition.release.version);
+      const reason = this.definition.validateInitialize(
+        initialize,
+        this.definition.release.version,
+      );
       if (reason) throw new AcpHarnessError("unavailable", reason);
       const mcpServers: McpServer[] = [];
       if (initialize.agentCapabilities?.mcpCapabilities?.http === true) {
@@ -760,9 +814,18 @@ export class AcpHarnessRuntime {
       let configOptions: SessionConfigOption[] = [];
       let modes: SessionModeState | undefined;
       let restored = false;
-      if (saved && saved.cwd === host.cwd && initialize.agentCapabilities?.sessionCapabilities?.resume) {
+      if (
+        saved &&
+        saved.cwd === host.cwd &&
+        initialize.agentCapabilities?.sessionCapabilities?.resume
+      ) {
         try {
-          const resumed = await connection.resumeSession(saved.sessionId, host.cwd, mcpServers, signal);
+          const resumed = await connection.resumeSession(
+            saved.sessionId,
+            host.cwd,
+            mcpServers,
+            signal,
+          );
           sessionId = saved.sessionId;
           configOptions = resumed.configOptions ?? [];
           modes = resumed.modes ?? undefined;
@@ -840,8 +903,14 @@ export class AcpHarnessRuntime {
       // The agent cannot express this permission. Never run with a broader
       // native mode than Aiden granted: refusals in onPermission still apply,
       // but a mode we cannot set must not silently default to auto-approve.
-      if (host.permission() !== "full" && binding.currentMode === this.definition.nativeModeFor("full")) {
-        throw new AcpHarnessError("unavailable", `${this.definition.label} could not switch to an approval mode.`);
+      if (
+        host.permission() !== "full" &&
+        binding.currentMode === this.definition.nativeModeFor("full")
+      ) {
+        throw new AcpHarnessError(
+          "unavailable",
+          `${this.definition.label} could not switch to an approval mode.`,
+        );
       }
       return;
     }
@@ -857,10 +926,14 @@ export class AcpHarnessRuntime {
     const desired = this.definition.nativeModelId(model, options.reasoning);
     if (!desired || desired === binding.currentModel) return;
     const option = binding.configOptions.find(
-      (candidate) => (candidate.category === "model" || candidate.id === "model") && candidate.type === "select",
+      (candidate) =>
+        (candidate.category === "model" || candidate.id === "model") && candidate.type === "select",
     );
     if (!option) {
-      throw new AcpHarnessError("unavailable", `${this.definition.label} did not offer a model choice.`);
+      throw new AcpHarnessError(
+        "unavailable",
+        `${this.definition.label} did not offer a model choice.`,
+      );
     }
     if (!selectValues(option).includes(desired)) {
       throw new AcpHarnessError(
@@ -894,14 +967,18 @@ export class AcpHarnessRuntime {
         const next = binding.tracker.getState(id)!;
         const skipped = binding.toolUpdatesSkipped.get(id) ?? 0;
         const report = shouldReportToolUpdate(previous, next, update.status, skipped);
-        if (update.status === "completed" || update.status === "failed") binding.toolUpdatesSkipped.delete(id);
+        if (update.status === "completed" || update.status === "failed")
+          binding.toolUpdatesSkipped.delete(id);
         else binding.toolUpdatesSkipped.set(id, report ? 0 : skipped + 1);
         if (report) this.reportActivity(binding, binding.tracker.project(id));
         return;
       }
       case "plan": {
         const text = update.entries
-          .map((entry) => `- [${entry.status === "completed" ? "x" : " "}] ${entry.content.replace(/\s+/gu, " ").slice(0, 300)}`)
+          .map(
+            (entry) =>
+              `- [${entry.status === "completed" ? "x" : " "}] ${entry.content.replace(/\s+/gu, " ").slice(0, 300)}`,
+          )
           .join("\n");
         if (text && text !== binding.lastPlan) {
           binding.lastPlan = text;
@@ -911,8 +988,10 @@ export class AcpHarnessRuntime {
       }
       case "config_option_update":
         binding.configOptions = update.configOptions;
-        binding.currentMode = currentConfigValue(update.configOptions, "mode") ?? binding.currentMode;
-        binding.currentModel = currentConfigValue(update.configOptions, "model") ?? binding.currentModel;
+        binding.currentMode =
+          currentConfigValue(update.configOptions, "mode") ?? binding.currentMode;
+        binding.currentModel =
+          currentConfigValue(update.configOptions, "model") ?? binding.currentModel;
         return;
       case "current_mode_update":
         binding.currentMode = update.currentModeId;
@@ -950,10 +1029,14 @@ export class AcpHarnessRuntime {
     const step = timelineStepFor(activity, host.roots);
     if (!step) return;
     const targetPath = typeof step.args.path === "string" ? step.args.path : undefined;
-    const writes = (step.toolName === "write_file" || step.toolName === "edit_file") && targetPath !== undefined;
+    const writes =
+      (step.toolName === "write_file" || step.toolName === "edit_file") && targetPath !== undefined;
     const finished = activity.status === "completed" || activity.status === "failed";
     if (writes && !finished) noteOpenWriteActivity(binding.turn, id, targetPath);
-    const written = writes && activity.status === "completed" ? takeWrittenFile(binding.turn, targetPath, id) : undefined;
+    const written =
+      writes && activity.status === "completed"
+        ? takeWrittenFile(binding.turn, targetPath, id)
+        : undefined;
     if (finished) binding.turn?.openWriteActivities.delete(id);
     if (!binding.startedActivities.has(id)) {
       if (written?.created && step.toolName === "edit_file") {
@@ -967,10 +1050,13 @@ export class AcpHarnessRuntime {
       const startedToolName = binding.startedActivities.get(id) ?? step.toolName;
       const lineChanges = activity.lineChanges ?? written?.lineChanges;
       const producedFile =
-        written && targetPath && (startedToolName === "write_file" || startedToolName === "edit_file")
+        written &&
+        targetPath &&
+        (startedToolName === "write_file" || startedToolName === "edit_file")
           ? {
               relativePath: targetPath,
-              operation: startedToolName === "write_file" ? ("written" as const) : ("edited" as const),
+              operation:
+                startedToolName === "write_file" ? ("written" as const) : ("edited" as const),
               bytes: written.bytes,
             }
           : undefined;
@@ -1001,24 +1087,44 @@ export class AcpHarnessRuntime {
     if (!binding || !host || !binding.turn || request.sessionId !== binding.sessionId) {
       return { outcome: { outcome: "cancelled" } };
     }
-    const classification = this.definition.classifyPermission?.(request) ?? { kind: "approval" as const };
+    const classification = this.definition.classifyPermission?.(request) ?? {
+      kind: "approval" as const,
+    };
     const activity = binding.tracker.apply(request.toolCall);
     const id = `acp:${binding.sessionId}:${activity.id}`;
-    const step = classification.kind === "approval" ? timelineStepFor(activity, host.roots) : undefined;
+    const step =
+      classification.kind === "approval" ? timelineStepFor(activity, host.roots) : undefined;
     if (step && !binding.startedActivities.has(id)) {
       binding.startedActivities.set(id, step.toolName);
       host.activity.started(id, step.toolName, step.args);
     }
-    if (step && (step.toolName === "write_file" || step.toolName === "edit_file") && typeof step.args.path === "string") {
+    if (
+      step &&
+      (step.toolName === "write_file" || step.toolName === "edit_file") &&
+      typeof step.args.path === "string"
+    ) {
       noteOpenWriteActivity(binding.turn, id, step.args.path);
     }
     const turn = binding.turn;
-    const response = await answerPermission(request, classification, host, turn.controller.signal, step ? id : undefined);
+    const response = await answerPermission(
+      request,
+      classification,
+      host,
+      turn.controller.signal,
+      step ? id : undefined,
+    );
     const chosen =
       response.outcome.outcome === "selected"
-        ? request.options.find((candidate) => candidate.optionId === (response.outcome as { optionId: string }).optionId)
+        ? request.options.find(
+            (candidate) =>
+              candidate.optionId === (response.outcome as { optionId: string }).optionId,
+          )
         : undefined;
-    if (chosen?.kind.startsWith("allow") && classification.kind === "approval" && isMutation(request.toolCall.kind)) {
+    if (
+      chosen?.kind.startsWith("allow") &&
+      classification.kind === "approval" &&
+      isMutation(request.toolCall.kind)
+    ) {
       if (chosen.kind === "allow_always") binding.sessionWriteGrant = true;
       const paths = (request.toolCall.locations ?? []).map(
         (location) => canonicalDisplayPath(location.path) ?? path.resolve(location.path),
@@ -1035,7 +1141,10 @@ export class AcpHarnessRuntime {
     return response;
   }
 
-  private onBridgeCall(binding: Binding | undefined, invocation: BridgeInvocation): Promise<CallToolResult> {
+  private onBridgeCall(
+    binding: Binding | undefined,
+    invocation: BridgeInvocation,
+  ): Promise<CallToolResult> {
     if (!binding?.turn || binding.turn.abortRequested) {
       return Promise.resolve(toolError("Aiden cannot run this tool right now."));
     }
@@ -1113,7 +1222,8 @@ export class AcpHarnessRuntime {
     const current = this.bindings.get(binding.chatId);
     if (current) {
       const value = await current.catch(() => undefined);
-      if (value === binding && this.bindings.get(binding.chatId) === current) this.bindings.delete(binding.chatId);
+      if (value === binding && this.bindings.get(binding.chatId) === current)
+        this.bindings.delete(binding.chatId);
     }
     // A session closed mid-turn already received input its record does not count; resuming it
     // would send that input again, so the next turn starts a fresh session instead.
@@ -1121,7 +1231,10 @@ export class AcpHarnessRuntime {
     cancelTools(binding, "The agent session closed.");
     binding.buffered = [];
     binding.turn?.controller.abort();
-    await Promise.allSettled([binding.bridge?.close() ?? Promise.resolve(), binding.launched.dispose()]);
+    await Promise.allSettled([
+      binding.bridge?.close() ?? Promise.resolve(),
+      binding.launched.dispose(),
+    ]);
   }
 
   private async closeAll(): Promise<void> {
@@ -1129,8 +1242,8 @@ export class AcpHarnessRuntime {
     this.bindings.clear();
     const resolved = await Promise.all(pending.map((value) => value.catch(() => undefined)));
     await Promise.allSettled(
-      [...new Set([...this.live, ...resolved.filter((value): value is Binding => !!value)])].map((binding) =>
-        this.drop(binding),
+      [...new Set([...this.live, ...resolved.filter((value): value is Binding => !!value)])].map(
+        (binding) => this.drop(binding),
       ),
     );
   }
@@ -1143,8 +1256,10 @@ export class AcpHarnessRuntime {
   }
 
   private assertActive(): void {
-    if (this.disposed) throw new AcpHarnessError("unavailable", `${this.definition.label} is shutting down.`);
-    if (this.admissionClosed) throw new AcpHarnessError("unavailable", `${this.definition.label} is signing out.`);
+    if (this.disposed)
+      throw new AcpHarnessError("unavailable", `${this.definition.label} is shutting down.`);
+    if (this.admissionClosed)
+      throw new AcpHarnessError("unavailable", `${this.definition.label} is signing out.`);
   }
 }
 
@@ -1187,7 +1302,11 @@ function recordWrittenFile(turn: Turn, relativePath: string, entry: WrittenFileE
 
 const MAX_OPEN_WRITE_ACTIVITIES = 512;
 
-function noteOpenWriteActivity(turn: Turn | undefined, activityId: string, relativePath: string): void {
+function noteOpenWriteActivity(
+  turn: Turn | undefined,
+  activityId: string,
+  relativePath: string,
+): void {
   if (!turn || turn.openWriteActivities.has(activityId)) return;
   if (turn.openWriteActivities.size >= MAX_OPEN_WRITE_ACTIVITIES) {
     const oldest = turn.openWriteActivities.keys().next().value;
@@ -1200,7 +1319,8 @@ function noteOpenWriteActivity(turn: Turn | undefined, activityId: string, relat
 function openWriteActivityFor(turn: Turn, relativePath: string): string | undefined {
   const queue = turn.writtenFiles.get(relativePath) ?? [];
   for (const [activityId, target] of turn.openWriteActivities) {
-    if (target === relativePath && !queue.some((entry) => entry.activityId === activityId)) return activityId;
+    if (target === relativePath && !queue.some((entry) => entry.activityId === activityId))
+      return activityId;
   }
   return undefined;
 }
@@ -1210,12 +1330,18 @@ function openWriteActivityFor(turn: Turn, relativePath: string): string | undefi
  * else the oldest write no other open activity claimed (an agent may report a
  * creation only once it is done).
  */
-function takeWrittenFile(turn: Turn | undefined, relativePath: string, activityId: string): WrittenFileEntry | undefined {
+function takeWrittenFile(
+  turn: Turn | undefined,
+  relativePath: string,
+  activityId: string,
+): WrittenFileEntry | undefined {
   const queue = turn?.writtenFiles.get(relativePath);
   if (!queue) return undefined;
   let index = queue.findIndex((entry) => entry.activityId === activityId);
   if (index < 0) {
-    index = queue.findIndex((entry) => entry.activityId === undefined || !turn!.openWriteActivities.has(entry.activityId));
+    index = queue.findIndex(
+      (entry) => entry.activityId === undefined || !turn!.openWriteActivities.has(entry.activityId),
+    );
   }
   if (index < 0) return undefined;
   const [next] = queue.splice(index, 1);
@@ -1243,7 +1369,8 @@ function writeAllowed(binding: Binding, turn: Turn, host: AcpTurnHost, requested
   if (permission !== "ask") return false;
   if (binding.sessionWriteGrant) return true;
   // An "allow once" covers one write to that path.
-  if (turn.writeGrants.delete(canonicalDisplayPath(requested) ?? path.resolve(requested))) return true;
+  if (turn.writeGrants.delete(canonicalDisplayPath(requested) ?? path.resolve(requested)))
+    return true;
   if (turn.unscopedWriteGrants > 0) {
     turn.unscopedWriteGrants -= 1;
     return true;
@@ -1261,9 +1388,13 @@ function selectValues(option: SessionConfigOption): string[] {
   return output;
 }
 
-function currentConfigValue(options: readonly SessionConfigOption[], category: string): string | undefined {
+function currentConfigValue(
+  options: readonly SessionConfigOption[],
+  category: string,
+): string | undefined {
   const option = options.find(
-    (candidate) => (candidate.category === category || candidate.id === category) && candidate.type === "select",
+    (candidate) =>
+      (candidate.category === category || candidate.id === category) && candidate.type === "select",
   );
   return option && option.type === "select" ? option.currentValue : undefined;
 }
@@ -1271,7 +1402,8 @@ function currentConfigValue(options: readonly SessionConfigOption[], category: s
 function findToolResultIndex(messages: readonly Message[], id: string, name: string): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message?.role === "toolResult" && message.toolCallId === id && message.toolName === name) return index;
+    if (message?.role === "toolResult" && message.toolCallId === id && message.toolName === name)
+      return index;
   }
   return -1;
 }

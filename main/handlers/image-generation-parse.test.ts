@@ -17,19 +17,30 @@ const INVALID = /Invalid Image Generation request/u;
 
 test("requests are accepted only in their exact shape", () => {
   assert.deepEqual(parseProviderRequest({ provider: "fal" }), { provider: "fal" });
-  assert.deepEqual(parseSetKeyRequest({ provider: "replicate", key: "r8_abc" }), { provider: "replicate", key: "r8_abc" });
-  assert.deepEqual(parseSetModelEnabledRequest({ provider: "openrouter", id: "a/b", enabled: false }), {
-    provider: "openrouter",
-    id: "a/b",
-    enabled: false,
+  assert.deepEqual(parseSetKeyRequest({ provider: "replicate", key: "r8_abc" }), {
+    provider: "replicate",
+    key: "r8_abc",
   });
+  assert.deepEqual(
+    parseSetModelEnabledRequest({ provider: "openrouter", id: "a/b", enabled: false }),
+    {
+      provider: "openrouter",
+      id: "a/b",
+      enabled: false,
+    },
+  );
   assert.equal(parseSetDefaultModelRequest(null), null);
   assert.deepEqual(parseSetDefaultModelRequest({ provider: "fal", id: "fal-ai/flux/schnell" }), {
     provider: "fal",
     id: "fal-ai/flux/schnell",
   });
   assert.deepEqual(
-    parseAddCustomModelRequest({ provider: "fal", id: "acme/model", name: "", editEndpoint: "acme/model/edit" }),
+    parseAddCustomModelRequest({
+      provider: "fal",
+      id: "acme/model",
+      name: "",
+      editEndpoint: "acme/model/edit",
+    }),
     { provider: "fal", id: "acme/model", editEndpoint: "acme/model/edit" },
   );
 
@@ -48,7 +59,8 @@ test("requests are accepted only in their exact shape", () => {
     [parseAddCustomModelRequest, { provider: "fal", id: "a/b", acceptsReferenceImages: "true" }],
     [parseAddCustomModelRequest, { provider: "fal", id: "a/b", unknownField: 1 }],
   ];
-  for (const [parse, value] of rejected) assert.throws(() => parse(value), INVALID, JSON.stringify(value));
+  for (const [parse, value] of rejected)
+    assert.throws(() => parse(value), INVALID, JSON.stringify(value));
 });
 
 test("action results expose only known codes and messages", async () => {
@@ -81,16 +93,20 @@ test("action results expose only known codes and messages", async () => {
 
 test("bulk enable requests carry 1 to 2000 distinct, well-formed changes", () => {
   const change = (id: string, enabled = true) => ({ provider: "fal", id, enabled });
-  assert.deepEqual(parseSetModelsEnabledRequest({ changes: [change("a/b"), change("c/d", false)] }), {
-    changes: [
-      { provider: "fal", id: "a/b", enabled: true },
-      { provider: "fal", id: "c/d", enabled: false },
-    ],
-  });
+  assert.deepEqual(
+    parseSetModelsEnabledRequest({ changes: [change("a/b"), change("c/d", false)] }),
+    {
+      changes: [
+        { provider: "fal", id: "a/b", enabled: true },
+        { provider: "fal", id: "c/d", enabled: false },
+      ],
+    },
+  );
   // The same id under another provider is a different model.
   assert.equal(
-    parseSetModelsEnabledRequest({ changes: [change("a/b"), { provider: "replicate", id: "a/b", enabled: true }] })
-      .changes.length,
+    parseSetModelsEnabledRequest({
+      changes: [change("a/b"), { provider: "replicate", id: "a/b", enabled: true }],
+    }).changes.length,
     2,
   );
   const atLimit = Array.from({ length: 2000 }, (_, index) => change(`m/${index}`));
@@ -109,6 +125,10 @@ test("bulk enable requests carry 1 to 2000 distinct, well-formed changes", () =>
     { changes: [...atLimit, change("one/more")] },
   ];
   for (const value of rejected) {
-    assert.throws(() => parseSetModelsEnabledRequest(value), INVALID, JSON.stringify(value)?.slice(0, 80));
+    assert.throws(
+      () => parseSetModelsEnabledRequest(value),
+      INVALID,
+      JSON.stringify(value)?.slice(0, 80),
+    );
   }
 });

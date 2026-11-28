@@ -9,7 +9,12 @@ import { sanitizeSubagentSnapshotText } from "../../renderer/shared/subagent-saf
 import { boundedUnicodePrefix } from "../../renderer/shared/unicode-prefix.js";
 import { ChatProgressEvents } from "./chat-progress-events.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
-import { openCursorSse, sseFrame, type CursorSseHandle, type CursorSsePull } from "./aiden-remote-sse.js";
+import {
+  openCursorSse,
+  sseFrame,
+  type CursorSseHandle,
+  type CursorSsePull,
+} from "./aiden-remote-sse.js";
 import {
   parseAidenRemoteChatTaskProgress,
   parseAidenRemoteChatAgentRoster,
@@ -59,7 +64,10 @@ const PROGRESS_STREAMS_PER_DEVICE = 8;
 const PROGRESS_RETRY_AFTER_SECONDS = 5;
 
 type ProgressEventType = "task_update" | "agents_update" | "app_controls_changed";
-type ProgressSnapshot = AidenRemoteChatTaskProgress | AidenRemoteChatAgentRoster | { revision: number };
+type ProgressSnapshot =
+  | AidenRemoteChatTaskProgress
+  | AidenRemoteChatAgentRoster
+  | { revision: number };
 
 const ACTIVITY = {
   reading: "Reading",
@@ -85,10 +93,7 @@ export class AidenRemoteChatProgressService {
     string,
     { digest: string; revision: number; updatedAt: string }
   >();
-  private readonly subscribers = new Map<
-    ServerResponse,
-    { deviceId: string; close(): void }
-  >();
+  private readonly subscribers = new Map<ServerResponse, { deviceId: string; close(): void }>();
   /**
    * Snapshot revisions each recent event's stream had delivered, keyed by the
    * process-wide event sequence. A reconnect that presents one of these
@@ -114,15 +119,12 @@ export class AidenRemoteChatProgressService {
 
   private turnPublicId(chatId: string, generationId: string): string {
     return (
-      this.ports.publicTurnId?.(chatId, generationId) ??
-      this.publicId("turn", chatId, generationId)
+      this.ports.publicTurnId?.(chatId, generationId) ?? this.publicId("turn", chatId, generationId)
     );
   }
 
   private version(key: string, value: unknown) {
-    const digest = createHash("sha256")
-      .update(JSON.stringify(value))
-      .digest("hex");
+    const digest = createHash("sha256").update(JSON.stringify(value)).digest("hex");
     const cached = this.versions.get(key);
     if (cached?.digest === digest)
       return {
@@ -136,8 +138,7 @@ export class AidenRemoteChatProgressService {
       updatedAt: new Date(this.now()).toISOString(),
     };
     // Bounded metadata only; evicted entries receive a newer process-wide revision.
-    if (this.versions.size >= 512)
-      this.versions.delete(this.versions.keys().next().value!);
+    if (this.versions.size >= 512) this.versions.delete(this.versions.keys().next().value!);
     this.versions.set(key, next);
     return {
       epoch: this.epoch,
@@ -146,10 +147,7 @@ export class AidenRemoteChatProgressService {
     };
   }
 
-  async taskSnapshot(
-    deviceId: string,
-    chatId: string,
-  ): Promise<AidenRemoteChatTaskProgress> {
+  async taskSnapshot(deviceId: string, chatId: string): Promise<AidenRemoteChatTaskProgress> {
     await this.ports.authorize(deviceId, chatId, "tasks:read");
     const ticket = this.ports.events.revision(chatId);
     const active = this.ports.events.current(chatId);
@@ -165,8 +163,7 @@ export class AidenRemoteChatProgressService {
         })
       : await this.ports.readTodo(chatId);
     await this.ports.authorize(deviceId, chatId, "tasks:read");
-    if (ticket !== this.ports.events.revision(chatId))
-      return this.taskSnapshot(deviceId, chatId);
+    if (ticket !== this.ports.events.revision(chatId)) return this.taskSnapshot(deviceId, chatId);
     let value = {
       version: 1,
       chatId,
@@ -174,23 +171,24 @@ export class AidenRemoteChatProgressService {
       ...(todo.availability === "unavailable"
         ? { unavailableReason: todo.unavailableReason ?? "invalid_snapshot" }
         : {}),
-      tasks: todo.tasks.map(
-        ({ id, subject, status, activeForm, blockedBy }) => ({
-          id,
-          subject,
-          status,
-          ...(activeForm ? { activeForm } : {}),
-          ...(blockedBy ? { blockedBy } : {}),
-        }),
-      ),
+      tasks: todo.tasks.map(({ id, subject, status, activeForm, blockedBy }) => ({
+        id,
+        subject,
+        status,
+        ...(activeForm ? { activeForm } : {}),
+        ...(blockedBy ? { blockedBy } : {}),
+      })),
     };
     // Individually bounded labels/dependencies can still exceed the native
     // 1 MiB response/frame budget after JSON escaping. Keep room for metadata
     // and the SSE envelope; never send a snapshot that clients cannot decode.
     if (Buffer.byteLength(JSON.stringify(value), "utf8") > 1_000_000) {
       value = {
-        version: 1, chatId, availability: "unavailable",
-        unavailableReason: "invalid_snapshot", tasks: [],
+        version: 1,
+        chatId,
+        availability: "unavailable",
+        unavailableReason: "invalid_snapshot",
+        tasks: [],
       };
     }
     return parseAidenRemoteChatTaskProgress({
@@ -229,38 +227,24 @@ export class AidenRemoteChatProgressService {
     );
     const active = this.ports.events.current(chatId);
     const generationId = turnId
-      ? snapshots.find(
-          (run) => this.turnPublicId(chatId, run.generationId) === turnId,
-        )?.generationId
+      ? snapshots.find((run) => this.turnPublicId(chatId, run.generationId) === turnId)
+          ?.generationId
       : (active?.generationId ??
         chat.latestGenerationId ??
         snapshots.reduce<SubagentRunSnapshot | undefined>(
-          (latest, run) =>
-            !latest || run.startedAt > latest.startedAt ? run : latest,
+          (latest, run) => (!latest || run.startedAt > latest.startedAt ? run : latest),
           undefined,
         )?.generationId);
     if (turnId && !generationId)
-      throw new AidenRemoteServiceError(
-        "not_found",
-        "This turn is unavailable.",
-        404,
-      );
-    const selected = snapshots.filter(
-      (run) => run.generationId === generationId,
-    );
+      throw new AidenRemoteServiceError("not_found", "This turn is unavailable.", 404);
+    const selected = snapshots.filter((run) => run.generationId === generationId);
     // Never silently drop a parent or report an incorrect count when corrupt/oversized.
     if (selected.length > 64)
-      throw new AidenRemoteServiceError(
-        "internal_error",
-        "Agent progress is unavailable.",
-        500,
-      );
+      throw new AidenRemoteServiceError("internal_error", "Agent progress is unavailable.", 500);
     const agents: AidenRemoteChatAgent[] = selected.map((run) => {
       const terminal = AIDEN_REMOTE_CHAT_AGENT_TERMINAL_STATES.has(run.state);
       const state =
-        !terminal && active?.generationId !== run.generationId
-          ? "interrupted"
-          : run.state;
+        !terminal && active?.generationId !== run.generationId ? "interrupted" : run.state;
       const finished = AIDEN_REMOTE_CHAT_AGENT_TERMINAL_STATES.has(state);
       const milestone = run.milestones?.[run.milestones.length - 1];
       return {
@@ -272,8 +256,7 @@ export class AidenRemoteChatProgressService {
         revision: run.revision,
         role: run.role,
         label:
-          boundedUnicodePrefix(sanitizeSubagentSnapshotText(run.label), 120) ||
-          ROLES[run.role],
+          boundedUnicodePrefix(sanitizeSubagentSnapshotText(run.label), 120) || ROLES[run.role],
         // Private child instructions and reports are deliberately not projected.
         taskPreview: `${ROLES[run.role]} task`,
         state,
@@ -282,26 +265,19 @@ export class AidenRemoteChatProgressService {
         updatedAt: new Date(run.updatedAt).toISOString(),
         ...(finished
           ? {
-              finishedAt: new Date(
-                run.finishedAt ?? run.updatedAt,
-              ).toISOString(),
+              finishedAt: new Date(run.finishedAt ?? run.updatedAt).toISOString(),
             }
           : {}),
-        modelId:
-          boundedUnicodePrefix(sanitizeSubagentSnapshotText(run.modelId), 160) || "Model",
+        modelId: boundedUnicodePrefix(sanitizeSubagentSnapshotText(run.modelId), 160) || "Model",
         turns: run.turns,
         tools: run.tools,
         tokens: run.tokens,
         // The contract requires unique kinds; the upstream journal only skips
         // consecutive duplicates, so dedupe first-occurrence before emitting.
-        ...(run.milestones
-          ? { milestones: [...new Set(run.milestones)] }
-          : {}),
+        ...(run.milestones ? { milestones: [...new Set(run.milestones)] } : {}),
         // Closed producer facts (truncation/filtering) are safe to project;
         // raw error and warning strings stay private to the parent chat.
-        ...(run.projectionNotices?.length
-          ? { notices: [...new Set(run.projectionNotices)] }
-          : {}),
+        ...(run.projectionNotices?.length ? { notices: [...new Set(run.projectionNotices)] } : {}),
       };
     });
     await this.ports.authorize(deviceId, chatId, "agents:read");
@@ -316,9 +292,7 @@ export class AidenRemoteChatProgressService {
       );
     }
     const previousTurns = [...prior]
-      .sort(
-        (left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
-      )
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
       .slice(0, 16)
       .map(([id, startedAt]) => ({
         turnId: this.turnPublicId(chatId, id),
@@ -327,9 +301,7 @@ export class AidenRemoteChatProgressService {
     const value = {
       version: 1,
       chatId,
-      ...(generationId
-        ? { turnId: this.turnPublicId(chatId, generationId) }
-        : {}),
+      ...(generationId ? { turnId: this.turnPublicId(chatId, generationId) } : {}),
       availability: "ready",
       agents,
       ...(previousTurns.length ? { previousTurns } : {}),
@@ -416,14 +388,19 @@ export class AidenRemoteChatProgressService {
     response: ServerResponse,
     epoch?: string,
   ): Promise<void> {
-    let observesControls = Boolean(grants.has("app-controls:read") && this.ports.appControlsEnabled);
+    let observesControls = Boolean(
+      grants.has("app-controls:read") && this.ports.appControlsEnabled,
+    );
     if (observesControls) {
       try {
         await this.ports.authorize(deviceId, chatId, "app-controls:read");
       } catch (error) {
-        if (!(error instanceof AidenRemoteServiceError) ||
-            !["not_found", "capability_denied"].includes(error.code) ||
-            (!grants.has("tasks:read") && !grants.has("agents:read"))) throw error;
+        if (
+          !(error instanceof AidenRemoteServiceError) ||
+          !["not_found", "capability_denied"].includes(error.code) ||
+          (!grants.has("tasks:read") && !grants.has("agents:read"))
+        )
+          throw error;
         // An inapplicable projection (e.g. Bot controls) cannot tear down
         // separately authorized task/agent progress.
         observesControls = false;
@@ -459,15 +436,16 @@ export class AidenRemoteChatProgressService {
     let unsubscribe = () => {};
     let revalidate: ReturnType<typeof setInterval> | undefined;
     let scheduled: ReturnType<typeof setTimeout> | undefined;
-    const resumed = after > 0 && (epoch === undefined || epoch === this.epoch) ? this.cursors.get(after) : undefined;
+    const resumed =
+      after > 0 && (epoch === undefined || epoch === this.epoch)
+        ? this.cursors.get(after)
+        : undefined;
     const isResumed = resumed?.deviceId === deviceId && resumed.chatId === chatId;
     // Native clients drop live control snapshots when a stream disconnects, so
     // every successful subscription re-announces the controls revision even
     // when a warm resume suppresses unchanged task/agent snapshots.
     const sent = new Map<string, number>(
-      isResumed
-        ? [...resumed.sent].filter(([type]) => type !== "app_controls_changed")
-        : [],
+      isResumed ? [...resumed.sent].filter(([type]) => type !== "app_controls_changed") : [],
     );
     // Snapshots are full state, so a client that cannot keep up only needs the
     // newest of each kind: at most one per kind waits while the socket drains.
@@ -508,8 +486,7 @@ export class AidenRemoteChatProgressService {
           payload: snapshot,
         };
         frames.push(sseFrame(String(event.sequence), type, event));
-        if (this.cursors.size >= 1024)
-          this.cursors.delete(this.cursors.keys().next().value!);
+        if (this.cursors.size >= 1024) this.cursors.delete(this.cursors.keys().next().value!);
         this.cursors.set(event.sequence, { deviceId, chatId, sent: new Map(sent) });
       }
       return { frames };
@@ -572,7 +549,8 @@ export class AidenRemoteChatProgressService {
       void (async () => {
         try {
           if (grants.has("tasks:read")) await this.ports.authorize(deviceId, chatId, "tasks:read");
-          if (grants.has("agents:read")) await this.ports.authorize(deviceId, chatId, "agents:read");
+          if (grants.has("agents:read"))
+            await this.ports.authorize(deviceId, chatId, "agents:read");
           if (observesControls) await this.authorizeControls(deviceId, chatId);
         } catch {
           close();
@@ -590,8 +568,7 @@ export class AidenRemoteChatProgressService {
   }
 
   revokeDevice(deviceId: string): void {
-    for (const entry of this.subscribers.values())
-      if (entry.deviceId === deviceId) entry.close();
+    for (const entry of this.subscribers.values()) if (entry.deviceId === deviceId) entry.close();
     for (const [sequence, cursor] of this.cursors)
       if (cursor.deviceId === deviceId) this.cursors.delete(sequence);
   }

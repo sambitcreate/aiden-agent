@@ -90,7 +90,8 @@ export type ParsedCloneUrl =
 
 const INVALID_URL = "Enter an https:// or SSH repository URL, or owner/repo for GitHub.";
 const REPO_NAME = /^[A-Za-z0-9._-]+$/u;
-const HOST = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/u;
+const HOST =
+  /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/u;
 const GITHUB_OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u;
 const SCP_LIKE = /^([A-Za-z0-9._-]+)@([^:/\s]+):(.+)$/u;
 const SCP_PATH = /^[A-Za-z0-9._~/-]+$/u;

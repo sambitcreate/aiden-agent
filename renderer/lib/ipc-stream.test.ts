@@ -60,10 +60,7 @@ function installFakeBridge(
               }
             : undefined;
         },
-        onNotification: (
-          channel: string,
-          handler: (payload: unknown) => void,
-        ) => {
+        onNotification: (channel: string, handler: (payload: unknown) => void) => {
           const handlers = bridge.listeners.get(channel) ?? new Set();
           handlers.add(handler);
           bridge.listeners.set(channel, handlers);
@@ -107,10 +104,7 @@ function callbacks(): StreamCallbacks {
 }
 
 function listenerCount(bridge: FakeBridge): number {
-  return [...bridge.listeners.values()].reduce(
-    (total, listeners) => total + listeners.size,
-    0,
-  );
+  return [...bridge.listeners.values()].reduce((total, listeners) => total + listeners.size, 0);
 }
 
 test("lifecycle detachment releases subscriptions and notifies main exactly once", async () => {
@@ -143,17 +137,14 @@ test("lifecycle detachment releases subscriptions and notifies main exactly once
       "Visible before navigation",
     );
     assert.equal(
-      typeof detachedLifecycleChatProjection("chat-1", "workspace-1")
-        ?.lastTextDeltaAt,
+      typeof detachedLifecycleChatProjection("chat-1", "workspace-1")?.lastTextDeltaAt,
       "number",
     );
     await Promise.resolve();
     assert.equal(
       bridge.invokes.filter(
         ({ channel, args }) =>
-          channel === "chat:cancel" &&
-          args[0] === handle.streamId &&
-          args[1] === "lifecycle",
+          channel === "chat:cancel" && args[0] === handle.streamId && args[1] === "lifecycle",
       ).length,
       1,
     );
@@ -192,7 +183,14 @@ test("lifecycle detachment carries reasoning, timeline, artifacts and subagents 
         artifact: {
           version: 1,
           kind: "image",
-          attachment: { id: "att-1", name: "preview.png", mimeType: "image/png", kind: "image", size: 1, data: "AA==" },
+          attachment: {
+            id: "att-1",
+            name: "preview.png",
+            mimeType: "image/png",
+            kind: "image",
+            size: 1,
+            data: "AA==",
+          },
         },
       },
     });
@@ -226,8 +224,14 @@ test("lifecycle detachment carries reasoning, timeline, artifacts and subagents 
     const projection = detachedLifecycleChatProjection("chat-projection", "workspace-1");
     assert.equal(projection?.reasoning, "Weighing two layouts");
     assert.equal(projection?.timeline?.generationId, streamId);
-    assert.deepEqual(projection?.artifacts.map((artifact) => artifact.kind), ["image"]);
-    assert.deepEqual(projection?.subagents.map((snapshot) => snapshot.runId), ["run-1"]);
+    assert.deepEqual(
+      projection?.artifacts.map((artifact) => artifact.kind),
+      ["image"],
+    );
+    assert.deepEqual(
+      projection?.subagents.map((snapshot) => snapshot.runId),
+      ["run-1"],
+    );
   } finally {
     restore();
   }
@@ -329,17 +333,12 @@ test("subagent management sends no renderer-constructed authority tuple", async 
       subagentsApi.stop("chat-1", "run-1"),
       /invalid subagent control response/u,
     );
-    const request = bridge.invokes.find(
-      ({ channel }) => channel === "subagents:manage",
-    );
+    const request = bridge.invokes.find(({ channel }) => channel === "subagents:manage");
     assert.deepEqual(request, {
       channel: "subagents:manage",
       args: ["chat-1", { version: 2, action: "stop", runId: "run-1" }],
     });
-    assert.doesNotMatch(
-      JSON.stringify(request),
-      /authorityRevision|ownerDocumentId|workspaceId/u,
-    );
+    assert.doesNotMatch(JSON.stringify(request), /authorityRevision|ownerDocumentId|workspaceId/u);
   } finally {
     restore();
   }
@@ -667,57 +666,52 @@ test("approval details are forwarded only to their owning stream", () => {
 for (const [label, options] of [
   ["rejection", { rejectStart: true }],
   ["unaccepted result", { startResponse: { accepted: false, started: false } }],
-] as const) test(`a lifecycle-detached start ${label} clears through authoritative fallback`, async () => {
-  const { bridge, restore } = installFakeBridge(options);
-  const fallbacks: string[] = [];
-  const unsubscribe = subscribeDetachedTerminalChats(
-    (channel, handler) => {
-      const handlers = bridge.listeners.get(channel) ?? new Set();
-      handlers.add(handler);
-      bridge.listeners.set(channel, handlers);
-      return () => handlers.delete(handler);
-    },
-    () => undefined,
-    (owner) => {
-      fallbacks.push(owner.streamId);
-    },
-  );
-  let visibleErrors = 0;
-  try {
-    const handle = startGeneration(
-      {
-        chatId: "chat-rejected",
-        workspaceId: "workspace-1",
-        providerId: "provider-1",
-        model: "model-1",
+] as const)
+  test(`a lifecycle-detached start ${label} clears through authoritative fallback`, async () => {
+    const { bridge, restore } = installFakeBridge(options);
+    const fallbacks: string[] = [];
+    const unsubscribe = subscribeDetachedTerminalChats(
+      (channel, handler) => {
+        const handlers = bridge.listeners.get(channel) ?? new Set();
+        handlers.add(handler);
+        bridge.listeners.set(channel, handlers);
+        return () => handlers.delete(handler);
       },
-      {
-        ...callbacks(),
-        onError: () => {
-          visibleErrors += 1;
+      () => undefined,
+      (owner) => {
+        fallbacks.push(owner.streamId);
+      },
+    );
+    let visibleErrors = 0;
+    try {
+      const handle = startGeneration(
+        {
+          chatId: "chat-rejected",
+          workspaceId: "workspace-1",
+          providerId: "provider-1",
+          model: "model-1",
         },
-      },
-      "turn-rejected",
-    );
-    handle.cancel("lifecycle");
-    assert.equal(
-      isDetachedLifecycleChatDraining("chat-rejected", "workspace-1"),
-      true,
-    );
+        {
+          ...callbacks(),
+          onError: () => {
+            visibleErrors += 1;
+          },
+        },
+        "turn-rejected",
+      );
+      handle.cancel("lifecycle");
+      assert.equal(isDetachedLifecycleChatDraining("chat-rejected", "workspace-1"), true);
 
-    await Promise.resolve();
-    await Promise.resolve();
-    assert.deepEqual(fallbacks, [handle.streamId]);
-    assert.equal(
-      isDetachedLifecycleChatDraining("chat-rejected", "workspace-1"),
-      false,
-    );
-    assert.equal(visibleErrors, 0);
-  } finally {
-    unsubscribe();
-    restore();
-  }
-});
+      await Promise.resolve();
+      await Promise.resolve();
+      assert.deepEqual(fallbacks, [handle.streamId]);
+      assert.equal(isDetachedLifecycleChatDraining("chat-rejected", "workspace-1"), false);
+      assert.equal(visibleErrors, 0);
+    } finally {
+      unsubscribe();
+      restore();
+    }
+  });
 
 test("Stop returns accepted but unread Steer guidance to the mounted composer", () => {
   const { bridge, restore } = installFakeBridge();
@@ -758,8 +752,12 @@ test("a detached stream's unread Steer guidance is saved to the chat's draft", a
   const priorStorage = globalThis.localStorage;
   globalThis.localStorage = {
     getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => { values.set(key, value); },
-    removeItem: (key: string) => { values.delete(key); },
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
   } as Storage;
   const unsubscribe = subscribeDetachedTerminalChats(
     (channel, handler) => {
@@ -803,8 +801,12 @@ test("guidance returned after the terminal reaches the open composer or the stor
   const priorStorage = globalThis.localStorage;
   globalThis.localStorage = {
     getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => { values.set(key, value); },
-    removeItem: (key: string) => { values.delete(key); },
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
   } as Storage;
   const handlers = new Set<(payload: unknown) => void>();
   const unsubscribe = subscribeLateReturnedGuidance((channel, handler) => {
@@ -894,7 +896,12 @@ test("approval prompts keep the allow scopes main offered, and drop unknown ones
   const received: unknown[] = [];
   try {
     const generation = startGeneration(
-      { chatId: "chat-approval", workspaceId: "workspace-1", providerId: "provider-1", model: "model-1" },
+      {
+        chatId: "chat-approval",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
       { ...callbacks(), onApproval: (prompt) => received.push(prompt) },
       "turn-approval",
     );
@@ -907,11 +914,30 @@ test("approval prompts keep the allow scopes main offered, and drop unknown ones
         summary: "npm test",
         scopes: ["once", "chat", "forever"],
       });
-      handler({ streamId: generation.streamId, approvalId: "a-2", toolCallId: "call-2", toolName: "edit_file", summary: "Edit" });
+      handler({
+        streamId: generation.streamId,
+        approvalId: "a-2",
+        toolCallId: "call-2",
+        toolName: "edit_file",
+        summary: "Edit",
+      });
     }
     assert.deepEqual(received, [
-      { approvalId: "a-1", toolCallId: "call-1", toolName: "run_command", summary: "npm test", details: undefined, scopes: ["once", "chat"] },
-      { approvalId: "a-2", toolCallId: "call-2", toolName: "edit_file", summary: "Edit", details: undefined },
+      {
+        approvalId: "a-1",
+        toolCallId: "call-1",
+        toolName: "run_command",
+        summary: "npm test",
+        details: undefined,
+        scopes: ["once", "chat"],
+      },
+      {
+        approvalId: "a-2",
+        toolCallId: "call-2",
+        toolName: "edit_file",
+        summary: "Edit",
+        details: undefined,
+      },
     ]);
     generation.cancel("lifecycle");
   } finally {
@@ -980,10 +1006,7 @@ test("detachHandoffStream and claimChatHandoff forward the expected IPC payloads
       { channel: "chat:claimHandoff", args: [{ chatId: "chat-claim-1" }] },
       { channel: "chat:cancel", args: ["stream-unmounted", "lifecycle"] },
     ]);
-    assert.equal(
-      detachedLifecycleChatProjection("chat-unmounted", "ws-2")?.content,
-      "partial",
-    );
+    assert.equal(detachedLifecycleChatProjection("chat-unmounted", "ws-2")?.content, "partial");
   } finally {
     restore();
   }

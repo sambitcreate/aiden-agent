@@ -12,10 +12,10 @@ The note appears only after **2.5 seconds** of otherwise-silent generation. It i
 
 The user explicitly chooses its source in Settings:
 
-| Setting | Behavior | Network boundary |
-| --- | --- | --- |
-| **None** | Never create a progress note. | None |
-| **Apple Foundation Models** | Generate the note with the on-device system model, when the native helper reports ready. | On-device only |
+| Setting                       | Behavior                                                                                                                    | Network boundary                             |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| **None**                      | Never create a progress note.                                                                                               | None                                         |
+| **Apple Foundation Models**   | Generate the note with the on-device system model, when the native helper reports ready.                                    | On-device only                               |
 | **ChatGPT · GPT-5.5 Instant** | Generate the note through the user's healthy ChatGPT/Codex sign-in, when Aiden has verified an Instant-capable Codex route. | Sends the bounded current request to ChatGPT |
 
 The default is **Apple Foundation Models**, preserving the original on-device behavior. ChatGPT is an explicit opt-in, never an automatic fallback from Apple.
@@ -77,10 +77,7 @@ The provider call has a short deadline (target: 3 seconds) and is attempted at m
 Add a separate persisted setting:
 
 ```ts
-export type GenerationProgressProviderId =
-  | "none"
-  | "apple-foundation-models"
-  | "chatgpt-instant";
+export type GenerationProgressProviderId = "none" | "apple-foundation-models" | "chatgpt-instant";
 
 interface AppSettings {
   generationProgressProviderId?: GenerationProgressProviderId;
@@ -221,11 +218,11 @@ Expand the existing Apple Foundation Models card into a **Background helpers** s
 
 Add a **Progress note provider** selector:
 
-| Value | Label | Helper text / availability |
-| --- | --- | --- |
-| `none` | None | No interim acknowledgement is generated. |
-| `apple-foundation-models` | Apple Foundation Models | On this Mac; uses the existing readiness detail. |
-| `chatgpt-instant` | ChatGPT · GPT-5.5 Instant | Sends only the current request to ChatGPT; available after a healthy sign-in and verified Instant route. |
+| Value                     | Label                     | Helper text / availability                                                                               |
+| ------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `none`                    | None                      | No interim acknowledgement is generated.                                                                 |
+| `apple-foundation-models` | Apple Foundation Models   | On this Mac; uses the existing readiness detail.                                                         |
+| `chatgpt-instant`         | ChatGPT · GPT-5.5 Instant | Sends only the current request to ChatGPT; available after a healthy sign-in and verified Instant route. |
 
 Details:
 
@@ -318,14 +315,14 @@ Tasks:
 
 ## Test matrix
 
-| Area | Required cases |
-| --- | --- |
-| Foundation protocol | valid availability/title/progress responses; wrong method/field; malformed JSON; bounds; unavailable; cancellation; timeout |
-| Coordinator | 2.5-second boundary; one emission; fast text; reasoning; tool; approval; loading; done/error; user stop; owner invalidation; workspace cancellation; shutdown; late provider result |
-| Settings | enum validation; default; persisted unavailable ChatGPT choice; unavailable Apple choice; UI disabled/description states |
-| ChatGPT | signed out; needs attention; catalog lacks Instant; verified Instant; model unavailable does not poison OAuth health; abort request |
-| Renderer | subscription before start; stream isolation; note is not persisted; clear/fade paths; scroll; light/dark; Reduce Motion; one polite announcement |
-| Regression | chat-title routing, manual Rename with Apple, local loading status, Codex sign-in/out, normal chat streaming, activity feed |
+| Area                | Required cases                                                                                                                                                                      |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Foundation protocol | valid availability/title/progress responses; wrong method/field; malformed JSON; bounds; unavailable; cancellation; timeout                                                         |
+| Coordinator         | 2.5-second boundary; one emission; fast text; reasoning; tool; approval; loading; done/error; user stop; owner invalidation; workspace cancellation; shutdown; late provider result |
+| Settings            | enum validation; default; persisted unavailable ChatGPT choice; unavailable Apple choice; UI disabled/description states                                                            |
+| ChatGPT             | signed out; needs attention; catalog lacks Instant; verified Instant; model unavailable does not poison OAuth health; abort request                                                 |
+| Renderer            | subscription before start; stream isolation; note is not persisted; clear/fade paths; scroll; light/dark; Reduce Motion; one polite announcement                                    |
+| Regression          | chat-title routing, manual Rename with Apple, local loading status, Codex sign-in/out, normal chat streaming, activity feed                                                         |
 
 ## Acceptance criteria
 

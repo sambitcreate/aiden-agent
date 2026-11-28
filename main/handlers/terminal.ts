@@ -148,7 +148,12 @@ export function registerTerminalHandlers(): void {
     // reach the shell in the order they were typed.
     const place = terminalInput.enter(id);
     try {
-      await withSessionAccess(owner, id, () => terminalService.write(id, data, owner), place.previous);
+      await withSessionAccess(
+        owner,
+        id,
+        () => terminalService.write(id, data, owner),
+        place.previous,
+      );
     } finally {
       place.done();
     }

@@ -53,7 +53,13 @@ export function DeviceFeatureSections(props: {
         <ToolsSection title="Accessibility">
           <Row label="Overlay element frames">
             {props.axOverlay && !local ? (
-              <Button size="small" variant="transparent" iconOnly aria-label="Read element frames again" onClick={props.onAxRefresh}>
+              <Button
+                size="small"
+                variant="transparent"
+                iconOnly
+                aria-label="Read element frames again"
+                onClick={props.onAxRefresh}
+              >
                 <RefreshCw aria-hidden />
               </Button>
             ) : null}
@@ -69,7 +75,8 @@ export function DeviceFeatureSections(props: {
             </Text>
           ) : (
             <Text variant="small" color="secondary">
-              Hover the screen to see an element&apos;s label and role. Frames show on the flat screen.
+              Hover the screen to see an element&apos;s label and role. Frames show on the flat
+              screen.
             </Text>
           )}
         </ToolsSection>

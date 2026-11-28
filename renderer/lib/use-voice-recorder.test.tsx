@@ -97,7 +97,12 @@ function installCapture() {
 
 test("composer dictation on device sends the raw recording to the model and delivers its transcript", async () => {
   const calls = installBotTestIpc({
-    "voice:resolveProvider": () => ({ kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true }),
+    "voice:resolveProvider": () => ({
+      kind: "ready",
+      provider: "local",
+      modelId: "parakeet-v3",
+      automatic: true,
+    }),
     "localVoice:warm": () => undefined,
     "voice:transcribeLocal": () => "  hello there  ",
   });
@@ -123,7 +128,12 @@ test("composer dictation on device sends the raw recording to the model and deli
 
 test("a model that can keep up shows live words while recording, and the final decode replaces them", async () => {
   const calls = installBotTestIpc({
-    "voice:resolveProvider": () => ({ kind: "ready", provider: "local", modelId: "parakeet-v3-metal", automatic: true }),
+    "voice:resolveProvider": () => ({
+      kind: "ready",
+      provider: "local",
+      modelId: "parakeet-v3-metal",
+      automatic: true,
+    }),
     "localVoice:warm": () => undefined,
     "voice:localLiveStart": () => ({ sessionId: "live-1" }),
     "voice:localLivePush": () => undefined,
@@ -142,10 +152,26 @@ test("a model that can keep up shows live words while recording, and the final d
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "voice:localLivePush")));
   const push = calls.find((call) => call.channel === "voice:localLivePush")!;
   assert.equal(push.args[0], "live-1");
-  assert.equal((push.args[1] as ArrayBuffer).byteLength, 6_400, "two 100 ms chunks of 16 kHz PCM16");
+  assert.equal(
+    (push.args[1] as ArrayBuffer).byteLength,
+    6_400,
+    "two 100 ms chunks of 16 kHz PCM16",
+  );
 
-  act(() => emitBotTestNotification("voice:stream-text", { sessionId: "other", committed: "not", tentative: "mine" }));
-  act(() => emitBotTestNotification("voice:stream-text", { sessionId: "live-1", committed: "hello", tentative: "there" }));
+  act(() =>
+    emitBotTestNotification("voice:stream-text", {
+      sessionId: "other",
+      committed: "not",
+      tentative: "mine",
+    }),
+  );
+  act(() =>
+    emitBotTestNotification("voice:stream-text", {
+      sessionId: "live-1",
+      committed: "hello",
+      tentative: "there",
+    }),
+  );
   assert.deepEqual(result.current.liveTranscript, { committed: "hello", tentative: "there" });
 
   act(() => result.current.stop());
@@ -155,7 +181,10 @@ test("a model that can keep up shows live words while recording, and the final d
     assert.deepEqual(result.current.liveTranscript, { committed: "", tentative: "" });
   });
   const order = calls.map((call) => call.channel);
-  assert.ok(order.indexOf("voice:localLiveStop") < order.indexOf("voice:transcribeLocal"), order.join(", "));
+  assert.ok(
+    order.indexOf("voice:localLiveStop") < order.indexOf("voice:transcribeLocal"),
+    order.join(", "),
+  );
   // The final decode still gets the whole recording, not just what the preview saw.
   const final = calls.find((call) => call.channel === "voice:transcribeLocal")!;
   assert.ok((final.args[0] as ArrayBuffer).byteLength > 6_400);
@@ -163,13 +192,20 @@ test("a model that can keep up shows live words while recording, and the final d
 
 test("a composer recording that reaches the on-device limit stops and transcribes what was kept, once", async () => {
   const calls = installBotTestIpc({
-    "voice:resolveProvider": () => ({ kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true }),
+    "voice:resolveProvider": () => ({
+      kind: "ready",
+      provider: "local",
+      modelId: "parakeet-v3",
+      automatic: true,
+    }),
     "localVoice:warm": () => undefined,
     "voice:transcribeLocal": () => "kept words",
   });
   installCapture();
   const heard: string[] = [];
-  const { result } = renderHook(() => useVoiceRecorder((text) => heard.push(text), { maxRecordingSamples: 1_000 }));
+  const { result } = renderHook(() =>
+    useVoiceRecorder((text) => heard.push(text), { maxRecordingSamples: 1_000 }),
+  );
   await act(() => result.current.start());
   assert.equal(result.current.recording, true);
   // Two posts make one whole 100 ms chunk (1,600 samples), past the 1,000-sample limit.
@@ -190,6 +226,10 @@ test("a composer recording that reaches the on-device limit stops and transcribe
   await new Promise((resolve) => setTimeout(resolve, 50));
   const sent = calls.filter((call) => call.channel === "voice:transcribeLocal");
   assert.equal(sent.length, 1);
-  assert.equal((sent[0]!.args[0] as ArrayBuffer).byteLength, 2_000, "exactly the kept 1,000 samples");
+  assert.equal(
+    (sent[0]!.args[0] as ArrayBuffer).byteLength,
+    2_000,
+    "exactly the kept 1,000 samples",
+  );
   assert.deepEqual(heard, ["kept words"]);
 });

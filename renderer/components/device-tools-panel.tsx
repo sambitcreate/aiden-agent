@@ -9,7 +9,17 @@
  */
 import * as React from "react";
 import { X } from "lucide-react";
-import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, Text } from "./ui";
+import {
+  Button,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Switch,
+  Text,
+} from "./ui";
 import type { DeviceControls } from "../lib/device-controls";
 import { DeviceHostDiagnostics } from "./device-host-diagnostics";
 import {
@@ -48,7 +58,10 @@ const TOGGLE_LABELS: Record<DeviceToggle, string> = {
   networkEnabled: "Network (Wi-Fi and data)",
 };
 
-export const DEVICE_ORIENTATION_OPTIONS: ReadonlyArray<{ value: DeviceOrientationValue; label: string }> = [
+export const DEVICE_ORIENTATION_OPTIONS: ReadonlyArray<{
+  value: DeviceOrientationValue;
+  label: string;
+}> = [
   { value: "portrait", label: "Portrait" },
   { value: "landscape_left", label: "Landscape" },
 ];
@@ -95,7 +108,13 @@ export function DeviceToolsPanel({
         <Text id="device-tools-title" variant="small-strong">
           Device tools
         </Text>
-        <Button variant="transparent" size="small" iconOnly aria-label="Close device tools" onClick={onClose}>
+        <Button
+          variant="transparent"
+          size="small"
+          iconOnly
+          aria-label="Close device tools"
+          onClick={onClose}
+        >
           <X aria-hidden />
         </Button>
       </header>
@@ -235,11 +254,17 @@ export function DeviceToolsPanel({
         <PermissionsSection
           defaultAppId={foregroundApp?.id ?? ""}
           appIdLabel={appIdLabel}
-          permissions={android ? PERMISSIONS.filter((option) => isAndroidPermission(option.value)) : PERMISSIONS}
+          permissions={
+            android
+              ? PERMISSIONS.filter((option) => isAndroidPermission(option.value))
+              : PERMISSIONS
+          }
           // Android has no reset; a revoke returns a runtime permission to "ask".
           decisions={android ? ["grant", "revoke"] : ["grant", "revoke", "reset"]}
           disabled={disabled}
-          onDecide={(appId, permission, decision) => act({ type: "setPermission", appId, permission, decision })}
+          onDecide={(appId, permission, decision) =>
+            act({ type: "setPermission", appId, permission, decision })
+          }
         />
 
         {android ? null : (
@@ -250,7 +275,9 @@ export function DeviceToolsPanel({
               action="Send"
               disabled={disabled || !foregroundApp}
               onSubmit={(payload) =>
-                foregroundApp ? act({ type: "sendPush", appId: foregroundApp.id, payload }) : Promise.resolve(false)
+                foregroundApp
+                  ? act({ type: "sendPush", appId: foregroundApp.id, payload })
+                  : Promise.resolve(false)
               }
             />
             {!foregroundApp ? (
@@ -377,16 +404,28 @@ function SubmitRow(props: {
         autoCapitalize="off"
         onChange={(event) => setValue(event.target.value)}
       />
-      <Button type="submit" size="small" variant="muted" disabled={props.disabled || value.trim().length === 0}>
+      <Button
+        type="submit"
+        size="small"
+        variant="muted"
+        disabled={props.disabled || value.trim().length === 0}
+      >
         {props.action}
       </Button>
     </form>
   );
 }
 
-const DECISION_LABELS: Record<DevicePermissionDecision, string> = { grant: "Grant", revoke: "Revoke", reset: "Reset" };
+const DECISION_LABELS: Record<DevicePermissionDecision, string> = {
+  grant: "Grant",
+  revoke: "Revoke",
+  reset: "Reset",
+};
 
-export function parseCoordinates(latitude: string, longitude: string): { latitude: number; longitude: number } | null {
+export function parseCoordinates(
+  latitude: string,
+  longitude: string,
+): { latitude: number; longitude: number } | null {
   if (latitude.trim() === "" || longitude.trim() === "") return null;
   const parsed = { latitude: Number(latitude), longitude: Number(longitude) };
   if (!Number.isFinite(parsed.latitude) || !Number.isFinite(parsed.longitude)) return null;
@@ -455,7 +494,9 @@ function LocationSection(props: {
           size="small"
           variant="muted"
           disabled={props.disabled || !coordinates}
-          onClick={() => coordinates && void props.onSet(coordinates.latitude, coordinates.longitude)}
+          onClick={() =>
+            coordinates && void props.onSet(coordinates.latitude, coordinates.longitude)
+          }
         >
           Set
         </Button>
@@ -484,12 +525,17 @@ function PermissionsSection(props: {
   permissions: ReadonlyArray<{ value: DevicePermission; label: string }>;
   decisions: readonly DevicePermissionDecision[];
   disabled: boolean;
-  onDecide(appId: string, permission: DevicePermission, decision: DevicePermissionDecision): Promise<boolean>;
+  onDecide(
+    appId: string,
+    permission: DevicePermission,
+    decision: DevicePermissionDecision,
+  ): Promise<boolean>;
 }) {
   const [appId, setAppId] = React.useState("");
   const [permission, setPermission] = React.useState<DevicePermission>("camera");
   const resolvedAppId = appId.trim() || props.defaultAppId;
-  const decide = (decision: DevicePermissionDecision) => void props.onDecide(resolvedAppId, permission, decision);
+  const decide = (decision: DevicePermissionDecision) =>
+    void props.onDecide(resolvedAppId, permission, decision);
   const unavailable = props.disabled || !resolvedAppId;
   return (
     <ToolsSection title="Permissions">

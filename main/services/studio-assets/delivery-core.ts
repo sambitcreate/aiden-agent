@@ -80,7 +80,10 @@ export class StudioAssetGrants {
       return grantUrl(existing);
     }
     if (!this.documentListeners.has(documentKey)) {
-      this.documentListeners.set(documentKey, owner.onInvalidated(() => this.revokeDocument(documentKey)));
+      this.documentListeners.set(
+        documentKey,
+        owner.onInvalidated(() => this.revokeDocument(documentKey)),
+      );
     }
     const token = this.token();
     this.grants.set(token, { assetId, rendition, documentKey, dedupeKey, owner });

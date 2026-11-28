@@ -23,8 +23,7 @@ test("macOS menu retains application services and update entry", () => {
   });
   assert.equal(menu[0]?.label, "Aiden Agent");
   assert.ok(
-    Array.isArray(menu[0]?.submenu) &&
-      menu[0].submenu.some((item) => item.role === "services"),
+    Array.isArray(menu[0]?.submenu) && menu[0].submenu.some((item) => item.role === "services"),
   );
   assert.ok(
     Array.isArray(menu[0]?.submenu) &&
@@ -73,7 +72,11 @@ test("macOS gets View, Go and Chat menus, and Help lists Keyboard Shortcuts", ()
   const menu = applicationMenuTemplate({
     platform: "darwin",
     appName: "Aiden Agent",
-    bindings: { "shortcuts.show": "Command+/", "sidebar.toggle": "Command+B", "chat.find": "Command+F" },
+    bindings: {
+      "shortcuts.show": "Command+/",
+      "sidebar.toggle": "Command+B",
+      "chat.find": "Command+F",
+    },
     actions,
   });
   assert.deepEqual(
@@ -131,7 +134,13 @@ test("on a Mac a menu item runs when chosen, by mouse or Return, but not when a 
 
 test("menu items grey out while the app can't run them, once it has said what it can run", () => {
   const build = (available: ReadonlySet<string> | null) =>
-    applicationMenuTemplate({ platform: "darwin", appName: "Aiden Agent", bindings: {}, actions, available });
+    applicationMenuTemplate({
+      platform: "darwin",
+      appName: "Aiden Agent",
+      bindings: {},
+      actions,
+      available,
+    });
   const before = submenu(build(null), "Chat");
   assert.equal(item(before, "Rename…").enabled, true, "everything works until the app reports");
   const menu = build(new Set(["chat.find", "navigate.back"]));
@@ -144,10 +153,10 @@ test("menu items grey out while the app can't run them, once it has said what it
 });
 
 test("the app's list of runnable commands keeps only known command ids", () => {
-  assert.deepEqual([...(parseMenuCommandIds(["chat.find", "nope", 3, null, "navigate.back"]) ?? [])], [
-    "chat.find",
-    "navigate.back",
-  ]);
+  assert.deepEqual(
+    [...(parseMenuCommandIds(["chat.find", "nope", 3, null, "navigate.back"]) ?? [])],
+    ["chat.find", "navigate.back"],
+  );
   assert.equal(parseMenuCommandIds("chat.find"), null);
   assert.equal(parseMenuCommandIds(undefined), null);
 });

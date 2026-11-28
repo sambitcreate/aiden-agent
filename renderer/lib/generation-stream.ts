@@ -2,8 +2,15 @@
 // startGeneration subscribes here before invoking main, so no opening tokens
 // are dropped.
 import { parseAgentsInstructionNotices } from "../shared/agents-instructions-notice";
-import { parseAskUserQuestionPrompt, type AskUserQuestionPromptV1 } from "../shared/ask-user-question";
-import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";
+import {
+  parseAskUserQuestionPrompt,
+  type AskUserQuestionPromptV1,
+} from "../shared/ask-user-question";
+import {
+  chatArtifactIdentity,
+  parseChatArtifactEventV1,
+  type ChatArtifactV1,
+} from "../shared/chat-artifacts";
 import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
 import { reduceUiVisuals } from "./ui-visual-transcript";
 import { parseChatContextPressureNotification } from "../shared/context-pressure";
@@ -19,7 +26,10 @@ import { parseToolApprovalScope } from "../shared/tool-approval-scope";
 import { parseToolApprovalPreview } from "../shared/tool-approval-preview";
 import { parseCommandReading } from "../shared/command-reading";
 import { parseTodoSnapshotView } from "../shared/todo";
-import { restoreUndeliveredGuidance, undeliveredGuidanceFromTerminal } from "./composer-draft-store";
+import {
+  restoreUndeliveredGuidance,
+  undeliveredGuidanceFromTerminal,
+} from "./composer-draft-store";
 import type { ApprovalPrompt, ChatStatusPhase, StreamCallbacks, ToolPhase } from "./ipc";
 import { onNotification } from "./ipc-bridge";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
@@ -54,10 +64,14 @@ const MAX_HOOK_MESSAGE_CHARS = 500;
 function parseHookMessages(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
-    .filter((message): message is string => typeof message === "string" && message.trim().length > 0)
+    .filter(
+      (message): message is string => typeof message === "string" && message.trim().length > 0,
+    )
     .slice(0, MAX_HOOK_MESSAGES)
     .map((message) =>
-      message.length > MAX_HOOK_MESSAGE_CHARS ? `${message.slice(0, MAX_HOOK_MESSAGE_CHARS - 1)}…` : message,
+      message.length > MAX_HOOK_MESSAGE_CHARS
+        ? `${message.slice(0, MAX_HOOK_MESSAGE_CHARS - 1)}…`
+        : message,
     );
 }
 interface ChatDone {
@@ -211,11 +225,18 @@ export function subscribeGenerationStream(
   let projectedLastTextDeltaAt: number | null = initialProjection?.lastTextDeltaAt ?? null;
   let projectedReasoning = initialProjection?.reasoning ?? "";
   let projectedTimeline: GenerationTimeline | null = initialProjection?.timeline ?? null;
-  let projectedArtifacts: ChatArtifactV1[] = initialProjection?.artifacts ? [...initialProjection.artifacts] : [];
-  let projectedUiVisuals: ChatUiVisualV1[] = initialProjection?.uiVisuals ? [...initialProjection.uiVisuals] : [];
-  let projectedSubagents: SubagentRunSnapshot[] = initialProjection?.subagents ? [...initialProjection.subagents] : [];
+  let projectedArtifacts: ChatArtifactV1[] = initialProjection?.artifacts
+    ? [...initialProjection.artifacts]
+    : [];
+  let projectedUiVisuals: ChatUiVisualV1[] = initialProjection?.uiVisuals
+    ? [...initialProjection.uiVisuals]
+    : [];
+  let projectedSubagents: SubagentRunSnapshot[] = initialProjection?.subagents
+    ? [...initialProjection.subagents]
+    : [];
   // Folding never mutates a map, so the handed-over one can seed this as is.
-  let projectedSubagentTranscripts: LiveSubagentTranscripts | undefined = initialProjection?.subagentTranscripts;
+  let projectedSubagentTranscripts: LiveSubagentTranscripts | undefined =
+    initialProjection?.subagentTranscripts;
   const unsubs: Array<() => void> = [];
   const handlers = new Map<GenerationStreamChannel, (payload: unknown) => void>();
   let disposed = false;
@@ -224,7 +245,7 @@ export function subscribeGenerationStream(
     for (const u of unsubs) u();
     unsubs.length = 0;
   };
-  const register = <T,>(
+  const register = <T>(
     channel: GenerationStreamChannel,
     handler: (payload: T) => void,
     unsubscribe: () => void,
@@ -352,7 +373,11 @@ export function subscribeGenerationStream(
       }
       callbacks.onArtifactEvent?.(event);
     };
-    register("chat:artifact", onArtifact, onNotification<ChatArtifactNotification>("chat:artifact", onArtifact));
+    register(
+      "chat:artifact",
+      onArtifact,
+      onNotification<ChatArtifactNotification>("chat:artifact", onArtifact),
+    );
   }
   if (callbacks.onSubagents) {
     const onSubagents = (p: ChatSubagents) => {
@@ -366,7 +391,11 @@ export function subscribeGenerationStream(
         callbacks.onSubagents?.(snapshot);
       }
     };
-    register("chat:subagents", onSubagents, onNotification<ChatSubagents>("chat:subagents", onSubagents));
+    register(
+      "chat:subagents",
+      onSubagents,
+      onNotification<ChatSubagents>("chat:subagents", onSubagents),
+    );
   }
   // Folded whenever helpers are shown, so a detached run hands them over.
   if (callbacks.onSubagents || callbacks.onSubagentTranscript) {
@@ -407,7 +436,9 @@ export function subscribeGenerationStream(
           return reading ? { reading } : {};
         })(),
         // Offered allow scopes ("this chat", "always"); absent means once only.
-        ...(Array.isArray(p.scopes) ? { scopes: p.scopes.filter((entry) => parseToolApprovalScope(entry)) } : {}),
+        ...(Array.isArray(p.scopes)
+          ? { scopes: p.scopes.filter((entry) => parseToolApprovalScope(entry)) }
+          : {}),
         ...(typeof p.canAllow === "boolean" ? { canAllow: p.canAllow } : {}),
       });
   };
@@ -456,7 +487,9 @@ export function subscribeGenerationStream(
       artifacts: projectedArtifacts,
       uiVisuals: projectedUiVisuals,
       subagents: projectedSubagents,
-      ...(projectedSubagentTranscripts ? { subagentTranscripts: projectedSubagentTranscripts } : {}),
+      ...(projectedSubagentTranscripts
+        ? { subagentTranscripts: projectedSubagentTranscripts }
+        : {}),
     }),
   };
 }

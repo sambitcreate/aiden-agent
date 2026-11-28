@@ -27,7 +27,8 @@ import { fileBotFolderGrantJournal } from "./bot-folder-grant-journal.js";
 import { botAccessPrivateRoots } from "./bot-runtime/bot-access-target.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
 
-const approvedFolderRuntime = async () => (await import("./aiden-remote-service-main.js")).getAidenRemoteRuntime();
+const approvedFolderRuntime = async () =>
+  (await import("./aiden-remote-service-main.js")).getAidenRemoteRuntime();
 
 export const botApplicationService = createBotApplicationService({
   botStore,
@@ -36,7 +37,10 @@ export const botApplicationService = createBotApplicationService({
   catalog: botCapabilityCatalog,
   // Loaded on use: the model runtime is heavy and Bot startup doesn't need it.
   modelThinkingLevels: async (providerId, modelId) => {
-    const [{ resolveRuntimeModelMetadata }, { botRoutineModelThinkingLevels }] = await Promise.all([import("./model-runtime.js"), import("./bot-routine-models.js")]);
+    const [{ resolveRuntimeModelMetadata }, { botRoutineModelThinkingLevels }] = await Promise.all([
+      import("./model-runtime.js"),
+      import("./bot-routine-models.js"),
+    ]);
     return botRoutineModelThinkingLevels(await resolveRuntimeModelMetadata(providerId, modelId));
   },
   managedWorkspace: botManagedWorkspace,
@@ -46,10 +50,19 @@ export const botApplicationService = createBotApplicationService({
   inventoryLeases: botRuntimeInventoryLeases,
   approvedFolders: {
     list: async () => (await (await approvedFolderRuntime()).state.snapshot()).approvedRoots,
-    add: async (folderPath, input) => (await approvedFolderRuntime()).approvedRoots.addLocalFolder(folderPath, { ...input, botsOnly: true }),
-    removeOwned: async (rootId, operationId) => (await approvedFolderRuntime()).approvedRoots.removeLocalRoot(rootId, operationId),
-    withInventoryLock: async (action) => (await approvedFolderRuntime()).approvedRoots.withInventoryLock(action),
-    target: { homeDirectory: os.homedir, privateRoots: () => botAccessPrivateRoots(app.getPath("userData"), aidenConfigDir()) },
+    add: async (folderPath, input) =>
+      (await approvedFolderRuntime()).approvedRoots.addLocalFolder(folderPath, {
+        ...input,
+        botsOnly: true,
+      }),
+    removeOwned: async (rootId, operationId) =>
+      (await approvedFolderRuntime()).approvedRoots.removeLocalRoot(rootId, operationId),
+    withInventoryLock: async (action) =>
+      (await approvedFolderRuntime()).approvedRoots.withInventoryLock(action),
+    target: {
+      homeDirectory: os.homedir,
+      privateRoots: () => botAccessPrivateRoots(app.getPath("userData"), aidenConfigDir()),
+    },
     journal: fileBotFolderGrantJournal(() => app.getPath("userData")),
   },
   deleteChatWithEffects: (chatId, assertCurrent, onDeletionRollForward) =>
@@ -85,10 +98,8 @@ export function initializeBotApplicationService(): Promise<void> {
       await botApplicationService.initialize();
       await reconcileTelegramBotBindings({
         listBindings: () => telegramBotBindings.list(),
-        disableBinding: (botId) =>
-          telegramBotBindingAuthority.disableBot(botId),
-        withBotMutation: (botId, action) =>
-          botApplicationService.withBotMutation(botId, action),
+        disableBinding: (botId) => telegramBotBindingAuthority.disableBot(botId),
+        withBotMutation: (botId, action) => botApplicationService.withBotMutation(botId, action),
         getChat: (chatId) => chatStore.get(chatId),
         getChatAccess: (chatId) => botApplicationService.getChatAccess(chatId),
       });
@@ -99,8 +110,11 @@ export function initializeBotApplicationService(): Promise<void> {
         .then(async ({ initializeBotSessionRuntime, reconcileBotAllowList }) => {
           // Journal recovery is complete. Reconcile historical obligations,
           // without publishing new consent or restoring ephemeral run access.
-          try { await reconcileBotAllowList(); }
-          catch (error) { logger.warn("bots", "Bot approval history could not be reconciled.", error); }
+          try {
+            await reconcileBotAllowList();
+          } catch (error) {
+            logger.warn("bots", "Bot approval history could not be reconciled.", error);
+          }
           await initializeBotSessionRuntime();
         })
         .catch((error: unknown) => logger.error("bots", "The Bot runtime could not start.", error));

@@ -47,8 +47,10 @@ export const settingsApi = {
     invoke<AppSettings>("settings:setGoogleThinking", modelId, level),
   setCodexThinking: (modelId: string, level: CodexThinkingLevel) =>
     invoke<AppSettings>("settings:setCodexThinking", modelId, level),
-  setCompactionModelBudget: (modelKey: string, budget: import("../shared/compaction").CompactionModelBudget | null) =>
-    invoke<AppSettings>("settings:setCompactionModelBudget", modelKey, budget),
+  setCompactionModelBudget: (
+    modelKey: string,
+    budget: import("../shared/compaction").CompactionModelBudget | null,
+  ) => invoke<AppSettings>("settings:setCompactionModelBudget", modelKey, budget),
   setAnthropicThinking: (modelId: string, level: AnthropicThinkingLevel) =>
     invoke<AppSettings>("settings:setAnthropicThinking", modelId, level),
   setProviderThinking: (
@@ -82,9 +84,11 @@ export const voiceApi = {
   cancelLocalTranscription: (operationId: string) =>
     invoke<void>("voice:transcribeLocalCancel", operationId),
   /** Live text for an on-device model fast enough to decode while you speak; null otherwise. */
-  localLiveStart: (modelId: string) => invoke<{ sessionId: string } | null>("voice:localLiveStart", modelId),
+  localLiveStart: (modelId: string) =>
+    invoke<{ sessionId: string } | null>("voice:localLiveStart", modelId),
   /** Native-order PCM16 samples captured since the last push. */
-  localLivePush: (sessionId: string, pcm: ArrayBuffer) => invoke<void>("voice:localLivePush", sessionId, pcm),
+  localLivePush: (sessionId: string, pcm: ArrayBuffer) =>
+    invoke<void>("voice:localLivePush", sessionId, pcm),
   localLiveStop: (sessionId: string) => invoke<void>("voice:localLiveStop", sessionId),
   streamStart: () => invoke<{ sessionId: string }>("voice:streamStart"),
   streamPush: (sessionId: string, pcmBase64: string) =>

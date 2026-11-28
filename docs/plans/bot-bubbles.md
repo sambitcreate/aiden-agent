@@ -6,15 +6,15 @@ Any Bot chat can shrink into a round head that floats over every app. Its mini c
 
 ## Decisions
 
-| # | Question | Answer |
-|---|---|---|
-| 1 | Where bubbles float | Over every app on macOS. Linux keeps heads inside the Aiden window (see Linux below) |
-| 2 | Main window while bubbled | A small card: "Penny is in a bubble" with **Bring back here** and **Open bubble** |
-| 3 | How many | Up to 5. A sixth pushes the oldest head to the recent list ("Bubble again" in the Bot ••• menu) |
-| 4 | Closed head shows | Unread reply count, a Needs-you mark, and a working ring |
-| 5 | Approvals in the bubble | Yes, the same approval and question cards as the main chat |
-| 6 | After a restart | The same Bots come back on the same side and height |
-| 7 | Phones | Desktop only |
+| #   | Question                  | Answer                                                                                          |
+| --- | ------------------------- | ----------------------------------------------------------------------------------------------- |
+| 1   | Where bubbles float       | Over every app on macOS. Linux keeps heads inside the Aiden window (see Linux below)            |
+| 2   | Main window while bubbled | A small card: "Penny is in a bubble" with **Bring back here** and **Open bubble**               |
+| 3   | How many                  | Up to 5. A sixth pushes the oldest head to the recent list ("Bubble again" in the Bot ••• menu) |
+| 4   | Closed head shows         | Unread reply count, a Needs-you mark, and a working ring                                        |
+| 5   | Approvals in the bubble   | Yes, the same approval and question cards as the main chat                                      |
+| 6   | After a restart           | The same Bots come back on the same side and height                                             |
+| 7   | Phones                    | Desktop only                                                                                    |
 
 Also decided: heads never bounce (a reply only changes the count); a head shows the Bot's photo when it has one, otherwise its face.
 

@@ -66,15 +66,27 @@ test("a stack that runs past the bottom is pushed back up to fit", () => {
     ],
     AREA,
   );
-  assert.deepEqual(["a", "b", "c"].map((id) => placed.get(id)?.y), [606, 670, 734]);
+  assert.deepEqual(
+    ["a", "b", "c"].map((id) => placed.get(id)?.y),
+    [606, 670, 734],
+  );
 });
 
 test("a release picks the side from where the head is headed, and a flick throws it", () => {
-  assert.deepEqual(releaseHead({ x: 600, y: 300 }, { x: 0, y: 0 }, AREA), { side: "right", y: 300 });
+  assert.deepEqual(releaseHead({ x: 600, y: 300 }, { x: 0, y: 0 }, AREA), {
+    side: "right",
+    y: 300,
+  });
   // Centre at 626, thrown left at 1px/ms: 160px further it is at 466, past the middle.
-  assert.deepEqual(releaseHead({ x: 600, y: 300 }, { x: -1, y: 0 }, AREA), { side: "left", y: 300 });
+  assert.deepEqual(releaseHead({ x: 600, y: 300 }, { x: -1, y: 0 }, AREA), {
+    side: "left",
+    y: 300,
+  });
   // Carried 0.5px/ms × 120ms = 60px down.
-  assert.deepEqual(releaseHead({ x: 100, y: 300 }, { x: 0, y: 0.5 }, AREA), { side: "left", y: 360 });
+  assert.deepEqual(releaseHead({ x: 100, y: 300 }, { x: 0, y: 0.5 }, AREA), {
+    side: "left",
+    y: 360,
+  });
   // Thrown past the bottom it stays inside the area; the stack draws it on the margin.
   assert.deepEqual(releaseHead({ x: 100, y: 780 }, { x: 0, y: 2 }, AREA), { side: "left", y: 748 });
 });
@@ -87,11 +99,26 @@ test("the × target sits centred 92px above the bottom and pulls a head within 8
 });
 
 test("arrow keys switch sides or move a head 40px, never past the margins", () => {
-  assert.deepEqual(moveHeadWithKey({ side: "right", y: 300 }, "ArrowLeft", AREA), { side: "left", y: 300 });
-  assert.deepEqual(moveHeadWithKey({ side: "left", y: 300 }, "ArrowRight", AREA), { side: "right", y: 300 });
-  assert.deepEqual(moveHeadWithKey({ side: "right", y: 300 }, "ArrowDown", AREA), { side: "right", y: 340 });
-  assert.deepEqual(moveHeadWithKey({ side: "right", y: 30 }, "ArrowUp", AREA), { side: "right", y: 14 });
-  assert.deepEqual(moveHeadWithKey({ side: "right", y: 720 }, "ArrowDown", AREA), { side: "right", y: 734 });
+  assert.deepEqual(moveHeadWithKey({ side: "right", y: 300 }, "ArrowLeft", AREA), {
+    side: "left",
+    y: 300,
+  });
+  assert.deepEqual(moveHeadWithKey({ side: "left", y: 300 }, "ArrowRight", AREA), {
+    side: "right",
+    y: 300,
+  });
+  assert.deepEqual(moveHeadWithKey({ side: "right", y: 300 }, "ArrowDown", AREA), {
+    side: "right",
+    y: 340,
+  });
+  assert.deepEqual(moveHeadWithKey({ side: "right", y: 30 }, "ArrowUp", AREA), {
+    side: "right",
+    y: 14,
+  });
+  assert.deepEqual(moveHeadWithKey({ side: "right", y: 720 }, "ArrowDown", AREA), {
+    side: "right",
+    y: 734,
+  });
 });
 
 test("the mini chat opens beside a right head, toward the middle, with its pointer on the head's centre", () => {
@@ -123,7 +150,12 @@ test("in a small area the mini chat shrinks to fit beside a left head", () => {
 });
 
 test("the peek sits 10px inside a head, centred on it, at most 230px wide", () => {
-  assert.deepEqual(peekPlacement({ x: 934, y: 300 }, "right", AREA), { side: "right", x: 924, y: 326, maxWidth: 230 });
+  assert.deepEqual(peekPlacement({ x: 934, y: 300 }, "right", AREA), {
+    side: "right",
+    x: 924,
+    y: 326,
+    maxWidth: 230,
+  });
   assert.deepEqual(peekPlacement({ x: 14, y: 14 }, "left", { width: 200, height: 300 }), {
     side: "left",
     x: 76,
@@ -143,9 +175,15 @@ test("Up and Down on a stacked head step past its neighbour instead of sticking 
   const swapped = stackHeads([heads[0]!, { id: "b", ...up }], AREA);
   assert.deepEqual([swapped.get("b")?.y, swapped.get("a")?.y], [36, 100]);
   // a at 100 moving down jumps below b (164 + 64).
-  assert.deepEqual(moveStackedHeadWithKey(heads, "a", "ArrowDown", AREA), { side: "right", y: 228 });
+  assert.deepEqual(moveStackedHeadWithKey(heads, "a", "ArrowDown", AREA), {
+    side: "right",
+    y: 228,
+  });
   // With room, a plain 40px step.
-  assert.deepEqual(moveStackedHeadWithKey([{ id: "c", side: "left", y: 300 }], "c", "ArrowUp", AREA), { side: "left", y: 260 });
+  assert.deepEqual(
+    moveStackedHeadWithKey([{ id: "c", side: "left", y: 300 }], "c", "ArrowUp", AREA),
+    { side: "left", y: 260 },
+  );
 });
 
 test("at the top margin, Up still moves a head ahead of the one above it", () => {
@@ -208,10 +246,18 @@ test("heads dropped one after another past the top edge stack newest first, and 
     { id: "b", side: "right", y: 500 },
   ];
   for (const id of ["a", "b"]) {
-    const spot = placeHeadInStack(heads, id, releaseHead({ x: 934, y: -40 }, { x: 0, y: 0 }, AREA), AREA);
+    const spot = placeHeadInStack(
+      heads,
+      id,
+      releaseHead({ x: 934, y: -40 }, { x: 0, y: 0 }, AREA),
+      AREA,
+    );
     heads = roundTrip(heads.map((head) => (head.id === id ? { id, ...spot } : head)));
   }
   assert.deepEqual(drawnOrder(heads), ["b@14", "a@78"]);
   // A drop in open space keeps exactly where it was put.
-  assert.deepEqual(placeHeadInStack(heads, "a", { side: "right", y: 300 }, AREA), { side: "right", y: 300 });
+  assert.deepEqual(placeHeadInStack(heads, "a", { side: "right", y: 300 }, AREA), {
+    side: "right",
+    y: 300,
+  });
 });

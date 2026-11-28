@@ -75,7 +75,8 @@ export interface GoalWindowRoundStartResult {
 }
 
 function record(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid request.");
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid request.");
   return value as Record<string, unknown>;
 }
 
@@ -117,7 +118,9 @@ export function registerGoalHandlers(dependencies: GoalHandlerDependencies): voi
   };
 
   if (proposals) {
-    handle(GOAL_PROPOSAL_CHANNEL, (_event, id): GoalProposalView | null => proposals.get(chatId(id)));
+    handle(GOAL_PROPOSAL_CHANNEL, (_event, id): GoalProposalView | null =>
+      proposals.get(chatId(id)),
+    );
     handle(GOAL_DISMISS_PROPOSAL_CHANNEL, (event, input): void => {
       activeDocument(event);
       proposals.dismiss(chatId(record(input).chatId));
@@ -144,19 +147,34 @@ export function registerGoalHandlers(dependencies: GoalHandlerDependencies): voi
   handle(GOAL_VIEW_CHANNEL, (event, input): void => {
     const value = record(input);
     if (typeof value.focused !== "boolean") throw new Error("Invalid view.");
-    windowRounds.report(event, { chatId: value.chatId === null ? null : chatId(value.chatId), focused: value.focused });
+    windowRounds.report(event, {
+      chatId: value.chatId === null ? null : chatId(value.chatId),
+      focused: value.focused,
+    });
   });
 
-  handle(GOAL_START_WINDOW_ROUND_CHANNEL, async (event, input): Promise<GoalWindowRoundStartResult> => {
-    const value = record(input);
-    const round = token(value.token);
-    if (!isSafeSubagentIdentifier(value.streamId)) throw new Error("Invalid chat stream identifier.");
-    const streamId = value.streamId;
-    const result = await windowRounds.start(event, round, streamId);
-    if (result.kind === "started") return { streamId, accepted: true, started: true };
-    // Accepted with an error, so the window's stream ends the way a failed start's does.
-    return { streamId, accepted: true, started: false, error: result.kind === "busy" ? "The chat is busy, so this keep-going round didn't start." : result.reason };
-  });
+  handle(
+    GOAL_START_WINDOW_ROUND_CHANNEL,
+    async (event, input): Promise<GoalWindowRoundStartResult> => {
+      const value = record(input);
+      const round = token(value.token);
+      if (!isSafeSubagentIdentifier(value.streamId))
+        throw new Error("Invalid chat stream identifier.");
+      const streamId = value.streamId;
+      const result = await windowRounds.start(event, round, streamId);
+      if (result.kind === "started") return { streamId, accepted: true, started: true };
+      // Accepted with an error, so the window's stream ends the way a failed start's does.
+      return {
+        streamId,
+        accepted: true,
+        started: false,
+        error:
+          result.kind === "busy"
+            ? "The chat is busy, so this keep-going round didn't start."
+            : result.reason,
+      };
+    },
+  );
 
   handle(GOAL_DECLINE_WINDOW_ROUND_CHANNEL, (event, input): void => {
     windowRounds.decline(event, token(record(input).token));

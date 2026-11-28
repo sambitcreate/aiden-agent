@@ -1,5 +1,12 @@
 import type { NodeProps } from "@xyflow/react";
-import { Badge, ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, Text } from "../../components/ui";
+import {
+  Badge,
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+  Text,
+} from "../../components/ui";
 import { CanvasNodeChrome } from "../../canvas";
 import type { OutputRef } from "../../shared/images/run-types";
 import { useWorkflowEditor } from "../editor-context";
@@ -20,9 +27,29 @@ export interface OutputImageActions {
   revealLabel: string;
 }
 
-function Thumbnail({ image, index, url, name, more, actions }: { image: OutputRef; index: number; url?: string; name: string; more: number; actions?: OutputImageActions }) {
+function Thumbnail({
+  image,
+  index,
+  url,
+  name,
+  more,
+  actions,
+}: {
+  image: OutputRef;
+  index: number;
+  url?: string;
+  name: string;
+  more: number;
+  actions?: OutputImageActions;
+}) {
   const media = url ? (
-    <img src={url} alt={more > 0 ? "" : name} width={image.width} height={image.height} draggable={false} />
+    <img
+      src={url}
+      alt={more > 0 ? "" : name}
+      width={image.width}
+      height={image.height}
+      draggable={false}
+    />
   ) : (
     <div className="image-gallery-placeholder" role="img" aria-label={`${name}, loading`} />
   );
@@ -37,13 +64,19 @@ function Thumbnail({ image, index, url, name, more, actions }: { image: OutputRe
           onClick={() => actions.open(index)}
         >
           {media}
-          {more > 0 ? <span className="image-thumb-more" aria-hidden="true">+{more}</span> : null}
+          {more > 0 ? (
+            <span className="image-thumb-more" aria-hidden="true">
+              +{more}
+            </span>
+          ) : null}
         </button>
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem onSelect={() => actions.saveAs(image.assetId)}>Save…</ContextMenuItem>
         <ContextMenuItem onSelect={() => actions.copy(image.assetId)}>Copy Image</ContextMenuItem>
-        <ContextMenuItem onSelect={() => actions.reveal(image.assetId)}>{actions.revealLabel}</ContextMenuItem>
+        <ContextMenuItem onSelect={() => actions.reveal(image.assetId)}>
+          {actions.revealLabel}
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -61,7 +94,11 @@ export function OutputNodeBody({
   actions?: OutputImageActions;
 }) {
   if (images.length === 0) {
-    return <Text variant="small" color="secondary">Run the workflow to see images here.</Text>;
+    return (
+      <Text variant="small" color="secondary">
+        Run the workflow to see images here.
+      </Text>
+    );
   }
   const shown = images.slice(0, GALLERY_LIMIT);
   const hidden = images.length - shown.length;

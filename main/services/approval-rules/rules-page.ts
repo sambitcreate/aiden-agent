@@ -83,7 +83,10 @@ export interface ApprovalRulesPagePorts {
     get(botId: string): Promise<BotRulesView>;
     update(botId: string, revision: number, change: BotRuleChange): Promise<BotRulesUpdateResult>;
   };
-  botChatMac?: { list(): Promise<BotChatMacGrantView[]>; revoke(botId: string, grantId: string): Promise<boolean> };
+  botChatMac?: {
+    list(): Promise<BotChatMacGrantView[]>;
+    revoke(botId: string, grantId: string): Promise<boolean>;
+  };
   /** The legacy Computer Use switch "Always allow in every chat". */
   computerUseEverywhere?: { get(): Promise<boolean>; turnOff(): Promise<void> };
   bots(): Promise<ApprovalRulesPageBot[]>;
@@ -127,7 +130,10 @@ export function createApprovalRulesPage(ports: ApprovalRulesPagePorts): Approval
     }
   }
 
-  async function ruleRows(names: Map<string, string>, workspaces: Map<string, string>): Promise<ApprovalRuleRow[] | "unreadable"> {
+  async function ruleRows(
+    names: Map<string, string>,
+    workspaces: Map<string, string>,
+  ): Promise<ApprovalRuleRow[] | "unreadable"> {
     let rules: ApprovalRule[];
     try {
       rules = await ports.book.list();
@@ -139,32 +145,46 @@ export function createApprovalRulesPage(ports: ApprovalRulesPagePorts): Approval
       const owner = rule.owner;
       // A rule whose Bot or workspace is gone answers for nobody; it is listed
       // to remove, with nothing to change, until the owner's deletion forgets it.
-      const orphan = (owner.kind === "bot" && !names.has(owner.botId)) || (owner.kind === "workspace" && !workspaces.has(owner.workspaceId));
+      const orphan =
+        (owner.kind === "bot" && !names.has(owner.botId)) ||
+        (owner.kind === "workspace" && !workspaces.has(owner.workspaceId));
       if (orphan) {
-        return [{
+        return [
+          {
+            ref: { source: "rule", id: rule.id },
+            group: rule.decision,
+            title: describeApprovalRuleTarget(rule.target, rule.label),
+            kind: approvalRuleKindLabel(rule.target.kind),
+            scope:
+              owner.kind === "bot"
+                ? { kind: "bot", label: "a deleted Bot" }
+                : { kind: "workspace", label: "a deleted workspace" },
+            legacy: true,
+            decisions: [],
+            createdAt: rule.createdAt,
+          },
+        ];
+      }
+      return [
+        {
           ref: { source: "rule", id: rule.id },
           group: rule.decision,
           title: describeApprovalRuleTarget(rule.target, rule.label),
           kind: approvalRuleKindLabel(rule.target.kind),
-          scope: owner.kind === "bot" ? { kind: "bot", label: "a deleted Bot" } : { kind: "workspace", label: "a deleted workspace" },
-          legacy: true,
-          decisions: [],
+          scope:
+            owner.kind === "mac"
+              ? { kind: "mac" }
+              : owner.kind === "workspace"
+                ? { kind: "workspace", label: workspaces.get(owner.workspaceId) ?? "Workspace" }
+                : { kind: "bot", label: names.get(owner.botId)! },
+          ...(owner.kind === "bot" ? { legacy: true as const } : {}),
+          decisions: approvalRuleDecisionsFor(rule.target),
+          ...(rule.target.kind === "text" && rule.decision === "ask"
+            ? { handOff: { on: rule.handOff === true } }
+            : {}),
           createdAt: rule.createdAt,
-        }];
-      }
-      return [{
-        ref: { source: "rule", id: rule.id },
-        group: rule.decision,
-        title: describeApprovalRuleTarget(rule.target, rule.label),
-        kind: approvalRuleKindLabel(rule.target.kind),
-        scope: owner.kind === "mac" ? { kind: "mac" }
-          : owner.kind === "workspace" ? { kind: "workspace", label: workspaces.get(owner.workspaceId) ?? "Workspace" }
-            : { kind: "bot", label: names.get(owner.botId)! },
-        ...(owner.kind === "bot" ? { legacy: true as const } : {}),
-        decisions: approvalRuleDecisionsFor(rule.target),
-        ...(rule.target.kind === "text" && rule.decision === "ask" ? { handOff: { on: rule.handOff === true } } : {}),
-        createdAt: rule.createdAt,
-      }];
+        },
+      ];
     });
   }
 
@@ -174,7 +194,10 @@ export function createApprovalRulesPage(ports: ApprovalRulesPagePorts): Approval
       group: "allow",
       title: describeToolApprovalRule(rule),
       kind: rule.toolName === "run_command" ? "Command" : "File",
-      scope: { kind: "workspace", label: workspaces.get(rule.workspaceId) ?? rule.workspaceLabel ?? "Workspace" },
+      scope: {
+        kind: "workspace",
+        label: workspaces.get(rule.workspaceId) ?? rule.workspaceLabel ?? "Workspace",
+      },
       legacy: true,
       // An exact rule can be dropped (Ask), never widened into a Block of every command.
       decisions: ["allow", "ask"],
@@ -203,7 +226,8 @@ export function createApprovalRulesPage(ports: ApprovalRulesPagePorts): Approval
         });
         continue;
       }
-      if (!targets.has(entry.botId)) targets.set(entry.botId, await ports.botAllowed.targets(entry.botId));
+      if (!targets.has(entry.botId))
+        targets.set(entry.botId, await ports.botAllowed.targets(entry.botId));
       const target = targets.get(entry.botId)!.find((rule) => rule.id === entry.id)?.target;
       rows.push({
         ref: { source: "bot-allow", botId: entry.botId, entryId: entry.id },
@@ -251,7 +275,10 @@ export function createApprovalRulesPage(ports: ApprovalRulesPagePorts): Approval
     return rows;
   }
 
-  async function macRows(workspaces: ApprovalRulesPageWorkspace[], names: Map<string, string>): Promise<ApprovalRuleRow[]> {
+  async function macRows(
+    workspaces: ApprovalRulesPageWorkspace[],
+    names: Map<string, string>,
+  ): Promise<ApprovalRuleRow[]> {
     const rows: ApprovalRuleRow[] = [];
     for (const workspace of workspaces) {
       const policy = workspaceApprovalPolicy(workspace, "ask");
@@ -306,13 +333,21 @@ export function createApprovalRulesPage(ports: ApprovalRulesPagePorts): Approval
   }
 
   async function botRuleOf(botId: string, ruleId: string) {
-    const rule = (await ports.botRules?.get(botId))?.rules.find((candidate) => candidate.id === ruleId);
-    if (!rule || BOT_LOCKED_RULES.some((locked) => locked.id === rule.id)) throw new Error(botRuleRefusalText("not_found"));
+    const rule = (await ports.botRules?.get(botId))?.rules.find(
+      (candidate) => candidate.id === ruleId,
+    );
+    if (!rule || BOT_LOCKED_RULES.some((locked) => locked.id === rule.id))
+      throw new Error(botRuleRefusalText("not_found"));
     return rule;
   }
 
-  async function botAllowTarget(botId: string, entryId: string): Promise<ApprovalRuleTarget | undefined> {
-    const target = (await ports.botAllowed?.targets(botId))?.find((rule) => rule.id === entryId)?.target;
+  async function botAllowTarget(
+    botId: string,
+    entryId: string,
+  ): Promise<ApprovalRuleTarget | undefined> {
+    const target = (await ports.botAllowed?.targets(botId))?.find(
+      (rule) => rule.id === entryId,
+    )?.target;
     if (!target) return undefined;
     return target.kind === "site"
       ? { kind: "site", host: target.host }
@@ -359,39 +394,69 @@ export function createApprovalRulesPage(ports: ApprovalRulesPagePorts): Approval
     async change({ ref, decision, handOff }) {
       switch (ref.source) {
         case "rule":
-          return { changed: await ports.book.change(ref.id, { ...(decision ? { decision } : {}), ...(handOff === undefined ? {} : { handOff }) }) };
+          return {
+            changed: await ports.book.change(ref.id, {
+              ...(decision ? { decision } : {}),
+              ...(handOff === undefined ? {} : { handOff }),
+            }),
+          };
         case "workspace-exact":
-          if (handOff !== undefined || decision === "block") throw new Error("This rule can only be allowed or asked.");
-          return { changed: decision === "ask" ? await ports.workspaceExact.revoke(ref.id) : false };
+          if (handOff !== undefined || decision === "block")
+            throw new Error("This rule can only be allowed or asked.");
+          return {
+            changed: decision === "ask" ? await ports.workspaceExact.revoke(ref.id) : false,
+          };
         case "bot-allow": {
-          if (handOff !== undefined || !ports.botAllowed) throw new Error("This rule can’t be changed here.");
+          if (handOff !== undefined || !ports.botAllowed)
+            throw new Error("This rule can’t be changed here.");
           if (decision === "allow" || decision === undefined) return { changed: false };
           // Read the target first: once removed, the entry no longer names it.
-          const target = decision === "block" ? await botAllowTarget(ref.botId, ref.entryId) : undefined;
-          if (decision === "block" && !target) throw new Error("This allowance changed. Try again.");
+          const target =
+            decision === "block" ? await botAllowTarget(ref.botId, ref.entryId) : undefined;
+          if (decision === "block" && !target)
+            throw new Error("This allowance changed. Try again.");
           // The Block is saved before the allowance goes: a target the rule
           // book can't hold throws here and the allowance stays as it was.
-          if (target) await ports.book.add({ target, decision: "block", owner: { kind: "bot", botId: ref.botId } });
+          if (target)
+            await ports.book.add({
+              target,
+              decision: "block",
+              owner: { kind: "bot", botId: ref.botId },
+            });
           const removed = await ports.botAllowed.remove(ref.botId, ref.entryId);
           return { changed: removed || target !== undefined };
         }
         case "bot-rule": {
           const rule = await botRuleOf(ref.botId, ref.ruleId);
           if (rule.actionClass !== undefined) {
-            if (decision !== undefined && decision !== "ask") throw new Error("A built-in rule always asks or hands the step to you.");
+            if (decision !== undefined && decision !== "ask")
+              throw new Error("A built-in rule always asks or hands the step to you.");
             if (handOff === undefined) return { changed: false };
-            await botRuleChange(ref.botId, { type: "set_behavior", ruleId: rule.id, behavior: handOff ? "hand_off" : "ask" });
+            await botRuleChange(ref.botId, {
+              type: "set_behavior",
+              ruleId: rule.id,
+              behavior: handOff ? "hand_off" : "ask",
+            });
             return { changed: true };
           }
           if (decision === "block") {
             // Words that now block: the Bot's own Block rule, then the old rule goes.
-            await ports.book.add({ target: { kind: "text", text: rule.text ?? "" }, decision: "block", owner: { kind: "bot", botId: ref.botId } });
+            await ports.book.add({
+              target: { kind: "text", text: rule.text ?? "" },
+              decision: "block",
+              owner: { kind: "bot", botId: ref.botId },
+            });
             await botRuleChange(ref.botId, { type: "remove_custom", ruleId: rule.id });
             return { changed: true };
           }
-          if (decision === "allow") throw new Error("A rule in your own words can only ask or block.");
+          if (decision === "allow")
+            throw new Error("A rule in your own words can only ask or block.");
           if (handOff === undefined) return { changed: false };
-          await botRuleChange(ref.botId, { type: "edit_custom", ruleId: rule.id, behavior: handOff ? "hand_off" : "ask" });
+          await botRuleChange(ref.botId, {
+            type: "edit_custom",
+            ruleId: rule.id,
+            behavior: handOff ? "hand_off" : "ask",
+          });
           return { changed: true };
         }
         default:
@@ -412,16 +477,23 @@ export function createApprovalRulesPage(ports: ApprovalRulesPagePorts): Approval
         case "bot-rule": {
           const rule = await botRuleOf(ref.botId, ref.ruleId);
           // A built-in rule can't be removed; Remove stops it handing off.
-          await botRuleChange(ref.botId, rule.actionClass === undefined
-            ? { type: "remove_custom", ruleId: rule.id }
-            : { type: "set_behavior", ruleId: rule.id, behavior: "ask" });
+          await botRuleChange(
+            ref.botId,
+            rule.actionClass === undefined
+              ? { type: "remove_custom", ruleId: rule.id }
+              : { type: "set_behavior", ruleId: rule.id, behavior: "ask" },
+          );
           return { removed: true };
         }
         case "workspace-mac":
           await ports.revokeWorkspaceMac(ref.workspaceId, ref.grant);
           return { removed: true };
         case "bot-chat-mac":
-          return { removed: ports.botChatMac ? await ports.botChatMac.revoke(ref.botId, ref.grantId) : false };
+          return {
+            removed: ports.botChatMac
+              ? await ports.botChatMac.revoke(ref.botId, ref.grantId)
+              : false,
+          };
         case "computer-use-everywhere":
           if (!ports.computerUseEverywhere) return { removed: false };
           await ports.computerUseEverywhere.turnOff();

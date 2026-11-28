@@ -3,8 +3,15 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createDeviceService } from "../../../main/services/devices/device-service.js";
-import { createLocalDeviceHost, defaultLocalDeviceHostDeps } from "../../../main/services/devices/local-device-host.js";
-import { DEVICE_HUB, DeviceNodeUnavailableError, deviceToolPaths } from "../../../main/services/devices/device-toolchain.js";
+import {
+  createLocalDeviceHost,
+  defaultLocalDeviceHostDeps,
+} from "../../../main/services/devices/local-device-host.js";
+import {
+  DEVICE_HUB,
+  DeviceNodeUnavailableError,
+  deviceToolPaths,
+} from "../../../main/services/devices/device-toolchain.js";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -64,8 +71,9 @@ function view(props: Partial<SimulatorSettingsViewProps>) {
 }
 
 function switchFor(html: string, label: string): string {
-  const match = new RegExp(`<button[^>]*role="switch"[^>]*aria-label="${label}"[^>]*>`, "u").exec(html)
-    ?? new RegExp(`<button[^>]*aria-label="${label}"[^>]*role="switch"[^>]*>`, "u").exec(html);
+  const match =
+    new RegExp(`<button[^>]*role="switch"[^>]*aria-label="${label}"[^>]*>`, "u").exec(html) ??
+    new RegExp(`<button[^>]*aria-label="${label}"[^>]*role="switch"[^>]*>`, "u").exec(html);
   assert.ok(match, `switch ${label}`);
   return match[0];
 }
@@ -76,13 +84,37 @@ test("Simulator is a settings destination hidden without the devices capability"
   assert.ok(destination?.keywords.includes("ios"));
   // The settings nav and the command palette both filter through this helper.
   const hasSimulator = (devices: boolean) =>
-    availableSettingsDestinations({ computerUse: true, devices, botComputers: true, hooks: true, mcpServer: true }).some((entry) => entry.id === "simulator");
+    availableSettingsDestinations({
+      computerUse: true,
+      devices,
+      botComputers: true,
+      hooks: true,
+      mcpServer: true,
+    }).some((entry) => entry.id === "simulator");
   assert.equal(hasSimulator(false), false);
   assert.equal(hasSimulator(true), true);
   assert.match(read("../../main/settings-view.tsx"), /simulator: SimulatorSettings/u);
   // The assistant prompt lists Simulator only when the devices feature is on.
-  assert.equal(assistantSettingsPages({ computerUse: true, devices: false, botComputers: true, hooks: true, mcpServer: true }).includes("Simulator"), false);
-  assert.equal(assistantSettingsPages({ computerUse: true, devices: true, botComputers: true, hooks: true, mcpServer: true }).includes("Simulator"), true);
+  assert.equal(
+    assistantSettingsPages({
+      computerUse: true,
+      devices: false,
+      botComputers: true,
+      hooks: true,
+      mcpServer: true,
+    }).includes("Simulator"),
+    false,
+  );
+  assert.equal(
+    assistantSettingsPages({
+      computerUse: true,
+      devices: true,
+      botComputers: true,
+      hooks: true,
+      mcpServer: true,
+    }).includes("Simulator"),
+    true,
+  );
 });
 
 test("a build without the devices capability reads nothing and says so", () => {
@@ -106,7 +138,10 @@ test("before setup only streaming can be turned on, and nothing can be pruned or
 
 test("installed helpers show their versions, and stale ones can be pruned", () => {
   const html = view({
-    state: state({ hostStatus: "stopped", consent: { streaming: true, agentAccess: false, peerSharing: false } }),
+    state: state({
+      hostStatus: "stopped",
+      consent: { streaming: true, agentAccess: false, peerSharing: false },
+    }),
     toolchain: {
       tools: [
         { id: "hub", name: "expo-device-hub", pinned: "0.12.0", installed: ["0.11.0", "0.12.0"] },
@@ -125,7 +160,10 @@ test("installed helpers show their versions, and stale ones can be pruned", () =
 
 test("while one change is pending every control waits, and errors are announced", () => {
   const html = view({
-    state: state({ hostStatus: "installing", consent: { streaming: true, agentAccess: false, peerSharing: false } }),
+    state: state({
+      hostStatus: "installing",
+      consent: { streaming: true, agentAccess: false, peerSharing: false },
+    }),
     pending: "agentAccess",
     error: "npm was not found.",
   });
@@ -137,14 +175,28 @@ test("while one change is pending every control waits, and errors are announced"
 });
 
 test("an unavailable Mac explains why, and a missing state is a read in progress", () => {
-  assert.match(view({ state: state({ hostStatus: "unavailable", unavailableReason: "Install Xcode to use simulators." }) }), /Install Xcode/u);
+  assert.match(
+    view({
+      state: state({
+        hostStatus: "unavailable",
+        unavailableReason: "Install Xcode to use simulators.",
+      }),
+    }),
+    /Install Xcode/u,
+  );
   assert.match(view({ state: null }), /Reading simulator settings…/u);
-  assert.match(view({ state: null, error: "Could not read." }), /role="alert"[^>]*>Could not read\./u);
+  assert.match(
+    view({ state: null, error: "Could not read." }),
+    /role="alert"[^>]*>Could not read\./u,
+  );
 });
 
 test("downloads and removal each ask before they run", () => {
   const source = read("./simulator-settings.tsx");
-  assert.match(source, /if \(granted && \(kind === "streaming" \|\| kind === "agentAccess"\)\) confirm\(kind\)/u);
+  assert.match(
+    source,
+    /if \(granted && \(kind === "streaming" \|\| kind === "agentAccess"\)\) confirm\(kind\)/u,
+  );
   assert.match(source, /confirmVariant="destructive"/u);
   assert.match(source, /onRemove=\{\(\) => confirm\("remove"\)\}/u);
   // Both confirmations stay open, busy, until the work finishes, then return focus to their control.
@@ -159,7 +211,10 @@ test("sharing with Aiden On The Go is its own switch, off by default and built o
   assert.match(off, / disabled=""/u);
 
   const streaming = view({
-    state: state({ hostStatus: "ready", consent: { streaming: true, agentAccess: false, peerSharing: true } }),
+    state: state({
+      hostStatus: "ready",
+      consent: { streaming: true, agentAccess: false, peerSharing: true },
+    }),
   });
   // Sharing with paired Macs never implies sharing with phones.
   assert.match(switchFor(streaming, "Share with paired Macs"), /aria-checked="true"/u);
@@ -178,25 +233,37 @@ test("sharing with Aiden On The Go is its own switch, off by default and built o
   assert.match(switchFor(shared, "Share with paired Macs"), /aria-checked="false"/u);
 });
 
-
 test("Settings offers Retry for the real service's missing-Node setup error and keeps consent", async () => {
   const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-settings-node-"));
   let hasNode = false;
   const deps = defaultLocalDeviceHostDeps({
-    baseDir, platform: "darwin", env: { HOME: baseDir },
+    baseDir,
+    platform: "darwin",
+    env: { HOME: baseDir },
     resolveNodePath: async () => {
       if (!hasNode) throw new DeviceNodeUnavailableError();
       return process.execPath;
     },
-    resolveNpmRunner: async () => { throw new Error("No download expected"); },
+    resolveNpmRunner: async () => {
+      throw new Error("No download expected");
+    },
   });
-  deps.runCommand = async (_command, args) => ({ code: 0, stderr: "", stdout: args.includes("list") ? '{"devices":{}}' : "usage: simctl" });
+  deps.runCommand = async (_command, args) => ({
+    code: 0,
+    stderr: "",
+    stdout: args.includes("list") ? '{"devices":{}}' : "usage: simctl",
+  });
   deps.pathExists = async () => false;
   deps.realPath = async () => null;
   const service = createDeviceService({
-    baseDir, host: createLocalDeviceHost(deps),
-    startProxy: async () => { throw new Error("No viewer was opened"); },
-    fetch: async () => { throw new Error("No Android SDK was found"); },
+    baseDir,
+    host: createLocalDeviceHost(deps),
+    startProxy: async () => {
+      throw new Error("No viewer was opened");
+    },
+    fetch: async () => {
+      throw new Error("No Android SDK was found");
+    },
   });
   try {
     const failed = await service.grantConsent("streaming");
@@ -211,7 +278,10 @@ test("Settings offers Retry for the real service's missing-Node setup error and 
     const tool = deviceToolPaths(baseDir, DEVICE_HUB);
     await mkdir(path.dirname(tool.entryPath), { recursive: true });
     await writeFile(tool.sentinel, `${DEVICE_HUB.version}\n`);
-    await writeFile(tool.entryPath, `import { createServer } from 'node:http'; createServer((req,res)=>res.end('{}')).listen(Number(process.argv[process.argv.indexOf('--port')+1]),'127.0.0.1');`);
+    await writeFile(
+      tool.entryPath,
+      `import { createServer } from 'node:http'; createServer((req,res)=>res.end('{}')).listen(Number(process.argv[process.argv.indexOf('--port')+1]),'127.0.0.1');`,
+    );
     hasNode = true;
     const recovered = await service.startHost("local");
     assert.equal(recovered.hostStatus, "ready");
@@ -236,17 +306,33 @@ test("helper tools fold away when current, and open with the update state when o
     agent: { requiredVersion: "0.21.12", installedVersions: [], runningVersion: null },
   });
   const local = (installedVersions: string[]) =>
-    state({ hosts: [{ id: "local", kind: "local", name: "This Mac", status: "ready", tools: hostTools(installedVersions) }] });
+    state({
+      hosts: [
+        {
+          id: "local",
+          kind: "local",
+          name: "This Mac",
+          status: "ready",
+          tools: hostTools(installedVersions),
+        },
+      ],
+    });
 
   const current = parse(view({ state: local(["0.12.0"]), toolchain: tools(["0.12.0"]) }));
   const fold = current.querySelector("details")!;
   assert.equal(fold.hasAttribute("open"), false);
-  assert.match(fold.querySelector("summary")!.textContent ?? "", /Up to date.*1 pinned package installed/u);
+  assert.match(
+    fold.querySelector("summary")!.textContent ?? "",
+    /Up to date.*1 pinned package installed/u,
+  );
 
   const outdated = parse(view({ state: local(["0.11.0"]), toolchain: tools(["0.11.0"]) }));
   const open = outdated.querySelector("details")!;
   assert.equal(open.hasAttribute("open"), true);
-  assert.match(open.querySelector("summary")!.textContent ?? "", /Update available.*Older versions installed/u);
+  assert.match(
+    open.querySelector("summary")!.textContent ?? "",
+    /Update available.*Older versions installed/u,
+  );
 
   // Removing the helpers is destructive, so it never hides inside the fold.
   assert.equal(fold.textContent?.includes("Remove installed tools"), false);

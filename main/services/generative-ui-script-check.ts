@@ -113,7 +113,9 @@ export function checkGenerativeUiScripts(html: string): GenerativeUiScriptCheck 
     const node = stack.pop() as Node;
     if (isElement(node) && node.tagName === "script") scripts.push(node);
     // A template's content lives outside childNodes, so its scripts are not visited.
-    if ("childNodes" in node) for (let index = node.childNodes.length - 1; index >= 0; index -= 1) stack.push(node.childNodes[index]);
+    if ("childNodes" in node)
+      for (let index = node.childNodes.length - 1; index >= 0; index -= 1)
+        stack.push(node.childNodes[index]);
   }
   for (const script of scripts) {
     if (attribute(script, "src") !== undefined) continue;
@@ -132,7 +134,9 @@ export function checkGenerativeUiScripts(html: string): GenerativeUiScriptCheck 
       continue;
     }
     if (!CLASSIC_TYPES.has(type)) continue;
-    const text = script.childNodes.map((child) => ("value" in child && child.nodeName === "#text" ? child.value : "")).join("");
+    const text = script.childNodes
+      .map((child) => ("value" in child && child.nodeName === "#text" ? child.value : ""))
+      .join("");
     if (!text.trim()) continue;
     seen += 1;
     if (seen > MAX_SCRIPTS_CHECKED) {
@@ -143,7 +147,11 @@ export function checkGenerativeUiScripts(html: string): GenerativeUiScriptCheck 
     const line = at?.startLine ?? 1;
     try {
       // Compiling only parses: nothing in the script runs in the main process.
-      new Script(text, { filename: FILENAME, lineOffset: line - 1, columnOffset: (at?.startCol ?? 1) - 1 });
+      new Script(text, {
+        filename: FILENAME,
+        lineOffset: line - 1,
+        columnOffset: (at?.startCol ?? 1) - 1,
+      });
     } catch (error) {
       if (error instanceof SyntaxError) {
         findings.push(
@@ -154,13 +162,20 @@ export function checkGenerativeUiScripts(html: string): GenerativeUiScriptCheck 
       }
     }
   }
-  if (skipped) unchecked.push(`${skipped} more script${skipped === 1 ? "" : "s"} past the first ${MAX_SCRIPTS_CHECKED}`);
-  if (modules) unchecked.push(`${modules} module script${modules === 1 ? "" : "s"} (type="module")`);
+  if (skipped)
+    unchecked.push(
+      `${skipped} more script${skipped === 1 ? "" : "s"} past the first ${MAX_SCRIPTS_CHECKED}`,
+    );
+  if (modules)
+    unchecked.push(`${modules} module script${modules === 1 ? "" : "s"} (type="module")`);
   return { findings, unchecked, checked: Math.min(seen, MAX_SCRIPTS_CHECKED) };
 }
 
 /** The script check as text for the end of render_artifact's result; empty when there were no scripts to check and nothing to report. */
-export function describeGenerativeUiScriptCheck(check: GenerativeUiScriptCheck, rerun: string): string {
+export function describeGenerativeUiScriptCheck(
+  check: GenerativeUiScriptCheck,
+  rerun: string,
+): string {
   if (!check.checked && !check.unchecked.length && !check.findings.length) return "";
   return formatCheckReport({
     label: "Script check",

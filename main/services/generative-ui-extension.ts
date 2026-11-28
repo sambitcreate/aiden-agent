@@ -4,8 +4,14 @@ import * as path from "node:path";
 import { isPathInside } from "../shared/path-containment.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import type { ChatHtmlArtifactV1, HtmlArtifactLayout } from "../../renderer/shared/chat-artifacts.js";
-import { CHAT_ARTIFACT_VERSION, isHtmlArtifactLayout } from "../../renderer/shared/chat-artifacts.js";
+import type {
+  ChatHtmlArtifactV1,
+  HtmlArtifactLayout,
+} from "../../renderer/shared/chat-artifacts.js";
+import {
+  CHAT_ARTIFACT_VERSION,
+  isHtmlArtifactLayout,
+} from "../../renderer/shared/chat-artifacts.js";
 import {
   HTML_ARTIFACT_MIME_TYPE,
   MAX_HTML_ARTIFACT_BYTES,
@@ -15,7 +21,10 @@ import {
   MAX_HTML_ARTIFACT_TITLE_CHARS,
 } from "../../renderer/shared/generative-ui.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
-import type { GenerativeUiArtifactRecoveryChat, GenerativeUiArtifactStore } from "./generative-ui-artifact-store.js";
+import type {
+  GenerativeUiArtifactRecoveryChat,
+  GenerativeUiArtifactStore,
+} from "./generative-ui-artifact-store.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { declareOnDemandLoadNotes, declareOnDemandSummary } from "./on-demand-tools.js";
 import {
@@ -36,12 +45,18 @@ import {
 } from "./generative-ui-guide.js";
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import { createRenderUiTool, type RenderUiToolOptions } from "./aiden-ui-tool.js";
-import { checkGenerativeUiScripts, describeGenerativeUiScriptCheck } from "./generative-ui-script-check.js";
+import {
+  checkGenerativeUiScripts,
+  describeGenerativeUiScriptCheck,
+} from "./generative-ui-script-check.js";
 import { visualRoutingRule } from "./visual-routing.js";
 
 export const GENERATIVE_UI_EXTENSION_ID = "aiden.gui.generative-ui";
 export const VISUALIZE_GUIDE_TOOL_NAME = "visualize_guide" as const;
-import { RENDER_ARTIFACT_TOOL_NAME, RENDER_UI_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
+import {
+  RENDER_ARTIFACT_TOOL_NAME,
+  RENDER_UI_TOOL_NAME,
+} from "../../renderer/shared/generative-ui.js";
 
 export const GENERATIVE_UI_TOOL_NAME = RENDER_ARTIFACT_TOOL_NAME;
 
@@ -96,7 +111,10 @@ export function displayedAssistantHtmlUsage(
   return { bytes, count };
 }
 
-const ON_REQUEST_DRAWING_TOOLS: ReadonlySet<string> = new Set([RENDER_ARTIFACT_TOOL_NAME, RENDER_UI_TOOL_NAME]);
+const ON_REQUEST_DRAWING_TOOLS: ReadonlySet<string> = new Set([
+  RENDER_ARTIFACT_TOOL_NAME,
+  RENDER_UI_TOOL_NAME,
+]);
 
 /**
  * Why a drawing tool cannot run in this turn, or undefined when it can. With
@@ -112,7 +130,10 @@ export function generativeUiUnavailableReason(
 }
 
 /** The staging store calls a turn makes before it may draw. */
-export type GenerativeUiTurnStore = Pick<GenerativeUiArtifactStore, "availability" | "usageByChat" | "reconcilePersisted">;
+export type GenerativeUiTurnStore = Pick<
+  GenerativeUiArtifactStore,
+  "availability" | "usageByChat" | "reconcilePersisted"
+>;
 
 /**
  * Checks the chat's staged visuals before a turn. A turn that may draw fails
@@ -127,7 +148,11 @@ export async function prepareGenerativeUiTurnStore(
   store: GenerativeUiTurnStore,
   chat: GenerativeUiArtifactRecoveryChat,
   turn: { onRequest: boolean; visualize: boolean },
-): Promise<{ pending: { bytes: number; count: number }; unavailableReason?: string; reconcileError?: unknown }> {
+): Promise<{
+  pending: { bytes: number; count: number };
+  unavailableReason?: string;
+  reconcileError?: unknown;
+}> {
   const mayDraw = !turn.onRequest || turn.visualize;
   const availability = store.availability();
   if (!availability.available) {
@@ -146,9 +171,14 @@ export async function prepareGenerativeUiTurnStore(
   }
   const pending = await store.usageByChat(chat.id);
   if (pending.count > 0) {
-    const reason = "A previous visual artifact could not be recovered. Delete this chat to discard it before continuing.";
+    const reason =
+      "A previous visual artifact could not be recovered. Delete this chat to discard it before continuing.";
     if (mayDraw) throw new Error(reason);
-    return { pending, unavailableReason: reason, ...(reconcileError ? { reconcileError: reconcileError.error } : {}) };
+    return {
+      pending,
+      unavailableReason: reason,
+      ...(reconcileError ? { reconcileError: reconcileError.error } : {}),
+    };
   }
   return { pending };
 }
@@ -198,7 +228,10 @@ const ON_REQUEST_VISUALS_NOTE =
   " Inline visuals are set to On request: draw one only in a turn where the person used /visualize. In other turns render_artifact and render_ui are refused, so answer in text.";
 
 /** The same tool, refusing to run when `turn` does not allow it. The host refuses first, in its tool-call check. */
-function refusedOffRequest<T extends AgentTool>(declared: T, turn: { onRequest: boolean; visualize: boolean }): T {
+function refusedOffRequest<T extends AgentTool>(
+  declared: T,
+  turn: { onRequest: boolean; visualize: boolean },
+): T {
   const reason = generativeUiUnavailableReason(declared.name, turn);
   if (!reason) return declared;
   return {
@@ -208,10 +241,7 @@ function refusedOffRequest<T extends AgentTool>(declared: T, turn: { onRequest: 
     },
   };
 }
-function resolveWorkspaceHtml(
-  root: string,
-  suppliedPath: string,
-): { relative: string } {
+function resolveWorkspaceHtml(root: string, suppliedPath: string): { relative: string } {
   if (
     suppliedPath.length === 0 ||
     suppliedPath.length > 4096 ||
@@ -249,7 +279,12 @@ function resolveWorkspaceRoot(workspaceRoot: string) {
 }
 
 /** Guide modules render_artifact (raw HTML) needs; its load answer carries them. */
-const RENDER_ARTIFACT_GUIDE_MODULES = ["design", "html", "charts", "interactive"] as const satisfies readonly GenerativeUiGuideModule[];
+const RENDER_ARTIFACT_GUIDE_MODULES = [
+  "design",
+  "html",
+  "charts",
+  "interactive",
+] as const satisfies readonly GenerativeUiGuideModule[];
 
 /** Guide modules that apply to workspace artifact pages (Aiden UI Markup). */
 const ARTIFACT_GUIDE_MODULES = ["catalog"] as const satisfies readonly GenerativeUiGuideModule[];
@@ -261,37 +296,48 @@ const ARTIFACT_GUIDE_MODULES = ["catalog"] as const satisfies readonly Generativ
  */
 export function createVisualizeGuideTool(options: { inlineVisuals?: boolean } = {}): AgentTool {
   const inlineVisuals = options.inlineVisuals !== false;
-  const modules: readonly GenerativeUiGuideModule[] = inlineVisuals ? GENERATIVE_UI_GUIDE_MODULES : ARTIFACT_GUIDE_MODULES;
+  const modules: readonly GenerativeUiGuideModule[] = inlineVisuals
+    ? GENERATIVE_UI_GUIDE_MODULES
+    : ARTIFACT_GUIDE_MODULES;
   return declareOnDemandSummary(
     declarePiRuntimeReplay(
-    {
-      name: VISUALIZE_GUIDE_TOOL_NAME,
-      label: "Visualize Guide",
-      description: inlineVisuals
-        ? "Read Aiden's design guidance for inline visuals before your first render_artifact call in a conversation. Request only the modules you need."
-        : 'Read the Aiden UI Markup guide (components, data, state and buttons) before your first workspace_artifact page in a conversation. Request the "catalog" module.',
-      parameters: Type.Object({
-        modules: Type.Array(
-          Type.Union(modules.map((module) => Type.Literal(module))),
-          { minItems: 1, maxItems: modules.length },
-        ),
-      }),
-      execute: async (_toolCallId, params): Promise<AgentToolResult<null>> => {
-        const requested = (params as { modules?: unknown }).modules;
-        if (
-          !Array.isArray(requested) ||
-          requested.length === 0 ||
-          !requested.every((module) => isGenerativeUiGuideModule(module) && modules.includes(module))
-        ) {
-          throw new Error(`visualize_guide modules must be one or more of: ${modules.join(", ")}.`);
-        }
-        return {
-          content: [{ type: "text", text: generativeUiGuide(requested as GenerativeUiGuideModule[], { inlineVisuals }) }],
-          details: null,
-        };
+      {
+        name: VISUALIZE_GUIDE_TOOL_NAME,
+        label: "Visualize Guide",
+        description: inlineVisuals
+          ? "Read Aiden's design guidance for inline visuals before your first render_artifact call in a conversation. Request only the modules you need."
+          : 'Read the Aiden UI Markup guide (components, data, state and buttons) before your first workspace_artifact page in a conversation. Request the "catalog" module.',
+        parameters: Type.Object({
+          modules: Type.Array(Type.Union(modules.map((module) => Type.Literal(module))), {
+            minItems: 1,
+            maxItems: modules.length,
+          }),
+        }),
+        execute: async (_toolCallId, params): Promise<AgentToolResult<null>> => {
+          const requested = (params as { modules?: unknown }).modules;
+          if (
+            !Array.isArray(requested) ||
+            requested.length === 0 ||
+            !requested.every(
+              (module) => isGenerativeUiGuideModule(module) && modules.includes(module),
+            )
+          ) {
+            throw new Error(
+              `visualize_guide modules must be one or more of: ${modules.join(", ")}.`,
+            );
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: generativeUiGuide(requested as GenerativeUiGuideModule[], { inlineVisuals }),
+              },
+            ],
+            details: null,
+          };
+        },
       },
-    },
-    "never",
+      "never",
     ),
     inlineVisuals
       ? "Read how to build inline visuals and artifact pages; call it before your first render_ui or render_artifact in a chat."
@@ -328,9 +374,10 @@ export function generativeUiTurnNote(turn: {
   return notes.join(" ");
 }
 
-export function createGenerativeUiExtensionRuntime(
-  options: GenerativeUiExtensionOptions,
-): { extension: PiAgentRuntimeExtension; turnNote: string } {
+export function createGenerativeUiExtensionRuntime(options: GenerativeUiExtensionOptions): {
+  extension: PiAgentRuntimeExtension;
+  turnNote: string;
+} {
   const workspace = options.workspaceRoot ? resolveWorkspaceRoot(options.workspaceRoot) : undefined;
   const existingChatHtmlBytes = options.existingChatHtmlBytes ?? 0;
   const existingChatHtmlCount = options.existingChatHtmlCount ?? 0;
@@ -346,7 +393,10 @@ export function createGenerativeUiExtensionRuntime(
   let displayedCount = 0;
   let displayedBytes = 0;
   let serial = Promise.resolve();
-  const titlesInGeneration = new Map<string, { mediaId: string; size: number; toolCallId: string }>();
+  const titlesInGeneration = new Map<
+    string,
+    { mediaId: string; size: number; toolCallId: string }
+  >();
   const designCanvas = options.designCanvas === true;
   const designModeOffered = !designCanvas && options.designModeOffered === true;
   const routing = visualRoutingRule({
@@ -362,171 +412,181 @@ export function createGenerativeUiExtensionRuntime(
 
   const tool: AgentTool = declareOnDemandSummary(
     declarePiRuntimeReplay(
-    {
-      name: GENERATIVE_UI_TOOL_NAME,
-      label: "Render Artifact",
-      description:
-        "Render an interactive HTML/CSS/JS visualization inline in the current Aiden chat, inside the reply at the point you call it. " +
-        (designCanvas
-          ? "Use this only for small charts, diagrams, or widgets that support the reply; pages, screens, and UI mockups go on the design canvas as design/*.html files instead. "
-          : designModeOffered
-            ? "Use this for charts, diagrams, dashboards, interactive explainers, or a small UI sketch instead of huge Markdown tables; for whole pages, app screens or several design directions, ask to open design mode with design_mode instead. "
-            : "Use this for charts, diagrams, dashboards, interactive explainers, or UI mockups instead of huge Markdown tables. ") +
-        "Provide either `html` (preferred) or a workspace-relative `.html` path. Vanilla HTML/CSS/JS only. Chart.js (`Chart`), Plotly (`Plotly`), and KaTeX (`katex`) are injected by Aiden—do not load CDN scripts or call network APIs. Do not use this for ordinary prose or raster images (use display_image).",
-      parameters: Type.Object({
-        title: Type.String({
-          description: "Short visible title for the artifact frame.",
-          minLength: 1,
-          maxLength: MAX_HTML_ARTIFACT_TITLE_CHARS,
+      {
+        name: GENERATIVE_UI_TOOL_NAME,
+        label: "Render Artifact",
+        description:
+          "Render an interactive HTML/CSS/JS visualization inline in the current Aiden chat, inside the reply at the point you call it. " +
+          (designCanvas
+            ? "Use this only for small charts, diagrams, or widgets that support the reply; pages, screens, and UI mockups go on the design canvas as design/*.html files instead. "
+            : designModeOffered
+              ? "Use this for charts, diagrams, dashboards, interactive explainers, or a small UI sketch instead of huge Markdown tables; for whole pages, app screens or several design directions, ask to open design mode with design_mode instead. "
+              : "Use this for charts, diagrams, dashboards, interactive explainers, or UI mockups instead of huge Markdown tables. ") +
+          "Provide either `html` (preferred) or a workspace-relative `.html` path. Vanilla HTML/CSS/JS only. Chart.js (`Chart`), Plotly (`Plotly`), and KaTeX (`katex`) are injected by Aiden—do not load CDN scripts or call network APIs. Do not use this for ordinary prose or raster images (use display_image).",
+        parameters: Type.Object({
+          title: Type.String({
+            description: "Short visible title for the artifact frame.",
+            minLength: 1,
+            maxLength: MAX_HTML_ARTIFACT_TITLE_CHARS,
+          }),
+          layout: Type.Optional(
+            Type.Union([Type.Literal("column"), Type.Literal("wide")], {
+              description:
+                "Set before html. column (default): the reading column, about 690px wide, for charts, cards, diagrams, and small tools. wide: spans the whole chat pane (up to about 1280px) and follows the window size, " +
+                (designCanvas
+                  ? "for multi-panel charts and wide tables."
+                  : designModeOffered
+                    ? "for dashboards, multi-panel layouts, and wide tables."
+                    : "for dashboards, UI mockups, multi-panel layouts, and wide tables."),
+            }),
+          ),
+          html: Type.Optional(
+            Type.String({
+              description: "Complete HTML document or fragment. Mutually exclusive with path.",
+              minLength: 1,
+              maxLength: MAX_HTML_ARTIFACT_BYTES,
+            }),
+          ),
+          path: Type.Optional(
+            Type.String({
+              description:
+                "Workspace-relative .html file to copy into Aiden-owned storage. Needs workspace access; otherwise pass html.",
+              minLength: 1,
+              maxLength: 4096,
+            }),
+          ),
         }),
-        layout: Type.Optional(
-          Type.Union([Type.Literal("column"), Type.Literal("wide")], {
-            description:
-              "Set before html. column (default): the reading column, about 690px wide, for charts, cards, diagrams, and small tools. wide: spans the whole chat pane (up to about 1280px) and follows the window size, " +
-              (designCanvas
-                ? "for multi-panel charts and wide tables."
-                : designModeOffered
-                  ? "for dashboards, multi-panel layouts, and wide tables."
-                  : "for dashboards, UI mockups, multi-panel layouts, and wide tables."),
-          }),
-        ),
-        html: Type.Optional(
-          Type.String({
-            description: "Complete HTML document or fragment. Mutually exclusive with path.",
-            minLength: 1,
-            maxLength: MAX_HTML_ARTIFACT_BYTES,
-          }),
-        ),
-        path: Type.Optional(
-          Type.String({
-            description:
-              "Workspace-relative .html file to copy into Aiden-owned storage. Needs workspace access; otherwise pass html.",
-            minLength: 1,
-            maxLength: 4096,
-          }),
-        ),
-      }),
-      execute: async (toolCallId, params, signal): Promise<AgentToolResult<null>> => {
-        const previous = serial;
-        let release!: () => void;
-        serial = new Promise<void>((resolve) => {
-          release = resolve;
-        });
-        await previous;
-        try {
-          if (signal?.aborted) throw new Error("Artifact rendering was cancelled.");
-          const input = params as { title?: unknown; html?: unknown; path?: unknown; layout?: unknown };
-          const title = requireGenerativeUiTitle(input.title);
-          if (input.layout !== undefined && !isHtmlArtifactLayout(input.layout)) {
-            throw new Error('render_artifact layout must be "column" or "wide".');
-          }
-          const layout: HtmlArtifactLayout = input.layout ?? "column";
-          const hasHtml = typeof input.html === "string" && input.html.length > 0;
-          const hasPath = typeof input.path === "string" && input.path.length > 0;
-          if (hasHtml === hasPath) {
-            throw new Error("render_artifact requires exactly one of html or path.");
-          }
-          let html: string;
-          let sourceLabel = "inline HTML";
-          if (hasPath) {
-            if (!workspace) {
-              throw new Error("render_artifact path requires workspace access; pass html instead.");
+        execute: async (toolCallId, params, signal): Promise<AgentToolResult<null>> => {
+          const previous = serial;
+          let release!: () => void;
+          serial = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          await previous;
+          try {
+            if (signal?.aborted) throw new Error("Artifact rendering was cancelled.");
+            const input = params as {
+              title?: unknown;
+              html?: unknown;
+              path?: unknown;
+              layout?: unknown;
+            };
+            const title = requireGenerativeUiTitle(input.title);
+            if (input.layout !== undefined && !isHtmlArtifactLayout(input.layout)) {
+              throw new Error('render_artifact layout must be "column" or "wide".');
             }
-            const resolved = resolveWorkspaceHtml(workspace.canonicalRoot, input.path as string);
-            const relative = resolved.relative.split(path.sep).join("/");
-            const reader = createSubagentFileMutatorClient({
-              workspaceRoot: workspace.identity,
-            });
-            try {
-              html = await reader.readHtml(randomUUID(), relative, signal);
-            } catch (error) {
-              if (error instanceof SubagentFileMutatorError && error.failure === "cancelled") {
-                throw new Error("Artifact rendering was cancelled.");
+            const layout: HtmlArtifactLayout = input.layout ?? "column";
+            const hasHtml = typeof input.html === "string" && input.html.length > 0;
+            const hasPath = typeof input.path === "string" && input.path.length > 0;
+            if (hasHtml === hasPath) {
+              throw new Error("render_artifact requires exactly one of html or path.");
+            }
+            let html: string;
+            let sourceLabel = "inline HTML";
+            if (hasPath) {
+              if (!workspace) {
+                throw new Error(
+                  "render_artifact path requires workspace access; pass html instead.",
+                );
               }
-              throw new Error(`Path "${resolved.relative}" could not be read safely.`);
-            } finally {
-              await reader.close();
+              const resolved = resolveWorkspaceHtml(workspace.canonicalRoot, input.path as string);
+              const relative = resolved.relative.split(path.sep).join("/");
+              const reader = createSubagentFileMutatorClient({
+                workspaceRoot: workspace.identity,
+              });
+              try {
+                html = await reader.readHtml(randomUUID(), relative, signal);
+              } catch (error) {
+                if (error instanceof SubagentFileMutatorError && error.failure === "cancelled") {
+                  throw new Error("Artifact rendering was cancelled.");
+                }
+                throw new Error(`Path "${resolved.relative}" could not be read safely.`);
+              } finally {
+                await reader.close();
+              }
+              sourceLabel = resolved.relative;
+            } else {
+              html = input.html as string;
             }
-            sourceLabel = resolved.relative;
-          } else {
-            html = input.html as string;
-          }
-          validateGenerativeUiHtml(html);
-          const scriptCheck = describeGenerativeUiScriptCheck(
-            checkGenerativeUiScripts(html),
-            "call render_artifact again with the same title to replace it",
-          );
-          const size = htmlArtifactByteLength(html);
-          const replacing = titlesInGeneration.get(title);
-          const nextBytes = displayedBytes - (replacing?.size ?? 0) + size;
-          if (!replacing) {
-            if (displayedCount >= MAX_HTML_ARTIFACTS_PER_RESPONSE) {
-              throw new Error(
-                `Up to ${MAX_HTML_ARTIFACTS_PER_RESPONSE} HTML artifacts can be rendered in one response.`,
-              );
+            validateGenerativeUiHtml(html);
+            const scriptCheck = describeGenerativeUiScriptCheck(
+              checkGenerativeUiScripts(html),
+              "call render_artifact again with the same title to replace it",
+            );
+            const size = htmlArtifactByteLength(html);
+            const replacing = titlesInGeneration.get(title);
+            const nextBytes = displayedBytes - (replacing?.size ?? 0) + size;
+            if (!replacing) {
+              if (displayedCount >= MAX_HTML_ARTIFACTS_PER_RESPONSE) {
+                throw new Error(
+                  `Up to ${MAX_HTML_ARTIFACTS_PER_RESPONSE} HTML artifacts can be rendered in one response.`,
+                );
+              }
+              if (existingChatHtmlCount + displayedCount >= MAX_HTML_ARTIFACTS_PER_CHAT) {
+                throw new Error(
+                  `This chat has reached its ${MAX_HTML_ARTIFACTS_PER_CHAT}-artifact limit.`,
+                );
+              }
             }
-            if (existingChatHtmlCount + displayedCount >= MAX_HTML_ARTIFACTS_PER_CHAT) {
-              throw new Error(
-                `This chat has reached its ${MAX_HTML_ARTIFACTS_PER_CHAT}-artifact limit.`,
-              );
+            if (
+              nextBytes > MAX_HTML_ARTIFACTS_PER_RESPONSE * MAX_HTML_ARTIFACT_BYTES ||
+              existingChatHtmlBytes + nextBytes > MAX_HTML_ARTIFACT_BYTES_PER_CHAT
+            ) {
+              throw new Error("HTML artifacts reached this response or chat's storage limit.");
             }
+            await options.beforeArtifact?.();
+            if (signal?.aborted) throw new Error("Artifact rendering was cancelled.");
+            const mediaId =
+              replacing?.mediaId ??
+              createHash("sha256")
+                .update(artifactNamespace)
+                .update("\0")
+                .update(toolCallId)
+                .digest("hex");
+            const id = createHash("sha256").update(html).digest("hex");
+            const artifact: ChatHtmlArtifactV1 = {
+              version: CHAT_ARTIFACT_VERSION,
+              kind: "html",
+              id,
+              title,
+              mimeType: HTML_ARTIFACT_MIME_TYPE,
+              size,
+              mediaId,
+            };
+            // A same-title replace stays where the visual first appeared.
+            const placementCallId = replacing?.toolCallId ?? toolCallId;
+            const presented =
+              (await options.onArtifact(artifact, html, {
+                toolCallId: placementCallId,
+                layout,
+              })) !== false;
+            if (presented && !replacing) {
+              displayedCount += 1;
+              displayedBytes = nextBytes;
+              titlesInGeneration.set(title, { mediaId, size, toolCallId });
+            } else if (presented && replacing) {
+              displayedBytes = nextBytes;
+              titlesInGeneration.set(title, { ...replacing, size });
+            }
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: !replacing
+                    ? `Rendered artifact "${title}" inline from ${sourceLabel} (${size} bytes).${scriptCheck}`
+                    : presented
+                      ? `Replaced the artifact "${title}" in place from ${sourceLabel} (${size} bytes); the person now sees this version.${scriptCheck}`
+                      : `Aiden could not show this version of the artifact "${title}" from ${sourceLabel} (${size} bytes); the person still sees the version rendered earlier in this reply.`,
+                },
+              ],
+              details: null,
+            };
+          } finally {
+            release();
           }
-          if (
-            nextBytes > MAX_HTML_ARTIFACTS_PER_RESPONSE * MAX_HTML_ARTIFACT_BYTES ||
-            existingChatHtmlBytes + nextBytes > MAX_HTML_ARTIFACT_BYTES_PER_CHAT
-          ) {
-            throw new Error("HTML artifacts reached this response or chat's storage limit.");
-          }
-          await options.beforeArtifact?.();
-          if (signal?.aborted) throw new Error("Artifact rendering was cancelled.");
-          const mediaId =
-            replacing?.mediaId ??
-            createHash("sha256")
-              .update(artifactNamespace)
-              .update("\0")
-              .update(toolCallId)
-              .digest("hex");
-          const id = createHash("sha256").update(html).digest("hex");
-          const artifact: ChatHtmlArtifactV1 = {
-            version: CHAT_ARTIFACT_VERSION,
-            kind: "html",
-            id,
-            title,
-            mimeType: HTML_ARTIFACT_MIME_TYPE,
-            size,
-            mediaId,
-          };
-          // A same-title replace stays where the visual first appeared.
-          const placementCallId = replacing?.toolCallId ?? toolCallId;
-          const presented =
-            (await options.onArtifact(artifact, html, { toolCallId: placementCallId, layout })) !== false;
-          if (presented && !replacing) {
-            displayedCount += 1;
-            displayedBytes = nextBytes;
-            titlesInGeneration.set(title, { mediaId, size, toolCallId });
-          } else if (presented && replacing) {
-            displayedBytes = nextBytes;
-            titlesInGeneration.set(title, { ...replacing, size });
-          }
-          return {
-            content: [
-              {
-                type: "text",
-                text: !replacing
-                  ? `Rendered artifact "${title}" inline from ${sourceLabel} (${size} bytes).${scriptCheck}`
-                  : presented
-                    ? `Replaced the artifact "${title}" in place from ${sourceLabel} (${size} bytes); the person now sees this version.${scriptCheck}`
-                    : `Aiden could not show this version of the artifact "${title}" from ${sourceLabel} (${size} bytes); the person still sees the version rendered earlier in this reply.`,
-              },
-            ],
-            details: null,
-          };
-        } finally {
-          release();
-        }
+        },
       },
-    },
-    "never",
+      "never",
     ),
     options.onUiVisual
       ? "Draw custom HTML/JS inside your reply; use only for what render_ui cannot draw, such as canvas drawing, simulations, 3D or Plotly."
@@ -548,7 +608,7 @@ export function createGenerativeUiExtensionRuntime(
         (options.onUiVisual
           ? "Aiden can draw inline visuals in this chat. Prefer render_ui, which composes Aiden's own native components (charts, stats, tables, comparisons, checklists, steps, simple filters and tabs); use render_artifact (sandboxed HTML) only for custom drawing or scripting. "
           : "Aiden can draw inline visuals in this chat with render_artifact. ") +
-        "Use one when a comparison, trend, structure, process, or interactive what-if is clearer as a visual than as prose — not for plain answers or raster images (use display_image), and usually at most one per reply. Each visual appears inside your reply in the Aiden Agent chat, at the point you call the tool, on the chat's own background (no frame or border), with its height following its content. It defaults to the reading column (about 690px wide); pass layout \"wide\" (before the markup or html) when it needs room, such as " +
+        'Use one when a comparison, trend, structure, process, or interactive what-if is clearer as a visual than as prose — not for plain answers or raster images (use display_image), and usually at most one per reply. Each visual appears inside your reply in the Aiden Agent chat, at the point you call the tool, on the chat\'s own background (no frame or border), with its height following its content. It defaults to the reading column (about 690px wide); pass layout "wide" (before the markup or html) when it needs room, such as ' +
         (designCanvas
           ? "a multi-panel chart or wide table"
           : designModeOffered
@@ -556,7 +616,9 @@ export function createGenerativeUiExtensionRuntime(
             : "a dashboard, UI mockup, multi-panel layout, or wide table") +
         ", and it will span the chat pane and follow the window size. Either way its width changes with the window, so build it fluid. Before your first visual in a conversation, call visualize_guide with the modules you need (catalog for render_ui; design, html, charts, interactive for render_artifact). Keep the reply complete without the visual: state the key takeaway in a sentence. Never load remote scripts or call network APIs from a visual, and do not claim inline visuals are unavailable while these tools are present." +
         (routing ? ` ${routing}` : "") +
-        (designCanvas ? " Keep inline visuals to small charts, diagrams or widgets that support your reply." : "") +
+        (designCanvas
+          ? " Keep inline visuals to small charts, diagrams or widgets that support your reply."
+          : "") +
         (options.onRequest ? ON_REQUEST_VISUALS_NOTE : ""),
       tools: (options.onUiVisual
         ? [
@@ -571,11 +633,16 @@ export function createGenerativeUiExtensionRuntime(
             ),
             guideTool,
           ]
-        : [declareOnDemandLoadNotes(tool, visualizeGuideLoadNotes(RENDER_ARTIFACT_GUIDE_MODULES)), guideTool]
-      ).map((declared) => refusedOffRequest(declared, {
-        onRequest: options.onRequest === true,
-        visualize: options.preferArtifactThisTurn === true,
-      })),
+        : [
+            declareOnDemandLoadNotes(tool, visualizeGuideLoadNotes(RENDER_ARTIFACT_GUIDE_MODULES)),
+            guideTool,
+          ]
+      ).map((declared) =>
+        refusedOffRequest(declared, {
+          onRequest: options.onRequest === true,
+          visualize: options.preferArtifactThisTurn === true,
+        }),
+      ),
     },
   };
 }

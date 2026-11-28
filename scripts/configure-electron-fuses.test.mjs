@@ -16,9 +16,7 @@ import {
   removeSharedWriteAccess,
 } from "./configure-electron-fuses.mjs";
 
-const packageJson = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-);
+const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
 test("strict Electron fuse config closes model-controlled Node entry points", () => {
   assert.equal(AIDEN_FUSE_CONFIG.strictlyRequireAllFuses, true);
@@ -117,10 +115,7 @@ test("Linux package paths target the native executable and resources tree", () =
       platformSpecificBuildOptions: { executableName: "aiden-agent" },
     },
   };
-  assert.equal(
-    packagedElectronExecutable(context),
-    "/tmp/aiden/linux-unpacked/aiden-agent",
-  );
+  assert.equal(packagedElectronExecutable(context), "/tmp/aiden/linux-unpacked/aiden-agent");
   assert.equal(
     packagedResourcesDirectory(context.appOutDir, "linux"),
     "/tmp/aiden/linux-unpacked/resources",

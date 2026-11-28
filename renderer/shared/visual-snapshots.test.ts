@@ -32,7 +32,10 @@ test("a snapshot is hidden only beside the visual it pictures", () => {
   );
   // A paired Mac's chat arrives without anything this desktop can draw: the
   // snapshot is the only picture of the visual, so it shows.
-  assert.deepEqual(attachmentsShownWithVisuals({ attachments: [snapshot, photo] }), [snapshot, photo]);
+  assert.deepEqual(attachmentsShownWithVisuals({ attachments: [snapshot, photo] }), [
+    snapshot,
+    photo,
+  ]);
   // A visual that is no longer drawable here (an older build dropped it).
   assert.deepEqual(
     attachmentsShownWithVisuals({

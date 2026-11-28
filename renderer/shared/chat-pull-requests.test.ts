@@ -20,9 +20,7 @@ import {
 } from "./chat-pull-requests";
 
 test("parseGitHubPullRequestUrl resolves canonical host/repository/number", () => {
-  const parsed = parseGitHubPullRequestUrl(
-    "https://github.com/Owner/Repo/pull/123",
-  );
+  const parsed = parseGitHubPullRequestUrl("https://github.com/Owner/Repo/pull/123");
   assert.deepEqual(parsed, {
     host: "github.com",
     repository: "owner/repo",
@@ -31,9 +29,7 @@ test("parseGitHubPullRequestUrl resolves canonical host/repository/number", () =
 });
 
 test("parseGitHubPullRequestUrl accepts GitHub Enterprise hosts", () => {
-  const parsed = parseGitHubPullRequestUrl(
-    "https://ghe.example.com/Team/Service/pull/9",
-  );
+  const parsed = parseGitHubPullRequestUrl("https://ghe.example.com/Team/Service/pull/9");
   assert.deepEqual(parsed, {
     host: "ghe.example.com",
     repository: "team/service",
@@ -42,14 +38,11 @@ test("parseGitHubPullRequestUrl accepts GitHub Enterprise hosts", () => {
 });
 
 test("parseGitHubPullRequestUrl tolerates the /pulls/ listing path shape", () => {
-  assert.deepEqual(
-    parseGitHubPullRequestUrl("https://github.com/o/r/pulls/7"),
-    {
-      host: "github.com",
-      repository: "o/r",
-      number: 7,
-    },
-  );
+  assert.deepEqual(parseGitHubPullRequestUrl("https://github.com/o/r/pulls/7"), {
+    host: "github.com",
+    repository: "o/r",
+    number: 7,
+  });
 });
 
 test("parseGitHubPullRequestUrl rejects non-pull-request shapes", () => {
@@ -71,10 +64,7 @@ test("parseGitHubPullRequestUrl rejects non-pull-request shapes", () => {
 });
 
 test("normalizeGitHubRepositoryIdentity lowercases and drops .git", () => {
-  assert.equal(
-    normalizeGitHubRepositoryIdentity("Owner/Repo.GIT"),
-    "owner/repo",
-  );
+  assert.equal(normalizeGitHubRepositoryIdentity("Owner/Repo.GIT"), "owner/repo");
   assert.equal(normalizeGitHubRepositoryIdentity("owner/repo"), "owner/repo");
   assert.equal(normalizeGitHubRepositoryIdentity("a/b/c"), undefined);
   assert.equal(normalizeGitHubRepositoryIdentity("no-slash"), undefined);
@@ -91,10 +81,7 @@ test("normalizeGitHubHost lowercases and bounds hostnames", () => {
 test("canonicalGitHubPullRequestUrl round-trips a parsed ref", () => {
   const ref = parseGitHubPullRequestUrl("https://github.com/owner/repo/pull/5");
   assert.ok(ref);
-  assert.equal(
-    canonicalGitHubPullRequestUrl(ref),
-    "https://github.com/owner/repo/pull/5",
-  );
+  assert.equal(canonicalGitHubPullRequestUrl(ref), "https://github.com/owner/repo/pull/5");
 });
 
 test("pullRequestRefKey identifies (host, repository, number)", () => {
@@ -219,15 +206,7 @@ test("link cap constant is sane", () => {
 test("supplied malformed commit expectations are rejected rather than omitted", () => {
   assert.equal(parseExpectedHeadSha(undefined), undefined);
   assert.equal(parseExpectedHeadSha("A".repeat(40)), "a".repeat(40));
-  for (const value of [
-    null,
-    "",
-    " ",
-    "not-a-sha",
-    "a".repeat(65),
-    "a".repeat(40) + "\n",
-    123,
-  ]) {
+  for (const value of [null, "", " ", "not-a-sha", "a".repeat(65), "a".repeat(40) + "\n", 123]) {
     assert.throws(() => parseExpectedHeadSha(value), /expectedHeadSha/);
   }
 });
@@ -250,10 +229,7 @@ test("push endpoint identity preserves the selected host and repository without 
     "ssh://git@github.com/Fork/Repo.git",
     "https://github.com/Fork/Repo.git",
   ]) {
-    assert.equal(
-      pullRequestRepositoryFromPushEndpoint(endpoint),
-      "github.com/fork/repo",
-    );
+    assert.equal(pullRequestRepositoryFromPushEndpoint(endpoint), "github.com/fork/repo");
   }
   assert.equal(
     pullRequestRepositoryFromPushEndpoint("git@ghe.example.com:Team/Repo.git"),
@@ -267,9 +243,6 @@ test("push endpoint identity preserves the selected host and repository without 
   ]) {
     assert.equal(pullRequestRepositoryFromPushEndpoint(endpoint), undefined);
   }
-  assert.equal(
-    parsePullRequestRepository("github.com/Fork/Repo"),
-    "github.com/fork/repo",
-  );
+  assert.equal(parsePullRequestRepository("github.com/Fork/Repo"), "github.com/fork/repo");
   assert.throws(() => parsePullRequestRepository("github.com/a/b/extra"));
 });

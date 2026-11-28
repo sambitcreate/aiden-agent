@@ -74,29 +74,32 @@ test("remote Bot Files binds opaque handles to device, chat, policy epoch, and m
   const root = path.join(temporary, "managed-home");
   await fs.mkdir(path.join(root, "Notes"), { recursive: true });
   await fs.writeFile(path.join(root, "Notes", "plan.md"), "first\n", "utf8");
-  const chats = new Map<string, Chat>([[
-    "chat-1",
-    {
-      id: "chat-1",
-      botId: "bot-1",
-      workspaceId: "managed-workspace-1",
-      title: "Plan",
-      messages: [],
-      createdAt: 1,
-      updatedAt: 1,
-    },
-  ], [
-    "chat-2",
-    {
-      id: "chat-2",
-      botId: "bot-2",
-      workspaceId: "managed-workspace-1",
-      title: "Other Bot",
-      messages: [],
-      createdAt: 1,
-      updatedAt: 1,
-    },
-  ]]);
+  const chats = new Map<string, Chat>([
+    [
+      "chat-1",
+      {
+        id: "chat-1",
+        botId: "bot-1",
+        workspaceId: "managed-workspace-1",
+        title: "Plan",
+        messages: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+    [
+      "chat-2",
+      {
+        id: "chat-2",
+        botId: "bot-2",
+        workspaceId: "managed-workspace-1",
+        title: "Other Bot",
+        messages: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+  ]);
   let epoch = "1";
   let botHome = true;
   let revoked = false;
@@ -121,7 +124,9 @@ test("remote Bot Files binds opaque handles to device, chat, policy epoch, and m
         revalidateBeforeEffect: async () => {
           if (revoked) throw new BotRuntimeAuthorityError("capability_changed");
         },
-        release: () => { releases += 1; },
+        release: () => {
+          releases += 1;
+        },
       }),
     },
   });
@@ -134,7 +139,10 @@ test("remote Bot Files binds opaque handles to device, chat, policy epoch, and m
     assert.equal(file.language, "Markdown");
     assert.equal(JSON.stringify(index).includes(root), false);
     assert.equal(JSON.stringify(index).includes("managed-workspace-1"), false);
-    assert.equal(handles.storedTokenMaterialForTesting().some((value) => value.includes("plan")), false);
+    assert.equal(
+      handles.storedTokenMaterialForTesting().some((value) => value.includes("plan")),
+      false,
+    );
 
     const first = await service.read("device-1", "chat-1", file.id);
     assert.equal(first.content, "first\n");
@@ -215,7 +223,7 @@ test("a device paired without its own Full Access notice opens Bot Files under t
   const service = new AidenRemoteBotFileService({
     instanceId: "instance-1",
     botAudienceId: "desktop:local",
-    chats: { get: async (chatId) => chatId === chat.id ? chat : null },
+    chats: { get: async (chatId) => (chatId === chat.id ? chat : null) },
     authority: {
       admit: async ({ audienceId, botId, chatId }): Promise<BotRuntimeAuthorityAdmission> => {
         if (!acceptedAudiences.has(audienceId)) {
@@ -240,7 +248,10 @@ test("a device paired without its own Full Access notice opens Bot Files under t
 
   try {
     const index = await service.list("device-new-iphone", "chat-1");
-    assert.deepEqual(index.entries.map(({ displayPath }) => displayPath), ["brief.md"]);
+    assert.deepEqual(
+      index.entries.map(({ displayPath }) => displayPath),
+      ["brief.md"],
+    );
     const file = index.entries[0]!;
     const document = await service.read("device-new-iphone", "chat-1", file.id);
     assert.equal(document.content, "agenda\n");
@@ -269,16 +280,29 @@ test("re-listing Bot Files reclaims superseded unopened handles instead of answe
   await fs.writeFile(path.join(root, "a.md"), "a\n", "utf8");
   await fs.writeFile(path.join(root, "b.md"), "b\n", "utf8");
   const chat: Chat = {
-    id: "chat-1", botId: "bot-1", workspaceId: "managed-workspace-1", title: "Plan", messages: [], createdAt: 1, updatedAt: 1,
+    id: "chat-1",
+    botId: "bot-1",
+    workspaceId: "managed-workspace-1",
+    title: "Plan",
+    messages: [],
+    createdAt: 1,
+    updatedAt: 1,
   };
   const service = new AidenRemoteBotFileService({
     instanceId: "instance-1",
     botAudienceId: "desktop:local",
-    chats: { get: async (chatId) => chatId === chat.id ? chat : null },
+    chats: { get: async (chatId) => (chatId === chat.id ? chat : null) },
     handles: new AidenOpaqueHandleStore({ maxEntries: 3 }),
     authority: {
       admit: async ({ botId, chatId }): Promise<BotRuntimeAuthorityAdmission> => ({
-        authority: authorityFixture({ root, botId, chatId, workspaceId: "managed-workspace-1", epoch: "1", botHome: true }),
+        authority: authorityFixture({
+          root,
+          botId,
+          chatId,
+          workspaceId: "managed-workspace-1",
+          epoch: "1",
+          botHome: true,
+        }),
         signal: new AbortController().signal,
         revalidateBeforeEffect: async () => undefined,
         release: () => undefined,
@@ -302,14 +326,17 @@ test("re-listing Bot Files reclaims superseded unopened handles instead of answe
 test("remote Bot Files rejects ordinary and cross-Bot chats before managed-home access", async () => {
   let admissions = 0;
   const chats = new Map<string, Chat>([
-    ["ordinary", {
-      id: "ordinary",
-      workspaceId: "workspace-1",
-      title: "Ordinary",
-      messages: [],
-      createdAt: 1,
-      updatedAt: 1,
-    }],
+    [
+      "ordinary",
+      {
+        id: "ordinary",
+        workspaceId: "workspace-1",
+        title: "Ordinary",
+        messages: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
   ]);
   const service = new AidenRemoteBotFileService({
     instanceId: "instance-1",
@@ -347,17 +374,20 @@ async function httpFixture(options: {
     appVersion: "0.30.0",
     devices: {
       authenticate: async (credential) => {
-        const id = credential === "a".repeat(43)
-          ? "device-authorized-12345678"
-          : credential === "b".repeat(43)
-            ? "device-other-87654321"
-            : undefined;
-        return id ? {
-          id,
-          revoked: false,
-          acceptsBotCapabilities: true,
-          capabilities: new Set(options.capabilities),
-        } : null;
+        const id =
+          credential === "a".repeat(43)
+            ? "device-authorized-12345678"
+            : credential === "b".repeat(43)
+              ? "device-other-87654321"
+              : undefined;
+        return id
+          ? {
+              id,
+              revoked: false,
+              acceptsBotCapabilities: true,
+              capabilities: new Set(options.capabilities),
+            }
+          : null;
       },
       acquireDeviceAuthorization: (deviceId) => {
         if (options.authorizationBlocked?.(deviceId)) {
@@ -370,12 +400,22 @@ async function httpFixture(options: {
         return () => undefined;
       },
     },
-    pairing: { exchange: async () => { throw new Error("unused"); } },
+    pairing: {
+      exchange: async () => {
+        throw new Error("unused");
+      },
+    },
     botFiles: {
       list: async (deviceId, chatId) => {
         calls.push(`list:${deviceId}:${chatId}`);
         await options.holdRead?.();
-        return { snapshotId: "files-1", entries: [], truncated: false, maxEntries: 4_000, maxDepth: 20 };
+        return {
+          snapshotId: "files-1",
+          entries: [],
+          truncated: false,
+          maxEntries: 4_000,
+          maxDepth: 20,
+        };
       },
       read: async (deviceId, chatId, suppliedFileId) => {
         calls.push(`read:${deviceId}:${chatId}:${suppliedFileId}`);
@@ -444,7 +484,10 @@ test("Bot conversation file routes require conjunctive Bot and file grants", asy
     });
     assert.equal(written.status, 200);
     assert.equal((await written.json()).content, "saved");
-    assert.deepEqual(app.calls.map((call) => call.split(":", 1)[0]), ["list", "read", "write"]);
+    assert.deepEqual(
+      app.calls.map((call) => call.split(":", 1)[0]),
+      ["list", "read", "write"],
+    );
   } finally {
     await app.close();
   }
@@ -472,13 +515,20 @@ test("a Bot Files read held across device revocation publishes nothing, and othe
     holdRead: async () => {
       if (revoked.size > 0 || !release) return;
       held?.();
-      await new Promise<void>((resolve) => { release = resolve; });
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
     },
   });
   try {
-    for (const path of ["/bot-conversations/chat-1/files", `/bot-conversations/chat-1/files/${app.fileId}`]) {
+    for (const path of [
+      "/bot-conversations/chat-1/files",
+      `/bot-conversations/chat-1/files/${app.fileId}`,
+    ]) {
       release = () => undefined;
-      const reached = new Promise<void>((resolve) => { held = resolve; });
+      const reached = new Promise<void>((resolve) => {
+        held = resolve;
+      });
       const pending = fetch(`${app.base}${path}`, { headers: authorizationHeaders });
       await reached;
       // Revocation completes while the Mac-owner Bot authority is still reading.
@@ -512,23 +562,28 @@ test("stalled Bot file PUT parses its body before device revocation admission", 
   try {
     const target = new URL(`${app.base}/bot-conversations/chat-1/files/${app.fileId}`);
     const result = await new Promise<{ status: number; body: string }>((resolve, reject) => {
-      const request = httpRequest({
-        host: target.hostname,
-        port: target.port,
-        path: target.pathname,
-        method: "PUT",
-        headers: {
-          ...authorizationHeaders,
-          "content-type": "application/json",
+      const request = httpRequest(
+        {
+          host: target.hostname,
+          port: target.port,
+          path: target.pathname,
+          method: "PUT",
+          headers: {
+            ...authorizationHeaders,
+            "content-type": "application/json",
+          },
         },
-      }, (incoming) => {
-        const chunks: Buffer[] = [];
-        incoming.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-        incoming.on("end", () => resolve({
-          status: incoming.statusCode ?? 0,
-          body: Buffer.concat(chunks).toString("utf8"),
-        }));
-      });
+        (incoming) => {
+          const chunks: Buffer[] = [];
+          incoming.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+          incoming.on("end", () =>
+            resolve({
+              status: incoming.statusCode ?? 0,
+              body: Buffer.concat(chunks).toString("utf8"),
+            }),
+          );
+        },
+      );
       request.once("error", reject);
       request.write("{");
       blocked = true;
@@ -550,16 +605,39 @@ async function budgetBotFixture(t: test.TestContext) {
   const handles = new AidenOpaqueHandleStore();
   let releases = 0;
   const service = new AidenRemoteBotFileService({
-    instanceId: "instance", botAudienceId: "desktop:local", handles,
-    chats: { get: async id => ({ id, botId: "bot", workspaceId: "home", title: "Bot", messages: [], createdAt: 1, updatedAt: 1 }) },
-    authority: { admit: async ({ botId, chatId }) => ({
-      authority: authorityFixture({ root, botId, chatId, workspaceId: "home", epoch: "1", botHome: true }),
-      signal: controller.signal,
-      revalidateBeforeEffect: async () => {
-        if (controller.signal.aborted) throw new BotRuntimeAuthorityError("capability_changed");
-      },
-      release: () => { releases += 1; },
-    }) },
+    instanceId: "instance",
+    botAudienceId: "desktop:local",
+    handles,
+    chats: {
+      get: async (id) => ({
+        id,
+        botId: "bot",
+        workspaceId: "home",
+        title: "Bot",
+        messages: [],
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+    },
+    authority: {
+      admit: async ({ botId, chatId }) => ({
+        authority: authorityFixture({
+          root,
+          botId,
+          chatId,
+          workspaceId: "home",
+          epoch: "1",
+          botHome: true,
+        }),
+        signal: controller.signal,
+        revalidateBeforeEffect: async () => {
+          if (controller.signal.aborted) throw new BotRuntimeAuthorityError("capability_changed");
+        },
+        release: () => {
+          releases += 1;
+        },
+      }),
+    },
   });
   return { root, service, handles, controller, releases: () => releases };
 }
@@ -568,7 +646,8 @@ test("Bot and workspace listings share the aggregate metadata budget with ordere
   const { service, releases } = await budgetBotFixture(t);
   const desktopRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-desktop-metadata-"));
   t.after(() => fs.rm(desktopRoot, { recursive: true, force: true }));
-  for (let i = 0; i < 96; i += 1) await fs.writeFile(path.join(desktopRoot, `file${i}.txt`), "fixture");
+  for (let i = 0; i < 96; i += 1)
+    await fs.writeFile(path.join(desktopRoot, `file${i}.txt`), "fixture");
   const original = fsPromises.stat;
   let active = 0;
   let peak = 0;
@@ -578,25 +657,44 @@ test("Bot and workspace listings share the aggregate metadata budget with ordere
     calls += 1;
     peak = Math.max(peak, ++active);
     try {
-      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
       return await original(...args);
-    } finally { active -= 1; }
+    } finally {
+      active -= 1;
+    }
   }) as typeof fsPromises.stat;
   syncBuiltinESMExports();
-  t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
+  t.after(() => {
+    fsPromises.stat = original;
+    syncBuiltinESMExports();
+  });
   const [first, second, desktop] = await Promise.all([
-    service.list("device-1", "chat-one"), service.list("device-1", "chat-two"), listWorkspaceFiles(desktopRoot),
+    service.list("device-1", "chat-one"),
+    service.list("device-1", "chat-two"),
+    listWorkspaceFiles(desktopRoot),
   ]);
   const paths = Array.from({ length: 24 }, (_, i) => `file${i}.txt`);
-  assert.deepEqual(first.entries.map(entry => entry.displayPath), paths);
-  assert.deepEqual(second.entries.map(entry => entry.displayPath), paths);
-  assert.deepEqual(desktop.entries.map(entry => entry.path), Array.from({ length: 96 }, (_, i) => `file${i}.txt`));
+  assert.deepEqual(
+    first.entries.map((entry) => entry.displayPath),
+    paths,
+  );
+  assert.deepEqual(
+    second.entries.map((entry) => entry.displayPath),
+    paths,
+  );
+  assert.deepEqual(
+    desktop.entries.map((entry) => entry.path),
+    Array.from({ length: 96 }, (_, i) => `file${i}.txt`),
+  );
   assert.equal(calls, 192);
   assert.ok(peak > 1 && peak <= 4, `aggregate Bot/workspace metadata concurrency: ${peak}`);
   assert.equal(active, 0);
   assert.equal(releases(), 2);
-  await assert.rejects(service.read("device-1", "chat-two", first.entries[0]!.id),
-    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "root_policy_changed");
+  await assert.rejects(
+    service.read("device-1", "chat-two", first.entries[0]!.id),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError && error.code === "root_policy_changed",
+  );
 });
 
 test("Bot revocation during identity inspection drains work before releasing authority and issues no handles", async (t) => {
@@ -611,15 +709,23 @@ test("Bot revocation during identity inspection drains work before releasing aut
     visits.set(name, visit);
     active += 1;
     try {
-      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
       if (visit === 2) controller.abort(new BotRuntimeAuthorityError("capability_changed"));
       return await original(...args);
-    } finally { active -= 1; }
+    } finally {
+      active -= 1;
+    }
   }) as typeof fsPromises.stat;
   syncBuiltinESMExports();
-  t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
-  await assert.rejects(service.list("device-1", "chat-one"),
-    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "operation_stale");
+  t.after(() => {
+    fsPromises.stat = original;
+    syncBuiltinESMExports();
+  });
+  await assert.rejects(
+    service.list("device-1", "chat-one"),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError && error.code === "operation_stale",
+  );
   assert.equal(active, 0);
   assert.equal(releases(), 1);
   assert.equal(handles.storedTokenMaterialForTesting().length, 0);

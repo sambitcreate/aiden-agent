@@ -94,7 +94,10 @@ async function withProject<T>(run: (root: string, outside: string) => Promise<T>
 }
 
 /** Runs a real tool call and reports whether it was refused (thrown or error result). */
-async function refusal(tool: AgentTool, args: Record<string, unknown>): Promise<string | undefined> {
+async function refusal(
+  tool: AgentTool,
+  args: Record<string, unknown>,
+): Promise<string | undefined> {
   try {
     const result = (await tool.execute("call", args as never)) as {
       isError?: boolean;
@@ -406,7 +409,10 @@ test("Assistant reaches connector tools only for an explicit, exact MCP grant", 
     sources,
   );
   assert.deepEqual(names(unattended), ["mcp__gmail__send_email"]);
-  assert.deepEqual(calls.mcp.map((ctx) => ctx.mcpServerIds), [["gmail"]]);
+  assert.deepEqual(
+    calls.mcp.map((ctx) => ctx.mcpServerIds),
+    [["gmail"]],
+  );
   assert.equal(calls.webSearch, 0);
 
   assert.deepEqual(

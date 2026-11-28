@@ -1,6 +1,9 @@
 import { analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
 import { filterRemoteVisibleWorkspaces } from "./visible-chat-projection.js";
-import { createAidenRemoteBotAllowList, type AidenRemoteBotAllowList } from "./aiden-remote-bot-allowed.js";
+import {
+  createAidenRemoteBotAllowList,
+  type AidenRemoteBotAllowList,
+} from "./aiden-remote-bot-allowed.js";
 import { botMessagingEnabled } from "../../renderer/shared/bot-messages.js";
 import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
 import { workspaceIntakeService } from "./workspace-intake-main.js";
@@ -8,7 +11,10 @@ import { mcpLiveStatus } from "./mcp-status-events.js";
 import { remoteAppControls } from "./aiden-remote-app-controls.js";
 import { publishAppControlsChanged } from "./app-controls-events-main.js";
 import { AidenRemoteProviderService } from "./aiden-remote-providers.js";
-import { reconcilePendingProviderCredentialRotation, saveProviderWithCredentialRotation } from "./provider-credential-rotation.js";
+import {
+  reconcilePendingProviderCredentialRotation,
+  saveProviderWithCredentialRotation,
+} from "./provider-credential-rotation.js";
 import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
 import { secrets } from "./secrets.js";
 import { ttsService } from "./tts/service-main.js";
@@ -20,8 +26,16 @@ import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { workspaceFolderRemoteRefusal } from "./workspace-folder-presence.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
-import { buildVisualViewerDocument, type VisualViewerAppearance, type VisualViewerSource } from "./visual-viewer-document.js";
-import { loadVisualViewerBundle, loadVisualViewerLibraries, visualViewerInstalled } from "./visual-viewer-main.js";
+import {
+  buildVisualViewerDocument,
+  type VisualViewerAppearance,
+  type VisualViewerSource,
+} from "./visual-viewer-document.js";
+import {
+  loadVisualViewerBundle,
+  loadVisualViewerLibraries,
+  visualViewerInstalled,
+} from "./visual-viewer-main.js";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -87,7 +101,10 @@ import {
   AidenIdempotencyLedger,
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
-import { aidenRemoteOperationStoreOptions, openAidenRemoteOperationLedger } from "./aiden-remote-operation-store.js";
+import {
+  aidenRemoteOperationStoreOptions,
+  openAidenRemoteOperationLedger,
+} from "./aiden-remote-operation-store.js";
 import {
   AidenRemoteChatService,
   type AidenRemoteRetainedBotChatAuthorizationRequest,
@@ -169,30 +186,31 @@ import {
 import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import { botQuestions } from "./bot-runtime/bot-questions-main.js";
 import { botPlans } from "./bot-plans/plans-main.js";
-import { botAccessRequests, answerBotAccessRequest } from "./bot-runtime/bot-access-requests-main.js";
+import {
+  botAccessRequests,
+  answerBotAccessRequest,
+} from "./bot-runtime/bot-access-requests-main.js";
 import { botHandoffs } from "./bot-runtime/bot-handoffs-main.js";
 import { botRunStarts, botTurnIntents } from "./bot-runtime/bot-turn-intents-main.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
 import { botApplicationService } from "./bot-application-service-main.js";
-import { revokeBotNoticeAudience, type BotNoticeRevokePolicy } from "./bot-capability-store-core.js";
+import {
+  revokeBotNoticeAudience,
+  type BotNoticeRevokePolicy,
+} from "./bot-capability-store-core.js";
 import {
   BOT_DESKTOP_AUDIENCE_ID,
   botRuntimeAuthority,
   preflightBotTurnAuthority,
   resolveBotRuntimeCatalogSnapshot,
 } from "./bot-runtime-authority-main.js";
-import {
-  AidenRemoteBotService,
-} from "./aiden-remote-bots.js";
+import { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import {
   botCapabilityCatalog,
   botCapabilityStore,
   resolveBotRuntimeSkills,
 } from "./bot-capability-services-main.js";
-import {
-  exactBotSkillToolNames,
-  filterBotSkillSnapshot,
-} from "./bot-tool-authority.js";
+import { exactBotSkillToolNames, filterBotSkillSnapshot } from "./bot-tool-authority.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { withoutSkills } from "./skill-registry.js";
 import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
@@ -212,12 +230,18 @@ import {
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { electronConnectorWatchRemotePorts } from "./bot-routine-events/connector-watch-startup.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
-import { AidenRemoteHostFeedService, createHostFeedBotSignalsCache } from "./aiden-remote-host-feed.js";
+import {
+  AidenRemoteHostFeedService,
+  createHostFeedBotSignalsCache,
+} from "./aiden-remote-host-feed.js";
 import { createAidenRemoteHostFeedSource } from "./aiden-remote-host-feed-source.js";
 import { hostRunRegistry } from "./host-runs-main.js";
 import { liveRunAttention } from "./chat-pending-attention.js";
 import { gitCachedRepositoryIdentity } from "./git.js";
-import { aidenRemoteHostPlatform, type AidenRemotePendingQuestion } from "./aiden-remote-protocol.js";
+import {
+  aidenRemoteHostPlatform,
+  type AidenRemotePendingQuestion,
+} from "./aiden-remote-protocol.js";
 import type { ToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 
 const STATE_FILE = "aiden-remote-v1.json";
@@ -235,23 +259,25 @@ async function mapWithConcurrency<Input, Output>(
 ): Promise<Output[]> {
   const output = new Array<Output>(values.length);
   let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, values.length) }, async () => {
-    while (next < values.length) {
-      const index = next++;
-      output[index] = await project(values[index]!);
-    }
-  }));
+  await Promise.all(
+    Array.from({ length: Math.min(limit, values.length) }, async () => {
+      while (next < values.length) {
+        const index = next++;
+        output[index] = await project(values[index]!);
+      }
+    }),
+  );
   return output;
 }
 
 async function computerDisplayName(): Promise<string> {
   if (process.platform !== "darwin") return os.hostname();
   try {
-    const { stdout } = await execFileAsync(
-      "/usr/sbin/scutil",
-      ["--get", "ComputerName"],
-      { timeout: 1_000, maxBuffer: 4_096, encoding: "utf8" },
-    );
+    const { stdout } = await execFileAsync("/usr/sbin/scutil", ["--get", "ComputerName"], {
+      timeout: 1_000,
+      maxBuffer: 4_096,
+      encoding: "utf8",
+    });
     return stdout;
   } catch {
     return os.hostname();
@@ -264,7 +290,8 @@ function remoteRouteCategory(value: unknown): string {
   if (value.startsWith("pairing")) return "pairing";
   if (value.startsWith("bot")) return value === "botFiles" ? "files" : "bots";
   if (value.toLowerCase().includes("workspace")) return "workspaces";
-  if (value.toLowerCase().includes("file") || value.toLowerCase().includes("attachment")) return "files";
+  if (value.toLowerCase().includes("file") || value.toLowerCase().includes("attachment"))
+    return "files";
   if (value.toLowerCase().includes("git")) return "git";
   if (value.toLowerCase().includes("schedule")) return "schedules";
   if (value.toLowerCase().includes("usage")) return "usage";
@@ -293,7 +320,8 @@ function writeRemoteLog(entry: AidenRemoteServiceLogEntry): void {
             ...(typeof details.method === "string" ? { method: details.method } : {}),
             ...(typeof details.routePath === "string" ? { route: details.routePath } : {}),
             statusClass: status >= 500 ? "5xx" : status >= 400 ? "4xx" : "2xx",
-            latencyBucket: latencyMs >= 10_000 ? "10s-plus" : latencyMs >= 5_000 ? "5s-plus" : "2s-plus",
+            latencyBucket:
+              latencyMs >= 10_000 ? "10s-plus" : latencyMs >= 5_000 ? "5s-plus" : "2s-plus",
             remoteCode: typeof details.errorCode === "string" ? details.errorCode : null,
           },
         });
@@ -314,9 +342,10 @@ async function authorizeRemoteRetainedBotChat(
 ): Promise<boolean> {
   return botApplicationService.authorizeRetainedChat({
     // A paired desktop reading host-wide sees Bot chats as the host owner does.
-    audienceId: request.audience === "host-owner" && request.access === "read"
-      ? BOT_DESKTOP_AUDIENCE_ID
-      : request.deviceId,
+    audienceId:
+      request.audience === "host-owner" && request.access === "read"
+        ? BOT_DESKTOP_AUDIENCE_ID
+        : request.deviceId,
     botId: request.botId,
     chatId: request.chatId,
     access: request.access,
@@ -364,10 +393,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     {
       maxBytes: MAX_STATE_BYTES,
       fileMode: 0o600,
-      normalize: (value) => normalizeAidenRemoteStateForRuntimeProfile(
-        parseAidenRemoteStateDocument(value, defaultDisplayName),
-        runtimeProfile.id,
-      ),
+      normalize: (value) =>
+        normalizeAidenRemoteStateForRuntimeProfile(
+          parseAidenRemoteStateDocument(value, defaultDisplayName),
+          runtimeProfile.id,
+        ),
       isSafe: (value) => {
         try {
           parseAidenRemoteStateDocument(value, defaultDisplayName);
@@ -380,33 +410,40 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       rejectUnsafeWrite: true,
     },
   );
-  const state = new AidenRemoteStateRegistry({
-    load: () => store.load(),
-    needsSaveAfterLoad: async () => {
-      const contents = await store.loadedDiskContents();
-      if (contents === null) return true;
-      try {
-        const raw = JSON.parse(contents.toString("utf8")) as unknown;
-        return !raw || typeof raw !== "object" || Array.isArray(raw)
-          || !("displayName" in raw) || !("lanPortCommitted" in raw)
-          || (
-            runtimeProfile.id === "development"
-            && "lanPort" in raw
-            && typeof raw.lanPort === "number"
-            && isAidenRemoteReservedLanPort(raw.lanPort, "production")
-            && !("tailscalePendingOutcome" in raw)
+  const state = new AidenRemoteStateRegistry(
+    {
+      load: () => store.load(),
+      needsSaveAfterLoad: async () => {
+        const contents = await store.loadedDiskContents();
+        if (contents === null) return true;
+        try {
+          const raw = JSON.parse(contents.toString("utf8")) as unknown;
+          return (
+            !raw ||
+            typeof raw !== "object" ||
+            Array.isArray(raw) ||
+            !("displayName" in raw) ||
+            !("lanPortCommitted" in raw) ||
+            (runtimeProfile.id === "development" &&
+              "lanPort" in raw &&
+              typeof raw.lanPort === "number" &&
+              isAidenRemoteReservedLanPort(raw.lanPort, "production") &&
+              !("tailscalePendingOutcome" in raw))
           );
-      } catch {
-        return false;
-      }
+        } catch {
+          return false;
+        }
+      },
+      save: async (document) => {
+        await store.save(document);
+        ipcMain.broadcast("remote:changed", {});
+      },
     },
-    save: async (document) => {
-      await store.save(document);
-      ipcMain.broadcast("remote:changed", {});
+    undefined,
+    {
+      botCapabilitiesSupported: () => hostPlatformCapabilities().bots,
     },
-  }, undefined, {
-    botCapabilitiesSupported: () => hostPlatformCapabilities().bots,
-  });
+  );
   const operationStore = new DataStore<AidenIdempotencySnapshot>(
     OPERATIONS_FILE,
     new AidenIdempotencyLedger().snapshot(),
@@ -414,31 +451,28 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     aidenRemoteOperationStoreOptions(),
   );
   const streamJournal = new AidenRemoteStreamJournal(STREAMS_FILE, () => userData);
-  const tailscale = new AidenRemoteTailscaleController(
-    await createSystemTailscaleCommandRunner(),
-    {
-      onStatusReadFailure: ({ phase, attempt, final, category }) => {
-        if (!final) return;
-        writeDiagnosticEvent({
-          level: "warn",
-          area: "remote",
-          event: "tailscale-status-read-unavailable",
-          outcome: "unavailable",
-          fields: {
-            tailscalePhase: phase,
-            failureCategory: category,
-            attempts: attempt,
-          },
-        });
-      },
-      outcomeStore: {
-        begin: (outcome) => state.beginTailscalePendingOutcome(outcome),
-        snapshot: async () => (await state.snapshot()).tailscalePendingOutcome,
-        commit: (ownership) => state.commitTailscaleOutcome(ownership),
-        clear: () => state.clearTailscalePendingOutcome(),
-      },
+  const tailscale = new AidenRemoteTailscaleController(await createSystemTailscaleCommandRunner(), {
+    onStatusReadFailure: ({ phase, attempt, final, category }) => {
+      if (!final) return;
+      writeDiagnosticEvent({
+        level: "warn",
+        area: "remote",
+        event: "tailscale-status-read-unavailable",
+        outcome: "unavailable",
+        fields: {
+          tailscalePhase: phase,
+          failureCategory: category,
+          attempts: attempt,
+        },
+      });
     },
-  );
+    outcomeStore: {
+      begin: (outcome) => state.beginTailscalePendingOutcome(outcome),
+      snapshot: async () => (await state.snapshot()).tailscalePendingOutcome,
+      commit: (ownership) => state.commitTailscaleOutcome(ownership),
+      clear: () => state.clearTailscalePendingOutcome(),
+    },
+  });
   const workspaceApis = memoizeAidenRemoteWorkspaceApi<{
     instanceId: string;
     workspaces: AidenRemoteWorkspaceService;
@@ -506,12 +540,15 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     activeHostFeed?.revokeDevice(deviceId);
     activeHostRuns?.revokeDevice(deviceId);
     activeBotSessions?.revokeDevice(deviceId);
-    const revoked = await revokeAidenRemoteRuntimeDevice({
-      state,
-      streams: activeStreams,
-      chats: activeChats,
-      workspaceOwners,
-    }, deviceId);
+    const revoked = await revokeAidenRemoteRuntimeDevice(
+      {
+        state,
+        streams: activeStreams,
+        chats: activeChats,
+        workspaceOwners,
+      },
+      deviceId,
+    );
     // A stream or relay admitted between the first close and the revocation
     // fence is closed here.
     activeReadAloud?.revokeDevice(deviceId);
@@ -523,8 +560,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     // Cleanup is intentionally idempotent: a retry after a crash between the
     // device tombstone and notice removal must still remove the acceptance.
     if (hostPlatformCapabilities().bots) {
-      await revokeBotNoticeAudience(() => botApplicationService.revokeNoticeAudience(deviceId), botNotices, () =>
-        logger.warn("aiden-mcp", "revoke-bot-notices-unavailable", {}),
+      await revokeBotNoticeAudience(
+        () => botApplicationService.revokeNoticeAudience(deviceId),
+        botNotices,
+        () => logger.warn("aiden-mcp", "revoke-bot-notices-unavailable", {}),
       );
     }
     return revoked;
@@ -538,10 +577,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     botCapabilitiesSupported: () => hostPlatformCapabilities().bots,
     hostname: lanHostnames.endpoint,
     tailscale,
-    portCandidates: (preferredPort) => aidenRemotePortCandidatesForProfile(
-      runtimeProfile.id,
-      preferredPort,
-    ),
+    portCandidates: (preferredPort) =>
+      aidenRemotePortCandidatesForProfile(runtimeProfile.id, preferredPort),
     bonjour: createAidenRemoteBonjourPublisher(writeRemoteLog),
     notifyPairingChanged: () => ipcMain.broadcast("remote:changed", {}),
     pairingRequestSettings: {
@@ -554,866 +591,982 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     botRoutineWebhook: async (request) =>
       (await import("./bot-routine-events/sources-main.js")).handleBotRoutineWebhook(request),
     taskTriggerWebhook: {
-      admit: async (request) => (await import("./scheduled-task-triggers-main.js")).admitTaskTriggerWebhook(request),
-      deliver: async (request) => (await import("./scheduled-task-triggers-main.js")).deliverTaskTriggerWebhook(request),
-      tooLarge: async (request) => (await import("./scheduled-task-triggers-main.js")).taskTriggerWebhookTooLarge(request),
+      admit: async (request) =>
+        (await import("./scheduled-task-triggers-main.js")).admitTaskTriggerWebhook(request),
+      deliver: async (request) =>
+        (await import("./scheduled-task-triggers-main.js")).deliverTaskTriggerWebhook(request),
+      tooLarge: async (request) =>
+        (await import("./scheduled-task-triggers-main.js")).taskTriggerWebhookTooLarge(request),
     },
-    workspaceApi: remoteWorkspaceApi = async (instanceId) => {
+    workspaceApi: (remoteWorkspaceApi = async (instanceId) => {
       // A failed build is retried by the next start rather than replayed.
-      const api = await workspaceApis(
-        instanceId,
-        async () => {
-          const idempotency = await openAidenRemoteOperationLedger(operationStore);
-          const workspaceBrowser = new AidenRemoteWorkspaceBrowserService({
-            instanceId,
-            state,
-            approvalStore: userData,
-          });
-          const models = new AidenRemoteModelService({
-            listProviders: listConfiguredProviders,
-            getSettings: () => configStore.getSettings(),
-          });
-          const loadedStreamSnapshot = await streamJournal.load();
-          const revokedDeviceIds = new Set(
-            (await state.snapshot()).devices
-              .filter(({ revokedAt }) => revokedAt !== undefined)
-              .map(({ id }) => id),
-          );
-          const streamSnapshot = removeRevokedDeviceStreams(
-            loadedStreamSnapshot,
-            revokedDeviceIds,
-          );
-          if (streamSnapshot.streams.length !== loadedStreamSnapshot.streams.length) {
-            await streamJournal.replace(streamSnapshot);
-          }
-          const streams = new AidenRemoteStreamService({
-            now: Date.now,
-            cancel: (streamId, ownerDocumentId) =>
-              llmClient.cancel(streamId, "user_stop", ownerDocumentId),
-            approve: (approvalId, decision, ownerDocumentId, scope) =>
-              llmClient.approve(
-                approvalId,
-                decision,
-                ownerDocumentId,
-                scope ? { scope } : undefined,
+      const api = await workspaceApis(instanceId, async () => {
+        const idempotency = await openAidenRemoteOperationLedger(operationStore);
+        const workspaceBrowser = new AidenRemoteWorkspaceBrowserService({
+          instanceId,
+          state,
+          approvalStore: userData,
+        });
+        const models = new AidenRemoteModelService({
+          listProviders: listConfiguredProviders,
+          getSettings: () => configStore.getSettings(),
+        });
+        const loadedStreamSnapshot = await streamJournal.load();
+        const revokedDeviceIds = new Set(
+          (await state.snapshot()).devices
+            .filter(({ revokedAt }) => revokedAt !== undefined)
+            .map(({ id }) => id),
+        );
+        const streamSnapshot = removeRevokedDeviceStreams(loadedStreamSnapshot, revokedDeviceIds);
+        if (streamSnapshot.streams.length !== loadedStreamSnapshot.streams.length) {
+          await streamJournal.replace(streamSnapshot);
+        }
+        const streams = new AidenRemoteStreamService({
+          now: Date.now,
+          cancel: (streamId, ownerDocumentId) =>
+            llmClient.cancel(streamId, "user_stop", ownerDocumentId),
+          approve: (approvalId, decision, ownerDocumentId, scope) =>
+            llmClient.approve(approvalId, decision, ownerDocumentId, scope ? { scope } : undefined),
+          submitInput: (input) => llmClient.admitChatRunInput(input),
+          respondQuestion: (promptId, response, ownerDocumentId) =>
+            llmClient.answerQuestionnaire(promptId, response, ownerDocumentId),
+          notifyChatChanged: () => ipcMain.broadcast("chats:changed", {}),
+          notifyApprovalChanged: (chatId) =>
+            ipcMain.broadcast("remote:approval-changed", { chatId }),
+          snapshot: streamSnapshot,
+          persist: (write) => streamJournal.save(write),
+          idempotency,
+          persistIdempotency: (snapshot) => operationStore.save(snapshot),
+          onPersistenceError: (error) =>
+            logger.error("aiden-remote", "Could not persist the remote stream journal.", error),
+        });
+        activeStreams = streams;
+        const botsSupported = hostPlatformCapabilities().bots;
+        const chats = new AidenRemoteChatService({
+          attachments: remoteAttachmentStore,
+          // Revision 53: a phone's New worktree, through the desktop's first-message coordinator.
+          newWorktrees: {
+            ...createAidenRemoteNewWorktrees({
+              getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
+              branches: (folderPath) => gitBranches(folderPath),
+              ensure: (request, seed, owner) => firstMessageWorktrees.ensure(request, seed, owner),
+              owner: (deviceId) => workspaceOwners.owner(deviceId),
+              record: (key) => firstMessageWorktrees.record(key),
+              listWorkspaces: () => configStore.listWorkspaces(),
+            }),
+            // The chat couldn't move into the worktree just made for it. Main
+            // removes it (no window or device owns this), never by force; the
+            // first-message record then starts over on a retry.
+            discard: async (workspaceId) => {
+              await workspaceWorktreeApplicationService.remove(
+                { isDestroyed: () => false, onInvalidated: () => () => undefined },
+                workspaceId,
+                undefined,
+                { force: false },
+              );
+            },
+          },
+          application: chatApplicationService,
+          chatStore,
+          generation: {
+            beginChatTurn: (chatId, turnId, ownerId) =>
+              llmClient.beginChatTurn(chatId, turnId, ownerId),
+            start: (streamId, params, owner, options) =>
+              startGenerationAndMaybeTitle(
+                {
+                  start: (id, input) => llmClient.start(id, input, owner, options),
+                  startTitle: (input) => chatTitleService.startForFirstTurn(input),
+                },
+                streamId,
+                params,
               ),
-            submitInput: (input) => llmClient.admitChatRunInput(input),
-            respondQuestion: (promptId, response, ownerDocumentId) =>
-              llmClient.answerQuestionnaire(promptId, response, ownerDocumentId),
-            notifyChatChanged: () => ipcMain.broadcast("chats:changed", {}),
-            notifyApprovalChanged: (chatId) =>
-              ipcMain.broadcast("remote:approval-changed", { chatId }),
-            snapshot: streamSnapshot,
-            persist: (write) => streamJournal.save(write),
-            idempotency,
-            persistIdempotency: (snapshot) => operationStore.save(snapshot),
-            onPersistenceError: (error) =>
-              logger.error("aiden-remote", "Could not persist the remote stream journal.", error),
-          });
-          activeStreams = streams;
-          const botsSupported = hostPlatformCapabilities().bots;
-          const chats = new AidenRemoteChatService({
-            attachments: remoteAttachmentStore,
-            // Revision 53: a phone's New worktree, through the desktop's first-message coordinator.
-            newWorktrees: {
-              ...createAidenRemoteNewWorktrees({
-                getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
-                branches: (folderPath) => gitBranches(folderPath),
-                ensure: (request, seed, owner) => firstMessageWorktrees.ensure(request, seed, owner),
-                owner: (deviceId) => workspaceOwners.owner(deviceId),
-                record: (key) => firstMessageWorktrees.record(key),
-                listWorkspaces: () => configStore.listWorkspaces(),
-              }),
-              // The chat couldn't move into the worktree just made for it. Main
-              // removes it (no window or device owns this), never by force; the
-              // first-message record then starts over on a retry.
-              discard: async (workspaceId) => {
-                await workspaceWorktreeApplicationService.remove(
-                  { isDestroyed: () => false, onInvalidated: () => () => undefined },
-                  workspaceId,
-                  undefined,
-                  { force: false },
-                );
-              },
-            },
-            application: chatApplicationService,
-            chatStore,
-            generation: {
-              beginChatTurn: (chatId, turnId, ownerId) =>
-                llmClient.beginChatTurn(chatId, turnId, ownerId),
-              start: (streamId, params, owner, options) =>
-                startGenerationAndMaybeTitle(
-                  {
-                    start: (id, input) => llmClient.start(id, input, owner, options),
-                    startTitle: (input) => chatTitleService.startForFirstTurn(input),
-                  },
-                  streamId,
-                  params,
-                ),
-            },
-            streams,
-            models,
-            bots: botsSupported
-              ? botStore
-              : { get: async () => null },
-            botMutations: botsSupported
-              ? botMutationGate
-              : {
-                  run: async <Result>(
-                    _botId: string,
-                    _action: () => Promise<Result>,
-                  ): Promise<Result> => {
-                    throw new AidenRemoteServiceError(
-                      "not_found",
-                      "This Aiden chat no longer exists.",
-                      404,
-                    );
-                  },
-                },
-            ...(botsSupported
-              ? {
-                  retainedBotChatAuthorizer: authorizeRemoteRetainedBotChat,
-                  durableBotSessions: () => activeBotSessions !== undefined,
-                  botTurnAuthorityPreflight: preflightBotTurnAuthority,
-                  // A Bot the person paused takes no turns from the legacy chat route either.
-                  botPaused: async (botId: string) =>
-                    (await import("./bot-runtime/bot-session-main.js")).isBotPaused(botId),
-                }
-              : {}),
-            // A chat over its spending limit takes no phone turns until more is allowed.
-            spendingRefusal: (chat) =>
-              spending.refusal(chat.botId ? { kind: "bot", id: chat.botId } : { kind: "chat", id: chat.id }),
-            idempotency,
-            persistIdempotency: (snapshot) => operationStore.save(snapshot),
-            // Revision 35: phones open visuals full screen when this build ships the viewer.
-            ...(visualViewerInstalled()
-              ? {
-                  visualViewer: {
-                    htmlFor: (chatId: string, mediaId: string) => generativeUiArtifactStore.htmlFor(chatId, mediaId),
-                    render: async (source: VisualViewerSource, appearance: VisualViewerAppearance) =>
-                      buildVisualViewerDocument(source, appearance, await loadVisualViewerBundle(), await loadVisualViewerLibraries()),
-                  },
-                }
-              : {}),
-            // Revision 46: phones play the agent's browser recordings their chats name.
-            browserRecordings: {
-              read: async (recordingId: string) =>
-                (await import("./browser/recordings.js")).readBrowserRecording(app.getPath("userData"), recordingId),
-              namedByLiveRun: (chatId: string, recordingId: string) =>
-                hostRunRegistry.chatRunNamesRecording(chatId, recordingId),
-            },
-            // Paired devices see visuals as snapshots, so turns follow Appearance.
-            inlineVisuals: async () =>
-              normalizeAppearanceConfig((await configStore.getSettings()).appearance).inlineVisuals,
-            deviceSupportsQuestionPrompts: async (deviceId) => {
-              const device = (await state.snapshot()).devices.find(
-                (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
-              );
-              return (
-                device !== undefined &&
-                device.acceptsProgressCapabilities === true &&
-                device.capabilities.includes("questions:respond")
-              );
-            },
-            deviceIsOutsideApp: async (deviceId) =>
-              (await state.snapshot()).devices.some((candidate) => candidate.id === deviceId && candidate.type === "agent"),
-            workspaceFolderRefusal: async (workspaceId) => {
-              const workspace = await configStore.getWorkspace(workspaceId);
-              return workspace ? workspaceFolderRemoteRefusal(workspace) : undefined;
-            },
-            // Revision 64: an opt-in, so it needs no progress-capability handshake.
-            deviceSupportsContinueInNewChat: async (deviceId) => {
-              const device = (await state.snapshot()).devices.find(
-                (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
-              );
-              return device?.capabilities.includes("chat:continue-in-new-chat") === true;
-            },
-            // Revision 70: only a device that negotiated it keeps its turn's selection as the chat's own.
-            deviceSupportsAgentSlider: async (deviceId) => {
-              const device = (await state.snapshot()).devices.find(
-                (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
-              );
-              return device?.capabilities.includes("chat:agent-slider") === true;
-            },
-            // A selection is saved only while the desktop keeps a readable slider.
-            hostHasAgentSlider: async () => readableAgentSlider(await configStore.getSettings()) !== undefined,
-            isFolderWorkspace: async (workspaceId) =>
-              analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId)) !== "none",
-            deviceIsPeer: async (deviceId) => {
-              const device = (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId);
-              return device?.type === "mac" || device?.type === "linux";
-            },
-            // An outside MCP app's and a lead chat's started chats are never product analytics.
-            deviceReportsAnalytics: async (deviceId) =>
-              audienceReportsAnalytics(deviceId, (await state.snapshot()).devices),
-            noWorkspace: {
-              // The desktop's sidebar lists a chat only once it knows the chat's workspace, so a
-              // hidden record made or removed here is announced like any other workspace change.
-              target: async (workspaceId) => {
-                const target = await workspaceApplicationService.reserveNoWorkspaceChat(workspaceId);
-                if (target.workspaceId !== workspaceId) ipcMain.broadcast("workspaces:changed", {});
-                return target;
-              },
-              release: async (workspaceId) => {
-                try {
-                  await workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId);
-                } catch {
-                  logger.warn("aiden-remote", "Could not release a moved chat's hidden folder.");
-                  return;
-                }
-                ipcMain.broadcast("workspaces:changed", {});
-              },
-            },
-            deviceSupportsSkillInvocation: async (deviceId) => {
-              const device = (await state.snapshot()).devices.find(
-                (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
-              );
-              return (
-                device !== undefined &&
-                device.acceptsProgressCapabilities === true &&
-                device.capabilities.includes("skills:invoke")
-              );
-            },
-            // Phones never get workspace_artifact, hooks or the design canvas, so they do not list those skills either.
-            skillCatalog: async (workspaceId) =>
-              withoutSkills(await skillRegistry.snapshot(workspaceId), new Set([...DESKTOP_ARTIFACT_SKILLS, ...DESKTOP_HOOK_SKILLS, ...DESIGN_CANVAS_SKILLS])).catalog,
-            botSkillCatalog: async (deviceId, botId, chatId, workspaceId) => {
-              // The same Full/Custom narrowing the generation path enforces:
-              // admit fresh, revalidate, then filter the workspace snapshot
-              // down to the Bot's currently admitted skill tool names.
-              const admission = await botRuntimeAuthority.admit({
-                audienceId: deviceId,
-                botId,
-                chatId,
-              });
-              try {
-                const runtimeCatalog = await resolveBotRuntimeCatalogSnapshot(
-                  admission.authority,
-                );
-                const workspace = await configStore.getWorkspace(workspaceId);
-                if (!workspace) return [];
-                const snapshot = await skillRegistry.snapshotResolved(workspace);
-                const resolved = await resolveBotRuntimeSkills(botId);
-                const toolNames = exactBotSkillToolNames(
-                  admission.authority,
-                  runtimeCatalog.resources.skills,
-                  resolved,
-                  snapshot,
-                );
-                await admission.revalidateBeforeEffect();
-                return filterBotSkillSnapshot(snapshot, toolNames, admission).catalog;
-              } finally {
-                admission.release();
-              }
-            },
-            resolveSkillInvocation: (workspaceId, invocationId) =>
-              skillRegistry.resolveFresh(workspaceId, invocationId),
-            // Revision 41: the same projection the composer meter reads (`chats:contextPressure`).
-            contextPressure: async (chatId, selection) =>
-              (await import("./context-pressure.js")).chatContextPressure(chatId, selection),
-            notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
-            isTitlePending: (chatId) => chatTitleService.isFirstTurnPending(chatId),
-            activeChatIds: () => chatActivityRegistry.snapshot().activeChatIds,
-            activitySnapshot: () => chatActivityRegistry.snapshot(),
-            readMarkers: {
-              snapshot: () => chatReadMarkers.snapshot(),
-              markRead: (chatId, throughMessageId) => markChatRead(chatId, throughMessageId),
-            },
-            triage: chatTriage,
-            // Revision 52: live-run times for the summaries' Inbox signals.
-            runTimes: (chatId) => liveRunAttention(chatId, hostRunRegistry),
-            forks: {
-              service: chatForkService,
-              admitWorkspace: (workspaceId) => {
-                const admission = workspaceMutationGate.admit(workspaceId);
-                return {
-                  isAborted: () => admission.signal.aborted,
-                  release: () => admission.release(),
-                };
-              },
-              summaries: {
-                retry: (chatId) => forkSummaryService.retry(chatId),
-                skip: (chatId) => forkSummaryService.skip(chatId),
-                cancel: (chatId) => forkSummaryService.cancel(chatId),
-              },
-            },
-          });
-          activeChats = chats;
-          activeProgress?.close();
-          const chatProgress = new AidenRemoteChatProgressService({
-            instanceId,
-            events: chatProgressEvents,
-            appControlsEnabled: () => remoteAppControls.enabled(),
-            authorize: createChatProgressAuthorizer({
-              acquireDeviceAuthorization: (deviceId) =>
-                state.acquireDeviceAuthorization(deviceId, false),
-              device: async (deviceId) =>
-                (await state.snapshot()).devices.find(
-                  (entry) => entry.id === deviceId,
-                ),
-              chatMetadata: () => chatStore.listSummaryMetadata(),
-              readChat: async (chatId) =>
-                (await chatStore.get(chatId)) ?? undefined,
-              authorizeRetainedBotChat: (input) =>
-                chats.authorizeRetainedBotChat(input),
-              events: chatProgressEvents,
-            }),
-            readTodo: async (chatId) => {
-              const chat = await chatStore.get(chatId);
-              if (!chat) throw new AidenRemoteServiceError("not_found", "This chat is unavailable.", 404);
-              const opened = await piCompactionSessionStore.openChatIfEligible(chatId, chat);
-              return (await loadDurableTodoSnapshot(chatId, opened.session)).snapshot;
-            },
-            readAgents: (chatId) => subagentRunStore.listByChat(chatId),
-            // Reuses the desktop Subagents panel stop path. The chat's
-            // persisted workspace, not the run snapshot, scopes the binding.
-            stopAgent: async ({ chatId, runId }) => {
-              const chat = await chatStore.get(chatId);
-              if (!chat || chat.id !== chatId) return false;
-              const result = await subagentControlMainV2.stopForChat(
-                { chatId, workspaceId: persistedChatWorkspaceId(chat.workspaceId) },
-                runId,
-              );
-              return result !== undefined;
-            },
-            // Remote-created turns already have a public turn identity; the
-            // roster must echo it so clients can correlate turnStart with agents.
-            publicTurnId: (chatId, generationId) => streams.turnIdFor(chatId, generationId),
-          });
-          activeProgress = chatProgress;
-          const projectBotHealth = async (
-            botId: string,
-            fullReady?: boolean,
-          ): Promise<"ready" | "degraded" | "unavailable"> => {
-            const policy = await botCapabilityStore.getBotPolicy(botId);
-            if (policy.accessMode === "full") {
-              if (fullReady !== undefined) return fullReady ? "ready" : "unavailable";
-              const snapshot = await botCapabilityCatalog.snapshot({
-                audienceId: instanceId,
-                botId,
-              });
-              return snapshot.resources.providers.some(
-                (provider) => provider.option.available &&
-                  provider.models.some((model) => model.option.available),
-              ) ? "ready" : "unavailable";
-            }
-            const binding = await botCapabilityStore.getBotBinding(botId);
-            if (!binding) return "unavailable";
-            try {
-              const reconciled = await botCapabilityCatalog.reconcile(binding, {
-                audienceId: instanceId,
-                botId,
-              });
-              if (reconciled.issues.length === 0) return "ready";
-              return reconciled.issues.some(
-                ({ group }) => group === "provider" || group === "model",
-              ) ? "unavailable" : "degraded";
-            } catch {
-              return "unavailable";
-            }
-          };
-          const bots = botsSupported ? new AidenRemoteBotService({
-            application: botApplicationService,
-            chatStore,
-            log: (message, error) => logger.warn("aiden-remote", message, error),
-            avatar: createMainBotAvatarApplicationAdapter(instanceId),
-            inbox: {
-              list: (deviceId, input) =>
-                createBotInboxProjectionService({
-                  listBots: () => botApplicationService.list(),
-                  listChatMetadata: () => chatStore.list(),
-                  projectBatch: async (request) => {
-                    const activities = await streams.projectChatActivities(
-                      deviceId,
-                      request.map(({ chatId }) => chatId),
-                    );
-                    return mergeBotInboxActivityPreviews(request, activities);
-                  },
-                }).list(input),
-            },
-            deleteBot: async (botId) => {
-              const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
-              await (await botSessionRuntime()).deleteBot(botId);
-            },
-            // The holder's view (revision 37: a person's pause is `paused`); the
-            // router and the host feed project it for every other device.
-            sessionStates: async (botIds) => {
-              const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
-              const runtime = await botSessionRuntime();
-              const rows = await mapWithConcurrency(botIds, 4, async (botId) =>
-                [botId, projectBotSessionState(await runtime.state(botId), { handoffs: true }).state] as const,
-              );
-              return new Map(rows);
-            },
-            health: (botId) => projectBotHealth(botId),
-            // Revision 42: the holder's `issueCount`; the router drops it for
-            // every device that did not negotiate `bot:issues`.
-            issues: {
-              openCount: async (botId) => (await botIssues.list(botId, { open: true })).length,
-            },
-            healthBatch: async (botIds) => {
-              const snapshot = await botCapabilityCatalog.snapshot({
-                audienceId: instanceId,
-              });
-              const fullReady = snapshot.resources.providers.some(
-                (provider) => provider.option.available &&
-                  provider.models.some((model) => model.option.available),
-              );
-              const rows = await mapWithConcurrency(botIds, 4, async (botId) =>
-                [botId, await projectBotHealth(botId, fullReady)] as const,
-              );
-              return new Map(rows);
-            },
-            resolveProviderModel: async ({
-              audienceId,
-              botId,
-              providerId,
-              modelId,
-            }) => {
-              // A routine credential write during the snapshot must not fail
-              // the phone's send; read again under a fresh lease instead.
-              const { lease: inventoryLease, value: { defaultSelection, snapshot } } =
-                await readUnderFreshBotRuntimeInventoryLease(botRuntimeInventoryLeases, async () => {
-                  const defaultSelection = providerId === undefined || modelId === undefined
-                    ? await models.resolve()
-                    : undefined;
-                  const retained = await botCapabilityStore.getBotBinding(botId);
-                  const snapshot = await botCapabilityCatalog.snapshot({
-                    audienceId,
-                    botId,
-                    ...(retained ? { retainedBindings: [retained] } : {}),
-                  });
-                  return { defaultSelection, snapshot };
-                });
-              try {
-                const provider = snapshot.resources.providers.find((candidate) =>
-                  providerId !== undefined
-                    ? candidate.option.id === providerId
-                    : candidate.sourceId === defaultSelection?.providerId,
-                );
-                const model = provider?.models.find((candidate) =>
-                  modelId !== undefined
-                    ? candidate.option.id === modelId
-                    : candidate.sourceId === defaultSelection?.modelId,
-                );
-                if (
-                  !provider ||
-                  !model ||
-                  !provider.option.available ||
-                  !model.option.available
-                ) {
+          },
+          streams,
+          models,
+          bots: botsSupported ? botStore : { get: async () => null },
+          botMutations: botsSupported
+            ? botMutationGate
+            : {
+                run: async <Result>(
+                  _botId: string,
+                  _action: () => Promise<Result>,
+                ): Promise<Result> => {
                   throw new AidenRemoteServiceError(
-                    "operation_stale",
-                    "Provider selection is unavailable. Refresh the Bot capability list.",
-                    409,
-                    true,
+                    "not_found",
+                    "This Aiden chat no longer exists.",
+                    404,
                   );
-                }
-                return {
-                  providerId: provider.sourceId,
-                  model: model.sourceId,
-                  assertCurrent: () => {
-                    try {
-                      inventoryLease.assertCurrent();
-                    } catch {
-                      throw new AidenRemoteServiceError(
-                        "operation_stale",
-                        "Provider selection changed. Refresh the Bot capability list.",
-                        409,
-                        true,
-                      );
-                    }
-                  },
-                  release: () => inventoryLease.release(),
-                };
-              } catch (error) {
-                inventoryLease.release();
-                throw error;
+                },
+              },
+          ...(botsSupported
+            ? {
+                retainedBotChatAuthorizer: authorizeRemoteRetainedBotChat,
+                durableBotSessions: () => activeBotSessions !== undefined,
+                botTurnAuthorityPreflight: preflightBotTurnAuthority,
+                // A Bot the person paused takes no turns from the legacy chat route either.
+                botPaused: async (botId: string) =>
+                  (await import("./bot-runtime/bot-session-main.js")).isBotPaused(botId),
               }
-            },
-            chatActivity: true,
-            messaging: {
-              enabled: async () => botMessagingEnabled(await configStore.getSettings()),
-              setEnabled: async (enabled) => botMessagingEnabled(await configStore.setSettings({botMessaging: enabled})),
-            },
-            idempotency,
-            persistIdempotency: (snapshot) => operationStore.save(snapshot),
-            notifyBotsChanged: () => ipcMain.broadcast("bots:changed", {}),
-            notifyChatsChanged: () => ipcMain.broadcast("chats:changed", {}),
-          }) : undefined;
-          const files = new AidenRemoteFileService({
-            instanceId,
-            application: workspaceEnvironmentApplicationService,
-            owners: workspaceOwners,
-          });
-          const botFiles = botsSupported
-            ? new AidenRemoteBotFileService({
-                instanceId,
-                botAudienceId: BOT_DESKTOP_AUDIENCE_ID,
-                authority: botRuntimeAuthority,
-                chats: chatStore,
-              })
-            : undefined;
-          const botAllowed = bots ? createAidenRemoteBotAllowList({
-            allowed: {
-              list: async botId => (await import("./bot-runtime/bot-session-main.js")).botAllowList.list(botId),
-              remove: async (botId, entryId) => (await import("./bot-runtime/bot-session-main.js")).botAllowList.remove(botId, entryId),
-            },
-            botExists: async botId => {
-              const [bot, { botLifecycleJournal }] = await Promise.all([
-                botApplicationService.get(botId), import("./bot-capability-services-main.js"),
-              ]);
-              return bot !== null && !(await botLifecycleJournal.listPending()).some(operation => operation.kind === "delete_bot" && operation.botId === botId);
-            },
-          }) : undefined;
-          // A rebuilt API must not leave the previous one's watches and streams open.
-          void activeBotSessions?.close();
-          const botSessions = bots
-            ? new AidenRemoteBotSessionService({
-                bots,
-                runtime: async () => {
-                  const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
-                  return botSessionRuntime();
+            : {}),
+          // A chat over its spending limit takes no phone turns until more is allowed.
+          spendingRefusal: (chat) =>
+            spending.refusal(
+              chat.botId ? { kind: "bot", id: chat.botId } : { kind: "chat", id: chat.id },
+            ),
+          idempotency,
+          persistIdempotency: (snapshot) => operationStore.save(snapshot),
+          // Revision 35: phones open visuals full screen when this build ships the viewer.
+          ...(visualViewerInstalled()
+            ? {
+                visualViewer: {
+                  htmlFor: (chatId: string, mediaId: string) =>
+                    generativeUiArtifactStore.htmlFor(chatId, mediaId),
+                  render: async (source: VisualViewerSource, appearance: VisualViewerAppearance) =>
+                    buildVisualViewerDocument(
+                      source,
+                      appearance,
+                      await loadVisualViewerBundle(),
+                      await loadVisualViewerLibraries(),
+                    ),
                 },
-                routines: botRoutineService,
-                questions: botQuestions,
-                approvals: botApprovals,
-                // Revision 61: held update_bot cards, suggestions and learning receipts,
-                // answered through the desktop's own services (same serialization and checks).
-                settingsChanges: {
-                  respond: async (botId, changeId, decision) =>
-                    (await import("./bot-settings-changes/service-main.js")).botSettingsChanges.respond(botId, changeId, decision),
-                },
-                suggestions: {
-                  respondSkill: async (botId, proposalId, decision) =>
-                    (await import("./bot-skills/skill-proposals-main.js")).botSkillProposals.answer({ botId, proposalId, decision }),
-                  respondLesson: async (botId, lessonId, decision) =>
-                    (await import("./bot-learning/learning-main.js")).respondToWaitingLesson(botId, lessonId, decision),
-                  removeLesson: async (botId, lessonId) =>
-                    (await (await import("./bot-learning/learning-main.js")).removeLesson(botId, lessonId)) ? { ok: true } : { ok: false, code: "not_found" },
-                  undoLearning: async (botId, changeId) =>
-                    (await import("./bot-learning/learning-main.js")).undoBotLearning(botId, changeId),
-                },
-                // Revision 37: phones answer hand-offs through the desktop's own bridge.
-                handoffs: botHandoffs,
-                accessRequests: botAccessRequests,
-                plans: botPlans,
-                answerAccessRequest: answerBotAccessRequest,
-                // Revision 42: the desktop's own issue service raises, settles and acts.
-                issues: botIssues,
-                openHandoffOnMac: async (botId, waitId) => {
-                  const { openBotHandoffById } = await import("./bot-runtime/bot-handoff-open-main.js");
-                  return openBotHandoffById(botId, waitId, "phone");
-                },
-                // A pause or unpause on the Mac commits nothing to the conversation:
-                // open phone streams hear it through the runtime's state bridge.
-                stateChanges: (listener) => {
-                  let stopped = false;
-                  let unsubscribe: (() => void) | undefined;
-                  void import("./bot-runtime/bot-session-main.js")
-                    .then(({ onBotSessionStateChange }) => {
-                      if (!stopped) unsubscribe = onBotSessionStateChange((botId) => listener(botId));
-                    })
-                    .catch((error: unknown) => logger.warn("aiden-remote", "Bot state changes are unavailable to phones.", error));
-                  return () => {
-                    stopped = true;
-                    unsubscribe?.();
-                  };
-                },
-                turnIntents: botTurnIntents,
-                // The desktop feed's run start times: a phone opening mid-run sees the real elapsed time.
-                runStarts: botRunStarts,
-                onReport: (botId, error) => logger.warn("aiden-remote", `Bot ${botId} queued or placed messages could not be read for phones.`, error),
-                // Phone uploads share the workspace chats' one-shot store (revision 33).
-                attachments: remoteAttachmentStore,
-                presets: {
-                  list: () => BOT_PRESETS,
-                  // The one process-wide starter the desktop uses: a Mac tap and a
-                  // phone tap converge on one Bot, and only the creator sends the self-intro.
-                  create: async (presetId, { audienceId, version }) => {
-                    const { botStarter } = await import("./bot-runtime/bot-starter-main.js");
-                    const result = await botStarter().startFromPreset(presetId, {
-                      // Revision 61: a `bot:templates` phone names the version it was shown.
-                      ...(version === undefined ? {} : { version }),
-                      // Created for the phone's audience; the key is remembered by the shared starter.
-                      createBot: (bot, botId, presetId) => botApplicationService.createBot({ audienceId, botId, bot, presetId }),
-                    });
-                    return { botId: result.bot.id, created: result.created };
-                  },
-                  presetBots: async () => (await import("./bot-runtime/bot-starter-main.js")).botStarter().presetBots(),
-                  introduce: async (botId) => (await import("./bot-runtime/bot-starter-main.js")).botStarter().introduce(botId),
-                },
-                connectCardStatus: async (botId, card) => {
-                  const { connectCardStatus } = await import("./bot-runtime/bot-session-main.js");
-                  return connectCardStatus(botId, card);
-                },
-                connectionRequested: async ({ botId, pluginId }) => {
-                  // Already connected but left out of this Bot's access: the
-                  // Mac opens the Bot's chat, where the card offers "Add to this Bot".
-                  const { connectCardStatus } = await import("./bot-runtime/bot-session-main.js");
-                  const card = { type: "connect_card", pluginId, reason: "", status: "pending" } as const;
-                  if ((await connectCardStatus(botId, card)) === "needs_access") {
-                    await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`);
-                    return;
-                  }
-                  if (!openConnectionSetup(pluginId)) {
-                    throw new AidenRemoteServiceError("not_found", "Aiden can't connect that app.", 404);
-                  }
-                },
-                defaultTimezone: systemTimezone,
-                notifyBotsChanged: (botId) => ipcMain.broadcast("bots:changed", { botId }),
-                // Contract revision 27: the desktop's own memory and proposal services.
-                memory: botMemoryService,
-                proposals: botRoutineProposals,
-                routineNotifications: createBotNotificationFeed({
-                  log: botDeliveryLog,
-                  issueKind: async (botId, issueId) => (await botIssues.list(botId)).find((issue) => issue.id === issueId)?.kind,
-                  botName: async (botId) => (await botStore.get(botId))?.name,
-                }),
-              })
-            : undefined;
-          activeBotSessions = botSessions;
-          const git = new AidenRemoteGitService({
-            application: workspaceEnvironmentApplicationService,
-            owners: workspaceOwners,
-            git: {
-              review: gitReview,
-              diff: gitDiff,
-              branches: gitBranches,
-              checkout: gitCheckout,
-              createBranch: gitCreateBranch,
-              commit: gitCommit,
-              pushCapability: gitPushCapability,
-              push: gitPush,
-              compare: gitCompare,
-              comparisonDiff: gitComparisonDiff,
-              worktrees: gitWorktrees,
-            },
-            worktrees: workspaceWorktreeApplicationService,
-            listWorkspaces: () => configStore.listWorkspaces(),
-            idempotency,
-            persistIdempotency: (snapshot) => operationStore.save(snapshot),
-            onPushed: (result) => pullRequestBranchPushed(result.pullRequestRepository),
-          });
-          const schedules = new AidenRemoteScheduleService({
-            application: scheduledTaskApplicationService,
-            models,
-            idempotency,
-            persistIdempotency: (snapshot) => operationStore.save(snapshot),
-          });
-          const hostRuns = new AidenRemoteHostRunService({
-            registry: hostRunRegistry,
-            now: Date.now,
-            controls: {
-              cancel: (runId) => llmClient.cancel(runId, "user_stop"),
-              // A phone-owned approval settles through the stream service so its
-              // device records stay consistent; everything else settles directly.
-              approve: ({ chatId, approvalId, decision, scope }) =>
-                streams.respondApprovalFromHost(chatId, approvalId, decision, scope) ||
-                llmClient.approveAsHost(approvalId, decision, scope ? { scope } : undefined),
-              answer: ({ promptId, response }) => {
-                const outcome = llmClient.answerQuestionnaireAsHost(promptId, response);
-                if (outcome !== "rejected") streams.retireQuestionSettledByHost(promptId);
-                return outcome;
-              },
-              admitInput: (input) => llmClient.admitChatRunInput(input),
-            },
-          });
-          activeHostRuns = hostRuns;
-          detachHostFeed?.();
-          activeHostFeed?.close();
-          const isEphemeralOnlyNoWorkspace = async (workspace: { id: string; noWorkspace?: boolean }): Promise<boolean> => {
-            if (workspace.noWorkspace !== true || workspace.id === "default") return false;
-            const wsChats = await chatStore.list(workspace.id);
-            return wsChats.length > 0 && wsChats.every((meta) => meta.ephemeral === true);
-          };
-          const listRemoteVisibleWorkspaces = async () =>
-            filterRemoteVisibleWorkspaces(
-              await workspaceApplicationService.list(),
-              () => chatStore.list(),
+              }
+            : {}),
+          // Revision 46: phones play the agent's browser recordings their chats name.
+          browserRecordings: {
+            read: async (recordingId: string) =>
+              (await import("./browser/recordings.js")).readBrowserRecording(
+                app.getPath("userData"),
+                recordingId,
+              ),
+            namedByLiveRun: (chatId: string, recordingId: string) =>
+              hostRunRegistry.chatRunNamesRecording(chatId, recordingId),
+          },
+          // Paired devices see visuals as snapshots, so turns follow Appearance.
+          inlineVisuals: async () =>
+            normalizeAppearanceConfig((await configStore.getSettings()).appearance).inlineVisuals,
+          deviceSupportsQuestionPrompts: async (deviceId) => {
+            const device = (await state.snapshot()).devices.find(
+              (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
             );
-          const botSignalsCache = createHostFeedBotSignalsCache({
-            summary: async (botId) => {
-              const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
-              return botLiveProjection().summary(botId);
+            return (
+              device !== undefined &&
+              device.acceptsProgressCapabilities === true &&
+              device.capabilities.includes("questions:respond")
+            );
+          },
+          deviceIsOutsideApp: async (deviceId) =>
+            (await state.snapshot()).devices.some(
+              (candidate) => candidate.id === deviceId && candidate.type === "agent",
+            ),
+          workspaceFolderRefusal: async (workspaceId) => {
+            const workspace = await configStore.getWorkspace(workspaceId);
+            return workspace ? workspaceFolderRemoteRefusal(workspace) : undefined;
+          },
+          // Revision 64: an opt-in, so it needs no progress-capability handshake.
+          deviceSupportsContinueInNewChat: async (deviceId) => {
+            const device = (await state.snapshot()).devices.find(
+              (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
+            );
+            return device?.capabilities.includes("chat:continue-in-new-chat") === true;
+          },
+          // Revision 70: only a device that negotiated it keeps its turn's selection as the chat's own.
+          deviceSupportsAgentSlider: async (deviceId) => {
+            const device = (await state.snapshot()).devices.find(
+              (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
+            );
+            return device?.capabilities.includes("chat:agent-slider") === true;
+          },
+          // A selection is saved only while the desktop keeps a readable slider.
+          hostHasAgentSlider: async () =>
+            readableAgentSlider(await configStore.getSettings()) !== undefined,
+          isFolderWorkspace: async (workspaceId) =>
+            analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId)) !== "none",
+          deviceIsPeer: async (deviceId) => {
+            const device = (await state.snapshot()).devices.find(
+              (candidate) => candidate.id === deviceId,
+            );
+            return device?.type === "mac" || device?.type === "linux";
+          },
+          // An outside MCP app's and a lead chat's started chats are never product analytics.
+          deviceReportsAnalytics: async (deviceId) =>
+            audienceReportsAnalytics(deviceId, (await state.snapshot()).devices),
+          noWorkspace: {
+            // The desktop's sidebar lists a chat only once it knows the chat's workspace, so a
+            // hidden record made or removed here is announced like any other workspace change.
+            target: async (workspaceId) => {
+              const target = await workspaceApplicationService.reserveNoWorkspaceChat(workspaceId);
+              if (target.workspaceId !== workspaceId) ipcMain.broadcast("workspaces:changed", {});
+              return target;
             },
-          });
-          const hostFeed = new AidenRemoteHostFeedService({
-            now: Date.now,
-            attentionSummary: (runId) => {
-              const run = hostRunRegistry.summary(runId);
-              return run ? liveRunAttention(run.chatId, hostRunRegistry)?.summary : undefined;
+            release: async (workspaceId) => {
+              try {
+                await workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId);
+              } catch {
+                logger.warn("aiden-remote", "Could not release a moved chat's hidden folder.");
+                return;
+              }
+              ipcMain.broadcast("workspaces:changed", {});
             },
-            liveRuns: () => hostRunRegistry.list(),
-            source: createAidenRemoteHostFeedSource({
-              chats,
-              listWorkspaces: listRemoteVisibleWorkspaces,
-              approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
-              repositoryIdentity: gitCachedRepositoryIdentity,
-              ...(bots ? { listBots: () => bots.list() } : {}),
-              // The same summary this Mac's own Bots list reads (revision 66), kept per
-              // Bot until that Bot's own `bots:changed` or `bots:attention` arrives, so
-              // a chat or workspace change opens no Bot conversation.
-              botSignals: (botRows) => botSignalsCache.signals(botRows),
-            }),
-          });
-          activeHostFeed = hostFeed;
-          const hostFeedChannels = new Set([
-            "chats:changed",
-            "chats:metadata-updated",
-            "chats:activity-changed",
-            "chats:read-markers-changed",
-            "chats:triage-changed",
-            "chats:fork-summary-changed",
-            "workspaces:changed",
-            "bots:changed",
-            // A Bot's wait began or ended: its row's `needsYou` changed (revision 52).
-            "bots:attention",
-          ]);
-          const detachers = [
-            onBroadcast((channel, botId) => {
-              if (channel === "bots:changed" || channel === "bots:attention") botSignalsCache.invalidate(botId);
-              if (hostFeedChannels.has(channel)) hostFeed.invalidate();
-            }),
-            chatStore.onIndexChanged(() => hostFeed.invalidate()),
-            configStore.onWorkspacesChanged(() => hostFeed.invalidate()),
-            hostRunRegistry.onChange((summary, removed) => hostFeed.noteRun(summary, removed)),
-          ];
-          detachHostFeed = () => {
-            for (const detach of detachers) detach();
-          };
-          const providers = new AidenRemoteProviderService({
-            get: (id) => configStore.getProvider(id),
-            save: saveProviderWithCredentialRotation,
-            recoverCredential: async (provider) => {
-              await reconcilePendingProviderCredentialRotation();
-              return Boolean(await secrets.getProviderKey(provider.id, JSON.stringify(providerConnectionSnapshot(provider))));
+          },
+          deviceSupportsSkillInvocation: async (deviceId) => {
+            const device = (await state.snapshot()).devices.find(
+              (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
+            );
+            return (
+              device !== undefined &&
+              device.acceptsProgressCapabilities === true &&
+              device.capabilities.includes("skills:invoke")
+            );
+          },
+          // Phones never get workspace_artifact, hooks or the design canvas, so they do not list those skills either.
+          skillCatalog: async (workspaceId) =>
+            withoutSkills(
+              await skillRegistry.snapshot(workspaceId),
+              new Set([
+                ...DESKTOP_ARTIFACT_SKILLS,
+                ...DESKTOP_HOOK_SKILLS,
+                ...DESIGN_CANVAS_SKILLS,
+              ]),
+            ).catalog,
+          botSkillCatalog: async (deviceId, botId, chatId, workspaceId) => {
+            // The same Full/Custom narrowing the generation path enforces:
+            // admit fresh, revalidate, then filter the workspace snapshot
+            // down to the Bot's currently admitted skill tool names.
+            const admission = await botRuntimeAuthority.admit({
+              audienceId: deviceId,
+              botId,
+              chatId,
+            });
+            try {
+              const runtimeCatalog = await resolveBotRuntimeCatalogSnapshot(admission.authority);
+              const workspace = await configStore.getWorkspace(workspaceId);
+              if (!workspace) return [];
+              const snapshot = await skillRegistry.snapshotResolved(workspace);
+              const resolved = await resolveBotRuntimeSkills(botId);
+              const toolNames = exactBotSkillToolNames(
+                admission.authority,
+                runtimeCatalog.resources.skills,
+                resolved,
+                snapshot,
+              );
+              await admission.revalidateBeforeEffect();
+              return filterBotSkillSnapshot(snapshot, toolNames, admission).catalog;
+            } finally {
+              admission.release();
+            }
+          },
+          resolveSkillInvocation: (workspaceId, invocationId) =>
+            skillRegistry.resolveFresh(workspaceId, invocationId),
+          // Revision 41: the same projection the composer meter reads (`chats:contextPressure`).
+          contextPressure: async (chatId, selection) =>
+            (await import("./context-pressure.js")).chatContextPressure(chatId, selection),
+          notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
+          isTitlePending: (chatId) => chatTitleService.isFirstTurnPending(chatId),
+          activeChatIds: () => chatActivityRegistry.snapshot().activeChatIds,
+          activitySnapshot: () => chatActivityRegistry.snapshot(),
+          readMarkers: {
+            snapshot: () => chatReadMarkers.snapshot(),
+            markRead: (chatId, throughMessageId) => markChatRead(chatId, throughMessageId),
+          },
+          triage: chatTriage,
+          // Revision 52: live-run times for the summaries' Inbox signals.
+          runTimes: (chatId) => liveRunAttention(chatId, hostRunRegistry),
+          forks: {
+            service: chatForkService,
+            admitWorkspace: (workspaceId) => {
+              const admission = workspaceMutationGate.admit(workspaceId);
+              return {
+                isAborted: () => admission.signal.aborted,
+                release: () => admission.release(),
+              };
             },
-            changed: () => ipcMain.broadcast("app:config-externally-changed", {}),
-          });
-          const memorySettings = new AidenRemoteMemorySettingsService(configStore, publishAppControlsChanged);
-          // Revision 61 (`approvals:settings`): the desktop's own mode save path and rules page.
-          const approvalSettings = new AidenRemoteApprovalSettingsService({
-            readMode: async () => {
-              const usable = (await listConfiguredProviders()).some((provider) =>
-                provider.models.length > 0 && (provider.hasKey || !provider.needsKey));
-              return { mode: effectiveApprovalMode(await configStore.getSettings(), usable), autoAvailable: usable };
+            summaries: {
+              retry: (chatId) => forkSummaryService.retry(chatId),
+              skip: (chatId) => forkSummaryService.skip(chatId),
+              cancel: (chatId) => forkSummaryService.cancel(chatId),
             },
-            writeMode: async (mode) => {
-              const before = (await configStore.getSettings()).approvalMode;
-              const patch = { approvalMode: mode };
-              const saved = await configStore.setSettings(patch);
-              await applySettingsEffects(saved, patch);
-              reportApprovalModeChanged("global", before, saved.approvalMode);
-              publishAppControlsChanged();
-            },
-            rules: {
-              list: async () => (await import("./approval-rules/rules-page-main.js")).approvalRulesPage().list(),
-              picker: async () => (await import("./approval-rules/rules-page-main.js")).approvalRulesPage().picker(),
-              add: async (input) => (await import("./approval-rules/rules-page-main.js")).approvalRulesPage().add(input),
-              change: async (input) => (await import("./approval-rules/rules-page-main.js")).approvalRulesPage().change(input),
-              remove: async (ref) => (await import("./approval-rules/rules-page-main.js")).approvalRulesPage().remove(ref),
-            },
-            log: (message, error) => logger.warn("aiden-remote", message, error),
-          });
-          const speech = new AidenRemoteSpeechService();
-          activeReadAloud?.close();
-          const readAloud = new AidenRemoteTtsService(ttsService);
-          activeReadAloud = readAloud;
-          return {
-            instanceId,
-            workspaceBrowser,
-            chats,
-            models,
-            streams,
-            chatProgress,
-            files,
-            git,
-            schedules,
-            appControls: remoteAppControls,
-            providers,
-            memorySettings,
-            approvalSettings,
-            spending: new AidenRemoteSpendingService({
-              spending,
-              requireBot: async (botId) => {
-                if (!bots) throw new AidenRemoteServiceError("not_found", "This Bot no longer exists.", 404);
-                await bots.bot(botId);
+          },
+        });
+        activeChats = chats;
+        activeProgress?.close();
+        const chatProgress = new AidenRemoteChatProgressService({
+          instanceId,
+          events: chatProgressEvents,
+          appControlsEnabled: () => remoteAppControls.enabled(),
+          authorize: createChatProgressAuthorizer({
+            acquireDeviceAuthorization: (deviceId) =>
+              state.acquireDeviceAuthorization(deviceId, false),
+            device: async (deviceId) =>
+              (await state.snapshot()).devices.find((entry) => entry.id === deviceId),
+            chatMetadata: () => chatStore.listSummaryMetadata(),
+            readChat: async (chatId) => (await chatStore.get(chatId)) ?? undefined,
+            authorizeRetainedBotChat: (input) => chats.authorizeRetainedBotChat(input),
+            events: chatProgressEvents,
+          }),
+          readTodo: async (chatId) => {
+            const chat = await chatStore.get(chatId);
+            if (!chat)
+              throw new AidenRemoteServiceError("not_found", "This chat is unavailable.", 404);
+            const opened = await piCompactionSessionStore.openChatIfEligible(chatId, chat);
+            return (await loadDurableTodoSnapshot(chatId, opened.session)).snapshot;
+          },
+          readAgents: (chatId) => subagentRunStore.listByChat(chatId),
+          // Reuses the desktop Subagents panel stop path. The chat's
+          // persisted workspace, not the run snapshot, scopes the binding.
+          stopAgent: async ({ chatId, runId }) => {
+            const chat = await chatStore.get(chatId);
+            if (!chat || chat.id !== chatId) return false;
+            const result = await subagentControlMainV2.stopForChat(
+              { chatId, workspaceId: persistedChatWorkspaceId(chat.workspaceId) },
+              runId,
+            );
+            return result !== undefined;
+          },
+          // Remote-created turns already have a public turn identity; the
+          // roster must echo it so clients can correlate turnStart with agents.
+          publicTurnId: (chatId, generationId) => streams.turnIdFor(chatId, generationId),
+        });
+        activeProgress = chatProgress;
+        const projectBotHealth = async (
+          botId: string,
+          fullReady?: boolean,
+        ): Promise<"ready" | "degraded" | "unavailable"> => {
+          const policy = await botCapabilityStore.getBotPolicy(botId);
+          if (policy.accessMode === "full") {
+            if (fullReady !== undefined) return fullReady ? "ready" : "unavailable";
+            const snapshot = await botCapabilityCatalog.snapshot({
+              audienceId: instanceId,
+              botId,
+            });
+            return snapshot.resources.providers.some(
+              (provider) =>
+                provider.option.available &&
+                provider.models.some((model) => model.option.available),
+            )
+              ? "ready"
+              : "unavailable";
+          }
+          const binding = await botCapabilityStore.getBotBinding(botId);
+          if (!binding) return "unavailable";
+          try {
+            const reconciled = await botCapabilityCatalog.reconcile(binding, {
+              audienceId: instanceId,
+              botId,
+            });
+            if (reconciled.issues.length === 0) return "ready";
+            return reconciled.issues.some(({ group }) => group === "provider" || group === "model")
+              ? "unavailable"
+              : "degraded";
+          } catch {
+            return "unavailable";
+          }
+        };
+        const bots = botsSupported
+          ? new AidenRemoteBotService({
+              application: botApplicationService,
+              chatStore,
+              log: (message, error) => logger.warn("aiden-remote", message, error),
+              avatar: createMainBotAvatarApplicationAdapter(instanceId),
+              inbox: {
+                list: (deviceId, input) =>
+                  createBotInboxProjectionService({
+                    listBots: () => botApplicationService.list(),
+                    listChatMetadata: () => chatStore.list(),
+                    projectBatch: async (request) => {
+                      const activities = await streams.projectChatActivities(
+                        deviceId,
+                        request.map(({ chatId }) => chatId),
+                      );
+                      return mergeBotInboxActivityPreviews(request, activities);
+                    },
+                  }).list(input),
               },
-            }),
-            // Background jobs run on the Mac and Linux desktop; phones list and stop them.
-            ...(hostPlatformCapabilities().backgroundJobs
-              ? {
-                  backgroundJobs: new AidenRemoteBackgroundJobService({
-                    list: (chatId) => backgroundJobs.list(chatId),
-                    stop: (chatId, jobId) => backgroundJobs.stop(chatId, jobId, "person"),
-                  }),
-                }
-              : {}),
-            usage: usageStore,
-            speech,
-            readAloud,
-            ...await electronConnectorWatchRemotePorts({ bots: botsSupported }, async () =>
-              (await import("./bot-routine-events/sources-main.js")).botConnectorWatches),
-            ...(botsSupported
-              ? {
-                  botFiles,
-                  bots,
-                  botSessions,
-                  // Revision 68 (`bot:needs-you`): the same signal this Mac's own Bot rows, the host feed
-                  // and the Dock badge use, read without the transcript.
-                  botNeedsYou: async (botIds: readonly string[]) => {
-                    const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
-                    const live = botLiveProjection();
-                    const waiting = await mapWithConcurrency(botIds, 4, async (botId) =>
-                      (await live.needsYou(botId).catch(() => false)) ? botId : null,
-                    );
-                    return new Set(waiting.filter((botId): botId is string => botId !== null));
+              deleteBot: async (botId) => {
+                const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
+                await (await botSessionRuntime()).deleteBot(botId);
+              },
+              // The holder's view (revision 37: a person's pause is `paused`); the
+              // router and the host feed project it for every other device.
+              sessionStates: async (botIds) => {
+                const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
+                const runtime = await botSessionRuntime();
+                const rows = await mapWithConcurrency(
+                  botIds,
+                  4,
+                  async (botId) =>
+                    [
+                      botId,
+                      projectBotSessionState(await runtime.state(botId), { handoffs: true }).state,
+                    ] as const,
+                );
+                return new Map(rows);
+              },
+              health: (botId) => projectBotHealth(botId),
+              // Revision 42: the holder's `issueCount`; the router drops it for
+              // every device that did not negotiate `bot:issues`.
+              issues: {
+                openCount: async (botId) => (await botIssues.list(botId, { open: true })).length,
+              },
+              healthBatch: async (botIds) => {
+                const snapshot = await botCapabilityCatalog.snapshot({
+                  audienceId: instanceId,
+                });
+                const fullReady = snapshot.resources.providers.some(
+                  (provider) =>
+                    provider.option.available &&
+                    provider.models.some((model) => model.option.available),
+                );
+                const rows = await mapWithConcurrency(
+                  botIds,
+                  4,
+                  async (botId) => [botId, await projectBotHealth(botId, fullReady)] as const,
+                );
+                return new Map(rows);
+              },
+              resolveProviderModel: async ({ audienceId, botId, providerId, modelId }) => {
+                // A routine credential write during the snapshot must not fail
+                // the phone's send; read again under a fresh lease instead.
+                const {
+                  lease: inventoryLease,
+                  value: { defaultSelection, snapshot },
+                } = await readUnderFreshBotRuntimeInventoryLease(
+                  botRuntimeInventoryLeases,
+                  async () => {
+                    const defaultSelection =
+                      providerId === undefined || modelId === undefined
+                        ? await models.resolve()
+                        : undefined;
+                    const retained = await botCapabilityStore.getBotBinding(botId);
+                    const snapshot = await botCapabilityCatalog.snapshot({
+                      audienceId,
+                      botId,
+                      ...(retained ? { retainedBindings: [retained] } : {}),
+                    });
+                    return { defaultSelection, snapshot };
                   },
-                  botOpenWork: (await import("./bot-open-work/service-main.js")).botOpenWork,
-                  botRoutineModels: { ...(await import("./bot-routine-models-main.js")).botRoutineModels, resumeStatus: async (botId: string) => (await (await import("./bot-runtime/bot-session-main.js")).botSessionRuntime()).executionResumeStatus(botId) },
-                  botPeers: (await import("./bot-peers/service-main.js")).botPeers,
-                  botAllowed,
+                );
+                try {
+                  const provider = snapshot.resources.providers.find((candidate) =>
+                    providerId !== undefined
+                      ? candidate.option.id === providerId
+                      : candidate.sourceId === defaultSelection?.providerId,
+                  );
+                  const model = provider?.models.find((candidate) =>
+                    modelId !== undefined
+                      ? candidate.option.id === modelId
+                      : candidate.sourceId === defaultSelection?.modelId,
+                  );
+                  if (
+                    !provider ||
+                    !model ||
+                    !provider.option.available ||
+                    !model.option.available
+                  ) {
+                    throw new AidenRemoteServiceError(
+                      "operation_stale",
+                      "Provider selection is unavailable. Refresh the Bot capability list.",
+                      409,
+                      true,
+                    );
+                  }
+                  return {
+                    providerId: provider.sourceId,
+                    model: model.sourceId,
+                    assertCurrent: () => {
+                      try {
+                        inventoryLease.assertCurrent();
+                      } catch {
+                        throw new AidenRemoteServiceError(
+                          "operation_stale",
+                          "Provider selection changed. Refresh the Bot capability list.",
+                          409,
+                          true,
+                        );
+                      }
+                    },
+                    release: () => inventoryLease.release(),
+                  };
+                } catch (error) {
+                  inventoryLease.release();
+                  throw error;
                 }
-              : {}),
-            hostFeed,
-            hostRuns,
-            settle: () => { readAloud.suspend(); return streams.settlePersistence(); },
-            workspaces: new AidenRemoteWorkspaceService({
-              clone: workspaceIntakeService.clone,
-              application: workspaceApplicationService,
-              browser: workspaceBrowser,
+              },
+              chatActivity: true,
+              messaging: {
+                enabled: async () => botMessagingEnabled(await configStore.getSettings()),
+                setEnabled: async (enabled) =>
+                  botMessagingEnabled(await configStore.setSettings({ botMessaging: enabled })),
+              },
               idempotency,
               persistIdempotency: (snapshot) => operationStore.save(snapshot),
-              notifyChanged: () => ipcMain.broadcast("workspaces:changed", {}),
-              approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
-              isWorkspaceHidden: isEphemeralOnlyNoWorkspace,
-              filterVisibleWorkspaces: (workspaces) =>
-                filterRemoteVisibleWorkspaces(workspaces, () => chatStore.list()),
-            }),
-          };
-        },
-      );
+              notifyBotsChanged: () => ipcMain.broadcast("bots:changed", {}),
+              notifyChatsChanged: () => ipcMain.broadcast("chats:changed", {}),
+            })
+          : undefined;
+        const files = new AidenRemoteFileService({
+          instanceId,
+          application: workspaceEnvironmentApplicationService,
+          owners: workspaceOwners,
+        });
+        const botFiles = botsSupported
+          ? new AidenRemoteBotFileService({
+              instanceId,
+              botAudienceId: BOT_DESKTOP_AUDIENCE_ID,
+              authority: botRuntimeAuthority,
+              chats: chatStore,
+            })
+          : undefined;
+        const botAllowed = bots
+          ? createAidenRemoteBotAllowList({
+              allowed: {
+                list: async (botId) =>
+                  (await import("./bot-runtime/bot-session-main.js")).botAllowList.list(botId),
+                remove: async (botId, entryId) =>
+                  (await import("./bot-runtime/bot-session-main.js")).botAllowList.remove(
+                    botId,
+                    entryId,
+                  ),
+              },
+              botExists: async (botId) => {
+                const [bot, { botLifecycleJournal }] = await Promise.all([
+                  botApplicationService.get(botId),
+                  import("./bot-capability-services-main.js"),
+                ]);
+                return (
+                  bot !== null &&
+                  !(await botLifecycleJournal.listPending()).some(
+                    (operation) => operation.kind === "delete_bot" && operation.botId === botId,
+                  )
+                );
+              },
+            })
+          : undefined;
+        // A rebuilt API must not leave the previous one's watches and streams open.
+        void activeBotSessions?.close();
+        const botSessions = bots
+          ? new AidenRemoteBotSessionService({
+              bots,
+              runtime: async () => {
+                const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
+                return botSessionRuntime();
+              },
+              routines: botRoutineService,
+              questions: botQuestions,
+              approvals: botApprovals,
+              // Revision 61: held update_bot cards, suggestions and learning receipts,
+              // answered through the desktop's own services (same serialization and checks).
+              settingsChanges: {
+                respond: async (botId, changeId, decision) =>
+                  (
+                    await import("./bot-settings-changes/service-main.js")
+                  ).botSettingsChanges.respond(botId, changeId, decision),
+              },
+              suggestions: {
+                respondSkill: async (botId, proposalId, decision) =>
+                  (await import("./bot-skills/skill-proposals-main.js")).botSkillProposals.answer({
+                    botId,
+                    proposalId,
+                    decision,
+                  }),
+                respondLesson: async (botId, lessonId, decision) =>
+                  (await import("./bot-learning/learning-main.js")).respondToWaitingLesson(
+                    botId,
+                    lessonId,
+                    decision,
+                  ),
+                removeLesson: async (botId, lessonId) =>
+                  (await (
+                    await import("./bot-learning/learning-main.js")
+                  ).removeLesson(botId, lessonId))
+                    ? { ok: true }
+                    : { ok: false, code: "not_found" },
+                undoLearning: async (botId, changeId) =>
+                  (await import("./bot-learning/learning-main.js")).undoBotLearning(
+                    botId,
+                    changeId,
+                  ),
+              },
+              // Revision 37: phones answer hand-offs through the desktop's own bridge.
+              handoffs: botHandoffs,
+              accessRequests: botAccessRequests,
+              plans: botPlans,
+              answerAccessRequest: answerBotAccessRequest,
+              // Revision 42: the desktop's own issue service raises, settles and acts.
+              issues: botIssues,
+              openHandoffOnMac: async (botId, waitId) => {
+                const { openBotHandoffById } =
+                  await import("./bot-runtime/bot-handoff-open-main.js");
+                return openBotHandoffById(botId, waitId, "phone");
+              },
+              // A pause or unpause on the Mac commits nothing to the conversation:
+              // open phone streams hear it through the runtime's state bridge.
+              stateChanges: (listener) => {
+                let stopped = false;
+                let unsubscribe: (() => void) | undefined;
+                void import("./bot-runtime/bot-session-main.js")
+                  .then(({ onBotSessionStateChange }) => {
+                    if (!stopped) unsubscribe = onBotSessionStateChange((botId) => listener(botId));
+                  })
+                  .catch((error: unknown) =>
+                    logger.warn(
+                      "aiden-remote",
+                      "Bot state changes are unavailable to phones.",
+                      error,
+                    ),
+                  );
+                return () => {
+                  stopped = true;
+                  unsubscribe?.();
+                };
+              },
+              turnIntents: botTurnIntents,
+              // The desktop feed's run start times: a phone opening mid-run sees the real elapsed time.
+              runStarts: botRunStarts,
+              onReport: (botId, error) =>
+                logger.warn(
+                  "aiden-remote",
+                  `Bot ${botId} queued or placed messages could not be read for phones.`,
+                  error,
+                ),
+              // Phone uploads share the workspace chats' one-shot store (revision 33).
+              attachments: remoteAttachmentStore,
+              presets: {
+                list: () => BOT_PRESETS,
+                // The one process-wide starter the desktop uses: a Mac tap and a
+                // phone tap converge on one Bot, and only the creator sends the self-intro.
+                create: async (presetId, { audienceId, version }) => {
+                  const { botStarter } = await import("./bot-runtime/bot-starter-main.js");
+                  const result = await botStarter().startFromPreset(presetId, {
+                    // Revision 61: a `bot:templates` phone names the version it was shown.
+                    ...(version === undefined ? {} : { version }),
+                    // Created for the phone's audience; the key is remembered by the shared starter.
+                    createBot: (bot, botId, presetId) =>
+                      botApplicationService.createBot({ audienceId, botId, bot, presetId }),
+                  });
+                  return { botId: result.bot.id, created: result.created };
+                },
+                presetBots: async () =>
+                  (await import("./bot-runtime/bot-starter-main.js")).botStarter().presetBots(),
+                introduce: async (botId) =>
+                  (await import("./bot-runtime/bot-starter-main.js")).botStarter().introduce(botId),
+              },
+              connectCardStatus: async (botId, card) => {
+                const { connectCardStatus } = await import("./bot-runtime/bot-session-main.js");
+                return connectCardStatus(botId, card);
+              },
+              connectionRequested: async ({ botId, pluginId }) => {
+                // Already connected but left out of this Bot's access: the
+                // Mac opens the Bot's chat, where the card offers "Add to this Bot".
+                const { connectCardStatus } = await import("./bot-runtime/bot-session-main.js");
+                const card = {
+                  type: "connect_card",
+                  pluginId,
+                  reason: "",
+                  status: "pending",
+                } as const;
+                if ((await connectCardStatus(botId, card)) === "needs_access") {
+                  await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`);
+                  return;
+                }
+                if (!openConnectionSetup(pluginId)) {
+                  throw new AidenRemoteServiceError(
+                    "not_found",
+                    "Aiden can't connect that app.",
+                    404,
+                  );
+                }
+              },
+              defaultTimezone: systemTimezone,
+              notifyBotsChanged: (botId) => ipcMain.broadcast("bots:changed", { botId }),
+              // Contract revision 27: the desktop's own memory and proposal services.
+              memory: botMemoryService,
+              proposals: botRoutineProposals,
+              routineNotifications: createBotNotificationFeed({
+                log: botDeliveryLog,
+                issueKind: async (botId, issueId) =>
+                  (await botIssues.list(botId)).find((issue) => issue.id === issueId)?.kind,
+                botName: async (botId) => (await botStore.get(botId))?.name,
+              }),
+            })
+          : undefined;
+        activeBotSessions = botSessions;
+        const git = new AidenRemoteGitService({
+          application: workspaceEnvironmentApplicationService,
+          owners: workspaceOwners,
+          git: {
+            review: gitReview,
+            diff: gitDiff,
+            branches: gitBranches,
+            checkout: gitCheckout,
+            createBranch: gitCreateBranch,
+            commit: gitCommit,
+            pushCapability: gitPushCapability,
+            push: gitPush,
+            compare: gitCompare,
+            comparisonDiff: gitComparisonDiff,
+            worktrees: gitWorktrees,
+          },
+          worktrees: workspaceWorktreeApplicationService,
+          listWorkspaces: () => configStore.listWorkspaces(),
+          idempotency,
+          persistIdempotency: (snapshot) => operationStore.save(snapshot),
+          onPushed: (result) => pullRequestBranchPushed(result.pullRequestRepository),
+        });
+        const schedules = new AidenRemoteScheduleService({
+          application: scheduledTaskApplicationService,
+          models,
+          idempotency,
+          persistIdempotency: (snapshot) => operationStore.save(snapshot),
+        });
+        const hostRuns = new AidenRemoteHostRunService({
+          registry: hostRunRegistry,
+          now: Date.now,
+          controls: {
+            cancel: (runId) => llmClient.cancel(runId, "user_stop"),
+            // A phone-owned approval settles through the stream service so its
+            // device records stay consistent; everything else settles directly.
+            approve: ({ chatId, approvalId, decision, scope }) =>
+              streams.respondApprovalFromHost(chatId, approvalId, decision, scope) ||
+              llmClient.approveAsHost(approvalId, decision, scope ? { scope } : undefined),
+            answer: ({ promptId, response }) => {
+              const outcome = llmClient.answerQuestionnaireAsHost(promptId, response);
+              if (outcome !== "rejected") streams.retireQuestionSettledByHost(promptId);
+              return outcome;
+            },
+            admitInput: (input) => llmClient.admitChatRunInput(input),
+          },
+        });
+        activeHostRuns = hostRuns;
+        detachHostFeed?.();
+        activeHostFeed?.close();
+        const isEphemeralOnlyNoWorkspace = async (workspace: {
+          id: string;
+          noWorkspace?: boolean;
+        }): Promise<boolean> => {
+          if (workspace.noWorkspace !== true || workspace.id === "default") return false;
+          const wsChats = await chatStore.list(workspace.id);
+          return wsChats.length > 0 && wsChats.every((meta) => meta.ephemeral === true);
+        };
+        const listRemoteVisibleWorkspaces = async () =>
+          filterRemoteVisibleWorkspaces(await workspaceApplicationService.list(), () =>
+            chatStore.list(),
+          );
+        const botSignalsCache = createHostFeedBotSignalsCache({
+          summary: async (botId) => {
+            const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
+            return botLiveProjection().summary(botId);
+          },
+        });
+        const hostFeed = new AidenRemoteHostFeedService({
+          now: Date.now,
+          attentionSummary: (runId) => {
+            const run = hostRunRegistry.summary(runId);
+            return run ? liveRunAttention(run.chatId, hostRunRegistry)?.summary : undefined;
+          },
+          liveRuns: () => hostRunRegistry.list(),
+          source: createAidenRemoteHostFeedSource({
+            chats,
+            listWorkspaces: listRemoteVisibleWorkspaces,
+            approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
+            repositoryIdentity: gitCachedRepositoryIdentity,
+            ...(bots ? { listBots: () => bots.list() } : {}),
+            // The same summary this Mac's own Bots list reads (revision 66), kept per
+            // Bot until that Bot's own `bots:changed` or `bots:attention` arrives, so
+            // a chat or workspace change opens no Bot conversation.
+            botSignals: (botRows) => botSignalsCache.signals(botRows),
+          }),
+        });
+        activeHostFeed = hostFeed;
+        const hostFeedChannels = new Set([
+          "chats:changed",
+          "chats:metadata-updated",
+          "chats:activity-changed",
+          "chats:read-markers-changed",
+          "chats:triage-changed",
+          "chats:fork-summary-changed",
+          "workspaces:changed",
+          "bots:changed",
+          // A Bot's wait began or ended: its row's `needsYou` changed (revision 52).
+          "bots:attention",
+        ]);
+        const detachers = [
+          onBroadcast((channel, botId) => {
+            if (channel === "bots:changed" || channel === "bots:attention")
+              botSignalsCache.invalidate(botId);
+            if (hostFeedChannels.has(channel)) hostFeed.invalidate();
+          }),
+          chatStore.onIndexChanged(() => hostFeed.invalidate()),
+          configStore.onWorkspacesChanged(() => hostFeed.invalidate()),
+          hostRunRegistry.onChange((summary, removed) => hostFeed.noteRun(summary, removed)),
+        ];
+        detachHostFeed = () => {
+          for (const detach of detachers) detach();
+        };
+        const providers = new AidenRemoteProviderService({
+          get: (id) => configStore.getProvider(id),
+          save: saveProviderWithCredentialRotation,
+          recoverCredential: async (provider) => {
+            await reconcilePendingProviderCredentialRotation();
+            return Boolean(
+              await secrets.getProviderKey(
+                provider.id,
+                JSON.stringify(providerConnectionSnapshot(provider)),
+              ),
+            );
+          },
+          changed: () => ipcMain.broadcast("app:config-externally-changed", {}),
+        });
+        const memorySettings = new AidenRemoteMemorySettingsService(
+          configStore,
+          publishAppControlsChanged,
+        );
+        // Revision 61 (`approvals:settings`): the desktop's own mode save path and rules page.
+        const approvalSettings = new AidenRemoteApprovalSettingsService({
+          readMode: async () => {
+            const usable = (await listConfiguredProviders()).some(
+              (provider) => provider.models.length > 0 && (provider.hasKey || !provider.needsKey),
+            );
+            return {
+              mode: effectiveApprovalMode(await configStore.getSettings(), usable),
+              autoAvailable: usable,
+            };
+          },
+          writeMode: async (mode) => {
+            const before = (await configStore.getSettings()).approvalMode;
+            const patch = { approvalMode: mode };
+            const saved = await configStore.setSettings(patch);
+            await applySettingsEffects(saved, patch);
+            reportApprovalModeChanged("global", before, saved.approvalMode);
+            publishAppControlsChanged();
+          },
+          rules: {
+            list: async () =>
+              (await import("./approval-rules/rules-page-main.js")).approvalRulesPage().list(),
+            picker: async () =>
+              (await import("./approval-rules/rules-page-main.js")).approvalRulesPage().picker(),
+            add: async (input) =>
+              (await import("./approval-rules/rules-page-main.js")).approvalRulesPage().add(input),
+            change: async (input) =>
+              (await import("./approval-rules/rules-page-main.js"))
+                .approvalRulesPage()
+                .change(input),
+            remove: async (ref) =>
+              (await import("./approval-rules/rules-page-main.js")).approvalRulesPage().remove(ref),
+          },
+          log: (message, error) => logger.warn("aiden-remote", message, error),
+        });
+        const speech = new AidenRemoteSpeechService();
+        activeReadAloud?.close();
+        const readAloud = new AidenRemoteTtsService(ttsService);
+        activeReadAloud = readAloud;
+        return {
+          instanceId,
+          workspaceBrowser,
+          chats,
+          models,
+          streams,
+          chatProgress,
+          files,
+          git,
+          schedules,
+          appControls: remoteAppControls,
+          providers,
+          memorySettings,
+          approvalSettings,
+          spending: new AidenRemoteSpendingService({
+            spending,
+            requireBot: async (botId) => {
+              if (!bots)
+                throw new AidenRemoteServiceError("not_found", "This Bot no longer exists.", 404);
+              await bots.bot(botId);
+            },
+          }),
+          // Background jobs run on the Mac and Linux desktop; phones list and stop them.
+          ...(hostPlatformCapabilities().backgroundJobs
+            ? {
+                backgroundJobs: new AidenRemoteBackgroundJobService({
+                  list: (chatId) => backgroundJobs.list(chatId),
+                  stop: (chatId, jobId) => backgroundJobs.stop(chatId, jobId, "person"),
+                }),
+              }
+            : {}),
+          usage: usageStore,
+          speech,
+          readAloud,
+          ...(await electronConnectorWatchRemotePorts(
+            { bots: botsSupported },
+            async () => (await import("./bot-routine-events/sources-main.js")).botConnectorWatches,
+          )),
+          ...(botsSupported
+            ? {
+                botFiles,
+                bots,
+                botSessions,
+                // Revision 68 (`bot:needs-you`): the same signal this Mac's own Bot rows, the host feed
+                // and the Dock badge use, read without the transcript.
+                botNeedsYou: async (botIds: readonly string[]) => {
+                  const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
+                  const live = botLiveProjection();
+                  const waiting = await mapWithConcurrency(botIds, 4, async (botId) =>
+                    (await live.needsYou(botId).catch(() => false)) ? botId : null,
+                  );
+                  return new Set(waiting.filter((botId): botId is string => botId !== null));
+                },
+                botOpenWork: (await import("./bot-open-work/service-main.js")).botOpenWork,
+                botRoutineModels: {
+                  ...(await import("./bot-routine-models-main.js")).botRoutineModels,
+                  resumeStatus: async (botId: string) =>
+                    (
+                      await (await import("./bot-runtime/bot-session-main.js")).botSessionRuntime()
+                    ).executionResumeStatus(botId),
+                },
+                botPeers: (await import("./bot-peers/service-main.js")).botPeers,
+                botAllowed,
+              }
+            : {}),
+          hostFeed,
+          hostRuns,
+          settle: () => {
+            readAloud.suspend();
+            return streams.settlePersistence();
+          },
+          workspaces: new AidenRemoteWorkspaceService({
+            clone: workspaceIntakeService.clone,
+            application: workspaceApplicationService,
+            browser: workspaceBrowser,
+            idempotency,
+            persistIdempotency: (snapshot) => operationStore.save(snapshot),
+            notifyChanged: () => ipcMain.broadcast("workspaces:changed", {}),
+            approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
+            isWorkspaceHidden: isEphemeralOnlyNoWorkspace,
+            filterVisibleWorkspaces: (workspaces) =>
+              filterRemoteVisibleWorkspaces(workspaces, () => chatStore.list()),
+          }),
+        };
+      });
       api.readAloud.resume();
       return api;
-    },
-    loadTlsIdentity: () => loadOrCreateAidenRemoteTlsIdentity({
-      directory: path.join(userData, "aiden-remote-identity"),
-      hostnames: lanHostnames.certificate,
     }),
+    loadTlsIdentity: () =>
+      loadOrCreateAidenRemoteTlsIdentity({
+        directory: path.join(userData, "aiden-remote-identity"),
+        hostnames: lanHostnames.certificate,
+      }),
     log: writeRemoteLog,
   });
-  const mcpProvenance = new AidenMcpProvenanceLog(new DataStore<AidenMcpProvenanceDocument>(
-    MCP_PROVENANCE_FILE,
-    emptyAidenMcpProvenanceDocument(),
-    () => userData,
-    {
-      maxBytes: MAX_MCP_PROVENANCE_BYTES,
-      fileMode: 0o600,
-      compact: true,
-      normalize: (value) => parseAidenMcpProvenanceDocument(value),
-    },
-  ));
+  const mcpProvenance = new AidenMcpProvenanceLog(
+    new DataStore<AidenMcpProvenanceDocument>(
+      MCP_PROVENANCE_FILE,
+      emptyAidenMcpProvenanceDocument(),
+      () => userData,
+      {
+        maxBytes: MAX_MCP_PROVENANCE_BYTES,
+        fileMode: 0o600,
+        compact: true,
+        normalize: (value) => parseAidenMcpProvenanceDocument(value),
+      },
+    ),
+  );
   const mcpTools = new AidenMcpToolRunner({
     services: async () => {
       const api = await remoteWorkspaceApi?.((await state.snapshot()).instanceId);
@@ -1430,7 +1583,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     state,
     tools: mcpTools,
     supported: () => hostPlatformCapabilities().mcpServer,
-    defaultPort: runtimeProfile.id === "development" ? AIDEN_MCP_DEVELOPMENT_PORT : AIDEN_MCP_PRODUCTION_PORT,
+    defaultPort:
+      runtimeProfile.id === "development" ? AIDEN_MCP_DEVELOPMENT_PORT : AIDEN_MCP_PRODUCTION_PORT,
     revokeDevice: (appId) => revokeDevice(appId, "when-available"),
     appVersion: app.getVersion(),
     // Category-only: never a credential, app name, chat or path.
@@ -1517,7 +1671,9 @@ export async function revokeAidenMcpApp(appId: string): Promise<boolean> {
 }
 
 /** The outside app that started `chatId` through the MCP server, for the chat's "Started by" label. */
-export async function aidenMcpChatProvenance(chatId: string): Promise<AidenMcpChatProvenance | undefined> {
+export async function aidenMcpChatProvenance(
+  chatId: string,
+): Promise<AidenMcpChatProvenance | undefined> {
   return (await getAidenRemoteRuntime()).mcpProvenance.get(chatId);
 }
 

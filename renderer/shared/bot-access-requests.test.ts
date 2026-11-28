@@ -105,7 +105,10 @@ test("titles, choices and result lines match the card", () => {
   );
 });
 test("access changed is an explicit non-decline result", () => {
-  assert.equal(botAccessResultLine({ target: "folder", label: "Taxes", outcome: "access_changed" }), "Access changed for Taxes");
+  assert.equal(
+    botAccessResultLine({ target: "folder", label: "Taxes", outcome: "access_changed" }),
+    "Access changed for Taxes",
+  );
 });
 test("authorization parsing requires a bounded exact pinned snapshot and never saves Whole Mac Always", () => {
   const auth = {
@@ -148,7 +151,21 @@ test("new access issue vocabulary requires explicit opt-in, keeping legacy Remot
 test("approval count is public only for an Always-eligible folder and an integer from 3 through 20", () => {
   assert.equal(botPendingAccessRequestOf({ ...card, approvalCount: 3 })?.approvalCount, 3);
   assert.equal(botPendingAccessRequestOf({ ...card, approvalCount: 20 })?.approvalCount, 20);
-  for (const approvalCount of [2, 21, 3.5, "3", NaN]) assert.equal(botPendingAccessRequestOf({ ...card, approvalCount }), null);
-  assert.equal(botPendingAccessRequestOf({ ...card, choices: ["not_now", "once"], approvalCount: 3 }), null);
-  assert.equal(botPendingAccessRequestOf({ ...card, target: "whole_mac", label: "your whole Mac", place: undefined, choices: ["not_now", "once"], approvalCount: 3 }), null);
+  for (const approvalCount of [2, 21, 3.5, "3", NaN])
+    assert.equal(botPendingAccessRequestOf({ ...card, approvalCount }), null);
+  assert.equal(
+    botPendingAccessRequestOf({ ...card, choices: ["not_now", "once"], approvalCount: 3 }),
+    null,
+  );
+  assert.equal(
+    botPendingAccessRequestOf({
+      ...card,
+      target: "whole_mac",
+      label: "your whole Mac",
+      place: undefined,
+      choices: ["not_now", "once"],
+      approvalCount: 3,
+    }),
+    null,
+  );
 });

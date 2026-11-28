@@ -54,13 +54,24 @@ test("fresh renderer capabilities fail closed until main explicitly enables feat
   assert.equal(parseAppCapabilities({ geminiLive: true }).geminiLive, true);
   assert.equal(parseAppCapabilities({ devices: true }).devices, true);
   assert.equal(parseAppCapabilities({ devices: "true" }).devices, false);
-  assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files", "browser", "new-tab", "context", "terminal", "artifacts"]);
+  assert.deepEqual(availableEnvironmentPanelTabs(false), [
+    "review",
+    "files",
+    "browser",
+    "new-tab",
+    "context",
+    "terminal",
+    "artifacts",
+  ]);
   assert.deepEqual(availableEnvironmentPanelTabs(true), [
     "review",
     "subagents",
     "files",
     "browser",
-    "new-tab", "context", "terminal", "artifacts",
+    "new-tab",
+    "context",
+    "terminal",
+    "artifacts",
   ]);
 });
 
@@ -236,7 +247,10 @@ test("archived subagent references remain stored but are invisible while disable
 test("the Environment work surface owns one mounted Subagents destination", () => {
   const environment = source("./environment-panel.tsx");
 
-  assert.match(environment, /availableEnvironmentPanelTabs\(panel\.subagentsEnabled, panel\.devicesEnabled\)/u);
+  assert.match(
+    environment,
+    /availableEnvironmentPanelTabs\(panel\.subagentsEnabled, panel\.devicesEnabled\)/u,
+  );
   assert.match(environment, /active=\{presented && panel\.tab === "subagents"\}/u);
   assert.match(environment, /compact=\{width < 620\}/u);
   assert.match(environment, /chatId=\{panel\.subagents\.chatId\}/u);
@@ -281,10 +295,7 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   );
   assert.match(environment, /if \(!subagentsEnabled\) return;/u);
   assert.match(environment, /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
-  assert.match(
-    pane,
-    /capabilities\.computerUse && settings\.data\?\.computerUseEnabled === true/u,
-  );
+  assert.match(pane, /capabilities\.computerUse && settings\.data\?\.computerUseEnabled === true/u);
   assert.match(pane, /visibleSubagentReferences\(messages, environmentPanel\.subagentsEnabled\)/u);
   assert.match(pane, /subagentsEnabled=\{environmentPanel\.subagentsEnabled\}/u);
 });
@@ -577,10 +588,15 @@ test("chip focus survives live-to-persisted replacement by run identity", () => 
   assert.match(environment, /\[data-subagent-detail-heading\]/u);
 });
 
-
 test("dictation settings match host support even with a saved hold preference", () => {
-  assert.equal(parseAppCapabilities({ platform: "linux", dictationHoldToTalk: false }).dictationHoldToTalk, false);
-  assert.equal(parseAppCapabilities({ platform: "darwin", dictationHoldToTalk: true }).dictationHoldToTalk, true);
+  assert.equal(
+    parseAppCapabilities({ platform: "linux", dictationHoldToTalk: false }).dictationHoldToTalk,
+    false,
+  );
+  assert.equal(
+    parseAppCapabilities({ platform: "darwin", dictationHoldToTalk: true }).dictationHoldToTalk,
+    true,
+  );
   assert.equal(parseAppCapabilities({ dictationHoldToTalk: "true" }).dictationHoldToTalk, false);
   // A saved hold or hybrid preference shows (and behaves) as toggle on a host
   // that cannot report key releases; the Settings radio reads this value.
@@ -607,15 +623,28 @@ test("app update controls require an explicit main-owned runtime capability", ()
   assert.match(handler, /appUpdates: supportsAppUpdates\(\)/u);
 });
 
-
 test("Linux hold setup is distinct from an active desktop binding", () => {
-  const setup = parseAppCapabilities({ platform: "linux", dictationHoldSetup: true, dictationHoldToTalk: false });
+  const setup = parseAppCapabilities({
+    platform: "linux",
+    dictationHoldSetup: true,
+    dictationHoldToTalk: false,
+  });
   assert.equal(setup.dictationHoldSetup, true);
   assert.equal(setup.dictationHoldToTalk, false);
-  assert.equal(parseAppCapabilities({ dictationHoldSetup: "true", dictationHoldTrigger: 7 }).dictationHoldSetup, false);
+  assert.equal(
+    parseAppCapabilities({ dictationHoldSetup: "true", dictationHoldTrigger: 7 })
+      .dictationHoldSetup,
+    false,
+  );
   assert.equal(parseAppCapabilities({ dictationHoldTrigger: 7 }).dictationHoldTrigger, null);
-  assert.equal(parseAppCapabilities({ dictationHoldTrigger: "Desktop shortcut" }).dictationHoldTrigger, "Desktop shortcut");
+  assert.equal(
+    parseAppCapabilities({ dictationHoldTrigger: "Desktop shortcut" }).dictationHoldTrigger,
+    "Desktop shortcut",
+  );
   const settings = source("./settings/dictation-shortcut-settings.tsx");
-  assert.match(settings, /capabilities\.dictationHoldToTalk \|\| capabilities\.dictationHoldSetup/u);
+  assert.match(
+    settings,
+    /capabilities\.dictationHoldToTalk \|\| capabilities\.dictationHoldSetup/u,
+  );
   assert.match(settings, /desktop assign a hold shortcut for this session/u);
 });

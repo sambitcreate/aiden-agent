@@ -21,7 +21,11 @@ import {
   BOT_COMPUTER_VIEWER_HOST_ID,
   type BotComputerViewerGrant,
 } from "../../../renderer/shared/bot-computers.js";
-import { rendererProxyOrigins, startDeviceHubProxy, type DeviceHubProxy } from "../devices/device-hub-proxy.js";
+import {
+  rendererProxyOrigins,
+  startDeviceHubProxy,
+  type DeviceHubProxy,
+} from "../devices/device-hub-proxy.js";
 import { isLiveScreen, type BotComputerLiveScreen } from "./rfb-screen.js";
 import {
   BotComputerError,
@@ -32,13 +36,18 @@ import {
   type BotComputerScreenFactory,
   type BotComputerSessions,
 } from "./types.js";
-import { BOT_COMPUTER_VIEWER_KEY_HEADER, startBotComputerViewerHub, type BotComputerViewerHub } from "./viewer-hub.js";
+import {
+  BOT_COMPUTER_VIEWER_KEY_HEADER,
+  startBotComputerViewerHub,
+  type BotComputerViewerHub,
+} from "./viewer-hub.js";
 
 /** The hub's key for the base computer; never a Bot id, which can't hold `#`. */
 export const BOT_COMPUTER_BASE_VIEW_KEY = "#base-computer";
 
 export interface BotComputerViewerDependencies {
-  host: Pick<BotComputerHost, "computer" | "ensureRunning" | "touch" | "onChange"> & Partial<Pick<BotComputerHost, "baseView">>;
+  host: Pick<BotComputerHost, "computer" | "ensureRunning" | "touch" | "onChange"> &
+    Partial<Pick<BotComputerHost, "baseView">>;
   sessions: Pick<BotComputerSessions, "runningScreen">;
   control: Pick<BotComputerControl, "controller" | "takeOver" | "onChange">;
   /** Opens the base computer's screen while setup waits for the person (the same factory as the Bots'). */
@@ -52,7 +61,10 @@ export interface BotComputerViewerDependencies {
 
 export interface BotComputerViewer {
   /** Where the Computer tab connects for this Bot's computer. */
-  grant(botId: string, options: { start: boolean; signal?: AbortSignal }): Promise<BotComputerViewerGrant>;
+  grant(
+    botId: string,
+    options: { start: boolean; signal?: AbortSignal },
+  ): Promise<BotComputerViewerGrant>;
   /** Where Settings connects for the base computer while setup waits for the person's grants. */
   grantBase(): Promise<BotComputerViewerGrant>;
   /** Open MJPEG streams and input sockets for a Bot's computer. */
@@ -83,7 +95,8 @@ export function createBotComputerViewer(deps: BotComputerViewerDependencies): Bo
   };
   const baseLiveScreen = async (signal: AbortSignal): Promise<BotComputerLiveScreen> => {
     const connection: BotComputerConnection | undefined = deps.host.baseView?.();
-    if (!connection || !deps.baseScreen) throw new BotComputerError("cancelled", "The base computer isn't waiting for you.");
+    if (!connection || !deps.baseScreen)
+      throw new BotComputerError("cancelled", "The base computer isn't waiting for you.");
     const key = `${connection.vmName}\u0000${connection.vnc.port}\u0000${connection.vnc.password}`;
     if (baseScreen?.key !== key) {
       dropBaseScreen();
@@ -94,7 +107,8 @@ export function createBotComputerViewer(deps: BotComputerViewerDependencies): Bo
       });
     }
     const screen = await baseScreen.screen;
-    if (!isLiveScreen(screen)) throw new BotComputerError("unsupported", "The base computer's screen can't be viewed.");
+    if (!isLiveScreen(screen))
+      throw new BotComputerError("unsupported", "The base computer's screen can't be viewed.");
     return screen;
   };
 
@@ -106,7 +120,8 @@ export function createBotComputerViewer(deps: BotComputerViewerDependencies): Bo
   const liveScreen = async (botId: string, signal: AbortSignal): Promise<BotComputerLiveScreen> => {
     if (botId === BOT_COMPUTER_BASE_VIEW_KEY) return baseLiveScreen(signal);
     const screen = await deps.sessions.runningScreen(botId, signal);
-    if (!isLiveScreen(screen)) throw new BotComputerError("unsupported", "This computer's screen can't be viewed.");
+    if (!isLiveScreen(screen))
+      throw new BotComputerError("unsupported", "This computer's screen can't be viewed.");
     return screen;
   };
 
@@ -119,7 +134,8 @@ export function createBotComputerViewer(deps: BotComputerViewerDependencies): Bo
         screen: liveScreen,
         // Nobody else drives the base: the person always has it.
         control: {
-          controller: (botId) => (botId === BOT_COMPUTER_BASE_VIEW_KEY ? "person" : deps.control.controller(botId)),
+          controller: (botId) =>
+            botId === BOT_COMPUTER_BASE_VIEW_KEY ? "person" : deps.control.controller(botId),
           takeOver: (botId, by) => {
             if (botId !== BOT_COMPUTER_BASE_VIEW_KEY) deps.control.takeOver(botId, by);
           },
@@ -185,11 +201,18 @@ export function createBotComputerViewer(deps: BotComputerViewerDependencies): Bo
     async grant(botId, { start: startIt, signal }) {
       if (closed) throw new BotComputerError("cancelled", "Aiden is quitting.");
       const computer = await deps.host.computer(botId);
-      if (!computer) throw new BotComputerError("no_computer", `${await possessive(botId)} computer has been removed.`);
+      if (!computer)
+        throw new BotComputerError(
+          "no_computer",
+          `${await possessive(botId)} computer has been removed.`,
+        );
       if (startIt) {
         await deps.host.ensureRunning(botId, { reason: "viewer", signal });
       } else if (computer.state !== "running") {
-        throw new BotComputerError("cancelled", `${await possessive(botId)} computer isn't running.`);
+        throw new BotComputerError(
+          "cancelled",
+          `${await possessive(botId)} computer isn't running.`,
+        );
       }
       // A computer's VM name never changes while the Bot has it; read it again after a start all the same.
       const vmName = (await deps.host.computer(botId))?.vmName ?? computer.vmName;
@@ -201,10 +224,15 @@ export function createBotComputerViewer(deps: BotComputerViewerDependencies): Bo
     async grantBase() {
       if (closed) throw new BotComputerError("cancelled", "Aiden is quitting.");
       const connection = deps.host.baseView?.();
-      if (!connection || !deps.baseScreen) throw new BotComputerError("cancelled", "The base computer isn't waiting for you.");
+      if (!connection || !deps.baseScreen)
+        throw new BotComputerError("cancelled", "The base computer isn't waiting for you.");
       vms.set(connection.vmName, BOT_COMPUTER_BASE_VIEW_KEY);
       const { proxy } = await start();
-      return { hostId: BOT_COMPUTER_VIEWER_HOST_ID, deviceId: connection.vmName, grant: proxy.mintGrant() };
+      return {
+        hostId: BOT_COMPUTER_VIEWER_HOST_ID,
+        deviceId: connection.vmName,
+        grant: proxy.mintGrant(),
+      };
     },
 
     viewers: (botId) => current?.hub.viewers(botId) ?? 0,

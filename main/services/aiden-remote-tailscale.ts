@@ -165,9 +165,12 @@ export function tailscaleCommandErrorCode(
   }
   const value = record(error);
   const stderr = typeof value?.stderr === "string" ? value.stderr : "";
-  const message = error instanceof Error
-    ? error.message
-    : typeof value?.message === "string" ? value.message : "";
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof value?.message === "string"
+        ? value.message
+        : "";
   const haystack = `${stderr}\n${message}`;
   return haystack.includes("Access denied: serve config denied") &&
     haystack.includes("tailscale set --operator=")
@@ -177,7 +180,7 @@ export function tailscaleCommandErrorCode(
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null;
 }
 
@@ -195,9 +198,7 @@ function parseBoundedJson(serialized: string, label: string): unknown {
 export function normalizeDnsName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const dnsName = value.trim().replace(/\.$/u, "").toLowerCase();
-  return /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(dnsName)
-    ? dnsName
-    : undefined;
+  return /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(dnsName) ? dnsName : undefined;
 }
 
 function parseNodeStatus(serialized: string): AidenTailscaleNodeStatus {
@@ -282,11 +283,11 @@ function preservedServeFingerprintForListenerTransition(status: AidenTailscaleSt
   );
   const tcp443 = preservedStatus.TCP?.["443"];
   if (
-    preservedStatus.Web === undefined
-    && tcp443?.HTTPS === true
-    && Object.keys(tcp443).length === 1
-    && Object.keys(preservedStatus.TCP ?? {}).length === 1
-    && Object.keys(preservedStatus).every((key) => key === "TCP")
+    preservedStatus.Web === undefined &&
+    tcp443?.HTTPS === true &&
+    Object.keys(tcp443).length === 1 &&
+    Object.keys(preservedStatus.TCP ?? {}).length === 1 &&
+    Object.keys(preservedStatus).every((key) => key === "TCP")
   ) {
     delete preservedStatus.TCP;
   }
@@ -299,13 +300,16 @@ function permitsHttpsListenerScaffoldingChange(
 ): boolean {
   const snapshot = aidenTailscaleCanonicalRouteSnapshot(before);
   if (nextTarget !== undefined) {
-    return snapshot.target === undefined
-      && before.TCP?.["443"] === undefined
-      && Object.keys(snapshot.preservedStatus).length === 0;
+    return (
+      snapshot.target === undefined &&
+      before.TCP?.["443"] === undefined &&
+      Object.keys(snapshot.preservedStatus).length === 0
+    );
   }
-  return snapshot.target !== undefined
-    && preservedServeFingerprintForListenerTransition(before)
-      === serveFingerprint({});
+  return (
+    snapshot.target !== undefined &&
+    preservedServeFingerprintForListenerTransition(before) === serveFingerprint({})
+  );
 }
 
 async function probeLoopbackHealth(target: string): Promise<boolean> {
@@ -323,39 +327,46 @@ async function probeLoopbackHealth(target: string): Promise<boolean> {
       clearTimeout(deadline);
       resolve(healthy);
     };
-    request = httpGet(endpoint, {
-      headers: { accept: "application/json", connection: "close" },
-      timeout: HEALTH_TIMEOUT_MS,
-    }, (response) => {
-      const chunks: Buffer[] = [];
-      let bytes = 0;
-      response.on("data", (chunk: Buffer | string) => {
-        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        bytes += buffer.length;
-        if (bytes > MAX_HEALTH_BYTES) {
-          request?.destroy();
-          finish(false);
-          return;
-        }
-        chunks.push(buffer);
-      });
-      response.on("end", () => {
-        if (response.statusCode !== 200) return finish(false);
-        try {
-          const parsed = parseAidenRemoteJson(Buffer.concat(chunks).toString("utf8"), "Aiden health response");
-          const health = record(parsed);
-          finish(
-            health?.ok === true
-            && health.protocolVersion === 1
-            && Object.keys(health).length === 2,
-          );
-        } catch {
-          finish(false);
-        }
-      });
-      response.once("aborted", () => finish(false));
-      response.once("error", () => finish(false));
-    });
+    request = httpGet(
+      endpoint,
+      {
+        headers: { accept: "application/json", connection: "close" },
+        timeout: HEALTH_TIMEOUT_MS,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+        response.on("data", (chunk: Buffer | string) => {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          bytes += buffer.length;
+          if (bytes > MAX_HEALTH_BYTES) {
+            request?.destroy();
+            finish(false);
+            return;
+          }
+          chunks.push(buffer);
+        });
+        response.on("end", () => {
+          if (response.statusCode !== 200) return finish(false);
+          try {
+            const parsed = parseAidenRemoteJson(
+              Buffer.concat(chunks).toString("utf8"),
+              "Aiden health response",
+            );
+            const health = record(parsed);
+            finish(
+              health?.ok === true &&
+                health.protocolVersion === 1 &&
+                Object.keys(health).length === 2,
+            );
+          } catch {
+            finish(false);
+          }
+        });
+        response.once("aborted", () => finish(false));
+        response.once("error", () => finish(false));
+      },
+    );
     request.once("timeout", () => {
       request.destroy();
       finish(false);
@@ -427,14 +438,14 @@ export async function createSystemTailscaleCommandRunner(
   options: AidenTailscaleSystemRunnerOptions = {},
 ): Promise<AidenTailscaleCommandRunner | null> {
   const platform = options.platform ?? process.platform;
-  const binary = await (
-    options.resolveBinary ?? (() => resolveTailscaleBinary(platform))
-  )();
+  const binary = await (options.resolveBinary ?? (() => resolveTailscaleBinary(platform)))();
   if (!binary) return null;
-  const execute = options.execute ?? (async (command, args, execOptions) => {
-    const { stdout } = await execFileAsync(command, [...args], execOptions);
-    return { stdout };
-  });
+  const execute =
+    options.execute ??
+    (async (command, args, execOptions) => {
+      const { stdout } = await execFileAsync(command, [...args], execOptions);
+      return { stdout };
+    });
   const environment = options.environment ?? process.env;
   return {
     run: async (args) => {
@@ -463,9 +474,10 @@ function statusReadFailureCategory(error: unknown): AidenTailscaleStatusReadFail
   if (error instanceof Error && error.message === "tailscale_status_invalid_response") {
     return "invalid-response";
   }
-  const details = error !== null && typeof error === "object"
-    ? error as { code?: unknown; killed?: unknown }
-    : undefined;
+  const details =
+    error !== null && typeof error === "object"
+      ? (error as { code?: unknown; killed?: unknown })
+      : undefined;
   if (details?.code === "ETIMEDOUT" || details?.killed === true) return "timed-out";
   return "command-failed";
 }
@@ -489,8 +501,7 @@ export class AidenRemoteTailscaleController {
     this.monotonicNow = options.monotonicNow ?? (() => performance.now());
     this.probeHealth = options.probeHealth ?? probeLoopbackHealth;
     this.randomToken = options.randomToken ?? (() => randomBytes(24).toString("base64url"));
-    this.withRouteLock = options.withRouteLock
-      ?? ((action) => withAidenTailscaleRouteLock(action));
+    this.withRouteLock = options.withRouteLock ?? ((action) => withAidenTailscaleRouteLock(action));
     this.outcomeStore = options.outcomeStore;
     this.onStatusReadFailure = options.onStatusReadFailure;
   }
@@ -511,11 +522,12 @@ export class AidenRemoteTailscaleController {
     nodeStatus: AidenTailscaleNodeStatus,
     serveStatus: AidenTailscaleStatus,
   ): AidenTailscaleConnectionStatus {
-    const errorCode = !nodeStatus.connected || !nodeStatus.dnsName
-      ? "not_connected" as const
-      : !nodeStatus.httpsAvailable
-        ? "https_unavailable" as const
-        : undefined;
+    const errorCode =
+      !nodeStatus.connected || !nodeStatus.dnsName
+        ? ("not_connected" as const)
+        : !nodeStatus.httpsAvailable
+          ? ("https_unavailable" as const)
+          : undefined;
     return {
       installed: true,
       ...(nodeStatus.dnsName ? { dnsName: nodeStatus.dnsName } : {}),
@@ -594,7 +606,7 @@ export class AidenRemoteTailscaleController {
     const classification = classifyAidenTailscaleRoute(serveStatus, target, ownership);
     if (classification.kind === "other_aiden") {
       return {
-        state: await this.probeHealth(classification.target)
+        state: (await this.probeHealth(classification.target))
           ? "other_aiden_live"
           : "other_aiden_stale",
       };
@@ -622,11 +634,12 @@ export class AidenRemoteTailscaleController {
       const code = error instanceof Error ? error.message : "";
       return {
         state: "unavailable",
-        errorCode: code === "tailscale_not_connected"
-          ? "not_connected"
-          : code === "tailscale_https_unavailable"
-            ? "https_unavailable"
-            : "status_unavailable",
+        errorCode:
+          code === "tailscale_not_connected"
+            ? "not_connected"
+            : code === "tailscale_https_unavailable"
+              ? "https_unavailable"
+              : "status_unavailable",
       };
     }
   }
@@ -673,16 +686,18 @@ export class AidenRemoteTailscaleController {
   private async setExactRoute(target: string): Promise<void> {
     if (!this.runner) throw new Error("tailscale_not_installed");
     await this.runner.run([
-      "serve", "--yes", "--bg", "--https=443",
-      `--set-path=/api/aiden/v1`, target,
+      "serve",
+      "--yes",
+      "--bg",
+      "--https=443",
+      `--set-path=/api/aiden/v1`,
+      target,
     ]);
   }
 
   private async clearExactRoute(): Promise<void> {
     if (!this.runner) throw new Error("tailscale_not_installed");
-    await this.runner.run([
-      "serve", "--https=443", `--set-path=/api/aiden/v1`, "off",
-    ]);
+    await this.runner.run(["serve", "--https=443", `--set-path=/api/aiden/v1`, "off"]);
   }
 
   private async conditionalRecoverRoute(
@@ -693,16 +708,13 @@ export class AidenRemoteTailscaleController {
     const current = await this.serveStatusAfterMutation("tailscale_route_recovery_failed");
     const currentSnapshot = aidenTailscaleCanonicalRouteSnapshot(current);
     if (
-      serveFingerprint(current) !== expectedCurrentFingerprint
-      || currentSnapshot.funnel
-      || currentSnapshot.target !== expectedCurrentTarget
+      serveFingerprint(current) !== expectedCurrentFingerprint ||
+      currentSnapshot.funnel ||
+      currentSnapshot.target !== expectedCurrentTarget
     ) {
       throw new Error("tailscale_route_recovery_failed");
     }
-    const permitsScaffoldingChange = permitsHttpsListenerScaffoldingChange(
-      current,
-      previousTarget,
-    );
+    const permitsScaffoldingChange = permitsHttpsListenerScaffoldingChange(current, previousTarget);
     const preserved = permitsScaffoldingChange
       ? preservedServeFingerprintForListenerTransition(current)
       : preservedServeFingerprint(current);
@@ -715,10 +727,10 @@ export class AidenRemoteTailscaleController {
     const recovered = await this.serveStatusAfterMutation("tailscale_route_recovery_failed");
     const recoveredSnapshot = aidenTailscaleCanonicalRouteSnapshot(recovered);
     if (
-      recoveredSnapshot.funnel
-      || recoveredSnapshot.target !== previousTarget
-      || (previousTarget !== undefined && recovered.TCP?.["443"]?.HTTPS !== true)
-      || (permitsScaffoldingChange
+      recoveredSnapshot.funnel ||
+      recoveredSnapshot.target !== previousTarget ||
+      (previousTarget !== undefined && recovered.TCP?.["443"]?.HTTPS !== true) ||
+      (permitsScaffoldingChange
         ? preservedServeFingerprintForListenerTransition(recovered)
         : preservedServeFingerprint(recovered)) !== preserved
     ) {
@@ -771,10 +783,10 @@ export class AidenRemoteTailscaleController {
     const observedSnapshot = aidenTailscaleCanonicalRouteSnapshot(observed);
     const observedFingerprint = serveFingerprint(observed);
     if (
-      observedSnapshot.funnel
-      || observedSnapshot.target !== nextTarget
-      || (nextTarget !== undefined && observed.TCP?.["443"]?.HTTPS !== true)
-      || (permitsScaffoldingChange
+      observedSnapshot.funnel ||
+      observedSnapshot.target !== nextTarget ||
+      (nextTarget !== undefined && observed.TCP?.["443"]?.HTTPS !== true) ||
+      (permitsScaffoldingChange
         ? preservedServeFingerprintForListenerTransition(observed)
         : preservedServeFingerprint(observed)) !== preserved
     ) {
@@ -793,9 +805,9 @@ export class AidenRemoteTailscaleController {
         await this.outcomeStore?.clear();
         if (commandFailureCode) throw new Error(commandFailureCode);
       }
-      throw new Error(commandFailed
-        ? "tailscale_route_outcome_unknown"
-        : "tailscale_route_verification_failed");
+      throw new Error(
+        commandFailed ? "tailscale_route_outcome_unknown" : "tailscale_route_verification_failed",
+      );
     }
     return observedFingerprint;
   }
@@ -815,7 +827,11 @@ export class AidenRemoteTailscaleController {
       );
       let committedRouteFingerprint = serveFingerprint(serveStatus);
       if (plan.action === "set") {
-        committedRouteFingerprint = await this.applyExactRouteMutation(serveStatus, target, "connect");
+        committedRouteFingerprint = await this.applyExactRouteMutation(
+          serveStatus,
+          target,
+          "connect",
+        );
       }
       if (persistOwnership) {
         try {
@@ -823,11 +839,7 @@ export class AidenRemoteTailscaleController {
         } catch {
           if (plan.action === "set") {
             try {
-              await this.conditionalRecoverRoute(
-                committedRouteFingerprint,
-                target,
-                undefined,
-              );
+              await this.conditionalRecoverRoute(committedRouteFingerprint, target, undefined);
             } catch {
               throw new Error("tailscale_route_recovery_failed");
             }
@@ -896,8 +908,8 @@ export class AidenRemoteTailscaleController {
       }
       const classification = classifyAidenTailscaleRoute(serveStatus, target);
       if (
-        classification.kind !== "other_aiden"
-        || classification.target !== review.incumbentTarget
+        classification.kind !== "other_aiden" ||
+        classification.target !== review.incumbentTarget
       ) {
         throw new Error("tailscale_takeover_changed");
       }
@@ -910,8 +922,8 @@ export class AidenRemoteTailscaleController {
       }
       const immediateClassification = classifyAidenTailscaleRoute(immediateStatus, target);
       if (
-        immediateClassification.kind !== "other_aiden"
-        || immediateClassification.target !== review.incumbentTarget
+        immediateClassification.kind !== "other_aiden" ||
+        immediateClassification.target !== review.incumbentTarget
       ) {
         throw new Error("tailscale_takeover_changed");
       }
@@ -951,7 +963,11 @@ export class AidenRemoteTailscaleController {
       const plan = planAidenTailscaleDisconnect(serveStatus, target, ownership);
       let committedRouteFingerprint = serveFingerprint(serveStatus);
       if (plan.action === "clear") {
-        committedRouteFingerprint = await this.applyExactRouteMutation(serveStatus, undefined, "disconnect");
+        committedRouteFingerprint = await this.applyExactRouteMutation(
+          serveStatus,
+          undefined,
+          "disconnect",
+        );
       }
       if (clearOwnership) {
         try {
@@ -959,11 +975,7 @@ export class AidenRemoteTailscaleController {
         } catch {
           if (plan.action === "clear") {
             try {
-              await this.conditionalRecoverRoute(
-                committedRouteFingerprint,
-                undefined,
-                target,
-              );
+              await this.conditionalRecoverRoute(committedRouteFingerprint, undefined, target);
             } catch {
               throw new Error("tailscale_route_recovery_failed");
             }
@@ -993,7 +1005,7 @@ export class AidenRemoteTailscaleController {
       };
       if (pending.operation !== "disconnect" && route.target === pending.target) {
         if (!route.https) throw new Error("tailscale_reconciliation_conflict");
-        if (!await this.probeHealth(pending.target)) {
+        if (!(await this.probeHealth(pending.target))) {
           throw new Error("tailscale_reconciliation_unhealthy");
         }
         await confirmUnchanged();

@@ -177,10 +177,7 @@ test("mutation raw boundary fences and invokes the client exactly once without a
   assert.ok(
     h.events.indexOf("config-fence") < h.events.indexOf("final-authority-ledger-budget-fence"),
   );
-  assert.equal(
-    h.events.indexOf("raw-client-call"),
-    h.events.lastIndexOf("config-fence") + 1,
-  );
+  assert.equal(h.events.indexOf("raw-client-call"), h.events.lastIndexOf("config-fence") + 1);
 });
 
 test("configuration invalidation during awaited auth prevents raw connect", async () => {
@@ -509,10 +506,18 @@ test("stdio is withheld before client, credential, or process-transport allocati
   assert.deepEqual(h.transportPolicy, []);
 });
 
-
 test("provider-authenticated MCP is denied before a child can create or reuse any client", async () => {
   const h = harness();
-  await assert.rejects(withIsolatedSubagentMcpClientCore({ server: { ...server, headers: undefined, authProvider: "openai" }, signal: new AbortController().signal, configurationLease: h.configurationLease, dependencies: h.dependencies, operation: async () => "must not run" }), /unavailable to child agents/u);
+  await assert.rejects(
+    withIsolatedSubagentMcpClientCore({
+      server: { ...server, headers: undefined, authProvider: "openai" },
+      signal: new AbortController().signal,
+      configurationLease: h.configurationLease,
+      dependencies: h.dependencies,
+      operation: async () => "must not run",
+    }),
+    /unavailable to child agents/u,
+  );
   assert.deepEqual(h.events, []);
 });
 
@@ -521,9 +526,14 @@ test("isolated child inventory follows pages and rejects credential revocation b
     const h = harness();
     const cursors: Array<string | undefined> = [];
     let revision = "initial";
-    h.dependencies.resolveCredentialBoundary = async () => ({ revision, redactText: (text) => text });
+    h.dependencies.resolveCredentialBoundary = async () => ({
+      revision,
+      redactText: (text) => text,
+    });
     h.dependencies.createClient = () => ({
-      connect: async () => {}, close: async () => {}, callTool: async () => ({}),
+      connect: async () => {},
+      close: async () => {},
+      callTool: async () => ({}),
       listTools: async (cursor) => {
         cursors.push(cursor);
         if (cursor) return { tools: [{ name: "last", annotations: { readOnlyHint: true } }] };
@@ -532,12 +542,21 @@ test("isolated child inventory follows pages and rejects credential revocation b
       },
     });
     const signal = new AbortController().signal;
-    const operation = withIsolatedSubagentMcpClientCore({ server, signal, configurationLease: h.configurationLease, dependencies: h.dependencies, operation: (client) => client.listTools(signal) });
+    const operation = withIsolatedSubagentMcpClientCore({
+      server,
+      signal,
+      configurationLease: h.configurationLease,
+      dependencies: h.dependencies,
+      operation: (client) => client.listTools(signal),
+    });
     if (revoke) {
       await assert.rejects(operation, /credential revision changed/u);
       assert.deepEqual(cursors, [undefined]);
     } else {
-      assert.deepEqual(await operation, [{ name: "first" }, { name: "last", annotations: { readOnlyHint: true } }]);
+      assert.deepEqual(await operation, [
+        { name: "first" },
+        { name: "last", annotations: { readOnlyHint: true } },
+      ]);
       assert.deepEqual(cursors, [undefined, "next"]);
     }
   }
@@ -547,9 +566,18 @@ test("child reads and mutations stop before spending authority on a withdrawn to
   const h = harness();
   let revision = 0;
   const original = h.dependencies.createClient;
-  h.dependencies.createClient = () => ({ ...original(), get inventoryRevision() { return revision; } });
+  h.dependencies.createClient = () => ({
+    ...original(),
+    get inventoryRevision() {
+      return revision;
+    },
+  });
   const signal = new AbortController().signal;
-  await withIsolatedSubagentMcpClientCore({ server, signal, configurationLease: h.configurationLease, dependencies: h.dependencies,
+  await withIsolatedSubagentMcpClientCore({
+    server,
+    signal,
+    configurationLease: h.configurationLease,
+    dependencies: h.dependencies,
     operation: async (client) => {
       await client.listTools(signal);
       revision++;
@@ -564,42 +592,72 @@ test("child reads and mutations stop before spending authority on a withdrawn to
 
 test("child regular and raw calls return schema mismatches as received, preserve server errors and block required tasks", async () => {
   for (const raw of [false, true]) {
-    const h = harness(); let dispatches = 0;
+    const h = harness();
+    let dispatches = 0;
     const diagnostics: string[] = [];
     h.dependencies.reportOutputSchemaDiagnostic = (diagnostic) => diagnostics.push(diagnostic);
     let response: unknown = { content: [], structuredContent: { value: "invalid" } };
     h.dependencies.createClient = () => ({
-      connect: async () => {}, close: async () => {},
-      listTools: async (cursor) => cursor ? { tools: [{ name: "last" }] } : { tools: [
-        { name: "typed", outputSchema: { type: "object", required: ["value"], properties: { value: { type: "number" } } } },
-        { name: "task", execution: { taskSupport: "required" } },
-      ], nextCursor: "last" },
-      callTool: async () => { dispatches++; return response; },
+      connect: async () => {},
+      close: async () => {},
+      listTools: async (cursor) =>
+        cursor
+          ? { tools: [{ name: "last" }] }
+          : {
+              tools: [
+                {
+                  name: "typed",
+                  outputSchema: {
+                    type: "object",
+                    required: ["value"],
+                    properties: { value: { type: "number" } },
+                  },
+                },
+                { name: "task", execution: { taskSupport: "required" } },
+              ],
+              nextCursor: "last",
+            },
+      callTool: async () => {
+        dispatches++;
+        return response;
+      },
     });
     const signal = new AbortController().signal;
-    await withIsolatedSubagentMcpClientCore({ server, signal, configurationLease: h.configurationLease, dependencies: h.dependencies, operation: async (client) => {
-      await client.listTools(signal);
-      const call = async (name: string) => raw ? client.callToolRaw!(name, {}, signal, () => {}) : client.callTool(name, {}, signal, () => {});
-      await assert.rejects(call("task"), /task-based/u);
-      assert.equal(dispatches, 0);
-      // The tool already ran: an error here would invite the child to repeat it.
-      assert.deepEqual(await call("typed"), { content: [], structuredContent: { value: "invalid" } });
-      assert.equal(dispatches, 1);
-      assert.equal(diagnostics.length, 1);
-      assert.match(diagnostics[0], /output schema/u);
-      assert.doesNotMatch(diagnostics[0], /invalid/u);
-      response = {
-        isError: true,
-        content: [{ type: "text", text: "Permission denied for echo-secret" }],
-        structuredContent: { code: "PERMISSION_DENIED" },
-      };
-      assert.deepEqual(await call("typed"), {
-        isError: true,
-        content: [{ type: "text", text: "Permission denied for [REDACTED]" }],
-        structuredContent: { code: "PERMISSION_DENIED" },
-      });
-      assert.equal(dispatches, 2);
-    } });
+    await withIsolatedSubagentMcpClientCore({
+      server,
+      signal,
+      configurationLease: h.configurationLease,
+      dependencies: h.dependencies,
+      operation: async (client) => {
+        await client.listTools(signal);
+        const call = async (name: string) =>
+          raw
+            ? client.callToolRaw!(name, {}, signal, () => {})
+            : client.callTool(name, {}, signal, () => {});
+        await assert.rejects(call("task"), /task-based/u);
+        assert.equal(dispatches, 0);
+        // The tool already ran: an error here would invite the child to repeat it.
+        assert.deepEqual(await call("typed"), {
+          content: [],
+          structuredContent: { value: "invalid" },
+        });
+        assert.equal(dispatches, 1);
+        assert.equal(diagnostics.length, 1);
+        assert.match(diagnostics[0], /output schema/u);
+        assert.doesNotMatch(diagnostics[0], /invalid/u);
+        response = {
+          isError: true,
+          content: [{ type: "text", text: "Permission denied for echo-secret" }],
+          structuredContent: { code: "PERMISSION_DENIED" },
+        };
+        assert.deepEqual(await call("typed"), {
+          isError: true,
+          content: [{ type: "text", text: "Permission denied for [REDACTED]" }],
+          structuredContent: { code: "PERMISSION_DENIED" },
+        });
+        assert.equal(dispatches, 2);
+      },
+    });
   }
 });
 
@@ -607,15 +665,37 @@ test("real child calls preserve last-page diagnostics through the raw request ad
   for (const raw of [false, true]) {
     const h = harness();
     const mcp = new McpClient({ name: "child-test", version: "1" });
-    const remote = new Server({ name: "child-server", version: "1" }, { capabilities: { tools: {} } });
-    remote.setRequestHandler(ListToolsRequestSchema, async ({ params }) => params?.cursor ? { tools: [{
-      name: "typed", inputSchema: { type: "object" },
-      outputSchema: { type: "object", required: ["value"], properties: { value: { type: "number" } } },
-    }] } : { tools: [{ name: "first", inputSchema: { type: "object" } }], nextCursor: "last" });
+    const remote = new Server(
+      { name: "child-server", version: "1" },
+      { capabilities: { tools: {} } },
+    );
+    remote.setRequestHandler(ListToolsRequestSchema, async ({ params }) =>
+      params?.cursor
+        ? {
+            tools: [
+              {
+                name: "typed",
+                inputSchema: { type: "object" },
+                outputSchema: {
+                  type: "object",
+                  required: ["value"],
+                  properties: { value: { type: "number" } },
+                },
+              },
+            ],
+          }
+        : { tools: [{ name: "first", inputSchema: { type: "object" } }], nextCursor: "last" },
+    );
     let fail = true;
-    remote.setRequestHandler(CallToolRequestSchema, async () => fail ? {
-      isError: true, content: [{ type: "text", text: "Permission denied for echo-secret" }], structuredContent: { code: "DENIED" },
-    } : { content: [], structuredContent: { value: "invalid" } });
+    remote.setRequestHandler(CallToolRequestSchema, async () =>
+      fail
+        ? {
+            isError: true,
+            content: [{ type: "text", text: "Permission denied for echo-secret" }],
+            structuredContent: { code: "DENIED" },
+          }
+        : { content: [], structuredContent: { value: "invalid" } },
+    );
     const clientTransport = await connectSdkServer(remote);
     h.dependencies.makeTransport = () => clientTransport;
     // The same adapter the MCP manager builds over Pi's client.
@@ -627,16 +707,30 @@ test("real child calls preserve last-page diagnostics through the raw request ad
     });
     const signal = new AbortController().signal;
     try {
-      await withIsolatedSubagentMcpClientCore({ server, signal, configurationLease: h.configurationLease, dependencies: h.dependencies, operation: async client => {
-        await client.listTools(signal);
-        const invoke = () => raw ? client.callToolRaw!("typed", {}, signal, () => {}) : client.callTool("typed", {}, signal, () => {});
-        assert.deepEqual(await invoke(), {
-          isError: true, content: [{ type: "text", text: "Permission denied for [REDACTED]" }], structuredContent: { code: "DENIED" },
-        });
-        fail = false;
-        // The call already ran; the child reads the mismatched reply as received.
-        assert.deepEqual(await invoke(), { content: [], structuredContent: { value: "invalid" } });
-      } });
+      await withIsolatedSubagentMcpClientCore({
+        server,
+        signal,
+        configurationLease: h.configurationLease,
+        dependencies: h.dependencies,
+        operation: async (client) => {
+          await client.listTools(signal);
+          const invoke = () =>
+            raw
+              ? client.callToolRaw!("typed", {}, signal, () => {})
+              : client.callTool("typed", {}, signal, () => {});
+          assert.deepEqual(await invoke(), {
+            isError: true,
+            content: [{ type: "text", text: "Permission denied for [REDACTED]" }],
+            structuredContent: { code: "DENIED" },
+          });
+          fail = false;
+          // The call already ran; the child reads the mismatched reply as received.
+          assert.deepEqual(await invoke(), {
+            content: [],
+            structuredContent: { value: "invalid" },
+          });
+        },
+      });
     } finally {
       await remote.close();
     }
@@ -645,26 +739,37 @@ test("real child calls preserve last-page diagnostics through the raw request ad
 
 test("child results redact credential echoes inside structured content, or withhold it when unbounded", async () => {
   const h = harness();
-  let structuredContent: unknown = { echo: "value echo-secret", nested: [{ "key-echo-secret": ["echo-secret"] }], count: 3 };
+  let structuredContent: unknown = {
+    echo: "value echo-secret",
+    nested: [{ "key-echo-secret": ["echo-secret"] }],
+    count: 3,
+  };
   h.dependencies.createClient = () => ({
     connect: async () => undefined,
     close: async () => undefined,
-    listTools: async () => ({ tools: [{ name: "lookup", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }] }),
+    listTools: async () => ({
+      tools: [
+        { name: "lookup", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+      ],
+    }),
     callTool: async () => ({ content: [], structuredContent }),
   });
-  const call = () => withIsolatedSubagentMcpClientCore({
-    server,
-    signal: new AbortController().signal,
-    configurationLease: h.configurationLease,
-    dependencies: h.dependencies,
-    operation: async (client) => {
-      await client.listTools(new AbortController().signal);
-      return client.callTool("lookup", {}, new AbortController().signal);
-    },
-  }) as Promise<{ structuredContent?: unknown }>;
+  const call = () =>
+    withIsolatedSubagentMcpClientCore({
+      server,
+      signal: new AbortController().signal,
+      configurationLease: h.configurationLease,
+      dependencies: h.dependencies,
+      operation: async (client) => {
+        await client.listTools(new AbortController().signal);
+        return client.callTool("lookup", {}, new AbortController().signal);
+      },
+    }) as Promise<{ structuredContent?: unknown }>;
   const redacted = await call();
   assert.deepEqual(JSON.parse(JSON.stringify(redacted.structuredContent)), {
-    echo: "value [REDACTED]", nested: [{ "key-[REDACTED]": ["[REDACTED]"] }], count: 3,
+    echo: "value [REDACTED]",
+    nested: [{ "key-[REDACTED]": ["[REDACTED]"] }],
+    count: 3,
   });
   structuredContent = { blob: `echo-secret${"x".repeat(MAX_CHILD_STRUCTURED_BYTES)}` };
   const withheld = await call();

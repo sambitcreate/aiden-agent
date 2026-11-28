@@ -4,13 +4,20 @@ import type { BigIntStats } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { isProtectedCredentialPath } from "../model-file-policy.js";
-import { captureManagedWorktreeRootIdentity, readConfinedWorkspaceFile, ManagedWorktreeFileIoError, type ManagedWorktreeRootIdentity } from "../managed-worktree-file-io.js";
+import {
+  captureManagedWorktreeRootIdentity,
+  readConfinedWorkspaceFile,
+  ManagedWorktreeFileIoError,
+  type ManagedWorktreeRootIdentity,
+} from "../managed-worktree-file-io.js";
 import { decodeWorkspaceFileText } from "../workspace-files.js";
 
 export const ARTIFACT_FILE_DENIED = "Credential files are unavailable to workspace artifacts.";
 /** A read the policy refuses. The page drops whatever it read from that source before. */
 export class WorkspaceArtifactFileDeniedError extends Error {
-  constructor(message = ARTIFACT_FILE_DENIED) { super(message); }
+  constructor(message = ARTIFACT_FILE_DENIED) {
+    super(message);
+  }
 }
 /**
  * The file, or a folder on its path, was replaced or changed between Aiden
@@ -18,7 +25,11 @@ export class WorkspaceArtifactFileDeniedError extends Error {
  * before was read under the policy, so the page keeps it, marked stale.
  */
 export class WorkspaceArtifactFileChangedError extends Error {
-  constructor(file: string) { super(`${file} changed while Aiden was reading it, so the page keeps the data it read before. The next refresh reads it again.`); }
+  constructor(file: string) {
+    super(
+      `${file} changed while Aiden was reading it, so the page keeps the data it read before. The next refresh reads it again.`,
+    );
+  }
 }
 /**
  * The workspace folder, or a folder on the way to the file, is not a plain
@@ -28,7 +39,9 @@ export class WorkspaceArtifactFileChangedError extends Error {
  */
 export class WorkspaceArtifactFileUnsafeError extends Error {
   constructor(file: string) {
-    super(`Aiden could not safely read ${file}: the workspace folder, or a folder on the way to the file, is a link or not a folder, or Aiden may not open it. Nothing was read.`);
+    super(
+      `Aiden could not safely read ${file}: the workspace folder, or a folder on the way to the file, is a link or not a folder, or Aiden may not open it. Nothing was read.`,
+    );
   }
 }
 /**
@@ -36,9 +49,12 @@ export class WorkspaceArtifactFileUnsafeError extends Error {
  * the file's name alone would send the page looking for the wrong thing.
  */
 export class WorkspaceArtifactFolderGoneError extends Error {
-  constructor(file: string) { super(`The workspace folder is gone, so Aiden could not read ${file}.`); }
+  constructor(file: string) {
+    super(`The workspace folder is gone, so Aiden could not read ${file}.`);
+  }
 }
-const isUnsafeSource = (error: unknown) => error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_source";
+const isUnsafeSource = (error: unknown) =>
+  error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_source";
 
 export function assertArtifactFilePath(file: string): void {
   if (isProtectedCredentialPath(file, "file")) throw new WorkspaceArtifactFileDeniedError();
@@ -49,7 +65,8 @@ export function assertArtifactFilePath(file: string): void {
  * resolved past a link, so a page cannot tell from its errors which files
  * exist outside the workspace folder.
  */
-const missingOrOutside = (file: string) => `${file} is missing or leads outside the workspace folder.`;
+const missingOrOutside = (file: string) =>
+  `${file} is missing or leads outside the workspace folder.`;
 
 /**
  * A file the system would not let Aiden read for a reason of its own (a
@@ -57,7 +74,9 @@ const missingOrOutside = (file: string) => `${file} is missing or leads outside 
  * names the folder's full path, so the page is told only this.
  */
 export class WorkspaceArtifactFileUnreadableError extends Error {
-  constructor(file: string) { super(`${file} cannot be read.`); }
+  constructor(file: string) {
+    super(`${file} cannot be read.`);
+  }
 }
 
 /**
@@ -67,7 +86,12 @@ export class WorkspaceArtifactFileUnreadableError extends Error {
  */
 function withoutSystemText(file: string, error: unknown): unknown {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  if (error instanceof ManagedWorktreeFileIoError || typeof code !== "string" || !/^E[A-Z0-9]+$/u.test(code)) return error;
+  if (
+    error instanceof ManagedWorktreeFileIoError ||
+    typeof code !== "string" ||
+    !/^E[A-Z0-9]+$/u.test(code)
+  )
+    return error;
   if (code === "ENOENT") return Object.assign(new Error(`There is no file at ${file}.`), { code });
   return new WorkspaceArtifactFileUnreadableError(file);
 }
@@ -84,9 +108,14 @@ function withoutSystemText(file: string, error: unknown): unknown {
  * refusal, so a swap made and undone around the open would have to land
  * between two checks a moment apart.
  */
-async function readRefused(root: ManagedWorktreeRootIdentity, relative: string, file: AdmittedFileStamp): Promise<boolean> {
+async function readRefused(
+  root: ManagedWorktreeRootIdentity,
+  relative: string,
+  file: AdmittedFileStamp,
+): Promise<boolean> {
   const at = path.join(root.path, relative);
-  const refusal = (error: unknown) => ["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException | undefined)?.code ?? "");
+  const refusal = (error: unknown) =>
+    ["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException | undefined)?.code ?? "");
   // "same": the admitted file is still there; "refused": a folder inside the workspace may not be entered; else it changed.
   const check = async (): Promise<"same" | "refused" | "changed"> => {
     if (!(await rootUnchanged(root)) || (await linkOnPath(root.path, relative))) return "changed";
@@ -114,19 +143,36 @@ async function readRefused(root: ManagedWorktreeRootIdentity, relative: string, 
  * hands a removed file's inode to the next file made (Linux does) would
  * otherwise let a different file put in its place pass as the admitted one.
  */
-type AdmittedFileStamp = { device: string; inode: string; size: string; ctime: string; mtime: string; birthtime: string };
+type AdmittedFileStamp = {
+  device: string;
+  inode: string;
+  size: string;
+  ctime: string;
+  mtime: string;
+  birthtime: string;
+};
 const stampOf = (info: BigIntStats): AdmittedFileStamp => ({
-  device: String(info.dev), inode: String(info.ino), size: String(info.size),
-  ctime: String(info.ctimeNs), mtime: String(info.mtimeNs), birthtime: String(info.birthtimeNs),
+  device: String(info.dev),
+  inode: String(info.ino),
+  size: String(info.size),
+  ctime: String(info.ctimeNs),
+  mtime: String(info.mtimeNs),
+  birthtime: String(info.birthtimeNs),
 });
 const sameStamp = (a: AdmittedFileStamp, b: AdmittedFileStamp) =>
-  a.device === b.device && a.inode === b.inode && a.size === b.size && a.ctime === b.ctime && a.mtime === b.mtime && a.birthtime === b.birthtime;
+  a.device === b.device &&
+  a.inode === b.inode &&
+  a.size === b.size &&
+  a.ctime === b.ctime &&
+  a.mtime === b.mtime &&
+  a.birthtime === b.birthtime;
 
 /** Whether `root.path` is still the folder Aiden admitted: a real folder, not a link, with no link above it, and the same device and inode. */
 async function rootUnchanged(root: ManagedWorktreeRootIdentity): Promise<boolean> {
   try {
     const info = await fs.lstat(root.path, { bigint: true });
-    if (!info.isDirectory() || String(info.dev) !== root.device || String(info.ino) !== root.inode) return false;
+    if (!info.isDirectory() || String(info.dev) !== root.device || String(info.ino) !== root.inode)
+      return false;
     return (await fs.realpath(root.path)) === root.path;
   } catch {
     return false;
@@ -149,9 +195,13 @@ async function linkOnPath(root: string, file: string): Promise<boolean> {
 
 async function admittedFile(root: string, file: string) {
   assertArtifactFilePath(file);
-  if (!file || path.isAbsolute(file) || file.split(/[\\/]/u).includes("..")) throw new WorkspaceArtifactFileDeniedError(`${file || "The file"} is not a path inside the workspace folder.`);
+  if (!file || path.isAbsolute(file) || file.split(/[\\/]/u).includes(".."))
+    throw new WorkspaceArtifactFileDeniedError(
+      `${file || "The file"} is not a path inside the workspace folder.`,
+    );
   const identity = await captureManagedWorktreeRootIdentity(root).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") throw new WorkspaceArtifactFolderGoneError(file);
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT")
+      throw new WorkspaceArtifactFolderGoneError(file);
     throw isUnsafeSource(error) ? new WorkspaceArtifactFileUnsafeError(file) : error;
   });
   let canonical: string;
@@ -159,40 +209,76 @@ async function admittedFile(root: string, file: string) {
     canonical = await fs.realpath(path.resolve(identity.path, file));
   } catch (error) {
     // Past a link the path may lead anywhere: whether something is missing out there is not the page's to learn.
-    if (await linkOnPath(identity.path, file)) throw new WorkspaceArtifactFileDeniedError(missingOrOutside(file));
+    if (await linkOnPath(identity.path, file))
+      throw new WorkspaceArtifactFileDeniedError(missingOrOutside(file));
     // A missing file is the one failure the page is told in its own words; the runner says there is no file there.
     if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") throw error;
     throw new WorkspaceArtifactFileUnreadableError(file);
   }
   const relative = path.relative(identity.path, canonical);
-  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new WorkspaceArtifactFileDeniedError(missingOrOutside(file));
+  if (
+    !relative ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  )
+    throw new WorkspaceArtifactFileDeniedError(missingOrOutside(file));
   assertArtifactFilePath(relative);
   const info = await fs.lstat(canonical, { bigint: true });
-  if (!info.isFile() || info.isSymbolicLink()) throw new WorkspaceArtifactFileDeniedError(`${file} is not a file.`);
-  if (info.nlink !== 1n) throw new WorkspaceArtifactFileDeniedError(`${file} has more than one hard link, so an artifact cannot read it.`);
-  return { identity, relative, file: { device: String(info.dev), inode: String(info.ino) }, stamp: stampOf(info) };
+  if (!info.isFile() || info.isSymbolicLink())
+    throw new WorkspaceArtifactFileDeniedError(`${file} is not a file.`);
+  if (info.nlink !== 1n)
+    throw new WorkspaceArtifactFileDeniedError(
+      `${file} has more than one hard link, so an artifact cannot read it.`,
+    );
+  return {
+    identity,
+    relative,
+    file: { device: String(info.dev), inode: String(info.ino) },
+    stamp: stampOf(info),
+  };
 }
 
 /** Metadata-only check for cached data. Missing/unavailable files inside the folder keep ordinary transient cache semantics; one missing past a link is refused. */
 export async function artifactFileAllowed(root: string, file: string): Promise<boolean> {
-  try { await admittedFile(root, file); return true; }
-  catch (error) { if (error instanceof WorkspaceArtifactFileDeniedError) return false; throw withoutSystemText(file, error); }
+  try {
+    await admittedFile(root, file);
+    return true;
+  } catch (error) {
+    if (error instanceof WorkspaceArtifactFileDeniedError) return false;
+    throw withoutSystemText(file, error);
+  }
 }
 
-export async function readWorkspaceArtifactFile(root: string, file: string, signal?: AbortSignal, hooks: { beforeRead?: () => Promise<void> } = {}): Promise<string> {
-  const admitted = await admittedFile(root, file).catch((error: unknown) => { throw withoutSystemText(file, error); });
+export async function readWorkspaceArtifactFile(
+  root: string,
+  file: string,
+  signal?: AbortSignal,
+  hooks: { beforeRead?: () => Promise<void> } = {},
+): Promise<string> {
+  const admitted = await admittedFile(root, file).catch((error: unknown) => {
+    throw withoutSystemText(file, error);
+  });
   signal?.throwIfAborted();
   await hooks.beforeRead?.();
   const identity = { root: admitted.identity, file: admitted.file };
-  const reading = process.platform === "linux"
-    ? readLinuxArtifactFile(identity, admitted.relative, signal)
-    : readConfinedWorkspaceFile(identity, admitted.relative, signal);
+  const reading =
+    process.platform === "linux"
+      ? readLinuxArtifactFile(identity, admitted.relative, signal)
+      : readConfinedWorkspaceFile(identity, admitted.relative, signal);
   const bytes = await reading.catch(async (error: unknown) => {
     // Linux's reader passes a refused open through as it is; the macOS helper reports it as a change.
-    const linuxRefusal = process.platform === "linux" && ["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException | undefined)?.code ?? "");
-    if (linuxRefusal || error instanceof LinuxArtifactFileChangedError || (error instanceof ManagedWorktreeFileIoError && error.code === "source_changed")) {
+    const linuxRefusal =
+      process.platform === "linux" &&
+      ["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException | undefined)?.code ?? "");
+    if (
+      linuxRefusal ||
+      error instanceof LinuxArtifactFileChangedError ||
+      (error instanceof ManagedWorktreeFileIoError && error.code === "source_changed")
+    ) {
       // A file Aiden may not read fails to open the same way a replaced one does; say which it is.
-      if (await readRefused(admitted.identity, admitted.relative, admitted.stamp)) throw new WorkspaceArtifactFileUnreadableError(file);
+      if (await readRefused(admitted.identity, admitted.relative, admitted.stamp))
+        throw new WorkspaceArtifactFileUnreadableError(file);
       throw new WorkspaceArtifactFileChangedError(file);
     }
     if (isUnsafeSource(error)) throw new WorkspaceArtifactFileUnsafeError(file);

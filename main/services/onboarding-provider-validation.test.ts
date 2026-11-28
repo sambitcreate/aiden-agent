@@ -89,6 +89,9 @@ test("failed, unsupported, or stale validation never reaches the credential comm
 
   globalThis.fetch = (async () =>
     new Response(JSON.stringify({ data: [{ id: "model-a" }] }), { status: 200 })) as typeof fetch;
-  await assert.rejects(validate(() => false), /no longer active/u);
+  await assert.rejects(
+    validate(() => false),
+    /no longer active/u,
+  );
   assert.equal(writes, 0);
 });

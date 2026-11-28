@@ -51,23 +51,24 @@ Acceptance on the owner's Mac: release-to-text on a warm model under about 400 m
   - Nemotron streaming (English, multilingual) on sherpa-onnx `OnlineRecognizer`.
 
   For each it reports load time, memory (RSS, and the macOS physical footprint that counts Metal buffers), and decode time for clips of about 3, 10 and 30 s, plus two LibriSpeech clips. For live text it reports update cost, busy share, first word, finalize time and word error rate.
+
 - transcribe.cpp 0.4.0 does not stream Parakeet TDT v3: the model reports no streaming support and rejects the `parakeet_buffered` extension. Live words on v3, Aiden's multilingual default, would mean re-decoding the recording so far. The benchmark measures this as `redecode`, re-decoding every 500 ms.
 - A smoke run on the 4-vCPU Linux cloud container (not representative) showed sherpa v3 re-decoding falling behind on a 17 s clip. Sherpa Nemotron streaming kept up there at about 75 to 85% busy, with 0 to 4% WER on LibriSpeech. Mac numbers decide.
 - **Mac results (2026-10-22).** The benchmark ran on a Mac Studio (M1 Max, 64 GB, macOS 27.0); full tables are in [`reference-results/2026-10-22-mac-studio-m1-max.md`](../../scripts/voice-engine-spike/reference-results/2026-10-22-mac-studio-m1-max.md).
 
-  | Warm decode, release to text | 3.5 s | 8.8 s | 26.9 s | mean WER |
-  |---|---|---|---|---|
-  | sherpa v3 int8, 2 threads (today) | 162 ms | 378 ms | 1220 ms | 0.036 |
-  | sherpa v3 int8, 4 threads | 119 ms | 263 ms | 810 ms | 0.036 |
-  | transcribe.cpp v3 Q8_0, Metal | 64 ms | 115 ms | 388 ms | 0.022 |
-  | transcribe.cpp v3 Q8_0, 4 CPU threads | 178 ms | 420 ms | 1393 ms | 0.022 |
-
+  | Warm decode, release to text          | 3.5 s  | 8.8 s  | 26.9 s  | mean WER |
+  | ------------------------------------- | ------ | ------ | ------- | -------- |
+  | sherpa v3 int8, 2 threads (today)     | 162 ms | 378 ms | 1220 ms | 0.036    |
+  | sherpa v3 int8, 4 threads             | 119 ms | 263 ms | 810 ms  | 0.036    |
+  | transcribe.cpp v3 Q8_0, Metal         | 64 ms  | 115 ms | 388 ms  | 0.022    |
+  | transcribe.cpp v3 Q8_0, 4 CPU threads | 178 ms | 420 ms | 1393 ms | 0.022    |
   - Re-decoding v3 on Metal every 500 ms stayed at or under 37% busy up to 27 s of audio. It showed the first words after 0.5 s of audio, and the final decode took 64 to 340 ms.
   - The Nemotron 3.5 stream on Metal cost about 0.2 ms per 100 ms chunk and finalized in 24 to 64 ms. Its first word came only after 1.1 s, and it made more mistakes.
   - Parakeet Unified English showed its first word only after 2.1 s.
   - Both sherpa Nemotron streams dropped the first word of every spoken phrase.
   - sherpa's Core ML provider decoded slower than its CPU path and used a 4.7 GB footprint.
   - Physical footprint after load: 897 MB for transcribe.cpp v3 on Metal, against 1136 MB for sherpa v3.
+
 - **Engine decision.** On Apple Silicon Macs, use transcribe.cpp 0.4.0 on Metal with Parakeet TDT v3 Q8_0. Live text re-decodes v3, because the same model then writes both the live words and the final text, and the words barely change at release. This is 2.5 to 3 times faster than today and more accurate.
   - Linux and Intel Macs keep sherpa-onnx. transcribe.cpp on CPU is slower than sherpa on 4 threads and fell behind re-decoding a 27 s clip (136% busy).
   - Nemotron 3.5 streaming stays a later option for long dictations or slower Macs.

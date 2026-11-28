@@ -63,7 +63,13 @@ export interface GuestDriverInstallContext {
   signal?: AbortSignal;
 }
 
-export type GuestDriverInstallStep = "locate" | "copy" | "verify" | "notice" | "agent" | "wait_for_socket";
+export type GuestDriverInstallStep =
+  | "locate"
+  | "copy"
+  | "verify"
+  | "notice"
+  | "agent"
+  | "wait_for_socket";
 
 function absolute(location: GuestDriverLocation, relative: string): string {
   return `${location.home}/${relative}`;
@@ -94,7 +100,11 @@ export function guestDriverDaemonArguments(location: GuestDriverLocation): strin
 }
 
 function xml(value: string): string {
-  return value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;").replace(/"/gu, "&quot;");
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;");
 }
 
 /**
@@ -103,7 +113,8 @@ function xml(value: string): string {
  * exists. Every path is absolute.
  */
 export function guestDriverLaunchAgentPlist(location: GuestDriverLocation): string {
-  const strings = (values: readonly string[]) => values.map((value) => `\t\t<string>${xml(value)}</string>`).join("\n");
+  const strings = (values: readonly string[]) =>
+    values.map((value) => `\t\t<string>${xml(value)}</string>`).join("\n");
   const env = Object.entries(guestDriverEnvironment())
     .map(([key, value]) => `\t\t<key>${xml(key)}</key>\n\t\t<string>${xml(value)}</string>`)
     .join("\n");
@@ -167,8 +178,14 @@ export function guestDriverLocateScript(): string {
 
 export function parseGuestDriverLocation(stdout: string): GuestDriverLocation {
   const line = stdout.split(/\r?\n/u).find((entry) => entry.startsWith(`${LOCATE_MARKER} `));
-  const match = line ? new RegExp(`^${LOCATE_MARKER} ([0-9]{1,7}) (/Users/[A-Za-z0-9._-]{1,64})$`, "u").exec(line) : null;
-  if (!match) throw new BotComputerError("start_failed", "The base computer reported an unexpected user home.");
+  const match = line
+    ? new RegExp(`^${LOCATE_MARKER} ([0-9]{1,7}) (/Users/[A-Za-z0-9._-]{1,64})$`, "u").exec(line)
+    : null;
+  if (!match)
+    throw new BotComputerError(
+      "start_failed",
+      "The base computer reported an unexpected user home.",
+    );
   return { uid: Number(match[1]), home: match[2] };
 }
 
@@ -187,7 +204,8 @@ export function guestDriverNoticeScript(): string {
  * into place. A copy that fails either check is deleted.
  */
 export function guestDriverVerifyScript(pin: GuestDriverPin): string {
-  if (!/^[0-9a-f]{64}$/u.test(pin.binarySha256)) throw new BotComputerError("invalid", "The driver pin is malformed.");
+  if (!/^[0-9a-f]{64}$/u.test(pin.binarySha256))
+    throw new BotComputerError("invalid", "The driver pin is malformed.");
   return [
     `f="$HOME/${GUEST_DRIVER_STAGING}"`,
     `d="$HOME/${GUEST_DRIVER_BINARY}"`,
@@ -267,7 +285,9 @@ export function guestDriverSuspendScript(): string {
  * --socket`, which never launches a standalone driver app of its own.
  */
 export function guestDriverBridgeScript(location: GuestDriverLocation, waitSeconds = 10): string {
-  const env = Object.entries(guestDriverEnvironment()).map(([key, value]) => `${key}=${quoteRemoteArg(value)}`);
+  const env = Object.entries(guestDriverEnvironment()).map(
+    ([key, value]) => `${key}=${quoteRemoteArg(value)}`,
+  );
   return [
     `e=${quoteRemoteArg(absolute(location, GUEST_DRIVER_ENABLED_FILE))}`,
     '[ -e "$e" ] || /usr/bin/touch "$e" || exit 68',
@@ -295,7 +315,10 @@ function check(step: GuestDriverInstallStep, result: BotComputerGuestCommandResu
           : result.timedOut
             ? "it timed out"
             : `exit ${String(result.exitCode)}`;
-  throw new BotComputerError("start_failed", `Installing Aiden's helper in the base computer failed at "${step}" (${reason}).`);
+  throw new BotComputerError(
+    "start_failed",
+    `Installing Aiden's helper in the base computer failed at "${step}" (${reason}).`,
+  );
 }
 
 /**
@@ -307,7 +330,8 @@ export async function installGuestDriver(
   options: { onStep?(step: GuestDriverInstallStep): void } = {},
 ): Promise<GuestDriverLocation> {
   const step = (id: GuestDriverInstallStep) => {
-    if (context.signal?.aborted) throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
+    if (context.signal?.aborted)
+      throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
     options.onStep?.(id);
   };
   step("locate");
@@ -315,12 +339,27 @@ export async function installGuestDriver(
   check("locate", located);
   const location = parseGuestDriverLocation(located.stdout);
   step("copy");
-  check("copy", await context.guestSsh(guestDriverCopyScript(), { stdinFile: context.driverPath, timeoutMs: 300_000 }));
+  check(
+    "copy",
+    await context.guestSsh(guestDriverCopyScript(), {
+      stdinFile: context.driverPath,
+      timeoutMs: 300_000,
+    }),
+  );
   step("verify");
-  check("verify", await context.guestSsh(guestDriverVerifyScript(context.pin), { timeoutMs: 120_000 }));
+  check(
+    "verify",
+    await context.guestSsh(guestDriverVerifyScript(context.pin), { timeoutMs: 120_000 }),
+  );
   if (context.noticePath !== undefined) {
     step("notice");
-    check("notice", await context.guestSsh(guestDriverNoticeScript(), { stdinFile: context.noticePath, timeoutMs: 30_000 }));
+    check(
+      "notice",
+      await context.guestSsh(guestDriverNoticeScript(), {
+        stdinFile: context.noticePath,
+        timeoutMs: 30_000,
+      }),
+    );
   }
   step("agent");
   check(
@@ -331,6 +370,9 @@ export async function installGuestDriver(
     }),
   );
   step("wait_for_socket");
-  check("wait_for_socket", await context.guestSsh(guestDriverWaitScript(location, 30), { timeoutMs: 45_000 }));
+  check(
+    "wait_for_socket",
+    await context.guestSsh(guestDriverWaitScript(location, 30), { timeoutMs: 45_000 }),
+  );
   return location;
 }

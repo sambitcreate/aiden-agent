@@ -21,10 +21,12 @@ const ARTIFACT =
   "a page the person will come back to (a dashboard they check daily, a status board, a checklist) is a workspace artifact (workspace_artifact)";
 /** Only said where design mode is part of the choice, so a turn without it never hears of it. */
 const ARTIFACT_IN_DESIGN_MODE = `${ARTIFACT}, even in design mode`;
-const CANVAS_ON = "screens, pages and directions to design and iterate on go on the design canvas as design/*.html files";
+const CANVAS_ON =
+  "screens, pages and directions to design and iterate on go on the design canvas as design/*.html files";
 const CANVAS_OFFERED =
   "screens, pages and directions to design and iterate on go on the design canvas: call design_mode to ask to open it";
-const IMAGES = "a picture, photo or illustration comes from the image tools (generate_image), not from HTML";
+const IMAGES =
+  "a picture, photo or illustration comes from the image tools (generate_image), not from HTML";
 
 /**
  * The rule for this turn, naming only destinations it has tools for. Empty
@@ -34,8 +36,16 @@ const IMAGES = "a picture, photo or illustration comes from the image tools (gen
 export function visualRoutingRule(destinations: VisualDestinations): string {
   const parts = [
     destinations.inline ? INLINE : null,
-    destinations.workspaceArtifact ? (destinations.designCanvas === "off" ? ARTIFACT : ARTIFACT_IN_DESIGN_MODE) : null,
-    destinations.designCanvas === "on" ? CANVAS_ON : destinations.designCanvas === "offered" ? CANVAS_OFFERED : null,
+    destinations.workspaceArtifact
+      ? destinations.designCanvas === "off"
+        ? ARTIFACT
+        : ARTIFACT_IN_DESIGN_MODE
+      : null,
+    destinations.designCanvas === "on"
+      ? CANVAS_ON
+      : destinations.designCanvas === "offered"
+        ? CANVAS_OFFERED
+        : null,
     destinations.images ? IMAGES : null,
   ].filter((part): part is string => part !== null);
   if (parts.length < 2) return "";

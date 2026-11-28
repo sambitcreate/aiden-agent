@@ -10,7 +10,11 @@ import type { ChatMessage } from "../lib/types";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
 import type { SubagentMessageReferenceV1, SubagentRunSnapshotV1 } from "../shared/subagent-runs";
-import { STREAMING_REVEAL_FADE_MS, STREAMING_REVEAL_RELEASE_MS, STREAMING_REVEAL_MAX_WAIT_MS } from "../lib/streaming-reveal";
+import {
+  STREAMING_REVEAL_FADE_MS,
+  STREAMING_REVEAL_RELEASE_MS,
+  STREAMING_REVEAL_MAX_WAIT_MS,
+} from "../lib/streaming-reveal";
 
 afterEach(() => {
   mock.restoreAll();
@@ -85,7 +89,9 @@ function replyCopyButton(): HTMLElement {
 }
 
 function copies(container: HTMLElement, text: string): number {
-  return [...container.querySelectorAll("p")].filter((paragraph) => paragraph.textContent?.includes(text)).length;
+  return [...container.querySelectorAll("p")].filter((paragraph) =>
+    paragraph.textContent?.includes(text),
+  ).length;
 }
 
 test("a finished reply settles in place: one copy during the handoff, the same elements after", () => {
@@ -94,7 +100,11 @@ test("a finished reply settles in place: one copy during the handoff, the same e
   const intro = "Here is the snippet you asked for.";
   const reply = `${intro}\n\n\`\`\`ts\nconst answer = 42;\n\`\`\`\n`;
   const view = render(
-    transcript({ messages: [prompt], streamingText: `${intro}\n\n\`\`\`ts\nconst answer = 42;\n`, live: true }),
+    transcript({
+      messages: [prompt],
+      streamingText: `${intro}\n\n\`\`\`ts\nconst answer = 42;\n`,
+      live: true,
+    }),
   );
   const paragraph = screen.getByText(intro).closest("p");
   const code = screen.getByText("const answer = 42;").closest(".group\\/code");
@@ -121,22 +131,37 @@ test("a finished reply settles in place: one copy during the handoff, the same e
       live: true,
     }),
   );
-  assert.equal(copies(view.container, intro), 1, "exactly one copy of the reply during the handoff");
+  assert.equal(
+    copies(view.container, intro),
+    1,
+    "exactly one copy of the reply during the handoff",
+  );
   assert.equal(view.container.querySelectorAll('[data-html-artifact="media-1"]').length, 1);
 
   // The handoff ends and the live state clears: the saved row is the same row.
   view.rerender(transcript({ messages: [prompt, saved], streamingText: null }));
   assert.equal(copies(view.container, intro), 1);
-  assert.equal(screen.getByText(intro).closest("p"), paragraph, "the paragraph is the same element");
+  assert.equal(
+    screen.getByText(intro).closest("p"),
+    paragraph,
+    "the paragraph is the same element",
+  );
   assert.equal(
     screen.getByText("const answer = 42;").closest(".group\\/code"),
     code,
     "the code block highlights in place instead of being replaced",
   );
-  assert.equal(view.container.querySelector('[data-html-artifact="media-1"]'), card, "the visual stays mounted");
+  assert.equal(
+    view.container.querySelector('[data-html-artifact="media-1"]'),
+    card,
+    "the visual stays mounted",
+  );
   assert.equal(replyCopyButton(), copy, "the reserved actions appear in place");
   assert.equal(copy.closest('[aria-hidden="true"]'), null);
-  assert.ok(screen.getByRole("button", { name: "Fork from here" }), "and the settled reply gains its fork action");
+  assert.ok(
+    screen.getByRole("button", { name: "Fork from here" }),
+    "and the settled reply gains its fork action",
+  );
 });
 
 /** The rendered Markdown of the reply that shows `text`: its whole document root. */
@@ -211,10 +236,17 @@ test("a reply settling behind a queued prompt keeps its place and its elements",
   const follows = (first: Node, second: Node) =>
     Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
   assert.equal(screen.getByText(text).closest("p"), paragraph, "the reply is not remounted");
-  assert.ok(follows(paragraph, screen.getByText("And then?")), "and it stays above the queued prompt");
+  assert.ok(
+    follows(paragraph, screen.getByText("And then?")),
+    "and it stays above the queued prompt",
+  );
 
   view.rerender(transcript({ messages: [prompt, saved, queued], streamingText: null }));
-  assert.equal(screen.getByText(text).closest("p"), paragraph, "the saved reply is the same element");
+  assert.equal(
+    screen.getByText(text).closest("p"),
+    paragraph,
+    "the saved reply is the same element",
+  );
 });
 
 test("a new answer to a prompt that already has one starts with its own sections closed", () => {
@@ -233,7 +265,9 @@ test("a new answer to a prompt that already has one starts with its own sections
   assert.equal(header.closest("section")?.dataset.disclosureLayout, "full", "the reader opened it");
 
   // The saved answer is replaced by a fresh one streaming in its place.
-  view.rerender(transcript({ messages: [prompt], streamingText: "", reasoning: "Fresh thinking." }));
+  view.rerender(
+    transcript({ messages: [prompt], streamingText: "", reasoning: "Fresh thinking." }),
+  );
   const live = view.container.querySelector<HTMLButtonElement>("section > button[aria-expanded]");
   assert.equal(live?.getAttribute("aria-expanded"), "false", "the new reasoning starts closed");
   assert.equal(live?.closest("section")?.dataset.disclosureLayout, "collapsed");
@@ -272,7 +306,12 @@ test("an earlier reply with the same text keeps its own preview while a new one 
   ];
   for (const handoffId of [null, "missing-current-response"]) {
     const view = render(
-      transcript({ messages, streamingText: repeated, streamComplete: true, persistedHandoffMessageId: handoffId }),
+      transcript({
+        messages,
+        streamingText: repeated,
+        streamComplete: true,
+        persistedHandoffMessageId: handoffId,
+      }),
     );
     assert.equal(previews(view.container), 2, String(handoffId));
     view.unmount();
@@ -305,21 +344,40 @@ test("text closed by a tool step joins whole at the next release", async () => {
     startedAt: 1,
     steps,
   });
-  const view = render(transcript({ messages: [prompt], streamingText: text, timeline: timeline([]) }));
+  const view = render(
+    transcript({ messages: [prompt], streamingText: text, timeline: timeline([]) }),
+  );
   assert.ok(view.container.textContent?.includes("Checked the config."));
-  assert.equal(view.container.textContent?.includes("Now reading"), false, "an unfinished sentence waits");
+  assert.equal(
+    view.container.textContent?.includes("Now reading"),
+    false,
+    "an unfinished sentence waits",
+  );
 
   // A tool call starts: this text can no longer grow, so its end is a boundary
   // that joins at the next release instead of all at once.
-  view.rerender(transcript({ messages: [prompt], streamingText: text, timeline: timeline([toolStep(text.length)]) }));
-  assert.equal(view.container.textContent?.includes("Now reading"), false, "the release interval still holds");
+  view.rerender(
+    transcript({
+      messages: [prompt],
+      streamingText: text,
+      timeline: timeline([toolStep(text.length)]),
+    }),
+  );
+  assert.equal(
+    view.container.textContent?.includes("Now reading"),
+    false,
+    "the release interval still holds",
+  );
   await wait(STREAMING_REVEAL_RELEASE_MS + 20);
   assert.ok(view.container.textContent?.includes("Now reading the file that defines"));
 });
 
 test("tool-closed text keeps its release slot when follow-up prose starts", async () => {
   const first = "Checked the config.\n\nNow reading the file that defines";
-  const timeline = (steps: AgentToolStep[], status: GenerationTimeline["status"] = "running"): GenerationTimeline => ({
+  const timeline = (
+    steps: AgentToolStep[],
+    status: GenerationTimeline["status"] = "running",
+  ): GenerationTimeline => ({
     version: 3,
     generationId: "generation-1",
     status,
@@ -327,20 +385,35 @@ test("tool-closed text keeps its release slot when follow-up prose starts", asyn
     steps,
   });
   const closed = timeline([toolStep(first.length)]);
-  const view = render(transcript({ messages: [prompt], streamingText: first, timeline: timeline([]) }));
+  const view = render(
+    transcript({ messages: [prompt], streamingText: first, timeline: timeline([]) }),
+  );
   view.rerender(transcript({ messages: [prompt], streamingText: first, timeline: closed }));
-  assert.equal(view.container.textContent?.includes("Now reading"), false, "the release interval holds");
+  assert.equal(
+    view.container.textContent?.includes("Now reading"),
+    false,
+    "the release interval holds",
+  );
 
   // The next prose row starts before the closed row's slot comes round.
   const both = `${first}\n\nThe follow-up`;
   view.rerender(transcript({ messages: [prompt], streamingText: both, timeline: closed }));
-  assert.equal(view.container.textContent?.includes("Now reading"), false, "newer prose does not flush the closed tail");
+  assert.equal(
+    view.container.textContent?.includes("Now reading"),
+    false,
+    "newer prose does not flush the closed tail",
+  );
 
   await wait(STREAMING_REVEAL_RELEASE_MS + 20);
-  assert.ok(view.container.textContent?.includes("Now reading the file that defines"), "the tail joins at its slot");
+  assert.ok(
+    view.container.textContent?.includes("Now reading the file that defines"),
+    "the tail joins at its slot",
+  );
 
   // The end of the turn shows every row in full.
-  view.rerender(transcript({ messages: [prompt], streamingText: both, timeline: closed, streamComplete: true }));
+  view.rerender(
+    transcript({ messages: [prompt], streamingText: both, timeline: closed, streamComplete: true }),
+  );
   assert.ok(view.container.textContent?.includes("The follow-up"));
 });
 
@@ -369,7 +442,11 @@ test("a streaming reply keeps one hidden action row after its last row, so new p
   const followUp = screen.getByText("The follow-up paragraph.");
   assert.equal(replyCopyButton(), copy, "the same row stays put as a new paragraph starts");
   assert.ok(followUp.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING);
-  assert.equal(copy.closest("p, .streaming-reveal"), null, "it belongs to the turn, not a paragraph");
+  assert.equal(
+    copy.closest("p, .streaming-reveal"),
+    null,
+    "it belongs to the turn, not a paragraph",
+  );
 });
 
 test("max-wait timeout releases pending heading and prose tails while turn still runs", async () => {
@@ -377,13 +454,21 @@ test("max-wait timeout releases pending heading and prose tails while turn still
   const contentWithHeading = "Intro paragraph.\n\n## Next section";
   const view = render(transcript({ messages: [prompt], streamingText: contentWithHeading }));
   assert.ok(view.container.textContent?.includes("Intro paragraph."));
-  assert.equal(view.container.textContent?.includes("Next section"), false, "unfinished heading waits");
+  assert.equal(
+    view.container.textContent?.includes("Next section"),
+    false,
+    "unfinished heading waits",
+  );
 
   // Wait past the max-wait timeout
   await wait(STREAMING_REVEAL_MAX_WAIT_MS + 50);
   // The heading should now be visible, and the turn is still running (streamComplete not set)
   assert.ok(view.container.textContent?.includes("Next section"), "heading visible after timeout");
-  assert.equal(view.container.textContent?.includes("Intro paragraph."), true, "intro still present");
+  assert.equal(
+    view.container.textContent?.includes("Intro paragraph."),
+    true,
+    "intro still present",
+  );
 
   // Verify we're still streaming by checking for the data-streaming attribute
   const reveal = view.container.querySelector(".streaming-reveal");
@@ -395,15 +480,27 @@ test("max-wait timeout shows unfinished prose sentence while turn still runs", a
   const contentWithProse = "Here is the intro.\n\nShort unfinished sentence";
   const view = render(transcript({ messages: [prompt], streamingText: contentWithProse }));
   assert.ok(view.container.textContent?.includes("Here is the intro."));
-  assert.equal(view.container.textContent?.includes("Short unfinished"), false, "incomplete prose waits");
+  assert.equal(
+    view.container.textContent?.includes("Short unfinished"),
+    false,
+    "incomplete prose waits",
+  );
 
   // Wait past the timeout
   await wait(STREAMING_REVEAL_MAX_WAIT_MS + 50);
-  assert.ok(view.container.textContent?.includes("Short unfinished sentence"), "prose visible after timeout");
+  assert.ok(
+    view.container.textContent?.includes("Short unfinished sentence"),
+    "prose visible after timeout",
+  );
 
   // More of the same sentence arriving never hides what the deadline showed.
-  view.rerender(transcript({ messages: [prompt], streamingText: `${contentWithProse} keeps going` }));
-  assert.ok(view.container.textContent?.includes("Short unfinished sentence"), "flushed prose stays visible");
+  view.rerender(
+    transcript({ messages: [prompt], streamingText: `${contentWithProse} keeps going` }),
+  );
+  assert.ok(
+    view.container.textContent?.includes("Short unfinished sentence"),
+    "flushed prose stays visible",
+  );
 
   // Turn is still running
   const reveal = view.container.querySelector(".streaming-reveal");
@@ -413,20 +510,31 @@ test("max-wait timeout shows unfinished prose sentence while turn still runs", a
 test("a streaming reply joins a paragraph at a time and stops fading once settled", async () => {
   const first = "The first paragraph is ready.";
   const second = "The second paragraph follows.";
-  const view = render(transcript({ messages: [prompt], streamingText: `${first}\n\n${second.slice(0, 10)}` }));
+  const view = render(
+    transcript({ messages: [prompt], streamingText: `${first}\n\n${second.slice(0, 10)}` }),
+  );
   assert.ok(view.container.textContent?.includes(first), "the first block shows at once");
   const reveal = view.container.querySelector(".streaming-reveal");
   assert.ok(reveal?.hasAttribute("data-streaming"), "new blocks fade while the reply streams");
 
   const reply = `${first}\n\n${second}\n\n`;
   view.rerender(transcript({ messages: [prompt], streamingText: reply }));
-  assert.equal(view.container.textContent?.includes(second), false, "the next block waits its turn");
+  assert.equal(
+    view.container.textContent?.includes(second),
+    false,
+    "the next block waits its turn",
+  );
   await wait(STREAMING_REVEAL_RELEASE_MS + 20);
   assert.ok(view.container.textContent?.includes(second), "then joins whole");
 
   const saved: ChatMessage = { id: "assistant-1", role: "assistant", content: reply, createdAt: 2 };
   view.rerender(
-    transcript({ messages: [prompt, saved], streamingText: reply, streamComplete: true, persistedHandoffMessageId: saved.id }),
+    transcript({
+      messages: [prompt, saved],
+      streamingText: reply,
+      streamComplete: true,
+      persistedHandoffMessageId: saved.id,
+    }),
   );
   await wait(STREAMING_REVEAL_FADE_MS + 50);
   view.rerender(transcript({ messages: [prompt, saved], streamingText: null }));
@@ -439,7 +547,9 @@ test("with reduced motion streamed text shows whole at each release, unfinished 
   document.documentElement.dataset.reduceMotion = "true";
   const view = render(transcript({ messages: [prompt], streamingText: "One.\n\n" }));
   assert.ok(view.container.textContent?.includes("One."), "the first text shows at once");
-  view.rerender(transcript({ messages: [prompt], streamingText: "One.\n\nTwo.\n\n- three\n- four" }));
+  view.rerender(
+    transcript({ messages: [prompt], streamingText: "One.\n\nTwo.\n\n- three\n- four" }),
+  );
   await wait(STREAMING_REVEAL_RELEASE_MS + 20);
   for (const text of ["One.", "Two.", "three", "four"]) {
     assert.ok(view.container.textContent?.includes(text), text);
@@ -542,7 +652,11 @@ test("keyboard focus on a subagent group's header follows the group when it move
   });
   const after = screen.getByRole("button", { name: /^Kicked off 1 scout\./u });
   assert.equal(after === before, false, "the group remounted in its new place");
-  assert.equal(document.activeElement === after, true, "focus moved with it instead of dropping to the page");
+  assert.equal(
+    document.activeElement === after,
+    true,
+    "focus moved with it instead of dropping to the page",
+  );
 });
 
 test("the call that started subagents has no row of its own while their card stands for it", () => {
@@ -551,17 +665,32 @@ test("the call that started subagents has no row of its own while their card sta
   const frame = (subagentsEnabled: boolean, steps: AgentToolStep[]): Frame => ({
     messages: [prompt],
     streamingText: text,
-    timeline: { version: 3, generationId: "generation-launch", status: "running", startedAt: 1, steps },
+    timeline: {
+      version: 3,
+      generationId: "generation-launch",
+      status: "running",
+      startedAt: 1,
+      steps,
+    },
     liveSubagents: [{ ...liveRun("launch-run"), generationId: "generation-launch" }],
     subagentsEnabled,
   });
-  const launch: AgentToolStep = { ...toolStep(text.length), toolName: "subagent", label: "Subagent" };
+  const launch: AgentToolStep = {
+    ...toolStep(text.length),
+    toolName: "subagent",
+    label: "Subagent",
+  };
   const view = render(transcript(frame(true, [launch])));
   assert.ok(screen.getByRole("button", { name: /^Kicked off 1 scout\./u }), "the card shows");
   assert.equal(screen.queryByText("Subagent"), null, "no bare launch row above the card");
 
   // Other work in the same stretch keeps its activity row; only the launch call leaves it.
-  const read: AgentToolStep = { ...toolStep(text.length), id: "step-read", toolName: "read_file", label: "Read notes.md" };
+  const read: AgentToolStep = {
+    ...toolStep(text.length),
+    id: "step-read",
+    toolName: "read_file",
+    label: "Read notes.md",
+  };
   view.rerender(transcript(frame(true, [read, launch])));
   assert.ok(view.container.querySelector(".activity-feed"), "the read keeps its row");
   assert.equal(screen.queryByText("Subagent"), null);
@@ -587,7 +716,13 @@ test("a reply steered mid-run stays the same reply through guidance, handoff and
     { messages: [prompt] },
     { messageId: "user-steer-1", text: "Use examples", createdAt: 2 },
   ).messages;
-  const saved: ChatMessage = { id: "assistant-1", role: "assistant", content: text, reasoning, createdAt: 3 };
+  const saved: ChatMessage = {
+    id: "assistant-1",
+    role: "assistant",
+    content: text,
+    reasoning,
+    createdAt: 3,
+  };
   const frames: Frame[] = [
     { messages: steered, streamingText: `${text}\n\n`, reasoning },
     {
@@ -603,7 +738,9 @@ test("a reply steered mid-run stays the same reply through guidance, handoff and
     view.rerender(transcript(frame));
     assert.ok(screen.getByText(text).closest("p") === paragraph, "the reply is not remounted");
     assert.equal(
-      view.container.querySelector("section > button[aria-expanded]")?.getAttribute("aria-expanded"),
+      view.container
+        .querySelector("section > button[aria-expanded]")
+        ?.getAttribute("aria-expanded"),
       collapsed,
       "the reader's choice on its reasoning holds",
     );
@@ -612,9 +749,19 @@ test("a reply steered mid-run stays the same reply through guidance, handoff and
 
 test("a reply that settles gives way to the next run's reply", () => {
   document.documentElement.dataset.reduceMotion = "true";
-  const first: ChatMessage = { id: "assistant-1", role: "assistant", content: "The first answer.", createdAt: 2 };
+  const first: ChatMessage = {
+    id: "assistant-1",
+    role: "assistant",
+    content: "The first answer.",
+    createdAt: 2,
+  };
   const next: ChatMessage = { id: "user-2", role: "user", content: "And then?", createdAt: 3 };
-  const second: ChatMessage = { id: "assistant-2", role: "assistant", content: "The second answer.", createdAt: 4 };
+  const second: ChatMessage = {
+    id: "assistant-2",
+    role: "assistant",
+    content: "The second answer.",
+    createdAt: 4,
+  };
   // Two rows under one key leave React free to drop or swap either reply.
   const errors = mock.method(console, "error", () => undefined);
   const view = render(transcript({ messages: [prompt], streamingText: "The first answer.\n\n" }));
@@ -628,7 +775,9 @@ test("a reply that settles gives way to the next run's reply", () => {
   );
   const settled = screen.getByText(first.content).closest("p");
   // The queued prompt starts its run as the first one settles, with no idle frame between.
-  view.rerender(transcript({ messages: [prompt, first, next], streamingText: "The second answer.\n\n" }));
+  view.rerender(
+    transcript({ messages: [prompt, first, next], streamingText: "The second answer.\n\n" }),
+  );
   const streamed = screen.getByText(second.content).closest("p");
   view.rerender(
     transcript({
@@ -645,13 +794,19 @@ test("a reply that settles gives way to the next run's reply", () => {
     "each message shows once",
   );
   assert.deepEqual(
-    errors.mock.calls.map((call) => String(call.arguments[0])).filter((message) => message.includes("same key")),
+    errors.mock.calls
+      .map((call) => String(call.arguments[0]))
+      .filter((message) => message.includes("same key")),
     [],
     "every row keeps its own key",
   );
   assert.ok(screen.getByText(first.content).closest("p") === settled, "the first reply stays put");
-  assert.ok(screen.getByText(second.content).closest("p") === streamed, "the second settles in place");
-  const follows = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.ok(
+    screen.getByText(second.content).closest("p") === streamed,
+    "the second settles in place",
+  );
+  const follows = (a: Node, b: Node) =>
+    Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
   assert.ok(follows(screen.getByText(next.content), streamed!), "below the prompt it answers");
 });
 
@@ -660,7 +815,12 @@ test("a saved reply that differs from the live one never shares the live row's k
   const streamed = "The streamed answer, cut short.";
   // The saved copy is not what streamed (a failure note, a trimmed partial), so
   // it cannot take the live row's place: both rows show until the live one ends.
-  const saved: ChatMessage = { id: "assistant-1", role: "assistant", content: "The saved answer.", createdAt: 2 };
+  const saved: ChatMessage = {
+    id: "assistant-1",
+    role: "assistant",
+    content: "The saved answer.",
+    createdAt: 2,
+  };
   const errors = mock.method(console, "error", () => undefined);
   const view = render(transcript({ messages: [prompt], streamingText: `${streamed}\n\n` }));
   view.rerender(
@@ -680,7 +840,9 @@ test("a saved reply that differs from the live one never shares the live row's k
   assert.equal(screen.queryAllByText(streamed).length, 0, "the live reply leaves");
   assert.equal(screen.queryAllByText(saved.content).length, 1, "the saved reply stays");
   assert.deepEqual(
-    errors.mock.calls.map((call) => String(call.arguments[0])).filter((message) => message.includes("same key")),
+    errors.mock.calls
+      .map((call) => String(call.arguments[0]))
+      .filter((message) => message.includes("same key")),
     [],
     "every row keeps its own key",
   );
@@ -709,9 +871,13 @@ test("a generated image shows exactly once through handoff and settlement", () =
     createdAt: 2,
     attachments: [image.attachment],
   };
-  const shown = () => [...view.container.querySelectorAll(`[data-attachment-preview-id="${image.attachment.id}"]`)];
+  const shown = () => [
+    ...view.container.querySelectorAll(`[data-attachment-preview-id="${image.attachment.id}"]`),
+  ];
   const onlyPreview = () => shown().length === 1 && shown()[0] === preview;
-  const view = render(transcript({ messages: [prompt], streamingText: `${prose}\n\n`, streamingArtifacts: [image] }));
+  const view = render(
+    transcript({ messages: [prompt], streamingText: `${prose}\n\n`, streamingArtifacts: [image] }),
+  );
   const [preview] = shown();
   assert.ok(preview, "the live reply shows its image");
   view.rerender(
@@ -780,12 +946,26 @@ test("a prompt a hook refused shows it was not sent, with the hook's reason; oth
 test("latest work details retain on completion, fold on an admitted prompt, and preserve answer identity", () => {
   document.documentElement.dataset.reduceMotion = "true";
   installBotTestIpc({ "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined) });
-  localStorage.setItem("aiden-agent.appearance-v1", JSON.stringify({ workDetails: "detailed", workDetailsCollapseTiming: "next-input" }));
+  localStorage.setItem(
+    "aiden-agent.appearance-v1",
+    JSON.stringify({ workDetails: "detailed", workDetailsCollapseTiming: "next-input" }),
+  );
   const completed: GenerationTimeline = {
-    version: 3, generationId: "details-run", status: "completed", startedAt: 1, finishedAt: 2,
+    version: 3,
+    generationId: "details-run",
+    status: "completed",
+    startedAt: 1,
+    finishedAt: 2,
     steps: [{ ...toolStep(0), status: "completed", target: "preferences.json" }],
   };
-  const saved: ChatMessage = { id: "details-answer", role: "assistant", content: "Preferences checked.", reasoning: "Inspecting the saved preference.", createdAt: 2, timeline: completed };
+  const saved: ChatMessage = {
+    id: "details-answer",
+    role: "assistant",
+    content: "Preferences checked.",
+    reasoning: "Inspecting the saved preference.",
+    createdAt: 2,
+    timeline: completed,
+  };
   const view = render(transcript({ messages: [prompt, saved], streamingText: null }));
   const answer = screen.getByText("Preferences checked.");
   const reasoning = screen.getByRole("button", { name: /Thought|Thinking/u });
@@ -793,7 +973,16 @@ test("latest work details retain on completion, fold on an admitted prompt, and 
   assert.equal(reasoning.getAttribute("aria-expanded"), "false");
   const activity = view.container.querySelector("details.activity-feed")!;
   assert.equal(activity.hasAttribute("open"), true);
-  view.rerender(transcript({ messages: [prompt, saved, { id: "next-user", role: "user", content: "Continue", createdAt: 3 }], streamingText: null }));
+  view.rerender(
+    transcript({
+      messages: [
+        prompt,
+        saved,
+        { id: "next-user", role: "user", content: "Continue", createdAt: 3 },
+      ],
+      streamingText: null,
+    }),
+  );
   assert.equal(activity.hasAttribute("open"), false);
   assert.equal(screen.getByText("Preferences checked."), answer);
   localStorage.clear();
@@ -802,17 +991,49 @@ test("latest work details retain on completion, fold on an admitted prompt, and 
 test("a next prompt admitted during handoff folds the old automatic preview once", () => {
   document.documentElement.dataset.reduceMotion = "true";
   installBotTestIpc({ "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined) });
-  localStorage.setItem("aiden-agent.appearance-v1", JSON.stringify({ workDetails: "detailed", workDetailsCollapseTiming: "next-input" }));
+  localStorage.setItem(
+    "aiden-agent.appearance-v1",
+    JSON.stringify({ workDetails: "detailed", workDetailsCollapseTiming: "next-input" }),
+  );
   const finished: GenerationTimeline = {
-    version: 3, generationId: "handoff-run", status: "completed", startedAt: 1, finishedAt: 2,
+    version: 3,
+    generationId: "handoff-run",
+    status: "completed",
+    startedAt: 1,
+    finishedAt: 2,
     steps: [{ ...toolStep(0), status: "completed", target: "first.txt" }],
   };
-  const saved: ChatMessage = { id: "handoff-details", role: "assistant", content: "First answer.", createdAt: 2, timeline: finished };
-  const next: ChatMessage = { id: "handoff-next", role: "user", content: "Next request", createdAt: 3 };
-  const view = render(transcript({ messages: [prompt], streamingText: "First answer.", timeline: finished }));
+  const saved: ChatMessage = {
+    id: "handoff-details",
+    role: "assistant",
+    content: "First answer.",
+    createdAt: 2,
+    timeline: finished,
+  };
+  const next: ChatMessage = {
+    id: "handoff-next",
+    role: "user",
+    content: "Next request",
+    createdAt: 3,
+  };
+  const view = render(
+    transcript({ messages: [prompt], streamingText: "First answer.", timeline: finished }),
+  );
   const activity = () => view.container.querySelector("details.activity-feed");
-  assert.equal(activity()?.hasAttribute("open"), true, "Detailed keeps the live exchange's steps open");
-  view.rerender(transcript({ messages: [prompt, saved, next], streamingText: saved.content, timeline: finished, streamComplete: true, persistedHandoffMessageId: saved.id }));
+  assert.equal(
+    activity()?.hasAttribute("open"),
+    true,
+    "Detailed keeps the live exchange's steps open",
+  );
+  view.rerender(
+    transcript({
+      messages: [prompt, saved, next],
+      streamingText: saved.content,
+      timeline: finished,
+      streamComplete: true,
+      persistedHandoffMessageId: saved.id,
+    }),
+  );
   assert.equal(activity()?.hasAttribute("open"), false);
   view.rerender(transcript({ messages: [prompt, saved, next], streamingText: null }));
   assert.equal(activity()?.hasAttribute("open"), false);
@@ -823,7 +1044,12 @@ test("settled fork actions follow the chat's busy reason as a turn starts and en
   document.documentElement.dataset.reduceMotion = "true";
   installBotTestIpc({});
   const forks: Array<[string, string]> = [];
-  const reply: ChatMessage = { id: "assistant-1", role: "assistant", content: "First answer.", createdAt: 2 };
+  const reply: ChatMessage = {
+    id: "assistant-1",
+    role: "assistant",
+    content: "First answer.",
+    createdAt: 2,
+  };
   const list = (forkDisabledReason: string | null) => (
     <MessageList
       chatId="chat-fork"
@@ -858,7 +1084,10 @@ test("settled fork actions follow the chat's busy reason as a turn starts and en
   assert.deepEqual(forks, []);
   fireEvent.contextMenu(answer);
   const menu = await screen.findByRole("menu");
-  assert.equal(within(menu).getByRole("menuitem", { name: "Fork from here" }).getAttribute("aria-disabled"), "true");
+  assert.equal(
+    within(menu).getByRole("menuitem", { name: "Fork from here" }).getAttribute("aria-disabled"),
+    "true",
+  );
   fireEvent.keyDown(menu, { key: "Escape" });
 
   // The turn ends: forking works again from the same rows.
@@ -867,7 +1096,10 @@ test("settled fork actions follow the chat's busy reason as a turn starts and en
   assert.equal(forkButton().getAttribute("title"), "Fork from here");
   fireEvent.click(forkButton());
   fireEvent.click(editButton());
-  assert.deepEqual(forks, [["assistant-1", "after"], ["user-1", "before"]]);
+  assert.deepEqual(forks, [
+    ["assistant-1", "after"],
+    ["user-1", "before"],
+  ]);
 });
 
 test("a running reply keeps one status slot as steps hand off, and gives it up when the turn ends", () => {
@@ -885,7 +1117,12 @@ test("a running reply keeps one status slot as steps hand off, and gives it up w
   assert.ok(slotNow() === slot);
   assert.equal(within(slot).queryAllByRole("status").length, 0);
 
-  view.rerender(transcript({ ...frame, agentActivity: { phase: "responding", label: "Responding…", mark: "compose" } }));
+  view.rerender(
+    transcript({
+      ...frame,
+      agentActivity: { phase: "responding", label: "Responding…", mark: "compose" },
+    }),
+  );
   assert.ok(slotNow() === slot);
   assert.equal(within(slot).getByRole("status").textContent, "Responding…");
 

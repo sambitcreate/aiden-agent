@@ -33,7 +33,14 @@ test("Remote approval IPC identifiers are bounded and path-safe", () => {
 test("Tailscale takeover IPC accepts only one exact opaque review token", () => {
   const token = "A".repeat(32);
   assert.equal(parseAidenRemoteTakeoverToken(token), token);
-  for (const invalid of [undefined, null, "A".repeat(31), "A".repeat(33), `${"A".repeat(31)}+`, { token }]) {
+  for (const invalid of [
+    undefined,
+    null,
+    "A".repeat(31),
+    "A".repeat(33),
+    `${"A".repeat(31)}+`,
+    { token },
+  ]) {
     assert.throws(() => parseAidenRemoteTakeoverToken(invalid), /invalid/iu);
   }
 });
@@ -68,7 +75,10 @@ test("pairing TLS probe failures resolve as a structured IPC outcome", async () 
 
 test("guided setup IPC binds the acknowledgement to its live document and settings", async () => {
   const source = await readFile(new URL("./aiden-remote.ts", import.meta.url), "utf8");
-  const handler = source.slice(source.indexOf('ipcMain.handle("remote:setupPairing"'), source.indexOf('ipcMain.handle("remote:beginPairing"'));
+  const handler = source.slice(
+    source.indexOf('ipcMain.handle("remote:setupPairing"'),
+    source.indexOf('ipcMain.handle("remote:beginPairing"'),
+  );
   assert.match(handler, /rendererDocumentOwner/u);
   assert.match(handler, /parseAidenRemoteTransport\(transport\)/u);
   assert.match(handler, /typeof review.enabled !== "boolean"/u);

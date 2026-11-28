@@ -4,7 +4,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RESULT_MAX_BYTES, RESULT_MAX_VALUES, RESULT_SCHEMA_MAX_BYTES, checkResult, compileResultSchema, isStorableResultSchema } from "./result-schema.js";
+import {
+  RESULT_MAX_BYTES,
+  RESULT_MAX_VALUES,
+  RESULT_SCHEMA_MAX_BYTES,
+  checkResult,
+  compileResultSchema,
+  isStorableResultSchema,
+} from "./result-schema.js";
 
 const SCHEMA = {
   type: "object",
@@ -24,17 +31,43 @@ test("a result that matches is accepted, and one that doesn't names the field to
 
 test("a schema that refers outside itself, is too large or doesn't compile is refused", () => {
   assert.equal(compileResultSchema(SCHEMA).ok, true);
-  assert.equal(compileResultSchema({ $defs: { n: { type: "number" } }, $ref: "#/$defs/n" }).ok, true, "local refs are fine");
-  assert.equal(compileResultSchema({ definitions: { n: { type: "number" } }, $ref: "#/definitions/n" }).ok, true);
+  assert.equal(
+    compileResultSchema({ $defs: { n: { type: "number" } }, $ref: "#/$defs/n" }).ok,
+    true,
+    "local refs are fine",
+  );
+  assert.equal(
+    compileResultSchema({ definitions: { n: { type: "number" } }, $ref: "#/definitions/n" }).ok,
+    true,
+  );
   const loop = compileResultSchema({ type: "object", properties: { child: { $ref: "#" } } });
-  assert.match(loop.ok ? "" : loop.error, /refs must not loop/u, "a reference back to the root loops");
-  const defsLoop = { $defs: { a: { $ref: "#/$defs/b" }, b: { anyOf: [{ type: "string" }, { $ref: "#/$defs/a" }] } }, $ref: "#/$defs/a" };
+  assert.match(
+    loop.ok ? "" : loop.error,
+    /refs must not loop/u,
+    "a reference back to the root loops",
+  );
+  const defsLoop = {
+    $defs: { a: { $ref: "#/$defs/b" }, b: { anyOf: [{ type: "string" }, { $ref: "#/$defs/a" }] } },
+    $ref: "#/$defs/a",
+  };
   assert.equal(compileResultSchema(defsLoop).ok, false);
   assert.equal(isStorableResultSchema(defsLoop), false);
   const cases: Array<[string, unknown, RegExp]> = [
-    ["remote $ref", { $ref: "https://example.com/schema.json" }, /may only refer to .*; https:\/\/example\.com\/schema\.json isn't/u],
-    ["nested remote $ref", { properties: { a: { $ref: "other.json#/a" } } }, /other\.json#\/a isn't/u],
-    ["pointer into another keyword", { properties: { a: { $ref: "#/properties/b" } } }, /#\/properties\/b isn't/u],
+    [
+      "remote $ref",
+      { $ref: "https://example.com/schema.json" },
+      /may only refer to .*; https:\/\/example\.com\/schema\.json isn't/u,
+    ],
+    [
+      "nested remote $ref",
+      { properties: { a: { $ref: "other.json#/a" } } },
+      /other\.json#\/a isn't/u,
+    ],
+    [
+      "pointer into another keyword",
+      { properties: { a: { $ref: "#/properties/b" } } },
+      /#\/properties\/b isn't/u,
+    ],
     ["escaped pointer", { $defs: { "a/b": {} }, $ref: "#/$defs/a~1b" }, /#\/\$defs\/a~1b isn't/u],
     ["anchor", { $ref: "#thing" }, /#thing isn't/u],
     ["nested too deeply", nest(70), /nested more than 64 levels/u],
@@ -59,20 +92,38 @@ test("a schema with a regular expression anywhere is refused, so a crafted patte
   const nested = { type: "object", properties: { id: { type: "string", pattern: "^(a+)+$" } } };
   const keyed = { type: "object", patternProperties: { "^x": { type: "string" } } };
   const names = { type: "object", propertyNames: { pattern: "^[a-z]+$" } };
-  const deep = { type: "object", $defs: { item: { anyOf: [{ type: "string", pattern: "(.*a){20}" }] } }, properties: { item: { $ref: "#/$defs/item" } } };
-  for (const [schema, keyword] of [[nested, "pattern"], [keyed, "patternProperties"], [names, "pattern"], [deep, "pattern"]] as const) {
+  const deep = {
+    type: "object",
+    $defs: { item: { anyOf: [{ type: "string", pattern: "(.*a){20}" }] } },
+    properties: { item: { $ref: "#/$defs/item" } },
+  };
+  for (const [schema, keyword] of [
+    [nested, "pattern"],
+    [keyed, "patternProperties"],
+    [names, "pattern"],
+    [deep, "pattern"],
+  ] as const) {
     const compiled = compileResultSchema(schema);
     assert.equal(compiled.ok, false, keyword);
-    assert.match(compiled.ok ? "" : compiled.error, new RegExp(`can't contain the key "${keyword}"`, "u"));
+    assert.match(
+      compiled.ok ? "" : compiled.error,
+      new RegExp(`can't contain the key "${keyword}"`, "u"),
+    );
     assert.equal(isStorableResultSchema(schema), false, keyword);
   }
   // An enum value that reads like a keyword is data and fine; a property literally
   // named "pattern" is refused, with a message that says so.
-  const valueNamed = { type: "object", properties: { kind: { type: "string", enum: ["pattern"] } } };
+  const valueNamed = {
+    type: "object",
+    properties: { kind: { type: "string", enum: ["pattern"] } },
+  };
   assert.equal(compileResultSchema(valueNamed).ok, true);
   assert.deepEqual(checkResult(valueNamed, { kind: "pattern" }), { ok: true });
   const fieldNamed = { type: "object", properties: { pattern: { type: "string" } } };
-  assert.match((compileResultSchema(fieldNamed) as { error: string }).error, /even as a property name/u);
+  assert.match(
+    (compileResultSchema(fieldNamed) as { error: string }).error,
+    /even as a property name/u,
+  );
 
   // The catastrophic pattern would hang a check of this short value; refused, nothing runs.
   const started = Date.now();
@@ -95,7 +146,10 @@ test("a pattern hidden in data keywords, $defs names or dependentSchemas is refu
     ["$defs named pattern", { $defs: { pattern: { type: "string" } }, $ref: "#/$defs/pattern" }],
     ["$defs map holding pattern", { $defs: { pattern: "^(a+)+$" } }],
     ["dependentSchemas", { type: "object", dependentSchemas: { pattern: { type: "object" } } }],
-    ["dependentSchemas holding a pattern", { type: "object", dependentSchemas: { a: { properties: { b: evil } } } }],
+    [
+      "dependentSchemas holding a pattern",
+      { type: "object", dependentSchemas: { a: { properties: { b: evil } } } },
+    ],
     ["data keyword alone", { default: evil }],
   ];
   const value = `${"a".repeat(27)}!`;
@@ -109,16 +163,31 @@ test("a pattern hidden in data keywords, $defs names or dependentSchemas is refu
   }
   // Pointers into data are refused even when the data holds no pattern.
   for (const ref of ["#/default", "#/examples/0", "#/enum/0", "#/const"]) {
-    assert.equal(compileResultSchema({ default: { type: "string" }, examples: [{}], enum: [{}], const: {}, $ref: ref }).ok, false, ref);
+    assert.equal(
+      compileResultSchema({
+        default: { type: "string" },
+        examples: [{}],
+        enum: [{}],
+        const: {},
+        $ref: ref,
+      }).ok,
+      false,
+      ref,
+    );
   }
-  assert.equal(isStorableResultSchema({ $defs: { n: { type: "number" } }, $ref: "#/$defs/n" }), true);
+  assert.equal(
+    isStorableResultSchema({ $defs: { n: { type: "number" } }, $ref: "#/$defs/n" }),
+    true,
+  );
 });
 
 /** The reviewer's shape: each level an anyOf of ten references to the next; the leaf a string. */
 function branching(depth: number, width = 10): Record<string, unknown> {
   const $defs: Record<string, unknown> = { [`d${depth}`]: { type: "string" } };
   for (let level = depth - 1; level >= 0; level--) {
-    $defs[`d${level}`] = { anyOf: Array.from({ length: width }, () => ({ $ref: `#/$defs/d${level + 1}` })) };
+    $defs[`d${level}`] = {
+      anyOf: Array.from({ length: width }, () => ({ $ref: `#/$defs/d${level + 1}` })),
+    };
   }
   return { $defs, $ref: "#/$defs/d0" };
 }
@@ -133,20 +202,42 @@ test("a schema whose branches multiply through references is refused before ajv 
     assert.match(compiled.ok ? "" : compiled.error, /could take too long to check/u);
     assert.equal(checked.ok, false);
     assert.equal(isStorableResultSchema(schema), false);
-    assert.ok(performance.now() - started < 100, `depth ${depth} took ${performance.now() - started} ms`);
+    assert.ok(
+      performance.now() - started < 100,
+      `depth ${depth} took ${performance.now() - started} ms`,
+    );
   }
-  const refs = { $defs: { s: { type: "string" } }, type: "object", properties: Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`f${i}`, { $ref: "#/$defs/s" }])) };
+  const refs = {
+    $defs: { s: { type: "string" } },
+    type: "object",
+    properties: Object.fromEntries(
+      Array.from({ length: 300 }, (_, i) => [`f${i}`, { $ref: "#/$defs/s" }]),
+    ),
+  };
   assert.match((compileResultSchema(refs) as { error: string }).error, /more than 256 references/u);
   const unique = { type: "array", uniqueItems: true };
-  assert.match((compileResultSchema(unique) as { error: string }).error, /uniqueItems needs items with a plain type/u);
-  assert.equal(compileResultSchema({ type: "array", uniqueItems: true, items: { type: "string" } }).ok, true);
+  assert.match(
+    (compileResultSchema(unique) as { error: string }).error,
+    /uniqueItems needs items with a plain type/u,
+  );
+  assert.equal(
+    compileResultSchema({ type: "array", uniqueItems: true, items: { type: "string" } }).ok,
+    true,
+  );
 });
 
 test("a reasonable nested schema is accepted, and checking hostile values against it stays fast", () => {
   const schema = {
     type: "object",
     $defs: {
-      file: { type: "object", properties: { path: { type: "string" }, lines: { type: "array", items: { type: "integer" } } }, required: ["path"] },
+      file: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          lines: { type: "array", items: { type: "integer" } },
+        },
+        required: ["path"],
+      },
       status: { enum: ["passed", "failed", "skipped"] },
       note: { anyOf: [{ type: "string" }, { type: "null" }, { $ref: "#/$defs/file" }] },
     },
@@ -155,7 +246,13 @@ test("a reasonable nested schema is accepted, and checking hostile values agains
       status: { $ref: "#/$defs/status" },
       notes: { type: "array", items: { $ref: "#/$defs/note" } },
       tags: { type: "array", uniqueItems: true, items: { type: "string" } },
-      groups: { type: "array", items: { type: "array", items: { anyOf: [{ type: "string" }, { type: "boolean" }, { type: "integer" }] } } },
+      groups: {
+        type: "array",
+        items: {
+          type: "array",
+          items: { anyOf: [{ type: "string" }, { type: "boolean" }, { type: "integer" }] },
+        },
+      },
     },
     required: ["files", "status"],
   };
@@ -169,7 +266,10 @@ test("a reasonable nested schema is accepted, and checking hostile values agains
     { files: Array.from({ length: 5_000 }, () => ({ path: 1 })), status: "nope" },
   ];
   for (const value of hostile) {
-    assert.ok(Buffer.byteLength(JSON.stringify(value)) <= RESULT_MAX_BYTES, "a value the size limit lets through");
+    assert.ok(
+      Buffer.byteLength(JSON.stringify(value)) <= RESULT_MAX_BYTES,
+      "a value the size limit lets through",
+    );
     const started = performance.now();
     checkResult(schema, value);
     assert.ok(performance.now() - started < 100, `took ${performance.now() - started} ms`);
@@ -180,7 +280,9 @@ test("a reasonable nested schema is accepted, and checking hostile values agains
 function tree(depth: number, fan: number, leaf: unknown): Record<string, unknown> {
   const $defs: Record<string, unknown> = { [`d${depth}`]: leaf };
   for (let level = 0; level < depth; level++) {
-    $defs[`d${level}`] = { anyOf: Array.from({ length: fan }, () => ({ $ref: `#/$defs/d${level + 1}` })) };
+    $defs[`d${level}`] = {
+      anyOf: Array.from({ length: fan }, () => ({ $ref: `#/$defs/d${level + 1}` })),
+    };
   }
   return $defs;
 }
@@ -195,15 +297,42 @@ test("a large result against a schema whose branches are costly is refused quick
   const minLengths = { anyOf: Array.from({ length: 8 }, () => ({ minLength: 999_999 })) };
   const attacks: Array<[string, unknown, unknown]> = [
     // Each array item tries a ~8,700-node branch tree before the plain number branch matches.
-    ["items through a branch tree", { $defs: tree(3, 16, { type: "string" }), type: "array", items: { anyOf: [{ $ref: "#/$defs/d0" }, { type: "number" }] } }, Array(9_000).fill(0)],
+    [
+      "items through a branch tree",
+      {
+        $defs: tree(3, 16, { type: "string" }),
+        type: "array",
+        items: { anyOf: [{ $ref: "#/$defs/d0" }, { type: "number" }] },
+      },
+      Array(9_000).fill(0),
+    ],
     // Every branch measures the whole 64 KB string again.
-    ["minLength per branch", { $defs: tree(3, 8, minLengths), anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] }, "a".repeat(64_000)],
-    ["minLength per branch, surrogate pairs", { $defs: tree(3, 8, minLengths), anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] }, "\u{1F600}".repeat(10_000)],
-    ["minLength inside items", { $defs: tree(3, 8, minLengths), type: "array", items: { anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] } }, ["a".repeat(63_000)]],
+    [
+      "minLength per branch",
+      { $defs: tree(3, 8, minLengths), anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] },
+      "a".repeat(64_000),
+    ],
+    [
+      "minLength per branch, surrogate pairs",
+      { $defs: tree(3, 8, minLengths), anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] },
+      "\u{1F600}".repeat(10_000),
+    ],
+    [
+      "minLength inside items",
+      {
+        $defs: tree(3, 8, minLengths),
+        type: "array",
+        items: { anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] },
+      },
+      ["a".repeat(63_000)],
+    ],
   ];
   for (const [name, schema, value] of attacks) {
     assert.equal(compileResultSchema(schema).ok, true, `${name}: the schema alone is allowed`);
-    assert.ok(Buffer.byteLength(JSON.stringify(value)) <= RESULT_MAX_BYTES, `${name}: within the size limit`);
+    assert.ok(
+      Buffer.byteLength(JSON.stringify(value)) <= RESULT_MAX_BYTES,
+      `${name}: within the size limit`,
+    );
     const { checked, ms } = timedCheck(schema, value);
     assert.equal(checked.ok, false, name);
     assert.match(checked.ok ? "" : checked.error, /too large to check against this schema/u, name);
@@ -214,13 +343,19 @@ test("a large result against a schema whose branches are costly is refused quick
   const costly = attacks[0]![1];
   assert.deepEqual(checkResult(costly, [1, 2, 3, "x"]), { ok: true });
   assert.equal(checkResult(costly, [1, {}]).ok, false);
-  assert.match((checkResult(costly, [1, {}]) as { error: string }).error, /doesn't match the schema/u);
+  assert.match(
+    (checkResult(costly, [1, {}]) as { error: string }).error,
+    /doesn't match the schema/u,
+  );
 });
 
 test("a result with too many values or too deep a nesting is refused before it is checked or serialized", () => {
   const many = timedCheck({ type: "array" }, Array(32_000).fill(0));
   assert.equal(many.checked.ok, false);
-  assert.match((many.checked as { error: string }).error, new RegExp(`more than ${RESULT_MAX_VALUES.toLocaleString("en-US")} values`, "u"));
+  assert.match(
+    (many.checked as { error: string }).error,
+    new RegExp(`more than ${RESULT_MAX_VALUES.toLocaleString("en-US")} values`, "u"),
+  );
   assert.ok(many.ms < 100, `took ${many.ms} ms`);
 
   let deep: unknown = 0;
@@ -239,14 +374,40 @@ test("a result with too many values or too deep a nesting is refused before it i
 test("long enum, const and required lists count toward a schema's cost, so branching over them is refused quickly", () => {
   const sixThousand = { enum: Array.from({ length: 6_000 }, (_, i) => i % 10) };
   const names = Array.from({ length: 1_700 }, (_, i) => `k${i}`);
-  const constObject = Object.fromEntries(Array.from({ length: 1_200 }, (_, i) => [`a${i}`, i % 10]));
+  const constObject = Object.fromEntries(
+    Array.from({ length: 1_200 }, (_, i) => [`a${i}`, i % 10]),
+  );
   const refused: Array<[string, unknown, unknown]> = [
     // A 15 KB schema whose 4,900 branches each compare against 6,000 members.
     ["enum under 70 × 70 branches", { $defs: tree(2, 70, sixThousand), $ref: "#/$defs/d0" }, -1],
-    ["enum under 70 × 70 branches, as items", { $defs: tree(2, 70, sixThousand), type: "array", items: { anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] } }, Array(90).fill(-1)],
-    ["enum under 12 × 12 × 12 branches", { $defs: tree(3, 12, { enum: Array.from({ length: 5_000 }, (_, i) => i % 10) }), type: "array", items: { anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] } }, [-1]],
-    ["required under 70 × 70 branches", { $defs: tree(2, 70, { required: names }), $ref: "#/$defs/d0" }, {}],
-    ["const under 70 × 70 branches", { $defs: tree(2, 70, { const: constObject }), $ref: "#/$defs/d0" }, { ...constObject, a1199: 99 }],
+    [
+      "enum under 70 × 70 branches, as items",
+      {
+        $defs: tree(2, 70, sixThousand),
+        type: "array",
+        items: { anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] },
+      },
+      Array(90).fill(-1),
+    ],
+    [
+      "enum under 12 × 12 × 12 branches",
+      {
+        $defs: tree(3, 12, { enum: Array.from({ length: 5_000 }, (_, i) => i % 10) }),
+        type: "array",
+        items: { anyOf: [{ $ref: "#/$defs/d0" }, { type: "string" }] },
+      },
+      [-1],
+    ],
+    [
+      "required under 70 × 70 branches",
+      { $defs: tree(2, 70, { required: names }), $ref: "#/$defs/d0" },
+      {},
+    ],
+    [
+      "const under 70 × 70 branches",
+      { $defs: tree(2, 70, { const: constObject }), $ref: "#/$defs/d0" },
+      { ...constObject, a1199: 99 },
+    ],
   ];
   for (const [name, schema, value] of refused) {
     const started = performance.now();
@@ -261,23 +422,53 @@ test("long enum, const and required lists count toward a schema's cost, so branc
   }
 
   // An ordinary list of choices, used for every item, still works.
-  const labels = { type: "array", items: { enum: Array.from({ length: 200 }, (_, i) => `label-${i}`) } };
-  assert.deepEqual(checkResult(labels, Array.from({ length: 100 }, (_, i) => `label-${i}`)), { ok: true });
-  assert.match((checkResult(labels, ["label-1", "nope"]) as { error: string }).error, /\/1 must be equal to one of the allowed values/u);
+  const labels = {
+    type: "array",
+    items: { enum: Array.from({ length: 200 }, (_, i) => `label-${i}`) },
+  };
+  assert.deepEqual(
+    checkResult(
+      labels,
+      Array.from({ length: 100 }, (_, i) => `label-${i}`),
+    ),
+    { ok: true },
+  );
+  assert.match(
+    (checkResult(labels, ["label-1", "nope"]) as { error: string }).error,
+    /\/1 must be equal to one of the allowed values/u,
+  );
 });
 
 test("a schema whose shared $defs entry is referred to from many branches compiles and checks quickly", () => {
   // Many keywords in one ref-free entry, referred to 240 times: inlined, ajv
   // copied it into every branch and took seconds to compile.
   const keywords = {
-    type: ["number", "string", "object", "array"], minimum: 1, maximum: 2, exclusiveMinimum: 0, exclusiveMaximum: 3, multipleOf: 0.37,
-    minLength: 5, maxLength: 9, minItems: 1, maxItems: 3, minProperties: 1, maxProperties: 4,
+    type: ["number", "string", "object", "array"],
+    minimum: 1,
+    maximum: 2,
+    exclusiveMinimum: 0,
+    exclusiveMaximum: 3,
+    multipleOf: 0.37,
+    minLength: 5,
+    maxLength: 9,
+    minItems: 1,
+    maxItems: 3,
+    minProperties: 1,
+    maxProperties: 4,
   };
-  const leaf = { properties: Object.fromEntries(Array.from({ length: 38 }, (_, i) => [`p${i}`, keywords])) };
-  for (const [outer, inner] of [[2, 120], [3, 80]] as const) {
+  const leaf = {
+    properties: Object.fromEntries(Array.from({ length: 38 }, (_, i) => [`p${i}`, keywords])),
+  };
+  for (const [outer, inner] of [
+    [2, 120],
+    [3, 80],
+  ] as const) {
     const schema = {
       description: `shared entry ${outer}x${inner}`,
-      $defs: { leaf, middle: { anyOf: Array.from({ length: inner }, () => ({ $ref: "#/$defs/leaf" })) } },
+      $defs: {
+        leaf,
+        middle: { anyOf: Array.from({ length: inner }, () => ({ $ref: "#/$defs/leaf" })) },
+      },
       anyOf: Array.from({ length: outer }, () => ({ $ref: "#/$defs/middle" })),
     };
     const started = performance.now();
@@ -285,14 +476,28 @@ test("a schema whose shared $defs entry is referred to from many branches compil
     const ms = performance.now() - started;
     assert.deepEqual(checked, { ok: true }, `${outer}x${inner}`);
     assert.ok(ms < 100, `${outer}x${inner}: compile and check took ${ms} ms`);
-    assert.equal(checkResult(schema, { p0: 1.5 }).ok, false, "the shared entry still applies its keywords");
+    assert.equal(
+      checkResult(schema, { p0: 1.5 }).ok,
+      false,
+      "the shared entry still applies its keywords",
+    );
   }
 });
 
 test("a schema is compiled once: the same schema, in any key order, reuses its validator", () => {
-  const schema = { type: "object", properties: { done: { type: "boolean" }, notes: { type: "string" } }, required: ["done"], description: "compiled once" };
+  const schema = {
+    type: "object",
+    properties: { done: { type: "boolean" }, notes: { type: "string" } },
+    required: ["done"],
+    description: "compiled once",
+  };
   const first = compileResultSchema(schema);
-  const reordered = compileResultSchema({ description: "compiled once", required: ["done"], properties: { notes: { type: "string" }, done: { type: "boolean" } }, type: "object" });
+  const reordered = compileResultSchema({
+    description: "compiled once",
+    required: ["done"],
+    properties: { notes: { type: "string" }, done: { type: "boolean" } },
+    type: "object",
+  });
   assert.ok(first.ok && reordered.ok);
   assert.equal(reordered.validate, first.validate);
   assert.deepEqual(checkResult(structuredClone(schema), { done: true }), { ok: true });
@@ -310,7 +515,11 @@ test("a schema is compiled once: the same schema, in any key order, reuses its v
 
 test("a schema with a number JSON can't carry is refused, at start and when a stored link loads", () => {
   // 1e400 parses to Infinity; saved with the link it would come back as null.
-  for (const text of ['{"type":"number","maximum":1e400}', '{"type":"number","minimum":-1e400}', '{"type":"array","items":{"enum":[1,1e999]}}']) {
+  for (const text of [
+    '{"type":"number","maximum":1e400}',
+    '{"type":"number","minimum":-1e400}',
+    '{"type":"array","items":{"enum":[1,1e999]}}',
+  ]) {
     const schema = JSON.parse(text) as Record<string, unknown>;
     const compiled = compileResultSchema(schema);
     assert.equal(compiled.ok, false, text);
@@ -321,7 +530,11 @@ test("a schema with a number JSON can't carry is refused, at start and when a st
 
   // The schema with null in the same place is its own schema, checked as itself.
   const withNull = { type: "number", maximum: null, description: "not a twin" };
-  compileResultSchema({ type: "number", maximum: Number.POSITIVE_INFINITY, description: "not a twin" });
+  compileResultSchema({
+    type: "number",
+    maximum: Number.POSITIVE_INFINITY,
+    description: "not a twin",
+  });
   const checked = compileResultSchema(withNull);
   assert.equal(checked.ok, false, "maximum must be a number, so ajv refuses it");
   assert.equal(compileResultSchema({ type: "number", maximum: 1e300 }).ok, true);

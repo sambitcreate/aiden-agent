@@ -26,7 +26,11 @@ const defaults: GitExecutableDependencies = {
   async developerDirectory(env, signal) {
     // Unlike git/xcrun, querying the selected directory never requests installation.
     const { stdout } = await execFileAsync("/usr/bin/xcode-select", ["--print-path"], {
-      env, signal, timeout: 2_000, maxBuffer: 16_384, encoding: "utf8",
+      env,
+      signal,
+      timeout: 2_000,
+      maxBuffer: 16_384,
+      encoding: "utf8",
     });
     return stdout.trim();
   },
@@ -77,7 +81,9 @@ export async function resolveGitExecutable(
     if (commandLineGit && commandLineGit !== "/usr/bin/git") return commandLineGit;
     // A GUI PATH may put Apple's shim before Homebrew. Keep looking for a real Git.
   }
-  throw new Error("Git is not installed or unavailable. Install Git to use repository features; ordinary chat does not require it.");
+  throw new Error(
+    "Git is not installed or unavailable. Install Git to use repository features; ordinary chat does not require it.",
+  );
 }
 
 export type GitExecutableResolver = (
@@ -102,8 +108,14 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Pro
     const onAbort = () => reject(signal.reason);
     signal.addEventListener("abort", onAbort, { once: true });
     promise.then(
-      (value) => { signal.removeEventListener("abort", onAbort); resolve(value); },
-      (error) => { signal.removeEventListener("abort", onAbort); reject(error); },
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
     );
   });
 }
@@ -127,11 +139,7 @@ export function createGitExecutableResolver(
     signal?.throwIfAborted();
     if (deps.platform === "win32") return binary;
     const directPath = binary.includes("/") ? path.resolve(cwd, binary) : undefined;
-    const key = JSON.stringify([
-      directPath ?? binary,
-      env.PATH ?? null,
-      env.DEVELOPER_DIR ?? null,
-    ]);
+    const key = JSON.stringify([directPath ?? binary, env.PATH ?? null, env.DEVELOPER_DIR ?? null]);
     const cached = resolved.get(key);
     if (cached && now() - cached.at < ttlMs) {
       if (directPath) {
@@ -150,12 +158,12 @@ export function createGitExecutableResolver(
     let resolution = pending.get(key);
     if (!resolution) {
       // Shared by concurrent callers, so it must not inherit any one caller's signal.
-      resolution = resolveGitExecutable(binary, cwd, env, undefined, deps).then(
-        (executable) => {
+      resolution = resolveGitExecutable(binary, cwd, env, undefined, deps)
+        .then((executable) => {
           resolved.set(key, { executable, at: now() });
           return executable;
-        },
-      ).finally(() => pending.delete(key));
+        })
+        .finally(() => pending.delete(key));
       // A caller may abort before attaching; the failure still surfaces to the others.
       resolution.catch(() => undefined);
       pending.set(key, resolution);

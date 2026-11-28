@@ -60,21 +60,44 @@ test("keeps completed and read-only failures quiet", () => {
 test("connector failures follow the host's MCP identity, not the tool name's shape", () => {
   const mcpTools = new Set(["linear_create_issue"]);
   const options = { isConnectorTool: (name: string) => mcpTools.has(name) };
-  assert.deepEqual(detectUnverifiedSuccessClaim("Done.", timeline("linear_create_issue", "failed"), options), {
-    kind: "unverified_success", stepIds: ["tool-1"],
-  });
+  assert.deepEqual(
+    detectUnverifiedSuccessClaim("Done.", timeline("linear_create_issue", "failed"), options),
+    {
+      kind: "unverified_success",
+      stepIds: ["tool-1"],
+    },
+  );
   // A double underscore alone does not make a tool an MCP connector.
-  assert.equal(detectUnverifiedSuccessClaim("Done.", timeline("local__helper", "failed"), options), undefined);
+  assert.equal(
+    detectUnverifiedSuccessClaim("Done.", timeline("local__helper", "failed"), options),
+    undefined,
+  );
 });
 
 test("browser mutation failures cannot support an unqualified success claim", () => {
-  for (const tool of ["browser_click", "browser_type", "browser_press", "browser_scroll", "browser_evaluate"]) {
+  for (const tool of [
+    "browser_click",
+    "browser_type",
+    "browser_press",
+    "browser_scroll",
+    "browser_evaluate",
+  ]) {
     assert.deepEqual(detectUnverifiedSuccessClaim("Done.", timeline(tool, "failed")), {
-      kind: "unverified_success", stepIds: ["tool-1"],
+      kind: "unverified_success",
+      stepIds: ["tool-1"],
     });
-    assert.equal(detectUnverifiedSuccessClaim("Done, but the browser action failed.", timeline(tool, "failed")), undefined);
+    assert.equal(
+      detectUnverifiedSuccessClaim(
+        "Done, but the browser action failed.",
+        timeline(tool, "failed"),
+      ),
+      undefined,
+    );
   }
-  assert.equal(detectUnverifiedSuccessClaim("Done.", timeline("browser_snapshot", "failed")), undefined);
+  assert.equal(
+    detectUnverifiedSuccessClaim("Done.", timeline("browser_snapshot", "failed")),
+    undefined,
+  );
 });
 
 test("does not mistake negative or qualified prose for false success", () => {

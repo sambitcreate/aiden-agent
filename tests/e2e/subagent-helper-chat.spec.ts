@@ -2,7 +2,9 @@ import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 test.use({ workspaceSeed: true });
 
-test("a helper row in the chat card opens that helper's chat in the side panel", async ({ aiden }) => {
+test("a helper row in the chat card opens that helper's chat in the side panel", async ({
+  aiden,
+}) => {
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
   const composer = page.locator("textarea").first();
@@ -26,7 +28,9 @@ test("a helper row in the chat card opens that helper's chat in the side panel",
   await page.getByRole("button", { name: "Send message" }).click();
   child.push("Reading the notes folder now.");
 
-  const row = page.locator("[data-subagent-group]").getByRole("button", { name: /^Open Read the notes\./u });
+  const row = page
+    .locator("[data-subagent-group]")
+    .getByRole("button", { name: /^Open Read the notes\./u });
   await expect(row).toBeVisible();
   await row.click();
 
@@ -42,7 +46,9 @@ test("a helper row in the chat card opens that helper's chat in the side panel",
 
   // Expand fills the main pane and hides the composer; Esc returns to the main chat.
   await helperChat.getByRole("button", { name: "Expand" }).click();
-  const expanded = page.locator('[data-subagent-helper-chat][data-subagent-helper-expanded="true"]');
+  const expanded = page.locator(
+    '[data-subagent-helper-chat][data-subagent-helper-expanded="true"]',
+  );
   await expect(expanded).toBeVisible();
   await expect(page.getByRole("button", { name: "Send message" })).toHaveCount(0);
   // While the main pane shows the helper, the side panel says where it went,

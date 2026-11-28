@@ -49,13 +49,26 @@ test("curated entries are unique and their reference metadata is self-consistent
     assert.equal(new Set(ids).size, ids.length);
     for (const entry of list) {
       if (entry.adapter.kind === "replicate") {
-        assert.equal(entry.acceptsReferenceImages, entry.adapter.referenceField !== undefined, entry.id);
+        assert.equal(
+          entry.acceptsReferenceImages,
+          entry.adapter.referenceField !== undefined,
+          entry.id,
+        );
         if (entry.adapter.referenceField) {
-          assert.ok(Object.prototype.hasOwnProperty.call(REPLICATE_REFERENCE_FIELDS, entry.adapter.referenceField));
+          assert.ok(
+            Object.prototype.hasOwnProperty.call(
+              REPLICATE_REFERENCE_FIELDS,
+              entry.adapter.referenceField,
+            ),
+          );
         }
       } else if (entry.adapter.kind === "fal") {
         assert.equal(entry.adapter.textEndpoint, entry.id);
-        assert.equal(entry.acceptsReferenceImages, entry.adapter.editEndpoint !== undefined, entry.id);
+        assert.equal(
+          entry.acceptsReferenceImages,
+          entry.adapter.editEndpoint !== undefined,
+          entry.id,
+        );
       } else {
         assert.fail(`${entry.id} has a foreign adapter`);
       }

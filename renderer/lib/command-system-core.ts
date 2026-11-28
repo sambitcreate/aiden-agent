@@ -34,11 +34,7 @@ export function commandExecutionAllowed(
 ): boolean {
   if (context.applicationModal) return false;
   if (!context.dialogOpen) return true;
-  return (
-    commandId === "commandPalette.toggle" &&
-    context.paletteOpen &&
-    !context.foreignDialog
-  );
+  return commandId === "commandPalette.toggle" && context.paletteOpen && !context.foreignDialog;
 }
 
 export function workspaceCommandVisibility(pathname: string): {
@@ -66,10 +62,7 @@ export function resolveCommandForKeyEvent(
     const binding = bindings[definition.id];
     if (!binding || !matchesAccelerator(event, binding, platform)) continue;
     if (context.repeat && !definition.allowRepeat) continue;
-    if (
-      context.modal &&
-      (definition.id !== "commandPalette.toggle" || !context.paletteOpen)
-    )
+    if (context.modal && (definition.id !== "commandPalette.toggle" || !context.paletteOpen))
       continue;
     if (context.terminal && definition.id !== "terminal.toggle") continue;
     if (definition.scope === "fileEditor" && !context.fileEditor) continue;
@@ -91,7 +84,8 @@ export function paletteCommands(
   return COMMANDS.filter(
     (definition) =>
       definition.showInPalette &&
-      (definition.requiresCapability === undefined || capabilities[definition.requiresCapability]) &&
+      (definition.requiresCapability === undefined ||
+        capabilities[definition.requiresCapability]) &&
       (!definition.paletteWhenAvailable || available(definition.id)),
   );
 }

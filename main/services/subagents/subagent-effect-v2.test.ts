@@ -101,7 +101,10 @@ test("effect parsers reject hostile object shapes without invoking accessors or 
   const nonEnumerable = { ...approval() };
   Object.defineProperty(nonEnumerable, "hidden", { enumerable: false, value: "secret" });
   assert.equal(parseDurableSubagentApprovalV2(nonEnumerable), undefined);
-  assert.equal(parseDurableSubagentApprovalV2(Object.assign(Object.create({}), approval())), undefined);
+  assert.equal(
+    parseDurableSubagentApprovalV2(Object.assign(Object.create({}), approval())),
+    undefined,
+  );
 
   const preparation = {
     approvalId: "approval-1",

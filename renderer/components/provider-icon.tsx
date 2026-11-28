@@ -111,7 +111,11 @@ export function ProviderIcon({
 
   if (!slug || !iconUrl) {
     return (
-      <MarkInitial label={providerLabel} data-provider-icon-fallback={providerId} className={className} />
+      <MarkInitial
+        label={providerLabel}
+        data-provider-icon-fallback={providerId}
+        className={className}
+      />
     );
   }
 

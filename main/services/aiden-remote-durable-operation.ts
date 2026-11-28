@@ -128,7 +128,11 @@ async function settleDurably<T>(
     await persist(ledger.snapshot());
     admit();
   } catch {
-    const notPrepared = new AidenRemoteServiceError("internal_error", owner.notPreparedMessage, 500);
+    const notPrepared = new AidenRemoteServiceError(
+      "internal_error",
+      owner.notPreparedMessage,
+      500,
+    );
     refuse(new AidenOperationNotExecutedError(notPrepared));
     await pending.catch(() => undefined);
     ownership.recorded();

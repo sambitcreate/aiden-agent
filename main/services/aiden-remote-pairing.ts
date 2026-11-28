@@ -12,10 +12,7 @@ import { captureAnalyticsReporter } from "./analytics/analytics-report.js";
 import { countBucket } from "./analytics/analytics-sanitize.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { hkdfSha256, sealAesGcm } from "./aiden-remote-sealed-envelope.js";
-import type {
-  AidenRemoteDeviceType,
-  AidenRemoteStateRegistry,
-} from "./aiden-remote-state.js";
+import type { AidenRemoteDeviceType, AidenRemoteStateRegistry } from "./aiden-remote-state.js";
 
 const PAIRING_WINDOW_MS = 5 * 60_000;
 const PAIRING_ATTEMPTS_PER_SOURCE = 10;
@@ -110,11 +107,7 @@ function characterLength(value: string): number {
 }
 
 function bounded(value: unknown, maximum: number): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    characterLength(value) <= maximum
-  );
+  return typeof value === "string" && value.length > 0 && characterLength(value) <= maximum;
 }
 
 function digestSecret(secret: string): Buffer {
@@ -152,8 +145,8 @@ export function formatAidenManualPairingCode(code: string): string {
 export function normalizeAidenManualPairingCode(value: string): string {
   const normalized = value.replace(/[ -]/gu, "").toUpperCase();
   if (
-    normalized.length !== MANUAL_PAIRING_CODE_CHARACTERS
-    || [...normalized].some((character) => !MANUAL_PAIRING_CODE_ALPHABET.includes(character))
+    normalized.length !== MANUAL_PAIRING_CODE_CHARACTERS ||
+    [...normalized].some((character) => !MANUAL_PAIRING_CODE_ALPHABET.includes(character))
   ) {
     throw new AidenRemoteServiceError(
       "invalid_request",
@@ -180,11 +173,7 @@ export function parseAidenRemotePairingExchangeInput(
   value: unknown,
 ): AidenRemotePairingExchangeInput {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new AidenRemoteServiceError(
-      "invalid_request",
-      "Pairing details are invalid.",
-      400,
-    );
+    throw new AidenRemoteServiceError("invalid_request", "Pairing details are invalid.", 400);
   }
   const record = value as Record<string, unknown>;
   const allowed = new Set([
@@ -203,17 +192,19 @@ export function parseAidenRemotePairingExchangeInput(
     typeof record.secret !== "string" ||
     !/^[A-Za-z0-9_-]{43}$/u.test(record.secret) ||
     !bounded(record.deviceName, 80) ||
-    (record.deviceType !== "iphone" && record.deviceType !== "ipad" && record.deviceType !== "android" && record.deviceType !== "mac" && record.deviceType !== "linux") ||
+    (record.deviceType !== "iphone" &&
+      record.deviceType !== "ipad" &&
+      record.deviceType !== "android" &&
+      record.deviceType !== "mac" &&
+      record.deviceType !== "linux") ||
     !bounded(record.clientVersion, 40) ||
     (record.acceptsDisplayName !== undefined && typeof record.acceptsDisplayName !== "boolean") ||
-    (record.acceptsBotCapabilities !== undefined && typeof record.acceptsBotCapabilities !== "boolean") ||
-    (record.acceptsProgressCapabilities !== undefined && typeof record.acceptsProgressCapabilities !== "boolean")
+    (record.acceptsBotCapabilities !== undefined &&
+      typeof record.acceptsBotCapabilities !== "boolean") ||
+    (record.acceptsProgressCapabilities !== undefined &&
+      typeof record.acceptsProgressCapabilities !== "boolean")
   ) {
-    throw new AidenRemoteServiceError(
-      "invalid_request",
-      "Pairing details are invalid.",
-      400,
-    );
+    throw new AidenRemoteServiceError("invalid_request", "Pairing details are invalid.", 400);
   }
   return {
     secret: record.secret,
@@ -222,9 +213,7 @@ export function parseAidenRemotePairingExchangeInput(
     clientVersion: record.clientVersion,
     ...(record.acceptsDisplayName === true ? { acceptsDisplayName: true } : {}),
     ...(record.acceptsBotCapabilities === true ? { acceptsBotCapabilities: true } : {}),
-    ...(record.acceptsProgressCapabilities === true
-      ? { acceptsProgressCapabilities: true }
-      : {}),
+    ...(record.acceptsProgressCapabilities === true ? { acceptsProgressCapabilities: true } : {}),
   };
 }
 
@@ -445,10 +434,7 @@ export class AidenRemotePairingService {
     this.attempts.set(source, timestamps);
   }
 
-  async exchange(
-    value: unknown,
-    source: string,
-  ): Promise<AidenRemotePairingExchangeResponse> {
+  async exchange(value: unknown, source: string): Promise<AidenRemotePairingExchangeResponse> {
     this.admitAttempt(source);
     const input = parseAidenRemotePairingExchangeInput(value);
     const current = this.window;
@@ -496,24 +482,19 @@ export class AidenRemotePairingService {
         clientVersion: input.clientVersion,
         capabilities: [
           ...AIDEN_REMOTE_LEGACY_CAPABILITIES,
-          ...(acceptsBotCapabilities
-            ? AIDEN_REMOTE_BOT_CAPABILITIES
-            : []),
-          ...(input.acceptsProgressCapabilities
-            ? AIDEN_REMOTE_PROGRESS_CAPABILITIES
-            : []),
+          ...(acceptsBotCapabilities ? AIDEN_REMOTE_BOT_CAPABILITIES : []),
+          ...(input.acceptsProgressCapabilities ? AIDEN_REMOTE_PROGRESS_CAPABILITIES : []),
           // Host-wide run authority is desktop-only and explicit: a Mac or
           // Linux controller that opts into the progress vocabulary is a
           // multi-host client. Phones never receive it.
           ...(input.acceptsProgressCapabilities === true &&
-            (input.deviceType === "mac" || input.deviceType === "linux") &&
-            this.hostCapabilitiesSupported()
+          (input.deviceType === "mac" || input.deviceType === "linux") &&
+          this.hostCapabilitiesSupported()
             ? AIDEN_REMOTE_HOST_CAPABILITIES
             : []),
         ],
         acceptsBotCapabilities,
-        acceptsProgressCapabilities:
-          input.acceptsProgressCapabilities === true,
+        acceptsProgressCapabilities: input.acceptsProgressCapabilities === true,
         authorizeCommit: () => this.window === current && !current.cancelled,
       });
       if (this.window !== current || current.cancelled) {
@@ -550,13 +531,18 @@ export class AidenRemotePairingService {
 
   // A Mac or Linux client reports its own side as peer_mac_paired. The count is
   // read in the background so the phone's pairing never waits on it.
-  private reportPhonePaired(deviceType: AidenRemoteDeviceType, transport: "lan" | "tailscale"): void {
+  private reportPhonePaired(
+    deviceType: AidenRemoteDeviceType,
+    transport: "lan" | "tailscale",
+  ): void {
     if (deviceType === "mac" || deviceType === "linux") return;
     const report = captureAnalyticsReporter();
     void Promise.resolve()
       .then(() => this.devices.listDevices?.())
       .then((devices = []) => {
-        const phones = devices.filter((device) => !device.revokedAt && device.type !== "mac" && device.type !== "linux");
+        const phones = devices.filter(
+          (device) => !device.revokedAt && device.type !== "mac" && device.type !== "linux",
+        );
         report("phone_paired", { transport, device_count: countBucket(phones.length) });
       })
       .catch(() => undefined);

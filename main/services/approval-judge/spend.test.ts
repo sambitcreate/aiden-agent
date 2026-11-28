@@ -22,22 +22,41 @@ const provider: StoredProvider = {
   needsKey: true,
   deployment: "hosted",
 };
-const model = { id: "judge-1", name: "Judge 1", api: "openai-completions", provider: "openrouter" } as unknown as Model<Api>;
+const model = {
+  id: "judge-1",
+  name: "Judge 1",
+  api: "openai-completions",
+  provider: "openrouter",
+} as unknown as Model<Api>;
 
-function reply(text: string, costUsd: number, stopReason: AssistantMessage["stopReason"] = "stop"): AssistantMessage {
+function reply(
+  text: string,
+  costUsd: number,
+  stopReason: AssistantMessage["stopReason"] = "stop",
+): AssistantMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: { input: 120, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 121, cost: { input: costUsd, output: 0, cacheRead: 0, cacheWrite: 0, total: costUsd } },
+    usage: {
+      input: 120,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 121,
+      cost: { input: costUsd, output: 0, cacheRead: 0, cacheWrite: 0, total: costUsd },
+    },
     stopReason,
     timestamp: 0,
   } as AssistantMessage;
 }
 
-function streams(message: AssistantMessage | Error, sent: Array<{ cacheRetention?: string } | undefined> = []): Pick<Models, "streamSimple"> {
+function streams(
+  message: AssistantMessage | Error,
+  sent: Array<{ cacheRetention?: string } | undefined> = [],
+): Pick<Models, "streamSimple"> {
   return {
     streamSimple: ((_model: unknown, _context: unknown, options?: { cacheRetention?: string }) => {
       sent.push(options);
@@ -57,18 +76,28 @@ test("a judged action's cost counts toward the chat's limit and shows in usage",
   const owner: SpendingOwner = { kind: "chat", id: "chat-1" };
   const sent: Array<{ cacheRetention?: string } | undefined> = [];
   const meter = createSpendingMeter({
-    spending: { record: async (to, usd) => void recorded.push({ owner: to, usd }), refusal: async () => undefined },
+    spending: {
+      record: async (to, usd) => void recorded.push({ owner: to, usd }),
+      refusal: async () => undefined,
+    },
     owner,
     counts: async () => true,
   });
   const judge = createApprovalJudge({
     complete: approvalJudgeComplete(
       { model, provider, streams: streams(reply("PASS", 0.0004), sent) },
-      { recordUsage: (record) => void usage.push(record), countSpend: (message) => meter.count(message) },
+      {
+        recordUsage: (record) => void usage.push(record),
+        countSpend: (message) => meter.count(message),
+      },
     ),
   });
 
-  const first = await judge.judge({ effect: "send:a", action: "send to a", request: "send it to a" });
+  const first = await judge.judge({
+    effect: "send:a",
+    action: "send to a",
+    request: "send it to a",
+  });
   assert.equal(first.verdict, "pass");
   // A cached verdict costs nothing more.
   await judge.judge({ effect: "send:a", action: "send to a", request: "send it to a" });
@@ -80,7 +109,10 @@ test("a judged action's cost counts toward the chat's limit and shows in usage",
   assert.equal(usage[0]!.status, "completed");
   assert.equal(usage[0]!.costUsd, 0.0004);
   // A verdict request is never resent, so it writes no prompt cache.
-  assert.deepEqual(sent.map((options) => options?.cacheRetention), ["none"]);
+  assert.deepEqual(
+    sent.map((options) => options?.cacheRetention),
+    ["none"],
+  );
 });
 
 test("a failed judge call is still listed in usage, and defers", async () => {
@@ -89,7 +121,12 @@ test("a failed judge call is still listed in usage, and defers", async () => {
   const judge = createApprovalJudge({
     complete: approvalJudgeComplete(
       { model, provider, streams: streams(new Error("network")) },
-      { recordUsage: (record) => void usage.push(record), countSpend: () => { spent += 1; } },
+      {
+        recordUsage: (record) => void usage.push(record),
+        countSpend: () => {
+          spent += 1;
+        },
+      },
     ),
   });
   const verdict = await judge.judge({ effect: "x", action: "x", request: "y" });
@@ -106,7 +143,10 @@ test("a provider error reply is charged as reported, then defers", async () => {
   const judge = createApprovalJudge({
     complete: approvalJudgeComplete(
       { model, provider, streams: streams(reply("", 0.0001, "error")) },
-      { recordUsage: (record) => void usage.push(record), countSpend: (message) => void counted.push(message) },
+      {
+        recordUsage: (record) => void usage.push(record),
+        countSpend: (message) => void counted.push(message),
+      },
     ),
   });
   assert.equal((await judge.judge({ effect: "x", action: "x", request: "y" })).verdict, "defer");

@@ -99,7 +99,9 @@ test("until it is entered the page takes no pointer input, and a double-click en
   installBotTestIpc({});
   const entered: string[] = [];
   const frame = page();
-  const { rerender } = render(<FileFrame {...frameProps(frame, { onEnter: () => entered.push(frame.id) })} />);
+  const { rerender } = render(
+    <FileFrame {...frameProps(frame, { onEnter: () => entered.push(frame.id) })} />,
+  );
   const wrapper = iframes()[0]!.parentElement!;
   assert.equal(wrapper.style.pointerEvents, "none");
   assert.equal(wrapper.classList.contains("nodrag"), false, "dragging the frame moves it");
@@ -140,7 +142,10 @@ test("a page that never answers after loading is shown as missing, with a way to
   const frame = page();
   render(
     <FileFrame
-      {...frameProps(frame, { onMissing: () => missing.push(frame.id), onRemove: () => removed.push(frame.id) })}
+      {...frameProps(frame, {
+        onMissing: () => missing.push(frame.id),
+        onRemove: () => removed.push(frame.id),
+      })}
     />,
   );
   const iframe = iframes()[0]!;
@@ -192,7 +197,16 @@ test("a frame leaving the live set keeps its iframe until its snapshot is taken"
   const calls = installBotTestIpc({
     "designCanvas:capture": () => new Promise((resolve) => (answer = resolve)),
   });
-  const rect = { x: 10, y: 20, width: 640, height: 436, top: 20, left: 10, right: 650, bottom: 456 };
+  const rect = {
+    x: 10,
+    y: 20,
+    width: 640,
+    height: 436,
+    top: 20,
+    left: 10,
+    right: 650,
+    bottom: 456,
+  };
   const restore = window.HTMLElement.prototype.getBoundingClientRect;
   window.HTMLElement.prototype.getBoundingClientRect = function () {
     return { ...rect, toJSON: noop } as DOMRect;

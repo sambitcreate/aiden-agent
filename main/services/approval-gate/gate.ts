@@ -226,7 +226,10 @@ function decide(context: GateContext, action: GateAction): GateDecision {
   const unwatched = UNWATCHED.has(attendance);
   const mode = gateMode(context);
   const needsAnswer =
-    action.consequential === true || action.rule !== undefined || action.pageRule === "ask" || action.pageRule === "unreadable";
+    action.consequential === true ||
+    action.rule !== undefined ||
+    action.pageRule === "ask" ||
+    action.pageRule === "unreadable";
   // The person's Mac with no grant covering it: asks in every mode.
   const macOpen = action.mac === true && action.granted !== true && action.macGranted !== true;
 
@@ -235,7 +238,11 @@ function decide(context: GateContext, action: GateAction): GateDecision {
   if (action.pageRule === "block") return { outcome: "block", step: "block", reason: "rule" };
   if (action.stale) return { outcome: "block", step: "block", reason: "stale" };
   if (action.declinedInRun) return { outcome: "block", step: "block", reason: "declined" };
-  if (action.consequential && context.surface !== "workspace" && (context.access === "read-only" || context.access === "none")) {
+  if (
+    action.consequential &&
+    context.surface !== "workspace" &&
+    (context.access === "read-only" || context.access === "none")
+  ) {
     // A workspace chat is never offered a tool its access lacks; an ACP agent
     // or a subagent that asks for one is refused.
     return { outcome: "block", step: "block", reason: "no-access" };
@@ -247,7 +254,8 @@ function decide(context: GateContext, action: GateAction): GateDecision {
 
   // 2. Purchases, money, credentials and hand-off rules: the person does it.
   if (action.rule?.behavior === "hand_off") {
-    if (unwatched || attendance === "bot-message") return { outcome: "block", step: "money", reason: "needs-person" };
+    if (unwatched || attendance === "bot-message")
+      return { outcome: "block", step: "money", reason: "needs-person" };
     return { outcome: "hand-off", step: "money" };
   }
 
@@ -264,7 +272,11 @@ function decide(context: GateContext, action: GateAction): GateDecision {
     if (mode === "never" && (action.rule === undefined || context.mode !== undefined)) {
       // Legacy Full access never answered a Bot's rule; the chosen Never ask
       // mode does ("Only Block rules apply").
-      return { outcome: "allow", step: "never-ask", via: context.mode === undefined ? "full-access" : "never-ask" };
+      return {
+        outcome: "allow",
+        step: "never-ask",
+        via: context.mode === undefined ? "full-access" : "never-ask",
+      };
     }
     if (context.routineGoAhead && attendance === "routine") {
       return { outcome: "allow", step: "never-ask", via: "routine-go-ahead" };
@@ -281,12 +293,14 @@ function decide(context: GateContext, action: GateAction): GateDecision {
   // 5. A rule asks first.
   if (action.rule?.behavior === "ask") {
     // Nobody can answer a card a rule made on a call that needed none.
-    if (!action.consequential && unwatched) return { outcome: "block", step: "ask-rule", reason: "unattended-rule" };
+    if (!action.consequential && unwatched)
+      return { outcome: "block", step: "ask-rule", reason: "unattended-rule" };
     return { outcome: "ask", step: "ask-rule", offer: "rule" };
   }
   if (action.pageRule === "ask") {
     // As a Bot's own rule: nobody can answer a card on a call that needed none.
-    if (!action.consequential && unwatched) return { outcome: "block", step: "ask-rule", reason: "unattended-rule" };
+    if (!action.consequential && unwatched)
+      return { outcome: "block", step: "ask-rule", reason: "unattended-rule" };
     return { outcome: "ask", step: "ask-rule", offer: "once" };
   }
 
@@ -303,16 +317,23 @@ function decide(context: GateContext, action: GateAction): GateDecision {
   // 7. Always allow: a remembered grant covers it.
   if (action.granted) return { outcome: "allow", step: "always-allow", via: "grant" };
   // An Always-allow rule never reaches the person's Mac; only its grant does.
-  if (action.pageRule === "allow" && !action.mac) return { outcome: "allow", step: "always-allow", via: "rule" };
-  if (action.mac && action.macGranted) return { outcome: "allow", step: "always-allow", via: "grant" };
+  if (action.pageRule === "allow" && !action.mac)
+    return { outcome: "allow", step: "always-allow", via: "rule" };
+  if (action.mac && action.macGranted)
+    return { outcome: "allow", step: "always-allow", via: "grant" };
   if (action.consequential && action.rememberable) {
-    if (context.hook === "allow") return { outcome: "allow", step: "always-allow", via: "hook-allow" };
-    if (action.remembered === undefined) return { outcome: "lookup", step: "always-allow", lookup: "remembered" };
-    if (action.remembered !== "none") return { outcome: "allow", step: "always-allow", via: "remembered" };
+    if (context.hook === "allow")
+      return { outcome: "allow", step: "always-allow", via: "hook-allow" };
+    if (action.remembered === undefined)
+      return { outcome: "lookup", step: "always-allow", lookup: "remembered" };
+    if (action.remembered !== "none")
+      return { outcome: "allow", step: "always-allow", via: "remembered" };
   }
   if (action.consequential && action.allowListAvailable) {
-    if (action.allowList === undefined) return { outcome: "lookup", step: "always-allow", lookup: "allow-list" };
-    if (action.allowList === "match") return { outcome: "allow", step: "always-allow", via: "allow-list" };
+    if (action.allowList === undefined)
+      return { outcome: "lookup", step: "always-allow", lookup: "allow-list" };
+    if (action.allowList === "match")
+      return { outcome: "allow", step: "always-allow", via: "allow-list" };
   }
 
   // 8. Consequential: the Mac always asks; the rest is judged in Auto.
@@ -324,7 +345,14 @@ function decide(context: GateContext, action: GateAction): GateDecision {
     return {
       outcome: "ask",
       step: "consequential",
-      offer: action.mac && action.macClass ? "mac" : action.rememberable ? "workspace-scopes" : action.allowListAvailable ? "bot-remember" : "once",
+      offer:
+        action.mac && action.macClass
+          ? "mac"
+          : action.rememberable
+            ? "workspace-scopes"
+            : action.allowListAvailable
+              ? "bot-remember"
+              : "once",
     };
   }
   if (action.newDestination && macOpen) {

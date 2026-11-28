@@ -89,16 +89,57 @@ export function ownRecord(value: unknown): Record<string, unknown> | null {
 }
 
 const ASSISTANT_AUTOMATION_DETAIL_KEYS = [
-  "kind", "action", "taskId", "enabled", "name", "prompt", "cron", "timezone", "nextRunAt",
-  "notify", "mode", "permission", "workspaceId", "workspaceName", "mcpServerIds",
-  "mcpServerNames", "providerId", "providerName", "model", "modelName", "schedulerEnabled", "whenLabel",
+  "kind",
+  "action",
+  "taskId",
+  "enabled",
+  "name",
+  "prompt",
+  "cron",
+  "timezone",
+  "nextRunAt",
+  "notify",
+  "mode",
+  "permission",
+  "workspaceId",
+  "workspaceName",
+  "mcpServerIds",
+  "mcpServerNames",
+  "providerId",
+  "providerName",
+  "model",
+  "modelName",
+  "schedulerEnabled",
+  "whenLabel",
 ] as const;
 
 const SCHEDULED_TASK_DETAIL_KEYS = [
-  "kind", "action", "taskId", "expectedUpdatedAt", "enabled", "name", "prompt", "script",
-  "cron", "timezone", "nextRunAt", "notify", "mode", "permission", "workspaceId",
-  "workspaceName", "mcpServerIds", "mcpServerNames", "providerId", "providerName", "model",
-  "modelName", "legacyGlobalMcp", "schedulerEnabled", "postsIn", "whenLabel",
+  "kind",
+  "action",
+  "taskId",
+  "expectedUpdatedAt",
+  "enabled",
+  "name",
+  "prompt",
+  "script",
+  "cron",
+  "timezone",
+  "nextRunAt",
+  "notify",
+  "mode",
+  "permission",
+  "workspaceId",
+  "workspaceName",
+  "mcpServerIds",
+  "mcpServerNames",
+  "providerId",
+  "providerName",
+  "model",
+  "modelName",
+  "legacyGlobalMcp",
+  "schedulerEnabled",
+  "postsIn",
+  "whenLabel",
 ] as const;
 
 function pickDeclared(
@@ -107,7 +148,8 @@ function pickDeclared(
 ): ToolApprovalDetails {
   const picked: Record<string, unknown> = {};
   for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(details, key)) picked[key] = structuredClone(details[key]);
+    if (Object.prototype.hasOwnProperty.call(details, key))
+      picked[key] = structuredClone(details[key]);
   }
   return picked as unknown as ToolApprovalDetails;
 }
@@ -121,7 +163,10 @@ function pickDeclared(
 export function projectApprovalDetails(value: unknown): ToolApprovalDetails | undefined {
   try {
     if (isAssistantAutomationApprovalDetails(value)) {
-      return pickDeclared(value as unknown as Record<string, unknown>, ASSISTANT_AUTOMATION_DETAIL_KEYS);
+      return pickDeclared(
+        value as unknown as Record<string, unknown>,
+        ASSISTANT_AUTOMATION_DETAIL_KEYS,
+      );
     }
     if (isScheduledTaskApprovalDetails(value)) {
       return pickDeclared(value as unknown as Record<string, unknown>, SCHEDULED_TASK_DETAIL_KEYS);

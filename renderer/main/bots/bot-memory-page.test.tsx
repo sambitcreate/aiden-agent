@@ -47,7 +47,9 @@ const MEALS = { id: "m-meals", text: "Weekly meal plan is vegetarian except Frid
  */
 function memoryIpc(
   initial: BotMemoryView,
-  options: { refuse?: (edit: BotMemoryEdit) => Extract<BotMemoryEditResult, { ok: false }>["code"] | null } = {},
+  options: {
+    refuse?: (edit: BotMemoryEdit) => Extract<BotMemoryEditResult, { ok: false }>["code"] | null;
+  } = {},
 ) {
   let view = initial;
   const edits: BotMemoryEdit[] = [];
@@ -72,7 +74,9 @@ function memoryIpc(
         const next =
           edit.kind === "remove"
             ? current.filter((entry) => entry.id !== edit.entryId)
-            : current.map((entry) => (entry.id === edit.entryId ? { id: `${entry.id}+`, text: edit.text } : entry));
+            : current.map((entry) =>
+                entry.id === edit.entryId ? { id: `${entry.id}+`, text: edit.text } : entry,
+              );
         view =
           key === "user"
             ? memoryView(next, view.memory.entries)
@@ -101,7 +105,8 @@ async function chooseEntryAction(text: string, action: "Edit" | "Delete") {
   fireEvent.click(await screen.findByRole("menuitem", { name: action }));
 }
 
-const memoryGets = (calls: { channel: string }[]) => calls.filter((call) => call.channel === "bots:memory:get").length;
+const memoryGets = (calls: { channel: string }[]) =>
+  calls.filter((call) => call.channel === "bots:memory:get").length;
 
 test("the Bot's settings show how much it remembers, and Memory opens the panel's Memory tab with both groups and their usage", async () => {
   memoryIpc(memoryView([SHORT, KIDS], [MEALS]));
@@ -112,14 +117,26 @@ test("the Bot's settings show how much it remembers, and Memory opens the panel'
   fireEvent.click(row);
 
   const panel = document.getElementById("bot-panel")!;
-  await waitFor(() => assert.equal(within(panel).getByRole("tab", { name: "Memory" }).getAttribute("aria-selected"), "true"));
+  await waitFor(() =>
+    assert.equal(
+      within(panel).getByRole("tab", { name: "Memory" }).getAttribute("aria-selected"),
+      "true",
+    ),
+  );
   const aboutYou = await within(panel).findByRole("list", { name: "About you" });
   assert.deepEqual(
-    within(aboutYou).getAllByRole("listitem").map((item) => item.querySelector("p")?.textContent),
+    within(aboutYou)
+      .getAllByRole("listitem")
+      .map((item) => item.querySelector("p")?.textContent),
     [SHORT.text, KIDS.text],
   );
   const notes = within(panel).getByRole("list", { name: "Planner’s notes" });
-  assert.deepEqual(within(notes).getAllByRole("listitem").map((item) => item.querySelector("p")?.textContent), [MEALS.text]);
+  assert.deepEqual(
+    within(notes)
+      .getAllByRole("listitem")
+      .map((item) => item.querySelector("p")?.textContent),
+    [MEALS.text],
+  );
 
   const meters = within(panel).getAllByRole("meter");
   assert.deepEqual(
@@ -134,7 +151,11 @@ test("the Bot's settings show how much it remembers, and Memory opens the panel'
 test("an empty memory invites the person to share something and offers nothing to erase", async () => {
   memoryIpc(memoryView([], []));
   await mountMemory();
-  assert.ok(await screen.findByText("Nothing yet. Tell Planner something to remember, like “I’m vegetarian.”"));
+  assert.ok(
+    await screen.findByText(
+      "Nothing yet. Tell Planner something to remember, like “I’m vegetarian.”",
+    ),
+  );
   assert.equal(screen.queryByRole("button", { name: "Erase memory" }) === null, true);
 });
 
@@ -166,7 +187,12 @@ test("an edit main refuses explains why in the dialog; a valid edit saves and sh
   assert.equal(screen.queryByText(SHORT.text) === null, true);
   assert.deepEqual(ipc.edits, [
     { kind: "replace", target: "user", entryId: SHORT.id, text: "My password is hunter2" },
-    { kind: "replace", target: "user", entryId: SHORT.id, text: "Prefers short, friendly answers." },
+    {
+      kind: "replace",
+      target: "user",
+      entryId: SHORT.id,
+      text: "Prefers short, friendly answers.",
+    },
   ]);
 });
 
@@ -177,9 +203,14 @@ test("an edit to a memory that changed elsewhere says so and shows the fresh lis
   const dialog = await screen.findByRole("dialog");
   // Meanwhile the Bot rewrote that memory.
   ipc.set(memoryView([{ id: "u-new", text: "Prefers very short answers." }], []));
-  fireEvent.change(within(dialog).getByRole("textbox", { name: "Memory" }), { target: { value: "Likes detail." } });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Memory" }), {
+    target: { value: "Likes detail." },
+  });
   fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-  assert.match((await within(dialog).findByRole("alert")).textContent ?? "", /changed since you opened it/u);
+  assert.match(
+    (await within(dialog).findByRole("alert")).textContent ?? "",
+    /changed since you opened it/u,
+  );
   assert.ok(await screen.findByText("Prefers very short answers."));
 });
 
@@ -200,7 +231,9 @@ test("Delete hides a memory at once, Undo brings it back untouched, and a kept d
   await act(async () => {
     await router.navigate({ to: "/settings" });
   });
-  await waitFor(() => assert.deepEqual(ipc.edits, [{ kind: "remove", target: "user", entryId: KIDS.id }]));
+  await waitFor(() =>
+    assert.deepEqual(ipc.edits, [{ kind: "remove", target: "user", entryId: KIDS.id }]),
+  );
 });
 
 test("Erase memory asks first, then clears both groups", async () => {
@@ -215,9 +248,15 @@ test("Erase memory asks first, then clears both groups", async () => {
   assert.deepEqual(ipc.edits, []);
 
   fireEvent.click(screen.getByRole("button", { name: "Erase memory" }));
-  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Erase memory" }));
+  fireEvent.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Erase memory" }),
+  );
   await waitFor(() => assert.deepEqual(ipc.edits, [{ kind: "clear" }]));
-  assert.ok(await screen.findByText("Nothing yet. Tell Planner something to remember, like “I’m vegetarian.”"));
+  assert.ok(
+    await screen.findByText(
+      "Nothing yet. Tell Planner something to remember, like “I’m vegetarian.”",
+    ),
+  );
   assert.equal(screen.queryByText(SHORT.text) === null, true);
   assert.equal(screen.queryByText(MEALS.text) === null, true);
 });
@@ -235,13 +274,21 @@ test("unreadable memory shows a callout whose only action is Erase", async () =>
   assert.equal(screen.queryByRole("list", { name: "About you" }) === null, true);
   assert.equal(screen.queryAllByRole("meter").length, 0);
   assert.deepEqual(
-    within(alert).getAllByRole("button").map((button) => button.textContent),
+    within(alert)
+      .getAllByRole("button")
+      .map((button) => button.textContent),
     ["Erase memory"],
   );
   fireEvent.click(within(alert).getByRole("button", { name: "Erase memory" }));
-  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Erase memory" }));
+  fireEvent.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Erase memory" }),
+  );
   await waitFor(() => assert.deepEqual(ipc.edits, [{ kind: "clear" }]));
-  assert.ok(await screen.findByText("Nothing yet. Tell Planner something to remember, like “I’m vegetarian.”"));
+  assert.ok(
+    await screen.findByText(
+      "Nothing yet. Tell Planner something to remember, like “I’m vegetarian.”",
+    ),
+  );
 });
 
 test("a pushed memory change with a new revision refreshes the page; this Bot's same revision or another Bot's does not", async () => {
@@ -251,7 +298,10 @@ test("a pushed memory change with a new revision refreshes the page; this Bot's 
   const before = memoryGets(ipc.calls);
 
   emitBotTestNotification("bots:memory:changed", { botId: "bot-2", revision: "other" });
-  emitBotTestNotification("bots:memory:changed", { botId: "bot-1", revision: memoryView([SHORT], []).revision });
+  emitBotTestNotification("bots:memory:changed", {
+    botId: "bot-1",
+    revision: memoryView([SHORT], []).revision,
+  });
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(memoryGets(ipc.calls), before);
 

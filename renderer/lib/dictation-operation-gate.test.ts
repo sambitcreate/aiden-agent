@@ -116,7 +116,11 @@ test("an on-device worker that crashed twice asks for a retry, not a model downl
   assert.doesNotMatch(message, /Download/u);
   assert.match(message, /couldn.t finish/u);
   assert.match(
-    voiceErrorMessage(new Error("The selected voice model isn't downloaded. Download it in Settings → Voice & Speech.")),
+    voiceErrorMessage(
+      new Error(
+        "The selected voice model isn't downloaded. Download it in Settings → Voice & Speech.",
+      ),
+    ),
     /Download/u,
   );
 });

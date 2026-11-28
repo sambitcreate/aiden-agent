@@ -70,7 +70,10 @@ type BotReplyRowEvent =
   /** Nothing further may be sent: retries are spent, or the target went away. */
   | "send_abandoned";
 
-const BOT_REPLY_ROW_TRANSITIONS: Record<BotReplyRowEvent, Partial<Record<BotReplyRowState, BotReplyRowState>>> = {
+const BOT_REPLY_ROW_TRANSITIONS: Record<
+  BotReplyRowEvent,
+  Partial<Record<BotReplyRowState, BotReplyRowState>>
+> = {
   answered: { awaiting: "pending", interrupted: "pending" },
   turn_interrupted: { awaiting: "interrupted", interrupted: "interrupted" },
   turn_dismissed: { awaiting: "dismissed", interrupted: "dismissed" },
@@ -87,7 +90,10 @@ const BOT_REPLY_ROW_TRANSITIONS: Record<BotReplyRowEvent, Partial<Record<BotRepl
  * being repeated. `sending` is the unknown outcome: only a confirmation, the
  * one labelled retry, or giving up may leave it.
  */
-function advanceBotReplyRow(state: BotReplyRowState, event: BotReplyRowEvent): BotReplyRowState | undefined {
+function advanceBotReplyRow(
+  state: BotReplyRowState,
+  event: BotReplyRowEvent,
+): BotReplyRowState | undefined {
   return BOT_REPLY_ROW_TRANSITIONS[event][state];
 }
 
@@ -142,7 +148,7 @@ export interface TelegramBotReply {
 /** A routine result for the Bot's bound Telegram chat. */
 export interface TelegramBotRoutineDelivery {
   botIncarnation?: string;
-  publication?: {assertCurrent():Promise<void>};
+  publication?: { assertCurrent(): Promise<void> };
   botId: string;
   /** The routine run's session request id: one row per firing. */
   requestId: string;
@@ -165,7 +171,9 @@ export interface TelegramBotIngressDeps {
    * Whether a routine row may still go to its chat: the Bot's binding is
    * enabled and still targets that chat. Checked right before each send.
    */
-  routineTargetEnabled?(row: Pick<BotReplyRow, "botId" | "botIncarnation" | "chatId" | "threadId">): Promise<boolean>;
+  routineTargetEnabled?(
+    row: Pick<BotReplyRow, "botId" | "botIncarnation" | "chatId" | "threadId">,
+  ): Promise<boolean>;
   /** The Bot's display name, for the paused line. */
   botName?(botId: string): Promise<string | undefined>;
   now?: () => number;
@@ -183,7 +191,9 @@ export interface TelegramBotIngress {
    * Durably admit one message. Resolves only after the session accepted it,
    * or, for a paused Bot (`paused: true`), after the paused line was sent.
    */
-  admit(message: TelegramBotMessage): Promise<{ requestId: string; deduped: boolean; paused?: true }>;
+  admit(
+    message: TelegramBotMessage,
+  ): Promise<{ requestId: string; deduped: boolean; paused?: true }>;
   /**
    * Durably queue a routine's result for the bound chat and send it in the
    * background. A request id that already has a row is ignored.
@@ -217,12 +227,19 @@ function sessionRefusal(cause: unknown): "paused_by_person" | "spending_limit" |
 }
 
 export function telegramBotRequestId(
-  message: Pick<TelegramBotMessage, "botId" | "chatId" | "threadId" | "messageId" | "callbackQueryId">,
+  message: Pick<
+    TelegramBotMessage,
+    "botId" | "chatId" | "threadId" | "messageId" | "callbackQueryId"
+  >,
 ): string {
   if (typeof message.callbackQueryId === "string" && message.callbackQueryId.trim().length > 0) {
     return `tg:${message.botId}:${message.chatId}:${message.threadId ?? 0}:cbq:${message.callbackQueryId.trim()}`;
   }
-  if (typeof message.messageId === "number" && Number.isSafeInteger(message.messageId) && message.messageId > 0) {
+  if (
+    typeof message.messageId === "number" &&
+    Number.isSafeInteger(message.messageId) &&
+    message.messageId > 0
+  ) {
     return `tg:${message.botId}:${message.chatId}:${message.threadId ?? 0}:${message.messageId}`;
   }
   throw new Error("Telegram Bot admission requires a positive messageId or callbackQueryId.");
@@ -230,7 +247,8 @@ export function telegramBotRequestId(
 
 function parseFile(raw: string): OutboxFile {
   const value = JSON.parse(raw) as Partial<OutboxFile>;
-  if (value.version !== 1 || !Array.isArray(value.rows)) throw new Error("Unreadable Telegram Bot outbox.");
+  if (value.version !== 1 || !Array.isArray(value.rows))
+    throw new Error("Unreadable Telegram Bot outbox.");
   return { version: 1, rows: value.rows };
 }
 
@@ -265,10 +283,13 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
   /** Serialize every read-modify-write of the outbox file. */
   function locked<T>(action: (file: OutboxFile) => Promise<T> | T): Promise<T> {
     const next = tail.then(async () => {
-      state ??= await readFile(deps.file, "utf8").then(parseFile, (error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return { version: 1 as const, rows: [] };
-        throw error;
-      });
+      state ??= await readFile(deps.file, "utf8").then(
+        parseFile,
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return { version: 1 as const, rows: [] };
+          throw error;
+        },
+      );
       try {
         return await action(state);
       } catch (error) {
@@ -283,13 +304,24 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
     return next;
   }
 
-  async function persist(file: OutboxFile,publication?:{assertCurrent():Promise<void>}): Promise<void> {
-    const settled = file.rows.filter((row) => row.state === "sent" || row.state === "failed" || row.state === "dismissed");
+  async function persist(
+    file: OutboxFile,
+    publication?: { assertCurrent(): Promise<void> },
+  ): Promise<void> {
+    const settled = file.rows.filter(
+      (row) => row.state === "sent" || row.state === "failed" || row.state === "dismissed",
+    );
     if (settled.length > MAX_SETTLED_ROWS) {
       const drop = new Set(settled.slice(0, settled.length - MAX_SETTLED_ROWS));
       file.rows = file.rows.filter((row) => !drop.has(row));
     }
-    await writeJsonAtomic(deps.file, file, { mode: 0o600, mkdirMode: 0o700, beforePublish:async()=>{await publication?.assertCurrent();} });
+    await writeJsonAtomic(deps.file, file, {
+      mode: 0o600,
+      mkdirMode: 0o700,
+      beforePublish: async () => {
+        await publication?.assertCurrent();
+      },
+    });
   }
 
   /** Applies one event under the lock; undefined when the row has moved on and nothing changed. */
@@ -320,15 +352,20 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
   }
 
   function inBackground(work: () => Promise<void>): void {
-    const promise = work().catch((cause) => deps.onError?.("Telegram Bot reply delivery failed.", cause));
+    const promise = work().catch((cause) =>
+      deps.onError?.("Telegram Bot reply delivery failed.", cause),
+    );
     background.add(promise);
     void promise.finally(() => background.delete(promise));
   }
 
   async function attemptDelivery(requestId: string, duplicate: boolean): Promise<void> {
     const expectedState = duplicate ? "sending" : "pending";
-    const queued = await locked((file) => file.rows.find((candidate) =>
-      candidate.requestId === requestId && candidate.state === expectedState));
+    const queued = await locked((file) =>
+      file.rows.find(
+        (candidate) => candidate.requestId === requestId && candidate.state === expectedState,
+      ),
+    );
     if (!queued) return;
     if (queued?.kind === "routine" && !(await routineTargetEnabled(queued))) {
       // Unbound or switched off since the routine ran: drop it unsent.
@@ -336,7 +373,11 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
       return;
     }
     const row = duplicate
-      ? await advance(requestId, "redelivery_started", (current) => void (current.redelivered = true))
+      ? await advance(
+          requestId,
+          "redelivery_started",
+          (current) => void (current.redelivered = true),
+        )
       : await advance(requestId, "send_started");
     if (row === undefined || row.text === undefined) return;
     if (row.kind === "routine" && !(await routineTargetEnabled(row))) {
@@ -346,7 +387,7 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
     const text = duplicate ? `${MAY_BE_DUPLICATE_PREFIX} ${row.text}` : row.text;
     try {
       await deps.deliver({
-        ...(row.botIncarnation?{botId:row.botId,botIncarnation:row.botIncarnation}:{}),
+        ...(row.botIncarnation ? { botId: row.botId, botIncarnation: row.botIncarnation } : {}),
         chatId: row.chatId,
         ...(row.threadId === undefined ? {} : { threadId: row.threadId }),
         ownerUserId: row.ownerUserId,
@@ -382,7 +423,9 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
         tracking.delete(row.requestId);
       }
       if (recheck.delete(row.requestId) && !stopper.signal.aborted) {
-        const current = await locked((file) => file.rows.find((candidate) => candidate.requestId === row.requestId));
+        const current = await locked((file) =>
+          file.rows.find((candidate) => candidate.requestId === row.requestId),
+        );
         if (current?.state === "interrupted") trackOnce({ ...current });
       }
     });
@@ -401,7 +444,11 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
       return;
     }
     const text = outcome.kind === "completed" ? outcome.text : `⚠️ Error: ${outcome.error}`;
-    const answered = await advance(row.requestId, "answered", (current) => void (current.text = text));
+    const answered = await advance(
+      row.requestId,
+      "answered",
+      (current) => void (current.text = text),
+    );
     if (answered !== undefined) await deliverRow(row.requestId, false);
   }
 
@@ -421,7 +468,9 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
           text: message.text,
           requestId,
           ...(message.whenBusy !== undefined ? { whenBusy: message.whenBusy } : {}),
-          ...(message.attachments && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
+          ...(message.attachments && message.attachments.length > 0
+            ? { attachments: message.attachments }
+            : {}),
         });
       } catch (cause) {
         const refusal = sessionRefusal(cause);
@@ -433,7 +482,10 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
             chatId: message.chatId,
             ...(message.threadId === undefined ? {} : { threadId: message.threadId }),
             ownerUserId: message.ownerUserId,
-            text: refusal === "paused_by_person" ? telegramBotPausedLine(name) : (cause as Error).message,
+            text:
+              refusal === "paused_by_person"
+                ? telegramBotPausedLine(name)
+                : (cause as Error).message,
           });
         } catch (deliveryError) {
           deps.onError?.("Telegram could not tell a chat its Bot is paused.", deliveryError);
@@ -441,23 +493,24 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
         return { requestId, deduped: false, paused: true };
       }
       const { submissionId, deduped } = admitted;
-      const recordRow = () => locked(async (file) => {
-        const existing = file.rows.find((candidate) => candidate.requestId === requestId);
-        if (existing !== undefined) return undefined;
-        const created: BotReplyRow = {
-          requestId,
-          botId: message.botId,
-          submissionId,
-          chatId: message.chatId,
-          ...(message.threadId === undefined ? {} : { threadId: message.threadId }),
-          ownerUserId: message.ownerUserId,
-          state: "awaiting",
-          updatedAt: now(),
-        };
-        file.rows.push(created);
-        await persist(file);
-        return { ...created };
-      });
+      const recordRow = () =>
+        locked(async (file) => {
+          const existing = file.rows.find((candidate) => candidate.requestId === requestId);
+          if (existing !== undefined) return undefined;
+          const created: BotReplyRow = {
+            requestId,
+            botId: message.botId,
+            submissionId,
+            chatId: message.chatId,
+            ...(message.threadId === undefined ? {} : { threadId: message.threadId }),
+            ownerUserId: message.ownerUserId,
+            state: "awaiting",
+            updatedAt: now(),
+          };
+          file.rows.push(created);
+          await persist(file);
+          return { ...created };
+        });
       let row: BotReplyRow | undefined;
       try {
         row = await recordRow();
@@ -477,7 +530,7 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
         file.rows.push({
           requestId: delivery.requestId,
           botId: delivery.botId,
-          ...(delivery.botIncarnation?{botIncarnation:delivery.botIncarnation}:{}),
+          ...(delivery.botIncarnation ? { botIncarnation: delivery.botIncarnation } : {}),
           kind: "routine",
           submissionId: "",
           chatId: delivery.chatId,
@@ -487,7 +540,7 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
           text: telegramRoutineText(delivery.routineName, delivery.text),
           updatedAt: now(),
         });
-        await persist(file,delivery.publication);
+        await persist(file, delivery.publication);
         return true;
       });
       if (queued) inBackground(() => deliverRow(delivery.requestId, false));
@@ -515,7 +568,10 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
       inBackground(async () => {
         const rows = await locked((file) =>
           file.rows
-            .filter((row) => row.botId === botId && (row.state === "interrupted" || row.state === "awaiting"))
+            .filter(
+              (row) =>
+                row.botId === botId && (row.state === "interrupted" || row.state === "awaiting"),
+            )
             .map((row) => ({ ...row })),
         );
         for (const row of rows) {

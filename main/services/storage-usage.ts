@@ -75,9 +75,7 @@ export interface WorktreeGitState {
  * "every chat may be pinned": losing a pinned chat to a transient triage read
  * is not recoverable, while skipping cleanup is.
  */
-export type ThreadPinState =
-  | { kind: "known"; pinned: ReadonlySet<string> }
-  | { kind: "unknown" };
+export type ThreadPinState = { kind: "known"; pinned: ReadonlySet<string> } | { kind: "unknown" };
 
 export interface StorageCleanupScope {
   action: "remove-worktrees" | "delete-threads" | "clear-logs" | "clear-browser-cache";
@@ -212,11 +210,17 @@ export function createStorageUsageService(
     // root are measured, so a record pointing elsewhere never walks an
     // unrelated directory.
     const managed = workspaces.filter((workspace) => workspace.managedWorktree);
-    const realWorktreeRoot = path.join(await fs.realpath(profileRoot).catch(() => profileRoot), "worktrees");
+    const realWorktreeRoot = path.join(
+      await fs.realpath(profileRoot).catch(() => profileRoot),
+      "worktrees",
+    );
     const measurable: Workspace[] = [];
     for (const workspace of managed) {
       const worktreePath = workspace.managedWorktree!.worktreePath;
-      if (isInside(worktreeRoot, worktreePath) && (await resolvesInside(realWorktreeRoot, worktreePath))) {
+      if (
+        isInside(worktreeRoot, worktreePath) &&
+        (await resolvesInside(realWorktreeRoot, worktreePath))
+      ) {
         measurable.push(workspace);
       }
     }
@@ -248,14 +252,24 @@ export function createStorageUsageService(
       for (const name of topLevel.filter((entry) => storageCategoryForEntry(entry) === category)) {
         const target = path.join(profileRoot, name);
         if (category === "worktrees" && target === worktreeRoot) {
-          const measured = await measureWorktreeRoot(worktreeRoot, measurable, worktreeBytes, budget);
+          const measured = await measureWorktreeRoot(
+            worktreeRoot,
+            measurable,
+            worktreeBytes,
+            budget,
+          );
           partial ||= measured.truncated;
           usage.push(measured.usage);
           continue;
         }
         const measured = await measurePathBytes(target, budget, { onFile });
         partial ||= measured.truncated;
-        usage.push({ id: category, bytes: measured.bytes, itemCount: measured.files, complete: !measured.truncated });
+        usage.push({
+          id: category,
+          bytes: measured.bytes,
+          itemCount: measured.files,
+          complete: !measured.truncated,
+        });
       }
     }
 
@@ -300,7 +314,12 @@ export function createStorageUsageService(
     const rest = await measurePathBytes(worktreeRoot, budget, { exclude });
     const partial = truncated || rest.truncated;
     return {
-      usage: { id: "worktrees", bytes: bytes + rest.bytes, itemCount: files + rest.files, complete: !partial },
+      usage: {
+        id: "worktrees",
+        bytes: bytes + rest.bytes,
+        itemCount: files + rest.files,
+        complete: !partial,
+      },
       truncated: partial,
     };
   }
@@ -323,11 +342,16 @@ export function createStorageUsageService(
     for (const workspace of managed) {
       const tree = workspace.managedWorktree!;
       const gitState = await readGitState(tree);
-      const size =
-        sizes.get(workspace.id) ??
-        { bytes: 0, complete: !isInside(path.join(dependencies.profileRoot(), "worktrees"), tree.worktreePath) };
+      const size = sizes.get(workspace.id) ?? {
+        bytes: 0,
+        complete: !isInside(path.join(dependencies.profileRoot(), "worktrees"), tree.worktreePath),
+      };
       const lastUsedAt =
-        Math.max(workspace.updatedAt ?? 0, workspace.createdAt ?? 0, lastChatAt.get(workspace.id) ?? 0) || null;
+        Math.max(
+          workspace.updatedAt ?? 0,
+          workspace.createdAt ?? 0,
+          lastChatAt.get(workspace.id) ?? 0,
+        ) || null;
       views.push(
         classifyWorktree(
           {
@@ -367,7 +391,8 @@ export function createStorageUsageService(
     budget: StorageScanBudget,
   ): Promise<StorageThreadView[]> {
     const chatsDir = path.join(profileRoot, "chats");
-    const facts: Array<{ chat: ChatMeta; transcriptBytes: number; hashes: Set<string> | null }> = [];
+    const facts: Array<{ chat: ChatMeta; transcriptBytes: number; hashes: Set<string> | null }> =
+      [];
     const users = new Map<string, number>();
     for (const chat of chats) {
       const transcript = path.join(chatsDir, `${chat.id}.json`);
@@ -387,7 +412,9 @@ export function createStorageUsageService(
       if (size > 0) {
         const contents =
           size <= MAX_TRANSCRIPT_ATTRIBUTION_BYTES && !budget.exhausted()
-            ? await dependencies.readTranscript(transcript, MAX_TRANSCRIPT_ATTRIBUTION_BYTES).catch(() => undefined)
+            ? await dependencies
+                .readTranscript(transcript, MAX_TRANSCRIPT_ATTRIBUTION_BYTES)
+                .catch(() => undefined)
             : undefined;
         hashes = contents ? imageHashes(contents.toString("utf8")) : null;
       }
@@ -418,7 +445,9 @@ export function createStorageUsageService(
     });
   }
 
-  async function readGitState(tree: NonNullable<Workspace["managedWorktree"]>): Promise<WorktreeGitState | null> {
+  async function readGitState(
+    tree: NonNullable<Workspace["managedWorktree"]>,
+  ): Promise<WorktreeGitState | null> {
     try {
       return await dependencies.worktreeGitState({
         repositoryPath: tree.repositoryPath,
@@ -468,7 +497,12 @@ export function createStorageUsageService(
         const message = "Aiden could not finish measuring local storage. Try again.";
         const failed: StorageReport = cached
           ? { ...cached.report, scan: { ...cached.report.scan, status: "failed", error: message } }
-          : emptyStorageReport({ status: "failed", scannedAt: startedAt, error: message, truncated: false });
+          : emptyStorageReport({
+              status: "failed",
+              scannedAt: startedAt,
+              error: message,
+              truncated: false,
+            });
         if (!disposed) cached = { report: failed, scannedAt: startedAt };
         return failed;
       } finally {
@@ -498,7 +532,11 @@ export function createStorageUsageService(
       }
       return counts;
     } catch (error) {
-      dependencies.logError?.("storage", "Aiden could not read scheduled tasks for cleanup.", error);
+      dependencies.logError?.(
+        "storage",
+        "Aiden could not read scheduled tasks for cleanup.",
+        error,
+      );
       return null;
     }
   }
@@ -571,7 +609,9 @@ export function createStorageUsageService(
   }
 
   function assertWorktreeStillSafe(workspaceId: string, chats: readonly ChatMeta[]): void {
-    if (chats.some((chat) => chat.workspaceId === workspaceId && dependencies.isChatBusy(chat.id))) {
+    if (
+      chats.some((chat) => chat.workspaceId === workspaceId && dependencies.isChatBusy(chat.id))
+    ) {
       throw new StorageItemInUseError("active");
     }
     if (dependencies.hasOpenTerminal(workspaceId)) throw new StorageItemInUseError("terminal");
@@ -622,7 +662,9 @@ export function createStorageUsageService(
         await (logs ? dependencies.clearLogs() : dependencies.clearBrowserCache());
         removed.push(...plan.items);
       } catch (error) {
-        const reason = logs ? "Aiden could not clear its logs." : "Aiden could not clear the browser cache.";
+        const reason = logs
+          ? "Aiden could not clear its logs."
+          : "Aiden could not clear the browser cache.";
         dependencies.logError?.("storage", reason, error);
         failed.push({ id: plan.items[0]!.id, label: plan.items[0]!.label, reason });
       }
@@ -660,7 +702,11 @@ export function createStorageUsageService(
       }
       // Checked after the awaits above, so nothing starts once quitting has begun.
       if (disposed) {
-        failed.push({ id: item.id, label: item.label, reason: "Aiden was quitting, so this was left in place." });
+        failed.push({
+          id: item.id,
+          label: item.label,
+          reason: "Aiden was quitting, so this was left in place.",
+        });
         continue;
       }
       try {
@@ -677,7 +723,9 @@ export function createStorageUsageService(
           continue;
         }
         const fallback =
-          item.kind === "worktree" ? "Aiden could not remove this worktree." : "Aiden could not delete this chat.";
+          item.kind === "worktree"
+            ? "Aiden could not remove this worktree."
+            : "Aiden could not delete this chat.";
         dependencies.logError?.("storage", fallback, error);
         failed.push({
           id: item.id,
@@ -776,4 +824,3 @@ export function imageHashes(transcript: string): Set<string> {
   for (const match of transcript.matchAll(IMAGE_HASH)) hashes.add(match[1]!);
   return hashes;
 }
-

@@ -34,7 +34,10 @@ export function localClockParts(timestamp: number, zone: string): { date: string
     hourCycle: "h23",
   }).formatToParts(new Date(timestamp));
   const part = (type: string) => parts.find((entry) => entry.type === type)?.value ?? "";
-  return { date: `${part("year")}-${part("month")}-${part("day")}`, time: `${part("hour")}:${part("minute")}` };
+  return {
+    date: `${part("year")}-${part("month")}-${part("day")}`,
+    time: `${part("hour")}:${part("minute")}`,
+  };
 }
 
 /**
@@ -65,7 +68,11 @@ export function resolveWakeUpTime(
     const match = AT_PATTERN.exec(when.at.trim());
     if (!match) return undefined;
     try {
-      fireAt = nextScheduledRun(`${Number(match[2])} ${Number(match[1])} * * *`, zone, new Date(now));
+      fireAt = nextScheduledRun(
+        `${Number(match[2])} ${Number(match[1])} * * *`,
+        zone,
+        new Date(now),
+      );
     } catch {
       return undefined;
     }

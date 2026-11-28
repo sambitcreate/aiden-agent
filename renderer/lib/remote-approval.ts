@@ -8,20 +8,23 @@ export function mergeRemoteApproval(
 ): ApprovalPrompt[] {
   const local = current.filter((approval) => approval.source !== "remote");
   if (!remote || new Date(remote.expiresAt).getTime() <= now) return local;
-  return [...local, {
-    approvalId: remote.approvalId,
-    toolCallId: remote.toolCallId,
-    toolName: remote.toolName,
-    summary: remote.summary,
-    canAllow: remote.canAllow,
-    ...(remote.canAllow && remote.scopes ? { scopes: remote.scopes } : {}),
-    ...(remote.details ? { details: remote.details } : {}),
-    ...(() => {
-      const reading = parseCommandReading(remote.reading);
-      return reading ? { reading } : {};
-    })(),
-    source: "remote",
-  }];
+  return [
+    ...local,
+    {
+      approvalId: remote.approvalId,
+      toolCallId: remote.toolCallId,
+      toolName: remote.toolName,
+      summary: remote.summary,
+      canAllow: remote.canAllow,
+      ...(remote.canAllow && remote.scopes ? { scopes: remote.scopes } : {}),
+      ...(remote.details ? { details: remote.details } : {}),
+      ...(() => {
+        const reading = parseCommandReading(remote.reading);
+        return reading ? { reading } : {};
+      })(),
+      source: "remote",
+    },
+  ];
 }
 
 export function isLatestRemoteApprovalRefresh(requestId: number, latestRequestId: number): boolean {

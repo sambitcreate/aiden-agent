@@ -82,15 +82,46 @@ test("implementer role defaults meet parent permission and independent rollout c
   const task = parsed.tasks[0]!;
   const requestedCapabilities = effectiveSubagentTaskCapabilities(parsed, task);
   for (const variant of [
-    { permission: "ask" as const, writeEnabled: true, shellEnabled: true, expectedWrite: true, expectedShell: true },
-    { permission: "full" as const, writeEnabled: true, shellEnabled: true, expectedWrite: true, expectedShell: true },
-    { permission: "ask" as const, writeEnabled: false, shellEnabled: true, expectedWrite: false, expectedShell: true },
-    { permission: "ask" as const, writeEnabled: true, shellEnabled: false, expectedWrite: true, expectedShell: false },
-    { permission: "none" as const, writeEnabled: true, shellEnabled: true, expectedWrite: false, expectedShell: false },
+    {
+      permission: "ask" as const,
+      writeEnabled: true,
+      shellEnabled: true,
+      expectedWrite: true,
+      expectedShell: true,
+    },
+    {
+      permission: "full" as const,
+      writeEnabled: true,
+      shellEnabled: true,
+      expectedWrite: true,
+      expectedShell: true,
+    },
+    {
+      permission: "ask" as const,
+      writeEnabled: false,
+      shellEnabled: true,
+      expectedWrite: false,
+      expectedShell: true,
+    },
+    {
+      permission: "ask" as const,
+      writeEnabled: true,
+      shellEnabled: false,
+      expectedWrite: true,
+      expectedShell: false,
+    },
+    {
+      permission: "none" as const,
+      writeEnabled: true,
+      shellEnabled: true,
+      expectedWrite: false,
+      expectedShell: false,
+    },
   ]) {
     const parentWorkspace = { ...workspace, permission: variant.permission };
     const persistence = createForegroundSubagentPersistenceV2({
-      ...input(store("v2", [])), workspace: parentWorkspace,
+      ...input(store("v2", [])),
+      workspace: parentWorkspace,
       permission: variant.permission,
       writeEnabled: variant.writeEnabled,
       shellEnabled: variant.shellEnabled,
@@ -100,9 +131,17 @@ test("implementer role defaults meet parent permission and independent rollout c
       validateWorkspace: async () => {},
     });
     const prepared = await persistence.prepareRun({
-      identity: { runId: `run-${variant.permission}-${variant.writeEnabled}-${variant.shellEnabled}`, groupId: "group", childId: "child" },
-      task, requestedCapabilities, contextMode: "fresh",
-      contextRevision: "a".repeat(64), deadlineMs: 5_000, stop: () => {},
+      identity: {
+        runId: `run-${variant.permission}-${variant.writeEnabled}-${variant.shellEnabled}`,
+        groupId: "group",
+        childId: "child",
+      },
+      task,
+      requestedCapabilities,
+      contextMode: "fresh",
+      contextRevision: "a".repeat(64),
+      deadlineMs: 5_000,
+      stop: () => {},
     });
     assert.equal(prepared.authority?.capabilities.workspaceWrite, variant.expectedWrite);
     assert.equal(prepared.authority?.capabilities.shell, variant.expectedShell);
@@ -111,17 +150,25 @@ test("implementer role defaults meet parent permission and independent rollout c
   }
   const fullWorkspace = { ...workspace, permission: "full" as const };
   const narrowedTurn = createForegroundSubagentPersistenceV2({
-    ...input(store("v2", [])), workspace: fullWorkspace,
-    permission: "full", generationPermission: "read-only",
-    writeEnabled: true, shellEnabled: true, shellBinary: "/bin/zsh",
+    ...input(store("v2", [])),
+    workspace: fullWorkspace,
+    permission: "full",
+    generationPermission: "read-only",
+    writeEnabled: true,
+    shellEnabled: true,
+    shellBinary: "/bin/zsh",
     requestApproval: async () => true,
     currentWorkspace: async () => fullWorkspace,
     validateWorkspace: async () => {},
   });
   const prepared = await narrowedTurn.prepareRun({
     identity: { runId: "run-narrowed", groupId: "group", childId: "child" },
-    task, requestedCapabilities, contextMode: "fresh",
-    contextRevision: "b".repeat(64), deadlineMs: 5_000, stop: () => {},
+    task,
+    requestedCapabilities,
+    contextMode: "fresh",
+    contextRevision: "b".repeat(64),
+    deadlineMs: 5_000,
+    stop: () => {},
   });
   assert.equal(prepared.authority?.capabilities.workspaceWrite, false);
   assert.equal(prepared.authority?.capabilities.shell, false);
@@ -137,15 +184,36 @@ test("a per-child model binds only runtime identity and effort under Full and As
   const parent = runtime();
   const other: ResolvedModelRuntime = {
     ...parent,
-    provider: { ...parent.provider, id: "provider-two", label: "Provider Two", models: ["model-two"], deployment: "local" },
-    model: { ...parent.model, id: "model-two", name: "Model Two", provider: "provider-two", contextWindow: 8_000 },
+    provider: {
+      ...parent.provider,
+      id: "provider-two",
+      label: "Provider Two",
+      models: ["model-two"],
+      deployment: "local",
+    },
+    model: {
+      ...parent.model,
+      id: "model-two",
+      name: "Model Two",
+      provider: "provider-two",
+      contextWindow: 8_000,
+    },
   };
   const modelBound = (authority: Record<string, unknown>) => {
     const {
-      grantId: _grantId, runId: _runId, providerFingerprint: _provider, modelFingerprint: _model,
-      thinkingLevel: _thinking, budgets, ...grant
+      grantId: _grantId,
+      runId: _runId,
+      providerFingerprint: _provider,
+      modelFingerprint: _model,
+      thinkingLevel: _thinking,
+      budgets,
+      ...grant
     } = authority;
-    const { maxTokens: _tokens, maxActive: _active, ...otherBudgets } = budgets as Record<string, unknown>;
+    const {
+      maxTokens: _tokens,
+      maxActive: _active,
+      ...otherBudgets
+    } = budgets as Record<string, unknown>;
     return { ...grant, budgets: otherBudgets };
   };
   const permissionsSeen = new Map<string, unknown>();
@@ -153,7 +221,8 @@ test("a per-child model binds only runtime identity and effort under Full and As
     const parentWorkspace = { ...workspace, permission };
     const approvals: string[] = [];
     const persistence = createForegroundSubagentPersistenceV2({
-      ...input(store("v2", [])), workspace: parentWorkspace,
+      ...input(store("v2", [])),
+      workspace: parentWorkspace,
       permission,
       writeEnabled: true,
       shellEnabled: true,
@@ -165,15 +234,25 @@ test("a per-child model binds only runtime identity and effort under Full and As
       currentWorkspace: async () => parentWorkspace,
       validateWorkspace: async () => {},
     });
-    const prepare = (runId: string, childModel?: { runtime: ResolvedModelRuntime; thinkingLevel: "low" }) =>
+    const prepare = (
+      runId: string,
+      childModel?: { runtime: ResolvedModelRuntime; thinkingLevel: "low" },
+    ) =>
       persistence.prepareRun({
         identity: { runId, groupId: "group", childId: `child-${runId}` },
-        task, requestedCapabilities, contextMode: "fresh",
-        contextRevision: "a".repeat(64), deadlineMs: 5_000, stop: () => {},
+        task,
+        requestedCapabilities,
+        contextMode: "fresh",
+        contextRevision: "a".repeat(64),
+        deadlineMs: 5_000,
+        stop: () => {},
         ...(childModel ? { childModel } : {}),
       });
     const inherited = await prepare(`run-${permission}-inherited`);
-    const overridden = await prepare(`run-${permission}-override`, { runtime: other, thinkingLevel: "low" });
+    const overridden = await prepare(`run-${permission}-override`, {
+      runtime: other,
+      thinkingLevel: "low",
+    });
     const before = inherited.authority!;
     const after = overridden.authority!;
 
@@ -184,7 +263,10 @@ test("a per-child model binds only runtime identity and effort under Full and As
     assert.notEqual(after.modelFingerprint, before.modelFingerprint);
     assert.equal(after.budgets.maxActive, 1);
     assert.equal(after.budgets.maxTokens, before.budgets.maxTokens);
-    assert.equal(after.budgets.maxTokens, cumulativeSubagentTokenBudget(parent.model.contextWindow));
+    assert.equal(
+      after.budgets.maxTokens,
+      cumulativeSubagentTokenBudget(parent.model.contextWindow),
+    );
     assert.equal(after.capabilities.workspaceWrite, true);
     assert.equal(
       typeof overridden.prepareWorkspaceWriteApproval,
@@ -207,9 +289,12 @@ test("implementer tasks fail closed during V1 rollback", async () => {
   const task = parsed.tasks[0]!;
   const workspaceV1 = { ...workspace, permission: "full" as const };
   const persistence = createForegroundSubagentPersistenceV2({
-    ...input(store("v1", [])), workspace: workspaceV1,
+    ...input(store("v1", [])),
+    workspace: workspaceV1,
     permission: "full",
-    writeEnabled: true, shellEnabled: true, shellBinary: "/bin/zsh",
+    writeEnabled: true,
+    shellEnabled: true,
+    shellBinary: "/bin/zsh",
     requestApproval: async () => true,
     currentWorkspace: async () => workspaceV1,
     validateWorkspace: async () => {},
@@ -217,13 +302,24 @@ test("implementer tasks fail closed during V1 rollback", async () => {
   for (const requestedCapabilities of [
     // Role defaults (write + shell) and an explicitly read-only implementer.
     effectiveSubagentTaskCapabilities(parsed, task),
-    { workspaceRead: true, workspaceWrite: false, shell: false, web: false, mcp: [], delegate: false },
+    {
+      workspaceRead: true,
+      workspaceWrite: false,
+      shell: false,
+      web: false,
+      mcp: [],
+      delegate: false,
+    },
   ]) {
     await assert.rejects(
       persistence.prepareRun({
         identity: { runId: "run-v1-implementer", groupId: "group", childId: "child" },
-        task, requestedCapabilities, contextMode: "fresh",
-        contextRevision: "c".repeat(64), deadlineMs: 5_000, stop: () => {},
+        task,
+        requestedCapabilities,
+        contextMode: "fresh",
+        contextRevision: "c".repeat(64),
+        deadlineMs: 5_000,
+        stop: () => {},
       }),
       /implementer role is unavailable during V1 rollback/u,
     );
@@ -1113,12 +1209,18 @@ test("V2 grants retry random identities that accidentally match encoded private 
   let calls = 0;
   const persistence = createForegroundSubagentPersistenceV2({
     ...input(store("v2", [])),
-    randomUUID: () => ++calls === 1 ? "69462a29-f592-481f-a81d-60527d897e4e" : "00000000-0000-4000-8000-000000000001",
+    randomUUID: () =>
+      ++calls === 1
+        ? "69462a29-f592-481f-a81d-60527d897e4e"
+        : "00000000-0000-4000-8000-000000000001",
   });
   const prepared = await persistence.prepareRun({
     identity: { runId: "run-one", groupId: "group-one", childId: "child-one" },
     task: { role: "scout", label: "Scout", task: "Inspect" },
-    contextMode: "fresh", contextRevision: "a".repeat(64), deadlineMs: 5_000, stop: () => {},
+    contextMode: "fresh",
+    contextRevision: "a".repeat(64),
+    deadlineMs: 5_000,
+    stop: () => {},
   });
   assert.equal(prepared.authority?.grantId, "grant-00000000-0000-4000-8000-000000000001");
   assert.equal(calls, 2);

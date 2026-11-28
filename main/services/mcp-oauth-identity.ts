@@ -35,7 +35,9 @@ export function mcpOAuthClientIdentity(server: IdentityFields): McpOAuthClientId
  */
 export function mcpOAuthClientIdentityKey(identity: McpOAuthClientIdentity): string | undefined {
   if (identity.kind === "pre-registered") return `client_id:${identity.clientId}`;
-  return identity.clientName === DEFAULT_MCP_OAUTH_CLIENT_NAME ? undefined : `client_name:${identity.clientName}`;
+  return identity.clientName === DEFAULT_MCP_OAUTH_CLIENT_NAME
+    ? undefined
+    : `client_name:${identity.clientName}`;
 }
 
 /** The binding a server's stored OAuth session must carry to be used. */

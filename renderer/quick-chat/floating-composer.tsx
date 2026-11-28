@@ -98,8 +98,10 @@ function targetChipLabel(mode: QuickChatTargetMode, workspaces: readonly Workspa
 }
 
 function targetChipIcon(mode: QuickChatTargetMode) {
-  if (mode.kind === "ephemeral") return <Clock className="size-3.5 text-status-warning" aria-hidden="true" />;
-  if (mode.kind === "noWorkspace") return <MessageCircle className="size-3.5 text-secondary" aria-hidden="true" />;
+  if (mode.kind === "ephemeral")
+    return <Clock className="size-3.5 text-status-warning" aria-hidden="true" />;
+  if (mode.kind === "noWorkspace")
+    return <MessageCircle className="size-3.5 text-secondary" aria-hidden="true" />;
   return <Folder className="size-3.5 text-secondary" aria-hidden="true" />;
 }
 
@@ -150,9 +152,12 @@ export function FloatingComposer({
   const targetOpenReqRef = React.useRef(0);
   const prevPopoverResetSeqRef = React.useRef(popoverResetSeq);
 
-  React.useEffect(() => () => {
-    targetOpenReqRef.current += 1;
-  }, []);
+  React.useEffect(
+    () => () => {
+      targetOpenReqRef.current += 1;
+    },
+    [],
+  );
 
   React.useEffect(() => {
     if (popoverResetSeq === prevPopoverResetSeqRef.current) return;
@@ -288,7 +293,12 @@ export function FloatingComposer({
       return;
     }
     try {
-      const result = await attachmentsApi.readDroppedFiles(files, remainingSlots, true, remainingInlineBytes);
+      const result = await attachmentsApi.readDroppedFiles(
+        files,
+        remainingSlots,
+        true,
+        remainingInlineBytes,
+      );
       appendAttachments(result, 0);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not read dropped files.");
@@ -311,15 +321,12 @@ export function FloatingComposer({
     }
   };
 
-  const voice = useVoiceRecorder(
-    (transcript) => {
-      const trimmed = transcript.trim();
-      if (!trimmed) return;
-      onTextChange(text.trim() ? `${text.trimEnd()} ${trimmed}` : trimmed);
-      requestAnimationFrame(() => inputRef.current?.focus());
-    },
-    {},
-  );
+  const voice = useVoiceRecorder((transcript) => {
+    const trimmed = transcript.trim();
+    if (!trimmed) return;
+    onTextChange(text.trim() ? `${text.trimEnd()} ${trimmed}` : trimmed);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, {});
 
   const canSend =
     !sending &&
@@ -452,7 +459,9 @@ export function FloatingComposer({
                   data-testid="quick-chat-target-chip"
                 >
                   {targetChipIcon(targetMode)}
-                  <span className="min-w-0 truncate">{targetChipLabel(targetMode, workspaces)}</span>
+                  <span className="min-w-0 truncate">
+                    {targetChipLabel(targetMode, workspaces)}
+                  </span>
                   <ChevronDown className="size-3 shrink-0 opacity-70" aria-hidden="true" />
                 </Button>
               </DropdownMenuTrigger>
@@ -479,7 +488,10 @@ export function FloatingComposer({
                   }}
                 >
                   <DropdownMenuRadioItem value="ephemeral" className="items-start py-2">
-                    <Clock className="mt-0.5 size-3.5 shrink-0 text-status-warning" aria-hidden="true" />
+                    <Clock
+                      className="mt-0.5 size-3.5 shrink-0 text-status-warning"
+                      aria-hidden="true"
+                    />
                     <div className="min-w-0 flex-1">
                       <Text variant="small-strong" className="block">
                         Temporary
@@ -491,7 +503,10 @@ export function FloatingComposer({
                   </DropdownMenuRadioItem>
 
                   <DropdownMenuRadioItem value="noWorkspace" className="items-start py-2">
-                    <MessageCircle className="mt-0.5 size-3.5 shrink-0 text-secondary" aria-hidden="true" />
+                    <MessageCircle
+                      className="mt-0.5 size-3.5 shrink-0 text-secondary"
+                      aria-hidden="true"
+                    />
                     <div className="min-w-0 flex-1">
                       <Text variant="small-strong" className="block">
                         No workspace
@@ -508,7 +523,10 @@ export function FloatingComposer({
                       <div className="max-h-36 overflow-y-auto">
                         {realWorkspaces.map((ws) => (
                           <DropdownMenuRadioItem key={ws.id} value={`workspace:${ws.id}`}>
-                            <Folder className="size-3.5 shrink-0 text-secondary" aria-hidden="true" />
+                            <Folder
+                              className="size-3.5 shrink-0 text-secondary"
+                              aria-hidden="true"
+                            />
                             <span className="min-w-0 flex-1 truncate">{ws.name}</span>
                           </DropdownMenuRadioItem>
                         ))}

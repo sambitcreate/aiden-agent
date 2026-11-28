@@ -141,7 +141,8 @@ export class ChatSettlement {
 
   private arm(chatId: string): void {
     this.cancel(chatId);
-    if (this.closed || this.activeRuns.has(chatId) || !this.options.hasStoppableJobs(chatId)) return;
+    if (this.closed || this.activeRuns.has(chatId) || !this.options.hasStoppableJobs(chatId))
+      return;
     const timer = this.evicted.has(chatId)
       ? setTimeout(() => this.checkEvicted(chatId), this.evictedCheckMs)
       : setTimeout(() => this.fire(chatId), this.quietMs);
@@ -173,7 +174,12 @@ export class ChatSettlement {
     }
     void this.options
       .stopSettled(chatId)
-      .catch((error: unknown) => this.options.log?.("Background jobs could not be stopped after the chat went quiet.", error))
+      .catch((error: unknown) =>
+        this.options.log?.(
+          "Background jobs could not be stopped after the chat went quiet.",
+          error,
+        ),
+      )
       // A job whose stop could not be confirmed is still running: try again after another window.
       .then(() => this.jobsChanged(chatId));
   }

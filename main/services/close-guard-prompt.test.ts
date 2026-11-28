@@ -28,19 +28,27 @@ test("every surface holding unsaved work is named, the open file first", () => {
   assert.deepEqual(prompt.buttons, ["Keep Editing", "Discard Edits and Reload"]);
 
   assert.equal(
-    closeGuardDiscardPrompt({ dirty: ["images", "design"], saving: [] }, undefined, "close").message,
+    closeGuardDiscardPrompt({ dirty: ["images", "design"], saving: [] }, undefined, "close")
+      .message,
     "The image workflow and the design canvas have changes that have not been saved.",
   );
 });
 
 test("work from no named surface is the Files editor's, as its IPC path reports none", () => {
-  assert.equal(closeGuardDiscardPrompt(undefined, "notes.md", "close").message, "“notes.md” has edits that have not been saved.");
-  assert.equal(closeGuardDiscardPrompt({ dirty: [], saving: [] }, undefined, "close").message, "The open file has edits that have not been saved.");
+  assert.equal(
+    closeGuardDiscardPrompt(undefined, "notes.md", "close").message,
+    "“notes.md” has edits that have not been saved.",
+  );
+  assert.equal(
+    closeGuardDiscardPrompt({ dirty: [], saving: [] }, undefined, "close").message,
+    "The open file has edits that have not been saved.",
+  );
   const saving = closeGuardSavingPrompt(undefined, "close");
   assert.equal(saving.title, "File save in progress");
   assert.equal(saving.message, "Wait for the open file to finish saving before closing Aiden.");
   assert.equal(
-    closeGuardSavingPrompt({ dirty: [], saving: ["images"], imagesLabel: "Shots" }, "close").message,
+    closeGuardSavingPrompt({ dirty: [], saving: ["images"], imagesLabel: "Shots" }, "close")
+      .message,
     "Wait for the image workflow “Shots” to finish saving before closing Aiden.",
   );
 });

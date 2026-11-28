@@ -85,8 +85,7 @@ async function nativeModules(directory) {
       if (entry.isDirectory()) pending.push(candidate);
       else if (
         entry.isFile() &&
-        (entry.name.endsWith(".node") ||
-          /\.so(?:\.[0-9]+)*$/u.test(entry.name)) &&
+        (entry.name.endsWith(".node") || /\.so(?:\.[0-9]+)*$/u.test(entry.name)) &&
         (await isElfFile(candidate))
       ) {
         result.push(candidate);
@@ -117,17 +116,10 @@ async function isElfFile(file) {
   }
 }
 
-export function assertGlibcSymbolBaseline(
-  file,
-  symbolTable,
-  maximum = MAXIMUM_GLIBC_VERSION,
-) {
+export function assertGlibcSymbolBaseline(file, symbolTable, maximum = MAXIMUM_GLIBC_VERSION) {
   for (const match of symbolTable.matchAll(/GLIBC_(\d+)\.(\d+)/gu)) {
     const version = [Number(match[1]), Number(match[2])];
-    if (
-      version[0] > maximum[0] ||
-      (version[0] === maximum[0] && version[1] > maximum[1])
-    ) {
+    if (version[0] > maximum[0] || (version[0] === maximum[0] && version[1] > maximum[1])) {
       throw new Error(
         `${file} requires GLIBC_${version.join(".")}; Linux packages must remain compatible with GLIBC_${maximum.join(".")}.`,
       );
@@ -158,9 +150,7 @@ async function verifyActiveNodePty(resources, architecture) {
       if (error?.code !== "ENOENT") throw error;
     }
   }
-  throw new Error(
-    `No Linux ${architecture} node-pty native module was found under ${root}.`,
-  );
+  throw new Error(`No Linux ${architecture} node-pty native module was found under ${root}.`);
 }
 
 /**
@@ -175,7 +165,9 @@ export function assertNoMetalSpeechEngine(entries) {
     .map((entry) => entry.replaceAll("\\", "/"))
     .find((entry) => /\/node_modules\/(?:@transcribe-cpp|@koromix)\//u.test(entry));
   if (shipped) {
-    throw new Error(`Linux packages must not ship the Metal speech engine's native libraries: ${shipped}`);
+    throw new Error(
+      `Linux packages must not ship the Metal speech engine's native libraries: ${shipped}`,
+    );
   }
 }
 
@@ -201,9 +193,7 @@ export function assertLinuxBuildConfiguration(packageJson) {
     throw new Error("Linux package metadata must declare the repository license.");
   }
   if (build.toolsets?.appimage !== "1.0.3") {
-    throw new Error(
-      "Linux AppImage packages must use the pinned static runtime toolset.",
-    );
+    throw new Error("Linux AppImage packages must use the pinned static runtime toolset.");
   }
   const debDependencies = new Set(build.deb?.depends ?? []);
   for (const dependency of [
@@ -220,9 +210,7 @@ export function assertLinuxBuildConfiguration(packageJson) {
       throw new Error(`RPM package dependency ${dependency} is missing.`);
     }
   }
-  const helperDestinations = new Set(
-    (linux.extraFiles ?? []).map((entry) => entry.to),
-  );
+  const helperDestinations = new Set((linux.extraFiles ?? []).map((entry) => entry.to));
   for (const helper of [...REQUIRED_HELPERS, LINUX_PACKAGE_INSTALL_HELPER]) {
     if (!helperDestinations.has(`Helpers/${helper}`)) {
       throw new Error(`Linux package config is missing ${helper}.`);
@@ -235,18 +223,10 @@ export function assertLinuxBuildConfiguration(packageJson) {
   ) {
     throw new Error("Linux extraFiles must not include Apple Foundation Models or Computer Use.");
   }
-  if (
-    !(build.asarUnpack ?? []).some((pattern) =>
-      pattern.includes("sherpa-onnx-linux-"),
-    )
-  ) {
+  if (!(build.asarUnpack ?? []).some((pattern) => pattern.includes("sherpa-onnx-linux-"))) {
     throw new Error("Linux sherpa-onnx native packages are not unpacked.");
   }
-  if (
-    (build.extraResources ?? []).some((entry) =>
-      String(entry.from).includes("computer-use"),
-    )
-  ) {
+  if ((build.extraResources ?? []).some((entry) => String(entry.from).includes("computer-use"))) {
     throw new Error("Computer Use resources must not be global package resources.");
   }
   if (
@@ -319,7 +299,9 @@ export async function verifyLinuxPackage(appDirectory) {
     });
   }
   // Root runs this to install DEB/RPM updates; it must ship executable.
-  await assertRegularFile(path.join(root, "Helpers", LINUX_PACKAGE_INSTALL_HELPER), { executable: true });
+  await assertRegularFile(path.join(root, "Helpers", LINUX_PACKAGE_INSTALL_HELPER), {
+    executable: true,
+  });
   for (const forbidden of [
     path.join(root, "Helpers", "CuaDriver.app"),
     path.join(root, "Helpers", "Aiden Foundation Models Helper.app"),
@@ -364,9 +346,7 @@ export async function verifyLinuxPackage(appDirectory) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === modulePath) {
-  const packageJson = JSON.parse(
-    readFileSync(path.join(repositoryRoot, "package.json"), "utf8"),
-  );
+  const packageJson = JSON.parse(readFileSync(path.join(repositoryRoot, "package.json"), "utf8"));
   assertLinuxBuildConfiguration(packageJson);
   let appDirectory;
   if (process.argv[2]) {

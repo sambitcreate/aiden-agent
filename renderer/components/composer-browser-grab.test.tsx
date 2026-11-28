@@ -118,13 +118,15 @@ afterEach(() => {
   queryClient.clear();
 });
 
-async function mountComposer(props: {
-  chatId?: string;
-  visionSupported?: boolean;
-  isGenerating?: boolean;
-  firstMessageSaving?: boolean;
-  withQueueAndSteer?: boolean;
-} = {}) {
+async function mountComposer(
+  props: {
+    chatId?: string;
+    visionSupported?: boolean;
+    isGenerating?: boolean;
+    firstMessageSaving?: boolean;
+    withQueueAndSteer?: boolean;
+  } = {},
+) {
   const chatId = props.chatId ?? nextChatId();
   const chat = {
     id: chatId,
@@ -240,7 +242,11 @@ test("delivers grabbed element chip, deduplicates in place, hides raw thumbnail 
   assert.equal(calls[0]!.grabbedElements?.[0]?.id, "el-2");
   assert.equal(calls[0]!.attachments.length, 1);
   assert.equal(calls[0]!.attachments[0]?.id, grabbedElementThumbnailId("el-2"));
-  assert.equal(loadComposerDraftGrabbedElements(chatId).length, 0, "in-memory draft clears on send");
+  assert.equal(
+    loadComposerDraftGrabbedElements(chatId).length,
+    0,
+    "in-memory draft clears on send",
+  );
 });
 
 test("text-only models show non-blocking note and still allow sending grabbed elements", async () => {
@@ -324,7 +330,10 @@ test("failed send restores grabbed elements and linked thumbnails; localStorage 
 
   assert.equal(calls.length, 1);
   assert.equal(textarea.value, "Fix padding", "draft text restored");
-  assert.ok(container.querySelector('[data-grabbed-element-chip="el-retry"]'), "chip restored on failure");
+  assert.ok(
+    container.querySelector('[data-grabbed-element-chip="el-retry"]'),
+    "chip restored on failure",
+  );
 
   // Retry succeeds and still carries the restored element + thumbnail.
   rejectSend = null;
@@ -349,7 +358,11 @@ test("grabbed elements disable Steer when generating and block /btw side questio
     fireEvent.keyDown(textarea, { key: "Enter" });
   });
   assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.kind, "queue", "busy send queues instead of steering when grabbed elements attached");
+  assert.equal(
+    calls[0]!.kind,
+    "queue",
+    "busy send queues instead of steering when grabbed elements attached",
+  );
   assert.equal(calls[0]!.grabbedElements?.[0]?.id, "el-busy");
 
   // /btw is blocked when grabbed elements are attached.
@@ -379,15 +392,26 @@ test("Edit-in-Fork seeds and cancelled-worktree restore repopulate grabbed chips
   seedComposerGrabbedElements(chatId, [element], [thumb]);
 
   const firstMount = await mountComposer({ chatId });
-  assert.ok(firstMount.container.querySelector('[data-grabbed-element-chip="el-fork"]'), "forked chip mounts");
+  assert.ok(
+    firstMount.container.querySelector('[data-grabbed-element-chip="el-fork"]'),
+    "forked chip mounts",
+  );
   // Simulate switching away to another chat and returning: the seeded grabbed thumbnail persists in memory.
   firstMount.unmount();
 
   const { container } = await mountComposer({ chatId });
-  assert.ok(container.querySelector('[data-grabbed-element-chip="el-fork"]'), "forked chip persists after chat switch");
+  assert.ok(
+    container.querySelector('[data-grabbed-element-chip="el-fork"]'),
+    "forked chip persists after chat switch",
+  );
 
   // Restore unsent message (e.g. cancelled worktree send) into mounted composer.
-  const restoredEl = makeCapture({ id: "el-worktree", label: "<Footer />", selector: "footer", componentName: "Footer" }).element;
+  const restoredEl = makeCapture({
+    id: "el-worktree",
+    label: "<Footer />",
+    selector: "footer",
+    componentName: "Footer",
+  }).element;
   restoredEl.thumbnailAttachmentId = grabbedElementThumbnailId("el-worktree");
   const restoredThumb: Attachment = {
     ...thumb,

@@ -1,23 +1,10 @@
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
-import {
-  installBotTestIpc,
-  type BotTestIpcCall,
-} from "../../main/bots/test-dom";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { installBotTestIpc, type BotTestIpcCall } from "../../main/bots/test-dom";
 import { mountWithBotRouter } from "../../main/bots/test-providers";
-import {
-  AppCapabilitiesProvider,
-  DISABLED_APP_CAPABILITIES,
-} from "../../lib/app-capabilities";
+import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../../lib/app-capabilities";
 import type {
   BoundedNonSecretProviderConfig,
   WebSearchProviderId,
@@ -41,9 +28,7 @@ elementProto.releasePointerCapture ??= () => {};
 type Provider = WebSearchProviderRendererMetadata;
 type ExistingAuth = WebSearchRendererSnapshot["existingAuth"];
 
-function provider(
-  overrides: Partial<Provider> & Pick<Provider, "id" | "label">,
-): Provider {
+function provider(overrides: Partial<Provider> & Pick<Provider, "id" | "label">): Provider {
   return {
     description: `${overrides.label} search.`,
     credentialKind: "none",
@@ -124,10 +109,10 @@ const DEFAULT_PROVIDERS = [
   OPENAI,
   KAGI_EXPERIMENTAL,
 ];
-const DEFAULT_FALLBACK: Extract<
-  WebSearchSelection,
-  { mode: "automatic" }
->["fallbackOn"] = ["transient", "quota"];
+const DEFAULT_FALLBACK: Extract<WebSearchSelection, { mode: "automatic" }>["fallbackOn"] = [
+  "transient",
+  "quota",
+];
 
 const NOT_CONSENTED: ExistingAuth = {
   options: [],
@@ -166,9 +151,7 @@ function webSearchServer(options: ServerOptions = {}) {
   };
   let enabled = options.enabled ?? true;
   let existingAuth = options.existingAuth ?? NOT_CONSENTED;
-  const providerConfig: Partial<
-    Record<WebSearchProviderId, BoundedNonSecretProviderConfig>
-  > = {};
+  const providerConfig: Partial<Record<WebSearchProviderId, BoundedNonSecretProviderConfig>> = {};
   let getFailures = options.getFails ?? 0;
 
   const route = (): WebSearchRouteEntry[] =>
@@ -188,9 +171,7 @@ function webSearchServer(options: ServerOptions = {}) {
       selection,
       route: route(),
       routeReadiness: route().map((entry) => {
-        const match = providers.find(
-          (candidate) => candidate.id === entry.providerId,
-        );
+        const match = providers.find((candidate) => candidate.id === entry.providerId);
         return {
           providerId: entry.providerId,
           ready: match?.ready ?? false,
@@ -205,9 +186,7 @@ function webSearchServer(options: ServerOptions = {}) {
     if (message) throw new Error(message);
   };
   const updateProvider = (id: string, patch: Partial<Provider>) => {
-    providers = providers.map((entry) =>
-      entry.id === id ? { ...entry, ...patch } : entry,
-    );
+    providers = providers.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry));
   };
 
   const calls = installBotTestIpc({
@@ -233,17 +212,13 @@ function webSearchServer(options: ServerOptions = {}) {
       selection = {
         mode: "automatic",
         route: next as WebSearchRouteEntry[],
-        fallbackOn:
-          selection.mode === "automatic"
-            ? selection.fallbackOn
-            : [...DEFAULT_FALLBACK],
+        fallbackOn: selection.mode === "automatic" ? selection.fallbackOn : [...DEFAULT_FALLBACK],
       };
       return snapshot();
     },
     "webSearch:setProviderConfig": (id: unknown, config: unknown) => {
       guard("webSearch:setProviderConfig");
-      providerConfig[id as WebSearchProviderId] =
-        config as BoundedNonSecretProviderConfig;
+      providerConfig[id as WebSearchProviderId] = config as BoundedNonSecretProviderConfig;
       updateProvider(id as string, {
         configurationStatus: "configured",
         ready: true,
@@ -299,8 +274,7 @@ function webSearchServer(options: ServerOptions = {}) {
 
   return {
     calls,
-    callsTo: (channel: string) =>
-      calls.filter((call) => call.channel === channel),
+    callsTo: (channel: string) => calls.filter((call) => call.channel === channel),
     /** Web Search writes; app-shell reads made by the test harness are ignored. */
     mutations: () =>
       calls.filter(
@@ -330,15 +304,11 @@ function argsOf(calls: BotTestIpcCall[]): unknown[][] {
 }
 
 async function openRoutingOptions() {
-  fireEvent.click(
-    await screen.findByRole("button", { name: /Routing options/u }),
-  );
+  fireEvent.click(await screen.findByRole("button", { name: /Routing options/u }));
 }
 
 async function openProviderBrowser() {
-  fireEvent.click(
-    await screen.findByRole("button", { name: /^Browse providers/u }),
-  );
+  fireEvent.click(await screen.findByRole("button", { name: /^Browse providers/u }));
   await screen.findByRole("heading", { name: "Browse providers" });
 }
 
@@ -358,9 +328,7 @@ async function openProviderSetup(label: string) {
   assert.ok(row, `provider row for ${label}`);
   fireEvent.click(row);
   await screen.findByRole("heading", { level: 1, name: label });
-  fireEvent.click(
-    screen.getByRole("button", { name: /^(Configure|Manage)$/u }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: /^(Configure|Manage)$/u }));
   return screen.findByRole("dialog", { name: `Set up ${label}` });
 }
 
@@ -398,10 +366,7 @@ test("settings read only the generic Web Search IPC seam and list only shipped p
     fireEvent.change(screen.getByRole("searchbox"), {
       target: { value: label },
     });
-    assert.ok(
-      screen.queryAllByText(label).length > 0,
-      `${label} should be listed`,
-    );
+    assert.ok(screen.queryAllByText(label).length > 0, `${label} should be listed`);
   }
   fireEvent.change(screen.getByRole("searchbox"), {
     target: { value: "Kagi" },
@@ -435,22 +400,14 @@ test("the overview keeps enablement, recipients, readiness, and cost visible", a
     name: "Allow Web Search",
   });
   assert.equal(toggle.getAttribute("aria-checked"), "true");
-  const description = document.getElementById(
-    toggle.getAttribute("aria-describedby") ?? "",
-  );
-  assert.match(
-    description?.textContent ?? "",
-    /No startup or background search occurs/u,
-  );
+  const description = document.getElementById(toggle.getAttribute("aria-describedby") ?? "");
+  assert.match(description?.textContent ?? "", /No startup or background search occurs/u);
 
   const setup = screen.getByRole("region", { name: "Current search setup" });
   assert.match(setup.textContent ?? "", /Available/u);
   assert.match(setup.textContent ?? "", /2\/2 ready/u);
   assert.match(setup.textContent ?? "", /Exa → Brave Search/u);
-  assert.match(
-    setup.textContent ?? "",
-    /May use provider quota or paid usage/u,
-  );
+  assert.match(setup.textContent ?? "", /May use provider quota or paid usage/u);
   assert.match(
     setup.textContent ?? "",
     /sent sequentially to Exa, Brave Search; Aiden never fans out/u,
@@ -460,10 +417,7 @@ test("the overview keeps enablement, recipients, readiness, and cost visible", a
 
   fireEvent.click(toggle);
   await waitFor(() =>
-    assert.match(
-      screen.getByRole("status").textContent ?? "",
-      /Web Search is off/u,
-    ),
+    assert.match(screen.getByRole("status").textContent ?? "", /Web Search is off/u),
   );
   assert.deepEqual(argsOf(server.callsTo("webSearch:setEnabled")), [[false]]);
   assert.match(
@@ -471,14 +425,11 @@ test("the overview keeps enablement, recipients, readiness, and cost visible", a
     /route and credentials are preserved/u,
   );
   assert.equal(
-    screen
-      .getByRole("switch", { name: "Allow Web Search" })
-      .getAttribute("aria-checked"),
+    screen.getByRole("switch", { name: "Allow Web Search" }).getAttribute("aria-checked"),
     "false",
   );
   assert.match(
-    screen.getByRole("region", { name: "Current search setup" }).textContent ??
-      "",
+    screen.getByRole("region", { name: "Current search setup" }).textContent ?? "",
     /Turned off/u,
   );
 });
@@ -496,10 +447,7 @@ test("a single-destination free route names its only recipient", async () => {
     name: "Current search setup",
   });
   assert.match(setup.textContent ?? "", /Free route/u);
-  assert.match(
-    setup.textContent ?? "",
-    /may be sent to Exa only when search is used/u,
-  );
+  assert.match(setup.textContent ?? "", /may be sent to Exa only when search is used/u);
 });
 
 test("a route with no ready destination raises a fail-closed alert", async () => {
@@ -530,10 +478,7 @@ test("routing options are a disclosure that switches between automatic and fixed
   assert.equal(disclosure.getAttribute("aria-expanded"), "false");
   const controlsId = disclosure.getAttribute("aria-controls") ?? "";
   assert.equal(document.getElementById(controlsId), null);
-  assert.equal(
-    screen.queryByRole("radiogroup", { name: "Web Search routing policy" }),
-    null,
-  );
+  assert.equal(screen.queryByRole("radiogroup", { name: "Web Search routing policy" }), null);
 
   fireEvent.click(disclosure);
   assert.equal(disclosure.getAttribute("aria-expanded"), "true");
@@ -549,10 +494,7 @@ test("routing options are a disclosure that switches between automatic and fixed
 
   fireEvent.click(fixed);
   await waitFor(() =>
-    assert.match(
-      screen.getByRole("status").textContent ?? "",
-      /Fixed mode never falls back/u,
-    ),
+    assert.match(screen.getByRole("status").textContent ?? "", /Fixed mode never falls back/u),
   );
   assert.deepEqual(argsOf(server.callsTo("webSearch:setSelection")), [
     [{ mode: "fixed", providerId: "exa", credentialMode: "anonymous" }],
@@ -561,21 +503,16 @@ test("routing options are a disclosure that switches between automatic and fixed
     name: "Fixed Web Search provider",
   });
   assert.match(fixedSelect.textContent ?? "", /Exa/u);
-  assert.equal(
-    screen.queryByRole("list", { name: "Ordered automatic Web Search route" }),
-    null,
-  );
+  assert.equal(screen.queryByRole("list", { name: "Ordered automatic Web Search route" }), null);
 
   fireEvent.click(screen.getByRole("radio", { name: /Automatic/u }));
-  await waitFor(() =>
-    assert.equal(server.callsTo("webSearch:setSelection").length, 2),
-  );
-  const [automaticSelection] = server.callsTo("webSearch:setSelection")[1]!
-    .args as [WebSearchSelection];
+  await waitFor(() => assert.equal(server.callsTo("webSearch:setSelection").length, 2));
+  const [automaticSelection] = server.callsTo("webSearch:setSelection")[1]!.args as [
+    WebSearchSelection,
+  ];
   assert.equal(automaticSelection.mode, "automatic");
   assert.ok(
-    automaticSelection.mode === "automatic" &&
-      automaticSelection.fallbackOn.length > 0,
+    automaticSelection.mode === "automatic" && automaticSelection.fallbackOn.length > 0,
     "switching back to automatic restores disclosed fallback categories",
   );
   await screen.findByRole("list", {
@@ -593,10 +530,7 @@ test("the automatic route is an ordered list that reorders by button and Alt+Arr
   });
   const items = within(list).getAllByRole("listitem");
   assert.deepEqual(
-    items.map((item) => [
-      item.getAttribute("aria-posinset"),
-      item.getAttribute("aria-setsize"),
-    ]),
+    items.map((item) => [item.getAttribute("aria-posinset"), item.getAttribute("aria-setsize")]),
     [
       ["1", "2"],
       ["2", "2"],
@@ -619,21 +553,14 @@ test("the automatic route is an ordered list that reorders by button and Alt+Arr
     true,
   );
 
-  fireEvent.click(
-    within(list).getByRole("button", { name: "Move Brave Search up" }),
-  );
-  await waitFor(() =>
-    assert.equal(server.callsTo("webSearch:setAutomaticRoute").length, 1),
-  );
+  fireEvent.click(within(list).getByRole("button", { name: "Move Brave Search up" }));
+  await waitFor(() => assert.equal(server.callsTo("webSearch:setAutomaticRoute").length, 1));
   assert.deepEqual(server.callsTo("webSearch:setAutomaticRoute")[0]!.args[0], [
     { providerId: "brave", credentialMode: "api-key" },
     { providerId: "exa", credentialMode: "anonymous" },
   ]);
   await waitFor(() =>
-    assert.match(
-      within(list).getAllByRole("listitem")[0]!.textContent ?? "",
-      /Brave Search/u,
-    ),
+    assert.match(within(list).getAllByRole("listitem")[0]!.textContent ?? "", /Brave Search/u),
   );
 
   // A plain arrow key is left for scrolling; only Alt+Arrow moves an entry.
@@ -641,9 +568,7 @@ test("the automatic route is an ordered list that reorders by button and Alt+Arr
   fireEvent.keyDown(first, { key: "ArrowDown" });
   assert.equal(server.callsTo("webSearch:setAutomaticRoute").length, 1);
   fireEvent.keyDown(first, { key: "ArrowDown", altKey: true });
-  await waitFor(() =>
-    assert.equal(server.callsTo("webSearch:setAutomaticRoute").length, 2),
-  );
+  await waitFor(() => assert.equal(server.callsTo("webSearch:setAutomaticRoute").length, 2));
   assert.deepEqual(server.callsTo("webSearch:setAutomaticRoute")[1]!.args[0], [
     { providerId: "exa", credentialMode: "anonymous" },
     { providerId: "brave", credentialMode: "api-key" },
@@ -693,22 +618,13 @@ test("a failed route save shows a dismissible alert and keeps the routing editor
     name: "Ordered automatic Web Search route",
   });
 
-  fireEvent.click(
-    within(list).getByRole("button", { name: "Move Brave Search up" }),
-  );
+  fireEvent.click(within(list).getByRole("button", { name: "Move Brave Search up" }));
   const alert = await screen.findByText("Route store is read-only.");
   assert.ok(alert.closest("[role=alert]"));
-  assert.ok(
-    screen.getByRole("list", { name: "Ordered automatic Web Search route" }),
-  );
-  assert.match(
-    within(list).getAllByRole("listitem")[0]!.textContent ?? "",
-    /Exa/u,
-  );
+  assert.ok(screen.getByRole("list", { name: "Ordered automatic Web Search route" }));
+  assert.match(within(list).getAllByRole("listitem")[0]!.textContent ?? "", /Exa/u);
 
-  fireEvent.click(
-    screen.getByRole("button", { name: "Dismiss Web Search error" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss Web Search error" }));
   assert.equal(screen.queryByText("Route store is read-only."), null);
 });
 
@@ -725,26 +641,17 @@ test("the add-to-route menu labels each provider's cost and appends the choice",
   const listbox = await screen.findByRole("listbox");
   const options = within(listbox).getAllByRole("option");
   const text = (label: string) =>
-    options.find((option) => option.textContent?.startsWith(label))
-      ?.textContent ?? "";
+    options.find((option) => option.textContent?.startsWith(label))?.textContent ?? "";
   assert.match(text("Serper"), /Quota-based/u);
   assert.match(text("DuckDuckGo"), /Provider free/u);
   assert.match(text("SearXNG"), /Self-hosted/u);
-  assert.equal(
-    text("Exa"),
-    "",
-    "providers already in the route are not offered again",
-  );
+  assert.equal(text("Exa"), "", "providers already in the route are not offered again");
   assert.equal(text("Kagi"), "", "experimental providers are not offered");
 
-  const duck = options.find((option) =>
-    option.textContent?.startsWith("DuckDuckGo"),
-  );
+  const duck = options.find((option) => option.textContent?.startsWith("DuckDuckGo"));
   assert.ok(duck);
   fireEvent.keyDown(duck, { key: "Enter" });
-  await waitFor(() =>
-    assert.equal(server.callsTo("webSearch:setAutomaticRoute").length, 1),
-  );
+  await waitFor(() => assert.equal(server.callsTo("webSearch:setAutomaticRoute").length, 1));
   assert.deepEqual(server.callsTo("webSearch:setAutomaticRoute")[0]!.args[0], [
     { providerId: "exa", credentialMode: "anonymous" },
     { providerId: "brave", credentialMode: "api-key" },
@@ -757,10 +664,7 @@ test("the provider catalog searches, filters, discloses more providers, and rest
   await mountSettings();
   await openProviderBrowser();
   await waitFor(() =>
-    assert.equal(
-      document.activeElement,
-      screen.getByRole("heading", { name: "Browse providers" }),
-    ),
+    assert.equal(document.activeElement, screen.getByRole("heading", { name: "Browse providers" })),
   );
 
   // Built-in and connected providers are shown; the rest wait behind a disclosure.
@@ -771,9 +675,7 @@ test("the provider catalog searches, filters, discloses more providers, and rest
   assert.equal(more.getAttribute("aria-expanded"), "false");
   fireEvent.click(more);
   assert.equal(more.getAttribute("aria-expanded"), "true");
-  const moreRegion = document.getElementById(
-    more.getAttribute("aria-controls") ?? "",
-  );
+  const moreRegion = document.getElementById(more.getAttribute("aria-controls") ?? "");
   assert.ok(moreRegion && within(moreRegion).getByText("Serper"));
 
   const filters = screen.getByRole("group", { name: "Filter providers" });
@@ -785,31 +687,22 @@ test("the provider catalog searches, filters, discloses more providers, and rest
   );
   fireEvent.click(within(filters).getByRole("button", { name: "Self-hosted" }));
   assert.equal(
-    within(filters)
-      .getByRole("button", { name: "Self-hosted" })
-      .getAttribute("aria-pressed"),
+    within(filters).getByRole("button", { name: "Self-hosted" }).getAttribute("aria-pressed"),
     "true",
   );
   assert.ok(screen.getByText("SearXNG"));
   assert.equal(screen.queryByText("Exa"), null);
-  assert.match(
-    screen.getByText(/shipped provider/u).textContent ?? "",
-    /^1 shipped provider ·/u,
-  );
+  assert.match(screen.getByText(/shipped provider/u).textContent ?? "", /^1 shipped provider ·/u);
 
   const search = screen.getByRole("searchbox", {
     name: "Search shipped Web Search providers",
   });
   fireEvent.change(search, { target: { value: "no such provider" } });
   assert.ok(screen.getByText("No shipped providers match"));
-  fireEvent.click(
-    screen.getByRole("button", { name: "Clear search and filters" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Clear search and filters" }));
   assert.equal((search as HTMLInputElement).value, "");
   assert.equal(
-    within(filters)
-      .getByRole("button", { name: "All" })
-      .getAttribute("aria-pressed"),
+    within(filters).getByRole("button", { name: "All" }).getAttribute("aria-pressed"),
     "true",
   );
 
@@ -852,11 +745,8 @@ test("a provider's detail page links privacy and terms safely and adds it to the
   }
 
   fireEvent.click(screen.getByRole("button", { name: "Add to route" }));
-  await waitFor(() =>
-    assert.equal(server.callsTo("webSearch:setAutomaticRoute").length, 1),
-  );
-  const route = server.callsTo("webSearch:setAutomaticRoute")[0]!
-    .args[0] as WebSearchRouteEntry[];
+  await waitFor(() => assert.equal(server.callsTo("webSearch:setAutomaticRoute").length, 1));
+  const route = server.callsTo("webSearch:setAutomaticRoute")[0]!.args[0] as WebSearchRouteEntry[];
   assert.deepEqual(route[route.length - 1], {
     providerId: "duckduckgo",
     credentialMode: "anonymous",
@@ -875,9 +765,7 @@ test("provider setup keeps API keys write-only and never selects the provider", 
   assert.match(dialog.textContent ?? "", /Setup performs no network request/u);
   assert.equal(within(dialog).queryByRole("radiogroup"), null);
 
-  const input = within(dialog).getByLabelText(
-    "Serper API key",
-  ) as HTMLInputElement;
+  const input = within(dialog).getByLabelText("Serper API key") as HTMLInputElement;
   assert.equal(input.type, "password");
   assert.equal(input.getAttribute("autocomplete"), "new-password");
   const save = within(dialog).getByRole("button", {
@@ -896,14 +784,9 @@ test("provider setup keeps API keys write-only and never selects the provider", 
   fireEvent.change(input, { target: { value: `  ${SECRET}  ` } });
   fireEvent.click(save);
   await waitFor(() =>
-    assert.match(
-      within(dialog).getByRole("status").textContent ?? "",
-      /API key saved/u,
-    ),
+    assert.match(within(dialog).getByRole("status").textContent ?? "", /API key saved/u),
   );
-  assert.deepEqual(argsOf(server.callsTo("webSearch:setCredential")), [
-    ["serper", SECRET],
-  ]);
+  assert.deepEqual(argsOf(server.callsTo("webSearch:setCredential")), [["serper", SECRET]]);
   assert.deepEqual(
     server
       .mutations()
@@ -912,11 +795,7 @@ test("provider setup keeps API keys write-only and never selects the provider", 
     [],
     "saving a key does not touch route, selection, or enablement",
   );
-  assert.equal(
-    renderedSurface().includes(SECRET),
-    false,
-    "the saved key is not echoed",
-  );
+  assert.equal(renderedSurface().includes(SECRET), false, "the saved key is not echoed");
   assert.match(dialog.textContent ?? "", /Keys are write-only/u);
 
   const remove = within(dialog).getByRole("button", {
@@ -925,14 +804,9 @@ test("provider setup keeps API keys write-only and never selects the provider", 
   assert.ok(within(dialog).getByRole("button", { name: "Replace key" }));
   fireEvent.click(remove);
   await waitFor(() =>
-    assert.match(
-      within(dialog).getByRole("status").textContent ?? "",
-      /API key removed/u,
-    ),
+    assert.match(within(dialog).getByRole("status").textContent ?? "", /API key removed/u),
   );
-  assert.deepEqual(argsOf(server.callsTo("webSearch:removeCredential")), [
-    ["serper"],
-  ]);
+  assert.deepEqual(argsOf(server.callsTo("webSearch:removeCredential")), [["serper"]]);
 });
 
 test("a failed credential save is announced as an alert without echoing the key", async () => {
@@ -967,15 +841,9 @@ test("an optional-key provider asks for a connection method before showing the k
   );
   assert.equal(within(dialog).queryByLabelText("Jina API key"), null);
 
-  fireEvent.click(
-    within(method).getByRole("radio", { name: /Use my API key/u }),
-  );
+  fireEvent.click(within(method).getByRole("radio", { name: /Use my API key/u }));
   assert.ok(await within(dialog).findByLabelText("Jina API key"));
-  assert.deepEqual(
-    server.mutations(),
-    [],
-    "choosing a method does not change the route",
-  );
+  assert.deepEqual(server.mutations(), [], "choosing a method does not change the route");
 });
 
 test("self-hosted setup saves only the non-secret endpoint through provider settings", async () => {
@@ -1036,14 +904,9 @@ test("OpenAI saved-account reuse is an explicit, separate, redacted consent path
       .getAttribute("aria-checked"),
     "true",
   );
-  assert.equal(
-    within(dialog).queryByRole("button", { name: /Approve/u }),
-    null,
-  );
+  assert.equal(within(dialog).queryByRole("button", { name: /Approve/u }), null);
 
-  fireEvent.click(
-    within(method).getByRole("radio", { name: /Use approved OpenAI account/u }),
-  );
+  fireEvent.click(within(method).getByRole("radio", { name: /Use approved OpenAI account/u }));
   const approve = await within(dialog).findByRole("button", {
     name: "Approve for Web Search",
   });
@@ -1051,8 +914,7 @@ test("OpenAI saved-account reuse is an explicit, separate, redacted consent path
   assert.match(dialog.textContent ?? "", /OpenAI API quota and billing/u);
   assert.match(dialog.textContent ?? "", /does not send a request/u);
   assert.match(
-    within(dialog).getByRole("combobox", { name: "OpenAI Web Search model" })
-      .textContent ?? "",
+    within(dialog).getByRole("combobox", { name: "OpenAI Web Search model" }).textContent ?? "",
     /GPT Search Test/u,
   );
 
@@ -1083,9 +945,7 @@ test("OpenAI saved-account reuse is an explicit, separate, redacted consent path
   });
   assert.match(dialog.textContent ?? "", /Model: gpt-search-test/u);
   fireEvent.click(revoke);
-  await waitFor(() =>
-    assert.equal(server.callsTo("webSearch:existingAuth:revoke").length, 1),
-  );
+  await waitFor(() => assert.equal(server.callsTo("webSearch:existingAuth:revoke").length, 1));
   assert.equal(renderedSurface().includes(FINGERPRINT), false);
 });
 
@@ -1115,14 +975,8 @@ test("OpenAI account approval explains when no saved key exists and offers no ap
   });
   await mountSettings();
   const dialog = await openProviderSetup("OpenAI");
-  assert.match(
-    dialog.textContent ?? "",
-    /No saved OpenAI API key is available/u,
-  );
-  assert.equal(
-    within(dialog).queryByRole("button", { name: /Approve/u }),
-    null,
-  );
+  assert.match(dialog.textContent ?? "", /No saved OpenAI API key is available/u);
+  assert.equal(within(dialog).queryByRole("button", { name: /Approve/u }), null);
   assert.equal(
     within(dialog)
       .getByRole("radio", { name: /Use approved OpenAI account/u })
@@ -1137,26 +991,17 @@ test("privacy copy links to Bot and schedule grants without granting access", as
   const privacy = await screen.findByRole("region", {
     name: "Privacy and access",
   });
-  assert.match(
-    privacy.textContent ?? "",
-    /Bots and schedules still require their own explicit/u,
-  );
+  assert.match(privacy.textContent ?? "", /Bots and schedules still require their own explicit/u);
 
-  fireEvent.click(
-    within(privacy).getByRole("button", { name: "Manage Bot grants" }),
-  );
+  fireEvent.click(within(privacy).getByRole("button", { name: "Manage Bot grants" }));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots"));
   assert.deepEqual(server.mutations(), []);
 
   await act(async () => {
     await router.navigate({ to: "/settings" });
   });
-  fireEvent.click(
-    await screen.findByRole("button", { name: "Manage schedule grants" }),
-  );
-  await waitFor(() =>
-    assert.equal(router.state.location.pathname, "/scheduled"),
-  );
+  fireEvent.click(await screen.findByRole("button", { name: "Manage schedule grants" }));
+  await waitFor(() => assert.equal(router.state.location.pathname, "/scheduled"));
 });
 
 test("without Bots, privacy copy and actions mention only schedules", async () => {
@@ -1165,12 +1010,7 @@ test("without Bots, privacy copy and actions mention only schedules", async () =
   const privacy = await screen.findByRole("region", {
     name: "Privacy and access",
   });
-  assert.equal(
-    within(privacy).queryByRole("button", { name: "Manage Bot grants" }),
-    null,
-  );
-  assert.ok(
-    within(privacy).getByRole("button", { name: "Manage schedule grants" }),
-  );
+  assert.equal(within(privacy).queryByRole("button", { name: "Manage Bot grants" }), null);
+  assert.ok(within(privacy).getByRole("button", { name: "Manage schedule grants" }));
   assert.doesNotMatch(privacy.textContent ?? "", /Bots/u);
 });

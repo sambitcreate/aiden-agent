@@ -25,12 +25,13 @@ function safeText(value: string, max = 32_000): string {
 
 function sanitizeMessage(message: Message): Message | null {
   if (message.role === "user") {
-    const text = typeof message.content === "string"
-      ? message.content
-      : message.content
-          .filter((part): part is { type: "text"; text: string } => part.type === "text")
-          .map((part) => part.text)
-          .join("\n\n");
+    const text =
+      typeof message.content === "string"
+        ? message.content
+        : message.content
+            .filter((part): part is { type: "text"; text: string } => part.type === "text")
+            .map((part) => part.text)
+            .join("\n\n");
     return { role: "user", content: safeText(text), timestamp: message.timestamp };
   }
   if (message.role === "assistant") {
@@ -131,7 +132,14 @@ export function buildBtwContext(input: {
       api: input.model.api,
       provider: input.model.provider,
       model: input.model.id,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
       stopReason: "stop" as const,
       timestamp: turn.timestamp,
     },
@@ -153,10 +161,7 @@ export function buildBtwContext(input: {
   });
   return {
     messages: transformed.messages as Message[],
-    trimmed:
-      input.branch.length !== branch.length ||
-      input.retry === true ||
-      transformed.compacted,
+    trimmed: input.branch.length !== branch.length || input.retry === true || transformed.compacted,
   };
 }
 
@@ -178,9 +183,13 @@ export const BTW_CONTINUATION_INSTRUCTION = `This is a quick side question about
  * The final user message of a side question sent on the parent's prefix: the
  * instruction, earlier side questions in this thread and the new question.
  */
-export function btwContinuationPrompt(history: readonly BtwHistoryTurn[], question: string): Message {
+export function btwContinuationPrompt(
+  history: readonly BtwHistoryTurn[],
+  question: string,
+): Message {
   const earlier = boundedHistory(history).map(
-    (turn) => `<side_question>\n${turn.question}\n</side_question>\n<side_answer>\n${turn.answer}\n</side_answer>`,
+    (turn) =>
+      `<side_question>\n${turn.question}\n</side_question>\n<side_answer>\n${turn.answer}\n</side_answer>`,
   );
   const text = [
     BTW_CONTINUATION_INSTRUCTION,

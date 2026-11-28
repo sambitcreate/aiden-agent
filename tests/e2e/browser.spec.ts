@@ -3,27 +3,52 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Page } from "@playwright/test";
-import type { BrowserCommand, BrowserCommandResult, BrowserState } from "../../renderer/shared/browser";
+import type {
+  BrowserCommand,
+  BrowserCommandResult,
+  BrowserState,
+} from "../../renderer/shared/browser";
 import { E2E_WORKSPACE_ID, expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 import { observeNextBrowserMenu } from "./browser-native-menu";
 
 test.use({ workspaceSeed: true });
-type BrowserTestWindow = Window & { aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } } };
+type BrowserTestWindow = Window & {
+  aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+};
 
 async function command(page: Page, input: BrowserCommand): Promise<BrowserCommandResult> {
-  return page.evaluate(async ({ workspaceId, input }) => (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserCommandResult>("browser:command", workspaceId, input), { workspaceId: E2E_WORKSPACE_ID, input });
+  return page.evaluate(
+    async ({ workspaceId, input }) =>
+      (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserCommandResult>(
+        "browser:command",
+        workspaceId,
+        input,
+      ),
+    { workspaceId: E2E_WORKSPACE_ID, input },
+  );
 }
 async function state(page: Page): Promise<BrowserState> {
-  return page.evaluate(async (workspaceId) => (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>("browser:get-state", workspaceId), E2E_WORKSPACE_ID);
+  return page.evaluate(
+    async (workspaceId) =>
+      (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>(
+        "browser:get-state",
+        workspaceId,
+      ),
+    E2E_WORKSPACE_ID,
+  );
 }
 
-test("browser user and automation share a sandboxed page, annotations and isolated profiles", async ({ aiden }, testInfo) => {
+test("browser user and automation share a sandboxed page, annotations and isolated profiles", async ({
+  aiden,
+}, testInfo) => {
   const server = createServer((request, response) => {
     response.writeHead(200, { "content-type": "text/html" });
-    response.end(`<!doctype html><html><head><title>${request.url === "/next" ? "Next page" : "Browser fixture"}</title><style>body{font:18px system-ui;padding:32px}button,input{font:inherit;margin:8px;padding:10px} @media(prefers-color-scheme:dark){body{background:#141414;color:#eee}}</style></head><body><h1>Shared browser fixture</h1><label>Name<input id="name" aria-label="Name"></label><button id="save" onclick="document.querySelector('#result').textContent='Saved '+document.querySelector('#name').value">Save settings</button><p id="result">Ready</p><a href="/next">Next page</a><div id="shadow"></div><script>document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML='<button>Shadow action</button>';</script></body></html>`);
+    response.end(
+      `<!doctype html><html><head><title>${request.url === "/next" ? "Next page" : "Browser fixture"}</title><style>body{font:18px system-ui;padding:32px}button,input{font:inherit;margin:8px;padding:10px} @media(prefers-color-scheme:dark){body{background:#141414;color:#eee}}</style></head><body><h1>Shared browser fixture</h1><label>Name<input id="name" aria-label="Name"></label><button id="save" onclick="document.querySelector('#result').textContent='Saved '+document.querySelector('#name').value">Save settings</button><p id="result">Ready</p><a href="/next">Next page</a><div id="shadow"></div><script>document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML='<button>Shadow action</button>';</script></body></html>`,
+    );
   });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
     const { page } = aiden;
@@ -33,73 +58,169 @@ test("browser user and automation share a sandboxed page, annotations and isolat
     await surface.getByRole("button", { name: "Browser", exact: true }).click();
     const opened = await command(page, { action: "create", url });
     const tabId = opened.state.activeTabId!;
-    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.title).toBe("Browser fixture");
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.title)
+      .toBe("Browser fixture");
     await expect(surface.getByRole("button", { name: /Annotate/ })).toBeVisible();
 
-    const sandbox = await command(page, { action: "evaluate", tabId, expression: "({ bridge: typeof window.aidenAPI, node: typeof process, require: typeof require })" });
+    const sandbox = await command(page, {
+      action: "evaluate",
+      tabId,
+      expression:
+        "({ bridge: typeof window.aidenAPI, node: typeof process, require: typeof require })",
+    });
     expect(sandbox.value).toEqual({ bridge: "undefined", node: "undefined", require: "undefined" });
     await command(page, { action: "type", tabId, selector: "#name", text: "Aiden", clear: true });
     await command(page, { action: "click", tabId, selector: "#save" });
     const snapshot = await command(page, { action: "snapshot", tabId, includeImage: true });
     expect(snapshot.snapshot?.text).toContain("Saved Aiden");
-    expect(snapshot.snapshot?.elements.some(element => element.text.includes("Save settings"))).toBe(true);
+    expect(
+      snapshot.snapshot?.elements.some((element) => element.text.includes("Save settings")),
+    ).toBe(true);
     expect(snapshot.snapshot?.image?.data.length).toBeGreaterThan(100);
     expect(snapshot.snapshot?.accessibilityTree).toBeDefined();
-    const originalColor = (await command(page, { action: "evaluate", tabId, expression: "getComputedStyle(document.querySelector('#save')).color" })).value;
-    const styled = await command(page, { action: "annotation_preview", tabId, changes: [
-      { ref: "save", selector: "#save", styles: { color: "rgb(12, 34, 56)", "border-radius": "14px" } },
-      { ref: "name", selector: "#name", styles: { color: "rgb(78, 90, 12)" } },
-    ] });
+    const originalColor = (
+      await command(page, {
+        action: "evaluate",
+        tabId,
+        expression: "getComputedStyle(document.querySelector('#save')).color",
+      })
+    ).value;
+    const styled = await command(page, {
+      action: "annotation_preview",
+      tabId,
+      changes: [
+        {
+          ref: "save",
+          selector: "#save",
+          styles: { color: "rgb(12, 34, 56)", "border-radius": "14px" },
+        },
+        { ref: "name", selector: "#name", styles: { color: "rgb(78, 90, 12)" } },
+      ],
+    });
     expect(styled.elementStyleChanges).toHaveLength(2);
     expect(styled.elementStyleChanges?.[0].changes.color.previous).toBe(originalColor);
-    expect((await command(page, { action: "evaluate", tabId, expression: "getComputedStyle(document.querySelector('#save')).color" })).value).toBe("rgb(12, 34, 56)");
+    expect(
+      (
+        await command(page, {
+          action: "evaluate",
+          tabId,
+          expression: "getComputedStyle(document.querySelector('#save')).color",
+        })
+      ).value,
+    ).toBe("rgb(12, 34, 56)");
     await command(page, { action: "annotation_reset", tabId });
-    expect((await command(page, { action: "evaluate", tabId, expression: "getComputedStyle(document.querySelector('#save')).color" })).value).toBe(originalColor);
+    expect(
+      (
+        await command(page, {
+          action: "evaluate",
+          tabId,
+          expression: "getComputedStyle(document.querySelector('#save')).color",
+        })
+      ).value,
+    ).toBe(originalColor);
 
     await command(page, { action: "click", tabId, locator: "role=button[name='Shadow action']" });
     // Covered shadow-root targets must never turn into an accidental click on an overlay.
-    await command(page, { action: "evaluate", tabId, expression: "(() => { const cover=document.createElement('div');cover.id='cover';Object.assign(cover.style,{position:'fixed',inset:'0',zIndex:'9999'});document.body.append(cover); })()" });
-    await expect(command(page, { action: "click", tabId, locator: "role=button[name='Shadow action']", timeoutMs: 300 })).rejects.toThrow();
-    await command(page, { action: "evaluate", tabId, expression: "document.querySelector('#cover').remove()" });
+    await command(page, {
+      action: "evaluate",
+      tabId,
+      expression:
+        "(() => { const cover=document.createElement('div');cover.id='cover';Object.assign(cover.style,{position:'fixed',inset:'0',zIndex:'9999'});document.body.append(cover); })()",
+    });
+    await expect(
+      command(page, {
+        action: "click",
+        tabId,
+        locator: "role=button[name='Shadow action']",
+        timeoutMs: 300,
+      }),
+    ).rejects.toThrow();
+    await command(page, {
+      action: "evaluate",
+      tabId,
+      expression: "document.querySelector('#cover').remove()",
+    });
 
     const draft = page.locator("textarea").first();
     await draft.fill("Existing draft.");
-    await command(page, { action: "evaluate", tabId, expression: "globalThis.pickSideEffects=0;document.querySelector('#save').onpointerdown=()=>globalThis.pickSideEffects++;document.querySelector('#save').onmousedown=()=>globalThis.pickSideEffects++" });
+    await command(page, {
+      action: "evaluate",
+      tabId,
+      expression:
+        "globalThis.pickSideEffects=0;document.querySelector('#save').onpointerdown=()=>globalThis.pickSideEffects++;document.querySelector('#save').onmousedown=()=>globalThis.pickSideEffects++",
+    });
     // A native-focused guest forwards the shortcut to the host, then the live picker
     // returns the chosen element and selected text to the actual annotation editor.
     await aiden.app.evaluate(({ webContents }, guestUrl) => {
-      const guest = webContents.getAllWebContents().find(contents => contents.getURL().startsWith(guestUrl));
+      const guest = webContents
+        .getAllWebContents()
+        .find((contents) => contents.getURL().startsWith(guestUrl));
       if (!guest) throw new Error("Browser guest missing");
       guest.focus();
       guest.sendInputEvent({ type: "keyDown", keyCode: ".", modifiers: ["meta"] });
       guest.sendInputEvent({ type: "keyUp", keyCode: ".", modifiers: ["meta"] });
     }, url);
-    await expect.poll(() => aiden.app.evaluate(async ({ webContents }, guestUrl) => {
-      const guest = webContents.getAllWebContents().find(contents => contents.getURL().startsWith(guestUrl));
-      return guest?.executeJavaScript("typeof globalThis.__aidenPickerCancel === 'function'");
-    }, url)).toBe(true);
+    await expect
+      .poll(() =>
+        aiden.app.evaluate(async ({ webContents }, guestUrl) => {
+          const guest = webContents
+            .getAllWebContents()
+            .find((contents) => contents.getURL().startsWith(guestUrl));
+          return guest?.executeJavaScript("typeof globalThis.__aidenPickerCancel === 'function'");
+        }, url),
+      )
+      .toBe(true);
     await aiden.app.evaluate(async ({ webContents }, guestUrl) => {
-      const guest = webContents.getAllWebContents().find(contents => contents.getURL().startsWith(guestUrl))!;
-      const point = await guest.executeJavaScript("(() => { const el=document.querySelector('#save');const range=document.createRange();range.selectNodeContents(el);getSelection().removeAllRanges();getSelection().addRange(range);const r=el.getBoundingClientRect();return { x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2) }; })()");
+      const guest = webContents
+        .getAllWebContents()
+        .find((contents) => contents.getURL().startsWith(guestUrl))!;
+      const point = await guest.executeJavaScript(
+        "(() => { const el=document.querySelector('#save');const range=document.createRange();range.selectNodeContents(el);getSelection().removeAllRanges();getSelection().addRange(range);const r=el.getBoundingClientRect();return { x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2) }; })()",
+      );
       guest.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, ...point });
       guest.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, ...point });
     }, url);
     await expect(page.getByRole("region", { name: "Annotate browser" })).toBeVisible();
     // Keyboard focus moves into the editor so its controls and Escape are reachable.
-    await expect(page.getByRole("region", { name: "Annotate browser" }).getByRole("button", { name: "Element" })).toBeFocused();
-    await expect.poll(() => aiden.app.evaluate(({ BrowserWindow }, guestUrl) => {
-      const guests = BrowserWindow.getAllWindows().flatMap(window => window.contentView.children)
-        .filter(child => "webContents" in child && (child as Electron.WebContentsView).webContents.getURL().startsWith(guestUrl));
-      return { attached: guests.length > 0, visible: guests.some(guest => guest.getVisible()) };
-    }, url)).toEqual({ attached: process.platform === "linux", visible: false });
+    await expect(
+      page
+        .getByRole("region", { name: "Annotate browser" })
+        .getByRole("button", { name: "Element" }),
+    ).toBeFocused();
+    await expect
+      .poll(() =>
+        aiden.app.evaluate(({ BrowserWindow }, guestUrl) => {
+          const guests = BrowserWindow.getAllWindows()
+            .flatMap((window) => window.contentView.children)
+            .filter(
+              (child) =>
+                "webContents" in child &&
+                (child as Electron.WebContentsView).webContents.getURL().startsWith(guestUrl),
+            );
+          return {
+            attached: guests.length > 0,
+            visible: guests.some((guest) => guest.getVisible()),
+          };
+        }, url),
+      )
+      .toEqual({ attached: process.platform === "linux", visible: false });
     // Read the guest directly: a user browser command would interrupt the
     // editor's in-flight style preview and leave Add to chat disabled.
-    expect(await aiden.app.evaluate(({ webContents }, guestUrl) => {
-      const guest = webContents.getAllWebContents().find(contents => contents.getURL().startsWith(guestUrl))!;
-      return guest.executeJavaScript("globalThis.pickSideEffects");
-    }, url)).toBe(0);
-    await page.getByRole("textbox", { name: "Annotation comment" }).fill("Make this button clearer.");
-    await draft.evaluate(input => { (input as HTMLTextAreaElement).readOnly = true; });
+    expect(
+      await aiden.app.evaluate(({ webContents }, guestUrl) => {
+        const guest = webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL().startsWith(guestUrl))!;
+        return guest.executeJavaScript("globalThis.pickSideEffects");
+      }, url),
+    ).toBe(0);
+    await page
+      .getByRole("textbox", { name: "Annotation comment" })
+      .fill("Make this button clearer.");
+    await draft.evaluate((input) => {
+      (input as HTMLTextAreaElement).readOnly = true;
+    });
     // Keep the annotation open while checking the same real pointer action at
     // the default, minimum supported, compact and side-by-side window sizes.
     const addToChat = page.getByRole("button", { name: "Add to chat", exact: true });
@@ -110,9 +231,12 @@ test("browser user and automation share a sandboxed page, annotations and isolat
       [1600, 900, "tools-pinned"],
     ] as const) {
       await page.emulateMedia({ reducedMotion: width === 390 ? "reduce" : "no-preference" });
-      await aiden.app.evaluate(({ BrowserWindow }, size) => {
-        BrowserWindow.getAllWindows()[0].setSize(size.width, size.height);
-      }, { width, height });
+      await aiden.app.evaluate(
+        ({ BrowserWindow }, size) => {
+          BrowserWindow.getAllWindows()[0].setSize(size.width, size.height);
+        },
+        { width, height },
+      );
       await expect(surface).toHaveAttribute("data-surface-mode", mode);
       await addToChat.click();
       await expect(page.getByRole("region", { name: "Annotate browser" })).toBeVisible();
@@ -124,58 +248,124 @@ test("browser user and automation share a sandboxed page, annotations and isolat
       const screenshot = testInfo.outputPath(`annotation-controls-${width}x${height}.png`);
       await page.screenshot({ path: screenshot });
       await testInfo.attach(`annotation-controls-${width}x${height}`, {
-        path: screenshot, contentType: "image/png",
+        path: screenshot,
+        contentType: "image/png",
       });
       await addToChat.focus();
       await expect(addToChat).toBeFocused();
       await page.keyboard.press("Enter");
       await expect(draft).toHaveValue("Existing draft.");
     }
-    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await aiden.app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setSize(1280, 800),
+    );
     // Compact windows collapse the sidebar until the user explicitly reopens it.
     await page.getByRole("button", { name: "Show sidebar", exact: true }).click();
-    await draft.evaluate(input => { (input as HTMLTextAreaElement).readOnly = false; });
-    await page.getByRole("textbox", { name: "Annotation comment" }).press(`${process.platform === "darwin" ? "Meta" : "Control"}+Enter`);
+    await draft.evaluate((input) => {
+      (input as HTMLTextAreaElement).readOnly = false;
+    });
+    await page
+      .getByRole("textbox", { name: "Annotation comment" })
+      .press(`${process.platform === "darwin" ? "Meta" : "Control"}+Enter`);
     await expect(draft).toHaveValue("Existing draft.\n\nMake this button clearer.");
     await expect(page.getByRole("button", { name: "Remove Browser annotation.txt" })).toBeVisible();
 
     await command(page, { action: "navigate", tabId, url: `${url}/next` });
-    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.title).toBe("Next page");
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.title)
+      .toBe("Next page");
     await command(page, { action: "back", tabId });
-    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.title).toBe("Browser fixture");
-    await expect(command(page, { action: "navigate", tabId, url: "file:///etc/passwd" })).rejects.toThrow();
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.title)
+      .toBe("Browser fixture");
+    await expect(
+      command(page, { action: "navigate", tabId, url: "file:///etc/passwd" }),
+    ).rejects.toThrow();
 
-    await command(page, { action: "evaluate", tabId, expression: "document.cookie='shared=default; path=/'" });
+    await command(page, {
+      action: "evaluate",
+      tabId,
+      expression: "document.cookie='shared=default; path=/'",
+    });
     const incognito = await command(page, { action: "create", url, profileId: "incognito" });
     const privateId = incognito.state.activeTabId!;
-    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === privateId)?.loading).toBe(false);
-    expect((await command(page, { action: "evaluate", tabId: privateId, expression: "document.cookie" })).value).not.toContain("shared=default");
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === privateId)?.loading)
+      .toBe(false);
+    expect(
+      (await command(page, { action: "evaluate", tabId: privateId, expression: "document.cookie" }))
+        .value,
+    ).not.toContain("shared=default");
     await command(page, { action: "close", tabId: privateId });
     await command(page, { action: "select", tabId });
 
-    await command(page, { action: "viewport", tabId, viewport: { mode: "responsive", width: 390, height: 844, deviceName: "iPhone 12 Pro" } });
-    expect((await command(page, { action: "evaluate", tabId, expression: "({ width: innerWidth, height: innerHeight })" })).value).toEqual({ width: 390, height: 844 });
+    await command(page, {
+      action: "viewport",
+      tabId,
+      viewport: { mode: "responsive", width: 390, height: 844, deviceName: "iPhone 12 Pro" },
+    });
+    expect(
+      (
+        await command(page, {
+          action: "evaluate",
+          tabId,
+          expression: "({ width: innerWidth, height: innerHeight })",
+        })
+      ).value,
+    ).toEqual({ width: 390, height: 844 });
     await command(page, { action: "appearance", tabId, appearance: "dark" });
-    expect((await command(page, { action: "evaluate", tabId, expression: "matchMedia('(prefers-color-scheme: dark)').matches" })).value).toBe(true);
-    await command(page, { action: "viewport", tabId, viewport: { mode: "responsive", width: 1280, height: 720 } });
+    expect(
+      (
+        await command(page, {
+          action: "evaluate",
+          tabId,
+          expression: "matchMedia('(prefers-color-scheme: dark)').matches",
+        })
+      ).value,
+    ).toBe(true);
+    await command(page, {
+      action: "viewport",
+      tabId,
+      viewport: { mode: "responsive", width: 1280, height: 720 },
+    });
     await command(page, { action: "zoom", tabId, zoom: 1.25 });
-    const wideSnapshot = (await command(page, { action: "snapshot", tabId, includeImage: true })).snapshot!;
-    expect(Math.abs(wideSnapshot.image!.width / wideSnapshot.image!.height - wideSnapshot.tab.viewport.width / wideSnapshot.tab.viewport.height)).toBeLessThan(0.02);
+    const wideSnapshot = (await command(page, { action: "snapshot", tabId, includeImage: true }))
+      .snapshot!;
+    expect(
+      Math.abs(
+        wideSnapshot.image!.width / wideSnapshot.image!.height -
+          wideSnapshot.tab.viewport.width / wideSnapshot.tab.viewport.height,
+      ),
+    ).toBeLessThan(0.02);
     await command(page, { action: "zoom", tabId, zoom: 1 });
-    await command(page, { action: "viewport", tabId, viewport: { mode: "fill", width: 1280, height: 720 } });
+    await command(page, {
+      action: "viewport",
+      tabId,
+      viewport: { mode: "fill", width: 1280, height: 720 },
+    });
 
     await surface.getByRole("button", { name: "New workspace tab" }).click();
     await surface.getByRole("button", { name: "Changes", exact: true }).click();
-    expect((await state(page)).tabs.some(tab => tab.id === tabId)).toBe(true);
-    await surface.getByRole("tablist", { name: "Environment views" }).getByRole("tab", { name: "Browser fixture", exact: true }).click();
-    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(true);
+    expect((await state(page)).tabs.some((tab) => tab.id === tabId)).toBe(true);
+    await surface
+      .getByRole("tablist", { name: "Environment views" })
+      .getByRole("tab", { name: "Browser fixture", exact: true })
+      .click();
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.visible)
+      .toBe(true);
     await page.screenshot({ path: testInfo.outputPath("browser-light.png") });
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Appearance", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Appearance", exact: true })
+      .click();
     await page.getByRole("radio", { name: "Dark", exact: true }).click();
     await expect(page.locator("html")).toHaveClass(/dark/);
     await page.getByRole("button", { name: "Back to app" }).click();
-    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(true);
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.visible)
+      .toBe(true);
     await page.screenshot({ path: testInfo.outputPath("browser-dark.png") });
     const windowsBeforeFloat = aiden.app.windows().length;
     await command(page, { action: "float", tabId, floating: true });
@@ -183,18 +373,22 @@ test("browser user and automation share a sandboxed page, annotations and isolat
     await expect(floating).toBeVisible();
     await page.getByRole("button", { name: "Close environment panel", exact: true }).click();
     await expect(surface).toBeHidden();
-    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(true);
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.visible)
+      .toBe(true);
     expect(aiden.app.windows()).toHaveLength(windowsBeforeFloat);
     await floating.getByRole("button", { name: "New browser tab", exact: true }).click();
     const secondTabId = (await state(page)).activeTabId!;
     expect(secondTabId).not.toBe(tabId);
-    expect((await state(page)).tabs.find(tab => tab.id === secondTabId)?.floating).toBe(true);
-    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(false);
+    expect((await state(page)).tabs.find((tab) => tab.id === secondTabId)?.floating).toBe(true);
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.visible)
+      .toBe(false);
     const inactiveCapture = await command(page, { action: "screenshot", tabId });
     expect(inactiveCapture.image?.mimeType).toBe("image/png");
     expect(inactiveCapture.image?.width).toBeGreaterThan(0);
     expect((await state(page)).activeTabId).toBe(secondTabId);
-    expect((await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(false);
+    expect((await state(page)).tabs.find((tab) => tab.id === tabId)?.visible).toBe(false);
     await floating.getByRole("tab", { name: "Browser fixture", exact: true }).click();
     await expect.poll(async () => (await state(page)).activeTabId).toBe(tabId);
     await expect(floating).toBeVisible();
@@ -204,36 +398,58 @@ test("browser user and automation share a sandboxed page, annotations and isolat
     await floating.getByRole("tab").nth(1).click();
     await expect.poll(async () => (await state(page)).activeTabId).toBe(secondTabId);
     await expect(floating.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
-    await floating.locator(".browser-tab").nth(1).getByRole("button", { name: /^Close / }).click();
+    await floating
+      .locator(".browser-tab")
+      .nth(1)
+      .getByRole("button", { name: /^Close / })
+      .click();
     await expect.poll(async () => (await state(page)).activeTabId).toBe(tabId);
     await expect(floating).toBeVisible();
-    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(true);
-    await expect.poll(async () => {
-      const frame = await floating.boundingBox();
-      const composer = await page.locator('[data-browser-composer-inset="true"]').boundingBox();
-      return Boolean(frame && composer && frame.y + frame.height <= composer.y - 10);
-    }).toBe(true);
-    await expect.poll(async () => {
-      const slot = await floating.locator(".browser-native-slot").boundingBox();
-      const native = await aiden.app.evaluate(({ BrowserWindow }, guestUrl) => {
-        for (const window of BrowserWindow.getAllWindows()) {
-          const view = window.contentView.children.find(child => "webContents" in child && (child as Electron.WebContentsView).webContents.getURL() === new URL(guestUrl).href);
-          if (view) return { ...view.getBounds(), scale: window.webContents.getZoomFactor() };
-        }
-        return null;
-      }, url);
-      if (!slot || !native) return { slot, native };
-      return Object.fromEntries((["x", "y", "width", "height"] as const)
-        .filter(key => Math.abs(native[key] - Math.round(slot[key] * native.scale)) > 1)
-        .map(key => [key, { expected: Math.round(slot[key] * native.scale), actual: native[key], slot, native }]));
-    }).toEqual({});
-    if (process.env.AIDEN_BROWSER_VISUAL_REVIEW === "1") await new Promise(resolve => setTimeout(resolve, 45_000));
-    await floating.getByRole("button", { name: "Return browser to Environment", exact: true }).click();
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.visible)
+      .toBe(true);
+    await expect
+      .poll(async () => {
+        const frame = await floating.boundingBox();
+        const composer = await page.locator('[data-browser-composer-inset="true"]').boundingBox();
+        return Boolean(frame && composer && frame.y + frame.height <= composer.y - 10);
+      })
+      .toBe(true);
+    await expect
+      .poll(async () => {
+        const slot = await floating.locator(".browser-native-slot").boundingBox();
+        const native = await aiden.app.evaluate(({ BrowserWindow }, guestUrl) => {
+          for (const window of BrowserWindow.getAllWindows()) {
+            const view = window.contentView.children.find(
+              (child) =>
+                "webContents" in child &&
+                (child as Electron.WebContentsView).webContents.getURL() === new URL(guestUrl).href,
+            );
+            if (view) return { ...view.getBounds(), scale: window.webContents.getZoomFactor() };
+          }
+          return null;
+        }, url);
+        if (!slot || !native) return { slot, native };
+        return Object.fromEntries(
+          (["x", "y", "width", "height"] as const)
+            .filter((key) => Math.abs(native[key] - Math.round(slot[key] * native.scale)) > 1)
+            .map((key) => [
+              key,
+              { expected: Math.round(slot[key] * native.scale), actual: native[key], slot, native },
+            ]),
+        );
+      })
+      .toEqual({});
+    if (process.env.AIDEN_BROWSER_VISUAL_REVIEW === "1")
+      await new Promise((resolve) => setTimeout(resolve, 45_000));
+    await floating
+      .getByRole("button", { name: "Return browser to Environment", exact: true })
+      .click();
     await expect(surface).toBeVisible();
     await command(page, { action: "close", tabId });
   } finally {
     server.closeAllConnections();
-    await new Promise<void>(resolve => server.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 
@@ -242,29 +458,42 @@ for (const button of ["Browser menu", "Choose browser profile", "Open tabs"]) {
     const { app, page } = aiden;
     await finishLmStudioOnboarding(page);
     const name = "Animated browser fixture";
-    await writeFile(path.join(aiden.workspaceDir, "canvas.html"), `<!doctype html><title>${name}</title>
+    await writeFile(
+      path.join(aiden.workspaceDir, "canvas.html"),
+      `<!doctype html><title>${name}</title>
       <canvas width="80" height="80"></canvas><script>
         const ctx = document.querySelector('canvas').getContext('2d');
         let frames = 0;
         function draw() { ctx.fillStyle = 'hsl(' + ++frames % 360 + ' 100% 50%)'; ctx.fillRect(0, 0, 80, 80); requestAnimationFrame(draw); }
         draw();
-      </script>`);
+      </script>`,
+    );
     const tabId = (await command(page, { action: "open_file", path: "canvas.html" })).tabId!;
-    await command(page, { action: "viewport", tabId, viewport: { mode: "responsive", width: 1280, height: 720 } });
+    await command(page, {
+      action: "viewport",
+      tabId,
+      viewport: { mode: "responsive", width: 1280, height: 720 },
+    });
     const surface = page.getByRole("complementary", { name: "Environment work surface" });
-    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(true);
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.visible)
+      .toBe(true);
 
     // The guest itself must remain attached, visible and painting while the actual OS popup is up.
-    const paintedFrame = () => app.evaluate(async ({ BrowserWindow }, title) => {
-      for (const window of BrowserWindow.getAllWindows()) {
-        for (const view of window.contentView.children) {
-          if (!view.getVisible() || !("webContents" in view)) continue;
-          const guest = (view as Electron.WebContentsView).webContents;
-          if (guest.getTitle() === title) return await guest.executeJavaScript("document.visibilityState === 'visible' ? frames : 0") as number;
+    const paintedFrame = () =>
+      app.evaluate(async ({ BrowserWindow }, title) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          for (const view of window.contentView.children) {
+            if (!view.getVisible() || !("webContents" in view)) continue;
+            const guest = (view as Electron.WebContentsView).webContents;
+            if (guest.getTitle() === title)
+              return (await guest.executeJavaScript(
+                "document.visibilityState === 'visible' ? frames : 0",
+              )) as number;
+          }
         }
-      }
-      return 0;
-    }, name);
+        return 0;
+      }, name);
     const menu = await observeNextBrowserMenu(app);
     const trigger = surface.getByRole("button", { name: button, exact: true });
     await trigger.focus();
@@ -277,11 +506,16 @@ for (const button of ["Browser menu", "Choose browser profile", "Open tabs"]) {
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
     await expect(trigger).toBeFocused();
     if (button !== "Browser menu") return;
-    expect((await state(page)).tabs.find(tab => tab.id === tabId)?.zoom).toBe(1.1);
+    expect((await state(page)).tabs.find((tab) => tab.id === tabId)?.zoom).toBe(1.1);
     const replacement = (await command(page, { action: "create" })).tabId!;
-    const stale = await command(page, { action: "present", tabId, visible: true, bounds: { x: 10, y: 10, width: 200, height: 200 } });
+    const stale = await command(page, {
+      action: "present",
+      tabId,
+      visible: true,
+      bounds: { x: 10, y: 10, width: 200, height: 200 },
+    });
     expect(stale.state.activeTabId).toBe(replacement);
-    expect(stale.state.tabs.find(tab => tab.id === tabId)?.visible).toBe(false);
+    expect(stale.state.tabs.find((tab) => tab.id === tabId)?.visible).toBe(false);
     expect(await paintedFrame()).toBe(0);
     await command(page, { action: "select", tabId });
     await expect.poll(paintedFrame).toBeGreaterThan(0);
@@ -292,31 +526,64 @@ test("workspace documents and app links open in the shared browser", async ({ ai
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await mkdir(path.join(aiden.workspaceDir, "docs"), { recursive: true });
-  await writeFile(path.join(aiden.workspaceDir, "docs", "preview.html"), '<!doctype html><title>Workspace preview</title><link rel="stylesheet" href="/preview.css"><h1>Local document</h1>');
-  await writeFile(path.join(aiden.workspaceDir, "preview.css"), 'h1 { color: rgb(12, 34, 56); }');
+  await writeFile(
+    path.join(aiden.workspaceDir, "docs", "preview.html"),
+    '<!doctype html><title>Workspace preview</title><link rel="stylesheet" href="/preview.css"><h1>Local document</h1>',
+  );
+  await writeFile(path.join(aiden.workspaceDir, "preview.css"), "h1 { color: rgb(12, 34, 56); }");
   const opened = await command(page, { action: "open_file", path: "docs/preview.html" });
   const tabId = opened.state.activeTabId!;
-  await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.title).toBe("Workspace preview");
-  expect((await command(page, { action: "evaluate", tabId, expression: "getComputedStyle(document.querySelector('h1')).color" })).value).toBe("rgb(12, 34, 56)");
+  await expect
+    .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.title)
+    .toBe("Workspace preview");
+  expect(
+    (
+      await command(page, {
+        action: "evaluate",
+        tabId,
+        expression: "getComputedStyle(document.querySelector('h1')).color",
+      })
+    ).value,
+  ).toBe("rgb(12, 34, 56)");
   const localSnapshot = await command(page, { action: "snapshot", tabId, includeImage: false });
   expect(JSON.stringify(localSnapshot)).not.toContain("__aiden_preview");
   await command(page, { action: "defaults", defaults: { linkOpening: "browser" } });
-  const targetUrl = (await state(page)).tabs.find(tab => tab.id === tabId)!.url;
-  await page.evaluate(url => { const a=document.createElement("a");a.href=url;a.textContent="Browser routing fixture";document.body.append(a); }, targetUrl);
+  const targetUrl = (await state(page)).tabs.find((tab) => tab.id === tabId)!.url;
+  await page.evaluate((url) => {
+    const a = document.createElement("a");
+    a.href = url;
+    a.textContent = "Browser routing fixture";
+    document.body.append(a);
+  }, targetUrl);
   await page.getByRole("link", { name: "Browser routing fixture" }).click();
   // The link points at the already-open tab's own URL: open_link reuses that tab
   // rather than opening a duplicate (per the link-opening spec's tab-reuse rule).
   await expect.poll(async () => (await state(page)).tabs.length).toBe(1);
   await expect(command(page, { action: "open_file", path: "../../etc/passwd" })).rejects.toThrow();
   const pdfBytes = await aiden.app.evaluate(async ({ webContents }) => {
-    const guest = webContents.getAllWebContents().find(contents => contents.getURL().includes("/docs/preview.html"));
+    const guest = webContents
+      .getAllWebContents()
+      .find((contents) => contents.getURL().includes("/docs/preview.html"));
     if (!guest) throw new Error("Local document guest missing");
     return Array.from(await guest.printToPDF({ pageSize: "A4" }));
   });
   await writeFile(path.join(aiden.workspaceDir, "preview.pdf"), Buffer.from(pdfBytes));
   const pdf = await command(page, { action: "open_file", path: "preview.pdf" });
-  await expect.poll(async () => (await command(page, { action: "evaluate", tabId: pdf.state.activeTabId!, expression: "document.contentType === 'application/pdf' || Boolean(document.querySelector('embed[type=\"application/pdf\"]'))" })).value).toBe(true);
-  for (const tab of (await state(page)).tabs) await command(page, { action: "close", tabId: tab.id });
+  await expect
+    .poll(
+      async () =>
+        (
+          await command(page, {
+            action: "evaluate",
+            tabId: pdf.state.activeTabId!,
+            expression:
+              "document.contentType === 'application/pdf' || Boolean(document.querySelector('embed[type=\"application/pdf\"]'))",
+          })
+        ).value,
+    )
+    .toBe(true);
+  for (const tab of (await state(page)).tabs)
+    await command(page, { action: "close", tabId: tab.id });
   await command(page, { action: "agent_access", access: "off" });
   expect((await state(page)).agentAccessAllowed).toBe(false);
   const relaunched = await aiden.relaunch();
@@ -352,14 +619,16 @@ test("first link click asks, remembers Aiden, then reuses the tab", async ({ aid
   expect((await state(relaunched)).defaults.linkOpening).toBe("browser");
 });
 
-test("loopback links open in Aiden with no prompt even when the preference is external", async ({ aiden }) => {
+test("loopback links open in Aiden with no prompt even when the preference is external", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html" });
     response.end("<!doctype html><title>Loopback fixture</title><h1>Loopback</h1>");
   });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   try {
     await command(page, { action: "defaults", defaults: { linkOpening: "external" } });
@@ -375,21 +644,35 @@ test("loopback links open in Aiden with no prompt even when the preference is ex
     await expect.poll(async () => (await state(page)).tabs.length).toBe(before + 1);
   } finally {
     server.closeAllConnections();
-    await new Promise<void>(resolve => server.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 
-test("direct user document links discover static sidecars without widening agent file grants", async ({ aiden }) => {
+test("direct user document links discover static sidecars without widening agent file grants", async ({
+  aiden,
+}) => {
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
   const folder = path.join(aiden.workspaceDir, "user-preview");
   await mkdir(folder, { recursive: true });
-  await writeFile(path.join(folder, "index.html"), '<!doctype html><title>User resource preview</title><link rel="stylesheet" href="./style.css"><script type="module" src="./main.js"></script><h1>Local resource graph</h1>');
-  await writeFile(path.join(folder, "style.css"), '@import "./colors.css"; h1 { color: var(--preview-color); }');
-  await writeFile(path.join(folder, "colors.css"), ':root { --preview-color: rgb(12, 34, 56); }');
-  await writeFile(path.join(folder, "main.js"), 'import { message } from "./message.js"; window.previewMessage = message;');
-  await writeFile(path.join(folder, "message.js"), 'export const message = "static module loaded";');
-  await writeFile(path.join(folder, "unrelated.js"), 'PRIVATE_UNDECLARED_SIBLING');
+  await writeFile(
+    path.join(folder, "index.html"),
+    '<!doctype html><title>User resource preview</title><link rel="stylesheet" href="./style.css"><script type="module" src="./main.js"></script><h1>Local resource graph</h1>',
+  );
+  await writeFile(
+    path.join(folder, "style.css"),
+    '@import "./colors.css"; h1 { color: var(--preview-color); }',
+  );
+  await writeFile(path.join(folder, "colors.css"), ":root { --preview-color: rgb(12, 34, 56); }");
+  await writeFile(
+    path.join(folder, "main.js"),
+    'import { message } from "./message.js"; window.previewMessage = message;',
+  );
+  await writeFile(
+    path.join(folder, "message.js"),
+    'export const message = "static module loaded";',
+  );
+  await writeFile(path.join(folder, "unrelated.js"), "PRIVATE_UNDECLARED_SIBLING");
   // Exercise the app's real local-link handler, which supplies only the path,
   // just like Files → Open in Browser and terminal document links.
   await page.evaluate(() => {
@@ -401,25 +684,51 @@ test("direct user document links discover static sidecars without widening agent
   await page.getByRole("link", { name: "Open local resource preview" }).click();
   await expect.poll(async () => (await state(page)).tabs.length).toBe(1);
   const userTab = (await state(page)).tabs[0]!;
-  const content = async (tabId: string) => (await command(page, { action: "evaluate", tabId,
-    expression: "(() => { const heading=document.querySelector('h1'); return heading ? {color:getComputedStyle(heading).color,message:window.previewMessage??null} : null; })()" })).value;
-  await expect.poll(() => content(userTab.id)).toEqual({ color: "rgb(12, 34, 56)", message: "static module loaded" });
-  expect((await command(page, { action: "evaluate", tabId: userTab.id,
-    expression: "fetch('./unrelated.js').then(async response=>({status:response.status,text:await response.text()}))" })).value)
-    .toMatchObject({ status: 403 });
+  const content = async (tabId: string) =>
+    (
+      await command(page, {
+        action: "evaluate",
+        tabId,
+        expression:
+          "(() => { const heading=document.querySelector('h1'); return heading ? {color:getComputedStyle(heading).color,message:window.previewMessage??null} : null; })()",
+      })
+    ).value;
+  await expect
+    .poll(() => content(userTab.id))
+    .toEqual({ color: "rgb(12, 34, 56)", message: "static module loaded" });
+  expect(
+    (
+      await command(page, {
+        action: "evaluate",
+        tabId: userTab.id,
+        expression:
+          "fetch('./unrelated.js').then(async response=>({status:response.status,text:await response.text()}))",
+      })
+    ).value,
+  ).toMatchObject({ status: 403 });
 
   await page.getByRole("button", { name: "Close environment panel", exact: true }).click();
-  const prompt = "Strict local browser grant scenario: open user-preview/index.html without declaring assets.";
-  const scenario = lmStudio.enqueueToolScenario!({ prompt, calls: [
-    { name: "browser", arguments: {} },
-    { name: "browser_open", arguments: { path: "user-preview/index.html", reuseExistingTab: false } },
-  ], finalText: "The strict local preview is open." });
+  const prompt =
+    "Strict local browser grant scenario: open user-preview/index.html without declaring assets.";
+  const scenario = lmStudio.enqueueToolScenario!({
+    prompt,
+    calls: [
+      { name: "browser", arguments: {} },
+      {
+        name: "browser_open",
+        arguments: { path: "user-preview/index.html", reuseExistingTab: false },
+      },
+    ],
+    finalText: "The strict local preview is open.",
+  });
   await page.locator("textarea").first().fill(prompt);
   await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.getByText("The strict local preview is open.", { exact: true }).first()).toBeVisible({ timeout: 45_000 });
+  await expect(
+    page.getByText("The strict local preview is open.", { exact: true }).first(),
+  ).toBeVisible({ timeout: 45_000 });
   expect(scenario.error).toBeUndefined();
   expect(scenario.completed).toBe(true);
-  const agentTab = (await state(page)).tabs.find(tab => tab.id !== userTab.id)!;
+  const agentTab = (await state(page)).tabs.find((tab) => tab.id !== userTab.id)!;
   expect(new URL(agentTab.url).origin).not.toBe(new URL(userTab.url).origin);
   expect(await content(agentTab.id)).toEqual({ color: "rgb(0, 0, 0)", message: null });
   await command(page, { action: "close", tabId: agentTab.id });
@@ -431,43 +740,60 @@ test("file links in an agent reply open in the Aiden browser and Files", async (
   await finishLmStudioOnboarding(page);
   const folder = path.join(aiden.workspaceDir, "thermostat");
   await mkdir(folder, { recursive: true });
-  await writeFile(path.join(folder, "index.html"), '<!doctype html><title>Thermostat preview</title><h1>Thermostat</h1>');
+  await writeFile(
+    path.join(folder, "index.html"),
+    "<!doctype html><title>Thermostat preview</title><h1>Thermostat</h1>",
+  );
   await writeFile(path.join(folder, "style.css"), "h1 { color: tomato; }");
   // Agents write file:// URLs, workspace-relative paths, and folder links.
   const indexUrl = new URL(`file://${path.join(folder, "index.html")}`).href;
   const prompt = "Reply with links to the thermostat files.";
-  const scenario = lmStudio.enqueueToolScenario!({ prompt, calls: [],
-    finalText: `Files: [index.html](${indexUrl}), [style.css](thermostat/style.css) and [the folder](thermostat/).` });
+  const scenario = lmStudio.enqueueToolScenario!({
+    prompt,
+    calls: [],
+    finalText: `Files: [index.html](${indexUrl}), [style.css](thermostat/style.css) and [the folder](thermostat/).`,
+  });
   await page.locator("textarea").first().fill(prompt);
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.getByRole("link", { name: "index.html" })).toBeVisible({ timeout: 45_000 });
   expect(scenario.error).toBeUndefined();
 
   await page.getByRole("link", { name: "index.html" }).click();
-  await expect.poll(async () => (await state(page)).tabs.map((tab) => tab.title)).toContain("Thermostat preview");
+  await expect
+    .poll(async () => (await state(page)).tabs.map((tab) => tab.title))
+    .toContain("Thermostat preview");
   // The floating panel covers the transcript in the test window; close it before each next link.
-  const closePanel = () => page.getByRole("button", { name: "Close environment panel", exact: true }).click();
+  const closePanel = () =>
+    page.getByRole("button", { name: "Close environment panel", exact: true }).click();
   await closePanel();
 
   // The folder first: opening style.css would expand its parent on its own.
   await page.getByRole("link", { name: "the folder" }).click();
-  const folderButton = page.getByRole("region", { name: "Workspace files" }).getByRole("button", { name: "thermostat", exact: true });
+  const folderButton = page
+    .getByRole("region", { name: "Workspace files" })
+    .getByRole("button", { name: "thermostat", exact: true });
   await expect(folderButton).toHaveAttribute("aria-expanded", "true");
   await expect(folderButton).toBeFocused();
   await closePanel();
 
   await page.getByRole("link", { name: "style.css" }).click();
-  await expect(page.getByRole("textbox", { name: "Edit thermostat/style.css" })).toHaveValue("h1 { color: tomato; }");
+  await expect(page.getByRole("textbox", { name: "Edit thermostat/style.css" })).toHaveValue(
+    "h1 { color: tomato; }",
+  );
 });
 
-test("browser recording produces a real bounded MP4 that every client can play", async ({ aiden }) => {
+test("browser recording produces a real bounded MP4 that every client can play", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   const opened = await command(page, { action: "create" });
   const tabId = opened.state.activeTabId!;
   for (let cycle = 0; cycle < 3; cycle++) {
     await command(page, { action: "record_start", tabId, fps: 10 });
-    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.recording).toBe(true);
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.recording)
+      .toBe(true);
     const stopped = await command(page, { action: "record_stop", tabId });
     // H.264 MP4 plays on the phones as well as here; WebM is only the fallback.
     expect(stopped.recording?.mimeType).toBe("video/mp4");
@@ -477,12 +803,25 @@ test("browser recording produces a real bounded MP4 that every client can play",
     expect(stopped.recording!.sizeBytes).toBe(bytes.length);
     const decoded = await page.evaluate(async (base64) => {
       const video = document.createElement("video");
-      const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(base64), character => character.charCodeAt(0))], { type: "video/mp4" }));
+      const url = URL.createObjectURL(
+        new Blob([Uint8Array.from(atob(base64), (character) => character.charCodeAt(0))], {
+          type: "video/mp4",
+        }),
+      );
       try {
         return await new Promise<{ width: number; height: number }>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error("Recorded MP4 did not decode a video frame.")), 8_000);
-          video.onloadeddata = () => { clearTimeout(timer); resolve({ width: video.videoWidth, height: video.videoHeight }); };
-          video.onerror = () => { clearTimeout(timer); reject(new Error(video.error?.message || "Recorded MP4 could not be decoded.")); };
+          const timer = setTimeout(
+            () => reject(new Error("Recorded MP4 did not decode a video frame.")),
+            8_000,
+          );
+          video.onloadeddata = () => {
+            clearTimeout(timer);
+            resolve({ width: video.videoWidth, height: video.videoHeight });
+          };
+          video.onerror = () => {
+            clearTimeout(timer);
+            reject(new Error(video.error?.message || "Recorded MP4 could not be decoded."));
+          };
           video.src = url;
           video.load();
         });
@@ -503,17 +842,26 @@ test("an agent's browser recording shows in the chat and plays there", async ({ 
   await finishLmStudioOnboarding(page);
   const folder = path.join(aiden.workspaceDir, "recorded");
   await mkdir(folder, { recursive: true });
-  await writeFile(path.join(folder, "index.html"), "<!doctype html><title>Recorded page</title><h1>Recorded</h1>");
+  await writeFile(
+    path.join(folder, "index.html"),
+    "<!doctype html><title>Recorded page</title><h1>Recorded</h1>",
+  );
   const prompt = "Record the recorded page for me.";
-  const scenario = lmStudio.enqueueToolScenario!({ prompt, calls: [
-    { name: "browser", arguments: {} },
-    { name: "browser_open", arguments: { path: "recorded/index.html", reuseExistingTab: false } },
-    { name: "browser_recording_start", arguments: {} },
-    { name: "browser_recording_stop", arguments: {} },
-  ], finalText: "Here is the recording." });
+  const scenario = lmStudio.enqueueToolScenario!({
+    prompt,
+    calls: [
+      { name: "browser", arguments: {} },
+      { name: "browser_open", arguments: { path: "recorded/index.html", reuseExistingTab: false } },
+      { name: "browser_recording_start", arguments: {} },
+      { name: "browser_recording_stop", arguments: {} },
+    ],
+    finalText: "Here is the recording.",
+  });
   await page.locator("textarea").first().fill(prompt);
   await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.getByText("Here is the recording.", { exact: true }).first()).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByText("Here is the recording.", { exact: true }).first()).toBeVisible({
+    timeout: 45_000,
+  });
   expect(scenario.error).toBeUndefined();
   const panelClose = page.getByRole("button", { name: "Close environment panel", exact: true });
   if (await panelClose.isVisible()) await panelClose.click();
@@ -525,7 +873,11 @@ test("an agent's browser recording shows in the chat and plays there", async ({ 
   const video = card.locator("video");
   await expect(video).toBeVisible();
   // The card hands the player this Mac's own MP4, and it decodes a frame.
-  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.videoWidth), { timeout: 10_000 }).toBeGreaterThan(0);
+  await expect
+    .poll(() => video.evaluate((element: HTMLVideoElement) => element.videoWidth), {
+      timeout: 10_000,
+    })
+    .toBeGreaterThan(0);
 });
 
 test("guest identity headers match the renderer's navigator.userAgentData", async ({ aiden }) => {
@@ -534,32 +886,48 @@ test("guest identity headers match the renderer's navigator.userAgentData", asyn
     // /favicon.ico is fetched by Aiden's own tab strip, not by the guest page.
     if (request.url === "/" || request.url === "/pixel") seen.push(request.headers);
     response.writeHead(200, { "content-type": "text/html" });
-    response.end("<!doctype html><title>Identity fixture</title><img src=\"/pixel\">");
+    response.end('<!doctype html><title>Identity fixture</title><img src="/pixel">');
   });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   try {
     const { page } = aiden;
     await finishLmStudioOnboarding(page);
     const opened = await command(page, { action: "create", url });
     const tabId = opened.state.activeTabId!;
-    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.title).toBe("Identity fixture");
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.title)
+      .toBe("Identity fixture");
     await expect.poll(() => seen.length).toBeGreaterThanOrEqual(2);
-    const renderer = (await command(page, {
-      action: "evaluate",
-      tabId,
-      expression: "({ userAgent: navigator.userAgent, brands: navigator.userAgentData.brands.map(({ brand, version }) => ({ brand, version })), mobile: navigator.userAgentData.mobile, platform: navigator.userAgentData.platform })",
-    })).value as { userAgent: string; brands: Array<{ brand: string; version: string }>; mobile: boolean; platform: string };
+    const renderer = (
+      await command(page, {
+        action: "evaluate",
+        tabId,
+        expression:
+          "({ userAgent: navigator.userAgent, brands: navigator.userAgentData.brands.map(({ brand, version }) => ({ brand, version })), mobile: navigator.userAgentData.mobile, platform: navigator.userAgentData.platform })",
+      })
+    ).value as {
+      userAgent: string;
+      brands: Array<{ brand: string; version: string }>;
+      mobile: boolean;
+      platform: string;
+    };
     expect(renderer.userAgent).not.toMatch(/Electron|Aiden/iu);
     expect(renderer.brands.map(({ brand }) => brand)).not.toContain("Electron");
-    const expectedBrands = renderer.brands.map(({ brand, version }) => `"${brand}";v="${version}"`).join(", ");
+    const expectedBrands = renderer.brands
+      .map(({ brand, version }) => `"${brand}";v="${version}"`)
+      .join(", ");
     // Document and subresource requests carry the identity the page's JavaScript sees.
     for (const headers of seen) {
       expect(headers["user-agent"]).toBe(renderer.userAgent);
       expect(headers["sec-ch-ua"]).toBe(expectedBrands);
       expect(headers["sec-ch-ua-mobile"]).toBe(renderer.mobile ? "?1" : "?0");
       expect(headers["sec-ch-ua-platform"]).toBe(`"${renderer.platform}"`);
-      expect(Object.keys(headers).filter(name => name.startsWith("sec-ch-ua")).sort()).toEqual(["sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"]);
+      expect(
+        Object.keys(headers)
+          .filter((name) => name.startsWith("sec-ch-ua"))
+          .sort(),
+      ).toEqual(["sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"]);
     }
     await command(page, { action: "close", tabId });
   } finally {
@@ -567,25 +935,38 @@ test("guest identity headers match the renderer's navigator.userAgentData", asyn
   }
 });
 
-test("deleting a browser profile asks first, and a failure shows inside Browser settings", async ({ aiden }) => {
+test("deleting a browser profile asks first, and a failure shows inside Browser settings", async ({
+  aiden,
+}) => {
   const { page, app } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Show Environment" }).click();
   const surface = page.getByRole("complementary", { name: "Environment work surface" });
   await surface.getByRole("button", { name: "Browser", exact: true }).click();
   await command(page, { action: "profile_create", name: "Work" });
-  const hasWork = async () => (await state(page)).profiles.some(profile => profile.name === "Work");
+  const hasWork = async () =>
+    (await state(page)).profiles.some((profile) => profile.name === "Work");
   await expect.poll(hasWork).toBe(true);
 
   await app.evaluate(({ ipcMain }) => {
     const flags = globalThis as unknown as { failNextProfileDelete?: boolean };
     flags.failNextProfileDelete = true;
-    const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown> })._invokeHandlers;
+    const handlers = (
+      ipcMain as unknown as {
+        _invokeHandlers: Map<
+          string,
+          (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown
+        >;
+      }
+    )._invokeHandlers;
     const original = handlers.get("browser:command");
     if (!original) throw new Error("browser:command is not registered");
     ipcMain.removeHandler("browser:command");
     ipcMain.handle("browser:command", (event, ...args) => {
-      if (flags.failNextProfileDelete && (args[1] as { action?: string } | undefined)?.action === "profile_delete") {
+      if (
+        flags.failNextProfileDelete &&
+        (args[1] as { action?: string } | undefined)?.action === "profile_delete"
+      ) {
         flags.failNextProfileDelete = false;
         throw new Error("The Work profile is still in use.");
       }

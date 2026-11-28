@@ -34,12 +34,18 @@ export function registerLocalRunIpc(): void {
     observers: localRunObservers,
     stopRun: (runId) => {
       const summary = hostRunRegistry.summary(runId);
-      if (!summary || summary.state === "done" || summary.state === "failed" || summary.state === "cancelled") {
+      if (
+        !summary ||
+        summary.state === "done" ||
+        summary.state === "failed" ||
+        summary.state === "cancelled"
+      ) {
         return false;
       }
       // The same host-authority stop Aiden Remote's run controls use.
       const cancelled = llmClient.cancel(runId, "user_stop");
-      if (cancelled) logger.info("chat", JSON.stringify({ event: "renderer_host_run_stop", runId }));
+      if (cancelled)
+        logger.info("chat", JSON.stringify({ event: "renderer_host_run_stop", runId }));
       return cancelled;
     },
     isRunSettled: (runId) => {

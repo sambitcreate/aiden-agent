@@ -36,7 +36,11 @@ test("a Bot offers at most three suggestions of any kind in a rolling day; the f
   assert.equal(await h.offer("bot-a", "lesson", "lesson"), true);
   h.clock.at += HOUR;
   assert.equal(await h.offer("bot-a", "fourth"), false);
-  assert.deepEqual(h.shown, ["routine", "skill", "lesson"], "the fourth card never reaches the chat");
+  assert.deepEqual(
+    h.shown,
+    ["routine", "skill", "lesson"],
+    "the fourth card never reaches the chat",
+  );
   assert.equal(await h.budget.remaining("bot-a"), 0);
 });
 
@@ -73,7 +77,9 @@ test("the count survives a restart, and offers made at once never get past the l
   const restarted = createBotSuggestionBudget({ profileDir: () => h.root, now: () => h.clock.at });
   assert.equal(await restarted.remaining("bot-a"), 2);
   const results = await Promise.all(
-    ["x", "y", "z"].map((label) => restarted.offer("bot-a", "skill", async () => (h.shown.push(label), true))),
+    ["x", "y", "z"].map((label) =>
+      restarted.offer("bot-a", "skill", async () => (h.shown.push(label), true)),
+    ),
   );
   assert.deepEqual(results.filter(Boolean).length, 2);
   assert.equal(h.shown.length, 3, "the one shown before the restart and two more");
@@ -98,10 +104,16 @@ test("moving the clock back never refills the budget: suggestions stamped in the
 test("one the person asked for shows even with the window full, and still counts", async () => {
   const h = harness();
   for (const label of ["one", "two"]) assert.equal(await h.offer("bot-a", label), true);
-  const always = (label: string) => h.budget.offer("bot-a", "routine", async () => {
-    h.shown.push(label);
-    return true;
-  }, { always: true });
+  const always = (label: string) =>
+    h.budget.offer(
+      "bot-a",
+      "routine",
+      async () => {
+        h.shown.push(label);
+        return true;
+      },
+      { always: true },
+    );
   assert.equal(await always("asked"), true);
   assert.equal(await h.offer("bot-a", "own idea"), false, "the asked-for one used the last slot");
   assert.equal(await always("asked again"), true);

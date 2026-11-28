@@ -18,7 +18,11 @@ test("page reading is on by default and extract mode is off", () => {
 });
 
 test("stored documents parse strictly; a newer or broken one is not read", () => {
-  const valid = { version: 1, enabled: false, extract: { enabled: true, model: "cloudflare-clairic", accountId: ACCOUNT_ID } };
+  const valid = {
+    version: 1,
+    enabled: false,
+    extract: { enabled: true, model: "cloudflare-clairic", accountId: ACCOUNT_ID },
+  };
   assert.deepEqual(parseWebFetchSettings(valid), valid);
   for (const bad of [
     null,
@@ -41,24 +45,40 @@ test("account IDs are 32 hex characters, trimmed and lowercased", () => {
 });
 
 test("extract mode is active only when it is on and its model has an account ID and a key", () => {
-  const on = { ...defaultWebFetchSettings(), extract: { enabled: true, model: "cloudflare-clairic" as const, accountId: ACCOUNT_ID } };
-  assert.deepEqual(webFetchRendererSnapshot({ settings: on, webSearchEnabled: true, keyCount: 2 }).extract, {
-    hasAccountId: true,
-    keyCount: 2,
-    ready: true,
-    active: true,
-  });
-  assert.equal(webFetchRendererSnapshot({ settings: on, webSearchEnabled: true, keyCount: 0 }).extract.active, false);
+  const on = {
+    ...defaultWebFetchSettings(),
+    extract: { enabled: true, model: "cloudflare-clairic" as const, accountId: ACCOUNT_ID },
+  };
+  assert.deepEqual(
+    webFetchRendererSnapshot({ settings: on, webSearchEnabled: true, keyCount: 2 }).extract,
+    {
+      hasAccountId: true,
+      keyCount: 2,
+      ready: true,
+      active: true,
+    },
+  );
+  assert.equal(
+    webFetchRendererSnapshot({ settings: on, webSearchEnabled: true, keyCount: 0 }).extract.active,
+    false,
+  );
   const { accountId: _accountId, ...withoutAccount } = on.extract;
   assert.equal(
-    webFetchRendererSnapshot({ settings: { ...on, extract: withoutAccount }, webSearchEnabled: true, keyCount: 2 }).extract.active,
+    webFetchRendererSnapshot({
+      settings: { ...on, extract: withoutAccount },
+      webSearchEnabled: true,
+      keyCount: 2,
+    }).extract.active,
     false,
   );
   const off = { ...on, extract: { ...on.extract, enabled: false } };
-  assert.deepEqual(webFetchRendererSnapshot({ settings: off, webSearchEnabled: true, keyCount: 2 }).extract, {
-    hasAccountId: true,
-    keyCount: 2,
-    ready: true,
-    active: false,
-  });
+  assert.deepEqual(
+    webFetchRendererSnapshot({ settings: off, webSearchEnabled: true, keyCount: 2 }).extract,
+    {
+      hasAccountId: true,
+      keyCount: 2,
+      ready: true,
+      active: false,
+    },
+  );
 });

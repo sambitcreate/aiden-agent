@@ -24,7 +24,15 @@ import {
   Sun,
   Wrench,
 } from "lucide-react";
-import { Command, CommandEmpty, CommandInput, CommandItem, CommandList, keepOpenWhileComposing, toast } from "./ui";
+import {
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  keepOpenWhileComposing,
+  toast,
+} from "./ui";
 import { ProviderIcon } from "./provider-icon";
 import { cn } from "../lib/ui-utils";
 import { paletteCommands } from "../lib/command-system-core";
@@ -149,7 +157,10 @@ function ItemDetail({ children }: { children: React.ReactNode }) {
 function PaletteResultItem({
   result,
   ...props
-}: Omit<React.ComponentProps<typeof CommandItem>, "value" | "keywords" | "disabled" | "forceMount"> & {
+}: Omit<
+  React.ComponentProps<typeof CommandItem>,
+  "value" | "keywords" | "disabled" | "forceMount"
+> & {
   result: PaletteResult;
 }) {
   return <CommandItem {...props} value={result.identity} disabled={result.disabled} />;
@@ -227,18 +238,20 @@ export function AppCommandPalette({
     enabled: capabilities.bots && palette.open && palette.mode === "bots",
   });
   const botResults = React.useMemo(
-    () => (bots.data ?? []).map((bot) => ({
-      bot,
-      result: paletteResult(`bot:${bot.id}`, bot.name, [bot.description ?? ""]),
-    })),
+    () =>
+      (bots.data ?? []).map((bot) => ({
+        bot,
+        result: paletteResult(`bot:${bot.id}`, bot.name, [bot.description ?? ""]),
+      })),
     [bots.data],
   );
   // Chats match on their titles only: a date in the keywords would let "11"
   // match every chat from November.
   const chatResults = React.useMemo(
-    () => [...(chats.data ?? [])]
-      .sort((left, right) => right.updatedAt - left.updatedAt)
-      .map((chat) => ({ chat, result: paletteResult(`chat:${chat.id}`, chat.title) })),
+    () =>
+      [...(chats.data ?? [])]
+        .sort((left, right) => right.updatedAt - left.updatedAt)
+        .map((chat) => ({ chat, result: paletteResult(`chat:${chat.id}`, chat.title) })),
     [chats.data],
   );
   const modelRows = React.useMemo(
@@ -246,27 +259,35 @@ export function AppCommandPalette({
       ...models.map((entry) => ({
         kind: "model" as const,
         entry,
-        result: paletteResult(`model:${entry.value}`, entry.label, [entry.model, entry.providerLabel], {
-          disabled: busy,
-        }),
+        result: paletteResult(
+          `model:${entry.value}`,
+          entry.label,
+          [entry.model, entry.providerLabel],
+          {
+            disabled: busy,
+          },
+        ),
       })),
       ...unavailableModelProviders.map((provider) => ({
         kind: "unavailable" as const,
         provider,
         result: paletteResult(`unavailable-provider:${provider.id}`, `${provider.label} models`, [
-          ...provider.models, "unavailable setup provider",
+          ...provider.models,
+          "unavailable setup provider",
         ]),
       })),
     ],
     [models, unavailableModelProviders, busy],
   );
   const providerResults = React.useMemo(
-    () => (providers.data ?? []).map((provider) => ({
-      provider,
-      result: paletteResult(`provider:${provider.id}`, provider.label, [
-        provider.id, "manage connection models",
-      ]),
-    })),
+    () =>
+      (providers.data ?? []).map((provider) => ({
+        provider,
+        result: paletteResult(`provider:${provider.id}`, provider.label, [
+          provider.id,
+          "manage connection models",
+        ]),
+      })),
     [providers.data],
   );
   const appearanceResults = [
@@ -312,9 +333,15 @@ export function AppCommandPalette({
     [activeId, allChats.data, workspaces],
   );
   const noWorkspaceHomeId = noWorkspaceHome(workspaces)?.id;
-  const noWorkspaceCurrent = isNoWorkspace(workspaces.find((workspace) => workspace.id === activeId));
-  const noWorkspaceResult = paletteResult("no-workspace", NO_WORKSPACE_LABEL, ["just chat global settings"]);
-  const openFolderResult = paletteResult("open-folder", "Open folder…", ["add workspace directory"]);
+  const noWorkspaceCurrent = isNoWorkspace(
+    workspaces.find((workspace) => workspace.id === activeId),
+  );
+  const noWorkspaceResult = paletteResult("no-workspace", NO_WORKSPACE_LABEL, [
+    "just chat global settings",
+  ]);
+  const openFolderResult = paletteResult("open-folder", "Open folder…", [
+    "add workspace directory",
+  ]);
   const cloneResult = paletteResult("clone", "Clone repository…", ["git url github"]);
   // A typed path (`/`, `~`, `.`) is answered by one row: select, open or create.
   const pathIntake = useWorkspacePathIntake(query, {
@@ -328,14 +355,28 @@ export function AppCommandPalette({
     pathRow && pathRow.action !== "invalid"
       ? paletteResult(`path:${pathRow.action}:${pathRow.input}`, pathRow.label)
       : null;
-  const chatRetryResult = paletteResult("retry-chats", "Chats could not be loaded", [], { forceMount: true });
-  const modelRetryResult = paletteResult("retry-models", "Models could not be loaded", [], { forceMount: true });
-  const providerRetryResult = paletteResult("retry-providers", "Providers could not be loaded", [], {
+  const chatRetryResult = paletteResult("retry-chats", "Chats could not be loaded", [], {
     forceMount: true,
   });
-  const refreshResult = paletteResult("refresh-providers", "Refresh provider catalogs", ["model update"], {
-    disabled: busy,
+  const modelRetryResult = paletteResult("retry-models", "Models could not be loaded", [], {
+    forceMount: true,
   });
+  const providerRetryResult = paletteResult(
+    "retry-providers",
+    "Providers could not be loaded",
+    [],
+    {
+      forceMount: true,
+    },
+  );
+  const refreshResult = paletteResult(
+    "refresh-providers",
+    "Refresh provider catalogs",
+    ["model update"],
+    {
+      disabled: busy,
+    },
+  );
   const settingsPages = availableSettingsPages(capabilities);
   const settingsRows = [
     ...appearanceResults,
@@ -347,7 +388,9 @@ export function AppCommandPalette({
         destination,
         pageTitle,
         result: paletteResult(`settings:${destination.id}`, settingsTabLabel(destination.id), [
-          destination.title, ...destination.keywords, pageTitle,
+          destination.title,
+          ...destination.keywords,
+          pageTitle,
         ]),
       };
     }),
@@ -357,12 +400,18 @@ export function AppCommandPalette({
   const visible = (result: PaletteResult) => rankPaletteResults([{ result }], query)[0] ?? null;
   const shownRoot = palette.mode === "root" ? rankPaletteResults(rootRows, query) : [];
   const shownBots = React.useMemo(() => rankPaletteResults(botResults, query), [botResults, query]);
-  const matchedChats = React.useMemo(() => rankPaletteResults(chatResults, query), [chatResults, query]);
+  const matchedChats = React.useMemo(
+    () => rankPaletteResults(chatResults, query),
+    [chatResults, query],
+  );
   const chatLimit = useListLimit(CHAT_RESULTS_PAGE, `${palette.open}:${palette.mode}:${query}`);
   const chatPage = limitRows([matchedChats], chatLimit.limit);
   const shownChats = chatPage.sections[0];
-  const showMoreChats = chatPage.hidden > 0 ? showMoreLabel(chatPage.hidden, CHAT_RESULTS_PAGE) : null;
-  const showMoreChatsResult = showMoreChats ? paletteResult("show-more-chats", showMoreChats.title) : null;
+  const showMoreChats =
+    chatPage.hidden > 0 ? showMoreLabel(chatPage.hidden, CHAT_RESULTS_PAGE) : null;
+  const showMoreChatsResult = showMoreChats
+    ? paletteResult("show-more-chats", showMoreChats.title)
+    : null;
   const shownModels = React.useMemo(() => rankPaletteResults(modelRows, query), [modelRows, query]);
   const shownProviders = React.useMemo(
     () => rankPaletteResults(providerResults, query),
@@ -390,9 +439,15 @@ export function AppCommandPalette({
       ...(showMoreChatsResult ? [showMoreChatsResult] : []),
     ],
     newChatIn: pathIntake.pathQuery
-      ? pathRowResult ? [pathRowResult] : []
+      ? pathRowResult
+        ? [pathRowResult]
+        : []
       : results([...shownWorkspaces, shownNoWorkspace, shownOpenFolder, shownClone]),
-    models: providers.isLoading ? [] : providers.isError ? [modelRetryResult] : results(shownModels),
+    models: providers.isLoading
+      ? []
+      : providers.isError
+        ? [modelRetryResult]
+        : results(shownModels),
     providers: [
       ...results([shownRefresh]),
       ...(providers.isError ? [providerRetryResult] : []),
@@ -417,7 +472,7 @@ export function AppCommandPalette({
     // Persist a fallback too, so a removed result cannot reclaim selection if it
     // later reappears. Do not overwrite a newer keyboard/pointer selection.
     if (selectedResultValue !== activeResult) {
-      setActiveResult((current) => current === activeResult ? selectedResultValue : current);
+      setActiveResult((current) => (current === activeResult ? selectedResultValue : current));
     }
   }, [activeResult, selectedResultValue]);
   const appearanceMode = normalizeAppearanceConfig(
@@ -484,9 +539,11 @@ export function AppCommandPalette({
     if (!allowNavigation()) return;
     rememberCommand("chat.newIn");
     close();
-    void newChat.openNewChatIn(workspaceId, newWorktree ? { newWorktree } : undefined).catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : "Aiden could not start a chat there.");
-    });
+    void newChat
+      .openNewChatIn(workspaceId, newWorktree ? { newWorktree } : undefined)
+      .catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : "Aiden could not start a chat there.");
+      });
   };
 
   const openFolderForChat = () => {
@@ -767,14 +824,16 @@ export function AppCommandPalette({
               }}
             />
             <CommandList className="h-[320px] max-h-[min(320px,calc(100vh-12rem))] p-2">
-              {palette.mode === "newChatIn" && pathIntake.pathQuery ? null : <CommandEmpty>
-                <Search className="mx-auto mb-2 size-5 text-tertiary" />
-                No{" "}
-                {palette.mode === "newChatIn"
-                  ? "workspaces"
-                  : MODE_LABELS[palette.mode].toLocaleLowerCase()}{" "}
-                match “{query.trim()}”.
-              </CommandEmpty>}
+              {palette.mode === "newChatIn" && pathIntake.pathQuery ? null : (
+                <CommandEmpty>
+                  <Search className="mx-auto mb-2 size-5 text-tertiary" />
+                  No{" "}
+                  {palette.mode === "newChatIn"
+                    ? "workspaces"
+                    : MODE_LABELS[palette.mode].toLocaleLowerCase()}{" "}
+                  match “{query.trim()}”.
+                </CommandEmpty>
+              )}
 
               {shownRoot.map((row) => {
                 if (row.kind === "appearance") {
@@ -955,12 +1014,19 @@ export function AppCommandPalette({
                     ) : null}
                   </PaletteResultItem>
                 ) : pathRow?.action === "invalid" ? (
-                  <p role="status" data-path-row="invalid" className="flex items-start gap-2 px-3 py-3 text-small text-secondary">
+                  <p
+                    role="status"
+                    data-path-row="invalid"
+                    className="flex items-start gap-2 px-3 py-3 text-small text-secondary"
+                  >
                     <CircleAlert className="mt-px size-4 shrink-0 text-tertiary" />
                     <span className="min-w-0 flex-1">{pathRow.message}</span>
                   </p>
                 ) : (
-                  <p role="status" className="flex items-center gap-2 px-3 py-3 text-small text-tertiary">
+                  <p
+                    role="status"
+                    className="flex items-center gap-2 px-3 py-3 text-small text-tertiary"
+                  >
                     <RefreshCw className="size-4 shrink-0 animate-spin" />
                     Checking path…
                   </p>
@@ -1121,7 +1187,10 @@ export function AppCommandPalette({
                         {selected ? (
                           <>
                             <span className="sr-only">Current</span>
-                            <Check aria-hidden="true" className="size-4 shrink-0 text-accent-text" />
+                            <Check
+                              aria-hidden="true"
+                              className="size-4 shrink-0 text-accent-text"
+                            />
                           </>
                         ) : null}
                       </PaletteResultItem>
@@ -1149,11 +1218,7 @@ export function AppCommandPalette({
                     </PaletteResultItem>
                   ) : null}
                   {providers.isLoading ? (
-                    <CommandItem
-                      disabled
-                      value="Loading providers"
-                      className="min-h-11 px-3"
-                    >
+                    <CommandItem disabled value="Loading providers" className="min-h-11 px-3">
                       <RefreshCw className="size-4 animate-spin text-secondary" />
                       <span>Loading providers…</span>
                     </CommandItem>

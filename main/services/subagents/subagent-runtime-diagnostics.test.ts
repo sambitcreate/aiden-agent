@@ -167,7 +167,6 @@ test("oversized retained subagent rotation is removed at startup", async () => {
   }
 });
 
-
 test("persisted runtime evidence strips bare vendor credentials and omits provider free text", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-diagnostic-credentials-"));
   const target = path.join(root, "runtime.log");
@@ -184,11 +183,28 @@ test("persisted runtime evidence strips bare vendor credentials and omits provid
   try {
     initSubagentRuntimeDiagnostics(target);
     writeSubagentRuntimeFailure({
-      diagnosticId: "SA-safe-corpus", providerId: "test", modelId: "test-model", failure: "provider", attempts: 1,
+      diagnosticId: "SA-safe-corpus",
+      providerId: "test",
+      modelId: "test-model",
+      failure: "provider",
+      attempts: 1,
       diagnostics: [
-        { stage: "bootstrap", code: "pre_ready_exit", detail: `Loader failed. ${secrets.join(" ")}` },
-        { stage: "bootstrap", code: "pre_ready_exit", detail: encodeURIComponent(`x-api-key: ${secrets[0]}\nloader cause retained`) },
-        { stage: "provider", code: "provider_failure", providerCategory: "authentication", detail: "unlabelled-private-provider-response" },
+        {
+          stage: "bootstrap",
+          code: "pre_ready_exit",
+          detail: `Loader failed. ${secrets.join(" ")}`,
+        },
+        {
+          stage: "bootstrap",
+          code: "pre_ready_exit",
+          detail: encodeURIComponent(`x-api-key: ${secrets[0]}\nloader cause retained`),
+        },
+        {
+          stage: "provider",
+          code: "provider_failure",
+          providerCategory: "authentication",
+          detail: "unlabelled-private-provider-response",
+        },
         { stage: "provider_hook", code: "provider_hook_failed", detail: "opaque-private-request" },
       ],
     });
@@ -202,9 +218,10 @@ test("persisted runtime evidence strips bare vendor credentials and omits provid
     assert.equal(record.diagnostics[2].detail, undefined);
     assert.match(record.diagnostics[0].detail, /Loader failed/u);
     assert.equal(record.diagnostics[0].code, "pre_ready_exit");
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
-
 
 test("journal redaction inspects control-split credentials before normalizing controls", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-diagnostic-control-"));
@@ -222,17 +239,38 @@ test("journal redaction inspects control-split credentials before normalizing co
   ];
   try {
     initSubagentRuntimeDiagnostics(target);
-    for (const [index, detail] of probes.entries()) writeSubagentRuntimeFailure({
-      diagnosticId: `SA-control-${index}`, providerId: "test", modelId: "test-model", failure: "inference-startup", attempts: 1,
-      diagnostics: [{ stage: "bootstrap", code: "pre_ready_exit", detail }],
-    });
+    for (const [index, detail] of probes.entries())
+      writeSubagentRuntimeFailure({
+        diagnosticId: `SA-control-${index}`,
+        providerId: "test",
+        modelId: "test-model",
+        failure: "inference-startup",
+        attempts: 1,
+        diagnostics: [{ stage: "bootstrap", code: "pre_ready_exit", detail }],
+      });
     await flushSubagentRuntimeDiagnostics();
     const raw = await readFile(target, "utf8");
-    assert.doesNotMatch(raw, /Replica|Groq|CredentialValue123456789|opaque-private|SecretSuffix|PrivatePrefix/u);
-    const records = raw.trim().split("\n").map(line => JSON.parse(line));
+    assert.doesNotMatch(
+      raw,
+      /Replica|Groq|CredentialValue123456789|opaque-private|SecretSuffix|PrivatePrefix/u,
+    );
+    const records = raw
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
     assert.equal(records.length, probes.length);
     for (const record of records) assert.equal(record.diagnostics[0].code, "pre_ready_exit");
-    for (const record of records.slice(-2)) assert.match(record.diagnostics[0].detail, /Loader failed/u, "the unrelated loader line survives");
-    assert.match(sanitizeSubagentDiagnosticText("Module\u0000loader failed"), /Module loader failed/u);
-  } finally { await rm(root, { recursive: true, force: true }); }
+    for (const record of records.slice(-2))
+      assert.match(
+        record.diagnostics[0].detail,
+        /Loader failed/u,
+        "the unrelated loader line survives",
+      );
+    assert.match(
+      sanitizeSubagentDiagnosticText("Module\u0000loader failed"),
+      /Module loader failed/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

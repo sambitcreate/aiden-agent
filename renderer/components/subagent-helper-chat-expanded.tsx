@@ -32,7 +32,8 @@ export function useExpandedSubagentHelperChat(chatId: string | null | undefined)
 
 function insideOpenLayer(target: EventTarget | null): boolean {
   return (
-    target instanceof Element && target.closest('[role="menu"], [role="dialog"], [role="listbox"]') !== null
+    target instanceof Element &&
+    target.closest('[role="menu"], [role="dialog"], [role="listbox"]') !== null
   );
 }
 
@@ -132,7 +133,8 @@ function ExpandedHelperChatView({ chatId, runId }: { chatId: string; runId: stri
     <div
       className="flex min-h-0 flex-1 flex-col"
       onKeyDown={(event) => {
-        if (event.key !== "Escape" || event.defaultPrevented || insideOpenLayer(event.target)) return;
+        if (event.key !== "Escape" || event.defaultPrevented || insideOpenLayer(event.target))
+          return;
         event.preventDefault();
         event.stopPropagation();
         store.collapse();

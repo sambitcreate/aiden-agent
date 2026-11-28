@@ -54,7 +54,8 @@ export function MemorySettings() {
           label="Use memory"
           hint={
             <InfoHint topic="turning memory off">
-              Off stops memory tools, prompt context and new indexing. Approved facts stay on this device for when you turn it back on.
+              Off stops memory tools, prompt context and new indexing. Approved facts stay on this
+              device for when you turn it back on.
             </InfoHint>
           }
           description="Lets Aiden recall approved facts, suggest new facts during chats, and index conversation metadata for retrieval."
@@ -72,7 +73,8 @@ export function MemorySettings() {
         title="Workspaces"
         hint={
           <InfoHint topic="workspace memory">
-            These switches affect regular workspace chats. Bot memory has its own scope and follows Use memory.
+            These switches affect regular workspace chats. Bot memory has its own scope and follows
+            Use memory.
           </InfoHint>
         }
       >

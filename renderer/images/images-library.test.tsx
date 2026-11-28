@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { Outlet, RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import {
+  Outlet,
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
 import { installBotTestIpc } from "../main/bots/test-dom";
 import { parseImagesHomeSearch } from "../main/images-home-search";
 import { SAVE_ALL_MAX_IMAGES, type GalleryItem } from "../shared/images/ipc-types";
@@ -19,15 +26,48 @@ afterEach(() => cleanup());
 const NOW = new Date(2026, 9, 31, 12, 0).getTime();
 const at = (day: number, hour: number) => new Date(2026, 9, day, hour, 0).getTime();
 const item = (seed: string, patch: Partial<GalleryItem> = {}): GalleryItem => ({
-  assetId: seed.repeat(64), width: 8, height: 8, mediaType: "image/png", runId: `run-${seed}`, runState: "succeeded", workflowId: "wf-a",
-  workflowTitle: "Posters", nodeId: "g", nodeTitle: "Generate Image", variant: 0, index: 0, provider: "openrouter", model: "google/flash-image",
-  createdAt: at(31, 11), saved: true, thumbUrl: `thumb-${seed}`, ...patch,
+  assetId: seed.repeat(64),
+  width: 8,
+  height: 8,
+  mediaType: "image/png",
+  runId: `run-${seed}`,
+  runState: "succeeded",
+  workflowId: "wf-a",
+  workflowTitle: "Posters",
+  nodeId: "g",
+  nodeTitle: "Generate Image",
+  variant: 0,
+  index: 0,
+  provider: "openrouter",
+  model: "google/flash-image",
+  createdAt: at(31, 11),
+  saved: true,
+  thumbUrl: `thumb-${seed}`,
+  ...patch,
 });
 const LIBRARY = [
   item("a", { prompt: "A lighthouse at dusk" }),
-  item("b", { createdAt: at(31, 10), workflowId: "wf-b", workflowTitle: "Product shots", nodeTitle: "Hero", model: "black-forest/flux", prompt: "white sneaker" }),
-  item("c", { createdAt: at(30, 9), workflowId: "wf-gone", workflowTitle: undefined, nodeTitle: undefined, prompt: "lighthouse in fog" }),
-  item("d", { createdAt: at(20, 9), workflowId: "wf-b", workflowTitle: "Product shots", model: "black-forest/flux" }),
+  item("b", {
+    createdAt: at(31, 10),
+    workflowId: "wf-b",
+    workflowTitle: "Product shots",
+    nodeTitle: "Hero",
+    model: "black-forest/flux",
+    prompt: "white sneaker",
+  }),
+  item("c", {
+    createdAt: at(30, 9),
+    workflowId: "wf-gone",
+    workflowTitle: undefined,
+    nodeTitle: undefined,
+    prompt: "lighthouse in fog",
+  }),
+  item("d", {
+    createdAt: at(20, 9),
+    workflowId: "wf-b",
+    workflowTitle: "Product shots",
+    model: "black-forest/flux",
+  }),
 ];
 
 function fakeActions(log: string[]): ImageActions {
@@ -36,7 +76,13 @@ function fakeActions(log: string[]): ImageActions {
     copy: (assetId) => void log.push(`copy:${assetId[0]}`),
     reveal: (assetId) => void log.push(`reveal:${assetId[0]}`),
     revealFolder: () => void log.push("reveal-folder"),
-    saveAll: (assetIds) => void log.push(`save-all:${assetIds.length}:${assetIds.slice(0, 4).map((id) => id[0]).join("")}`),
+    saveAll: (assetIds) =>
+      void log.push(
+        `save-all:${assetIds.length}:${assetIds
+          .slice(0, 4)
+          .map((id) => id[0])
+          .join("")}`,
+      ),
     drag: (assetId) => void log.push(`drag:${assetId[0]}`),
     view: async () => null,
   };
@@ -72,16 +118,26 @@ const tileNames = () => Array.from(tiles(), (tile) => tile.getAttribute("aria-la
 const status = () => screen.getByRole("status").textContent;
 
 async function choose(combobox: string, option: string) {
-  fireEvent.pointerDown(screen.getByRole("combobox", { name: combobox }), { button: 0, ctrlKey: false, pointerType: "mouse" });
+  fireEvent.pointerDown(screen.getByRole("combobox", { name: combobox }), {
+    button: 0,
+    ctrlKey: false,
+    pointerType: "mouse",
+  });
   const listbox = await screen.findByRole("listbox");
   fireEvent.keyDown(within(listbox).getByRole("option", { name: option }), { key: "Enter" });
   await waitFor(() => assert.equal(screen.queryByRole("listbox"), null));
 }
 
 async function optionsOf(combobox: string): Promise<string[]> {
-  fireEvent.pointerDown(screen.getByRole("combobox", { name: combobox }), { button: 0, ctrlKey: false, pointerType: "mouse" });
+  fireEvent.pointerDown(screen.getByRole("combobox", { name: combobox }), {
+    button: 0,
+    ctrlKey: false,
+    pointerType: "mouse",
+  });
   const listbox = await screen.findByRole("listbox");
-  const labels = within(listbox).getAllByRole("option").map((option) => option.textContent ?? "");
+  const labels = within(listbox)
+    .getAllByRole("option")
+    .map((option) => option.textContent ?? "");
   fireEvent.keyDown(listbox, { key: "Escape" });
   await waitFor(() => assert.equal(screen.queryByRole("listbox"), null));
   return labels;
@@ -90,13 +146,19 @@ async function optionsOf(combobox: string): Promise<string[]> {
 test("All Images sections by day, and the search narrows by prompt, title or model until Clear Filters", () => {
   render(<Library />);
   const date = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(at(20, 9));
-  assert.deepEqual(screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent), ["Today", "Yesterday", date]);
+  assert.deepEqual(
+    screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent),
+    ["Today", "Yesterday", date],
+  );
   assert.equal(status(), "4 images");
   assert.ok(screen.getByText("Saved to Pictures › Aiden"));
 
   const search = screen.getByRole("searchbox", { name: "Search images" });
   fireEvent.change(search, { target: { value: "LIGHTHOUSE" } });
-  assert.deepEqual(tileNames(), ["Image 1 of 2, Posters: A lighthouse at dusk", "Image 2 of 2, Deleted workflow: lighthouse in fog"]);
+  assert.deepEqual(tileNames(), [
+    "Image 1 of 2, Posters: A lighthouse at dusk",
+    "Image 2 of 2, Deleted workflow: lighthouse in fog",
+  ]);
   assert.equal(status(), "2 of 4 images");
   fireEvent.change(search, { target: { value: "hero" } });
   assert.deepEqual(tileNames(), ["Image 1 of 1, Product shots: white sneaker"]);
@@ -106,19 +168,30 @@ test("All Images sections by day, and the search narrows by prompt, title or mod
   assert.ok(screen.getByText("No matching images"));
   fireEvent.click(screen.getByRole("button", { name: "Clear Filters" }));
   assert.equal(tiles().length, 4);
-  assert.equal((screen.getByRole("searchbox", { name: "Search images" }) as HTMLInputElement).value, "");
+  assert.equal(
+    (screen.getByRole("searchbox", { name: "Search images" }) as HTMLInputElement).value,
+    "",
+  );
 });
 
 test("the workflow and model filters show counts that follow each other, and the sort flips the order", async () => {
   render(<Library />);
-  assert.deepEqual(await optionsOf("Workflow"), ["All Workflows (4)", "Product shots (2)", "Deleted workflows (1)", "Posters (1)"]);
+  assert.deepEqual(await optionsOf("Workflow"), [
+    "All Workflows (4)",
+    "Product shots (2)",
+    "Deleted workflows (1)",
+    "Posters (1)",
+  ]);
   await choose("Workflow", "Product shots (2)");
   assert.equal(tiles().length, 2);
   assert.deepEqual(await optionsOf("Model"), ["All Models (2)", "black-forest/flux (2)"]);
 
   await choose("Workflow", "All Workflows (4)");
   await choose("Model", "google/flash-image (2)");
-  assert.deepEqual(tileNames().map((name) => name?.split(",")[1]?.trim()), ["Posters: A lighthouse at dusk", "Deleted workflow: lighthouse in fog"]);
+  assert.deepEqual(
+    tileNames().map((name) => name?.split(",")[1]?.trim()),
+    ["Posters: A lighthouse at dusk", "Deleted workflow: lighthouse in fog"],
+  );
 
   await choose("Model", "All Models (4)");
   await choose("Sort", "Oldest First");
@@ -129,12 +202,17 @@ test("the workflow and model filters show counts that follow each other, and the
 test("a thumbnail opens the viewer over the filtered images, and Open Workflow goes to a workflow that still exists", async () => {
   const opened: string[] = [];
   render(<Library opened={opened} />);
-  fireEvent.change(screen.getByRole("searchbox", { name: "Search images" }), { target: { value: "lighthouse" } });
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search images" }), {
+    target: { value: "lighthouse" },
+  });
   fireEvent.click(tiles()[1]!);
   const dialog = await screen.findByRole("dialog");
   assert.ok(within(dialog).getByText("2 of 2"));
   // The deleted workflow can't be opened.
-  assert.equal((within(dialog).getByRole("button", { name: "Open Workflow" }) as HTMLButtonElement).disabled, true);
+  assert.equal(
+    (within(dialog).getByRole("button", { name: "Open Workflow" }) as HTMLButtonElement).disabled,
+    true,
+  );
   fireEvent.keyDown(document.body, { key: "ArrowLeft" });
   await waitFor(() => assert.ok(within(dialog).getByText("1 of 2")));
   fireEvent.click(within(dialog).getByRole("button", { name: "Open Workflow" }));
@@ -149,10 +227,20 @@ test("closing the viewer returns focus to the image it showed, even after newer 
   const dialog = await screen.findByRole("dialog");
   assert.ok(within(dialog).getByText("2 of 4"));
   // A run finishes meanwhile: its image is newest and every other thumbnail shifts by one.
-  rerender(<Library log={log} items={[item("e", { createdAt: at(31, 11) + 1, prompt: "A fresh one" }), ...LIBRARY]} />);
+  rerender(
+    <Library
+      log={log}
+      items={[item("e", { createdAt: at(31, 11) + 1, prompt: "A fresh one" }), ...LIBRARY]}
+    />,
+  );
   fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
   await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
-  await waitFor(() => assert.equal(document.activeElement?.getAttribute("aria-label"), "Image 3 of 5, Product shots: white sneaker"));
+  await waitFor(() =>
+    assert.equal(
+      document.activeElement?.getAttribute("aria-label"),
+      "Image 3 of 5, Product shots: white sneaker",
+    ),
+  );
   assert.equal(document.activeElement?.getAttribute("tabindex"), "0");
 });
 
@@ -162,7 +250,9 @@ test("a thumbnail's menu saves, copies and reveals that image, and offers its wo
   render(<Library log={log} opened={opened} />);
   fireEvent.contextMenu(tiles()[1]!);
   let menu = await screen.findByRole("menu");
-  const labels = within(menu).getAllByRole("menuitem").map((entry) => entry.textContent ?? "");
+  const labels = within(menu)
+    .getAllByRole("menuitem")
+    .map((entry) => entry.textContent ?? "");
   assert.deepEqual([labels[0], labels[1], labels[3]], ["Save…", "Copy Image", "Open Workflow"]);
   assert.match(labels[2] ?? "", /^Show in (Finder|folder)$/u);
   fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy Image" }));
@@ -170,12 +260,17 @@ test("a thumbnail's menu saves, copies and reveals that image, and offers its wo
 
   fireEvent.contextMenu(tiles()[2]!);
   menu = await screen.findByRole("menu");
-  assert.equal(within(menu).getByRole("menuitem", { name: "Open Workflow" }).getAttribute("aria-disabled"), "true");
+  assert.equal(
+    within(menu).getByRole("menuitem", { name: "Open Workflow" }).getAttribute("aria-disabled"),
+    "true",
+  );
   fireEvent.click(within(menu).getByRole("menuitem", { name: "Save…" }));
   await waitFor(() => assert.equal(screen.queryByRole("menu"), null));
 
   fireEvent.contextMenu(tiles()[3]!);
-  fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Open Workflow" }));
+  fireEvent.click(
+    within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Open Workflow" }),
+  );
   assert.deepEqual(log, ["copy:b", "save-as:c"]);
   assert.deepEqual(opened, ["wf-b"]);
 });
@@ -185,7 +280,9 @@ test("Shift+F10 and the Menu key open the focused thumbnail's menu from the keyb
   render(<Library log={log} />);
   tiles()[1]!.focus();
   fireEvent.keyDown(tiles()[1]!, { key: "F10", shiftKey: true });
-  fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Copy Image" }));
+  fireEvent.click(
+    within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Copy Image" }),
+  );
   await waitFor(() => assert.equal(screen.queryByRole("menu"), null));
   tiles()[2]!.focus();
   fireEvent.keyDown(tiles()[2]!, { key: "ContextMenu" });
@@ -196,15 +293,25 @@ test("Shift+F10 and the Menu key open the focused thumbnail's menu from the keyb
 test("Save All saves what the filters show, and says when only the first part of a large set is saved", () => {
   const log: string[] = [];
   const { unmount } = render(<Library log={log} />);
-  fireEvent.change(screen.getByRole("searchbox", { name: "Search images" }), { target: { value: "product" } });
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search images" }), {
+    target: { value: "product" },
+  });
   fireEvent.click(screen.getByRole("button", { name: "Save all 2 images…" }));
   assert.deepEqual(log, ["save-all:2:bd"]);
   unmount();
 
-  const many = Array.from({ length: SAVE_ALL_MAX_IMAGES + 5 }, (_, index) => item(String(index), { createdAt: NOW - index * 1000 }));
+  const many = Array.from({ length: SAVE_ALL_MAX_IMAGES + 5 }, (_, index) =>
+    item(String(index), { createdAt: NOW - index * 1000 }),
+  );
   render(<Library items={many} log={log} />);
-  assert.ok(screen.getByText(`Saves the first ${SAVE_ALL_MAX_IMAGES} of ${SAVE_ALL_MAX_IMAGES + 5}`));
-  fireEvent.click(screen.getByRole("button", { name: `Save the first ${SAVE_ALL_MAX_IMAGES} of ${SAVE_ALL_MAX_IMAGES + 5} images…` }));
+  assert.ok(
+    screen.getByText(`Saves the first ${SAVE_ALL_MAX_IMAGES} of ${SAVE_ALL_MAX_IMAGES + 5}`),
+  );
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: `Save the first ${SAVE_ALL_MAX_IMAGES} of ${SAVE_ALL_MAX_IMAGES + 5} images…`,
+    }),
+  );
   assert.equal(log[1]?.split(":")[1], String(SAVE_ALL_MAX_IMAGES));
 });
 
@@ -256,17 +363,35 @@ test("each workflow card shows its newest image, image count and last image time
     duplicate: (workflow) => picked.push(`duplicate:${workflow.id}`),
     remove: (workflow) => picked.push(`delete:${workflow.id}`),
   };
-  render(<WorkflowGrid workflows={WORKFLOWS} summaries={summarizeWorkflowImages(LIBRARY)} galleryReady now={at(31, 10) + 5 * 60_000} actions={actions} />);
-  const cards = within(screen.getByRole("list", { name: "Image workflows" })).getAllByRole("listitem");
+  render(
+    <WorkflowGrid
+      workflows={WORKFLOWS}
+      summaries={summarizeWorkflowImages(LIBRARY)}
+      galleryReady
+      now={at(31, 10) + 5 * 60_000}
+      actions={actions}
+    />,
+  );
+  const cards = within(screen.getByRole("list", { name: "Image workflows" })).getAllByRole(
+    "listitem",
+  );
   assert.equal(cards[0]!.querySelector("img")?.getAttribute("src"), "thumb-b");
   const open = within(cards[0]!).getByRole("button", { name: "Product shots" });
-  assert.equal(open.getAttribute("aria-describedby") && document.getElementById(open.getAttribute("aria-describedby")!)?.textContent, "2 images · 5 min ago");
+  assert.equal(
+    open.getAttribute("aria-describedby") &&
+      document.getElementById(open.getAttribute("aria-describedby")!)?.textContent,
+    "2 images · 5 min ago",
+  );
   assert.equal(cards[1]!.querySelector("img"), null);
   assert.ok(within(cards[1]!).getByText("No images yet"));
 
   fireEvent.click(open);
-  fireEvent.keyDown(within(cards[1]!).getByRole("button", { name: "More actions for Untitled" }), { key: "Enter" });
-  fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Rename…" }));
+  fireEvent.keyDown(within(cards[1]!).getByRole("button", { name: "More actions for Untitled" }), {
+    key: "Enter",
+  });
+  fireEvent.click(
+    within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Rename…" }),
+  );
   assert.deepEqual(picked, ["open:wf-b", "rename:wf-new"]);
 });
 
@@ -274,7 +399,10 @@ test("the home keeps All Images selected across opening a workflow from it and c
   installBotTestIpc({
     "imageWorkflows:list": () => ({ workflows: WORKFLOWS, imageCounts: {} }),
     "imageWorkflows:list-models": () => ({ models: [] }),
-    "imageWorkflows:gallery": () => ({ items: LIBRARY.slice(1, 2), saveFolderLabel: "Pictures › Aiden" }),
+    "imageWorkflows:gallery": () => ({
+      items: LIBRARY.slice(1, 2),
+      saveFolderLabel: "Pictures › Aiden",
+    }),
   });
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const homeRoute = createRoute({
@@ -312,7 +440,9 @@ test("the home keeps All Images selected across opening a workflow from it and c
   assert.equal(tab("All Images").getAttribute("aria-controls"), panel.id);
   assert.ok(panel.contains(tiles()[0]!));
   fireEvent.click(tiles()[0]!);
-  fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Open Workflow" }));
+  fireEvent.click(
+    within(await screen.findByRole("dialog")).getByRole("button", { name: "Open Workflow" }),
+  );
   await screen.findByText("Editing wf-b");
 
   await act(async () => router.history.back());

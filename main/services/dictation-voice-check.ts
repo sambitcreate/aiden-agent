@@ -1,7 +1,10 @@
 // The dictation hotkey's provider check and warm-up share one resolution per
 // press, so warm-up preloads exactly the on-device model that press resolved.
 
-import { voiceSetupMessage, type VoiceProviderResolution } from "../../renderer/shared/voice-provider.js";
+import {
+  voiceSetupMessage,
+  type VoiceProviderResolution,
+} from "../../renderer/shared/voice-provider.js";
 import type { VoiceResolutionCheck } from "./dictation-coordinator.js";
 
 export interface PressVoiceCheckDeps {

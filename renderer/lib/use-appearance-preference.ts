@@ -5,9 +5,9 @@ import { createDefaultAppearanceConfig, type AppearanceConfig } from "../shared/
 const defaults = createDefaultAppearanceConfig();
 
 /** Subscribe to one primitive, including live previews when browser storage is unavailable. */
-export function useAppearancePreference<Key extends "workDetails" | "workDetailsCollapseTiming" | "busySendBehavior" | "showToolActivity">(
-  key: Key,
-): AppearanceConfig[Key] {
+export function useAppearancePreference<
+  Key extends "workDetails" | "workDetailsCollapseTiming" | "busySendBehavior" | "showToolActivity",
+>(key: Key): AppearanceConfig[Key] {
   const [value, setValue] = useState(() => readCurrentAppearance()?.[key] ?? defaults[key]);
   useEffect(() => {
     const update = (event: Event) => {

@@ -2,12 +2,35 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
+import {
+  emptyDesignCanvas,
+  type DesignCanvas,
+  type DesignFrame,
+} from "../shared/design-canvas/schema";
 import { nodesFromCanvas } from "./canvas-adapter-core";
-import { bringLayerToFront, designLayers, reorderLayer, sendLayerToBack, stepLayer, type DesignLayer } from "./layers-core";
+import {
+  bringLayerToFront,
+  designLayers,
+  reorderLayer,
+  sendLayerToBack,
+  stepLayer,
+  type DesignLayer,
+} from "./layers-core";
 
 function frame(id: string, overrides: Partial<DesignFrame> = {}): DesignFrame {
-  return { id, kind: "note", title: id, x: 0, y: 0, w: 200, h: 120, text: "", pageId: "page-1", createdBy: "person", ...overrides };
+  return {
+    id,
+    kind: "note",
+    title: id,
+    x: 0,
+    y: 0,
+    w: 200,
+    h: 120,
+    text: "",
+    pageId: "page-1",
+    createdBy: "person",
+    ...overrides,
+  };
 }
 
 function canvas(...frames: DesignFrame[]): DesignCanvas {
@@ -15,9 +38,14 @@ function canvas(...frames: DesignFrame[]): DesignCanvas {
 }
 
 const outline = (layers: DesignLayer[]): unknown[] =>
-  layers.map((layer) => (layer.children.length > 0 ? [layer.frame.id, outline(layer.children)] : layer.frame.id));
+  layers.map((layer) =>
+    layer.children.length > 0 ? [layer.frame.id, outline(layer.children)] : layer.frame.id,
+  );
 /** What the canvas draws, front-most first: the order the list must show. */
-const onScreen = (doc: DesignCanvas) => nodesFromCanvas(doc, new Set()).map((node) => node.id).reverse();
+const onScreen = (doc: DesignCanvas) =>
+  nodesFromCanvas(doc, new Set())
+    .map((node) => node.id)
+    .reverse();
 
 const page = canvas(
   frame("a", { groupId: "board" }),
@@ -34,7 +62,9 @@ test("the list is the page's frames front-most first, with an artboard's items u
   const drawn = onScreen(page);
   const check = (layers: DesignLayer[]) => {
     for (let index = 1; index < layers.length; index += 1) {
-      assert.ok(drawn.indexOf(layers[index - 1]!.frame.id) < drawn.indexOf(layers[index]!.frame.id));
+      assert.ok(
+        drawn.indexOf(layers[index - 1]!.frame.id) < drawn.indexOf(layers[index]!.frame.id),
+      );
     }
     for (const layer of layers) check(layer.children);
   };
@@ -61,7 +91,10 @@ test("one step forward or back trades with the next sibling, and stops at the en
   assert.deepEqual(outline(designLayers(forward)).slice(-1)[0], ["board", ["a", "b"]]);
   assert.equal(stepLayer(forward, "a", "forward"), forward);
   assert.equal(stepLayer(page, "loose", "forward"), page);
-  assert.deepEqual(outline(designLayers(stepLayer(page, "board", "forward"))).slice(1), [["board", ["b", "a"]], "group"]);
+  assert.deepEqual(outline(designLayers(stepLayer(page, "board", "forward"))).slice(1), [
+    ["board", ["b", "a"]],
+    "group",
+  ]);
 });
 
 test("bringing a layer to the front or back moves it past all its siblings, and only them", () => {
@@ -73,6 +106,9 @@ test("bringing a layer to the front or back moves it past all its siblings, and 
   assert.deepEqual(outline(designLayers(toFront)).slice(-1)[0], ["board", ["b", "a"]]);
   // A frame on another page reorders among that page's frames.
   const other = canvas(frame("x", { pageId: "page-2" }), frame("y", { pageId: "page-2" }));
-  assert.deepEqual(bringLayerToFront(other, "x").frames.map((entry) => entry.id), ["y", "x"]);
+  assert.deepEqual(
+    bringLayerToFront(other, "x").frames.map((entry) => entry.id),
+    ["y", "x"],
+  );
   assert.equal(sendLayerToBack(page, "missing"), page);
 });

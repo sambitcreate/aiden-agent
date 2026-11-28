@@ -99,30 +99,30 @@ The service core composes domain ports; it must not become a second application 
 
 ## Frozen parity matrix
 
-| Surface | Reference behavior | Aiden baseline | Delivery phase |
-| --- | --- | --- | --- |
-| Pairing and commands | `/start`, command registration, owner gate | Partial (`/start`, `/help`) | 1 |
-| Control commands | compact, next, continue, abort, stop | Only queue-clearing stop/cancel | 1 |
-| Operator menu | status, model, thinking, queue, settings, sections | Plain help/status text | 1 |
-| Model controls | scoped/all catalogs, paging, safe active-run switch | Settings-only provider/model | 1 |
-| Thinking controls | model-aware levels | Not remote-controlled | 1 |
-| Queue controls | inspect, prioritize, delete, dispatch, reactions | Internal FIFO only | 1 |
-| Compaction | confirmation, active status, queue fencing | Pi-native compaction exists but no Telegram entry | 1 |
-| Prompt templates | safe Telegram command projection | No Telegram projection | 1 |
-| Streaming | native typing plus bounded draft previews | Typing plus final-only reply | 2 |
-| Activity | configurable thinking/tool delivery | Not delivered | 2 |
-| Rich answers | native Rich Markdown with HTML fallback | Markdown-to-HTML chunks | 2 |
-| Inbound content | replies, edits, images, documents, albums, forwards | Text/caption only | 2 |
-| Outbound content | files, voice, buttons, target-aware direct sends | Text only | 2 |
-| Agent tools | attach, message, voice, help | None | 2 |
-| Voice | pluggable inbound STT and outbound TTS policy | None | 2 |
-| Threaded Mode | one bot, named private-chat threads, target routing | Single private DM | 3 |
-| Multi-instance behavior | leader/follower Pi processes | Adapt to Aiden agent/chat targets; no hidden processes | 3 |
-| Ownership and recovery | durable lock, fencing, bounded recovery | Single app process, persisted offset | 3 |
-| Profiles | isolated named bot profiles | One bot token | 3 |
-| Extension platform | commands, sections, status, updates, handlers, voice | No Telegram registry | 3 |
-| Diagnostics | redacted ring and `/telegram-status` equivalent | Basic status/last error | 3 |
-| Settings/onboarding | full controls and capability prerequisites | Basic setup/provider/workspace | 4 |
+| Surface                 | Reference behavior                                   | Aiden baseline                                         | Delivery phase |
+| ----------------------- | ---------------------------------------------------- | ------------------------------------------------------ | -------------- |
+| Pairing and commands    | `/start`, command registration, owner gate           | Partial (`/start`, `/help`)                            | 1              |
+| Control commands        | compact, next, continue, abort, stop                 | Only queue-clearing stop/cancel                        | 1              |
+| Operator menu           | status, model, thinking, queue, settings, sections   | Plain help/status text                                 | 1              |
+| Model controls          | scoped/all catalogs, paging, safe active-run switch  | Settings-only provider/model                           | 1              |
+| Thinking controls       | model-aware levels                                   | Not remote-controlled                                  | 1              |
+| Queue controls          | inspect, prioritize, delete, dispatch, reactions     | Internal FIFO only                                     | 1              |
+| Compaction              | confirmation, active status, queue fencing           | Pi-native compaction exists but no Telegram entry      | 1              |
+| Prompt templates        | safe Telegram command projection                     | No Telegram projection                                 | 1              |
+| Streaming               | native typing plus bounded draft previews            | Typing plus final-only reply                           | 2              |
+| Activity                | configurable thinking/tool delivery                  | Not delivered                                          | 2              |
+| Rich answers            | native Rich Markdown with HTML fallback              | Markdown-to-HTML chunks                                | 2              |
+| Inbound content         | replies, edits, images, documents, albums, forwards  | Text/caption only                                      | 2              |
+| Outbound content        | files, voice, buttons, target-aware direct sends     | Text only                                              | 2              |
+| Agent tools             | attach, message, voice, help                         | None                                                   | 2              |
+| Voice                   | pluggable inbound STT and outbound TTS policy        | None                                                   | 2              |
+| Threaded Mode           | one bot, named private-chat threads, target routing  | Single private DM                                      | 3              |
+| Multi-instance behavior | leader/follower Pi processes                         | Adapt to Aiden agent/chat targets; no hidden processes | 3              |
+| Ownership and recovery  | durable lock, fencing, bounded recovery              | Single app process, persisted offset                   | 3              |
+| Profiles                | isolated named bot profiles                          | One bot token                                          | 3              |
+| Extension platform      | commands, sections, status, updates, handlers, voice | No Telegram registry                                   | 3              |
+| Diagnostics             | redacted ring and `/telegram-status` equivalent      | Basic status/last error                                | 3              |
+| Settings/onboarding     | full controls and capability prerequisites           | Basic setup/provider/workspace                         | 4              |
 
 ## Phase 1 — Operator control parity
 

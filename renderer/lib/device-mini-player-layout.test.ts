@@ -22,15 +22,23 @@ const PHONE = deviceMiniPlayerSource("iphone", { width: 1206, height: 2622 });
 const GAP = DEVICE_MINI_PLAYER_GAP;
 
 function inside(frame: DeviceMiniPlayerFrame, container: { width: number; height: number }) {
-  assert.ok(frame.x >= GAP && frame.y >= GAP, `frame ${JSON.stringify(frame)} starts inside the gap`);
+  assert.ok(
+    frame.x >= GAP && frame.y >= GAP,
+    `frame ${JSON.stringify(frame)} starts inside the gap`,
+  );
   assert.ok(frame.x + frame.width <= container.width - GAP + 0.5, "right edge stays inside");
   assert.ok(frame.y + frame.height <= container.height - GAP + 0.5, "bottom edge stays inside");
 }
 
-const screenAspect = (frame: DeviceMiniPlayerFrame) => frame.width / (frame.height - DEVICE_MINI_PLAYER_CHROME_HEIGHT);
+const screenAspect = (frame: DeviceMiniPlayerFrame) =>
+  frame.width / (frame.height - DEVICE_MINI_PLAYER_CHROME_HEIGHT);
 
 test("a fresh player sits in the top-right of the chat at the screen's shape", () => {
-  const frame = deviceMiniPlayerFrame({ source: PHONE, container: CHAT, geometry: DEFAULT_DEVICE_MINI_PLAYER_GEOMETRY });
+  const frame = deviceMiniPlayerFrame({
+    source: PHONE,
+    container: CHAT,
+    geometry: DEFAULT_DEVICE_MINI_PLAYER_GEOMETRY,
+  });
   inside(frame, CHAT);
   assert.equal(frame.y, GAP);
   assert.equal(frame.x + frame.width, CHAT.width - GAP);
@@ -47,8 +55,17 @@ test("before the first frame an iPad floats as an iPad and a phone as a phone", 
 });
 
 test("dragging clamps to the chat area, and a release near an edge snaps to the corner", () => {
-  const start = deviceMiniPlayerFrame({ source: PHONE, container: CHAT, geometry: DEFAULT_DEVICE_MINI_PLAYER_GEOMETRY });
-  const dragged = moveDeviceMiniPlayer({ start, delta: { x: -5_000, y: 5_000 }, source: PHONE, container: CHAT });
+  const start = deviceMiniPlayerFrame({
+    source: PHONE,
+    container: CHAT,
+    geometry: DEFAULT_DEVICE_MINI_PLAYER_GEOMETRY,
+  });
+  const dragged = moveDeviceMiniPlayer({
+    start,
+    delta: { x: -5_000, y: 5_000 },
+    source: PHONE,
+    container: CHAT,
+  });
   inside(dragged, CHAT);
   assert.equal(dragged.x, GAP);
   assert.equal(dragged.y, CHAT.height - dragged.height - GAP);
@@ -56,7 +73,10 @@ test("dragging clamps to the chat area, and a release near an edge snaps to the 
   // Released 30px from the left and 20px above the bottom corner: it lands in the corner.
   const near = { ...dragged, x: GAP + 30, y: CHAT.height - dragged.height - GAP - 20 };
   const snapped = snapDeviceMiniPlayer(near, CHAT);
-  assert.deepEqual({ x: snapped.x, y: snapped.y }, { x: GAP, y: CHAT.height - dragged.height - GAP });
+  assert.deepEqual(
+    { x: snapped.x, y: snapped.y },
+    { x: GAP, y: CHAT.height - dragged.height - GAP },
+  );
 
   // Released mid-chat it stays exactly where it was dropped.
   const middle = { ...dragged, x: 300, y: 120 };
@@ -68,13 +88,29 @@ test("dragging clamps to the chat area, and a release near an edge snaps to the 
 });
 
 test("resizing keeps the screen's aspect ratio, anchors the opposite corner, and stops at the chat", () => {
-  const start = deviceMiniPlayerFrame({ source: PHONE, container: CHAT, geometry: { width: 240, position: { x: 400, y: 40 } } });
-  const grown = resizeDeviceMiniPlayer({ start, edge: "southwest", delta: { x: -60, y: 0 }, source: PHONE, container: CHAT });
+  const start = deviceMiniPlayerFrame({
+    source: PHONE,
+    container: CHAT,
+    geometry: { width: 240, position: { x: 400, y: 40 } },
+  });
+  const grown = resizeDeviceMiniPlayer({
+    start,
+    edge: "southwest",
+    delta: { x: -60, y: 0 },
+    source: PHONE,
+    container: CHAT,
+  });
   assert.ok(grown.width > start.width);
   assert.equal(grown.x + grown.width, start.x + start.width);
   assert.equal(grown.y, start.y);
   assert.ok(Math.abs(screenAspect(grown) - screenAspect(start)) < 0.02);
-  const huge = resizeDeviceMiniPlayer({ start, edge: "southeast", delta: { x: 5_000, y: 5_000 }, source: PHONE, container: CHAT });
+  const huge = resizeDeviceMiniPlayer({
+    start,
+    edge: "southeast",
+    delta: { x: 5_000, y: 5_000 },
+    source: PHONE,
+    container: CHAT,
+  });
   inside(huge, CHAT);
 });
 
@@ -85,13 +121,21 @@ test("a stored size and position are re-fitted to a smaller window without being
   inside(fitted, small);
   assert.ok(fitted.width < 320);
   // Back in the full chat area the original choice applies again.
-  const restored = deviceMiniPlayerFrame({ source: PHONE, container: { width: 1400, height: 1400 }, geometry });
+  const restored = deviceMiniPlayerFrame({
+    source: PHONE,
+    container: { width: 1400, height: 1400 },
+    geometry,
+  });
   assert.equal(restored.width, 320);
   assert.deepEqual({ x: restored.x, y: restored.y }, geometry.position);
 });
 
 test("keyboard: arrows move, Shift moves further, plus and minus resize, other keys pass through", () => {
-  const frame = deviceMiniPlayerFrame({ source: PHONE, container: CHAT, geometry: { width: 260, position: { x: 300, y: 100 } } });
+  const frame = deviceMiniPlayerFrame({
+    source: PHONE,
+    container: CHAT,
+    geometry: { width: 260, position: { x: 300, y: 100 } },
+  });
   const key = (name: string, shiftKey = false) =>
     keyboardDeviceMiniPlayer({ key: name, shiftKey, frame, source: PHONE, container: CHAT });
   assert.equal(key("ArrowLeft")!.x, frame.x - 16);
@@ -104,20 +148,34 @@ test("keyboard: arrows move, Shift moves further, plus and minus resize, other k
 
 test("size and position persist for the window and reject damaged values", () => {
   const values = new Map<string, string>();
-  const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => void values.set(key, value) };
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => void values.set(key, value),
+  };
   const store = createDeviceWorkspaceStore(storage);
   assert.deepEqual(store.geometry(), DEFAULT_DEVICE_MINI_PLAYER_GEOMETRY);
-  const frame = deviceMiniPlayerFrame({ source: PHONE, container: CHAT, geometry: { width: 250.4, position: { x: 33.6, y: 20.2 } } });
+  const frame = deviceMiniPlayerFrame({
+    source: PHONE,
+    container: CHAT,
+    geometry: { width: 250.4, position: { x: 33.6, y: 20.2 } },
+  });
   store.setGeometry(deviceMiniPlayerGeometry(frame));
-  assert.deepEqual(createDeviceWorkspaceStore(storage).geometry(), { width: 250, position: { x: 34, y: 20 } });
+  assert.deepEqual(createDeviceWorkspaceStore(storage).geometry(), {
+    width: 250,
+    position: { x: 34, y: 20 },
+  });
 
   assert.deepEqual(parseDeviceMiniPlayerGeometry("{"), DEFAULT_DEVICE_MINI_PLAYER_GEOMETRY);
   assert.deepEqual(
-    parseDeviceMiniPlayerGeometry(JSON.stringify({ version: 1, width: -4, position: { x: "1", y: 2 } })),
+    parseDeviceMiniPlayerGeometry(
+      JSON.stringify({ version: 1, width: -4, position: { x: "1", y: 2 } }),
+    ),
     DEFAULT_DEVICE_MINI_PLAYER_GEOMETRY,
   );
   assert.deepEqual(
-    parseDeviceMiniPlayerGeometry(serializeDeviceMiniPlayerGeometry({ width: 300, position: null })),
+    parseDeviceMiniPlayerGeometry(
+      serializeDeviceMiniPlayerGeometry({ width: 300, position: null }),
+    ),
     { width: 300, position: null },
   );
 });

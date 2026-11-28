@@ -25,44 +25,47 @@ export interface ImageNodeDefinition {
   outputs: readonly ImagePortDefinition[];
 }
 
-export const IMAGE_NODE_DEFINITIONS: Readonly<Record<ImageNodeType, ImageNodeDefinition>> = Object.freeze({
-  prompt: {
-    type: "prompt",
-    title: "Prompt",
-    lane: "local",
-    inputs: [],
-    outputs: [{ id: "text", kind: "text", label: "Prompt" }],
-  },
-  "image-input": {
-    type: "image-input",
-    title: "Image Input",
-    lane: "local",
-    inputs: [],
-    outputs: [{ id: "image", kind: "image", label: "Image" }],
-  },
-  "generate-image": {
-    type: "generate-image",
-    title: "Generate Image",
-    lane: "provider",
-    inputs: [
-      { id: "prompt", kind: "text", label: "Prompt", required: true, maxConnections: 1 },
-      {
-        id: "references",
-        kind: "images",
-        label: "References",
-        maxConnections: IMAGE_WORKFLOW_LIMITS.maxReferences,
-      },
-    ],
-    outputs: [{ id: "images", kind: "images", label: "Images" }],
-  },
-  output: {
-    type: "output",
-    title: "Output",
-    lane: "local",
-    inputs: [{ id: "images", kind: "images", label: "Images", required: true, maxConnections: 1 }],
-    outputs: [],
-  },
-});
+export const IMAGE_NODE_DEFINITIONS: Readonly<Record<ImageNodeType, ImageNodeDefinition>> =
+  Object.freeze({
+    prompt: {
+      type: "prompt",
+      title: "Prompt",
+      lane: "local",
+      inputs: [],
+      outputs: [{ id: "text", kind: "text", label: "Prompt" }],
+    },
+    "image-input": {
+      type: "image-input",
+      title: "Image Input",
+      lane: "local",
+      inputs: [],
+      outputs: [{ id: "image", kind: "image", label: "Image" }],
+    },
+    "generate-image": {
+      type: "generate-image",
+      title: "Generate Image",
+      lane: "provider",
+      inputs: [
+        { id: "prompt", kind: "text", label: "Prompt", required: true, maxConnections: 1 },
+        {
+          id: "references",
+          kind: "images",
+          label: "References",
+          maxConnections: IMAGE_WORKFLOW_LIMITS.maxReferences,
+        },
+      ],
+      outputs: [{ id: "images", kind: "images", label: "Images" }],
+    },
+    output: {
+      type: "output",
+      title: "Output",
+      lane: "local",
+      inputs: [
+        { id: "images", kind: "images", label: "Images", required: true, maxConnections: 1 },
+      ],
+      outputs: [],
+    },
+  });
 
 export function imageNodePorts(
   node: Pick<WorkflowNode, "type">,
@@ -101,7 +104,10 @@ function port(node: WorkflowNode, direction: "inputs" | "outputs", portId: strin
   return imageNodePorts(node, direction).find((candidate) => candidate.id === portId);
 }
 
-function structurallyValidEdges(document: WorkflowDocV1, issues: WorkflowGraphIssue[]): WorkflowEdge[] {
+function structurallyValidEdges(
+  document: WorkflowDocV1,
+  issues: WorkflowGraphIssue[],
+): WorkflowEdge[] {
   const nodes = new Map(document.nodes.map((node) => [node.id, node]));
   const seen = new Set<string>();
   const incomingCount = new Map<string, number>();
@@ -110,11 +116,20 @@ function structurallyValidEdges(document: WorkflowDocV1, issues: WorkflowGraphIs
     const source = nodes.get(edge.source);
     const target = nodes.get(edge.target);
     if (!source || !target) {
-      issues.push({ code: "unknown_node", edgeId: edge.id, message: "This connection points at a node that no longer exists." });
+      issues.push({
+        code: "unknown_node",
+        edgeId: edge.id,
+        message: "This connection points at a node that no longer exists.",
+      });
       continue;
     }
     if (source.id === target.id) {
-      issues.push({ code: "self_loop", edgeId: edge.id, nodeId: source.id, message: "A node cannot connect to itself." });
+      issues.push({
+        code: "self_loop",
+        edgeId: edge.id,
+        nodeId: source.id,
+        message: "A node cannot connect to itself.",
+      });
       continue;
     }
     const sourcePort = port(source, "outputs", edge.sourcePort);
@@ -125,7 +140,9 @@ function structurallyValidEdges(document: WorkflowDocV1, issues: WorkflowGraphIs
         edgeId: edge.id,
         nodeId: source.id,
         portId: edge.sourcePort,
-        message: reversed ? "Connections start from an output port." : "That output port does not exist.",
+        message: reversed
+          ? "Connections start from an output port."
+          : "That output port does not exist.",
       });
       continue;
     }
@@ -151,7 +168,11 @@ function structurallyValidEdges(document: WorkflowDocV1, issues: WorkflowGraphIs
     }
     const key = [edge.source, edge.sourcePort, edge.target, edge.targetPort].join("\u0000");
     if (seen.has(key)) {
-      issues.push({ code: "duplicate_connection", edgeId: edge.id, message: "This connection already exists." });
+      issues.push({
+        code: "duplicate_connection",
+        edgeId: edge.id,
+        message: "This connection already exists.",
+      });
       continue;
     }
     seen.add(key);
@@ -197,7 +218,10 @@ function kahn(document: WorkflowDocV1, edges: readonly WorkflowEdge[]) {
   return { order, remaining: indegree };
 }
 
-function cycleIssues(document: WorkflowDocV1, edges: readonly WorkflowEdge[]): WorkflowGraphIssue[] {
+function cycleIssues(
+  document: WorkflowDocV1,
+  edges: readonly WorkflowEdge[],
+): WorkflowGraphIssue[] {
   const { order, remaining } = kahn(document, edges);
   if (order.length === document.nodes.length) return [];
   return document.nodes
@@ -244,9 +268,17 @@ export function validateWorkflowGraph(
       }
     }
     if (node.type === "prompt" && node.data.text.trim().length === 0) {
-      issues.push({ code: "missing_prompt", nodeId: node.id, message: "Write a prompt before running." });
+      issues.push({
+        code: "missing_prompt",
+        nodeId: node.id,
+        message: "Write a prompt before running.",
+      });
     } else if (node.type === "image-input" && !node.data.assetId) {
-      issues.push({ code: "missing_asset", nodeId: node.id, message: "Choose an image before running." });
+      issues.push({
+        code: "missing_asset",
+        nodeId: node.id,
+        message: "Choose an image before running.",
+      });
     } else if (node.type === "generate-image" && !node.data.model) {
       issues.push({ code: "missing_model", nodeId: node.id, message: "Choose an image model." });
     }

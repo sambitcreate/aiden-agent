@@ -18,12 +18,24 @@ test("an IPC envelope may omit the marker but never send another value", () => {
 });
 
 test("desktop run input carries the voice marker for Live's steer and refuses other values", () => {
-  assert.deepEqual(parseChatRunInput({ mode: "steer", text: "Use staging" }), { mode: "steer", text: "Use staging" });
-  assert.deepEqual(parseChatRunInput({ mode: "steer", text: "Use staging", inputSource: "voice" }), {
+  assert.deepEqual(parseChatRunInput({ mode: "steer", text: "Use staging" }), {
     mode: "steer",
     text: "Use staging",
-    inputSource: "voice",
   });
-  assert.throws(() => parseChatRunInput({ mode: "steer", text: "Hi", inputSource: "phone" }), /Invalid chat run input/u);
-  assert.throws(() => parseChatRunInput({ mode: "steer", text: "Hi", source: "voice" }), /Invalid chat run input/u);
+  assert.deepEqual(
+    parseChatRunInput({ mode: "steer", text: "Use staging", inputSource: "voice" }),
+    {
+      mode: "steer",
+      text: "Use staging",
+      inputSource: "voice",
+    },
+  );
+  assert.throws(
+    () => parseChatRunInput({ mode: "steer", text: "Hi", inputSource: "phone" }),
+    /Invalid chat run input/u,
+  );
+  assert.throws(
+    () => parseChatRunInput({ mode: "steer", text: "Hi", source: "voice" }),
+    /Invalid chat run input/u,
+  );
 });

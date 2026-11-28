@@ -29,8 +29,12 @@ function memoryStorage() {
   const values = new Map<string, string>();
   return {
     getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => { values.set(key, value); },
-    removeItem: (key: string) => { values.delete(key); },
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
     values,
   };
 }
@@ -49,20 +53,38 @@ function withLocalStorage(t: test.TestContext) {
 test("workspace git memory defaults to This checkout and survives bad or missing storage", () => {
   const storage = memoryStorage();
   assert.deepEqual(readChatDraftGitMemory("ws-a", storage), { gitMode: "checkout" });
-  rememberChatDraftGitMemory("ws-a", { gitMode: "worktree", baseRef: "main", fromOrigin: true }, storage);
+  rememberChatDraftGitMemory(
+    "ws-a",
+    { gitMode: "worktree", baseRef: "main", fromOrigin: true },
+    storage,
+  );
   rememberChatDraftGitMemory("ws-b", { gitMode: "checkout" }, storage);
-  assert.deepEqual(readChatDraftGitMemory("ws-a", storage), { gitMode: "worktree", baseRef: "main", fromOrigin: true });
+  assert.deepEqual(readChatDraftGitMemory("ws-a", storage), {
+    gitMode: "worktree",
+    baseRef: "main",
+    fromOrigin: true,
+  });
   assert.deepEqual(readChatDraftGitMemory("ws-b", storage), { gitMode: "checkout" });
 
   storage.setItem(CHAT_DRAFT_GIT_MEMORY_KEY, "{not json");
   assert.deepEqual(readChatDraftGitMemory("ws-a", storage), { gitMode: "checkout" });
-  storage.setItem(CHAT_DRAFT_GIT_MEMORY_KEY, JSON.stringify([["ws-a", { gitMode: "elsewhere" }], ["ws-b", { gitMode: "worktree", baseRef: 7 }]]));
+  storage.setItem(
+    CHAT_DRAFT_GIT_MEMORY_KEY,
+    JSON.stringify([
+      ["ws-a", { gitMode: "elsewhere" }],
+      ["ws-b", { gitMode: "worktree", baseRef: 7 }],
+    ]),
+  );
   assert.deepEqual(readChatDraftGitMemory("ws-a", storage), { gitMode: "checkout" });
   assert.deepEqual(readChatDraftGitMemory("ws-b", storage), { gitMode: "worktree" });
 
   const throwing = {
-    getItem: () => { throw new Error("denied"); },
-    setItem: () => { throw new Error("denied"); },
+    getItem: () => {
+      throw new Error("denied");
+    },
+    setItem: () => {
+      throw new Error("denied");
+    },
   };
   assert.deepEqual(readChatDraftGitMemory("ws-a", throwing), { gitMode: "checkout" });
   assert.doesNotThrow(() => rememberChatDraftGitMemory("ws-a", { gitMode: "worktree" }, throwing));
@@ -74,23 +96,66 @@ test("workspace git memory keeps only the most recently used workspaces", () => 
   for (let index = 0; index <= CHAT_DRAFT_GIT_MEMORY_LIMIT; index += 1) {
     rememberChatDraftGitMemory(`ws-${index}`, { gitMode: "worktree" }, storage);
   }
-  assert.deepEqual(readChatDraftGitMemory("ws-0", storage), { gitMode: "checkout" }, "the oldest is forgotten");
+  assert.deepEqual(
+    readChatDraftGitMemory("ws-0", storage),
+    { gitMode: "checkout" },
+    "the oldest is forgotten",
+  );
   assert.equal(readChatDraftGitMemory("ws-1", storage).gitMode, "worktree");
-  assert.equal(readChatDraftGitMemory(`ws-${CHAT_DRAFT_GIT_MEMORY_LIMIT}`, storage).gitMode, "worktree");
+  assert.equal(
+    readChatDraftGitMemory(`ws-${CHAT_DRAFT_GIT_MEMORY_LIMIT}`, storage).gitMode,
+    "worktree",
+  );
 });
 
 test("new-worktree defaults prefer a remembered base that still exists, then the default branch", () => {
   const repository = {
-    branches: ["feature", "main"], remoteBranches: ["origin/main"], current: "feature",
-    defaultBranch: "main", hasRemote: true,
+    branches: ["feature", "main"],
+    remoteBranches: ["origin/main"],
+    current: "feature",
+    defaultBranch: "main",
+    hasRemote: true,
   };
-  const cases: Array<[string, Parameters<typeof resolveDraftWorktreeDefaults>, ReturnType<typeof resolveDraftWorktreeDefaults>]> = [
-    ["nothing remembered", [{ gitMode: "checkout" }, repository], { baseRef: "main", fromOrigin: true }],
-    ["remembered base", [{ gitMode: "worktree", baseRef: "feature", fromOrigin: false }, repository], { baseRef: "feature", fromOrigin: false }],
-    ["remembered remote base", [{ gitMode: "worktree", baseRef: "origin/main" }, repository], { baseRef: "origin/main", fromOrigin: true }],
-    ["remembered base deleted", [{ gitMode: "worktree", baseRef: "gone" }, repository], { baseRef: "main", fromOrigin: true }],
-    ["no remote", [{ gitMode: "worktree", fromOrigin: true }, { branches: ["trunk"], current: "trunk", hasRemote: false }], { baseRef: "trunk", fromOrigin: false }],
-    ["default branch only on the remote", [{ gitMode: "checkout" }, { ...repository, branches: ["feature"] }], { baseRef: "feature", fromOrigin: true }],
+  const cases: Array<
+    [
+      string,
+      Parameters<typeof resolveDraftWorktreeDefaults>,
+      ReturnType<typeof resolveDraftWorktreeDefaults>,
+    ]
+  > = [
+    [
+      "nothing remembered",
+      [{ gitMode: "checkout" }, repository],
+      { baseRef: "main", fromOrigin: true },
+    ],
+    [
+      "remembered base",
+      [{ gitMode: "worktree", baseRef: "feature", fromOrigin: false }, repository],
+      { baseRef: "feature", fromOrigin: false },
+    ],
+    [
+      "remembered remote base",
+      [{ gitMode: "worktree", baseRef: "origin/main" }, repository],
+      { baseRef: "origin/main", fromOrigin: true },
+    ],
+    [
+      "remembered base deleted",
+      [{ gitMode: "worktree", baseRef: "gone" }, repository],
+      { baseRef: "main", fromOrigin: true },
+    ],
+    [
+      "no remote",
+      [
+        { gitMode: "worktree", fromOrigin: true },
+        { branches: ["trunk"], current: "trunk", hasRemote: false },
+      ],
+      { baseRef: "trunk", fromOrigin: false },
+    ],
+    [
+      "default branch only on the remote",
+      [{ gitMode: "checkout" }, { ...repository, branches: ["feature"] }],
+      { baseRef: "feature", fromOrigin: true },
+    ],
     ["no commits yet", [{ gitMode: "worktree" }, { branches: ["main"], unborn: true }], undefined],
   ];
   for (const [name, args, expected] of cases) {
@@ -100,7 +165,11 @@ test("new-worktree defaults prefer a remembered base that still exists, then the
 
 test("a draft starts in the workspace's remembered git mode and resets it when it moves", (t) => {
   withLocalStorage(t);
-  rememberChatDraftGitMemory("ws-worktree", { gitMode: "worktree", baseRef: "main", fromOrigin: true });
+  rememberChatDraftGitMemory("ws-worktree", {
+    gitMode: "worktree",
+    baseRef: "main",
+    fromOrigin: true,
+  });
 
   const plain = mountedDraft("ws-plain");
   assert.equal(plain.gitMode, "checkout");
@@ -130,7 +199,11 @@ test("worktree choices are remembered per workspace and become the first-message
   const draft = mountedDraft("ws-a");
   assert.throws(() => updateChatDraftWorktree(draft.chat.id, { fromOrigin: true }), /base branch/u);
   setChatDraftGitMode(draft.chat.id, "worktree");
-  updateChatDraftWorktree(draft.chat.id, { baseRef: "develop", fromOrigin: true, branchName: "  aiden/custom " });
+  updateChatDraftWorktree(draft.chat.id, {
+    baseRef: "develop",
+    fromOrigin: true,
+    branchName: "  aiden/custom ",
+  });
 
   assert.deepEqual(chatDraftWorktreeRequest(getChatDraft(draft.chat.id)!), {
     sourceWorkspaceId: "ws-a",
@@ -140,15 +213,27 @@ test("worktree choices are remembered per workspace and become the first-message
     idempotencyKey: draft.chat.id,
   });
   // The branch name is this draft's own; the mode and base carry to the next draft.
-  assert.deepEqual(readChatDraftGitMemory("ws-a"), { gitMode: "worktree", baseRef: "develop", fromOrigin: true });
+  assert.deepEqual(readChatDraftGitMemory("ws-a"), {
+    gitMode: "worktree",
+    baseRef: "develop",
+    fromOrigin: true,
+  });
   const next = mountedDraft("ws-a");
   assert.deepEqual(next.worktree, { baseRef: "develop", fromOrigin: true });
 
   updateChatDraftWorktree(draft.chat.id, { branchName: "" });
-  assert.equal(getChatDraft(draft.chat.id)?.worktree?.branchName, undefined, "blank goes back to Auto");
+  assert.equal(
+    getChatDraft(draft.chat.id)?.worktree?.branchName,
+    undefined,
+    "blank goes back to Auto",
+  );
   setChatDraftGitMode(draft.chat.id, "checkout");
   assert.equal(chatDraftWorktreeRequest(getChatDraft(draft.chat.id)!), undefined);
-  assert.deepEqual(getChatDraft(draft.chat.id)?.worktree, { baseRef: "develop", fromOrigin: true }, "settings survive the toggle");
+  assert.deepEqual(
+    getChatDraft(draft.chat.id)?.worktree,
+    { baseRef: "develop", fromOrigin: true },
+    "settings survive the toggle",
+  );
   assert.equal(readChatDraftGitMemory("ws-a").gitMode, "checkout");
 
   for (const item of [draft, next]) discardChatDraft(item.chat.id);

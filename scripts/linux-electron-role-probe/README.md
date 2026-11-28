@@ -120,9 +120,9 @@ for label observation. No blanket FD denial can substitute for the object rule.
 
 The verifier requires all four cells from the same server PID:
 
-| Receiver | Generic endpoint | Protected endpoint |
-| --- | --- | --- |
-| Electron main | Token/ACK roundtrip | Token/ACK roundtrip |
+| Receiver           | Generic endpoint    | Protected endpoint                       |
+| ------------------ | ------------------- | ---------------------------------------- |
+| Electron main      | Token/ACK roundtrip | Token/ACK roundtrip                      |
 | Node utility child | Token/ACK roundtrip | No received FD, MSG_CTRUNC, no token/ACK |
 
 It cross-checks native receiver PIDs with the existing root process receipt,

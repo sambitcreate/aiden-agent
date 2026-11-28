@@ -40,7 +40,12 @@ export type ChatTurnEvent =
 
 /** Effects run in order: the budget is complete before `finalize` is reached. */
 export type ChatTurnEffect =
-  | { readonly type: "budget"; readonly pool: ChatTurnPoolName; readonly turns: number; readonly bytes: number }
+  | {
+      readonly type: "budget";
+      readonly pool: ChatTurnPoolName;
+      readonly turns: number;
+      readonly bytes: number;
+    }
   | { readonly type: "revoked" }
   | { readonly type: "finalize" };
 
@@ -72,9 +77,7 @@ function poolHasRoom(pool: ChatTurnPool, bytes: number): boolean {
 }
 
 function refund(pool: ChatTurnPoolName, slot: ChatTurnSlot): ChatTurnEffect[] {
-  return slot.holder === "lease"
-    ? [{ type: "budget", pool, turns: -1, bytes: -slot.bytes }]
-    : [];
+  return slot.holder === "lease" ? [{ type: "budget", pool, turns: -1, bytes: -slot.bytes }] : [];
 }
 
 /** Whether this turn may still start work. */
@@ -162,7 +165,9 @@ export function transitionChatTurn(
           skill: { holder: "lease", bytes: event.bytes },
           skillPrepared: true,
         },
-        effects: [{ type: "budget", pool: "skill", turns: 0, bytes: event.bytes - state.skill.bytes }],
+        effects: [
+          { type: "budget", pool: "skill", turns: 0, bytes: event.bytes - state.skill.bytes },
+        ],
       };
     }
     case "settle": {

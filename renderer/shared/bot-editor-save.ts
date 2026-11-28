@@ -23,9 +23,7 @@ export interface BotEditorAccessDraft {
 }
 
 function sameAvatar(left: BotAvatarAppearance, right: BotAvatarAppearance): boolean {
-  return left.version === right.version
-    && left.shape === right.shape
-    && left.color === right.color;
+  return left.version === right.version && left.shape === right.shape && left.color === right.color;
 }
 
 function sameIds(left: readonly string[], right: readonly string[]): boolean {
@@ -40,12 +38,14 @@ export function rebaseBotEditorIdentityDraft(
 ): BotEditorIdentityDraft {
   return {
     name: draft.name.trim() === baseline.name.trim() ? authoritative.name : draft.name,
-    description: draft.description.trim() === baseline.description.trim()
-      ? authoritative.description
-      : draft.description,
-    instructions: draft.instructions.trim() === baseline.instructions.trim()
-      ? authoritative.instructions
-      : draft.instructions,
+    description:
+      draft.description.trim() === baseline.description.trim()
+        ? authoritative.description
+        : draft.description,
+    instructions:
+      draft.instructions.trim() === baseline.instructions.trim()
+        ? authoritative.instructions
+        : draft.instructions,
     avatar: sameAvatar(draft.avatar, baseline.avatar) ? authoritative.avatar : draft.avatar,
   };
 }
@@ -59,39 +59,40 @@ export function rebaseBotEditorAccessDraft(
   // Provider and model form one binding. Keeping a user-edited model while
   // adopting a concurrently changed provider (or vice versa) can manufacture
   // a pair that never existed in either editor.
-  const modelBindingChanged = draft.providerId !== baseline.providerId
-    || draft.modelId !== baseline.modelId;
+  const modelBindingChanged =
+    draft.providerId !== baseline.providerId || draft.modelId !== baseline.modelId;
   return {
-    usesFullAccess: draft.usesFullAccess === baseline.usesFullAccess
-      ? authoritative.usesFullAccess
-      : draft.usesFullAccess,
-    webSearchEnabled: draft.webSearchEnabled === baseline.webSearchEnabled
-      ? authoritative.webSearchEnabled
-      : draft.webSearchEnabled,
+    usesFullAccess:
+      draft.usesFullAccess === baseline.usesFullAccess
+        ? authoritative.usesFullAccess
+        : draft.usesFullAccess,
+    webSearchEnabled:
+      draft.webSearchEnabled === baseline.webSearchEnabled
+        ? authoritative.webSearchEnabled
+        : draft.webSearchEnabled,
     providerId: modelBindingChanged ? draft.providerId : authoritative.providerId,
     modelId: modelBindingChanged ? draft.modelId : authoritative.modelId,
     visionProviderId:
-      draft.visionProviderId !== baseline.visionProviderId
-      || draft.visionModelId !== baseline.visionModelId
+      draft.visionProviderId !== baseline.visionProviderId ||
+      draft.visionModelId !== baseline.visionModelId
         ? draft.visionProviderId
         : authoritative.visionProviderId,
     visionModelId:
-      draft.visionProviderId !== baseline.visionProviderId
-      || draft.visionModelId !== baseline.visionModelId
+      draft.visionProviderId !== baseline.visionProviderId ||
+      draft.visionModelId !== baseline.visionModelId
         ? draft.visionModelId
         : authoritative.visionModelId,
     fileScopeIds: sameIds(draft.fileScopeIds, baseline.fileScopeIds)
       ? authoritative.fileScopeIds
       : draft.fileScopeIds,
-    shellEnabled: draft.shellEnabled === baseline.shellEnabled
-      ? authoritative.shellEnabled
-      : draft.shellEnabled,
+    shellEnabled:
+      draft.shellEnabled === baseline.shellEnabled
+        ? authoritative.shellEnabled
+        : draft.shellEnabled,
     connectionIds: sameIds(draft.connectionIds, baseline.connectionIds)
       ? authoritative.connectionIds
       : draft.connectionIds,
-    skillIds: sameIds(draft.skillIds, baseline.skillIds)
-      ? authoritative.skillIds
-      : draft.skillIds,
+    skillIds: sameIds(draft.skillIds, baseline.skillIds) ? authoritative.skillIds : draft.skillIds,
     otherCapabilityIds: sameIds(draft.otherCapabilityIds, baseline.otherCapabilityIds)
       ? authoritative.otherCapabilityIds
       : draft.otherCapabilityIds,

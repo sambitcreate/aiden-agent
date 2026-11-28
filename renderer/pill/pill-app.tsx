@@ -263,9 +263,7 @@ export function PillApp() {
         };
         liveTranscriptRef.current = { committed: "", tentative: "" };
         setLiveTranscript(liveTranscriptRef.current);
-        if (
-          shouldUseGeminiLiveTranscription(voice.provider, settings.voiceModel)
-        ) {
+        if (shouldUseGeminiLiveTranscription(voice.provider, settings.voiceModel)) {
           active.liveStart = GeminiLiveCapture.start(stream, publishLiveTranscript).catch(
             () => undefined,
           );
@@ -358,7 +356,11 @@ export function PillApp() {
                   await dictationApi.reportProgress(operationId, "fallback", progressAudioSeconds);
                 } else {
                   // Batch transcription is the first attempt, not a retry.
-                  await dictationApi.reportProgress(operationId, "finalizing", progressAudioSeconds);
+                  await dictationApi.reportProgress(
+                    operationId,
+                    "finalizing",
+                    progressAudioSeconds,
+                  );
                 }
                 active.batchOperationId = `${operationId}-batch`;
                 active.batchProvider = voice.provider;
@@ -658,10 +660,10 @@ export function PillApp() {
                 {loadingModel && phase !== "delivering"
                   ? "Loading model…"
                   : phase === "finalizing"
-                  ? "Finishing transcript…"
-                  : phase === "fallback"
-                    ? "Retrying with recorded audio…"
-                    : "Pasting…"}
+                    ? "Finishing transcript…"
+                    : phase === "fallback"
+                      ? "Retrying with recorded audio…"
+                      : "Pasting…"}
               </span>
               <button
                 type="button"

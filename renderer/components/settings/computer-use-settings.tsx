@@ -6,17 +6,8 @@ import { InfoHint } from "../ui-info-hint";
 import { computerUseApi, formFillApi, settingsApi } from "../../lib/ipc";
 import { reduceComputerUseRefreshState } from "../../lib/computer-use-readiness";
 import { useRequestComputerUsePermissions } from "../computer-use-access-approval";
-import {
-  queryKeys,
-  useComputerUseStatus,
-  useFormFillStatus,
-  useSettings,
-} from "../../lib/queries";
-import type {
-  AppSettings,
-  ComputerUseStatus,
-  FormFillSettingsView,
-} from "../../lib/types";
+import { queryKeys, useComputerUseStatus, useFormFillStatus, useSettings } from "../../lib/queries";
+import type { AppSettings, ComputerUseStatus, FormFillSettingsView } from "../../lib/types";
 
 function statusPresentation(status: ComputerUseStatus | undefined, failed: boolean) {
   if (failed) {
@@ -90,7 +81,9 @@ function ResetChatGrantsField() {
         queryClient.invalidateQueries({ queryKey: ["chat"] }),
         queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
       ]);
-      toast.success(`Reset Computer Use permissions for ${cleared} ${cleared === 1 ? "chat" : "chats"}.`);
+      toast.success(
+        `Reset Computer Use permissions for ${cleared} ${cleared === 1 ? "chat" : "chats"}.`,
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn’t reset chat permissions.");
     } finally {
@@ -118,7 +111,10 @@ function FormFillSpecialistField() {
     setRemoving(true);
     try {
       const status = await formFillApi.remove();
-      queryClient.setQueryData<FormFillSettingsView>(queryKeys.formFillStatus, { enabled: false, status });
+      queryClient.setQueryData<FormFillSettingsView>(queryKeys.formFillStatus, {
+        enabled: false,
+        status,
+      });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't remove the model.");
     } finally {
@@ -346,8 +342,8 @@ export function ComputerUseSettings() {
       <div className="flex items-start gap-1.5 px-4">
         <Text as="p" variant="small" color="secondary" className="max-w-[46rem] text-pretty">
           In an allowed chat, your selected model may receive screenshots, window details and
-          accessibility text, and Aiden can click and type without asking again. Aiden doesn’t
-          save that content; your provider’s data policy applies.
+          accessibility text, and Aiden can click and type without asking again. Aiden doesn’t save
+          that content; your provider’s data policy applies.
         </Text>
         <InfoHint topic="how Computer Use behaves">
           Aiden asks once in each chat unless you turn on Always allow.

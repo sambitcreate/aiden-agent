@@ -106,7 +106,10 @@ export function createChatOwedTurns<Context, Origin extends string>(
 
   return {
     /** A run that can owe its chat a turn has started. */
-    open(streamId: string, run: { chatId: string; ownerDocumentId: string; context: Context }): void {
+    open(
+      streamId: string,
+      run: { chatId: string; ownerDocumentId: string; context: Context },
+    ): void {
       if (shuttingDown || entries.has(streamId)) return;
       entries.set(streamId, {
         chatId: run.chatId,

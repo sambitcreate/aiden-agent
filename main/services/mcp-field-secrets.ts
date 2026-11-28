@@ -27,7 +27,8 @@ import { createMcpStdioApprovalStore } from "./mcp-stdio-approvals.js";
 import type { McpServer } from "./types.js";
 
 /** Whole-record bound: every value at its limit, plus JSON overhead. */
-const MAX_RECORD_CHARS = MCP_FIELD_SECRET_LIMITS.entries * 2 * (MCP_FIELD_SECRET_LIMITS.valueChars + 64);
+const MAX_RECORD_CHARS =
+  MCP_FIELD_SECRET_LIMITS.entries * 2 * (MCP_FIELD_SECRET_LIMITS.valueChars + 64);
 
 export const mcpStdioApprovals = createMcpStdioApprovalStore(async () => {
   const root = app.getPath("userData");
@@ -35,7 +36,10 @@ export const mcpStdioApprovals = createMcpStdioApprovalStore(async () => {
   return path.join(root, "mcp-stdio-approvals.json");
 });
 
-export function planMcpServerFieldSecrets(server: McpServer, options: McpFieldSecretPlanOptions = {}): McpFieldSecretPlan {
+export function planMcpServerFieldSecrets(
+  server: McpServer,
+  options: McpFieldSecretPlanOptions = {},
+): McpFieldSecretPlan {
   return planMcpFieldSecrets(server, () => randomBytes(16).toString("hex"), options);
 }
 
@@ -45,7 +49,9 @@ export async function storedMcpFieldSecretValues(server: McpServer): Promise<Mcp
 }
 
 /** A local server's env as its launch approval shows it. */
-export async function storedMcpEnvForApproval(server: McpServer): Promise<ReturnType<typeof mcpEnvForApproval>> {
+export async function storedMcpEnvForApproval(
+  server: McpServer,
+): Promise<ReturnType<typeof mcpEnvForApproval>> {
   return mcpEnvForApproval(server, await readRecord(server.id).catch(() => undefined));
 }
 
@@ -53,12 +59,21 @@ async function readRecord(serverId: string): Promise<McpFieldSecretRecord | unde
   return parseMcpFieldSecretRecord(await secrets.getKeyStrict(mcpFieldSecretId(serverId)));
 }
 
-async function writeRecord(serverId: string, record: McpFieldSecretRecord | undefined, isCurrent: () => boolean): Promise<void> {
+async function writeRecord(
+  serverId: string,
+  record: McpFieldSecretRecord | undefined,
+  isCurrent: () => boolean,
+): Promise<void> {
   if (!record || Object.values(record.bindings).every((group) => Object.keys(group).length === 0)) {
     await secrets.deleteKey(mcpFieldSecretId(serverId), isCurrent);
     return;
   }
-  await secrets.setInternalKey(mcpFieldSecretId(serverId), serializeMcpFieldSecretRecord(record), MAX_RECORD_CHARS, isCurrent);
+  await secrets.setInternalKey(
+    mcpFieldSecretId(serverId),
+    serializeMcpFieldSecretRecord(record),
+    MAX_RECORD_CHARS,
+    isCurrent,
+  );
 }
 
 /**
@@ -71,7 +86,10 @@ export async function stageStoredMcpFieldSecrets(
   isCurrent: () => boolean,
   options: { fromEditor?: boolean; current?: McpServer } = {},
 ): Promise<McpServer> {
-  const staged = stageMcpFieldSecrets(await readRecord(serverId), plan, { ...options, random: () => randomBytes(16).toString("hex") });
+  const staged = stageMcpFieldSecrets(await readRecord(serverId), plan, {
+    ...options,
+    random: () => randomBytes(16).toString("hex"),
+  });
   if (staged.record) await writeRecord(serverId, staged.record, isCurrent);
   return staged.server;
 }
@@ -89,7 +107,8 @@ export async function pruneStoredMcpFieldSecrets(
   const record = await readRecord(serverId);
   if (!record) return;
   const pruned = pruneMcpFieldSecretRecord(record, current);
-  if (pruned && serializeMcpFieldSecretRecord(pruned) === serializeMcpFieldSecretRecord(record)) return;
+  if (pruned && serializeMcpFieldSecretRecord(pruned) === serializeMcpFieldSecretRecord(record))
+    return;
   await writeRecord(serverId, pruned, isCurrent);
 }
 

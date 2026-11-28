@@ -33,7 +33,10 @@ const wrapLine = (line: string, maxChars: number): string[] => {
 };
 
 export const wrapLongLines = (text: string, maxChars = TUI_SAFE_LINE_CHARS): string =>
-  text.split("\n").flatMap((line) => wrapLine(line, maxChars)).join("\n");
+  text
+    .split("\n")
+    .flatMap((line) => wrapLine(line, maxChars))
+    .join("\n");
 
 export const capBrief = (text: string): string => {
   const lines = text.split("\n");

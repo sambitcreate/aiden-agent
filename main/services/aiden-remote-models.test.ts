@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AidenRemoteModelService } from "./aiden-remote-models.js";
-import { parseAidenRemoteAgentSlider, type AidenRemoteAgentSlider } from "./aiden-remote-protocol.js";
+import {
+  parseAidenRemoteAgentSlider,
+  type AidenRemoteAgentSlider,
+} from "./aiden-remote-protocol.js";
 import type { Provider } from "./types.js";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { withPiRemoteCatalog } from "./pi-remote-catalog.js";
@@ -33,17 +36,25 @@ function provider(overrides: Partial<Provider> = {}): Provider {
 test("mobile catalogs omit legacy Google models and recover stale defaults", async () => {
   const google = builtinProviders().find((entry) => entry.id === "google");
   assert.ok(google);
-  const models = withPiRemoteCatalog(google).getModels().map((model) => model.id);
+  const models = withPiRemoteCatalog(google)
+    .getModels()
+    .map((model) => model.id);
   const service = new AidenRemoteModelService({
     listProviders: async () => [provider({ id: "google", models, modelMetadata: {} })],
     getSettings: async () => ({ lastProviderId: "google", lastModel: "gemini-2.5-flash" }),
   });
   const catalog = await service.list();
   assert.ok(catalog.providers[0]?.models.length);
-  assert.ok(catalog.providers[0]?.models.every((model) => !/^gemini-(?:2\.5|2\.0|1\.5)(?:-|$)/u.test(model.id)));
+  assert.ok(
+    catalog.providers[0]?.models.every(
+      (model) => !/^gemini-(?:2\.5|2\.0|1\.5)(?:-|$)/u.test(model.id),
+    ),
+  );
   assert.ok(catalog.defaults.modelId && models.includes(catalog.defaults.modelId));
-  await assert.rejects(service.resolve("google", "gemini-2.5-flash"),
-    (error: unknown) => (error as { code?: string }).code === "invalid_request");
+  await assert.rejects(
+    service.resolve("google", "gemini-2.5-flash"),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
 });
 
 test("model projection includes only configured chat models and no connection secrets", async () => {
@@ -72,7 +83,8 @@ test("model projection includes only configured chat models and no connection se
 test("custom provider artwork crosses the remote catalog only as bounded normalized PNG data", async () => {
   const artwork = {
     mimeType: "image/png" as const,
-    dataBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    dataBase64:
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   };
   const service = new AidenRemoteModelService({
     listProviders: async () => [provider({ artwork })],
@@ -146,14 +158,20 @@ test("without a saved model, phones start on the provider's default model", asyn
     }),
   ];
   const fresh = new AidenRemoteModelService({ listProviders, getSettings: async () => ({}) });
-  assert.deepEqual((await fresh.list()).defaults, { providerId: "provider-1", modelId: "default-model" });
+  assert.deepEqual((await fresh.list()).defaults, {
+    providerId: "provider-1",
+    modelId: "default-model",
+  });
   assert.equal((await fresh.resolve()).modelId, "default-model");
 
   const saved = new AidenRemoteModelService({
     listProviders,
     getSettings: async () => ({ lastProviderId: "provider-1", lastModel: "first-model" }),
   });
-  assert.deepEqual((await saved.list()).defaults, { providerId: "provider-1", modelId: "first-model" });
+  assert.deepEqual((await saved.list()).defaults, {
+    providerId: "provider-1",
+    modelId: "first-model",
+  });
 });
 
 test("a provider with every model hidden has no remote default", async () => {
@@ -183,9 +201,11 @@ test("transcription-only rejects new remote Google chat selection but allows a p
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
   assert.equal(
-    (await service.resolve("google", "gemini-chat", {
-      allowExistingPinnedGemini: true,
-    })).modelId,
+    (
+      await service.resolve("google", "gemini-chat", {
+        allowExistingPinnedGemini: true,
+      })
+    ).modelId,
     "gemini-chat",
   );
 });
@@ -197,12 +217,16 @@ test("remote catalog omits oversized model identities instead of truncating or c
     getSettings: async () => ({}),
   });
 
-  assert.deepEqual((await service.list()).providers[0]?.models.map((model) => model.id), ["safe"]);
+  assert.deepEqual(
+    (await service.list()).providers[0]?.models.map((model) => model.id),
+    ["safe"],
+  );
 });
 
 test("remote model projection remains below the generic iOS response ceiling", async () => {
-  const models = Array.from({ length: 20_000 }, (_, index) =>
-    `model-${index.toString().padStart(5, "0")}-${"x".repeat(120)}`,
+  const models = Array.from(
+    { length: 20_000 },
+    (_, index) => `model-${index.toString().padStart(5, "0")}-${"x".repeat(120)}`,
   );
   const service = new AidenRemoteModelService({
     listProviders: async () => [provider({ models })],
@@ -216,130 +240,200 @@ test("remote model projection remains below the generic iOS response ceiling", a
 
 test("OpenCode Go projects remotely refreshed Ox Alpha metadata and thinking choices to iOS", async () => {
   const service = new AidenRemoteModelService({
-    listProviders: async () => [provider({
-      id: "opencode-go",
-      label: "OpenCode Go",
-      models: ["ox-alpha-free"],
-      defaultModel: "ox-alpha-free",
-      modelMetadata: {
-        "ox-alpha-free": {
-          source: "provider",
-          name: "Ox Alpha Free (Unlimited)",
-          type: "llm",
-          reasoning: true,
-          thinkingLevels: ["low", "high", "max"],
-          thinkingCanDisable: false,
+    listProviders: async () => [
+      provider({
+        id: "opencode-go",
+        label: "OpenCode Go",
+        models: ["ox-alpha-free"],
+        defaultModel: "ox-alpha-free",
+        modelMetadata: {
+          "ox-alpha-free": {
+            source: "provider",
+            name: "Ox Alpha Free (Unlimited)",
+            type: "llm",
+            reasoning: true,
+            thinkingLevels: ["low", "high", "max"],
+            thinkingCanDisable: false,
+          },
         },
-      },
-    })],
+      }),
+    ],
     getSettings: async () => ({
       providerThinkingByModel: { "opencode-go": { "ox-alpha-free": "max" } },
     }),
   });
-  assert.deepEqual((await service.list()).providers[0]?.models, [{
-    id: "ox-alpha-free",
-    label: "Ox Alpha Free (Unlimited)",
-    supportsImages: false,
-    thinkingLevels: ["low", "high", "max"],
-    defaultThinkingLevel: "max",
-    thinkingCanDisable: false,
-  }]);
+  assert.deepEqual((await service.list()).providers[0]?.models, [
+    {
+      id: "ox-alpha-free",
+      label: "Ox Alpha Free (Unlimited)",
+      supportsImages: false,
+      thinkingLevels: ["low", "high", "max"],
+      defaultThinkingLevel: "max",
+      thinkingCanDisable: false,
+    },
+  ]);
 });
 
 test("Google Gemini 4 models project xhigh and saved thinking preferences to paired devices", async () => {
   const service = new AidenRemoteModelService({
-    listProviders: async () => [provider({
-      id: "google",
-      label: "Google Gemini",
-      models: ["gemini-4-hydrogen"],
-      defaultModel: "gemini-4-hydrogen",
-      modelMetadata: {
-        "gemini-4-hydrogen": {
-          source: "provider",
-          name: "Gemini 4 Hydrogen",
-          type: "llm",
-          vision: true,
-          reasoning: true,
-          thinkingLevels: ["off", "low", "medium", "high", "xhigh"],
-          thinkingCanDisable: false,
+    listProviders: async () => [
+      provider({
+        id: "google",
+        label: "Google Gemini",
+        models: ["gemini-4-hydrogen"],
+        defaultModel: "gemini-4-hydrogen",
+        modelMetadata: {
+          "gemini-4-hydrogen": {
+            source: "provider",
+            name: "Gemini 4 Hydrogen",
+            type: "llm",
+            vision: true,
+            reasoning: true,
+            thinkingLevels: ["off", "low", "medium", "high", "xhigh"],
+            thinkingCanDisable: false,
+          },
         },
-      },
-    })],
+      }),
+    ],
     getSettings: async () => ({
       googleThinkingByModel: { "gemini-4-hydrogen": "xhigh" },
     }),
   });
-  assert.deepEqual((await service.list()).providers[0]?.models, [{
-    id: "gemini-4-hydrogen",
-    label: "Gemini 4 Hydrogen",
-    supportsImages: true,
-    thinkingLevels: ["off", "low", "medium", "high", "xhigh"],
-    defaultThinkingLevel: "xhigh",
-    thinkingCanDisable: false,
-  }]);
+  assert.deepEqual((await service.list()).providers[0]?.models, [
+    {
+      id: "gemini-4-hydrogen",
+      label: "Gemini 4 Hydrogen",
+      supportsImages: true,
+      thinkingLevels: ["off", "low", "medium", "high", "xhigh"],
+      defaultThinkingLevel: "xhigh",
+      thinkingCanDisable: false,
+    },
+  ]);
 });
 
 test("desktop local classifier opt-in does not alter the native chat catalog contract", async () => {
-  const saved = provider({ id: "custom:llama", baseUrl: "http://localhost:8080/v1", deployment: "local", llamaCppClassifierEnabled: true });
-  const service = new AidenRemoteModelService({ listProviders: async () => [saved], getSettings: async () => ({}) });
+  const saved = provider({
+    id: "custom:llama",
+    baseUrl: "http://localhost:8080/v1",
+    deployment: "local",
+    llamaCppClassifierEnabled: true,
+  });
+  const service = new AidenRemoteModelService({
+    listProviders: async () => [saved],
+    getSettings: async () => ({}),
+  });
   const projection = await service.list();
   assert.deepEqual(Object.keys(projection.providers[0]).sort(), ["id", "label", "models"]);
-  assert.deepEqual(projection.providers[0].models.map((model) => model.id), ["chat-model"]);
+  assert.deepEqual(
+    projection.providers[0].models.map((model) => model.id),
+    ["chat-model"],
+  );
 });
 
 test("remote provider creation saves explicit image options and recovers a lost receipt without key rotation", async () => {
   const { AidenRemoteProviderService } = await import("./aiden-remote-providers.js");
   const { splitStoredProvider, composeStoredProvider } = await import("./portable-config-core.js");
   let saved: import("./types.js").StoredProvider | undefined;
-  let writes = 0; let receivedKey: string | null = null;
+  let writes = 0;
+  let receivedKey: string | null = null;
   const dependencies = {
     get: async () => saved,
     save: async (value: import("./types.js").StoredProvider, key: string | null) => {
-      writes++; receivedKey = key;
+      writes++;
+      receivedKey = key;
       const { intent, cache } = splitStoredProvider(value);
-      saved = composeStoredProvider(JSON.parse(JSON.stringify(intent)), JSON.parse(JSON.stringify(cache)));
+      saved = composeStoredProvider(
+        JSON.parse(JSON.stringify(intent)),
+        JSON.parse(JSON.stringify(cache)),
+      );
       return saved;
     },
     changed: () => {},
     recoverCredential: async () => receivedKey !== null,
   };
-  const input = { label: "Private", baseUrl: "https://models.example.test/v1", kind: "openai", deployment: "hosted", needsKey: true, apiKey: "fixture-key", confirmedForeground: true, models: [{ id: "private-vision", vision: true, reasoning: false, toolCall: true }] };
+  const input = {
+    label: "Private",
+    baseUrl: "https://models.example.test/v1",
+    kind: "openai",
+    deployment: "hosted",
+    needsKey: true,
+    apiKey: "fixture-key",
+    confirmedForeground: true,
+    models: [{ id: "private-vision", vision: true, reasoning: false, toolCall: true }],
+  };
   const service = new AidenRemoteProviderService(dependencies);
-  const [first, repeated] = await Promise.all([service.create("device-one", "fixture-request-key", input), service.create("device-one", "fixture-request-key", input)]);
+  const [first, repeated] = await Promise.all([
+    service.create("device-one", "fixture-request-key", input),
+    service.create("device-one", "fixture-request-key", input),
+  ]);
   assert.deepEqual(repeated, first);
-  assert.equal(writes, 1); assert.equal(receivedKey, "fixture-key");
+  assert.equal(writes, 1);
+  assert.equal(receivedKey, "fixture-key");
   assert.deepEqual(Object.keys(first).sort(), ["id", "label", "models"]);
   assert.equal(saved?.modelMetadata?.["private-vision"]?.overrides?.vision, true);
   const restarted = new AidenRemoteProviderService(dependencies);
   assert.deepEqual(await restarted.create("device-one", "fixture-request-key", input), first);
   assert.equal(writes, 1);
-  await assert.rejects(restarted.create("device-one", "fixture-request-key", { ...input, baseUrl: "https://other.example.test/v1" }), (error: unknown) => (error as { code: string }).code === "idempotency_conflict");
-  await assert.rejects(service.create("device-one", "fixture-other-request", input, () => false), (error: unknown) => (error as { code: string }).code === "credential_revoked");
+  await assert.rejects(
+    restarted.create("device-one", "fixture-request-key", {
+      ...input,
+      baseUrl: "https://other.example.test/v1",
+    }),
+    (error: unknown) => (error as { code: string }).code === "idempotency_conflict",
+  );
+  await assert.rejects(
+    service.create("device-one", "fixture-other-request", input, () => false),
+    (error: unknown) => (error as { code: string }).code === "credential_revoked",
+  );
   assert.equal(writes, 1);
-  const catalog = new AidenRemoteModelService({listProviders: async () => [{ ...saved!, hasKey: true }], getSettings: async () => ({})});
+  const catalog = new AidenRemoteModelService({
+    listProviders: async () => [{ ...saved!, hasKey: true }],
+    getSettings: async () => ({}),
+  });
   assert.equal((await catalog.list()).providers[0]?.models[0]?.supportsImages, true);
 });
 
 test("remote provider creation rejects malformed credentials, endpoint redirects, and ambiguous model declarations", async () => {
   const { parseRemoteProviderCreation } = await import("./aiden-remote-providers.js");
-  const input = {label: "Local", baseUrl: "http://localhost:1234/v1", kind: "openai", deployment: "local", needsKey: false, confirmedForeground: true, models: [{id: "local", vision: false, reasoning: false, toolCall: true}]};
+  const input = {
+    label: "Local",
+    baseUrl: "http://localhost:1234/v1",
+    kind: "openai",
+    deployment: "local",
+    needsKey: false,
+    confirmedForeground: true,
+    models: [{ id: "local", vision: false, reasoning: false, toolCall: true }],
+  };
   assert.equal(parseRemoteProviderCreation(input).baseUrl, "http://localhost:1234/v1");
   for (const invalid of [
-    {...input, confirmedForeground: false}, {...input, needsKey: true}, {...input, apiKey: "unneeded-secret"},
-    {...input, baseUrl: "https://user:password@example.test/v1"}, {...input, baseUrl: "http://169.254.169.254/"},
-    {...input, models: []}, {...input, models: [input.models[0], input.models[0]]},
-    {...input, models: [{...input.models[0], vision: "true"}]}, {...input, isBuiltin: true},
-    {...input, kind: { toString: null }}, {...input, deployment: ["local"]},
-    {...input, models: [{...input.models[0], contextLength: 100, outputLimit: 101}]},
-  ]) assert.throws(() => parseRemoteProviderCreation(invalid), (error: unknown) => (error as {code: string}).code === "invalid_request");
+    { ...input, confirmedForeground: false },
+    { ...input, needsKey: true },
+    { ...input, apiKey: "unneeded-secret" },
+    { ...input, baseUrl: "https://user:password@example.test/v1" },
+    { ...input, baseUrl: "http://169.254.169.254/" },
+    { ...input, models: [] },
+    { ...input, models: [input.models[0], input.models[0]] },
+    { ...input, models: [{ ...input.models[0], vision: "true" }] },
+    { ...input, isBuiltin: true },
+    { ...input, kind: { toString: null } },
+    { ...input, deployment: ["local"] },
+    { ...input, models: [{ ...input.models[0], contextLength: 100, outputLimit: 101 }] },
+  ])
+    assert.throws(
+      () => parseRemoteProviderCreation(invalid),
+      (error: unknown) => (error as { code: string }).code === "invalid_request",
+    );
 });
 
 test("provider replay waits for the originally journaled credential after partial publication", async () => {
   const { AidenRemoteProviderService } = await import("./aiden-remote-providers.js");
   const { splitStoredProvider, composeStoredProvider } = await import("./portable-config-core.js");
-  const { credentialAfterProviderRotation, providerConnectionSnapshot } = await import("./provider-credential-rotation-core.js");
+  const { credentialAfterProviderRotation, providerConnectionSnapshot } =
+    await import("./provider-credential-rotation-core.js");
   let saved: import("./types.js").StoredProvider | undefined;
-  let pending: import("./provider-credential-rotation-core.js").PendingProviderCredentialRotationV1 | undefined;
+  let pending:
+    | import("./provider-credential-rotation-core.js").PendingProviderCredentialRotationV1
+    | undefined;
   let boundKey: string | null = null;
   let backendAvailable = false;
   let writes = 0;
@@ -347,9 +441,19 @@ test("provider replay waits for the originally journaled credential after partia
     get: async () => saved,
     save: async (value: import("./types.js").StoredProvider, key: string | null) => {
       writes++;
-      pending = { version: 1, providerId: value.id, previous: null, target: providerConnectionSnapshot(value), previousKey: null, targetKey: key };
+      pending = {
+        version: 1,
+        providerId: value.id,
+        previous: null,
+        target: providerConnectionSnapshot(value),
+        previousKey: null,
+        targetKey: key,
+      };
       const { intent, cache } = splitStoredProvider(value);
-      saved = composeStoredProvider(JSON.parse(JSON.stringify(intent)), JSON.parse(JSON.stringify(cache)));
+      saved = composeStoredProvider(
+        JSON.parse(JSON.stringify(intent)),
+        JSON.parse(JSON.stringify(cache)),
+      );
       throw new Error("Credential backend is unavailable after configuration publication");
     },
     recoverCredential: async () => {
@@ -364,25 +468,49 @@ test("provider replay waits for the originally journaled credential after partia
     },
     changed: () => {},
   };
-  const input = { label: "Private", baseUrl: "https://models.example.test/v1", kind: "openai", deployment: "hosted", needsKey: true, apiKey: "original-journaled-key", confirmedForeground: true, models: [{ id: "vision", vision: true, reasoning: false, toolCall: true }] };
+  const input = {
+    label: "Private",
+    baseUrl: "https://models.example.test/v1",
+    kind: "openai",
+    deployment: "hosted",
+    needsKey: true,
+    apiKey: "original-journaled-key",
+    confirmedForeground: true,
+    models: [{ id: "vision", vision: true, reasoning: false, toolCall: true }],
+  };
   const first = new AidenRemoteProviderService(dependencies);
-  await assert.rejects(first.create("device", "partial-request-key", input), /after configuration publication/u);
-  const catalog = new AidenRemoteModelService({ listProviders: async () => [{ ...saved!, hasKey: boundKey !== null }], getSettings: async () => ({}) });
+  await assert.rejects(
+    first.create("device", "partial-request-key", input),
+    /after configuration publication/u,
+  );
+  const catalog = new AidenRemoteModelService({
+    listProviders: async () => [{ ...saved!, hasKey: boundKey !== null }],
+    getSettings: async () => ({}),
+  });
   assert.equal((await catalog.list()).providers.length, 0);
   const restarted = new AidenRemoteProviderService(dependencies);
   for (let attempt = 0; attempt < 2; attempt++) {
-    await assert.rejects(restarted.create("device", "partial-request-key", input), /still unavailable/u);
+    await assert.rejects(
+      restarted.create("device", "partial-request-key", input),
+      /still unavailable/u,
+    );
     assert.equal(boundKey, null);
     assert.equal((await catalog.list()).providers.length, 0);
   }
   backendAvailable = true;
-  const receipt = await restarted.create("device", "partial-request-key", { ...input, apiKey: "must-not-rotate-on-replay" });
+  const receipt = await restarted.create("device", "partial-request-key", {
+    ...input,
+    apiKey: "must-not-rotate-on-replay",
+  });
   assert.equal(receipt.id, saved!.id);
   assert.equal(boundKey, "original-journaled-key");
   assert.equal(writes, 1);
   assert.equal((await catalog.list()).providers.length, 1);
   boundKey = null;
-  await assert.rejects(restarted.create("device", "partial-request-key", input), (error: unknown) => (error as { code: string }).code === "internal_error");
+  await assert.rejects(
+    restarted.create("device", "partial-request-key", input),
+    (error: unknown) => (error as { code: string }).code === "internal_error",
+  );
   assert.equal(writes, 1, "missing credentials cannot be replaced from a replay request");
 });
 
@@ -400,10 +528,20 @@ test("keyless provider replay does not require a credential backend", async () =
       saved = composeStoredProvider(intent, cache);
       return saved;
     },
-    recoverCredential: async () => { throw new Error("No system credential backend is available"); },
+    recoverCredential: async () => {
+      throw new Error("No system credential backend is available");
+    },
     changed: () => {},
   });
-  const input = { label: "Local", baseUrl: "http://localhost:1234/v1", kind: "openai", deployment: "local", needsKey: false, confirmedForeground: true, models: [{ id: "local", vision: false, reasoning: false, toolCall: true }] };
+  const input = {
+    label: "Local",
+    baseUrl: "http://localhost:1234/v1",
+    kind: "openai",
+    deployment: "local",
+    needsKey: false,
+    confirmedForeground: true,
+    models: [{ id: "local", vision: false, reasoning: false, toolCall: true }],
+  };
   const receipt = await service.create("device", "keyless-request-key", input);
   assert.deepEqual(await service.create("device", "keyless-request-key", input), receipt);
   assert.equal(writes, 1);
@@ -411,27 +549,65 @@ test("keyless provider replay does not require a credential backend", async () =
 
 test("phones never see agent-backed providers and cannot start turns on them", async () => {
   const service = new AidenRemoteModelService({
-    listProviders: async () => [provider({ id: "antigravity", label: "Google Antigravity" }), provider()],
+    listProviders: async () => [
+      provider({ id: "antigravity", label: "Google Antigravity" }),
+      provider(),
+    ],
     getSettings: async () => ({ lastProviderId: "antigravity", lastModel: "chat-model" }),
   });
   const catalog = await service.list();
-  assert.deepEqual(catalog.providers.map((entry) => entry.id), ["provider-1"]);
+  assert.deepEqual(
+    catalog.providers.map((entry) => entry.id),
+    ["provider-1"],
+  );
   assert.notEqual(catalog.defaults.providerId, "antigravity");
-  await assert.rejects(service.resolve("antigravity", "chat-model"), /runs only in chats you have open on this computer/u);
+  await assert.rejects(
+    service.resolve("antigravity", "chat-model"),
+    /runs only in chats you have open on this computer/u,
+  );
 });
 
 test("the Agent Slider reaches phones with each stop's availability and a level its model offers", async () => {
   const longModel = "x".repeat(300);
   const stops = [
-    { id: "ready", label: "Deep", providerId: "provider-1", model: "chat-model", thinkingLevel: "high" as const },
-    { id: "fitted", label: "Middle", providerId: "provider-1", model: "chat-model", thinkingLevel: "medium" as const },
+    {
+      id: "ready",
+      label: "Deep",
+      providerId: "provider-1",
+      model: "chat-model",
+      thinkingLevel: "high" as const,
+    },
+    {
+      id: "fitted",
+      label: "Middle",
+      providerId: "provider-1",
+      model: "chat-model",
+      thinkingLevel: "medium" as const,
+    },
     { id: "unassigned", label: "Choose a model" },
     { id: "gone", label: "Gone", providerId: "removed", model: "chat-model" },
-    { id: "signed-out", label: "Signed out", providerId: "no-key", model: "chat-model", thinkingLevel: "low" as const },
-    { id: "signed-out-unnamed", label: "Signed out, unnamed", providerId: "no-key", model: "unnamed-model" },
+    {
+      id: "signed-out",
+      label: "Signed out",
+      providerId: "no-key",
+      model: "chat-model",
+      thinkingLevel: "low" as const,
+    },
+    {
+      id: "signed-out-unnamed",
+      label: "Signed out, unnamed",
+      providerId: "no-key",
+      model: "unnamed-model",
+    },
     { id: "missing", label: "Missing", providerId: "provider-1", model: "retired-model" },
     { id: "embedding", label: "Embedding", providerId: "provider-1", model: "embedding-model" },
-    { id: "long", label: "Long", providerId: "provider-1", model: longModel, thinkingLevel: "high" as const },
+    {
+      id: "long",
+      label: "Long",
+      providerId: "provider-1",
+      model: longModel,
+      thinkingLevel: "high" as const,
+    },
   ];
   const settings = {
     lastProviderId: "provider-1",
@@ -441,7 +617,12 @@ test("the Agent Slider reaches phones with each stop's availability and a level 
   const service = new AidenRemoteModelService({
     listProviders: async () => [
       provider({ models: ["chat-model", "embedding-model", longModel] }),
-      provider({ id: "no-key", label: "Keyless Co", hasKey: false, models: ["chat-model", "unnamed-model"] }),
+      provider({
+        id: "no-key",
+        label: "Keyless Co",
+        hasKey: false,
+        models: ["chat-model", "unnamed-model"],
+      }),
     ],
     getSettings: async () => settings,
   });
@@ -449,7 +630,11 @@ test("the Agent Slider reaches phones with each stop's availability and a level 
   const slider = projection.agentSlider;
   assert.ok(slider);
   assert.equal(slider.homeStopId, "ready");
-  assert.deepEqual(slider.stops.map((stop) => stop.id), stops.map((stop) => stop.id), "order and every stop survive");
+  assert.deepEqual(
+    slider.stops.map((stop) => stop.id),
+    stops.map((stop) => stop.id),
+    "order and every stop survive",
+  );
   const byId = new Map(slider.stops.map((stop) => [stop.id, stop]));
   assert.deepEqual(byId.get("ready"), {
     id: "ready",
@@ -462,57 +647,132 @@ test("the Agent Slider reaches phones with each stop's availability and a level 
     availability: "ready",
   });
   // The model offers low and high only, so a phone is told a level it can actually send.
-  const offered = projection.providers[0]?.models.find((model) => model.id === "chat-model")?.thinkingLevels ?? [];
+  const offered =
+    projection.providers[0]?.models.find((model) => model.id === "chat-model")?.thinkingLevels ??
+    [];
   const fitted = byId.get("fitted");
   assert.equal(fitted?.availability, "ready");
-  assert.ok(fitted?.thinkingLevel && offered.includes(fitted.thinkingLevel), `fitted level ${fitted?.thinkingLevel} is offered`);
-  assert.deepEqual(byId.get("unassigned"), { id: "unassigned", label: "Choose a model", availability: "unassigned" });
-  // Unavailable stops name what to fix in words, never by id, and carry no level.
-  assert.deepEqual(byId.get("gone"), { id: "gone", label: "Gone", availability: "provider-missing" });
-  assert.deepEqual(byId.get("signed-out"), {
-    id: "signed-out", label: "Signed out", providerLabel: "Keyless Co", modelLabel: "Chat Model", availability: "not-signed-in",
+  assert.ok(
+    fitted?.thinkingLevel && offered.includes(fitted.thinkingLevel),
+    `fitted level ${fitted?.thinkingLevel} is offered`,
+  );
+  assert.deepEqual(byId.get("unassigned"), {
+    id: "unassigned",
+    label: "Choose a model",
+    availability: "unassigned",
   });
-  assert.deepEqual(byId.get("signed-out-unnamed"), {
-    id: "signed-out-unnamed", label: "Signed out, unnamed", providerLabel: "Keyless Co", availability: "not-signed-in",
-  }, "a model known only by its id gets no label");
-  assert.deepEqual(byId.get("missing"), { id: "missing", label: "Missing", providerLabel: "Provider", availability: "model-missing" });
+  // Unavailable stops name what to fix in words, never by id, and carry no level.
+  assert.deepEqual(byId.get("gone"), {
+    id: "gone",
+    label: "Gone",
+    availability: "provider-missing",
+  });
+  assert.deepEqual(byId.get("signed-out"), {
+    id: "signed-out",
+    label: "Signed out",
+    providerLabel: "Keyless Co",
+    modelLabel: "Chat Model",
+    availability: "not-signed-in",
+  });
+  assert.deepEqual(
+    byId.get("signed-out-unnamed"),
+    {
+      id: "signed-out-unnamed",
+      label: "Signed out, unnamed",
+      providerLabel: "Keyless Co",
+      availability: "not-signed-in",
+    },
+    "a model known only by its id gets no label",
+  );
+  assert.deepEqual(byId.get("missing"), {
+    id: "missing",
+    label: "Missing",
+    providerLabel: "Provider",
+    availability: "model-missing",
+  });
   // Runs on the computer, but the phone catalog leaves the model out: nothing about it is sent.
-  assert.deepEqual(byId.get("embedding"), { id: "embedding", label: "Embedding", availability: "computer-only" });
+  assert.deepEqual(byId.get("embedding"), {
+    id: "embedding",
+    label: "Embedding",
+    availability: "computer-only",
+  });
   assert.deepEqual(byId.get("long"), { id: "long", label: "Long", availability: "computer-only" });
   // Every stop the host sends meets the published contract (in slider-sized groups of three).
   for (let at = 0; at < slider.stops.length; at += 3) {
-    const group: AidenRemoteAgentSlider = { stops: slider.stops.slice(at, at + 3), homeStopId: slider.stops[at]!.id };
+    const group: AidenRemoteAgentSlider = {
+      stops: slider.stops.slice(at, at + 3),
+      homeStopId: slider.stops[at]!.id,
+    };
     assert.deepEqual(parseAidenRemoteAgentSlider(group), group);
   }
   for (const stop of slider.stops) {
     const source = stops.find((candidate) => candidate.id === stop.id)!;
-    assert.equal(stop.providerId !== undefined, stop.availability === "ready", `${stop.id}: ids only when ready`);
-    assert.equal(stop.thinkingLevel === undefined || stop.availability === "ready", true, `${stop.id}: level only when ready`);
-    if (source.model) assert.notEqual(stop.modelLabel, source.model, `${stop.id}: model label is never the id`);
-    if (source.providerId) assert.notEqual(stop.providerLabel, source.providerId, `${stop.id}: provider label is never the id`);
+    assert.equal(
+      stop.providerId !== undefined,
+      stop.availability === "ready",
+      `${stop.id}: ids only when ready`,
+    );
+    assert.equal(
+      stop.thinkingLevel === undefined || stop.availability === "ready",
+      true,
+      `${stop.id}: level only when ready`,
+    );
+    if (source.model)
+      assert.notEqual(stop.modelLabel, source.model, `${stop.id}: model label is never the id`);
+    if (source.providerId)
+      assert.notEqual(
+        stop.providerLabel,
+        source.providerId,
+        `${stop.id}: provider label is never the id`,
+      );
   }
 
   const hidden = new AidenRemoteModelService({
     listProviders: async () => [provider()],
-    getSettings: async () => ({ ...settings, hiddenModelsByProvider: { "provider-1": ["chat-model"] } }),
+    getSettings: async () => ({
+      ...settings,
+      hiddenModelsByProvider: { "provider-1": ["chat-model"] },
+    }),
   });
   assert.deepEqual((await hidden.list()).agentSlider?.stops[0], {
-    id: "ready", label: "Deep", providerLabel: "Provider", modelLabel: "Chat Model", availability: "hidden",
+    id: "ready",
+    label: "Deep",
+    providerLabel: "Provider",
+    modelLabel: "Chat Model",
+    availability: "hidden",
   });
 
   const harness = new AidenRemoteModelService({
-    listProviders: async () => [provider({ id: "antigravity", label: "Google Antigravity" }), provider()],
+    listProviders: async () => [
+      provider({ id: "antigravity", label: "Google Antigravity" }),
+      provider(),
+    ],
     getSettings: async () => ({
       ...settings,
-      agentSlider: { ...settings.agentSlider, stops: [{ ...stops[0], providerId: "antigravity" }, ...stops.slice(1)] },
+      agentSlider: {
+        ...settings.agentSlider,
+        stops: [{ ...stops[0], providerId: "antigravity" }, ...stops.slice(1)],
+      },
     }),
   });
-  assert.deepEqual((await harness.list()).agentSlider?.stops[0], {
-    id: "ready", label: "Deep", availability: "computer-only",
-  }, "agent harness stops stay on the computer and phones never learn the provider");
+  assert.deepEqual(
+    (await harness.list()).agentSlider?.stops[0],
+    {
+      id: "ready",
+      label: "Deep",
+      availability: "computer-only",
+    },
+    "agent harness stops stay on the computer and phones never learn the provider",
+  );
 
-  for (const without of [{ lastProviderId: "provider-1" }, { ...settings, agentSliderUnreadable: true as const }]) {
-    const service = new AidenRemoteModelService({ listProviders: async () => [provider()], getSettings: async () => without });
+  for (const without of [
+    { lastProviderId: "provider-1" },
+    { ...settings, agentSliderUnreadable: true as const },
+  ]) {
+    const service = new AidenRemoteModelService({
+      listProviders: async () => [provider()],
+      getSettings: async () => without,
+    });
     assert.equal("agentSlider" in (await service.list()), false);
   }
 });
@@ -520,36 +780,83 @@ test("the Agent Slider reaches phones with each stop's availability and a level 
 test("with a slider, new chats default to the computer's last stop level, fitted, only when the default is that last model", async () => {
   const agentSlider = {
     version: 1 as const,
-    stops: [{ id: "deep", label: "Deep", providerId: "provider-1", model: "chat-model", thinkingLevel: "high" as const }],
+    stops: [
+      {
+        id: "deep",
+        label: "Deep",
+        providerId: "provider-1",
+        model: "chat-model",
+        thinkingLevel: "high" as const,
+      },
+    ],
     homeStopId: "deep",
   };
   const list = async (settings: Record<string, unknown>, providers = [provider()]) =>
-    (await new AidenRemoteModelService({ listProviders: async () => providers, getSettings: async () => settings }).list()).defaults;
+    (
+      await new AidenRemoteModelService({
+        listProviders: async () => providers,
+        getSettings: async () => settings,
+      }).list()
+    ).defaults;
 
   assert.deepEqual(
-    await list({ lastProviderId: "provider-1", lastModel: "chat-model", lastThinkingLevel: "high", agentSlider }),
+    await list({
+      lastProviderId: "provider-1",
+      lastModel: "chat-model",
+      lastThinkingLevel: "high",
+      agentSlider,
+    }),
     { providerId: "provider-1", modelId: "chat-model", thinkingLevel: "high" },
   );
   // The model offers low and high only: an xhigh last level runs, and starts, at a level it offers.
-  const fitted = await list({ lastProviderId: "provider-1", lastModel: "chat-model", lastThinkingLevel: "xhigh", agentSlider });
+  const fitted = await list({
+    lastProviderId: "provider-1",
+    lastModel: "chat-model",
+    lastThinkingLevel: "xhigh",
+    agentSlider,
+  });
   assert.ok(["low", "high"].includes(fitted.thinkingLevel ?? ""), `fitted ${fitted.thinkingLevel}`);
   // The last model is gone, so the default falls back to another model: no level from the old one.
   assert.deepEqual(
-    await list({ lastProviderId: "provider-1", lastModel: "retired-model", lastThinkingLevel: "high", agentSlider }),
+    await list({
+      lastProviderId: "provider-1",
+      lastModel: "retired-model",
+      lastThinkingLevel: "high",
+      agentSlider,
+    }),
     { providerId: "provider-1", modelId: "chat-model" },
   );
   // A model with no levels takes no level.
   assert.deepEqual(
     await list(
-      { lastProviderId: "provider-1", lastModel: "chat-model", lastThinkingLevel: "high", agentSlider },
-      [provider({ modelMetadata: { "chat-model": { source: "provider", name: "Chat Model", type: "llm" } } })],
+      {
+        lastProviderId: "provider-1",
+        lastModel: "chat-model",
+        lastThinkingLevel: "high",
+        agentSlider,
+      },
+      [
+        provider({
+          modelMetadata: { "chat-model": { source: "provider", name: "Chat Model", type: "llm" } },
+        }),
+      ],
     ),
     { providerId: "provider-1", modelId: "chat-model" },
   );
   for (const withoutSlider of [
     { lastProviderId: "provider-1", lastModel: "chat-model", lastThinkingLevel: "high" },
-    { lastProviderId: "provider-1", lastModel: "chat-model", lastThinkingLevel: "high", agentSlider, agentSliderUnreadable: true },
+    {
+      lastProviderId: "provider-1",
+      lastModel: "chat-model",
+      lastThinkingLevel: "high",
+      agentSlider,
+      agentSliderUnreadable: true,
+    },
   ]) {
-    assert.deepEqual(await list(withoutSlider), { providerId: "provider-1", modelId: "chat-model" }, "no slider, no level");
+    assert.deepEqual(
+      await list(withoutSlider),
+      { providerId: "provider-1", modelId: "chat-model" },
+      "no slider, no level",
+    );
   }
 });

@@ -25,7 +25,10 @@ import type { AidenLivePreferences } from "../../shared/aiden-live-settings";
 import { LiveRibbon } from "./live-ribbon";
 import { useLiveVoiceEnding } from "./live-ribbon-session";
 import { liveCornerClearance, measureChatComposer } from "./use-live-ribbon-placement";
-import { useAidenLivePreferences, type AidenLivePreferencesPatch } from "./use-aiden-live-preferences";
+import {
+  useAidenLivePreferences,
+  type AidenLivePreferencesPatch,
+} from "./use-aiden-live-preferences";
 import { useLiveChatVoiceApprovals } from "./use-live-chat-voice-approvals";
 import { isEscapeKey } from "../../lib/dismiss-key";
 
@@ -44,7 +47,11 @@ const DEFAULT_RIBBON_PREFERENCES: Pick<AidenLivePreferences, "voice" | "speed" |
 const AIDEN_LIVE_SETUP_COMPLETE_KEY = "aiden.live.setup-complete";
 const LEGACY_GEMINI_LIVE_SETUP_COMPLETE_KEY = "aiden.gemini-live.setup-complete";
 
-export function liveDockClickAction(live: Pick<AssistantLiveController, "state" | "active" | "busy" | "setupComplete">, setupCompleted: boolean, stopRevealed: boolean) {
+export function liveDockClickAction(
+  live: Pick<AssistantLiveController, "state" | "active" | "busy" | "setupComplete">,
+  setupCompleted: boolean,
+  stopRevealed: boolean,
+) {
   if (live.state === "closing") return "none";
   if (live.active) return stopRevealed ? "stop" : "reveal-stop";
   if (live.busy) return "none";
@@ -288,10 +295,14 @@ export function AssistantDockPresentation({
   // The idle pill moved into the composer's Send button. The corner pill
   // shows only while there is a session starting or stopping, a pending
   // approval, or an error to see and stop.
-  const sessionVisible = live.active || live.busy || closing || Boolean(live.error) || approvalPending;
+  const sessionVisible =
+    live.active || live.busy || closing || Boolean(live.error) || approvalPending;
   const dockRef = React.useRef<HTMLDivElement>(null);
   // The chat column keeps no lane for the pill, so it rises above the composer it would cover.
-  const cornerClearance = useLiveCornerClearance(dockRef, live.visible && enabled && !live.active && sessionVisible);
+  const cornerClearance = useLiveCornerClearance(
+    dockRef,
+    live.visible && enabled && !live.active && sessionVisible,
+  );
 
   if (!live.visible || !enabled) return <></>;
 
@@ -299,13 +310,17 @@ export function AssistantDockPresentation({
   const glyph = aidenLiveMark(markState);
   const label = liveTriggerLabel(markState, closing, showStop);
   const action = live.active
-    ? stopRevealed ? "Stop Aiden Live" : "Show Stop Aiden Live button"
+    ? stopRevealed
+      ? "Stop Aiden Live"
+      : "Show Stop Aiden Live button"
     : !setupCompleted
-    ? "Set up Aiden Live"
-    : "Start Aiden Live";
+      ? "Set up Aiden Live"
+      : "Start Aiden Live";
   // The accessible name must contain the visible label (WCAG 2.5.3) so voice
   // control can target "Listening" or "Disconnected" by what it shows.
-  const accessibleName = action.toLowerCase().includes(label.toLowerCase()) ? action : `${label}, ${action}`;
+  const accessibleName = action.toLowerCase().includes(label.toLowerCase())
+    ? action
+    : `${label}, ${action}`;
 
   const approvalPrompt = liveApproval ? (
     <AssistantComputerUseApproval
@@ -332,7 +347,10 @@ export function AssistantDockPresentation({
         className="aiden-live-dock pointer-events-none absolute z-40 flex flex-col items-end gap-2 transition-[right,bottom] duration-300 ease-out motion-reduce:transition-none"
         style={{
           right: `calc(var(--aiden-live-edge-inset) + ${Math.max(0, rightInset)}px)`,
-          bottom: cornerClearance > 0 ? `max(var(--aiden-live-edge-inset), ${cornerClearance}px)` : undefined,
+          bottom:
+            cornerClearance > 0
+              ? `max(var(--aiden-live-edge-inset), ${cornerClearance}px)`
+              : undefined,
         }}
       >
         {!live.active && live.error && (hudOpen || live.screenActive) ? (
@@ -350,27 +368,47 @@ export function AssistantDockPresentation({
             disabled={closing}
             aria-label={accessibleName}
             aria-expanded={live.setupOpen}
-            onKeyDown={(event) => { if (isEscapeKey(event)) setStopRevealed(false); }}
+            onKeyDown={(event) => {
+              if (isEscapeKey(event)) setStopRevealed(false);
+            }}
             onClick={openPanel}
           >
             <span className="aiden-live-trigger-glyph" aria-hidden="true">
               {showStop ? (
                 <span className="aiden-live-stop-symbol" />
               ) : (
-                <AidenActivityMark key={glyph.mark} mark={glyph.mark} size={20} active={glyph.active} level={live.microphoneLevel} />
+                <AidenActivityMark
+                  key={glyph.mark}
+                  mark={glyph.mark}
+                  size={20}
+                  active={glyph.active}
+                  level={live.microphoneLevel}
+                />
               )}
             </span>
             <span className="aiden-live-trigger-label">{label}</span>
-            {approvalPending ? <span className="aiden-live-trigger-badge" aria-hidden="true" /> : null}
+            {approvalPending ? (
+              <span className="aiden-live-trigger-badge" aria-hidden="true" />
+            ) : null}
           </button>
         ) : null}
         {live.active ? null : (
           <span role="status" aria-live="polite" className="sr-only">
-            {live.error ? "Disconnected — see details" : live.busy ? live.state === "closing" ? "Stopping…" : "Connecting…" : ""}
+            {live.error
+              ? "Disconnected — see details"
+              : live.busy
+                ? live.state === "closing"
+                  ? "Stopping…"
+                  : "Connecting…"
+                : ""}
           </span>
         )}
         {!setupCompleted ? (
-          <AssistantLiveSetupDialog live={live} onOpenSettings={onOpenSettings} onStart={startAfterHandoff} />
+          <AssistantLiveSetupDialog
+            live={live}
+            onOpenSettings={onOpenSettings}
+            onStart={startAfterHandoff}
+          />
         ) : null}
       </div>
     </>
@@ -382,7 +420,10 @@ export function AssistantDockPresentation({
  * while the pill shows. Chats open and close and the composer grows, so it
  * re-measures on resize, after transitions and twice a second.
  */
-function useLiveCornerClearance(dockRef: React.RefObject<HTMLDivElement | null>, shown: boolean): number {
+function useLiveCornerClearance(
+  dockRef: React.RefObject<HTMLDivElement | null>,
+  shown: boolean,
+): number {
   const [clearance, setClearance] = React.useState(0);
   React.useLayoutEffect(() => {
     if (!shown) {
@@ -394,9 +435,12 @@ function useLiveCornerClearance(dockRef: React.RefObject<HTMLDivElement | null>,
       frame = 0;
       const dock = dockRef.current;
       if (!dock) return;
-      const container = dock.offsetParent instanceof HTMLElement ? dock.offsetParent.getBoundingClientRect() : null;
+      const container =
+        dock.offsetParent instanceof HTMLElement ? dock.offsetParent.getBoundingClientRect() : null;
       // A presented floating tools panel keeps the corner slot below it for the pill.
-      const panel = document.querySelector<HTMLElement>('.environment-panel[data-surface-mode="tools-floating"][data-state="open"]');
+      const panel = document.querySelector<HTMLElement>(
+        '.environment-panel[data-surface-mode="tools-floating"][data-state="open"]',
+      );
       const panelBox = panel?.getBoundingClientRect();
       const next = liveCornerClearance({
         composer: measureChatComposer(),

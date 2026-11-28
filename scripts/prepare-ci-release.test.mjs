@@ -20,10 +20,7 @@ test("an existing declared tag makes release publication a green no-op", () => {
 });
 
 test("declared release selection rejects ambiguous inputs", () => {
-  assert.throws(
-    () => mainPushReleaseSelection("1.0", false),
-    /Invalid declared release version/u,
-  );
+  assert.throws(() => mainPushReleaseSelection("1.0", false), /Invalid declared release version/u);
   assert.throws(
     () => mainPushReleaseSelection("1.0.0", undefined),
     /Declared tag existence must be a boolean/u,

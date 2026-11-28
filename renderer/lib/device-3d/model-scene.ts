@@ -15,7 +15,8 @@ export interface LoadedDeviceModel {
 export async function loadDeviceModel(
   source: DeviceAssetSource,
   signal: AbortSignal,
-  fetchImpl: (url: string, init: { signal: AbortSignal }) => Promise<Response> = (url, init) => fetch(url, init),
+  fetchImpl: (url: string, init: { signal: AbortSignal }) => Promise<Response> = (url, init) =>
+    fetch(url, init),
 ): Promise<LoadedDeviceModel> {
   const response = await fetchImpl(source.url, { signal });
   if (!response.ok) throw new Error(`Device model request failed: ${response.status}`);
@@ -25,7 +26,11 @@ export async function loadDeviceModel(
 }
 
 /** Parses GLB bytes. `url` resolves any external resources; bundled models embed theirs. */
-export async function parseDeviceModel(data: ArrayBuffer, url: string, signal?: AbortSignal): Promise<LoadedDeviceModel> {
+export async function parseDeviceModel(
+  data: ArrayBuffer,
+  url: string,
+  signal?: AbortSignal,
+): Promise<LoadedDeviceModel> {
   const base = globalThis.location ? new URL(".", new URL(url, globalThis.location.href)).href : "";
   const gltf = await new GLTFLoader().parseAsync(data, base);
   if (signal?.aborted) {
@@ -56,7 +61,8 @@ export function disposeDeviceModel(root: Object3D) {
   for (const texture of textures) {
     texture.dispose();
     // GLTFLoader decodes textures to ImageBitmaps, which hold memory until closed.
-    if (typeof ImageBitmap !== "undefined" && texture.image instanceof ImageBitmap) images.add(texture.image);
+    if (typeof ImageBitmap !== "undefined" && texture.image instanceof ImageBitmap)
+      images.add(texture.image);
   }
   for (const image of images) image.close();
 }
@@ -68,14 +74,16 @@ export function createModelPhoneScene(asset: Group, texture: Texture, initial: P
     if (object instanceof Mesh && object.name === "device-screen") screens.push(object);
   });
   const display = screens[0];
-  if (!display || screens.length !== 1) throw new Error("Device model must have one device-screen mesh");
+  if (!display || screens.length !== 1)
+    throw new Error("Device model must have one device-screen mesh");
   asset.updateMatrixWorld(true);
   const screenBounds = new Box3().setFromObject(display);
   const screenWidth = screenBounds.max.x - screenBounds.min.x;
   const screenHeight = screenBounds.max.y - screenBounds.min.y;
   if (
     display.matrixWorld.elements.some(
-      (value, index) => !Number.isFinite(value) || Math.abs(value - (index % 5 === 0 ? 1 : 0)) > 0.001,
+      (value, index) =>
+        !Number.isFinite(value) || Math.abs(value - (index % 5 === 0 ? 1 : 0)) > 0.001,
     ) ||
     !Number.isFinite(screenWidth) ||
     !Number.isFinite(screenHeight) ||
@@ -99,7 +107,13 @@ export function createModelPhoneScene(asset: Group, texture: Texture, initial: P
   root.add(orientation);
   const bounds = new Box3().setFromObject(asset);
   let layout = initial;
-  const projection = createDisplayProjection(display, orientation, screenWidth, screenHeight, () => layout);
+  const projection = createDisplayProjection(
+    display,
+    orientation,
+    screenWidth,
+    screenHeight,
+    () => layout,
+  );
   return {
     root,
     orientation,

@@ -94,10 +94,18 @@ test("logout keeps a legacy key a custom alias owns, and the next launch still d
   );
 
   await stores.logout("openai");
-  assert.equal(stores.legacyKeys.get("openai"), "sk-custom-endpoint", "the custom endpoint's key survives");
+  assert.equal(
+    stores.legacyKeys.get("openai"),
+    "sk-custom-endpoint",
+    "the custom endpoint's key survives",
+  );
 
   await migrateLegacyApiKeysToPi(stores.launch());
-  assert.equal(stores.piCredentials.has("openai"), false, "the signed-out built-in stays signed out");
+  assert.equal(
+    stores.piCredentials.has("openai"),
+    false,
+    "the signed-out built-in stays signed out",
+  );
   assert.equal(stores.legacyKeys.get("openai"), "sk-custom-endpoint");
 });
 

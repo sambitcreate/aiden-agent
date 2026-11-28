@@ -5,7 +5,10 @@ import {
   type AnalyticsPropSpec,
 } from "../services/analytics/analytics-events.js";
 import type { AnalyticsService, AnalyticsStatus } from "../services/analytics/analytics-service.js";
-import type { AnalyticsRegistryView, AnalyticsPropertyView } from "../../renderer/shared/analytics.js";
+import type {
+  AnalyticsRegistryView,
+  AnalyticsPropertyView,
+} from "../../renderer/shared/analytics.js";
 
 function describe(name: string, spec: AnalyticsPropSpec): AnalyticsPropertyView {
   const optional = spec.optional === true;
@@ -27,7 +30,10 @@ function properties(specs: Readonly<Record<string, AnalyticsPropSpec>>): Analyti
 // list cannot drift from what actually leaves the machine.
 export function analyticsRegistryView(): AnalyticsRegistryView {
   return {
-    events: Object.entries(ANALYTICS_EVENTS).map(([name, specs]) => ({ name, properties: properties(specs) })),
+    events: Object.entries(ANALYTICS_EVENTS).map(([name, specs]) => ({
+      name,
+      properties: properties(specs),
+    })),
     exceptionProperties: properties(EXCEPTION_PROPERTIES),
     superProperties: properties(SUPER_PROPERTIES),
   };
@@ -39,16 +45,23 @@ export function registerAnalyticsHandlers<Event>(dependencies: {
   owner(event: Event): { isDestroyed(): boolean };
   analytics: Pick<AnalyticsService, "status" | "setEnabled" | "markNoticeShown">;
 }): void {
-  dependencies.handle("analytics:status", (): Promise<AnalyticsStatus> => dependencies.analytics.status());
+  dependencies.handle(
+    "analytics:status",
+    (): Promise<AnalyticsStatus> => dependencies.analytics.status(),
+  );
   dependencies.handle("analytics:setEnabled", (event, enabled) => {
     if (typeof enabled !== "boolean") throw new Error("Invalid usage data setting.");
     const owner = dependencies.owner(event);
     return dependencies.analytics.setEnabled(enabled, () => !owner.isDestroyed());
   });
   dependencies.handle("analytics:markNoticeShown", (event, choice) => {
-    if (choice !== "ok" && choice !== "turn-off") throw new Error("Invalid usage data notice choice.");
+    if (choice !== "ok" && choice !== "turn-off")
+      throw new Error("Invalid usage data notice choice.");
     const owner = dependencies.owner(event);
-    return dependencies.analytics.markNoticeShown(choice === "turn-off" ? { enabled: false } : undefined, () => !owner.isDestroyed());
+    return dependencies.analytics.markNoticeShown(
+      choice === "turn-off" ? { enabled: false } : undefined,
+      () => !owner.isDestroyed(),
+    );
   });
   dependencies.handle("analytics:registry", () => analyticsRegistryView());
 }

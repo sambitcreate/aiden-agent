@@ -19,7 +19,11 @@ function call(requestIds: readonly (string | undefined)[]): BotToolCall {
   return { runRequestIds: async () => requestIds } as unknown as BotToolCall;
 }
 
-async function write(candidates: BotToolCandidate[], requestIds: readonly (string | undefined)[], file: string) {
+async function write(
+  candidates: BotToolCandidate[],
+  requestIds: readonly (string | undefined)[],
+  file: string,
+) {
   const candidate = candidates.find(({ tool }) => tool.name === "write_file");
   assert.ok(candidate?.bind);
   await candidate.bind(call(requestIds)).execute("w", { path: file, content: "out" });
@@ -43,7 +47,10 @@ test("a routine run's file writes are journaled even though the registry built t
     assert.equal(await fs.readFile(path.join(root, "report.md"), "utf8"), "out");
     // The journal holds the version the routine's write left, as the folder watch reads it.
     const report = await fs.stat(path.join(root, "report.md"));
-    assert.deepEqual(journal.writtenSince(BOT, path.join(root, "report.md"), since), { mtimeMs: report.mtimeMs, size: report.size });
+    assert.deepEqual(journal.writtenSince(BOT, path.join(root, "report.md"), since), {
+      mtimeMs: report.mtimeMs,
+      size: report.size,
+    });
     assert.equal(journal.writtenSince(BOT, path.join(root, "notes.md"), since), undefined);
     assert.equal(journal.writtenSince(BOT, path.join(root, "telegram.md"), since), undefined);
   } finally {
@@ -56,15 +63,43 @@ test("bound file tools resolve only their calling run's late grant", async () =>
   try {
     const store = createBotRunAccess({ now: () => 1 });
     const stat = await fs.stat(root, { bigint: true });
-    store.grant(BOT, { requestIds: ["r1"], target: "folder", key: root, root, label: "Folder", identity: { device: String(stat.dev), inode: String(stat.ino) }, policyRevision: "rev1", access: "write", owner: { kind: "access", id: "wait" }, grantedAt: 1, expiresAt: 100 });
+    store.grant(BOT, {
+      requestIds: ["r1"],
+      target: "folder",
+      key: root,
+      root,
+      label: "Folder",
+      identity: { device: String(stat.dev), inode: String(stat.ino) },
+      policyRevision: "rev1",
+      access: "write",
+      owner: { kind: "access", id: "wait" },
+      grantedAt: 1,
+      expiresAt: 100,
+    });
     const candidates = botFileCandidates([{ id: "home", label: "Bot folder", root }], {
-      routine: false, recordOwnWrite: () => {},
-      runAccess: { resolve: async (call) => store.location(BOT, await call.runRequestIds!(), "rev1") },
+      routine: false,
+      recordOwnWrite: () => {},
+      runAccess: {
+        resolve: async (call) => store.location(BOT, await call.runRequestIds!(), "rev1"),
+      },
     });
     const tool = candidates.find(({ tool }) => tool.name === "write_file")!;
-    await tool.bind!(call(["r1"])).execute("w", { path: "yes.txt", content: "yes", location: "run.access" });
-    await assert.rejects(tool.bind!(call(["r2"])).execute("w", { path: "no.txt", content: "no", location: "run.access" }), /Ask with request_access first/u);
+    await tool.bind!(call(["r1"])).execute("w", {
+      path: "yes.txt",
+      content: "yes",
+      location: "run.access",
+    });
+    await assert.rejects(
+      tool.bind!(call(["r2"])).execute("w", {
+        path: "no.txt",
+        content: "no",
+        location: "run.access",
+      }),
+      /Ask with request_access first/u,
+    );
     assert.equal(await fs.readFile(path.join(root, "yes.txt"), "utf8"), "yes");
     await assert.rejects(fs.access(path.join(root, "no.txt")));
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

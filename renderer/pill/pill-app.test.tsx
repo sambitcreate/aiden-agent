@@ -145,9 +145,14 @@ function mount(
 }
 
 test("needs-setup never opens the microphone", async () => {
-  const { calls, capture } = mount({ kind: "needs-setup", reason: "no-local-model" }, async () => "");
+  const { calls, capture } = mount(
+    { kind: "needs-setup", reason: "no-local-model" },
+    async () => "",
+  );
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:ready")));
-  act(() => emitBotTestNotification("dictation:state", { state: "recording", operationId: "op-1" }));
+  act(() =>
+    emitBotTestNotification("dictation:state", { state: "recording", operationId: "op-1" }),
+  );
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:error")));
   assert.equal(capture.getUserMediaCalls(), 0);
   const error = calls.find((call) => call.channel === "dictation:error");
@@ -158,14 +163,19 @@ test("needs-setup never opens the microphone", async () => {
 test("a slow on-device model load shows Loading model… while transcription waits", async () => {
   let transcribing = false;
   let finish: (text: string) => void = () => {};
-  const { calls } = mount({ kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true }, () => {
-    transcribing = true;
-    return new Promise<string>((resolve) => {
-      finish = resolve;
-    });
-  });
+  const { calls } = mount(
+    { kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true },
+    () => {
+      transcribing = true;
+      return new Promise<string>((resolve) => {
+        finish = resolve;
+      });
+    },
+  );
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:ready")));
-  act(() => emitBotTestNotification("dictation:state", { state: "recording", operationId: "op-2" }));
+  act(() =>
+    emitBotTestNotification("dictation:state", { state: "recording", operationId: "op-2" }),
+  );
   await screen.findByRole("button", { name: "Cancel dictation" });
   act(() => emitBotTestNotification("dictation:state", { state: "stopping", operationId: "op-2" }));
   await waitFor(() => assert.equal(transcribing, true), { timeout: 2_000 });
@@ -193,13 +203,13 @@ test("a slow on-device model load shows Loading model… while transcription wai
 });
 
 test("a cloud transcription reports no recording length, so the coordinator keeps its cloud fence", async () => {
-  const { calls } = mount(
-    { kind: "ready", provider: "openai", automatic: false },
-    async () => "",
-    { "voice:transcribe": () => "hello" },
-  );
+  const { calls } = mount({ kind: "ready", provider: "openai", automatic: false }, async () => "", {
+    "voice:transcribe": () => "hello",
+  });
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:ready")));
-  act(() => emitBotTestNotification("dictation:state", { state: "recording", operationId: "op-3" }));
+  act(() =>
+    emitBotTestNotification("dictation:state", { state: "recording", operationId: "op-3" }),
+  );
   await screen.findByRole("button", { name: "Cancel dictation" });
   act(() => emitBotTestNotification("dictation:state", { state: "stopping", operationId: "op-3" }));
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:result")));
@@ -212,16 +222,26 @@ test("a cloud transcription reports no recording length, so the coordinator keep
 });
 
 test("on-device dictation records with the press's provider and sends raw samples, with no decode", async () => {
-  const voice = { kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true } as const;
+  const voice = {
+    kind: "ready",
+    provider: "local",
+    modelId: "parakeet-v3",
+    automatic: true,
+  } as const;
   const { calls } = mount({ kind: "needs-setup", reason: "no-provider" }, async () => "hello");
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:ready")));
-  act(() => emitBotTestNotification("dictation:state", { state: "recording", operationId: "op-4", voice }));
+  act(() =>
+    emitBotTestNotification("dictation:state", { state: "recording", operationId: "op-4", voice }),
+  );
   await screen.findByRole("button", { name: "Cancel dictation" });
   act(() => emitBotTestNotification("dictation:state", { state: "stopping", operationId: "op-4" }));
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:result")));
 
   // Main's answer for this press is used as is; the stale resolver would have refused.
-  assert.equal(calls.some((call) => call.channel === "voice:resolveProvider"), false);
+  assert.equal(
+    calls.some((call) => call.channel === "voice:resolveProvider"),
+    false,
+  );
   const sent = calls.find((call) => call.channel === "voice:transcribeLocal");
   assert.ok(sent?.args[0] instanceof ArrayBuffer);
   assert.equal((sent.args[0] as ArrayBuffer).byteLength, 3_200);
@@ -231,43 +251,71 @@ test("on-device dictation records with the press's provider and sends raw sample
 });
 
 test("a recording that captured nothing reports an empty result instead of waiting out the watchdog", async () => {
-  const voice = { kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true } as const;
+  const voice = {
+    kind: "ready",
+    provider: "local",
+    modelId: "parakeet-v3",
+    automatic: true,
+  } as const;
   const { calls } = mount(voice, async () => "never");
   capturedSamples = new Float32Array(0);
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:ready")));
-  act(() => emitBotTestNotification("dictation:state", { state: "recording", operationId: "op-5", voice }));
+  act(() =>
+    emitBotTestNotification("dictation:state", { state: "recording", operationId: "op-5", voice }),
+  );
   await screen.findByRole("button", { name: "Cancel dictation" });
   act(() => emitBotTestNotification("dictation:state", { state: "stopping", operationId: "op-5" }));
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:result")));
   assert.deepEqual(calls.find((call) => call.channel === "dictation:result")?.args, ["op-5", ""]);
-  assert.equal(calls.some((call) => call.channel === "voice:transcribeLocal"), false);
+  assert.equal(
+    calls.some((call) => call.channel === "voice:transcribeLocal"),
+    false,
+  );
 });
 
 test("a model that can keep up shows live words in the pill, and only the final text is reported", async () => {
-  const voice = { kind: "ready", provider: "local", modelId: "parakeet-v3-metal", automatic: true } as const;
+  const voice = {
+    kind: "ready",
+    provider: "local",
+    modelId: "parakeet-v3-metal",
+    automatic: true,
+  } as const;
   const { calls } = mount(voice, async () => "Hello there, friend.", {
     "voice:localLiveStart": () => ({ sessionId: "live-7" }),
     "voice:localLivePush": () => undefined,
     "voice:localLiveStop": () => undefined,
   });
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:ready")));
-  act(() => emitBotTestNotification("dictation:state", { state: "recording", operationId: "op-6", voice }));
+  act(() =>
+    emitBotTestNotification("dictation:state", { state: "recording", operationId: "op-6", voice }),
+  );
   await screen.findByRole("button", { name: "Cancel dictation" });
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "voice:localLiveStart")));
-  assert.deepEqual(calls.find((call) => call.channel === "voice:localLiveStart")?.args, ["parakeet-v3-metal"]);
+  assert.deepEqual(calls.find((call) => call.channel === "voice:localLiveStart")?.args, [
+    "parakeet-v3-metal",
+  ]);
   act(() => {
     for (let post = 0; post < 3; post += 1) FakeAudioWorkletNode.latest!.speak();
   });
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "voice:localLivePush")));
 
-  act(() => emitBotTestNotification("voice:stream-text", { sessionId: "live-7", committed: "hello", tentative: "there" }));
+  act(() =>
+    emitBotTestNotification("voice:stream-text", {
+      sessionId: "live-7",
+      committed: "hello",
+      tentative: "there",
+    }),
+  );
   const live = await screen.findByLabelText("Live transcription");
   assert.equal(live.textContent, "hello there");
 
   act(() => emitBotTestNotification("dictation:state", { state: "stopping", operationId: "op-6" }));
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:result")));
   const order = calls.map((call) => call.channel);
-  assert.ok(order.indexOf("voice:localLiveStop") < order.indexOf("voice:transcribeLocal"), order.join(", "));
+  assert.ok(
+    order.indexOf("voice:localLiveStop") < order.indexOf("voice:transcribeLocal"),
+    order.join(", "),
+  );
   // One paste at the end, with the final decode's text rather than the preview's.
   assert.deepEqual(
     calls.filter((call) => call.channel === "dictation:result").map((call) => call.args),

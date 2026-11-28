@@ -45,19 +45,19 @@ maintenance patch. Existing package-lock pins are unchanged.
 
 ## Automated verification
 
-| Check | Result |
-| --- | --- |
-| `npm ci` | Completed using the existing lockfile |
-| `npm run test:mcp` | 55 passed; registered after the required native-remover build in pretest, and in preflight |
-| `npm run test:config-recovery` | 55 passed |
-| Scoped supervisor, child-runtime, request-capability, generation-context, timeline, and Remote protocol tests | 118 passed |
-| `npm run test:preflight` | Passed (MCP plus 65 Artificial Analysis, 61 Model Pad, and 230 preflight tests); run before final focused review regressions |
-| `npm run test:compaction` | 22 VCC and 279 compaction/runtime tests passed |
-| `npm run type-check` | Passed |
-| `npm run lint` | Passed |
-| `npm run build` | Passed again after all review fixes and focused regressions |
-| Android Chat, RemoteClient, and BotContract unit suites | 52 passed on the bundled Android Studio JDK/SDK |
-| Physical iPhone 13 Pro: Chat, RemoteClient, and BotContract XCTest suites | 198 passed, 3 skipped, 3 failed in unchanged iOS source |
+| Check                                                                                                         | Result                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `npm ci`                                                                                                      | Completed using the existing lockfile                                                                                        |
+| `npm run test:mcp`                                                                                            | 55 passed; registered after the required native-remover build in pretest, and in preflight                                   |
+| `npm run test:config-recovery`                                                                                | 55 passed                                                                                                                    |
+| Scoped supervisor, child-runtime, request-capability, generation-context, timeline, and Remote protocol tests | 118 passed                                                                                                                   |
+| `npm run test:preflight`                                                                                      | Passed (MCP plus 65 Artificial Analysis, 61 Model Pad, and 230 preflight tests); run before final focused review regressions |
+| `npm run test:compaction`                                                                                     | 22 VCC and 279 compaction/runtime tests passed                                                                               |
+| `npm run type-check`                                                                                          | Passed                                                                                                                       |
+| `npm run lint`                                                                                                | Passed                                                                                                                       |
+| `npm run build`                                                                                               | Passed again after all review fixes and focused regressions                                                                  |
+| Android Chat, RemoteClient, and BotContract unit suites                                                       | 52 passed on the bundled Android Studio JDK/SDK                                                                              |
+| Physical iPhone 13 Pro: Chat, RemoteClient, and BotContract XCTest suites                                     | 198 passed, 3 skipped, 3 failed in unchanged iOS source                                                                      |
 
 The MCP tests use the actual pinned SDK 1.30.0 for HTTP/SSE discovery and token
 exchange, plus fake services/credentials. A loopback redirect test verifies that

@@ -20,17 +20,17 @@ const runtimeProfile = configureRuntimeProfile();
 const productionDiagnosticsDisabled =
   runtimeProfile.id === "production" && process.env.AIDEN_DISABLE_PRODUCTION_DIAGNOSTICS === "1";
 initSubagentRuntimeDiagnostics(path.join(runtimeProfile.logsPath, SUBAGENT_RUNTIME_LOG_FILENAME));
-initDiagnosticHealth(path.join(runtimeProfile.logsPath, "diagnostic-health.json"), !productionDiagnosticsDisabled);
+initDiagnosticHealth(
+  path.join(runtimeProfile.logsPath, "diagnostic-health.json"),
+  !productionDiagnosticsDisabled,
+);
 initDiagnosticJournal({
   targetPath: path.join(
     runtimeProfile.logsPath,
     runtimeProfile.id === "development" ? "aiden-dev.log" : "aiden.log",
   ),
   profile: runtimeProfile.id,
-  writeMode:
-    productionDiagnosticsDisabled
-      ? "fatal-only"
-      : "all",
+  writeMode: productionDiagnosticsDisabled ? "fatal-only" : "all",
 });
 installProcessDiagnostics();
 void pruneExpiredDiagnosticCrashDumps(runtimeProfile.crashDumpsPath).catch(() => undefined);
@@ -47,9 +47,8 @@ const captureAcceptance = parseCaptureAcceptanceLaunch({
 
 try {
   if (captureAcceptance.requested) {
-    const { runDisplayCaptureAcceptance } = await import(
-      "./services/gemini-live/display-capture-acceptance.js"
-    );
+    const { runDisplayCaptureAcceptance } =
+      await import("./services/gemini-live/display-capture-acceptance.js");
     app.exit(await runDisplayCaptureAcceptance(runtimeProfile));
   } else {
     // Hold renderer invokes until index.ts finishes startup reconciliation;
@@ -59,13 +58,16 @@ try {
   }
 } catch (error) {
   const projected = projectDiagnosticError(error);
-  writeDiagnosticEventSync({
-    level: "fatal",
-    area: "app",
-    event: "bootstrap-import-failed",
-    outcome: "failed",
-    code: projected.code,
-    fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
-  }, { rawError: error });
+  writeDiagnosticEventSync(
+    {
+      level: "fatal",
+      area: "app",
+      event: "bootstrap-import-failed",
+      outcome: "failed",
+      code: projected.code,
+      fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
+    },
+    { rawError: error },
+  );
   throw error;
 }

@@ -31,9 +31,17 @@ import {
   openAidenRemoteOperationLedger,
 } from "./aiden-remote-operation-store.js";
 
-const SCOPE = { deviceId: "device-1", route: "POST /things", resourceId: "thing-1", key: "operation-key-0001" };
+const SCOPE = {
+  deviceId: "device-1",
+  route: "POST /things",
+  resourceId: "thing-1",
+  key: "operation-key-0001",
+};
 const OTHER_SCOPE = { ...SCOPE, key: "operation-key-0002" };
-const MESSAGES = { notPreparedMessage: "not prepared", outcomeUnrecordedMessage: "outcome unrecorded" };
+const MESSAGES = {
+  notPreparedMessage: "not prepared",
+  outcomeUnrecordedMessage: "outcome unrecorded",
+};
 
 function code(expected: string) {
   return (error: unknown) => (error as { code?: string }).code === expected;
@@ -91,16 +99,31 @@ test("the same key with a changed body is refused before and after a restart", a
   const ledger = await openAidenRemoteOperationLedger(store);
   let effects = 0;
   const action = async () => (effects += 1);
-  await executeAidenDurableOperation(owner(ledger, (snapshot) => store.save(snapshot)), SCOPE, { name: "a" }, action);
+  await executeAidenDurableOperation(
+    owner(ledger, (snapshot) => store.save(snapshot)),
+    SCOPE,
+    { name: "a" },
+    action,
+  );
 
   await assert.rejects(
-    executeAidenDurableOperation(owner(ledger, (snapshot) => store.save(snapshot)), SCOPE, { name: "b" }, action),
+    executeAidenDurableOperation(
+      owner(ledger, (snapshot) => store.save(snapshot)),
+      SCOPE,
+      { name: "b" },
+      action,
+    ),
     code("idempotency_conflict"),
   );
   const restartedStore = open();
   const restarted = await openAidenRemoteOperationLedger(restartedStore);
   await assert.rejects(
-    executeAidenDurableOperation(owner(restarted, (snapshot) => restartedStore.save(snapshot)), SCOPE, { name: "b" }, action),
+    executeAidenDurableOperation(
+      owner(restarted, (snapshot) => restartedStore.save(snapshot)),
+      SCOPE,
+      { name: "b" },
+      action,
+    ),
     code("idempotency_conflict"),
   );
   assert.equal(effects, 1);
@@ -116,20 +139,30 @@ test("a crash between the admission write and the outcome write leaves an unknow
     crash = resolve;
   });
   // The process dies with the action in progress: only the admission reached disk.
-  void executeAidenDurableOperation(owner(ledger, (snapshot) => store.save(snapshot)), SCOPE, {}, async () => {
-    effects += 1;
-    crash();
-    return new Promise<never>(() => undefined);
-  });
+  void executeAidenDurableOperation(
+    owner(ledger, (snapshot) => store.save(snapshot)),
+    SCOPE,
+    {},
+    async () => {
+      effects += 1;
+      crash();
+      return new Promise<never>(() => undefined);
+    },
+  );
   await effectRan;
 
   const restartedStore = open();
   const restarted = await openAidenRemoteOperationLedger(restartedStore);
   assert.equal(restarted.snapshot().entries[0]?.state, "in_flight");
   await assert.rejects(
-    executeAidenDurableOperation(owner(restarted, (snapshot) => restartedStore.save(snapshot)), SCOPE, {}, async () => {
-      effects += 1;
-    }),
+    executeAidenDurableOperation(
+      owner(restarted, (snapshot) => restartedStore.save(snapshot)),
+      SCOPE,
+      {},
+      async () => {
+        effects += 1;
+      },
+    ),
     code("idempotency_in_flight"),
   );
   assert.equal(effects, 1);
@@ -158,9 +191,14 @@ test("an outcome that could not be written reports unknown, and the crash after 
   const restartedStore = open();
   const restarted = await openAidenRemoteOperationLedger(restartedStore);
   await assert.rejects(
-    executeAidenDurableOperation(owner(restarted, (snapshot) => restartedStore.save(snapshot)), SCOPE, {}, async () => {
-      effects += 1;
-    }),
+    executeAidenDurableOperation(
+      owner(restarted, (snapshot) => restartedStore.save(snapshot)),
+      SCOPE,
+      {},
+      async () => {
+        effects += 1;
+      },
+    ),
     code("idempotency_in_flight"),
   );
   assert.equal(effects, 1);
@@ -179,12 +217,16 @@ test("a failed admission write runs nothing, keeps no record, and frees the key"
   });
   await assert.rejects(
     executeAidenDurableOperation(durable, SCOPE, {}, async () => (effects += 1)),
-    (error: unknown) => (error as Error).message === MESSAGES.notPreparedMessage && code("internal_error")(error),
+    (error: unknown) =>
+      (error as Error).message === MESSAGES.notPreparedMessage && code("internal_error")(error),
   );
   assert.equal(effects, 0);
   assert.equal(ledger.snapshot().entries.length, 0);
 
-  assert.equal(await executeAidenDurableOperation(durable, SCOPE, {}, async () => (effects += 1)), 1);
+  assert.equal(
+    await executeAidenDurableOperation(durable, SCOPE, {}, async () => (effects += 1)),
+    1,
+  );
   assert.equal(effects, 1);
 });
 
@@ -221,13 +263,18 @@ test("a request joined to a running action reports that action's result, whateve
   const started = new Promise<void>((resolve) => {
     announceStart = resolve;
   });
-  const running = executeAidenDurableOperation(owner(ledger, async () => undefined), SCOPE, {}, () => {
-    effects += 1;
-    announceStart();
-    return new Promise<string>((done) => {
-      finish = done;
-    });
-  });
+  const running = executeAidenDurableOperation(
+    owner(ledger, async () => undefined),
+    SCOPE,
+    {},
+    () => {
+      effects += 1;
+      announceStart();
+      return new Promise<string>((done) => {
+        finish = done;
+      });
+    },
+  );
   await started;
   const brokenDisk = owner(ledger, async () => {
     throw new Error("disk full");
@@ -423,8 +470,14 @@ test("a result that cannot be recorded is unknown to its caller, as it is on dis
     return undefined as unknown as string;
   };
 
-  await assert.rejects(executeAidenDurableOperation(durable, SCOPE, {}, action), code("idempotency_in_flight"));
-  await assert.rejects(executeAidenDurableOperation(durable, SCOPE, {}, action), code("idempotency_in_flight"));
+  await assert.rejects(
+    executeAidenDurableOperation(durable, SCOPE, {}, action),
+    code("idempotency_in_flight"),
+  );
+  await assert.rejects(
+    executeAidenDurableOperation(durable, SCOPE, {}, action),
+    code("idempotency_in_flight"),
+  );
   assert.equal(effects, 1);
 });
 
@@ -434,7 +487,9 @@ test("an earlier owner's failed write leaves a later owner's recorded outcome al
   const durable = owner(ledger, disk.persist);
 
   const earlier = executeAidenDurableOperation(durable, SCOPE, {}, async () => {
-    throw new AidenOperationNotExecutedError(new AidenRemoteServiceError("not_found", "not run", 404));
+    throw new AidenOperationNotExecutedError(
+      new AidenRemoteServiceError("not_found", "not run", 404),
+    );
   });
   const earlierAnswer = assert.rejects(earlier, code("idempotency_in_flight"));
   await disk.write(2).arrived;
@@ -556,19 +611,33 @@ test("an outcome that could not be written stays unknown past the replay window 
     if (saves === 2) throw new Error("disk lost");
   });
   const action = async () => (effects += 1);
-  await assert.rejects(executeAidenDurableOperation(durable, SCOPE, {}, action), code("idempotency_in_flight"));
+  await assert.rejects(
+    executeAidenDurableOperation(durable, SCOPE, {}, action),
+    code("idempotency_in_flight"),
+  );
   // What the caller was told holds immediately, and after the window.
-  await assert.rejects(executeAidenDurableOperation(durable, SCOPE, {}, action), code("idempotency_in_flight"));
+  await assert.rejects(
+    executeAidenDurableOperation(durable, SCOPE, {}, action),
+    code("idempotency_in_flight"),
+  );
   now += 1_000;
-  await assert.rejects(executeAidenDurableOperation(durable, SCOPE, {}, action), code("idempotency_in_flight"));
+  await assert.rejects(
+    executeAidenDurableOperation(durable, SCOPE, {}, action),
+    code("idempotency_in_flight"),
+  );
   assert.equal(effects, 1);
 });
 
 test("a falsy action failure still reaches the caller after its outcome is written", async () => {
   const ledger = new AidenIdempotencyLedger();
-  const failure = await executeAidenDurableOperation(owner(ledger, async () => undefined), SCOPE, {}, async () => {
-    throw 0;
-  }).then(
+  const failure = await executeAidenDurableOperation(
+    owner(ledger, async () => undefined),
+    SCOPE,
+    {},
+    async () => {
+      throw 0;
+    },
+  ).then(
     () => "resolved",
     (error: unknown) => error,
   );
@@ -589,7 +658,10 @@ test("an action that owns its own receipt frees the key, on disk too, so its ret
     return "reconciled";
   };
 
-  await assert.rejects(executeAidenDurableOperation(durable, SCOPE, {}, action), (error) => error === lost);
+  await assert.rejects(
+    executeAidenDurableOperation(durable, SCOPE, {}, action),
+    (error) => error === lost,
+  );
   assert.equal(new AidenIdempotencyLedger(saved).sizeForTesting(), 0);
 
   assert.equal(await executeAidenDurableOperation(durable, SCOPE, {}, action), "reconciled");
@@ -638,7 +710,8 @@ test("generated request, failure and restart orders never run a key twice or for
       let ranNow = false;
       const outcome = await executeAidenDurableOperation(durable, SCOPE, {}, async () => {
         ranNow = true;
-        if (ending === "not_executed") throw new AidenOperationNotExecutedError(new Error("refused"));
+        if (ending === "not_executed")
+          throw new AidenOperationNotExecutedError(new Error("refused"));
         committedEffects += 1;
         if (ending === "reject") throw new AidenOperationContractError("revision_conflict");
         if (ending === "unknown") throw new AidenOperationUnknownOutcomeError();
@@ -679,7 +752,8 @@ test("only reconciliation leaves unknown, and only a failed write unsettles an o
     { kind: "rejected", errorCode: "revision_conflict", expiresAt: 1 },
   ];
   for (const phase of settled) {
-    for (const event of events) assert.deepEqual(advanceAidenOperation(phase, event), phase, event.type);
+    for (const event of events)
+      assert.deepEqual(advanceAidenOperation(phase, event), phase, event.type);
   }
   for (const phase of settled) {
     assert.equal(advanceAidenOperation(phase, { type: "outcome_unrecorded" }).kind, "unknown");
@@ -698,7 +772,13 @@ test("only reconciliation leaves unknown, and only a failed write unsettles an o
 
 interface FailureAmbiguityFixtureCase {
   name: string;
-  kind: "server" | "unexpected_status" | "invalid_response" | "transport" | "cancelled" | "pre_send_local";
+  kind:
+    | "server"
+    | "unexpected_status"
+    | "invalid_response"
+    | "transport"
+    | "cancelled"
+    | "pre_send_local";
   status?: number;
   code?: string;
   beforeEffectRefusal: { ambiguous: boolean };
@@ -754,19 +834,34 @@ function classifyFixtureFailure(
 
 test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, AidenRemoteServiceError, and bot-outbox-delivery", async () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-  const fixturePath = path.join(repoRoot, "protocol/aiden-remote/v1/fixtures/mutation-failure-ambiguity.json");
-  const outboxPath = path.join(repoRoot, "protocol/aiden-remote/v1/fixtures/bot-outbox-delivery.json");
+  const fixturePath = path.join(
+    repoRoot,
+    "protocol/aiden-remote/v1/fixtures/mutation-failure-ambiguity.json",
+  );
+  const outboxPath = path.join(
+    repoRoot,
+    "protocol/aiden-remote/v1/fixtures/bot-outbox-delivery.json",
+  );
   const fixture = JSON.parse(await fs.readFile(fixturePath, "utf8")) as FailureAmbiguityFixture;
-  const outboxFixture = JSON.parse(await fs.readFile(outboxPath, "utf8")) as BotOutboxDeliveryFixture;
+  const outboxFixture = JSON.parse(
+    await fs.readFile(outboxPath, "utf8"),
+  ) as BotOutboxDeliveryFixture;
 
   assert.equal(fixture.version, 1);
   assert.equal(fixture.scope, "host-durable-operation-contract");
   assert.deepEqual(fixture.enforcedBy, ["main/services/aiden-remote-durable-operation.test.ts"]);
   const protocolCodes = new Set<string>(AIDEN_REMOTE_ERROR_CODES);
   const recognized = new Set(fixture.recognizedBeforeEffectCodes);
-  assert.equal(recognized.size, fixture.recognizedBeforeEffectCodes.length, "recognizedBeforeEffectCodes must be unique");
+  assert.equal(
+    recognized.size,
+    fixture.recognizedBeforeEffectCodes.length,
+    "recognizedBeforeEffectCodes must be unique",
+  );
   for (const entryCode of fixture.recognizedBeforeEffectCodes) {
-    assert.ok(protocolCodes.has(entryCode), `recognized code ${entryCode} must exist in AIDEN_REMOTE_ERROR_CODES`);
+    assert.ok(
+      protocolCodes.has(entryCode),
+      `recognized code ${entryCode} must exist in AIDEN_REMOTE_ERROR_CODES`,
+    );
   }
   for (const forbidden of [
     "idempotency_in_flight",
@@ -774,7 +869,11 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
     "internal_error",
     "server_interrupted",
   ]) {
-    assert.equal(recognized.has(forbidden), false, `${forbidden} must never be in recognizedBeforeEffectCodes`);
+    assert.equal(
+      recognized.has(forbidden),
+      false,
+      `${forbidden} must never be in recognizedBeforeEffectCodes`,
+    );
   }
 
   // Every row in the fixture must agree with the canonical policy rules.
@@ -790,16 +889,26 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
       `cachedRejectionLedger mismatch for "${entry.name}"`,
     );
     if (entry.kind === "server" && entry.name.startsWith("unrecognized ")) {
-      assert.equal(protocolCodes.has(entry.code!), false, `${entry.code} should be an unknown protocol code`);
+      assert.equal(
+        protocolCodes.has(entry.code!),
+        false,
+        `${entry.code} should be an unknown protocol code`,
+      );
     }
   }
 
   // Cross-check every shared server row with bot-outbox-delivery.json.
   for (const outboxRow of outboxFixture.classification) {
     const match = fixture.cases.find(
-      (entry) => entry.kind === "server" && entry.status === outboxRow.status && entry.code === outboxRow.code,
+      (entry) =>
+        entry.kind === "server" &&
+        entry.status === outboxRow.status &&
+        entry.code === outboxRow.code,
     );
-    assert.ok(match, `bot-outbox-delivery row (${outboxRow.status} ${outboxRow.code}) must exist in mutation-failure-ambiguity.json`);
+    assert.ok(
+      match,
+      `bot-outbox-delivery row (${outboxRow.status} ${outboxRow.code}) must exist in mutation-failure-ambiguity.json`,
+    );
     assert.equal(
       match.cachedRejectionLedger.ambiguous,
       outboxRow.ambiguous,
@@ -808,7 +917,13 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
   }
 
   // Exercise real executeAidenDurableOperation & AidenRemoteServiceError behavior for every serverScenario row.
-  const runScenario = async (scenario: string): Promise<{ error: AidenRemoteServiceError; effects: number; replayedError?: AidenRemoteServiceError }> => {
+  const runScenario = async (
+    scenario: string,
+  ): Promise<{
+    error: AidenRemoteServiceError;
+    effects: number;
+    replayedError?: AidenRemoteServiceError;
+  }> => {
     switch (scenario) {
       case "outcome_unrecorded": {
         const ledger = new AidenIdempotencyLedger();
@@ -818,10 +933,18 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
           saves += 1;
           if (saves === 2) throw new Error("disk lost");
         });
-        const error = await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, async () => (effects += 1))
-          .then(() => assert.fail("expected outcome_unrecorded failure"), mapDurableRouteError);
-        const replayedError = await executeAidenDurableOperation(owner(ledger, async () => undefined), SCOPE, { v: 1 }, async () => (effects += 1))
-          .then(() => assert.fail("expected unknown replay failure"), mapDurableRouteError);
+        const error = await executeAidenDurableOperation(
+          durable,
+          SCOPE,
+          { v: 1 },
+          async () => (effects += 1),
+        ).then(() => assert.fail("expected outcome_unrecorded failure"), mapDurableRouteError);
+        const replayedError = await executeAidenDurableOperation(
+          owner(ledger, async () => undefined),
+          SCOPE,
+          { v: 1 },
+          async () => (effects += 1),
+        ).then(() => assert.fail("expected unknown replay failure"), mapDurableRouteError);
         return { error, effects, replayedError };
       }
       case "restored_in_flight": {
@@ -846,8 +969,12 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
         );
         await started;
         const restarted = new AidenIdempotencyLedger(persisted);
-        const error = await executeAidenDurableOperation(owner(restarted, async () => undefined), SCOPE, { v: 1 }, async () => (effects += 1))
-          .then(() => assert.fail("expected restored in_flight rejection"), mapDurableRouteError);
+        const error = await executeAidenDurableOperation(
+          owner(restarted, async () => undefined),
+          SCOPE,
+          { v: 1 },
+          async () => (effects += 1),
+        ).then(() => assert.fail("expected restored in_flight rejection"), mapDurableRouteError);
         return { error, effects };
       }
       case "replayed_revision_conflict": {
@@ -860,15 +987,19 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
           assertRevision("r1", thing.revision);
           thing.writes += 1;
         };
-        const first = await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, casWrite)
-          .then(() => assert.fail("expected revision_conflict"), mapDurableRouteError);
+        const first = await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, casWrite).then(
+          () => assert.fail("expected revision_conflict"),
+          mapDurableRouteError,
+        );
         assert.equal(first.status, 409);
         assert.equal(first.code, "revision_conflict");
-        const error = await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, casWrite)
-          .then(() => assert.fail("expected replayed revision_conflict"), (caught) => {
+        const error = await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, casWrite).then(
+          () => assert.fail("expected replayed revision_conflict"),
+          (caught) => {
             assert.ok(caught instanceof AidenOperationReplayedRejection);
             return mapDurableRouteError(caught);
-          });
+          },
+        );
         assert.equal(thing.writes, 0, "revision_conflict is refused before anything is written");
         return { error, effects };
       }
@@ -880,11 +1011,18 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
           effects += 1;
           throw new AidenRemoteServiceError("internal_error", "action failed", 500);
         }).catch(() => undefined);
-        const error = await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, async () => (effects += 1))
-          .then(() => assert.fail("expected replayed internal_error"), (caught) => {
+        const error = await executeAidenDurableOperation(
+          durable,
+          SCOPE,
+          { v: 1 },
+          async () => (effects += 1),
+        ).then(
+          () => assert.fail("expected replayed internal_error"),
+          (caught) => {
             assert.ok(caught instanceof AidenOperationReplayedRejection);
             return mapDurableRouteError(caught);
-          });
+          },
+        );
         return { error, effects };
       }
       case "body_mismatch_conflict": {
@@ -892,8 +1030,12 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
         const durable = owner(ledger, async () => undefined);
         let effects = 0;
         await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, async () => (effects += 1));
-        const error = await executeAidenDurableOperation(durable, SCOPE, { v: 2 }, async () => (effects += 1))
-          .then(() => assert.fail("expected body mismatch conflict"), mapDurableRouteError);
+        const error = await executeAidenDurableOperation(
+          durable,
+          SCOPE,
+          { v: 2 },
+          async () => (effects += 1),
+        ).then(() => assert.fail("expected body mismatch conflict"), mapDurableRouteError);
         return { error, effects };
       }
       case "not_executed_invalid_request":
@@ -913,11 +1055,16 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
         const durable = owner(ledger, async () => undefined);
         let effects = 0;
         const error = await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, async () => {
-          throw new AidenOperationNotExecutedError(new AidenRemoteServiceError(expectedCode, "refused", expectedStatus));
+          throw new AidenOperationNotExecutedError(
+            new AidenRemoteServiceError(expectedCode, "refused", expectedStatus),
+          );
         }).then(() => assert.fail("expected not-executed refusal"), mapDurableRouteError);
         // Key was freed because nothing executed; retrying with the same key succeeds.
         assert.equal(ledger.holds(SCOPE), false);
-        assert.equal(await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, async () => (effects += 1)), 1);
+        assert.equal(
+          await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, async () => (effects += 1)),
+          1,
+        );
         return { error, effects };
       }
       case "admission_capacity": {
@@ -925,8 +1072,12 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
         const durable = owner(ledger, async () => undefined);
         let effects = 0;
         await executeAidenDurableOperation(durable, OTHER_SCOPE, { v: 1 }, async () => "filled");
-        const error = await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, async () => (effects += 1))
-          .then(() => assert.fail("expected capacity refusal"), mapDurableRouteError);
+        const error = await executeAidenDurableOperation(
+          durable,
+          SCOPE,
+          { v: 1 },
+          async () => (effects += 1),
+        ).then(() => assert.fail("expected capacity refusal"), mapDurableRouteError);
         return { error, effects };
       }
       case "admission_persist_failed": {
@@ -937,11 +1088,18 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
           saves += 1;
           if (saves === 1) throw new Error("disk full");
         });
-        const error = await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, async () => (effects += 1))
-          .then(() => assert.fail("expected admission failure"), mapDurableRouteError);
+        const error = await executeAidenDurableOperation(
+          durable,
+          SCOPE,
+          { v: 1 },
+          async () => (effects += 1),
+        ).then(() => assert.fail("expected admission failure"), mapDurableRouteError);
         assert.equal(effects, 0, "failed admission must not execute effect");
         assert.equal(ledger.holds(SCOPE), false, "failed admission frees the key for safe retry");
-        assert.equal(await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, async () => (effects += 1)), 1);
+        assert.equal(
+          await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, async () => (effects += 1)),
+          1,
+        );
         return { error, effects };
       }
       case "unclassified_server_error": {
@@ -963,11 +1121,21 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
       assert.equal(result.replayedError.status, 409);
       assert.equal(result.replayedError.code, "idempotency_in_flight");
     }
-    if (row.serverScenario === "outcome_unrecorded" || row.serverScenario === "restored_in_flight") {
+    if (
+      row.serverScenario === "outcome_unrecorded" ||
+      row.serverScenario === "restored_in_flight"
+    ) {
       assert.equal(result.effects, 1, `${row.name}: unknown outcome must never re-run effect`);
     }
-    if (row.serverScenario === "replayed_revision_conflict" || row.serverScenario === "replayed_internal_error") {
-      assert.equal(result.effects, 1, `${row.name}: cached rejection replay must not re-run effect`);
+    if (
+      row.serverScenario === "replayed_revision_conflict" ||
+      row.serverScenario === "replayed_internal_error"
+    ) {
+      assert.equal(
+        result.effects,
+        1,
+        `${row.name}: cached rejection replay must not re-run effect`,
+      );
     }
   }
 });
@@ -985,24 +1153,44 @@ test("a 409 revision_conflict proves nothing was written, so the client drops th
   };
 
   // Another client moves the revision first.
-  assert.equal(await executeAidenDurableOperation(durable, OTHER_SCOPE, { value: "theirs" }, write("r1", "theirs")), "r2");
+  assert.equal(
+    await executeAidenDurableOperation(
+      durable,
+      OTHER_SCOPE,
+      { value: "theirs" },
+      write("r1", "theirs"),
+    ),
+    "r2",
+  );
 
-  const stale = await executeAidenDurableOperation(durable, SCOPE, { value: "mine" }, write("r1", "mine"))
-    .then(() => assert.fail("expected revision_conflict"), mapDurableRouteError);
+  const stale = await executeAidenDurableOperation(
+    durable,
+    SCOPE,
+    { value: "mine" },
+    write("r1", "mine"),
+  ).then(() => assert.fail("expected revision_conflict"), mapDurableRouteError);
   assert.equal(stale.status, 409);
   assert.equal(stale.code, "revision_conflict");
-  assert.deepEqual(thing, { revision: "r2", value: "theirs", runs: 2 }, "the refused write changed nothing");
+  assert.deepEqual(
+    thing,
+    { revision: "r2", value: "theirs", runs: 2 },
+    "the refused write changed nothing",
+  );
 
   // The key is spent: reusing it only replays the refusal and never runs again.
   await assert.rejects(
     executeAidenDurableOperation(durable, SCOPE, { value: "mine" }, write("r2", "mine")),
-    (error: unknown) => error instanceof AidenOperationReplayedRejection && error.code === "revision_conflict",
+    (error: unknown) =>
+      error instanceof AidenOperationReplayedRejection && error.code === "revision_conflict",
   );
   assert.equal(thing.runs, 2);
 
   // A fresh key with the current revision commits once.
   const fresh = { ...SCOPE, key: "operation-key-0003" };
-  assert.equal(await executeAidenDurableOperation(durable, fresh, { value: "mine" }, write("r2", "mine")), "r3");
+  assert.equal(
+    await executeAidenDurableOperation(durable, fresh, { value: "mine" }, write("r2", "mine")),
+    "r3",
+  );
   assert.deepEqual(thing, { revision: "r3", value: "mine", runs: 3 });
 });
 
@@ -1022,15 +1210,19 @@ test("a same-key retry after an unknown outcome stays in flight and never turns 
   };
 
   // The write commits, but its outcome cannot be recorded.
-  const unknown = await executeAidenDurableOperation(durable, SCOPE, { value: "mine" }, write)
-    .then(() => assert.fail("expected an unknown outcome"), mapDurableRouteError);
+  const unknown = await executeAidenDurableOperation(durable, SCOPE, { value: "mine" }, write).then(
+    () => assert.fail("expected an unknown outcome"),
+    mapDurableRouteError,
+  );
   assert.equal(unknown.code, "idempotency_in_flight");
   assert.equal(thing.revision, "r2");
 
   // Re-running the stale write would now fail its own revision check. The ledger
   // never re-runs it, so the retry cannot report the attempt's own commit as a conflict.
-  const retried = await executeAidenDurableOperation(durable, SCOPE, { value: "mine" }, write)
-    .then(() => assert.fail("expected the unknown outcome again"), mapDurableRouteError);
+  const retried = await executeAidenDurableOperation(durable, SCOPE, { value: "mine" }, write).then(
+    () => assert.fail("expected the unknown outcome again"),
+    mapDurableRouteError,
+  );
   assert.equal(retried.status, 409);
   assert.equal(retried.code, "idempotency_in_flight");
   assert.equal(thing.runs, 1);

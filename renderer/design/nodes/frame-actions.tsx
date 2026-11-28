@@ -15,7 +15,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../components/ui";
-import { designExportFormats, type DesignExportFormat } from "../../shared/design-canvas/frame-export";
+import {
+  designExportFormats,
+  type DesignExportFormat,
+} from "../../shared/design-canvas/frame-export";
 import type { DesignFrame, DesignPaper, DesignPrintMode } from "../../shared/design-canvas/schema";
 import { useDesignNodeContext } from "./design-node-context";
 
@@ -47,7 +50,13 @@ export function FrameActions({ frame }: { frame: DesignFrame }) {
       {formats.length > 0 ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button iconOnly size="small" variant="transparent" aria-label={`Download ${name}`} title="Download">
+            <Button
+              iconOnly
+              size="small"
+              variant="transparent"
+              aria-label={`Download ${name}`}
+              title="Download"
+            >
               <Download aria-hidden />
             </Button>
           </DropdownMenuTrigger>
@@ -64,21 +73,37 @@ export function FrameActions({ frame }: { frame: DesignFrame }) {
                 <DropdownMenuRadioGroup
                   value={frame.paper ?? "letter"}
                   onValueChange={(value) =>
-                    canvas.update(frame.id, { paper: value === "a4" ? "a4" : undefined }, { record: true })
+                    canvas.update(
+                      frame.id,
+                      { paper: value === "a4" ? "a4" : undefined },
+                      { record: true },
+                    )
                   }
                 >
-                  <DropdownMenuRadioItem value={"letter" satisfies DesignPaper}>Letter</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value={"a4" satisfies DesignPaper}>A4</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value={"letter" satisfies DesignPaper}>
+                    Letter
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value={"a4" satisfies DesignPaper}>
+                    A4
+                  </DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
                 <DropdownMenuLabel>PDF layout</DropdownMenuLabel>
                 <DropdownMenuRadioGroup
                   value={frame.printMode ?? "flow"}
                   onValueChange={(value) =>
-                    canvas.update(frame.id, { printMode: value === "fixed" ? "fixed" : undefined }, { record: true })
+                    canvas.update(
+                      frame.id,
+                      { printMode: value === "fixed" ? "fixed" : undefined },
+                      { record: true },
+                    )
                   }
                 >
-                  <DropdownMenuRadioItem value={"flow" satisfies DesignPrintMode}>Flow to the paper</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value={"fixed" satisfies DesignPrintMode}>Fixed at design width</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value={"flow" satisfies DesignPrintMode}>
+                    Flow to the paper
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value={"fixed" satisfies DesignPrintMode}>
+                    Fixed at design width
+                  </DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
               </>
             ) : null}

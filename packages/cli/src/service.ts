@@ -7,10 +7,22 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { serverAnalyticsContext, showServerNotice, type ServerAnalyticsContext } from "./server-analytics.ts";
+import {
+  serverAnalyticsContext,
+  showServerNotice,
+  type ServerAnalyticsContext,
+} from "./server-analytics.ts";
 import { acquireLease } from "./state.ts";
 import { tailscaleSetupMessage } from "./tailscale-setup-message.ts";
 import type { RemoteNetwork } from "./remote.ts";
@@ -21,7 +33,10 @@ import type { AidenTailscaleOwnership } from "../../../main/services/aiden-remot
 export const LAUNCHD_LABEL = "com.sambitcreate.aiden-agent.serve";
 export const SYSTEMD_UNIT = "aiden.service";
 
-export type ServiceRunner = (command: string, args: string[]) => { status: number | null; stdout: string; stderr: string };
+export type ServiceRunner = (
+  command: string,
+  args: string[],
+) => { status: number | null; stdout: string; stderr: string };
 
 /** The machine the service is installed on. Tests pass a fake. */
 export interface ServiceHost {
@@ -54,7 +69,11 @@ export function systemHost(): ServiceHost {
     ...(process.env.XDG_CONFIG_HOME ? { xdgConfigHome: process.env.XDG_CONFIG_HOME } : {}),
     run: (command, args) => {
       const result = spawnSync(command, args, { encoding: "utf8" });
-      return { status: result.error ? null : result.status, stdout: result.stdout ?? "", stderr: result.error?.message ?? result.stderr ?? "" };
+      return {
+        status: result.error ? null : result.status,
+        stdout: result.stdout ?? "",
+        stderr: result.error?.message ?? result.stderr ?? "",
+      };
     },
   };
 }
@@ -64,7 +83,10 @@ export function systemHost(): ServiceHost {
  * sets an invocation ID. A terminal opened from a systemd unit inherits that
  * ID, so a process on a terminal counts as started by hand.
  */
-export function runsUnderServiceManager(env: Readonly<Record<string, string | undefined>>, onTerminal: boolean): boolean {
+export function runsUnderServiceManager(
+  env: Readonly<Record<string, string | undefined>>,
+  onTerminal: boolean,
+): boolean {
   return env.XPC_SERVICE_NAME === LAUNCHD_LABEL || (!!env.INVOCATION_ID && !onTerminal);
 }
 
@@ -77,14 +99,20 @@ function serveArgs(launch: ServiceLaunch): string[] {
 
 /** systemd unit text. Arguments are quoted and `%`, `$`, `\` and `"` escaped. */
 export function systemdUnit(launch: ServiceLaunch): string {
-  const quote = (value: string, dollars: boolean) => `"${value.replace(/[\\"]/gu, "\\$&").replace(/%/gu, "%%").replace(/\$/gu, dollars ? "$$$$" : "$")}"`;
+  const quote = (value: string, dollars: boolean) =>
+    `"${value
+      .replace(/[\\"]/gu, "\\$&")
+      .replace(/%/gu, "%%")
+      .replace(/\$/gu, dollars ? "$$$$" : "$")}"`;
   return [
     "[Unit]",
     "Description=Aiden server (aiden serve)",
     "",
     "[Service]",
     "Type=simple",
-    `ExecStart=${serveArgs(launch).map((arg) => quote(arg, true)).join(" ")}`,
+    `ExecStart=${serveArgs(launch)
+      .map((arg) => quote(arg, true))
+      .join(" ")}`,
     `Environment=${quote(`AIDEN_CODING_AGENT_DIR=${launch.agentDir}`, false)}`,
     `Environment=${quote(`PATH=${launch.path}`, false)}`,
     "Restart=on-failure",
@@ -98,7 +126,12 @@ export function systemdUnit(launch: ServiceLaunch): string {
 
 /** launchd property list. Output goes to the same serve.log as `serve --daemon`. */
 export function launchdPlist(launch: ServiceLaunch): string {
-  const xml = (value: string) => value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;").replace(/"/gu, "&quot;");
+  const xml = (value: string) =>
+    value
+      .replace(/&/gu, "&amp;")
+      .replace(/</gu, "&lt;")
+      .replace(/>/gu, "&gt;")
+      .replace(/"/gu, "&quot;");
   const log = join(launch.agentDir, "serve.log");
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
@@ -132,7 +165,9 @@ type Manager = "systemd" | "launchd";
 function manager(host: ServiceHost): Manager {
   if (host.platform === "linux") return "systemd";
   if (host.platform === "darwin") return "launchd";
-  throw new Error("`aiden service` supports Linux (systemd) and macOS (launchd). Run `aiden serve --daemon` instead.");
+  throw new Error(
+    "`aiden service` supports Linux (systemd) and macOS (launchd). Run `aiden serve --daemon` instead.",
+  );
 }
 
 export function serviceFile(host: ServiceHost): string {
@@ -143,7 +178,10 @@ export function serviceFile(host: ServiceHost): string {
 
 function must(host: ServiceHost, command: string, args: string[], failure: string): string {
   const result = host.run(command, args);
-  if (result.status !== 0) throw new Error(`${failure} (${`${command} ${args.join(" ")}`}: ${(result.stderr || result.stdout).trim() || `exit ${result.status}`})`);
+  if (result.status !== 0)
+    throw new Error(
+      `${failure} (${`${command} ${args.join(" ")}`}: ${(result.stderr || result.stdout).trim() || `exit ${result.status}`})`,
+    );
   return result.stdout;
 }
 
@@ -186,9 +224,24 @@ export function installService(host: ServiceHost, launch: ServiceLaunch): Instal
   if (kind === "systemd") {
     writeFileSync(file, systemdUnit(launch), { mode: 0o644 });
     try {
-      must(host, "systemctl", ["--user", "daemon-reload"], "systemd user services are not available in this session. Log in as this user over SSH (not with su or sudo), or run `aiden serve --daemon` instead");
-      must(host, "systemctl", ["--user", "enable", SYSTEMD_UNIT], "Could not enable the Aiden service");
-      must(host, "systemctl", ["--user", "restart", SYSTEMD_UNIT], "Could not start the Aiden service");
+      must(
+        host,
+        "systemctl",
+        ["--user", "daemon-reload"],
+        "systemd user services are not available in this session. Log in as this user over SSH (not with su or sudo), or run `aiden serve --daemon` instead",
+      );
+      must(
+        host,
+        "systemctl",
+        ["--user", "enable", SYSTEMD_UNIT],
+        "Could not enable the Aiden service",
+      );
+      must(
+        host,
+        "systemctl",
+        ["--user", "restart", SYSTEMD_UNIT],
+        "Could not start the Aiden service",
+      );
     } catch (error) {
       if (previous !== undefined) {
         restoreService(host, previous);
@@ -203,9 +256,17 @@ export function installService(host: ServiceHost, launch: ServiceLaunch): Instal
     // Without lingering, user services stop at logout and do not start at boot.
     const linger = host.run("loginctl", ["show-user", host.user, "--property=Linger", "--value"]);
     const kept = previous !== undefined ? { previous } : {};
-    if (linger.status === 0 && linger.stdout.trim() === "yes") return { manager: kind, file, ...kept };
-    if (host.run("loginctl", ["enable-linger", host.user]).status === 0) return { manager: kind, file, ...kept };
-    return { manager: kind, file, ...kept, warning: "The server stops when you log out and does not start at boot until you run `sudo loginctl enable-linger $USER` once." };
+    if (linger.status === 0 && linger.stdout.trim() === "yes")
+      return { manager: kind, file, ...kept };
+    if (host.run("loginctl", ["enable-linger", host.user]).status === 0)
+      return { manager: kind, file, ...kept };
+    return {
+      manager: kind,
+      file,
+      ...kept,
+      warning:
+        "The server stops when you log out and does not start at boot until you run `sudo loginctl enable-linger $USER` once.",
+    };
   }
   writeFileSync(file, launchdPlist(launch), { mode: 0o644 });
   const target = `gui/${host.uid}`;
@@ -213,14 +274,30 @@ export function installService(host: ServiceHost, launch: ServiceLaunch): Instal
     // A reinstall replaces the loaded job; bootout fails harmlessly when none is loaded.
     host.run("launchctl", ["bootout", `${target}/${LAUNCHD_LABEL}`]);
     // A disabled label stays disabled across boots and refuses to load until enabled.
-    must(host, "launchctl", ["enable", `${target}/${LAUNCHD_LABEL}`], "Could not enable the Aiden service");
-    must(host, "launchctl", ["bootstrap", target, file], "Could not load the Aiden service. Run `aiden service install` from a session logged in to this Mac's desktop");
+    must(
+      host,
+      "launchctl",
+      ["enable", `${target}/${LAUNCHD_LABEL}`],
+      "Could not enable the Aiden service",
+    );
+    must(
+      host,
+      "launchctl",
+      ["bootstrap", target, file],
+      "Could not load the Aiden service. Run `aiden service install` from a session logged in to this Mac's desktop",
+    );
   } catch (error) {
     if (previous === undefined) rmSync(file, { force: true });
     else restoreService(host, previous);
     throw error;
   }
-  return { manager: kind, file, ...(previous !== undefined ? { previous } : {}), warning: "On a Mac the server runs while you are logged in. For a Mac without a screen, turn on automatic login in System Settings → Users & Groups." };
+  return {
+    manager: kind,
+    file,
+    ...(previous !== undefined ? { previous } : {}),
+    warning:
+      "On a Mac the server runs while you are logged in. For a Mac without a screen, turn on automatic login in System Settings → Users & Groups.",
+  };
 }
 
 /** The manager's answer when the service is simply not loaded, which uninstall treats as already stopped. */
@@ -239,29 +316,78 @@ function checkedProfile(value: string): string {
 /** Parse only the profile syntax written by this CLI, never an arbitrary service file. */
 function fileProfile(host: ServiceHost, content: string): string {
   if (manager(host) === "launchd") {
-    if (!content.includes(`<key>Label</key><string>${LAUNCHD_LABEL}</string>`) || !content.includes("<key>ProgramArguments</key>") || !content.includes("<string>serve</string>\n    <string>--no-pair</string>") || !content.includes("<key>EnvironmentVariables</key>")) throw new Error("Unrecognized installed service profile.");
-    const matches = [...content.matchAll(/<key>AIDEN_CODING_AGENT_DIR<\/key><string>([^<]*)<\/string>/gu)];
-    if (matches.length !== 1 || (content.match(/<key>AIDEN_CODING_AGENT_DIR<\/key>/gu) ?? []).length !== 1) throw new Error("Unrecognized installed service profile.");
+    if (
+      !content.includes(`<key>Label</key><string>${LAUNCHD_LABEL}</string>`) ||
+      !content.includes("<key>ProgramArguments</key>") ||
+      !content.includes("<string>serve</string>\n    <string>--no-pair</string>") ||
+      !content.includes("<key>EnvironmentVariables</key>")
+    )
+      throw new Error("Unrecognized installed service profile.");
+    const matches = [
+      ...content.matchAll(/<key>AIDEN_CODING_AGENT_DIR<\/key><string>([^<]*)<\/string>/gu),
+    ];
+    if (
+      matches.length !== 1 ||
+      (content.match(/<key>AIDEN_CODING_AGENT_DIR<\/key>/gu) ?? []).length !== 1
+    )
+      throw new Error("Unrecognized installed service profile.");
     const encoded = matches[0]![1]!;
-    if (/&(?!amp;|lt;|gt;|quot;)/u.test(encoded)) throw new Error("Unrecognized installed service profile.");
-    return checkedProfile(encoded.replace(/&(amp|lt|gt|quot);/gu, (_, name: string) => ({ amp: "&", lt: "<", gt: ">", quot: '"' })[name]!));
+    if (/&(?!amp;|lt;|gt;|quot;)/u.test(encoded))
+      throw new Error("Unrecognized installed service profile.");
+    return checkedProfile(
+      encoded.replace(
+        /&(amp|lt|gt|quot);/gu,
+        (_, name: string) => ({ amp: "&", lt: "<", gt: ">", quot: '"' })[name]!,
+      ),
+    );
   }
-  if (!content.startsWith("[Unit]\nDescription=Aiden server (aiden serve)\n\n[Service]\nType=simple\n") || !content.includes(' "serve" "--no-pair"\n') || !content.includes("\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n")) throw new Error("Unrecognized installed service profile.");
+  if (
+    !content.startsWith(
+      "[Unit]\nDescription=Aiden server (aiden serve)\n\n[Service]\nType=simple\n",
+    ) ||
+    !content.includes(' "serve" "--no-pair"\n') ||
+    !content.includes("\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n")
+  )
+    throw new Error("Unrecognized installed service profile.");
   const assignments = content.split("\n").filter((line) => /^\s*Environment\s*=/u.test(line));
   const lines = assignments.filter((line) => line.startsWith(`Environment="${PROFILE_KEY}=`));
-  if (assignments.length !== 2 || lines.length !== 1 || !assignments.some((line) => line.startsWith('Environment="PATH=')) || /^\s*(?:EnvironmentFile|UnsetEnvironment)\s*=/mu.test(content)) throw new Error("Unrecognized installed service profile.");
+  if (
+    assignments.length !== 2 ||
+    lines.length !== 1 ||
+    !assignments.some((line) => line.startsWith('Environment="PATH=')) ||
+    /^\s*(?:EnvironmentFile|UnsetEnvironment)\s*=/mu.test(content)
+  )
+    throw new Error("Unrecognized installed service profile.");
   const match = /^Environment="AIDEN_CODING_AGENT_DIR=((?:[^"\\]|\\["\\])*)"$/u.exec(lines[0]!);
-  if (!match || match[1]!.replace(/%%/gu, "").includes("%")) throw new Error("Unrecognized installed service profile.");
+  if (!match || match[1]!.replace(/%%/gu, "").includes("%"))
+    throw new Error("Unrecognized installed service profile.");
   return checkedProfile(match[1]!.replace(/\\(["\\])/gu, "$1").replace(/%%/gu, "%"));
 }
 
 function managerProperty(host: ServiceHost, property: string): { type: string; data: unknown } {
-  const result = host.run("busctl", ["--user", "--json=short", "get-property", "org.freedesktop.systemd1", "/org/freedesktop/systemd1/unit/aiden_2eservice", "org.freedesktop.systemd1.Service", property]);
-  if (result.status !== 0) throw new Error("Cannot inspect the installed Aiden service; it was not changed.");
+  const result = host.run("busctl", [
+    "--user",
+    "--json=short",
+    "get-property",
+    "org.freedesktop.systemd1",
+    "/org/freedesktop/systemd1/unit/aiden_2eservice",
+    "org.freedesktop.systemd1.Service",
+    property,
+  ]);
+  if (result.status !== 0)
+    throw new Error("Cannot inspect the installed Aiden service; it was not changed.");
   try {
     const parsed: unknown = JSON.parse(result.stdout);
-    if (parsed && typeof parsed === "object" && typeof (parsed as { type?: unknown }).type === "string" && "data" in parsed) return parsed as { type: string; data: unknown };
-  } catch { /* fail closed below */ }
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof (parsed as { type?: unknown }).type === "string" &&
+      "data" in parsed
+    )
+      return parsed as { type: string; data: unknown };
+  } catch {
+    /* fail closed below */
+  }
   throw new Error("Cannot inspect the installed Aiden service; it was not changed.");
 }
 
@@ -274,45 +400,118 @@ function serviceIdentity(host: ServiceHost): ServiceIdentity {
     const result = host.run("launchctl", ["print", target]);
     if (result.status === 0) {
       const blocks = [...result.stdout.matchAll(/^\tenvironment = \{\n([\s\S]*?)^\t\}/gmu)];
-      if (blocks.length !== 1) throw new Error("Cannot identify the loaded Aiden service profile; it was not changed.");
-      const lines = blocks[0]![1]!.split("\n").filter((line) => line.startsWith(`\t\t${PROFILE_KEY} => `));
-      if (lines.length !== 1) throw new Error("Cannot identify the loaded Aiden service profile; it was not changed.");
-      return { loaded: true, profile: checkedProfile(lines[0]!.slice(`\t\t${PROFILE_KEY} => `.length)), fileContents };
+      if (blocks.length !== 1)
+        throw new Error("Cannot identify the loaded Aiden service profile; it was not changed.");
+      const lines = blocks[0]![1]!
+        .split("\n")
+        .filter((line) => line.startsWith(`\t\t${PROFILE_KEY} => `));
+      if (lines.length !== 1)
+        throw new Error("Cannot identify the loaded Aiden service profile; it was not changed.");
+      return {
+        loaded: true,
+        profile: checkedProfile(lines[0]!.slice(`\t\t${PROFILE_KEY} => `.length)),
+        fileContents,
+      };
     }
-    if (result.status !== 113 || !result.stderr.includes(`Could not find service "${LAUNCHD_LABEL}"`)) throw new Error("Cannot inspect the installed Aiden service; it was not changed.");
+    if (
+      result.status !== 113 ||
+      !result.stderr.includes(`Could not find service "${LAUNCHD_LABEL}"`)
+    )
+      throw new Error("Cannot inspect the installed Aiden service; it was not changed.");
   } else {
-    const state = host.run("systemctl", ["--user", "show", SYSTEMD_UNIT, "--property=LoadState", "--value"]);
-    if (state.status !== 0) throw new Error("Cannot inspect the installed Aiden service; it was not changed.");
+    const state = host.run("systemctl", [
+      "--user",
+      "show",
+      SYSTEMD_UNIT,
+      "--property=LoadState",
+      "--value",
+    ]);
+    if (state.status !== 0)
+      throw new Error("Cannot inspect the installed Aiden service; it was not changed.");
     const loadState = state.stdout.trim();
     if (loadState === "loaded") {
-      const fragment = host.run("systemctl", ["--user", "show", SYSTEMD_UNIT, "--property=FragmentPath", "--value"]);
+      const fragment = host.run("systemctl", [
+        "--user",
+        "show",
+        SYSTEMD_UNIT,
+        "--property=FragmentPath",
+        "--value",
+      ]);
       const fragmentPath = fragment.stdout.replace(/\n$/u, "");
-      if (fragment.status !== 0 || fragmentPath !== file) throw new Error("The loaded Aiden service has an unrecognized service file; it was not changed.");
+      if (fragment.status !== 0 || fragmentPath !== file)
+        throw new Error(
+          "The loaded Aiden service has an unrecognized service file; it was not changed.",
+        );
       const env = managerProperty(host, "Environment");
       const files = managerProperty(host, "EnvironmentFiles");
       const unset = managerProperty(host, "UnsetEnvironment");
-      if (env.type !== "as" || !Array.isArray(env.data) || !env.data.every((x) => typeof x === "string") || files.type !== "a(sb)" || !Array.isArray(files.data) || files.data.length !== 0 || unset.type !== "as" || !Array.isArray(unset.data) || unset.data.length !== 0) throw new Error("Cannot identify the loaded Aiden service profile; it was not changed.");
+      if (
+        env.type !== "as" ||
+        !Array.isArray(env.data) ||
+        !env.data.every((x) => typeof x === "string") ||
+        files.type !== "a(sb)" ||
+        !Array.isArray(files.data) ||
+        files.data.length !== 0 ||
+        unset.type !== "as" ||
+        !Array.isArray(unset.data) ||
+        unset.data.length !== 0
+      )
+        throw new Error("Cannot identify the loaded Aiden service profile; it was not changed.");
       const matches = (env.data as string[]).filter((x) => x.startsWith(`${PROFILE_KEY}=`));
-      if (matches.length !== 1) throw new Error("Cannot identify the loaded Aiden service profile; it was not changed.");
+      if (matches.length !== 1)
+        throw new Error("Cannot identify the loaded Aiden service profile; it was not changed.");
       const profile = checkedProfile(matches[0]!.slice(PROFILE_KEY.length + 1));
       const pid = managerProperty(host, "MainPID");
-      if (pid.type !== "u" || typeof pid.data !== "number" || !Number.isSafeInteger(pid.data) || pid.data < 0) throw new Error("Cannot inspect the running Aiden service; it was not changed.");
+      if (
+        pid.type !== "u" ||
+        typeof pid.data !== "number" ||
+        !Number.isSafeInteger(pid.data) ||
+        pid.data < 0
+      )
+        throw new Error("Cannot inspect the running Aiden service; it was not changed.");
       if (pid.data > 0) {
         let processEnvironment: string;
-        try { processEnvironment = host.readProcessEnvironment?.(pid.data) ?? readFileSync(`/proc/${pid.data}/environ`, "utf8"); }
-        catch { throw new Error("Cannot inspect the running Aiden service; it was not changed."); }
-        const actual = processEnvironment.split("\0").filter((x) => x.startsWith(`${PROFILE_KEY}=`));
-        if (actual.length !== 1 || actual[0]!.slice(PROFILE_KEY.length + 1) !== profile) throw new Error("The running Aiden service differs from its loaded profile; it was not changed.");
+        try {
+          processEnvironment =
+            host.readProcessEnvironment?.(pid.data) ??
+            readFileSync(`/proc/${pid.data}/environ`, "utf8");
+        } catch {
+          throw new Error("Cannot inspect the running Aiden service; it was not changed.");
+        }
+        const actual = processEnvironment
+          .split("\0")
+          .filter((x) => x.startsWith(`${PROFILE_KEY}=`));
+        if (actual.length !== 1 || actual[0]!.slice(PROFILE_KEY.length + 1) !== profile)
+          throw new Error(
+            "The running Aiden service differs from its loaded profile; it was not changed.",
+          );
       }
       return { loaded: true, profile, fileContents };
     }
-    if (loadState !== "not-found") throw new Error("Cannot inspect the installed Aiden service; it was not changed.");
+    if (loadState !== "not-found")
+      throw new Error("Cannot inspect the installed Aiden service; it was not changed.");
   }
   if (fileContents !== undefined && manager(host) === "systemd") {
-    const dirs = [join(dirname(file), `${SYSTEMD_UNIT}.d`), "/etc/systemd/user/aiden.service.d", "/run/systemd/user/aiden.service.d", "/usr/local/lib/systemd/user/aiden.service.d", "/usr/lib/systemd/user/aiden.service.d"];
-    if (dirs.some((dir) => existsSync(dir) && readdirSync(dir).some((name) => name.endsWith(".conf")))) throw new Error("Cannot identify the installed Aiden service profile with overrides; it was not changed.");
+    const dirs = [
+      join(dirname(file), `${SYSTEMD_UNIT}.d`),
+      "/etc/systemd/user/aiden.service.d",
+      "/run/systemd/user/aiden.service.d",
+      "/usr/local/lib/systemd/user/aiden.service.d",
+      "/usr/lib/systemd/user/aiden.service.d",
+    ];
+    if (
+      dirs.some((dir) => existsSync(dir) && readdirSync(dir).some((name) => name.endsWith(".conf")))
+    )
+      throw new Error(
+        "Cannot identify the installed Aiden service profile with overrides; it was not changed.",
+      );
   }
-  return { loaded: false, ...(fileContents === undefined ? {} : { profile: fileProfile(host, fileContents), fileContents }) };
+  return {
+    loaded: false,
+    ...(fileContents === undefined
+      ? {}
+      : { profile: fileProfile(host, fileContents), fileContents }),
+  };
 }
 
 function sameIdentity(a: ServiceIdentity, b: ServiceIdentity): boolean {
@@ -328,19 +527,31 @@ export function uninstallService(host: ServiceHost, loaded = false): boolean {
   const kind = manager(host);
   const file = serviceFile(host);
   if (!existsSync(file) && !loaded) return false;
-  const [command, args] = kind === "systemd"
-    ? ["systemctl", ["--user", "stop", SYSTEMD_UNIT]]
-    : ["launchctl", ["bootout", `gui/${host.uid}/${LAUNCHD_LABEL}`]];
+  const [command, args] =
+    kind === "systemd"
+      ? ["systemctl", ["--user", "stop", SYSTEMD_UNIT]]
+      : ["launchctl", ["bootout", `gui/${host.uid}/${LAUNCHD_LABEL}`]];
   const stopped = host.run(command, args);
   const output = `${stopped.stderr}\n${stopped.stdout}`.trim();
   if (stopped.status !== 0 && !(stopped.status !== null && !loaded && NOT_LOADED.test(output))) {
-    throw new Error(`Could not stop the Aiden service (${command} ${args.join(" ")}: ${output || `exit ${stopped.status}`}). It is still installed; fix that and run \`aiden service uninstall\` again.`);
+    throw new Error(
+      `Could not stop the Aiden service (${command} ${args.join(" ")}: ${output || `exit ${stopped.status}`}). It is still installed; fix that and run \`aiden service uninstall\` again.`,
+    );
   }
   if (kind === "systemd") {
     const disabled = host.run("systemctl", ["--user", "disable", SYSTEMD_UNIT]);
     const output = `${disabled.stderr}\n${disabled.stdout}`.trim();
-    if (disabled.status !== 0 && !(disabled.status !== null && !existsSync(file) && /unit file .* does not exist/iu.test(output))) {
-      throw new Error(`Could not disable the Aiden service (${output || `exit ${disabled.status}`}). Its file and route were left in place.`);
+    if (
+      disabled.status !== 0 &&
+      !(
+        disabled.status !== null &&
+        !existsSync(file) &&
+        /unit file .* does not exist/iu.test(output)
+      )
+    ) {
+      throw new Error(
+        `Could not disable the Aiden service (${output || `exit ${disabled.status}`}). Its file and route were left in place.`,
+      );
     }
   }
   rmSync(file, { force: true });
@@ -348,20 +559,43 @@ export function uninstallService(host: ServiceHost, loaded = false): boolean {
   return true;
 }
 
-export function serviceStatus(host: ServiceHost): { installed: boolean; manager: Manager; file: string; active: boolean; logs: string } {
+export function serviceStatus(host: ServiceHost): {
+  installed: boolean;
+  manager: Manager;
+  file: string;
+  active: boolean;
+  logs: string;
+} {
   const kind = manager(host);
   const file = serviceFile(host);
   if (kind === "systemd") {
-    const active = host.run("systemctl", ["--user", "is-active", SYSTEMD_UNIT]).stdout.trim() === "active";
-    return { installed: existsSync(file), manager: kind, file, active, logs: `journalctl --user -u ${SYSTEMD_UNIT}` };
+    const active =
+      host.run("systemctl", ["--user", "is-active", SYSTEMD_UNIT]).stdout.trim() === "active";
+    return {
+      installed: existsSync(file),
+      manager: kind,
+      file,
+      active,
+      logs: `journalctl --user -u ${SYSTEMD_UNIT}`,
+    };
   }
   const printed = host.run("launchctl", ["print", `gui/${host.uid}/${LAUNCHD_LABEL}`]);
-  return { installed: existsSync(file), manager: kind, file, active: printed.status === 0 && /\bstate = running\b/u.test(printed.stdout), logs: "serve.log in the Aiden agent directory" };
+  return {
+    installed: existsSync(file),
+    manager: kind,
+    file,
+    active: printed.status === 0 && /\bstate = running\b/u.test(printed.stdout),
+    logs: "serve.log in the Aiden agent directory",
+  };
 }
 
-export const SERVICE_USAGE = "Usage: aiden service install [--network local|tailscale|both] [--no-pair] | uninstall | status";
+export const SERVICE_USAGE =
+  "Usage: aiden service install [--network local|tailscale|both] [--no-pair] | uninstall | status";
 
-export function parseInstallFlags(args: readonly string[]): { network?: RemoteNetwork; pair: boolean } {
+export function parseInstallFlags(args: readonly string[]): {
+  network?: RemoteNetwork;
+  pair: boolean;
+} {
   let network: RemoteNetwork | undefined;
   let pair = true;
   for (let index = 0; index < args.length; index += 1) {
@@ -369,7 +603,8 @@ export function parseInstallFlags(args: readonly string[]): { network?: RemoteNe
     if (arg === "--no-pair") pair = false;
     else if (arg === "--network" || arg.startsWith("--network=")) {
       const value = arg === "--network" ? args[(index += 1)] : arg.slice("--network=".length);
-      if (value !== "local" && value !== "tailscale" && value !== "both") throw new Error("Usage: aiden service install --network local|tailscale|both");
+      if (value !== "local" && value !== "tailscale" && value !== "both")
+        throw new Error("Usage: aiden service install --network local|tailscale|both");
       network = value;
     } else throw new Error(SERVICE_USAGE);
   }
@@ -378,13 +613,18 @@ export function parseInstallFlags(args: readonly string[]): { network?: RemoteNe
 
 const CHOICE: Record<RemoteNetwork, string> = { local: "1", tailscale: "2", both: "3" };
 
-async function askNetwork(question: { text: string; recommended: RemoteNetwork }): Promise<RemoteNetwork> {
+async function askNetwork(question: {
+  text: string;
+  recommended: RemoteNetwork;
+}): Promise<RemoteNetwork> {
   const { createInterface } = await import("node:readline/promises");
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try {
     process.stdout.write(question.text);
     for (;;) {
-      const answer = (await prompt.question(`Choose 1, 2 or 3 [${CHOICE[question.recommended]}]: `)).trim() || CHOICE[question.recommended];
+      const answer =
+        (await prompt.question(`Choose 1, 2 or 3 [${CHOICE[question.recommended]}]: `)).trim() ||
+        CHOICE[question.recommended];
       if (answer === "1") return "local";
       if (answer === "2") return "tailscale";
       if (answer === "3") return "both";
@@ -406,10 +646,20 @@ export interface NetworkChoiceSources {
  * default; without one, the suggestion only when Tailscale is ready, so an
  * unattended install never picks a network that cannot work yet.
  */
-export async function chooseNetwork(host: ServiceHost, interactive: boolean, sources: NetworkChoiceSources = {}): Promise<RemoteNetwork> {
-  const { looksLikeCloudServer, networkQuestion, readSystemTailscaleFacts, tailscaleReady } = await import("./reachability.ts");
-  const readFacts = sources.facts ?? (() => readSystemTailscaleFacts({ platform: host.platform, uid: host.uid, user: host.user }));
-  const [facts, cloud] = await Promise.all([readFacts(), (sources.cloud ?? (() => looksLikeCloudServer()))()]);
+export async function chooseNetwork(
+  host: ServiceHost,
+  interactive: boolean,
+  sources: NetworkChoiceSources = {},
+): Promise<RemoteNetwork> {
+  const { looksLikeCloudServer, networkQuestion, readSystemTailscaleFacts, tailscaleReady } =
+    await import("./reachability.ts");
+  const readFacts =
+    sources.facts ??
+    (() => readSystemTailscaleFacts({ platform: host.platform, uid: host.uid, user: host.user }));
+  const [facts, cloud] = await Promise.all([
+    readFacts(),
+    (sources.cloud ?? (() => looksLikeCloudServer()))(),
+  ]);
   const question = networkQuestion(facts, cloud, host.platform);
   if (interactive) return (sources.ask ?? askNetwork)(question);
   return tailscaleReady(facts) ? question.recommended : "local";
@@ -420,8 +670,10 @@ export interface OfflineRouteRelease {
   withRouteLock?: <T>(action: () => Promise<T>) => Promise<T>;
 }
 
-const ROUTE_REMOVED = "Removed Aiden's Tailscale route. `aiden remote network tailscale` (or `both`) adds it back later.";
-const ROUTE_BY_HAND = "Remove it by hand with `tailscale serve --https=443 --set-path=/api/aiden/v1 off`.";
+const ROUTE_REMOVED =
+  "Removed Aiden's Tailscale route. `aiden remote network tailscale` (or `both`) adds it back later.";
+const ROUTE_BY_HAND =
+  "Remove it by hand with `tailscale serve --https=443 --set-path=/api/aiden/v1 off`.";
 const UNFINISHED_CHANGE = `Aiden's Tailscale route may have an unfinished change, so it was left alone. ${ROUTE_BY_HAND}`;
 
 /**
@@ -431,7 +683,10 @@ const UNFINISHED_CHANGE = `Aiden's Tailscale route may have an unfinished change
  * it saved as its own is removed through Tailscale directly. Returns the line
  * to print, if any.
  */
-export async function releaseTailscaleRoute(agentDir: string, offline: OfflineRouteRelease = {}): Promise<string | undefined> {
+export async function releaseTailscaleRoute(
+  agentDir: string,
+  offline: OfflineRouteRelease = {},
+): Promise<string | undefined> {
   const { remoteServerStatus } = await import("./reachability.ts");
   const status = await remoteServerStatus(agentDir);
   // A server that does not answer is handled like a stopped one: the controller takes the same route lock.
@@ -447,17 +702,29 @@ export async function releaseTailscaleRoute(agentDir: string, offline: OfflineRo
     }
   }
   const { JsonStore } = await import("./state.ts");
-  const store = new JsonStore<{ tailscaleOwnership?: AidenTailscaleOwnership; tailscalePendingOutcome?: unknown }>(join(agentDir, "remote.json"), {});
+  const store = new JsonStore<{
+    tailscaleOwnership?: AidenTailscaleOwnership;
+    tailscalePendingOutcome?: unknown;
+  }>(join(agentDir, "remote.json"), {});
   const saved = await store.load().catch(() => undefined);
   // A first connect or takeover that did not report back leaves a pending outcome before any saved ownership.
   if (saved?.tailscalePendingOutcome) return UNFINISHED_CHANGE;
   const ownership = saved?.tailscaleOwnership;
   if (!ownership?.target) return undefined;
   try {
-    const { AidenRemoteTailscaleController, createSystemTailscaleCommandRunner } = await import("../../../main/services/aiden-remote-tailscale.js");
-    const runner = offline.runner === undefined ? await createSystemTailscaleCommandRunner() : offline.runner;
-    const controller = new AidenRemoteTailscaleController(runner, offline.withRouteLock ? { withRouteLock: offline.withRouteLock } : {});
-    await controller.disconnect(ownership.target, ownership, () => store.update((draft) => { delete draft.tailscaleOwnership; }));
+    const { AidenRemoteTailscaleController, createSystemTailscaleCommandRunner } =
+      await import("../../../main/services/aiden-remote-tailscale.js");
+    const runner =
+      offline.runner === undefined ? await createSystemTailscaleCommandRunner() : offline.runner;
+    const controller = new AidenRemoteTailscaleController(
+      runner,
+      offline.withRouteLock ? { withRouteLock: offline.withRouteLock } : {},
+    );
+    await controller.disconnect(ownership.target, ownership, () =>
+      store.update((draft) => {
+        delete draft.tailscaleOwnership;
+      }),
+    );
     return ROUTE_REMOVED;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
@@ -466,20 +733,30 @@ export async function releaseTailscaleRoute(agentDir: string, offline: OfflineRo
 }
 
 function tailscaleReason(code: string): string {
-  return code === "tailscale_route_conflict" ? "the route there is no longer Aiden's" : code === "tailscale_not_installed" ? "Tailscale is not installed" : code;
+  return code === "tailscale_route_conflict"
+    ? "the route there is no longer Aiden's"
+    : code === "tailscale_not_installed"
+      ? "Tailscale is not installed"
+      : code;
 }
 
 /** The Tailscale network a server already uses, read from its saved Remote settings; a reinstall keeps it instead of falling back to local. */
 export function savedNetwork(agentDir: string): RemoteNetwork | undefined {
   try {
-    const mode: unknown = JSON.parse(readFileSync(join(agentDir, "remote.json"), "utf8"))?.connectionMode;
+    const mode: unknown = JSON.parse(
+      readFileSync(join(agentDir, "remote.json"), "utf8"),
+    )?.connectionMode;
     return mode === "tailscale" || mode === "both" ? mode : undefined;
   } catch {
     return undefined;
   }
 }
 
-const NETWORK_LABEL: Record<RemoteNetwork, string> = { local: "the local network only", tailscale: "Tailscale only", both: "the local network and Tailscale" };
+const NETWORK_LABEL: Record<RemoteNetwork, string> = {
+  local: "the local network only",
+  tailscale: "Tailscale only",
+  both: "the local network and Tailscale",
+};
 
 async function waitForServer(agentDir: string, timeoutMs = 30_000): Promise<boolean> {
   const { daemonStatus } = await import("./serve-lifecycle.ts");
@@ -492,12 +769,24 @@ async function waitForServer(agentDir: string, timeoutMs = 30_000): Promise<bool
 }
 
 /** Which networks really reach the server: none while Remote is off or not listening, the local network in LAN modes, Tailscale only while its route is connected. */
-export function reachableNetwork(status: { enabled?: boolean; running?: boolean; connectionMode?: string; tailscaleConnected?: boolean; tailscaleRouteState?: string } | undefined): RemoteNetwork | undefined {
+export function reachableNetwork(
+  status:
+    | {
+        enabled?: boolean;
+        running?: boolean;
+        connectionMode?: string;
+        tailscaleConnected?: boolean;
+        tailscaleRouteState?: string;
+      }
+    | undefined,
+): RemoteNetwork | undefined {
   if (status?.enabled === false || status?.running === false) return undefined;
   // An unfinished route change may have left Aiden's old Serve route live, so the server's reach is unknown.
   if (status?.tailscaleRouteState === "reconciliation_required") return undefined;
   const lan = status?.connectionMode === "lan" || status?.connectionMode === "both";
-  const tailscale = (status?.connectionMode === "tailscale" || status?.connectionMode === "both") && status.tailscaleConnected === true;
+  const tailscale =
+    (status?.connectionMode === "tailscale" || status?.connectionMode === "both") &&
+    status.tailscaleConnected === true;
   return lan && tailscale ? "both" : lan ? "local" : tailscale ? "tailscale" : undefined;
 }
 
@@ -523,7 +812,10 @@ export interface ServiceCommandOptions {
 /** Whether a failed network change was Tailscale refusing this user Serve settings. */
 export function isTailscalePermissionDenied(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return message === "tailscale_permission_denied" || message === tailscaleSetupMessage("tailscale_permission_denied");
+  return (
+    message === "tailscale_permission_denied" ||
+    message === tailscaleSetupMessage("tailscale_permission_denied")
+  );
 }
 
 /**
@@ -532,7 +824,8 @@ export function isTailscalePermissionDenied(error: unknown): boolean {
  * `aiden remote check` names, with sudo asking for the password itself.
  */
 export async function allowTailscaleOperator(host: ServiceHost): Promise<boolean> {
-  const { resolveTailscaleBinary } = await import("../../../main/services/aiden-remote-tailscale.js");
+  const { resolveTailscaleBinary } =
+    await import("../../../main/services/aiden-remote-tailscale.js");
   const binary = await resolveTailscaleBinary(host.platform);
   if (!binary) return false;
   const command = `sudo ${binary === "/usr/bin/tailscale" ? "tailscale" : binary} set --operator=${host.user}`;
@@ -540,36 +833,69 @@ export async function allowTailscaleOperator(host: ServiceHost): Promise<boolean
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   let answer: string;
   try {
-    process.stdout.write(`Tailscale lets only root change Serve settings on this computer, so Aiden could not add its private route.\n`);
-    answer = (await prompt.question(`Run \`${command}\` now so ${host.user} may? It asks for your password. [Y/n]: `)).trim().toLowerCase();
+    process.stdout.write(
+      `Tailscale lets only root change Serve settings on this computer, so Aiden could not add its private route.\n`,
+    );
+    answer = (
+      await prompt.question(
+        `Run \`${command}\` now so ${host.user} may? It asks for your password. [Y/n]: `,
+      )
+    )
+      .trim()
+      .toLowerCase();
   } finally {
     prompt.close();
   }
   if (answer !== "" && answer !== "y" && answer !== "yes") return false;
-  const result = spawnSync("sudo", [binary, "set", `--operator=${host.user}`], { stdio: "inherit" });
+  const result = spawnSync("sudo", [binary, "set", `--operator=${host.user}`], {
+    stdio: "inherit",
+  });
   return !result.error && result.status === 0;
 }
 
 /** `aiden service ...`. Prints its own output. */
-export async function serviceCommand(agentDir: string, args: string[], host: ServiceHost = systemHost(), options: ServiceCommandOptions = {}): Promise<void> {
-  if (args[0] !== "install" && args[0] !== "uninstall") return serviceCommandUnlocked(agentDir, args, host, options);
+export async function serviceCommand(
+  agentDir: string,
+  args: string[],
+  host: ServiceHost = systemHost(),
+  options: ServiceCommandOptions = {},
+): Promise<void> {
+  if (args[0] !== "install" && args[0] !== "uninstall")
+    return serviceCommandUnlocked(agentDir, args, host, options);
   const release = acquireLease(join(host.leaseHome ?? host.home, ".aiden", "service-manager"));
-  try { await serviceCommandUnlocked(agentDir, args, host, options, release); }
-  finally { release(); }
+  try {
+    await serviceCommandUnlocked(agentDir, args, host, options, release);
+  } finally {
+    release();
+  }
 }
 
-async function serviceCommandUnlocked(agentDir: string, args: string[], host: ServiceHost, options: ServiceCommandOptions, releaseLease?: () => void): Promise<void> {
+async function serviceCommandUnlocked(
+  agentDir: string,
+  args: string[],
+  host: ServiceHost,
+  options: ServiceCommandOptions,
+  releaseLease?: () => void,
+): Promise<void> {
   const [action, ...rest] = args;
   const out = (line: string) => process.stdout.write(`${line}\n`);
   if (action === "status" && rest.length === 0) {
     const { daemonStatus } = await import("./serve-lifecycle.ts");
-    process.stdout.write(JSON.stringify({ ...serviceStatus(host), server: daemonStatus(agentDir) }, null, 2) + "\n");
+    process.stdout.write(
+      JSON.stringify({ ...serviceStatus(host), server: daemonStatus(agentDir) }, null, 2) + "\n",
+    );
     return;
   }
   if (action === "uninstall" && rest.length === 0) {
     const identity = serviceIdentity(host);
-    if (!identity.profile) { out("The Aiden service was not installed."); return; }
-    if (!sameIdentity(identity, serviceIdentity(host))) throw new Error("The installed Aiden service changed while inspecting it; it was not changed.");
+    if (!identity.profile) {
+      out("The Aiden service was not installed.");
+      return;
+    }
+    if (!sameIdentity(identity, serviceIdentity(host)))
+      throw new Error(
+        "The installed Aiden service changed while inspecting it; it was not changed.",
+      );
     // Stop the service first: if the manager refuses, the running server keeps its route and a retry can still remove it.
     if (!uninstallService(host, identity.loaded)) {
       out("The Aiden service was not installed.");
@@ -584,16 +910,32 @@ async function serviceCommandUnlocked(agentDir: string, args: string[], host: Se
   const flags = parseInstallFlags(rest);
   manager(host);
   const entry = realpathSync(process.env.AIDEN_CLI_ENTRY || process.argv[1] || "");
-  if (!entry.endsWith(".js")) throw new Error("Build the CLI first (`npm run cli:build`); the service runs the built dist/app/cli.js.");
+  if (!entry.endsWith(".js"))
+    throw new Error(
+      "Build the CLI first (`npm run cli:build`); the service runs the built dist/app/cli.js.",
+    );
   // The service has no terminal, so this is where the person learns about usage data.
   showServerNotice(options.analytics ?? serverAnalyticsContext(agentDir));
   const kept = flags.network ? undefined : savedNetwork(agentDir);
-  if (kept) out(`Keeping the server's network: ${NETWORK_LABEL[kept]}. Choose another with \`--network\` or \`aiden remote network\`.`);
-  const network = flags.network ?? kept ?? await chooseNetwork(host, !!(process.stdin.isTTY && process.stdout.isTTY));
+  if (kept)
+    out(
+      `Keeping the server's network: ${NETWORK_LABEL[kept]}. Choose another with \`--network\` or \`aiden remote network\`.`,
+    );
+  const network =
+    flags.network ??
+    kept ??
+    (await chooseNetwork(host, !!(process.stdin.isTTY && process.stdout.isTTY)));
 
   const identity = serviceIdentity(host);
-  if (identity.loaded && (!identity.fileContents || fileProfile(host, identity.fileContents) !== identity.profile)) throw new Error("The loaded Aiden service differs from its installed file; it was not changed.");
-  if (!sameIdentity(identity, serviceIdentity(host))) throw new Error("The installed Aiden service changed while inspecting it; it was not changed.");
+  if (
+    identity.loaded &&
+    (!identity.fileContents || fileProfile(host, identity.fileContents) !== identity.profile)
+  )
+    throw new Error(
+      "The loaded Aiden service differs from its installed file; it was not changed.",
+    );
+  if (!sameIdentity(identity, serviceIdentity(host)))
+    throw new Error("The installed Aiden service changed while inspecting it; it was not changed.");
 
   // The service takes over the server's lease, so stop a server started by hand.
   const { daemonStatus, stopDaemon } = await import("./serve-lifecycle.ts");
@@ -604,36 +946,67 @@ async function serviceCommandUnlocked(agentDir: string, args: string[], host: Se
   }
   let installed: InstallResult | undefined;
   try {
-    if (!sameIdentity(identity, serviceIdentity(host))) throw new Error("The installed Aiden service changed while inspecting it; it was not changed.");
-    installed = installService(host, { node: process.execPath, entry, agentDir: resolve(agentDir), path: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin" });
+    if (!sameIdentity(identity, serviceIdentity(host)))
+      throw new Error(
+        "The installed Aiden service changed while inspecting it; it was not changed.",
+      );
+    installed = installService(host, {
+      node: process.execPath,
+      entry,
+      agentDir: resolve(agentDir),
+      path: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    });
     out(`Installed ${installed.file}.`);
-    const logs = installed.manager === "systemd" ? `journalctl --user -u ${SYSTEMD_UNIT}` : join(agentDir, "serve.log");
+    const logs =
+      installed.manager === "systemd"
+        ? `journalctl --user -u ${SYSTEMD_UNIT}`
+        : join(agentDir, "serve.log");
     const readyMs = options.readyTimeoutMs ?? 30_000;
-    if (!await (options.ready ?? waitForServer)(agentDir, readyMs)) throw new Error(`The service did not start the server within ${Math.round(readyMs / 1000)}s. See ${logs}.`);
+    if (!(await (options.ready ?? waitForServer)(agentDir, readyMs)))
+      throw new Error(
+        `The service did not start the server within ${Math.round(readyMs / 1000)}s. See ${logs}.`,
+      );
   } catch (error) {
     const message = (error instanceof Error ? error.message : String(error)).replace(/\.*$/u, ".");
     // The replacement never served: put back the service it replaced (installService already did when the manager refused).
     if (installed?.previous !== undefined) {
       restoreService(host, installed.previous);
-      throw new Error(`${message} Put back the service that was installed before.`, { cause: error });
+      throw new Error(`${message} Put back the service that was installed before.`, {
+        cause: error,
+      });
     }
     // A first install that never served is removed, so it can't keep restarting next to a server started by hand.
     if (installed) {
       try {
         uninstallService(host);
       } catch (removeError) {
-        throw new Error(`${message} ${removeError instanceof Error ? removeError.message : String(removeError)}`, { cause: error });
+        throw new Error(
+          `${message} ${removeError instanceof Error ? removeError.message : String(removeError)}`,
+          { cause: error },
+        );
       }
-      const restart = stopped && !daemonStatus(agentDir).running ? " The server that was running before is stopped; start it again with `aiden serve --daemon`." : "";
+      const restart =
+        stopped && !daemonStatus(agentDir).running
+          ? " The server that was running before is stopped; start it again with `aiden serve --daemon`."
+          : "";
       throw new Error(`${message} Removed the service it installed.${restart}`, { cause: error });
     }
     // Say how to get back the server this install stopped, unless something is already serving again.
     if (!stopped || daemonStatus(agentDir).running) throw error;
-    throw new Error(`${message} The server that was running before is stopped; start it again with \`aiden serve --daemon\`.`, { cause: error });
+    throw new Error(
+      `${message} The server that was running before is stopped; start it again with \`aiden serve --daemon\`.`,
+      { cause: error },
+    );
   }
-  const logs = installed.manager === "systemd" ? `journalctl --user -u ${SYSTEMD_UNIT}` : join(agentDir, "serve.log");
+  const logs =
+    installed.manager === "systemd"
+      ? `journalctl --user -u ${SYSTEMD_UNIT}`
+      : join(agentDir, "serve.log");
 
-  const remote = options.remote ?? (async (remoteArgs: string[]) => (await import("./daemon-control.ts")).remoteDaemonCommand(agentDir, "remote", remoteArgs));
+  const remote =
+    options.remote ??
+    (async (remoteArgs: string[]) =>
+      (await import("./daemon-control.ts")).remoteDaemonCommand(agentDir, "remote", remoteArgs));
   let reachable: RemoteNetwork | undefined = network;
   const interactive = options.tty ?? !!(process.stdin.isTTY && process.stdout.isTTY);
   let tailscaleFailed = false;
@@ -642,24 +1015,43 @@ async function serviceCommandUnlocked(agentDir: string, args: string[], host: Se
       await remote(["network", network]);
     } catch (error) {
       // The common first-run gap on Linux: offer the one sudo step, then try once more.
-      if (network === "local" || !interactive || host.platform !== "linux" || !isTailscalePermissionDenied(error)) throw error;
-      if (!await (options.allowTailscaleOperator ?? allowTailscaleOperator)(host)) throw error;
+      if (
+        network === "local" ||
+        !interactive ||
+        host.platform !== "linux" ||
+        !isTailscalePermissionDenied(error)
+      )
+        throw error;
+      if (!(await (options.allowTailscaleOperator ?? allowTailscaleOperator)(host))) throw error;
       await remote(["network", network]);
     }
   } catch (error) {
     tailscaleFailed = network !== "local";
-    const status = await remote(["status"]).catch(() => undefined) as Parameters<typeof reachableNetwork>[0];
+    const status = (await remote(["status"]).catch(() => undefined)) as Parameters<
+      typeof reachableNetwork
+    >[0];
     reachable = reachableNetwork(status);
-    process.stderr.write(`aiden: Could not set up ${NETWORK_LABEL[network]}. ${error instanceof Error ? error.message : String(error)}\n`);
-    out(reachable
-      ? `For now the server is reachable over ${NETWORK_LABEL[reachable]}. Change it later with \`aiden remote network local|tailscale|both\`.`
-      : status?.tailscaleRouteState === "reconciliation_required"
-        ? "Aiden's Tailscale route may have an unfinished change, so it is unclear which networks reach the server. Run `aiden remote tailscale-reconcile`, then `aiden remote network local|tailscale|both`."
-        : "For now no phone can reach the server. Fix the step above, or use the local network with `aiden remote network local`.");
+    process.stderr.write(
+      `aiden: Could not set up ${NETWORK_LABEL[network]}. ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    out(
+      reachable
+        ? `For now the server is reachable over ${NETWORK_LABEL[reachable]}. Change it later with \`aiden remote network local|tailscale|both\`.`
+        : status?.tailscaleRouteState === "reconciliation_required"
+          ? "Aiden's Tailscale route may have an unfinished change, so it is unclear which networks reach the server. Run `aiden remote tailscale-reconcile`, then `aiden remote network local|tailscale|both`."
+          : "For now no phone can reach the server. Fix the step above, or use the local network with `aiden remote network local`.",
+    );
   }
   // Without lingering a Linux user service does not start at boot; the warning says so instead.
-  const boot = installed.manager === "systemd" && installed.warning ? "" : installed.manager === "systemd" ? " It starts again after a reboot." : " It starts again when you log in.";
-  out(`The Aiden server is running as a service${reachable ? ` and reachable over ${NETWORK_LABEL[reachable]}` : ""}.${boot}`);
+  const boot =
+    installed.manager === "systemd" && installed.warning
+      ? ""
+      : installed.manager === "systemd"
+        ? " It starts again after a reboot."
+        : " It starts again when you log in.";
+  out(
+    `The Aiden server is running as a service${reachable ? ` and reachable over ${NETWORK_LABEL[reachable]}` : ""}.${boot}`,
+  );
   if (installed.warning) out(installed.warning);
   out(`Logs: ${logs}. Stop it for good with \`aiden service uninstall\`.`);
 
@@ -668,7 +1060,9 @@ async function serviceCommandUnlocked(agentDir: string, args: string[], host: Se
   if (!reachable) return;
   // A local-network code is no use to a phone that was meant to reach the server over Tailscale.
   if (tailscaleFailed) {
-    out(`Once the step above is fixed, run \`aiden remote network ${network}\`, then \`aiden remote pair tailscale\` for a Tailscale code. A phone on this computer's network can pair now with \`aiden remote pair lan\`.`);
+    out(
+      `Once the step above is fixed, run \`aiden remote network ${network}\`, then \`aiden remote pair tailscale\` for a Tailscale code. A phone on this computer's network can pair now with \`aiden remote pair lan\`.`,
+    );
     return;
   }
   if (!flags.pair || !(options.tty ?? process.stdout.isTTY)) {
@@ -682,11 +1076,17 @@ async function serviceCommandUnlocked(agentDir: string, args: string[], host: Se
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   for (const signal of signals) process.once(signal, stop);
   try {
-    const pair = options.pair ?? (async (transport: "lan" | "tailscale", signal: AbortSignal) => (await import("./serve-command.ts")).showStartupPairing(agentDir, transport, signal));
+    const pair =
+      options.pair ??
+      (async (transport: "lan" | "tailscale", signal: AbortSignal) =>
+        (await import("./serve-command.ts")).showStartupPairing(agentDir, transport, signal));
     const session = await pair(reachable === "local" ? "lan" : "tailscale", controller.signal);
     // Unlike foreground `serve`, the server keeps running after Ctrl+C here, so close the code it was showing.
     if (controller.signal.aborted && session) {
-      await remote(["pair-cancel", session]).then(() => out("Closed the pairing code."), () => undefined);
+      await remote(["pair-cancel", session]).then(
+        () => out("Closed the pairing code."),
+        () => undefined,
+      );
     }
   } finally {
     for (const signal of signals) process.removeListener(signal, stop);

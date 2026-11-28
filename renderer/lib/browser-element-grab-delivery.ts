@@ -125,7 +125,8 @@ export function materializeGrabbedElementDraft(
   }
 
   const staleThumbnailId = replaced
-    ? existingElements[matchIndex].thumbnailAttachmentId ?? grabbedElementThumbnailId(existingElements[matchIndex].id)
+    ? (existingElements[matchIndex].thumbnailAttachmentId ??
+      grabbedElementThumbnailId(existingElements[matchIndex].id))
     : null;
   const newThumbnailId = grabbedElementThumbnailId(capture.element.id);
   const baseAttachments = existingAttachments.filter(

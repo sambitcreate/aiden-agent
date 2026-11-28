@@ -13,7 +13,10 @@ import { SubagentRunGrantApproval } from "./subagent-run-grant-approval.js";
 import { ChatApprovalCard } from "./chat-approval-card.js";
 import type { ApprovalPrompt } from "../lib/ipc.js";
 
-function renderApprovalCard(details: unknown, prompt: Partial<ApprovalPrompt> = {}): { markup: string; buttons: string[] } {
+function renderApprovalCard(
+  details: unknown,
+  prompt: Partial<ApprovalPrompt> = {},
+): { markup: string; buttons: string[] } {
   const markup = renderToStaticMarkup(
     <ChatApprovalCard
       pending={{
@@ -96,10 +99,16 @@ test("chat approval surface claims shell details before generic approval and kee
 
 test("run grant card states its whole-run scope and rejects malformed host claims", () => {
   const grant: SubagentRunGrantApprovalDetails = {
-    kind: "subagent-run-grant", lane: "shell", runId: "run-1",
-    childLabel: "Implement checks", workspaceLabel: "Project",
-    worktreeLabel: null, isManagedWorktree: false,
-    workspaceRevisionPrefix: "a".repeat(12), fullHostAccess: true, noRollback: true,
+    kind: "subagent-run-grant",
+    lane: "shell",
+    runId: "run-1",
+    childLabel: "Implement checks",
+    workspaceLabel: "Project",
+    worktreeLabel: null,
+    isManagedWorktree: false,
+    workspaceRevisionPrefix: "a".repeat(12),
+    fullHostAccess: true,
+    noRollback: true,
   };
   assert.equal(isSubagentRunGrantApprovalDetails(grant), true);
   assert.equal(isSubagentRunGrantApprovalDetails({ ...grant, fullHostAccess: false }), false);
@@ -111,7 +120,10 @@ test("run grant card states its whole-run scope and rejects malformed host claim
   assert.match(shellHtml, /Later commands will not ask again/u);
   assert.match(shellHtml, /not OS sandboxed/u);
   const writeHtml = renderToStaticMarkup(
-    <SubagentRunGrantApproval details={{ ...grant, lane: "write", fullHostAccess: false, noRollback: false }} descriptionId="write-description" />,
+    <SubagentRunGrantApproval
+      details={{ ...grant, lane: "write", fullHostAccess: false, noRollback: false }}
+      descriptionId="write-description"
+    />,
   );
   assert.match(writeHtml, /Later file changes will not ask again/u);
   const card = renderApprovalCard(grant, { scopes: ["chat", "always"] });

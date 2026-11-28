@@ -9,14 +9,20 @@
 
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { redactCredentialText } from "./diagnostics-contract.js";
-import { SCHEDULED_TASK_LINK_LIMITS, type ScheduledTaskLinkTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
+import {
+  SCHEDULED_TASK_LINK_LIMITS,
+  type ScheduledTaskLinkTrigger,
+} from "../../renderer/shared/scheduled-task-trigger.js";
 import type { BotRoutineEventOutcome } from "./bot-routine-events/dispatcher.js";
 import type { TaskLinkLogEntry, TaskTriggerRoutine } from "./scheduled-task-triggers-store.js";
 
 const BATCH_MARK = "\u0000aiden-link-batch:";
 
 /** A held batch of calls: the newest 20, and how many older ones were dropped. */
-interface LinkBatch { calls: string[]; dropped: number }
+interface LinkBatch {
+  calls: string[];
+  dropped: number;
+}
 
 function readBatch(payload: string): LinkBatch {
   if (payload.startsWith(BATCH_MARK)) {
@@ -24,8 +30,15 @@ function readBatch(payload: string): LinkBatch {
       const parsed = JSON.parse(payload.slice(BATCH_MARK.length)) as unknown;
       if (parsed && typeof parsed === "object") {
         const record = parsed as Record<string, unknown>;
-        const calls = Array.isArray(record.calls) ? record.calls.filter((call): call is string => typeof call === "string") : [];
-        const dropped = typeof record.dropped === "number" && Number.isSafeInteger(record.dropped) && record.dropped >= 0 ? record.dropped : 0;
+        const calls = Array.isArray(record.calls)
+          ? record.calls.filter((call): call is string => typeof call === "string")
+          : [];
+        const dropped =
+          typeof record.dropped === "number" &&
+          Number.isSafeInteger(record.dropped) &&
+          record.dropped >= 0
+            ? record.dropped
+            : 0;
         return { calls, dropped };
       }
     } catch {
@@ -53,7 +66,8 @@ export function mergeLinkBatches(older: string, newer: string, maxChars: number)
   let encoded = encode();
   while (encoded.length > maxChars) {
     let longest = 0;
-    for (let index = 1; index < kept.length; index += 1) if (kept[index]!.length > kept[longest]!.length) longest = index;
+    for (let index = 1; index < kept.length; index += 1)
+      if (kept[index]!.length > kept[longest]!.length) longest = index;
     const call = kept[longest]!;
     kept[longest] = `${call.slice(0, Math.max(0, Math.floor(call.length * 0.8) - 1))}…`;
     encoded = encode();
@@ -72,11 +86,13 @@ export function linkEventText(payload: string, maxChars: number): string {
   const { calls, dropped } = readBatch(payload);
   const head = `${calls.length} calls arrived while the task waited.${dropped ? ` ${dropped} more ${dropped === 1 ? "call was" : "calls were"} dropped.` : ""}`;
   const kept = [...calls];
-  const spell = () => [head, ...kept.map((call, index) => `Call ${index + 1}:\n${call}`)].join("\n\n");
+  const spell = () =>
+    [head, ...kept.map((call, index) => `Call ${index + 1}:\n${call}`)].join("\n\n");
   let text = spell();
   while (text.length > maxChars) {
     let longest = 0;
-    for (let index = 1; index < kept.length; index += 1) if (kept[index]!.length > kept[longest]!.length) longest = index;
+    for (let index = 1; index < kept.length; index += 1)
+      if (kept[index]!.length > kept[longest]!.length) longest = index;
     const call = kept[longest]!;
     if (call.length <= 1) return cut(text, maxChars);
     kept[longest] = `${call.slice(0, Math.max(0, Math.floor(call.length * 0.8) - 1))}…`;
@@ -85,15 +101,20 @@ export function linkEventText(payload: string, maxChars: number): string {
   return text;
 }
 
-const SECRET_KEY = /^(?:authorization|cookie|set-cookie|password|passwd|secret|client_secret|token|access_token|refresh_token|id_token|api[-_]?key|x-api-key|private[-_]?key|signature)$/iu;
+const SECRET_KEY =
+  /^(?:authorization|cookie|set-cookie|password|passwd|secret|client_secret|token|access_token|refresh_token|id_token|api[-_]?key|x-api-key|private[-_]?key|signature)$/iu;
 
 /** Values under credential-looking keys are withheld, at any depth. */
 function withholdSecrets(value: unknown, depth = 0): unknown {
   if (depth > MAX_JSON_DEPTH) return "[withheld]";
   if (Array.isArray(value)) return value.map((item) => withholdSecrets(item, depth + 1));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) =>
-      [key, SECRET_KEY.test(key) ? "[withheld]" : withholdSecrets(item, depth + 1)]));
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        SECRET_KEY.test(key) ? "[withheld]" : withholdSecrets(item, depth + 1),
+      ]),
+    );
   }
   return typeof value === "string" ? redactCredentialText(value) : value;
 }
@@ -108,8 +129,11 @@ function nestsDeeper(value: unknown, limit: number): boolean {
     const { value: current, depth } = stack.pop()!;
     if (current === null || typeof current !== "object") continue;
     if (depth >= limit) return true;
-    for (const child of Array.isArray(current) ? current : Object.values(current as Record<string, unknown>)) {
-      if (child !== null && typeof child === "object") stack.push({ value: child, depth: depth + 1 });
+    for (const child of Array.isArray(current)
+      ? current
+      : Object.values(current as Record<string, unknown>)) {
+      if (child !== null && typeof child === "object")
+        stack.push({ value: child, depth: depth + 1 });
     }
   }
   return false;
@@ -125,7 +149,8 @@ function valueAt(value: unknown, path: string): unknown {
   return current;
 }
 
-const asText = (value: unknown) => (typeof value === "string" ? value : JSON.stringify(value) ?? "");
+const asText = (value: unknown) =>
+  typeof value === "string" ? value : (JSON.stringify(value) ?? "");
 
 function cut(text: string, chars: number): string {
   const shown = [...text.slice(0, chars * 2)];
@@ -135,17 +160,31 @@ function cut(text: string, chars: number): string {
 function previewOf(text: string): string {
   const bytes = Buffer.from(text, "utf8");
   if (bytes.byteLength <= SCHEDULED_TASK_LINK_LIMITS.previewBytes) return text;
-  return `${bytes.subarray(0, SCHEDULED_TASK_LINK_LIMITS.previewBytes - 3).toString("utf8").replace(/�+$/u, "")}…`;
+  return `${bytes
+    .subarray(0, SCHEDULED_TASK_LINK_LIMITS.previewBytes - 3)
+    .toString("utf8")
+    .replace(/�+$/u, "")}…`;
 }
 
 /** The body as the model and the log see it: credentials withheld, NULs removed. */
-export function linkCallText(trigger: ScheduledTaskLinkTrigger, json: unknown | undefined, text: string): string {
-  if (json === undefined) return cut(redactCredentialText(text).split("\u0000").join(""), SCHEDULED_TASK_LINK_LIMITS.payloadChars);
+export function linkCallText(
+  trigger: ScheduledTaskLinkTrigger,
+  json: unknown | undefined,
+  text: string,
+): string {
+  if (json === undefined)
+    return cut(
+      redactCredentialText(text).split("\u0000").join(""),
+      SCHEDULED_TASK_LINK_LIMITS.payloadChars,
+    );
   const safe = withholdSecrets(json);
   const shown = trigger.includeFields?.length
     ? Object.fromEntries(trigger.includeFields.map((path) => [path, valueAt(safe, path) ?? null]))
     : safe;
-  return cut(JSON.stringify(shown, null, 2).split("\u0000").join(""), SCHEDULED_TASK_LINK_LIMITS.payloadChars);
+  return cut(
+    JSON.stringify(shown, null, 2).split("\u0000").join(""),
+    SCHEDULED_TASK_LINK_LIMITS.payloadChars,
+  );
 }
 
 function signatureMatches(secret: string, body: Uint8Array, header: string | undefined): boolean {
@@ -158,7 +197,12 @@ function signatureMatches(secret: string, body: Uint8Array, header: string | und
 }
 
 const LOG_OF: Record<BotRoutineEventOutcome, TaskLinkLogEntry["outcome"]> = {
-  queued: "ran", held: "batched", duplicate: "duplicate", daily_limit: "daily_limit", disabled: "off", unknown: "off",
+  queued: "ran",
+  held: "batched",
+  duplicate: "duplicate",
+  daily_limit: "daily_limit",
+  disabled: "off",
+  unknown: "off",
 };
 
 export interface TaskLinkWebhookDependencies {
@@ -170,7 +214,10 @@ export interface TaskLinkWebhookDependencies {
   findByToken(token: string): Promise<TaskTriggerRoutine | undefined>;
   /** The link's signing secret (`aiden-internal:task-hook:<taskId>`). */
   secret(taskId: string): Promise<string | null>;
-  emit(taskId: string, event: { eventId: string; payload: string }): Promise<BotRoutineEventOutcome>;
+  emit(
+    taskId: string,
+    event: { eventId: string; payload: string },
+  ): Promise<BotRoutineEventOutcome>;
   log(taskId: string, entry: TaskLinkLogEntry, options?: { coalesce?: boolean }): Promise<void>;
   now(): number;
 }
@@ -186,7 +233,10 @@ export const UNKNOWN_LINK_CALLS_PER_MINUTE = 120;
 export const REFUSED_LINK_CALLS_PER_MINUTE = 30;
 
 /** One call's place in a link's 60 a minute. */
-interface Admission { at: number; id: string }
+interface Admission {
+  at: number;
+  id: string;
+}
 
 type LinkRoutine = TaskTriggerRoutine & { task: { trigger: ScheduledTaskLinkTrigger } };
 
@@ -199,8 +249,10 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
   /** Recent calls with an unknown token, across every link. */
   let unknown: number[] = [];
 
-  const within = (times: number[] | undefined, now: number) => (times ?? []).filter((at) => at > now - 60_000);
-  const admittedWithin = (calls: Admission[] | undefined, now: number) => (calls ?? []).filter((call) => call.at > now - 60_000);
+  const within = (times: number[] | undefined, now: number) =>
+    (times ?? []).filter((at) => at > now - 60_000);
+  const admittedWithin = (calls: Admission[] | undefined, now: number) =>
+    (calls ?? []).filter((call) => call.at > now - 60_000);
 
   /** The task behind a link, read-only, if it is on and still a link task. */
   async function open(token: string): Promise<LinkRoutine | undefined> {
@@ -231,7 +283,8 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
     return true;
   }
 
-  const mediaType = (contentType: string | undefined) => (contentType ?? "text/plain").split(";")[0]!.trim().toLowerCase();
+  const mediaType = (contentType: string | undefined) =>
+    (contentType ?? "text/plain").split(";")[0]!.trim().toLowerCase();
   const acceptedType = (contentType: string | undefined) => {
     const type = mediaType(contentType);
     return type === "application/json" || type === "text/plain";
@@ -239,7 +292,12 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
 
   return {
     /** Before the body is read: 404, 429 or 415, or the header the signature comes in. */
-    async admit(request: { token: string; contentType?: string }): Promise<{ status: 404 | 415 | 429 } | { accept: true; admission: string; signatureHeader?: string }> {
+    async admit(request: {
+      token: string;
+      contentType?: string;
+    }): Promise<
+      { status: 404 | 415 | 429 } | { accept: true; admission: string; signatureHeader?: string }
+    > {
       if (!deps.active()) return { status: 404 };
       const now = deps.now();
       // The in-memory index first: only a miss counts as an unknown token, so
@@ -254,7 +312,8 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
       const typeAccepted = acceptedType(request.contentType);
       // A wrong content type never uses the link's 60. Once a minute's worth
       // of refusals is reached it is answered without reading the task.
-      if (!typeAccepted && within(refused.get(taskId), now).length >= REFUSED_LINK_CALLS_PER_MINUTE) return { status: 415 };
+      if (!typeAccepted && within(refused.get(taskId), now).length >= REFUSED_LINK_CALLS_PER_MINUTE)
+        return { status: 415 };
       // A known token, even one whose task is off, uses its link's 60 a minute
       // before anything else is read.
       const calls = admittedWithin(recent.get(taskId), now);
@@ -287,15 +346,26 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
     },
 
     /** The call itself: signature, filters, repeats, then the event core. */
-    async deliver(request: { token: string; admission?: string; contentType?: string; signature?: string; body: Uint8Array }): Promise<{ status: 202 | 400 | 401 | 404 | 413 | 415 }> {
+    async deliver(request: {
+      token: string;
+      admission?: string;
+      contentType?: string;
+      signature?: string;
+      body: Uint8Array;
+    }): Promise<{ status: 202 | 400 | 401 | 404 | 413 | 415 }> {
       if (!deps.active()) return { status: 404 };
       const routine = await open(request.token);
       if (!routine) return { status: 404 };
       // The reservation `admit` made for this call, if it came through `admit`.
       const admittedAt = request.admission;
-      if (request.body.byteLength > SCHEDULED_TASK_LINK_LIMITS.bodyBytes || !acceptedType(request.contentType)) {
+      if (
+        request.body.byteLength > SCHEDULED_TASK_LINK_LIMITS.bodyBytes ||
+        !acceptedType(request.contentType)
+      ) {
         refuse(routine.id, admittedAt);
-        return { status: request.body.byteLength > SCHEDULED_TASK_LINK_LIMITS.bodyBytes ? 413 : 415 };
+        return {
+          status: request.body.byteLength > SCHEDULED_TASK_LINK_LIMITS.bodyBytes ? 413 : 415,
+        };
       }
       const type = mediaType(request.contentType);
       const trigger = routine.task.trigger;
@@ -306,7 +376,15 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
         const secret = await deps.secret(routine.id);
         if (!secret || !signatureMatches(secret, request.body, request.signature)) {
           if (refuse(routine.id, admittedAt)) {
-            await deps.log(routine.id, { at: deps.now(), outcome: "bad_signature", preview: previewOf(cut(redactCredentialText(text), 2_048)) }, { coalesce: true });
+            await deps.log(
+              routine.id,
+              {
+                at: deps.now(),
+                outcome: "bad_signature",
+                preview: previewOf(cut(redactCredentialText(text), 2_048)),
+              },
+              { coalesce: true },
+            );
           }
           return { status: 401 };
         }
@@ -318,22 +396,41 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
           if (nestsDeeper(json, MAX_JSON_DEPTH)) throw new Error("Nested too deeply.");
         } catch {
           if (refuse(routine.id, admittedAt)) {
-            await deps.log(routine.id, { at: deps.now(), outcome: "invalid", preview: previewOf(cut(redactCredentialText(text), 2_048)) }, { coalesce: true });
+            await deps.log(
+              routine.id,
+              {
+                at: deps.now(),
+                outcome: "invalid",
+                preview: previewOf(cut(redactCredentialText(text), 2_048)),
+              },
+              { coalesce: true },
+            );
           }
           return { status: 400 };
         }
       }
       const payload = linkCallText(trigger, json, text);
-      const matches = (trigger.filters ?? []).every((filter) => json !== undefined && asText(valueAt(json, filter.path)) === filter.equals);
+      const matches = (trigger.filters ?? []).every(
+        (filter) => json !== undefined && asText(valueAt(json, filter.path)) === filter.equals,
+      );
       if (!matches) {
         await log("filtered", payload);
         return { status: 202 };
       }
       // The same repeat value is one event; without one, identical bodies within a minute are.
-      const repeat = trigger.dedupePath && json !== undefined ? valueAt(json, trigger.dedupePath) : undefined;
-      const eventId = repeat !== undefined
-        ? createHash("sha256").update(`d\0${asText(repeat)}`).digest("hex").slice(0, 32)
-        : createHash("sha256").update(`${Math.floor(deps.now() / 60_000)}\0`).update(request.body).digest("hex").slice(0, 32);
+      const repeat =
+        trigger.dedupePath && json !== undefined ? valueAt(json, trigger.dedupePath) : undefined;
+      const eventId =
+        repeat !== undefined
+          ? createHash("sha256")
+              .update(`d\0${asText(repeat)}`)
+              .digest("hex")
+              .slice(0, 32)
+          : createHash("sha256")
+              .update(`${Math.floor(deps.now() / 60_000)}\0`)
+              .update(request.body)
+              .digest("hex")
+              .slice(0, 32);
       const outcome = await deps.emit(routine.id, { eventId, payload });
       await log(LOG_OF[outcome], payload);
       return { status: 202 };

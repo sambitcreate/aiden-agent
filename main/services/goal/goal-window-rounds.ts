@@ -66,7 +66,10 @@ export interface GoalWindowRoundClaim<P> {
 }
 
 export class GoalWindowRounds<P> {
-  private readonly views = new Map<string, { document: GoalWindowDocument; view: GoalWindowView; at: number }>();
+  private readonly views = new Map<
+    string,
+    { document: GoalWindowDocument; view: GoalWindowView; at: number }
+  >();
   private readonly pending = new Map<string, Pending<P>>();
   private readonly active = new Map<string, { chatId: string; streamId: string; payload: P }>();
   private clock = 0;
@@ -77,7 +80,8 @@ export class GoalWindowRounds<P> {
   report(document: GoalWindowDocument, view: GoalWindowView): void {
     this.views.set(document.documentId, { document, view, at: ++this.clock });
     for (const pending of [...this.pending.values()]) {
-      if (pending.documentId === document.documentId && view.chatId !== pending.chatId) this.finish(pending, "no-window");
+      if (pending.documentId === document.documentId && view.chatId !== pending.chatId)
+        this.finish(pending, "no-window");
     }
     const round = this.active.get(document.documentId);
     if (round && view.chatId !== round.chatId) this.lose(document.documentId);
@@ -111,7 +115,10 @@ export class GoalWindowRounds<P> {
         cancelTimer: () => undefined,
       };
       this.pending.set(token, pending);
-      pending.cancelTimer = this.deps.setTimer(() => this.finish(pending, "no-window"), GOAL_WINDOW_ROUND_CLAIM_MS);
+      pending.cancelTimer = this.deps.setTimer(
+        () => this.finish(pending, "no-window"),
+        GOAL_WINDOW_ROUND_CLAIM_MS,
+      );
       try {
         target.send({ chatId, token });
       } catch {
@@ -134,7 +141,11 @@ export class GoalWindowRounds<P> {
         if (settled) return;
         settled = true;
         if (result.kind === "started") {
-          this.active.set(documentId, { chatId: pending.chatId, streamId: result.streamId, payload: pending.payload });
+          this.active.set(documentId, {
+            chatId: pending.chatId,
+            streamId: result.streamId,
+            payload: pending.payload,
+          });
           // The document went away, or showed another chat, while the round was starting.
           if (this.views.get(documentId)?.view.chatId !== pending.chatId) this.lose(documentId);
         }
@@ -177,6 +188,11 @@ export class GoalWindowRounds<P> {
     const round = this.active.get(documentId);
     if (!round) return;
     this.active.delete(documentId);
-    this.deps.closedMidRound({ chatId: round.chatId, streamId: round.streamId, documentId, payload: round.payload });
+    this.deps.closedMidRound({
+      chatId: round.chatId,
+      streamId: round.streamId,
+      documentId,
+      payload: round.payload,
+    });
   }
 }

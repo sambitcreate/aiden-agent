@@ -1,18 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { registerMcpControlHandlers, type McpControlDependencies, type McpDraftCredentials } from "./mcp-controls.js";
+import {
+  registerMcpControlHandlers,
+  type McpControlDependencies,
+  type McpDraftCredentials,
+} from "./mcp-controls.js";
 import type { McpServer } from "../services/types.js";
 import { MCP_PRESETS, serverFromPreset } from "../services/mcp-presets.js";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { McpLiveStatusRegistry } from "../services/mcp-status-events.js";
-import { createMcpStdioApprovalStore, type McpStdioApprovalStore } from "../services/mcp-stdio-approvals.js";
+import {
+  createMcpStdioApprovalStore,
+  type McpStdioApprovalStore,
+} from "../services/mcp-stdio-approvals.js";
 import { mcpStdioLaunchFingerprint } from "../services/mcp-field-secrets-core.js";
 import { mcpMacAppStatus, openMcpMacApp, type McpMacAppProbe } from "../services/mcp-mac-apps.js";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const linear = { id: "custom-linear", name: "Linear", transport: "http", url: "https://mcp.test/sse", oauth: true, enabled: true } as const;
+const linear = {
+  id: "custom-linear",
+  name: "Linear",
+  transport: "http",
+  url: "https://mcp.test/sse",
+  oauth: true,
+  enabled: true,
+} as const;
 
 const noApprovals: McpStdioApprovalStore = {
   isApproved: async () => false,
@@ -29,13 +43,22 @@ function macWithImcp(opened: string[]): McpMacAppProbe {
     platform: "darwin",
     homedir: "/Users/me",
     isTrustedServer: async (file) => file === "/Applications/iMCP.app/Contents/MacOS/imcp-server",
-    bundleInfo: async (bundle, key) => (bundle === "/Applications/iMCP.app" && key === "CFBundleIdentifier" ? "co.dododo.iMCP" : undefined),
+    bundleInfo: async (bundle, key) =>
+      bundle === "/Applications/iMCP.app" && key === "CFBundleIdentifier"
+        ? "co.dododo.iMCP"
+        : undefined,
     isRunning: async () => false,
-    open: async (bundle) => { opened.push(bundle); },
+    open: async (bundle) => {
+      opened.push(bundle);
+    },
   };
 }
 
-function setup(saved: McpServer[] = [linear], registry = new McpLiveStatusRegistry(), approvals = noApprovals) {
+function setup(
+  saved: McpServer[] = [linear],
+  registry = new McpLiveStatusRegistry(),
+  approvals = noApprovals,
+) {
   const handlers = new Map<string, (event: string, ...args: unknown[]) => unknown>();
   const log: string[] = [];
   const opened: string[] = [];
@@ -49,14 +72,24 @@ function setup(saved: McpServer[] = [linear], registry = new McpLiveStatusRegist
   const authorizations: Array<{ server: McpServer; signal: AbortSignal }> = [];
   let authorizeResult: { authorized: true; connectionError?: string } = { authorized: true };
   let authorizeGate: Promise<void> = Promise.resolve();
-  const connected: McpStatus = { connected: true, toolCount: 3, tools: ["a", "b", "c"], serverCapabilities: {} };
+  const connected: McpStatus = {
+    connected: true,
+    toolCount: 3,
+    tools: ["a", "b", "c"],
+    serverCapabilities: {},
+  };
   const deps: McpControlDependencies<string> = {
-    handle: (channel, handler) => { handlers.set(channel, handler); },
+    handle: (channel, handler) => {
+      handlers.set(channel, handler);
+    },
     owner(event) {
       if (event !== "settings") throw new Error("Untrusted document");
       return {
         isDestroyed: () => destroyed,
-        onInvalidated: (listener: () => void) => { invalidated.add(listener); return () => invalidated.delete(listener); },
+        onInvalidated: (listener: () => void) => {
+          invalidated.add(listener);
+          return () => invalidated.delete(listener);
+        },
       };
     },
     authorize: async (server, _isCurrent, signal) => {
@@ -66,9 +99,18 @@ function setup(saved: McpServer[] = [linear], registry = new McpLiveStatusRegist
       return authorizeResult;
     },
     configured: async (id) => saved.find((server) => server.id === id),
-    cancelAuthorization: (id) => { const had = waiting.delete(id); log.push(`cancel:${id}:${had}`); return had; },
-    signOut: async (server) => { log.push(`signOut:${server.id}`); },
-    testDraft: async (server, credentials) => { drafts.push({ server, credentials }); return connected; },
+    cancelAuthorization: (id) => {
+      const had = waiting.delete(id);
+      log.push(`cancel:${id}:${had}`);
+      return had;
+    },
+    signOut: async (server) => {
+      log.push(`signOut:${server.id}`);
+    },
+    testDraft: async (server, credentials) => {
+      drafts.push({ server, credentials });
+      return connected;
+    },
     // Models withConfiguredMcp: refuse when the saved record changed after it was compared.
     admitSaved: async (savedServer, operation) => {
       admitted.push(savedServer.id);
@@ -84,7 +126,13 @@ function setup(saved: McpServer[] = [linear], registry = new McpLiveStatusRegist
       const pending = [];
       for (const server of saved) {
         if (server.transport !== "stdio" || (await approvals.isApproved(server))) continue;
-        pending.push({ serverId: server.id, fingerprint: mcpStdioLaunchFingerprint(server), command: server.command ?? "", args: server.args ?? [], env: Object.entries(server.env ?? {}).map(([name, value]) => ({ name, value })) });
+        pending.push({
+          serverId: server.id,
+          fingerprint: mcpStdioLaunchFingerprint(server),
+          command: server.command ?? "",
+          args: server.args ?? [],
+          env: Object.entries(server.env ?? {}).map(([name, value]) => ({ name, value })),
+        });
       }
       return pending;
     },
@@ -97,45 +145,118 @@ function setup(saved: McpServer[] = [linear], registry = new McpLiveStatusRegist
   const invoke = (channel: string, event: string, ...args: unknown[]) =>
     Promise.resolve().then(() => handlers.get(channel)!(event, ...args));
   return {
-    invoke, log, drafts, admitted, authorizations, opened,
-    setAuthorizeResult: (result: typeof authorizeResult) => { authorizeResult = result; },
-    holdAuthorize: () => { let release!: () => void; authorizeGate = new Promise((resolve) => { release = resolve; }); return release; },
-    invalidate: () => { destroyed = true; for (const listener of invalidated) listener(); },
+    invoke,
+    log,
+    drafts,
+    admitted,
+    authorizations,
+    opened,
+    setAuthorizeResult: (result: typeof authorizeResult) => {
+      authorizeResult = result;
+    },
+    holdAuthorize: () => {
+      let release!: () => void;
+      authorizeGate = new Promise((resolve) => {
+        release = resolve;
+      });
+      return release;
+    },
+    invalidate: () => {
+      destroyed = true;
+      for (const listener of invalidated) listener();
+    },
     watchers: () => invalidated.size,
-    changeSaved: () => { savedChanged = true; },
-    setSignIn: (state: typeof signIn) => { signIn = state; },
-    destroy: () => { destroyed = true; },
-    wait: (id: string) => { waiting = new Set([...waiting, id]); },
+    changeSaved: () => {
+      savedChanged = true;
+    },
+    setSignIn: (state: typeof signIn) => {
+      signIn = state;
+    },
+    destroy: () => {
+      destroyed = true;
+    },
+    wait: (id: string) => {
+      waiting = new Set([...waiting, id]);
+    },
   };
 }
 
 test("cancel sign-in reports whether a sign-in was waiting and requires the live document", async () => {
   const ipc = setup();
   ipc.wait(linear.id);
-  assert.deepEqual(await ipc.invoke("mcp:cancelAuthorize", "settings", linear.id), { cancelled: true });
-  assert.deepEqual(await ipc.invoke("mcp:cancelAuthorize", "settings", linear.id), { cancelled: false });
+  assert.deepEqual(await ipc.invoke("mcp:cancelAuthorize", "settings", linear.id), {
+    cancelled: true,
+  });
+  assert.deepEqual(await ipc.invoke("mcp:cancelAuthorize", "settings", linear.id), {
+    cancelled: false,
+  });
   await assert.rejects(ipc.invoke("mcp:cancelAuthorize", "foreign", linear.id), /Untrusted/u);
   ipc.destroy();
-  await assert.rejects(ipc.invoke("mcp:cancelAuthorize", "settings", linear.id), /active application document/u);
+  await assert.rejects(
+    ipc.invoke("mcp:cancelAuthorize", "settings", linear.id),
+    /active application document/u,
+  );
 });
 
 test("authorize runs browser sign-in only for OAuth servers from the live document and reports a kept sign-in's connection error", async () => {
-  const apiKeyPreset = serverFromPreset(MCP_PRESETS.find((candidate) => candidate.auth.kind === "apiKey")!);
+  const apiKeyPreset = serverFromPreset(
+    MCP_PRESETS.find((candidate) => candidate.auth.kind === "apiKey")!,
+  );
   const ipc = setup();
-  assert.deepEqual(await ipc.invoke("mcp:authorize", "settings", { ...linear, name: "  Linear  " }), { authorized: true });
+  assert.deepEqual(
+    await ipc.invoke("mcp:authorize", "settings", { ...linear, name: "  Linear  " }),
+    { authorized: true },
+  );
   assert.equal(ipc.authorizations[0]?.server.id, linear.id);
-  ipc.setAuthorizeResult({ authorized: true, connectionError: "MCP HTTP request failed with status 503" });
-  assert.deepEqual(await ipc.invoke("mcp:authorize", "settings", linear), { authorized: true, connectionError: "MCP HTTP request failed with status 503" });
-  await assert.rejects(ipc.invoke("mcp:authorize", "settings", apiKeyPreset), /does not use browser sign-in/u);
-  const localPreset = serverFromPreset(MCP_PRESETS.find((candidate) => candidate.id === "figma-desktop")!);
-  await assert.rejects(ipc.invoke("mcp:authorize", "settings", localPreset), /does not use browser sign-in/u);
+  ipc.setAuthorizeResult({
+    authorized: true,
+    connectionError: "MCP HTTP request failed with status 503",
+  });
+  assert.deepEqual(await ipc.invoke("mcp:authorize", "settings", linear), {
+    authorized: true,
+    connectionError: "MCP HTTP request failed with status 503",
+  });
+  await assert.rejects(
+    ipc.invoke("mcp:authorize", "settings", apiKeyPreset),
+    /does not use browser sign-in/u,
+  );
+  const localPreset = serverFromPreset(
+    MCP_PRESETS.find((candidate) => candidate.id === "figma-desktop")!,
+  );
+  await assert.rejects(
+    ipc.invoke("mcp:authorize", "settings", localPreset),
+    /does not use browser sign-in/u,
+  );
   // A connector marked unavailable is refused before any sign-in starts.
-  const hostedFigma = { id: "preset-figma", name: "Figma", transport: "http", url: "https://mcp.figma.com/mcp", oauth: true, presetId: "figma", enabled: true };
+  const hostedFigma = {
+    id: "preset-figma",
+    name: "Figma",
+    transport: "http",
+    url: "https://mcp.figma.com/mcp",
+    oauth: true,
+    presetId: "figma",
+    enabled: true,
+  };
   await assert.rejects(ipc.invoke("mcp:authorize", "settings", hostedFigma), /isn’t approved yet/u);
   await assert.rejects(ipc.invoke("mcp:testDraft", "settings", hostedFigma), /isn’t approved yet/u);
-  await assert.rejects(ipc.invoke("mcp:authorize", "settings", { id: "files", name: "Files", transport: "stdio", command: "npx", enabled: true }), /does not use browser sign-in/u);
-  await assert.rejects(ipc.invoke("mcp:authorize", "settings", { ...linear, oauth: false }), /does not use browser sign-in/u);
-  await assert.rejects(ipc.invoke("mcp:authorize", "settings", { ...linear, oauthClientId: " padded " }), /OAuth client ID/u);
+  await assert.rejects(
+    ipc.invoke("mcp:authorize", "settings", {
+      id: "files",
+      name: "Files",
+      transport: "stdio",
+      command: "npx",
+      enabled: true,
+    }),
+    /does not use browser sign-in/u,
+  );
+  await assert.rejects(
+    ipc.invoke("mcp:authorize", "settings", { ...linear, oauth: false }),
+    /does not use browser sign-in/u,
+  );
+  await assert.rejects(
+    ipc.invoke("mcp:authorize", "settings", { ...linear, oauthClientId: " padded " }),
+    /OAuth client ID/u,
+  );
   await assert.rejects(ipc.invoke("mcp:authorize", "foreign", linear), /Untrusted/u);
   assert.equal(ipc.authorizations.length, 2);
   assert.equal(ipc.watchers(), 0, "each sign-in stops watching its document");
@@ -150,16 +271,28 @@ test("authorize is aborted when its document goes away", async () => {
   release();
   await assert.rejects(pending, /no longer active/u);
   assert.equal(ipc.authorizations[0]?.signal.aborted, true);
-  await assert.rejects(ipc.invoke("mcp:authorize", "settings", linear), /active application document/u);
+  await assert.rejects(
+    ipc.invoke("mcp:authorize", "settings", linear),
+    /active application document/u,
+  );
 });
 
 test("sign out stops a waiting sign-in first, then clears the configured OAuth server", async () => {
-  const stdio = { id: "files", name: "Files", transport: "stdio", command: "npx", enabled: true } as const;
+  const stdio = {
+    id: "files",
+    name: "Files",
+    transport: "stdio",
+    command: "npx",
+    enabled: true,
+  } as const;
   const ipc = setup([linear, stdio]);
   ipc.wait(linear.id);
   assert.deepEqual(await ipc.invoke("mcp:signOut", "settings", linear.id), { authorized: false });
   assert.deepEqual(ipc.log, [`cancel:${linear.id}:true`, `signOut:${linear.id}`]);
-  await assert.rejects(ipc.invoke("mcp:signOut", "settings", "files"), /does not use browser sign-in/u);
+  await assert.rejects(
+    ipc.invoke("mcp:signOut", "settings", "files"),
+    /does not use browser sign-in/u,
+  );
   await assert.rejects(ipc.invoke("mcp:signOut", "settings", "gone"), /no longer configured/u);
   assert.equal(ipc.log.filter((entry) => entry.startsWith("signOut")).length, 1);
 });
@@ -167,33 +300,72 @@ test("sign out stops a waiting sign-in first, then clears the configured OAuth s
 test("testing a draft validates like save and never lends saved sign-in to a changed endpoint", async () => {
   const ipc = setup();
   // Unchanged connection: stored credentials apply.
-  assert.equal(((await ipc.invoke("mcp:testDraft", "settings", { ...linear, name: "Renamed" })) as McpStatus).connected, true);
-  assert.deepEqual(ipc.drafts[ipc.drafts.length - 1]?.credentials, { matchesSaved: true, savedDestination: true });
+  assert.equal(
+    ((await ipc.invoke("mcp:testDraft", "settings", { ...linear, name: "Renamed" })) as McpStatus)
+      .connected,
+    true,
+  );
+  assert.deepEqual(ipc.drafts[ipc.drafts.length - 1]?.credentials, {
+    matchesSaved: true,
+    savedDestination: true,
+  });
   // Changed URL on an OAuth server: refuse before any connection is attempted.
-  const changed = (await ipc.invoke("mcp:testDraft", "settings", { ...linear, url: "https://other.test/mcp" })) as McpStatus;
+  const changed = (await ipc.invoke("mcp:testDraft", "settings", {
+    ...linear,
+    url: "https://other.test/mcp",
+  })) as McpStatus;
   assert.equal(changed.connected, false);
   assert.match(changed.error ?? "", /Authorize this server/u);
   assert.equal(ipc.drafts.length, 1);
   // A brand-new stdio server is tested without a saved record.
-  await ipc.invoke("mcp:testDraft", "settings", { id: "new", name: "New", transport: "stdio", command: "npx", enabled: true });
-  assert.deepEqual(ipc.drafts[ipc.drafts.length - 1]?.credentials, { matchesSaved: false, savedDestination: false });
+  await ipc.invoke("mcp:testDraft", "settings", {
+    id: "new",
+    name: "New",
+    transport: "stdio",
+    command: "npx",
+    enabled: true,
+  });
+  assert.deepEqual(ipc.drafts[ipc.drafts.length - 1]?.credentials, {
+    matchesSaved: false,
+    savedDestination: false,
+  });
   // Same validation as save.
-  await assert.rejects(ipc.invoke("mcp:testDraft", "settings", { id: "", name: "x" }), /non-empty/u);
+  await assert.rejects(
+    ipc.invoke("mcp:testDraft", "settings", { id: "", name: "x" }),
+    /non-empty/u,
+  );
   // Only API-key presets accept a pasted key.
-  await assert.rejects(ipc.invoke("mcp:testDraft", "settings", { id: "new", name: "New", transport: "stdio", command: "npx" }, "sk-1"), /does not take an API key/u);
+  await assert.rejects(
+    ipc.invoke(
+      "mcp:testDraft",
+      "settings",
+      { id: "new", name: "New", transport: "stdio", command: "npx" },
+      "sk-1",
+    ),
+    /does not take an API key/u,
+  );
   assert.equal(ipc.drafts.length, 2);
 });
 
 test("a draft borrowing saved credentials is tested only under admission for that saved record, with its sign-in state", async () => {
   const ipc = setup();
   ipc.setSignIn({ authorized: false, needsSignIn: true, hasSession: true });
-  const status = (await ipc.invoke("mcp:testDraft", "settings", { ...linear, name: "Renamed" })) as McpStatus;
+  const status = (await ipc.invoke("mcp:testDraft", "settings", {
+    ...linear,
+    name: "Renamed",
+  })) as McpStatus;
   assert.deepEqual(ipc.admitted, [linear.id]);
   assert.equal(status.authorized, false);
   assert.equal(status.needsSignIn, true);
   assert.equal(status.hasSession, true, "Sign out stays available for a broken sign-in");
   // A brand-new draft borrows nothing: no admission, no sign-in fields.
-  const fresh = (await ipc.invoke("mcp:testDraft", "settings", { id: "new", name: "New", transport: "stdio", command: "npx", enabled: true })) as McpStatus;
+  const fresh = (await ipc.invoke("mcp:testDraft", "settings", {
+    id: "new",
+    name: "New",
+    transport: "stdio",
+    command: "npx",
+    enabled: true,
+  })) as McpStatus;
   assert.deepEqual(ipc.admitted, [linear.id]);
   assert.equal(fresh.authorized, undefined);
   // The saved record changed between comparison and admission: nothing is tested.
@@ -209,7 +381,9 @@ test("dependents and live status are read through the live document", async () =
     schedules: [{ id: "t1", name: `uses ${linear.id}` }],
     bots: [],
   });
-  assert.deepEqual(await ipc.invoke("mcp:liveStatus", "settings"), [{ serverId: linear.id, state: "connected", toolCount: 3 }]);
+  assert.deepEqual(await ipc.invoke("mcp:liveStatus", "settings"), [
+    { serverId: linear.id, state: "connected", toolCount: 3 },
+  ]);
   await assert.rejects(ipc.invoke("mcp:dependents", "settings", 42), /Expected/u);
 });
 
@@ -218,7 +392,11 @@ test("an API-key preset draft is tested with the pasted key, unsaved", async () 
   const ipc = setup([]);
   const draft = serverFromPreset(preset);
   await ipc.invoke("mcp:testDraft", "settings", draft, "  sk-draft  ");
-  assert.deepEqual(ipc.drafts[ipc.drafts.length - 1]?.credentials, { matchesSaved: false, savedDestination: false, apiKey: "sk-draft" });
+  assert.deepEqual(ipc.drafts[ipc.drafts.length - 1]?.credentials, {
+    matchesSaved: false,
+    savedDestination: false,
+    apiKey: "sk-draft",
+  });
   assert.equal(ipc.drafts[ipc.drafts.length - 1]?.server.headers, undefined);
 });
 
@@ -250,22 +428,52 @@ test("the tool list comes from the last discovery, bounded, and is null before a
 
 test("stored header values are lent to a draft only while it reaches the saved endpoint", async () => {
   const marker = `aiden-secret:v1:${"a".repeat(32)}`;
-  const keyed = { id: "keyed", name: "Keyed", transport: "http", url: "https://keyed.test/mcp", headers: { Authorization: marker }, enabled: true } as const;
+  const keyed = {
+    id: "keyed",
+    name: "Keyed",
+    transport: "http",
+    url: "https://keyed.test/mcp",
+    headers: { Authorization: marker },
+    enabled: true,
+  } as const;
   const ipc = setup([keyed]);
-  await ipc.invoke("mcp:testDraft", "settings", { ...keyed, headers: { ...keyed.headers, "X-New": "typed" } });
-  assert.deepEqual(ipc.drafts[ipc.drafts.length - 1]?.credentials, { matchesSaved: false, savedDestination: true });
+  await ipc.invoke("mcp:testDraft", "settings", {
+    ...keyed,
+    headers: { ...keyed.headers, "X-New": "typed" },
+  });
+  assert.deepEqual(ipc.drafts[ipc.drafts.length - 1]?.credentials, {
+    matchesSaved: false,
+    savedDestination: true,
+  });
   await ipc.invoke("mcp:testDraft", "settings", { ...keyed, url: "https://elsewhere.test/mcp" });
-  assert.deepEqual(ipc.drafts[ipc.drafts.length - 1]?.credentials, { matchesSaved: false, savedDestination: false });
+  assert.deepEqual(ipc.drafts[ipc.drafts.length - 1]?.credentials, {
+    matchesSaved: false,
+    savedDestination: false,
+  });
 });
 
 test("local servers added outside Aiden are listed with what they run and approved only as shown", async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-mcp-controls-"));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const approvals = createMcpStdioApprovalStore(async () => path.join(dir, "approvals.json"));
-  const local: McpServer = { id: "files", name: "Files", transport: "stdio", command: "npx", args: ["-y", "server"], env: { TOKEN: `aiden-secret:v1:${"b".repeat(32)}` }, enabled: true };
+  const local: McpServer = {
+    id: "files",
+    name: "Files",
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", "server"],
+    env: { TOKEN: `aiden-secret:v1:${"b".repeat(32)}` },
+    enabled: true,
+  };
   const saved: McpServer[] = [linear, local];
   const ipc = setup(saved, undefined, approvals);
-  const [pending, ...others] = (await ipc.invoke("mcp:launchApprovals", "settings")) as { serverId: string; fingerprint: string; command: string; args: string[]; env: { name: string; value?: string }[] }[];
+  const [pending, ...others] = (await ipc.invoke("mcp:launchApprovals", "settings")) as {
+    serverId: string;
+    fingerprint: string;
+    command: string;
+    args: string[];
+    env: { name: string; value?: string }[];
+  }[];
   assert.deepEqual(others, []);
   assert.equal(pending?.serverId, "files");
   assert.equal(pending?.command, "npx");
@@ -281,18 +489,33 @@ test("local servers added outside Aiden are listed with what they run and approv
 
   // config.json changed after Settings showed the command: nothing is approved.
   saved[1] = { ...local, args: ["-y", "other"] };
-  await assert.rejects(ipc.invoke("mcp:approveLaunch", "settings", "files", pending!.fingerprint), /command changed/u);
+  await assert.rejects(
+    ipc.invoke("mcp:approveLaunch", "settings", "files", pending!.fingerprint),
+    /command changed/u,
+  );
   assert.equal(await approvals.isApproved(saved[1]!), false);
 
   saved[1] = local;
-  assert.deepEqual(await ipc.invoke("mcp:approveLaunch", "settings", "files", pending!.fingerprint), { approved: true });
+  assert.deepEqual(
+    await ipc.invoke("mcp:approveLaunch", "settings", "files", pending!.fingerprint),
+    { approved: true },
+  );
   assert.equal(await approvals.isApproved(local), true);
   assert.deepEqual(await ipc.invoke("mcp:launchApprovals", "settings"), []);
   await ipc.invoke("mcp:testDraft", "settings", local);
   assert.equal(ipc.drafts.length, 2, "an approved saved command can be tested");
-  await assert.rejects(ipc.invoke("mcp:approveLaunch", "settings", linear.id, pending!.fingerprint), /Only local/u);
-  await assert.rejects(ipc.invoke("mcp:approveLaunch", "settings", "files", "nope"), /Invalid launch fingerprint/u);
-  await assert.rejects(ipc.invoke("mcp:approveLaunch", "foreign", "files", pending!.fingerprint), /Untrusted/u);
+  await assert.rejects(
+    ipc.invoke("mcp:approveLaunch", "settings", linear.id, pending!.fingerprint),
+    /Only local/u,
+  );
+  await assert.rejects(
+    ipc.invoke("mcp:approveLaunch", "settings", "files", "nope"),
+    /Invalid launch fingerprint/u,
+  );
+  await assert.rejects(
+    ipc.invoke("mcp:approveLaunch", "foreign", "files", pending!.fingerprint),
+    /Untrusted/u,
+  );
 });
 
 test("Mac app status and Open serve only a Mac app connector, from the live document", async () => {
@@ -306,12 +529,23 @@ test("Mac app status and Open serve only a Mac app connector, from the live docu
   assert.deepEqual(await ipc.invoke("mcp:openMacApp", "settings", "imcp"), { opened: true });
   assert.deepEqual(ipc.opened, ["/Applications/iMCP.app"]);
   for (const presetId of ["notion", "figma-desktop", "unknown", "", 42]) {
-    await assert.rejects(ipc.invoke("mcp:macAppStatus", "settings", presetId), /Mac app|presetId/u, String(presetId));
-    await assert.rejects(ipc.invoke("mcp:openMacApp", "settings", presetId), /Mac app|presetId/u, String(presetId));
+    await assert.rejects(
+      ipc.invoke("mcp:macAppStatus", "settings", presetId),
+      /Mac app|presetId/u,
+      String(presetId),
+    );
+    await assert.rejects(
+      ipc.invoke("mcp:openMacApp", "settings", presetId),
+      /Mac app|presetId/u,
+      String(presetId),
+    );
   }
   await assert.rejects(ipc.invoke("mcp:openMacApp", "foreign", "imcp"), /Untrusted/u);
   ipc.destroy();
-  await assert.rejects(ipc.invoke("mcp:openMacApp", "settings", "imcp"), /active application document/u);
+  await assert.rejects(
+    ipc.invoke("mcp:openMacApp", "settings", "imcp"),
+    /active application document/u,
+  );
   assert.deepEqual(ipc.opened, ["/Applications/iMCP.app"], "nothing else was opened");
 });
 

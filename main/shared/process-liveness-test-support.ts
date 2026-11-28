@@ -18,7 +18,10 @@ function linuxState(pid: number): string | undefined {
 
 function psState(pid: number): string | undefined {
   try {
-    return execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).trim() || undefined;
+    return (
+      execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).trim() ||
+      undefined
+    );
   } catch {
     return undefined;
   }

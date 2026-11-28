@@ -4,7 +4,8 @@ import type { GraphIssue } from "../shared/images/ipc-types";
 import type { ImageRunConsentPlan, RunScope, RunSnapshot } from "../shared/images/run-types";
 import { acceptSnapshot, ownValue, START_ERROR_MESSAGES } from "./run-view-core";
 
-const failureText = (failure: unknown, fallback: string) => (failure instanceof Error ? failure.message : fallback);
+const failureText = (failure: unknown, fallback: string) =>
+  failure instanceof Error ? failure.message : fallback;
 import type { WorkflowController } from "./use-workflow-controller";
 
 export function useImageRun(
@@ -25,7 +26,8 @@ export function useImageRun(
   React.useEffect(() => {
     let active = true;
     const accept = (next: RunSnapshot) => {
-      if (next.run.workflowId === workflowId) setSnapshot((current) => acceptSnapshot(current, next));
+      if (next.run.workflowId === workflowId)
+        setSnapshot((current) => acceptSnapshot(current, next));
     };
     const unsubscribe = createImagesIpc.onRunChanged(accept);
     createImagesIpc.getRun({ workflowId }).then(
@@ -35,7 +37,13 @@ export function useImageRun(
         if (response.snapshot) accept(response.snapshot);
       },
       (failure: unknown) => {
-        if (active) setIssues([{ code: "error", message: failureText(failure, "Aiden could not read this workflow's last run.") }]);
+        if (active)
+          setIssues([
+            {
+              code: "error",
+              message: failureText(failure, "Aiden could not read this workflow's last run."),
+            },
+          ]);
       },
     );
     return () => {
@@ -50,7 +58,9 @@ export function useImageRun(
   grantedUrls.current = assetUrls;
   React.useEffect(() => {
     if (!snapshot) return;
-    const missing = snapshot.attempts.some((attempt) => attempt.output.some((ref) => ownValue(grantedUrls.current, ref.assetId) === undefined));
+    const missing = snapshot.attempts.some((attempt) =>
+      attempt.output.some((ref) => ownValue(grantedUrls.current, ref.assetId) === undefined),
+    );
     if (!missing) return;
     createImagesIpc.getRun({ runId: snapshot.run.runId }).then(
       (response) => addAssetUrls(response.assetUrls),
@@ -76,14 +86,21 @@ export function useImageRun(
       try {
         const revision = await flush();
         if (revision === null) {
-          setIssues([{ code: "unsaved", message: "Aiden could not save this workflow, so it cannot run yet." }]);
+          setIssues([
+            {
+              code: "unsaved",
+              message: "Aiden could not save this workflow, so it cannot run yet.",
+            },
+          ]);
           return;
         }
         const response = await createImagesIpc.prepareRun({ workflowId, revision, scope });
         if ("issues" in response) setIssues(response.issues);
         else setPlan(response.plan);
       } catch (failure) {
-        setIssues([{ code: "error", message: failureText(failure, "The run could not be prepared.") }]);
+        setIssues([
+          { code: "error", message: failureText(failure, "The run could not be prepared.") },
+        ]);
       } finally {
         preparing.current = false;
         setBusy(false);
@@ -99,9 +116,12 @@ export function useImageRun(
     setBusy(true);
     try {
       const response = await createImagesIpc.startRun(plan.consentId);
-      if ("error" in response) setIssues([{ code: response.error, message: START_ERROR_MESSAGES[response.error] }]);
+      if ("error" in response)
+        setIssues([{ code: response.error, message: START_ERROR_MESSAGES[response.error] }]);
     } catch (failure) {
-      setIssues([{ code: "error", message: failureText(failure, "The run could not be started.") }]);
+      setIssues([
+        { code: "error", message: failureText(failure, "The run could not be started.") },
+      ]);
     } finally {
       setPlan(null);
       setBusy(false);
@@ -121,15 +141,22 @@ export function useImageRun(
     stop: () => {
       if (snapshot?.run.state !== "running") return;
       const stopFailed = (detail?: string) =>
-        setIssues([{ code: "error", message: detail ?? "Aiden could not stop this run. Try Stop again." }]);
+        setIssues([
+          { code: "error", message: detail ?? "Aiden could not stop this run. Try Stop again." },
+        ]);
       createImagesIpc.cancelRun(snapshot.run.runId).then(
         (result) => {
           // A refusal for a run that has since ended is the race with its last request, not a failure.
-          if (!result.ok && latestSnapshot.current?.run.runId === snapshot.run.runId && latestSnapshot.current.run.state === "running") {
+          if (
+            !result.ok &&
+            latestSnapshot.current?.run.runId === snapshot.run.runId &&
+            latestSnapshot.current.run.state === "running"
+          ) {
             stopFailed();
           }
         },
-        (failure: unknown) => stopFailed(failureText(failure, "Aiden could not stop this run. Try Stop again.")),
+        (failure: unknown) =>
+          stopFailed(failureText(failure, "Aiden could not stop this run. Try Stop again.")),
       );
     },
     clearIssues: () => setIssues([]),

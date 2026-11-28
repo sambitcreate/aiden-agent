@@ -9,7 +9,8 @@ import { VISUAL_SNAPSHOT_ID_PREFIX } from "../../renderer/shared/visual-snapshot
 import { displayedAssistantImageUsage } from "./display-image-extension.js";
 import type { Attachment } from "./types.js";
 
-const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+const PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 const PNG_SIZE = Buffer.from(PNG, "base64").length;
 const HTML_MEDIA = `html_${"1".repeat(43)}`;
 
@@ -25,17 +26,39 @@ async function chatWithVisuals(t: TestContext, extraAttachments: Attachment[] = 
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-snapshots-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
-  const chat = await store.create({ title: "Snapshots", workspaceId: "w", providerId: "p", model: "m" });
+  const chat = await store.create({
+    title: "Snapshots",
+    workspaceId: "w",
+    providerId: "p",
+    model: "m",
+  });
   await store.appendMessage(chat.id, { role: "user", content: "Draw it" });
   const withAssistant = await store.appendMessage(chat.id, {
     role: "assistant",
     content: "Here",
     ...(extraAttachments.length ? { attachments: extraAttachments } : {}),
-    htmlArtifacts: [{ version: 1, kind: "html", id: "a-1", title: "Chart", mimeType: "text/html", size: 1, mediaId: HTML_MEDIA }],
-    uiVisuals: [{
-      version: 1, kind: "ui", id: "ui-1", title: "Board", catalogVersion: 1,
-      tree: { t: "Visual", k: "0" }, fallbackText: "Board",
-    }],
+    htmlArtifacts: [
+      {
+        version: 1,
+        kind: "html",
+        id: "a-1",
+        title: "Chart",
+        mimeType: "text/html",
+        size: 1,
+        mediaId: HTML_MEDIA,
+      },
+    ],
+    uiVisuals: [
+      {
+        version: 1,
+        kind: "ui",
+        id: "ui-1",
+        title: "Board",
+        catalogVersion: 1,
+        tree: { t: "Visual", k: "0" },
+        fallbackText: "Board",
+      },
+    ],
   });
   const [user, assistant] = withAssistant.messages;
   return { store, directory, chatId: chat.id, userId: user!.id, assistantId: assistant!.id };
@@ -43,13 +66,24 @@ async function chatWithVisuals(t: TestContext, extraAttachments: Attachment[] = 
 
 test("snapshots attach as reserved images and a newer capture replaces the older one", async (t) => {
   const { store, directory, chatId, assistantId } = await chatWithVisuals(t);
-  assert.equal(await store.addVisualSnapshots(chatId, assistantId, [
-    { visualId: "ui-1", attachment: png(snapshotId("a")) },
-    { visualId: HTML_MEDIA, attachment: png(snapshotId("b"), "Chart.png") },
-  ]), true);
-  assert.equal(await store.addVisualSnapshots(chatId, assistantId, [{ visualId: "ui-1", attachment: png(snapshotId("c")) }]), true);
+  assert.equal(
+    await store.addVisualSnapshots(chatId, assistantId, [
+      { visualId: "ui-1", attachment: png(snapshotId("a")) },
+      { visualId: HTML_MEDIA, attachment: png(snapshotId("b"), "Chart.png") },
+    ]),
+    true,
+  );
+  assert.equal(
+    await store.addVisualSnapshots(chatId, assistantId, [
+      { visualId: "ui-1", attachment: png(snapshotId("c")) },
+    ]),
+    true,
+  );
   const message = (await createChatStore(async () => directory).get(chatId))?.messages[1];
-  assert.deepEqual(message?.attachments?.map((attachment) => attachment.id).sort(), [snapshotId("b"), snapshotId("c")]);
+  assert.deepEqual(message?.attachments?.map((attachment) => attachment.id).sort(), [
+    snapshotId("b"),
+    snapshotId("c"),
+  ]);
   assert.deepEqual(message?.visualSnapshots, [
     { visualId: HTML_MEDIA, attachmentId: snapshotId("b") },
     { visualId: "ui-1", attachmentId: snapshotId("c") },
@@ -60,16 +94,41 @@ test("snapshots attach as reserved images and a newer capture replaces the older
 
 test("snapshots are refused for unknown visuals, user messages, and unreserved ids", async (t) => {
   const { store, chatId, assistantId, userId } = await chatWithVisuals(t);
-  assert.equal(await store.addVisualSnapshots(chatId, assistantId, [{ visualId: "ui-ghost", attachment: png(snapshotId("a")) }]), false);
-  assert.equal(await store.addVisualSnapshots(chatId, userId, [{ visualId: "ui-1", attachment: png(snapshotId("a")) }]), false);
-  assert.equal(await store.addVisualSnapshots(chatId, assistantId, [{ visualId: "ui-1", attachment: png("plain-id") }]), false);
-  assert.equal(await store.addVisualSnapshots("missing", assistantId, [{ visualId: "ui-1", attachment: png(snapshotId("a")) }]), false);
+  assert.equal(
+    await store.addVisualSnapshots(chatId, assistantId, [
+      { visualId: "ui-ghost", attachment: png(snapshotId("a")) },
+    ]),
+    false,
+  );
+  assert.equal(
+    await store.addVisualSnapshots(chatId, userId, [
+      { visualId: "ui-1", attachment: png(snapshotId("a")) },
+    ]),
+    false,
+  );
+  assert.equal(
+    await store.addVisualSnapshots(chatId, assistantId, [
+      { visualId: "ui-1", attachment: png("plain-id") },
+    ]),
+    false,
+  );
+  assert.equal(
+    await store.addVisualSnapshots("missing", assistantId, [
+      { visualId: "ui-1", attachment: png(snapshotId("a")) },
+    ]),
+    false,
+  );
 });
 
 test("a message already holding twenty attachments gets no snapshot", async (t) => {
   const full = Array.from({ length: 20 }, (_, index) => png(`image-${index}`, `${index}.png`));
   const { store, chatId, assistantId } = await chatWithVisuals(t, full);
-  assert.equal(await store.addVisualSnapshots(chatId, assistantId, [{ visualId: "ui-1", attachment: png(snapshotId("a")) }]), false);
+  assert.equal(
+    await store.addVisualSnapshots(chatId, assistantId, [
+      { visualId: "ui-1", attachment: png(snapshotId("a")) },
+    ]),
+    false,
+  );
 });
 
 test("copies keep each snapshot pointing at the copied visual", async (t) => {
@@ -86,11 +145,17 @@ test("copies keep each snapshot pointing at the copied visual", async (t) => {
     { visualId: "ui-1", attachmentId: snapshotId("a") },
     { visualId: copiedMedia, attachmentId: snapshotId("b") },
   ]);
-  assert.deepEqual(copied?.attachments?.map((attachment) => attachment.id).sort(), [snapshotId("a"), snapshotId("b")]);
+  assert.deepEqual(copied?.attachments?.map((attachment) => attachment.id).sort(), [
+    snapshotId("a"),
+    snapshotId("b"),
+  ]);
   // Phones reading the copy still get each visual with its own snapshot.
   const projected = projectAidenRemoteChat(clone).messages[1]?.visuals;
-  assert.deepEqual(projected?.map((visual) => [visual.id, visual.snapshotAttachmentId]), [
-    [copiedMedia, snapshotId("b")],
-    ["ui-1", snapshotId("a")],
-  ]);
+  assert.deepEqual(
+    projected?.map((visual) => [visual.id, visual.snapshotAttachmentId]),
+    [
+      [copiedMedia, snapshotId("b")],
+      ["ui-1", snapshotId("a")],
+    ],
+  );
 });

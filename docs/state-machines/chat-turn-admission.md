@@ -8,31 +8,31 @@ One lease covers the critical section between a user message being appended and 
 
 These are independent. Do not fold them into one enum.
 
-| Axis | Values | Meaning |
-|---|---|---|
-| Authority | `active`, `revoked` | May this turn still start work? Expiry, owner invalidation, chat deletion and `releaseAll` all revoke through the same event. |
-| Preparation | `pending`, `settled` | Has admitted async work finished? Revoked work that has not settled still holds the chat and its bytes. |
-| Registration | `none`, `registering` | Is `handoff` inside its synchronous callback? |
-| Append slot, skill slot | `none`, `lease(bytes)` | Which bytes this lease holds against the process-wide pools. |
-| Skill custody (per handoff) | `lease`, `lease_release_requested`, `generation`, `returned`, `released` | Who owes the refund for a skill reservation once handoff starts. |
-| Reconciliation fence (per owner) | unset, set | Storage could not say whether an append landed. Separate from every lease. |
+| Axis                             | Values                                                                   | Meaning                                                                                                                       |
+| -------------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| Authority                        | `active`, `revoked`                                                      | May this turn still start work? Expiry, owner invalidation, chat deletion and `releaseAll` all revoke through the same event. |
+| Preparation                      | `pending`, `settled`                                                     | Has admitted async work finished? Revoked work that has not settled still holds the chat and its bytes.                       |
+| Registration                     | `none`, `registering`                                                    | Is `handoff` inside its synchronous callback?                                                                                 |
+| Append slot, skill slot          | `none`, `lease(bytes)`                                                   | Which bytes this lease holds against the process-wide pools.                                                                  |
+| Skill custody (per handoff)      | `lease`, `lease_release_requested`, `generation`, `returned`, `released` | Who owes the refund for a skill reservation once handoff starts.                                                              |
+| Reconciliation fence (per owner) | unset, set                                                               | Storage could not say whether an append landed. Separate from every lease.                                                    |
 
 ## Transitions
 
 Guard failures reject the event and change nothing.
 
-| Event | Source | Guard | Next | Effects |
-|---|---|---|---|---|
-| Begin | `tryBegin` | Generation idle, no record for the chat, owner not fenced | `active`, `pending`, slots empty | Starts the expiry timer |
-| Reserve append | `reserveAppendPayload` | `active`, no append slot, not registering, safe non-negative bytes, pool has room | Append slot `lease(bytes)` | Charges the append pool |
-| Reserve skill | `reserveSkillPreparation` | `active`, no skill slot, not registering, pool has room | Skill slot `lease(max)` | Charges the skill pool |
-| Prepare skill | `prepareSkillInvocation` | `active`, skill slot held, nothing prepared, not registering, bytes fit | Skill slot shrinks to actual bytes | Refunds the difference |
-| Settle | `settleAsyncWork` | Not already settled | `settled` | Refunds the append slot unless retained. Finalizes if revoked. |
-| Revoke | `release`, expiry, `releaseMatching`, `releaseChat`, `releaseAll` | `active` | `revoked` | Stops the timer, runs release callbacks. Finalizes if settled and not registering. |
-| Begin registration | `handoff` | `active`, `settled`, identity matches, not registering | `registering` | Runs the registration callback |
-| Registration succeeded | `handoff` | `registering` | Skill slot moves to the generation, authority `revoked` | Revokes if still active, then finalizes |
-| Registration failed | `handoff` | `registering` | `none`; the lease keeps its slots | Finalizes only if revoked meanwhile. Rethrows to the caller. |
-| Skill release requested | Generation cleanup | Custody `lease` or `generation` | `lease_release_requested` or `released` | Refunds the skill pool once, only from `generation` |
+| Event                   | Source                                                            | Guard                                                                             | Next                                                    | Effects                                                                            |
+| ----------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Begin                   | `tryBegin`                                                        | Generation idle, no record for the chat, owner not fenced                         | `active`, `pending`, slots empty                        | Starts the expiry timer                                                            |
+| Reserve append          | `reserveAppendPayload`                                            | `active`, no append slot, not registering, safe non-negative bytes, pool has room | Append slot `lease(bytes)`                              | Charges the append pool                                                            |
+| Reserve skill           | `reserveSkillPreparation`                                         | `active`, no skill slot, not registering, pool has room                           | Skill slot `lease(max)`                                 | Charges the skill pool                                                             |
+| Prepare skill           | `prepareSkillInvocation`                                          | `active`, skill slot held, nothing prepared, not registering, bytes fit           | Skill slot shrinks to actual bytes                      | Refunds the difference                                                             |
+| Settle                  | `settleAsyncWork`                                                 | Not already settled                                                               | `settled`                                               | Refunds the append slot unless retained. Finalizes if revoked.                     |
+| Revoke                  | `release`, expiry, `releaseMatching`, `releaseChat`, `releaseAll` | `active`                                                                          | `revoked`                                               | Stops the timer, runs release callbacks. Finalizes if settled and not registering. |
+| Begin registration      | `handoff`                                                         | `active`, `settled`, identity matches, not registering                            | `registering`                                           | Runs the registration callback                                                     |
+| Registration succeeded  | `handoff`                                                         | `registering`                                                                     | Skill slot moves to the generation, authority `revoked` | Revokes if still active, then finalizes                                            |
+| Registration failed     | `handoff`                                                         | `registering`                                                                     | `none`; the lease keeps its slots                       | Finalizes only if revoked meanwhile. Rethrows to the caller.                       |
+| Skill release requested | Generation cleanup                                                | Custody `lease` or `generation`                                                   | `lease_release_requested` or `released`                 | Refunds the skill pool once, only from `generation`                                |
 
 Finalize removes the record, stops the timer and refunds whatever the lease still holds. It runs exactly when authority is `revoked`, preparation is `settled` and registration is `none`.
 

@@ -7,10 +7,24 @@ import { ownValue } from "../run-view-core";
 import { ImageNodeFrame } from "./node-frame";
 import { NodePorts } from "./node-ports";
 
-export function ImageInputNodeBody({ url, label, onChoose }: { url?: string; label: string; onChoose(): void }) {
+export function ImageInputNodeBody({
+  url,
+  label,
+  onChoose,
+}: {
+  url?: string;
+  label: string;
+  onChoose(): void;
+}) {
   return (
     <div className="image-node-body flex flex-col gap-2">
-      {url ? <img className="image-node-media" src={url} alt={label} /> : <Text variant="small" color="secondary">No image chosen</Text>}
+      {url ? (
+        <img className="image-node-media" src={url} alt={label} />
+      ) : (
+        <Text variant="small" color="secondary">
+          No image chosen
+        </Text>
+      )}
       <Button size="small" variant="muted" className="nodrag shrink-0" onClick={onChoose}>
         {url ? "Replace Image…" : "Choose Image…"}
       </Button>

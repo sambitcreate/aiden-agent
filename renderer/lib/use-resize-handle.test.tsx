@@ -61,9 +61,20 @@ const divider = () => screen.getByRole("separator", { name: "Resize panel" });
 const valueNow = () => Number(divider().getAttribute("aria-valuenow"));
 
 function press(init: PointerEventInit = {}) {
-  fireEvent.pointerDown(divider(), { button: 0, isPrimary: true, pointerId: 1, clientX: 100, clientY: 100, ...init });
+  fireEvent.pointerDown(divider(), {
+    button: 0,
+    isPrimary: true,
+    pointerId: 1,
+    clientX: 100,
+    clientY: 100,
+    ...init,
+  });
 }
-function pointer(type: "pointermove" | "pointerup" | "pointercancel", clientX: number, clientY = 100) {
+function pointer(
+  type: "pointermove" | "pointerup" | "pointercancel",
+  clientX: number,
+  clientY = 100,
+) {
   act(() => {
     window.dispatchEvent(new PointerEvent(type, { pointerId: 1, clientX, clientY }));
   });
@@ -117,7 +128,11 @@ test("a mouse press never focuses the divider, so a later Enter goes where focus
     </>,
   );
   screen.getByRole("button", { name: "Send" }).focus();
-  assert.equal(fireEvent.mouseDown(divider(), { button: 0 }), false, "the press's default focus change is prevented");
+  assert.equal(
+    fireEvent.mouseDown(divider(), { button: 0 }),
+    false,
+    "the press's default focus change is prevented",
+  );
   assert.equal(document.activeElement?.textContent, "Send");
   divider().focus();
   assert.equal(document.activeElement?.getAttribute("aria-label"), "Resize panel");
@@ -132,7 +147,11 @@ test("a drag past the threshold follows the pointer within the bounds and commit
   pointer("pointermove", 103);
   assert.deepEqual(log.resizing, [true]);
   assert.equal(valueNow(), 303);
-  assert.equal(document.body.style.cursor, "col-resize", "the cursor holds while the pointer crosses other content");
+  assert.equal(
+    document.body.style.cursor,
+    "col-resize",
+    "the cursor holds while the pointer crosses other content",
+  );
   pointer("pointermove", 400);
   assert.equal(valueNow(), 400, "never past the maximum");
   assert.deepEqual(log.committed, [], "nothing settles mid-drag");
@@ -268,8 +287,14 @@ test("unmounting mid-drag ends the drag and restores the cursor", () => {
 
 test("the sidebar divider drags and saves its width, and Enter hides the sidebar and focuses its toggle", async () => {
   const shortcuts = { overrides: undefined, effective: effectiveBindings(undefined), global: [] };
-  installBotTestIpc({ "shortcut:get": () => shortcuts, "app:renderer-ready": () => null, "app:setMenuCommands": () => true });
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  installBotTestIpc({
+    "shortcut:get": () => shortcuts,
+    "app:renderer-ready": () => null,
+    "app:setMenuCommands": () => true,
+  });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  });
   client.setQueryData(["shortcuts"], shortcuts);
   render(
     <QueryClientProvider client={client}>

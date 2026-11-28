@@ -20,7 +20,13 @@ function woff2OnlyFonts(): Plugin {
         if (!fileName.endsWith(".css") || !options.dir) continue;
         const file = resolve(options.dir, fileName);
         const source = readFileSync(file, "utf8");
-        writeFileSync(file, source.replace(/,\s*url\(data:font\/(?:woff|ttf);[^)]*\)\s*format\("(?:woff|truetype)"\)/gu, ""));
+        writeFileSync(
+          file,
+          source.replace(
+            /,\s*url\(data:font\/(?:woff|ttf);[^)]*\)\s*format\("(?:woff|truetype)"\)/gu,
+            "",
+          ),
+        );
       }
     },
   };

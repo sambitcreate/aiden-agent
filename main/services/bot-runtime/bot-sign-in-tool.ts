@@ -50,7 +50,7 @@ const ACTION_PREFIX = "Sign in to ";
 
 const DESCRIPTION =
   "Ask the person to sign in to one website for you, in your own browser, when a site you need asks for an " +
-  "account. `site` is the site's name or https address (\"github.com\"); `why` says in a sentence why you need " +
+  'account. `site` is the site\'s name or https address ("github.com"); `why` says in a sentence why you need ' +
   "it. The app shows a card: the person takes control and signs in in a new tab of your browser, which you can't " +
   "see or use until they finish, then answers I'm done or Skip. Their answer comes back as this tool's result: wait for it. " +
   "You never see or type their password, so never ask for it in the chat. Afterwards your browser has their " +
@@ -58,14 +58,14 @@ const DESCRIPTION =
 
 const COMPUTER_DESCRIPTION =
   "Ask the person to sign in to one website for you on your own computer, when a site you need there asks for an " +
-  "account. `site` is the site's name or https address (\"github.com\"); `why` says in a sentence why you need " +
+  'account. `site` is the site\'s name or https address ("github.com"); `why` says in a sentence why you need ' +
   "it. The app shows a card: the person takes control of your computer, signs in in Safari there, then answers " +
   "I'm done or Skip. You can't see or use the computer until they give it back. Their answer comes back as this " +
   "tool's result: wait for it. You never see or type their password, so never ask for it in the chat. Afterwards " +
   "take a fresh computer capture to check.";
 
 const BOTH_NOTE =
-  " To sign in on your own computer instead (for an app or site you use there), pass where: \"computer\": the " +
+  ' To sign in on your own computer instead (for an app or site you use there), pass where: "computer": the ' +
   "person signs in in Safari on it, then gives it back; take a fresh computer capture to check.";
 
 /** Where this Bot can have the person sign in, for the tool's description. */
@@ -74,7 +74,9 @@ export interface BotSignInTargets {
   computer: boolean;
 }
 
-export function botSignInDescription(targets: BotSignInTargets = { browser: true, computer: false }): string {
+export function botSignInDescription(
+  targets: BotSignInTargets = { browser: true, computer: false },
+): string {
   if (!targets.browser && targets.computer) return COMPUTER_DESCRIPTION;
   return targets.computer ? `${DESCRIPTION}${BOTH_NOTE}` : DESCRIPTION;
 }
@@ -111,7 +113,9 @@ function parseParams(params: unknown): SignInParams {
     throw new Error("A sign-in needs a site: the name of the website, like github.com.");
   }
   if ([...record.site.trim()].length > BOT_SIGN_IN_SITE_MAX_CHARS) {
-    throw new Error(`Name the site, like github.com, in under ${BOT_SIGN_IN_SITE_MAX_CHARS} characters.`);
+    throw new Error(
+      `Name the site, like github.com, in under ${BOT_SIGN_IN_SITE_MAX_CHARS} characters.`,
+    );
   }
   // Throws "Use an https site name like github.com." for anything else.
   const origin = normalizeSignInOrigin(record.site);
@@ -120,7 +124,7 @@ function parseParams(params: unknown): SignInParams {
     throw new Error("That site name is too long to show on a card. Use the site's main address.");
   }
   if (record.where !== undefined && record.where !== "browser" && record.where !== "computer") {
-    throw new Error("`where` must be \"browser\" or \"computer\".");
+    throw new Error('`where` must be "browser" or "computer".');
   }
   const why = handoffWhyOf(record.why);
   return {
@@ -131,7 +135,11 @@ function parseParams(params: unknown): SignInParams {
   };
 }
 
-export function signInCandidate(botId: string, handoffs: BotHandoffs, deps: BotSignInDeps = {}): BotToolCandidate {
+export function signInCandidate(
+  botId: string,
+  handoffs: BotHandoffs,
+  deps: BotSignInDeps = {},
+): BotToolCandidate {
   const schema: AgentTool = {
     name: BOT_SIGN_IN_TOOL_NAME,
     label: "Sign In",
@@ -145,7 +153,10 @@ export function signInCandidate(botId: string, handoffs: BotHandoffs, deps: BotS
         description: "The website to sign in to, as its name or https address, like github.com.",
       }),
       why: Type.Optional(
-        Type.String({ maxLength: BOT_HANDOFF_WHY_MAX_CHARS, description: "Why you need the person signed in there." }),
+        Type.String({
+          maxLength: BOT_HANDOFF_WHY_MAX_CHARS,
+          description: "Why you need the person signed in there.",
+        }),
       ),
       where: Type.Optional(
         Type.Union([Type.Literal("browser"), Type.Literal("computer")], {
@@ -173,14 +184,19 @@ export function signInCandidate(botId: string, handoffs: BotHandoffs, deps: BotS
         // A Bot without a browser signs in on its computer.
         const target: BotHandoffTarget = asked ?? (hasBrowser ? "browser" : "computer");
         const name = async () => (await deps.botName?.(botId).catch(() => undefined)) ?? "This Bot";
-        if (target === "computer" && (await deps.hasComputer?.(botId).catch(() => false)) !== true) {
+        if (
+          target === "computer" &&
+          (await deps.hasComputer?.(botId).catch(() => false)) !== true
+        ) {
           throw new Error(`${await name()} has no computer to sign in on yet.`);
         }
         if (target === "browser" && !hasBrowser) {
           throw new Error(`${await name()} has no browser to sign in in. Use where: "computer".`);
         }
         const action = `${ACTION_PREFIX}${host}`;
-        const memo = await call.memo<{ waitId: string }>(BOT_SIGN_IN_MEMO, { waitId: randomUUID() });
+        const memo = await call.memo<{ waitId: string }>(BOT_SIGN_IN_MEMO, {
+          waitId: randomUUID(),
+        });
         const answer = await handoffs.request({
           botId,
           waitId: memo.waitId,
@@ -195,7 +211,9 @@ export function signInCandidate(botId: string, handoffs: BotHandoffs, deps: BotS
           signal: call.signal,
         });
         const text =
-          answer.outcome === "done" ? signInDoneText(origin, answer.note, target) : handoffSkippedText(action, answer.note);
+          answer.outcome === "done"
+            ? signInDoneText(origin, answer.note, target)
+            : handoffSkippedText(action, answer.note);
         return {
           content: [{ type: "text", text }],
           details: {

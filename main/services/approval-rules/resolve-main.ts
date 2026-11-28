@@ -17,7 +17,9 @@ import { approvalRules } from "./store-main.js";
  * once in every mode, Never ask included, since a Block on any tool may be
  * the rule it can't see.
  */
-export async function pageRuleFor(subject: ApprovalRuleSubject): Promise<ApprovalRuleDecision | "unreadable" | undefined> {
+export async function pageRuleFor(
+  subject: ApprovalRuleSubject,
+): Promise<ApprovalRuleDecision | "unreadable" | undefined> {
   try {
     return resolveApprovalRule(await approvalRules.list(), subject)?.decision;
   } catch (error) {

@@ -26,11 +26,18 @@ function shortTitle(text: string, fallback: string): string {
   const start = text.trimStart();
   const clipped = start.length > TITLE_SCAN_UNITS;
   // A cut can split an emoji; drop the half left at the end.
-  const line = start.slice(0, TITLE_SCAN_UNITS).replace(/\s+/gu, " ").trim().replace(/[\uD800-\uDBFF]$/u, "");
+  const line = start
+    .slice(0, TITLE_SCAN_UNITS)
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/[\uD800-\uDBFF]$/u, "");
   if (!line) return fallback;
   const points = [...line];
   if (points.length <= BOT_ACTIVITY_TITLE_CHARS && !clipped) return line;
-  return `${points.slice(0, BOT_ACTIVITY_TITLE_CHARS - 1).join("").trimEnd()}…`;
+  return `${points
+    .slice(0, BOT_ACTIVITY_TITLE_CHARS - 1)
+    .join("")
+    .trimEnd()}…`;
 }
 
 /** What started the turn, as a group title. */
@@ -38,14 +45,20 @@ function replyTitle(start: BotTurn["start"]): { title: string; routine: boolean 
   switch (start.type) {
     case "user": {
       const photos = start.imageCount === 1 ? "Photo" : `${start.imageCount} photos`;
-      return { title: shortTitle(start.text, start.imageCount > 0 ? photos : "Message"), routine: false };
+      return {
+        title: shortTitle(start.text, start.imageCount > 0 ? photos : "Message"),
+        routine: false,
+      };
     }
     case "question_answer":
       return { title: shortTitle(start.text, "Answer"), routine: false };
     case "handoff_result":
       return { title: "Hand-off", routine: false };
     case "bot_message":
-      return { title: shortTitle(botMessageRowLabel(start.kind, start.botName), "Bot message"), routine: false };
+      return {
+        title: shortTitle(botMessageRowLabel(start.kind, start.botName), "Bot message"),
+        routine: false,
+      };
     case "routine":
       return { title: shortTitle(start.label, "Routine"), routine: true };
     default:

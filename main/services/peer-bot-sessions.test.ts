@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AIDEN_REMOTE_PROTOCOL_VERSION } from "./aiden-remote-protocol.js";
-import { PEER_BACKOFF_STEPS_MS, PeerHostManager, type PeerManagerRegistry } from "./peer-host-manager.js";
+import {
+  PEER_BACKOFF_STEPS_MS,
+  PeerHostManager,
+  type PeerManagerRegistry,
+} from "./peer-host-manager.js";
 import { PEER_BOT_SESSION_CHANNEL } from "./peer-bot-sessions.js";
 import { PeerTransportError, type PeerRequest, type PeerStreamEnd } from "./peer-transport.js";
 import type { PeerHostView } from "../../renderer/shared/peer-host.js";
@@ -91,7 +95,11 @@ function harness(view: PeerHostView = VIEW) {
   const registry: PeerManagerRegistry = {
     list: async () => [view],
     connect: async () => view,
-    request: (_id: string, input: Omit<PeerRequest, "credential">, onFrame?: (frame: string) => void) =>
+    request: (
+      _id: string,
+      input: Omit<PeerRequest, "credential">,
+      onFrame?: (frame: string) => void,
+    ) =>
       new Promise<unknown>((resolve, reject) => {
         const stream: OpenStream = {
           path: input.path,
@@ -136,16 +144,25 @@ test("windows following one host Bot share a single session stream and get its p
     const b = await manager.botSessionSubscribe("host_a", "bot_1", "window-b");
     await settle();
     assert.notEqual(a.subscriptionId, b.subscriptionId);
-    assert.deepEqual(streams.map((stream) => stream.path), ["/bots/bot_1/session/events"]);
+    assert.deepEqual(
+      streams.map((stream) => stream.path),
+      ["/bots/bot_1/session/events"],
+    );
 
     streams[0]!.send(snapshot("e1", "hello"));
     streams[0]!.send(frame("state", 1, { state: "running", interrupted: false }));
     streams[0]!.send(frame("partial", 2, { text: "Hi th" }));
     assert.deepEqual(
       events(messages).map((event) => [event.type, event.seq]),
-      [["snapshot", 0], ["state", 1], ["partial", 2]],
+      [
+        ["snapshot", 0],
+        ["state", 1],
+        ["partial", 2],
+      ],
     );
-    assert.ok(messages.some((message) => message.kind === "state" && message.state === "streaming"));
+    assert.ok(
+      messages.some((message) => message.kind === "state" && message.state === "streaming"),
+    );
 
     // The stream stays open until its last window lets go.
     assert.equal(manager.botSessionUnsubscribe(a.subscriptionId, "window-a"), true);
@@ -265,7 +282,10 @@ test("a host that does not share its Bots' sessions refuses the subscription", a
   const { manager, streams } = harness({ ...VIEW, features: ["host-events-v1"] });
   try {
     await manager.whenReady();
-    await assert.rejects(manager.botSessionSubscribe("host_a", "bot_1", "window-a"), /does not share/);
+    await assert.rejects(
+      manager.botSessionSubscribe("host_a", "bot_1", "window-a"),
+      /does not share/,
+    );
     assert.equal(streams.length, 0);
   } finally {
     manager.close();
@@ -305,8 +325,16 @@ test("a newer host's session opens here: unknown states, entries and events degr
     const opened = seen[0];
     assert.equal(opened?.type, "snapshot");
     if (opened?.type === "snapshot") {
-      assert.equal(opened.payload.session.state, "unavailable", "an unknown state reads as unavailable");
-      assert.deepEqual(opened.payload.session.entries.map((entry) => entry.id), ["m1"], "an unreadable entry is left out");
+      assert.equal(
+        opened.payload.session.state,
+        "unavailable",
+        "an unknown state reads as unavailable",
+      );
+      assert.deepEqual(
+        opened.payload.session.entries.map((entry) => entry.id),
+        ["m1"],
+        "an unreadable entry is left out",
+      );
     }
     assert.ok(
       messages.some((message) => message.kind === "resync"),
@@ -328,7 +356,9 @@ test("a frame that is not a Bot session event at all still fails the stream", as
     await manager.botSessionSubscribe("host_a", "bot_1", "window-a");
     await settle();
     streams[0]!.send(snapshot("e1", "hello"));
-    streams[0]!.send(`event: partial\ndata: ${JSON.stringify({ protocolVersion: 2, botId: "bot_1", epoch: "e1", seq: 1, type: "partial", payload: { text: "x" } })}`);
+    streams[0]!.send(
+      `event: partial\ndata: ${JSON.stringify({ protocolVersion: 2, botId: "bot_1", epoch: "e1", seq: 1, type: "partial", payload: { text: "x" } })}`,
+    );
     await settle();
     assert.equal(streams[0]!.aborted, true);
   } finally {

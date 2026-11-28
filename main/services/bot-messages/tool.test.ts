@@ -40,7 +40,13 @@ const call = {
   appendEntry: async () => undefined,
 };
 const peers = (ids: string[], paused: string[] = []) =>
-  ids.map((id) => ({ id, name: `Bot ${id}`, purpose: "helper", acceptsMessages: !paused.includes(id), sendsMessages: true }));
+  ids.map((id) => ({
+    id,
+    name: `Bot ${id}`,
+    purpose: "helper",
+    acceptsMessages: !paused.includes(id),
+    sendsMessages: true,
+  }));
 
 test("refusals are error results", async () => {
   const candidate = await messageBotCandidate("A", {
@@ -64,20 +70,36 @@ test("the declaration is the same whatever the roster, and list returns the Bots
   const rosters = [peers([]), peers(["A", "B"]), peers(["A", "B", "C", "D"], ["C"])];
   const declared = await Promise.all(
     rosters.map(async (roster) => {
-      const { tool } = await messageBotCandidate("A", { roster: async () => roster, post: unexpectedPost });
-      return JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters });
+      const { tool } = await messageBotCandidate("A", {
+        roster: async () => roster,
+        post: unexpectedPost,
+      });
+      return JSON.stringify({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      });
     }),
   );
   assert.equal(new Set(declared).size, 1, "one declaration for every roster");
   assert.ok(!declared[0]!.includes("Bot B"), "no peer is named in the declaration");
 
   const roster = rosters[2]!;
-  const candidate = await messageBotCandidate("A", { roster: async () => roster, post: unexpectedPost });
+  const candidate = await messageBotCandidate("A", {
+    roster: async () => roster,
+    post: unexpectedPost,
+  });
   const listed = await candidate.bind!(call).execute("call", { action: "list" });
   assert.equal(listed.isError, undefined);
-  assert.deepEqual((listed.details as { bots: Array<{ id: string }> }).bots.map((b) => b.id), ["B", "D"]);
+  assert.deepEqual(
+    (listed.details as { bots: Array<{ id: string }> }).bots.map((b) => b.id),
+    ["B", "D"],
+  );
 
-  const alone = await messageBotCandidate("A", { roster: async () => peers(["A"]), post: unexpectedPost });
+  const alone = await messageBotCandidate("A", {
+    roster: async () => peers(["A"]),
+    post: unexpectedPost,
+  });
   const none = await alone.bind!(call).execute("call", { action: "list" });
   assert.deepEqual((none.details as { bots: unknown[] }).bots, []);
   assert.match(JSON.stringify(none.content), /No other Bot accepts messages/);
@@ -90,12 +112,17 @@ test("a send without a target or a message is refused before posting", async () 
       throw new Error("Unexpected send");
     },
   });
-  await assert.rejects(candidate.bind!(call).execute("call", { message: "hi" }), /needs both "bot" and "message"/);
+  await assert.rejects(
+    candidate.bind!(call).execute("call", { message: "hi" }),
+    /needs both "bot" and "message"/,
+  );
 });
 
 test("building the declaration reads no availability and posting stays authoritative", async () => {
   const candidate = await messageBotCandidate("A", {
-    roster: async () => { throw new Error("Declaration must not discover availability"); },
+    roster: async () => {
+      throw new Error("Declaration must not discover availability");
+    },
     post: async () => ({ status: "refused", code: "bot_paused", message: "Paused now" }),
   });
   const result = await candidate.bind!(call).execute("call", { bot: "B", message: "Review" });
@@ -105,7 +132,10 @@ test("building the declaration reads no availability and posting stays authorita
 
 test("a Bot declares message_bot from the messaging switch and its own send setting, whatever the other Bots", async () => {
   let messaging = true;
-  const bots = new Map<string, { messagesOtherBots?: boolean; acceptsBotMessages?: boolean }>([["A", {}], ["B", {}]]);
+  const bots = new Map<string, { messagesOtherBots?: boolean; acceptsBotMessages?: boolean }>([
+    ["A", {}],
+    ["B", {}],
+  ]);
   let rosterReads = 0;
   const offerFor = async (botId: string) => {
     const candidate = await messageBotOffer(botId, {
@@ -121,9 +151,17 @@ test("a Bot declares message_bot from the messaging switch and its own send sett
           sendsMessages: bot.messagesOtherBots !== false,
         }));
       },
-      post: async () => { throw new Error("Declaring must not send"); },
+      post: async () => {
+        throw new Error("Declaring must not send");
+      },
     });
-    return candidate ? JSON.stringify({ name: candidate.tool.name, description: candidate.tool.description, parameters: candidate.tool.parameters }) : undefined;
+    return candidate
+      ? JSON.stringify({
+          name: candidate.tool.name,
+          description: candidate.tool.description,
+          parameters: candidate.tool.parameters,
+        })
+      : undefined;
   };
 
   const declared = await offerFor("A");

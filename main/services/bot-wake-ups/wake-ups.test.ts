@@ -24,8 +24,13 @@ class MemoryPersistence<T> {
 const MINUTE = 60_000;
 
 /** A real schedule store and Bot routine service; nothing ever fires. */
-function harness(options: { routineDeleted?: (botId: string, routineId: string) => Promise<void> } = {}) {
-  const store = createScheduleStore(new MemoryPersistence<unknown[]>([]), new MemoryPersistence<unknown[]>([]));
+function harness(
+  options: { routineDeleted?: (botId: string, routineId: string) => Promise<void> } = {},
+) {
+  const store = createScheduleStore(
+    new MemoryPersistence<unknown[]>([]),
+    new MemoryPersistence<unknown[]>([]),
+  );
   const scheduler = createScheduleServiceCore({
     store,
     execution: {
@@ -54,7 +59,7 @@ function harness(options: { routineDeleted?: (botId: string, routineId: string) 
     store,
     routines,
     timezone: () => "UTC",
-    generation: async (botId) => switches.get(botId) === false ? null : "",
+    generation: async (botId) => (switches.get(botId) === false ? null : ""),
   });
   return { store, scheduler, routines, switches, wakeUps };
 }
@@ -63,19 +68,34 @@ test("in_minutes is bounded to 1 through 1440 and lands on a whole minute ahead 
   const h = harness();
   t.after(() => h.scheduler.stop());
   for (const inMinutes of [0, -5, 1441, 2.5]) {
-    const outcome = await h.wakeUps.set("bot-chef", { when: { inMinutes }, note: "Check the oven." });
+    const outcome = await h.wakeUps.set("bot-chef", {
+      when: { inMinutes },
+      note: "Check the oven.",
+    });
     assert.equal(outcome.ok, false, `in_minutes ${inMinutes}`);
     if (!outcome.ok) assert.equal(outcome.code, "invalid_time");
   }
   const before = Date.now();
   const soon = await h.wakeUps.set("bot-chef", { when: { inMinutes: 1 }, note: "Check the oven." });
-  const late = await h.wakeUps.set("bot-chef", { when: { inMinutes: 1440 }, note: "Ask how the bake went." });
+  const late = await h.wakeUps.set("bot-chef", {
+    when: { inMinutes: 1440 },
+    note: "Ask how the bake went.",
+  });
   assert.ok(soon.ok && late.ok);
   assert.equal(soon.wakeUp.fireAt % MINUTE, 0);
-  assert.ok(soon.wakeUp.fireAt >= before + 30_000 && soon.wakeUp.fireAt <= Date.now() + MINUTE + 30_000);
-  assert.ok(late.wakeUp.fireAt <= Date.now() + 1440 * MINUTE && late.wakeUp.fireAt > before + 1439 * MINUTE - 1_000);
+  assert.ok(
+    soon.wakeUp.fireAt >= before + 30_000 && soon.wakeUp.fireAt <= Date.now() + MINUTE + 30_000,
+  );
+  assert.ok(
+    late.wakeUp.fireAt <= Date.now() + 1440 * MINUTE &&
+      late.wakeUp.fireAt > before + 1439 * MINUTE - 1_000,
+  );
   assert.deepEqual(
-    (await h.routines.list("bot-chef")).map((routine) => [routine.name, routine.wakeUp !== undefined, routine.enabled]),
+    (await h.routines.list("bot-chef")).map((routine) => [
+      routine.name,
+      routine.wakeUp !== undefined,
+      routine.enabled,
+    ]),
     [
       ["Wake-up", true, true],
       ["Wake-up", true, true],
@@ -101,8 +121,14 @@ test("a local time means its next occurrence within a day, in the host's zone", 
 
 test("in_minutes never lands on a minute less than 30 seconds away", () => {
   const now = Date.UTC(2026, 9, 28, 14, 0, 45);
-  assert.equal(resolveBotWakeUpTime({ inMinutes: 1 }, now, "UTC")?.fireAt, Date.UTC(2026, 9, 28, 14, 2));
-  assert.equal(resolveBotWakeUpTime({ inMinutes: 1 }, Date.UTC(2026, 9, 28, 14, 0, 20), "UTC")?.fireAt, Date.UTC(2026, 9, 28, 14, 1));
+  assert.equal(
+    resolveBotWakeUpTime({ inMinutes: 1 }, now, "UTC")?.fireAt,
+    Date.UTC(2026, 9, 28, 14, 2),
+  );
+  assert.equal(
+    resolveBotWakeUpTime({ inMinutes: 1 }, Date.UTC(2026, 9, 28, 14, 0, 20), "UTC")?.fireAt,
+    Date.UTC(2026, 9, 28, 14, 1),
+  );
 });
 
 test("a delay into the repeated hour of a daylight-saving change is refused instead of firing an hour early", () => {
@@ -127,7 +153,10 @@ test("the note is required and at most 500 characters", async (t) => {
     const outcome = await h.wakeUps.set("bot-chef", { when: { inMinutes: 5 }, note });
     assert.equal(outcome.ok ? "ok" : outcome.code, "invalid_note");
   }
-  assert.equal((await h.wakeUps.set("bot-chef", { when: { inMinutes: 5 }, note: "x".repeat(500) })).ok, true);
+  assert.equal(
+    (await h.wakeUps.set("bot-chef", { when: { inMinutes: 5 }, note: "x".repeat(500) })).ok,
+    true,
+  );
 });
 
 test("a fourth pending wake-up is refused with the three it would join, and cancelling one makes room", async (t) => {
@@ -135,12 +164,18 @@ test("a fourth pending wake-up is refused with the three it would join, and canc
   t.after(() => h.scheduler.stop());
   const ids: string[] = [];
   for (const minutes of [30, 10, 20]) {
-    const outcome = await h.wakeUps.set("bot-chef", { when: { inMinutes: minutes }, note: `In ${minutes}` });
+    const outcome = await h.wakeUps.set("bot-chef", {
+      when: { inMinutes: minutes },
+      note: `In ${minutes}`,
+    });
     assert.ok(outcome.ok);
     ids.push(outcome.wakeUp.id);
   }
   // Another Bot's wake-ups never count against this one.
-  assert.equal((await h.wakeUps.set("bot-scout", { when: { inMinutes: 5 }, note: "Mine." })).ok, true);
+  assert.equal(
+    (await h.wakeUps.set("bot-scout", { when: { inMinutes: 5 }, note: "Mine." })).ok,
+    true,
+  );
 
   const refused = await h.wakeUps.set("bot-chef", { when: { inMinutes: 5 }, note: "One more." });
   assert.equal(refused.ok, false);
@@ -154,20 +189,29 @@ test("a fourth pending wake-up is refused with the three it would join, and canc
 
   const missing = await h.wakeUps.cancel("bot-chef", "no-such-wake-up");
   assert.equal(missing.ok ? "ok" : missing.code, "not_found");
-  assert.equal((await h.wakeUps.cancel("bot-scout", ids[0]!)).ok, false, "a Bot cannot cancel another Bot's wake-up");
+  assert.equal(
+    (await h.wakeUps.cancel("bot-scout", ids[0]!)).ok,
+    false,
+    "a Bot cannot cancel another Bot's wake-up",
+  );
 
   const cancelled = await h.wakeUps.cancel("bot-chef", ids[0]!);
   assert.ok(cancelled.ok);
   assert.equal(cancelled.cancelled.note, "In 30");
   assert.equal(await h.store.get(ids[0]!), undefined, "a cancelled wake-up is gone, not paused");
-  assert.equal((await h.wakeUps.set("bot-chef", { when: { inMinutes: 5 }, note: "Now there's room." })).ok, true);
+  assert.equal(
+    (await h.wakeUps.set("bot-chef", { when: { inMinutes: 5 }, note: "Now there's room." })).ok,
+    true,
+  );
 });
 
 test("two wake-ups set at once cannot both slip past the cap", async (t) => {
   const h = harness();
   t.after(() => h.scheduler.stop());
   const outcomes = await Promise.all(
-    [1, 2, 3, 4, 5].map((minutes) => h.wakeUps.set("bot-chef", { when: { inMinutes: minutes }, note: `n${minutes}` })),
+    [1, 2, 3, 4, 5].map((minutes) =>
+      h.wakeUps.set("bot-chef", { when: { inMinutes: minutes }, note: `n${minutes}` }),
+    ),
   );
   assert.equal(outcomes.filter((outcome) => outcome.ok).length, 3);
   assert.equal((await h.wakeUps.pending("bot-chef")).length, 3);
@@ -200,8 +244,14 @@ test("with the Bot's switch off nothing is set, and turning it off cancels its w
 test("turning the switch off still cancels the rest when the person removed one a moment before", async (t) => {
   const h = harness();
   t.after(() => h.scheduler.stop());
-  const first = await h.wakeUps.set("bot-chef", { when: { inMinutes: 15 }, note: "Check the oven." });
-  const second = await h.wakeUps.set("bot-chef", { when: { inMinutes: 45 }, note: "Ask about dessert." });
+  const first = await h.wakeUps.set("bot-chef", {
+    when: { inMinutes: 15 },
+    note: "Check the oven.",
+  });
+  const second = await h.wakeUps.set("bot-chef", {
+    when: { inMinutes: 45 },
+    note: "Ask about dessert.",
+  });
   assert.ok(first.ok && second.ok);
   // The switch read the list just before the person's Cancel from the chat landed.
   const before = await h.store.list();
@@ -226,12 +276,24 @@ test("turning the switch off also removes a wake-up that fired while the Bot was
   assert.ok(set.ok);
   // Its fire was claimed while the Bot was paused: spent, skipped, owed a catch-up.
   const skippedAt = Date.now();
-  await h.store.updateRuntime(set.wakeUp.id, { enabled: false, nextRunAt: undefined, lastRunAt: skippedAt, lastResult: "skipped" });
+  await h.store.updateRuntime(set.wakeUp.id, {
+    enabled: false,
+    nextRunAt: undefined,
+    lastRunAt: skippedAt,
+    lastResult: "skipped",
+  });
   const caughtUp: string[] = [];
   const catchUp = createBotRoutineCatchUp({
     store: {
       list: () => h.store.list(),
-      runs: async () => [{ id: "run-1", result: "skipped", reason: "bot_paused", startedAt: skippedAt } as ScheduledRun],
+      runs: async () => [
+        {
+          id: "run-1",
+          result: "skipped",
+          reason: "bot_paused",
+          startedAt: skippedAt,
+        } as ScheduledRun,
+      ],
     },
     scheduler: {
       catchUp: (id) => {
@@ -240,7 +302,11 @@ test("turning the switch off also removes a wake-up that fired while the Bot was
       },
     },
   });
-  assert.equal((await catchUp.catchUp("bot-chef")).length, 1, "while the switch is on, Resume would run it");
+  assert.equal(
+    (await catchUp.catchUp("bot-chef")).length,
+    1,
+    "while the switch is on, Resume would run it",
+  );
 
   h.switches.set("bot-chef", false);
   assert.equal(await h.wakeUps.cancelAll("bot-chef"), 1);
@@ -266,7 +332,10 @@ test("the Bot's own cancel and set return while a removed wake-up's cleanup wait
   });
   t.after(() => h.scheduler.stop());
   const withinTurn = <T>(work: Promise<T>) =>
-    Promise.race([work, new Promise<"stuck">((resolve) => setTimeout(() => resolve("stuck"), 1_000))]);
+    Promise.race([
+      work,
+      new Promise<"stuck">((resolve) => setTimeout(() => resolve("stuck"), 1_000)),
+    ]);
 
   const old = await h.wakeUps.set("bot-chef", { when: { inMinutes: 15 }, note: "Long ago." });
   const current = await h.wakeUps.set("bot-chef", { when: { inMinutes: 30 }, note: "Soon." });
@@ -289,7 +358,11 @@ test("the Bot's own cancel and set return while a removed wake-up's cleanup wait
 
   release();
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.deepEqual(cleaned.sort(), [current.wakeUp.id, old.wakeUp.id].sort(), "each removed wake-up still settles");
+  assert.deepEqual(
+    cleaned.sort(),
+    [current.wakeUp.id, old.wakeUp.id].sort(),
+    "each removed wake-up still settles",
+  );
 });
 
 test("turning the switch off returns while the removed wake-ups' cleanup waits, and a call queued behind it answers off", async (t) => {
@@ -313,8 +386,14 @@ test("turning the switch off returns while the removed wake-ups' cleanup waits, 
     schedule: { kind: "daily", time: "09:00" },
     prompt: "Anything due today?",
   });
-  const first = await h.wakeUps.set("bot-chef", { when: { inMinutes: 15 }, note: "Check the oven." });
-  const second = await h.wakeUps.set("bot-chef", { when: { inMinutes: 45 }, note: "Ask about dessert." });
+  const first = await h.wakeUps.set("bot-chef", {
+    when: { inMinutes: 15 },
+    note: "Check the oven.",
+  });
+  const second = await h.wakeUps.set("bot-chef", {
+    when: { inMinutes: 45 },
+    note: "Ask about dessert.",
+  });
   assert.ok(first.ok && second.ok);
 
   h.switches.set("bot-chef", false);
@@ -327,12 +406,19 @@ test("turning the switch off returns while the removed wake-ups' cleanup waits, 
   assert.equal(switchedOff, 2);
   assert.notEqual(queued, "stuck");
   if (queued !== "stuck") assert.equal(queued.body.code, "off");
-  assert.deepEqual((await h.routines.list("bot-chef")).map((each) => each.id), [routine.id]);
+  assert.deepEqual(
+    (await h.routines.list("bot-chef")).map((each) => each.id),
+    [routine.id],
+  );
   assert.deepEqual(cleaned, []);
 
   release();
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.deepEqual(cleaned.sort(), [first.wakeUp.id, second.wakeUp.id].sort(), "each removed wake-up still settles");
+  assert.deepEqual(
+    cleaned.sort(),
+    [first.wakeUp.id, second.wakeUp.id].sort(),
+    "each removed wake-up still settles",
+  );
 });
 
 function run(tool: ReturnType<typeof createWakeUpTool>, params: Record<string, unknown>) {
@@ -357,7 +443,11 @@ test("the tool sets a wake-up with a chat chip, lists it, and cancels it by id",
   assert.equal(neither.body.code, "invalid_time");
   assert.equal(chips.length, 0, "a refused set shows nothing in the chat");
 
-  const set = await run(tool, { action: "set", in_minutes: 20, note: "  See if the dough rose.  " });
+  const set = await run(tool, {
+    action: "set",
+    in_minutes: 20,
+    note: "  See if the dough rose.  ",
+  });
   assert.equal(set.isError, false);
   const wakeUp = set.body.wakeUp as { id: string; at: string; note: string };
   assert.equal(wakeUp.note, "See if the dough rose.");

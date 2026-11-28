@@ -2,17 +2,24 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { BOT_BUBBLE_CHANNELS } from "./shared/bot-bubbles.js";
 import { INVOKE_PREFIXES, NOTIFICATION_CHANNELS } from "./preload-channels.js";
-import { BOT_BUBBLES_INVOKE_CHANNELS, BOT_BUBBLES_NOTIFICATION_CHANNELS } from "./bot-bubbles-preload-channels.js";
+import {
+  BOT_BUBBLES_INVOKE_CHANNELS,
+  BOT_BUBBLES_NOTIFICATION_CHANNELS,
+} from "./bot-bubbles-preload-channels.js";
 import { createBotBubblesPreloadApi } from "./bot-bubbles-preload-core.js";
 
 test("every overlay invoke channel is one the shared preload prefixes cover", () => {
   for (const channel of BOT_BUBBLES_INVOKE_CHANNELS) {
-    assert.ok(INVOKE_PREFIXES.some((prefix) => channel.startsWith(prefix)), channel);
+    assert.ok(
+      INVOKE_PREFIXES.some((prefix) => channel.startsWith(prefix)),
+      channel,
+    );
   }
 });
 
 test("every overlay notification is in the shared notification allowlist", () => {
-  for (const channel of BOT_BUBBLES_NOTIFICATION_CHANNELS) assert.ok(NOTIFICATION_CHANNELS.has(channel), channel);
+  for (const channel of BOT_BUBBLES_NOTIFICATION_CHANNELS)
+    assert.ok(NOTIFICATION_CHANNELS.has(channel), channel);
 });
 
 test("the main window hears bubble changes and Open in Aiden", () => {
@@ -24,7 +31,7 @@ test("the overlay bridge passes allowed channels through and refuses everything 
   const calls: Array<{ channel: string; args: unknown[] }> = [];
   const subscribed: string[] = [];
   const api = createBotBubblesPreloadApi({
-    invoke: async <T,>(channel: string, ...args: unknown[]) => {
+    invoke: async <T>(channel: string, ...args: unknown[]) => {
       calls.push({ channel, args });
       return null as T;
     },
@@ -62,5 +69,9 @@ test("the overlay bridge passes allowed channels through and refuses everything 
     [BOT_BUBBLE_CHANNELS.open, "bots:live:subscribe", "bots:approve"],
   );
   assert.deepEqual(calls[0]!.args, [{ botId: "bot-a" }]);
-  assert.deepEqual(subscribed, [BOT_BUBBLE_CHANNELS.transition, BOT_BUBBLE_CHANNELS.overlayInfoChanged, "bots:live:event"]);
+  assert.deepEqual(subscribed, [
+    BOT_BUBBLE_CHANNELS.transition,
+    BOT_BUBBLE_CHANNELS.overlayInfoChanged,
+    "bots:live:event",
+  ]);
 });

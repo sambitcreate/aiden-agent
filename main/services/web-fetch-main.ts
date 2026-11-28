@@ -9,7 +9,9 @@ export const webFetchService = new WebFetchService({
   getSettings: () => configStore.getWebFetchSettings(),
   webSearchEnabled: async () => (await configStore.getWebSearchSettings()).enabled,
   getExtractKeyPool: (modelId) =>
-    webSearchCredentials.readPool(webSearchCredentials.reference(WEB_EXTRACT_MODELS[modelId].credentialId)),
+    webSearchCredentials.readPool(
+      webSearchCredentials.reference(WEB_EXTRACT_MODELS[modelId].credentialId),
+    ),
   // Shared with Settings, so a cooled-down key shows there too.
   keyPoolTracker: webSearchKeyPoolTracker,
 });

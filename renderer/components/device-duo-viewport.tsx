@@ -8,7 +8,11 @@ import {
   type DuoPanelSinks,
 } from "../lib/device-stream";
 import { createDuoPinch, type DuoPinch } from "../lib/device-duo-control";
-import { createPhoneInteraction, type PhoneInteraction, type Point } from "../lib/device-3d/interaction";
+import {
+  createPhoneInteraction,
+  type PhoneInteraction,
+  type Point,
+} from "../lib/device-3d/interaction";
 import type { DuoViewer } from "../lib/device-3d/duo-viewer";
 import { bindPhoneTrackpad, type PhoneTrackpad } from "../lib/device-3d/trackpad";
 
@@ -102,7 +106,10 @@ export function DeviceDuoViewport({
     void Promise.all([loadDuoViewer(), loadModelAssets()])
       .then(([{ createDuoViewer }, assets]) => {
         if (disposed) return;
-        const sources = { 1: document.createElement("canvas"), 3: document.createElement("canvas") };
+        const sources = {
+          1: document.createElement("canvas"),
+          3: document.createElement("canvas"),
+        };
         const viewer = createDuoViewer({
           canvas,
           sources,
@@ -113,8 +120,12 @@ export function DeviceDuoViewport({
           onModelError: (cause) => console.warn("iPhone Duo 3D model could not load", cause),
           // Snapping to the other display turns the device over; the hub confirms or the view rolls back.
           onPanelRequested: (panel) =>
-            client.current?.controlDuo({ control: "physical", value: panel === 1 ? "facedown" : "faceup" }),
-          onOrientationRequested: (value) => client.current?.controlDuo({ control: "orientation", value }),
+            client.current?.controlDuo({
+              control: "physical",
+              value: panel === 1 ? "facedown" : "faceup",
+            }),
+          onOrientationRequested: (value) =>
+            client.current?.controlDuo({ control: "orientation", value }),
         });
         viewerRef.current = viewer;
         onResetReady(viewer.resetPose);
@@ -158,7 +169,9 @@ export function DeviceDuoViewport({
         interactionRef.current = interaction;
         const pinch = createDuoPinch({
           angle: () =>
-            previewRef.current ?? screenRef.current?.hingeAngle ?? (screenRef.current?.screenId === 1 ? 0 : 180),
+            previewRef.current ??
+            screenRef.current?.hingeAngle ??
+            (screenRef.current?.screenId === 1 ? 0 : 180),
           contains: (x, y) => Boolean(screenRef.current) && viewer.beginHinge(x, y),
           change: (angle) => {
             // The model follows the fingers at once; the device confirms each angle in turn.
@@ -221,7 +234,9 @@ export function DeviceDuoViewport({
           if (!interactionRef.current?.begin(event.pointerId, point(event), event.altKey)) return;
           event.preventDefault();
           event.currentTarget.setPointerCapture(event.pointerId);
-          (event.currentTarget.closest('[role="application"]') as HTMLElement | null)?.focus({ preventScroll: true });
+          (event.currentTarget.closest('[role="application"]') as HTMLElement | null)?.focus({
+            preventScroll: true,
+          });
         }}
         onPointerMove={(event) => interactionRef.current?.move(event.pointerId, point(event))}
         onPointerUp={(event) => {

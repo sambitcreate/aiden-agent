@@ -16,9 +16,17 @@ test("request ids round-trip colon Bot ids and malformed ids fail closed", () =>
     hop: 2,
     deliveryId: d,
   });
-  for (const id of [`bot:x:3:${d}`, "bot:x:1:not-a-uuid", "botreply:", "routine:t:1", "tg:a:b:c:d", "intro:x"])
+  for (const id of [
+    `bot:x:3:${d}`,
+    "bot:x:1:not-a-uuid",
+    "botreply:",
+    "routine:t:1",
+    "tg:a:b:c:d",
+    "intro:x",
+  ])
     assert.deepEqual(botMessageTurnOf(id), { kind: "unattended" });
-  for (const id of [undefined, "abc", "remote:d:k"]) assert.deepEqual(botMessageTurnOf(id), { kind: "person" });
+  for (const id of [undefined, "abc", "remote:d:k"])
+    assert.deepEqual(botMessageTurnOf(id), { kind: "person" });
 });
 test("chains use the strictest input and refuse ambiguous parents", () => {
   assert.deepEqual(botMessageChainOf([undefined]), { canSend: true, hop: 1, chain: [] });
@@ -28,11 +36,17 @@ test("chains use the strictest input and refuse ambiguous parents", () => {
     parentDeliveryId: d,
     chain: ["J"],
   });
-  for (const ids of [[botMessageRequestId("J", 2, d)], [undefined, botReplyRequestId(d)], ["intro:x"], ["routine:t:1"]])
+  for (const ids of [
+    [botMessageRequestId("J", 2, d)],
+    [undefined, botReplyRequestId(d)],
+    ["intro:x"],
+    ["routine:t:1"],
+  ])
     assert.equal(botMessageChainOf(ids).canSend, false);
 });
 test("switches default on and status copy is stable", () => {
-  for (const settings of [undefined, {}, { botMessaging: "no" }]) assert.equal(botMessagingEnabled(settings), true);
+  for (const settings of [undefined, {}, { botMessaging: "no" }])
+    assert.equal(botMessagingEnabled(settings), true);
   assert.equal(botMessagingEnabled({ botMessaging: false }), false);
   const lines = {
     waiting_approval: "COS is waiting for you to approve: send",

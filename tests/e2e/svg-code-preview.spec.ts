@@ -16,37 +16,63 @@ const DRAWING = [
   "```",
 ].join("\n");
 // No xmlns, as agents often write it: the preview adds the namespace so it still draws.
-const NO_XMLNS = ["```svg", '<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>', "```"].join("\n");
+const NO_XMLNS = [
+  "```svg",
+  '<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>',
+  "```",
+].join("\n");
 
 // Real chat Markdown and the built stylesheet in Chromium, light and dark.
 test("svg code blocks toggle between code and drawing without a blank card or network", async () => {
   const testInfo = test.info();
   const rootDir = await mkdtemp(path.join(tmpdir(), "aiden-svg-preview-"));
   const entry = path.join(rootDir, "main.cjs");
-  await writeFile(entry, `const { app, BrowserWindow } = require("electron");
+  await writeFile(
+    entry,
+    `const { app, BrowserWindow } = require("electron");
     app.setPath("userData", ${JSON.stringify(path.join(rootDir, "user-data"))});
-    app.whenReady().then(() => { const window = new BrowserWindow({ width: 760, height: 900, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false } }); window.loadURL("about:blank"); });`);
+    app.whenReady().then(() => { const window = new BrowserWindow({ width: 760, height: 900, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false } }); window.loadURL("about:blank"); });`,
+  );
   const electron = (playwright as unknown as typeof PlaywrightModule)._electron;
   const app = await electron.launch({ args: [entry], env: isolatedAppEnvironment() });
   const page = await app.firstWindow();
   const networkRequests: string[] = [];
-  page.on("request", (request) => { if (/^(https?|wss?):/u.test(request.url())) networkRequests.push(request.url()); });
+  page.on("request", (request) => {
+    if (/^(https?|wss?):/u.test(request.url())) networkRequests.push(request.url());
+  });
   try {
     const assetsDir = path.resolve("build/renderer/assets");
     const stylesheets = (await readdir(assetsDir)).filter((name) => name.endsWith(".css"));
     expect(stylesheets.length).toBeGreaterThan(0);
-    const bundle = await build({ stdin: { contents: `
+    const bundle = await build({
+      stdin: {
+        contents: `
       import React from "react";
       import { createRoot } from "react-dom/client";
       import { Markdown } from "./renderer/components/markdown";
       const root = createRoot(document.getElementById("root"));
       window.showFixtureTranscript = (content) => root.render(<Markdown content={content} />);
-    `, resolveDir: process.cwd(), loader: "tsx" }, loader: { ".css": "empty" }, bundle: true, write: false, format: "iife", platform: "browser", define: { "process.env.NODE_ENV": '"production"' }, absWorkingDir: path.resolve(process.cwd()) });
-    await page.setContent('<html data-reduce-motion="true"><body><div id="root" style="box-sizing: border-box; max-width: 720px; padding: 24px; overflow: auto"></div></body></html>');
+    `,
+        resolveDir: process.cwd(),
+        loader: "tsx",
+      },
+      loader: { ".css": "empty" },
+      bundle: true,
+      write: false,
+      format: "iife",
+      platform: "browser",
+      define: { "process.env.NODE_ENV": '"production"' },
+      absWorkingDir: path.resolve(process.cwd()),
+    });
+    await page.setContent(
+      '<html data-reduce-motion="true"><body><div id="root" style="box-sizing: border-box; max-width: 720px; padding: 24px; overflow: auto"></div></body></html>',
+    );
     for (const name of stylesheets) await page.addStyleTag({ path: path.join(assetsDir, name) });
     await page.addScriptTag({ content: bundle.outputFiles[0]!.text });
     await page.evaluate((content) => {
-      (window as unknown as { showFixtureTranscript(content: string): void }).showFixtureTranscript(content);
+      (window as unknown as { showFixtureTranscript(content: string): void }).showFixtureTranscript(
+        content,
+      );
     }, `Here is the drawing:\n\n${DRAWING}\n\nAnd one without a namespace:\n\n${NO_XMLNS}`);
 
     const toggles = page.getByRole("button", { name: "Preview" });
@@ -56,31 +82,53 @@ test("svg code blocks toggle between code and drawing without a blank card or ne
 
     // Keyboard: Tab to the first toggle so focus-visible shows, then press it.
     await page.locator("body").click({ position: { x: 2, y: 2 } });
-    for (let step = 0; step < 10 && !(await drawingToggle.evaluate((node) => node === document.activeElement)); step += 1) {
+    for (
+      let step = 0;
+      step < 10 && !(await drawingToggle.evaluate((node) => node === document.activeElement));
+      step += 1
+    ) {
       await page.keyboard.press("Tab");
     }
     await expect(drawingToggle).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(drawingToggle).toHaveAttribute("aria-pressed", "true");
     const drawing = page.getByRole("img", { name: "SVG preview" });
-    await expect.poll(() => drawing.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+    await expect
+      .poll(() =>
+        drawing.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0),
+      )
+      .toBe(true);
 
     // The namespace-less fence is drawn, never a blank card, and never the failure note.
     await bareToggle.click();
-    await expect.poll(async () => {
-      if (await page.getByText("Couldn't draw this SVG.").isVisible()) return "note";
-      const images = page.getByRole("img", { name: "SVG preview" });
-      if ((await images.count()) === 2 && await images.nth(1).evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)) return "drawing";
-      return "pending";
-    }).toBe("drawing");
+    await expect
+      .poll(async () => {
+        if (await page.getByText("Couldn't draw this SVG.").isVisible()) return "note";
+        const images = page.getByRole("img", { name: "SVG preview" });
+        if (
+          (await images.count()) === 2 &&
+          (await images
+            .nth(1)
+            .evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0))
+        )
+          return "drawing";
+        return "pending";
+      })
+      .toBe("drawing");
     await expect(page.getByText("Couldn't draw this SVG.")).toHaveCount(0);
 
     await drawingToggle.focus();
     await page.keyboard.press("Tab");
     await page.keyboard.press("Shift+Tab");
     for (const theme of ["light", "dark"] as const) {
-      await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), theme === "dark");
-      await page.screenshot({ path: testInfo.outputPath(`svg-preview-${theme}.png`), fullPage: true });
+      await page.evaluate(
+        (dark) => document.documentElement.classList.toggle("dark", dark),
+        theme === "dark",
+      );
+      await page.screenshot({
+        path: testInfo.outputPath(`svg-preview-${theme}.png`),
+        fullPage: true,
+      });
     }
 
     await drawingToggle.click();

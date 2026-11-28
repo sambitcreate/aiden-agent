@@ -55,7 +55,8 @@ export const MAX_ENABLED_CHOICES = 2000;
 const MAX_FIXED_INPUTS = 16;
 
 export function isValidImageModelId(provider: ImageGenerationProviderId, id: string): boolean {
-  if (id.length === 0 || id.length > IMAGE_GENERATION_LIMITS.maxModelIdLength || id.trim() !== id) return false;
+  if (id.length === 0 || id.length > IMAGE_GENERATION_LIMITS.maxModelIdLength || id.trim() !== id)
+    return false;
   if (provider === "openrouter") return OPENROUTER_ID.test(id);
   if (provider === "replicate") return REPLICATE_ID.test(id);
   return isFalEndpointId(id);
@@ -77,7 +78,9 @@ function optionalRecord(value: unknown): Record<string, unknown> {
 
 function maxReferences(value: unknown): number | undefined {
   if (value === undefined) return undefined;
-  return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= MAX_IMAGE_REFERENCES
+  return Number.isSafeInteger(value) &&
+    (value as number) >= 1 &&
+    (value as number) <= MAX_IMAGE_REFERENCES
     ? (value as number)
     : fail();
 }
@@ -94,12 +97,18 @@ function falAspectRatio(value: unknown): FalAspectRatioSupport | undefined {
   if (value === undefined) return undefined;
   const support = record(value);
   if (support.field === "image_size")
-    return support.customSizes === true ? { field: "image_size", customSizes: true } : { field: "image_size" };
+    return support.customSizes === true
+      ? { field: "image_size", customSizes: true }
+      : { field: "image_size" };
   if (support.field !== "aspect_ratio") fail();
   return { field: "aspect_ratio", values: aspectRatios(support.values) ?? fail() };
 }
 
-function parseAdapter(provider: ImageGenerationProviderId, id: string, value: unknown): ImageModelAdapter {
+function parseAdapter(
+  provider: ImageGenerationProviderId,
+  id: string,
+  value: unknown,
+): ImageModelAdapter {
   const adapter = record(value);
   if (adapter.kind !== provider) fail();
   if (provider === "openrouter") {
@@ -109,9 +118,18 @@ function parseAdapter(provider: ImageGenerationProviderId, id: string, value: un
   const max = maxReferences(adapter.maxReferences);
   if (provider === "replicate") {
     const field = adapter.referenceField;
-    if (field !== undefined && (typeof field !== "string" || !Object.prototype.hasOwnProperty.call(REPLICATE_REFERENCE_FIELDS, field))) fail();
+    if (
+      field !== undefined &&
+      (typeof field !== "string" ||
+        !Object.prototype.hasOwnProperty.call(REPLICATE_REFERENCE_FIELDS, field))
+    )
+      fail();
     const mode = adapter.referenceMode;
-    if (mode !== undefined && (!field || !(REPLICATE_REFERENCE_MODES as readonly unknown[]).includes(mode))) fail();
+    if (
+      mode !== undefined &&
+      (!field || !(REPLICATE_REFERENCE_MODES as readonly unknown[]).includes(mode))
+    )
+      fail();
     let input: Record<string, string | number | boolean> | undefined;
     if (adapter.input !== undefined) {
       const raw = record(adapter.input);
@@ -120,14 +138,22 @@ function parseAdapter(provider: ImageGenerationProviderId, id: string, value: un
       input = {};
       for (const [key, entry] of entries) {
         if (!INPUT_KEY.test(key) || key === "prompt") fail();
-        if (typeof entry === "string" ? entry.length > 200 : typeof entry !== "number" && typeof entry !== "boolean") {
+        if (
+          typeof entry === "string"
+            ? entry.length > 200
+            : typeof entry !== "number" && typeof entry !== "boolean"
+        ) {
           fail();
         }
         input[key] = entry as string | number | boolean;
       }
     }
     const version = adapter.version;
-    if (version !== undefined && (typeof version !== "string" || !REPLICATE_VERSION_ID.test(version))) fail();
+    if (
+      version !== undefined &&
+      (typeof version !== "string" || !REPLICATE_VERSION_ID.test(version))
+    )
+      fail();
     const ratios = aspectRatios(adapter.aspectRatios);
     return {
       kind: "replicate",
@@ -164,19 +190,29 @@ function parseAdapter(provider: ImageGenerationProviderId, id: string, value: un
 }
 
 /** Strictly validate one stored catalog entry for a provider. */
-export function parseImageCatalogEntry(provider: ImageGenerationProviderId, value: unknown): ImageCatalogEntry {
+export function parseImageCatalogEntry(
+  provider: ImageGenerationProviderId,
+  value: unknown,
+): ImageCatalogEntry {
   const entry = record(value);
   if (entry.provider !== provider) fail();
   const id = entry.id;
   if (typeof id !== "string" || !isValidImageModelId(provider, id)) fail();
   const name = entry.name;
-  if (typeof name !== "string" || !name.trim() || name.length > IMAGE_GENERATION_LIMITS.maxModelNameLength) fail();
-  if (entry.maker !== undefined && (typeof entry.maker !== "string" || !MAKER.test(entry.maker))) fail();
+  if (
+    typeof name !== "string" ||
+    !name.trim() ||
+    name.length > IMAGE_GENERATION_LIMITS.maxModelNameLength
+  )
+    fail();
+  if (entry.maker !== undefined && (typeof entry.maker !== "string" || !MAKER.test(entry.maker)))
+    fail();
   const adapter = parseAdapter(provider, id, entry.adapter);
   let acceptsReferenceImages: boolean;
   if (adapter.kind === "replicate") acceptsReferenceImages = adapter.referenceField !== undefined;
   else if (adapter.kind === "fal") acceptsReferenceImages = adapter.editEndpoint !== undefined;
-  else if (typeof entry.acceptsReferenceImages === "boolean") acceptsReferenceImages = entry.acceptsReferenceImages;
+  else if (typeof entry.acceptsReferenceImages === "boolean")
+    acceptsReferenceImages = entry.acceptsReferenceImages;
   else fail();
   return {
     provider,
@@ -188,7 +224,11 @@ export function parseImageCatalogEntry(provider: ImageGenerationProviderId, valu
   };
 }
 
-function parseEntries(provider: ImageGenerationProviderId, value: unknown, limit: number): ImageCatalogEntry[] {
+function parseEntries(
+  provider: ImageGenerationProviderId,
+  value: unknown,
+  limit: number,
+): ImageCatalogEntry[] {
   if (!Array.isArray(value) || value.length > limit) fail();
   const seen = new Set<string>();
   return value.map((raw) => {
@@ -227,7 +267,11 @@ export function normalizeImageGenerationSettings(value: unknown): ImageGeneratio
 
   for (const [provider, raw] of Object.entries(optionalRecord(document.custom))) {
     if (!isImageGenerationProviderId(provider)) fail();
-    settings.custom[provider] = parseEntries(provider, raw, IMAGE_GENERATION_LIMITS.maxCustomModelsPerProvider);
+    settings.custom[provider] = parseEntries(
+      provider,
+      raw,
+      IMAGE_GENERATION_LIMITS.maxCustomModelsPerProvider,
+    );
   }
 
   for (const [provider, raw] of Object.entries(optionalRecord(document.fetched))) {
@@ -237,7 +281,11 @@ export function normalizeImageGenerationSettings(value: unknown): ImageGeneratio
     if (typeof fetchedAt !== "number" || !Number.isSafeInteger(fetchedAt) || fetchedAt <= 0) fail();
     settings.fetched[provider] = {
       fetchedAt,
-      models: parseEntries(provider, cache.models, IMAGE_GENERATION_LIMITS.maxFetchedModelsPerProvider),
+      models: parseEntries(
+        provider,
+        cache.models,
+        IMAGE_GENERATION_LIMITS.maxFetchedModelsPerProvider,
+      ),
     };
   }
   return settings;
@@ -252,7 +300,9 @@ export interface ImageGenerationSettingsStore {
 }
 
 /** A DataStore-backed settings store; `root` is injectable for tests. */
-export function createImageGenerationSettingsStore(root?: () => string): ImageGenerationSettingsStore {
+export function createImageGenerationSettingsStore(
+  root?: () => string,
+): ImageGenerationSettingsStore {
   const store = new DataStore<ImageGenerationSettings>(
     IMAGE_GENERATION_SETTINGS_FILE,
     defaultImageGenerationSettings(),

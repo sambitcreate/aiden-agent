@@ -26,8 +26,14 @@ export function createGenerationWatchdog(expired: (reason: "inactive" | "deadlin
   deadline.unref?.();
   return {
     activity(event: { type: string }) {
-      if (!disposed && (event.type === "message_update" || event.type === "tool_execution_start" ||
-        event.type === "tool_execution_update" || event.type === "tool_execution_end")) armIdle();
+      if (
+        !disposed &&
+        (event.type === "message_update" ||
+          event.type === "tool_execution_start" ||
+          event.type === "tool_execution_update" ||
+          event.type === "tool_execution_end")
+      )
+        armIdle();
     },
     dispose,
   };

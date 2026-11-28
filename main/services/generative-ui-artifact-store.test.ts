@@ -11,7 +11,9 @@ const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -50,12 +52,9 @@ test("staging, commit, recovery, and pending gates", async () => {
   );
   assert.equal(await store.hasPending("chat-1"), true);
   const recovered: Array<{ chatId: string; htmlArtifacts: ChatHtmlArtifactV1[] }> = [];
-  await store.recover(
-    [{ id: "chat-1", messages: [] }],
-    async (message) => {
-      recovered.push(message);
-    },
-  );
+  await store.recover([{ id: "chat-1", messages: [] }], async (message) => {
+    recovered.push(message);
+  });
   assert.equal(recovered.length, 1);
   assert.equal(recovered[0]?.htmlArtifacts[0]?.mediaId, "media-1");
   assert.equal(await store.hasPending("chat-1"), false);
@@ -152,11 +151,7 @@ test("prepared chat copies recover to committed artifacts after chat installatio
   });
   await store.commit("source-chat", [item.mediaId]);
 
-  const [copy] = await store.prepareSelectedCopy(
-    "source-chat",
-    "target-chat",
-    [item.mediaId],
-  );
+  const [copy] = await store.prepareSelectedCopy("source-chat", "target-chat", [item.mediaId]);
   assert.ok(copy);
   assert.equal(await store.hasPending("target-chat"), true);
 
@@ -164,7 +159,8 @@ test("prepared chat copies recover to committed artifacts after chat installatio
   await restarted.initialize();
   await restarted.recover(
     [{ id: "target-chat", messages: [{ role: "assistant", htmlArtifacts: [copy] }] }],
-    async () => assert.fail("A prepared copy already referenced by chat must not append a message."),
+    async () =>
+      assert.fail("A prepared copy already referenced by chat must not append a message."),
   );
 
   assert.equal(await restarted.hasPending("target-chat"), false);
@@ -183,11 +179,7 @@ test("prepared chat copies are discarded when chat installation never happened",
     html: HTML,
   });
   await store.commit("source-chat", [item.mediaId]);
-  const [copy] = await store.prepareSelectedCopy(
-    "source-chat",
-    "target-chat",
-    [item.mediaId],
-  );
+  const [copy] = await store.prepareSelectedCopy("source-chat", "target-chat", [item.mediaId]);
   assert.ok(copy);
 
   const restarted = new GenerativeUiArtifactStore({ root: () => root });

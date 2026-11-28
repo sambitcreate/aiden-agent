@@ -146,7 +146,11 @@ export interface SubagentHelperChatStore {
     decidingApprovalId: string | null,
     decide: SubagentHelperApprovalDecide | null,
   ): void;
-  decide(prompt: ApprovalPrompt, decision: "allow" | "deny", options?: ChatApprovalDecisionOptions): void;
+  decide(
+    prompt: ApprovalPrompt,
+    decision: "allow" | "deny",
+    options?: ChatApprovalDecisionOptions,
+  ): void;
   /** Fill the main pane with this helper's chat. `opener` gets focus back on collapse. */
   expand(runId: string, opener: HTMLElement | null): void;
   /** Return to the main chat; focus goes back to whatever opened the expanded chat. */

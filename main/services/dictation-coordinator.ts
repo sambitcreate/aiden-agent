@@ -7,7 +7,10 @@ import {
   HYBRID_TAP_THRESHOLD_MS,
   type DictationActivationMode,
 } from "../../renderer/shared/dictation-preferences.js";
-import { MAX_TIMER_DELAY_MS, transcriptionBudgetMs } from "../../renderer/lib/dictation-operation-gate.js";
+import {
+  MAX_TIMER_DELAY_MS,
+  transcriptionBudgetMs,
+} from "../../renderer/lib/dictation-operation-gate.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { PasteDeliveryResult, PasteOutcome } from "./dictation-paste.js";
 
@@ -58,7 +61,9 @@ export interface DictationCoordinatorDeps {
   ) => (() => void) | null | undefined;
 }
 
-export type VoiceResolutionCheck = { ok: true; voice?: ReadyVoiceProvider } | { ok: false; message: string };
+export type VoiceResolutionCheck =
+  | { ok: true; voice?: ReadyVoiceProvider }
+  | { ok: false; message: string };
 
 /** Milliseconds spent in each stage of one delivered dictation. */
 export interface DictationTiming {
@@ -105,7 +110,10 @@ const WATCHDOG_HEADROOM_MS = 10_000;
  * never shorter than the cloud's, so the fence never preempts either.
  */
 export function transcriptionWatchdogMs(audioSeconds?: number): number {
-  return Math.min(MAX_TIMER_DELAY_MS, transcriptionBudgetMs("local", audioSeconds) + WATCHDOG_HEADROOM_MS);
+  return Math.min(
+    MAX_TIMER_DELAY_MS,
+    transcriptionBudgetMs("local", audioSeconds) + WATCHDOG_HEADROOM_MS,
+  );
 }
 
 /**
@@ -613,16 +621,16 @@ export class DictationCoordinator {
           message: typeof pasteResult === "string" ? undefined : pasteResult.message,
         });
         // A Secure Input warning explains a manual next step; keep it readable.
-        this.scheduleHide(
-          reason === "secure-input" ? WARNING_HIDE_DELAY_MS : RESULT_HIDE_DELAY_MS,
-        );
+        this.scheduleHide(reason === "secure-input" ? WARNING_HIDE_DELAY_MS : RESULT_HIDE_DELAY_MS);
       } catch (error) {
         this.stage = "idle";
         this.operationId = null;
         this.deps.logError("Dictation delivery failed.", error);
         this.broadcastError(
           operationId,
-          error instanceof Error && error.message.trim() ? error.message.trim() : "Dictation failed.",
+          error instanceof Error && error.message.trim()
+            ? error.message.trim()
+            : "Dictation failed.",
         );
       }
     });

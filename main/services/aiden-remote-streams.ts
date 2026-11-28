@@ -1,6 +1,10 @@
 import type { ServerResponse } from "node:http";
 import { CHAT_AUDIENCE_PROMPT_LIFETIME_MS, isChatAudience } from "./chat-orchestration/audience.js";
-import { approvalCardAllows, buildApprovalCard, type ApprovalCard } from "../../renderer/shared/approval-card-model.js";
+import {
+  approvalCardAllows,
+  buildApprovalCard,
+  type ApprovalCard,
+} from "../../renderer/shared/approval-card-model.js";
 import { parseCommandReading, type CommandReading } from "../../renderer/shared/command-reading.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
@@ -283,10 +287,17 @@ export function projectPhoneStreamApproval(
   options: { scheduleCard?: boolean; card?: boolean; plainWords?: boolean } = {},
 ): AidenRemotePendingApproval {
   const { details: _hostOnly, reading: _reading, scopes, ...mobile } = approval;
-  const card = options.card === true ? streamApprovalCard(approval, options.plainWords === true) : undefined;
-  const canAllow = card ? approvalCardAllows(card) : approvalIsHostOnly(approval.details) ? false : approval.canAllow;
-  const offered = card && scopes ? scopes.filter((scope) => approvalCardAllows(card, scope)) : scopes;
-  const schedule = options.scheduleCard === true ? approvalScheduleCard(approval.details) : undefined;
+  const card =
+    options.card === true ? streamApprovalCard(approval, options.plainWords === true) : undefined;
+  const canAllow = card
+    ? approvalCardAllows(card)
+    : approvalIsHostOnly(approval.details)
+      ? false
+      : approval.canAllow;
+  const offered =
+    card && scopes ? scopes.filter((scope) => approvalCardAllows(card, scope)) : scopes;
+  const schedule =
+    options.scheduleCard === true ? approvalScheduleCard(approval.details) : undefined;
   return {
     ...mobile,
     canAllow,
@@ -298,7 +309,10 @@ export function projectPhoneStreamApproval(
 
 /** The typed card for a phone's own stream approval (revision 61), from the one card model. */
 function streamApprovalCard(
-  approval: Pick<ApprovalRecord, "toolName" | "summary" | "canAllow" | "scopes" | "details" | "reading">,
+  approval: Pick<
+    ApprovalRecord,
+    "toolName" | "summary" | "canAllow" | "scopes" | "details" | "reading"
+  >,
   plainWords = false,
 ): ApprovalCard {
   return buildApprovalCard({
@@ -354,25 +368,26 @@ function normalizeLegacyTimelineEvent(value: unknown): unknown {
   if (!Number.isFinite(timestamp)) return value;
   const sequence = Number(event.sequence);
   const label = payload.label;
-  const step = label === "Thinking"
-    ? {
-        id: `think-${sequence}`,
-        order: 0,
-        kind: "thinking" as const,
-        startedAt: timestamp,
-        updatedAt: timestamp,
-      }
-    : {
-        id: `tool-${sequence}`,
-        order: 0,
-        kind: "tool" as const,
-        toolCallId: `call-${sequence}`,
-        toolName: "legacy_activity",
-        label,
-        status: "running" as const,
-        startedAt: timestamp,
-        updatedAt: timestamp,
-      };
+  const step =
+    label === "Thinking"
+      ? {
+          id: `think-${sequence}`,
+          order: 0,
+          kind: "thinking" as const,
+          startedAt: timestamp,
+          updatedAt: timestamp,
+        }
+      : {
+          id: `tool-${sequence}`,
+          order: 0,
+          kind: "tool" as const,
+          toolCallId: `call-${sequence}`,
+          toolName: "legacy_activity",
+          label,
+          status: "running" as const,
+          startedAt: timestamp,
+          updatedAt: timestamp,
+        };
   return {
     ...event,
     payload: {
@@ -404,8 +419,15 @@ function parseSnapshot(value: unknown): AidenRemoteStreamSnapshot {
     const stream = ownRecord(raw);
     if (
       !stream ||
-      Object.keys(stream).some((key) => !["streamId", "chatId", "turnId", "deviceId", "state", "updatedAt", "events"].includes(key)) ||
-      !["streamId", "chatId", "turnId", "deviceId", "state", "updatedAt", "events"].every((key) => Object.prototype.hasOwnProperty.call(stream, key)) ||
+      Object.keys(stream).some(
+        (key) =>
+          !["streamId", "chatId", "turnId", "deviceId", "state", "updatedAt", "events"].includes(
+            key,
+          ),
+      ) ||
+      !["streamId", "chatId", "turnId", "deviceId", "state", "updatedAt", "events"].every((key) =>
+        Object.prototype.hasOwnProperty.call(stream, key),
+      ) ||
       typeof stream.streamId !== "string" ||
       !/^[A-Za-z0-9._:-]{1,128}$/u.test(stream.streamId) ||
       streamIds.has(stream.streamId) ||
@@ -417,7 +439,16 @@ function parseSnapshot(value: unknown): AidenRemoteStreamSnapshot {
       stream.deviceId.length === 0 ||
       stream.deviceId.length > 128 ||
       typeof stream.state !== "string" ||
-      !["queued", "running", "waiting_for_approval", "reconciling", "done", "error", "cancelled", "interrupted"].includes(stream.state) ||
+      ![
+        "queued",
+        "running",
+        "waiting_for_approval",
+        "reconciling",
+        "done",
+        "error",
+        "cancelled",
+        "interrupted",
+      ].includes(stream.state) ||
       !Number.isSafeInteger(stream.updatedAt) ||
       Number(stream.updatedAt) < 0 ||
       !Array.isArray(stream.events) ||
@@ -436,9 +467,7 @@ function parseSnapshot(value: unknown): AidenRemoteStreamSnapshot {
         event.protocolVersion !== AIDEN_REMOTE_PROTOCOL_VERSION ||
         event.streamId !== stream.streamId ||
         !Number.isSafeInteger(event.sequence) ||
-        (previous === 0
-          ? Number(event.sequence) < 1
-          : Number(event.sequence) !== previous + 1) ||
+        (previous === 0 ? Number(event.sequence) < 1 : Number(event.sequence) !== previous + 1) ||
         typeof event.timestamp !== "string" ||
         !Number.isFinite(Date.parse(event.timestamp)) ||
         typeof event.type !== "string" ||
@@ -715,7 +744,8 @@ export class AidenRemoteStreamService {
     return createRemoteChatGenerationOwner({
       deviceId: record.deviceId,
       streamId: record.streamId,
-      publish: (channel, payload) => this.projectNotification(this.streams.get(record.streamId)!, channel, payload),
+      publish: (channel, payload) =>
+        this.projectNotification(this.streams.get(record.streamId)!, channel, payload),
     });
   }
 
@@ -727,10 +757,7 @@ export class AidenRemoteStreamService {
     for (const saved of parsed.streams) {
       const base: Omit<StreamRecord, "owner"> = {
         ...saved,
-        eventBytes: saved.events.reduce(
-          (total, event) => total + this.eventSize(event),
-          0,
-        ),
+        eventBytes: saved.events.reduce((total, event) => total + this.eventSize(event), 0),
         subscribers: new Set(),
         cancelRequested: false,
         cancellationSource: "server",
@@ -880,9 +907,7 @@ export class AidenRemoteStreamService {
       Math.max(0, streamCount - 1);
     for (const stream of this.streams.values()) {
       bytes +=
-        this.envelopeEntryBytes(stream) +
-        stream.eventBytes +
-        Math.max(0, stream.events.length - 1);
+        this.envelopeEntryBytes(stream) + stream.eventBytes + Math.max(0, stream.events.length - 1);
     }
     return bytes;
   }
@@ -996,9 +1021,8 @@ export class AidenRemoteStreamService {
     this.approvals.delete(approvalId);
     const stream = this.streams.get(approval.streamId);
     const nextApproval = stream ? this.pendingApprovalForStream(stream.streamId) : undefined;
-    const nextQuestion = !nextApproval && stream
-      ? this.pendingQuestionForStream(stream.streamId)
-      : undefined;
+    const nextQuestion =
+      !nextApproval && stream ? this.pendingQuestionForStream(stream.streamId) : undefined;
     if (stream && !terminal(stream.state)) {
       if (!resolved) {
         this.append(stream, "status", { state: "reconciling" }, false, "reconciling");
@@ -1057,17 +1081,17 @@ export class AidenRemoteStreamService {
     const question = this.questions.get(promptId);
     if (!question) return false;
     clearTimeout(question.expiry);
-    const resolved = response === "settled_by_host"
-      ? true
-      : this.options.respondQuestion
-        ? this.options.respondQuestion(promptId, response, question.ownerDocumentId)
-        : false;
+    const resolved =
+      response === "settled_by_host"
+        ? true
+        : this.options.respondQuestion
+          ? this.options.respondQuestion(promptId, response, question.ownerDocumentId)
+          : false;
     this.questions.delete(promptId);
     const stream = this.streams.get(question.streamId);
     const nextQuestion = stream ? this.pendingQuestionForStream(stream.streamId) : undefined;
-    const nextApproval = !nextQuestion && stream
-      ? this.pendingApprovalForStream(stream.streamId)
-      : undefined;
+    const nextApproval =
+      !nextQuestion && stream ? this.pendingApprovalForStream(stream.streamId) : undefined;
     if (stream && !terminal(stream.state)) {
       if (!resolved) {
         this.append(stream, "status", { state: "reconciling" }, false, "reconciling");
@@ -1114,13 +1138,23 @@ export class AidenRemoteStreamService {
     return stream;
   }
 
-  create(deviceId: string, streamId: string, chatId: string, turnId: string): RemoteChatGenerationOwnerController {
+  create(
+    deviceId: string,
+    streamId: string,
+    chatId: string,
+    turnId: string,
+  ): RemoteChatGenerationOwnerController {
     this.prune();
     if (this.streams.has(streamId)) {
       throw new AidenRemoteServiceError("already_exists", "That stream already exists.", 409);
     }
     if (this.streams.size >= MAX_STREAMS) {
-      throw new AidenRemoteServiceError("rate_limited", "Too many remote streams are retained.", 429, true);
+      throw new AidenRemoteServiceError(
+        "rate_limited",
+        "Too many remote streams are retained.",
+        429,
+        true,
+      );
     }
     const base: Omit<StreamRecord, "owner"> = {
       streamId,
@@ -1333,7 +1367,10 @@ export class AidenRemoteStreamService {
         toolName,
         // These model operations require complete payload inspection on the owning desktop.
         // Remote summaries are bounded and cannot establish disclosure consent.
-        canAllow: toolName !== "classify" && toolName !== "generate_image" && (!claimsStructuredDetails || details !== undefined),
+        canAllow:
+          toolName !== "classify" &&
+          toolName !== "generate_image" &&
+          (!claimsStructuredDetails || details !== undefined),
         ...(scopes ? { scopes } : {}),
         ...(details ? { details } : {}),
         ...(reading ? { reading } : {}),
@@ -1444,13 +1481,7 @@ export class AidenRemoteStreamService {
   markStartError(deviceId: string, streamId: string, error: unknown): void {
     const stream = this.requireStream(deviceId, streamId);
     if (stream.cancelRequested) {
-      this.append(
-        stream,
-        "cancelled",
-        { source: stream.cancellationSource },
-        true,
-        "cancelled",
-      );
+      this.append(stream, "cancelled", { source: stream.cancellationSource }, true, "cancelled");
       return;
     }
     void error;
@@ -1571,11 +1602,7 @@ export class AidenRemoteStreamService {
   approvalChatId(deviceId: string, approvalId: string): string {
     this.prune();
     const approval = this.approvals.get(approvalId);
-    if (
-      !approval ||
-      approval.deviceId !== deviceId ||
-      approval.expiresAt <= this.options.now()
-    ) {
+    if (!approval || approval.deviceId !== deviceId || approval.expiresAt <= this.options.now()) {
       throw new AidenRemoteServiceError(
         "approval_expired",
         "This approval is no longer available.",
@@ -1591,11 +1618,7 @@ export class AidenRemoteStreamService {
   ): AidenRemoteCapability | undefined {
     this.prune();
     const approval = this.approvals.get(approvalId);
-    if (
-      !approval ||
-      approval.deviceId !== deviceId ||
-      approval.expiresAt <= this.options.now()
-    ) {
+    if (!approval || approval.deviceId !== deviceId || approval.expiresAt <= this.options.now()) {
       throw new AidenRemoteServiceError(
         "approval_expired",
         "This approval is no longer available.",
@@ -1616,11 +1639,7 @@ export class AidenRemoteStreamService {
   questionChatId(deviceId: string, promptId: string): string {
     this.prune();
     const question = this.questions.get(promptId);
-    if (
-      !question ||
-      question.deviceId !== deviceId ||
-      question.expiresAt <= this.options.now()
-    ) {
+    if (!question || question.deviceId !== deviceId || question.expiresAt <= this.options.now()) {
       throw new AidenRemoteServiceError(
         "question_expired",
         "This question is no longer available.",
@@ -1657,7 +1676,11 @@ export class AidenRemoteStreamService {
         async () => {
           this.prune();
           const question = this.questions.get(promptId);
-          if (!question || question.deviceId !== deviceId || question.expiresAt <= this.options.now()) {
+          if (
+            !question ||
+            question.deviceId !== deviceId ||
+            question.expiresAt <= this.options.now()
+          ) {
             throw new AidenRemoteServiceError(
               "question_expired",
               "This question is no longer available.",
@@ -1870,11 +1893,7 @@ export class AidenRemoteStreamService {
               };
             }
             if (!this.options.submitInput) {
-              throw new AidenRemoteServiceError(
-                "not_found",
-                "This endpoint is unavailable.",
-                404,
-              );
+              throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
             }
             const admission = await this.options.submitInput({
               streamId: stream.streamId,
@@ -1904,9 +1923,7 @@ export class AidenRemoteStreamService {
               ...(admission.queue === undefined ? {} : { queue: admission.queue }),
               ...(admission.reason === undefined ? {} : { reason: admission.reason }),
               committed: admission.committed,
-              ...(admission.messageId === undefined
-                ? {}
-                : { messageId: admission.messageId }),
+              ...(admission.messageId === undefined ? {} : { messageId: admission.messageId }),
             };
           };
           return runAccess(stream.chatId, execute);
@@ -1975,8 +1992,16 @@ export class AidenRemoteStreamService {
         async () => {
           this.prune();
           const approval = this.approvals.get(approvalId);
-          if (!approval || approval.deviceId !== deviceId || approval.expiresAt <= this.options.now()) {
-            throw new AidenRemoteServiceError("approval_expired", "This approval is no longer available.", 409);
+          if (
+            !approval ||
+            approval.deviceId !== deviceId ||
+            approval.expiresAt <= this.options.now()
+          ) {
+            throw new AidenRemoteServiceError(
+              "approval_expired",
+              "This approval is no longer available.",
+              409,
+            );
           }
           // A device holding `approval:cards` may allow exactly what its card
           // offers (revision 61); every other device keeps the summary rule.
@@ -1988,7 +2013,11 @@ export class AidenRemoteStreamService {
               403,
             );
           }
-          if (decision === "allow" && !card && (approvalIsHostOnly(approval.details) || !approval.canAllow)) {
+          if (
+            decision === "allow" &&
+            !card &&
+            (approvalIsHostOnly(approval.details) || !approval.canAllow)
+          ) {
             throw new AidenRemoteServiceError(
               "capability_denied",
               "Allow this in Aiden Agent on your computer.",
@@ -2004,7 +2033,11 @@ export class AidenRemoteStreamService {
           }
           return runAccess(approval.chatId, async () => {
             if (!this.resolveApproval(approvalId, decision, scope)) {
-              throw new AidenRemoteServiceError("approval_already_resolved", "This approval was already resolved.", 409);
+              throw new AidenRemoteServiceError(
+                "approval_already_resolved",
+                "This approval was already resolved.",
+                409,
+              );
             }
             return {
               approvalId,
@@ -2061,7 +2094,11 @@ export class AidenRemoteStreamService {
     const stream = this.requireStream(deviceId, streamId);
     const lastSequence = stream.events[stream.events.length - 1]?.sequence ?? 0;
     if (after > lastSequence) {
-      throw new AidenRemoteServiceError("invalid_request", "The stream cursor is ahead of Aiden.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The stream cursor is ahead of Aiden.",
+        400,
+      );
     }
     const snapshotReasons = options.snapshotReasons === true;
     let cursor = after;

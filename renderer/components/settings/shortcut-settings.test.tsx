@@ -5,7 +5,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
-import { COMMANDS, type CommandId, type KeybindingMutation, type KeybindingSnapshot } from "../../shared/keybindings";
+import {
+  COMMANDS,
+  type CommandId,
+  type KeybindingMutation,
+  type KeybindingSnapshot,
+} from "../../shared/keybindings";
 import { ShortcutSettings } from "./shortcut-settings";
 
 afterEach(cleanup);
@@ -16,7 +21,10 @@ function defaults(): KeybindingSnapshot {
   return {
     overrides: { version: 1, commands: {} },
     effective: Object.fromEntries(
-      COMMANDS.map((command) => [command.id, command.defaultEnabled === false ? null : command.defaultBinding]),
+      COMMANDS.map((command) => [
+        command.id,
+        command.defaultEnabled === false ? null : command.defaultBinding,
+      ]),
     ) as Record<CommandId, string | null>,
     global: [],
   };
@@ -35,10 +43,18 @@ async function mount() {
         held.push({
           mutation,
           finish() {
-            const binding = "binding" in mutation ? mutation.binding : "disabled" in mutation && mutation.disabled ? null : snapshot.effective[mutation.commandId];
+            const binding =
+              "binding" in mutation
+                ? mutation.binding
+                : "disabled" in mutation && mutation.disabled
+                  ? null
+                  : snapshot.effective[mutation.commandId];
             snapshot = {
               ...snapshot,
-              overrides: { version: 1, commands: { ...snapshot.overrides.commands, [mutation.commandId]: { binding } } },
+              overrides: {
+                version: 1,
+                commands: { ...snapshot.overrides.commands, [mutation.commandId]: { binding } },
+              },
               effective: { ...snapshot.effective, [mutation.commandId]: binding },
             };
             resolve(snapshot);
@@ -66,7 +82,10 @@ test("a switch stays enabled and focused while its save runs; a second press the
   assert.equal(toggle.hasAttribute("disabled"), false);
   assert.equal(document.activeElement, toggle);
   // Other rows stay usable too; their presses wait for nothing and are dropped while this one saves.
-  assert.equal(screen.getByRole("switch", { name: "Disable Open Aiden" }).hasAttribute("disabled"), false);
+  assert.equal(
+    screen.getByRole("switch", { name: "Disable Open Aiden" }).hasAttribute("disabled"),
+    false,
+  );
   fireEvent.click(toggle);
   fireEvent.click(screen.getByRole("switch", { name: "Disable Open Aiden" }));
   assert.equal(held.length, 1);
@@ -75,7 +94,10 @@ test("a switch stays enabled and focused while its save runs; a second press the
   await waitFor(() => assert.equal(toggle.getAttribute("aria-checked"), "false"));
   assert.equal(toggle.getAttribute("aria-label"), "Enable Focus composer");
   assert.equal(document.activeElement, toggle);
-  assert.deepEqual(held.map((save) => save.mutation), [{ commandId: "composer.focus", disabled: true }]);
+  assert.deepEqual(
+    held.map((save) => save.mutation),
+    [{ commandId: "composer.focus", disabled: true }],
+  );
 });
 
 test("a failed save leaves the switch as it was and says why", async () => {
@@ -96,7 +118,13 @@ test("recording a shortcut keeps the recorder enabled and focused while it saves
   fireEvent.click(recorder);
   await screen.findByRole("button", { name: "Recording shortcut for Focus composer" });
   recorder.focus();
-  fireEvent.keyDown(recorder, { key: "k", code: "KeyK", metaKey: true, ctrlKey: true, shiftKey: true });
+  fireEvent.keyDown(recorder, {
+    key: "k",
+    code: "KeyK",
+    metaKey: true,
+    ctrlKey: true,
+    shiftKey: true,
+  });
   await waitFor(() => assert.equal(held.length, 1));
   assert.equal(recorder.hasAttribute("disabled"), false);
   assert.equal(document.activeElement, recorder);
@@ -104,7 +132,9 @@ test("recording a shortcut keeps the recorder enabled and focused while it saves
   assert.ok("binding" in recorded && recorded.commandId === "composer.focus");
 
   await act(async () => held[0]!.finish());
-  await waitFor(() => assert.equal(recorder.getAttribute("aria-label"), "Change shortcut for Focus composer"));
+  await waitFor(() =>
+    assert.equal(recorder.getAttribute("aria-label"), "Change shortcut for Focus composer"),
+  );
   assert.notEqual(recorder.textContent, before, "the recorder shows the new shortcut");
   assert.equal(document.activeElement, recorder);
 });

@@ -53,7 +53,12 @@ export function LocalProviderDialog({
         },
         previous,
       );
-      const saved = await providersApi.save({ ...draft, models, modelMetadata, defaultModel: model });
+      const saved = await providersApi.save({
+        ...draft,
+        models,
+        modelMetadata,
+        defaultModel: model,
+      });
       await onSaved(saved);
       onClose();
     } catch (cause) {

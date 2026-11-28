@@ -85,22 +85,13 @@ export function extractFormFillEntities(input: {
   const { attachmentId, name } = input;
   const text = input.text ?? "";
   if (input.size > FORM_FILL_MAX_DOCUMENT_BYTES) {
-    throw new FormFillExtractionError(
-      "too_large",
-      `${name} is too large to use for form filling.`,
-    );
+    throw new FormFillExtractionError("too_large", `${name} is too large to use for form filling.`);
   }
   if (text.length === 0 || text.trim().length === 0) {
-    throw new FormFillExtractionError(
-      "empty",
-      `${name} does not contain any text to fill from.`,
-    );
+    throw new FormFillExtractionError("empty", `${name} does not contain any text to fill from.`);
   }
   if (text.includes("\0") || /[￾￿]/u.test(text)) {
-    throw new FormFillExtractionError(
-      "binary",
-      `${name} is not a plain-text document.`,
-    );
+    throw new FormFillExtractionError("binary", `${name} is not a plain-text document.`);
   }
   if (
     text.endsWith(FORM_FILL_TRUNCATION_SUFFIX.trimEnd()) ||
@@ -123,8 +114,7 @@ export function extractFormFillEntities(input: {
       continue;
     }
     const trimmed = raw.trim();
-    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//"))
-      continue;
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//")) continue;
     const match = LABEL_VALUE.exec(raw);
     if (!match) continue;
     if (/\p{Cf}/u.test(raw)) {
@@ -136,13 +126,8 @@ export function extractFormFillEntities(input: {
     const label = match[1].trim();
     const value = match[2].trim();
     if (!label.length || !value.length) continue;
-    if (
-      label.length > FORM_FILL_MAX_LABEL_CHARS ||
-      value.length > FORM_FILL_MAX_VALUE_CHARS
-    ) {
-      issues.push(
-        `Line ${index + 1} has an oversized label or value and was skipped.`,
-      );
+    if (label.length > FORM_FILL_MAX_LABEL_CHARS || value.length > FORM_FILL_MAX_VALUE_CHARS) {
+      issues.push(`Line ${index + 1} has an oversized label or value and was skipped.`);
       continue;
     }
     const normalized = normalizeLabel(label);

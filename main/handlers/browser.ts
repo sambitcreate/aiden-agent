@@ -11,12 +11,21 @@ import type { BrowserCommand, BrowserMenuItem } from "../../renderer/shared/brow
 import { findBrowserRecording, readBrowserRecording } from "../services/browser/recordings.js";
 
 export function registerBrowserHandlers(): void {
-  ipcMain.handle("browser:popup-menu", (event, id: string, point: { x: number; y: number }, items: BrowserMenuItem[]) => {
-    const owner = rendererDocumentOwner(event, () => new Error("Browser menus require the active application document."));
-    return popupBrowserMenu(event.sender, owner, id, point, items);
-  });
+  ipcMain.handle(
+    "browser:popup-menu",
+    (event, id: string, point: { x: number; y: number }, items: BrowserMenuItem[]) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Browser menus require the active application document."),
+      );
+      return popupBrowserMenu(event.sender, owner, id, point, items);
+    },
+  );
   ipcMain.handle("browser:dismiss-menu", (event, id: string) => {
-    rendererDocumentOwner(event, () => new Error("Browser menus require the active application document."));
+    rendererDocumentOwner(
+      event,
+      () => new Error("Browser menus require the active application document."),
+    );
     dismissBrowserMenu(event.sender, id);
   });
   ipcMain.handle("browser:get-state", async (event, workspaceId: unknown) => {
@@ -61,39 +70,65 @@ export function registerBrowserHandlers(): void {
   // A recording the agent made, played in its chat. Only the recorder's own
   // ids are opened, from Aiden's own folder; a chat names them in its timeline.
   ipcMain.handle("browser:recording", async (event, recordingId: unknown) => {
-    rendererDocumentOwner(event, () => new Error("Recordings require the active application document."));
+    rendererDocumentOwner(
+      event,
+      () => new Error("Recordings require the active application document."),
+    );
     if (typeof recordingId !== "string") throw new Error("A recording id is required.");
     const recording = await readBrowserRecording(app.getPath("userData"), recordingId);
-    return recording ? { mimeType: recording.mimeType, data: new Uint8Array(recording.data) } : null;
+    return recording
+      ? { mimeType: recording.mimeType, data: new Uint8Array(recording.data) }
+      : null;
   });
   ipcMain.handle("browser:reveal-recording", async (event, recordingId: unknown) => {
-    rendererDocumentOwner(event, () => new Error("Recordings require the active application document."));
+    rendererDocumentOwner(
+      event,
+      () => new Error("Recordings require the active application document."),
+    );
     if (typeof recordingId !== "string") throw new Error("A recording id is required.");
     const recording = await findBrowserRecording(app.getPath("userData"), recordingId);
     if (!recording) throw new Error("This recording is no longer on this computer.");
     shell.showItemInFolder(recording.path);
   });
   ipcMain.handle("browser:link-preference", (event) => {
-    rendererDocumentOwner(event, () => new Error("Link settings require the active application document."));
+    rendererDocumentOwner(
+      event,
+      () => new Error("Link settings require the active application document."),
+    );
     return browserService.linkOpening();
   });
   ipcMain.handle("browser:set-link-preference", (event, value: unknown) => {
-    rendererDocumentOwner(event, () => new Error("Link settings require the active application document."));
+    rendererDocumentOwner(
+      event,
+      () => new Error("Link settings require the active application document."),
+    );
     return browserService.setLinkOpening(value);
   });
   ipcMain.handle("browser:open-external", async (event, value: unknown) => {
-    rendererDocumentOwner(event, () => new Error("Opening links requires the active application document."));
+    rendererDocumentOwner(
+      event,
+      () => new Error("Opening links requires the active application document."),
+    );
     await shell.openExternal(externalUrl(value));
   });
   // A chat file link's "Open in system browser": a workspace HTML or PDF file
   // handed to the default app for its type.
-  ipcMain.handle("browser:open-file-external", async (event, workspaceId: unknown, filePath: unknown) => {
-    rendererDocumentOwner(event, () => new Error("Opening files requires the active application document."));
-    const workspace = typeof workspaceId === "string" ? await configStore.getWorkspace(workspaceId) : undefined;
-    if (!workspace?.folderPath || workspace.permission === "none")
-      throw new Error("Workspace file access is not available.");
-    if (typeof filePath !== "string") throw new Error("A document path is required.");
-    const failure = await shell.openPath(await resolveExternalWorkspaceDocument(workspace.folderPath, filePath));
-    if (failure) throw new Error(failure);
-  });
+  ipcMain.handle(
+    "browser:open-file-external",
+    async (event, workspaceId: unknown, filePath: unknown) => {
+      rendererDocumentOwner(
+        event,
+        () => new Error("Opening files requires the active application document."),
+      );
+      const workspace =
+        typeof workspaceId === "string" ? await configStore.getWorkspace(workspaceId) : undefined;
+      if (!workspace?.folderPath || workspace.permission === "none")
+        throw new Error("Workspace file access is not available.");
+      if (typeof filePath !== "string") throw new Error("A document path is required.");
+      const failure = await shell.openPath(
+        await resolveExternalWorkspaceDocument(workspace.folderPath, filePath),
+      );
+      if (failure) throw new Error(failure);
+    },
+  );
 }

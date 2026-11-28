@@ -1,7 +1,4 @@
-import {
-  clearObservedRunProjection,
-  publishObservedRunProjection,
-} from "../chat-terminal-sync";
+import { clearObservedRunProjection, publishObservedRunProjection } from "../chat-terminal-sync";
 import type { HostChatAdapter } from "./host-chat-adapter";
 import {
   applyRemoteRunEvent,
@@ -72,7 +69,8 @@ function hasReplyFrom(
   return messages.some(
     (message) =>
       message.role === "assistant" &&
-      (message.timeline?.generationId === runId || (doneMessageId !== null && message.id === doneMessageId)),
+      (message.timeline?.generationId === runId ||
+        (doneMessageId !== null && message.id === doneMessageId)),
   );
 }
 
@@ -167,7 +165,9 @@ export function observeLocalRun(options: ObserveLocalRunOptions): ObservedLocalR
         const complete =
           outcome.kind === "gone" ||
           (outcome.kind === "read" &&
-            (!waitingForReply || !mirroredReply || hasReplyFrom(outcome.messages, runAtRead!, doneMessageIdAtRead)));
+            (!waitingForReply ||
+              !mirroredReply ||
+              hasReplyFrom(outcome.messages, runAtRead!, doneMessageIdAtRead)));
         if (complete) {
           readOwed = false;
           attempt = 0;
@@ -286,7 +286,9 @@ export function createObservedRunLifecycle(start: (target: ObservedRunTarget) =>
     update({ target, active }: ObservedRunLifecycleState): void {
       const moved =
         current !== null &&
-        (target === null || current.target.chatId !== target.chatId || current.target.workspaceId !== target.workspaceId);
+        (target === null ||
+          current.target.chatId !== target.chatId ||
+          current.target.workspaceId !== target.workspaceId);
       if (current && (moved || current.run.closed)) stop();
       if (target === null) return;
       if (active) {

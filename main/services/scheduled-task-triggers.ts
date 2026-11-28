@@ -19,9 +19,20 @@ import { createEventWatches } from "./bot-routine-events/watch.js";
 import type { BotWatchCheck } from "./bot-routine-events/watch-sources.js";
 import type { ScriptProcessResult } from "./schedule-script.js";
 import { ScheduledTaskIneligible, type ScheduledRunTrigger } from "./schedule-service-core.js";
-import { createTaskLinkWebhook, linkEventText, mergeLinkBatches } from "./scheduled-task-link-trigger.js";
-import type { TaskConnectorSource, TaskConnectorTriggers } from "./scheduled-task-connector-trigger.js";
-import { TASK_TRIGGER_PAYLOAD_CHARS, type ScheduledTaskTriggerStore, type TaskTriggerRoutine } from "./scheduled-task-triggers-store.js";
+import {
+  createTaskLinkWebhook,
+  linkEventText,
+  mergeLinkBatches,
+} from "./scheduled-task-link-trigger.js";
+import type {
+  TaskConnectorSource,
+  TaskConnectorTriggers,
+} from "./scheduled-task-connector-trigger.js";
+import {
+  TASK_TRIGGER_PAYLOAD_CHARS,
+  type ScheduledTaskTriggerStore,
+  type TaskTriggerRoutine,
+} from "./scheduled-task-triggers-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
 
 type EventTrigger = Extract<ScheduledRunTrigger, { kind: "event" }>;
@@ -35,13 +46,24 @@ export interface ScheduledTaskTriggersDependencies {
   /** The run recorded under this id, if any (a replayed event that already ran). */
   findRun(taskId: string, runId: string): Promise<ScheduledRun | undefined>;
   /** One GET of a watched address; `publicOnly` for a watch Aiden proposed (never this computer or a private network). */
-  fetchUrl(url: string, signal: AbortSignal, options: { publicOnly: boolean }): Promise<BotWatchCheck>;
+  fetchUrl(
+    url: string,
+    signal: AbortSignal,
+    options: { publicOnly: boolean },
+  ): Promise<BotWatchCheck>;
   /** The script's path and the folder it runs in (the task's project), or why it can't run. */
   resolveScript(task: ScheduledTask, script: string): Promise<{ path: string; cwd: string }>;
   /** Runs a script check (runScheduledScript in production). */
-  execScript(scriptPath: string, options: {
-    cwd: string; timeoutMs: number; outputLimit: number; signal: AbortSignal; env: Readonly<Record<string, string>>;
-  }): Promise<ScriptProcessResult>;
+  execScript(
+    scriptPath: string,
+    options: {
+      cwd: string;
+      timeoutMs: number;
+      outputLimit: number;
+      signal: AbortSignal;
+      env: Readonly<Record<string, string>>;
+    },
+  ): Promise<ScriptProcessResult>;
   /** The folder each task's private check state file lives in. */
   checkStateDir(): Promise<string>;
   /** Connected-app checks (scheduled-task-connector-trigger.ts); they never connect or sign in. */
@@ -75,7 +97,11 @@ export function scriptCheckResult(script: string, result: ScriptProcessResult): 
   if (result.timedOut) return failed(`${script} ran longer than 60 seconds.`);
   if (result.outputLimitExceeded) return failed(`${script} printed more than 1 MB.`);
   if (result.exitCode !== 0) {
-    return failed(result.exitCode === null ? `${script} was stopped by ${result.signal ?? "a signal"}.` : `${script} exited with code ${result.exitCode}.`);
+    return failed(
+      result.exitCode === null
+        ? `${script} was stopped by ${result.signal ?? "a signal"}.`
+        : `${script} exited with code ${result.exitCode}.`,
+    );
   }
   return { ok: true, bytes: new TextEncoder().encode(result.stdout) };
 }
@@ -149,14 +175,26 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
    * receipt (or the held copy, if the write landed) is what the next start
    * replays, and `requeue` itself does nothing for a receipt already settled.
    */
-  async function holdAgain(routine: TaskTriggerRoutine, held: { eventId: string; payload: string; watchRevision?: number; retries?: number }, settles: string, link: boolean, notBefore: number | undefined): Promise<{ settled: boolean }> {
+  async function holdAgain(
+    routine: TaskTriggerRoutine,
+    held: { eventId: string; payload: string; watchRevision?: number; retries?: number },
+    settles: string,
+    link: boolean,
+    notBefore: number | undefined,
+  ): Promise<{ settled: boolean }> {
     try {
-      await dispatcher.requeue(routine.id, routine.id, held, (older, newer) => combineHeld(link, older, newer), {
-        settles,
-        refund: true,
-        maxRetries: TASK_TRIGGER_RETRIES,
-        ...(notBefore !== undefined ? { notBefore } : {}),
-      });
+      await dispatcher.requeue(
+        routine.id,
+        routine.id,
+        held,
+        (older, newer) => combineHeld(link, older, newer),
+        {
+          settles,
+          refund: true,
+          maxRetries: TASK_TRIGGER_RETRIES,
+          ...(notBefore !== undefined ? { notBefore } : {}),
+        },
+      );
     } catch (error) {
       deps.onError?.(error);
       return { settled: false };
@@ -164,7 +202,10 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
     return { settled: !stopped };
   }
 
-  async function runOnce(routine: TaskTriggerRoutine, event: { eventId: string; payload: string; watchRevision?: number; retries?: number }): Promise<{ settled: boolean }> {
+  async function runOnce(
+    routine: TaskTriggerRoutine,
+    event: { eventId: string; payload: string; watchRevision?: number; retries?: number },
+  ): Promise<{ settled: boolean }> {
     const release = await slots.take();
     try {
       if (stopped) return { settled: false };
@@ -172,16 +213,23 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
       const recorded = await deps.findRun(routine.id, runId);
       // A run that delivered nothing (Aiden may have stopped before its
       // payload was held again) runs again, like one that was cut short.
-      if (recorded && recorded.result !== "blocked" && !undelivered(recorded)) return { settled: true };
+      if (recorded && recorded.result !== "blocked" && !undelivered(recorded))
+        return { settled: true };
       const link = routine.task.trigger.kind === "webhook";
       let run: ScheduledRun;
       try {
-        run = await deps.runEvent(routine.id, {
-          kind: "event",
-          eventId: event.eventId,
-          source: link ? "webhook" : "watch",
-          payload: link ? linkEventText(event.payload, TASK_TRIGGER_PAYLOAD_CHARS) : event.payload,
-        }, runId);
+        run = await deps.runEvent(
+          routine.id,
+          {
+            kind: "event",
+            eventId: event.eventId,
+            source: link ? "webhook" : "watch",
+            payload: link
+              ? linkEventText(event.payload, TASK_TRIGGER_PAYLOAD_CHARS)
+              : event.payload,
+          },
+          runId,
+        );
       } catch (error) {
         if (stopped) return { settled: false };
         deps.onError?.(error);
@@ -191,23 +239,39 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
         // replay reads a run it may have recorded instead of running twice,
         // and try again later, at most TASK_TRIGGER_RETRIES times.
         const retries = event.retries ?? 0;
-        return holdAgain(routine, {
-          eventId: event.eventId,
-          payload: event.payload,
-          ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}),
-          ...(retries ? { retries } : {}),
-        }, event.eventId, link, deps.now() + Math.min(TASK_TRIGGER_FAILURE_RETRY_MAX_MS, TASK_TRIGGER_FAILURE_RETRY_MS * 2 ** retries));
+        return holdAgain(
+          routine,
+          {
+            eventId: event.eventId,
+            payload: event.payload,
+            ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}),
+            ...(retries ? { retries } : {}),
+          },
+          event.eventId,
+          link,
+          deps.now() +
+            Math.min(
+              TASK_TRIGGER_FAILURE_RETRY_MAX_MS,
+              TASK_TRIGGER_FAILURE_RETRY_MS * 2 ** retries,
+            ),
+        );
       }
       // Its chat was busy or out of task runs this hour: what happened waits
       // for the next allowed run instead of being lost, and the run doesn't
       // count toward the day's 48. A chat out of runs has room within the hour.
       if (!stopped && undelivered(run)) {
-        return holdAgain(routine, {
-          eventId: `${event.eventId.slice(0, 120)}~${deps.now().toString(36)}`,
-          payload: event.payload,
-          ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}),
-          ...(event.retries ? { retries: event.retries } : {}),
-        }, event.eventId, link, run.reason === "chat_budget" ? deps.now() + CHAT_BUDGET_RETRY_MS : undefined);
+        return holdAgain(
+          routine,
+          {
+            eventId: `${event.eventId.slice(0, 120)}~${deps.now().toString(36)}`,
+            payload: event.payload,
+            ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}),
+            ...(event.retries ? { retries: event.retries } : {}),
+          },
+          event.eventId,
+          link,
+          run.reason === "chat_budget" ? deps.now() + CHAT_BUDGET_RETRY_MS : undefined,
+        );
       }
       // A run cut short by Aiden stopping runs again at the next start.
       return { settled: !stopped };
@@ -223,26 +287,31 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
     isPaused: async () => !deps.isActive(),
     // A link chooses its own gap (1–60 minutes); a watch waits 5.
     limits: (routine) => ({
-      minGapMs: routine.task.trigger.kind === "webhook" ? routine.task.trigger.gapMinutes * 60_000 : SCHEDULED_TASK_TRIGGER_LIMITS.minGapMs,
+      minGapMs:
+        routine.task.trigger.kind === "webhook"
+          ? routine.task.trigger.gapMinutes * 60_000
+          : SCHEDULED_TASK_TRIGGER_LIMITS.minGapMs,
       perDay: SCHEDULED_TASK_TRIGGER_LIMITS.perDay,
     }),
     payloadChars: TASK_TRIGGER_PAYLOAD_CHARS,
     // Calls inside a link's gap are batched (20 at most); a watch keeps its
     // newest change first, then earlier ones not yet delivered.
-    mergeHeld: (held, incoming, routine) => combineHeld(routine.task.trigger.kind === "webhook", held.payload, incoming.payload),
+    mergeHeld: (held, incoming, routine) =>
+      combineHeld(routine.task.trigger.kind === "webhook", held.payload, incoming.payload),
     heldDropped: async (routine, held, reason, already = []) => {
       const link = routine.task.trigger.kind === "webhook";
       const what = link ? "the calls" : "the change";
       const were = link ? "were" : "was";
-      const card = reason === "daily_limit"
-        ? {
-          summary: `Today's ${SCHEDULED_TASK_TRIGGER_LIMITS.perDay} runs were used up`,
-          text: `Scheduled task "${routine.task.name}" already ran ${SCHEDULED_TASK_TRIGGER_LIMITS.perDay} times today, so ${what} it was holding ${were} dropped. It runs again tomorrow.`,
-        }
-        : {
-          summary: "Couldn't deliver, dropped",
-          text: `Scheduled task "${routine.task.name}" tried ${TASK_TRIGGER_RETRIES + 1} times but couldn't deliver (its chat was busy or out of task runs, or the run couldn't start), so ${what} it was holding ${were} dropped. It runs again on the next ${link ? "call" : "change"}.`,
-        };
+      const card =
+        reason === "daily_limit"
+          ? {
+              summary: `Today's ${SCHEDULED_TASK_TRIGGER_LIMITS.perDay} runs were used up`,
+              text: `Scheduled task "${routine.task.name}" already ran ${SCHEDULED_TASK_TRIGGER_LIMITS.perDay} times today, so ${what} it was holding ${were} dropped. It runs again tomorrow.`,
+            }
+          : {
+              summary: "Couldn't deliver, dropped",
+              text: `Scheduled task "${routine.task.name}" tried ${TASK_TRIGGER_RETRIES + 1} times but couldn't deliver (its chat was busy or out of task runs, or the run couldn't start), so ${what} it was holding ${were} dropped. It runs again on the next ${link ? "call" : "change"}.`,
+            };
       // Each part is shown once: a retry after a failure skips what was already shown.
       const done = new Set(already);
       try {
@@ -250,10 +319,21 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
         done.add("card");
         if (link && !done.has("log")) {
           // A retried drop's line is keyed by its notice, so a write that landed and then failed isn't added twice.
-          await deps.store.appendLog(routine.id, reason === "daily_limit"
-            ? { at: deps.now(), outcome: "daily_limit", preview: "Held calls dropped: today's runs were used up." }
-            : { at: deps.now(), outcome: "dropped", preview: "Held calls dropped: they couldn't be delivered." },
-          reason === "retries" ? { key: `${held.eventId}:retries:log` } : {});
+          await deps.store.appendLog(
+            routine.id,
+            reason === "daily_limit"
+              ? {
+                  at: deps.now(),
+                  outcome: "daily_limit",
+                  preview: "Held calls dropped: today's runs were used up.",
+                }
+              : {
+                  at: deps.now(),
+                  outcome: "dropped",
+                  preview: "Held calls dropped: they couldn't be delivered.",
+                },
+            reason === "retries" ? { key: `${held.eventId}:retries:log` } : {},
+          );
         }
         done.add("log");
       } catch (error) {
@@ -288,13 +368,23 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
 
   async function check(routine: TaskTriggerRoutine, signal: AbortSignal): Promise<BotWatchCheck> {
     if (routine.task.trigger.kind === "connector") {
-      if (!deps.connector) return { ok: false, error: "Connected-app checks aren't available here." };
+      if (!deps.connector)
+        return { ok: false, error: "Connected-app checks aren't available here." };
       const trigger = routine.task.trigger;
-      return deps.connector.check({ id: routine.id, trigger }, routine.connectorSource, routine.watch?.connectorBaseline, signal);
+      return deps.connector.check(
+        { id: routine.id, trigger },
+        routine.connectorSource,
+        routine.watch?.connectorBaseline,
+        signal,
+      );
     }
-    if (routine.task.trigger.kind !== "watch") return { ok: false, error: "This task has no watch." };
+    if (routine.task.trigger.kind !== "watch")
+      return { ok: false, error: "This task has no watch." };
     const source = routine.task.trigger.source;
-    if (source.type === "url") return deps.fetchUrl(source.url, signal, { publicOnly: routine.task.trigger.agentProposed === true });
+    if (source.type === "url")
+      return deps.fetchUrl(source.url, signal, {
+        publicOnly: routine.task.trigger.agentProposed === true,
+      });
     let resolved: { path: string; cwd: string };
     try {
       resolved = await deps.resolveScript(routine.task, source.script);
@@ -328,11 +418,16 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
     dispatcher,
     isPaused: async () => !deps.isActive(),
     paused: async (routine, error) => {
-      await deps.paused(routine.task, error, (routine.watch?.failures ?? 0) >= BOT_WATCH_LIMITS.failuresBeforePause);
+      await deps.paused(
+        routine.task,
+        error,
+        (routine.watch?.failures ?? 0) >= BOT_WATCH_LIMITS.failuresBeforePause,
+      );
       deps.changed?.(routine.id);
     },
     recovered: async () => undefined,
-    reportsOutput: (routine) => routine.task.trigger.kind === "watch" && routine.task.trigger.source.type === "script",
+    reportsOutput: (routine) =>
+      routine.task.trigger.kind === "watch" && routine.task.trigger.source.type === "script",
     now: deps.now,
     setTimer: deps.setTimer,
     onError: deps.onError,
@@ -351,10 +446,13 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
       deps.changed(taskId);
       return;
     }
-    state.pending = deps.setTimer(() => {
-      logBroadcasts.set(taskId, { at: deps.now() });
-      deps.changed?.(taskId);
-    }, state.at + LOG_BROADCAST_MS - now);
+    state.pending = deps.setTimer(
+      () => {
+        logBroadcasts.set(taskId, { at: deps.now() });
+        deps.changed?.(taskId);
+      },
+      state.at + LOG_BROADCAST_MS - now,
+    );
     logBroadcasts.set(taskId, state);
   }
 
@@ -381,7 +479,12 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
       await this.rearm();
       if (!deps.needsSource) return;
       for (const routine of await deps.store.all()) {
-        if (!routine.task.enabled || routine.task.trigger.kind !== "connector" || routine.connectorSource) continue;
+        if (
+          !routine.task.enabled ||
+          routine.task.trigger.kind !== "connector" ||
+          routine.connectorSource
+        )
+          continue;
         await deps.needsSource(routine.task).catch((error: unknown) => deps.onError?.(error));
       }
     },

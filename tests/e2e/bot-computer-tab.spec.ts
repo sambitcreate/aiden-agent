@@ -5,7 +5,9 @@ import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 // authority, so only the platform capability, the Bot IPC and the Bot-computer
 // IPC are substituted. The panel, the Computer tab and the app's stylesheet
 // are the shipped renderer: this is where the CSS cascade decides the colour.
-test("a computer that fails to start says why in the status red, not in the empty state's grey", async ({ aiden }) => {
+test("a computer that fails to start says why in the status red, not in the empty state's grey", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   const planner = botFixture({ id: "bot-planner", name: "Planner", description: "Plans meals" });
   await finishLmStudioOnboarding(page);
@@ -24,12 +26,19 @@ test("a computer that fails to start says why in the status red, not in the empt
       "botComputers:status",
       "botComputers:pointer",
       "botComputers:viewerGrant",
-    ]) ipcMain.removeHandler(channel);
+    ])
+      ipcMain.removeHandler(channel);
     ipcMain.handle("app:getInfo", () => ({
       name: "Aiden",
       version: "e2e",
       environment: "test",
-      capabilities: { platform: "darwin", subagents: true, bots: true, computerUse: true, botComputers: true },
+      capabilities: {
+        platform: "darwin",
+        subagents: true,
+        bots: true,
+        computerUse: true,
+        botComputers: true,
+      },
     }));
     ipcMain.handle("bots:list", () => [bot]);
     ipcMain.handle("bots:get", (_event, botId: string) => (botId === bot.id ? bot : null));
@@ -59,7 +68,16 @@ test("a computer that fails to start says why in the status red, not in the empt
       setup: { kind: "ready", baseBuild: "25G83", baseVersion: "26.6.2", updateAvailable: false },
       settings: { maxRunning: 2, idleStopMinutes: 10 },
       diskUsedBytes: 0,
-      computers: [{ botId: bot.id, vmName, state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot" }],
+      computers: [
+        {
+          botId: bot.id,
+          vmName,
+          state: "stopped",
+          baseBuild: "25G83",
+          outdated: false,
+          controller: "bot",
+        },
+      ],
       requirements: {
         downloadBytes: 19_772_231_540,
         baseDiskBytes: 50_000_000_000,
@@ -98,7 +116,11 @@ test("a computer that fails to start says why in the status red, not in the empt
       probe.remove();
       return color;
     };
-    return { alert: getComputedStyle(element).color, red: resolve("--status-red"), secondary: resolve("--text-secondary") };
+    return {
+      alert: getComputedStyle(element).color,
+      red: resolve("--status-red"),
+      secondary: resolve("--text-secondary"),
+    };
   });
   expect(colors.red).not.toBe(colors.secondary);
   expect(colors.alert).toBe(colors.red);

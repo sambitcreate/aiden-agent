@@ -35,7 +35,11 @@ const base: PeerHostFeedSnapshot = {
   runs: [{ chatId: "a", runId: "r1", state: "working", unread: false }],
 };
 
-function message(sequence: number, change: PeerHostFeedChange, epoch: string | null = "e1"): PeerHostFeedMessage {
+function message(
+  sequence: number,
+  change: PeerHostFeedChange,
+  epoch: string | null = "e1",
+): PeerHostFeedMessage {
   return { hostId: "studio", epoch, sequence, change };
 }
 
@@ -58,8 +62,14 @@ test("row changes upsert in place, append new rows, and remove by id", () => {
     { id: "a", title: "A renamed" },
     { id: "c", title: "C" },
   ]);
-  assert.deepEqual(updated.workspaces.map((row) => row.id), ["w", "w2"]);
-  assert.deepEqual(updated.bots.map((row) => row.id), ["bot"]);
+  assert.deepEqual(
+    updated.workspaces.map((row) => row.id),
+    ["w", "w2"],
+  );
+  assert.deepEqual(
+    updated.bots.map((row) => row.id),
+    ["bot"],
+  );
   assert.equal(updated.sequence, 9);
   // The input snapshot is never mutated.
   assert.equal(base.summaries.length, 2);
@@ -69,8 +79,14 @@ test("row changes upsert in place, append new rows, and remove by id", () => {
 test("a run update moves that run to the newest position, as main keeps it", () => {
   const withRuns = snapshotOrFail(
     replayPeerHostFeedMessages(base, [
-      message(5, { type: "run.state", run: { chatId: "b", runId: "r2", state: "working", unread: false } }),
-      message(6, { type: "run.state", run: { chatId: "a", runId: "r1", state: "done", unread: true } }),
+      message(5, {
+        type: "run.state",
+        run: { chatId: "b", runId: "r2", state: "working", unread: false },
+      }),
+      message(6, {
+        type: "run.state",
+        run: { chatId: "a", runId: "r1", state: "done", unread: true },
+      }),
     ]),
   );
   assert.deepEqual(
@@ -85,16 +101,28 @@ test("a run update moves that run to the newest position, as main keeps it", () 
 test("a removed chat takes its run states with it, so a chat re-added later starts idle", () => {
   const withRuns = snapshotOrFail(
     replayPeerHostFeedMessages(base, [
-      message(5, { type: "run.state", run: { chatId: "b", runId: "r2", state: "needs_approval", unread: false } }),
+      message(5, {
+        type: "run.state",
+        run: { chatId: "b", runId: "r2", state: "needs_approval", unread: false },
+      }),
       message(6, { type: "chat.remove", id: "a" }),
     ]),
   );
-  assert.deepEqual(withRuns.runs.map((run) => run.runId), ["r2"]);
+  assert.deepEqual(
+    withRuns.runs.map((run) => run.runId),
+    ["r2"],
+  );
 
   const readded = snapshotOrFail(
-    applyPeerHostFeedMessage(withRuns, message(7, { type: "chat.upsert", row: { id: "a", title: "A" } })),
+    applyPeerHostFeedMessage(
+      withRuns,
+      message(7, { type: "chat.upsert", row: { id: "a", title: "A" } }),
+    ),
   );
-  assert.deepEqual(readded.runs.filter((run) => run.chatId === "a"), []);
+  assert.deepEqual(
+    readded.runs.filter((run) => run.chatId === "a"),
+    [],
+  );
 });
 
 test("a paired upsert and remove sharing a sequence both apply, and older messages are skipped", () => {
@@ -104,7 +132,10 @@ test("a paired upsert and remove sharing a sequence both apply, and older messag
       message(5, { type: "chat.remove", id: "a" }),
     ]),
   );
-  assert.deepEqual(moved.summaries.map((row) => row.id), ["b", "a2"]);
+  assert.deepEqual(
+    moved.summaries.map((row) => row.id),
+    ["b", "a2"],
+  );
   // Sent before the snapshot was read, so already reflected in it.
   assert.equal(applyPeerHostFeedMessage(base, message(3, { type: "chat.remove", id: "a" })), base);
 });
@@ -125,7 +156,11 @@ test("an epoch the snapshot never saw asks for a fresh read; a reset replaces ev
   const reset = snapshotOrFail(
     applyPeerHostFeedMessage(
       stale,
-      message(1, { type: "reset", summaries: [{ id: "z" }], workspaces: [], bots: [], runs: [] }, "e2"),
+      message(
+        1,
+        { type: "reset", summaries: [{ id: "z" }], workspaces: [], bots: [], runs: [] },
+        "e2",
+      ),
     ),
   );
   assert.equal(reset.epoch, "e2");
@@ -138,22 +173,34 @@ test("an epoch the snapshot never saw asks for a fresh read; a reset replaces ev
   const after = snapshotOrFail(
     applyPeerHostFeedMessage(reset, message(2, { type: "chat.upsert", row: { id: "y" } }, "e2")),
   );
-  assert.deepEqual(after.summaries.map((row) => row.id), ["z", "y"]);
+  assert.deepEqual(
+    after.summaries.map((row) => row.id),
+    ["z", "y"],
+  );
 });
 
 test("stale flips keep rows and sequence, and another host's message changes nothing", () => {
-  const stale = snapshotOrFail(applyPeerHostFeedMessage(base, message(4, { type: "stale", stale: true })));
+  const stale = snapshotOrFail(
+    applyPeerHostFeedMessage(base, message(4, { type: "stale", stale: true })),
+  );
   assert.equal(stale.stale, true);
   assert.equal(stale.summaries, base.summaries);
   assert.equal(stale.sequence, 4);
   assert.equal(applyPeerHostFeedMessage(base, message(4, { type: "stale", stale: false })), base);
   assert.equal(
-    applyPeerHostFeedMessage(base, { ...message(9, { type: "chat.remove", id: "a" }), hostId: "laptop" }),
+    applyPeerHostFeedMessage(base, {
+      ...message(9, { type: "chat.remove", id: "a" }),
+      hostId: "laptop",
+    }),
     base,
   );
 });
 
-function status(hostId: string, generation: number, kind: "connected" | "connecting"): PeerHostStatus {
+function status(
+  hostId: string,
+  generation: number,
+  kind: "connected" | "connecting",
+): PeerHostStatus {
   return {
     hostId,
     generation,
@@ -165,7 +212,10 @@ function status(hostId: string, generation: number, kind: "connected" | "connect
 
 test("host statuses only move forward by generation", () => {
   const current = [status("studio", 5, "connected"), status("laptop", 2, "connecting")];
-  const merged = mergePeerHostStatuses(current, [status("studio", 4, "connecting"), status("laptop", 3, "connected")]);
+  const merged = mergePeerHostStatuses(current, [
+    status("studio", 4, "connecting"),
+    status("laptop", 3, "connected"),
+  ]);
   assert.deepEqual(
     merged.map((entry) => [entry.hostId, entry.generation, entry.state.kind]),
     [
@@ -185,7 +235,13 @@ test("host statuses only move forward by generation", () => {
 });
 
 function blocked(hostId: string, generation: number): PeerHostStatus {
-  return { hostId, generation, state: { kind: "blocked", reason: "auth" }, feed: "live", stale: false };
+  return {
+    hostId,
+    generation,
+    state: { kind: "blocked", reason: "auth" },
+    feed: "live",
+    stale: false,
+  };
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -202,9 +258,10 @@ function watchStatuses(queryClient: QueryClient, sync: PeerHostStatusSync) {
   return {
     enable: () => observer.setOptions({ ...options, enabled: true }),
     availability: (views: PeerHostView[]) =>
-      sidebarHosts(views, queryClient.getQueryData<PeerHostStatus[]>(hostQueryKeys.statuses()) ?? []).map(
-        (host) => [host.id, host.availability],
-      ),
+      sidebarHosts(
+        views,
+        queryClient.getQueryData<PeerHostStatus[]>(hostQueryKeys.statuses()) ?? [],
+      ).map((host) => [host.id, host.availability]),
     stop: () => {
       unsubscribe();
       queryClient.clear();
@@ -213,8 +270,22 @@ function watchStatuses(queryClient: QueryClient, sync: PeerHostStatusSync) {
 }
 
 const views: PeerHostView[] = [
-  { id: "studio", name: "Studio", enabled: true, state: "connected", features: [], capabilities: [] },
-  { id: "laptop", name: "Laptop", enabled: true, state: "connected", features: [], capabilities: [] },
+  {
+    id: "studio",
+    name: "Studio",
+    enabled: true,
+    state: "connected",
+    features: [],
+    capabilities: [],
+  },
+  {
+    id: "laptop",
+    name: "Laptop",
+    enabled: true,
+    state: "connected",
+    features: [],
+    capabilities: [],
+  },
 ];
 
 test("a host's broadcast before the first status read does not stand in for every host's status", async () => {
@@ -334,7 +405,10 @@ for (const hostCount of [1, 5, 10]) {
           change:
             sequence % 4 === 0
               ? { type: "chat.remove", id: `chat-${sequence - 1}` }
-              : { type: "chat.upsert", row: { id: `chat-${sequence}`, title: `${hostId} ${sequence}` } },
+              : {
+                  type: "chat.upsert",
+                  row: { id: `chat-${sequence}`, title: `${hostId} ${sequence}` },
+                },
         });
 
     // Nothing renders until the frame, and the whole burst asked for one frame.
@@ -358,7 +432,12 @@ for (const hostCount of [1, 5, 10]) {
     // A quiet frame does nothing; the next message asks for a new frame.
     frames.frame();
     assert.equal(store.writes.length, hostCount);
-    batcher.push({ hostId: hostIds[0], epoch: "e1", sequence: perHost + 1, change: { type: "stale", stale: true } });
+    batcher.push({
+      hostId: hostIds[0],
+      epoch: "e1",
+      sequence: perHost + 1,
+      change: { type: "stale", stale: true },
+    });
     assert.equal(frames.requested, 2);
     frames.frame();
     assert.equal(store.snapshots.get(hostIds[0])?.stale, true);
@@ -371,8 +450,18 @@ test("an epoch gap asks once per host for a fresh read, unless a reset later in 
   store.snapshots.set("unloaded", null);
   const batcher = createPeerHostFeedBatcher((flush) => frames.schedule(flush), store.target);
   for (const hostId of ["gap", "recovered", "unloaded"]) {
-    batcher.push({ hostId, epoch: "e9", sequence: 1, change: { type: "chat.upsert", row: { id: "x" } } });
-    batcher.push({ hostId, epoch: "e9", sequence: 2, change: { type: "chat.upsert", row: { id: "y" } } });
+    batcher.push({
+      hostId,
+      epoch: "e9",
+      sequence: 1,
+      change: { type: "chat.upsert", row: { id: "x" } },
+    });
+    batcher.push({
+      hostId,
+      epoch: "e9",
+      sequence: 2,
+      change: { type: "chat.upsert", row: { id: "y" } },
+    });
   }
   batcher.push({
     hostId: "recovered",
@@ -380,12 +469,20 @@ test("an epoch gap asks once per host for a fresh read, unless a reset later in 
     sequence: 3,
     change: { type: "reset", summaries: [{ id: "fresh" }], workspaces: [], bots: [], runs: [] },
   });
-  batcher.push({ hostId: "recovered", epoch: "e9", sequence: 4, change: { type: "chat.upsert", row: { id: "late" } } });
+  batcher.push({
+    hostId: "recovered",
+    epoch: "e9",
+    sequence: 4,
+    change: { type: "chat.upsert", row: { id: "late" } },
+  });
   frames.frame();
 
   assert.deepEqual(store.resyncs, ["gap"]);
   assert.deepEqual(store.writes, ["recovered"]);
-  assert.deepEqual(store.snapshots.get("recovered")?.summaries.map((row) => row.id), ["fresh", "late"]);
+  assert.deepEqual(
+    store.snapshots.get("recovered")?.summaries.map((row) => row.id),
+    ["fresh", "late"],
+  );
   // A host whose first read is still in flight is left to that read.
   assert.equal(store.snapshots.get("unloaded"), null);
 });
@@ -395,8 +492,18 @@ test("a host that floods a window with no frames is held to one fresh read", () 
   const store = feedStore(["busy", "quiet"]);
   const batcher = createPeerHostFeedBatcher((flush) => frames.schedule(flush), store.target);
   for (let sequence = 1; sequence <= PEER_FEED_BATCH_MAX_MESSAGES * 4; sequence += 1)
-    batcher.push({ hostId: "busy", epoch: "e1", sequence, change: { type: "chat.upsert", row: { id: `c${sequence}` } } });
-  batcher.push({ hostId: "quiet", epoch: "e1", sequence: 1, change: { type: "chat.upsert", row: { id: "q" } } });
+    batcher.push({
+      hostId: "busy",
+      epoch: "e1",
+      sequence,
+      change: { type: "chat.upsert", row: { id: `c${sequence}` } },
+    });
+  batcher.push({
+    hostId: "quiet",
+    epoch: "e1",
+    sequence: 1,
+    change: { type: "chat.upsert", row: { id: "q" } },
+  });
   frames.frame();
 
   assert.deepEqual(store.resyncs, ["busy"]);
@@ -411,15 +518,33 @@ test("a scheduler that flushes at once still applies each message, and dispose d
     flush();
     return () => assert.fail("a finished flush is never cancelled");
   }, store.target);
-  immediate.push({ hostId: "now", epoch: "e1", sequence: 1, change: { type: "chat.upsert", row: { id: "a" } } });
-  immediate.push({ hostId: "now", epoch: "e1", sequence: 2, change: { type: "chat.upsert", row: { id: "b" } } });
+  immediate.push({
+    hostId: "now",
+    epoch: "e1",
+    sequence: 1,
+    change: { type: "chat.upsert", row: { id: "a" } },
+  });
+  immediate.push({
+    hostId: "now",
+    epoch: "e1",
+    sequence: 2,
+    change: { type: "chat.upsert", row: { id: "b" } },
+  });
   immediate.dispose();
-  assert.deepEqual(store.snapshots.get("now")?.summaries.map((row) => row.id), ["a", "b"]);
+  assert.deepEqual(
+    store.snapshots.get("now")?.summaries.map((row) => row.id),
+    ["a", "b"],
+  );
 
   const frames = manualFrames();
   const later = feedStore(["held"]);
   const disposed = createPeerHostFeedBatcher((flush) => frames.schedule(flush), later.target);
-  disposed.push({ hostId: "held", epoch: "e1", sequence: 1, change: { type: "chat.upsert", row: { id: "a" } } });
+  disposed.push({
+    hostId: "held",
+    epoch: "e1",
+    sequence: 1,
+    change: { type: "chat.upsert", row: { id: "a" } },
+  });
   disposed.dispose();
   assert.equal(frames.pending, 0);
   frames.frame();

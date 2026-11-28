@@ -52,7 +52,10 @@ export function webhookPayload(contentType: string, body: Uint8Array): string | 
     } catch {
       return undefined;
     }
-    if (text.length > BOT_ROUTINE_EVENT_LIMITS.payloadChars || jsonDepth(text, PRETTY_MAX_DEPTH) > PRETTY_MAX_DEPTH) {
+    if (
+      text.length > BOT_ROUTINE_EVENT_LIMITS.payloadChars ||
+      jsonDepth(text, PRETTY_MAX_DEPTH) > PRETTY_MAX_DEPTH
+    ) {
       return text.slice(0, BOT_ROUTINE_EVENT_LIMITS.payloadChars);
     }
     return JSON.stringify(parsed, null, 2).slice(0, BOT_ROUTINE_EVENT_LIMITS.payloadChars * 2);
@@ -75,7 +78,11 @@ export function createBotWebhookHandler(deps: {
     if (payload === undefined) return { status: 400 };
     // Identical bodies within a minute are one event.
     const minute = Math.floor(deps.now() / 60_000);
-    const eventId = createHash("sha256").update(`${minute}\0`).update(request.body).digest("hex").slice(0, 32);
+    const eventId = createHash("sha256")
+      .update(`${minute}\0`)
+      .update(request.body)
+      .digest("hex")
+      .slice(0, 32);
     await deps.dispatcher.emit(routine.botId, routine.id, { eventId, payload });
     return { status: 202 };
   };

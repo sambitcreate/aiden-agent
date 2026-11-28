@@ -122,7 +122,10 @@ export interface ToolMaintenanceResult {
   stderr: string;
 }
 
-export type ToolMaintenanceRunner = (nodePath: string, script: string) => Promise<ToolMaintenanceResult>;
+export type ToolMaintenanceRunner = (
+  nodePath: string,
+  script: string,
+) => Promise<ToolMaintenanceResult>;
 
 /** Builds the program `runToolMaintenance` evaluates; it prints the removed versions as JSON. */
 export function toolMaintenanceProgram(
@@ -148,14 +151,24 @@ export class DeviceToolMaintenanceError extends Error {
 
 /** Runs the maintenance program under `nodePath` and returns the `name@version` entries it removed. */
 export async function runToolMaintenance(
-  input: { nodePath: string; toolsRoot: string; specs: readonly ToolMaintenanceSpec[]; policy: "prune" | "reclaim" },
+  input: {
+    nodePath: string;
+    toolsRoot: string;
+    specs: readonly ToolMaintenanceSpec[];
+    policy: "prune" | "reclaim";
+  },
   runner: ToolMaintenanceRunner = runNodeScript,
 ): Promise<string[]> {
-  const result = await runner(input.nodePath, toolMaintenanceProgram(input.toolsRoot, input.specs, input.policy));
+  const result = await runner(
+    input.nodePath,
+    toolMaintenanceProgram(input.toolsRoot, input.specs, input.policy),
+  );
   if (result.code !== 0) throw new DeviceToolMaintenanceError(result.stderr.trim());
   try {
     const removed = JSON.parse(result.stdout.trim()) as unknown;
-    return Array.isArray(removed) ? removed.filter((entry): entry is string => typeof entry === "string") : [];
+    return Array.isArray(removed)
+      ? removed.filter((entry): entry is string => typeof entry === "string")
+      : [];
   } catch {
     return [];
   }

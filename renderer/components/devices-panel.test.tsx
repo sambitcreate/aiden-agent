@@ -15,9 +15,18 @@ const IPHONE: DeviceSummary = {
   booted: true,
   kind: "iphone",
 };
-const IPAD: DeviceSummary = { ...IPHONE, id: "UDID-2", name: "iPad Air", booted: false, kind: "ipad" };
+const IPAD: DeviceSummary = {
+  ...IPHONE,
+  id: "UDID-2",
+  name: "iPad Air",
+  booted: false,
+  kind: "ipad",
+};
 
-function state(hostStatus: DeviceHostStatus, extra: Partial<DeviceServiceState> = {}): DeviceServiceState {
+function state(
+  hostStatus: DeviceHostStatus,
+  extra: Partial<DeviceServiceState> = {},
+): DeviceServiceState {
   return {
     hostStatus,
     hostStatuses: { local: { status: hostStatus } },
@@ -52,7 +61,9 @@ function view(props: Partial<DevicesPanelViewProps>) {
 }
 
 test("the stateful panel renders a checking state before any IPC answers", () => {
-  const html = renderToStaticMarkup(<DevicesPanel workspaceId="w1" chatId="chat-1" active compact={false} />);
+  const html = renderToStaticMarkup(
+    <DevicesPanel workspaceId="w1" chatId="chat-1" active compact={false} />,
+  );
   assert.match(html, /Checking simulator setup/u);
   assert.match(html, /aria-labelledby="devices-empty-title"/u);
 });
@@ -79,18 +90,25 @@ test("consent explains npm and the node-datachannel prebuilt download before set
 
 test("compact panels keep explanations for assistive technology", () => {
   const html = view({ state: state("needs-consent"), compact: true });
-  assert.match(html, /class="sr-only"[^>]*>Watch and control iOS Simulators from Xcode and Android Emulators/u);
+  assert.match(
+    html,
+    /class="sr-only"[^>]*>Watch and control iOS Simulators from Xcode and Android Emulators/u,
+  );
 });
 
 test("installing, starting, stopped, unavailable, and error each render their own state", () => {
   const installing = view({
-    state: state("installing", { hostStatuses: { local: { status: "installing", detail: "expo-device-hub@0.12.0" } } }),
+    state: state("installing", {
+      hostStatuses: { local: { status: "installing", detail: "expo-device-hub@0.12.0" } },
+    }),
   });
   assert.match(installing, /Installing simulator helpers/u);
   assert.match(installing, /role="status"[^>]*>expo-device-hub@0\.12\.0/u);
   assert.match(view({ state: state("starting") }), /Starting simulator helpers/u);
   assert.match(view({ state: state("stopped") }), />Start<\/button>/u);
-  const unavailable = view({ state: state("unavailable", { unavailableReason: "Install Xcode first." }) });
+  const unavailable = view({
+    state: state("unavailable", { unavailableReason: "Install Xcode first." }),
+  });
   assert.match(unavailable, /Simulators unavailable/u);
   assert.match(unavailable, /Install Xcode first\./u);
   assert.match(unavailable, /Try again/u);
@@ -119,12 +137,21 @@ test("agent access is an explicit, labelled switch that discloses the npm instal
   assert.match(off, /aria-labelledby="devices-agent-access-label"/u);
   assert.match(off, /installs agent-device from npm/u);
   const on = view({
-    state: state("ready", { devices: [IPHONE], consent: { streaming: true, agentAccess: true, peerSharing: false } }),
+    state: state("ready", {
+      devices: [IPHONE],
+      consent: { streaming: true, agentAccess: true, peerSharing: false },
+    }),
     pending: "agent",
   });
   assert.match(on, /role="switch" aria-checked="true"/u);
-  assert.match(on, /disabled=""[^>]*aria-labelledby="devices-agent-access-label"|aria-labelledby="devices-agent-access-label"[^>]*disabled=""/u);
-  assert.match(view({ state: state("ready"), compact: true }), /class="[^"]*\bsr-only"[^>]*>In chats, Aiden can open/u);
+  assert.match(
+    on,
+    /disabled=""[^>]*aria-labelledby="devices-agent-access-label"|aria-labelledby="devices-agent-access-label"[^>]*disabled=""/u,
+  );
+  assert.match(
+    view({ state: state("ready"), compact: true }),
+    /class="[^"]*\bsr-only"[^>]*>In chats, Aiden can open/u,
+  );
 });
 
 const PEER_PHONE: DeviceSummary = { ...IPHONE, hostId: "peer:studio", name: "iPhone 17" };
@@ -138,12 +165,21 @@ test("a lone Mac keeps the flat list while paired Macs group devices by host", (
       hosts: [
         { id: "local", kind: "local", name: "This Mac", status: "ready" },
         { id: "peer:studio", kind: "peer", name: "Studio", status: "ready" },
-        { id: "peer:laptop", kind: "peer", name: "Laptop", status: "unavailable", detail: "Could not reach Laptop." },
+        {
+          id: "peer:laptop",
+          kind: "peer",
+          name: "Laptop",
+          status: "unavailable",
+          detail: "Could not reach Laptop.",
+        },
       ],
     }),
   });
   assert.equal(grouped.match(/class="devices-host-group"/gu)?.length, 3);
-  assert.ok(grouped.indexOf(">This Mac<") < grouped.indexOf(">Studio<"), "this Mac is listed first");
+  assert.ok(
+    grouped.indexOf(">This Mac<") < grouped.indexOf(">Studio<"),
+    "this Mac is listed first",
+  );
   assert.match(grouped, /aria-labelledby="devices-host-peer-studio"/u);
   assert.match(grouped, /Open iPhone 17/u);
   assert.match(grouped, /Could not reach Laptop\./u);
@@ -152,16 +188,27 @@ test("a lone Mac keeps the flat list while paired Macs group devices by host", (
 });
 
 test("sharing with paired Macs is a labelled switch shown only while this Mac is ready", () => {
-  const html = view({ state: state("ready", { consent: { streaming: true, agentAccess: false, peerSharing: true } }) });
+  const html = view({
+    state: state("ready", { consent: { streaming: true, agentAccess: false, peerSharing: true } }),
+  });
   assert.match(html, /id="devices-peer-sharing-label"[^>]*>Share with paired Macs/u);
-  assert.match(html, /role="switch"[^>]*aria-checked="true"[^>]*aria-labelledby="devices-peer-sharing-label"/u);
+  assert.match(
+    html,
+    /role="switch"[^>]*aria-checked="true"[^>]*aria-labelledby="devices-peer-sharing-label"/u,
+  );
   assert.match(html, /Turning this off disconnects them/u);
   assert.doesNotMatch(view({ state: state("stopped") }), /Share with paired Macs/u);
 });
 
 test("a ready paired Mac keeps the list usable when this Mac's helpers are unavailable", () => {
   const hosts = [
-    { id: "local", kind: "local" as const, name: "This Mac", status: "unavailable" as const, detail: "Xcode is not installed." },
+    {
+      id: "local",
+      kind: "local" as const,
+      name: "This Mac",
+      status: "unavailable" as const,
+      detail: "Xcode is not installed.",
+    },
     { id: "peer:studio", kind: "peer" as const, name: "Studio", status: "ready" as const },
   ];
   const html = view({ state: state("unavailable", { devices: [PEER_PHONE], hosts }) });
@@ -198,27 +245,51 @@ test("each device tab shows its own session, and no selection shows the picker",
     ],
   });
   const viewer = (_session: unknown, device: DeviceSummary) => <div>viewer:{device.name}</div>;
-  assert.match(view({ state: ready, viewer, selected: { hostId: "local", deviceId: "UDID-2" } }), /viewer:iPad Air/u);
-  assert.match(view({ state: ready, viewer, selected: { hostId: "local", deviceId: "UDID-1" } }), /viewer:iPhone 17 Pro/u);
+  assert.match(
+    view({ state: ready, viewer, selected: { hostId: "local", deviceId: "UDID-2" } }),
+    /viewer:iPad Air/u,
+  );
+  assert.match(
+    view({ state: ready, viewer, selected: { hostId: "local", deviceId: "UDID-1" } }),
+    /viewer:iPhone 17 Pro/u,
+  );
   const picker = view({ state: ready, viewer, selected: null });
   assert.doesNotMatch(picker, /viewer:/u);
   assert.match(picker, /Boot and open iPad Air/u);
   // A tab whose session already ended falls back to the picker rather than another device.
-  assert.doesNotMatch(view({ state: ready, viewer, selected: { hostId: "local", deviceId: "GONE" } }), /viewer:/u);
+  assert.doesNotMatch(
+    view({ state: ready, viewer, selected: { hostId: "local", deviceId: "GONE" } }),
+    /viewer:/u,
+  );
 });
 
 test("a floating device's tab offers Dock instead of a second stream", () => {
-  const html = renderToStaticMarkup(<DeviceFloatingPlaceholder name="iPhone 17 Pro" onDock={noop} />);
+  const html = renderToStaticMarkup(
+    <DeviceFloatingPlaceholder name="iPhone 17 Pro" onDock={noop} />,
+  );
   assert.match(html, /iPhone 17 Pro is floating over the chat/u);
   assert.match(html, /<button[^>]*>Dock in this tab<\/button>/u);
   assert.doesNotMatch(html, /<canvas|role="application"/u);
 });
 
 test("the viewer rail offers Float over chat only where the device can float", () => {
-  const session = { chatId: "chat-1", hostId: "local", deviceId: "UDID-1", openedBy: "user" as const };
+  const session = {
+    chatId: "chat-1",
+    hostId: "local",
+    deviceId: "UDID-1",
+    openedBy: "user" as const,
+  };
   const render = (onFloat?: () => void) =>
     renderToStaticMarkup(
-      <DeviceViewer chatId="chat-1" session={session} device={IPHONE} active={false} compact={false} onClose={noop} onFloat={onFloat} />,
+      <DeviceViewer
+        chatId="chat-1"
+        session={session}
+        device={IPHONE}
+        active={false}
+        compact={false}
+        onClose={noop}
+        onFloat={onFloat}
+      />,
     );
   assert.match(render(noop), /aria-label="Float over chat"/u);
   assert.doesNotMatch(render(), /Float over chat/u);
@@ -288,7 +359,12 @@ const PIXEL: DeviceSummary = {
   booted: true,
   kind: "other",
 };
-const FOLD_AVD: DeviceSummary = { ...PIXEL, id: "Pixel_Fold_API_35", name: "Pixel Fold", booted: false };
+const FOLD_AVD: DeviceSummary = {
+  ...PIXEL,
+  id: "Pixel_Fold_API_35",
+  name: "Pixel Fold",
+  booted: false,
+};
 
 test("this Mac lists iOS Simulators and Android Emulators in their own sections", () => {
   const html = view({
@@ -310,7 +386,10 @@ test("this Mac lists iOS Simulators and Android Emulators in their own sections"
   });
   assert.match(html, /aria-labelledby="devices-local-ios"/u);
   assert.match(html, /id="devices-local-android"[^>]*>Android Emulators</u);
-  assert.ok(html.indexOf(">iOS Simulators<") < html.indexOf(">Android Emulators<"), "iOS is listed first");
+  assert.ok(
+    html.indexOf(">iOS Simulators<") < html.indexOf(">Android Emulators<"),
+    "iOS is listed first",
+  );
   assert.match(html, /Android 15\.0 · Booted/u);
   assert.match(html, /aria-label="Open Pixel 9"/u);
   assert.match(html, /aria-label="Boot and open Pixel Fold"/u);
@@ -320,7 +399,8 @@ test("this Mac lists iOS Simulators and Android Emulators in their own sections"
 });
 
 test("a platform this Mac cannot run says why instead of listing nothing", () => {
-  const reason = "Android SDK not found. Install it with Android Studio, or set ANDROID_HOME to your SDK folder.";
+  const reason =
+    "Android SDK not found. Install it with Android Studio, or set ANDROID_HOME to your SDK folder.";
   const html = view({
     state: state("ready", {
       devices: [IPHONE],
@@ -339,7 +419,10 @@ test("a platform this Mac cannot run says why instead of listing nothing", () =>
     }),
   });
   assert.match(html, />Android Emulators</u);
-  assert.match(html, /Android SDK not found\. Install it with Android Studio, or set ANDROID_HOME/u);
+  assert.match(
+    html,
+    /Android SDK not found\. Install it with Android Studio, or set ANDROID_HOME/u,
+  );
   assert.match(html, /aria-label="Open iPhone 17 Pro"/u);
   const empty = view({
     state: state("ready", {
@@ -387,7 +470,15 @@ test("an Android viewer swaps the iOS rail for Back, Home, Recents, and Power", 
       onClose={noop}
     />,
   );
-  for (const name of ["Back", "Home", "Recents", "Power", "Rotate", "Shut down emulator", "Close emulator"]) {
+  for (const name of [
+    "Back",
+    "Home",
+    "Recents",
+    "Power",
+    "Rotate",
+    "Shut down emulator",
+    "Close emulator",
+  ]) {
     assert.match(html, new RegExp(`aria-label="${name}"`, "u"), name);
   }
   assert.doesNotMatch(html, /aria-label="Lock"/u);

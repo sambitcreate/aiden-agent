@@ -32,14 +32,20 @@ function pluralMessages(count: number): string {
 }
 
 /** Aiden's own prompt and tools no longer fit, so compaction cannot help and requests will fail. */
-export function contextWindowTooSmall(pressure: Pick<ChatContextPressureV1, "staticTokens" | "inputBudgetTokens">): boolean {
+export function contextWindowTooSmall(
+  pressure: Pick<ChatContextPressureV1, "staticTokens" | "inputBudgetTokens">,
+): boolean {
   return pressure.staticTokens > pressure.inputBudgetTokens;
 }
 
 export const CONTEXT_WINDOW_TOO_SMALL_NOTE =
   "This model's context window is too small for Aiden's prompt and tools. Choose a larger-context model or turn off integrations that add tools.";
 
-export function compactionNote(pressure: ChatContextPressureV1, approaching: boolean, compacting: boolean): string {
+export function compactionNote(
+  pressure: ChatContextPressureV1,
+  approaching: boolean,
+  compacting: boolean,
+): string {
   if (compacting) return "Compacting context…";
   if (contextWindowTooSmall(pressure)) return CONTEXT_WINDOW_TOO_SMALL_NOTE;
   if (pressure.shouldCompact) return "Aiden will compact context before the next request.";
@@ -67,7 +73,9 @@ export function ContextStatus({
       role={role}
       className={cn(
         "m-0 inline-flex max-w-full items-start gap-1.5 rounded-control px-2.5 py-1 text-small leading-snug",
-        warning ? "bg-status-warning-surface text-status-warning" : "bg-status-green-surface text-status-green",
+        warning
+          ? "bg-status-warning-surface text-status-warning"
+          : "bg-status-green-surface text-status-green",
         className,
       )}
     >
@@ -95,14 +103,20 @@ function CategoryRow({
   return (
     <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 text-regular text-primary">
       <span className="flex min-w-0 items-center gap-2">
-        <span aria-hidden="true" className="size-2 shrink-0 rounded-full" style={{ background: fill }} />
+        <span
+          aria-hidden="true"
+          className="size-2 shrink-0 rounded-full"
+          style={{ background: fill }}
+        />
         <span data-legend-label="" className="min-w-0 truncate">
           {label}
         </span>
       </span>
       <span className="text-small text-tertiary tabular-nums">
         {formatContextTokenCount(tokens)}
-        <span className="ml-2 inline-block min-w-[3.2em] text-right text-secondary">{ofWindow}</span>
+        <span className="ml-2 inline-block min-w-[3.2em] text-right text-secondary">
+          {ofWindow}
+        </span>
       </span>
       <span aria-hidden="true" className="col-span-2 h-1 overflow-hidden rounded-full bg-control">
         <span
@@ -131,7 +145,9 @@ function QuietRow({
       <span data-legend-label="" className="min-w-0 truncate">
         {label}
       </span>
-      {notCounted ? <span className="shrink-0 whitespace-nowrap text-mini">not counted</span> : null}
+      {notCounted ? (
+        <span className="shrink-0 whitespace-nowrap text-mini">not counted</span>
+      ) : null}
       <span className="ml-auto tabular-nums">{formatContextTokenCount(tokens)}</span>
     </li>
   );
@@ -150,7 +166,13 @@ function cacheLifetime(ms: number): string {
 }
 
 /** Counts down the provider's prompt cache from the last request that used it. */
-export function PromptCacheTimer({ cache, initialNow }: { cache: PromptCacheWindowV1; initialNow?: number }) {
+export function PromptCacheTimer({
+  cache,
+  initialNow,
+}: {
+  cache: PromptCacheWindowV1;
+  initialNow?: number;
+}) {
   const expiresAt = cache.lastRequestAt + cache.ttlMs;
   const [clock, setClock] = React.useState(() => Date.now());
   const now = initialNow ?? clock;
@@ -177,7 +199,10 @@ export function PromptCacheTimer({ cache, initialNow }: { cache: PromptCacheWind
         <Timer aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
         <span className="text-secondary">Prompt cache</span>
         <span
-          className={cn("ml-auto tabular-nums", lapsed ? "text-tertiary" : low ? "text-support-warning" : "text-primary")}
+          className={cn(
+            "ml-auto tabular-nums",
+            lapsed ? "text-tertiary" : low ? "text-support-warning" : "text-primary",
+          )}
         >
           {lapsed ? "Likely expired" : `${cacheTimeLeft(remaining)} left`}
         </span>
@@ -230,7 +255,9 @@ function DeferredFold({ deferred }: { deferred: DeferredContextCategory }) {
             <li key={server.name} className="col-span-3 grid grid-cols-subgrid">
               <span className="min-w-0 truncate text-secondary">{server.name}</span>
               <span className="text-right tabular-nums">{`${server.count} ${server.count === 1 ? "tool" : "tools"}`}</span>
-              <span className="text-right tabular-nums">{formatContextTokenCount(server.tokens)}</span>
+              <span className="text-right tabular-nums">
+                {formatContextTokenCount(server.tokens)}
+              </span>
             </li>
           ))}
         </ul>
@@ -294,7 +321,11 @@ export function ContextBreakdown({
         />
       ))}
       <li aria-hidden="true" className="h-px bg-separator" />
-      <QuietRow label="Reserved for response" tokens={pressure.reservedTokens} swatch={{ background: RESERVED_FILL }} />
+      <QuietRow
+        label="Reserved for response"
+        tokens={pressure.reservedTokens}
+        swatch={{ background: RESERVED_FILL }}
+      />
       <QuietRow label="Free space" tokens={free} swatch={{ background: FREE_COLOR }} />
       {deferred.map((entry) => (
         <QuietRow
@@ -342,11 +373,15 @@ export function ContextBreakdown({
         <DeferredFold key={`fold-${entry.id}`} deferred={entry} />
       ))}
 
-      {pressure.promptCache ? <PromptCacheTimer cache={pressure.promptCache} initialNow={now} /> : null}
+      {pressure.promptCache ? (
+        <PromptCacheTimer cache={pressure.promptCache} initialNow={now} />
+      ) : null}
 
       <ContextStatus role="note" warning={approaching} className="mt-3">
         {compactionNote(pressure, approaching, compacting)}
-        {deferred.length > 0 ? " Deferred tools load through tool search and aren't counted until used." : null}
+        {deferred.length > 0
+          ? " Deferred tools load through tool search and aren't counted until used."
+          : null}
       </ContextStatus>
     </div>
   );

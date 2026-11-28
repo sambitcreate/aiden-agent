@@ -31,13 +31,20 @@ test("workspace terminal opens a real PTY, runs a shell command, and persists ou
   // cannot run inside the terminal must still leave the built-in F6 path free.
   const terminalInput = drawer.locator(".ghostty-input");
   await terminalInput.press("F6");
-  expect(await page.evaluate(() => document.activeElement?.closest('[data-focus-region]')?.getAttribute("data-focus-region"))).toBe("sidebar");
+  expect(
+    await page.evaluate(() =>
+      document.activeElement?.closest("[data-focus-region]")?.getAttribute("data-focus-region"),
+    ),
+  ).toBe("sidebar");
   await terminalInput.focus();
   await page.keyboard.press("Shift+F6");
   const composer = page.locator('[data-focus-region="composer"] textarea');
   await expect(composer).toBeFocused();
   await page.evaluate(async () => {
-    await window.aidenAPI.ipc.invoke("shortcut:set", { commandId: "model.change", binding: "Shift+F6" });
+    await window.aidenAPI.ipc.invoke("shortcut:set", {
+      commandId: "model.change",
+      binding: "Shift+F6",
+    });
   });
   await terminalInput.focus();
   await page.keyboard.press("Shift+F6");
@@ -82,19 +89,24 @@ test("workspace terminal opens a real PTY, runs a shell command, and persists ou
   await expect(drawer.getByRole("log", { name: "Terminal output" })).not.toContainText("585987");
 
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  await page.evaluate(() => { document.documentElement.dataset.reduceMotion = "false"; });
+  await page.evaluate(() => {
+    document.documentElement.dataset.reduceMotion = "false";
+  });
   // Observe the actual close commit: the exiting drawer must still occupy space
   // while already preventing keyboard input, then release that space below.
-  const exitState = await hideTerminal.evaluate((button) => new Promise<{ height: number; inert: boolean }>((resolve) => {
-    const surface = button.closest<HTMLElement>(".terminal-drawer")!;
-    const observer = new MutationObserver(() => {
-      if (surface.dataset.state !== "closed") return;
-      observer.disconnect();
-      resolve({ height: surface.getBoundingClientRect().height, inert: surface.inert });
-    });
-    observer.observe(surface, { attributes: true, attributeFilter: ["data-state"] });
-    (button as HTMLButtonElement).click();
-  }));
+  const exitState = await hideTerminal.evaluate(
+    (button) =>
+      new Promise<{ height: number; inert: boolean }>((resolve) => {
+        const surface = button.closest<HTMLElement>(".terminal-drawer")!;
+        const observer = new MutationObserver(() => {
+          if (surface.dataset.state !== "closed") return;
+          observer.disconnect();
+          resolve({ height: surface.getBoundingClientRect().height, inert: surface.inert });
+        });
+        observer.observe(surface, { attributes: true, attributeFilter: ["data-state"] });
+        (button as HTMLButtonElement).click();
+      }),
+  );
   expect(exitState.height).toBeGreaterThan(0);
   expect(exitState.inert).toBe(true);
   await expect(page.getByRole("button", { name: "Show terminal" })).toBeVisible();
@@ -108,19 +120,23 @@ test("workspace terminal opens a real PTY, runs a shell command, and persists ou
   await expect(drawer.locator("canvas")).toHaveCount(2);
   await drawer.getByRole("button", { name: "Hide terminal" }).click();
   await expect(page.locator(".terminal-drawer")).toBeHidden();
-  const canvasSizes = await page.evaluate(() => new Promise<string[]>((resolve) => {
-    const sizes = new Set<string>();
-    const start = performance.now();
-    const sample = () => {
-      const drawer = document.querySelector<HTMLElement>(".terminal-drawer");
-      if (drawer && drawer.getBoundingClientRect().height > 0) {
-        for (const canvas of drawer.querySelectorAll("canvas")) sizes.add(`${canvas.clientHeight}/${canvas.height}`);
-      }
-      if (performance.now() - start < 600) requestAnimationFrame(sample);
-      else resolve([...sizes]);
-    };
-    document.querySelector<HTMLButtonElement>("button[data-terminal-toggle]")!.click();
-    requestAnimationFrame(sample);
-  }));
+  const canvasSizes = await page.evaluate(
+    () =>
+      new Promise<string[]>((resolve) => {
+        const sizes = new Set<string>();
+        const start = performance.now();
+        const sample = () => {
+          const drawer = document.querySelector<HTMLElement>(".terminal-drawer");
+          if (drawer && drawer.getBoundingClientRect().height > 0) {
+            for (const canvas of drawer.querySelectorAll("canvas"))
+              sizes.add(`${canvas.clientHeight}/${canvas.height}`);
+          }
+          if (performance.now() - start < 600) requestAnimationFrame(sample);
+          else resolve([...sizes]);
+        };
+        document.querySelector<HTMLButtonElement>("button[data-terminal-toggle]")!.click();
+        requestAnimationFrame(sample);
+      }),
+  );
   expect(canvasSizes).toHaveLength(1);
 });

@@ -11,8 +11,12 @@ test("successful deletion removes the exact transcript and tombstones late termi
   const priorStorage = globalThis.localStorage;
   globalThis.localStorage = {
     getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => { values.set(key, value); },
-    removeItem: (key: string) => { values.delete(key); },
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
   } as Storage;
   try {
     const queryClient = new QueryClient();

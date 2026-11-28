@@ -55,7 +55,9 @@ function inspectVue(element: unknown): FrameworkInspectionResult | null {
         framework: "vue",
         ...(primary ? { componentName: primary.name } : {}),
         componentStack: frames,
-        ...(primary?.source ?? frames[0]?.source ? { source: primary?.source ?? frames[0]?.source } : {}),
+        ...((primary?.source ?? frames[0]?.source)
+          ? { source: primary?.source ?? frames[0]?.source }
+          : {}),
       };
     }
   }
@@ -91,7 +93,9 @@ function inspectVue(element: unknown): FrameworkInspectionResult | null {
         framework: "vue",
         ...(primary ? { componentName: primary.name } : {}),
         componentStack: frames,
-        ...(primary?.source ?? frames[0]?.source ? { source: primary?.source ?? frames[0]?.source } : {}),
+        ...((primary?.source ?? frames[0]?.source)
+          ? { source: primary?.source ?? frames[0]?.source }
+          : {}),
       };
     }
   }

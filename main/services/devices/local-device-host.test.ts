@@ -118,7 +118,10 @@ async function withHost(
       return { stdout: "", stderr: "", code: 0 };
     },
     reservePort: async () => nextPort++,
-    fetch: async (url) => ({ ok: url.endsWith("/readyz"), status: url.endsWith("/readyz") ? 200 : 404 }),
+    fetch: async (url) => ({
+      ok: url.endsWith("/readyz"),
+      status: url.endsWith("/readyz") ? 200 : 404,
+    }),
     sleep: async (ms) => {
       harness.sleeps.push(ms);
       clock += ms;
@@ -145,7 +148,9 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 function deferred() {
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
@@ -215,7 +220,10 @@ test("starts queued before stop cannot revive a stopped host", async () => {
     await host.stop();
     const fresh = host.ensureReady();
     readyGate.resolve();
-    assert.deepEqual((await oldStarts).map((result) => result.status), ["rejected", "rejected"]);
+    assert.deepEqual(
+      (await oldStarts).map((result) => result.status),
+      ["rejected", "rejected"],
+    );
     assert.equal((await fresh).hub.origin, "http://127.0.0.1:52001");
     assert.deepEqual(harness.children[0]!.killed, ["SIGTERM"]);
     await host.stop();
@@ -229,7 +237,10 @@ test("unavailable Xcode or a non-Mac host leaves no child running", async () => 
       await assert.rejects(host.ensureReady(), (error: unknown) => {
         assert.ok(error instanceof DeviceHostUnavailableError);
         // Neither platform can run, so the user learns what each one needs.
-        assert.match(error.reason, /^Open Xcode once and accept its license, then try again\. Android SDK not found\./u);
+        assert.match(
+          error.reason,
+          /^Open Xcode once and accept its license, then try again\. Android SDK not found\./u,
+        );
         return true;
       });
       assert.equal(harness.spawns.length, 0);
@@ -260,12 +271,22 @@ test("unavailable Xcode or a non-Mac host leaves no child running", async () => 
 
 test("Xcode failures map to setup steps the user can take", () => {
   assert.equal(xcodeUnavailableReason({ stdout: "", stderr: "", code: 0 }), null);
-  assert.match(xcodeUnavailableReason({ stdout: "", stderr: "spawn xcrun ENOENT", code: 127 })!, /Install Xcode/u);
   assert.match(
-    xcodeUnavailableReason({ stdout: "", stderr: "xcrun: error: unable to find utility \"simctl\"", code: 72 })!,
+    xcodeUnavailableReason({ stdout: "", stderr: "spawn xcrun ENOENT", code: 127 })!,
     /Install Xcode/u,
   );
-  assert.match(xcodeUnavailableReason({ stdout: "", stderr: "boom", code: 1 })!, /did not respond/u);
+  assert.match(
+    xcodeUnavailableReason({
+      stdout: "",
+      stderr: 'xcrun: error: unable to find utility "simctl"',
+      code: 72,
+    })!,
+    /Install Xcode/u,
+  );
+  assert.match(
+    xcodeUnavailableReason({ stdout: "", stderr: "boom", code: 1 })!,
+    /did not respond/u,
+  );
 });
 
 test("a missing install never reaches npm unless the caller allows installing", async () => {
@@ -278,7 +299,10 @@ test("a missing install never reaches npm unless the caller allows installing", 
       };
       const host = createLocalDeviceHost(harness.deps);
       const phases: string[] = [];
-      for (const start of [() => host.ensureReady((phase) => phases.push(phase)), () => host.ensureAgentReady()]) {
+      for (const start of [
+        () => host.ensureReady((phase) => phases.push(phase)),
+        () => host.ensureAgentReady(),
+      ]) {
         await assert.rejects(start(), (error: unknown) => {
           assert.ok(error instanceof DeviceToolsMissingError);
           assert.equal(error.tool, DEVICE_HUB.name);
@@ -299,11 +323,14 @@ test("a missing install asks for npm only when needed and reports installing fir
     async (harness) => {
       const host = createLocalDeviceHost(harness.deps);
       const phases: string[] = [];
-      await assert.rejects(host.ensureReady((phase) => phases.push(phase), { allowInstall: true }), (error: unknown) => {
-        assert.ok(error instanceof DeviceHostUnavailableError);
-        assert.equal(error.reason, NPM_REQUIRED_REASON);
-        return true;
-      });
+      await assert.rejects(
+        host.ensureReady((phase) => phases.push(phase), { allowInstall: true }),
+        (error: unknown) => {
+          assert.ok(error instanceof DeviceHostUnavailableError);
+          assert.equal(error.reason, NPM_REQUIRED_REASON);
+          return true;
+        },
+      );
       assert.deepEqual(phases, ["installing"]);
       assert.equal(harness.spawns.length, 0);
     },
@@ -324,9 +351,12 @@ test("a missing install asks for npm only when needed and reports installing fir
     async (harness) => {
       const host = createLocalDeviceHost(harness.deps);
       const phases: string[] = [];
-      await host.ensureReady((phase, detail) => phases.push(detail ? `${phase}:${detail}` : phase), {
-        allowInstall: true,
-      });
+      await host.ensureReady(
+        (phase, detail) => phases.push(detail ? `${phase}:${detail}` : phase),
+        {
+          allowInstall: true,
+        },
+      );
       assert.deepEqual(phases, ["installing:expo-device-hub@0.12.0", "starting"]);
       assert.equal(npmCalls.length, 1);
       assert.equal(npmCalls[0][npmCalls[0].length - 1], "expo-device-hub@0.12.0");
@@ -438,12 +468,20 @@ test("a replacement that becomes ready after stop is killed without republishing
     await waitFor(() => harness.children.length === 2);
     await host.stop();
     await host.stop();
-    assert.deepEqual(harness.children[1]!.killed, ["SIGTERM"], "stop signals the in-flight child before readiness returns");
+    assert.deepEqual(
+      harness.children[1]!.killed,
+      ["SIGTERM"],
+      "stop signals the in-flight child before readiness returns",
+    );
     readyGate.resolve();
     await waitFor(() => harness.children[1]!.killed.length > 0);
     await waitFor(async () => {
-      try { await readFile(path.join(harness.baseDir, "hub.json")); return false; }
-      catch { return true; }
+      try {
+        await readFile(path.join(harness.baseDir, "hub.json"));
+        return false;
+      } catch {
+        return true;
+      }
     });
     assert.deepEqual(harness.children[1]!.killed, ["SIGTERM"]);
     assert.equal(host.current(), null);
@@ -462,7 +500,9 @@ test("stop aborts in-flight readiness so a later explicit start can proceed", as
     const originalFetch = harness.deps.fetch;
     harness.deps.fetch = async (url, init) => {
       if (url.startsWith("http://127.0.0.1:52001/")) {
-        await new Promise<void>((resolve) => init?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+        await new Promise<void>((resolve) =>
+          init?.signal?.addEventListener("abort", () => resolve(), { once: true }),
+        );
         throw new Error("readiness aborted");
       }
       return originalFetch(url, init);
@@ -475,7 +515,11 @@ test("stop aborts in-flight readiness so a later explicit start can proceed", as
     assert.deepEqual(harness.children[1]!.killed, ["SIGTERM"]);
     const fresh = await host.ensureReady();
     assert.equal(fresh.hub.origin, "http://127.0.0.1:52002");
-    assert.deepEqual(harness.children[1]!.killed, ["SIGTERM"], "cleanup does not signal the old child twice");
+    assert.deepEqual(
+      harness.children[1]!.killed,
+      ["SIGTERM"],
+      "cleanup does not signal the old child twice",
+    );
     await host.stop();
   });
 });
@@ -535,7 +579,10 @@ test("a restart failure after stop cannot emit stale health", async () => {
 test("streaming revocation and service shutdown fence a late local-host restart", async () => {
   for (const action of ["revoke", "shutdown"] as const) {
     await withHost(async (harness) => {
-      await writeFile(path.join(harness.baseDir, "consent.json"), JSON.stringify({ version: 1, streaming: true }));
+      await writeFile(
+        path.join(harness.baseDir, "consent.json"),
+        JSON.stringify({ version: 1, streaming: true }),
+      );
       const readyGate = deferred();
       const originalFetch = harness.deps.fetch;
       harness.deps.fetch = async (url, init) => {
@@ -548,12 +595,15 @@ test("streaming revocation and service shutdown fence a late local-host restart"
       const service = createDeviceService({
         baseDir: harness.baseDir,
         host,
-        startProxy: async () => { throw new Error("no stream was opened"); },
+        startProxy: async () => {
+          throw new Error("no stream was opened");
+        },
         fetch: async () => ({
           ok: true,
           status: 200,
           headers: { get: () => "application/json" },
-          arrayBuffer: async () => payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength),
+          arrayBuffer: async () =>
+            payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength),
         }),
       });
       service.onState((state) => statuses.push(state.hostStatus));
@@ -569,9 +619,17 @@ test("streaming revocation and service shutdown fence a late local-host restart"
           await assert.rejects(service.shareHost().open("missing"), /sharing is off/u);
         } else {
           await service.stop();
-          assert.equal(service.state().consent.streaming, true, "shutdown does not revoke saved consent");
+          assert.equal(
+            service.state().consent.streaming,
+            true,
+            "shutdown does not revoke saved consent",
+          );
         }
-        assert.deepEqual(harness.children[1]!.killed, ["SIGTERM"], `${action} signals the in-flight child immediately`);
+        assert.deepEqual(
+          harness.children[1]!.killed,
+          ["SIGTERM"],
+          `${action} signals the in-flight child immediately`,
+        );
         const statusCount = statuses.length;
         readyGate.resolve();
         await waitFor(() => harness.children[1]!.killed.length > 0);
@@ -589,7 +647,10 @@ test("streaming revocation and service shutdown fence a late local-host restart"
 
 test("streaming revocation keeps needs-consent when an initial local-host start is cancelled", async () => {
   await withHost(async (harness) => {
-    await writeFile(path.join(harness.baseDir, "consent.json"), JSON.stringify({ version: 1, streaming: true }));
+    await writeFile(
+      path.join(harness.baseDir, "consent.json"),
+      JSON.stringify({ version: 1, streaming: true }),
+    );
     const resolving = deferred();
     const releaseResolution = deferred();
     harness.deps.resolveNodePath = async () => {
@@ -601,8 +662,12 @@ test("streaming revocation keeps needs-consent when an initial local-host start 
     const service = createDeviceService({
       baseDir: harness.baseDir,
       host,
-      startProxy: async () => { throw new Error("no stream was opened"); },
-      fetch: async () => { throw new Error("a cancelled start must not list devices"); },
+      startProxy: async () => {
+        throw new Error("no stream was opened");
+      },
+      fetch: async () => {
+        throw new Error("a cancelled start must not list devices");
+      },
     });
     try {
       const refresh = service.refresh();
@@ -617,7 +682,9 @@ test("streaming revocation keeps needs-consent when an initial local-host start 
       assert.equal(host.current(), null);
       assert.equal(harness.children.length, 0);
 
-      harness.deps.resolveNodePath = async () => { throw new Error("current runtime failure"); };
+      harness.deps.resolveNodePath = async () => {
+        throw new Error("current runtime failure");
+      };
       const retried = await service.grantConsent("streaming");
       assert.equal(retried.hostStatus, "error", "a current start still reports its failure");
       assert.match(retried.hostStatuses.local.detail ?? "", /current runtime failure/u);
@@ -631,7 +698,10 @@ test("streaming revocation keeps needs-consent when an initial local-host start 
 test("sharing-only revocation keeps a held local-host start running", async () => {
   for (const kind of ["peerSharing", "mobileSharing"] as const) {
     await withHost(async (harness) => {
-      await writeFile(path.join(harness.baseDir, "consent.json"), JSON.stringify({ version: 1, streaming: true, [kind]: true }));
+      await writeFile(
+        path.join(harness.baseDir, "consent.json"),
+        JSON.stringify({ version: 1, streaming: true, [kind]: true }),
+      );
       const readyGate = deferred();
       const originalFetch = harness.deps.fetch;
       harness.deps.fetch = async (url, init) => {
@@ -643,12 +713,15 @@ test("sharing-only revocation keeps a held local-host start running", async () =
       const service = createDeviceService({
         baseDir: harness.baseDir,
         host,
-        startProxy: async () => { throw new Error("no stream was opened"); },
+        startProxy: async () => {
+          throw new Error("no stream was opened");
+        },
         fetch: async () => ({
           ok: true,
           status: 200,
           headers: { get: () => "application/json" },
-          arrayBuffer: async () => payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength),
+          arrayBuffer: async () =>
+            payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength),
         }),
       });
       try {
@@ -703,7 +776,10 @@ test("stopping the agent after a relaunch stops the daemon a previous run left b
   await withHost(async (harness) => {
     const stateDir = path.join(harness.baseDir, "agent-state");
     await mkdir(stateDir, { recursive: true });
-    await writeFile(path.join(stateDir, "daemon.json"), JSON.stringify({ httpPort: 61_500, token: "old" }));
+    await writeFile(
+      path.join(stateDir, "daemon.json"),
+      JSON.stringify({ httpPort: 61_500, token: "old" }),
+    );
     const host = createLocalDeviceHost(harness.deps);
     await host.stopAgent();
     const stop = harness.commands.find((entry) => entry.args.includes("daemon"));
@@ -723,7 +799,10 @@ test("a healthy existing agent-device daemon is reused", async () => {
     async (harness) => {
       const stateDir = path.join(harness.baseDir, "agent-state");
       await mkdir(stateDir, { recursive: true });
-      await writeFile(path.join(stateDir, "daemon.json"), JSON.stringify({ httpPort: 61_500, token: "kept" }));
+      await writeFile(
+        path.join(stateDir, "daemon.json"),
+        JSON.stringify({ httpPort: 61_500, token: "kept" }),
+      );
       const host = createLocalDeviceHost(harness.deps);
       const ready = await host.ensureAgentReady();
       assert.equal(ready.agentDevice.baseUrl, "http://127.0.0.1:61500");
@@ -731,7 +810,10 @@ test("a healthy existing agent-device daemon is reused", async () => {
       await host.stop();
     },
     {
-      fetch: async (url) => ({ ok: true, status: url.includes("61500/health") || url.endsWith("/readyz") ? 200 : 404 }),
+      fetch: async (url) => ({
+        ok: true,
+        status: url.includes("61500/health") || url.endsWith("/readyz") ? 200 : 404,
+      }),
     },
   );
 });
@@ -767,25 +849,53 @@ const COMPLETE_SDK = [
 ];
 
 test("the Android SDK is found from ANDROID_HOME, Android Studio's default, or the adb on PATH", async () => {
-  const explicit = await findAndroidSdk({ env: { ANDROID_HOME: "/opt/sdk", HOME: "/Users/me" }, ...fakeFs(COMPLETE_SDK) });
+  const explicit = await findAndroidSdk({
+    env: { ANDROID_HOME: "/opt/sdk", HOME: "/Users/me" },
+    ...fakeFs(COMPLETE_SDK),
+  });
   // An explicit ANDROID_HOME wins even when it is incomplete, so the reason names that folder.
-  assert.deepEqual(explicit, { root: "/opt/sdk", adb: false, emulator: false, avdmanager: false, legacyAvdmanager: false });
-  assert.match(androidUnavailableReason(explicit) ?? "", /Platform-Tools are missing from \/opt\/sdk/u);
+  assert.deepEqual(explicit, {
+    root: "/opt/sdk",
+    adb: false,
+    emulator: false,
+    avdmanager: false,
+    legacyAvdmanager: false,
+  });
+  assert.match(
+    androidUnavailableReason(explicit) ?? "",
+    /Platform-Tools are missing from \/opt\/sdk/u,
+  );
 
-  const studio = await findAndroidSdk({ env: { HOME: "/Users/me", PATH: "/usr/bin" }, ...fakeFs(COMPLETE_SDK) });
+  const studio = await findAndroidSdk({
+    env: { HOME: "/Users/me", PATH: "/usr/bin" },
+    ...fakeFs(COMPLETE_SDK),
+  });
   assert.equal(studio.root, SDK);
   assert.equal(androidUnavailableReason(studio), null);
 
   const brew = await findAndroidSdk({
     env: { HOME: "/Users/me", PATH: "/usr/bin:/opt/homebrew/bin" },
-    ...fakeFs(["/opt/android/platform-tools/adb", "/opt/android/emulator/emulator", "/opt/android/tools/bin/avdmanager"], {
-      "/opt/homebrew/bin/adb": "/opt/android/platform-tools/adb",
-    }),
+    ...fakeFs(
+      [
+        "/opt/android/platform-tools/adb",
+        "/opt/android/emulator/emulator",
+        "/opt/android/tools/bin/avdmanager",
+      ],
+      {
+        "/opt/homebrew/bin/adb": "/opt/android/platform-tools/adb",
+      },
+    ),
   });
   assert.equal(brew.root, "/opt/android");
-  assert.match(androidUnavailableReason(brew) ?? "", /command-line tools in \/opt\/android are too old/u);
+  assert.match(
+    androidUnavailableReason(brew) ?? "",
+    /command-line tools in \/opt\/android are too old/u,
+  );
 
-  const none = await findAndroidSdk({ env: { HOME: "/Users/me", PATH: "/usr/bin" }, ...fakeFs([]) });
+  const none = await findAndroidSdk({
+    env: { HOME: "/Users/me", PATH: "/usr/bin" },
+    ...fakeFs([]),
+  });
   assert.equal(none.root, null);
   assert.equal(
     androidUnavailableReason(none),
@@ -806,48 +916,56 @@ test("the hub gets Android Studio's Java when JAVA_HOME is unset, so avdmanager 
       await host.ensureReady();
       const [spawned] = harness.spawns;
       assert.equal(spawned?.env.JAVA_HOME, jbr);
-      assert.ok(spawned?.env.PATH?.split(":").includes(`${jbr}/bin`), "java resolves from the bundled runtime");
+      assert.ok(
+        spawned?.env.PATH?.split(":").includes(`${jbr}/bin`),
+        "java resolves from the bundled runtime",
+      );
       await host.stop();
     },
     fakeFs([...COMPLETE_SDK, `${jbr}/bin/java`]),
   );
   // A Java the user chose is never replaced.
   assert.equal(
-    await findAndroidStudioJava({ env: { JAVA_HOME: "/opt/jdk", HOME: "/Users/me" }, ...fakeFs([`${jbr}/bin/java`]) }),
+    await findAndroidStudioJava({
+      env: { JAVA_HOME: "/opt/jdk", HOME: "/Users/me" },
+      ...fakeFs([`${jbr}/bin/java`]),
+    }),
     null,
   );
   assert.equal(
-    await findAndroidStudioJava({ env: { HOME: "/Users/me" }, ...fakeFs(["/Users/me/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/java"]) }),
+    await findAndroidStudioJava({
+      env: { HOME: "/Users/me" },
+      ...fakeFs(["/Users/me/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/java"]),
+    }),
     "/Users/me/Applications/Android Studio.app/Contents/jbr/Contents/Home",
   );
   assert.equal(await findAndroidStudioJava({ env: { HOME: "/Users/me" }, ...fakeFs([]) }), null);
 });
 
 test("a Mac with the Android SDK but no Xcode starts the hub with the SDK on its PATH", async () => {
-  await withHost(
-    async (harness) => {
-      const recorded = harness.deps.runCommand;
-      harness.deps.runCommand = async (command, args, options) =>
-        command === "xcrun"
-          ? { stdout: "", stderr: "xcode-select: error: tool 'xcrun' requires Xcode", code: 72 }
-          : recorded(command, args, options);
-      const host = createLocalDeviceHost(harness.deps);
-      assert.deepEqual(await host.platformAvailability("android"), { platform: "android", available: true });
-      assert.equal((await host.platformAvailability("ios")).available, false);
-      const ready = await host.ensureReady();
-      const [spawned] = harness.spawns;
-      assert.equal(spawned?.env.ANDROID_HOME, SDK);
-      assert.equal(spawned?.env.PATH, `/opt/node/bin:${SDK}/platform-tools:${SDK}/emulator:/usr/bin`);
-      // Host commands (adb, emulator) resolve against the same PATH.
-      await ready.run("adb", ["devices"]);
-      const adb = harness.commands.find((command) => command.command === "adb");
-      assert.equal(adb?.env.PATH, `/opt/node/bin:${SDK}/platform-tools:${SDK}/emulator:/usr/bin`);
-      await host.stop();
-    },
-    fakeFs(COMPLETE_SDK),
-  );
+  await withHost(async (harness) => {
+    const recorded = harness.deps.runCommand;
+    harness.deps.runCommand = async (command, args, options) =>
+      command === "xcrun"
+        ? { stdout: "", stderr: "xcode-select: error: tool 'xcrun' requires Xcode", code: 72 }
+        : recorded(command, args, options);
+    const host = createLocalDeviceHost(harness.deps);
+    assert.deepEqual(await host.platformAvailability("android"), {
+      platform: "android",
+      available: true,
+    });
+    assert.equal((await host.platformAvailability("ios")).available, false);
+    const ready = await host.ensureReady();
+    const [spawned] = harness.spawns;
+    assert.equal(spawned?.env.ANDROID_HOME, SDK);
+    assert.equal(spawned?.env.PATH, `/opt/node/bin:${SDK}/platform-tools:${SDK}/emulator:/usr/bin`);
+    // Host commands (adb, emulator) resolve against the same PATH.
+    await ready.run("adb", ["devices"]);
+    const adb = harness.commands.find((command) => command.command === "adb");
+    assert.equal(adb?.env.PATH, `/opt/node/bin:${SDK}/platform-tools:${SDK}/emulator:/usr/bin`);
+    await host.stop();
+  }, fakeFs(COMPLETE_SDK));
 });
-
 
 test("missing Node fails before install or spawn, and Retry discovers a newly installed runtime", async () => {
   await withHost(async (harness) => {
@@ -881,16 +999,21 @@ test("production defaults launch a real hub with standalone Node when the host e
     await writeFile(app, `#!/bin/sh\ntouch '${marker}'\nexit 0\n`);
     await chmod(app, 0o755);
     const entry = deviceToolPaths(baseDir, DEVICE_HUB).entryPath;
-    await writeFile(entry, `import { createServer } from 'node:http';
+    await writeFile(
+      entry,
+      `import { createServer } from 'node:http';
 createServer((req, res) => { res.end(JSON.stringify({node:process.execPath,electron:!!process.versions.electron,mode:process.env.ELECTRON_RUN_AS_NODE ?? null})); })
 .listen(Number(process.argv[process.argv.indexOf('--port')+1]), '127.0.0.1');
-`);
+`,
+    );
     let host: ReturnType<typeof createLocalDeviceHost> | undefined;
     const descriptor = Object.getOwnPropertyDescriptor(process, "execPath")!;
     try {
       Object.defineProperty(process, "execPath", { ...descriptor, value: app });
       const deps = defaultLocalDeviceHostDeps({
-        baseDir, platform: "darwin", resolveNpmRunner: async () => null,
+        baseDir,
+        platform: "darwin",
+        resolveNpmRunner: async () => null,
         env: { PATH: path.dirname(realNode), HOME: baseDir, ELECTRON_RUN_AS_NODE: "1" },
       });
       // Only platform discovery is stubbed; runtime resolution, spawn, HTTP readiness and cleanup are real.
@@ -912,8 +1035,11 @@ createServer((req, res) => { res.end(JSON.stringify({node:process.execPath,elect
 test("a runtime removed after resolution reports a startup failure without crashing the parent", async () => {
   await withHost(async ({ baseDir }) => {
     const deps = defaultLocalDeviceHostDeps({
-      baseDir, platform: "darwin", resolveNpmRunner: async () => null,
-      resolveNodePath: async () => path.join(baseDir, "removed-node"), env: { HOME: baseDir },
+      baseDir,
+      platform: "darwin",
+      resolveNpmRunner: async () => null,
+      resolveNodePath: async () => path.join(baseDir, "removed-node"),
+      env: { HOME: baseDir },
     });
     deps.runCommand = async () => ({ code: 0, stdout: "usage: simctl", stderr: "" });
     deps.pathExists = async () => false;
@@ -925,32 +1051,54 @@ test("a runtime removed after resolution reports a startup failure without crash
   });
 });
 
-
 test("missing Node after relaunch cannot block revocation or removal of leftover agent credentials", async () => {
   for (const action of ["agentAccess", "streaming", "remove"] as const) {
     await withHost(async ({ deps, baseDir }) => {
       await mkdir(path.join(baseDir, "agent-state"));
-      await writeFile(path.join(baseDir, "agent-state", "daemon.json"), JSON.stringify({ httpPort: 12345, token: "leftover" }));
+      await writeFile(
+        path.join(baseDir, "agent-state", "daemon.json"),
+        JSON.stringify({ httpPort: 12345, token: "leftover" }),
+      );
       await mkdir(path.join(baseDir, "hosts"));
-      await writeFile(path.join(baseDir, "hosts", "local.json"), JSON.stringify({ daemonAuthToken: "leftover" }));
-      await writeFile(path.join(baseDir, "consent.json"), JSON.stringify({ version: 1, streaming: true, agentAccess: true }));
-      deps.resolveNodePath = async () => { throw new DeviceNodeUnavailableError(); };
+      await writeFile(
+        path.join(baseDir, "hosts", "local.json"),
+        JSON.stringify({ daemonAuthToken: "leftover" }),
+      );
+      await writeFile(
+        path.join(baseDir, "consent.json"),
+        JSON.stringify({ version: 1, streaming: true, agentAccess: true }),
+      );
+      deps.resolveNodePath = async () => {
+        throw new DeviceNodeUnavailableError();
+      };
       const host = createLocalDeviceHost(deps);
       const service = createDeviceService({
-        baseDir, host,
-        startProxy: async () => { throw new Error("cleanup must not start a proxy"); },
-        fetch: async () => { throw new Error("cleanup must not contact the hub"); },
+        baseDir,
+        host,
+        startProxy: async () => {
+          throw new Error("cleanup must not start a proxy");
+        },
+        fetch: async () => {
+          throw new Error("cleanup must not contact the hub");
+        },
       });
       try {
-        const state = action === "remove" ? await service.removeTools() : await service.revokeConsent(action);
+        const state =
+          action === "remove" ? await service.removeTools() : await service.revokeConsent(action);
         assert.equal(state.consent.agentAccess, false);
         if (action !== "agentAccess") assert.equal(state.consent.streaming, false);
         const saved = JSON.parse(await readFile(path.join(baseDir, "consent.json"), "utf8"));
         assert.equal(saved.agentAccess, false);
-        await assert.rejects(readFile(path.join(baseDir, "hosts", "local.json")), { code: "ENOENT" });
+        await assert.rejects(readFile(path.join(baseDir, "hosts", "local.json")), {
+          code: "ENOENT",
+        });
         if (action === "remove") {
-          await assert.rejects(readFile(deviceToolPaths(baseDir, AGENT_DEVICE).sentinel), { code: "ENOENT" });
-          await assert.rejects(readFile(path.join(baseDir, "agent-state", "daemon.json")), { code: "ENOENT" });
+          await assert.rejects(readFile(deviceToolPaths(baseDir, AGENT_DEVICE).sentinel), {
+            code: "ENOENT",
+          });
+          await assert.rejects(readFile(path.join(baseDir, "agent-state", "daemon.json")), {
+            code: "ENOENT",
+          });
         }
       } finally {
         await service.stop();
@@ -960,7 +1108,10 @@ test("missing Node after relaunch cannot block revocation or removal of leftover
 });
 
 test("quit ends a helper command still running before its own timeout, and only running ones", async () => {
-  const finished = await runChildCommand(process.execPath, ["-e", ""], { env: process.env, timeoutMs: 60_000 });
+  const finished = await runChildCommand(process.execPath, ["-e", ""], {
+    env: process.env,
+    timeoutMs: 60_000,
+  });
   assert.equal(finished.code, 0);
   const startedAt = Date.now();
   const held = runChildCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
@@ -973,7 +1124,10 @@ test("quit ends a helper command still running before its own timeout, and only 
     assert.equal(terminateRunningDeviceCommands(), 1);
     const result = await held;
     assert.notEqual(result.code, 0);
-    assert.ok(Date.now() - startedAt < 10_000, "the held command ended long before its 60 s timeout");
+    assert.ok(
+      Date.now() - startedAt < 10_000,
+      "the held command ended long before its 60 s timeout",
+    );
     assert.equal(terminateRunningDeviceCommands(), 0);
   } finally {
     resetDeviceCommandCancellationForTests();
@@ -989,11 +1143,17 @@ test("after quit's deadline cleanup, a helper command the shutdown chain starts 
     // Stands in for the `daemon stop` that device-service reaches only after the recordings and SSH waits.
     const late = await runChildCommand(
       process.execPath,
-      ["-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran"); setInterval(() => {}, 1000)`],
+      [
+        "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran"); setInterval(() => {}, 1000)`,
+      ],
       { env: process.env, timeoutMs: 60_000 },
     );
     assert.notEqual(late.code, 0);
-    assert.ok(Date.now() - startedAt < 5_000, "the late command was refused rather than left running until its timeout");
+    assert.ok(
+      Date.now() - startedAt < 5_000,
+      "the late command was refused rather than left running until its timeout",
+    );
     // Wait past a process start so a spawned child would have written the marker.
     await new Promise((resolve) => setTimeout(resolve, 500));
     await assert.rejects(readFile(marker), { code: "ENOENT" });
@@ -1006,13 +1166,19 @@ test("after quit's deadline cleanup, a helper command the shutdown chain starts 
 
 /** A long-running process standing in for the agent-device daemon, its command line naming `script`. */
 async function startDaemonFixture(script: string) {
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", script], { stdio: "ignore" });
-  const exited = new Promise<NodeJS.Signals | null>((resolve) => child.once("exit", (_code, signal) => resolve(signal)));
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", script], {
+    stdio: "ignore",
+  });
+  const exited = new Promise<NodeJS.Signals | null>((resolve) =>
+    child.once("exit", (_code, signal) => resolve(signal)),
+  );
   await new Promise<void>((resolve, reject) => {
     child.once("spawn", () => resolve());
     child.once("error", reject);
   });
-  const startTime = execFileSync("/bin/ps", ["-p", String(child.pid), "-o", "lstart="], { encoding: "utf8" }).trim();
+  const startTime = execFileSync("/bin/ps", ["-p", String(child.pid), "-o", "lstart="], {
+    encoding: "utf8",
+  }).trim();
   return { child, pid: child.pid!, startTime, exited };
 }
 
@@ -1048,8 +1214,11 @@ test("after quit refuses `daemon stop`, the recorded daemon is still terminated,
       );
     const stopHost = async () => {
       const deps = defaultLocalDeviceHostDeps({
-        baseDir, platform: "darwin", resolveNpmRunner: async () => null,
-        resolveNodePath: async () => process.execPath, env: process.env,
+        baseDir,
+        platform: "darwin",
+        resolveNpmRunner: async () => null,
+        resolveNodePath: async () => process.execPath,
+        env: process.env,
       });
       await createLocalDeviceHost(deps).stop();
     };
@@ -1078,12 +1247,15 @@ test("after quit refuses `daemon stop`, the recorded daemon is still terminated,
       await stopHost();
       const ended = await Promise.race([
         daemon.exited,
-        new Promise<"still running">((resolve) => setTimeout(() => resolve("still running"), 5_000)),
+        new Promise<"still running">((resolve) =>
+          setTimeout(() => resolve("still running"), 5_000),
+        ),
       ]);
       assert.equal(ended, "SIGTERM", "the daemon ended at quit");
     } finally {
       resetDeviceCommandCancellationForTests();
-      for (const fixture of [daemon, stranger, reused, unrecorded, cli]) fixture.child.kill("SIGKILL");
+      for (const fixture of [daemon, stranger, reused, unrecorded, cli])
+        fixture.child.kill("SIGKILL");
     }
   });
 });

@@ -1,5 +1,9 @@
 // Installs happy-dom and the fake IPC bridge; must stay the first import.
-import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
+import {
+  emitBotTestNotification,
+  installBotTestIpc,
+  type BotTestIpcCall,
+} from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { afterEach, test } from "node:test";
@@ -9,7 +13,11 @@ import * as React from "react";
 import { Toaster } from "../components/ui";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
-import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
+import {
+  emptyDesignCanvas,
+  type DesignCanvas,
+  type DesignFrame,
+} from "../shared/design-canvas/schema";
 import { DesignCanvasRegion } from "./design-canvas-region";
 import { designFrameSnapshots } from "./frame-snapshots";
 import { designCommentTray, type DesignCommentSend } from "./comment-tray-store";
@@ -18,7 +26,8 @@ import { DESIGN_CANVAS_SAVE_DELAY_MS } from "./use-design-canvas";
 // The canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
 registerHooks({
   resolve(specifier, context, next) {
-    if (specifier.endsWith(".css")) return { url: "data:text/javascript,export%20default%20%7B%7D", shortCircuit: true };
+    if (specifier.endsWith(".css"))
+      return { url: "data:text/javascript,export%20default%20%7B%7D", shortCircuit: true };
     return next(specifier, context);
   },
 });
@@ -59,18 +68,33 @@ function setup(
 /** Every element measures as the 1000 x 800 canvas, so "the view" has a known centre. */
 function measureCanvasAt1000x800() {
   window.HTMLElement.prototype.getBoundingClientRect = function () {
-    return { x: 0, y: 0, top: 0, left: 0, width: 1000, height: 800, right: 1000, bottom: 800, toJSON: () => ({}) } as DOMRect;
+    return {
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      width: 1000,
+      height: 800,
+      right: 1000,
+      bottom: 800,
+      toJSON: () => ({}),
+    } as DOMRect;
   };
 }
 
 async function mount() {
   render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
       <DesignCanvasRegion chatId="chat-1" width={1000} placement="split" hidden={false} />
     </QueryClientProvider>,
   );
   // The landmark shows while the canvas loads; wait until the loaded canvas replaces the skeleton.
-  await waitFor(() => assert.equal(screen.queryByRole("status", { name: "Loading canvas" }) === null, true), SAVE_WAIT);
+  await waitFor(
+    () => assert.equal(screen.queryByRole("status", { name: "Loading canvas" }) === null, true),
+    SAVE_WAIT,
+  );
   const region = screen.getByRole("region", { name: "Design canvas" });
   // Let the grant and the first live-set pass land.
   await act(async () => {
@@ -132,10 +156,10 @@ test("Add → File… asks for a workspace page and frames the one chosen", asyn
   await mount();
   await chooseAdd("File…");
   await waitFor(() => assert.equal(saved()?.frames.length, 1), SAVE_WAIT);
-  assert.deepEqual(
-    calls.find((call) => call.channel === "designCanvas:pickFile")?.args,
-    ["chat-1", "file"],
-  );
+  assert.deepEqual(calls.find((call) => call.channel === "designCanvas:pickFile")?.args, [
+    "chat-1",
+    "file",
+  ]);
   const frame = saved()!.frames[0]!;
   assert.equal(frame.kind, "file");
   assert.equal(frame.path, "design/hero.html");
@@ -149,11 +173,25 @@ test("cancelling the file picker adds nothing", async () => {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 900));
   });
-  assert.equal(calls.some((call) => call.channel === "designCanvas:save"), false);
+  assert.equal(
+    calls.some((call) => call.channel === "designCanvas:save"),
+    false,
+  );
 });
 
 test("Delete removes the selected frame and Command-Z brings it back", async () => {
-  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 0, y: 0, w: 240, h: 160, text: "hello", pageId: "page-1", createdBy: "person" };
+  const sticky: DesignFrame = {
+    id: "n1",
+    kind: "note",
+    title: "Sticky",
+    x: 0,
+    y: 0,
+    w: 240,
+    h: 160,
+    text: "hello",
+    pageId: "page-1",
+    createdBy: "person",
+  };
   setup(canvasWith(sticky));
   const region = await mount();
   fireEvent.click(screen.getByRole("group", { name: "Sticky" }));
@@ -173,14 +211,27 @@ function ChatComposer() {
 }
 
 test("canvas keys with a printable character stay with the canvas instead of typing into the chat", async () => {
-  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 0, y: 0, w: 240, h: 160, text: "hello", pageId: "page-1", createdBy: "person" };
+  const sticky: DesignFrame = {
+    id: "n1",
+    kind: "note",
+    title: "Sticky",
+    x: 0,
+    y: 0,
+    w: 240,
+    h: 160,
+    text: "hello",
+    pageId: "page-1",
+    createdBy: "person",
+  };
   setup(canvasWith(sticky));
   render(<ChatComposer />);
   const composer = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
   // happy-dom lays nothing out; the composer counts as on screen, as it is in the app.
   composer.getClientRects = () => [new DOMRect(0, 0, 400, 40)] as unknown as DOMRectList;
   const region = await mount();
-  const frame = screen.getByRole("group", { name: "Sticky" }).closest<HTMLElement>(".react-flow__node")!;
+  const frame = screen
+    .getByRole("group", { name: "Sticky" })
+    .closest<HTMLElement>(".react-flow__node")!;
   fireEvent.click(frame);
   frame.focus();
 
@@ -193,11 +244,35 @@ test("canvas keys with a printable character stay with the canvas instead of typ
 });
 
 test("Enter on a selected page enters it, so the keyboard reaches what a double-click does", async () => {
-  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 640, h: 436, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
-  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 700, y: 0, w: 240, h: 160, text: "hello", pageId: "page-1", createdBy: "person" };
+  const hero: DesignFrame = {
+    id: "f1",
+    kind: "file",
+    title: "Hero",
+    x: 0,
+    y: 0,
+    w: 640,
+    h: 436,
+    path: "design/hero.html",
+    designWidth: 1280,
+    pageId: "page-1",
+    createdBy: "aiden",
+  };
+  const sticky: DesignFrame = {
+    id: "n1",
+    kind: "note",
+    title: "Sticky",
+    x: 700,
+    y: 0,
+    w: 240,
+    h: 160,
+    text: "hello",
+    pageId: "page-1",
+    createdBy: "person",
+  };
   setup(canvasWith(hero, sticky));
   const region = await mount();
-  const entered = () => document.querySelector("iframe")?.parentElement?.classList.contains("nodrag") === true;
+  const entered = () =>
+    document.querySelector("iframe")?.parentElement?.classList.contains("nodrag") === true;
 
   fireEvent.click(screen.getByRole("group", { name: "Sticky" }));
   region.focus();
@@ -208,7 +283,11 @@ test("Enter on a selected page enters it, so the keyboard reaches what a double-
   region.focus();
   fireEvent.keyDown(region, { key: "Enter", code: "Enter" });
   await waitFor(() => assert.equal(entered(), true));
-  assert.equal(document.querySelector("iframe")!.getAttribute("tabindex"), "0", "Tab now reaches the page");
+  assert.equal(
+    document.querySelector("iframe")!.getAttribute("tabindex"),
+    "0",
+    "Tab now reaches the page",
+  );
 });
 
 test("a change the app cannot save says so instead of failing silently", async () => {
@@ -220,11 +299,25 @@ test("a change the app cannot save says so instead of failing silently", async (
   render(<Toaster />);
   await mount();
   fireEvent.click(screen.getByRole("button", { name: "Note" }));
-  assert.ok(await screen.findByText("The canvas couldn't save your latest changes.", {}, SAVE_WAIT));
+  assert.ok(
+    await screen.findByText("The canvas couldn't save your latest changes.", {}, SAVE_WAIT),
+  );
 });
 
 test("Escape leaves an entered frame without leaving design mode", async () => {
-  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 640, h: 436, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const hero: DesignFrame = {
+    id: "f1",
+    kind: "file",
+    title: "Hero",
+    x: 0,
+    y: 0,
+    w: 640,
+    h: 436,
+    path: "design/hero.html",
+    designWidth: 1280,
+    pageId: "page-1",
+    createdBy: "aiden",
+  };
   const { calls } = setup(canvasWith(hero));
   const region = await mount();
   fireEvent.doubleClick(screen.getByRole("group", { name: "Hero" }));
@@ -233,7 +326,11 @@ test("Escape leaves an entered frame without leaving design mode", async () => {
     assert.ok(element);
     return element;
   });
-  assert.equal(iframe.parentElement!.classList.contains("nodrag"), true, "entered: the page takes the pointer");
+  assert.equal(
+    iframe.parentElement!.classList.contains("nodrag"),
+    true,
+    "entered: the page takes the pointer",
+  );
 
   region.focus();
   fireEvent.keyDown(region, { key: "Escape", code: "Escape" });
@@ -241,13 +338,39 @@ test("Escape leaves an entered frame without leaving design mode", async () => {
     const element = document.querySelector("iframe");
     assert.equal(element === null || !element.parentElement!.classList.contains("nodrag"), true);
   });
-  assert.equal(calls.some((call) => call.channel === "chats:setDesignMode"), false);
+  assert.equal(
+    calls.some((call) => call.channel === "chats:setDesignMode"),
+    false,
+  );
   assert.ok(screen.getByRole("region", { name: "Design canvas" }), "the canvas is still open");
 });
 
 test("the canvas watches its pages and reloads one when its file changes", async () => {
-  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 640, h: 436, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
-  const pic: DesignFrame = { id: "i1", kind: "image", title: "Logo", x: 700, y: 0, w: 200, h: 200, path: "assets/logo.png", pageId: "page-1", createdBy: "person" };
+  const hero: DesignFrame = {
+    id: "f1",
+    kind: "file",
+    title: "Hero",
+    x: 0,
+    y: 0,
+    w: 640,
+    h: 436,
+    path: "design/hero.html",
+    designWidth: 1280,
+    pageId: "page-1",
+    createdBy: "aiden",
+  };
+  const pic: DesignFrame = {
+    id: "i1",
+    kind: "image",
+    title: "Logo",
+    x: 700,
+    y: 0,
+    w: 200,
+    h: 200,
+    path: "assets/logo.png",
+    pageId: "page-1",
+    createdBy: "person",
+  };
   const { calls } = setup(canvasWith(hero, pic));
   await mount();
   await waitFor(() =>
@@ -260,9 +383,23 @@ test("the canvas watches its pages and reloads one when its file changes", async
   const src = () => document.querySelector("iframe")?.getAttribute("src");
   await waitFor(() => assert.equal(src(), `aiden-design://${GRANT}/design/hero.html`));
 
-  act(() => emitBotTestNotification("designCanvas:filesChanged", { chatId: "chat-2", paths: ["design/hero.html"] }));
-  assert.equal(src(), `aiden-design://${GRANT}/design/hero.html`, "another chat's change is not ours");
-  act(() => emitBotTestNotification("designCanvas:filesChanged", { chatId: "chat-1", paths: ["design/hero.html"] }));
+  act(() =>
+    emitBotTestNotification("designCanvas:filesChanged", {
+      chatId: "chat-2",
+      paths: ["design/hero.html"],
+    }),
+  );
+  assert.equal(
+    src(),
+    `aiden-design://${GRANT}/design/hero.html`,
+    "another chat's change is not ours",
+  );
+  act(() =>
+    emitBotTestNotification("designCanvas:filesChanged", {
+      chatId: "chat-1",
+      paths: ["design/hero.html"],
+    }),
+  );
   await waitFor(() => assert.equal(src(), `aiden-design://${GRANT}/design/hero.html?v=1`));
   assert.equal(
     screen.getByRole("img", { name: "Logo" }).getAttribute("src"),
@@ -274,12 +411,27 @@ test("the canvas watches its pages and reloads one when its file changes", async
 test("a text edit written to a file shown twice reloads only the other frame", async () => {
   // Two frames of one file, as ⌘D or Duplicate page leaves them.
   measureCanvasAt1000x800();
-  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 300, h: 300, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const hero: DesignFrame = {
+    id: "f1",
+    kind: "file",
+    title: "Hero",
+    x: 0,
+    y: 0,
+    w: 300,
+    h: 300,
+    path: "design/hero.html",
+    designWidth: 1280,
+    pageId: "page-1",
+    createdBy: "aiden",
+  };
   const copy: DesignFrame = { ...hero, id: "f2", title: "Hero copy", x: 400 };
-  const { calls } = setup(canvasWith(hero, copy), { "designCanvas:editText": () => ({ ok: true }) });
+  const { calls } = setup(canvasWith(hero, copy), {
+    "designCanvas:editText": () => ({ ok: true }),
+  });
   await mount();
   fireEvent.doubleClick(screen.getByRole("group", { name: "Hero" }));
-  const frame = (id: string) => document.querySelector<HTMLIFrameElement>(`iframe[data-frame-id="${id}"]`);
+  const frame = (id: string) =>
+    document.querySelector<HTMLIFrameElement>(`iframe[data-frame-id="${id}"]`);
   await waitFor(() => {
     assert.equal(frame("f1")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html`);
     assert.equal(frame("f2")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html`);
@@ -305,13 +457,32 @@ test("a text edit written to a file shown twice reloads only the other frame", a
       }),
     );
   });
-  await waitFor(() => assert.equal(frame("f2")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html?v=1`), SAVE_WAIT);
-  assert.deepEqual(calls.find((call) => call.channel === "designCanvas:editText")?.args.slice(0, 2), ["chat-1", "f1"]);
+  await waitFor(
+    () =>
+      assert.equal(
+        frame("f2")?.getAttribute("src"),
+        `aiden-design://${GRANT}/design/hero.html?v=1`,
+      ),
+    SAVE_WAIT,
+  );
+  assert.deepEqual(
+    calls.find((call) => call.channel === "designCanvas:editText")?.args.slice(0, 2),
+    ["chat-1", "f1"],
+  );
   assert.equal(frame("f1"), edited, "the frame being edited is not replaced");
-  assert.equal(edited.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html`, "and keeps the page it shows");
+  assert.equal(
+    edited.getAttribute("src"),
+    `aiden-design://${GRANT}/design/hero.html`,
+    "and keeps the page it shows",
+  );
 
   // A later change of the file reloads both frames.
-  act(() => emitBotTestNotification("designCanvas:filesChanged", { chatId: "chat-1", paths: ["design/hero.html"] }));
+  act(() =>
+    emitBotTestNotification("designCanvas:filesChanged", {
+      chatId: "chat-1",
+      paths: ["design/hero.html"],
+    }),
+  );
   await waitFor(() => {
     assert.equal(frame("f1")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html?v=2`);
     assert.equal(frame("f2")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html?v=2`);
@@ -322,23 +493,41 @@ test("a page edited in place does not show its picture from before the edit once
   measureCanvasAt1000x800();
   // A small page and six larger ones: only six frames run a real page, so the
   // small one shows its snapshot unless it is entered.
-  const edited: DesignFrame = { id: "kept-1", kind: "file", title: "Hero", x: 0, y: 600, w: 100, h: 100, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
-  const others = Array.from({ length: 6 }, (_, index): DesignFrame => ({
-    ...edited,
-    id: `other-${index}`,
-    title: `Other ${index}`,
-    path: `design/other-${index}.html`,
-    x: (index % 3) * 320,
-    y: Math.floor(index / 3) * 260,
-    w: 300,
-    h: 240,
-  }));
+  const edited: DesignFrame = {
+    id: "kept-1",
+    kind: "file",
+    title: "Hero",
+    x: 0,
+    y: 600,
+    w: 100,
+    h: 100,
+    path: "design/hero.html",
+    designWidth: 1280,
+    pageId: "page-1",
+    createdBy: "aiden",
+  };
+  const others = Array.from(
+    { length: 6 },
+    (_, index): DesignFrame => ({
+      ...edited,
+      id: `other-${index}`,
+      title: `Other ${index}`,
+      path: `design/other-${index}.html`,
+      x: (index % 3) * 320,
+      y: Math.floor(index / 3) * 260,
+      w: 300,
+      h: 240,
+    }),
+  );
   const before = "data:image/png;base64,QkVGT1JF";
   // Taken when the page last left the live set, before the edit.
   designFrameSnapshots.set("kept-1", 0, before);
-  const { calls } = setup(canvasWith(edited, ...others), { "designCanvas:editText": () => ({ ok: true }) });
+  const { calls } = setup(canvasWith(edited, ...others), {
+    "designCanvas:editText": () => ({ ok: true }),
+  });
   const region = await mount();
-  const picture = () => screen.getByRole("group", { name: "Hero" }).querySelector("img")?.getAttribute("src") ?? null;
+  const picture = () =>
+    screen.getByRole("group", { name: "Hero" }).querySelector("img")?.getAttribute("src") ?? null;
   await waitFor(() => assert.equal(picture(), before));
 
   fireEvent.doubleClick(screen.getByRole("group", { name: "Hero" }));
@@ -365,7 +554,14 @@ test("a page edited in place does not show its picture from before the edit once
       }),
     );
   });
-  await waitFor(() => assert.equal(calls.some((call) => call.channel === "designCanvas:editText"), true), SAVE_WAIT);
+  await waitFor(
+    () =>
+      assert.equal(
+        calls.some((call) => call.channel === "designCanvas:editText"),
+        true,
+      ),
+    SAVE_WAIT,
+  );
   // The rest of the write is promise callbacks, all run before the next task.
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -378,19 +574,43 @@ test("a page edited in place does not show its picture from before the edit once
   // Compared as a boolean: a failed strict assert on the element itself diffs
   // happy-dom's whole inspected iframe against null, which takes long enough
   // that waitFor's interval and timeout never get to run.
-  await waitFor(() => assert.equal(document.querySelector('iframe[data-frame-id="kept-1"]') === null, true, "the page left the live set"), SAVE_WAIT);
+  await waitFor(
+    () =>
+      assert.equal(
+        document.querySelector('iframe[data-frame-id="kept-1"]') === null,
+        true,
+        "the page left the live set",
+      ),
+    SAVE_WAIT,
+  );
   // Its capture as it left came back empty, so it has no picture of the edited page yet.
   const hero = screen.getByRole("group", { name: "Hero" });
   assert.equal(picture(), null, "the picture from before the edit is gone");
-  assert.ok(within(hero).getByRole("img", { name: "Hero" }), "the frame shows its skeleton instead");
+  assert.ok(
+    within(hero).getByRole("img", { name: "Hero" }),
+    "the frame shows its skeleton instead",
+  );
 
   // Live again, it runs the page, which shows the edit.
   fireEvent.doubleClick(hero);
-  await waitFor(() => assert.equal(document.querySelector('iframe[data-frame-id="kept-1"]') === null, false));
+  await waitFor(() =>
+    assert.equal(document.querySelector('iframe[data-frame-id="kept-1"]') === null, false),
+  );
 });
 
 test("a visual Aiden draws again under the same title replaces the one in its frame", async () => {
-  const chart: DesignFrame = { id: "a1", kind: "artifact", title: "Chart", x: 0, y: 0, w: 640, h: 480, mediaId: "m1", pageId: "page-1", createdBy: "aiden" };
+  const chart: DesignFrame = {
+    id: "a1",
+    kind: "artifact",
+    title: "Chart",
+    x: 0,
+    y: 0,
+    w: 640,
+    h: 480,
+    mediaId: "m1",
+    pageId: "page-1",
+    createdBy: "aiden",
+  };
   let doc = canvasWith(chart);
   const { calls } = setup(doc, {
     "designCanvas:get": () => doc,
@@ -409,7 +629,9 @@ test("a visual Aiden draws again under the same title replaces the one in its fr
   act(() => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 2 }));
   await waitFor(() => assert.equal(src(), "aiden-genui://preview/m2"), SAVE_WAIT);
   assert.deepEqual(
-    calls.filter((call) => call.channel === "chats:htmlArtifactSrcdoc").map((call) => (call.args[0] as { mediaId: string }).mediaId),
+    calls
+      .filter((call) => call.channel === "chats:htmlArtifactSrcdoc")
+      .map((call) => (call.args[0] as { mediaId: string }).mediaId),
     ["m1", "m2"],
   );
 });
@@ -421,19 +643,36 @@ test("Aiden's snapshot request is answered with a picture of the canvas region, 
     "designCanvas:snapshotAnswer": () => true,
   });
   await mount();
-  act(() => emitBotTestNotification("designCanvas:snapshot", { requestId: "s0", chatId: "chat-2" }));
-  act(() => emitBotTestNotification("designCanvas:snapshot", { requestId: "s1", chatId: "chat-1" }));
+  act(() =>
+    emitBotTestNotification("designCanvas:snapshot", { requestId: "s0", chatId: "chat-2" }),
+  );
+  act(() =>
+    emitBotTestNotification("designCanvas:snapshot", { requestId: "s1", chatId: "chat-1" }),
+  );
   await waitFor(() =>
     assert.deepEqual(
-      calls.filter((call) => call.channel === "designCanvas:snapshotAnswer").map((call) => call.args),
+      calls
+        .filter((call) => call.channel === "designCanvas:snapshotAnswer")
+        .map((call) => call.args),
       [["s1", "data:image/png;base64,iVBORw0KGgo="]],
     ),
   );
-  assert.deepEqual(calls.find((call) => call.channel === "designCanvas:capture")?.args, [{ x: 0, y: 0, width: 1000, height: 800 }]);
+  assert.deepEqual(calls.find((call) => call.channel === "designCanvas:capture")?.args, [
+    { x: 0, y: 0, width: 1000, height: 800 },
+  ]);
 });
 
 const sticky = (id: string, title: string, pageId = "page-1"): DesignFrame => ({
-  id, kind: "note", title, x: 0, y: 0, w: 240, h: 160, text: "", pageId, createdBy: "person",
+  id,
+  kind: "note",
+  title,
+  x: 0,
+  y: 0,
+  w: 240,
+  h: 160,
+  text: "",
+  pageId,
+  createdBy: "person",
 });
 
 function twoPageCanvas(): DesignCanvas {
@@ -467,14 +706,27 @@ test("a new page starts empty and is shown; deleting it can be undone from the t
   await choosePageItem("New page");
   assert.ok(await screen.findByRole("button", { name: "Page: Page 2" }));
   assert.equal(screen.queryByRole("group", { name: "On home" }), null);
-  await waitFor(() => assert.deepEqual(saved()?.pages.map((page) => page.name), ["Page 1", "Page 2"]), SAVE_WAIT);
+  await waitFor(
+    () =>
+      assert.deepEqual(
+        saved()?.pages.map((page) => page.name),
+        ["Page 1", "Page 2"],
+      ),
+    SAVE_WAIT,
+  );
 
   await choosePageItem("Page 1", "menuitemradio");
   assert.ok(await screen.findByRole("group", { name: "On home" }));
   await choosePageItem("Delete page");
-  assert.ok(await screen.findByRole("button", { name: "Page: Page 2" }), "the page after it is shown");
+  assert.ok(
+    await screen.findByRole("button", { name: "Page: Page 2" }),
+    "the page after it is shown",
+  );
   fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
-  assert.ok(await screen.findByRole("group", { name: "On home" }), "the page and its note are back");
+  assert.ok(
+    await screen.findByRole("group", { name: "On home" }),
+    "the page and its note are back",
+  );
   assert.ok(screen.getByRole("button", { name: "Page: Page 1" }));
 });
 
@@ -518,24 +770,39 @@ test("the comment tool drops a pin on the canvas, and a saved comment waits in t
   const region = await mount();
   region.focus();
   fireEvent.keyDown(region, { key: "c", code: "KeyC" });
-  assert.equal(screen.getByRole("button", { name: "Comment" }).getAttribute("aria-pressed"), "true", "C turns on the comment tool");
+  assert.equal(
+    screen.getByRole("button", { name: "Comment" }).getAttribute("aria-pressed"),
+    "true",
+    "C turns on the comment tool",
+  );
 
   fireEvent.click(document.querySelector(".react-flow__pane")!, { clientX: 300, clientY: 200 });
   const box = await screen.findByRole("dialog", { name: "New comment" });
   assert.ok(box.textContent?.includes("Canvas"), "the box says what the comment is attached to");
   const field = screen.getByRole("textbox", { name: "Comment" });
   assert.equal(document.activeElement, field);
-  assert.equal((screen.getByRole("checkbox", { name: "Send to Aiden" }) as HTMLElement).getAttribute("aria-checked"), "true");
+  assert.equal(
+    (screen.getByRole("checkbox", { name: "Send to Aiden" }) as HTMLElement).getAttribute(
+      "aria-checked",
+    ),
+    "true",
+  );
   fireEvent.change(field, { target: { value: "Add a footer here" } });
   fireEvent.keyDown(field, { key: "Enter", code: "Enter" });
 
   await waitFor(() => assert.equal(saved()?.comments.length, 1), SAVE_WAIT);
   const comment = saved()!.comments[0]!;
-  assert.deepEqual([comment.x, comment.y, comment.note, comment.queued, comment.frameId], [300, 200, "Add a footer here", true, undefined]);
+  assert.deepEqual(
+    [comment.x, comment.y, comment.note, comment.queued, comment.frameId],
+    [300, 200, "Add a footer here", true, undefined],
+  );
   assert.ok(await screen.findByRole("button", { name: "Comment 1 on Canvas" }));
 
   const tray = designCommentTray("chat-1");
-  assert.deepEqual(tray?.comments.map((entry) => [entry.label, entry.note]), [["Canvas", "Add a footer here"]]);
+  assert.deepEqual(
+    tray?.comments.map((entry) => [entry.label, entry.note]),
+    [["Canvas", "Add a footer here"]],
+  );
   assert.match(tray!.block(), /"note": "Add a footer here"/u);
 
   let send: DesignCommentSend | null | undefined;
@@ -549,10 +816,17 @@ test("the comment tool drops a pin on the canvas, and a saved comment waits in t
 
   // The send then fails: the comment waits in the tray again.
   act(() => send!.undo());
-  assert.deepEqual(designCommentTray("chat-1")?.comments.map((entry) => entry.note), ["Add a footer here"]);
-  await waitFor(() => assert.deepEqual([saved()?.comments[0]?.state, saved()?.comments[0]?.queued], ["open", true]), {
-    timeout: DESIGN_CANVAS_SAVE_DELAY_MS / 2,
-  });
+  assert.deepEqual(
+    designCommentTray("chat-1")?.comments.map((entry) => entry.note),
+    ["Add a footer here"],
+  );
+  await waitFor(
+    () =>
+      assert.deepEqual([saved()?.comments[0]?.state, saved()?.comments[0]?.queued], ["open", true]),
+    {
+      timeout: DESIGN_CANVAS_SAVE_DELAY_MS / 2,
+    },
+  );
   assert.ok(await screen.findByRole("button", { name: "Comment 1 on Canvas" }));
 });
 
@@ -561,7 +835,10 @@ test("when the canvas can't save a comment as sent, the comment stays in the tra
   let revision = 1;
   let refuse = false;
   const { saved } = setup(canvasWith(), {
-    "designCanvas:save": () => (refuse ? { ok: false, reason: "invalid", issues: ["too big"] } : { ok: true, revision: (revision += 1) }),
+    "designCanvas:save": () =>
+      refuse
+        ? { ok: false, reason: "invalid", issues: ["too big"] }
+        : { ok: true, revision: (revision += 1) },
   });
   const region = await mount();
   region.focus();
@@ -585,24 +862,46 @@ test("when the canvas can't save a comment as sent, the comment stays in the tra
     ["Add a footer here"],
     "the comment waits in the tray for the next try",
   );
-  assert.ok(await screen.findByRole("button", { name: "Comment 1 on Canvas" }), "and is not shown as sent");
+  assert.ok(
+    await screen.findByRole("button", { name: "Comment 1 on Canvas" }),
+    "and is not shown as sent",
+  );
 });
 
 test("a comment on a frame keeps its spot on the frame; with Send to Aiden off it stays a comment", async () => {
   measureCanvasAt1000x800();
-  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 100, y: 100, w: 240, h: 160, text: "hello", pageId: "page-1", createdBy: "person" };
+  const sticky: DesignFrame = {
+    id: "n1",
+    kind: "note",
+    title: "Sticky",
+    x: 100,
+    y: 100,
+    w: 240,
+    h: 160,
+    text: "hello",
+    pageId: "page-1",
+    createdBy: "person",
+  };
   const { saved } = setup(canvasWith(sticky));
   await mount();
   fireEvent.click(screen.getByRole("button", { name: "Comment" }));
-  fireEvent.click(screen.getByRole("group", { name: "Sticky" }).closest(".react-flow__node")!, { clientX: 140, clientY: 150 });
+  fireEvent.click(screen.getByRole("group", { name: "Sticky" }).closest(".react-flow__node")!, {
+    clientX: 140,
+    clientY: 150,
+  });
   await screen.findByRole("dialog", { name: "New comment" });
   fireEvent.click(screen.getByRole("checkbox", { name: "Send to Aiden" }));
-  fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Shorter" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), {
+    target: { value: "Shorter" },
+  });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
   await waitFor(() => assert.equal(saved()?.comments.length, 1), SAVE_WAIT);
   const comment = saved()!.comments[0]!;
-  assert.deepEqual([comment.frameId, comment.x, comment.y, comment.queued], ["n1", 40, 50, undefined]);
+  assert.deepEqual(
+    [comment.frameId, comment.x, comment.y, comment.queued],
+    ["n1", 40, 50, undefined],
+  );
   assert.equal(designCommentTray("chat-1"), null);
 
   // Opening it again shows the note; Escape closes the box, a second Escape leaves the tool.
@@ -614,16 +913,41 @@ test("a comment on a frame keeps its spot on the frame; with Send to Aiden off i
 });
 
 test("removing a frame removes its comments, and undo brings both back", async () => {
-  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 0, y: 0, w: 240, h: 160, text: "hello", pageId: "page-1", createdBy: "person" };
+  const sticky: DesignFrame = {
+    id: "n1",
+    kind: "note",
+    title: "Sticky",
+    x: 0,
+    y: 0,
+    w: 240,
+    h: 160,
+    text: "hello",
+    pageId: "page-1",
+    createdBy: "person",
+  };
   const doc = canvasWith(sticky);
-  doc.comments = [{ id: "c1", pageId: "page-1", frameId: "n1", x: 10, y: 10, note: "Bigger", state: "open", anchorState: "anchored", createdAt: "2026-11-05T10:00:00.000Z" }];
+  doc.comments = [
+    {
+      id: "c1",
+      pageId: "page-1",
+      frameId: "n1",
+      x: 10,
+      y: 10,
+      note: "Bigger",
+      state: "open",
+      anchorState: "anchored",
+      createdAt: "2026-11-05T10:00:00.000Z",
+    },
+  ];
   setup(doc);
   const region = await mount();
   assert.ok(screen.getByRole("button", { name: "Comment 1 on Sticky" }));
   fireEvent.click(screen.getByRole("group", { name: "Sticky" }));
   region.focus();
   fireEvent.keyDown(region, { key: "Delete", code: "Delete" });
-  await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Comment 1 on Sticky" }), null));
+  await waitFor(() =>
+    assert.equal(screen.queryByRole("button", { name: "Comment 1 on Sticky" }), null),
+  );
   fireEvent.keyDown(region, { key: "z", code: "KeyZ", ...commandKey });
   assert.ok(await screen.findByRole("button", { name: "Comment 1 on Sticky" }));
 });
@@ -634,16 +958,48 @@ test("All comments lists comments by state, and choosing one shows its page and 
   doc.pages = [...doc.pages, { id: "p2", name: "Pricing", viewport: { x: 0, y: 0, zoom: 1 } }];
   const at = "2026-11-05T10:00:00.000Z";
   doc.comments = [
-    { id: "c1", pageId: "page-1", x: 10, y: 10, note: "Warmer colours", state: "open", anchorState: "anchored", createdAt: at },
-    { id: "c2", pageId: "p2", x: 40, y: 40, note: "Show yearly prices", state: "open", anchorState: "anchored", createdAt: "2026-11-05T11:00:00.000Z", reply: { text: "Should yearly be the default?", at } },
-    { id: "c3", pageId: "page-1", x: 0, y: 0, note: "Done already", state: "resolved", anchorState: "anchored", createdAt: at, resolvedAt: at },
+    {
+      id: "c1",
+      pageId: "page-1",
+      x: 10,
+      y: 10,
+      note: "Warmer colours",
+      state: "open",
+      anchorState: "anchored",
+      createdAt: at,
+    },
+    {
+      id: "c2",
+      pageId: "p2",
+      x: 40,
+      y: 40,
+      note: "Show yearly prices",
+      state: "open",
+      anchorState: "anchored",
+      createdAt: "2026-11-05T11:00:00.000Z",
+      reply: { text: "Should yearly be the default?", at },
+    },
+    {
+      id: "c3",
+      pageId: "page-1",
+      x: 0,
+      y: 0,
+      note: "Done already",
+      state: "resolved",
+      anchorState: "anchored",
+      createdAt: at,
+      resolvedAt: at,
+    },
   ];
   const { saved } = setup(doc);
   await mount();
   fireEvent.click(screen.getByRole("button", { name: "All comments, 2 open" }));
   const panel = await screen.findByRole("dialog", { name: "All comments" });
   assert.ok(panel.textContent?.includes("Warmer colours"));
-  assert.ok(panel.textContent?.includes("Pricing · Canvas"), "with several pages each comment names its page");
+  assert.ok(
+    panel.textContent?.includes("Pricing · Canvas"),
+    "with several pages each comment names its page",
+  );
   assert.equal(panel.textContent?.includes("Done already"), false);
   fireEvent.click(screen.getByRole("radio", { name: "Resolved" }));
   assert.ok(panel.textContent?.includes("Done already"));
@@ -652,17 +1008,39 @@ test("All comments lists comments by state, and choosing one shows its page and 
   fireEvent.click(screen.getByRole("button", { name: /Show yearly prices/u }));
   await waitFor(() => assert.equal(saved()?.activePageId, "p2"), SAVE_WAIT);
   const box = await screen.findByRole("dialog", { name: "Comment" });
-  assert.equal((screen.getByRole("textbox", { name: "Comment" }) as HTMLTextAreaElement).value, "Show yearly prices");
-  assert.ok(within(box).getByRole("region", { name: "Aiden's reply" }).textContent?.includes("Should yearly be the default?"), "Aiden's reply shows under the note");
+  assert.equal(
+    (screen.getByRole("textbox", { name: "Comment" }) as HTMLTextAreaElement).value,
+    "Show yearly prices",
+  );
+  assert.ok(
+    within(box)
+      .getByRole("region", { name: "Aiden's reply" })
+      .textContent?.includes("Should yearly be the default?"),
+    "Aiden's reply shows under the note",
+  );
 });
 
 test("the pen in the comment box draws marks over a frame, saved as fractions of it", async () => {
   measureCanvasAt1000x800();
-  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 100, y: 100, w: 200, h: 100, text: "hello", pageId: "page-1", createdBy: "person" };
+  const sticky: DesignFrame = {
+    id: "n1",
+    kind: "note",
+    title: "Sticky",
+    x: 100,
+    y: 100,
+    w: 200,
+    h: 100,
+    text: "hello",
+    pageId: "page-1",
+    createdBy: "person",
+  };
   const { saved } = setup(canvasWith(sticky));
   await mount();
   fireEvent.click(screen.getByRole("button", { name: "Comment" }));
-  fireEvent.click(screen.getByRole("group", { name: "Sticky" }).closest(".react-flow__node")!, { clientX: 120, clientY: 120 });
+  fireEvent.click(screen.getByRole("group", { name: "Sticky" }).closest(".react-flow__node")!, {
+    clientX: 120,
+    clientY: 120,
+  });
   await screen.findByRole("dialog", { name: "New comment" });
   fireEvent.click(screen.getByRole("button", { name: "Draw marks" }));
   const surface = document.querySelector("[data-design-draw]")!;
@@ -671,17 +1049,30 @@ test("the pen in the comment box draws marks over a frame, saved as fractions of
   fireEvent.pointerMove(surface, { pointerId: 1, clientX: 300, clientY: 200 });
   fireEvent.pointerUp(surface, { pointerId: 1 });
   assert.ok(screen.getByRole("button", { name: "Clear marks" }));
-  fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Circle this" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), {
+    target: { value: "Circle this" },
+  });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
   await waitFor(() => assert.equal(saved()?.comments.length, 1), SAVE_WAIT);
-  assert.deepEqual(saved()!.comments[0]!.marks, [{ points: [[0, 0], [0.5, 0.5], [1, 1]] }]);
+  assert.deepEqual(saved()!.comments[0]!.marks, [
+    {
+      points: [
+        [0, 0],
+        [0.5, 0.5],
+        [1, 1],
+      ],
+    },
+  ]);
   assert.equal(document.querySelector("[data-design-draw]"), null, "saving puts the pen away");
 });
 
 test("the side panel opens again on the tab it was left on, Tweaks included", async () => {
   setup(canvasWith());
-  window.localStorage.setItem("aiden.design.sidePanel", JSON.stringify({ open: true, tab: "tweaks" }));
+  window.localStorage.setItem(
+    "aiden.design.sidePanel",
+    JSON.stringify({ open: true, tab: "tweaks" }),
+  );
   try {
     await mount();
     const tweaks = screen.getByRole("radio", { name: "Tweaks" });
@@ -693,7 +1084,19 @@ test("the side panel opens again on the tab it was left on, Tweaks included", as
 });
 
 test("while the canvas can't be saved, the Code tab says so instead of reading an older copy of the page", async () => {
-  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 640, h: 436, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const hero: DesignFrame = {
+    id: "f1",
+    kind: "file",
+    title: "Hero",
+    x: 0,
+    y: 0,
+    w: 640,
+    h: 436,
+    path: "design/hero.html",
+    designWidth: 1280,
+    pageId: "page-1",
+    createdBy: "aiden",
+  };
   const { calls } = setup(canvasWith(hero), {
     "designCanvas:save": () => {
       throw new Error("chat is gone");
@@ -701,15 +1104,29 @@ test("while the canvas can't be saved, the Code tab says so instead of reading a
     "designCanvas:source": () => ({ text: "<h1>Hero</h1>", truncated: false }),
   });
   render(<Toaster />);
-  window.localStorage.setItem("aiden.design.sidePanel", JSON.stringify({ open: true, tab: "code" }));
+  window.localStorage.setItem(
+    "aiden.design.sidePanel",
+    JSON.stringify({ open: true, tab: "code" }),
+  );
   try {
     await mount();
     fireEvent.click(screen.getByRole("button", { name: "Note" }));
-    assert.ok(await screen.findByText("The canvas couldn't save your latest changes.", {}, SAVE_WAIT));
+    assert.ok(
+      await screen.findByText("The canvas couldn't save your latest changes.", {}, SAVE_WAIT),
+    );
 
     fireEvent.click(screen.getByRole("group", { name: "Hero" }));
-    assert.ok(await screen.findByText("The canvas couldn't be saved, so the code can't be shown yet.", {}, SAVE_WAIT));
-    assert.equal(calls.some((call) => call.channel === "designCanvas:source"), false);
+    assert.ok(
+      await screen.findByText(
+        "The canvas couldn't be saved, so the code can't be shown yet.",
+        {},
+        SAVE_WAIT,
+      ),
+    );
+    assert.equal(
+      calls.some((call) => call.channel === "designCanvas:source"),
+      false,
+    );
   } finally {
     window.localStorage.removeItem("aiden.design.sidePanel");
   }

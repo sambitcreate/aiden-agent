@@ -43,7 +43,11 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 function formatDate(epochMs: number): string {
-  return new Date(epochMs).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  return new Date(epochMs).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 export interface AidenMcpStatusPresentation {
@@ -55,7 +59,10 @@ export interface AidenMcpStatusPresentation {
 }
 
 /** What the enable row says about the server. */
-export function aidenMcpStatusPresentation(status: AidenMcpServerStatusView, computer: LocalComputerNoun): AidenMcpStatusPresentation {
+export function aidenMcpStatusPresentation(
+  status: AidenMcpServerStatusView,
+  computer: LocalComputerNoun,
+): AidenMcpStatusPresentation {
   if (!status.enabled) {
     return {
       label: "Off",
@@ -89,7 +96,12 @@ export function aidenMcpStatusPresentation(status: AidenMcpServerStatusView, com
       detail: "Aiden couldn't start its MCP server. Try again, or turn it off and on.",
     };
   }
-  return { label: "Starting…", tone: "gray", canRetry: false, detail: "Aiden is starting its MCP server." };
+  return {
+    label: "Starting…",
+    tone: "gray",
+    canRetry: false,
+    detail: "Aiden is starting its MCP server.",
+  };
 }
 
 const ACCESS_CHOICES: ReadonlyArray<readonly [AidenMcpAccess, string]> = [
@@ -160,7 +172,9 @@ function AddAppDialog({
           />
         </label>
         <div className="flex flex-col gap-1.5">
-          <Text variant="small-strong" id="aiden-mcp-access-label">Access</Text>
+          <Text variant="small-strong" id="aiden-mcp-access-label">
+            Access
+          </Text>
           <RadioGroup
             orientation="vertical"
             aria-labelledby="aiden-mcp-access-label"
@@ -180,16 +194,22 @@ function AddAppDialog({
                 />
                 <span className="flex flex-col gap-1">
                   <Text>{AIDEN_MCP_ACCESS_LABELS[value]}</Text>
-                  <Text as="span" variant="small" color="secondary">{description}</Text>
+                  <Text as="span" variant="small" color="secondary">
+                    {description}
+                  </Text>
                 </span>
               </label>
             ))}
           </RadioGroup>
         </div>
         {tooLong ? (
-          <Text as="p" variant="small" color="status-red" role="alert">Give the app a name of up to {MAX_APP_NAME_LENGTH} characters.</Text>
+          <Text as="p" variant="small" color="status-red" role="alert">
+            Give the app a name of up to {MAX_APP_NAME_LENGTH} characters.
+          </Text>
         ) : failure ? (
-          <Text as="p" variant="small" color="status-red" role="alert">{failure}</Text>
+          <Text as="p" variant="small" color="status-red" role="alert">
+            {failure}
+          </Text>
         ) : null}
       </div>
     </Dialog>
@@ -199,7 +219,9 @@ function AddAppDialog({
 function CodeLine({ text, copyLabel }: { text: string; copyLabel: string }) {
   return (
     <div className="flex items-start gap-2 rounded-lg bg-control py-2 pl-3 pr-1.5">
-      <code className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-small text-primary">{text}</code>
+      <code className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-small text-primary">
+        {text}
+      </code>
       <CopyButton text={text} label={copyLabel} className="shrink-0" />
     </div>
   );
@@ -237,10 +259,16 @@ function CredentialDialog({
               <div key={snippet.id} className="flex flex-col gap-1.5">
                 <Text variant="small-strong">{snippet.client}</Text>
                 <Text as="p" variant="small" color="secondary">
-                  Set the token in the shell you start {snippet.client} from, or in your shell profile:
+                  Set the token in the shell you start {snippet.client} from, or in your shell
+                  profile:
                 </Text>
-                <CodeLine text={snippet.exportLine} copyLabel={`Copy the ${snippet.client} token line`} />
-                <Text as="p" variant="small" color="secondary">Then add Aiden. {snippet.client} reads the token from that variable:</Text>
+                <CodeLine
+                  text={snippet.exportLine}
+                  copyLabel={`Copy the ${snippet.client} token line`}
+                />
+                <Text as="p" variant="small" color="secondary">
+                  Then add Aiden. {snippet.client} reads the token from that variable:
+                </Text>
                 <CodeLine text={snippet.command} copyLabel={`Copy the ${snippet.client} command`} />
               </div>
             ))
@@ -269,13 +297,22 @@ export function AidenMcpAppRow({ app, onRevoke }: AidenMcpAppRowProps) {
     >
       <AppWindow className="size-4 shrink-0 text-secondary" aria-hidden="true" />
       <div className="min-w-0 flex-1">
-        <Text variant="small-strong" truncate className="block">{app.name}</Text>
+        <Text variant="small-strong" truncate className="block">
+          {app.name}
+        </Text>
         <Text variant="small" color="secondary" className="block">
           Added {formatDate(app.createdAt)} · {used}
         </Text>
       </div>
-      <Badge color={app.access === "supervised" ? "blue" : "gray"}>{AIDEN_MCP_ACCESS_LABELS[app.access]}</Badge>
-      <Button size="small" variant="transparent" onClick={onRevoke} aria-label={`Revoke ${app.name}`}>
+      <Badge color={app.access === "supervised" ? "blue" : "gray"}>
+        {AIDEN_MCP_ACCESS_LABELS[app.access]}
+      </Badge>
+      <Button
+        size="small"
+        variant="transparent"
+        onClick={onRevoke}
+        aria-label={`Revoke ${app.name}`}
+      >
         Revoke
       </Button>
     </div>
@@ -295,7 +332,9 @@ function AidenMcpSettingsView({ computer }: { computer: LocalComputerNoun }) {
   const apps = useQuery({ queryKey: aidenMcpQueryKeys.apps(), queryFn: aidenMcpApi.listApps });
   const [switching, setSwitching] = React.useState(false);
   const [adding, setAdding] = React.useState(false);
-  const [issued, setIssued] = React.useState<{ credential: string; app: AidenMcpAppView } | null>(null);
+  const [issued, setIssued] = React.useState<{ credential: string; app: AidenMcpAppView } | null>(
+    null,
+  );
   const [revoking, setRevoking] = React.useState<AidenMcpAppView | null>(null);
   const [revokeBusy, setRevokeBusy] = React.useState(false);
 
@@ -313,7 +352,12 @@ function AidenMcpSettingsView({ computer }: { computer: LocalComputerNoun }) {
       queryClient.setQueryData(aidenMcpQueryKeys.status(), await aidenMcpApi.setEnabled(enabled));
     } catch (error) {
       if (previous) queryClient.setQueryData(aidenMcpQueryKeys.status(), previous);
-      toast.error(errorMessage(error, enabled ? "Couldn't turn on the MCP server." : "Couldn't turn off the MCP server."));
+      toast.error(
+        errorMessage(
+          error,
+          enabled ? "Couldn't turn on the MCP server." : "Couldn't turn off the MCP server.",
+        ),
+      );
     } finally {
       setSwitching(false);
     }
@@ -343,7 +387,9 @@ function AidenMcpSettingsView({ computer }: { computer: LocalComputerNoun }) {
       <FieldSet title="Apps using Aiden">
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 p-4">
           <Text variant="small">Couldn't read the MCP server's status.</Text>
-          <Button size="small" disabled={status.isFetching} onClick={() => void status.refetch()}>Try again</Button>
+          <Button size="small" disabled={status.isFetching} onClick={() => void status.refetch()}>
+            Try again
+          </Button>
         </div>
       </FieldSet>
     );
@@ -370,7 +416,9 @@ function AidenMcpSettingsView({ computer }: { computer: LocalComputerNoun }) {
         {server.enabled && server.url ? (
           <Field label="Address" description={`Apps on this ${computer} connect here.`}>
             <div className="flex items-center justify-end gap-2 max-[540px]:justify-start">
-              <code className="min-w-0 truncate font-mono text-small text-secondary">{server.url}</code>
+              <code className="min-w-0 truncate font-mono text-small text-secondary">
+                {server.url}
+              </code>
               <CopyButton text={server.url} label="Copy address" />
             </div>
           </Field>
@@ -378,7 +426,12 @@ function AidenMcpSettingsView({ computer }: { computer: LocalComputerNoun }) {
         {presentation.canRetry ? (
           <Field label="Start again" description="Aiden tries the same port again.">
             <div className="flex justify-end max-[540px]:justify-start">
-              <Button size="small" variant="filled" disabled={switching} onClick={() => void setEnabled(true)}>
+              <Button
+                size="small"
+                variant="filled"
+                disabled={switching}
+                onClick={() => void setEnabled(true)}
+              >
                 <RotateCw /> Try again
               </Button>
             </div>
@@ -388,38 +441,52 @@ function AidenMcpSettingsView({ computer }: { computer: LocalComputerNoun }) {
 
       <FieldSet
         title="Apps"
-        action={(
+        action={
           // An app's token is shown only once, so Add app waits for the address its setup commands need.
-          <Button size="small" variant="accent" disabled={!server.url} onClick={() => setAdding(true)}>
+          <Button
+            size="small"
+            variant="accent"
+            disabled={!server.url}
+            onClick={() => setAdding(true)}
+          >
             <Plus /> Add app
           </Button>
-        )}
+        }
       >
         {apps.isLoading ? (
           <div className="p-4" role="status">
-            <Text variant="small" color="secondary">Loading apps…</Text>
+            <Text variant="small" color="secondary">
+              Loading apps…
+            </Text>
           </div>
         ) : apps.isError ? (
           <div role="alert" className="flex flex-wrap items-center justify-between gap-3 p-4">
             <Text variant="small">Couldn't load your apps. Their access hasn't changed.</Text>
-            <Button size="small" disabled={apps.isFetching} onClick={() => void apps.refetch()}>Try again</Button>
+            <Button size="small" disabled={apps.isFetching} onClick={() => void apps.refetch()}>
+              Try again
+            </Button>
           </div>
         ) : appList.length === 0 ? (
           <EmptyState
             placement="inline"
             title="No apps yet"
-            description={server.url
-              ? "Add Claude Code, Codex or another MCP app to let it read your chats here."
-              : "Turn on Let apps use Aiden, then add Claude Code, Codex or another MCP app."}
+            description={
+              server.url
+                ? "Add Claude Code, Codex or another MCP app to let it read your chats here."
+                : "Turn on Let apps use Aiden, then add Claude Code, Codex or another MCP app."
+            }
           />
         ) : (
-          appList.map((app) => <AidenMcpAppRow key={app.id} app={app} onRevoke={() => setRevoking(app)} />)
+          appList.map((app) => (
+            <AidenMcpAppRow key={app.id} app={app} onRevoke={() => setRevoking(app)} />
+          ))
         )}
       </FieldSet>
       <Text as="p" variant="small" color="secondary" className="-mt-4 mb-7 px-4 text-pretty">
-        Apps never answer approvals or questions; those wait for you in Aiden. A Supervised app's turns follow
-        the workspace's approval mode like your own: in Auto a model approves routine actions, in Never ask
-        almost everything runs without asking, and in Ask only what you've allowed in that workspace does.
+        Apps never answer approvals or questions; those wait for you in Aiden. A Supervised app's
+        turns follow the workspace's approval mode like your own: in Auto a model approves routine
+        actions, in Never ask almost everything runs without asking, and in Ask only what you've
+        allowed in that workspace does.
       </Text>
 
       <AddAppDialog

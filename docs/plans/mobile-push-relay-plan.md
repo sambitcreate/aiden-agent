@@ -5,6 +5,7 @@
 **Goal:** Get approvals, questions, results, Bot asks and scheduled runs to an iPhone or Android phone while it is locked, and keep the Live Activity current while the app is suspended.
 
 **Architecture:**
+
 1. **Registration.** A paired phone that turns push on gives its APNs/FCM token and a preview key it generated itself to that Mac, over the existing Aiden Remote API (revision 66, capability `push:alerts`).
 2. **Sending.** The Mac or `aiden serve` watches its own event sources and seals the visible text with the phone's key. It posts `{token, kind, pairing, sealed}` to a stateless Cloudflare Worker, which holds Aiden's APNs and FCM keys and forwards a payload built from fixed templates.
 3. **Delivery.**
@@ -13,12 +14,14 @@
    - Live Activity tokens follow the same path in Task 7.
 
 **Tech Stack:**
+
 - Mac/server: TypeScript (Node 22, `node:crypto`), Electron main process and `packages/cli`.
 - Relay: Cloudflare Workers, using WebCrypto for the ES256/RS256 JWTs.
 - Phones: Swift 6/CryptoKit/UserNotifications/ActivityKit, and Kotlin/Firebase Messaging.
 - Tests: `tsx --test`/`node --test`, XCTest and JUnit.
 
 **Spec:**
+
 - [`ios-alerts-live-activities-proposal.html`](ios-alerts-live-activities-proposal.html): sections 04 and 05, and phases 2–3 in section 06. Published at https://claude.ai/artifact/J9i8yfi8YcTWsgGCdpfaZj.
 - Owner decisions of 2026-11-22: owner-run Worker, stateless, opt-in per Mac, Android in the same revision.
 - The app-only work it builds on is in [`ios-alerts-app-only-plan.md`](ios-alerts-app-only-plan.md). Tasks 5–7 here depend on its Tasks 3–5: the action broker, the alert categories and `AidenNotificationPreferences`.
@@ -33,6 +36,7 @@
   - The App Store privacy label (Device ID, for app functionality, not linked to the person).
 
   Tasks build and test without these. Only the device acceptance steps need them.
+
 - **Relay origin.** There is one constant, `AIDEN_PUSH_RELAY_ORIGIN`, in `main/services/push/push-relay-origin.ts`. The owner sets its value to the deployed host. Tests always inject an origin.
 - **The relay is stateless.**
   - No KV, D1, Durable Objects or R2 bindings.
@@ -85,6 +89,7 @@
 ### Task 1: One seal format in TypeScript, Swift and Kotlin
 
 **Files:**
+
 - Create: `main/services/push/push-relay-contract.ts`. It holds `PushKind` now; Task 2 adds `RelaySendRequest`. The relay imports this file by relative path, so the Mac and the relay share one wire type.
 - Create: `main/services/push/push-seal.ts`, `main/services/push/push-seal.test.ts`.
 - Create: `protocol/aiden-remote/v1/fixtures/push-seal.json`. It holds one fixed vector: key, nonce, kind, plaintext and expected wire. It's generated once by the TS test helper and then committed.
@@ -93,15 +98,40 @@
 - Modify: `package.json`. Add `test:push` and append it to `test`.
 
 **Interfaces:**
+
 - Produces:
 
 ```ts
-export interface PushPreview { title: string; body: string; deepLink: string; category?: string; userInfo?: Record<string, string> }
+export interface PushPreview {
+  title: string;
+  body: string;
+  deepLink: string;
+  category?: string;
+  userInfo?: Record<string, string>;
+}
 export function pushPairingTag(key: Uint8Array): string;
-export function sealPushPreview(key: Uint8Array, kind: PushKind, preview: PushPreview, nonce?: Uint8Array): string; // throws if plaintext > 2048 bytes
-export function openPushPreview(key: Uint8Array, kind: PushKind, sealed: string): PushPreview | null;          // null on any failure
+export function sealPushPreview(
+  key: Uint8Array,
+  kind: PushKind,
+  preview: PushPreview,
+  nonce?: Uint8Array,
+): string; // throws if plaintext > 2048 bytes
+export function openPushPreview(
+  key: Uint8Array,
+  kind: PushKind,
+  sealed: string,
+): PushPreview | null; // null on any failure
 // push-relay-contract.ts
-export type PushKind = "approval" | "question" | "completed" | "failed" | "bot_needs_you" | "bot_handoff" | "scheduled_run" | "test" | "live_activity";
+export type PushKind =
+  | "approval"
+  | "question"
+  | "completed"
+  | "failed"
+  | "bot_needs_you"
+  | "bot_handoff"
+  | "scheduled_run"
+  | "test"
+  | "live_activity";
 ```
 
 ```swift
@@ -137,11 +167,13 @@ npx tsx --test main/services/push/push-seal.test.ts
 ```
 
 Then the iOS `-only-testing:AidenOnTheGoTests/AidenPushSealTests`, and Gradle `--tests '*AidenPushSealTest'`.
+
 - [ ] **Step 5: Commit** with the message "Add the shared push seal format".
 
 ### Task 2: The stateless relay Worker
 
 **Files:**
+
 - Create the project in `services/push-relay/`:
   - `package.json`: private, with `wrangler` as its only devDependency and its own lockfile, so it isn't part of the root install.
   - `wrangler.toml`:
@@ -161,38 +193,78 @@ Then the iOS `-only-testing:AidenOnTheGoTests/AidenPushSealTests`, and Gradle `-
 - Modify: `package.json` `test:push`. Add `services/push-relay/src/*.test.ts`.
 
 **Interfaces:**
+
 - Consumes: `PushKind` from `main/services/push/push-relay-contract.ts` (Task 1).
 - Produces the wire contract the Mac's client (Task 4) uses. `RelaySendRequest` lives in `main/services/push/push-relay-contract.ts`. The functions live in the relay's `src/` files and import the type relatively. They must not import anything else from `main/`.
 
 ```ts
 // POST /v1/send   (Content-Type: application/json, body ≤ 6144 bytes)
 export type RelaySendRequest =
-  | { platform: "ios"; environment: "production" | "development"; token: string; kind: Exclude<PushKind, "live_activity">;
-      thread: string; pairing: string; sealed: string; category?: string; timeSensitive?: boolean }
-  | { platform: "ios"; environment: "production" | "development"; token: string; kind: "live_activity";
-      event: "update" | "end"; contentState: Record<string, unknown>; staleDate?: number; dismissalDate?: number;
-      alertKind?: "completed" | "failed"; priority: 5 | 10 }
-  | { platform: "android"; token: string; kind: Exclude<PushKind, "live_activity">; thread: string; pairing: string; sealed: string; highPriority: boolean };
+  | {
+      platform: "ios";
+      environment: "production" | "development";
+      token: string;
+      kind: Exclude<PushKind, "live_activity">;
+      thread: string;
+      pairing: string;
+      sealed: string;
+      category?: string;
+      timeSensitive?: boolean;
+    }
+  | {
+      platform: "ios";
+      environment: "production" | "development";
+      token: string;
+      kind: "live_activity";
+      event: "update" | "end";
+      contentState: Record<string, unknown>;
+      staleDate?: number;
+      dismissalDate?: number;
+      alertKind?: "completed" | "failed";
+      priority: 5 | 10;
+    }
+  | {
+      platform: "android";
+      token: string;
+      kind: Exclude<PushKind, "live_activity">;
+      thread: string;
+      pairing: string;
+      sealed: string;
+      highPriority: boolean;
+    };
 // 200 {"status":"sent"} · 410 {"status":"gone"} · 400 {"status":"invalid"} · 429 {"status":"slow_down"} · 502 {"status":"upstream"}
 export function parseRelaySendRequest(body: unknown): RelaySendRequest | null;
-export const ALERT_TEMPLATES: Record<Exclude<PushKind, "live_activity">, { title: string; body: string }>;
-export function buildApnsAlertPayload(req: Extract<RelaySendRequest, { platform: "ios"; sealed: string }>): object;
-export function buildApnsLiveActivityPayload(req: Extract<RelaySendRequest, { kind: "live_activity" }>, now: number): object;
+export const ALERT_TEMPLATES: Record<
+  Exclude<PushKind, "live_activity">,
+  { title: string; body: string }
+>;
+export function buildApnsAlertPayload(
+  req: Extract<RelaySendRequest, { platform: "ios"; sealed: string }>,
+): object;
+export function buildApnsLiveActivityPayload(
+  req: Extract<RelaySendRequest, { kind: "live_activity" }>,
+  now: number,
+): object;
 export function buildFcmMessage(req: Extract<RelaySendRequest, { platform: "android" }>): object;
-export function createApnsJwtCache(keyP8: string, keyId: string, teamId: string, now: () => number): () => Promise<string>; // reuses a token for 50 min
+export function createApnsJwtCache(
+  keyP8: string,
+  keyId: string,
+  teamId: string,
+  now: () => number,
+): () => Promise<string>; // reuses a token for 50 min
 ```
 
 - **Templates** (exact copy, title "Aiden" for all):
 
-  | Kind | Body |
-  |---|---|
-  | `approval` | "Needs your approval" |
-  | `question` | "Has a question for you" |
-  | `completed` | "Response complete" |
-  | `failed` | "Response failed" |
-  | `bot_needs_you`, `bot_handoff` | "A Bot needs you" |
-  | `scheduled_run` | "Scheduled task finished" |
-  | `test` | "Test notification" |
+  | Kind                           | Body                      |
+  | ------------------------------ | ------------------------- |
+  | `approval`                     | "Needs your approval"     |
+  | `question`                     | "Has a question for you"  |
+  | `completed`                    | "Response complete"       |
+  | `failed`                       | "Response failed"         |
+  | `bot_needs_you`, `bot_handoff` | "A Bot needs you"         |
+  | `scheduled_run`                | "Scheduled task finished" |
+  | `test`                         | "Test notification"       |
 
 - **APNs alert payload:**
   - `aps.alert` from the template;
@@ -203,6 +275,7 @@ export function createApnsJwtCache(keyP8: string, keyId: string, teamId: string,
   - top-level `kind`, `pairing` and `sealed`.
 
   Headers: `apns-push-type: alert`, `apns-priority: 10`, `apns-topic: APNS_TOPIC`.
+
 - **APNs Live Activity payload:**
   - `aps.event`;
   - `aps.timestamp` (now, in seconds);
@@ -211,6 +284,7 @@ export function createApnsJwtCache(keyP8: string, keyId: string, teamId: string,
   - `aps.alert` from the template only when `alertKind` is set.
 
   Headers: `apns-push-type: liveactivity`, `apns-topic: APNS_TOPIC + ".push-type.liveactivity"`, `apns-priority: priority`.
+
 - **Hosts:** `api.push.apple.com` for production, `api.sandbox.push.apple.com` for development.
 - **FCM message:** `message.data = {kind, thread, pairing, sealed}`, `android.priority = highPriority ? "HIGH" : "NORMAL"`, and no `notification` block, so the app always decrypts.
 
@@ -245,6 +319,7 @@ npx tsx --test services/push-relay/src/*.test.ts
 ### Task 3: Revision 66: devices register for push
 
 **Files:**
+
 - Modify: `main/services/aiden-remote-protocol.ts`:
   - `AIDEN_REMOTE_PUSH_CONTRACT_REVISION = 66`, and point `AIDEN_REMOTE_CONTRACT_REVISION` at it.
   - Capability `push:alerts`, added to `AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES`.
@@ -258,6 +333,7 @@ npx tsx --test services/push-relay/src/*.test.ts
 - Tests: `main/services/aiden-remote-protocol.test.ts`, `aiden-remote-state.test.ts`, `aiden-remote-router.test.ts`, `aiden-remote-revocation.test.ts`. Also bump the pinned revision in the iOS and Android tests listed in Global Constraints.
 
 **Interfaces:**
+
 - Produces:
 
 ```ts
@@ -308,6 +384,7 @@ npx tsx --test main/services/aiden-remote-protocol.test.ts main/services/aiden-r
 ### Task 4: The Mac and `aiden serve` send pushes
 
 **Files:**
+
 - Create:
   - `main/services/push/push-relay-origin.ts`
   - `main/services/push/push-client.ts`: fixed-origin sender, 5 s timeout, `redirect: "error"`, abort on shutdown.
@@ -320,6 +397,7 @@ npx tsx --test main/services/aiden-remote-protocol.test.ts main/services/aiden-r
 - Modify: `AGENTS.md` (new "Mobile push" section), `docs/push.md` (new), `packages/cli/README.md`, `docs/aiden-on-the-go-remote-access.md`.
 
 **Interfaces:**
+
 - Consumes:
   - `HostRunRegistry.onChange(listener(summary, removed))`, `.pendingPrompt(id)`, and `HostRunSummary` (`state`, `pendingApprovalIds`, `pendingQuestionIds`, `origin`, `chatId`, `runId`).
   - `registry.listPushDevices()` / `clearDevicePush()` (Task 3), and `sealPushPreview` / `pushPairingTag` (Task 1).
@@ -328,21 +406,44 @@ npx tsx --test main/services/aiden-remote-protocol.test.ts main/services/aiden-r
 
 ```ts
 export type PushSendOutcome = "sent" | "gone" | "dropped";
-export interface PushSender { send(request: RelaySendRequest): Promise<PushSendOutcome> }   // "dropped" on timeout, 4xx/5xx other than 410, or AIDEN_PUSH=0
-export function createPushSender(options: { origin: string; fetch: typeof fetch; env: NodeJS.ProcessEnv; signal: AbortSignal }): PushSender;
+export interface PushSender {
+  send(request: RelaySendRequest): Promise<PushSendOutcome>;
+} // "dropped" on timeout, 4xx/5xx other than 410, or AIDEN_PUSH=0
+export function createPushSender(options: {
+  origin: string;
+  fetch: typeof fetch;
+  env: NodeJS.ProcessEnv;
+  signal: AbortSignal;
+}): PushSender;
 
 export interface PushEvent {
-  kind: Exclude<PushKind, "live_activity" | "test">; dedupeKey: string; chatId?: string; runId?: string;
-  preview: PushPreview;      // title = chat or Bot name; body = summary/question when showMessageText, else template body
-  requiredGrants: readonly string[];   // e.g. ["chat:read"], ["bot:read","chat:read"], ["schedule:read"]
+  kind: Exclude<PushKind, "live_activity" | "test">;
+  dedupeKey: string;
+  chatId?: string;
+  runId?: string;
+  preview: PushPreview; // title = chat or Bot name; body = summary/question when showMessageText, else template body
+  requiredGrants: readonly string[]; // e.g. ["chat:read"], ["bot:read","chat:read"], ["schedule:read"]
   preference: keyof AidenRemotePushPreferences;
-  timeSensitive: boolean; category?: string;   // app-only plan's AidenRunAlertCategory ids
+  timeSensitive: boolean;
+  category?: string; // app-only plan's AidenRunAlertCategory ids
 }
-export function eventsForRunChange(summary: HostRunSummary, previous: HostRunSummary | undefined,
-  lookup: { chatTitle(chatId: string): string; prompt(id: string): HostRunPendingPrompt | undefined }): PushEvent[];
+export function eventsForRunChange(
+  summary: HostRunSummary,
+  previous: HostRunSummary | undefined,
+  lookup: {
+    chatTitle(chatId: string): string;
+    prompt(id: string): HostRunPendingPrompt | undefined;
+  },
+): PushEvent[];
 export type PushRegistry = Pick<AidenRemoteStateRegistry, "listPushDevices" | "clearDevicePush">;
-export function createPushService(deps: { registry: PushRegistry; sender: PushSender; now: () => number }): {
-  notify(event: PushEvent): Promise<void>; dispose(): void };
+export function createPushService(deps: {
+  registry: PushRegistry;
+  sender: PushSender;
+  now: () => number;
+}): {
+  notify(event: PushEvent): Promise<void>;
+  dispose(): void;
+};
 ```
 
 - **Mapping rules** for `eventsForRunChange`:
@@ -409,6 +510,7 @@ npx tsx --test main/services/push/*.test.ts
 ### Task 5: iPhone receives push
 
 **Files:**
+
 - Create the Notification Service Extension target `AidenNotificationService` in `ios/AidenOnTheGo.xcodeproj` (bundle `sbtbiswas.AidenOnTheGo.NotificationService`, iOS 26):
   - `ios/AidenNotificationService/NotificationService.swift`
   - `Resources/Info.plist`
@@ -427,6 +529,7 @@ npx tsx --test main/services/push/*.test.ts
 - Tests: `ios/AidenOnTheGoTests/AidenPushTests.swift` (new), plus `AidenRemoteClientTests.swift`.
 
 **Interfaces:**
+
 - Consumes: `AidenPushSeal` (Task 1), the Task 3 routes, and the app-only plan's `AidenRunAlertCategory`, `AidenAlertAction` and `AidenNotificationPreferences`.
 - Produces:
 
@@ -473,6 +576,7 @@ xcodebuild build -project ios/AidenOnTheGo.xcodeproj -scheme AidenOnTheGo -desti
 ### Task 6: Android receives push (FCM)
 
 **Files:**
+
 - Modify:
   - `android/build.gradle.kts`, `android/app/build.gradle.kts`: Google services plugin and `com.google.firebase:firebase-messaging`, exact versions pinned. `google-services.json` is supplied by the owner and gitignored.
   - `android/app/src/main/AndroidManifest.xml`: the service.
@@ -489,6 +593,7 @@ xcodebuild build -project ios/AidenOnTheGo.xcodeproj -scheme AidenOnTheGo -desti
 - Tests: `android/app/src/test/java/sbtbiswas/AidenOnTheGo/push/AidenPushContentTest.kt`, `AidenPushRegistrarTest.kt`.
 
 **Interfaces:**
+
 - Produces:
 
 ```kotlin
@@ -516,6 +621,7 @@ cd android && ./gradlew --offline :app:testDebugUnitTest --tests '*AidenPush*'
 ### Task 7: The Live Activity updates over push
 
 **Files:**
+
 - Modify: `ios/AidenOnTheGo/LiveActivities/AgentRunActivityAttributes.swift`:
   - `ContentState` also decodes the compact push shape `{v, status, approval_id?, run_id?, started_at, updated_at, final?}`. Wire status values are `working`, `needs_approval`, `needs_input`, `done`, `failed`, `cancelled`, and map to `.thinking`, `.waitingForApproval`, `.waitingForAnswer`, `.complete`, `.failed` and `.cancelled`.
   - An unknown `v` or status decodes as `.thinking`.
@@ -535,6 +641,7 @@ cd android && ./gradlew --offline :app:testDebugUnitTest --tests '*AidenPush*'
 - Tests: `main/services/push/push-service.test.ts`, `ios/AidenOnTheGoTests/AidenNativeIntegrationTests.swift`.
 
 **Interfaces:**
+
 - Consumes: Task 3 routes, Task 4 `PushSender`/`eventsForRunChange`, app-only plan Task 1 `AgentRunTextPresentation`.
 - Produces: `export function liveActivityPushFor(summary: HostRunSummary, previous: HostRunSummary | undefined, now: number): Extract<RelaySendRequest, { kind: "live_activity" }>["contentState"] & { event: "update" | "end" } | null`.
 

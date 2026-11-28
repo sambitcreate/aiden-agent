@@ -44,7 +44,10 @@ test("the recorders journal a renderer run from begin through settle", () => {
   );
 
   now += 10;
-  hostRuns.recordRunNotification(registry, "stream-1", "chat:delta", { streamId: "stream-1", delta: "Hi" });
+  hostRuns.recordRunNotification(registry, "stream-1", "chat:delta", {
+    streamId: "stream-1",
+    delta: "Hi",
+  });
   hostRuns.recordRunNotification(registry, "stream-1", "chat:approval", {
     approvalId: "approval-1",
     streamId: "stream-1",
@@ -59,7 +62,10 @@ test("the recorders journal a renderer run from begin through settle", () => {
   assert.equal(registry.summary("stream-1")?.state, "working");
   assert.deepEqual(registry.summary("stream-1")?.pendingApprovalIds, []);
 
-  hostRuns.recordRunNotification(registry, "stream-1", "chat:done", { streamId: "stream-1", content: "Hi" });
+  hostRuns.recordRunNotification(registry, "stream-1", "chat:done", {
+    streamId: "stream-1",
+    content: "Hi",
+  });
   const beforeSettle = registry.summary("stream-1")?.lastSequence;
   hostRuns.recordRunSettled(registry, "stream-1");
 
@@ -89,7 +95,11 @@ test("settling a run that never reported an outcome ends it failed", () => {
   const read = registry.read("stream-2", 1);
   assert.equal(read.kind, "events");
   assert.deepEqual(
-    read.events.map((event) => ({ type: event.type, terminal: event.terminal, code: event.payload.code })),
+    read.events.map((event) => ({
+      type: event.type,
+      terminal: event.terminal,
+      code: event.payload.code,
+    })),
     [{ type: "error", terminal: true, code: "run_ended_without_outcome" }],
   );
 });

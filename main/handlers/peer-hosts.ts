@@ -16,24 +16,37 @@ import { registerPeerPairingHandlers } from "./peer-pairing.js";
 export function registerPeerHostHandlers(): void {
   registerPeerProjectCloneHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
-    owner: event => {
-      const owner = rendererDocumentOwner(event, () => new Error("Project transfer requires an active application document."));
-      return { key: `${owner.id}:${owner.documentId}`, isDestroyed: owner.isDestroyed, onInvalidated: owner.onInvalidated };
+    owner: (event) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Project transfer requires an active application document."),
+      );
+      return {
+        key: `${owner.id}:${owner.documentId}`,
+        isDestroyed: owner.isDestroyed,
+        onInvalidated: owner.onInvalidated,
+      };
     },
-    source: createPeerProjectSource({ getWorkspace: id => configStore.getWorkspace(id) }),
+    source: createPeerProjectSource({ getWorkspace: (id) => configStore.getWorkspace(id) }),
     hosts: () => getPeerHostRegistry().list(),
     manager: getPeerHostManager,
   });
   registerPeerIntentHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
-    active: event => {
-      const owner = rendererDocumentOwner(event, () => new Error("Saved requests require an active application document."));
+    active: (event) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Saved requests require an active application document."),
+      );
       if (owner.isDestroyed()) throw new Error("The application document changed.");
     },
     store: getPeerIntentStore,
   });
   const requireActive = (event: Electron.IpcMainInvokeEvent) => {
-    const owner = rendererDocumentOwner(event, () => new Error("Connection actions require an active application document."));
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Connection actions require an active application document."),
+    );
     if (owner.isDestroyed()) throw new Error("The application document changed.");
   };
   ipcMain.handle("remote:peerRouteRemove", (event, hostId: unknown, routeId: unknown) => {
@@ -51,8 +64,7 @@ export function registerPeerHostHandlers(): void {
       () => new Error("Pairing requires an active application document."),
     );
     const pairing = parsePeerPairing(peerText(payload, 8192));
-    if (owner.isDestroyed())
-      throw new Error("The application document changed.");
+    if (owner.isDestroyed()) throw new Error("The application document changed.");
     const controller = new AbortController();
     const detach = owner.onInvalidated(() => controller.abort());
     try {
@@ -66,8 +78,7 @@ export function registerPeerHostHandlers(): void {
     owner: (event) => {
       const owner = rendererDocumentOwner(
         event,
-        () =>
-          new Error("Device actions require an active application document."),
+        () => new Error("Device actions require an active application document."),
       );
       return {
         key: `${owner.id}:${owner.documentId}`,

@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  onboardingStepIndex,
-  parseOnboardingState,
-  shouldOpenOnboarding,
-} from "./onboarding.js";
+import { onboardingStepIndex, parseOnboardingState, shouldOpenOnboarding } from "./onboarding.js";
 
 test("onboarding state accepts only the current bounded non-secret contract", () => {
   assert.deepEqual(
@@ -42,9 +38,22 @@ test("resume position is derived from authoritative readiness", () => {
   assert.equal(onboardingStepIndex({ ...base, profileReady: false, providerReady: false }), 0);
   assert.equal(onboardingStepIndex({ ...base, profileReady: true, providerReady: false }), 1);
   assert.equal(onboardingStepIndex({ ...base, profileReady: true, providerReady: true }), 2);
-  const botCreated = { ...base, lastSatisfiedStep: "bots" as const, profileReady: true, providerReady: false };
-  assert.equal(onboardingStepIndex(botCreated), 2, "deferring a provider and choosing a Bot resumes at Finish");
-  assert.equal(onboardingStepIndex({ ...botCreated, selectedProviderId: "removed" }), 1, "an unavailable prior connection needs repair");
+  const botCreated = {
+    ...base,
+    lastSatisfiedStep: "bots" as const,
+    profileReady: true,
+    providerReady: false,
+  };
+  assert.equal(
+    onboardingStepIndex(botCreated),
+    2,
+    "deferring a provider and choosing a Bot resumes at Finish",
+  );
+  assert.equal(
+    onboardingStepIndex({ ...botCreated, selectedProviderId: "removed" }),
+    1,
+    "an unavailable prior connection needs repair",
+  );
 });
 
 test("only incomplete setup opens onboarding automatically", () => {
@@ -58,5 +67,8 @@ test("the Bots step is a persisted progress marker between provider and tour", (
     parseOnboardingState({ version: 2, outcome: "incomplete", lastSatisfiedStep: "bots" }),
     { version: 2, outcome: "incomplete", lastSatisfiedStep: "bots" },
   );
-  assert.equal(parseOnboardingState({ version: 2, outcome: "incomplete", lastSatisfiedStep: "bot" }), null);
+  assert.equal(
+    parseOnboardingState({ version: 2, outcome: "incomplete", lastSatisfiedStep: "bot" }),
+    null,
+  );
 });

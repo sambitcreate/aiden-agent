@@ -18,10 +18,19 @@ test("each app's token variable is a shell name that only that app's export sets
     ...APPS.map((app) => `printf '%s\\n' "$${aidenMcpTokenEnvName(app)}"`),
   ].join("\n");
   const output = execFileSync("/bin/sh", ["-c", script], { encoding: "utf8" });
-  assert.deepEqual(output.trim().split("\n"), APPS.map((app) => app.token));
+  assert.deepEqual(
+    output.trim().split("\n"),
+    APPS.map((app) => app.token),
+  );
 });
 
 test("the variable name tells the person which app's token it holds", () => {
-  assert.match(aidenMcpTokenEnvName({ id: "device_k3j9qxa1", name: "Claude Code" }), /^AIDEN_MCP_TOKEN_CLAUDE_CODE_K3J9QX$/u);
-  assert.match(aidenMcpTokenEnvName({ id: "device_p7qd2mb2", name: "Codex" }), /^AIDEN_MCP_TOKEN_CODEX_P7QD2M$/u);
+  assert.match(
+    aidenMcpTokenEnvName({ id: "device_k3j9qxa1", name: "Claude Code" }),
+    /^AIDEN_MCP_TOKEN_CLAUDE_CODE_K3J9QX$/u,
+  );
+  assert.match(
+    aidenMcpTokenEnvName({ id: "device_p7qd2mb2", name: "Codex" }),
+    /^AIDEN_MCP_TOKEN_CODEX_P7QD2M$/u,
+  );
 });

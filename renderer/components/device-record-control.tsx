@@ -35,12 +35,17 @@ const fileName = (path: string) => path.split("/").pop() ?? path;
 export async function saveRecordingWithFeedback(info: DeviceRecordingInfo): Promise<void> {
   try {
     if (info.reason === "max-duration") {
-      toast.info(`The recording stopped at ${Math.round((info.endsBy - info.startedAt) / 60_000)} minutes.`);
+      toast.info(
+        `The recording stopped at ${Math.round((info.endsBy - info.startedAt) / 60_000)} minutes.`,
+      );
     }
     const result = await devicesApi.saveRecording(info.id);
     if (result.status !== "saved") return;
     toast.success(`Saved ${fileName(result.path)}.`, {
-      action: { label: "Reveal in Finder", onClick: () => void devicesApi.revealSaved(result.path).catch(() => undefined) },
+      action: {
+        label: "Reveal in Finder",
+        onClick: () => void devicesApi.revealSaved(result.path).catch(() => undefined),
+      },
     });
   } catch (error) {
     toast.error(error instanceof Error ? error.message : "The recording could not be saved.");
@@ -81,7 +86,8 @@ export function DeviceRecordControl(props: {
   }, [props.initial]);
 
   const mine = recordings.find(
-    (info) => info.chatId === chatId && info.hostId === target.hostId && info.deviceId === target.deviceId,
+    (info) =>
+      info.chatId === chatId && info.hostId === target.hostId && info.deviceId === target.deviceId,
   );
 
   React.useEffect(() => {
@@ -132,7 +138,11 @@ export function DeviceRecordControl(props: {
         variant="muted"
         size="small"
         className="device-record-indicator"
-        aria-label={stopping ? "Finishing the recording" : `Stop recording, ${spokenRecordingElapsed(elapsed)} recorded`}
+        aria-label={
+          stopping
+            ? "Finishing the recording"
+            : `Stop recording, ${spokenRecordingElapsed(elapsed)} recorded`
+        }
         title={stopping ? "Finishing the recording…" : "Stop recording"}
         disabled={stopping}
         data-recording={!stopping || undefined}

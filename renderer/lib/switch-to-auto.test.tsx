@@ -13,25 +13,60 @@ import { ChatApprovalCard } from "../components/chat-approval-card";
 import { Toaster } from "../components/ui";
 import type { ApprovalPrompt } from "./ipc";
 import type { ApprovalWorkspaceFields } from "../shared/approval-mode";
-import { noteWorkspaceAllow, resetWorkspaceAllows, useWorkspaceRepeatNudge } from "./switch-to-auto";
+import {
+  noteWorkspaceAllow,
+  resetWorkspaceAllows,
+  useWorkspaceRepeatNudge,
+} from "./switch-to-auto";
 
 afterEach(cleanup);
 beforeEach(resetWorkspaceAllows);
 
 const USABLE = [{ id: "openai", models: ["fast"], hasKey: true, needsKey: true }];
 // Main marks a card Auto would hand to the judge.
-const PROMPT: ApprovalPrompt = { approvalId: "a-1", toolCallId: "c-1", toolName: "gmail_send_email", summary: "Send the update.", autoWouldJudge: true };
-const WORKSPACE = { id: "w-1", permission: "ask" } satisfies ApprovalWorkspaceFields & { id: string };
+const PROMPT: ApprovalPrompt = {
+  approvalId: "a-1",
+  toolCallId: "c-1",
+  toolName: "gmail_send_email",
+  summary: "Send the update.",
+  autoWouldJudge: true,
+};
+const WORKSPACE = { id: "w-1", permission: "ask" } satisfies ApprovalWorkspaceFields & {
+  id: string;
+};
 
-function Card({ workspace, pending }: { workspace: ApprovalWorkspaceFields & { id: string }; pending: ApprovalPrompt }) {
-  return <ChatApprovalCard pending={pending} deciding={false} onDecide={() => {}} {...useWorkspaceRepeatNudge(workspace, pending)} />;
+function Card({
+  workspace,
+  pending,
+}: {
+  workspace: ApprovalWorkspaceFields & { id: string };
+  pending: ApprovalPrompt;
+}) {
+  return (
+    <ChatApprovalCard
+      pending={pending}
+      deciding={false}
+      onDecide={() => {}}
+      {...useWorkspaceRepeatNudge(workspace, pending)}
+    />
+  );
 }
 
-async function mount(options: { settings?: unknown; workspace?: ApprovalWorkspaceFields & { id: string }; pending?: ApprovalPrompt; providers?: unknown[] } = {}) {
+async function mount(
+  options: {
+    settings?: unknown;
+    workspace?: ApprovalWorkspaceFields & { id: string };
+    pending?: ApprovalPrompt;
+    providers?: unknown[];
+  } = {},
+) {
   const saved: unknown[] = [];
   installBotTestIpc({
     "settings:get": () => options.settings ?? { approvalMode: "ask" },
-    "settings:set": (patch) => { saved.push(patch); return { approvalMode: "auto" }; },
+    "settings:set": (patch) => {
+      saved.push(patch);
+      return { approvalMode: "auto" };
+    },
     "providers:list": () => options.providers ?? USABLE,
   });
   render(
@@ -41,7 +76,9 @@ async function mount(options: { settings?: unknown; workspace?: ApprovalWorkspac
     </QueryClientProvider>,
   );
   // Settings and providers land before anything is checked.
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
   return saved;
 }
 
@@ -59,7 +96,10 @@ test("the third allow of the same action in a workspace offers Auto, and choosin
   assert.deepEqual(saved, [{ approvalMode: "auto" }]);
   // Switching answers nothing: the person is told this card still waits on them.
   assert.ok(await screen.findByText(/This card still needs your answer/u));
-  assert.ok(within(card).getByRole("button", { name: /Allow/u }), "the card is still there to answer");
+  assert.ok(
+    within(card).getByRole("button", { name: /Allow/u }),
+    "the card is still there to answer",
+  );
   assert.equal(offer(), null, "once in Auto the offer goes");
 });
 
@@ -84,7 +124,10 @@ test("no offer in Auto or Never ask, for a workspace with its own mode or Chat o
     // Main leaves autoWouldJudge off where Auto asks too: a command, a file
     // change, a background job, a saved screenshot, sharing or creating an image.
     ["a card Auto would not spare", { pending: { ...PROMPT, autoWouldJudge: undefined } }],
-    ["only an agent-runtime provider, which can't judge", { providers: [{ id: "antigravity", models: ["gemini"], hasKey: false, needsKey: false }] }],
+    [
+      "only an agent-runtime provider, which can't judge",
+      { providers: [{ id: "antigravity", models: ["gemini"], hasKey: false, needsKey: false }] },
+    ],
   ];
   for (const [name, options] of cases) {
     await mount(options);

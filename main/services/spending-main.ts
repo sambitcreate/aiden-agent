@@ -6,25 +6,38 @@ import { configStore } from "./config-store.js";
 import { DataStore } from "./data-store.js";
 import type { SpendingDocument } from "./spending-core.js";
 import { SPENDING_FILE, SpendingService } from "./spending-service.js";
-import { parseDurableSpendingDocument, SPENDING_DISPATCH_LIMITS } from "./spending-dispatch-ledger.js";
+import {
+  parseDurableSpendingDocument,
+  SPENDING_DISPATCH_LIMITS,
+} from "./spending-dispatch-ledger.js";
 
 const safe = (value: unknown): boolean => {
-  try { parseDurableSpendingDocument(value); return true; }
-  catch { return false; }
+  try {
+    parseDurableSpendingDocument(value);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
-const store = new DataStore<unknown>(SPENDING_FILE, { version: 1, chats: {}, bots: {}, botLimits: {}, runs: {} }, undefined, {
-  maxBytes: SPENDING_DISPATCH_LIMITS.bytes,
-  fileMode: 0o600,
-  compact: true,
-  isSafe: safe,
-  rejectCorruptWrite: true,
-  rejectUnsafeWrite: true,
-});
+const store = new DataStore<unknown>(
+  SPENDING_FILE,
+  { version: 1, chats: {}, bots: {}, botLimits: {}, runs: {} },
+  undefined,
+  {
+    maxBytes: SPENDING_DISPATCH_LIMITS.bytes,
+    fileMode: 0o600,
+    compact: true,
+    isSafe: safe,
+    rejectCorruptWrite: true,
+    rejectUnsafeWrite: true,
+  },
+);
 
 async function loadSpending(): Promise<unknown> {
   const value = await store.load();
-  if (await store.loadedFromCorruptFile() || await store.loadedFromUnsafeFile()) throw new Error("Saved spending data is unavailable. Restore the last valid backup.");
+  if ((await store.loadedFromCorruptFile()) || (await store.loadedFromUnsafeFile()))
+    throw new Error("Saved spending data is unavailable. Restore the last valid backup.");
   return value;
 }
 
@@ -32,7 +45,10 @@ async function loadSpending(): Promise<unknown> {
 export const spending = new SpendingService({
   persistence: {
     load: loadSpending,
-    reload: async () => { await store.reload(); return loadSpending(); },
+    reload: async () => {
+      await store.reload();
+      return loadSpending();
+    },
     save: (document: SpendingDocument) => store.save(document),
   },
   settings: async () => (await configStore.getSettings()).spendingLimits,

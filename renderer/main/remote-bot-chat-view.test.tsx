@@ -29,7 +29,14 @@ const HOST: PeerHostView = {
   enabled: true,
   state: "connected",
   features: ["bot-durable-session-v1", "bot-activity-v1"],
-  capabilities: ["chat:read", "chat:write", "bot:read", "bot:write", "bot:activity", "approval:respond"],
+  capabilities: [
+    "chat:read",
+    "chat:write",
+    "bot:read",
+    "bot:write",
+    "bot:activity",
+    "approval:respond",
+  ],
 };
 
 const SESSION = {
@@ -56,25 +63,45 @@ function event(seq: number, type: string, payload: unknown) {
   };
 }
 
-async function mount(host: PeerHostView = HOST, extra: Record<string, (...args: unknown[]) => unknown> = {}) {
+async function mount(
+  host: PeerHostView = HOST,
+  extra: Record<string, (...args: unknown[]) => unknown> = {},
+) {
   const calls = installBotTestIpc({
     "remote:peerBotSessionSubscribe": () => ({ subscriptionId: "bot_sub_1", state: "streaming" }),
     "remote:peerBotSessionUnsubscribe": () => true,
     "remote:peerCall": (_hostId, operation) => {
       const { operation: name } = operation as PeerOperation;
       if (name === "botSession") return { ok: true, value: SESSION };
-      if (name === "botSend") return { ok: true, value: { submissionId: "s1", deduped: false, state: "running", interrupted: false } };
-      if (name === "respondApproval") return { ok: true, value: { approvalId: "w1", decision: "deny", resolvedAt: "2026-10-20T10:00:00.000Z" } };
+      if (name === "botSend")
+        return {
+          ok: true,
+          value: { submissionId: "s1", deduped: false, state: "running", interrupted: false },
+        };
+      if (name === "respondApproval")
+        return {
+          ok: true,
+          value: { approvalId: "w1", decision: "deny", resolvedAt: "2026-10-20T10:00:00.000Z" },
+        };
       return { ok: false, error: { code: "failed", message: `unexpected ${name}` } };
     },
     ...extra,
   });
   const queryClient = createBotTestQueryClient();
   queryClient.setQueryData(hostQueryKeys.list(), [host]);
-  queryClient.setQueryData(hostQueryKeys.feed("host_a"), { bots: [{ id: "bot_1", name: "Planner" }], chats: [], runs: [] });
-  await mountWithBotRouter(<RemoteBotChatView hostId="host_a" botId="bot_1" />, { initialPath: "/bots", queryClient });
+  queryClient.setQueryData(hostQueryKeys.feed("host_a"), {
+    bots: [{ id: "bot_1", name: "Planner" }],
+    chats: [],
+    runs: [],
+  });
+  await mountWithBotRouter(<RemoteBotChatView hostId="host_a" botId="bot_1" />, {
+    initialPath: "/bots",
+    queryClient,
+  });
   const peerCalls = () =>
-    calls.filter((call) => call.channel === "remote:peerCall").map((call) => call.args[1] as PeerOperation);
+    calls
+      .filter((call) => call.channel === "remote:peerCall")
+      .map((call) => call.args[1] as PeerOperation);
   return { calls, peerCalls };
 }
 
@@ -82,21 +109,26 @@ test("a paired Mac's Bot opens its one conversation there and sends to it with a
   const { calls, peerCalls } = await mount();
   assert.ok(await screen.findByText("Two meetings and a dentist."));
   assert.ok(screen.getByText("on Studio"));
-  assert.deepEqual(
-    calls.find((call) => call.channel === "remote:peerBotSessionSubscribe")?.args,
-    ["host_a", "bot_1"],
-  );
+  assert.deepEqual(calls.find((call) => call.channel === "remote:peerBotSessionSubscribe")?.args, [
+    "host_a",
+    "bot_1",
+  ]);
 
   const box = await screen.findByPlaceholderText("Ask Planner");
   fireEvent.change(box, { target: { value: "Move the dentist" } });
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
-  await waitFor(() => assert.equal(peerCalls().filter((call) => call.operation === "botSend").length, 1));
+  await waitFor(() =>
+    assert.equal(peerCalls().filter((call) => call.operation === "botSend").length, 1),
+  );
   const sent = peerCalls().find((call) => call.operation === "botSend")!;
   assert.equal(sent.resourceId, "bot_1");
   assert.deepEqual(sent.body, { text: "Move the dentist" });
   assert.ok(typeof sent.idempotencyKey === "string" && sent.idempotencyKey.length >= 16);
   // Nothing goes through the workspace chat routes.
-  assert.equal(peerCalls().some((call) => call.operation === "createBotChat" || call.operation === "send"), false);
+  assert.equal(
+    peerCalls().some((call) => call.operation === "createBotChat" || call.operation === "send"),
+    false,
+  );
 });
 
 test("a send whose acknowledgement was lost keeps the draft and retries with the same key", async () => {
@@ -109,7 +141,10 @@ test("a send whose acknowledgement was lost keeps the draft and retries with the
         sends += 1;
         return sends === 1
           ? { ok: false, error: { code: "outcome_unknown", message: "No answer." } }
-          : { ok: true, value: { submissionId: "s1", deduped: true, state: "running", interrupted: false } };
+          : {
+              ok: true,
+              value: { submissionId: "s1", deduped: true, state: "running", interrupted: false },
+            };
       }
       return { ok: false, error: { code: "failed", message: `unexpected ${name}` } };
     },
@@ -121,13 +156,20 @@ test("a send whose acknowledgement was lost keeps the draft and retries with the
   await waitFor(() => assert.equal(box.value, "Move the dentist"));
   // The Bot starts running meanwhile, so the composer now queues the same draft.
   await act(async () => {
-    emitBotTestNotification("remote:peer-bot-session", event(4, "state", { state: "running", interrupted: false }));
+    emitBotTestNotification(
+      "remote:peer-bot-session",
+      event(4, "state", { state: "running", interrupted: false }),
+    );
   });
   fireEvent.click(await screen.findByRole("button", { name: "Queue message" }));
   await waitFor(() => assert.equal(sends, 2));
   const sent = peerCalls().filter((call) => call.operation === "botSend");
   assert.equal(sent.length, 2);
-  assert.equal(sent[0]!.idempotencyKey, sent[1]!.idempotencyKey, "the host can tell the retry is the same message");
+  assert.equal(
+    sent[0]!.idempotencyKey,
+    sent[1]!.idempotencyKey,
+    "the host can tell the retry is the same message",
+  );
   assert.deepEqual(sent[1]!.body, sent[0]!.body, "the retry replays the original request");
 });
 
@@ -147,12 +189,18 @@ test("Retry on a failed reply from another computer resends the person's words t
           },
         };
       }
-      if (name === "botSend") return { ok: true, value: { submissionId: "s2", deduped: false, state: "running", interrupted: false } };
+      if (name === "botSend")
+        return {
+          ok: true,
+          value: { submissionId: "s2", deduped: false, state: "running", interrupted: false },
+        };
       return { ok: false, error: { code: "failed", message: `unexpected ${name}` } };
     },
   });
   fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
-  await waitFor(() => assert.equal(peerCalls().filter((call) => call.operation === "botSend").length, 1));
+  await waitFor(() =>
+    assert.equal(peerCalls().filter((call) => call.operation === "botSend").length, 1),
+  );
   const sent = peerCalls().find((call) => call.operation === "botSend")!;
   assert.deepEqual(sent.body, { text: "Move the dentist" });
 });
@@ -180,13 +228,25 @@ test("live frames from the host stream into the chat, and a deny-only approval a
   const { peerCalls } = await mount();
   await screen.findByText("Two meetings and a dentist.");
   await act(async () => {
-    emitBotTestNotification("remote:peer-bot-session", event(4, "state", { state: "running", interrupted: false }));
+    emitBotTestNotification(
+      "remote:peer-bot-session",
+      event(4, "state", { state: "running", interrupted: false }),
+    );
     // Finish the paragraph so this transport test does not race the unfinished-text reveal deadline.
-    emitBotTestNotification("remote:peer-bot-session", event(5, "partial", { text: "Looking at your calendar\n\n" }));
+    emitBotTestNotification(
+      "remote:peer-bot-session",
+      event(5, "partial", { text: "Looking at your calendar\n\n" }),
+    );
     emitBotTestNotification(
       "remote:peer-bot-session",
       event(6, "approval", {
-        approval: { waitId: "w1", toolCallId: "t1", toolName: "computer_use", summary: "Open Calendar", canAllow: false },
+        approval: {
+          waitId: "w1",
+          toolCallId: "t1",
+          toolName: "computer_use",
+          summary: "Open Calendar",
+          canAllow: false,
+        },
       }),
     );
   });
@@ -219,48 +279,80 @@ test("a question or approval answered here shows again when the host asks it aga
   const { peerCalls } = await mount(HOST, {
     "remote:peerCall": (_hostId, raw) => {
       const operation = raw as PeerOperation;
-      if (operation.operation === "botSession") return { ok: true, value: { ...SESSION, state: "running" } };
-      if (operation.operation === "botAnswerQuestion") return { ok: true, value: { waitId: operation.itemId } };
+      if (operation.operation === "botSession")
+        return { ok: true, value: { ...SESSION, state: "running" } };
+      if (operation.operation === "botAnswerQuestion")
+        return { ok: true, value: { waitId: operation.itemId } };
       if (operation.operation === "respondApproval") {
-        return { ok: true, value: { approvalId: operation.resourceId, decision: "deny", resolvedAt: "2026-10-20T10:00:00.000Z" } };
+        return {
+          ok: true,
+          value: {
+            approvalId: operation.resourceId,
+            decision: "deny",
+            resolvedAt: "2026-10-20T10:00:00.000Z",
+          },
+        };
       }
       return { ok: false, error: { code: "failed", message: `unexpected ${operation.operation}` } };
     },
   });
   await screen.findByText("Two meetings and a dentist.");
   const asked = () => document.body.textContent?.includes(COLOUR_QUESTION.question) === true;
-  const question = { waitId: "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c", toolCallId: "call_q1", questions: [COLOUR_QUESTION] };
+  const question = {
+    waitId: "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c",
+    toolCallId: "call_q1",
+    questions: [COLOUR_QUESTION],
+  };
   await act(async () => {
     emitBotTestNotification("remote:peer-bot-session", event(4, "question", { question }));
   });
   assert.ok(await screen.findByRole("heading", { name: COLOUR_QUESTION.question }));
   fireEvent.click(screen.getByRole("button", { name: /Blue/u }));
   fireEvent.click(screen.getByRole("button", { name: "Submit" }));
-  await waitFor(() => assert.equal(peerCalls().filter((call) => call.operation === "botAnswerQuestion").length, 1));
+  await waitFor(() =>
+    assert.equal(peerCalls().filter((call) => call.operation === "botAnswerQuestion").length, 1),
+  );
   await waitFor(() => assert.equal(asked(), false));
   // The host quit before its Bot kept the answer; Resume asks the same question under the same wait id.
   await act(async () => {
     emitBotTestNotification("remote:peer-bot-session", event(5, "question", { question: null }));
     // Each frame crosses IPC as a fresh copy.
-    emitBotTestNotification("remote:peer-bot-session", event(6, "question", { question: structuredClone(question) }));
+    emitBotTestNotification(
+      "remote:peer-bot-session",
+      event(6, "question", { question: structuredClone(question) }),
+    );
   });
   await waitFor(() => assert.equal(asked(), true, "the question asked again can be answered here"));
   await act(async () => {
     emitBotTestNotification("remote:peer-bot-session", event(7, "question", { question: null }));
   });
 
-  const approval = { waitId: "w1", toolCallId: "t1", toolName: "computer_use", summary: "Open Calendar", canAllow: false };
+  const approval = {
+    waitId: "w1",
+    toolCallId: "t1",
+    toolName: "computer_use",
+    summary: "Open Calendar",
+    canAllow: false,
+  };
   await act(async () => {
     emitBotTestNotification("remote:peer-bot-session", event(8, "approval", { approval }));
   });
   fireEvent.click(await screen.findByRole("button", { name: "Deny" }));
-  await waitFor(() => assert.equal(peerCalls().filter((call) => call.operation === "respondApproval").length, 1));
+  await waitFor(() =>
+    assert.equal(peerCalls().filter((call) => call.operation === "respondApproval").length, 1),
+  );
   await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Deny" }), null));
   await act(async () => {
     emitBotTestNotification("remote:peer-bot-session", event(9, "approval", { approval: null }));
-    emitBotTestNotification("remote:peer-bot-session", event(10, "approval", { approval: structuredClone(approval) }));
+    emitBotTestNotification(
+      "remote:peer-bot-session",
+      event(10, "approval", { approval: structuredClone(approval) }),
+    );
   });
-  assert.ok(await screen.findByRole("button", { name: "Deny" }), "the approval asked again can be answered here");
+  assert.ok(
+    await screen.findByRole("button", { name: "Deny" }),
+    "the approval asked again can be answered here",
+  );
 });
 
 test("a host too old to share its Bots' conversation says so instead of opening a split chat", async () => {
@@ -269,7 +361,10 @@ test("a host too old to share its Bots' conversation says so instead of opening 
   assert.equal(peerCalls().length, 0);
 });
 
-const HANDOFF_HOST: PeerHostView = { ...HOST, capabilities: [...HOST.capabilities, "bot:handoffs"] };
+const HANDOFF_HOST: PeerHostView = {
+  ...HOST,
+  capabilities: [...HOST.capabilities, "bot:handoffs"],
+};
 
 const BANK_HANDOFF = {
   waitId: "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f",
@@ -282,7 +377,10 @@ const BANK_HANDOFF = {
 /** A host that serves hand-offs; `answer` decides each hand-off answer's outcome. */
 async function mountHandoff(
   session: Record<string, unknown>,
-  answer: (operation: PeerOperation, attempt: number) => unknown = (operation) => ({ ok: true, value: { waitId: operation.itemId } }),
+  answer: (operation: PeerOperation, attempt: number) => unknown = (operation) => ({
+    ok: true,
+    value: { waitId: operation.itemId },
+  }),
   extra: Record<string, (...args: unknown[]) => unknown> = {},
 ) {
   let answers = 0;
@@ -301,12 +399,19 @@ async function mountHandoff(
         case "botUnpause":
           return { ok: true, value: { state: "idle", interrupted: false } };
         default:
-          return { ok: false, error: { code: "failed", message: `unexpected ${operation.operation}` } };
+          return {
+            ok: false,
+            error: { code: "failed", message: `unexpected ${operation.operation}` },
+          };
       }
     },
     ...extra,
   });
-  return { ...mounted, handoffAnswers: () => mounted.peerCalls().filter((call) => call.operation === "botAnswerHandoff") };
+  return {
+    ...mounted,
+    handoffAnswers: () =>
+      mounted.peerCalls().filter((call) => call.operation === "botAnswerHandoff"),
+  };
 }
 
 const RUNNING_WITH_HANDOFF = { ...SESSION, state: "running", handoff: BANK_HANDOFF };
@@ -321,12 +426,16 @@ test("a hand-off from a Bot on another computer shows its card here, and Done an
   const card = await screen.findByRole("group", { name: "Planner needs you" });
   assert.ok(screen.getByText("Needs you: Enter the 2FA code your bank sent you"));
   assert.deepEqual(
-    [...card.querySelectorAll("button")].map((button) => button.getAttribute("aria-label") ?? button.textContent),
+    [...card.querySelectorAll("button")].map(
+      (button) => button.getAttribute("aria-label") ?? button.textContent,
+    ),
     ["Take control at bank.example.com"],
   );
   await takeControl();
   assert.deepEqual(
-    [...card.querySelectorAll("button")].map((button) => button.getAttribute("aria-label") ?? button.textContent),
+    [...card.querySelectorAll("button")].map(
+      (button) => button.getAttribute("aria-label") ?? button.textContent,
+    ),
     ["Open again: Take control at bank.example.com", "Skip", "I’m done"],
   );
   fireEvent.click(screen.getByRole("button", { name: "I’m done" }));
@@ -336,14 +445,18 @@ test("a hand-off from a Bot on another computer shows its card here, and Done an
   assert.equal(sent.itemId, BANK_HANDOFF.waitId);
   assert.deepEqual(sent.body, { outcome: "done" });
   assert.ok(typeof sent.idempotencyKey === "string" && sent.idempotencyKey.length >= 16);
-  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null));
+  await waitFor(() =>
+    assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null),
+  );
 });
 
 test("typing while a hand-off waits answers it as done with a note, and Open opens the page on this Mac", async () => {
   const { calls, handoffAnswers } = await mountHandoff(RUNNING_WITH_HANDOFF);
   fireEvent.click(await screen.findByRole("button", { name: "Take control at bank.example.com" }));
   await waitFor(() =>
-    assert.deepEqual(calls.find((call) => call.channel === "browser:open-external")?.args, [BANK_HANDOFF.open.url]),
+    assert.deepEqual(calls.find((call) => call.channel === "browser:open-external")?.args, [
+      BANK_HANDOFF.open.url,
+    ]),
   );
   const box = await screen.findByPlaceholderText("Add a note and send to mark it done");
   fireEvent.change(box, { target: { value: "  The code was from 9:01.  " } });
@@ -351,32 +464,54 @@ test("typing while a hand-off waits answers it as done with a note, and Open ope
   await waitFor(() => assert.equal(handoffAnswers().length, 1));
   assert.deepEqual(handoffAnswers()[0]!.body, { outcome: "done", note: "The code was from 9:01." });
   // The note answered the card: nothing went to the Bot as a message.
-  assert.equal(calls.some((call) => call.channel === "remote:peerCall" && (call.args[1] as PeerOperation).operation === "botSend"), false);
+  assert.equal(
+    calls.some(
+      (call) =>
+        call.channel === "remote:peerCall" &&
+        (call.args[1] as PeerOperation).operation === "botSend",
+    ),
+    false,
+  );
 });
 
 test("a card already settled on the other computer goes away quietly", async () => {
   const expired = await mountHandoff(RUNNING_WITH_HANDOFF, () => ({
     ok: false,
-    error: { code: "request_failed", status: 409, remoteCode: "handoff_expired", message: "The other device could not complete this request." },
+    error: {
+      code: "request_failed",
+      status: 409,
+      remoteCode: "handoff_expired",
+      message: "The other device could not complete this request.",
+    },
   }));
   await takeControl();
   fireEvent.click(await screen.findByRole("button", { name: "Skip" }));
   await waitFor(() => assert.equal(expired.handoffAnswers().length, 1));
   assert.deepEqual(expired.handoffAnswers()[0]!.body, { outcome: "skipped" });
-  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null));
+  await waitFor(() =>
+    assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null),
+  );
 
   // A pause withdrew it; once the turn resumes, the host asks again under the same wait id.
   await act(async () => {
     emitBotTestNotification("remote:peer-bot-session", event(4, "handoff", { handoff: null }));
     // Each frame crosses IPC as a fresh copy.
-    emitBotTestNotification("remote:peer-bot-session", event(5, "handoff", { handoff: structuredClone(BANK_HANDOFF) }));
+    emitBotTestNotification(
+      "remote:peer-bot-session",
+      event(5, "handoff", { handoff: structuredClone(BANK_HANDOFF) }),
+    );
   });
-  assert.ok(await screen.findByRole("group", { name: "Planner needs you" }), "the card asked again can be answered here");
+  assert.ok(
+    await screen.findByRole("group", { name: "Planner needs you" }),
+    "the card asked again can be answered here",
+  );
 });
 
 test("a lost hand-off answer is resent under its key", async () => {
   const lost = await mountHandoff(RUNNING_WITH_HANDOFF, (operation, attempt) =>
-    attempt === 0 ? { ok: false, error: { code: "outcome_unknown", message: "No answer." } } : { ok: true, value: { waitId: operation.itemId } },
+    attempt === 0
+      ? { ok: false, error: { code: "outcome_unknown", message: "No answer." } }
+      : { ok: true, value: { waitId: operation.itemId } },
   );
   await takeControl();
   fireEvent.click(await screen.findByRole("button", { name: "I’m done" }));
@@ -388,7 +523,9 @@ test("a lost hand-off answer is resent under its key", async () => {
   await waitFor(() => assert.equal(lost.handoffAnswers().length, 2));
   const [first, second] = lost.handoffAnswers();
   assert.equal(first!.idempotencyKey, second!.idempotencyKey);
-  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null));
+  await waitFor(() =>
+    assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null),
+  );
 });
 
 test("while the card's answer is on its way, Pause finishing first keeps the card waiting and the composer sends no second answer", async () => {
@@ -396,16 +533,21 @@ test("while the card's answer is on its way, Pause finishing first keeps the car
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const { peerCalls, handoffAnswers } = await mountHandoff(RUNNING_WITH_HANDOFF, async (operation) => {
-    await held;
-    return { ok: true, value: { waitId: operation.itemId } };
-  });
+  const { peerCalls, handoffAnswers } = await mountHandoff(
+    RUNNING_WITH_HANDOFF,
+    async (operation) => {
+      await held;
+      return { ok: true, value: { waitId: operation.itemId } };
+    },
+  );
   await takeControl();
   fireEvent.click(await screen.findByRole("button", { name: "I’m done" }));
   await waitFor(() => assert.equal(handoffAnswers().length, 1));
   fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
   fireEvent.click(await screen.findByRole("menuitem", { name: "Pause Bot" }));
-  await waitFor(() => assert.equal(peerCalls().filter((call) => call.operation === "botPause").length, 1));
+  await waitFor(() =>
+    assert.equal(peerCalls().filter((call) => call.operation === "botPause").length, 1),
+  );
   await act(async () => undefined);
   assert.equal(
     (screen.getByRole("button", { name: "I’m done" }) as HTMLButtonElement).disabled,
@@ -413,24 +555,35 @@ test("while the card's answer is on its way, Pause finishing first keeps the car
     "the card still waits for its own answer",
   );
 
-  const box = (await screen.findByPlaceholderText("Add a note and send to mark it done")) as HTMLTextAreaElement;
+  const box = (await screen.findByPlaceholderText(
+    "Add a note and send to mark it done",
+  )) as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: "Finished on the website." } });
   fireEvent.click(screen.getByRole("button", { name: "Send message" }));
   await act(async () => undefined);
   assert.equal(handoffAnswers().length, 1, "one card, one answer");
-  await waitFor(() => assert.equal(box.value, "Finished on the website.", "the note stays in the composer"));
+  await waitFor(() =>
+    assert.equal(box.value, "Finished on the website.", "the note stays in the composer"),
+  );
 
   await act(async () => {
     release();
   });
-  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null));
+  await waitFor(() =>
+    assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null),
+  );
   assert.equal(handoffAnswers().length, 1);
 });
 
 test("a sign-in is finished on the Bot's own Mac: the card offers Finish there, then Skip, never Done", async () => {
   const { peerCalls, handoffAnswers } = await mountHandoff({
     ...RUNNING_WITH_HANDOFF,
-    handoff: { waitId: "wait-sign-in", kind: "sign_in", action: "Sign in to github.com", open: { url: "https://github.com" } },
+    handoff: {
+      waitId: "wait-sign-in",
+      kind: "sign_in",
+      action: "Sign in to github.com",
+      open: { url: "https://github.com" },
+    },
   });
   const card = await screen.findByRole("group", { name: "Planner needs you" });
   assert.deepEqual(
@@ -447,7 +600,10 @@ test("a sign-in is finished on the Bot's own Mac: the card offers Finish there, 
     assert.equal(finish?.itemId, "wait-sign-in");
     assert.ok(typeof finish?.idempotencyKey === "string");
   });
-  assert.deepEqual([...card.querySelectorAll("button")].map((button) => button.textContent), ["Finish on Studio", "Skip"]);
+  assert.deepEqual(
+    [...card.querySelectorAll("button")].map((button) => button.textContent),
+    ["Finish on Studio", "Skip"],
+  );
   assert.equal(handoffAnswers().length, 0);
 });
 
@@ -460,14 +616,23 @@ test("a password-or-code card from another computer takes no note: no note box, 
   assert.equal(screen.queryByPlaceholderText("Add a note and send to mark it done"), null);
   assert.equal(screen.queryByText(/Planner reads any note you send/u), null);
   assert.ok(
-    screen.getByText(/This card takes no note, so a password or code never reaches Planner\./u, { selector: "[role=status]" }),
+    screen.getByText(/This card takes no note, so a password or code never reaches Planner\./u, {
+      selector: "[role=status]",
+    }),
     "the composer says why it can't send",
   );
   await takeControl();
   fireEvent.click(screen.getByRole("button", { name: "I’m done" }));
   await waitFor(() => assert.equal(handoffAnswers().length, 1));
   assert.deepEqual(handoffAnswers()[0]!.body, { outcome: "done" });
-  assert.equal(calls.some((call) => call.channel === "remote:peerCall" && (call.args[1] as PeerOperation).operation === "botSend"), false);
+  assert.equal(
+    calls.some(
+      (call) =>
+        call.channel === "remote:peerCall" &&
+        (call.args[1] as PeerOperation).operation === "botSend",
+    ),
+    false,
+  );
 });
 
 test("a paused Bot on another computer says so, blocks the composer, and Resume lifts the pause there", async () => {
@@ -475,12 +640,20 @@ test("a paused Bot on another computer says so, blocks the composer, and Resume 
   await screen.findByText("Two meetings and a dentist.");
   fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
   fireEvent.click(await screen.findByRole("menuitem", { name: "Pause Bot" }));
-  await waitFor(() => assert.equal(peerCalls().filter((call) => call.operation === "botPause").length, 1));
+  await waitFor(() =>
+    assert.equal(peerCalls().filter((call) => call.operation === "botPause").length, 1),
+  );
   await act(async () => {
-    emitBotTestNotification("remote:peer-bot-session", event(4, "state", { state: "paused", interrupted: false }));
+    emitBotTestNotification(
+      "remote:peer-bot-session",
+      event(4, "state", { state: "paused", interrupted: false }),
+    );
   });
   assert.ok(await screen.findByRole("group", { name: "Planner is paused." }));
-  assert.ok(screen.getByText("Planner is paused.", { selector: "[role=status]" }), "the composer says why it can't send");
+  assert.ok(
+    screen.getByText("Planner is paused.", { selector: "[role=status]" }),
+    "the composer says why it can't send",
+  );
   fireEvent.click(screen.getByRole("button", { name: "Resume" }));
   await waitFor(() => {
     const lift = peerCalls().find((call) => call.operation === "botUnpause");
@@ -488,10 +661,18 @@ test("a paused Bot on another computer says so, blocks the composer, and Resume 
     assert.ok(typeof lift?.idempotencyKey === "string");
   });
   await act(async () => {
-    emitBotTestNotification("remote:peer-bot-session", event(5, "state", { state: "interrupted", interrupted: true }));
+    emitBotTestNotification(
+      "remote:peer-bot-session",
+      event(5, "state", { state: "interrupted", interrupted: true }),
+    );
   });
-  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner is paused." }), null));
-  assert.ok(await screen.findByRole("button", { name: "Resume" }), "the turn the pause cut short offers its own Resume");
+  await waitFor(() =>
+    assert.equal(screen.queryByRole("group", { name: "Planner is paused." }), null),
+  );
+  assert.ok(
+    await screen.findByRole("button", { name: "Resume" }),
+    "the turn the pause cut short offers its own Resume",
+  );
 });
 
 test("a host that does not serve hand-offs to this Mac offers no Pause here", async () => {
@@ -501,28 +682,44 @@ test("a host that does not serve hand-offs to this Mac offers no Pause here", as
 });
 
 test("without the host's activity frames a busy Bot is not offered Queue, so a queued message never goes missing", async () => {
-  const { peerCalls } = await mount({ ...HOST, capabilities: HOST.capabilities.filter((grant) => grant !== "bot:activity") });
+  const { peerCalls } = await mount({
+    ...HOST,
+    capabilities: HOST.capabilities.filter((grant) => grant !== "bot:activity"),
+  });
   await screen.findByText("Two meetings and a dentist.");
   await act(async () => {
-    emitBotTestNotification("remote:peer-bot-session", event(4, "state", { state: "running", interrupted: false }));
+    emitBotTestNotification(
+      "remote:peer-bot-session",
+      event(4, "state", { state: "running", interrupted: false }),
+    );
   });
   const box = await screen.findByPlaceholderText("Ask Planner");
   fireEvent.change(box, { target: { value: "and Friday?" } });
   assert.equal(screen.queryByRole("button", { name: "Queue message" }), null);
   fireEvent.keyDown(box, { key: "Enter" });
   await act(async () => undefined);
-  assert.equal(peerCalls().some((call) => call.operation === "botSend"), false, "nothing is sent that this Mac could not show");
+  assert.equal(
+    peerCalls().some((call) => call.operation === "botSend"),
+    false,
+    "nothing is sent that this Mac could not show",
+  );
 });
 
 test("a host that was unpaired while its Bot was open says so, instead of blaming the Bot", async () => {
   installBotTestIpc({
     "remote:peerBotSessionSubscribe": () => ({ subscriptionId: "bot_sub_1", state: "streaming" }),
     "remote:peerBotSessionUnsubscribe": () => true,
-    "remote:peerCall": () => ({ ok: false, error: { code: "unavailable", message: "Not paired." } }),
+    "remote:peerCall": () => ({
+      ok: false,
+      error: { code: "unavailable", message: "Not paired." },
+    }),
   });
   const queryClient = createBotTestQueryClient();
   queryClient.setQueryData(hostQueryKeys.list(), []);
-  await mountWithBotRouter(<RemoteBotChatView hostId="host_a" botId="bot_1" />, { initialPath: "/bots", queryClient });
+  await mountWithBotRouter(<RemoteBotChatView hostId="host_a" botId="bot_1" />, {
+    initialPath: "/bots",
+    queryClient,
+  });
   assert.ok(await screen.findByText("This device isn't paired anymore"));
   assert.equal(screen.queryByText("Bot not found"), null);
 });
@@ -544,7 +741,13 @@ function sharedImageSession(image: (operation: PeerOperation) => unknown) {
             ...SESSION,
             entries: [
               ...SESSION.entries,
-              { type: "shared_image", id: "img_1", name: "dentist-map.png", mimeType: "image/png", size: PIXEL.byteLength },
+              {
+                type: "shared_image",
+                id: "img_1",
+                name: "dentist-map.png",
+                mimeType: "image/png",
+                size: PIXEL.byteLength,
+              },
             ],
           },
         };
@@ -557,7 +760,10 @@ function sharedImageSession(image: (operation: PeerOperation) => unknown) {
 test("an image a Bot on another computer shared draws here once its bytes are read from that computer", async () => {
   const { peerCalls } = await mount(
     { ...HOST, capabilities: [...HOST.capabilities, "bot:images"] },
-    sharedImageSession(() => ({ ok: true, value: { mimeType: "image/png", bytes: new Uint8Array(PIXEL) } })),
+    sharedImageSession(() => ({
+      ok: true,
+      value: { mimeType: "image/png", bytes: new Uint8Array(PIXEL) },
+    })),
   );
   const image = (await screen.findByRole("img", { name: "dentist-map.png" })) as HTMLImageElement;
   assert.equal(image.getAttribute("src"), `data:image/png;base64,${PIXEL.toString("base64")}`);
@@ -572,9 +778,16 @@ test("an image a Bot on another computer shared draws here once its bytes are re
 test("a shared image whose bytes cannot be read from the other computer says what it was instead", async () => {
   await mount(
     { ...HOST, capabilities: [...HOST.capabilities, "bot:images"] },
-    sharedImageSession(() => ({ ok: false, error: { code: "not_found", message: "This image is no longer in the Bot's chat." } })),
+    sharedImageSession(() => ({
+      ok: false,
+      error: { code: "not_found", message: "This image is no longer in the Bot's chat." },
+    })),
   );
-  assert.ok(await screen.findByText(/I shared an image: dentist-map\.png\. Open this chat on its computer to see it\./));
+  assert.ok(
+    await screen.findByText(
+      /I shared an image: dentist-map\.png\. Open this chat on its computer to see it\./,
+    ),
+  );
   assert.ok(!screen.queryByRole("img", { name: "dentist-map.png" }), "no image drawn");
 });
 
@@ -604,13 +817,18 @@ const DOCS_ACCESS = {
   choices: ["once", "always", "not_now"],
 };
 
-async function mountCards(session: Record<string, unknown>, answers: Partial<Record<string, (operation: PeerOperation) => unknown>> = {}) {
+async function mountCards(
+  session: Record<string, unknown>,
+  answers: Partial<Record<string, (operation: PeerOperation) => unknown>> = {},
+) {
   return mount(CARDS_HOST, {
     "remote:peerCall": (_hostId, raw) => {
       const operation = raw as PeerOperation;
       if (operation.operation === "botSession") return { ok: true, value: session };
       const answer = answers[operation.operation];
-      return answer ? answer(operation) : { ok: false, error: { code: "failed", message: `unexpected ${operation.operation}` } };
+      return answer
+        ? answer(operation)
+        : { ok: false, error: { code: "failed", message: `unexpected ${operation.operation}` } };
     },
   });
 }
@@ -620,7 +838,10 @@ test("a Bot on another computer waiting on a folder and a plan shows both cards 
     { ...SESSION, state: "running", accessRequest: DOCS_ACCESS, plan: TRIP_PLAN },
     {
       botAnswerAccessRequest: () => ({ ok: true, value: { answered: true } }),
-      botRespondPlan: (operation) => ({ ok: true, value: { planId: operation.itemId, status: "active" } }),
+      botRespondPlan: (operation) => ({
+        ok: true,
+        value: { planId: operation.itemId, status: "active" },
+      }),
     },
   );
   // Two things wait, one card at a time; the composer can't skip past the plan.
@@ -646,15 +867,23 @@ test("a Bot on another computer waiting on a folder and a plan shows both cards 
 
   // The host's next frame carries the approved plan: its checklist shows in the chat, with Stop.
   await act(async () => {
-    emitBotTestNotification("remote:peer-bot-session", event(4, "access_request", { accessRequest: null }));
-    emitBotTestNotification("remote:peer-bot-session", event(5, "plan", { plan: { ...TRIP_PLAN, status: "active" } }));
+    emitBotTestNotification(
+      "remote:peer-bot-session",
+      event(4, "access_request", { accessRequest: null }),
+    );
+    emitBotTestNotification(
+      "remote:peer-bot-session",
+      event(5, "plan", { plan: { ...TRIP_PLAN, status: "active" } }),
+    );
   });
   fireEvent.click(await screen.findByRole("button", { name: "Stop plan" }));
   await waitFor(() =>
-    assert.deepEqual(peerCalls().filter((call) => call.operation === "botRespondPlan").map((call) => call.body), [
-      { decision: "approve" },
-      { decision: "stop" },
-    ]),
+    assert.deepEqual(
+      peerCalls()
+        .filter((call) => call.operation === "botRespondPlan")
+        .map((call) => call.body),
+      [{ decision: "approve" }, { decision: "stop" }],
+    ),
   );
 });
 
@@ -664,7 +893,11 @@ test("a plan already answered on the other computer says so on the card instead 
     {
       botRespondPlan: () => ({
         ok: false,
-        error: { code: "request_failed", remoteCode: "plan_expired", message: "This plan is no longer waiting." },
+        error: {
+          code: "request_failed",
+          remoteCode: "plan_expired",
+          message: "This plan is no longer waiting.",
+        },
       }),
     },
   );
@@ -691,7 +924,10 @@ test("a routine a Bot on another computer suggested is added there, and a memory
       ],
     },
     {
-      botRespondRoutineProposal: () => ({ ok: true, value: { status: "accepted", routineId: "routine-9" } }),
+      botRespondRoutineProposal: () => ({
+        ok: true,
+        value: { status: "accepted", routineId: "routine-9" },
+      }),
     },
   );
   const card = await screen.findByRole("group", { name: "Routine suggestion: Morning brief" });
@@ -727,9 +963,12 @@ test("Not now on a routine a Bot on another computer suggested doesn't ask why, 
   const card = await screen.findByRole("group", { name: "Routine suggestion: Morning brief" });
   fireEvent.click(within(card).getByRole("button", { name: /^Not now/u }));
   assert.ok(await screen.findByText("Not added: Morning brief"));
-  assert.deepEqual(peerCalls().filter((call) => call.operation === "botRespondRoutineProposal").map((call) => call.body), [
-    { decision: "dismiss" },
-  ]);
+  assert.deepEqual(
+    peerCalls()
+      .filter((call) => call.operation === "botRespondRoutineProposal")
+      .map((call) => call.body),
+    [{ decision: "dismiss" }],
+  );
   assert.equal(screen.queryByRole("button", { name: /^Why not/u }), null);
   assert.equal(screen.queryByText(/Noted, thanks/u), null);
 });
@@ -740,7 +979,8 @@ test("a message sent to a Bot on another computer shows at once, before that com
     "remote:peerCall": (_hostId, raw) => {
       const operation = raw as PeerOperation;
       if (operation.operation === "botSession") return { ok: true, value: SESSION };
-      if (operation.operation === "botSend") return new Promise((resolve) => (acknowledge = resolve));
+      if (operation.operation === "botSend")
+        return new Promise((resolve) => (acknowledge = resolve));
       return { ok: false, error: { code: "failed", message: `unexpected ${operation.operation}` } };
     },
   });
@@ -750,10 +990,15 @@ test("a message sent to a Bot on another computer shows at once, before that com
   assert.ok(await screen.findByText("Move the dentist to Friday"));
   // The host's entry takes its place: the words show once.
   await act(async () => {
-    acknowledge({ ok: true, value: { submissionId: "s1", deduped: false, state: "running", interrupted: false } });
+    acknowledge({
+      ok: true,
+      value: { submissionId: "s1", deduped: false, state: "running", interrupted: false },
+    });
     emitBotTestNotification(
       "remote:peer-bot-session",
-      event(4, "entry", { entry: { type: "message", id: "m3", role: "user", text: "Move the dentist to Friday" } }),
+      event(4, "entry", {
+        entry: { type: "message", id: "m3", role: "user", text: "Move the dentist to Friday" },
+      }),
     );
   });
   await waitFor(() => assert.equal(screen.getAllByText("Move the dentist to Friday").length, 1));
@@ -780,7 +1025,12 @@ test("a message waiting for a Bot on another computer can be taken back from her
     told.push(message);
     return "toast-id";
   });
-  const running = { ...SESSION, state: "running", activity: null, queued: [{ submissionId: "s9", mode: "queue", text: "and Friday?" }] };
+  const running = {
+    ...SESSION,
+    state: "running",
+    activity: null,
+    queued: [{ submissionId: "s9", mode: "queue", text: "and Friday?" }],
+  };
   let outcome: unknown = { ok: true, value: { submissionId: "s9", outcome: "started" } };
   const { peerCalls } = await mountCards(running, { botWithdrawQueued: () => outcome });
   const remove = await screen.findByRole("button", { name: "Remove queued message: and Friday?" });
@@ -792,32 +1042,73 @@ test("a message waiting for a Bot on another computer can be taken back from her
   assert.ok(withdraw.idempotencyKey);
   await waitFor(() => assert.deepEqual(told, ["That message already started, so it stays."]));
 
-  outcome = { ok: false, error: { code: "not_found", message: "This Aiden Remote endpoint does not exist.", status: 404 } };
+  outcome = {
+    ok: false,
+    error: {
+      code: "not_found",
+      message: "This Aiden Remote endpoint does not exist.",
+      status: 404,
+    },
+  };
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove queued message: and Friday?" }));
   });
-  await waitFor(() => assert.equal(told[told.length - 1], "Update Aiden on Studio to remove a waiting message from here."));
+  await waitFor(() =>
+    assert.equal(
+      told[told.length - 1],
+      "Update Aiden on Studio to remove a waiting message from here.",
+    ),
+  );
 });
 
 test("earlier messages of a Bot on another computer load a page at a time above the chat", async () => {
   const pages: Record<string, unknown> = {
-    m1: { ok: true, value: { botId: "bot_1", epoch: "e1", entries: [{ type: "message", id: "m0", role: "assistant", text: "Morning! Coffee first?" }], hasOlder: false } },
+    m1: {
+      ok: true,
+      value: {
+        botId: "bot_1",
+        epoch: "e1",
+        entries: [{ type: "message", id: "m0", role: "assistant", text: "Morning! Coffee first?" }],
+        hasOlder: false,
+      },
+    },
   };
-  const { peerCalls } = await mountCards({ ...SESSION, hasOlder: true }, { botSessionEntries: (operation) => pages[operation.before!] });
+  const { peerCalls } = await mountCards(
+    { ...SESSION, hasOlder: true },
+    { botSessionEntries: (operation) => pages[operation.before!] },
+  );
   await screen.findByText("Two meetings and a dentist.");
   assert.equal(screen.queryByText("Morning! Coffee first?"), null);
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
   });
   await screen.findByText("Morning! Coffee first?");
-  assert.equal(peerCalls().find((call) => call.operation === "botSessionEntries")?.before, "m1", "the page ends where the chat began");
-  assert.equal(screen.queryByRole("button", { name: "Load older messages" }), null, "nothing older is left");
+  assert.equal(
+    peerCalls().find((call) => call.operation === "botSessionEntries")?.before,
+    "m1",
+    "the page ends where the chat began",
+  );
+  assert.equal(
+    screen.queryByRole("button", { name: "Load older messages" }),
+    null,
+    "nothing older is left",
+  );
 });
 
 test("a computer too old to page back says where the older messages are", async () => {
-  await mountCards({ ...SESSION, hasOlder: true }, {
-    botSessionEntries: () => ({ ok: false, error: { code: "not_found", message: "This Aiden Remote endpoint does not exist.", status: 404 } }),
-  });
+  await mountCards(
+    { ...SESSION, hasOlder: true },
+    {
+      botSessionEntries: () => ({
+        ok: false,
+        error: {
+          code: "not_found",
+          message: "This Aiden Remote endpoint does not exist.",
+          status: 404,
+        },
+      }),
+    },
+  );
   await screen.findByText("Two meetings and a dentist.");
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
@@ -834,11 +1125,36 @@ test("a paired Mac's Bot's dot clears only once its chat shows the new reply", a
     localStorage.clear();
     resetRemoteBotSeenForTests();
     // This Mac first listed the host's Bots before the reply came.
-    localStorage.setItem(REMOTE_BOT_SEEN_KEY, JSON.stringify({ version: 2, hostSince: { host_a: before }, seenReplyAt: {} }));
+    localStorage.setItem(
+      REMOTE_BOT_SEEN_KEY,
+      JSON.stringify({ version: 2, hostSince: { host_a: before }, seenReplyAt: {} }),
+    );
     const entries = [
-      { type: "message", id: "m1", role: "user", text: "What is on today?", createdAt: "2026-11-24T07:59:00.000Z" },
-      { type: "message", id: "m2", role: "assistant", text: "Two meetings and a dentist.", createdAt: "2026-11-24T08:00:00.000Z" },
-      ...(shows ? [{ type: "message", id: "m3", role: "assistant", text: "The dentist moved to Friday.", createdAt: replyAt }] : []),
+      {
+        type: "message",
+        id: "m1",
+        role: "user",
+        text: "What is on today?",
+        createdAt: "2026-11-24T07:59:00.000Z",
+      },
+      {
+        type: "message",
+        id: "m2",
+        role: "assistant",
+        text: "Two meetings and a dentist.",
+        createdAt: "2026-11-24T08:00:00.000Z",
+      },
+      ...(shows
+        ? [
+            {
+              type: "message",
+              id: "m3",
+              role: "assistant",
+              text: "The dentist moved to Friday.",
+              createdAt: replyAt,
+            },
+          ]
+        : []),
     ];
     installBotTestIpc({
       "remote:peerBotSessionSubscribe": () => ({ subscriptionId: "bot_sub_1", state: "streaming" }),

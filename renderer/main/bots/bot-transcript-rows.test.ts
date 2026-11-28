@@ -3,28 +3,83 @@ import test from "node:test";
 import type { BotTranscriptEntry } from "../../shared/bot-live";
 import { botTranscriptRows } from "./bot-transcript-rows";
 
-const user = (id: string, text: string): BotTranscriptEntry => ({ id, type: "user", text, imageCount: 0 });
-const userAt = (id: string, text: string, at: number): BotTranscriptEntry => ({ id, type: "user", text, imageCount: 0, at });
+const user = (id: string, text: string): BotTranscriptEntry => ({
+  id,
+  type: "user",
+  text,
+  imageCount: 0,
+});
+const userAt = (id: string, text: string, at: number): BotTranscriptEntry => ({
+  id,
+  type: "user",
+  text,
+  imageCount: 0,
+  at,
+});
 const step = (id: string, text: string): BotTranscriptEntry => ({
   id,
   type: "assistant",
   text,
-  toolCalls: [{ id: `${id}-call`, name: "web_search", kind: "searching", label: "Searched the web" }],
+  toolCalls: [
+    { id: `${id}-call`, name: "web_search", kind: "searching", label: "Searched the web" },
+  ],
   stopReason: "toolUse",
 });
-const answer = (id: string, text: string): BotTranscriptEntry => ({ id, type: "assistant", text, toolCalls: [], stopReason: "stop" });
-const answerAt = (id: string, text: string, at: number): BotTranscriptEntry => ({ id, type: "assistant", text, toolCalls: [], stopReason: "stop", at });
-const result = (id: string): BotTranscriptEntry => ({ id, type: "tool_result", toolCallId: `${id}-call`, toolName: "web_search", isError: false, status: "ok" });
-const failed = (id: string, retryText: string | null): BotTranscriptEntry => ({ id, type: "failed_turn", retryText });
+const answer = (id: string, text: string): BotTranscriptEntry => ({
+  id,
+  type: "assistant",
+  text,
+  toolCalls: [],
+  stopReason: "stop",
+});
+const answerAt = (id: string, text: string, at: number): BotTranscriptEntry => ({
+  id,
+  type: "assistant",
+  text,
+  toolCalls: [],
+  stopReason: "stop",
+  at,
+});
+const result = (id: string): BotTranscriptEntry => ({
+  id,
+  type: "tool_result",
+  toolCallId: `${id}-call`,
+  toolName: "web_search",
+  isError: false,
+  status: "ok",
+});
+const failed = (id: string, retryText: string | null): BotTranscriptEntry => ({
+  id,
+  type: "failed_turn",
+  retryText,
+});
 
 const kinds = (rows: ReturnType<typeof botTranscriptRows>) => rows.map((row) => row.kind);
 
 const quiet = { running: false, level: "quiet" } as const;
 
 test("peer messages remain quiet exchange navigation and never become a person's request bubble", () => {
-  const rows = botTranscriptRows([{ id: "peer1", type: "peer", exchangeId: "exchange1", direction: "received", peerBotId: "bot_other", peerName: "Researcher", messageKind: "request", at: 10 }], null, quiet);
-  assert.equal(rows.length, 1); assert.equal(rows[0].kind, "peer");
-  assert.ok(rows[0].kind === "peer"); assert.equal(rows[0].exchangeId, "exchange1"); assert.equal(rows[0].peerName, "Researcher");
+  const rows = botTranscriptRows(
+    [
+      {
+        id: "peer1",
+        type: "peer",
+        exchangeId: "exchange1",
+        direction: "received",
+        peerBotId: "bot_other",
+        peerName: "Researcher",
+        messageKind: "request",
+        at: 10,
+      },
+    ],
+    null,
+    quiet,
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, "peer");
+  assert.ok(rows[0].kind === "peer");
+  assert.equal(rows[0].exchangeId, "exchange1");
+  assert.equal(rows[0].peerName, "Researcher");
 });
 
 test("narration written alongside tool calls is a bubble, and tool steps never become rows", () => {
@@ -42,14 +97,29 @@ test("narration written alongside tool calls is a bubble, and tool steps never b
   );
   assert.deepEqual(
     rows.map((row) => (row.kind === "assistant" ? `assistant:${row.text}` : row.kind)),
-    ["user", "assistant:On it, I'll check the airlines.", "assistant:The cheapest is TAP on Friday."],
+    [
+      "user",
+      "assistant:On it, I'll check the airlines.",
+      "assistant:The cheapest is TAP on Friday.",
+    ],
   );
 });
 
 test("a running reply streams as a bubble, and nothing is shown before it has words", () => {
-  const rows = botTranscriptRows([user("u1", "Plan dinner")], "Looking at recipes", { running: true, level: "quiet" });
-  assert.deepEqual(rows[rows.length - 1], { kind: "assistant", id: "partial", text: "Looking at recipes", streaming: true });
-  assert.deepEqual(kinds(botTranscriptRows([user("u1", "Hi")], null, { running: true, level: "quiet" })), ["user"]);
+  const rows = botTranscriptRows([user("u1", "Plan dinner")], "Looking at recipes", {
+    running: true,
+    level: "quiet",
+  });
+  assert.deepEqual(rows[rows.length - 1], {
+    kind: "assistant",
+    id: "partial",
+    text: "Looking at recipes",
+    streaming: true,
+  });
+  assert.deepEqual(
+    kinds(botTranscriptRows([user("u1", "Hi")], null, { running: true, level: "quiet" })),
+    ["user"],
+  );
 });
 
 test("Quiet adds no recap to a turn whose steps all worked; Summary puts one recap of the turn right above its answer", () => {
@@ -67,57 +137,131 @@ test("Quiet adds no recap to a turn whose steps all worked; Summary puts one rec
   assert.ok(recap?.kind === "recap");
   assert.equal(recap.live, false);
   assert.equal(recap.durationMs, 18_000);
-  assert.deepEqual(recap.steps.map((s) => [s.kind, s.status]), [["searching", "ok"]]);
+  assert.deepEqual(
+    recap.steps.map((s) => [s.kind, s.status]),
+    [["searching", "ok"]],
+  );
 });
 
 test("with tool activity off, a finished turn still shows its line when a step was blocked or failed, and only then", () => {
   const blockedResult = { ...result("a1"), status: "blocked", isError: true } as BotTranscriptEntry;
-  const blocked = botTranscriptRows([user("u1", "Send it"), step("a1", ""), blockedResult, answer("a2", "I couldn't send it.")], null, quiet);
+  const blocked = botTranscriptRows(
+    [user("u1", "Send it"), step("a1", ""), blockedResult, answer("a2", "I couldn't send it.")],
+    null,
+    quiet,
+  );
   const blockedRecap = blocked.find((row) => row.kind === "recap");
-  assert.ok(blockedRecap?.kind === "recap", "a blocked step is something the person may need to act on");
-  assert.deepEqual(blockedRecap.steps.map((s) => s.status), ["blocked"]);
-  const unanswered = botTranscriptRows([user("u1", "go"), step("a1", ""), answer("a2", "Done.")], null, quiet);
-  assert.ok(unanswered.some((row) => row.kind === "recap"), "a step that never finished reads as failed and keeps its line");
-  const running = botTranscriptRows([user("u1", "go"), step("a1", ""), blockedResult], null, { running: true, level: "quiet" });
-  assert.equal(kinds(running).includes("recap"), false, "nothing shows while the turn is still going");
-  const stopped = botTranscriptRows([user("u1", "go"), step("a1", ""), { ...result("a1"), status: "stopped", isError: true } as BotTranscriptEntry], null, quiet);
-  assert.equal(kinds(stopped).includes("recap"), false, "a step the person stopped needs nothing more than the stopped line");
+  assert.ok(
+    blockedRecap?.kind === "recap",
+    "a blocked step is something the person may need to act on",
+  );
+  assert.deepEqual(
+    blockedRecap.steps.map((s) => s.status),
+    ["blocked"],
+  );
+  const unanswered = botTranscriptRows(
+    [user("u1", "go"), step("a1", ""), answer("a2", "Done.")],
+    null,
+    quiet,
+  );
+  assert.ok(
+    unanswered.some((row) => row.kind === "recap"),
+    "a step that never finished reads as failed and keeps its line",
+  );
+  const running = botTranscriptRows([user("u1", "go"), step("a1", ""), blockedResult], null, {
+    running: true,
+    level: "quiet",
+  });
+  assert.equal(
+    kinds(running).includes("recap"),
+    false,
+    "nothing shows while the turn is still going",
+  );
+  const stopped = botTranscriptRows(
+    [
+      user("u1", "go"),
+      step("a1", ""),
+      { ...result("a1"), status: "stopped", isError: true } as BotTranscriptEntry,
+    ],
+    null,
+    quiet,
+  );
+  assert.equal(
+    kinds(stopped).includes("recap"),
+    false,
+    "a step the person stopped needs nothing more than the stopped line",
+  );
 });
 
 test("while running, Summary shows no recap yet and Detailed shows a live one at the end", () => {
   const entries = [user("u1", "Plan dinner"), step("a1", "")];
-  assert.equal(kinds(botTranscriptRows(entries, null, { running: true, level: "summary" })).includes("recap"), false);
+  assert.equal(
+    kinds(botTranscriptRows(entries, null, { running: true, level: "summary" })).includes("recap"),
+    false,
+  );
   const rows = botTranscriptRows(entries, null, { running: true, level: "detailed" });
   const recap = rows[rows.length - 1];
   assert.ok(recap?.kind === "recap");
   assert.equal(recap.live, true);
-  assert.deepEqual(recap.steps.map((s) => s.status), ["running"]);
+  assert.deepEqual(
+    recap.steps.map((s) => s.status),
+    ["running"],
+  );
 });
 
 test("a call with no result in a finished turn counts as failed", () => {
-  const rows = botTranscriptRows([user("u1", "go"), step("a1", ""), answer("a2", "Done.")], null, { running: false, level: "summary" });
+  const rows = botTranscriptRows([user("u1", "go"), step("a1", ""), answer("a2", "Done.")], null, {
+    running: false,
+    level: "summary",
+  });
   const recap = rows.find((row) => row.kind === "recap");
   assert.ok(recap?.kind === "recap");
-  assert.deepEqual(recap.steps.map((s) => s.status), ["failed"]);
+  assert.deepEqual(
+    recap.steps.map((s) => s.status),
+    ["failed"],
+  );
 });
 
 test("Stop during a tool run: the step reads as stopped and the turn ends with a stopped line", () => {
   // The harness writes only the round's tool results (status "stopped"); no aborted reply follows.
   const stoppedResult = { ...result("a1"), status: "stopped", isError: true } as BotTranscriptEntry;
-  const rows = botTranscriptRows([user("u1", "go"), step("a1", ""), stoppedResult], null, { running: false, level: "summary" });
+  const rows = botTranscriptRows([user("u1", "go"), step("a1", ""), stoppedResult], null, {
+    running: false,
+    level: "summary",
+  });
   const recap = rows.find((row) => row.kind === "recap");
   assert.ok(recap?.kind === "recap");
-  assert.deepEqual(recap.steps.map((s) => s.status), ["stopped"]);
+  assert.deepEqual(
+    recap.steps.map((s) => s.status),
+    ["stopped"],
+  );
   assert.equal(rows[rows.length - 1]?.kind, "stopped");
-  const quietRows = botTranscriptRows([user("u1", "go"), step("a1", ""), stoppedResult], null, quiet);
-  assert.equal(quietRows[quietRows.length - 1]?.kind, "stopped", "Quiet shows the stopped line too");
-
-  const restarted = botTranscriptRows(
-    [user("u1", "go"), step("a1", ""), stoppedResult, { id: "n1", type: "notice", notice: "interrupted" }],
+  const quietRows = botTranscriptRows(
+    [user("u1", "go"), step("a1", ""), stoppedResult],
     null,
     quiet,
   );
-  assert.equal(kinds(restarted).includes("stopped"), false, "a restart cut it short; the person did not stop it");
+  assert.equal(
+    quietRows[quietRows.length - 1]?.kind,
+    "stopped",
+    "Quiet shows the stopped line too",
+  );
+
+  const restarted = botTranscriptRows(
+    [
+      user("u1", "go"),
+      step("a1", ""),
+      stoppedResult,
+      { id: "n1", type: "notice", notice: "interrupted" },
+    ],
+    null,
+    quiet,
+  );
+  assert.equal(
+    kinds(restarted).includes("stopped"),
+    false,
+    "a restart cut it short; the person did not stop it",
+  );
 });
 
 test("an unfinished call in a reply the person stopped is stopped, not failed", () => {
@@ -128,16 +272,26 @@ test("an unfinished call in a reply the person stopped is stopped, not failed", 
     toolCalls: [{ id: "a1-call", name: "run_command", kind: "command", label: "Ran a command" }],
     stopReason: "aborted",
   };
-  const rows = botTranscriptRows([user("u1", "go"), aborted], null, { running: false, level: "summary" });
+  const rows = botTranscriptRows([user("u1", "go"), aborted], null, {
+    running: false,
+    level: "summary",
+  });
   const recap = rows.find((row) => row.kind === "recap");
   assert.ok(recap?.kind === "recap");
-  assert.deepEqual(recap.steps.map((s) => s.status), ["stopped"]);
+  assert.deepEqual(
+    recap.steps.map((s) => s.status),
+    ["stopped"],
+  );
   assert.equal(rows[rows.length - 1]?.kind, "stopped");
 });
 
 test("a reply that carries on after a restart's stop marker and finishes never reads as stopped", () => {
   // Resume after a restart: recovery settles an unsafe in-flight tool as interrupted ("stopped"), then the run goes on.
-  const interruptedResult = { ...result("a1"), status: "stopped", isError: true } as BotTranscriptEntry;
+  const interruptedResult = {
+    ...result("a1"),
+    status: "stopped",
+    isError: true,
+  } as BotTranscriptEntry;
   const resumed = botTranscriptRows(
     [user("u1", "go"), step("a1", ""), interruptedResult, answer("a2", "Recovered.")],
     null,
@@ -146,7 +300,11 @@ test("a reply that carries on after a restart's stop marker and finishes never r
   assert.equal(kinds(resumed).includes("stopped"), false, kinds(resumed).join(", "));
   const recap = resumed.find((row) => row.kind === "recap");
   assert.ok(recap?.kind === "recap");
-  assert.deepEqual(recap.steps.map((s) => s.status), ["stopped"], "the cut-short step stays neutral");
+  assert.deepEqual(
+    recap.steps.map((s) => s.status),
+    ["stopped"],
+    "the cut-short step stays neutral",
+  );
 
   // A retried request after a restart mid-stream: the partial lands as an aborted reply, then the retry answers.
   const partialCall: BotTranscriptEntry = {
@@ -156,19 +314,37 @@ test("a reply that carries on after a restart's stop marker and finishes never r
     toolCalls: [{ id: "a1-call", name: "run_command", kind: "command", label: "Ran a command" }],
     stopReason: "aborted",
   };
-  const retried = botTranscriptRows([user("u1", "Story"), partialCall, answer("a2", "Recovered.")], null, {
-    running: false,
-    level: "summary",
-  });
+  const retried = botTranscriptRows(
+    [user("u1", "Story"), partialCall, answer("a2", "Recovered.")],
+    null,
+    {
+      running: false,
+      level: "summary",
+    },
+  );
   assert.equal(kinds(retried).includes("stopped"), false, kinds(retried).join(", "));
   const retriedRecap = retried.find((row) => row.kind === "recap");
   assert.ok(retriedRecap?.kind === "recap");
-  assert.deepEqual(retriedRecap.steps.map((s) => s.status), ["stopped"], "the unfinished call is neither failed nor running");
+  assert.deepEqual(
+    retriedRecap.steps.map((s) => s.status),
+    ["stopped"],
+    "the unfinished call is neither failed nor running",
+  );
 });
 
 test("a reply the person stopped ends with a stopped line; an interrupted one does not", () => {
-  const aborted: BotTranscriptEntry = { id: "a1", type: "assistant", text: "Once upon", toolCalls: [], stopReason: "aborted" };
-  assert.deepEqual(kinds(botTranscriptRows([user("u1", "Story"), aborted], null, quiet)), ["user", "assistant", "stopped"]);
+  const aborted: BotTranscriptEntry = {
+    id: "a1",
+    type: "assistant",
+    text: "Once upon",
+    toolCalls: [],
+    stopReason: "aborted",
+  };
+  assert.deepEqual(kinds(botTranscriptRows([user("u1", "Story"), aborted], null, quiet)), [
+    "user",
+    "assistant",
+    "stopped",
+  ]);
   const interrupted = botTranscriptRows(
     [user("u1", "Story"), aborted, { id: "n1", type: "notice", notice: "interrupted" }],
     null,
@@ -182,10 +358,19 @@ test("only the newest failed turn offers Retry, and never while the Bot is worki
   const latest = botTranscriptRows(history, null, quiet).slice(-1)[0];
   assert.deepEqual(latest, { kind: "failed", id: "a1:failed", retryText: "Plan dinner" });
 
-  const older = botTranscriptRows([...history, user("u2", "Never mind"), answer("a2", "Okay.")], null, quiet);
-  assert.deepEqual(older.find((row) => row.kind === "failed"), { kind: "failed", id: "a1:failed", retryText: null });
+  const older = botTranscriptRows(
+    [...history, user("u2", "Never mind"), answer("a2", "Okay.")],
+    null,
+    quiet,
+  );
+  assert.deepEqual(
+    older.find((row) => row.kind === "failed"),
+    { kind: "failed", id: "a1:failed", retryText: null },
+  );
 
-  const busy = botTranscriptRows(history, null, { running: true, level: "quiet" }).find((row) => row.kind === "failed");
+  const busy = botTranscriptRows(history, null, { running: true, level: "quiet" }).find(
+    (row) => row.kind === "failed",
+  );
   assert.equal(busy?.kind === "failed" && busy.retryText, null);
 
   const routine = botTranscriptRows([failed("r1:failed", null)], null, quiet)[0];
@@ -194,7 +379,11 @@ test("only the newest failed turn offers Retry, and never while the Bot is worki
 
 test("a paused reply keeps what it wrote as a bubble", () => {
   const rows = botTranscriptRows([user("u1", "Summarize")], "Here is what I have so far", quiet);
-  assert.deepEqual(rows[rows.length - 1], { kind: "assistant", id: "partial", text: "Here is what I have so far" });
+  assert.deepEqual(rows[rows.length - 1], {
+    kind: "assistant",
+    id: "partial",
+    text: "Here is what I have so far",
+  });
 });
 
 test("a queued follow-up is a faded row at the end, and a steer is a normal bubble right away", () => {
@@ -229,7 +418,10 @@ test("a steer placed after the round's tool results keeps the step ok and reads 
   );
   const recap = rows.find((row) => row.kind === "recap");
   assert.ok(recap?.kind === "recap");
-  assert.deepEqual(recap.steps.map((s) => [s.kind, s.status]), [["searching", "ok"]]);
+  assert.deepEqual(
+    recap.steps.map((s) => [s.kind, s.status]),
+    [["searching", "ok"]],
+  );
 });
 
 test("a new message after a reply stopped mid tool call starts its own turn; the stopped line stays with the first", () => {
@@ -237,11 +429,18 @@ test("a new message after a reply stopped mid tool call starts its own turn; the
     id: "a1",
     type: "assistant",
     text: "",
-    toolCalls: [{ id: "a1-call", name: "web_search", kind: "searching", label: "Searched the web" }],
+    toolCalls: [
+      { id: "a1-call", name: "web_search", kind: "searching", label: "Searched the web" },
+    ],
     stopReason: "aborted",
     at: 2_000,
   };
-  const entries = [userAt("u1", "Find flights", 1_000), aborted, userAt("u2", "Never mind, hotels", 3_600_000), answerAt("a3", "Hotel X.", 3_601_000)];
+  const entries = [
+    userAt("u1", "Find flights", 1_000),
+    aborted,
+    userAt("u2", "Never mind, hotels", 3_600_000),
+    answerAt("a3", "Hotel X.", 3_601_000),
+  ];
   const rows = botTranscriptRows(entries, null, { running: false, level: "summary" });
   assert.deepEqual(
     rows.map((row) => (row.kind === "user" ? `user:${row.text}` : row.kind)),
@@ -250,7 +449,10 @@ test("a new message after a reply stopped mid tool call starts its own turn; the
   const recap = rows.find((row) => row.kind === "recap");
   assert.ok(recap?.kind === "recap");
   assert.equal(recap.durationMs, 1_000);
-  assert.deepEqual(recap.steps.map((s) => s.status), ["stopped"]);
+  assert.deepEqual(
+    recap.steps.map((s) => s.status),
+    ["stopped"],
+  );
 });
 
 test("a new message after a finished tool starts a new turn with its own recap", () => {
@@ -276,7 +478,14 @@ test("the person's answer to a hand-off is their own row, with the note below, a
       toolCalls: [{ id: "h1", name: "hand_off", kind: "waiting", label: "Handed you a step" }],
       stopReason: "toolUse",
     },
-    { id: "handoff:h1", type: "handoff_result", kind: "action", outcome: "done", action: "Enter the 2FA code", note: "It said verified." },
+    {
+      id: "handoff:h1",
+      type: "handoff_result",
+      kind: "action",
+      outcome: "done",
+      action: "Enter the 2FA code",
+      note: "It said verified.",
+    },
     {
       id: "a2",
       type: "assistant",
@@ -284,15 +493,38 @@ test("the person's answer to a hand-off is their own row, with the note below, a
       toolCalls: [{ id: "s1", name: "sign_in", kind: "waiting", label: "Handed you a step" }],
       stopReason: "toolUse",
     },
-    { id: "handoff:s1", type: "handoff_result", kind: "sign_in", outcome: "done", action: "Sign in to github.com", origin: "https://github.com" },
-    { id: "a3", type: "assistant", text: "", toolCalls: [{ id: "h2", name: "hand_off", kind: "waiting", label: "Handed you a step" }], stopReason: "toolUse" },
-    { id: "handoff:h2", type: "handoff_result", kind: "action", outcome: "skipped", action: "Pay the invoice" },
+    {
+      id: "handoff:s1",
+      type: "handoff_result",
+      kind: "sign_in",
+      outcome: "done",
+      action: "Sign in to github.com",
+      origin: "https://github.com",
+    },
+    {
+      id: "a3",
+      type: "assistant",
+      text: "",
+      toolCalls: [{ id: "h2", name: "hand_off", kind: "waiting", label: "Handed you a step" }],
+      stopReason: "toolUse",
+    },
+    {
+      id: "handoff:h2",
+      type: "handoff_result",
+      kind: "action",
+      outcome: "skipped",
+      action: "Pay the invoice",
+    },
     answer("a4", "All set, I left the invoice for you."),
   ];
   for (const level of ["quiet", "summary", "detailed"] as const) {
     const rows = botTranscriptRows(entries, null, { running: false, level });
     assert.deepEqual(
-      rows.map((row) => (row.kind === "handoff_result" ? `${row.outcome}${row.signedIn ? " signed in" : ""}: ${row.text}` : row.kind)),
+      rows.map((row) =>
+        row.kind === "handoff_result"
+          ? `${row.outcome}${row.signedIn ? " signed in" : ""}: ${row.text}`
+          : row.kind,
+      ),
       [
         "user",
         "assistant",
@@ -308,15 +540,39 @@ test("the person's answer to a hand-off is their own row, with the note below, a
   }
 });
 
-
 test("Bot message rows start separate turns and preserve display-only saved answers", () => {
-  const rows = botTranscriptRows([
-    user("u", "First"), step("a", ""),
-    {id: "b", type: "bot_message", kind: "reply", botId: "c", botName: "COS", text: "Saved reply"},
-    step("b-step", ""), answer("done", "Done"),
-    {id: "s", type: "bot_message_status", data: {deliveryId: "d", botId: "c", botName: "COS", outcome: "replied_while_paused", text: "Read me"}},
-  ], null, {running: false, level: "summary"});
-  assert.equal(rows.filter(r => r.kind === "recap").length, 2);
-  assert.ok(rows.some(r => r.kind === "bot_message" && r.label === "COS replied" && r.botName === "COS"));
-  assert.ok(rows.some(r => r.kind === "bot_message_status" && r.text === "Read me"));
+  const rows = botTranscriptRows(
+    [
+      user("u", "First"),
+      step("a", ""),
+      {
+        id: "b",
+        type: "bot_message",
+        kind: "reply",
+        botId: "c",
+        botName: "COS",
+        text: "Saved reply",
+      },
+      step("b-step", ""),
+      answer("done", "Done"),
+      {
+        id: "s",
+        type: "bot_message_status",
+        data: {
+          deliveryId: "d",
+          botId: "c",
+          botName: "COS",
+          outcome: "replied_while_paused",
+          text: "Read me",
+        },
+      },
+    ],
+    null,
+    { running: false, level: "summary" },
+  );
+  assert.equal(rows.filter((r) => r.kind === "recap").length, 2);
+  assert.ok(
+    rows.some((r) => r.kind === "bot_message" && r.label === "COS replied" && r.botName === "COS"),
+  );
+  assert.ok(rows.some((r) => r.kind === "bot_message_status" && r.text === "Read me"));
 });

@@ -53,11 +53,16 @@ export function setRendererLifecycleGuard(
   const after: SourceState = {
     dirty: patch.dirty ?? before.dirty,
     saving: patch.saving ?? before.saving,
-    ...(options.label !== undefined ? { label: options.label } : before.label !== undefined ? { label: before.label } : {}),
+    ...(options.label !== undefined
+      ? { label: options.label }
+      : before.label !== undefined
+        ? { label: before.label }
+        : {}),
   };
   sources[source] = after;
   const gitBusy = patch.gitBusy ?? current.gitBusy;
-  const changed = after.dirty !== before.dirty || after.saving !== before.saving || gitBusy !== current.gitBusy;
+  const changed =
+    after.dirty !== before.dirty || after.saving !== before.saving || gitBusy !== current.gitBusy;
   current = {
     dirty: SOURCES.some((name) => sources[name].dirty),
     gitBusy,

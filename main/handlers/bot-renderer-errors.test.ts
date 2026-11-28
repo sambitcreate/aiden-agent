@@ -22,7 +22,10 @@ test("a Bot create that loses every inventory race asks for a retry, not a revie
 test("create and access saves share the remaining recovery guidance", () => {
   const validation = new BotCapabilityValidationError("Choose a model this Bot can use.");
   assert.equal(message(botCreateRendererError(validation)), "Choose a model this Bot can use.");
-  assert.equal(message(botAccessUpdateRendererError(validation)), "Choose a model this Bot can use.");
+  assert.equal(
+    message(botAccessUpdateRendererError(validation)),
+    "Choose a model this Bot can use.",
+  );
   assert.equal(
     message(botCreateRendererError(new BotCapabilityRevisionConflictError("revision:1"))),
     "This Bot changed. Refresh it before trying again.",

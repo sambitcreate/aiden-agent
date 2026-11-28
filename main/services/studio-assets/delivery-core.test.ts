@@ -30,7 +30,10 @@ test("issued URLs carry only an opaque token that resolves to the asset", () => 
   const url = grants.issue(owner(), ASSET, "original");
   assert.match(url, /^aiden-asset:\/\/grant\/[A-Za-z0-9_-]{43}$/u);
   assert.equal(url.includes(ASSET), false);
-  assert.deepEqual(grants.resolve(studioAssetGrantToken(url)!), { assetId: ASSET, rendition: "original" });
+  assert.deepEqual(grants.resolve(studioAssetGrantToken(url)!), {
+    assetId: ASSET,
+    rendition: "original",
+  });
 });
 
 test("grants deduplicate per document, asset and rendition", () => {
@@ -57,7 +60,10 @@ test("navigation revokes every grant of that document and only that document", (
 
   a.navigate();
   for (const url of aUrls) assert.equal(grants.resolve(studioAssetGrantToken(url)!), undefined);
-  assert.deepEqual(grants.resolve(studioAssetGrantToken(bUrl)!), { assetId: ASSET, rendition: "original" });
+  assert.deepEqual(grants.resolve(studioAssetGrantToken(bUrl)!), {
+    assetId: ASSET,
+    rendition: "original",
+  });
   assert.equal(a.listeners(), 0);
   assert.equal(grants.size(), 1);
 });

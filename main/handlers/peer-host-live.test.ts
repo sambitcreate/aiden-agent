@@ -2,10 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { PeerHostView } from "../../renderer/shared/peer-host.js";
 import { AIDEN_REMOTE_RUN_STREAMS_FEATURE } from "../services/aiden-remote-protocol.js";
-import {
-  PeerHostManager,
-  type PeerManagerRegistry,
-} from "../services/peer-host-manager.js";
+import { PeerHostManager, type PeerManagerRegistry } from "../services/peer-host-manager.js";
 import { PEER_RUN_EVICT_MS } from "../services/peer-run-subscriptions.js";
 import type { PeerRequest } from "../services/peer-transport.js";
 import { PeerTransportError } from "../services/peer-transport.js";
@@ -114,7 +111,8 @@ async function setup() {
   registerPeerHostLiveHandlers<FakeEvent>({
     handle: (channel, handler) => handlers.set(channel, handler),
     owner: (event) => {
-      if (!event.document) throw new Error("Device actions require an active application document.");
+      if (!event.document)
+        throw new Error("Device actions require an active application document.");
       return event.document;
     },
     manager: () => manager,
@@ -138,7 +136,13 @@ test("windows share one live run stream and lose their viewers when their docume
       subscriptionId: string;
       key: string;
     };
-    const b = (await invoke("remote:peerRunSubscribe", second, "host_a", { runId: "run_1" }, 0)) as {
+    const b = (await invoke(
+      "remote:peerRunSubscribe",
+      second,
+      "host_a",
+      { runId: "run_1" },
+      0,
+    )) as {
       subscriptionId: string;
       key: string;
     };
@@ -171,7 +175,11 @@ test("windows share one live run stream and lose their viewers when their docume
     assert.equal(await invoke("remote:peerRunUnsubscribe", second, b.subscriptionId), true);
     timers.advance(PEER_RUN_EVICT_MS + 1);
     await settle();
-    assert.equal(registry.streams[0]!.signal.aborted, true, "the last viewer leaving evicts the stream");
+    assert.equal(
+      registry.streams[0]!.signal.aborted,
+      true,
+      "the last viewer leaving evicts the stream",
+    );
   } finally {
     manager.close();
   }
@@ -213,7 +221,11 @@ test("only an active application document reaches the device supervisor", async 
       ["remote:peersRemove", ["host_a"]],
       ["remote:peerReconnect", ["host_a"]],
     ] as const) {
-      await assert.rejects(invoke(channel, gone, ...args), /application document changed/u, channel);
+      await assert.rejects(
+        invoke(channel, gone, ...args),
+        /application document changed/u,
+        channel,
+      );
       await assert.rejects(invoke(channel, null, ...args), /active application document/u, channel);
     }
     assert.deepEqual(registry.reads, [], "rejected requests make no host traffic");
@@ -233,7 +245,9 @@ test("peerCall returns typed outcomes while peerOperation keeps throwing", async
       ok: true,
       value: { approval: null },
     });
-    assert.deepEqual(await invoke("remote:peerOperation", page, "host_a", read), { approval: null });
+    assert.deepEqual(await invoke("remote:peerOperation", page, "host_a", read), {
+      approval: null,
+    });
 
     const invalid = { operation: "approval", resourceId: "../escape" };
     const outcome = (await invoke("remote:peerCall", page, "host_a", invalid)) as {
@@ -264,9 +278,13 @@ test("a request in flight is aborted when its document goes away", async () => {
   try {
     registry.answer = (input) =>
       new Promise((_resolve, reject) => {
-        input.signal?.addEventListener("abort", () => reject(new PeerTransportError("unavailable")), {
-          once: true,
-        });
+        input.signal?.addEventListener(
+          "abort",
+          () => reject(new PeerTransportError("unavailable")),
+          {
+            once: true,
+          },
+        );
       });
     const page = new FakeDocument("1:main");
     const read = { operation: "approval", resourceId: "stream_1" };
@@ -292,7 +310,10 @@ test("disabling through IPC stops supervision and drops the host's rows", async 
       before.map((status) => status.state.kind),
       ["connected"],
     );
-    await assert.rejects(invoke("remote:peersSetEnabled", page, "host_a", "no"), /connection state/u);
+    await assert.rejects(
+      invoke("remote:peersSetEnabled", page, "host_a", "no"),
+      /connection state/u,
+    );
     assert.equal(registry.view.enabled, true);
 
     await invoke("remote:peersSetEnabled", page, "host_a", false);
@@ -333,7 +354,11 @@ test("the first status and feed replies describe the loaded hosts, not an empty 
     owner: (event) => event.document!,
     // Built on first use, as in the app.
     manager: () =>
-      (manager ??= new PeerHostManager({ registry, broadcast: () => {}, timers: new FakeTimers() })),
+      (manager ??= new PeerHostManager({
+        registry,
+        broadcast: () => {},
+        timers: new FakeTimers(),
+      })),
   });
   try {
     const window = new FakeDocument("1:main");
@@ -344,7 +369,11 @@ test("the first status and feed replies describe the loaded hosts, not an empty 
       { hostId: "host_a", generation: 0, state: { kind: "disabled" }, feed: "off", stale: false },
     ]);
     assert.equal(await feed, null);
-    assert.equal(registry.streams.length + registry.reads.length, 0, "a disabled host makes no traffic");
+    assert.equal(
+      registry.streams.length + registry.reads.length,
+      0,
+      "a disabled host makes no traffic",
+    );
   } finally {
     manager?.close();
   }
@@ -355,11 +384,22 @@ test("a durable request with no saved admission never reaches the host", async (
   try {
     const page = new FakeDocument("durable:main");
     const before = registry.reads.length;
-    const result = await invoke("remote:peerCall", page, "host_a", {
-      operation: "send", resourceId: "chat_1", body: { text: "Unconfirmed" }, idempotencyKey: "request_123",
-    }, { savedIntent: true }) as { ok: boolean; error?: { code: string } };
+    const result = (await invoke(
+      "remote:peerCall",
+      page,
+      "host_a",
+      {
+        operation: "send",
+        resourceId: "chat_1",
+        body: { text: "Unconfirmed" },
+        idempotencyKey: "request_123",
+      },
+      { savedIntent: true },
+    )) as { ok: boolean; error?: { code: string } };
     assert.equal(result.ok, false);
     assert.equal(result.error?.code, "outcome_unknown");
     assert.equal(registry.reads.length, before);
-  } finally { manager.close(); }
+  } finally {
+    manager.close();
+  }
 });

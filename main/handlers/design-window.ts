@@ -1,6 +1,10 @@
 import { BrowserWindow, ipcMain, screen, systemPreferences } from "../platform.js";
 import { designModeEnabled } from "../services/studio/feature-flags.js";
-import { canWidenForDesign, widenWindowForDesign, type Rectangle } from "../windows/design-window-core.js";
+import {
+  canWidenForDesign,
+  widenWindowForDesign,
+  type Rectangle,
+} from "../windows/design-window-core.js";
 
 const workAreaFor = (bounds: Rectangle) => screen.getDisplayMatching(bounds).workArea;
 
@@ -24,6 +28,8 @@ export function registerDesignWindowHandlers(): void {
   });
   ipcMain.handle("app:designWindowCanWiden", (event) => {
     if (!designModeEnabled()) return { canWiden: false };
-    return { canWiden: canWidenForDesign(BrowserWindow.fromWebContents(event.sender), workAreaFor) };
+    return {
+      canWiden: canWidenForDesign(BrowserWindow.fromWebContents(event.sender), workAreaFor),
+    };
   });
 }

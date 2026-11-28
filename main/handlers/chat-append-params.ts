@@ -81,11 +81,7 @@ function boundedString(
   optional = false,
 ): { value: string | undefined; bytes: number } {
   if (value === undefined && optional) return { value: undefined, bytes: 0 };
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > maxChars
-  ) {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxChars) {
     throw new Error(`Invalid ${label}.`);
   }
   const bytes = Buffer.byteLength(value, "utf8");
@@ -93,35 +89,16 @@ function boundedString(
   return { value, bytes };
 }
 
-export function parseChatAppend(
-  id: unknown,
-  message: unknown,
-  meta: unknown,
-): ParsedChatAppend {
-  const parsedChatId = boundedString(
-    id,
-    "chat id",
-    MAX_CHAT_ID_CHARS,
-    MAX_CHAT_ID_BYTES,
-  );
+export function parseChatAppend(id: unknown, message: unknown, meta: unknown): ParsedChatAppend {
+  const parsedChatId = boundedString(id, "chat id", MAX_CHAT_ID_CHARS, MAX_CHAT_ID_BYTES);
   const chatId = parsedChatId.value!;
-  const messageRecord = recordWithExactKeys(
-    message,
-    MESSAGE_KEYS,
-    "chat message",
-  );
-  const metaRecord = recordWithExactKeys(
-    meta,
-    META_KEYS,
-    "chat message metadata",
-  );
+  const messageRecord = recordWithExactKeys(message, MESSAGE_KEYS, "chat message");
+  const metaRecord = recordWithExactKeys(meta, META_KEYS, "chat message metadata");
 
   if (messageRecord.role !== "user") {
     throw new Error("Renderer chat appends accept only user messages.");
   }
-  const { content, bytes: contentBytes } = parseChatMessageContent(
-    messageRecord.content,
-  );
+  const { content, bytes: contentBytes } = parseChatMessageContent(messageRecord.content);
   const parsedMessageModel = boundedString(
     messageRecord.model,
     "message model",
@@ -130,20 +107,14 @@ export function parseChatAppend(
     true,
   );
   const attachments = parseAttachments(messageRecord.attachments);
-  const rawGrabbedElements = parseGrabbedElements(
-    messageRecord.grabbedElements,
-    "append",
-  );
+  const rawGrabbedElements = parseGrabbedElements(messageRecord.grabbedElements, "append");
   const imageAttachmentIds = new Set(
     (attachments ?? [])
       .filter((attachment) => attachment.kind === "image" && Boolean(attachment.data))
       .map((attachment) => attachment.id),
   );
   const grabbedElements = rawGrabbedElements?.map((element) => {
-    if (
-      element.thumbnailAttachmentId &&
-      !imageAttachmentIds.has(element.thumbnailAttachmentId)
-    ) {
+    if (element.thumbnailAttachmentId && !imageAttachmentIds.has(element.thumbnailAttachmentId)) {
       const { thumbnailAttachmentId: _dangling, ...withoutThumb } = element;
       return withoutThumb;
     }
@@ -164,10 +135,7 @@ export function parseChatAppend(
     MAX_MODEL_ID_BYTES,
     true,
   );
-  if (
-    metaRecord.autoTitle !== undefined &&
-    typeof metaRecord.autoTitle !== "boolean"
-  ) {
+  if (metaRecord.autoTitle !== undefined && typeof metaRecord.autoTitle !== "boolean") {
     throw new Error("Invalid auto-title flag.");
   }
   const parsedTurnId = boundedString(
@@ -192,8 +160,7 @@ export function parseChatAppend(
 
   let retainedBytes = FIXED_APPEND_REPRESENTATION_BYTES;
   retainedBytes += parsedChatId.bytes + contentBytes + parsedMessageModel.bytes;
-  retainedBytes +=
-    parsedProviderId.bytes + parsedMetaModel.bytes + parsedTurnId.bytes;
+  retainedBytes += parsedProviderId.bytes + parsedMetaModel.bytes + parsedTurnId.bytes;
   retainedBytes += attachmentRepresentationBytes(attachments);
   retainedBytes += grabbedElementsRepresentationBytes(grabbedElements);
   if (skillReference) {
@@ -201,8 +168,7 @@ export function parseChatAppend(
     retainedBytes += Buffer.byteLength(skillReference.displayName, "utf8");
     retainedBytes += Buffer.byteLength(skillReference.source, "utf8") + 64;
   }
-  if (!Number.isSafeInteger(retainedBytes))
-    throw new Error("Invalid chat message payload.");
+  if (!Number.isSafeInteger(retainedBytes)) throw new Error("Invalid chat message payload.");
 
   return {
     chatId,

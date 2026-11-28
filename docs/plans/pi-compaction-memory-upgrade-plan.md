@@ -56,12 +56,12 @@ Research sources:
 
 The relevant changes from Aiden's `0.80.10` baseline are:
 
-| Pi release | Relevant change | Aiden consequence |
-| --- | --- | --- |
-| `0.81.0` | Compaction entries store `retainedTail` directly and include summary usage. | Old `firstKeptEntryId` journals need a materializing migration; usage accounting can stop inferring hidden summary cost. |
-| `0.81.1`–`0.82.0` | Compaction gained retry/lifecycle support and isolated routing identities with prompt caching disabled. | Replace Aiden's proxy retry wrapper with the audited Pi retry API after parity fixtures pass. |
-| `0.84.0` | v4 lane-based sessions, durable operation records, bounded branch queries, and atomic JSONL publication. | Introduce a session port and a one-time migration; do not change the package underneath existing journals. |
-| `0.84.4` | `prepareNextTurn*` runs only when another assistant turn will actually start. | Move end-of-run work to `agent_end`; retain between-tool pressure checks only on true continuations. |
+| Pi release        | Relevant change                                                                                          | Aiden consequence                                                                                                        |
+| ----------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `0.81.0`          | Compaction entries store `retainedTail` directly and include summary usage.                              | Old `firstKeptEntryId` journals need a materializing migration; usage accounting can stop inferring hidden summary cost. |
+| `0.81.1`–`0.82.0` | Compaction gained retry/lifecycle support and isolated routing identities with prompt caching disabled.  | Replace Aiden's proxy retry wrapper with the audited Pi retry API after parity fixtures pass.                            |
+| `0.84.0`          | v4 lane-based sessions, durable operation records, bounded branch queries, and atomic JSONL publication. | Introduce a session port and a one-time migration; do not change the package underneath existing journals.               |
+| `0.84.4`          | `prepareNextTurn*` runs only when another assistant turn will actually start.                            | Move end-of-run work to `agent_end`; retain between-tool pressure checks only on true continuations.                     |
 
 ## Reference extension/plugin audit rule
 
@@ -69,18 +69,18 @@ Before implementing any phase, re-check the latest default branch/release of eve
 
 The standing reference inventory is:
 
-| Reference | Re-check when changing | Current relevance to this plan |
-| --- | --- | --- |
-| [`mksglu/context-mode`](https://github.com/mksglu/context-mode) | context projection, tool-output shaping, session recall, compaction hooks | Direct. Compare sandboxed bulk results, FTS5/BM25 on-demand recall, clean-session semantics, purge/diagnostics, and pre-compaction capture. Keep these main-owned rather than adding a parallel MCP authority path. |
-| [`nicobailon/pi-subagents`](https://github.com/nicobailon/pi-subagents) | child context, artifacts, truncation, session sharing, background lifecycle | Direct. Compare initial-fork shaping, bounded artifacts, child/parent continuity, and observability while preserving Aiden's existing immutable authority ceilings. |
-| [`juicesharp/rpiv-mono`](https://github.com/juicesharp/rpiv-mono) | any installed `rpiv-*` integration or shared Pi hook/runtime change | Compatibility. Re-run the affected Aiden integration contracts whenever the Pi runtime/session surface changes. |
-| [`nicobailon/pi-web-access`](https://github.com/nicobailon/pi-web-access) | web-result persistence, citations, or context shaping | Conditional. Compare bounded extracted content and durable source references if web output enters memory or compaction fixtures. |
-| [`nicobailon/pi-mcp-adapter`](https://github.com/nicobailon/pi-mcp-adapter) | MCP lifecycle, result shaping, schemas, or session sharing | Direct for tool bulk. Compare compact result rendering and explicit unsupported-content failures; do not create a second MCP server/session owner. |
-| [`DietrichGebert/ponytail`](https://github.com/DietrichGebert/ponytail) | autonomous simplification or code-change minimization | Conditional. Use only as a workflow/simplicity reference, never as memory authority. |
-| [`@gotgenes/pi-permission-system`](https://pi.dev/packages/@gotgenes/pi-permission-system) | approvals, memory writes, child asks, external paths, or capability policy | Direct. Compare deterministic allow/ask/deny, fail-closed gates, bounded approval presentation, and child-to-owner forwarding. Do not assume its still-open durable-approval semantics are settled. |
-| [`MattDevy/pi-extensions`](https://github.com/MattDevy/pi-extensions) and [`pi-simplify`](https://github.com/MattDevy/pi-extensions/tree/main/packages/pi-simplify) | learning/memory suggestions, review, or simplification | Direct for `pi-continuous-learning` confidence/feedback ideas; `pi-simplify` itself is code-review workflow, not context compaction, so it is only a delivery-quality reference here. |
-| [`narumiruna/pi-extensions`](https://github.com/narumiruna/pi-extensions) | provider-native compaction, side-context, or Pi extension compatibility | Direct. Compare `pi-codex-compact`'s bounded opaque checkpoint plus Pi-native fallback before Phase 7 provider-native work. |
-| [`injaneity/pi-computer-use`](https://github.com/injaneity/pi-computer-use) | screenshot/image history, computer-use tool output, or resumed visual turns | Conditional. Compare media/result bounding when extending the image-heavy replay matrix. |
+| Reference                                                                                                                                                           | Re-check when changing                                                      | Current relevance to this plan                                                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`mksglu/context-mode`](https://github.com/mksglu/context-mode)                                                                                                     | context projection, tool-output shaping, session recall, compaction hooks   | Direct. Compare sandboxed bulk results, FTS5/BM25 on-demand recall, clean-session semantics, purge/diagnostics, and pre-compaction capture. Keep these main-owned rather than adding a parallel MCP authority path. |
+| [`nicobailon/pi-subagents`](https://github.com/nicobailon/pi-subagents)                                                                                             | child context, artifacts, truncation, session sharing, background lifecycle | Direct. Compare initial-fork shaping, bounded artifacts, child/parent continuity, and observability while preserving Aiden's existing immutable authority ceilings.                                                 |
+| [`juicesharp/rpiv-mono`](https://github.com/juicesharp/rpiv-mono)                                                                                                   | any installed `rpiv-*` integration or shared Pi hook/runtime change         | Compatibility. Re-run the affected Aiden integration contracts whenever the Pi runtime/session surface changes.                                                                                                     |
+| [`nicobailon/pi-web-access`](https://github.com/nicobailon/pi-web-access)                                                                                           | web-result persistence, citations, or context shaping                       | Conditional. Compare bounded extracted content and durable source references if web output enters memory or compaction fixtures.                                                                                    |
+| [`nicobailon/pi-mcp-adapter`](https://github.com/nicobailon/pi-mcp-adapter)                                                                                         | MCP lifecycle, result shaping, schemas, or session sharing                  | Direct for tool bulk. Compare compact result rendering and explicit unsupported-content failures; do not create a second MCP server/session owner.                                                                  |
+| [`DietrichGebert/ponytail`](https://github.com/DietrichGebert/ponytail)                                                                                             | autonomous simplification or code-change minimization                       | Conditional. Use only as a workflow/simplicity reference, never as memory authority.                                                                                                                                |
+| [`@gotgenes/pi-permission-system`](https://pi.dev/packages/@gotgenes/pi-permission-system)                                                                          | approvals, memory writes, child asks, external paths, or capability policy  | Direct. Compare deterministic allow/ask/deny, fail-closed gates, bounded approval presentation, and child-to-owner forwarding. Do not assume its still-open durable-approval semantics are settled.                 |
+| [`MattDevy/pi-extensions`](https://github.com/MattDevy/pi-extensions) and [`pi-simplify`](https://github.com/MattDevy/pi-extensions/tree/main/packages/pi-simplify) | learning/memory suggestions, review, or simplification                      | Direct for `pi-continuous-learning` confidence/feedback ideas; `pi-simplify` itself is code-review workflow, not context compaction, so it is only a delivery-quality reference here.                               |
+| [`narumiruna/pi-extensions`](https://github.com/narumiruna/pi-extensions)                                                                                           | provider-native compaction, side-context, or Pi extension compatibility     | Direct. Compare `pi-codex-compact`'s bounded opaque checkpoint plus Pi-native fallback before Phase 7 provider-native work.                                                                                         |
+| [`injaneity/pi-computer-use`](https://github.com/injaneity/pi-computer-use)                                                                                         | screenshot/image history, computer-use tool output, or resumed visual turns | Conditional. Compare media/result bounding when extending the image-heavy replay matrix.                                                                                                                            |
 
 Research from these repositories informs contracts and tests; it does not authorize installing, vendoring, or exposing a third-party extension in Aiden. Aiden keeps its existing main-process authority, encrypted credentials, workspace fences, and private journal ownership.
 
@@ -191,15 +191,15 @@ Gate: upstream parity fixtures plus Aiden lifecycle, provider, deletion, corrupt
 
 ## Phase 5 — Prove every conversation surface
 
-| Surface | Required behavior |
-| --- | --- |
-| Ordinary workspace chat | Current prompt and static tools are budgeted; automatic and manual compaction use the saved provider/model. |
-| Canonical Bot chat on Mac | Same lifecycle as workspace chat plus Bot authority/persona; no new conversation is minted to escape pressure. |
-| Telegram-bound Bot | Uses the canonical backing chat and Bot-saved model, acquires the same turn gate, and shares checkpoints with Mac/iOS. |
-| Ordinary Telegram chat | Uses its own persistent backing chat and exact profile/workspace selection without inheriting Bot memory. |
-| iOS/Android Bot chat | Continues through the existing one-chat-per-Bot server contract; clients render state but never author checkpoint/memory contents. |
-| Child agent | Compacts an oversized initial fork before first provider I/O and between later turns, while preserving its existing bounded authority and parent reporting. |
-| Scheduled/remote turn | Uses the same lifecycle only where that surface already has generation authority; this plan does not grant new unattended tools or Bot identity. |
+| Surface                   | Required behavior                                                                                                                                           |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ordinary workspace chat   | Current prompt and static tools are budgeted; automatic and manual compaction use the saved provider/model.                                                 |
+| Canonical Bot chat on Mac | Same lifecycle as workspace chat plus Bot authority/persona; no new conversation is minted to escape pressure.                                              |
+| Telegram-bound Bot        | Uses the canonical backing chat and Bot-saved model, acquires the same turn gate, and shares checkpoints with Mac/iOS.                                      |
+| Ordinary Telegram chat    | Uses its own persistent backing chat and exact profile/workspace selection without inheriting Bot memory.                                                   |
+| iOS/Android Bot chat      | Continues through the existing one-chat-per-Bot server contract; clients render state but never author checkpoint/memory contents.                          |
+| Child agent               | Compacts an oversized initial fork before first provider I/O and between later turns, while preserving its existing bounded authority and parent reporting. |
+| Scheduled/remote turn     | Uses the same lifecycle only where that surface already has generation authority; this plan does not grant new unattended tools or Bot identity.            |
 
 Gate: one shared contract matrix runs against every adapter, with credentialed Telegram and packaged multi-surface concurrency retained as explicit operator gates.
 
@@ -297,6 +297,7 @@ This plan is complete only when:
 ## 2026-09-22 bounded compatibility follow-up
 
 Model-switch pressure checks now fence usage by exact provider/model and measure retained content across reopened checkpoints; effect-store startup recovery is single-flight. See [audit and scope](../../.memory/upgrade-pi-budget-recovery.md). Pi remains pinned to audited 0.84.4. Persisted per-model budget overrides and a newer paired Pi upgrade are deferred pending configuration/preflight integration and the existing upgrade gates. No rollout stage or installed acceptance status advances.
+
 ## 2026-09-22 small-context budget follow-up
 
 A separate bounded fix applies the existing VCC reserve/retained-tail bounds to LLM settings only when their pair cannot fit the selected model context. This prevents negative automatic thresholds and unnecessary child/restart checkpoints while preserving feasible Pi defaults and the pinned runtime. Boundary, manual/automatic restart and child regressions pass locally. See [implementation and remaining scope](../../.memory/upgrade-pi-small-context-budgets.md); PR/CI review is tracked separately. Persisted user-defined compaction-policy overrides remain unimplemented; custom model context/output limits already ship. No rollout or operator-acceptance stage advances.

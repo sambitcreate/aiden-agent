@@ -33,9 +33,9 @@ function formatToken(value: string): string {
     return value.slice(0, -1) + value.slice(-1).toLocaleUpperCase();
   }
   if (/^[a-z]\d+(?:\.\d+)?[bm]$/iu.test(value)) {
-    return value.charAt(0).toLocaleUpperCase() +
-      value.slice(1, -1) +
-      value.slice(-1).toLocaleUpperCase();
+    return (
+      value.charAt(0).toLocaleUpperCase() + value.slice(1, -1) + value.slice(-1).toLocaleUpperCase()
+    );
   }
   if (/^[vkmq]\d+(?:\.\d+)?$/iu.test(value)) return value.toLocaleUpperCase();
   return lower.charAt(0).toLocaleUpperCase() + lower.slice(1);
@@ -58,10 +58,7 @@ export interface ModelDisplay {
 }
 
 /** Prefer models.dev's canonical name while retaining local quantization tags. */
-export function resolveModelDisplay(
-  modelId: string,
-  info?: Pick<ModelInfo, "name">,
-): ModelDisplay {
+export function resolveModelDisplay(modelId: string, info?: Pick<ModelInfo, "name">): ModelDisplay {
   const match = modelId.match(FORMAT_RE);
   const baseId = match?.index === undefined ? modelId : modelId.slice(0, match.index);
   const officialName = info?.name?.trim();

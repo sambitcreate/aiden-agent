@@ -8,14 +8,25 @@ export function ConsentSummary({ plan }: { plan: ImageRunConsentPlan }) {
   const upstream = plan.requests.some((request) => request.pendingReferenceCount > 0);
   return (
     <div className="flex flex-col gap-3">
-      {note ? <Text as="p" variant="small" color="secondary">{note}</Text> : null}
+      {note ? (
+        <Text as="p" variant="small" color="secondary">
+          {note}
+        </Text>
+      ) : null}
       <ul aria-label="Image requests" className="flex flex-col gap-2">
         {plan.requests.map((request) => {
           const references = referenceSummary(request);
           return (
-            <li key={`${request.nodeId}:${request.variant}`} className="flex flex-col gap-0.5 rounded-control bg-control px-3 py-2">
+            <li
+              key={`${request.nodeId}:${request.variant}`}
+              className="flex flex-col gap-0.5 rounded-control bg-control px-3 py-2"
+            >
               <Text variant="strong">{`${request.providerLabel} · ${request.modelLabel}`}</Text>
-              {references ? <Text variant="small" color="secondary">{references}</Text> : null}
+              {references ? (
+                <Text variant="small" color="secondary">
+                  {references}
+                </Text>
+              ) : null}
             </li>
           );
         })}
@@ -56,7 +67,11 @@ export function ConsentSheet({
         if (!open) onCancel();
       }}
       title={plan ? consentTitle(plan) : ""}
-      description={plan ? `Generating sends ${requestCountLabel(plan.totalRequests)} and may incur charges.` : undefined}
+      description={
+        plan
+          ? `Generating sends ${requestCountLabel(plan.totalRequests)} and may incur charges.`
+          : undefined
+      }
       confirmLabel="Generate"
       cancelLabel="Cancel"
       busy={busy}

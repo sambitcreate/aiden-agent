@@ -18,10 +18,19 @@ const grant = (overrides: Record<string, unknown> = {}) => ({
 
 test("the renderer takes a viewer grant only for the viewer host, a device id and a live loopback grant", () => {
   assert.deepEqual(parseBotComputerViewerGrant(grant(), NOW), grant());
-  assert.equal(parseBotComputerViewerGrant(grant({ hostId: "local" }), NOW), undefined, "the Simulator's host");
+  assert.equal(
+    parseBotComputerViewerGrant(grant({ hostId: "local" }), NOW),
+    undefined,
+    "the Simulator's host",
+  );
   assert.equal(parseBotComputerViewerGrant(grant({ deviceId: "../vm" }), NOW), undefined);
   assert.equal(
-    parseBotComputerViewerGrant(grant({ grant: { origin: "http://192.168.1.4:52100", token: "a".repeat(43), expiresAt: NOW + 1 } }), NOW),
+    parseBotComputerViewerGrant(
+      grant({
+        grant: { origin: "http://192.168.1.4:52100", token: "a".repeat(43), expiresAt: NOW + 1 },
+      }),
+      NOW,
+    ),
     undefined,
     "not loopback",
   );
@@ -39,7 +48,12 @@ test("the viewer request is { start } and nothing else", () => {
 });
 
 test("a pointer must sit inside its screen", () => {
-  assert.deepEqual(parseBotComputerPointer({ x: 0, y: 768, width: 1024, height: 768 }), { x: 0, y: 768, width: 1024, height: 768 });
+  assert.deepEqual(parseBotComputerPointer({ x: 0, y: 768, width: 1024, height: 768 }), {
+    x: 0,
+    y: 768,
+    width: 1024,
+    height: 768,
+  });
   assert.equal(parseBotComputerPointer({ x: 1025, y: 0, width: 1024, height: 768 }), null);
   assert.equal(parseBotComputerPointer({ x: -1, y: 0, width: 1024, height: 768 }), null);
   assert.equal(parseBotComputerPointer({ x: 1, y: 1, width: 0, height: 768 }), null);

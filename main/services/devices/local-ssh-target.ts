@@ -20,7 +20,9 @@ export interface LocalSshTargetDeps {
 }
 
 /** The `ssh -G` arguments for one host entry. */
-export function sshConfigArgs(host: Pick<SshDeviceHostConfig, "target" | "port" | "identityFile">): string[] {
+export function sshConfigArgs(
+  host: Pick<SshDeviceHostConfig, "target" | "port" | "identityFile">,
+): string[] {
   return [
     "-G",
     ...(host.port === undefined ? [] : ["-p", String(host.port)]),
@@ -63,7 +65,9 @@ export async function isLocalSshTarget(
   if (!hostname) return false;
   const addresses = isIP(hostname) ? [hostname] : await deps.lookup(hostname).catch(() => []);
   const local = deps.localAddresses();
-  return addresses.length > 0 && addresses.every((address) => local.has(address) || isLoopback(address));
+  return (
+    addresses.length > 0 && addresses.every((address) => local.has(address) || isLoopback(address))
+  );
 }
 
 export function defaultLocalSshTargetDeps(
@@ -80,7 +84,9 @@ export function defaultLocalSshTargetDeps(
     },
     localAddresses: () =>
       new Set(
-        Object.values(networkInterfaces()).flatMap((entries) => entries?.map((entry) => entry.address) ?? []),
+        Object.values(networkInterfaces()).flatMap(
+          (entries) => entries?.map((entry) => entry.address) ?? [],
+        ),
       ),
   };
 }

@@ -13,10 +13,7 @@ import {
 } from "./helper-client.js";
 import { FORM_FILL_MODEL_REVISION } from "./manifest.js";
 
-export type {
-  FormFillArtifactStatus,
-  FormFillArtifactState,
-} from "./artifacts.js";
+export type { FormFillArtifactStatus, FormFillArtifactState } from "./artifacts.js";
 
 /**
  * Coordinator for the on-device form-fill runtime: artifact lifecycle plus a
@@ -52,20 +49,12 @@ export class FormFillRuntime {
    * cached compiled bundle (compiling once when missing). */
   async ensureReady(signal?: AbortSignal): Promise<void> {
     if (this.stopping)
-      throw new FormFillHelperError(
-        "cancelled",
-        "The form-fill runtime is stopping.",
-      );
-    const bound = signal
-      ? AbortSignal.any([signal, this.lifecycle.signal])
-      : this.lifecycle.signal;
+      throw new FormFillHelperError("cancelled", "The form-fill runtime is stopping.");
+    const bound = signal ? AbortSignal.any([signal, this.lifecycle.signal]) : this.lifecycle.signal;
     bound.throwIfAborted();
     const support = (this.deps.supported ?? isFormFillSupported)();
     if (!support.supported) {
-      throw new FormFillHelperError(
-        "unavailable",
-        support.reason ?? "Form fill is unsupported.",
-      );
+      throw new FormFillHelperError("unavailable", support.reason ?? "Form fill is unsupported.");
     }
     const failure = await (this.deps.verifyPackage ?? verifyFormFillPackage)(
       this.artifacts.rootDir,
@@ -101,10 +90,7 @@ export class FormFillRuntime {
     bound.throwIfAborted();
   }
 
-  private async prepare(
-    client: FormFillHelperClient,
-    signal: AbortSignal,
-  ): Promise<void> {
+  private async prepare(client: FormFillHelperClient, signal: AbortSignal): Promise<void> {
     const compiled = await this.compiledModelPath(signal);
     signal.throwIfAborted();
     try {
@@ -131,20 +117,13 @@ export class FormFillRuntime {
   private async compiledModelPath(signal?: AbortSignal): Promise<string> {
     const root = this.artifacts.rootDir;
     const packagePath = formFillPackagePath(root);
-    const compiledDir = path.join(
-      this.artifacts.compiledDir,
-      FORM_FILL_MODEL_REVISION,
-    );
+    const compiledDir = path.join(this.artifacts.compiledDir, FORM_FILL_MODEL_REVISION);
     if (this.compiled) return this.compiled;
     // Never trust compiled bytes left by an earlier process. Compile from the
     // verified source once per runtime, then reuse this process-owned result.
     await fsp.rm(this.artifacts.compiledDir, { recursive: true, force: true });
     signal?.throwIfAborted();
-    const compiled = await this.getClient().compileModel(
-      packagePath,
-      compiledDir,
-      signal,
-    );
+    const compiled = await this.getClient().compileModel(packagePath, compiledDir, signal);
     signal?.throwIfAborted();
     this.compiled = compiled;
     return this.compiled;
@@ -155,19 +134,14 @@ export class FormFillRuntime {
     options: string[],
     signal?: AbortSignal,
   ): Promise<FormFillScoreResult> {
-    const bound = signal
-      ? AbortSignal.any([signal, this.lifecycle.signal])
-      : this.lifecycle.signal;
+    const bound = signal ? AbortSignal.any([signal, this.lifecycle.signal]) : this.lifecycle.signal;
     await this.ensureReady(bound);
     bound.throwIfAborted();
     const client = this.getClient();
     try {
       return await client.score(context, options, bound);
     } catch (error) {
-      if (
-        error instanceof FormFillHelperError &&
-        error.code === "model_not_loaded"
-      ) {
+      if (error instanceof FormFillHelperError && error.code === "model_not_loaded") {
         // Helper restarted or lost state — reload once, then fail closed.
         this.preparation = null;
         await this.ensureReady(bound);

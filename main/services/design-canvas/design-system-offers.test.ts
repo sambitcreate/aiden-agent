@@ -19,7 +19,11 @@ async function write(root: string, relativePath: string, text: string): Promise<
 
 test("the workspace scan reads its style files but not vendored code, Aiden's design folder or credential files", async (t) => {
   const root = await tempDir(t);
-  await write(root, "src/styles/globals.css", ":root { --brand: #2f6fed; --font-sans: 'Inter', sans-serif }");
+  await write(
+    root,
+    "src/styles/globals.css",
+    ":root { --brand: #2f6fed; --font-sans: 'Inter', sans-serif }",
+  );
   await write(root, "node_modules/lib/theme.css", ":root { --vendor: #123456 }");
   await write(root, "design/old.css", ":root { --aiden: #654321 }");
   await write(root, ".env.css", ":root { --secret: #abcdef }");
@@ -30,7 +34,10 @@ test("the workspace scan reads its style files but not vendored code, Aiden's de
     detected.colors.map((color) => [color.name, color.value]),
     [["--brand", "#2f6fed"]],
   );
-  assert.deepEqual(detected.fonts.map((font) => font.family), ["Inter"]);
+  assert.deepEqual(
+    detected.fonts.map((font) => font.family),
+    ["Inter"],
+  );
   assert.deepEqual(detected.sources, ["src/styles/globals.css"]);
 });
 
@@ -72,7 +79,11 @@ test("an offer is logged only once its turn ended normally, and a failed turn's 
   assert.match(await new DesignSystemOffers({ file }).offerFor(root), /--brand #2f6fed/u);
 
   await offers.settle(root, false);
-  assert.match(await offers.offerFor(root), /--brand #2f6fed/u, "a failed or stopped turn leaves it for the next");
+  assert.match(
+    await offers.offerFor(root),
+    /--brand #2f6fed/u,
+    "a failed or stopped turn leaves it for the next",
+  );
   await offers.settle(root, true);
   assert.equal(await offers.offerFor(root), "");
   assert.equal(await new DesignSystemOffers({ file }).offerFor(root), "");

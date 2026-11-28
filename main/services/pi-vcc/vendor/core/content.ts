@@ -33,21 +33,20 @@ export const clipSentence = (text: string, max = 200): string => {
 };
 
 export const nonEmptyLines = (text: string): string[] =>
-  text.split("\n").map((line) => line.trim()).filter(Boolean);
+  text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
 
-export const firstLine = (text: string, max = 200): string =>
-  clip(text.split("\n")[0] ?? "", max);
+export const firstLine = (text: string, max = 200): string => clip(text.split("\n")[0] ?? "", max);
 
 export const textParts = (content: Message["content"]): string[] => {
   if (!content) return [];
   if (typeof content === "string") return [content];
-  return content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text);
+  return content.filter((part) => part.type === "text").map((part) => part.text);
 };
 
-export const textOf = (content: Message["content"]): string =>
-  textParts(content).join("\n");
+export const textOf = (content: Message["content"]): string => textParts(content).join("\n");
 
 /**
  * Check if tool call arguments contain content-bearing data.
@@ -74,17 +73,9 @@ export const isContentBearing = (args: Record<string, unknown>): boolean => {
   )
     return true;
   // oldText/newText without edits are content-bearing
-  if (
-    typeof args.oldText === "string" &&
-    args.oldText.length > 0 &&
-    args.edits === undefined
-  )
+  if (typeof args.oldText === "string" && args.oldText.length > 0 && args.edits === undefined)
     return true;
-  if (
-    typeof args.newText === "string" &&
-    args.newText.length > 0 &&
-    args.edits === undefined
-  )
+  if (typeof args.newText === "string" && args.newText.length > 0 && args.edits === undefined)
     return true;
   return false;
 };
@@ -107,10 +98,8 @@ export const extractToolCallText = (args: Record<string, unknown>): string => {
       }
     }
   }
-  if (typeof args.oldText === "string" && !Array.isArray(args.edits))
-    text += args.oldText + "\n";
-  if (typeof args.newText === "string" && !Array.isArray(args.edits))
-    text += args.newText + "\n";
+  if (typeof args.oldText === "string" && !Array.isArray(args.edits)) text += args.oldText + "\n";
+  if (typeof args.newText === "string" && !Array.isArray(args.edits)) text += args.newText + "\n";
   return text;
 };
 

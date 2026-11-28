@@ -26,7 +26,7 @@ const shell = "/bin/sh";
 async function installerFunctionHarness(body) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-install-functions-"));
   const source = await readFile(installer, "utf8");
-  const end = source.indexOf("\nwhile [ \"$#\" -gt 0 ]");
+  const end = source.indexOf('\nwhile [ "$#" -gt 0 ]');
   assert.notEqual(end, -1);
   const harness = path.join(root, "harness.sh");
   await writeFile(harness, `${source.slice(0, end)}\n${body}\n`);
@@ -39,7 +39,10 @@ async function plan({ system, machine, format = "auto", translated = "0", user =
   const curl = path.join(root, "curl");
   const sysctl = path.join(root, "sysctl");
   await Promise.all([
-    writeFile(uname, `#!/bin/sh\n[ "$1" = "-s" ] && printf '%s\\n' '${system}' || printf '%s\\n' '${machine}'\n`),
+    writeFile(
+      uname,
+      `#!/bin/sh\n[ "$1" = "-s" ] && printf '%s\\n' '${system}' || printf '%s\\n' '${machine}'\n`,
+    ),
     writeFile(curl, "#!/bin/sh\nexit 99\n"),
     writeFile(sysctl, `#!/bin/sh\nprintf '%s\\n' '${translated}'\n`),
   ]);
@@ -50,28 +53,45 @@ async function plan({ system, machine, format = "auto", translated = "0", user =
     env: { ...process.env, PATH: `${root}:${process.env.PATH ?? ""}` },
   });
   return Object.fromEntries(
-    stdout.trim().split("\n").map((line) => line.split("=", 2)),
+    stdout
+      .trim()
+      .split("\n")
+      .map((line) => line.split("=", 2)),
   );
 }
 
 test("selects exact package architecture aliases", async () => {
-  assert.equal((await plan({ system: "Linux", machine: "x86_64", format: "deb" })).asset,
-    "Aiden-Agent-1.2.3-amd64-linux.deb");
-  assert.equal((await plan({ system: "Linux", machine: "aarch64", format: "rpm" })).asset,
-    "Aiden-Agent-1.2.3-aarch64-linux.rpm");
-  assert.equal((await plan({ system: "Linux", machine: "x86_64", format: "appimage" })).asset,
-    "Aiden-Agent-1.2.3-x86_64-linux.AppImage");
-  assert.equal((await plan({ system: "Linux", machine: "arm64", format: "deb", user: true })).asset,
-    "Aiden-Agent-1.2.3-arm64-linux.AppImage");
+  assert.equal(
+    (await plan({ system: "Linux", machine: "x86_64", format: "deb" })).asset,
+    "Aiden-Agent-1.2.3-amd64-linux.deb",
+  );
+  assert.equal(
+    (await plan({ system: "Linux", machine: "aarch64", format: "rpm" })).asset,
+    "Aiden-Agent-1.2.3-aarch64-linux.rpm",
+  );
+  assert.equal(
+    (await plan({ system: "Linux", machine: "x86_64", format: "appimage" })).asset,
+    "Aiden-Agent-1.2.3-x86_64-linux.AppImage",
+  );
+  assert.equal(
+    (await plan({ system: "Linux", machine: "arm64", format: "deb", user: true })).asset,
+    "Aiden-Agent-1.2.3-arm64-linux.AppImage",
+  );
 });
 
 test("selects Mac DMGs and recognizes Rosetta", async () => {
-  assert.equal((await plan({ system: "Darwin", machine: "arm64" })).asset,
-    "Aiden-Agent-Beta-1.2.3-arm64.dmg");
-  assert.equal((await plan({ system: "Darwin", machine: "x86_64", translated: "0" })).asset,
-    "Aiden-Agent-Beta-1.2.3-x64.dmg");
-  assert.equal((await plan({ system: "Darwin", machine: "x86_64", translated: "1" })).asset,
-    "Aiden-Agent-Beta-1.2.3-arm64.dmg");
+  assert.equal(
+    (await plan({ system: "Darwin", machine: "arm64" })).asset,
+    "Aiden-Agent-Beta-1.2.3-arm64.dmg",
+  );
+  assert.equal(
+    (await plan({ system: "Darwin", machine: "x86_64", translated: "0" })).asset,
+    "Aiden-Agent-Beta-1.2.3-x64.dmg",
+  );
+  assert.equal(
+    (await plan({ system: "Darwin", machine: "x86_64", translated: "1" })).asset,
+    "Aiden-Agent-Beta-1.2.3-arm64.dmg",
+  );
 });
 
 test("rejects unsupported options, versions, systems, architectures, and formats", async () => {
@@ -84,9 +104,15 @@ test("rejects unsupported options, versions, systems, architectures, and formats
     await assert.rejects(execFileAsync(shell, [installer, ...args]), /Aiden installer:/u);
   }
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-install-reject-"));
-  await writeFile(path.join(root, "uname"), "#!/bin/sh\n[ \"$1\" = -s ] && echo FreeBSD || echo sparc\n");
+  await writeFile(
+    path.join(root, "uname"),
+    '#!/bin/sh\n[ "$1" = -s ] && echo FreeBSD || echo sparc\n',
+  );
   await writeFile(path.join(root, "curl"), "#!/bin/sh\nexit 99\n");
-  await Promise.all([chmod(path.join(root, "uname"), 0o755), chmod(path.join(root, "curl"), 0o755)]);
+  await Promise.all([
+    chmod(path.join(root, "uname"), 0o755),
+    chmod(path.join(root, "curl"), 0o755),
+  ]);
   await assert.rejects(
     execFileAsync(shell, [installer, "--plan", "--version", "1.2.3"], {
       env: { ...process.env, PATH: `${root}:${process.env.PATH ?? ""}` },
@@ -111,23 +137,16 @@ async function linuxDownloadFixture({
   const packagePath = path.join(root, asset);
   const checksumPath = path.join(root, "SHA256SUMS");
   const ghLog = path.join(root, "gh.log");
-  const requiredTools = [
-    "awk",
-    "cat",
-    "chmod",
-    "cp",
-    "grep",
-    "mkdir",
-    "mktemp",
-    "rm",
-    "rmdir",
-  ];
+  const requiredTools = ["awk", "cat", "chmod", "cp", "grep", "mkdir", "mktemp", "rm", "rmdir"];
   await Promise.all([
     writeFile(packagePath, payload),
     writeFile(checksumPath, `${checksum === "valid" ? digest : "0".repeat(64)}  ${asset}\n`),
-    writeFile(path.join(bin, "uname"), "#!/bin/sh\n[ \"$1\" = -s ] && echo Linux || echo x86_64\n"),
-    writeFile(path.join(bin, "mv"), "#!/bin/sh\n[ \"$1\" = -fT ] && shift\nexec /bin/mv -f \"$@\"\n"),
-    writeFile(path.join(bin, "ln"), "#!/bin/sh\n[ \"$1\" = -sfnT ] && shift\nexec /bin/ln -sfn \"$@\"\n"),
+    writeFile(path.join(bin, "uname"), '#!/bin/sh\n[ "$1" = -s ] && echo Linux || echo x86_64\n'),
+    writeFile(path.join(bin, "mv"), '#!/bin/sh\n[ "$1" = -fT ] && shift\nexec /bin/mv -f "$@"\n'),
+    writeFile(
+      path.join(bin, "ln"),
+      '#!/bin/sh\n[ "$1" = -sfnT ] && shift\nexec /bin/ln -sfn "$@"\n',
+    ),
     writeFile(
       path.join(bin, "curl"),
       String.raw`#!/bin/sh
@@ -219,10 +238,16 @@ test("downloads one fixed Linux asset and requires its pinned release attestatio
     [installer, "--version", "1.2.3", "--format", "deb", "--download-only", fixture.output],
     { env: fixture.env },
   );
-  assert.equal(await readFile(path.join(fixture.output, fixture.asset), "utf8"), "verified package fixture");
+  assert.equal(
+    await readFile(path.join(fixture.output, fixture.asset), "utf8"),
+    "verified package fixture",
+  );
   const ghLog = await readFile(fixture.ghLog, "utf8");
   assert.match(ghLog, /releases\/tags\/v1\.2\.3 --jq \.target_commitish/u);
-  assert.match(ghLog, /attestation verify .* --source-digest 0123456789abcdef0123456789abcdef01234567/u);
+  assert.match(
+    ghLog,
+    /attestation verify .* --source-digest 0123456789abcdef0123456789abcdef01234567/u,
+  );
   assert.match(ghLog, /--signer-digest 0123456789abcdef0123456789abcdef01234567/u);
 });
 
@@ -382,29 +407,46 @@ test("installer and standalone Linux workflow preserve verification boundaries",
   const [source, workflow] = await Promise.all([
     import("node:fs/promises").then(({ readFile }) => readFile(installer, "utf8")),
     import("node:fs/promises").then(({ readFile }) =>
-      readFile(new URL("../.github/workflows/linux-installers.yml", import.meta.url), "utf8")),
+      readFile(new URL("../.github/workflows/linux-installers.yml", import.meta.url), "utf8"),
+    ),
   ]);
   assert.match(source, /gh attestation verify/u);
   assert.match(
     source,
     /--cert-identity "https:\/\/github\.com\/\$\{repository\}\/\.github\/workflows\/release\.yml@refs\/heads\/main"/u,
   );
-  assert.doesNotMatch(source, /--signer-(?:repo|workflow)/u, "gh rejects these alongside --cert-identity");
+  assert.doesNotMatch(
+    source,
+    /--signer-(?:repo|workflow)/u,
+    "gh rejects these alongside --cert-identity",
+  );
   assert.match(source, /--source-digest "\$expected_commit"/u);
   assert.match(source, /--deny-self-hosted-runners/u);
   assert.match(source, /codesign --verify --strict/u);
   assert.match(source, /spctl --assess --type execute/u);
   assert.match(source, /mac_stage_parent=.*mktemp -d/u);
-  assert.match(source, /chmod 0711 "\$mac_stage_parent"[\s\S]*mac_backup="\$mac_stage_parent\/previous\.app"/u);
-  assert.match(source, /promote_macos_app\(\) \{[\s\S]*mac_promoted=true[\s\S]*privilege \/bin\/mv/u);
-  assert.match(source, /promote_macos_app[\s\S]*verify_macos_app "\$mac_destination"[\s\S]*mac_transaction=false/u);
+  assert.match(
+    source,
+    /chmod 0711 "\$mac_stage_parent"[\s\S]*mac_backup="\$mac_stage_parent\/previous\.app"/u,
+  );
+  assert.match(
+    source,
+    /promote_macos_app\(\) \{[\s\S]*mac_promoted=true[\s\S]*privilege \/bin\/mv/u,
+  );
+  assert.match(
+    source,
+    /promote_macos_app[\s\S]*verify_macos_app "\$mac_destination"[\s\S]*mac_transaction=false/u,
+  );
   assert.match(source, /mv -fT "\$staged" "\$app_destination"/u);
   assert.doesNotMatch(source, /--no-sandbox|xattr -[cdr]|spctl --master-disable/u);
   assert.match(workflow, /workflow_dispatch:/u);
   assert.match(workflow, /ubuntu-24\.04-arm/u);
   assert.match(workflow, /npm run dist:linux/u);
   assert.match(workflow, /verify-linux-package\.mjs/u);
-  assert.match(workflow, /sha256sum -- \*\.AppImage \*\.deb \*\.rpm latest-linux\*\.yml install\.sh/u);
+  assert.match(
+    workflow,
+    /sha256sum -- \*\.AppImage \*\.deb \*\.rpm latest-linux\*\.yml install\.sh/u,
+  );
   assert.match(workflow, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/u);
   assert.doesNotMatch(workflow, /gh release|contents: write/u);
 });

@@ -39,7 +39,14 @@ const timeline = {
 };
 
 function hostChat(messages: ChatMessage[]): Chat {
-  return { id: "chat-1", title: "Release notes", createdAt: 1, updatedAt: 2, workspaceId: "ws", messages };
+  return {
+    id: "chat-1",
+    title: "Release notes",
+    createdAt: 1,
+    updatedAt: 2,
+    workspaceId: "ws",
+    messages,
+  };
 }
 
 function numbered(count: number): ChatMessage[] {
@@ -66,7 +73,14 @@ test("a host message survives projection and mapping with what the transcript ca
       content: "Summarise the README",
       createdAt: Date.UTC(2026, 9, 1, 9, 30),
       attachments: [
-        { id: "a1", name: "notes.txt", mimeType: "text/plain", kind: "text", size: 12, text: "secret body" },
+        {
+          id: "a1",
+          name: "notes.txt",
+          mimeType: "text/plain",
+          kind: "text",
+          size: 12,
+          text: "secret body",
+        },
       ],
     },
     {
@@ -77,7 +91,15 @@ test("a host message survives projection and mapping with what the transcript ca
       createdAt: Date.UTC(2026, 9, 1, 9, 31),
       timeline,
       htmlArtifacts: [
-        { version: 1, kind: "html", id: "art-1", title: "Chart", mimeType: "text/html", size: 10, mediaId: "media-1" },
+        {
+          version: 1,
+          kind: "html",
+          id: "art-1",
+          title: "Chart",
+          mimeType: "text/html",
+          size: 10,
+          mediaId: "media-1",
+        },
       ],
     },
     {
@@ -94,7 +116,12 @@ test("a host message survives projection and mapping with what the transcript ca
   assert.equal(window.chatId, "chat-1");
   assert.equal(window.hasOlder, false);
   assert.deepEqual(
-    window.messages.map((message) => [message.id, message.role, message.content, message.createdAt]),
+    window.messages.map((message) => [
+      message.id,
+      message.role,
+      message.content,
+      message.createdAt,
+    ]),
     original.map((message) => [message.id, message.role, message.content, message.createdAt]),
   );
   // Attachment chips keep their metadata; the bytes never cross.
@@ -125,13 +152,31 @@ test("another computer's native visual shows on this Mac as the text its phones 
   const compiled = compileAum(markup, { fallback: { chartTables: true, plainTables: true } });
   assert.ok(compiled.tree);
   const hostVisual: ChatUiVisualV1 = {
-    version: 1, kind: "ui", id: "ui-1", toolCallId: "call-1", title: "Revenue", catalogVersion: 1,
-    tree: compiled.tree, ...(compiled.dataJson ? { dataJson: compiled.dataJson } : {}), state: { picked: "Jan" },
-    fallbackText: compiled.fallbackText, layout: "wide",
+    version: 1,
+    kind: "ui",
+    id: "ui-1",
+    toolCallId: "call-1",
+    title: "Revenue",
+    catalogVersion: 1,
+    tree: compiled.tree,
+    ...(compiled.dataJson ? { dataJson: compiled.dataJson } : {}),
+    state: { picked: "Jan" },
+    fallbackText: compiled.fallbackText,
+    layout: "wide",
   };
-  const [message] = served([{
-    id: "a1", role: "assistant", content: "Here it is.", createdAt: 1, timeline, uiVisuals: [hostVisual],
-  }], { limit: 50 }).messages;
+  const [message] = served(
+    [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Here it is.",
+        createdAt: 1,
+        timeline,
+        uiVisuals: [hostVisual],
+      },
+    ],
+    { limit: 50 },
+  ).messages;
   assert.equal(message?.uiVisuals?.length, 1);
   const [visual] = message!.uiVisuals!;
   assert.equal(visual!.id, "ui-1");
@@ -139,7 +184,10 @@ test("another computer's native visual shows on this Mac as the text its phones 
   assert.equal(visual!.toolCallId, "call-1", "placed where its tool call ran");
   assert.equal(visual!.layout, "wide");
   // What is drawn is the host's text, line for line, with the chart's rows written out.
-  assert.deepEqual(drawnLines(visual!.tree), compiled.fallbackText.split("\n").filter((line) => line.trim()));
+  assert.deepEqual(
+    drawnLines(visual!.tree),
+    compiled.fallbackText.split("\n").filter((line) => line.trim()),
+  );
   assert.ok(drawnLines(visual!.tree).includes("month: Jan · revenue: $1,200.00"));
   // Nothing from the host's markup crosses: no controls, data or state to act on.
   assert.deepEqual([...new Set(components(visual!.tree))].sort(), ["#text", "Text", "Visual"]);
@@ -149,25 +197,65 @@ test("another computer's native visual shows on this Mac as the text its phones 
 
 test("remote visual text is drawn as words, never as markup, and an HTML, empty or pictured visual adds no text visual", () => {
   const visuals = [
-    { id: "ui-markup", kind: "ui", title: "Odd", fallbackText: "<Button label=\"Go\" onClick={send(\"rm\")} />\n**bold** [link](https://example.com)" },
+    {
+      id: "ui-markup",
+      kind: "ui",
+      title: "Odd",
+      fallbackText:
+        '<Button label="Go" onClick={send("rm")} />\n**bold** [link](https://example.com)',
+    },
     { id: "ui-empty", kind: "ui", title: "Empty", fallbackText: "   " },
     { id: "html-1", kind: "html", title: "Chart", fallbackText: "ignored" },
     { id: "ui-markup", kind: "ui", title: "Duplicate", fallbackText: "again" },
     { id: "ui-bad id!", kind: "ui", title: "Bad", fallbackText: "text" },
     // Pictured on the host: its snapshot already shows as an image.
-    { id: "ui-pictured", kind: "ui", title: "Pictured", fallbackText: "text", snapshotAttachmentId: "visual-snapshot_abc" },
+    {
+      id: "ui-pictured",
+      kind: "ui",
+      title: "Pictured",
+      fallbackText: "text",
+      snapshotAttachmentId: "visual-snapshot_abc",
+    },
   ];
-  const message = mapRemoteMessage({ id: "a1", role: "assistant", text: "Done", createdAt: new Date(1).toISOString(), visuals });
-  assert.deepEqual(message?.uiVisuals?.map((visual) => visual.id), ["ui-markup"]);
+  const message = mapRemoteMessage({
+    id: "a1",
+    role: "assistant",
+    text: "Done",
+    createdAt: new Date(1).toISOString(),
+    visuals,
+  });
+  assert.deepEqual(
+    message?.uiVisuals?.map((visual) => visual.id),
+    ["ui-markup"],
+  );
   const [visual] = message!.uiVisuals!;
-  assert.deepEqual(drawnLines(visual!.tree), ["<Button label=\"Go\" onClick={send(\"rm\")} />", "**bold** [link](https://example.com)"]);
+  assert.deepEqual(drawnLines(visual!.tree), [
+    '<Button label="Go" onClick={send("rm")} />',
+    "**bold** [link](https://example.com)",
+  ]);
   assert.deepEqual([...new Set(components(visual!.tree))].sort(), ["#text", "Text", "Visual"]);
   // A user's message never carries one.
-  assert.equal(mapRemoteMessage({ id: "u1", role: "user", text: "Hi", createdAt: new Date(1).toISOString(), visuals })?.uiVisuals, undefined);
+  assert.equal(
+    mapRemoteMessage({
+      id: "u1",
+      role: "user",
+      text: "Hi",
+      createdAt: new Date(1).toISOString(),
+      visuals,
+    })?.uiVisuals,
+    undefined,
+  );
 
   // However many lines the host sends, the drawn tree stays inside the visual node cap and keeps every word.
   const many = Array.from({ length: 1_500 }, (_, index) => String(index % 10)).join("\n");
-  const [long] = mapRemoteMessage({ id: "a2", role: "assistant", text: "", createdAt: new Date(1).toISOString(), visuals: [{ id: "ui-long", kind: "ui", title: "Long", fallbackText: many }] })?.uiVisuals ?? [];
+  const [long] =
+    mapRemoteMessage({
+      id: "a2",
+      role: "assistant",
+      text: "",
+      createdAt: new Date(1).toISOString(),
+      visuals: [{ id: "ui-long", kind: "ui", title: "Long", fallbackText: many }],
+    })?.uiVisuals ?? [];
   assert.ok(long);
   assert.ok(components(long.tree).length <= 2_000);
   assert.equal(drawnLines(long.tree).join(" ").split(" ").length, 1_500);
@@ -175,7 +263,13 @@ test("remote visual text is drawn as words, never as markup, and an HTML, empty 
 
 test("a remote visual's long or odd title and its hidden characters never cost the visual or split a character", () => {
   const map = (title: unknown, fallbackText: string) =>
-    mapRemoteMessage({ id: "a1", role: "assistant", text: "", createdAt: new Date(1).toISOString(), visuals: [{ id: "ui-1", kind: "ui", title, fallbackText }] })?.uiVisuals?.[0];
+    mapRemoteMessage({
+      id: "a1",
+      role: "assistant",
+      text: "",
+      createdAt: new Date(1).toISOString(),
+      visuals: [{ id: "ui-1", kind: "ui", title, fallbackText }],
+    })?.uiVisuals?.[0];
   const loneSurrogate = /\p{Cs}/u;
 
   // 119 letters then emoji: the 120-unit cap falls inside the first emoji's pair.
@@ -184,7 +278,11 @@ test("a remote visual's long or odd title and its hidden characters never cost t
   assert.ok(long.title.length <= 120);
   assert.ok(long.title.endsWith("…"));
   assert.doesNotMatch(long.title, loneSurrogate);
-  assert.equal(map("\u202e\u0007\t", "Body")?.title, "Visual", "a title of nothing visible falls back");
+  assert.equal(
+    map("\u202e\u0007\t", "Body")?.title,
+    "Visual",
+    "a title of nothing visible falls back",
+  );
   assert.equal(map(42, "Body")?.title, "Visual");
   assert.equal(map("Q3\trevenue\u202e \u0085report", "Body")?.title, "Q3 revenue report");
 
@@ -204,9 +302,15 @@ test("a remote visual's long or odd title and its hidden characters never cost t
   assert.ok(padded, "a text of invisible characters before the words still shows the visual");
   assert.deepEqual(drawnLines(padded.tree), ["visible"]);
   // However long the hidden run, and however it lines up with the emoji after it, nothing visible is lost or split.
-  assert.equal(map(`${"​".repeat(50_000)}Long ${" ​".repeat(5_000)}title`, "Body")?.title, "Long title");
+  assert.equal(
+    map(`${"​".repeat(50_000)}Long ${" ​".repeat(5_000)}title`, "Body")?.title,
+    "Long title",
+  );
   for (let lead = 1_015; lead <= 1_030; lead += 1) {
-    const emoji = map(`${"​".repeat(lead)}${"\u{1f600}".repeat(70)}`, `${"﻿".repeat(lead * 10)}${"\u{1f600}".repeat(2_100)}`);
+    const emoji = map(
+      `${"​".repeat(lead)}${"\u{1f600}".repeat(70)}`,
+      `${"﻿".repeat(lead * 10)}${"\u{1f600}".repeat(2_100)}`,
+    );
     assert.ok(emoji);
     assert.equal(emoji.title, `${"\u{1f600}".repeat(59)}…`, `lead ${lead}`);
     assert.equal(emoji.fallbackText, "\u{1f600}".repeat(2_000), `lead ${lead}`);
@@ -216,13 +320,22 @@ test("a remote visual's long or odd title and its hidden characters never cost t
   // or lone half of a pair draws as nothing and is dropped; a line or paragraph separator
   // reads as a space; the joiner inside an emoji stays.
   assert.equal(map("Q3\u200b rev\ufeffenue\u2060\u2028report", "Body")?.title, "Q3 revenue report");
-  const hidden = map("Hidden", "pay\u200broll\u2062\ufff9note\ufffb\u2029end\ud800\n\u{1f469}\u200d\u{1f4bb} team");
+  const hidden = map(
+    "Hidden",
+    "pay\u200broll\u2062\ufff9note\ufffb\u2029end\ud800\n\u{1f469}\u200d\u{1f4bb} team",
+  );
   assert.deepEqual(drawnLines(hidden!.tree), ["payrollnote end", "\u{1f469}\u200d\u{1f4bb} team"]);
 });
 
 test("rows the transcript cannot render are skipped and malformed pages are rejected", () => {
-  assert.equal(mapRemoteMessage({ id: "x", role: "system", text: "hi", createdAt: "2026-10-01T00:00:00Z" }), null);
-  assert.equal(mapRemoteMessage({ id: "x", role: "user", text: "hi", createdAt: "not a date" }), null);
+  assert.equal(
+    mapRemoteMessage({ id: "x", role: "system", text: "hi", createdAt: "2026-10-01T00:00:00Z" }),
+    null,
+  );
+  assert.equal(
+    mapRemoteMessage({ id: "x", role: "user", text: "hi", createdAt: "not a date" }),
+    null,
+  );
   assert.equal(mapRemoteMessage(null), null);
   // A failure outcome that breaks the closed schema is dropped, not guessed.
   const message = mapRemoteMessage({
@@ -237,39 +350,122 @@ test("rows the transcript cannot render are skipped and malformed pages are reje
 });
 
 test("host image placements survive mapping without admitting malformed or non-image placements", () => {
-  const bytes = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+  const bytes =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
   for (const toolName of ["generate_image", "display_image", "share_image"]) {
-    const [message] = served([{
-      id: "reply", role: "assistant", content: "Explanation after the image.", createdAt: 1,
-      timeline: { ...timeline, steps: [{ ...timeline.steps[0]!, toolName }] },
-      attachments: [{ id: "photo", name: "Photo.png", kind: "image", mimeType: "image/png", size: Buffer.from(bytes, "base64").length, data: bytes }],
-      imagePlacements: [{ attachmentId: "photo", toolCallId: "call-1" }],
-    }], { limit: 50 }).messages;
-    assert.deepEqual(message?.imagePlacements, [{ attachmentId: "photo", toolCallId: "call-1" }], toolName);
-    assert.equal(message?.attachments?.[0]?.data, undefined, "placement does not inline image bytes");
+    const [message] = served(
+      [
+        {
+          id: "reply",
+          role: "assistant",
+          content: "Explanation after the image.",
+          createdAt: 1,
+          timeline: { ...timeline, steps: [{ ...timeline.steps[0]!, toolName }] },
+          attachments: [
+            {
+              id: "photo",
+              name: "Photo.png",
+              kind: "image",
+              mimeType: "image/png",
+              size: Buffer.from(bytes, "base64").length,
+              data: bytes,
+            },
+          ],
+          imagePlacements: [{ attachmentId: "photo", toolCallId: "call-1" }],
+        },
+      ],
+      { limit: 50 },
+    ).messages;
+    assert.deepEqual(
+      message?.imagePlacements,
+      [{ attachmentId: "photo", toolCallId: "call-1" }],
+      toolName,
+    );
+    assert.equal(
+      message?.attachments?.[0]?.data,
+      undefined,
+      "placement does not inline image bytes",
+    );
   }
 
-  const attachment = { id: "photo", name: "Photo.png", kind: "image", mimeType: "image/png", size: 10 };
-  const projected = { id: "reply", role: "assistant", text: "Reply", createdAt: "2026-11-02T00:00:00Z" };
-  for (const toolCallId of [undefined, null, 1, "call-0", "call-01", "call-1/other", `call-${"1".repeat(130)}`]) {
-    const message = mapRemoteMessage({ ...projected, attachments: [{ ...attachment, toolCallId }] });
-    assert.equal(message?.attachments?.length, 1, "an invalid additive placement must not drop the picture");
+  const attachment = {
+    id: "photo",
+    name: "Photo.png",
+    kind: "image",
+    mimeType: "image/png",
+    size: 10,
+  };
+  const projected = {
+    id: "reply",
+    role: "assistant",
+    text: "Reply",
+    createdAt: "2026-11-02T00:00:00Z",
+  };
+  for (const toolCallId of [
+    undefined,
+    null,
+    1,
+    "call-0",
+    "call-01",
+    "call-1/other",
+    `call-${"1".repeat(130)}`,
+  ]) {
+    const message = mapRemoteMessage({
+      ...projected,
+      attachments: [{ ...attachment, toolCallId }],
+    });
+    assert.equal(
+      message?.attachments?.length,
+      1,
+      "an invalid additive placement must not drop the picture",
+    );
     assert.equal(message?.imagePlacements, undefined);
   }
-  assert.equal(mapRemoteMessage({ ...projected, role: "user", attachments: [{ ...attachment, toolCallId: "call-1" }] })?.imagePlacements, undefined);
-  assert.equal(mapRemoteMessage({ ...projected, attachments: [{ ...attachment, kind: "text", mimeType: "text/plain", toolCallId: "call-1" }] })?.imagePlacements, undefined);
+  assert.equal(
+    mapRemoteMessage({
+      ...projected,
+      role: "user",
+      attachments: [{ ...attachment, toolCallId: "call-1" }],
+    })?.imagePlacements,
+    undefined,
+  );
+  assert.equal(
+    mapRemoteMessage({
+      ...projected,
+      attachments: [{ ...attachment, kind: "text", mimeType: "text/plain", toolCallId: "call-1" }],
+    })?.imagePlacements,
+    undefined,
+  );
 });
 
 test("another Mac's voice message keeps its By voice label; other values and roles do not", () => {
-  const messages = served([
-    { id: "voice", role: "user", content: "Check the reset page too.", inputSource: "voice", createdAt: 1 },
-    { id: "typed", role: "user", content: "Thanks.", createdAt: 2 },
-  ], { limit: 50 }).messages;
-  assert.deepEqual(messages.map((message) => message.inputSource), ["voice", undefined]);
+  const messages = served(
+    [
+      {
+        id: "voice",
+        role: "user",
+        content: "Check the reset page too.",
+        inputSource: "voice",
+        createdAt: 1,
+      },
+      { id: "typed", role: "user", content: "Thanks.", createdAt: 2 },
+    ],
+    { limit: 50 },
+  ).messages;
+  assert.deepEqual(
+    messages.map((message) => message.inputSource),
+    ["voice", undefined],
+  );
 
   const projected = { id: "m", text: "Hi", createdAt: "2026-11-06T00:00:00Z" };
-  assert.equal(mapRemoteMessage({ ...projected, role: "user", inputSource: "dictation" })?.inputSource, undefined);
-  assert.equal(mapRemoteMessage({ ...projected, role: "assistant", inputSource: "voice" })?.inputSource, undefined);
+  assert.equal(
+    mapRemoteMessage({ ...projected, role: "user", inputSource: "dictation" })?.inputSource,
+    undefined,
+  );
+  assert.equal(
+    mapRemoteMessage({ ...projected, role: "assistant", inputSource: "voice" })?.inputSource,
+    undefined,
+  );
 });
 
 test("a summary row or chat projection maps to a chat with no transcript of its own", () => {
@@ -290,7 +486,10 @@ test("a summary row or chat projection maps to a chat with no transcript of its 
 
 test("a large chat is read newest first and paged back to the beginning without gaps", () => {
   const all = numbered(130);
-  let transcript: RemoteTranscript = mergeNewestWindow(emptyRemoteTranscript("chat-1"), served(all, { limit: 50 }));
+  let transcript: RemoteTranscript = mergeNewestWindow(
+    emptyRemoteTranscript("chat-1"),
+    served(all, { limit: 50 }),
+  );
   assert.equal(transcript.messages.length, 50);
   assert.equal(transcript.messages[transcript.messages.length - 1]?.id, "m129");
   assert.equal(transcript.hasOlder, true);
@@ -308,7 +507,10 @@ test("a large chat is read newest first and paged back to the beginning without 
 test("refreshing the newest window keeps older pages it still overlaps", () => {
   const all = numbered(80);
   let transcript = mergeNewestWindow(emptyRemoteTranscript("chat-1"), served(all, { limit: 50 }));
-  transcript = mergeOlderWindow(transcript, served(all, { before: transcript.messages[0]!.id, limit: 50 }));
+  transcript = mergeOlderWindow(
+    transcript,
+    served(all, { before: transcript.messages[0]!.id, limit: 50 }),
+  );
   assert.equal(transcript.messages.length, 80);
 
   // Two new turns land on the host; the newest window still overlaps what is loaded.
@@ -375,7 +577,10 @@ test("the host can remove the cached prefix or reveal earlier pages at the same 
   const all = numbered(5);
   const cached = mergeNewestWindow(emptyRemoteTranscript("chat-1"), served(all, { limit: 10 }));
   const shortened = mergeNewestWindow(cached, served(all.slice(2), { limit: 10 }));
-  assert.deepEqual(shortened.messages.map((m) => m.id), ["m2", "m3", "m4"]);
+  assert.deepEqual(
+    shortened.messages.map((m) => m.id),
+    ["m2", "m3", "m4"],
+  );
   const restored = mergeNewestWindow(shortened, served(all, { limit: 3 }));
   assert.equal(restored.hasOlder, true);
 });

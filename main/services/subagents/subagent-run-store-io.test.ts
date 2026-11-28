@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createNativeSubagentRunStoreStorage, isSubagentRunStoreGeneration } from "./subagent-run-store-io.js";
+import {
+  createNativeSubagentRunStoreStorage,
+  isSubagentRunStoreGeneration,
+} from "./subagent-run-store-io.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../../..");
 const binary = path.join(repositoryRoot, "build", "native", "aiden-subagent-run-store");
@@ -46,7 +49,19 @@ test("native run-store adapter accepts the platform generation and round-trips d
 test("native generation admits exactly Linux and macOS field shapes", () => {
   assert.equal(isSubagentRunStoreGeneration("missing"), true);
   for (let fields = 1; fields <= 12; fields++) {
-    assert.equal(isSubagentRunStoreGeneration(Array.from({ length: fields }, () => "a1").join("-")), fields === 7 || fields === 9);
+    assert.equal(
+      isSubagentRunStoreGeneration(Array.from({ length: fields }, () => "a1").join("-")),
+      fields === 7 || fields === 9,
+    );
   }
-  for (const value of [undefined, null, 1, "", "A-1-1-1-1-1-1", "1-1-1-1-1-1-1\n", "1--1-1-1-1-1-1"]) assert.equal(isSubagentRunStoreGeneration(value), false);
+  for (const value of [
+    undefined,
+    null,
+    1,
+    "",
+    "A-1-1-1-1-1-1",
+    "1-1-1-1-1-1-1\n",
+    "1--1-1-1-1-1-1",
+  ])
+    assert.equal(isSubagentRunStoreGeneration(value), false);
 });

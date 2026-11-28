@@ -33,11 +33,20 @@ const STEP_ROW_SIZE = {
 } as const;
 
 /** One step as a list item, in B's wording and tones; the live step shimmers (only with motion allowed). */
-export function BotStepRow({ step, size = "mini" }: { step: BotRecapStep; size?: keyof typeof STEP_ROW_SIZE }) {
+export function BotStepRow({
+  step,
+  size = "mini",
+}: {
+  step: BotRecapStep;
+  size?: keyof typeof STEP_ROW_SIZE;
+}) {
   const line = botStepLine(step);
   return (
     <div role="listitem" className={`flex min-w-0 items-start ${STEP_ROW_SIZE[size]}`}>
-      <span ref={line.active ? pauseWhenUnseen : undefined} className={`min-w-0 break-words ${line.active ? "agent-thinking-shimmer" : ""}`}>
+      <span
+        ref={line.active ? pauseWhenUnseen : undefined}
+        className={`min-w-0 break-words ${line.active ? "agent-thinking-shimmer" : ""}`}
+      >
         <span className={`${toneClass(line.tone)} font-medium`}>{line.text}</span>
         {line.detail ? <span className="text-tertiary"> · {line.detail}</span> : null}
       </span>
@@ -62,16 +71,24 @@ export function BotActivityRecap({
 }) {
   const [choice, setChoice] = React.useState<boolean | null>(null);
   const regionId = React.useId();
-  const automaticOpen = level === "detailed" && mode !== "compact" && (live || retainDetails || mode === "verbose");
+  const automaticOpen =
+    level === "detailed" && mode !== "compact" && (live || retainDetails || mode === "verbose");
   const open = choice ?? automaticOpen;
   const issues = botRecapIssues(steps);
   const header = botRecapHeader(steps, durationMs, live);
-  const issueText = issues.failed ? (issues.failed === 1 ? "1 issue" : `${issues.failed} issues`) : "";
+  const issueText = issues.failed
+    ? issues.failed === 1
+      ? "1 issue"
+      : `${issues.failed} issues`
+    : "";
   const blockedText = issues.blocked ? `${issues.blocked} blocked` : "";
   const name = [header, issueText, blockedText].filter(Boolean).join(" · ");
-  const shown = choice === true || mode === "verbose" || mode === "detailed"
-    ? mergeBotSteps(steps)
-    : live || retainDetails ? steps.slice(-LIVE_ROWS) : mergeBotSteps(steps);
+  const shown =
+    choice === true || mode === "verbose" || mode === "detailed"
+      ? mergeBotSteps(steps)
+      : live || retainDetails
+        ? steps.slice(-LIVE_ROWS)
+        : mergeBotSteps(steps);
   return (
     <div className="min-w-0" data-bot-recap={live ? "live" : "done"}>
       <button
@@ -86,7 +103,12 @@ export function BotActivityRecap({
           aria-hidden="true"
           className={`size-3.5 shrink-0 transition-transform duration-150 motion-reduce:transition-none ${open ? "rotate-90" : ""}`}
         />
-        <span ref={live ? pauseWhenUnseen : undefined} className={`min-w-0 truncate ${live ? "agent-thinking-shimmer" : ""}`}>{header}</span>
+        <span
+          ref={live ? pauseWhenUnseen : undefined}
+          className={`min-w-0 truncate ${live ? "agent-thinking-shimmer" : ""}`}
+        >
+          {header}
+        </span>
         {issueText ? <span className="shrink-0 text-red">{issueText}</span> : null}
         {blockedText ? <span className="shrink-0 text-support-warning">{blockedText}</span> : null}
       </button>

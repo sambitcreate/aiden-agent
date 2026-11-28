@@ -32,7 +32,8 @@ export type WebFetchErrorKind =
 
 const MESSAGES: Readonly<Record<WebFetchErrorKind, string>> = {
   "invalid-url": "Only public http and https URLs without credentials can be read.",
-  "blocked-address": "That address is on this computer or a private network; web_fetch reads public pages only.",
+  "blocked-address":
+    "That address is on this computer or a private network; web_fetch reads public pages only.",
   "unsupported-content": "That URL is not a web page or text (for example a PDF or an image).",
   "http-status": "The site answered with an error.",
   "too-many-redirects": "The site redirected too many times.",
@@ -45,22 +46,46 @@ export class WebFetchError extends Error {
     readonly kind: WebFetchErrorKind,
     readonly status?: number,
   ) {
-    super(kind === "http-status" && status ? `The site answered with HTTP ${status}.` : MESSAGES[kind]);
+    super(
+      kind === "http-status" && status ? `The site answered with HTTP ${status}.` : MESSAGES[kind],
+    );
     this.name = "WebFetchError";
   }
 }
 
 const blocked = new BlockList();
 for (const [network, prefix] of [
-  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16],
-  ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.0.2.0", 24], ["192.88.99.0", 24], ["192.168.0.0", 16],
-  ["198.18.0.0", 15], ["198.51.100.0", 24], ["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4],
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.0.0.0", 24],
+  ["192.0.2.0", 24],
+  ["192.88.99.0", 24],
+  ["192.168.0.0", 16],
+  ["198.18.0.0", 15],
+  ["198.51.100.0", 24],
+  ["203.0.113.0", 24],
+  ["224.0.0.0", 4],
+  ["240.0.0.0", 4],
 ] as const) {
   blocked.addSubnet(network, prefix, "ipv4");
 }
 for (const [network, prefix] of [
-  ["::", 128], ["::1", 128], ["64:ff9b::", 96], ["64:ff9b:1::", 48], ["100::", 64], ["2001::", 32],
-  ["2001:db8::", 32], ["2002::", 16], ["fc00::", 7], ["fe80::", 10], ["fec0::", 10], ["ff00::", 8],
+  ["::", 128],
+  ["::1", 128],
+  ["64:ff9b::", 96],
+  ["64:ff9b:1::", 48],
+  ["100::", 64],
+  ["2001::", 32],
+  ["2001:db8::", 32],
+  ["2002::", 16],
+  ["fc00::", 7],
+  ["fe80::", 10],
+  ["fec0::", 10],
+  ["ff00::", 8],
 ] as const) {
   blocked.addSubnet(network, prefix, "ipv6");
 }
@@ -111,9 +136,18 @@ export interface WebFetchResult {
 }
 
 const TEXT_TYPES = new Set([
-  "text/html", "application/xhtml+xml", "text/plain", "text/markdown", "text/x-markdown",
-  "text/csv", "application/json", "application/ld+json", "application/xml", "text/xml",
-  "application/rss+xml", "application/atom+xml",
+  "text/html",
+  "application/xhtml+xml",
+  "text/plain",
+  "text/markdown",
+  "text/x-markdown",
+  "text/csv",
+  "application/json",
+  "application/ld+json",
+  "application/xml",
+  "text/xml",
+  "application/rss+xml",
+  "application/atom+xml",
 ]);
 
 export function isReadableMediaType(mediaType: string): boolean {
@@ -131,14 +165,22 @@ export function normalizeWebFetchUrl(value: unknown): URL {
   } catch {
     throw new WebFetchError("invalid-url");
   }
-  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password || !url.hostname) {
+  if (
+    (url.protocol !== "https:" && url.protocol !== "http:") ||
+    url.username ||
+    url.password ||
+    !url.hostname
+  ) {
     throw new WebFetchError("invalid-url");
   }
   url.hash = "";
   return url;
 }
 
-function guardedLookup(allow: (address: string) => boolean, resolve: typeof dnsLookup): LookupFunction {
+function guardedLookup(
+  allow: (address: string) => boolean,
+  resolve: typeof dnsLookup,
+): LookupFunction {
   return (hostname, options, callback) => {
     resolve(hostname, { ...options, all: true }, (error, addresses) => {
       if (error) {
@@ -151,7 +193,8 @@ function guardedLookup(allow: (address: string) => boolean, resolve: typeof dnsL
         callback(new WebFetchError("blocked-address") as NodeJS.ErrnoException, "", 0);
         return;
       }
-      if (options.all) (callback as unknown as (error: null, addresses: LookupAddress[]) => void)(null, list);
+      if (options.all)
+        (callback as unknown as (error: null, addresses: LookupAddress[]) => void)(null, list);
       else callback(null, list[0]!.address, list[0]!.family);
     });
   };
@@ -177,7 +220,12 @@ interface Hop {
   readonly stream: http.IncomingMessage;
 }
 
-function request(url: URL, signal: AbortSignal, lookup: LookupFunction, accept: string): Promise<Hop> {
+function request(
+  url: URL,
+  signal: AbortSignal,
+  lookup: LookupFunction,
+  accept: string,
+): Promise<Hop> {
   const client = url.protocol === "https:" ? https : http;
   return new Promise((resolve, reject) => {
     const outgoing = client.request(
@@ -188,13 +236,15 @@ function request(url: URL, signal: AbortSignal, lookup: LookupFunction, accept: 
         agent: false,
         signal,
         headers: {
-          "User-Agent": "Mozilla/5.0 (compatible; Aiden/1.0; +https://github.com/sambitcreate/aiden-agent)",
+          "User-Agent":
+            "Mozilla/5.0 (compatible; Aiden/1.0; +https://github.com/sambitcreate/aiden-agent)",
           Accept: accept,
           "Accept-Encoding": "gzip, deflate, br",
           "Accept-Language": "en-US,en;q=0.9",
         },
       },
-      (response) => resolve({ status: response.statusCode ?? 0, headers: response.headers, stream: response }),
+      (response) =>
+        resolve({ status: response.statusCode ?? 0, headers: response.headers, stream: response }),
     );
     outgoing.on("error", reject);
     outgoing.end();
@@ -208,8 +258,14 @@ function decompressorFor(encoding: string): Transform | undefined {
   return undefined;
 }
 
-async function readBody(hop: Hop, maxBytes: number, signal: AbortSignal): Promise<{ bytes: Buffer; truncated: boolean }> {
-  const encoding = String(hop.headers["content-encoding"] ?? "").trim().toLowerCase();
+async function readBody(
+  hop: Hop,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<{ bytes: Buffer; truncated: boolean }> {
+  const encoding = String(hop.headers["content-encoding"] ?? "")
+    .trim()
+    .toLowerCase();
   const decompressor = decompressorFor(encoding);
   let stream: Readable = hop.stream;
   if (decompressor) {
@@ -218,7 +274,8 @@ async function readBody(hop: Hop, maxBytes: number, signal: AbortSignal): Promis
     // leave the decoder waiting for input that never comes.
     hop.stream.once("error", (error) => decompressor.destroy(error));
     hop.stream.once("close", () => {
-      if (!hop.stream.readableEnded) decompressor.destroy(new Error("The connection closed before the page ended."));
+      if (!hop.stream.readableEnded)
+        decompressor.destroy(new Error("The connection closed before the page ended."));
     });
   }
   // A timeout or Stop ends the read even while no chunk is arriving.
@@ -251,7 +308,14 @@ export async function fetchPublicBytes(
   target: URL,
   policy: { accept: string; readableMediaType: (mediaType: string) => boolean },
   options: WebFetchOptions = {},
-): Promise<{ url: string; status: number; mediaType: string; contentType: string; bytes: Buffer; truncated: boolean }> {
+): Promise<{
+  url: string;
+  status: number;
+  mediaType: string;
+  contentType: string;
+  bytes: Buffer;
+  truncated: boolean;
+}> {
   const allow = options.allowAddress ?? isPublicAddress;
   const lookup = guardedLookup(allow, options.lookup ?? dnsLookup);
   const timeout = AbortSignal.timeout(options.timeoutMs ?? WEB_FETCH_TIMEOUT_MS);
@@ -283,7 +347,11 @@ export async function fetchPublicBytes(
         hop.stream.destroy();
         throw new WebFetchError("unsupported-content");
       }
-      const { bytes, truncated } = await readBody(hop, options.maxBytes ?? WEB_FETCH_MAX_BYTES, signal);
+      const { bytes, truncated } = await readBody(
+        hop,
+        options.maxBytes ?? WEB_FETCH_MAX_BYTES,
+        signal,
+      );
       return { url: url.href, status: hop.status, mediaType, contentType, bytes, truncated };
     }
   } catch (error) {
@@ -299,10 +367,17 @@ export async function fetchPublicBytes(
 }
 
 /** Fetch one public page as text. */
-export async function fetchPublicPage(target: URL, options: WebFetchOptions = {}): Promise<WebFetchResult> {
-  const { bytes, contentType, ...result } = await fetchPublicBytes(target, {
-    accept: "text/html,application/xhtml+xml,text/plain;q=0.9,application/json;q=0.8,*/*;q=0.5",
-    readableMediaType: isReadableMediaType,
-  }, options);
+export async function fetchPublicPage(
+  target: URL,
+  options: WebFetchOptions = {},
+): Promise<WebFetchResult> {
+  const { bytes, contentType, ...result } = await fetchPublicBytes(
+    target,
+    {
+      accept: "text/html,application/xhtml+xml,text/plain;q=0.9,application/json;q=0.8,*/*;q=0.5",
+      readableMediaType: isReadableMediaType,
+    },
+    options,
+  );
   return { ...result, body: decoderFor(contentType).decode(bytes) };
 }

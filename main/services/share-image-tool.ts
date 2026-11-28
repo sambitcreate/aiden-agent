@@ -46,7 +46,9 @@ function textResult(text: string): AgentToolResult<null> {
 
 function completeImage(bytes: Buffer, mimeType: "image/png" | "image/jpeg"): boolean {
   if (mimeType === "image/jpeg") {
-    return bytes.length >= 2 && bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9;
+    return (
+      bytes.length >= 2 && bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9
+    );
   }
   const trailer = Buffer.from([0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130]);
   return bytes.length >= trailer.length && bytes.subarray(-trailer.length).equals(trailer);
@@ -71,10 +73,15 @@ function safeDisplayName(filePath: string, mimeType: "image/png" | "image/jpeg")
     })
     .join("")
     .trim();
-  return Array.from(leaf || fallback).slice(0, 255).join("");
+  return Array.from(leaf || fallback)
+    .slice(0, 255)
+    .join("");
 }
 
-async function readVerifiedImage(filePath: string, signal?: AbortSignal): Promise<{
+async function readVerifiedImage(
+  filePath: string,
+  signal?: AbortSignal,
+): Promise<{
   bytes: Buffer;
   mimeType: "image/png" | "image/jpeg";
   resolvedPath: string;
@@ -82,13 +89,15 @@ async function readVerifiedImage(filePath: string, signal?: AbortSignal): Promis
   if (signal?.aborted) throw signal.reason ?? new Error("Image sharing was cancelled.");
   const resolvedPath = await fs.realpath(filePath);
   const before = await fs.lstat(resolvedPath);
-  if (!before.isFile() || before.isSymbolicLink() || before.size < 1 || before.size > MAX_IMAGE_BYTES) {
+  if (
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    before.size < 1 ||
+    before.size > MAX_IMAGE_BYTES
+  ) {
     throw new Error("Choose a PNG or JPEG image no larger than 8 MB.");
   }
-  const handle = await fs.open(
-    resolvedPath,
-    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
-  );
+  const handle = await fs.open(resolvedPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
   try {
     const opened = await handle.stat();
     if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) {
@@ -114,42 +123,47 @@ async function readVerifiedImage(filePath: string, signal?: AbortSignal): Promis
 }
 
 export function createShareImageTool(dependencies: ShareImageToolDependencies): AgentTool {
-  return declarePiRuntimeReplay({
-    name: SHARE_IMAGE_TOOL_NAME,
-    label: "Share Image",
-    description:
-      "Attach a PNG or JPEG file from this computer to your response so the user can receive it in Aiden Agent and on paired iPhone, iPad and Android devices. This is an outbound sharing tool: it cannot inspect an image or add one to model input. Never call it to view, understand, or analyze an image. Images attached by the user are already supplied in the conversation when the selected model supports vision. Use this tool only when the user asks to see or receive a local image file. Relative paths start at the active workspace; absolute paths are accepted after user approval.",
-    parameters: Type.Object({
-      path: Type.String({ description: "Workspace-relative or absolute path to the PNG or JPEG." }),
-    }),
-    execute: async (toolCallId, rawParams, signal): Promise<AgentToolResult<null>> => {
-      const suppliedPath = (rawParams as { path?: unknown }).path;
-      if (typeof suppliedPath !== "string" || suppliedPath.trim().length === 0) {
-        throw new Error("An image path is required.");
-      }
-      const scopedRoot = dependencies.scopeToWorkspace
-        ? await verifyScopedWorkspace(dependencies, signal)
-        : undefined;
-      const requestedPath = path.isAbsolute(suppliedPath)
-        ? path.normalize(suppliedPath)
-        : path.resolve(scopedRoot ?? dependencies.workspaceRoot, suppliedPath);
-      const image = await readVerifiedImage(requestedPath, signal);
-      if (scopedRoot && !isPathInside(scopedRoot, image.resolvedPath)) {
-        throw new Error("Bot images must come from this Bot's folder.");
-      }
-      if (scopedRoot) await verifyScopedWorkspace(dependencies, signal);
-      const attachment: Attachment = {
-        id: `shared_${randomUUID()}`,
-        name: safeDisplayName(image.resolvedPath, image.mimeType),
-        mimeType: image.mimeType,
-        kind: "image",
-        size: image.bytes.length,
-        data: image.bytes.toString("base64"),
-      };
-      dependencies.share(attachment, toolCallId);
-      return textResult(
-        JSON.stringify({ shared: true, name: attachment.name, size: attachment.size }),
-      );
+  return declarePiRuntimeReplay(
+    {
+      name: SHARE_IMAGE_TOOL_NAME,
+      label: "Share Image",
+      description:
+        "Attach a PNG or JPEG file from this computer to your response so the user can receive it in Aiden Agent and on paired iPhone, iPad and Android devices. This is an outbound sharing tool: it cannot inspect an image or add one to model input. Never call it to view, understand, or analyze an image. Images attached by the user are already supplied in the conversation when the selected model supports vision. Use this tool only when the user asks to see or receive a local image file. Relative paths start at the active workspace; absolute paths are accepted after user approval.",
+      parameters: Type.Object({
+        path: Type.String({
+          description: "Workspace-relative or absolute path to the PNG or JPEG.",
+        }),
+      }),
+      execute: async (toolCallId, rawParams, signal): Promise<AgentToolResult<null>> => {
+        const suppliedPath = (rawParams as { path?: unknown }).path;
+        if (typeof suppliedPath !== "string" || suppliedPath.trim().length === 0) {
+          throw new Error("An image path is required.");
+        }
+        const scopedRoot = dependencies.scopeToWorkspace
+          ? await verifyScopedWorkspace(dependencies, signal)
+          : undefined;
+        const requestedPath = path.isAbsolute(suppliedPath)
+          ? path.normalize(suppliedPath)
+          : path.resolve(scopedRoot ?? dependencies.workspaceRoot, suppliedPath);
+        const image = await readVerifiedImage(requestedPath, signal);
+        if (scopedRoot && !isPathInside(scopedRoot, image.resolvedPath)) {
+          throw new Error("Bot images must come from this Bot's folder.");
+        }
+        if (scopedRoot) await verifyScopedWorkspace(dependencies, signal);
+        const attachment: Attachment = {
+          id: `shared_${randomUUID()}`,
+          name: safeDisplayName(image.resolvedPath, image.mimeType),
+          mimeType: image.mimeType,
+          kind: "image",
+          size: image.bytes.length,
+          data: image.bytes.toString("base64"),
+        };
+        dependencies.share(attachment, toolCallId);
+        return textResult(
+          JSON.stringify({ shared: true, name: attachment.name, size: attachment.size }),
+        );
+      },
     },
-  }, "never");
+    "never",
+  );
 }

@@ -4,10 +4,7 @@ import {
   attachmentRepresentationBytes,
   parseAttachments,
 } from "./attachment-contract.js";
-import {
-  MAX_IMAGE_BYTES,
-  MAX_TEXT_CHARS,
-} from "./attachments.js";
+import { MAX_IMAGE_BYTES, MAX_TEXT_CHARS } from "./attachments.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type { Attachment } from "./types.js";
 import { MAX_ATTACHMENT_INLINE_BYTES } from "../../renderer/shared/attachment-contract.js";
@@ -73,7 +70,12 @@ function exactKeys(record: Record<string, unknown>, expected: ReadonlySet<string
 function validDisplayName(value: unknown): value is string {
   if (typeof value !== "string") return false;
   const cleaned = value.trim();
-  if (!cleaned || Array.from(cleaned).length > 255 || cleaned.includes("/") || cleaned.includes("\\")) {
+  if (
+    !cleaned ||
+    Array.from(cleaned).length > 255 ||
+    cleaned.includes("/") ||
+    cleaned.includes("\\")
+  ) {
     return false;
   }
   for (let index = 0; index < cleaned.length; index += 1) {
@@ -172,14 +174,16 @@ function parseUpload(input: unknown, id: string): Attachment {
         throw new Error("invalid image envelope");
       }
       const bytes = Buffer.from(record.data, "base64");
-      const attachment = parseAttachments([{
-        id,
-        name,
-        mimeType: record.mimeType,
-        kind: "image",
-        size: bytes.length,
-        data: record.data,
-      }])?.[0];
+      const attachment = parseAttachments([
+        {
+          id,
+          name,
+          mimeType: record.mimeType,
+          kind: "image",
+          size: bytes.length,
+          data: record.data,
+        },
+      ])?.[0];
       if (!attachment) throw new Error("invalid image attachment");
       validateDimensions(bytes, attachment.mimeType);
       return attachment;
@@ -196,14 +200,16 @@ function parseUpload(input: unknown, id: string): Attachment {
     ) {
       throw new Error("invalid text envelope");
     }
-    const attachment = parseAttachments([{
-      id,
-      name,
-      mimeType: record.mimeType.toLowerCase(),
-      kind: "text",
-      size: Buffer.byteLength(record.text, "utf8"),
-      text: record.text,
-    }])?.[0];
+    const attachment = parseAttachments([
+      {
+        id,
+        name,
+        mimeType: record.mimeType.toLowerCase(),
+        kind: "text",
+        size: Buffer.byteLength(record.text, "utf8"),
+        text: record.text,
+      },
+    ])?.[0];
     if (!attachment) throw new Error("invalid text attachment");
     return attachment;
   } catch (error) {
@@ -233,12 +239,14 @@ export class AidenRemoteAttachmentStore {
   private readonly deletingChats = new Set<string>();
   private retainedRepresentationBytes = 0;
 
-  constructor(private readonly options: {
-    now?: () => number;
-    randomId?: () => string;
-    maxEntries?: number;
-    maxRepresentationBytes?: number;
-  } = {}) {}
+  constructor(
+    private readonly options: {
+      now?: () => number;
+      randomId?: () => string;
+      maxEntries?: number;
+      maxRepresentationBytes?: number;
+    } = {},
+  ) {}
 
   /** Fence the awaited chat lookup without retaining permanent chat tombstones. */
   beginUpload(deviceId: string, chatId: string): { assertCurrent(): void; release(): void } {
@@ -246,14 +254,23 @@ export class AidenRemoteAttachmentStore {
       throw new AidenRemoteServiceError("not_found", "This Aiden chat is being deleted.", 404);
     }
     if (this.uploads.size >= MAX_PENDING_ATTACHMENTS) {
-      throw new AidenRemoteServiceError("handle_capacity", "Too many attachment uploads are in progress.", 429, true);
+      throw new AidenRemoteServiceError(
+        "handle_capacity",
+        "Too many attachment uploads are in progress.",
+        429,
+        true,
+      );
     }
     const lease = { deviceId, chatId, active: true };
     this.uploads.add(lease);
     return {
       assertCurrent: () => {
         if (!lease.active) {
-          throw new AidenRemoteServiceError("handle_invalid", "The attachment upload is no longer current.", 409);
+          throw new AidenRemoteServiceError(
+            "handle_invalid",
+            "The attachment upload is no longer current.",
+            409,
+          );
         }
       },
       release: () => {
@@ -315,9 +332,20 @@ export class AidenRemoteAttachmentStore {
     let omitted = 0;
     for (const attachment of attachments.slice(0, MAX_AIDEN_REMOTE_ATTACHMENTS_PER_TURN)) {
       try {
-        const upload = attachment.kind === "image"
-          ? { name: attachment.name, mimeType: attachment.mimeType, kind: "image", data: attachment.data }
-          : { name: attachment.name, mimeType: attachment.mimeType, kind: "text", text: attachment.text };
+        const upload =
+          attachment.kind === "image"
+            ? {
+                name: attachment.name,
+                mimeType: attachment.mimeType,
+                kind: "image",
+                data: attachment.data,
+              }
+            : {
+                name: attachment.name,
+                mimeType: attachment.mimeType,
+                kind: "text",
+                text: attachment.text,
+              };
         staged.push(this.retain(deviceId, chatId, parseUpload(upload, this.nextId()), now));
       } catch (error) {
         if (!(error instanceof AidenRemoteServiceError)) throw error;
@@ -376,7 +404,11 @@ export class AidenRemoteAttachmentStore {
     const { selected, now } = this.select(deviceId, chatId, input);
     const attachments = selected.map((record) => structuredClone(record.attachment));
     if (attachmentInlineBytes(attachments) > MAX_ATTACHMENT_INLINE_BYTES) {
-      throw new AidenRemoteServiceError("payload_too_large", "The attachments exceed the turn limit.", 413);
+      throw new AidenRemoteServiceError(
+        "payload_too_large",
+        "The attachments exceed the turn limit.",
+        413,
+      );
     }
     for (const record of selected) this.removeRecord(record);
     this.prune(now);
@@ -398,7 +430,11 @@ export class AidenRemoteAttachmentStore {
     const { selected } = this.select(deviceId, chatId, input);
     const attachments = selected.map((record) => structuredClone(record.attachment));
     if (attachmentInlineBytes(attachments) > MAX_ATTACHMENT_INLINE_BYTES) {
-      throw new AidenRemoteServiceError("payload_too_large", "The attachments exceed the turn limit.", 413);
+      throw new AidenRemoteServiceError(
+        "payload_too_large",
+        "The attachments exceed the turn limit.",
+        413,
+      );
     }
     for (const record of selected) record.reserved = true;
     let settled = false;
@@ -432,13 +468,25 @@ export class AidenRemoteAttachmentStore {
       input.length === 0 ||
       input.length > MAX_AIDEN_REMOTE_ATTACHMENTS_PER_TURN
     ) {
-      throw new AidenRemoteServiceError("invalid_request", "The attachment references are invalid.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The attachment references are invalid.",
+        400,
+      );
     }
     const ids: string[] = [];
     const unique = new Set<string>();
     for (const candidate of input) {
-      if (typeof candidate !== "string" || !ATTACHMENT_ID.test(candidate) || unique.has(candidate)) {
-        throw new AidenRemoteServiceError("invalid_request", "The attachment references are invalid.", 400);
+      if (
+        typeof candidate !== "string" ||
+        !ATTACHMENT_ID.test(candidate) ||
+        unique.has(candidate)
+      ) {
+        throw new AidenRemoteServiceError(
+          "invalid_request",
+          "The attachment references are invalid.",
+          400,
+        );
       }
       unique.add(candidate);
       ids.push(candidate);
@@ -449,20 +497,40 @@ export class AidenRemoteAttachmentStore {
     for (const id of ids) {
       const record = this.records.get(id);
       if (!record) {
-        throw new AidenRemoteServiceError("handle_invalid", "That attachment is no longer available.", 409);
+        throw new AidenRemoteServiceError(
+          "handle_invalid",
+          "That attachment is no longer available.",
+          409,
+        );
       }
       if (record.expiresAt <= now) {
         this.removeRecord(record);
-        throw new AidenRemoteServiceError("handle_expired", "That attachment expired. Attach it again.", 409);
+        throw new AidenRemoteServiceError(
+          "handle_expired",
+          "That attachment expired. Attach it again.",
+          409,
+        );
       }
       if (record.deviceId !== deviceId) {
-        throw new AidenRemoteServiceError("handle_wrong_device", "That attachment belongs to another device.", 403);
+        throw new AidenRemoteServiceError(
+          "handle_wrong_device",
+          "That attachment belongs to another device.",
+          403,
+        );
       }
       if (record.chatId !== chatId) {
-        throw new AidenRemoteServiceError("handle_invalid", "That attachment belongs to another chat.", 409);
+        throw new AidenRemoteServiceError(
+          "handle_invalid",
+          "That attachment belongs to another chat.",
+          409,
+        );
       }
       if (record.reserved) {
-        throw new AidenRemoteServiceError("handle_invalid", "That attachment is already being sent.", 409);
+        throw new AidenRemoteServiceError(
+          "handle_invalid",
+          "That attachment is already being sent.",
+          409,
+        );
       }
       selected.push(record);
     }
@@ -471,15 +539,27 @@ export class AidenRemoteAttachmentStore {
 
   remove(deviceId: string, chatId: string, id: string): void {
     if (!ATTACHMENT_ID.test(id)) {
-      throw new AidenRemoteServiceError("invalid_request", "The attachment reference is invalid.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The attachment reference is invalid.",
+        400,
+      );
     }
     const record = this.records.get(id);
     if (!record) return;
     if (record.deviceId !== deviceId) {
-      throw new AidenRemoteServiceError("handle_wrong_device", "That attachment belongs to another device.", 403);
+      throw new AidenRemoteServiceError(
+        "handle_wrong_device",
+        "That attachment belongs to another device.",
+        403,
+      );
     }
     if (record.chatId !== chatId) {
-      throw new AidenRemoteServiceError("handle_invalid", "That attachment belongs to another chat.", 409);
+      throw new AidenRemoteServiceError(
+        "handle_invalid",
+        "That attachment belongs to another chat.",
+        409,
+      );
     }
     // A send holds it; that send spends it or gives it back.
     if (record.reserved) return;
@@ -502,7 +582,11 @@ export class AidenRemoteAttachmentStore {
   private nextId(): string {
     const id = this.options.randomId?.() ?? `att_${randomBytes(32).toString("base64url")}`;
     if (!ATTACHMENT_ID.test(id) || this.records.has(id)) {
-      throw new AidenRemoteServiceError("internal_error", "Aiden could not allocate an attachment reference.", 500);
+      throw new AidenRemoteServiceError(
+        "internal_error",
+        "Aiden could not allocate an attachment reference.",
+        500,
+      );
     }
     return id;
   }

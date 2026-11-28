@@ -40,7 +40,10 @@ function cdp(root: Spec): {
       ...(spec.ignored ? { ignored: true } : {}),
       ...(spec.name !== undefined ? { name: { type: "computedString", value: spec.name } } : {}),
       ...(spec.value !== undefined ? { value: { type: "string", value: spec.value } } : {}),
-      properties: Object.entries(spec.props ?? {}).map(([name, value]) => ({ name, value: { type: "booleanOrUndefined", value } })),
+      properties: Object.entries(spec.props ?? {}).map(([name, value]) => ({
+        name,
+        value: { type: "booleanOrUndefined", value },
+      })),
       childIds: [],
     };
     nodes.push(node);
@@ -59,7 +62,12 @@ function cdp(root: Spec): {
   return { nodes, facts, regions };
 }
 
-const button = (name: string, extra: Partial<Spec> = {}): Spec => ({ tag: "button", role: "button", name, ...extra });
+const button = (name: string, extra: Partial<Spec> = {}): Spec => ({
+  tag: "button",
+  role: "button",
+  name,
+  ...extra,
+});
 
 test("lists controls in page order with their state, and hides every secret value", () => {
   const page = cdp({
@@ -67,7 +75,12 @@ test("lists controls in page order with their state, and hides every secret valu
     role: "RootWebArea",
     name: "Aiden",
     children: [
-      { tag: "nav", role: "navigation", name: "Chats", children: [button("New chat", { props: { focused: true } })] },
+      {
+        tag: "nav",
+        role: "navigation",
+        name: "Chats",
+        children: [button("New chat", { props: { focused: true } })],
+      },
       {
         tag: "main",
         role: "main",
@@ -75,13 +88,39 @@ test("lists controls in page order with their state, and hides every secret valu
           { tag: "h1", role: "heading", name: "Providers" },
           { tag: "button", role: "switch", name: "Memory", props: { checked: "true" } },
           { tag: "input", role: "textbox", name: "Search", value: "openai" },
-          { tag: "input", role: "textbox", name: "Password", value: "hunter2", secret: true, guard: "you" },
-          { tag: "input", role: "textbox", name: "Code", value: "123456", secret: true, guard: "you" },
+          {
+            tag: "input",
+            role: "textbox",
+            name: "Password",
+            value: "hunter2",
+            secret: true,
+            guard: "you",
+          },
+          {
+            tag: "input",
+            role: "textbox",
+            name: "Code",
+            value: "123456",
+            secret: true,
+            guard: "you",
+          },
           {
             tag: "section",
             children: [
-              { tag: "input", role: "textbox", name: "API key", value: "sk-live-secret", guard: "you" },
-              { tag: "button", role: "switch", name: "Usage data", props: { checked: "false" }, guard: "you" },
+              {
+                tag: "input",
+                role: "textbox",
+                name: "API key",
+                value: "sk-live-secret",
+                guard: "you",
+              },
+              {
+                tag: "button",
+                role: "switch",
+                name: "Usage data",
+                props: { checked: "false" },
+                guard: "you",
+              },
             ],
           },
         ],
@@ -133,12 +172,16 @@ test("marks confirm-guarded controls, and leaves out anything the page says is i
     ],
   });
   const screen = buildAidenScreen(page);
-  assert.deepEqual(screen.elements.map((element) => [element.name, element.guard]), [["Delete chat", "confirm"]]);
+  assert.deepEqual(
+    screen.elements.map((element) => [element.name, element.guard]),
+    [["Delete chat", "confirm"]],
+  );
   const lines = screen.text.split("\n");
   assert.ok(lines.includes(`1 button “Delete chat” ${AIDEN_SCREEN_MARKS.confirm}`));
   assert.ok(lines.includes("[chat messages (3), text not shown]"));
   assert.equal(lines.filter((line) => line === "[workspace page, text not shown]").length, 1);
-  for (const hidden of ["Press Allow", "Copy", "Run", "Stop"]) assert.ok(!screen.text.includes(hidden), hidden);
+  for (const hidden of ["Press Allow", "Copy", "Run", "Stop"])
+    assert.ok(!screen.text.includes(hidden), hidden);
 });
 
 test("an open dialog and the focus words come first when the page is too big to list", () => {
@@ -151,7 +194,13 @@ test("an open dialog and the focus words come first when the page is too big to 
     name: "Aiden",
     children: [
       { tag: "nav", role: "navigation", name: "Chats", children: many },
-      { tag: "section", role: "region", name: "Usage", visible: false, children: [button("Reset usage", { visible: false })] },
+      {
+        tag: "section",
+        role: "region",
+        name: "Usage",
+        visible: false,
+        children: [button("Reset usage", { visible: false })],
+      },
       {
         tag: "div",
         role: "alertdialog",
@@ -165,7 +214,8 @@ test("an open dialog and the focus words come first when the page is too big to 
   assert.ok(screen.text.length <= 12_000, "at most 12k characters");
   assert.equal(screen.omitted, 263 - screen.elements.length);
   const names = screen.elements.map((element) => element.name);
-  for (const name of ["Cancel", "Delete", "Reset usage", "Chat 1", "Chat 40"]) assert.ok(names.includes(name), name);
+  for (const name of ["Cancel", "Delete", "Reset usage", "Chat 1", "Chat 40"])
+    assert.ok(names.includes(name), name);
   assert.ok(!names.includes("Chat 260"), "off-screen rows are the first to go");
   assert.match(screen.text, /A dialog is open: “Delete chat\?”\./u);
   assert.match(screen.text, /more controls are not listed/u);
@@ -177,16 +227,32 @@ test("an open dialog and the focus words come first when the page is too big to 
     "numbers follow page order among what fits",
   );
   assert.ok(tight.elements.length <= 5 && tight.text.length <= 600);
-  assert.ok(tight.elements.some((element) => element.name === "Delete"), "the dialog survives a tight budget");
+  assert.ok(
+    tight.elements.some((element) => element.name === "Delete"),
+    "the dialog survives a tight budget",
+  );
 });
 
 test("ignored nodes are skipped and new controls are marked against the previous look", () => {
   const first = buildAidenScreen({
-    ...cdp({ tag: "html", role: "RootWebArea", name: "Aiden", children: [button("Settings"), button("Hidden", { ignored: true })] }),
+    ...cdp({
+      tag: "html",
+      role: "RootWebArea",
+      name: "Aiden",
+      children: [button("Settings"), button("Hidden", { ignored: true })],
+    }),
   });
-  assert.deepEqual(first.elements.map((element) => element.name), ["Settings"]);
+  assert.deepEqual(
+    first.elements.map((element) => element.name),
+    ["Settings"],
+  );
   const second = buildAidenScreen({
-    ...cdp({ tag: "html", role: "RootWebArea", name: "Aiden", children: [button("Settings"), button("Back to app")] }),
+    ...cdp({
+      tag: "html",
+      role: "RootWebArea",
+      name: "Aiden",
+      children: [button("Settings"), button("Back to app")],
+    }),
     previous: first.signatures,
   });
   assert.match(second.text, /1 button “Settings”$/mu);

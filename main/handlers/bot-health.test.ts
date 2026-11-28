@@ -21,7 +21,10 @@ function register() {
 
 test("report returns the newest report or null", async () => {
   const h = register();
-  assert.equal(((await h.invoke("bots:health:report", { botId: "bot-1" })) as BotHealthReport).botId, "bot-1");
+  assert.equal(
+    ((await h.invoke("bots:health:report", { botId: "bot-1" })) as BotHealthReport).botId,
+    "bot-1",
+  );
   assert.equal(await h.invoke("bots:health:report", { botId: "bot-2" }), null);
 });
 
@@ -33,6 +36,8 @@ test("check runs the checks for that Bot once", async () => {
 
 test("extra fields are rejected before anything runs", async () => {
   const h = register();
-  await assert.rejects(() => Promise.resolve(h.invoke("bots:health:check", { botId: "bot-2", force: true })));
+  await assert.rejects(() =>
+    Promise.resolve(h.invoke("bots:health:check", { botId: "bot-2", force: true })),
+  );
   assert.deepEqual(h.checked, []);
 });

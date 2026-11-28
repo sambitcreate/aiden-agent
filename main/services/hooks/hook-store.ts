@@ -22,7 +22,13 @@ import {
   validateHookHandler,
   type ParsedHooksFile,
 } from "./hook-config.js";
-import type { HookCommandHandler, HookDefinition, HookEvent, HookListing, HookScope } from "./hook-types.js";
+import type {
+  HookCommandHandler,
+  HookDefinition,
+  HookEvent,
+  HookListing,
+  HookScope,
+} from "./hook-types.js";
 
 export const WORKSPACE_HOOKS_FILE = path.join(".aiden", "hooks.json");
 export const MAX_WORKSPACE_HOOKS_FILE_BYTES = 256 * 1024;
@@ -52,23 +58,37 @@ function sanitizeScope(raw: unknown): HookScope | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const scope = raw as Record<string, unknown>;
   if (scope.kind === "global") return { kind: "global" };
-  if (scope.kind === "workspace" && typeof scope.workspaceRoot === "string" && path.isAbsolute(scope.workspaceRoot)) {
+  if (
+    scope.kind === "workspace" &&
+    typeof scope.workspaceRoot === "string" &&
+    path.isAbsolute(scope.workspaceRoot)
+  ) {
     return normalizeHookScope({ kind: "workspace", workspaceRoot: scope.workspaceRoot });
   }
-  if (scope.kind === "chat" && typeof scope.chatId === "string" && scope.chatId) return { kind: "chat", chatId: scope.chatId };
-  if (scope.kind === "bot" && typeof scope.botId === "string" && scope.botId) return { kind: "bot", botId: scope.botId };
+  if (scope.kind === "chat" && typeof scope.chatId === "string" && scope.chatId)
+    return { kind: "chat", chatId: scope.chatId };
+  if (scope.kind === "bot" && typeof scope.botId === "string" && scope.botId)
+    return { kind: "bot", botId: scope.botId };
   return undefined;
 }
 
 function sanitizeStore(raw: unknown): HookStoreState {
   const state = emptyStore();
-  if (!raw || typeof raw !== "object" || !Array.isArray((raw as { entries?: unknown }).entries)) throw new Error("it has no list of entries");
+  if (!raw || typeof raw !== "object" || !Array.isArray((raw as { entries?: unknown }).entries))
+    throw new Error("it has no list of entries");
   const seen = new Set<string>();
   for (const item of (raw as { entries: unknown[] }).entries) {
     if (!item || typeof item !== "object") continue;
     const entry = item as Record<string, unknown>;
     const scope = sanitizeScope(entry.scope);
-    if (typeof entry.id !== "string" || !entry.id || seen.has(entry.id) || !scope || !isHookEvent(entry.event)) continue;
+    if (
+      typeof entry.id !== "string" ||
+      !entry.id ||
+      seen.has(entry.id) ||
+      !scope ||
+      !isHookEvent(entry.event)
+    )
+      continue;
     if (!entry.handler || typeof entry.handler !== "object") continue;
     seen.add(entry.id);
     state.entries.push({
@@ -92,7 +112,10 @@ export function storedEntryListing(entry: StoredHookEntry): HookListing {
   const validation = validateHookHandler(entry.handler);
   const handler: HookCommandHandler = validation.ok
     ? validation.handler
-    : { type: "command", command: typeof entry.handler?.command === "string" ? entry.handler.command : "" };
+    : {
+        type: "command",
+        command: typeof entry.handler?.command === "string" ? entry.handler.command : "",
+      };
   const definition = hookDefinitionFor({ ...entry, handler });
   const matcher = compileHookMatcher(entry.matcher);
   const reason = !validation.ok ? validation.reason : !matcher.ok ? matcher.reason : undefined;
@@ -179,14 +202,22 @@ export async function readWorkspaceHooksFile(workspaceRoot: string): Promise<Wor
   const directory = path.join(root, ".aiden");
   try {
     const stat = await fs.lstat(directory);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) return empty(".aiden is not a plain folder, so its hooks were not read.");
+    if (stat.isSymbolicLink() || !stat.isDirectory())
+      return empty(".aiden is not a plain folder, so its hooks were not read.");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") return empty(undefined, false);
+    if (
+      (error as NodeJS.ErrnoException).code === "ENOENT" ||
+      (error as NodeJS.ErrnoException).code === "ENOTDIR"
+    )
+      return empty(undefined, false);
     return empty(`The hooks file could not be read: ${(error as Error).message}`);
   }
   let handle: fs.FileHandle;
   try {
-    handle = await fs.open(path.join(root, WORKSPACE_HOOKS_FILE), fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+    handle = await fs.open(
+      path.join(root, WORKSPACE_HOOKS_FILE),
+      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0),
+    );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return empty(undefined, false);
     return empty(`The hooks file could not be read: ${(error as Error).message}`);
@@ -194,17 +225,25 @@ export async function readWorkspaceHooksFile(workspaceRoot: string): Promise<Wor
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) return empty("The hooks file is not a regular file.");
-    if (stat.size > MAX_WORKSPACE_HOOKS_FILE_BYTES) return empty(`The hooks file is larger than ${MAX_WORKSPACE_HOOKS_FILE_BYTES / 1024} KiB.`);
+    if (stat.size > MAX_WORKSPACE_HOOKS_FILE_BYTES)
+      return empty(`The hooks file is larger than ${MAX_WORKSPACE_HOOKS_FILE_BYTES / 1024} KiB.`);
     const buffer = Buffer.alloc(MAX_WORKSPACE_HOOKS_FILE_BYTES + 1);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    if (bytesRead > MAX_WORKSPACE_HOOKS_FILE_BYTES) return empty(`The hooks file is larger than ${MAX_WORKSPACE_HOOKS_FILE_BYTES / 1024} KiB.`);
+    if (bytesRead > MAX_WORKSPACE_HOOKS_FILE_BYTES)
+      return empty(`The hooks file is larger than ${MAX_WORKSPACE_HOOKS_FILE_BYTES / 1024} KiB.`);
     const parsed = parseHooksConfigText(buffer.subarray(0, bytesRead).toString("utf8"), {
       scope,
       source: "workspace-file",
       idPrefix: workspaceFileIdPrefix(root),
     });
     // Problems with nothing loaded means the file as a whole could not be read.
-    return { present: true, ...(parsed.hooks.length === 0 && parsed.problems.length > 0 ? { unreadable: true as const } : {}), ...parsed };
+    return {
+      present: true,
+      ...(parsed.hooks.length === 0 && parsed.problems.length > 0
+        ? { unreadable: true as const }
+        : {}),
+      ...parsed,
+    };
   } finally {
     await handle.close();
   }

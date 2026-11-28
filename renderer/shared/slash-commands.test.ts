@@ -101,12 +101,18 @@ test("curated slash catalog freezes unique command names, aliases, and required 
     "generative-ui",
     "generative_ui",
   ]);
-  assert.deepEqual(SLASH_COMMANDS.find((command) => command.name === "connectors")?.aliases, ["mcp"]);
+  assert.deepEqual(SLASH_COMMANDS.find((command) => command.name === "connectors")?.aliases, [
+    "mcp",
+  ]);
   assert.deepEqual(SLASH_COMMANDS.find((command) => command.name === "connectors")?.action, {
     kind: "settings",
     section: "mcp",
   });
-  assert.ok(!SLASH_COMMANDS.some((command) => command.name === "plugins" || command.aliases.includes("plugins")));
+  assert.ok(
+    !SLASH_COMMANDS.some(
+      (command) => command.name === "plugins" || command.aliases.includes("plugins"),
+    ),
+  );
   assert.deepEqual(
     SLASH_COMMANDS.find((command) => command.name === "environment"),
     {
@@ -123,19 +129,22 @@ test("curated slash catalog freezes unique command names, aliases, and required 
       draftPolicy: "preserve",
     },
   );
-  assert.deepEqual(SLASH_COMMANDS.find((command) => command.name === "quick-view"), {
-    name: "quick-view",
-    aliases: [],
-    title: "Toggle Quick View",
-    description: "Show or hide the compact workspace summary.",
-    keywords: ["summary", "preview", "status", "git"],
-    icon: "environment",
-    action: { kind: "command", commandId: "quick-view.toggle" },
-    behavior: "immediate",
-    availability: "workspace-environment",
-    argument: "none",
-    draftPolicy: "preserve",
-  });
+  assert.deepEqual(
+    SLASH_COMMANDS.find((command) => command.name === "quick-view"),
+    {
+      name: "quick-view",
+      aliases: [],
+      title: "Toggle Quick View",
+      description: "Show or hide the compact workspace summary.",
+      keywords: ["summary", "preview", "status", "git"],
+      icon: "environment",
+      action: { kind: "command", commandId: "quick-view.toggle" },
+      behavior: "immediate",
+      availability: "workspace-environment",
+      argument: "none",
+      draftPolicy: "preserve",
+    },
+  );
 
   assert.equal(SLASH_LIMITS.queryCharacters, 256);
   assert.equal(SLASH_LIMITS.catalogEntries, 500);

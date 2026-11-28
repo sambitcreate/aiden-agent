@@ -23,7 +23,9 @@ export const createImagesRuntime = new CreateImagesRuntime({
     createWiredImagePort({
       models: imageGeneration.models,
       providerLabel: (providerId) =>
-        isImageGenerationProviderId(providerId) ? IMAGE_GENERATION_PROVIDER_NAMES[providerId] : providerId,
+        isImageGenerationProviderId(providerId)
+          ? IMAGE_GENERATION_PROVIDER_NAMES[providerId]
+          : providerId,
       // Offline: loads image settings and registers providers; never contacts a provider.
       ready: () => imageGeneration.ready(),
       // Cached and offline: the Settings default preselects new Generate Image steps.

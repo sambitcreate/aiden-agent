@@ -25,16 +25,22 @@ function initRepository(workspaceDir: string, { edits }: { edits: boolean }): vo
 const sectionOrder = (quickView: Locator) => () =>
   quickView
     .locator("[data-quick-view-section]")
-    .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-quick-view-section")));
+    .evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("data-quick-view-section")),
+    );
 
 test.describe("Quick View cards", () => {
   test.use({ workspaceSeed: true });
 
-  test("sections collapse, survive a reload, and reorder by keyboard and pointer", async ({ aiden }) => {
+  test("sections collapse, survive a reload, and reorder by keyboard and pointer", async ({
+    aiden,
+  }) => {
     const { page } = aiden;
     initRepository(aiden.workspaceDir, { edits: true });
     await finishLmStudioOnboarding(page);
-    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1400, 900));
+    await aiden.app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setSize(1400, 900),
+    );
     await page.locator("[data-quick-view-toggle]").click();
     const quickView = page.getByRole("complementary", { name: "Quick View" });
     const order = sectionOrder(quickView);
@@ -96,10 +102,9 @@ test.describe("Quick View cards", () => {
     await expect.poll(order).toEqual(["changes", "environment"]);
 
     await quickView.getByRole("button", { name: "Environment", exact: true }).click();
-    await expect(quickView.getByRole("button", { name: "Environment", exact: true })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
+    await expect(
+      quickView.getByRole("button", { name: "Environment", exact: true }),
+    ).toHaveAttribute("aria-expanded", "true");
 
     await page.reload();
     // Quick View remembers that it was open; the order and the opened card come back too.
@@ -109,13 +114,14 @@ test.describe("Quick View cards", () => {
       "aria-expanded",
       "false",
     );
-    await expect(quickView.getByRole("button", { name: "Environment", exact: true })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
+    await expect(
+      quickView.getByRole("button", { name: "Environment", exact: true }),
+    ).toHaveAttribute("aria-expanded", "true");
   });
 
-  test("Changes leaves once the repository is clean, with no commits to push or a PR", async ({ aiden }) => {
+  test("Changes leaves once the repository is clean, with no commits to push or a PR", async ({
+    aiden,
+  }) => {
     const { page } = aiden;
     initRepository(aiden.workspaceDir, { edits: true });
     // Stage the edit so reverting it touches the index, which main's Git watcher reports.
@@ -155,11 +161,14 @@ test.describe("Quick View cards", () => {
       .toBeLessThan(16);
   });
 
-  test("the Environment card's header shows the workspace folder in the file manager", async ({ aiden }) => {
+  test("the Environment card's header shows the workspace folder in the file manager", async ({
+    aiden,
+  }) => {
     const { page, app } = aiden;
     await app.evaluate(({ ipcMain }) => {
       const opened: unknown[] = [];
-      (globalThis as unknown as { quickViewOpenedFolders: unknown[] }).quickViewOpenedFolders = opened;
+      (globalThis as unknown as { quickViewOpenedFolders: unknown[] }).quickViewOpenedFolders =
+        opened;
       ipcMain.removeHandler("workspaces:openFolder");
       ipcMain.handle("workspaces:openFolder", (_event, workspaceId: unknown) => {
         opened.push(workspaceId);
@@ -174,7 +183,10 @@ test.describe("Quick View cards", () => {
       .click();
     await expect
       .poll(() =>
-        app.evaluate(() => (globalThis as unknown as { quickViewOpenedFolders: unknown[] }).quickViewOpenedFolders),
+        app.evaluate(
+          () =>
+            (globalThis as unknown as { quickViewOpenedFolders: unknown[] }).quickViewOpenedFolders,
+        ),
       )
       .toHaveLength(1);
   });

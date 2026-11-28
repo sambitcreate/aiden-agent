@@ -25,7 +25,11 @@ export interface GitCommandResult {
   code: number;
 }
 
-export type LocalGitRunner = (cwd: string, args: string[], signal?: AbortSignal) => Promise<GitCommandResult>;
+export type LocalGitRunner = (
+  cwd: string,
+  args: string[],
+  signal?: AbortSignal,
+) => Promise<GitCommandResult>;
 
 export interface GitRemoteLocation {
   host: string;
@@ -57,7 +61,11 @@ export interface LocalRepositoryResolverOptions {
   now?: () => number;
 }
 
-async function defaultGit(cwd: string, args: string[], signal?: AbortSignal): Promise<GitCommandResult> {
+async function defaultGit(
+  cwd: string,
+  args: string[],
+  signal?: AbortSignal,
+): Promise<GitCommandResult> {
   const env = { ...githubCliEnvironment(), GIT_OPTIONAL_LOCKS: "0" };
   const binary = await resolveGitExecutableMemoized("git", cwd, env, signal);
   try {
@@ -72,7 +80,8 @@ async function defaultGit(cwd: string, args: string[], signal?: AbortSignal): Pr
     return { stdout: String(result.stdout), code: 0 };
   } catch (error) {
     const failure = error as { code?: unknown; stdout?: unknown };
-    if (typeof failure.code === "number") return { stdout: String(failure.stdout ?? ""), code: failure.code };
+    if (typeof failure.code === "number")
+      return { stdout: String(failure.stdout ?? ""), code: failure.code };
     throw error;
   }
 }
@@ -85,7 +94,9 @@ async function defaultSshHostname(alias: string): Promise<string | undefined> {
       maxBuffer: 256 * 1024,
       timeout: SSH_CONFIG_TIMEOUT_MS,
     });
-    const line = String(result.stdout).split("\n").find((entry) => entry.startsWith("hostname "));
+    const line = String(result.stdout)
+      .split("\n")
+      .find((entry) => entry.startsWith("hostname "));
     return line?.slice("hostname ".length).trim() || undefined;
   } catch {
     return undefined;
@@ -106,7 +117,8 @@ function splitRepositoryPath(path: string): { owner: string; name: string } | un
   if (parts.length !== 2) return undefined;
   const owner = parts[0]!.toLowerCase();
   const name = parts[1]!.replace(/\.git$/iu, "").toLowerCase();
-  if (!/^[a-z0-9](?:[a-z0-9-]{0,38})$/u.test(owner) || !/^[a-z0-9._-]{1,100}$/u.test(name)) return undefined;
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,38})$/u.test(owner) || !/^[a-z0-9._-]{1,100}$/u.test(name))
+    return undefined;
   return { owner, name };
 }
 
@@ -125,7 +137,8 @@ export function parseGitRemoteUrl(raw: string): ParsedRemoteUrl | undefined {
   } catch {
     return undefined;
   }
-  if (!["https:", "http:", "ssh:", "git:", "git+ssh:", "ssh+git:"].includes(url.protocol)) return undefined;
+  if (!["https:", "http:", "ssh:", "git:", "git+ssh:", "ssh+git:"].includes(url.protocol))
+    return undefined;
   const host = normalizeGitHubHost(url.hostname);
   const path = splitRepositoryPath(decodeURIComponent(url.pathname));
   return host && path ? { host, ...path, ssh: url.protocol.includes("ssh") } : undefined;
@@ -195,7 +208,11 @@ export class LocalRepositoryResolver {
   async resolve(cwd: string, signal?: AbortSignal): Promise<LocalRepositoryResult> {
     const head = await this.git(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"], signal);
     if (head.code !== 0 && head.code !== 1) {
-      return { ok: false, availability: "not-repo", message: "This folder is not a git repository." };
+      return {
+        ok: false,
+        availability: "not-repo",
+        message: "This folder is not a git repository.",
+      };
     }
     const branch = head.code === 0 ? head.stdout.trim() || undefined : undefined;
     const dump = await this.git(cwd, ["config", "-z", "--get-regexp", CONFIG_PATTERN], signal);
@@ -209,7 +226,11 @@ export class LocalRepositoryResolver {
     }
     const base = this.baseRemote(config, remotes);
     if (!base) {
-      return { ok: false, availability: "not-github", message: "This repository's remote is not hosted on GitHub." };
+      return {
+        ok: false,
+        availability: "not-github",
+        message: "This repository's remote is not hosted on GitHub.",
+      };
     }
 
     const repository: LocalGitHubRepository = { ...base };
@@ -217,7 +238,9 @@ export class LocalRepositoryResolver {
     repository.branch = branch;
     const branchRemote = lastValue(config, `branch.${branch}.remote`);
     const pushRemote =
-      lastValue(config, `branch.${branch}.pushremote`) ?? lastValue(config, "remote.pushdefault") ?? branchRemote;
+      lastValue(config, `branch.${branch}.pushremote`) ??
+      lastValue(config, "remote.pushdefault") ??
+      branchRemote;
     const merge = lastValue(config, `branch.${branch}.merge`);
     const push = await this.git(
       cwd,
@@ -239,9 +262,17 @@ export class LocalRepositoryResolver {
     }
     if (headLocation && headLocation.host === base.host) repository.headOwner = headLocation.owner;
 
-    const trackingRef = pushRef ? `${branch}@{push}` : pushRemote ? `refs/remotes/${pushRemote}/${headBranch}` : undefined;
+    const trackingRef = pushRef
+      ? `${branch}@{push}`
+      : pushRemote
+        ? `refs/remotes/${pushRemote}/${headBranch}`
+        : undefined;
     if (trackingRef) {
-      const tracking = await this.git(cwd, ["rev-parse", "--verify", "--quiet", trackingRef], signal);
+      const tracking = await this.git(
+        cwd,
+        ["rev-parse", "--verify", "--quiet", trackingRef],
+        signal,
+      );
       const sha = tracking.code === 0 ? tracking.stdout.trim().toLowerCase() : "";
       if (/^[0-9a-f]{40,64}$/u.test(sha)) repository.headSha = sha;
     }
@@ -259,11 +290,14 @@ export class LocalRepositoryResolver {
     merge: string | undefined,
     pushRef: string,
   ): string {
-    if (pushRemote && pushRef.startsWith(`${pushRemote}/`)) return pushRef.slice(pushRemote.length + 1);
+    if (pushRemote && pushRef.startsWith(`${pushRemote}/`))
+      return pushRef.slice(pushRemote.length + 1);
     if (pushRef.includes("/")) return pushRef.slice(pushRef.indexOf("/") + 1);
     if (pushRef) return pushRef;
     const sameRemote = !pushRemote || pushRemote === branchRemote;
-    return sameRemote && merge?.startsWith("refs/heads/") ? merge.slice("refs/heads/".length) : branch;
+    return sameRemote && merge?.startsWith("refs/heads/")
+      ? merge.slice("refs/heads/".length)
+      : branch;
   }
 
   private baseRemote(
@@ -287,15 +321,21 @@ export class LocalRepositoryResolver {
     return ranked.length > 0 ? remotes.get(ranked[0]!) : undefined;
   }
 
-  private async location(config: GitConfigSnapshot, url: string): Promise<GitRemoteLocation | undefined> {
+  private async location(
+    config: GitConfigSnapshot,
+    url: string,
+  ): Promise<GitRemoteLocation | undefined> {
     const parsed = parseGitRemoteUrl(rewriteUrl(config, url));
     if (!parsed) return undefined;
     const { ssh, ...location } = parsed;
-    if (location.host === "ssh.github.com" || location.host === "www.github.com") location.host = "github.com";
+    if (location.host === "ssh.github.com" || location.host === "www.github.com")
+      location.host = "github.com";
     if (await this.isGitHubHost(location.host)) return location;
     if (!ssh) return undefined;
     const real = await this.aliasHost(location.host);
-    return real && real !== location.host && (await this.isGitHubHost(real)) ? { ...location, host: real } : undefined;
+    return real && real !== location.host && (await this.isGitHubHost(real))
+      ? { ...location, host: real }
+      : undefined;
   }
 
   private async aliasHost(alias: string): Promise<string | undefined> {

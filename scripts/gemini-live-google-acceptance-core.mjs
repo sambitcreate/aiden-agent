@@ -1,6 +1,5 @@
 export const GOOGLE_LIVE_ACCEPTANCE_ENV = "AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE";
-export const GOOGLE_LIVE_ACCEPTANCE_CONFIRMATION =
-  "--i-understand-real-google-call";
+export const GOOGLE_LIVE_ACCEPTANCE_CONFIRMATION = "--i-understand-real-google-call";
 export const GOOGLE_LIVE_ACCEPTANCE_SCHEMA_VERSION = 1;
 export const GOOGLE_LIVE_ACCEPTANCE_TOTAL_DEADLINE_MS = 12 * 60 * 1_000;
 export const GOOGLE_LIVE_ACCEPTANCE_MODEL = "gemini-3.8-live-extended-thinking";
@@ -49,12 +48,7 @@ const TIMING_KEYS = new Set([
   "appStoppedMs",
 ]);
 const RUNNER_EVIDENCE_KEYS = new Set(["isolatedProfile"]);
-const APP_EVIDENCE_KEYS = new Set([
-  "ready",
-  "providerResponse",
-  "stopRequested",
-  "stopped",
-]);
+const APP_EVIDENCE_KEYS = new Set(["ready", "providerResponse", "stopRequested", "stopped"]);
 const OPERATOR_EVIDENCE_KEYS = new Set([
   "credentialEnteredInApp",
   "liveReadyObserved",
@@ -69,14 +63,12 @@ function exactKeys(value, allowlist, label) {
     throw new Error(`${label} must be an object.`);
   }
   for (const key of Object.keys(value)) {
-    if (!allowlist.has(key))
-      throw new Error(`${label} contains a forbidden field.`);
+    if (!allowlist.has(key)) throw new Error(`${label} contains a forbidden field.`);
   }
 }
 
 function finiteNonNegative(value, label) {
-  if (!Number.isFinite(value) || value < 0)
-    throw new Error(`${label} must be non-negative.`);
+  if (!Number.isFinite(value) || value < 0) throw new Error(`${label} must be non-negative.`);
 }
 
 export function parseGoogleLiveAcceptanceArgs(argv) {
@@ -103,17 +95,13 @@ export function parseGoogleLiveAcceptanceArgs(argv) {
 }
 
 export function googleLiveAcceptanceEnabled(environment, confirmed) {
-  return (
-    environment[GOOGLE_LIVE_ACCEPTANCE_ENV]?.trim() === "1" &&
-    confirmed === true
-  );
+  return environment[GOOGLE_LIVE_ACCEPTANCE_ENV]?.trim() === "1" && confirmed === true;
 }
 
 export function parseGoogleLiveAppEvidence(contents) {
   const allowed = ["ready", "provider_response", "stop_requested", "stopped"];
   const lines = contents.trim() ? contents.trim().split("\n") : [];
-  if (lines.length > allowed.length)
-    throw new Error("App evidence contains too many records.");
+  if (lines.length > allowed.length) throw new Error("App evidence contains too many records.");
   let previous = -1;
   const result = new Map();
   for (let index = 0; index < lines.length; index += 1) {
@@ -123,25 +111,16 @@ export function parseGoogleLiveAppEvidence(contents) {
     } catch {
       throw new Error("App evidence is not valid JSON.");
     }
-    exactKeys(
-      record,
-      new Set(["event", "elapsedMs", "sessionId"]),
-      "app evidence record",
-    );
-    if (record.event !== allowed[index])
-      throw new Error("App evidence sequence is invalid.");
+    exactKeys(record, new Set(["event", "elapsedMs", "sessionId"]), "app evidence record");
+    if (record.event !== allowed[index]) throw new Error("App evidence sequence is invalid.");
     finiteNonNegative(record.elapsedMs, "app evidence elapsedMs");
-    if (
-      typeof record.sessionId !== "string" ||
-      !/^[0-9a-f-]{16,64}$/iu.test(record.sessionId)
-    ) {
+    if (typeof record.sessionId !== "string" || !/^[0-9a-f-]{16,64}$/iu.test(record.sessionId)) {
       throw new Error("App evidence session identity is invalid.");
     }
     if (index > 0 && record.sessionId !== result.get("sessionId")) {
       throw new Error("App evidence spans multiple sessions.");
     }
-    if (record.elapsedMs < previous)
-      throw new Error("App evidence timing is not monotonic.");
+    if (record.elapsedMs < previous) throw new Error("App evidence timing is not monotonic.");
     previous = record.elapsedMs;
     result.set(record.event, record.elapsedMs);
     result.set("sessionId", record.sessionId);
@@ -154,18 +133,15 @@ export function assertGoogleLiveAcceptanceReceipt(receipt) {
   if (receipt.schemaVersion !== GOOGLE_LIVE_ACCEPTANCE_SCHEMA_VERSION) {
     throw new Error("Receipt schema version is invalid.");
   }
-  if (!RESULT_VALUES.has(receipt.result))
-    throw new Error("Receipt result is invalid.");
+  if (!RESULT_VALUES.has(receipt.result)) throw new Error("Receipt result is invalid.");
   if (receipt.result === "pass" && receipt.failureCode !== undefined) {
     throw new Error("Passing receipts cannot contain a failure code.");
   }
   if (receipt.result === "fail" && !FAILURE_CODES.has(receipt.failureCode)) {
     throw new Error("Failing receipts require a fixed failure code.");
   }
-  if (!Number.isFinite(Date.parse(receipt.startedAt)))
-    throw new Error("Start time is invalid.");
-  if (!Number.isFinite(Date.parse(receipt.completedAt)))
-    throw new Error("End time is invalid.");
+  if (!Number.isFinite(Date.parse(receipt.startedAt))) throw new Error("Start time is invalid.");
+  if (!Number.isFinite(Date.parse(receipt.completedAt))) throw new Error("End time is invalid.");
   finiteNonNegative(receipt.durationMs, "durationMs");
 
   exactKeys(receipt.environment, ENVIRONMENT_KEYS, "environment");
@@ -180,10 +156,7 @@ export function assertGoogleLiveAcceptanceReceipt(receipt) {
     "buildSha256",
     "model",
   ]) {
-    if (
-      typeof receipt.environment[key] !== "string" ||
-      !receipt.environment[key]
-    ) {
+    if (typeof receipt.environment[key] !== "string" || !receipt.environment[key]) {
       throw new Error("Receipt environment metadata is invalid.");
     }
   }
@@ -193,30 +166,19 @@ export function assertGoogleLiveAcceptanceReceipt(receipt) {
   if (receipt.result === "pass" && receipt.environment.gitDirty) {
     throw new Error("Passing receipts require a clean git tree.");
   }
-  if (
-    receipt.result === "pass" &&
-    !/^[0-9a-f]{40,64}$/u.test(receipt.environment.gitCommit)
-  ) {
+  if (receipt.result === "pass" && !/^[0-9a-f]{40,64}$/u.test(receipt.environment.gitCommit)) {
     throw new Error("Passing receipts require an exact git commit.");
   }
-  if (
-    receipt.result === "pass" &&
-    !/^[0-9a-f]{64}$/u.test(receipt.environment.buildSha256)
-  ) {
+  if (receipt.result === "pass" && !/^[0-9a-f]{64}$/u.test(receipt.environment.buildSha256)) {
     throw new Error("Passing receipts require an exact build hash.");
   }
 
   exactKeys(receipt.timing, TIMING_KEYS, "timing");
-  for (const value of Object.values(receipt.timing))
-    finiteNonNegative(value, "phase timing");
+  for (const value of Object.values(receipt.timing)) finiteNonNegative(value, "phase timing");
 
   exactKeys(receipt.runnerEvidence, RUNNER_EVIDENCE_KEYS, "runnerEvidence");
   exactKeys(receipt.appEvidence, APP_EVIDENCE_KEYS, "appEvidence");
-  exactKeys(
-    receipt.operatorEvidence,
-    OPERATOR_EVIDENCE_KEYS,
-    "operatorEvidence",
-  );
+  exactKeys(receipt.operatorEvidence, OPERATOR_EVIDENCE_KEYS, "operatorEvidence");
   for (const [evidence, keys] of [
     [receipt.runnerEvidence, RUNNER_EVIDENCE_KEYS],
     [receipt.appEvidence, APP_EVIDENCE_KEYS],

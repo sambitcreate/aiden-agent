@@ -51,7 +51,10 @@ function mount(handoff: BotPendingHandoff = HANDOFF, busy = false) {
   return { view, answers, opens: () => opens };
 }
 
-const buttonNames = () => screen.getAllByRole("button").map((button) => button.getAttribute("aria-label") ?? button.textContent);
+const buttonNames = () =>
+  screen
+    .getAllByRole("button")
+    .map((button) => button.getAttribute("aria-label") ?? button.textContent);
 
 test("the card says whose turn it is, what to do and why, and names the page Open goes to", () => {
   mount();
@@ -68,13 +71,23 @@ test("Take control opens the page and only then offers I'm done and Skip, with t
   assert.equal(opens(), 1);
   assert.deepEqual(answers, [], "taking control answers nothing");
   assert.deepEqual(buttonNames(), ["Open again: Take control at bank.example", "Skip", "I’m done"]);
-  assert.equal(document.activeElement, screen.getByRole("button", { name: "I’m done" }), "focus moves on to the answer, not to the page body");
+  assert.equal(
+    document.activeElement,
+    screen.getByRole("button", { name: "I’m done" }),
+    "focus moves on to the answer, not to the page body",
+  );
   fireEvent.click(screen.getByRole("button", { name: "Open again: Take control at bank.example" }));
   assert.equal(opens(), 2);
 });
 
 test("with no page to open, Take control only moves the card on, and a rule's card says which rule asked", () => {
-  const { opens } = mount({ ...HANDOFF, open: undefined, why: undefined, source: "rule", rule: { id: "money", label: "Move money" } });
+  const { opens } = mount({
+    ...HANDOFF,
+    open: undefined,
+    why: undefined,
+    source: "rule",
+    rule: { id: "money", label: "Move money" },
+  });
   assert.deepEqual(buttonNames(), ["Take control"]);
   fireEvent.click(screen.getByRole("button", { name: "Take control" }));
   assert.equal(opens(), 0);
@@ -121,8 +134,16 @@ test("on a Bot that lives on another Mac, a sign-in offers Finish there, then Sk
   assert.deepEqual(buttonNames(), ["Finish on Studio"]);
   assert.equal(screen.queryByText(/^Opens /u), null, "the page opens over there, not here");
   fireEvent.click(screen.getByRole("button", { name: "Finish on Studio" }));
-  assert.deepEqual(buttonNames(), ["Finish on Studio", "Skip"], "the sign-in is answered over there, so only Skip here");
-  assert.equal(document.activeElement, screen.getByRole("button", { name: "Skip" }), "focus moves to the one answer left here");
+  assert.deepEqual(
+    buttonNames(),
+    ["Finish on Studio", "Skip"],
+    "the sign-in is answered over there, so only Skip here",
+  );
+  assert.equal(
+    document.activeElement,
+    screen.getByRole("button", { name: "Skip" }),
+    "focus moves to the one answer left here",
+  );
   fireEvent.click(screen.getByRole("button", { name: "Skip" }));
   assert.equal(finishes, 1);
   assert.deepEqual(answers, ["skipped"]);
@@ -154,7 +175,11 @@ test("a sign-in asks to sign in to one site for the Bot, opens it in the Bot's b
   screen.getByText("Opens in Ada’s own browser. Ada never sees your password.");
   assert.deepEqual(buttonNames(), ["Take control to sign in"]);
   fireEvent.click(screen.getByRole("button", { name: "Take control to sign in" }));
-  assert.deepEqual(buttonNames(), ["Open again: Take control to sign in", "Skip", "I’m done"], "then Skip and I'm done in tab order");
+  assert.deepEqual(
+    buttonNames(),
+    ["Open again: Take control to sign in", "Skip", "I’m done"],
+    "then Skip and I'm done in tab order",
+  );
   fireEvent.click(screen.getByRole("button", { name: "I’m done" }));
   assert.equal(opens(), 1);
   assert.deepEqual(answers, ["done"], "I'm done answers Done");
@@ -169,28 +194,48 @@ test("a sign-in on the Bot's computer opens Ada's computer and says the Bot wait
   const onComputer: BotPendingHandoff = { ...SIGN_IN, target: "computer" };
   const { answers, opens } = mount(onComputer);
   screen.getByText("Sign in to github.com for Ada");
-  screen.getByText("Opens on Ada’s own computer, with you in control. Ada waits until you answer, and never sees your password.");
+  screen.getByText(
+    "Opens on Ada’s own computer, with you in control. Ada waits until you answer, and never sees your password.",
+  );
   assert.deepEqual(buttonNames(), ["Take control of Ada’s computer"]);
   fireEvent.click(screen.getByRole("button", { name: "Take control of Ada’s computer" }));
   fireEvent.click(screen.getByRole("button", { name: "I’m done" }));
   assert.equal(opens(), 1);
   assert.deepEqual(answers, ["done"]);
-  assert.equal(handoffSignInComposerText("Ada"), "Sign in for Ada with Take control above, then choose I’m done.");
+  assert.equal(
+    handoffSignInComposerText("Ada"),
+    "Sign in for Ada with Take control above, then choose I’m done.",
+  );
 });
 
 test("the panel's copy of the buttons names the Bot's computer too, and a Bot on another Mac still finishes there", () => {
   const onComputer: BotPendingHandoff = { ...SIGN_IN, target: "computer" };
-  render(<Actions handoff={onComputer} name="Ada" onOpen={() => undefined} onAnswer={() => undefined} />);
+  render(
+    <Actions handoff={onComputer} name="Ada" onOpen={() => undefined} onAnswer={() => undefined} />,
+  );
   assert.deepEqual(buttonNames(), ["Take control of Ada’s computer"]);
   cleanup();
-  render(<Actions handoff={onComputer} name="Ada" finishOn="Studio" onOpen={() => undefined} onAnswer={() => undefined} />);
+  render(
+    <Actions
+      handoff={onComputer}
+      name="Ada"
+      finishOn="Studio"
+      onOpen={() => undefined}
+      onAnswer={() => undefined}
+    />,
+  );
   assert.deepEqual(buttonNames(), ["Finish on Studio"]);
   fireEvent.click(screen.getByRole("button", { name: "Finish on Studio" }));
   assert.deepEqual(buttonNames(), ["Finish on Studio", "Skip"]);
 });
 
 test("a step on the Bot's own browser opens there, never in the person's browser, and is answered Done or Skip", () => {
-  const { answers, opens } = mount({ ...HANDOFF, action: "Choose the delivery slot", open: { url: "https://shop.example/checkout" }, target: "browser" });
+  const { answers, opens } = mount({
+    ...HANDOFF,
+    action: "Choose the delivery slot",
+    open: { url: "https://shop.example/checkout" },
+    target: "browser",
+  });
   screen.getByText("Needs you: Choose the delivery slot");
   screen.getByText("Opens in Ada’s own browser at shop.example, not in yours.");
   assert.equal(screen.queryByText("Opens shop.example"), null);

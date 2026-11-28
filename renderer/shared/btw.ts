@@ -77,13 +77,15 @@ export function parseBtwEvent(value: unknown): BtwEventV1 | null {
     !safeIdentity(event.requestId) ||
     !Number.isSafeInteger(event.sequence) ||
     (event.sequence as number) < 0
-  ) return null;
+  )
+    return null;
   if (event.type === "started") {
     if (
       typeof event.question !== "string" ||
       typeof event.hasHistory !== "boolean" ||
       typeof event.contextTrimmed !== "boolean"
-    ) return null;
+    )
+      return null;
   } else if (event.type === "delta") {
     if (typeof event.delta !== "string") return null;
   } else if (event.type === "terminal") {
@@ -92,7 +94,8 @@ export function parseBtwEvent(value: unknown): BtwEventV1 | null {
       (event.answer !== undefined && typeof event.answer !== "string") ||
       (event.message !== undefined && typeof event.message !== "string") ||
       typeof event.contextTrimmed !== "boolean"
-    ) return null;
+    )
+      return null;
   } else if (event.type !== "cleared" && event.type !== "reset") {
     return null;
   }

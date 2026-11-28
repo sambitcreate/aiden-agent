@@ -219,7 +219,10 @@ export function grabSourceAuthority(pageUrl: string | undefined): GrabSourceAuth
  * belongs to the page it was taken on, so it may only be judged against that
  * page's origin.
  */
-export function sameGrabSourceAuthority(first: string | undefined, second: string | undefined): boolean {
+export function sameGrabSourceAuthority(
+  first: string | undefined,
+  second: string | undefined,
+): boolean {
   const a = grabSourceAuthority(first);
   const b = grabSourceAuthority(second);
   if (!a || !b) return !a && !b;
@@ -228,7 +231,10 @@ export function sameGrabSourceAuthority(first: string | undefined, second: strin
 }
 
 /** Whether a guest-supplied script or map URL falls under the page's authority. */
-export function isAuthorizedSourceUrl(rawUrl: string, authority: GrabSourceAuthority | undefined): boolean {
+export function isAuthorizedSourceUrl(
+  rawUrl: string,
+  authority: GrabSourceAuthority | undefined,
+): boolean {
   if (!authority || !isAllowedSourceMapUrl(rawUrl)) return false;
   let parsed: URL;
   try {
@@ -272,10 +278,7 @@ export function normalizeBundlerSourcePath(rawPath: string, workspaceRoot?: stri
   cleaned = cleaned.replace(/^rsc:\/\/React\/Server\//iu, "");
 
   // Unwrap webpack-internal and webpack URLs.
-  cleaned = cleaned.replace(
-    /^webpack-internal:\/\/\/(?:\([^)]+\)\/)?\.?\//iu,
-    "",
-  );
+  cleaned = cleaned.replace(/^webpack-internal:\/\/\/(?:\([^)]+\)\/)?\.?\//iu, "");
   cleaned = cleaned.replace(/^webpack:\/\/[^/]*\/\.?\//iu, "");
   cleaned = cleaned.replace(/^webpack:\/\/\//iu, "");
 
@@ -288,7 +291,10 @@ export function normalizeBundlerSourcePath(rawPath: string, workspaceRoot?: stri
   if (cleaned.startsWith("/@fs/")) {
     cleaned = cleaned.slice(4);
   } else {
-    cleaned = cleaned.replace(/^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\/@fs\//iu, "/");
+    cleaned = cleaned.replace(
+      /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\/@fs\//iu,
+      "/",
+    );
   }
 
   // Decode file:// URLs.
@@ -340,7 +346,13 @@ export function parseDebugStackFrames(debugStack: string): ParsedStackFrame[] {
     const url = match[1]!.trim();
     const lineNum = Number(match[2]);
     const colNum = Number(match[3]);
-    if (!url || !Number.isSafeInteger(lineNum) || lineNum < 1 || !Number.isSafeInteger(colNum) || colNum < 1) {
+    if (
+      !url ||
+      !Number.isSafeInteger(lineNum) ||
+      lineNum < 1 ||
+      !Number.isSafeInteger(colNum) ||
+      colNum < 1
+    ) {
       continue;
     }
     if (IGNORED_STACK_URL_PATTERN.test(url)) continue;
@@ -358,13 +370,21 @@ function extractSourceMappingUrl(jsContent: string): string | null {
 }
 
 function parseInlineDataSourceMap(dataUrl: string): ParsedSourceMapV3 | null {
-  const match = /^data:application\/json(?:;charset=[^;,]+)?;base64,([A-Za-z0-9+/=]+)$/iu.exec(dataUrl.trim());
+  const match = /^data:application\/json(?:;charset=[^;,]+)?;base64,([A-Za-z0-9+/=]+)$/iu.exec(
+    dataUrl.trim(),
+  );
   if (!match) return null;
   const base64 = match[1]!;
   if (Math.floor((base64.length * 3) / 4) > MAX_SOURCE_MAP_BYTES) return null;
   try {
-    const parsed = JSON.parse(Buffer.from(base64, "base64").toString("utf8")) as Partial<ParsedSourceMapV3>;
-    if (parsed.version === 3 && Array.isArray(parsed.sources) && typeof parsed.mappings === "string") {
+    const parsed = JSON.parse(
+      Buffer.from(base64, "base64").toString("utf8"),
+    ) as Partial<ParsedSourceMapV3>;
+    if (
+      parsed.version === 3 &&
+      Array.isArray(parsed.sources) &&
+      typeof parsed.mappings === "string"
+    ) {
       return parsed as ParsedSourceMapV3;
     }
   } catch {
@@ -425,11 +445,17 @@ export class LocalGrabSourceMapResolver {
   }
 
   /** Resolves symlinks on both sides so an in-root link cannot reach outside the workspace. */
-  private async canonicalWorkspaceFile(url: string, workspaceRoot?: string): Promise<string | null> {
+  private async canonicalWorkspaceFile(
+    url: string,
+    workspaceRoot?: string,
+  ): Promise<string | null> {
     const lexical = allowedLocalSourceMapFilePath(url, workspaceRoot);
     if (!lexical || !workspaceRoot) return null;
     try {
-      const [root, file] = await Promise.all([this.realpathImpl(workspaceRoot), this.realpathImpl(lexical)]);
+      const [root, file] = await Promise.all([
+        this.realpathImpl(workspaceRoot),
+        this.realpathImpl(lexical),
+      ]);
       if (!ALLOWED_LOCAL_FILE_EXTENSIONS.test(file) || !isStrictlyInside(root, file)) return null;
       return file;
     } catch {
@@ -492,7 +518,9 @@ export class LocalGrabSourceMapResolver {
     if (bundleUrl.startsWith("file:") && !allowedLocalSourceMapFilePath(bundleUrl, workspaceRoot)) {
       return null;
     }
-    const cacheKey = bundleUrl.startsWith("file:") ? `${workspaceRoot ?? ""}::${bundleUrl}` : bundleUrl;
+    const cacheKey = bundleUrl.startsWith("file:")
+      ? `${workspaceRoot ?? ""}::${bundleUrl}`
+      : bundleUrl;
     const cached = this.cacheGet(cacheKey);
     if (cached !== undefined) return cached;
 
@@ -509,7 +537,11 @@ export class LocalGrabSourceMapResolver {
             const mapText = await this.fetchLocalText(mapUrl, authority, workspaceRoot);
             if (mapText) {
               const json = JSON.parse(mapText) as Partial<ParsedSourceMapV3>;
-              if (json.version === 3 && Array.isArray(json.sources) && typeof json.mappings === "string") {
+              if (
+                json.version === 3 &&
+                Array.isArray(json.sources) &&
+                typeof json.mappings === "string"
+              ) {
                 parsedMap = json as ParsedSourceMapV3;
               }
             }
@@ -527,7 +559,11 @@ export class LocalGrabSourceMapResolver {
         const mapText = await this.fetchLocalText(directMapUrl, authority, workspaceRoot);
         if (mapText) {
           const json = JSON.parse(mapText) as Partial<ParsedSourceMapV3>;
-          if (json.version === 3 && Array.isArray(json.sources) && typeof json.mappings === "string") {
+          if (
+            json.version === 3 &&
+            Array.isArray(json.sources) &&
+            typeof json.mappings === "string"
+          ) {
             parsedMap = json as ParsedSourceMapV3;
           }
         }

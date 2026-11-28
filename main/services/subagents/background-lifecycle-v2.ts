@@ -19,23 +19,11 @@ export const MAX_BACKGROUND_WAITS_V2 = 64;
 export const MAX_BACKGROUND_WAIT_MS_V2 = 30_000;
 export const MAX_BACKGROUND_STEER_CHARS_V2 = 8_000;
 
-const ACTIVE = new Set<SubagentRunStateV2>([
-  "queued",
-  "starting",
-  "running",
-  "needs_attention",
-]);
+const ACTIVE = new Set<SubagentRunStateV2>(["queued", "starting", "running", "needs_attention"]);
 const TRANSITIONS: Readonly<Record<string, ReadonlySet<SubagentRunStateV2>>> = {
   // A queued run whose child could not be created fails without starting.
   queued: new Set(["starting", "failed", "stopped", "interrupted"]),
-  starting: new Set([
-    "running",
-    "failed",
-    "timed_out",
-    "stopped",
-    "interrupted",
-    "unknown",
-  ]),
+  starting: new Set(["running", "failed", "timed_out", "stopped", "interrupted", "unknown"]),
   running: new Set([
     "needs_attention",
     "completed",
@@ -45,26 +33,13 @@ const TRANSITIONS: Readonly<Record<string, ReadonlySet<SubagentRunStateV2>>> = {
     "interrupted",
     "unknown",
   ]),
-  needs_attention: new Set([
-    "running",
-    "failed",
-    "timed_out",
-    "stopped",
-    "interrupted",
-    "unknown",
-  ]),
+  needs_attention: new Set(["running", "failed", "timed_out", "stopped", "interrupted", "unknown"]),
 };
 
 export interface BackgroundSubagentEventV2 {
   sequence: number;
   at: number;
-  kind:
-    | "accepted"
-    | "transition"
-    | "wait"
-    | "steer"
-    | "stop_requested"
-    | "reconciled";
+  kind: "accepted" | "transition" | "wait" | "steer" | "stop_requested" | "reconciled";
   state: SubagentRunStateV2;
 }
 
@@ -95,30 +70,65 @@ export interface BackgroundSubagentRunV2 {
 
 export interface BackgroundSubagentStoreV2 {
   get(runId: string): Promise<BackgroundSubagentRunV2 | null>;
-  put(
-    run: BackgroundSubagentRunV2,
-    expectedRevision: number | null,
-  ): Promise<boolean>;
+  put(run: BackgroundSubagentRunV2, expectedRevision: number | null): Promise<boolean>;
   list(): Promise<BackgroundSubagentRunV2[]>;
 }
 
 const AUTHORITY_KEYS = [
-  "version", "grantId", "treeRootId", "runId", "depth", "authorityRevision",
-  "generationId", "chatId", "workspaceId", "workspaceRevision", "ownerDocumentId",
-  "providerFingerprint", "modelFingerprint", "contextRevision", "execution", "context",
-  "thinkingLevel", "capabilities", "budgets", "expiresAt",
+  "version",
+  "grantId",
+  "treeRootId",
+  "runId",
+  "depth",
+  "authorityRevision",
+  "generationId",
+  "chatId",
+  "workspaceId",
+  "workspaceRevision",
+  "ownerDocumentId",
+  "providerFingerprint",
+  "modelFingerprint",
+  "contextRevision",
+  "execution",
+  "context",
+  "thinkingLevel",
+  "capabilities",
+  "budgets",
+  "expiresAt",
 ] as const;
 const EVENT_KINDS = new Set<BackgroundSubagentEventV2["kind"]>([
-  "accepted", "transition", "wait", "steer", "stop_requested", "reconciled",
+  "accepted",
+  "transition",
+  "wait",
+  "steer",
+  "stop_requested",
+  "reconciled",
 ]);
 const RUN_STATES = new Set<SubagentRunStateV2>([
-  "queued", "starting", "running", "needs_attention", "completed", "failed",
-  "timed_out", "stopped", "interrupted", "unknown",
+  "queued",
+  "starting",
+  "running",
+  "needs_attention",
+  "completed",
+  "failed",
+  "timed_out",
+  "stopped",
+  "interrupted",
+  "unknown",
 ]);
 
-function exact(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): boolean {
+function exact(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
   const keys = Object.keys(value);
-  return required.every((key) => key in value) && keys.every((key) => required.includes(key) || optional.includes(key)) && keys.length >= required.length && keys.length <= required.length + optional.length;
+  return (
+    required.every((key) => key in value) &&
+    keys.every((key) => required.includes(key) || optional.includes(key)) &&
+    keys.length >= required.length &&
+    keys.length <= required.length + optional.length
+  );
 }
 
 function parseBackgroundAuthority(value: unknown): SubagentAuthorityV2 | undefined {
@@ -136,52 +146,121 @@ function parseBackgroundAuthority(value: unknown): SubagentAuthorityV2 | undefin
 export function parseBackgroundSubagentRunV2(value: unknown): BackgroundSubagentRunV2 | undefined {
   if (
     !record(value) ||
-    !exact(value, ["version", "manifest", "snapshot", "events", "steering", "waitCount", "waitedMs"]) ||
+    !exact(value, [
+      "version",
+      "manifest",
+      "snapshot",
+      "events",
+      "steering",
+      "waitCount",
+      "waitedMs",
+    ]) ||
     value.version !== 2 ||
     !record(value.manifest) ||
-    !exact(value.manifest, ["version", "execution", "context", "reusableAuthority", "acceptedAt", "task", "authority"]) ||
-    value.manifest.version !== 2 || value.manifest.execution !== "background" ||
-    value.manifest.context !== "fresh" || value.manifest.reusableAuthority !== false ||
-    typeof value.manifest.acceptedAt !== "number" || !Number.isFinite(value.manifest.acceptedAt) || value.manifest.acceptedAt < 0 ||
-    !bounded(value.manifest.task, 240) || sanitizeSubagentText(value.manifest.task) !== value.manifest.task ||
-    !Array.isArray(value.events) || value.events.length < 1 || value.events.length > MAX_BACKGROUND_EVENTS_V2 ||
-    !Array.isArray(value.steering) || value.steering.length > MAX_BACKGROUND_STEERS_V2 ||
-    !Number.isSafeInteger(value.waitCount) || (value.waitCount as number) < 0 || (value.waitCount as number) > MAX_BACKGROUND_WAITS_V2 ||
-    !Number.isSafeInteger(value.waitedMs) || (value.waitedMs as number) < 0 || (value.waitedMs as number) > MAX_BACKGROUND_WAITS_V2 * MAX_BACKGROUND_WAIT_MS_V2
-  ) return undefined;
+    !exact(value.manifest, [
+      "version",
+      "execution",
+      "context",
+      "reusableAuthority",
+      "acceptedAt",
+      "task",
+      "authority",
+    ]) ||
+    value.manifest.version !== 2 ||
+    value.manifest.execution !== "background" ||
+    value.manifest.context !== "fresh" ||
+    value.manifest.reusableAuthority !== false ||
+    typeof value.manifest.acceptedAt !== "number" ||
+    !Number.isFinite(value.manifest.acceptedAt) ||
+    value.manifest.acceptedAt < 0 ||
+    !bounded(value.manifest.task, 240) ||
+    sanitizeSubagentText(value.manifest.task) !== value.manifest.task ||
+    !Array.isArray(value.events) ||
+    value.events.length < 1 ||
+    value.events.length > MAX_BACKGROUND_EVENTS_V2 ||
+    !Array.isArray(value.steering) ||
+    value.steering.length > MAX_BACKGROUND_STEERS_V2 ||
+    !Number.isSafeInteger(value.waitCount) ||
+    (value.waitCount as number) < 0 ||
+    (value.waitCount as number) > MAX_BACKGROUND_WAITS_V2 ||
+    !Number.isSafeInteger(value.waitedMs) ||
+    (value.waitedMs as number) < 0 ||
+    (value.waitedMs as number) > MAX_BACKGROUND_WAITS_V2 * MAX_BACKGROUND_WAIT_MS_V2
+  )
+    return undefined;
   const authority = parseBackgroundAuthority(value.manifest.authority);
   const snapshot = parseSubagentRunSnapshotV2(value.snapshot);
   if (
-    !authority || !snapshot || snapshot.execution !== "background" || snapshot.context !== "fresh" ||
-    snapshot.runId !== authority.runId || snapshot.generationId !== authority.generationId ||
-    snapshot.chatId !== authority.chatId || snapshot.workspaceId !== authority.workspaceId ||
-    snapshot.authorityRevision !== authority.authorityRevision || snapshot.taskPreview !== value.manifest.task
-  ) return undefined;
+    !authority ||
+    !snapshot ||
+    snapshot.execution !== "background" ||
+    snapshot.context !== "fresh" ||
+    snapshot.runId !== authority.runId ||
+    snapshot.generationId !== authority.generationId ||
+    snapshot.chatId !== authority.chatId ||
+    snapshot.workspaceId !== authority.workspaceId ||
+    snapshot.authorityRevision !== authority.authorityRevision ||
+    snapshot.taskPreview !== value.manifest.task
+  )
+    return undefined;
   const events: BackgroundSubagentEventV2[] = [];
   let previousEventSequence = 0;
   for (let index = 0; index < value.events.length; index += 1) {
     const item = value.events[index];
-    if (!record(item) || !exact(item, ["sequence", "at", "kind", "state"]) ||
-      !Number.isSafeInteger(item.sequence) || (item.sequence as number) < 1 ||
+    if (
+      !record(item) ||
+      !exact(item, ["sequence", "at", "kind", "state"]) ||
+      !Number.isSafeInteger(item.sequence) ||
+      (item.sequence as number) < 1 ||
       (index > 0 && item.sequence !== previousEventSequence + 1) ||
-      typeof item.at !== "number" || !Number.isFinite(item.at) || item.at < 0 ||
-      !EVENT_KINDS.has(item.kind as BackgroundSubagentEventV2["kind"]) || !RUN_STATES.has(item.state as SubagentRunStateV2)
-    ) return undefined;
+      typeof item.at !== "number" ||
+      !Number.isFinite(item.at) ||
+      item.at < 0 ||
+      !EVENT_KINDS.has(item.kind as BackgroundSubagentEventV2["kind"]) ||
+      !RUN_STATES.has(item.state as SubagentRunStateV2)
+    )
+      return undefined;
     previousEventSequence = item.sequence as number;
-    events.push({ sequence: item.sequence as number, at: item.at, kind: item.kind as BackgroundSubagentEventV2["kind"], state: item.state as SubagentRunStateV2 });
+    events.push({
+      sequence: item.sequence as number,
+      at: item.at,
+      kind: item.kind as BackgroundSubagentEventV2["kind"],
+      state: item.state as SubagentRunStateV2,
+    });
   }
   const steering: BackgroundSubagentSteerV2[] = [];
   for (let index = 0; index < value.steering.length; index += 1) {
     const item = value.steering[index];
-    if (!record(item) || !exact(item, ["sequence", "at", "instruction", "consumed"]) ||
-      item.sequence !== index + 1 || typeof item.at !== "number" || !Number.isFinite(item.at) || item.at < 0 ||
-      !bounded(item.instruction, MAX_BACKGROUND_STEER_CHARS_V2) || sanitizeSubagentText(item.instruction) !== item.instruction || typeof item.consumed !== "boolean"
-    ) return undefined;
-    steering.push({ sequence: item.sequence, at: item.at, instruction: item.instruction, consumed: item.consumed });
+    if (
+      !record(item) ||
+      !exact(item, ["sequence", "at", "instruction", "consumed"]) ||
+      item.sequence !== index + 1 ||
+      typeof item.at !== "number" ||
+      !Number.isFinite(item.at) ||
+      item.at < 0 ||
+      !bounded(item.instruction, MAX_BACKGROUND_STEER_CHARS_V2) ||
+      sanitizeSubagentText(item.instruction) !== item.instruction ||
+      typeof item.consumed !== "boolean"
+    )
+      return undefined;
+    steering.push({
+      sequence: item.sequence,
+      at: item.at,
+      instruction: item.instruction,
+      consumed: item.consumed,
+    });
   }
   return {
     version: 2,
-    manifest: { version: 2, execution: "background", context: "fresh", reusableAuthority: false, acceptedAt: value.manifest.acceptedAt, task: value.manifest.task, authority },
+    manifest: {
+      version: 2,
+      execution: "background",
+      context: "fresh",
+      reusableAuthority: false,
+      acceptedAt: value.manifest.acceptedAt,
+      task: value.manifest.task,
+      authority,
+    },
     snapshot,
     events,
     steering,
@@ -227,8 +306,7 @@ function bounded(value: unknown, maximum = 256): value is string {
 export function parseBackgroundSubagentManagementRequestV2(
   value: unknown,
 ): BackgroundSubagentManagementRequestV2 {
-  if (!record(value))
-    throw new Error("Invalid background subagent management request.");
+  if (!record(value)) throw new Error("Invalid background subagent management request.");
   const base = [
     "version",
     "action",
@@ -240,20 +318,14 @@ export function parseBackgroundSubagentManagementRequestV2(
     "expectedRevision",
   ];
   const optional =
-    value.action === "wait"
-      ? ["timeoutMs"]
-      : value.action === "steer"
-        ? ["instruction"]
-        : [];
+    value.action === "wait" ? ["timeoutMs"] : value.action === "steer" ? ["instruction"] : [];
   const keys = Object.keys(value);
   if (
     value.version !== SUBAGENT_AUTHORITY_VERSION ||
     !["status", "wait", "stop", "steer"].includes(String(value.action)) ||
     keys.length !== base.length + optional.length ||
     !keys.every((key) => base.includes(key) || optional.includes(key)) ||
-    ![value.runId, value.chatId, value.workspaceId].every(
-      isSafeSubagentIdentifier,
-    ) ||
+    ![value.runId, value.chatId, value.workspaceId].every(isSafeSubagentIdentifier) ||
     !bounded(value.ownerDocumentId) ||
     !Number.isSafeInteger(value.authorityRevision) ||
     (value.authorityRevision as number) < 1 ||
@@ -294,11 +366,7 @@ function assertBackgroundAuthority(authority: SubagentAuthorityV2): void {
 }
 
 function safeVisible(value: unknown, maximum: number, field: string): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > maximum
-  ) {
+  if (typeof value !== "string" || value.length === 0 || value.length > maximum) {
     throw new Error(`Invalid background ${field}.`);
   }
   const safe = sanitizeSubagentText(value);
@@ -438,13 +506,8 @@ export class BackgroundSubagentLifecycleV2 {
       };
       run.events = event(run, "wait", at);
     } else if (request.action === "steer") {
-      if (
-        run.snapshot.state !== "running" &&
-        run.snapshot.state !== "needs_attention"
-      )
-        throw new Error(
-          "Background run cannot be steered in its current state.",
-        );
+      if (run.snapshot.state !== "running" && run.snapshot.state !== "needs_attention")
+        throw new Error("Background run cannot be steered in its current state.");
       if (run.steering.length >= MAX_BACKGROUND_STEERS_V2)
         throw new Error("Background steering ledger is full.");
       run.steering.push({
@@ -470,9 +533,7 @@ export class BackgroundSubagentLifecycleV2 {
       }
     }
     if (!(await this.store.put(copy(run), request.expectedRevision))) {
-      throw new Error(
-        "Background subagent revision changed before persistence.",
-      );
+      throw new Error("Background subagent revision changed before persistence.");
     }
     try {
       if (request.action === "steer") this.hooks.steer?.(run.snapshot.runId);
@@ -497,13 +558,8 @@ export class BackgroundSubagentLifecycleV2 {
     if (!TRANSITIONS[run.snapshot.state]?.has(next))
       throw new Error("Invalid background subagent state transition.");
     const at = this.now();
-    if (
-      (next === "starting" || next === "running") &&
-      run.manifest.authority.expiresAt <= at
-    ) {
-      throw new Error(
-        "Background subagent authority expired before execution transition.",
-      );
+    if ((next === "starting" || next === "running") && run.manifest.authority.expiresAt <= at) {
+      throw new Error("Background subagent authority expired before execution transition.");
     }
     this.setState(
       run,
@@ -516,9 +572,7 @@ export class BackgroundSubagentLifecycleV2 {
       at,
     );
     if (!(await this.store.put(copy(run), request.expectedRevision))) {
-      throw new Error(
-        "Background subagent revision changed before persistence.",
-      );
+      throw new Error("Background subagent revision changed before persistence.");
     }
     return run;
   }
@@ -549,33 +603,19 @@ export class BackgroundSubagentLifecycleV2 {
 
   private async recordHookFailure(run: BackgroundSubagentRunV2): Promise<void> {
     const expectedRevision = run.snapshot.revision;
-    this.setState(
-      run,
-      "unknown",
-      "Lifecycle hook outcome could not be proven.",
-      this.now(),
-    );
+    this.setState(run, "unknown", "Lifecycle hook outcome could not be proven.", this.now());
     if (await this.store.put(copy(run), expectedRevision)) return;
     const current = await this.store.get(run.snapshot.runId);
     if (!current || !ACTIVE.has(current.snapshot.state)) return;
     const retryRevision = current.snapshot.revision;
-    this.setState(
-      current,
-      "unknown",
-      "Lifecycle hook outcome could not be proven.",
-      this.now(),
-    );
+    this.setState(current, "unknown", "Lifecycle hook outcome could not be proven.", this.now());
     if (!(await this.store.put(copy(current), retryRevision))) {
       throw new Error("Background hook ambiguity could not be persisted.");
     }
   }
 
   async reconcileStartup(): Promise<number> {
-    return this.terminate(
-      "shutdown",
-      "interrupted",
-      "Interrupted after Aiden restarted.",
-    );
+    return this.terminate("shutdown", "interrupted", "Interrupted after Aiden restarted.");
   }
   async chatDeleted(chatId: string): Promise<number> {
     return this.terminate(
@@ -594,11 +634,7 @@ export class BackgroundSubagentLifecycleV2 {
     );
   }
   async shutdown(): Promise<number> {
-    return this.terminate(
-      "shutdown",
-      "interrupted",
-      "Interrupted during Aiden shutdown.",
-    );
+    return this.terminate("shutdown", "interrupted", "Interrupted during Aiden shutdown.");
   }
 
   private async terminate(

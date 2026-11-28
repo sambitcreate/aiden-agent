@@ -7,15 +7,24 @@
 
 import type { BotApplicationService } from "../services/bot-application-service.js";
 import type { Chat, TelegramProfileSettings } from "../services/types.js";
-import type { TelegramBotBinding, TelegramBotBindingInput } from "../services/telegram/telegram-bot-binding-store.js";
+import type {
+  TelegramBotBinding,
+  TelegramBotBindingInput,
+} from "../services/telegram/telegram-bot-binding-store.js";
 import type { TelegramProfileMutationAdmission } from "../services/telegram/telegram-profile-mutation-fence.js";
-import { normalizeTelegramProfileName, telegramBotNoticeAudienceId } from "../services/telegram/telegram-profile-config.js";
+import {
+  normalizeTelegramProfileName,
+  telegramBotNoticeAudienceId,
+} from "../services/telegram/telegram-profile-config.js";
 import { parseBotId } from "./bot-params.js";
 
 export interface BotTelegramProfile {
   name: string;
   hasToken: boolean;
-  settings: Pick<TelegramProfileSettings, "enabled" | "allowedUserId" | "providerId" | "model" | "workspaceId">;
+  settings: Pick<
+    TelegramProfileSettings,
+    "enabled" | "allowedUserId" | "providerId" | "model" | "workspaceId"
+  >;
 }
 
 export interface BotTelegramTarget {
@@ -44,7 +53,9 @@ export interface BotTelegramHandlerDependencies<Event> {
       action: (admission: TelegramProfileMutationAdmission) => Promise<Result>,
     ): Promise<Result>;
   };
-  botMutationGate: { run<Result>(botId: string, operation: () => Promise<Result>): Promise<Result> };
+  botMutationGate: {
+    run<Result>(botId: string, operation: () => Promise<Result>): Promise<Result>;
+  };
   workspaceGate: { admit(workspaceId: string): { signal: AbortSignal; release(): void } };
   workspaces: {
     list(): Promise<readonly { id: string; name: string }[]>;
@@ -53,7 +64,9 @@ export interface BotTelegramHandlerDependencies<Event> {
   chats: { get(chatId: string): Promise<Pick<Chat, "botId" | "workspaceId"> | null | undefined> };
 }
 
-export function registerBotTelegramHandlers<Event>(deps: BotTelegramHandlerDependencies<Event>): void {
+export function registerBotTelegramHandlers<Event>(
+  deps: BotTelegramHandlerDependencies<Event>,
+): void {
   deps.handle("bots:getTelegramBinding", async (_event, id: unknown) =>
     deps.bindings.get(parseBotId(id)),
   );
@@ -115,7 +128,9 @@ export function registerBotTelegramHandlers<Event>(deps: BotTelegramHandlerDepen
             })();
     return deps.service.withBotMutation(botId, (operations) =>
       deps.profileFence.runBinding(profileName, async (profileAdmission) => {
-        const profile = (await deps.telegram.listProfiles()).find(({ name }) => name === profileName);
+        const profile = (await deps.telegram.listProfiles()).find(
+          ({ name }) => name === profileName,
+        );
         if (!profile || !profile.hasToken || profile.settings.allowedUserId === undefined)
           throw new Error("Choose a Telegram profile that has a token and paired owner.");
         const ownerUserId = profile.settings.allowedUserId;
@@ -127,7 +142,9 @@ export function registerBotTelegramHandlers<Event>(deps: BotTelegramHandlerDepen
               );
         if (!target) throw new Error("That Telegram thread is no longer available.");
         if (!target.workspaceId)
-          throw new Error("Choose a live folder workspace for this Telegram target before binding it.");
+          throw new Error(
+            "Choose a live folder workspace for this Telegram target before binding it.",
+          );
         const targetWorkspaceId = target.workspaceId;
         const workspaceAdmission = deps.workspaceGate.admit(targetWorkspaceId);
         try {
@@ -162,7 +179,9 @@ export function registerBotTelegramHandlers<Event>(deps: BotTelegramHandlerDepen
                 assertCurrent: () => {
                   profileAdmission.assertCurrent();
                   if (workspaceAdmission.signal.aborted)
-                    throw new Error("The Telegram target workspace changed before binding completed.");
+                    throw new Error(
+                      "The Telegram target workspace changed before binding completed.",
+                    );
                 },
               });
             }

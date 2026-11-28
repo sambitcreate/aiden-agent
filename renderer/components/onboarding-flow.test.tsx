@@ -65,10 +65,7 @@ test("local onboarding reuses canonical intent and never applies another choice'
     isPreset: existing.isPreset,
     isBuiltin: existing.isBuiltin,
   });
-  assert.equal(
-    localProviderDraft("ollama")?.baseUrl,
-    "http://127.0.0.1:11434/v1",
-  );
+  assert.equal(localProviderDraft("ollama")?.baseUrl, "http://127.0.0.1:11434/v1");
   assert.equal(localProviderDraft("lmstudio")?.id, "custom:lmstudio");
   assert.equal(localProviderDraft("ollama")?.id, "custom:ollama");
 });
@@ -130,10 +127,13 @@ test("profile onboarding keeps Web Search default-on without a first-run toggle"
 test("the final step is a complete grouped bento gallery with hover descriptions", () => {
   assert.match(
     source,
-    /<OnboardingFeatureGallery features=\{visibleFeatureBentos\} platform=\{capabilities\.platform\} \/>/u,
+    /<OnboardingFeatureGallery\s+features=\{visibleFeatureBentos\}\s+platform=\{capabilities\.platform\}\s*\/>/u,
   );
   assert.match(featurePresentation, /Queue follow-ups, edit them, or steer the next response/u);
-  assert.match(galleryMarkup, new RegExp(`data-onboarding-feature-count="${onboardingFeatures.length}"`, "u"));
+  assert.match(
+    galleryMarkup,
+    new RegExp(`data-onboarding-feature-count="${onboardingFeatures.length}"`, "u"),
+  );
   for (const hero of onboardingFeatures.filter((feature) => feature.size === "hero")) {
     assert.match(tileMarkup(hero.id), /^<article [^>]*class="[^"]*col-span-4 row-span-2/u, hero.id);
   }
@@ -197,11 +197,20 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /reopen it with sanitized local history/u);
   assert.match(featurePresentation, /explicitly choose an image-understanding companion/u);
   assert.match(featurePresentation, /workspace agent show raster images inline/u);
-  assert.match(featurePresentation, /Approve a whole plan in Aiden Agent or on your phone, follow its checklist, or stop it\./u);
-  assert.match(featurePresentation, /listed actions within the Bot's access and limits, for this run and up to 60 minutes/u);
+  assert.match(
+    featurePresentation,
+    /Approve a whole plan in Aiden Agent or on your phone, follow its checklist, or stop it\./u,
+  );
+  assert.match(
+    featurePresentation,
+    /listed actions within the Bot's access and limits, for this run and up to 60 minutes/u,
+  );
   assert.match(featurePresentation, /ask each other for help/u);
   // Bot computers are opt-in: the tile points to Settings and promises no download before Set up.
-  assert.match(featurePresentation, /Set it up in Settings → Computers & VMs → Bot computers; nothing downloads until you choose Set up\./u);
+  assert.match(
+    featurePresentation,
+    /Set it up in Settings → Computers & VMs → Bot computers; nothing downloads until you choose Set up\./u,
+  );
   assert.match(
     featurePresentation,
     /Ask Aiden in any chat to schedule recurring work, review its unattended access/u,
@@ -219,11 +228,18 @@ test("the final step is a complete grouped bento gallery with hover descriptions
 test("every tour tile draws its own themed illustration without raster assets", () => {
   const ids = onboardingFeatures.map((feature) => feature.id);
   assert.equal(new Set(ids).size, ids.length);
-  assert.deepEqual(new Set(Object.keys(FEATURE_ART)), new Set(ids), "every tile has art and no art is orphaned");
+  assert.deepEqual(
+    new Set(Object.keys(FEATURE_ART)),
+    new Set(ids),
+    "every tile has art and no art is orphaned",
+  );
   assert.equal(galleryTiles.length, onboardingFeatures.length);
   for (const feature of onboardingFeatures) {
     const tile = tileMarkup(feature.id);
-    assert.match(tile, new RegExp(`<div aria-hidden="true" class="oa-art" data-onboarding-art="${feature.id}"`, "u"));
+    assert.match(
+      tile,
+      new RegExp(`<div aria-hidden="true" class="oa-art" data-onboarding-art="${feature.id}"`, "u"),
+    );
     assert.doesNotMatch(
       tile,
       /<img\b|<picture\b|url\([^)]*\.(?:png|jpe?g|webp|gif|avif)\b|data:image\/(?!svg)/iu,
@@ -237,7 +253,9 @@ test("every tour tile draws its own themed illustration without raster assets", 
     ["Linux", hostPlatformCapabilities("linux", "x64")],
   ] as const) {
     const shown = visibleOnboardingFeatures(onboardingFeatures, host);
-    const markup = renderToStaticMarkup(<OnboardingFeatureGallery features={shown} platform="darwin" />);
+    const markup = renderToStaticMarkup(
+      <OnboardingFeatureGallery features={shown} platform="darwin" />,
+    );
     const tiles = markup.match(/<article\b[\s\S]*?<\/article>/gu) ?? [];
     assert.equal(tiles.length, shown.length, name);
     for (const group of ["create", "extend", "control"] as const) {
@@ -245,7 +263,10 @@ test("every tour tile draws its own themed illustration without raster assets", 
       for (const feature of shown.filter((item) => item.group === group)) {
         const tile = tiles.find((item) => item.includes(`data-onboarding-feature="${feature.id}"`));
         const tint = tile ? /--oa-tint:var\(--bot-avatar-([a-z]+)\)/u.exec(tile)?.[1] : undefined;
-        assert.ok(tint && (BOT_AVATAR_COLORS as readonly string[]).includes(tint), `${name}: ${feature.id} tint ${tint}`);
+        assert.ok(
+          tint && (BOT_AVATAR_COLORS as readonly string[]).includes(tint),
+          `${name}: ${feature.id} tint ${tint}`,
+        );
         assert.notEqual(tint, previousTint, `${name}: ${feature.id} repeats its neighbour's tint`);
         previousTint = tint;
       }
@@ -264,7 +285,8 @@ test("the command palette tile draws the shortcuts of the platform it runs on", 
       ),
     );
   const mac = paletteText("darwin");
-  for (const label of ["⌘K", "⌘N", "⌘⇧F", "⌘J", "⌘,"]) assert.ok(mac.includes(label), `macOS ${label}`);
+  for (const label of ["⌘K", "⌘N", "⌘⇧F", "⌘J", "⌘,"])
+    assert.ok(mac.includes(label), `macOS ${label}`);
   const linux = paletteText("linux");
   for (const label of ["Ctrl+K", "Ctrl+N", "Ctrl+Shift+F", "Ctrl+J", "Ctrl+,"]) {
     assert.ok(linux.includes(label), `Linux ${label}`);
@@ -273,7 +295,10 @@ test("the command palette tile draws the shortcuts of the platform it runs on", 
 });
 
 test("Connectors onboarding discloses service-supplied tool guidance", () => {
-  assert.match(featurePresentation, /Connected services may also provide guidance for using those tools\./u);
+  assert.match(
+    featurePresentation,
+    /Connected services may also provide guidance for using those tools\./u,
+  );
 });
 
 test("Connectors tour explains connected-service resource reads", () => {
@@ -286,21 +311,30 @@ test("blocked form filling is not advertised as a shipped tour feature", () => {
 });
 
 test("workspace tour discloses AGENTS instruction loading and refresh", () => {
-  assert.match(featurePresentation, /global and workspace AGENTS\.md guidance, refreshing it between model turns/u);
+  assert.match(
+    featurePresentation,
+    /global and workspace AGENTS\.md guidance, refreshing it between model turns/u,
+  );
 });
 
 test("provider onboarding explains separate opt-in and cloud speech privacy without network setup", () => {
-  const disclosure = source.slice(source.indexOf("data-onboarding-tts-privacy"), source.indexOf("</Text>", source.indexOf("data-onboarding-tts-privacy")));
+  const disclosure = source.slice(
+    source.indexOf("data-onboarding-tts-privacy"),
+    source.indexOf("</Text>", source.indexOf("data-onboarding-tts-privacy")),
+  );
   assert.match(disclosure, /off by default/u);
-  assert.match(disclosure, /Settings → Voice & Speech → Text to Speech/u);
-  assert.match(disclosure, /response text to Google/u);
+  assert.match(disclosure, /Settings →\s+Voice & Speech →\s+Text to Speech/u);
+  assert.match(disclosure, /response\s+text to Google/u);
   assert.match(disclosure, /local-model replies/u);
   assert.match(disclosure, /charges may apply/u);
   assert.doesNotMatch(source, /ttsApi\.(start|preview)/u);
 });
 
 test("feature tour introduces native folder browsing and source previews", () => {
-  assert.match(featurePresentation, /On your phone, expand folders on demand and preview source before editing\./u);
+  assert.match(
+    featurePresentation,
+    /On your phone, expand folders on demand and preview source before editing\./u,
+  );
 });
 
 test("platform feature filtering preserves classifier consent and unavailable-feature boundaries", () => {
@@ -315,18 +349,37 @@ test("platform feature filtering preserves classifier consent and unavailable-fe
     { id: "botRoutineModels", description: "Choose a routine model." },
     { id: "botPeers", description: "Approve named Bot pairs." },
   ];
-  const linux = visibleOnboardingFeatures(features, { platform: "linux", computerUse: false, bots: false, botComputers: false });
-  assert.deepEqual(linux.map(({ id }) => id), ["models", "commands"]);
+  const linux = visibleOnboardingFeatures(features, {
+    platform: "linux",
+    computerUse: false,
+    bots: false,
+    botComputers: false,
+  });
+  assert.deepEqual(
+    linux.map(({ id }) => id),
+    ["models", "commands"],
+  );
   assert.match(linux[0]!.description, /classifiers.*approve sending it; provider charges/u);
-  assert.match(linux[0]!.description, /Enable local llama.cpp classification.*Advanced panel under Model options/u);
+  assert.match(
+    linux[0]!.description,
+    /Enable local llama.cpp classification.*Advanced panel under Model options/u,
+  );
   assert.doesNotMatch(linux[0]!.description, /Apple/u);
   assert.match(linux[1]!.description, /Ctrl-K/u);
   assert.equal(features[1]!.description, "Use Command-K to open commands.");
-  const mac = visibleOnboardingFeatures(features, { platform: "darwin", computerUse: true, bots: true, botComputers: true });
+  const mac = visibleOnboardingFeatures(features, {
+    platform: "darwin",
+    computerUse: true,
+    bots: true,
+    botComputers: true,
+  });
   assert.equal(mac.length, 9);
   assert.match(mac[0]!.description, /Apple models/u);
   assert.match(mac[0]!.description, /classifiers.*approve sending it; provider charges/u);
-  assert.match(mac[0]!.description, /Enable local llama.cpp classification.*Advanced panel under Model options/u);
+  assert.match(
+    mac[0]!.description,
+    /Enable local llama.cpp classification.*Advanced panel under Model options/u,
+  );
 });
 
 test("the Bot computers tile shows only where a Bot can have its own macOS computer", () => {
@@ -334,7 +387,11 @@ test("the Bot computers tile shows only where a Bot can have its own macOS compu
     visibleOnboardingFeatures(onboardingFeatures, host).map(({ id }) => id);
   const appleSilicon = tiles(hostPlatformCapabilities("darwin", "arm64"));
   assert.ok(appleSilicon.includes("botComputers"));
-  assert.equal(appleSilicon.indexOf("botComputers"), appleSilicon.indexOf("bots") + 1, "it follows Meet your Bots");
+  assert.equal(
+    appleSilicon.indexOf("botComputers"),
+    appleSilicon.indexOf("bots") + 1,
+    "it follows Meet your Bots",
+  );
   for (const [name, host] of [
     ["Intel Mac", hostPlatformCapabilities("darwin", "x64")],
     ["Linux", hostPlatformCapabilities("linux", "arm64")],
@@ -342,5 +399,8 @@ test("the Bot computers tile shows only where a Bot can have its own macOS compu
   ] as const) {
     assert.equal(tiles(host).includes("botComputers"), false, name);
   }
-  assert.ok(tiles(hostPlatformCapabilities("linux", "x64")).includes("bots"), "Linux still meets its Bots");
+  assert.ok(
+    tiles(hostPlatformCapabilities("linux", "x64")).includes("bots"),
+    "Linux still meets its Bots",
+  );
 });

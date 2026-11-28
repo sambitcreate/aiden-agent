@@ -16,10 +16,16 @@ import { BotBubbleHeads } from "./bot-bubble-heads";
 import { HEAD_SIZE, shareToY, stackHeads, type BubbleArea, type HeadPosition } from "./head-layout";
 import { useViewportArea } from "./window-host";
 
-type OverlayInfoState = { kind: "loading" } | { kind: "ready"; info: BotBubbleOverlayInfo } | { kind: "failed" };
+type OverlayInfoState =
+  | { kind: "loading" }
+  | { kind: "ready"; info: BotBubbleOverlayInfo }
+  | { kind: "failed" };
 
 /** The heads that belong on this overlay's display; a null display is the primary one. */
-export function bubblesForOverlay(bubbles: readonly BotBubble[], info: OverlayInfoState): readonly BotBubble[] {
+export function bubblesForOverlay(
+  bubbles: readonly BotBubble[],
+  info: OverlayInfoState,
+): readonly BotBubble[] {
   if (info.kind === "failed") return bubbles;
   if (info.kind === "loading") return [];
   const { displayId, primary = true } = info.info;
@@ -32,10 +38,15 @@ export function bubblesForOverlay(bubbles: readonly BotBubble[], info: OverlayIn
 function useOverlayBotSync() {
   const queryClient = useQueryClient();
   React.useEffect(() => {
-    const stopChanged = onNotification("bots:changed", (payload: unknown) => void invalidateForBotsChanged(queryClient, payload));
+    const stopChanged = onNotification(
+      "bots:changed",
+      (payload: unknown) => void invalidateForBotsChanged(queryClient, payload),
+    );
     const stopAttention = onNotification("bots:attention", (payload: unknown) => {
-      const botId = payload && typeof payload === "object" ? (payload as { botId?: unknown }).botId : undefined;
-      if (typeof botId === "string" && botId) void queryClient.invalidateQueries({ queryKey: queryKeys.botLiveSummary(botId) });
+      const botId =
+        payload && typeof payload === "object" ? (payload as { botId?: unknown }).botId : undefined;
+      if (typeof botId === "string" && botId)
+        void queryClient.invalidateQueries({ queryKey: queryKeys.botLiveSummary(botId) });
     });
     return () => {
       stopChanged();
@@ -44,7 +55,9 @@ function useOverlayBotSync() {
   }, [queryClient]);
   // This window hears nothing about a Bot while it isn't bubbled, so a Bot that
   // comes (back) as a head is read afresh: its definition, photo and summary.
-  const bubbledIds = useBotBubbles().bubbles.map((bubble) => bubble.botId).join("\n");
+  const bubbledIds = useBotBubbles()
+    .bubbles.map((bubble) => bubble.botId)
+    .join("\n");
   const known = React.useRef<ReadonlySet<string> | null>(null);
   React.useEffect(() => {
     const ids = new Set(bubbledIds ? bubbledIds.split("\n") : []);
@@ -170,10 +183,20 @@ export function BotBubbleTransitionView({
       const scale = HEAD_SIZE / Math.max(1, rect.width);
       const dx = to.x + HEAD_SIZE / 2 - (rect.x + rect.width / 2);
       const dy = to.y + HEAD_SIZE / 2 - (rect.y + rect.height / 2);
-      const small = { transform: `translate(${dx}px, ${dy}px) scale(${scale})`, borderRadius: `${rect.width / 2}px`, opacity: 0 };
+      const small = {
+        transform: `translate(${dx}px, ${dy}px) scale(${scale})`,
+        borderRadius: `${rect.width / 2}px`,
+        opacity: 0,
+      };
       const big = { transform: "translate(0, 0) scale(1)", borderRadius: "", opacity: 1 };
       started = element.animate(
-        kind === "shrink" ? [big, small] : [{ ...small, opacity: 1 }, { ...big, opacity: 0.9 }, { ...big, opacity: 0 }],
+        kind === "shrink"
+          ? [big, small]
+          : [
+              { ...small, opacity: 1 },
+              { ...big, opacity: 0.9 },
+              { ...big, opacity: 0 },
+            ],
         { duration: 340, easing: cssToken("--motion-large-easing", "ease-out"), fill: "forwards" },
       );
     }
@@ -214,9 +237,17 @@ export function BotBubbleTransitionView({
   );
 }
 
-function headPosition(bubbles: readonly BotBubble[], botId: string, area: BubbleArea): HeadPosition | null {
+function headPosition(
+  bubbles: readonly BotBubble[],
+  botId: string,
+  area: BubbleArea,
+): HeadPosition | null {
   const positions = stackHeads(
-    bubbles.map((bubble) => ({ id: bubble.botId, side: bubble.placement.side, y: shareToY(bubble.placement.y, area) })),
+    bubbles.map((bubble) => ({
+      id: bubble.botId,
+      side: bubble.placement.side,
+      y: shareToY(bubble.placement.y, area),
+    })),
     area,
   );
   return positions.get(botId) ?? null;
@@ -236,7 +267,8 @@ function useOverlayInfo(): OverlayInfoState {
           if (active && asked === read) setInfo({ kind: "ready", info: next });
         })
         .catch(() => {
-          if (active && asked === read) setInfo((current) => (current.kind === "ready" ? current : { kind: "failed" }));
+          if (active && asked === read)
+            setInfo((current) => (current.kind === "ready" ? current : { kind: "failed" }));
         });
     };
     refresh();
@@ -272,8 +304,14 @@ export function BotBubbleOverlayApp() {
         : viewport,
     [info, viewport],
   );
-  const bubbles = React.useMemo(() => bubblesForOverlay(state.bubbles, info), [state.bubbles, info]);
-  const openBotId = state.openBotId !== null && bubbles.some((bubble) => bubble.botId === state.openBotId) ? state.openBotId : null;
+  const bubbles = React.useMemo(
+    () => bubblesForOverlay(state.bubbles, info),
+    [state.bubbles, info],
+  );
+  const openBotId =
+    state.openBotId !== null && bubbles.some((bubble) => bubble.botId === state.openBotId)
+      ? state.openBotId
+      : null;
   const showing = state.host === "overlay" && bubbles.length > 0;
 
   // Remember where this display's heads sit, for a grow that leaves from a closed one.
@@ -294,9 +332,13 @@ export function BotBubbleOverlayApp() {
       // A grow leaves from its head, or from where a head main already removed last sat.
       // A shrink lands on its head, which may not exist yet: it is looked up again as heads change.
       const head =
-        headPosition(shown, transition.botId, now) ?? (transition.kind === "grow" ? (lastHead.get(transition.botId) ?? null) : null);
+        headPosition(shown, transition.botId, now) ??
+        (transition.kind === "grow" ? (lastHead.get(transition.botId) ?? null) : null);
       const item: OverlayTransition = { ...transition, key: next, head };
-      setTransitions((current) => [...current.filter((other) => other.botId !== transition.botId), item]);
+      setTransitions((current) => [
+        ...current.filter((other) => other.botId !== transition.botId),
+        item,
+      ]);
     });
   }, []);
 
@@ -312,7 +354,10 @@ export function BotBubbleOverlayApp() {
     onInteractiveChange(false);
     onDraggingChange(false);
   }, [showing, onInteractiveChange, onDraggingChange]);
-  const finish = React.useCallback((key: number) => setTransitions((current) => current.filter((item) => item.key !== key)), []);
+  const finish = React.useCallback(
+    (key: number) => setTransitions((current) => current.filter((item) => item.key !== key)),
+    [],
+  );
 
   return (
     <>
@@ -332,9 +377,14 @@ export function BotBubbleOverlayApp() {
             <BotBubbleTransitionView
               key={transition.key}
               transition={transition}
-              head={transition.kind === "shrink" ? headPosition(bubbles, transition.botId, area) : transition.head}
+              head={
+                transition.kind === "shrink"
+                  ? headPosition(bubbles, transition.botId, area)
+                  : transition.head
+              }
               onShown={() => {
-                if (transition.cover !== undefined) void botBubblesApi.transitionShown(transition.cover).catch(() => undefined);
+                if (transition.cover !== undefined)
+                  void botBubblesApi.transitionShown(transition.cover).catch(() => undefined);
               }}
               onDone={() => finish(transition.key)}
             />

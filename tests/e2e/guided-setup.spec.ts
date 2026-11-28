@@ -1,7 +1,16 @@
 import type { ElectronApplication, Page } from "playwright";
-import { BOT_FULL_ACCESS_NOTICE_VERSION, type BotCapabilityCatalog } from "../../renderer/shared/bot-capabilities";
+import {
+  BOT_FULL_ACCESS_NOTICE_VERSION,
+  type BotCapabilityCatalog,
+} from "../../renderer/shared/bot-capabilities";
 import { botFixture } from "../../renderer/main/bots/test-fixtures";
-import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, connectOnboardingLmStudio, test } from "./fixtures";
+import {
+  E2E_PROFILE_NAME,
+  expect,
+  finishLmStudioOnboarding,
+  connectOnboardingLmStudio,
+  test,
+} from "./fixtures";
 
 test("onboarding groups connection methods and validates custom setup", async ({ aiden }) => {
   const { page } = aiden;
@@ -17,7 +26,9 @@ test("onboarding groups connection methods and validates custom setup", async ({
   const custom = page.getByRole("dialog", { name: "Configure Custom Provider" });
   await expect(custom).toBeVisible();
   await custom.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(custom.getByText("Discover models and choose an available default before continuing.")).toBeVisible();
+  await expect(
+    custom.getByText("Discover models and choose an available default before continuing."),
+  ).toBeVisible();
   await custom.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(onboarding.getByRole("heading", { name: "Connect your AI" })).toBeVisible();
 });
@@ -40,16 +51,18 @@ test("skipping provider setup leaves a route to Providers", async ({ aiden }) =>
   const connect = page.getByRole("button", { name: "Connect a provider", exact: true });
   await expect(connect.first()).toBeVisible();
   await connect.first().click();
-  await expect(
-    page.getByRole("button", { name: /Connect (?:another )?AI/u }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /Connect (?:another )?AI/u })).toBeVisible();
 });
 
-test("computer control respects platform support and explains access before enabling", async ({ aiden }) => {
+test("computer control respects platform support and explains access before enabling", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  const computerUse = page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: /^Computer(s & VMs| Use)$/u });
+  const computerUse = page
+    .getByRole("navigation", { name: "Settings" })
+    .getByRole("button", { name: /^Computer(s & VMs| Use)$/u });
   if (process.platform !== "darwin") {
     await expect(computerUse).toHaveCount(0);
     await expect(page.getByRole("switch", { name: "Enable Computer Use beta" })).toHaveCount(0);
@@ -71,53 +84,135 @@ test("computer control respects platform support and explains access before enab
 // shipped code.
 async function substituteBotIpc(app: ElectronApplication, options: { failFirstCreate: boolean }) {
   const catalog: BotCapabilityCatalog = {
-    revision: "catalog-editor-fixture", providers: [{ id: "custom:lmstudio", label: "LM Studio", available: true,
-      models: [{ id: "aiden-e2e-vision", label: "Aiden E2E Vision", available: true, supportsImages: true }] }],
-    fileScopes: [], shellAvailable: true, connections: [], skills: [], otherCapabilities: [],
-    notice: { version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: false, acceptedAt: "2026-10-01T00:00:00.000Z", acceptedDecision: "continue_full" },
+    revision: "catalog-editor-fixture",
+    providers: [
+      {
+        id: "custom:lmstudio",
+        label: "LM Studio",
+        available: true,
+        models: [
+          {
+            id: "aiden-e2e-vision",
+            label: "Aiden E2E Vision",
+            available: true,
+            supportsImages: true,
+          },
+        ],
+      },
+    ],
+    fileScopes: [],
+    shellAvailable: true,
+    connections: [],
+    skills: [],
+    otherCapabilities: [],
+    notice: {
+      version: BOT_FULL_ACCESS_NOTICE_VERSION,
+      requiresAcknowledgement: false,
+      acceptedAt: "2026-10-01T00:00:00.000Z",
+      acceptedDecision: "continue_full",
+    },
   };
-  const bot = botFixture({ id: "bot-meal", name: "Meal Planner", description: "Plan my meals and grocery list every week" });
+  const bot = botFixture({
+    id: "bot-meal",
+    name: "Meal Planner",
+    description: "Plan my meals and grocery list every week",
+  });
   const idle = { botId: bot.id, preview: null, updatedAt: null, state: { kind: "idle" } };
   // Shape of the bots:getBotAccess result (BotAccessState) for a Full-access Bot.
   const access = {
-    access: { botId: bot.id, revision: "access-1", policyEpoch: "policy-1", summary: "Everything", accessMode: "full" },
+    access: {
+      botId: bot.id,
+      revision: "access-1",
+      policyEpoch: "policy-1",
+      summary: "Everything",
+      accessMode: "full",
+    },
     modelSelection: { providerId: "custom:lmstudio", modelId: "aiden-e2e-vision" },
   };
-  await app.evaluate(({ ipcMain }, fixture) => {
-    const state = { created: false, createCalls: 0, failFirstCreate: fixture.failFirstCreate, creates: [] as unknown[], accessUpdates: [] as unknown[] };
-    (globalThis as unknown as { botCreateE2e: typeof state }).botCreateE2e = state;
-    for (const channel of [
-      "bots:list", "bots:get", "bots:create", "bots:introduce", "bots:getCapabilityCatalog",
-      "bots:getBotAccess", "bots:updateBotAccess", "bots:live:subscribe", "bots:live:summary",
-      "bots:getCanonicalPhoto", "bots:pendingApprovals",
-    ]) ipcMain.removeHandler(channel);
-    ipcMain.handle("bots:list", () => (state.created ? [fixture.bot] : []));
-    ipcMain.handle("bots:get", () => fixture.bot);
-    ipcMain.handle("bots:getCapabilityCatalog", () => fixture.catalog);
-    ipcMain.handle("bots:create", (_event, input: unknown) => {
-      state.createCalls += 1;
-      state.creates.push(input);
-      if (state.failFirstCreate && state.createCalls === 1) throw new Error("The test storage is unavailable.");
-      state.created = true;
-      return fixture.bot;
-    });
-    ipcMain.handle("bots:introduce", () => false);
-    ipcMain.handle("bots:getBotAccess", () => fixture.access);
-    ipcMain.handle("bots:updateBotAccess", (_event, input: unknown) => {
-      state.accessUpdates.push(input);
-      return { ...fixture.access.access, revision: "access-2", accessMode: "custom", custom: { providerId: "custom:lmstudio", modelId: "aiden-e2e-vision", fileScopeIds: [], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] } };
-    });
-    ipcMain.handle("bots:live:subscribe", () => ({ ...fixture.idle, epoch: "e1", seq: 0, entries: [], partial: null, activity: null, queued: [] }));
-    ipcMain.handle("bots:live:summary", () => fixture.idle);
-    ipcMain.handle("bots:getCanonicalPhoto", () => null);
-    ipcMain.handle("bots:pendingApprovals", () => []);
-  }, { bot, catalog, access, idle, failFirstCreate: options.failFirstCreate });
+  await app.evaluate(
+    ({ ipcMain }, fixture) => {
+      const state = {
+        created: false,
+        createCalls: 0,
+        failFirstCreate: fixture.failFirstCreate,
+        creates: [] as unknown[],
+        accessUpdates: [] as unknown[],
+      };
+      (globalThis as unknown as { botCreateE2e: typeof state }).botCreateE2e = state;
+      for (const channel of [
+        "bots:list",
+        "bots:get",
+        "bots:create",
+        "bots:introduce",
+        "bots:getCapabilityCatalog",
+        "bots:getBotAccess",
+        "bots:updateBotAccess",
+        "bots:live:subscribe",
+        "bots:live:summary",
+        "bots:getCanonicalPhoto",
+        "bots:pendingApprovals",
+      ])
+        ipcMain.removeHandler(channel);
+      ipcMain.handle("bots:list", () => (state.created ? [fixture.bot] : []));
+      ipcMain.handle("bots:get", () => fixture.bot);
+      ipcMain.handle("bots:getCapabilityCatalog", () => fixture.catalog);
+      ipcMain.handle("bots:create", (_event, input: unknown) => {
+        state.createCalls += 1;
+        state.creates.push(input);
+        if (state.failFirstCreate && state.createCalls === 1)
+          throw new Error("The test storage is unavailable.");
+        state.created = true;
+        return fixture.bot;
+      });
+      ipcMain.handle("bots:introduce", () => false);
+      ipcMain.handle("bots:getBotAccess", () => fixture.access);
+      ipcMain.handle("bots:updateBotAccess", (_event, input: unknown) => {
+        state.accessUpdates.push(input);
+        return {
+          ...fixture.access.access,
+          revision: "access-2",
+          accessMode: "custom",
+          custom: {
+            providerId: "custom:lmstudio",
+            modelId: "aiden-e2e-vision",
+            fileScopeIds: [],
+            shellEnabled: false,
+            connectionIds: [],
+            skillIds: [],
+            otherCapabilityIds: [],
+          },
+        };
+      });
+      ipcMain.handle("bots:live:subscribe", () => ({
+        ...fixture.idle,
+        epoch: "e1",
+        seq: 0,
+        entries: [],
+        partial: null,
+        activity: null,
+        queued: [],
+      }));
+      ipcMain.handle("bots:live:summary", () => fixture.idle);
+      ipcMain.handle("bots:getCanonicalPhoto", () => null);
+      ipcMain.handle("bots:pendingApprovals", () => []);
+    },
+    { bot, catalog, access, idle, failFirstCreate: options.failFirstCreate },
+  );
 }
 
 async function botCreateE2e(app: ElectronApplication) {
-  return app.evaluate(() => (globalThis as unknown as { botCreateE2e: {
-    createCalls: number; creates: unknown[]; accessUpdates: unknown[];
-  } }).botCreateE2e);
+  return app.evaluate(
+    () =>
+      (
+        globalThis as unknown as {
+          botCreateE2e: {
+            createCalls: number;
+            creates: unknown[];
+            accessUpdates: unknown[];
+          };
+        }
+      ).botCreateE2e,
+  );
 }
 
 /** Opens New bot from the Create (+) menu at the top of the Bots sidebar. */
@@ -128,7 +223,9 @@ async function openNewBot(page: Page) {
   return page.getByRole("dialog", { name: "New bot", exact: true });
 }
 
-test("New bot keeps the typed name after a failed create, then creates it with Full access", async ({ aiden }) => {
+test("New bot keeps the typed name after a failed create, then creates it with Full access", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await substituteBotIpc(aiden.app, { failFirstCreate: true });
@@ -161,32 +258,64 @@ test("New bot from just a name, then disable a tool in the Advanced tab", async 
   const created = creates[0];
   expect(created).toMatchObject({
     bot: { name: "Meal Planner" },
-    access: { accessMode: "full", catalogRevision: "catalog-editor-fixture", providerId: "custom:lmstudio", modelId: "aiden-e2e-vision" },
+    access: {
+      accessMode: "full",
+      catalogRevision: "catalog-editor-fixture",
+      providerId: "custom:lmstudio",
+      modelId: "aiden-e2e-vision",
+    },
   });
   expect(created).not.toHaveProperty("bot.description");
   expect(created).not.toHaveProperty("access.custom");
 
   // The Bot's name in its chat opens its settings in the side panel.
   await page.getByRole("button", { name: "Meal Planner settings", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "Advanced", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText(/^Everything Aiden can use on this (?:Mac|computer)\b/u)).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Advanced", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(
+    page.getByText(/^Everything Aiden can use on this (?:Mac|computer)\b/u),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Disable a tool", exact: true }).click();
-  await page.getByRole("dialog", { name: "Disable a tool", exact: true }).getByRole("option", { name: /^Run commands/u }).click();
-  await expect(page.getByRole("button", { name: "Turn on Run commands", exact: true })).toBeVisible();
-  await page.getByRole("region", { name: "Unsaved changes" }).getByRole("button", { name: "Save", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "Disable a tool", exact: true })
+    .getByRole("option", { name: /^Run commands/u })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Turn on Run commands", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("region", { name: "Unsaved changes" })
+    .getByRole("button", { name: "Save", exact: true })
+    .click();
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Unsaved changes" })).toHaveCount(0);
 
   const { accessUpdates } = await botCreateE2e(aiden.app);
-  expect(accessUpdates).toMatchObject([{
-    botId: "bot-meal",
-    expectedRevision: "access-1",
-    access: { accessMode: "custom", custom: { providerId: "custom:lmstudio", modelId: "aiden-e2e-vision", shellEnabled: false, fileScopeIds: [], connectionIds: [], skillIds: [], otherCapabilityIds: [] } },
-  }]);
+  expect(accessUpdates).toMatchObject([
+    {
+      botId: "bot-meal",
+      expectedRevision: "access-1",
+      access: {
+        accessMode: "custom",
+        custom: {
+          providerId: "custom:lmstudio",
+          modelId: "aiden-e2e-vision",
+          shellEnabled: false,
+          fileScopeIds: [],
+          connectionIds: [],
+          skillIds: [],
+          otherCapabilityIds: [],
+        },
+      },
+    },
+  ]);
 });
 
-
-test("feature gallery reveals complete descriptions through keyboard focus at narrow widths", async ({ aiden }) => {
+test("feature gallery reveals complete descriptions through keyboard focus at narrow widths", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   const onboarding = page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
@@ -210,14 +339,23 @@ test("feature gallery reveals complete descriptions through keyboard focus at na
       await tile.focus();
       await tile.scrollIntoViewIfNeeded();
       const description = tile.locator("[data-onboarding-feature-description]");
-      await expect.poll(() => description.evaluate((element) => {
-        const overlay = element.parentElement!.parentElement!;
-        return getComputedStyle(overlay).opacity;
-      })).toBe("1");
+      await expect
+        .poll(() =>
+          description.evaluate((element) => {
+            const overlay = element.parentElement!.parentElement!;
+            return getComputedStyle(overlay).opacity;
+          }),
+        )
+        .toBe("1");
       const bounds = await description.evaluate((element) => {
         const text = element.getBoundingClientRect();
         const card = element.closest("article")!.getBoundingClientRect();
-        return { top: text.top - card.top, bottom: card.bottom - text.bottom, left: text.left - card.left, right: card.right - text.right };
+        return {
+          top: text.top - card.top,
+          bottom: card.bottom - text.bottom,
+          left: text.left - card.left,
+          right: card.right - text.right,
+        };
       });
       expect(bounds.top).toBeGreaterThanOrEqual(0);
       expect(bounds.bottom).toBeGreaterThanOrEqual(0);
@@ -227,15 +365,18 @@ test("feature gallery reveals complete descriptions through keyboard focus at na
   }
 });
 
-
 for (const platform of ["linux", "darwin"] as const) {
-  test(`Model Freedom renders platform-accurate providers and classifier disclosures on ${platform}`, async ({ aiden }) => {
+  test(`Model Freedom renders platform-accurate providers and classifier disclosures on ${platform}`, async ({
+    aiden,
+  }) => {
     // Only platform capability IPC is substituted: the real onboarding data,
     // filtering, gallery card and accessible description are rendered unchanged.
     await aiden.app.evaluate(({ ipcMain }, hostPlatform) => {
       ipcMain.removeHandler("app:getInfo");
       ipcMain.handle("app:getInfo", () => ({
-        name: "Aiden", version: "e2e", environment: "test",
+        name: "Aiden",
+        version: "e2e",
+        environment: "test",
         capabilities: { platform: hostPlatform, appleFoundationModels: hostPlatform === "darwin" },
       }));
     }, platform);
@@ -244,7 +385,7 @@ for (const platform of ["linux", "darwin"] as const) {
     await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
     await onboarding.getByRole("button", { name: /^Next/u }).click();
     await connectOnboardingLmStudio(onboarding);
-  await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
+    await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
     const card = onboarding.getByRole("article", { name: /^Model Freedom\./u });
     await card.focus();
     const description = card.locator("[data-onboarding-feature-description]");
@@ -255,19 +396,33 @@ for (const platform of ["linux", "darwin"] as const) {
       await expect(description).not.toContainText("Apple");
       await expect(card).not.toHaveAttribute("aria-label", /Apple/u);
     }
-    await expect(description).toContainText("Enable local llama.cpp classification in a custom provider’s Advanced panel under Model options");
+    await expect(description).toContainText(
+      "Enable local llama.cpp classification in a custom provider’s Advanced panel under Model options",
+    );
     await expect(description).toContainText("approve sending it; provider charges may apply");
   });
 }
 
-for (const [host, botComputers] of [["an Apple silicon Mac", true], ["an Intel Mac", false]] as const) {
-  test(`the feature tour ${botComputers ? "introduces" : "leaves out"} Bot computers on ${host}`, async ({ aiden }) => {
+for (const [host, botComputers] of [
+  ["an Apple silicon Mac", true],
+  ["an Intel Mac", false],
+] as const) {
+  test(`the feature tour ${botComputers ? "introduces" : "leaves out"} Bot computers on ${host}`, async ({
+    aiden,
+  }) => {
     // Only the platform capability IPC is substituted; the onboarding data, filter and tile render unchanged.
     await aiden.app.evaluate(({ ipcMain }, hasBotComputers) => {
       ipcMain.removeHandler("app:getInfo");
       ipcMain.handle("app:getInfo", () => ({
-        name: "Aiden", version: "e2e", environment: "test",
-        capabilities: { platform: "darwin", bots: true, computerUse: true, botComputers: hasBotComputers },
+        name: "Aiden",
+        version: "e2e",
+        environment: "test",
+        capabilities: {
+          platform: "darwin",
+          bots: true,
+          computerUse: true,
+          botComputers: hasBotComputers,
+        },
       }));
     }, botComputers);
     await aiden.page.reload();
@@ -275,7 +430,7 @@ for (const [host, botComputers] of [["an Apple silicon Mac", true], ["an Intel M
     await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
     await onboarding.getByRole("button", { name: /^Next/u }).click();
     await connectOnboardingLmStudio(onboarding);
-  await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
+    await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
     const tile = onboarding.getByRole("article", { name: /^Bot computers\./u });
     if (!botComputers) {
       await expect(onboarding.getByRole("article", { name: /^Meet your Bots\./u })).toBeVisible();
@@ -291,11 +446,15 @@ for (const [host, botComputers] of [["an Apple silicon Mac", true], ["an Intel M
     await tile.focus();
     const description = tile.locator("[data-onboarding-feature-description]");
     await expect(description).toBeVisible();
-    await expect(description).toContainText("Set it up in Settings → Computers & VMs → Bot computers; nothing downloads until you choose Set up.");
+    await expect(description).toContainText(
+      "Set it up in Settings → Computers & VMs → Bot computers; nothing downloads until you choose Set up.",
+    );
   });
 }
 
-test("feature tour explains image and classifier disclosure on rendered cards", async ({ aiden }) => {
+test("feature tour explains image and classifier disclosure on rendered cards", async ({
+  aiden,
+}) => {
   const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   await onboarding.getByRole("button", { name: /^Next/u }).click();
@@ -303,35 +462,66 @@ test("feature tour explains image and classifier disclosure on rendered cards", 
   await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
   const images = onboarding.getByRole("article", { name: /Generate or edit attached images/u });
   await images.hover();
-  await expect(images.getByText(/approving the prompt, reference images, and possible provider charges/u)).toBeVisible();
+  await expect(
+    images.getByText(/approving the prompt, reference images, and possible provider charges/u),
+  ).toBeVisible();
   const models = onboarding.getByRole("article", { name: /^Model Freedom/u });
   await models.hover();
-  await expect(models.getByText(/classifiers.*approve sending it.*provider charges/u)).toBeVisible();
+  await expect(
+    models.getByText(/classifiers.*approve sending it.*provider charges/u),
+  ).toBeVisible();
 });
 
-test("classifier approval lets users inspect late payload fields before denying", async ({ aiden }) => {
+test("classifier approval lets users inspect late payload fields before denying", async ({
+  aiden,
+}) => {
   await finishLmStudioOnboarding(aiden.page);
   const state = JSON.stringify({ early: "x".repeat(20_000), late: "PRIVATE-LATE-FIELD" });
-  const questions = JSON.stringify({ verdict: { type: "bool", instructions: "Inspect every field", criteria: { true: "Accept", false: "Reject" } } });
-  await aiden.app.evaluate(({ ipcMain }, payload) => {
-    ipcMain.removeHandler("chat:start");
-    ipcMain.removeHandler("chat:approve");
-    ipcMain.handle("chat:start", (event, streamId: string) => {
-      (globalThis as unknown as { classifierStreamId: string }).classifierStreamId = streamId;
-      event.sender.send("chat:approval", { streamId, approvalId: "classifier-inspection", toolCallId: "classify-1", toolName: "classify", summary: "Classify structured data", details: {
-        kind: "model-classification", providerId: "research", providerLabel: "Research team", modelId: "judge",
-        stateJson: payload.state, questionsJson: payload.questions, stateBytes: Buffer.byteLength(payload.state), questionsBytes: Buffer.byteLength(payload.questions), payloadComplete: true,
-      } });
-      return { streamId, accepted: true, started: true };
-    });
-    ipcMain.handle("chat:approve", (_event, _id: string, decision: string) => {
-      (globalThis as unknown as { classifierDecision: string }).classifierDecision = decision;
-    });
-  }, { state, questions });
+  const questions = JSON.stringify({
+    verdict: {
+      type: "bool",
+      instructions: "Inspect every field",
+      criteria: { true: "Accept", false: "Reject" },
+    },
+  });
+  await aiden.app.evaluate(
+    ({ ipcMain }, payload) => {
+      ipcMain.removeHandler("chat:start");
+      ipcMain.removeHandler("chat:approve");
+      ipcMain.handle("chat:start", (event, streamId: string) => {
+        (globalThis as unknown as { classifierStreamId: string }).classifierStreamId = streamId;
+        event.sender.send("chat:approval", {
+          streamId,
+          approvalId: "classifier-inspection",
+          toolCallId: "classify-1",
+          toolName: "classify",
+          summary: "Classify structured data",
+          details: {
+            kind: "model-classification",
+            providerId: "research",
+            providerLabel: "Research team",
+            modelId: "judge",
+            stateJson: payload.state,
+            questionsJson: payload.questions,
+            stateBytes: Buffer.byteLength(payload.state),
+            questionsBytes: Buffer.byteLength(payload.questions),
+            payloadComplete: true,
+          },
+        });
+        return { streamId, accepted: true, started: true };
+      });
+      ipcMain.handle("chat:approve", (_event, _id: string, decision: string) => {
+        (globalThis as unknown as { classifierDecision: string }).classifierDecision = decision;
+      });
+    },
+    { state, questions },
+  );
   const composer = aiden.page.locator("textarea").first();
   await composer.fill("Inspect classification inputs");
   await composer.press("Enter");
-  await expect(aiden.page.getByText(/Send the state and questions below to Research team/u)).toBeVisible();
+  await expect(
+    aiden.page.getByText(/Send the state and questions below to Research team/u),
+  ).toBeVisible();
   await aiden.page.getByText(/^State ·/u).click();
   const inspector = aiden.page.getByLabel("Complete classification state", { exact: true });
   await expect(inspector).toHaveText(state);
@@ -339,14 +529,30 @@ test("classifier approval lets users inspect late payload fields before denying"
   await inspector.press("ControlOrMeta+End");
   await expect(inspector).toBeFocused();
   await aiden.page.getByText(/^Questions ·/u).click();
-  await expect(aiden.page.getByLabel("Complete classification questions", { exact: true })).toHaveText(questions);
+  await expect(
+    aiden.page.getByLabel("Complete classification questions", { exact: true }),
+  ).toHaveText(questions);
   await aiden.page.getByRole("button", { name: "Deny", exact: true }).click();
-  expect(await aiden.app.evaluate(() => (globalThis as unknown as { classifierDecision: string }).classifierDecision)).toBe("deny");
+  expect(
+    await aiden.app.evaluate(
+      () => (globalThis as unknown as { classifierDecision: string }).classifierDecision,
+    ),
+  ).toBe("deny");
   await aiden.app.evaluate(({ BrowserWindow }) => {
     const streamId = (globalThis as unknown as { classifierStreamId: string }).classifierStreamId;
-    BrowserWindow.getAllWindows()[0]!.webContents.send("chat:approval", { streamId, approvalId: "missing-classifier-inputs", toolCallId: "classify-2", toolName: "classify", summary: "Inputs omitted" });
+    BrowserWindow.getAllWindows()[0]!.webContents.send("chat:approval", {
+      streamId,
+      approvalId: "missing-classifier-inputs",
+      toolCallId: "classify-2",
+      toolName: "classify",
+      summary: "Inputs omitted",
+    });
   });
-  await expect(aiden.page.getByText("This malformed privileged action cannot be allowed. Deny it to continue.")).toBeVisible();
+  await expect(
+    aiden.page.getByText(
+      "This malformed privileged action cannot be allowed. Deny it to continue.",
+    ),
+  ).toBeVisible();
   await expect(aiden.page.getByRole("button", { name: "Allow once", exact: true })).toHaveCount(0);
   await expect(aiden.page.getByRole("button", { name: "Deny", exact: true })).toBeEnabled();
 });

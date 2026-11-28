@@ -37,7 +37,10 @@ export function workspaceArtifactRevisionWaitsForApproval(
   workspace: ArtifactWorkspace,
 ): boolean {
   const { permission, hasFolder } = workspaceAccess(workspace);
-  return entry.needsApproval && workspaceArtifactCommandAccess(permission, hasFolder, false) === "needs-approval";
+  return (
+    entry.needsApproval &&
+    workspaceArtifactCommandAccess(permission, hasFolder, false) === "needs-approval"
+  );
 }
 
 /**
@@ -48,11 +51,15 @@ export function workspaceArtifactRevisionWaitsForApproval(
  */
 export type WorkspaceArtifactImportAccess = "needs-approval" | "run" | "off" | "no-folder";
 
-export function workspaceArtifactImportAccess(workspace: ArtifactWorkspace): WorkspaceArtifactImportAccess {
+export function workspaceArtifactImportAccess(
+  workspace: ArtifactWorkspace,
+): WorkspaceArtifactImportAccess {
   const { permission, hasFolder } = workspaceAccess(workspace);
   if (!hasFolder) return "no-folder";
   if (permission === "none") return "off";
-  return workspaceArtifactCommandAccess(permission, hasFolder, false) === "run" ? "run" : "needs-approval";
+  return workspaceArtifactCommandAccess(permission, hasFolder, false) === "run"
+    ? "run"
+    : "needs-approval";
 }
 
 /**
@@ -66,8 +73,11 @@ export function workspaceArtifactPageAccess(
   const { sources, actions } = view.artifact;
   if (sources.length === 0 && actions.length === 0) return null;
   const { permission, hasFolder, approved } = accessInputs(view, workspace);
-  const states = sources.map((source) => workspaceArtifactSourceAccess(permission, hasFolder, source, approved));
-  if (actions.length > 0) states.push(workspaceArtifactCommandAccess(permission, hasFolder, approved));
+  const states = sources.map((source) =>
+    workspaceArtifactSourceAccess(permission, hasFolder, source, approved),
+  );
+  if (actions.length > 0)
+    states.push(workspaceArtifactCommandAccess(permission, hasFolder, approved));
   if (states.includes("blocked")) return "blocked";
   if (states.includes("needs-approval")) return "needs-approval";
   return "run";
@@ -78,9 +88,14 @@ export function workspaceArtifactPageAccess(
  * before the page's commands are approved, so a page can refresh while its
  * buttons still wait.
  */
-export function workspaceArtifactCanRefresh(view: WorkspaceArtifactView, workspace: ArtifactWorkspace): boolean {
+export function workspaceArtifactCanRefresh(
+  view: WorkspaceArtifactView,
+  workspace: ArtifactWorkspace,
+): boolean {
   const { permission, hasFolder, approved } = accessInputs(view, workspace);
-  return view.artifact.sources.some((source) => workspaceArtifactSourceAccess(permission, hasFolder, source, approved) === "run");
+  return view.artifact.sources.some(
+    (source) => workspaceArtifactSourceAccess(permission, hasFolder, source, approved) === "run",
+  );
 }
 
 export interface WorkspaceArtifactProblem {
@@ -96,12 +111,21 @@ export function workspaceArtifactProblems(view: WorkspaceArtifactView): Workspac
   return view.artifact.sources.flatMap((source) => {
     const result = results[source.name];
     if (!result || result.status === "ok") return [];
-    return [{ name: source.name, status: result.status, message: result.error ?? (result.status === "blocked" ? "Not run." : "Failed.") }];
+    return [
+      {
+        name: source.name,
+        status: result.status,
+        message: result.error ?? (result.status === "blocked" ? "Not run." : "Failed."),
+      },
+    ];
   });
 }
 
 /** Keeps the person's choice while it exists; otherwise the first artifact. */
-export function pickWorkspaceArtifact(views: readonly WorkspaceArtifactView[], selectedId: string | null): string | null {
+export function pickWorkspaceArtifact(
+  views: readonly WorkspaceArtifactView[],
+  selectedId: string | null,
+): string | null {
   if (selectedId && views.some((view) => view.artifact.id === selectedId)) return selectedId;
   return views[0]?.artifact.id ?? null;
 }

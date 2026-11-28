@@ -124,8 +124,12 @@ export function parseBotChatActivity(value: unknown): BotChatActivity | undefine
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
-  if (keys.length !== 2 || !keys.every((key) => key === "level" || key === "wording")) return undefined;
-  if (!includes(BOT_CHAT_ACTIVITY_LEVELS, record.level) || !includes(BOT_CHAT_ACTIVITY_WORDINGS, record.wording))
+  if (keys.length !== 2 || !keys.every((key) => key === "level" || key === "wording"))
+    return undefined;
+  if (
+    !includes(BOT_CHAT_ACTIVITY_LEVELS, record.level) ||
+    !includes(BOT_CHAT_ACTIVITY_WORDINGS, record.wording)
+  )
     return undefined;
   return { level: record.level, wording: record.wording };
 }
@@ -152,7 +156,10 @@ export function showsBotToolActivity(
  * shows, Quiet (nothing but the reply) when it is hidden. The status line
  * keeps the Bot's stored wording, which phones can still change.
  */
-export function botChatActivityOnDevice(show: boolean, stored: BotChatActivity | undefined): BotChatActivity {
+export function botChatActivityOnDevice(
+  show: boolean,
+  stored: BotChatActivity | undefined,
+): BotChatActivity {
   return { level: show ? "detailed" : "quiet", wording: resolveBotChatActivity(stored).wording };
 }
 
@@ -182,24 +189,40 @@ export function parseBotInterruptions(value: unknown): BotInterruptions {
   if (!value || typeof value !== "object" || Array.isArray(value)) return fail();
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
-  if (keys.length !== 2 || !keys.every((key) => key === "quietHours" || key === "dailyLimit")) return fail();
+  if (keys.length !== 2 || !keys.every((key) => key === "quietHours" || key === "dailyLimit"))
+    return fail();
   const quiet = record.quietHours;
   if (!quiet || typeof quiet !== "object" || Array.isArray(quiet)) return fail();
   const hours = quiet as Record<string, unknown>;
   const hourKeys = Object.keys(hours);
-  if (hourKeys.length !== 3 || !hourKeys.every((key) => key === "enabled" || key === "start" || key === "end")) return fail();
+  if (
+    hourKeys.length !== 3 ||
+    !hourKeys.every((key) => key === "enabled" || key === "start" || key === "end")
+  )
+    return fail();
   if (typeof hours.enabled !== "boolean") return fail();
   if (typeof hours.start !== "string" || !CLOCK_TIME.test(hours.start)) return fail();
   if (typeof hours.end !== "string" || !CLOCK_TIME.test(hours.end)) return fail();
   const limit = record.dailyLimit;
-  if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 0 || limit > BOT_INTERRUPTIONS_MAX_DAILY_LIMIT) return fail();
-  return { quietHours: { enabled: hours.enabled, start: hours.start, end: hours.end }, dailyLimit: limit };
+  if (
+    typeof limit !== "number" ||
+    !Number.isInteger(limit) ||
+    limit < 0 ||
+    limit > BOT_INTERRUPTIONS_MAX_DAILY_LIMIT
+  )
+    return fail();
+  return {
+    quietHours: { enabled: hours.enabled, start: hours.start, end: hours.end },
+    dailyLimit: limit,
+  };
 }
 
 /** The stored setting, or the defaults when none (or an unreadable one) is stored. */
 export function resolveBotInterruptions(value: unknown): BotInterruptions {
   try {
-    return value === undefined ? structuredClone(DEFAULT_BOT_INTERRUPTIONS) : parseBotInterruptions(value);
+    return value === undefined
+      ? structuredClone(DEFAULT_BOT_INTERRUPTIONS)
+      : parseBotInterruptions(value);
   } catch {
     return structuredClone(DEFAULT_BOT_INTERRUPTIONS);
   }

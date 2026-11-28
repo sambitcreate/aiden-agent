@@ -35,13 +35,20 @@ function fixture(options: { busy?: boolean; streamDelayMs?: number; chat?: Parti
     send: (_channel, event) => events.push(event),
     onInvalidated: (listener) => {
       invalidation = listener;
-      return () => { invalidation = undefined; };
+      return () => {
+        invalidation = undefined;
+      };
     },
   };
   const streamSimple = () => {
     const stream = createAssistantMessageEventStream();
     const complete = () => {
-      stream.push({ type: "text_delta", contentIndex: 0, delta: "The side answer.", partial: response });
+      stream.push({
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "The side answer.",
+        partial: response,
+      });
       stream.push({ type: "done", reason: "stop", message: response });
     };
     if (options.streamDelayMs === undefined) queueMicrotask(complete);
@@ -91,7 +98,9 @@ function fixture(options: { busy?: boolean; streamDelayMs?: number; chat?: Parti
       streams: { streamSimple: streamSimple as never },
     }),
     isChatBusy: () => options.busy === true,
-    recordUsage: async (record) => { usage.push(record); },
+    recordUsage: async (record) => {
+      usage.push(record);
+    },
     registry,
   };
   return {
@@ -117,7 +126,10 @@ test("BTW streams an ephemeral answer and records content-free usage", async () 
   const receipt = await app.service.start("chat-a", "What changed?", app.owner);
   assert.match(receipt.requestId, /^btw_/u);
   await waitForTerminal(app.events);
-  assert.deepEqual(app.events.map((event) => event.type), ["started", "delta", "terminal"]);
+  assert.deepEqual(
+    app.events.map((event) => event.type),
+    ["started", "delta", "terminal"],
+  );
   const terminal = app.events[2];
   assert.equal(terminal?.type === "terminal" ? terminal.answer : undefined, "The side answer.");
   assert.equal(app.usage.length, 1);
@@ -127,7 +139,10 @@ test("BTW streams an ephemeral answer and records content-free usage", async () 
 
 test("BTW refuses busy chats before provider dispatch", async () => {
   const app = fixture({ busy: true });
-  await assert.rejects(app.service.start("chat-a", "Question", app.owner), /Finish the current response/u);
+  await assert.rejects(
+    app.service.start("chat-a", "Question", app.owner),
+    /Finish the current response/u,
+  );
   assert.deepEqual(app.events, []);
   assert.deepEqual(app.usage, []);
 });
@@ -145,11 +160,15 @@ test("startup that fails twice still frees the slot and reports the first failur
   const app = fixture();
   const service = app.service as unknown as { thread: unknown };
   const thread = service.thread;
-  service.thread = () => { throw new Error("thread unavailable"); };
+  service.thread = () => {
+    throw new Error("thread unavailable");
+  };
   await assert.rejects(
     app.service.start("chat-a", "Question", {
       ...app.owner,
-      onInvalidated: () => () => { throw new Error("listener already gone"); },
+      onInvalidated: () => () => {
+        throw new Error("listener already gone");
+      },
     }),
     /thread unavailable/u,
   );
@@ -192,7 +211,10 @@ test("detached deletion ignores late provider events after the abort grace", asy
 
   assert.equal(await app.registry.cancelAndSettle("chat-a", 5), false);
   await new Promise((resolve) => setTimeout(resolve, 60));
-  assert.deepEqual(app.events.map((event) => event.type), ["started"]);
+  assert.deepEqual(
+    app.events.map((event) => event.type),
+    ["started"],
+  );
 });
 
 test("BTW refuses feature-owned chats before provider dispatch", async () => {

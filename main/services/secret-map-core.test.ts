@@ -100,12 +100,7 @@ test("unbound legacy credentials move to quarantine without deleting ciphertext"
   const map = normalizeSecretKeyMap({ provider: "encrypted-legacy-key" });
 
   assert.equal(
-    moveSecretEntryWithBindingIfVacant(
-      map,
-      "provider",
-      quarantine,
-      "encrypted-legacy-marker",
-    ),
+    moveSecretEntryWithBindingIfVacant(map, "provider", quarantine, "encrypted-legacy-marker"),
     true,
   );
   assert.equal(secretKeyEntry(map, "provider"), undefined);
@@ -125,12 +120,7 @@ test("an occupied quarantine never destroys an unbound legacy credential", () =>
   });
 
   assert.equal(
-    moveSecretEntryWithBindingIfVacant(
-      map,
-      "provider",
-      quarantine,
-      "encrypted-legacy-marker",
-    ),
+    moveSecretEntryWithBindingIfVacant(map, "provider", quarantine, "encrypted-legacy-marker"),
     false,
   );
   assert.equal(secretKeyEntry(map, "provider"), "encrypted-legacy-key");

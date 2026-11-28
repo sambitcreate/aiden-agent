@@ -30,7 +30,9 @@ function matchesModelFilter(_id: string, search: string, keywords?: string[]): n
   return (keywords ?? []).join(" ").toLowerCase().includes(needle) ? 1 : 0;
 }
 
-export function botModelCapabilityLabel(supportsImages: boolean | undefined): "Reads images" | "Text only" {
+export function botModelCapabilityLabel(
+  supportsImages: boolean | undefined,
+): "Reads images" | "Text only" {
   return supportsImages ? "Reads images" : "Text only";
 }
 
@@ -97,9 +99,10 @@ export function BotModelPicker({
   };
   const selected = findBotModel(catalog, providerId, modelId);
   const isRecommended = Boolean(
-    selected && recommended
-      && recommended.providerId === selected.provider.id
-      && recommended.modelId === selected.model.id,
+    selected &&
+    recommended &&
+    recommended.providerId === selected.provider.id &&
+    recommended.modelId === selected.model.id,
   );
   const groups = catalog.providers
     .map((provider) => ({
@@ -125,7 +128,9 @@ export function BotModelPicker({
               mark={markFor(selected.provider.label)}
             />
           ) : null}
-          <span className="min-w-0 flex-1 truncate text-left">{selected?.model.label ?? "Choose a model"}</span>
+          <span className="min-w-0 flex-1 truncate text-left">
+            {selected?.model.label ?? "Choose a model"}
+          </span>
           {isRecommended ? <InlineMetadata className="shrink-0">Recommended</InlineMetadata> : null}
           <ChevronDown className="size-4 shrink-0 text-tertiary" aria-hidden="true" />
         </Button>
@@ -150,7 +155,8 @@ export function BotModelPicker({
               >
                 {models.map((model) => {
                   const usable = provider.available && model.available;
-                  const isSelected = selected?.provider.id === provider.id && selected.model.id === model.id;
+                  const isSelected =
+                    selected?.provider.id === provider.id && selected.model.id === model.id;
                   return (
                     <CommandItem
                       key={model.id}
@@ -169,8 +175,12 @@ export function BotModelPicker({
                         mark={markFor(provider.label)}
                       />
                       <span className="min-w-0 flex-1 truncate">{model.label}</span>
-                      <InlineMetadata className="shrink-0">{botModelCapabilityLabel(model.supportsImages)}</InlineMetadata>
-                      {isSelected ? <Check className="size-4 shrink-0" role="img" aria-label="Selected" /> : null}
+                      <InlineMetadata className="shrink-0">
+                        {botModelCapabilityLabel(model.supportsImages)}
+                      </InlineMetadata>
+                      {isSelected ? (
+                        <Check className="size-4 shrink-0" role="img" aria-label="Selected" />
+                      ) : null}
                     </CommandItem>
                   );
                 })}

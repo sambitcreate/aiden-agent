@@ -2,11 +2,32 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyDesignCanvas, type DesignCanvas } from "../shared/design-canvas/schema";
 import { addPage, deletePage, showPage } from "../shared/design-canvas/pages";
-import { changesBetween, keepUnchanged, record, redo, takeIn, undo, type CanvasHistory } from "./canvas-history-core";
+import {
+  changesBetween,
+  keepUnchanged,
+  record,
+  redo,
+  takeIn,
+  undo,
+  type CanvasHistory,
+} from "./canvas-history-core";
 
 const state = (label: string): DesignCanvas => ({
   ...emptyDesignCanvas(),
-  frames: [{ id: label, kind: "note", title: label, x: 0, y: 0, w: 200, h: 120, text: label, pageId: "page-1", createdBy: "person" }],
+  frames: [
+    {
+      id: label,
+      kind: "note",
+      title: label,
+      x: 0,
+      y: 0,
+      w: 200,
+      h: 120,
+      text: label,
+      pageId: "page-1",
+      createdBy: "person",
+    },
+  ],
 });
 const label = (doc: DesignCanvas | undefined) => doc?.frames[0]?.id;
 const fresh: CanvasHistory = { past: [], future: [] };
@@ -44,7 +65,12 @@ test("history keeps the newest 100 states and drops the oldest", () => {
   assert.equal(label(history.past[0]), "s1");
   assert.equal(label(history.past[history.past.length - 1]), "s100");
   assert.equal(record(fresh, state("a"), 2).past.length, 1);
-  assert.equal(record(record(record(fresh, state("a"), 2), state("b"), 2), state("c"), 2).past.map(label).join(), "b,c");
+  assert.equal(
+    record(record(record(fresh, state("a"), 2), state("b"), 2), state("c"), 2)
+      .past.map(label)
+      .join(),
+    "b,c",
+  );
 });
 
 test("undoing a page delete brings the page and its frames back, and keeps a frame someone else added meanwhile", () => {
@@ -56,9 +82,15 @@ test("undoing a page delete brings the page and its frames back, and keeps a fra
   const deleted = deletePage(before, "p2");
   assert.equal(deleted.activePageId, "page-1");
   // Aiden adds a note while the delete is on screen.
-  const elsewhere: DesignCanvas = { ...deleted, frames: [...deleted.frames, { ...deleted.frames[0]!, id: "aiden" }] };
+  const elsewhere: DesignCanvas = {
+    ...deleted,
+    frames: [...deleted.frames, { ...deleted.frames[0]!, id: "aiden" }],
+  };
   const restored = changesBetween(deleted, before)(elsewhere);
-  assert.deepEqual(restored.pages.map((page) => page.name), ["Page 1", "Pricing"]);
+  assert.deepEqual(
+    restored.pages.map((page) => page.name),
+    ["Page 1", "Pricing"],
+  );
   assert.equal(restored.activePageId, "p2", "the restored page is shown again");
   assert.deepEqual(restored.frames.map((frame) => frame.id).sort(), ["aiden", "kept", "on-p2"]);
 });
@@ -74,25 +106,55 @@ test("an undo never shows a page that no longer exists", () => {
 
 test("undoing a comment edit keeps comments someone else changed, and a comment goes with its frame", () => {
   const comment = (id: string, frameId?: string) => ({
-    id, pageId: "page-1", ...(frameId ? { frameId } : {}), x: 0, y: 0, note: id, state: "open" as const, anchorState: "anchored" as const, createdAt: "2026-11-05T10:00:00.000Z",
+    id,
+    pageId: "page-1",
+    ...(frameId ? { frameId } : {}),
+    x: 0,
+    y: 0,
+    note: id,
+    state: "open" as const,
+    anchorState: "anchored" as const,
+    createdAt: "2026-11-05T10:00:00.000Z",
   });
   const pinned = comment("pinned", "frame");
   const before: DesignCanvas = { ...state("frame"), comments: [comment("mine"), pinned] };
-  const after: DesignCanvas = { ...before, comments: [{ ...comment("mine"), note: "edited" }, pinned] };
+  const after: DesignCanvas = {
+    ...before,
+    comments: [{ ...comment("mine"), note: "edited" }, pinned],
+  };
   // Aiden's turn marks the pinned comment resolved while the edit is on screen.
-  const meanwhile: DesignCanvas = { ...after, comments: [after.comments[0]!, { ...pinned, state: "resolved" }] };
+  const meanwhile: DesignCanvas = {
+    ...after,
+    comments: [after.comments[0]!, { ...pinned, state: "resolved" }],
+  };
   const undone = changesBetween(after, before)(meanwhile);
   assert.equal(undone.comments.find((entry) => entry.id === "mine")?.note, "mine");
   assert.equal(undone.comments.find((entry) => entry.id === "pinned")?.state, "resolved");
 
   const removed = changesBetween(before, { ...before, frames: [] })({ ...before });
-  assert.deepEqual(removed.comments.map((entry) => entry.id), ["mine"], "removing a frame removes its comments");
+  assert.deepEqual(
+    removed.comments.map((entry) => entry.id),
+    ["mine"],
+    "removing a frame removes its comments",
+  );
 });
 
 const note = (id: string, x = 0) => ({
-  id, kind: "note" as const, title: id, x, y: 0, w: 200, h: 120, text: id, pageId: "page-1", createdBy: "person" as const,
+  id,
+  kind: "note" as const,
+  title: id,
+  x,
+  y: 0,
+  w: 200,
+  h: 120,
+  text: id,
+  pageId: "page-1",
+  createdBy: "person" as const,
 });
-const withFrames = (...frames: ReturnType<typeof note>[]): DesignCanvas => ({ ...emptyDesignCanvas(), frames });
+const withFrames = (...frames: ReturnType<typeof note>[]): DesignCanvas => ({
+  ...emptyDesignCanvas(),
+  frames,
+});
 const ids = (doc: DesignCanvas | undefined) => doc?.frames.map((frame) => frame.id);
 
 test("every change from one reply undoes as one step, and a second reply is a step of its own", () => {
@@ -118,7 +180,14 @@ test("a change from another writer is carried into earlier steps rather than bec
   const elsewhere = keepUnchanged(moved, withFrames(note("a", 100), note("z")));
   history = takeIn(history, { before: moved, from: moved, to: elsewhere });
   const back = undo(history, elsewhere);
-  assert.deepEqual(back?.doc.frames.map((frame) => [frame.id, frame.x]), [["a", 0], ["z", 0]], "undo takes back the move and keeps z");
+  assert.deepEqual(
+    back?.doc.frames.map((frame) => [frame.id, frame.x]),
+    [
+      ["a", 0],
+      ["z", 0],
+    ],
+    "undo takes back the move and keeps z",
+  );
   assert.equal(undo(back!.history, back!.doc), null, "z's arrival is not an undo step");
 });
 
@@ -131,5 +200,11 @@ test("a fetched canvas keeps the objects of frames that did not change, so undo 
   assert.equal(merged.frames[1]?.x, 300);
   // Only b differs, so carrying the change into an old snapshot touches only b.
   const carried = changesBetween(local, merged)(withFrames(note("a", 50), note("b")));
-  assert.deepEqual(carried.frames.map((frame) => [frame.id, frame.x]), [["a", 50], ["b", 300]]);
+  assert.deepEqual(
+    carried.frames.map((frame) => [frame.id, frame.x]),
+    [
+      ["a", 50],
+      ["b", 300],
+    ],
+  );
 });

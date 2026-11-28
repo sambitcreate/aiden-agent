@@ -1,10 +1,10 @@
-import { FORM_FILL_MUTATION_AVAILABLE, FORM_FILL_UNAVAILABLE_MESSAGE } from "../../renderer/shared/form-fill-availability.js";
+import {
+  FORM_FILL_MUTATION_AVAILABLE,
+  FORM_FILL_UNAVAILABLE_MESSAGE,
+} from "../../renderer/shared/form-fill-availability.js";
 import { llmClient } from "../services/llm-client.js";
 import { ipcMain } from "../platform.js";
-import {
-  formFillArtifacts,
-  formFillRuntime,
-} from "../services/form-fill/artifacts.js";
+import { formFillArtifacts, formFillRuntime } from "../services/form-fill/artifacts.js";
 import {
   formFillSpecialistEnabled,
   setFormFillSpecialistEnabled,
@@ -14,13 +14,10 @@ import {
   type RendererDocumentOwner,
 } from "../services/renderer-document-owner.js";
 
-function requestOwner(
-  event: Electron.IpcMainInvokeEvent,
-): RendererDocumentOwner {
+function requestOwner(event: Electron.IpcMainInvokeEvent): RendererDocumentOwner {
   return rendererDocumentOwner(
     event,
-    () =>
-      new Error("Form fill settings require the active application document."),
+    () => new Error("Form fill settings require the active application document."),
   );
 }
 
@@ -41,12 +38,10 @@ export function registerFormFillHandlers(): void {
   });
 
   ipcMain.handle("formFill:setEnabled", async (event, enabled: unknown) => {
-    if (typeof enabled !== "boolean")
-      throw new Error("Invalid form fill setting.");
+    if (typeof enabled !== "boolean") throw new Error("Invalid form fill setting.");
     const owner = requestOwner(event);
     await setFormFillSpecialistEnabled(enabled);
-    if (owner.isDestroyed())
-      throw new Error("The renderer document is no longer active.");
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
     return { enabled, status: await formFillArtifacts.refresh() };
   });
 
@@ -55,8 +50,7 @@ export function registerFormFillHandlers(): void {
     if (!FORM_FILL_MUTATION_AVAILABLE) throw new Error(FORM_FILL_UNAVAILABLE_MESSAGE);
     const unsubscribe = owner.onInvalidated(() => formFillArtifacts.cancel());
     try {
-      if (owner.isDestroyed())
-        throw new Error("The renderer document is no longer active.");
+      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
       await formFillArtifacts.download();
     } finally {
       unsubscribe();

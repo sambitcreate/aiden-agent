@@ -494,7 +494,12 @@ test("a lost database is rebuilt from stored blobs, which stay readable and in g
   for (const asset of [large, small]) {
     const { record, bytes } = await reopened.read(asset.assetId);
     assert.deepEqual(
-      { mediaType: record.mediaType, width: record.width, height: record.height, bytes: bytes.byteLength },
+      {
+        mediaType: record.mediaType,
+        width: record.width,
+        height: record.height,
+        bytes: bytes.byteLength,
+      },
       { mediaType: asset.mediaType, width: asset.width, height: asset.height, bytes: asset.bytes },
     );
     assert.deepEqual(reopened.holders(asset.assetId), [], "holds are not recoverable from blobs");
@@ -532,40 +537,48 @@ test("a lost database is rebuilt from stored blobs, which stay readable and in g
   assert.deepEqual(await restarted.collectGarbage(), { deletedAssets: 1, freedBytes: fresh.bytes });
 });
 
-test("a rebuild interrupted before it re-indexes resumes on the next start instead of deleting images", { skip: process.getuid?.() === 0 && "root ignores directory permissions" }, async (t) => {
-  const errors: unknown[] = [];
-  const f = await fixture(t, {}, { onError: (error) => errors.push(error) });
-  const image = await f.store.put({ bytes: pngBytes(10, 10, 1) });
-  f.store.retain({ kind: "images-workflow", id: "wf-1" }, [image.assetId]);
-  await f.store.close();
-  await removeDatabase(f.root);
+test(
+  "a rebuild interrupted before it re-indexes resumes on the next start instead of deleting images",
+  { skip: process.getuid?.() === 0 && "root ignores directory permissions" },
+  async (t) => {
+    const errors: unknown[] = [];
+    const f = await fixture(t, {}, { onError: (error) => errors.push(error) });
+    const image = await f.store.put({ bytes: pngBytes(10, 10, 1) });
+    f.store.retain({ kind: "images-workflow", id: "wf-1" }, [image.assetId]);
+    await f.store.close();
+    await removeDatabase(f.root);
 
-  // The rebuild's blob scan fails (an unreadable shard stands in for any I/O error
-  // or an exit mid-scan); the store still opens, without the image indexed.
-  const shard = path.join(f.root, "blobs", image.assetId.slice(0, 2));
-  await fs.chmod(shard, 0o000);
-  t.after(() => fs.chmod(shard, 0o700).catch(() => undefined));
-  const failed = await f.open();
-  assert.equal(errors.length, 1);
-  assert.equal(failed.get(image.assetId), undefined);
-  await failed.close();
+    // The rebuild's blob scan fails (an unreadable shard stands in for any I/O error
+    // or an exit mid-scan); the store still opens, without the image indexed.
+    const shard = path.join(f.root, "blobs", image.assetId.slice(0, 2));
+    await fs.chmod(shard, 0o000);
+    t.after(() => fs.chmod(shard, 0o700).catch(() => undefined));
+    const failed = await f.open();
+    assert.equal(errors.length, 1);
+    assert.equal(failed.get(image.assetId), undefined);
+    await failed.close();
 
-  await fs.chmod(shard, 0o700);
-  const restarted = await f.open();
-  assert.equal((await restarted.read(image.assetId)).bytes.byteLength, image.bytes);
-  f.advance(3 * HOUR);
-  assert.deepEqual(await restarted.collectGarbage(), { deletedAssets: 0, freedBytes: 0 }, "it is protected as recovered");
+    await fs.chmod(shard, 0o700);
+    const restarted = await f.open();
+    assert.equal((await restarted.read(image.assetId)).bytes.byteLength, image.bytes);
+    f.advance(3 * HOUR);
+    assert.deepEqual(
+      await restarted.collectGarbage(),
+      { deletedAssets: 0, freedBytes: 0 },
+      "it is protected as recovered",
+    );
 
-  // Once the rebuild finished, later starts are ordinary again.
-  await restarted.close();
-  const stray = pngBytes(11, 11, 6);
-  const strayId = createHash("sha256").update(stray).digest("hex");
-  await fs.mkdir(path.join(f.root, "blobs", strayId.slice(0, 2)), { recursive: true });
-  await fs.writeFile(path.join(f.root, "blobs", strayId.slice(0, 2), strayId), stray);
-  const ordinary = await f.open();
-  assert.equal(ordinary.get(strayId), undefined);
-  assert.deepEqual(await f.blobFiles(), [image.assetId]);
-});
+    // Once the rebuild finished, later starts are ordinary again.
+    await restarted.close();
+    const stray = pngBytes(11, 11, 6);
+    const strayId = createHash("sha256").update(stray).digest("hex");
+    await fs.mkdir(path.join(f.root, "blobs", strayId.slice(0, 2)), { recursive: true });
+    await fs.writeFile(path.join(f.root, "blobs", strayId.slice(0, 2), strayId), stray);
+    const ordinary = await f.open();
+    assert.equal(ordinary.get(strayId), undefined);
+    assert.deepEqual(await f.blobFiles(), [image.assetId]);
+  },
+);
 
 test("a quota refusal says how much space recovered images keep, since deleting items never frees it", async (t) => {
   const f = await fixture(t, { maxAssets: 2 });
@@ -576,7 +589,10 @@ test("a quota refusal says how much space recovered images keep, since deleting 
   await reopened.put({ bytes: pngBytes(10, 10, 2) });
   await assert.rejects(reopened.put({ bytes: pngBytes(10, 10, 3) }), (error: unknown) => {
     assert.ok(error instanceof StudioAssetError && error.code === "quota");
-    assert.match(error.message, new RegExp(`keeps 1 image \\(${recovered.bytes} bytes\\) recovered`, "u"));
+    assert.match(
+      error.message,
+      new RegExp(`keeps 1 image \\(${recovered.bytes} bytes\\) recovered`, "u"),
+    );
     assert.match(error.message, /deleting items does not free that space/u);
     return true;
   });
@@ -631,7 +647,10 @@ test("a corrupt database is quarantined and rebuilt, keeping every image", async
   assert.deepEqual(await fs.readFile(path.join(f.root, quarantined[0]!)), garbage);
   if (process.platform !== "win32") {
     // The kept copy may be 0644 from an older build; it is made private like the live database.
-    assert.equal(((await fs.stat(path.join(f.root, quarantined[0]!))).mode & 0o777).toString(8), "600");
+    assert.equal(
+      ((await fs.stat(path.join(f.root, quarantined[0]!))).mode & 0o777).toString(8),
+      "600",
+    );
   }
   assert.ok(warnings.some((message) => message.includes(quarantined[0]!)));
   // The rebuilt store accepts new work.
@@ -642,10 +661,14 @@ test("a corrupt database is quarantined and rebuilt, keeping every image", async
 test("a damaged table page first met by the startup scan is quarantined and rebuilt, keeping every image", async (t) => {
   const warnings: string[] = [];
   const errors: unknown[] = [];
-  const f = await fixture(t, {}, {
-    onWarning: (message) => warnings.push(message),
-    onError: (error) => errors.push(error),
-  });
+  const f = await fixture(
+    t,
+    {},
+    {
+      onWarning: (message) => warnings.push(message),
+      onError: (error) => errors.push(error),
+    },
+  );
   const asset = await f.store.put({ bytes: pngBytes(40, 30, 4) });
   await f.store.close();
   // Grow the tables well past their root pages, then damage the last pages: the
@@ -655,7 +678,8 @@ test("a damaged table page first met by the startup scan is quarantined and rebu
   const insert = raw.prepare(
     "INSERT INTO assets (id, media_type, bytes, width, height, created_at, touched_at) VALUES (?, 'image/png', 1, 1, 1, 0, 0)",
   );
-  for (let index = 0; index < 400; index += 1) insert.run(createHash("sha256").update(String(index)).digest("hex"));
+  for (let index = 0; index < 400; index += 1)
+    insert.run(createHash("sha256").update(String(index)).digest("hex"));
   const { page_size: pageSize } = raw.prepare("PRAGMA page_size").get() as { page_size: number };
   raw.close();
   const { size } = await fs.stat(file);
@@ -683,9 +707,14 @@ test("a rebuild re-indexes only blobs whose bytes hash to their name in their ow
   await f.store.close();
   await removeDatabase(f.root);
   // A valid image filed under another image's hash.
-  const misnamedId = createHash("sha256").update(pngBytes(12, 12, 8)).digest("hex");
+  const misnamedId = createHash("sha256")
+    .update(pngBytes(12, 12, 8))
+    .digest("hex");
   await fs.mkdir(path.join(f.root, "blobs", misnamedId.slice(0, 2)), { recursive: true });
-  await fs.writeFile(path.join(f.root, "blobs", misnamedId.slice(0, 2), misnamedId), pngBytes(13, 13, 9));
+  await fs.writeFile(
+    path.join(f.root, "blobs", misnamedId.slice(0, 2), misnamedId),
+    pngBytes(13, 13, 9),
+  );
   // A valid image under its own hash, but in a shard its name does not start with.
   const misplaced = pngBytes(14, 14, 7);
   const misplacedId = createHash("sha256").update(misplaced).digest("hex");
@@ -711,7 +740,10 @@ test("a database with an invalid schema version is quarantined and rebuilt", asy
   const reopened = await f.open();
   assert.equal(reopened.get(asset.assetId)?.width, 40);
   const names = await fs.readdir(f.root);
-  assert.equal(names.filter((name) => /\.corrupt-[^-]/u.test(name) && !/-(wal|shm)$/u.test(name)).length, 1);
+  assert.equal(
+    names.filter((name) => /\.corrupt-[^-]/u.test(name) && !/-(wal|shm)$/u.test(name)).length,
+    1,
+  );
 });
 
 test("a database from a newer build is left untouched and the store stays unavailable", async (t) => {
@@ -725,12 +757,24 @@ test("a database from a newer build is left untouched and the store stays unavai
   raw.close();
 
   await assert.rejects(f.open(), code("unavailable"));
-  assert.deepEqual((await fs.readdir(f.root)).filter((name) => name.includes(".corrupt-")), []);
+  assert.deepEqual(
+    (await fs.readdir(f.root)).filter((name) => name.includes(".corrupt-")),
+    [],
+  );
   assert.deepEqual(await f.blobFiles(), [asset.assetId]);
   // The newer build's database, holds included, is still there for that build.
   const check = new DatabaseSync(file);
-  assert.equal((check.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 2);
-  assert.deepEqual(check.prepare("SELECT holder FROM holds").all().map((row) => (row as { holder: string }).holder), ["design:project-1"]);
+  assert.equal(
+    (check.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+    2,
+  );
+  assert.deepEqual(
+    check
+      .prepare("SELECT holder FROM holds")
+      .all()
+      .map((row) => (row as { holder: string }).holder),
+    ["design:project-1"],
+  );
   check.close();
 });
 

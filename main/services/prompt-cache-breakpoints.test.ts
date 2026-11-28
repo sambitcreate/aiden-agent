@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cleanupSessionResources, normalizeContext, type Api, type Model, type SimpleStreamOptions, type Tool } from "@earendil-works/pi-ai";
+import {
+  cleanupSessionResources,
+  normalizeContext,
+  type Api,
+  type Model,
+  type SimpleStreamOptions,
+  type Tool,
+} from "@earendil-works/pi-ai";
 
 import {
   MAX_ANTHROPIC_CACHE_BREAKPOINTS,
@@ -19,20 +26,42 @@ const STABLE_HEAD = "You are the fixture agent.\n\nFollow the fixture rules.";
 const FROZEN_TAIL = "<volatile_memory>fixture memory</volatile_memory>";
 const SYSTEM_PROMPT = `${STABLE_HEAD}\n\n${FROZEN_TAIL}`;
 const TOOLS: Tool[] = [
-  { name: "read_fixture", description: "Read a fixture.", parameters: { type: "object", properties: {} } as Tool["parameters"] },
-  { name: "write_fixture", description: "Write a fixture.", parameters: { type: "object", properties: {} } as Tool["parameters"] },
+  {
+    name: "read_fixture",
+    description: "Read a fixture.",
+    parameters: { type: "object", properties: {} } as Tool["parameters"],
+  },
+  {
+    name: "write_fixture",
+    description: "Write a fixture.",
+    parameters: { type: "object", properties: {} } as Tool["parameters"],
+  },
 ];
 
 const anthropicModel: Model<Api> = {
-  id: "fixture-model", name: "Fixture", api: "anthropic-messages", provider: "anthropic",
-  baseUrl: "https://api.anthropic.com", reasoning: false, input: ["text"], cost: ZERO_COST,
-  contextWindow: 200_000, maxTokens: 8_192,
+  id: "fixture-model",
+  name: "Fixture",
+  api: "anthropic-messages",
+  provider: "anthropic",
+  baseUrl: "https://api.anthropic.com",
+  reasoning: false,
+  input: ["text"],
+  cost: ZERO_COST,
+  contextWindow: 200_000,
+  maxTokens: 8_192,
 };
 // A Claude Bedrock ID Pi caches without AWS_BEDROCK_FORCE_CACHE.
 const bedrockModel: Model<Api> = {
-  id: "anthropic.claude-fixture-4-0-v1:0", name: "Fixture", api: "bedrock-converse-stream", provider: "amazon-bedrock",
-  baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com", reasoning: false, input: ["text"], cost: ZERO_COST,
-  contextWindow: 200_000, maxTokens: 8_192,
+  id: "anthropic.claude-fixture-4-0-v1:0",
+  name: "Fixture",
+  api: "bedrock-converse-stream",
+  provider: "amazon-bedrock",
+  baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+  reasoning: false,
+  input: ["text"],
+  cost: ZERO_COST,
+  contextWindow: 200_000,
+  maxTokens: 8_192,
 };
 
 function context(systemPrompt = SYSTEM_PROMPT) {
@@ -44,8 +73,13 @@ function context(systemPrompt = SYSTEM_PROMPT) {
 }
 
 /** The Anthropic request body the real Pi adapter sends, captured at fetch. */
-async function sentAnthropic(chatId: string, options: Partial<SimpleStreamOptions> = {}, systemPrompt = SYSTEM_PROMPT) {
-  const { anthropicMessagesApi } = await import("@earendil-works/pi-ai/api/anthropic-messages.lazy");
+async function sentAnthropic(
+  chatId: string,
+  options: Partial<SimpleStreamOptions> = {},
+  systemPrompt = SYSTEM_PROMPT,
+) {
+  const { anthropicMessagesApi } =
+    await import("@earendil-works/pi-ai/api/anthropic-messages.lazy");
   const stream = withPromptCacheBreakpoints(anthropicMessagesApi().streamSimple);
   let body: Record<string, unknown> | undefined;
   await stream(anthropicModel, context(systemPrompt), {
@@ -62,14 +96,22 @@ async function sentAnthropic(chatId: string, options: Partial<SimpleStreamOption
 }
 
 /** The Bedrock payload the real Pi adapter builds, as the last payload hook sees it. */
-async function sentBedrock(chatId: string, options: Partial<SimpleStreamOptions> = {}, forceCache = false, model = bedrockModel) {
-  const { bedrockConverseStreamApi } = await import("@earendil-works/pi-ai/api/bedrock-converse-stream.lazy");
+async function sentBedrock(
+  chatId: string,
+  options: Partial<SimpleStreamOptions> = {},
+  forceCache = false,
+  model = bedrockModel,
+) {
+  const { bedrockConverseStreamApi } =
+    await import("@earendil-works/pi-ai/api/bedrock-converse-stream.lazy");
   const stream = withPromptCacheBreakpoints(bedrockConverseStreamApi().streamSimple);
   let payload: Record<string, unknown> | undefined;
   await stream(model, context(), {
     sessionId: chatId,
     env: {
-      AWS_REGION: "us-east-1", AWS_ACCESS_KEY_ID: "offline", AWS_SECRET_ACCESS_KEY: "offline",
+      AWS_REGION: "us-east-1",
+      AWS_ACCESS_KEY_ID: "offline",
+      AWS_SECRET_ACCESS_KEY: "offline",
       ...(forceCache ? { AWS_BEDROCK_FORCE_CACHE: "1" } : {}),
     },
     ...options,
@@ -89,8 +131,16 @@ function systemBlocks(body: Record<string, unknown>) {
 test("stableHeadOf splits only a prompt that ends with its frozen-state tail", () => {
   assert.equal(stableHeadOf(SYSTEM_PROMPT, FROZEN_TAIL), STABLE_HEAD);
   assert.equal(stableHeadOf(STABLE_HEAD, ""), undefined, "no tail, no split");
-  assert.equal(stableHeadOf(`${SYSTEM_PROMPT}\n\nlater text`, FROZEN_TAIL), undefined, "the tail must be last");
-  assert.equal(stableHeadOf(`\n\n${FROZEN_TAIL}`, FROZEN_TAIL), undefined, "a blank head is not a head");
+  assert.equal(
+    stableHeadOf(`${SYSTEM_PROMPT}\n\nlater text`, FROZEN_TAIL),
+    undefined,
+    "the tail must be last",
+  );
+  assert.equal(
+    stableHeadOf(`\n\n${FROZEN_TAIL}`, FROZEN_TAIL),
+    undefined,
+    "a blank head is not a head",
+  );
 });
 
 test("Anthropic: the stable head gets the fourth breakpoint and a tail change keeps it byte-identical", async () => {
@@ -103,15 +153,28 @@ test("Anthropic: the stable head gets the fourth breakpoint and a tail change ke
   assert.ok(tail.text.startsWith(FROZEN_TAIL), "the frozen-state tail follows in its own block");
   assert.ok(tail.cache_control, "the system prompt as a whole stays a breakpoint");
   const unsplit = await sentAnthropic("chat-head-unregistered");
-  assert.equal(systemBlocks(body).map((block) => block.text).join(""), systemBlocks(unsplit)[0].text,
-    "the model reads the same system text, byte for byte");
+  assert.equal(
+    systemBlocks(body)
+      .map((block) => block.text)
+      .join(""),
+    systemBlocks(unsplit)[0].text,
+    "the model reads the same system text, byte for byte",
+  );
 
   const tools = body.tools as Array<{ cache_control?: unknown }>;
   assert.ok(tools[tools.length - 1]?.cache_control, "Pi's tool breakpoint is kept");
 
-  const changed = await sentAnthropic("chat-head", {}, `${STABLE_HEAD}\n\n<volatile_memory>new memory</volatile_memory>`);
+  const changed = await sentAnthropic(
+    "chat-head",
+    {},
+    `${STABLE_HEAD}\n\n<volatile_memory>new memory</volatile_memory>`,
+  );
   assert.deepEqual(changed.tools, body.tools);
-  assert.deepEqual(systemBlocks(changed)[0], head, "the cached prefix through the stable head is unchanged");
+  assert.deepEqual(
+    systemBlocks(changed)[0],
+    head,
+    "the cached prefix through the stable head is unchanged",
+  );
   assert.notDeepEqual(systemBlocks(changed)[1], tail);
 });
 
@@ -134,7 +197,10 @@ test("Anthropic: nothing is added without a matching head, with caching off, or 
   rememberStableHead("chat-oauth", STABLE_HEAD);
   const oauth = await sentAnthropic("chat-oauth", { apiKey: "sk-ant-oat01-offline-fixture" });
   assert.ok(anthropicCacheBreakpoints(oauth) <= MAX_ANTHROPIC_CACHE_BREAKPOINTS);
-  assert.equal(systemBlocks(oauth).some((block) => block.text === `${STABLE_HEAD}\n\n`), false);
+  assert.equal(
+    systemBlocks(oauth).some((block) => block.text === `${STABLE_HEAD}\n\n`),
+    false,
+  );
 });
 
 test("Anthropic: a payload that already holds four markers is left alone", () => {
@@ -150,12 +216,18 @@ test("Anthropic: a payload that already holds four markers is left alone", () =>
   assert.equal(anthropicCacheBreakpoints(full), MAX_ANTHROPIC_CACHE_BREAKPOINTS);
   assert.equal(withStableHeadBreakpoint(full, STABLE_HEAD), undefined);
   const three = { ...full, messages: full.messages.slice(1) };
-  assert.equal(anthropicCacheBreakpoints(withStableHeadBreakpoint(three, STABLE_HEAD)), MAX_ANTHROPIC_CACHE_BREAKPOINTS);
+  assert.equal(
+    anthropicCacheBreakpoints(withStableHeadBreakpoint(three, STABLE_HEAD)),
+    MAX_ANTHROPIC_CACHE_BREAKPOINTS,
+  );
 });
 
 test("a deleted chat's stable head is forgotten", async () => {
   rememberStableHead("chat-deleted", STABLE_HEAD);
-  assert.equal(anthropicCacheBreakpoints(await sentAnthropic("chat-deleted")), MAX_ANTHROPIC_CACHE_BREAKPOINTS);
+  assert.equal(
+    anthropicCacheBreakpoints(await sentAnthropic("chat-deleted")),
+    MAX_ANTHROPIC_CACHE_BREAKPOINTS,
+  );
   cleanupSessionResources("chat-deleted");
   const after = await sentAnthropic("chat-deleted");
   assert.equal(systemBlocks(after).length, 1);
@@ -180,9 +252,13 @@ test("Bedrock: a cachePoint follows the tools, with the system cachePoint's shap
   for (const cacheRetention of ["short", "long"] as const) {
     const payload = await sentBedrock("chat-bedrock", { cacheRetention });
     const toolConfig = payload.toolConfig as { tools: Array<Record<string, unknown>> };
-    assert.deepEqual(toolConfig.tools.slice(0, -1).map((tool) => (tool.toolSpec as { name: string }).name),
-      ["read_fixture", "write_fixture"]);
-    const systemPoint = (payload.system as Array<Record<string, unknown>>).find((block) => block.cachePoint)?.cachePoint;
+    assert.deepEqual(
+      toolConfig.tools.slice(0, -1).map((tool) => (tool.toolSpec as { name: string }).name),
+      ["read_fixture", "write_fixture"],
+    );
+    const systemPoint = (payload.system as Array<Record<string, unknown>>).find(
+      (block) => block.cachePoint,
+    )?.cachePoint;
     assert.deepEqual(toolConfig.tools[toolConfig.tools.length - 1], { cachePoint: systemPoint });
     assert.ok(bedrockCachePoints(payload) <= MAX_BEDROCK_CACHE_POINTS);
     assert.equal(bedrockCachePoints(payload), 3, "system, tools and the last user message");
@@ -207,12 +283,18 @@ test("Bedrock: a payload that already holds four cachePoints is left alone", () 
   const full = {
     system: [{ text: SYSTEM_PROMPT }, { cachePoint: point }],
     toolConfig: { tools: [{ toolSpec: { name: "read_fixture" } }] },
-    messages: [1, 2, 3].map((turn) => ({ role: "user", content: [{ text: `turn ${turn}` }, { cachePoint: point }] })),
+    messages: [1, 2, 3].map((turn) => ({
+      role: "user",
+      content: [{ text: `turn ${turn}` }, { cachePoint: point }],
+    })),
   };
   assert.equal(bedrockCachePoints(full), MAX_BEDROCK_CACHE_POINTS);
   assert.equal(withBedrockToolsCachePoint(full, bedrockModel), undefined);
   const three = { ...full, messages: full.messages.slice(1) };
-  assert.equal(bedrockCachePoints(withBedrockToolsCachePoint(three, bedrockModel)), MAX_BEDROCK_CACHE_POINTS);
+  assert.equal(
+    bedrockCachePoints(withBedrockToolsCachePoint(three, bedrockModel)),
+    MAX_BEDROCK_CACHE_POINTS,
+  );
 });
 
 test("other APIs pass through without a payload hook", () => {
@@ -222,7 +304,13 @@ test("other APIs pass through without a payload hook", () => {
     throw new Error("captured");
   }) as Parameters<typeof withPromptCacheBreakpoints>[0];
   const options: SimpleStreamOptions = { sessionId: "chat-other" };
-  assert.throws(() => withPromptCacheBreakpoints(inner)({ ...anthropicModel, api: "openai-completions" }, context(), options));
+  assert.throws(() =>
+    withPromptCacheBreakpoints(inner)(
+      { ...anthropicModel, api: "openai-completions" },
+      context(),
+      options,
+    ),
+  );
   assert.strictEqual(received, options);
   assert.equal(received?.onPayload, undefined);
 });

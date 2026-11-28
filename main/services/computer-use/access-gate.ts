@@ -17,10 +17,7 @@ export const COMPUTER_USE_SETUP_REASON =
   "Finish Computer Use setup on your Mac (Accessibility and Screen Recording), then ask again.";
 
 /** Block reasons for approvals that settled without a user decision. */
-const UNDECIDED_REASONS: Record<
-  Exclude<ToolApprovalOutcome, "allowed" | "denied">,
-  string
-> = {
+const UNDECIDED_REASONS: Record<Exclude<ToolApprovalOutcome, "allowed" | "denied">, string> = {
   detached:
     "Approval is unavailable while this response continues in the background. Return to the chat and retry the action.",
   unavailable:
@@ -28,8 +25,7 @@ const UNDECIDED_REASONS: Record<
   cancelled: "The action was cancelled before approval.",
 };
 
-export type ComputerUseAccessDecision =
-  { allowed: true } | { allowed: false; reason: string };
+export type ComputerUseAccessDecision = { allowed: true } | { allowed: false; reason: string };
 
 /**
  * Bumped whenever grants are revoked (Reset chat permissions, Always allow
@@ -120,16 +116,20 @@ export interface ComputerUseAccessGateDependencies {
  * setting, and a bare allow or "once" (what phones send) grants only this
  * stream and persists nothing.
  */
-export function createComputerUseAccessGate(
-  deps: ComputerUseAccessGateDependencies,
-) {
+export function createComputerUseAccessGate(deps: ComputerUseAccessGateDependencies) {
   let declined = false;
   // Computer Use is the person's Mac itself: its first use asks in every
   // mode, and a chat grant ("always" included) is the remembered answer.
   const accessGate = (granted: boolean) =>
     planActionGate(
       { surface: "workspace", access: "ask" },
-      { toolName: COMPUTER_USE_TOOL_NAME, mac: true, consequential: true, granted, declinedInRun: declined },
+      {
+        toolName: COMPUTER_USE_TOOL_NAME,
+        mac: true,
+        consequential: true,
+        granted,
+        declinedInRun: declined,
+      },
     );
   /** Grant revision at which this stream knew it was granted. */
   let grantedAt: number | null = null;
@@ -147,10 +147,7 @@ export function createComputerUseAccessGate(
   const readStatus = async (
     signal: AbortSignal | undefined,
     force = false,
-  ): Promise<Pick<
-    ComputerUseStatus,
-    "ready" | "available" | "detail"
-  > | null> => {
+  ): Promise<Pick<ComputerUseStatus, "ready" | "available" | "detail"> | null> => {
     try {
       return await deps.status({ force, signal });
     } catch (error) {
@@ -158,10 +155,7 @@ export function createComputerUseAccessGate(
       return {
         ready: false,
         available: false,
-        detail:
-          error instanceof Error
-            ? error.message
-            : "Computer Use status is unavailable.",
+        detail: error instanceof Error ? error.message : "Computer Use status is unavailable.",
       };
     }
   };
@@ -199,8 +193,7 @@ export function createComputerUseAccessGate(
     // A deny holds for the rest of the stream: the gate never asks again.
     if (accessGate(false).outcome === "block")
       return { allowed: false, reason: COMPUTER_USE_DECLINED_REASON };
-    if (resetsInProgress > 0)
-      return { allowed: false, reason: COMPUTER_USE_RESETTING_REASON };
+    if (resetsInProgress > 0) return { allowed: false, reason: COMPUTER_USE_RESETTING_REASON };
     const revision = grantRevision;
     // Once this stream saw a granted chat on a ready Mac, skip the status
     // probe; a later permission loss surfaces as a driver error instead.
@@ -209,17 +202,13 @@ export function createComputerUseAccessGate(
     if (!status) return { allowed: false, reason: UNDECIDED_REASONS.cancelled };
     // Nothing the user can grant fixes an unsupported OS, an unsigned build or
     // a broken driver, so those block with the status detail and no card.
-    if (!status.ready && !status.available)
-      return { allowed: false, reason: status.detail };
+    if (!status.ready && !status.available) return { allowed: false, reason: status.detail };
     if (grantedAt !== revision) {
       grantedAt = null;
       try {
         if (await deps.readGrant()) grantedAt = revision;
       } catch (error) {
-        deps.warn(
-          "Could not read the Computer Use grant; asking instead.",
-          error,
-        );
+        deps.warn("Could not read the Computer Use grant; asking instead.", error);
       }
     }
     // A revocation during the awaits above makes both the cached grant and this
@@ -237,38 +226,28 @@ export function createComputerUseAccessGate(
       await setPending(true);
       return { allowed: false, reason: COMPUTER_USE_SETUP_REASON };
     }
-    if (signal?.aborted)
-      return { allowed: false, reason: UNDECIDED_REASONS.cancelled };
+    if (signal?.aborted) return { allowed: false, reason: UNDECIDED_REASONS.cancelled };
 
     if (!status.ready) await setPending(true);
     const { outcome, scope } = await deps.requestAccess(toolCallId, signal);
     if (outcome === "allowed") {
       // Nothing may be saved while stored grants are being cleared.
-      if (resetsInProgress > 0)
-        return { allowed: false, reason: COMPUTER_USE_RESETTING_REASON };
+      if (resetsInProgress > 0) return { allowed: false, reason: COMPUTER_USE_RESETTING_REASON };
       // The answer is fresh as of now, even if grants moved while the card was
       // open. Only a revocation after this point can overrule it.
       const answeredAt = grantRevision;
       if (scope === "always") {
-        await persist(
-          "Could not save Always allow for Computer Use.",
-          deps.grantAlways,
-        );
+        await persist("Could not save Always allow for Computer Use.", deps.grantAlways);
       } else if (scope === "chat") {
-        await persist(
-          "Could not save the chat's Computer Use grant.",
-          deps.grantChat,
-        );
+        await persist("Could not save the chat's Computer Use grant.", deps.grantChat);
       }
       // A bare allow or "once" grants this response only.
       grantedAt = answeredAt;
       const current = status.ready ? status : await readStatus(signal, true);
-      if (!current)
-        return { allowed: false, reason: UNDECIDED_REASONS.cancelled };
+      if (!current) return { allowed: false, reason: UNDECIDED_REASONS.cancelled };
       // Still not ready: keep the continue marker so the chat can resume
       // after setup (and a restart, if macOS needs one).
-      if (!current.ready)
-        return { allowed: false, reason: COMPUTER_USE_SETUP_REASON };
+      if (!current.ready) return { allowed: false, reason: COMPUTER_USE_SETUP_REASON };
       // A revoked allow goes back through a decision, which owns the marker.
       if (answeredAt !== grantRevision) return decideAgain(toolCallId, signal, attempt);
       await clearPending();
@@ -285,8 +264,7 @@ export function createComputerUseAccessGate(
       // Keep the marker across an app quit so the chat can offer Continue
       // after restart; a user Stop ends the request.
       const origin = deps.cancellationOrigin();
-      if (origin !== undefined && origin !== "application_shutdown")
-        await setPending(false);
+      if (origin !== undefined && origin !== "application_shutdown") await setPending(false);
     }
     // Detached or unavailable keep any continue marker.
     return { allowed: false, reason: UNDECIDED_REASONS[outcome] };
@@ -295,10 +273,7 @@ export function createComputerUseAccessGate(
   // Parallel tool calls share one card: each waits for the previous decision.
   let tail: Promise<unknown> = Promise.resolve();
   return {
-    authorize(
-      toolCallId: string,
-      signal?: AbortSignal,
-    ): Promise<ComputerUseAccessDecision> {
+    authorize(toolCallId: string, signal?: AbortSignal): Promise<ComputerUseAccessDecision> {
       const next = tail.then(() => decide(toolCallId, signal));
       tail = next.catch(() => undefined);
       return next;
@@ -306,9 +281,7 @@ export function createComputerUseAccessGate(
   };
 }
 
-export type ComputerUseAccessGate = ReturnType<
-  typeof createComputerUseAccessGate
->;
+export type ComputerUseAccessGate = ReturnType<typeof createComputerUseAccessGate>;
 
 /**
  * In a chat with Computer Use access, run an input action without its own

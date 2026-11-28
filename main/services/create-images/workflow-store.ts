@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { IMAGE_NODE_DEFINITIONS, validateWorkflowGraph } from "../../../renderer/shared/images/ports.js";
+import {
+  IMAGE_NODE_DEFINITIONS,
+  validateWorkflowGraph,
+} from "../../../renderer/shared/images/ports.js";
 import {
   IMAGE_WORKFLOW_ID_PATTERN,
   IMAGE_WORKFLOW_LIMITS,
@@ -9,7 +12,10 @@ import {
   type WorkflowDocV1,
   type WorkflowSummary,
 } from "../../../renderer/shared/images/schema.js";
-import { workflowFromTemplate, type ImageWorkflowTemplate } from "../../../renderer/shared/images/templates.js";
+import {
+  workflowFromTemplate,
+  type ImageWorkflowTemplate,
+} from "../../../renderer/shared/images/templates.js";
 import { writeJsonAtomic } from "../durable-fs.js";
 import { StudioAssetError } from "../studio-assets/contract.js";
 import type { StudioAssetStore } from "../studio-assets/store.js";
@@ -54,7 +60,9 @@ function summary(doc: WorkflowDocV1): WorkflowSummary {
 }
 
 function imageInputAssets(doc: WorkflowDocV1): string[] {
-  return doc.nodes.flatMap((node) => (node.type === "image-input" && node.data.assetId ? [node.data.assetId] : []));
+  return doc.nodes.flatMap((node) =>
+    node.type === "image-input" && node.data.assetId ? [node.data.assetId] : [],
+  );
 }
 
 /** What the store remembers of each indexed document, so hot reads never re-parse files. */
@@ -68,9 +76,17 @@ interface DocumentFacts {
 function factsOf(doc: WorkflowDocV1): DocumentFacts {
   const generateTitles = new Map<string, string>();
   for (const node of doc.nodes) {
-    if (node.type === "generate-image") generateTitles.set(node.id, node.title?.trim() || IMAGE_NODE_DEFINITIONS["generate-image"].title);
+    if (node.type === "generate-image")
+      generateTitles.set(
+        node.id,
+        node.title?.trim() || IMAGE_NODE_DEFINITIONS["generate-image"].title,
+      );
   }
-  return { nodeIds: new Set(doc.nodes.map((node) => node.id)), imageInputs: [...new Set(imageInputAssets(doc))].sort(), generateTitles };
+  return {
+    nodeIds: new Set(doc.nodes.map((node) => node.id)),
+    imageInputs: [...new Set(imageInputAssets(doc))].sort(),
+    generateTitles,
+  };
 }
 
 /** At most `max` UTF-16 units, never splitting a surrogate pair. */
@@ -88,7 +104,10 @@ const STAGED_UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const STAGED_DOCUMENT = new RegExp(`^\\..+\\.json\\.${STAGED_UUID}\\.tmp$`, "u");
 const STAGED_INDEX = new RegExp(`^\\.index\\.json\\.${STAGED_UUID}\\.tmp$`, "u");
 
-type LoadedDocument = { kind: "ok"; doc: WorkflowDocV1 } | { kind: "missing" } | { kind: "unreadable" };
+type LoadedDocument =
+  | { kind: "ok"; doc: WorkflowDocV1 }
+  | { kind: "missing" }
+  | { kind: "unreadable" };
 
 /** Distinct graph problems in reading order; a document with many bad edges repeats the same sentence. */
 function graphProblems(doc: WorkflowDocV1): string[] {
@@ -166,7 +185,12 @@ export class ImageWorkflowStore {
       cached.length === current.length &&
       cached.every((entry) => {
         const fresh = this.index.get(entry.id);
-        return fresh !== undefined && fresh.title === entry.title && fresh.revision === entry.revision && fresh.updatedAt === entry.updatedAt;
+        return (
+          fresh !== undefined &&
+          fresh.title === entry.title &&
+          fresh.revision === entry.revision &&
+          fresh.updatedAt === entry.updatedAt
+        );
       });
     if (!matches) await this.writeIndex();
   }
@@ -182,7 +206,8 @@ export class ImageWorkflowStore {
    */
   async imageInputAssets(): Promise<Record<string, string[]>> {
     const found: Record<string, string[]> = {};
-    for (const [id, facts] of this.facts) if (facts.imageInputs.length > 0) found[id] = [...facts.imageInputs];
+    for (const [id, facts] of this.facts)
+      if (facts.imageInputs.length > 0) found[id] = [...facts.imageInputs];
     return found;
   }
 
@@ -219,7 +244,8 @@ export class ImageWorkflowStore {
       ...(options.model ? { model: options.model } : {}),
     });
     const parsed = parseWorkflowDocV1(doc);
-    if (!parsed.ok || graphProblems(parsed.value).length > 0) throw new Error("The workflow template is invalid.");
+    if (!parsed.ok || graphProblems(parsed.value).length > 0)
+      throw new Error("The workflow template is invalid.");
     await this.serialize(doc.id, () => this.publish(parsed.value));
     return parsed.value;
   }
@@ -246,7 +272,11 @@ export class ImageWorkflowStore {
       const parsed = parseWorkflowDocV1(document);
       if (!parsed.ok) return { ok: false, reason: "invalid", issues: parsed.issues } as const;
       if (parsed.value.id !== workflowId) {
-        return { ok: false, reason: "invalid", issues: ["The document belongs to another workflow."] } as const;
+        return {
+          ok: false,
+          reason: "invalid",
+          issues: ["The document belongs to another workflow."],
+        } as const;
       }
       const next: WorkflowDocV1 = {
         ...parsed.value,
@@ -274,11 +304,17 @@ export class ImageWorkflowStore {
       try {
         current = await this.get(workflowId);
       } catch (error) {
-        if (error instanceof ImageWorkflowLoadError) return { ok: false, reason: "invalid", issues: error.issues } as const;
+        if (error instanceof ImageWorkflowLoadError)
+          return { ok: false, reason: "invalid", issues: error.issues } as const;
         throw error;
       }
       if (!current) return { ok: false, reason: "not-found" } as const;
-      const next = { ...current, title, revision: current.revision + 1, updatedAt: Math.max(this.now(), current.updatedAt + 1) };
+      const next = {
+        ...current,
+        title,
+        revision: current.revision + 1,
+        updatedAt: Math.max(this.now(), current.updatedAt + 1),
+      };
       const parsed = parseWorkflowDocV1(next);
       if (!parsed.ok) return { ok: false, reason: "invalid", issues: parsed.issues } as const;
       await this.publish(parsed.value);
@@ -301,7 +337,8 @@ export class ImageWorkflowStore {
     };
     return this.serialize(copy.id, async () => {
       const held = this.retainAssets(copy);
-      if (held) throw new Error(held.issues?.[0] ?? "An image in this workflow is no longer available.");
+      if (held)
+        throw new Error(held.issues?.[0] ?? "An image in this workflow is no longer available.");
       try {
         await this.publish(copy);
       } catch (error) {
@@ -333,7 +370,11 @@ export class ImageWorkflowStore {
       return null;
     } catch (error) {
       if (error instanceof StudioAssetError && error.code === "not_found") {
-        return { ok: false, reason: "invalid", issues: ["An image in this workflow is no longer available."] };
+        return {
+          ok: false,
+          reason: "invalid",
+          issues: ["An image in this workflow is no longer available."],
+        };
       }
       throw error;
     }
@@ -342,7 +383,10 @@ export class ImageWorkflowStore {
   /** After the document is committed: drop holds the document no longer references. */
   private settleHolds(doc: WorkflowDocV1): void {
     try {
-      this.options.assets.replaceHolder({ kind: "images-workflow", id: doc.id }, imageInputAssets(doc));
+      this.options.assets.replaceHolder(
+        { kind: "images-workflow", id: doc.id },
+        imageInputAssets(doc),
+      );
     } catch (error) {
       // Holds are a superset until the next save; the committed document is not undone.
       this.reportIssue(`Could not trim image holds for workflow ${doc.id}.`, error);
@@ -359,7 +403,8 @@ export class ImageWorkflowStore {
       // see, so it counts as committed: dropping it from the index (or its
       // holds) would desync the library from the files.
       const stored = await this.readDocument(doc.id);
-      if (stored === null || stored.revision !== doc.revision || stored.updatedAt !== doc.updatedAt) throw error;
+      if (stored === null || stored.revision !== doc.revision || stored.updatedAt !== doc.updatedAt)
+        throw error;
       this.reportIssue(`Workflow ${doc.id} was written but could not be flushed to disk.`, error);
     }
     this.remember(doc);
@@ -372,12 +417,18 @@ export class ImageWorkflowStore {
     this.unreadable.delete(doc.id);
   }
 
-  private async sweepStaged(directory: string, names: readonly string[], pattern: RegExp): Promise<void> {
+  private async sweepStaged(
+    directory: string,
+    names: readonly string[],
+    pattern: RegExp,
+  ): Promise<void> {
     for (const name of names) {
       if (!pattern.test(name)) continue;
-      await fs.rm(path.join(directory, name), { force: true }).catch((error: unknown) =>
-        this.reportIssue("Could not remove a leftover image workflow staging file.", error),
-      );
+      await fs
+        .rm(path.join(directory, name), { force: true })
+        .catch((error: unknown) =>
+          this.reportIssue("Could not remove a leftover image workflow staging file.", error),
+        );
     }
   }
 
@@ -398,7 +449,9 @@ export class ImageWorkflowStore {
     }
     try {
       const parsed = parseWorkflowDocV1(JSON.parse(text));
-      return parsed.ok && parsed.value.id === workflowId ? { kind: "ok", doc: parsed.value } : { kind: "unreadable" };
+      return parsed.ok && parsed.value.id === workflowId
+        ? { kind: "ok", doc: parsed.value }
+        : { kind: "unreadable" };
     } catch {
       return { kind: "unreadable" };
     }
@@ -417,7 +470,9 @@ export class ImageWorkflowStore {
     // A failed cache write is reported, never thrown: the index is rebuilt from the documents.
     const write = this.indexWrites
       .then(() => this.writeJson(this.indexFile(), this.list(), JSON_FILE))
-      .catch((error: unknown) => this.reportIssue("Could not write the image workflow index.", error));
+      .catch((error: unknown) =>
+        this.reportIssue("Could not write the image workflow index.", error),
+      );
     this.indexWrites = write;
     return write;
   }

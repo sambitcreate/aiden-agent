@@ -108,14 +108,24 @@ export function clampLiveTimelineToContent(
   contentLength: number,
   reasoningLength = Number.POSITIVE_INFINITY,
 ): GenerationTimeline | null | undefined {
-  const ahead = (offset: number | undefined, length: number) => offset !== undefined && offset > length;
+  const ahead = (offset: number | undefined, length: number) =>
+    offset !== undefined && offset > length;
   const reasoningAhead = (step: AgentStep) =>
-    !isToolStep(step) && (ahead(step.reasoningStartOffset, reasoningLength) || ahead(step.reasoningEndOffset, reasoningLength));
-  if (!timeline?.steps.some((step) => ahead(step.contentOffset, contentLength) || reasoningAhead(step))) return timeline;
+    !isToolStep(step) &&
+    (ahead(step.reasoningStartOffset, reasoningLength) ||
+      ahead(step.reasoningEndOffset, reasoningLength));
+  if (
+    !timeline?.steps.some(
+      (step) => ahead(step.contentOffset, contentLength) || reasoningAhead(step),
+    )
+  )
+    return timeline;
   return {
     ...timeline,
     steps: timeline.steps.map((step) => {
-      const contentOffset = ahead(step.contentOffset, contentLength) ? contentLength : step.contentOffset;
+      const contentOffset = ahead(step.contentOffset, contentLength)
+        ? contentLength
+        : step.contentOffset;
       if (isToolStep(step) || !reasoningAhead(step)) {
         return contentOffset === step.contentOffset ? step : { ...step, contentOffset };
       }
@@ -174,7 +184,8 @@ export function assistantPresentationRows(
   let hasReasoningSpan = false;
   for (const step of timeline.steps) {
     if (isToolStep(step) || step.reasoningStartOffset === undefined) continue;
-    const end = step.reasoningEndOffset ?? (step.finishedAt === undefined ? reasoning.length : undefined);
+    const end =
+      step.reasoningEndOffset ?? (step.finishedAt === undefined ? reasoning.length : undefined);
     if (
       !Number.isSafeInteger(step.reasoningStartOffset) ||
       !Number.isSafeInteger(end) ||
@@ -182,7 +193,8 @@ export function assistantPresentationRows(
       (end as number) < step.reasoningStartOffset ||
       (end as number) > reasoning.length ||
       reasoning.slice(reasoningCursor, step.reasoningStartOffset).trim()
-    ) return null;
+    )
+      return null;
     reasoningCursor = end as number;
     hasReasoningSpan = true;
   }
@@ -199,7 +211,8 @@ export function assistantPresentationRows(
     if (narrative) rows.push(narrative);
     if (!isToolStep(step)) {
       const start = step.reasoningStartOffset;
-      const end = step.reasoningEndOffset ?? (step.finishedAt === undefined ? reasoning.length : undefined);
+      const end =
+        step.reasoningEndOffset ?? (step.finishedAt === undefined ? reasoning.length : undefined);
       rows.push({
         key: `reasoning-${step.id}`,
         kind: "reasoning",
@@ -234,8 +247,10 @@ export function assistantPresentationRows(
       steps,
     });
     for (const grouped of steps) {
-      if (isExtractionStep(grouped)) rows.push({ key: `extraction-${grouped.id}`, kind: "extraction", step: grouped });
-      if (isRecordingStep(grouped)) rows.push({ key: `recording-${grouped.id}`, kind: "recording", step: grouped });
+      if (isExtractionStep(grouped))
+        rows.push({ key: `extraction-${grouped.id}`, kind: "extraction", step: grouped });
+      if (isRecordingStep(grouped))
+        rows.push({ key: `recording-${grouped.id}`, kind: "recording", step: grouped });
     }
     cursor = offset;
   }

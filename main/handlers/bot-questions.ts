@@ -19,10 +19,13 @@ export interface BotQuestionHandlerDependencies {
 }
 
 export function registerBotQuestionHandlers(dependencies: BotQuestionHandlerDependencies): void {
-  dependencies.handle(BOT_ANSWER_QUESTION_CHANNEL, async (_event, input): Promise<{ answered: boolean }> => {
-    const { botId, waitId, answer } = parseBotQuestionAnswer(input);
-    const outcome = dependencies.questions.answer(botId, waitId, answer);
-    if (outcome === "invalid") throw new Error("That answer doesn’t match the question.");
-    return { answered: outcome === "answered" };
-  });
+  dependencies.handle(
+    BOT_ANSWER_QUESTION_CHANNEL,
+    async (_event, input): Promise<{ answered: boolean }> => {
+      const { botId, waitId, answer } = parseBotQuestionAnswer(input);
+      const outcome = dependencies.questions.answer(botId, waitId, answer);
+      if (outcome === "invalid") throw new Error("That answer doesn’t match the question.");
+      return { answered: outcome === "answered" };
+    },
+  );
 }

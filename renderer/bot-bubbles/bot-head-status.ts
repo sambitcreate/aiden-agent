@@ -6,7 +6,11 @@
 
 import { useBot } from "../lib/queries";
 import { useBotLive } from "../lib/use-bot-live";
-import { botRecentReplyTimes, botTranscriptPreview, type BotLiveSnapshot } from "../shared/bot-live";
+import {
+  botRecentReplyTimes,
+  botTranscriptPreview,
+  type BotLiveSnapshot,
+} from "../shared/bot-live";
 import type { BotDefinition } from "../shared/bots";
 import { botRowLine, useBotLiveSummary } from "../main/bots/bot-sidebar-rows";
 import { useBotSidebarPreferences } from "../main/bots/use-bot-sidebar-preferences";
@@ -42,10 +46,10 @@ export function botUnreadReplyCount(replyTimes: readonly number[], seenAt: numbe
 function snapshotNeedsYou(snapshot: BotLiveSnapshot): boolean {
   return Boolean(
     snapshot.question ||
-      snapshot.handoff ||
-      snapshot.accessRequest ||
-      snapshot.plan?.status === "pending" ||
-      snapshot.entries.some((entry) => entry.type === "issue" && entry.status === "open"),
+    snapshot.handoff ||
+    snapshot.accessRequest ||
+    snapshot.plan?.status === "pending" ||
+    snapshot.entries.some((entry) => entry.type === "issue" && entry.status === "open"),
   );
 }
 
@@ -56,14 +60,18 @@ function snapshotNeedsYou(snapshot: BotLiveSnapshot): boolean {
  * count comes from the summary's recent reply times.
  * `viewing` is set while this Bot's mini chat is open: it has nothing unread.
  */
-export function useBotHeadStatus(botId: string, { live, viewing }: { live: boolean; viewing: boolean }): BotHeadStatus {
+export function useBotHeadStatus(
+  botId: string,
+  { live, viewing }: { live: boolean; viewing: boolean },
+): BotHeadStatus {
   const bot = useBot(botId);
   const summary = useBotLiveSummary(botId);
   const feed = useBotLive(live ? botId : undefined);
   const { preferences } = useBotSidebarPreferences();
   const snapshot = feed.snapshot;
   const state = snapshot?.state ?? summary.data?.state;
-  const needsYou = (summary.data?.needsYou ?? false) || (snapshot ? snapshotNeedsYou(snapshot) : false);
+  const needsYou =
+    (summary.data?.needsYou ?? false) || (snapshot ? snapshotNeedsYou(snapshot) : false);
   const seenAt = preferences.seenReplyAt[botId] ?? preferences.since;
   let unreadCount: number | null = 0;
   if (!viewing) {
@@ -72,20 +80,27 @@ export function useBotHeadStatus(botId: string, { live, viewing }: { live: boole
       // No feed (heads in the Aiden window): count from the summary's reply times.
       const lastReplyAt = summary.data?.lastReplyAt ?? null;
       const recent = summary.data?.recentReplyAt;
-      unreadCount = lastReplyAt === null || lastReplyAt <= seenAt ? 0 : recent ? botUnreadReplyCount(recent, seenAt) : null;
+      unreadCount =
+        lastReplyAt === null || lastReplyAt <= seenAt
+          ? 0
+          : recent
+            ? botUnreadReplyCount(recent, seenAt)
+            : null;
     }
   }
-  const preview = snapshot ? (botTranscriptPreview(snapshot.entries)?.text ?? null) : (summary.data?.preview ?? null);
+  const preview = snapshot
+    ? (botTranscriptPreview(snapshot.entries)?.text ?? null)
+    : (summary.data?.preview ?? null);
   const definition = bot.data ?? null;
   const line = definition
-    ? botRowLine({
+    ? (botRowLine({
         bot: definition,
         ...(state ? { state } : {}),
         ...(preview ? { preview } : {}),
         activityAt: 0,
         needsYou,
         lastReplyAt: null,
-      })?.text ?? null
+      })?.text ?? null)
     : null;
   return {
     bot: definition,
@@ -100,9 +115,14 @@ export function useBotHeadStatus(botId: string, { live, viewing }: { live: boole
 }
 
 /** The head's accessible name, e.g. "Penny, 2 unread, needs you. Enter opens, Delete closes." */
-export function botHeadLabel(status: Pick<BotHeadStatus, "name" | "unread" | "unreadCount" | "needsYou" | "working">): string {
+export function botHeadLabel(
+  status: Pick<BotHeadStatus, "name" | "unread" | "unreadCount" | "needsYou" | "working">,
+): string {
   const parts = [status.name];
-  if (status.unread) parts.push(status.unreadCount === null ? "unread" : `${botUnreadBadge(status.unreadCount)} unread`);
+  if (status.unread)
+    parts.push(
+      status.unreadCount === null ? "unread" : `${botUnreadBadge(status.unreadCount)} unread`,
+    );
   if (status.needsYou) parts.push("needs you");
   if (status.working) parts.push("working");
   return `${parts.join(", ")}. Enter opens, Delete closes.`;

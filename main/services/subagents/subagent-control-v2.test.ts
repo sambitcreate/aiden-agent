@@ -9,9 +9,7 @@ import {
 } from "./subagent-control-v2.js";
 import type { SubagentRunSnapshotV2 } from "../../../renderer/shared/subagent-runs.js";
 
-function snapshot(
-  overrides: Partial<SubagentRunSnapshotV2> = {},
-): SubagentRunSnapshotV2 {
+function snapshot(overrides: Partial<SubagentRunSnapshotV2> = {}): SubagentRunSnapshotV2 {
   return {
     version: 2,
     runId: "run-one",
@@ -168,7 +166,10 @@ test("control updates preserve task provenance and only add report facts at term
     terminalMarkdown: "Done.\n\n... [report truncated]",
   };
   registry.update(owner, completed);
-  assert.deepEqual(registry.status(owner, "run-one").projectionNotices, completed.projectionNotices);
+  assert.deepEqual(
+    registry.status(owner, "run-one").projectionNotices,
+    completed.projectionNotices,
+  );
 });
 
 test("mandatory hook failures prevent false terminal acknowledgement", () => {
@@ -235,10 +236,7 @@ test("steering is serial, bounded, abort-aware, and closes at terminal state", a
   const pending = Array.from({ length: MAX_SUBAGENT_CONTROL_STEERING_PER_RUN }, (_, index) =>
     registry.steer(owner, "run-one", `instruction-${index}`),
   );
-  await assert.rejects(
-    registry.steer(owner, "run-one", "one-too-many"),
-    /steering queue is full/u,
-  );
+  await assert.rejects(registry.steer(owner, "run-one", "one-too-many"), /steering queue is full/u);
   assert.deepEqual(accepted, ["instruction-0"]);
   releases.shift()?.();
   await pending[0];
@@ -293,10 +291,9 @@ test("retry mints fresh identities, links the source, clears runtime state, and 
       return {
         registration: registration(retry),
         start: () => {
-          startedRegistered = registry.status(
-            { ...owner, authorityRevision: retry.authorityRevision },
-            retry.runId,
-          ).runId === retry.runId;
+          startedRegistered =
+            registry.status({ ...owner, authorityRevision: retry.authorityRevision }, retry.runId)
+              .runId === retry.runId;
         },
       };
     },
@@ -383,14 +380,8 @@ test("terminal records are evicted oldest-first before they can exhaust capacity
   );
   registry.register(registration(snapshot({ runId: "run-live", childId: "child-live" })));
   assert.equal(registry.size, 2);
-  assert.throws(
-    () => registry.status(owner, "run-old"),
-    /authority does not match/u,
-  );
-  assert.equal(
-    registry.status({ ...owner }, "run-live").state,
-    "running",
-  );
+  assert.throws(() => registry.status(owner, "run-old"), /authority does not match/u);
+  assert.equal(registry.status({ ...owner }, "run-live").state, "running");
 });
 
 test("failed terminal admission preserves every accepted record at capacity", () => {
@@ -422,10 +413,7 @@ test("failed terminal admission preserves every accepted record at capacity", ()
   assert.equal(registry.size, 2);
   assert.equal(registry.status(owner, "run-old").state, "completed");
   assert.equal(registry.status(owner, "run-new").state, "completed");
-  assert.throws(
-    () => registry.status(owner, "run-rejected"),
-    /authority does not match/u,
-  );
+  assert.throws(() => registry.status(owner, "run-rejected"), /authority does not match/u);
 });
 
 test("only a pristine queued preparation can be unregistered before launch", () => {
@@ -461,10 +449,7 @@ test("only a pristine queued preparation can be unregistered before launch", () 
       updatedAt: 200,
     }),
   );
-  assert.throws(
-    () => registry.unregisterPrepared(owner, "run-started"),
-    /unlaunched queued/u,
-  );
+  assert.throws(() => registry.unregisterPrepared(owner, "run-started"), /unlaunched queued/u);
 });
 
 test("update rejects direct stopped transitions and treats unknown as terminal", async () => {

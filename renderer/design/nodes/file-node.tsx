@@ -10,9 +10,17 @@ import { FrameActions } from "./frame-actions";
 import { FrameTitle } from "./frame-title";
 import { LayoutGuide } from "./layout-guide";
 import { cn } from "../../lib/ui-utils";
-import { parseDesignBridgeMessage, postToDesignPage, type DesignBridgeMessage } from "../../shared/design-canvas/bridge-messages";
+import {
+  parseDesignBridgeMessage,
+  postToDesignPage,
+  type DesignBridgeMessage,
+} from "../../shared/design-canvas/bridge-messages";
 import { PageTextBar } from "./page-text-bar";
-import { designTweakState, withDesignTweakQuery, type DesignTweakState } from "../../shared/design-canvas/tweaks";
+import {
+  designTweakState,
+  withDesignTweakQuery,
+  type DesignTweakState,
+} from "../../shared/design-canvas/tweaks";
 import type { DesignFrame } from "../../shared/design-canvas/schema";
 import { designUrl } from "../../shared/design-canvas/url";
 import type { DesignNode } from "../canvas-adapter-core";
@@ -77,7 +85,10 @@ export function FileFrame({
   const tweakKey = JSON.stringify(tweaks);
   const [boot, setBoot] = React.useState(() => ({ address, tweakKey }));
   if (boot.address !== address) setBoot({ address, tweakKey });
-  const src = address === null ? null : withDesignTweakQuery(address, JSON.parse(boot.tweakKey) as DesignTweakState);
+  const src =
+    address === null
+      ? null
+      : withDesignTweakQuery(address, JSON.parse(boot.tweakKey) as DesignTweakState);
   const tweaksRef = React.useRef(tweaks);
   const editable = entered && onEditMessage !== undefined;
   const editRef = React.useRef({ editable, onEditMessage });
@@ -99,7 +110,13 @@ export function FileFrame({
   }, [onMissing]);
 
   const canShow = src !== null && !missing;
-  const retiring = useRetiringFrame({ frameId: frame.id, version, live, showing: canShow, content: contentRef });
+  const retiring = useRetiringFrame({
+    frameId: frame.id,
+    version,
+    live,
+    showing: canShow,
+    content: contentRef,
+  });
   const showIframe = canShow && (live || retiring);
   const { snapshot } = useFrameSnapshot(frame.id, version);
 
@@ -135,7 +152,10 @@ export function FileFrame({
 
   React.useEffect(() => {
     if (!showIframe) return;
-    postToDesignPage(iframeRef.current?.contentWindow, { type: "set-tweaks", ...(JSON.parse(tweakKey) as DesignTweakState) });
+    postToDesignPage(iframeRef.current?.contentWindow, {
+      type: "set-tweaks",
+      ...(JSON.parse(tweakKey) as DesignTweakState),
+    });
   }, [showIframe, tweakKey]);
 
   React.useEffect(() => {
@@ -195,7 +215,14 @@ export function FileFrame({
       </div>
     );
   } else if (snapshot) {
-    body = <img src={snapshot} alt={frame.title} draggable={false} className="block h-full w-full object-cover object-top" />;
+    body = (
+      <img
+        src={snapshot}
+        alt={frame.title}
+        draggable={false}
+        className="block h-full w-full object-cover object-top"
+      />
+    );
   } else {
     body = <FrameSkeleton title={frame.title} />;
   }

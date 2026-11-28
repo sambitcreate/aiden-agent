@@ -253,7 +253,11 @@ test("a Bot computer is an ordinary capability; an unknown kind fails closed", (
   const result = snapshot(withComputer);
   const option = result.catalog.otherCapabilities.find(({ label }) => label === "Bot computer");
   assert.equal(option?.available, true);
-  assert.doesNotMatch(JSON.stringify(result.catalog), /"computer"/u, "the public option carries no private kind");
+  assert.doesNotMatch(
+    JSON.stringify(result.catalog),
+    /"computer"/u,
+    "the public option carries no private kind",
+  );
 
   const unknown = inventory();
   unknown.otherCapabilities.push({

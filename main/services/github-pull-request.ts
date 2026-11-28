@@ -60,7 +60,8 @@ const DEFAULT_CREATE_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024;
 const KILL_GRACE_MS = 1_000;
 const PIPE_DRAIN_MS = 1_000;
-const RATE_LIMITED_MESSAGE = "GitHub's API rate limit was reached. Pull request status will refresh after it resets.";
+const RATE_LIMITED_MESSAGE =
+  "GitHub's API rate limit was reached. Pull request status will refresh after it resets.";
 
 interface CommandResult {
   stdout: string;
@@ -74,7 +75,11 @@ interface CommandOptions {
   maxBuffer: number;
 }
 
-export type GitHubCliRunner = (cwd: string, args: string[], options: CommandOptions) => Promise<CommandResult>;
+export type GitHubCliRunner = (
+  cwd: string,
+  args: string[],
+  options: CommandOptions,
+) => Promise<CommandResult>;
 
 export interface GitHubPullRequestReadOptions {
   /** A user-initiated read; may spend the GraphQL reserve kept for interactive work. */
@@ -97,7 +102,11 @@ interface RepositoryTarget {
   name: string;
 }
 
-type Failure = { availability: Exclude<GitHubPullRequestAvailability, "ready">; message: string; retryAt?: number };
+type Failure = {
+  availability: Exclude<GitHubPullRequestAvailability, "ready">;
+  message: string;
+  retryAt?: number;
+};
 
 function replaceAllLiteral(value: string, search: string, replacement: string): string {
   return search ? value.split(search).join(replacement) : value;
@@ -129,7 +138,11 @@ function createFailureKind(error: unknown): "missing-tool" | "unauthenticated" |
   const execError = error as ExecFileException | undefined;
   const combined = `${execError?.stdout ?? ""}\n${execError?.stderr ?? ""}\n${execError?.message ?? ""}`;
   if (/spawn .*gh ENOENT/u.test(combined)) return "missing-tool";
-  if (/auth login|not logged into|authentication required|HTTP 401|could not authenticate/iu.test(combined)) {
+  if (
+    /auth login|not logged into|authentication required|HTTP 401|could not authenticate/iu.test(
+      combined,
+    )
+  ) {
     return "unauthenticated";
   }
   return "other";
@@ -140,7 +153,11 @@ function createFailureKind(error: unknown): "missing-tool" | "unauthenticated" |
  * stops the `git` and credential helpers it started. Failures keep the shape of
  * `execFile`'s errors (`killed` on timeout, `code`, `stdout`, `stderr`).
  */
-async function defaultRunner(cwd: string, args: string[], options: CommandOptions): Promise<CommandResult> {
+async function defaultRunner(
+  cwd: string,
+  args: string[],
+  options: CommandOptions,
+): Promise<CommandResult> {
   options.signal?.throwIfAborted();
   const child = spawn(options.binary, args, {
     cwd,
@@ -165,7 +182,11 @@ async function defaultRunner(cwd: string, args: string[], options: CommandOption
     bytes[stream] += chunk.length;
     if (bytes[stream] > options.maxBuffer) {
       if (remaining > 0) output[stream].push(chunk.subarray(0, remaining));
-      stop(Object.assign(new Error(`${stream} maxBuffer length exceeded`), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }));
+      stop(
+        Object.assign(new Error(`${stream} maxBuffer length exceeded`), {
+          code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+        }),
+      );
       return;
     }
     output[stream].push(chunk);
@@ -180,11 +201,19 @@ async function defaultRunner(cwd: string, args: string[], options: CommandOption
   // a pipe is stopped by the drain below, not reported as a timeout.
   child.once("exit", () => clearTimeout(timer));
   const onAbort = () =>
-    stop(Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR" }));
+    stop(
+      Object.assign(new Error("The operation was aborted"), {
+        name: "AbortError",
+        code: "ABORT_ERR",
+      }),
+    );
   options.signal?.addEventListener("abort", onAbort, { once: true });
   try {
     // A helper still holding a pipe a second after `gh` exits is stopped with its group.
-    const exit = await waitForChildExit(child, { drainMs: PIPE_DRAIN_MS, onPipesHeld: () => terminator.terminate() });
+    const exit = await waitForChildExit(child, {
+      drainMs: PIPE_DRAIN_MS,
+      onPipesHeld: () => terminator.terminate(),
+    });
     const stdout = Buffer.concat(output.stdout).toString("utf8");
     const stderr = Buffer.concat(output.stderr).toString("utf8");
     if (stopped) throw Object.assign(stopped, { stdout, stderr });
@@ -212,10 +241,17 @@ export function parseRepositorySelector(selector: string): RepositoryTarget | un
     parts.length === 2 ? ["github.com", parts[0], parts[1]] : parts.length === 3 ? parts : [];
   const normalizedHost = normalizeGitHubHost(host);
   if (!normalizedHost || !owner || !name) return undefined;
-  return { host: normalizedHost, owner: owner.toLowerCase(), name: name.replace(/\.git$/iu, "").toLowerCase() };
+  return {
+    host: normalizedHost,
+    owner: owner.toLowerCase(),
+    name: name.replace(/\.git$/iu, "").toLowerCase(),
+  };
 }
 
-function failureFrom(result: Exclude<PullRequestEntryResult, { kind: "ok" }>, host: string): Failure {
+function failureFrom(
+  result: Exclude<PullRequestEntryResult, { kind: "ok" }>,
+  host: string,
+): Failure {
   switch (result.kind) {
     case "rate-limited":
       return {
@@ -273,7 +309,11 @@ export class GitHubPullRequestService {
 
   private async local(cwd: string, signal?: AbortSignal) {
     const local = await this.repositories.resolve(cwd, signal);
-    if (!local.ok) return { ok: false as const, failure: { availability: local.availability, message: local.message } };
+    if (!local.ok)
+      return {
+        ok: false as const,
+        failure: { availability: local.availability, message: local.message },
+      };
     return { ok: true as const, repository: local.repository };
   }
 
@@ -281,12 +321,17 @@ export class GitHubPullRequestService {
     cwd: string,
     selector: string | undefined,
     signal?: AbortSignal,
-  ): Promise<{ ok: true; target: RepositoryTarget; headBranch?: string } | { ok: false; failure: Failure }> {
+  ): Promise<
+    { ok: true; target: RepositoryTarget; headBranch?: string } | { ok: false; failure: Failure }
+  > {
     if (selector) {
       const target = parseRepositorySelector(selector);
       return target
         ? { ok: true, target }
-        : { ok: false, failure: { availability: "error", message: "The GitHub repository is invalid." } };
+        : {
+            ok: false,
+            failure: { availability: "error", message: "The GitHub repository is invalid." },
+          };
     }
     const local = await this.local(cwd, signal);
     if (!local.ok) return local;
@@ -320,22 +365,36 @@ export class GitHubPullRequestService {
     if (!local.ok) return local.failure;
     const repository = local.repository;
     if (!repository.headBranch) {
-      return { availability: "no-pull-request", message: "Check out a branch to see its GitHub pull request." };
+      return {
+        availability: "no-pull-request",
+        message: "Check out a branch to see its GitHub pull request.",
+      };
     }
     const result = await this.read(
       repository,
-      { kind: "head", owner: repository.owner, name: repository.name, headBranch: repository.headBranch },
+      {
+        kind: "head",
+        owner: repository.owner,
+        name: repository.name,
+        headBranch: repository.headBranch,
+      },
       "pr.current",
       signal,
       { ...options, ...(repository.headSha ? { version: repository.headSha } : {}) },
     );
     if (result.kind !== "ok") return failureFrom(result, repository.host);
     const fromHead = result.pullRequests.filter(
-      (pullRequest) => !repository.headOwner || !pullRequest.headOwner || pullRequest.headOwner === repository.headOwner,
+      (pullRequest) =>
+        !repository.headOwner ||
+        !pullRequest.headOwner ||
+        pullRequest.headOwner === repository.headOwner,
     );
     const chosen = fromHead.find((pullRequest) => pullRequest.state === "open") ?? fromHead[0];
     if (!chosen) {
-      return { availability: "no-pull-request", message: "No GitHub pull request is linked to the current branch." };
+      return {
+        availability: "no-pull-request",
+        message: "No GitHub pull request is linked to the current branch.",
+      };
     }
     return { availability: "ready", pullRequest: toSummary(chosen) };
   }
@@ -353,7 +412,13 @@ export class GitHubPullRequestService {
     const resolved = await this.target(cwd, repository, signal);
     if (!resolved.ok) return resolved.failure;
     const { target } = resolved;
-    const result = await this.read(target, { kind: "repository", owner: target.owner, name: target.name }, "repo.resolve", signal, options);
+    const result = await this.read(
+      target,
+      { kind: "repository", owner: target.owner, name: target.name },
+      "repo.resolve",
+      signal,
+      options,
+    );
     if (result.kind === "ok") {
       return {
         availability: "ready",
@@ -362,7 +427,10 @@ export class GitHubPullRequestService {
       };
     }
     if (result.kind === "not-found") {
-      return { availability: "error", message: `GitHub could not find ${target.owner}/${target.name}.` };
+      return {
+        availability: "error",
+        message: `GitHub could not find ${target.owner}/${target.name}.`,
+      };
     }
     return failureFrom(result, target.host);
   }
@@ -389,10 +457,19 @@ export class GitHubPullRequestService {
     signal: AbortSignal | undefined,
     options: GitHubPullRequestReadOptions,
   ): Promise<GitHubPullRequestStatus> {
-    const result = await this.read(target, { kind: "number", owner: target.owner, name: target.name, number }, "pr.read", signal, options);
+    const result = await this.read(
+      target,
+      { kind: "number", owner: target.owner, name: target.name, number },
+      "pr.read",
+      signal,
+      options,
+    );
     if (result.kind !== "ok") {
       if (result.kind === "not-found") {
-        return { availability: "error", message: `GitHub could not find pull request #${number} in ${target.owner}/${target.name}.` };
+        return {
+          availability: "error",
+          message: `GitHub could not find pull request #${number} in ${target.owner}/${target.name}.`,
+        };
       }
       return failureFrom(result, target.host);
     }
@@ -414,7 +491,8 @@ export class GitHubPullRequestService {
   ): Promise<GitHubPullRequestStatus> {
     const ref = parseGitHubPullRequestUrl(url);
     const target = ref ? parseRepositorySelector(`${ref.host}/${ref.repository}`) : undefined;
-    if (!ref || !target) return { availability: "error", message: "That is not a GitHub pull request URL." };
+    if (!ref || !target)
+      return { availability: "error", message: "That is not a GitHub pull request URL." };
     return this.readNumber(target, ref.number, signal, options);
   }
 
@@ -445,7 +523,8 @@ export class GitHubPullRequestService {
     if (result.pullRequests.length >= BRANCH_LOOKUP_LIMIT) {
       return {
         availability: "error",
-        message: "The branch lookup reached its result limit. Check GitHub before retrying creation.",
+        message:
+          "The branch lookup reached its result limit. Check GitHub before retrying creation.",
       };
     }
     return { availability: "ready", pullRequests: result.pullRequests.map(toSummary) };
@@ -512,15 +591,22 @@ export class GitHubPullRequestService {
         ?.split(/\s+/u)
         .find((token) => parseGitHubPullRequestUrl(token) !== undefined);
       if (!createdUrl) {
-        return { kind: "unknown", message: "GitHub CLI finished without reporting the new pull request URL." };
+        return {
+          kind: "unknown",
+          message: "GitHub CLI finished without reporting the new pull request URL.",
+        };
       }
-      const resolved = await this.getPullRequestByUrl(cwd, createdUrl, signal, { interactive: true });
+      const resolved = await this.getPullRequestByUrl(cwd, createdUrl, signal, {
+        interactive: true,
+      });
       if (resolved.availability === "ready" && resolved.pullRequest) {
         return { kind: "created", pullRequest: resolved.pullRequest };
       }
       return {
         kind: "unknown",
-        message: resolved.message ?? "GitHub created the pull request but its details could not be read back.",
+        message:
+          resolved.message ??
+          "GitHub created the pull request but its details could not be read back.",
       };
     } catch (error) {
       if (signal?.aborted || isAbortError(error)) throw error;
@@ -530,10 +616,18 @@ export class GitHubPullRequestService {
       // must be reconciled.
       const kind = createFailureKind(error);
       if (kind === "missing-tool") {
-        return { kind: "failed", availability: kind, message: "Install GitHub CLI, then run `gh auth login`." };
+        return {
+          kind: "failed",
+          availability: kind,
+          message: "Install GitHub CLI, then run `gh auth login`.",
+        };
       }
       if (kind === "unauthenticated") {
-        return { kind: "failed", availability: kind, message: `Run \`gh auth login\` on this ${localComputerNoun(process.platform)}, then try again.` };
+        return {
+          kind: "failed",
+          availability: kind,
+          message: `Run \`gh auth login\` on this ${localComputerNoun(process.platform)}, then try again.`,
+        };
       }
       const timedOut = (error as { killed?: unknown } | undefined)?.killed === true;
       return {

@@ -20,9 +20,7 @@ export type AppendReconciliationFailureKind = "current" | "blocked";
 const APPEND_RECONCILIATION_REQUIRED_MESSAGE = `${APPEND_RECONCILIATION_REQUIRED}: Message save status is unknown. Reload Aiden before sending again.`;
 const APPEND_RECONCILIATION_BLOCKED_MESSAGE = `${APPEND_RECONCILIATION_BLOCKED}: Reload Aiden before creating or sending another message.`;
 
-export function appendReconciliationFailureMessage(
-  kind: AppendReconciliationFailureKind,
-): string {
+export function appendReconciliationFailureMessage(kind: AppendReconciliationFailureKind): string {
   return kind === "current"
     ? APPEND_RECONCILIATION_REQUIRED_MESSAGE
     : APPEND_RECONCILIATION_BLOCKED_MESSAGE;

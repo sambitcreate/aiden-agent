@@ -73,12 +73,14 @@ class FakeController implements GeminiLiveComputerUseController {
   }
 }
 
-function harness(overrides: {
-  actionPolicy?: "session" | "per-action";
-  controller?: FakeController;
-  authorized?: () => boolean | Promise<boolean>;
-  approve?: (signal: AbortSignal, summary: string) => Promise<boolean>;
-} = {}) {
+function harness(
+  overrides: {
+    actionPolicy?: "session" | "per-action";
+    controller?: FakeController;
+    authorized?: () => boolean | Promise<boolean>;
+    approve?: (signal: AbortSignal, summary: string) => Promise<boolean>;
+  } = {},
+) {
   const controller = overrides.controller ?? new FakeController();
   const responses: Array<{ id: string; response: Record<string, unknown> }> = [];
   const approvalSummaries: string[] = [];
@@ -97,7 +99,12 @@ function harness(overrides: {
 }
 
 test("session actions execute without prompts and still bind a fresh target grant", async () => {
-  const h = harness({ actionPolicy: "session", approve: async () => { throw new Error("must not prompt"); } });
+  const h = harness({
+    actionPolicy: "session",
+    approve: async () => {
+      throw new Error("must not prompt");
+    },
+  });
   h.bridge.enqueue({ id: "type", name: "computer_use", args: { action: "type", text: "hello" } });
   await tick();
   assert.deepEqual(h.approvalSummaries, []);
@@ -302,8 +309,6 @@ test("tool response keeps only bounded transient screenshots and has no persiste
   assert.deepEqual((small.screenshot as { mime_type: string }).mime_type, "image/png");
   assert.equal("path" in small, false);
   assert.equal("history" in small, false);
-  const large = geminiLiveComputerUseResponse(
-    result("capture", { image: "a".repeat(12_001) }),
-  );
+  const large = geminiLiveComputerUseResponse(result("capture", { image: "a".repeat(12_001) }));
   assert.equal("screenshot" in large, false);
 });

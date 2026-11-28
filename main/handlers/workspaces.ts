@@ -143,7 +143,10 @@ async function withWorkspaceOperation<T>(
 async function withOptionalWorkspaceOperation<T>(
   event: IpcMainInvokeEvent,
   workspaceIdValue: unknown,
-  operation: (resolved: WorkspaceEnvironmentDirectory | undefined, signal: AbortSignal) => Promise<T>,
+  operation: (
+    resolved: WorkspaceEnvironmentDirectory | undefined,
+    signal: AbortSignal,
+  ) => Promise<T>,
 ): Promise<T> {
   const owner = rendererDocumentOwner(
     event,
@@ -176,18 +179,22 @@ export function registerWorkspaceHandlers(): void {
       import("../services/memory-store-main.js"),
       import("../services/config-store.js"),
     ]);
-    return createWorkspaceMemoryFacts({ getWorkspace: (id) => configStore.getWorkspace(id), store: memoryStore });
+    return createWorkspaceMemoryFacts({
+      getWorkspace: (id) => configStore.getWorkspace(id),
+      store: memoryStore,
+    });
   };
   ipcMain.handle("workspaces:memoryFacts", async (_event, workspaceId: unknown) =>
     (await memoryFacts()).list(workspaceId),
   );
-  ipcMain.handle("workspaces:deleteMemoryFact", async (_event, workspaceId: unknown, factId: unknown) =>
-    (await memoryFacts()).remove(workspaceId, factId),
+  ipcMain.handle(
+    "workspaces:deleteMemoryFact",
+    async (_event, workspaceId: unknown, factId: unknown) =>
+      (await memoryFacts()).remove(workspaceId, factId),
   );
 
-  ipcMain.handle(
-    "workspaces:get",
-    async (_event, id: unknown) => workspaceApplicationService.get(asString(id, "id")),
+  ipcMain.handle("workspaces:get", async (_event, id: unknown) =>
+    workspaceApplicationService.get(asString(id, "id")),
   );
 
   ipcMain.handle("workspaces:create", async (_event, input: unknown) =>
@@ -260,22 +267,34 @@ export function registerWorkspaceHandlers(): void {
     }),
   );
 
-  ipcMain.handle("git:pullRequestStatus", async (event, workspaceId: unknown, interactive?: unknown) =>
-    withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) => {
-      if (!resolved) return { availability: "not-repo" as const, message: "This workspace has no accessible folder." };
-      const info = await gitInfo(resolved.folderPath, signal);
-      if (!info.isRepo) {
-        return { availability: "not-repo" as const, message: "This workspace is not a Git repository." };
-      }
-      if (!info.hasRemote) {
-        return { availability: "no-pull-request" as const, message: "This repository has no remote to inspect for pull requests." };
-      }
-      return githubCurrentPullRequest(
-        resolved.folderPath,
-        signal,
-        interactive === true ? { interactive: true } : undefined,
-      );
-    }),
+  ipcMain.handle(
+    "git:pullRequestStatus",
+    async (event, workspaceId: unknown, interactive?: unknown) =>
+      withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) => {
+        if (!resolved)
+          return {
+            availability: "not-repo" as const,
+            message: "This workspace has no accessible folder.",
+          };
+        const info = await gitInfo(resolved.folderPath, signal);
+        if (!info.isRepo) {
+          return {
+            availability: "not-repo" as const,
+            message: "This workspace is not a Git repository.",
+          };
+        }
+        if (!info.hasRemote) {
+          return {
+            availability: "no-pull-request" as const,
+            message: "This repository has no remote to inspect for pull requests.",
+          };
+        }
+        return githubCurrentPullRequest(
+          resolved.folderPath,
+          signal,
+          interactive === true ? { interactive: true } : undefined,
+        );
+      }),
   );
 
   // ── Environment panel: Files + Review ────────────────────────────────
@@ -393,10 +412,7 @@ export function registerWorkspaceHandlers(): void {
   );
 
   ipcMain.handle("git:createWorktree", async (event, workspaceId: unknown, name: unknown) => {
-    const { workspaceId: sourceWorkspaceId, branch } = parseWorktreeCreateParams(
-      workspaceId,
-      name,
-    );
+    const { workspaceId: sourceWorkspaceId, branch } = parseWorktreeCreateParams(workspaceId, name);
     const owner = rendererDocumentOwner(
       event,
       () => new Error("Workspace access requires the active renderer document."),
@@ -425,9 +441,7 @@ export function registerWorkspaceHandlers(): void {
     async (event, workspaceId: unknown, snapshotId: unknown, name: unknown) => {
       const id = asString(workspaceId, "workspaceId");
       const snapshot = asString(snapshotId, "snapshotId");
-      if (
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(snapshot)
-      ) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(snapshot)) {
         throw new Error("The snapshot identifier is invalid.");
       }
       const requestedName = name === undefined ? undefined : asString(name, "name");
@@ -442,7 +456,8 @@ export function registerWorkspaceHandlers(): void {
   // Whether the workspace's folder is still on disk, so the composer can say it
   // was moved or deleted before a send fails inside a tool.
   ipcMain.handle("workspaces:folderPresence", async (_event, workspaceId: unknown) => {
-    if (typeof workspaceId !== "string" || !workspaceId) throw new Error("A workspace id is required.");
+    if (typeof workspaceId !== "string" || !workspaceId)
+      throw new Error("A workspace id is required.");
     const workspace = await workspaceApplicationService.get(workspaceId);
     if (!workspace || !workspaceFolderCheckApplies(workspace)) {
       return { presence: "none" } satisfies WorkspaceFolderPresenceResult;
@@ -456,7 +471,11 @@ export function registerWorkspaceHandlers(): void {
             worktrees: (repositoryPath) => gitWorktrees(repositoryPath),
             deletionPending: (managed) =>
               managed.worktreeGitDir && managed.ownershipToken
-                ? gitManagedWorktreeDeletionPending(managed.worktreePath, managed.worktreeGitDir, managed.ownershipToken)
+                ? gitManagedWorktreeDeletionPending(
+                    managed.worktreePath,
+                    managed.worktreeGitDir,
+                    managed.ownershipToken,
+                  )
                 : Promise.resolve(false),
             folderExists: async (folder) => {
               try {

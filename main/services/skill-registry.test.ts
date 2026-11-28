@@ -13,7 +13,10 @@ import { buildSkillTools, piResourcesForSkillSnapshot } from "./skill-tools.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 /** Which of `names` the model can load through the one `skill` tool, by trying each. */
-async function loadableNames(tools: readonly AgentTool[], names: readonly string[]): Promise<string[]> {
+async function loadableNames(
+  tools: readonly AgentTool[],
+  names: readonly string[],
+): Promise<string[]> {
   const loaded: string[] = [];
   for (const name of names) {
     if (tools.length === 0) break;
@@ -230,7 +233,9 @@ test("the renderer catalog cap never suppresses internal tools or resolution", a
   assert.ok(snapshot.catalog.some((entry) => entry.name === "Workspace winner"));
   const winner = snapshot.available.find((skill) => skill.name === "Workspace winner");
   assert.ok(winner);
-  assert.deepEqual(await loadableNames(buildSkillTools(snapshot), ["Workspace winner"]), ["Workspace winner"]);
+  assert.deepEqual(await loadableNames(buildSkillTools(snapshot), ["Workspace winner"]), [
+    "Workspace winner",
+  ]);
   assert.equal(await h.registry.resolve("one", winner.invocationId), winner);
   assert.match(formatAvailableSkills(snapshot) ?? "", /Workspace winner/u);
 });
@@ -434,7 +439,12 @@ test("invocation policies independently gate catalogs, tools, and authoritative 
     discovered("global", { id: "both", name: "Both" }),
     discovered("global", { id: "user", name: "User", modelInvocable: false }),
     discovered("global", { id: "model", name: "Model", userInvocable: false }),
-    discovered("global", { id: "neither", name: "Neither", modelInvocable: false, userInvocable: false }),
+    discovered("global", {
+      id: "neither",
+      name: "Neither",
+      modelInvocable: false,
+      userInvocable: false,
+    }),
   ]);
   const snapshot = await h.registry.snapshot("one");
   assert.deepEqual(snapshot.catalog.map(({ name }) => name).sort(), ["Both", "User"]);
@@ -442,14 +452,25 @@ test("invocation policies independently gate catalogs, tools, and authoritative 
     await loadableNames(buildSkillTools(snapshot), ["Both", "User", "Model", "Neither"]),
     ["Both", "Model"],
   );
-  assert.deepEqual(piResourcesForSkillSnapshot(snapshot).skills?.map(({ name }) => name).sort(), ["Both", "Model"]);
+  assert.deepEqual(
+    piResourcesForSkillSnapshot(snapshot)
+      .skills?.map(({ name }) => name)
+      .sort(),
+    ["Both", "Model"],
+  );
   const prompt = formatAvailableSkills(snapshot)!;
   assert.match(prompt, /<name>Model<\/name>/u);
   assert.doesNotMatch(prompt, /<name>(User|Neither)<\/name>|global instructions/u);
   for (const skill of snapshot.skills) {
     if (skill.userInvocable === false) {
-      await assert.rejects(h.registry.resolve("one", skill.invocationId), /does not allow user invocation/u);
-      await assert.rejects(h.registry.resolveFresh("one", skill.invocationId), /does not allow user invocation/u);
+      await assert.rejects(
+        h.registry.resolve("one", skill.invocationId),
+        /does not allow user invocation/u,
+      );
+      await assert.rejects(
+        h.registry.resolveFresh("one", skill.invocationId),
+        /does not allow user invocation/u,
+      );
     } else {
       assert.equal((await h.registry.resolveFresh("one", skill.invocationId)).name, skill.name);
     }
@@ -463,7 +484,10 @@ test("policy edits expire user selections while existing model tools retain thei
   const before = await h.registry.snapshot("one");
   const tools = buildSkillTools(before);
   h.setDiscovered([{ ...original, modelInvocable: false, userInvocable: false }]);
-  await assert.rejects(h.registry.resolveFresh("one", before.catalog[0]!.invocationId), /expired or changed/u);
+  await assert.rejects(
+    h.registry.resolveFresh("one", before.catalog[0]!.invocationId),
+    /expired or changed/u,
+  );
   h.registry.invalidate();
   const after = await h.registry.snapshot("one");
   assert.notEqual(after.fingerprint, before.fingerprint);
@@ -489,9 +513,15 @@ test("an invocation opt-out never reveals a shadowed lower-priority skill", asyn
   await assert.rejects(h.registry.resolveFresh("one", shadowed.invocationId), /Shadowed/u);
 });
 
-
 test("owned product skill wins a discovered collision and obeys the global gate", async () => {
-  const builtin = { stableId: "builtin:aiden-app", name: "aiden-app", description: "Owned help", instructions: "Use owned help", enabled: true, source: "builtin" as const };
+  const builtin = {
+    stableId: "builtin:aiden-app",
+    name: "aiden-app",
+    description: "Owned help",
+    instructions: "Use owned help",
+    enabled: true,
+    source: "builtin" as const,
+  };
   const h = harness({ listBuiltin: async () => [builtin] });
   h.setConfigured([configured({ name: "aiden-app", instructions: "Untrusted replacement" })]);
   const snapshot = await h.registry.snapshot("one");
@@ -503,17 +533,36 @@ test("owned product skill wins a discovered collision and obeys the global gate"
 });
 
 test("a surface can drop a built-in skill it cannot use from the prompt, tools and catalog alike", async () => {
-  const app = { stableId: "builtin:aiden-app", name: "aiden-app", description: "Owned help", instructions: "Use owned help", enabled: true, source: "builtin" as const };
-  const desktop = { stableId: "builtin:desktop-only", name: "desktop-only", description: "Desktop pages", instructions: "Only on desktop", enabled: true, source: "builtin" as const };
+  const app = {
+    stableId: "builtin:aiden-app",
+    name: "aiden-app",
+    description: "Owned help",
+    instructions: "Use owned help",
+    enabled: true,
+    source: "builtin" as const,
+  };
+  const desktop = {
+    stableId: "builtin:desktop-only",
+    name: "desktop-only",
+    description: "Desktop pages",
+    instructions: "Only on desktop",
+    enabled: true,
+    source: "builtin" as const,
+  };
   const h = harness({ listBuiltin: async () => [app, desktop] });
   const full = await h.registry.snapshot("one");
   const phone = withoutSkills(full, new Set(["builtin:desktop-only"]));
-  assert.deepEqual(phone.catalog.map(({ name }) => name), ["aiden-app"]);
-  assert.deepEqual(await loadableNames(buildSkillTools(phone), ["aiden-app", "desktop-only"]), ["aiden-app"]);
   assert.deepEqual(
-    await loadableNames(buildSkillTools(full), ["aiden-app", "desktop-only"]),
-    ["aiden-app", "desktop-only"],
+    phone.catalog.map(({ name }) => name),
+    ["aiden-app"],
   );
+  assert.deepEqual(await loadableNames(buildSkillTools(phone), ["aiden-app", "desktop-only"]), [
+    "aiden-app",
+  ]);
+  assert.deepEqual(await loadableNames(buildSkillTools(full), ["aiden-app", "desktop-only"]), [
+    "aiden-app",
+    "desktop-only",
+  ]);
   assert.doesNotMatch(formatAvailableSkills(phone) ?? "", /desktop-only/u);
   assert.match(formatAvailableSkills(full) ?? "", /desktop-only/u);
   assert.equal(withoutSkills(full, new Set(["builtin:missing"])), full);
@@ -530,11 +579,21 @@ test("a skill switched off for a workspace leaves the model's view but still run
   h.workspaces.set("one", { ...workspace("one"), disabledSkills: ["review"] });
   const after = await h.registry.snapshot("one");
 
-  assert.notEqual(after.fingerprint, before.fingerprint, "a changed off-list replaces the cached snapshot");
-  assert.deepEqual(modelInvocableSkills(after).map(({ name }) => name), ["Deploy"]);
+  assert.notEqual(
+    after.fingerprint,
+    before.fingerprint,
+    "a changed off-list replaces the cached snapshot",
+  );
+  assert.deepEqual(
+    modelInvocableSkills(after).map(({ name }) => name),
+    ["Deploy"],
+  );
   const [skillTool] = buildSkillTools(after);
   await assert.rejects(skillTool!.execute("call", { name: "Review" }), /No skill named "Review"/u);
-  assert.deepEqual(piResourcesForSkillSnapshot(after).skills?.map(({ name }) => name), ["Deploy"]);
+  assert.deepEqual(
+    piResourcesForSkillSnapshot(after).skills?.map(({ name }) => name),
+    ["Deploy"],
+  );
   assert.doesNotMatch(formatAvailableSkills(after) ?? "", /<name>Review<\/name>/u);
   const review = after.catalog.find(({ name }) => name === "Review")!;
   assert.equal((await h.registry.resolveFresh("one", review.invocationId)).name, "Review");
@@ -549,5 +608,7 @@ test("a skill switched off for a workspace leaves the model's view but still run
   );
   // Other workspaces keep the skill.
   h.workspaces.set("two", workspace("two"));
-  assert.ok(modelInvocableSkills(await h.registry.snapshot("two")).some(({ name }) => name === "Review"));
+  assert.ok(
+    modelInvocableSkills(await h.registry.snapshot("two")).some(({ name }) => name === "Review"),
+  );
 });

@@ -100,7 +100,9 @@ export interface LinuxPackageInstall {
  * person, and the tools to install a newer package exist. Returns the package
  * format and its helper, or null when updates belong to the person.
  */
-export function inspectLinuxPackage(runtime: LinuxPackageUpdateRuntime): LinuxPackageInstall | null {
+export function inspectLinuxPackage(
+  runtime: LinuxPackageUpdateRuntime,
+): LinuxPackageInstall | null {
   try {
     // An AppImage that happens to carry a package-type file is never a distro install.
     if (runtime.appImage) return null;
@@ -123,14 +125,16 @@ export function inspectLinuxPackage(runtime: LinuxPackageUpdateRuntime): LinuxPa
     if (!ancestorsProtected(installDir, systemUid)) return null;
     const config = lstatSync(path.join(resources, "app-update.yml"));
     if (!config.isFile() || config.size === 0 || config.size > 65_536) return null;
-    const needed = kind === "deb"
-      ? [tools.aptGet, tools.dpkgDeb, tools.dpkgQuery]
-      : [tools.dnf, tools.rpm];
+    const needed =
+      kind === "deb" ? [tools.aptGet, tools.dpkgDeb, tools.dpkgQuery] : [tools.dnf, tools.rpm];
     // The person approves the install in the desktop's own password prompt.
     if (runtime.uid !== 0) needed.push(tools.pkexec);
     if (!needed.every(isExecutableFile)) return null;
     if (kind === "deb") {
-      const owned = readFileSync(path.join(runtime.dpkgInfoDir ?? "/var/lib/dpkg/info", `${LINUX_PACKAGE_NAME}.list`), "utf8");
+      const owned = readFileSync(
+        path.join(runtime.dpkgInfoDir ?? "/var/lib/dpkg/info", `${LINUX_PACKAGE_NAME}.list`),
+        "utf8",
+      );
       if (!owned.split("\n").includes(executable)) return null;
     }
     return { kind, helper };
@@ -154,12 +158,17 @@ export type CommandRunner = (file: string, args: readonly string[]) => Promise<C
 
 export const runCommand: CommandRunner = (file, args) =>
   new Promise((resolve) => {
-    execFile(file, [...args], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024, env: { ...process.env, LC_ALL: "C" } }, (error, stdout, stderr) => {
-      // A non-zero exit carries its numeric code; a spawn failure carries a string such as ENOENT.
-      const exit = (error as { code?: unknown } | null)?.code;
-      const code = error ? (typeof exit === "number" ? exit : null) : 0;
-      resolve({ code, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
-    });
+    execFile(
+      file,
+      [...args],
+      { encoding: "utf8", maxBuffer: 4 * 1024 * 1024, env: { ...process.env, LC_ALL: "C" } },
+      (error, stdout, stderr) => {
+        // A non-zero exit carries its numeric code; a spawn failure carries a string such as ENOENT.
+        const exit = (error as { code?: unknown } | null)?.code;
+        const code = error ? (typeof exit === "number" ? exit : null) : 0;
+        resolve({ code, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
+      },
+    );
   });
 
 export type LinuxPackageInstallOutcome = "installed" | "cancelled" | "failed";
@@ -203,22 +212,32 @@ function tail(text: string): string {
  * package name and version before apt-get or dnf sees it. The installed
  * version is read back before this reports success.
  */
-export async function installLinuxPackageUpdate(options: LinuxPackageInstallOptions): Promise<LinuxPackageInstallOutcome> {
+export async function installLinuxPackageUpdate(
+  options: LinuxPackageInstallOptions,
+): Promise<LinuxPackageInstallOutcome> {
   const tools = options.tools ?? LINUX_PACKAGE_TOOLS;
   const run = options.run ?? runCommand;
   const log = options.log ?? (() => {});
-  if (!/^[A-Za-z0-9+/]{86}==$/u.test(options.sha512) || !/^\d+\.\d+\.\d+$/u.test(options.version) || !path.isAbsolute(options.installer)) {
+  if (
+    !/^[A-Za-z0-9+/]{86}==$/u.test(options.sha512) ||
+    !/^\d+\.\d+\.\d+$/u.test(options.version) ||
+    !path.isAbsolute(options.installer)
+  ) {
     return "failed";
   }
   const install = inspectLinuxPackage(options.runtime);
   if (!install || install.kind !== options.kind) {
-    log("The installed package or its update helper is no longer protected; update it with your package manager.");
+    log(
+      "The installed package or its update helper is no longer protected; update it with your package manager.",
+    );
     return "failed";
   }
   const sha512Hex = Buffer.from(options.sha512, "base64").toString("hex");
   const command = [install.helper, options.kind, options.installer, sha512Hex, options.version];
   const elevated = options.uid === 0;
-  const result = elevated ? await run(command[0]!, command.slice(1)) : await run(tools.pkexec, command);
+  const result = elevated
+    ? await run(command[0]!, command.slice(1))
+    : await run(tools.pkexec, command);
   // pkexec exits 126 when the person closes the password prompt.
   if (!elevated && result.code === 126) return "cancelled";
   if (result.code === 3) {
@@ -226,13 +245,17 @@ export async function installLinuxPackageUpdate(options: LinuxPackageInstallOpti
     return "failed";
   }
   if (result.code !== 0) {
-    log(`The package manager could not install the update (exit ${result.code ?? "signal"}): ${tail(result.stderr || result.stdout)}`);
+    log(
+      `The package manager could not install the update (exit ${result.code ?? "signal"}): ${tail(result.stderr || result.stdout)}`,
+    );
     return "failed";
   }
   const [checkFile, checkArgs] = installedVersion(options.kind, tools);
   const installed = await run(checkFile, checkArgs);
   if (installed.code !== 0 || installed.stdout.trim() !== options.version) {
-    log(`After installing, the system reports ${LINUX_PACKAGE_NAME} ${installed.stdout.trim() || "missing"}.`);
+    log(
+      `After installing, the system reports ${LINUX_PACKAGE_NAME} ${installed.stdout.trim() || "missing"}.`,
+    );
     return "failed";
   }
   return "installed";

@@ -16,10 +16,7 @@ export interface DockIconSurface {
  * list. Startup restores the saved icon right after the window opens, so an
  * unconditional `show()` made Aiden hide itself on some launches.
  */
-export async function applyDockIcon(
-  dock: DockIconSurface,
-  icon: unknown,
-): Promise<void> {
+export async function applyDockIcon(dock: DockIconSurface, icon: unknown): Promise<void> {
   dock.setIcon(icon);
   if (!dock.isVisible()) await dock.show();
 }

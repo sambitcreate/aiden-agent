@@ -24,7 +24,6 @@ export function compactSidebarAutoFocusIntent(
     return null;
   }
 
-  const resumesCoveredSidebar =
-    previous.compact && previous.expanded && previous.contentModalOpen;
+  const resumesCoveredSidebar = previous.compact && previous.expanded && previous.contentModalOpen;
   return resumesCoveredSidebar ? "preserve-current" : "first-control";
 }

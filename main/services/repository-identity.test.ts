@@ -66,14 +66,22 @@ test("relative paths are POSIX inside the repository and absent outside it", () 
 });
 
 test("the primary remote is origin, else the only remote", () => {
-  const fetchLine = (name: string, url: string) => `${name}\t${url} (fetch)\n${name}\t${url} (push)\n`;
+  const fetchLine = (name: string, url: string) =>
+    `${name}\t${url} (fetch)\n${name}\t${url} (push)\n`;
   assert.equal(
-    primaryRemoteUrl(fetchLine("upstream", "https://a.example/x/y") + fetchLine("origin", "git@b.example:o/r.git")),
+    primaryRemoteUrl(
+      fetchLine("upstream", "https://a.example/x/y") + fetchLine("origin", "git@b.example:o/r.git"),
+    ),
     "git@b.example:o/r.git",
   );
-  assert.equal(primaryRemoteUrl(fetchLine("fork", "https://a.example/x/y")), "https://a.example/x/y");
   assert.equal(
-    primaryRemoteUrl(fetchLine("fork", "https://a.example/x/y") + fetchLine("upstream", "https://b.example/x/y")),
+    primaryRemoteUrl(fetchLine("fork", "https://a.example/x/y")),
+    "https://a.example/x/y",
+  );
+  assert.equal(
+    primaryRemoteUrl(
+      fetchLine("fork", "https://a.example/x/y") + fetchLine("upstream", "https://b.example/x/y"),
+    ),
     undefined,
   );
   assert.equal(primaryRemoteUrl(""), undefined);

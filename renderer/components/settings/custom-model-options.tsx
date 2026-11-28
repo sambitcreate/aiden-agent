@@ -1,15 +1,38 @@
 import * as React from "react";
 import {
-  Button, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem,
-  Field, FieldSet, Input, Select, SelectContent, SelectItem,
-  SelectTrigger, SelectValue, Switch, Text,
+  Button,
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  Field,
+  FieldSet,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Switch,
+  Text,
 } from "../ui";
 import type { ModelInfo, ProviderModelMetadata } from "../../lib/types";
-import { customModelThinkingLevels, type CustomModelOptions } from "../../shared/custom-model-options";
-import { GENERATION_THINKING_LEVELS, type GenerationThinkingLevel } from "../../shared/generation-thinking";
+import {
+  customModelThinkingLevels,
+  type CustomModelOptions,
+} from "../../shared/custom-model-options";
+import {
+  GENERATION_THINKING_LEVELS,
+  type GenerationThinkingLevel,
+} from "../../shared/generation-thinking";
 
 const effortLabels: Record<GenerationThinkingLevel, string> = {
-  off: "None", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max",
+  off: "None",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max",
 };
 
 export function CustomModelOptionsEditor({
@@ -49,9 +72,7 @@ export function CustomModelOptionsEditor({
           <Button
             size="small"
             disabled={
-              disabled ||
-              !modelId.trim() ||
-              (!modelsStale && models.includes(modelId.trim()))
+              disabled || !modelId.trim() || (!modelsStale && models.includes(modelId.trim()))
             }
             onClick={() => {
               onAdd(modelId.trim());
@@ -63,9 +84,8 @@ export function CustomModelOptionsEditor({
         </div>
       </Field>
       <Text variant="small" color="tertiary" as="p">
-        Enable only the capabilities your server supports. Image and reasoning
-        controls apply to this connection, not a similarly named public model.
-        Changes apply when you save.
+        Enable only the capabilities your server supports. Image and reasoning controls apply to
+        this connection, not a similarly named public model. Changes apply when you save.
       </Text>
       {models.map((id) => {
         const overrides = metadata[id]?.overrides ?? {};
@@ -80,9 +100,13 @@ export function CustomModelOptionsEditor({
             <summary className="cursor-pointer break-words px-4 py-3 text-small-strong text-primary">
               {metadata[id]?.name ?? info?.[id]?.name ?? id}
               <Text as="span" variant="small" color="tertiary" className="mt-1 block font-normal">
-                {effective.vision === true && overrides.maxImages !== 0 ? "Images enabled" : "Text only"}
+                {effective.vision === true && overrides.maxImages !== 0
+                  ? "Images enabled"
+                  : "Text only"}
                 {effective.reasoning === true ? " · Reasoning" : ""}
-                {overrides.contextLength ? ` · ${new Intl.NumberFormat().format(overrides.contextLength)} tokens` : ""}
+                {overrides.contextLength
+                  ? ` · ${new Intl.NumberFormat().format(overrides.contextLength)} tokens`
+                  : ""}
               </Text>
             </summary>
             <FieldSet className="mb-0">
@@ -98,11 +122,14 @@ export function CustomModelOptionsEditor({
                 <Field key={key} label={label}>
                   <Switch
                     aria-label={`${id}: ${label}`}
-                    checked={effective[key] === true && (key !== "vision" || overrides.maxImages !== 0)}
+                    checked={
+                      effective[key] === true && (key !== "vision" || overrides.maxImages !== 0)
+                    }
                     disabled={disabled}
                     onCheckedChange={(checked) => {
                       const next = { ...overrides, [key]: checked };
-                      if (key === "vision" && checked && next.maxImages === 0) delete next.maxImages;
+                      if (key === "vision" && checked && next.maxImages === 0)
+                        delete next.maxImages;
                       if (key === "reasoning" && !checked) {
                         delete next.effortControl;
                         delete next.effortLevels;
@@ -121,8 +148,10 @@ export function CustomModelOptionsEditor({
                   disabled={disabled || !supportsEffortControl}
                   onValueChange={(value) => {
                     const next = { ...overrides };
-                    if (value === "none") { delete next.effortControl; delete next.effortLevels; }
-                    else if (value === "openai" || value === "glm") {
+                    if (value === "none") {
+                      delete next.effortControl;
+                      delete next.effortLevels;
+                    } else if (value === "openai" || value === "glm") {
                       next.effortControl = value;
                       next.reasoning = true;
                     }
@@ -130,7 +159,13 @@ export function CustomModelOptionsEditor({
                   }}
                 >
                   <SelectTrigger aria-label={`${id}: Effort request format`}>
-                    <SelectValue>{overrides.effortControl === "glm" ? "GLM / vLLM" : overrides.effortControl === "openai" ? "OpenAI-compatible" : "Not configured"}</SelectValue>
+                    <SelectValue>
+                      {overrides.effortControl === "glm"
+                        ? "GLM / vLLM"
+                        : overrides.effortControl === "openai"
+                          ? "OpenAI-compatible"
+                          : "Not configured"}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">Not configured</SelectItem>
@@ -151,7 +186,9 @@ export function CustomModelOptionsEditor({
                       disabled={disabled || !supportsEffortControl || !overrides.effortControl}
                       className="h-auto min-h-7 max-w-full whitespace-normal py-1 text-left"
                     >
-                      {effortLevels.length ? effortLevels.map((level) => effortLabels[level]).join(", ") : "Select levels"}
+                      {effortLevels.length
+                        ? effortLevels.map((level) => effortLabels[level]).join(", ")
+                        : "Select levels"}
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
@@ -160,11 +197,16 @@ export function CustomModelOptionsEditor({
                         key={level}
                         checked={effortLevels.includes(level)}
                         onSelect={(event) => event.preventDefault()}
-                        onCheckedChange={(checked) => onChange(id, {
-                          ...overrides,
-                          effortLevels: GENERATION_THINKING_LEVELS.filter((candidate) =>
-                            candidate === level ? checked === true : effortLevels.includes(candidate)),
-                        })}
+                        onCheckedChange={(checked) =>
+                          onChange(id, {
+                            ...overrides,
+                            effortLevels: GENERATION_THINKING_LEVELS.filter((candidate) =>
+                              candidate === level
+                                ? checked === true
+                                : effortLevels.includes(candidate),
+                            ),
+                          })
+                        }
                       >
                         {effortLabels[level]}
                       </DropdownMenuCheckboxItem>

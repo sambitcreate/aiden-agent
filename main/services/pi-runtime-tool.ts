@@ -16,22 +16,41 @@ export type PiRuntimeTool = AgentTool & {
 };
 
 const CODEMODE_WORKSPACE_TOOLS = new Set([
-  "read_file", "list_dir", "glob", "grep", "write_file", "edit_file", "run_command",
+  "read_file",
+  "list_dir",
+  "glob",
+  "grep",
+  "write_file",
+  "edit_file",
+  "run_command",
 ]);
 
 export function isPiCodemodeCallable(tool: AgentTool): boolean {
   const admission = (tool as PiRuntimeTool).codemode;
-  return tool.name !== "codemode" && admission !== false &&
-    (admission === true || CODEMODE_WORKSPACE_TOOLS.has(tool.name));
+  return (
+    tool.name !== "codemode" &&
+    admission !== false &&
+    (admission === true || CODEMODE_WORKSPACE_TOOLS.has(tool.name))
+  );
 }
 
 /** Apply only after host/model exclusions. Without codemode, tools stay directly declared. */
-export function partitionPiCodemodeTools(tools: readonly AgentTool[]): { declared: AgentTool[]; deferred: AgentTool[] } {
+export function partitionPiCodemodeTools(tools: readonly AgentTool[]): {
+  declared: AgentTool[];
+  deferred: AgentTool[];
+} {
   const enabled = tools.some((tool) => tool.name === "codemode");
   const declared: AgentTool[] = [];
   const deferred: AgentTool[] = [];
   for (const tool of tools) {
-    (enabled && (tool as PiRuntimeTool).codemode === true && (tool as PiRuntimeTool).alwaysDeclared !== true && Boolean((tool as PiDiscoverableTool).discovery) && isPiCodemodeCallable(tool) ? deferred : declared).push(tool);
+    (enabled &&
+    (tool as PiRuntimeTool).codemode === true &&
+    (tool as PiRuntimeTool).alwaysDeclared !== true &&
+    Boolean((tool as PiDiscoverableTool).discovery) &&
+    isPiCodemodeCallable(tool)
+      ? deferred
+      : declared
+    ).push(tool);
   }
   return { declared, deferred };
 }

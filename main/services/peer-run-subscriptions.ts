@@ -34,8 +34,7 @@ export function peerRunTarget(value: unknown): PeerRunTarget {
   if (keys.length !== 1) throw new Error("Invalid run target.");
   if (typeof record.chatId === "string" && CHAT_ID.test(record.chatId))
     return { chatId: record.chatId };
-  if (typeof record.runId === "string" && RUN_ID.test(record.runId))
-    return { runId: record.runId };
+  if (typeof record.runId === "string" && RUN_ID.test(record.runId)) return { runId: record.runId };
   throw new Error("Invalid run target.");
 }
 
@@ -220,7 +219,8 @@ export class PeerRunStream {
       payload: {
         reason: "gap",
         ...this.transcript.payload(),
-        state: approvals.size > 0 ? "needs_approval" : questions.size > 0 ? "needs_input" : "working",
+        state:
+          approvals.size > 0 ? "needs_approval" : questions.size > 0 ? "needs_input" : "working",
         approvals: [...approvals.values()],
         questions: [...questions.values()],
         nextSequence: this.floor + 1,

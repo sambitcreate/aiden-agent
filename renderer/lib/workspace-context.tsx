@@ -35,7 +35,11 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   listRef.current = list;
   const lastPersistedWorkspaceIdRef = React.useRef<string | undefined>(undefined);
   const persistLastWorkspace = React.useCallback((workspace: Workspace | undefined) => {
-    if (!workspace || isNoWorkspace(workspace) || lastPersistedWorkspaceIdRef.current === workspace.id) {
+    if (
+      !workspace ||
+      isNoWorkspace(workspace) ||
+      lastPersistedWorkspaceIdRef.current === workspace.id
+    ) {
       return;
     }
     const targetId = workspace.id;
@@ -47,11 +51,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const select = React.useCallback((id: string) => {
-    setActiveId(id);
-    localStorage.setItem(STORAGE_KEY, id);
-    persistLastWorkspace(listRef.current.find((w) => w.id === id));
-  }, [persistLastWorkspace]);
+  const select = React.useCallback(
+    (id: string) => {
+      setActiveId(id);
+      localStorage.setItem(STORAGE_KEY, id);
+      persistLastWorkspace(listRef.current.find((w) => w.id === id));
+    },
+    [persistLastWorkspace],
+  );
 
   // Keep the active id pointing at a real workspace as the list loads/changes.
   // Deleting a No workspace chat releases its hidden workspace: the selection

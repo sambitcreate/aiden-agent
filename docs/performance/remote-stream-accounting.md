@@ -13,9 +13,9 @@ Aggregate pressure keeps the existing oldest-terminal eviction and largest-journ
 Run `node_modules/.bin/tsx docs/performance/remote-stream-accounting-benchmark.mts "$PWD" /tmp/stream-accounting.json` in either checkout. The same script ran before and after, with no persistence callback or subscribers, one warmup plus five measured trials, and 64 small appends. Runtime: Node v26.10.0, Darwin 27.0.0 arm64. Inputs are synthetic; no application state or provider traffic is used.
 
 | Prior retained chunks | Snapshot bytes before → after appends (identical both revisions) | Full snapshot calls before → after | Median elapsed before → after |
-| --- | --- | --- | --- |
-| 0 | 368 → 11,561 | 64 → 0 | 2.767 → 0.212 ms |
-| 32 × 128 KiB | 4,200,168 → 4,211,361 | 64 → 0 | 93.925 → 0.223 ms |
+| --------------------- | ---------------------------------------------------------------- | ---------------------------------- | ----------------------------- |
+| 0                     | 368 → 11,561                                                     | 64 → 0                             | 2.767 → 0.212 ms              |
+| 32 × 128 KiB          | 4,200,168 → 4,211,361                                            | 64 → 0                             | 93.925 → 0.223 ms             |
 
 Before samples (ms): `[2.769, 2.763875, 2.637083, 2.766583, 2.864084]`; retained-history samples `[93.924875, 90.031208, 93.034, 104.148833, 96.301417]`. After samples: `[0.248875, 0.248666, 0.212458, 0.210042, 0.1905]`; retained-history samples `[0.260792, 0.222958, 0.221417, 0.216959, 0.262041]`.
 

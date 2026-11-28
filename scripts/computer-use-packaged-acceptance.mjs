@@ -706,9 +706,13 @@ async function runAcceptance() {
     console.log(`\nPackaged Computer Use acceptance is running in: ${temporary}`);
     console.log("1. In Settings → Computers & VMs → Computer Use, turn on the global beta gate.");
     console.log("2. Request access if macOS reports missing permissions.");
-    console.log("3. Return to the acceptance chat and send: “Run the packaged Computer Use acceptance sequence.”");
+    console.log(
+      "3. Return to the acceptance chat and send: “Run the packaged Computer Use acceptance sequence.”",
+    );
     console.log("4. On the Computer Use access card, choose Allow for this chat.");
-    console.log("5. The type, save-key and stale click run without further cards; the stale click must be rejected.");
+    console.log(
+      "5. The type, save-key and stale click run without further cards; the stale click must be rejected.",
+    );
     console.log("6. When the 30-second wait starts, press Stop but keep Aiden open.");
     console.log("7. Quit Aiden normally only after this terminal confirms Stop teardown.");
     console.log("No model data leaves this Mac; the provider listens only on 127.0.0.1.");
@@ -735,9 +739,7 @@ async function runAcceptance() {
     }
     const gateEvidence = model.gateEvidence();
     if (!gateEvidence?.globalEnabled || !gateEvidence?.accessGranted) {
-      throw new Error(
-        "The operator did not turn on Computer Use and allow the acceptance chat.",
-      );
+      throw new Error("The operator did not turn on Computer Use and allow the acceptance chat.");
     }
     const resolvedTarget = model.target();
     if (!resolvedTarget || resolvedTarget.pid !== textEditProcess.pid) {

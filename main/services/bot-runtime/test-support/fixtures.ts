@@ -32,15 +32,17 @@ export interface RecordedDeps extends BotExtensionDeps {
   recordCalls: BotRuleHandoffRecord[];
 }
 
-export function recordingDeps(options: {
-  sections?: string[];
-  tools?: BotToolEntry[];
-  policy?: (toolName: string) => BotPolicyDecision;
-  approve?: (request: BotApprovalRequest) => Promise<"allow" | "deny">;
-  /** Answers rule hand-off cards. Absent: no one to ask. */
-  handoff?: (request: BotRuleHandoffRequest) => Promise<BotHandoffAnswer>;
-  readmit?: () => BotReadmission;
-} = {}): RecordedDeps {
+export function recordingDeps(
+  options: {
+    sections?: string[];
+    tools?: BotToolEntry[];
+    policy?: (toolName: string) => BotPolicyDecision;
+    approve?: (request: BotApprovalRequest) => Promise<"allow" | "deny">;
+    /** Answers rule hand-off cards. Absent: no one to ask. */
+    handoff?: (request: BotRuleHandoffRequest) => Promise<BotHandoffAnswer>;
+    readmit?: () => BotReadmission;
+  } = {},
+): RecordedDeps {
   const deps: RecordedDeps = {
     approvals: [],
     readmissions: 0,
@@ -57,7 +59,12 @@ export function recordingDeps(options: {
     requestApproval: async (request) => {
       deps.approvals.push(request);
       const answer = options.approve ? await options.approve(request) : "allow";
-      return { id: request.waitId, authorizationFingerprint: request.authorizationFingerprint, answer, source: "person" };
+      return {
+        id: request.waitId,
+        authorizationFingerprint: request.authorizationFingerprint,
+        answer,
+        source: "person",
+      };
     },
     ...(options.handoff === undefined
       ? {}
@@ -81,8 +88,11 @@ export function recordingDeps(options: {
 /** An Aiden-shaped tool that records each execution. */
 export function countingTool(
   name: string,
-  behaviour: (params: { text: string }, signal: AbortSignal | undefined, onUpdate?: Parameters<AgentTool["execute"]>[3]) => Promise<string> = async (params) =>
-    `ran ${params.text}`,
+  behaviour: (
+    params: { text: string },
+    signal: AbortSignal | undefined,
+    onUpdate?: Parameters<AgentTool["execute"]>[3],
+  ) => Promise<string> = async (params) => `ran ${params.text}`,
 ): AgentTool & { executions: Array<{ text: string }> } {
   const executions: Array<{ text: string }> = [];
   return {

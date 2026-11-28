@@ -79,7 +79,12 @@ test("auto steers a working chat and reports what the run did with it", async ()
   assert.equal((await working.controller.send("Use staging", "auto")).status, "steered");
   assert.deepEqual(working.calls, ["steer:Use staging"]);
 
-  working.setSteerReceipt({ admitted: false, committed: true, reason: "run_not_active", messageId: "m2" });
+  working.setSteerReceipt({
+    admitted: false,
+    committed: true,
+    reason: "run_not_active",
+    messageId: "m2",
+  });
   assert.equal((await working.controller.send("Too late", "steer")).status, "saved_not_read");
 
   // A hook refused it: saved and marked, so Live must not say the chat has it.
@@ -94,7 +99,10 @@ test("auto steers a working chat and reports what the run did with it", async ()
   assert.equal((refused.error as { code: string }).code, "steer_rejected");
 
   working.setSteerReceipt(null);
-  assert.equal(((await working.controller.send("Ended", "steer")).error as { code: string }).code, "cannot_steer");
+  assert.equal(
+    ((await working.controller.send("Ended", "steer")).error as { code: string }).code,
+    "cannot_steer",
+  );
 });
 
 test("a chat that isn't ready, or whose first message is saving, sends nothing", async () => {
@@ -116,7 +124,9 @@ test("a send that fails is reported with a fixed message and shown in the window
     ok: false,
     error: { code: "send_failed", message: "Aiden couldn't send the message." },
   });
-  assert.deepEqual(errors, ["Wait for the previous response to finish saving before sending again."]);
+  assert.deepEqual(errors, [
+    "Wait for the previous response to finish saving before sending again.",
+  ]);
 });
 
 test("queue mode on a working chat queues behind the reply", async () => {
@@ -133,7 +143,12 @@ test("stop is the composer's Stop, and says when nothing is running", () => {
   assert.deepEqual(working.controller.stop(), { ok: true, status: "stopping", title: "Fix login" });
   assert.deepEqual(working.calls, ["stop"]);
   const queued = pane({ busy: true, hasQueued: true });
-  assert.deepEqual(queued.controller.stop(), { ok: true, status: "stopping", title: "Fix login", queuePaused: true });
+  assert.deepEqual(queued.controller.stop(), {
+    ok: true,
+    status: "stopping",
+    title: "Fix login",
+    queuePaused: true,
+  });
   const starting = pane({ busy: true, stop: () => false });
   assert.equal((starting.controller.stop().error as { code: string }).code, "cannot_stop");
 });
@@ -170,7 +185,10 @@ test("a paused queue is never fed: Live refuses instead of leaving the message w
   const result = await idleWithQueue.controller.send("Next step", "auto");
   assert.equal((result.error as { code: string }).code, "queue_paused");
   const busy = pane({ busy: true, queuePaused: true });
-  assert.equal(((await busy.controller.send("Later", "queue")).error as { code: string }).code, "queue_paused");
+  assert.equal(
+    ((await busy.controller.send("Later", "queue")).error as { code: string }).code,
+    "queue_paused",
+  );
   assert.deepEqual([...idleWithQueue.calls, ...busy.calls], []);
   // An idle chat with nothing queued still sends directly.
   const idle = pane({ queuePaused: true });
@@ -180,7 +198,9 @@ test("a paused queue is never fed: Live refuses instead of leaving the message w
 test("an unconfirmed send or steer is outcome_unknown, so Live never resends it", async () => {
   const send = pane({
     send: async () => {
-      throw new Error(`Error invoking remote method: ${appendReconciliationFailureMessage("current")}`);
+      throw new Error(
+        `Error invoking remote method: ${appendReconciliationFailureMessage("current")}`,
+      );
     },
   });
   const sent = await send.controller.send("Hello", "auto");
@@ -205,14 +225,20 @@ test("only a loaded regular chat is reachable: never Bot, Assistant or feature c
   assert.equal(liveChatReachable({ workspaceId: "ws-1" }), true);
   assert.equal(liveChatReachable({ workspaceId: "ws-1", botId: "bot-1" }), false);
   assert.equal(liveChatReachable({ workspaceId: ASSISTANT_WORKSPACE_ID }), false);
-  assert.equal(liveChatReachable({ workspaceId: "ws-1", owner: { kind: "design-project", projectId: "p1" } }), false);
+  assert.equal(
+    liveChatReachable({ workspaceId: "ws-1", owner: { kind: "design-project", projectId: "p1" } }),
+    false,
+  );
 });
 
 test("the pane registers its controller only while its chat is reachable", () => {
   const base = pane().state;
-  const { rerender, unmount } = renderHook((state: LiveChatPaneState) => useLiveChatController(state), {
-    initialProps: { ...base, reachable: false },
-  });
+  const { rerender, unmount } = renderHook(
+    (state: LiveChatPaneState) => useLiveChatController(state),
+    {
+      initialProps: { ...base, reachable: false },
+    },
+  );
   assert.equal(liveChatControl.current(), null, "a Bot chat or an unloaded chat has no controller");
   rerender({ ...base, reachable: true });
   assert.equal(liveChatControl.current()?.chatId, "chat-1");

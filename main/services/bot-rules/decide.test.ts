@@ -10,10 +10,16 @@ import {
   type BotRuleBehavior,
   type BotRuled,
 } from "../../../renderer/shared/bot-rules.js";
-import { classifyBotAction, type BotActionClassification, type BotClassifiableAction } from "./classify.js";
+import {
+  classifyBotAction,
+  type BotActionClassification,
+  type BotClassifiableAction,
+} from "./classify.js";
 import { botBaselineOf, decideBotRule } from "./decide.js";
 
-const corpus = JSON.parse(readFileSync(new URL("./fixtures/actions.json", import.meta.url), "utf8")) as {
+const corpus = JSON.parse(
+  readFileSync(new URL("./fixtures/actions.json", import.meta.url), "utf8"),
+) as {
   rows: Array<{ id: string; action: BotClassifiableAction; customRules?: BotRule[] }>;
 };
 
@@ -29,14 +35,19 @@ function* builtInCombinations(): Generator<BotRule[]> {
     for (const actionClass of BOT_CHANGEABLE_ACTION_CLASSES) {
       const state = STATES[rest % STATES.length]!;
       rest = Math.floor(rest / STATES.length);
-      if (state !== "absent") rules.push({ id: `default.${actionClass}`, actionClass, behavior: state, locked: false });
+      if (state !== "absent")
+        rules.push({ id: `default.${actionClass}`, actionClass, behavior: state, locked: false });
     }
     yield rules;
   }
 }
 
 function classification(classes: string[], customRuleIds: string[] = []): BotActionClassification {
-  return { classes: new Set(classes) as BotActionClassification["classes"], customRuleIds: new Set(customRuleIds), evidence: [] };
+  return {
+    classes: new Set(classes) as BotActionClassification["classes"],
+    customRuleIds: new Set(customRuleIds),
+    evidence: [],
+  };
 }
 
 test("rules only tighten: every baseline, every built-in combination, custom on and off, every corpus row", () => {
@@ -73,7 +84,10 @@ test("rules only tighten: every baseline, every built-in combination, custom on 
           } else {
             assert.equal(ruled, "ask", where);
           }
-          if (row.classification.classes.has("credentials") || row.classification.classes.has("money")) {
+          if (
+            row.classification.classes.has("credentials") ||
+            row.classification.classes.has("money")
+          ) {
             assert.equal(ruled, "hand_off", `${where}: a locked class must hand off`);
             assert.equal(rule!.locked, true, `${where}: the locked rule wins the tie`);
           }
@@ -87,7 +101,9 @@ test("rules only tighten: every baseline, every built-in combination, custom on 
 test("locked rules hand off even when the caller's list drops or weakens them", () => {
   const card = classification(["money"]);
   assert.equal(decideBotRule("allowed", [], card).ruled, "hand_off");
-  const weakened: BotRule[] = [{ id: "locked.money", actionClass: "money", behavior: "ask", locked: true }];
+  const weakened: BotRule[] = [
+    { id: "locked.money", actionClass: "money", behavior: "ask", locked: true },
+  ];
   const decision = decideBotRule("ask", weakened, card);
   assert.equal(decision.ruled, "hand_off");
   assert.equal(decision.rule?.id, "locked.money");
@@ -123,11 +139,27 @@ test("the baseline is today's approval decision", () => {
 });
 
 test("all matching asks are exposed without changing the displayed winner", () => {
-  const custom: BotRule = { id: "custom.travel", text: "book a table", behavior: "ask", locked: false };
-  const decision = decideBotRule("ask", [custom, ...BOT_DEFAULT_RULES], classification(["purchase", "communicate"], [custom.id]));
+  const custom: BotRule = {
+    id: "custom.travel",
+    text: "book a table",
+    behavior: "ask",
+    locked: false,
+  };
+  const decision = decideBotRule(
+    "ask",
+    [custom, ...BOT_DEFAULT_RULES],
+    classification(["purchase", "communicate"], [custom.id]),
+  );
   assert.equal(decision.rule?.id, "default.purchase");
-  assert.deepEqual(decision.allMatchingAsk.map(rule => rule.id).sort(), ["custom.travel", "default.communicate", "default.purchase"]);
+  assert.deepEqual(decision.allMatchingAsk.map((rule) => rule.id).sort(), [
+    "custom.travel",
+    "default.communicate",
+    "default.purchase",
+  ]);
   const locked = decideBotRule("ask", [custom], classification(["money"], [custom.id]));
   assert.equal(locked.rule?.id, "locked.money");
-  assert.deepEqual(locked.allMatchingAsk.map(rule => rule.id), [custom.id]);
+  assert.deepEqual(
+    locked.allMatchingAsk.map((rule) => rule.id),
+    [custom.id],
+  );
 });

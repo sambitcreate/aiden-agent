@@ -23,7 +23,9 @@ test("notice copy names the file, its size and what Aiden did", () => {
     "This workspace's AGENTS.md is 51 KB, over the 16 KB limit. Aiden is using the first 16 KB.",
   );
   assert.equal(
-    agentsInstructionNoticeMessage(notice({ scope: "global", kind: "skipped", sizeBytes: 600 * 1024 })),
+    agentsInstructionNoticeMessage(
+      notice({ scope: "global", kind: "skipped", sizeBytes: 600 * 1024 }),
+    ),
     "Your global AGENTS.md is 600 KB, too large to read. Aiden is responding without it.",
   );
 });

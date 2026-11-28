@@ -15,9 +15,15 @@ import {
 } from "./schema.js";
 
 /** A removed frame takes its comments with it. Returns the same list when none were on those frames. */
-export function commentsWithoutFrames(comments: readonly DesignComment[], removed: ReadonlySet<string>): DesignComment[] {
-  if (!comments.some((comment) => comment.frameId !== undefined && removed.has(comment.frameId))) return comments as DesignComment[];
-  return comments.filter((comment) => comment.frameId === undefined || !removed.has(comment.frameId));
+export function commentsWithoutFrames(
+  comments: readonly DesignComment[],
+  removed: ReadonlySet<string>,
+): DesignComment[] {
+  if (!comments.some((comment) => comment.frameId !== undefined && removed.has(comment.frameId)))
+    return comments as DesignComment[];
+  return comments.filter(
+    (comment) => comment.frameId === undefined || !removed.has(comment.frameId),
+  );
 }
 
 /** Where a new comment goes. */
@@ -60,13 +66,16 @@ const LABEL_TEXT_CHARS = 32;
 export function elementLabel(element: { tag: string; text: string }): string {
   const text = squash(element.text);
   if (!text) return element.tag;
-  const short = text.length > LABEL_TEXT_CHARS ? `${text.slice(0, LABEL_TEXT_CHARS - 1).trimEnd()}…` : text;
+  const short =
+    text.length > LABEL_TEXT_CHARS ? `${text.slice(0, LABEL_TEXT_CHARS - 1).trimEnd()}…` : text;
   return `${element.tag} "${short}"`;
 }
 
 /** What a comment is attached to: `Hero › h1 "Ship faster"`, `Hero`, or `Canvas`. */
 export function commentLabel(doc: DesignCanvas, comment: DesignComment): string {
-  const frame = comment.frameId ? doc.frames.find((entry) => entry.id === comment.frameId) : undefined;
+  const frame = comment.frameId
+    ? doc.frames.find((entry) => entry.id === comment.frameId)
+    : undefined;
   if (!frame) return "Canvas";
   return comment.anchor ? `${frame.title} › ${elementLabel(comment.anchor)}` : frame.title;
 }
@@ -86,7 +95,10 @@ export function addComment(
   if (doc.comments.length >= DESIGN_CANVAS_LIMITS.comments) return null;
   if (doc.comments.some((comment) => comment.id === input.id)) return null;
   const { place } = input;
-  const frame = place.frameId !== undefined ? doc.frames.find((entry) => entry.id === place.frameId) : undefined;
+  const frame =
+    place.frameId !== undefined
+      ? doc.frames.find((entry) => entry.id === place.frameId)
+      : undefined;
   if (place.frameId !== undefined && !frame) return null;
   const comment: DesignComment = {
     id: input.id,
@@ -99,7 +111,8 @@ export function addComment(
     createdAt: input.createdAt,
   };
   if (frame) comment.frameId = frame.id;
-  if (frame && place.frameId !== undefined && place.anchor) comment.anchor = { ...place.anchor, commentId: input.id };
+  if (frame && place.frameId !== undefined && place.anchor)
+    comment.anchor = { ...place.anchor, commentId: input.id };
   if (input.queued) comment.queued = true;
   if (input.marks && input.marks.length > 0) comment.marks = input.marks;
   return { ...doc, comments: [...doc.comments, comment] };
@@ -127,8 +140,10 @@ export function editComment(
   patch: { note?: string; marks?: DesignComment["marks"] },
 ): DesignCanvas {
   return updateOne(doc, id, (comment) => {
-    const note = patch.note === undefined ? comment.note : patch.note.slice(0, DESIGN_CANVAS_LIMITS.noteChars);
-    const marksChanged = "marks" in patch && JSON.stringify(patch.marks) !== JSON.stringify(comment.marks);
+    const note =
+      patch.note === undefined ? comment.note : patch.note.slice(0, DESIGN_CANVAS_LIMITS.noteChars);
+    const marksChanged =
+      "marks" in patch && JSON.stringify(patch.marks) !== JSON.stringify(comment.marks);
     if (note === comment.note && !marksChanged) return comment;
     const next = { ...comment, note };
     if (marksChanged) {
@@ -164,7 +179,11 @@ export function queuedComments(doc: DesignCanvas): DesignComment[] {
 }
 
 /** Marks comments as sent to Aiden, and takes them out of the tray. */
-export function markCommentsSent(doc: DesignCanvas, ids: readonly string[], sentAt: string): DesignCanvas {
+export function markCommentsSent(
+  doc: DesignCanvas,
+  ids: readonly string[],
+  sentAt: string,
+): DesignCanvas {
   const wanted = new Set(ids);
   let changed = false;
   const comments = doc.comments.map((comment) => {
@@ -184,11 +203,16 @@ export function markCommentsSent(doc: DesignCanvas, ids: readonly string[], sent
  * edited meanwhile are kept; a comment that has moved on since (resolved,
  * reopened, sent again, or replied to by Aiden) is left as it is.
  */
-export function unmarkCommentsSent(doc: DesignCanvas, ids: readonly string[], sentAt: string): DesignCanvas {
+export function unmarkCommentsSent(
+  doc: DesignCanvas,
+  ids: readonly string[],
+  sentAt: string,
+): DesignCanvas {
   const wanted = new Set(ids);
   let changed = false;
   const comments = doc.comments.map((comment) => {
-    if (!wanted.has(comment.id) || comment.state !== "sent" || comment.sentAt !== sentAt) return comment;
+    if (!wanted.has(comment.id) || comment.state !== "sent" || comment.sentAt !== sentAt)
+      return comment;
     if (comment.reply && comment.reply.at >= sentAt) return comment;
     changed = true;
     const next: DesignComment = { ...comment, state: "open", queued: true };
@@ -211,7 +235,12 @@ export function resolveComment(doc: DesignCanvas, id: string, resolvedAt: string
  * Aiden's reply on a comment, shown under the person's note. A newer reply
  * replaces the last one; an empty reply changes nothing.
  */
-export function replyToComment(doc: DesignCanvas, id: string, text: string, at: string): DesignCanvas {
+export function replyToComment(
+  doc: DesignCanvas,
+  id: string,
+  text: string,
+  at: string,
+): DesignCanvas {
   const reply = text.trim().slice(0, DESIGN_CANVAS_LIMITS.replyChars);
   if (!reply) return doc;
   return updateOne(doc, id, (comment) =>
@@ -253,7 +282,8 @@ export function anchorScore(
   const now = squash(candidate.text).toLowerCase();
   if (was && now) {
     if (was === now) score += 2;
-    else if (Math.min(was.length, now.length) >= 4 && (was.includes(now) || now.includes(was))) score += 1;
+    else if (Math.min(was.length, now.length) >= 4 && (was.includes(now) || now.includes(was)))
+      score += 1;
   }
   if (anchor.tag.toLowerCase() === candidate.tag.toLowerCase()) score += 1;
   if (anchor.rect) {
@@ -269,10 +299,14 @@ export function anchorScore(
  * the source carries, by the same selector on the same tag, or by the best
  * fuzzy score of at least `DESIGN_ANCHOR_MATCH_SCORE`.
  */
-export function locateAnchor(anchor: DesignCommentAnchor, result: DesignLocateResult): DesignLocated {
+export function locateAnchor(
+  anchor: DesignCommentAnchor,
+  result: DesignLocateResult,
+): DesignLocated {
   if (result.byId) return { state: "anchored", element: result.byId };
   const exact = result.candidates.find(
-    (candidate) => candidate.selectorMatch && candidate.tag.toLowerCase() === anchor.tag.toLowerCase(),
+    (candidate) =>
+      candidate.selectorMatch && candidate.tag.toLowerCase() === anchor.tag.toLowerCase(),
   );
   if (exact) return { state: "anchored", element: exact };
   let best: (DesignPageElement & { selectorMatch: boolean }) | undefined;
@@ -284,7 +318,9 @@ export function locateAnchor(anchor: DesignCommentAnchor, result: DesignLocateRe
       bestScore = score;
     }
   }
-  return best && bestScore >= DESIGN_ANCHOR_MATCH_SCORE ? { state: "stale", element: best } : { state: "lost" };
+  return best && bestScore >= DESIGN_ANCHOR_MATCH_SCORE
+    ? { state: "stale", element: best }
+    : { state: "lost" };
 }
 
 /**
@@ -424,8 +460,13 @@ export function attachedDesignCommentCount(text: string): number {
  * element's markup when the page gave it), whether the frame is drawn light
  * or dark, and Aiden's own last reply.
  */
-export function describeComment(doc: DesignCanvas, comment: DesignComment): Record<string, unknown> {
-  const frame = comment.frameId ? doc.frames.find((entry) => entry.id === comment.frameId) : undefined;
+export function describeComment(
+  doc: DesignCanvas,
+  comment: DesignComment,
+): Record<string, unknown> {
+  const frame = comment.frameId
+    ? doc.frames.find((entry) => entry.id === comment.frameId)
+    : undefined;
   const page = doc.pages.find((entry) => entry.id === comment.pageId);
   const entry: Record<string, unknown> = {
     commentId: comment.id,
@@ -453,9 +494,9 @@ export function describeComment(doc: DesignCanvas, comment: DesignComment): Reco
     entry.at = { x: Math.round(comment.x), y: Math.round(comment.y), on: "canvas" };
   }
   if (comment.marks?.length) {
-    entry.marks = comment.marks.slice(0, BLOCK_MARKS).map((mark) =>
-      thin(mark.points, BLOCK_MARK_POINTS).map(([x, y]) => [round(x), round(y)]),
-    );
+    entry.marks = comment.marks
+      .slice(0, BLOCK_MARKS)
+      .map((mark) => thin(mark.points, BLOCK_MARK_POINTS).map(([x, y]) => [round(x), round(y)]));
   }
   if (comment.reply) entry.yourReply = comment.reply.text;
   return entry;
@@ -466,9 +507,11 @@ function blockText(comments: readonly DesignComment[], entries: Record<string, u
   return [
     "<attached-design-comments>",
     `Comments the person made on their design canvas. ${DESIGN_COMMENT_DATA_NOTE}`,
-    "Change only these elements unless told otherwise. When you edit an element a comment is about, add data-aiden-comment=\"<commentId>\" to it in the source and keep it on later edits. look says whether the frame is drawn light or dark.",
+    'Change only these elements unless told otherwise. When you edit an element a comment is about, add data-aiden-comment="<commentId>" to it in the source and keep it on later edits. look says whether the frame is drawn light or dark.',
     ...(entries.some((entry) => entry.picture)
-      ? ["picture names the attached image of that comment's spot; a comment without one has no picture."]
+      ? [
+          "picture names the attached image of that comment's spot; a comment without one has no picture.",
+        ]
       : []),
     ...(comments.some((comment) => comment.marks?.length)
       ? [

@@ -40,10 +40,7 @@
       "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
       "harnessMs": 523.5562090000001,
       "transformMs": 0.8641249999999445,
-      "transformDurations": [
-        0.5934169999999312,
-        0.27070800000001327
-      ],
+      "transformDurations": [0.5934169999999312, 0.27070800000001327],
       "peakRssKiB": 209968,
       "seedMessages": 2001,
       "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
@@ -82,15 +79,10 @@
         "04a5c6f76cc6b4cd8c0400a0380bac591ae2b74b8af11ef9efb5a2549e451851",
         "04960b5643d174b7d6ce9671d88c6d7509986fcd7561e9316e71c6b026f5db5f"
       ],
-      "summaryRequests": [
-        "929302ae7dc35333af4cc44058687320288ef092234857ceeb49561503de4292"
-      ],
+      "summaryRequests": ["929302ae7dc35333af4cc44058687320288ef092234857ceeb49561503de4292"],
       "summaryEvidence": [
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 1298,
           "containsUser": true,
           "containsToolEvidence": false,
@@ -159,10 +151,7 @@
       "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
       "harnessMs": 537.685167,
       "transformMs": 0.6388749999999845,
-      "transformDurations": [
-        0.4959999999999809,
-        0.14287500000000364
-      ],
+      "transformDurations": [0.4959999999999809, 0.14287500000000364],
       "peakRssKiB": 209392,
       "seedMessages": 2001,
       "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
@@ -201,15 +190,10 @@
         "04a5c6f76cc6b4cd8c0400a0380bac591ae2b74b8af11ef9efb5a2549e451851",
         "04960b5643d174b7d6ce9671d88c6d7509986fcd7561e9316e71c6b026f5db5f"
       ],
-      "summaryRequests": [
-        "929302ae7dc35333af4cc44058687320288ef092234857ceeb49561503de4292"
-      ],
+      "summaryRequests": ["929302ae7dc35333af4cc44058687320288ef092234857ceeb49561503de4292"],
       "summaryEvidence": [
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 1298,
           "containsUser": true,
           "containsToolEvidence": false,
@@ -278,10 +262,7 @@
       "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
       "harnessMs": 515.6397919999999,
       "transformMs": 0.5500409999999647,
-      "transformDurations": [
-        0.41041599999994105,
-        0.13962500000002365
-      ],
+      "transformDurations": [0.41041599999994105, 0.13962500000002365],
       "peakRssKiB": 208608,
       "seedMessages": 2001,
       "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
@@ -320,15 +301,10 @@
         "04a5c6f76cc6b4cd8c0400a0380bac591ae2b74b8af11ef9efb5a2549e451851",
         "04960b5643d174b7d6ce9671d88c6d7509986fcd7561e9316e71c6b026f5db5f"
       ],
-      "summaryRequests": [
-        "929302ae7dc35333af4cc44058687320288ef092234857ceeb49561503de4292"
-      ],
+      "summaryRequests": ["929302ae7dc35333af4cc44058687320288ef092234857ceeb49561503de4292"],
       "summaryEvidence": [
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 1298,
           "containsUser": true,
           "containsToolEvidence": false,
@@ -397,10 +373,7 @@
       "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
       "harnessMs": 540.582834,
       "transformMs": 0.8289999999999509,
-      "transformDurations": [
-        0.649332999999956,
-        0.17966699999999491
-      ],
+      "transformDurations": [0.649332999999956, 0.17966699999999491],
       "peakRssKiB": 209456,
       "seedMessages": 2001,
       "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
@@ -439,15 +412,10 @@
         "04a5c6f76cc6b4cd8c0400a0380bac591ae2b74b8af11ef9efb5a2549e451851",
         "04960b5643d174b7d6ce9671d88c6d7509986fcd7561e9316e71c6b026f5db5f"
       ],
-      "summaryRequests": [
-        "929302ae7dc35333af4cc44058687320288ef092234857ceeb49561503de4292"
-      ],
+      "summaryRequests": ["929302ae7dc35333af4cc44058687320288ef092234857ceeb49561503de4292"],
       "summaryEvidence": [
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 1298,
           "containsUser": true,
           "containsToolEvidence": false,
@@ -516,10 +484,7 @@
       "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
       "harnessMs": 546.7373749999999,
       "transformMs": 0.8646250000000464,
-      "transformDurations": [
-        0.5873750000000655,
-        0.2772499999999809
-      ],
+      "transformDurations": [0.5873750000000655, 0.2772499999999809],
       "peakRssKiB": 215040,
       "seedMessages": 3001,
       "seedHash": "11dabae581684834c703bd4cd8f29f0ca46881cc29de22d0bd3d384f224cfac7",
@@ -558,15 +523,10 @@
         "01643574d850bf101bb438f3439b264edcb3593b5e65482af93a1343c8e52bc7",
         "535b2350e57b8ad2087f574b9600ffe5b92f17861b9ec647c0809f8036153d9d"
       ],
-      "summaryRequests": [
-        "0528e4b0fb13ded4ffd9eb89dc1e2a4da7c7278827a932d6d3cdd1e9119d6cd2"
-      ],
+      "summaryRequests": ["0528e4b0fb13ded4ffd9eb89dc1e2a4da7c7278827a932d6d3cdd1e9119d6cd2"],
       "summaryEvidence": [
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 3186,
           "containsUser": true,
           "containsToolEvidence": false,
@@ -635,10 +595,7 @@
       "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
       "harnessMs": 547.528958,
       "transformMs": 0.6749579999999469,
-      "transformDurations": [
-        0.49049999999999727,
-        0.1844579999999496
-      ],
+      "transformDurations": [0.49049999999999727, 0.1844579999999496],
       "peakRssKiB": 215328,
       "seedMessages": 3001,
       "seedHash": "11dabae581684834c703bd4cd8f29f0ca46881cc29de22d0bd3d384f224cfac7",
@@ -677,15 +634,10 @@
         "01643574d850bf101bb438f3439b264edcb3593b5e65482af93a1343c8e52bc7",
         "535b2350e57b8ad2087f574b9600ffe5b92f17861b9ec647c0809f8036153d9d"
       ],
-      "summaryRequests": [
-        "0528e4b0fb13ded4ffd9eb89dc1e2a4da7c7278827a932d6d3cdd1e9119d6cd2"
-      ],
+      "summaryRequests": ["0528e4b0fb13ded4ffd9eb89dc1e2a4da7c7278827a932d6d3cdd1e9119d6cd2"],
       "summaryEvidence": [
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 3186,
           "containsUser": true,
           "containsToolEvidence": false,
@@ -754,10 +706,7 @@
       "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
       "harnessMs": 546.548375,
       "transformMs": 0.7290419999999358,
-      "transformDurations": [
-        0.5319170000000213,
-        0.1971249999999145
-      ],
+      "transformDurations": [0.5319170000000213, 0.1971249999999145],
       "peakRssKiB": 214736,
       "seedMessages": 3001,
       "seedHash": "11dabae581684834c703bd4cd8f29f0ca46881cc29de22d0bd3d384f224cfac7",
@@ -796,15 +745,10 @@
         "01643574d850bf101bb438f3439b264edcb3593b5e65482af93a1343c8e52bc7",
         "535b2350e57b8ad2087f574b9600ffe5b92f17861b9ec647c0809f8036153d9d"
       ],
-      "summaryRequests": [
-        "0528e4b0fb13ded4ffd9eb89dc1e2a4da7c7278827a932d6d3cdd1e9119d6cd2"
-      ],
+      "summaryRequests": ["0528e4b0fb13ded4ffd9eb89dc1e2a4da7c7278827a932d6d3cdd1e9119d6cd2"],
       "summaryEvidence": [
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 3186,
           "containsUser": true,
           "containsToolEvidence": false,
@@ -873,10 +817,7 @@
       "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
       "harnessMs": 591.3025829999999,
       "transformMs": 0.9844999999999118,
-      "transformDurations": [
-        0.73012499999993,
-        0.2543749999999818
-      ],
+      "transformDurations": [0.73012499999993, 0.2543749999999818],
       "peakRssKiB": 213456,
       "seedMessages": 3001,
       "seedHash": "11dabae581684834c703bd4cd8f29f0ca46881cc29de22d0bd3d384f224cfac7",
@@ -915,15 +856,10 @@
         "01643574d850bf101bb438f3439b264edcb3593b5e65482af93a1343c8e52bc7",
         "535b2350e57b8ad2087f574b9600ffe5b92f17861b9ec647c0809f8036153d9d"
       ],
-      "summaryRequests": [
-        "0528e4b0fb13ded4ffd9eb89dc1e2a4da7c7278827a932d6d3cdd1e9119d6cd2"
-      ],
+      "summaryRequests": ["0528e4b0fb13ded4ffd9eb89dc1e2a4da7c7278827a932d6d3cdd1e9119d6cd2"],
       "summaryEvidence": [
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 3186,
           "containsUser": true,
           "containsToolEvidence": false,
@@ -993,10 +929,7 @@
       "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
       "harnessMs": 601.36625,
       "transformMs": 522.396583,
-      "transformDurations": [
-        183.09862500000003,
-        339.297958
-      ],
+      "transformDurations": [183.09862500000003, 339.297958],
       "peakRssKiB": 138736,
       "seedMessages": 2001,
       "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
@@ -1100,10 +1033,7 @@
       "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
       "harnessMs": 91.10125,
       "transformMs": 11.71962400000001,
-      "transformDurations": [
-        6.614208000000019,
-        5.105415999999991
-      ],
+      "transformDurations": [6.614208000000019, 5.105415999999991],
       "peakRssKiB": 139760,
       "seedMessages": 2001,
       "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
@@ -1207,10 +1137,7 @@
       "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
       "harnessMs": 92.840958,
       "transformMs": 11.485708999999986,
-      "transformDurations": [
-        6.405499999999961,
-        5.080209000000025
-      ],
+      "transformDurations": [6.405499999999961, 5.080209000000025],
       "peakRssKiB": 140320,
       "seedMessages": 2001,
       "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
@@ -1314,10 +1241,7 @@
       "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
       "harnessMs": 594.854583,
       "transformMs": 517.058875,
-      "transformDurations": [
-        179.92337500000002,
-        337.1355
-      ],
+      "transformDurations": [179.92337500000002, 337.1355],
       "peakRssKiB": 139872,
       "seedMessages": 2001,
       "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
@@ -1421,10 +1345,7 @@
       "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
       "harnessMs": 11867.70125,
       "transformMs": 11590.157833000001,
-      "transformDurations": [
-        3832.4371250000004,
-        7757.720708000001
-      ],
+      "transformDurations": [3832.4371250000004, 7757.720708000001],
       "peakRssKiB": 195488,
       "seedMessages": 10001,
       "seedHash": "1ec578c29d5bde2a82ccfdb733ddd76538b4c9534496d5016df924d630da4f53",
@@ -1528,10 +1449,7 @@
       "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
       "harnessMs": 314.09762499999994,
       "transformMs": 32.82208299999991,
-      "transformDurations": [
-        17.90037499999994,
-        14.921707999999967
-      ],
+      "transformDurations": [17.90037499999994, 14.921707999999967],
       "peakRssKiB": 196288,
       "seedMessages": 10001,
       "seedHash": "1ec578c29d5bde2a82ccfdb733ddd76538b4c9534496d5016df924d630da4f53",
@@ -1635,10 +1553,7 @@
       "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
       "harnessMs": 311.55220799999995,
       "transformMs": 33.77491699999996,
-      "transformDurations": [
-        18.120916999999963,
-        15.653999999999996
-      ],
+      "transformDurations": [18.120916999999963, 15.653999999999996],
       "peakRssKiB": 193776,
       "seedMessages": 10001,
       "seedHash": "1ec578c29d5bde2a82ccfdb733ddd76538b4c9534496d5016df924d630da4f53",
@@ -1742,10 +1657,7 @@
       "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
       "harnessMs": 11850.962042,
       "transformMs": 11573.690249,
-      "transformDurations": [
-        3844.391708,
-        7729.298541
-      ],
+      "transformDurations": [3844.391708, 7729.298541],
       "peakRssKiB": 194016,
       "seedMessages": 10001,
       "seedHash": "1ec578c29d5bde2a82ccfdb733ddd76538b4c9534496d5016df924d630da4f53",

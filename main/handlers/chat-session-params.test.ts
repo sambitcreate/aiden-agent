@@ -15,20 +15,31 @@ test("session command parsers accept only exact bounded chat selectors", () => {
     forkAt: { messageId: "message-1", position: "after" },
   });
   for (const position of ["after", "before"] as const) {
-    assert.deepEqual(
-      parseChatCopyRequest({ chatId: "chat-1", messageId: "message-1", position }),
-      { chatId: "chat-1", forkAt: { messageId: "message-1", position } },
-    );
+    assert.deepEqual(parseChatCopyRequest({ chatId: "chat-1", messageId: "message-1", position }), {
+      chatId: "chat-1",
+      forkAt: { messageId: "message-1", position },
+    });
   }
   // A fork may ask for a summary; blank focus means no focus.
   assert.deepEqual(
     parseChatCopyRequest({
-      chatId: "chat-1", messageId: "message-1", position: "after", summary: { instructions: "  tests  " },
+      chatId: "chat-1",
+      messageId: "message-1",
+      position: "after",
+      summary: { instructions: "  tests  " },
     }),
-    { chatId: "chat-1", forkAt: { messageId: "message-1", position: "after" }, summary: { instructions: "tests" } },
+    {
+      chatId: "chat-1",
+      forkAt: { messageId: "message-1", position: "after" },
+      summary: { instructions: "tests" },
+    },
   );
   assert.deepEqual(
-    parseChatCopyRequest({ chatId: "chat-1", throughMessageId: "message-1", summary: { instructions: " " } }),
+    parseChatCopyRequest({
+      chatId: "chat-1",
+      throughMessageId: "message-1",
+      summary: { instructions: " " },
+    }),
     { chatId: "chat-1", forkAt: { messageId: "message-1", position: "after" }, summary: {} },
   );
   assert.deepEqual(parseChatOnlyRequest({ chatId: "chat-1" }), { chatId: "chat-1" });
@@ -39,7 +50,12 @@ test("session command parsers accept only exact bounded chat selectors", () => {
   for (const invalid of [
     // Continuing takes the whole conversation, never a cut or a summary.
     { chatId: "chat", continueInWorkspaceId: "workspace-2", throughMessageId: "message-1" },
-    { chatId: "chat", continueInWorkspaceId: "workspace-2", messageId: "message-1", position: "after" },
+    {
+      chatId: "chat",
+      continueInWorkspaceId: "workspace-2",
+      messageId: "message-1",
+      position: "after",
+    },
     { chatId: "chat", continueInWorkspaceId: "workspace-2", summary: {} },
     { chatId: "chat", continueInWorkspaceId: "" },
     { chatId: "chat", continueInWorkspaceId: 2 },
@@ -48,7 +64,12 @@ test("session command parsers accept only exact bounded chat selectors", () => {
     { chatId: "chat", messageId: "m", position: "after", summary: true },
     { chatId: "chat", messageId: "m", position: "after", summary: { instructions: 1 } },
     { chatId: "chat", messageId: "m", position: "after", summary: { focus: "x" } },
-    { chatId: "chat", messageId: "m", position: "after", summary: { instructions: "x".repeat(1_001) } },
+    {
+      chatId: "chat",
+      messageId: "m",
+      position: "after",
+      summary: { instructions: "x".repeat(1_001) },
+    },
     null,
     {},
     { chatId: "" },
@@ -120,9 +141,7 @@ test("context pressure requests accept a bounded optional draft", () => {
       ],
     },
   );
-  assert.throws(() =>
-    parseChatContextPressureRequest({ chatId: "chat-1", attachments: "no" }),
-  );
+  assert.throws(() => parseChatContextPressureRequest({ chatId: "chat-1", attachments: "no" }));
   // An empty live selection must not shadow the chat's saved provider/model.
   assert.deepEqual(
     parseChatContextPressureRequest({ chatId: "chat-1", providerId: "", modelId: "" }),
@@ -174,9 +193,7 @@ test("context pressure requests accept a bounded optional draft", () => {
   assert.throws(() =>
     parseChatContextPressureRequest({
       chatId: "chat-1",
-      attachments: [
-        { id: "a1", name: "x", kind: "text", mimeType: "text/plain", textLength: -1 },
-      ],
+      attachments: [{ id: "a1", name: "x", kind: "text", mimeType: "text/plain", textLength: -1 }],
     }),
   );
 });

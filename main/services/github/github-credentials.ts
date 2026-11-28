@@ -152,12 +152,8 @@ async function defaultKnownHosts(env: NodeJS.ProcessEnv = process.env): Promise<
 }
 
 /** Token from the environment, following gh's precedence for the host kind. */
-export function environmentGitHubToken(
-  host: string,
-  env: NodeJS.ProcessEnv,
-): string | undefined {
-  const pick = (...keys: string[]) =>
-    keys.map((key) => env[key]?.trim()).find((value) => value);
+export function environmentGitHubToken(host: string, env: NodeJS.ProcessEnv): string | undefined {
+  const pick = (...keys: string[]) => keys.map((key) => env[key]?.trim()).find((value) => value);
   if (isDotComHost(host)) return pick("GH_TOKEN", "GITHUB_TOKEN");
   if (configuredGitHubEnterpriseHost(env) !== host) return undefined;
   return pick("GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN");
@@ -179,16 +175,12 @@ function ghAuthTokenEnv(host: string): NodeJS.ProcessEnv {
 
 async function defaultGhAuthToken(host: string): Promise<string> {
   const binary = await resolveGitHubCliBinary();
-  const result = await execFileAsync(
-    binary,
-    ["auth", "token", "--hostname", host],
-    {
-      encoding: "utf8",
-      env: ghAuthTokenEnv(host),
-      maxBuffer: 64 * 1024,
-      timeout: GH_AUTH_TOKEN_TIMEOUT_MS,
-    },
-  );
+  const result = await execFileAsync(binary, ["auth", "token", "--hostname", host], {
+    encoding: "utf8",
+    env: ghAuthTokenEnv(host),
+    maxBuffer: 64 * 1024,
+    timeout: GH_AUTH_TOKEN_TIMEOUT_MS,
+  });
   return String(result.stdout).trim();
 }
 
@@ -200,9 +192,7 @@ function ghMissingReason(error: unknown): GitHubCredentialMissing["reason"] {
     : "unauthenticated";
 }
 
-type CacheEntry =
-  | { result: GitHubCredentialResult; expiresAt: number }
-  | undefined;
+type CacheEntry = { result: GitHubCredentialResult; expiresAt: number } | undefined;
 
 /**
  * Resolves a token per host: GH_TOKEN/GITHUB_TOKEN (or the enterprise pair for

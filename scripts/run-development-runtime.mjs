@@ -4,10 +4,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repositoryRoot = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-);
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 if (process.platform === "darwin") {
   const child = spawn(
@@ -25,8 +22,7 @@ if (process.platform === "darwin") {
     env: {
       ...process.env,
       AIDEN_RUNTIME_PROFILE: "development",
-      AIDEN_RENDERER_URL:
-        process.env.AIDEN_RENDERER_URL ?? "http://127.0.0.1:4143",
+      AIDEN_RENDERER_URL: process.env.AIDEN_RENDERER_URL ?? "http://127.0.0.1:4143",
     },
     stdio: "inherit",
   });

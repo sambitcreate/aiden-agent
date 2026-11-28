@@ -22,7 +22,10 @@ export function ArtboardNode({ data, selected }: NodeProps<DesignNode>) {
         className="relative h-full w-full"
       >
         <div className="absolute bottom-full left-0 flex max-w-full pb-1">
-          <FrameTitle frame={frame} className={cn("text-small text-secondary", selected && "text-primary")} />
+          <FrameTitle
+            frame={frame}
+            className={cn("text-small text-secondary", selected && "text-primary")}
+          />
         </div>
         <div
           className="relative h-full w-full overflow-hidden bg-popover shadow-control"

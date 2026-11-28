@@ -80,18 +80,11 @@ test("a newer runtime event replaces stale Settings hydration and its pending sa
     uiFontSize: 17,
   };
 
-  const reconciled = reconcileRuntimeAppearanceEvent(
-    fromCommandPalette,
-    4,
-    5,
-  );
+  const reconciled = reconcileRuntimeAppearanceEvent(fromCommandPalette, 4, 5);
   assert.equal(reconciled.config.mode, "light");
   assert.equal(reconciled.config.uiFontSize, 17);
   assert.equal(reconciled.supersedesPending, true);
-  assert.equal(
-    reconcileRuntimeAppearanceEvent(fromCommandPalette, 5, 5).supersedesPending,
-    false,
-  );
+  assert.equal(reconcileRuntimeAppearanceEvent(fromCommandPalette, 5, 5).supersedesPending, false);
 });
 
 test("a failed newer intent rebases an older pending save onto current ownership", async () => {

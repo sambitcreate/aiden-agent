@@ -34,11 +34,16 @@ for (const failure of ["none", ...expected]) {
   test(`cleanup completes all steps when ${failure} fails`, () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "aiden-ipc-cleanup-"));
     try {
-      const result = spawnSync("bash", ["-c", shell, "test", cleanup, root, failure, "0"], { encoding: "utf8", timeout: 5000 });
+      const result = spawnSync("bash", ["-c", shell, "test", cleanup, root, failure, "0"], {
+        encoding: "utf8",
+        timeout: 5000,
+      });
       assert.equal(result.error, undefined);
       assert.equal(result.status, failure === "none" ? 0 : 1, result.stderr);
       assert.deepEqual(readFileSync(path.join(root, "steps"), "utf8").trim().split("\n"), expected);
       assert.equal(readFileSync(path.join(root, "cleanup.log"), "utf8"), `exit=${result.status}\n`);
-    } finally { rmSync(root, {recursive: true, force: true}); }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 }

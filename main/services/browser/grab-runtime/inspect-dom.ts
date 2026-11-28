@@ -112,7 +112,10 @@ function filteredClasses(element: Element): string[] {
   return raw
     .split(/\s+/u)
     .map((token) => token.trim())
-    .filter((token) => token.length > 0 && token.length <= 48 && !/^(css|sc|emotion)-[a-z0-9]{5,}$/iu.test(token));
+    .filter(
+      (token) =>
+        token.length > 0 && token.length <= 48 && !/^(css|sc|emotion)-[a-z0-9]{5,}$/iu.test(token),
+    );
 }
 
 export function buildDomLabel(element: Element): string {
@@ -197,7 +200,9 @@ export function buildCssSelector(element: Element): string {
     }
   }
 
-  return sections.join(" >> ").slice(0, MAX_SELECTOR_CHARS) || (element.localName || "div").toLowerCase();
+  return (
+    sections.join(" >> ").slice(0, MAX_SELECTOR_CHARS) || (element.localName || "div").toLowerCase()
+  );
 }
 
 function implicitAriaRole(element: Element): string | undefined {
@@ -258,7 +263,11 @@ function escapeHtmlAttr(value: string): string {
   return value.replace(/&/gu, "&amp;").replace(/"/gu, "&quot;");
 }
 
-function serializeBoundedHtml(element: Element, depth: number, budget: { remaining: number }): string {
+function serializeBoundedHtml(
+  element: Element,
+  depth: number,
+  budget: { remaining: number },
+): string {
   if (budget.remaining <= 0) return "";
   const tag = (element.localName || element.tagName || "div").toLowerCase();
   const attrs: string[] = [];
@@ -276,7 +285,21 @@ function serializeBoundedHtml(element: Element, depth: number, budget: { remaini
     }
   }
   const openTag = attrs.length > 0 ? `<${tag} ${attrs.join(" ")}>` : `<${tag}>`;
-  const voidTags = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
+  const voidTags = new Set([
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "source",
+    "track",
+    "wbr",
+  ]);
   if (voidTags.has(tag)) {
     budget.remaining -= openTag.length;
     return openTag;
@@ -393,7 +416,8 @@ function extractCuratedStyles(element: Element): Record<string, string> | undefi
     if (prop === "border-radius" && val === "0px") continue;
     if (prop === "margin" && val === "0px") continue;
     if (prop === "padding" && val === "0px") continue;
-    if (prop === "background-color" && (val === "rgba(0, 0, 0, 0)" || val === "transparent")) continue;
+    if (prop === "background-color" && (val === "rgba(0, 0, 0, 0)" || val === "transparent"))
+      continue;
     result[prop] = val.slice(0, 256);
     count += 1;
   }
@@ -412,7 +436,9 @@ export function collectSensitiveFieldRects(rootDoc: Document): ViewportRect[] {
 
   const visitRoot = (root: Document | ShadowRoot, depth: number) => {
     if (depth > 8 || visited >= MAX_VISITED) return;
-    const candidates = root.querySelectorAll?.("input, textarea, select, [autocomplete], iframe, *");
+    const candidates = root.querySelectorAll?.(
+      "input, textarea, select, [autocomplete], iframe, *",
+    );
     if (!candidates) return;
     for (let i = 0; i < candidates.length && visited < MAX_VISITED; i += 1) {
       visited += 1;
@@ -453,7 +479,10 @@ export function inspectDomElement(element: Element): DomInspectionResult {
   const selector = buildCssSelector(element);
   const role = implicitAriaRole(element);
   const accessibleName = extractAccessibleName(element);
-  const htmlSnippet = serializeBoundedHtml(element, 0, { remaining: MAX_HTML_CHARS }).slice(0, MAX_HTML_CHARS);
+  const htmlSnippet = serializeBoundedHtml(element, 0, { remaining: MAX_HTML_CHARS }).slice(
+    0,
+    MAX_HTML_CHARS,
+  );
   const textPreview = extractTextPreview(element);
   const attributes = extractSafeAttributes(element);
   const computedStyles = extractCuratedStyles(element);

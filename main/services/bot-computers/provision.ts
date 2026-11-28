@@ -29,9 +29,15 @@ export type ProvisionChannel = "lume_ssh" | "guest_ssh" | "lume";
 
 export interface ProvisionContext {
   /** `lume ssh <base> <command>` with the preset's default password. */
-  lumeSsh(command: string, timeoutSeconds: number): Promise<{ exitCode: number | null; stdout: string; stderr: string }>;
+  lumeSsh(
+    command: string,
+    timeoutSeconds: number,
+  ): Promise<{ exitCode: number | null; stdout: string; stderr: string }>;
   /** System ssh with Aiden's key; `stdin` carries secrets. */
-  guestSsh(command: string, options: { stdin?: string; timeoutMs: number }): Promise<BotComputerGuestCommandResult>;
+  guestSsh(
+    command: string,
+    options: { stdin?: string; timeoutMs: number },
+  ): Promise<BotComputerGuestCommandResult>;
   /** `lume stop <base>` and wait for it to be stopped. */
   stopBase(): Promise<void>;
   /** Aiden's `ssh-ed25519 …` public key. */
@@ -72,7 +78,8 @@ const PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz2345
 /** A random 32-character guest password from an unambiguous alphabet. */
 export function generateGuestPassword(length = 32): string {
   let password = "";
-  for (let index = 0; index < length; index += 1) password += PASSWORD_ALPHABET[randomInt(PASSWORD_ALPHABET.length)];
+  for (let index = 0; index < length; index += 1)
+    password += PASSWORD_ALPHABET[randomInt(PASSWORD_ALPHABET.length)];
   return password;
 }
 
@@ -95,7 +102,10 @@ function check(
 ): void {
   if (result.exitCode === 0 && !result.timedOut) return;
   const detail = result.timedOut ? "it timed out" : `exit ${String(result.exitCode)}`;
-  throw new BotComputerError("start_failed", `Preparing the base computer failed at "${step}" (${detail}).`);
+  throw new BotComputerError(
+    "start_failed",
+    `Preparing the base computer failed at "${step}" (${detail}).`,
+  );
 }
 
 const SUDO = "/usr/bin/sudo -S -p ''";
@@ -123,7 +133,11 @@ export const BASE_PROVISION_STEPS: readonly ProvisionStep[] = Object.freeze([
       const result = await context.lumeSsh("cat /etc/ssh/ssh_host_ed25519_key.pub", 60);
       check("capture_host_key", result);
       const line = result.stdout.split(/\r?\n/u).find((entry) => entry.startsWith("ssh-ed25519 "));
-      if (!line) throw new BotComputerError("start_failed", "The base computer did not report its SSH host key.");
+      if (!line)
+        throw new BotComputerError(
+          "start_failed",
+          "The base computer did not report its SSH host key.",
+        );
       await context.writeKnownHost(line);
     },
   },
@@ -151,7 +165,10 @@ export const BASE_PROVISION_STEPS: readonly ProvisionStep[] = Object.freeze([
     channel: "guest_ssh",
     async run(context, state) {
       const script = `${SUDO} /bin/sh -c 'umask 022 && printf "%s\\n" "# Written by Aiden: Bot computers accept key logins only." "PasswordAuthentication no" "KbdInteractiveAuthentication no" > ${BOT_COMPUTER_SSHD_DROP_IN} && /usr/sbin/sshd -T 2>/dev/null | /usr/bin/grep -qx "passwordauthentication no"'`;
-      check("harden_sshd", await context.guestSsh(script, { stdin: `${state.password}\n`, timeoutMs: 60_000 }));
+      check(
+        "harden_sshd",
+        await context.guestSsh(script, { stdin: `${state.password}\n`, timeoutMs: 60_000 }),
+      );
     },
   },
   {
@@ -166,10 +183,16 @@ export const BASE_PROVISION_STEPS: readonly ProvisionStep[] = Object.freeze([
         "ConfigDataInstall",
         "CriticalUpdateInstall",
       ]
-        .map((key) => `/usr/bin/defaults write /Library/Preferences/com.apple.SoftwareUpdate ${key} -bool false`)
+        .map(
+          (key) =>
+            `/usr/bin/defaults write /Library/Preferences/com.apple.SoftwareUpdate ${key} -bool false`,
+        )
         .join(" && ");
       const script = `${SUDO} /bin/sh -c '${writes} && /usr/bin/defaults write /Library/Preferences/com.apple.commerce AutoUpdate -bool false && { /usr/sbin/softwareupdate --schedule off >/dev/null 2>&1 || true; }'`;
-      check("disable_updates", await context.guestSsh(script, { stdin: `${state.password}\n`, timeoutMs: 120_000 }));
+      check(
+        "disable_updates",
+        await context.guestSsh(script, { stdin: `${state.password}\n`, timeoutMs: 120_000 }),
+      );
     },
   },
   {
@@ -191,7 +214,8 @@ export const BASE_PROVISION_STEPS: readonly ProvisionStep[] = Object.freeze([
         "DidSeeTermsOfAddress",
         "SkipFirstLoginOptimization",
       ];
-      const history = '"/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist"';
+      const history =
+        '"/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist"';
       const script = [
         "IFS= read -r pw || exit 64",
         `for k in ${seen.join(" ")}; do /usr/bin/defaults write com.apple.SetupAssistant "$k" -bool true || exit 65; done`,
@@ -201,7 +225,10 @@ export const BASE_PROVISION_STEPS: readonly ProvisionStep[] = Object.freeze([
         "/usr/bin/defaults write com.apple.CrashReporter DialogType none || exit 65",
         `printf '%s\\n' "$pw" | ${SUDO} /bin/sh -c '/usr/bin/defaults write ${history} AutoSubmit -bool false && /usr/bin/defaults write ${history} ThirdPartyDataSubmit -bool false' || exit 66`,
       ].join("\n");
-      check("suppress_prompts", await context.guestSsh(script, { stdin: `${state.password}\n`, timeoutMs: 60_000 }));
+      check(
+        "suppress_prompts",
+        await context.guestSsh(script, { stdin: `${state.password}\n`, timeoutMs: 60_000 }),
+      );
     },
   },
   {
@@ -245,7 +272,8 @@ export async function provisionBase(
 ): Promise<void> {
   const state: ProvisionState = { password: BOT_COMPUTER_DEFAULT_GUEST_PASSWORD };
   for (const step of BASE_PROVISION_STEPS) {
-    if (context.signal?.aborted) throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
+    if (context.signal?.aborted)
+      throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
     options.onStep?.(step.id);
     await step.run(context, state);
   }
@@ -273,7 +301,8 @@ export interface BaseBuildDependencies {
  */
 export async function buildBaseVm(deps: BaseBuildDependencies): Promise<void> {
   const cancelled = () => {
-    if (deps.signal?.aborted) throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
+    if (deps.signal?.aborted)
+      throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
   };
   try {
     cancelled();
@@ -284,7 +313,9 @@ export async function buildBaseVm(deps: BaseBuildDependencies): Promise<void> {
     deps.onStep?.("provision");
     const { ip } = await deps.start();
     cancelled();
-    await provisionBase(deps.provisionContext(ip), { onStep: (step) => deps.onStep?.("provision", step) });
+    await provisionBase(deps.provisionContext(ip), {
+      onStep: (step) => deps.onStep?.("provision", step),
+    });
   } catch (error) {
     await deps.stop().catch(() => undefined);
     await deps.deleteVm().catch(() => undefined);

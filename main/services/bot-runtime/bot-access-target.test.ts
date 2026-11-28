@@ -102,16 +102,33 @@ test("private storage and its parents are refused while Home remains once-only",
   await fs.mkdir(path.join(home, "Documents"));
   await fs.symlink(parent, path.join(home, "alias"));
   await fs.symlink(configDirectory, path.join(home, "config-alias"));
-  const deps: BotAccessTargetDeps = { homeDirectory: () => home, privateRoots: () => botAccessPrivateRoots(privateRoot, configDirectory), approvedRoots: async () => [] };
-  for (const requested of [parent, path.join(home, "Library"), path.join(home, "alias"), privateRoot, configDirectory, path.join(configDirectory, "extra-config.json"), path.join(home, "config-alias")]) {
-    assert.deepEqual(await resolveBotAccessTarget(requested, deps), { kind: "refused", reason: "private" }, requested);
+  const deps: BotAccessTargetDeps = {
+    homeDirectory: () => home,
+    privateRoots: () => botAccessPrivateRoots(privateRoot, configDirectory),
+    approvedRoots: async () => [],
+  };
+  for (const requested of [
+    parent,
+    path.join(home, "Library"),
+    path.join(home, "alias"),
+    privateRoot,
+    configDirectory,
+    path.join(configDirectory, "extra-config.json"),
+    path.join(home, "config-alias"),
+  ]) {
+    assert.deepEqual(
+      await resolveBotAccessTarget(requested, deps),
+      { kind: "refused", reason: "private" },
+      requested,
+    );
   }
   const ordinary = await resolveBotAccessTarget(path.join(home, "Documents"), deps);
   assert.equal(ordinary.kind, "folder");
   if (ordinary.kind === "folder") assert.deepEqual(ordinary.always, { kind: "new" });
   const resolved = await resolveBotAccessTarget("~", deps);
   assert.equal(resolved.kind, "folder");
-  if (resolved.kind === "folder") assert.deepEqual(resolved.always, { kind: "none", reason: "home" });
+  if (resolved.kind === "folder")
+    assert.deepEqual(resolved.always, { kind: "none", reason: "home" });
 });
 
 test("only approved roots overlapping the target invalidate its inventory snapshot", async (t) => {
@@ -122,8 +139,16 @@ test("only approved roots overlapping the target invalidate its inventory snapsh
   await fs.mkdir(target, { recursive: true });
   await fs.mkdir(unrelated);
   let roots: { id: string; folderPath: string }[] = [];
-  const deps: BotAccessTargetDeps = { homeDirectory: () => home, privateRoots: () => [], approvedRoots: async () => roots };
-  const revision = async () => { const resolved = await resolveBotAccessTarget(target, deps); assert.equal(resolved.kind, "folder"); return resolved.kind === "folder" ? resolved.inventoryRevision : undefined; };
+  const deps: BotAccessTargetDeps = {
+    homeDirectory: () => home,
+    privateRoots: () => [],
+    approvedRoots: async () => roots,
+  };
+  const revision = async () => {
+    const resolved = await resolveBotAccessTarget(target, deps);
+    assert.equal(resolved.kind, "folder");
+    return resolved.kind === "folder" ? resolved.inventoryRevision : undefined;
+  };
   const captured = await revision();
   assert.ok(captured);
   roots = [{ id: "unrelated", folderPath: unrelated }];
@@ -139,8 +164,20 @@ test("only approved roots overlapping the target invalidate its inventory snapsh
 
 test("a transient target filesystem read failure is preserved rather than declared stale or missing", async () => {
   const failure = Object.assign(new Error("temporary disk read failure"), { code: "EIO" });
-  await assert.rejects(resolveBotAccessTarget("/ordinary", {
-    homeDirectory: () => "/home", privateRoots: () => [], approvedRoots: async () => [],
-    filesystem: { realpath: async () => { throw failure; }, stat: async () => { throw new Error("unreachable"); } },
-  }), (error: unknown) => error === failure);
+  await assert.rejects(
+    resolveBotAccessTarget("/ordinary", {
+      homeDirectory: () => "/home",
+      privateRoots: () => [],
+      approvedRoots: async () => [],
+      filesystem: {
+        realpath: async () => {
+          throw failure;
+        },
+        stat: async () => {
+          throw new Error("unreachable");
+        },
+      },
+    }),
+    (error: unknown) => error === failure,
+  );
 });

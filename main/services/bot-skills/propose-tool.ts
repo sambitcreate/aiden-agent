@@ -28,12 +28,22 @@ export function createProposeSkillTool(botId: string, deps: ProposeSkillDependen
         name: Type.String({ maxLength: BOT_SKILL_PROPOSAL_LIMITS.nameChars }),
         description: Type.String({ maxLength: BOT_SKILL_PROPOSAL_LIMITS.descriptionChars }),
         instructions: Type.String(),
-        reason: Type.Optional(Type.String({ maxLength: BOT_SKILL_PROPOSAL_LIMITS.reasonChars, description: "One line on why it would help them." })),
+        reason: Type.Optional(
+          Type.String({
+            maxLength: BOT_SKILL_PROPOSAL_LIMITS.reasonChars,
+            description: "One line on why it would help them.",
+          }),
+        ),
       },
       { additionalProperties: false },
     ),
     execute: async (_toolCallId, params): Promise<AgentToolResult<null>> => {
-      const input = params as { name?: unknown; description?: unknown; instructions?: unknown; reason?: unknown };
+      const input = params as {
+        name?: unknown;
+        description?: unknown;
+        instructions?: unknown;
+        reason?: unknown;
+      };
       const outcome = await deps.propose(botId, {
         name: typeof input.name === "string" ? input.name : "",
         description: typeof input.description === "string" ? input.description : "",
@@ -41,7 +51,10 @@ export function createProposeSkillTool(botId: string, deps: ProposeSkillDependen
         ...(typeof input.reason === "string" ? { reason: input.reason } : {}),
       });
       const body = outcome.ok
-        ? { ok: true, message: "I've shown the person the skill. Don't ask again unless they bring it up." }
+        ? {
+            ok: true,
+            message: "I've shown the person the skill. Don't ask again unless they bring it up.",
+          }
         : { ok: false, code: outcome.code, errors: outcome.errors };
       return {
         content: [{ type: "text", text: JSON.stringify(body) }],

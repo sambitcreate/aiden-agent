@@ -91,7 +91,9 @@ type RoutedTool = AgentTool & {
 export function declareOnDemandSummary<T extends AgentTool>(tool: T, summary: string): T {
   const line = summary.replace(/\s+/gu, " ").trim();
   if (!line || line.length > MAX_ON_DEMAND_ROUTING_CHARACTERS) {
-    throw new Error(`${tool.name}'s catalog line must be 1 to ${MAX_ON_DEMAND_ROUTING_CHARACTERS} characters.`);
+    throw new Error(
+      `${tool.name}'s catalog line must be 1 to ${MAX_ON_DEMAND_ROUTING_CHARACTERS} characters.`,
+    );
   }
   return Object.assign(tool, { onDemandSummary: line });
 }
@@ -102,7 +104,10 @@ export function declareOnDemandSummary<T extends AgentTool>(tool: T, summary: st
  * and reading take one step. Notes with the same key (another tool loaded in
  * the same call needs the same guide) are sent once.
  */
-export function declareOnDemandLoadNotes<T extends AgentTool>(tool: T, notes: readonly OnDemandLoadNote[]): T {
+export function declareOnDemandLoadNotes<T extends AgentTool>(
+  tool: T,
+  notes: readonly OnDemandLoadNote[],
+): T {
   const existing = (tool as RoutedTool).onDemandLoadNotes ?? [];
   return Object.assign(tool, { onDemandLoadNotes: [...existing, ...notes] });
 }
@@ -111,7 +116,10 @@ export function declareOnDemandLoadNotes<T extends AgentTool>(tool: T, notes: re
  * The notes of `loaded` tools, in load order, each key once, leaving out any
  * whose text `alreadyRead` says the chat's tool results already hold.
  */
-function onDemandLoadAnswerNotes(loaded: readonly AgentTool[], alreadyRead: (text: string) => boolean): string[] {
+function onDemandLoadAnswerNotes(
+  loaded: readonly AgentTool[],
+  alreadyRead: (text: string) => boolean,
+): string[] {
   const seen = new Set<string>();
   const headed = new Set<string>();
   const texts: string[] = [];
@@ -160,7 +168,10 @@ export function onDemandToolSummary(description: string): string {
 }
 
 /** On-demand tool names this transcript loaded or called, in first-use order. */
-export function onDemandToolsUsed(messages: readonly AgentMessage[], available: ReadonlySet<string>): string[] {
+export function onDemandToolsUsed(
+  messages: readonly AgentMessage[],
+  available: ReadonlySet<string>,
+): string[] {
   const used = new Set<string>();
   for (const message of messages) {
     if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
@@ -169,7 +180,8 @@ export function onDemandToolsUsed(messages: readonly AgentMessage[], available: 
       if (block.name === LOAD_TOOLS_TOOL_NAME) {
         const names = (block.arguments as { names?: unknown } | undefined)?.names;
         if (!Array.isArray(names)) continue;
-        for (const name of names) if (typeof name === "string" && available.has(name)) used.add(name);
+        for (const name of names)
+          if (typeof name === "string" && available.has(name)) used.add(name);
       } else if (available.has(block.name)) {
         // A direct call to an undeclared tool fails as "not found"; declaring
         // it on the next step lets the model's retry work.
@@ -227,7 +239,8 @@ export function createOnDemandTools(
   names: ReadonlySet<string> = ON_DEMAND_TOOL_NAMES,
 ): OnDemandTools | undefined {
   const onDemand = tools.filter((tool) => names.has(tool.name));
-  if (onDemand.length === 0 || tools.some((tool) => tool.name === LOAD_TOOLS_TOOL_NAME)) return undefined;
+  if (onDemand.length === 0 || tools.some((tool) => tool.name === LOAD_TOOLS_TOOL_NAME))
+    return undefined;
   const everyday = tools.filter((tool) => !names.has(tool.name));
   const byName = new Map(onDemand.map((tool) => [tool.name, tool]));
   const available = new Set(byName.keys());
@@ -247,11 +260,16 @@ export function createOnDemandTools(
         catalog,
       ].join("\n"),
       parameters: Type.Object({
-        names: Type.Array(Type.String({ maxLength: 64 }), { minItems: 1, maxItems: MAX_NAMES_PER_CALL }),
+        names: Type.Array(Type.String({ maxLength: 64 }), {
+          minItems: 1,
+          maxItems: MAX_NAMES_PER_CALL,
+        }),
       }),
       execute: async (_id, args) => {
         const requested = (args as { names?: unknown }).names;
-        const list = Array.isArray(requested) ? requested.filter((name): name is string => typeof name === "string") : [];
+        const list = Array.isArray(requested)
+          ? requested.filter((name): name is string => typeof name === "string")
+          : [];
         const unknown = list.filter((name) => !available.has(name));
         if (list.length === 0 || unknown.length > 0) {
           throw new Error(
@@ -259,12 +277,20 @@ export function createOnDemandTools(
           );
         }
         const loaded = [...new Set(list)];
-        const notes = onDemandLoadAnswerNotes(loaded.map((name) => byName.get(name)!), toolResultTexts(transcript));
+        const notes = onDemandLoadAnswerNotes(
+          loaded.map((name) => byName.get(name)!),
+          toolResultTexts(transcript),
+        );
         return {
-          content: [{
-            type: "text",
-            text: [`Loaded ${loaded.join(", ")}. Call ${loaded.length === 1 ? "it" : "them"} from your next step.`, ...notes].join("\n\n"),
-          }],
+          content: [
+            {
+              type: "text",
+              text: [
+                `Loaded ${loaded.join(", ")}. Call ${loaded.length === 1 ? "it" : "them"} from your next step.`,
+                ...notes,
+              ].join("\n\n"),
+            },
+          ],
           details: null,
         };
       },
@@ -306,7 +332,8 @@ export function createOnDemandTools(
         .filter((name) => !present.has(name))
         .map((name) => byName.get(name)!);
       if (additions.length === 0) return context;
-      for (const tool of additions) if (!declared.includes(tool.name)) declared = [...declared, tool.name];
+      for (const tool of additions)
+        if (!declared.includes(tool.name)) declared = [...declared, tool.name];
       return { ...context, tools: [...(context.tools ?? []), ...additions] };
     },
     declaredNames() {
@@ -322,7 +349,10 @@ export function createOnDemandTools(
 export const ON_DEMAND_DECLARED_ENTRY = "aiden.on-demand-declared.v1";
 
 /** The on-demand tool names in `tools`, in declared order: what a run records under `ON_DEMAND_DECLARED_ENTRY`. */
-export function onDemandDeclaredNames(tools: readonly AgentTool[], onDemand: readonly AgentTool[]): string[] {
+export function onDemandDeclaredNames(
+  tools: readonly AgentTool[],
+  onDemand: readonly AgentTool[],
+): string[] {
   const names = new Set(onDemand.map((tool) => tool.name));
   return tools.filter((tool) => names.has(tool.name)).map((tool) => tool.name);
 }
@@ -333,13 +363,19 @@ export function onDemandDeclaredNames(tools: readonly AgentTool[], onDemand: rea
  * declaring it in the same place instead of dropping it.
  */
 export function onDemandDeclaredOfBranch(
-  branch: readonly { readonly type: string; readonly customType?: string; readonly data?: unknown }[],
+  branch: readonly {
+    readonly type: string;
+    readonly customType?: string;
+    readonly data?: unknown;
+  }[],
 ): string[] {
   for (let index = branch.length - 1; index >= 0; index--) {
     const entry = branch[index]!;
     if (entry.type !== "custom" || entry.customType !== ON_DEMAND_DECLARED_ENTRY) continue;
     const names = (entry.data as { names?: unknown } | undefined)?.names;
-    return Array.isArray(names) ? names.filter((name): name is string => typeof name === "string").slice(0, 200) : [];
+    return Array.isArray(names)
+      ? names.filter((name): name is string => typeof name === "string").slice(0, 200)
+      : [];
   }
   return [];
 }

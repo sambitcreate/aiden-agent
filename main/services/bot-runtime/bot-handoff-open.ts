@@ -23,7 +23,10 @@
 // failure reaches the person on the Mac, and a phone's Open still brings the
 // chat forward.
 
-import { isBotHandoffOpenUrl, type BotPendingHandoff } from "../../../renderer/shared/bot-handoffs.js";
+import {
+  isBotHandoffOpenUrl,
+  type BotPendingHandoff,
+} from "../../../renderer/shared/bot-handoffs.js";
 
 export type BotHandoffOpenFrom = "desktop" | "phone";
 export type BotHandoffOpened = "external" | "browser" | "computer" | "focused" | "none";
@@ -37,25 +40,42 @@ export interface BotHandoffOpeners {
    * Open `url` in the Bot's own browser, holding the tab for the person, or
    * without one hold the Bot's current tab as it is; false when the Bot has none.
    */
-  botBrowser?(botId: string, waitId: string, url: string | undefined, hold: "handoff" | "sign_in"): Promise<boolean>;
+  botBrowser?(
+    botId: string,
+    waitId: string,
+    url: string | undefined,
+    hold: "handoff" | "sign_in",
+  ): Promise<boolean>;
   /** Hand the Bot's own computer to the person, opening `url` there if given; false when the Bot has none. */
   botComputer?(botId: string, waitId: string, url: string | undefined): Promise<boolean>;
   /** The Bot's browser or computer failed, and the card fell back (the system browser, or the chat). */
   onOpenerError?(error: unknown): void;
 }
 
-async function openSignIn(prompt: BotPendingHandoff, url: string, openers: BotHandoffOpeners): Promise<BotHandoffOpened> {
+async function openSignIn(
+  prompt: BotPendingHandoff,
+  url: string,
+  openers: BotHandoffOpeners,
+): Promise<BotHandoffOpened> {
   if ((prompt.target ?? "browser") === "computer") {
-    return (await openers.botComputer?.(prompt.botId, prompt.waitId, url)) === true ? "computer" : "none";
+    return (await openers.botComputer?.(prompt.botId, prompt.waitId, url)) === true
+      ? "computer"
+      : "none";
   }
-  return (await openers.botBrowser?.(prompt.botId, prompt.waitId, url, "sign_in")) === true ? "browser" : "none";
+  return (await openers.botBrowser?.(prompt.botId, prompt.waitId, url, "sign_in")) === true
+    ? "browser"
+    : "none";
 }
 
 /**
  * The Bot's browser for an action: its link, or the Bot's current tab without
  * one. False when it has none or couldn't open it.
  */
-async function openInBotBrowser(prompt: BotPendingHandoff, url: string | undefined, openers: BotHandoffOpeners): Promise<boolean> {
+async function openInBotBrowser(
+  prompt: BotPendingHandoff,
+  url: string | undefined,
+  openers: BotHandoffOpeners,
+): Promise<boolean> {
   try {
     return (await openers.botBrowser?.(prompt.botId, prompt.waitId, url, "handoff")) === true;
   } catch (error) {
@@ -76,7 +96,9 @@ async function openOnBotScreen(
   openers: BotHandoffOpeners,
 ): Promise<BotHandoffOpened> {
   if (target === "computer") {
-    return (await openers.botComputer?.(prompt.botId, prompt.waitId, link)) === true ? "computer" : "none";
+    return (await openers.botComputer?.(prompt.botId, prompt.waitId, link)) === true
+      ? "computer"
+      : "none";
   }
   return (await openInBotBrowser(prompt, link, openers)) ? "browser" : "none";
 }

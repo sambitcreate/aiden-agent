@@ -17,8 +17,24 @@ export function isWindowChrome(value: unknown): value is WindowChrome {
   return value === "mac" || value === "aiden" || value === "system";
 }
 
-const TILING_DESKTOPS = new Set(["sway", "hyprland", "i3", "niri", "river", "qtile", "bspwm", "awesome", "dwm", "xmonad"]);
-const TILING_SOCKETS = ["SWAYSOCK", "HYPRLAND_INSTANCE_SIGNATURE", "I3SOCK", "NIRI_SOCKET"] as const;
+const TILING_DESKTOPS = new Set([
+  "sway",
+  "hyprland",
+  "i3",
+  "niri",
+  "river",
+  "qtile",
+  "bspwm",
+  "awesome",
+  "dwm",
+  "xmonad",
+]);
+const TILING_SOCKETS = [
+  "SWAYSOCK",
+  "HYPRLAND_INSTANCE_SIGNATURE",
+  "I3SOCK",
+  "NIRI_SOCKET",
+] as const;
 
 /**
  * Whether the session runs a tiling window manager, where window buttons do

@@ -12,7 +12,12 @@ import { eventRoutineAfterRun } from "./after-run.js";
 import { createBotRoutineEventDispatcher } from "./dispatcher.js";
 import { createBotFolderWatches } from "./folder-watch.js";
 import { botOwnWrites } from "./own-writes.js";
-import { createBotEventRunner, createEventModelOwnershipPorts, eventRoutineRunStore, eventRoutineTask } from "./runner.js";
+import {
+  createBotEventRunner,
+  createEventModelOwnershipPorts,
+  eventRoutineRunStore,
+  eventRoutineTask,
+} from "./runner.js";
 import { createBotEventRoutineStore, type BotEventRoutine } from "./store.js";
 import { createBotWatches } from "./watch.js";
 import { productionConnectorWatchService } from "./connector-host-main.js";
@@ -22,7 +27,9 @@ import { createBotWebhookHandler } from "./webhook.js";
 
 const REARM_INTERVAL_MS = 5 * 60_000;
 
-export const botEventRoutines = createBotEventRoutineStore({ profileDir: () => app.getPath("userData") });
+export const botEventRoutines = createBotEventRoutineStore({
+  profileDir: () => app.getPath("userData"),
+});
 
 /**
  * The link a person can call for a webhook routine's token, from the Remote
@@ -33,7 +40,7 @@ export async function botRoutineWebhookLink(token: string): Promise<string | nul
   const { getAidenRemoteService } = await import("../aiden-remote-service-main.js");
   const status = await (await getAidenRemoteService()).status().catch(() => undefined);
   // Tailscale first: it reaches this Mac from anywhere the person's devices are.
-  const base = status?.running ? status.tailscaleEndpoint ?? status.lanEndpoint : undefined;
+  const base = status?.running ? (status.tailscaleEndpoint ?? status.lanEndpoint) : undefined;
   return base ? `${base.replace(/\/+$/u, "")}/hooks/bot-routines/${token}` : null;
 }
 
@@ -53,7 +60,11 @@ const executor = createBotRoutineExecutor({
   ports: async () => (await import("../scheduled-bot-routines-main.js")).botRoutinePorts(),
   deliver: async (input) => {
     try {
-      const outcome = await (await import("../bot-delivery/funnel-main.js")).botDeliveryFunnel().deliver(input);
+      const outcome = await (
+        await import("../bot-delivery/funnel-main.js")
+      )
+        .botDeliveryFunnel()
+        .deliver(input);
       if (input.requestId) undelivered.delete(input.requestId);
       return outcome;
     } catch (error) {
@@ -63,9 +74,14 @@ const executor = createBotRoutineExecutor({
   },
   broadcast: (payload) => ipcMain.broadcast("bots:changed", payload),
   afterRun: async (task, run) => {
-    await eventRoutineAfterRun(task, run, { store: botEventRoutines, runs: (id) => scheduleStore.runs(id),
-      issues: (await import("../bot-issues/service-main.js")).botIssues, changed: botEventRoutinesChanged }).catch((error: unknown) =>
-      logger.warn("bots", `Bot event routine ${task.id} follow-up failed.`, error));
+    await eventRoutineAfterRun(task, run, {
+      store: botEventRoutines,
+      runs: (id) => scheduleStore.runs(id),
+      issues: (await import("../bot-issues/service-main.js")).botIssues,
+      changed: botEventRoutinesChanged,
+    }).catch((error: unknown) =>
+      logger.warn("bots", `Bot event routine ${task.id} follow-up failed.`, error),
+    );
   },
 });
 
@@ -75,13 +91,16 @@ export async function forgetBotEventRoutine(botId: string, routineId: string): P
   const { botRoutineNotes } = await import("../scheduled-bot-routines-main.js");
   await botRoutineNotes.clear(botId, routineId).catch(() => undefined);
   await watchIssueSerial(`event_claim:${botId}:${routineId}`, async () => {
-    await (await import("../bot-issues/service-main.js")).botIssues.resolve(botId, `event_claim:${routineId}`, "fixed");
+    await (
+      await import("../bot-issues/service-main.js")
+    ).botIssues.resolve(botId, `event_claim:${routineId}`, "fixed");
   });
 }
 
 /** A Bot is deleted: every event routine's runs go (the routine file goes with the Bot's folder). */
 export async function forgetBotEventRoutines(botId: string): Promise<void> {
-  for (const routine of await botEventRoutines.list(botId)) await forgetBotEventRoutine(botId, routine.id);
+  for (const routine of await botEventRoutines.list(botId))
+    await forgetBotEventRoutine(botId, routine.id);
 }
 
 /**
@@ -100,28 +119,47 @@ const runner = createBotEventRunner({
 const dispatcher = createBotRoutineEventDispatcher({
   store: botEventRoutines,
   ...createEventModelOwnershipPorts({
-    prepare: async routine => (await import("../bot-routine-models-main.js")).botRoutineModels.prepareRoutineClaim(routine.botId, routine.id),
-    claim: async (routine, event, expectedChoiceHash) => (await import("../scheduled-bot-routines-main.js")).claimBotRoutineExecution(eventRoutineTask(routine), { kind: "event", ...event }, expectedChoiceHash),
+    prepare: async (routine) =>
+      (await import("../bot-routine-models-main.js")).botRoutineModels.prepareRoutineClaim(
+        routine.botId,
+        routine.id,
+      ),
+    claim: async (routine, event, expectedChoiceHash) =>
+      (await import("../scheduled-bot-routines-main.js")).claimBotRoutineExecution(
+        eventRoutineTask(routine),
+        { kind: "event", ...event },
+        expectedChoiceHash,
+      ),
   }),
   claimFailed: async (routine, error) => {
     await watchIssueSerial(`event_claim:${routine.botId}:${routine.id}`, async () => {
-      const fresh = (await botEventRoutines.list(routine.botId)).find(row => row.id === routine.id && row.createdAt === routine.createdAt);
-      if (!fresh?.running?.some(row => row.claimPending)) return;
+      const fresh = (await botEventRoutines.list(routine.botId)).find(
+        (row) => row.id === routine.id && row.createdAt === routine.createdAt,
+      );
+      if (!fresh?.running?.some((row) => row.claimPending)) return;
       const { BotRoutineModelPreparationChangedError } = await import("../bot-routine-models.js");
       const { botIssues } = await import("../bot-issues/service-main.js");
       const changed = error instanceof BotRoutineModelPreparationChangedError;
-      await botIssues.raise({ botId: routine.botId, kind: "routine_failed", dedupeKey: `event_claim:${routine.id}`,
+      await botIssues.raise({
+        botId: routine.botId,
+        kind: "routine_failed",
+        dedupeKey: `event_claim:${routine.id}`,
         title: `${routine.name} needs its original model`,
-        body: changed ? "An event is safely retained, but its model, thinking or fallback choice changed before ownership was saved. Restore the original Model choices to retry it, or delete the routine to cancel the retained event. New events cannot replace its payload."
+        body: changed
+          ? "An event is safely retained, but its model, thinking or fallback choice changed before ownership was saved. Restore the original Model choices to retry it, or delete the routine to cancel the retained event. New events cannot replace its payload."
           : "An event is safely retained while its original execution choice is unavailable. Check the routine's Model settings and access. Aiden retries while it runs; delete the routine to cancel the retained event.",
-        routineId: routine.id, actions: [] });
+        routineId: routine.id,
+        actions: [],
+      });
       ipcMain.broadcast("bots:changed", { botId: routine.botId });
     });
   },
-  claimRecovered: async routine => {
+  claimRecovered: async (routine) => {
     await watchIssueSerial(`event_claim:${routine.botId}:${routine.id}`, async () => {
-      const fresh = (await botEventRoutines.list(routine.botId)).find(row => row.id === routine.id);
-      if (!fresh || fresh.running?.some(row => row.claimPending)) return;
+      const fresh = (await botEventRoutines.list(routine.botId)).find(
+        (row) => row.id === routine.id,
+      );
+      if (!fresh || fresh.running?.some((row) => row.claimPending)) return;
       const { botIssues } = await import("../bot-issues/service-main.js");
       await botIssues.resolve(routine.botId, `event_claim:${routine.id}`, "fixed");
     });
@@ -131,9 +169,19 @@ const dispatcher = createBotRoutineEventDispatcher({
     const grant = await admitWatchDispatch(routine);
     if ("error" in grant) {
       const paused = await botEventRoutines.mutate(routine.botId, routine.id, (fresh) => {
-        if (!fresh.enabled || fresh.updatedAt !== routine.updatedAt || !fresh.watch) return { result: undefined };
-        const next = { ...fresh, enabled: false, watch: { ...fresh.watch, failures: fresh.watch.failures + 1,
-          unsettledFailure: true as const, lastResult: "error" as const, lastError: grant.error.slice(0, 200) } };
+        if (!fresh.enabled || fresh.updatedAt !== routine.updatedAt || !fresh.watch)
+          return { result: undefined };
+        const next = {
+          ...fresh,
+          enabled: false,
+          watch: {
+            ...fresh.watch,
+            failures: fresh.watch.failures + 1,
+            unsettledFailure: true as const,
+            lastResult: "error" as const,
+            lastError: grant.error.slice(0, 200),
+          },
+        };
         return { next, result: next };
       });
       if (paused) await reportWatchPaused(paused, grant.error);
@@ -161,7 +209,8 @@ const folders = createBotFolderWatches({
   },
   watch: (folder, listener, onError) => {
     const handle = fsWatch(folder, { recursive: true, persistent: false }, (_event, file) =>
-      listener(typeof file === "string" ? file : file === null ? null : String(file)));
+      listener(typeof file === "string" ? file : file === null ? null : String(file)),
+    );
     handle.on("error", (error) => {
       logger.warn("bots", "A Bot folder watch stopped.", error);
       onError();
@@ -169,7 +218,8 @@ const folders = createBotFolderWatches({
     return { close: () => handle.close() };
   },
   dispatcher,
-  ownWrite: (routine, absolutePath, since) => botOwnWrites.writtenSince(routine.botId, absolutePath, since),
+  ownWrite: (routine, absolutePath, since) =>
+    botOwnWrites.writtenSince(routine.botId, absolutePath, since),
   stat: async (absolutePath) => {
     const stats = await fsPromises.stat(absolutePath).catch(() => undefined);
     return stats ? { mtimeMs: stats.mtimeMs, size: stats.size } : undefined;
@@ -177,22 +227,32 @@ const folders = createBotFolderWatches({
   refused: (routine) => {
     if (refusedOnce.has(routine.id)) return;
     refusedOnce.add(routine.id);
-    void import("../bot-issues/service-main.js").then(({ botIssues }) => botIssues.raise({
-      botId: routine.botId,
-      kind: "routine_failed",
-      dedupeKey: `event_folder:${routine.id}`,
-      title: `${routine.name} can't watch its folder`,
-      body: "Its folder is missing, outside the Bot's folder, or can't be watched. Edit the routine to pick another one.",
-      routineId: routine.id,
-      actions: [],
-    })).catch((error: unknown) => logger.warn("bots", "Could not report a Bot folder problem.", error));
+    void import("../bot-issues/service-main.js")
+      .then(({ botIssues }) =>
+        botIssues.raise({
+          botId: routine.botId,
+          kind: "routine_failed",
+          dedupeKey: `event_folder:${routine.id}`,
+          title: `${routine.name} can't watch its folder`,
+          body: "Its folder is missing, outside the Bot's folder, or can't be watched. Edit the routine to pick another one.",
+          routineId: routine.id,
+          actions: [],
+        }),
+      )
+      .catch((error: unknown) =>
+        logger.warn("bots", "Could not report a Bot folder problem.", error),
+      );
   },
   accepted: (routine) => {
     // Also after a restart, when the card outlived this process's memory.
     refusedOnce.delete(routine.id);
     void import("../bot-issues/service-main.js")
-      .then(({ botIssues }) => botIssues.resolve(routine.botId, `event_folder:${routine.id}`, "fixed"))
-      .catch((error: unknown) => logger.warn("bots", "Could not clear a Bot folder problem.", error));
+      .then(({ botIssues }) =>
+        botIssues.resolve(routine.botId, `event_folder:${routine.id}`, "fixed"),
+      )
+      .catch((error: unknown) =>
+        logger.warn("bots", "Could not clear a Bot folder problem.", error),
+      );
   },
   now: Date.now,
   setTimer: (fn, ms) => {
@@ -209,7 +269,8 @@ const timer = (fn: () => void, ms: number) => {
 };
 
 async function admitWatchDispatch(routine: BotEventRoutine) {
-  if (routine.trigger.kind === "watch" && routine.trigger.source.type === "connector") return botConnectorWatches.authorize(routine);
+  if (routine.trigger.kind === "watch" && routine.trigger.source.type === "connector")
+    return botConnectorWatches.authorize(routine);
   if (routine.trigger.kind === "watch" && routine.trigger.source.type === "script") {
     return (await import("../bot-runtime/bot-session-main.js")).admitBotShellWork(routine.botId);
   }
@@ -220,14 +281,19 @@ const watchIssueSerial = createKeyedSerial();
 
 async function reportWatchPaused(routine: BotEventRoutine, error: string): Promise<void> {
   return watchIssueSerial(`${routine.botId}:${routine.id}`, async () => {
-    const fresh = (await botEventRoutines.list(routine.botId)).find((item) => item.id === routine.id);
+    const fresh = (await botEventRoutines.list(routine.botId)).find(
+      (item) => item.id === routine.id,
+    );
     if (!fresh || fresh.watch?.lastResult !== "error") return;
     const { botIssues } = await import("../bot-issues/service-main.js");
     await botIssues.raise({
-      botId: routine.botId, kind: "routine_paused", dedupeKey: `watch_failed:${routine.id}`,
+      botId: routine.botId,
+      kind: "routine_paused",
+      dedupeKey: `watch_failed:${routine.id}`,
       title: `Turned off ${routine.name}`,
       body: `Its watch couldn't continue${error ? `: ${error}` : "."} Check its source or access, then turn it back on.`,
-      routineId: routine.id, actions: [],
+      routineId: routine.id,
+      actions: [],
     });
     ipcMain.broadcast("bots:changed", { botId: routine.botId });
     ipcMain.broadcast("bots:eventRoutines:changed", { botId: routine.botId });
@@ -238,16 +304,23 @@ const watches = createBotWatches({
   routines: () => botEventRoutines.all(),
   store: botEventRoutines,
   check: (routine, signal) => {
-    if (routine.trigger.kind !== "watch") return Promise.resolve({ ok: false as const, error: "Not a watch." });
-    if (routine.trigger.source.type === "connector") return botConnectorWatches.check(routine, signal);
-    return checkBotWatchSource(routine.trigger.source, async () => {
-      const { botManagedWorkspace } = await import("../bot-capability-services-main.js");
-      return (await botManagedWorkspace.resolve(routine.botId)).homePath;
-    }, {
-      signal,
-      // A script runs only under the Bot's current Shell access.
-      authorize: async () => (await import("../bot-runtime/bot-session-main.js")).admitBotShellWork(routine.botId),
-    });
+    if (routine.trigger.kind !== "watch")
+      return Promise.resolve({ ok: false as const, error: "Not a watch." });
+    if (routine.trigger.source.type === "connector")
+      return botConnectorWatches.check(routine, signal);
+    return checkBotWatchSource(
+      routine.trigger.source,
+      async () => {
+        const { botManagedWorkspace } = await import("../bot-capability-services-main.js");
+        return (await botManagedWorkspace.resolve(routine.botId)).homePath;
+      },
+      {
+        signal,
+        // A script runs only under the Bot's current Shell access.
+        authorize: async () =>
+          (await import("../bot-runtime/bot-session-main.js")).admitBotShellWork(routine.botId),
+      },
+    );
   },
   dispatcher,
   isPaused: async (botId) => (await import("../bot-pause-main.js")).isBotPaused(botId),
@@ -255,7 +328,9 @@ const watches = createBotWatches({
   authorizeDispatch: admitWatchDispatch,
   recovered: async (routine) => {
     await watchIssueSerial(`${routine.botId}:${routine.id}`, async () => {
-      const fresh = (await botEventRoutines.list(routine.botId)).find((item) => item.id === routine.id);
+      const fresh = (await botEventRoutines.list(routine.botId)).find(
+        (item) => item.id === routine.id,
+      );
       if (!fresh?.enabled || fresh.watch?.failures !== 0 || fresh.watch.unsettledFailure) return;
       const { botIssues } = await import("../bot-issues/service-main.js");
       await botIssues.resolve(routine.botId, `watch_failed:${routine.id}`, "fixed");
@@ -274,7 +349,9 @@ const watches = createBotWatches({
   },
 });
 
-export const botConnectorWatches = productionConnectorWatchService({ store: botEventRoutines, dispatcher,
+export const botConnectorWatches = productionConnectorWatchService({
+  store: botEventRoutines,
+  dispatcher,
   changed: botEventRoutinesChanged,
   isPaused: async (botId) => (await import("../bot-pause-main.js")).isBotPaused(botId),
 });
@@ -287,10 +364,19 @@ let interval: ReturnType<typeof setInterval> | undefined;
 /** Re-read the routines: watch what's new, stop watching what's gone. */
 export function rearmBotEventRoutines(): void {
   if (!started) return;
-  void botEventRoutines.all().then((rows) => botConnectorWatches.rearmSources(rows)).catch((error: unknown) => logger.warn("bots", "Connector session retention failed.", error));
-  void folders.rearm().catch((error: unknown) => logger.warn("bots", "Could not arm Bot folder watches.", error));
-  void watches.rearm().catch((error: unknown) => logger.warn("bots", "Could not arm Bot watch checks.", error));
-  void dispatcher.rearm(botEventRoutines.all()).catch((error: unknown) => logger.warn("bots", "Could not resume Bot event receipts.", error));
+  void botEventRoutines
+    .all()
+    .then((rows) => botConnectorWatches.rearmSources(rows))
+    .catch((error: unknown) => logger.warn("bots", "Connector session retention failed.", error));
+  void folders
+    .rearm()
+    .catch((error: unknown) => logger.warn("bots", "Could not arm Bot folder watches.", error));
+  void watches
+    .rearm()
+    .catch((error: unknown) => logger.warn("bots", "Could not arm Bot watch checks.", error));
+  void dispatcher
+    .rearm(botEventRoutines.all())
+    .catch((error: unknown) => logger.warn("bots", "Could not resume Bot event receipts.", error));
 }
 
 let listeningForPower = false;
@@ -301,12 +387,17 @@ export function startBotEventRoutines(): void {
   if (!listeningForPower) {
     listeningForPower = true;
     powerMonitor.on("suspend", () => {
-      sleeping = true; botConnectorWatches.suspend();
-      powerTransition = stopBotEventRoutines({ forSleep: true }).catch((error) => logger.warn("bots", "Watch sleep suspension did not finish.", error));
+      sleeping = true;
+      botConnectorWatches.suspend();
+      powerTransition = stopBotEventRoutines({ forSleep: true }).catch((error) =>
+        logger.warn("bots", "Watch sleep suspension did not finish.", error),
+      );
     });
     powerMonitor.on("resume", () => {
       sleeping = false;
-      void powerTransition.then(() => { if (!sleeping && !hostStopped) startBotEventRoutines(); });
+      void powerTransition.then(() => {
+        if (!sleeping && !hostStopped) startBotEventRoutines();
+      });
     });
   }
   if (started || sleeping) return;
@@ -339,7 +430,11 @@ export async function stopBotEventRoutines(options: { forSleep?: boolean } = {})
 }
 
 /** `POST /hooks/bot-routines/{token}`; only while Bots are open. */
-export async function handleBotRoutineWebhook(request: { token: string; contentType?: string; body: Uint8Array }): Promise<{ status: number }> {
+export async function handleBotRoutineWebhook(request: {
+  token: string;
+  contentType?: string;
+  body: Uint8Array;
+}): Promise<{ status: number }> {
   if (!started) return { status: 404 };
   return webhook(request);
 }

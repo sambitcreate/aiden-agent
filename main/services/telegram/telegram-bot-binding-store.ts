@@ -71,8 +71,7 @@ export interface TelegramBotBindingAuthorityTransitionHooks {
   afterCommit?(): Promise<void>;
 }
 
-export const TELEGRAM_BOT_BINDING_STORE_UNAVAILABLE_MESSAGE =
-  `Telegram routing data is unavailable. Open Aiden on your ${localComputerNoun(process.platform)} to repair it.`;
+export const TELEGRAM_BOT_BINDING_STORE_UNAVAILABLE_MESSAGE = `Telegram routing data is unavailable. Open Aiden on your ${localComputerNoun(process.platform)} to repair it.`;
 
 export class TelegramBotBindingStoreUnavailableError extends Error {
   constructor() {
@@ -81,13 +80,10 @@ export class TelegramBotBindingStoreUnavailableError extends Error {
   }
 }
 
-export type TelegramBotBindingListOptions =
-  boolean | { includeDisabled?: boolean };
+export type TelegramBotBindingListOptions = boolean | { includeDisabled?: boolean };
 
 function includeDisabled(options: TelegramBotBindingListOptions): boolean {
-  return typeof options === "boolean"
-    ? options
-    : options.includeDisabled === true;
+  return typeof options === "boolean" ? options : options.includeDisabled === true;
 }
 
 function validTimestamp(value: unknown): value is number {
@@ -95,9 +91,7 @@ function validTimestamp(value: unknown): value is number {
 }
 
 function validChatId(value: unknown): value is number {
-  return (
-    typeof value === "number" && Number.isSafeInteger(value) && value !== 0
-  );
+  return typeof value === "number" && Number.isSafeInteger(value) && value !== 0;
 }
 
 function validPositiveId(value: unknown): value is number {
@@ -154,15 +148,10 @@ export function telegramBotBindingTargetKey(
   return JSON.stringify([profile, chatId, threadId ?? "dm"]);
 }
 
-function projectBinding(
-  value: unknown,
-  migrateV1 = false,
-): TelegramBotBinding | null {
+function projectBinding(value: unknown, migrateV1 = false): TelegramBotBinding | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
-  const backingWorkspaceId = migrateV1
-    ? raw.workspaceId
-    : raw.backingWorkspaceId;
+  const backingWorkspaceId = migrateV1 ? raw.workspaceId : raw.backingWorkspaceId;
   if (
     !validBotId(raw.botId) ||
     !validProfile(raw.profile) ||
@@ -229,9 +218,7 @@ function normalizeState(value: unknown): TelegramBotBindingState {
   }
   const migrateV1 = raw.version === 1;
   const generation =
-    raw.version === 3 &&
-    Number.isSafeInteger(raw.generation) &&
-    (raw.generation as number) >= 0
+    raw.version === 3 && Number.isSafeInteger(raw.generation) && (raw.generation as number) >= 0
       ? (raw.generation as number)
       : 0;
 
@@ -247,11 +234,7 @@ function normalizeState(value: unknown): TelegramBotBindingState {
   const bindings: TelegramBotBinding[] = [];
   for (const binding of projected) {
     if (bots.has(binding.botId)) continue;
-    const target = telegramBotBindingTargetKey(
-      binding.profile,
-      binding.chatId,
-      binding.threadId,
-    );
+    const target = telegramBotBindingTargetKey(binding.profile, binding.chatId, binding.threadId);
     if (binding.enabled && targets.has(target)) continue;
     bots.add(binding.botId);
     if (binding.enabled) targets.add(target);
@@ -274,29 +257,21 @@ function supportedState(value: unknown): boolean {
     raw.bindings.length > TELEGRAM_BOT_BINDING_LIMITS.maxBindings ||
     !Object.keys(raw).every(
       (key) =>
-        key === "version" ||
-        key === "bindings" ||
-        (raw.version === 3 && key === "generation"),
+        key === "version" || key === "bindings" || (raw.version === 3 && key === "generation"),
     ) ||
-    (raw.version === 3 &&
-      (!Number.isSafeInteger(raw.generation) || (raw.generation as number) < 0))
+    (raw.version === 3 && (!Number.isSafeInteger(raw.generation) || (raw.generation as number) < 0))
   )
     return false;
 
   const bots = new Set<string>();
   const targets = new Set<string>();
   for (const candidate of raw.bindings) {
-    if (!hasExactBindingKeys(candidate, raw.version === 3 ? 2 : raw.version))
-      return false;
+    if (!hasExactBindingKeys(candidate, raw.version === 3 ? 2 : raw.version)) return false;
     const binding = projectBinding(candidate, raw.version === 1);
     if (!binding || bots.has(binding.botId)) return false;
     bots.add(binding.botId);
     if (!binding.enabled) continue;
-    const target = telegramBotBindingTargetKey(
-      binding.profile,
-      binding.chatId,
-      binding.threadId,
-    );
+    const target = telegramBotBindingTargetKey(binding.profile, binding.chatId, binding.threadId);
     if (targets.has(target)) return false;
     targets.add(target);
   }
@@ -311,8 +286,7 @@ function normalizeBotId(value: unknown): string {
 }
 
 function normalizeProfile(value: unknown): string {
-  if (typeof value !== "string")
-    throw new Error("A Telegram profile is required.");
+  if (typeof value !== "string") throw new Error("A Telegram profile is required.");
   const profile = value.trim().toLowerCase();
   if (!validProfile(profile) || profile === "main" || profile === "active") {
     throw new Error("The Telegram profile is invalid or reserved.");
@@ -321,35 +295,29 @@ function normalizeProfile(value: unknown): string {
 }
 
 function normalizeChatId(value: unknown): number {
-  if (!validChatId(value))
-    throw new Error("A valid Telegram chat id is required.");
+  if (!validChatId(value)) throw new Error("A valid Telegram chat id is required.");
   return value;
 }
 
 function normalizeThreadId(value: unknown): number | undefined {
   if (value === undefined) return undefined;
-  if (!validThreadId(value))
-    throw new Error("A Telegram thread id must be a positive integer.");
+  if (!validThreadId(value)) throw new Error("A Telegram thread id must be a positive integer.");
   return value;
 }
 
 function normalizeOwnerUserId(value: unknown): number {
-  if (!validPositiveId(value))
-    throw new Error("A valid Telegram owner id is required.");
+  if (!validPositiveId(value)) throw new Error("A valid Telegram owner id is required.");
   return value;
 }
 
 function normalizeWorkspaceId(value: unknown): string {
   if (typeof value !== "string") throw new Error("A workspace id is required.");
   const workspaceId = value.trim();
-  if (!validWorkspaceId(workspaceId))
-    throw new Error("The workspace id is invalid or too long.");
+  if (!validWorkspaceId(workspaceId)) throw new Error("The workspace id is invalid or too long.");
   return workspaceId;
 }
 
-function normalizeInput(
-  input: TelegramBotBindingInput,
-): TelegramBotBindingInput {
+function normalizeInput(input: TelegramBotBindingInput): TelegramBotBindingInput {
   if (!input || typeof input !== "object") {
     throw new Error("A Telegram bot binding is required.");
   }
@@ -414,13 +382,10 @@ export function createTelegramBotBindingStore(options: {
 
   function parseAuthority(
     value: string,
-  ):
-    | { phase: "committed"; head: string }
-    | { phase: "pending"; previous: string; next: string } {
+  ): { phase: "committed"; head: string } | { phase: "pending"; previous: string; next: string } {
     const committed = /^committed\|([0-9]+:[a-f0-9]{64})$/u.exec(value);
     if (committed) return { phase: "committed", head: committed[1]! };
-    const pending =
-      /^pending\|([0-9]+:[a-f0-9]{64})\|([0-9]+:[a-f0-9]{64})$/u.exec(value);
+    const pending = /^pending\|([0-9]+:[a-f0-9]{64})\|([0-9]+:[a-f0-9]{64})$/u.exec(value);
     if (pending)
       return {
         phase: "pending",
@@ -468,15 +433,11 @@ export function createTelegramBotBindingStore(options: {
     if (value === null) throw new TelegramBotBindingStoreUnavailableError();
     const state = parseAuthority(value);
     if (state.phase === "committed") {
-      if (state.head !== fileHead)
-        throw new TelegramBotBindingStoreUnavailableError();
+      if (state.head !== fileHead) throw new TelegramBotBindingStoreUnavailableError();
       return;
     }
     if (fileHead === state.previous) {
-      await options.authority.head.store(
-        committedAuthority(state.previous),
-        value,
-      );
+      await options.authority.head.store(committedAuthority(state.previous), value);
       return;
     }
     if (fileHead === state.next) {
@@ -488,10 +449,7 @@ export function createTelegramBotBindingStore(options: {
 
   async function assertDataHealthy(): Promise<void> {
     await store.load();
-    if (
-      (await store.loadedFromCorruptFile()) ||
-      (await store.loadedFromUnsafeFile())
-    ) {
+    if ((await store.loadedFromCorruptFile()) || (await store.loadedFromUnsafeFile())) {
       throw new TelegramBotBindingStoreUnavailableError();
     }
   }
@@ -506,7 +464,8 @@ export function createTelegramBotBindingStore(options: {
         let raw: TelegramBotBindingLegacyState | TelegramBotBindingState;
         try {
           raw = JSON.parse(disk.toString("utf8")) as
-            TelegramBotBindingLegacyState | TelegramBotBindingState;
+            | TelegramBotBindingLegacyState
+            | TelegramBotBindingState;
         } catch {
           throw new TelegramBotBindingStoreUnavailableError();
         }
@@ -528,9 +487,7 @@ export function createTelegramBotBindingStore(options: {
     await reconcileAuthority(authorityHead(current));
   }
 
-  function mutate<Result>(
-    operation: (draft: TelegramBotBindingState) => Result,
-  ): Promise<Result> {
+  function mutate<Result>(operation: (draft: TelegramBotBindingState) => Result): Promise<Result> {
     const result = mutationTail.then(async () => {
       await assertHealthy();
       const current = structuredClone(await store.load());
@@ -583,10 +540,8 @@ export function createTelegramBotBindingStore(options: {
 
   function makeBackingChatId(existing: ReadonlySet<string>): string {
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      const candidate =
-        options.createBackingChatId?.() ?? `telegram-bot-${randomUUID()}`;
-      if (validBackingChatId(candidate) && !existing.has(candidate))
-        return candidate;
+      const candidate = options.createBackingChatId?.() ?? `telegram-bot-${randomUUID()}`;
+      if (validBackingChatId(candidate) && !existing.has(candidate)) return candidate;
     }
     throw new Error("Unable to allocate a unique Telegram backing chat id.");
   }
@@ -603,8 +558,7 @@ export function createTelegramBotBindingStore(options: {
       const id = normalizeBotId(botId);
       const showDisabled = includeDisabled(filter);
       const binding = (await store.load()).bindings.find(
-        (candidate) =>
-          candidate.botId === id && (showDisabled || candidate.enabled),
+        (candidate) => candidate.botId === id && (showDisabled || candidate.enabled),
       );
       return binding ? clone(binding) : null;
     },
@@ -626,11 +580,8 @@ export function createTelegramBotBindingStore(options: {
       const binding = (await store.load()).bindings.find(
         (candidate) =>
           candidate.enabled &&
-          telegramBotBindingTargetKey(
-            candidate.profile,
-            candidate.chatId,
-            candidate.threadId,
-          ) === key,
+          telegramBotBindingTargetKey(candidate.profile, candidate.chatId, candidate.threadId) ===
+            key,
       );
       return binding ? clone(binding) : null;
     },
@@ -663,22 +614,15 @@ export function createTelegramBotBindingStore(options: {
         const activeTarget = draft.bindings.find(
           (binding) =>
             binding.enabled &&
-            telegramBotBindingTargetKey(
-              binding.profile,
-              binding.chatId,
-              binding.threadId,
-            ) === targetKey,
+            telegramBotBindingTargetKey(binding.profile, binding.chatId, binding.threadId) ===
+              targetKey,
         );
         if (activeTarget) {
-          throw new Error(
-            "This Telegram chat is already bound to another bot.",
-          );
+          throw new Error("This Telegram chat is already bound to another bot.");
         }
 
         const timestamp = now();
-        const previous = draft.bindings.find(
-          (binding) => binding.botId === normalized.botId,
-        );
+        const previous = draft.bindings.find((binding) => binding.botId === normalized.botId);
         if (previous) {
           // Rebinding an archived binding keeps its durable backing chat so
           // the Pi session identity remains stable across target changes.
@@ -714,8 +658,7 @@ export function createTelegramBotBindingStore(options: {
         const binding = draft.bindings.find(
           (candidate) => candidate.botId === id && candidate.enabled,
         );
-        if (!binding)
-          throw new Error("This bot has no active Telegram binding.");
+        if (!binding) throw new Error("This bot has no active Telegram binding.");
         binding.enabled = false;
         binding.updatedAt = now();
         return clone(binding);
@@ -730,8 +673,7 @@ export function createTelegramBotBindingStore(options: {
         const timestamp = now();
         let count = 0;
         for (const binding of draft.bindings) {
-          if (binding.profile !== normalizedProfile || !binding.enabled)
-            continue;
+          if (binding.profile !== normalizedProfile || !binding.enabled) continue;
           binding.enabled = false;
           binding.updatedAt = timestamp;
           count += 1;
@@ -742,6 +684,4 @@ export function createTelegramBotBindingStore(options: {
   };
 }
 
-export type TelegramBotBindingStore = ReturnType<
-  typeof createTelegramBotBindingStore
->;
+export type TelegramBotBindingStore = ReturnType<typeof createTelegramBotBindingStore>;

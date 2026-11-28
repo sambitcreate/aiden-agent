@@ -28,7 +28,11 @@ function subject() {
 }
 
 test("choosing an on-device model or provider loads it ahead of dictation", async () => {
-  for (const patch of [{ localVoiceModel: "parakeet-v3" }, { voiceProvider: "local" as const }, { localVoicePreload: true }]) {
+  for (const patch of [
+    { localVoiceModel: "parakeet-v3" },
+    { voiceProvider: "local" as const },
+    { localVoicePreload: true },
+  ]) {
     const { apply, calls } = subject();
     await apply(patch);
     assert.ok(calls.includes("preloadLocalVoice"), JSON.stringify(patch));
@@ -43,7 +47,11 @@ test("switching back to Automatic loads the on-device model too", async () => {
 });
 
 test("unrelated changes and turning Load in advance off load nothing", async () => {
-  for (const patch of [{ localVoicePreload: false }, { voiceTrimSilence: false }, { localVoiceIdleUnloadMinutes: 5 }]) {
+  for (const patch of [
+    { localVoicePreload: false },
+    { voiceTrimSilence: false },
+    { localVoiceIdleUnloadMinutes: 5 },
+  ]) {
     const { apply, calls } = subject();
     await apply(patch);
     assert.equal(calls.includes("preloadLocalVoice"), false, JSON.stringify(patch));

@@ -159,10 +159,7 @@ test("DataStore rejects JSON escaping that expands a write above its byte ceilin
     maxBytes: 64,
   });
 
-  await assert.rejects(
-    () => store.save({ value: "\0".repeat(20) }),
-    DataStoreUnsafeWriteError,
-  );
+  await assert.rejects(() => store.save({ value: "\0".repeat(20) }), DataStoreUnsafeWriteError);
   assert.deepEqual(JSON.parse(await fs.readFile(target, "utf8")), { value: "safe" });
 });
 
@@ -245,7 +242,11 @@ test("DataStore leaves no rescue copy for a regenerable cache", async (t) => {
 
   await store.save({ count: 5 });
 
-  assert.deepEqual(await fs.readdir(dir), ["config.json"], "an explicit cache opt-out leaves no litter");
+  assert.deepEqual(
+    await fs.readdir(dir),
+    ["config.json"],
+    "an explicit cache opt-out leaves no litter",
+  );
 });
 
 test("DataStore only rescues the corrupt file once, not on every later write", async (t) => {
@@ -742,7 +743,11 @@ test("DataStore preserves a changed crash-held predecessor as a conflict", async
   const expected = JSON.stringify({ count: 1 });
   const edited = JSON.stringify({ count: 9, external: true });
   const expectedHash = createHash("sha256").update(expected).digest("hex");
-  await fs.writeFile(path.join(dir, `.config.json.${expectedHash}.00000000-0000-4000-8000-000000000008.held`), edited, "utf-8");
+  await fs.writeFile(
+    path.join(dir, `.config.json.${expectedHash}.00000000-0000-4000-8000-000000000008.held`),
+    edited,
+    "utf-8",
+  );
   await fs.writeFile(path.join(dir, "config.json"), JSON.stringify({ count: 2 }), "utf-8");
   const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
 
@@ -1001,9 +1006,7 @@ test("chat store: list() drops malformed index entries while preserving valid ch
     "utf-8",
   );
   const store = createChatStore(async () => dir);
-  assert.deepEqual(await store.list(), [
-    { ...valid, summaryRevision: chatSummaryRevision(valid) },
-  ]);
+  assert.deepEqual(await store.list(), [{ ...valid, summaryRevision: chatSummaryRevision(valid) }]);
 });
 
 test("chat store: list() returns [] when index.json is missing", async (t) => {
@@ -1099,6 +1102,5 @@ test("DataStore recovery leaves dotted sibling held and previous files untouched
   });
   assert.deepEqual(await store.load(), { count: 0 });
   assert.deepEqual((await fs.readdir(dir)).sort(), names.sort());
-  for (const name of names)
-    assert.equal(await fs.readFile(path.join(dir, name), "utf8"), payload);
+  for (const name of names) assert.equal(await fs.readFile(path.join(dir, name), "utf8"), payload);
 });

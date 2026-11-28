@@ -7,7 +7,10 @@ import {
   MAX_INLINE_VISUAL_HEIGHT,
   MIN_INLINE_VISUAL_HEIGHT,
 } from "../../renderer/shared/generative-ui-bridge.js";
-import { GENERATIVE_UI_GUEST_CSP, GENERATIVE_UI_IFRAME_SANDBOX } from "../../renderer/shared/generative-ui.js";
+import {
+  GENERATIVE_UI_GUEST_CSP,
+  GENERATIVE_UI_IFRAME_SANDBOX,
+} from "../../renderer/shared/generative-ui.js";
 import {
   abortableSleep,
   createVisualSnapshotQueue,
@@ -39,7 +42,13 @@ const SETTLE_MS = 400;
 const MAX_PNG_BYTES = 2 * 1024 * 1024;
 const IDLE_CLOSE_MS = 10_000;
 
-const LIGHT_THEME = { colorScheme: "light" as const, canvas: CANVAS, foreground: "#181817", secondary: "#6b6b68", accent: "#0b7de5" };
+const LIGHT_THEME = {
+  colorScheme: "light" as const,
+  canvas: CANVAS,
+  foreground: "#181817",
+  secondary: "#6b6b68",
+  accent: "#0b7de5",
+};
 
 /**
  * The guest document is inlined as `srcdoc`, not loaded from its own
@@ -57,7 +66,11 @@ const HOST_PAGE_CSP = GENERATIVE_UI_GUEST_CSP.replace("frame-src 'none'", "frame
 
 /** Escapes a value for a double-quoted attribute. */
 function escapeAttribute(value: string): string {
-  return value.replace(/&/gu, "&amp;").replace(/"/gu, "&quot;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/"/gu, "&quot;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;");
 }
 
 function hostPage(guestDocument: string, width: number): string {
@@ -141,15 +154,25 @@ export function createElectronVisualSnapshotCapture(deps: {
     idleTimer = setTimeout(closeWindow, IDLE_CLOSE_MS);
   };
 
-  const captureSized = async (target: InstanceType<typeof BrowserWindow>, width: number, height: number, signal: AbortSignal): Promise<CapturedImage | null> => {
+  const captureSized = async (
+    target: InstanceType<typeof BrowserWindow>,
+    width: number,
+    height: number,
+    signal: AbortSignal,
+  ): Promise<CapturedImage | null> => {
     const fullWidth = width + PADDING * 2;
     const fullHeight = Math.min(height, MAX_INLINE_VISUAL_HEIGHT) + PADDING * 2;
     if (signal.aborted) return null;
     target.setContentSize(fullWidth, fullHeight);
-    await target.webContents.executeJavaScript("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+    await target.webContents.executeJavaScript(
+      "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+    );
     for (let attempt = 0; attempt < 3; attempt += 1) {
       if (signal.aborted) return null;
-      const image = await target.webContents.capturePage({ x: 0, y: 0, width: fullWidth, height: fullHeight }, { stayHidden: true });
+      const image = await target.webContents.capturePage(
+        { x: 0, y: 0, width: fullWidth, height: fullHeight },
+        { stayHidden: true },
+      );
       if (signal.aborted) return null;
       if (!image.isEmpty()) {
         const png = image.toPNG();
@@ -170,13 +193,21 @@ export function createElectronVisualSnapshotCapture(deps: {
     const width = visual.layout === "wide" ? WIDE_WIDTH : COLUMN_WIDTH;
     // Inline, as the desktop draws it: the same font size and a body that
     // measures its own margins. The host page paints the opaque canvas.
-    const guest = wrapGenerativeUiHtml(html, visual.title, LIGHT_THEME, { inline: true, stillImage: true });
+    const guest = wrapGenerativeUiHtml(html, visual.title, LIGHT_THEME, {
+      inline: true,
+      stillImage: true,
+    });
     target.setContentSize(width + PADDING * 2, 400);
-    await target.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(hostPage(guest, width))}`);
+    await target.loadURL(
+      `data:text/html;charset=utf-8,${encodeURIComponent(hostPage(guest, width))}`,
+    );
     // Wait for the guest to report its height and then stop changing.
     let height = 0;
     while (!signal.aborted) {
-      const snap = (await target.webContents.executeJavaScript("window.__snap")) as { height: number; changedAt: number };
+      const snap = (await target.webContents.executeJavaScript("window.__snap")) as {
+        height: number;
+        changedAt: number;
+      };
       if (signal.aborted) return null;
       if (snap.height > 0 && Date.now() - snap.changedAt >= SETTLE_MS) {
         height = snap.height;
@@ -196,7 +227,9 @@ export function createElectronVisualSnapshotCapture(deps: {
     target.setContentSize(width + PADDING * 2, 400);
     await target.loadURL(getWindowUrl("visual-snapshot.html"));
     while (!signal.aborted) {
-      const ready = await target.webContents.executeJavaScript("typeof window.__aidenSnapshot === 'function'");
+      const ready = await target.webContents.executeJavaScript(
+        "typeof window.__aidenSnapshot === 'function'",
+      );
       if (signal.aborted) return null;
       if (ready) break;
       await abortableSleep(50, signal);
@@ -205,7 +238,11 @@ export function createElectronVisualSnapshotCapture(deps: {
     // Only the images this visual shows travel to the page: id, type, and data.
     const payload = {
       visual: visual.visual,
-      attachments: (visual.attachments ?? []).map(({ id, mimeType, data }) => ({ id, mimeType, data })),
+      attachments: (visual.attachments ?? []).map(({ id, mimeType, data }) => ({
+        id,
+        mimeType,
+        data,
+      })),
     };
     const height = (await target.webContents.executeJavaScript(
       `window.__aidenSnapshot(${JSON.stringify(JSON.stringify(payload))}, ${width}, ${PADDING})`,
@@ -215,9 +252,14 @@ export function createElectronVisualSnapshotCapture(deps: {
   };
 
   return {
-    async capture(visual: SnapshotVisual, signal: AbortSignal, job: VisualSnapshotJob): Promise<CapturedImage | null> {
+    async capture(
+      visual: SnapshotVisual,
+      signal: AbortSignal,
+      job: VisualSnapshotJob,
+    ): Promise<CapturedImage | null> {
       if (signal.aborted) return null;
-      const html = visual.kind === "html" ? ((await deps.htmlFor(job.chatId, visual.visualId)) ?? "") : "";
+      const html =
+        visual.kind === "html" ? ((await deps.htmlFor(job.chatId, visual.visualId)) ?? "") : "";
       // Checked again before a window is claimed, so an abandoned capture never takes one.
       if (signal.aborted || (visual.kind === "html" && !html)) return null;
       const target = ensureWindow();
@@ -226,7 +268,9 @@ export function createElectronVisualSnapshotCapture(deps: {
       const discard = () => discardWindow(target);
       signal.addEventListener("abort", discard, { once: true });
       try {
-        return visual.kind === "ui" ? await captureUi(visual, target, signal) : await captureHtml(visual, html, target, signal);
+        return visual.kind === "ui"
+          ? await captureUi(visual, target, signal)
+          : await captureHtml(visual, html, target, signal);
       } finally {
         signal.removeEventListener("abort", discard);
         // An abandoned capture no longer owns the window, so it leaves the idle timer alone.
@@ -240,7 +284,11 @@ export function createElectronVisualSnapshotCapture(deps: {
 /** Wires the capture to the chat store; returns the queue the service registry installs. */
 export function createMainVisualSnapshotQueue(deps: {
   htmlFor: (chatId: string, mediaId: string) => Promise<string | undefined>;
-  addVisualSnapshots: (chatId: string, messageId: string, snapshots: { visualId: string; attachment: Attachment }[]) => Promise<boolean>;
+  addVisualSnapshots: (
+    chatId: string,
+    messageId: string,
+    snapshots: { visualId: string; attachment: Attachment }[],
+  ) => Promise<boolean>;
 }) {
   const capture = createElectronVisualSnapshotCapture({ htmlFor: deps.htmlFor });
   const queue = createVisualSnapshotQueue({
@@ -249,7 +297,10 @@ export function createMainVisualSnapshotQueue(deps: {
       deps.addVisualSnapshots(
         chatId,
         messageId,
-        snapshots.map((snapshot) => ({ visualId: snapshot.visualId, attachment: snapshotAttachment(chatId, messageId, snapshot) })),
+        snapshots.map((snapshot) => ({
+          visualId: snapshot.visualId,
+          attachment: snapshotAttachment(chatId, messageId, snapshot),
+        })),
       ),
     onError: (error) => logger.warn("visuals", "A visual snapshot could not be captured.", error),
   });

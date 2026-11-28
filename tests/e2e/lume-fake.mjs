@@ -50,7 +50,15 @@
 //   guest's screen (it reads the run's `--vnc-password` from the fake state).
 //   Unset, the listener only greets and hangs up.
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { connect, createServer } from "node:net";
 import path from "node:path";
 import process from "node:process";
@@ -96,7 +104,8 @@ const fail = (message, code = 1) => {
   process.exit(code);
 };
 
-const DEFAULT_HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKfakeHostKeyForAidenBotComputerTests0123456789";
+const DEFAULT_HOST_KEY =
+  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKfakeHostKeyForAidenBotComputerTests0123456789";
 
 const VALUE_OPTIONS = new Set([
   "--storage",
@@ -187,7 +196,10 @@ function swiftJson(value) {
 function details(storage, name, vm) {
   const running = isRunning(vm);
   const template = JSON.parse(
-    readFileSync(path.join(fixtures, running ? "lume-get-running.json" : "lume-get-stopped.json"), "utf8"),
+    readFileSync(
+      path.join(fixtures, running ? "lume-get-running.json" : "lume-get-stopped.json"),
+      "utf8",
+    ),
   )[0];
   const stale = staleNames().has(name);
   const host = process.env.AIDEN_FAKE_LUME_VNC_HOST ?? "127.0.0.1";
@@ -225,7 +237,9 @@ async function vncChild(storage, name, port) {
     socket.pipe(guest);
     guest.pipe(socket);
   });
-  await new Promise((resolve) => server.listen(port, process.env.AIDEN_FAKE_LUME_VNC_BIND ?? "127.0.0.1", resolve));
+  await new Promise((resolve) =>
+    server.listen(port, process.env.AIDEN_FAKE_LUME_VNC_BIND ?? "127.0.0.1", resolve),
+  );
   const state = readState(storage);
   const vm = state.vms[name];
   if (!vm) process.exit(0);
@@ -280,8 +294,10 @@ async function main() {
   }
   let storage;
   if (op === "clone") {
-    if (!options["--source-storage"] || !options["--dest-storage"]) fail("clone needs --source-storage and --dest-storage", 72);
-    if (options["--source-storage"] !== options["--dest-storage"]) fail("fake lume keeps one storage directory", 72);
+    if (!options["--source-storage"] || !options["--dest-storage"])
+      fail("clone needs --source-storage and --dest-storage", 72);
+    if (options["--source-storage"] !== options["--dest-storage"])
+      fail("fake lume keeps one storage directory", 72);
     storage = options["--source-storage"];
   } else {
     if (!options["--storage"]) fail(`${op} needs --storage`, 72);
@@ -299,7 +315,8 @@ async function main() {
   switch (op) {
     case "create": {
       const [, name] = positionals;
-      if (options["--os"] !== "macOS" || options["--unattended"] !== "tahoe") fail("unexpected create options", 74);
+      if (options["--os"] !== "macOS" || options["--unattended"] !== "tahoe")
+        fail("unexpected create options", 74);
       if (!options["--ipsw"] || !existsSync(options["--ipsw"])) fail("restore image not found");
       if (state.vms[name]) fail(`Virtual machine already exists with name: ${name}`);
       // `--unattended` boots the new VM to drive Setup Assistant, so it needs one of
@@ -332,7 +349,8 @@ async function main() {
       if (cloneDelay > 0) {
         await sleep(cloneDelay);
         const copied = readState(storage);
-        if (copied.vms[source] && isRunning(copied.vms[source])) fail(`fake lume: ${source} started while its disk was being copied`);
+        if (copied.vms[source] && isRunning(copied.vms[source]))
+          fail(`fake lume: ${source} started while its disk was being copied`);
         Object.assign(state, copied);
       }
       const count = Object.keys(state.vms).length;
@@ -351,9 +369,14 @@ async function main() {
       const [, name] = positionals;
       const vm = state.vms[name];
       if (!vm) fail(`Virtual machine not found: ${name}`);
-      if (!flags.has("--detach") || options["--display"] !== "none") fail("Aiden always runs detached with no display", 75);
+      if (!flags.has("--detach") || options["--display"] !== "none")
+        fail("Aiden always runs detached with no display", 75);
       const shared = options["--shared-dir"] ?? "";
-      if (!shared.endsWith(":rw") || !path.isAbsolute(shared.slice(0, -3)) || !existsSync(shared.slice(0, -3))) {
+      if (
+        !shared.endsWith(":rw") ||
+        !path.isAbsolute(shared.slice(0, -3)) ||
+        !existsSync(shared.slice(0, -3))
+      ) {
         fail("shared directory must be an existing absolute path tagged :rw", 76);
       }
       if (!options["--vnc-password"]) fail("Aiden always sets a VNC password", 77);
@@ -367,7 +390,10 @@ async function main() {
         // The real detached child fails after `run` returned; its error lands in the log.
         if (logFile) {
           mkdirSync(path.dirname(logFile), { recursive: true });
-          appendFileSync(logFile, readFileSync(path.join(fixtures, "lume-error-vm-limit.txt"), "utf8"));
+          appendFileSync(
+            logFile,
+            readFileSync(path.join(fixtures, "lume-error-vm-limit.txt"), "utf8"),
+          );
         }
         if (returnDelay > 0) await sleep(returnDelay);
         process.stdout.write(`Started '${name}' in the background (PID 1).\nLog: ${logFile}\n`);
@@ -396,7 +422,9 @@ async function main() {
       if (listed("AIDEN_FAKE_LUME_RUN_FAILS_LATE", name)) {
         fail(`fake lume: '${name}' was launched, then run failed`);
       }
-      process.stdout.write(`Started '${name}' in the background (PID ${child.pid}).\nLog: ${logFile}\n`);
+      process.stdout.write(
+        `Started '${name}' in the background (PID ${child.pid}).\nLog: ${logFile}\n`,
+      );
       return;
     }
     case "get": {
@@ -420,10 +448,12 @@ async function main() {
       const vm = state.vms[name];
       if (!vm) fail(`Virtual machine not found: ${name}`);
       if (!isRunning(vm)) {
-        if (vm.status === "starting" && listed("AIDEN_FAKE_LUME_STOP_FAILS_BOOTING", name)) fail(`Failed to stop virtual machine: ${name}`);
+        if (vm.status === "starting" && listed("AIDEN_FAKE_LUME_STOP_FAILS_BOOTING", name))
+          fail(`Failed to stop virtual machine: ${name}`);
         fail(`Virtual machine not running: ${name}`);
       }
-      if (listed("AIDEN_FAKE_LUME_STOP_FAILS", name)) fail(`Failed to stop virtual machine: ${name}`);
+      if (listed("AIDEN_FAKE_LUME_STOP_FAILS", name))
+        fail(`Failed to stop virtual machine: ${name}`);
       const stopDelay = Number(process.env.AIDEN_FAKE_LUME_STOP_DELAY_MS ?? "0");
       if (stopDelay > 0) await sleep(stopDelay);
       // Re-read: other Lume calls may have changed the state while this one waited.

@@ -22,7 +22,13 @@ function FieldValue({ field }: { field: WebExtractRecapFieldV1 }) {
   }
   return (
     <span className="inline-flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-      <span className={field.status === "extracted" ? "break-words font-medium text-primary" : "break-words text-secondary"}>
+      <span
+        className={
+          field.status === "extracted"
+            ? "break-words font-medium text-primary"
+            : "break-words text-secondary"
+        }
+      >
         {field.value}
       </span>
       {field.status === "uncertain" ? <Badge color="warning">Guess</Badge> : null}
@@ -33,11 +39,7 @@ function FieldValue({ field }: { field: WebExtractRecapFieldV1 }) {
 function FieldSource({ field }: { field: WebExtractRecapFieldV1 }) {
   if (field.status === "null") return null;
   if (field.sourceLine) {
-    return (
-      <q className="mt-0.5 block break-words text-small text-tertiary">
-        {field.sourceLine}
-      </q>
-    );
+    return <q className="mt-0.5 block break-words text-small text-tertiary">{field.sourceLine}</q>;
   }
   return field.notFound ? (
     <span className="mt-0.5 block text-small text-tertiary">Not found on the page</span>
@@ -47,20 +49,29 @@ function FieldSource({ field }: { field: WebExtractRecapFieldV1 }) {
 export function WebExtractRecap({ recap }: { recap: WebExtractRecapV1 }) {
   const title = `Values read from ${recap.host}`;
   return (
-    <section aria-label={title} className="web-extract-recap max-w-full select-text rounded-card bg-well px-3.5 py-3">
+    <section
+      aria-label={title}
+      className="web-extract-recap max-w-full select-text rounded-card bg-well px-3.5 py-3"
+    >
       <p className="flex min-w-0 items-center gap-1.5 text-small text-secondary">
         <Globe2 aria-hidden="true" className="size-3.5 shrink-0" />
         <span className="truncate">{recap.host}</span>
       </p>
       {recap.error ? (
         <p className="mt-1.5 text-small text-secondary">
-          Couldn’t read the values: {WEB_EXTRACT_ERROR_MESSAGES[recap.error]}. The page was read instead.
+          Couldn’t read the values: {WEB_EXTRACT_ERROR_MESSAGES[recap.error]}. The page was read
+          instead.
         </p>
       ) : (
         <dl className="mt-2 grid gap-2.5">
           {recap.fields.map((field) => (
-            <div key={field.name} className="grid min-w-0 gap-x-4 gap-y-0.5 min-[540px]:grid-cols-[minmax(6rem,0.32fr)_minmax(0,1fr)]">
-              <dt className="break-words text-small text-secondary">{webExtractFieldLabel(field.name)}</dt>
+            <div
+              key={field.name}
+              className="grid min-w-0 gap-x-4 gap-y-0.5 min-[540px]:grid-cols-[minmax(6rem,0.32fr)_minmax(0,1fr)]"
+            >
+              <dt className="break-words text-small text-secondary">
+                {webExtractFieldLabel(field.name)}
+              </dt>
               <dd className="min-w-0">
                 <FieldValue field={field} />
                 <FieldSource field={field} />

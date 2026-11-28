@@ -9,10 +9,7 @@ import {
   inspectAidenFilesystemIdentity,
   type AidenOpaqueHandleClaims,
 } from "./aiden-remote-opaque-handles.js";
-import type {
-  AidenRemoteApprovedRoot,
-  AidenRemoteStateRegistry,
-} from "./aiden-remote-state.js";
+import type { AidenRemoteApprovedRoot, AidenRemoteStateRegistry } from "./aiden-remote-state.js";
 
 const LOCATION_TTL_MS = 10 * 60_000;
 const CURSOR_TTL_MS = 2 * 60_000;
@@ -83,17 +80,18 @@ function safeLabel(value: string, fallback: string): string {
 
 function mapHandleError(error: unknown): never {
   if (!(error instanceof AidenOpaqueHandleError)) throw error;
-  const status = error.code === "handle_wrong_device"
-    ? 403
-    : error.code === "handle_expired"
-      ? 410
-      : error.code === "handle_capacity"
-        ? 429
-        : error.code === "root_policy_changed" ||
-            error.code === "filesystem_identity_changed" ||
-            error.code === "path_outside_root"
-          ? 409
-          : 400;
+  const status =
+    error.code === "handle_wrong_device"
+      ? 403
+      : error.code === "handle_expired"
+        ? 410
+        : error.code === "handle_capacity"
+          ? 429
+          : error.code === "root_policy_changed" ||
+              error.code === "filesystem_identity_changed" ||
+              error.code === "path_outside_root"
+            ? 409
+            : 400;
   throw new AidenRemoteServiceError(
     error.code,
     error.code === "handle_expired"
@@ -291,7 +289,10 @@ export class AidenRemoteWorkspaceBrowserService {
         parentHandleDigest: undefined,
       });
       result.push({
-        label: index === 0 ? safeLabel(root.label, "Approved folder") : safeLabel(segments[index - 1]!, "Folder"),
+        label:
+          index === 0
+            ? safeLabel(root.label, "Approved folder")
+            : safeLabel(segments[index - 1]!, "Folder"),
         location: this.handles.issue("loc", claims),
       });
     }
@@ -316,7 +317,11 @@ export class AidenRemoteWorkspaceBrowserService {
     }
     const entries = await this.directoryEntries(root, claims.canonicalPath);
     const snapshotId = createHash("sha256")
-      .update(entries.map((entry) => `${entry.name}\0${entry.filesystemDevice}\0${entry.filesystemInode}`).join("\n"))
+      .update(
+        entries
+          .map((entry) => `${entry.name}\0${entry.filesystemDevice}\0${entry.filesystemInode}`)
+          .join("\n"),
+      )
       .digest("base64url");
     let offset = 0;
     if (cursor) {
@@ -356,15 +361,16 @@ export class AidenRemoteWorkspaceBrowserService {
       })),
     );
     const nextOffset = offset + pageEntries.length;
-    const nextCursor = nextOffset < entries.length
-      ? this.handles.issue("cur", {
-          ...claims,
-          expiresAt: this.now() + CURSOR_TTL_MS,
-          snapshotId,
-          cursorOffset: nextOffset,
-          parentHandleDigest: tokenDigest(location),
-        })
-      : undefined;
+    const nextCursor =
+      nextOffset < entries.length
+        ? this.handles.issue("cur", {
+            ...claims,
+            expiresAt: this.now() + CURSOR_TTL_MS,
+            snapshotId,
+            cursorOffset: nextOffset,
+            parentHandleDigest: tokenDigest(location),
+          })
+        : undefined;
     return {
       rootId: root.id,
       label: safeLabel(path.basename(claims.canonicalPath), root.label),

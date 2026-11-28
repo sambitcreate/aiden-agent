@@ -57,13 +57,22 @@ export function botTurnTimeline(turn: readonly BotTranscriptEntry[]): Generation
       finishedAt: at,
     });
   }
-  return { version: GENERATION_TIMELINE_VERSION, generationId: "bot-turn", status: "completed", startedAt: 0, steps };
+  return {
+    version: GENERATION_TIMELINE_VERSION,
+    generationId: "bot-turn",
+    status: "completed",
+    startedAt: 0,
+    steps,
+  };
 }
 
 /** The turn's visible reply: its assistant text, in order. */
 function turnText(turn: readonly BotTranscriptEntry[]): string {
   return turn
-    .filter((entry): entry is Extract<BotTranscriptEntry, { type: "assistant" }> => entry.type === "assistant")
+    .filter(
+      (entry): entry is Extract<BotTranscriptEntry, { type: "assistant" }> =>
+        entry.type === "assistant",
+    )
     .map((entry) => entry.text)
     .filter((text) => text.trim())
     .join("\n\n");
@@ -87,8 +96,13 @@ export function checkBotTurnClaims(
   const claimCheck = detectUnverifiedSuccessClaim(turnText(turn), timeline, options);
   if (!claimCheck) return undefined;
   const flagged = new Set(claimCheck.stepIds);
-  const toolNames = [...new Set(timeline.steps.flatMap((step) =>
-    step.kind === "tool" && flagged.has(step.id) ? [step.toolName] : []))];
+  const toolNames = [
+    ...new Set(
+      timeline.steps.flatMap((step) =>
+        step.kind === "tool" && flagged.has(step.id) ? [step.toolName] : [],
+      ),
+    ),
+  ];
   return { claimCheck, toolNames };
 }
 

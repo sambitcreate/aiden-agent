@@ -7,7 +7,9 @@ import * as fs from "node:fs/promises";
 
 export class WorktreeCapacityUnavailableError extends Error {
   readonly code = "capacity_unavailable";
-  constructor(message = "Disk capacity could not be verified. Check that the worktree and repository volumes are available.") {
+  constructor(
+    message = "Disk capacity could not be verified. Check that the worktree and repository volumes are available.",
+  ) {
     super(message);
     this.name = "WorktreeCapacityUnavailableError";
   }
@@ -81,13 +83,20 @@ async function inspectFilesystemCapacity(dir: string): Promise<WorktreeFilesyste
         fs.stat(candidate, { bigint: true }),
       ]);
       const availableBytes = Number(stats.bavail) * Number(stats.bsize);
-      if (!Number.isSafeInteger(availableBytes) || availableBytes < 0 ||
-          !Number.isSafeInteger(Number(stats.bsize)) || Number(stats.bsize) <= 0) {
+      if (
+        !Number.isSafeInteger(availableBytes) ||
+        availableBytes < 0 ||
+        !Number.isSafeInteger(Number(stats.bsize)) ||
+        Number(stats.bsize) <= 0
+      ) {
         throw new WorktreeCapacityUnavailableError();
       }
       return { device: identity.dev.toString(), availableBytes };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || path.dirname(candidate) === candidate) {
+      if (
+        (error as NodeJS.ErrnoException).code !== "ENOENT" ||
+        path.dirname(candidate) === candidate
+      ) {
         throw new WorktreeCapacityUnavailableError();
       }
       candidate = path.dirname(candidate);
@@ -105,12 +114,23 @@ function capacityReport(
   estimatedBytes: number,
   policy: DiskCapacityPolicy,
 ): DiskCapacityReport {
-  if (!Number.isSafeInteger(estimatedBytes) || estimatedBytes < 0 ||
-      !Number.isSafeInteger(availableBytes) || availableBytes < 0) {
-    throw new WorktreeCapacityUnavailableError("The worktree allocation size could not be verified.");
+  if (
+    !Number.isSafeInteger(estimatedBytes) ||
+    estimatedBytes < 0 ||
+    !Number.isSafeInteger(availableBytes) ||
+    availableBytes < 0
+  ) {
+    throw new WorktreeCapacityUnavailableError(
+      "The worktree allocation size could not be verified.",
+    );
   }
   const requiredBytes = Math.ceil(estimatedBytes * policy.overheadFactor) + policy.reserveBytes;
-  const report = { availableBytes, requiredBytes, reserveBytes: policy.reserveBytes, estimatedBytes };
+  const report = {
+    availableBytes,
+    requiredBytes,
+    reserveBytes: policy.reserveBytes,
+    estimatedBytes,
+  };
   if (availableBytes < requiredBytes) throw new InsufficientDiskSpaceError(report);
   return report;
 }
@@ -135,7 +155,9 @@ export async function checkWorktreeAllocation(
   inspect: (directory: string) => Promise<WorktreeFilesystemCapacity> = inspectFilesystemCapacity,
 ): Promise<void> {
   if (!Number.isSafeInteger(checkoutAndPayloadBytes) || checkoutAndPayloadBytes < 0) {
-    throw new WorktreeCapacityUnavailableError("The worktree allocation size could not be verified.");
+    throw new WorktreeCapacityUnavailableError(
+      "The worktree allocation size could not be verified.",
+    );
   }
   const [checkout, metadata] = await Promise.all([inspect(destination), inspect(commonDirectory)]);
   if (!checkout.device || !metadata.device) throw new WorktreeCapacityUnavailableError();

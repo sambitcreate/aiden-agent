@@ -4,11 +4,17 @@ import type * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DOMParser } from "@xmldom/xmldom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { RemoteBotsSection, remoteBotGroupsMatching, remoteBotLine } from "../components/remote-bots-section";
+import {
+  RemoteBotsSection,
+  remoteBotGroupsMatching,
+  remoteBotLine,
+} from "../components/remote-bots-section";
 
 /** The rows read photos through React Query, as under the app's provider. */
 const renderSection = (element: React.ReactElement) =>
-  renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}>{element}</QueryClientProvider>);
+  renderToStaticMarkup(
+    <QueryClientProvider client={new QueryClient()}>{element}</QueryClientProvider>,
+  );
 import { SCRATCH_PROJECT } from "../components/remote-new-chat-pickers";
 import { CommandSystemProvider } from "../lib/command-system";
 import type { HostChatCapability } from "../lib/hosts/host-chat-adapter";
@@ -22,20 +28,48 @@ const noop = () => undefined;
 const asyncNoop = async () => undefined;
 
 const studio: NewChatMachine = { id: "host-b", label: "Studio", availability: "online" };
-const laptop: NewChatMachine = { id: "host-c", label: "Laptop", availability: "offline", disabledReason: "Laptop is offline." };
+const laptop: NewChatMachine = {
+  id: "host-c",
+  label: "Laptop",
+  availability: "offline",
+  disabledReason: "Laptop is offline.",
+};
 const CHAT: HostChatCapability[] = ["send", "attach", "createChat"];
 
 const catalog: HostModelCatalog = {
-  providers: [{ id: "prov", label: "Provider", models: [{ id: "fast", label: "Fast model", supportsImages: false, thinkingLevels: [], thinkingCanDisable: true, hidden: false }] }],
+  providers: [
+    {
+      id: "prov",
+      label: "Provider",
+      models: [
+        {
+          id: "fast",
+          label: "Fast model",
+          supportsImages: false,
+          thinkingLevels: [],
+          thinkingCanDisable: true,
+          hidden: false,
+        },
+      ],
+    },
+  ],
   defaults: { providerId: "prov", modelId: "fast" },
 };
 
 function ready(patch: Partial<RemoteNewChatSnapshot> = {}): RemoteNewChatSnapshot {
-  return { status: { availability: "online", generation: 1 }, starting: false, unresolved: null, ...patch };
+  return {
+    status: { availability: "online", generation: 1 },
+    starting: false,
+    unresolved: null,
+    ...patch,
+  };
 }
 
 function dom(markup: string) {
-  const document = new DOMParser().parseFromString(`<!doctype html><html><body>${markup}</body></html>`, "text/html");
+  const document = new DOMParser().parseFromString(
+    `<!doctype html><html><body>${markup}</body></html>`,
+    "text/html",
+  );
   const all = Array.from(document.getElementsByTagName("*"));
   const buttons = all.filter((node) => node.tagName.toLowerCase() === "button");
   return {
@@ -43,7 +77,10 @@ function dom(markup: string) {
     all,
     buttons,
     button: (label: RegExp) =>
-      buttons.find((node) => label.test(node.textContent ?? "") || label.test(node.getAttribute("aria-label") ?? "")),
+      buttons.find(
+        (node) =>
+          label.test(node.textContent ?? "") || label.test(node.getAttribute("aria-label") ?? ""),
+      ),
     attr: (name: string) => all.find((node) => node.hasAttribute(name))?.getAttribute(name) ?? null,
   };
 }
@@ -91,7 +128,10 @@ test("a new chat on a paired Mac names that Mac and its project, model and machi
   assert.equal(view.attr("data-remote-project"), "w-1");
   assert.ok(view.button(/^Project on Studio: Site$/u));
   assert.ok(view.button(/^Model on Studio: Fast model$/u));
-  assert.ok(view.button(/^Attach files or images$/u), "the host stages uploads, so files can be attached");
+  assert.ok(
+    view.button(/^Attach files or images$/u),
+    "the host stages uploads, so files can be attached",
+  );
   assert.equal(
     view.buttons.some((node) => (node.getAttribute("aria-label") ?? "").startsWith("Approvals:")),
     false,
@@ -104,14 +144,31 @@ test("a new chat on a paired Mac names that Mac and its project, model and machi
 test("the model chip shows the host provider's logo, as this Mac's own model chip does", () => {
   const view = renderPane({
     models: {
-      providers: [{ id: "zai-coding-cn", label: "Z.AI Coding CN", models: [{ id: "glm-5.3", label: "GLM 5.3", supportsImages: false, thinkingLevels: [], thinkingCanDisable: true, hidden: false }] }],
+      providers: [
+        {
+          id: "zai-coding-cn",
+          label: "Z.AI Coding CN",
+          models: [
+            {
+              id: "glm-5.3",
+              label: "GLM 5.3",
+              supportsImages: false,
+              thinkingLevels: [],
+              thinkingCanDisable: true,
+              hidden: false,
+            },
+          ],
+        },
+      ],
       defaults: { providerId: "zai-coding-cn", modelId: "glm-5.3" },
     },
     model: { providerId: "zai-coding-cn", modelId: "glm-5.3" },
   });
   const chip = view.button(/^Model on Studio: GLM 5\.3$/u);
   assert.ok(chip);
-  const marks = Array.from(chip.getElementsByTagName("*")).map((node) => node.getAttribute("data-provider-icon"));
+  const marks = Array.from(chip.getElementsByTagName("*")).map((node) =>
+    node.getAttribute("data-provider-icon"),
+  );
   assert.ok(marks.includes("zai-coding-cn"));
 });
 
@@ -121,9 +178,18 @@ test("the new chat's composer sits on the column once, and the header chip names
   assert.equal(chip?.textContent, "Runs on Studio");
   const composer = view.all.find((node) => node.hasAttribute("data-browser-composer-inset"));
   assert.ok(composer);
-  const columns = (node: Element) => (node.getAttribute("class") ?? "").split(/\s+/u).includes("chat-content-column");
-  for (let parent = composer.parentNode as Element | null; parent?.getAttribute; parent = parent.parentNode as Element | null) {
-    assert.equal(columns(parent), false, "a second column around it would narrow it by another dock gutter");
+  const columns = (node: Element) =>
+    (node.getAttribute("class") ?? "").split(/\s+/u).includes("chat-content-column");
+  for (
+    let parent = composer.parentNode as Element | null;
+    parent?.getAttribute;
+    parent = parent.parentNode as Element | null
+  ) {
+    assert.equal(
+      columns(parent),
+      false,
+      "a second column around it would narrow it by another dock gutter",
+    );
   }
 });
 
@@ -131,11 +197,19 @@ test("sending waits for a project, a reachable host and a connected control", ()
   const needsProject = renderPane({ project: "" });
   assert.match(needsProject.text, /Choose a project on Studio first\./u);
 
-  const noProjects = renderPane({ project: "", projects: [], capabilities: new Set<HostChatCapability>(["send", "createChat"]) });
+  const noProjects = renderPane({
+    project: "",
+    projects: [],
+    capabilities: new Set<HostChatCapability>(["send", "createChat"]),
+  });
   assert.match(noProjects.text, /Studio has no projects this computer can use yet\./u);
 
   const foreign = renderPane({ project: "w-from-another-mac" });
-  assert.match(foreign.text, /Choose a project on Studio first\./u, "a project this host does not list cannot be sent to");
+  assert.match(
+    foreign.text,
+    /Choose a project on Studio first\./u,
+    "a project this host does not list cannot be sent to",
+  );
 
   const connecting = renderPane({ snapshot: null });
   assert.match(connecting.text, /Connecting to Studio…/u);
@@ -152,7 +226,12 @@ test("sending waits for a project, a reachable host and a connected control", ()
 test("a first message the host may not have received offers retry, dismiss and opening the chat", () => {
   const view = renderPane({
     snapshot: ready({
-      unresolved: { chatId: "chat-9", text: "Draft the launch notes", message: "Studio may not have received this.", retrying: false },
+      unresolved: {
+        chatId: "chat-9",
+        text: "Draft the launch notes",
+        message: "Studio may not have received this.",
+        retrying: false,
+      },
     }),
   });
   assert.equal(view.attr("data-remote-new-chat-unresolved"), "true");
@@ -165,7 +244,9 @@ test("a first message the host may not have received offers retry, dismiss and o
   }
 
   const retrying = renderPane({
-    snapshot: ready({ unresolved: { chatId: "chat-9", text: "Draft", message: "Checking.", retrying: true } }),
+    snapshot: ready({
+      unresolved: { chatId: "chat-9", text: "Draft", message: "Checking.", retrying: true },
+    }),
   });
   assert.equal(retrying.button(/^Retry$/u)?.hasAttribute("disabled"), true);
   assert.equal(retrying.button(/^Dismiss$/u)?.hasAttribute("disabled"), true);
@@ -189,7 +270,9 @@ test("the folder browser lists a host's shared roots, then a folder's subfolders
       />,
     ),
   );
-  assert.ok(roots.all.some((node) => node.getAttribute("aria-label") === "Shared folders on Studio"));
+  assert.ok(
+    roots.all.some((node) => node.getAttribute("aria-label") === "Shared folders on Studio"),
+  );
   assert.ok(roots.button(/^Projects$/u));
   assert.equal(roots.button(/^Show more$/u), undefined);
 
@@ -228,8 +311,15 @@ test("the folder browser lists a host's shared roots, then a folder's subfolders
   assert.ok(inside.all.some((node) => node.getAttribute("aria-label") === "Folders in site"));
   assert.ok(inside.button(/^docs$/u));
   assert.ok(inside.button(/^src$/u));
-  assert.equal(inside.button(/^Projects$/u)?.hasAttribute("disabled"), false, "an ancestor can be reopened");
-  assert.equal(inside.buttons.filter((node) => node.textContent === "site")[0]?.hasAttribute("disabled"), true);
+  assert.equal(
+    inside.button(/^Projects$/u)?.hasAttribute("disabled"),
+    false,
+    "an ancestor can be reopened",
+  );
+  assert.equal(
+    inside.buttons.filter((node) => node.textContent === "site")[0]?.hasAttribute("disabled"),
+    true,
+  );
   assert.ok(inside.button(/^Show more$/u));
 
   const failed = dom(
@@ -277,7 +367,13 @@ test("Bots on paired Macs are grouped by Mac, and a Mac that cannot open them sa
       renderSection(
         <RemoteBotsSection
           groups={[
-            { host: studio, bots: [{ id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests" }, { id: "bot-2", name: "Scribe" }] },
+            {
+              host: studio,
+              bots: [
+                { id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests" },
+                { id: "bot-2", name: "Scribe" },
+              ],
+            },
             { host: laptop, bots: [{ id: "bot-3", name: "Planner" }] },
           ]}
           opening={null}
@@ -297,8 +393,16 @@ test("Bots on paired Macs are grouped by Mac, and a Mac that cannot open them sa
 
   const opening = render({ opening: "host-b/bot-1" });
   assert.equal(opening.button(/^Reviewer, on Studio$/u)?.getAttribute("aria-busy"), "true");
-  assert.equal(opening.button(/^Reviewer, on Studio$/u)?.hasAttribute("disabled"), false, "the opening row keeps its focus");
-  assert.equal(opening.button(/^Scribe, on Studio$/u)?.hasAttribute("disabled"), false, "the other rows stay reachable");
+  assert.equal(
+    opening.button(/^Reviewer, on Studio$/u)?.hasAttribute("disabled"),
+    false,
+    "the opening row keeps its focus",
+  );
+  assert.equal(
+    opening.button(/^Scribe, on Studio$/u)?.hasAttribute("disabled"),
+    false,
+    "the other rows stay reachable",
+  );
 
   assert.equal(renderSection(<RemoteBotsSection groups={[]} opening={null} onOpen={noop} />), "");
 });
@@ -323,21 +427,56 @@ test("a paired Mac's paused, interrupted or model-less Bot says so, never its pu
       />,
     ),
   );
-  assert.equal(view.button(/^Reviewer, on Studio, paused$/u)?.textContent?.includes("Paused"), true);
-  assert.equal(view.button(/^Scribe, on Studio, interrupted$/u)?.textContent?.includes("Interrupted — tap to resume"), true);
-  assert.equal(view.button(/^Planner, on Studio, working$/u)?.textContent?.includes("Thinking…"), true);
-  assert.equal(view.button(/^Drafter, on Studio, needs an AI model$/u)?.textContent?.includes("Needs an AI model"), true);
-  assert.doesNotMatch(view.text, /Reviews pull requests|Takes notes|Plans the week|Drafts replies/u);
-  assert.equal(view.button(/^Reviewer, on Studio, paused$/u)?.hasAttribute("disabled"), false, "a paused Bot's chat still opens");
+  assert.equal(
+    view.button(/^Reviewer, on Studio, paused$/u)?.textContent?.includes("Paused"),
+    true,
+  );
+  assert.equal(
+    view
+      .button(/^Scribe, on Studio, interrupted$/u)
+      ?.textContent?.includes("Interrupted — tap to resume"),
+    true,
+  );
+  assert.equal(
+    view.button(/^Planner, on Studio, working$/u)?.textContent?.includes("Thinking…"),
+    true,
+  );
+  assert.equal(
+    view
+      .button(/^Drafter, on Studio, needs an AI model$/u)
+      ?.textContent?.includes("Needs an AI model"),
+    true,
+  );
+  assert.doesNotMatch(
+    view.text,
+    /Reviews pull requests|Takes notes|Plans the week|Drafts replies/u,
+  );
+  assert.equal(
+    view.button(/^Reviewer, on Studio, paused$/u)?.hasAttribute("disabled"),
+    false,
+    "a paused Bot's chat still opens",
+  );
 });
 
 test("search in the Bots sidebar narrows paired Macs' Bots too, and hides a Mac with no match", () => {
   const groups = [
-    { host: studio, bots: [{ id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests" }, { id: "bot-2", name: "Scribe" }] },
+    {
+      host: studio,
+      bots: [
+        { id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests" },
+        { id: "bot-2", name: "Scribe" },
+      ],
+    },
     { host: laptop, bots: [{ id: "bot-3", name: "Planner" }] },
   ];
   const shown = (query: string) =>
-    renderSection(<RemoteBotsSection groups={remoteBotGroupsMatching(groups, query)} opening={null} onOpen={noop} />);
+    renderSection(
+      <RemoteBotsSection
+        groups={remoteBotGroupsMatching(groups, query)}
+        opening={null}
+        onOpen={noop}
+      />,
+    );
   const searched = dom(shown("pull requests"));
   assert.equal(searched.button(/^Reviewer, on Studio$/u) !== undefined, true);
   assert.equal(searched.button(/^Scribe, on Studio$/u) === undefined, true);
@@ -355,9 +494,23 @@ test("a paired Mac's Bot's last message is its line only when nothing more press
 });
 
 test("a paired Mac that lists no Bots for a reason says it under its name, until the person searches", () => {
-  const groups = [{ host: { ...laptop, disabledReason: "To use Laptop's Bots here, pair this Mac with it again." }, bots: [] }];
+  const groups = [
+    {
+      host: {
+        ...laptop,
+        disabledReason: "To use Laptop's Bots here, pair this Mac with it again.",
+      },
+      bots: [],
+    },
+  ];
   const shown = (query: string) =>
-    renderSection(<RemoteBotsSection groups={remoteBotGroupsMatching(groups, query)} opening={null} onOpen={noop} />);
+    renderSection(
+      <RemoteBotsSection
+        groups={remoteBotGroupsMatching(groups, query)}
+        opening={null}
+        onOpen={noop}
+      />,
+    );
   const view = dom(shown(""));
   assert.match(view.text, /On Laptop/u);
   assert.match(view.text, /pair this Mac with it again/u);

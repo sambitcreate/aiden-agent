@@ -62,14 +62,34 @@ export interface SensitiveFieldBoxes {
 
 const ELEMENT_NODE = 1;
 /** Elements that host another document or a plugin. */
-const FRAME_ELEMENTS: ReadonlySet<string> = new Set(["iframe", "frame", "fencedframe", "object", "embed", "portal"]);
-const CREDENTIAL_TOKENS: ReadonlySet<string> = new Set(["current-password", "new-password", "one-time-code"]);
+const FRAME_ELEMENTS: ReadonlySet<string> = new Set([
+  "iframe",
+  "frame",
+  "fencedframe",
+  "object",
+  "embed",
+  "portal",
+]);
+const CREDENTIAL_TOKENS: ReadonlySet<string> = new Set([
+  "current-password",
+  "new-password",
+  "one-time-code",
+]);
 const NOTHING_REMEMBERED: ReadonlySet<number> = new Set();
 /** Fields remembered per renderer process, and processes per tab: the most recent are kept. */
 const REMEMBERED_FIELDS = 512;
 const REMEMBERED_PROCESSES = 4;
 /** Autocomplete tokens that only scope the field token after them (WHATWG autofill detail tokens). */
-const SCOPE_TOKENS: ReadonlySet<string> = new Set(["shipping", "billing", "home", "work", "mobile", "fax", "pager", "webauthn"]);
+const SCOPE_TOKENS: ReadonlySet<string> = new Set([
+  "shipping",
+  "billing",
+  "home",
+  "work",
+  "mobile",
+  "fax",
+  "pager",
+  "webauthn",
+]);
 /** A pathological DOM is still walked, but not without bound. */
 const MAX_NODES = 200_000;
 
@@ -86,13 +106,20 @@ export function autocompleteFieldTokens(value: string | undefined): string[] {
   return (value ?? "")
     .toLowerCase()
     .split(/[\s]+/u)
-    .filter((token) => token.length > 0 && !token.startsWith("section-") && !SCOPE_TOKENS.has(token));
+    .filter(
+      (token) => token.length > 0 && !token.startsWith("section-") && !SCOPE_TOKENS.has(token),
+    );
 }
 
 /** Whether an element holds a password, a one-time code or card details. */
-export function isSensitiveField(element: { localName?: string; nodeName?: string; attributes?: string[] }): boolean {
+export function isSensitiveField(element: {
+  localName?: string;
+  nodeName?: string;
+  attributes?: string[];
+}): boolean {
   const name = (element.localName ?? element.nodeName ?? "").toLowerCase();
-  if (name === "input" && (attribute(element, "type") ?? "").trim().toLowerCase() === "password") return true;
+  if (name === "input" && (attribute(element, "type") ?? "").trim().toLowerCase() === "password")
+    return true;
   return autocompleteFieldTokens(attribute(element, "autocomplete")).some(
     (token) => CREDENTIAL_TOKENS.has(token) || token.startsWith("cc-"),
   );
@@ -138,13 +165,17 @@ export class SensitiveFieldMemory {
  * Sensitive fields and unreadable frames in a pierced `DOM.getDocument` tree.
  * A node in `remembered` is sensitive whatever its attributes say now.
  */
-export function scanCredentialTree(root: CdpDomNode, remembered: ReadonlySet<number> = NOTHING_REMEMBERED): CredentialTreeScan {
+export function scanCredentialTree(
+  root: CdpDomNode,
+  remembered: ReadonlySet<number> = NOTHING_REMEMBERED,
+): CredentialTreeScan {
   const scan: CredentialTreeScan = { sensitive: [], recalled: [], opaqueFrames: [] };
   const stack: CdpDomNode[] = [root];
   let visited = 0;
   while (stack.length > 0) {
     const node = stack.pop()!;
-    if (++visited > MAX_NODES) throw new Error("The page is too large to check for password fields.");
+    if (++visited > MAX_NODES)
+      throw new Error("The page is too large to check for password fields.");
     if (node.nodeType === ELEMENT_NODE) {
       const name = (node.localName ?? node.nodeName).toLowerCase();
       if (isSensitiveField(node)) scan.sensitive.push(node.backendNodeId);
@@ -152,25 +183,38 @@ export function scanCredentialTree(root: CdpDomNode, remembered: ReadonlySet<num
         scan.sensitive.push(node.backendNodeId);
         scan.recalled.push(node.backendNodeId);
       }
-      if (FRAME_ELEMENTS.has(name) && node.contentDocument === undefined) scan.opaqueFrames.push(node.backendNodeId);
+      if (FRAME_ELEMENTS.has(name) && node.contentDocument === undefined)
+        scan.opaqueFrames.push(node.backendNodeId);
     }
     // Reverse push keeps document order: shadow trees, then the frame's
     // document, then children (a template's inert content is never rendered).
-    const next = [...(node.shadowRoots ?? []), ...(node.contentDocument ? [node.contentDocument] : []), ...(node.children ?? [])];
+    const next = [
+      ...(node.shadowRoots ?? []),
+      ...(node.contentDocument ? [node.contentDocument] : []),
+      ...(node.children ?? []),
+    ];
     for (let index = next.length - 1; index >= 0; index -= 1) stack.push(next[index]!);
   }
   return scan;
 }
 
 /** The page's sensitive fields (`remembered` ones included) and unreadable frames. */
-export async function scanSensitiveFields(port: CdpPort, remembered?: ReadonlySet<number>): Promise<CredentialTreeScan> {
-  const document = (await port.call("DOM.getDocument", { depth: -1, pierce: true })) as { root?: CdpDomNode };
+export async function scanSensitiveFields(
+  port: CdpPort,
+  remembered?: ReadonlySet<number>,
+): Promise<CredentialTreeScan> {
+  const document = (await port.call("DOM.getDocument", { depth: -1, pierce: true })) as {
+    root?: CdpDomNode;
+  };
   if (!document.root) throw new Error("The page's document could not be read.");
   return scanCredentialTree(document.root, remembered);
 }
 
 /** Backend node ids of the page's sensitive fields, without reading where they are. */
-export async function sensitiveFieldIds(port: CdpPort, remembered?: ReadonlySet<number>): Promise<number[]> {
+export async function sensitiveFieldIds(
+  port: CdpPort,
+  remembered?: ReadonlySet<number>,
+): Promise<number[]> {
   return (await scanSensitiveFields(port, remembered)).sensitive;
 }
 
@@ -204,13 +248,28 @@ export interface SensitiveFieldReach {
 }
 
 /** Elements a `<label>` names (HTML labelable elements; a custom element may be a form-associated one). */
-const LABELABLE: ReadonlySet<string> = new Set(["button", "input", "meter", "output", "progress", "select", "textarea"]);
+const LABELABLE: ReadonlySet<string> = new Set([
+  "button",
+  "input",
+  "meter",
+  "output",
+  "progress",
+  "select",
+  "textarea",
+]);
 const NATIVE_FIELDS: ReadonlySet<string> = new Set(["input", "textarea", "select"]);
 
 /** What reaches each of `sensitive` in a pierced `DOM.getDocument` tree (see `SensitiveFieldReach`). */
-export function sensitiveFieldReach(root: CdpDomNode, sensitive: ReadonlySet<number>): SensitiveFieldReach {
-  const known = new Set<number>(), inside = new Set<number>(), selfNamed = new Set<number>();
-  const parentOf = new Map<number, number>(), scopeOf = new Map<number, number>(), hostOf = new Map<number, number>();
+export function sensitiveFieldReach(
+  root: CdpDomNode,
+  sensitive: ReadonlySet<number>,
+): SensitiveFieldReach {
+  const known = new Set<number>(),
+    inside = new Set<number>(),
+    selfNamed = new Set<number>();
+  const parentOf = new Map<number, number>(),
+    scopeOf = new Map<number, number>(),
+    hostOf = new Map<number, number>();
   const ids = new Map<number, Map<string, number>>();
   const elementChildren = new Map<number, number[]>();
   // `into.get(b)` lists every `a` whose name reads `b` directly.
@@ -220,13 +279,23 @@ export function sensitiveFieldReach(root: CdpDomNode, sensitive: ReadonlySet<num
     if (list) list.push(from);
     else into.set(to, [from]);
   };
-  const references: Array<{ from: number; scope: number; value: string; kind: "name" | "description" | "for" }> = [];
-  const labels = new Set<number>(), labelable: number[] = [], slots: number[] = [];
-  const stack: Array<{ node: CdpDomNode; parent?: number; scope: number; under: boolean }> = [{ node: root, scope: root.backendNodeId, under: false }];
+  const references: Array<{
+    from: number;
+    scope: number;
+    value: string;
+    kind: "name" | "description" | "for";
+  }> = [];
+  const labels = new Set<number>(),
+    labelable: number[] = [],
+    slots: number[] = [];
+  const stack: Array<{ node: CdpDomNode; parent?: number; scope: number; under: boolean }> = [
+    { node: root, scope: root.backendNodeId, under: false },
+  ];
   let visited = 0;
   while (stack.length > 0) {
     const { node, parent, scope, under } = stack.pop()!;
-    if (++visited > MAX_NODES) throw new Error("The page is too large to check for password fields.");
+    if (++visited > MAX_NODES)
+      throw new Error("The page is too large to check for password fields.");
     const id = node.backendNodeId;
     known.add(id);
     if (parent !== undefined) {
@@ -244,7 +313,11 @@ export function sensitiveFieldReach(root: CdpDomNode, sensitive: ReadonlySet<num
         if (!scoped.has(own)) scoped.set(own, id);
         ids.set(scope, scoped);
       }
-      for (const [attr, kind] of [["aria-labelledby", "name"], ["aria-owns", "name"], ["aria-describedby", "description"]] as const) {
+      for (const [attr, kind] of [
+        ["aria-labelledby", "name"],
+        ["aria-owns", "name"],
+        ["aria-describedby", "description"],
+      ] as const) {
         const value = attribute(node, attr);
         if (value) references.push({ from: id, scope, value, kind });
       }
@@ -256,7 +329,12 @@ export function sensitiveFieldReach(root: CdpDomNode, sensitive: ReadonlySet<num
       if (LABELABLE.has(name) || name.includes("-")) labelable.push(id);
       if (name === "slot") slots.push(id);
       if (sensitive.has(id) && !NATIVE_FIELDS.has(name)) selfNamed.add(id);
-      elementChildren.set(id, (node.children ?? []).filter((child) => child.nodeType === ELEMENT_NODE).map((child) => child.backendNodeId));
+      elementChildren.set(
+        id,
+        (node.children ?? [])
+          .filter((child) => child.nodeType === ELEMENT_NODE)
+          .map((child) => child.backendNodeId),
+      );
     }
     const below = under || (element && sensitive.has(id));
     const next: Array<{ node: CdpDomNode; parent: number; scope: number; under: boolean }> = [];
@@ -264,8 +342,15 @@ export function sensitiveFieldReach(root: CdpDomNode, sensitive: ReadonlySet<num
       hostOf.set(shadow.backendNodeId, id);
       next.push({ node: shadow, parent: id, scope: shadow.backendNodeId, under: below });
     }
-    if (node.contentDocument) next.push({ node: node.contentDocument, parent: id, scope: node.contentDocument.backendNodeId, under: below });
-    for (const child of [...(node.pseudoElements ?? []), ...(node.children ?? [])]) next.push({ node: child, parent: id, scope, under: below });
+    if (node.contentDocument)
+      next.push({
+        node: node.contentDocument,
+        parent: id,
+        scope: node.contentDocument.backendNodeId,
+        under: below,
+      });
+    for (const child of [...(node.pseudoElements ?? []), ...(node.children ?? [])])
+      next.push({ node: child, parent: id, scope, under: below });
     for (let index = next.length - 1; index >= 0; index -= 1) stack.push(next[index]!);
   }
   const describedBy = new Map<number, number[]>();
@@ -284,16 +369,22 @@ export function sensitiveFieldReach(root: CdpDomNode, sensitive: ReadonlySet<num
   // A control is also named by every label around it in its own tree.
   for (const control of labelable) {
     const scope = scopeOf.get(control);
-    for (let above = parentOf.get(control); above !== undefined && scopeOf.get(above) === scope; above = parentOf.get(above)) {
+    for (
+      let above = parentOf.get(control);
+      above !== undefined && scopeOf.get(above) === scope;
+      above = parentOf.get(above)
+    ) {
       if (labels.has(above)) edge(control, above);
     }
   }
   // A slot shows its host's children.
   for (const slot of slots) {
     const host = hostOf.get(scopeOf.get(slot) ?? -1);
-    for (const child of host === undefined ? [] : elementChildren.get(host) ?? []) edge(slot, child);
+    for (const child of host === undefined ? [] : (elementChildren.get(host) ?? []))
+      edge(slot, child);
   }
-  const reads = new Map<number, Set<number>>(), holds = new Map<number, Set<number>>();
+  const reads = new Map<number, Set<number>>(),
+    holds = new Map<number, Set<number>>();
   const add = (map: Map<number, Set<number>>, node: number, field: number): void => {
     const set = map.get(node);
     if (set) set.add(field);
@@ -301,7 +392,8 @@ export function sensitiveFieldReach(root: CdpDomNode, sensitive: ReadonlySet<num
   };
   for (const field of sensitive) {
     if (!known.has(field)) continue;
-    for (let node: number | undefined = field; node !== undefined; node = parentOf.get(node)) add(holds, node, field);
+    for (let node: number | undefined = field; node !== undefined; node = parentOf.get(node))
+      add(holds, node, field);
     const queue = [field];
     const seen = new Set<number>();
     while (queue.length > 0) {
@@ -321,7 +413,9 @@ export async function scanSensitiveFieldReach(
   remembered?: ReadonlySet<number>,
   also: Iterable<number> = [],
 ): Promise<SensitiveFieldReach> {
-  const document = (await port.call("DOM.getDocument", { depth: -1, pierce: true })) as { root?: CdpDomNode };
+  const document = (await port.call("DOM.getDocument", { depth: -1, pierce: true })) as {
+    root?: CdpDomNode;
+  };
   if (!document.root) throw new Error("The page's document could not be read.");
   const scan = scanCredentialTree(document.root, remembered);
   return sensitiveFieldReach(document.root, new Set([...scan.sensitive, ...also]));
@@ -329,20 +423,33 @@ export async function scanSensitiveFieldReach(
 
 /** The bounding rectangle of DevTools quads (`[x1, y1, … x4, y4]` each). */
 export function quadsBounds(quads: readonly (readonly number[])[]): CssRect | undefined {
-  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  let left = Infinity,
+    top = Infinity,
+    right = -Infinity,
+    bottom = -Infinity;
   for (const quad of quads) {
     for (let index = 0; index + 1 < quad.length; index += 2) {
-      const x = quad[index]!, y = quad[index + 1]!;
+      const x = quad[index]!,
+        y = quad[index + 1]!;
       if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined;
-      left = Math.min(left, x); right = Math.max(right, x);
-      top = Math.min(top, y); bottom = Math.max(bottom, y);
+      left = Math.min(left, x);
+      right = Math.max(right, x);
+      top = Math.min(top, y);
+      bottom = Math.max(bottom, y);
     }
   }
-  return right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : undefined;
+  return right > left && bottom > top
+    ? { x: left, y: top, width: right - left, height: bottom - top }
+    : undefined;
 }
 
 function intersectsViewport(rect: CssRect, viewport: { width: number; height: number }): boolean {
-  return rect.x < viewport.width && rect.y < viewport.height && rect.x + rect.width > 0 && rect.y + rect.height > 0;
+  return (
+    rect.x < viewport.width &&
+    rect.y < viewport.height &&
+    rect.x + rect.width > 0 &&
+    rect.y + rect.height > 0
+  );
 }
 
 /**
@@ -352,14 +459,18 @@ function intersectsViewport(rect: CssRect, viewport: { width: number; height: nu
  */
 async function nodeBounds(port: CdpPort, backendNodeId: number): Promise<CssRect | undefined> {
   try {
-    const result = (await port.call("DOM.getContentQuads", { backendNodeId })) as { quads?: number[][] };
+    const result = (await port.call("DOM.getContentQuads", { backendNodeId })) as {
+      quads?: number[][];
+    };
     const bounds = quadsBounds(result.quads ?? []);
     if (bounds) return bounds;
   } catch {
     /* Not rendered, or no content quads: try the box model. */
   }
   try {
-    const result = (await port.call("DOM.getBoxModel", { backendNodeId })) as { model?: { border?: number[] } };
+    const result = (await port.call("DOM.getBoxModel", { backendNodeId })) as {
+      model?: { border?: number[] };
+    };
     return result.model?.border ? quadsBounds([result.model.border]) : undefined;
   } catch {
     return undefined;

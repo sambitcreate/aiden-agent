@@ -20,14 +20,19 @@ test("every canvas tool the design skill and prompt name is a tool Aiden actuall
   });
   const offered = new Set(tools.map((tool) => tool.name));
   const named = new Set(
-    [AIDEN_DESIGN_SKILL.instructions, DESIGN_MODE_PROMPT_SECTION].flatMap((text) => text.match(/\bcanvas_[a-z_]+/gu) ?? []),
+    [AIDEN_DESIGN_SKILL.instructions, DESIGN_MODE_PROMPT_SECTION].flatMap(
+      (text) => text.match(/\bcanvas_[a-z_]+/gu) ?? [],
+    ),
   );
   assert.ok(named.size >= 3, "the skill teaches the canvas tools by name");
   for (const name of named) assert.ok(offered.has(name), `${name} is named but not offered`);
 });
 
 test("every library the design skill offers is one a design page can load", async () => {
-  const listed = AIDEN_DESIGN_SKILL.instructions.match(/\/__aiden\/lib\/<name>: ([^\n]+)\./u)?.[1]?.split(", ") ?? [];
+  const listed =
+    AIDEN_DESIGN_SKILL.instructions
+      .match(/\/__aiden\/lib\/<name>: ([^\n]+)\./u)?.[1]
+      ?.split(", ") ?? [];
   assert.ok(listed.length > 0);
   for (const name of listed) {
     assert.ok(await readGenerativeUiHostLibrary(name), `${name} is offered but not served`);
@@ -38,5 +43,8 @@ test("an on-demand tool the design skill tells Aiden to call comes with how to l
   const words = new Set(AIDEN_DESIGN_SKILL.instructions.match(/\b[a-z]+(?:_[a-z]+)+\b/gu) ?? []);
   const onDemand = [...words].filter((word) => ON_DEMAND_TOOL_NAMES.has(word));
   assert.ok(onDemand.length > 0, "the skill names design_mode, which is on demand");
-  assert.ok(words.has(LOAD_TOOLS_TOOL_NAME), `${onDemand.join(", ")} is on demand, so the skill must say to load it with ${LOAD_TOOLS_TOOL_NAME}`);
+  assert.ok(
+    words.has(LOAD_TOOLS_TOOL_NAME),
+    `${onDemand.join(", ")} is on demand, so the skill must say to load it with ${LOAD_TOOLS_TOOL_NAME}`,
+  );
 });

@@ -48,14 +48,21 @@ export function displayWorkspaceFolder(folderPath: string, home = os.homedir()):
   return folderPath;
 }
 
-type CheckedWorkspace = Pick<Workspace, "name" | "folderPath" | "permission" | "managedWorktree" | "noWorkspace">;
+type CheckedWorkspace = Pick<
+  Workspace,
+  "name" | "folderPath" | "permission" | "managedWorktree" | "noWorkspace"
+>;
 
 /** The folder whose absence counts: an Aiden-managed worktree's checkout root, else the workspace folder. */
-export function checkedWorkspaceFolder(workspace: Pick<Workspace, "folderPath" | "managedWorktree">): string | undefined {
+export function checkedWorkspaceFolder(
+  workspace: Pick<Workspace, "folderPath" | "managedWorktree">,
+): string | undefined {
   return workspace.managedWorktree?.worktreePath ?? workspace.folderPath;
 }
 
-export function workspaceFolderMissingText(workspace: Pick<Workspace, "name" | "folderPath" | "managedWorktree">): string {
+export function workspaceFolderMissingText(
+  workspace: Pick<Workspace, "name" | "folderPath" | "managedWorktree">,
+): string {
   // Aiden chose a worktree's folder, so its path tells the person nothing.
   if (workspace.managedWorktree) return managedWorktreeMissingMessage(workspace.name, undefined);
   return workspaceFolderMissingMessage(
@@ -66,7 +73,10 @@ export function workspaceFolderMissingText(workspace: Pick<Workspace, "name" | "
 
 export class WorkspaceFolderMissingError extends Error {
   readonly code = "workspace_folder_missing";
-  constructor(workspace: Pick<Workspace, "name" | "folderPath" | "managedWorktree">, message = workspaceFolderMissingText(workspace)) {
+  constructor(
+    workspace: Pick<Workspace, "name" | "folderPath" | "managedWorktree">,
+    message = workspaceFolderMissingText(workspace),
+  ) {
     super(message);
     this.name = "WorkspaceFolderMissingError";
   }
@@ -78,7 +88,10 @@ export class WorkspaceFolderMissingError extends Error {
  */
 export async function restoreNoWorkspaceFolder(
   workspace: Pick<Workspace, "folderPath" | "noWorkspace">,
-  mkdir: (target: string, options: { recursive: true; mode: number }) => Promise<unknown> = fs.mkdir,
+  mkdir: (
+    target: string,
+    options: { recursive: true; mode: number },
+  ) => Promise<unknown> = fs.mkdir,
 ): Promise<void> {
   if (!workspace.noWorkspace || !workspace.folderPath) return;
   if ((await workspaceFolderPresence(workspace.folderPath)) !== "missing") return;
@@ -86,7 +99,10 @@ export async function restoreNoWorkspaceFolder(
 }
 
 /** Whether this workspace's folder is checked and gone. */
-export async function workspaceFolderMissing(workspace: CheckedWorkspace, stat?: Stat): Promise<boolean> {
+export async function workspaceFolderMissing(
+  workspace: CheckedWorkspace,
+  stat?: Stat,
+): Promise<boolean> {
   return (
     workspaceFolderCheckApplies(workspace) &&
     (await workspaceFolderPresence(checkedWorkspaceFolder(workspace)!, stat)) === "missing"
@@ -102,9 +118,13 @@ export function workspaceFolderRemoteRefusalText(
   host: WorkspaceFolderRefusalHost = "mac",
 ): string {
   if (host === "server") {
-    return workspace.managedWorktree ? SERVER_MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL : SERVER_WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL;
+    return workspace.managedWorktree
+      ? SERVER_MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL
+      : SERVER_WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL;
   }
-  return workspace.managedWorktree ? MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL : WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL;
+  return workspace.managedWorktree
+    ? MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL
+    : WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL;
 }
 
 /** Which folder is gone: the workspace's own, or an Aiden-managed worktree's checkout. */
@@ -188,13 +208,16 @@ export async function missingWorktreeOptions(
     ) {
       const checkout = path.resolve(managed.worktreePath);
       restorable = !(await git.worktrees(managed.repositoryPath)).some(
-        (worktree) => worktree.branch === managed.branch && path.resolve(worktree.path) !== checkout,
+        (worktree) =>
+          worktree.branch === managed.branch && path.resolve(worktree.path) !== checkout,
       );
     }
   } catch {
     restorable = false;
   }
-  const subpath = workspace.folderPath ? path.relative(managed.worktreePath, workspace.folderPath) : "";
+  const subpath = workspace.folderPath
+    ? path.relative(managed.worktreePath, workspace.folderPath)
+    : "";
   const eligible = workspaces.filter(
     (candidate) =>
       !candidate.managedWorktree &&
@@ -203,7 +226,10 @@ export async function missingWorktreeOptions(
       candidate.folderPath !== undefined,
   );
   let main: Workspace | undefined;
-  for (const folder of [path.resolve(managed.repositoryPath, subpath), path.resolve(managed.repositoryPath)]) {
+  for (const folder of [
+    path.resolve(managed.repositoryPath, subpath),
+    path.resolve(managed.repositoryPath),
+  ]) {
     for (const candidate of eligible) {
       if (await sameFolder(candidate.folderPath!, folder)) {
         main = candidate;

@@ -32,11 +32,24 @@ import { createBotRuntimeModels } from "../../../main/services/bot-runtime/bot-m
 import { createBotApprovals } from "../../../main/services/bot-runtime/bot-approvals.js";
 import { createBotMemoryService } from "../../../main/services/bot-memory/service.js";
 import { createBotMemoryStore } from "../../../main/services/bot-memory/store.js";
-import { renderBotMemorySection, withBotMemoryEdits } from "../../../main/services/bot-memory/prompt.js";
-import { botMemoryToolEntry, withBotMemoryIngress } from "../../../main/services/bot-memory/tool.js";
+import {
+  renderBotMemorySection,
+  withBotMemoryEdits,
+} from "../../../main/services/bot-memory/prompt.js";
+import {
+  botMemoryToolEntry,
+  withBotMemoryIngress,
+} from "../../../main/services/bot-memory/tool.js";
 import { botRecallToolEntry } from "../../../main/services/bot-memory/recall.js";
-import { botIngressAllowsTool, botIngressRefusal, botTurnAttended } from "../../../main/services/bot-runtime/bot-tool-policy.js";
-import { composioServiceCallRequiresForeground, isComposioServiceToolDescriptor } from "../../../main/services/composio-service-tool.js";
+import {
+  botIngressAllowsTool,
+  botIngressRefusal,
+  botTurnAttended,
+} from "../../../main/services/bot-runtime/bot-tool-policy.js";
+import {
+  composioServiceCallRequiresForeground,
+  isComposioServiceToolDescriptor,
+} from "../../../main/services/composio-service-tool.js";
 import { mcpAgentToolDescriptor } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-runtime-authority.js";
 import type { createBotApplicationService } from "../../../main/services/bot-application-service.js";
@@ -53,7 +66,10 @@ export interface CliDurableBotPorts {
   botStore: ReturnType<typeof createBotStore>;
   capabilities: ReturnType<typeof createBotCapabilityStore>;
   authority: ReturnType<typeof createBotRuntimeAuthorityResolver>;
-  tools(admission: BotRuntimeAuthorityAdmission, context?: CliDurableBotToolContext): Promise<AgentTool[]>;
+  tools(
+    admission: BotRuntimeAuthorityAdmission,
+    context?: CliDurableBotToolContext,
+  ): Promise<AgentTool[]>;
   instructions(admission: BotRuntimeAuthorityAdmission): Promise<string>;
   deleteRoutines(botId: string): Promise<void>;
   /** The CLI's pause store (`aiden bots pause`), shared so both paths read one file. */
@@ -70,17 +86,44 @@ export interface CliDurableBotToolContext {
 }
 
 /** Immutable visible transcript snapshot for this exact durable tool call. */
-export function cliDurableBotToolContext(entries: readonly EntryRecord[], identity: { chatId: string; botId: string }): CliDurableBotToolContext {
-  const attachmentsOf = (records: readonly EntryRecord[]) => imageAttachmentsFromEntries(records).map((image) => ({ ...image, size: Buffer.from(image.data!, "base64").byteLength }));
+export function cliDurableBotToolContext(
+  entries: readonly EntryRecord[],
+  identity: { chatId: string; botId: string },
+): CliDurableBotToolContext {
+  const attachmentsOf = (records: readonly EntryRecord[]) =>
+    imageAttachmentsFromEntries(records).map((image) => ({
+      ...image,
+      size: Buffer.from(image.data!, "base64").byteLength,
+    }));
   const chronological = [...entries].reverse(); // call.entries() is newest first.
   const byId = new Map(chronological.map((entry) => [String(entry.id), entry]));
-  const messages = projectBotTranscript(chronological).flatMap((entry) => entry.type === "user" || entry.type === "assistant" ? [{
-    id: entry.id, role: entry.type, content: entry.text, createdAt: entry.at ?? 0,
-    ...(entry.type === "user" && byId.has(entry.id) ? { attachments: attachmentsOf([byId.get(entry.id)!]) } : {}),
-  }] : []);
-  const snapshot: Chat = { id: cliSubagentIdentity(identity.chatId), botId: identity.botId, title: "Bot conversation", createdAt: messages[0]?.createdAt ?? 0,
-    updatedAt: messages.at(-1)?.createdAt ?? 0, messages };
-  return { attachments: attachmentsOf(chronological), loadChat: async () => structuredClone(snapshot) };
+  const messages = projectBotTranscript(chronological).flatMap((entry) =>
+    entry.type === "user" || entry.type === "assistant"
+      ? [
+          {
+            id: entry.id,
+            role: entry.type,
+            content: entry.text,
+            createdAt: entry.at ?? 0,
+            ...(entry.type === "user" && byId.has(entry.id)
+              ? { attachments: attachmentsOf([byId.get(entry.id)!]) }
+              : {}),
+          },
+        ]
+      : [],
+  );
+  const snapshot: Chat = {
+    id: cliSubagentIdentity(identity.chatId),
+    botId: identity.botId,
+    title: "Bot conversation",
+    createdAt: messages[0]?.createdAt ?? 0,
+    updatedAt: messages.at(-1)?.createdAt ?? 0,
+    messages,
+  };
+  return {
+    attachments: attachmentsOf(chronological),
+    loadChat: async () => structuredClone(snapshot),
+  };
 }
 
 export async function createCliDurableBots(profileDir: string, ports: CliDurableBotPorts) {
@@ -92,127 +135,272 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
   const memory = createBotMemoryService({ store: createBotMemoryStore({ profileDir }) });
   const stateListeners = new Set<(botId: string, state: BotSessionState) => void>();
   /** Pause changes commit no entry; open phone streams hear them here. */
-  const stateChanges = (listener: (botId: string, state: BotSessionState) => void) => { stateListeners.add(listener); return () => { stateListeners.delete(listener); }; };
+  const stateChanges = (listener: (botId: string, state: BotSessionState) => void) => {
+    stateListeners.add(listener);
+    return () => {
+      stateListeners.delete(listener);
+    };
+  };
   const spending = createCliBotSpending(profileDir);
-  const spendingRefusal = async (botId: string) => spending.refusal(botId, (await ports.botStore.get(botId))?.name);
-  const roster = async () => projectBotMessageRoster(await ports.botStore.list(), {
-    paused: async (id) => (await ports.pauses.get(id)) !== undefined,
-    hasModel: async (id) => {
-      if (await ports.capabilities.getBotModelAuthority(id) === undefined) return false;
-      await admitted(id, async () => {});
-      return true;
-    },
-    spendingRefusal: (id, name) => spending.refusal(id, name),
-    report: (id, error) => process.stderr.write(`Bot ${id} messaging availability: ${String(error)}\n`),
-  });
+  const spendingRefusal = async (botId: string) =>
+    spending.refusal(botId, (await ports.botStore.get(botId))?.name);
+  const roster = async () =>
+    projectBotMessageRoster(await ports.botStore.list(), {
+      paused: async (id) => (await ports.pauses.get(id)) !== undefined,
+      hasModel: async (id) => {
+        if ((await ports.capabilities.getBotModelAuthority(id)) === undefined) return false;
+        await admitted(id, async () => {});
+        return true;
+      },
+      spendingRefusal: (id, name) => spending.refusal(id, name),
+      report: (id, error) =>
+        process.stderr.write(`Bot ${id} messaging availability: ${String(error)}\n`),
+    });
   const messages = createBotMessageLifecycle({
     report: (error) => process.stderr.write(`Bot messaging could not start: ${String(error)}\n`),
-    create: () => createBotMessageCourier({
-      ledger: createBotMessageLedger({ file: () => join(profileDir, "bots", "bot-messages.json"), now: Date.now }),
-      // Only external courier work reaches sessions. Tool post() reads local authority only.
-      sessions: {
-        send: (...args) => runtime.send(...args), awaitReply: (...args) => runtime.awaitReply(...args),
-        markSilent: (...args) => runtime.markSilent(...args), appendEntry: (...args) => runtime.appendEntry(...args),
-        state: (...args) => runtime.state(...args), submissionForRequest: (...args) => runtime.submissionForRequest(...args),
-        awaitMessageTaskSettlement: (...args) => runtime.awaitMessageTaskSettlement(...args),
-      },
-      roster, botExists: async (botId) => (await ports.botStore.get(botId)) !== null,
-      enabled: () => ports.messagingEnabled?.() ?? Promise.resolve(true), approvals, onStateChange: stateChanges,
-      now: Date.now, setTimer: (fn, ms) => { const timer = setTimeout(fn, ms); timer.unref(); return { cancel: () => clearTimeout(timer) }; },
-      report: (error) => process.stderr.write(`Bot message courier: ${String(error)}\n`),
-    }),
+    create: () =>
+      createBotMessageCourier({
+        ledger: createBotMessageLedger({
+          file: () => join(profileDir, "bots", "bot-messages.json"),
+          now: Date.now,
+        }),
+        // Only external courier work reaches sessions. Tool post() reads local authority only.
+        sessions: {
+          send: (...args) => runtime.send(...args),
+          awaitReply: (...args) => runtime.awaitReply(...args),
+          markSilent: (...args) => runtime.markSilent(...args),
+          appendEntry: (...args) => runtime.appendEntry(...args),
+          state: (...args) => runtime.state(...args),
+          submissionForRequest: (...args) => runtime.submissionForRequest(...args),
+          awaitMessageTaskSettlement: (...args) => runtime.awaitMessageTaskSettlement(...args),
+        },
+        roster,
+        botExists: async (botId) => (await ports.botStore.get(botId)) !== null,
+        enabled: () => ports.messagingEnabled?.() ?? Promise.resolve(true),
+        approvals,
+        onStateChange: stateChanges,
+        now: Date.now,
+        setTimer: (fn, ms) => {
+          const timer = setTimeout(fn, ms);
+          timer.unref();
+          return { cancel: () => clearTimeout(timer) };
+        },
+        report: (error) => process.stderr.write(`Bot message courier: ${String(error)}\n`),
+      }),
   });
   async function admit(botId: string) {
-    const chat = await ports.application.getCanonicalChat(botId) ?? await ports.application.createChat({ audienceId: "cli:local", botId });
+    const chat =
+      (await ports.application.getCanonicalChat(botId)) ??
+      (await ports.application.createChat({ audienceId: "cli:local", botId }));
     return ports.authority.admit({ audienceId: "cli:local", botId, chatId: chat.id });
   }
-  async function admitted<T>(botId: string, action: (admission: BotRuntimeAuthorityAdmission) => Promise<T>): Promise<T> {
+  async function admitted<T>(
+    botId: string,
+    action: (admission: BotRuntimeAuthorityAdmission) => Promise<T>,
+  ): Promise<T> {
     const lease = await admit(botId);
-    try { await lease.revalidateBeforeEffect(); return await action(lease); }
-    finally { lease.release(); }
+    try {
+      await lease.revalidateBeforeEffect();
+      return await action(lease);
+    } finally {
+      lease.release();
+    }
   }
   async function currentTools(botId: string) {
-    return admitted(botId, (lease) => ports.tools(lease, { attachments: [], loadChat: async () => null }));
+    return admitted(botId, (lease) =>
+      ports.tools(lease, { attachments: [], loadChat: async () => null }),
+    );
   }
-  function bindTool(botId: string, tool: AgentTool, call: BotToolCall, replyClock: SubagentReplyClock): AgentTool {
-    return { ...tool, execute: (callId, args, signal, onUpdate) => admitted(botId, async (lease) => {
-      const context = { ...cliDurableBotToolContext(await call.entries(), lease.authority), replyClock };
-      const live = (await ports.tools(lease, context)).find((candidate) => candidate.name === tool.name);
-      if (!live) throw new Error("This Bot tool is no longer available.");
-      const expected = mcpAgentToolDescriptor(tool), actual = mcpAgentToolDescriptor(live);
-      if (JSON.stringify(expected) !== JSON.stringify(actual)) throw new Error("The connection tool changed before invocation.");
-      return live.execute(callId, args, signal ? AbortSignal.any([signal, lease.signal]) : lease.signal, onUpdate);
-    }) };
+  function bindTool(
+    botId: string,
+    tool: AgentTool,
+    call: BotToolCall,
+    replyClock: SubagentReplyClock,
+  ): AgentTool {
+    return {
+      ...tool,
+      execute: (callId, args, signal, onUpdate) =>
+        admitted(botId, async (lease) => {
+          const context = {
+            ...cliDurableBotToolContext(await call.entries(), lease.authority),
+            replyClock,
+          };
+          const live = (await ports.tools(lease, context)).find(
+            (candidate) => candidate.name === tool.name,
+          );
+          if (!live) throw new Error("This Bot tool is no longer available.");
+          const expected = mcpAgentToolDescriptor(tool),
+            actual = mcpAgentToolDescriptor(live);
+          if (JSON.stringify(expected) !== JSON.stringify(actual))
+            throw new Error("The connection tool changed before invocation.");
+          return live.execute(
+            callId,
+            args,
+            signal ? AbortSignal.any([signal, lease.signal]) : lease.signal,
+            onUpdate,
+          );
+        }),
+    };
   }
   const runtime = await createBotSessionService({
-    profileDir, leaseHelperPath: cliLeaseHelperPath(), models: models.modelsFor, pauses: ports.pauses,
+    profileDir,
+    leaseHelperPath: cliLeaseHelperPath(),
+    models: models.modelsFor,
+    pauses: ports.pauses,
     spendingRefusal,
     knownBotIds: async () => new Set((await ports.botStore.list()).map((bot) => bot.id)),
     resolveModel: async (botId) => {
-      if (await ports.capabilities.getBotModelAuthority(botId) === undefined) return null;
+      if ((await ports.capabilities.getBotModelAuthority(botId)) === undefined) return null;
       return admitted(botId, async (lease) => {
         const { sourceProviderId, sourceModelId } = lease.authority.provider;
         const cliModels = await createCliModelRuntime(profileDir);
-        const resolved = await resolveRuntimeFromContext({ modelRegistry: new ModelRegistry(cliModels) }, sourceProviderId, sourceModelId);
+        const resolved = await resolveRuntimeFromContext(
+          { modelRegistry: new ModelRegistry(cliModels) },
+          sourceProviderId,
+          sourceModelId,
+        );
         imageInputs.set(botId, resolved.model.input.includes("image"));
-        spending.register(botId, { local: /^(ollama|lmstudio)$/.test(sourceProviderId), provider: resolved.provider, models: cliModels });
-        models.register(botId, { ...resolved, streams: { streamSimple: (model, context, options) => lazyStream(model, async () => {
-          const requestLease = await admit(botId);
-          try {
-            await requestLease.revalidateBeforeEffect();
-            const selected = requestLease.authority.provider;
-            if (selected.sourceProviderId !== sourceProviderId || selected.sourceModelId !== sourceModelId) throw new Error("The Bot model changed.");
-            const current = await resolveRuntimeFromContext({ modelRegistry: new ModelRegistry(await createCliModelRuntime(profileDir)) }, sourceProviderId, sourceModelId);
-            await requestLease.revalidateBeforeEffect();
-            const stream = current.models.streamSimple(current.model, context, { ...options, apiKey: current.apiKey, headers: current.headers,
-              signal: options?.signal ? AbortSignal.any([options.signal, requestLease.signal]) : requestLease.signal });
-            void stream.result().then((message) => recordUsage(profileDir, "chat", message)).catch((error: unknown) => { process.stderr.write(`Bot usage could not be recorded: ${error instanceof Error ? error.message : String(error)}\n`); }).finally(() => requestLease.release());
-            return stream;
-          } catch (error) { requestLease.release(); throw error; }
-        }) } });
+        spending.register(botId, {
+          local: /^(ollama|lmstudio)$/.test(sourceProviderId),
+          provider: resolved.provider,
+          models: cliModels,
+        });
+        models.register(botId, {
+          ...resolved,
+          streams: {
+            streamSimple: (model, context, options) =>
+              lazyStream(model, async () => {
+                const requestLease = await admit(botId);
+                try {
+                  await requestLease.revalidateBeforeEffect();
+                  const selected = requestLease.authority.provider;
+                  if (
+                    selected.sourceProviderId !== sourceProviderId ||
+                    selected.sourceModelId !== sourceModelId
+                  )
+                    throw new Error("The Bot model changed.");
+                  const current = await resolveRuntimeFromContext(
+                    { modelRegistry: new ModelRegistry(await createCliModelRuntime(profileDir)) },
+                    sourceProviderId,
+                    sourceModelId,
+                  );
+                  await requestLease.revalidateBeforeEffect();
+                  const stream = current.models.streamSimple(current.model, context, {
+                    ...options,
+                    apiKey: current.apiKey,
+                    headers: current.headers,
+                    signal: options?.signal
+                      ? AbortSignal.any([options.signal, requestLease.signal])
+                      : requestLease.signal,
+                  });
+                  void stream
+                    .result()
+                    .then((message) => recordUsage(profileDir, "chat", message))
+                    .catch((error: unknown) => {
+                      process.stderr.write(
+                        `Bot usage could not be recorded: ${error instanceof Error ? error.message : String(error)}\n`,
+                      );
+                    })
+                    .finally(() => requestLease.release());
+                  return stream;
+                } catch (error) {
+                  requestLease.release();
+                  throw error;
+                }
+              }),
+          },
+        });
         return { provider: resolved.model.provider, modelId: resolved.model.id };
       });
     },
     extension: {
-      loadBot: async (botId) => { const bot = await ports.botStore.get(botId); if (!bot) throw new Error("Bot is unavailable."); return bot; },
-      systemSections: (bot) => admitted(bot.id, async (lease) => [await ports.instructions(lease), `Working directory: ${lease.authority.workingDirectory}. Use only the offered tools within their granted locations.`]),
+      loadBot: async (botId) => {
+        const bot = await ports.botStore.get(botId);
+        if (!bot) throw new Error("Bot is unavailable.");
+        return bot;
+      },
+      systemSections: (bot) =>
+        admitted(bot.id, async (lease) => [
+          await ports.instructions(lease),
+          `Working directory: ${lease.authority.workingDirectory}. Use only the offered tools within their granted locations.`,
+        ]),
       imageInput: async (botId) => imageInputs.get(botId) ?? false,
-      memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
+      memorySection: async (botId, offer) =>
+        renderBotMemorySection(await memory.snapshot(botId), offer),
       // The person's memory edits follow their next input, leaving system cached.
       promptTail: async (botId) => withBotMemoryEdits("", memory.takeEdits(botId)),
       currentTools: async (bot) => {
         // The desktop's rule (candidate.ts), with the Bot just loaded for this turn.
         const messageBot = await messageBotOffer(bot.id, {
           messagingEnabled: () => ports.messagingEnabled?.() ?? Promise.resolve(true),
-          bot: async () => bot, roster, post: (input) => messages.post(input),
+          bot: async () => bot,
+          roster,
+          post: (input) => messages.post(input),
         });
         // One clock per turn: the next refresh builds new tools and drops it.
         const replyClock = new SubagentReplyClock();
         return [
           ...(await currentTools(bot.id)).map((tool) => ({
-            tool: { ...tool, execute: async () => { throw new Error("A durable Bot tool requires its calling conversation."); } },
+            tool: {
+              ...tool,
+              execute: async () => {
+                throw new Error("A durable Bot tool requires its calling conversation.");
+              },
+            },
             bind: (call: BotToolCall) => bindTool(bot.id, tool, call, replyClock),
-            replay: "unsafe" as const, ...(mcpAgentToolDescriptor(tool) ? { mcp: true } : {}),
+            replay: "unsafe" as const,
+            ...(mcpAgentToolDescriptor(tool) ? { mcp: true } : {}),
           })),
           botMemoryToolEntry(bot.id, memory, {
-            canSchedule: () => admitted(bot.id, async (lease) => lease.authority.otherCapabilities.some((grant) => grant.kind === "schedules")),
-          }), botRecallToolEntry(),
+            canSchedule: () =>
+              admitted(bot.id, async (lease) =>
+                lease.authority.otherCapabilities.some((grant) => grant.kind === "schedules"),
+              ),
+          }),
+          botRecallToolEntry(),
           ...(messageBot ? [{ ...messageBot, replay: "safe" as const }] : []),
         ];
       },
-      checkPolicy: async (botId, name, call) => admitted(botId, async (lease) => {
-        if (name === "bot_memory" || name === "bot_recall" || name === "message_bot") return { allowed: true };
-        const tool = (await ports.tools(lease, { attachments: [], loadChat: async () => null })).find((candidate) => candidate.name === name);
-        if (!tool) return { allowed: false, reason: "This Bot tool is no longer available." };
-        if (composioServiceCallRequiresForeground(call?.args) && isComposioServiceToolDescriptor(mcpAgentToolDescriptor(tool))
-          && !botIngressAllowsTool("sign_in", call?.requestIds ?? [])) return { allowed: false, reason: "Composio connection setup needs the person in the foreground." };
-        // An MCP descriptor is treated conservatively: all connection calls
-        // ask the person, including providers without effect annotations.
-        return { allowed: true, ...(mcpAgentToolDescriptor(tool) ? { approval: { summary: `Allow ${tool.label ?? name}?` } } : {}) };
-      }),
+      checkPolicy: async (botId, name, call) =>
+        admitted(botId, async (lease) => {
+          if (name === "bot_memory" || name === "bot_recall" || name === "message_bot")
+            return { allowed: true };
+          const tool = (
+            await ports.tools(lease, { attachments: [], loadChat: async () => null })
+          ).find((candidate) => candidate.name === name);
+          if (!tool) return { allowed: false, reason: "This Bot tool is no longer available." };
+          if (
+            composioServiceCallRequiresForeground(call?.args) &&
+            isComposioServiceToolDescriptor(mcpAgentToolDescriptor(tool)) &&
+            !botIngressAllowsTool("sign_in", call?.requestIds ?? [])
+          )
+            return {
+              allowed: false,
+              reason: "Composio connection setup needs the person in the foreground.",
+            };
+          // An MCP descriptor is treated conservatively: all connection calls
+          // ask the person, including providers without effect annotations.
+          return {
+            allowed: true,
+            ...(mcpAgentToolDescriptor(tool)
+              ? { approval: { summary: `Allow ${tool.label ?? name}?` } }
+              : {}),
+          };
+        }),
       requestApproval: async (request) => {
-        const window = await messages.announceWaiting(request.botId, request.owner?.inputs.map((input) => input.requestId) ?? [], request.summary, request.waitId);
-        if (window?.expired) return { id: request.waitId, authorizationFingerprint: request.authorizationFingerprint, answer: "deny", source: "expiry" };
+        const window = await messages.announceWaiting(
+          request.botId,
+          request.owner?.inputs.map((input) => input.requestId) ?? [],
+          request.summary,
+          request.waitId,
+        );
+        if (window?.expired)
+          return {
+            id: request.waitId,
+            authorizationFingerprint: request.authorizationFingerprint,
+            answer: "deny",
+            source: "expiry",
+          };
         return approvals.request(request);
       },
       spending: {
@@ -223,26 +411,75 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       turnAllows: withBotMemoryIngress(botIngressAllowsTool),
       turnRefusal: botIngressRefusal,
       // The person's global and Bot hooks, run in the Bot's working directory.
-      hooks: { cwd: (botId) => admitted(botId, async (lease) => lease.authority.workingDirectory), attended: botTurnAttended,
+      hooks: {
+        cwd: (botId) => admitted(botId, async (lease) => lease.authority.workingDirectory),
+        attended: botTurnAttended,
         // A Bot run has no transcript notice row, so hook messages go to the daemon log.
-        report: (botId, lines) => { for (const line of lines) process.stderr.write(`aiden: Bot ${botId} hook: ${line.replace(/[\r\n]+/gu, " ").slice(0, 500)}\n`); } },
+        report: (botId, lines) => {
+          for (const line of lines)
+            process.stderr.write(
+              `aiden: Bot ${botId} hook: ${line.replace(/[\r\n]+/gu, " ").slice(0, 500)}\n`,
+            );
+        },
+      },
       readmit: async (botId) => {
-        if (!await ports.botStore.get(botId)) return { ok: false, reason: "bot_missing" };
-        try { await admitted(botId, async () => {}); return { ok: true }; }
-        catch { return { ok: false, reason: "access_changed" }; }
+        if (!(await ports.botStore.get(botId))) return { ok: false, reason: "bot_missing" };
+        try {
+          await admitted(botId, async () => {});
+          return { ok: true };
+        } catch {
+          return { ok: false, reason: "access_changed" };
+        }
       },
     },
     onSessionOpen: (botId) => memory.beginSession(botId),
     onStateChange: (botId, state) => {
       for (const listener of stateListeners) {
-        try { listener(botId, state); } catch (error) { process.stderr.write(`Bot ${botId} state listener failed: ${error instanceof Error ? error.message : String(error)}\n`); }
+        try {
+          listener(botId, state);
+        } catch (error) {
+          process.stderr.write(
+            `Bot ${botId} state listener failed: ${error instanceof Error ? error.message : String(error)}\n`,
+          );
+        }
       }
     },
-    deleteEffects: [(botId) => messages.forgetBot(botId), ports.deleteRoutines, async (botId) => { try { await spending.forgetBot(botId); } catch (error) { process.stderr.write(`Bot ${botId} spending cleanup: ${String(error)}\n`); } }, async (botId) => { memory.forgetBot(botId); models.forget(botId); imageInputs.delete(botId); }, async (botId) => { await ports.pauses.forgetBot(botId); }, async (botId) => { await ports.application.deleteBot({ botId }); }],
-    onReport: (botId, error) => process.stderr.write(`Bot ${botId}: ${error instanceof Error ? error.message : String(error)}\n`),
+    deleteEffects: [
+      (botId) => messages.forgetBot(botId),
+      ports.deleteRoutines,
+      async (botId) => {
+        try {
+          await spending.forgetBot(botId);
+        } catch (error) {
+          process.stderr.write(`Bot ${botId} spending cleanup: ${String(error)}\n`);
+        }
+      },
+      async (botId) => {
+        memory.forgetBot(botId);
+        models.forget(botId);
+        imageInputs.delete(botId);
+      },
+      async (botId) => {
+        await ports.pauses.forgetBot(botId);
+      },
+      async (botId) => {
+        await ports.application.deleteBot({ botId });
+      },
+    ],
+    onReport: (botId, error) =>
+      process.stderr.write(
+        `Bot ${botId}: ${error instanceof Error ? error.message : String(error)}\n`,
+      ),
   });
-  try { await runtime.initialize(); await messages.start(); } // Interrupted runs stay paused; accepted courier work reattaches.
-  catch (error) { await messages.dispose(); await runtime.shutdown(); throw error; }
+  try {
+    await runtime.initialize();
+    await messages.start();
+  } catch (error) {
+    // Interrupted runs stay paused; accepted courier work reattaches.
+    await messages.dispose();
+    await runtime.shutdown();
+    throw error;
+  }
   const creationKeys = createBotCreationKeyStore({ root: () => profileDir });
   const starter = createBotStarter({
     findBotByCreationKey: async (key) => {
@@ -250,15 +487,30 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       const bot = id ? await ports.botStore.get(id) : null;
       if (!bot && id) await creationKeys.forget(key);
       return bot ?? null;
-    }, mintBotId: newBotId,
+    },
+    mintBotId: newBotId,
     reserveCreation: (key, botId) => creationKeys.set(key, botId),
-    createBot: (bot, access, botId, presetId) => ports.application.createBot({ audienceId: "cli:local", botId, bot, access, presetId }),
+    createBot: (bot, access, botId, presetId) =>
+      ports.application.createBot({ audienceId: "cli:local", botId, bot, access, presetId }),
     session: runtime,
   });
-  return { runtime, messages, approvals, memory, stateChanges, presets: { list: () => BOT_PRESETS, create: async (presetId: string, { audienceId }: { audienceId: string }) => {
-    const result = await starter.startFromPreset(presetId, { createBot: (bot, botId, presetId) => ports.application.createBot({ audienceId, botId, bot, presetId }) });
-    return { botId: result.bot.id, created: result.created };
-  } } };
+  return {
+    runtime,
+    messages,
+    approvals,
+    memory,
+    stateChanges,
+    presets: {
+      list: () => BOT_PRESETS,
+      create: async (presetId: string, { audienceId }: { audienceId: string }) => {
+        const result = await starter.startFromPreset(presetId, {
+          createBot: (bot, botId, presetId) =>
+            ports.application.createBot({ audienceId, botId, bot, presetId }),
+        });
+        return { botId: result.bot.id, created: result.created };
+      },
+    },
+  };
 }
 
 /**

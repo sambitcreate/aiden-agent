@@ -241,9 +241,7 @@ export function evaluateAcceptanceRequests(requests, { expectedTitles = [], save
       typed.capture.mode !== "som" ||
       !targetMatches(typed.capture.target, target)
     ) {
-      failures.push(
-        "The type action did not return an exact-target capture_after result.",
-      );
+      failures.push("The type action did not return an exact-target capture_after result.");
     } else if (!JSON.stringify(typed.capture).includes(ACCEPTANCE_TEXT)) {
       failures.push("The capture_after result did not contain the typed acceptance marker.");
     }

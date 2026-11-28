@@ -21,10 +21,15 @@ test("setup opens in the focused window only", () => {
   const { windows, sent } = windowsOf([{ id: 1 }, { id: 2, focused: true }, { id: 3 }]);
   const history = createFocusHistory();
   history.focused(3);
-  connectionSetupTarget({ all: () => windows, focusHistory: history.list })?.send("bots:connections:setup", {
-    pluginId: "x",
-  });
-  assert.deepEqual(sent, [{ id: 2, channel: "bots:connections:setup", payload: { pluginId: "x" } }]);
+  connectionSetupTarget({ all: () => windows, focusHistory: history.list })?.send(
+    "bots:connections:setup",
+    {
+      pluginId: "x",
+    },
+  );
+  assert.deepEqual(sent, [
+    { id: 2, channel: "bots:connections:setup", payload: { pluginId: "x" } },
+  ]);
 });
 
 test("with nothing focused, the most recently focused open window gets setup", () => {

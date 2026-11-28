@@ -51,7 +51,9 @@ test("the declaration is the same for every inventory; action list returns the l
     false,
     false,
   );
-  const empty = createSubagentTool({ execute: async () => "done" } as unknown as SubagentSupervisor);
+  const empty = createSubagentTool({
+    execute: async () => "done",
+  } as unknown as SubagentSupervisor);
   for (const declared of [other, empty]) {
     assert.equal(declared.description, tool().description);
     assert.deepEqual(declared.parameters, tool().parameters);
@@ -74,7 +76,12 @@ test("the declaration is the same for every inventory; action list returns the l
 test("action list launches nothing; any other call reaches the supervisor", async () => {
   const calls: unknown[] = [];
   const delegated = createSubagentTool(
-    { execute: async (params: unknown) => { calls.push(params); return "ran"; } } as unknown as SubagentSupervisor,
+    {
+      execute: async (params: unknown) => {
+        calls.push(params);
+        return "ran";
+      },
+    } as unknown as SubagentSupervisor,
     [{ serverId: "docs", tools: ["lookup"] }],
   );
   await delegated.execute("call-1", { action: "list" });
@@ -105,8 +112,14 @@ test("two no-capability scouts need no model-supplied resource budget", () => {
   assert.equal(validate({ ...noCapabilityRhymes, deadlineMs: 60_000 }), false);
   assert.match(delegated.description, /read-only task may request maxTurns/u);
   assert.match(delegated.description, /Never send execution, deadline, or other budget fields/u);
-  assert.equal(validate({ ...noCapabilityRhymes, tasks: [{ ...noCapabilityRhymes.tasks[0], maxTurns: 128 }] }), true);
-  assert.equal(validate({ ...noCapabilityRhymes, tasks: [{ ...noCapabilityRhymes.tasks[0], maxTurns: 129 }] }), false);
+  assert.equal(
+    validate({ ...noCapabilityRhymes, tasks: [{ ...noCapabilityRhymes.tasks[0], maxTurns: 128 }] }),
+    true,
+  );
+  assert.equal(
+    validate({ ...noCapabilityRhymes, tasks: [{ ...noCapabilityRhymes.tasks[0], maxTurns: 129 }] }),
+    false,
+  );
   assert.match(delegated.description, /infers only their exact union/u);
   assert.match(delegated.description, /read-only role defaults/u);
 });
@@ -135,16 +148,11 @@ test("Phase 5E exposes shell only after the complete positive production gate", 
     capabilities: { ...request("docs", "lookup").capabilities, shell: true },
   };
   assert.equal(
-    new Ajv().compile(tool(false, false, false).parameters as object)(
-      requestWithShell,
-    ),
+    new Ajv().compile(tool(false, false, false).parameters as object)(requestWithShell),
     false,
   );
   const enabled = tool(false, false, true);
-  assert.equal(
-    new Ajv().compile(enabled.parameters as object)(requestWithShell),
-    true,
-  );
+  assert.equal(new Ajv().compile(enabled.parameters as object)(requestWithShell), true);
   assert.match(enabled.description, /full-host execution/u);
   assert.match(enabled.description, /not OS-sandboxed or rolled back/u);
   const [llm, assembly, runner] = await Promise.all([
@@ -164,10 +172,7 @@ test("Phase 6A schema remains inert unless the Phase 6B gate is enabled", async 
     capabilities: { ...request("docs", "lookup").capabilities, delegate: true },
   };
   for (const delegated of [tool(), tool(true, true, true)]) {
-    assert.equal(
-      new Ajv().compile(delegated.parameters as object)(requestWithDelegate),
-      false,
-    );
+    assert.equal(new Ajv().compile(delegated.parameters as object)(requestWithDelegate), false);
     assert.doesNotMatch(JSON.stringify(delegated.parameters), /"delegate"/u);
   }
   const productionSources = await Promise.all(
@@ -189,16 +194,11 @@ test("Phase 6B exposes delegate only behind its exact production schema gate", (
     capabilities: { ...request("docs", "lookup").capabilities, delegate: true },
   };
   assert.equal(
-    new Ajv().compile(tool(false, false, false, false).parameters)(
-      requestWithDelegate,
-    ),
+    new Ajv().compile(tool(false, false, false, false).parameters)(requestWithDelegate),
     false,
   );
   const enabled = tool(false, false, false, true);
-  assert.equal(
-    new Ajv().compile(enabled.parameters)(requestWithDelegate),
-    true,
-  );
+  assert.equal(new Ajv().compile(enabled.parameters)(requestWithDelegate), true);
   assert.match(enabled.description, /depth-1 child/u);
   assert.match(enabled.description, /fresh context by default/u);
   assert.match(enabled.description, /explicit immutable user-visible fork/u);
@@ -208,18 +208,12 @@ test("Phase 6B exposes delegate only behind its exact production schema gate", (
 test("model-facing MCP copy is truthful about server-declared read-only metadata", () => {
   const delegated = tool();
   assert.match(delegated.description, /server-declared read-only MCP/u);
-  assert.match(
-    delegated.description,
-    /configured server controls the actual effect/u,
-  );
+  assert.match(delegated.description, /configured server controls the actual effect/u);
   assert.doesNotMatch(
     delegated.description,
     /(?:^|\s)listed read-only MCP|Requestable read-only MCP/u,
   );
-  assert.match(
-    JSON.stringify(delegated.parameters),
-    /server-declared read-only/u,
-  );
+  assert.match(JSON.stringify(delegated.parameters), /server-declared read-only/u);
 });
 
 test("task-label schema matches renderer-safe attended approval labels", () => {
@@ -236,9 +230,7 @@ test("task-label schema matches renderer-safe attended approval labels", () => {
   assert.equal(
     validate({
       ...request("docs", "lookup"),
-      tasks: [
-        { role: "scout", label: "Safe label", task: "Inspect one source" },
-      ],
+      tasks: [{ role: "scout", label: "Safe label", task: "Inspect one source" }],
     }),
     true,
   );
@@ -272,10 +264,7 @@ test("workspace-write schema exposure is positive, rollbackable, and truthful ab
     true,
   );
   assert.match(enabled.description, /positive foreground authority request/u);
-  assert.match(
-    enabled.description,
-    /Only write_file\/edit_file calls are exposed/u,
-  );
+  assert.match(enabled.description, /Only write_file\/edit_file calls are exposed/u);
   assert.match(JSON.stringify(enabled.parameters), /run-scoped grant/u);
 });
 
@@ -313,38 +302,25 @@ test("Phase 5C exposes only exact rollback-gated mutation requests", async () =>
   assert.match(tool(true, true).description, /never retries automatically/u);
   assert.match(tool(true, true).description, /rollback is unavailable/u);
 
-  const [llm, assembly, schema, mutationApproval, mutationBroker] =
-    await Promise.all([
-      readFile(new URL("../llm-client.ts", import.meta.url), "utf8"),
-      readFile(new URL("./subagent-tool-assembly.ts", import.meta.url), "utf8"),
-      readFile(new URL("./subagent-tool.ts", import.meta.url), "utf8"),
-      readFile(
-        new URL("./subagent-mcp-mutation-approval.ts", import.meta.url),
-        "utf8",
-      ),
-      readFile(new URL("./subagent-mcp-mutation.ts", import.meta.url), "utf8"),
-    ]);
+  const [llm, assembly, schema, mutationApproval, mutationBroker] = await Promise.all([
+    readFile(new URL("../llm-client.ts", import.meta.url), "utf8"),
+    readFile(new URL("./subagent-tool-assembly.ts", import.meta.url), "utf8"),
+    readFile(new URL("./subagent-tool.ts", import.meta.url), "utf8"),
+    readFile(new URL("./subagent-mcp-mutation-approval.ts", import.meta.url), "utf8"),
+    readFile(new URL("./subagent-mcp-mutation.ts", import.meta.url), "utf8"),
+  ]);
   assert.match(llm, /subagentChildMcpMutationsEnabled/u);
   assert.match(llm, /projectRequestableSubagentMcpMutationInventoryV2/u);
   assert.match(assembly, /createSubagentMcpMutationToolsV2/u);
   assert.match(schema, /mcpMutations/u);
-  assert.doesNotMatch(
-    mutationApproval,
-    /callTool\(|createReadOnlySubagentMcpTools/u,
-  );
+  assert.doesNotMatch(mutationApproval, /callTool\(|createReadOnlySubagentMcpTools/u);
   assert.match(mutationBroker, /dispatchRaw/u);
   assert.match(mutationBroker, /markEffectDispatchStarted/u);
 });
 
 test("llm-client resolves write rollout before schema and authority exposure", async () => {
-  const source = await readFile(
-    new URL("../llm-client.ts", import.meta.url),
-    "utf8",
-  );
-  assert.match(
-    source,
-    /const childWriteRollout = subagentChildWriteEnabled\(\)/u,
-  );
+  const source = await readFile(new URL("../llm-client.ts", import.meta.url), "utf8");
+  assert.match(source, /const childWriteRollout = subagentChildWriteEnabled\(\)/u);
   assert.match(source, /subagentWorkspaceWriteAllowedForGeneration/u);
   assert.match(source, /generationPermission: permission/u);
   assert.match(source, /subagentRunStore\.selection === "v2"/u);
@@ -357,8 +333,18 @@ test("llm-client resolves write rollout before schema and authority exposure", a
 
 const modelChoices = {
   models: [
-    { providerId: "anthropic", providerLabel: "Anthropic", modelId: "claude-sonnet", modelLabel: "Claude Sonnet" },
-    { providerId: "openrouter", providerLabel: "OpenRouter", modelId: "qwen/qwen3", modelLabel: "Qwen 3" },
+    {
+      providerId: "anthropic",
+      providerLabel: "Anthropic",
+      modelId: "claude-sonnet",
+      modelLabel: "Claude Sonnet",
+    },
+    {
+      providerId: "openrouter",
+      providerLabel: "OpenRouter",
+      modelId: "qwen/qwen3",
+      modelLabel: "Qwen 3",
+    },
   ],
   efforts: ["off", "low", "medium"] as const,
 };

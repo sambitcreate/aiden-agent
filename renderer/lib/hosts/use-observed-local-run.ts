@@ -4,7 +4,11 @@ import { chatsApi } from "../ipc";
 import { queryKeys } from "../queries";
 import { isChatCacheDeleted } from "../chat-deletion-cache";
 import { localHostAdapter } from "./local-host-adapter";
-import { createObservedRunLifecycle, observeLocalRun, type ObservedChatRead } from "./observed-local-run";
+import {
+  createObservedRunLifecycle,
+  observeLocalRun,
+  type ObservedChatRead,
+} from "./observed-local-run";
 
 type ObservedRunLifecycle = ReturnType<typeof createObservedRunLifecycle>;
 
@@ -16,7 +20,11 @@ type ObservedRunLifecycle = ReturnType<typeof createObservedRunLifecycle>;
  * draft, or the pane running its own turn) stops it at once, so nobody
  * watching costs nothing.
  */
-export function useObservedLocalRun(chatId: string | null, workspaceId: string | undefined, active: boolean): void {
+export function useObservedLocalRun(
+  chatId: string | null,
+  workspaceId: string | undefined,
+  active: boolean,
+): void {
   const queryClient = useQueryClient();
   const lifecycleRef = React.useRef<ObservedRunLifecycle | null>(null);
 
@@ -51,6 +59,9 @@ export function useObservedLocalRun(chatId: string | null, workspaceId: string |
 
   // Declared after the lifecycle so it runs once one exists.
   React.useEffect(() => {
-    lifecycleRef.current?.update({ target: chatId && workspaceId ? { chatId, workspaceId } : null, active });
+    lifecycleRef.current?.update({
+      target: chatId && workspaceId ? { chatId, workspaceId } : null,
+      active,
+    });
   }, [active, chatId, workspaceId, queryClient]);
 }

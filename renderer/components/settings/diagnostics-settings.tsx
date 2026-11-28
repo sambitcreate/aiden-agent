@@ -17,7 +17,8 @@ function formatBytes(bytes: number): string {
 }
 
 function statusDescription(status: DiagnosticSupportStatusView | null, failed: boolean): string {
-  if (failed) return "Aiden could not inspect local diagnostic storage. Existing app data is unaffected.";
+  if (failed)
+    return "Aiden could not inspect local diagnostic storage. Existing app data is unaffected.";
   if (!status) return "Checking the bounded, device-local diagnostic journal…";
   const range = status.oldestAt
     ? ` Oldest retained event: ${new Date(status.oldestAt).toLocaleDateString()}.`
@@ -66,7 +67,8 @@ export function DiagnosticsSettings() {
     setAction("export");
     try {
       const result = await diagnosticsApi.export(includeCrashDumps);
-      if (result.exported) toast.success("Diagnostics exported. Aiden did not send the file anywhere.");
+      if (result.exported)
+        toast.success("Diagnostics exported. Aiden did not send the file anywhere.");
     } catch {
       toast.error("Aiden could not build a privacy-safe diagnostics export.");
     } finally {
@@ -111,10 +113,7 @@ export function DiagnosticsSettings() {
     <>
       <UsageDataSettings />
       <FieldSet title="Diagnostics">
-        <Field
-          label="Local evidence"
-          description={statusDescription(status, loadFailed)}
-        >
+        <Field label="Local evidence" description={statusDescription(status, loadFailed)}>
           <div className="flex flex-wrap justify-end gap-2 max-[540px]:justify-start">
             <Button size="small" variant="filled" disabled={busy} onClick={() => void reveal()}>
               {action === "reveal" ? <Loader2 className="animate-spin" /> : <FolderOpen />}
@@ -134,7 +133,12 @@ export function DiagnosticsSettings() {
         <Field
           className="border-t border-separator"
           label="Crash capture"
-          hint={<InfoHint topic="crash capture">Dumps stay on this device and are never uploaded automatically. Aiden keeps at most three, for seven days.</InfoHint>}
+          hint={
+            <InfoHint topic="crash capture">
+              Dumps stay on this device and are never uploaded automatically. Aiden keeps at most
+              three, for seven days.
+            </InfoHint>
+          }
           description={
             status?.diagnosticMode.enabled
               ? `Active until Aiden restarts. ${status.diagnosticMode.crashDumpCount} local crash dump${status.diagnosticMode.crashDumpCount === 1 ? "" : "s"} retained.`
@@ -185,8 +189,12 @@ export function DiagnosticsSettings() {
           </div>
         </Field>
         {status?.sinkFailed || status?.droppedWrites ? (
-          <p role="status" className="border-t border-separator px-4 py-3 text-small text-secondary">
-            Some diagnostic evidence could not be retained. Product data and normal app behavior are unaffected.
+          <p
+            role="status"
+            className="border-t border-separator px-4 py-3 text-small text-secondary"
+          >
+            Some diagnostic evidence could not be retained. Product data and normal app behavior are
+            unaffected.
           </p>
         ) : null}
       </FieldSet>

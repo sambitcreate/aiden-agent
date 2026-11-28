@@ -2,14 +2,13 @@ import type { TodoSnapshotViewV1 } from "../../renderer/shared/todo.js";
 
 /** Process-local invalidations, not another persistence authority. */
 export class ChatProgressEvents {
-  private readonly active = new Map<
-    string,
-    { generationId: string; todo?: TodoSnapshotViewV1 }
-  >();
+  private readonly active = new Map<string, { generationId: string; todo?: TodoSnapshotViewV1 }>();
   private readonly listeners = new Map<string, Set<() => void>>();
   private serial = 0;
   private controlSerial = 0;
-  appControlsRevision(): number { return this.controlSerial; }
+  appControlsRevision(): number {
+    return this.controlSerial;
+  }
   /** One bounded invalidation for each currently subscribed foreground chat. */
   appControlsChanged(): void {
     this.controlSerial = this.controlSerial >= Number.MAX_SAFE_INTEGER ? 0 : this.controlSerial + 1;
@@ -26,25 +25,14 @@ export class ChatProgressEvents {
     this.changed(chatId);
   }
 
-  current(
-    chatId: string,
-  ): { generationId: string; todo?: TodoSnapshotViewV1 } | undefined {
+  current(chatId: string): { generationId: string; todo?: TodoSnapshotViewV1 } | undefined {
     const value = this.active.get(chatId);
     return value && structuredClone(value);
   }
 
-  durableTodo(
-    chatId: string,
-    generationId: string,
-    todo: TodoSnapshotViewV1,
-  ): void {
+  durableTodo(chatId: string, generationId: string, todo: TodoSnapshotViewV1): void {
     const current = this.active.get(chatId);
-    if (
-      !current ||
-      current.generationId !== generationId ||
-      todo.chatId !== chatId
-    )
-      return;
+    if (!current || current.generationId !== generationId || todo.chatId !== chatId) return;
     current.todo = structuredClone(todo);
     this.changed(chatId);
   }
@@ -58,8 +46,7 @@ export class ChatProgressEvents {
   changed(chatId: string): void {
     this.serial += 1;
     this.revisions.delete(chatId);
-    if (this.revisions.size >= 512)
-      this.revisions.delete(this.revisions.keys().next().value!);
+    if (this.revisions.size >= 512) this.revisions.delete(this.revisions.keys().next().value!);
     this.revisions.set(chatId, this.serial);
     for (const listener of this.listeners.get(chatId) ?? []) {
       // An optional observer must never fail the owning generation.

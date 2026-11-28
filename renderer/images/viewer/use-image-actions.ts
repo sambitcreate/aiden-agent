@@ -1,8 +1,18 @@
 import * as React from "react";
 import { toast } from "../../components/ui";
 import { createImagesIpc } from "../../lib/create-images-ipc";
-import { SAVE_ALL_MAX_IMAGES, type ImageActionRequest, type ImageActionResponse } from "../../shared/images/ipc-types";
-import { actionOutcome, revealLabel, thrownOutcome, type ActionOutcome, type ImageActionOp } from "./viewer-core";
+import {
+  SAVE_ALL_MAX_IMAGES,
+  type ImageActionRequest,
+  type ImageActionResponse,
+} from "../../shared/images/ipc-types";
+import {
+  actionOutcome,
+  revealLabel,
+  thrownOutcome,
+  type ActionOutcome,
+  type ImageActionOp,
+} from "./viewer-core";
 
 export const IS_MAC = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
 export const REVEAL_LABEL = revealLabel(IS_MAC);
@@ -32,14 +42,20 @@ export function useImageActions(options: { onSaved?: () => void } = {}) {
   onSaved.current = options.onSaved;
 
   return React.useMemo(() => {
-    const run = async (op: ImageActionOp, request: ImageActionRequest): Promise<ImageActionResponse | null> => {
+    const run = async (
+      op: ImageActionOp,
+      request: ImageActionRequest,
+    ): Promise<ImageActionResponse | null> => {
       const response = await perform(request);
       const outcome = response ? actionOutcome(op, response) : thrownOutcome(op);
       // A save names what it wrote by an opaque id, so the toast can show it in the file manager,
       // including the folder of a Save All that wrote only some of its images.
       const savedId = outcome?.savedId;
       const showSaved = savedId
-        ? { label: REVEAL_LABEL, onClick: () => void run("reveal-saved", { op: "reveal-saved", savedId }) }
+        ? {
+            label: REVEAL_LABEL,
+            onClick: () => void run("reveal-saved", { op: "reveal-saved", savedId }),
+          }
         : undefined;
       announce(outcome, showSaved);
       // Reveal saves a missing auto-saved copy first, so the saved state may have changed.

@@ -4,15 +4,17 @@ import { basename, dirname, join, resolve } from "node:path";
 
 const heldPaths = new Set<string>();
 
-export function desktopLeaseHelperPath(runtime: {
-  defaultApp: boolean;
-  resourcesPath?: string;
-  cwd: string;
-} = {
-  defaultApp: process.defaultApp === true,
-  resourcesPath: typeof process.resourcesPath === "string" ? process.resourcesPath : undefined,
-  cwd: process.cwd(),
-}): string {
+export function desktopLeaseHelperPath(
+  runtime: {
+    defaultApp: boolean;
+    resourcesPath?: string;
+    cwd: string;
+  } = {
+    defaultApp: process.defaultApp === true,
+    resourcesPath: typeof process.resourcesPath === "string" ? process.resourcesPath : undefined,
+    cwd: process.cwd(),
+  },
+): string {
   return runtime.defaultApp !== true && runtime.resourcesPath
     ? resolve(runtime.resourcesPath, "..", "Helpers", "aiden-lease-flock")
     : resolve(runtime.cwd, "build", "native", "aiden-lease-flock");
@@ -33,8 +35,12 @@ export function tryAcquireProcessLifetimeLock(file: string, helper: string): (()
   try {
     fd = openSync(canonical, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
     const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0 ||
-        (process.getuid !== undefined && stat.uid !== process.getuid())) {
+    if (
+      !stat.isFile() ||
+      stat.nlink !== 1 ||
+      (stat.mode & 0o077) !== 0 ||
+      (process.getuid !== undefined && stat.uid !== process.getuid())
+    ) {
       throw new Error(`Unsafe lease guard at ${canonical}`);
     }
     const result = spawnSync(helper, [], {
@@ -43,7 +49,9 @@ export function tryAcquireProcessLifetimeLock(file: string, helper: string): (()
       encoding: "utf8",
     });
     if (result.error || result.signal || (result.status !== 0 && result.status !== 10)) {
-      throw new Error(`Cannot lock ${canonical}: ${result.error?.message ?? result.signal ?? result.stderr?.trim() ?? `helper exit ${result.status}`}`);
+      throw new Error(
+        `Cannot lock ${canonical}: ${result.error?.message ?? result.signal ?? result.stderr?.trim() ?? `helper exit ${result.status}`}`,
+      );
     }
     if (result.status === 10) {
       closeSync(fd);

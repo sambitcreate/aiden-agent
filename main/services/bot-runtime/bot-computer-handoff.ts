@@ -22,7 +22,11 @@
 // Holds live in memory: an app restart stops the computer, so a hold can't
 // outlive it.
 
-import type { BotComputerControl, BotComputerHost, BotComputerTakeOverSource } from "../bot-computers/types.js";
+import type {
+  BotComputerControl,
+  BotComputerHost,
+  BotComputerTakeOverSource,
+} from "../bot-computers/types.js";
 import { guestDriverSuspendScript } from "../bot-computers/guest-driver-install.js";
 import { quoteRemoteArg } from "../devices/ssh-device-script.js";
 import type { BotHandoffs } from "./bot-handoffs.js";
@@ -55,20 +59,29 @@ export interface BotComputerHandoffDeps {
  * in Safari there when given (a sign-in always gives one; an action may not).
  * False when nothing opened.
  */
-export type BotComputerHandoffOpener = (botId: string, waitId: string, url: string | undefined) => Promise<boolean>;
+export type BotComputerHandoffOpener = (
+  botId: string,
+  waitId: string,
+  url: string | undefined,
+) => Promise<boolean>;
 
 function heldKey(botId: string, waitId: string): string {
   return `${botId}\u0000${waitId}`;
 }
 
-export function createBotComputerHandoffOpener(deps: BotComputerHandoffDeps): BotComputerHandoffOpener {
+export function createBotComputerHandoffOpener(
+  deps: BotComputerHandoffDeps,
+): BotComputerHandoffOpener {
   /** The cards whose Open took the computer over. */
   const held = new Set<string>();
 
   const release = (botId: string, waitId: string): void => {
     if (!held.delete(heldKey(botId, waitId))) return;
     // The person may have given it back already, or taken it again from the viewer.
-    if (deps.control.controller(botId) === "person" && deps.control.takenOverBy(botId) === "sign_in") {
+    if (
+      deps.control.controller(botId) === "person" &&
+      deps.control.takenOverBy(botId) === "sign_in"
+    ) {
       deps.control.giveBack(botId);
     }
   };
@@ -79,7 +92,8 @@ export function createBotComputerHandoffOpener(deps: BotComputerHandoffDeps): Bo
   // time this runs.
   deps.handoffs.onSettled((prompt) => {
     queueMicrotask(() => {
-      if (deps.handoffs.get(prompt.botId, prompt.waitId) === undefined) release(prompt.botId, prompt.waitId);
+      if (deps.handoffs.get(prompt.botId, prompt.waitId) === undefined)
+        release(prompt.botId, prompt.waitId);
     });
   });
 
@@ -88,7 +102,8 @@ export function createBotComputerHandoffOpener(deps: BotComputerHandoffDeps): Bo
       timeoutMs: GUEST_COMMAND_TIMEOUT_MS,
       maxOutputBytes: GUEST_COMMAND_OUTPUT_BYTES,
     });
-    if (result.exitCode !== 0) throw new Error(`The Bot's computer couldn't ${what} (exit ${result.exitCode ?? "none"}).`);
+    if (result.exitCode !== 0)
+      throw new Error(`The Bot's computer couldn't ${what} (exit ${result.exitCode ?? "none"}).`);
   };
 
   return async (botId, waitId, url) => {

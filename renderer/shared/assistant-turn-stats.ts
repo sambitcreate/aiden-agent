@@ -125,7 +125,9 @@ export function formatTokenCount(value: number): string {
 /** "0.8s", "12s", "3m 5s", "1h 2m". */
 export function formatTurnDuration(durationMs: number): string {
   if (durationMs < 10_000) {
-    return `${Math.max(0.1, Math.round(durationMs / 100) / 10).toFixed(1).replace(/\.0$/u, "")}s`;
+    return `${Math.max(0.1, Math.round(durationMs / 100) / 10)
+      .toFixed(1)
+      .replace(/\.0$/u, "")}s`;
   }
   const seconds = Math.round(durationMs / 1_000);
   if (seconds < 60) return `${seconds}s`;
@@ -160,7 +162,9 @@ export function turnFooterItems(input: {
   const items: TurnFooterItem[] = [];
   const bounds = input.turnStats
     ? { startedAt: input.turnStats.startedAt, finishedAt: input.turnStats.finishedAt }
-    : input.timeline && input.timeline.status !== "running" && input.timeline.finishedAt !== undefined
+    : input.timeline &&
+        input.timeline.status !== "running" &&
+        input.timeline.finishedAt !== undefined
       ? { startedAt: input.timeline.startedAt, finishedAt: input.timeline.finishedAt }
       : undefined;
   if (bounds && bounds.finishedAt >= bounds.startedAt) {
@@ -173,7 +177,8 @@ export function turnFooterItems(input: {
   if (usage && usage.total > 0) {
     const read = usage.input + usage.cacheRead + usage.cacheWrite;
     const text = `${formatTokenCount(read)} in · ${formatTokenCount(usage.output)} out`;
-    const cached = usage.cacheRead > 0 ? `, ${usage.cacheRead.toLocaleString("en-US")} from cache` : "";
+    const cached =
+      usage.cacheRead > 0 ? `, ${usage.cacheRead.toLocaleString("en-US")} from cache` : "";
     const requests = usage.requests === 1 ? "1 request" : `${usage.requests} requests`;
     items.push({
       kind: "tokens",

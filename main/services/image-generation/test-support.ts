@@ -24,10 +24,16 @@ export class MemoryCredentialStore implements CredentialStore {
   }
 
   async list() {
-    return [...this.entries].map(([providerId, credential]) => ({ providerId, type: credential.type }));
+    return [...this.entries].map(([providerId, credential]) => ({
+      providerId,
+      type: credential.type,
+    }));
   }
 
-  async modify(providerId: string, fn: (current: Credential | undefined) => Promise<Credential | undefined>) {
+  async modify(
+    providerId: string,
+    fn: (current: Credential | undefined) => Promise<Credential | undefined>,
+  ) {
     this.touched.push(providerId);
     const next = await fn(this.entries.get(providerId));
     if (next) this.entries.set(providerId, next);
@@ -75,14 +81,22 @@ export function fakeFetch(route: Route): { fetch: typeof fetch; requests: Record
 }
 
 export function json(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 export function bytes(value: Uint8Array, status = 200): Response {
   return new Response(Buffer.from(value), { status, headers: { "content-type": "image/png" } });
 }
 
-export function imageModel(provider: string, id: string, api: ImageApi, input: ("text" | "image")[] = ["text"]): ImageModel<ImageApi> {
+export function imageModel(
+  provider: string,
+  id: string,
+  api: ImageApi,
+  input: ("text" | "image")[] = ["text"],
+): ImageModel<ImageApi> {
   return {
     type: "image",
     id,

@@ -11,7 +11,8 @@ import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
 
 let accountPromise: Promise<string> | undefined;
 const account = (): Promise<string> => {
-  accountPromise ??= fs.realpath(app.getPath("userData"))
+  accountPromise ??= fs
+    .realpath(app.getPath("userData"))
     .then(botCapabilityAuthorityAccountForCanonicalRoot)
     .catch((error) => {
       accountPromise = undefined;

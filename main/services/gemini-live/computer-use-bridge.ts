@@ -1,5 +1,8 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ComputerUseApprovalDescriptor, ComputerUseResultDetails } from "../computer-use/controller.js";
+import type {
+  ComputerUseApprovalDescriptor,
+  ComputerUseResultDetails,
+} from "../computer-use/controller.js";
 import type { ComputerUseArgs } from "../computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 import { computerUseNeedsApproval, normalizeComputerUseArgs } from "../computer-use/safety.js";
@@ -46,11 +49,7 @@ export interface GeminiLiveComputerUseBridgeOptions {
     signal: AbortSignal;
   }): Promise<boolean>;
   onActivity?(active: boolean): void;
-  sendResult(result: {
-    id: string;
-    name: string;
-    response: Record<string, unknown>;
-  }): void;
+  sendResult(result: { id: string; name: string; response: Record<string, unknown> }): void;
 }
 
 interface QueueEntry {
@@ -198,7 +197,9 @@ export class GeminiLiveComputerUseBridge {
       }
       const coordinateMutation =
         computerUseNeedsApproval(entry.args) &&
-        ("coordinate" in entry.args || "from_coordinate" in entry.args || "to_coordinate" in entry.args);
+        ("coordinate" in entry.args ||
+          "from_coordinate" in entry.args ||
+          "to_coordinate" in entry.args);
       if (coordinateMutation && !this.currentCapture) {
         throw new Error("Capture the current target before using coordinates.");
       }
@@ -207,13 +208,15 @@ export class GeminiLiveComputerUseBridge {
         entry.controller.signal,
       );
       if (approval) {
-        const allowed = this.options.actionPolicy === "session" || await this.options.requestApproval({
-          streamId: `live:${this.options.sessionId}`,
-          toolCallId: entry.call.id,
-          toolName: COMPUTER_USE_TOOL_NAME,
-          summary: approval.summary,
-          signal: entry.controller.signal,
-        });
+        const allowed =
+          this.options.actionPolicy === "session" ||
+          (await this.options.requestApproval({
+            streamId: `live:${this.options.sessionId}`,
+            toolCallId: entry.call.id,
+            toolName: COMPUTER_USE_TOOL_NAME,
+            summary: approval.summary,
+            signal: entry.controller.signal,
+          }));
         if (!allowed) throw new Error("The user did not allow this Computer Use action.");
         if (!(await this.options.isAuthorized()) || entry.controller.signal.aborted) {
           throw new Error("Computer Use approval is stale.");

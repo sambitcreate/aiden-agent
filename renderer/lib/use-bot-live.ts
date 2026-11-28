@@ -1,10 +1,6 @@
 import * as React from "react";
 import { botsApi } from "./ipc";
-import {
-  applyBotLiveEvent,
-  type BotLiveEvent,
-  type BotLiveSnapshot,
-} from "../shared/bot-live";
+import { applyBotLiveEvent, type BotLiveEvent, type BotLiveSnapshot } from "../shared/bot-live";
 
 const MAX_RESUBSCRIBE_RETRIES = 3;
 const RESUBSCRIBE_DELAY_MS = 500;
@@ -271,5 +267,8 @@ export function useBotLive(botId: string | undefined): BotLiveView {
   const state = React.useSyncExternalStore(store.subscribe, store.getState);
   const { snapshot, failed, stale } = state;
   const reload = store.reload;
-  return React.useMemo(() => ({ snapshot, failed, stale, reload }), [snapshot, failed, stale, reload]);
+  return React.useMemo(
+    () => ({ snapshot, failed, stale, reload }),
+    [snapshot, failed, stale, reload],
+  );
 }

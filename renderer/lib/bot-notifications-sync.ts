@@ -15,7 +15,10 @@ import { invalidateBotCanonicalPhotos } from "./bot-canonical-photo-cache";
 import { botsApi, onNotification } from "./ipc";
 import { queryKeys } from "./queries";
 
-export async function invalidateForBotsChanged(queryClient: QueryClient, payload: unknown): Promise<void> {
+export async function invalidateForBotsChanged(
+  queryClient: QueryClient,
+  payload: unknown,
+): Promise<void> {
   const record = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
   const botId = typeof record.botId === "string" && record.botId ? record.botId : null;
   if (botId && record.deleted === true) {
@@ -31,21 +34,34 @@ export async function invalidateForBotsChanged(queryClient: QueryClient, payload
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.bots }),
     queryClient.invalidateQueries({ queryKey: botId ? queryKeys.bot(botId) : ["bot"] }),
-    queryClient.invalidateQueries({ queryKey: botId ? queryKeys.botLiveSummary(botId) : queryKeys.botLiveSummaries }),
-    queryClient.invalidateQueries({ queryKey: botId ? queryKeys.botTelegramBinding(botId) : ["bot-telegram-binding"] }),
+    queryClient.invalidateQueries({
+      queryKey: botId ? queryKeys.botLiveSummary(botId) : queryKeys.botLiveSummaries,
+    }),
+    queryClient.invalidateQueries({
+      queryKey: botId ? queryKeys.botTelegramBinding(botId) : ["bot-telegram-binding"],
+    }),
     queryClient.invalidateQueries({ queryKey: queryKeys.botTelegramTargets }),
-    queryClient.invalidateQueries({ queryKey: botId ? ["bot-routine-models", botId] : ["bot-routine-models"] }),
+    queryClient.invalidateQueries({
+      queryKey: botId ? ["bot-routine-models", botId] : ["bot-routine-models"],
+    }),
     // A routine change (a wake-up set, cancelled or switched off) names its Bot.
-    queryClient.invalidateQueries({ queryKey: botId ? queryKeys.botRoutines(botId) : ["bot-routines"] }),
+    queryClient.invalidateQueries({
+      queryKey: botId ? queryKeys.botRoutines(botId) : ["bot-routines"],
+    }),
     // Profile-wide Bot settings can change from a paired phone.
     ...(!botId ? [queryClient.invalidateQueries({ queryKey: queryKeys.settings })] : []),
   ]);
 }
 
 /** "Re-read this Bot's summary", never the whole list; a payload without a Bot is ignored. */
-async function invalidateForBotAttention(queryClient: QueryClient, payload: unknown): Promise<void> {
-  const botId = payload && typeof payload === "object" ? (payload as { botId?: unknown }).botId : undefined;
-  if (typeof botId === "string" && botId) await queryClient.invalidateQueries({ queryKey: queryKeys.botLiveSummary(botId) });
+async function invalidateForBotAttention(
+  queryClient: QueryClient,
+  payload: unknown,
+): Promise<void> {
+  const botId =
+    payload && typeof payload === "object" ? (payload as { botId?: unknown }).botId : undefined;
+  if (typeof botId === "string" && botId)
+    await queryClient.invalidateQueries({ queryKey: queryKeys.botLiveSummary(botId) });
 }
 
 /** Keeps Bot queries in step with main's `bots:changed` and `bots:attention`; mount once per window. */
@@ -59,10 +75,18 @@ export function useBotNotificationsSync(queryClient: QueryClient): void {
           const retired = await botsApi.confirmedRetiredPendingBots(ids.slice(start, start + 256));
           if (active) retired.forEach(forgetBotPendingChanges);
         }
-      } catch { /* Unknown ownership must retain the original pending identities. */ }
+      } catch {
+        /* Unknown ownership must retain the original pending identities. */
+      }
     })();
-    const stopChanged = onNotification("bots:changed", (payload: unknown) => void invalidateForBotsChanged(queryClient, payload));
-    const stopAttention = onNotification("bots:attention", (payload: unknown) => void invalidateForBotAttention(queryClient, payload));
+    const stopChanged = onNotification(
+      "bots:changed",
+      (payload: unknown) => void invalidateForBotsChanged(queryClient, payload),
+    );
+    const stopAttention = onNotification(
+      "bots:attention",
+      (payload: unknown) => void invalidateForBotAttention(queryClient, payload),
+    );
     return () => {
       active = false;
       stopChanged();

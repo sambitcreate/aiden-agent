@@ -91,12 +91,8 @@ export async function startPeerTestHost(
   const firstDirectory = path.join(root, "a");
   const hostnames = options.lanHostname ? [options.lanHostname] : [];
   let identity = await identityIn(firstDirectory, hostnames);
-  const caDerBase64 = new X509Certificate(identity.caCertificate).raw.toString(
-    "base64",
-  );
-  let stored: AidenRemoteStateDocument = createDefaultAidenRemoteState(() =>
-    randomBytes(24),
-  );
+  const caDerBase64 = new X509Certificate(identity.caCertificate).raw.toString("base64");
+  let stored: AidenRemoteStateDocument = createDefaultAidenRemoteState(() => randomBytes(24));
   const devices = new AidenRemoteStateRegistry(
     {
       load: async () => structuredClone(stored),
@@ -173,8 +169,7 @@ export async function startPeerTestHost(
   const listen = async (server: https.Server) => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
-    if (!address || typeof address === "string")
-      throw new Error("The test host did not bind.");
+    if (!address || typeof address === "string") throw new Error("The test host did not bind.");
     return address.port;
   };
   const tlsOptions = () => ({

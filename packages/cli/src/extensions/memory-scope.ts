@@ -5,7 +5,11 @@
 
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
-import { canonicalWorkspacePath, legacyCliWorkspaceScopeId, sharedWorkspaceScopeId } from "../../../../main/services/memory-shared.ts";
+import {
+  canonicalWorkspacePath,
+  legacyCliWorkspaceScopeId,
+  sharedWorkspaceScopeId,
+} from "../../../../main/services/memory-shared.ts";
 import { readJson } from "../state.ts";
 import { readAidenSettings } from "./aiden-settings.ts";
 
@@ -15,27 +19,30 @@ import { readAidenSettings } from "./aiden-settings.ts";
  * reverse) through the shared `~/.aiden/memory` database.
  */
 export function workspaceScopeId(workspaceRoot: string): string {
-	return sharedWorkspaceScopeId(workspaceRoot);
+  return sharedWorkspaceScopeId(workspaceRoot);
 }
 
 /** Scope ids the CLI used before sharing, absorbed into the shared scope. */
 export function legacyWorkspaceScopeIds(workspaceRoot: string): Record<string, string> {
-	const target = sharedWorkspaceScopeId(workspaceRoot);
-	return {
-		[legacyCliWorkspaceScopeId(workspaceRoot)]: target,
-		[legacyCliWorkspaceScopeId(canonicalWorkspacePath(workspaceRoot))]: target,
-	};
+  const target = sharedWorkspaceScopeId(workspaceRoot);
+  return {
+    [legacyCliWorkspaceScopeId(workspaceRoot)]: target,
+    [legacyCliWorkspaceScopeId(canonicalWorkspacePath(workspaceRoot))]: target,
+  };
 }
 
-interface CliWorkspaceEntry { folderPath?: string; memoryEnabled?: boolean }
+interface CliWorkspaceEntry {
+  folderPath?: string;
+  memoryEnabled?: boolean;
+}
 
 function workspaceEntries(agentDir: string): CliWorkspaceEntry[] {
-	try {
-		const parsed = readJson<unknown>(join(agentDir, "workspaces.json"), []);
-		return Array.isArray(parsed) ? (parsed as CliWorkspaceEntry[]) : [];
-	} catch {
-		return [];
-	}
+  try {
+    const parsed = readJson<unknown>(join(agentDir, "workspaces.json"), []);
+    return Array.isArray(parsed) ? (parsed as CliWorkspaceEntry[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -44,12 +51,12 @@ function workspaceEntries(agentDir: string): CliWorkspaceEntry[] {
  * file still defaults on — new workspaces have no entry to find anyway).
  */
 function workspaceEntriesStrict(agentDir: string): CliWorkspaceEntry[] | undefined {
-	try {
-		const parsed = readJson<unknown>(join(agentDir, "workspaces.json"), []);
-		return Array.isArray(parsed) ? (parsed as CliWorkspaceEntry[]) : undefined;
-	} catch {
-		return undefined;
-	}
+  try {
+    const parsed = readJson<unknown>(join(agentDir, "workspaces.json"), []);
+    return Array.isArray(parsed) ? (parsed as CliWorkspaceEntry[]) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -58,16 +65,19 @@ function workspaceEntriesStrict(agentDir: string): CliWorkspaceEntry[] | undefin
  * their canonical `ws-` scopes instead of being orphaned under `cli-*` ids
  * nothing queries anymore.
  */
-export function legacyWorkspaceScopeIdMap(agentDir: string, workspaceRoot: string): Record<string, string> {
-	const map = legacyWorkspaceScopeIds(workspaceRoot);
-	for (const entry of workspaceEntries(agentDir)) {
-		const folder = entry.folderPath;
-		if (!folder || map[legacyCliWorkspaceScopeId(folder)]) continue;
-		const target = sharedWorkspaceScopeId(folder);
-		map[legacyCliWorkspaceScopeId(folder)] ??= target;
-		map[legacyCliWorkspaceScopeId(canonicalWorkspacePath(folder))] ??= target;
-	}
-	return map;
+export function legacyWorkspaceScopeIdMap(
+  agentDir: string,
+  workspaceRoot: string,
+): Record<string, string> {
+  const map = legacyWorkspaceScopeIds(workspaceRoot);
+  for (const entry of workspaceEntries(agentDir)) {
+    const folder = entry.folderPath;
+    if (!folder || map[legacyCliWorkspaceScopeId(folder)]) continue;
+    const target = sharedWorkspaceScopeId(folder);
+    map[legacyCliWorkspaceScopeId(folder)] ??= target;
+    map[legacyCliWorkspaceScopeId(canonicalWorkspacePath(folder))] ??= target;
+  }
+  return map;
 }
 
 /**
@@ -76,19 +86,23 @@ export function legacyWorkspaceScopeIdMap(agentDir: string, workspaceRoot: strin
  * desktop's memoryEnabledForChat two-level gate.
  */
 export function memoryEnabledFor(agentDir: string, workspaceRoot?: string): boolean {
-	if (readAidenSettings(agentDir).memoryEnabled === false) return false;
-	if (!workspaceRoot) return true;
-	let canonical: string;
-	try {
-		canonical = realpathSync(workspaceRoot);
-	} catch {
-		canonical = workspaceRoot;
-	}
-	const entries = workspaceEntriesStrict(agentDir);
-	if (!entries) return false;
-	const entry = entries.find((item) => {
-		if (!item.folderPath) return false;
-		try { return realpathSync(item.folderPath) === canonical; } catch { return item.folderPath === workspaceRoot; }
-	});
-	return entry?.memoryEnabled !== false;
+  if (readAidenSettings(agentDir).memoryEnabled === false) return false;
+  if (!workspaceRoot) return true;
+  let canonical: string;
+  try {
+    canonical = realpathSync(workspaceRoot);
+  } catch {
+    canonical = workspaceRoot;
+  }
+  const entries = workspaceEntriesStrict(agentDir);
+  if (!entries) return false;
+  const entry = entries.find((item) => {
+    if (!item.folderPath) return false;
+    try {
+      return realpathSync(item.folderPath) === canonical;
+    } catch {
+      return item.folderPath === workspaceRoot;
+    }
+  });
+  return entry?.memoryEnabled !== false;
 }

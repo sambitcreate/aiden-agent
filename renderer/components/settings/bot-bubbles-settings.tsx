@@ -60,7 +60,10 @@ export function BotBubblesSettings() {
           />
         </Field>
       ) : (
-        <Field orientation="vertical" description="On this desktop, heads stay inside the Aiden window." />
+        <Field
+          orientation="vertical"
+          description="On this desktop, heads stay inside the Aiden window."
+        />
       )}
     </FieldSet>
   );

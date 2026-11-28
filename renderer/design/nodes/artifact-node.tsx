@@ -34,7 +34,13 @@ export function ArtifactNode({ id, data, selected }: NodeProps<DesignNode>) {
   const src = loaded && loaded.mediaId === frame.mediaId ? loaded.src : null;
   const version = mediaVersion(frame.mediaId);
   const contentRef = React.useRef<HTMLDivElement | null>(null);
-  const retiring = useRetiringFrame({ frameId: id, version, live, showing: src !== null, content: contentRef });
+  const retiring = useRetiringFrame({
+    frameId: id,
+    version,
+    live,
+    showing: src !== null,
+    content: contentRef,
+  });
   const { snapshot } = useFrameSnapshot(id, version);
   const wanted = (live || retiring) && frame.mediaId !== undefined;
   const dark = frame.dark === true;
@@ -49,12 +55,14 @@ export function ArtifactNode({ id, data, selected }: NodeProps<DesignNode>) {
     if (!wanted || src !== null || !frame.mediaId) return;
     const mediaId = frame.mediaId;
     let cancelled = false;
-    void chatsApi.htmlArtifactSrcdoc(canvas.chatId, mediaId, readDesignArtifactTheme(darkRef.current)).then(
-      (preview) => {
-        if (!cancelled && preview) setLoaded({ mediaId, src: preview.src });
-      },
-      () => undefined,
-    );
+    void chatsApi
+      .htmlArtifactSrcdoc(canvas.chatId, mediaId, readDesignArtifactTheme(darkRef.current))
+      .then(
+        (preview) => {
+          if (!cancelled && preview) setLoaded({ mediaId, src: preview.src });
+        },
+        () => undefined,
+      );
     return () => {
       cancelled = true;
     };
@@ -71,7 +79,14 @@ export function ArtifactNode({ id, data, selected }: NodeProps<DesignNode>) {
       </div>
     );
   } else if (snapshot) {
-    body = <img src={snapshot} alt={frame.title} draggable={false} className="block h-full w-full object-cover object-top" />;
+    body = (
+      <img
+        src={snapshot}
+        alt={frame.title}
+        draggable={false}
+        className="block h-full w-full object-cover object-top"
+      />
+    );
   } else body = <FrameSkeleton title={frame.title} />;
 
   return (

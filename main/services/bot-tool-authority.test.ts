@@ -21,10 +21,7 @@ import {
   type BotToolCapability,
 } from "./bot-tool-authority.js";
 import { botCapabilityFactsFingerprint } from "./bot-capability-catalog-core.js";
-import {
-  resolveBotMcpConnectionIdentities,
-  resolveBotMcpInventory,
-} from "./bot-mcp-inventory.js";
+import { resolveBotMcpConnectionIdentities, resolveBotMcpInventory } from "./bot-mcp-inventory.js";
 import { inspectSubagentMcpServer } from "./subagents/subagent-mcp-read.js";
 import type { McpServer } from "./types.js";
 import { createHash } from "node:crypto";
@@ -423,11 +420,7 @@ test("failed fresh admission prevents the effect", async () => {
   assert.equal(effects, 0);
 });
 
-function registeredSkill(
-  invocationId: string,
-  toolKey: string,
-  available = true,
-): RegisteredSkill {
+function registeredSkill(invocationId: string, toolKey: string, available = true): RegisteredSkill {
   return {
     stableId: invocationId,
     invocationId,
@@ -450,8 +443,20 @@ function skillSnapshot(): SkillRegistrySnapshot {
     revision: "revision",
     fingerprint: "fingerprint",
     catalog: [
-      { invocationId: "allowed", name: "allowed", description: "", source: "configured", available: true },
-      { invocationId: "denied", name: "denied", description: "", source: "configured", available: true },
+      {
+        invocationId: "allowed",
+        name: "allowed",
+        description: "",
+        source: "configured",
+        available: true,
+      },
+      {
+        invocationId: "denied",
+        name: "denied",
+        description: "",
+        source: "configured",
+        available: true,
+      },
     ],
     skills: [allowed, denied],
     available: [allowed, denied],
@@ -461,9 +466,18 @@ function skillSnapshot(): SkillRegistrySnapshot {
 test("skill prompt/resources and explicit invocation share the filtered schema set", () => {
   const allowed = new Set(["skill_allowed"]);
   const filtered = filterBotSkillSnapshot(skillSnapshot(), allowed, admission());
-  assert.deepEqual(filtered.skills.map(({ toolKey }) => toolKey), ["skill_allowed"]);
-  assert.deepEqual(filtered.available.map(({ toolKey }) => toolKey), ["skill_allowed"]);
-  assert.deepEqual(filtered.catalog.map(({ invocationId }) => invocationId), ["allowed"]);
+  assert.deepEqual(
+    filtered.skills.map(({ toolKey }) => toolKey),
+    ["skill_allowed"],
+  );
+  assert.deepEqual(
+    filtered.available.map(({ toolKey }) => toolKey),
+    ["skill_allowed"],
+  );
+  assert.deepEqual(
+    filtered.catalog.map(({ invocationId }) => invocationId),
+    ["allowed"],
+  );
   assert.doesNotThrow(() => assertBotSkillInvocationAllowed("skill_allowed", allowed, admission()));
   assert.throws(
     () => assertBotSkillInvocationAllowed("skill_denied", allowed, admission()),
@@ -486,43 +500,75 @@ test("main MCP publication requires an exact fresh connection and tool join", ()
     exactFingerprint: connection.exactFingerprint,
     tools: [{ ...mcpTool }],
   };
-  const built = [markMcpAgentTool({ name: "calendar__calendar_events" }, { serverId: "calendar", toolName: "calendar_events" })];
+  const built = [
+    markMcpAgentTool(
+      { name: "calendar__calendar_events" },
+      { serverId: "calendar", toolName: "calendar_events" },
+    ),
+  ];
   const exact = exactBotMcpToolNames(customAuthority, [currentConnection], built);
   assert.equal(exact.get("calendar__calendar_events")?.exactFingerprint, mcpTool.exactFingerprint);
   assert.throws(
-    () => exactBotMcpToolNames(
-      customAuthority,
-      [{
-        ...currentConnection,
-        tools: [{ ...mcpTool, outputSchemaFingerprint: fingerprint("changed") }],
-      }],
-      built,
-    ),
+    () =>
+      exactBotMcpToolNames(
+        customAuthority,
+        [
+          {
+            ...currentConnection,
+            tools: [{ ...mcpTool, outputSchemaFingerprint: fingerprint("changed") }],
+          },
+        ],
+        built,
+      ),
     /connection tool changed/u,
   );
   // An exact grant whose tool was not built (or a same-named tool without MCP identity) is not offered.
   assert.equal(exactBotMcpToolNames(customAuthority, [currentConnection], []).size, 0);
-  assert.equal(exactBotMcpToolNames(customAuthority, [currentConnection], [{ name: "calendar__calendar_events" }]).size, 0);
+  assert.equal(
+    exactBotMcpToolNames(
+      customAuthority,
+      [currentConnection],
+      [{ name: "calendar__calendar_events" }],
+    ).size,
+    0,
+  );
 });
 
 test("Bot MCP grants follow the built tool's name when it collides outside the catalog's first 32 tools", () => {
   const server = { id: "calendar", name: "Calendar" };
   // Sorted: the granted tool, 35 fillers, then a tool that sanitizes to the
   // granted tool's name. The catalog lists only the first 32.
-  const inventory = ["events_list", ...Array.from({ length: 35 }, (_, index) => `events_m${String(index).padStart(2, "0")}`), "events~list"];
+  const inventory = [
+    "events_list",
+    ...Array.from({ length: 35 }, (_, index) => `events_m${String(index).padStart(2, "0")}`),
+    "events~list",
+  ];
   const catalogSubset = [...inventory].sort().slice(0, 32);
   assert.ok(catalogSubset.includes("events_list") && !catalogSubset.includes("events~list"));
   const builtNames = mcpAgentToolNames(server, [server], inventory);
   const builtName = builtNames.get("events_list")!;
   // The old join recomputed names from the subset and so missed the live tool.
-  assert.notEqual(builtName, mcpAgentToolName(server, "events_list", { configured: [server], inventory: catalogSubset }));
+  assert.notEqual(
+    builtName,
+    mcpAgentToolName(server, "events_list", { configured: [server], inventory: catalogSubset }),
+  );
   const grant = { ...mcpTool, name: "events_list" };
   const authority = { ...customAuthority, connections: [{ ...connection, tools: [grant] }] };
-  const current = { ...connection, option: { id: "opaque", label: "Calendar", available: true }, tools: [grant] };
-  const built = inventory.map((toolName) => markMcpAgentTool({ name: builtNames.get(toolName)! }, { serverId: server.id, toolName }));
+  const current = {
+    ...connection,
+    option: { id: "opaque", label: "Calendar", available: true },
+    tools: [grant],
+  };
+  const built = inventory.map((toolName) =>
+    markMcpAgentTool({ name: builtNames.get(toolName)! }, { serverId: server.id, toolName }),
+  );
   const admitted = exactBotMcpToolNames(authority, [current], built);
   assert.deepEqual([...admitted.keys()], [builtName]);
-  assert.equal(admitted.get(builtName)?.effect, "mutating", "approval facts are keyed by the live name");
+  assert.equal(
+    admitted.get(builtName)?.effect,
+    "mutating",
+    "approval facts are keyed by the live name",
+  );
 });
 
 test("subagent MCP projection joins connection, combined schema, output, effect, and exact facts", () => {
@@ -540,51 +586,65 @@ test("subagent MCP projection joins connection, combined schema, output, effect,
   });
   const exactAuthority: BotRuntimeEffectiveAuthority = {
     ...customAuthority,
-    connections: [{
-      ...connection,
-      tools: [{
-        toolId: exactFingerprint,
-        name: "lookup",
-        inputSchemaFingerprint: schemaHash,
-        outputSchemaFingerprint,
-        effect: "read",
-        effectFingerprint,
-        exactFingerprint,
-      }],
-    }],
+    connections: [
+      {
+        ...connection,
+        tools: [
+          {
+            toolId: exactFingerprint,
+            name: "lookup",
+            inputSchemaFingerprint: schemaHash,
+            outputSchemaFingerprint,
+            effect: "read",
+            effectFingerprint,
+            exactFingerprint,
+          },
+        ],
+      },
+    ],
   };
-  const inventory = [{
-    serverId: connection.sourceId,
-    // Child authority deliberately uses a process-owned credential domain.
-    connectionFingerprint: fingerprint("child-process"),
-    tools: [{ toolName: "lookup", schemaHash, effect: "read" as const }],
-  }];
-  const identities = [{
-    serverId: connection.sourceId,
-    connectionFingerprint: connection.connectionFingerprint,
-  }];
+  const inventory = [
+    {
+      serverId: connection.sourceId,
+      // Child authority deliberately uses a process-owned credential domain.
+      connectionFingerprint: fingerprint("child-process"),
+      tools: [{ toolName: "lookup", schemaHash, effect: "read" as const }],
+    },
+  ];
+  const identities = [
+    {
+      serverId: connection.sourceId,
+      connectionFingerprint: connection.connectionFingerprint,
+    },
+  ];
   assert.equal(
     filterExactBotSubagentMcpInventory(exactAuthority, inventory, identities)[0]?.tools.length,
     1,
   );
   assert.deepEqual(
-    filterExactBotSubagentMcpInventory(exactAuthority, inventory, [{
-      ...identities[0]!,
-      connectionFingerprint: fingerprint("wrong"),
-    }]),
+    filterExactBotSubagentMcpInventory(exactAuthority, inventory, [
+      {
+        ...identities[0]!,
+        connectionFingerprint: fingerprint("wrong"),
+      },
+    ]),
     [],
   );
   assert.deepEqual(
     filterExactBotSubagentMcpInventory(
       {
         ...exactAuthority,
-        connections: [{
-          ...exactAuthority.connections[0]!,
-          tools: [{
-            ...exactAuthority.connections[0]!.tools[0]!,
-            outputSchemaFingerprint: fingerprint("wrong"),
-          }],
-        }],
+        connections: [
+          {
+            ...exactAuthority.connections[0]!,
+            tools: [
+              {
+                ...exactAuthority.connections[0]!.tools[0]!,
+                outputSchemaFingerprint: fingerprint("wrong"),
+              },
+            ],
+          },
+        ],
       },
       inventory,
       identities,
@@ -601,11 +661,13 @@ test("subagent MCP projection joins real durable Bot and process-owned child ide
     url: "https://mcp.example.invalid",
     enabled: true,
   };
-  const remoteTools = [{
-    name: "lookup",
-    inputSchema: { type: "object", properties: { query: { type: "string" } } },
-    annotations: { readOnlyHint: true },
-  }];
+  const remoteTools = [
+    {
+      name: "lookup",
+      inputSchema: { type: "object", properties: { query: { type: "string" } } },
+      annotations: { readOnlyHint: true },
+    },
+  ];
   const credentialSignature = createHash("sha256").update("durable-credential").digest("hex");
   const credentialRevision = createHash("sha256").update("process-credential").digest("hex");
   let credentialIncarnation = "credential-incarnation".padEnd(43, "c");
@@ -629,13 +691,14 @@ test("subagent MCP projection joins real durable Bot and process-owned child ide
     inspectSubagentMcpServer({
       server,
       signal: new AbortController().signal,
-      withClient: async (_current, _signal, operation) => operation({
-        credentialRevision,
-        credentialRevisionIsCurrent: async () => true,
-        redactCredentialText: (text) => text,
-        listTools: async () => remoteTools,
-        callTool: async () => ({ content: [] }),
-      }),
+      withClient: async (_current, _signal, operation) =>
+        operation({
+          credentialRevision,
+          credentialRevisionIsCurrent: async () => true,
+          redactCredentialText: (text) => text,
+          listTools: async () => remoteTools,
+          callTool: async () => ({ content: [] }),
+        }),
     }),
   ]);
   const botScope = botInventory[0]!;
@@ -658,30 +721,38 @@ test("subagent MCP projection joins real durable Bot and process-owned child ide
   });
   const exactAuthority: BotRuntimeEffectiveAuthority = {
     ...customAuthority,
-    connections: [{
-      sourceId: botScope.serverId,
-      connectionFingerprint: botScope.connectionFingerprint,
-      toolsetFingerprint: botCapabilityFactsFingerprint([{
-        name: botTool.toolName,
-        exactFingerprint,
-      }]),
-      exactFingerprint: botCapabilityFactsFingerprint({
+    connections: [
+      {
+        sourceId: botScope.serverId,
         connectionFingerprint: botScope.connectionFingerprint,
-        toolsetFingerprint: botCapabilityFactsFingerprint([{
-          name: botTool.toolName,
-          exactFingerprint,
-        }]),
-      }),
-      tools: [{
-        toolId: exactFingerprint,
-        name: botTool.toolName,
-        inputSchemaFingerprint: botTool.schemaHash,
-        outputSchemaFingerprint,
-        effect: botTool.effect,
-        effectFingerprint,
-        exactFingerprint,
-      }],
-    }],
+        toolsetFingerprint: botCapabilityFactsFingerprint([
+          {
+            name: botTool.toolName,
+            exactFingerprint,
+          },
+        ]),
+        exactFingerprint: botCapabilityFactsFingerprint({
+          connectionFingerprint: botScope.connectionFingerprint,
+          toolsetFingerprint: botCapabilityFactsFingerprint([
+            {
+              name: botTool.toolName,
+              exactFingerprint,
+            },
+          ]),
+        }),
+        tools: [
+          {
+            toolId: exactFingerprint,
+            name: botTool.toolName,
+            inputSchemaFingerprint: botTool.schemaHash,
+            outputSchemaFingerprint,
+            effect: botTool.effect,
+            effectFingerprint,
+            exactFingerprint,
+          },
+        ],
+      },
+    ],
   };
 
   assert.equal(
@@ -718,42 +789,48 @@ test("skill publication joins the exact fresh catalog resource and runtime conte
     ...customAuthority,
     skills: [skill],
   };
-  const current = [{
-    option: { id: "opaque", label: selected.name, available: true },
-    sourceId: skill.sourceId,
-    identityFingerprint: skill.identityFingerprint,
-    contentFingerprint: skill.contentFingerprint,
-    exactFingerprint: skill.exactFingerprint,
-  }];
-  const runtime = [{
-    sourceId: skill.sourceId,
-    runtimeStableId: selected.stableId,
-    label: selected.name,
-    description: selected.description,
-    instructions: selected.instructions,
-    available: true,
-    incarnationPartition: "global",
-  }];
+  const current = [
+    {
+      option: { id: "opaque", label: selected.name, available: true },
+      sourceId: skill.sourceId,
+      identityFingerprint: skill.identityFingerprint,
+      contentFingerprint: skill.contentFingerprint,
+      exactFingerprint: skill.exactFingerprint,
+    },
+  ];
+  const runtime = [
+    {
+      sourceId: skill.sourceId,
+      runtimeStableId: selected.stableId,
+      label: selected.name,
+      description: selected.description,
+      instructions: selected.instructions,
+      available: true,
+      incarnationPartition: "global",
+    },
+  ];
   assert.deepEqual(
     [...exactBotSkillToolNames(exactAuthority, current, runtime, snapshot)],
     [selected.toolKey],
   );
   assert.throws(
-    () => exactBotSkillToolNames(
-      exactAuthority,
-      [{ ...current[0]!, contentFingerprint: fingerprint("wrong") }],
-      runtime,
-      snapshot,
-    ),
+    () =>
+      exactBotSkillToolNames(
+        exactAuthority,
+        [{ ...current[0]!, contentFingerprint: fingerprint("wrong") }],
+        runtime,
+        snapshot,
+      ),
     /skill changed or is unavailable/u,
   );
   assert.throws(
-    () => exactBotSkillToolNames(
-      exactAuthority,
-      current,
-      [{ ...runtime[0]!, instructions: "changed" }],
-      snapshot,
-    ),
+    () =>
+      exactBotSkillToolNames(
+        exactAuthority,
+        current,
+        [{ ...runtime[0]!, instructions: "changed" }],
+        snapshot,
+      ),
     /skill changed while this response was starting/u,
   );
 });
@@ -763,28 +840,60 @@ test("existing Full and Custom Bot MCP grants never admit the separate resource 
   const current = { ...connection, option: { id: "opaque", label: "Calendar", available: true } };
   for (const accessMode of ["full", "custom"] as const) {
     const authority = { ...customAuthority, accessMode };
-    const admitted = exactBotMcpToolNames(authority, [current], [
-      markMcpAgentTool({ name: mcpAgentToolName(server, "calendar_events", { configured: [server], inventory: ["calendar_events"] }) }, { serverId: server.id, toolName: "calendar_events" }),
-      { name: mcpResourceToolName(server) },
-    ]);
+    const admitted = exactBotMcpToolNames(
+      authority,
+      [current],
+      [
+        markMcpAgentTool(
+          {
+            name: mcpAgentToolName(server, "calendar_events", {
+              configured: [server],
+              inventory: ["calendar_events"],
+            }),
+          },
+          { serverId: server.id, toolName: "calendar_events" },
+        ),
+        { name: mcpResourceToolName(server) },
+      ],
+    );
     assert.equal(admitted.has("calendar__calendar_events"), true);
     assert.equal(admitted.has(mcpResourceToolName(server)), false);
   }
 });
 
-
 test("form specialist uses only the Computer Use grant and remains revocable", async () => {
   const names = ["computer_use", "form_fill", "form_fill_submit", "run_command"];
-  const grant = { kind: "computer_use" as const, capabilityFingerprint: fingerprint("u"), exactFingerprint: fingerprint("U") };
+  const grant = {
+    kind: "computer_use" as const,
+    capabilityFingerprint: fingerprint("u"),
+    exactFingerprint: fingerprint("U"),
+  };
   const authority = { ...customAuthority, otherCapabilities: [grant] };
-  const capability = { kind: "other" as const, ordinaryKind: grant.kind, capabilityFingerprint: grant.capabilityFingerprint, exactFingerprint: grant.exactFingerprint };
+  const capability = {
+    kind: "other" as const,
+    ordinaryKind: grant.kind,
+    capabilityFingerprint: grant.capabilityFingerprint,
+    exactFingerprint: grant.exactFingerprint,
+  };
   for (const allowed of [false, true]) {
-    const admitted = names.filter((name) => isComputerUseCapabilityTool(name) && botToolCapabilityAllowed(allowed ? authority : { ...authority, otherCapabilities: [] }, capability));
+    const admitted = names.filter(
+      (name) =>
+        isComputerUseCapabilityTool(name) &&
+        botToolCapabilityAllowed(
+          allowed ? authority : { ...authority, otherCapabilities: [] },
+          capability,
+        ),
+    );
     assert.deepEqual(admitted, allowed ? ["computer_use", "form_fill"] : []);
   }
   let effects = 0;
   const controller = new AbortController();
-  const protectedTool = protectAdmittedBotTool(tool("form_fill", () => { effects++; }), { ...admission(authority), signal: controller.signal });
+  const protectedTool = protectAdmittedBotTool(
+    tool("form_fill", () => {
+      effects++;
+    }),
+    { ...admission(authority), signal: controller.signal },
+  );
   await protectedTool.execute("first", {});
   controller.abort(new Error("Computer Use revoked"));
   await assert.rejects(() => protectedTool.execute("second", {}), /revoked/);

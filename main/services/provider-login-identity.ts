@@ -1,5 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { constants, closeSync, fstatSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  constants,
+  closeSync,
+  fstatSync,
+  fsyncSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -11,10 +22,14 @@ export function createProviderLoginDeviceId(filePath: () => string): () => strin
     if (cached) return cached;
     const destination = filePath();
     const read = (): string => {
-      const fd = openSync(destination, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      const fd = openSync(
+        destination,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
       try {
         const stat = fstatSync(fd);
-        if (!stat.isFile() || stat.size > 128) throw new Error("Invalid provider login identity file.");
+        if (!stat.isFile() || stat.size > 128)
+          throw new Error("Invalid provider login identity file.");
         const id = readFileSync(fd, "utf8").trim();
         if (!UUID.test(id)) throw new Error("Invalid provider login identity file.");
         return id;
@@ -43,7 +58,11 @@ export function createProviderLoginDeviceId(filePath: () => string): () => strin
         linkSync(temporary, destination);
         if (process.platform !== "win32") {
           const directory = openSync(dirname(destination), constants.O_RDONLY);
-          try { fsyncSync(directory); } finally { closeSync(directory); }
+          try {
+            fsyncSync(directory);
+          } finally {
+            closeSync(directory);
+          }
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;

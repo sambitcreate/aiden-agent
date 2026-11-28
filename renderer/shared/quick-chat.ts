@@ -11,8 +11,7 @@ export const QUICK_CHAT_DEFAULT_PERSISTENCE_VALUES = [
   "lastWorkspace",
 ] as const;
 
-export type QuickChatDefaultPersistence =
-  (typeof QUICK_CHAT_DEFAULT_PERSISTENCE_VALUES)[number];
+export type QuickChatDefaultPersistence = (typeof QUICK_CHAT_DEFAULT_PERSISTENCE_VALUES)[number];
 
 export type QuickChatOpenSource = "hotkey" | "command";
 
@@ -20,9 +19,7 @@ export interface QuickChatOpenedPayload {
   source: QuickChatOpenSource;
 }
 
-export type QuickChatHandoffCompletePayload =
-  | { kind: "draft" }
-  | { kind: "chat"; chatId: string };
+export type QuickChatHandoffCompletePayload = { kind: "draft" } | { kind: "chat"; chatId: string };
 
 export type QuickChatExpandRequest =
   | {
@@ -98,9 +95,10 @@ function parseQueuedMessages(value: unknown): HandoffQueuedMessage[] | undefined
     if (item.content.length > MAX_DRAFT_TEXT_CHARS) {
       throw new Error("Queued message exceeds maximum length.");
     }
-    const attachments = item.attachments !== undefined
-      ? parseAttachments(item.attachments, "queued message attachments")
-      : undefined;
+    const attachments =
+      item.attachments !== undefined
+        ? parseAttachments(item.attachments, "queued message attachments")
+        : undefined;
     parsed.push({
       content: item.content,
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
@@ -124,7 +122,9 @@ export function parseQuickChatExpandRequest(value: unknown): QuickChatExpandRequ
     }
     const attachments = parseAttachments(value.attachments, "attachments");
     const providerId =
-      typeof value.providerId === "string" && value.providerId.trim().length > 0 && value.providerId.length <= 128
+      typeof value.providerId === "string" &&
+      value.providerId.trim().length > 0 &&
+      value.providerId.length <= 128
         ? value.providerId.trim()
         : undefined;
     const model =

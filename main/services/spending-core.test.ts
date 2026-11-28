@@ -4,7 +4,8 @@ import test from "node:test";
 // Bot months start at local midnight; pin the zone so the oracle is fixed.
 process.env.TZ = "UTC";
 
-const { parseSpendingDocument, SpendingLedger, spendingBlockMessage, spendingMonth } = await import("./spending-core.js");
+const { parseSpendingDocument, SpendingLedger, spendingBlockMessage, spendingMonth } =
+  await import("./spending-core.js");
 
 const NOW = Date.UTC(2026, 9, 26, 15, 0, 0);
 const CHAT = { kind: "chat", id: "chat-1" } as const;
@@ -20,8 +21,15 @@ test("a chat stops after the request that crosses its limit, and Allow more adds
   // The crossing request still counts in full.
   ledger.record(CHAT, 1.3, settings, NOW);
   const block = ledger.block(CHAT, settings, NOW);
-  assert.deepEqual(block && { ...block, spentUsd: Math.round(block.spentUsd * 100) / 100 }, { kind: "chat", allowedUsd: 5, spentUsd: 5.4 });
-  assert.equal(spendingBlockMessage(block!), "This chat reached its $5.00 spending limit. Allow more to keep going.");
+  assert.deepEqual(block && { ...block, spentUsd: Math.round(block.spentUsd * 100) / 100 }, {
+    kind: "chat",
+    allowedUsd: 5,
+    spentUsd: 5.4,
+  });
+  assert.equal(
+    spendingBlockMessage(block!),
+    "This chat reached its $5.00 spending limit. Allow more to keep going.",
+  );
 
   const allowed = ledger.allowMore("chat", "chat-1", settings, NOW);
   assert.equal(allowed?.extraUsd, 5);
@@ -74,14 +82,24 @@ test("a routine run has its own limit and also counts toward its Bot's month", (
   const run1 = { kind: "bot", id: "ada", run: "routine:t1:100" } as const;
   const run2 = { kind: "bot", id: "ada", run: "routine:t1:200" } as const;
   ledger.record(run1, 1.2, settings, NOW);
-  assert.deepEqual(ledger.block(run1, settings, NOW), { kind: "run", allowedUsd: 1, spentUsd: 1.2 });
-  assert.match(spendingBlockMessage(ledger.block(run1, settings, NOW)!), /The next run starts fresh\.$/u);
+  assert.deepEqual(ledger.block(run1, settings, NOW), {
+    kind: "run",
+    allowedUsd: 1,
+    spentUsd: 1.2,
+  });
+  assert.match(
+    spendingBlockMessage(ledger.block(run1, settings, NOW)!),
+    /The next run starts fresh\.$/u,
+  );
   assert.equal(ledger.block(run2, settings, NOW), undefined, "the next run starts fresh");
   assert.equal(ledger.status("bot", "ada", settings, NOW)?.spentUsd, 1.2);
   ledger.record(run2, 9, settings, NOW);
   // Over the month: the month's limit is what stops it.
   assert.equal(ledger.block(run2, settings, NOW)?.kind, "bot-month");
-  assert.match(spendingBlockMessage(ledger.block(run2, settings, NOW)!, "Ada"), /^Ada reached its \$10\.00 spending limit for this month\./u);
+  assert.match(
+    spendingBlockMessage(ledger.block(run2, settings, NOW)!, "Ada"),
+    /^Ada reached its \$10\.00 spending limit for this month\./u,
+  );
 });
 
 test("the saved document survives a reload and drops anything malformed", () => {
@@ -91,12 +109,21 @@ test("the saved document survives a reload and drops anything malformed", () => 
   ledger.setBotLimit("ada", 40);
   const run = { kind: "bot", id: "ada", run: "routine:t1:100" } as const;
   ledger.record(run, 1.2, {}, NOW);
-  const reloaded = new SpendingLedger(parseSpendingDocument(JSON.parse(JSON.stringify(ledger.snapshot()))));
+  const reloaded = new SpendingLedger(
+    parseSpendingDocument(JSON.parse(JSON.stringify(ledger.snapshot()))),
+  );
   assert.equal(reloaded.status("chat", "chat-1", { chatUsd: 5 }, NOW)?.spentUsd, 2);
   assert.equal(reloaded.status("bot", "ada", {}, NOW)?.limitUsd, 40);
   // A routine run resumed after a restart keeps its balance; a new run starts fresh.
-  assert.deepEqual(reloaded.block(run, { routineRunUsd: 1 }, NOW), { kind: "run", allowedUsd: 1, spentUsd: 1.2 });
-  assert.equal(reloaded.block({ ...run, run: "routine:t1:200" }, { routineRunUsd: 1 }, NOW), undefined);
+  assert.deepEqual(reloaded.block(run, { routineRunUsd: 1 }, NOW), {
+    kind: "run",
+    allowedUsd: 1,
+    spentUsd: 1.2,
+  });
+  assert.equal(
+    reloaded.block({ ...run, run: "routine:t1:200" }, { routineRunUsd: 1 }, NOW),
+    undefined,
+  );
 
   const parsed = parseSpendingDocument(
     JSON.parse(

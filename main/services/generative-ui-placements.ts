@@ -37,15 +37,19 @@ export function createArtifactPlacementLedger() {
     },
     publicIdFor,
     layoutFor,
-    placementsFor(artifacts: readonly { mediaId: string }[]): HtmlArtifactPlacementV1[] | undefined {
+    placementsFor(
+      artifacts: readonly { mediaId: string }[],
+    ): HtmlArtifactPlacementV1[] | undefined {
       const placements = artifacts.flatMap((artifact): HtmlArtifactPlacementV1[] => {
         const toolCallId = publicIdFor(artifact.mediaId);
         if (!toolCallId) return [];
-        return [{
-          mediaId: artifact.mediaId,
-          toolCallId,
-          ...(layoutFor(artifact.mediaId) === "wide" ? { layout: "wide" as const } : {}),
-        }];
+        return [
+          {
+            mediaId: artifact.mediaId,
+            toolCallId,
+            ...(layoutFor(artifact.mediaId) === "wide" ? { layout: "wide" as const } : {}),
+          },
+        ];
       });
       return placements.length ? placements : undefined;
     },

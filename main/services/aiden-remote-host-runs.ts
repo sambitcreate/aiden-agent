@@ -1,6 +1,10 @@
 import { parseCommandReading } from "../../renderer/shared/command-reading.js";
 import type { ServerResponse } from "node:http";
-import { approvalCardAllows, buildApprovalCard, type ApprovalCard } from "../../renderer/shared/approval-card-model.js";
+import {
+  approvalCardAllows,
+  buildApprovalCard,
+  type ApprovalCard,
+} from "../../renderer/shared/approval-card-model.js";
 import {
   parseRemoteToolApprovalScope,
   remoteOfferedScopes,
@@ -27,7 +31,12 @@ import {
   AidenIdempotencyLedger,
   AidenOperationContractError,
 } from "./aiden-remote-operation-contract.js";
-import { openCursorSse, sseFrame, type CursorSseHandle, type CursorSsePull } from "./aiden-remote-sse.js";
+import {
+  openCursorSse,
+  sseFrame,
+  type CursorSseHandle,
+  type CursorSsePull,
+} from "./aiden-remote-sse.js";
 import type {
   HostRunEvent,
   HostRunRead,
@@ -161,7 +170,11 @@ type ControlOutcome<T> =
     };
 
 function runGone(): AidenRemoteServiceError {
-  return new AidenRemoteServiceError("run_gone", "This run is no longer available on this computer.", 404);
+  return new AidenRemoteServiceError(
+    "run_gone",
+    "This run is no longer available on this computer.",
+    404,
+  );
 }
 
 function staleRun(): AidenRemoteServiceError {
@@ -212,17 +225,29 @@ function projectPayload(
   if (projection === "observer") return scopes === undefined ? summary : { ...summary, scopes };
   // The phone projection matches the phone's own stream approvals: a summary,
   // whether it may allow from the phone, and allow scopes only when it may.
-  const card = projection.includes("-cards") ? runApprovalCard(payload, projection.endsWith("-words")) : undefined;
+  const card = projection.includes("-cards")
+    ? runApprovalCard(payload, projection.endsWith("-words"))
+    : undefined;
   const canAllow = card ? approvalCardAllows(card) : phoneMayAllow(payload);
   // A card holder is offered exactly the scopes its card's buttons offer.
-  const cardScopes = card && Array.isArray(scopes)
-    ? scopes.filter((scope) => typeof scope === "string" && approvalCardAllows(card, scope as ToolApprovalScope))
-    : scopes;
-  const schedule = projection.startsWith("phone-schedule") ? approvalScheduleCard(payload.details) : undefined;
+  const cardScopes =
+    card && Array.isArray(scopes)
+      ? scopes.filter(
+          (scope) =>
+            typeof scope === "string" && approvalCardAllows(card, scope as ToolApprovalScope),
+        )
+      : scopes;
+  const schedule = projection.startsWith("phone-schedule")
+    ? approvalScheduleCard(payload.details)
+    : undefined;
   return {
     ...summary,
     canAllow,
-    ...(canAllow && cardScopes !== undefined && (!Array.isArray(cardScopes) || cardScopes.length > 0) ? { scopes: cardScopes } : {}),
+    ...(canAllow &&
+    cardScopes !== undefined &&
+    (!Array.isArray(cardScopes) || cardScopes.length > 0)
+      ? { scopes: cardScopes }
+      : {}),
     ...(schedule ? { schedule } : {}),
     ...(card ? { card } : {}),
   };
@@ -241,7 +266,13 @@ function runApprovalCard(payload: Record<string, unknown>, plainWords = false): 
     toolName: typeof payload.toolName === "string" ? payload.toolName : "tool",
     summary: typeof payload.summary === "string" ? payload.summary : "",
     canAllow: payload.canAllow !== false,
-    ...(offered ? { scopes: offered.map((scope) => parseRemoteToolApprovalScope(scope)).filter((scope) => scope !== undefined) } : {}),
+    ...(offered
+      ? {
+          scopes: offered
+            .map((scope) => parseRemoteToolApprovalScope(scope))
+            .filter((scope) => scope !== undefined),
+        }
+      : {}),
     ...(payload.details !== undefined ? { details: payload.details } : {}),
     ...(payload.detailsOmitted === true ? { detailsOmitted: true } : {}),
   });
@@ -250,12 +281,21 @@ function runApprovalCard(payload: Record<string, unknown>, plainWords = false): 
 /** The run projection for a reader, from its device type and grants. */
 export function runProjectionForDevice(device: AidenRemoteHostRunDevice): RunProjection {
   if (isPhoneRunDevice(device)) {
-    const schedule = device.capabilities.has("schedule:cards") && device.capabilities.has("schedule:read");
+    const schedule =
+      device.capabilities.has("schedule:cards") && device.capabilities.has("schedule:read");
     const cards = device.capabilities.has("approval:cards");
     const words = cards && device.capabilities.has("approval:plain-words");
     return schedule
-      ? (words ? "phone-schedule-cards-words" : cards ? "phone-schedule-cards" : "phone-schedule")
-      : words ? "phone-cards-words" : cards ? "phone-cards" : "phone";
+      ? words
+        ? "phone-schedule-cards-words"
+        : cards
+          ? "phone-schedule-cards"
+          : "phone-schedule"
+      : words
+        ? "phone-cards-words"
+        : cards
+          ? "phone-cards"
+          : "phone";
   }
   return device.capabilities.has("runs:control") ? "full" : "observer";
 }
@@ -272,11 +312,12 @@ export function hostRunWireEvent(
   projection: RunProjection,
 ): AidenRemoteRunEvent {
   const type = event.type === "run_started" ? "run.started" : event.type;
-  const payload = event.type === "run_started"
-    ? { runId: event.runId, chatId, origin: event.payload.origin }
-    : event.type === "snapshot"
-      ? { runId: event.runId, chatId, reason: "reset", nextSequence: event.sequence + 1 }
-      : projectPayload(event.type, event.payload, projection);
+  const payload =
+    event.type === "run_started"
+      ? { runId: event.runId, chatId, origin: event.payload.origin }
+      : event.type === "snapshot"
+        ? { runId: event.runId, chatId, reason: "reset", nextSequence: event.sequence + 1 }
+        : projectPayload(event.type, event.payload, projection);
   return {
     protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
     streamId: event.runId,
@@ -360,7 +401,9 @@ function phoneMayAllow(payload: Record<string, unknown>): boolean {
  * own stream approvals: creating or editing an automation needs
  * `schedule:write` on top of `approval:respond`.
  */
-function approvalAllowCapability(payload: Record<string, unknown>): AidenRemoteCapability | undefined {
+function approvalAllowCapability(
+  payload: Record<string, unknown>,
+): AidenRemoteCapability | undefined {
   return payload.toolName === ASSISTANT_AUTOMATION_TOOL_NAME ||
     payload.toolName === ASSISTANT_AUTOMATION_EDIT_TOOL_NAME
     ? "schedule:write"
@@ -372,7 +415,10 @@ function approvalAllowCapability(payload: Record<string, unknown>): AidenRemoteC
  * were too large to journal can be denied remotely but must be allowed on the
  * host, and a scope must be one the prompt offered.
  */
-function requireInformedAllow(payload: Record<string, unknown>, scope: ToolApprovalScope | undefined): void {
+function requireInformedAllow(
+  payload: Record<string, unknown>,
+  scope: ToolApprovalScope | undefined,
+): void {
   if (payload.detailsOmitted === true) {
     throw new AidenRemoteServiceError(
       "capability_denied",
@@ -382,13 +428,21 @@ function requireInformedAllow(payload: Record<string, unknown>, scope: ToolAppro
   }
   const offered = Array.isArray(payload.scopes) ? payload.scopes : [];
   if (scope !== undefined && scope !== "once" && !offered.includes(scope)) {
-    throw new AidenRemoteServiceError("invalid_request", "That approval scope was not offered.", 400);
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "That approval scope was not offered.",
+      400,
+    );
   }
 }
 
-function parseRunApproval(value: unknown): { decision: "allow" | "deny"; scope?: ToolApprovalScope } {
+function parseRunApproval(value: unknown): {
+  decision: "allow" | "deny";
+  scope?: ToolApprovalScope;
+} {
   const record = ownRecord(value);
-  const scope = record && "scope" in record ? parseRemoteToolApprovalScope(record.scope) : undefined;
+  const scope =
+    record && "scope" in record ? parseRemoteToolApprovalScope(record.scope) : undefined;
   if (
     !record ||
     Object.keys(record).some((key) => key !== "decision" && key !== "scope") ||
@@ -438,10 +492,12 @@ export class AidenRemoteHostRunService {
   private readonly idempotency: AidenIdempotencyLedger;
 
   constructor(private readonly options: AidenRemoteHostRunServiceOptions) {
-    this.idempotency = options.idempotency ?? new AidenIdempotencyLedger(undefined, {
-      ttlMs: 10 * 60_000,
-      now: options.now,
-    });
+    this.idempotency =
+      options.idempotency ??
+      new AidenIdempotencyLedger(undefined, {
+        ttlMs: 10 * 60_000,
+        now: options.now,
+      });
   }
 
   /** The chat a live or retained run belongs to; `run_gone` otherwise. */
@@ -481,7 +537,11 @@ export class AidenRemoteHostRunService {
     const initial = registry.summary(runId);
     if (!initial) throw runGone();
     if (after > initial.lastSequence) {
-      throw new AidenRemoteServiceError("invalid_request", "The run cursor is ahead of Aiden.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The run cursor is ahead of Aiden.",
+        400,
+      );
     }
     const projection = runProjectionForDevice(device);
     let cursor = after;
@@ -518,10 +578,7 @@ export class AidenRemoteHostRunService {
         frames.push(sseFrame(String(wire.sequence), wire.type, wire));
         cursor = event.sequence;
       }
-      if (
-        isTerminal(read.summary.state) &&
-        cursor === read.summary.lastSequence
-      ) {
+      if (isTerminal(read.summary.state) && cursor === read.summary.lastSequence) {
         endedSent = true;
         const ended = hostRunEndedEvent(read.summary);
         frames.push(sseFrame(String(ended.sequence), ended.type, ended));
@@ -606,10 +663,15 @@ export class AidenRemoteHostRunService {
           const prompt = this.options.registry.pendingPrompt(approvalId);
           if (prompt && decision === "allow") {
             // A phone holding `approval:cards` may allow exactly what its card offers (revision 61).
-            const card = options.phoneScoped === true && options.capabilities?.has("approval:cards") === true
-              ? runApprovalCard(prompt.payload)
-              : undefined;
-            if (card ? !approvalCardAllows(card, scope) : options.phoneScoped === true && !phoneMayAllow(prompt.payload)) {
+            const card =
+              options.phoneScoped === true && options.capabilities?.has("approval:cards") === true
+                ? runApprovalCard(prompt.payload)
+                : undefined;
+            if (
+              card
+                ? !approvalCardAllows(card, scope)
+                : options.phoneScoped === true && !phoneMayAllow(prompt.payload)
+            ) {
               throw new AidenRemoteServiceError(
                 "capability_denied",
                 "Allow this in Aiden Agent on your computer.",
@@ -617,7 +679,11 @@ export class AidenRemoteHostRunService {
               );
             }
             const needed = approvalAllowCapability(prompt.payload);
-            if (options.phoneScoped === true && needed && options.capabilities?.has(needed) !== true) {
+            if (
+              options.phoneScoped === true &&
+              needed &&
+              options.capabilities?.has(needed) !== true
+            ) {
               throw new AidenRemoteServiceError(
                 "capability_denied",
                 "This device does not have access to that Aiden capability.",
@@ -628,15 +694,22 @@ export class AidenRemoteHostRunService {
           }
           if (
             summary.pendingApprovalIds.includes(approvalId) &&
-            this.options.controls.approve({ runId, chatId: summary.chatId, approvalId, decision, scope })
+            this.options.controls.approve({
+              runId,
+              chatId: summary.chatId,
+              approvalId,
+              decision,
+              scope,
+            })
           ) {
             return {
               runId,
               approvalId,
               decision,
               ...(scope ? { scope } : {}),
-              resolvedAt: this.options.registry.resolution(approvalId)?.resolvedAt
-                ?? new Date(this.options.now()).toISOString(),
+              resolvedAt:
+                this.options.registry.resolution(approvalId)?.resolvedAt ??
+                new Date(this.options.now()).toISOString(),
             };
           }
           throw this.approvalLost(runId, approvalId);
@@ -660,7 +733,11 @@ export class AidenRemoteHostRunService {
       typeof record.cancelled !== "boolean" ||
       !Array.isArray(record.answers)
     ) {
-      throw new AidenRemoteServiceError("invalid_request", "The question response is invalid.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The question response is invalid.",
+        400,
+      );
     }
     const input = { cancelled: record.cancelled, answers: record.answers };
     return this.control(
@@ -686,13 +763,18 @@ export class AidenRemoteHostRunService {
                 runId,
                 promptId,
                 outcome,
-                resolvedAt: this.options.registry.resolution(promptId)?.resolvedAt
-                  ?? new Date(this.options.now()).toISOString(),
+                resolvedAt:
+                  this.options.registry.resolution(promptId)?.resolvedAt ??
+                  new Date(this.options.now()).toISOString(),
               };
             }
             if (this.options.registry.summary(runId)?.pendingQuestionIds.includes(promptId)) {
               // Still pending after a rejected answer: the body did not match the prompt.
-              throw new AidenRemoteServiceError("invalid_request", "The question response is invalid.", 400);
+              throw new AidenRemoteServiceError(
+                "invalid_request",
+                "The question response is invalid.",
+                400,
+              );
             }
           }
           throw this.questionLost(runId, promptId);
@@ -725,7 +807,7 @@ export class AidenRemoteHostRunService {
             runId,
             chatId: summary.chatId,
             mode: parsed.mode,
-            status: admission.admitted ? "admitted" as const : "rejected" as const,
+            status: admission.admitted ? ("admitted" as const) : ("rejected" as const),
             ...(admission.queue === undefined ? {} : { queue: admission.queue }),
             ...(admission.reason === undefined ? {} : { reason: admission.reason }),
             committed: admission.committed,
@@ -749,7 +831,11 @@ export class AidenRemoteHostRunService {
     const summary = this.options.registry.summary(runId);
     if (!summary) throw runGone();
     if (this.options.registry.runForPrompt(promptId) !== runId) {
-      throw new AidenRemoteServiceError("not_found", "This prompt does not belong to that run.", 404);
+      throw new AidenRemoteServiceError(
+        "not_found",
+        "This prompt does not belong to that run.",
+        404,
+      );
     }
     return summary;
   }
@@ -767,7 +853,11 @@ export class AidenRemoteHostRunService {
     }
     return isTerminal(this.options.registry.summary(runId)?.state ?? "done")
       ? staleRun()
-      : new AidenRemoteServiceError("approval_expired", "This approval is no longer available.", 409);
+      : new AidenRemoteServiceError(
+          "approval_expired",
+          "This approval is no longer available.",
+          409,
+        );
   }
 
   private questionLost(runId: string, promptId: string): AidenRemoteServiceError {
@@ -783,7 +873,11 @@ export class AidenRemoteHostRunService {
     }
     return isTerminal(this.options.registry.summary(runId)?.state ?? "done")
       ? staleRun()
-      : new AidenRemoteServiceError("question_expired", "This question is no longer available.", 409);
+      : new AidenRemoteServiceError(
+          "question_expired",
+          "This question is no longer available.",
+          409,
+        );
   }
 
   /**
@@ -800,23 +894,27 @@ export class AidenRemoteHostRunService {
     }
     let outcome: ControlOutcome<T>;
     try {
-      outcome = await this.idempotency.execute(scope, input, async (): Promise<ControlOutcome<T>> => {
-        try {
-          return { ok: true, value: await action() };
-        } catch (error) {
-          if (!(error instanceof AidenRemoteServiceError)) throw error;
-          return {
-            ok: false,
-            error: {
-              code: error.code,
-              message: error.message,
-              status: error.status,
-              retryable: error.retryable,
-              ...(error.details ? { details: { ...error.details } } : {}),
-            },
-          };
-        }
-      });
+      outcome = await this.idempotency.execute(
+        scope,
+        input,
+        async (): Promise<ControlOutcome<T>> => {
+          try {
+            return { ok: true, value: await action() };
+          } catch (error) {
+            if (!(error instanceof AidenRemoteServiceError)) throw error;
+            return {
+              ok: false,
+              error: {
+                code: error.code,
+                message: error.message,
+                status: error.status,
+                retryable: error.retryable,
+                ...(error.details ? { details: { ...error.details } } : {}),
+              },
+            };
+          }
+        },
+      );
     } catch (error) {
       if (error instanceof AidenOperationContractError) {
         throw new AidenRemoteServiceError(

@@ -40,9 +40,18 @@ export function renderQrRows(payload: string): string[] {
     for (let column = 0; column < span; column += 1) {
       const top = color(row, column);
       const bottom = row + 1 < span ? color(row + 1, column) : WHITE;
-      if (bottom !== background) { line += `\x1b[48;5;${bottom}m`; background = bottom; }
-      if (top === bottom) { line += " "; continue; }
-      if (top !== foreground) { line += `\x1b[38;5;${top}m`; foreground = top; }
+      if (bottom !== background) {
+        line += `\x1b[48;5;${bottom}m`;
+        background = bottom;
+      }
+      if (top === bottom) {
+        line += " ";
+        continue;
+      }
+      if (top !== foreground) {
+        line += `\x1b[38;5;${top}m`;
+        foreground = top;
+      }
       line += "▀";
     }
     rows.push(`${line}${RESET}`);
@@ -61,7 +70,10 @@ export function qrWidth(payload: string): number {
  * take by hand. Each value sits alone on its line, so a triple-click copies
  * exactly that value.
  */
-export async function renderPairingTerminal(pairing: AidenRemoteDesktopPairing, options: PairingTerminalOptions = {}): Promise<string | undefined> {
+export async function renderPairingTerminal(
+  pairing: AidenRemoteDesktopPairing,
+  options: PairingTerminalOptions = {},
+): Promise<string | undefined> {
   if (!pairing.qrPayload) return undefined;
   const endpoint = pairing.bootstrap.endpoint;
   const tailscale = isTailscaleEndpoint(endpoint);
@@ -69,7 +81,9 @@ export async function renderPairingTerminal(pairing: AidenRemoteDesktopPairing, 
   const width = qrWidth(pairing.qrPayload);
   const columns = options.columns ?? process.stdout.columns;
   if (columns && columns < width) {
-    lines.push(`The QR code needs a window at least ${width} characters wide, and this one is ${columns}. Widen the window and run \`aiden remote pair ${tailscale ? "tailscale" : "lan"}\` for a new code, or enter the address and setup code below by hand.`);
+    lines.push(
+      `The QR code needs a window at least ${width} characters wide, and this one is ${columns}. Widen the window and run \`aiden remote pair ${tailscale ? "tailscale" : "lan"}\` for a new code, or enter the address and setup code below by hand.`,
+    );
   } else {
     lines.push(...renderQrRows(pairing.qrPayload));
   }
@@ -82,9 +96,10 @@ export async function renderPairingTerminal(pairing: AidenRemoteDesktopPairing, 
     lines.push(`Verification: ${pairing.bootstrap.serverSpkiSha256.slice(-9, -1).toUpperCase()}`);
   }
   const connection = tailscale ? "private address" : "nearby address";
-  const how = "Open pairing in Aiden On The Go. On iPhone or iPad, choose Add Computer. "
-    + `Scan the QR code if shown, or enter the ${connection} and setup code.`
-    + (tailscale ? "" : " Your phone must be on the same network as this computer.");
+  const how =
+    "Open pairing in Aiden On The Go. On iPhone or iPad, choose Add Computer. " +
+    `Scan the QR code if shown, or enter the ${connection} and setup code.` +
+    (tailscale ? "" : " Your phone must be on the same network as this computer.");
   const expiresAt = Date.parse(pairing.bootstrap.expiresAt);
   if (Number.isFinite(expiresAt)) {
     const seconds = Math.max(0, Math.ceil((expiresAt - (options.now ?? Date.now())) / 1000));

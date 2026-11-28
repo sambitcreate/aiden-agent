@@ -29,7 +29,9 @@ export const ttsService = createTtsService({
     isChatBusy: (chatId) => llmClient.isChatBusy(chatId),
   },
   provider: createGeminiTtsProvider(),
-  recordUsage: (report) => { void usageStore.record(ttsUsageRecord(report)); },
+  recordUsage: (report) => {
+    void usageStore.record(ttsUsageRecord(report));
+  },
   emit: (event, owner) => {
     if (owner?.kind === "remote") return;
     ipcMain.broadcast("tts:event", event);

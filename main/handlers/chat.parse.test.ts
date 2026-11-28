@@ -37,8 +37,11 @@ test("registered chat:start forwards foreground delegation and the appended turn
   const handlers = new Map<string, Handler>();
   const admission = new ChatTurnAdmission();
   const owner = {
-    id: 7, documentId: "renderer-document-1", isDestroyed: () => false,
-    send() {}, onInvalidated: () => () => {},
+    id: 7,
+    documentId: "renderer-document-1",
+    isDestroyed: () => false,
+    send() {},
+    onInvalidated: () => () => {},
   };
   const event = { sender: "owning-renderer" };
   const lease = admission.tryBegin("c1", "appended-turn-1", owner.documentId, false);
@@ -60,15 +63,21 @@ test("registered chat:start forwards foreground delegation and the appended turn
     assert.equal(streamId, "stream-1");
     assert.equal(generationOwner, owner);
     assert.ok(options, "chat:start must pass main-owned execution options");
-    assert.equal(subagentsAllowedForGeneration({
-      assistantMode: false,
-      allowSubagents: options.allowSubagents,
-      usageSource: options.usageSource,
-      workspaceId: params.workspaceId,
-      folderPath: "/workspace",
-      permission: "ask",
-    }), true);
-    assert.equal(admission.handoff(params.chatId, options.turnId!, generationOwner.documentId, () => {}), true);
+    assert.equal(
+      subagentsAllowedForGeneration({
+        assistantMode: false,
+        allowSubagents: options.allowSubagents,
+        usageSource: options.usageSource,
+        workspaceId: params.workspaceId,
+        folderPath: "/workspace",
+        permission: "ask",
+      }),
+      true,
+    );
+    assert.equal(
+      admission.handoff(params.chatId, options.turnId!, generationOwner.documentId, () => {}),
+      true,
+    );
     assert.ok(options.onTurnAccepted, "accepted turn must be acknowledged to the renderer");
     options.onTurnAccepted();
     // The turn started on the slider's second stop (the same model, no level).
@@ -76,10 +85,23 @@ test("registered chat:start forwards foreground delegation and the appended turn
     return true;
   };
   const mocks: Record<string, unknown> = {
-    "../platform.js": { ipcMain: { handle: (name: string, handler: Handler) => handlers.set(name, handler) } },
+    "../platform.js": {
+      ipcMain: { handle: (name: string, handler: Handler) => handlers.set(name, handler) },
+    },
     "../services/llm-client.js": { llmClient: { start } },
-    "../services/chat-generation-owner.js": { chatGenerationOwner: (received: unknown) => { assert.equal(received, event); return owner; } },
-    "../services/chat-title.js": { chatTitleService: { startForFirstTurn: () => { titles++; } } },
+    "../services/chat-generation-owner.js": {
+      chatGenerationOwner: (received: unknown) => {
+        assert.equal(received, event);
+        return owner;
+      },
+    },
+    "../services/chat-title.js": {
+      chatTitleService: {
+        startForFirstTurn: () => {
+          titles++;
+        },
+      },
+    },
     "../services/config-store.js": {
       configStore: {
         setSettings: async () => {},
@@ -110,7 +132,11 @@ test("registered chat:start forwards foreground delegation and the appended turn
   // No source rewriting, network, profile reads, or model calls are involved.
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("./chat.ts", import.meta.url))],
-    bundle: true, write: false, platform: "node", format: "cjs", external: Object.keys(mocks),
+    bundle: true,
+    write: false,
+    platform: "node",
+    format: "cjs",
+    external: Object.keys(mocks),
   });
   const module = { exports: {} as typeof import("./chat.js") };
   const require = createRequire(import.meta.url);
@@ -120,28 +146,44 @@ test("registered chat:start forwards foreground delegation and the appended turn
       assert.ok(name in mocks, `Unexpected dependency: ${name}`);
       return mocks[name];
     },
-    module, module.exports,
+    module,
+    module.exports,
   );
   module.exports.registerChatGenerationHandlers();
   const handler = handlers.get("chat:start");
   assert.ok(handler);
   try {
-    assert.deepEqual(await handler(event, "stream-1", { ...base, workspaceId: "workspace-1" }, "appended-turn-1"), {
-      streamId: "stream-1", accepted: true, started: true,
-    });
+    assert.deepEqual(
+      await handler(event, "stream-1", { ...base, workspaceId: "workspace-1" }, "appended-turn-1"),
+      {
+        streamId: "stream-1",
+        accepted: true,
+        started: true,
+      },
+    );
     assert.equal(admission.isAdmitted("c1"), false);
     assert.equal(starts, 1);
     assert.equal(titles, 1);
-    await assert.rejects(handler(event, "stream-1", base, undefined), /Invalid chat message turn identifier/u);
+    await assert.rejects(
+      handler(event, "stream-1", base, undefined),
+      /Invalid chat message turn identifier/u,
+    );
     assert.equal(starts, 1);
     await analyticsSettled();
-    assert.deepEqual(sent, [{
-      event: "chat_message_sent",
-      props: {
-        provider_id: "custom", model_id: "custom", in_workspace: true, thinking: "other", origin: "desktop",
-        slider_stop: "2", slider_stop_count: 3,
+    assert.deepEqual(sent, [
+      {
+        event: "chat_message_sent",
+        props: {
+          provider_id: "custom",
+          model_id: "custom",
+          in_workspace: true,
+          thinking: "other",
+          origin: "desktop",
+          slider_stop: "2",
+          slider_stop_count: 3,
+        },
       },
-    }]);
+    ]);
   } finally {
     lease.release();
   }
@@ -183,20 +225,22 @@ test("chat lifecycle handling detaches the renderer instead of aborting inferenc
 
 test("user Stop acknowledges only a generation owned by the calling document", () => {
   const handler = readFileSync(new URL("./chat.ts", import.meta.url), "utf8");
-  assert.match(handler, /const cancelled = llmClient\.cancel\(streamId, "user_stop", owner\.documentId\)/u);
+  assert.match(
+    handler,
+    /const cancelled = llmClient\.cancel\(streamId, "user_stop", owner\.documentId\)/u,
+  );
   assert.match(handler, /return cancelled;/u);
   const runtime = readFileSync(new URL("../services/llm-client.ts", import.meta.url), "utf8");
-  assert.match(runtime, /cancel\([\s\S]*?ownerDocumentId\?: string,[\s\S]*?owner\.documentId !== ownerDocumentId/u);
+  assert.match(
+    runtime,
+    /cancel\([\s\S]*?ownerDocumentId\?: string,[\s\S]*?owner\.documentId !== ownerDocumentId/u,
+  );
 });
 
 test("parseParams accepts only the attended Assistant mode", () => {
   assert.equal(parseParams({ ...base, mode: "assistant" }).mode, "assistant");
   assert.equal(parseParams(base).mode, undefined);
-  for (const mode of [
-    "assistant-unattended",
-    "assistant-automation",
-    "workspace",
-  ]) {
+  for (const mode of ["assistant-unattended", "assistant-automation", "workspace"]) {
     assert.throws(() => parseParams({ ...base, mode }), /Invalid chat mode/);
   }
 });
@@ -211,10 +255,7 @@ test("chat:start rejects renderer history and every unknown authority field", ()
     /history is main-owned/,
   );
   for (const field of ["skillInvocation", "permission", "tools"]) {
-    assert.throws(
-      () => parseParams({ ...base, [field]: "forged" }),
-      /Invalid generation field/u,
-    );
+    assert.throws(() => parseParams({ ...base, [field]: "forged" }), /Invalid generation field/u);
   }
 });
 
@@ -242,38 +283,23 @@ test("parseParams rejects invalid envelopes and requires provider/model identity
     assert.throws(() => parseParams(value), /Invalid generation params/);
   }
   assert.throws(() => parseParams({}), /Invalid chat id/);
-  assert.throws(
-    () => parseParams({ chatId: "c", providerId: "p" }),
-    /Invalid model id/,
-  );
+  assert.throws(() => parseParams({ chatId: "c", providerId: "p" }), /Invalid model id/);
   assert.throws(
     () => parseParams({ chatId: "c", providerId: "", model: "m" }),
     /Invalid provider id/,
   );
-  assert.throws(
-    () => parseParams({ chatId: "c", providerId: "p", model: "" }),
-    /Invalid model id/,
-  );
+  assert.throws(() => parseParams({ chatId: "c", providerId: "p", model: "" }), /Invalid model id/);
 });
 
 test("parseParams bounds every selector before generation handoff", () => {
   const cases: Array<[string, Record<string, unknown>]> = [
     ["chat id", { ...base, chatId: "c".repeat(MAX_CHAT_ID_CHARS + 1) }],
-    [
-      "workspace id",
-      { ...base, workspaceId: "w".repeat(MAX_WORKSPACE_ID_CHARS + 1) },
-    ],
-    [
-      "provider id",
-      { ...base, providerId: "p".repeat(MAX_PROVIDER_ID_CHARS + 1) },
-    ],
+    ["workspace id", { ...base, workspaceId: "w".repeat(MAX_WORKSPACE_ID_CHARS + 1) }],
+    ["provider id", { ...base, providerId: "p".repeat(MAX_PROVIDER_ID_CHARS + 1) }],
     ["model id", { ...base, model: "m".repeat(MAX_MODEL_ID_CHARS + 1) }],
   ];
   for (const [label, value] of cases) {
-    assert.throws(
-      () => parseParams(value),
-      new RegExp(`Invalid ${label}`, "u"),
-    );
+    assert.throws(() => parseParams(value), new RegExp(`Invalid ${label}`, "u"));
   }
 });
 
@@ -291,41 +317,23 @@ test("start envelope rejects many extra properties without materializing an Obje
     providerId: "provider-1",
     model: "model-1",
   };
-  for (let index = 0; index < 10_000; index += 1)
-    manyFields[`extra-${index}`] = index;
+  for (let index = 0; index < 10_000; index += 1) manyFields[`extra-${index}`] = index;
   assert.throws(
     () => parseParams(manyFields),
-    (error: unknown) =>
-      error instanceof Error && error.message === "Invalid generation fields.",
+    (error: unknown) => error instanceof Error && error.message === "Invalid generation fields.",
   );
-  const parserSource = readFileSync(
-    new URL("./chat-params.ts", import.meta.url),
-    "utf8",
-  );
+  const parserSource = readFileSync(new URL("./chat-params.ts", import.meta.url), "utf8");
   assert.doesNotMatch(parserSource, /Object\.keys/u);
   assert.match(parserSource, /keyCount > ALLOWED_CHAT_START_KEYS\.size/u);
 });
 
 test("parseParams accepts only Aiden's bounded generation thinking enum", () => {
-  for (const thinkingLevel of [
-    "off",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max",
-  ] as const) {
-    assert.equal(
-      parseParams({ ...base, thinkingLevel }).thinkingLevel,
-      thinkingLevel,
-    );
+  for (const thinkingLevel of ["off", "low", "medium", "high", "xhigh", "max"] as const) {
+    assert.equal(parseParams({ ...base, thinkingLevel }).thinkingLevel, thinkingLevel);
   }
   assert.equal(parseParams(base).thinkingLevel, undefined);
   for (const thinkingLevel of ["minimal", "dynamic", "", 1, null]) {
-    assert.throws(
-      () => parseParams({ ...base, thinkingLevel }),
-      /Invalid thinking level/u,
-    );
+    assert.throws(() => parseParams({ ...base, thinkingLevel }), /Invalid thinking level/u);
   }
 });
 
@@ -353,15 +361,27 @@ test("parseParams keeps bounded generation selectors and creates empty authorita
     assert.equal(parseParams({ ...base, inlineVisuals }).inlineVisuals, inlineVisuals);
   }
   assert.equal(parseParams(base).inlineVisuals, undefined);
-  assert.throws(() => parseParams({ ...base, inlineVisuals: "sometimes" }), /Invalid generation fields/);
+  assert.throws(
+    () => parseParams({ ...base, inlineVisuals: "sometimes" }),
+    /Invalid generation fields/,
+  );
   assert.throws(() => parseParams({ ...base, inlineVisuals: 1 }), /Invalid generation fields/);
-  assert.deepEqual(parseParams({ ...base, designView: { selection: ["f1"], viewSize: { w: 900, h: 600 } } }).designView, {
-    selection: ["f1"],
-    viewSize: { w: 900, h: 600 },
-  });
+  assert.deepEqual(
+    parseParams({ ...base, designView: { selection: ["f1"], viewSize: { w: 900, h: 600 } } })
+      .designView,
+    {
+      selection: ["f1"],
+      viewSize: { w: 900, h: 600 },
+    },
+  );
   assert.equal(parseParams(base).designView, undefined);
   // A canvas view that does not parse is dropped; the message itself still goes.
-  for (const designView of [{ selection: [42] }, { selection: [], viewSize: { w: -1, h: 600 } }, "canvas", null]) {
+  for (const designView of [
+    { selection: [42] },
+    { selection: [], viewSize: { w: -1, h: 600 } },
+    "canvas",
+    null,
+  ]) {
     const parsed = parseParams({ ...base, designView });
     assert.equal(parsed.designView, undefined);
     assert.equal(parsed.chatId, base.chatId);
@@ -372,7 +392,9 @@ const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
 const TINY_PNG_BYTES = Buffer.byteLength(TINY_PNG_BASE64, "base64");
 
-function validGrabbedElement(overrides: Partial<GrabbedElementContextV1> = {}): GrabbedElementContextV1 {
+function validGrabbedElement(
+  overrides: Partial<GrabbedElementContextV1> = {},
+): GrabbedElementContextV1 {
   const id = overrides.id ?? "grab_1";
   const base: GrabbedElementContextV1 = {
     version: GRABBED_ELEMENT_SCHEMA_VERSION,
@@ -516,18 +538,31 @@ test("materializeGrabbedElementDraft output passes strict parseChatAppend and pa
 
   const appended = parseChatAppend(
     "chat-1",
-    { role: "user", content: "Tighten padding", attachments: draft.attachments, grabbedElements: draft.elements },
+    {
+      role: "user",
+      content: "Tighten padding",
+      attachments: draft.attachments,
+      grabbedElements: draft.elements,
+    },
     { turnId: "turn-draft-wire" },
   );
   assert.equal(appended.attachments?.length, 1);
   assert.equal(appended.grabbedElements?.length, 1);
-  assert.equal(appended.grabbedElements?.[0]?.thumbnailAttachmentId, grabbedElementThumbnailId("el_draft_wire"));
+  assert.equal(
+    appended.grabbedElements?.[0]?.thumbnailAttachmentId,
+    grabbedElementThumbnailId("el_draft_wire"),
+  );
 
   const first = parseChatFirstMessage({
     draftId: "22222222-2222-4222-8222-222222222222",
     workspaceId: "workspace-1",
     turnId: "turn-draft-first",
-    message: { role: "user", content: "", attachments: draft.attachments, grabbedElements: draft.elements },
+    message: {
+      role: "user",
+      content: "",
+      attachments: draft.attachments,
+      grabbedElements: draft.elements,
+    },
   });
   assert.equal(first.attachments?.length, 1);
   assert.equal(first.grabbedElements?.length, 1);

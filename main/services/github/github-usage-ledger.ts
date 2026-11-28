@@ -54,7 +54,8 @@ export class GitHubUsageLedger {
     usage.points += points;
     if (observation.outcome === "not-modified") usage.notModified += 1;
     else if (observation.outcome === "rate-limited") usage.rateLimited += 1;
-    else if (observation.outcome === "failed" || observation.outcome === "unauthorized") usage.failures += 1;
+    else if (observation.outcome === "failed" || observation.outcome === "unauthorized")
+      usage.failures += 1;
     this.maybeSummarize();
   }
 
@@ -80,7 +81,10 @@ export class GitHubUsageLedger {
         requests: operations.reduce((sum, usage) => sum + usage.requests, 0),
         points: operations.reduce((sum, usage) => sum + usage.points, 0),
         rateLimited: operations.reduce((sum, usage) => sum + usage.rateLimited, 0),
-        refusals: operations.reduce((sum, usage) => sum + usage.pausedRefusals + usage.budgetRefusals, 0),
+        refusals: operations.reduce(
+          (sum, usage) => sum + usage.pausedRefusals + usage.budgetRefusals,
+          0,
+        ),
       },
       operations,
       scopes: [...this.scopes.values()].map((scope) => {
@@ -98,7 +102,17 @@ export class GitHubUsageLedger {
     const key = `${kind}:${operation}`;
     let usage = this.operations.get(key);
     if (!usage) {
-      usage = { operation, kind, requests: 0, points: 0, notModified: 0, rateLimited: 0, pausedRefusals: 0, budgetRefusals: 0, failures: 0 };
+      usage = {
+        operation,
+        kind,
+        requests: 0,
+        points: 0,
+        notModified: 0,
+        rateLimited: 0,
+        pausedRefusals: 0,
+        budgetRefusals: 0,
+        failures: 0,
+      };
       this.operations.set(key, usage);
     }
     return usage;
@@ -117,8 +131,13 @@ export class GitHubUsageLedger {
       .map((usage) => `${usage.operation}=${usage.requests}/${usage.points}pt`)
       .join(" ");
     const scopes = snapshot.scopes
-      .map((scope) => `${scope.host}:${scope.remaining ?? "?"}/${scope.limit ?? "?"}${scope.pausedUntil ? " paused" : ""}`)
+      .map(
+        (scope) =>
+          `${scope.host}:${scope.remaining ?? "?"}/${scope.limit ?? "?"}${scope.pausedUntil ? " paused" : ""}`,
+      )
       .join(" ");
-    this.log(`GitHub usage: ${requests} requests in the last 10 min; top ${top || "none"}; budget ${scopes || "unknown"}`);
+    this.log(
+      `GitHub usage: ${requests} requests in the last 10 min; top ${top || "none"}; budget ${scopes || "unknown"}`,
+    );
   }
 }

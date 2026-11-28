@@ -23,13 +23,24 @@ const echo: AgentTool = {
   execute: async () => ({ content: [{ type: "text", text: "ok" }], details: null }),
 };
 
-function harness(responses: FauxResponseStep[], options: Partial<PiAgentRuntimeHarnessOptions> = {}) {
-  const core = createFauxCore({ provider: `aiden-finish-turn-${Math.random().toString(36).slice(2)}` });
+function harness(
+  responses: FauxResponseStep[],
+  options: Partial<PiAgentRuntimeHarnessOptions> = {},
+) {
+  const core = createFauxCore({
+    provider: `aiden-finish-turn-${Math.random().toString(36).slice(2)}`,
+  });
   core.setResponses(responses);
   const instance = new PiAgentRuntimeHarness({
     convertToLlm,
     streamFn: core.streamSimple,
-    initialState: { systemPrompt: "Base", thinkingLevel: "off", tools: [echo], messages: [], model: core.getModel() },
+    initialState: {
+      systemPrompt: "Base",
+      thinkingLevel: "off",
+      tools: [echo],
+      messages: [],
+      model: core.getModel(),
+    },
     ...options,
   });
   return { core, harness: instance };
@@ -54,7 +65,10 @@ test("an extension can end the run before Pi spends another provider request", a
   assert.equal(core.state.callCount, 1);
   assert.equal(core.getPendingResponseCount(), 1);
   assert.deepEqual(seen, ["toolUse"]);
-  assert.ok(run.state.messages.some((message) => message.role === "toolResult"), "the tool result is kept");
+  assert.ok(
+    run.state.messages.some((message) => message.role === "toolResult"),
+    "the tool result is kept",
+  );
 });
 
 test("without an end vote Pi keeps its normal scheduling", async () => {
@@ -76,7 +90,17 @@ test("error and aborted responses never reach extension finishTurn", async () =>
     let calls = 0;
     const { harness: run } = harness(
       [fauxAssistantMessage("", { stopReason, errorMessage: `${stopReason} response` })],
-      { extensions: [{ id: "counter", finishTurn: () => { calls += 1; return { action: "end" }; } }] },
+      {
+        extensions: [
+          {
+            id: "counter",
+            finishTurn: () => {
+              calls += 1;
+              return { action: "end" };
+            },
+          },
+        ],
+      },
     );
     await run.prompt("go").catch(() => undefined);
     assert.equal(calls, 0, stopReason);
@@ -109,10 +133,20 @@ test("an extension end overrides a host continue, and the host still runs", asyn
 test("a throwing finishTurn extension fails the run closed as a policy fault", async () => {
   const faults: PiHarnessFault[] = [];
   const { core, harness: run } = harness([toolTurn(), fauxAssistantMessage("must not run")], {
-    extensions: [{ id: "broken", finishTurn: () => { throw new Error("private stop failure"); } }],
+    extensions: [
+      {
+        id: "broken",
+        finishTurn: () => {
+          throw new Error("private stop failure");
+        },
+      },
+    ],
     onFault: (fault) => faults.push(fault),
   });
   await assert.rejects(run.prompt("go"));
   assert.equal(core.state.callCount, 1);
-  assert.deepEqual(faults.map((fault) => [fault.source, fault.extensionId]), [["extension_finish_turn", "broken"]]);
+  assert.deepEqual(
+    faults.map((fault) => [fault.source, fault.extensionId]),
+    [["extension_finish_turn", "broken"]],
+  );
 });

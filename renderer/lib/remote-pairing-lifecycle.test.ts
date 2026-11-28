@@ -22,51 +22,72 @@ function device(id: string, lastSeenAt: number, revokedAt?: number): AidenRemote
 
 test("only the exact main-owned pairing session and issued device can complete a dialog", () => {
   const unrelatedDevice = device("device_other", 20);
-  assert.deepEqual(evaluateRemotePairingLifecycle({
-    pairingSessionId: "pairing_current",
-    status: { sessionId: "pairing_other", state: "finishing", deviceId: unrelatedDevice.id },
-    devices: [unrelatedDevice],
-  }), { state: "unrelated" });
+  assert.deepEqual(
+    evaluateRemotePairingLifecycle({
+      pairingSessionId: "pairing_current",
+      status: { sessionId: "pairing_other", state: "finishing", deviceId: unrelatedDevice.id },
+      devices: [unrelatedDevice],
+    }),
+    { state: "unrelated" },
+  );
 
-  assert.deepEqual(evaluateRemotePairingLifecycle({
-    pairingSessionId: "pairing_current",
-    status: { sessionId: "pairing_current", state: "finishing", deviceId: "device_expected" },
-    devices: [unrelatedDevice],
-  }), { state: "finishing" });
+  assert.deepEqual(
+    evaluateRemotePairingLifecycle({
+      pairingSessionId: "pairing_current",
+      status: { sessionId: "pairing_current", state: "finishing", deviceId: "device_expected" },
+      devices: [unrelatedDevice],
+    }),
+    { state: "finishing" },
+  );
 
   const pending = device("device_expected", 0);
-  assert.equal(evaluateRemotePairingLifecycle({
-    pairingSessionId: "pairing_current",
-    status: { sessionId: "pairing_current", state: "finishing", deviceId: pending.id },
-    devices: [pending, unrelatedDevice],
-  }).state, "finishing");
+  assert.equal(
+    evaluateRemotePairingLifecycle({
+      pairingSessionId: "pairing_current",
+      status: { sessionId: "pairing_current", state: "finishing", deviceId: pending.id },
+      devices: [pending, unrelatedDevice],
+    }).state,
+    "finishing",
+  );
 
   const connected = device("device_expected", 21);
-  assert.deepEqual(evaluateRemotePairingLifecycle({
-    pairingSessionId: "pairing_current",
-    status: { sessionId: "pairing_current", state: "finishing", deviceId: connected.id },
-    devices: [connected, unrelatedDevice],
-  }), { state: "connected", device: connected });
+  assert.deepEqual(
+    evaluateRemotePairingLifecycle({
+      pairingSessionId: "pairing_current",
+      status: { sessionId: "pairing_current", state: "finishing", deviceId: connected.id },
+      devices: [connected, unrelatedDevice],
+    }),
+    { state: "connected", device: connected },
+  );
 });
 
 test("failed, expired, absent, and revoked pairing states never report connected", () => {
   const revoked = device("device_expected", 20, 21);
   for (const state of ["failed", "expired"] as const) {
-    assert.deepEqual(evaluateRemotePairingLifecycle({
-      pairingSessionId: "pairing_current",
-      status: { sessionId: "pairing_current", state },
-      devices: [revoked],
-    }), { state });
+    assert.deepEqual(
+      evaluateRemotePairingLifecycle({
+        pairingSessionId: "pairing_current",
+        status: { sessionId: "pairing_current", state },
+        devices: [revoked],
+      }),
+      { state },
+    );
   }
-  assert.deepEqual(evaluateRemotePairingLifecycle({
-    pairingSessionId: "pairing_current",
-    devices: [revoked],
-  }), { state: "unrelated" });
-  assert.equal(evaluateRemotePairingLifecycle({
-    pairingSessionId: "pairing_current",
-    status: { sessionId: "pairing_current", state: "finishing", deviceId: revoked.id },
-    devices: [revoked],
-  }).state, "cancelled");
+  assert.deepEqual(
+    evaluateRemotePairingLifecycle({
+      pairingSessionId: "pairing_current",
+      devices: [revoked],
+    }),
+    { state: "unrelated" },
+  );
+  assert.equal(
+    evaluateRemotePairingLifecycle({
+      pairingSessionId: "pairing_current",
+      status: { sessionId: "pairing_current", state: "finishing", deviceId: revoked.id },
+      devices: [revoked],
+    }).state,
+    "cancelled",
+  );
 });
 
 test("finishing presentation retains a disabled QR and ignores the elapsed bootstrap clock", () => {

@@ -15,7 +15,12 @@ import {
  */
 const USAGE_SAVE_DELAY_MS = 2_000;
 
-const persistence = new DataStore<UsageDatabase>("usage.json", createEmptyUsageDatabase(), undefined, { compact: true });
+const persistence = new DataStore<UsageDatabase>(
+  "usage.json",
+  createEmptyUsageDatabase(),
+  undefined,
+  { compact: true },
+);
 const store = createUsageStore(
   {
     load: () => persistence.load(),

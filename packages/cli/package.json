@@ -1,7 +1,7 @@
 {
   "name": "aiden-cli",
   "version": "0.1.0",
-  "description": "Aiden Agent CLI \u2014 a pi-based headless server for paired Aiden clients",
+  "description": "Aiden Agent CLI — a pi-based headless server for paired Aiden clients",
   "type": "module",
   "private": true,
   "piConfig": {

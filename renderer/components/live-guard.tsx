@@ -20,7 +20,9 @@ export function useLiveGuard(): LiveGuardValue | null {
  * the caller's props: the stronger of the region's guard and one the caller
  * set directly wins, so neither can weaken the other.
  */
-export function useLiveGuardAttributes(props?: object): { [LIVE_GUARD_ATTRIBUTE]?: LiveGuardValue } {
+export function useLiveGuardAttributes(props?: object): {
+  [LIVE_GUARD_ATTRIBUTE]?: LiveGuardValue;
+} {
   const inherited = useLiveGuard();
   const explicit = props ? (props as Record<string, unknown>)[LIVE_GUARD_ATTRIBUTE] : undefined;
   const own = explicit === "you" || explicit === "confirm" ? explicit : null;

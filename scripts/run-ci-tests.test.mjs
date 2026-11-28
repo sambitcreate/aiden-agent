@@ -61,14 +61,23 @@ test("parallel mode overlaps lanes after prerequisites and before preserved comm
     assert.equal(order[0], "start prerequisite");
     assert.equal(order[1], "end prerequisite");
     assert.deepEqual(order.slice(-2), ["start preserved", "end preserved"]);
-    assert.deepEqual(order.slice(2, -2).filter((event) => event.startsWith("start")).toSorted(), ["start alpha", "start beta"]);
+    assert.deepEqual(
+      order
+        .slice(2, -2)
+        .filter((event) => event.startsWith("start"))
+        .toSorted(),
+      ["start alpha", "start beta"],
+    );
   });
 });
 
 test("a failing lane fails the run without skipping its sibling or running preserved commands", async () => {
   await withDirectory(async (directory) => {
     const { log, plan } = fixturePlan(directory, { failLane: "alpha" });
-    await assert.rejects(executePlan(plan, parseArguments(["--parallel"])), /alpha:tests exited with status 1/u);
+    await assert.rejects(
+      executePlan(plan, parseArguments(["--parallel"])),
+      /alpha:tests exited with status 1/u,
+    );
     const order = await events(log);
     assert.ok(order.includes("end beta"), "the sibling lane still finishes");
     assert.ok(!order.includes("start preserved"));
@@ -80,7 +89,10 @@ async function runFixtureLane(directory, source) {
   // node:test reports the resolved path (macOS's tmpdir is under the /var -> /private/var link).
   const file = path.join(await realpath(directory), "fixture.test.mjs");
   await writeFile(file, source);
-  const plan = buildPlan({ lanes: [{ name: "fixture", files: [file] }], prerequisites: [], preserved: [] }, parseArguments(["--lane", "fixture", "--parallel"]));
+  const plan = buildPlan(
+    { lanes: [{ name: "fixture", files: [file] }], prerequisites: [], preserved: [] },
+    parseArguments(["--lane", "fixture", "--parallel"]),
+  );
   const output = [];
   const write = process.stdout.write;
   const log = console.log;
@@ -90,7 +102,13 @@ async function runFixtureLane(directory, source) {
   process.stdout.write = (chunk) => output.push(String(chunk)) > 0;
   console.log = (...parts) => output.push(`${parts.join(" ")}\n`);
   try {
-    const result = await executePlan(plan, parseArguments(["--lane", "fixture", "--parallel"])).then(() => "passed", (error) => error.message);
+    const result = await executePlan(
+      plan,
+      parseArguments(["--lane", "fixture", "--parallel"]),
+    ).then(
+      () => "passed",
+      (error) => error.message,
+    );
     return { result, file, output: output.join("") };
   } finally {
     process.stdout.write = write;
@@ -101,17 +119,23 @@ async function runFixtureLane(directory, source) {
 
 test("a failed lane ends by listing each failed test with its file, line and error", async () => {
   await withDirectory(async (directory) => {
-    const { result, file, output } = await runFixtureLane(directory, [
-      'import assert from "node:assert/strict";',
-      'import test from "node:test";',
-      'test("the fixture that passes", () => {});',
-      'test("the fixture that fails", () => {',
-      '  assert.equal(1 + 1, 3, "the sum the digest quotes");',
-      "});",
-    ].join("\n"));
+    const { result, file, output } = await runFixtureLane(
+      directory,
+      [
+        'import assert from "node:assert/strict";',
+        'import test from "node:test";',
+        'test("the fixture that passes", () => {});',
+        'test("the fixture that fails", () => {',
+        '  assert.equal(1 + 1, 3, "the sum the digest quotes");',
+        "});",
+      ].join("\n"),
+    );
     assert.match(result, /fixture:tests exited with status 1/u);
     const digest = output.slice(output.lastIndexOf("Failed tests in fixture:tests:"));
-    assert.ok(digest.startsWith("Failed tests in fixture:tests:"), "the list comes after the lane's own output");
+    assert.ok(
+      digest.startsWith("Failed tests in fixture:tests:"),
+      "the list comes after the lane's own output",
+    );
     assert.match(digest, /not ok the fixture that fails/u);
     assert.ok(digest.includes(`at ${file}:4:1`), "it names where the test is");
     assert.match(digest, /the sum the digest quotes/u);
@@ -121,7 +145,10 @@ test("a failed lane ends by listing each failed test with its file, line and err
 
 test("a lane that passes lists no failed tests", async () => {
   await withDirectory(async (directory) => {
-    const { result, output } = await runFixtureLane(directory, 'import test from "node:test";\ntest("the fixture that passes", () => {});\n');
+    const { result, output } = await runFixtureLane(
+      directory,
+      'import test from "node:test";\ntest("the fixture that passes", () => {});\n',
+    );
     assert.equal(result, "passed");
     assert.doesNotMatch(output, /Failed tests in/u);
   });
@@ -130,7 +157,12 @@ test("a lane that passes lists no failed tests", async () => {
 test("related unit selection keeps only reachable files in a lane", () => {
   const registry = {
     lanes: [
-      { name: "one", files: ["main/services/x.test.ts", "main/services/other.test.ts"], prerequisites: [], preserved: [] },
+      {
+        name: "one",
+        files: ["main/services/x.test.ts", "main/services/other.test.ts"],
+        prerequisites: [],
+        preserved: [],
+      },
     ],
     prerequisites: [],
     preserved: [],
@@ -150,35 +182,67 @@ test("related unit selection keeps only reachable files in a lane", () => {
 test("the default plan runs each unit file once across lanes", () => {
   const registry = {
     lanes: [
-      { name: "one", files: ["a.test.ts", "b.test.ts"], prerequisites: ["build"], preserved: ["mode"] },
+      {
+        name: "one",
+        files: ["a.test.ts", "b.test.ts"],
+        prerequisites: ["build"],
+        preserved: ["mode"],
+      },
       { name: "two", files: ["c.test.ts"], prerequisites: ["build"], preserved: [] },
     ],
     prerequisites: [{ id: "build", command: ["node", "build.mjs"] }],
     preserved: [{ id: "mode", command: ["npm", "run", "test:mode"] }],
   };
   const plan = buildPlan(registry, parseArguments(["--parallel"]));
-  assert.deepEqual(plan.unitCommands.flatMap((command) => command.files).toSorted(), ["a.test.ts", "b.test.ts", "c.test.ts"]);
-  assert.deepEqual(plan.prerequisites.map((entry) => entry.id), ["build"]);
-  assert.deepEqual(plan.preserved.map((entry) => entry.id), ["mode"]);
+  assert.deepEqual(plan.unitCommands.flatMap((command) => command.files).toSorted(), [
+    "a.test.ts",
+    "b.test.ts",
+    "c.test.ts",
+  ]);
+  assert.deepEqual(
+    plan.prerequisites.map((entry) => entry.id),
+    ["build"],
+  );
+  assert.deepEqual(
+    plan.preserved.map((entry) => entry.id),
+    ["mode"],
+  );
 });
 
 test("the real registry schedules every build and preserved command exactly once", () => {
   const registry = readRegistry();
   const counts = (entries) => {
     const tally = new Map();
-    for (const entry of entries) tally.set(JSON.stringify(entry.command), (tally.get(JSON.stringify(entry.command)) ?? 0) + 1);
+    for (const entry of entries)
+      tally.set(JSON.stringify(entry.command), (tally.get(JSON.stringify(entry.command)) ?? 0) + 1);
     return [...tally.values()];
   };
-  for (const argumentsList of [[], ["--parallel"], ["--lane", "core-git"], ["--lane", "runtime-subagents"], ["--lane", "renderer-other"]]) {
+  for (const argumentsList of [
+    [],
+    ["--parallel"],
+    ["--lane", "core-git"],
+    ["--lane", "runtime-subagents"],
+    ["--lane", "renderer-other"],
+  ]) {
     const plan = buildPlan(registry, parseArguments(argumentsList));
     const label = argumentsList.join(" ") || "default";
     assert.ok(plan.prerequisites.length > 0, label);
-    assert.ok(counts(plan.prerequisites).every((count) => count === 1), `${label}: a prerequisite runs more than once`);
-    assert.ok(counts(plan.preserved).every((count) => count === 1), `${label}: a preserved command runs more than once`);
+    assert.ok(
+      counts(plan.prerequisites).every((count) => count === 1),
+      `${label}: a prerequisite runs more than once`,
+    );
+    assert.ok(
+      counts(plan.preserved).every((count) => count === 1),
+      `${label}: a preserved command runs more than once`,
+    );
     const required = new Set([
       ...plan.lanes.flatMap((lane) => lane.prerequisites ?? []),
       ...plan.preserved.flatMap((entry) => entry.requires ?? []),
     ]);
-    assert.deepEqual(plan.prerequisites.map((entry) => entry.id).toSorted(), [...required].toSorted(), label);
+    assert.deepEqual(
+      plan.prerequisites.map((entry) => entry.id).toSorted(),
+      [...required].toSorted(),
+      label,
+    );
   }
 });

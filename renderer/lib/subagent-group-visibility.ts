@@ -106,7 +106,10 @@ export function useSubagentGroupOnScreen(groupKeys: readonly string[]): boolean 
 }
 
 /** Registers a card element for as long as it is mounted under this group key. */
-export function useObserveSubagentGroup(ref: React.RefObject<Element | null>, groupKey: string): void {
+export function useObserveSubagentGroup(
+  ref: React.RefObject<Element | null>,
+  groupKey: string,
+): void {
   React.useEffect(() => {
     const element = ref.current;
     if (!element) return;

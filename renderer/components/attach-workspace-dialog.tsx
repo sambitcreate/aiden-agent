@@ -40,7 +40,10 @@ export interface AttachWorkspaceDialogProps {
   /** Called after a new workspace folder is added via the native picker. */
   onWorkspaceCreated?: (workspace: Workspace) => void;
   /** Called after the chat is attached in main. */
-  onAttached: (result: AttachToWorkspaceResult<Chat>, targetWorkspace: Workspace) => void | Promise<void>;
+  onAttached: (
+    result: AttachToWorkspaceResult<Chat>,
+    targetWorkspace: Workspace,
+  ) => void | Promise<void>;
 }
 
 export function AttachWorkspaceDialog({
@@ -99,7 +102,8 @@ export function AttachWorkspaceDialog({
         await onAttached(result, target);
         onOpenChange(false);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Could not attach this chat to the workspace.";
+        const message =
+          error instanceof Error ? error.message : "Could not attach this chat to the workspace.";
         setErrorText(message);
         toast.error(message);
       } finally {
@@ -190,7 +194,10 @@ export function AttachWorkspaceDialog({
             ) : null}
           </div>
           {errorText ? (
-            <p role="alert" className="rounded-control bg-status-red-surface px-3 py-2 text-small text-status-red">
+            <p
+              role="alert"
+              className="rounded-control bg-status-red-surface px-3 py-2 text-small text-status-red"
+            >
               {errorText}
             </p>
           ) : null}
@@ -263,7 +270,10 @@ export function AttachWorkspaceDialog({
           )}
         </div>
         {errorText ? (
-          <p role="alert" className="rounded-control bg-status-red-surface px-3 py-2 text-small text-status-red">
+          <p
+            role="alert"
+            className="rounded-control bg-status-red-surface px-3 py-2 text-small text-status-red"
+          >
             {errorText}
           </p>
         ) : null}

@@ -46,7 +46,9 @@ export interface BotPauseStoreOptions {
 
 export class BotPauseStoreCorruptError extends Error {
   constructor() {
-    super(`Aiden can't read which Bots are paused (${BOT_PAUSES_FILE}). Fix or remove that file to continue.`);
+    super(
+      `Aiden can't read which Bots are paused (${BOT_PAUSES_FILE}). Fix or remove that file to continue.`,
+    );
     this.name = "BotPauseStoreCorruptError";
   }
 }
@@ -117,7 +119,8 @@ export function createBotPauseStore(options: BotPauseStoreOptions): BotPauseStor
     rejectUnsafeWrite: true,
   });
 
-  const unreadable = async () => (await store.loadedFromCorruptFile()) || (await store.loadedFromUnsafeFile());
+  const unreadable = async () =>
+    (await store.loadedFromCorruptFile()) || (await store.loadedFromUnsafeFile());
 
   /** The parsed file, or a throw when it cannot be trusted. */
   async function readable(): Promise<BotPauseState> {

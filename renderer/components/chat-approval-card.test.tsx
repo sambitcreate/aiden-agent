@@ -3,11 +3,20 @@ import * as React from "react";
 import assert from "node:assert/strict";
 import { afterEach, mock, test } from "node:test";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { ApprovalStatusLine, ChatApprovalCard, revealApprovalCard, type ApprovalStatus, type ChatApprovalDecisionOptions } from "./chat-approval-card";
+import {
+  ApprovalStatusLine,
+  ChatApprovalCard,
+  revealApprovalCard,
+  type ApprovalStatus,
+  type ChatApprovalDecisionOptions,
+} from "./chat-approval-card";
 import { TooltipProvider } from "./ui";
 import { openLayer } from "../lib/layer-stack";
 import type { ApprovalPrompt } from "../lib/ipc";
-import type { AssistantAutomationApprovalDetails, ScheduledTaskApprovalDetails } from "../shared/assistant";
+import type {
+  AssistantAutomationApprovalDetails,
+  ScheduledTaskApprovalDetails,
+} from "../shared/assistant";
 import type { HookProposalApprovalDetails } from "../shared/hook-proposal-approval";
 import { toolApprovalPreview } from "../shared/tool-approval-preview";
 import { detectedKeyboardPlatform } from "../shared/keybindings";
@@ -39,9 +48,14 @@ test("a command approval asks whether to run it on the Mac and shows the exact c
   });
 
   assert.equal(screen.getByRole("region", { name: "Run on your Mac?" }), card);
-  assert.match(card.querySelector("#approval-summary-approval-1")?.textContent ?? "", /rm -rf dist && npm ci$/u);
+  assert.match(
+    card.querySelector("#approval-summary-approval-1")?.textContent ?? "",
+    /rm -rf dist && npm ci$/u,
+  );
   assert.deepEqual(
-    within(card).getAllByRole("button").map((button) => button.getAttribute("aria-label") ?? button.textContent),
+    within(card)
+      .getAllByRole("button")
+      .map((button) => button.getAttribute("aria-label") ?? button.textContent),
     ["Copy command", "Deny", "Allow once", "More ways to allow"],
   );
 
@@ -61,7 +75,11 @@ test("a command with a description opens on what it will do and flips to the exa
     preview: toolApprovalPreview("run_command", { command }),
     reading: {
       explanation: "Clears the app cache and installs the helper",
-      tags: [{ label: "Runs a script from the internet", tone: "risk" }, { label: "Deletes files", tone: "risk" }, { label: "Makes folder out", tone: "calm" }],
+      tags: [
+        { label: "Runs a script from the internet", tone: "risk" },
+        { label: "Deletes files", tone: "risk" },
+        { label: "Makes folder out", tone: "calm" },
+      ],
     },
     scopes: ["once"],
   });
@@ -71,17 +89,24 @@ test("a command with a description opens on what it will do and flips to the exa
   assert.doesNotMatch(card.textContent ?? "", /curl -fsSL/u, "the command stays one flip away");
   assert.equal(within(card).queryByRole("button", { name: "Copy command" }), null);
   const tags = within(card).getByRole("list", { name: "What Aiden sees in this command" });
-  assert.deepEqual(within(tags).getAllByRole("listitem").map((item) => item.textContent), [
-    "Runs a script from the internet",
-    "Deletes files",
-    "Makes folder out",
-  ]);
+  assert.deepEqual(
+    within(tags)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent),
+    ["Runs a script from the internet", "Deletes files", "Makes folder out"],
+  );
 
   fireEvent.click(within(card).getByRole("button", { name: "Show the command" }));
-  assert.match(card.querySelector("#approval-summary-approval-1")?.textContent ?? "", /curl -fsSL https:\/\/example\.com\/x\.sh \| sh$/u);
+  assert.match(
+    card.querySelector("#approval-summary-approval-1")?.textContent ?? "",
+    /curl -fsSL https:\/\/example\.com\/x\.sh \| sh$/u,
+  );
   assert.doesNotMatch(card.textContent ?? "", /Clears the app cache/u);
   assert.ok(within(card).getByRole("button", { name: "Copy command" }));
-  assert.ok(within(card).getByRole("list", { name: "What Aiden sees in this command" }), "the tags stay on both sides");
+  assert.ok(
+    within(card).getByRole("list", { name: "What Aiden sees in this command" }),
+    "the tags stay on both sides",
+  );
 
   fireEvent.click(within(card).getByRole("button", { name: "Show what it will do" }));
   assert.match(card.textContent ?? "", /Clears the app cache and installs the helper/u);
@@ -98,12 +123,17 @@ test("a command with no description shows the command as before, with Aiden's ta
     preview: toolApprovalPreview("run_command", { command }),
     reading: { tags: [{ label: "Stops programs", tone: "risk" }] },
   });
-  assert.match(card.querySelector("#approval-summary-approval-1")?.textContent ?? "", /kill -9 1234$/u);
+  assert.match(
+    card.querySelector("#approval-summary-approval-1")?.textContent ?? "",
+    /kill -9 1234$/u,
+  );
   assert.equal(within(card).queryByRole("button", { name: "Show what it will do" }), null);
   assert.equal(within(card).queryByRole("button", { name: "Show the command" }), null);
   assert.doesNotMatch(card.textContent ?? "", /What it will do/u);
   assert.deepEqual(
-    within(within(card).getByRole("list", { name: "What Aiden sees in this command" })).getAllByRole("listitem").map((item) => item.textContent),
+    within(within(card).getByRole("list", { name: "What Aiden sees in this command" }))
+      .getAllByRole("listitem")
+      .map((item) => item.textContent),
     ["Stops programs"],
   );
 });
@@ -116,7 +146,10 @@ test("the Allow menu offers the remembered scopes and sends the one picked", asy
     scopes: ["once", "chat", "always"],
   });
 
-  fireEvent.pointerDown(within(card).getByRole("button", { name: "More ways to allow" }), { button: 0, pointerType: "mouse" });
+  fireEvent.pointerDown(within(card).getByRole("button", { name: "More ways to allow" }), {
+    button: 0,
+    pointerType: "mouse",
+  });
   const items = await screen.findAllByRole("menuitem");
   assert.deepEqual(
     items.map((item) => item.textContent),
@@ -138,11 +171,16 @@ test("under an approval mode a Mac card keeps Allow once and offers the shell fo
   });
   assert.equal(screen.getByRole("region", { name: "Run on your Mac?" }), card);
   assert.ok(within(card).getByRole("button", { name: "Allow once" }));
-  fireEvent.pointerDown(within(card).getByRole("button", { name: "More ways to allow" }), { button: 0, pointerType: "mouse" });
+  fireEvent.pointerDown(within(card).getByRole("button", { name: "More ways to allow" }), {
+    button: 0,
+    pointerType: "mouse",
+  });
   const items = await screen.findAllByRole("menuitem");
   assert.deepEqual(
     items.map((item) => item.textContent),
-    ["Allow in this workspaceWon't ask again before running commands in this workspace. Remove it in Workspace settings."],
+    [
+      "Allow in this workspaceWon't ask again before running commands in this workspace. Remove it in Workspace settings.",
+    ],
   );
   fireEvent.click(items[0]!);
   assert.deepEqual(decisions, [["allow", { scope: "workspace" }]]);
@@ -153,9 +191,16 @@ test("under an approval mode a Mac card keeps Allow once and offers the shell fo
 
 test("a remembered file approval says it covers any later change to that file", async () => {
   // File rules match the tool and path, not the contents, so the hint must not promise an exact change.
-  const { card } = mount({ toolName: "edit_file", summary: "Edit file: src/forecast.ts", scopes: ["once", "chat", "always"] });
+  const { card } = mount({
+    toolName: "edit_file",
+    summary: "Edit file: src/forecast.ts",
+    scopes: ["once", "chat", "always"],
+  });
 
-  fireEvent.pointerDown(within(card).getByRole("button", { name: "More ways to allow" }), { button: 0, pointerType: "mouse" });
+  fireEvent.pointerDown(within(card).getByRole("button", { name: "More ways to allow" }), {
+    button: 0,
+    pointerType: "mouse",
+  });
   assert.deepEqual(
     (await screen.findAllByRole("menuitem")).map((item) => item.textContent),
     [
@@ -179,7 +224,10 @@ test("a file edit shows the lines it removes and adds, labelled for screen reade
   assert.ok(screen.getByRole("region", { name: "Change files on your Mac?" }));
   const change = within(card).getByRole("group", { name: "Change to src/forecast.ts" });
   assert.deepEqual(
-    [...change.querySelectorAll("[data-line]")].map((line) => [line.getAttribute("data-line"), line.textContent]),
+    [...change.querySelectorAll("[data-line]")].map((line) => [
+      line.getAttribute("data-line"),
+      line.textContent,
+    ]),
     [
       ["context", "  const score = hike();"],
       ["removed", "- Removed: return Math.floor(score);"],
@@ -187,14 +235,21 @@ test("a file edit shows the lines it removes and adds, labelled for screen reade
     ],
   );
   assert.ok(within(card).getByText("src/forecast.ts · 1 added, 1 removed"));
-  assert.equal(within(card).queryByRole("button", { name: "More ways to allow" }), null, "no scopes were offered");
+  assert.equal(
+    within(card).queryByRole("button", { name: "More ways to allow" }),
+    null,
+    "no scopes were offered",
+  );
 });
 
 test("a paired host's command summary still shows just the command", () => {
   const { card } = mount({ toolName: "run_command", summary: "Run command: git status" });
 
   assert.ok(screen.getByRole("region", { name: "Run on your Mac?" }));
-  assert.match(card.querySelector("#approval-summary-approval-1")?.textContent ?? "", /^\$ git status$/u);
+  assert.match(
+    card.querySelector("#approval-summary-approval-1")?.textContent ?? "",
+    /^\$ git status$/u,
+  );
   assert.ok(within(card).getByText("Aiden is paused until you choose."));
   cleanup();
 
@@ -205,22 +260,38 @@ test("a paired host's command summary still shows just the command", () => {
 });
 
 test("a subagent's web search reaches the owner as a plain card with its whole request", () => {
-  const summary = subagentOutboundApprovalSummaryV2({ toolName: "web_search", kind: "web" }, { query: "best hikes near Boulder" });
+  const summary = subagentOutboundApprovalSummaryV2(
+    { toolName: "web_search", kind: "web" },
+    { query: "best hikes near Boulder" },
+  );
   const { card, decisions } = mount({ toolName: "web_search", summary });
 
   assert.ok(screen.getByRole("region", { name: "Review before Web search" }));
-  assert.equal(within(card).getByText(/^Search the public web/u).textContent, summary, "every line of the request is shown");
+  assert.equal(
+    within(card).getByText(/^Search the public web/u).textContent,
+    summary,
+    "every line of the request is shown",
+  );
   fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
   assert.deepEqual(decisions, [["allow", undefined]]);
 });
 
 test("a call that does not touch the Mac reads Review before its tool, and the site it reaches", () => {
   mount({ toolName: "web_fetch", summary: "Fetch https://Docs.Example.com/guide?page=2" });
-  assert.ok(screen.getByRole("region", { name: "Review before Fetch web page → docs.example.com" }));
+  assert.ok(
+    screen.getByRole("region", { name: "Review before Fetch web page → docs.example.com" }),
+  );
   cleanup();
   // A link inside prose names only its host: no trailing punctuation, sign-in or port.
-  mount({ toolName: "calendar__create_event", summary: "Create “Review” on https://calendar.example.com, Tue 10:00" });
-  assert.ok(screen.getByRole("region", { name: "Review before Calendar create event → calendar.example.com" }));
+  mount({
+    toolName: "calendar__create_event",
+    summary: "Create “Review” on https://calendar.example.com, Tue 10:00",
+  });
+  assert.ok(
+    screen.getByRole("region", {
+      name: "Review before Calendar create event → calendar.example.com",
+    }),
+  );
   cleanup();
   mount({ toolName: "web_fetch", summary: "Fetch (https://me:pw@api.example.com:8443/v1)." });
   assert.ok(screen.getByRole("region", { name: "Review before Fetch web page → api.example.com" }));
@@ -234,7 +305,13 @@ test("a Bot's card names the Bot, keeps its own Always, and notes how often it w
   render(
     <TooltipProvider>
       <ChatApprovalCard
-        pending={{ approvalId: "wait-1", toolCallId: "call-1", toolName: "calendar__create_event", summary: "Create event", scopes: ["once", "always"] }}
+        pending={{
+          approvalId: "wait-1",
+          toolCallId: "call-1",
+          toolName: "calendar__create_event",
+          summary: "Create event",
+          scopes: ["once", "always"],
+        }}
         deciding={false}
         onDecide={(decision, options) => decisions.push([decision, options])}
         requester="Ada"
@@ -243,13 +320,24 @@ test("a Bot's card names the Bot, keeps its own Always, and notes how often it w
       />
     </TooltipProvider>,
   );
-  const card = screen.getByRole("region", { name: "Request from Ada: Review before Calendar create event" });
+  const card = screen.getByRole("region", {
+    name: "Request from Ada: Review before Calendar create event",
+  });
   assert.ok(within(card).getByText("Ada is paused until you choose."));
   assert.ok(within(card).getByText("You’ve allowed this 3 times in the last 2 weeks."));
-  assert.equal(screen.getByRole("status").textContent, "Ada needs approval for Calendar create event");
-  fireEvent.pointerDown(within(card).getByRole("button", { name: "More ways to allow" }), { button: 0, pointerType: "mouse" });
+  assert.equal(
+    screen.getByRole("status").textContent,
+    "Ada needs approval for Calendar create event",
+  );
+  fireEvent.pointerDown(within(card).getByRole("button", { name: "More ways to allow" }), {
+    button: 0,
+    pointerType: "mouse",
+  });
   const items = await screen.findAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Always allow for AdaAda won’t ask again for this."]);
+  assert.deepEqual(
+    items.map((item) => item.textContent),
+    ["Always allow for AdaAda won’t ask again for this."],
+  );
   fireEvent.click(items[0]!);
   assert.deepEqual(decisions, [["allow", { scope: "always" }]]);
 });
@@ -299,7 +387,12 @@ test("a card that may only be allowed on another device shows its request and on
   render(
     <TooltipProvider>
       <ChatApprovalCard
-        pending={{ approvalId: "wait-2", toolCallId: "call-2", toolName: "send_email", summary: "Send the update to the team." }}
+        pending={{
+          approvalId: "wait-2",
+          toolCallId: "call-2",
+          toolName: "send_email",
+          summary: "Send the update to the team.",
+        }}
         deciding={false}
         onDecide={() => undefined}
         requester="Ada"
@@ -310,7 +403,12 @@ test("a card that may only be allowed on another device shows its request and on
   const card = screen.getByRole("region");
   assert.ok(within(card).getByText("Send the update to the team."));
   assert.ok(within(card).getByText("Allow it on Studio Mac."));
-  assert.deepEqual(within(card).getAllByRole("button").map((button) => button.textContent), ["Deny"]);
+  assert.deepEqual(
+    within(card)
+      .getAllByRole("button")
+      .map((button) => button.textContent),
+    ["Deny"],
+  );
 });
 
 test("an answered or stale card collapses to one status line", () => {
@@ -335,7 +433,9 @@ test("an approval that cannot be allowed here offers only Deny", () => {
   const { card } = mount({ toolName: "run_command", summary: "Run command: ls", canAllow: false });
 
   assert.deepEqual(
-    within(card).getAllByRole("button").map((button) => button.textContent),
+    within(card)
+      .getAllByRole("button")
+      .map((button) => button.textContent),
     ["Deny"],
   );
   assert.ok(within(card).getByText(/cannot safely authorize this action from this view/u));
@@ -344,7 +444,9 @@ test("an approval that cannot be allowed here offers only Deny", () => {
 const LOCAL_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 /** A scheduled-task approval as the schedule tool hands it to the card. */
-function scheduledTask(overrides: Partial<ScheduledTaskApprovalDetails> = {}): ScheduledTaskApprovalDetails {
+function scheduledTask(
+  overrides: Partial<ScheduledTaskApprovalDetails> = {},
+): ScheduledTaskApprovalDetails {
   return {
     kind: "scheduled-task",
     action: "create",
@@ -376,7 +478,10 @@ function scheduledTask(overrides: Partial<ScheduledTaskApprovalDetails> = {}): S
 
 function mountSchedule(details: ScheduledTaskApprovalDetails | AssistantAutomationApprovalDetails) {
   return mount({
-    toolName: details.kind === "scheduled-task" || details.action === "create" ? "schedule_task" : "edit_automation",
+    toolName:
+      details.kind === "scheduled-task" || details.action === "create"
+        ? "schedule_task"
+        : "edit_automation",
     summary: "Create scheduled task",
     details: details as unknown as ApprovalPrompt["details"],
   });
@@ -385,7 +490,9 @@ function mountSchedule(details: ScheduledTaskApprovalDetails | AssistantAutomati
 /** Each detail row as its label and what it says, the way a screen reader pairs them. */
 function facts(card: HTMLElement): Record<string, string> {
   return Object.fromEntries(
-    within(card).getAllByRole("term").map((term) => [term.textContent, term.nextElementSibling?.textContent ?? ""]),
+    within(card)
+      .getAllByRole("term")
+      .map((term) => [term.textContent, term.nextElementSibling?.textContent ?? ""]),
   );
 }
 
@@ -394,11 +501,18 @@ test("a scheduled task reads as the task itself: its question, cadence, next run
 
   assert.equal(screen.getByRole("region", { name: "Save this scheduled task?" }), card);
   assert.ok(within(card).getByText("Morning briefing"));
-  assert.ok(within(card).getByText(/^Weekdays at 9:00\sAM$/u), "the cadence is plain words, never cron");
+  assert.ok(
+    within(card).getByText(/^Weekdays at 9:00\sAM$/u),
+    "the cadence is plain words, never cron",
+  );
   assert.equal(within(card).queryByText(/0 9 \* \* 1-5/u), null);
   assert.ok(within(card).getByText(/^Next run /u));
   const rows = facts(card);
-  assert.match(rows["Runs in"] ?? "", /^Aiden Agent.*workspace-1$/u, "the project and the exact id it authorizes");
+  assert.match(
+    rows["Runs in"] ?? "",
+    /^Aiden Agent.*workspace-1$/u,
+    "the project and the exact id it authorizes",
+  );
   assert.equal(rows.Access, "Read-only");
   assert.equal(rows.Model, "OpenRouter · Qwen3 Coder");
   assert.equal(rows.Notifications, "On");
@@ -407,8 +521,16 @@ test("a scheduled task reads as the task itself: its question, cadence, next run
     within(card).getByLabelText("Instructions").textContent,
     "Summarize overnight commits.\nFlag anything that broke the build.",
   );
-  assert.ok(within(card).getByText("Scheduled work runs on this computer while Aiden is open and it's awake."));
-  assert.equal(within(card).queryAllByRole("note").length, 0, "a task that will run as asked needs no warning");
+  assert.ok(
+    within(card).getByText(
+      "Scheduled work runs on this computer while Aiden is open and it's awake.",
+    ),
+  );
+  assert.equal(
+    within(card).queryAllByRole("note").length,
+    0,
+    "a task that will run as asked needs no warning",
+  );
 
   fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
   fireEvent.click(within(card).getByRole("button", { name: "Deny" }));
@@ -419,25 +541,33 @@ test("a scheduled task reads as the task itself: its question, cadence, next run
 });
 
 test("where a task runs follows its scope: connectors by name and id, the whole computer, or no project", () => {
-  const { card } = mountSchedule(scheduledTask({
-    permission: "full",
-    workspaceId: null,
-    workspaceName: null,
-    mcpServerIds: ["gmail-1", "linear-2"],
-    mcpServerNames: ["Gmail", "Linear"],
-  }));
-  const connectors = within(card).getAllByRole("listitem").map((item) => item.textContent);
+  const { card } = mountSchedule(
+    scheduledTask({
+      permission: "full",
+      workspaceId: null,
+      workspaceName: null,
+      mcpServerIds: ["gmail-1", "linear-2"],
+      mcpServerNames: ["Gmail", "Linear"],
+    }),
+  );
+  const connectors = within(card)
+    .getAllByRole("listitem")
+    .map((item) => item.textContent);
   assert.equal(connectors.length, 2);
   assert.match(connectors[0] ?? "", /^Gmail .*gmail-1$/u);
   assert.match(connectors[1] ?? "", /^Linear .*linear-2$/u);
   assert.equal(facts(card).Access, "Full access");
   cleanup();
 
-  const { card: global } = mountSchedule(scheduledTask({ permission: "full", workspaceId: null, workspaceName: null }));
+  const { card: global } = mountSchedule(
+    scheduledTask({ permission: "full", workspaceId: null, workspaceName: null }),
+  );
   assert.equal(facts(global)["Runs in"], "Anywhere on your computer");
   cleanup();
 
-  const { card: unscoped } = mountSchedule(scheduledTask({ workspaceId: null, workspaceName: null }));
+  const { card: unscoped } = mountSchedule(
+    scheduledTask({ workspaceId: null, workspaceName: null }),
+  );
   assert.equal(facts(unscoped)["Runs in"], "No project");
   assert.equal(facts(unscoped).Access, "Read-only");
 });
@@ -449,19 +579,30 @@ test("a next run is named only while the task will run on its own, and schedulin
     within(off).getByRole("note").textContent,
     "Scheduling is off. This task will be saved but will not run automatically until you enable scheduling.",
   );
-  assert.ok(within(off).getByRole("button", { name: "Allow once" }), "saving stays possible while scheduling is off");
+  assert.ok(
+    within(off).getByRole("button", { name: "Allow once" }),
+    "saving stays possible while scheduling is off",
+  );
   cleanup();
 
-  const { card: paused } = mountSchedule(scheduledTask({ action: "update", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }));
+  const { card: paused } = mountSchedule(
+    scheduledTask({ action: "update", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }),
+  );
   assert.ok(screen.getByRole("region", { name: "Update this scheduled task?" }));
   assert.equal(within(paused).queryByText(/^Next run /u), null);
   assert.equal(within(paused).getByRole("note").textContent, "This task stays paused.");
   cleanup();
 
-  const { card: removing } = mountSchedule(scheduledTask({ action: "remove", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }));
+  const { card: removing } = mountSchedule(
+    scheduledTask({ action: "remove", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }),
+  );
   assert.ok(screen.getByRole("region", { name: "Delete this scheduled task?" }));
   assert.equal(within(removing).queryByText(/^Next run /u), null);
-  assert.equal(within(removing).queryAllByRole("note").length, 0, "a deleted task is not described as paused");
+  assert.equal(
+    within(removing).queryAllByRole("note").length,
+    0,
+    "a deleted task is not described as paused",
+  );
   cleanup();
 
   for (const [action, title] of [
@@ -477,19 +618,33 @@ test("a next run is named only while the task will run on its own, and schedulin
 
 test("pausing and resuming describe the task as it will be once approved", () => {
   // A proposal carries the task's state while it waits: resuming a paused task, pausing a running one.
-  const { card: resuming } = mountSchedule(scheduledTask({ action: "resume", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }));
+  const { card: resuming } = mountSchedule(
+    scheduledTask({ action: "resume", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }),
+  );
   assert.ok(within(resuming).getByText(/^Next run /u), "a resumed task runs on its own again");
   assert.equal(within(resuming).queryAllByRole("note").length, 0);
   cleanup();
 
-  const { card: pausing } = mountSchedule(scheduledTask({ action: "pause", taskId: "task-1", expectedUpdatedAt: 5, enabled: true }));
+  const { card: pausing } = mountSchedule(
+    scheduledTask({ action: "pause", taskId: "task-1", expectedUpdatedAt: 5, enabled: true }),
+  );
   assert.equal(within(pausing).queryByText(/^Next run /u), null, "a paused task has no next run");
-  assert.equal(within(pausing).queryAllByRole("note").length, 0, "the question already says it pauses");
+  assert.equal(
+    within(pausing).queryAllByRole("note").length,
+    0,
+    "the question already says it pauses",
+  );
   cleanup();
 
-  const { card: runningNow } = mountSchedule(scheduledTask({ action: "run_now", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }));
+  const { card: runningNow } = mountSchedule(
+    scheduledTask({ action: "run_now", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }),
+  );
   assert.equal(within(runningNow).queryByText(/^Next run /u), null);
-  assert.equal(within(runningNow).getByRole("note").textContent, "This task stays paused.", "running it once leaves it paused");
+  assert.equal(
+    within(runningNow).getByRole("note").textContent,
+    "This task stays paused.",
+    "running it once leaves it paused",
+  );
 });
 
 test("a tall schedule review scrolls as one labelled region with the notes outside it", () => {
@@ -499,7 +654,11 @@ test("a tall schedule review scrolls as one labelled region with the notes outsi
   assert.ok(within(review).getByText("Morning briefing"));
   assert.ok(within(review).getByLabelText("Instructions"));
   assert.equal(within(review).queryAllByRole("note").length, 0);
-  assert.equal(within(card).getAllByRole("note").length, 1, "the scheduling-off note stays in view");
+  assert.equal(
+    within(card).getAllByRole("note").length,
+    1,
+    "the scheduling-off note stays in view",
+  );
 });
 
 test("a script task shows the exact script it will run and no model", () => {
@@ -553,7 +712,10 @@ test("an automation change keeps its own question and the same review", () => {
 
 function mountWithComposer(
   pending: Partial<ApprovalPrompt> & Pick<ApprovalPrompt, "toolName" | "summary">,
-  { keyboardShortcuts = true, deciding = false }: { keyboardShortcuts?: boolean; deciding?: boolean } = {},
+  {
+    keyboardShortcuts = true,
+    deciding = false,
+  }: { keyboardShortcuts?: boolean; deciding?: boolean } = {},
 ) {
   const decisions: Array<[string, ChatApprovalDecisionOptions | undefined]> = [];
   render(
@@ -653,7 +815,10 @@ test("approval keys stay off while a menu is open, without the modifier, or whil
 });
 
 test("only a card that takes approval keys answers them, and one that can't allow only denies", () => {
-  const passive = mountWithComposer({ toolName: "bash", summary: "npm test" }, { keyboardShortcuts: false });
+  const passive = mountWithComposer(
+    { toolName: "bash", summary: "npm test" },
+    { keyboardShortcuts: false },
+  );
   fireEvent.keyDown(passive.composer, primaryKey("Enter"));
   fireEvent.keyDown(passive.composer, primaryKey("Backspace"));
   assert.deepEqual(passive.decisions, []);
@@ -674,13 +839,23 @@ test("while Aiden Live is on an approval, the card says whether to speak or tap"
   };
   const view = render(
     <TooltipProvider>
-      <ChatApprovalCard pending={pending} deciding={false} onDecide={() => undefined} liveVoice="voice" />
+      <ChatApprovalCard
+        pending={pending}
+        deciding={false}
+        onDecide={() => undefined}
+        liveVoice="voice"
+      />
     </TooltipProvider>,
   );
   assert.equal(screen.getByRole("note").textContent, "Live is listening. Say “allow” or “deny”.");
   view.rerender(
     <TooltipProvider>
-      <ChatApprovalCard pending={pending} deciding={false} onDecide={() => undefined} liveVoice="tap" />
+      <ChatApprovalCard
+        pending={pending}
+        deciding={false}
+        onDecide={() => undefined}
+        liveVoice="tap"
+      />
     </TooltipProvider>,
   );
   assert.equal(screen.getByRole("note").textContent, "Live can’t answer this one. Tap to choose.");
@@ -693,7 +868,9 @@ test("while Aiden Live is on an approval, the card says whether to speak or tap"
 });
 
 /** A hook the agent proposed, as the hooks tool hands it to the card. */
-function hookProposal(overrides: Partial<HookProposalApprovalDetails> = {}): HookProposalApprovalDetails {
+function hookProposal(
+  overrides: Partial<HookProposalApprovalDetails> = {},
+): HookProposalApprovalDetails {
   return {
     kind: "hook-proposal",
     action: "create",
@@ -713,7 +890,10 @@ function hookProposal(overrides: Partial<HookProposalApprovalDetails> = {}): Hoo
   };
 }
 
-function mountHook(details: HookProposalApprovalDetails | Record<string, unknown>, extra: Partial<ApprovalPrompt> = {}) {
+function mountHook(
+  details: HookProposalApprovalDetails | Record<string, unknown>,
+  extra: Partial<ApprovalPrompt> = {},
+) {
   return mount({
     toolName: "hooks",
     summary: "Aiden wants to add a hook. Review and approve it on the computer running this chat.",
@@ -742,12 +922,21 @@ test("a proposed hook shows where and when it runs and its whole command, and is
     "jq -r '.tool_input.command' | grep -q 'push -f' && exit 2 || exit 0",
   );
   assert.deepEqual(
-    within(card).getAllByRole("button").map((button) => button.getAttribute("aria-label") ?? button.textContent),
+    within(card)
+      .getAllByRole("button")
+      .map((button) => button.getAttribute("aria-label") ?? button.textContent),
     ["Dismiss", "Apply"],
   );
   fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
   fireEvent.click(within(card).getByRole("button", { name: "Dismiss" }));
-  assert.deepEqual(decisions, [["allow", undefined], ["deny", undefined]], "Apply and Dismiss send the same answers Allow and Deny did");
+  assert.deepEqual(
+    decisions,
+    [
+      ["allow", undefined],
+      ["deny", undefined],
+    ],
+    "Apply and Dismiss send the same answers Allow and Deny did",
+  );
 });
 
 test("a proposed hook shows a matcher only for events that filter on it", () => {
@@ -764,10 +953,18 @@ test("a hook change shows the current command beside the new one", () => {
   const { card } = mountHook(
     hookProposal({
       action: "update",
-      command: "npx prettier --write \"$FILE\"",
+      command: 'npx prettier --write "$FILE"',
       event: "PostToolUse",
       matcher: "write_file",
-      previous: { event: "PostToolUse", matcher: "write_file", command: "npx prettier --write .", timeoutSeconds: 10, async: false, failClosed: false, envAllow: [] },
+      previous: {
+        event: "PostToolUse",
+        matcher: "write_file",
+        command: "npx prettier --write .",
+        timeoutSeconds: 10,
+        async: false,
+        failClosed: false,
+        envAllow: [],
+      },
     }),
   );
   assert.ok(screen.getByRole("region", { name: "Change this hook?" }));
@@ -775,7 +972,10 @@ test("a hook change shows the current command beside the new one", () => {
   assert.equal(current.textContent, "npx prettier --write .");
   // A long command scrolls inside its well, so the well takes keyboard focus.
   assert.equal(current.tabIndex, 0);
-  assert.equal(within(card).getByRole("group", { name: "New command" }).textContent, "npx prettier --write \"$FILE\"");
+  assert.equal(
+    within(card).getByRole("group", { name: "New command" }).textContent,
+    'npx prettier --write "$FILE"',
+  );
   // The old and new time limits both read out, each named for screen readers rather than by strike-through alone.
   const timeLimit = facts(card)["Time limit"];
   assert.match(timeLimit, /Before: 10 s/u);
@@ -790,7 +990,15 @@ test("a background hook says so, and a change to a long-running background hook 
       matcher: "write_file",
       command: "./scripts/index.sh",
       async: true,
-      previous: { event: "PostToolUse", matcher: "write_file", command: "./scripts/index.sh", timeoutSeconds: 600, async: true, failClosed: false, envAllow: [] },
+      previous: {
+        event: "PostToolUse",
+        matcher: "write_file",
+        command: "./scripts/index.sh",
+        timeoutSeconds: 600,
+        async: true,
+        failClosed: false,
+        envAllow: [],
+      },
     }),
   );
   assert.match(facts(card).Runs, /In the background/u);
@@ -799,12 +1007,27 @@ test("a background hook says so, and a change to a long-running background hook 
 
 test("a proposed repo hook names the script files its approval covers, and warns when it can't follow them all", () => {
   const { card } = mountHook(
-    hookProposal({ command: "./scripts/lint.sh && npm run check", scriptFiles: ["scripts/lint.sh"], scriptCoverage: "partial" }),
+    hookProposal({
+      command: "./scripts/lint.sh && npm run check",
+      scriptFiles: ["scripts/lint.sh"],
+      scriptCoverage: "partial",
+    }),
   );
   const files = within(card).getByRole("list", { name: "Script files" });
-  assert.deepEqual(within(files).getAllByRole("listitem").map((item) => item.textContent), ["scripts/lint.sh"]);
-  assert.match(within(card).getByRole("note").textContent ?? "", /can’t check every file this command runs/u);
-  assert.ok(within(card).getByRole("button", { name: "Apply" }), "a partial check still lets the owner decide");
+  assert.deepEqual(
+    within(files)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent),
+    ["scripts/lint.sh"],
+  );
+  assert.match(
+    within(card).getByRole("note").textContent ?? "",
+    /can’t check every file this command runs/u,
+  );
+  assert.ok(
+    within(card).getByRole("button", { name: "Apply" }),
+    "a partial check still lets the owner decide",
+  );
   cleanup();
 
   const { card: plain } = mountHook(hookProposal());
@@ -831,7 +1054,11 @@ test("a malformed hook proposal is blocked instead of shown", () => {
 });
 
 test("arriving at the card from Go to approval scrolls it into view, focuses it without deciding, and tints it for a moment", () => {
-  const { card, decisions } = mount({ toolName: "run_command", summary: "Run command: npm test", scopes: ["once"] });
+  const { card, decisions } = mount({
+    toolName: "run_command",
+    summary: "Run command: npm test",
+    scopes: ["once"],
+  });
   const scrolls: ScrollIntoViewOptions[] = [];
   card.scrollIntoView = (options?: boolean | ScrollIntoViewOptions) => {
     if (typeof options === "object") scrolls.push(options);
@@ -850,8 +1077,15 @@ test("arriving at the card from Go to approval scrolls it into view, focuses it 
     root.dataset.reduceMotion = "true";
     revealApprovalCard(card);
     assert.equal(document.activeElement, card);
-    assert.deepEqual(scrolls[1], { block: "nearest", behavior: "auto" }, "Reduce Motion still scrolls, at once");
-    assert.ok(card.hasAttribute("data-approval-arrival"), "and still shows where focus landed, held still");
+    assert.deepEqual(
+      scrolls[1],
+      { block: "nearest", behavior: "auto" },
+      "Reduce Motion still scrolls, at once",
+    );
+    assert.ok(
+      card.hasAttribute("data-approval-arrival"),
+      "and still shows where focus landed, held still",
+    );
     mock.timers.tick(1_199);
     assert.ok(card.hasAttribute("data-approval-arrival"));
     mock.timers.tick(1);
@@ -877,8 +1111,22 @@ test("the next approval updates the same status line and starts with fresh choic
       targetApp: "Safari",
       targetTitle: "Registration",
       rows: [
-        { order: 0, elementIndex: 3, label: "First name", value: "Ada", sourceLabel: "First name", sourceLine: 1 },
-        { order: 1, elementIndex: 4, label: "Last name", value: "Lovelace", sourceLabel: "Last name", sourceLine: 2 },
+        {
+          order: 0,
+          elementIndex: 3,
+          label: "First name",
+          value: "Ada",
+          sourceLabel: "First name",
+          sourceLine: 1,
+        },
+        {
+          order: 1,
+          elementIndex: 4,
+          label: "Last name",
+          value: "Lovelace",
+          sourceLabel: "Last name",
+          sourceLine: 2,
+        },
       ],
       skippedRows: [],
       fillCount: 2,
@@ -888,7 +1136,12 @@ test("the next approval updates the same status line and starts with fresh choic
   });
   const card = (pending: ApprovalPrompt, pendingCount: number) => (
     <TooltipProvider>
-      <ChatApprovalCard pending={pending} pendingCount={pendingCount} deciding={false} onDecide={() => undefined} />
+      <ChatApprovalCard
+        pending={pending}
+        pendingCount={pendingCount}
+        deciding={false}
+        onDecide={() => undefined}
+      />
     </TooltipProvider>
   );
   const view = render(card(formFill("approval-a"), 2));
@@ -902,6 +1155,9 @@ test("the next approval updates the same status line and starts with fresh choic
   // so the next approval changes the text of the one already on screen.
   assert.equal(screen.getByRole("status"), status);
   assert.doesNotMatch(status.textContent ?? "", /1 of/u);
-  assert.ok(screen.getAllByRole("checkbox").every((box) => (box as HTMLInputElement).checked), "no field carries over unticked");
+  assert.ok(
+    screen.getAllByRole("checkbox").every((box) => (box as HTMLInputElement).checked),
+    "no field carries over unticked",
+  );
   assert.ok(screen.getByRole("button", { name: "Fill 2 fields" }));
 });

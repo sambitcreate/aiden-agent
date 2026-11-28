@@ -31,8 +31,12 @@ const PERMANENT_OPEN_ERRORS: ReadonlyArray<{ pattern: RegExp; guidance: string }
   },
 ];
 
-export function workspaceFileOpenErrorPresentation(message: string): WorkspaceFileOpenErrorPresentation {
+export function workspaceFileOpenErrorPresentation(
+  message: string,
+): WorkspaceFileOpenErrorPresentation {
   const trimmed = message.trim();
   const match = PERMANENT_OPEN_ERRORS.find(({ pattern }) => pattern.test(trimmed));
-  return match ? { retryable: false, guidance: match.guidance } : { retryable: true, guidance: null };
+  return match
+    ? { retryable: false, guidance: match.guidance }
+    : { retryable: true, guidance: null };
 }

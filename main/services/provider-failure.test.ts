@@ -17,63 +17,84 @@ import { normalizeDiagnosticFields } from "./diagnostics-contract.js";
 const PRIVATE_CANARY = "PRIVATE_PROVIDER_DETAIL_7dbfe9";
 
 test("main-only provider diagnostics distinguish model availability without persisting provider text", () => {
-  const outcome = { kind: "provider_failed" as const, reason: "request-failed" as const, attempts: 2,
-    finalMessage: { errorMessage: `404 model private-model not found ${PRIVATE_CANARY} Bearer private-auth https://private-endpoint prompt=private-task` } };
+  const outcome = {
+    kind: "provider_failed" as const,
+    reason: "request-failed" as const,
+    attempts: 2,
+    finalMessage: {
+      errorMessage: `404 model private-model not found ${PRIVATE_CANARY} Bearer private-auth https://private-endpoint prompt=private-task`,
+    },
+  };
   const fields = providerFailureDiagnosticFields(outcome);
   assert.equal(fields.providerCategory, "model_unavailable");
   assert.equal(fields.failurePhase, "provider-request");
   assert.equal(fields.httpStatus, undefined);
   assert.equal(providerFailureFromTerminalOutcome(outcome).category, "invalid_request");
   assert.doesNotMatch(JSON.stringify(fields), /PRIVATE_PROVIDER|private-/);
-  const changedText = providerFailureDiagnosticFields({ ...outcome, finalMessage: { errorMessage: "model another-model not found" } });
+  const changedText = providerFailureDiagnosticFields({
+    ...outcome,
+    finalMessage: { errorMessage: "model another-model not found" },
+  });
   assert.equal(changedText.fingerprint, fields.fingerprint);
-  const invalid = providerFailureDiagnosticFields({ ...outcome, finalMessage: { errorMessage: "400 invalid_request private" } });
+  const invalid = providerFailureDiagnosticFields({
+    ...outcome,
+    finalMessage: { errorMessage: "400 invalid_request private" },
+  });
   assert.equal(invalid.providerCategory, "invalid_request");
   assert.notEqual(invalid.fingerprint, fields.fingerprint);
-  assert.equal(providerFailureDiagnosticFields({ ...outcome, finalMessage: undefined }).providerCategory, "unknown");
-  assert.equal(providerFailureDiagnosticFields({ ...outcome, reason: "interrupted" }).providerCategory, "interrupted");
-  assert.equal(providerFailureDiagnosticFields({ ...outcome, reason: "compaction-failed" }).failurePhase, "provider-compaction");
+  assert.equal(
+    providerFailureDiagnosticFields({ ...outcome, finalMessage: undefined }).providerCategory,
+    "unknown",
+  );
+  assert.equal(
+    providerFailureDiagnosticFields({ ...outcome, reason: "interrupted" }).providerCategory,
+    "interrupted",
+  );
+  assert.equal(
+    providerFailureDiagnosticFields({ ...outcome, reason: "compaction-failed" }).failurePhase,
+    "provider-compaction",
+  );
   const connection = providerFailureDiagnosticFields({
-    kind: "provider_failed", reason: "request-failed", attempts: 2,
+    kind: "provider_failed",
+    reason: "request-failed",
+    attempts: 2,
     finalMessage: { errorMessage: `Connection error. ${PRIVATE_CANARY}` },
   });
   assert.equal(connection.providerCategory, "network");
   assert.equal(connection.transportCause, "connection-error");
   assert.doesNotMatch(JSON.stringify(connection), /PRIVATE_PROVIDER_DETAIL/u);
   const hangUp = providerFailureDiagnosticFields({
-    kind: "provider_failed", reason: "request-failed", attempts: 1,
+    kind: "provider_failed",
+    reason: "request-failed",
+    attempts: 1,
     finalMessage: { errorMessage: `socket hang up ${PRIVATE_CANARY}` },
   });
   assert.equal(hangUp.providerCategory, "network");
   assert.equal(hangUp.transportCause, "socket-closed");
   const codexLimit = providerFailureDiagnosticFields({
-    kind: "provider_failed", reason: "request-failed", attempts: 1,
-    finalMessage: { errorMessage: `Responses websocket connection limit reached ${PRIVATE_CANARY}` },
+    kind: "provider_failed",
+    reason: "request-failed",
+    attempts: 1,
+    finalMessage: {
+      errorMessage: `Responses websocket connection limit reached ${PRIVATE_CANARY}`,
+    },
   });
   assert.equal(codexLimit.providerCategory, "network");
   assert.equal(codexLimit.transportCause, "websocket-closed");
   assert.equal(normalizeDiagnosticFields(codexLimit)?.transportCause, "websocket-closed");
 });
 
-function classify(
-  reason: ProviderFailureReason,
-  errorMessage?: string,
-  attempts = 1,
-) {
+function classify(reason: ProviderFailureReason, errorMessage?: string, attempts = 1) {
   return providerFailureFromTerminalOutcome({
     kind: "provider_failed",
     reason,
     attempts,
-    finalMessage: errorMessage
-      ? { stopReason: "error", errorMessage }
-      : undefined,
+    finalMessage: errorMessage ? { stopReason: "error", errorMessage } : undefined,
   });
 }
 
 test("provider failures map to a closed privacy-safe category", () => {
-  const cases: Array<
-    [ProviderFailureReason, string | undefined, string]
-  > = [
+  const cases: Array<[ProviderFailureReason, string | undefined, string]> = [
     ["request-failed", `Connection error. ${PRIVATE_CANARY}`, "network"],
     ["request-failed", `request timed out ${PRIVATE_CANARY}`, "timeout"],
     // Codex closes its WebSocket after 60 minutes; Pi 1.6 retries it, and a
@@ -82,10 +103,22 @@ test("provider failures map to a closed privacy-safe category", () => {
     ["request-failed", `websocket_connection_limit_reached ${PRIVATE_CANARY}`, "network"],
     ["request-failed", `503 service unavailable ${PRIVATE_CANARY}`, "service_unavailable"],
     ["request-failed", `503 model service unavailable ${PRIVATE_CANARY}`, "service_unavailable"],
-    ["request-failed", `404 model gemini-old is not found or unavailable ${PRIVATE_CANARY}`, "invalid_request"],
+    [
+      "request-failed",
+      `404 model gemini-old is not found or unavailable ${PRIVATE_CANARY}`,
+      "invalid_request",
+    ],
     ["request-failed", `429 rate limit ${PRIVATE_CANARY}`, "rate_limit"],
-    ["request-failed", `You have hit your ChatGPT usage limit (plus plan). Try again in ~42 min. ${PRIVATE_CANARY}`, "rate_limit"],
-    ["request-failed", "Claude is still at its usage limit, and Aiden stopped waiting for it a few minutes ago.", "rate_limit"],
+    [
+      "request-failed",
+      `You have hit your ChatGPT usage limit (plus plan). Try again in ~42 min. ${PRIVATE_CANARY}`,
+      "rate_limit",
+    ],
+    [
+      "request-failed",
+      "Claude is still at its usage limit, and Aiden stopped waiting for it a few minutes ago.",
+      "rate_limit",
+    ],
     ["request-failed", `401 unauthorized ${PRIVATE_CANARY}`, "authentication"],
     ["request-failed", `API key not valid. ${PRIVATE_CANARY}`, "authentication"],
     ["request-failed", `insufficient_quota ${PRIVATE_CANARY}`, "quota"],

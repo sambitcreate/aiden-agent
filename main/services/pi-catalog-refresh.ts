@@ -8,10 +8,7 @@ import type {
   Provider,
 } from "@earendil-works/pi-ai";
 import type { ProviderModelsStore } from "./pi-models-store.js";
-import {
-  isPiRemoteCatalogCacheFresh,
-  isPiRemoteCatalogProvider,
-} from "./pi-remote-catalog.js";
+import { isPiRemoteCatalogCacheFresh, isPiRemoteCatalogProvider } from "./pi-remote-catalog.js";
 
 export interface RefreshPiCatalogsOptions {
   models: Models;
@@ -50,15 +47,17 @@ export async function staleCatalogProviderIds(
   providers: readonly Provider[],
   providerModelsStore: (providerId: string) => ProviderModelsStore,
 ): Promise<string[]> {
-  const results = await Promise.all(providers.map(async (provider) => {
-    if (!provider.refreshModels || !isPiRemoteCatalogProvider(provider)) return undefined;
-    try {
-      const entry = await providerModelsStore(provider.id).read();
-      return isPiRemoteCatalogCacheFresh(provider, entry) ? undefined : provider.id;
-    } catch {
-      return provider.id;
-    }
-  }));
+  const results = await Promise.all(
+    providers.map(async (provider) => {
+      if (!provider.refreshModels || !isPiRemoteCatalogProvider(provider)) return undefined;
+      try {
+        const entry = await providerModelsStore(provider.id).read();
+        return isPiRemoteCatalogCacheFresh(provider, entry) ? undefined : provider.id;
+      } catch {
+        return provider.id;
+      }
+    }),
+  );
   return results.filter((providerId): providerId is string => providerId !== undefined);
 }
 
@@ -100,9 +99,12 @@ function beginRefresh(models: Models, provider: Provider, signal?: AbortSignal) 
   attempts.set(provider.id, controller);
   return {
     signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
-    isCurrent: () => attempts.get(provider.id) === controller && models.getProvider(provider.id) === provider,
+    isCurrent: () =>
+      attempts.get(provider.id) === controller && models.getProvider(provider.id) === provider,
     abort: () => controller.abort(),
-    finish: () => { if (attempts.get(provider.id) === controller) attempts.delete(provider.id); },
+    finish: () => {
+      if (attempts.get(provider.id) === controller) attempts.delete(provider.id);
+    },
   };
 }
 
@@ -133,8 +135,19 @@ function publicationOwnership(
  * Pi has no public context getter. The production registry uses Pi's default.
  * Provider state stays on the original provider objects; no catalog is copied.
  */
-async function refreshNativeCatalogs(options: RefreshPiCatalogsOptions): Promise<RefreshPiCatalogsResult> {
-  const { models, authContext, credentials, providerModelsStore, providerIds, signal, force = true, allowNetwork = true } = options;
+async function refreshNativeCatalogs(
+  options: RefreshPiCatalogsOptions,
+): Promise<RefreshPiCatalogsResult> {
+  const {
+    models,
+    authContext,
+    credentials,
+    providerModelsStore,
+    providerIds,
+    signal,
+    force = true,
+    allowNetwork = true,
+  } = options;
   const snapshots = new Map<string, Credential | undefined>();
   const observedCredentials: CredentialStore = {
     read: async (id, authOptions) => {
@@ -170,31 +183,43 @@ async function refreshNativeCatalogs(options: RefreshPiCatalogsOptions): Promise
         const effectiveSignal = AbortSignal.any([context.signal, attempt.signal]);
         const isCurrent = () => !effectiveSignal.aborted && attempt.isCurrent();
         const canPublish = publicationOwnership(
-          credentials, provider.id, snapshots.get(provider.id), effectiveSignal, isCurrent,
+          credentials,
+          provider.id,
+          snapshots.get(provider.id),
+          effectiveSignal,
+          isCurrent,
         );
         // A missing snapshot means Pi's initial credential read failed. Pi
         // rethrows that saved auth error after the offline phase; aborting here
         // would suppress it as cancellation. Unknown ownership cannot hydrate.
         if (!snapshots.has(provider.id)) return;
-        if (!await canPublish() || !isCurrent()) {
+        if (!(await canPublish()) || !isCurrent()) {
           attempt.abort();
           return;
         }
         await provider.refreshModels!({
           ...context,
           signal: effectiveSignal,
-          publish: (publication) => providerModelsStore(provider.id).publish(publication, canPublish, isCurrent),
+          publish: (publication) =>
+            providerModelsStore(provider.id).publish(publication, canPublish, isCurrent),
         });
       },
     });
   }
-  const results = await Promise.all(attempts.map(async ({ providerId, attempt }) => {
-    try {
-      return await native.refresh({ providers: [providerId], force, allowNetwork, signal: attempt.signal });
-    } finally {
-      attempt.finish();
-    }
-  }));
+  const results = await Promise.all(
+    attempts.map(async ({ providerId, attempt }) => {
+      try {
+        return await native.refresh({
+          providers: [providerId],
+          force,
+          allowNetwork,
+          signal: attempt.signal,
+        });
+      } finally {
+        attempt.finish();
+      }
+    }),
+  );
   return {
     aborted: signal?.aborted ?? false,
     errors: new Map(results.flatMap((result) => [...result.errors])),
@@ -214,7 +239,16 @@ export async function refreshPiCatalogs({
 }: RefreshPiCatalogsOptions): Promise<RefreshPiCatalogsResult> {
   if (signal?.aborted) return { aborted: true, errors: new Map() };
   if (providerIds === undefined || !allowNetwork) {
-    return refreshNativeCatalogs({ models, authContext, credentials, providerModelsStore, providerIds, force, allowNetwork, signal });
+    return refreshNativeCatalogs({
+      models,
+      authContext,
+      credentials,
+      providerModelsStore,
+      providerIds,
+      force,
+      allowNetwork,
+      signal,
+    });
   }
 
   const errors = new Map<string, Error>();
@@ -232,21 +266,36 @@ export async function refreshPiCatalogs({
         }
         // checkAuth is explicitly non-refreshing for OAuth. Catalog refresh
         // must never outlive its timeout while secretly rotating credentials.
-        const auth = await raceWithAbort(models.checkAuth(providerId, { signal: effectiveSignal }), effectiveSignal);
+        const auth = await raceWithAbort(
+          models.checkAuth(providerId, { signal: effectiveSignal }),
+          effectiveSignal,
+        );
         if (!auth || effectiveSignal.aborted) return;
-        const credential = await raceWithAbort(credentials.read(providerId, { signal: effectiveSignal }), effectiveSignal);
+        const credential = await raceWithAbort(
+          credentials.read(providerId, { signal: effectiveSignal }),
+          effectiveSignal,
+        );
         const stored = await raceWithAbort(store.read(), effectiveSignal);
         const isCurrent = () => !effectiveSignal.aborted && attempt.isCurrent();
-        const canPublish = publicationOwnership(credentials, providerId, credential, effectiveSignal, isCurrent);
-        if (!await canPublish() || !isCurrent()) return;
-        await raceWithAbort(provider.refreshModels({
+        const canPublish = publicationOwnership(
+          credentials,
+          providerId,
           credential,
-          stored,
-          publish: (publication) => store.publish(publication, canPublish, isCurrent),
-          allowNetwork: true,
-          force,
-          signal: effectiveSignal,
-        }), effectiveSignal);
+          effectiveSignal,
+          isCurrent,
+        );
+        if (!(await canPublish()) || !isCurrent()) return;
+        await raceWithAbort(
+          provider.refreshModels({
+            credential,
+            stored,
+            publish: (publication) => store.publish(publication, canPublish, isCurrent),
+            allowNetwork: true,
+            force,
+            signal: effectiveSignal,
+          }),
+          effectiveSignal,
+        );
       } catch (error) {
         errors.set(
           providerId,

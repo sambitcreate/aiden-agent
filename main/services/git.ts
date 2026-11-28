@@ -92,8 +92,14 @@ function waitUnlessAborted(pending: Promise<void>, signal: AbortSignal | undefin
     const onAbort = () => reject(cancelled());
     signal.addEventListener("abort", onAbort, { once: true });
     pending.then(
-      () => { signal.removeEventListener("abort", onAbort); resolve(); },
-      () => { signal.removeEventListener("abort", onAbort); resolve(); },
+      () => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      },
+      () => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      },
     );
   });
 }
@@ -314,7 +320,8 @@ interface ManagedWorktreeDeletionPolicy {
 }
 
 const MANAGED_WORKTREE_SNAPSHOT_REF_PREFIX = "refs/aiden/snapshots/";
-const MANAGED_WORKTREE_SNAPSHOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const MANAGED_WORKTREE_SNAPSHOT_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const GIT_OBJECT_ID = /^[0-9a-f]{40}$/u;
 
 function managedWorktreeSnapshotRef(snapshotId: string): string {
@@ -1121,9 +1128,7 @@ async function sha256BoundedNoFollowFile(
   maxBytes: number,
 ): Promise<string | undefined> {
   const flags =
-    fsConstants.O_RDONLY |
-    (fsConstants.O_NOFOLLOW ?? 0) |
-    (fsConstants.O_NONBLOCK ?? 0);
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
   let handle: fs.FileHandle | undefined;
   try {
     handle = await fs.open(filePath, flags);
@@ -1161,9 +1166,7 @@ async function isNativeExecutableBinary(realPath: string): Promise<boolean> {
     return false;
   }
   const flags =
-    fsConstants.O_RDONLY |
-    (fsConstants.O_NOFOLLOW ?? 0) |
-    (fsConstants.O_NONBLOCK ?? 0);
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
   let handle: fs.FileHandle | undefined;
   try {
     handle = await fs.open(realPath, flags);
@@ -1264,7 +1267,10 @@ export class GitService {
    * Credential-free remote identity learned by ordinary status reads, keyed by
    * repository working directory. Raw remote URLs are never retained.
    */
-  private readonly repositoryIdentities = new Map<string, { topLevel: string; canonicalKey: string }>();
+  private readonly repositoryIdentities = new Map<
+    string,
+    { topLevel: string; canonicalKey: string }
+  >();
   private readonly branchCache = new Map<string, CacheEntry<GitBranches>>();
   private readonly mutations = new Map<string, Promise<void>>();
   private readonly mutationEpochs = new Map<string, number>();
@@ -1288,7 +1294,11 @@ export class GitService {
       options.worktreeRemovalManifestInspector ?? managedWorktreeRemovalManifestPresent;
   }
 
-  private async run(cwd: string, args: string[], options: GitRunOptions = {}): Promise<GitCommandResult> {
+  private async run(
+    cwd: string,
+    args: string[],
+    options: GitRunOptions = {},
+  ): Promise<GitCommandResult> {
     if (options.signal?.aborted) {
       return Promise.reject(new GitServiceError("aborted", "Git operation was cancelled."));
     }
@@ -1356,7 +1366,11 @@ export class GitService {
           // A child that exits early (for example on error, abort, or early
           // streaming rejection) closes its read end and raises EPIPE/ERR_STREAM_DESTROYED.
           if (error.code === "EPIPE" || error.code === "ERR_STREAM_DESTROYED") return;
-          callbackError ??= new GitServiceError("command_failed", publicGitMessage(error, cwd), error);
+          callbackError ??= new GitServiceError(
+            "command_failed",
+            publicGitMessage(error, cwd),
+            error,
+          );
           terminate("callback_error");
         });
         child.stdin.end(options.stdin);
@@ -1431,7 +1445,11 @@ export class GitService {
           reject(
             callbackError instanceof Error
               ? callbackError
-              : new GitServiceError("command_failed", publicGitMessage(callbackError, cwd), callbackError),
+              : new GitServiceError(
+                  "command_failed",
+                  publicGitMessage(callbackError, cwd),
+                  callbackError,
+                ),
           );
           return;
         }
@@ -1728,7 +1746,12 @@ export class GitService {
   ): Promise<readonly string[] | undefined> {
     if (env.GIT_CONFIG_NOSYSTEM !== undefined) {
       const normalized = env.GIT_CONFIG_NOSYSTEM.trim().toLowerCase();
-      if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
+      if (
+        normalized === "1" ||
+        normalized === "true" ||
+        normalized === "yes" ||
+        normalized === "on"
+      ) {
         return [];
       }
       if (
@@ -1763,11 +1786,7 @@ export class GitService {
         return undefined;
       }
       const tokens = probe.stdout.split("\0");
-      if (
-        tokens.length < 3 ||
-        tokens[tokens.length - 1] !== "" ||
-        (tokens.length - 1) % 2 !== 0
-      ) {
+      if (tokens.length < 3 || tokens[tokens.length - 1] !== "" || (tokens.length - 1) % 2 !== 0) {
         return undefined;
       }
       const origins = new Set<string>();
@@ -1872,12 +1891,7 @@ export class GitService {
     );
     if (!execBefore && process.platform === "darwin") {
       viaDarwinShim = true;
-      execBefore = await this.executableIdentitySignature(
-        canonicalCwd,
-        env,
-        freshExecutable,
-        true,
-      );
+      execBefore = await this.executableIdentitySignature(canonicalCwd, env, freshExecutable, true);
     }
     if (!execBefore) return undefined;
     if (!(await isNativeExecutableBinary(execBefore.real))) {
@@ -2076,9 +2090,7 @@ export class GitService {
     operation: (signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
     if (signal?.aborted)
-      return Promise.reject(
-        new GitServiceError("aborted", "Git operation was cancelled."),
-      );
+      return Promise.reject(new GitServiceError("aborted", "Git operation was cancelled."));
     let flight = this.readFlights.get(key);
     if (!flight) {
       const controller = new AbortController();
@@ -2109,8 +2121,7 @@ export class GitService {
         if (error) reject(error);
         else resolve(value as T);
       };
-      const abort = () =>
-        finish(new GitServiceError("aborted", "Git operation was cancelled."));
+      const abort = () => finish(new GitServiceError("aborted", "Git operation was cancelled."));
       signal?.addEventListener("abort", abort, { once: true });
       void owned.promise.then(
         (value) => finish(null, value as T),
@@ -2119,9 +2130,7 @@ export class GitService {
     });
   }
 
-  private async repositorySignature(
-    paths: string[],
-  ): Promise<string | undefined> {
+  private async repositorySignature(paths: string[]): Promise<string | undefined> {
     try {
       const signatures = await Promise.all(
         paths.map(async (filePath) => {
@@ -2129,14 +2138,12 @@ export class GitService {
             const stat = await fs.lstat(filePath, { bigint: true });
             // Directory contents change during ordinary Git operations; identity
             // is sufficient here. Pointer/config files also need content metadata.
-            if (stat.isSymbolicLink())
-              throw new Error("Uncached symbolic metadata path");
+            if (stat.isSymbolicLink()) throw new Error("Uncached symbolic metadata path");
             return stat.isDirectory()
               ? `${await fs.realpath(filePath)}:${stat.dev}:${stat.ino}:${stat.mode}`
               : `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === "ENOENT")
-              return "missing";
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
             throw error;
           }
         }),
@@ -2147,7 +2154,9 @@ export class GitService {
     }
   }
 
-  private async rootReadIdentity(cwd: string): Promise<
+  private async rootReadIdentity(
+    cwd: string,
+  ): Promise<
     { paths: string[]; configFiles: string[]; signature: string; commonDir: string } | undefined
   > {
     try {
@@ -2156,7 +2165,10 @@ export class GitService {
       const baseSignature = await this.repositorySignature(basePaths);
       const markerStat = await fs.lstat(marker);
       const readPointer = async (filePath: string): Promise<string> => {
-        const handle = await fs.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+        const handle = await fs.open(
+          filePath,
+          fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+        );
         try {
           const stat = await handle.stat();
           if (!stat.isFile() || stat.size > 4096) throw new Error("Unsupported Git pointer");
@@ -2164,7 +2176,9 @@ export class GitService {
           const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
           if (bytesRead !== stat.size) throw new Error("Changed Git pointer");
           return buffer.subarray(0, bytesRead).toString("utf8");
-        } finally { await handle.close(); }
+        } finally {
+          await handle.close();
+        }
       };
       let gitDir = marker;
       if (markerStat.isFile()) {
@@ -2176,8 +2190,11 @@ export class GitService {
       const adminPaths = [gitDir, commonPointer];
       const adminSignature = await this.repositorySignature(adminPaths);
       let commonPath = gitDir;
-      try { commonPath = path.resolve(gitDir, (await readPointer(commonPointer)).trim()); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      try {
+        commonPath = path.resolve(gitDir, (await readPointer(commonPointer)).trim());
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
       const commonDir = await fs.realpath(commonPath);
       const configFiles = [
         path.join(gitDir, "config"),
@@ -2187,46 +2204,80 @@ export class GitService {
       const paths = [...basePaths, ...adminPaths, commonPath, commonDir, ...configFiles];
       const signature = await this.repositorySignature(paths);
       // Pointer parsing must describe the same routing files as the proof.
-      if (!signature || !baseSignature || !adminSignature ||
-          baseSignature !== await this.repositorySignature(basePaths) ||
-          adminSignature !== await this.repositorySignature(adminPaths)) return undefined;
+      if (
+        !signature ||
+        !baseSignature ||
+        !adminSignature ||
+        baseSignature !== (await this.repositorySignature(basePaths)) ||
+        adminSignature !== (await this.repositorySignature(adminPaths))
+      )
+        return undefined;
       return { paths, configFiles, signature, commonDir };
-    } catch { return undefined; }
+    } catch {
+      return undefined;
+    }
   }
 
-  private async readRepository(cwd: string, signal: AbortSignal, share = true): Promise<GitRepository | null> {
+  private async readRepository(
+    cwd: string,
+    signal: AbortSignal,
+    share = true,
+  ): Promise<GitRepository | null> {
     if (!share) return this.repository(cwd, signal);
     // Resolve aliases on every read, including after a workspace symlink swaps.
     let canonical: string;
-    try { canonical = await fs.realpath(cwd); } catch { return null; }
+    try {
+      canonical = await fs.realpath(cwd);
+    } catch {
+      return null;
+    }
     const discovered = await this.sharedRead(`repository:${canonical}`, signal, async (owner) => {
       // Match the existing display TTL: included/global Git configuration can
       // affect discovery without touching the local config files below.
       const cached = this.getCached(this.repositoryCache, canonical);
-      if (cached?.readIdentity &&
-          await this.repositorySignature(cached.readIdentity.paths) === cached.readIdentity.signature) return cached;
+      if (
+        cached?.readIdentity &&
+        (await this.repositorySignature(cached.readIdentity.paths)) ===
+          cached.readIdentity.signature
+      )
+        return cached;
       this.repositoryCache.delete(canonical);
       this.infoCache.delete(canonical);
       this.branchCache.delete(canonical);
       for (let attempt = 0; attempt < 3; attempt++) {
         const identity = await this.rootReadIdentity(canonical);
         let repo: GitRepository | null;
-        try { repo = await this.repository(canonical, owner); }
-        catch (error) {
-          if (!owner.aborted && identity &&
-              await this.repositorySignature(identity.paths) !== identity.signature) continue;
+        try {
+          repo = await this.repository(canonical, owner);
+        } catch (error) {
+          if (
+            !owner.aborted &&
+            identity &&
+            (await this.repositorySignature(identity.paths)) !== identity.signature
+          )
+            continue;
           throw error;
         }
-        if (identity && await this.repositorySignature(identity.paths) !== identity.signature) continue;
+        if (identity && (await this.repositorySignature(identity.paths)) !== identity.signature)
+          continue;
         // Nested/unusual layouts remain uncached. The filesystem proof only
         // qualifies reuse of Git's result; it never replaces Git discovery.
-        if (repo && identity && repo.cwd === repo.topLevel && repo.commonDir === identity.commonDir && !owner.aborted) {
+        if (
+          repo &&
+          identity &&
+          repo.cwd === repo.topLevel &&
+          repo.commonDir === identity.commonDir &&
+          !owner.aborted
+        ) {
           repo.readIdentity = identity;
           this.setCached(this.repositoryCache, canonical, repo.commonDir, repo);
         }
         return repo;
       }
-      throw new GitServiceError("stale_snapshot", "The repository changed during discovery. Refresh and try again.");
+      throw new GitServiceError(
+        "stale_snapshot",
+        "The repository changed during discovery. Refresh and try again.",
+      );
     });
     // Unsupported discovery is only a hint; admit an independent current tuple.
     return discovered?.readIdentity ? discovered : this.repository(cwd, signal);
@@ -2252,14 +2303,21 @@ export class GitService {
         const repo = current;
         let result: { value: T } | { error: unknown };
         try {
-          result = { value: repo
-            ? await this.stableRead(repo, () => operation(repo, owner), owner)
-            : await operation(null, owner) };
-        } catch (error) { result = { error }; }
+          result = {
+            value: repo
+              ? await this.stableRead(repo, () => operation(repo, owner), owner)
+              : await operation(null, owner),
+          };
+        } catch (error) {
+          result = { error };
+        }
         if (owner.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
-        if (!repo?.readIdentity ||
-            (await fs.realpath(cwd).catch(() => undefined) === repo.cwd &&
-             await this.repositorySignature(repo.readIdentity.paths) === repo.readIdentity.signature)) {
+        if (
+          !repo?.readIdentity ||
+          ((await fs.realpath(cwd).catch(() => undefined)) === repo.cwd &&
+            (await this.repositorySignature(repo.readIdentity.paths)) ===
+              repo.readIdentity.signature)
+        ) {
           if ("error" in result) throw result.error;
           return result.value;
         }
@@ -2271,7 +2329,11 @@ export class GitService {
       }
     };
     return admitted?.readIdentity
-      ? this.sharedRead(JSON.stringify([key, path.resolve(cwd), admitted.readIdentity.signature]), signal, read)
+      ? this.sharedRead(
+          JSON.stringify([key, path.resolve(cwd), admitted.readIdentity.signature]),
+          signal,
+          read,
+        )
       : read(callerSignal);
   }
 
@@ -2280,7 +2342,11 @@ export class GitService {
     return repo;
   }
 
-  private getCached<T>(cache: Map<string, CacheEntry<T>>, key: string, identity?: string): T | undefined {
+  private getCached<T>(
+    cache: Map<string, CacheEntry<T>>,
+    key: string,
+    identity?: string,
+  ): T | undefined {
     const entry = cache.get(key);
     if (!entry) return undefined;
     if (entry.expiresAt <= Date.now() || (identity !== undefined && entry.identity !== identity)) {
@@ -2445,7 +2511,11 @@ export class GitService {
     const afterSignature = await this.repoRemoteHintSignature(commonDir);
     if (!afterSignature || afterSignature !== expectedSignature) return;
     this.repoRemoteHints.delete(commonDir);
-    this.repoRemoteHints.set(commonDir, { configSignature: afterSignature, hasRemote, defaultBranch });
+    this.repoRemoteHints.set(commonDir, {
+      configSignature: afterSignature,
+      hasRemote,
+      defaultBranch,
+    });
     if (this.repoRemoteHints.size > this.cacheEntries) {
       const oldest = this.repoRemoteHints.keys().next().value as string | undefined;
       if (oldest !== undefined) this.repoRemoteHints.delete(oldest);
@@ -2535,18 +2605,36 @@ export class GitService {
   }
 
   private async repositoryInfo(repo: GitRepository, signal: AbortSignal): Promise<GitInfo> {
-    const read = (owner: AbortSignal) => this.stableRead(repo, async () => {
-      const cached = repo.readIdentity ? this.getCached(this.infoCache, repo.cwd, repo.readIdentity.signature) : undefined;
-      if (cached) return cached;
-      const value = await this.status(repo, owner);
-      if (owner.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
-      if (repo.readIdentity) this.setCached(this.infoCache, repo.cwd, repo.commonDir, value, repo.readIdentity.signature);
-      return value;
-    }, owner);
+    const read = (owner: AbortSignal) =>
+      this.stableRead(
+        repo,
+        async () => {
+          const cached = repo.readIdentity
+            ? this.getCached(this.infoCache, repo.cwd, repo.readIdentity.signature)
+            : undefined;
+          if (cached) return cached;
+          const value = await this.status(repo, owner);
+          if (owner.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
+          if (repo.readIdentity)
+            this.setCached(
+              this.infoCache,
+              repo.cwd,
+              repo.commonDir,
+              value,
+              repo.readIdentity.signature,
+            );
+          return value;
+        },
+        owner,
+      );
     // Raw status work has its own key. Every display owner must still perform
     // its own routing validation after receiving a shared result.
     return repo.readIdentity
-      ? this.sharedRead(JSON.stringify(["repository-info", repo.cwd, repo.readIdentity.signature]), signal, read)
+      ? this.sharedRead(
+          JSON.stringify(["repository-info", repo.cwd, repo.readIdentity.signature]),
+          signal,
+          read,
+        )
       : read(signal);
   }
 
@@ -2577,7 +2665,8 @@ export class GitService {
 
   async info(cwd: string, signal?: AbortSignal): Promise<GitInfo> {
     return this.displayRead(cwd, "info", signal, (repo, owner) =>
-      repo ? this.repositoryInfo(repo, owner) : Promise.resolve({ isRepo: false }));
+      repo ? this.repositoryInfo(repo, owner) : Promise.resolve({ isRepo: false }),
+    );
   }
 
   async branches(cwd: string, signal?: AbortSignal): Promise<GitBranches> {
@@ -2592,7 +2681,9 @@ export class GitService {
       return this.stableRead(
         repo,
         async () => {
-          const cached = repo.readIdentity ? this.getCached(this.branchCache, repo.cwd, repo.readIdentity.signature) : undefined;
+          const cached = repo.readIdentity
+            ? this.getCached(this.branchCache, repo.cwd, repo.readIdentity.signature)
+            : undefined;
           if (cached) return cached;
           const [info, localResult, remoteRefs] = await Promise.all([
             // Reuse admission and share raw status; outer reads each validate
@@ -2620,12 +2711,15 @@ export class GitService {
             remoteBranches: remoteRefs.branches,
             uncommitted: info.uncommitted ?? 0,
           };
-          if (signal.aborted)
-            throw new GitServiceError(
-              "aborted",
-              "Git operation was cancelled.",
+          if (signal.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
+          if (repo.readIdentity)
+            this.setCached(
+              this.branchCache,
+              repo.cwd,
+              repo.commonDir,
+              value,
+              repo.readIdentity.signature,
             );
-          if (repo.readIdentity) this.setCached(this.branchCache, repo.cwd, repo.commonDir, value, repo.readIdentity.signature);
           return value;
         },
         signal,
@@ -2659,8 +2753,10 @@ export class GitService {
           if (!linkStats.isSymbolicLink()) return { complete: false, symlinkStats };
           const target = await fs.readlink(lexicalPath);
           const signature = reviewFileSignature(linkStats);
-          if (Buffer.byteLength(target) === Number(linkStats.size) &&
-              reviewFileSignature(await fs.lstat(lexicalPath, { bigint: true })) === signature) {
+          if (
+            Buffer.byteLength(target) === Number(linkStats.size) &&
+            reviewFileSignature(await fs.lstat(lexicalPath, { bigint: true })) === signature
+          ) {
             symlinkStats.set(file.path, { signature, additions: countTextLines(target) });
           }
           totalBytes += Buffer.byteLength(target);
@@ -2670,7 +2766,8 @@ export class GitService {
           continue;
         }
         if (!stats.isFile()) return { complete: false, symlinkStats };
-        if (totalBytes + stats.size > this.snapshotMaxBytes) return { complete: false, symlinkStats };
+        if (totalBytes + stats.size > this.snapshotMaxBytes)
+          return { complete: false, symlinkStats };
         totalBytes += stats.size;
         const cacheKey = `${repo.cwd}\u0000${file.path}`;
         const signature = [
@@ -2705,7 +2802,8 @@ export class GitService {
         hash.update("file\u0000");
         hash.update(digest);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { complete: false, symlinkStats };
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+          return { complete: false, symlinkStats };
         hash.update("missing\u0000");
       }
     }
@@ -2720,10 +2818,7 @@ export class GitService {
     return result.exitCode !== 0 || result.stdout.trim() !== "false";
   }
 
-  private async inspectReview(
-    repo: GitRepository,
-    signal?: AbortSignal,
-  ): Promise<GitReview> {
+  private async inspectReview(repo: GitRepository, signal?: AbortSignal): Promise<GitReview> {
     const [statusResult, coreFileMode] = await Promise.all([
       this.run(
         repo.cwd,
@@ -2755,13 +2850,7 @@ export class GitService {
         allowExitCodes: [128],
         signal,
       }),
-      this.reviewSnapshot(
-        repo,
-        statusResult.stdout,
-        files,
-        coreFileMode,
-        signal,
-      ),
+      this.reviewSnapshot(repo, statusResult.stdout, files, coreFileMode, signal),
     ]);
     const hasHead = head.exitCode === 0;
     const numstat = hasHead
@@ -2782,17 +2871,14 @@ export class GitService {
         )
       : null;
     const stats = new Map(
-      parseGitNumstat(numstat?.stdout ?? "").map(
-        (entry) => [entry.path, entry] as const,
-      ),
+      parseGitNumstat(numstat?.stdout ?? "").map((entry) => [entry.path, entry] as const),
     );
 
     // Serial inspection bounds active descriptors/buffers independently of file
     // count. The budget is separate from the authoritative commit snapshot.
     let remainingStatsBytes = this.reviewStatsMaxBytes;
     for (const file of files) {
-      if (signal?.aborted)
-        throw new GitServiceError("aborted", "Git operation was cancelled.");
+      if (signal?.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
       const stat = stats.get(file.path);
       if (stat) {
         file.additions = stat.additions;
@@ -2811,8 +2897,11 @@ export class GitService {
           // snapshot's already-read target count instead of doing another read
           // against an earlier lstat-sized reservation.
           const captured = snapshot.symlinkStats?.get(file.path);
-          if (captured?.signature === reviewFileSignature(lexicalStats) &&
-              reviewFileSignature(await fs.lstat(lexicalPath, { bigint: true })) === captured.signature) {
+          if (
+            captured?.signature === reviewFileSignature(lexicalStats) &&
+            reviewFileSignature(await fs.lstat(lexicalPath, { bigint: true })) ===
+              captured.signature
+          ) {
             file.additions = captured.additions;
             file.deletions = 0;
             file.binary = false;
@@ -2821,17 +2910,9 @@ export class GitService {
         }
         const canonicalPath = await fs.realpath(lexicalPath);
         const relative = path.relative(repo.cwd, canonicalPath);
-        if (
-          relative === ".." ||
-          relative.startsWith(`..${path.sep}`) ||
-          path.isAbsolute(relative)
-        )
+        if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
           continue;
-        if (
-          !lexicalStats.isFile() ||
-          lexicalStats.size > BigInt(this.maxBufferBytes)
-        )
-          continue;
+        if (!lexicalStats.isFile() || lexicalStats.size > BigInt(this.maxBufferBytes)) continue;
         const signature = reviewFileSignature;
         const before = signature(lexicalStats);
         const cacheKey = `${repo.cwd}\u0000${file.path}`;
@@ -2840,9 +2921,7 @@ export class GitService {
         if (cached?.signature !== before && capacity > remainingStatsBytes) continue;
         handle = await fs.open(
           canonicalPath,
-          fsConstants.O_RDONLY |
-            fsConstants.O_NOFOLLOW |
-            fsConstants.O_NONBLOCK,
+          fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
         );
         if (signature(await handle.stat({ bigint: true })) !== before) continue;
         if (cached?.signature === before) {
@@ -2857,11 +2936,7 @@ export class GitService {
         const buffer = Buffer.alloc(capacity);
         let length = 0;
         while (length < capacity) {
-          if (signal?.aborted)
-            throw new GitServiceError(
-              "aborted",
-              "Git operation was cancelled.",
-            );
+          if (signal?.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
           const { bytesRead } = await handle.read(
             buffer,
             length,
@@ -2871,8 +2946,7 @@ export class GitService {
           if (!bytesRead) break;
           length += bytesRead;
         }
-        if (signal?.aborted)
-          throw new GitServiceError("aborted", "Git operation was cancelled.");
+        if (signal?.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
         if (
           length !== Number(lexicalStats.size) ||
           signature(await handle.stat({ bigint: true })) !== before ||
@@ -2881,9 +2955,7 @@ export class GitService {
           continue;
         const contents = buffer.subarray(0, length);
         const binary = contents.subarray(0, 8_192).includes(0);
-        const additions = binary
-          ? undefined
-          : countTextLines(contents.toString("utf8"));
+        const additions = binary ? undefined : countTextLines(contents.toString("utf8"));
         file.binary = binary;
         file.additions = additions;
         file.deletions = binary ? undefined : 0;
@@ -2895,15 +2967,10 @@ export class GitService {
           binary,
         });
         while (this.reviewStatsCache.size > SNAPSHOT_CACHE_ENTRIES) {
-          this.reviewStatsCache.delete(
-            this.reviewStatsCache.keys().next().value!,
-          );
+          this.reviewStatsCache.delete(this.reviewStatsCache.keys().next().value!);
         }
       } catch (error) {
-        if (
-          signal?.aborted ||
-          (error instanceof GitServiceError && error.code === "aborted")
-        ) {
+        if (signal?.aborted || (error instanceof GitServiceError && error.code === "aborted")) {
           throw new GitServiceError("aborted", "Git operation was cancelled.");
         }
         // Changed, unsupported or over-budget files retain unavailable counts.
@@ -2913,28 +2980,19 @@ export class GitService {
     }
     const summary: GitReviewSummary = {
       fileCount: files.length,
-      additions: files.reduce(
-        (total, file) => total + (file.additions ?? 0),
-        0,
-      ),
-      deletions: files.reduce(
-        (total, file) => total + (file.deletions ?? 0),
-        0,
-      ),
+      additions: files.reduce((total, file) => total + (file.additions ?? 0), 0),
+      deletions: files.reduce((total, file) => total + (file.deletions ?? 0), 0),
       unavailableStats: files.filter(
         (file) => file.additions === undefined || file.deletions === undefined,
       ).length,
       stagedFiles: files.filter((file) => file.staged).length,
       unstagedFiles: files.filter((file) => file.unstaged).length,
-      conflictedFiles: files.filter((file) => file.status === "conflicted")
-        .length,
+      conflictedFiles: files.filter((file) => file.status === "conflicted").length,
     };
-    const repositoryRoot =
-      path.resolve(repo.cwd) === path.resolve(repo.topLevel);
+    const repositoryRoot = path.resolve(repo.cwd) === path.resolve(repo.topLevel);
     let reason: string | undefined;
     if (!repositoryRoot) {
-      reason =
-        "Commit from Aiden is available only when the workspace is the repository root.";
+      reason = "Commit from Aiden is available only when the workspace is the repository root.";
     } else if (parsedStatus.detached) {
       reason = "Switch to a local branch before committing from Aiden.";
     } else if (summary.conflictedFiles > 0) {
@@ -2996,11 +3054,7 @@ export class GitService {
           },
         };
       }
-      return this.stableRead(
-        repo,
-        () => this.inspectReview(repo, signal),
-        signal,
-      );
+      return this.stableRead(repo, () => this.inspectReview(repo, signal), signal);
     });
   }
 
@@ -3955,34 +4009,22 @@ export class GitService {
     };
   }
 
-  async pushCapability(
-    cwd: string,
-    signal?: AbortSignal,
-  ): Promise<GitPushCapability> {
-    return this.displayRead(
-      cwd,
-      "pushCapability",
-      signal,
-      async (repo, signal) => {
-        if (!repo) {
-          return {
-            allowed: false,
-            reason: "This workspace is not a Git repository.",
-            remotes: [],
-            remoteIdentities: {},
-            ahead: 0,
-            behind: 0,
-            repositoryRoot: false,
-            remoteState: "local-ref",
-          };
-        }
-        return this.stableRead(
-          repo,
-          () => this.inspectPushCapability(repo, signal),
-          signal,
-        );
-      },
-    );
+  async pushCapability(cwd: string, signal?: AbortSignal): Promise<GitPushCapability> {
+    return this.displayRead(cwd, "pushCapability", signal, async (repo, signal) => {
+      if (!repo) {
+        return {
+          allowed: false,
+          reason: "This workspace is not a Git repository.",
+          remotes: [],
+          remoteIdentities: {},
+          ahead: 0,
+          behind: 0,
+          repositoryRoot: false,
+          remoteState: "local-ref",
+        };
+      }
+      return this.stableRead(repo, () => this.inspectPushCapability(repo, signal), signal);
+    });
   }
 
   private async snapshotPushedTrackingRef(
@@ -4592,22 +4634,14 @@ export class GitService {
     );
   }
 
-  async compare(
-    cwd: string,
-    targetRef: string,
-    signal?: AbortSignal,
-  ): Promise<GitComparison> {
+  async compare(cwd: string, targetRef: string, signal?: AbortSignal): Promise<GitComparison> {
     return this.displayRead(
       cwd,
       JSON.stringify(["compare", targetRef]),
       signal,
       async (discovered, signal) => {
         const repo = this.requireRepository(discovered);
-        return this.stableRead(
-          repo,
-          () => this.inspectComparison(repo, targetRef, signal),
-          signal,
-        );
+        return this.stableRead(repo, () => this.inspectComparison(repo, targetRef, signal), signal);
       },
     );
   }
@@ -4721,17 +4755,24 @@ export class GitService {
     ref: string,
     signal?: AbortSignal,
   ): Promise<string | undefined> {
-    const result = await this.run(repo.cwd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
-      allowExitCodes: [1, 128],
-      signal,
-    });
+    const result = await this.run(
+      repo.cwd,
+      ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
+      {
+        allowExitCodes: [1, 128],
+        signal,
+      },
+    );
     const commit = result.stdout.trim();
     return result.exitCode === 0 && commit ? commit : undefined;
   }
 
   private async configuredRemotes(repo: GitRepository, signal?: AbortSignal): Promise<string[]> {
     const result = await this.run(repo.cwd, ["remote"], { signal });
-    return result.stdout.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
+    return result.stdout
+      .split(/\r?\n/u)
+      .map((value) => value.trim())
+      .filter(Boolean);
   }
 
   /**
@@ -4977,9 +5018,19 @@ export class GitService {
       for (const candidate of candidates) {
         let worktreeGitDir: string;
         try {
-          const gitDir = await this.run(candidate.path, ["rev-parse", "--path-format=absolute", "--git-dir"]);
-          worktreeGitDir = this.validatedWorktreeGitDir(repo, await fs.realpath(gitDir.stdout.trim()));
-          const marker = await fs.readFile(path.join(worktreeGitDir, WORKTREE_OWNER_MARKER), "utf8");
+          const gitDir = await this.run(candidate.path, [
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-dir",
+          ]);
+          worktreeGitDir = this.validatedWorktreeGitDir(
+            repo,
+            await fs.realpath(gitDir.stdout.trim()),
+          );
+          const marker = await fs.readFile(
+            path.join(worktreeGitDir, WORKTREE_OWNER_MARKER),
+            "utf8",
+          );
           if (marker.trim() !== token) continue;
         } catch {
           continue;
@@ -5019,7 +5070,10 @@ export class GitService {
       ["for-each-ref", "--format=%(refname:strip=2)%00", "refs/heads"],
       { signal },
     );
-    return result.stdout.split("\u0000").map((value) => value.trim()).filter(Boolean);
+    return result.stdout
+      .split("\u0000")
+      .map((value) => value.trim())
+      .filter(Boolean);
   }
 
   async checkout(cwd: string, name: string, signal?: AbortSignal): Promise<void> {
@@ -5282,9 +5336,7 @@ export class GitService {
     maxBytes: number,
   ): Promise<{ ok: true; text: string } | { ok: false; code?: string }> {
     const flags =
-      fsConstants.O_RDONLY |
-      (fsConstants.O_NOFOLLOW ?? 0) |
-      (fsConstants.O_NONBLOCK ?? 0);
+      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
     let handle: fs.FileHandle | undefined;
     try {
       handle = await fs.open(filePath, flags);
@@ -5344,8 +5396,17 @@ export class GitService {
     }
   }
 
-  private async branchRefExistsPureFs(commonDir: string, branch: string): Promise<boolean | "fallback"> {
-    if (!branch || branch.includes("\u0000") || branch.includes("..") || branch.startsWith("/") || branch.endsWith("/")) {
+  private async branchRefExistsPureFs(
+    commonDir: string,
+    branch: string,
+  ): Promise<boolean | "fallback"> {
+    if (
+      !branch ||
+      branch.includes("\u0000") ||
+      branch.includes("..") ||
+      branch.startsWith("/") ||
+      branch.endsWith("/")
+    ) {
       return false;
     }
     // Reftable repositories do not store branches under `refs/heads` or `packed-refs`.
@@ -5684,13 +5745,21 @@ export class GitService {
       "repositoryPath",
       "version",
     ].sort();
-    const legacyLifecycleKeys = [...baseKeys, "deletionMode", "provisionedIgnored", "snapshotId", "snapshotRef", "snapshotTree"].sort();
+    const legacyLifecycleKeys = [
+      ...baseKeys,
+      "deletionMode",
+      "provisionedIgnored",
+      "snapshotId",
+      "snapshotRef",
+      "snapshotTree",
+    ].sort();
     const lifecycleKeys = [...legacyLifecycleKeys, "snapshotCommit"].sort();
     const keyShape =
       JSON.stringify(keys) === JSON.stringify(baseKeys) && journal.version === 3
         ? 3
         : (JSON.stringify(keys) === JSON.stringify(lifecycleKeys) ||
-            JSON.stringify(keys) === JSON.stringify(legacyLifecycleKeys)) && journal.version === 4
+              JSON.stringify(keys) === JSON.stringify(legacyLifecycleKeys)) &&
+            journal.version === 4
           ? 4
           : 0;
     if (
@@ -5751,8 +5820,7 @@ export class GitService {
         !Array.isArray(journal.provisionedIgnored) ||
         journal.provisionedIgnored.length > MANAGED_STATUS_PATH_LIMIT ||
         journal.provisionedIgnored.some(
-          (entry) =>
-            typeof entry !== "string" || normalizedRelativeWorktreePath(entry) !== entry,
+          (entry) => typeof entry !== "string" || normalizedRelativeWorktreePath(entry) !== entry,
         ) ||
         (journal.snapshotId !== null &&
           (typeof journal.snapshotId !== "string" ||
@@ -6023,21 +6091,36 @@ export class GitService {
     // Something set aside goes back only to a free path; with nothing set
     // aside, what is at the path must be the original (for the checkout, the
     // very directory this restore made). Anything else keeps the journal.
-    const putBack = async (original: string, setAside: string[], isOriginal: () => Promise<boolean>) => {
+    const putBack = async (
+      original: string,
+      setAside: string[],
+      isOriginal: () => Promise<boolean>,
+    ) => {
       const moved = [];
       for (const candidate of setAside) if (await this.pathExists(candidate)) moved.push(candidate);
       if (moved.length > 1) return false;
       if (moved.length === 1) return this.restoreQuarantinedPath(moved[0]!, original);
       return isOriginal();
     };
-    const checkoutBack = await putBack(target, [removal.checkout, removal.checkoutAuthorization], async () => {
-      const now = await fs.lstat(target).catch(() => undefined);
-      return now !== undefined && now.isDirectory() && now.dev === checkout.dev && now.ino === checkout.ino;
-    });
+    const checkoutBack = await putBack(
+      target,
+      [removal.checkout, removal.checkoutAuthorization],
+      async () => {
+        const now = await fs.lstat(target).catch(() => undefined);
+        return (
+          now !== undefined &&
+          now.isDirectory() &&
+          now.dev === checkout.dev &&
+          now.ino === checkout.ino
+        );
+      },
+    );
     // A checkout that cannot go back leaves its Git record set aside too, as
     // the removal's journal describes it.
     if (!checkoutBack) return false;
-    const recordBack = await putBack(gitDir, [removal.gitDir, removal.gitDirAuthorization], () => this.pathExists(gitDir));
+    const recordBack = await putBack(gitDir, [removal.gitDir, removal.gitDirAuthorization], () =>
+      this.pathExists(gitDir),
+    );
     if (!recordBack) return false;
     await fs.rm(removal.journal, { force: true });
     return true;
@@ -6082,7 +6165,9 @@ export class GitService {
     const recordedGitDir = this.validatedWorktreeGitDir(repo, recorded.gitDir);
     const candidates = owned
       ? [owned.gitDir]
-      : (await fs.readdir(registrations).catch(() => [] as string[])).map((name) => path.join(registrations, name));
+      : (await fs.readdir(registrations).catch(() => [] as string[])).map((name) =>
+          path.join(registrations, name),
+        );
     for (const candidate of candidates) {
       let gitFile: string;
       try {
@@ -6090,7 +6175,9 @@ export class GitService {
       } catch {
         continue;
       }
-      const checkout = path.dirname(path.isAbsolute(gitFile) ? path.resolve(gitFile) : path.resolve(candidate, gitFile));
+      const checkout = path.dirname(
+        path.isAbsolute(gitFile) ? path.resolve(gitFile) : path.resolve(candidate, gitFile),
+      );
       if (!targets.includes(checkout)) continue;
       const markerPath = path.join(candidate, WORKTREE_OWNER_MARKER);
       const marker = await fs.readFile(markerPath, "utf8").then(
@@ -6116,7 +6203,11 @@ export class GitService {
   }
 
   /** Renames a kept checkout's Git record to `recordedGitDir` and points the checkout at it. */
-  private async moveKeptRecordToRecordedName(candidate: string, recordedGitDir: string, checkout: string): Promise<boolean> {
+  private async moveKeptRecordToRecordedName(
+    candidate: string,
+    recordedGitDir: string,
+    checkout: string,
+  ): Promise<boolean> {
     const dotGit = path.join(checkout, ".git");
     const pointer = await fs.lstat(dotGit).catch(() => undefined);
     if (!pointer?.isFile() || (await this.pathExists(recordedGitDir))) return false;
@@ -6192,8 +6283,7 @@ export class GitService {
     if (!unknownIgnored) {
       const expanded = await this.expandIgnoredStatusPaths(scan, status.ignoredPaths);
       unknownIgnored =
-        expanded === undefined ||
-        expanded.some((entry) => !policy.allowedIgnored.has(entry));
+        expanded === undefined || expanded.some((entry) => !policy.allowedIgnored.has(entry));
     }
     if (policy.snapshotTree === null && policy.allowedIgnored.size === 0) {
       return status.uncommitted > 0 || status.ignored > 0 ? "strict_dirty" : undefined;
@@ -7218,14 +7308,12 @@ export class GitService {
   ): Promise<GitCreatedWorktree> {
     const repo = this.requireRepository(await this.verifyAdmissionRepository(cwd));
     await this.validateBranchName(repo, branch);
-    const requestedOwnershipToken = options?.ownershipToken === undefined
-      ? undefined
-      : this.validatedWorktreeOwnershipToken(options.ownershipToken);
+    const requestedOwnershipToken =
+      options?.ownershipToken === undefined
+        ? undefined
+        : this.validatedWorktreeOwnershipToken(options.ownershipToken);
     const additionalAllocationBytes = options?.additionalAllocationBytes ?? 0;
-    if (
-      !Number.isSafeInteger(additionalAllocationBytes) ||
-      additionalAllocationBytes < 0
-    ) {
+    if (!Number.isSafeInteger(additionalAllocationBytes) || additionalAllocationBytes < 0) {
       throw new GitServiceError("invalid_input", "The worktree capacity reserve is invalid.");
     }
     const createdWorktree = await this.enqueueMutation(repo.commonDir, async () => {
@@ -7233,18 +7321,20 @@ export class GitService {
         options?.startPoint === undefined
           ? this.requireHead(repo)
           : this.requireStartCommit(repo, options.startPoint, signal),
-        this.run(
-          repo.cwd,
-          ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
-          { allowExitCodes: [1], signal },
-        ),
+        this.run(repo.cwd, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
+          allowExitCodes: [1],
+          signal,
+        }),
       ]);
       if (exists.exitCode === 0)
         throw new GitServiceError("invalid_ref", `Branch “${branch}” already exists.`);
       const checkoutBytes = await this.managedWorktreeCheckoutBytesForRepo(repo, createdFromHead);
       const totalAllocationBytes = checkoutBytes + additionalAllocationBytes;
       if (!Number.isSafeInteger(totalAllocationBytes)) {
-        throw new GitServiceError("unsupported_scope", "The checkout is too large to estimate safely.");
+        throw new GitServiceError(
+          "unsupported_scope",
+          "The checkout is too large to estimate safely.",
+        );
       }
       await checkWorktreeAllocation(root, repo.commonDir, totalAllocationBytes);
 
@@ -7461,11 +7551,9 @@ export class GitService {
               ])
             ).stdout,
           );
-          const blocked = await this.managedWorktreeDeletionBlocked(
-            lifecyclePolicy,
-            status,
-            { cwd: worktreePath },
-          );
+          const blocked = await this.managedWorktreeDeletionBlocked(lifecyclePolicy, status, {
+            cwd: worktreePath,
+          });
           if (blocked === "unknown_ignored") {
             throw new GitServiceError(
               "dirty_worktree",
@@ -7797,22 +7885,36 @@ export class GitService {
     repo: GitRepository,
     commit?: string,
   ): Promise<number> {
-    const head = commit ?? await this.requireHead(repo);
+    const head = commit ?? (await this.requireHead(repo));
     if (!GIT_OBJECT_ID.test(head)) {
-      throw new GitServiceError("invalid_input", "The checkout estimate requires a commit identity.");
+      throw new GitServiceError(
+        "invalid_input",
+        "The checkout estimate requires a commit identity.",
+      );
     }
     const result = await this.run(repo.topLevel, ["ls-tree", "--full-tree", "-rlz", head, "--"]);
     if (Buffer.byteLength(result.stdout) > DEFAULT_MAX_BUFFER_BYTES) {
-      throw new GitServiceError("output_limit", "The checkout listing exceeds the safe admission limit.");
+      throw new GitServiceError(
+        "output_limit",
+        "The checkout listing exceeds the safe admission limit.",
+      );
     }
     let bytes = 0;
     const paths: string[] = [];
     for (const record of result.stdout.split("\u0000").filter(Boolean)) {
       const match = /^(\d{6}) (blob|commit) [0-9a-f]{40} +([0-9]+|-)\t([\s\S]+)$/u.exec(record);
-      if (!match) throw new GitServiceError("unsupported_scope", "The checkout size could not be determined safely.");
+      if (!match)
+        throw new GitServiceError(
+          "unsupported_scope",
+          "The checkout size could not be determined safely.",
+        );
       // Submodules are not recursively initialized by worktree add.
       bytes += match[2] === "blob" ? Number(match[3]) * 2 + 4096 : 4096;
-      if (!Number.isSafeInteger(bytes)) throw new GitServiceError("unsupported_scope", "The checkout is too large to estimate safely.");
+      if (!Number.isSafeInteger(bytes))
+        throw new GitServiceError(
+          "unsupported_scope",
+          "The checkout is too large to estimate safely.",
+        );
       paths.push(match[4]);
     }
     if (paths.length === 0) return bytes;
@@ -7828,50 +7930,46 @@ export class GitService {
       let fieldIndex = 0;
       let currentAttr = "";
       const stdin = `${paths.join("\u0000")}\u0000`;
-      await this.run(
-        repo.topLevel,
-        ["check-attr", "--cached", "-z", "--all", "--stdin"],
-        {
-          gitIndexFile,
-          stdin,
-          onStdoutChunk: (chunk) => {
-            const buf = carry.length > 0 ? Buffer.concat([carry, chunk]) : chunk;
-            let start = 0;
-            while (start < buf.length) {
-              const nul = buf.indexOf(0, start);
-              if (nul === -1) break;
-              if (fieldIndex === 1) {
-                currentAttr = buf.subarray(start, nul).toString("utf8");
-              } else if (fieldIndex === 2) {
-                // Git cannot distinguish -filter from filter=unset here. A driver
-                // can also activate only in the new worktree via includeIf, so the
-                // source's filter config cannot safely resolve that ambiguity.
-                // Disabled ident is safe: its false/sentinel values do not expand.
-                const value = buf.subarray(start, nul).toString("utf8");
-                if (
-                  currentAttr === "filter" ||
-                  currentAttr === "working-tree-encoding" ||
-                  (currentAttr === "ident" && value !== "unset" && value !== "unspecified")
-                ) {
-                  throw new GitServiceError(
-                    "unsupported_scope",
-                    "Managed worktrees cannot safely estimate checkout filters, ident expansion or working-tree encodings. Use a checkout without these transformations.",
-                  );
-                }
+      await this.run(repo.topLevel, ["check-attr", "--cached", "-z", "--all", "--stdin"], {
+        gitIndexFile,
+        stdin,
+        onStdoutChunk: (chunk) => {
+          const buf = carry.length > 0 ? Buffer.concat([carry, chunk]) : chunk;
+          let start = 0;
+          while (start < buf.length) {
+            const nul = buf.indexOf(0, start);
+            if (nul === -1) break;
+            if (fieldIndex === 1) {
+              currentAttr = buf.subarray(start, nul).toString("utf8");
+            } else if (fieldIndex === 2) {
+              // Git cannot distinguish -filter from filter=unset here. A driver
+              // can also activate only in the new worktree via includeIf, so the
+              // source's filter config cannot safely resolve that ambiguity.
+              // Disabled ident is safe: its false/sentinel values do not expand.
+              const value = buf.subarray(start, nul).toString("utf8");
+              if (
+                currentAttr === "filter" ||
+                currentAttr === "working-tree-encoding" ||
+                (currentAttr === "ident" && value !== "unset" && value !== "unspecified")
+              ) {
+                throw new GitServiceError(
+                  "unsupported_scope",
+                  "Managed worktrees cannot safely estimate checkout filters, ident expansion or working-tree encodings. Use a checkout without these transformations.",
+                );
               }
-              fieldIndex = (fieldIndex + 1) % 3;
-              start = nul + 1;
             }
-            carry = start < buf.length ? Buffer.from(buf.subarray(start)) : Buffer.alloc(0);
-            if (carry.length > this.maxBufferBytes) {
-              throw new GitServiceError(
-                "output_limit",
-                "Git produced more output than Aiden can safely process.",
-              );
-            }
-          },
+            fieldIndex = (fieldIndex + 1) % 3;
+            start = nul + 1;
+          }
+          carry = start < buf.length ? Buffer.from(buf.subarray(start)) : Buffer.alloc(0);
+          if (carry.length > this.maxBufferBytes) {
+            throw new GitServiceError(
+              "output_limit",
+              "Git produced more output than Aiden can safely process.",
+            );
+          }
         },
-      );
+      });
       if (carry.length !== 0 || fieldIndex !== 0) {
         throw new GitServiceError(
           "unsupported_scope",
@@ -7931,11 +8029,9 @@ export class GitService {
     if (upstream && upstream.exitCode === 0) {
       const tracking = upstream.stdout.trim();
       if (tracking) {
-        const counts = await this.run(
-          cwd,
-          ["rev-list", "--count", `${tracking}..${branchRef}`],
-          { signal },
-        );
+        const counts = await this.run(cwd, ["rev-list", "--count", `${tracking}..${branchRef}`], {
+          signal,
+        });
         const ahead = Number(counts.stdout.trim());
         return Number.isSafeInteger(ahead) && ahead > 0 ? ahead : 0;
       }
@@ -8042,9 +8138,7 @@ export class GitService {
       // Git records canonical paths in the gitdir backlink and `worktree list`;
       // resolve so symlinked ancestors (e.g. /var on macOS) compare equal.
       const resolvedTarget = await fs.realpath(candidate);
-      const gitFileContents = (
-        await fs.readFile(path.join(resolvedTarget, ".git"), "utf8")
-      ).trim();
+      const gitFileContents = (await fs.readFile(path.join(resolvedTarget, ".git"), "utf8")).trim();
       const gitdirMatch = /^gitdir:\s+(.+)$/u.exec(gitFileContents);
       if (gitdirMatch === null) {
         throw new GitServiceError(
@@ -8061,9 +8155,7 @@ export class GitService {
         ),
       );
       const ownershipToken = this.validatedWorktreeOwnershipToken(
-        (
-          await fs.readFile(path.join(worktreeGitDir, WORKTREE_OWNER_MARKER), "utf8")
-        ).trim(),
+        (await fs.readFile(path.join(worktreeGitDir, WORKTREE_OWNER_MARKER), "utf8")).trim(),
       );
       const registeredGitFile = (
         await fs.readFile(path.join(worktreeGitDir, "gitdir"), "utf8")
@@ -8193,11 +8285,7 @@ export class GitService {
     const commit = await this.managedWorktreeSnapshotCommit(cwd, snapshotId);
     if (commit !== expectedCommit) return undefined;
     const repo = this.requireRepository(await this.repository(cwd));
-    const result = await this.run(repo.cwd, [
-      "rev-parse",
-      "--verify",
-      `${commit}^{tree}`,
-    ]);
+    const result = await this.run(repo.cwd, ["rev-parse", "--verify", `${commit}^{tree}`]);
     const tree = result.stdout.trim();
     return GIT_OBJECT_ID.test(tree) ? tree : undefined;
   }
@@ -8256,10 +8344,7 @@ export class GitService {
       let parentStat: Stats;
       let canonicalParent: string;
       try {
-        [parentStat, canonicalParent] = await Promise.all([
-          fs.lstat(parent),
-          fs.realpath(parent),
-        ]);
+        [parentStat, canonicalParent] = await Promise.all([fs.lstat(parent), fs.realpath(parent)]);
       } catch (cause) {
         throw new GitServiceError(
           "command_failed",
@@ -8308,12 +8393,16 @@ export class GitService {
             extraConfig: parallelCheckoutConfig(),
           });
         } else {
-          await this.run(repo.cwd, ["worktree", "add", "-b", branch, "--", resolvedTarget, baseCommit], {
-            hooksDisabled: true,
-            mutation: true,
-            signal,
-            extraConfig: parallelCheckoutConfig(),
-          });
+          await this.run(
+            repo.cwd,
+            ["worktree", "add", "-b", branch, "--", resolvedTarget, baseCommit],
+            {
+              hooksDisabled: true,
+              mutation: true,
+              signal,
+              extraConfig: parallelCheckoutConfig(),
+            },
+          );
         }
         createdByCommand = true;
         const registered = (await this.inspectWorktrees(repo, resolvedTarget)).find(
@@ -8416,7 +8505,8 @@ export class GitService {
       try {
         const parent = path.dirname(requestedTarget);
         const parentStat = await fs.lstat(parent);
-        if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) throw new Error("not a directory");
+        if (!parentStat.isDirectory() || parentStat.isSymbolicLink())
+          throw new Error("not a directory");
         canonicalParent = await fs.realpath(parent);
       } catch (cause) {
         throw new GitServiceError(
@@ -8427,7 +8517,11 @@ export class GitService {
       }
       const target = path.join(canonicalParent, path.basename(requestedTarget));
       const relativeTarget = path.relative(managedRoot, target);
-      if (relativeTarget.length === 0 || relativeTarget.startsWith("..") || path.isAbsolute(relativeTarget)) {
+      if (
+        relativeTarget.length === 0 ||
+        relativeTarget.startsWith("..") ||
+        path.isAbsolute(relativeTarget)
+      ) {
         throw new GitServiceError(
           "invalid_input",
           "The worktree must be restored inside Aiden's worktree folder.",
@@ -8438,7 +8532,11 @@ export class GitService {
       }
       let removing: boolean;
       try {
-        removing = await this.managedWorktreeDeletionPending(worktreePath, worktreeGitDir, ownershipToken);
+        removing = await this.managedWorktreeDeletionPending(
+          worktreePath,
+          worktreeGitDir,
+          ownershipToken,
+        );
       } catch {
         removing = true;
       }
@@ -8459,7 +8557,11 @@ export class GitService {
         worktreeGitDir,
         ownershipToken,
       );
-      if (stale && path.resolve(stale.path) !== requestedTarget && path.resolve(stale.path) !== target) {
+      if (
+        stale &&
+        path.resolve(stale.path) !== requestedTarget &&
+        path.resolve(stale.path) !== target
+      ) {
         throw new GitServiceError(
           "command_failed",
           "This worktree was moved, so Aiden can't restore it in its old place.",
@@ -8472,8 +8574,13 @@ export class GitService {
           `The branch “${branch}” is checked out in another worktree, so this one can't be restored.`,
         );
       }
-      if (others.some((worktree) => [requestedTarget, target].includes(path.resolve(worktree.path)))) {
-        throw new GitServiceError("command_failed", "Another worktree is registered at this folder.");
+      if (
+        others.some((worktree) => [requestedTarget, target].includes(path.resolve(worktree.path)))
+      ) {
+        throw new GitServiceError(
+          "command_failed",
+          "Another worktree is registered at this folder.",
+        );
       }
       const head = await this.managedWorktreeBranchHead(repo.cwd, branch);
       if (head === undefined) {
@@ -8497,14 +8604,20 @@ export class GitService {
         }
         const staleGitDir = this.validatedWorktreeGitDir(repo, worktreeGitDir);
         if (await this.pathExists(path.join(staleGitDir, "locked"))) {
-          throw new GitServiceError("command_failed", "Git has this worktree locked, so Aiden can't restore it.");
+          throw new GitServiceError(
+            "command_failed",
+            "Git has this worktree locked, so Aiden can't restore it.",
+          );
         }
         // Only Git's record is cleared, never with `worktree remove`: that
         // deletes a clean checkout's folder, ignored files and all, if one
         // came back after the check above. Moving the record aside touches
         // nothing at the checkout path, and the path is checked once more
         // before the record is gone for good.
-        staleRecord = { setAside: await this.setAsideWorktreeRecord(repo, staleGitDir), gitDir: staleGitDir };
+        staleRecord = {
+          setAside: await this.setAsideWorktreeRecord(repo, staleGitDir),
+          gitDir: staleGitDir,
+        };
         if ((await this.pathExists(stale.path)) || (await this.pathExists(target))) {
           await this.restoreQuarantinedPath(staleRecord.setAside, staleRecord.gitDir);
           throw new GitServiceError("command_failed", "The worktree folder is already there.");
@@ -8535,13 +8648,15 @@ export class GitService {
         // A folder put back from the Trash after the last look gets its Git
         // record back: the old record is kept until the new checkout exists.
         if (placeholder) await fs.rmdir(placeholder).catch(() => undefined);
-        if (staleRecord) await this.restoreQuarantinedPath(staleRecord.setAside, staleRecord.gitDir);
+        if (staleRecord)
+          await this.restoreQuarantinedPath(staleRecord.setAside, staleRecord.gitDir);
         throw error;
       }
       if (placeholder) await fs.rmdir(placeholder).catch(() => undefined);
       // The old record is out of Git's list already; failing to delete it only
       // leaves a stray folder in the Git directory, never a stranded checkout.
-      if (staleRecord) await this.discardSetAsideRecord(staleRecord.setAside).catch(() => undefined);
+      if (staleRecord)
+        await this.discardSetAsideRecord(staleRecord.setAside).catch(() => undefined);
       // The folder this call made, so a rollback never touches a replacement.
       const added = await fs.lstat(target).catch(() => undefined);
       let owned: { gitDir: string; token: string } | undefined;
@@ -8550,22 +8665,37 @@ export class GitService {
           (worktree) => worktree.branch === branch && path.resolve(worktree.path) === target,
         );
         if (!registered) {
-          throw new GitServiceError("command_failed", "The restored worktree could not be verified.");
+          throw new GitServiceError(
+            "command_failed",
+            "The restored worktree could not be verified.",
+          );
         }
-        const gitDirResult = await this.run(registered.path, ["rev-parse", "--path-format=absolute", "--git-dir"]);
-        const newGitDir = this.validatedWorktreeGitDir(repo, await fs.realpath(gitDirResult.stdout.trim()));
+        const gitDirResult = await this.run(registered.path, [
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-dir",
+        ]);
+        const newGitDir = this.validatedWorktreeGitDir(
+          repo,
+          await fs.realpath(gitDirResult.stdout.trim()),
+        );
         const newToken = randomUUID();
         await this.persistWorktreeOwnership(newGitDir, newToken);
         owned = { gitDir: newGitDir, token: newToken };
         const checkout = await fs.lstat(registered.path);
         if (!checkout.isDirectory() || checkout.isSymbolicLink()) {
-          throw new GitServiceError("command_failed", "The restored worktree could not be verified.");
+          throw new GitServiceError(
+            "command_failed",
+            "The restored worktree could not be verified.",
+          );
         }
         // A workspace in a subfolder needs that subfolder on the branch as it
         // stands now; otherwise the record would point at a missing folder
         // that no notice offers to restore.
         if (workspaceSubpath !== "") {
-          const workspaceFolder = await fs.lstat(path.join(registered.path, workspaceSubpath)).catch(() => undefined);
+          const workspaceFolder = await fs
+            .lstat(path.join(registered.path, workspaceSubpath))
+            .catch(() => undefined);
           if (!workspaceFolder?.isDirectory() || workspaceFolder.isSymbolicLink()) {
             throw new GitServiceError(
               "command_failed",
@@ -8596,7 +8726,11 @@ export class GitService {
         let kept: GitServiceError | undefined;
         try {
           const now = await fs.lstat(target).catch(() => undefined);
-          const same = added !== undefined && now !== undefined && now.dev === added.dev && now.ino === added.ino;
+          const same =
+            added !== undefined &&
+            now !== undefined &&
+            now.dev === added.dev &&
+            now.ino === added.ino;
           if (now !== undefined && (!same || owned === undefined)) {
             kept = new GitServiceError(
               "dirty_worktree",
@@ -8622,7 +8756,8 @@ export class GitService {
               // The removal may stop after setting the folder and its Git
               // record aside (a write landed late): put both back first, so
               // "kept" means the folder is where it was.
-              if (!(await this.returnSetAsideRestore(target, owned.gitDir, owned.token, added))) throw removalError;
+              if (!(await this.returnSetAsideRestore(target, owned.gitDir, owned.token, added)))
+                throw removalError;
               kept = new GitServiceError(
                 "dirty_worktree",
                 "Restoring the worktree failed after something changed in its folder, so Aiden kept the folder. Copy out what you need, then delete the folder and choose Restore again.",
@@ -8666,17 +8801,24 @@ export class GitService {
   ): Promise<void> {
     await this.requireRepository(await this.repository(cwd));
     if (!GIT_OBJECT_ID.test(snapshotCommit)) {
-      throw new GitServiceError("invalid_input", "The managed worktree snapshot commit is invalid.");
+      throw new GitServiceError(
+        "invalid_input",
+        "The managed worktree snapshot commit is invalid.",
+      );
     }
-    await this.run(
-      worktreePath,
-      ["read-tree", "--reset", "-u", snapshotCommit],
-      { mutation: true, signal, hooksDisabled: true },
-    );
+    await this.run(worktreePath, ["read-tree", "--reset", "-u", snapshotCommit], {
+      mutation: true,
+      signal,
+      hooksDisabled: true,
+    });
     const head = (
       await this.run(worktreePath, ["rev-parse", "--verify", "HEAD"], { signal })
     ).stdout.trim();
-    await this.run(worktreePath, ["read-tree", head], { mutation: true, signal, hooksDisabled: true });
+    await this.run(worktreePath, ["read-tree", head], {
+      mutation: true,
+      signal,
+      hooksDisabled: true,
+    });
   }
 }
 
@@ -8854,8 +8996,7 @@ export const gitExpandManagedWorktreeIgnored = (
 ) => gitService.expandManagedWorktreeIgnored(folderPath, worktreePath, ignoredPaths);
 export const gitManagedWorktreeDirtyBytes = (folderPath: string, worktreePath: string) =>
   gitService.managedWorktreeDirtyBytes(folderPath, worktreePath);
-export const gitRepositoryPaths = (folderPath: string) =>
-  gitService.repositoryPaths(folderPath);
+export const gitRepositoryPaths = (folderPath: string) => gitService.repositoryPaths(folderPath);
 export const gitListFiles = (folderPath: string, args: readonly string[]) =>
   gitService.listFiles(folderPath, args);
 export const gitCheckIgnoredPaths = (

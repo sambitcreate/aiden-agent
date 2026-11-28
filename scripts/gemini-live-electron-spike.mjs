@@ -17,9 +17,7 @@ const packagedAssets = process.argv.includes("--packaged");
 const receiptPath = path.join(
   repositoryRoot,
   "build",
-  packagedAssets
-    ? "gemini-live-packaged-spike.json"
-    : "gemini-live-electron-spike.json",
+  packagedAssets ? "gemini-live-packaged-spike.json" : "gemini-live-electron-spike.json",
 );
 
 async function findAsar(directory) {
@@ -108,9 +106,10 @@ async function run() {
     server = createServer((request, response) => {
       response.writeHead(200, {
         "cache-control": "no-store",
-        "content-type": request.url === "/gemini-live-pcm-worklet.js"
-          ? "text/javascript"
-          : "text/html; charset=utf-8",
+        "content-type":
+          request.url === "/gemini-live-pcm-worklet.js"
+            ? "text/javascript"
+            : "text/html; charset=utf-8",
       });
       response.end(request.url === "/gemini-live-pcm-worklet.js" ? worklet : html);
     });
@@ -140,10 +139,10 @@ async function run() {
       (webContents, permission, callback, details) =>
         callback(
           webContents === browser.webContents &&
-          permission === "display-capture" &&
-          details.isMainFrame === true &&
-          browser.webContents.mainFrame.frameToken === boundDocument &&
-          browser.webContents.mainFrame.url === boundUrl,
+            permission === "display-capture" &&
+            details.isMainFrame === true &&
+            browser.webContents.mainFrame.frameToken === boundDocument &&
+            browser.webContents.mainFrame.url === boundUrl,
         ),
     );
     session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
@@ -201,13 +200,17 @@ async function run() {
     }
     await writeFile(
       receiptPath,
-      `${JSON.stringify({
-        electron: process.versions.electron,
-        packagedAssets,
-        evidenceClass: "dependency_electron_deterministic_only",
-        builtAudioWorkletExecuted: true,
-        deterministicCustomHandlerContractPassed: true,
-      }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          electron: process.versions.electron,
+          packagedAssets,
+          evidenceClass: "dependency_electron_deterministic_only",
+          builtAudioWorkletExecuted: true,
+          deterministicCustomHandlerContractPassed: true,
+        },
+        null,
+        2,
+      )}\n`,
       "utf8",
     );
     exitCode = 0;
@@ -215,13 +218,17 @@ async function run() {
     const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
     await writeFile(
       receiptPath,
-      `${JSON.stringify({
-        electron: process.versions.electron,
-        packagedAssets,
-        evidenceClass: "dependency_electron_deterministic_only",
-        passed: false,
-        error: detail,
-      }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          electron: process.versions.electron,
+          packagedAssets,
+          evidenceClass: "dependency_electron_deterministic_only",
+          passed: false,
+          error: detail,
+        },
+        null,
+        2,
+      )}\n`,
       "utf8",
     );
     process.stderr.write(`${detail}\n`);

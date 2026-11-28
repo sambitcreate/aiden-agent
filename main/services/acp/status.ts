@@ -2,7 +2,10 @@ import type { AcpHarnessStatus } from "../../../renderer/shared/acp-harness.js";
 import type { AcpRuntimeState } from "./installer.js";
 
 /** Project installer state onto the renderer-safe status shape. */
-export function projectRuntime(state: AcpRuntimeState, downloadHost?: string): AcpHarnessStatus["runtime"] {
+export function projectRuntime(
+  state: AcpRuntimeState,
+  downloadHost?: string,
+): AcpHarnessStatus["runtime"] {
   const source = downloadHost ? { downloadHost } : {};
   switch (state.status) {
     case "unsupported":
@@ -20,8 +23,12 @@ export function projectRuntime(state: AcpRuntimeState, downloadHost?: string): A
         status: "installing",
         version: state.version,
         phase: state.progress.phase,
-        ...(state.progress.receivedBytes !== undefined ? { receivedBytes: state.progress.receivedBytes } : {}),
-        ...(state.progress.totalBytes !== undefined ? { totalBytes: state.progress.totalBytes } : {}),
+        ...(state.progress.receivedBytes !== undefined
+          ? { receivedBytes: state.progress.receivedBytes }
+          : {}),
+        ...(state.progress.totalBytes !== undefined
+          ? { totalBytes: state.progress.totalBytes }
+          : {}),
       };
     case "installed":
       return { status: "installed", version: state.version };

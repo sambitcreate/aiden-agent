@@ -1,4 +1,10 @@
-import type { McpLiveStatus, McpPresetAuth, McpPresetState, McpServer, McpServerDependents } from "./types";
+import type {
+  McpLiveStatus,
+  McpPresetAuth,
+  McpPresetState,
+  McpServer,
+  McpServerDependents,
+} from "./types";
 
 export function mcpPresetCredentialReady({
   auth,
@@ -127,7 +133,9 @@ export function mcpConnectionChanged(saved: McpServer, draft: McpServer): boolea
   // Headers and environment are part of main's connection snapshot. Main drops
   // empty maps, so an empty map and a missing one are the same connection.
   const map = (record: Record<string, string> | undefined) => {
-    const entries = Object.entries(record ?? {}).sort(([left], [right]) => left.localeCompare(right));
+    const entries = Object.entries(record ?? {}).sort(([left], [right]) =>
+      left.localeCompare(right),
+    );
     return entries.length ? entries : null;
   };
   const pick = (server: McpServer) =>

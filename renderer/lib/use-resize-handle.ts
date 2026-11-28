@@ -107,7 +107,11 @@ export function useResizeHandle(options: ResizeHandleOptions) {
       // A mouse released outside the window, whose pointerup never arrived.
       if (pointer.pointerType === "mouse" && pointer.buttons === 0) return finish(pointer);
       if (!started) {
-        if (Math.abs((horizontal ? pointer.clientY : pointer.clientX) - origin) < RESIZE_DRAG_THRESHOLD) return;
+        if (
+          Math.abs((horizontal ? pointer.clientY : pointer.clientX) - origin) <
+          RESIZE_DRAG_THRESHOLD
+        )
+          return;
         started = true;
         // The cursor stays a resize cursor over whatever the pointer crosses.
         body.style.cursor = horizontal ? "row-resize" : "col-resize";

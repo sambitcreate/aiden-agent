@@ -63,7 +63,10 @@ test("without the panel only the system browser is offered", () => {
 test("copy link copies the URL without choosing", async () => {
   installBotTestIpc();
   const written: string[] = [];
-  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => void written.push(text) } });
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (text: string) => void written.push(text) },
+  });
   const { choices } = setup();
   fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
   await Promise.resolve();

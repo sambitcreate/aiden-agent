@@ -10,10 +10,7 @@ import { createDeviceRecorder } from "../services/devices/device-recording.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { rendererProxyOrigins, startDeviceHubProxy } from "../services/devices/device-hub-proxy.js";
 import { registerDeviceHandlersWith } from "../services/devices/device-ipc.js";
-import {
-  createDeviceService,
-  type DeviceService,
-} from "../services/devices/device-service.js";
+import { createDeviceService, type DeviceService } from "../services/devices/device-service.js";
 import {
   createNpmRunner,
   defaultNpmResolutionDeps,
@@ -35,7 +32,10 @@ import {
   runSshCommand,
   sshDeviceHostOwner,
 } from "../services/devices/ssh-device-host.js";
-import { defaultLocalSshTargetDeps, isLocalSshTarget } from "../services/devices/local-ssh-target.js";
+import {
+  defaultLocalSshTargetDeps,
+  isLocalSshTarget,
+} from "../services/devices/local-ssh-target.js";
 
 /** The system ssh; Aiden never bundles one or stores keys. */
 const SSH_PATH = "/usr/bin/ssh";
@@ -69,7 +69,11 @@ function defaultDeviceService(): DeviceService {
       create: (config) =>
         createSshDeviceHost(
           config,
-          defaultSshDeviceHostDeps({ owner: sshDeviceHostOwner(baseDir, config.id), sshPath: SSH_PATH, reservePort }),
+          defaultSshDeviceHostDeps({
+            owner: sshDeviceHostOwner(baseDir, config.id),
+            sshPath: SSH_PATH,
+            reservePort,
+          }),
         ),
       isLocalTarget: (config) =>
         isLocalSshTarget(
@@ -102,7 +106,11 @@ function defaultDeviceFeatures(): DeviceFeatures {
     service: defaultDeviceService(),
     recorder: createDeviceRecorder({
       spawn: (command, args, env) =>
-        nodeSpawn(command, [...args], { stdio: "ignore", detached: false, ...(env ? { env } : {}) }),
+        nodeSpawn(command, [...args], {
+          stdio: "ignore",
+          detached: false,
+          ...(env ? { env } : {}),
+        }),
       tempDir: async () => {
         const directory = path.join(baseDir, "recordings");
         await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -179,7 +187,9 @@ export function terminateDeviceHelperCommands(): void {
 
 export function registerDeviceHandlers(): void {
   // Paired Macs reach this Mac's simulators only while the flag and the owner's sharing consent are on.
-  registerSimulatorShareHost((audience) => (devicesEnabled() ? defaultDeviceService().shareHost(audience) : null));
+  registerSimulatorShareHost((audience) =>
+    devicesEnabled() ? defaultDeviceService().shareHost(audience) : null,
+  );
   registerDeviceHandlersWith({
     handle: (channel, listener) =>
       ipcMain.handle(channel, (event, ...args) => listener(event, ...args)),

@@ -129,26 +129,38 @@ test("Assistant schedule profile selects the bounded runtime for global and proj
 });
 
 test("ordinary schedules require an exact Web Search grant", () => {
-  assert.equal(scheduledTaskAllowsWebSearch({
-    mode: "llm",
-    executionProfile: undefined,
-    webSearchEnabled: undefined,
-  }), false);
-  assert.equal(scheduledTaskAllowsWebSearch({
-    mode: "llm",
-    executionProfile: undefined,
-    webSearchEnabled: false,
-  }), false);
-  assert.equal(scheduledTaskAllowsWebSearch({
-    mode: "llm",
-    executionProfile: undefined,
-    webSearchEnabled: true,
-  }), true);
-  assert.equal(scheduledTaskAllowsWebSearch({
-    mode: "script",
-    executionProfile: undefined,
-    webSearchEnabled: true,
-  }), false);
+  assert.equal(
+    scheduledTaskAllowsWebSearch({
+      mode: "llm",
+      executionProfile: undefined,
+      webSearchEnabled: undefined,
+    }),
+    false,
+  );
+  assert.equal(
+    scheduledTaskAllowsWebSearch({
+      mode: "llm",
+      executionProfile: undefined,
+      webSearchEnabled: false,
+    }),
+    false,
+  );
+  assert.equal(
+    scheduledTaskAllowsWebSearch({
+      mode: "llm",
+      executionProfile: undefined,
+      webSearchEnabled: true,
+    }),
+    true,
+  );
+  assert.equal(
+    scheduledTaskAllowsWebSearch({
+      mode: "script",
+      executionProfile: undefined,
+      webSearchEnabled: true,
+    }),
+    false,
+  );
 });
 
 test("scheduled MCP identities are bounded, normalized, and deduplicated", () => {

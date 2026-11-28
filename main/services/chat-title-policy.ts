@@ -18,7 +18,9 @@ export function assertRenameAllowedFromChat(
   options: { rejectFeatureOwned?: boolean },
 ): void {
   if (options.rejectFeatureOwned && chatSurface(chat) === "feature") {
-    throw new Error("This conversation belongs to another Aiden feature and cannot be changed from chat.");
+    throw new Error(
+      "This conversation belongs to another Aiden feature and cannot be changed from chat.",
+    );
   }
 }
 
@@ -71,7 +73,8 @@ function titleMessageExcerpt(message: ChatMessage): string {
     (element) => `Element: ${compact(element.label) || "Element"}`,
   );
   const attachments = withoutGrabbedElementThumbnails(message.attachments ?? []).map(
-    (attachment) => `${attachment.kind === "image" ? "Image" : "File"}: ${compact(attachment.name)}`,
+    (attachment) =>
+      `${attachment.kind === "image" ? "Image" : "File"}: ${compact(attachment.name)}`,
   );
   const body = [content, ...grabbed, ...attachments].filter(Boolean).join(" | ");
   return body ? `${label}: ${body}` : "";
@@ -119,10 +122,7 @@ export function sanitizeGeneratedChatTitle(raw: string): string | null {
     .replace(/\s*```$/i, "")
     .trim();
   const candidate = titleFromJson(unfenced) ?? unfenced;
-  const firstLine = candidate
-    .trim()
-    .split(/\r?\n/g)[0]
-    ?.trim();
+  const firstLine = candidate.trim().split(/\r?\n/g)[0]?.trim();
   if (!firstLine) return null;
 
   const normalized = compact(

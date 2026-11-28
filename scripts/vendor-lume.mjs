@@ -121,7 +121,13 @@ export async function extractLumeApp(archive, directory, runner = run) {
   if ((await readdir(directory)).length !== 0) {
     throw new Error("Lume must be extracted into an empty staging directory.");
   }
-  await runner("/usr/bin/tar", ["-xzf", archive, "-C", directory, LUME_ARTIFACT_PROVENANCE.appBundle]);
+  await runner("/usr/bin/tar", [
+    "-xzf",
+    archive,
+    "-C",
+    directory,
+    LUME_ARTIFACT_PROVENANCE.appBundle,
+  ]);
   const entries = await readdir(directory);
   if (entries.length !== 1 || entries[0] !== LUME_ARTIFACT_PROVENANCE.appBundle) {
     throw new Error("Extracting Lume produced unexpected staging entries.");
@@ -129,7 +135,9 @@ export async function extractLumeApp(archive, directory, runner = run) {
   const extracted = path.join(directory, LUME_ARTIFACT_PROVENANCE.appBundle);
   await assertExactLumeAppTree(extracted);
   const resolvedDirectory = await realpath(directory);
-  if ((await realpath(extracted)) !== path.join(resolvedDirectory, LUME_ARTIFACT_PROVENANCE.appBundle)) {
+  if (
+    (await realpath(extracted)) !== path.join(resolvedDirectory, LUME_ARTIFACT_PROVENANCE.appBundle)
+  ) {
     throw new Error("The extracted lume.app escaped its private staging directory.");
   }
   return extracted;
@@ -147,7 +155,8 @@ export async function validateVendoredLume(appPath, runner = run, hashBinary = h
     const binary = path.join(appPath, "Contents", "MacOS", "lume");
     const binaryInfo = await lstat(binary);
     if (!binaryInfo.isFile() || binaryInfo.isSymbolicLink()) return false;
-    if ((await realpath(binary)) !== path.join(resolvedApp, "Contents", "MacOS", "lume")) return false;
+    if ((await realpath(binary)) !== path.join(resolvedApp, "Contents", "MacOS", "lume"))
+      return false;
     if (binaryInfo.size !== LUME_ARTIFACT_PROVENANCE.binaryBytes) return false;
     if ((await hashBinary(binary)) !== LUME_ARTIFACT_PROVENANCE.binarySha256) return false;
     const profile = await lstat(path.join(appPath, "Contents", "embedded.provisionprofile"));
@@ -155,8 +164,10 @@ export async function validateVendoredLume(appPath, runner = run, hashBinary = h
     const infoPlist = path.join(appPath, "Contents", "Info.plist");
     const plistValue = async (key) =>
       (await runner("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", infoPlist])).trim();
-    if ((await plistValue("CFBundleIdentifier")) !== LUME_ARTIFACT_PROVENANCE.bundleIdentifier) return false;
-    if ((await plistValue("CFBundleVersion")) !== LUME_ARTIFACT_PROVENANCE.bundleVersion) return false;
+    if ((await plistValue("CFBundleIdentifier")) !== LUME_ARTIFACT_PROVENANCE.bundleIdentifier)
+      return false;
+    if ((await plistValue("CFBundleVersion")) !== LUME_ARTIFACT_PROVENANCE.bundleVersion)
+      return false;
     await runner("/usr/bin/codesign", [
       "--verify",
       "--strict",
@@ -179,7 +190,11 @@ export async function validateVendoredLume(appPath, runner = run, hashBinary = h
 
 export async function downloadLumeArchive(
   archive,
-  { fetchImpl = fetch, maxBytes = LUME_ARTIFACT_PROVENANCE.maxArchiveBytes, timeoutMs = DOWNLOAD_TIMEOUT_MS } = {},
+  {
+    fetchImpl = fetch,
+    maxBytes = LUME_ARTIFACT_PROVENANCE.maxArchiveBytes,
+    timeoutMs = DOWNLOAD_TIMEOUT_MS,
+  } = {},
 ) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -190,7 +205,8 @@ export async function downloadLumeArchive(
       redirect: "follow",
       signal: controller.signal,
     });
-    if (!response.ok || !response.body) throw new Error(`Download failed with HTTP ${response.status}.`);
+    if (!response.ok || !response.body)
+      throw new Error(`Download failed with HTTP ${response.status}.`);
     const declaredBytes = Number(response.headers.get("content-length"));
     if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
       await response.body.cancel().catch(() => {});
@@ -201,12 +217,18 @@ export async function downloadLumeArchive(
       transform(chunk, _encoding, callback) {
         downloadedBytes += chunk.byteLength;
         callback(
-          downloadedBytes > maxBytes ? new Error(`The pinned Lume download exceeds ${maxBytes} bytes.`) : undefined,
+          downloadedBytes > maxBytes
+            ? new Error(`The pinned Lume download exceeds ${maxBytes} bytes.`)
+            : undefined,
           chunk,
         );
       },
     });
-    await pipeline(Readable.fromWeb(response.body), bound, createWriteStream(archive, { flags: "wx", mode: 0o600 }));
+    await pipeline(
+      Readable.fromWeb(response.body),
+      bound,
+      createWriteStream(archive, { flags: "wx", mode: 0o600 }),
+    );
   } finally {
     clearTimeout(timeout);
   }
@@ -226,7 +248,11 @@ async function pathExists(candidate) {
  * Stage, validate, swap into place, validate again. A previous install is
  * moved aside and only removed once the new bundle verifies.
  */
-export async function installLumeApp(stagedApp, destination = VENDORED_LUME_APP, validate = validateVendoredLume) {
+export async function installLumeApp(
+  stagedApp,
+  destination = VENDORED_LUME_APP,
+  validate = validateVendoredLume,
+) {
   if (!(await validate(stagedApp))) {
     throw new Error("The staged lume.app failed its hash, signature, or version pin.");
   }
@@ -279,7 +305,9 @@ export async function vendorLume({
     await downloadLumeArchive(archive, { fetchImpl });
     const actualSha256 = await hashFile(archive);
     if (actualSha256 !== LUME_ARTIFACT_PROVENANCE.sha256) {
-      throw new Error(`Lume checksum mismatch: expected ${LUME_ARTIFACT_PROVENANCE.sha256}, received ${actualSha256}`);
+      throw new Error(
+        `Lume checksum mismatch: expected ${LUME_ARTIFACT_PROVENANCE.sha256}, received ${actualSha256}`,
+      );
     }
     const extractDirectory = path.join(staging, "extracted");
     await mkdir(extractDirectory, { mode: 0o700 });

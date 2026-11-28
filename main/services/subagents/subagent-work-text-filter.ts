@@ -24,8 +24,12 @@ const ENDS_IN_REDACTION = /\[REDACTED(?: [A-Z -]+)?\]["'`]?[,;]?$/u;
  */
 function readsAsProse(line: string): boolean {
   const trimmed = line.trim();
-  return !/[A-Za-z0-9]/u.test(trimmed) || /\s/u.test(trimmed) || /^[A-Z][a-z]+[.!?]$/u.test(trimmed) ||
-    lineIsPathOrVersion(trimmed);
+  return (
+    !/[A-Za-z0-9]/u.test(trimmed) ||
+    /\s/u.test(trimmed) ||
+    /^[A-Z][a-z]+[.!?]$/u.test(trimmed) ||
+    lineIsPathOrVersion(trimmed)
+  );
 }
 
 /**
@@ -60,7 +64,9 @@ function redactPrivateKeyBlocks(reports: readonly string[]): string[] {
     let text = entry;
     if (open) {
       const end = PRIVATE_KEY_END.exec(text);
-      text = end ? `[REDACTED PRIVATE KEY]${text.slice(end.index + end[0].length)}` : "[REDACTED PRIVATE KEY]";
+      text = end
+        ? `[REDACTED PRIVATE KEY]${text.slice(end.index + end[0].length)}`
+        : "[REDACTED PRIVATE KEY]";
       if (!end) return text;
     }
     open = opensPrivateKey(text);
@@ -80,7 +86,8 @@ export function sanitizePartialFindingsForParent(reports: readonly string[]): st
   // The line scan below cannot see that `PASSWORD:` owns the indented lines
   // under it, so hide secret-named blocks across lines first.
   const rawReports = redactPrivateKeyBlocks(reports).map((entry) =>
-    redactSensitiveNextLineBlocks(entry).split(/\r\n|[\n\r\u2028\u2029]/u));
+    redactSensitiveNextLineBlocks(entry).split(/\r\n|[\n\r\u2028\u2029]/u),
+  );
   const safeReports = rawReports.map((lines) => [...lines]);
   const earlierReportTails: Array<{ text: string; reportIndex: number; lineIndex: number }> = [];
   let comparisons = 0;
@@ -106,11 +113,12 @@ export function sanitizePartialFindingsForParent(reports: readonly string[]): st
     }
     let lineIndex = lines.length - 1;
     while (lineIndex >= 0 && !lines[lineIndex]!.trim()) lineIndex -= 1;
-    if (lineIndex >= 0) earlierReportTails.push({
-      text: lines[lineIndex]!.slice(-128),
-      reportIndex,
-      lineIndex,
-    });
+    if (lineIndex >= 0)
+      earlierReportTails.push({
+        text: lines[lineIndex]!.slice(-128),
+        reportIndex,
+        lineIndex,
+      });
   }
   const report = safeReports.map((lines) => lines.join("\n")).join("\n\n");
   const lines = report.split(/\r\n|[\n\r\u2028\u2029]/u);
@@ -122,9 +130,11 @@ export function sanitizePartialFindingsForParent(reports: readonly string[]): st
     // such as the second half of a key or token, is hidden with it, and so is
     // the line after it while it still continues the value.
     const wrappedTail = isWrappedSecretTail(previous, line);
-    safeLines.push(wrappedTail || containsHighConfidenceSecretIncludingEncodings(directSafe)
-      ? REDACTED_CREDENTIAL
-      : directSafe);
+    safeLines.push(
+      wrappedTail || containsHighConfidenceSecretIncludingEncodings(directSafe)
+        ? REDACTED_CREDENTIAL
+        : directSafe,
+    );
   }
   // A sensitive assignment key can be split across lines or settled messages.
   // Find the shortest unsafe adjacent span so unrelated source-path lines stay.
@@ -137,9 +147,11 @@ export function sanitizePartialFindingsForParent(reports: readonly string[]): st
       for (let start = 0; start + width <= lines.length; start += 1) {
         const indices = Array.from({ length: width }, (_value, offset) => start + offset);
         if (indices.some((index) => redacted.has(index))) continue;
-        if (containsHighConfidenceSecretIncludingEncodings(
-          joinForSplitCheck(safeLines.slice(start, start + width)),
-        )) {
+        if (
+          containsHighConfidenceSecretIncludingEncodings(
+            joinForSplitCheck(safeLines.slice(start, start + width)),
+          )
+        ) {
           for (const index of indices) redacted.add(index);
         }
       }
@@ -149,9 +161,11 @@ export function sanitizePartialFindingsForParent(reports: readonly string[]): st
   const partial = safeLines.join("\n").trim();
   // Arbitrarily fragmented or encoded material beyond the local span limit
   // cannot be reconstructed safely; fail closed before the parent sees it.
-  if (containsHighConfidenceSecretIncludingEncodings(partial) ||
+  if (
+    containsHighConfidenceSecretIncludingEncodings(partial) ||
     containsHighConfidenceSecretIncludingEncodings(joinForSplitCheck(safeLines))
-  ) return REDACTED_CREDENTIAL;
+  )
+    return REDACTED_CREDENTIAL;
   return scanLimitReached ? `${partial}\n${PARTIAL_SCAN_LIMIT_NOTICE}`.trim() : partial;
 }
 

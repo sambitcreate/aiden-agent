@@ -22,15 +22,27 @@ export const SIGN_IN_ARGS = {
 };
 
 function entryOf(candidate: BotToolCandidate): BotToolEntry {
-  return { tool: candidate.tool, replay: candidate.replay ?? "safe", ...(candidate.bind ? { bind: candidate.bind } : {}) };
+  return {
+    tool: candidate.tool,
+    replay: candidate.replay ?? "safe",
+    ...(candidate.bind ? { bind: candidate.bind } : {}),
+  };
 }
 
 /** The hand-off tool as a Bot turn offers it, answered through `handoffs`. */
-export function handoffEntries(handoffs: BotHandoffs, botId = "bot-h", deps: BotHandoffDeps = {}): BotToolEntry[] {
+export function handoffEntries(
+  handoffs: BotHandoffs,
+  botId = "bot-h",
+  deps: BotHandoffDeps = {},
+): BotToolEntry[] {
   return [entryOf(botHandoffCandidate(botId, handoffs, deps))];
 }
 
 /** The sign-in tool as a Bot turn offers it, answered through `handoffs`. */
-export function signInEntries(handoffs: BotHandoffs, botId = "bot-s", deps: BotSignInDeps = {}): BotToolEntry[] {
+export function signInEntries(
+  handoffs: BotHandoffs,
+  botId = "bot-s",
+  deps: BotSignInDeps = {},
+): BotToolEntry[] {
   return [entryOf(signInCandidate(botId, handoffs, deps))];
 }

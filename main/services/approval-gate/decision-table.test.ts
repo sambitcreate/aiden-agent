@@ -21,11 +21,21 @@ import { createComputerUseAccessGate } from "../computer-use/access-gate.js";
 import { SCHEDULE_TOOL_NAME, EDIT_AUTOMATION_TOOL_NAME } from "../schedule-tool.js";
 import { SubagentRunGrantV2 } from "../subagents/approval-v2.js";
 import type { SubagentAuthorityV2 } from "../subagents/authority-v2.js";
-import { assemblyDeps, assemblyState, FULL_GRANTS, MAIL_SERVER, SEND_EMAIL_TOOL, testAuthority } from "../bot-runtime/test-support/assembly-fixtures.js";
+import {
+  assemblyDeps,
+  assemblyState,
+  FULL_GRANTS,
+  MAIL_SERVER,
+  SEND_EMAIL_TOOL,
+  testAuthority,
+} from "../bot-runtime/test-support/assembly-fixtures.js";
 import { countingTool } from "../bot-runtime/test-support/fixtures.js";
 import type { BotClassifiableAction } from "../bot-rules/classify.js";
 import { defaultBotRules, type BotRule } from "../../../renderer/shared/bot-rules.js";
-import { workspaceToolApproval, type WorkspaceToolApprovalInput } from "./workspace-tool-approval.js";
+import {
+  workspaceToolApproval,
+  type WorkspaceToolApprovalInput,
+} from "./workspace-tool-approval.js";
 
 type TableName = keyof typeof EXPECTED;
 const RECORD = process.env.AIDEN_RECORD_APPROVAL_TABLE === "1";
@@ -50,15 +60,20 @@ after(() => {
   }
   // Every recorded row must still be exercised: a dropped scenario is a lost oracle row.
   for (const table of Object.keys(EXPECTED) as TableName[]) {
-    for (const key of Object.keys(EXPECTED[table])) assert.ok(seen[table]?.has(key), `${table}: ${key} was not exercised`);
+    for (const key of Object.keys(EXPECTED[table]))
+      assert.ok(seen[table]?.has(key), `${table}: ${key} was not exercised`);
   }
 });
 
 // ---------------------------------------------------------------- workspace
 
-function workspaceOutcome(input: WorkspaceToolApprovalInput, remembered?: "chat" | "always"): string {
+function workspaceOutcome(
+  input: WorkspaceToolApprovalInput,
+  remembered?: "chat" | "always",
+): string {
   let decided = workspaceToolApproval(input);
-  if (decided.readsRemembered && remembered) decided = workspaceToolApproval({ ...input, remembered });
+  if (decided.readsRemembered && remembered)
+    decided = workspaceToolApproval({ ...input, remembered });
   const decision = decided.decision;
   switch (decision.outcome) {
     case "allow":
@@ -73,52 +88,86 @@ function workspaceOutcome(input: WorkspaceToolApprovalInput, remembered?: "chat"
 }
 
 /** One tool call per kind of workspace tool, with the arguments that matter. */
-const WORKSPACE_CALLS: Record<string, Pick<WorkspaceToolApprovalInput, "toolName" | "args"> & Partial<WorkspaceToolApprovalInput>> = {
-  "run_command": { toolName: "run_command", args: { command: "npm test" } },
-  "edit_file": { toolName: "edit_file", args: { path: "src/a.ts", oldText: "a", newText: "b" } },
-  "write_file": { toolName: "write_file", args: { path: "src/b.ts", content: "x" } },
-  "read_file": { toolName: "read_file", args: { path: "src/a.ts" } },
-  "list_files": { toolName: "list_files", args: { path: "." } },
-  "web_search": { toolName: "web_search", args: { query: "weather" } },
-  "browser_open": { toolName: "browser_open", args: { url: "https://example.com" } },
-  "browser_open local file": { toolName: "browser_open", args: { url: "file:///w/index.html" }, browserFileRequired: true },
-  "browser_click": { toolName: "browser_click", args: { ref: "e1" } },
-  "browser_type": { toolName: "browser_type", args: { ref: "e1", text: "hi" } },
-  "device_open": { toolName: "device_open", args: { id: "sim" } },
-  "device_screenshot": { toolName: "device_screenshot", args: {} },
+const WORKSPACE_CALLS: Record<
+  string,
+  Pick<WorkspaceToolApprovalInput, "toolName" | "args"> & Partial<WorkspaceToolApprovalInput>
+> = {
+  run_command: { toolName: "run_command", args: { command: "npm test" } },
+  edit_file: { toolName: "edit_file", args: { path: "src/a.ts", oldText: "a", newText: "b" } },
+  write_file: { toolName: "write_file", args: { path: "src/b.ts", content: "x" } },
+  read_file: { toolName: "read_file", args: { path: "src/a.ts" } },
+  list_files: { toolName: "list_files", args: { path: "." } },
+  web_search: { toolName: "web_search", args: { query: "weather" } },
+  browser_open: { toolName: "browser_open", args: { url: "https://example.com" } },
+  "browser_open local file": {
+    toolName: "browser_open",
+    args: { url: "file:///w/index.html" },
+    browserFileRequired: true,
+  },
+  browser_click: { toolName: "browser_click", args: { ref: "e1" } },
+  browser_type: { toolName: "browser_type", args: { ref: "e1", text: "hi" } },
+  device_open: { toolName: "device_open", args: { id: "sim" } },
+  device_screenshot: { toolName: "device_screenshot", args: {} },
   "device_screenshot saveTo": { toolName: "device_screenshot", args: { saveTo: "shot.png" } },
-  "background_job start": { toolName: "background_job", args: { action: "start", command: "npm run dev" } },
-  "background_job read": { toolName: "background_job", args: { action: "read", job_id: "job_1a2b3c4d" } },
-  "share_image": { toolName: "share_image", args: { path: "a.png" } },
-  "generate_image": { toolName: "generate_image", args: { prompt: "a cat" } },
-  "classify": { toolName: "classify", args: { provider: "p" } },
+  "background_job start": {
+    toolName: "background_job",
+    args: { action: "start", command: "npm run dev" },
+  },
+  "background_job read": {
+    toolName: "background_job",
+    args: { action: "read", job_id: "job_1a2b3c4d" },
+  },
+  share_image: { toolName: "share_image", args: { path: "a.png" } },
+  generate_image: { toolName: "generate_image", args: { prompt: "a cat" } },
+  classify: { toolName: "classify", args: { provider: "p" } },
   "schedule create": { toolName: SCHEDULE_TOOL_NAME, args: { action: "create", title: "t" } },
   "schedule list": { toolName: SCHEDULE_TOOL_NAME, args: { action: "list" } },
-  "edit_automation": { toolName: EDIT_AUTOMATION_TOOL_NAME, args: { id: "a" } },
-  "remember_fact": { toolName: "remember_fact", args: { text: "likes tea" } },
-  "forget_fact": { toolName: "forget_fact", args: { id: "f1" } },
-  "workspace_artifact needing review": { toolName: "workspace_artifact", args: { action: "save" }, artifactRequired: true },
+  edit_automation: { toolName: EDIT_AUTOMATION_TOOL_NAME, args: { id: "a" } },
+  remember_fact: { toolName: "remember_fact", args: { text: "likes tea" } },
+  forget_fact: { toolName: "forget_fact", args: { id: "f1" } },
+  "workspace_artifact needing review": {
+    toolName: "workspace_artifact",
+    args: { action: "save" },
+    artifactRequired: true,
+  },
   "workspace_artifact read": { toolName: "workspace_artifact", args: { action: "list" } },
-  "ask_user_question": { toolName: "ask_user_question", args: {} },
-  "computer_use": { toolName: "computer_use", args: { action: "click" } },
-  "form_fill": { toolName: "form_fill", args: {} },
+  ask_user_question: { toolName: "ask_user_question", args: {} },
+  computer_use: { toolName: "computer_use", args: { action: "click" } },
+  form_fill: { toolName: "form_fill", args: {} },
 };
 
 for (const permission of ["full", "ask", "read-only", "none"] as const) {
   test(`workspace chat, ${permission} access, no hook`, () => {
     for (const [name, call] of Object.entries(WORKSPACE_CALLS)) {
-      check("workspace", `${permission} | ${name}`, workspaceOutcome({ workspaceId: "ws-1", permission, ...call }));
+      check(
+        "workspace",
+        `${permission} | ${name}`,
+        workspaceOutcome({ workspaceId: "ws-1", permission, ...call }),
+      );
     }
   });
 }
 
-const HOOK_CALLS = ["run_command", "edit_file", "read_file", "share_image", "schedule create", "remember_fact", "computer_use", "form_fill"];
+const HOOK_CALLS = [
+  "run_command",
+  "edit_file",
+  "read_file",
+  "share_image",
+  "schedule create",
+  "remember_fact",
+  "computer_use",
+  "form_fill",
+];
 for (const permission of ["full", "ask"] as const) {
   for (const hook of ["block", "ask", "allow"] as const) {
     test(`workspace chat, ${permission} access, hook ${hook}`, () => {
       for (const name of HOOK_CALLS) {
         const call = WORKSPACE_CALLS[name]!;
-        check("workspace", `${permission} | hook ${hook} | ${name}`, workspaceOutcome({ workspaceId: "ws-1", permission, hook, ...call }));
+        check(
+          "workspace",
+          `${permission} | hook ${hook} | ${name}`,
+          workspaceOutcome({ workspaceId: "ws-1", permission, hook, ...call }),
+        );
       }
     });
   }
@@ -126,22 +175,123 @@ for (const permission of ["full", "ask"] as const) {
 
 test("workspace chat, remembered approvals and their limits", () => {
   const cases: Record<string, [WorkspaceToolApprovalInput, ("chat" | "always")?]> = {
-    "ask | run_command remembered for chat": [{ workspaceId: "ws-1", permission: "ask", toolName: "run_command", args: { command: "npm test" } }, "chat"],
-    "ask | run_command remembered always": [{ workspaceId: "ws-1", permission: "ask", toolName: "run_command", args: { command: "npm test" } }, "always"],
-    "ask | edit_file remembered always": [{ workspaceId: "ws-1", permission: "ask", toolName: "edit_file", args: { path: "src/a.ts" } }, "always"],
-    "ask | write_file remembered for chat": [{ workspaceId: "ws-1", permission: "ask", toolName: "write_file", args: { path: "src/b.ts" } }, "chat"],
-    "ask | browser_click remembered (not rememberable)": [{ workspaceId: "ws-1", permission: "ask", toolName: "browser_click", args: {} }, "always"],
-    "ask | background_job start remembered (not rememberable)": [{ workspaceId: "ws-1", permission: "ask", toolName: "background_job", args: { action: "start" } }, "always"],
-    "ask | run_command without a workspace": [{ permission: "ask", toolName: "run_command", args: { command: "npm test" } }, "always"],
-    "ask | run_command with no command": [{ workspaceId: "ws-1", permission: "ask", toolName: "run_command", args: {} }, "always"],
-    "ask | edit_file with a parent path": [{ workspaceId: "ws-1", permission: "ask", toolName: "edit_file", args: { path: "../x.ts" } }, "always"],
-    "ask | Bot-bound run_command remembered": [{ workspaceId: "ws-1", permission: "ask", botBound: true, toolName: "run_command", args: { command: "ls" } }, "always"],
-    "ask | Bot-bound run_command": [{ workspaceId: "ws-1", permission: "ask", botBound: true, toolName: "run_command", args: { command: "ls" } }],
-    "full | Bot-bound mutating connection tool": [{ workspaceId: "ws-1", permission: "full", botBound: true, botMutating: true, toolName: "mail__send", args: {} }],
-    "ask | Bot-bound mutating connection tool": [{ workspaceId: "ws-1", permission: "ask", botBound: true, botMutating: true, toolName: "mail__send", args: {} }],
-    "ask | hook ask on remembered run_command": [{ workspaceId: "ws-1", permission: "ask", hook: "ask", toolName: "run_command", args: { command: "npm test" } }, "always"],
-    "ask | hook allow without a rememberable target": [{ workspaceId: "ws-1", permission: "ask", hook: "allow", toolName: "run_command", args: {} }],
-    "ask | hook allow on browser_click": [{ workspaceId: "ws-1", permission: "ask", hook: "allow", toolName: "browser_click", args: {} }],
+    "ask | run_command remembered for chat": [
+      {
+        workspaceId: "ws-1",
+        permission: "ask",
+        toolName: "run_command",
+        args: { command: "npm test" },
+      },
+      "chat",
+    ],
+    "ask | run_command remembered always": [
+      {
+        workspaceId: "ws-1",
+        permission: "ask",
+        toolName: "run_command",
+        args: { command: "npm test" },
+      },
+      "always",
+    ],
+    "ask | edit_file remembered always": [
+      { workspaceId: "ws-1", permission: "ask", toolName: "edit_file", args: { path: "src/a.ts" } },
+      "always",
+    ],
+    "ask | write_file remembered for chat": [
+      {
+        workspaceId: "ws-1",
+        permission: "ask",
+        toolName: "write_file",
+        args: { path: "src/b.ts" },
+      },
+      "chat",
+    ],
+    "ask | browser_click remembered (not rememberable)": [
+      { workspaceId: "ws-1", permission: "ask", toolName: "browser_click", args: {} },
+      "always",
+    ],
+    "ask | background_job start remembered (not rememberable)": [
+      {
+        workspaceId: "ws-1",
+        permission: "ask",
+        toolName: "background_job",
+        args: { action: "start" },
+      },
+      "always",
+    ],
+    "ask | run_command without a workspace": [
+      { permission: "ask", toolName: "run_command", args: { command: "npm test" } },
+      "always",
+    ],
+    "ask | run_command with no command": [
+      { workspaceId: "ws-1", permission: "ask", toolName: "run_command", args: {} },
+      "always",
+    ],
+    "ask | edit_file with a parent path": [
+      { workspaceId: "ws-1", permission: "ask", toolName: "edit_file", args: { path: "../x.ts" } },
+      "always",
+    ],
+    "ask | Bot-bound run_command remembered": [
+      {
+        workspaceId: "ws-1",
+        permission: "ask",
+        botBound: true,
+        toolName: "run_command",
+        args: { command: "ls" },
+      },
+      "always",
+    ],
+    "ask | Bot-bound run_command": [
+      {
+        workspaceId: "ws-1",
+        permission: "ask",
+        botBound: true,
+        toolName: "run_command",
+        args: { command: "ls" },
+      },
+    ],
+    "full | Bot-bound mutating connection tool": [
+      {
+        workspaceId: "ws-1",
+        permission: "full",
+        botBound: true,
+        botMutating: true,
+        toolName: "mail__send",
+        args: {},
+      },
+    ],
+    "ask | Bot-bound mutating connection tool": [
+      {
+        workspaceId: "ws-1",
+        permission: "ask",
+        botBound: true,
+        botMutating: true,
+        toolName: "mail__send",
+        args: {},
+      },
+    ],
+    "ask | hook ask on remembered run_command": [
+      {
+        workspaceId: "ws-1",
+        permission: "ask",
+        hook: "ask",
+        toolName: "run_command",
+        args: { command: "npm test" },
+      },
+      "always",
+    ],
+    "ask | hook allow without a rememberable target": [
+      { workspaceId: "ws-1", permission: "ask", hook: "allow", toolName: "run_command", args: {} },
+    ],
+    "ask | hook allow on browser_click": [
+      {
+        workspaceId: "ws-1",
+        permission: "ask",
+        hook: "allow",
+        toolName: "browser_click",
+        args: {},
+      },
+    ],
   };
   for (const [name, [input, remembered]] of Object.entries(cases)) {
     check("workspace", name, workspaceOutcome(input, remembered));
@@ -153,20 +303,50 @@ test("workspace chat, remembered approvals and their limits", () => {
 function acpRequest(kind: ToolKind | undefined): RequestPermissionRequest {
   return {
     sessionId: "s",
-    toolCall: { toolCallId: "t1", title: "Do it", ...(kind ? { kind } : {}), locations: [{ path: "/w/file.ts" }] },
-    options: (["allow_once", "allow_always", "reject_once"] as const).map((option) => ({ optionId: option, name: option, kind: option })),
+    toolCall: {
+      toolCallId: "t1",
+      title: "Do it",
+      ...(kind ? { kind } : {}),
+      locations: [{ path: "/w/file.ts" }],
+    },
+    options: (["allow_once", "allow_always", "reject_once"] as const).map((option) => ({
+      optionId: option,
+      name: option,
+      kind: option,
+    })),
   };
 }
 
 test("ACP harness permission requests", async () => {
   for (const permission of ["full", "ask", "read-only", "none"] as const) {
-    for (const kind of ["read", "search", "think", "execute", "edit", "delete", "move", "fetch", "other", undefined] as const) {
+    for (const kind of [
+      "read",
+      "search",
+      "think",
+      "execute",
+      "edit",
+      "delete",
+      "move",
+      "fetch",
+      "other",
+      undefined,
+    ] as const) {
       const host = new RecordingHost("c", "/w");
       host.currentPermission = permission;
       host.approvalAnswer = "allow_once";
-      const response = await answerPermission(acpRequest(kind), { kind: "approval" }, host, new AbortController().signal);
-      const chosen = response.outcome.outcome === "selected" ? response.outcome.optionId : "cancelled";
-      check("acp", `${permission} | ${kind ?? "no kind"}`, `${host.approvals.length > 0 ? "ask" : "no card"} → ${chosen}`);
+      const response = await answerPermission(
+        acpRequest(kind),
+        { kind: "approval" },
+        host,
+        new AbortController().signal,
+      );
+      const chosen =
+        response.outcome.outcome === "selected" ? response.outcome.optionId : "cancelled";
+      check(
+        "acp",
+        `${permission} | ${kind ?? "no kind"}`,
+        `${host.approvals.length > 0 ? "ask" : "no card"} → ${chosen}`,
+      );
     }
   }
 });
@@ -184,9 +364,25 @@ function botHome(): string {
 }
 
 const BOT_ACTIONS: Record<string, BotClassifiableAction> = {
-  "purchase click": { surface: "computer_use", action: "click", app: "Safari", windowTitle: "Checkout", element: { role: "AXButton", label: "Place your order" } },
-  "plain click": { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } },
-  "password typing": { surface: "computer_use", action: "type", app: "Safari", focusedElement: { role: "AXSecureTextField", label: "Password" } },
+  "purchase click": {
+    surface: "computer_use",
+    action: "click",
+    app: "Safari",
+    windowTitle: "Checkout",
+    element: { role: "AXButton", label: "Place your order" },
+  },
+  "plain click": {
+    surface: "computer_use",
+    action: "click",
+    app: "Notes",
+    element: { role: "AXButton", label: "Bold" },
+  },
+  "password typing": {
+    surface: "computer_use",
+    action: "type",
+    app: "Safari",
+    focusedElement: { role: "AXSecureTextField", label: "Password" },
+  },
 };
 
 const BOT_TURNS: Record<string, { requestIds: string[]; hasRoutineInputs?: true }> = {
@@ -198,8 +394,12 @@ const BOT_TURNS: Record<string, { requestIds: string[]; hasRoutineInputs?: true 
 
 function rulesWith(purchase: BotRule["behavior"], communicate?: BotRule["behavior"]): BotRule[] {
   return defaultBotRules().map((rule) =>
-    rule.actionClass === "purchase" ? { ...rule, behavior: purchase }
-      : rule.actionClass === "communicate" && communicate ? { ...rule, behavior: communicate } : rule);
+    rule.actionClass === "purchase"
+      ? { ...rule, behavior: purchase }
+      : rule.actionClass === "communicate" && communicate
+        ? { ...rule, behavior: communicate }
+        : rule,
+  );
 }
 
 async function botOutcome(options: {
@@ -213,7 +413,12 @@ async function botOutcome(options: {
 }): Promise<string> {
   const state = assemblyState(testAuthority({ mode: "full", home: botHome(), ...FULL_GRANTS }));
   const deps = assemblyDeps(state, {
-    candidates: () => [{ tool: countingTool(options.toolName ?? "computer_use"), ...(options.toolName === SEND_EMAIL_TOOL ? { mcp: true } : {}) }],
+    candidates: () => [
+      {
+        tool: countingTool(options.toolName ?? "computer_use"),
+        ...(options.toolName === SEND_EMAIL_TOOL ? { mcp: true } : {}),
+      },
+    ],
     rules: () => rulesWith(options.purchase, options.communicate),
     botName: "Ada",
     routinesGoAhead: () => options.goAhead,
@@ -254,7 +459,14 @@ for (const [actionName, action] of Object.entries(BOT_ACTIONS)) {
 
 test("Bot connection tool (send email)", async () => {
   const actions: Record<string, BotClassifiableAction> = {
-    "send email": { surface: "mcp", modelName: SEND_EMAIL_TOOL, serverId: MAIL_SERVER.id, remoteName: "send_email", summary: "Send email", destructive: "additive" },
+    "send email": {
+      surface: "mcp",
+      modelName: SEND_EMAIL_TOOL,
+      serverId: MAIL_SERVER.id,
+      remoteName: "send_email",
+      summary: "Send email",
+      destructive: "additive",
+    },
   };
   for (const [actionName, action] of Object.entries(actions)) {
     for (const baseline of [true, false]) {
@@ -262,7 +474,19 @@ test("Bot connection tool (send email)", async () => {
         for (const [turnName, turn] of Object.entries(BOT_TURNS)) {
           for (const goAhead of turnName === "routine" ? [false, true] : [false]) {
             const key = `${actionName} | ${baseline ? "approval" : "no approval"} | communicate ${purchase} | ${turnName}${goAhead ? " | go ahead" : ""}`;
-            check("bot", key, await botOutcome({ toolName: SEND_EMAIL_TOOL, action, baseline, purchase, communicate: purchase, turn, goAhead }));
+            check(
+              "bot",
+              key,
+              await botOutcome({
+                toolName: SEND_EMAIL_TOOL,
+                action,
+                baseline,
+                purchase,
+                communicate: purchase,
+                turn,
+                goAhead,
+              }),
+            );
           }
         }
       }
@@ -275,7 +499,18 @@ test("Bot disclosure tool (share_image)", async () => {
   for (const [turnName, turn] of Object.entries(BOT_TURNS)) {
     for (const goAhead of turnName === "routine" ? [false, true] : [false]) {
       const key = `share image | approval | ${turnName}${goAhead ? " | go ahead" : ""}`;
-      check("bot", key, await botOutcome({ toolName: "share_image", action: BOT_ACTIONS["plain click"]!, baseline: true, purchase: "ask", turn, goAhead }));
+      check(
+        "bot",
+        key,
+        await botOutcome({
+          toolName: "share_image",
+          action: BOT_ACTIONS["plain click"]!,
+          baseline: true,
+          purchase: "ask",
+          turn,
+          goAhead,
+        }),
+      );
     }
   }
 });
@@ -316,8 +551,11 @@ test("Computer Use access in a workspace chat", async () => {
   for (const granted of [false, true]) {
     for (const status of ["ready", "needs permissions", "unavailable"] as const) {
       for (const answer of ["allow", "deny"] as const) {
-        check("computerUse", `${granted ? "granted" : "not granted"} | ${status} | answer ${answer}`,
-          await computerUseOutcome({ granted, status, answer }));
+        check(
+          "computerUse",
+          `${granted ? "granted" : "not granted"} | ${status} | answer ${answer}`,
+          await computerUseOutcome({ granted, status, answer }),
+        );
       }
     }
   }
@@ -326,7 +564,10 @@ test("Computer Use access in a workspace chat", async () => {
 // ------------------------------------------------------------- subagent run grants
 
 test("subagent implementer run grants", async () => {
-  const authority = { expiresAt: Date.now() + 3_600_000, runId: "run-1" } as unknown as SubagentAuthorityV2;
+  const authority = {
+    expiresAt: Date.now() + 3_600_000,
+    runId: "run-1",
+  } as unknown as SubagentAuthorityV2;
   for (const permission of ["full", "ask", "none"] as const) {
     for (const answer of [true, false]) {
       let cards = 0;
@@ -337,8 +578,11 @@ test("subagent implementer run grants", async () => {
       };
       const first = await grant.ensure(authority, permission, ask);
       const second = await grant.ensure(authority, permission, ask);
-      check("subagent", `${permission} | answer ${answer ? "allow" : "deny"}`,
-        `${first ? "allow" : "refuse"}, then ${second ? "allow" : "refuse"}; cards ${cards}`);
+      check(
+        "subagent",
+        `${permission} | answer ${answer ? "allow" : "deny"}`,
+        `${first ? "allow" : "refuse"}, then ${second ? "allow" : "refuse"}; cards ${cards}`,
+      );
     }
   }
 });
@@ -568,31 +812,46 @@ const EXPECTED = {
   bot: {
     "purchase click | approval | purchase ask | person": "ask (rule)",
     // Phase 2: a routine refuses where it would ask (plan §3.2 Unattended runs).
-    "purchase click | approval | purchase ask | routine": "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
+    "purchase click | approval | purchase ask | routine":
+      "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
     // Phase 2: a routine refuses where it would ask (plan §3.2 Unattended runs).
-    "purchase click | approval | purchase ask | routine | go ahead": "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
+    "purchase click | approval | purchase ask | routine | go ahead":
+      "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
     "purchase click | approval | purchase ask | telegram": "ask (rule)",
     "purchase click | approval | purchase ask | bot message": "ask (rule)",
     "purchase click | approval | purchase hand_off | person": "hand off",
-    "purchase click | approval | purchase hand_off | routine": "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
-    "purchase click | approval | purchase hand_off | routine | go ahead": "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
-    "purchase click | approval | purchase hand_off | telegram": "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
-    "purchase click | approval | purchase hand_off | bot message": "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
+    "purchase click | approval | purchase hand_off | routine":
+      "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
+    "purchase click | approval | purchase hand_off | routine | go ahead":
+      "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
+    "purchase click | approval | purchase hand_off | telegram":
+      "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
+    "purchase click | approval | purchase hand_off | bot message":
+      "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
     "purchase click | no approval | purchase ask | person": "ask (rule)",
-    "purchase click | no approval | purchase ask | routine": "block: This needs the person's OK (Make a purchase or booking). Tell them in your reply.",
-    "purchase click | no approval | purchase ask | routine | go ahead": "block: This needs the person's OK (Make a purchase or booking). Tell them in your reply.",
-    "purchase click | no approval | purchase ask | telegram": "block: This needs the person's OK (Make a purchase or booking). Tell them in your reply.",
+    "purchase click | no approval | purchase ask | routine":
+      "block: This needs the person's OK (Make a purchase or booking). Tell them in your reply.",
+    "purchase click | no approval | purchase ask | routine | go ahead":
+      "block: This needs the person's OK (Make a purchase or booking). Tell them in your reply.",
+    "purchase click | no approval | purchase ask | telegram":
+      "block: This needs the person's OK (Make a purchase or booking). Tell them in your reply.",
     "purchase click | no approval | purchase ask | bot message": "ask (rule)",
     "purchase click | no approval | purchase hand_off | person": "hand off",
-    "purchase click | no approval | purchase hand_off | routine": "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
-    "purchase click | no approval | purchase hand_off | routine | go ahead": "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
-    "purchase click | no approval | purchase hand_off | telegram": "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
-    "purchase click | no approval | purchase hand_off | bot message": "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
+    "purchase click | no approval | purchase hand_off | routine":
+      "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
+    "purchase click | no approval | purchase hand_off | routine | go ahead":
+      "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
+    "purchase click | no approval | purchase hand_off | telegram":
+      "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
+    "purchase click | no approval | purchase hand_off | bot message":
+      "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
     "plain click | approval | purchase ask | person": "ask",
     // Phase 2: a routine refuses where it would ask (plan §3.2 Unattended runs).
-    "plain click | approval | purchase ask | routine": "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
+    "plain click | approval | purchase ask | routine":
+      "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
     // Phase 2: a routine refuses where it would ask (plan §3.2 Unattended runs).
-    "plain click | approval | purchase ask | routine | go ahead": "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
+    "plain click | approval | purchase ask | routine | go ahead":
+      "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
     "plain click | approval | purchase ask | telegram": "ask",
     "plain click | approval | purchase ask | bot message": "ask",
     "plain click | no approval | purchase ask | person": "allow",
@@ -601,40 +860,61 @@ const EXPECTED = {
     "plain click | no approval | purchase ask | telegram": "allow",
     "plain click | no approval | purchase ask | bot message": "allow",
     "password typing | approval | purchase ask | person": "hand off",
-    "password typing | approval | purchase ask | routine": "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
-    "password typing | approval | purchase ask | routine | go ahead": "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
-    "password typing | approval | purchase ask | telegram": "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
-    "password typing | approval | purchase ask | bot message": "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
+    "password typing | approval | purchase ask | routine":
+      "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
+    "password typing | approval | purchase ask | routine | go ahead":
+      "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
+    "password typing | approval | purchase ask | telegram":
+      "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
+    "password typing | approval | purchase ask | bot message":
+      "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
     "password typing | no approval | purchase ask | person": "hand off",
-    "password typing | no approval | purchase ask | routine": "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
-    "password typing | no approval | purchase ask | routine | go ahead": "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
-    "password typing | no approval | purchase ask | telegram": "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
-    "password typing | no approval | purchase ask | bot message": "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
+    "password typing | no approval | purchase ask | routine":
+      "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
+    "password typing | no approval | purchase ask | routine | go ahead":
+      "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
+    "password typing | no approval | purchase ask | telegram":
+      "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
+    "password typing | no approval | purchase ask | bot message":
+      "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
     "send email | approval | communicate ask | person": "ask (rule)",
     // Phase 2: a routine refuses where it would ask (plan §3.2 Unattended runs).
-    "send email | approval | communicate ask | routine": "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
+    "send email | approval | communicate ask | routine":
+      "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
     "send email | approval | communicate ask | routine | go ahead": "allow (go ahead)",
     "send email | approval | communicate ask | telegram": "ask (rule)",
     "send email | approval | communicate ask | bot message": "ask (rule)",
     "send email | approval | communicate hand_off | person": "hand off",
-    "send email | approval | communicate hand_off | routine": "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
-    "send email | approval | communicate hand_off | routine | go ahead": "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
-    "send email | approval | communicate hand_off | telegram": "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
-    "send email | approval | communicate hand_off | bot message": "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
+    "send email | approval | communicate hand_off | routine":
+      "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
+    "send email | approval | communicate hand_off | routine | go ahead":
+      "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
+    "send email | approval | communicate hand_off | telegram":
+      "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
+    "send email | approval | communicate hand_off | bot message":
+      "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
     "send email | no approval | communicate ask | person": "ask (rule)",
-    "send email | no approval | communicate ask | routine": "block: This needs the person's OK (Send a message or email to someone). Tell them in your reply.",
+    "send email | no approval | communicate ask | routine":
+      "block: This needs the person's OK (Send a message or email to someone). Tell them in your reply.",
     "send email | no approval | communicate ask | routine | go ahead": "allow (go ahead)",
-    "send email | no approval | communicate ask | telegram": "block: This needs the person's OK (Send a message or email to someone). Tell them in your reply.",
+    "send email | no approval | communicate ask | telegram":
+      "block: This needs the person's OK (Send a message or email to someone). Tell them in your reply.",
     "send email | no approval | communicate ask | bot message": "ask (rule)",
     "send email | no approval | communicate hand_off | person": "hand off",
-    "send email | no approval | communicate hand_off | routine": "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
-    "send email | no approval | communicate hand_off | routine | go ahead": "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
-    "send email | no approval | communicate hand_off | telegram": "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
-    "send email | no approval | communicate hand_off | bot message": "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
+    "send email | no approval | communicate hand_off | routine":
+      "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
+    "send email | no approval | communicate hand_off | routine | go ahead":
+      "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
+    "send email | no approval | communicate hand_off | telegram":
+      "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
+    "send email | no approval | communicate hand_off | bot message":
+      "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
     "share image | approval | person": "ask",
-    "share image | approval | routine": "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
+    "share image | approval | routine":
+      "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
     // Phase 3: disclosure tools are explicit-only for Bots too (plan deviation e), so the routines go-ahead no longer shares.
-    "share image | approval | routine | go ahead": "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
+    "share image | approval | routine | go ahead":
+      "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
     "share image | approval | telegram": "ask",
     "share image | approval | bot message": "ask",
   },

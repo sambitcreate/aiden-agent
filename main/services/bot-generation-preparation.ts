@@ -3,10 +3,7 @@ import type { BotDefinition } from "../../renderer/shared/bots.js";
 import type { BotManagedWorkspaceResolution } from "./bot-managed-workspace-core.js";
 import type { Chat, Workspace } from "./types.js";
 
-type BotGenerationChat = Pick<
-  Chat,
-  "id" | "botId" | "workspaceId" | "providerId" | "model"
->;
+type BotGenerationChat = Pick<Chat, "id" | "botId" | "workspaceId" | "providerId" | "model">;
 
 export interface RequestedBotGenerationTarget {
   workspaceId?: string;
@@ -50,10 +47,7 @@ export function assertExactBotProviderDispatch(
   expected: { provider: string; model: string },
   requested: { provider: string; model: string },
 ): void {
-  if (
-    requested.provider !== expected.provider ||
-    requested.model !== expected.model
-  ) {
+  if (requested.provider !== expected.provider || requested.model !== expected.model) {
     throw new Error("This Bot chat's AI connection or model changed before provider dispatch.");
   }
 }
@@ -63,9 +57,7 @@ function requirePersistedSelection(chat: BotGenerationChat): {
   model: string;
 } {
   if (!chat.providerId || !chat.model) {
-    throw new Error(
-      "This Bot chat needs an exact AI connection and model before it can reply.",
-    );
+    throw new Error("This Bot chat needs an exact AI connection and model before it can reply.");
   }
   return { providerId: chat.providerId, model: chat.model };
 }
@@ -80,8 +72,7 @@ function assertManagedHome(
     chat.botId !== bot.id ||
     managed.botId !== bot.id ||
     !chat.workspaceId ||
-    (requested.workspaceId !== undefined &&
-      requested.workspaceId !== chat.workspaceId)
+    (requested.workspaceId !== undefined && requested.workspaceId !== chat.workspaceId)
   ) {
     throw new Error("This Bot chat is not bound to its persisted workspace identity.");
   }
@@ -110,9 +101,7 @@ export async function prepareBotGeneration<Runtime extends ExactBotRuntime>(
     input.requested.providerId !== selection.providerId ||
     input.requested.model !== selection.model
   ) {
-    throw new Error(
-      "This Bot chat's saved AI connection changed. Reload it before sending.",
-    );
+    throw new Error("This Bot chat's saved AI connection changed. Reload it before sending.");
   }
 
   const managedWorkspace = await input.resolveManagedWorkspace(input.bot.id);
@@ -125,10 +114,7 @@ export async function prepareBotGeneration<Runtime extends ExactBotRuntime>(
     input.signal,
     input.chat.id,
   );
-  if (
-    runtime.provider.id !== selection.providerId ||
-    runtime.model.id !== selection.model
-  ) {
+  if (runtime.provider.id !== selection.providerId || runtime.model.id !== selection.model) {
     throw new Error(
       "This Bot chat's saved AI connection no longer resolves exactly. Choose it again.",
     );

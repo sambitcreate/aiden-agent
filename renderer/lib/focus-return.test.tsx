@@ -43,9 +43,22 @@ test("returnFocus skips removed, hidden, inert, aria-hidden and disabled candida
   const target = button("Target");
   const later = button("Later");
 
-  const landed = returnFocus([null, removed, hiddenAttribute, insideUndisplayed, insideInert, insideAriaHidden, disabled, () => target, later], {
-    region: null,
-  });
+  const landed = returnFocus(
+    [
+      null,
+      removed,
+      hiddenAttribute,
+      insideUndisplayed,
+      insideInert,
+      insideAriaHidden,
+      disabled,
+      () => target,
+      later,
+    ],
+    {
+      region: null,
+    },
+  );
 
   assert.equal(landed, target);
   assert.equal(document.activeElement, target);
@@ -121,7 +134,9 @@ test("a tooltip opens when its trigger is focused, but not when focus is put bac
   );
   const trigger = screen.getByRole("button", { name: "Terminal" });
   act(() => trigger.focus());
-  await waitFor(() => assert.notEqual(screen.queryByRole("tooltip"), null, "keyboard focus shows the hint"));
+  await waitFor(() =>
+    assert.notEqual(screen.queryByRole("tooltip"), null, "keyboard focus shows the hint"),
+  );
   act(() => screen.getByRole("button", { name: "Elsewhere" }).focus());
   await waitFor(() => assert.equal(screen.queryByRole("tooltip"), null));
 
@@ -144,7 +159,13 @@ function DialogWithVanishingOpener() {
           Delete chat
         </button>
       ) : null}
-      <Dialog open={open} onOpenChange={setOpen} title="Delete chat" confirmLabel="Delete" onConfirm={() => setRowShown(false)}>
+      <Dialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Delete chat"
+        confirmLabel="Delete"
+        onConfirm={() => setRowShown(false)}
+      >
         <p>The chat goes away.</p>
       </Dialog>
     </>
@@ -161,7 +182,9 @@ test("a Dialog whose opener was removed while open returns focus to the message 
   await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Delete chat" }), null));
   fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
   await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
-  await waitFor(() => assert.equal(document.activeElement, screen.getByRole("textbox", { name: "Message" })));
+  await waitFor(() =>
+    assert.equal(document.activeElement, screen.getByRole("textbox", { name: "Message" })),
+  );
 });
 
 /**
@@ -198,7 +221,9 @@ function withDialogAnimations(): () => void {
 }
 
 function finishExitAnimations(): void {
-  for (const part of document.querySelectorAll('[data-slot="dialog-content"], [data-slot="dialog-overlay"]')) {
+  for (const part of document.querySelectorAll(
+    '[data-slot="dialog-content"], [data-slot="dialog-overlay"]',
+  )) {
     const event = new Event("animationend", { bubbles: true });
     Object.defineProperty(event, "animationName", { value: "aiden-out" });
     part.dispatchEvent(event);
@@ -206,8 +231,23 @@ function finishExitAnimations(): void {
 }
 
 for (const [kind, Shown] of [
-  ["Dialog", ({ open }: { open: boolean }) => <Dialog open={open} onOpenChange={() => undefined} title="Rename chat" description="Pick a name." />],
-  ["AlertDialog", ({ open }: { open: boolean }) => <AlertDialog open={open} onOpenChange={() => undefined} title="Rename chat" />],
+  [
+    "Dialog",
+    ({ open }: { open: boolean }) => (
+      <Dialog
+        open={open}
+        onOpenChange={() => undefined}
+        title="Rename chat"
+        description="Pick a name."
+      />
+    ),
+  ],
+  [
+    "AlertDialog",
+    ({ open }: { open: boolean }) => (
+      <AlertDialog open={open} onOpenChange={() => undefined} title="Rename chat" />
+    ),
+  ],
 ] as const) {
   test(`a closing ${kind} stays on screen until its exit animation ends`, async () => {
     const restore = withDialogAnimations();
@@ -218,7 +258,10 @@ for (const [kind, Shown] of [
       const closing = document.querySelector('[data-slot="dialog-content"]');
       assert.ok(closing, "the dialog is still mounted while it animates out");
       assert.equal(closing.getAttribute("data-state"), "closed");
-      assert.equal(document.querySelector('[data-slot="dialog-overlay"]')?.getAttribute("data-state"), "closed");
+      assert.equal(
+        document.querySelector('[data-slot="dialog-overlay"]')?.getAttribute("data-state"),
+        "closed",
+      );
       await act(async () => finishExitAnimations());
       assert.equal(document.querySelector('[data-slot="dialog-content"]'), null);
       assert.equal(document.querySelector('[data-slot="dialog-overlay"]'), null);

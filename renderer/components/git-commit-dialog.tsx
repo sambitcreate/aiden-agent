@@ -4,15 +4,7 @@ import { AlertCircle, RefreshCw } from "lucide-react";
 import { gitApi } from "../lib/ipc";
 import { queryKeys } from "../lib/queries";
 import type { GitCommitMode, GitReview } from "../lib/types";
-import {
-  Dialog,
-  Button,
-  Label,
-  RadioGroup,
-  RadioGroupItem,
-  Textarea,
-  toast,
-} from "./ui";
+import { Dialog, Button, Label, RadioGroup, RadioGroupItem, Textarea, toast } from "./ui";
 import { cn } from "../lib/ui-utils";
 
 function selectionDescription(review: GitReview, mode: GitCommitMode): string {
@@ -100,7 +92,9 @@ export function GitCommitDialog({
         else cancelRef.current?.focus();
       });
     } catch (refreshError) {
-      setError(refreshError instanceof Error ? refreshError.message : "Aiden could not refresh Review.");
+      setError(
+        refreshError instanceof Error ? refreshError.message : "Aiden could not refresh Review.",
+      );
     } finally {
       setRefreshing(false);
     }
@@ -134,7 +128,8 @@ export function GitCommitDialog({
       toast.success(`Committed “${result.subject}” to ${result.branch}.`);
       if (result.warning) toast.warning(result.warning);
     } catch (commitError) {
-      const message = commitError instanceof Error ? commitError.message : "Aiden could not create the commit.";
+      const message =
+        commitError instanceof Error ? commitError.message : "Aiden could not create the commit.";
       setError(message);
       setNeedsRefresh(true);
       void invalidateGitState();
@@ -146,7 +141,7 @@ export function GitCommitDialog({
   };
 
   const stagedUnavailable = !review || review.summary.stagedFiles === 0;
-  const disabledReason = busy ? null : blockedReason ?? review?.commit.reason ?? null;
+  const disabledReason = busy ? null : (blockedReason ?? review?.commit.reason ?? null);
   const confirmDisabled =
     busy ||
     refreshing ||
@@ -166,8 +161,8 @@ export function GitCommitDialog({
       title="Commit changes"
       description={
         <>
-          Commit the reviewed snapshot to <span className="font-medium text-primary">{branch}</span>. Git hooks and
-          signing settings apply; push stays separate.
+          Commit the reviewed snapshot to <span className="font-medium text-primary">{branch}</span>
+          . Git hooks and signing settings apply; push stays separate.
         </>
       }
       confirmLabel={busy ? "Committing…" : "Commit"}
@@ -214,7 +209,11 @@ export function GitCommitDialog({
                       disabled && "opacity-45",
                     )}
                   >
-                    <RadioGroupItem value={option} disabled={disabled || busy} className="mt-0.5 shrink-0" />
+                    <RadioGroupItem
+                      value={option}
+                      disabled={disabled || busy}
+                      className="mt-0.5 shrink-0"
+                    />
                     <span className="min-w-0">
                       <span className="block text-regular text-primary">
                         {option === "staged" ? "Staged changes only" : "All current changes"}
@@ -231,17 +230,26 @@ export function GitCommitDialog({
         ) : null}
 
         {busy ? (
-          <div className="flex items-center gap-2 rounded-control bg-status-accent-surface px-3 py-2 text-small text-status-accent" role="status">
+          <div
+            className="flex items-center gap-2 rounded-control bg-status-accent-surface px-3 py-2 text-small text-status-accent"
+            role="status"
+          >
             <RefreshCw className="size-4 shrink-0 animate-spin" aria-hidden="true" />
             <span>Creating an immutable local commit…</span>
           </div>
         ) : disabledReason ? (
-          <div className="flex items-start gap-2 rounded-control bg-status-warning-surface px-3 py-2 text-small text-status-warning" role="status">
+          <div
+            className="flex items-start gap-2 rounded-control bg-status-warning-surface px-3 py-2 text-small text-status-warning"
+            role="status"
+          >
             <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>{disabledReason}</span>
           </div>
         ) : error ? (
-          <div className="rounded-control bg-status-red-surface px-3 py-2 text-small text-status-red" role="alert">
+          <div
+            className="rounded-control bg-status-red-surface px-3 py-2 text-small text-status-red"
+            role="alert"
+          >
             <div className="flex items-start gap-2">
               <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
               <span>{error}</span>
@@ -255,7 +263,10 @@ export function GitCommitDialog({
                 onClick={() => void refreshReview()}
                 className="mt-2 text-primary"
               >
-                <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} aria-hidden="true" />
+                <RefreshCw
+                  className={cn("size-3.5", refreshing && "animate-spin")}
+                  aria-hidden="true"
+                />
                 {refreshing ? "Refreshing…" : "Refresh changes"}
               </Button>
             ) : null}

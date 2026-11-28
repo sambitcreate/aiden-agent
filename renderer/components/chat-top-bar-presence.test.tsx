@@ -11,7 +11,11 @@ import { useDelayedFlag } from "../lib/use-delayed-flag";
 import type { ExternalEditor } from "../lib/types";
 import { effectiveBindings } from "../shared/keybindings";
 import { WorkspaceToolButtons, type FoldableToolbarAction } from "./chat-top-bar";
-import { EnvironmentPanelContext, GIT_BUSY_DIM_DELAY_MS, type EnvironmentPanelContextValue } from "./environment-panel";
+import {
+  EnvironmentPanelContext,
+  GIT_BUSY_DIM_DELAY_MS,
+  type EnvironmentPanelContextValue,
+} from "./environment-panel";
 import { OpenInEditorPicker } from "./open-in-editor-picker";
 
 const CURSOR: ExternalEditor = { id: "cursor", label: "Cursor" } as ExternalEditor;
@@ -48,7 +52,11 @@ beforeEach(() => {
   slideRunning = false;
   shownTools = [];
   installBotTestIpc({
-    "shortcut:get": () => ({ overrides: { version: 1, commands: {} }, effective: effectiveBindings(undefined), global: [] }),
+    "shortcut:get": () => ({
+      overrides: { version: 1, commands: {} },
+      effective: effectiveBindings(undefined),
+      global: [],
+    }),
     "workspaces:externalEditors": async () => {
       await new Promise<void>((release) => heldDiscoveries.push(release));
       return [CURSOR];
@@ -57,7 +65,8 @@ beforeEach(() => {
   queryClient = createBotTestQueryClient();
   Element.prototype.getAnimations = function (this: Element) {
     const sliding =
-      this.getAttribute("data-presence") === "exiting" || (slideRunning && this.classList.contains("toolbar-presence"));
+      this.getAttribute("data-presence") === "exiting" ||
+      (slideRunning && this.classList.contains("toolbar-presence"));
     return (sliding ? exitAnimations : []) as unknown as Animation[];
   };
   document.documentElement.dataset.reduceMotion = "false";
@@ -123,7 +132,11 @@ function Header(state: HeaderState) {
           hasFolderAccess={access}
           isRepo={false}
           foldable={[terminal]}
-          trailing={state.openInEditor ? <OpenInEditorPicker workspaceId="site" folderPath="/Users/person/site" /> : undefined}
+          trailing={
+            state.openInEditor ? (
+              <OpenInEditorPicker workspaceId="site" folderPath="/Users/person/site" />
+            ) : undefined
+          }
           end={
             <button type="button" data-environment-toggle>
               Show Environment
@@ -169,13 +182,25 @@ const filesButton = () => screen.queryByRole("button", { name: "Show Files" });
 test("Open stays out of the header, divider included, until the editor list arrives, then slides in", async () => {
   const header = renderHeader({ openInEditor: true });
   try {
-    assert.equal(screen.queryByRole("group", { name: "Open workspace in editor" }), null, "no greyed Open while loading");
+    assert.equal(
+      screen.queryByRole("group", { name: "Open workspace in editor" }),
+      null,
+      "no greyed Open while loading",
+    );
     const bar = document.querySelector("[data-workspace-tool-buttons]")!;
-    assert.equal(bar.querySelectorAll(".bg-separator").length, 0, "no divider is left waiting for it");
+    assert.equal(
+      bar.querySelectorAll(".bg-separator").length,
+      0,
+      "no divider is left waiting for it",
+    );
 
     await act(async () => heldDiscoveries.shift()?.());
     const open = await screen.findByRole("group", { name: "Open workspace in editor" });
-    assert.equal(open.closest(".toolbar-presence")?.getAttribute("data-enter"), "animate", "it arrives with the slide-in");
+    assert.equal(
+      open.closest(".toolbar-presence")?.getAttribute("data-enter"),
+      "animate",
+      "it arrives with the slide-in",
+    );
     assert.ok(screen.getByRole("button", { name: "Open workspace in Cursor" }));
   } finally {
     header.restore();
@@ -186,7 +211,11 @@ test("Open stays out of the header, divider included, until the editor list arri
   const again = renderHeader({ openInEditor: true });
   try {
     const open = screen.getByRole("group", { name: "Open workspace in editor" });
-    assert.equal(open.closest(".toolbar-presence")?.hasAttribute("data-enter"), false, "no slide on a fresh header");
+    assert.equal(
+      open.closest(".toolbar-presence")?.hasAttribute("data-enter"),
+      false,
+      "no slide on a fresh header",
+    );
   } finally {
     again.restore();
   }
@@ -207,7 +236,9 @@ test("with workspace access off, Terminal and Files are left out of the header a
   const narrow = renderHeader({ hasFolderAccess: false, width: 600 });
   try {
     await act(async () => {
-      fireEvent.keyDown(screen.getByRole("button", { name: "More workspace tools" }), { key: "Enter" });
+      fireEvent.keyDown(screen.getByRole("button", { name: "More workspace tools" }), {
+        key: "Enter",
+      });
     });
     const items = (await screen.findAllByRole("menuitem")).map((item) => item.textContent);
     assert.ok(items.includes("Browser"));
@@ -221,7 +252,11 @@ test("turning access on slides Terminal and Files in; a first render or another 
   const header = renderHeader({ hasFolderAccess: true });
   try {
     for (const button of [terminalButton(), filesButton()]) {
-      assert.equal(button?.closest(".toolbar-presence")?.hasAttribute("data-enter"), false, "the first render is still");
+      assert.equal(
+        button?.closest(".toolbar-presence")?.hasAttribute("data-enter"),
+        false,
+        "the first render is still",
+      );
     }
     header.rerender({ hasFolderAccess: false });
     await act(async () => exitAnimations.splice(0).forEach((animation) => animation.finish()));
@@ -229,7 +264,11 @@ test("turning access on slides Terminal and Files in; a first render or another 
 
     header.rerender({ hasFolderAccess: true });
     for (const button of [terminalButton(), filesButton()]) {
-      assert.equal(button?.closest(".toolbar-presence")?.getAttribute("data-enter"), "animate", "access on mid-chat slides in");
+      assert.equal(
+        button?.closest(".toolbar-presence")?.getAttribute("data-enter"),
+        "animate",
+        "access on mid-chat slides in",
+      );
     }
 
     // Switching to a chat whose folder has access off, then to one with access on: no motion either way.
@@ -250,9 +289,15 @@ test("a button leaving mid-chat can't be used on its way out and hands focus to 
     files.focus();
     header.rerender({ hasFolderAccess: false });
 
-    const leaving = document.querySelector('[data-workspace-tool="files"]')!.closest(".toolbar-presence")!;
+    const leaving = document
+      .querySelector('[data-workspace-tool="files"]')!
+      .closest(".toolbar-presence")!;
     assert.equal(leaving.getAttribute("data-presence"), "exiting", "it stays for its slide-out");
-    assert.equal(leaving.hasAttribute("inert"), true, "it can't be clicked or focused while it goes");
+    assert.equal(
+      leaving.hasAttribute("inert"),
+      true,
+      "it can't be clicked or focused while it goes",
+    );
     assert.equal(
       document.activeElement,
       screen.getByRole("button", { name: "More workspace tools" }),
@@ -273,11 +318,19 @@ test("a chat switch mid-slide shows the next chat's header at once", async () =>
     exitAnimations = [slide];
     slideRunning = true;
     header.rerender({ hasFolderAccess: true });
-    assert.equal(filesButton()?.closest(".toolbar-presence")?.getAttribute("data-enter"), "animate", "Files starts sliding in");
+    assert.equal(
+      filesButton()?.closest(".toolbar-presence")?.getAttribute("data-enter"),
+      "animate",
+      "Files starts sliding in",
+    );
 
     // The next chat has access off: Files must not linger while its slide-in runs out.
     header.rerender({ chatId: "chat-2", hasFolderAccess: false });
-    assert.equal(document.querySelector('[data-workspace-tool="files"]'), null, "gone before the next paint");
+    assert.equal(
+      document.querySelector('[data-workspace-tool="files"]'),
+      null,
+      "gone before the next paint",
+    );
     assert.equal(terminalButton(), null);
 
     // Back mid-chat it slides in again; a switch to a chat that has it lands it fully at once.
@@ -305,8 +358,14 @@ test("a running Git operation refuses tool clicks at once but dims them only pas
 
     header.rerender({ gitOperationBusy: true, gitOperationDimmed: false });
     header.rerender({ gitOperationBusy: true, gitOperationDimmed: true });
-    assert.equal((screen.getByRole("button", { name: "Show Browser" }) as HTMLButtonElement).disabled, true);
-    assert.equal((screen.getByRole("button", { name: "More workspace tools" }) as HTMLButtonElement).disabled, true);
+    assert.equal(
+      (screen.getByRole("button", { name: "Show Browser" }) as HTMLButtonElement).disabled,
+      true,
+    );
+    assert.equal(
+      (screen.getByRole("button", { name: "More workspace tools" }) as HTMLButtonElement).disabled,
+      true,
+    );
   } finally {
     header.restore();
   }
@@ -315,9 +374,12 @@ test("a running Git operation refuses tool clicks at once but dims them only pas
 test("a Git operation shorter than the dim delay never dims; a longer one does until it ends", () => {
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
-    const { result, rerender } = renderHook(({ busy }) => useDelayedFlag(busy, GIT_BUSY_DIM_DELAY_MS), {
-      initialProps: { busy: true },
-    });
+    const { result, rerender } = renderHook(
+      ({ busy }) => useDelayedFlag(busy, GIT_BUSY_DIM_DELAY_MS),
+      {
+        initialProps: { busy: true },
+      },
+    );
     act(() => mock.timers.tick(GIT_BUSY_DIM_DELAY_MS - 100));
     assert.equal(result.current, false, "a quick commit");
     rerender({ busy: false });

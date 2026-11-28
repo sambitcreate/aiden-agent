@@ -13,7 +13,10 @@ import { parsePeerPairing, type PeerPairing } from "../services/peer-pairing.js"
 import { PeerPairingOutcomeError } from "../services/peer-pairing-client.js";
 import type { PeerHostLiveOwner } from "./peer-host-live.js";
 
-export type PeerPairingDiscovery = Pick<PeerDiscovery, "start" | "stop" | "refresh" | "target" | "state">;
+export type PeerPairingDiscovery = Pick<
+  PeerDiscovery,
+  "start" | "stop" | "refresh" | "target" | "state"
+>;
 export type PeerPairingRegistry = Pick<
   PeerHostRegistry,
   "pair" | "pairWithRequest" | "pairWithSetupCode" | "rename"
@@ -54,7 +57,11 @@ export function peerSetupAddress(value: unknown): string | undefined {
   }
   const path = url.pathname.replace(/\/+$/u, "");
   if (path !== "" && path !== API_PATH) return undefined;
-  if (!/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$|^\[[0-9a-f:.]+\]$/u.test(url.hostname))
+  if (
+    !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$|^\[[0-9a-f:.]+\]$/u.test(
+      url.hostname,
+    )
+  )
     return undefined;
   return `https://${url.host}${API_PATH}`;
 }
@@ -68,9 +75,11 @@ function replacement(value: unknown): PeerPairingOptions {
 }
 
 function setupInput(value: unknown): { deviceId?: string; address?: unknown; code: string } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid setup code request.");
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid setup code request.");
   const record = value as Record<string, unknown>;
-  if (typeof record.code !== "string" || record.code.length > 64) throw new Error("Invalid setup code.");
+  if (typeof record.code !== "string" || record.code.length > 64)
+    throw new Error("Invalid setup code.");
   return {
     code: record.code,
     ...(record.deviceId === undefined ? {} : { deviceId: hostIdentifier(record.deviceId) }),
@@ -84,7 +93,9 @@ function setupInput(value: unknown): { deviceId?: string; address?: unknown; cod
  * addresses, the credentials and the pins never leave the main process.
  * Every attempt ends in a typed `PeerPairingResult` rather than a throw.
  */
-export function registerPeerPairingHandlers<Event>(dependencies: PeerPairingHandlerDependencies<Event>): void {
+export function registerPeerPairingHandlers<Event>(
+  dependencies: PeerPairingHandlerDependencies<Event>,
+): void {
   const { handle } = dependencies;
   /** Documents with the sheet open, and the listener that closes their scan. */
   const scanners = new Map<string, () => void>();
@@ -117,7 +128,8 @@ export function registerPeerPairingHandlers<Event>(dependencies: PeerPairingHand
     try {
       const host = await work(controller.signal);
       // A re-paired host was blocked; supervise it again with the new trust.
-      if (options.replaceHostId !== undefined) await dependencies.reconnectRepaired(host.id).catch(() => undefined);
+      if (options.replaceHostId !== undefined)
+        await dependencies.reconnectRepaired(host.id).catch(() => undefined);
       return { ok: true, host };
     } catch (error) {
       if (controller.signal.aborted) return { ok: false, outcome: { status: "cancelled" } };
@@ -136,7 +148,11 @@ export function registerPeerPairingHandlers<Event>(dependencies: PeerPairingHand
 
   handle("remote:peerDiscoveryStart", async (event) => {
     const owner = active(event);
-    if (!scanners.has(owner.key)) scanners.set(owner.key, owner.onInvalidated(() => release(owner.key)));
+    if (!scanners.has(owner.key))
+      scanners.set(
+        owner.key,
+        owner.onInvalidated(() => release(owner.key)),
+      );
     dependencies.discovery().start();
     return discoveryState();
   });
@@ -193,7 +209,10 @@ export function registerPeerPairingHandlers<Event>(dependencies: PeerPairingHand
     return attempt(
       owner,
       attemptId,
-      (signal) => dependencies.registry().pairWithSetupCode({ ...destination, code: input.code }, signal, options),
+      (signal) =>
+        dependencies
+          .registry()
+          .pairWithSetupCode({ ...destination, code: input.code }, signal, options),
       options,
     );
   });
@@ -210,7 +229,12 @@ export function registerPeerPairingHandlers<Event>(dependencies: PeerPairingHand
     } catch {
       return failure("That pairing link is not valid or has expired.");
     }
-    return attempt(owner, attemptId, (signal) => dependencies.registry().pair(pairing, signal, options), options);
+    return attempt(
+      owner,
+      attemptId,
+      (signal) => dependencies.registry().pair(pairing, signal, options),
+      options,
+    );
   });
 
   handle("remote:peerPairCancel", (event, attemptId) => {
@@ -223,7 +247,8 @@ export function registerPeerPairingHandlers<Event>(dependencies: PeerPairingHand
 
   handle("remote:peersRename", (event, hostId, name) => {
     active(event);
-    if (typeof name !== "string" || name.length > 200) throw new Error("Enter a name of up to 80 characters.");
+    if (typeof name !== "string" || name.length > 200)
+      throw new Error("Enter a name of up to 80 characters.");
     return dependencies.registry().rename(hostIdentifier(hostId), name);
   });
 }

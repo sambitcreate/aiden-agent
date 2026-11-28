@@ -17,12 +17,12 @@ implementation notes are in `.memory/bot-rules.md`.
 
 ## The rules
 
-| Rule | What the Bot does | Can it change? |
-| --- | --- | --- |
-| Enter a password or 2FA code, or change account security | Hands off | No (locked) |
-| Move money or enter card details | Hands off | No (locked) |
-| Make a purchase or booking; Send a message or email to someone; Post or publish something publicly; Permanently delete something; Install software on your Mac | Asks first | Ask first or Hand off to me; never removed |
-| The person's own rules, "When a Bot wants to …" (120 characters each), added on the rules page for every Bot, or kept from a Bot's old Rules screen for that Bot | Ask first, or Do it myself (hand off) | Changed or removed on the rules page |
+| Rule                                                                                                                                                             | What the Bot does                     | Can it change?                             |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------ |
+| Enter a password or 2FA code, or change account security                                                                                                         | Hands off                             | No (locked)                                |
+| Move money or enter card details                                                                                                                                 | Hands off                             | No (locked)                                |
+| Make a purchase or booking; Send a message or email to someone; Post or publish something publicly; Permanently delete something; Install software on your Mac   | Asks first                            | Ask first or Hand off to me; never removed |
+| The person's own rules, "When a Bot wants to …" (120 characters each), added on the rules page for every Bot, or kept from a Bot's old Rules screen for that Bot | Ask first, or Do it myself (hand off) | Changed or removed on the rules page       |
 
 - The locked rules are code, not settings: a missing, edited or corrupt rules
   file can never remove them.
@@ -237,13 +237,13 @@ or words ("When a Bot wants to …", Ask or Block only, never Allow).
 Nothing is copied when the page first opens. Each older grant is shown where
 it is stored and answers only for its old owner:
 
-| Stored before | Row |
-| --- | --- |
-| A Bot's "Always allow for <Bot>" | Always allow, "Only for <Bot>" |
-| A Bot's own rule in words | Always ask, that Bot only |
+| Stored before                               | Row                                                         |
+| ------------------------------------------- | ----------------------------------------------------------- |
+| A Bot's "Always allow for <Bot>"            | Always allow, "Only for <Bot>"                              |
+| A Bot's own rule in words                   | Always ask, that Bot only                                   |
 | A Bot's built-in rule set to Hand off to me | Always ask, with **Do it myself** checked in the row's menu |
-| A workspace's remembered command or file | Always allow, that workspace |
-| A folder a Bot may change | Allowed on this Mac (or computer), that Bot |
+| A workspace's remembered command or file    | Always allow, that workspace                                |
+| A folder a Bot may change                   | Allowed on this Mac (or computer), that Bot                 |
 
 Remove goes through the row's own store, so a Bot's allow list keeps its
 receipts, tombstones and counts: a removed entry is never brought back by a

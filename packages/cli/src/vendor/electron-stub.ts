@@ -7,19 +7,19 @@
  */
 
 const unavailable = (name: string): never => {
-	throw new Error(`electron.${name} is not available in the Aiden CLI.`);
+  throw new Error(`electron.${name} is not available in the Aiden CLI.`);
 };
 
 // Deliberately any-typed: every property chain must typecheck against the
 // real electron API surface while failing loudly at runtime.
 const stub = (name: string): any =>
-	new Proxy(() => unavailable(name), {
-		get: (_target, property) => {
-			if (property === "then" || property === Symbol.toPrimitive) return undefined;
-			return stub(`${name}.${String(property)}`);
-		},
-		apply: () => unavailable(name),
-	});
+  new Proxy(() => unavailable(name), {
+    get: (_target, property) => {
+      if (property === "then" || property === Symbol.toPrimitive) return undefined;
+      return stub(`${name}.${String(property)}`);
+    },
+    apply: () => unavailable(name),
+  });
 
 export const app = stub("app");
 export const BaseWindow = stub("BaseWindow");

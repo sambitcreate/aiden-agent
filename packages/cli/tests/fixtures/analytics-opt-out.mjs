@@ -14,7 +14,9 @@ await api.telemetryCommand(agentDir, ["off"], {
   createTransport: async () => ({
     capture() {},
     revokeQueue() {},
-    captureOptOut: async (message) => { process.stdout.write(`${JSON.stringify(message)}\n`); },
+    captureOptOut: async (message) => {
+      process.stdout.write(`${JSON.stringify(message)}\n`);
+    },
     flush: async () => {},
     shutdown: async () => {},
     discard: async () => {},

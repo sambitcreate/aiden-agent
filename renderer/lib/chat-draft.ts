@@ -76,7 +76,9 @@ const notify = () => {
 
 export function subscribeChatDrafts(listener: () => void): () => void {
   listeners.add(listener);
-  return () => { listeners.delete(listener); };
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export function getChatDraft(id: string): ChatDraft | undefined {
@@ -143,10 +145,14 @@ export function reopenClosedChatDraft(id: string): ChatDraft | undefined {
   });
 }
 
-export function updateChatDraft(id: string, update: Pick<Partial<Chat>, "workspaceId" | "title">): void {
+export function updateChatDraft(
+  id: string,
+  update: Pick<Partial<Chat>, "workspaceId" | "title">,
+): void {
   const draft = drafts.get(id);
   if (!draft || draft.sending) throw new Error("Wait for the first message to finish saving.");
-  const movesWorkspace = update.workspaceId !== undefined && update.workspaceId !== draft.chat.workspaceId;
+  const movesWorkspace =
+    update.workspaceId !== undefined && update.workspaceId !== draft.chat.workspaceId;
   const { worktree: _previousWorktree, ...withoutWorktree } = draft;
   drafts.set(id, {
     ...(movesWorkspace ? withoutWorktree : draft),
@@ -195,9 +201,8 @@ export function updateChatDraftWorktree(
   const draft = settableDraft(id);
   const baseRef = update.baseRef ?? draft.worktree?.baseRef;
   if (!baseRef) throw new Error("Choose a base branch for the new worktree.");
-  const branchName = "branchName" in update
-    ? update.branchName?.trim() || undefined
-    : draft.worktree?.branchName;
+  const branchName =
+    "branchName" in update ? update.branchName?.trim() || undefined : draft.worktree?.branchName;
   const worktree: ChatDraftWorktree = {
     baseRef,
     fromOrigin: update.fromOrigin ?? draft.worktree?.fromOrigin ?? false,
@@ -214,7 +219,9 @@ export function updateChatDraftWorktree(
  * checkout mode. The draft id is the idempotency key, so a retry or a double
  * send never creates a second worktree.
  */
-export function chatDraftWorktreeRequest(draft: ChatDraft): FirstMessageWorktreeRequest | undefined {
+export function chatDraftWorktreeRequest(
+  draft: ChatDraft,
+): FirstMessageWorktreeRequest | undefined {
   if (draft.gitMode !== "worktree") return undefined;
   if (!draft.worktree) throw new Error("Choose a base branch for the new worktree.");
   if (!draft.chat.workspaceId) throw new Error("Choose a workspace for the new worktree.");
@@ -337,7 +344,8 @@ export function retainChatDraft(id: string): () => void {
       if (owners.has(id)) return;
       const draft = drafts.get(id);
       if (!draft?.hasContent) {
-        if (draft && !draft.sending && draft.chat.workspaceId) rememberClosedEmptyDraft(draft, draft.chat.workspaceId);
+        if (draft && !draft.sending && draft.chat.workspaceId)
+          rememberClosedEmptyDraft(draft, draft.chat.workspaceId);
         discardChatDraft(id);
         return;
       }

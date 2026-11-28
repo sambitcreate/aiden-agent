@@ -32,7 +32,8 @@ export function routineLinkDescription(platform: string | null | undefined): str
   const computer = localComputerNoun(platform);
   return `Works on your network or Tailscale while this ${computer} is awake. It is shown only now; New link makes another and stops this one. The ${computer}'s certificate is self-signed, so callers may need to allow that (curl -k).`;
 }
-export const ROUTINE_LINK_OFF_DESCRIPTION = "Turn on remote access in Settings → Connections to use this routine's link.";
+export const ROUTINE_LINK_OFF_DESCRIPTION =
+  "Turn on remote access in Settings → Connections to use this routine's link.";
 
 function ProposalIcon({ proposal }: { proposal: Pick<BotRoutineProposalEntryData, "trigger"> }) {
   if (proposal.trigger?.kind === "webhook") return <Link2 />;
@@ -74,12 +75,15 @@ export function RoutineProposalCard({
   const [busy, setBusy] = React.useState<BotRoutineProposalDecision | "link" | null>(null);
   // A link routine's link, shown only on this card, only now.
   const [link, setLink] = React.useState<{ value: string | null } | null>(null);
-  const settled = status !== "pending" ? status : answered?.status ?? null;
+  const settled = status !== "pending" ? status : (answered?.status ?? null);
   const when = botRoutineProposalWhen(proposal);
   const addedRoutine = routineId ?? answered?.routineId;
 
   /** True once the answer was taken. */
-  const respond = async (decision: BotRoutineProposalDecision, reason?: BotRoutineProposalDeclineReason): Promise<boolean> => {
+  const respond = async (
+    decision: BotRoutineProposalDecision,
+    reason?: BotRoutineProposalDeclineReason,
+  ): Promise<boolean> => {
     if (busy) return false;
     setBusy(decision);
     try {
@@ -110,16 +114,30 @@ export function RoutineProposalCard({
   };
 
   if (settled === "dismissed" && supersededBy) {
-    return <ReceiptLine icon={<ProposalIcon proposal={proposal} />} text={`${proposal.name} · replaced by a newer suggestion`} />;
+    return (
+      <ReceiptLine
+        icon={<ProposalIcon proposal={proposal} />}
+        text={`${proposal.name} · replaced by a newer suggestion`}
+      />
+    );
   }
   const linkRoutine = settled === "accepted" && proposal.trigger?.kind === "webhook";
   if (settled === "accepted" && !linkRoutine) {
-    return <ReceiptLine icon={<Check className="text-status-green" />} text={`Added ${proposal.name} · ${when}`} />;
+    return (
+      <ReceiptLine
+        icon={<Check className="text-status-green" />}
+        text={`Added ${proposal.name} · ${when}`}
+      />
+    );
   }
   if (settled === "dismissed") {
     if (whyNot === "asking") {
       return (
-        <div role="group" aria-label={`Why not ${proposal.name}?`} className="flex flex-wrap items-center justify-center gap-1.5 py-1">
+        <div
+          role="group"
+          aria-label={`Why not ${proposal.name}?`}
+          className="flex flex-wrap items-center justify-center gap-1.5 py-1"
+        >
           {BOT_ROUTINE_PROPOSAL_DECLINE_REASONS.map((reason) => (
             <Button
               key={reason}
@@ -127,7 +145,9 @@ export function RoutineProposalCard({
               size="small"
               disabled={busy !== null}
               onClick={() => {
-                void respond("dismiss", reason).then((taken) => setWhyNot(taken ? "given" : "offered"));
+                void respond("dismiss", reason).then((taken) =>
+                  setWhyNot(taken ? "given" : "offered"),
+                );
               }}
             >
               {BOT_ROUTINE_PROPOSAL_DECLINE_LABELS[reason]}
@@ -139,8 +159,22 @@ export function RoutineProposalCard({
     return (
       <ReceiptLine
         icon={<ProposalIcon proposal={proposal} />}
-        text={whyNot === "given" ? `Not added: ${proposal.name}. Noted, thanks.` : `Not added: ${proposal.name}`}
-        actions={whyNot === "offered" ? [{ label: "Why not?", ariaLabel: `Why not ${proposal.name}?`, onClick: () => setWhyNot("asking") }] : []}
+        text={
+          whyNot === "given"
+            ? `Not added: ${proposal.name}. Noted, thanks.`
+            : `Not added: ${proposal.name}`
+        }
+        actions={
+          whyNot === "offered"
+            ? [
+                {
+                  label: "Why not?",
+                  ariaLabel: `Why not ${proposal.name}?`,
+                  onClick: () => setWhyNot("asking"),
+                },
+              ]
+            : []
+        }
       />
     );
   }
@@ -152,14 +186,21 @@ export function RoutineProposalCard({
         <Button
           size="small"
           variant="filled"
-          onClick={() => void navigator.clipboard?.writeText(copy).then(() => toast.success("Link copied."))}
+          onClick={() =>
+            void navigator.clipboard?.writeText(copy).then(() => toast.success("Link copied."))
+          }
         >
           <Copy /> Copy link
         </Button>
       );
     } else if (!link && onNewLink && addedRoutine) {
       actions = (
-        <Button size="small" variant="filled" disabled={busy !== null} onClick={() => void newLink()}>
+        <Button
+          size="small"
+          variant="filled"
+          disabled={busy !== null}
+          onClick={() => void newLink()}
+        >
           {busy === "link" ? "Making…" : "New link"}
         </Button>
       );
@@ -175,9 +216,13 @@ export function RoutineProposalCard({
       >
         <p>{`Added ✓ · ${when}`}</p>
         {link ? (
-          <p className="mt-0.5">{link.value ? routineLinkDescription(platform) : ROUTINE_LINK_OFF_DESCRIPTION}</p>
+          <p className="mt-0.5">
+            {link.value ? routineLinkDescription(platform) : ROUTINE_LINK_OFF_DESCRIPTION}
+          </p>
         ) : actions ? (
-          <p className="mt-0.5">Its link is shown once. New link makes one here and stops any earlier one.</p>
+          <p className="mt-0.5">
+            Its link is shown once. New link makes one here and stops any earlier one.
+          </p>
         ) : null}
       </BotNoticeCard>
     );

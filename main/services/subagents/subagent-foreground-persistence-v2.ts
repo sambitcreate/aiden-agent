@@ -54,10 +54,7 @@ import {
   type SubagentMcpMutationBindingV2,
   type SubagentMcpMutationHostV2,
 } from "./subagent-mcp-mutation.js";
-import {
-  createSubagentShellBrokerV2,
-  type SubagentShellToolBindingV2,
-} from "./subagent-shell.js";
+import { createSubagentShellBrokerV2, type SubagentShellToolBindingV2 } from "./subagent-shell.js";
 
 const READ_ONLY_CAPABILITIES: SubagentCapabilitySetV2 = {
   workspaceRead: true,
@@ -78,9 +75,8 @@ export const MAX_SUBAGENT_CUMULATIVE_TOKENS = 10_000_000;
  * context ceiling. Keep the cost/lifecycle bound finite and host-owned.
  */
 export function cumulativeSubagentTokenBudget(contextWindow: number | undefined): number {
-  const perRequestContext = Number.isSafeInteger(contextWindow) && (contextWindow ?? 0) > 0
-    ? contextWindow!
-    : 1_000_000;
+  const perRequestContext =
+    Number.isSafeInteger(contextWindow) && (contextWindow ?? 0) > 0 ? contextWindow! : 1_000_000;
   return Math.min(
     MAX_SUBAGENT_CUMULATIVE_TOKENS,
     perRequestContext * SUBAGENT_CUMULATIVE_TOKEN_MULTIPLIER,
@@ -101,9 +97,7 @@ export interface ForegroundSubagentPersistenceV2Input {
   /** Active turn ceiling; stored workspace permission alone cannot authorize a child. */
   generationPermission?: WorkspacePermission | "read-only";
   control?: SubagentControlMainV2;
-  applyControlSnapshot?: (
-    snapshot: SubagentRunSnapshotV2,
-  ) => SubagentRunSnapshotV1;
+  applyControlSnapshot?: (snapshot: SubagentRunSnapshotV2) => SubagentRunSnapshotV1;
   currentControlSnapshot?: (runId: string) => SubagentRunSnapshotV1;
   settleControlSnapshots?: () => Promise<void>;
   onControlSnapshot?: (snapshot: SubagentRunSnapshotV1) => void;
@@ -155,9 +149,7 @@ function modelFingerprint(runtime: ResolvedModelRuntime): string {
  * persistence. The private immutable authority is created once per run and is
  * never included in the returned renderer projection.
  */
-export function createForegroundSubagentPersistenceV2(
-  input: ForegroundSubagentPersistenceV2Input,
-) {
+export function createForegroundSubagentPersistenceV2(input: ForegroundSubagentPersistenceV2Input) {
   const now = input.now ?? Date.now;
   const allocateUuid = input.randomUUID ?? randomUUID;
   const safeGrantId = () => {
@@ -222,34 +214,24 @@ export function createForegroundSubagentPersistenceV2(
         parentAuthority.capabilities.delegation !== true ||
         parentAuthority.expiresAt <= issuedAt
       ) {
-        throw new Error(
-          "Nested subagent parent authority is stale, revoked, or ineligible.",
-        );
+        throw new Error("Nested subagent parent authority is stale, revoked, or ineligible.");
       }
     }
-    const availableMcpInventory = (input.mcpInventory ?? []).flatMap(
-      (scope) => {
-        const tools = scope.tools.filter(
-          (tool) =>
-            tool.effect === "read" || input.mcpMutationsEnabled === true,
-        );
-        return tools.length > 0 ? [{ ...scope, tools }] : [];
-      },
-    );
+    const availableMcpInventory = (input.mcpInventory ?? []).flatMap((scope) => {
+      const tools = scope.tools.filter(
+        (tool) => tool.effect === "read" || input.mcpMutationsEnabled === true,
+      );
+      return tools.length > 0 ? [{ ...scope, tools }] : [];
+    });
     const exactRequested = resolveRequestedSubagentCapabilitiesV2(
       requestedCapabilities,
       availableMcpInventory,
     );
     if (
       parentAuthority &&
-      !subagentCapabilitiesAreSubsetV2(
-        exactRequested,
-        parentAuthority.capabilities,
-      )
+      !subagentCapabilitiesAreSubsetV2(exactRequested, parentAuthority.capabilities)
     ) {
-      throw new Error(
-        "A nested subagent request cannot widen its parent capability ceiling.",
-      );
+      throw new Error("A nested subagent request cannot widen its parent capability ceiling.");
     }
     const generationPermission = input.generationPermission ?? input.permission;
     const generationWritable = generationPermission === "ask" || generationPermission === "full";
@@ -294,15 +276,11 @@ export function createForegroundSubagentPersistenceV2(
       userGrant: availableCapabilities,
       workspacePermission: input.permission,
       workspaceEgressApproval:
-        typeof input.requestApproval === "function"
-          ? "per_call"
-          : "unavailable",
+        typeof input.requestApproval === "function" ? "per_call" : "unavailable",
     });
     const authority = createSubagentAuthorityV2({
       grantId: safeGrantId(),
-      treeRootId:
-        parentAuthority?.treeRootId ??
-        safeTreeId(),
+      treeRootId: parentAuthority?.treeRootId ?? safeTreeId(),
       runId: identity.runId,
       ...(parentAuthority ? { parentRunId: parentAuthority.runId } : {}),
       depth: parentAuthority ? 2 : 1,
@@ -317,30 +295,26 @@ export function createForegroundSubagentPersistenceV2(
       // above were resolved from the parent grant and are never model-dependent.
       providerFingerprint: childModel
         ? scheduledProviderFingerprint(childModel.runtime.provider)
-        : parentAuthority?.providerFingerprint ?? providerBinding,
+        : (parentAuthority?.providerFingerprint ?? providerBinding),
       modelFingerprint: childModel
         ? modelFingerprint(childModel.runtime)
-        : parentAuthority?.modelFingerprint ?? modelBinding,
+        : (parentAuthority?.modelFingerprint ?? modelBinding),
       contextRevision,
       execution: parentAuthority?.execution ?? "foreground",
       context: contextMode,
-      thinkingLevel: childModel?.thinkingLevel ?? parentAuthority?.thinkingLevel ?? input.thinkingLevel,
+      thinkingLevel:
+        childModel?.thinkingLevel ?? parentAuthority?.thinkingLevel ?? input.thinkingLevel,
       capabilities,
       budgets: {
         deadlineMs,
         maxTurns: Math.min(maxTurns, parentAuthority?.budgets.maxTurns ?? maxTurns),
         maxToolCalls: MAX_SUBAGENT_CHILD_TOOL_CALLS,
-        maxOutputChars: Math.max(
-          MAX_SUBAGENT_SUMMARY_CHARS,
-          MAX_SUBAGENT_CHILD_OUTPUT_CHARS,
-        ),
+        maxOutputChars: Math.max(MAX_SUBAGENT_SUMMARY_CHARS, MAX_SUBAGENT_CHILD_OUTPUT_CHARS),
         // Generation-wide tree allowance stays on the parent runtime. Pi already
         // enforces each child's own context window per request; a smaller child
         // must not shrink the shared remaining budget or clamp larger siblings.
         maxTokens: cumulativeSubagentTokenBudget(input.runtime.model.contextWindow),
-        maxLaunches:
-          parentAuthority?.budgets.maxLaunches ??
-          MAX_SUBAGENT_LAUNCHES_PER_GENERATION,
+        maxLaunches: parentAuthority?.budgets.maxLaunches ?? MAX_SUBAGENT_LAUNCHES_PER_GENERATION,
         maxDepth: 2,
         maxActive: (childModel?.runtime ?? input.runtime).provider.deployment === "local" ? 1 : 2,
         maxQueued: MAX_QUEUED_SUBAGENT_CHILDREN,
@@ -355,17 +329,10 @@ export function createForegroundSubagentPersistenceV2(
     return authority;
   }
 
-  function manifestFor(
-    canonical: SubagentRunSnapshotV2,
-  ): NativeSubagentPrivateRunManifestV2 {
+  function manifestFor(canonical: SubagentRunSnapshotV2): NativeSubagentPrivateRunManifestV2 {
     const authority = authorities.get(canonical.runId);
-    if (
-      !authority ||
-      canonical.authorityRevision !== authority.authorityRevision
-    ) {
-      throw new Error(
-        "Foreground subagent authority was not resolved before launch.",
-      );
+    if (!authority || canonical.authorityRevision !== authority.authorityRevision) {
+      throw new Error("Foreground subagent authority was not resolved before launch.");
     }
     return {
       version: 2,
@@ -381,14 +348,10 @@ export function createForegroundSubagentPersistenceV2(
     };
   }
 
-  function canonicalSnapshot(
-    snapshot: SubagentRunSnapshotV1,
-  ): SubagentRunSnapshotV2 {
+  function canonicalSnapshot(snapshot: SubagentRunSnapshotV1): SubagentRunSnapshotV2 {
     const authority = authorities.get(snapshot.runId);
     if (!authority) {
-      throw new Error(
-        "Foreground subagent authority was not resolved before launch.",
-      );
+      throw new Error("Foreground subagent authority was not resolved before launch.");
     }
     const canonical = parseSubagentRunSnapshotV2({
       ...snapshot,
@@ -400,9 +363,7 @@ export function createForegroundSubagentPersistenceV2(
       authorityRevision: authority.authorityRevision,
     });
     if (!canonical) {
-      throw new Error(
-        "Foreground subagent snapshot could not enter canonical V2 storage.",
-      );
+      throw new Error("Foreground subagent snapshot could not enter canonical V2 storage.");
     }
     return canonical;
   }
@@ -411,8 +372,7 @@ export function createForegroundSubagentPersistenceV2(
     canonical: SubagentRunSnapshotV2,
     manifest: NativeSubagentPrivateRunManifestV2,
   ): void {
-    const operation = () =>
-      input.store.upsert(canonical, manifest).then(() => undefined);
+    const operation = () => input.store.upsert(canonical, manifest).then(() => undefined);
     const result = controlPersistenceTail.then(operation, operation);
     controlPersistenceTail = result.then(
       () => undefined,
@@ -452,13 +412,9 @@ export function createForegroundSubagentPersistenceV2(
       }
       if (
         requestedCapabilities.delegate === true &&
-        (!input.delegationEnabled ||
-          input.store.selection !== "v2" ||
-          value.parentAuthority)
+        (!input.delegationEnabled || input.store.selection !== "v2" || value.parentAuthority)
       ) {
-        throw new Error(
-          "Requested subagent delegation capability is unavailable.",
-        );
+        throw new Error("Requested subagent delegation capability is unavailable.");
       }
       // V1 rollback never mints V2 authority, so the child could only receive
       // read tools. Refuse the coding role instead of launching a lane that
@@ -466,7 +422,8 @@ export function createForegroundSubagentPersistenceV2(
       if (input.store.selection === "v1" && value.task.role === "implementer") {
         throw new Error("The implementer role is unavailable during V1 rollback.");
       }
-      const implicitImplementer = value.task.role === "implementer" &&
+      const implicitImplementer =
+        value.task.role === "implementer" &&
         value.task.capabilities === undefined &&
         requestedCapabilities.workspaceRead &&
         !requestedCapabilities.web &&
@@ -483,27 +440,29 @@ export function createForegroundSubagentPersistenceV2(
           requestedCapabilities.mcp.length > 0 ||
           (requestedCapabilities.mcpMutations?.length ?? 0) > 0)
       ) {
-        throw new Error(
-          "Requested subagent capabilities are unavailable during V1 rollback.",
-        );
+        throw new Error("Requested subagent capabilities are unavailable during V1 rollback.");
       }
       if (
-        requestedCapabilities.workspaceWrite && !implicitImplementer &&
+        requestedCapabilities.workspaceWrite &&
+        !implicitImplementer &&
         (input.writeEnabled !== true ||
-          (input.generationPermission !== undefined && input.generationPermission !== "ask" && input.generationPermission !== "full") ||
+          (input.generationPermission !== undefined &&
+            input.generationPermission !== "ask" &&
+            input.generationPermission !== "full") ||
           (input.permission !== "ask" && input.permission !== "full") ||
           typeof input.requestApproval !== "function" ||
           typeof input.currentWorkspace !== "function" ||
           typeof input.validateWorkspace !== "function")
       ) {
-        throw new Error(
-          "Requested subagent workspace-write capability is unavailable.",
-        );
+        throw new Error("Requested subagent workspace-write capability is unavailable.");
       }
       if (
-        requestedCapabilities.shell === true && !implicitImplementer &&
+        requestedCapabilities.shell === true &&
+        !implicitImplementer &&
         (input.shellEnabled !== true ||
-          (input.generationPermission !== undefined && input.generationPermission !== "ask" && input.generationPermission !== "full") ||
+          (input.generationPermission !== undefined &&
+            input.generationPermission !== "ask" &&
+            input.generationPermission !== "full") ||
           !input.shellBinary ||
           input.permission === "none" ||
           !input.requestApproval ||
@@ -514,32 +473,22 @@ export function createForegroundSubagentPersistenceV2(
       }
       if (
         (requestedCapabilities.mcpMutations?.length ?? 0) > 0 &&
-        (input.mcpMutationsEnabled !== true ||
-          !input.mcpMutationHost ||
-          !input.requestApproval)
+        (input.mcpMutationsEnabled !== true || !input.mcpMutationHost || !input.requestApproval)
       ) {
-        throw new Error(
-          "Requested subagent MCP mutation capability is unavailable.",
-        );
+        throw new Error("Requested subagent MCP mutation capability is unavailable.");
       }
       if (input.store.selection === "v2") {
         if (value.parentAuthority) {
           if (!input.currentWorkspace || !input.validateWorkspace) {
-            throw new Error(
-              "Nested subagent workspace revalidation is unavailable.",
-            );
+            throw new Error("Nested subagent workspace revalidation is unavailable.");
           }
-          const currentWorkspace = await input.currentWorkspace(
-            value.parentAuthority.workspaceId,
-          );
+          const currentWorkspace = await input.currentWorkspace(value.parentAuthority.workspaceId);
           if (
             !currentWorkspace ||
             subagentWorkspaceRevisionV2(currentWorkspace) !==
               value.parentAuthority.workspaceRevision
           ) {
-            throw new Error(
-              "Nested subagent workspace authority changed before preparation.",
-            );
+            throw new Error("Nested subagent workspace authority changed before preparation.");
           }
           await input.validateWorkspace(currentWorkspace);
         }
@@ -568,59 +517,36 @@ export function createForegroundSubagentPersistenceV2(
         authority: authorities.get(value.identity.runId),
         revalidateAuthority: async () => {
           const authority = authorities.get(value.identity.runId);
-          if (
-            !authority ||
-            revokedRuns.has(value.identity.runId) ||
-            authority.expiresAt <= now()
-          ) {
-            throw new Error(
-              "Subagent authority was revoked before provider dispatch.",
-            );
+          if (!authority || revokedRuns.has(value.identity.runId) || authority.expiresAt <= now()) {
+            throw new Error("Subagent authority was revoked before provider dispatch.");
           }
           if (value.parentAuthority) {
             const parent = authorities.get(value.parentAuthority.runId);
             if (
               !parent ||
               revokedRuns.has(parent.runId) ||
-              JSON.stringify(parent) !==
-                JSON.stringify(value.parentAuthority) ||
+              JSON.stringify(parent) !== JSON.stringify(value.parentAuthority) ||
               parent.expiresAt <= now() ||
               !input.currentWorkspace ||
               !input.validateWorkspace
             ) {
-              throw new Error(
-                "Nested subagent parent authority was revoked before dispatch.",
-              );
+              throw new Error("Nested subagent parent authority was revoked before dispatch.");
             }
             const workspace = await input.currentWorkspace(parent.workspaceId);
-            if (
-              !workspace ||
-              subagentWorkspaceRevisionV2(workspace) !==
-                parent.workspaceRevision
-            ) {
-              throw new Error(
-                "Nested subagent workspace authority changed before dispatch.",
-              );
+            if (!workspace || subagentWorkspaceRevisionV2(workspace) !== parent.workspaceRevision) {
+              throw new Error("Nested subagent workspace authority changed before dispatch.");
             }
             await input.validateWorkspace(workspace);
           }
           return authority;
         },
         currentAuthority: () =>
-          revokedRuns.has(value.identity.runId)
-            ? undefined
-            : authorities.get(value.identity.runId),
+          revokedRuns.has(value.identity.runId) ? undefined : authorities.get(value.identity.runId),
         consumeNetworkOperation: (authority: SubagentAuthorityV2) =>
           networkBudgets.consume(authority),
-        prepareOutboundApproval: (
-          bindings: readonly SubagentOutboundToolBindingV2[],
-        ) => {
+        prepareOutboundApproval: (bindings: readonly SubagentOutboundToolBindingV2[]) => {
           const authority = authorities.get(value.identity.runId);
-          if (
-            !authority ||
-            revokedRuns.has(value.identity.runId) ||
-            !input.requestApproval
-          ) {
+          if (!authority || revokedRuns.has(value.identity.runId) || !input.requestApproval) {
             throw new Error("Subagent outbound approval is unavailable.");
           }
           return createSubagentOutboundApprovalBrokerV2({
@@ -646,9 +572,7 @@ export function createForegroundSubagentPersistenceV2(
             !input.currentWorkspace ||
             !input.validateWorkspace
           ) {
-            throw new Error(
-              "Subagent workspace-write approval is unavailable.",
-            );
+            throw new Error("Subagent workspace-write approval is unavailable.");
           }
           if (!input.workspace.folderPath) {
             throw new Error("Subagent workspace root is unavailable.");
@@ -658,8 +582,12 @@ export function createForegroundSubagentPersistenceV2(
             childId: value.identity.childId,
             childLabel: value.task.label,
             workspace: input.workspace,
-            parentPermission: input.generationPermission === "full" ? "full" :
-              input.generationPermission === undefined ? input.permission : "ask",
+            parentPermission:
+              input.generationPermission === "full"
+                ? "full"
+                : input.generationPermission === undefined
+                  ? input.permission
+                  : "ask",
             workspaceRoot: input.workspace.folderPath,
             bindings,
             binary: input.fileMutatorBinary,
@@ -700,8 +628,7 @@ export function createForegroundSubagentPersistenceV2(
             host: input.mcpMutationHost,
             currentAuthority: (runId) =>
               revokedRuns.has(runId) ? undefined : authorities.get(runId),
-            consumeNetworkOperation: (current) =>
-              networkBudgets.consume(current),
+            consumeNetworkOperation: (current) => networkBudgets.consume(current),
             requestApproval: input.requestApproval,
             findPriorUnknownEffect: async (query) => {
               const effects = await input.store.listEffectsByChat(query.chatId);
@@ -747,8 +674,12 @@ export function createForegroundSubagentPersistenceV2(
             childId: value.identity.childId,
             childLabel: value.task.label,
             workspace: input.workspace,
-            parentPermission: input.generationPermission === "full" ? "full" :
-              input.generationPermission === undefined ? input.permission : "ask",
+            parentPermission:
+              input.generationPermission === "full"
+                ? "full"
+                : input.generationPermission === undefined
+                  ? input.permission
+                  : "ask",
             workspaceRoot: input.workspace.folderPath,
             ledger: approvals,
             journal: input.store,
@@ -798,16 +729,12 @@ export function createForegroundSubagentPersistenceV2(
     /** Projector assertion: preflight, rather than projection, owns grants. */
     prepare(snapshot: SubagentRunSnapshotV1): void {
       if (input.store.selection === "v2" && !authorities.has(snapshot.runId)) {
-        throw new Error(
-          "Foreground subagent authority was not resolved before projection.",
-        );
+        throw new Error("Foreground subagent authority was not resolved before projection.");
       }
       if (input.store.selection !== "v2" || !input.control) return;
       const prepared = preparedRuns.get(snapshot.runId);
       if (!prepared || prepared.controlRegistered) {
-        throw new Error(
-          "Foreground subagent control preparation is unavailable.",
-        );
+        throw new Error("Foreground subagent control preparation is unavailable.");
       }
       const canonical = canonicalSnapshot(snapshot);
       input.control.register({
@@ -827,9 +754,7 @@ export function createForegroundSubagentPersistenceV2(
         ...(input.currentControlSnapshot
           ? {
               currentSnapshot: () =>
-                canonicalSnapshot(
-                  input.currentControlSnapshot!(snapshot.runId),
-                ),
+                canonicalSnapshot(input.currentControlSnapshot!(snapshot.runId)),
             }
           : {}),
         onSnapshot: (controlSnapshot) => {
@@ -871,9 +796,7 @@ export function createForegroundSubagentPersistenceV2(
      * enqueue its canonical write. Call `flushControlPersistence` before an IPC
      * action acknowledges that transition.
      */
-    projectControlSnapshot(
-      snapshot: SubagentRunSnapshotV2,
-    ): SubagentRunSnapshotV1 {
+    projectControlSnapshot(snapshot: SubagentRunSnapshotV2): SubagentRunSnapshotV1 {
       if (input.store.selection !== "v2") {
         throw new Error("V2 subagent control is unavailable during rollback.");
       }
@@ -881,9 +804,7 @@ export function createForegroundSubagentPersistenceV2(
       if (!canonical) throw new Error("Invalid subagent control snapshot.");
       const projected = adaptSubagentRunSnapshotV2ToV1(canonical);
       if (!projected) {
-        throw new Error(
-          "Subagent control snapshot could not be projected safely.",
-        );
+        throw new Error("Subagent control snapshot could not be projected safely.");
       }
       enqueueControlPersistence(canonical, manifestFor(canonical));
       return projected;

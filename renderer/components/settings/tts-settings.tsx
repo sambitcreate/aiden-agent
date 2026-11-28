@@ -319,11 +319,7 @@ export function TtsSettingsView({
               >
                 Save key
               </Button>
-              <Button
-                variant="transparent"
-                disabled={saving}
-                onClick={onClearDedicatedKey}
-              >
+              <Button variant="transparent" disabled={saving} onClick={onClearDedicatedKey}>
                 Remove
               </Button>
             </div>
@@ -504,11 +500,7 @@ export function TtsSettingsView({
           label="Audio retention"
           description="Generated speech is kept in a bounded session cache and never enters chats or exports."
         >
-          <Button
-            variant="muted"
-            disabled={saving}
-            onClick={onClearCache}
-          >
+          <Button variant="muted" disabled={saving} onClick={onClearCache}>
             Clear generated audio
           </Button>
         </Field>

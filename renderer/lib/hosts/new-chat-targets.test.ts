@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { PeerFeedRow, PeerHostFeedSnapshot, PeerHostStatus, PeerHostView } from "../../shared/peer-host";
+import type {
+  PeerFeedRow,
+  PeerHostFeedSnapshot,
+  PeerHostStatus,
+  PeerHostView,
+} from "../../shared/peer-host";
 import {
   createdProjects,
   newChatMachines,
@@ -14,20 +19,47 @@ import { parseRemoteNewChatSearch } from "./remote-new-chat-search";
 
 const CHAT_GRANTS = ["chat:read", "chat:write", "workspace:read"];
 
-function view(id: string, name: string, capabilities: string[] = CHAT_GRANTS, enabled = true): PeerHostView {
+function view(
+  id: string,
+  name: string,
+  capabilities: string[] = CHAT_GRANTS,
+  enabled = true,
+): PeerHostView {
   return { id, name, enabled, state: "connected", features: [], capabilities };
 }
 
 function connected(hostId: string): PeerHostStatus {
-  return { hostId, generation: 1, state: { kind: "connected", since: 1 }, feed: "live", stale: false };
+  return {
+    hostId,
+    generation: 1,
+    state: { kind: "connected", since: 1 },
+    feed: "live",
+    stale: false,
+  };
 }
 
 function backoff(hostId: string): PeerHostStatus {
-  return { hostId, generation: 1, state: { kind: "backoff", attempt: 2, retryAt: 10 }, feed: "off", stale: true };
+  return {
+    hostId,
+    generation: 1,
+    state: { kind: "backoff", attempt: 2, retryAt: 10 },
+    feed: "off",
+    stale: true,
+  };
 }
 
 function feed(hostId: string, patch: Partial<PeerHostFeedSnapshot>): PeerHostFeedSnapshot {
-  return { hostId, epoch: "e1", sequence: 1, stale: false, summaries: [], workspaces: [], bots: [], runs: [], ...patch };
+  return {
+    hostId,
+    epoch: "e1",
+    sequence: 1,
+    stale: false,
+    summaries: [],
+    workspaces: [],
+    bots: [],
+    runs: [],
+    ...patch,
+  };
 }
 
 test("an online host that granted chat writes can start a new chat", () => {
@@ -39,7 +71,12 @@ test("an online host that granted chat writes can start a new chat", () => {
 
 test("a host that cannot take a new chat stays listed with a reason naming it", () => {
   const machines = newChatMachines(
-    [view("host-b", "Studio"), view("host-c", "Laptop", ["chat:read"]), view("host-d", "Spare"), view("host-e", "Off", CHAT_GRANTS, false)],
+    [
+      view("host-b", "Studio"),
+      view("host-c", "Laptop", ["chat:read"]),
+      view("host-d", "Spare"),
+      view("host-e", "Off", CHAT_GRANTS, false),
+    ],
     [backoff("host-b"), connected("host-c")],
     "darwin",
   );
@@ -51,19 +88,28 @@ test("a host that cannot take a new chat stays listed with a reason naming it", 
   const [studio, laptop, spare] = machines;
   assert.match(studio?.disabledReason ?? "", /^Studio is offline/u);
   assert.equal(laptop?.disabledReason, "Laptop hasn't allowed this Mac to start chats.");
-  assert.match(spare?.disabledReason ?? "", /^Still connecting to Spare/u, "a host with no status yet is still connecting");
+  assert.match(
+    spare?.disabledReason ?? "",
+    /^Still connecting to Spare/u,
+    "a host with no status yet is still connecting",
+  );
 });
 
 test("a reason names the paired computer throughout and this computer by its platform", () => {
-  const blocked = (hostId: string, reason: "protocol" | "auth"): PeerHostStatus => ({
-    hostId,
-    generation: 1,
-    state: { kind: "blocked", reason },
-    feed: "off",
-    stale: true,
-  } as PeerHostStatus);
+  const blocked = (hostId: string, reason: "protocol" | "auth"): PeerHostStatus =>
+    ({
+      hostId,
+      generation: 1,
+      state: { kind: "blocked", reason },
+      feed: "off",
+      stale: true,
+    }) as PeerHostStatus;
   const [studio, mini, laptop] = newChatMachines(
-    [view("host-b", "Studio"), view("host-c", "Lab $& box"), view("host-d", "Laptop", ["chat:read"])],
+    [
+      view("host-b", "Studio"),
+      view("host-c", "Lab $& box"),
+      view("host-d", "Laptop", ["chat:read"]),
+    ],
     [blocked("host-b", "protocol"), blocked("host-c", "auth"), connected("host-d")],
     "linux",
   );
@@ -72,14 +118,22 @@ test("a reason names the paired computer throughout and this computer by its pla
     "Studio runs an incompatible version of Aiden. Update Aiden on both computers to control it.",
   );
   // The name is used as written, even with characters a pattern replacement would expand.
-  assert.equal(mini?.disabledReason, "Lab $& box needs to be paired again before it can be controlled.");
+  assert.equal(
+    mini?.disabledReason,
+    "Lab $& box needs to be paired again before it can be controlled.",
+  );
   assert.equal(laptop?.disabledReason, "Laptop hasn't allowed this computer to start chats.");
 });
 
 test("a host's projects are offered most recently used first, with a name even when the host sent none", () => {
   const rows: PeerFeedRow[] = [
     { id: "w-old", name: "Archive", updatedAt: "2026-01-01T00:00:00.000Z" },
-    { id: "w-new", name: "  ", repositoryName: "aiden-agent", updatedAt: "2026-03-01T00:00:00.000Z" },
+    {
+      id: "w-new",
+      name: "  ",
+      repositoryName: "aiden-agent",
+      updatedAt: "2026-03-01T00:00:00.000Z",
+    },
     { id: "w-undated", name: "Notes" },
     { id: "w-mid", name: "Site", updatedAt: "2026-02-01T00:00:00.000Z" },
   ];
@@ -93,16 +147,28 @@ test("a host's projects are offered most recently used first, with a name even w
 });
 
 test("a project just created on the host is offered at once, and only once after its feed catches up", () => {
-  const listed: PeerFeedRow[] = [{ id: "w-site", name: "Site", updatedAt: "2026-02-01T00:00:00.000Z" }];
+  const listed: PeerFeedRow[] = [
+    { id: "w-site", name: "Site", updatedAt: "2026-02-01T00:00:00.000Z" },
+  ];
   const created = [{ id: "w-launch", name: "launch" }];
   assert.deepEqual(
-    remoteProjectChoices(feed("host-b", { workspaces: listed }), created).map((project) => project.name),
+    remoteProjectChoices(feed("host-b", { workspaces: listed }), created).map(
+      (project) => project.name,
+    ),
     ["launch", "Site"],
     "the new project can be chosen before the host's feed reports it",
   );
   assert.deepEqual(remoteProjectChoices(null, created), [{ id: "w-launch", name: "launch" }]);
 
-  const caughtUp: PeerFeedRow[] = [...listed, { id: "w-launch", name: "launch", repositoryName: "launch-repo", updatedAt: "2026-03-01T00:00:00.000Z" }];
+  const caughtUp: PeerFeedRow[] = [
+    ...listed,
+    {
+      id: "w-launch",
+      name: "launch",
+      repositoryName: "launch-repo",
+      updatedAt: "2026-03-01T00:00:00.000Z",
+    },
+  ];
   assert.deepEqual(remoteProjectChoices(feed("host-b", { workspaces: caughtUp }), created), [
     { id: "w-launch", name: "launch", detail: "launch-repo" },
     { id: "w-site", name: "Site" },
@@ -117,7 +183,11 @@ function offered(steps: Array<{ created: string } | { feed: PeerFeedRow[] }>): s
     const event: CreatedProjectsEvent =
       "created" in step
         ? { type: "created", hostId: "host-b", project: { id: step.created, name: step.created } }
-        : { type: "feed", hostId: "host-b", feed: (latest = feed("host-b", { workspaces: step.feed })) };
+        : {
+            type: "feed",
+            hostId: "host-b",
+            feed: (latest = feed("host-b", { workspaces: step.feed })),
+          };
     state = reduceCreatedProjects(state, event);
     return remoteProjectChoices(latest, state.pending).map((project) => project.id);
   });
@@ -125,21 +195,33 @@ function offered(steps: Array<{ created: string } | { feed: PeerFeedRow[] }>): s
 
 test("a created project the feed has listed is retired, so the host deleting it later removes it", () => {
   const site: PeerFeedRow = { id: "w-site", name: "Site", updatedAt: "2026-02-01T00:00:00.000Z" };
-  const launch: PeerFeedRow = { id: "w-launch", name: "launch", updatedAt: "2026-03-01T00:00:00.000Z" };
+  const launch: PeerFeedRow = {
+    id: "w-launch",
+    name: "launch",
+    updatedAt: "2026-03-01T00:00:00.000Z",
+  };
 
-  assert.deepEqual(offered([{ feed: [site] }, { created: "w-launch" }, { feed: [site, launch] }, { feed: [site] }]), [
-    ["w-site"],
-    ["w-launch", "w-site"],
-    ["w-launch", "w-site"],
-    ["w-site"],
-  ], "the create's answer first: offered at once, listed once, gone once the host deletes it");
+  assert.deepEqual(
+    offered([
+      { feed: [site] },
+      { created: "w-launch" },
+      { feed: [site, launch] },
+      { feed: [site] },
+    ]),
+    [["w-site"], ["w-launch", "w-site"], ["w-launch", "w-site"], ["w-site"]],
+    "the create's answer first: offered at once, listed once, gone once the host deletes it",
+  );
 
-  assert.deepEqual(offered([{ feed: [site] }, { feed: [site, launch] }, { created: "w-launch" }, { feed: [site] }]), [
-    ["w-site"],
-    ["w-launch", "w-site"],
-    ["w-launch", "w-site"],
-    ["w-site"],
-  ], "the feed first: the late create answer does not keep a project the host deletes");
+  assert.deepEqual(
+    offered([
+      { feed: [site] },
+      { feed: [site, launch] },
+      { created: "w-launch" },
+      { feed: [site] },
+    ]),
+    [["w-site"], ["w-launch", "w-site"], ["w-launch", "w-site"], ["w-site"]],
+    "the feed first: the late create answer does not keep a project the host deletes",
+  );
 
   assert.deepEqual(
     offered([{ created: "w-launch" }, { created: "w-scratch" }, { feed: [site] }]),
@@ -151,7 +233,11 @@ test("a created project the feed has listed is retired, so the host deleting it 
 test("Bots are grouped by host, without hosts that have none", () => {
   const botGrants = [...CHAT_GRANTS, "bot:read", "bot:write"];
   const groups = remoteBotGroups(
-    [view("host-b", "Studio", botGrants), view("host-c", "Laptop", botGrants), view("host-d", "Spare", CHAT_GRANTS)],
+    [
+      view("host-b", "Studio", botGrants),
+      view("host-c", "Laptop", botGrants),
+      view("host-d", "Spare", CHAT_GRANTS),
+    ],
     [connected("host-b"), connected("host-c"), connected("host-d")],
     new Map([
       [
@@ -226,8 +312,19 @@ test("a remote Bot keeps its avatar and says it needs the person, as its own Mac
   const avatar = { version: 1, shape: "hex", color: "rose" };
   const rows = [
     // Waiting on an approval: the host's session state is still running.
-    { id: "bot-1", name: "Chief of Staff", avatar: { semantic: avatar }, sessionState: "running", needsYou: true },
-    { id: "bot-2", name: "Jester", avatar: { semantic: { version: 9, shape: "hex", color: "rose" } }, sessionState: "running" },
+    {
+      id: "bot-1",
+      name: "Chief of Staff",
+      avatar: { semantic: avatar },
+      sessionState: "running",
+      needsYou: true,
+    },
+    {
+      id: "bot-2",
+      name: "Jester",
+      avatar: { semantic: { version: 9, shape: "hex", color: "rose" } },
+      sessionState: "running",
+    },
     { id: "bot-3", name: "Modelless", sessionState: "needs_model", failed: true },
   ];
   const [online] = remoteBotGroups(
@@ -249,12 +346,17 @@ test("a remote Bot keeps its avatar and says it needs the person, as its own Mac
     new Map([["host-b", feed("host-b", { stale: true, bots: rows })]]),
     "darwin",
   );
-  assert.equal(offline?.bots.some((bot) => bot.working), false);
+  assert.equal(
+    offline?.bots.some((bot) => bot.working),
+    false,
+  );
   assert.equal(offline?.bots[0]?.needsYou, true);
 });
 
 test("the new remote chat route keeps only a well-formed project identifier", () => {
-  assert.deepEqual(parseRemoteNewChatSearch({ workspaceId: "ws_01:abc.def-1" }), { workspaceId: "ws_01:abc.def-1" });
+  assert.deepEqual(parseRemoteNewChatSearch({ workspaceId: "ws_01:abc.def-1" }), {
+    workspaceId: "ws_01:abc.def-1",
+  });
   assert.deepEqual(parseRemoteNewChatSearch({ workspaceId: "../etc/passwd" }), {});
   assert.deepEqual(parseRemoteNewChatSearch({ workspaceId: "a".repeat(161) }), {});
   assert.deepEqual(parseRemoteNewChatSearch({ workspaceId: 7 }), {});

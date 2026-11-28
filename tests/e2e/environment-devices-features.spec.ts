@@ -81,7 +81,12 @@ async function readHubLog(): Promise<HubLogEntry[]> {
 async function simctlVerbs(): Promise<string[]> {
   return (await readFile(xcrunLog, "utf8"))
     .split("\n")
-    .filter((line) => line.startsWith("simctl ") && !line.startsWith("simctl list") && !line.startsWith("simctl ui"))
+    .filter(
+      (line) =>
+        line.startsWith("simctl ") &&
+        !line.startsWith("simctl list") &&
+        !line.startsWith("simctl ui"),
+    )
     .filter((line) => !line.startsWith("simctl help") && !line.startsWith("simctl spawn"));
 }
 
@@ -90,7 +95,9 @@ async function seedInstalledFakeHub(userDataDir: string): Promise<void> {
   const installDir = path.join(baseDir, "tools", "expo-device-hub", HUB_VERSION);
   const entryDir = path.join(installDir, "node_modules", "expo-device-hub", "dist", "server");
   await mkdir(entryDir, { recursive: true });
-  const fakeHub = pathToFileURL(path.join(REPOSITORY_ROOT, "tests", "e2e", "device-hub-fake.mjs")).href;
+  const fakeHub = pathToFileURL(
+    path.join(REPOSITORY_ROOT, "tests", "e2e", "device-hub-fake.mjs"),
+  ).href;
   await writeFile(path.join(entryDir, "cli.mjs"), `import ${JSON.stringify(fakeHub)};\n`);
   await writeFile(path.join(installDir, ".install-complete"), `${HUB_VERSION}\n`);
   await writeFile(
@@ -135,7 +142,10 @@ test.describe("Simulator power features", () => {
 
     // Save screenshot… goes through the save dialog, which main answers here.
     await app.evaluate(({ dialog }, filePath) => {
-      dialog.showSaveDialog = (async () => ({ canceled: false, filePath })) as unknown as typeof dialog.showSaveDialog;
+      dialog.showSaveDialog = (async () => ({
+        canceled: false,
+        filePath,
+      })) as unknown as typeof dialog.showSaveDialog;
     }, savedScreenshot);
     const options = panel.getByRole("button", { name: "Screenshot options" });
     await options.focus();
@@ -166,7 +176,9 @@ test.describe("Simulator power features", () => {
           .map((entry) => entry.body?.type),
       )
       .toEqual(expect.arrayContaining(["begin", "move", "end"]));
-    const begin = (await readHubLog()).find((entry) => entry.tag === MSG_MULTI_TOUCH && entry.body?.type === "begin");
+    const begin = (await readHubLog()).find(
+      (entry) => entry.tag === MSG_MULTI_TOUCH && entry.body?.type === "begin",
+    );
     expect((begin?.body?.x1 ?? 0) + (begin?.body?.x2 ?? 0)).toBeCloseTo(1, 5);
 
     // The accessibility overlay draws frames on the flat screen and names the hovered element.
@@ -181,7 +193,11 @@ test.describe("Simulator power features", () => {
     await page.mouse.move(framed.x + framed.width * 0.5, framed.y + framed.height * 0.27);
     await expect(panel.locator(".device-ax-label")).toContainText("General");
     await expect(panel.locator(".device-ax-label")).toContainText("Button");
-    expect((await readHubLog()).some((entry) => entry.path === `/vendor/serve-sim/helper/${DEVICE_UDID}/ax`)).toBe(true);
+    expect(
+      (await readHubLog()).some(
+        (entry) => entry.path === `/vendor/serve-sim/helper/${DEVICE_UDID}/ax`,
+      ),
+    ).toBe(true);
     await overlaySwitch.click();
     await expect(panel.locator(".device-ax-frame")).toHaveCount(0);
 
@@ -197,12 +213,18 @@ test.describe("Simulator power features", () => {
 
     // A hidden window closes the open event log's feed; showing it again resubscribes.
     const eventLogOpens = async () =>
-      (await readHubLog()).filter((entry) => entry.kind === "http" && entry.path === eventLogPath).length;
+      (await readHubLog()).filter((entry) => entry.kind === "http" && entry.path === eventLogPath)
+        .length;
     const eventLogCloses = async () =>
-      (await readHubLog()).filter((entry) => entry.kind === "sse-close" && entry.path === eventLogPath).length;
+      (await readHubLog()).filter(
+        (entry) => entry.kind === "sse-close" && entry.path === eventLogPath,
+      ).length;
     const setHidden = (hidden: boolean) =>
       page.evaluate((value) => {
-        Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (value ? "hidden" : "visible") });
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          get: () => (value ? "hidden" : "visible"),
+        });
         document.dispatchEvent(new Event("visibilitychange"));
       }, hidden);
     expect(await eventLogOpens()).toBe(1);
@@ -223,14 +245,19 @@ test.describe("Simulator power features", () => {
     expect((await simctlVerbs()).some((line) => line.startsWith("simctl erase"))).toBe(false);
 
     await panel.getByRole("button", { name: "Erase all content and settings…" }).click();
-    await page.getByRole("alertdialog", { name: `Erase ${DEVICE_NAME}?` }).getByRole("button", { name: "Erase" }).click();
+    await page
+      .getByRole("alertdialog", { name: `Erase ${DEVICE_NAME}?` })
+      .getByRole("button", { name: "Erase" })
+      .click();
     const offer = page.getByRole("dialog", { name: `${DEVICE_NAME} was erased` });
     await expect(offer).toBeVisible();
     expect(await simctlVerbs()).toEqual(
       expect.arrayContaining([`simctl shutdown ${DEVICE_UDID}`, `simctl erase ${DEVICE_UDID}`]),
     );
     const verbs = await simctlVerbs();
-    expect(verbs.indexOf(`simctl shutdown ${DEVICE_UDID}`)).toBeLessThan(verbs.indexOf(`simctl erase ${DEVICE_UDID}`));
+    expect(verbs.indexOf(`simctl shutdown ${DEVICE_UDID}`)).toBeLessThan(
+      verbs.indexOf(`simctl erase ${DEVICE_UDID}`),
+    );
     await offer.getByRole("button", { name: "Boot" }).click();
     await expect(offer).toBeHidden();
     await expect(status).toHaveText("Live");

@@ -7,7 +7,12 @@ import type { BotRecapStep } from "./bot-activity-steps";
 
 afterEach(cleanup);
 
-const ok = (id: string, kind: BotRecapStep["kind"], label: string, extra: Partial<BotRecapStep> = {}): BotRecapStep => ({
+const ok = (
+  id: string,
+  kind: BotRecapStep["kind"],
+  label: string,
+  extra: Partial<BotRecapStep> = {},
+): BotRecapStep => ({
   id,
   kind,
   label,
@@ -23,32 +28,71 @@ const TURN: BotRecapStep[] = [
 ];
 
 const itemTexts = () =>
-  within(screen.getByRole("list", { name: "Steps" })).getAllByRole("listitem").map((item) => item.textContent);
+  within(screen.getByRole("list", { name: "Steps" }))
+    .getAllByRole("listitem")
+    .map((item) => item.textContent);
 
 test("a finished recap is one closed line that opens to its merged steps", () => {
   render(<BotActivityRecap steps={TURN} durationMs={18_000} live={false} level="summary" />);
-  const header = screen.getByRole("button", { name: "Worked for 18s · read 2 files, searched the web, used Notion" });
+  const header = screen.getByRole("button", {
+    name: "Worked for 18s · read 2 files, searched the web, used Notion",
+  });
   assert.equal(header.getAttribute("aria-expanded"), "false");
   fireEvent.click(header);
-  assert.deepEqual(itemTexts(), ["Read 2 files", "Searched the web · lisbon trains", "Used Notion"]);
+  assert.deepEqual(itemTexts(), [
+    "Read 2 files",
+    "Searched the web · lisbon trains",
+    "Used Notion",
+  ]);
 });
 
 test("Detailed opens while live with the last three steps, and folds itself when the reply lands", () => {
-  const live = [...TURN, { id: "5", kind: "editing" as const, label: "Edited 1 file", detail: "plan.md", status: "running" as const }];
-  const { rerender } = render(<BotActivityRecap steps={live} durationMs={0} live level="detailed" />);
-  assert.deepEqual(itemTexts(), ["Searched the web · lisbon trains", "Used Notion", "Editing files · plan.md"]);
-  rerender(<BotActivityRecap steps={live.map((step) => ({ ...step, status: "ok" }))} durationMs={9_000} live={false} level="detailed" />);
+  const live = [
+    ...TURN,
+    {
+      id: "5",
+      kind: "editing" as const,
+      label: "Edited 1 file",
+      detail: "plan.md",
+      status: "running" as const,
+    },
+  ];
+  const { rerender } = render(
+    <BotActivityRecap steps={live} durationMs={0} live level="detailed" />,
+  );
+  assert.deepEqual(itemTexts(), [
+    "Searched the web · lisbon trains",
+    "Used Notion",
+    "Editing files · plan.md",
+  ]);
+  rerender(
+    <BotActivityRecap
+      steps={live.map((step) => ({ ...step, status: "ok" }))}
+      durationMs={9_000}
+      live={false}
+      level="detailed"
+    />,
+  );
   assert.equal(screen.queryByRole("list", { name: "Steps" }), null);
 });
 
 test("a manual close or open during the run sticks after the reply lands", () => {
-  const { rerender } = render(<BotActivityRecap steps={TURN} durationMs={0} live level="detailed" />);
+  const { rerender } = render(
+    <BotActivityRecap steps={TURN} durationMs={0} live level="detailed" />,
+  );
   fireEvent.click(screen.getByRole("button", { name: /^Working/u }));
   rerender(<BotActivityRecap steps={TURN} durationMs={0} live level="detailed" />);
-  assert.equal(screen.queryByRole("list", { name: "Steps" }), null, "closed by hand stays closed while live");
+  assert.equal(
+    screen.queryByRole("list", { name: "Steps" }),
+    null,
+    "closed by hand stays closed while live",
+  );
   fireEvent.click(screen.getByRole("button", { name: /^Working/u }));
   rerender(<BotActivityRecap steps={TURN} durationMs={4_000} live={false} level="detailed" />);
-  assert.ok(screen.getByRole("list", { name: "Steps" }), "opened by hand stays open after the reply");
+  assert.ok(
+    screen.getByRole("list", { name: "Steps" }),
+    "opened by hand stays open after the reply",
+  );
 });
 
 test("a failed step is a red issue and a refused one is amber Blocked, never alike", () => {
@@ -64,7 +108,9 @@ test("a failed step is a red issue and a refused one is amber Blocked, never ali
       level="summary"
     />,
   );
-  const header = screen.getByRole("button", { name: "Worked for 5s · read 1 file · 1 issue · 1 blocked" });
+  const header = screen.getByRole("button", {
+    name: "Worked for 5s · read 1 file · 1 issue · 1 blocked",
+  });
   fireEvent.click(header);
   assert.ok(screen.getByText("Couldn’t run a command"));
   assert.ok(screen.getByText("Blocked: search the web"));
@@ -91,7 +137,15 @@ test("a step the person stopped is a neutral line, never an issue or a block, an
 });
 
 test("next-message timing retains completed Detailed work without a live label, then folds", () => {
-  const { rerender } = render(<BotActivityRecap steps={TURN} durationMs={18_000} live={false} level="detailed" retainDetails />);
+  const { rerender } = render(
+    <BotActivityRecap
+      steps={TURN}
+      durationMs={18_000}
+      live={false}
+      level="detailed"
+      retainDetails
+    />,
+  );
   assert.ok(screen.getByRole("list", { name: "Steps" }));
   assert.equal(screen.queryByText(/^Working/u), null);
   rerender(<BotActivityRecap steps={TURN} durationMs={18_000} live={false} level="detailed" />);
@@ -99,11 +153,36 @@ test("next-message timing retains completed Detailed work without a live label, 
 });
 
 test("global detail modes respect Bot Summary and explicit disclosure choices", () => {
-  const { rerender } = render(<BotActivityRecap steps={TURN} durationMs={18_000} live={false} level="summary" mode="verbose" />);
+  const { rerender } = render(
+    <BotActivityRecap
+      steps={TURN}
+      durationMs={18_000}
+      live={false}
+      level="summary"
+      mode="verbose"
+    />,
+  );
   assert.equal(screen.queryByRole("list", { name: "Steps" }), null);
-  rerender(<BotActivityRecap steps={TURN} durationMs={18_000} live={false} level="detailed" mode="verbose" />);
+  rerender(
+    <BotActivityRecap
+      steps={TURN}
+      durationMs={18_000}
+      live={false}
+      level="detailed"
+      mode="verbose"
+    />,
+  );
   assert.ok(screen.getByRole("list", { name: "Steps" }));
   fireEvent.click(screen.getByRole("button"));
-  rerender(<BotActivityRecap steps={TURN} durationMs={18_000} live={false} level="detailed" mode="detailed" retainDetails />);
+  rerender(
+    <BotActivityRecap
+      steps={TURN}
+      durationMs={18_000}
+      live={false}
+      level="detailed"
+      mode="detailed"
+      retainDetails
+    />,
+  );
   assert.equal(screen.queryByRole("list", { name: "Steps" }), null);
 });

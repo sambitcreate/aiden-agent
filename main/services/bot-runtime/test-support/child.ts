@@ -21,9 +21,13 @@ export interface HarnessChild {
 }
 
 export function spawnHarnessChild(mode: string, args: string[]): HarnessChild {
-  const child = spawn(process.execPath, ["--no-warnings", "--import", tsxLoader, helper, mode, ...args], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const child = spawn(
+    process.execPath,
+    ["--no-warnings", "--import", tsxLoader, helper, mode, ...args],
+    {
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
   let stdout = "";
   let stderr = "";
   const waiters: Array<() => void> = [];
@@ -45,10 +49,17 @@ export function spawnHarnessChild(mode: string, args: string[]): HarnessChild {
     child,
     waitFor(tag, timeoutMs = 20_000, expected) {
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`child never printed ${tag}\n${stdout}\n${stderr}`)), timeoutMs);
+        const timer = setTimeout(
+          () => reject(new Error(`child never printed ${tag}\n${stdout}\n${stderr}`)),
+          timeoutMs,
+        );
         const check = () => {
           const match = stdout.match(new RegExp(`^${tag} (.*)$`, "mu"));
-          if (match && (expected === undefined || expected.every((value) => stdout.includes(`${tag} ${value}\n`)))) {
+          if (
+            match &&
+            (expected === undefined ||
+              expected.every((value) => stdout.includes(`${tag} ${value}\n`)))
+          ) {
             clearTimeout(timer);
             resolve(match[1]!);
             return;

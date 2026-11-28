@@ -9,21 +9,23 @@ interface FileActivity {
 
 // Tool names are matched case-insensitively (see `matches`), mirroring the /i
 // regexes in core/rank.ts. Entries must be lowercase.
-const FILE_READ_TOOLS = new Set([
-  "read", "read_file", "view",
-]);
+const FILE_READ_TOOLS = new Set(["read", "read_file", "view"]);
 
 // Multi-file patch tools (apply_patch) carry their paths inside the diff payload,
 // not in a path arg, so extractPath yields nothing for them; those files are
 // recovered from the hook-provided fileOps below.
 const FILE_WRITE_TOOLS = new Set([
-  "edit", "write", "edit_file", "write_file",
-  "multiedit", "quick_edit", "target_edit", "apply_patch",
+  "edit",
+  "write",
+  "edit_file",
+  "write_file",
+  "multiedit",
+  "quick_edit",
+  "target_edit",
+  "apply_patch",
 ]);
 
-const FILE_CREATE_TOOLS = new Set([
-  "write", "write_file",
-]);
+const FILE_CREATE_TOOLS = new Set(["write", "write_file"]);
 
 const matches = (tools: Set<string>, name: string): boolean => tools.has(name.toLowerCase());
 
@@ -55,10 +57,7 @@ const trimPaths = (set: Set<string>, prefix: string): Set<string> => {
   return out;
 };
 
-export const extractFiles = (
-  blocks: NormalizedBlock[],
-  fileOps?: FileOps,
-): FileActivity => {
+export const extractFiles = (blocks: NormalizedBlock[], fileOps?: FileOps): FileActivity => {
   const act: FileActivity = {
     read: new Set(fileOps?.readFiles ?? []),
     modified: new Set(fileOps?.modifiedFiles ?? []),

@@ -94,7 +94,8 @@ export class Pcm16ChunkEncoder {
     // Input index 0 is the carried sample when there is one, then `samples`.
     const offset = this.carry === null ? 0 : 1;
     const length = samples.length + offset;
-    const at = (index: number) => (index < offset ? (this.carry as number) : samples[index - offset]);
+    const at = (index: number) =>
+      index < offset ? (this.carry as number) : samples[index - offset];
     const tick = TARGET_SAMPLE_RATE;
     const lastTick = (length - 1) * tick;
     while (this.position < lastTick) {
@@ -116,7 +117,8 @@ export class Pcm16ChunkEncoder {
 
   flush(): Uint8Array[] {
     // The carried sample is the final input; emit it unless the next output already lies past it.
-    if (this.carry !== null && this.position < TARGET_SAMPLE_RATE) this.pending[this.filled++] = this.carry;
+    if (this.carry !== null && this.position < TARGET_SAMPLE_RATE)
+      this.pending[this.filled++] = this.carry;
     this.carry = null;
     this.position = 0;
     const chunks: Uint8Array[] = [];

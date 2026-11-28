@@ -55,7 +55,8 @@ type FollowUpChat = { chat: Chat; workspaceId: string; providerId: string; model
 async function followUpChat(chatId: string): Promise<FollowUpChat | { unavailable: string }> {
   const chat = await chatStore.get(chatId);
   if (!chat) return { unavailable: "The chat no longer exists." };
-  if (chat.botId || chat.owner !== undefined) return { unavailable: "This conversation runs its own way." };
+  if (chat.botId || chat.owner !== undefined)
+    return { unavailable: "This conversation runs its own way." };
   if (!chat.providerId || !chat.model) return { unavailable: "The chat has no model yet." };
   if (!chat.workspaceId) return { unavailable: "The chat has no folder." };
   const workspace = await configStore.getWorkspace(chat.workspaceId);
@@ -66,7 +67,10 @@ async function followUpChat(chatId: string): Promise<FollowUpChat | { unavailabl
 }
 
 async function queueIntoRun(post: AgentNoticePost): Promise<QueueIntoRunResult> {
-  const result = await llmClient.admitAgentNotice(post.chatId, { text: post.text, notice: post.notice });
+  const result = await llmClient.admitAgentNotice(post.chatId, {
+    text: post.text,
+    notice: post.notice,
+  });
   if (!result) return { kind: "no-run" };
   if ("busyWith" in result) return { kind: "busy", holder: result.busyWith };
   if (result.committed) transcriptChanged(post.chatId);
@@ -117,7 +121,11 @@ async function startTurn(chatId: string, post?: AgentNoticePost): Promise<StartT
     );
     if (!started) {
       lease.release();
-      return { kind: "unavailable", reason: "The follow-up turn stopped before it began.", ...(messageId ? { messageId } : {}) };
+      return {
+        kind: "unavailable",
+        reason: "The follow-up turn stopped before it began.",
+        ...(messageId ? { messageId } : {}),
+      };
     }
     return { kind: "started", streamId, ...(messageId ? { messageId } : {}) };
   } catch (error) {
@@ -161,7 +169,11 @@ async function append(post: AgentNoticePost): Promise<AppendResult> {
 export const noticeDelivery = new NoticeDelivery({
   queueIntoRun,
   startTurn,
-  startGoalRound: (chatId, post) => goalTurnHooks().noticeRound(chatId, post ? { text: post.text, notice: post.notice } : undefined),
+  startGoalRound: (chatId, post) =>
+    goalTurnHooks().noticeRound(
+      chatId,
+      post ? { text: post.text, notice: post.notice } : undefined,
+    ),
   append,
   waitForIdle: async (chatId) => {
     await llmClient.waitForChatIdle(chatId);

@@ -17,7 +17,11 @@ import { WorkspaceApprovalFields } from "../workspace-settings-dialog";
 import * as React from "react";
 import { ApprovalModeSettings, ApprovalsContentSettledContext } from "./approval-mode-settings";
 import { SettingsAnchorContext } from "./settings-page";
-import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES, type AppCapabilities } from "../../lib/app-capabilities";
+import {
+  AppCapabilitiesProvider,
+  DISABLED_APP_CAPABILITIES,
+  type AppCapabilities,
+} from "../../lib/app-capabilities";
 
 afterEach(cleanup);
 
@@ -34,7 +38,12 @@ const MODEL: Provider = {
 function mount(
   settings: Partial<AppSettings>,
   providers: Provider[] = [MODEL],
-  options: { failSave?: boolean; anchor?: "bots"; children?: React.ReactNode; platform?: AppCapabilities["platform"] } = {},
+  options: {
+    failSave?: boolean;
+    anchor?: "bots";
+    children?: React.ReactNode;
+    platform?: AppCapabilities["platform"];
+  } = {},
 ) {
   let current: Partial<AppSettings> = { ...settings };
   const calls = installBotTestIpc({
@@ -47,29 +56,42 @@ function mount(
     "providers:list": () => providers,
   });
   render(
-    <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: options.platform ?? "darwin" }}>
+    <AppCapabilitiesProvider
+      capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: options.platform ?? "darwin" }}
+    >
       <TooltipProvider>
         <QueryClientProvider client={createBotTestQueryClient()}>
-          <SettingsAnchorContext.Provider value={options.anchor ? { section: options.anchor, request: 1 } : null}>
+          <SettingsAnchorContext.Provider
+            value={options.anchor ? { section: options.anchor, request: 1 } : null}
+          >
             <ApprovalModeSettings>{options.children}</ApprovalModeSettings>
           </SettingsAnchorContext.Provider>
         </QueryClientProvider>
       </TooltipProvider>
     </AppCapabilitiesProvider>,
   );
-  const saves = () => calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
+  const saves = () =>
+    calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
   return { saves, current: () => current };
 }
 
 const modeGroup = () => screen.findByRole("radiogroup", { name: "Approval mode" });
 const checked = (group: HTMLElement) =>
-  within(group).getAllByRole("radio").find((radio) => radio.getAttribute("aria-checked") === "true")?.getAttribute("aria-label");
+  within(group)
+    .getAllByRole("radio")
+    .find((radio) => radio.getAttribute("aria-checked") === "true")
+    ?.getAttribute("aria-label");
 
 test("a fresh install with a usable model is on Auto, and choosing Ask saves it", async () => {
   const { saves } = mount({ approvalModeOrigin: "fresh" });
   const group = await modeGroup();
   await waitFor(() => assert.equal(checked(group), "Auto"));
-  assert.deepEqual(within(group).getAllByRole("radio").map((radio) => radio.getAttribute("aria-label")), ["Auto", "Ask", "Never ask"]);
+  assert.deepEqual(
+    within(group)
+      .getAllByRole("radio")
+      .map((radio) => radio.getAttribute("aria-label")),
+    ["Auto", "Ask", "Never ask"],
+  );
   screen.getByText("A model approves routine actions and asks you about the rest.");
   fireEvent.click(within(group).getByRole("radio", { name: "Ask" }));
   await waitFor(() => assert.deepEqual(saves(), [{ approvalMode: "ask" }]));
@@ -79,13 +101,22 @@ test("a fresh install with a usable model is on Auto, and choosing Ask saves it"
 test("the Approval model setting says the actions it reviews are sent to that model", async () => {
   mount({ approvalModeOrigin: "fresh" });
   await modeGroup();
-  screen.getByText(/Each action it reviews is sent to this model, with typed text, passwords and card details left out\./u);
+  screen.getByText(
+    /Each action it reviews is sent to this model, with typed text, passwords and card details left out\./u,
+  );
 });
 
 test("with no usable model Auto is hidden and the mode reads Ask", async () => {
   mount({ approvalMode: "auto" }, [{ ...MODEL, hasKey: false }]);
   const group = await modeGroup();
-  await waitFor(() => assert.deepEqual(within(group).getAllByRole("radio").map((radio) => radio.getAttribute("aria-label")), ["Ask", "Never ask"]));
+  await waitFor(() =>
+    assert.deepEqual(
+      within(group)
+        .getAllByRole("radio")
+        .map((radio) => radio.getAttribute("aria-label")),
+      ["Ask", "Never ask"],
+    ),
+  );
   assert.equal(checked(group), "Ask");
   await screen.findByText("Auto appears once a model is connected in Providers.");
 });
@@ -123,13 +154,23 @@ test("an upgraded install sees What changed once; Got it hides it for good", asy
 test("the routines switch appears only for someone who had it on, and only turns off", async () => {
   mount({ approvalMode: "ask" });
   await modeGroup();
-  assert.equal(screen.queryByRole("switch", { name: "Let routines go ahead without asking" }), null);
+  assert.equal(
+    screen.queryByRole("switch", { name: "Let routines go ahead without asking" }),
+    null,
+  );
   cleanup();
   const { saves } = mount({ approvalMode: "ask", botRoutinesGoAhead: true });
-  const toggle = await screen.findByRole("switch", { name: "Let routines go ahead without asking" });
+  const toggle = await screen.findByRole("switch", {
+    name: "Let routines go ahead without asking",
+  });
   fireEvent.click(toggle);
   await waitFor(() => assert.deepEqual(saves(), [{ botRoutinesGoAhead: false }]));
-  await waitFor(() => assert.equal(screen.queryByRole("switch", { name: "Let routines go ahead without asking" }), null));
+  await waitFor(() =>
+    assert.equal(
+      screen.queryByRole("switch", { name: "Let routines go ahead without asking" }),
+      null,
+    ),
+  );
 });
 
 test("Bot messaging is one switch under Advanced: on unless turned off, and it saves botMessaging", async () => {
@@ -209,7 +250,15 @@ test("a jump to Bot messaging waits for the rules list above it to load before s
     React.useEffect(() => {
       if (rows) settled?.();
     }, [rows, settled]);
-    return rows ? <ul>{rows.map((row) => <li key={row}>{row}</li>)}</ul> : <p>Loading rules</p>;
+    return rows ? (
+      <ul>
+        {rows.map((row) => (
+          <li key={row}>{row}</li>
+        ))}
+      </ul>
+    ) : (
+      <p>Loading rules</p>
+    );
   }
   try {
     mount({ approvalMode: "ask" }, [MODEL], { anchor: "bots", children: <SlowRules /> });
@@ -225,14 +274,21 @@ test("a jump to Bot messaging waits for the rules list above it to load before s
   }
 });
 
-function mountWorkspace(workspace: Workspace, settings: Partial<AppSettings>, platform: AppCapabilities["platform"] = "darwin") {
+function mountWorkspace(
+  workspace: Workspace,
+  settings: Partial<AppSettings>,
+  platform: AppCapabilities["platform"] = "darwin",
+) {
   const patches: unknown[] = [];
   installBotTestIpc({ "settings:get": () => settings, "providers:list": () => [MODEL] });
   render(
     <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, platform }}>
       <TooltipProvider>
         <QueryClientProvider client={createBotTestQueryClient()}>
-          <WorkspaceApprovalFields workspace={workspace} onPatch={(patch) => void patches.push(patch)} />
+          <WorkspaceApprovalFields
+            workspace={workspace}
+            onPatch={(patch) => void patches.push(patch)}
+          />
         </QueryClientProvider>
       </TooltipProvider>
     </AppCapabilitiesProvider>,
@@ -253,7 +309,10 @@ const workspace = (fields: Partial<Workspace> = {}): Workspace => ({
 test("a workspace follows the global mode until customized", async () => {
   mountWorkspace(workspace(), { approvalMode: "never" });
   await screen.findByText(/^Follows Settings → Approvals\. Asks only before purchases/u);
-  assert.match(screen.getByRole("combobox", { name: "Approvals in this workspace" }).textContent ?? "", /Use Settings \(Never ask\)/u);
+  assert.match(
+    screen.getByRole("combobox", { name: "Approvals in this workspace" }).textContent ?? "",
+    /Use Settings \(Never ask\)/u,
+  );
 });
 
 test("on Linux a workspace on Never ask names the computer whose first use still asks", async () => {
@@ -264,7 +323,10 @@ test("on Linux a workspace on Never ask names the computer whose first use still
 test("a Full workspace reads as Never ask with commands and file changes allowed, each removable", async () => {
   const patches = mountWorkspace(workspace({ permission: "full" }), { approvalMode: "ask" });
   await waitFor(() =>
-    assert.match(screen.getByRole("combobox", { name: "Approvals in this workspace" }).textContent ?? "", /^Never ask$/u),
+    assert.match(
+      screen.getByRole("combobox", { name: "Approvals in this workspace" }).textContent ?? "",
+      /^Never ask$/u,
+    ),
   );
   screen.getByText("Run commands");
   screen.getByText("Change files");

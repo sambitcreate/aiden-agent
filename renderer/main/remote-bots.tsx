@@ -36,12 +36,20 @@ export function useRemoteBots(): {
 } {
   const navigate = useNavigate();
   const list = useQuery<PeerHostView[]>({ queryKey: hostQueryKeys.list(), queryFn: skipToken });
-  const statuses = useQuery<PeerHostStatus[]>({ queryKey: hostQueryKeys.statuses(), queryFn: skipToken });
+  const statuses = useQuery<PeerHostStatus[]>({
+    queryKey: hostQueryKeys.statuses(),
+    queryFn: skipToken,
+  });
   const views = React.useMemo(() => (list.data ?? []).filter((view) => view.enabled), [list.data]);
   const feeds = useQueries({
     queries: views.map((view) => ({ queryKey: hostQueryKeys.feed(view.id), queryFn: skipToken })),
     combine: (results) =>
-      new Map(views.map((view, index) => [view.id, results[index]?.data as PeerHostFeedSnapshot | null | undefined])),
+      new Map(
+        views.map((view, index) => [
+          view.id,
+          results[index]?.data as PeerHostFeedSnapshot | null | undefined,
+        ]),
+      ),
   });
   const { platform } = useAppCapabilities();
   const groups = React.useMemo(
@@ -100,7 +108,10 @@ export function useRemoteBots(): {
       if (request !== latestOpen.current) return;
       await navigate({ to: "/host/$hostId/chat/$chatId", params: { hostId, chatId } });
     } catch (error) {
-      if (request === latestOpen.current) toast.error(error instanceof Error ? error.message : "That Bot's chat could not be opened.");
+      if (request === latestOpen.current)
+        toast.error(
+          error instanceof Error ? error.message : "That Bot's chat could not be opened.",
+        );
     } finally {
       if (request === latestOpen.current) setOpening(null);
     }
@@ -109,6 +120,9 @@ export function useRemoteBots(): {
   // `open` keeps one identity, so callers can depend on it without re-running each render.
   const openRef = React.useRef(open);
   openRef.current = open;
-  const stableOpen = React.useCallback((hostId: string, botId: string) => void openRef.current(hostId, botId), []);
+  const stableOpen = React.useCallback(
+    (hostId: string, botId: string) => void openRef.current(hostId, botId),
+    [],
+  );
   return { groups, opening, open: stableOpen };
 }

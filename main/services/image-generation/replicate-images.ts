@@ -71,7 +71,8 @@ function parsePrediction(value: unknown): Prediction {
 
 function outputSources(output: unknown): string[] {
   if (typeof output === "string") return [output];
-  if (Array.isArray(output) && output.every((entry) => typeof entry === "string")) return output as string[];
+  if (Array.isArray(output) && output.every((entry) => typeof entry === "string"))
+    return output as string[];
   throw new ImageAdapterError("Replicate returned output Aiden can't read.");
 }
 
@@ -96,7 +97,8 @@ async function uploadReference(
   });
   if (!response.ok) throw await httpFailure(response, PROVIDER, scope.signal);
   const url = record(record(await readJson(response, PROVIDER, scope.signal))?.urls)?.get;
-  if (typeof url !== "string") throw new ImageAdapterError("Replicate didn't accept the reference image.");
+  if (typeof url !== "string")
+    throw new ImageAdapterError("Replicate didn't accept the reference image.");
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -109,7 +111,11 @@ async function uploadReference(
   return parsed.href;
 }
 
-async function referenceValue(image: ImageContent, key: string, scope: RequestScope): Promise<string> {
+async function referenceValue(
+  image: ImageContent,
+  key: string,
+  scope: RequestScope,
+): Promise<string> {
   return base64ByteLength(image.data) <= REPLICATE_INLINE_REFERENCE_BYTES
     ? dataUri(image)
     : uploadReference(image, key, scope);
@@ -123,7 +129,9 @@ async function latestVersion(modelPath: string, key: string, scope: RequestScope
     signal: scope.signal,
   });
   if (!response.ok) throw await httpFailure(response, PROVIDER, scope.signal);
-  const version = record(record(await readJson(response, PROVIDER, scope.signal))?.latest_version)?.id;
+  const version = record(
+    record(await readJson(response, PROVIDER, scope.signal))?.latest_version,
+  )?.id;
   if (typeof version !== "string" || !VERSION_ID.test(version)) {
     throw new ImageAdapterError("Replicate doesn't have a runnable version of this model.");
   }
@@ -155,8 +163,10 @@ export function replicateImagesApi(deps: ReplicateImagesDeps): ProviderImages {
       try {
         scope = requestScope(options, deps);
         key = options?.apiKey?.trim();
-        if (!key) throw new ImageAdapterError("Add a Replicate key in Settings → Image Generation.");
-        if (!MODEL_ID.test(model.id)) throw new ImageAdapterError("This Replicate model id isn't valid.");
+        if (!key)
+          throw new ImageAdapterError("Add a Replicate key in Settings → Image Generation.");
+        if (!MODEL_ID.test(model.id))
+          throw new ImageAdapterError("This Replicate model id isn't valid.");
         const meta = deps.metadata(model.id) ?? { kind: "replicate" as const };
         const prompt = promptFromContext(context);
         if (!prompt) throw new ImageAdapterError("Describe the image to generate.");
@@ -164,7 +174,8 @@ export function replicateImagesApi(deps: ReplicateImagesDeps): ProviderImages {
         const references = referencesFromContext(context);
         const input: Record<string, unknown> = { ...(meta.input ?? {}), prompt };
         const aspectRatio = requestedAspectRatio(options);
-        if (aspectRatio && meta.aspectRatios?.includes(aspectRatio)) input.aspect_ratio = aspectRatio;
+        if (aspectRatio && meta.aspectRatios?.includes(aspectRatio))
+          input.aspect_ratio = aspectRatio;
         if (references.length > 0) {
           const field = meta.referenceField;
           if (!field) throw new ImageAdapterError(NO_REFERENCES);
@@ -192,7 +203,8 @@ export function replicateImagesApi(deps: ReplicateImagesDeps): ProviderImages {
             redirect: "error",
             signal: activeScope.signal,
           });
-        const createByVersion = (version: string) => create(`${REPLICATE_API_BASE}/predictions`, { version, input });
+        const createByVersion = (version: string) =>
+          create(`${REPLICATE_API_BASE}/predictions`, { version, input });
 
         let created: Response;
         if (meta.version && VERSION_ID.test(meta.version)) {
@@ -218,15 +230,19 @@ export function replicateImagesApi(deps: ReplicateImagesDeps): ProviderImages {
           await sleep(pollIntervalMs, scope.signal);
           const current = prediction;
           prediction = await withPollRetries(activeScope, pollIntervalMs, async () => {
-            const polled = await activeScope.fetch(`${REPLICATE_API_BASE}/predictions/${current.id}`, {
-              method: "GET",
-              headers: { authorization: `Bearer ${activeKey}` },
-              redirect: "error",
-              signal: activeScope.signal,
-            });
+            const polled = await activeScope.fetch(
+              `${REPLICATE_API_BASE}/predictions/${current.id}`,
+              {
+                method: "GET",
+                headers: { authorization: `Bearer ${activeKey}` },
+                redirect: "error",
+                signal: activeScope.signal,
+              },
+            );
             if (!polled.ok) throw await httpFailure(polled, PROVIDER, activeScope.signal);
             const next = parsePrediction(await readJson(polled, PROVIDER, activeScope.signal));
-            if (next.id !== current.id) throw new ImageAdapterError("Replicate returned an unexpected prediction.");
+            if (next.id !== current.id)
+              throw new ImageAdapterError("Replicate returned an unexpected prediction.");
             return next;
           });
         }
@@ -236,7 +252,9 @@ export function replicateImagesApi(deps: ReplicateImagesDeps): ProviderImages {
         if (prediction.status === "failed") {
           const detail = providerDetail(prediction.error);
           throw new ImageAdapterError(
-            detail ? `Replicate couldn't generate this image: ${detail}` : "Replicate couldn't generate this image.",
+            detail
+              ? `Replicate couldn't generate this image: ${detail}`
+              : "Replicate couldn't generate this image.",
           );
         }
         if (prediction.status === "canceled" || prediction.status === "aborted") {

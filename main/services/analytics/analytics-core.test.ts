@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createAnalyticsCore, validateOutgoingEvent, type AnalyticsMessage } from "./analytics-core.js";
+import {
+  createAnalyticsCore,
+  validateOutgoingEvent,
+  type AnalyticsMessage,
+} from "./analytics-core.js";
 import { WITHHELD_MESSAGE } from "./analytics-sanitize.js";
 import type { AnalyticsSuperProperties } from "./analytics-events.js";
 
@@ -16,7 +20,9 @@ const SUPER: AnalyticsSuperProperties = {
   channel: "release",
 };
 
-function harness(overrides: { distinctId?: string | undefined; superProperties?: AnalyticsSuperProperties } = {}) {
+function harness(
+  overrides: { distinctId?: string | undefined; superProperties?: AnalyticsSuperProperties } = {},
+) {
   const sent: AnalyticsMessage[] = [];
   const internalErrors: unknown[] = [];
   const core = createAnalyticsCore({
@@ -39,27 +45,32 @@ function failing(message: string, fn = "save"): Error {
 test("a tracked event carries its props, the super properties and no person profile", () => {
   const { core, sent } = harness();
 
-  assert.equal(core.track("chat_message_sent", {
-    provider_id: "anthropic",
-    model_id: "claude-sonnet",
-    in_workspace: true,
-    thinking: "medium",
-    origin: "phone",
-  }), true);
-
-  assert.deepEqual(sent, [{
-    distinctId: INSTALL_ID,
-    event: "chat_message_sent",
-    properties: {
+  assert.equal(
+    core.track("chat_message_sent", {
       provider_id: "anthropic",
       model_id: "claude-sonnet",
       in_workspace: true,
       thinking: "medium",
       origin: "phone",
-      ...SUPER,
-      $process_person_profile: false,
+    }),
+    true,
+  );
+
+  assert.deepEqual(sent, [
+    {
+      distinctId: INSTALL_ID,
+      event: "chat_message_sent",
+      properties: {
+        provider_id: "anthropic",
+        model_id: "claude-sonnet",
+        in_workspace: true,
+        thinking: "medium",
+        origin: "phone",
+        ...SUPER,
+        $process_person_profile: false,
+      },
     },
-  }]);
+  ]);
 });
 
 test("nothing is sent without a distinct id", () => {
@@ -78,7 +89,10 @@ test("an event with a bad or missing required prop is dropped, and unknown props
   assert.equal(untyped("chat_created", { workspace_kind: "/Users/jane/project" }), false);
   assert.equal(untyped("chat_created", {}), false);
   assert.equal(untyped("not_an_event", {}), false);
-  assert.equal(untyped("chat_created", { workspace_kind: "folder", path: "/Users/jane/project" }), true);
+  assert.equal(
+    untyped("chat_created", { workspace_kind: "folder", path: "/Users/jane/project" }),
+    true,
+  );
 
   assert.equal(sent.length, 1);
   assert.equal("path" in sent[0]!.properties, false);
@@ -88,7 +102,10 @@ test("an invalid optional prop is omitted rather than dropping the event", () =>
   const { core, sent } = harness();
   const untyped = core.track as (event: string, props: Record<string, unknown>) => boolean;
 
-  assert.equal(untyped("onboarding_finished", { outcome: "completed", provider_id: "Has Spaces" }), true);
+  assert.equal(
+    untyped("onboarding_finished", { outcome: "completed", provider_id: "Has Spaces" }),
+    true,
+  );
   assert.equal("provider_id" in sent[0]!.properties, false);
 });
 
@@ -102,13 +119,16 @@ test("invalid super properties disable sending entirely", () => {
 test("an exception is sent in PostHog's format with the outermost frame first", () => {
   const { core, sent } = harness();
 
-  assert.equal(core.captureException(failing("Maximum call stack size exceeded"), {
-    source: "main",
-    level: "fatal",
-    processType: "browser",
-    origin: "uncaught_exception",
-    uptimeSeconds: 120,
-  }), true);
+  assert.equal(
+    core.captureException(failing("Maximum call stack size exceeded"), {
+      source: "main",
+      level: "fatal",
+      processType: "browser",
+      origin: "uncaught_exception",
+      uptimeSeconds: 120,
+    }),
+    true,
+  );
 
   const [message] = sent;
   assert.equal(message!.event, "$exception");
@@ -124,23 +144,39 @@ test("an exception is sent in PostHog's format with the outermost frame first", 
   assert.equal(entry!.value, "Maximum call stack size exceeded");
   assert.equal(entry!.mechanism.handled, false);
   assert.equal(entry!.stacktrace.type, "raw");
-  assert.deepEqual(entry!.stacktrace.frames.map((frame) => frame.function), ["run", "save"]);
+  assert.deepEqual(
+    entry!.stacktrace.frames.map((frame) => frame.function),
+    ["run", "save"],
+  );
   assert.equal(entry!.stacktrace.frames[0]!.platform, "node:javascript");
 });
 
 test("a replayed crash is reported against the version that crashed", () => {
   const { core, sent } = harness();
 
-  core.captureException(failing("x"), { source: "main", level: "fatal", origin: "pending_crash", appVersion: "1.39.2" });
-  core.captureException(failing("x", "load"), { source: "main", level: "fatal", appVersion: "not a version" });
+  core.captureException(failing("x"), {
+    source: "main",
+    level: "fatal",
+    origin: "pending_crash",
+    appVersion: "1.39.2",
+  });
+  core.captureException(failing("x", "load"), {
+    source: "main",
+    level: "fatal",
+    appVersion: "not a version",
+  });
 
-  assert.deepEqual(sent.map((message) => message.properties.app_version), ["1.39.2", SUPER.app_version]);
+  assert.deepEqual(
+    sent.map((message) => message.properties.app_version),
+    ["1.39.2", SUPER.app_version],
+  );
 });
 
 test("repeats of one error are capped per session, but fatal errors are not", () => {
   const { core, sent } = harness();
 
-  for (let i = 0; i < 4; i += 1) core.captureException(failing(`same ${i}`), { source: "renderer", level: "error" });
+  for (let i = 0; i < 4; i += 1)
+    core.captureException(failing(`same ${i}`), { source: "renderer", level: "error" });
   assert.equal(sent.length, 2);
 
   core.captureException(failing("same"), { source: "main", level: "fatal" });
@@ -150,10 +186,14 @@ test("repeats of one error are capped per session, but fatal errors are not", ()
 test("the session cap covers exceptions and app_crashed together, and resets", () => {
   const { core, sent } = harness();
 
-  for (let i = 0; i < 4; i += 1) core.captureException(failing("x", `fn${i}`), { source: "main", level: "error" });
+  for (let i = 0; i < 4; i += 1)
+    core.captureException(failing("x", `fn${i}`), { source: "main", level: "error" });
   assert.equal(core.track("app_crashed", { kind: "gpu" }), true);
   assert.equal(core.track("app_crashed", { kind: "gpu" }), false);
-  assert.equal(core.captureException(failing("x", "late"), { source: "main", level: "fatal" }), false);
+  assert.equal(
+    core.captureException(failing("x", "late"), { source: "main", level: "fatal" }),
+    false,
+  );
   assert.equal(sent.length, 5);
 
   core.resetSession();
@@ -163,7 +203,11 @@ test("the session cap covers exceptions and app_crashed together, and resets", (
 test("a failing transport never throws into the caller", () => {
   const internalErrors: unknown[] = [];
   const core = createAnalyticsCore({
-    transport: { capture: () => { throw new Error("socket closed"); } },
+    transport: {
+      capture: () => {
+        throw new Error("socket closed");
+      },
+    },
     getDistinctId: () => INSTALL_ID,
     superProperties: SUPER,
     appRoots: [APP_ROOT],
@@ -215,7 +259,12 @@ test("the outgoing guard admits a real exception unchanged and drops undeclared 
 
   const cleaned = validateOutgoingEvent({
     event: message!.event,
-    properties: { ...message!.properties, $email: "jane.doe@example.com", $ip: "192.0.2.1", $exception_secret: "private" },
+    properties: {
+      ...message!.properties,
+      $email: "jane.doe@example.com",
+      $ip: "192.0.2.1",
+      $exception_secret: "private",
+    },
   });
 
   assert.ok(cleaned);
@@ -227,10 +276,20 @@ test("the outgoing guard rejects an exception whose fields were not built by the
   core.captureException(failing("disk full"), { source: "main", level: "error" });
   const valid = sent[0]!.properties;
   const [entry] = valid.$exception_list as { stacktrace: { frames: Record<string, unknown>[] } }[];
-  const withFrame = (frame: Record<string, unknown>) => [{ ...entry, stacktrace: { type: "raw", frames: [frame] } }];
+  const withFrame = (frame: Record<string, unknown>) => [
+    { ...entry, stacktrace: { type: "raw", frames: [frame] } },
+  ];
 
   for (const properties of [
-    { ...valid, $exception_list: withFrame({ platform: "node:javascript", filename: "/Users/jane/secret.js", function: "f", in_app: false }) },
+    {
+      ...valid,
+      $exception_list: withFrame({
+        platform: "node:javascript",
+        filename: "/Users/jane/secret.js",
+        function: "f",
+        in_app: false,
+      }),
+    },
     { ...valid, $exception_list: [{ ...entry, extra: "private content" }, { nope: true }] },
     { ...valid, $exception_level: "private" },
     { ...valid, $exception_fingerprint: "jane.doe@example.com" },
@@ -244,11 +303,17 @@ test("the outgoing guard keeps a listed system error code on a server's report a
   const report = (source: "server" | "main" | "renderer", value: string) => {
     const { core, sent } = harness();
     core.captureSanitizedException(
-      { errors: [{ type: "Error", value, frames: [] }], fingerprint: "0123456789abcdef0123456789abcdef" },
+      {
+        errors: [{ type: "Error", value, frames: [] }],
+        fingerprint: "0123456789abcdef0123456789abcdef",
+      },
       { source, level: "fatal" },
     );
     const [message] = sent;
-    const checked = validateOutgoingEvent({ event: message!.event, properties: message!.properties });
+    const checked = validateOutgoingEvent({
+      event: message!.event,
+      properties: message!.properties,
+    });
     return (checked?.properties?.$exception_list as { value: string }[])[0]!.value;
   };
 
@@ -256,7 +321,12 @@ test("the outgoing guard keeps a listed system error code on a server's report a
   assert.equal(report("server", "ECONNRESET"), "ECONNRESET");
   assert.equal(report("main", "EACCES"), WITHHELD_MESSAGE);
   assert.equal(report("renderer", "ENOSPC"), WITHHELD_MESSAGE);
-  for (const text of ["ACME_MERGER_Q3", "EVERYONE_KNOWS_BOB", "eacces", "EACCES acme-merger-q3.md"]) {
+  for (const text of [
+    "ACME_MERGER_Q3",
+    "EVERYONE_KNOWS_BOB",
+    "eacces",
+    "EACCES acme-merger-q3.md",
+  ]) {
     assert.equal(report("server", text), WITHHELD_MESSAGE);
   }
 });
@@ -277,7 +347,10 @@ test("server_started passes with a known launch and is dropped with anything els
 test("the outgoing guard rejects events outside the registry", () => {
   assert.equal(validateOutgoingEvent({ event: "$identify", properties: {} }), null);
   assert.equal(validateOutgoingEvent({ event: "$pageview", properties: {} }), null);
-  assert.equal(validateOutgoingEvent({ event: "$exception", properties: { source: "main", level: "error" } }), null);
+  assert.equal(
+    validateOutgoingEvent({ event: "$exception", properties: { source: "main", level: "error" } }),
+    null,
+  );
 });
 
 test("browser_element_grabbed and browser_grab_sent pass content-free props and reject invalid or free-text fields", () => {
@@ -293,18 +366,9 @@ test("browser_element_grabbed and browser_grab_sent pass content-free props and 
     }),
     true,
   );
-  assert.equal(
-    core.track("browser_element_grabbed", { kind: "dom", source: "shortcut" }),
-    true,
-  );
-  assert.equal(
-    untyped("browser_element_grabbed", { kind: "vue", source: "toolbar" }),
-    false,
-  );
-  assert.equal(
-    untyped("browser_element_grabbed", { kind: "react", source: "menu" }),
-    false,
-  );
+  assert.equal(core.track("browser_element_grabbed", { kind: "dom", source: "shortcut" }), true);
+  assert.equal(untyped("browser_element_grabbed", { kind: "vue", source: "toolbar" }), false);
+  assert.equal(untyped("browser_element_grabbed", { kind: "react", source: "menu" }), false);
 
   assert.equal(
     untyped("browser_grab_sent", {
@@ -314,14 +378,8 @@ test("browser_element_grabbed and browser_grab_sent pass content-free props and 
     }),
     true,
   );
-  assert.equal(
-    untyped("browser_grab_sent", { count_bucket: "99", with_screenshot: false }),
-    false,
-  );
-  assert.equal(
-    untyped("browser_grab_sent", { count_bucket: "1" }),
-    false,
-  );
+  assert.equal(untyped("browser_grab_sent", { count_bucket: "99", with_screenshot: false }), false);
+  assert.equal(untyped("browser_grab_sent", { count_bucket: "1" }), false);
 
   assert.equal(sent.length, 3);
   assert.equal(sent[0]!.event, "browser_element_grabbed");
@@ -341,7 +399,10 @@ test("browser_element_grabbed and browser_grab_sent pass content-free props and 
 test("floating Quick Chat events accept allowlisted enums/booleans and drop invalid payloads", () => {
   const { core, sent } = harness();
   assert.equal(core.track("floating_chat_opened", { source: "hotkey" }), true);
-  assert.equal(core.track("floating_chat_expanded", { during_stream: true, was_ephemeral: true }), true);
+  assert.equal(
+    core.track("floating_chat_expanded", { during_stream: true, was_ephemeral: true }),
+    true,
+  );
   assert.equal(core.track("floating_chat_promoted", { target: "workspace" }), true);
   assert.equal(sent.length, 3);
   assert.equal(sent[0]!.properties.source, "hotkey");
@@ -355,7 +416,9 @@ test("floating Quick Chat events accept allowlisted enums/booleans and drop inva
     false,
   );
   assert.equal(
-    core.track("floating_chat_promoted", { target: "/Users/dev/secret" } as unknown as { target: "chats" }),
+    core.track("floating_chat_promoted", { target: "/Users/dev/secret" } as unknown as {
+      target: "chats";
+    }),
     false,
   );
   assert.equal(sent.length, 3);

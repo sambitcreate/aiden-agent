@@ -22,12 +22,18 @@ import { effectiveBindings } from "../shared/keybindings";
 import type { Chat, ChatMeta, Workspace } from "../lib/types";
 import { WorkspaceProvider } from "../lib/workspace-context";
 import { DesignPaneSwitch } from "../components/chat-top-bar";
-import { DesignChatBody, DesignModeBannerSlot, DesignWorkbench, useDesignChatState } from "./design-layout";
+import {
+  DesignChatBody,
+  DesignModeBannerSlot,
+  DesignWorkbench,
+  useDesignChatState,
+} from "./design-layout";
 
 // The lazy canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
 registerHooks({
   resolve(specifier, context, next) {
-    if (specifier.endsWith(".css")) return { url: "data:text/javascript,export%20default%20%7B%7D", shortCircuit: true };
+    if (specifier.endsWith(".css"))
+      return { url: "data:text/javascript,export%20default%20%7B%7D", shortCircuit: true };
     return next(specifier, context);
   },
 });
@@ -47,7 +53,15 @@ const WORKSPACE: Workspace = {
 };
 
 function chat(id: string, overrides: Partial<Chat> = {}): Chat {
-  return { id, title: id, workspaceId: "site", createdAt: 1, updatedAt: 5, messages: [], ...overrides };
+  return {
+    id,
+    title: id,
+    workspaceId: "site",
+    createdAt: 1,
+    updatedAt: 5,
+    messages: [],
+    ...overrides,
+  };
 }
 
 let queryClient: QueryClient;
@@ -72,7 +86,17 @@ beforeEach(() => {
   savedDesignModes = [];
   // happy-dom does no layout, so every measured box reports the test's width.
   HTMLElement.prototype.getBoundingClientRect = function () {
-    return { x: 0, y: 0, top: 0, left: 0, bottom: 800, right: containerWidth, width: containerWidth, height: 800, toJSON() {} } as DOMRect;
+    return {
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      bottom: 800,
+      right: containerWidth,
+      width: containerWidth,
+      height: 800,
+      toJSON() {},
+    } as DOMRect;
   };
   const chats = [
     chat("design-chat", { designMode: true }),
@@ -81,7 +105,11 @@ beforeEach(() => {
     chat("bot-chat", { botId: "bot-1" }),
   ];
   installBotTestIpc({
-    "shortcut:get": () => ({ overrides: { version: 1, commands: {} }, effective: effectiveBindings(undefined), global: [] }),
+    "shortcut:get": () => ({
+      overrides: { version: 1, commands: {} },
+      effective: effectiveBindings(undefined),
+      global: [],
+    }),
     "workspaces:list": () => [WORKSPACE],
     "browser:link-preference": () => "ask",
     "chats:get": (id) => ({
@@ -158,19 +186,21 @@ function DesignChat({ chatId }: { chatId: string }) {
 function Shell({ chatId, designMode = true }: { chatId: string; designMode?: boolean }) {
   return (
     <QueryClientProvider client={queryClient}>
-      <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: "darwin", designMode }}>
+      <AppCapabilitiesProvider
+        capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: "darwin", designMode }}
+      >
         <CommandSystemProvider>
-        <WorkspaceProvider>
-          <WorkspaceTerminalProvider>
-            <EnvironmentPanelProvider>
-              <PanelProbe />
-              <SplitView storageKey="aiden-agent" sidebar={<nav aria-label="Chats" />}>
-                <SidebarProbe />
-                <DesignChat chatId={chatId} />
-              </SplitView>
-            </EnvironmentPanelProvider>
-          </WorkspaceTerminalProvider>
-        </WorkspaceProvider>
+          <WorkspaceProvider>
+            <WorkspaceTerminalProvider>
+              <EnvironmentPanelProvider>
+                <PanelProbe />
+                <SplitView storageKey="aiden-agent" sidebar={<nav aria-label="Chats" />}>
+                  <SidebarProbe />
+                  <DesignChat chatId={chatId} />
+                </SplitView>
+              </EnvironmentPanelProvider>
+            </WorkspaceTerminalProvider>
+          </WorkspaceProvider>
         </CommandSystemProvider>
       </AppCapabilitiesProvider>
     </QueryClientProvider>
@@ -179,7 +209,8 @@ function Shell({ chatId, designMode = true }: { chatId: string; designMode?: boo
 
 const chatColumn = () => document.querySelector<HTMLElement>("[data-design-mode]");
 const canvasRegion = () => document.querySelector<HTMLElement>("[data-design-canvas-region]");
-const toolsSurface = () => document.querySelector<HTMLElement>('[data-environment-surface="tools"]');
+const toolsSurface = () =>
+  document.querySelector<HTMLElement>('[data-environment-surface="tools"]');
 
 /** The person has the panel open on Terminal at 700 px. */
 async function renderWithTerminalPanel(chatId: string) {
@@ -199,7 +230,8 @@ async function setDesignMode(chatId: string, on: boolean) {
   await waitFor(() => assert.equal(layoutState() === "off", !on));
 }
 
-const layoutState = () => document.querySelector("[data-design-layout]")?.getAttribute("data-design-layout");
+const layoutState = () =>
+  document.querySelector("[data-design-layout]")?.getAttribute("data-design-layout");
 const isHidden = (element: Element | null | undefined) =>
   Boolean(element?.closest("[inert]")) && Boolean(element?.closest('[aria-hidden="true"]'));
 /** Lets the debounced resize handler run. */
@@ -216,10 +248,22 @@ test("a design chat on a wide window splits into a 420 px chat column and the ca
   assert.equal(panel.toolsOpen, false, "the canvas takes the panel's place");
   assert.equal(toolsSurface()?.dataset.state ?? "closed", "closed");
   await waitFor(() => screen.getByRole("region", { name: "Design canvas" }));
-  assert.equal(screen.getAllByRole("region", { name: "Design canvas" }).length, 1, "one landmark, named once");
+  assert.equal(
+    screen.getAllByRole("region", { name: "Design canvas" }).length,
+    1,
+    "one landmark, named once",
+  );
   await waitFor(() => screen.getByText("Ask Aiden to design something, or add a note."));
-  assert.equal(panel.dockRightInset, 980, "the Live pill stays inside the chat column, off the canvas controls");
-  assert.equal(screen.queryByRole("radiogroup", { name: "Design mode view" }), null, "no pane switch while split");
+  assert.equal(
+    panel.dockRightInset,
+    980,
+    "the Live pill stays inside the chat column, off the canvas controls",
+  );
+  assert.equal(
+    screen.queryByRole("radiogroup", { name: "Design mode view" }),
+    null,
+    "no pane switch while split",
+  );
   assert.equal(widenCalls, 0, "a wide window is left alone");
 });
 
@@ -232,7 +276,10 @@ test("the split holds down to 680 px of content, with the canvas at least 320 px
   assert.equal(layoutState(), "split");
   assert.equal(chatColumn()?.style.width, "380px", "the chat gives way so the canvas keeps 320 px");
   assert.equal(canvasRegion()?.style.width, "320px");
-  assert.equal(screen.getByRole("separator", { name: "Resize chat" }).getAttribute("aria-valuemax"), "380");
+  assert.equal(
+    screen.getByRole("separator", { name: "Resize chat" }).getAttribute("aria-valuemax"),
+    "380",
+  );
 });
 
 test("leaving design mode puts back the panel's tab, width and open state", async () => {
@@ -268,12 +315,22 @@ test("a snapshot left from an earlier session is replaced when the panel is open
   // Another window's design mode left this snapshot in the shared storage.
   localStorage.setItem(
     SAVED_WORKBENCH_KEY,
-    JSON.stringify({ version: 1, tab: "files", toolsOpen: false, quickViewOpen: false, width: 500 }),
+    JSON.stringify({
+      version: 1,
+      tab: "files",
+      toolsOpen: false,
+      quickViewOpen: false,
+      width: 500,
+    }),
   );
   await setDesignMode("plain-chat", true);
   assert.equal(panel.toolsOpen, false);
   await setDesignMode("plain-chat", false);
-  assert.deepEqual([panel.toolsOpen, panel.tab], [true, "terminal"], "what the person had at entry comes back");
+  assert.deepEqual(
+    [panel.toolsOpen, panel.tab],
+    [true, "terminal"],
+    "what the person had at entry comes back",
+  );
   assert.equal(localStorage.getItem(ENVIRONMENT_WIDTH_KEY), "700");
 });
 
@@ -281,7 +338,13 @@ test("after a reload mid-design, leaving restores what the person had before ent
   // Entry saved Terminal at 700, open, then closed the panel; the window reloaded.
   localStorage.setItem(
     SAVED_WORKBENCH_KEY,
-    JSON.stringify({ version: 1, tab: "terminal", toolsOpen: true, quickViewOpen: false, width: 700 }),
+    JSON.stringify({
+      version: 1,
+      tab: "terminal",
+      toolsOpen: true,
+      quickViewOpen: false,
+      width: 700,
+    }),
   );
   await act(async () => {
     render(<Shell chatId="design-chat" />);
@@ -314,7 +377,12 @@ test("switching from a design chat to a normal chat never shows the canvas for t
   // normal chat for even one render would leave a record behind.
   const records: MutationRecord[] = [];
   const observer = new MutationObserver((batch) => records.push(...batch));
-  observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeOldValue: true });
+  observer.observe(document.body, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeOldValue: true,
+  });
   await act(async () => {
     view.rerender(<Shell chatId="plain-chat" />);
   });
@@ -337,7 +405,11 @@ test("switching from a design chat to a normal chat never shows the canvas for t
   assert.ok(records.length > 0, "the switch did change the DOM");
   assert.equal(canvasRegion(), null);
   assert.equal(chatColumn(), null);
-  assert.deepEqual([panel.toolsOpen, panel.tab], [true, "terminal"], "the normal chat gets the panel back");
+  assert.deepEqual(
+    [panel.toolsOpen, panel.tab],
+    [true, "terminal"],
+    "the normal chat gets the panel back",
+  );
 
   await act(async () => {
     view.rerender(<Shell chatId="design-chat" />);
@@ -352,7 +424,11 @@ test("below 680 px the layout stacks: one pane at a time behind the Chat | Canva
   await act(async () => undefined);
   assert.equal(layoutState(), "stacked");
   assert.equal(chatColumn()?.style.width, "", "the chat keeps the whole width");
-  assert.equal(screen.queryByRole("separator", { name: "Resize chat" }), null, "nothing to drag when stacked");
+  assert.equal(
+    screen.queryByRole("separator", { name: "Resize chat" }),
+    null,
+    "nothing to drag when stacked",
+  );
   const switcher = screen.getByRole("radiogroup", { name: "Design mode view" });
   assert.equal(screen.getByRole("radio", { name: "Chat" }).getAttribute("aria-checked"), "true");
   assert.ok(isHidden(canvasRegion()), "the hidden canvas is inert and hidden from assistive tech");
@@ -363,9 +439,16 @@ test("below 680 px the layout stacks: one pane at a time behind the Chat | Canva
     fireEvent.click(screen.getByRole("radio", { name: "Canvas" }));
   });
   assert.equal(isHidden(canvasRegion()), false, "the canvas shows");
-  assert.ok(isHidden(screen.getByText("Terminal drawer", { ignore: false })), "the chat body is inert and hidden");
+  assert.ok(
+    isHidden(screen.getByText("Terminal drawer", { ignore: false })),
+    "the chat body is inert and hidden",
+  );
   assert.ok(switcher.isConnected && !isHidden(switcher), "the switch stays usable in the top bar");
-  assert.equal(panel.dockRightInset, 600 - 128, "the Live pill moves to the canvas's bottom-left corner");
+  assert.equal(
+    panel.dockRightInset,
+    600 - 128,
+    "the Live pill moves to the canvas's bottom-left corner",
+  );
 
   // Each chat keeps its own choice for the session.
   await act(async () => {
@@ -384,7 +467,11 @@ test("the wider-window banner shows only when main says widening can work", asyn
   containerWidth = 600;
   const view = render(<Shell chatId="design-chat" />);
   await act(async () => undefined);
-  assert.equal(screen.queryByText("Design mode needs a wider window"), null, "no banner when widening can't work");
+  assert.equal(
+    screen.queryByText("Design mode needs a wider window"),
+    null,
+    "no banner when widening can't work",
+  );
   view.unmount();
 
   canWidenResult = { canWiden: true };
@@ -455,7 +542,11 @@ test("the person's own entry collapses the sidebar when that is enough for the s
     fireEvent.click(screen.getByRole("button", { name: "Design mode" }));
   });
   await waitFor(() => assert.equal(layoutState(), "off"));
-  assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "0", "the sidebar design mode collapsed reopens");
+  assert.equal(
+    localStorage.getItem(SIDEBAR_COLLAPSED_KEY),
+    "0",
+    "the sidebar design mode collapsed reopens",
+  );
 });
 
 test("the person's own entry leaves the sidebar open when only the closing panel makes the content look narrow", async () => {
@@ -532,10 +623,13 @@ test("dragging the divider saves the design chat width and leaves the panel widt
   await act(async () => {
     window.dispatchEvent(new PointerEvent("pointerup", { clientX: 900, pointerId: 1 }));
   });
-  assert.equal(localStorage.getItem(DESIGN_CHAT_WIDTH_KEY), "560", "the drag stops at the 560 px maximum");
+  assert.equal(
+    localStorage.getItem(DESIGN_CHAT_WIDTH_KEY),
+    "560",
+    "the drag stops at the 560 px maximum",
+  );
   assert.equal(chatColumn()?.style.width, "560px");
   assert.equal(localStorage.getItem(ENVIRONMENT_WIDTH_KEY), "700");
-
 });
 
 test("the divider resizes from the keyboard and saves each width", async () => {
@@ -633,7 +727,11 @@ test("Expand collapses the sidebar so the chat and canvas fill the window, and M
     render(<Shell chatId="design-chat" />);
   });
   const expand = await screen.findByRole("button", { name: "Expand canvas" });
-  assert.equal(expand.getAttribute("aria-pressed"), null, "the label says what a press does, so no pressed state");
+  assert.equal(
+    expand.getAttribute("aria-pressed"),
+    null,
+    "the label says what a press does, so no pressed state",
+  );
   await act(async () => {
     fireEvent.click(expand);
   });
@@ -661,7 +759,11 @@ test("design mode left expanded starts expanded on the person's next entry and g
     fireEvent.click(screen.getByRole("button", { name: "Design mode" }));
   });
   await waitFor(() => assert.equal(layoutState(), "off"));
-  assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "0", "leaving design mode reopens the sidebar");
+  assert.equal(
+    localStorage.getItem(SIDEBAR_COLLAPSED_KEY),
+    "0",
+    "leaving design mode reopens the sidebar",
+  );
 
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Design mode" }));
@@ -702,7 +804,11 @@ test("a sidebar the person hid by hand after undoing Expand stays hidden when de
   });
   await waitFor(() => assert.equal(layoutState(), "off"));
   await act(async () => undefined);
-  assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "1", "the person's own collapse is theirs to undo");
+  assert.equal(
+    localStorage.getItem(SIDEBAR_COLLAPSED_KEY),
+    "1",
+    "the person's own collapse is theirs to undo",
+  );
 });
 
 test("a narrow window, where the sidebar slides over the canvas, offers no Expand", async () => {

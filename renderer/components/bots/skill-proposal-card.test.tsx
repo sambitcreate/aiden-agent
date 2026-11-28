@@ -10,7 +10,15 @@ test("shows the skill, the reason and what would load; Add responds add and sett
   const answers: string[] = [];
   render(
     <SkillProposalCard
-      proposal={{ proposalId: "p1", name: "meal-plan", description: "Use when planning meals.", reason: "You asked twice.", origin: "bot", preview: "---\nname: meal-plan\n---\nList seven dinners.", update: false }}
+      proposal={{
+        proposalId: "p1",
+        name: "meal-plan",
+        description: "Use when planning meals.",
+        reason: "You asked twice.",
+        origin: "bot",
+        preview: "---\nname: meal-plan\n---\nList seven dinners.",
+        update: false,
+      }}
       status="pending"
       onRespond={async (decision) => {
         answers.push(decision);
@@ -21,7 +29,10 @@ test("shows the skill, the reason and what would load; Add responds add and sett
   assert.ok(screen.getByText("Add a skill?"));
   assert.ok(screen.getByText("You asked twice."));
   assert.match(screen.getByLabelText("What would load").textContent ?? "", /List seven dinners/u);
-  assert.deepEqual(screen.getAllByRole("button").map((button) => button.textContent), ["Not now", "Add"]);
+  assert.deepEqual(
+    screen.getAllByRole("button").map((button) => button.textContent),
+    ["Not now", "Add"],
+  );
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
   await waitFor(() => assert.ok(screen.getByText("Added skill: meal-plan")));
   assert.deepEqual(answers, ["add"]);
@@ -30,7 +41,14 @@ test("shows the skill, the reason and what would load; Add responds add and sett
 test("a folder skill asks Use this skill? and a decided card shows no buttons", () => {
   render(
     <SkillProposalCard
-      proposal={{ proposalId: "p2", name: "notes", description: "Use when x.", origin: "folder", preview: "y", update: false }}
+      proposal={{
+        proposalId: "p2",
+        name: "notes",
+        description: "Use when x.",
+        origin: "folder",
+        preview: "y",
+        update: false,
+      }}
       status="dismissed"
       onRespond={async () => null}
     />,

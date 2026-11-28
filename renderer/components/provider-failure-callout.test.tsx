@@ -18,7 +18,10 @@ function failed(id: string, category: ProviderFailureCategoryV1): ChatMessage {
   };
 }
 
-function renderList(messages: ChatMessage[], failureActions?: Parameters<typeof MessageList>[0]["failureActions"]) {
+function renderList(
+  messages: ChatMessage[],
+  failureActions?: Parameters<typeof MessageList>[0]["failureActions"],
+) {
   return render(
     <MessageList
       chatId="chat-1"
@@ -45,7 +48,9 @@ for (const [category, label, action] of [
   ["quota", "Open Providers", "open_providers"],
   ["output_limit", "Continue", "continue"],
   ["context_window", "Compact and try again", "compact"],
-] as const satisfies ReadonlyArray<readonly [ProviderFailureCategoryV1, string, ProviderFailureAction]>) {
+] as const satisfies ReadonlyArray<
+  readonly [ProviderFailureCategoryV1, string, ProviderFailureAction]
+>) {
   test(`a ${category} failure offers ${label} on the latest failed reply`, () => {
     const chosen: ProviderFailureAction[] = [];
     let switched = 0;
@@ -65,7 +70,12 @@ for (const [category, label, action] of [
 
 test("an older failure card and a card without actions show no buttons", () => {
   renderList(
-    [user, failed("reply-old", "network"), { ...user, id: "user-2" }, failed("reply-new", "network")],
+    [
+      user,
+      failed("reply-old", "network"),
+      { ...user, id: "user-2" },
+      failed("reply-new", "network"),
+    ],
     { messageId: "reply-new", onAction: () => undefined },
   );
   const cards = screen.getAllByRole("alert");

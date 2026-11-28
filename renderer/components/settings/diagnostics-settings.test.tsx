@@ -34,7 +34,12 @@ test("crash capture keeps its sensitivity warning on the row and its retention i
       newestAt: null,
       sinkFailed: false,
       droppedWrites: 0,
-      diagnosticMode: { enabled: false, expiresAt: null, disablesOnRestart: true, crashDumpCount: 0 },
+      diagnosticMode: {
+        enabled: false,
+        expiresAt: null,
+        disablesOnRestart: true,
+        crashDumpCount: 0,
+      },
     }),
     "analytics:status": () => ({ enabled: false, hasKey: false, envDisabled: false }),
   });
@@ -70,7 +75,10 @@ test("diagnostic IPC surface does not retain the arbitrary devlog writer", () =>
   assert.match(handlers, /parseRendererReport/u);
   assert.match(handlers, /uploadToServer: false/u);
   assert.doesNotMatch(handlers, /renderer-crashed/u);
-  assert.match(handlers, /rendererDiagnosticClassification\(report\.errorType, report\.suppressed\)/u);
+  assert.match(
+    handlers,
+    /rendererDiagnosticClassification\(report\.errorType, report\.suppressed\)/u,
+  );
   assert.match(handlers, /failurePhase:/u);
   assert.match(source("main/index.ts"), /code: "renderer-crashed"/u);
   assert.doesNotMatch(index, /devlog:write|String\(message\)/u);
@@ -81,5 +89,8 @@ test("damaged chat files are reported only when some were set aside", async () =
   assert.equal(quarantinedChatsNotice(undefined), null);
   assert.equal(quarantinedChatsNotice(0), null);
   assert.match(quarantinedChatsNotice(1) ?? "", /^1 damaged chat file .*set it aside unchanged/u);
-  assert.match(quarantinedChatsNotice(3) ?? "", /^3 damaged chat files .*set them aside unchanged/u);
+  assert.match(
+    quarantinedChatsNotice(3) ?? "",
+    /^3 damaged chat files .*set them aside unchanged/u,
+  );
 });

@@ -7,7 +7,9 @@ test("rich activity uses a safe native draft and lets the final reply complete i
   const drafts: Array<Record<string, unknown>> = [];
   const projector = createTelegramActivityProjector({
     api: {
-      async sendRichMessageDraft(input: Record<string, unknown>) { drafts.push(input); },
+      async sendRichMessageDraft(input: Record<string, unknown>) {
+        drafts.push(input);
+      },
     } as unknown as TelegramBotApi,
     chatId: 7,
     threadId: 11,
@@ -16,7 +18,7 @@ test("rich activity uses a safe native draft and lets the final reply complete i
     rendering: "rich",
     now: () => 1_000,
   });
-  projector.observe("chat:delta", { delta: "Working\n<!-- telegram_attach path=\"secret.pdf\" -->" });
+  projector.observe("chat:delta", { delta: 'Working\n<!-- telegram_attach path="secret.pdf" -->' });
   await projector.settle();
   assert.equal(drafts.length, 1);
   assert.equal(drafts[0]?.markdown, "Working");
@@ -28,7 +30,9 @@ test("rich activity holds an unfinished Markdown span until it closes", async ()
   let now = 0;
   const projector = createTelegramActivityProjector({
     api: {
-      async sendRichMessageDraft(input: Record<string, unknown>) { drafts.push(input); },
+      async sendRichMessageDraft(input: Record<string, unknown>) {
+        drafts.push(input);
+      },
     } as unknown as TelegramBotApi,
     chatId: 9,
     draftPreviews: true,
@@ -78,7 +82,9 @@ test("streamed reasoning sends at most one thinking update per interval, always 
         sent.push(input.text);
         return { message_id: 1, chat: { id: 7, type: "private" }, date: 0 };
       },
-      async editMessageText(input: { text: string }) { edits.push(input.text); },
+      async editMessageText(input: { text: string }) {
+        edits.push(input.text);
+      },
     } as unknown as TelegramBotApi,
     chatId: 7,
     draftPreviews: false,

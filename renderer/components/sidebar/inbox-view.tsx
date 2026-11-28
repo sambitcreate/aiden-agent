@@ -131,7 +131,8 @@ function insideRegions(regions: Regions, node: unknown): boolean {
 function inboxRows(regions: Regions): HTMLElement[] {
   const rows = new Set<HTMLElement>();
   for (const region of regions()) {
-    for (const row of region?.querySelectorAll<HTMLElement>("[data-inbox-row]") ?? []) rows.add(row);
+    for (const row of region?.querySelectorAll<HTMLElement>("[data-inbox-row]") ?? [])
+      rows.add(row);
   }
   return [...rows];
 }
@@ -196,18 +197,19 @@ function useListInUse(regions: Regions) {
     document.addEventListener("visibilitychange", onVisibility);
     // Menus and dialogs mount in portals directly under <body>.
     let wasOpen = overlayOpen();
-    const observer = typeof MutationObserver === "function"
-      ? new MutationObserver(() => {
-          const open = overlayOpen();
-          setOverlay(open);
-          if (wasOpen && !open) {
-            checkPointer();
-            cancelAnimationFrame(frame);
-            frame = requestAnimationFrame(checkPointer);
-          }
-          wasOpen = open;
-        })
-      : null;
+    const observer =
+      typeof MutationObserver === "function"
+        ? new MutationObserver(() => {
+            const open = overlayOpen();
+            setOverlay(open);
+            if (wasOpen && !open) {
+              checkPointer();
+              cancelAnimationFrame(frame);
+              frame = requestAnimationFrame(checkPointer);
+            }
+            wasOpen = open;
+          })
+        : null;
     observer?.observe(document.body, { childList: true });
     // The menu that switched the sidebar to the Inbox can close between the
     // first render and this effect, with no mutation left to report it.
@@ -253,7 +255,8 @@ function useSidebarHeight(ref: React.RefObject<HTMLElement | null>): number | nu
  */
 function liveStatusSection(entry: InboxEntry, now: number): InboxSection {
   const { shelf } = inboxState(entry.signals, now, Number.POSITIVE_INFINITY);
-  if (shelf === "pinned") return entry.signals.unread && !entry.signals.isOpen ? "updates" : "earlier";
+  if (shelf === "pinned")
+    return entry.signals.unread && !entry.signals.isOpen ? "updates" : "earlier";
   return shelf === "hidden" ? "earlier" : shelf;
 }
 
@@ -278,21 +281,26 @@ export function InboxView({
   const [, tick] = React.useReducer((count: number) => count + 1, 0);
   const [showAllEarlier, setShowAllEarlier] = React.useState(false);
   const [touched, setTouched] = React.useState<ReadonlySet<string>>(() => new Set());
-  const { collapsed: workingCollapsed, setCollapsed: setWorkingCollapsed } = useWorkingShelfCollapsed();
+  const { collapsed: workingCollapsed, setCollapsed: setWorkingCollapsed } =
+    useWorkingShelfCollapsed();
   const inUse = useListInUse(regions);
   const sidebarHeight = useSidebarHeight(rootRef);
   const frozen = inUse && !searching;
-  React.useImperativeHandle(handleRef, () => ({
-    touch: (keys) => {
-      if (keys.length === 0) return;
-      setTouched((current) => {
-        if (keys.every((key) => current.has(key))) return current;
-        const next = new Set(current);
-        for (const key of keys) next.add(key);
-        return next;
-      });
-    },
-  }), []);
+  React.useImperativeHandle(
+    handleRef,
+    () => ({
+      touch: (keys) => {
+        if (keys.length === 0) return;
+        setTouched((current) => {
+          if (keys.every((key) => current.has(key))) return current;
+          const next = new Set(current);
+          for (const key of keys) next.add(key);
+          return next;
+        });
+      },
+    }),
+    [],
+  );
 
   React.useEffect(() => {
     const interval = window.setInterval(tick, CLOCK_TICK_MS);
@@ -301,7 +309,8 @@ export function InboxView({
 
   // Opening a row (click, Enter, ⌘1–9 or any other route) places it live.
   React.useEffect(() => {
-    if (activeKey) setTouched((current) => (current.has(activeKey) ? current : new Set(current).add(activeKey)));
+    if (activeKey)
+      setTouched((current) => (current.has(activeKey) ? current : new Set(current).add(activeKey)));
   }, [activeKey]);
 
   const heldRef = React.useRef<HeldInboxOrder | null>(null);
@@ -334,25 +343,30 @@ export function InboxView({
     touched,
     now,
   });
-  const held: HeldInboxOrder = frozen && !reset && heldRef.current
-    ? freezeInboxOrder({
-        previous: heldRef.current,
-        next: debounced.order,
-        touched,
-        present,
-        earlierOverflow,
-        ...(showAllEarlier || searching ? {} : { earlierLimit: INBOX_EARLIER_LIMIT }),
-      })
-    : releasedInboxOrder(debounced.order);
+  const held: HeldInboxOrder =
+    frozen && !reset && heldRef.current
+      ? freezeInboxOrder({
+          previous: heldRef.current,
+          next: debounced.order,
+          touched,
+          present,
+          earlierOverflow,
+          ...(showAllEarlier || searching ? {} : { earlierLimit: INBOX_EARLIER_LIMIT }),
+        })
+      : releasedInboxOrder(debounced.order);
   const releasing = wasFrozenRef.current && !frozen;
-  const moreCount = searching || showAllEarlier
-    ? 0
-    : heldEarlierMoreCount(held, { earlier: live.earlier, earlierOverflow });
+  const moreCount =
+    searching || showAllEarlier
+      ? 0
+      : heldEarlierMoreCount(held, { earlier: live.earlier, earlierOverflow });
 
   // A host that isn't online stops its rows' clocks where it dropped.
   const offlineSince = offlineSinceRef.current;
-  const offlineHosts = new Set(entries.filter((entry) => !entry.signals.hostOnline).map((entry) => entry.hostId));
-  for (const hostId of [...offlineSince.keys()]) if (!offlineHosts.has(hostId)) offlineSince.delete(hostId);
+  const offlineHosts = new Set(
+    entries.filter((entry) => !entry.signals.hostOnline).map((entry) => entry.hostId),
+  );
+  for (const hostId of [...offlineSince.keys()])
+    if (!offlineHosts.has(hostId)) offlineSince.delete(hostId);
   for (const hostId of offlineHosts) if (!offlineSince.has(hostId)) offlineSince.set(hostId, now);
 
   // A held row shows its live state when it has one, else the last it showed.
@@ -370,8 +384,9 @@ export function InboxView({
     earlier: shownRows("earlier"),
     working: shownRows("working"),
   };
-  const shortcutKeys = inboxShortcutOrder(held, { workingExpanded: !workingCollapsed }).filter((key) =>
-    entryFor(key) !== undefined);
+  const shortcutKeys = inboxShortcutOrder(held, { workingExpanded: !workingCollapsed }).filter(
+    (key) => entryFor(key) !== undefined,
+  );
   const shortcutSignature = shortcutKeys.join("\u0000");
 
   // Commit what this render showed; the next render builds on it.
@@ -382,7 +397,8 @@ export function InboxView({
     resetRef.current = fullResetKey;
     wasFrozenRef.current = frozen;
     const kept = new Map<string, InboxEntry>();
-    for (const section of Object.values(sectionRows)) for (const { entry } of section) kept.set(entry.key, entry);
+    for (const section of Object.values(sectionRows))
+      for (const { entry } of section) kept.set(entry.key, entry);
     lastEntriesRef.current = kept;
   });
 
@@ -412,11 +428,16 @@ export function InboxView({
     const index = focusAfterShowMoreRef.current;
     if (index === null || !showAllEarlier) return;
     focusAfterShowMoreRef.current = null;
-    const rows = rootRef.current?.querySelectorAll<HTMLElement>('[data-inbox-section="earlier"] [data-roving-item]');
+    const rows = rootRef.current?.querySelectorAll<HTMLElement>(
+      '[data-inbox-section="earlier"] [data-roving-item]',
+    );
     rows?.[Math.min(index, rows.length - 1)]?.focus();
   }, [showAllEarlier]);
 
-  const renderEntry = (section: InboxSection, { row, entry }: { row: HeldInboxRow; entry: InboxEntry }) => {
+  const renderEntry = (
+    section: InboxSection,
+    { row, entry }: { row: HeldInboxRow; entry: InboxEntry },
+  ) => {
     const rowNow = entry.signals.hostOnline ? now : (offlineSince.get(entry.hostId) ?? now);
     const status = inboxRowStatus(entry, liveStatusSection(entry, rowNow), rowNow);
     const description = inboxRowDescription(entry, status);
@@ -427,7 +448,10 @@ export function InboxView({
           status,
           ...(description ? { description } : {}),
           dimmed: row.leaving || !entry.signals.hostOnline,
-          touch: () => setTouched((current) => (current.has(row.key) ? current : new Set(current).add(row.key))),
+          touch: () =>
+            setTouched((current) =>
+              current.has(row.key) ? current : new Set(current).add(row.key),
+            ),
         })}
       </div>
     );
@@ -440,41 +464,53 @@ export function InboxView({
   const shelfMaxHeight = sidebarHeight ? `${Math.round(sidebarHeight * 0.4)}px` : "40vh";
   const apart = shelfHost !== null;
 
-  const shelf = workingRows.length > 0 ? (
-    <section
-      ref={shelfRef}
-      role="group"
-      aria-label="Working"
-      data-inbox-section="working"
-      className={cn("flex min-h-0 flex-col pt-1", !apart && "mt-2")}
-      style={{ maxHeight: shelfMaxHeight }}
-    >
-      {/* Apart from the list, the shelf pads itself like the list and keeps
+  const shelf =
+    workingRows.length > 0 ? (
+      <section
+        ref={shelfRef}
+        role="group"
+        aria-label="Working"
+        data-inbox-section="working"
+        className={cn("flex min-h-0 flex-col pt-1", !apart && "mt-2")}
+        style={{ maxHeight: shelfMaxHeight }}
+      >
+        {/* Apart from the list, the shelf pads itself like the list and keeps
           the same scrollbar gutter, so its rows' edges line up with the list's.
           The header's clip box and the rows' scroller each leave 4px above and
           below for the 2px + 2px focus ring; the negative margins keep the
           header and the first row where they were. */}
-      <div className={cn("shrink-0", apart && "-mt-1 overflow-hidden px-2.5 py-1 [scrollbar-gutter:stable]")}>
-        <div className="flex h-6 items-center px-2.5 text-small-strong font-medium text-tertiary">
-          <div className="min-w-0 flex-1">
-            <SectionHeader
-              label="Working"
-              count={workingRows.length}
-              collapse={{ expanded: !workingCollapsed, onToggle: () => setWorkingCollapsed(!workingCollapsed) }}
-            />
+        <div
+          className={cn(
+            "shrink-0",
+            apart && "-mt-1 overflow-hidden px-2.5 py-1 [scrollbar-gutter:stable]",
+          )}
+        >
+          <div className="flex h-6 items-center px-2.5 text-small-strong font-medium text-tertiary">
+            <div className="min-w-0 flex-1">
+              <SectionHeader
+                label="Working"
+                count={workingRows.length}
+                collapse={{
+                  expanded: !workingCollapsed,
+                  onToggle: () => setWorkingCollapsed(!workingCollapsed),
+                }}
+              />
+            </div>
           </div>
         </div>
-      </div>
-      {workingCollapsed ? null : (
-        <div
-          data-inbox-flip-root=""
-          className={cn("flex min-h-0 flex-col gap-0.5 overflow-y-auto", apart && "-mt-1 px-2.5 py-1")}
-        >
-          {workingRows.map((shown) => renderEntry("working", shown))}
-        </div>
-      )}
-    </section>
-  ) : null;
+        {workingCollapsed ? null : (
+          <div
+            data-inbox-flip-root=""
+            className={cn(
+              "flex min-h-0 flex-col gap-0.5 overflow-y-auto",
+              apart && "-mt-1 px-2.5 py-1",
+            )}
+          >
+            {workingRows.map((shown) => renderEntry("working", shown))}
+          </div>
+        )}
+      </section>
+    ) : null;
 
   return (
     <div
@@ -495,13 +531,21 @@ export function InboxView({
           role="status"
           title={searching ? "No matches" : "Nothing needs you"}
           description={
-            searching ? "Try a different search." : "Chats that wait on you or have news show up here."
+            searching
+              ? "Try a different search."
+              : "Chats that wait on you or have news show up here."
           }
         />
       ) : (
         MAIN_SECTIONS.map(({ id, label }) =>
           sectionRows[id].length === 0 && !(id === "earlier" && moreCount > 0) ? null : (
-            <section key={id} role="group" aria-label={label} data-inbox-section={id} className="mt-2 first:mt-0">
+            <section
+              key={id}
+              role="group"
+              aria-label={label}
+              data-inbox-section={id}
+              className="mt-2 first:mt-0"
+            >
               <div className="flex h-6 items-center px-2.5 text-small-strong font-medium text-tertiary">
                 <div className="min-w-0 flex-1">
                   <SectionHeader
@@ -563,7 +607,11 @@ function useFlip(
       shifts.set(row, shift);
       next.set(row.dataset.inboxRow!, {
         frame,
-        top: row.getBoundingClientRect().top - shift - frame.getBoundingClientRect().top + frame.scrollTop,
+        top:
+          row.getBoundingClientRect().top -
+          shift -
+          frame.getBoundingClientRect().top +
+          frame.scrollTop,
       });
     }
     const previous = positionsRef.current;
@@ -578,13 +626,20 @@ function useFlip(
         continue;
       }
       // Where the row shows now, relative to its new place.
-      if (Math.abs(before.top - after.top) >= 1) moves.push({ row, offset: before.top + shifts.get(row)! - after.top });
+      if (Math.abs(before.top - after.top) >= 1)
+        moves.push({ row, offset: before.top + shifts.get(row)! - after.top });
     }
     if (moves.length === 0) return;
     const animate = !skip && moves.length <= FLIP_MAX_ROWS && !prefersReducedMotion();
     for (const { row, offset } of moves) {
       for (const animation of row.getAnimations?.() ?? []) animation.cancel();
-      if (!animate || !Number.isFinite(offset) || Math.abs(offset) < 1 || typeof row.animate !== "function") continue;
+      if (
+        !animate ||
+        !Number.isFinite(offset) ||
+        Math.abs(offset) < 1 ||
+        typeof row.animate !== "function"
+      )
+        continue;
       const from = Math.max(-FLIP_MAX_OFFSET_PX, Math.min(FLIP_MAX_OFFSET_PX, offset));
       row.animate(
         [{ transform: `translateY(${from}px)` }, { transform: "translateY(0)" }],
@@ -597,7 +652,8 @@ function useFlip(
 
 /** The vertical offset a running slide has the row at, from its computed transform. */
 function translateY(element: HTMLElement): number {
-  const transform = typeof getComputedStyle === "function" ? getComputedStyle(element).transform : "";
+  const transform =
+    typeof getComputedStyle === "function" ? getComputedStyle(element).transform : "";
   const values = /^matrix(3d)?\(([^)]*)\)$/u.exec(transform ?? "");
   if (!values) return 0;
   const parts = values[2]!.split(",").map(Number);
@@ -615,10 +671,15 @@ function useFocusFollowsRemoval(regions: Regions) {
     if (remembered && (active === document.body || active === null)) {
       const stillThere = rows.some((row) => row.dataset.inboxRow === remembered.key);
       if (!stillThere && rows.length > 0) {
-        rows[Math.min(remembered.index, rows.length - 1)]?.querySelector<HTMLElement>("[data-roving-item]")?.focus();
+        rows[Math.min(remembered.index, rows.length - 1)]
+          ?.querySelector<HTMLElement>("[data-roving-item]")
+          ?.focus();
       }
     }
     const focusedIndex = rows.findIndex((row) => row.contains(document.activeElement));
-    focusedRef.current = focusedIndex >= 0 ? { key: rows[focusedIndex]!.dataset.inboxRow!, index: focusedIndex } : null;
+    focusedRef.current =
+      focusedIndex >= 0
+        ? { key: rows[focusedIndex]!.dataset.inboxRow!, index: focusedIndex }
+        : null;
   });
 }

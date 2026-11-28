@@ -16,9 +16,7 @@ function currentSystemVersion(): string {
  * probed only when a call needs it.
  */
 export function computerUseCanEverRun(): boolean {
-  return (
-    app.isPackaged && computerUsePlatformSupported(process.platform, currentSystemVersion())
-  );
+  return app.isPackaged && computerUsePlatformSupported(process.platform, currentSystemVersion());
 }
 
 /** Resolve and construct one authenticated, generation- or probe-owned driver host. */

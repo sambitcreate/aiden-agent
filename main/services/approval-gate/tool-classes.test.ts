@@ -41,7 +41,11 @@ const CASES: ReadonlyArray<[string, "read" | "write", { readOnlyHint?: boolean }
 
 test("connector tool names are classed by their verbs", () => {
   for (const [name, expected, declared] of CASES) {
-    assert.equal(connectorToolEffect(name, declared), expected, `${name} ${JSON.stringify(declared ?? {})}`);
+    assert.equal(
+      connectorToolEffect(name, declared),
+      expected,
+      `${name} ${JSON.stringify(declared ?? {})}`,
+    );
   }
 });
 
@@ -72,25 +76,56 @@ test("in Ask, a connector write asks and a read runs; legacy (no mode) runs both
   });
   assert.equal(declaredWrite.decision.outcome, "ask");
   // Without a mode the call is a pre-mode one: connectors never asked.
-  assert.equal(workspaceToolApproval({ toolName: "gmail_send_email", args: {}, permission: "ask" }).decision.outcome, "allow");
+  assert.equal(
+    workspaceToolApproval({ toolName: "gmail_send_email", args: {}, permission: "ask" }).decision
+      .outcome,
+    "allow",
+  );
 });
 
 test("Never ask runs connector writes; shell asks until allowed in this workspace", () => {
-  const never = (grants: ReadonlySet<"shell" | "files" | "computer-use">) => ({ mode: "never" as const, macGrants: grants });
+  const never = (grants: ReadonlySet<"shell" | "files" | "computer-use">) => ({
+    mode: "never" as const,
+    macGrants: grants,
+  });
   assert.equal(
-    workspaceToolApproval({ toolName: "x_send", args: {}, permission: "ask", approval: never(new Set()), connector: { remoteName: "send" } }).decision.outcome,
+    workspaceToolApproval({
+      toolName: "x_send",
+      args: {},
+      permission: "ask",
+      approval: never(new Set()),
+      connector: { remoteName: "send" },
+    }).decision.outcome,
     "allow",
   );
-  const shell = workspaceToolApproval({ toolName: "run_command", args: { command: "ls" }, permission: "ask", approval: never(new Set()), workspaceId: "w1" });
+  const shell = workspaceToolApproval({
+    toolName: "run_command",
+    args: { command: "ls" },
+    permission: "ask",
+    approval: never(new Set()),
+    workspaceId: "w1",
+  });
   assert.equal(shell.decision.outcome, "ask");
   assert.equal(shell.decision.outcome === "ask" && shell.decision.macGrant, "shell");
   assert.equal(
-    workspaceToolApproval({ toolName: "run_command", args: { command: "ls" }, permission: "ask", approval: never(new Set(["shell"])), workspaceId: "w1" }).decision.outcome,
+    workspaceToolApproval({
+      toolName: "run_command",
+      args: { command: "ls" },
+      permission: "ask",
+      approval: never(new Set(["shell"])),
+      workspaceId: "w1",
+    }).decision.outcome,
     "allow",
   );
   // A file grant does not cover the shell.
   assert.equal(
-    workspaceToolApproval({ toolName: "run_command", args: { command: "ls" }, permission: "ask", approval: never(new Set(["files"])), workspaceId: "w1" }).decision.outcome === "allow",
+    workspaceToolApproval({
+      toolName: "run_command",
+      args: { command: "ls" },
+      permission: "ask",
+      approval: never(new Set(["files"])),
+      workspaceId: "w1",
+    }).decision.outcome === "allow",
     false,
   );
 });

@@ -23,15 +23,9 @@ function RecapAnswer({
     return <p className="mt-1 text-tertiary">{unansweredLabel(outcome)}</p>;
   }
   if (item.kind === "custom") {
-    return (
-      <p className="mt-1 whitespace-pre-wrap break-words text-primary">
-        “{item.answers[0]}”
-      </p>
-    );
+    return <p className="mt-1 whitespace-pre-wrap break-words text-primary">“{item.answers[0]}”</p>;
   }
-  return (
-    <p className="mt-1 break-words font-medium text-primary">{item.answers.join(", ")}</p>
-  );
+  return <p className="mt-1 break-words font-medium text-primary">{item.answers.join(", ")}</p>;
 }
 
 export function AskUserQuestionRecap({ recap }: { recap: AskUserQuestionRecapV1 }) {

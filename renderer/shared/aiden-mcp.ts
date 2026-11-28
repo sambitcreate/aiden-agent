@@ -46,7 +46,9 @@ export const AIDEN_MCP_ACCESS_LABELS: Readonly<Record<AidenMcpAccess, string>> =
 };
 
 function record(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function timestamp(value: unknown): number | undefined {
@@ -55,11 +57,21 @@ function timestamp(value: unknown): number | undefined {
 
 export function parseAidenMcpServerStatus(value: unknown): AidenMcpServerStatusView {
   const status = record(value);
-  const port = typeof status?.port === "number" && Number.isInteger(status.port) && status.port > 0 && status.port < 65_536
-    ? status.port
-    : undefined;
-  const url = typeof status?.url === "string" && /^http:\/\/127\.0\.0\.1:\d+\//u.test(status.url) ? status.url : undefined;
-  const problem = status?.problem === "port_in_use" || status?.problem === "start_failed" ? status.problem : undefined;
+  const port =
+    typeof status?.port === "number" &&
+    Number.isInteger(status.port) &&
+    status.port > 0 &&
+    status.port < 65_536
+      ? status.port
+      : undefined;
+  const url =
+    typeof status?.url === "string" && /^http:\/\/127\.0\.0\.1:\d+\//u.test(status.url)
+      ? status.url
+      : undefined;
+  const problem =
+    status?.problem === "port_in_use" || status?.problem === "start_failed"
+      ? status.problem
+      : undefined;
   return {
     supported: status?.supported === true,
     enabled: status?.enabled === true,
@@ -103,7 +115,13 @@ export function parseAidenMcpIssuedApp(value: unknown): AidenMcpIssuedAppView {
 export function parseAidenMcpChatProvenance(value: unknown): AidenMcpChatProvenanceView | null {
   const provenance = record(value);
   const startedAt = timestamp(provenance?.startedAt);
-  if (!provenance || typeof provenance.name !== "string" || !provenance.name || startedAt === undefined) return null;
+  if (
+    !provenance ||
+    typeof provenance.name !== "string" ||
+    !provenance.name ||
+    startedAt === undefined
+  )
+    return null;
   return { name: provenance.name, startedAt };
 }
 

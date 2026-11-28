@@ -115,7 +115,9 @@ export function renameAgentSliderStop(
 ): AgentSliderSettings {
   if (agentSliderLabelProblem(label)) return slider;
   const trimmed = label.trim();
-  return updateStop(slider, stopId, (stop) => (stop.label === trimmed ? stop : { ...stop, label: trimmed }));
+  return updateStop(slider, stopId, (stop) =>
+    stop.label === trimmed ? stop : { ...stop, label: trimmed },
+  );
 }
 
 /**
@@ -201,7 +203,11 @@ export function effortLadderTemplate(
   makeId: () => string = randomStopId,
 ): AgentSliderSettings | undefined {
   if (ladder.levels.length < AGENT_SLIDER_MIN_STOPS) return undefined;
-  return seedAgentSlider({ providerId: ladder.providerId, model: ladder.model }, ladder.levels, makeId);
+  return seedAgentSlider(
+    { providerId: ladder.providerId, model: ladder.model },
+    ladder.levels,
+    makeId,
+  );
 }
 
 /** A model a template may put on a stop, with the effort it starts at. */

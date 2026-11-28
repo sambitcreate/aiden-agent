@@ -1,4 +1,12 @@
-import { MemorySessionRepo, JsonlSessionRepo, TODO_CONTEXT, value, type JsonlSessionMetadata, type JsonValue, type Session } from "./pi-legacy-harness.js";
+import {
+  MemorySessionRepo,
+  JsonlSessionRepo,
+  TODO_CONTEXT,
+  value,
+  type JsonlSessionMetadata,
+  type JsonValue,
+  type Session,
+} from "./pi-legacy-harness.js";
 import { NodeExecutionEnv } from "./pi-legacy-harness.js";
 import { open, readdir, stat, unlink } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
@@ -26,21 +34,39 @@ export interface PiSessionRepositoryPort {
 const AIDEN_METADATA = value<Record<string, JsonValue>>("aiden", "session-metadata");
 const METADATA_SCAN_BYTES = 65_536;
 
-function metadataFromLines(lines: readonly string[]): { legacyV3: boolean; custom?: Record<string, JsonValue> } {
+function metadataFromLines(lines: readonly string[]): {
+  legacyV3: boolean;
+  custom?: Record<string, JsonValue>;
+} {
   let header: { type?: string; version?: number } = {};
-  try { header = JSON.parse(lines[0] ?? "{}") as typeof header; } catch { /* ignored */ }
+  try {
+    header = JSON.parse(lines[0] ?? "{}") as typeof header;
+  } catch {
+    /* ignored */
+  }
   if (header.type === "session" && header.version === 3) return { legacyV3: true };
   let custom: Record<string, JsonValue> | undefined;
   for (const line of lines.slice(1)) {
     if (!line) continue;
     let write: unknown;
-    try { write = JSON.parse(line); } catch { continue; }
+    try {
+      write = JSON.parse(line);
+    } catch {
+      continue;
+    }
     const writes = Array.isArray(write) ? write : [write];
     for (const candidate of writes) {
-      if (candidate && typeof candidate === "object" && candidate.kind === "value" &&
-          candidate.op === "set" && candidate.namespace === AIDEN_METADATA.namespace &&
-          candidate.key === AIDEN_METADATA.key &&
-          candidate.value && typeof candidate.value === "object" && !Array.isArray(candidate.value)) {
+      if (
+        candidate &&
+        typeof candidate === "object" &&
+        candidate.kind === "value" &&
+        candidate.op === "set" &&
+        candidate.namespace === AIDEN_METADATA.namespace &&
+        candidate.key === AIDEN_METADATA.key &&
+        candidate.value &&
+        typeof candidate.value === "object" &&
+        !Array.isArray(candidate.value)
+      ) {
         custom = candidate.value as Record<string, JsonValue>;
       }
     }
@@ -48,8 +74,13 @@ function metadataFromLines(lines: readonly string[]): { legacyV3: boolean; custo
   return { legacyV3: false, ...(custom === undefined ? {} : { custom }) };
 }
 
-async function readAidenMetadata(filePath: string): Promise<{ legacyV3: boolean; custom?: Record<string, JsonValue> }> {
-  const handle = await open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+async function readAidenMetadata(
+  filePath: string,
+): Promise<{ legacyV3: boolean; custom?: Record<string, JsonValue> }> {
+  const handle = await open(
+    filePath,
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+  );
   let size: number;
   let prefix: Buffer;
   try {
@@ -88,31 +119,33 @@ class CurrentPiSessionRepositoryPort implements PiSessionRepositoryPort {
 
   async list(): Promise<PiPersistentSessionMetadata[]> {
     const listed = await this.#repository.list(undefined, TODO_CONTEXT);
-    const current: Array<PiPersistentSessionMetadata | undefined> = await Promise.all(listed.map(async (metadata): Promise<PiPersistentSessionMetadata | undefined> => {
-      const active = this.#activeMetadata.get(metadata.path);
-      let custom = active?.metadata;
-      if (!active) {
-        const stored = await readAidenMetadata(metadata.path);
-        if (stored.legacyV3) return undefined;
-        custom = stored.custom;
-      }
-      return {
-        id: metadata.id,
-        createdAt: metadata.createdAt,
-        cwd: metadata.cwd,
-        path: metadata.path,
-        modifiedAt: metadata.modifiedAt,
-        sourceFormat: 4 as const,
-        storageVersion: metadata.storageVersion,
-        ...(metadata.parentSessionId === undefined
-          ? {}
-          : { parentSessionId: metadata.parentSessionId }),
-        ...(metadata.legacyParentSessionPath === undefined
-          ? {}
-          : { legacyParentSessionPath: metadata.legacyParentSessionPath }),
-        ...(custom === undefined ? {} : { metadata: custom }),
-      };
-    }));
+    const current: Array<PiPersistentSessionMetadata | undefined> = await Promise.all(
+      listed.map(async (metadata): Promise<PiPersistentSessionMetadata | undefined> => {
+        const active = this.#activeMetadata.get(metadata.path);
+        let custom = active?.metadata;
+        if (!active) {
+          const stored = await readAidenMetadata(metadata.path);
+          if (stored.legacyV3) return undefined;
+          custom = stored.custom;
+        }
+        return {
+          id: metadata.id,
+          createdAt: metadata.createdAt,
+          cwd: metadata.cwd,
+          path: metadata.path,
+          modifiedAt: metadata.modifiedAt,
+          sourceFormat: 4 as const,
+          storageVersion: metadata.storageVersion,
+          ...(metadata.parentSessionId === undefined
+            ? {}
+            : { parentSessionId: metadata.parentSessionId }),
+          ...(metadata.legacyParentSessionPath === undefined
+            ? {}
+            : { legacyParentSessionPath: metadata.legacyParentSessionPath }),
+          ...(custom === undefined ? {} : { metadata: custom }),
+        };
+      }),
+    );
     const old: PiPersistentSessionMetadata[] = [];
     for (const directory of await readdir(this.#root, { withFileTypes: true })) {
       if (!directory.isDirectory()) continue;
@@ -120,10 +153,14 @@ class CurrentPiSessionRepositoryPort implements PiSessionRepositoryPort {
       for (const file of await readdir(directoryPath, { withFileTypes: true })) {
         if (!file.isFile() || !file.name.endsWith(".jsonl")) continue;
         const filePath = path.join(directoryPath, file.name);
-        const handle = await open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+        const handle = await open(
+          filePath,
+          fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+        );
         let headerLine: string;
         try {
-          if (!(await handle.stat()).isFile()) throw new Error("Pi journal discovery found a non-regular file.");
+          if (!(await handle.stat()).isFile())
+            throw new Error("Pi journal discovery found a non-regular file.");
           const buffer = Buffer.alloc(65_536);
           const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
           headerLine = buffer.subarray(0, bytesRead).toString("utf8").split("\n", 1)[0] ?? "";
@@ -134,17 +171,27 @@ class CurrentPiSessionRepositoryPort implements PiSessionRepositoryPort {
         if (!header) continue;
         const fileInfo = await stat(filePath);
         old.push({
-          id: header.id, createdAt: header.createdAt, cwd: header.cwd,
-          path: filePath, modifiedAt: fileInfo.mtimeMs, sourceFormat: 4,
+          id: header.id,
+          createdAt: header.createdAt,
+          cwd: header.cwd,
+          path: filePath,
+          modifiedAt: fileInfo.mtimeMs,
+          sourceFormat: 4,
           storageVersion: 0,
-          ...(header.parentSessionId === undefined ? {} : { parentSessionId: header.parentSessionId }),
-          ...(header.legacyParentSessionPath === undefined ? {} : { legacyParentSessionPath: header.legacyParentSessionPath }),
+          ...(header.parentSessionId === undefined
+            ? {}
+            : { parentSessionId: header.parentSessionId }),
+          ...(header.legacyParentSessionPath === undefined
+            ? {}
+            : { legacyParentSessionPath: header.legacyParentSessionPath }),
           ...(header.metadata === undefined ? {} : { metadata: header.metadata }),
         });
       }
     }
-    return [...current.filter((entry): entry is PiPersistentSessionMetadata => entry !== undefined), ...old]
-      .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
+    return [
+      ...current.filter((entry): entry is PiPersistentSessionMetadata => entry !== undefined),
+      ...old,
+    ].sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
   }
 
   async open(
@@ -170,7 +217,8 @@ class CurrentPiSessionRepositoryPort implements PiSessionRepositoryPort {
     metadata: Record<string, unknown>;
   }): Promise<PiSessionPort<PiPersistentSessionMetadata>> {
     const custom = JSON.parse(JSON.stringify(options.metadata)) as Record<string, JsonValue>;
-    if (this.#pendingCreates.has(options.id)) throw new Error(`Session already exists: ${options.id}`);
+    if (this.#pendingCreates.has(options.id))
+      throw new Error(`Session already exists: ${options.id}`);
     this.#pendingCreates.add(options.id);
     let session: Session<JsonlSessionMetadata>;
     try {
@@ -211,7 +259,8 @@ class CurrentPiSessionRepositoryPort implements PiSessionRepositoryPort {
 
   /** Remove a header-only journal Pi created for this id that Aiden never owned. */
   async #reclaimUnownedCreate(id: string, cwd: string): Promise<boolean> {
-    if ([...this.#activeSessions.values()].some((session) => session.metadata.id === id)) return false;
+    if ([...this.#activeSessions.values()].some((session) => session.metadata.id === id))
+      return false;
     let reclaimed = false;
     for (const candidate of await this.#repository.list({ cwd }, TODO_CONTEXT)) {
       if (candidate.id !== id || candidate.storageVersion !== 1) continue;
@@ -225,10 +274,23 @@ class CurrentPiSessionRepositoryPort implements PiSessionRepositoryPort {
       }
       const lines = decodeUtf8(bytes).split("\n");
       let header: Record<string, unknown> | undefined;
-      try { header = JSON.parse(lines[0] ?? "") as Record<string, unknown>; } catch { continue; }
-      if (!isDeepStrictEqual(header, {
-        v: 4, kind: "header", id, storageVersion: 1, createdAt: candidate.createdAt, cwd: candidate.cwd,
-      }) || lines.slice(1).some((line) => line.trim())) continue;
+      try {
+        header = JSON.parse(lines[0] ?? "") as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (
+        !isDeepStrictEqual(header, {
+          v: 4,
+          kind: "header",
+          id,
+          storageVersion: 1,
+          createdAt: candidate.createdAt,
+          cwd: candidate.cwd,
+        }) ||
+        lines.slice(1).some((line) => line.trim())
+      )
+        continue;
       await this.#repository.delete(candidate, TODO_CONTEXT);
       reclaimed = true;
     }
@@ -250,7 +312,10 @@ class CurrentPiSessionRepositoryPort implements PiSessionRepositoryPort {
     }
     await this.#activeSessions.get(metadata.path)?.close(TODO_CONTEXT);
     if (this.#activeSessions.has(metadata.path) || metadata.storageVersion !== 0) {
-      await this.#repository.delete({ ...metadata, storageVersion: 1 } as JsonlSessionMetadata, TODO_CONTEXT);
+      await this.#repository.delete(
+        { ...metadata, storageVersion: 1 } as JsonlSessionMetadata,
+        TODO_CONTEXT,
+      );
     } else {
       await unlink(metadata.path);
     }

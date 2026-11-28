@@ -20,8 +20,7 @@ export function getPeerHostManager(): PeerHostManager {
   if (manager) return manager;
   const current = new PeerHostManager({
     registry: getPeerHostRegistry(),
-    broadcast: (channel, payload) =>
-      ipcMain.broadcast(channel as NotificationChannel, payload),
+    broadcast: (channel, payload) => ipcMain.broadcast(channel as NotificationChannel, payload),
   });
   manager = current;
   const wake = (): void => current.wake();

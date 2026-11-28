@@ -9,8 +9,15 @@
 // paused like every other goal.
 
 import { fenceAsData, tailText } from "../../../renderer/shared/agent-notices.js";
-import { MAX_DONE_WHEN_CHECKS, type DoneWhenCheckState } from "../../../renderer/shared/follow-through.js";
-import { GOAL_VERSION, validateGoalCheck, type GoalRecordV1 } from "../../../renderer/shared/goal.js";
+import {
+  MAX_DONE_WHEN_CHECKS,
+  type DoneWhenCheckState,
+} from "../../../renderer/shared/follow-through.js";
+import {
+  GOAL_VERSION,
+  validateGoalCheck,
+  type GoalRecordV1,
+} from "../../../renderer/shared/goal.js";
 
 export const DONE_WHEN_TIMEOUT_MS = 10 * 60_000;
 export const DONE_WHEN_OUTPUT_CHARS = 3_000;
@@ -59,7 +66,8 @@ function outcomeLine(result: DoneWhenRunResult): string {
 
 /** A run as the goal reads it: passed or not, one line, and the end of its output fenced as data. */
 export function goalCheckResult(command: string, result: DoneWhenRunResult): GoalCheckResult {
-  if (result.aborted) return { kind: "stopped", summary: `The check \`${command}\` was stopped before it finished` };
+  if (result.aborted)
+    return { kind: "stopped", summary: `The check \`${command}\` was stopped before it finished` };
   const passed = result.exitCode === 0 && !result.timedOut;
   const { text: tail, truncated } = tailText(result.output.trimEnd(), DONE_WHEN_OUTPUT_CHARS);
   const details = tail.trim()
@@ -131,10 +139,20 @@ export class GoalCheckRunner {
     this.deps.onChange?.(input.chatId);
     try {
       const result = await this.deps.run(input, controller.signal);
-      return goalCheckResult(input.command, controller.signal.aborted ? { ...result, aborted: true } : result);
+      return goalCheckResult(
+        input.command,
+        controller.signal.aborted ? { ...result, aborted: true } : result,
+      );
     } catch (error) {
-      if (error instanceof CheckInterruptedError) return { kind: "stopped", summary: error.message };
-      if (controller.signal.aborted) return goalCheckResult(input.command, { exitCode: null, timedOut: false, aborted: true, output: "" });
+      if (error instanceof CheckInterruptedError)
+        return { kind: "stopped", summary: error.message };
+      if (controller.signal.aborted)
+        return goalCheckResult(input.command, {
+          exitCode: null,
+          timedOut: false,
+          aborted: true,
+          output: "",
+        });
       return { kind: "stopped", summary: error instanceof Error ? error.message : String(error) };
     } finally {
       signal.removeEventListener("abort", forward);
@@ -192,7 +210,12 @@ export function migrateDoneWhenRecords(
   const kept: unknown[] = [];
   for (const entry of records) {
     const record = entry as Partial<DoneWhenRecord> | null;
-    if (record?.version !== 1 || typeof record.chatId !== "string" || typeof record.command !== "string") continue;
+    if (
+      record?.version !== 1 ||
+      typeof record.chatId !== "string" ||
+      typeof record.command !== "string"
+    )
+      continue;
     if (record.state !== "waiting" && record.state !== "running") continue;
     const command = validateGoalCheck(record.command)?.command;
     if (!command || taken.has(record.chatId)) continue;
@@ -203,10 +226,14 @@ export function migrateDoneWhenRecords(
     }
     if (!eligible) continue;
     taken.add(record.chatId);
-    const used = typeof record.checksRun === "number" && Number.isSafeInteger(record.checksRun) ? record.checksRun : 0;
+    const used =
+      typeof record.checksRun === "number" && Number.isSafeInteger(record.checksRun)
+        ? record.checksRun
+        : 0;
     // A check cut off while running had not used its attempt.
     const checksUsed = Math.max(0, record.state === "running" ? used - 1 : used);
-    const setAt = typeof record.setAt === "number" && Number.isFinite(record.setAt) ? record.setAt : make.now;
+    const setAt =
+      typeof record.setAt === "number" && Number.isFinite(record.setAt) ? record.setAt : make.now;
     migrated.push({
       version: GOAL_VERSION,
       id: make.newId(),

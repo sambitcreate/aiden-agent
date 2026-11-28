@@ -37,7 +37,7 @@ Each device you open in a chat gets its own Environment tab, named after the dev
 - Its size and position are kept for the window, and it always stays inside the chat area when the window or panels change size.
 - **Dock in tab** returns it to its tab; **Close floating device** just hides the player. The tab shows a placeholder while the device floats, so the device is never streamed twice.
 
-When a chat's agent opens a device, it floats over that chat. Turn off **Auto-show floating device** in **Settings → Simulator → Workspace** to open its tab instead. Device activity also shows in the chat's activity rows: *Opened simulator*, *Took simulator screenshot*, *Closed simulator*, and so on, on desktop and in Aiden On The Go.
+When a chat's agent opens a device, it floats over that chat. Turn off **Auto-show floating device** in **Settings → Simulator → Workspace** to open its tab instead. Device activity also shows in the chat's activity rows: _Opened simulator_, _Took simulator screenshot_, _Closed simulator_, and so on, on desktop and in Aiden On The Go.
 
 On narrower windows Quick View docks beside the chat: the conversation moves left only as far as the card needs and narrows only once it reaches the left edge. When even that would leave the chat too narrow, the card floats over it as before.
 
@@ -141,19 +141,19 @@ Settings → **Simulator** appears in the settings list and command palette only
 
 ## Troubleshooting
 
-| Symptom | What to do |
-| --- | --- |
-| "Xcode was not found." | Install Xcode from the App Store and open it once so it can finish setting up, then choose refresh. |
-| "Android SDK not found." | Install Android Studio and its SDK Platform-Tools, Emulator, and Command-line Tools (latest), or set `ANDROID_HOME`, then choose refresh. |
-| An Android emulator shows "Waiting for device video…" | The emulator is restarting its encoder after a fold or rotation. If it does not recover, close the device and open it again. |
-| Setup fails with an npm error | Make sure `npm` is on your PATH and can reach your registry, then turn streaming on again. |
-| The screen stays black | Close the device and open it again. If the stream can't renew its grant three times in a minute, **Reconnect** appears. |
-| The 3D view never shows | The stream is using MJPEG, WebGL is unavailable, or an iPhone Duo's hub predates hinge reporting. Hover **3D view** for the reason. After a failure, close and reopen the simulator to try 3D again. |
-| A paired Mac shows no simulators | On that Mac, check **Share with paired Macs** and the simulator-control grant for this Mac. |
-| An SSH host says SSH was refused | Load the key with `ssh-add`, or set the host's identity file. Aiden runs ssh in batch mode and never prompts for passwords. |
-| An SSH host stops at host key verification | Run `ssh <target>` once in Terminal to accept the host key, then choose **Retry**. |
-| "Node.js was not found" or "npm was not found" on an SSH host | Install Node.js 22 or newer with npm on the host. Make sure a non-interactive shell can find it, for example in `/opt/homebrew/bin`, `/usr/local/bin` or `~/.local/bin`. |
-| An SSH host is listed as this Mac | The target resolves to this Mac, whose simulators already appear under This Mac. |
+| Symptom                                                       | What to do                                                                                                                                                                                           |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "Xcode was not found."                                        | Install Xcode from the App Store and open it once so it can finish setting up, then choose refresh.                                                                                                  |
+| "Android SDK not found."                                      | Install Android Studio and its SDK Platform-Tools, Emulator, and Command-line Tools (latest), or set `ANDROID_HOME`, then choose refresh.                                                            |
+| An Android emulator shows "Waiting for device video…"         | The emulator is restarting its encoder after a fold or rotation. If it does not recover, close the device and open it again.                                                                         |
+| Setup fails with an npm error                                 | Make sure `npm` is on your PATH and can reach your registry, then turn streaming on again.                                                                                                           |
+| The screen stays black                                        | Close the device and open it again. If the stream can't renew its grant three times in a minute, **Reconnect** appears.                                                                              |
+| The 3D view never shows                                       | The stream is using MJPEG, WebGL is unavailable, or an iPhone Duo's hub predates hinge reporting. Hover **3D view** for the reason. After a failure, close and reopen the simulator to try 3D again. |
+| A paired Mac shows no simulators                              | On that Mac, check **Share with paired Macs** and the simulator-control grant for this Mac.                                                                                                          |
+| An SSH host says SSH was refused                              | Load the key with `ssh-add`, or set the host's identity file. Aiden runs ssh in batch mode and never prompts for passwords.                                                                          |
+| An SSH host stops at host key verification                    | Run `ssh <target>` once in Terminal to accept the host key, then choose **Retry**.                                                                                                                   |
+| "Node.js was not found" or "npm was not found" on an SSH host | Install Node.js 22 or newer with npm on the host. Make sure a non-interactive shell can find it, for example in `/opt/homebrew/bin`, `/usr/local/bin` or `~/.local/bin`.                             |
+| An SSH host is listed as this Mac                             | The target resolves to this Mac, whose simulators already appear under This Mac.                                                                                                                     |
 
 ## Internals
 

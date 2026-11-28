@@ -96,7 +96,9 @@ export function createBotQuestions(): BotQuestions {
       };
       // A wait under the same id can only be a stale invocation of the same
       // call that nobody can answer any more: withdraw it before asking again.
-      waiting.get(request.waitId)?.settle(null, new DOMException("The question was asked again.", "AbortError"));
+      waiting
+        .get(request.waitId)
+        ?.settle(null, new DOMException("The question was asked again.", "AbortError"));
       return new Promise<AskUserQuestionResponseV1>((resolve, reject) => {
         const onAbort = () => settle(null, abortReason(request.signal!));
         const settle = (response: AskUserQuestionResponseV1 | null, reason?: unknown) => {

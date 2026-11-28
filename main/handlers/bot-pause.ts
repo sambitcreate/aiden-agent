@@ -8,7 +8,10 @@
 // - Throws for a malformed Bot id, a Bot that does not exist (pause only), or
 //   an unreadable pause file. Unpausing a Bot that is gone is a harmless no-op.
 
-import type { BotSessionService, BotSessionState } from "../services/bot-runtime/bot-session-service.js";
+import type {
+  BotSessionService,
+  BotSessionState,
+} from "../services/bot-runtime/bot-session-service.js";
 import { parseBotId } from "./bot-params.js";
 
 export const BOT_PAUSE_CHANNEL = "bots:pause";

@@ -11,7 +11,8 @@ import { DESIGN_CANVAS_EMPTY_COPY } from "./design-canvas-empty";
 // The lazy canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
 registerHooks({
   resolve(specifier, context, next) {
-    if (specifier.endsWith(".css")) return { url: "data:text/javascript,export%20default%20%7B%7D", shortCircuit: true };
+    if (specifier.endsWith(".css"))
+      return { url: "data:text/javascript,export%20default%20%7B%7D", shortCircuit: true };
     return next(specifier, context);
   },
 });
@@ -26,7 +27,11 @@ test("while the canvas chunk loads, the region shows a neutral loading state, no
   render(<DesignCanvasRegion chatId="chat-1" width={800} placement="split" hidden={false} />);
 
   const loading = screen.getByRole("status", { name: "Loading canvas" });
-  assert.equal(screen.queryByText(DESIGN_CANVAS_EMPTY_COPY) === null, true, "no empty-state copy while loading");
+  assert.equal(
+    screen.queryByText(DESIGN_CANVAS_EMPTY_COPY) === null,
+    true,
+    "no empty-state copy while loading",
+  );
   assert.equal(loading.textContent?.trim() ?? "", "", "the skeleton draws no words");
 
   // The region's lazy import is this same module, so this waits for the chunk

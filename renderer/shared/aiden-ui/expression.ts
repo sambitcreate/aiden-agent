@@ -6,9 +6,28 @@ import type { AidenUiActionV1, AidenUiExprV1, AidenUiFunctionName } from "./type
  * are no assignments, loops, arrow functions, or arithmetic beyond `+`.
  */
 
-export const AIDEN_UI_FUNCTIONS: ReadonlySet<string> = new Set<AidenUiFunctionName>(["fmt", "len", "sum", "max", "min", "round", "filter", "sort"]);
+export const AIDEN_UI_FUNCTIONS: ReadonlySet<string> = new Set<AidenUiFunctionName>([
+  "fmt",
+  "len",
+  "sum",
+  "max",
+  "min",
+  "round",
+  "filter",
+  "sort",
+]);
 /** Binary operators the parser emits (`===` and `!==` become `==` and `!=`). */
-export const AIDEN_UI_BINARY_OPERATORS: ReadonlySet<string> = new Set(["||", "&&", "==", "!=", "<", "<=", ">", ">=", "+"]);
+export const AIDEN_UI_BINARY_OPERATORS: ReadonlySet<string> = new Set([
+  "||",
+  "&&",
+  "==",
+  "!=",
+  "<",
+  "<=",
+  ">",
+  ">=",
+  "+",
+]);
 /** What a `$name` or bare name may be. */
 export const AIDEN_UI_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const ACTIONS = new Set(["sendPrompt", "setState", "openUrl", "copy", "compose", "run"]);
@@ -23,7 +42,36 @@ type Token =
 
 class ExpressionError extends Error {}
 
-const PUNCTUATION = ["===", "!==", "==", "!=", "<=", ">=", "&&", "||", "=>", "<", ">", "+", "-", "!", "?", ":", ".", ",", "(", ")", "[", "]", "{", "}", "=", "*", "/", "%"];
+const PUNCTUATION = [
+  "===",
+  "!==",
+  "==",
+  "!=",
+  "<=",
+  ">=",
+  "&&",
+  "||",
+  "=>",
+  "<",
+  ">",
+  "+",
+  "-",
+  "!",
+  "?",
+  ":",
+  ".",
+  ",",
+  "(",
+  ")",
+  "[",
+  "]",
+  "{",
+  "}",
+  "=",
+  "*",
+  "/",
+  "%",
+];
 
 function tokenize(source: string): Token[] {
   const tokens: Token[] = [];
@@ -138,7 +186,9 @@ class Parser {
       default: {
         const key = args[0];
         if (args.length !== 2 || key?.op !== "lit" || typeof key.v !== "string" || !key.v) {
-          throw new ExpressionError('setState needs a string key and a value: setState("key", value)');
+          throw new ExpressionError(
+            'setState needs a string key and a value: setState("key", value)',
+          );
         }
         return { act: "set", key: key.v, value: args[1]! };
       }
@@ -169,8 +219,15 @@ class Parser {
     while (true) {
       const token = this.peek();
       if (token?.type !== "punct") return left;
-      if (token.value === "-" || token.value === "*" || token.value === "/" || token.value === "%") {
-        throw new ExpressionError(`"${token.value}" is not supported; use + or a function like sum() or round()`);
+      if (
+        token.value === "-" ||
+        token.value === "*" ||
+        token.value === "/" ||
+        token.value === "%"
+      ) {
+        throw new ExpressionError(
+          `"${token.value}" is not supported; use + or a function like sum() or round()`,
+        );
       }
       if (token.value === "=" || token.value === "=>") {
         throw new ExpressionError("Assignments and arrow functions are not supported");
@@ -207,7 +264,8 @@ class Parser {
         const name = this.peek();
         if (name?.type !== "ident") throw new ExpressionError("Expected a property name after .");
         this.index += 1;
-        if (this.isPunct("(")) throw new ExpressionError(`Methods like .${name.value}() are not supported`);
+        if (this.isPunct("("))
+          throw new ExpressionError(`Methods like .${name.value}() are not supported`);
         node = { op: "get", of: node, key: { op: "lit", v: name.value } };
         continue;
       }
@@ -251,10 +309,12 @@ class Parser {
       case "var":
         return { op: "var", name: token.value };
       case "ident": {
-        if (token.value === "true" || token.value === "false") return { op: "lit", v: token.value === "true" };
+        if (token.value === "true" || token.value === "false")
+          return { op: "lit", v: token.value === "true" };
         if (token.value === "null") return { op: "lit", v: null };
         if (this.isPunct("(")) {
-          if (ACTIONS.has(token.value)) throw new ExpressionError(`${token.value}() is only allowed as a whole action`);
+          if (ACTIONS.has(token.value))
+            throw new ExpressionError(`${token.value}() is only allowed as a whole action`);
           if (!AIDEN_UI_FUNCTIONS.has(token.value as AidenUiFunctionName)) {
             throw new ExpressionError(`Unknown function ${token.value}()`);
           }
@@ -290,7 +350,8 @@ class Parser {
       if (token.value === "null") return null;
       throw new ExpressionError("Object and array literals must be constant");
     }
-    if (token.type === "var") throw new ExpressionError("Object and array literals must be constant");
+    if (token.type === "var")
+      throw new ExpressionError("Object and array literals must be constant");
     if (token.value === "-" || token.value === "+") {
       const number = this.peek();
       if (number?.type !== "num") throw new ExpressionError("A sign must precede a number");
@@ -311,7 +372,8 @@ class Parser {
       const object: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
       while (!this.isPunct("}")) {
         const key = this.peek();
-        if (key?.type !== "ident" && key?.type !== "str") throw new ExpressionError("Expected an object key");
+        if (key?.type !== "ident" && key?.type !== "str")
+          throw new ExpressionError("Expected an object key");
         this.index += 1;
         this.expect(":");
         object[key.value] = this.literal();
@@ -325,7 +387,11 @@ class Parser {
   }
 }
 
-export function parseExpression(source: string): { expr?: AidenUiExprV1; action?: AidenUiActionV1; error?: string } {
+export function parseExpression(source: string): {
+  expr?: AidenUiExprV1;
+  action?: AidenUiActionV1;
+  error?: string;
+} {
   if (source.length > MAX_SOURCE_CHARS) return { error: "Expression is too long" };
   try {
     const tokens = tokenize(source);

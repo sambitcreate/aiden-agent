@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createBotStore } from "./bot-store-core.js";
-import { DEFAULT_BOT_AVATAR, DEFAULT_BOT_INTERRUPTIONS, resolveBotChatActivity, resolveBotInterruptions } from "../../renderer/shared/bots.js";
+import {
+  DEFAULT_BOT_AVATAR,
+  DEFAULT_BOT_INTERRUPTIONS,
+  resolveBotChatActivity,
+  resolveBotInterruptions,
+} from "../../renderer/shared/bots.js";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "aiden-bots-"));
@@ -52,11 +57,17 @@ test("bot store persists create and edit, and delete erases the record", async (
     assert.equal(await store.get(shaped.id), null);
     // Idempotent: a second delete finds nothing and changes nothing.
     assert.equal(await store.delete(shaped.id), false);
-    assert.deepEqual((await store.list()).map(({ id }) => id), [created.id]);
+    assert.deepEqual(
+      (await store.list()).map(({ id }) => id),
+      [created.id],
+    );
     const after = JSON.parse(await readFile(join(root, "bots.json"), "utf8")) as {
       bots: Array<{ id: string }>;
     };
-    assert.deepEqual(after.bots.map(({ id }) => id), [created.id]);
+    assert.deepEqual(
+      after.bots.map(({ id }) => id),
+      [created.id],
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -65,7 +76,11 @@ test("bot store persists create and edit, and delete erases the record", async (
 test("legacy archived records are hidden and reported for erase until deleted", async () => {
   const { root, store } = await fixture();
   try {
-    const live = await store.create({ name: "Live", instructions: "Stay.", avatar: { version: 1, shape: "orb", color: "sky" } });
+    const live = await store.create({
+      name: "Live",
+      instructions: "Stay.",
+      avatar: { version: 1, shape: "orb", color: "sky" },
+    });
     const disk = JSON.parse(await readFile(join(root, "bots.json"), "utf8")) as {
       version: number;
       bots: Array<Record<string, unknown>>;
@@ -82,7 +97,10 @@ test("legacy archived records are hidden and reported for erase until deleted", 
     await writeFile(join(root, "bots.json"), JSON.stringify(disk));
     const reopened = createBotStore({ root: () => root });
 
-    assert.deepEqual((await reopened.list()).map(({ id }) => id), [live.id]);
+    assert.deepEqual(
+      (await reopened.list()).map(({ id }) => id),
+      [live.id],
+    );
     assert.equal(await reopened.get("bot:archived-legacy"), null);
     assert.equal("archivedAt" in ((await reopened.list())[0] ?? {}), false);
     assert.deepEqual(await reopened.legacyArchivedIds(), ["bot:archived-legacy"]);
@@ -147,10 +165,7 @@ test("main-owned creation can commit one pre-minted bounded identity exactly onc
     const created = await store.createWithId("bot:managed-1", input);
     assert.equal(created.id, "bot:managed-1");
     assert.equal((await store.get("bot:managed-1"))?.name, "Managed helper");
-    await assert.rejects(
-      store.createWithId("bot:managed-1", input),
-      /already exists/u,
-    );
+    await assert.rejects(store.createWithId("bot:managed-1", input), /already exists/u);
     for (const id of ["", "../escape", "bot/escape", "\u212b", "x".repeat(161)]) {
       await assert.rejects(store.createWithId(id, input), /Invalid bot id/u);
     }
@@ -198,9 +213,31 @@ test("a stored avatar that is not a current recipe reads as the default and is r
       JSON.stringify({
         version: 1,
         bots: [
-          { id: "bot:old-id", name: "Old id", instructions: "x", avatar: "spark", avatarAppearance: { version: 1, shape: "hex", color: "sun" }, createdAt: 1, updatedAt: 3 },
-          { id: "bot:old-axes", name: "Old axes", instructions: "x", avatar: { version: 1, shape: "orb", color: "sky", eyes: "dots", detail: "none" }, createdAt: 1, updatedAt: 2 },
-          { id: "bot:current", name: "Current", instructions: "x", avatar: { version: 1, shape: "peak", color: "plum" }, createdAt: 1, updatedAt: 1 },
+          {
+            id: "bot:old-id",
+            name: "Old id",
+            instructions: "x",
+            avatar: "spark",
+            avatarAppearance: { version: 1, shape: "hex", color: "sun" },
+            createdAt: 1,
+            updatedAt: 3,
+          },
+          {
+            id: "bot:old-axes",
+            name: "Old axes",
+            instructions: "x",
+            avatar: { version: 1, shape: "orb", color: "sky", eyes: "dots", detail: "none" },
+            createdAt: 1,
+            updatedAt: 2,
+          },
+          {
+            id: "bot:current",
+            name: "Current",
+            instructions: "x",
+            avatar: { version: 1, shape: "peak", color: "plum" },
+            createdAt: 1,
+            updatedAt: 1,
+          },
         ],
       }),
     );
@@ -229,7 +266,9 @@ test("a stored avatar that is not a current recipe reads as the default and is r
     const written = disk.bots.find((bot) => bot.id === old.id)!;
     assert.deepEqual(written.avatar, { version: 1, shape: "drop", color: "rose" });
     assert.equal("avatarAppearance" in written, false);
-    await assert.rejects(readFile(join(root, "bot-avatar-appearances.json"), "utf8"), { code: "ENOENT" });
+    await assert.rejects(readFile(join(root, "bot-avatar-appearances.json"), "utf8"), {
+      code: "ENOENT",
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -243,16 +282,38 @@ test("a legacy record with an opening greeting loads, and the next save drops th
       JSON.stringify({
         version: 1,
         bots: [
-          { id: "bot:greeter", name: "Greeter", instructions: "x", openingGreeting: "Hi! What should we plan?", avatar: { version: 1, shape: "orb", color: "sky" }, createdAt: 1, updatedAt: 2 },
+          {
+            id: "bot:greeter",
+            name: "Greeter",
+            instructions: "x",
+            openingGreeting: "Hi! What should we plan?",
+            avatar: { version: 1, shape: "orb", color: "sky" },
+            createdAt: 1,
+            updatedAt: 2,
+          },
           // Over the old 2,000-character bound: once a reason to drop the whole Bot.
-          { id: "bot:long", name: "Long", instructions: "x", openingGreeting: "h".repeat(3_000), avatar: { version: 1, shape: "orb", color: "sky" }, createdAt: 1, updatedAt: 1 },
+          {
+            id: "bot:long",
+            name: "Long",
+            instructions: "x",
+            openingGreeting: "h".repeat(3_000),
+            avatar: { version: 1, shape: "orb", color: "sky" },
+            createdAt: 1,
+            updatedAt: 1,
+          },
         ],
       }),
     );
     const store = createBotStore({ root: () => root, now: () => 50 });
     const bots = await store.list();
-    assert.deepEqual(bots.map((bot) => bot.id), ["bot:greeter", "bot:long"]);
-    assert.ok(bots.every((bot) => !("openingGreeting" in bot)), "the greeting is never read back");
+    assert.deepEqual(
+      bots.map((bot) => bot.id),
+      ["bot:greeter", "bot:long"],
+    );
+    assert.ok(
+      bots.every((bot) => !("openingGreeting" in bot)),
+      "the greeting is never read back",
+    );
 
     const greeter = bots[0]!;
     await store.update({
@@ -262,7 +323,9 @@ test("a legacy record with an opening greeting loads, and the next save drops th
       instructions: "Plan meals.",
       avatar: greeter.avatar,
     });
-    const disk = JSON.parse(await readFile(join(root, "bots.json"), "utf8")) as { bots: Array<Record<string, unknown>> };
+    const disk = JSON.parse(await readFile(join(root, "bots.json"), "utf8")) as {
+      bots: Array<Record<string, unknown>>;
+    };
     assert.equal("openingGreeting" in disk.bots.find((bot) => bot.id === "bot:greeter")!, false);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -285,9 +348,20 @@ test("bot store rejects unsupported document versions and enforces bounded requi
     const cleanRoot = await mkdtemp(join(tmpdir(), "aiden-bots-validation-"));
     t.after(() => rm(cleanRoot, { recursive: true, force: true }));
     const cleanStore = createBotStore({ root: () => cleanRoot });
-    await assert.rejects(cleanStore.create({ name: "", instructions: "x", avatar: { version: 1, shape: "wisp", color: "lilac" } }), /name/u);
     await assert.rejects(
-      cleanStore.create({ name: "x", instructions: "x".repeat(32_001), avatar: { version: 1, shape: "wisp", color: "lilac" } }),
+      cleanStore.create({
+        name: "",
+        instructions: "x",
+        avatar: { version: 1, shape: "wisp", color: "lilac" },
+      }),
+      /name/u,
+    );
+    await assert.rejects(
+      cleanStore.create({
+        name: "x",
+        instructions: "x".repeat(32_001),
+        avatar: { version: 1, shape: "wisp", color: "lilac" },
+      }),
       /instructions/u,
     );
     await assert.rejects(
@@ -323,7 +397,11 @@ test("a Bot's chat activity is saved with a new revision, and identity edits tha
     assert.deepEqual(chosen.chatActivity, { level: "summary", wording: "thinking" });
     assert.notEqual(chosen.revision, created.revision);
     const reopened = await createBotStore({ root: () => root, now: () => 500 }).get(created.id);
-    assert.equal(reopened?.revision, chosen.revision, "a saved record and the reloaded one share a revision");
+    assert.equal(
+      reopened?.revision,
+      chosen.revision,
+      "a saved record and the reloaded one share a revision",
+    );
     const renamed = await store.update({
       id: created.id,
       expectedRevision: chosen.revision,
@@ -378,7 +456,10 @@ test("a stored chat activity that isn't a current choice reads as absent and kee
     assert.equal(byId.get("bot:newer"), undefined);
     assert.equal(byId.get("bot:extra"), undefined);
     assert.deepEqual(byId.get("bot:good"), { level: "detailed", wording: "follows" });
-    assert.deepEqual(resolveBotChatActivity(byId.get("bot:newer")), { level: "quiet", wording: "follows" });
+    assert.deepEqual(resolveBotChatActivity(byId.get("bot:newer")), {
+      level: "quiet",
+      wording: "follows",
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -387,28 +468,49 @@ test("a stored chat activity that isn't a current choice reads as absent and kee
 test("a Bot's interruption setting round-trips, keeps its place after chat activity, and absent reads as the defaults", async () => {
   const { root, store } = await fixture();
   try {
-    const created = await store.create({ name: "Planner", instructions: "Plan dinners.", avatar: { version: 1, shape: "hex", color: "sun" } });
+    const created = await store.create({
+      name: "Planner",
+      instructions: "Plan dinners.",
+      avatar: { version: 1, shape: "hex", color: "sun" },
+    });
     assert.equal(created.interruptions, undefined);
     assert.deepEqual(resolveBotInterruptions(created.interruptions), DEFAULT_BOT_INTERRUPTIONS);
     const quiet = { quietHours: { enabled: false, start: "21:00", end: "08:00" }, dailyLimit: 3 };
     const saved = await store.update({
-      id: created.id, expectedRevision: created.revision, name: created.name,
-      instructions: created.instructions, avatar: created.avatar, interruptions: quiet,
+      id: created.id,
+      expectedRevision: created.revision,
+      name: created.name,
+      instructions: created.instructions,
+      avatar: created.avatar,
+      interruptions: quiet,
     });
     assert.deepEqual(saved.interruptions, quiet);
     const withActivity = await store.update({
-      id: created.id, expectedRevision: saved.revision, name: created.name,
-      instructions: created.instructions, avatar: created.avatar,
+      id: created.id,
+      expectedRevision: saved.revision,
+      name: created.name,
+      instructions: created.instructions,
+      avatar: created.avatar,
       chatActivity: { level: "summary", wording: "thinking" },
     });
     assert.deepEqual(withActivity.interruptions, quiet, "an edit that leaves it out keeps it");
     const reopened = await createBotStore({ root: () => root, now: () => 500 }).get(created.id);
-    assert.equal(reopened?.revision, withActivity.revision, "a saved record and the reloaded one share a revision");
-    await assert.rejects(store.update({
-      id: created.id, expectedRevision: withActivity.revision, name: created.name,
-      instructions: created.instructions, avatar: created.avatar,
-      interruptions: { ...quiet, dailyLimit: 99 },
-    }), /interruption/u);
+    assert.equal(
+      reopened?.revision,
+      withActivity.revision,
+      "a saved record and the reloaded one share a revision",
+    );
+    await assert.rejects(
+      store.update({
+        id: created.id,
+        expectedRevision: withActivity.revision,
+        name: created.name,
+        instructions: created.instructions,
+        avatar: created.avatar,
+        interruptions: { ...quiet, dailyLimit: 99 },
+      }),
+      /interruption/u,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -417,66 +519,160 @@ test("a Bot's interruption setting round-trips, keeps its place after chat activ
 test("a Bot's own-wake-ups switch is on by default, stays off once turned off, and an edit that leaves it out keeps it", async () => {
   const { root, store } = await fixture();
   try {
-    const created = await store.create({ name: "Planner", instructions: "Plan dinners.", avatar: { version: 1, shape: "hex", color: "sun" } });
+    const created = await store.create({
+      name: "Planner",
+      instructions: "Plan dinners.",
+      avatar: { version: 1, shape: "hex", color: "sun" },
+    });
     assert.notEqual(created.selfWakeUps, false, "on unless the person turns it off");
-    const base = { id: created.id, name: created.name, instructions: created.instructions, avatar: created.avatar };
+    const base = {
+      id: created.id,
+      name: created.name,
+      instructions: created.instructions,
+      avatar: created.avatar,
+    };
     const original = await store.wakeUpGeneration(created.id);
     assert.equal(original, "", "legacy wake-ups belong to the original permission");
-    const off = await store.update({ ...base, expectedRevision: created.revision, selfWakeUps: false });
+    const off = await store.update({
+      ...base,
+      expectedRevision: created.revision,
+      selfWakeUps: false,
+    });
     assert.equal(off.selfWakeUps, false);
-    const renamed = await store.update({ ...base, expectedRevision: off.revision, name: "Dinner planner" });
+    const renamed = await store.update({
+      ...base,
+      expectedRevision: off.revision,
+      name: "Dinner planner",
+    });
     assert.equal(renamed.selfWakeUps, false, "an edit that leaves it out keeps it");
     const reopened = await createBotStore({ root: () => root, now: () => 900 }).get(created.id);
     assert.equal(reopened?.selfWakeUps, false);
     assert.equal(await createBotStore({ root: () => root }).wakeUpGeneration(created.id), null);
     assert.equal(reopened?.revision, renamed.revision);
-    const on = await store.update({ ...base, expectedRevision: renamed.revision, selfWakeUps: true });
+    const on = await store.update({
+      ...base,
+      expectedRevision: renamed.revision,
+      selfWakeUps: true,
+    });
     assert.notEqual(on.selfWakeUps, false);
     const newPermission = await createBotStore({ root: () => root }).wakeUpGeneration(created.id);
-    assert.ok(newPermission && newPermission !== original, "reenabling cannot revive a surviving old task");
-    const saved = await store.update({ ...base, expectedRevision: on.revision, name: "New planner" });
-    assert.equal(await store.wakeUpGeneration(saved.id), newPermission, "an ordinary edit preserves pending wake-ups");
+    assert.ok(
+      newPermission && newPermission !== original,
+      "reenabling cannot revive a surviving old task",
+    );
+    const saved = await store.update({
+      ...base,
+      expectedRevision: on.revision,
+      name: "New planner",
+    });
+    assert.equal(
+      await store.wakeUpGeneration(saved.id),
+      newPermission,
+      "an ordinary edit preserves pending wake-ups",
+    );
     assert.notEqual(on.revision, renamed.revision);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test('messaging switches store only off and survive unrelated edits',async()=>{
- const {root,store}=await fixture();
- try {
-  const bot=await store.create({name:'Ada',instructions:'help',avatar:DEFAULT_BOT_AVATAR});
-  const base={id:bot.id,name:bot.name,instructions:bot.instructions,avatar:bot.avatar};
-  const off=await store.update({...base,expectedRevision:bot.revision,acceptsBotMessages:false,messagesOtherBots:false});
-  const renamed=await store.update({...base,expectedRevision:off.revision,name:'New Ada'});
-  assert.equal(renamed.acceptsBotMessages,false);assert.equal(renamed.messagesOtherBots,false);
-  const on=await store.update({...base,expectedRevision:renamed.revision,acceptsBotMessages:true,messagesOtherBots:true});
-  assert.equal(Object.prototype.hasOwnProperty.call(on,'acceptsBotMessages'),false);assert.equal(Object.prototype.hasOwnProperty.call(on,'messagesOtherBots'),false);
-  const stored=await createBotStore({root:()=>root}).get(bot.id);assert.equal(stored?.revision,on.revision);
- } finally {await rm(root,{recursive:true,force:true});}
+test("messaging switches store only off and survive unrelated edits", async () => {
+  const { root, store } = await fixture();
+  try {
+    const bot = await store.create({
+      name: "Ada",
+      instructions: "help",
+      avatar: DEFAULT_BOT_AVATAR,
+    });
+    const base = { id: bot.id, name: bot.name, instructions: bot.instructions, avatar: bot.avatar };
+    const off = await store.update({
+      ...base,
+      expectedRevision: bot.revision,
+      acceptsBotMessages: false,
+      messagesOtherBots: false,
+    });
+    const renamed = await store.update({
+      ...base,
+      expectedRevision: off.revision,
+      name: "New Ada",
+    });
+    assert.equal(renamed.acceptsBotMessages, false);
+    assert.equal(renamed.messagesOtherBots, false);
+    const on = await store.update({
+      ...base,
+      expectedRevision: renamed.revision,
+      acceptsBotMessages: true,
+      messagesOtherBots: true,
+    });
+    assert.equal(Object.prototype.hasOwnProperty.call(on, "acceptsBotMessages"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(on, "messagesOtherBots"), false);
+    const stored = await createBotStore({ root: () => root }).get(bot.id);
+    assert.equal(stored?.revision, on.revision);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("a Bot's thinking level is stored only when not off, survives unrelated edits and reloads, and an unknown stored level reads as off", async () => {
   const { root, store } = await fixture();
   try {
-    const created = await store.create({ name: "Thinker", instructions: "Think.", avatar: DEFAULT_BOT_AVATAR });
+    const created = await store.create({
+      name: "Thinker",
+      instructions: "Think.",
+      avatar: DEFAULT_BOT_AVATAR,
+    });
     assert.equal(created.thinkingLevel, undefined, "off by default");
-    const base = { id: created.id, name: created.name, instructions: created.instructions, avatar: created.avatar };
-    const high = await store.update({ ...base, expectedRevision: created.revision, thinkingLevel: "high" });
+    const base = {
+      id: created.id,
+      name: created.name,
+      instructions: created.instructions,
+      avatar: created.avatar,
+    };
+    const high = await store.update({
+      ...base,
+      expectedRevision: created.revision,
+      thinkingLevel: "high",
+    });
     assert.equal(high.thinkingLevel, "high");
     assert.notEqual(high.revision, created.revision);
-    const renamed = await store.update({ ...base, expectedRevision: high.revision, name: "Deep thinker", selfWakeUps: false, messagesOtherBots: false });
+    const renamed = await store.update({
+      ...base,
+      expectedRevision: high.revision,
+      name: "Deep thinker",
+      selfWakeUps: false,
+      messagesOtherBots: false,
+    });
     assert.equal(renamed.thinkingLevel, "high", "an edit that leaves it out keeps it");
     const reopened = await createBotStore({ root: () => root }).get(created.id);
     assert.equal(reopened?.thinkingLevel, "high");
     assert.equal(reopened?.revision, renamed.revision, "a reload hashes to the same revision");
-    const off = await store.update({ ...base, expectedRevision: renamed.revision, thinkingLevel: "off" });
-    assert.equal(Object.prototype.hasOwnProperty.call(off, "thinkingLevel"), false, "off is not stored");
-    assert.equal((await createBotStore({ root: () => root }).get(created.id))?.revision, off.revision);
+    const off = await store.update({
+      ...base,
+      expectedRevision: renamed.revision,
+      thinkingLevel: "off",
+    });
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(off, "thinkingLevel"),
+      false,
+      "off is not stored",
+    );
+    assert.equal(
+      (await createBotStore({ root: () => root }).get(created.id))?.revision,
+      off.revision,
+    );
 
-    await assert.rejects(store.update({ ...base, expectedRevision: off.revision, thinkingLevel: "High" as never }), /thinking level/u);
-    assert.equal((await store.get(created.id))?.revision, off.revision, "a bad level changes nothing");
-    const stored = JSON.parse(await readFile(join(root, "bots.json"), "utf8")) as { bots: Record<string, unknown>[] };
+    await assert.rejects(
+      store.update({ ...base, expectedRevision: off.revision, thinkingLevel: "High" as never }),
+      /thinking level/u,
+    );
+    assert.equal(
+      (await store.get(created.id))?.revision,
+      off.revision,
+      "a bad level changes nothing",
+    );
+    const stored = JSON.parse(await readFile(join(root, "bots.json"), "utf8")) as {
+      bots: Record<string, unknown>[];
+    };
     stored.bots[0]!.thinkingLevel = "ultra";
     await writeFile(join(root, "bots.json"), JSON.stringify(stored));
     const unknown = await createBotStore({ root: () => root }).get(created.id);

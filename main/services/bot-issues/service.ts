@@ -70,7 +70,15 @@ export interface BotIssueService {
 
 export interface BotIssueServiceActions {
   /** Absent hosts fail closed; only the desktop main wiring supplies persistent grants. */
-  allowFolder?(botId: string, access: { folderPath: string; rootId?: string; authorization: import("../../../renderer/shared/bot-access-requests.js").BotAccessAuthorization }, operationId: string): Promise<"added" | "already_allowed">;
+  allowFolder?(
+    botId: string,
+    access: {
+      folderPath: string;
+      rootId?: string;
+      authorization: import("../../../renderer/shared/bot-access-requests.js").BotAccessAuthorization;
+    },
+    operationId: string,
+  ): Promise<"added" | "already_allowed">;
   /** Turn the Bot's routine back on through the routine service's own write. */
   resumeRoutine(botId: string, id: string): Promise<BotIssueResumeResult>;
   stopRun(botId: string): Promise<void>;
@@ -96,13 +104,18 @@ function bound(text: string, limit: number): string {
   const trimmed = text.trim();
   const points = [...trimmed];
   if (points.length <= limit) return trimmed;
-  return `${points.slice(0, limit - 1).join("").trimEnd()}…`;
+  return `${points
+    .slice(0, limit - 1)
+    .join("")
+    .trimEnd()}…`;
 }
 
 function sameAction(left: BotIssueAction, right: BotIssueAction): boolean {
   if (left.kind !== right.kind) return false;
-  if (left.kind === "open_settings" && right.kind === "open_settings") return left.section === right.section;
-  if (left.kind === "resume_routine" && right.kind === "resume_routine") return left.routineId === right.routineId;
+  if (left.kind === "open_settings" && right.kind === "open_settings")
+    return left.section === right.section;
+  if (left.kind === "resume_routine" && right.kind === "resume_routine")
+    return left.routineId === right.routineId;
   return true;
 }
 
@@ -112,10 +125,20 @@ function isOpen(issue: BotIssue): boolean {
 
 /** Run request ids do not alter authority for a future-task-only issue. */
 function accessIdentity(issue: Pick<BotIssue, "access">): string {
-  const access = issue.access, auth = access?.authorization;
-  return JSON.stringify([access?.folderPath, access?.rootId, auth?.policyRevision, auth?.target,
-    auth?.root, auth?.identity?.device, auth?.identity?.inode, auth?.rootId,
-    auth?.inventoryRevision, auth?.choices]);
+  const access = issue.access,
+    auth = access?.authorization;
+  return JSON.stringify([
+    access?.folderPath,
+    access?.rootId,
+    auth?.policyRevision,
+    auth?.target,
+    auth?.root,
+    auth?.identity?.device,
+    auth?.identity?.inode,
+    auth?.rootId,
+    auth?.inventoryRevision,
+    auth?.choices,
+  ]);
 }
 
 /** The issue as the chat card, the entry and every other reader sees it. */
@@ -140,12 +163,12 @@ function published(stored: StoredBotIssue): BotIssue {
  * here too: a row the store would drop on the next read must never be written,
  * because it would never dedupe and every repeat raise would become a new card.
  */
-function buildIssue(
-  input: BotIssueRaise,
-  id: string,
-  at: number,
-): StoredBotIssue {
-  if (typeof input.title !== "string" || typeof input.body !== "string" || !Array.isArray(input.actions)) {
+function buildIssue(input: BotIssueRaise, id: string, at: number): StoredBotIssue {
+  if (
+    typeof input.title !== "string" ||
+    typeof input.body !== "string" ||
+    !Array.isArray(input.actions)
+  ) {
     throw new Error("This issue can’t be stored.");
   }
   const issue: StoredBotIssue = {
@@ -164,8 +187,13 @@ function buildIssue(
     ...(input.quiet === true ? { quiet: true } : {}),
   };
   if (botIssueOf(issue, input.botId) === null) throw new Error("This issue can’t be stored.");
-  if (issue.kind !== "access_needed" && issue.actions.some((action) => action.kind === "dismiss_access")) throw new Error("Only access issues can offer Not now.");
-  if (issue.actions.some((action) => action.kind === "allow_folder") && !issue.access?.folderPath) throw new Error("Only a persistable folder can offer Allow this folder.");
+  if (
+    issue.kind !== "access_needed" &&
+    issue.actions.some((action) => action.kind === "dismiss_access")
+  )
+    throw new Error("Only access issues can offer Not now.");
+  if (issue.actions.some((action) => action.kind === "allow_folder") && !issue.access?.folderPath)
+    throw new Error("Only a persistable folder can offer Allow this folder.");
   return issue;
 }
 
@@ -186,12 +214,22 @@ function statusEntry(issue: BotIssue): BotIssueStatusEntryData & { effectId: str
  */
 function isHeadsUp(issue: StoredBotIssue): boolean {
   if (issue.quiet === true || issue.kind === "run_stalled") return true;
-  return issue.kind === "preflight_failed" && issue.routineId === undefined && issue.dedupeKey.startsWith("execution:");
+  return (
+    issue.kind === "preflight_failed" &&
+    issue.routineId === undefined &&
+    issue.dedupeKey.startsWith("execution:")
+  );
 }
 
 /** An ask that went out once, is still open, waited long enough and was never reminded. */
 function remindable(issue: StoredBotIssue, due: number): boolean {
-  return isOpen(issue) && !isHeadsUp(issue) && issue.reminded !== true && issue.delivered === true && issue.createdAt <= due;
+  return (
+    isOpen(issue) &&
+    !isHeadsUp(issue) &&
+    issue.reminded !== true &&
+    issue.delivered === true &&
+    issue.createdAt <= due
+  );
 }
 
 export function createBotIssueService(dependencies: BotIssueServiceDependencies): BotIssueService {
@@ -239,16 +277,25 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
     // prerequisite for this settlement. Re-read after the previous attempt so
     // concurrent repairs cannot append a status whose marker already landed.
     const active = repairing.get(botId);
-    const attempt = (active ?? Promise.resolve()).catch(() => undefined).then(async () => {
-      for (const row of await dependencies.store.read(botId)) {
-        if (isOpen(row) || row.statusAppended !== false || (issueId !== undefined && row.id !== issueId)) continue;
-        await dependencies.appendEntry(botId, BOT_ISSUE_STATUS_ENTRY_KIND, statusEntry(row));
-        await remember(botId, row.id, { statusAppended: true });
-        notify(botId);
-      }
-    });
+    const attempt = (active ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(async () => {
+        for (const row of await dependencies.store.read(botId)) {
+          if (
+            isOpen(row) ||
+            row.statusAppended !== false ||
+            (issueId !== undefined && row.id !== issueId)
+          )
+            continue;
+          await dependencies.appendEntry(botId, BOT_ISSUE_STATUS_ENTRY_KIND, statusEntry(row));
+          await remember(botId, row.id, { statusAppended: true });
+          notify(botId);
+        }
+      });
     repairing.set(botId, attempt);
-    const clear = () => { if (repairing.get(botId) === attempt) repairing.delete(botId); };
+    const clear = () => {
+      if (repairing.get(botId) === attempt) repairing.delete(botId);
+    };
     void attempt.then(clear, clear);
     return attempt;
   }
@@ -258,17 +305,36 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
     // keeps failed appends available for the next read or mutation to retry.
     if (repairing.has(botId)) return;
     void repairStatuses(botId).catch((error: unknown) => {
-      try { dependencies.onError?.(error); } catch { /* Reporting cannot change the issue. */ }
+      try {
+        dependencies.onError?.(error);
+      } catch {
+        /* Reporting cannot change the issue. */
+      }
     });
   }
 
   /** Settle one stored issue by key; false when it is no longer open. */
-  async function settle(botId: string, dedupeKey: string, resolution: BotIssueResolution, issueId?: string): Promise<boolean> {
+  async function settle(
+    botId: string,
+    dedupeKey: string,
+    resolution: BotIssueResolution,
+    issueId?: string,
+  ): Promise<boolean> {
     const settled = await dependencies.store.change(botId, (issues) => {
-      const index = issues.findIndex((issue) => isOpen(issue) && issue.dedupeKey === dedupeKey && (issueId === undefined || issue.id === issueId));
+      const index = issues.findIndex(
+        (issue) =>
+          isOpen(issue) &&
+          issue.dedupeKey === dedupeKey &&
+          (issueId === undefined || issue.id === issueId),
+      );
       if (index < 0) return { issues, result: undefined };
       const next = [...issues];
-      next[index] = { ...issues[index]!, resolvedAt: dependencies.now(), resolution, statusAppended: false };
+      next[index] = {
+        ...issues[index]!,
+        resolvedAt: dependencies.now(),
+        resolution,
+        statusAppended: false,
+      };
       return { issues: next, result: next[index]! };
     });
     if (settled === undefined) return false;
@@ -297,9 +363,21 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
       if (!issue.actions.some((offered) => sameAction(offered, action))) {
         return { issues, result: "invalid" };
       }
-      if (action.kind === "allow_folder" && (!issue.access?.folderPath || !dependencies.actions.allowFolder || issue.access.authorization.target !== "folder" || !issue.access.authorization.choices.includes("always"))) return { issues, result: "invalid" };
+      if (
+        action.kind === "allow_folder" &&
+        (!issue.access?.folderPath ||
+          !dependencies.actions.allowFolder ||
+          issue.access.authorization.target !== "folder" ||
+          !issue.access.authorization.choices.includes("always"))
+      )
+        return { issues, result: "invalid" };
       const next = [...issues];
-      next[index] = { ...issue, resolvedAt: dependencies.now(), resolution, ...(action.kind === "dismiss_access" ? { statusAppended: false } : {}) };
+      next[index] = {
+        ...issue,
+        resolvedAt: dependencies.now(),
+        resolution,
+        ...(action.kind === "dismiss_access" ? { statusAppended: false } : {}),
+      };
       return { issues: next, result: next[index]! };
     });
   }
@@ -308,7 +386,11 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
   function release(botId: string, claimed: StoredBotIssue): Promise<void> {
     return dependencies.store.change(botId, (issues) => ({
       issues: issues.map((row) => {
-        if (row.id !== claimed.id || row.resolvedAt !== claimed.resolvedAt || row.resolution !== claimed.resolution) {
+        if (
+          row.id !== claimed.id ||
+          row.resolvedAt !== claimed.resolvedAt ||
+          row.resolution !== claimed.resolution
+        ) {
           return row;
         }
         const reopened: StoredBotIssue = { ...row };
@@ -327,7 +409,9 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
     resolution: BotIssueResolution,
   ): Promise<StoredBotIssue> {
     return dependencies.store.change(botId, (issues) => {
-      const index = issues.findIndex((row) => row.id === claimed.id && row.resolvedAt === claimed.resolvedAt);
+      const index = issues.findIndex(
+        (row) => row.id === claimed.id && row.resolvedAt === claimed.resolvedAt,
+      );
       if (index < 0) return { issues, result: claimed };
       const next = [...issues];
       next[index] = { ...issues[index]!, resolution };
@@ -336,26 +420,36 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
   }
 
   /** Write the new issue, then every side effect it has not landed yet. */
-  async function deliverRaise(
-    input: BotIssueRaise,
-  ): Promise<BotIssue> {
+  async function deliverRaise(input: BotIssueRaise): Promise<BotIssue> {
     const raised = await dependencies.store.change(input.botId, (issues) => {
       const existing = issues.find((issue) => isOpen(issue) && issue.dedupeKey === input.dedupeKey);
-      if (existing && (input.kind !== "access_needed" || accessIdentity(existing) === accessIdentity(input))) return { issues, result: { issue: existing, created: false, superseded: undefined } };
+      if (
+        existing &&
+        (input.kind !== "access_needed" || accessIdentity(existing) === accessIdentity(input))
+      )
+        return { issues, result: { issue: existing, created: false, superseded: undefined } };
 
       const at = dependencies.now();
       const issue = buildIssue(input, randomUUID(), at);
       const open = issues.filter(isOpen);
       // The ninth open issue settles the oldest: the person always has at
       // most eight decisions, and the card they lose says why it left.
-      const oldest = existing ?? (
-        open.length < BOT_ISSUE_LIMITS.openPerBot
+      const oldest =
+        existing ??
+        (open.length < BOT_ISSUE_LIMITS.openPerBot
           ? undefined
           : [...open].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))[0]);
       const superseded =
-        oldest === undefined ? undefined : { ...oldest, resolvedAt: at, resolution: "superseded" as const, statusAppended: false };
+        oldest === undefined
+          ? undefined
+          : { ...oldest, resolvedAt: at, resolution: "superseded" as const, statusAppended: false };
       return {
-        issues: [issue, ...(superseded === undefined ? issues : issues.map((row) => (row.id === superseded.id ? superseded : row)))],
+        issues: [
+          issue,
+          ...(superseded === undefined
+            ? issues
+            : issues.map((row) => (row.id === superseded.id ? superseded : row))),
+        ],
         result: { issue, created: true, superseded },
       };
     });
@@ -372,7 +466,9 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
       await dependencies.funnel.deliver({
         botId: input.botId,
         class: "issue",
-        ...(issue.kind === "access_needed" ? { requiredCapability: "bot:access-requests" as const } : {}),
+        ...(issue.kind === "access_needed"
+          ? { requiredCapability: "bot:access-requests" as const }
+          : {}),
         dedupeKey: `issue:${issue.id}`,
         title: issue.title,
         body: issue.body,
@@ -392,7 +488,9 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
       const inFlight = raising.get(key);
       const identity = input.kind === "access_needed" ? accessIdentity(input) : "ordinary";
       if (inFlight?.identity === identity) return inFlight.attempt;
-      const attempt = inFlight ? inFlight.attempt.catch(() => undefined).then(() => deliverRaise(input)) : deliverRaise(input);
+      const attempt = inFlight
+        ? inFlight.attempt.catch(() => undefined).then(() => deliverRaise(input))
+        : deliverRaise(input);
       const pending = { identity, attempt };
       raising.set(key, pending);
       const clear = () => {
@@ -427,26 +525,53 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
             return "done";
           }
           const access = issue.access;
-          if (!issue.actions.some((offered) => sameAction(offered, action)) || !access?.folderPath || !dependencies.actions.allowFolder || access.authorization.target !== "folder" || !access.authorization.choices.includes("always")) return "invalid";
-          try { await dependencies.actions.allowFolder(botId, { folderPath: access.folderPath, ...(access.rootId ? { rootId: access.rootId } : {}), authorization: access.authorization }, issue.id); }
-          catch (error) {
+          if (
+            !issue.actions.some((offered) => sameAction(offered, action)) ||
+            !access?.folderPath ||
+            !dependencies.actions.allowFolder ||
+            access.authorization.target !== "folder" ||
+            !access.authorization.choices.includes("always")
+          )
+            return "invalid";
+          try {
+            await dependencies.actions.allowFolder(
+              botId,
+              {
+                folderPath: access.folderPath,
+                ...(access.rootId ? { rootId: access.rootId } : {}),
+                authorization: access.authorization,
+              },
+              issue.id,
+            );
+          } catch (error) {
             if (error instanceof BotFolderGrantReplayStaleError) {
               await settle(botId, issue.dedupeKey, "superseded", issue.id);
               return "not_open";
             }
-            if (error instanceof BotAccessRequestStaleError) await settle(botId, issue.dedupeKey, "superseded", issue.id);
+            if (error instanceof BotAccessRequestStaleError)
+              await settle(botId, issue.dedupeKey, "superseded", issue.id);
             throw error;
           }
           const fixed = await dependencies.store.change(botId, (issues) => {
             const current = issues.find((row) => row.id === issueId);
             if (!current || !isOpen(current)) return { issues, result: undefined };
-            const settled = { ...current, resolvedAt: dependencies.now(), resolution: "fixed" as const, statusAppended: false };
-            return { issues: issues.map((row) => row.id === issueId ? settled : row), result: settled };
+            const settled = {
+              ...current,
+              resolvedAt: dependencies.now(),
+              resolution: "fixed" as const,
+              statusAppended: false,
+            };
+            return {
+              issues: issues.map((row) => (row.id === issueId ? settled : row)),
+              result: settled,
+            };
           });
           notify(botId);
           if (fixed) await repairStatuses(botId, fixed.id);
           return "done";
-        } finally { allowingFolders.delete(key); }
+        } finally {
+          allowingFolders.delete(key);
+        }
       }
       // Opening a surface is not a fix and changes no Bot state, so these two
       // answer the card without settling it (and without a claim to release).
@@ -454,7 +579,8 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
         const issue = (await dependencies.store.read(botId)).find((row) => row.id === issueId);
         if (!issue || !isOpen(issue)) return "not_open";
         if (!issue.actions.some((offered) => sameAction(offered, action))) return "invalid";
-        if (action.kind === "open_settings") dependencies.actions.openSettings(botId, action.section);
+        if (action.kind === "open_settings")
+          dependencies.actions.openSettings(botId, action.section);
         return "done";
       }
 
@@ -489,7 +615,8 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
         throw error;
       }
 
-      const settled = resolution === claimed.resolution ? claimed : await resettle(botId, claimed, resolution);
+      const settled =
+        resolution === claimed.resolution ? claimed : await resettle(botId, claimed, resolution);
       await remember(botId, settled.id, { statusAppended: false });
       await repairStatuses(settled.botId);
       notify(botId);
@@ -520,7 +647,9 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
         await dependencies.funnel.deliver({
           botId,
           class: "issue",
-          ...(issue.kind === "access_needed" ? { requiredCapability: "bot:access-requests" as const } : {}),
+          ...(issue.kind === "access_needed"
+            ? { requiredCapability: "bot:access-requests" as const }
+            : {}),
           dedupeKey: `issue-reminder:${issue.id}`,
           title: botIssueReminderTitle(issue.title),
           body: issue.body,

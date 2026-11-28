@@ -5,7 +5,16 @@
 // controls (one provider's key or fetch, one model row), never the whole page.
 
 import * as React from "react";
-import { Check, ChevronDown, KeyRound, Loader2, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  KeyRound,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+} from "lucide-react";
 import {
   AlertDialog,
   Badge,
@@ -97,12 +106,12 @@ export function ImageGenerationSettings() {
   // Inline notices keyed like the actions: `key:<provider>` and `fetch:<provider>`.
   const [notices, setNotices] = React.useState<Readonly<Record<string, Notice>>>({});
   const [setupProvider, setSetupProvider] = React.useState<ImageGenerationProviderId | null>(null);
-  const setupTriggers = React.useRef<Partial<Record<ImageGenerationProviderId, HTMLButtonElement | null>>>({});
+  const setupTriggers = React.useRef<
+    Partial<Record<ImageGenerationProviderId, HTMLButtonElement | null>>
+  >({});
   const [addingModel, setAddingModel] = React.useState(false);
   const addModelTrigger = React.useRef<HTMLButtonElement>(null);
-  const [confirmRemove, setConfirmRemove] = React.useState<ImageGenerationProviderId | null>(
-    null,
-  );
+  const [confirmRemove, setConfirmRemove] = React.useState<ImageGenerationProviderId | null>(null);
 
   const load = React.useCallback(async () => {
     try {
@@ -181,8 +190,10 @@ export function ImageGenerationSettings() {
   const removeKey = async (provider: ImageGenerationProviderId) => {
     setNotice(`key:${provider}`, null);
     const result = await run(`key:${provider}`, () => imageGenerationApi.removeKey(provider));
-    if (result && !result.ok) setNotice(`key:${provider}`, { tone: "error", message: result.message });
-    else if (result?.ok) toast.success(`${IMAGE_GENERATION_PROVIDER_NAMES[provider]} image key removed.`);
+    if (result && !result.ok)
+      setNotice(`key:${provider}`, { tone: "error", message: result.message });
+    else if (result?.ok)
+      toast.success(`${IMAGE_GENERATION_PROVIDER_NAMES[provider]} image key removed.`);
   };
 
   const fetchModels = async (provider: ImageGenerationProviderId) => {
@@ -310,7 +321,12 @@ export function ImageGenerationSettings() {
         onSetMany={setModelsEnabled}
         onRemove={removeModel}
         addModelButton={
-          <Button ref={addModelTrigger} variant="muted" size="small" onClick={() => setAddingModel(true)}>
+          <Button
+            ref={addModelTrigger}
+            variant="muted"
+            size="small"
+            onClick={() => setAddingModel(true)}
+          >
             <Plus aria-hidden="true" />
             Add model by ID…
           </Button>
@@ -346,11 +362,16 @@ export function ImageGenerationSettings() {
   );
 }
 
-function providerSubtitle(state: ImageGenerationState, provider: ImageGenerationProviderView): string {
+function providerSubtitle(
+  state: ImageGenerationState,
+  provider: ImageGenerationProviderView,
+): string {
   const models = state.models.filter((model) => model.provider === provider.id);
   const on = models.filter((model) => model.enabled).length;
   const counts = `${models.length} ${models.length === 1 ? "model" : "models"} · ${on} on`;
-  return provider.fetchedAt ? `${counts} · fetched ${formatRelativeTime(provider.fetchedAt)}` : counts;
+  return provider.fetchedAt
+    ? `${counts} · fetched ${formatRelativeTime(provider.fetchedAt)}`
+    : counts;
 }
 
 function KeyStatusBadge({ provider }: { provider: ImageGenerationProviderView }) {
@@ -470,7 +491,10 @@ function ProviderSetupDialog({
                 />
                 <Button type="submit" size="medium" disabled={savingKey || !draft.trim()}>
                   {savingKey ? (
-                    <Loader2 aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+                    <Loader2
+                      aria-hidden="true"
+                      className="animate-spin motion-reduce:animate-none"
+                    />
                   ) : null}
                   Save key
                 </Button>
@@ -546,8 +570,8 @@ function ProviderSetupDialog({
           </div>
           {fetchBlocked ? (
             <Text id={fetchHintId} as="p" variant="small" color="secondary">
-              Add a {provider.name} key to fetch its model list. {provider.name} requires one for its
-              catalog.
+              Add a {provider.name} key to fetch its model list. {provider.name} requires one for
+              its catalog.
             </Text>
           ) : null}
           <NoticeLine notice={fetchNotice} />
@@ -575,7 +599,9 @@ function ModelOptionLabel({ model }: { model: ImageGenerationModelView }) {
         className="size-3.5 text-secondary"
       />
       <span className="truncate">{model.name}</span>
-      <span className="shrink-0 text-tertiary">{IMAGE_GENERATION_PROVIDER_NAMES[model.provider]}</span>
+      <span className="shrink-0 text-tertiary">
+        {IMAGE_GENERATION_PROVIDER_NAMES[model.provider]}
+      </span>
     </span>
   );
 }
@@ -644,7 +670,8 @@ type ProviderFilter = ImageGenerationProviderId | "all";
 
 function matchesQuery(model: ImageGenerationModelView, terms: readonly string[]): boolean {
   if (terms.length === 0) return true;
-  const haystack = `${model.name} ${model.id} ${model.maker ?? ""} ${IMAGE_GENERATION_PROVIDER_NAMES[model.provider]}`.toLocaleLowerCase();
+  const haystack =
+    `${model.name} ${model.id} ${model.maker ?? ""} ${IMAGE_GENERATION_PROVIDER_NAMES[model.provider]}`.toLocaleLowerCase();
   return terms.every((term) => haystack.includes(term));
 }
 
@@ -663,7 +690,8 @@ function bulkChanges(
   connected: ReadonlySet<ImageGenerationProviderId>,
 ): ImageGenerationSetModelEnabledRequest[] {
   return models.flatMap((model) => {
-    const enabled = action === "on" ? true : action === "off" ? false : connected.has(model.provider);
+    const enabled =
+      action === "on" ? true : action === "off" ? false : connected.has(model.provider);
     return model.enabled === enabled ? [] : [{ provider: model.provider, id: model.id, enabled }];
   });
 }
@@ -687,7 +715,9 @@ function ModelsGroup({
   state: ImageGenerationState;
   pending: ReadonlySet<string>;
   onToggle: (model: ImageGenerationModelView, enabled: boolean) => void;
-  onSetMany: (changes: ImageGenerationSetModelEnabledRequest[]) => Promise<ImageGenerationActionResult | null>;
+  onSetMany: (
+    changes: ImageGenerationSetModelEnabledRequest[],
+  ) => Promise<ImageGenerationActionResult | null>;
   onRemove: (model: ImageGenerationModelView) => void;
   addModelButton: React.ReactNode;
 }) {
@@ -706,9 +736,7 @@ function ModelsGroup({
     setBulkMessage(null);
   }, [terms, filter, showOff]);
 
-  const inFilter = state.models.filter(
-    (model) => filter === "all" || model.provider === filter,
-  );
+  const inFilter = state.models.filter((model) => filter === "all" || model.provider === filter);
   // Fetched models start off; keep them out of the way until searched for.
   const hiddenOff = (model: ImageGenerationModelView) =>
     model.origin === "fetched" && !model.enabled;
@@ -757,7 +785,11 @@ function ModelsGroup({
           />
         </label>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter models by provider">
+          <div
+            className="flex flex-wrap gap-1.5"
+            role="group"
+            aria-label="Filter models by provider"
+          >
             {(["all", ...IMAGE_GENERATION_PROVIDER_IDS] as const).map((option) => (
               <Button
                 key={option}
@@ -827,7 +859,9 @@ function ModelsGroup({
 
       {rows.length === 0 ? (
         <Text as="p" variant="small" color="secondary" className="px-4 pb-4" role="status">
-          {terms.length > 0 ? `No image models match “${query.trim()}”.` : "No image models here yet."}
+          {terms.length > 0
+            ? `No image models match “${query.trim()}”.`
+            : "No image models here yet."}
         </Text>
       ) : null}
 
@@ -839,7 +873,11 @@ function ModelsGroup({
               : `${hiddenCount} more from Fetch latest ${hiddenCount === 1 ? "is" : "are"} off. Search to find them.`}
           </Text>
           {matching.length > rows.length ? (
-            <Button size="small" variant="muted" onClick={() => setLimit((value) => value + MODEL_ROW_PAGE)}>
+            <Button
+              size="small"
+              variant="muted"
+              onClick={() => setLimit((value) => value + MODEL_ROW_PAGE)}
+            >
               Show more
             </Button>
           ) : (
@@ -867,7 +905,11 @@ const ModelRow = React.memo(function ModelRow({
   onRemove: (model: ImageGenerationModelView) => void;
 }) {
   const origin =
-    model.origin === "fetched" ? "From Fetch latest" : model.origin === "custom" ? "Added by you" : null;
+    model.origin === "fetched"
+      ? "From Fetch latest"
+      : model.origin === "custom"
+        ? "Added by you"
+        : null;
   return (
     <Field
       label={
@@ -930,7 +972,9 @@ function AddModelDialog({
   returnFocus,
 }: {
   busy: boolean;
-  onAdd: (request: ImageGenerationAddCustomModelRequest) => Promise<ImageGenerationActionResult | null>;
+  onAdd: (
+    request: ImageGenerationAddCustomModelRequest,
+  ) => Promise<ImageGenerationActionResult | null>;
   onClose: () => void;
   returnFocus: () => HTMLElement | null;
 }) {
@@ -964,7 +1008,8 @@ function AddModelDialog({
     if (provider === "openrouter" && references) request.acceptsReferenceImages = true;
     if (provider === "fal" && editEndpoint.trim()) request.editEndpoint = editEndpoint.trim();
     const fieldApplies = provider === "replicate" || (provider === "fal" && editEndpoint.trim());
-    if (fieldApplies && referenceField !== NO_REFERENCE_FIELD) request.referenceField = referenceField;
+    if (fieldApplies && referenceField !== NO_REFERENCE_FIELD)
+      request.referenceField = referenceField;
     const result = await onAdd(request);
     if (!result) return;
     if (!result.ok) {

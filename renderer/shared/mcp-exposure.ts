@@ -26,8 +26,12 @@ function isExposure(value: unknown): value is McpExposure {
 }
 
 function validToolName(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= MCP_HIDDEN_TOOLS_LIMITS.nameChars &&
-    ![...value].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MCP_HIDDEN_TOOLS_LIMITS.nameChars &&
+    ![...value].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
+  );
 }
 
 /** Throws on an unknown exposure or a malformed, oversized or duplicated hidden-tool list. */
@@ -37,17 +41,27 @@ export function validateMcpExposureFields(server: ExposureFields): void {
   }
   if (server.hiddenTools === undefined) return;
   const list = server.hiddenTools;
-  if (!Array.isArray(list) || list.length > MCP_HIDDEN_TOOLS_LIMITS.count || !list.every(validToolName)) {
-    throw new Error(`Hidden MCP tools must be at most ${MCP_HIDDEN_TOOLS_LIMITS.count} tool names of 1–${MCP_HIDDEN_TOOLS_LIMITS.nameChars} characters.`);
+  if (
+    !Array.isArray(list) ||
+    list.length > MCP_HIDDEN_TOOLS_LIMITS.count ||
+    !list.every(validToolName)
+  ) {
+    throw new Error(
+      `Hidden MCP tools must be at most ${MCP_HIDDEN_TOOLS_LIMITS.count} tool names of 1–${MCP_HIDDEN_TOOLS_LIMITS.nameChars} characters.`,
+    );
   }
-  if (new Set(list).size !== list.length) throw new Error("Hidden MCP tools must not repeat a tool name.");
+  if (new Set(list).size !== list.length)
+    throw new Error("Hidden MCP tools must not repeat a tool name.");
 }
 
 /**
  * Normalized fields for a parsed server: `auto` and an empty list are the
  * defaults and are omitted, so untouched servers keep their stored shape.
  */
-export function normalizeMcpExposureFields(server: ExposureFields): { exposure?: McpExposure; hiddenTools?: string[] } {
+export function normalizeMcpExposureFields(server: ExposureFields): {
+  exposure?: McpExposure;
+  hiddenTools?: string[];
+} {
   validateMcpExposureFields(server);
   const exposure = server.exposure as McpExposure | undefined;
   const hiddenTools = server.hiddenTools as string[] | undefined;
@@ -66,7 +80,10 @@ export function mcpServerOffersTools(server: { exposure?: McpExposure }): boolea
   return mcpServerExposure(server) !== "hidden";
 }
 
-export function isMcpToolHidden(server: { exposure?: McpExposure; hiddenTools?: readonly string[] }, toolName: string): boolean {
+export function isMcpToolHidden(
+  server: { exposure?: McpExposure; hiddenTools?: readonly string[] },
+  toolName: string,
+): boolean {
   return !mcpServerOffersTools(server) || (server.hiddenTools?.includes(toolName) ?? false);
 }
 

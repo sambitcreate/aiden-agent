@@ -69,7 +69,9 @@ export function inboxTriageHold(
   now: number,
 ): { done: boolean; snoozed: boolean } {
   return {
-    done: signals.doneAt !== undefined && (signals.lastAssistantAt ?? Number.NEGATIVE_INFINITY) <= signals.doneAt,
+    done:
+      signals.doneAt !== undefined &&
+      (signals.lastAssistantAt ?? Number.NEGATIVE_INFINITY) <= signals.doneAt,
     snoozed: signals.snoozedUntil !== undefined && signals.snoozedUntil > now,
   };
 }
@@ -110,7 +112,8 @@ export function inboxState(
   }
   // 6–8.
   if (signals.pinnedAt !== undefined) return { shelf: "pinned", tier: 0, sortAt: signals.pinnedAt };
-  if (unread) return { shelf: "updates", tier: 0, sortAt: signals.lastAssistantAt ?? signals.updatedAt };
+  if (unread)
+    return { shelf: "updates", tier: 0, sortAt: signals.lastAssistantAt ?? signals.updatedAt };
   // The open chat stays listed however old it is.
   if (signals.isOpen || now - signals.updatedAt <= recentWindowMs) {
     return { shelf: "earlier", tier: 0, sortAt: signals.updatedAt };
@@ -124,7 +127,15 @@ export function inboxState(
  * the triage that hides the row. `earlier` also covers chats older than the
  * recent window, because the host leaves that window to the reader.
  */
-export const INBOX_BUCKETS = ["needs_you", "pinned", "updates", "earlier", "working", "snoozed", "done"] as const;
+export const INBOX_BUCKETS = [
+  "needs_you",
+  "pinned",
+  "updates",
+  "earlier",
+  "working",
+  "snoozed",
+  "done",
+] as const;
 export type InboxBucket = (typeof INBOX_BUCKETS)[number];
 
 export function isInboxBucket(value: unknown): value is InboxBucket {
@@ -158,7 +169,10 @@ export interface HostInboxPlacement {
  * snooze that holds too; a reader shows a `snoozed` row past its
  * `snoozedUntil` (on the reader's clock) as awake.
  */
-export function hostInboxPlacement(signals: Readonly<HostInboxSignals>, now: number): HostInboxPlacement {
+export function hostInboxPlacement(
+  signals: Readonly<HostInboxSignals>,
+  now: number,
+): HostInboxPlacement {
   const asHost: InboxSignals = { ...signals, isOpen: false, hostOnline: true };
   const placement = inboxState(asHost, now, Number.POSITIVE_INFINITY);
   if (placement.shelf !== "hidden") return { bucket: placement.shelf, sortAt: placement.sortAt };

@@ -1,6 +1,10 @@
 import { PostHog, type PostHogOptions } from "posthog-node";
 
-import { validateOutgoingEvent, type AnalyticsMessage, type AnalyticsTransport } from "./analytics-core.js";
+import {
+  validateOutgoingEvent,
+  type AnalyticsMessage,
+  type AnalyticsTransport,
+} from "./analytics-core.js";
 
 // The only module that imports posthog-node. It is constructed only when a
 // release key is present and sending is allowed; dev, test and E2E builds
@@ -38,14 +42,18 @@ class AidenPostHog extends PostHog {
   // before discard, passes through here. Once revoked, nothing more is
   // dispatched and requests still in flight are aborted. Bytes already on
   // the wire cannot be recalled.
-  override fetch(url: string, options: Parameters<PostHog["fetch"]>[1]): ReturnType<PostHog["fetch"]> {
+  override fetch(
+    url: string,
+    options: Parameters<PostHog["fetch"]>[1],
+  ): ReturnType<PostHog["fetch"]> {
     if (this.revocation.signal.aborted) {
       return Promise.reject(new Error("Analytics sending was stopped."));
     }
     const signal = options.signal
       ? AbortSignal.any([options.signal, this.revocation.signal])
       : this.revocation.signal;
-    if (new URL(url).origin !== ANALYTICS_HOST) return Promise.reject(new Error("Invalid analytics destination."));
+    if (new URL(url).origin !== ANALYTICS_HOST)
+      return Promise.reject(new Error("Invalid analytics destination."));
     const request = { ...options, signal, redirect: "error" as const };
     return super.fetch(url, request);
   }
@@ -59,7 +67,10 @@ class AidenPostHog extends PostHog {
   }
 }
 
-export function postHogClientOptions(fetchImpl?: PostHogOptions["fetch"], retryDelayMs?: number): PostHogOptions {
+export function postHogClientOptions(
+  fetchImpl?: PostHogOptions["fetch"],
+  retryDelayMs?: number,
+): PostHogOptions {
   return {
     host: ANALYTICS_HOST,
     flushAt: 20,
@@ -82,7 +93,10 @@ export function postHogClientOptions(fetchImpl?: PostHogOptions["fetch"], retryD
 
 export function createPostHogTransport(options: PostHogTransportOptions): PostHogTransport {
   const createClient = () => {
-    const client = new AidenPostHog(options.apiKey, postHogClientOptions(options.fetch, options.retryDelayMs));
+    const client = new AidenPostHog(
+      options.apiKey,
+      postHogClientOptions(options.fetch, options.retryDelayMs),
+    );
     client.on("error", (error: unknown) => options.onError?.(error));
     return client;
   };
@@ -137,7 +151,9 @@ export function createPostHogTransport(options: PostHogTransportOptions): PostHo
       // "error". A failure from another request in flight just means this
       // record is sent again later under the same id.
       let failed = false;
-      const stopListening = client.on("error", () => { failed = true; });
+      const stopListening = client.on("error", () => {
+        failed = true;
+      });
       try {
         await client.captureImmediate(toEvent(message));
         return !failed;

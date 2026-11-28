@@ -1,11 +1,81 @@
 import * as React from "react";
 import {
-  Activity, Archive, ArrowDown, ArrowRight, ArrowUp, Battery, BookOpen, Bug, Calendar, Camera, ChartBar, ChartLine,
-  ChartPie, Check, Circle, CircleAlert, CircleCheck, CircleX, Clock, Cloud, Code, Coffee, Cpu, CreditCard, Database,
-  DollarSign, Download, FileText, Flag, Folder, GitBranch, Globe, GraduationCap, Heart, House, Image, Info, Leaf,
-  Lightbulb, Link, Lock, Mail, MapPin, MessageSquare, Minus, Moon, Music, Package, Phone, Plus, Rocket, Search, Server,
-  Settings, Shield, ShoppingCart, Sparkles, Star, Sun, Target, Terminal, ThumbsDown, ThumbsUp, Timer, TrendingDown,
-  TrendingUp, TriangleAlert, Truck, Upload, User, Users, Video, Wifi, Wrench, X, Zap,
+  Activity,
+  Archive,
+  ArrowDown,
+  ArrowRight,
+  ArrowUp,
+  Battery,
+  BookOpen,
+  Bug,
+  Calendar,
+  Camera,
+  ChartBar,
+  ChartLine,
+  ChartPie,
+  Check,
+  Circle,
+  CircleAlert,
+  CircleCheck,
+  CircleX,
+  Clock,
+  Cloud,
+  Code,
+  Coffee,
+  Cpu,
+  CreditCard,
+  Database,
+  DollarSign,
+  Download,
+  FileText,
+  Flag,
+  Folder,
+  GitBranch,
+  Globe,
+  GraduationCap,
+  Heart,
+  House,
+  Image,
+  Info,
+  Leaf,
+  Lightbulb,
+  Link,
+  Lock,
+  Mail,
+  MapPin,
+  MessageSquare,
+  Minus,
+  Moon,
+  Music,
+  Package,
+  Phone,
+  Plus,
+  Rocket,
+  Search,
+  Server,
+  Settings,
+  Shield,
+  ShoppingCart,
+  Sparkles,
+  Star,
+  Sun,
+  Target,
+  Terminal,
+  ThumbsDown,
+  ThumbsUp,
+  Timer,
+  TrendingDown,
+  TrendingUp,
+  TriangleAlert,
+  Truck,
+  Upload,
+  User,
+  Users,
+  Video,
+  Wifi,
+  Wrench,
+  X,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { truthy } from "../../shared/aiden-ui/evaluate";
@@ -31,8 +101,26 @@ import {
   Separator,
   Switch,
 } from "../ui";
-import { Checkbox, DataTable, Disclosure, Kbd, Progress, Segmented, Slider, Stat, Tabs, Tooltip } from "../ui-primitives";
-import { AidenUiBarList, AidenUiChart, AidenUiHeatmap, AidenUiSparkline, formatCell, type ChartProps } from "./chart";
+import {
+  Checkbox,
+  DataTable,
+  Disclosure,
+  Kbd,
+  Progress,
+  Segmented,
+  Slider,
+  Stat,
+  Tabs,
+  Tooltip,
+} from "../ui-primitives";
+import {
+  AidenUiBarList,
+  AidenUiChart,
+  AidenUiHeatmap,
+  AidenUiSparkline,
+  formatCell,
+  type ChartProps,
+} from "./chart";
 import {
   asNumber,
   asRecord,
@@ -57,19 +145,81 @@ export interface CatalogComponentProps {
 type CatalogComponent = (props: CatalogComponentProps) => React.ReactNode;
 
 const ICONS: Record<AidenUiIconName, LucideIcon> = {
-  activity: Activity, "alert-triangle": TriangleAlert, archive: Archive, "arrow-down": ArrowDown,
-  "arrow-right": ArrowRight, "arrow-up": ArrowUp, "bar-chart": ChartBar, battery: Battery, "book-open": BookOpen,
-  bug: Bug, calendar: Calendar, camera: Camera, check: Check, "circle-alert": CircleAlert, "circle-check": CircleCheck,
-  "circle-x": CircleX, clock: Clock, cloud: Cloud, code: Code, coffee: Coffee, cpu: Cpu, "credit-card": CreditCard,
-  database: Database, "dollar-sign": DollarSign, download: Download, "file-text": FileText, flag: Flag, folder: Folder,
-  "git-branch": GitBranch, globe: Globe, "graduation-cap": GraduationCap, heart: Heart, home: House, image: Image,
-  info: Info, leaf: Leaf, lightbulb: Lightbulb, "line-chart": ChartLine, link: Link, lock: Lock, mail: Mail,
-  "map-pin": MapPin, "message-square": MessageSquare, minus: Minus, moon: Moon, music: Music, package: Package,
-  phone: Phone, "pie-chart": ChartPie, plus: Plus, rocket: Rocket, search: Search, server: Server, settings: Settings,
-  shield: Shield, "shopping-cart": ShoppingCart, sparkles: Sparkles, star: Star, sun: Sun, target: Target,
-  terminal: Terminal, "thumbs-down": ThumbsDown, "thumbs-up": ThumbsUp, timer: Timer, "trending-down": TrendingDown,
-  "trending-up": TrendingUp, truck: Truck, upload: Upload, user: User, users: Users, video: Video, wifi: Wifi,
-  wrench: Wrench, x: X, zap: Zap,
+  activity: Activity,
+  "alert-triangle": TriangleAlert,
+  archive: Archive,
+  "arrow-down": ArrowDown,
+  "arrow-right": ArrowRight,
+  "arrow-up": ArrowUp,
+  "bar-chart": ChartBar,
+  battery: Battery,
+  "book-open": BookOpen,
+  bug: Bug,
+  calendar: Calendar,
+  camera: Camera,
+  check: Check,
+  "circle-alert": CircleAlert,
+  "circle-check": CircleCheck,
+  "circle-x": CircleX,
+  clock: Clock,
+  cloud: Cloud,
+  code: Code,
+  coffee: Coffee,
+  cpu: Cpu,
+  "credit-card": CreditCard,
+  database: Database,
+  "dollar-sign": DollarSign,
+  download: Download,
+  "file-text": FileText,
+  flag: Flag,
+  folder: Folder,
+  "git-branch": GitBranch,
+  globe: Globe,
+  "graduation-cap": GraduationCap,
+  heart: Heart,
+  home: House,
+  image: Image,
+  info: Info,
+  leaf: Leaf,
+  lightbulb: Lightbulb,
+  "line-chart": ChartLine,
+  link: Link,
+  lock: Lock,
+  mail: Mail,
+  "map-pin": MapPin,
+  "message-square": MessageSquare,
+  minus: Minus,
+  moon: Moon,
+  music: Music,
+  package: Package,
+  phone: Phone,
+  "pie-chart": ChartPie,
+  plus: Plus,
+  rocket: Rocket,
+  search: Search,
+  server: Server,
+  settings: Settings,
+  shield: Shield,
+  "shopping-cart": ShoppingCart,
+  sparkles: Sparkles,
+  star: Star,
+  sun: Sun,
+  target: Target,
+  terminal: Terminal,
+  "thumbs-down": ThumbsDown,
+  "thumbs-up": ThumbsUp,
+  timer: Timer,
+  "trending-down": TrendingDown,
+  "trending-up": TrendingUp,
+  truck: Truck,
+  upload: Upload,
+  user: User,
+  users: Users,
+  video: Video,
+  wifi: Wifi,
+  wrench: Wrench,
+  x: X,
+  zap: Zap,
 };
 
 /** Only the icon names in ICONS draw; any other name, including an inherited one, draws nothing. */
@@ -91,7 +241,9 @@ function gapStyle(value: unknown, fallback: number): React.CSSProperties {
 }
 
 function textContent(nodes: readonly AidenUiNodeV1[] | undefined): string {
-  return (nodes ?? []).map((node) => (node.t === "#text" ? node.s ?? "" : textContent(node.c))).join("");
+  return (nodes ?? [])
+    .map((node) => (node.t === "#text" ? (node.s ?? "") : textContent(node.c)))
+    .join("");
 }
 
 function read(node: AidenUiNodeV1, ctx: AidenUiRenderContext, name: string): unknown {
@@ -110,7 +262,16 @@ const Stack: CatalogComponent = ({ node, ctx }) => {
   const align = asString(read(node, ctx, "align"));
   return (
     <div
-      className={cn("flex min-w-0 flex-col", align === "center" ? "items-center" : align === "end" ? "items-end" : align === "start" ? "items-start" : "items-stretch")}
+      className={cn(
+        "flex min-w-0 flex-col",
+        align === "center"
+          ? "items-center"
+          : align === "end"
+            ? "items-end"
+            : align === "start"
+              ? "items-start"
+              : "items-stretch",
+      )}
       style={gapStyle(read(node, ctx, "gap"), 3)}
     >
       {ctx.renderChildren(node.c)}
@@ -127,8 +288,20 @@ const Row: CatalogComponent = ({ node, ctx }) => {
       className={cn(
         "flex min-w-0",
         wrap === false ? "flex-nowrap" : "flex-wrap",
-        align === "start" ? "items-start" : align === "end" ? "items-end" : align === "stretch" ? "items-stretch" : "items-center",
-        justify === "center" ? "justify-center" : justify === "end" ? "justify-end" : justify === "between" ? "justify-between" : "justify-start",
+        align === "start"
+          ? "items-start"
+          : align === "end"
+            ? "items-end"
+            : align === "stretch"
+              ? "items-stretch"
+              : "items-center",
+        justify === "center"
+          ? "justify-center"
+          : justify === "end"
+            ? "justify-end"
+            : justify === "between"
+              ? "justify-between"
+              : "justify-start",
         "[&>*]:min-w-0 [&>*]:flex-1",
       )}
       style={gapStyle(read(node, ctx, "gap"), 3)}
@@ -166,7 +339,12 @@ const CARD_TONE: Record<string, string> = {
 const Card: CatalogComponent = ({ node, ctx }) => {
   const title = asString(read(node, ctx, "title"));
   return (
-    <section className={cn("flex min-w-0 flex-col gap-2 rounded-card bg-well p-3", ownEntry(CARD_TONE, asString(read(node, ctx, "tone"))))}>
+    <section
+      className={cn(
+        "flex min-w-0 flex-col gap-2 rounded-card bg-well p-3",
+        ownEntry(CARD_TONE, asString(read(node, ctx, "tone"))),
+      )}
+    >
       {title ? <h4 className="m-0 text-small-strong text-primary">{title}</h4> : null}
       {ctx.renderChildren(node.c)}
     </section>
@@ -189,7 +367,11 @@ const Section: CatalogComponent = ({ node, ctx }) => {
   );
 };
 
-const TEXT_SIZE: Record<string, string> = { small: "text-small", regular: "text-regular", large: "text-large-strong" };
+const TEXT_SIZE: Record<string, string> = {
+  small: "text-small",
+  regular: "text-regular",
+  large: "text-large-strong",
+};
 
 const Text: CatalogComponent = ({ node, ctx }) => (
   <p
@@ -207,8 +389,13 @@ const Text: CatalogComponent = ({ node, ctx }) => (
 const Heading: CatalogComponent = ({ node, ctx }) => {
   const level = asString(read(node, ctx, "level")) || "2";
   const Tag = level === "1" ? "h2" : level === "3" ? "h4" : "h3";
-  const size = level === "1" ? "text-heading1" : level === "3" ? "text-large-strong" : "text-heading2";
-  return <Tag className={cn("m-0 min-w-0 font-semibold text-primary", size)}>{ctx.renderChildren(node.c)}</Tag>;
+  const size =
+    level === "1" ? "text-heading1" : level === "3" ? "text-large-strong" : "text-heading2";
+  return (
+    <Tag className={cn("m-0 min-w-0 font-semibold text-primary", size)}>
+      {ctx.renderChildren(node.c)}
+    </Tag>
+  );
 };
 
 /** Visual Markdown never loads remote images; its links open through the visual's own confirmed, https-only action. */
@@ -246,7 +433,10 @@ const StatComponent: CatalogComponent = ({ node, ctx }) => {
   const value = read(node, ctx, "value");
   const display =
     format === "currency" && /^[A-Z]{3}$/u.test(currency)
-      ? new Intl.NumberFormat(navigator.language || "en-US", { style: "currency", currency }).format(asNumber(value, 0))
+      ? new Intl.NumberFormat(navigator.language || "en-US", {
+          style: "currency",
+          currency,
+        }).format(asNumber(value, 0))
       : formatCell(value, format);
   const trend = read(node, ctx, "trend");
   return (
@@ -263,25 +453,35 @@ const TableComponent: CatalogComponent = ({ node, ctx }) => {
   const rows = read(node, ctx, "rows");
   const list = Array.isArray(rows) ? rows.slice(0, 200).map(asRecord) : [];
   const rawColumns = read(node, ctx, "columns");
-  const columns = Array.isArray(rawColumns) && rawColumns.length
-    ? rawColumns.map(asRecord).map((column) => ({
-        key: asString(column.key),
-        label: asString(column.label) || asString(column.key),
-        format: column.format,
-        align: column.align === "end" || (column.format && column.format !== "text" && column.format !== "date") ? ("end" as const) : ("start" as const),
-      })).filter((column) => column.key)
-    : Object.keys(list[0] ?? {}).map((key) => ({
-        key,
-        label: key,
-        format: undefined,
-        align: typeof list[0]?.[key] === "number" ? ("end" as const) : ("start" as const),
-      }));
+  const columns =
+    Array.isArray(rawColumns) && rawColumns.length
+      ? rawColumns
+          .map(asRecord)
+          .map((column) => ({
+            key: asString(column.key),
+            label: asString(column.label) || asString(column.key),
+            format: column.format,
+            align:
+              column.align === "end" ||
+              (column.format && column.format !== "text" && column.format !== "date")
+                ? ("end" as const)
+                : ("start" as const),
+          }))
+          .filter((column) => column.key)
+      : Object.keys(list[0] ?? {}).map((key) => ({
+          key,
+          label: key,
+          format: undefined,
+          align: typeof list[0]?.[key] === "number" ? ("end" as const) : ("start" as const),
+        }));
   return (
     <DataTable
       caption={asString(read(node, ctx, "caption")) || undefined}
       columns={columns.map(({ key, label, align }) => ({ key, label, align }))}
       rows={list.map((row) =>
-        Object.fromEntries(columns.map((column) => [column.key, formatCell(row[column.key], column.format)])),
+        Object.fromEntries(
+          columns.map((column) => [column.key, formatCell(row[column.key], column.format)]),
+        ),
       )}
     />
   );
@@ -318,7 +518,9 @@ const ListRow: CatalogComponent = ({ node, ctx }) => {
       {iconFor(read(node, ctx, "icon"), "size-4 text-secondary")}
       <span className="flex min-w-0 flex-1 flex-col text-left">
         <span className="truncate text-regular text-primary">{title}</span>
-        {description ? <span className="truncate text-small text-secondary">{description}</span> : null}
+        {description ? (
+          <span className="truncate text-small text-secondary">{description}</span>
+        ) : null}
       </span>
       {meta ? <span className="shrink-0 text-small text-tertiary">{meta}</span> : null}
     </>
@@ -385,7 +587,10 @@ const Checklist: CatalogComponent = ({ node, ctx }) => {
         return (
           <li key={index} className="flex min-w-0 items-start gap-2 text-regular">
             {done ? (
-              <CircleCheck aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-status-green" />
+              <CircleCheck
+                aria-hidden="true"
+                className="mt-0.5 size-4 shrink-0 text-status-green"
+              />
             ) : (
               <Circle aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-tertiary" />
             )}
@@ -414,9 +619,13 @@ const Timeline: CatalogComponent = ({ node, ctx }) => {
           <span className="flex min-w-0 flex-col">
             <span className="text-regular text-primary">
               {asString(item.title)}
-              {item.time ? <span className="ml-2 text-small text-tertiary">{asString(item.time)}</span> : null}
+              {item.time ? (
+                <span className="ml-2 text-small text-tertiary">{asString(item.time)}</span>
+              ) : null}
             </span>
-            {item.description ? <span className="text-small text-secondary">{asString(item.description)}</span> : null}
+            {item.description ? (
+              <span className="text-small text-secondary">{asString(item.description)}</span>
+            ) : null}
           </span>
         </li>
       ))}
@@ -428,14 +637,21 @@ const ImageComponent: CatalogComponent = ({ node, ctx }) => {
   const alt = asString(read(node, ctx, "alt"));
   const source = ctx.attachmentSource(asString(read(node, ctx, "attachment")));
   if (!source) return <p className="m-0 text-small text-secondary">{alt}</p>;
-  return <img src={source} alt={alt} className="block max-h-96 max-w-full rounded-card object-contain" />;
+  return (
+    <img src={source} alt={alt} className="block max-h-96 max-w-full rounded-card object-contain" />
+  );
 };
 
 const IconComponent: CatalogComponent = ({ node, ctx }) => {
   const icon = iconFor(read(node, ctx, "name"));
   if (!icon) return null;
   return (
-    <span className={cn("inline-flex align-middle", ownEntry(TONE_CLASS, asString(read(node, ctx, "tone"))) ?? "text-secondary")}>
+    <span
+      className={cn(
+        "inline-flex align-middle",
+        ownEntry(TONE_CLASS, asString(read(node, ctx, "tone"))) ?? "text-secondary",
+      )}
+    >
       {icon}
     </span>
   );
@@ -554,8 +770,15 @@ const SwitchComponent: CatalogComponent = ({ node, ctx }) => {
   const id = useLabelId();
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <Switch id={id} checked={truthy(ownField(ctx.state, key))} disabled={ctx.draft} onCheckedChange={(next) => ctx.setState(key, next)} />
-      <label htmlFor={id} className="min-w-0 text-small text-primary">{asString(read(node, ctx, "label"))}</label>
+      <Switch
+        id={id}
+        checked={truthy(ownField(ctx.state, key))}
+        disabled={ctx.draft}
+        onCheckedChange={(next) => ctx.setState(key, next)}
+      />
+      <label htmlFor={id} className="min-w-0 text-small text-primary">
+        {asString(read(node, ctx, "label"))}
+      </label>
     </div>
   );
 };
@@ -579,7 +802,11 @@ const RadioGroupComponent: CatalogComponent = ({ node, ctx }) => {
   const label = asString(read(node, ctx, "label"));
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      {label ? <span id={`${groupId}-label`} className="text-small text-secondary">{label}</span> : null}
+      {label ? (
+        <span id={`${groupId}-label`} className="text-small text-secondary">
+          {label}
+        </span>
+      ) : null}
       <RadioGroup
         aria-labelledby={label ? `${groupId}-label` : undefined}
         aria-label={label ? undefined : key}
@@ -594,7 +821,9 @@ const RadioGroupComponent: CatalogComponent = ({ node, ctx }) => {
         {options.map((option, index) => (
           <div key={option.key} className="flex items-center gap-2">
             <RadioGroupItem id={`${groupId}-${index}`} value={option.key} />
-            <label htmlFor={`${groupId}-${index}`} className="text-small text-primary">{option.label}</label>
+            <label htmlFor={`${groupId}-${index}`} className="text-small text-primary">
+              {option.label}
+            </label>
           </div>
         ))}
       </RadioGroup>
@@ -654,7 +883,9 @@ const TextInput: CatalogComponent = ({ node, ctx }) => {
   const id = useLabelId();
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <label htmlFor={id} className="text-small text-secondary">{asString(read(node, ctx, "label"))}</label>
+      <label htmlFor={id} className="text-small text-secondary">
+        {asString(read(node, ctx, "label"))}
+      </label>
       <Input
         id={id}
         value={asString(ownField(ctx.state, key))}
@@ -693,7 +924,10 @@ const ButtonGroup: CatalogComponent = ({ node, ctx }) => (
 );
 
 const DisclosureComponent: CatalogComponent = ({ node, ctx }) => (
-  <Disclosure title={asString(read(node, ctx, "title"))} defaultOpen={read(node, ctx, "open") === true}>
+  <Disclosure
+    title={asString(read(node, ctx, "title"))}
+    defaultOpen={read(node, ctx, "open") === true}
+  >
     <div className="flex min-w-0 flex-col gap-2">{ctx.renderChildren(node.c)}</div>
   </Disclosure>
 );
@@ -714,12 +948,47 @@ const Spacer: CatalogComponent = ({ node, ctx }) => {
 };
 
 export const CATALOG_COMPONENTS: Readonly<Record<string, CatalogComponent>> = {
-  Stack, Row, Grid, Card, Section, Separator: SeparatorComponent, Spacer,
-  Text, Heading, Markdown: MarkdownBlock, Code: CodeComponent, Math: MathComponent, Kbd: KbdComponent,
-  Stat: StatComponent, Table: TableComponent, KeyValue, List, ListRow, Badge: BadgeComponent, Callout: CalloutComponent,
-  Progress: ProgressComponent, Meter: ProgressComponent, Checklist, Timeline, Image: ImageComponent, Icon: IconComponent, LinkCard,
-  Chart: ChartComponent, BarList, Heatmap, Sparkline,
-  Segmented: SegmentedComponent, Tabs: TabsComponent, Switch: SwitchComponent, Checkbox: CheckboxComponent,
-  RadioGroup: RadioGroupComponent, Select: SelectComponent, Slider: SliderComponent, TextInput,
-  Button: ButtonComponent, ButtonGroup, Disclosure: DisclosureComponent, Tooltip: TooltipComponent,
+  Stack,
+  Row,
+  Grid,
+  Card,
+  Section,
+  Separator: SeparatorComponent,
+  Spacer,
+  Text,
+  Heading,
+  Markdown: MarkdownBlock,
+  Code: CodeComponent,
+  Math: MathComponent,
+  Kbd: KbdComponent,
+  Stat: StatComponent,
+  Table: TableComponent,
+  KeyValue,
+  List,
+  ListRow,
+  Badge: BadgeComponent,
+  Callout: CalloutComponent,
+  Progress: ProgressComponent,
+  Meter: ProgressComponent,
+  Checklist,
+  Timeline,
+  Image: ImageComponent,
+  Icon: IconComponent,
+  LinkCard,
+  Chart: ChartComponent,
+  BarList,
+  Heatmap,
+  Sparkline,
+  Segmented: SegmentedComponent,
+  Tabs: TabsComponent,
+  Switch: SwitchComponent,
+  Checkbox: CheckboxComponent,
+  RadioGroup: RadioGroupComponent,
+  Select: SelectComponent,
+  Slider: SliderComponent,
+  TextInput,
+  Button: ButtonComponent,
+  ButtonGroup,
+  Disclosure: DisclosureComponent,
+  Tooltip: TooltipComponent,
 };

@@ -24,12 +24,19 @@ import type { BotToolCandidate } from "./bot-tool-assembly.js";
 import { botTurnOf } from "./bot-tool-policy.js";
 import { BOT_COMPUTER_UNATTENDED_WAIT_MS } from "../bot-computers/control.js";
 import { createBotComputerShellTool } from "../bot-computers/computer-shell-tool.js";
-import { createBotComputerTool, type BotComputerToolDependencies, type BotComputerToolState } from "../bot-computers/computer-tool.js";
+import {
+  createBotComputerTool,
+  type BotComputerToolDependencies,
+  type BotComputerToolState,
+} from "../bot-computers/computer-tool.js";
 import type { BotComputerControl, BotComputerHost } from "../bot-computers/types.js";
 
 /** The Bot computer services a turn's tools run on. */
 export interface BotComputerToolServices {
-  host: Pick<BotComputerHost, "computer" | "ensureRunning" | "touch" | "runGuestCommand" | "guestDriver">;
+  host: Pick<
+    BotComputerHost,
+    "computer" | "ensureRunning" | "touch" | "runGuestCommand" | "guestDriver"
+  >;
   sessions: BotComputerToolDependencies["sessions"];
   /** `onChange` keeps the tool state's capture epochs. */
   control: BotComputerToolDependencies["control"] & Pick<BotComputerControl, "onChange">;
@@ -41,7 +48,12 @@ export async function botHasComputer(
   services: { enabled(): boolean; computers(): Pick<BotComputerToolServices, "host"> },
 ): Promise<boolean> {
   if (!services.enabled()) return false;
-  return (await services.computers().host.computer(botId).catch(() => undefined)) !== undefined;
+  return (
+    (await services
+      .computers()
+      .host.computer(botId)
+      .catch(() => undefined)) !== undefined
+  );
 }
 
 export interface BotComputerCandidateInput {
@@ -62,12 +74,16 @@ export interface BotComputerCandidateInput {
 }
 
 /** The `computer` and `computer_shell` candidates for one turn, or none. */
-export async function botComputerCandidates(botId: string, input: BotComputerCandidateInput): Promise<BotToolCandidate[]> {
+export async function botComputerCandidates(
+  botId: string,
+  input: BotComputerCandidateInput,
+): Promise<BotToolCandidate[]> {
   if (!input.granted || !input.hasComputer) return [];
   const { host, sessions, control } = await input.computers();
   const state = input.state(control);
   // The guest driver lane, only for a computer whose base passed its probe.
-  const elementControl = input.supportsImages && (await host.guestDriver(botId).catch(() => undefined)) !== undefined;
+  const elementControl =
+    input.supportsImages && (await host.guestDriver(botId).catch(() => undefined)) !== undefined;
   // No one answers a card on routine and Telegram runs, so such a run waits
   // for Give back only so long, in all, across both tools.
   const giveBackBudget = { remainingMs: input.unattendedWaitMs ?? BOT_COMPUTER_UNATTENDED_WAIT_MS };
@@ -79,7 +95,10 @@ export async function botComputerCandidates(botId: string, input: BotComputerCan
   type Turn = ReturnType<typeof turnOf>;
 
   /** `offered` for the turn the tools were built for; each call runs as the tool of the run it serves. */
-  const perRun = (offered: AgentTool, build: (turn: Turn) => AgentTool): NonNullable<BotToolCandidate["bind"]> => {
+  const perRun = (
+    offered: AgentTool,
+    build: (turn: Turn) => AgentTool,
+  ): NonNullable<BotToolCandidate["bind"]> => {
     const variants = new Map<string, AgentTool>([[`${input.routine}:${input.telegram}`, offered]]);
     return (call) => ({
       ...offered,
@@ -89,7 +108,10 @@ export async function botComputerCandidates(botId: string, input: BotComputerCan
         // A peer run counts as a routine run, as it always did; a call whose
         // run can't be read waits as an unattended one (fails closed).
         const routine = input.routine || turns.some((turn) => turn.routine || turn.peer);
-        const telegram = input.telegram || requestIds === undefined || turns.some((turn) => turn.telegram || turn.botMessage);
+        const telegram =
+          input.telegram ||
+          requestIds === undefined ||
+          turns.some((turn) => turn.telegram || turn.botMessage);
         const key = `${routine}:${telegram}`;
         let tool = variants.get(key);
         if (tool === undefined) {
@@ -102,8 +124,13 @@ export async function botComputerCandidates(botId: string, input: BotComputerCan
   };
 
   const computerFor = (turn: Turn) =>
-    createBotComputerTool(botId, { host, sessions, control, state, botName: input.botName }, { ...turn, elementControl });
-  const shellFor = (turn: Turn) => createBotComputerShellTool(botId, { host, control, botName: input.botName }, turn);
+    createBotComputerTool(
+      botId,
+      { host, sessions, control, state, botName: input.botName },
+      { ...turn, elementControl },
+    );
+  const shellFor = (turn: Turn) =>
+    createBotComputerShellTool(botId, { host, control, botName: input.botName }, turn);
   const offeredTurn = turnOf(input.routine, input.telegram);
   const candidates: BotToolCandidate[] = [];
   if (input.supportsImages) {

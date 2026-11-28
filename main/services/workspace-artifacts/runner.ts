@@ -1,4 +1,8 @@
-import { artifactFileAllowed, assertArtifactFilePath, WorkspaceArtifactFileDeniedError } from "./file-policy.js";
+import {
+  artifactFileAllowed,
+  assertArtifactFilePath,
+  WorkspaceArtifactFileDeniedError,
+} from "./file-policy.js";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import {
@@ -15,7 +19,10 @@ import {
   type WorkspaceArtifactV1,
   type WorkspaceArtifactView,
 } from "../../../renderer/shared/workspace-artifacts.js";
-import type { BoundedShellCommandOptions, BoundedShellCommandResult } from "../bounded-shell-command.js";
+import type {
+  BoundedShellCommandOptions,
+  BoundedShellCommandResult,
+} from "../bounded-shell-command.js";
 import { ManagedWorktreeFileIoError } from "../managed-worktree-file-io.js";
 import { MAX_EDITOR_LINES } from "../workspace-files.js";
 import type { ArgvPlanOptions } from "./argv-runner.js";
@@ -88,7 +95,10 @@ function failure(result: BoundedShellCommandResult): string {
     : result.outputLimitExceeded
       ? "Printed more than an artifact can hold."
       : `Exited with code ${result.exitCode ?? "?"}.`;
-  const detail = headAndTail(result.stderr || result.stdout, WORKSPACE_ARTIFACT_LIMITS.errorChars - reason.length - 1);
+  const detail = headAndTail(
+    result.stderr || result.stdout,
+    WORKSPACE_ARTIFACT_LIMITS.errorChars - reason.length - 1,
+  );
   return detail ? `${reason} ${detail}` : reason;
 }
 
@@ -154,7 +164,8 @@ function reusableReads(
     if (!result || result.status !== "ok" || result.dataJson === undefined) continue;
     if (!(now - result.at >= 0 && now - result.at < window)) continue;
     // A read from another folder, or from before Aiden noted the folder, describes other files.
-    if (!context.folderPath || result.folder !== workspaceArtifactFolderKey(context.folderPath)) continue;
+    if (!context.folderPath || result.folder !== workspaceArtifactFolderKey(context.folderPath))
+      continue;
     const before =
       snapshot.revision === view.artifact.revision
         ? source
@@ -162,7 +173,15 @@ function reusableReads(
           ? reuseFrom.sources.find((candidate) => candidate.name === source.name)
           : undefined;
     if (!before || !sameSource(before, source)) continue;
-    if (workspaceArtifactSourceAccess(context.permission, Boolean(context.folderPath), source, approved) !== "run") continue;
+    if (
+      workspaceArtifactSourceAccess(
+        context.permission,
+        Boolean(context.folderPath),
+        source,
+        approved,
+      ) !== "run"
+    )
+      continue;
     reused[source.name] = result;
   }
   return reused;
@@ -210,12 +229,14 @@ function tooLarge(file: string): string {
 function fileError(file: string, error: unknown): string {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === "ENOENT") return `There is no file at ${file}.`;
-  if (error instanceof ManagedWorktreeFileIoError && error.code === "too_many_bytes") return tooLarge(file);
+  if (error instanceof ManagedWorktreeFileIoError && error.code === "too_many_bytes")
+    return tooLarge(file);
   if (error instanceof Error && error.name === "AbortError") return "Cancelled.";
   if (code !== undefined || !(error instanceof Error)) return `${file} cannot be read.`;
   const message = error.message;
   if (/too large/iu.test(message)) return tooLarge(file);
-  if (/too many lines/iu.test(message)) return `${file} has more than ${MAX_EDITOR_LINES.toLocaleString("en-US")} lines, more than an artifact can read.`;
+  if (/too many lines/iu.test(message))
+    return `${file} has more than ${MAX_EDITOR_LINES.toLocaleString("en-US")} lines, more than an artifact can read.`;
   if (/binary|not valid UTF-8/iu.test(message)) return `${file} is not a text file.`;
   return message;
 }
@@ -235,7 +256,9 @@ function commandError(error: unknown): string {
 
 function cancelledResults(sources: readonly WorkspaceArtifactSourceV1[]): SourceResults {
   const at = Date.now();
-  return Object.fromEntries(sources.map((source) => [source.name, { status: "error", at, error: "Cancelled." } as const]));
+  return Object.fromEntries(
+    sources.map((source) => [source.name, { status: "error", at, error: "Cancelled." } as const]),
+  );
 }
 
 export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRunnerDependencies) {
@@ -253,7 +276,8 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
    * overwrites a newer read, and a cancelled newer run does not strand the page.
    */
   function shouldSave(id: string, entry: SharedRefresh): boolean {
-    if (entry.controller.signal.aborted || entry.generation <= (savedGeneration.get(id) ?? 0)) return false;
+    if (entry.controller.signal.aborted || entry.generation <= (savedGeneration.get(id) ?? 0))
+      return false;
     for (const other of live.get(id) ?? []) {
       if (other.generation > entry.generation && !other.controller.signal.aborted) return false;
     }
@@ -267,9 +291,15 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     signal: AbortSignal | undefined,
   ): Promise<WorkspaceArtifactSourceResultV1> {
     const at = Date.now();
-    const access = workspaceArtifactSourceAccess(context.permission, Boolean(context.folderPath), source, approved);
+    const access = workspaceArtifactSourceAccess(
+      context.permission,
+      Boolean(context.folderPath),
+      source,
+      approved,
+    );
     if (access === "blocked") return { status: "blocked", at, error: "Workspace access is off." };
-    if (access === "needs-approval") return { status: "blocked", at, error: "Waiting for you to allow this page’s commands." };
+    if (access === "needs-approval")
+      return { status: "blocked", at, error: "Waiting for you to allow this page’s commands." };
     const root = context.folderPath!;
     let text: string;
     try {
@@ -282,7 +312,14 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
             `Reading ${source.file} timed out.`,
           );
         } catch (error) {
-          return { status: "error", at, ...(error instanceof WorkspaceArtifactFileDeniedError ? { policyDenied: true as const } : {}), error: clip(fileError(source.file, error), WORKSPACE_ARTIFACT_LIMITS.errorChars) };
+          return {
+            status: "error",
+            at,
+            ...(error instanceof WorkspaceArtifactFileDeniedError
+              ? { policyDenied: true as const }
+              : {}),
+            error: clip(fileError(source.file, error), WORKSPACE_ARTIFACT_LIMITS.errorChars),
+          };
         }
         if (Buffer.byteLength(text, "utf8") > WORKSPACE_ARTIFACT_LIMITS.sourceOutputBytes) {
           return { status: "error", at, error: tooLarge(source.file) };
@@ -303,7 +340,11 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
         text = result.stdout;
       }
     } catch (error) {
-      return { status: "error", at, error: clip(commandError(error), WORKSPACE_ARTIFACT_LIMITS.errorChars) };
+      return {
+        status: "error",
+        at,
+        error: clip(commandError(error), WORKSPACE_ARTIFACT_LIMITS.errorChars),
+      };
     }
     const parsed = parseWorkspaceArtifactOutput(source.parse, text);
     return parsed.ok
@@ -319,7 +360,10 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     signal: AbortSignal | undefined,
   ): Promise<SourceResults> {
     const entries = await Promise.all(
-      sources.map(async (source) => [source.name, await runSource(source, approved, context, signal)] as const),
+      sources.map(
+        async (source) =>
+          [source.name, await runSource(source, approved, context, signal)] as const,
+      ),
     );
     return Object.fromEntries(entries);
   }
@@ -343,7 +387,9 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
       } catch (error) {
         const at = Date.now();
         const message = error instanceof Error ? error.message : FOLDER_UNAVAILABLE;
-        return Object.fromEntries(sources.map((source) => [source.name, { status: "error", at, error: message } as const]));
+        return Object.fromEntries(
+          sources.map((source) => [source.name, { status: "error", at, error: message } as const]),
+        );
       }
     }
     return runSources(sources, approved, { ...context, folderPath }, signal);
@@ -380,10 +426,13 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     if (signal?.aborted) return cancelledResults(view.artifact.sources);
     const fullKey = `${view.digest}\0${approved}\0${context.permission}\0${folderPath ?? ""}`;
     const reused =
-      folderError === undefined ? reusableReads(view, options.reuseFrom, approved, { ...context, folderPath }, Date.now()) : {};
+      folderError === undefined
+        ? reusableReads(view, options.reuseFrom, approved, { ...context, folderPath }, Date.now())
+        : {};
     // A kept file read still has to pass the file policy now; one that does not is read again, and that read is refused as usual.
     for (const source of view.artifact.sources) {
-      if (source.kind !== "file" || !Object.prototype.hasOwnProperty.call(reused, source.name)) continue;
+      if (source.kind !== "file" || !Object.prototype.hasOwnProperty.call(reused, source.name))
+        continue;
       const allowed = await fileAllowed(folderPath!, source.file).catch(() => false);
       if (!allowed) delete reused[source.name];
     }
@@ -392,21 +441,47 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     const key = reusedNames.length ? `${fullKey}\0reuse\0${reusedNames.join("\0")}` : fullKey;
     let shared = inFlight.get(id);
     // A run already reading every source is joined, whatever this one could keep.
-    const joinable = shared && !shared.controller.signal.aborted && (shared.key === key || shared.key === fullKey);
+    const joinable =
+      shared && !shared.controller.signal.aborted && (shared.key === key || shared.key === fullKey);
     if (!shared || !joinable) {
       const controller = new AbortController();
       const generation = (generations.get(id) ?? 0) + 1;
       generations.set(id, generation);
-      const entry: SharedRefresh = { key, controller, callers: 0, generation, promise: Promise.resolve({}) };
+      const entry: SharedRefresh = {
+        key,
+        controller,
+        callers: 0,
+        generation,
+        promise: Promise.resolve({}),
+      };
       entry.promise = (async () => {
         let results: SourceResults;
         if (folderError !== undefined) {
           const at = Date.now();
-          results = Object.fromEntries(view.artifact.sources.map((source) => [source.name, { status: "error", at, error: folderError } as const]));
+          results = Object.fromEntries(
+            view.artifact.sources.map((source) => [
+              source.name,
+              { status: "error", at, error: folderError } as const,
+            ]),
+          );
         } else {
-          const toRun = view.artifact.sources.filter((source) => !Object.prototype.hasOwnProperty.call(reused, source.name));
-          const ran = await runSources(toRun, approved, { ...context, folderPath }, controller.signal);
-          results = Object.fromEntries(view.artifact.sources.map((source) => [source.name, Object.prototype.hasOwnProperty.call(reused, source.name) ? reused[source.name]! : ran[source.name]!]));
+          const toRun = view.artifact.sources.filter(
+            (source) => !Object.prototype.hasOwnProperty.call(reused, source.name),
+          );
+          const ran = await runSources(
+            toRun,
+            approved,
+            { ...context, folderPath },
+            controller.signal,
+          );
+          results = Object.fromEntries(
+            view.artifact.sources.map((source) => [
+              source.name,
+              Object.prototype.hasOwnProperty.call(reused, source.name)
+                ? reused[source.name]!
+                : ran[source.name]!,
+            ]),
+          );
         }
         if (!shouldSave(id, entry)) return results;
         // A page whose commands changed meanwhile is re-read by its own refresh; these results describe the old ones.
@@ -429,7 +504,11 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     return join(shared, view.artifact.sources, signal);
   }
 
-  function join(shared: SharedRefresh, sources: readonly WorkspaceArtifactSourceV1[], signal: AbortSignal | undefined) {
+  function join(
+    shared: SharedRefresh,
+    sources: readonly WorkspaceArtifactSourceV1[],
+    signal: AbortSignal | undefined,
+  ) {
     shared.callers += 1;
     return new Promise<SourceResults>((resolve, reject) => {
       let left = false;
@@ -479,8 +558,13 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     const action = view.artifact.actions.find((entry) => entry.name === actionName);
     if (!action) throw new Error(`This page has no button named "${actionName}".`);
     const approved = view.artifact.approvedDigest === view.digest;
-    const access = workspaceArtifactCommandAccess(context.permission, Boolean(context.folderPath), approved);
-    if (access === "blocked") throw new Error("Workspace access is off, so this page’s buttons can’t run.");
+    const access = workspaceArtifactCommandAccess(
+      context.permission,
+      Boolean(context.folderPath),
+      approved,
+    );
+    if (access === "blocked")
+      throw new Error("Workspace access is off, so this page’s buttons can’t run.");
     if (access === "needs-approval") throw new Error("Allow this page’s commands first.");
     const resolved = resolveWorkspaceArtifactCommand(action, args);
     const cwd = await verifiedFolder(context.folderPath!);
@@ -492,12 +576,16 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
       signal,
     };
     // A command with page data never goes through a shell.
-    const result = resolved.kind === "argv"
-      ? await dependencies.runArgv({ ...run, steps: resolved.steps })
-      : await dependencies.runShell({ ...run, command: resolved.command });
+    const result =
+      resolved.kind === "argv"
+        ? await dependencies.runArgv({ ...run, steps: resolved.steps })
+        : await dependencies.runShell({ ...run, command: resolved.command });
     if (result.aborted) throw new Error("Cancelled.");
     const ok = result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded;
-    const output = clip([result.stdout, result.stderr].filter(Boolean).join("\n"), WORKSPACE_ARTIFACT_LIMITS.actionOutputChars);
+    const output = clip(
+      [result.stdout, result.stderr].filter(Boolean).join("\n"),
+      WORKSPACE_ARTIFACT_LIMITS.actionOutputChars,
+    );
     return { ok, output: ok ? output : failure(result) };
   }
 

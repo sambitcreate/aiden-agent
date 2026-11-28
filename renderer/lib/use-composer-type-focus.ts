@@ -21,44 +21,47 @@ export function useComposerTypeFocus(
       const composer = inputRef.current;
       // The page checks are getters: most keys (typing in the composer,
       // shortcuts) are settled before any of them runs.
-      const decision = decideComposerTypeFocus({
-        key: event.key,
-        metaKey: event.metaKey,
-        ctrlKey: event.ctrlKey,
-        altKey: event.altKey,
-        altGraph: event.getModifierState("AltGraph"),
-        defaultPrevented: event.defaultPrevented,
-        isComposing: event.isComposing,
-        repeat: event.repeat,
-        keyCode: event.keyCode,
-      }, {
-        macOS: isMacPlatform(),
-        composing: event.isComposing || event.key === "Dead" || event.keyCode === 229,
-        get composerFocused() {
-          return composer !== null && document.activeElement === composer;
+      const decision = decideComposerTypeFocus(
+        {
+          key: event.key,
+          metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
+          altKey: event.altKey,
+          altGraph: event.getModifierState("AltGraph"),
+          defaultPrevented: event.defaultPrevented,
+          isComposing: event.isComposing,
+          repeat: event.repeat,
+          keyCode: event.keyCode,
         },
-        get composerAvailable() {
-          return composerCanAcceptTyping(composer);
+        {
+          macOS: isMacPlatform(),
+          composing: event.isComposing || event.key === "Dead" || event.keyCode === 229,
+          get composerFocused() {
+            return composer !== null && document.activeElement === composer;
+          },
+          get composerAvailable() {
+            return composerCanAcceptTyping(composer);
+          },
+          get composerWritable() {
+            return Boolean(composer && !composer.disabled && !composer.readOnly);
+          },
+          get editable() {
+            return isEditableTypingTarget(event.target);
+          },
+          get overlayOpen() {
+            return typingRedirectBlockedByOverlay(
+              document.activeElement instanceof Element ? document.activeElement : null,
+            );
+          },
+          get reservedSurface() {
+            // A list searching by typeahead keeps its letters; only type-to-focus yields to it.
+            return isReservedTypingSurface(event.target) || isTypeaheadTarget(event.target);
+          },
+          get activationControl() {
+            return isActivationControl(event.target) || isActivationControl(document.activeElement);
+          },
         },
-        get composerWritable() {
-          return Boolean(composer && !composer.disabled && !composer.readOnly);
-        },
-        get editable() {
-          return isEditableTypingTarget(event.target);
-        },
-        get overlayOpen() {
-          return typingRedirectBlockedByOverlay(
-            document.activeElement instanceof Element ? document.activeElement : null,
-          );
-        },
-        get reservedSurface() {
-          // A list searching by typeahead keeps its letters; only type-to-focus yields to it.
-          return isReservedTypingSurface(event.target) || isTypeaheadTarget(event.target);
-        },
-        get activationControl() {
-          return isActivationControl(event.target) || isActivationControl(document.activeElement);
-        },
-      });
+      );
       if (decision.action === "ignore" || !composer) return;
       event.preventDefault();
       composer.focus({ preventScroll: true });

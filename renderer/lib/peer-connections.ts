@@ -25,25 +25,36 @@ function seconds(ms: number): string {
 }
 
 /** Failed attempts may have tried any saved route, so mixed routes get route-agnostic help. */
-export function peerConnectionRecovery(host: PeerHostView, failure: PeerHostStatus["failure"]): string {
+export function peerConnectionRecovery(
+  host: PeerHostView,
+  failure: PeerHostStatus["failure"],
+): string {
   // A failure may come from any saved route, so name one network only when the
   // host has no other kind of route to fall back to.
   const routeKinds = new Set((host.routes ?? []).map((route) => route.kind));
   if (host.activeRouteKind) routeKinds.add(host.activeRouteKind);
   const onlyRouteKind = routeKinds.size === 1 ? [...routeKinds][0] : undefined;
-  const routeHelp = onlyRouteKind === "tailscale"
-    ? "On both computers, open Tailscale and check that they are online in the same tailnet. Check its access rules allow Aiden."
-    : onlyRouteKind === "lan"
-      ? "Connect both computers to the same network. Check the other computer's firewall and Local Network permission for Aiden."
-      : "Check that both computers are awake and connected to the same network or Tailscale.";
+  const routeHelp =
+    onlyRouteKind === "tailscale"
+      ? "On both computers, open Tailscale and check that they are online in the same tailnet. Check its access rules allow Aiden."
+      : onlyRouteKind === "lan"
+        ? "Connect both computers to the same network. Check the other computer's firewall and Local Network permission for Aiden."
+        : "Check that both computers are awake and connected to the same network or Tailscale.";
   switch (failure) {
-    case "dns": return `Aiden couldn't resolve the other computer's address. ${routeHelp}`;
-    case "refused": return "The other computer refused the connection. Open Aiden there and turn on Control this device in Settings → Connections. Check its firewall allows Aiden.";
-    case "timeout": return `The other computer didn't respond in time. ${routeHelp}`;
-    case "network": return `There's no network route to the other computer. ${routeHelp}`;
-    case "tls": return "The secure connection failed. Check the date and time on both computers, update Aiden, then reconnect.";
-    case "invalid_response": return "The other computer returned an unreadable response. Update Aiden on both computers, then reconnect.";
-    default: return `Couldn't reach that computer. ${routeHelp}`;
+    case "dns":
+      return `Aiden couldn't resolve the other computer's address. ${routeHelp}`;
+    case "refused":
+      return "The other computer refused the connection. Open Aiden there and turn on Control this device in Settings → Connections. Check its firewall allows Aiden.";
+    case "timeout":
+      return `The other computer didn't respond in time. ${routeHelp}`;
+    case "network":
+      return `There's no network route to the other computer. ${routeHelp}`;
+    case "tls":
+      return "The secure connection failed. Check the date and time on both computers, update Aiden, then reconnect.";
+    case "invalid_response":
+      return "The other computer returned an unreadable response. Update Aiden on both computers, then reconnect.";
+    default:
+      return `Couldn't reach that computer. ${routeHelp}`;
   }
 }
 
@@ -67,8 +78,16 @@ export function peerHostPresentation(
       case "connecting":
         return { label: "Connecting", tone: "blue", ...idle };
       case "connected":
-        if (status.feed === "unsupported") return { label: "Access unavailable", tone: "warning", detail: "Connected, but chat synchronization isn't available. Check access and app versions on the other computer.", ...idle };
-        if (status.feed !== "live" || status.stale) return { label: "Syncing chats", tone: "blue", ...idle };
+        if (status.feed === "unsupported")
+          return {
+            label: "Access unavailable",
+            tone: "warning",
+            detail:
+              "Connected, but chat synchronization isn't available. Check access and app versions on the other computer.",
+            ...idle,
+          };
+        if (status.feed !== "live" || status.stale)
+          return { label: "Syncing chats", tone: "blue", ...idle };
         return { label: "Ready", tone: "green", ...idle };
       case "backoff":
         return {
@@ -91,14 +110,16 @@ export function peerHostPresentation(
           return {
             label: "Identity changed",
             tone: "red",
-            detail: "It no longer proves the identity saved when you paired. Re-pair only if you expected this.",
+            detail:
+              "It no longer proves the identity saved when you paired. Re-pair only if you expected this.",
             canReconnect: false,
             needsRepair: true,
           };
         return {
           label: "Update needed",
           tone: "warning",
-          detail: "The two devices run incompatible versions of Aiden. Update both, then reconnect.",
+          detail:
+            "The two devices run incompatible versions of Aiden. Update both, then reconnect.",
           canReconnect: true,
           needsRepair: false,
         };
@@ -177,7 +198,8 @@ export function peerPairingOutcomeCopy(outcome: PeerPairingFailure): PeerPairing
     case "unsupported":
       return {
         title: "Update the other device",
-        message: "It runs an older Aiden without connection requests. Update it, or use a setup code.",
+        message:
+          "It runs an older Aiden without connection requests. Update it, or use a setup code.",
       };
     case "invalid_code":
       return {

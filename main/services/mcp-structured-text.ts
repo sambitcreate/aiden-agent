@@ -16,12 +16,16 @@ function jsonEqual(left: unknown, right: unknown): boolean {
     if (a === b) return true;
     if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
     if (Array.isArray(a) !== Array.isArray(b)) return false;
-    if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((item, index) => equal(item, b[index], depth + 1));
+    if (Array.isArray(a) && Array.isArray(b))
+      return a.length === b.length && a.every((item, index) => equal(item, b[index], depth + 1));
     const aKeys = Object.keys(a);
     const bKeys = Object.keys(b);
     if (aKeys.length !== bKeys.length) return false;
-    return aKeys.every((key) => Object.prototype.hasOwnProperty.call(b, key) &&
-      equal((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key], depth + 1));
+    return aKeys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(b, key) &&
+        equal((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key], depth + 1),
+    );
   };
   return equal(left, right, 0);
 }
@@ -30,9 +34,19 @@ function jsonEqual(left: unknown, right: unknown): boolean {
 export function textCarriesStructured(content: unknown, structured: unknown): boolean {
   if (!Array.isArray(content)) return false;
   return content.slice(0, MAX_TEXT_PARTS).some((part) => {
-    if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string" || part.text.length > MAX_TEXT_CHARS) return false;
+    if (
+      !isRecord(part) ||
+      part.type !== "text" ||
+      typeof part.text !== "string" ||
+      part.text.length > MAX_TEXT_CHARS
+    )
+      return false;
     const text = part.text.trim();
     if (!text.startsWith("{") && !text.startsWith("[")) return false;
-    try { return jsonEqual(JSON.parse(text), structured); } catch { return false; }
+    try {
+      return jsonEqual(JSON.parse(text), structured);
+    } catch {
+      return false;
+    }
   });
 }

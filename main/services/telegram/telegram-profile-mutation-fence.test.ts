@@ -51,9 +51,7 @@ test("a bind queued behind profile deletion observes only post-delete state", as
   await deleting.promise;
   const bind = fence.runBinding("work", async () => {
     assert.equal(profileExists, false);
-    throw new Error(
-      "Choose a Telegram profile that has a token and paired owner.",
-    );
+    throw new Error("Choose a Telegram profile that has a token and paired owner.");
   });
   resume.resolve();
 

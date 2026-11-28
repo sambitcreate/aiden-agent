@@ -296,10 +296,12 @@ export class TerminalHistoryStore implements TerminalHistoryStoreLike {
     this.maxLines = options.maxLines ?? MAX_HISTORY_LINES;
     this.maxChars = options.maxChars ?? MAX_HISTORY_CHARS;
     this.debounceMs = options.debounceMs ?? PERSIST_DEBOUNCE_MS;
-    this.schedule = options.schedule ?? ((fn, ms) => {
-      const handle = setTimeout(fn, ms);
-      return () => clearTimeout(handle);
-    });
+    this.schedule =
+      options.schedule ??
+      ((fn, ms) => {
+        const handle = setTimeout(fn, ms);
+        return () => clearTimeout(handle);
+      });
     this.writeFile =
       options.writeFile ?? ((filePath, history) => fs.writeFile(filePath, history, "utf8"));
   }

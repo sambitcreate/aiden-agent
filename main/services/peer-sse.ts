@@ -49,10 +49,7 @@ export function parsePeerSseFrame(frame: string): PeerSseFrame {
  * Validate a stream envelope. A different protocol version is a typed
  * `unsupported_protocol`, so the supervisor blocks instead of retrying.
  */
-export function parsePeerStreamEnvelope(
-  frame: PeerSseFrame,
-  label: string,
-): PeerRunEvent {
+export function parsePeerStreamEnvelope(frame: PeerSseFrame, label: string): PeerRunEvent {
   let value: unknown;
   try {
     value = parseAidenRemoteJson(frame.data, label);
@@ -68,8 +65,7 @@ export function parsePeerStreamEnvelope(
   )
     throw new PeerTransportError("unsupported_protocol");
   if (Object.keys(record).some((key) => !ENVELOPE_KEYS.has(key))) malformed();
-  const { protocolVersion, streamId, sequence, timestamp, type, terminal, payload } =
-    record;
+  const { protocolVersion, streamId, sequence, timestamp, type, terminal, payload } = record;
   if (
     protocolVersion !== 1 ||
     typeof streamId !== "string" ||

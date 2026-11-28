@@ -1,7 +1,9 @@
 import { isIP } from "node:net";
 import { AIDEN_REMOTE_BASE_PATH } from "./aiden-remote-protocol.js";
 
-export interface AidenTailscaleHandler { Proxy: string }
+export interface AidenTailscaleHandler {
+  Proxy: string;
+}
 export interface AidenTailscaleStatus {
   TCP?: Record<string, { HTTPS?: boolean }>;
   Web?: Record<string, { Handlers?: Record<string, AidenTailscaleHandler>; Funnel?: boolean }>;
@@ -19,14 +21,23 @@ function funnelOn443(status: AidenTailscaleStatus): boolean {
 
 /** Funnel is on for the HTTPS 443 listener, by either way `serve status --json` reports it; Aiden's route refuses to sit behind it. */
 export function aidenTailscaleFunnelOn443(status: AidenTailscaleStatus): boolean {
-  return funnelOn443(status) || Object.entries(status.Web ?? {}).some(([authority, listener]) => listener.Funnel === true && parseTailscaleAuthority(authority)?.port === 443);
+  return (
+    funnelOn443(status) ||
+    Object.entries(status.Web ?? {}).some(
+      ([authority, listener]) =>
+        listener.Funnel === true && parseTailscaleAuthority(authority)?.port === 443,
+    )
+  );
 }
 
 // The public Serve prefix is the canonical API base. Tailscale strips this
 // prefix before proxying to the loopback listener, while the client retains
 // the one OpenAPI-approved `/api/aiden/v1` endpoint spelling.
 export const AIDEN_TAILSCALE_PATH = AIDEN_REMOTE_BASE_PATH;
-export interface AidenTailscaleOwnership { path: typeof AIDEN_TAILSCALE_PATH; target: string }
+export interface AidenTailscaleOwnership {
+  path: typeof AIDEN_TAILSCALE_PATH;
+  target: string;
+}
 export type AidenTailscaleRouteClassification =
   | { kind: "available" }
   | { kind: "owned"; target: string }
@@ -37,7 +48,8 @@ export type AidenTailscaleRouteClassification =
 const CANONICAL_LOOPBACK_HTTP_TARGET = new RegExp(
   `^http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\]):([1-9]\\d{0,4})${AIDEN_REMOTE_BASE_PATH}$`,
 );
-const LEGACY_LOOPBACK_HTTP_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):([1-9]\d{0,4})\/?$/;
+const LEGACY_LOOPBACK_HTTP_ORIGIN =
+  /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):([1-9]\d{0,4})\/?$/;
 
 interface ParsedTailscaleAuthority {
   port: number;
@@ -47,7 +59,13 @@ interface ParsedTailscaleAuthority {
 function hasUnsafeAuthorityCharacter(value: string): boolean {
   for (const character of value) {
     const codePoint = character.codePointAt(0);
-    if (codePoint === undefined || codePoint <= 0x20 || codePoint === 0x7f || "[]/?#@\\%".includes(character)) return true;
+    if (
+      codePoint === undefined ||
+      codePoint <= 0x20 ||
+      codePoint === 0x7f ||
+      "[]/?#@\\%".includes(character)
+    )
+      return true;
   }
   return false;
 }
@@ -86,8 +104,13 @@ function parseTailscaleAuthority(authority: string): ParsedTailscaleAuthority | 
   return { port, canonicalPort: rawPort === String(port) };
 }
 
-function httpsEndpoint(status: AidenTailscaleStatus): { handlers: Record<string, AidenTailscaleHandler>; funnel: boolean } {
-  const entries: Array<[string, { Handlers?: Record<string, AidenTailscaleHandler>; Funnel?: boolean }]> = [];
+function httpsEndpoint(status: AidenTailscaleStatus): {
+  handlers: Record<string, AidenTailscaleHandler>;
+  funnel: boolean;
+} {
+  const entries: Array<
+    [string, { Handlers?: Record<string, AidenTailscaleHandler>; Funnel?: boolean }]
+  > = [];
   for (const [authority, listener] of Object.entries(status.Web ?? {})) {
     const parsed = parseTailscaleAuthority(authority);
     if (!parsed || !parsed.canonicalPort) throw new Error("tailscale_route_conflict");
@@ -116,7 +139,8 @@ export function aidenTailscaleCanonicalRouteSnapshot(status: AidenTailscaleStatu
     }
     if (Object.keys(listener).length === 0) delete preservedStatus.Web?.[authority];
   }
-  if (preservedStatus.Web && Object.keys(preservedStatus.Web).length === 0) delete preservedStatus.Web;
+  if (preservedStatus.Web && Object.keys(preservedStatus.Web).length === 0)
+    delete preservedStatus.Web;
   return {
     ...(endpoint.handlers[AIDEN_TAILSCALE_PATH]?.Proxy
       ? { target: endpoint.handlers[AIDEN_TAILSCALE_PATH]!.Proxy }
@@ -197,7 +221,10 @@ export function classifyAidenTailscaleRoute(
   try {
     endpoint = httpsEndpoint(status);
   } catch {
-    if (canonicalListeners.some(([, listener]) => listener.Funnel === true) || funnelOn443(status)) {
+    if (
+      canonicalListeners.some(([, listener]) => listener.Funnel === true) ||
+      funnelOn443(status)
+    ) {
       return { kind: "funnel_conflict" };
     }
     return { kind: "unrelated_conflict" };
@@ -208,9 +235,9 @@ export function classifyAidenTailscaleRoute(
     return { kind: "unrelated_conflict" };
   }
   if (
-    handler?.Proxy === target
-    && ownership?.path === AIDEN_TAILSCALE_PATH
-    && ownership.target === target
+    handler?.Proxy === target &&
+    ownership?.path === AIDEN_TAILSCALE_PATH &&
+    ownership.target === target
   ) {
     return { kind: "owned", target };
   }
@@ -234,8 +261,8 @@ export function aidenTailscaleCanonicalLoopbackTargets(
   for (const listener of Object.values(status.Web ?? {})) {
     const target = listener.Handlers?.[AIDEN_TAILSCALE_PATH]?.Proxy;
     if (!target) continue;
-    const match = CANONICAL_LOOPBACK_HTTP_TARGET.exec(target)
-      ?? LEGACY_LOOPBACK_HTTP_ORIGIN.exec(target);
+    const match =
+      CANONICAL_LOOPBACK_HTTP_TARGET.exec(target) ?? LEGACY_LOOPBACK_HTTP_ORIGIN.exec(target);
     if (!match) continue;
     const port = Number(match[1]);
     if (!Number.isInteger(port) || port > 65_535) continue;
@@ -254,13 +281,22 @@ export function planAidenTailscaleConnect(
   assertServerOwnedLoopbackTarget(target);
   const classification = classifyAidenTailscaleRoute(status, target, ownership);
   const nextOwnership = { path: AIDEN_TAILSCALE_PATH, target } as const;
-  if (classification.kind === "available") return { action: "set", args: ["serve", "--https=443", `--set-path=${AIDEN_TAILSCALE_PATH}`, target], ownership: nextOwnership };
+  if (classification.kind === "available")
+    return {
+      action: "set",
+      args: ["serve", "--https=443", `--set-path=${AIDEN_TAILSCALE_PATH}`, target],
+      ownership: nextOwnership,
+    };
   if (classification.kind === "owned") return { action: "noop", ownership: nextOwnership };
   if (classification.kind === "funnel_conflict") throw new Error("tailscale_funnel_conflict");
   throw new Error("tailscale_route_conflict");
 }
 
-export function planAidenTailscaleDisconnect(status: AidenTailscaleStatus, target: string, ownership?: AidenTailscaleOwnership): { action: "clear" | "noop"; args?: string[] } {
+export function planAidenTailscaleDisconnect(
+  status: AidenTailscaleStatus,
+  target: string,
+  ownership?: AidenTailscaleOwnership,
+): { action: "clear" | "noop"; args?: string[] } {
   // Origin-only targets were persisted by pre-acceptance builds. They may be
   // recognized only for exact owned cleanup, never for a new connection.
   assertServerOwnedLoopbackTarget(target, true);
@@ -268,6 +304,14 @@ export function planAidenTailscaleDisconnect(status: AidenTailscaleStatus, targe
   if (endpoint.funnel) throw new Error("tailscale_funnel_conflict");
   const handler = endpoint.handlers[AIDEN_TAILSCALE_PATH];
   if (!handler) return { action: "noop" };
-  if (handler.Proxy !== target || ownership?.path !== AIDEN_TAILSCALE_PATH || ownership.target !== target) throw new Error("tailscale_route_conflict");
-  return { action: "clear", args: ["serve", "--https=443", `--set-path=${AIDEN_TAILSCALE_PATH}`, "off"] };
+  if (
+    handler.Proxy !== target ||
+    ownership?.path !== AIDEN_TAILSCALE_PATH ||
+    ownership.target !== target
+  )
+    throw new Error("tailscale_route_conflict");
+  return {
+    action: "clear",
+    args: ["serve", "--https=443", `--set-path=${AIDEN_TAILSCALE_PATH}`, "off"],
+  };
 }

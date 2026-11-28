@@ -7,7 +7,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Composer } from "./composer";
 import { Toaster, TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
-import { restoreUnsentMessage, stageComposerText, takeComposerAttachmentSeed } from "../lib/composer-draft-store";
+import {
+  restoreUnsentMessage,
+  stageComposerText,
+  takeComposerAttachmentSeed,
+} from "../lib/composer-draft-store";
 import type { Attachment, Chat, Workspace } from "../lib/types";
 
 // A cancelled worktree send hands its message back to the draft. The real
@@ -24,7 +28,13 @@ const WORKSPACE: Workspace = {
   createdAt: 1,
   updatedAt: 1,
 };
-const DRAFT = { id: "draft-restore", title: "New chat", messages: [], createdAt: 1, updatedAt: 1 } as unknown as Chat;
+const DRAFT = {
+  id: "draft-restore",
+  title: "New chat",
+  messages: [],
+  createdAt: 1,
+  updatedAt: 1,
+} as unknown as Chat;
 const NOTES: Attachment = {
   id: "att-notes",
   kind: "text",
@@ -87,7 +97,11 @@ test("an open composer takes back both the text and the attachments of a cancell
   const view = render(<Harness saving />);
   await settle();
   assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).value, "");
-  assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).readOnly, true, "a pending first send freezes the draft");
+  assert.equal(
+    (screen.getByRole("textbox") as HTMLTextAreaElement).readOnly,
+    true,
+    "a pending first send freezes the draft",
+  );
 
   await act(async () => {
     restoreUnsentMessage(DRAFT.id, "Fix the login bug", [NOTES]);
@@ -98,9 +112,20 @@ test("an open composer takes back both the text and the attachments of a cancell
   });
   await settle();
   assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).value, "Fix the login bug");
-  assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).readOnly, false, "cancelling unfreezes it");
-  assert.ok(screen.queryAllByText("notes.txt").length > 0, "the attachment is back in the composer");
-  assert.equal(takeComposerAttachmentSeed(DRAFT.id), undefined, "nothing is left waiting for a later mount");
+  assert.equal(
+    (screen.getByRole("textbox") as HTMLTextAreaElement).readOnly,
+    false,
+    "cancelling unfreezes it",
+  );
+  assert.ok(
+    screen.queryAllByText("notes.txt").length > 0,
+    "the attachment is back in the composer",
+  );
+  assert.equal(
+    takeComposerAttachmentSeed(DRAFT.id),
+    undefined,
+    "nothing is left waiting for a later mount",
+  );
 });
 
 test("staged text says a visual added it unless the stager asks for no notice", async () => {
@@ -119,7 +144,10 @@ test("staged text says a visual added it unless the stager asks for no notice", 
   // A visual's follow-up keeps telling the person where it went.
   await act(async () => stageComposerText(DRAFT.id, "Drill into EMEA"));
   await screen.findByText("A visual added a follow-up to your draft.");
-  assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).value, "Make a page\n\nDrill into EMEA");
+  assert.equal(
+    (screen.getByRole("textbox") as HTMLTextAreaElement).value,
+    "Make a page\n\nDrill into EMEA",
+  );
 });
 
 test("with no composer open, the message waits for the next one", async () => {

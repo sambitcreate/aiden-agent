@@ -1,24 +1,12 @@
 import { onNotification } from "./ipc-bridge";
 import { settingsApi } from "./ipc-voice";
-import {
-  APPEARANCE_STORAGE_KEY,
-  applyAppearanceConfig,
-} from "./appearance-runtime";
-import {
-  parseAppearanceConfig,
-  type AppearanceConfig,
-} from "../shared/appearance";
+import { APPEARANCE_STORAGE_KEY, applyAppearanceConfig } from "./appearance-runtime";
+import { parseAppearanceConfig, type AppearanceConfig } from "../shared/appearance";
 
 interface AppearanceMediaQuery {
   readonly matches: boolean;
-  addEventListener(
-    type: "change",
-    listener: (event: MediaQueryListEvent) => void,
-  ): void;
-  removeEventListener(
-    type: "change",
-    listener: (event: MediaQueryListEvent) => void,
-  ): void;
+  addEventListener(type: "change", listener: (event: MediaQueryListEvent) => void): void;
+  removeEventListener(type: "change", listener: (event: MediaQueryListEvent) => void): void;
 }
 
 interface PillAppearanceStorageChange {
@@ -37,9 +25,7 @@ export interface PillAppearanceSyncEnvironment {
   darkScheme: AppearanceMediaQuery;
   highContrast: AppearanceMediaQuery;
   reducedMotion: AppearanceMediaQuery;
-  subscribeStorage(
-    listener: (event: PillAppearanceStorageChange) => void,
-  ): () => void;
+  subscribeStorage(listener: (event: PillAppearanceStorageChange) => void): () => void;
   subscribeAppearance(listener: (value: unknown) => void): () => void;
   subscribeVisibility(listener: () => void): () => void;
 }
@@ -54,9 +40,7 @@ export interface PillAppearanceSyncHandle {
  * back to the persisted main-process settings instead of silently becoming
  * default appearance values.
  */
-export function parsePillAppearanceStorageValue(
-  value: string | null,
-): AppearanceConfig | null {
+export function parsePillAppearanceStorageValue(value: string | null): AppearanceConfig | null {
   if (!value) return null;
   try {
     return parseAppearanceConfig(JSON.parse(value) as unknown);
@@ -71,16 +55,10 @@ function browserEnvironment(): PillAppearanceSyncEnvironment {
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   return {
     readCachedAppearance: () =>
-      parsePillAppearanceStorageValue(
-        localStorage.getItem(APPEARANCE_STORAGE_KEY),
-      ),
+      parsePillAppearanceStorageValue(localStorage.getItem(APPEARANCE_STORAGE_KEY)),
     readAuthoritativeAppearance: () => settingsApi.getAppearance(),
     applyAppearance: (config, nativeUsesDarkColors, systemHighContrast) => {
-      applyAppearanceConfig(
-        config,
-        nativeUsesDarkColors,
-        systemHighContrast,
-      );
+      applyAppearanceConfig(config, nativeUsesDarkColors, systemHighContrast);
     },
     darkScheme,
     highContrast,
@@ -91,8 +69,7 @@ function browserEnvironment(): PillAppearanceSyncEnvironment {
       window.addEventListener("storage", handleStorage);
       return () => window.removeEventListener("storage", handleStorage);
     },
-    subscribeAppearance: (listener) =>
-      onNotification("settings:appearance-changed", listener),
+    subscribeAppearance: (listener) => onNotification("settings:appearance-changed", listener),
     subscribeVisibility: (listener) => {
       window.addEventListener("visibilitychange", listener);
       return () => window.removeEventListener("visibilitychange", listener);

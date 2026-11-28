@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ChatPullRequestView } from "../shared/chat-pull-requests";
-import { rowPullRequestLabel, sidebarPullRequestChatIds, sidebarRowPullRequest } from "./chat-row-context";
+import {
+  rowPullRequestLabel,
+  sidebarPullRequestChatIds,
+  sidebarRowPullRequest,
+} from "./chat-row-context";
 import type { GitHubPullRequestSummary } from "./types";
 
 function linked(number: number, overrides: Partial<ChatPullRequestView> = {}): ChatPullRequestView {
@@ -19,7 +23,10 @@ function linked(number: number, overrides: Partial<ChatPullRequestView> = {}): C
   };
 }
 
-function discovered(number: number, overrides: Partial<GitHubPullRequestSummary> = {}): GitHubPullRequestSummary {
+function discovered(
+  number: number,
+  overrides: Partial<GitHubPullRequestSummary> = {},
+): GitHubPullRequestSummary {
   return {
     number,
     title: `Branch ${number}`,
@@ -38,7 +45,10 @@ test("a chat with neither a linked nor a branch PR shows no PR", () => {
 });
 
 test("a branch PR the chat unlinked does not come back", () => {
-  assert.equal(sidebarRowPullRequest(undefined, discovered(12), ["github.com/owner/repo#12"]), undefined);
+  assert.equal(
+    sidebarRowPullRequest(undefined, discovered(12), ["github.com/owner/repo#12"]),
+    undefined,
+  );
   assert.equal(
     sidebarRowPullRequest(undefined, discovered(13), ["github.com/owner/repo#12"])?.number,
     13,
@@ -106,9 +116,12 @@ test("the bounded PR read keeps older chats in expanded groups ahead of newer co
     { id: "old-expanded", workspaceId: "w-open" },
     { id: "oldest-collapsed", workspaceId: "w-collapsed" },
   ];
-  assert.deepEqual(
-    sidebarPullRequestChatIds(chats, new Set(["w-open"]), 2),
-    ["new-collapsed", "old-expanded"],
-  );
-  assert.deepEqual(sidebarPullRequestChatIds(chats, new Set(), 2), ["new-collapsed", "newer-loose"]);
+  assert.deepEqual(sidebarPullRequestChatIds(chats, new Set(["w-open"]), 2), [
+    "new-collapsed",
+    "old-expanded",
+  ]);
+  assert.deepEqual(sidebarPullRequestChatIds(chats, new Set(), 2), [
+    "new-collapsed",
+    "newer-loose",
+  ]);
 });

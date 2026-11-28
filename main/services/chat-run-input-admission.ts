@@ -17,11 +17,7 @@ import type {
   ChatRunInputRejectionReason,
 } from "../../renderer/shared/chat-run-input.js";
 
-export type {
-  ChatRunInputAdmissionResult,
-  ChatRunInputMode,
-  ChatRunInputRejectionReason,
-};
+export type { ChatRunInputAdmissionResult, ChatRunInputMode, ChatRunInputRejectionReason };
 
 export interface ChatRunInputGenerationRef {
   chatId: string;
@@ -99,7 +95,10 @@ export interface ChatRunInputHooks {
    * The saved message id lets the run hand the context to an owed turn if
    * it ends before Pi reads the input.
    */
-  attachContext(input: { timestamp: number; text: string; messageId: string }, context: string): void;
+  attachContext(
+    input: { timestamp: number; text: string; messageId: string },
+    context: string,
+  ): void;
 }
 
 export interface ChatRunInputAdmissionDeps {
@@ -181,15 +180,12 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
   // The last timestamp each run's queued input used, so no two share one.
   const lastQueuedAt = new WeakMap<ChatRunInputGenerationRef, number>();
 
-  async function admit(
-    input: ChatRunInputAdmissionRequest,
-  ): Promise<ChatRunInputAdmissionResult> {
+  async function admit(input: ChatRunInputAdmissionRequest): Promise<ChatRunInputAdmissionResult> {
     const generation = deps.active.get(input.streamId);
     if (
       !generation ||
       (input.chatId !== undefined && generation.chatId !== input.chatId) ||
-      (input.ownerDocumentId !== undefined &&
-        generation.owner.documentId !== input.ownerDocumentId)
+      (input.ownerDocumentId !== undefined && generation.owner.documentId !== input.ownerDocumentId)
     ) {
       return { admitted: false, reason: "run_not_active", committed: false };
     }
@@ -249,7 +245,11 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
     // Pi already ended the run, so the saved input becomes the chat's next
     // turn, if main can still run one. A stopped run owes nothing.
     const owe = (): ChatRunInputAdmissionResult => {
-      if (owedHold && !stopped() && owedHold.register({ messageId, ...(hookContext ? { hookContext } : {}) })) {
+      if (
+        owedHold &&
+        !stopped() &&
+        owedHold.register({ messageId, ...(hookContext ? { hookContext } : {}) })
+      ) {
         return { admitted: true, queue: "follow-up", committed: true, messageId };
       }
       return { admitted: false, reason: "run_not_active", committed: true, messageId };
@@ -271,8 +271,7 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
               ...(input.fromLeadChat && !input.notice ? { fromLeadChat: true as const } : {}),
             },
             {
-              isCurrent: () =>
-                deps.active.get(input.streamId) === generation && !stopped(),
+              isCurrent: () => deps.active.get(input.streamId) === generation && !stopped(),
               ...(hookBlocked ? { hookBlockedReason: hookBlocked } : {}),
             },
           ),
@@ -300,7 +299,10 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
         // The input is committed either way; the snooze ends with the next wake.
       }
     }
-    if (generation.outsideInput && messageBringsOutsideContent({ role: "user", content: input.text, notice: input.notice })) {
+    if (
+      generation.outsideInput &&
+      messageBringsOutsideContent({ role: "user", content: input.text, notice: input.notice })
+    ) {
       generation.outsideInput();
     }
     if (input.fromLeadChat && generation.leadChatInput) {

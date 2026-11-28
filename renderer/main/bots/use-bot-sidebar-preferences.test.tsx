@@ -103,10 +103,13 @@ test("pruning with no live Bots keeps the pin, and pruning with live Bots drops 
 test("the gated preferences read and write nothing until enabled, then follow every change", async () => {
   const { useBotSidebarPreferencesWhen, botSidebarPreferenceActions } = await loadModule();
   let renders = 0;
-  const { result, rerender } = renderHook(({ enabled }) => {
-    renders += 1;
-    return useBotSidebarPreferencesWhen(enabled);
-  }, { initialProps: { enabled: false } });
+  const { result, rerender } = renderHook(
+    ({ enabled }) => {
+      renders += 1;
+      return useBotSidebarPreferencesWhen(enabled);
+    },
+    { initialProps: { enabled: false } },
+  );
   assert.equal(result.current === null, true, "a disabled caller reads nothing");
   assert.equal(stub.writes, 0, "a person who never enables it gets no stored record");
   const before = renders;
@@ -114,7 +117,11 @@ test("the gated preferences read and write nothing until enabled, then follow ev
   assert.equal(renders, before, "a Bot visit doesn't re-render a disabled caller");
 
   rerender({ enabled: true });
-  assert.equal(result.current?.lastViewed.b1 !== undefined, true, "enabling reads the current record");
+  assert.equal(
+    result.current?.lastViewed.b1 !== undefined,
+    true,
+    "enabling reads the current record",
+  );
   act(() => botSidebarPreferenceActions.markReplySeen("b2", 40));
   assert.equal(result.current?.seenReplyAt.b2, 40);
   assert.equal(result.current?.lastViewed.b2, undefined, "marking a reply read is not a view");

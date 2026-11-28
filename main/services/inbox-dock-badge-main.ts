@@ -51,7 +51,8 @@ async function botsNeedingYou(): Promise<string[]> {
   if (!hostPlatformCapabilities().bots) return [];
   const bots = await botApplicationService.list();
   if (bots.length === 0) return [];
-  const { botLiveProjection, botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
+  const { botLiveProjection, botSessionRuntime } =
+    await import("./bot-runtime/bot-session-main.js");
   const live = botLiveProjection();
   const sessions = await botSessionRuntime();
   const ids = bots.map((bot) => bot.id);
@@ -69,7 +70,8 @@ async function botsNeedingYou(): Promise<string[]> {
         // A Bot whose last turn failed (interrupted, or a model it can't use) counts too, as
         // the sidebar lists it as Failed in Needs you until its next run.
         if (await live.needsYou(id).catch(() => false)) waiting.push(id);
-        else if (isFailedBotSession(await sessions.state(id).catch(() => undefined))) waiting.push(id);
+        else if (isFailedBotSession(await sessions.state(id).catch(() => undefined)))
+          waiting.push(id);
       }
     }),
   );
@@ -100,7 +102,8 @@ async function readLocal(): Promise<InboxBadgeLocal> {
     {
       waits: interruptedWaits,
       operations: piRuntimeEffectStore,
-      onError: (error) => logger.warn("inbox", "Could not read interrupted waits for the Dock badge.", error),
+      onError: (error) =>
+        logger.warn("inbox", "Could not read interrupted waits for the Dock badge.", error),
     },
   );
   const pending = new Map<string, ChatPendingAttention>();
@@ -128,7 +131,9 @@ async function readLocal(): Promise<InboxBadgeLocal> {
 function readPeers(): InboxBadgePeer[] {
   const manager = peekPeerHostManager();
   if (!manager) return [];
-  return manager.statuses().map((status) => ({ status, feed: manager.feedSnapshot(status.hostId) }));
+  return manager
+    .statuses()
+    .map((status) => ({ status, feed: manager.feedSnapshot(status.hostId) }));
 }
 
 async function count(): Promise<number> {
@@ -145,7 +150,9 @@ let requested = false;
  * badge stays put when every window closes, so the Dock keeps counting with no
  * window open.
  */
-export function registerInboxDockBadgeIpc(options: { isMainWindow: (event: Electron.IpcMainInvokeEvent) => boolean }): void {
+export function registerInboxDockBadgeIpc(options: {
+  isMainWindow: (event: Electron.IpcMainInvokeEvent) => boolean;
+}): void {
   registerInboxBadgeRequest<Electron.IpcMainInvokeEvent>(ipcMain, {
     isMainWindow: options.isMainWindow,
     apply: (enabled) => {
@@ -166,7 +173,8 @@ export function startInboxDockBadge(options: { packaged: boolean }): void {
   const current = createInboxBadgeDriver({
     surface,
     count,
-    onError: (error) => logger.warn("inbox", "Could not count Needs you for the Dock badge.", error),
+    onError: (error) =>
+      logger.warn("inbox", "Could not count Needs you for the Dock badge.", error),
   });
   driver = current;
   const invalidate = (): void => current.invalidate();

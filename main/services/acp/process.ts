@@ -93,7 +93,8 @@ export class AcpProcess {
       detached: this.platform !== "win32",
     }) as ChildProcessWithoutNullStreams;
     this.child = child;
-    const group = this.platform !== "win32" && options.spawnImpl === undefined ? child.pid : undefined;
+    const group =
+      this.platform !== "win32" && options.spawnImpl === undefined ? child.pid : undefined;
     if (group !== undefined) {
       installExitHook();
       liveGroups.add(group);
@@ -180,7 +181,9 @@ export class AcpProcess {
         streamClosed = true;
         pending = [];
         pendingBytes = 0;
-        controller.error(new AcpHarnessError("protocol", "The agent sent an oversized protocol line."));
+        controller.error(
+          new AcpHarnessError("protocol", "The agent sent an oversized protocol line."),
+        );
         void this.close();
       }
     });
@@ -259,7 +262,8 @@ export class AcpProcess {
       this.stderrPartial = this.stderrPartial.slice(index + 1);
       safely(() => onLine(line));
     }
-    if (this.stderrPartial.length > 64 * 1024) this.stderrPartial = this.stderrPartial.slice(-64 * 1024);
+    if (this.stderrPartial.length > 64 * 1024)
+      this.stderrPartial = this.stderrPartial.slice(-64 * 1024);
   }
 
   private flushStderr(onLine?: (line: string) => void): void {

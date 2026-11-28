@@ -23,10 +23,7 @@ const provider: Provider = {
   hasKey: true,
 };
 
-function settingsServer(
-  initial: AppSettings,
-  options: { failWrites?: boolean } = {},
-) {
+function settingsServer(initial: AppSettings, options: { failWrites?: boolean } = {}) {
   let current = structuredClone(initial);
   const calls = installBotTestIpc({
     "settings:get": () => structuredClone(current),
@@ -136,7 +133,10 @@ test("list rows say whether each model is pinned, with no control inside the opt
     assert.equal(option.querySelectorAll("button, a[href], input, [tabindex]").length, 0);
     assert.ok(option.getAttribute("aria-keyshortcuts"));
   }
-  assert.equal(screen.queryAllByRole("button", { name: /^(Pin|Unpin) |(to|from) Pad$/u }).length, 0);
+  assert.equal(
+    screen.queryAllByRole("button", { name: /^(Pin|Unpin) |(to|from) Pad$/u }).length,
+    0,
+  );
 
   // The retired "add to Pad" shortcut does nothing now.
   pressRowShortcut(filter, "A");
@@ -160,7 +160,9 @@ test("the Pin shortcut pins the highlighted row, says so, and keeps the list ope
   });
 
   fireEvent.keyDown(search, { key: "ArrowUp" });
-  await waitFor(() => assert.equal(modelOption("Placed Two").getAttribute("aria-selected"), "true"));
+  await waitFor(() =>
+    assert.equal(modelOption("Placed Two").getAttribute("aria-selected"), "true"),
+  );
   pressRowShortcut(search, "P");
 
   await waitFor(() => assert.match(rowDescription("Placed Two"), /^.*\. Pinned\./u));
@@ -379,4 +381,3 @@ test("a failed recents write neither blocks the choice nor shows an error", asyn
   });
   assert.ok(!screen.queryByText(/disk full/u), "no error toast for history");
 });
-

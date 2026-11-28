@@ -33,8 +33,7 @@ export interface BotInboxWriterTestControl {
 export function resolveBotInboxWriterBinary(
   runtime: BotInboxWriterRuntimePaths = {
     defaultApp: process.defaultApp === true,
-    resourcesPath:
-      typeof process.resourcesPath === "string" ? process.resourcesPath : undefined,
+    resourcesPath: typeof process.resourcesPath === "string" ? process.resourcesPath : undefined,
     cwd: process.cwd(),
   },
 ): string {
@@ -43,12 +42,7 @@ export function resolveBotInboxWriterBinary(
     typeof runtime.resourcesPath === "string" &&
     runtime.resourcesPath.length > 0
   ) {
-    return path.resolve(
-      runtime.resourcesPath,
-      "..",
-      "Helpers",
-      "aiden-bot-inbox-writer",
-    );
+    return path.resolve(runtime.resourcesPath, "..", "Helpers", "aiden-bot-inbox-writer");
   }
   return path.resolve(runtime.cwd, "build", "native", "aiden-bot-inbox-writer");
 }
@@ -154,9 +148,7 @@ export async function writeBotInboundAttachment(input: {
         PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
         LANG: "C",
         LC_ALL: "C",
-        ...(input.testControl
-          ? { AIDEN_BOT_INBOX_WRITER_TEST_HANDSHAKE: "1" }
-          : {}),
+        ...(input.testControl ? { AIDEN_BOT_INBOX_WRITER_TEST_HANDSHAKE: "1" } : {}),
       },
       stdio: input.testControl
         ? ["pipe", "pipe", "pipe", "pipe", "pipe"]
@@ -181,13 +173,7 @@ export async function writeBotInboundAttachment(input: {
   });
   deadline.catch(() => undefined);
 
-  const storedPath = path.join(
-    input.home.homePath,
-    ".aiden",
-    "telegram-inbox",
-    profile,
-    leaf,
-  );
+  const storedPath = path.join(input.home.homePath, ".aiden", "telegram-inbox", profile, leaf);
   let written = false;
   const writing = writeThroughHelper().then(() => {
     written = true;
@@ -204,7 +190,9 @@ export async function writeBotInboundAttachment(input: {
     // A helper stuck in an uninterruptible filesystem call may not close
     // promptly even after SIGKILL; do not let that hang the ingest.
     await Promise.race([closed.catch(() => undefined), delay(INBOX_KILL_SETTLE_MS)]);
-    const diagnostic = (await Promise.race([stderr, delay(INBOX_KILL_SETTLE_MS).then(() => "")])).trim();
+    const diagnostic = (
+      await Promise.race([stderr, delay(INBOX_KILL_SETTLE_MS).then(() => "")])
+    ).trim();
     if (diagnostic.length > 0) {
       throw new Error(diagnostic);
     }

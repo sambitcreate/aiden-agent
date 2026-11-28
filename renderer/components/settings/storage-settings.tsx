@@ -22,7 +22,21 @@ import {
   type StorageReport,
   type StorageScanState,
 } from "../../shared/storage";
-import { AlertDialog, Badge, Button, EmptyState, Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Text, toast } from "../ui";
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  EmptyState,
+  Field,
+  FieldSet,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Text,
+  toast,
+} from "../ui";
 import { InfoHint } from "../ui-info-hint";
 
 import { localComputerNoun } from "../../shared/computer-noun";
@@ -40,7 +54,10 @@ function scanCaption(scan: StorageScanState): string {
   if (scan.status === "failed") return scan.error ?? "Aiden could not measure local storage.";
   if (scan.status === "scanning") return "Measuring how much disk Aiden uses…";
   if (scan.scannedAt === null) return "Not measured yet.";
-  const when = new Date(scan.scannedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const when = new Date(scan.scannedAt).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
   return scan.truncated
     ? `Measured at ${when}. Aiden stopped early, so some sizes are a minimum.`
     : `Measured at ${when}.`;
@@ -68,7 +85,9 @@ function segmentColor(index: number): string {
 
 /** Categories with something on disk, largest first; the bar and the list share this order. */
 function usedCategories(report: StorageReport): StorageCategoryUsage[] {
-  return report.categories.filter((category) => category.bytes > 0).sort((a, b) => b.bytes - a.bytes);
+  return report.categories
+    .filter((category) => category.bytes > 0)
+    .sort((a, b) => b.bytes - a.bytes);
 }
 
 function StorageBar({ report }: { report: StorageReport }) {
@@ -79,7 +98,10 @@ function StorageBar({ report }: { report: StorageReport }) {
       className="flex h-2 w-full gap-[2px] overflow-hidden rounded-pill bg-control"
       role="img"
       aria-label={`Disk use by category: ${used
-        .map((category) => `${storageCategory(category.id).label} ${formatStorageBytes(category.bytes)}`)
+        .map(
+          (category) =>
+            `${storageCategory(category.id).label} ${formatStorageBytes(category.bytes)}`,
+        )
         .join(", ")}`}
     >
       {used.map((category, index) => (
@@ -243,7 +265,8 @@ export function StorageSettings({
       const data = await storageApi.preview(request);
       if (change === latestWindowChange.current) setPreview({ request, single: false, data });
     } catch {
-      if (change === latestWindowChange.current) toast.error("Aiden could not work out what would be removed.");
+      if (change === latestWindowChange.current)
+        toast.error("Aiden could not work out what would be removed.");
     } finally {
       if (change === latestWindowChange.current) setBusy(null);
     }
@@ -269,7 +292,10 @@ export function StorageSettings({
         inactiveDays: data.inactiveDays,
         targetIds: data.items.map((item) => item.id),
       });
-      const freed = result.freedBytes > 0 ? `Freed ${formatStorageBytes(result.freedBytes)}.` : "No measurable space was freed.";
+      const freed =
+        result.freedBytes > 0
+          ? `Freed ${formatStorageBytes(result.freedBytes)}.`
+          : "No measurable space was freed.";
       // The removal only reports what the review had listed, so everything here is news.
       const notRemoved = result.failed.length + result.skipped.length;
       if (result.removed.length === 0) {
@@ -277,10 +303,15 @@ export function StorageSettings({
         announce(
           "error",
           result.failed[0]?.reason ??
-            (kept ? `Aiden kept ${kept.label}: ${protectionCopy(kept.reason).toLowerCase()}.` : "Nothing was removed."),
+            (kept
+              ? `Aiden kept ${kept.label}: ${protectionCopy(kept.reason).toLowerCase()}.`
+              : "Nothing was removed."),
         );
       } else if (notRemoved > 0) {
-        announce("error", `${freed} ${notRemoved} item${notRemoved === 1 ? " was" : "s were"} kept or could not be removed.`);
+        announce(
+          "error",
+          `${freed} ${notRemoved} item${notRemoved === 1 ? " was" : "s were"} kept or could not be removed.`,
+        );
       } else {
         announce("success", freed);
       }
@@ -317,7 +348,10 @@ export function StorageSettings({
             variant="filled"
             disabled={actionsDisabled || report.worktrees.length === 0}
             onClick={() =>
-              void openPreview({ action: "remove-worktrees", inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS }, false)
+              void openPreview(
+                { action: "remove-worktrees", inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS },
+                false,
+              )
             }
           >
             Review…
@@ -330,7 +364,10 @@ export function StorageSettings({
             variant="filled"
             disabled={actionsDisabled || report.browserCacheBytes <= 0}
             onClick={() =>
-              void openPreview({ action: "clear-browser-cache", inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS }, false)
+              void openPreview(
+                { action: "clear-browser-cache", inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS },
+                false,
+              )
             }
           >
             Clear cache…
@@ -343,7 +380,10 @@ export function StorageSettings({
             variant="filled"
             disabled={actionsDisabled}
             onClick={() =>
-              void openPreview({ action: "clear-logs", inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS }, false)
+              void openPreview(
+                { action: "clear-logs", inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS },
+                false,
+              )
             }
           >
             Clear…
@@ -443,7 +483,8 @@ export function StorageSettings({
           title="Largest worktrees"
           hint={
             <InfoHint topic="worktree removal">
-              Aiden only removes worktrees it created, and never one with work that isn’t saved and pushed.
+              Aiden only removes worktrees it created, and never one with work that isn’t saved and
+              pushed.
             </InfoHint>
           }
         >
@@ -453,7 +494,9 @@ export function StorageSettings({
               label={worktree.name}
               caption={`${worktree.branch} · ${idleCaption(worktree.idleDays)}`}
               size={sizeLabel(worktree.bytes, worktree.bytesComplete)}
-              keptReason={worktree.protected ? protectionCopy(worktree.protectionReason) : undefined}
+              keptReason={
+                worktree.protected ? protectionCopy(worktree.protectionReason) : undefined
+              }
               actionLabel="Remove…"
               actionDisabled={actionsDisabled}
               onAction={() =>
@@ -474,7 +517,11 @@ export function StorageSettings({
       {threads.length > 0 ? (
         <FieldSet
           title="Largest chats"
-          hint={<InfoHint topic="chat deletion">Chats are deleted one at a time, and only when you ask.</InfoHint>}
+          hint={
+            <InfoHint topic="chat deletion">
+              Chats are deleted one at a time, and only when you ask.
+            </InfoHint>
+          }
         >
           {threads.map((thread) => (
             <ItemRow
@@ -491,7 +538,11 @@ export function StorageSettings({
               actionDisabled={actionsDisabled}
               onAction={() =>
                 void openPreview(
-                  { action: "delete-threads", inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS, targetIds: [thread.chatId] },
+                  {
+                    action: "delete-threads",
+                    inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS,
+                    targetIds: [thread.chatId],
+                  },
                   true,
                 )
               }
@@ -500,7 +551,10 @@ export function StorageSettings({
         </FieldSet>
       ) : null}
 
-      {report && report.scan.status === "ready" && worktrees.length === 0 && threads.length === 0 ? (
+      {report &&
+      report.scan.status === "ready" &&
+      worktrees.length === 0 &&
+      threads.length === 0 ? (
         <EmptyState
           placement="inline"
           title="Nothing to list yet"
@@ -516,10 +570,15 @@ export function StorageSettings({
         title={preview ? previewTitle(preview) : ""}
         description={preview ? previewDescription(preview) : undefined}
         confirmLabel={
-          preview && busy === preview.request.action ? "Removing…" : preview ? previewConfirmLabel(preview) : "Remove"
+          preview && busy === preview.request.action
+            ? "Removing…"
+            : preview
+              ? previewConfirmLabel(preview)
+              : "Remove"
         }
         confirmVariant={
-          preview?.request.action === "remove-worktrees" || preview?.request.action === "delete-threads"
+          preview?.request.action === "remove-worktrees" ||
+          preview?.request.action === "delete-threads"
             ? "destructive"
             : undefined
         }
@@ -551,7 +610,8 @@ function previewDescription({ request, single, data }: OpenPreview): string {
   const freed = sizeLabel(data.totalBytes, data.totalComplete).replace(/^At least/u, "at least");
   const kept = data.skipped[0];
   if (data.items.length === 0) {
-    if (single && kept) return `Aiden keeps ${kept.label}: ${protectionCopy(kept.reason).toLowerCase()}.`;
+    if (single && kept)
+      return `Aiden keeps ${kept.label}: ${protectionCopy(kept.reason).toLowerCase()}.`;
     switch (request.action) {
       case "remove-worktrees":
         return `No worktree has gone unused for ${data.inactiveDays} days.`;
@@ -617,7 +677,10 @@ function PreviewBody({
           <Text variant="small" color="secondary" className="whitespace-nowrap">
             Unused for
           </Text>
-          <Select value={String(data.inactiveDays)} onValueChange={(next) => onWindowChange(Number(next) as StorageInactiveDays)}>
+          <Select
+            value={String(data.inactiveDays)}
+            onValueChange={(next) => onWindowChange(Number(next) as StorageInactiveDays)}
+          >
             <SelectTrigger size="small" aria-label="Unused for" className="w-40">
               <SelectValue />
             </SelectTrigger>
@@ -641,7 +704,9 @@ function PreviewBody({
             <li key={item.id} className="flex min-w-0 items-baseline gap-3">
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-primary">{item.label}</span>
-                {item.detail ? <span className="block truncate text-tertiary">{item.detail}</span> : null}
+                {item.detail ? (
+                  <span className="block truncate text-tertiary">{item.detail}</span>
+                ) : null}
               </span>
               <span className="shrink-0 tabular-nums text-secondary">
                 {sizeLabel(item.bytes, item.bytesComplete !== false)}

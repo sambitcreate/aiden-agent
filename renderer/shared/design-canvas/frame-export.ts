@@ -6,7 +6,11 @@ import type { DesignFrame, DesignPaper, DesignPrintMode } from "./schema.js";
 import { isDesignPrintable } from "./schema.js";
 
 export type DesignExportFormat = "png" | "pdf" | "source";
-export const DESIGN_EXPORT_FORMATS = ["png", "pdf", "source"] as const satisfies readonly DesignExportFormat[];
+export const DESIGN_EXPORT_FORMATS = [
+  "png",
+  "pdf",
+  "source",
+] as const satisfies readonly DesignExportFormat[];
 
 /** A picture of a page is drawn at most this tall, in the page's own CSS pixels. */
 export const DESIGN_EXPORT_MAX_HEIGHT = 8000;
@@ -75,6 +79,13 @@ export function designPdfLayout(input: {
   const paper = input.paper ?? "letter";
   const printable = (PAPER_INCHES[paper].width - DESIGN_PDF_MARGIN_IN * 2) * 96;
   const fixed = input.printMode === "fixed" && input.width > 0;
-  const scale = fixed ? Math.min(2, Math.max(0.1, Math.round((printable / input.width) * 1000) / 1000)) : 1;
-  return { paper, pageSize: paper === "a4" ? "A4" : "Letter", marginInches: DESIGN_PDF_MARGIN_IN, scale };
+  const scale = fixed
+    ? Math.min(2, Math.max(0.1, Math.round((printable / input.width) * 1000) / 1000))
+    : 1;
+  return {
+    paper,
+    pageSize: paper === "a4" ? "A4" : "Letter",
+    marginInches: DESIGN_PDF_MARGIN_IN,
+    scale,
+  };
 }

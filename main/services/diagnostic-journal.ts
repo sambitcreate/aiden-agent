@@ -148,7 +148,8 @@ function removeLegacyDevelopmentLogs(target: string): void {
         metadata.nlink !== 1 ||
         metadata.size > MAX_DIAGNOSTIC_LOG_BYTES ||
         metadata.mtimeMs < now().getTime() - MAX_DIAGNOSTIC_LOG_AGE_MS
-      ) rmSync(candidate, { force: true });
+      )
+        rmSync(candidate, { force: true });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -332,10 +333,7 @@ async function rotateBeforeAppend(target: string, incomingBytes: number): Promis
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   const ageExpired = now().getTime() - activeSegmentStartedAtMs >= MAX_DIAGNOSTIC_LOG_AGE_MS;
-  if (
-    currentBytes + incomingBytes <= MAX_DIAGNOSTIC_LOG_BYTES &&
-    !ageExpired
-  ) return currentBytes;
+  if (currentBytes + incomingBytes <= MAX_DIAGNOSTIC_LOG_BYTES && !ageExpired) return currentBytes;
 
   if (ageExpired) {
     await fs.rm(target, { force: true });
@@ -425,7 +423,10 @@ async function appendBatch(
 
 async function pruneGeneralRetentionAt(target: string, currentMs: number): Promise<void> {
   const cutoff = currentMs - MAX_DIAGNOSTIC_LOG_AGE_MS;
-  const removeExpiredStructured = async (candidate: string, maximumBytes: number): Promise<boolean> => {
+  const removeExpiredStructured = async (
+    candidate: string,
+    maximumBytes: number,
+  ): Promise<boolean> => {
     try {
       const metadata = await fs.lstat(candidate);
       if (
@@ -469,7 +470,8 @@ async function pruneGeneralRetentionAt(target: string, currentMs: number): Promi
           metadata.nlink !== 1 ||
           metadata.size > MAX_DIAGNOSTIC_LOG_BYTES ||
           metadata.mtimeMs < cutoff
-        ) await fs.rm(candidate, { force: true });
+        )
+          await fs.rm(candidate, { force: true });
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
@@ -514,7 +516,9 @@ export function pruneDiagnosticJournalRetention(at = new Date()): Promise<void> 
   }
   openBatch = null;
   const sweep = queue.then(() => pruneGeneralRetentionAt(target, at.getTime()));
-  queue = sweep.catch(() => { writeFailed = true; });
+  queue = sweep.catch(() => {
+    writeFailed = true;
+  });
   return sweep;
 }
 
@@ -540,7 +544,11 @@ export function initDiagnosticJournal(options: DiagnosticJournalOptions): void {
     removeStaleRotationArtifacts(options.targetPath);
     ensureJournalFile(options.targetPath);
     const currentMetadata = lstatSync(options.targetPath);
-    if (!currentMetadata.isFile() || currentMetadata.isSymbolicLink() || currentMetadata.nlink !== 1) {
+    if (
+      !currentMetadata.isFile() ||
+      currentMetadata.isSymbolicLink() ||
+      currentMetadata.nlink !== 1
+    ) {
       throw new Error("Diagnostic journal is not an owned regular file.");
     }
     if (currentMetadata.size > MAX_DIAGNOSTIC_LOG_BYTES) {
@@ -556,10 +564,8 @@ export function initDiagnosticJournal(options: DiagnosticJournalOptions): void {
     const oldestFatalAtMs = oldestRecordAtMs(fatal);
     if (
       fatalMetadata.size > MAX_DIAGNOSTIC_FATAL_BYTES ||
-      (fatalMetadata.size > 0 && (
-        oldestFatalAtMs === null ||
-        oldestFatalAtMs < now().getTime() - MAX_DIAGNOSTIC_LOG_AGE_MS
-      ))
+      (fatalMetadata.size > 0 &&
+        (oldestFatalAtMs === null || oldestFatalAtMs < now().getTime() - MAX_DIAGNOSTIC_LOG_AGE_MS))
     ) {
       rmSync(fatal, { force: true });
       ensureJournalFile(fatal);
@@ -649,7 +655,10 @@ export interface DiagnosticEventDetail {
   readonly duringShutdown?: boolean;
 }
 
-export type DiagnosticEventObserver = (event: DiagnosticEventV1, detail: DiagnosticEventDetail | undefined) => void;
+export type DiagnosticEventObserver = (
+  event: DiagnosticEventV1,
+  detail: DiagnosticEventDetail | undefined,
+) => void;
 
 let eventObserver: DiagnosticEventObserver | undefined;
 let observing = false;
@@ -661,7 +670,10 @@ export function observeDiagnosticEvents(observer: DiagnosticEventObserver | unde
 
 // Runs on the crash path. It cannot throw into the writer, and an event written
 // while the observer runs cannot reach the observer again.
-function notifyEventObserver(event: DiagnosticEventV1, detail: DiagnosticEventDetail | undefined): void {
+function notifyEventObserver(
+  event: DiagnosticEventV1,
+  detail: DiagnosticEventDetail | undefined,
+): void {
   if (!eventObserver || observing) return;
   observing = true;
   try {
@@ -673,7 +685,10 @@ function notifyEventObserver(event: DiagnosticEventV1, detail: DiagnosticEventDe
   }
 }
 
-export function writeDiagnosticEvent(input: DiagnosticEventInput, detail?: DiagnosticEventDetail): DiagnosticEventV1 {
+export function writeDiagnosticEvent(
+  input: DiagnosticEventInput,
+  detail?: DiagnosticEventDetail,
+): DiagnosticEventV1 {
   const event = eventForRuntime(input);
   if (writeMode !== "fatal-only" || event.level === "fatal") {
     recordDiagnosticHealth(event);
@@ -683,7 +698,10 @@ export function writeDiagnosticEvent(input: DiagnosticEventInput, detail?: Diagn
   return event;
 }
 
-export function writeDiagnosticEventSync(input: DiagnosticEventInput, detail?: DiagnosticEventDetail): DiagnosticEventV1 {
+export function writeDiagnosticEventSync(
+  input: DiagnosticEventInput,
+  detail?: DiagnosticEventDetail,
+): DiagnosticEventV1 {
   const event = eventForRuntime(input);
   if (writeMode !== "fatal-only" || event.level === "fatal") writeFatalLine(event);
   notifyEventObserver(event, detail);
@@ -699,7 +717,8 @@ function writeFatalLine(event: DiagnosticEventV1): void {
     ensurePrivateDirectory(path.dirname(target));
     ensureJournalFile(target);
     const current = lstatSync(target);
-    if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1) throw new Error("Invalid fatal journal.");
+    if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1)
+      throw new Error("Invalid fatal journal.");
     if (
       current.size + Buffer.byteLength(line) > MAX_DIAGNOSTIC_FATAL_BYTES ||
       now().getTime() - fatalSegmentStartedAtMs >= MAX_DIAGNOSTIC_LOG_AGE_MS
@@ -780,7 +799,10 @@ function legacyText(values: unknown[]): string {
   );
 }
 
-function legacyEventName(level: Exclude<DiagnosticLevel, "fatal">, area: DiagnosticArea): DiagnosticEventName {
+function legacyEventName(
+  level: Exclude<DiagnosticLevel, "fatal">,
+  area: DiagnosticArea,
+): DiagnosticEventName {
   if (level === "error") return `${area}-failed`;
   if (level === "warn") return `${area}-degraded`;
   return "legacy-log";
@@ -792,28 +814,42 @@ export function writeLegacyDiagnostic(
   values: unknown[],
   synchronous = false,
 ): DiagnosticEventV1 {
-  const error = values.find((value) => utilTypes.isNativeError(value)) ?? values.find((value) => {
-    if (!value || typeof value !== "object" || utilTypes.isProxy(value)) return false;
-    try {
-      if (value instanceof DOMException) return true;
-      // SDKs also throw plain structural envelopes. Classification never retains
-      // their message, response body, request, headers, or arbitrary properties.
-      // An arbitrary context object with a status/code alone is not an error.
-      const message = Object.getOwnPropertyDescriptor(value, "message");
-      return message && "value" in message && typeof message.value === "string" &&
-        projectDiagnosticError(value).code !== "unknown";
-    } catch {
-      // Even a non-proxy object may inherit from a hostile/revoked proxy.
-      return false;
-    }
-  });
+  const error =
+    values.find((value) => utilTypes.isNativeError(value)) ??
+    values.find((value) => {
+      if (!value || typeof value !== "object" || utilTypes.isProxy(value)) return false;
+      try {
+        if (value instanceof DOMException) return true;
+        // SDKs also throw plain structural envelopes. Classification never retains
+        // their message, response body, request, headers, or arbitrary properties.
+        // An arbitrary context object with a status/code alone is not an error.
+        const message = Object.getOwnPropertyDescriptor(value, "message");
+        return (
+          message &&
+          "value" in message &&
+          typeof message.value === "string" &&
+          projectDiagnosticError(value).code !== "unknown"
+        );
+      } catch {
+        // Even a non-proxy object may inherit from a hostile/revoked proxy.
+        return false;
+      }
+    });
   const projection = error ? projectDiagnosticError(error) : undefined;
   const input: DiagnosticEventInput = {
     level,
     area: LEGACY_AREA_MAP[scope] ?? "diagnostics",
-    event: runtimeProfile === "production" ? legacyEventName(level, LEGACY_AREA_MAP[scope] ?? "diagnostics") : "legacy-log",
-    ...(projection?.code === "cancelled" ? { outcome: "cancelled" as const }
-      : level === "error" ? { outcome: "failed" as const } : level === "warn" ? { outcome: "degraded" as const } : {}),
+    event:
+      runtimeProfile === "production"
+        ? legacyEventName(level, LEGACY_AREA_MAP[scope] ?? "diagnostics")
+        : "legacy-log",
+    ...(projection?.code === "cancelled"
+      ? { outcome: "cancelled" as const }
+      : level === "error"
+        ? { outcome: "failed" as const }
+        : level === "warn"
+          ? { outcome: "degraded" as const }
+          : {}),
     ...(projection ? { code: projection.code } : {}),
     fields: {
       legacyScope: sanitizeDiagnosticText(scope, 64) || "unknown",
@@ -884,7 +920,11 @@ export async function listDiagnosticJournalFiles(): Promise<string[]> {
 }
 
 async function writeSnapshot(destination: string, contents: Buffer): Promise<void> {
-  const handle = await fs.open(destination, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, 0o600);
+  const handle = await fs.open(
+    destination,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+    0o600,
+  );
   try {
     await handle.writeFile(contents);
     await handle.chmod(0o600);
@@ -934,7 +974,10 @@ async function copyNoFollow(source: string, destination: string): Promise<boolea
   }
 }
 
-export async function snapshotDiagnosticJournalFiles(destinationDirectory: string, at = new Date()): Promise<string[]> {
+export async function snapshotDiagnosticJournalFiles(
+  destinationDirectory: string,
+  at = new Date(),
+): Promise<string[]> {
   if (!targetPath) return [];
   const target = targetPath;
   // Copy the bounded fatal bytes before yielding: a later synchronous deletion
@@ -950,7 +993,12 @@ export async function snapshotDiagnosticJournalFiles(destinationDirectory: strin
   const snapshot = queue.then(async () => {
     await pruneGeneralRetentionAt(target, at.getTime());
     await fs.mkdir(destinationDirectory, { recursive: true, mode: 0o700 });
-    const sources = [target, ...Array.from({ length: MAX_DIAGNOSTIC_LOG_FILES - 1 }, (_, index) => rotatedPath(target, index + 1))];
+    const sources = [
+      target,
+      ...Array.from({ length: MAX_DIAGNOSTIC_LOG_FILES - 1 }, (_, index) =>
+        rotatedPath(target, index + 1),
+      ),
+    ];
     const copied: string[] = [];
     for (const source of sources) {
       const destination = path.join(destinationDirectory, path.basename(source));
@@ -963,7 +1011,11 @@ export async function snapshotDiagnosticJournalFiles(destinationDirectory: strin
     }
     return copied;
   });
-  queue = snapshot.then(() => undefined).catch(() => { writeFailed = true; });
+  queue = snapshot
+    .then(() => undefined)
+    .catch(() => {
+      writeFailed = true;
+    });
   return snapshot;
 }
 
@@ -983,7 +1035,9 @@ export async function deleteDiagnosticJournalFiles(): Promise<void> {
     ensureJournalFile(target);
     activeSegmentStartedAtMs = now().getTime();
   });
-  queue = deletion.catch(() => { writeFailed = true; });
+  queue = deletion.catch(() => {
+    writeFailed = true;
+  });
 
   // Fatal writes bypass the queue. Reset their file synchronously at admission
   // so a crash recorded while general deletion drains is preserved.

@@ -38,7 +38,8 @@ export function createChatAgentsInstructions(options: ChatAgentsInstructionOptio
 export const MCP_SERVERS_SECTION_ENTRY = "aiden.mcp-servers-section.v1";
 
 /** The section's guidance can exceed its listing budget; anything past this is not one we wrote. */
-const MAX_JOURNALED_SECTION_BYTES = MCP_SERVERS_SECTION_LIMITS.totalBytes + MCP_SERVERS_SECTION_LIMITS.guidanceBytes;
+const MAX_JOURNALED_SECTION_BYTES =
+  MCP_SERVERS_SECTION_LIMITS.totalBytes + MCP_SERVERS_SECTION_LIMITS.guidanceBytes;
 
 /**
  * The `mcp_servers` section the chat's latest connected generation showed, from
@@ -51,7 +52,8 @@ export function journaledMcpServersSection(branch: readonly PiSessionEntry[]): s
   for (const entry of branch) {
     if (entry.type !== "custom" || entry.customType !== MCP_SERVERS_SECTION_ENTRY) continue;
     const text = (entry.data as { text?: unknown } | undefined)?.text;
-    if (typeof text === "string" && Buffer.byteLength(text, "utf8") <= MAX_JOURNALED_SECTION_BYTES) section = text;
+    if (typeof text === "string" && Buffer.byteLength(text, "utf8") <= MAX_JOURNALED_SECTION_BYTES)
+      section = text;
   }
   return section;
 }
@@ -94,19 +96,25 @@ export interface ChatMcpServersSectionOptions {
  */
 export function createChatMcpServersSection(options: ChatMcpServersSectionOptions) {
   let rendered: string | undefined;
-  const render = () => (rendered ??= options.connectorsWithheld
-    ? options.journaled ?? ""
-    : renderMcpServersSection(options.inventory(), {
-        declared: options.declared,
-        connecting: (options.latePending?.() ?? 0) > 0,
-      }));
+  const render = () =>
+    (rendered ??= options.connectorsWithheld
+      ? (options.journaled ?? "")
+      : renderMcpServersSection(options.inventory(), {
+          declared: options.declared,
+          connecting: (options.latePending?.() ?? 0) > 0,
+        }));
   const refresher = createMcpServersSectionRefresher(render, options.now);
   return {
     apply: refresher.apply,
     /** The note that follows this turn's prompt, or "". */
     turnNote: options.connectorsWithheld && options.journaled ? CONNECTORS_WITHHELD_TURN_NOTE : "",
     async record(journal: Pick<PiSessionPort, "appendCustomEntry">): Promise<void> {
-      if (options.connectorsWithheld || rendered === undefined || rendered === (options.journaled ?? "")) return;
+      if (
+        options.connectorsWithheld ||
+        rendered === undefined ||
+        rendered === (options.journaled ?? "")
+      )
+        return;
       await journal.appendCustomEntry(MCP_SERVERS_SECTION_ENTRY, { text: rendered });
     },
   };

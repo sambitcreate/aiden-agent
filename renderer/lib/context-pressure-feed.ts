@@ -2,10 +2,7 @@ import type { ChatContextPressureV1 } from "../shared/context-pressure";
 
 export interface ContextPressureFeedOptions<Draft> {
   /** Ambient next-request projection for a chat (chats:contextPressure). */
-  fetch(
-    chatId: string,
-    draft: Draft | undefined,
-  ): Promise<ChatContextPressureV1 | null>;
+  fetch(chatId: string, draft: Draft | undefined): Promise<ChatContextPressureV1 | null>;
   /** Render a reading; null means the quiet "unknown" meter. */
   publish(pressure: ChatContextPressureV1 | null): void;
   /**
@@ -44,11 +41,9 @@ export class ContextPressureFeed<Draft> {
 
   constructor(private readonly options: ContextPressureFeedOptions<Draft>) {
     this.draftDelayMs = options.draftDelayMs ?? 500;
-    this.schedule =
-      options.schedule ?? ((run, delayMs) => setTimeout(run, delayMs));
+    this.schedule = options.schedule ?? ((run, delayMs) => setTimeout(run, delayMs));
     this.cancel =
-      options.cancel ??
-      ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+      options.cancel ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   }
 
   /** Show a chat (or none, for an unsaved draft chat); clears the old reading. */
@@ -97,7 +92,10 @@ export class ContextPressureFeed<Draft> {
     // Every request that can publish history takes a ticket, so an older one never overwrites a newer reading.
     const historyTicket = draft === undefined ? ++this.historyRequest : undefined;
     const reading = this.options.fetch(chatId, draft);
-    const history = withHistory && draft !== undefined && this.options.publishHistory ? this.readHistory(chatId) : undefined;
+    const history =
+      withHistory && draft !== undefined && this.options.publishHistory
+        ? this.readHistory(chatId)
+        : undefined;
     let pressure: ChatContextPressureV1 | null;
     try {
       pressure = await reading;

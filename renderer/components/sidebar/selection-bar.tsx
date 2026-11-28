@@ -20,7 +20,10 @@ export function SelectionBar({ count, onDelete, onClear }: SelectionBarProps) {
       data-selection-bar=""
       className="mx-2.5 mb-2 flex shrink-0 items-center gap-1 rounded-control bg-control/50 py-1 pr-1 pl-2.5"
     >
-      <span role="status" className="min-w-0 flex-1 truncate text-small text-secondary tabular-nums">
+      <span
+        role="status"
+        className="min-w-0 flex-1 truncate text-small text-secondary tabular-nums"
+      >
         {`${count} selected`}
       </span>
       <Button variant="transparent" size="small" onClick={onDelete}>

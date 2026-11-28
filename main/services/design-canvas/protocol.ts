@@ -171,14 +171,18 @@ export type DesignProtocolDeps = {
 };
 
 /** The handler `protocol.handle` runs for the scheme; any failure answers 404. */
-export function designProtocolHandler(deps: DesignProtocolDeps): (request: Request) => Promise<Response> {
+export function designProtocolHandler(
+  deps: DesignProtocolDeps,
+): (request: Request) => Promise<Response> {
   const handlerDeps: DesignResponseDeps = {
     grants: deps.grants,
     readFile: deps.readFile ?? readDesignFile,
     readLibrary: deps.readLibrary ?? readDesignLibrary,
   };
   return (request) =>
-    designResponse({ url: request.url, method: request.method }, handlerDeps).catch(() => failure(404));
+    designResponse({ url: request.url, method: request.method }, handlerDeps).catch(() =>
+      failure(404),
+    );
 }
 
 const registeredTargets = new WeakSet<object>();

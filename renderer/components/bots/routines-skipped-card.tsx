@@ -60,7 +60,11 @@ export function RoutinesSkippedCard({
           <ReceiptLine
             key={routine.routineId}
             icon={isStarted ? <Check className="text-status-green" /> : <CalendarClock />}
-            text={isStarted ? `Started: ${routine.name}` : `Skipped while paused (${skippedTimes(routine.count)}): ${routine.name}`}
+            text={
+              isStarted
+                ? `Started: ${routine.name}`
+                : `Skipped while paused (${skippedTimes(routine.count)}): ${routine.name}`
+            }
             {...(isStarted ? { role: "status" as const } : {})}
             actions={
               isStarted

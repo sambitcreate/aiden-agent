@@ -13,7 +13,9 @@ export interface ProviderCatalogIpc {
   handle(channel: string, handler: Handler): void;
 }
 
-export interface ProviderCatalogHandlerDependencies<Inventory extends { providers: unknown; errors: unknown }> {
+export interface ProviderCatalogHandlerDependencies<
+  Inventory extends { providers: unknown; errors: unknown },
+> {
   providerAuthOwner(event: IpcMainInvokeEvent): ProviderAuthOwner;
   isBuiltinProvider(providerId: string): boolean;
   refreshProviderCatalogs(providerIds?: readonly string[], force?: boolean): Promise<Inventory>;

@@ -204,9 +204,10 @@ const TELEGRAM_UNKNOWN_TRANSFER_BYTES = 20 * 1024 * 1024;
 /** Client-side deadline for one JSON Bot API request. */
 export function telegramRequestTimeoutMs(method: string, body: Record<string, unknown>): number {
   if (method === "getUpdates") {
-    const seconds = typeof body.timeout === "number" && Number.isFinite(body.timeout) && body.timeout > 0
-      ? body.timeout
-      : 0;
+    const seconds =
+      typeof body.timeout === "number" && Number.isFinite(body.timeout) && body.timeout > 0
+        ? body.timeout
+        : 0;
     return seconds * 1000 + TELEGRAM_LONG_POLL_GRACE_MS;
   }
   // A menu refresh must not indefinitely block later gate changes.
@@ -216,9 +217,10 @@ export function telegramRequestTimeoutMs(method: string, body: Record<string, un
 
 /** Client-side deadline for a file transfer, scaled by its size. */
 export function telegramTransferTimeoutMs(sizeBytes?: number): number {
-  const bytes = typeof sizeBytes === "number" && Number.isFinite(sizeBytes) && sizeBytes >= 0
-    ? sizeBytes
-    : TELEGRAM_UNKNOWN_TRANSFER_BYTES;
+  const bytes =
+    typeof sizeBytes === "number" && Number.isFinite(sizeBytes) && sizeBytes >= 0
+      ? sizeBytes
+      : TELEGRAM_UNKNOWN_TRANSFER_BYTES;
   return Math.min(
     TELEGRAM_TRANSFER_MAX_MS,
     TELEGRAM_TRANSFER_BASE_MS + Math.ceil((bytes / TELEGRAM_TRANSFER_BYTES_PER_SECOND) * 1000),
@@ -232,7 +234,9 @@ function requestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
 
 /** Production transport: posts JSON to api.telegram.org. Resolves the token
  *  per request so runtime key changes are picked up without re-creation. */
-export function createFetchTransport(tokenResolver: () => Promise<string | null>): TelegramTransport {
+export function createFetchTransport(
+  tokenResolver: () => Promise<string | null>,
+): TelegramTransport {
   return async (method, body, options) => {
     const token = await tokenResolver();
     if (!token) throw new Error("No Telegram bot token configured.");
@@ -348,30 +352,36 @@ export class TelegramBotApi {
     };
     if (offset !== undefined) body.offset = offset;
     return callWithAbort(
-      (requestSignal) => this.transport("getUpdates", body, requestSignal ? { signal: requestSignal } : undefined),
+      (requestSignal) =>
+        this.transport("getUpdates", body, requestSignal ? { signal: requestSignal } : undefined),
       signal,
     ).then((r) => unwrap<TelegramUpdate[]>(r));
   }
 
   async getMe(signal?: AbortSignal): Promise<TelegramUser> {
     return callWithAbort(
-      (requestSignal) => this.transport("getMe", {}, requestSignal ? { signal: requestSignal } : undefined),
+      (requestSignal) =>
+        this.transport("getMe", {}, requestSignal ? { signal: requestSignal } : undefined),
       signal,
     ).then((r) => unwrap<TelegramUser>(r));
   }
 
   async createForumTopic(chatId: number, name: string): Promise<TelegramForumTopic> {
-    return unwrap<TelegramForumTopic>(await this.transport("createForumTopic", {
-      chat_id: chatId,
-      name,
-    }));
+    return unwrap<TelegramForumTopic>(
+      await this.transport("createForumTopic", {
+        chat_id: chatId,
+        name,
+      }),
+    );
   }
 
   async deleteForumTopic(chatId: number, threadId: number): Promise<void> {
-    await unwrap<boolean>(await this.transport("deleteForumTopic", {
-      chat_id: chatId,
-      message_thread_id: threadId,
-    }));
+    await unwrap<boolean>(
+      await this.transport("deleteForumTopic", {
+        chat_id: chatId,
+        message_thread_id: threadId,
+      }),
+    );
   }
 
   async getFile(fileId: string): Promise<TelegramFile> {
@@ -400,20 +410,22 @@ export class TelegramBotApi {
     caption?: string;
   }): Promise<TelegramMessage> {
     if (!this.uploadTransport) throw new Error("Telegram file uploads are unavailable.");
-    return unwrap<TelegramMessage>(await this.uploadTransport(
-      "sendDocument",
-      {
-        chat_id: String(params.chatId),
-        ...(params.threadId !== undefined ? { message_thread_id: String(params.threadId) } : {}),
-        ...(params.caption ? { caption: params.caption } : {}),
-      },
-      {
-        field: "document",
-        bytes: params.bytes,
-        name: params.name,
-        mimeType: params.mimeType ?? "application/octet-stream",
-      },
-    ));
+    return unwrap<TelegramMessage>(
+      await this.uploadTransport(
+        "sendDocument",
+        {
+          chat_id: String(params.chatId),
+          ...(params.threadId !== undefined ? { message_thread_id: String(params.threadId) } : {}),
+          ...(params.caption ? { caption: params.caption } : {}),
+        },
+        {
+          field: "document",
+          bytes: params.bytes,
+          name: params.name,
+          mimeType: params.mimeType ?? "application/octet-stream",
+        },
+      ),
+    );
   }
 
   async sendVoice(params: {
@@ -425,20 +437,22 @@ export class TelegramBotApi {
     caption?: string;
   }): Promise<TelegramMessage> {
     if (!this.uploadTransport) throw new Error("Telegram voice uploads are unavailable.");
-    return unwrap<TelegramMessage>(await this.uploadTransport(
-      "sendVoice",
-      {
-        chat_id: String(params.chatId),
-        ...(params.threadId !== undefined ? { message_thread_id: String(params.threadId) } : {}),
-        ...(params.caption ? { caption: params.caption } : {}),
-      },
-      {
-        field: "voice",
-        bytes: params.bytes,
-        name: params.name ?? "aiden-voice.ogg",
-        mimeType: params.mimeType ?? "audio/ogg",
-      },
-    ));
+    return unwrap<TelegramMessage>(
+      await this.uploadTransport(
+        "sendVoice",
+        {
+          chat_id: String(params.chatId),
+          ...(params.threadId !== undefined ? { message_thread_id: String(params.threadId) } : {}),
+          ...(params.caption ? { caption: params.caption } : {}),
+        },
+        {
+          field: "voice",
+          bytes: params.bytes,
+          name: params.name ?? "aiden-voice.ogg",
+          mimeType: params.mimeType ?? "audio/ogg",
+        },
+      ),
+    );
   }
 
   /** Publish the private-chat command palette shown by Telegram clients. */
@@ -476,12 +490,14 @@ export class TelegramBotApi {
     markdown: string;
     replyMarkup?: unknown;
   }): Promise<TelegramMessage> {
-    return unwrap<TelegramMessage>(await this.transport("sendRichMessage", {
-      chat_id: params.chatId,
-      ...(params.threadId !== undefined ? { message_thread_id: params.threadId } : {}),
-      rich_message: { markdown: params.markdown, skip_entity_detection: true },
-      ...(params.replyMarkup ? { reply_markup: params.replyMarkup } : {}),
-    }));
+    return unwrap<TelegramMessage>(
+      await this.transport("sendRichMessage", {
+        chat_id: params.chatId,
+        ...(params.threadId !== undefined ? { message_thread_id: params.threadId } : {}),
+        rich_message: { markdown: params.markdown, skip_entity_detection: true },
+        ...(params.replyMarkup ? { reply_markup: params.replyMarkup } : {}),
+      }),
+    );
   }
 
   async sendRichMessageDraft(params: {
@@ -490,12 +506,14 @@ export class TelegramBotApi {
     draftId: number;
     markdown: string;
   }): Promise<void> {
-    await unwrap<boolean>(await this.transport("sendRichMessageDraft", {
-      chat_id: params.chatId,
-      draft_id: params.draftId,
-      ...(params.threadId !== undefined ? { message_thread_id: params.threadId } : {}),
-      rich_message: { markdown: params.markdown, skip_entity_detection: true },
-    }));
+    await unwrap<boolean>(
+      await this.transport("sendRichMessageDraft", {
+        chat_id: params.chatId,
+        draft_id: params.draftId,
+        ...(params.threadId !== undefined ? { message_thread_id: params.threadId } : {}),
+        rich_message: { markdown: params.markdown, skip_entity_detection: true },
+      }),
+    );
   }
 
   async editMessageText(params: {
@@ -517,7 +535,6 @@ export class TelegramBotApi {
     return unwrap<TelegramMessage>(await this.transport("editMessageText", body));
   }
 
-
   async editMessageReplyMarkup(params: {
     chatId: number;
     messageId: number;
@@ -532,11 +549,13 @@ export class TelegramBotApi {
   }
 
   async sendChatAction(chatId: number, action: string, threadId?: number): Promise<void> {
-    await unwrap<boolean>(await this.transport("sendChatAction", {
-      chat_id: chatId,
-      action,
-      ...(threadId !== undefined ? { message_thread_id: threadId } : {}),
-    }));
+    await unwrap<boolean>(
+      await this.transport("sendChatAction", {
+        chat_id: chatId,
+        action,
+        ...(threadId !== undefined ? { message_thread_id: threadId } : {}),
+      }),
+    );
   }
 
   async answerCallbackQuery(id: string, text?: string): Promise<void> {

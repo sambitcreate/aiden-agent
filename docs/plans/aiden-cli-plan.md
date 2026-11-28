@@ -90,7 +90,6 @@ Desktop global-hotkey dictation, computer-use, Bot Face Studio, and dock/menubar
 - Every phase extends `packages/cli/tests/` (registered in the root `test` chain): runtime smoke against the built bundle, structure checks, theme fidelity, and per-feature suites.
 - pi upgrades go through a replay gate modeled on `scripts/pi-upgrade-evaluation.mjs` before the exact pin moves.
 
-
 ## Parity implementation checkpoint — 2026-09-05
 
 Phases 2–5 now have CLI adapters and end-to-end tests: encrypted native provider credentials,

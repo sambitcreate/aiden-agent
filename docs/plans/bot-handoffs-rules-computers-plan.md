@@ -6,23 +6,23 @@ Status: Implemented in PR #559 (2026-10-21, shipped in 0.61.0); the owner's foll
 
 Five features for Aiden Bots:
 
-| | Feature | One line |
-|---|---|---|
-| A | **Hand-off cards** | A Bot can say "you do this part" (a 2FA code, a payment, a password change), and the person taps **Done** or **Skip**. |
-| B | **Sign-in for Bots** | A Bot gets its own browser profile. When it needs an account, it asks the person to sign in there. The model never sees the password. |
-| C | **Plain-language rules** | "When Ada wants to make a purchase → Ask first", "Move money → Hand off to me (locked)". Aiden enforces them. They can only make a Bot stricter. |
-| D | **Pause a Bot** | One switch stops the current turn, disarms every routine and stops the Bot's computer, until **Resume**. |
-| E | **Bot computers** | An opt-in macOS VM per Bot (Lume, Apple Virtualization), started only when needed, cloned from one shared base. The Bot can work there while the person is away, with a live view and **Take over**. |
+|     | Feature                  | One line                                                                                                                                                                                             |
+| --- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A   | **Hand-off cards**       | A Bot can say "you do this part" (a 2FA code, a payment, a password change), and the person taps **Done** or **Skip**.                                                                               |
+| B   | **Sign-in for Bots**     | A Bot gets its own browser profile. When it needs an account, it asks the person to sign in there. The model never sees the password.                                                                |
+| C   | **Plain-language rules** | "When Ada wants to make a purchase → Ask first", "Move money → Hand off to me (locked)". Aiden enforces them. They can only make a Bot stricter.                                                     |
+| D   | **Pause a Bot**          | One switch stops the current turn, disarms every routine and stops the Bot's computer, until **Resume**.                                                                                             |
+| E   | **Bot computers**        | An opt-in macOS VM per Bot (Lume, Apple Virtualization), started only when needed, cloned from one shared base. The Bot can work there while the person is away, with a live view and **Take over**. |
 
 ### Platforms
 
-| Feature | Mac | Linux | CLI | iOS / Android |
-|---|---|---|---|---|
-| A Hand-off | yes | yes | follow-up (the CLI Bot runtime has no durable waits yet) | yes (Remote rev 36) |
-| B Sign-in | yes | yes | no (no browser) | "Finish on your Mac" |
-| C Rules | yes | yes | follow-up (same reason) | read-only list, later |
-| D Pause | yes | yes | `aiden bots pause/unpause` | yes (Remote rev 36) |
-| E Bot computers | Apple silicon only | no (later: QEMU/Docker) | no | status only; live view later |
+| Feature         | Mac                | Linux                   | CLI                                                      | iOS / Android                |
+| --------------- | ------------------ | ----------------------- | -------------------------------------------------------- | ---------------------------- |
+| A Hand-off      | yes                | yes                     | follow-up (the CLI Bot runtime has no durable waits yet) | yes (Remote rev 36)          |
+| B Sign-in       | yes                | yes                     | no (no browser)                                          | "Finish on your Mac"         |
+| C Rules         | yes                | yes                     | follow-up (same reason)                                  | read-only list, later        |
+| D Pause         | yes                | yes                     | `aiden bots pause/unpause`                               | yes (Remote rev 36)          |
+| E Bot computers | Apple silicon only | no (later: QEMU/Docker) | no                                                       | status only; live view later |
 
 Bots already run on `darwin` and `linux` (`main/services/host-platform-capabilities.ts:22`). Bot computers add a separate `botComputers` flag that is true only on `darwin` + `arm64`.
 
@@ -46,7 +46,7 @@ Every feature below plugs into an existing piece:
 ## 3. Principles
 
 1. **Enforced, not just instructed.** Cua's rules are only text in the bot's instructions. Aiden checks every rule in `beforeTool`, and also renders the rules into the prompt so the model can plan around them.
-2. **Rules only tighten.** A rule can turn *allowed* into *ask*, or *ask* into *hand off*, never the other way. The one place Aiden relaxes anything is the Bot's own computer, and that relaxation comes from the VM boundary, not from a rule (§8.7).
+2. **Rules only tighten.** A rule can turn _allowed_ into _ask_, or _ask_ into _hand off_, never the other way. The one place Aiden relaxes anything is the Bot's own computer, and that relaxation comes from the VM boundary, not from a rule (§8.7).
 3. **Durable like questions.** Every new wait (a hand-off or a sign-in) stores its `waitId` in a tool-task memo and is asked again after a restart. An answer is applied exactly once.
 4. **Manual-only network.** Lume ships inside the app and the guest driver is copied from Aiden's own pinned `cua-driver`; only the macOS restore image is downloaded, and only after an explicit **Set up** action. Lume telemetry and update checks are off in every child process. No `lume serve`, no installer, no `PATH` lookup. Same posture as `cua-driver` and Antigravity.
 5. **One Remote revision** (36) for hand-offs and pause, gated per device (see §9 for why it can't be a new `/server` feature token).
@@ -88,7 +88,7 @@ hand_off({
 
 ### 4.4 Rule-driven hand-offs (with C)
 
-When a rule decides *hand off* for a tool call (§6.3), `beforeTool` opens a hand-off wait itself, using the memo `aiden.approval` with `kind: "handoff"`, instead of an approval card. The tool never runs. **Done** blocks the call with `The person did this themselves: <summary>. Continue from there.`, and **Skip** blocks it with the Skip text above. This works even when the model never calls `hand_off`.
+When a rule decides _hand off_ for a tool call (§6.3), `beforeTool` opens a hand-off wait itself, using the memo `aiden.approval` with `kind: "handoff"`, instead of an approval card. The tool never runs. **Done** blocks the call with `The person did this themselves: <summary>. Continue from there.`, and **Skip** blocks it with the Skip text above. This works even when the model never calls `hand_off`.
 
 On unattended turns (routine, Telegram), a rule hand-off doesn't wait. It blocks the call with `This needs the person (<rule>). Tell them in your reply.`, so the routine's result notification says what is needed.
 
@@ -138,41 +138,48 @@ CLI Bots (`packages/cli/src/bots.ts`) run on their own runtime, without the desk
 ### 6.1 Model
 
 ```ts
-type BotActionClass = "credentials" | "money" | "purchase" | "communicate" | "delete" | "publish" | "install";
-type BotRuleBehavior = "ask" | "hand_off";          // "allowed" is only a baseline, never a rule
+type BotActionClass =
+  | "credentials"
+  | "money"
+  | "purchase"
+  | "communicate"
+  | "delete"
+  | "publish"
+  | "install";
+type BotRuleBehavior = "ask" | "hand_off"; // "allowed" is only a baseline, never a rule
 interface BotRule {
   id: string;
-  actionClass?: BotActionClass;  // built-in rules
-  text?: string;                 // custom rules, the person's words (≤ 120 chars)
+  actionClass?: BotActionClass; // built-in rules
+  text?: string; // custom rules, the person's words (≤ 120 chars)
   behavior: BotRuleBehavior;
-  locked: boolean;               // code constants, never stored
+  locked: boolean; // code constants, never stored
 }
 ```
 
 Defaults for every Bot:
 
-| Rule (as shown) | Class | Behavior | Locked |
-|---|---|---|---|
-| Enter a password or 2FA code, or change account security | credentials | Hand off to me | yes |
-| Move money or enter card details | money | Hand off to me | yes |
-| Make a purchase or booking | purchase | Ask first | no (can change to Hand off) |
-| Send a message or email to someone | communicate | Ask first | no |
-| Post or publish something publicly | publish | Ask first | no |
-| Permanently delete something | delete | Ask first | no |
-| Install software (on your Mac) | install | Ask first | no |
+| Rule (as shown)                                          | Class       | Behavior       | Locked                      |
+| -------------------------------------------------------- | ----------- | -------------- | --------------------------- |
+| Enter a password or 2FA code, or change account security | credentials | Hand off to me | yes                         |
+| Move money or enter card details                         | money       | Hand off to me | yes                         |
+| Make a purchase or booking                               | purchase    | Ask first      | no (can change to Hand off) |
+| Send a message or email to someone                       | communicate | Ask first      | no                          |
+| Post or publish something publicly                       | publish     | Ask first      | no                          |
+| Permanently delete something                             | delete      | Ask first      | no                          |
+| Install software (on your Mac)                           | install     | Ask first      | no                          |
 
-Custom rule: "When Ada wants to *[text]* → Ask first | Hand off to me" (decision 3).
+Custom rule: "When Ada wants to _[text]_ → Ask first | Hand off to me" (decision 3).
 
 ### 6.2 Where actions are classified
 
 `main/services/bot-rules/classify.ts` turns a pending call into `{ classes: Set<BotActionClass>, evidence }`. It uses structured signals first and words second:
 
-| Surface | Strong signals | Word signals |
-|---|---|---|
-| Computer Use (`approvalFor` descriptor + captured element) | element `role` `AXSecureTextField` → credentials; menu leaf; app bundle (Mail, Messages → communicate) | the element label or title: "Pay", "Place order", "Buy", "Send", "Delete", "Transfer", "Publish", "Post" |
-| Browser (`browser_type`/`browser_click` target) | `input[type=password]`, `autocomplete` `one-time-code`/`cc-*`/`current-password`/`new-password`; a form posting to a payment host | the button or link accessible name, as above |
-| MCP mutating tools | tool annotations (`destructiveHint`), name verbs (`send_*`, `delete_*`, `post_*`, `create_payment*`) | summary text |
-| `hand_off` / `sign_in` / shell / files | not classified (shell stays governed by the Shell grant, which the rules editor says plainly) | |
+| Surface                                                    | Strong signals                                                                                                                    | Word signals                                                                                             |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Computer Use (`approvalFor` descriptor + captured element) | element `role` `AXSecureTextField` → credentials; menu leaf; app bundle (Mail, Messages → communicate)                            | the element label or title: "Pay", "Place order", "Buy", "Send", "Delete", "Transfer", "Publish", "Post" |
+| Browser (`browser_type`/`browser_click` target)            | `input[type=password]`, `autocomplete` `one-time-code`/`cc-*`/`current-password`/`new-password`; a form posting to a payment host | the button or link accessible name, as above                                                             |
+| MCP mutating tools                                         | tool annotations (`destructiveHint`), name verbs (`send_*`, `delete_*`, `post_*`, `create_payment*`)                              | summary text                                                                                             |
+| `hand_off` / `sign_in` / shell / files                     | not classified (shell stays governed by the Shell grant, which the rules editor says plainly)                                     |                                                                                                          |
 
 A labeled corpus (`main/services/bot-rules/fixtures/actions.json`, at least 80 real-looking descriptors across the surfaces) is the independent oracle for the classifier tests.
 
@@ -223,7 +230,7 @@ Property test: for every rule set and every call, `ruled >= baseline`.
 
 ### 7.2 Code
 
-- `bot-session-service.ts`: `pause(botId)` and `unpause(botId)`. `resume` is already the method for an interrupted turn, so the code, IPC (`bots:pause`, `bots:unpause`) and Remote names say *unpause*, even though the button reads **Resume**. Pausing needs a way to close one Bot's harness while a task is live. `harness-host.ts` only idle-closes today ("only with no live task"), so add a forced per-Bot close with the same bounded abort used at quit, and test that the turn comes back `interrupted`.
+- `bot-session-service.ts`: `pause(botId)` and `unpause(botId)`. `resume` is already the method for an interrupted turn, so the code, IPC (`bots:pause`, `bots:unpause`) and Remote names say _unpause_, even though the button reads **Resume**. Pausing needs a way to close one Bot's harness while a task is live. `harness-host.ts` only idle-closes today ("only with no live task"), so add a forced per-Bot close with the same bounded abort used at quit, and test that the turn comes back `interrupted`.
 - `BotSessionState` gains `{ kind: "paused"; interrupted?: string }`. `bot-status-line.tsx` and `bot-sidebar-rows.ts` show "Paused".
 - **Legacy wire projection (in this PR, before Remote rev 36).** Shipped iOS (`AidenBotSessionStateKind`) and Android (`AidenBot.kt`) clients decode Bot state as a closed enum, and `projectBotSessionState` (`aiden-remote-bot-session.ts`) passes kinds straight through. So it must map `paused` to `{ state: "unavailable", interrupted: false }` everywhere a state goes out: session snapshots, `state` frames, list and detail `sessionState`, and mutation responses. Only devices holding `bot:handoffs` (rev 36) see `paused`. Phone writes to a paused Bot (messages, resume, dismiss, running a routine) are refused with an error code shipped clients already know, picked from `AIDEN_REMOTE_ERROR_CODES` in this PR. `bot_paused` goes only to `bot:handoffs` devices.
 - `scheduled-bot-routines.ts`: check the pause store before the state switch, and add `paused_by_person` to `ScheduledRunSkipReason` (`main/services/types.ts:497`). `createBotRoutineCatchUp` ignores it.
@@ -277,8 +284,8 @@ Cross-version decoding: a paused Bot's snapshot, frames, list and detail respons
 - **Viewer.** Lume starts a VNC server per run with a random password. Two options for E0 to decide between:
   - (a) noVNC (MPL-2.0) in the renderer over a main-process WebSocket↔TCP bridge to the loopback port;
   - (b) a small RFB client in main that turns frames into the existing flat device viewer's MJPEG path.
-  - *Lean: (b)*, because it keeps the VNC password and socket in main and reuses the device viewer, floating player and phone viewer pipeline later.
-  - *Shipped (2026-10-21, PR #559): (b).* A main-side RFB client feeds a loopback viewer hub behind its own device hub proxy, and the Computer tab uses the existing `createDeviceStreamClient` with `preferMjpeg`.
+  - _Lean: (b)_, because it keeps the VNC password and socket in main and reuses the device viewer, floating player and phone viewer pipeline later.
+  - _Shipped (2026-10-21, PR #559): (b)._ A main-side RFB client feeds a loopback viewer hub behind its own device hub proxy, and the Computer tab uses the existing `createDeviceStreamClient` with `preferMjpeg`.
 - **VNC binding.** E0 must confirm Lume's VNC listener binds only to loopback. If it doesn't, Aiden must not use it.
 - **Take over.** It interrupts the Bot's current `computer` call (the turn stays alive and waits), switches the viewer to interactive, and shows **Give back**. Giving back resumes with a tool result note: `The person used the computer; take a fresh capture first.` Any physical input in the viewer also counts as Take over. While the person has control, `computer` captures are refused, so the model never sees a sign-in in progress. After Give back, macOS secure fields show only dots, but a plaintext one-time code left on screen is not masked in the VNC lane. That gap is listed in §13.
 - **Pointer avatar.** Draw the Bot's avatar at the last action point the Bot used (from the action arguments). That needs no guest cursor query.
@@ -288,15 +295,15 @@ Cross-version decoding: a paused Bot's snapshot, frames, list and detail respons
 - **New tool `computer`**, separate from `computer_use`, so the model and policy can't mix up "my own computer" with "the person's Mac". Same schema family and guidance as `computer_use` (capture, click, type, key, scroll, drag, wait, verify). It is offered when the Bot has a computer and the `computer` capability (`bot-capability-catalog-core.ts`).
 - **Control lane (decision 7):**
   - **VNC lane** (recommended first): screenshots and pointer/keyboard input go through the VNC session from the host. It needs no guest software and no guest permissions, and works even at the login window. It's vision-only, with no accessibility tree.
-  - **Guest driver lane** (second): run the pinned `cua-driver` inside the guest as a LaunchAgent in the logged-in session, and reach its MCP over an SSH-forwarded stdio channel. This plugs into `ComputerUseController` through a new `CuaDriverHostFactory` and a `Transport` over SSH (`computer-use/session.ts`). It gives the som/ax modes. It needs Accessibility and Screen Recording granted *inside the guest* once. The base-image setup walks the person through that in the live view, and clones inherit it.
+  - **Guest driver lane** (second): run the pinned `cua-driver` inside the guest as a LaunchAgent in the logged-in session, and reach its MCP over an SSH-forwarded stdio channel. This plugs into `ComputerUseController` through a new `CuaDriverHostFactory` and a `Transport` over SSH (`computer-use/session.ts`). It gives the som/ax modes. It needs Accessibility and Screen Recording granted _inside the guest_ once. The base-image setup walks the person through that in the live view, and clones inherit it.
 - **Shell in the computer:** `computer_shell({ command })` over SSH as `lume`, with a bounded output (reuse `bounded-shell-command.ts`) and a timeout. This lets the Bot install tools inside its own computer without touching the person's Mac.
 - **Files:** `<botHome>/Computer` is shared read-write at `/Volumes/My Shared Files` in the guest. That's the one way files move between the computer and the Bot's Files panel. Nothing else of the person's Mac is shared.
-- *Shipped (2026-10-21, PR #559):* both lanes. The VNC lane is the default. The guest driver lane uses Aiden's pinned cua-driver 0.36.0 (the same pin as Computer Use, not the 0.34.1 assumed here). Only its upstream-signed executable is copied into the base, and the guest checks its hash and signature. It is bridged with `cua-driver mcp --embedded --socket` over SSH rather than `nc -U`. The lane is used only after the base's grant probe passes, and only for `capture` with `app` and element clicks; screenshots, typing, keys, drags and scrolls stay on VNC.
+- _Shipped (2026-10-21, PR #559):_ both lanes. The VNC lane is the default. The guest driver lane uses Aiden's pinned cua-driver 0.36.0 (the same pin as Computer Use, not the 0.34.1 assumed here). Only its upstream-signed executable is copied into the base, and the guest checks its hash and signature. It is bridged with `cua-driver mcp --embedded --socket` over SSH rather than `nc -U`. The lane is used only after the base's grant probe passes, and only for `capture` with `app` and element clicks; screenshots, typing, keys, drags and scrolls stay on VNC.
 
 ### 8.7 Policy inside the Bot's computer
 
 - **Baseline is allowed.** Actions inside the Bot's own VM don't ask per click. That's the point of the feature, and the VM is the boundary.
-- **Rules still apply** (§6): purchase, communicate, publish and delete ask, and credentials and money hand off. VNC-lane clicks are coordinates, so every mutating `computer` action carries a required short `intent` ("Click Place order"). The classifier reads that intent and the window title, plus the guest driver's element roles once that lane exists. *Known gap:* in the VNC-only lane the classifier depends on the Bot's own description, so the guidance also tells the Bot to call `hand_off` for credentials and payments. The rules editor says so.
+- **Rules still apply** (§6): purchase, communicate, publish and delete ask, and credentials and money hand off. VNC-lane clicks are coordinates, so every mutating `computer` action carries a required short `intent` ("Click Place order"). The classifier reads that intent and the window title, plus the guest driver's element roles once that lane exists. _Known gap:_ in the VNC-only lane the classifier depends on the Bot's own description, so the guidance also tells the Bot to call `hand_off` for credentials and payments. The rules editor says so.
 - **Routines may use the computer unattended.** That is new. Today routines can't use Computer Use, because it asks per action.
 - **Network:** the guest uses Lume's default NAT, so it has the open internet. Note in docs that services listening on the Mac's interfaces are reachable from the guest. Aiden Remote stays authenticated, so that's acceptable.
 
@@ -304,13 +311,13 @@ Cross-version decoding: a paused Bot's snapshot, frames, list and detail respons
 
 `sign_in` on a Bot that is using its computer shows **Open Ada's computer**. It opens the Computer tab in Take over mode with Safari at the origin. The person signs in and taps **I'm signed in**, and the session stays in the guest. Nothing goes into a vault, and the model never sees the password.
 
-*Shipped (2026-10-21, PR #559).* `sign_in` takes `where: "computer"` when the Bot has a computer and Bot computers are on. Open hands the computer to the person before anything opens, stops the guest driver, and runs `/usr/bin/open -b com.apple.Safari <origin>`. The computer is given back when the card settles or is withdrawn. Give-back-on-settle lives in the computer opener (`bot-runtime/bot-computer-handoff.ts`), not in a separate holds module. Known limit: stopping the guest driver is one sweep, so a program the Bot left running in the guest is not stopped by it ([docs/bot-computers.md](../bot-computers.md)).
+_Shipped (2026-10-21, PR #559)._ `sign_in` takes `where: "computer"` when the Bot has a computer and Bot computers are on. Open hands the computer to the person before anything opens, stops the guest driver, and runs `/usr/bin/open -b com.apple.Safari <origin>`. The computer is given back when the card settles or is withdrawn. Give-back-on-settle lives in the computer opener (`bot-runtime/bot-computer-handoff.ts`), not in a separate holds module. Known limit: stopping the guest driver is one sweep, so a program the Bot left running in the guest is not stopped by it ([docs/bot-computers.md](../bot-computers.md)).
 
 ### 8.9 Phones
 
 v1 shows the computer's state on Bot detail ("Ada's computer is running"). A live phone view reuses the simulator viewer pipeline (`simulators:mobile`) in a later revision.
 
-*Not built yet (2026-10-21, PR #559).* Phones show "Using its computer" through the existing activity phases while the Bot uses it, but Bot detail has no computer state, and the Remote contract has no field for one.
+_Not built yet (2026-10-21, PR #559)._ Phones show "Using its computer" through the existing activity phases while the Bot uses it, but Bot detail has no computer state, and the Remote contract has no field for one.
 
 ### 8.10 Tests and acceptance
 
@@ -318,7 +325,7 @@ v1 shows the computer's state on Bot detail ("Ada's computer is running"). A liv
 - RFB client tests against recorded frame fixtures.
 - `main/services/bot-computers/integration.test.ts` runs a real Bot session with the real host (driving the fake Lume, whose VM forwards its VNC listener to the fake RFB server), sessions, RFB screen, viewer, IPC handlers and the `computer` tool. It covers Give, a capture that boots the VM, a click that lands, Take over interrupting the call and Give back returning the note, Pause stopping the VM, and Delete Bot removing it.
 - Packaged acceptance script `scripts/bot-computers-packaged-acceptance.mjs` (owner Mac only, like `computer-use-packaged-acceptance.mjs`): create the base, clone, run, capture, click, take over, then delete.
-  - *Shipped (2026-10-21, PR #559):* `AIDEN_BOT_COMPUTERS_ACCEPTANCE=1 npm run test:bot-computers:packaged`. The operator follows the prompts while the script plays the model: Set up, Give, a capture and a click, Take over and Give back, `computer_shell`, Pause, Delete Bot and Remove everything. It writes `build/bot-computers-acceptance-receipt.json`. Its pure core is tested in CI.
+  - _Shipped (2026-10-21, PR #559):_ `AIDEN_BOT_COMPUTERS_ACCEPTANCE=1 npm run test:bot-computers:packaged`. The operator follows the prompts while the script plays the model: Set up, Give, a capture and a click, Take over and Give back, `computer_shell`, Pause, Delete Bot and Remove everything. It writes `build/bot-computers-acceptance-receipt.json`. Its pure core is tested in CI.
 
 ## 9. Remote contract revision 36
 
@@ -358,19 +365,19 @@ Answer in shorthand ("1a 2a …"). **Bold** marks the recommendation that work p
 
 ## 11. Phases and PRs
 
-| # | PR | Depends on | Size |
-|---|---|---|---|
-| 1 | **Hand-off core + desktop** (§4 without Remote) | — | M |
-| 2 | **Pause core + desktop + CLI**, including the legacy wire projection (§7.2) so shipped phones keep decoding | — | M |
-| 3 | **Rules** (§6: classifier, corpus, store, enforcement for Computer Use and MCP, editor, prompt) | 1 | M–L |
-| 4 | **Remote rev 36 + iOS + Android** for hand-offs and pause (§9) | 1, 2 | L |
-| 5 | **Bot browser** (§5.1, plus browser signals in the rules classifier) | 3 | L |
-| 6 | **`sign_in`** (§5.2, desktop plus the phone "Finish on your Mac" path) | 4, 5 | M |
-| E0 | **Lume spike** on the owner's Apple silicon Mac: vendored and signed Lume runs from the Aiden bundle; base from a pinned IPSW; clone; detached run; loopback-only VNC; the two-VM limit error; RFB capture and input; `--shared-dir`; SSH key setup. Output: a short spike note and a go/no-go. | — (parallel) | S–M |
-| E1 | **Bot computers host** (§8.2–8.4): Settings page, base setup, clone, lifecycle, limits, delete step, `AGENTS.md` network rule | E0, 2 | L |
-| E2 | **Viewer + Take over** (§8.5) in the Bot panel and floating player | E1 | M–L |
-| E3 | **`computer` tool, VNC lane + `computer_shell` + shared folder**, with rules baseline (§8.6–8.7) and routine use | E2, 3 | L |
-| E4 | **Guest driver lane** (§8.6) and computer sign-in (§8.8) | E3, 6 | L |
+| #   | PR                                                                                                                                                                                                                                                                                              | Depends on   | Size |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ---- |
+| 1   | **Hand-off core + desktop** (§4 without Remote)                                                                                                                                                                                                                                                 | —            | M    |
+| 2   | **Pause core + desktop + CLI**, including the legacy wire projection (§7.2) so shipped phones keep decoding                                                                                                                                                                                     | —            | M    |
+| 3   | **Rules** (§6: classifier, corpus, store, enforcement for Computer Use and MCP, editor, prompt)                                                                                                                                                                                                 | 1            | M–L  |
+| 4   | **Remote rev 36 + iOS + Android** for hand-offs and pause (§9)                                                                                                                                                                                                                                  | 1, 2         | L    |
+| 5   | **Bot browser** (§5.1, plus browser signals in the rules classifier)                                                                                                                                                                                                                            | 3            | L    |
+| 6   | **`sign_in`** (§5.2, desktop plus the phone "Finish on your Mac" path)                                                                                                                                                                                                                          | 4, 5         | M    |
+| E0  | **Lume spike** on the owner's Apple silicon Mac: vendored and signed Lume runs from the Aiden bundle; base from a pinned IPSW; clone; detached run; loopback-only VNC; the two-VM limit error; RFB capture and input; `--shared-dir`; SSH key setup. Output: a short spike note and a go/no-go. | — (parallel) | S–M  |
+| E1  | **Bot computers host** (§8.2–8.4): Settings page, base setup, clone, lifecycle, limits, delete step, `AGENTS.md` network rule                                                                                                                                                                   | E0, 2        | L    |
+| E2  | **Viewer + Take over** (§8.5) in the Bot panel and floating player                                                                                                                                                                                                                              | E1           | M–L  |
+| E3  | **`computer` tool, VNC lane + `computer_shell` + shared folder**, with rules baseline (§8.6–8.7) and routine use                                                                                                                                                                                | E2, 3        | L    |
+| E4  | **Guest driver lane** (§8.6) and computer sign-in (§8.8)                                                                                                                                                                                                                                        | E3, 6        | L    |
 
 PRs 1 and 2 can start right away and in parallel. The E0 spike needs the owner's Mac, because cloud sessions run on Linux. It runs through Remote Control, which has dropped after a few minutes before, so the owner should keep the Mac awake for it.
 

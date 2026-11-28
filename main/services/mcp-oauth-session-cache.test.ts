@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createMcpOAuthSessionCache, McpOAuthCredentialStorageError } from "./mcp-oauth-session-cache.js";
+import {
+  createMcpOAuthSessionCache,
+  McpOAuthCredentialStorageError,
+} from "./mcp-oauth-session-cache.js";
 import type { McpOAuthSession } from "./mcp-oauth-session.js";
 
 /** A fake encrypted store: ciphertext is `enc:<json>`; reads and decrypts are counted. */
@@ -30,21 +33,30 @@ function fakeStore(initial: Record<string, McpOAuthSession>) {
         return JSON.parse(ciphertext.slice(4)) as McpOAuthSession;
       },
     },
-    write(id: string, session: McpOAuthSession) { file = { ...file, [id]: `enc:${JSON.stringify(session)}` }; },
+    write(id: string, session: McpOAuthSession) {
+      file = { ...file, [id]: `enc:${JSON.stringify(session)}` };
+    },
     reads: () => reads,
     decrypts: () => decrypts,
-    setUnreadable(value: boolean) { unreadable = value; },
-    setLocked(value: boolean) { locked = value; },
+    setUnreadable(value: boolean) {
+      unreadable = value;
+    },
+    setLocked(value: boolean) {
+      locked = value;
+    },
     /** The next read snapshots the file now but returns only after `release`. */
     holdNextRead() {
       let release!: () => void;
-      hold = new Promise<void>((resolve) => { release = resolve; });
+      hold = new Promise<void>((resolve) => {
+        release = resolve;
+      });
       return { release };
     },
   };
 }
 
-const tokens = (access: string) => ({ tokens: { access_token: access, token_type: "Bearer" } }) as McpOAuthSession;
+const tokens = (access: string) =>
+  ({ tokens: { access_token: access, token_type: "Bearer" } }) as McpOAuthSession;
 
 test("repeated token reads decrypt once until a write invalidates the cache", async () => {
   const store = fakeStore({ figma: tokens("first") });
@@ -82,9 +94,17 @@ test("unreadable storage is a distinct error from never authorized, and is not c
   const store = fakeStore({ figma: tokens("saved") });
   const cache = createMcpOAuthSessionCache(store.source);
   store.setLocked(true);
-  await assert.rejects(cache.get("figma"), (error: unknown) =>
-    error instanceof McpOAuthCredentialStorageError && /credential storage is unavailable/u.test(error.message));
-  assert.deepEqual(await cache.get("other"), {}, "a server that never signed in is still just empty");
+  await assert.rejects(
+    cache.get("figma"),
+    (error: unknown) =>
+      error instanceof McpOAuthCredentialStorageError &&
+      /credential storage is unavailable/u.test(error.message),
+  );
+  assert.deepEqual(
+    await cache.get("other"),
+    {},
+    "a server that never signed in is still just empty",
+  );
   store.setLocked(false);
   assert.equal((await cache.get("figma")).tokens?.access_token, "saved");
 

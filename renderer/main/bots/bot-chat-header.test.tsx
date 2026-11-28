@@ -25,10 +25,15 @@ async function renderHeader(pinned = false, paused = false) {
   const calls: string[] = [];
   await act(async () => {
     render(
-    <>
-      <BotChatNamePill bot={bot} onOpenProfile={() => calls.push("profile")} />
-      <BotChatActions bot={bot} pinned={pinned} paused={paused} onAction={(action) => calls.push(action)} />
-    </>,
+      <>
+        <BotChatNamePill bot={bot} onOpenProfile={() => calls.push("profile")} />
+        <BotChatActions
+          bot={bot}
+          pinned={pinned}
+          paused={paused}
+          onAction={(action) => calls.push(action)}
+        />
+      </>,
     );
   });
   return calls;
@@ -88,8 +93,14 @@ test("Delete Bot is the last item, set apart from the others by a separator", as
   const separator = screen.getByRole("separator");
   const deleteItem = screen.getByRole("menuitem", { name: "Delete Bot" });
   const pin = screen.getByRole("menuitem", { name: "Pin to top" });
-  assert.equal(Boolean(pin.compareDocumentPosition(separator) & Node.DOCUMENT_POSITION_FOLLOWING), true);
-  assert.equal(Boolean(separator.compareDocumentPosition(deleteItem) & Node.DOCUMENT_POSITION_FOLLOWING), true);
+  assert.equal(
+    Boolean(pin.compareDocumentPosition(separator) & Node.DOCUMENT_POSITION_FOLLOWING),
+    true,
+  );
+  assert.equal(
+    Boolean(separator.compareDocumentPosition(deleteItem) & Node.DOCUMENT_POSITION_FOLLOWING),
+    true,
+  );
 });
 
 test("closing the menu by Pin to top or Escape gives focus back to •••", async () => {
@@ -169,7 +180,13 @@ test("the menu offers Bubble, and for a bubbled Bot Open bubble and Bring back t
   assert.deepEqual(calls, ["bubble"]);
 
   bubbles({ bubbles: [HEAD] });
-  assert.deepEqual(await openMenu(), ["Pin to top", "Pause Bot", "Open bubble", "Bring back to window", "Delete Bot"]);
+  assert.deepEqual(await openMenu(), [
+    "Pin to top",
+    "Pause Bot",
+    "Open bubble",
+    "Bring back to window",
+    "Delete Bot",
+  ]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Bring back to window" }));
   await waitFor(() => assert.equal(screen.queryByRole("menu"), null));
   await openMenu();

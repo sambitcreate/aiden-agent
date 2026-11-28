@@ -125,7 +125,8 @@ function parseSteps(value: unknown, textLength: number): AgentStep[] | undefined
   if (!parsed || parsed.steps.length !== value.length) return undefined;
   for (const [index, step] of parsed.steps.entries()) {
     const raw = value[index];
-    if (!isPlainRecord(raw) || Object.keys(raw).length !== Object.keys(step).length) return undefined;
+    if (!isPlainRecord(raw) || Object.keys(raw).length !== Object.keys(step).length)
+      return undefined;
   }
   return parsed.steps;
 }
@@ -133,7 +134,11 @@ function parseSteps(value: unknown, textLength: number): AgentStep[] | undefined
 function parseEntry(value: unknown, index: number): SubagentTranscriptEntry | undefined {
   if (!isPlainRecord(value)) return undefined;
   if (index === 0) {
-    if (!hasOnlyKeys(value, ["kind", "text"]) || value.kind !== "task" || !boundedText(value.text)) {
+    if (
+      !hasOnlyKeys(value, ["kind", "text"]) ||
+      value.kind !== "task" ||
+      !boundedText(value.text)
+    ) {
       return undefined;
     }
     return { kind: "task", text: value.text };
@@ -189,10 +194,20 @@ export function parseSubagentTranscript(value: unknown): SubagentTranscriptV1 | 
   };
 }
 
-export function parseSubagentTranscriptUpdate(value: unknown): SubagentTranscriptUpdateV1 | undefined {
+export function parseSubagentTranscriptUpdate(
+  value: unknown,
+): SubagentTranscriptUpdateV1 | undefined {
   if (
     !isPlainRecord(value) ||
-    !hasOnlyKeys(value, ["version", "runId", "baseRevision", "revision", "trimmed", "entryCount", "changes"]) ||
+    !hasOnlyKeys(value, [
+      "version",
+      "runId",
+      "baseRevision",
+      "revision",
+      "trimmed",
+      "entryCount",
+      "changes",
+    ]) ||
     value.version !== SUBAGENT_TRANSCRIPT_VERSION ||
     !isSafeSubagentIdentifier(value.runId) ||
     !revisionNumber(value.baseRevision) ||
@@ -240,7 +255,11 @@ export function parseSubagentTranscriptNotification(
   value: unknown,
 ): SubagentTranscriptNotification | undefined {
   if (!isPlainRecord(value) || !hasOnlyKeys(value, ["streamId", "update"])) return undefined;
-  if (typeof value.streamId !== "string" || value.streamId.length === 0 || value.streamId.length > 256) {
+  if (
+    typeof value.streamId !== "string" ||
+    value.streamId.length === 0 ||
+    value.streamId.length > 256
+  ) {
     return undefined;
   }
   const update = parseSubagentTranscriptUpdate(value.update);
@@ -290,8 +309,10 @@ export interface SubagentHistoryDetailWithTranscriptV1 extends SubagentHistoryDe
 export function parseSubagentHistoryDetailWithTranscript(
   value: unknown,
 ): SubagentHistoryDetailWithTranscriptV1 | undefined {
-  if (!isPlainRecord(value) || Reflect.ownKeys(value).length !== Object.keys(value).length) return undefined;
-  if (!Object.prototype.hasOwnProperty.call(value, "transcript")) return parseSubagentHistoryDetailV1(value);
+  if (!isPlainRecord(value) || Reflect.ownKeys(value).length !== Object.keys(value).length)
+    return undefined;
+  if (!Object.prototype.hasOwnProperty.call(value, "transcript"))
+    return parseSubagentHistoryDetailV1(value);
   const { transcript: rawTranscript, ...rest } = value;
   const detail = parseSubagentHistoryDetailV1(rest);
   const transcript = parseSubagentTranscript(rawTranscript);
@@ -414,11 +435,13 @@ export function trimSubagentTranscriptToBytes(
   maxBytes: number = MAX_SUBAGENT_TRANSCRIPT_BYTES,
   entryBytes?: readonly number[],
 ): SubagentTranscriptV1 {
-  const sizes = entryBytes && entryBytes.length === transcript.entries.length
-    ? [...entryBytes]
-    : transcript.entries.map(subagentTranscriptEntryBytes);
+  const sizes =
+    entryBytes && entryBytes.length === transcript.entries.length
+      ? [...entryBytes]
+      : transcript.entries.map(subagentTranscriptEntryBytes);
   const commas = Math.max(0, transcript.entries.length - 1);
-  const envelope = (trimmed: boolean) => utf8Bytes(JSON.stringify({ ...transcript, trimmed, entries: [] }));
+  const envelope = (trimmed: boolean) =>
+    utf8Bytes(JSON.stringify({ ...transcript, trimmed, entries: [] }));
   let entriesSize = sizes.reduce((sum, size) => sum + size, 0) + commas;
   if (envelope(transcript.trimmed) + entriesSize <= maxBytes) return transcript;
   // Unchanged entries keep their identity, so a caller can reuse what it
@@ -467,10 +490,16 @@ export function trimSubagentTranscriptToBytes(
       replace(lastIndex, {
         ...last,
         text: `${TRIMMED_TEXT_PREFIX}${body}`,
-        steps: last.steps.map((step) => ({
-          ...step,
-          contentOffset: trimmedStepOffset((step.contentOffset ?? 0) - (last.text.length - original.length), removed),
-        }) as AgentStep),
+        steps: last.steps.map(
+          (step) =>
+            ({
+              ...step,
+              contentOffset: trimmedStepOffset(
+                (step.contentOffset ?? 0) - (last.text.length - original.length),
+                removed,
+              ),
+            }) as AgentStep,
+        ),
       });
       if (keep === 0) break;
     }

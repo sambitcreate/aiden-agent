@@ -30,7 +30,13 @@ const WORKSPACE: Workspace = {
 
 function entry(path: string, kind: WorkspaceFileEntry["kind"] = "file"): WorkspaceFileEntry {
   const parts = path.split("/");
-  return { path, name: parts[parts.length - 1]!, parentPath: parts.slice(0, -1).join("/"), depth: parts.length - 1, kind };
+  return {
+    path,
+    name: parts[parts.length - 1]!,
+    parentPath: parts.slice(0, -1).join("/"),
+    depth: parts.length - 1,
+    kind,
+  };
 }
 
 const FILES = [
@@ -40,7 +46,13 @@ const FILES = [
   entry("README.md"),
 ];
 
-const CHAT = { id: "chat-1", title: "New chat", messages: [], createdAt: 1, updatedAt: 1 } as unknown as Chat;
+const CHAT = {
+  id: "chat-1",
+  title: "New chat",
+  messages: [],
+  createdAt: 1,
+  updatedAt: 1,
+} as unknown as Chat;
 
 beforeEach(() => {
   localStorage.clear();
@@ -113,7 +125,11 @@ async function type(textbox: HTMLTextAreaElement, value: string) {
   await settle();
 }
 
-async function press(textbox: HTMLTextAreaElement, key: string, init: Record<string, unknown> = {}) {
+async function press(
+  textbox: HTMLTextAreaElement,
+  key: string,
+  init: Record<string, unknown> = {},
+) {
   await act(async () => {
     fireEvent.keyDown(textbox, { key, ...init });
   });
@@ -148,7 +164,9 @@ test("@ at a word boundary opens a ranked file listbox the textarea owns, with t
   assert.ok(texts.length === 2, `two files match, got ${JSON.stringify(texts)}`);
   assert.ok(texts[0]!.startsWith("composer.tsx"), `best match first, got ${JSON.stringify(texts)}`);
   const active = textbox.getAttribute("aria-activedescendant");
-  assert.ok(active !== null && document.getElementById(active)?.getAttribute("aria-selected") === "true");
+  assert.ok(
+    active !== null && document.getElementById(active)?.getAttribute("aria-selected") === "true",
+  );
   const marks = [...picker()!.querySelectorAll("mark")].map((mark) => mark.textContent);
   assert.ok(marks.includes("comp"), `marked ${JSON.stringify(marks)}`);
 });
@@ -158,7 +176,10 @@ test("arrows move the active file, Enter picks it into one chip and takes the ty
   await type(textbox, "look at @comp");
   await press(textbox, "ArrowDown");
   const active = document.getElementById(textbox.getAttribute("aria-activedescendant") ?? "");
-  assert.ok(active?.textContent?.startsWith("composer-mention-picker.tsx"), "ArrowDown moves to the second file");
+  assert.ok(
+    active?.textContent?.startsWith("composer-mention-picker.tsx"),
+    "ArrowDown moves to the second file",
+  );
 
   await press(textbox, "Enter");
 
@@ -217,7 +238,9 @@ test("a failed send gives the chips back as chips, the picker stays closed, and 
   assert.deepEqual(chipPaths(), ["README.md"]);
   assert.ok(picker() === null, "the restored draft does not reopen the picker");
   // A reload has only the stored text, so the unresolved send keeps its mentions as `@path`.
-  const stored = JSON.parse(localStorage.getItem(`aiden:composer-draft:${CHAT.id}`) ?? "null") as { unresolvedText?: string } | null;
+  const stored = JSON.parse(localStorage.getItem(`aiden:composer-draft:${CHAT.id}`) ?? "null") as {
+    unresolvedText?: string;
+  } | null;
   assert.ok(stored?.unresolvedText === "@README.md x", `stored ${JSON.stringify(stored)}`);
 
   rejectSends = false;

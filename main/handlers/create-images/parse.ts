@@ -1,9 +1,16 @@
 // Exact-shape request parsers for the Create Images channels. Anything else is
 // rejected with one generic message before any store is touched.
 import { hasExactKeys, isRecord } from "../../shared/guards.js";
-import { IMAGE_IMPORT_MAX_BYTES, SAVE_ALL_MAX_IMAGES, type ImageActionRequest } from "../../../renderer/shared/images/ipc-types.js";
+import {
+  IMAGE_IMPORT_MAX_BYTES,
+  SAVE_ALL_MAX_IMAGES,
+  type ImageActionRequest,
+} from "../../../renderer/shared/images/ipc-types.js";
 import type { RunScope } from "../../../renderer/shared/images/run-types.js";
-import { IMAGE_WORKFLOW_ID_PATTERN, IMAGE_WORKFLOW_LIMITS } from "../../../renderer/shared/images/schema.js";
+import {
+  IMAGE_WORKFLOW_ID_PATTERN,
+  IMAGE_WORKFLOW_LIMITS,
+} from "../../../renderer/shared/images/schema.js";
 import { hasControlCharacter } from "../../services/create-images/workflow-schema.js";
 import { isStudioAssetId } from "../../services/studio-assets/contract.js";
 
@@ -22,7 +29,11 @@ function plain(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-function shape(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
+function shape(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): Record<string, unknown> {
   if (!plain(value) || !hasExactKeys(value, required, optional)) invalid();
   return value;
 }
@@ -36,7 +47,9 @@ function id(value: unknown): string {
 function title(value: unknown): string {
   if (typeof value !== "string" || hasControlCharacter(value)) invalid();
   const trimmed = value.trim();
-  return trimmed.length > 0 && trimmed.length <= IMAGE_WORKFLOW_LIMITS.maxTitleLength ? trimmed : invalid();
+  return trimmed.length > 0 && trimmed.length <= IMAGE_WORKFLOW_LIMITS.maxTitleLength
+    ? trimmed
+    : invalid();
 }
 
 function revision(value: unknown): number {
@@ -51,20 +64,36 @@ export function parseWorkflowRequest(value: unknown): { workflowId: string } {
   return { workflowId: id(shape(value, ["workflowId"]).workflowId) };
 }
 
-export function parseCreateRequest(value: unknown): { template: "blank" | "starter"; title?: string } {
+export function parseCreateRequest(value: unknown): {
+  template: "blank" | "starter";
+  title?: string;
+} {
   const request = shape(value, ["template"], ["title"]);
   if (request.template !== "blank" && request.template !== "starter") invalid();
-  return { template: request.template, ...(request.title !== undefined ? { title: title(request.title) } : {}) };
+  return {
+    template: request.template,
+    ...(request.title !== undefined ? { title: title(request.title) } : {}),
+  };
 }
 
-export function parseSaveRequest(value: unknown): { workflowId: string; baseRevision: number; document: unknown } {
+export function parseSaveRequest(value: unknown): {
+  workflowId: string;
+  baseRevision: number;
+  document: unknown;
+} {
   const request = shape(value, ["workflowId", "baseRevision", "document"]);
-  return { workflowId: id(request.workflowId), baseRevision: revision(request.baseRevision), document: request.document };
+  return {
+    workflowId: id(request.workflowId),
+    baseRevision: revision(request.baseRevision),
+    document: request.document,
+  };
 }
 
 export function parseMutateRequest(
   value: unknown,
-): { op: "rename"; workflowId: string; title: string } | { op: "duplicate" | "delete"; workflowId: string } {
+):
+  | { op: "rename"; workflowId: string; title: string }
+  | { op: "duplicate" | "delete"; workflowId: string } {
   if (!plain(value)) invalid();
   if (value.op === "rename") {
     const request = shape(value, ["op", "workflowId", "title"]);
@@ -90,20 +119,34 @@ export function parseImportRequest(
   if (typeof request.name !== "string" || request.name.length > 255) invalid();
   if (typeof request.mimeType !== "string" || !IMPORT_TYPES.has(request.mimeType)) invalid();
   const data = request.data;
-  if (!(data instanceof Uint8Array) || data.byteLength === 0 || data.byteLength > IMAGE_IMPORT_MAX_BYTES) invalid();
+  if (
+    !(data instanceof Uint8Array) ||
+    data.byteLength === 0 ||
+    data.byteLength > IMAGE_IMPORT_MAX_BYTES
+  )
+    invalid();
   return { source: "bytes", name: request.name, mimeType: request.mimeType, data };
 }
 
 export function parseRunScope(value: unknown): RunScope {
   const scope = shape(value, ["kind"], ["nodeId"]);
   if (scope.kind === "all" && scope.nodeId === undefined) return { kind: "all" };
-  if (scope.kind === "from-node" || scope.kind === "node-only") return { kind: scope.kind, nodeId: id(scope.nodeId) };
+  if (scope.kind === "from-node" || scope.kind === "node-only")
+    return { kind: scope.kind, nodeId: id(scope.nodeId) };
   return invalid();
 }
 
-export function parsePrepareRequest(value: unknown): { workflowId: string; revision: number; scope: RunScope } {
+export function parsePrepareRequest(value: unknown): {
+  workflowId: string;
+  revision: number;
+  scope: RunScope;
+} {
   const request = shape(value, ["workflowId", "revision", "scope"]);
-  return { workflowId: id(request.workflowId), revision: revision(request.revision), scope: parseRunScope(request.scope) };
+  return {
+    workflowId: id(request.workflowId),
+    revision: revision(request.revision),
+    scope: parseRunScope(request.scope),
+  };
 }
 
 export function parseConsentRequest(value: unknown): { consentId: string } {

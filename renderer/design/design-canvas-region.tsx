@@ -33,7 +33,9 @@ export function DesignCanvasRegion({
       aria-hidden={hidden || undefined}
       className={cn(
         "design-canvas-region min-h-0 overflow-hidden bg-background",
-        placement === "stacked" ? "absolute inset-x-0 bottom-0 top-13 z-20" : "relative h-full shrink-0",
+        placement === "stacked"
+          ? "absolute inset-x-0 bottom-0 top-13 z-20"
+          : "relative h-full shrink-0",
         hidden && "invisible",
       )}
       style={
@@ -58,8 +60,15 @@ export function DesignCanvasRegion({
  */
 function DesignCanvasLoading() {
   return (
-    <div role="status" aria-label="Loading canvas" className="flex h-full items-center justify-center">
-      <div aria-hidden className="h-24 w-40 animate-pulse rounded-button bg-control motion-reduce:animate-none" />
+    <div
+      role="status"
+      aria-label="Loading canvas"
+      className="flex h-full items-center justify-center"
+    >
+      <div
+        aria-hidden
+        className="h-24 w-40 animate-pulse rounded-button bg-control motion-reduce:animate-none"
+      />
     </div>
   );
 }

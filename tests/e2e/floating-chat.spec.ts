@@ -1,9 +1,4 @@
-import {
-  expect,
-  expectSquircleButtons,
-  finishLmStudioOnboarding,
-  test,
-} from "./fixtures";
+import { expect, expectSquircleButtons, finishLmStudioOnboarding, test } from "./fixtures";
 import { auditAccessibility } from "./axe-gate";
 import { previewAppearance } from "./design-mode-helpers";
 import type { ElectronApplication, Page } from "@playwright/test";
@@ -61,9 +56,9 @@ test("floating starter morphs to mini-modal, stays ephemeral until attached to a
 
   await expect(quickPage.getByTestId("quick-chat-mini-modal")).toBeVisible({ timeout: 15_000 });
   await expect(quickPage.getByTestId("quick-chat-status-pill")).toContainText("Temporary");
-  await expect(
-    quickPage.getByText(/Deterministic E2E response/u).first(),
-  ).toBeVisible({ timeout: 20_000 });
+  await expect(quickPage.getByText(/Deterministic E2E response/u).first()).toBeVisible({
+    timeout: 20_000,
+  });
 
   // Wait for streaming and the streaming reveal fade-in to finish so axe measures settled contrast.
   await expect(quickPage.getByTestId("quick-chat-stop-btn")).toHaveCount(0, { timeout: 15_000 });
@@ -99,9 +94,9 @@ test("floating starter morphs to mini-modal, stays ephemeral until attached to a
   await expect(quickPage.getByTestId("quick-chat-status-pill")).toHaveCount(0, {
     timeout: 15_000,
   });
-  await expect(
-    quickPage.getByRole("dialog", { name: /Attach to workspace/iu }),
-  ).toHaveCount(0, { timeout: 5_000 });
+  await expect(quickPage.getByRole("dialog", { name: /Attach to workspace/iu })).toHaveCount(0, {
+    timeout: 5_000,
+  });
   await expect(quickPage.getByTestId("quick-chat-attached-workspace")).toContainText(
     "Aiden E2E workspace",
   );
@@ -146,15 +141,15 @@ test("expanding mid-stream hands off live generation seamlessly to the main wind
   await quickPage.getByTestId("quick-chat-expand-modal").click();
 
   // Main window navigates to the active chat and shows our user message.
-  await expect(
-    page.getByText("Hold stream then expand to main window").first(),
-  ).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Hold stream then expand to main window").first()).toBeVisible({
+    timeout: 15_000,
+  });
 
   // Release completion -> Main Window finishes streaming seamlessly!
   lmStudio.releaseCompletions?.();
-  await expect(
-    page.getByText(/Deterministic E2E response/u).first(),
-  ).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/Deterministic E2E response/u).first()).toBeVisible({
+    timeout: 20_000,
+  });
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden({
     timeout: 15_000,
   });

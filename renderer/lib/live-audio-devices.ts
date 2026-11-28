@@ -6,7 +6,9 @@ export interface LiveAudioDevices {
 const STORAGE_KEY = "aiden.live.audio-devices.v1";
 export const DEFAULT_LIVE_AUDIO_DEVICES: LiveAudioDevices = { input: "default", output: "default" };
 
-export function readLiveAudioDevices(storage: Pick<Storage, "getItem"> = localStorage): LiveAudioDevices {
+export function readLiveAudioDevices(
+  storage: Pick<Storage, "getItem"> = localStorage,
+): LiveAudioDevices {
   try {
     const value = JSON.parse(storage.getItem(STORAGE_KEY) ?? "null");
     return {
@@ -18,7 +20,10 @@ export function readLiveAudioDevices(storage: Pick<Storage, "getItem"> = localSt
   }
 }
 
-export function saveLiveAudioDevices(value: LiveAudioDevices, storage: Pick<Storage, "setItem"> = localStorage): void {
+export function saveLiveAudioDevices(
+  value: LiveAudioDevices,
+  storage: Pick<Storage, "setItem"> = localStorage,
+): void {
   storage.setItem(STORAGE_KEY, JSON.stringify(value));
 }
 
@@ -29,16 +34,23 @@ export async function routeLiveAudioOutput(context: AudioContext, deviceId: stri
   if (deviceId === "default") return;
   const sinkContext = context as AudioContext & { setSinkId?: (id: string) => Promise<void> };
   if (!sinkContext.setSinkId) {
-    throw new LiveAudioDeviceError("Speaker selection is unavailable. Choose System default in Aiden Live settings.");
+    throw new LiveAudioDeviceError(
+      "Speaker selection is unavailable. Choose System default in Aiden Live settings.",
+    );
   }
   try {
     await sinkContext.setSinkId(deviceId);
   } catch {
-    throw new LiveAudioDeviceError("The selected speaker is unavailable. Reconnect it or choose another output in Aiden Live settings.");
+    throw new LiveAudioDeviceError(
+      "The selected speaker is unavailable. Reconnect it or choose another output in Aiden Live settings.",
+    );
   }
 }
 
-export async function captureLiveMicrophone(deviceId: string, mediaDevices: Pick<MediaDevices, "getUserMedia"> = navigator.mediaDevices): Promise<MediaStream> {
+export async function captureLiveMicrophone(
+  deviceId: string,
+  mediaDevices: Pick<MediaDevices, "getUserMedia"> = navigator.mediaDevices,
+): Promise<MediaStream> {
   try {
     return await mediaDevices.getUserMedia({
       audio: {
@@ -50,8 +62,13 @@ export async function captureLiveMicrophone(deviceId: string, mediaDevices: Pick
       video: false,
     });
   } catch (error) {
-    if (error instanceof Error && ["NotFoundError", "OverconstrainedError", "NotReadableError"].includes(error.name)) {
-      throw new LiveAudioDeviceError("The selected microphone is unavailable or busy. Reconnect it or choose another input in Aiden Live settings.");
+    if (
+      error instanceof Error &&
+      ["NotFoundError", "OverconstrainedError", "NotReadableError"].includes(error.name)
+    ) {
+      throw new LiveAudioDeviceError(
+        "The selected microphone is unavailable or busy. Reconnect it or choose another input in Aiden Live settings.",
+      );
     }
     throw error;
   }

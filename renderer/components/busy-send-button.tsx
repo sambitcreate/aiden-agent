@@ -23,8 +23,18 @@ export const BUSY_SEND_MODES: ReadonlyArray<{
   detail: string;
   actionLabel: string;
 }> = [
-  { mode: "steer", label: "Steer", detail: "Add guidance without stopping", actionLabel: "Steer response" },
-  { mode: "queue", label: "Queue", detail: "Run after this response", actionLabel: "Queue message" },
+  {
+    mode: "steer",
+    label: "Steer",
+    detail: "Add guidance without stopping",
+    actionLabel: "Steer response",
+  },
+  {
+    mode: "queue",
+    label: "Queue",
+    detail: "Run after this response",
+    actionLabel: "Queue message",
+  },
 ];
 
 export const BUSY_SEND_HOLD_MS = 450;
@@ -38,13 +48,7 @@ interface Props {
   onModeChange: (mode: BusySendMode) => void;
 }
 
-export function BusySendButton({
-  mode,
-  canSubmit,
-  steerAvailable,
-  onSubmit,
-  onModeChange,
-}: Props) {
+export function BusySendButton({ mode, canSubmit, steerAvailable, onSubmit, onModeChange }: Props) {
   const [open, setOpen] = React.useState(false);
   const [holding, setHolding] = React.useState(false);
   const holdTimerRef = React.useRef<number | null>(null);
@@ -140,9 +144,7 @@ export function BusySendButton({
             >
               <span className="flex min-w-0 flex-col">
                 <span>{entry.label}</span>
-                <span className="text-small text-tertiary">
-                  {entry.detail}
-                </span>
+                <span className="text-small text-tertiary">{entry.detail}</span>
               </span>
             </DropdownMenuRadioItem>
           ))}

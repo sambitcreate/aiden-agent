@@ -33,7 +33,11 @@ export interface LumeInstallationOptions {
   /** `app.getAppPath()`: the repository root in development. */
   appPath: string;
   /** Runs fixed system tools (`plutil`, `codesign`); injected in tests. */
-  run?: (command: string, args: string[], signal?: AbortSignal) => Promise<{ exitCode: number | null; stdout: string }>;
+  run?: (
+    command: string,
+    args: string[],
+    signal?: AbortSignal,
+  ) => Promise<{ exitCode: number | null; stdout: string }>;
   hash?: (file: string, signal?: AbortSignal) => Promise<string>;
   signal?: AbortSignal;
 }
@@ -45,7 +49,8 @@ export interface LumeInstallation {
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw new BotComputerError("cancelled", "Checking the computer helper was cancelled.");
+  if (signal?.aborted)
+    throw new BotComputerError("cancelled", "Checking the computer helper was cancelled.");
 }
 
 async function hashFile(file: string, signal?: AbortSignal): Promise<string> {
@@ -75,7 +80,9 @@ async function runSystemTool(
 }
 
 /** Where the pinned bundle lives: inside the app when packaged, under build/ in development. */
-export function lumeAppPath(options: Pick<LumeInstallationOptions, "isPackaged" | "resourcesPath" | "appPath">): string {
+export function lumeAppPath(
+  options: Pick<LumeInstallationOptions, "isPackaged" | "resourcesPath" | "appPath">,
+): string {
   return options.isPackaged
     ? path.resolve(options.resourcesPath, "..", "Helpers", "lume.app")
     : path.join(options.appPath, "build", "bot-computers", "lume.app");
@@ -89,7 +96,9 @@ export function lumeAppPath(options: Pick<LumeInstallationOptions, "isPackaged" 
  * its own signature (it is never re-signed), so packaged and development
  * builds use the same requirement.
  */
-export async function resolveLumeInstallation(options: LumeInstallationOptions): Promise<LumeInstallation> {
+export async function resolveLumeInstallation(
+  options: LumeInstallationOptions,
+): Promise<LumeInstallation> {
   const { signal } = options;
   throwIfAborted(signal);
   if (options.platform !== "darwin" || options.arch !== "arm64") {
@@ -120,7 +129,10 @@ export async function resolveLumeInstallation(options: LumeInstallationOptions):
     throw new BotComputerError("lume_failed", "The computer helper escaped its signed bundle.");
   }
   if ((await hash(resolvedBinary, signal)) !== LUME_PINS.binarySha256) {
-    throw new BotComputerError("lume_failed", `The computer helper does not match Aiden's pinned Lume ${LUME_PINS.version}.`);
+    throw new BotComputerError(
+      "lume_failed",
+      `The computer helper does not match Aiden's pinned Lume ${LUME_PINS.version}.`,
+    );
   }
   throwIfAborted(signal);
   const plist = path.join(resolvedApp, "Contents", "Info.plist");
@@ -130,17 +142,34 @@ export async function resolveLumeInstallation(options: LumeInstallationOptions):
   ] as const) {
     const result = await run("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", plist], signal);
     if (result.exitCode !== 0 || result.stdout.trim() !== expected) {
-      throw new BotComputerError("lume_failed", "The computer helper has an unexpected bundle identity.");
+      throw new BotComputerError(
+        "lume_failed",
+        "The computer helper has an unexpected bundle identity.",
+      );
     }
   }
   const verify = await run(
     "/usr/bin/codesign",
-    ["--verify", "--strict", "--deep", "--verbose=2", `-R=${lumeSigningRequirement()}`, resolvedApp],
+    [
+      "--verify",
+      "--strict",
+      "--deep",
+      "--verbose=2",
+      `-R=${lumeSigningRequirement()}`,
+      resolvedApp,
+    ],
     signal,
   );
   if (verify.exitCode !== 0) {
-    throw new BotComputerError("lume_failed", "The computer helper failed its pinned signing requirement.");
+    throw new BotComputerError(
+      "lume_failed",
+      "The computer helper failed its pinned signing requirement.",
+    );
   }
   throwIfAborted(signal);
-  return { appPath: resolvedApp, binaryPath: resolvedBinary, invocation: { command: resolvedBinary } };
+  return {
+    appPath: resolvedApp,
+    binaryPath: resolvedBinary,
+    invocation: { command: resolvedBinary },
+  };
 }

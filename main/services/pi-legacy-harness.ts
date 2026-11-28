@@ -26,7 +26,7 @@ export {
   sessionName,
   setValue,
   shouldCompact,
-  value
+  value,
 } from "@aiden/pi-legacy-harness";
 export type {
   Session,
@@ -39,7 +39,7 @@ export type {
   Entry,
   NewEntry,
   JsonValue,
-  JsonlSessionMetadata
+  JsonlSessionMetadata,
 } from "@aiden/pi-legacy-harness";
 export { NodeExecutionEnv } from "@aiden/pi-legacy-harness/node";
 export { uuidv7 } from "@earendil-works/pi-ai";
@@ -109,7 +109,8 @@ export function compact(
   ]
 ): ReturnType<typeof legacyCompact> {
   const summaryModels = {
-    completeSimple: (...request: Parameters<Models["completeSimple"]>) => models.completeSimple(...request),
+    completeSimple: (...request: Parameters<Models["completeSimple"]>) =>
+      models.completeSimple(...request),
   };
   return legacyCompact(preparation, summaryModels as unknown as LegacyCompactArguments[1], ...args);
 }
@@ -119,14 +120,21 @@ type LegacyBranchSummaryArguments = Parameters<typeof legacyGenerateBranchSummar
 /** Fork summaries use the same current-provider seam as compaction. */
 export function generateBranchSummary(
   entries: LegacyBranchSummaryArguments[0],
-  options: Omit<LegacyBranchSummaryArguments[1], "models"> & { models: Pick<Models, "completeSimple"> },
+  options: Omit<LegacyBranchSummaryArguments[1], "models"> & {
+    models: Pick<Models, "completeSimple">;
+  },
   context: LegacyBranchSummaryArguments[2],
 ): ReturnType<typeof legacyGenerateBranchSummary> {
   const summaryModels = {
-    completeSimple: (...request: Parameters<Models["completeSimple"]>) => options.models.completeSimple(...request),
+    completeSimple: (...request: Parameters<Models["completeSimple"]>) =>
+      options.models.completeSimple(...request),
   };
-  return legacyGenerateBranchSummary(entries, {
-    ...options,
-    models: summaryModels as unknown as LegacyBranchSummaryArguments[1]["models"],
-  }, context);
+  return legacyGenerateBranchSummary(
+    entries,
+    {
+      ...options,
+      models: summaryModels as unknown as LegacyBranchSummaryArguments[1]["models"],
+    },
+    context,
+  );
 }

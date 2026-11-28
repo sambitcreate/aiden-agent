@@ -39,7 +39,7 @@ export interface BotRecallToolDetails {
 }
 
 const DESCRIPTION = [
-  "Search your earlier conversations with this person. Use it when they mention something from before that is not in saved memory or the current conversation (\"what was that book I told you about?\", \"the plan we made for Lisbon\").",
+  'Search your earlier conversations with this person. Use it when they mention something from before that is not in saved memory or the current conversation ("what was that book I told you about?", "the plan we made for Lisbon").',
   "",
   "QUERY: a few specific keywords (names, places, topics), not a sentence. Messages matching more of the words rank first, then newer ones.",
   "",
@@ -49,7 +49,11 @@ const DESCRIPTION = [
 const parameters = Type.Object({
   query: Type.String({ description: "Keywords to look for, e.g. 'Lisbon hotel'." }),
   limit: Type.Optional(
-    Type.Integer({ minimum: 1, maximum: BOT_RECALL_MAX_RESULTS, description: `How many excerpts to return (default ${BOT_RECALL_DEFAULT_RESULTS}).` }),
+    Type.Integer({
+      minimum: 1,
+      maximum: BOT_RECALL_MAX_RESULTS,
+      description: `How many excerpts to return (default ${BOT_RECALL_DEFAULT_RESULTS}).`,
+    }),
   ),
 });
 
@@ -59,11 +63,16 @@ function normalize(text: string): string {
 
 /** Distinct search words: letters and digits, at least two characters (one for scripts without spaces). */
 export function recallTerms(query: string): string[] {
-  const words = normalize(query.slice(0, MAX_QUERY_CHARS)).match(/[\p{L}\p{N}][\p{L}\p{N}'’_-]*/gu) ?? [];
+  const words =
+    normalize(query.slice(0, MAX_QUERY_CHARS)).match(/[\p{L}\p{N}][\p{L}\p{N}'’_-]*/gu) ?? [];
   const terms = new Set<string>();
   for (const word of words) {
     const term = word.replace(/['’_-]+$/u, "");
-    if (term.length >= 2 || /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(term)) terms.add(term);
+    if (
+      term.length >= 2 ||
+      /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(term)
+    )
+      terms.add(term);
     if (terms.size >= MAX_TERMS) break;
   }
   return [...terms];
@@ -75,7 +84,13 @@ function excerptAround(text: string, at: number, length: number): string {
   if (flat.length <= BOT_RECALL_EXCERPT_CHARS) return flat;
   // Only whitespace collapsed before the match moves it.
   const flatAt = Math.min(text.slice(0, at).replace(/\s+/gu, " ").trimStart().length, flat.length);
-  let start = Math.max(0, Math.min(flatAt - Math.floor((BOT_RECALL_EXCERPT_CHARS - length) / 3), flat.length - BOT_RECALL_EXCERPT_CHARS));
+  let start = Math.max(
+    0,
+    Math.min(
+      flatAt - Math.floor((BOT_RECALL_EXCERPT_CHARS - length) / 3),
+      flat.length - BOT_RECALL_EXCERPT_CHARS,
+    ),
+  );
   if (start > 0) {
     const space = flat.indexOf(" ", start);
     if (space >= 0 && space < flatAt) start = space + 1;
@@ -139,17 +154,31 @@ export async function searchBotHistory(
     if (score === 0) continue;
     const date = dateOf(entry);
     scored.push({
-      hit: { ...(date === undefined ? {} : { date }), from: isBotInputEntryKind(entry.kind) ? "person" : "bot", excerpt: excerptAround(text, first, firstLength) },
+      hit: {
+        ...(date === undefined ? {} : { date }),
+        from: isBotInputEntryKind(entry.kind) ? "person" : "bot",
+        excerpt: excerptAround(text, first, firstLength),
+      },
       score,
       order: index,
     });
   }
   scored.sort((a, b) => b.score - a.score || b.order - a.order);
-  return scored.slice(0, Math.max(1, Math.min(BOT_RECALL_MAX_RESULTS, limit))).map(({ hit }) => hit);
+  return scored
+    .slice(0, Math.max(1, Math.min(BOT_RECALL_MAX_RESULTS, limit)))
+    .map(({ hit }) => hit);
 }
 
-function resultOf(text: unknown, results: number, isError = false): AgentToolResult<BotRecallToolDetails> {
-  return { content: [{ type: "text", text: JSON.stringify(text) }], details: { results }, ...(isError ? { isError: true } : {}) };
+function resultOf(
+  text: unknown,
+  results: number,
+  isError = false,
+): AgentToolResult<BotRecallToolDetails> {
+  return {
+    content: [{ type: "text", text: JSON.stringify(text) }],
+    details: { results },
+    ...(isError ? { isError: true } : {}),
+  };
 }
 
 /** The tool for one call, reading the history of the conversation it runs in. */
@@ -169,10 +198,20 @@ export function createBotRecallTool(
       }
       const entries = await history();
       signal?.throwIfAborted();
-      const results = await searchBotHistory(entries, lookup, query, limit ?? BOT_RECALL_DEFAULT_RESULTS);
+      const results = await searchBotHistory(
+        entries,
+        lookup,
+        query,
+        limit ?? BOT_RECALL_DEFAULT_RESULTS,
+      );
       return resultOf(
         results.length === 0
-          ? { ok: true, query, results: [], note: "No earlier messages match. Try other keywords, or say you don't remember." }
+          ? {
+              ok: true,
+              query,
+              results: [],
+              note: "No earlier messages match. Try other keywords, or say you don't remember.",
+            }
           : { ok: true, query, results },
         results.length,
       );
@@ -182,7 +221,10 @@ export function createBotRecallTool(
 
 /** The entry `bot-session-main` adds to every Bot's tools. Replay is safe: it only reads. */
 export function botRecallToolEntry(): BotToolEntry {
-  const unbound = createBotRecallTool(async () => [], async (requestIds) => requestIds.map(() => undefined));
+  const unbound = createBotRecallTool(
+    async () => [],
+    async (requestIds) => requestIds.map(() => undefined),
+  );
   return {
     tool: unbound as unknown as AgentTool,
     replay: "safe",

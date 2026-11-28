@@ -16,20 +16,29 @@ test("runtime revocation is durable, cleans device resources, retries persistenc
   let stateDocument = createDefaultAidenRemoteState(() => Buffer.alloc(24, 4));
   let now = 1_000;
   let randomCounter = 0;
-  const state = new AidenRemoteStateRegistry({
-    load: async () => structuredClone(stateDocument),
-    save: async (document) => { stateDocument = structuredClone(document); },
-  }, {
-    ...defaultAidenRemoteStateDependencies(),
-    now: () => now,
-    randomBytes: (size) => Buffer.alloc(size, ++randomCounter),
-  });
+  const state = new AidenRemoteStateRegistry(
+    {
+      load: async () => structuredClone(stateDocument),
+      save: async (document) => {
+        stateDocument = structuredClone(document);
+      },
+    },
+    {
+      ...defaultAidenRemoteStateDependencies(),
+      now: () => now,
+      randomBytes: (size) => Buffer.alloc(size, ++randomCounter),
+    },
+  );
   await state.initialize();
   const deviceA = await state.issueDevice({
-    name: "Personal iPhone", type: "iphone", clientVersion: "1",
+    name: "Personal iPhone",
+    type: "iphone",
+    clientVersion: "1",
   });
   const deviceB = await state.issueDevice({
-    name: "Travel iPhone", type: "iphone", clientVersion: "1",
+    name: "Travel iPhone",
+    type: "iphone",
+    clientVersion: "1",
   });
 
   let streamSnapshot: AidenRemoteStreamSnapshot = { version: 1, streams: [] };
@@ -59,8 +68,16 @@ test("runtime revocation is durable, cleans device resources, retries persistenc
   const resources = {
     state,
     streams,
-    chats: { revokeDevice: (deviceId: string) => { chatRevocations.push(deviceId); } },
-    workspaceOwners: { revokeDevice: (deviceId: string) => { ownerRevocations.push(deviceId); } },
+    chats: {
+      revokeDevice: (deviceId: string) => {
+        chatRevocations.push(deviceId);
+      },
+    },
+    workspaceOwners: {
+      revokeDevice: (deviceId: string) => {
+        ownerRevocations.push(deviceId);
+      },
+    },
   };
 
   failStreamSave = true;
@@ -79,8 +96,14 @@ test("runtime revocation is durable, cleans device resources, retries persistenc
   failStreamSave = false;
   now += 1;
   assert.equal(await revokeAidenRemoteRuntimeDevice(resources, deviceA.device.id), false);
-  assert.equal(streamSnapshot.streams.some(({ deviceId }) => deviceId === deviceA.device.id), false);
-  assert.equal(streamSnapshot.streams.some(({ deviceId }) => deviceId === deviceB.device.id), true);
+  assert.equal(
+    streamSnapshot.streams.some(({ deviceId }) => deviceId === deviceA.device.id),
+    false,
+  );
+  assert.equal(
+    streamSnapshot.streams.some(({ deviceId }) => deviceId === deviceB.device.id),
+    true,
+  );
 
   const restartedStreams = new AidenRemoteStreamService({
     now: () => now,

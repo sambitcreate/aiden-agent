@@ -46,7 +46,11 @@ const runtime: McpOAuthRuntime = {
   },
   // Fixed loopback redirect so the registered redirect_uri stays stable across
   // sessions (dynamic client registration records it once).
-  loopback: { port: MCP_OAUTH_LOOPBACK_PORT, redirectUri: MCP_OAUTH_REDIRECT_URI, timeoutMs: AUTH_TIMEOUT_MS },
+  loopback: {
+    port: MCP_OAUTH_LOOPBACK_PORT,
+    redirectUri: MCP_OAUTH_REDIRECT_URI,
+    timeoutMs: AUTH_TIMEOUT_MS,
+  },
   clientMetadataUrl: AIDEN_MCP_CLIENT_METADATA_URL,
   publish: (serverId, operation) => withMcpConfigurationPublication(serverId, operation),
 };
@@ -66,7 +70,10 @@ export function oauthProviderFor(
 }
 
 /** Stored sign-in state of a server (Settings, presets, status). */
-export function mcpOAuthSignInStateFor(serverId: string, server: McpServer | undefined): Promise<McpOAuthSignInState> {
+export function mcpOAuthSignInStateFor(
+  serverId: string,
+  server: McpServer | undefined,
+): Promise<McpOAuthSignInState> {
   return readMcpOAuthSignInState(mcpOAuthStore, serverId, server);
 }
 
@@ -79,9 +86,7 @@ export async function clearOAuth(
   serverId: string,
   isCurrent: () => boolean = () => true,
 ): Promise<void> {
-  await withMcpConfigurationPublication(serverId, () =>
-    mcpOAuthStore.clear(serverId, isCurrent),
-  );
+  await withMcpConfigurationPublication(serverId, () => mcpOAuthStore.clear(serverId, isCurrent));
 }
 
 /**
@@ -109,9 +114,7 @@ export function reserveMcpAuthorization(serverId: string): McpOAuthOperation {
   return oauthOperations.begin(serverId);
 }
 
-export function endReservedMcpAuthorization(
-  operation: McpOAuthOperation,
-): void {
+export function endReservedMcpAuthorization(operation: McpOAuthOperation): void {
   oauthOperations.end(operation);
 }
 
@@ -125,5 +128,9 @@ export function authorizeMcpServer(
   ownerSignal?: AbortSignal,
   reservedOperation?: McpOAuthOperation,
 ): Promise<McpOAuthAuthorizationResult> {
-  return authorizeMcpServerWithRuntime(runtime, server, { isCurrent, ownerSignal, reservedOperation });
+  return authorizeMcpServerWithRuntime(runtime, server, {
+    isCurrent,
+    ownerSignal,
+    reservedOperation,
+  });
 }

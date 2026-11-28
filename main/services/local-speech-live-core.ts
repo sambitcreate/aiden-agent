@@ -74,7 +74,8 @@ function sortedIndex(sorted: readonly number[], value: number): number {
 
 function frameRms(samples: Int16Array, start: number): number {
   let sum = 0;
-  for (let index = start; index < start + FRAME_SAMPLES; index += 1) sum += samples[index]! * samples[index]!;
+  for (let index = start; index < start + FRAME_SAMPLES; index += 1)
+    sum += samples[index]! * samples[index]!;
   return Math.sqrt(sum / FRAME_SAMPLES);
 }
 
@@ -115,7 +116,12 @@ export class LivePreviewSession {
     const accepted = Math.min(pcm.length, MAX_LIVE_PREVIEW_SAMPLES - this.length);
     if (accepted <= 0) return;
     if (this.length + accepted > this.samples.length) {
-      const grown = new Int16Array(Math.min(MAX_LIVE_PREVIEW_SAMPLES, Math.max(this.samples.length * 2, this.length + accepted)));
+      const grown = new Int16Array(
+        Math.min(
+          MAX_LIVE_PREVIEW_SAMPLES,
+          Math.max(this.samples.length * 2, this.length + accepted),
+        ),
+      );
       grown.set(this.samples.subarray(0, this.length));
       this.samples = grown;
     }
@@ -178,7 +184,8 @@ export class LivePreviewSession {
   }
 
   private isSpeech(rms: number): boolean {
-    const floor = this.sortedEnergy[Math.floor((this.sortedEnergy.length - 1) * FLOOR_PERCENTILE)] ?? 0;
+    const floor =
+      this.sortedEnergy[Math.floor((this.sortedEnergy.length - 1) * FLOOR_PERCENTILE)] ?? 0;
     return rms > Math.max(MIN_SPEECH_RMS, floor * 3);
   }
 
@@ -205,7 +212,10 @@ export class LivePreviewSession {
     }
     if (this.speechFrames === 0) return;
     if (this.length - this.decodedUpTo < MIN_NEW_SAMPLES) return;
-    const wait = this.lastDecodeStartedAt + Math.max(MIN_DECODE_INTERVAL_MS, 1.5 * this.lastDecodeMs) - this.now();
+    const wait =
+      this.lastDecodeStartedAt +
+      Math.max(MIN_DECODE_INTERVAL_MS, 1.5 * this.lastDecodeMs) -
+      this.now();
     if (wait > 0) {
       this.cancelTimer ??= this.schedule(() => {
         this.cancelTimer = null;
@@ -244,7 +254,11 @@ export class LivePreviewSession {
   private revise(text: string): void {
     const next = words(text);
     let stable = 0;
-    while (stable < next.length && stable < this.hypothesis.length && sameWord(next[stable]!, this.hypothesis[stable]!)) {
+    while (
+      stable < next.length &&
+      stable < this.hypothesis.length &&
+      sameWord(next[stable]!, this.hypothesis[stable]!)
+    ) {
       stable += 1;
     }
     this.hypothesis = next;
@@ -265,7 +279,11 @@ export class LivePreviewSession {
 
   private countSpeechSince(sample: number): number {
     let count = 0;
-    for (let frame = Math.floor(sample / FRAME_SAMPLES); frame < this.frameEnergy.length; frame += 1) {
+    for (
+      let frame = Math.floor(sample / FRAME_SAMPLES);
+      frame < this.frameEnergy.length;
+      frame += 1
+    ) {
       if (this.isSpeech(this.frameEnergy[frame]!)) count += 1;
     }
     return count;
@@ -321,7 +339,9 @@ export class LivePreviewManager {
       decode: (pcm) => this.deps.decode(pcm, modelId),
       publish: (snapshot) => owner.send("voice:stream-text", { sessionId: id, ...snapshot }),
       onFailure: (error) => {
-        this.deps.warn?.(`Live dictation text stopped: ${error instanceof Error ? error.message : String(error)}`);
+        this.deps.warn?.(
+          `Live dictation text stopped: ${error instanceof Error ? error.message : String(error)}`,
+        );
         this.end(id);
       },
       schedule: this.deps.schedule,

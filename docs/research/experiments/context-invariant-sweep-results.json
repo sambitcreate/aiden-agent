@@ -1,16 +1,7 @@
 {
   "evidenceKind": "synthetic-invariant-sweep",
   "seed": 260920804,
-  "windows": [
-    2048,
-    4096,
-    8192,
-    16000,
-    32000,
-    64000,
-    128000,
-    272000
-  ],
+  "windows": [2048, 4096, 8192, 16000, 32000, 64000, 128000, 272000],
   "requestedCases": 1000,
   "totals": {
     "cases": 875,

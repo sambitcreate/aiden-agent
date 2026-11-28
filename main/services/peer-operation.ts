@@ -1,10 +1,11 @@
-import { peerBotSessionCompat, peerBotSessionPageCompat, peerBotSessionPageCursor } from "./peer-bot-session-compat.js";
+import {
+  peerBotSessionCompat,
+  peerBotSessionPageCompat,
+  peerBotSessionPageCursor,
+} from "./peer-bot-session-compat.js";
 import { validatePeerResponse } from "./peer-response.js";
 import { hostIdentifier } from "../../renderer/shared/peer-host.js";
-import type {
-  PeerAttachmentContent,
-  PeerOperation,
-} from "../../renderer/shared/peer-operation.js";
+import type { PeerAttachmentContent, PeerOperation } from "../../renderer/shared/peer-operation.js";
 import { peerRecord, peerText } from "./peer-pairing.js";
 import {
   MAX_PEER_BINARY_BYTES,
@@ -70,7 +71,11 @@ const STAGED_ATTACHMENT_ID = /^att_[A-Za-z0-9_-]{43}$/u;
 const BOT_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
 
 /** Operations whose answer is bounded image bytes, not JSON. */
-export const PEER_BINARY_OPERATIONS: ReadonlySet<string> = new Set(["attachmentContent", "botSessionImage", "botAvatar"]);
+export const PEER_BINARY_OPERATIONS: ReadonlySet<string> = new Set([
+  "attachmentContent",
+  "botSessionImage",
+  "botAvatar",
+]);
 
 /** Run-control operations reconcile from the host feed's run state. */
 export const PEER_RUN_OPERATIONS: ReadonlySet<string> = new Set([
@@ -126,7 +131,9 @@ function forkBody(value: unknown): Record<string, unknown> {
   if (
     Object.keys(summary).some((key) => key !== "focus") ||
     (focus !== undefined &&
-      (typeof focus !== "string" || !focus.trim() || focus.length > MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS))
+      (typeof focus !== "string" ||
+        !focus.trim() ||
+        focus.length > MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS))
   )
     throw new Error("Invalid peer fork request.");
   return {
@@ -139,8 +146,7 @@ function forkBody(value: unknown): Record<string, unknown> {
 /** `{cancelled}` from `POST /chats/{chatId}/fork-summary/cancel`. */
 function forkSummaryCancelled(value: unknown): { cancelled: boolean } {
   const record = peerRecord(value);
-  if (typeof record.cancelled !== "boolean")
-    throw new Error("Invalid peer fork summary answer.");
+  if (typeof record.cancelled !== "boolean") throw new Error("Invalid peer fork summary answer.");
   return { cancelled: record.cancelled };
 }
 
@@ -159,10 +165,7 @@ function binaryContent(value: unknown): PeerAttachmentContent {
 }
 
 /** Pairing credentials never cross back into renderer operation results. */
-export async function peerOperationResult(
-  operation: unknown,
-  value: unknown,
-): Promise<unknown> {
+export async function peerOperationResult(operation: unknown, value: unknown): Promise<unknown> {
   const input = peerRecord(operation);
   const name = peerText(input.operation, 40);
   if (PEER_BINARY_OPERATIONS.has(name)) return binaryContent(value);
@@ -189,8 +192,7 @@ export async function peerOperationResult(
     return { ...parsed, ...(olderCursor === undefined ? {} : { olderCursor }), hostCount };
   }
   await validatePeerResponse(name, value);
-  if (name === "summaries")
-    return parseAidenRemoteChatSummaryPage(value, "Peer chat summaries");
+  if (name === "summaries") return parseAidenRemoteChatSummaryPage(value, "Peer chat summaries");
   if (
     name === "chat" ||
     name === "createChat" ||
@@ -201,11 +203,16 @@ export async function peerOperationResult(
     return parseAidenRemoteChatProjection(value, "Peer chat");
   if (name === "contextPressure")
     return parseAidenRemoteChatContextPressure(value, "Peer chat context pressure");
-  if (name === "forkChat")
-    return parseAidenRemoteChatForkResult(value, "Peer chat fork");
+  if (name === "forkChat") return parseAidenRemoteChatForkResult(value, "Peer chat fork");
   if (name === "forkSummaryCancel") return forkSummaryCancelled(value);
   if (name === "botSend") return parseAidenRemoteBotMessageReceipt(value);
-  if (name === "botResume" || name === "botDismiss" || name === "botStop" || name === "botPause" || name === "botUnpause")
+  if (
+    name === "botResume" ||
+    name === "botDismiss" ||
+    name === "botStop" ||
+    name === "botPause" ||
+    name === "botUnpause"
+  )
     return parseAidenRemoteBotSessionStateView(value);
   if (name === "botAnswerQuestion") return parseAidenRemoteBotQuestionAnswerReceipt(value);
   if (name === "botAnswerHandoff") return parseAidenRemoteBotHandoffAnswerReceipt(value);
@@ -213,7 +220,8 @@ export async function peerOperationResult(
   if (name === "botConnectionRequest") return parseAidenRemoteBotConnectionRequestReceipt(value);
   if (name === "botRespondPlan") return parseAidenRemoteBotPlanRespondReceipt(value);
   if (name === "botAnswerAccessRequest") return parseAidenRemoteBotAccessAnswerReceipt(value);
-  if (name === "botRespondRoutineProposal") return parseAidenRemoteBotRoutineProposalRespondResult(value);
+  if (name === "botRespondRoutineProposal")
+    return parseAidenRemoteBotRoutineProposalRespondResult(value);
   if (name === "botWithdrawQueued") return parseAidenRemoteBotQueuedWithdrawReceipt(value);
   return value;
 }
@@ -235,9 +243,7 @@ export function hostQueryValue(value: string): string {
 }
 
 function query(entries: [string, string | undefined][]): string {
-  const present = entries.filter(
-    (entry): entry is [string, string] => entry[1] !== undefined,
-  );
+  const present = entries.filter((entry): entry is [string, string] => entry[1] !== undefined);
   return present.length === 0
     ? ""
     : `?${present.map(([key, value]) => `${key}=${hostQueryValue(value)}`).join("&")}`;
@@ -254,7 +260,8 @@ export function peerRawUploadRequest(
   request: Omit<PeerRequest, "credential">,
 ): Omit<PeerRequest, "credential"> {
   const input = peerRecord(operation);
-  if (input.operation !== "uploadAttachment" && input.operation !== "uploadBotAttachment") return request;
+  if (input.operation !== "uploadAttachment" && input.operation !== "uploadBotAttachment")
+    return request;
   const body = request.body;
   if (!body || typeof body !== "object" || Array.isArray(body)) return request;
   const { kind, mimeType, name, data } = body as Record<string, unknown>;
@@ -262,7 +269,12 @@ export function peerRawUploadRequest(
   if (typeof name !== "string" || typeof data !== "string") return request;
   const bytes = Buffer.from(data, "base64");
   // A body that is not exact base64 keeps the envelope, so the host refuses it as before.
-  if (bytes.length === 0 || bytes.length > MAX_INLINE_IMAGE_BYTES || bytes.toString("base64") !== data) return request;
+  if (
+    bytes.length === 0 ||
+    bytes.length > MAX_INLINE_IMAGE_BYTES ||
+    bytes.toString("base64") !== data
+  )
+    return request;
   let encodedName: string;
   try {
     encodedName = encodeAidenRemoteAttachmentName(name);
@@ -270,15 +282,14 @@ export function peerRawUploadRequest(
     // A lone surrogate cannot be percent-encoded; the envelope lets the host refuse it as before.
     return request;
   }
-  if (encodedName.length === 0 || encodedName.length > AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME) return request;
+  if (encodedName.length === 0 || encodedName.length > AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME)
+    return request;
   const { body: _json, ...rest } = request;
   return { ...rest, rawBody: { contentType: mimeType, encodedName, data: bytes } };
 }
 
 /** Renderer selects a closed operation, never an arbitrary URL, header or credential. */
-export function peerOperationRequest(
-  value: unknown,
-): Omit<PeerRequest, "credential"> {
+export function peerOperationRequest(value: unknown): Omit<PeerRequest, "credential"> {
   const input = peerRecord(value);
   if (Object.keys(input).some((key) => !OPERATION_FIELDS.has(key)))
     throw new Error("Unknown peer operation field.");
@@ -291,8 +302,7 @@ export function peerOperationRequest(
   };
   const item = () => pattern(input.itemId, PUBLIC_ID);
   const cursor = () => encodeURIComponent(peerText(input.cursor, 512));
-  const optional = (raw: unknown, read: () => string) =>
-    raw === undefined ? undefined : read();
+  const optional = (raw: unknown, read: () => string) => (raw === undefined ? undefined : read());
   const limit = (max: number) =>
     optional(input.limit, () => {
       if (
@@ -348,7 +358,10 @@ export function peerOperationRequest(
       break;
     case "messagesWindow":
       path = `/chats/${id()}/messages${query([
-        ["before", optional(input.before, () => decodeURIComponent(pattern(input.before, PUBLIC_ID)))],
+        [
+          "before",
+          optional(input.before, () => decodeURIComponent(pattern(input.before, PUBLIC_ID))),
+        ],
         ["limit", limit(200)],
       ])}`;
       break;
@@ -379,7 +392,10 @@ export function peerOperationRequest(
       break;
     case "agents":
       path = `/chats/${id()}/agents${query([
-        ["turnId", optional(input.turnId, () => decodeURIComponent(pattern(input.turnId, PUBLIC_ID)))],
+        [
+          "turnId",
+          optional(input.turnId, () => decodeURIComponent(pattern(input.turnId, PUBLIC_ID))),
+        ],
       ])}`;
       break;
     case "streamQuestion":
@@ -394,11 +410,14 @@ export function peerOperationRequest(
     case "botConversations":
       path = `/bot-conversations${query([
         ["cursor", optional(input.cursor, () => peerText(input.cursor, 128))],
-        ["query", optional(input.query, () => {
-          if (typeof input.query !== "string" || input.query.length > 200)
-            throw new Error("Invalid peer operation query.");
-          return input.query;
-        })],
+        [
+          "query",
+          optional(input.query, () => {
+            if (typeof input.query !== "string" || input.query.length > 200)
+              throw new Error("Invalid peer operation query.");
+            return input.query;
+          }),
+        ],
         ["botId", optional(input.botId, () => hostIdentifier(input.botId))],
         ["limit", limit(50)],
       ])}`;
@@ -645,9 +664,7 @@ export function peerOperationRequest(
   return {
     path,
     method,
-    ...(method !== "GET" && method !== "DELETE"
-      ? { body: body ?? {} }
-      : {}),
+    ...(method !== "GET" && method !== "DELETE" ? { body: body ?? {} } : {}),
     ...(needsKey ? { idempotencyKey: token(input.idempotencyKey, 16) } : {}),
     ...(needsRevision ? { revision: token(input.revision, 1) } : {}),
     ...(maxBodyBytes !== undefined ? { maxBodyBytes } : {}),

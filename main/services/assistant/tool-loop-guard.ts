@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { copyBoundedJson, utf8Size } from "../bounded-json.js";
-import type { AgentContext, AgentTurnContext, AgentTurnDecision } from "@earendil-works/pi-agent-core";
+import type {
+  AgentContext,
+  AgentTurnContext,
+  AgentTurnDecision,
+} from "@earendil-works/pi-agent-core";
 
 export const MAX_CONSECUTIVE_ATTENDED_TOOL_ERROR_TURNS = 2;
 export const ATTENDED_TOOL_FAILURE_RECOVERY_REPLY =
@@ -21,11 +25,22 @@ export interface AttendedToolErrorState {
 export const MAX_ATTENDED_TOOL_FAILURES = 8;
 const executedArguments = new WeakMap<object, string | undefined>();
 function argumentDigest(value: unknown): string | undefined {
-  const args = copyBoundedJson(value, { maxNodes: 2048, maxDepth: 24, maxSize: 16384, measure: utf8Size });
+  const args = copyBoundedJson(value, {
+    maxNodes: 2048,
+    maxDepth: 24,
+    maxSize: 16384,
+    measure: utf8Size,
+  });
   if (args === undefined) return undefined;
   const canonical = (value: unknown): string => {
     if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-    if (value && typeof value === "object") return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`).join(",")}}`;
+    if (value && typeof value === "object")
+      return `{${Object.keys(value)
+        .sort()
+        .map(
+          (key) => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`,
+        )
+        .join(",")}}`;
     return JSON.stringify(value) ?? "null";
   };
   return createHash("sha256").update(canonical(args)).digest("hex");
@@ -39,7 +54,12 @@ export function recordAttendedToolArguments(call: object, args: unknown): void {
 /** Digests only; never retain tool arguments or provider error text. */
 export function advanceAttendedToolErrorState(
   current: AttendedToolErrorState | undefined,
-  toolResults: readonly { isError?: boolean; toolName?: string; toolCallId?: string; content?: unknown }[],
+  toolResults: readonly {
+    isError?: boolean;
+    toolName?: string;
+    toolCallId?: string;
+    content?: unknown;
+  }[],
   calls: readonly { id: string; name: string; arguments: unknown }[] = [],
 ): AttendedToolErrorState {
   if (current?.shouldStop) return current;
@@ -50,18 +70,45 @@ export function advanceAttendedToolErrorState(
     if (!result.isError) continue;
     totalFailures += 1;
     const call = calls.find((item) => item.id === result.toolCallId);
-    const text = Array.isArray(result.content) ? result.content.filter((item) => item?.type === "text").map((item) => item.text).join(" ").slice(0, 4096) : "";
+    const text = Array.isArray(result.content)
+      ? result.content
+          .filter((item) => item?.type === "text")
+          .map((item) => item.text)
+          .join(" ")
+          .slice(0, 4096)
+      : "";
     // Closed categories only. Denial is terminal even if a provider changes arguments.
-    const terminal = /user denied this action|user declined this automation|action was cancelled before approval|authority.*revoked|approval.*cancelled|operation aborted/iu.test(text);
-    const category = terminal ? "denied" : /invalid|validation|malformed/iu.test(text) ? "invalid" : "failed";
-    const digest = call ? (executedArguments.has(call) ? executedArguments.get(call) : argumentDigest(call.arguments)) : "unknown";
+    const terminal =
+      /user denied this action|user declined this automation|action was cancelled before approval|authority.*revoked|approval.*cancelled|operation aborted/iu.test(
+        text,
+      );
+    const category = terminal
+      ? "denied"
+      : /invalid|validation|malformed/iu.test(text)
+        ? "invalid"
+        : "failed";
+    const digest = call
+      ? executedArguments.has(call)
+        ? executedArguments.get(call)
+        : argumentDigest(call.arguments)
+      : "unknown";
     if (terminal || totalFailures >= MAX_ATTENDED_TOOL_FAILURES) shouldStop = true;
     // Oversized/unfingerprintable inputs count toward the total, never as an identical call.
-    if (digest === undefined) { if (shouldStop) break; else continue; }
-    const key = createHash("sha256").update(`${result.toolName ?? call?.name ?? "unknown"}\0${category}\0${digest}`).digest("hex");
+    if (digest === undefined) {
+      if (shouldStop) break;
+      else continue;
+    }
+    const key = createHash("sha256")
+      .update(`${result.toolName ?? call?.name ?? "unknown"}\0${category}\0${digest}`)
+      .digest("hex");
     const count = (failures.get(key) ?? 0) + 1;
     failures.set(key, count);
-    if (terminal || count >= MAX_CONSECUTIVE_ATTENDED_TOOL_ERROR_TURNS || totalFailures >= MAX_ATTENDED_TOOL_FAILURES) shouldStop = true;
+    if (
+      terminal ||
+      count >= MAX_CONSECUTIVE_ATTENDED_TOOL_ERROR_TURNS ||
+      totalFailures >= MAX_ATTENDED_TOOL_FAILURES
+    )
+      shouldStop = true;
     if (shouldStop) break;
   }
   return { failures, totalFailures, shouldStop };
@@ -100,5 +147,6 @@ export function recoverAttendedToolErrorContext(
 export function endRunAfterIgnoredToolRecovery(
   recoveryRequested: () => boolean,
 ): (turn: Pick<AgentTurnContext, "toolResults">) => AgentTurnDecision | undefined {
-  return (turn) => (recoveryRequested() && turn.toolResults.length > 0 ? { action: "end" } : undefined);
+  return (turn) =>
+    recoveryRequested() && turn.toolResults.length > 0 ? { action: "end" } : undefined;
 }

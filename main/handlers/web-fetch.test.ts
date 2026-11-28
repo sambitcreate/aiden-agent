@@ -17,7 +17,12 @@ function register(options: { keyCount?: number; destroyed?: boolean } = {}) {
   registerWebFetchHandlers<unknown>({
     handle: (channel, handler) => handlers.set(channel, handler),
     owner: () => owner,
-    snapshot: async () => webFetchRendererSnapshot({ settings, webSearchEnabled: true, keyCount: options.keyCount ?? 0 }),
+    snapshot: async () =>
+      webFetchRendererSnapshot({
+        settings,
+        webSearchEnabled: true,
+        keyCount: options.keyCount ?? 0,
+      }),
     update: async (mutation, isCurrent) => {
       const next = mutation(structuredClone(settings));
       if (isCurrent()) settings = next;
@@ -34,7 +39,9 @@ test("every channel is registered", () => {
 
 test("page reading turns off and on and returns the new snapshot", async () => {
   const { invoke, current } = register();
-  const snapshot = (await invoke("webSearch:pages:setEnabled", false)) as { settings: WebFetchSettingsV1 };
+  const snapshot = (await invoke("webSearch:pages:setEnabled", false)) as {
+    settings: WebFetchSettingsV1;
+  };
   assert.equal(snapshot.settings.enabled, false);
   assert.equal(current().enabled, false);
   await assert.rejects(invoke("webSearch:pages:setEnabled", "off"), /on or off/u);
@@ -42,13 +49,18 @@ test("page reading turns off and on and returns the new snapshot", async () => {
 
 test("extract mode turns on only once the account ID and a key are saved", async () => {
   const without = register({ keyCount: 1 });
-  await assert.rejects(without.invoke("webSearch:pages:setExtractEnabled", true), /account ID and at least one API key/u);
+  await assert.rejects(
+    without.invoke("webSearch:pages:setExtractEnabled", true),
+    /account ID and at least one API key/u,
+  );
   assert.equal(without.current().extract.enabled, false);
 
   const ready = register({ keyCount: 1 });
   await ready.invoke("webSearch:pages:setExtractAccountId", ` ${ACCOUNT_ID.toUpperCase()} `);
   assert.equal(ready.current().extract.accountId, ACCOUNT_ID);
-  const snapshot = (await ready.invoke("webSearch:pages:setExtractEnabled", true)) as { extract: { active: boolean } };
+  const snapshot = (await ready.invoke("webSearch:pages:setExtractEnabled", true)) as {
+    extract: { active: boolean };
+  };
   assert.equal(snapshot.extract.active, true);
   // Turning it off never needs the model.
   await ready.invoke("webSearch:pages:setExtractAccountId", null);
@@ -59,7 +71,10 @@ test("extract mode turns on only once the account ID and a key are saved", async
 
 test("a malformed account ID is refused and nothing changes", async () => {
   const { invoke, current } = register();
-  await assert.rejects(invoke("webSearch:pages:setExtractAccountId", "acct-123"), /32 letters and digits/u);
+  await assert.rejects(
+    invoke("webSearch:pages:setExtractAccountId", "acct-123"),
+    /32 letters and digits/u,
+  );
   await assert.rejects(invoke("webSearch:pages:setExtractAccountId", 42), /must be text/u);
   assert.deepEqual(current(), defaultWebFetchSettings());
 });

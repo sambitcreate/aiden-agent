@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { LiveOpenChatStore, type LiveOpenChatSnapshot } from "./live-open-chat";
 
-const chat = (chatId: string, overrides: Partial<LiveOpenChatSnapshot> = {}): LiveOpenChatSnapshot => ({
+const chat = (
+  chatId: string,
+  overrides: Partial<LiveOpenChatSnapshot> = {},
+): LiveOpenChatSnapshot => ({
   chatId,
   title: `Chat ${chatId}`,
   workspaceId: null,

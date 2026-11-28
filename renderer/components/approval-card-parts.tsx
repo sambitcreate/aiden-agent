@@ -14,7 +14,11 @@ import {
 } from "./ui";
 import { cn } from "../lib/ui-utils";
 import { LiveGuard } from "./live-guard";
-import { approvalAriaKeyShortcut, approvalShortcutLabel, type ApprovalShortcut } from "../lib/approval-shortcuts";
+import {
+  approvalAriaKeyShortcut,
+  approvalShortcutLabel,
+  type ApprovalShortcut,
+} from "../lib/approval-shortcuts";
 import { detectedKeyboardPlatform } from "../shared/keybindings";
 import { approvalStatusLabel, type ApprovalStatus } from "../shared/approval-card-model";
 
@@ -70,7 +74,11 @@ export function ApprovalActions({
   const shortcutHint = (shortcut: ApprovalShortcut) =>
     keyboardShortcuts && !disabled ? (
       // Shown only where both buttons have room for it; a narrow card keeps plain labels.
-      <span aria-hidden="true" data-approval-shortcut={shortcut} className="ml-1.5 hidden shrink-0 font-normal tabular-nums opacity-65 @md:inline">
+      <span
+        aria-hidden="true"
+        data-approval-shortcut={shortcut}
+        className="ml-1.5 hidden shrink-0 font-normal tabular-nums opacity-65 @md:inline"
+      >
         {approvalShortcutLabel(shortcut, keyboardPlatform)}
       </span>
     ) : null;
@@ -83,21 +91,33 @@ export function ApprovalActions({
         size="large"
         className="flex-1"
         disabled={disabled}
-        aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("deny", keyboardPlatform) : undefined}
+        aria-keyshortcuts={
+          keyboardShortcuts ? approvalAriaKeyShortcut("deny", keyboardPlatform) : undefined
+        }
         onClick={onDeny}
       >
         {denyLabel}
         {shortcutHint("deny")}
       </Button>
       {allowLabel !== undefined ? (
-        <div className={cn("flex min-w-0 flex-1", joined && "squircle-action-group squircle-control shadow-control")}>
+        <div
+          className={cn(
+            "flex min-w-0 flex-1",
+            joined && "squircle-action-group squircle-control shadow-control",
+          )}
+        >
           <Button
             variant="accent"
             size="large"
-            className={cn("min-w-0 flex-1", joined && "shadow-none hover:shadow-none active:shadow-none")}
+            className={cn(
+              "min-w-0 flex-1",
+              joined && "shadow-none hover:shadow-none active:shadow-none",
+            )}
             disabled={disabled || allowDisabled}
             aria-describedby={allowDescribedBy}
-            aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("allow", keyboardPlatform) : undefined}
+            aria-keyshortcuts={
+              keyboardShortcuts ? approvalAriaKeyShortcut("allow", keyboardPlatform) : undefined
+            }
             onClick={onAllow}
           >
             {allowLabel}
@@ -149,7 +169,10 @@ export function ApprovalStatusLine({ status }: { status: ApprovalStatus }) {
     >
       <Icon
         aria-hidden="true"
-        className={cn("size-4 shrink-0", status.decision === "allow" ? "text-status-green" : "text-tertiary")}
+        className={cn(
+          "size-4 shrink-0",
+          status.decision === "allow" ? "text-status-green" : "text-tertiary",
+        )}
       />
       <Text variant="small" color="secondary" as="span">
         {approvalStatusLabel(status)}
@@ -157,7 +180,6 @@ export function ApprovalStatusLine({ status }: { status: ApprovalStatus }) {
     </div>
   );
 }
-
 
 /**
  * The ask card's frame for cards that are not tool approvals but ask the same
@@ -208,13 +230,23 @@ export function AskCard({
               {eyebrow}
             </Text>
           ) : null}
-          <Text variant="strong" as="p" id={titleId} className={cn(eyebrow ? "mt-0.5" : "mt-2.5", "text-balance")}>
+          <Text
+            variant="strong"
+            as="p"
+            id={titleId}
+            className={cn(eyebrow ? "mt-0.5" : "mt-2.5", "text-balance")}
+          >
             {title}
           </Text>
         </div>
         {children}
         {error ? (
-          <Text variant="small" as="p" role="alert" className="mt-1.5 shrink-0 text-center text-status-red">
+          <Text
+            variant="small"
+            as="p"
+            role="alert"
+            className="mt-1.5 shrink-0 text-center text-status-red"
+          >
             {error}
           </Text>
         ) : null}

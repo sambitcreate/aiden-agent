@@ -63,7 +63,11 @@ function summary(id: string, updatedAt = 2_000, title = `Chat ${id}`) {
   } as AidenRemoteChatSummaryProjection;
 }
 
-function run(runId: string, chatId: string, state: HostRunSummary["state"] = "working"): HostRunSummary {
+function run(
+  runId: string,
+  chatId: string,
+  state: HostRunSummary["state"] = "working",
+): HostRunSummary {
   return {
     runId,
     chatId,
@@ -80,7 +84,11 @@ function run(runId: string, chatId: string, state: HostRunSummary["state"] = "wo
 function host(
   epoch: string,
   current: AidenRemoteHostFeedState,
-  options: { maxEvents?: number; snapshotChunkBytes?: number; attentionSummary?: (runId: string) => string | undefined } = {},
+  options: {
+    maxEvents?: number;
+    snapshotChunkBytes?: number;
+    attentionSummary?: (runId: string) => string | undefined;
+  } = {},
 ) {
   const state = { current };
   const feed = new AidenRemoteHostFeedService({
@@ -93,7 +101,11 @@ function host(
   return { feed, state };
 }
 
-async function subscribe(feed: AidenRemoteHostFeedService, cursor?: string, extra: AidenRemoteCapability[] = []) {
+async function subscribe(
+  feed: AidenRemoteHostFeedService,
+  cursor?: string,
+  extra: AidenRemoteCapability[] = [],
+) {
   const wire = new Wire();
   await feed.open(
     { id: "desktop", capabilities: new Set<AidenRemoteCapability>(["host:events", ...extra]) },
@@ -163,16 +175,21 @@ test("a chunked snapshot applies only when complete and then mirrors the host's 
     await feed.refresh();
     const live = wire.drain();
     const changes = feedInto(cache, live);
-    assert.deepEqual(
-      changes.map((change) => change.type).sort(),
-      ["chat.remove", "chat.upsert", "chat.upsert", "run.state", "workspace.remove"],
-    );
+    assert.deepEqual(changes.map((change) => change.type).sort(), [
+      "chat.remove",
+      "chat.upsert",
+      "chat.upsert",
+      "run.state",
+      "workspace.remove",
+    ]);
     const view = cache.snapshot();
     assert.deepEqual(ids(view.summaries), ids(state.current.summaries));
     assert.equal(view.summaries.find((item) => item.id === "chat-1")?.title, "Renamed");
     assert.deepEqual(view.workspaces, []);
     // The removed chat's run goes with it.
-    assert.deepEqual(view.runs, [{ chatId: "chat-1", runId: "run-1", state: "working", unread: false }]);
+    assert.deepEqual(view.runs, [
+      { chatId: "chat-1", runId: "run-1", state: "working", unread: false },
+    ]);
     assert.equal(cache.runForChat("chat-3"), undefined);
     assert.equal(cache.runForChat("chat-1")?.runId, "run-1");
     assert.equal(cache.cursor(), `epoch_a:${feed.sequence}`);
@@ -197,7 +214,10 @@ test("an interrupted snapshot restarts whole and a same-epoch resync keeps known
 
     // The cursor falls behind retention while disconnected: the host resends a snapshot.
     for (const index of [40, 41, 42]) {
-      state.current = { ...state.current, summaries: [...state.current.summaries, summary(`chat-${index}`, 3_000 + index)] };
+      state.current = {
+        ...state.current,
+        summaries: [...state.current.summaries, summary(`chat-${index}`, 3_000 + index)],
+      };
       feed.invalidate();
       await feed.refresh();
     }
@@ -312,11 +332,7 @@ test("a window rebuilt from broadcast changes matches the cache when it drops ru
       window.apply(feedInto(cache, wire.drain()));
       const view = cache.snapshot();
       assert.deepEqual([...window.summaries.keys()].sort(), ids(view.summaries));
-      assert.deepEqual(
-        [...window.runs.values()],
-        view.runs,
-        "the window's runs match the cache's",
-      );
+      assert.deepEqual([...window.runs.values()], view.runs, "the window's runs match the cache's");
     };
     await step();
     // chat-10 and chat-20 are older than the newest 2,000, yet their runs are still learned.
@@ -327,7 +343,10 @@ test("a window rebuilt from broadcast changes matches the cache when it drops ru
     assert.equal(cache.run("run-20")?.chatId, "chat-20");
 
     // The host deletes chat-10.
-    state.current = { ...state.current, summaries: state.current.summaries.filter((item) => item.id !== "chat-10") };
+    state.current = {
+      ...state.current,
+      summaries: state.current.summaries.filter((item) => item.id !== "chat-10"),
+    };
     feed.invalidate();
     await step();
     assert.equal(cache.run("run-10"), undefined);
@@ -365,24 +384,38 @@ test("future vocabulary is skipped in place and a different protocol version blo
       ),
       "host feed",
     );
-  cache.apply(envelope(0, "snapshot", { epoch: "epoch_a", sequence: 0, summaries: [], workspaces: [], bots: [] }));
+  cache.apply(
+    envelope(0, "snapshot", {
+      epoch: "epoch_a",
+      sequence: 0,
+      summaries: [],
+      workspaces: [],
+      bots: [],
+    }),
+  );
   assert.deepEqual(cache.apply(envelope(4, "chat.pinned", { id: "chat-1" })), []);
   assert.equal(cache.cursor(), "epoch_a:4");
   assert.throws(
     () => envelope(5, "chat.upsert", { id: "x" }, 2),
-    (error: unknown) => error instanceof PeerTransportError && error.code === "unsupported_protocol",
+    (error: unknown) =>
+      error instanceof PeerTransportError && error.code === "unsupported_protocol",
   );
   assert.throws(
     () => cache.apply(envelope(6, "chat.upsert", { id: "../escape" })),
     (error: unknown) => error instanceof PeerTransportError && error.code === "invalid_response",
   );
   assert.throws(() =>
-    parsePeerStreamEnvelope(parsePeerSseFrame('data: {"protocolVersion":1,"authorization":"x"}'), "host feed"),
+    parsePeerStreamEnvelope(
+      parsePeerSseFrame('data: {"protocolVersion":1,"authorization":"x"}'),
+      "host feed",
+    ),
   );
 });
 
 test("a waiting run keeps the ask its host sent, and a malformed ask is dropped rather than refusing the frame", async () => {
-  const { feed } = host("epoch_a", initial(), { attentionSummary: (runId) => (runId === "run-ask" ? "Allow writing to notes.md" : undefined) });
+  const { feed } = host("epoch_a", initial(), {
+    attentionSummary: (runId) => (runId === "run-ask" ? "Allow writing to notes.md" : undefined),
+  });
   const wire = await subscribe(feed, undefined, ["runs:observe"]);
   try {
     const cache = new PeerHostFeedCache("host-1");
@@ -413,12 +446,31 @@ test("a waiting run keeps the ask its host sent, and a malformed ask is dropped 
       ),
       "host feed",
     );
-  cache.apply(envelope(0, "snapshot", { epoch: "epoch_b", sequence: 0, summaries: [], workspaces: [], bots: [] }));
+  cache.apply(
+    envelope(0, "snapshot", {
+      epoch: "epoch_b",
+      sequence: 0,
+      summaries: [],
+      workspaces: [],
+      bots: [],
+    }),
+  );
   const base = { chatId: "chat-1", state: "needs_input", unread: false };
-  cache.apply(envelope(1, "run.state", { ...base, runId: "run-odd", attentionSummary: { text: "x" } }));
-  cache.apply(envelope(2, "run.state", { ...base, runId: "run-long", attentionSummary: `Pick\n${"y".repeat(500)}` }));
+  cache.apply(
+    envelope(1, "run.state", { ...base, runId: "run-odd", attentionSummary: { text: "x" } }),
+  );
+  cache.apply(
+    envelope(2, "run.state", {
+      ...base,
+      runId: "run-long",
+      attentionSummary: `Pick\n${"y".repeat(500)}`,
+    }),
+  );
   assert.equal(cache.run("run-odd")?.state, "needs_input");
   assert.equal(cache.run("run-odd")?.attentionSummary, undefined);
   const long = cache.run("run-long")?.attentionSummary ?? "";
-  assert.ok(Array.from(long).length <= 200 && long.startsWith("Pick y"), "a long ask is clipped to one line");
+  assert.ok(
+    Array.from(long).length <= 200 && long.startsWith("Pick y"),
+    "a long ask is clipped to one line",
+  );
 });

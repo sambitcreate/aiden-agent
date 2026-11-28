@@ -6,21 +6,37 @@ import { test } from "node:test";
 import { agentNotice } from "../../../renderer/shared/agent-notices.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
 import type { StartTurnResult } from "../follow-through/notice-delivery.js";
-import { createGoalRoundStarter, type GoalRoundStarterDependencies, type WindowRoundPayload } from "./goal-round-starter.js";
+import {
+  createGoalRoundStarter,
+  type GoalRoundStarterDependencies,
+  type WindowRoundPayload,
+} from "./goal-round-starter.js";
 import type { GoalWindowRoundResult } from "./goal-window-rounds.js";
 
 const CHAT = "chat-1";
 const CONTEXT = { workspaceId: "ws-1", providerId: "anthropic", model: "claude" };
 const ROUND = {
   text: "Keep going: write the changelog.",
-  notice: agentNotice({ source: "goal", tone: "info", title: "Keep going · round 2 of 50", summary: "Write the changelog" }),
+  notice: agentNotice({
+    source: "goal",
+    tone: "info",
+    title: "Keep going · round 2 of 50",
+    summary: "Write the changelog",
+  }),
 };
 
 function owner(documentId: string): ChatGenerationOwner {
-  return { id: 0, documentId, isDestroyed: () => false, send: () => {} } as unknown as ChatGenerationOwner;
+  return {
+    id: 0,
+    documentId,
+    isDestroyed: () => false,
+    send: () => {},
+  } as unknown as ChatGenerationOwner;
 }
 
-function harness(options: { window?: (payload: WindowRoundPayload) => Promise<GoalWindowRoundResult> } = {}) {
+function harness(
+  options: { window?: (payload: WindowRoundPayload) => Promise<GoalWindowRoundResult> } = {},
+) {
   const saved: Array<{ content: string; stillCurrent: boolean }> = [];
   const started: string[] = [];
   const leases = { begun: 0, released: 0 };
@@ -96,7 +112,12 @@ test("a notice round goes through the window offer and returns the window's own 
     },
   });
   // A notice already saved: the round answers it, with no message of its own.
-  const result: StartTurnResult = await h.starter.startGoalRound(CHAT, CONTEXT, undefined, () => true);
+  const result: StartTurnResult = await h.starter.startGoalRound(
+    CHAT,
+    CONTEXT,
+    undefined,
+    () => true,
+  );
   assert.deepEqual(result, { kind: "started", streamId: "window-stream", messageId: "msg-notice" });
   assert.equal(offered.length, 1);
   assert.equal(offered[0]!.round, undefined);
@@ -105,7 +126,9 @@ test("a notice round goes through the window offer and returns the window's own 
 
   // A window that was busy hands back the busy outcome, so the notice waits for the chat to be idle.
   const busy = harness({ window: async () => "busy" });
-  assert.deepEqual(await busy.starter.startGoalRound(CHAT, CONTEXT, undefined, () => true), { kind: "busy" });
+  assert.deepEqual(await busy.starter.startGoalRound(CHAT, CONTEXT, undefined, () => true), {
+    kind: "busy",
+  });
 });
 
 test("the goal is checked when the round's message is saved and again just before the turn starts", async () => {
@@ -124,7 +147,11 @@ test("the goal is checked when the round's message is saved and again just befor
   const afterSave = harness();
   afterSave.hooks.afterAppend = () => (current = false);
   const stopped = await afterSave.starter.startGoalRound(CHAT, CONTEXT, ROUND, () => current);
-  assert.deepEqual(stopped, { kind: "unavailable", reason: "The goal changed before the round began.", messageId: "msg-1" });
+  assert.deepEqual(stopped, {
+    kind: "unavailable",
+    reason: "The goal changed before the round began.",
+    messageId: "msg-1",
+  });
   assert.deepEqual(afterSave.started, []);
   assert.equal(afterSave.leases.released, 1);
 });

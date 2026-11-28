@@ -23,7 +23,8 @@ export function botMemoryRuntime(): BotMemoryRuntime {
   if (runtime === undefined) {
     runtime = createBotMemoryService({
       store: createBotMemoryStore({ profileDir: app.getPath("userData") }),
-      onReport: (botId, error) => logger.warn("bots", `Bot ${botId} memory listener failed.`, error),
+      onReport: (botId, error) =>
+        logger.warn("bots", `Bot ${botId} memory listener failed.`, error),
     });
     runtime.onChanged((event) => ipcMain.broadcast(BOT_MEMORY_CHANGED_CHANNEL, event));
   }
@@ -34,7 +35,8 @@ export function botMemoryRuntime(): BotMemoryRuntime {
 export const botMemory: BotMemoryRuntime = {
   view: (botId) => botMemoryRuntime().view(botId),
   edit: (input) => botMemoryRuntime().edit(input),
-  apply: (botId, target, operations, options) => botMemoryRuntime().apply(botId, target, operations, options),
+  apply: (botId, target, operations, options) =>
+    botMemoryRuntime().apply(botId, target, operations, options),
   snapshot: (botId) => botMemoryRuntime().snapshot(botId),
   takeEdits: (botId) => botMemoryRuntime().takeEdits(botId),
   beginSession: (botId) => botMemoryRuntime().beginSession(botId),

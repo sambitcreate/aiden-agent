@@ -25,7 +25,8 @@ export function normalizeSignInOrigin(site: string): string {
   if (typeof site !== "string") refuse();
   const input = site.trim();
   if (input.length === 0 || input.length > MAX_SITE_LENGTH) refuse();
-  const explicit = input.includes("://") || (/^[a-z][a-z\d+.-]*:/iu.test(input) && !looksLikeHostAndPort(input));
+  const explicit =
+    input.includes("://") || (/^[a-z][a-z\d+.-]*:/iu.test(input) && !looksLikeHostAndPort(input));
   let url: URL;
   try {
     url = new URL(explicit ? input : `https://${input}`);

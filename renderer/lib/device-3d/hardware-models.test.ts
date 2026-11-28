@@ -12,13 +12,22 @@ import {
   Vector3,
 } from "three";
 import { buildDuoModel } from "./duo-model.js";
-import { buildHandsetModel, DISPLAY_HEIGHT, displaySize, HANDSET_SPECS, modelGeometries } from "./hardware-models.js";
+import {
+  buildHandsetModel,
+  DISPLAY_HEIGHT,
+  displaySize,
+  HANDSET_SPECS,
+  modelGeometries,
+} from "./hardware-models.js";
 import { isDuoDevice, resolveDeviceModelId } from "./model-registry.js";
 import { createModelPhoneScene, disposeDeviceModel } from "./model-scene.js";
 import { phoneDisplayLayout } from "./phone-scene.js";
 
 const close = (actual: number, expected: number, epsilon: number, label = "") =>
-  assert.ok(Math.abs(actual - expected) <= epsilon, `${label} ${actual} is not within ${epsilon} of ${expected}`);
+  assert.ok(
+    Math.abs(actual - expected) <= epsilon,
+    `${label} ${actual} is not within ${epsilon} of ${expected}`,
+  );
 
 // Adapted from t3code model.test.ts @ a6ec88f7 (MIT).
 test("only exact simulator names that share a modelled chassis get a hardware model", () => {
@@ -28,7 +37,14 @@ test("only exact simulator names that share a modelled chassis get a hardware mo
   assert.equal(resolveDeviceModelId("ios", "iPad Pro 13-inch (M5)"), "ipad-pro-13");
   assert.equal(resolveDeviceModelId("ios", "iPad Pro 13-inch (M4)"), "ipad-pro-13");
   assert.equal(resolveDeviceModelId("ios", "iPhone Duo"), "iphone-duo");
-  for (const name of ["iPhone 16 Pro", "iPhone 18", "iPhone Air", "iPad Pro 11-inch (M5)", "Pixel_10_Pro", "My iPhone 17 Pro"]) {
+  for (const name of [
+    "iPhone 16 Pro",
+    "iPhone 18",
+    "iPhone Air",
+    "iPad Pro 11-inch (M5)",
+    "Pixel_10_Pro",
+    "My iPhone 17 Pro",
+  ]) {
     assert.equal(resolveDeviceModelId("ios", name), null, name);
   }
   assert.equal(resolveDeviceModelId("android", "iPhone 18 Pro"), null);
@@ -51,7 +67,12 @@ for (const id of ["iphone-pro", "iphone-pro-max", "ipad-pro-13"] as const) {
     const screenSize = screenBounds.getSize(new Vector3());
     close(screenSize.y, DISPLAY_HEIGHT, 1e-3, "display height");
     // The display has the framebuffer's aspect, so live pixels are never stretched.
-    close(screenSize.x / screenSize.y, spec.pixels.width / spec.pixels.height, 2e-3, "display aspect");
+    close(
+      screenSize.x / screenSize.y,
+      spec.pixels.width / spec.pixels.height,
+      2e-3,
+      "display aspect",
+    );
     // The body has the published width, height and depth, at the display's scale.
     const scale = DISPLAY_HEIGHT / displaySize(spec).height;
     const front = new Box3();
@@ -80,7 +101,11 @@ for (const id of ["iphone-pro", "iphone-pro-max", "ipad-pro-13"] as const) {
 test("a touch through the Dynamic Island still reaches the framebuffer under it", () => {
   const asset = buildHandsetModel("iphone-pro");
   const texture = new Texture();
-  const phone = createModelPhoneScene(asset, texture, phoneDisplayLayout({ width: 1206, height: 2622, orientation: "portrait" }, 1206, 2622));
+  const phone = createModelPhoneScene(
+    asset,
+    texture,
+    phoneDisplayLayout({ width: 1206, height: 2622, orientation: "portrait" }, 1206, 2622),
+  );
   const camera = new PerspectiveCamera(32, 1, 0.1, 30);
   camera.position.z = 6;
   camera.updateMatrixWorld(true);
@@ -96,7 +121,12 @@ test("a touch through the Dynamic Island still reaches the framebuffer under it"
 });
 
 test("models stay light: a few draw calls each, a bounded vertex budget, and full release", () => {
-  for (const build of [() => buildHandsetModel("iphone-pro"), () => buildHandsetModel("iphone-pro-max"), () => buildHandsetModel("ipad-pro-13"), buildDuoModel]) {
+  for (const build of [
+    () => buildHandsetModel("iphone-pro"),
+    () => buildHandsetModel("iphone-pro-max"),
+    () => buildHandsetModel("ipad-pro-13"),
+    buildDuoModel,
+  ]) {
     const asset = build();
     let meshes = 0;
     let vertices = 0;
@@ -127,7 +157,12 @@ function fixtureAsset() {
   return { root, screen, body };
 }
 
-for (const orientation of ["portrait", "landscape_left", "landscape_right", "portrait_upside_down"] as const) {
+for (const orientation of [
+  "portrait",
+  "landscape_left",
+  "landscape_right",
+  "portrait_upside_down",
+] as const) {
   test(`a model keeps its geometry while mapping input and framebuffer UVs in ${orientation}`, () => {
     const { root, screen } = fixtureAsset();
     const texture = new Texture();
@@ -156,7 +191,10 @@ for (const orientation of ["portrait", "landscape_left", "landscape_right", "por
     close(hit.x, expected[0]!, 1e-3);
     close(hit.y, expected[1]!, 1e-3);
     const geometry = screen.geometry;
-    phone.setDisplay(texture, phoneDisplayLayout({ width: 2622, height: 1206, orientation: "landscape_left" }, 2622, 1206));
+    phone.setDisplay(
+      texture,
+      phoneDisplayLayout({ width: 2622, height: 1206, orientation: "landscape_left" }, 2622, 1206),
+    );
     assert.equal(screen.geometry, geometry);
     const position = geometry.getAttribute("position");
     const uv = geometry.getAttribute("uv");
@@ -191,12 +229,21 @@ test("a model with a missing or unnormalized display is refused before its mater
   const original = screen.material;
   const texture = new Texture();
   screen.geometry.scale(1, 2, 1);
-  assert.throws(() => createModelPhoneScene(root, texture, phoneDisplayLayout(null, 1206, 2622)), /not normalized/u);
+  assert.throws(
+    () => createModelPhoneScene(root, texture, phoneDisplayLayout(null, 1206, 2622)),
+    /not normalized/u,
+  );
   assert.equal(screen.material, original);
   screen.geometry.scale(1, 0.5, 1);
   root.rotation.y = Math.PI;
-  assert.throws(() => createModelPhoneScene(root, texture, phoneDisplayLayout(null, 1206, 2622)), /not normalized/u);
+  assert.throws(
+    () => createModelPhoneScene(root, texture, phoneDisplayLayout(null, 1206, 2622)),
+    /not normalized/u,
+  );
   screen.name = "wrong-screen";
-  assert.throws(() => createModelPhoneScene(root, texture, phoneDisplayLayout(null, 1206, 2622)), /one device-screen/u);
+  assert.throws(
+    () => createModelPhoneScene(root, texture, phoneDisplayLayout(null, 1206, 2622)),
+    /one device-screen/u,
+  );
   disposeDeviceModel(root);
 });

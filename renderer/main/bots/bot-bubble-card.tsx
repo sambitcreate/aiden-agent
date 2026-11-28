@@ -5,7 +5,12 @@
 import * as React from "react";
 import { BotAvatar } from "../../components/bot-avatar";
 import { Button, EmptyState, toast } from "../../components/ui";
-import { applyBotBubbleChange, botBubblesApi, useBotBubbles, useBotBubblesLoaded } from "../../lib/bot-bubbles-api";
+import {
+  applyBotBubbleChange,
+  botBubblesApi,
+  useBotBubbles,
+  useBotBubblesLoaded,
+} from "../../lib/bot-bubbles-api";
 import { isBotBubbled } from "../../shared/bot-bubbles";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { BotDefinition } from "../../shared/bots";
@@ -38,7 +43,13 @@ export function BotBubbleCard({ bot }: { bot: Pick<BotDefinition, "id" | "name" 
   };
   return (
     <div className="flex min-h-full flex-col items-center justify-center" data-bot-bubble-card="">
-      <BotAvatar avatar={bot.avatar} botId={bot.id} name={bot.name} size="large" photoLoading="immediate" />
+      <BotAvatar
+        avatar={bot.avatar}
+        botId={bot.id}
+        name={bot.name}
+        size="large"
+        photoLoading="immediate"
+      />
       <EmptyState
         role="status"
         className="pt-4"
@@ -50,7 +61,10 @@ export function BotBubbleCard({ bot }: { bot: Pick<BotDefinition, "id" | "name" 
               variant="filled"
               disabled={busy}
               onClick={() =>
-                void run(() => applyBotBubbleChange(botBubblesApi.open(bot.id)), `Aiden couldn’t open ${bot.name}’s bubble.`)
+                void run(
+                  () => applyBotBubbleChange(botBubblesApi.open(bot.id)),
+                  `Aiden couldn’t open ${bot.name}’s bubble.`,
+                )
               }
             >
               Open bubble
@@ -59,7 +73,10 @@ export function BotBubbleCard({ bot }: { bot: Pick<BotDefinition, "id" | "name" 
               variant="accent"
               disabled={busy}
               onClick={() =>
-                void run(() => applyBotBubbleChange(botBubblesApi.bringBack(bot.id)), `Aiden couldn’t bring ${bot.name} back.`)
+                void run(
+                  () => applyBotBubbleChange(botBubblesApi.bringBack(bot.id)),
+                  `Aiden couldn’t bring ${bot.name} back.`,
+                )
               }
             >
               Bring back here

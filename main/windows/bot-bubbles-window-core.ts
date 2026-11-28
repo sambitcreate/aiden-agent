@@ -75,7 +75,9 @@ export function bubbleDisplayId(
   displays: readonly OverlayDisplay[],
   primaryDisplayId: number,
 ): number {
-  return displayId !== null && displays.some((display) => display.id === displayId) ? displayId : primaryDisplayId;
+  return displayId !== null && displays.some((display) => display.id === displayId)
+    ? displayId
+    : primaryDisplayId;
 }
 
 /**
@@ -98,7 +100,10 @@ export function windowRectToOverlay(
 }
 
 /** The main window's content area in an overlay's coordinates: where a grow animation ends. */
-export function growTargetRect(contentBounds: BotBubbleRect, overlayWorkArea: BotBubbleRect): BotBubbleRect {
+export function growTargetRect(
+  contentBounds: BotBubbleRect,
+  overlayWorkArea: BotBubbleRect,
+): BotBubbleRect {
   return {
     x: contentBounds.x - overlayWorkArea.x,
     y: contentBounds.y - overlayWorkArea.y,
@@ -108,7 +113,10 @@ export function growTargetRect(contentBounds: BotBubbleRect, overlayWorkArea: Bo
 }
 
 /** A screen rect clamped to a window's content, for `capturePage`; null when nothing is left. */
-export function captureRect(rect: BotBubbleRect, contentSize: { width: number; height: number }): BotBubbleRect | null {
+export function captureRect(
+  rect: BotBubbleRect,
+  contentSize: { width: number; height: number },
+): BotBubbleRect | null {
   const x = Math.max(0, Math.round(rect.x));
   const y = Math.max(0, Math.round(rect.y));
   const right = Math.min(contentSize.width, Math.round(rect.x + rect.width));
@@ -164,7 +172,9 @@ export class PendingTransitions<T> {
   /** The page is listening: everything still fresh, in order. */
   markReady(now: number): T[] {
     this.ready = true;
-    const fresh = this.queue.filter((entry) => now - entry.at <= TRANSITION_STALE_MS).map((entry) => entry.value);
+    const fresh = this.queue
+      .filter((entry) => now - entry.at <= TRANSITION_STALE_MS)
+      .map((entry) => entry.value);
     this.queue = [];
     return fresh;
   }
@@ -177,19 +187,36 @@ export class PendingTransitions<T> {
 }
 
 /** Overlay geometry in its page's CSS pixels (the page zooms with every Aiden page of its origin). */
-export function overlayCssSize(workArea: BotBubbleRect, zoomFactor: number): { width: number; height: number } {
+export function overlayCssSize(
+  workArea: BotBubbleRect,
+  zoomFactor: number,
+): { width: number; height: number } {
   const zoom = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
   return { width: workArea.width / zoom, height: workArea.height / zoom };
 }
 
 export function scaleRect(rect: BotBubbleRect, zoomFactor: number): BotBubbleRect {
   const zoom = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
-  return { x: rect.x / zoom, y: rect.y / zoom, width: rect.width / zoom, height: rect.height / zoom };
+  return {
+    x: rect.x / zoom,
+    y: rect.y / zoom,
+    width: rect.width / zoom,
+    height: rect.height / zoom,
+  };
 }
 
 /** ⌘/Ctrl with +, -, = or 0: the zoom shortcuts the overlay ignores. */
-export function isZoomShortcut(input: { type: string; key: string; meta: boolean; control: boolean }): boolean {
-  return input.type === "keyDown" && (input.meta || input.control) && ["+", "=", "-", "_", "0"].includes(input.key);
+export function isZoomShortcut(input: {
+  type: string;
+  key: string;
+  meta: boolean;
+  control: boolean;
+}): boolean {
+  return (
+    input.type === "keyDown" &&
+    (input.meta || input.control) &&
+    ["+", "=", "-", "_", "0"].includes(input.key)
+  );
 }
 
 /** How an overlay gives up the keyboard. */

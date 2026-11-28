@@ -1,4 +1,8 @@
-import { imageNodePorts, isImagePortCompatible, validateWorkflowGraph } from "../shared/images/ports";
+import {
+  imageNodePorts,
+  isImagePortCompatible,
+  validateWorkflowGraph,
+} from "../shared/images/ports";
 import {
   IMAGE_WORKFLOW_LIMITS,
   type WorkflowDocV1,
@@ -25,7 +29,10 @@ export function decideCanvasMutationCapacity(
   addedEdges: number,
 ): { allowed: boolean; message?: string } {
   if (nodeCount + addedNodes > IMAGE_WORKFLOW_LIMITS.maxNodes) {
-    return { allowed: false, message: `Workflows are limited to ${IMAGE_WORKFLOW_LIMITS.maxNodes} nodes.` };
+    return {
+      allowed: false,
+      message: `Workflows are limited to ${IMAGE_WORKFLOW_LIMITS.maxNodes} nodes.`,
+    };
   }
   if (edgeCount + addedEdges > IMAGE_WORKFLOW_LIMITS.maxEdges) {
     return {
@@ -38,7 +45,8 @@ export function decideCanvasMutationCapacity(
 
 export function boundedCanvasPosition(position: WorkflowPosition): WorkflowPosition {
   const limit = IMAGE_WORKFLOW_LIMITS.positionLimit;
-  const coordinate = (value: number) => (Number.isFinite(value) ? Math.max(-limit, Math.min(limit, value)) : 0);
+  const coordinate = (value: number) =>
+    Number.isFinite(value) ? Math.max(-limit, Math.min(limit, value)) : 0;
   return { x: coordinate(position.x), y: coordinate(position.y) };
 }
 
@@ -47,7 +55,11 @@ export function boundedViewport(viewport: WorkflowViewport): WorkflowViewport {
   const { positionLimit: limit, minZoom, maxZoom } = IMAGE_WORKFLOW_LIMITS;
   const clamp = (value: number, min: number, max: number, fallback: number) =>
     Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
-  return { x: clamp(viewport.x, -limit, limit, 0), y: clamp(viewport.y, -limit, limit, 0), zoom: clamp(viewport.zoom, minZoom, maxZoom, 1) };
+  return {
+    x: clamp(viewport.x, -limit, limit, 0),
+    y: clamp(viewport.y, -limit, limit, 0),
+    zoom: clamp(viewport.zoom, minZoom, maxZoom, 1),
+  };
 }
 
 export function decideCanvasConnection(
@@ -63,11 +75,17 @@ export function decideCanvasConnection(
   const source = document.nodes.find((node) => node.id === intent.source);
   const target = document.nodes.find((node) => node.id === intent.target);
   if (!source || !target) return { allowed: false, message: "That node is no longer available." };
-  const sourcePort = imageNodePorts(source, "outputs").find((port) => port.id === intent.sourcePort);
+  const sourcePort = imageNodePorts(source, "outputs").find(
+    (port) => port.id === intent.sourcePort,
+  );
   const targetPort = imageNodePorts(target, "inputs").find((port) => port.id === intent.targetPort);
-  if (!sourcePort || !targetPort) return { allowed: false, message: "Connect an output port to an input port." };
+  if (!sourcePort || !targetPort)
+    return { allowed: false, message: "Connect an output port to an input port." };
   if (!isImagePortCompatible(sourcePort.kind, targetPort.kind)) {
-    return { allowed: false, message: `${sourcePort.label} cannot connect to ${targetPort.label}.` };
+    return {
+      allowed: false,
+      message: `${sourcePort.label} cannot connect to ${targetPort.label}.`,
+    };
   }
   const edge: WorkflowEdge = {
     id: edgeId,
@@ -91,7 +109,11 @@ export function createEditorHistory<T>(present: T): EditorHistory<T> {
   return { past: [], present, future: [] };
 }
 
-export function commitEditorHistory<T>(history: EditorHistory<T>, next: T, limit = 50): EditorHistory<T> {
+export function commitEditorHistory<T>(
+  history: EditorHistory<T>,
+  next: T,
+  limit = 50,
+): EditorHistory<T> {
   return { past: [...history.past, history.present].slice(-limit), present: next, future: [] };
 }
 
@@ -106,7 +128,11 @@ export function undoEditorHistory<T>(history: EditorHistory<T>): EditorHistory<T
 
 export function redoEditorHistory<T>(history: EditorHistory<T>): EditorHistory<T> {
   if (history.future.length === 0) return history;
-  return { past: [...history.past, history.present], present: history.future[0]!, future: history.future.slice(1) };
+  return {
+    past: [...history.past, history.present],
+    present: history.future[0]!,
+    future: history.future.slice(1),
+  };
 }
 
 const encoder = new TextEncoder();

@@ -23,7 +23,11 @@ import {
   type WorkspaceOperationAdmission,
   type WorkspaceOperationRegistry,
 } from "../workspace-operation-registry.js";
-import { SubagentApprovalLedgerV2, SubagentRunGrantV2, type PrepareSubagentApprovalV2Input } from "./approval-v2.js";
+import {
+  SubagentApprovalLedgerV2,
+  SubagentRunGrantV2,
+  type PrepareSubagentApprovalV2Input,
+} from "./approval-v2.js";
 import { subagentAuthorityDigestV2, type SubagentAuthorityV2 } from "./authority-v2.js";
 import type { SubagentMcpMutationJournalV2 } from "./subagent-mcp-mutation.js";
 import { sameSubagentAuthorityBindingV2 } from "./outbound-approval-v2.js";
@@ -290,8 +294,11 @@ export function createSubagentShellBrokerV2(
     throw new Error("Subagent shell authority is unavailable.");
   }
   const now = input.now ?? Date.now;
-  const grantPermission = input.workspace.permission === "full" &&
-    (input.parentPermission ?? input.workspace.permission) === "full" ? "full" : "ask";
+  const grantPermission =
+    input.workspace.permission === "full" &&
+    (input.parentPermission ?? input.workspace.permission) === "full"
+      ? "full"
+      : "ask";
   const runGrant = input.implementerRunGrant
     ? new SubagentRunGrantV2(input.authority, grantPermission, input.runSignal, now)
     : undefined;
@@ -305,7 +312,12 @@ export function createSubagentShellBrokerV2(
   // these settle: an abort asks a helper to stop, and is no proof that it did.
   const settling = new Set<Promise<void>>();
   const tracked = <T>(work: Promise<T>): Promise<T> => {
-    const settled = work.then(() => undefined, () => undefined).finally(() => settling.delete(settled));
+    const settled = work
+      .then(
+        () => undefined,
+        () => undefined,
+      )
+      .finally(() => settling.delete(settled));
     settling.add(settled);
     return work;
   };
@@ -454,21 +466,40 @@ export function createSubagentShellBrokerV2(
           arbitraryNetworkAvailable: true,
           detachedProcessesMaySurvive: true,
         };
-        const requestExact = () => input.requestApproval({
-          streamId: authority.generationId,
-          toolCallId: context.toolCall.id,
-          toolName: SUBAGENT_RUN_COMMAND_TOOL_NAME,
-          summary: `Run a full-host command for ${input.childLabel}`,
-          details,
-        }, signal, authority.ownerDocumentId);
+        const requestExact = () =>
+          input.requestApproval(
+            {
+              streamId: authority.generationId,
+              toolCallId: context.toolCall.id,
+              toolName: SUBAGENT_RUN_COMMAND_TOOL_NAME,
+              summary: `Run a full-host command for ${input.childLabel}`,
+              details,
+            },
+            signal,
+            authority.ownerDocumentId,
+          );
         const requestRunGrant = () => {
           const grantDetails: SubagentRunGrantApprovalDetails = {
             kind: "subagent-run-grant",
             lane: "shell",
             runId: authority.runId,
-            childLabel: approvalDisplayLabel(input.childLabel, SUBAGENT_WORKSPACE_WRITE_CHILD_LABEL_LIMIT, "Subagent"),
-            workspaceLabel: approvalDisplayLabel(workspace.name, SUBAGENT_WORKSPACE_WRITE_WORKSPACE_LABEL_LIMIT, "Workspace"),
-            worktreeLabel: worktree ? approvalDisplayLabel(worktree.branch, SUBAGENT_WORKSPACE_WRITE_WORKTREE_LABEL_LIMIT, "Managed worktree") : null,
+            childLabel: approvalDisplayLabel(
+              input.childLabel,
+              SUBAGENT_WORKSPACE_WRITE_CHILD_LABEL_LIMIT,
+              "Subagent",
+            ),
+            workspaceLabel: approvalDisplayLabel(
+              workspace.name,
+              SUBAGENT_WORKSPACE_WRITE_WORKSPACE_LABEL_LIMIT,
+              "Workspace",
+            ),
+            worktreeLabel: worktree
+              ? approvalDisplayLabel(
+                  worktree.branch,
+                  SUBAGENT_WORKSPACE_WRITE_WORKTREE_LABEL_LIMIT,
+                  "Managed worktree",
+                )
+              : null,
             isManagedWorktree: Boolean(worktree),
             workspaceRevisionPrefix: authority.workspaceRevision.slice(0, 12),
             fullHostAccess: true,
@@ -477,13 +508,17 @@ export function createSubagentShellBrokerV2(
           if (!isSubagentRunGrantApprovalDetails(grantDetails)) {
             throw new Error("Invalid subagent shell run-grant display.");
           }
-          return input.requestApproval({
-            streamId: authority.generationId,
-            toolCallId: context.toolCall.id,
-            toolName: SUBAGENT_RUN_COMMAND_TOOL_NAME,
-            summary: `Allow shell for this subagent run: ${input.childLabel}`,
-            details: grantDetails,
-          }, signal, authority.ownerDocumentId);
+          return input.requestApproval(
+            {
+              streamId: authority.generationId,
+              toolCallId: context.toolCall.id,
+              toolName: SUBAGENT_RUN_COMMAND_TOOL_NAME,
+              summary: `Allow shell for this subagent run: ${input.childLabel}`,
+              details: grantDetails,
+            },
+            signal,
+            authority.ownerDocumentId,
+          );
         };
         const allowed = runGrant
           ? await runGrant.ensure(authority, grantPermission, requestRunGrant)
@@ -527,9 +562,13 @@ export function createSubagentShellBrokerV2(
       }
       const controller = new AbortController();
       const signal = AbortSignal.any(
-        [stop.signal, controller.signal, effect.signal, input.runSignal, prepared.admission.signal].filter(
-          (candidate): candidate is AbortSignal => candidate !== undefined,
-        ),
+        [
+          stop.signal,
+          controller.signal,
+          effect.signal,
+          input.runSignal,
+          prepared.admission.signal,
+        ].filter((candidate): candidate is AbortSignal => candidate !== undefined),
       );
       let dispatchStarted = false;
       let terminal = false;

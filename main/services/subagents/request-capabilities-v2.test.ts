@@ -108,22 +108,32 @@ test("legacy calls keep the workspace-read-only default", () => {
 });
 
 test("implementer omission requests write and shell without widening omitted read roles", () => {
-  const request = parseSubagentToolRequest({ tasks: [
-    { role: "implementer", label: "Code", task: "Make the change." },
-    { role: "scout", label: "Inspect", task: "Inspect the tree." },
-  ] });
+  const request = parseSubagentToolRequest({
+    tasks: [
+      { role: "implementer", label: "Code", task: "Make the change." },
+      { role: "scout", label: "Inspect", task: "Inspect the tree." },
+    ],
+  });
   assert.equal(request.capabilities?.workspaceWrite, true);
   assert.equal(request.capabilities?.shell, true);
   assert.deepEqual(effectiveSubagentTaskCapabilities(request, request.tasks[0]!), {
-    workspaceRead: true, workspaceWrite: true, shell: true, delegate: false,
-    web: false, mcp: [],
+    workspaceRead: true,
+    workspaceWrite: true,
+    shell: true,
+    delegate: false,
+    web: false,
+    mcp: [],
   });
   assert.equal(effectiveSubagentTaskCapabilities(request, request.tasks[1]!).workspaceWrite, false);
   assert.equal(effectiveSubagentTaskCapabilities(request, request.tasks[1]!).shell, false);
   assert.equal(effectiveSubagentTaskCapabilities(request, request.tasks[0]!).delegate, false);
-  assert.throws(() => parseSubagentToolRequest({
-    tasks: [{ role: "implementer", label: "Code", task: "Code.", maxTurns: 72 }],
-  }), /read-only capabilities/u);
+  assert.throws(
+    () =>
+      parseSubagentToolRequest({
+        tasks: [{ role: "implementer", label: "Code", task: "Code.", maxTurns: 72 }],
+      }),
+    /read-only capabilities/u,
+  );
 });
 
 test("omitted root capabilities infer the exact mixed child lanes", () => {
@@ -655,7 +665,11 @@ test("subagents can never request or receive simulator device tools", () => {
       permission: "full",
       capabilityProfile: { kind: "subagent", role, featurePolicy: [...DEVICE_TOOL_NAMES] },
     });
-    assert.deepEqual(tools.filter(({ name }) => isDeviceToolName(name)), [], role);
+    assert.deepEqual(
+      tools.filter(({ name }) => isDeviceToolName(name)),
+      [],
+      role,
+    );
   }
 });
 
@@ -666,7 +680,15 @@ test("per-task model and effort are optional, independently revalidated, and nev
   assert.equal("model" in plain.tasks[0]!, false);
   assert.equal("effort" in plain.tasks[0]!, false);
   const chosen = parseSubagentToolRequest({
-    tasks: [{ role: "scout", label: "Inspect", task: "Inspect files", model: "openrouter/qwen/qwen3", effort: "low" }],
+    tasks: [
+      {
+        role: "scout",
+        label: "Inspect",
+        task: "Inspect files",
+        model: "openrouter/qwen/qwen3",
+        effort: "low",
+      },
+    ],
   });
   assert.equal(chosen.tasks[0]?.model, "openrouter/qwen/qwen3");
   assert.equal(chosen.tasks[0]?.effort, "low");
@@ -674,9 +696,17 @@ test("per-task model and effort are optional, independently revalidated, and nev
     effectiveSubagentTaskCapabilities(chosen, chosen.tasks[0]!),
     effectiveSubagentTaskCapabilities(plain, plain.tasks[0]!),
   );
-  for (const invalid of [{ model: "no-provider" }, { model: " anthropic/x" }, { model: 7 }, { effort: "turbo" }]) {
+  for (const invalid of [
+    { model: "no-provider" },
+    { model: " anthropic/x" },
+    { model: 7 },
+    { effort: "turbo" },
+  ]) {
     assert.throws(
-      () => parseSubagentToolRequest({ tasks: [{ role: "scout", label: "Inspect", task: "Inspect files", ...invalid }] }),
+      () =>
+        parseSubagentToolRequest({
+          tasks: [{ role: "scout", label: "Inspect", task: "Inspect files", ...invalid }],
+        }),
       /Invalid subagent (model|effort)/u,
     );
   }

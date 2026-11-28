@@ -44,9 +44,17 @@ import {
 import { DEFAULT_IMAGE_MODEL } from "../../../renderer/shared/images/schema.js";
 import { requestedAspectRatio } from "./adapter-core.js";
 import { createImageCredentialView } from "./credential-view.js";
-import { CatalogFetchError, fetchImageModels, IMAGE_CATALOG_FETCH_TIMEOUT_MS } from "./catalog-fetch.js";
+import {
+  CatalogFetchError,
+  fetchImageModels,
+  IMAGE_CATALOG_FETCH_TIMEOUT_MS,
+} from "./catalog-fetch.js";
 import { FAL_IMAGES_API, falImagesApi } from "./fal-images.js";
-import { REPLICATE_API_BASE, REPLICATE_IMAGES_API, replicateImagesApi } from "./replicate-images.js";
+import {
+  REPLICATE_API_BASE,
+  REPLICATE_IMAGES_API,
+  replicateImagesApi,
+} from "./replicate-images.js";
 import {
   isValidImageModelId,
   parseImageCatalogEntry,
@@ -120,14 +128,19 @@ function defaultAuthContext(): AuthContext {
 }
 
 function storedKey(credential: { type: string; key?: unknown } | undefined): string | undefined {
-  return credential?.type === "api_key" && typeof credential.key === "string" && credential.key.trim()
+  return credential?.type === "api_key" &&
+    typeof credential.key === "string" &&
+    credential.key.trim()
     ? credential.key.trim()
     : undefined;
 }
 
 function imageKeyAuth(provider: ImageGenerationProviderId): ApiKeyAuth {
   const envName = IMAGE_GENERATION_ENV_VARS[provider];
-  const resolveKey = async (ctx: AuthContext, credential: { type: string; key?: unknown } | undefined) => {
+  const resolveKey = async (
+    ctx: AuthContext,
+    credential: { type: string; key?: unknown } | undefined,
+  ) => {
     const stored = storedKey(credential);
     if (stored) return { key: stored, source: "stored" };
     const ambient = (await ctx.env(envName))?.trim();
@@ -151,7 +164,10 @@ export function openRouterEntry(model: ImageModel<ImageApi>): ImageCatalogEntry 
   return {
     provider: "openrouter",
     id: model.id,
-    name: openRouterImageModelDisplayName(model.name || model.id).slice(0, IMAGE_GENERATION_LIMITS.maxModelNameLength),
+    name: openRouterImageModelDisplayName(model.name || model.id).slice(
+      0,
+      IMAGE_GENERATION_LIMITS.maxModelNameLength,
+    ),
     ...(maker ? { maker } : {}),
     acceptsReferenceImages: model.input.includes("image"),
     adapter: { kind: "openrouter", ...(model.output.includes("text") ? { textOutput: true } : {}) },
@@ -162,11 +178,11 @@ function maxReferences(adapter: ImageModelAdapter): number | undefined {
   if (adapter.kind === "replicate") {
     const mode = replicateReferenceMode(adapter);
     if (!mode) return undefined;
-    return mode === "single" ? 1 : adapter.maxReferences ?? 4;
+    return mode === "single" ? 1 : (adapter.maxReferences ?? 4);
   }
   if (adapter.kind === "fal") {
     if (!adapter.editEndpoint) return undefined;
-    return adapter.referenceField === "image_url" ? 1 : adapter.maxReferences ?? 4;
+    return adapter.referenceField === "image_url" ? 1 : (adapter.maxReferences ?? 4);
   }
   return undefined;
 }
@@ -180,7 +196,9 @@ function piModel(entry: ImageCatalogEntry, bundled?: ImageModel<ImageApi>): Imag
     id: entry.id,
     name: entry.name,
     provider: entry.provider,
-    input: entry.acceptsReferenceImages ? (["text", "image"] as ("text" | "image")[]) : (["text"] as ("text" | "image")[]),
+    input: entry.acceptsReferenceImages
+      ? (["text", "image"] as ("text" | "image")[])
+      : (["text"] as ("text" | "image")[]),
     cost: ZERO_COST,
     ...(max ? { inputLimits: { images: { maxPerRequest: max } } } : {}),
   };
@@ -198,7 +216,12 @@ function piModel(entry: ImageCatalogEntry, bundled?: ImageModel<ImageApi>): Imag
   };
 }
 
-function isEnabled(settings: ImageGenerationSettings, provider: ImageGenerationProviderId, id: string, origin: ImageModelOrigin) {
+function isEnabled(
+  settings: ImageGenerationSettings,
+  provider: ImageGenerationProviderId,
+  id: string,
+  origin: ImageModelOrigin,
+) {
   const choices = settings.enabled[provider];
   if (choices && Object.prototype.hasOwnProperty.call(choices, id)) return choices[id] === true;
   // A fetch can return hundreds of models; only curated and custom ones start on.
@@ -215,11 +238,20 @@ const KEY_CHARACTERS = /^[\x21-\x7e]+$/u;
 export function normalizeImageKey(value: unknown): string {
   if (typeof value !== "string") throw new ImageGenerationError("invalid_key", "Enter an API key.");
   const key = value.trim();
-  if (key.length < IMAGE_GENERATION_LIMITS.minKeyLength || key.length > IMAGE_GENERATION_LIMITS.maxKeyLength) {
-    throw new ImageGenerationError("invalid_key", "That key doesn't look right. Check its length and try again.");
+  if (
+    key.length < IMAGE_GENERATION_LIMITS.minKeyLength ||
+    key.length > IMAGE_GENERATION_LIMITS.maxKeyLength
+  ) {
+    throw new ImageGenerationError(
+      "invalid_key",
+      "That key doesn't look right. Check its length and try again.",
+    );
   }
   if (!KEY_CHARACTERS.test(key)) {
-    throw new ImageGenerationError("invalid_key", "Keys can't contain spaces or special characters.");
+    throw new ImageGenerationError(
+      "invalid_key",
+      "Keys can't contain spaces or special characters.",
+    );
   }
   return key;
 }
@@ -242,28 +274,39 @@ export function customEntry(request: ImageGenerationAddCustomModelRequest): Imag
     );
   }
   const name = request.name?.trim() || id;
-  if (name.length > IMAGE_GENERATION_LIMITS.maxModelNameLength) throw invalidRequest("That name is too long.");
+  if (name.length > IMAGE_GENERATION_LIMITS.maxModelNameLength)
+    throw invalidRequest("That name is too long.");
   const maker = inferImageModelMaker(provider, id);
   let adapter: ImageModelAdapter;
   if (provider === "openrouter") {
-    if (request.referenceField !== undefined || request.editEndpoint !== undefined) throw invalidRequest();
+    if (request.referenceField !== undefined || request.editEndpoint !== undefined)
+      throw invalidRequest();
     adapter = { kind: "openrouter" };
   } else if (provider === "replicate") {
-    if (request.editEndpoint !== undefined || request.acceptsReferenceImages !== undefined) throw invalidRequest();
+    if (request.editEndpoint !== undefined || request.acceptsReferenceImages !== undefined)
+      throw invalidRequest();
     const field = request.referenceField;
-    if (field !== undefined && !Object.prototype.hasOwnProperty.call(REPLICATE_REFERENCE_FIELDS, field)) {
+    if (
+      field !== undefined &&
+      !Object.prototype.hasOwnProperty.call(REPLICATE_REFERENCE_FIELDS, field)
+    ) {
       throw invalidRequest("Choose a supported reference image field.");
     }
-    adapter = { kind: "replicate", ...(field ? { referenceField: field as ReplicateReferenceField } : {}) };
+    adapter = {
+      kind: "replicate",
+      ...(field ? { referenceField: field as ReplicateReferenceField } : {}),
+    };
   } else {
     if (request.acceptsReferenceImages !== undefined) throw invalidRequest();
     const edit = request.editEndpoint?.trim();
-    if (edit !== undefined && !isValidImageModelId("fal", edit)) throw invalidRequest("Enter a valid fal edit endpoint.");
+    if (edit !== undefined && !isValidImageModelId("fal", edit))
+      throw invalidRequest("Enter a valid fal edit endpoint.");
     const field = request.referenceField;
     if (field !== undefined && field !== "image_urls" && field !== "image_url") {
       throw invalidRequest("Choose a supported reference image field.");
     }
-    if (field !== undefined && !edit) throw invalidRequest("Reference images need an edit endpoint.");
+    if (field !== undefined && !edit)
+      throw invalidRequest("Reference images need an edit endpoint.");
     adapter = {
       kind: "fal",
       textEndpoint: id,
@@ -275,7 +318,8 @@ export function customEntry(request: ImageGenerationAddCustomModelRequest): Imag
     id,
     name,
     ...(maker ? { maker } : {}),
-    acceptsReferenceImages: provider === "openrouter" ? request.acceptsReferenceImages === true : false,
+    acceptsReferenceImages:
+      provider === "openrouter" ? request.acceptsReferenceImages === true : false,
     adapter,
   });
 }
@@ -307,7 +351,10 @@ export function explainAspectRatioRejection(
  * so it is added to the outgoing body as `image_config.aspect_ratio`, which
  * OpenRouter forwards to models that support it and ignores otherwise.
  */
-export function imageRequestOptions(provider: string, options: ImagesOptions | undefined): ImagesOptions | undefined {
+export function imageRequestOptions(
+  provider: string,
+  options: ImagesOptions | undefined,
+): ImagesOptions | undefined {
   const aspectRatio = requestedAspectRatio(options);
   if (provider !== "openrouter" || !aspectRatio) return options;
   const callerOnPayload = options?.onPayload;
@@ -318,7 +365,9 @@ export function imageRequestOptions(provider: string, options: ImagesOptions | u
       const body = (replaced === undefined ? payload : replaced) as Record<string, unknown> | null;
       if (body === null || typeof body !== "object" || Array.isArray(body)) return replaced;
       const imageConfig =
-        body.image_config !== null && typeof body.image_config === "object" && !Array.isArray(body.image_config)
+        body.image_config !== null &&
+        typeof body.image_config === "object" &&
+        !Array.isArray(body.image_config)
           ? (body.image_config as Record<string, unknown>)
           : {};
       return { ...body, image_config: { ...imageConfig, aspect_ratio: aspectRatio } };
@@ -339,7 +388,10 @@ export class ImageGenerationRuntime {
   private keyCache: Promise<KeyStatuses> | undefined;
   private registration: Promise<void> = Promise.resolve();
   /** One Fetch latest models per provider at a time; a concurrent press joins it. */
-  private readonly catalogFetches = new Map<ImageGenerationProviderId, Promise<ImageGenerationState>>();
+  private readonly catalogFetches = new Map<
+    ImageGenerationProviderId,
+    Promise<ImageGenerationState>
+  >();
   private readonly catalogFetchedAt = new Map<ImageGenerationProviderId, number>();
   readonly models: ImageGenerationModels;
 
@@ -353,8 +405,10 @@ export class ImageGenerationRuntime {
     const native = this.native;
     const ready = () => this.ready();
     this.models = {
-      getModelsOfType: ((type, provider) => native.getModelsOfType(type, provider)) as Models["getModelsOfType"],
-      getModelOfType: ((type, provider, id) => native.getModelOfType(type, provider, id)) as Models["getModelOfType"],
+      getModelsOfType: ((type, provider) =>
+        native.getModelsOfType(type, provider)) as Models["getModelsOfType"],
+      getModelOfType: ((type, provider, id) =>
+        native.getModelOfType(type, provider, id)) as Models["getModelOfType"],
       getAvailableOfType: (async (type, provider, options) => {
         await ready();
         return native.getAvailableOfType(type, provider, options);
@@ -371,11 +425,16 @@ export class ImageGenerationRuntime {
             model: model.id,
             output: [],
             stopReason: "error",
-            errorMessage: "This image model is turned off or unavailable in Settings → Image Generation.",
+            errorMessage:
+              "This image model is turned off or unavailable in Settings → Image Generation.",
             timestamp: Date.now(),
           };
         }
-        const result = await native.generateImages(registered, context, imageRequestOptions(registered.provider, options));
+        const result = await native.generateImages(
+          registered,
+          context,
+          imageRequestOptions(registered.provider, options),
+        );
         return explainAspectRatioRejection(registered.provider, options, result);
       },
     };
@@ -386,7 +445,9 @@ export class ImageGenerationRuntime {
     if (!this.readyPromise) {
       const pending = (async () => {
         if (await this.deps.settings.loadedFromCorruptFile()) {
-          this.deps.onWarning?.("Image generation settings were unreadable and have been reset to defaults.");
+          this.deps.onWarning?.(
+            "Image generation settings were unreadable and have been reset to defaults.",
+          );
         }
         await this.register();
       })();
@@ -401,7 +462,9 @@ export class ImageGenerationRuntime {
 
   /** The maker logo slug for a listed model, or one inferred from its id. */
   imageModelMaker(provider: string, id: string): string | undefined {
-    const row = this.rows.find((candidate) => candidate.entry.provider === provider && candidate.entry.id === id);
+    const row = this.rows.find(
+      (candidate) => candidate.entry.provider === provider && candidate.entry.id === id,
+    );
     return row ? row.entry.maker : inferImageModelMaker(provider, id);
   }
 
@@ -424,18 +487,29 @@ export class ImageGenerationRuntime {
         ...(draft.fetched[provider]?.models ?? []).map((entry) => entry.id),
       ]);
       const kept = Object.entries(choices).filter(([id]) => known.has(id));
-      if (kept.length !== Object.keys(choices).length) draft.enabled[provider] = Object.fromEntries(kept);
+      if (kept.length !== Object.keys(choices).length)
+        draft.enabled[provider] = Object.fromEntries(kept);
     }
   }
 
-  private adapterFor(provider: ImageGenerationProviderId, id: string): ImageModelAdapter | undefined {
+  private adapterFor(
+    provider: ImageGenerationProviderId,
+    id: string,
+  ): ImageModelAdapter | undefined {
     return this.metadata.get(provider)?.get(id);
   }
 
-  private buildRows(provider: ImageGenerationProviderId, settings: ImageGenerationSettings): CatalogRow[] {
+  private buildRows(
+    provider: ImageGenerationProviderId,
+    settings: ImageGenerationSettings,
+  ): CatalogRow[] {
     const rows: CatalogRow[] = [];
     const seen = new Set<string>();
-    const add = (entry: ImageCatalogEntry, origin: ImageModelOrigin, bundled?: ImageModel<ImageApi>) => {
+    const add = (
+      entry: ImageCatalogEntry,
+      origin: ImageModelOrigin,
+      bundled?: ImageModel<ImageApi>,
+    ) => {
       if (seen.has(entry.id) || (provider === "openrouter" && AUTO_ROUTER.test(entry.id))) return;
       seen.add(entry.id);
       rows.push({
@@ -447,7 +521,8 @@ export class ImageGenerationRuntime {
     };
     if (provider === "openrouter") {
       for (const model of this.deps.openRouterModels()) {
-        if (model.provider === "openrouter" && model.type === "image") add(openRouterEntry(model), "curated", model);
+        if (model.provider === "openrouter" && model.type === "image")
+          add(openRouterEntry(model), "curated", model);
       }
     } else {
       for (const entry of curatedImageModels(provider)) add(entry, "curated");
@@ -459,9 +534,16 @@ export class ImageGenerationRuntime {
   }
 
   /** What a provider would register under `settings`: its rows, their origin and enable state. */
-  private providerSignature(provider: ImageGenerationProviderId, settings: ImageGenerationSettings): string {
+  private providerSignature(
+    provider: ImageGenerationProviderId,
+    settings: ImageGenerationSettings,
+  ): string {
     return JSON.stringify(
-      this.buildRows(provider, settings).map(({ entry, origin, enabled }) => [entry, origin, enabled]),
+      this.buildRows(provider, settings).map(({ entry, origin, enabled }) => [
+        entry,
+        origin,
+        enabled,
+      ]),
     );
   }
 
@@ -471,7 +553,8 @@ export class ImageGenerationRuntime {
     after: ImageGenerationSettings,
   ): ImageGenerationProviderId[] {
     return IMAGE_GENERATION_PROVIDER_IDS.filter(
-      (provider) => this.providerSignature(provider, before) !== this.providerSignature(provider, after),
+      (provider) =>
+        this.providerSignature(provider, before) !== this.providerSignature(provider, after),
     );
   }
 
@@ -482,7 +565,9 @@ export class ImageGenerationRuntime {
    * later commit still applies that commit, and overlapping mutations can't
    * leave a provider registered from an older document.
    */
-  private register(providers: readonly ImageGenerationProviderId[] = IMAGE_GENERATION_PROVIDER_IDS): Promise<void> {
+  private register(
+    providers: readonly ImageGenerationProviderId[] = IMAGE_GENERATION_PROVIDER_IDS,
+  ): Promise<void> {
     const run = this.registration.then(async () => {
       const settings = await this.deps.settings.read();
       const rows: CatalogRow[] = [];
@@ -517,7 +602,10 @@ export class ImageGenerationRuntime {
       auth: { apiKey: imageKeyAuth(provider) },
       models,
     };
-    const adapterDeps = { fetch: this.fetchImpl, ...(this.deps.pollIntervalMs ? { pollIntervalMs: this.deps.pollIntervalMs } : {}) };
+    const adapterDeps = {
+      fetch: this.fetchImpl,
+      ...(this.deps.pollIntervalMs ? { pollIntervalMs: this.deps.pollIntervalMs } : {}),
+    };
     if (provider === "replicate") {
       return createProvider({
         ...common,
@@ -548,11 +636,16 @@ export class ImageGenerationRuntime {
         },
       });
     }
-    return createProvider({ ...common, baseUrl: OPENROUTER_BASE_URL, images: { "openrouter-images": openrouterImagesApi() } });
+    return createProvider({
+      ...common,
+      baseUrl: OPENROUTER_BASE_URL,
+      images: { "openrouter-images": openrouterImagesApi() },
+    });
   }
 
   private async keyStatus(provider: ImageGenerationProviderId): Promise<ImageGenerationKeyStatus> {
-    if (storedKey(await this.credentials.read(provider))) return { connected: true, source: "stored" };
+    if (storedKey(await this.credentials.read(provider)))
+      return { connected: true, source: "stored" };
     const ambient = (await this.authContext.env(IMAGE_GENERATION_ENV_VARS[provider]))?.trim();
     return ambient ? { connected: true, source: "env" } : { connected: false, source: null };
   }
@@ -562,7 +655,9 @@ export class ImageGenerationRuntime {
     if (!this.keyCache) {
       const pending = (async () => {
         const entries = await Promise.all(
-          IMAGE_GENERATION_PROVIDER_IDS.map(async (provider) => [provider, await this.keyStatus(provider)] as const),
+          IMAGE_GENERATION_PROVIDER_IDS.map(
+            async (provider) => [provider, await this.keyStatus(provider)] as const,
+          ),
         );
         return Object.fromEntries(entries) as KeyStatuses;
       })();
@@ -624,7 +719,9 @@ export class ImageGenerationRuntime {
    * mutation, never from rows cached before it, so overlapping mutations
    * can't skip a provider they changed.
    */
-  private async mutate(mutation: (draft: ImageGenerationSettings) => void): Promise<ImageGenerationState> {
+  private async mutate(
+    mutation: (draft: ImageGenerationSettings) => void,
+  ): Promise<ImageGenerationState> {
     await this.ready();
     let before: ImageGenerationSettings | undefined;
     const after = await this.deps.settings.update((draft) => {
@@ -632,12 +729,16 @@ export class ImageGenerationRuntime {
       mutation(draft);
       this.pruneEnabled(draft);
     });
-    await this.register(before ? this.changedProviders(before, after) : IMAGE_GENERATION_PROVIDER_IDS);
+    await this.register(
+      before ? this.changedProviders(before, after) : IMAGE_GENERATION_PROVIDER_IDS,
+    );
     return this.getState();
   }
 
   private requireRow(provider: ImageGenerationProviderId, id: string): CatalogRow {
-    const row = this.rows.find((candidate) => candidate.entry.provider === provider && candidate.entry.id === id);
+    const row = this.rows.find(
+      (candidate) => candidate.entry.provider === provider && candidate.entry.id === id,
+    );
     if (!row) throw new ImageGenerationError("unknown_model", "That model isn't in the list.");
     return row;
   }
@@ -663,7 +764,11 @@ export class ImageGenerationRuntime {
     return this.getState();
   }
 
-  async setModelEnabled(provider: ImageGenerationProviderId, id: string, enabled: boolean): Promise<ImageGenerationState> {
+  async setModelEnabled(
+    provider: ImageGenerationProviderId,
+    id: string,
+    enabled: boolean,
+  ): Promise<ImageGenerationState> {
     await this.ready();
     this.requireRow(provider, id);
     return this.mutate((draft) => {
@@ -684,8 +789,11 @@ export class ImageGenerationRuntime {
     const seen = new Set<string>();
     for (const { provider, id } of changes) {
       const key = `${provider}\u0000${id}`;
-      const listed = this.rows.some((row) => row.entry.provider === provider && row.entry.id === id);
-      if (!listed || seen.has(key)) throw invalidRequest("One or more of those models aren't in the list.");
+      const listed = this.rows.some(
+        (row) => row.entry.provider === provider && row.entry.id === id,
+      );
+      if (!listed || seen.has(key))
+        throw invalidRequest("One or more of those models aren't in the list.");
       seen.add(key);
     }
     if (changes.length === 0) return this.getState();
@@ -693,7 +801,8 @@ export class ImageGenerationRuntime {
       changes.some((change) => change.provider === provider),
     );
     return this.mutate((draft) => {
-      for (const provider of providers) draft.enabled[provider] = { ...(draft.enabled[provider] ?? {}) };
+      for (const provider of providers)
+        draft.enabled[provider] = { ...(draft.enabled[provider] ?? {}) };
       for (const { provider, id, enabled } of changes) draft.enabled[provider]![id] = enabled;
     });
   }
@@ -704,37 +813,52 @@ export class ImageGenerationRuntime {
     return this.mutate((draft) => {
       draft.defaultModel = ref ? { provider: ref.provider, id: ref.id } : null;
       // Choosing a default turns that model on.
-      if (ref) draft.enabled[ref.provider] = { ...(draft.enabled[ref.provider] ?? {}), [ref.id]: true };
+      if (ref)
+        draft.enabled[ref.provider] = { ...(draft.enabled[ref.provider] ?? {}), [ref.id]: true };
     });
   }
 
-  async addCustomModel(request: ImageGenerationAddCustomModelRequest): Promise<ImageGenerationState> {
+  async addCustomModel(
+    request: ImageGenerationAddCustomModelRequest,
+  ): Promise<ImageGenerationState> {
     const entry = customEntry(request);
     await this.ready();
-    const existing = this.rows.find((row) => row.entry.provider === entry.provider && row.entry.id === entry.id);
+    const existing = this.rows.find(
+      (row) => row.entry.provider === entry.provider && row.entry.id === entry.id,
+    );
     if (existing && existing.origin !== "fetched") {
       throw new ImageGenerationError("invalid_request", "That model is already in the list.");
     }
     return this.mutate((draft) => {
       const custom = draft.custom[entry.provider] ?? [];
       if (custom.length >= IMAGE_GENERATION_LIMITS.maxCustomModelsPerProvider) {
-        throw new ImageGenerationError("invalid_request", "You've reached the limit of custom models for this provider.");
+        throw new ImageGenerationError(
+          "invalid_request",
+          "You've reached the limit of custom models for this provider.",
+        );
       }
       draft.custom[entry.provider] = [...custom, entry];
-      draft.enabled[entry.provider] = { ...(draft.enabled[entry.provider] ?? {}), [entry.id]: true };
+      draft.enabled[entry.provider] = {
+        ...(draft.enabled[entry.provider] ?? {}),
+        [entry.id]: true,
+      };
     });
   }
 
   async removeCustomModel(ref: ImageModelRef): Promise<ImageGenerationState> {
     await this.ready();
     const row = this.requireRow(ref.provider, ref.id);
-    if (row.origin !== "custom") throw new ImageGenerationError("invalid_request", "Only models you added can be removed.");
+    if (row.origin !== "custom")
+      throw new ImageGenerationError("invalid_request", "Only models you added can be removed.");
     return this.mutate((draft) => {
-      draft.custom[ref.provider] = (draft.custom[ref.provider] ?? []).filter((entry) => entry.id !== ref.id);
+      draft.custom[ref.provider] = (draft.custom[ref.provider] ?? []).filter(
+        (entry) => entry.id !== ref.id,
+      );
       const choices = { ...(draft.enabled[ref.provider] ?? {}) };
       delete choices[ref.id];
       draft.enabled[ref.provider] = choices;
-      if (draft.defaultModel?.provider === ref.provider && draft.defaultModel.id === ref.id) draft.defaultModel = null;
+      if (draft.defaultModel?.provider === ref.provider && draft.defaultModel.id === ref.id)
+        draft.defaultModel = null;
     });
   }
 
@@ -744,7 +868,10 @@ export class ImageGenerationRuntime {
    * governs the request; a joiner's own signal only stops its wait). A repeat shortly after a
    * success is answered from that result without contacting the provider again.
    */
-  async fetchModels(provider: ImageGenerationProviderId, signal?: AbortSignal): Promise<ImageGenerationState> {
+  async fetchModels(
+    provider: ImageGenerationProviderId,
+    signal?: AbortSignal,
+  ): Promise<ImageGenerationState> {
     let pending = this.catalogFetches.get(provider);
     if (!pending) {
       const fetchedAt = this.catalogFetchedAt.get(provider);
@@ -770,18 +897,27 @@ export class ImageGenerationRuntime {
     });
   }
 
-  private async fetchModelsOnce(provider: ImageGenerationProviderId, signal?: AbortSignal): Promise<ImageGenerationState> {
+  private async fetchModelsOnce(
+    provider: ImageGenerationProviderId,
+    signal?: AbortSignal,
+  ): Promise<ImageGenerationState> {
     await this.ready();
     const key = provider === "openrouter" ? undefined : await this.resolvedKey(provider);
     // The whole fetch, every page included, has one deadline.
-    const deadline = AbortSignal.timeout(this.deps.catalogFetchTimeoutMs ?? IMAGE_CATALOG_FETCH_TIMEOUT_MS);
+    const deadline = AbortSignal.timeout(
+      this.deps.catalogFetchTimeoutMs ?? IMAGE_CATALOG_FETCH_TIMEOUT_MS,
+    );
     const bounded = signal ? AbortSignal.any([signal, deadline]) : deadline;
     let models: ImageCatalogEntry[];
     try {
       models = await fetchImageModels(provider, { fetch: this.fetchImpl, key, signal: bounded });
     } catch (error) {
-      if (error instanceof CatalogFetchError) throw new ImageGenerationError(error.code, error.message);
-      throw new ImageGenerationError("network_error", `Aiden couldn't fetch ${IMAGE_GENERATION_PROVIDER_NAMES[provider]} models.`);
+      if (error instanceof CatalogFetchError)
+        throw new ImageGenerationError(error.code, error.message);
+      throw new ImageGenerationError(
+        "network_error",
+        `Aiden couldn't fetch ${IMAGE_GENERATION_PROVIDER_NAMES[provider]} models.`,
+      );
     }
     return this.mutate((draft) => {
       draft.fetched[provider] = { fetchedAt: Date.now(), models };
@@ -807,7 +943,10 @@ export class ImageGenerationRuntime {
     const row = await this.defaultRow();
     if (!row) return { available: false };
     const { provider, id, name } = row.entry;
-    return { available: true, defaultModel: { provider, id, name: row.origin === "curated" ? name : id } };
+    return {
+      available: true,
+      defaultModel: { provider, id, name: row.origin === "curated" ? name : id },
+    };
   }
 
   private async defaultRow(): Promise<CatalogRow | undefined> {
@@ -816,7 +955,9 @@ export class ImageGenerationRuntime {
     const keys = await this.keyStatuses();
     const usable = this.rows.filter((row) => row.enabled && keys[row.entry.provider].connected);
     const find = (ref: { readonly provider: string; readonly id: string } | null | undefined) =>
-      ref ? usable.find((row) => row.entry.provider === ref.provider && row.entry.id === ref.id) : undefined;
+      ref
+        ? usable.find((row) => row.entry.provider === ref.provider && row.entry.id === ref.id)
+        : undefined;
     // Automatic: the owner's Nano Banana 2 preference (shared with Create Images), then the first available.
     return find(this.settingsSnapshot?.defaultModel) ?? find(DEFAULT_IMAGE_MODEL) ?? usable[0];
   }

@@ -705,7 +705,11 @@ export function argumentRefusal(name, args) {
   const missing = schema.required.find((key) => !Object.hasOwn(args, key));
   if (missing) return refusalResult("invalid_arguments", `${name}: missing required ${missing}`);
   if (Object.hasOwn(args, "target")) {
-    if (Object.hasOwn(args, "pid") || Object.hasOwn(args, "window_id") || Object.hasOwn(args, "scope")) {
+    if (
+      Object.hasOwn(args, "pid") ||
+      Object.hasOwn(args, "window_id") ||
+      Object.hasOwn(args, "scope")
+    ) {
       return codedRefusal(
         "invalid_action_target",
         "target cannot be combined with legacy scope, pid, or window_id fields",
@@ -718,7 +722,10 @@ export function argumentRefusal(name, args) {
       !Number.isSafeInteger(target.window_id) ||
       Object.keys(target).length !== 3
     ) {
-      return codedRefusal("invalid_action_target", "window target accepts only kind, pid, and window_id");
+      return codedRefusal(
+        "invalid_action_target",
+        "window target accepts only kind, pid, and window_id",
+      );
     }
   }
   if (
@@ -817,8 +824,7 @@ export class FakeSnapshotStore {
     }
     // set_window_frame's x/y are desktop points, not screenshot pixels.
     const pixels =
-      name !== "set_window_frame" &&
-      ["x", "from_x"].some((key) => typeof args[key] === "number");
+      name !== "set_window_frame" && ["x", "from_x"].some((key) => typeof args[key] === "number");
     if (pixels) {
       const snapshot = this.windows.get(`${pid}:${windowId}`);
       if (!snapshot?.withScreenshot) return screenshotContextRefusal(pid, windowId);
@@ -904,7 +910,13 @@ export const DEFAULT_ELEMENTS = [
  */
 export const ECHO_ROW_ELEMENTS = [
   { role: "AXGroup", label: "Discard changes?", frame: { x: 110, y: 50, w: 200, h: 80 }, depth: 1 },
-  { role: "AXStaticText", label: "Discard changes?", echo: true, frame: { x: 120, y: 55, w: 120, h: 16 }, depth: 2 },
+  {
+    role: "AXStaticText",
+    label: "Discard changes?",
+    echo: true,
+    frame: { x: 120, y: 55, w: 120, h: 16 },
+    depth: 2,
+  },
   { role: "AXButton", label: "Cancel", frame: { x: 130, y: 100, w: 60, h: 20 }, depth: 2 },
   { role: "AXButton", label: "Delete", frame: { x: 220, y: 100, w: 60, h: 20 }, depth: 2 },
 ];
@@ -955,7 +967,9 @@ function diffRows(oldMarkdown, newMarkdown, since, snapshotId) {
   const replaced = new Set();
   for (const row of newRows) {
     if (oldKeys.has(row.key)) continue;
-    const old = oldRows.find((candidate) => candidate.index === row.index && !newKeys.has(candidate.key));
+    const old = oldRows.find(
+      (candidate) => candidate.index === row.index && !newKeys.has(candidate.key),
+    );
     if (old) {
       replaced.add(old.key);
       changed.push(row);
@@ -1137,7 +1151,11 @@ export class FakeCuaDriver {
         structuredContent: { code: "invalid_arguments" },
       };
     }
-    const { id, invalidated } = this.snapshots.publish(window.pid, window.window_id, withScreenshot);
+    const { id, invalidated } = this.snapshots.publish(
+      window.pid,
+      window.window_id,
+      withScreenshot,
+    );
     const width = Math.round(window.bounds.width * this.screenshotScale);
     const height = Math.round(window.bounds.height * this.screenshotScale);
     const rows = withTree ? this.elements(window).slice(0, args.max_elements ?? 2_000) : [];
@@ -1178,7 +1196,13 @@ export class FakeCuaDriver {
     const snapshotId = `s${id.toString(16).padStart(8, "0")}`;
     const since = withTree ? this.sinceView(args, window, snapshotId, treeMarkdown) : null;
     if (withTree) {
-      this.snapshots.remember(snapshotId, window.pid, window.window_id, args.max_elements ?? null, treeMarkdown);
+      this.snapshots.remember(
+        snapshotId,
+        window.pid,
+        window.window_id,
+        args.max_elements ?? null,
+        treeMarkdown,
+      );
     }
     if (since?.diff) {
       // window_state_view.rs: a diff keeps only the + and ~ rows' elements
@@ -1308,14 +1332,17 @@ export class FakeCuaDriver {
       if (predicate.element && !predicate.window) {
         if (!window) return outcome("unknown", "target_missing", { window_exists: false });
         const { selector, value_equals: valueEquals, enabled, selected } = predicate.element;
-        if (!selector?.role && !selector?.label_contains) return outcome("unknown", "invalid_predicate");
+        if (!selector?.role && !selector?.label_contains)
+          return outcome("unknown", "invalid_predicate");
         const rows = this.elements(window);
         if (rows.some((row) => row.in_web_content)) return outcome("unknown", "untrusted_source");
         const matches = rows.filter(
           (row) =>
             (!selector.role || row.role === selector.role) &&
             (!selector.label_contains ||
-              String(row.label ?? "").toLowerCase().includes(selector.label_contains.toLowerCase())),
+              String(row.label ?? "")
+                .toLowerCase()
+                .includes(selector.label_contains.toLowerCase())),
         );
         if (matches.length === 0) return outcome("unknown", "observation_unavailable");
         if (matches.length > 1) return outcome("unknown", "multi_match");

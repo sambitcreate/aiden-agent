@@ -7,7 +7,10 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { assertPathInside } from "../shared/path-containment.js";
-import { listConfinedWorkspaceDirectory, type WorkspaceDirectoryIdentities } from "./managed-worktree-file-io.js";
+import {
+  listConfinedWorkspaceDirectory,
+  type WorkspaceDirectoryIdentities,
+} from "./managed-worktree-file-io.js";
 import { mapWorkspaceMetadata, WORKSPACE_METADATA_CONCURRENCY } from "./workspace-metadata.js";
 import { readRegularFile, type RegularFileIdentity } from "./regular-file-read.js";
 
@@ -192,13 +195,18 @@ function assertRelativePath(value: string): string {
 }
 
 function assertInRoot(root: string, candidate: string, suppliedPath: string): string {
-  assertPathInside(root, candidate, `Path "${suppliedPath}" resolves outside the workspace folder.`);
+  assertPathInside(
+    root,
+    candidate,
+    `Path "${suppliedPath}" resolves outside the workspace folder.`,
+  );
   return candidate;
 }
 
 async function canonicalRoot(root: string): Promise<string> {
   const realRoot = await fs.realpath(root);
-  if (!(await fs.stat(realRoot)).isDirectory()) throw new Error("The workspace folder is unavailable.");
+  if (!(await fs.stat(realRoot)).isDirectory())
+    throw new Error("The workspace folder is unavailable.");
   return realRoot;
 }
 
@@ -251,10 +259,14 @@ export async function listWorkspaceDirectory(
   // The native helper opens each component with openat(O_NOFOLLOW), then
   // enumerates the held descriptor. Path swaps cannot redirect enumeration.
   const result = await listConfinedWorkspaceDirectory(realRoot, directory, signal, identities);
-  const entries: WorkspaceFileEntry[] = result.entries.map(child => ({
-    path: toPortablePath(path.join(directory, child.name)), name: child.name,
-    parentPath: directory, depth: directory.split("/").filter(Boolean).length, kind: child.kind,
-    filesystemDevice: child.device, filesystemInode: child.inode,
+  const entries: WorkspaceFileEntry[] = result.entries.map((child) => ({
+    path: toPortablePath(path.join(directory, child.name)),
+    name: child.name,
+    parentPath: directory,
+    depth: directory.split("/").filter(Boolean).length,
+    kind: child.kind,
+    filesystemDevice: child.device,
+    filesystemInode: child.inode,
   }));
   sortWorkspaceEntries(entries);
   return { entries, truncated: result.truncated, skippedDirectories: 0 };
@@ -286,10 +298,13 @@ export async function listWorkspaceFiles(
     children.sort((left, right) => {
       const leftDirectory = left.isDirectory() ? 0 : 1;
       const rightDirectory = right.isDirectory() ? 0 : 1;
-      return leftDirectory - rightDirectory || left.name.localeCompare(right.name, undefined, { numeric: true });
+      return (
+        leftDirectory - rightDirectory ||
+        left.name.localeCompare(right.name, undefined, { numeric: true })
+      );
     });
 
-    for (let childIndex = 0; childIndex < children.length;) {
+    for (let childIndex = 0; childIndex < children.length; ) {
       throwIfAborted(signal);
       if (entries.length >= MAX_INDEX_ENTRIES) {
         truncated = true;
@@ -297,64 +312,69 @@ export async function listWorkspaceFiles(
       }
       // Never inspect beyond the remaining output budget. Commit each small
       // batch in enumeration order so breadth-first selection stays unchanged.
-      const batch = children.slice(childIndex, childIndex + Math.min(
-        WORKSPACE_METADATA_CONCURRENCY, MAX_INDEX_ENTRIES - entries.length,
-      ));
+      const batch = children.slice(
+        childIndex,
+        childIndex + Math.min(WORKSPACE_METADATA_CONCURRENCY, MAX_INDEX_ENTRIES - entries.length),
+      );
       childIndex += batch.length;
-      const inspected = await mapWorkspaceMetadata(batch, async (child): Promise<WorkspaceFileEntry | undefined> => {
-        if (child.isDirectory() && SKIP_DIRECTORIES.has(child.name)) {
-          skippedDirectories += 1;
-          return undefined;
-        }
+      const inspected = await mapWorkspaceMetadata(
+        batch,
+        async (child): Promise<WorkspaceFileEntry | undefined> => {
+          if (child.isDirectory() && SKIP_DIRECTORIES.has(child.name)) {
+            skippedDirectories += 1;
+            return undefined;
+          }
 
-        const relativePath = path.join(relativeDirectory, child.name);
-        const portablePath = toPortablePath(relativePath);
-        const parentPath = toPortablePath(relativeDirectory);
-        const lexicalPath = path.join(realRoot, relativePath);
+          const relativePath = path.join(relativeDirectory, child.name);
+          const portablePath = toPortablePath(relativePath);
+          const parentPath = toPortablePath(relativeDirectory);
+          const lexicalPath = path.join(realRoot, relativePath);
 
-        if (child.isSymbolicLink()) {
-          try {
-            const target = assertInRoot(realRoot, await fs.realpath(lexicalPath), portablePath);
-            const targetStats = await fs.stat(target);
+          if (child.isSymbolicLink()) {
+            try {
+              const target = assertInRoot(realRoot, await fs.realpath(lexicalPath), portablePath);
+              const targetStats = await fs.stat(target);
+              return {
+                path: portablePath,
+                name: child.name,
+                parentPath,
+                depth,
+                kind: targetStats.isFile() ? "file" : "symlink",
+                symbolic: true,
+                size: targetStats.isFile() ? targetStats.size : undefined,
+                modifiedAt: targetStats.mtimeMs,
+              };
+            } catch {
+              return {
+                path: portablePath,
+                name: child.name,
+                parentPath,
+                depth,
+                kind: "symlink",
+                symbolic: true,
+              };
+            }
+          }
+
+          if (child.isDirectory()) {
+            return { path: portablePath, name: child.name, parentPath, depth, kind: "directory" };
+          }
+
+          if (child.isFile()) {
+            const stats = await fs.stat(lexicalPath);
             return {
               path: portablePath,
               name: child.name,
               parentPath,
               depth,
-              kind: targetStats.isFile() ? "file" : "symlink",
-              symbolic: true,
-              size: targetStats.isFile() ? targetStats.size : undefined,
-              modifiedAt: targetStats.mtimeMs,
-            };
-          } catch {
-            return {
-              path: portablePath,
-              name: child.name,
-              parentPath,
-              depth,
-              kind: "symlink",
-              symbolic: true,
+              kind: "file",
+              size: stats.size,
+              modifiedAt: stats.mtimeMs,
             };
           }
-        }
-
-        if (child.isDirectory()) {
-          return { path: portablePath, name: child.name, parentPath, depth, kind: "directory" };
-        }
-
-        if (child.isFile()) {
-          const stats = await fs.stat(lexicalPath);
-          return {
-            path: portablePath,
-            name: child.name,
-            parentPath,
-            depth,
-            kind: "file",
-            size: stats.size,
-            modifiedAt: stats.mtimeMs,
-          };
-        }
-      }, signal);
+        },
+        signal,
+      );
       for (const entry of inspected) {
         if (!entry) continue;
         entries.push(entry);
@@ -386,12 +406,16 @@ export async function readWorkspaceFile(
   const stats = await fs.stat(fullPath);
   if (!stats.isFile()) throw new Error(`${relativePath} is not a file.`);
   if (stats.size > limit) {
-    throw new Error(`${relativePath} is too large to edit in Aiden (${Math.ceil(stats.size / 1_000_000)} MB).`);
+    throw new Error(
+      `${relativePath} is too large to edit in Aiden (${Math.ceil(stats.size / 1_000_000)} MB).`,
+    );
   }
   // A pathname stat is only a snapshot: another app can grow or replace the
   // file before it is read. Enforce the byte limit on the opened descriptor.
   // Remote handles also bind the descriptor to the issued single-link inode.
-  const buffer = await readRegularFile(fullPath, limit, { exclusiveIdentity: options.exclusiveIdentity }).catch((error: unknown) => {
+  const buffer = await readRegularFile(fullPath, limit, {
+    exclusiveIdentity: options.exclusiveIdentity,
+  }).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "EFBIG") {
       throw new Error(`${relativePath} is too large to edit in Aiden.`);
     }
@@ -415,7 +439,9 @@ export async function writeWorkspaceFile(
   signal?: AbortSignal,
   hooks?: WorkspaceFileWriteHooks,
 ): Promise<WorkspaceFileDocument> {
-  return (await writeWorkspaceFileInstalling(root, suppliedPath, content, expectedVersion, signal, hooks)).document;
+  return (
+    await writeWorkspaceFileInstalling(root, suppliedPath, content, expectedVersion, signal, hooks)
+  ).document;
 }
 
 /** The inode a save installed, so a handle is rebound to it and never to a later replacement. */
@@ -504,8 +530,8 @@ export async function writeWorkspaceFileInstalling(
       fs.readFile(recoveryPath),
     ]);
     if (
-      contentVersion(savedBuffer) !== contentVersion(nextBuffer)
-      || contentVersion(verifiedDisplaced) !== expectedVersion
+      contentVersion(savedBuffer) !== contentVersion(nextBuffer) ||
+      contentVersion(verifiedDisplaced) !== expectedVersion
     ) {
       throw new WorkspaceFileError(
         "changed_on_disk",
@@ -528,11 +554,12 @@ export async function writeWorkspaceFileInstalling(
     } else if (recoveryMatches === false) {
       warning = `Another app wrote to the previous file during Aiden's save. Your draft was saved, and that app's version remains at ${path.basename(recoveryPath)}.`;
     } else {
-      warning = use === "open"
-        ? `Another app still had the previous file open. Aiden saved your draft and kept that app's in-flight copy at ${path.basename(recoveryPath)}.`
-        : recoveryMatches
-          ? `Aiden could not verify that the previous file was closed. Your draft was saved, and a recovery copy remains at ${path.basename(recoveryPath)}.`
-          : "Aiden saved your draft but could not verify the previous file's recovery copy. Review the workspace before making another save.";
+      warning =
+        use === "open"
+          ? `Another app still had the previous file open. Aiden saved your draft and kept that app's in-flight copy at ${path.basename(recoveryPath)}.`
+          : recoveryMatches
+            ? `Aiden could not verify that the previous file was closed. Your draft was saved, and a recovery copy remains at ${path.basename(recoveryPath)}.`
+            : "Aiden saved your draft but could not verify the previous file's recovery copy. Review the workspace before making another save.";
     }
   } catch (error) {
     if (displaced && !installed) {
@@ -547,13 +574,14 @@ export async function writeWorkspaceFileInstalling(
         // reconcile the extremely narrow external-write race without loss.
       }
     }
-    const detail = error instanceof WorkspaceFileError
-      ? error
-      : new WorkspaceFileError(
-          "io_error",
-          error instanceof Error ? error.message : `Aiden could not save ${relativePath}.`,
-          { cause: error },
-        );
+    const detail =
+      error instanceof WorkspaceFileError
+        ? error
+        : new WorkspaceFileError(
+            "io_error",
+            error instanceof Error ? error.message : `Aiden could not save ${relativePath}.`,
+            { cause: error },
+          );
     if (displaced) {
       throw new WorkspaceFileError(
         detail.code,

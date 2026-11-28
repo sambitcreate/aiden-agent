@@ -21,9 +21,7 @@ function extract(text: string, overrides: Partial<typeof base> = {}) {
 }
 
 test("extracts explicit Label: value pairs with provenance", () => {
-  const result = extract(
-    "First name: Ada\nE-mail: ada@example.com\nPhone: 555-0100\n",
-  );
+  const result = extract("First name: Ada\nE-mail: ada@example.com\nPhone: 555-0100\n");
   assert.equal(result.entities.length, 3);
   assert.deepEqual(
     result.entities.map((e) => [e.label, e.value, e.line]),
@@ -135,10 +133,9 @@ test("conflicting duplicate labels fail closed; identical duplicates are noted",
 });
 
 test(`exactly ${FORM_FILL_MAX_ENTITIES} entities pass; one more fails closed`, () => {
-  const ok = Array.from(
-    { length: FORM_FILL_MAX_ENTITIES },
-    (_, i) => `Field ${i}: v${i}`,
-  ).join("\n");
+  const ok = Array.from({ length: FORM_FILL_MAX_ENTITIES }, (_, i) => `Field ${i}: v${i}`).join(
+    "\n",
+  );
   assert.equal(extract(ok).entities.length, FORM_FILL_MAX_ENTITIES);
   const over = `${ok}\nField ${FORM_FILL_MAX_ENTITIES}: v`;
   assert.throws(
@@ -188,8 +185,11 @@ test("normalizeLabel is only for de-duplication", () => {
 for (const invisible of ["\u200b", "\u200c", "\u200d", "\u2060", "\u00ad", "\ufeff", "\u{e0001}"]) {
   test(`rejects invisible format character U+${invisible.codePointAt(0)!.toString(16)} before value trimming`, () => {
     for (const text of [`Name: Ada${invisible}Lovelace`, `Name: Ada${invisible}`]) {
-      assert.throws(() => extract(text), (error: unknown) =>
-        error instanceof FormFillExtractionError && error.failure === "unsafe_text");
+      assert.throws(
+        () => extract(text),
+        (error: unknown) =>
+          error instanceof FormFillExtractionError && error.failure === "unsafe_text",
+      );
     }
   });
 }

@@ -3,7 +3,11 @@ import { constants } from "node:fs";
 import { open, realpath } from "node:fs/promises";
 import * as path from "node:path";
 
-export const PLUGIN_DISCOVERY_LIMITS = Object.freeze({ metadataBytes: 1024 * 1024, plugins: 128, pathsPerPlugin: 16 });
+export const PLUGIN_DISCOVERY_LIMITS = Object.freeze({
+  metadataBytes: 1024 * 1024,
+  plugins: 128,
+  pathsPerPlugin: 16,
+});
 export interface PluginSkillRoot {
   root: string;
   namespace: string;
@@ -42,21 +46,29 @@ async function readJson(file: string): Promise<Record<string, unknown> | undefin
 }
 
 /** Inventory order selects the first applicable installed version, never all cached versions. */
-export async function claudePluginSkillRoots(home: string, workspaceRoot?: string): Promise<PluginSkillRoot[]> {
+export async function claudePluginSkillRoots(
+  home: string,
+  workspaceRoot?: string,
+): Promise<PluginSkillRoot[]> {
   const config = path.join(home, ".claude");
   // Resolved once per call; a missing workspace never matches a project record.
   const workspaceReal = workspaceRoot ? await canonicalPath(workspaceRoot) : undefined;
   const homeReal = await canonicalPath(home);
-  const projectSettingsRoot = workspaceRoot && !(workspaceReal !== undefined && workspaceReal === homeReal) ? workspaceRoot : undefined;
+  const projectSettingsRoot =
+    workspaceRoot && !(workspaceReal !== undefined && workspaceReal === homeReal)
+      ? workspaceRoot
+      : undefined;
   const plugins = (await readJson(path.join(config, "plugins", "installed_plugins.json")))?.plugins;
   if (!record(plugins)) return [];
   const enabled = new Map<string, { value: unknown; workspace: boolean }>();
   for (const [file, workspace] of [
     [path.join(config, "settings.json"), false],
-    ...(projectSettingsRoot ? [
-      [path.join(projectSettingsRoot, ".claude", "settings.json"), true],
-      [path.join(projectSettingsRoot, ".claude", "settings.local.json"), true],
-    ] as const : []),
+    ...(projectSettingsRoot
+      ? ([
+          [path.join(projectSettingsRoot, ".claude", "settings.json"), true],
+          [path.join(projectSettingsRoot, ".claude", "settings.local.json"), true],
+        ] as const)
+      : []),
   ] as const) {
     const settings = (await readJson(file))?.enabledPlugins;
     if (!record(settings)) continue;
@@ -68,11 +80,20 @@ export async function claudePluginSkillRoots(home: string, workspaceRoot?: strin
     if (setting?.value !== true || !Array.isArray(installs)) continue;
     let install: unknown;
     for (const candidate of installs.slice(0, PLUGIN_DISCOVERY_LIMITS.plugins) as unknown[]) {
-      if (!record(candidate) || typeof candidate.installPath !== "string" || !path.isAbsolute(candidate.installPath)) continue;
-      if (candidate.scope === "user" || candidate.scope === "managed" || (
-        (candidate.scope === "project" || candidate.scope === "local") && workspaceReal !== undefined &&
-        typeof candidate.projectPath === "string" && (await canonicalPath(candidate.projectPath)) === workspaceReal
-      )) {
+      if (
+        !record(candidate) ||
+        typeof candidate.installPath !== "string" ||
+        !path.isAbsolute(candidate.installPath)
+      )
+        continue;
+      if (
+        candidate.scope === "user" ||
+        candidate.scope === "managed" ||
+        ((candidate.scope === "project" || candidate.scope === "local") &&
+          workspaceReal !== undefined &&
+          typeof candidate.projectPath === "string" &&
+          (await canonicalPath(candidate.projectPath)) === workspaceReal)
+      ) {
         install = candidate;
         break;
       }
@@ -81,21 +102,45 @@ export async function claudePluginSkillRoots(home: string, workspaceRoot?: strin
     const root = install.installPath;
     const manifest = await readJson(path.join(root, ".claude-plugin", "plugin.json"));
     const namespace = manifest?.name ?? key.split("@")[0];
-    if (typeof namespace !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$/u.test(namespace)) continue;
-    const custom = typeof manifest?.skills === "string" ? [manifest.skills] : Array.isArray(manifest?.skills) ? manifest.skills : [];
+    if (typeof namespace !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$/u.test(namespace))
+      continue;
+    const custom =
+      typeof manifest?.skills === "string"
+        ? [manifest.skills]
+        : Array.isArray(manifest?.skills)
+          ? manifest.skills
+          : [];
     // The standard collection holds `<name>/SKILL.md` skills, never one of its own.
     const searches: PluginSkillRoot["searches"] = [{ base: "skills", maxDepth: 12 }];
     for (const candidate of custom.slice(0, PLUGIN_DISCOVERY_LIMITS.pathsPerPlugin)) {
-      if (typeof candidate !== "string" || !candidate || path.isAbsolute(candidate) || candidate.includes("\\")) continue;
+      if (
+        typeof candidate !== "string" ||
+        !candidate ||
+        path.isAbsolute(candidate) ||
+        candidate.includes("\\")
+      )
+        continue;
       const relative = path.relative(root, path.resolve(root, candidate));
       if (relative === ".." || relative.startsWith(`..${path.sep}`)) continue;
       // A manifest may name a skill directory, a collection, or SKILL.md itself.
       // A named SKILL.md is that one file: depth 0 reads it without walking its folder.
       const file = candidate.endsWith("SKILL.md");
-      searches.push({ base: file ? path.dirname(relative) : relative, maxDepth: file ? 0 : 12, baseSkill: true });
+      searches.push({
+        base: file ? path.dirname(relative) : relative,
+        maxDepth: file ? 0 : 12,
+        baseSkill: true,
+      });
     }
     searches.push({ base: "", maxDepth: 0, baseSkill: true });
-    roots.push({ root, namespace, scope: setting.workspace || install.scope === "project" || install.scope === "local" ? "workspace" : "global", searches });
+    roots.push({
+      root,
+      namespace,
+      scope:
+        setting.workspace || install.scope === "project" || install.scope === "local"
+          ? "workspace"
+          : "global",
+      searches,
+    });
   }
   return roots;
 }

@@ -26,13 +26,20 @@ function activityIds(value: unknown, known?: ReadonlySet<string>): string[] | nu
   return [...ids];
 }
 
-export function parseChatActivitySnapshot(value: unknown, knownChatIds?: ReadonlySet<string>): ChatActivitySnapshot | null {
+export function parseChatActivitySnapshot(
+  value: unknown,
+  knownChatIds?: ReadonlySet<string>,
+): ChatActivitySnapshot | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
   if (!isRevision(candidate.revision)) return null;
   const activeChatIds = activityIds(candidate.activeChatIds, knownChatIds);
-  const approvalChatIds = candidate.approvalChatIds === undefined ? [] : activityIds(candidate.approvalChatIds, knownChatIds);
-  const inputChatIds = candidate.inputChatIds === undefined ? [] : activityIds(candidate.inputChatIds, knownChatIds);
+  const approvalChatIds =
+    candidate.approvalChatIds === undefined
+      ? []
+      : activityIds(candidate.approvalChatIds, knownChatIds);
+  const inputChatIds =
+    candidate.inputChatIds === undefined ? [] : activityIds(candidate.inputChatIds, knownChatIds);
   if (!activeChatIds || !approvalChatIds || !inputChatIds) return null;
   return {
     revision: candidate.revision,

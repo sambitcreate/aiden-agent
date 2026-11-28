@@ -227,6 +227,8 @@ jobs:
         run: npm ci
       - name: Verify TypeScript
         run: npm run type-check && npm run type-check:e2e
+      - name: Verify formatting
+        run: npm run format:check
       - name: Verify lint
         run: npm run lint
       - name: Verify Aiden design rules
@@ -716,7 +718,22 @@ jobs:
   required:
     name: CI required
     if: ${{ always() }}
-    needs: [changes, policy, static, build, verify, catalog, unit, e2e, linux-e2e, apple, ios, android, cli-linux]
+    needs:
+      [
+        changes,
+        policy,
+        static,
+        build,
+        verify,
+        catalog,
+        unit,
+        e2e,
+        linux-e2e,
+        apple,
+        ios,
+        android,
+        cli-linux,
+      ]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

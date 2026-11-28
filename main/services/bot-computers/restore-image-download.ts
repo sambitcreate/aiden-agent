@@ -76,14 +76,17 @@ async function sha256(file: string, signal: AbortSignal): Promise<string> {
  * kept across launches and resumed with `Range`, the size is capped at the
  * pin, and nothing is used before its SHA-256 matches.
  */
-export function createRestoreImageDownloader(options: RestoreImageDownloaderOptions): RestoreImageDownloader {
+export function createRestoreImageDownloader(
+  options: RestoreImageDownloaderOptions,
+): RestoreImageDownloader {
   const image = options.image ?? BOT_COMPUTER_RESTORE_IMAGE;
   const fetchImpl = options.fetchImpl ?? fetch;
   const reserve = options.reserveBytes ?? BOT_COMPUTER_BASE_DISK_RESERVE_BYTES;
   const connectMs = options.connectTimeoutMs ?? 30_000;
   const stallMs = options.stallTimeoutMs ?? 60_000;
   const progressMs = options.progressIntervalMs ?? 250;
-  if (!/^[A-Za-z0-9]+$/u.test(image.build)) throw new Error("The restore image build is malformed.");
+  if (!/^[A-Za-z0-9]+$/u.test(image.build))
+    throw new Error("The restore image build is malformed.");
   const final = path.join(options.dir, `UniversalMac_${image.build}_Restore.ipsw`);
   const partial = `${final}.part`;
   let active: { controller: AbortController; promise: Promise<string> } | undefined;
@@ -93,25 +96,49 @@ export function createRestoreImageDownloader(options: RestoreImageDownloaderOpti
     return Math.max(0, image.bytes - (await sizeOf(partial))) + reserve;
   }
 
-  async function verify(file: string, signal: AbortSignal, emit: (progress: RestoreImageProgress) => void): Promise<boolean> {
+  async function verify(
+    file: string,
+    signal: AbortSignal,
+    emit: (progress: RestoreImageProgress) => void,
+  ): Promise<boolean> {
     emit({ phase: "verifying", receivedBytes: image.bytes, totalBytes: image.bytes });
     if ((await sizeOf(file)) !== image.bytes) return false;
     return (await sha256(file, signal)) === image.sha256;
   }
 
-  async function fetchInto(have: number, controller: AbortController, emit: (progress: RestoreImageProgress) => void): Promise<void> {
+  async function fetchInto(
+    have: number,
+    controller: AbortController,
+    emit: (progress: RestoreImageProgress) => void,
+  ): Promise<void> {
     let reason: "connect" | "stall" | "oversize" | undefined;
     const abortFor = (why: "connect" | "stall" | "oversize") => {
       reason ??= why;
       controller.abort(why);
     };
     const failure = (error: unknown): Error => {
-      if (controller.signal.reason === CANCELLED) return new BotComputerError("cancelled", CANCELLED);
-      if (reason === "connect") return new BotComputerError("download_failed", "Apple's download server didn't answer. Try again later.");
-      if (reason === "stall") return new BotComputerError("download_failed", "The macOS download stalled. Choose Set up to resume it.");
-      if (reason === "oversize") return new BotComputerError("download_failed", "The macOS download was larger than expected, so Aiden stopped it.");
+      if (controller.signal.reason === CANCELLED)
+        return new BotComputerError("cancelled", CANCELLED);
+      if (reason === "connect")
+        return new BotComputerError(
+          "download_failed",
+          "Apple's download server didn't answer. Try again later.",
+        );
+      if (reason === "stall")
+        return new BotComputerError(
+          "download_failed",
+          "The macOS download stalled. Choose Set up to resume it.",
+        );
+      if (reason === "oversize")
+        return new BotComputerError(
+          "download_failed",
+          "The macOS download was larger than expected, so Aiden stopped it.",
+        );
       if (error instanceof BotComputerError) return error;
-      return new BotComputerError("download_failed", "The macOS download was interrupted. Choose Set up to resume it.");
+      return new BotComputerError(
+        "download_failed",
+        "The macOS download was interrupted. Choose Set up to resume it.",
+      );
     };
     const connectTimer = setTimeout(() => abortFor("connect"), connectMs);
     let response: Response;
@@ -133,7 +160,10 @@ export function createRestoreImageDownloader(options: RestoreImageDownloaderOpti
       if (!match || Number(match[1]) !== have) {
         await response.body?.cancel().catch(() => undefined);
         await rm(partial, { force: true });
-        throw new BotComputerError("download_failed", "The download server resumed at the wrong place. Choose Set up to start again.");
+        throw new BotComputerError(
+          "download_failed",
+          "The download server resumed at the wrong place. Choose Set up to start again.",
+        );
       }
       start = have;
     } else if (response.status === 416) {
@@ -142,13 +172,24 @@ export function createRestoreImageDownloader(options: RestoreImageDownloaderOpti
       return;
     } else if (!response.ok || !response.body) {
       await response.body?.cancel().catch(() => undefined);
-      throw new BotComputerError("download_failed", `The macOS download failed (HTTP ${response.status}).`);
+      throw new BotComputerError(
+        "download_failed",
+        `The macOS download failed (HTTP ${response.status}).`,
+      );
     }
     // A 200 answer to a Range request restarts from zero.
-    if (!response.body) throw new BotComputerError("download_failed", "The macOS download returned nothing.");
+    if (!response.body)
+      throw new BotComputerError("download_failed", "The macOS download returned nothing.");
     const file = createWriteStream(partial, { flags: start > 0 ? "a" : "w", mode: 0o600 });
     const fileError = new Promise<never>((_, reject) =>
-      file.once("error", () => reject(new BotComputerError("download_failed", "Aiden couldn't write the macOS download to disk."))),
+      file.once("error", () =>
+        reject(
+          new BotComputerError(
+            "download_failed",
+            "Aiden couldn't write the macOS download to disk.",
+          ),
+        ),
+      ),
     );
     fileError.catch(() => undefined);
     const reader = response.body.getReader();
@@ -171,7 +212,11 @@ export function createRestoreImageDownloader(options: RestoreImageDownloaderOpti
           abortFor("oversize");
           throw new BotComputerError("download_failed", "oversize");
         }
-        if (!file.write(chunk)) await Promise.race([new Promise<void>((resolve) => file.once("drain", resolve)), fileError]);
+        if (!file.write(chunk))
+          await Promise.race([
+            new Promise<void>((resolve) => file.once("drain", resolve)),
+            fileError,
+          ]);
         received += chunk.length;
         const now = Date.now();
         if (now - lastEmit >= progressMs) {
@@ -185,7 +230,10 @@ export function createRestoreImageDownloader(options: RestoreImageDownloaderOpti
       emit({ phase: "downloading", receivedBytes: received, totalBytes: image.bytes });
       if (received < image.bytes) {
         // The server ended cleanly but early; the partial resumes next time.
-        throw new BotComputerError("download_failed", "The macOS download ended early. Choose Set up to resume it.");
+        throw new BotComputerError(
+          "download_failed",
+          "The macOS download ended early. Choose Set up to resume it.",
+        );
       }
     } catch (error) {
       throw failure(error);
@@ -200,7 +248,10 @@ export function createRestoreImageDownloader(options: RestoreImageDownloaderOpti
     }
   }
 
-  async function perform(controller: AbortController, onProgress?: (progress: RestoreImageProgress) => void): Promise<string> {
+  async function perform(
+    controller: AbortController,
+    onProgress?: (progress: RestoreImageProgress) => void,
+  ): Promise<string> {
     const emit = (progress: RestoreImageProgress) => {
       try {
         onProgress?.(progress);

@@ -28,7 +28,8 @@ test("a feature whose switch is off or whose setup fails leaves only its own too
     () => {
       throw new Error("setup failed");
     },
-    async (_input, settings) => (settings.aidenLiveAppControl === false ? null : provider("look_at_aiden")),
+    async (_input, settings) =>
+      settings.aidenLiveAppControl === false ? null : provider("look_at_aiden"),
   ]);
   assert.deepEqual(
     providers.map((entry) => entry.declarations[0]!.name),

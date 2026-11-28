@@ -4,10 +4,7 @@
 
 import { mcpPresetKeyBinding } from "../mcp-credential-cleanup-core.js";
 import { mcpOAuthBindingForServer } from "../mcp-oauth-identity.js";
-import {
-  sessionMatchesMcpBinding,
-  type McpOAuthSession,
-} from "../mcp-oauth-session.js";
+import { sessionMatchesMcpBinding, type McpOAuthSession } from "../mcp-oauth-session.js";
 import { assertMcpPresetServer } from "../mcp-presets.js";
 import type { McpServer } from "../types.js";
 import {
@@ -32,9 +29,7 @@ export interface SubagentMcpCredentialSources {
 
 function assertCurrent(signal: AbortSignal): void {
   if (signal.aborted) {
-    throw signal.reason instanceof Error
-      ? signal.reason
-      : new Error("MCP read cancelled.");
+    throw signal.reason instanceof Error ? signal.reason : new Error("MCP read cancelled.");
   }
 }
 
@@ -44,7 +39,8 @@ export async function resolveSubagentMcpCredentialBoundary(
   sources: SubagentMcpCredentialSources,
 ): Promise<SubagentMcpCredentialBoundary> {
   assertCurrent(signal);
-  if (server.authProvider) throw new Error("Provider-authenticated MCP is unavailable to child agents.");
+  if (server.authProvider)
+    throw new Error("Provider-authenticated MCP is unavailable to child agents.");
   if (server.transport === "stdio") {
     throw new Error("Subagent MCP requires an isolated remote transport.");
   }
@@ -59,8 +55,7 @@ export async function resolveSubagentMcpCredentialBoundary(
     const session = await sources.oauthSession(server);
     assertCurrent(signal);
     oauthSession =
-      server.url &&
-      sessionMatchesMcpBinding(session, mcpOAuthBindingForServer(server))
+      server.url && sessionMatchesMcpBinding(session, mcpOAuthBindingForServer(server))
         ? session
         : {};
   }
@@ -69,7 +64,9 @@ export async function resolveSubagentMcpCredentialBoundary(
   return createSubagentMcpCredentialBoundary({
     revisionKey: sources.revisionKey,
     configuredHeaders: resolved.headers,
-    ...(resolved.oauthClientSecret !== undefined ? { oauthClientSecret: resolved.oauthClientSecret } : {}),
+    ...(resolved.oauthClientSecret !== undefined
+      ? { oauthClientSecret: resolved.oauthClientSecret }
+      : {}),
     endpointCredentials: subagentMcpEndpointCredentials(server.url),
     presetApiKey,
     oauthSession,

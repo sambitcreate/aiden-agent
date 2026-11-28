@@ -13,7 +13,13 @@ const RECAP: WebExtractRecapV1 = {
   host: "acme.example",
   cut: false,
   fields: [
-    { name: "pro_monthly", status: "extracted", value: "20", confidence: 0.97, sourceLine: "Pro is $20 per month." },
+    {
+      name: "pro_monthly",
+      status: "extracted",
+      value: "20",
+      confidence: 0.97,
+      sourceLine: "Pro is $20 per month.",
+    },
     { name: "team_yearly", status: "uncertain", value: "1399", confidence: 0.92, notFound: true },
     { name: "enterprise", status: "null" },
   ],
@@ -24,7 +30,12 @@ test("the recap keeps names, display values, confidence and source lines, and no
     url: "https://acme.example/pricing?token=secret",
     cut: false,
     fields: {
-      pro_monthly: { status: "extracted", value: 20, confidence: 0.97, sourceLine: "Pro is $20 per month." },
+      pro_monthly: {
+        status: "extracted",
+        value: 20,
+        confidence: 0.97,
+        sourceLine: "Pro is $20 per month.",
+      },
       team_yearly: { status: "uncertain", guess: 1399, confidence: 0.92, notFound: true },
       enterprise: { status: "null", value: null },
     },
@@ -41,7 +52,14 @@ test("long or multi-line values are shown on one bounded line", () => {
   assert.ok(long.endsWith("…"));
   const recap = buildWebExtractRecap({
     url: "https://acme.example",
-    fields: { notes: { status: "extracted", value: "y".repeat(500), confidence: 0.9, sourceLine: `${"z".repeat(300)}\n` } },
+    fields: {
+      notes: {
+        status: "extracted",
+        value: "y".repeat(500),
+        confidence: 0.9,
+        sourceLine: `${"z".repeat(300)}\n`,
+      },
+    },
   });
   assert.ok(recap);
   assert.ok(Array.from(recap.fields[0]!.value!).length <= 200);
@@ -61,7 +79,10 @@ test("a failed extraction is a recap with the reason and no fields", () => {
 
 test("stored and received recaps are rejected unless every field keeps its promise", () => {
   assert.deepEqual(parseWebExtractRecap(RECAP), RECAP);
-  const field = (overrides: Record<string, unknown>) => ({ ...RECAP, fields: [{ ...RECAP.fields[0], ...overrides }] });
+  const field = (overrides: Record<string, unknown>) => ({
+    ...RECAP,
+    fields: [{ ...RECAP.fields[0], ...overrides }],
+  });
   const cases: Array<[string, unknown]> = [
     ["newer version", { ...RECAP, version: 2 }],
     ["no fields and no error", { ...RECAP, fields: [] }],
@@ -77,7 +98,14 @@ test("stored and received recaps are rejected unless every field keeps its promi
     ["bad field name", field({ name: "has space" })],
     ["duplicate names", { ...RECAP, fields: [RECAP.fields[0], RECAP.fields[0]] }],
     ["host with a newline", { ...RECAP, host: "a\nb" }],
-    ["seventeen fields", { ...RECAP, fields: Array.from({ length: 17 }, (_, index) => ({ name: `f${index}`, status: "null" })) }],
+    [
+      "seventeen fields",
+      {
+        ...RECAP,
+        fields: Array.from({ length: 17 }, (_, index) => ({ name: `f${index}`, status: "null" })),
+      },
+    ],
   ];
-  for (const [name, candidate] of cases) assert.equal(parseWebExtractRecap(candidate), undefined, name);
+  for (const [name, candidate] of cases)
+    assert.equal(parseWebExtractRecap(candidate), undefined, name);
 });

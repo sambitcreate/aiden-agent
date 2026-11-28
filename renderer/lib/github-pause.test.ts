@@ -11,8 +11,14 @@ const NOW = new Date(2026, 9, 7, 15, 0).getTime();
 const MINUTE = 60_000;
 
 test("a pause lasts until GitHub's retry time and no longer", () => {
-  assert.equal(githubPausedUntil({ availability: "rate-limited", retryAt: NOW + MINUTE }, NOW), NOW + MINUTE);
-  assert.equal(githubPausedUntil({ availability: "rate-limited", retryAt: NOW - 1 }, NOW), undefined);
+  assert.equal(
+    githubPausedUntil({ availability: "rate-limited", retryAt: NOW + MINUTE }, NOW),
+    NOW + MINUTE,
+  );
+  assert.equal(
+    githubPausedUntil({ availability: "rate-limited", retryAt: NOW - 1 }, NOW),
+    undefined,
+  );
   assert.equal(githubPausedUntil({ availability: "rate-limited" }, NOW), undefined);
   assert.equal(githubPausedUntil({ availability: "error", retryAt: NOW + MINUTE }, NOW), undefined);
   assert.equal(githubPausedUntil(undefined, NOW), undefined);
@@ -24,7 +30,10 @@ test("polling waits out a pause longer than its interval", () => {
   const next = NOW + pausedPollInterval(paused, NOW, fiveMinutes);
   assert.ok(next > paused.retryAt, "the next poll lands after the pause");
   assert.ok(next <= paused.retryAt + 5_000);
-  assert.equal(pausedPollInterval({ availability: "rate-limited", retryAt: NOW + MINUTE }, NOW, fiveMinutes), fiveMinutes);
+  assert.equal(
+    pausedPollInterval({ availability: "rate-limited", retryAt: NOW + MINUTE }, NOW, fiveMinutes),
+    fiveMinutes,
+  );
   assert.equal(pausedPollInterval({ availability: "ready" }, NOW, fiveMinutes), fiveMinutes);
 });
 
@@ -32,15 +41,21 @@ test("a paused answer keeps the last pull request; other answers replace it", ()
   type Status = { availability: string; retryAt?: number; pullRequest?: { number: number } };
   const pullRequest = { number: 7 };
   const previous: Status = { availability: "ready", pullRequest };
-  assert.deepEqual(keepPullRequestWhilePaused(previous, { availability: "rate-limited", retryAt: NOW }), {
-    availability: "rate-limited",
-    retryAt: NOW,
-    pullRequest,
-  });
+  assert.deepEqual(
+    keepPullRequestWhilePaused(previous, { availability: "rate-limited", retryAt: NOW }),
+    {
+      availability: "rate-limited",
+      retryAt: NOW,
+      pullRequest,
+    },
+  );
   assert.deepEqual(keepPullRequestWhilePaused(previous, { availability: "no-pull-request" }), {
     availability: "no-pull-request",
   });
-  assert.deepEqual(keepPullRequestWhilePaused<Status>(undefined, { availability: "rate-limited" }), { availability: "rate-limited" });
+  assert.deepEqual(
+    keepPullRequestWhilePaused<Status>(undefined, { availability: "rate-limited" }),
+    { availability: "rate-limited" },
+  );
 });
 
 test("the pause is worded with the local time, and the day when it is not today", () => {

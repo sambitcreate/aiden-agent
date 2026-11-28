@@ -2,7 +2,10 @@ import { validateLocalClassifierPreference } from "../../renderer/shared/local-c
 import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 import { withoutRetiredMcpServers } from "../../renderer/shared/mcp-retired-servers.js";
 import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
-import { compactionEngineFrom, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
+import {
+  compactionEngineFrom,
+  parseCompactionModelOverrides,
+} from "../../renderer/shared/compaction.js";
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { isLocalVoiceIdleUnloadMinutes } from "../../renderer/shared/dictation-preferences.js";
 import { normalizeLanguageIntent } from "../../renderer/shared/voice-language.js";
@@ -57,7 +60,10 @@ import {
   normalizePinnedModels,
   normalizeRecentModels,
 } from "../../renderer/shared/model-preferences.js";
-import { normalizeAgentSlider, type AgentSliderSettings } from "../../renderer/shared/agent-slider.js";
+import {
+  normalizeAgentSlider,
+  type AgentSliderSettings,
+} from "../../renderer/shared/agent-slider.js";
 import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
@@ -324,7 +330,11 @@ function isWorkspace(value: unknown): value is Workspace {
 
 export function isMcpServer(value: unknown): value is McpServer {
   if (!isRecord(value)) return false;
-  try { validateMcpServerMetadata(value); } catch { return false; }
+  try {
+    validateMcpServerMetadata(value);
+  } catch {
+    return false;
+  }
   return (
     typeof value.id === "string" &&
     value.id.trim().length > 0 &&
@@ -347,7 +357,10 @@ export function isSkill(value: unknown): value is Skill {
   return isConfiguredSkill(value);
 }
 
-export { retiredMcpServerIds, withoutRetiredMcpServers } from "../../renderer/shared/mcp-retired-servers.js";
+export {
+  retiredMcpServerIds,
+  withoutRetiredMcpServers,
+} from "../../renderer/shared/mcp-retired-servers.js";
 
 export function isMcpServerList(value: unknown): value is McpServer[] {
   return Array.isArray(value) && value.every(isMcpServer) && hasUniqueIds(value);
@@ -416,16 +429,23 @@ function hasSensitiveProviderUrl(value: unknown): boolean {
 export function isPortableProvider(value: unknown): value is PortableProvider {
   if (!isRecord(value)) return false;
   const provider = value as Partial<PortableProvider>;
-  try { validateLocalClassifierPreference(provider); } catch { return false; }
+  try {
+    validateLocalClassifierPreference(provider);
+  } catch {
+    return false;
+  }
   if (provider.customModelOptions !== undefined) {
     if (!isRecord(provider.customModelOptions)) return false;
     try {
       for (const [id, options] of Object.entries(provider.customModelOptions)) {
         if (!id.trim() || id.length > MAX_CONFIG_ID_LENGTH || !isRecord(options)) return false;
-        if (options.manuallyAdded !== undefined && typeof options.manuallyAdded !== "boolean") return false;
+        if (options.manuallyAdded !== undefined && typeof options.manuallyAdded !== "boolean")
+          return false;
         parseCustomModelOptions(options);
       }
-    } catch { return false; }
+    } catch {
+      return false;
+    }
   }
   return (
     typeof provider.id === "string" &&
@@ -453,7 +473,11 @@ export function isPortableProviderList(value: unknown): value is PortableProvide
 }
 
 function isProviderModelMetadata(value: unknown): value is ProviderModelMetadata {
-  try { if (isRecord(value)) parseCustomModelOptions(value.overrides); } catch { return false; }
+  try {
+    if (isRecord(value)) parseCustomModelOptions(value.overrides);
+  } catch {
+    return false;
+  }
   if (!isRecord(value)) return false;
   return (
     (value.source === "lmstudio" || value.source === "ollama" || value.source === "provider") &&
@@ -632,7 +656,9 @@ function applyAgentSliderSettings(source: AgentSliderFields, target: AgentSlider
 }
 
 /** The portable Agent Slider, normalized for reading; a malformed hand edit reads as absent. */
-export function portableAgentSlider(config: { agentSlider?: unknown }): AgentSliderSettings | undefined {
+export function portableAgentSlider(config: {
+  agentSlider?: unknown;
+}): AgentSliderSettings | undefined {
   return normalizeAgentSlider(config.agentSlider);
 }
 
@@ -737,7 +763,11 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     }
   }
   if (settings.appControlPolicy !== undefined) {
-    normalized.appControlPolicy = ["disabled", "ask", "safe"].includes(settings.appControlPolicy as string) ? settings.appControlPolicy : "disabled";
+    normalized.appControlPolicy = ["disabled", "ask", "safe"].includes(
+      settings.appControlPolicy as string,
+    )
+      ? settings.appControlPolicy
+      : "disabled";
   }
   // Assistant, appearance, and keybindings are versioned/tolerant nested
   // documents. Runtime consumers project supported values separately; the
@@ -757,7 +787,8 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   }
   if (Object.prototype.hasOwnProperty.call(settings, "webFetch")) {
     // Like Web Search: a future document stays on disk for the build that wrote it.
-    normalized.webFetch = parseWebFetchSettings(settings.webFetch) ?? structuredClone(settings.webFetch);
+    normalized.webFetch =
+      parseWebFetchSettings(settings.webFetch) ?? structuredClone(settings.webFetch);
   }
   const onboarding = parseOnboardingState(settings.onboarding);
   if (onboarding) normalized.onboarding = onboarding;
@@ -789,29 +820,48 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   if (settings.botMessaging !== false) delete runtime.botMessaging;
   if (settings.childChats !== false) delete runtime.childChats;
   runtime.compactionEngine = compactionEngineFrom(settings.compactionEngine);
-  if (settings.cacheWarmingEnabled !== undefined) runtime.cacheWarmingEnabled = settings.cacheWarmingEnabled === true;
+  if (settings.cacheWarmingEnabled !== undefined)
+    runtime.cacheWarmingEnabled = settings.cacheWarmingEnabled === true;
   // Only a literal true pays for hour-long caches; anything hand-edited reads as off.
-  if (settings.longPromptCacheRetention !== undefined) runtime.longPromptCacheRetention = settings.longPromptCacheRetention === true;
-  if (settings.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(settings.usageLimitWaitHours)) delete runtime.usageLimitWaitHours;
+  if (settings.longPromptCacheRetention !== undefined)
+    runtime.longPromptCacheRetention = settings.longPromptCacheRetention === true;
+  if (
+    settings.usageLimitWaitHours !== undefined &&
+    !isUsageLimitWaitHours(settings.usageLimitWaitHours)
+  )
+    delete runtime.usageLimitWaitHours;
   // Only a literal true lets routines go ahead; anything else hand-edited reads as off.
-  if (settings.botRoutinesGoAhead !== undefined && settings.botRoutinesGoAhead !== true) delete runtime.botRoutinesGoAhead;
+  if (settings.botRoutinesGoAhead !== undefined && settings.botRoutinesGoAhead !== true)
+    delete runtime.botRoutinesGoAhead;
   // A hand-edited approval mode that isn't one of the three reads as Ask, never as unset (which may be Auto).
-  if (settings.approvalMode !== undefined && parseApprovalMode(settings.approvalMode) === undefined) runtime.approvalMode = "ask";
-  if (settings.approvalModel !== undefined && parseApprovalModel(settings.approvalModel) === undefined) delete runtime.approvalModel;
+  if (settings.approvalMode !== undefined && parseApprovalMode(settings.approvalMode) === undefined)
+    runtime.approvalMode = "ask";
+  if (
+    settings.approvalModel !== undefined &&
+    parseApprovalModel(settings.approvalModel) === undefined
+  )
+    delete runtime.approvalModel;
   if (settings.spendingLimits !== undefined) {
     const spendingLimits = parseSpendingLimitsSettings(settings.spendingLimits);
     if (spendingLimits === undefined) delete runtime.spendingLimits;
     else runtime.spendingLimits = spendingLimits;
   }
   if (settings.compactionModelOverrides !== undefined) {
-    try { runtime.compactionModelOverrides = parseCompactionModelOverrides(settings.compactionModelOverrides); }
-    catch { delete runtime.compactionModelOverrides; }
+    try {
+      runtime.compactionModelOverrides = parseCompactionModelOverrides(
+        settings.compactionModelOverrides,
+      );
+    } catch {
+      delete runtime.compactionModelOverrides;
+    }
   }
   const onboarding = parseOnboardingState(settings.onboarding);
   if (onboarding) runtime.onboarding = onboarding;
   else delete runtime.onboarding;
   if (settings.quickChatDefaultPersistence !== undefined) {
-    const parsedQuickChatMode = parseQuickChatDefaultPersistence(settings.quickChatDefaultPersistence);
+    const parsedQuickChatMode = parseQuickChatDefaultPersistence(
+      settings.quickChatDefaultPersistence,
+    );
     if (parsedQuickChatMode) runtime.quickChatDefaultPersistence = parsedQuickChatMode;
     else delete runtime.quickChatDefaultPersistence;
   }
@@ -1065,7 +1115,8 @@ async function ensureCompleteLegacyArchive(
   ownedPublicationPaths: Set<string>,
 ): Promise<string> {
   if (await fileEqualsContents(sourceContents, destination)) return destination;
-  if (await writeFileAtomicallyIfAbsent(sourceContents, destination, ownedPublicationPaths)) return destination;
+  if (await writeFileAtomicallyIfAbsent(sourceContents, destination, ownedPublicationPaths))
+    return destination;
   if (await fileEqualsContents(sourceContents, destination)) return destination;
 
   // An older non-atomic migration may already have left the canonical archive
@@ -1139,9 +1190,14 @@ export function splitStoredProvider(provider: StoredProvider): {
 } {
   const { models, modelMetadata, ...intent } = provider;
   if (modelMetadata !== undefined) {
-    const custom = Object.fromEntries(Object.entries(modelMetadata)
-      .filter(([, metadata]) => metadata.overrides !== undefined || metadata.manuallyAdded)
-      .map(([id, metadata]) => [id, { ...metadata.overrides, ...(metadata.manuallyAdded ? { manuallyAdded: true } : {}) }]));
+    const custom = Object.fromEntries(
+      Object.entries(modelMetadata)
+        .filter(([, metadata]) => metadata.overrides !== undefined || metadata.manuallyAdded)
+        .map(([id, metadata]) => [
+          id,
+          { ...metadata.overrides, ...(metadata.manuallyAdded ? { manuallyAdded: true } : {}) },
+        ]),
+    );
     if (Object.keys(custom).length) intent.customModelOptions = custom;
     else delete intent.customModelOptions;
   }
@@ -1164,17 +1220,28 @@ export function composeStoredProvider(
     ...safeIntent
   } = intent as PortableProvider & Partial<StoredProvider>;
   const composed: StoredProvider = { ...safeIntent, models: cache?.models ?? [] };
-  if (cache?.modelMetadata) composed.modelMetadata = Object.fromEntries(
-    Object.entries(cache.modelMetadata).map(([id, metadata]) => {
-      const { overrides: _overrides, manuallyAdded: _manual, ...detected } = metadata;
-      return [id, detected];
-    }),
-  );
+  if (cache?.modelMetadata)
+    composed.modelMetadata = Object.fromEntries(
+      Object.entries(cache.modelMetadata).map(([id, metadata]) => {
+        const { overrides: _overrides, manuallyAdded: _manual, ...detected } = metadata;
+        return [id, detected];
+      }),
+    );
   for (const [id, options] of Object.entries(safeIntent.customModelOptions ?? {})) {
     const { manuallyAdded, ...overrides } = options;
     composed.modelMetadata ??= {};
-    const detected = Object.prototype.hasOwnProperty.call(composed.modelMetadata, id) ? composed.modelMetadata[id] : undefined;
-    composed.modelMetadata = { ...composed.modelMetadata, [id]: { source: "provider", ...detected, ...(Object.keys(overrides).length ? { overrides } : {}), ...(manuallyAdded ? { manuallyAdded: true } : {}) } };
+    const detected = Object.prototype.hasOwnProperty.call(composed.modelMetadata, id)
+      ? composed.modelMetadata[id]
+      : undefined;
+    composed.modelMetadata = {
+      ...composed.modelMetadata,
+      [id]: {
+        source: "provider",
+        ...detected,
+        ...(Object.keys(overrides).length ? { overrides } : {}),
+        ...(manuallyAdded ? { manuallyAdded: true } : {}),
+      },
+    };
     if (manuallyAdded && !composed.models.includes(id)) composed.models = [...composed.models, id];
   }
   return composed;
@@ -1348,13 +1415,32 @@ export function createPortableConfigStores(
     const protectedSecondary: string[] = [];
     for (const entry of await fs.readdir(root)) {
       const archive = `${LOCAL_CONFIG_FILENAME}${LEGACY_CONFIG_ARCHIVE_SUFFIX}`;
-      const isArchive = !portableDirectory && (entry === archive ||
-        /^config\.json\.pre-aiden-dir\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(entry));
-      const isCorrupt = /^config\.json\.invalid-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}$/u.test(entry);
-      const isConflict = /^config\.json\.conflict-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(entry);
+      const isArchive =
+        !portableDirectory &&
+        (entry === archive ||
+          /^config\.json\.pre-aiden-dir\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(
+            entry,
+          ));
+      const isCorrupt =
+        /^config\.json\.invalid-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}$/u.test(
+          entry,
+        );
+      const isConflict =
+        /^config\.json\.conflict-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(
+          entry,
+        );
       if (isArchive && (await fs.lstat(path.join(root, entry))).isDirectory()) continue;
-      const isStaged = /^\.config\.json(?:\.pre-aiden-dir(?:\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})?)?\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.tmp$/u.test(entry);
-      if (isArchive || isCorrupt || isConflict || isStaged || isDataStoreRecoveryFile(entry, file)) {
+      const isStaged =
+        /^\.config\.json(?:\.pre-aiden-dir(?:\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})?)?\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.tmp$/u.test(
+          entry,
+        );
+      if (
+        isArchive ||
+        isCorrupt ||
+        isConflict ||
+        isStaged ||
+        isDataStoreRecoveryFile(entry, file)
+      ) {
         const secondaryPath = path.join(root, entry);
         hardenPrivateFile(secondaryPath, ownedPaths);
         protectedSecondary.push(secondaryPath);

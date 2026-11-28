@@ -50,7 +50,11 @@ test("new heads stack below the lowest head on their side and start fresh on the
   assert.ok(b!.placement.y > a!.placement.y, "the second head sits below the first");
   const left = bubbleBot(list, "c", { side: "left" });
   assert.equal(left.bubbles[2]!.placement.side, "left");
-  assert.equal(left.bubbles[2]!.placement.y, a!.placement.y, "an empty side starts at the same height");
+  assert.equal(
+    left.bubbles[2]!.placement.y,
+    a!.placement.y,
+    "an empty side starts at the same height",
+  );
 });
 
 test("a side that is full to the bottom wraps the new head to a free gap", () => {
@@ -58,12 +62,15 @@ test("a side that is full to the bottom wraps the new head to a free gap", () =>
   list = moveBubble(list, "a", { side: "right", y: 0.5, displayId: null });
   list = moveBubble(list, "b", { side: "right", y: 1, displayId: null });
   const placed = bubbleBot(list, "c").bubbles[2]!.placement;
-  for (const other of [0.5, 1]) assert.ok(Math.abs(placed.y - other) >= 0.06, `${placed.y} sits on ${other}`);
+  for (const other of [0.5, 1])
+    assert.ok(Math.abs(placed.y - other) >= 0.06, `${placed.y} sits on ${other}`);
   assert.ok(placed.y >= 0 && placed.y <= 1);
 });
 
 test("heads on another display don't count when finding a free height", () => {
-  const list = bubbleBot(bubbleBot(EMPTY_BOT_BUBBLE_LIST, "a", { displayId: 2 }), "b", { displayId: 3 });
+  const list = bubbleBot(bubbleBot(EMPTY_BOT_BUBBLE_LIST, "a", { displayId: 2 }), "b", {
+    displayId: 3,
+  });
   assert.equal(list.bubbles[0]!.placement.y, list.bubbles[1]!.placement.y);
   assert.equal(list.bubbles[1]!.placement.displayId, 3);
 });
@@ -111,11 +118,14 @@ test("recents stay deduplicated and bounded", () => {
 test("moving a head that isn't out does nothing", () => {
   const list = bubbleAll(["a"]);
   assert.equal(moveBubble(list, "b", { side: "left", y: 0.4, displayId: null }), list);
-  assert.deepEqual(moveBubble(list, "a", { side: "left", y: 0.4, displayId: 7 }).bubbles[0]!.placement, {
-    side: "left",
-    y: 0.4,
-    displayId: 7,
-  });
+  assert.deepEqual(
+    moveBubble(list, "a", { side: "left", y: 0.4, displayId: 7 }).bubbles[0]!.placement,
+    {
+      side: "left",
+      y: 0.4,
+      displayId: 7,
+    },
+  );
 });
 
 test("pruning drops heads, recents and the open chat of deleted Bots", () => {
@@ -125,7 +135,11 @@ test("pruning drops heads, recents and the open chat of deleted Bots", () => {
   assert.deepEqual(ids(pruned), ["a"]);
   assert.deepEqual(pruned.recents, []);
   assert.equal(pruned.openBotId, null);
-  assert.equal(pruneBubbles(pruned, new Set(["a", "z"])), pruned, "nothing to drop keeps the same list");
+  assert.equal(
+    pruneBubbles(pruned, new Set(["a", "z"])),
+    pruned,
+    "nothing to drop keeps the same list",
+  );
 });
 
 test("heads on a removed or unknown display move to the primary display with the same side and height", () => {
@@ -135,7 +149,11 @@ test("heads on a removed or unknown display move to the primary display with the
   const moved = moveBubblesOffMissingDisplays(list, new Set([1]), 1);
   assert.deepEqual(moved.bubbles[0]!.placement, { ...list.bubbles[0]!.placement, displayId: 1 });
   assert.deepEqual(moved.bubbles[1], list.bubbles[1]);
-  assert.equal(moved.bubbles[2]!.placement.displayId, 1, "a head with no display yet lands on the primary");
+  assert.equal(
+    moved.bubbles[2]!.placement.displayId,
+    1,
+    "a head with no display yet lands on the primary",
+  );
   assert.equal(moveBubblesOffMissingDisplays(moved, new Set([1]), 1), moved);
 });
 
@@ -144,10 +162,22 @@ test("host follows the two switches and the platform", () => {
   assert.deepEqual(on, { enabled: true, floatOverApps: true });
   assert.equal(resolveBotBubbleHost(on, "darwin"), "overlay");
   assert.equal(resolveBotBubbleHost(on, "linux"), "window");
-  assert.equal(resolveBotBubbleHost(botBubbleSettingsFrom({ botBubblesFloatOverApps: false }), "darwin"), "window");
-  assert.equal(resolveBotBubbleHost(botBubbleSettingsFrom({ botBubblesEnabled: false }), "darwin"), "off");
-  assert.equal(botBubbleStateFrom(EMPTY_BOT_BUBBLE_LIST, on, "linux").floatOverAppsAvailable, false);
-  assert.equal(botBubbleStateFrom(EMPTY_BOT_BUBBLE_LIST, on, "darwin").floatOverAppsAvailable, true);
+  assert.equal(
+    resolveBotBubbleHost(botBubbleSettingsFrom({ botBubblesFloatOverApps: false }), "darwin"),
+    "window",
+  );
+  assert.equal(
+    resolveBotBubbleHost(botBubbleSettingsFrom({ botBubblesEnabled: false }), "darwin"),
+    "off",
+  );
+  assert.equal(
+    botBubbleStateFrom(EMPTY_BOT_BUBBLE_LIST, on, "linux").floatOverAppsAvailable,
+    false,
+  );
+  assert.equal(
+    botBubbleStateFrom(EMPTY_BOT_BUBBLE_LIST, on, "darwin").floatOverAppsAvailable,
+    true,
+  );
 });
 
 test("the saved file round-trips order, side, height and display but not the open chat", () => {
@@ -175,7 +205,16 @@ test("a damaged or unknown saved file starts empty", () => {
     { ...good, bubbles: [{ botId: "../x", side: "left", y: 0.2, displayId: null }] },
     { ...good, recents: ["a"] },
     { ...good, recents: ["z", "z"] },
-    { ...good, bubbles: Array.from({ length: 6 }, (_, i) => ({ botId: `b${i}`, side: "left", y: 0, displayId: null })) },
+    {
+      ...good,
+      bubbles: Array.from({ length: 6 }, (_, i) => ({
+        botId: `b${i}`,
+        side: "left",
+        y: 0,
+        displayId: null,
+      })),
+    },
   ];
-  for (const raw of cases) assert.deepEqual(parseBotBubbleFile(raw), EMPTY_BOT_BUBBLE_LIST, JSON.stringify(raw));
+  for (const raw of cases)
+    assert.deepEqual(parseBotBubbleFile(raw), EMPTY_BOT_BUBBLE_LIST, JSON.stringify(raw));
 });

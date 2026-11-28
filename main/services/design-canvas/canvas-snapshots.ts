@@ -22,9 +22,19 @@ export class DesignCanvasSnapshots {
   constructor(private readonly timeoutMs = DESIGN_SNAPSHOT_TIMEOUT_MS) {}
 
   /** Null when no window on this desktop shows the canvas in time. */
-  request(input: { chatId: string; owner?: ChatGenerationOwner; signal?: AbortSignal }): Promise<Snapshot | null> {
+  request(input: {
+    chatId: string;
+    owner?: ChatGenerationOwner;
+    signal?: AbortSignal;
+  }): Promise<Snapshot | null> {
     const { owner, signal } = input;
-    if (!owner || owner.kind === "remote" || owner.id === 0 || owner.isDestroyed() || signal?.aborted) {
+    if (
+      !owner ||
+      owner.kind === "remote" ||
+      owner.id === 0 ||
+      owner.isDestroyed() ||
+      signal?.aborted
+    ) {
       return Promise.resolve(null);
     }
     if (this.pending.size >= 8) return Promise.resolve(null);
@@ -44,7 +54,10 @@ export class DesignCanvasSnapshots {
       unsubscribe = owner.onInvalidated(abort);
       signal?.addEventListener("abort", abort, { once: true });
       try {
-        owner.send("designCanvas:snapshot", { requestId, chatId: input.chatId } satisfies DesignCanvasSnapshotRequest);
+        owner.send("designCanvas:snapshot", {
+          requestId,
+          chatId: input.chatId,
+        } satisfies DesignCanvasSnapshotRequest);
       } catch {
         abort();
       }
@@ -74,7 +87,9 @@ export class DesignCanvasSnapshots {
       dataUrl.length > PNG_PREFIX.length &&
       dataUrl.length <= DESIGN_SNAPSHOT_MAX_CHARS &&
       /^[A-Za-z0-9+/]+=*$/u.test(dataUrl.slice(PNG_PREFIX.length));
-    request.finish(valid ? { data: dataUrl.slice(PNG_PREFIX.length), mimeType: "image/png" } : null);
+    request.finish(
+      valid ? { data: dataUrl.slice(PNG_PREFIX.length), mimeType: "image/png" } : null,
+    );
     return true;
   }
 }

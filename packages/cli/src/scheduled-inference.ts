@@ -1,6 +1,10 @@
 import { mcpServerOffersTools } from "../../../renderer/shared/mcp-exposure.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { createAgentSession, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { ScheduledTask } from "../../../main/services/types.js";
 import { assertScheduledMcpServerBindings } from "../../../main/services/schedule-mcp-binding.js";
@@ -24,26 +28,49 @@ import { createGenerationWatchdog } from "./generation-watchdog.ts";
  * Every update also carries the whole partial message, which is never counted.
  */
 export function createReplyMeter() {
-  const streamed = new Map<number, number>(), signatures = new Map<number, number>();
+  const streamed = new Map<number, number>(),
+    signatures = new Map<number, number>();
   let total = 0;
-  const countSignature = (index: number, block: AssistantMessage["content"][number] | undefined) => {
+  const countSignature = (
+    index: number,
+    block: AssistantMessage["content"][number] | undefined,
+  ) => {
     if (block?.type !== "thinking") return;
-    const bytes = Buffer.byteLength(block.thinkingSignature ?? ""), counted = signatures.get(index) ?? 0;
-    if (bytes > counted) { total += bytes - counted; signatures.set(index, bytes); }
+    const bytes = Buffer.byteLength(block.thinkingSignature ?? ""),
+      counted = signatures.get(index) ?? 0;
+    if (bytes > counted) {
+      total += bytes - counted;
+      signatures.set(index, bytes);
+    }
   };
   return {
     /** A new assistant message starts its content indices afresh. */
-    nextMessage() { streamed.clear(); signatures.clear(); },
+    nextMessage() {
+      streamed.clear();
+      signatures.clear();
+    },
     add(event: AssistantMessageEvent): number {
-      if (event.type === "text_delta" || event.type === "thinking_delta" || event.type === "toolcall_delta") {
+      if (
+        event.type === "text_delta" ||
+        event.type === "thinking_delta" ||
+        event.type === "toolcall_delta"
+      ) {
         const bytes = Buffer.byteLength(event.delta);
         streamed.set(event.contentIndex, (streamed.get(event.contentIndex) ?? 0) + bytes);
         total += bytes;
-      } else if (event.type === "text_end" || event.type === "thinking_end" || event.type === "toolcall_end") {
-        const size = event.type === "toolcall_end" ? Buffer.byteLength(JSON.stringify(event.toolCall.arguments ?? {})) : Buffer.byteLength(event.content);
+      } else if (
+        event.type === "text_end" ||
+        event.type === "thinking_end" ||
+        event.type === "toolcall_end"
+      ) {
+        const size =
+          event.type === "toolcall_end"
+            ? Buffer.byteLength(JSON.stringify(event.toolCall.arguments ?? {}))
+            : Buffer.byteLength(event.content);
         total += Math.max(0, size - (streamed.get(event.contentIndex) ?? 0));
         streamed.delete(event.contentIndex);
-        if (event.type === "thinking_end") countSignature(event.contentIndex, event.partial.content[event.contentIndex]);
+        if (event.type === "thinking_end")
+          countSignature(event.contentIndex, event.partial.content[event.contentIndex]);
       }
       return total;
     },
@@ -56,61 +83,134 @@ export function createReplyMeter() {
 }
 
 /** An unattended schedule receives only its persisted tool and connector selection. */
-export async function runScheduledInference(agentDir: string, cwd: string, task: ScheduledTask, signal: AbortSignal, assertAuthority: () => Promise<void>) {
-  const pool = createCliMcpPool(agentDir), produced: AssistantMessage[] = [];
-  const controller = new AbortController(), combined = AbortSignal.any([signal, controller.signal]);
+export async function runScheduledInference(
+  agentDir: string,
+  cwd: string,
+  task: ScheduledTask,
+  signal: AbortSignal,
+  assertAuthority: () => Promise<void>,
+) {
+  const pool = createCliMcpPool(agentDir),
+    produced: AssistantMessage[] = [];
+  const controller = new AbortController(),
+    combined = AbortSignal.any([signal, controller.signal]);
   let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
-  let removeEvents = () => {}, calls = 0, turns = 0;
+  let removeEvents = () => {},
+    calls = 0,
+    turns = 0;
   const reply = createReplyMeter();
-  const abort = () => { void session?.abort().catch(() => {}); };
+  const abort = () => {
+    void session?.abort().catch(() => {});
+  };
   combined.addEventListener("abort", abort, { once: true });
-  const watchdog = createGenerationWatchdog((reason) => controller.abort(new Error(reason === "inactive"
-    ? "Scheduled inference was inactive for five minutes." : "Scheduled inference reached its six-hour limit.")));
+  const watchdog = createGenerationWatchdog((reason) =>
+    controller.abort(
+      new Error(
+        reason === "inactive"
+          ? "Scheduled inference was inactive for five minutes."
+          : "Scheduled inference reached its six-hour limit.",
+      ),
+    ),
+  );
   const check = async () => {
-    combined.throwIfAborted(); await assertAuthority();
+    combined.throwIfAborted();
+    await assertAuthority();
     const servers = await pool.listServers();
     const selected = (task.mcpServerIds ?? []).map((id) => {
       // A server switched off for the model fails the run instead of running without it.
-      const server = servers.find((item) => item.enabled && mcpServerOffersTools(item) && item.id === id);
+      const server = servers.find(
+        (item) => item.enabled && mcpServerOffersTools(item) && item.id === id,
+      );
       if (!server) throw new Error("An approved scheduled MCP connection is unavailable.");
       return server;
     });
     assertScheduledMcpServerBindings(selected, task.mcpServerBindings ?? []);
-    combined.throwIfAborted(); return selected;
+    combined.throwIfAborted();
+    return selected;
   };
   try {
-    const runtime = await createCliModelRuntime(agentDir), found = runtime.getModel(task.providerId!, task.model!);
+    const runtime = await createCliModelRuntime(agentDir),
+      found = runtime.getModel(task.providerId!, task.model!);
     if (!found) throw new Error("Scheduled provider/model is unavailable.");
     const model = withoutMessageThreads(found);
     const selected = await check();
-    const tools: AgentTool[] = (await Promise.all(selected.map((server) => pool.agentTools(server, combined)))).flat();
+    const tools: AgentTool[] = (
+      await Promise.all(selected.map((server) => pool.agentTools(server, combined)))
+    ).flat();
     tools.push(...cliWorkspaceCodingTools(cwd, task.permission !== "full"));
-    if (task.webSearchEnabled) { const tool = await createCliWebSearch(agentDir).toolForGeneration(); if (!tool) throw new Error("Scheduled Web Search is unavailable."); tools.push(tool); }
-    const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
-      extensionFactories: [createPromptCacheBreakpointsInlineExtension(() => undefined), { name: "aiden-schedule-authority", factory(pi) {
-        for (const tool of tools) pi.registerTool({ ...tool, label: tool.label ?? tool.name });
-        pi.on("tool_call", async () => { try { if (++calls > 64) throw new Error("Scheduled tool budget exhausted."); await check(); } catch (error) { return { block: true, reason: String(error) }; } });
-      } }],
+    if (task.webSearchEnabled) {
+      const tool = await createCliWebSearch(agentDir).toolForGeneration();
+      if (!tool) throw new Error("Scheduled Web Search is unavailable.");
+      tools.push(tool);
+    }
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      extensionFactories: [
+        createPromptCacheBreakpointsInlineExtension(() => undefined),
+        {
+          name: "aiden-schedule-authority",
+          factory(pi) {
+            for (const tool of tools) pi.registerTool({ ...tool, label: tool.label ?? tool.name });
+            pi.on("tool_call", async () => {
+              try {
+                if (++calls > 64) throw new Error("Scheduled tool budget exhausted.");
+                await check();
+              } catch (error) {
+                return { block: true, reason: String(error) };
+              }
+            });
+          },
+        },
+      ],
     });
     await loader.reload();
-    const created = await createAgentSession({ cwd, agentDir, settingsManager: daemonSettingsManager(cwd, agentDir, { attended: false }), modelRuntime: runtime, model, sessionManager: SessionManager.inMemory(cwd), resourceLoader: loader,
+    const created = await createAgentSession({
+      cwd,
+      agentDir,
+      settingsManager: daemonSettingsManager(cwd, agentDir, { attended: false }),
+      modelRuntime: runtime,
+      model,
+      sessionManager: SessionManager.inMemory(cwd),
+      resourceLoader: loader,
       tools: tools.map(({ name }) => name),
     });
     session = created.session;
     removeEvents = session.subscribe((event) => {
       watchdog.activity(event);
-      if (event.type === "turn_start" && ++turns > 24) controller.abort(new Error("Scheduled turn budget exhausted."));
+      if (event.type === "turn_start" && ++turns > 24)
+        controller.abort(new Error("Scheduled turn budget exhausted."));
       if (event.type === "message_start") reply.nextMessage();
-      const replied = event.type === "message_update" ? reply.add(event.assistantMessageEvent)
-        : event.type === "message_end" && event.message.role === "assistant" ? (produced.push(event.message), reply.finish(event.message)) : 0;
-      if (replied > 2 * 1024 * 1024) controller.abort(new Error("Scheduled response budget exhausted."));
+      const replied =
+        event.type === "message_update"
+          ? reply.add(event.assistantMessageEvent)
+          : event.type === "message_end" && event.message.role === "assistant"
+            ? (produced.push(event.message), reply.finish(event.message))
+            : 0;
+      if (replied > 2 * 1024 * 1024)
+        controller.abort(new Error("Scheduled response budget exhausted."));
     });
-    await check(); await session.prompt(task.prompt!, { expandPromptTemplates: false }); combined.throwIfAborted();
+    await check();
+    await session.prompt(task.prompt!, { expandPromptTemplates: false });
+    combined.throwIfAborted();
     const last = produced.at(-1);
-    if (!last || last.stopReason === "error" || last.stopReason === "aborted") throw new Error("Scheduled inference did not produce a final response.");
-    return produced.map((message) => messageText(message.content)).join("\n").slice(0, 100_000);
+    if (!last || last.stopReason === "error" || last.stopReason === "aborted")
+      throw new Error("Scheduled inference did not produce a final response.");
+    return produced
+      .map((message) => messageText(message.content))
+      .join("\n")
+      .slice(0, 100_000);
   } finally {
-    watchdog.dispose(); combined.removeEventListener("abort", abort); removeEvents(); session?.dispose(); await pool.close();
-    for (const message of produced) await recordUsage(agentDir, "scheduled", message).catch(() => {});
+    watchdog.dispose();
+    combined.removeEventListener("abort", abort);
+    removeEvents();
+    session?.dispose();
+    await pool.close();
+    for (const message of produced)
+      await recordUsage(agentDir, "scheduled", message).catch(() => {});
   }
 }

@@ -10,9 +10,17 @@ import { createRfbScreenFactory, nativeImageEncoder } from "./rfb-screen-main.js
 import type { BotComputerImageEncoder } from "./rfb-screen.js";
 import type { BotComputerConnection } from "./types.js";
 
-const encode: BotComputerImageEncoder = async (bgra, width, height) => ({ image: Buffer.from(bgra.subarray(0, 4)), width, height });
+const encode: BotComputerImageEncoder = async (bgra, width, height) => ({
+  image: Buffer.from(bgra.subarray(0, 4)),
+  width,
+  height,
+});
 
-const connectionTo = (port: number, password: string, host = "127.0.0.1"): BotComputerConnection => ({
+const connectionTo = (
+  port: number,
+  password: string,
+  host = "127.0.0.1",
+): BotComputerConnection => ({
   vmName: "aiden-bot-0123456789abcdef",
   ip: "192.168.64.9",
   vnc: { host: host as "127.0.0.1", port, password },
@@ -50,10 +58,19 @@ test("a VNC address off loopback is refused before any connection", async () => 
 
 test("an owner-Mac recording holds only what the server sent, in a file only this user can read", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "aiden-rfb-recordings-"));
-  const server = new FakeRfbServer({ width: 16, height: 12, password: "run-pass-2", version: "3.8" });
+  const server = new FakeRfbServer({
+    width: 16,
+    height: 12,
+    password: "run-pass-2",
+    version: "3.8",
+  });
   const port = await server.listen();
   try {
-    const factory = createRfbScreenFactory({ encode, recordingsDir: path.join(dir, "rfb-recordings"), now: () => Date.UTC(2026, 9, 21, 9, 30) });
+    const factory = createRfbScreenFactory({
+      encode,
+      recordingsDir: path.join(dir, "rfb-recordings"),
+      now: () => Date.UTC(2026, 9, 21, 9, 30),
+    });
     const screen = await factory(connectionTo(port, "run-pass-2"));
     await screen.capture({ format: "jpeg", maxWidth: 16 });
     await screen.close();
@@ -72,7 +89,12 @@ test("an owner-Mac recording holds only what the server sent, in a file only thi
 
 test("a recording the disk refuses ends the recording, and the screen keeps working", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "aiden-rfb-recordings-"));
-  const server = new FakeRfbServer({ width: 16, height: 12, password: "run-pass-2", version: "3.8" });
+  const server = new FakeRfbServer({
+    width: 16,
+    height: 12,
+    password: "run-pass-2",
+    version: "3.8",
+  });
   const port = await server.listen();
   const logged: string[] = [];
   let writes = 0;
@@ -81,7 +103,10 @@ test("a recording the disk refuses ends the recording, and the screen keeps work
     ...fs,
     writeSync: ((fd: number, buffer: Buffer) => {
       writes += 1;
-      if (writes > 1) throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+      if (writes > 1)
+        throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+          code: "ENOSPC",
+        });
       return fs.writeSync(fd, buffer);
     }) as typeof fs.writeSync,
   };
@@ -96,12 +121,22 @@ test("a recording the disk refuses ends the recording, and the screen keeps work
     server.paint({ x: 0, y: 0, width: 16, height: 12 }, [1, 2, 3]);
     const screen = await factory(connectionTo(port, "run-pass-2"));
     const shot = await screen.capture({ format: "png", maxWidth: 16 });
-    assert.deepEqual([...shot.image], [3, 2, 1, 255], "the screen goes on after the recording stopped");
+    assert.deepEqual(
+      [...shot.image],
+      [3, 2, 1, 255],
+      "the screen goes on after the recording stopped",
+    );
     await screen.close();
     assert.equal(writes, 2, "nothing more is written once the disk refused");
-    assert.ok(logged.some((message) => /recording/iu.test(message)), "the stop is logged");
+    assert.ok(
+      logged.some((message) => /recording/iu.test(message)),
+      "the stop is logged",
+    );
     const [file] = await readdir(path.join(dir, "rfb-recordings"));
-    assert.equal((await readFile(path.join(dir, "rfb-recordings", file))).subarray(0, 12).toString("latin1"), "RFB 003.008\n");
+    assert.equal(
+      (await readFile(path.join(dir, "rfb-recordings", file))).subarray(0, 12).toString("latin1"),
+      "RFB 003.008\n",
+    );
   } finally {
     await server.close();
     await rm(dir, { recursive: true, force: true });

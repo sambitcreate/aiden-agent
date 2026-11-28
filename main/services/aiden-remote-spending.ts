@@ -47,11 +47,18 @@ export interface AidenRemoteSpendingDependencies {
 const cents = (usd: number) => Math.round(usd * 100);
 
 function revisionOf(view: SpendingStatusView): string {
-  const key = JSON.stringify([view.period, view.periodStart ?? null, cents(view.limitUsd), cents(view.extraUsd)]);
+  const key = JSON.stringify([
+    view.period,
+    view.periodStart ?? null,
+    cents(view.limitUsd),
+    cents(view.extraUsd),
+  ]);
   return `sp_${createHash("sha256").update(key).digest("base64url").slice(0, 22)}`;
 }
 
-export function projectAidenRemoteSpending(view: SpendingStatusView | undefined): AidenRemoteSpendingResponse {
+export function projectAidenRemoteSpending(
+  view: SpendingStatusView | undefined,
+): AidenRemoteSpendingResponse {
   if (!view) return { spending: null };
   return {
     spending: {
@@ -61,8 +68,12 @@ export function projectAidenRemoteSpending(view: SpendingStatusView | undefined)
       allowedUsd: cents(view.limitUsd + view.extraUsd) / 100,
       spentUsd: cents(view.spentUsd) / 100,
       allowMoreUsd: cents(view.limitUsd) / 100,
-      ...(view.periodStart !== undefined ? { periodStart: new Date(view.periodStart).toISOString() } : {}),
-      ...(view.periodEnd !== undefined ? { periodEnd: new Date(view.periodEnd).toISOString() } : {}),
+      ...(view.periodStart !== undefined
+        ? { periodStart: new Date(view.periodStart).toISOString() }
+        : {}),
+      ...(view.periodEnd !== undefined
+        ? { periodEnd: new Date(view.periodEnd).toISOString() }
+        : {}),
       revision: revisionOf(view),
     },
   };
@@ -80,11 +91,17 @@ export class AidenRemoteSpendingService {
     return projectAidenRemoteSpending(await this.dependencies.spending.status("bot", botId));
   }
 
-  async allowMoreChat(chatId: string, expectedRevision: string): Promise<AidenRemoteSpendingResponse> {
+  async allowMoreChat(
+    chatId: string,
+    expectedRevision: string,
+  ): Promise<AidenRemoteSpendingResponse> {
     return this.allowMore("chat", chatId, expectedRevision);
   }
 
-  async allowMoreBot(botId: string, expectedRevision: string): Promise<AidenRemoteSpendingResponse> {
+  async allowMoreBot(
+    botId: string,
+    expectedRevision: string,
+  ): Promise<AidenRemoteSpendingResponse> {
     await this.dependencies.requireBot(botId);
     return this.allowMore("bot", botId, expectedRevision);
   }
@@ -94,7 +111,11 @@ export class AidenRemoteSpendingService {
    * revision makes a repeated or crossed tap a conflict instead of a second
    * allowance; a chat or Bot still under its limit is returned unchanged.
    */
-  private async allowMore(kind: "chat" | "bot", id: string, expectedRevision: string): Promise<AidenRemoteSpendingResponse> {
+  private async allowMore(
+    kind: "chat" | "bot",
+    id: string,
+    expectedRevision: string,
+  ): Promise<AidenRemoteSpendingResponse> {
     const { view, accepted } = await this.dependencies.spending.allowMoreIf(
       kind,
       id,

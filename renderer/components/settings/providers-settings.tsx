@@ -58,16 +58,29 @@ function statusBadge(p: Provider): React.ReactNode {
     return p.hasKey ? <Badge>Configured</Badge> : <Badge color="warning">Needs attention</Badge>;
   }
   if (!p.needsKey) return <Badge color="blue">No key needed</Badge>;
-  if (p.hasKey) return <Badge color="green" icon={<Check />}>Key saved</Badge>;
+  if (p.hasKey)
+    return (
+      <Badge color="green" icon={<Check />}>
+        Key saved
+      </Badge>
+    );
   return <Badge color="warning">Needs API key</Badge>;
 }
 
 function foundationModelsBadge(status: FoundationModelsConnectionStatus): React.ReactNode {
   switch (status.state) {
     case "ready":
-      return <Badge color="green" icon={<Check />}>Ready</Badge>;
+      return (
+        <Badge color="green" icon={<Check />}>
+          Ready
+        </Badge>
+      );
     case "model_preparing":
-      return <Badge color="blue" icon={<Loader2 className="animate-spin motion-reduce:animate-none" />}>Preparing</Badge>;
+      return (
+        <Badge color="blue" icon={<Loader2 className="animate-spin motion-reduce:animate-none" />}>
+          Preparing
+        </Badge>
+      );
     case "apple_intelligence_disabled":
       return <Badge>Apple Intelligence off</Badge>;
     case "device_not_eligible":
@@ -106,7 +119,7 @@ function BuiltinProviderRows({
         subtitle={
           provider.id === GOOGLE_PROVIDER_ID && settings?.geminiUsageScope === "transcription_only"
             ? "Transcription only · chat models hidden"
-            : availableChatModel(provider, settings) ?? "No chat model available"
+            : (availableChatModel(provider, settings) ?? "No chat model available")
         }
         actionLabel={provider.hasKey ? "Manage" : "Reconnect"}
         onAction={() => onSetUp(provider)}
@@ -150,7 +163,7 @@ export function ProvidersSettings() {
   );
   const builtins = list.filter((provider) => provider.isBuiltin);
   const customProviders = list.filter((provider) => !provider.isBuiltin);
-  const configured = builtins.filter(p => p.hasKey || p.canLogout);
+  const configured = builtins.filter((p) => p.hasKey || p.canLogout);
   const hasCodex = codex.data?.configured || codex.data?.needsAttention;
   const hasConnections = configured.length > 0 || customProviders.length > 0 || hasCodex;
   const titleProviderId = settings.data?.chatTitleProviderId ?? "automatic";
@@ -262,9 +275,18 @@ export function ProvidersSettings() {
   };
 
   const addCustom = (template: "lmstudio" | "ollama" | "custom" | "tailnet") => {
-    editingFocusTarget.current.capture(document.activeElement instanceof HTMLElement ? document.activeElement : addProviderTriggerRef.current);
-    const existing = (template === "lmstudio" || template === "ollama") && customProviders.find(p => p.id === `custom:${template}`);
-    if (existing) { setEditing(existing); return; }
+    editingFocusTarget.current.capture(
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : addProviderTriggerRef.current,
+    );
+    const existing =
+      (template === "lmstudio" || template === "ollama") &&
+      customProviders.find((p) => p.id === `custom:${template}`);
+    if (existing) {
+      setEditing(existing);
+      return;
+    }
     const id =
       template === "lmstudio" || template === "ollama"
         ? `custom:${template}`
@@ -306,14 +328,28 @@ export function ProvidersSettings() {
     toast.success(`${provider.label} configured.`);
   };
 
-  const returnFocus = () => editingFocusTarget.current.take() as HTMLElement | null ?? addProviderTriggerRef.current;
+  const returnFocus = () =>
+    (editingFocusTarget.current.take() as HTMLElement | null) ?? addProviderTriggerRef.current;
   const chooseConnection = (route: ConnectionRoute, trigger: HTMLButtonElement) => {
     editingFocusTarget.current.capture(trigger);
-    if (route.kind === "local") { setRuntime(route.runtime); return; }
-    if (route.kind === "endpoint") { addCustom(route.template); return; }
-    if (route.kind === "codex") { setShowCodex(true); setChooserOpen(false); return; }
+    if (route.kind === "local") {
+      setRuntime(route.runtime);
+      return;
+    }
+    if (route.kind === "endpoint") {
+      addCustom(route.template);
+      return;
+    }
+    if (route.kind === "codex") {
+      setShowCodex(true);
+      setChooserOpen(false);
+      return;
+    }
     const { id } = route.provider;
-    if (route.method === "api_key" && (id === "openai" || id === "anthropic")) { setHostedKey(id); return; }
+    if (route.method === "api_key" && (id === "openai" || id === "anthropic")) {
+      setHostedKey(id);
+      return;
+    }
     setRouteMethod(route.method);
     openBuiltinSetup(route.provider);
   };
@@ -343,9 +379,12 @@ export function ProvidersSettings() {
       <div className="settings-page-heading flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1">
-            <Text as="h1" variant="heading1">Providers</Text>
+            <Text as="h1" variant="heading1">
+              Providers
+            </Text>
             <InfoHint topic="provider connections">
-              Connect an account, an API key or a local model. Custom endpoints and catalog updates are in Advanced.
+              Connect an account, an API key or a local model. Custom endpoints and catalog updates
+              are in Advanced.
             </InfoHint>
           </div>
           <Text variant="small" color="secondary" className="mt-0.5 block">
@@ -353,15 +392,43 @@ export function ProvidersSettings() {
           </Text>
         </div>
       </div>
-      {providers.isLoading || codex.isLoading ? <Text role="status" variant="small">Loading connections…</Text>
-        : providers.isError || codex.isError ? <div role="alert" className="settings-card p-4">
-          Couldn’t read all connections. <Button size="small" onClick={() => { void providers.refetch(); void codex.refetch(); }}>Try again</Button>
-        </div> : null}
-      {hasConnections && <Text as="h2" variant="small-strong">Your connections</Text>}
+      {providers.isLoading || codex.isLoading ? (
+        <Text role="status" variant="small">
+          Loading connections…
+        </Text>
+      ) : providers.isError || codex.isError ? (
+        <div role="alert" className="settings-card p-4">
+          Couldn’t read all connections.{" "}
+          <Button
+            size="small"
+            onClick={() => {
+              void providers.refetch();
+              void codex.refetch();
+            }}
+          >
+            Try again
+          </Button>
+        </div>
+      ) : null}
+      {hasConnections && (
+        <Text as="h2" variant="small-strong">
+          Your connections
+        </Text>
+      )}
       {(hasCodex || showCodex || codex.isError) && <CodexProviderSettings />}
-      {configured.length > 0 && <div className="settings-card">
-        <BuiltinProviderRows providers={configured} onSetUp={p => { editingFocusTarget.current.capture(document.activeElement as HTMLElement | null); setRouteMethod(undefined); openBuiltinSetup(p); }} settings={settings.data} />
-      </div>}
+      {configured.length > 0 && (
+        <div className="settings-card">
+          <BuiltinProviderRows
+            providers={configured}
+            onSetUp={(p) => {
+              editingFocusTarget.current.capture(document.activeElement as HTMLElement | null);
+              setRouteMethod(undefined);
+              openBuiltinSetup(p);
+            }}
+            settings={settings.data}
+          />
+        </div>
+      )}
       {customProviders.length > 0 ? (
         <div className="grid min-w-0 grid-cols-1 gap-2">
           <div className="settings-card rounded-card">
@@ -385,7 +452,8 @@ export function ProvidersSettings() {
                       {statusBadge(p)}
                     </div>
                     <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-                      {availableChatModel(p, settings.data) ?? (p.needsKey && !p.hasKey ? "Add an API key" : "No chat model available")}
+                      {availableChatModel(p, settings.data) ??
+                        (p.needsKey && !p.hasKey ? "Add an API key" : "No chat model available")}
                     </Text>
                   </div>
                   <Button
@@ -416,177 +484,230 @@ export function ProvidersSettings() {
           </div>
         </div>
       ) : null}
-      <div className={hasConnections ? "grid justify-items-start gap-3" : "settings-card grid justify-items-start gap-3 p-4"}>
-        {!hasConnections && providers.isSuccess && codex.isSuccess && <div>
-          <Text as="h2" variant="strong">Give Aiden a way to reply</Text>
-          <Text as="p" variant="small" color="secondary">Connect an account, use an API key or run a model on your {localComputerNoun(capabilities.platform)}.</Text>
-        </div>}
-        <Button ref={addProviderTriggerRef} variant={hasConnections ? "filled" : "accent"} aria-expanded={chooserOpen}
-          onClick={() => setChooserOpen(!chooserOpen)}><Plus />{hasConnections ? "Connect another AI" : "Connect AI"}</Button>
-        {chooserOpen && <div className="w-full"><GuidedProviderChooser providers={builtins} showEndpoints={false} onChoose={chooseConnection} /></div>}
+      <div
+        className={
+          hasConnections
+            ? "grid justify-items-start gap-3"
+            : "settings-card grid justify-items-start gap-3 p-4"
+        }
+      >
+        {!hasConnections && providers.isSuccess && codex.isSuccess && (
+          <div>
+            <Text as="h2" variant="strong">
+              Give Aiden a way to reply
+            </Text>
+            <Text as="p" variant="small" color="secondary">
+              Connect an account, use an API key or run a model on your{" "}
+              {localComputerNoun(capabilities.platform)}.
+            </Text>
+          </div>
+        )}
+        <Button
+          ref={addProviderTriggerRef}
+          variant={hasConnections ? "filled" : "accent"}
+          aria-expanded={chooserOpen}
+          onClick={() => setChooserOpen(!chooserOpen)}
+        >
+          <Plus />
+          {hasConnections ? "Connect another AI" : "Connect AI"}
+        </Button>
+        {chooserOpen && (
+          <div className="w-full">
+            <GuidedProviderChooser
+              providers={builtins}
+              showEndpoints={false}
+              onChoose={chooseConnection}
+            />
+          </div>
+        )}
       </div>
       <details className="settings-card">
         <summary className="cursor-pointer px-4 py-3 text-small-strong">Advanced</summary>
         <div className="grid min-w-0 gap-5 px-4 pb-4">
-          <div className="flex flex-wrap gap-2"><Button variant="filled" size="small" onClick={() => addCustom("custom")}>Add custom endpoint</Button>
-            <Button variant="filled" size="small" onClick={() => addCustom("tailnet")}>Connect Tailscale server</Button></div>
-      {capabilities.appleFoundationModels && foundationModels.data ? (
-        <div
-          className="settings-card rounded-card"
-          aria-busy={refreshingFoundationModels}
-        >
-          <div className="flex items-start gap-3 px-4 py-3">
-            <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
-              <ProviderIcon
-                providerId="apple-foundation-models"
-                providerLabel="Apple Foundation Models"
-                className="size-4"
-              />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <Text variant="strong">Apple Foundation Models</Text>
-                <InfoHint topic="Apple Foundation Models in Aiden">
-                  This on-device connection is used only for background chat titles. It never
-                  appears in the chat model picker.
-                </InfoHint>
-                <Badge color="blue">On-device</Badge>
-                {foundationModelsBadge(foundationModels.data)}
-              </div>
-              <div aria-live="polite">
-                <Text variant="small" color="tertiary" className="mt-1 block">
-                  {foundationModels.data.detail}
-                </Text>
-              </div>
-            </div>
-            <Button
-              variant="transparent"
-              size="small"
-              iconOnly
-              aria-label="Refresh Apple Foundation Models status"
-              disabled={refreshingFoundationModels}
-              onClick={() => void refreshFoundationModels()}
-            >
-              <RefreshCw className={`size-4 ${refreshingFoundationModels ? "animate-spin" : ""}`} />
+          <div className="flex flex-wrap gap-2">
+            <Button variant="filled" size="small" onClick={() => addCustom("custom")}>
+              Add custom endpoint
+            </Button>
+            <Button variant="filled" size="small" onClick={() => addCustom("tailnet")}>
+              Connect Tailscale server
             </Button>
           </div>
-          <div className="border-t border-separator">
+          {capabilities.appleFoundationModels && foundationModels.data ? (
+            <div className="settings-card rounded-card" aria-busy={refreshingFoundationModels}>
+              <div className="flex items-start gap-3 px-4 py-3">
+                <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
+                  <ProviderIcon
+                    providerId="apple-foundation-models"
+                    providerLabel="Apple Foundation Models"
+                    className="size-4"
+                  />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Text variant="strong">Apple Foundation Models</Text>
+                    <InfoHint topic="Apple Foundation Models in Aiden">
+                      This on-device connection is used only for background chat titles. It never
+                      appears in the chat model picker.
+                    </InfoHint>
+                    <Badge color="blue">On-device</Badge>
+                    {foundationModelsBadge(foundationModels.data)}
+                  </div>
+                  <div aria-live="polite">
+                    <Text variant="small" color="tertiary" className="mt-1 block">
+                      {foundationModels.data.detail}
+                    </Text>
+                  </div>
+                </div>
+                <Button
+                  variant="transparent"
+                  size="small"
+                  iconOnly
+                  aria-label="Refresh Apple Foundation Models status"
+                  disabled={refreshingFoundationModels}
+                  onClick={() => void refreshFoundationModels()}
+                >
+                  <RefreshCw
+                    className={`size-4 ${refreshingFoundationModels ? "animate-spin" : ""}`}
+                  />
+                </Button>
+              </div>
+              <div className="border-t border-separator">
+                <Field
+                  label="Chat title generation"
+                  hint={
+                    <InfoHint topic="chat title generation">
+                      Automatic uses the on-device model when it can, then your chat model.
+                      On-device only never sends your message to a network provider.
+                    </InfoHint>
+                  }
+                >
+                  <Select
+                    value={titleProviderId}
+                    disabled={savingTitleProvider}
+                    onValueChange={(value) => void setTitleProvider(value as ChatTitleProviderId)}
+                  >
+                    <SelectTrigger
+                      size="small"
+                      className="w-full shrink-0 sm:w-48"
+                      aria-label="Chat title provider"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="automatic">Automatic</SelectItem>
+                      <SelectItem value="apple-foundation-models">On-device only</SelectItem>
+                      <SelectItem value="chat-model">Selected chat model</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              </div>
+            </div>
+          ) : !capabilities.appleFoundationModels ? (
+            <div className="rounded-card bg-well px-3.5 py-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <Text variant="small-strong" as="p">
+                    Chat title provider
+                  </Text>
+                  <Text variant="small" color="tertiary" as="p" className="mt-0.5">
+                    {titleProviderId === "apple-foundation-models"
+                      ? `On-device titles are unavailable on this ${localComputerNoun(capabilities.platform)}. Choose Automatic or Selected chat model to allow your selected model to generate titles.`
+                      : "Automatic uses your selected chat model. Choose Selected chat model to make that preference explicit."}
+                  </Text>
+                </div>
+                <Select
+                  value={titleProviderId}
+                  disabled={savingTitleProvider}
+                  onValueChange={(value) => void setTitleProvider(value as ChatTitleProviderId)}
+                >
+                  <SelectTrigger
+                    size="small"
+                    className="w-full shrink-0 sm:w-48"
+                    aria-label="Chat title provider"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {titleProviderId === "apple-foundation-models" ? (
+                      <SelectItem value="apple-foundation-models" disabled>
+                        On-device only (unavailable)
+                      </SelectItem>
+                    ) : null}
+                    <SelectItem value="automatic">Automatic</SelectItem>
+                    <SelectItem value="chat-model">Selected chat model</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="settings-card rounded-card">
             <Field
-              label="Chat title generation"
+              label="Model catalog"
               hint={
-                <InfoHint topic="chat title generation">
-                  Automatic uses the on-device model when it can, then your chat model. On-device
-                  only never sends your message to a network provider.
+                <InfoHint topic="model catalogs">
+                  Downloaded models.dev data changes display details only, never which models can
+                  run or their runtime limits.
                 </InfoHint>
               }
+              description={
+                <>
+                  <span aria-live="polite" className="block">
+                    {catalogOutcome ??
+                      `Model details: ${
+                        modelCatalogStatus.data?.source === "device-cache"
+                          ? "device cache"
+                          : "bundled snapshot"
+                      }${
+                        modelCatalogStatus.data?.fetchedAt
+                          ? ` · updated ${new Date(modelCatalogStatus.data.fetchedAt).toLocaleString()}`
+                          : ""
+                      }`}
+                  </span>
+                  <span className="mt-0.5 block">
+                    Updating contacts built-in catalog services and models.dev. It sends no prompts,
+                    chats or device identifier. A provider&apos;s own catalog service may use your
+                    sign-in for that provider; models.dev gets no credentials.
+                  </span>
+                </>
+              }
             >
-              <Select
-                value={titleProviderId}
-                disabled={savingTitleProvider}
-                onValueChange={(value) => void setTitleProvider(value as ChatTitleProviderId)}
+              <Button
+                variant="filled"
+                size="small"
+                disabled={refreshingProviders}
+                aria-busy={refreshingProviders}
+                onClick={() => void refreshProviders()}
               >
-                <SelectTrigger
-                  size="small"
-                  className="w-full shrink-0 sm:w-48"
-                  aria-label="Chat title provider"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="automatic">Automatic</SelectItem>
-                  <SelectItem value="apple-foundation-models">On-device only</SelectItem>
-                  <SelectItem value="chat-model">Selected chat model</SelectItem>
-                </SelectContent>
-              </Select>
+                <RefreshCw
+                  className={`size-4 ${refreshingProviders ? "animate-spin motion-reduce:animate-none" : ""}`}
+                />
+                {refreshingProviders ? "Updating…" : "Update model catalogs"}
+              </Button>
             </Field>
           </div>
         </div>
-      ) : !capabilities.appleFoundationModels ? (
-        <div className="rounded-card bg-well px-3.5 py-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <Text variant="small-strong" as="p">
-                Chat title provider
-              </Text>
-              <Text variant="small" color="tertiary" as="p" className="mt-0.5">
-                {titleProviderId === "apple-foundation-models"
-                  ? `On-device titles are unavailable on this ${localComputerNoun(capabilities.platform)}. Choose Automatic or Selected chat model to allow your selected model to generate titles.`
-                  : "Automatic uses your selected chat model. Choose Selected chat model to make that preference explicit."}
-              </Text>
-            </div>
-            <Select
-              value={titleProviderId}
-              disabled={savingTitleProvider}
-              onValueChange={(value) => void setTitleProvider(value as ChatTitleProviderId)}
-            >
-              <SelectTrigger
-                size="small"
-                className="w-full shrink-0 sm:w-48"
-                aria-label="Chat title provider"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {titleProviderId === "apple-foundation-models" ? (
-                  <SelectItem value="apple-foundation-models" disabled>On-device only (unavailable)</SelectItem>
-                ) : null}
-                <SelectItem value="automatic">Automatic</SelectItem>
-                <SelectItem value="chat-model">Selected chat model</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="settings-card rounded-card">
-        <Field
-          label="Model catalog"
-          hint={
-            <InfoHint topic="model catalogs">
-              Downloaded models.dev data changes display details only, never which models can run or
-              their runtime limits.
-            </InfoHint>
-          }
-          description={
-            <>
-              <span aria-live="polite" className="block">
-                {catalogOutcome ??
-                  `Model details: ${
-                    modelCatalogStatus.data?.source === "device-cache" ? "device cache" : "bundled snapshot"
-                  }${
-                    modelCatalogStatus.data?.fetchedAt
-                      ? ` · updated ${new Date(modelCatalogStatus.data.fetchedAt).toLocaleString()}`
-                      : ""
-                  }`}
-              </span>
-              <span className="mt-0.5 block">
-                Updating contacts built-in catalog services and models.dev. It sends no prompts, chats
-                or device identifier. A provider&apos;s own catalog service may use your sign-in for
-                that provider; models.dev gets no credentials.
-              </span>
-            </>
-          }
-        >
-          <Button
-            variant="filled"
-            size="small"
-            disabled={refreshingProviders}
-            aria-busy={refreshingProviders}
-            onClick={() => void refreshProviders()}
-          >
-            <RefreshCw
-              className={`size-4 ${refreshingProviders ? "animate-spin motion-reduce:animate-none" : ""}`}
-            />
-            {refreshingProviders ? "Updating…" : "Update model catalogs"}
-          </Button>
-        </Field>
-      </div>
-
-        </div>
       </details>
-      {hostedKey && <ProviderKeyDialog returnFocus={returnFocus} id={hostedKey} onClose={() => setHostedKey(null)} onSaved={savedConnection} />}
-      {runtime && <LocalProviderDialog returnFocus={returnFocus} runtime={runtime} onSaved={savedConnection} onClose={() => setRuntime(null)}
-        onEdit={() => { addCustom(runtime); setRuntime(null); }} />}
+      {hostedKey && (
+        <ProviderKeyDialog
+          returnFocus={returnFocus}
+          id={hostedKey}
+          onClose={() => setHostedKey(null)}
+          onSaved={savedConnection}
+        />
+      )}
+      {runtime && (
+        <LocalProviderDialog
+          returnFocus={returnFocus}
+          runtime={runtime}
+          onSaved={savedConnection}
+          onClose={() => setRuntime(null)}
+          onEdit={() => {
+            addCustom(runtime);
+            setRuntime(null);
+          }}
+        />
+      )}
       {editing ? (
         <ProviderEditor
           provider={editing}

@@ -13,7 +13,11 @@ import {
   parseWwwAuthenticate,
   type OAuthClientProvider,
 } from "@earendil-works/pi-mcp/oauth";
-import { createMcpFetchPolicy, MAX_MCP_RESPONSE_BYTES, type McpFetchPolicyOptions } from "./mcp-fetch-policy.js";
+import {
+  createMcpFetchPolicy,
+  MAX_MCP_RESPONSE_BYTES,
+  type McpFetchPolicyOptions,
+} from "./mcp-fetch-policy.js";
 
 /**
  * An OAuth provider that may also hear why a token refresh failed for a
@@ -44,14 +48,17 @@ function needsSignIn(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "mcp-oauth-sign-in-required";
 }
 
-type RefreshOptions = Partial<Pick<Parameters<typeof authorizeMcp>[1], "serverUrl" | "fetch" | "resourceMetadataUrl" | "scope">>;
+type RefreshOptions = Partial<
+  Pick<Parameters<typeof authorizeMcp>[1], "serverUrl" | "fetch" | "resourceMetadataUrl" | "scope">
+>;
 
 function adaptRemoteOAuthProvider(
   provider: McpRemoteOAuthProvider,
   service: { serverUrl: URL; fetch: typeof globalThis.fetch },
 ): AuthProvider {
   const adapted = adaptOAuthProvider(provider);
-  const mapError = (error: unknown) => provider.mapAuthorizationError ? provider.mapAuthorizationError(error) : error;
+  const mapError = (error: unknown) =>
+    provider.mapAuthorizationError ? provider.mapAuthorizationError(error) : error;
   if (!provider.withRefreshLock) {
     if (!provider.mapAuthorizationError || !adapted.onUnauthorized) return adapted;
     const onUnauthorized = adapted.onUnauthorized.bind(adapted);
@@ -94,7 +101,13 @@ function adaptRemoteOAuthProvider(
       await refreshing?.catch(() => undefined);
       const current = (await provider.tokens())?.access_token;
       const dueAt = provider.tokenRefreshDueAt?.();
-      if (current === undefined || dueAt === undefined || dueAt > Date.now() || current === earlyRefreshFailedFor) return current;
+      if (
+        current === undefined ||
+        dueAt === undefined ||
+        dueAt > Date.now() ||
+        current === earlyRefreshFailedFor
+      )
+        return current;
       try {
         await refresh(current);
       } catch (error) {
@@ -134,8 +147,10 @@ export type McpRemoteFetchOptions = McpFetchPolicyOptions & {
 function isRefreshRequest(init: RequestInit | undefined): boolean {
   if ((init?.method ?? "GET").toUpperCase() !== "POST") return false;
   const body = init?.body;
-  return (typeof body === "string" || body instanceof URLSearchParams) &&
-    new URLSearchParams(body).get("grant_type") === "refresh_token";
+  return (
+    (typeof body === "string" || body instanceof URLSearchParams) &&
+    new URLSearchParams(body).get("grant_type") === "refresh_token"
+  );
 }
 
 /** Statuses after which a token endpoint may well answer on the next try. */
@@ -157,7 +172,10 @@ export function createMcpRemoteFetch(options: McpRemoteFetchOptions): typeof glo
     if (!isRefreshRequest(init)) return fetch(input, init);
     try {
       const response = await fetch(input, init);
-      if (transientStatus(response.status)) provider.observeRefreshFailure?.(new Error(`the token endpoint answered HTTP ${response.status}`));
+      if (transientStatus(response.status))
+        provider.observeRefreshFailure?.(
+          new Error(`the token endpoint answered HTTP ${response.status}`),
+        );
       return response;
     } catch (error) {
       provider.observeRefreshFailure?.(error instanceof Error ? error : new Error(String(error)));
@@ -190,12 +208,16 @@ class AidenStreamableHttpTransport extends StreamableHttpTransport {
   }
 
   override async send(message: JsonRpcMessage, options?: McpTransportSendOptions): Promise<void> {
-    const id = "method" in message && message.method === "tools/call" && "id" in message ? message.id : undefined;
+    const id =
+      "method" in message && message.method === "tools/call" && "id" in message
+        ? message.id
+        : undefined;
     const guard = mcpToolSendGuard.getStore();
-    if (id !== undefined && guard) this.toolSends.set(id, () => {
-      options?.signal?.throwIfAborted();
-      guard();
-    });
+    if (id !== undefined && guard)
+      this.toolSends.set(id, () => {
+        options?.signal?.throwIfAborted();
+        guard();
+      });
     try {
       await super.send(message, options);
     } catch (error) {
@@ -235,7 +257,10 @@ class AidenStreamableHttpTransport extends StreamableHttpTransport {
  * lock uses the tokens the holder saved instead of refreshing again.
  */
 export function createMcpRemoteTransport(
-  options: McpRemoteFetchOptions & { onTerminalFailure?: () => void; wrapFetch?: (send: typeof globalThis.fetch) => typeof globalThis.fetch },
+  options: McpRemoteFetchOptions & {
+    onTerminalFailure?: () => void;
+    wrapFetch?: (send: typeof globalThis.fetch) => typeof globalThis.fetch;
+  },
 ): StreamableHttpTransport {
   const lifetime = new AbortController();
   const toolSends = new Map<string | number, () => void>();
@@ -244,8 +269,13 @@ export function createMcpRemoteTransport(
   const send: typeof globalThis.fetch = (input, init) => {
     // Only the matching service RPC carries tool authority. The same client
     // can concurrently send OAuth, SSE, cancellation and other tool requests.
-    if (toolSends.size && init?.method === "POST" && typeof init.body === "string" &&
-        String(input) === serviceUrl && new Headers(init.headers).get("content-type") === "application/json") {
+    if (
+      toolSends.size &&
+      init?.method === "POST" &&
+      typeof init.body === "string" &&
+      String(input) === serviceUrl &&
+      new Headers(init.headers).get("content-type") === "application/json"
+    ) {
       const rpc = JSON.parse(init.body);
       if (rpc?.method === "tools/call") toolSends.get(rpc.id)?.();
     }
@@ -256,12 +286,22 @@ export function createMcpRemoteTransport(
     fetch: options.wrapFetch ? options.wrapFetch(send) : send,
     signal: options.signal ? AbortSignal.any([lifetime.signal, options.signal]) : lifetime.signal,
   });
-  return new AidenStreamableHttpTransport({
-    url: options.serviceUrl,
-    fetch,
-    maxMessageBytes: MAX_MCP_RESPONSE_BYTES,
-    ...(options.authProvider
-      ? { authProvider: adaptRemoteOAuthProvider(options.authProvider, { serverUrl: new URL(options.serviceUrl), fetch }) }
-      : {}),
-  }, lifetime, toolSends, options.onTerminalFailure);
+  return new AidenStreamableHttpTransport(
+    {
+      url: options.serviceUrl,
+      fetch,
+      maxMessageBytes: MAX_MCP_RESPONSE_BYTES,
+      ...(options.authProvider
+        ? {
+            authProvider: adaptRemoteOAuthProvider(options.authProvider, {
+              serverUrl: new URL(options.serviceUrl),
+              fetch,
+            }),
+          }
+        : {}),
+    },
+    lifetime,
+    toolSends,
+    options.onTerminalFailure,
+  );
 }

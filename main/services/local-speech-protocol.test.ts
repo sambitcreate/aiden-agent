@@ -33,18 +33,28 @@ test("a v2 transcribe request carrying PCM16 validates", () => {
 
 test("PCM longer than the sample cap is rejected", () => {
   assert.equal(
-    isLocalSpeechParentMessage(transcribe({ audio: { kind: "pcm16", pcm: new Int16Array(MAX_PCM_SAMPLES + 1) } })),
+    isLocalSpeechParentMessage(
+      transcribe({ audio: { kind: "pcm16", pcm: new Int16Array(MAX_PCM_SAMPLES + 1) } }),
+    ),
     false,
   );
   assert.equal(
-    isLocalSpeechParentMessage(transcribe({ audio: { kind: "pcm16", pcm: new Int16Array(MAX_PCM_SAMPLES) } })),
+    isLocalSpeechParentMessage(
+      transcribe({ audio: { kind: "pcm16", pcm: new Int16Array(MAX_PCM_SAMPLES) } }),
+    ),
     true,
   );
 });
 
 test("PCM that is not a typed array is rejected", () => {
-  assert.equal(isLocalSpeechParentMessage(transcribe({ audio: { kind: "pcm16", pcm: [1, 2, 3] } })), false);
-  assert.equal(isLocalSpeechParentMessage(transcribe({ audio: { kind: "pcm16", pcm: "AAA=" } })), false);
+  assert.equal(
+    isLocalSpeechParentMessage(transcribe({ audio: { kind: "pcm16", pcm: [1, 2, 3] } })),
+    false,
+  );
+  assert.equal(
+    isLocalSpeechParentMessage(transcribe({ audio: { kind: "pcm16", pcm: "AAA=" } })),
+    false,
+  );
 });
 
 test("PCM delivered as another typed-array view or Buffer is normalized to Int16Array", () => {
@@ -61,9 +71,22 @@ test("PCM delivered as another typed-array view or Buffer is normalized to Int16
 });
 
 test("ogg-opus audio needs non-empty bytes", () => {
-  assert.equal(isLocalSpeechParentMessage(transcribe({ audio: { kind: "ogg-opus", bytes: new Uint8Array(8) } })), true);
-  assert.equal(isLocalSpeechParentMessage(transcribe({ audio: { kind: "ogg-opus", bytes: new Uint8Array(0) } })), false);
-  assert.equal(isLocalSpeechParentMessage(transcribe({ audio: { kind: "ogg-opus", bytes: "T2dnUw==" } })), false);
+  assert.equal(
+    isLocalSpeechParentMessage(
+      transcribe({ audio: { kind: "ogg-opus", bytes: new Uint8Array(8) } }),
+    ),
+    true,
+  );
+  assert.equal(
+    isLocalSpeechParentMessage(
+      transcribe({ audio: { kind: "ogg-opus", bytes: new Uint8Array(0) } }),
+    ),
+    false,
+  );
+  assert.equal(
+    isLocalSpeechParentMessage(transcribe({ audio: { kind: "ogg-opus", bytes: "T2dnUw==" } })),
+    false,
+  );
 });
 
 test("language must be a short lowercase code or null", () => {
@@ -80,14 +103,24 @@ test("translate and trimSilence must be booleans", () => {
 
 test("every catalog model, the Metal GGUF one included, is a valid request spec", () => {
   for (const model of SPEECH_MODELS) {
-    assert.equal(isLocalSpeechParentMessage(transcribe({ modelId: model.id, spec: model })), true, model.id);
+    assert.equal(
+      isLocalSpeechParentMessage(transcribe({ modelId: model.id, spec: model })),
+      true,
+      model.id,
+    );
   }
 });
 
 test("the spec must describe the requested model", () => {
   assert.equal(isLocalSpeechParentMessage(transcribe({ modelId: "whisper-turbo" })), false);
-  assert.equal(isLocalSpeechParentMessage(transcribe({ spec: { ...spec, family: "kaldi" } })), false);
-  assert.equal(isLocalSpeechParentMessage(transcribe({ spec: { ...spec, files: { encoder: 3 } } })), false);
+  assert.equal(
+    isLocalSpeechParentMessage(transcribe({ spec: { ...spec, family: "kaldi" } })),
+    false,
+  );
+  assert.equal(
+    isLocalSpeechParentMessage(transcribe({ spec: { ...spec, files: { encoder: 3 } } })),
+    false,
+  );
   const load = {
     version: 2,
     kind: "load",
@@ -103,34 +136,82 @@ test("the spec must describe the requested model", () => {
 test("version 1 frames are rejected", () => {
   assert.equal(isLocalSpeechParentMessage({ version: 1, kind: "status", requestId: "s1" }), false);
   assert.equal(isLocalSpeechParentMessage(transcribe({ version: 1 })), false);
-  assert.equal(isLocalSpeechWorkerMessage({ version: 1, kind: "result", requestId: "r1", text: "hi" }), false);
+  assert.equal(
+    isLocalSpeechWorkerMessage({ version: 1, kind: "result", requestId: "r1", text: "hi" }),
+    false,
+  );
   assert.equal(isLocalSpeechParentMessage({ version: 2, kind: "status", requestId: "s1" }), true);
   assert.equal(isLocalSpeechParentMessage({ version: 2, kind: "release", requestId: "x1" }), true);
 });
 
 test("a status frame may name the family whose engine to check, and only a known one", () => {
-  assert.equal(isLocalSpeechParentMessage({ version: 2, kind: "status", requestId: "s1", family: "parakeet-gguf" }), true);
-  assert.equal(isLocalSpeechParentMessage({ version: 2, kind: "status", requestId: "s1", family: "llama" }), false);
+  assert.equal(
+    isLocalSpeechParentMessage({
+      version: 2,
+      kind: "status",
+      requestId: "s1",
+      family: "parakeet-gguf",
+    }),
+    true,
+  );
+  assert.equal(
+    isLocalSpeechParentMessage({ version: 2, kind: "status", requestId: "s1", family: "llama" }),
+    false,
+  );
 });
 
 test("worker results and failures are validated", () => {
   assert.equal(
-    isLocalSpeechWorkerMessage({ version: 2, kind: "result", requestId: "r1", text: "hello", language: "en", decodeMs: 12 }),
-    true,
-  );
-  assert.equal(isLocalSpeechWorkerMessage({ version: 2, kind: "result", requestId: "r1", text: 12 }), false);
-  assert.equal(isLocalSpeechWorkerMessage({ version: 2, kind: "result", requestId: "r1", decodeMs: "fast" }), false);
-  assert.equal(
-    isLocalSpeechWorkerMessage({ version: 2, kind: "failure", requestId: "r1", message: "nope", code: "model-missing" }),
-    true,
-  );
-  assert.equal(isLocalSpeechWorkerMessage({ version: 2, kind: "failure", requestId: "r1", message: "nope" }), true);
-  assert.equal(
-    isLocalSpeechWorkerMessage({ version: 2, kind: "failure", requestId: "r1", message: "bad frame", code: "invalid-request" }),
+    isLocalSpeechWorkerMessage({
+      version: 2,
+      kind: "result",
+      requestId: "r1",
+      text: "hello",
+      language: "en",
+      decodeMs: 12,
+    }),
     true,
   );
   assert.equal(
-    isLocalSpeechWorkerMessage({ version: 2, kind: "failure", requestId: "r1", message: "nope", code: "exploded" }),
+    isLocalSpeechWorkerMessage({ version: 2, kind: "result", requestId: "r1", text: 12 }),
+    false,
+  );
+  assert.equal(
+    isLocalSpeechWorkerMessage({ version: 2, kind: "result", requestId: "r1", decodeMs: "fast" }),
+    false,
+  );
+  assert.equal(
+    isLocalSpeechWorkerMessage({
+      version: 2,
+      kind: "failure",
+      requestId: "r1",
+      message: "nope",
+      code: "model-missing",
+    }),
+    true,
+  );
+  assert.equal(
+    isLocalSpeechWorkerMessage({ version: 2, kind: "failure", requestId: "r1", message: "nope" }),
+    true,
+  );
+  assert.equal(
+    isLocalSpeechWorkerMessage({
+      version: 2,
+      kind: "failure",
+      requestId: "r1",
+      message: "bad frame",
+      code: "invalid-request",
+    }),
+    true,
+  );
+  assert.equal(
+    isLocalSpeechWorkerMessage({
+      version: 2,
+      kind: "failure",
+      requestId: "r1",
+      message: "nope",
+      code: "exploded",
+    }),
     false,
   );
 });

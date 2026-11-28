@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { audienceReportsAnalytics, chatAudience, chatAudienceLead, isChatAudience } from "./audience.js";
+import {
+  audienceReportsAnalytics,
+  chatAudience,
+  chatAudienceLead,
+  isChatAudience,
+} from "./audience.js";
 
 test("a lead chat's audience names its lead and nothing else does", () => {
   const audience = chatAudience("lead-1");
@@ -18,7 +23,10 @@ test("a chat audience reports no analytics even with no device record; apps neve
     { id: "app-1", type: "agent" },
   ];
   assert.equal(audienceReportsAnalytics(chatAudience("lead-1"), devices), false);
-  assert.equal(audienceReportsAnalytics(chatAudience("lead-1"), [{ id: "chat:lead-1", type: "iphone" }]), false);
+  assert.equal(
+    audienceReportsAnalytics(chatAudience("lead-1"), [{ id: "chat:lead-1", type: "iphone" }]),
+    false,
+  );
   assert.equal(audienceReportsAnalytics("app-1", devices), false);
   assert.equal(audienceReportsAnalytics("phone-1", devices), true);
 });

@@ -162,8 +162,8 @@ test("native runner uses a secret-free fixed environment and private 0700 direct
   t.after(() => delete process.env.AIDEN_PHASE5D_SECRET);
   const modeCommand =
     process.platform === "linux"
-      ? "stat -c '%a' \"$HOME\" \"$TMPDIR\" \"$XDG_CONFIG_HOME\""
-      : "stat -f '%Lp' \"$HOME\" \"$TMPDIR\" \"$XDG_CONFIG_HOME\"";
+      ? 'stat -c \'%a\' "$HOME" "$TMPDIR" "$XDG_CONFIG_HOME"'
+      : 'stat -f \'%Lp\' "$HOME" "$TMPDIR" "$XDG_CONFIG_HOME"';
   const result = await run(
     t,
     [
@@ -244,63 +244,66 @@ test("workspace identity drift is rejected before shell execution", async (t) =>
 });
 
 for (const delay of [false, true]) {
-test(`a deliberate setsid double-fork proves the documented containment limit and self-cleans${delay ? " after delayed detachment" : ""}`, async (t) => {
-  if (process.platform !== "darwin" && process.platform !== "linux") return;
-  const rootPath = await workspace(t);
-  const marker = path.join(rootPath, "detached.pid");
-  const fixture = path.join(
-    process.cwd(),
-    "build",
-    "native",
-    "aiden-subagent-shell-setsid-fixture",
-  );
-  let pid = 0;
-  let cleaned = false;
-  const cleanup = async () => {
-    if (cleaned) return;
-    const deadline = Date.now() + 5_000;
-    while (pid <= 1 && Date.now() < deadline) {
-      try {
-        const candidate = Number.parseInt(await readFile(marker, "utf8"), 10);
-        if (candidate > 1) pid = candidate;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      if (pid <= 1) await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    if (pid <= 1) return;
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-    }
-    cleaned = true;
-  };
-  t.after(cleanup);
-  try {
-    const result = await run(t, `${fixture} ${marker}${delay ? " --delay-detach" : ""}`, FIXTURE_DEADLINE_MS);
-    assert.equal(result.exitCode, 0);
-    assert.equal(result.outcome, "exited");
-    const markerDeadline = Date.now() + 20_000;
-    while (Date.now() < markerDeadline) {
-      try {
-        const candidate = Number.parseInt(await readFile(marker, "utf8"), 10);
-        if (candidate > 1) {
-          pid = candidate;
-          break;
+  test(`a deliberate setsid double-fork proves the documented containment limit and self-cleans${delay ? " after delayed detachment" : ""}`, async (t) => {
+    if (process.platform !== "darwin" && process.platform !== "linux") return;
+    const rootPath = await workspace(t);
+    const marker = path.join(rootPath, "detached.pid");
+    const fixture = path.join(
+      process.cwd(),
+      "build",
+      "native",
+      "aiden-subagent-shell-setsid-fixture",
+    );
+    let pid = 0;
+    let cleaned = false;
+    const cleanup = async () => {
+      if (cleaned) return;
+      const deadline = Date.now() + 5_000;
+      while (pid <= 1 && Date.now() < deadline) {
+        try {
+          const candidate = Number.parseInt(await readFile(marker, "utf8"), 10);
+          if (candidate > 1) pid = candidate;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
-      } catch {
-        // The intermediate process publishes the marker asynchronously.
+        if (pid <= 1) await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (pid <= 1) return;
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+      cleaned = true;
+    };
+    t.after(cleanup);
+    try {
+      const result = await run(
+        t,
+        `${fixture} ${marker}${delay ? " --delay-detach" : ""}`,
+        FIXTURE_DEADLINE_MS,
+      );
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.outcome, "exited");
+      const markerDeadline = Date.now() + 20_000;
+      while (Date.now() < markerDeadline) {
+        try {
+          const candidate = Number.parseInt(await readFile(marker, "utf8"), 10);
+          if (candidate > 1) {
+            pid = candidate;
+            break;
+          }
+        } catch {
+          // The intermediate process publishes the marker asynchronously.
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.ok(pid > 1, "detached fixture must publish its PID");
+      assert.doesNotThrow(() => process.kill(pid, 0));
+    } finally {
+      await cleanup();
     }
-    assert.ok(pid > 1, "detached fixture must publish its PID");
-    assert.doesNotThrow(() => process.kill(pid, 0));
-  } finally {
-    await cleanup();
-  }
-});
-
+  });
 }
 
 for (const failure of ["EPIPE", "EIO", "synchronous"] as const) {
@@ -312,7 +315,9 @@ for (const failure of ["EPIPE", "EIO", "synchronous"] as const) {
       },
     });
     if (failure === "synchronous") {
-      stdin.write = (() => { throw new Error("synchronous write failure"); }) as typeof stdin.write;
+      stdin.write = (() => {
+        throw new Error("synchronous write failure");
+      }) as typeof stdin.write;
     }
     const stdout = new PassThrough();
     const stderr = new PassThrough();
@@ -320,12 +325,18 @@ for (const failure of ["EPIPE", "EIO", "synchronous"] as const) {
     let settled = false;
     const pending = runSubagentShellProductionInert({
       workspaceRoot: { path: "/workspace", device: "1", inode: "2" },
-      command: "printf should-not-run", effectDigest: digest, nonce,
-      timeoutMs: 1_000, signal: new AbortController().signal,
+      command: "printf should-not-run",
+      effectDigest: digest,
+      nonce,
+      timeoutMs: 1_000,
+      signal: new AbortController().signal,
       spawnProcess: (() => child) as never,
     });
-    const checked = assert.rejects(pending, /failed before returning a verified outcome/u)
-      .finally(() => { settled = true; });
+    const checked = assert
+      .rejects(pending, /failed before returning a verified outcome/u)
+      .finally(() => {
+        settled = true;
+      });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(stdin.destroyed, true);
     assert.equal(settled, false, "write errors must not bypass helper close/cleanup");
@@ -348,19 +359,27 @@ test("a failed control write keeps the watchdog until helper close", async () =>
   const stderr = new PassThrough();
   const kills: string[] = [];
   Object.assign(child, {
-    stdin, stdout, stderr,
+    stdin,
+    stdout,
+    stderr,
     kill: (signal: string) => {
       kills.push(signal);
       child.emit("close", null, "SIGKILL");
       return true;
     },
   });
-  await assert.rejects(runSubagentShellProductionInert({
-    workspaceRoot: { path: "/workspace", device: "1", inode: "2" },
-    command: "printf should-not-run", effectDigest: digest, nonce,
-    timeoutMs: 1, signal: new AbortController().signal,
-    spawnProcess: (() => child) as never,
-  }), /failed before returning a verified outcome/u);
+  await assert.rejects(
+    runSubagentShellProductionInert({
+      workspaceRoot: { path: "/workspace", device: "1", inode: "2" },
+      command: "printf should-not-run",
+      effectDigest: digest,
+      nonce,
+      timeoutMs: 1,
+      signal: new AbortController().signal,
+      spawnProcess: (() => child) as never,
+    }),
+    /failed before returning a verified outcome/u,
+  );
   assert.deepEqual(kills, ["SIGKILL"]);
   assert.equal(stdin.destroyed, true);
   assert.equal(stdout.destroyed, true);
@@ -381,12 +400,22 @@ for (const settlement of ["success", "callback-error", "stream-error", "watchdog
     Object.assign(child, { stdin, stdout, stderr, kill: () => true });
     const pending = runSubagentShellProductionInert({
       workspaceRoot: { path: "/workspace", device: "1", inode: "2" },
-      command: "printf done", effectDigest: digest, nonce,
-      timeoutMs: 1, signal: new AbortController().signal,
+      command: "printf done",
+      effectDigest: digest,
+      nonce,
+      timeoutMs: 1,
+      signal: new AbortController().signal,
       spawnProcess: (() => child) as never,
     });
     let settled = false;
-    void pending.then(() => { settled = true; }, () => { settled = true; });
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
     const response = Buffer.alloc(164);
     response.write("AIDSR001", 0, "ascii");
     response.writeUInt32BE(1, 8);
@@ -416,7 +445,12 @@ test("a stalled setsid handshake fails closed on the fixture's own bounded wait"
   if (process.platform !== "darwin") return;
   const rootPath = await workspace(t);
   const marker = path.join(rootPath, "detached.pid");
-  const fixture = path.join(process.cwd(), "build", "native", "aiden-subagent-shell-setsid-fixture");
+  const fixture = path.join(
+    process.cwd(),
+    "build",
+    "native",
+    "aiden-subagent-shell-setsid-fixture",
+  );
   const result = await run(t, `${fixture} ${marker} --stall-detach`, FIXTURE_DEADLINE_MS);
   assert.equal(result.outcome, "exited");
   assert.equal(result.exitCode, 75);
@@ -428,16 +462,27 @@ test("a timed-out publication cannot leave a detached child without a readiness 
   const rootPath = await workspace(t);
   const marker = path.join(rootPath, "detached.pid");
   const witness = `${marker}.spawned`;
-  const fixture = path.join(process.cwd(), "build", "native", "aiden-subagent-shell-setsid-fixture");
+  const fixture = path.join(
+    process.cwd(),
+    "build",
+    "native",
+    "aiden-subagent-shell-setsid-fixture",
+  );
   let pid = 0;
   let cleaned = false;
   t.after(async () => {
     if (cleaned) return;
     if (pid <= 1) {
-      try { pid = Number.parseInt(await readFile(witness, "utf8"), 10); } catch { return; }
+      try {
+        pid = Number.parseInt(await readFile(witness, "utf8"), 10);
+      } catch {
+        return;
+      }
     }
     if (pid > 1) {
-      try { process.kill(pid, "SIGKILL"); } catch (error) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
       }
     }
@@ -450,7 +495,9 @@ test("a timed-out publication cannot leave a detached child without a readiness 
   await assert.rejects(stat(marker), { code: "ENOENT" });
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    try { process.kill(pid, 0); } catch (error) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ESRCH") {
         cleaned = true;
         return;

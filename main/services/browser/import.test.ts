@@ -141,7 +141,10 @@ test("Linux browser discovery uses XDG config profiles instead of stale default 
       readRunningBrowsers: async () => new Set(["Chrome"]),
     };
     const sources = await browserImportSources(options);
-    assert.deepEqual(sources.map((source) => source.path), [chrome, brave]);
+    assert.deepEqual(
+      sources.map((source) => source.path),
+      [chrome, brave],
+    );
     assert.equal(sources[0].profile, "Work");
     assert.equal(sources[0].running, true);
     assert.equal(sources[1].running, false);
@@ -161,7 +164,10 @@ test("Linux Chrome config override takes precedence without relocating other bro
       env: { XDG_CONFIG_HOME: xdg, CHROME_CONFIG_HOME: chrome },
       readRunningBrowsers: noRunningBrowsers,
     });
-    assert.deepEqual(sources.map((source) => source.path), [expectedChrome, expectedBrave]);
+    assert.deepEqual(
+      sources.map((source) => source.path),
+      [expectedChrome, expectedBrave],
+    );
   });
 });
 
@@ -180,7 +186,10 @@ test("Linux browser config defaults ignore empty or relative environment overrid
         env,
         readRunningBrowsers: noRunningBrowsers,
       });
-      assert.deepEqual(sources.map((source) => source.path), [fallback]);
+      assert.deepEqual(
+        sources.map((source) => source.path),
+        [fallback],
+      );
     }
     const sources = await browserImportSources({
       platform: "linux",
@@ -188,7 +197,10 @@ test("Linux browser config defaults ignore empty or relative environment overrid
       env: { XDG_CONFIG_HOME: xdg, CHROME_CONFIG_HOME: "relative-chrome" },
       readRunningBrowsers: noRunningBrowsers,
     });
-    assert.deepEqual(sources.map((source) => source.path), [configured]);
+    assert.deepEqual(
+      sources.map((source) => source.path),
+      [configured],
+    );
   });
 });
 
@@ -221,6 +233,9 @@ test("macOS browser discovery keeps Application Support regardless of Linux over
       env: { XDG_CONFIG_HOME: xdg, CHROME_CONFIG_HOME: chrome },
       readRunningBrowsers: noRunningBrowsers,
     });
-    assert.deepEqual(sources.map((source) => source.path), [expected]);
+    assert.deepEqual(
+      sources.map((source) => source.path),
+      [expected],
+    );
   });
 });

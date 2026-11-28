@@ -21,8 +21,13 @@ const migration = new DataStore<EmptyChatMigrationState>(
   "empty-workspace-chats-migration-v1.json",
   { version: 1, pending: null, complete: false },
   undefined,
-  { fileMode: 0o600, maxBytes: 4 * 1024 * 1024, isSafe: isEmptyChatMigrationState,
-    rejectCorruptWrite: true, rejectUnsafeWrite: true },
+  {
+    fileMode: 0o600,
+    maxBytes: 4 * 1024 * 1024,
+    isSafe: isEmptyChatMigrationState,
+    rejectCorruptWrite: true,
+    rejectUnsafeWrite: true,
+  },
 );
 
 /** Protect even disabled tasks and retained historical runs, without normalizing away invalid records. */
@@ -37,7 +42,8 @@ async function scheduledChatIds(): Promise<Set<string>> {
       throw error;
     }
     const records: unknown = JSON.parse(decodeUtf8(bytes));
-    if (!Array.isArray(records)) throw new Error("Scheduled chat references could not be read safely.");
+    if (!Array.isArray(records))
+      throw new Error("Scheduled chat references could not be read safely.");
     for (const record of records) {
       if (!record || typeof record !== "object" || Array.isArray(record)) {
         throw new Error("Scheduled chat references could not be read safely.");
@@ -50,42 +56,56 @@ async function scheduledChatIds(): Promise<Set<string>> {
 
 export async function migrateLegacyEmptyWorkspaceChats(): Promise<number> {
   const state = await migration.load();
-  if (await migration.loadedFromCorruptFile() || await migration.loadedFromUnsafeFile()) {
+  if ((await migration.loadedFromCorruptFile()) || (await migration.loadedFromUnsafeFile())) {
     throw new Error("Empty-chat migration receipt could not be read safely.");
   }
   if (state.complete) return 0;
   // Defer unrelated stores until after the immutable candidate boundary is
   // saved. If they are unreadable, preserve affected candidates and finish.
   let context: Promise<{ workspaceIds: Set<string>; reservedChatIds: Set<string> }> | undefined;
-  const eligibilityContext = () => context ??= (async () => {
-    if (!displayImageArtifactStore.availability().available || !generativeUiArtifactStore.availability().available) {
-      throw new Error("Empty-chat cleanup requires readable artifact recovery stores.");
-    }
-    return {
-      workspaceIds: new Set((await configStore.listWorkspaces()).map((workspace) => workspace.id)),
-      reservedChatIds: await scheduledChatIds(),
-    };
-  })();
+  const eligibilityContext = () =>
+    (context ??= (async () => {
+      if (
+        !displayImageArtifactStore.availability().available ||
+        !generativeUiArtifactStore.availability().available
+      ) {
+        throw new Error("Empty-chat cleanup requires readable artifact recovery stores.");
+      }
+      return {
+        workspaceIds: new Set(
+          (await configStore.listWorkspaces()).map((workspace) => workspace.id),
+        ),
+        reservedChatIds: await scheduledChatIds(),
+      };
+    })());
   let reportedPreservation = false;
   return migrateEmptyWorkspaceChats({
     load: async () => state,
-    save: async (next) => { await migration.update((current) => Object.assign(current, next)); },
+    save: async (next) => {
+      await migration.update((current) => Object.assign(current, next));
+    },
     list: () => chatStore.list(),
     get: (id) => chatStore.get(id),
     onPreserved: (error) => {
       if (reportedPreservation) return;
       reportedPreservation = true;
-      logger.warn("chat", "Empty-chat cleanup preserved records whose private history or ownership could not be read safely.", error);
+      logger.warn(
+        "chat",
+        "Empty-chat cleanup preserved records whose private history or ownership could not be read safely.",
+        error,
+      );
     },
     eligible: async (chat) => {
       const { workspaceIds, reservedChatIds } = await eligibilityContext();
-      return isLegacyEmptyWorkspaceChat(chat, workspaceIds, reservedChatIds) &&
-      !(await displayImageArtifactStore.hasPending(chat.id)) &&
-      !(await generativeUiArtifactStore.hasPending(chat.id)) &&
-      (await subagentRunStore.listByChat(chat.id)).length === 0 &&
-      (await piRuntimeEffectStore.listOperationsByChat(chat.id)).length === 0 &&
-      (await piRuntimeEffectStore.listEffectsByChat(chat.id)).length === 0 &&
-      !(await piCompactionSessionStore.hasChatHistory(chat.id));
+      return (
+        isLegacyEmptyWorkspaceChat(chat, workspaceIds, reservedChatIds) &&
+        !(await displayImageArtifactStore.hasPending(chat.id)) &&
+        !(await generativeUiArtifactStore.hasPending(chat.id)) &&
+        (await subagentRunStore.listByChat(chat.id)).length === 0 &&
+        (await piRuntimeEffectStore.listOperationsByChat(chat.id)).length === 0 &&
+        (await piRuntimeEffectStore.listEffectsByChat(chat.id)).length === 0 &&
+        !(await piCompactionSessionStore.hasChatHistory(chat.id))
+      );
     },
     remove: (id, assertCurrent) => chatApplicationService.remove(id, { assertCurrent }),
   });

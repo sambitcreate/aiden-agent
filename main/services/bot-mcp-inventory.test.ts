@@ -28,7 +28,11 @@ import {
   type McpOAuthSession,
 } from "./mcp-oauth-session.js";
 import type { McpServer } from "./types.js";
-import { admitWithBotConnectorInventoryScope, botConnectorInventoryServer, withBotConnectorInventoryScope } from "./bot-connector-inventory-scope.js";
+import {
+  admitWithBotConnectorInventoryScope,
+  botConnectorInventoryServer,
+  withBotConnectorInventoryScope,
+} from "./bot-connector-inventory-scope.js";
 import type { BotRuntimeEffectiveAuthority } from "./bot-runtime-authority.js";
 import { getMcpPreset, serverFromPreset } from "./mcp-presets.js";
 import type { SubagentMcpRemoteTool } from "./subagents/subagent-mcp-read.js";
@@ -38,70 +42,192 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
 test("Composio catalogs one stable service across vendor inventory edits while credential changes revoke it", async () => {
   const server = serverFromPreset(getMcpPreset("composio")!);
   let signature = hash("credential-one");
-  let remote: SubagentMcpRemoteTool[] = [{ name: "COMPOSIO_SEARCH_TOOLS", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }];
-  const snapshot = () => resolveBotMcpInventory(new AbortController().signal, {
-    listServers: async () => [server], credentialSignature: async () => signature, inspectTools: async () => remote,
-    incarnations: { reconcileNamespace: async (_namespace, resources) => resources.map(({ sourceId, credentialSignature }) => ({ sourceId, resourceIncarnation: "a".repeat(43), credentialIncarnation: credentialSignature.slice(0, 43) })) },
-  });
+  let remote: SubagentMcpRemoteTool[] = [
+    {
+      name: "COMPOSIO_SEARCH_TOOLS",
+      inputSchema: { type: "object" },
+      annotations: { readOnlyHint: true },
+    },
+  ];
+  const snapshot = () =>
+    resolveBotMcpInventory(new AbortController().signal, {
+      listServers: async () => [server],
+      credentialSignature: async () => signature,
+      inspectTools: async () => remote,
+      incarnations: {
+        reconcileNamespace: async (_namespace, resources) =>
+          resources.map(({ sourceId, credentialSignature }) => ({
+            sourceId,
+            resourceIncarnation: "a".repeat(43),
+            credentialIncarnation: credentialSignature.slice(0, 43),
+          })),
+      },
+    });
   const before = (await snapshot())[0];
-  assert.equal(before.tools.length, 1); assert.equal(before.tools[0].toolName, "composio");
-  remote = [{ name: "COMPOSIO_SEARCH_TOOLS", inputSchema: { type: "object", properties: { newArgument: { type: "string" } } }, annotations: { readOnlyHint: true } }, { name: "COMPOSIO_MULTI_EXECUTE_TOOL", inputSchema: { type: "object" }, annotations: { readOnlyHint: false } }];
+  assert.equal(before.tools.length, 1);
+  assert.equal(before.tools[0].toolName, "composio");
+  remote = [
+    {
+      name: "COMPOSIO_SEARCH_TOOLS",
+      inputSchema: { type: "object", properties: { newArgument: { type: "string" } } },
+      annotations: { readOnlyHint: true },
+    },
+    {
+      name: "COMPOSIO_MULTI_EXECUTE_TOOL",
+      inputSchema: { type: "object" },
+      annotations: { readOnlyHint: false },
+    },
+  ];
   const changedVendor = (await snapshot())[0];
   assert.equal(changedVendor.connectionFingerprint, before.connectionFingerprint);
   assert.deepEqual(changedVendor.tools, before.tools);
   signature = hash("credential-two");
   assert.notEqual((await snapshot())[0].connectionFingerprint, before.connectionFingerprint);
   server.hiddenTools = ["COMPOSIO_MULTI_EXECUTE_TOOL"];
-  assert.equal((await snapshot()).length, 0, "legacy partial exclusions need the person's single service allowance");
+  assert.equal(
+    (await snapshot()).length,
+    0,
+    "legacy partial exclusions need the person's single service allowance",
+  );
 });
 
 function connectorScopeFixture() {
-  const servers: McpServer[] = ["selected-imcp", "other-connector"].map((id) => ({ id, name: id, transport: "stdio", command: "synthetic-only", enabled: true }));
+  const servers: McpServer[] = ["selected-imcp", "other-connector"].map((id) => ({
+    id,
+    name: id,
+    transport: "stdio",
+    command: "synthetic-only",
+    enabled: true,
+  }));
   const inspectCalls: { id: string; selected: string | undefined }[] = [];
   let now = 0;
-  const dependencies = { listServers: async () => servers, credentialSignature: async () => hash("synthetic-credential"),
-    scopeCache: createBotMcpScopeCache({ now: () => now }), incarnations: {
-      reconcileNamespace: async (_namespace: string, resources: readonly { sourceId: string }[]) => resources.map(({ sourceId }) => ({ sourceId, resourceIncarnation: "a".repeat(43), credentialIncarnation: "b".repeat(43) })),
-    }, inspectTools: async (server: McpServer) => {
+  const dependencies = {
+    listServers: async () => servers,
+    credentialSignature: async () => hash("synthetic-credential"),
+    scopeCache: createBotMcpScopeCache({ now: () => now }),
+    incarnations: {
+      reconcileNamespace: async (_namespace: string, resources: readonly { sourceId: string }[]) =>
+        resources.map(({ sourceId }) => ({
+          sourceId,
+          resourceIncarnation: "a".repeat(43),
+          credentialIncarnation: "b".repeat(43),
+        })),
+    },
+    inspectTools: async (server: McpServer) => {
       inspectCalls.push({ id: server.id, selected: botConnectorInventoryServer() });
-      return [{ name: "read", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } }];
-    } };
-  return { dependencies, inspectCalls, advance: () => { now += 60_001; }, snapshot: () => resolveBotMcpInventory(new AbortController().signal, dependencies) };
+      return [
+        {
+          name: "read",
+          inputSchema: { type: "object", properties: {} },
+          annotations: { readOnlyHint: true },
+        },
+      ];
+    },
+  };
+  return {
+    dependencies,
+    inspectCalls,
+    advance: () => {
+      now += 60_001;
+    },
+    snapshot: () => resolveBotMcpInventory(new AbortController().signal, dependencies),
+  };
 }
 
 test("returned watch authority revalidation keeps the selected scope on real inventory cache misses", async () => {
-  const f = connectorScopeFixture(); let released = 0;
+  const f = connectorScopeFixture();
+  let released = 0;
   const admission = await admitWithBotConnectorInventoryScope("selected-imcp", async () => {
-    assert.deepEqual((await f.snapshot()).map((scope) => scope.serverId), ["selected-imcp"]);
-    return { authority: {} as BotRuntimeEffectiveAuthority, signal: new AbortController().signal,
-      revalidateBeforeEffect: async () => { assert.deepEqual((await f.snapshot()).map((scope) => scope.serverId), ["selected-imcp"]); }, release: () => { released++; } };
+    assert.deepEqual(
+      (await f.snapshot()).map((scope) => scope.serverId),
+      ["selected-imcp"],
+    );
+    return {
+      authority: {} as BotRuntimeEffectiveAuthority,
+      signal: new AbortController().signal,
+      revalidateBeforeEffect: async () => {
+        assert.deepEqual(
+          (await f.snapshot()).map((scope) => scope.serverId),
+          ["selected-imcp"],
+        );
+      },
+      release: () => {
+        released++;
+      },
+    };
   });
-  assert.equal(botConnectorInventoryServer(), undefined, "the caller has left the initial admission scope");
-  f.advance(); const revalidate = admission.revalidateBeforeEffect;
+  assert.equal(
+    botConnectorInventoryServer(),
+    undefined,
+    "the caller has left the initial admission scope",
+  );
+  f.advance();
+  const revalidate = admission.revalidateBeforeEffect;
   await revalidate();
-  assert.deepEqual(f.inspectCalls.map((call) => call.id), ["selected-imcp", "selected-imcp"], "neither admission nor later cache-miss revalidation inspects the second connector");
+  assert.deepEqual(
+    f.inspectCalls.map((call) => call.id),
+    ["selected-imcp", "selected-imcp"],
+    "neither admission nor later cache-miss revalidation inspects the second connector",
+  );
   assert.ok(f.inspectCalls.every((call) => call.selected === "selected-imcp"));
-  admission.release(); assert.equal(released, 1);
+  admission.release();
+  assert.equal(released, 1);
   const foreground = await f.snapshot();
-  assert.deepEqual(foreground.map((scope) => scope.serverId), ["other-connector", "selected-imcp"], "ordinary foreground inventory remains available outside watch work");
+  assert.deepEqual(
+    foreground.map((scope) => scope.serverId),
+    ["other-connector", "selected-imcp"],
+    "ordinary foreground inventory remains available outside watch work",
+  );
 });
 
 test("watch inventory does not join an unscoped in-flight inspection or start another connector", async (t) => {
   const f = connectorScopeFixture();
-  let release!: () => void; const blocked = new Promise<void>((resolve) => { release = resolve; }); t.after(() => release());
-  let bothStarted!: () => void; const started = new Promise<void>((resolve) => { bothStarted = resolve; }); let foregroundCalls = 0;
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  let bothStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    bothStarted = resolve;
+  });
+  let foregroundCalls = 0;
   f.dependencies.inspectTools = async (server) => {
-    const selected = botConnectorInventoryServer(); f.inspectCalls.push({ id: server.id, selected });
-    if (!selected) { foregroundCalls++; if (foregroundCalls === 2) bothStarted(); await blocked; }
-    return [{ name: selected ? "existing_live_read" : "foreground_read", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } }];
+    const selected = botConnectorInventoryServer();
+    f.inspectCalls.push({ id: server.id, selected });
+    if (!selected) {
+      foregroundCalls++;
+      if (foregroundCalls === 2) bothStarted();
+      await blocked;
+    }
+    return [
+      {
+        name: selected ? "existing_live_read" : "foreground_read",
+        inputSchema: { type: "object", properties: {} },
+        annotations: { readOnlyHint: true },
+      },
+    ];
   };
   const foreground = f.snapshot();
   await started;
   const watch = await withBotConnectorInventoryScope("selected-imcp", f.snapshot);
-  assert.deepEqual(watch.map((scope) => ({ id: scope.serverId, tools: scope.tools.map((tool) => tool.toolName) })), [{ id: "selected-imcp", tools: ["existing_live_read"] }], "the watch uses its own existing-session inspection while foreground work is blocked");
-  assert.deepEqual(f.inspectCalls.filter((call) => call.selected).map((call) => call.id), ["selected-imcp"]);
-  release(); await foreground;
-  await assert.rejects(withBotConnectorInventoryScope("selected-imcp", () => withBotConnectorInventoryScope("other-connector", f.snapshot)), /cannot switch/u);
+  assert.deepEqual(
+    watch.map((scope) => ({ id: scope.serverId, tools: scope.tools.map((tool) => tool.toolName) })),
+    [{ id: "selected-imcp", tools: ["existing_live_read"] }],
+    "the watch uses its own existing-session inspection while foreground work is blocked",
+  );
+  assert.deepEqual(
+    f.inspectCalls.filter((call) => call.selected).map((call) => call.id),
+    ["selected-imcp"],
+  );
+  release();
+  await foreground;
+  await assert.rejects(
+    withBotConnectorInventoryScope("selected-imcp", () =>
+      withBotConnectorInventoryScope("other-connector", f.snapshot),
+    ),
+    /cannot switch/u,
+  );
 });
 
 test("Bot MCP inventory includes stdio and exceeds subagent 16x32 bounds within Bot limits", async () => {
@@ -152,11 +278,13 @@ test("Bot MCP connection identity is stable across inspection and changes with i
       { name: "read", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
     ],
     incarnations: {
-      reconcileNamespace: async () => [{
-        sourceId: server.id,
-        resourceIncarnation: "a".repeat(43),
-        credentialIncarnation,
-      }],
+      reconcileNamespace: async () => [
+        {
+          sourceId: server.id,
+          resourceIncarnation: "a".repeat(43),
+          credentialIncarnation,
+        },
+      ],
     },
   };
   const first = await resolveBotMcpInventory(new AbortController().signal, dependencies);
@@ -170,21 +298,24 @@ test("Bot MCP connection identity is stable across inspection and changes with i
 test("Bot MCP discovery returns at its deadline even if an inspector ignores cancellation", async () => {
   const started = Date.now();
   const scopes = await resolveBotMcpInventory(new AbortController().signal, {
-    listServers: async () => [{
-      id: "hung",
-      name: "Hung",
-      transport: "stdio",
-      command: "mcp-hung",
-      enabled: true,
-    }],
+    listServers: async () => [
+      {
+        id: "hung",
+        name: "Hung",
+        transport: "stdio",
+        command: "mcp-hung",
+        enabled: true,
+      },
+    ],
     credentialSignature: async () => hash("credential"),
     inspectTools: async () => new Promise<never>(() => undefined),
     incarnations: {
-      reconcileNamespace: async (_namespace, resources) => resources.map(({ sourceId }) => ({
-        sourceId,
-        resourceIncarnation: "a".repeat(43),
-        credentialIncarnation: "b".repeat(43),
-      })),
+      reconcileNamespace: async (_namespace, resources) =>
+        resources.map(({ sourceId }) => ({
+          sourceId,
+          resourceIncarnation: "a".repeat(43),
+          credentialIncarnation: "b".repeat(43),
+        })),
     },
     deadlineMs: 20,
   });
@@ -214,14 +345,23 @@ test("an OAuth token refresh during discovery keeps a Bot's MCP connection; re-a
   let session: McpOAuthSession = sessionWithSavedMcpTokens(
     sessionForMcpAuthorizationAttempt({}, binding),
     binding,
-    { access_token: "access-1", token_type: "Bearer", refresh_token: "refresh-1", expires_in: 3600 },
+    {
+      access_token: "access-1",
+      token_type: "Bearer",
+      refresh_token: "refresh-1",
+      expires_in: 3600,
+    },
   );
   const key = Buffer.alloc(32, 3);
   let refreshOnInspect = false;
   const dependencies = {
     listServers: async () => [server],
     credentialSignature: async (current: McpServer) =>
-      botMcpCredentialSignatureCore(key, { server: current, presetKey: null, oauthSession: session }),
+      botMcpCredentialSignatureCore(key, {
+        server: current,
+        presetKey: null,
+        oauthSession: session,
+      }),
     // Opening a fresh client with an expired access token makes the SDK
     // refresh and save rotated tokens in the middle of the Bot snapshot.
     inspectTools: async () => {
@@ -233,7 +373,9 @@ test("an OAuth token refresh during discovery keeps a Bot's MCP connection; re-a
           expires_in: 3600,
         });
       }
-      return [{ name: "search", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }];
+      return [
+        { name: "search", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+      ];
     },
     incarnations: createBotCapabilityIncarnationStore(protectedStore),
   };
@@ -289,7 +431,8 @@ test("repeated Bot snapshots inspect each MCP server once within the TTL and aga
   const inspections = new Map<string, number>();
   const dependencies = {
     listServers: async () => servers,
-    credentialSignature: async (server: McpServer) => hash(`credential:${server.id}:${server.env?.TOKEN ?? ""}`),
+    credentialSignature: async (server: McpServer) =>
+      hash(`credential:${server.id}:${server.env?.TOKEN ?? ""}`),
     inspectTools: async (server: McpServer) => {
       inspections.set(server.id, (inspections.get(server.id) ?? 0) + 1);
       return [readTool(`${server.id}_read`)];
@@ -307,7 +450,10 @@ test("repeated Bot snapshots inspect each MCP server once within the TTL and aga
   assert.deepEqual(later, first);
 
   // Renaming is not an authority change: the grant fingerprint and cache survive.
-  servers = [stdioServer("alpha", { name: "Alpha (work)", description: "Renamed" }), stdioServer("beta")];
+  servers = [
+    stdioServer("alpha", { name: "Alpha (work)", description: "Renamed" }),
+    stdioServer("beta"),
+  ];
   assert.deepEqual(await snapshot(), first);
   assert.deepEqual(Object.fromEntries(inspections), { alpha: 1, beta: 1 });
 
@@ -353,7 +499,8 @@ test("a slow or failing MCP server drops only its own Bot scope and keeps its la
   const reports: BotMcpInspectionFailureReport[] = [];
   const dependencies = {
     listServers: async () => servers,
-    credentialSignature: async (server: McpServer) => hash(`credential:${server.id}:${server.url ?? ""}`),
+    credentialSignature: async (server: McpServer) =>
+      hash(`credential:${server.id}:${server.url ?? ""}`),
     inspectTools: async (server: McpServer) => {
       if (server.id === "slow" && hangSlow) return new Promise<never>(() => undefined);
       if (server.id === "broken" && breakBroken) throw new Error("connect ECONNREFUSED");
@@ -365,7 +512,8 @@ test("a slow or failing MCP server drops only its own Bot scope and keeps its la
     deadlineMs: 30,
   };
   const snapshot = () => resolveBotMcpInventory(new AbortController().signal, dependencies);
-  const ids = (scopes: Awaited<ReturnType<typeof snapshot>>) => scopes.map(({ serverId }) => serverId);
+  const ids = (scopes: Awaited<ReturnType<typeof snapshot>>) =>
+    scopes.map(({ serverId }) => serverId);
 
   const healthy = await snapshot();
   assert.deepEqual(ids(healthy), ["broken", "fast", "slow"]);
@@ -379,7 +527,10 @@ test("a slow or failing MCP server drops only its own Bot scope and keeps its la
   assert.deepEqual(await snapshot(), healthy);
   assert.deepEqual(reports, [], "no turn waited on a failing refresh");
   await settle();
-  assert.deepEqual(reportRows(backgroundReports), [["broken", "failed", true], ["slow", "timed_out", true]]);
+  assert.deepEqual(reportRows(backgroundReports), [
+    ["broken", "failed", true],
+    ["slow", "timed_out", true],
+  ]);
 
   // Past the grace window only the server that answered remains.
   clock += 120_000;
@@ -392,11 +543,19 @@ test("a slow or failing MCP server drops only its own Bot scope and keeps its la
   cache.clear();
   await snapshot();
   clock += 10;
-  servers = [stdioServer("fast"), stdioServer("slow", { command: "mcp-other" }), stdioServer("broken")];
+  servers = [
+    stdioServer("fast"),
+    stdioServer("slow", { command: "mcp-other" }),
+    stdioServer("broken"),
+  ];
   hangSlow = true;
   reports.length = 0;
   assert.deepEqual(ids(await snapshot()), ["broken", "fast"]);
-  assert.deepEqual(reportRows(reports), [["slow", "timed_out", false]], "a new connection is inspected while the turn waits");
+  assert.deepEqual(
+    reportRows(reports),
+    [["slow", "timed_out", false]],
+    "a new connection is inspected while the turn waits",
+  );
   // Nor does a disabled one.
   hangSlow = false;
   servers = [stdioServer("fast"), stdioServer("slow"), stdioServer("broken", { enabled: false })];
@@ -419,22 +578,24 @@ test("an unreachable MCP server delays one Bot snapshot, then is skipped and ret
   let unreachable = true;
   let downInspections = 0;
   const reports: BotMcpInspectionFailureReport[] = [];
-  const snapshot = () => resolveBotMcpInventory(new AbortController().signal, {
-    listServers: async () => servers,
-    credentialSignature: async (server: McpServer) => hash(`credential:${server.id}`),
-    inspectTools: async (server: McpServer) => {
-      if (server.id !== "down") return [readTool("up_read")];
-      downInspections++;
-      // Like a stdio server whose host app is not running: it never answers.
-      if (unreachable) return new Promise<never>(() => undefined);
-      return [readTool("down_read")];
-    },
-    incarnations: fixedIncarnations,
-    scopeCache: cache,
-    reportFailure: (report: BotMcpInspectionFailureReport) => reports.push(report),
-    deadlineMs: 30,
-  });
-  const ids = (scopes: Awaited<ReturnType<typeof snapshot>>) => scopes.map(({ serverId }) => serverId);
+  const snapshot = () =>
+    resolveBotMcpInventory(new AbortController().signal, {
+      listServers: async () => servers,
+      credentialSignature: async (server: McpServer) => hash(`credential:${server.id}`),
+      inspectTools: async (server: McpServer) => {
+        if (server.id !== "down") return [readTool("up_read")];
+        downInspections++;
+        // Like a stdio server whose host app is not running: it never answers.
+        if (unreachable) return new Promise<never>(() => undefined);
+        return [readTool("down_read")];
+      },
+      incarnations: fixedIncarnations,
+      scopeCache: cache,
+      reportFailure: (report: BotMcpInspectionFailureReport) => reports.push(report),
+      deadlineMs: 30,
+    });
+  const ids = (scopes: Awaited<ReturnType<typeof snapshot>>) =>
+    scopes.map(({ serverId }) => serverId);
 
   // The first snapshot waits for the server and reports it once.
   assert.deepEqual(ids(await snapshot()), ["up"]);
@@ -492,22 +653,32 @@ test("an unreachable MCP server delays one Bot snapshot, then is skipped and ret
 
 test("a stale Bot MCP scope answers at once and is refreshed behind the turn", async () => {
   let clock = 1_000;
-  const cache = createBotMcpScopeCache({ now: () => clock, ttlMs: 100, graceMs: 10_000, inspectionDeadlineMs: 1_000 });
+  const cache = createBotMcpScopeCache({
+    now: () => clock,
+    ttlMs: 100,
+    graceMs: 10_000,
+    inspectionDeadlineMs: 1_000,
+  });
   let toolName = "v1_read";
   let release: (() => void) | undefined;
   let inspections = 0;
-  const snapshot = () => resolveBotMcpInventory(new AbortController().signal, {
-    listServers: async () => [stdioServer("notes")],
-    credentialSignature: async () => hash("credential"),
-    inspectTools: async () => {
-      inspections++;
-      if (inspections > 1) await new Promise<void>((resolve) => { release = resolve; });
-      return [readTool(toolName)];
-    },
-    incarnations: fixedIncarnations,
-    scopeCache: cache,
-  });
-  const names = (scopes: Awaited<ReturnType<typeof snapshot>>) => scopes.flatMap((scope) => scope.tools.map((tool) => tool.toolName));
+  const snapshot = () =>
+    resolveBotMcpInventory(new AbortController().signal, {
+      listServers: async () => [stdioServer("notes")],
+      credentialSignature: async () => hash("credential"),
+      inspectTools: async () => {
+        inspections++;
+        if (inspections > 1)
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        return [readTool(toolName)];
+      },
+      incarnations: fixedIncarnations,
+      scopeCache: cache,
+    });
+  const names = (scopes: Awaited<ReturnType<typeof snapshot>>) =>
+    scopes.flatMap((scope) => scope.tools.map((tool) => tool.toolName));
 
   assert.deepEqual(names(await snapshot()), ["v1_read"]);
   clock += 200;
@@ -524,16 +695,25 @@ test("a stale Bot MCP scope answers at once and is refreshed behind the turn", a
 
 test("an inspection from before a configuration fence never replaces the newer generation's result", async () => {
   let generation = 1;
-  const cache = createBotMcpScopeCache({ generation: () => generation, inspectionDeadlineMs: 1_000 });
+  const cache = createBotMcpScopeCache({
+    generation: () => generation,
+    inspectionDeadlineMs: 1_000,
+  });
   const server = stdioServer("notes");
   const fingerprint = hash("connection");
-  const held: Array<{ resolve: (tools: SubagentMcpRemoteTool[]) => void; reject: (error: Error) => void }> = [];
+  const held: Array<{
+    resolve: (tools: SubagentMcpRemoteTool[]) => void;
+    reject: (error: Error) => void;
+  }> = [];
   let inspections = 0;
   const inspect = () => {
     inspections++;
-    return new Promise<SubagentMcpRemoteTool[]>((resolve, reject) => held.push({ resolve, reject }));
+    return new Promise<SubagentMcpRemoteTool[]>((resolve, reject) =>
+      held.push({ resolve, reject }),
+    );
   };
-  const names = (tools: Awaited<ReturnType<typeof cache.inspect>>) => tools.map((tool) => tool.toolName);
+  const names = (tools: Awaited<ReturnType<typeof cache.inspect>>) =>
+    tools.map((tool) => tool.toolName);
   const signal = new AbortController().signal;
 
   // Generation 1 and generation 2 inspections overlap; the newer one finishes first.
@@ -575,15 +755,24 @@ test("an inspection from before a configuration fence never replaces the newer g
 
 test("Bot MCP grant identity ignores display fields but not connection settings", async () => {
   const identity = async (server: McpServer) =>
-    (await resolveBotMcpConnectionIdentities(new AbortController().signal, {
-      listServers: async () => [server],
-      credentialSignature: async (current) =>
-        botMcpCredentialSignatureCore(Buffer.alloc(32, 7), { server: current, presetKey: null, oauthSession: null }),
-      incarnations: fixedIncarnations,
-    }))[0]?.connectionFingerprint;
+    (
+      await resolveBotMcpConnectionIdentities(new AbortController().signal, {
+        listServers: async () => [server],
+        credentialSignature: async (current) =>
+          botMcpCredentialSignatureCore(Buffer.alloc(32, 7), {
+            server: current,
+            presetKey: null,
+            oauthSession: null,
+          }),
+        incarnations: fixedIncarnations,
+      })
+    )[0]?.connectionFingerprint;
   const base = stdioServer("tools", { env: { TOKEN: "one" } });
   const original = await identity(base);
-  assert.equal(await identity({ ...base, name: "Renamed", description: "Now described" }), original);
+  assert.equal(
+    await identity({ ...base, name: "Renamed", description: "Now described" }),
+    original,
+  );
   assert.notEqual(await identity({ ...base, args: ["--write"] }), original);
   assert.notEqual(await identity({ ...base, env: { TOKEN: "two" } }), original);
 });
@@ -609,18 +798,33 @@ test("servers switched off for the model and hidden tools never reach Bot scopes
     },
     incarnations: {
       reconcileNamespace: async (_namespace: string, resources: readonly { sourceId: string }[]) =>
-        resources.map(({ sourceId }) => ({ sourceId, resourceIncarnation: "a".repeat(43), credentialIncarnation: "b".repeat(43) })),
+        resources.map(({ sourceId }) => ({
+          sourceId,
+          resourceIncarnation: "a".repeat(43),
+          credentialIncarnation: "b".repeat(43),
+        })),
     },
     scopeCache: cache,
   };
   const scopes = await resolveBotMcpInventory(new AbortController().signal, dependencies);
-  assert.deepEqual(scopes.map(({ serverId, tools }) => [serverId, tools.map(({ toolName }) => toolName)]), [["partly", ["read"]]]);
+  assert.deepEqual(
+    scopes.map(({ serverId, tools }) => [serverId, tools.map(({ toolName }) => toolName)]),
+    [["partly", ["read"]]],
+  );
   // A server switched off for the model is never even inspected.
   assert.ok(!inspected.includes("off"));
   // Showing a tool again needs no reconnect: the cached inspection still has it.
-  servers = servers.map((server) => server.id === "partly" ? { ...server, hiddenTools: undefined } : server);
+  servers = servers.map((server) =>
+    server.id === "partly" ? { ...server, hiddenTools: undefined } : server,
+  );
   const shown = await resolveBotMcpInventory(new AbortController().signal, dependencies);
-  assert.deepEqual(shown.find(({ serverId }) => serverId === "partly")?.tools.map(({ toolName }) => toolName).sort(), ["delete", "read"]);
+  assert.deepEqual(
+    shown
+      .find(({ serverId }) => serverId === "partly")
+      ?.tools.map(({ toolName }) => toolName)
+      .sort(),
+    ["delete", "read"],
+  );
 });
 
 test("one unreadable saved MCP sign-in stays on its own connection instead of failing the Bot catalog", async (t) => {
@@ -686,27 +890,44 @@ test("one unreadable saved MCP sign-in stays on its own connection instead of fa
       inspected.push(server.id);
       // A server's own connection reads its sign-in and reports why it failed.
       if (server.oauth) await sessions.get(server.id);
-      return [{ name: "search", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }];
+      return [
+        { name: "search", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+      ];
     },
     incarnations: createBotCapabilityIncarnationStore(protectedStore),
   };
 
-  const signedIn = await resolveBotMcpConnectionIdentities(new AbortController().signal, dependencies);
+  const signedIn = await resolveBotMcpConnectionIdentities(
+    new AbortController().signal,
+    dependencies,
+  );
   corrupt = true;
   sessions.invalidate();
 
   await assert.rejects(sessions.get(corruptEnabled.id), McpOAuthCredentialStorageError);
   const scopes = await resolveBotMcpInventory(new AbortController().signal, dependencies);
-  assert.deepEqual(scopes.map(({ serverId }) => serverId), [healthy.id]);
+  assert.deepEqual(
+    scopes.map(({ serverId }) => serverId),
+    [healthy.id],
+  );
   assert.deepEqual(inspected.sort(), [corruptEnabled.id, healthy.id]);
 
-  const unreadable = await resolveBotMcpConnectionIdentities(new AbortController().signal, dependencies);
+  const unreadable = await resolveBotMcpConnectionIdentities(
+    new AbortController().signal,
+    dependencies,
+  );
   const fingerprint = (values: typeof signedIn, id: string) =>
     values.find(({ serverId }) => serverId === id)?.connectionFingerprint;
   // Unrelated connections keep their identity, so their Bot grants survive.
   assert.equal(fingerprint(unreadable, healthy.id), fingerprint(signedIn, healthy.id));
   // Unreadable connections never keep the signed-in grant's identity.
   assert.notEqual(fingerprint(unreadable, corruptEnabled.id), undefined);
-  assert.notEqual(fingerprint(unreadable, corruptEnabled.id), fingerprint(signedIn, corruptEnabled.id));
-  assert.notEqual(fingerprint(unreadable, corruptDisabled.id), fingerprint(signedIn, corruptDisabled.id));
+  assert.notEqual(
+    fingerprint(unreadable, corruptEnabled.id),
+    fingerprint(signedIn, corruptEnabled.id),
+  );
+  assert.notEqual(
+    fingerprint(unreadable, corruptDisabled.id),
+    fingerprint(signedIn, corruptDisabled.id),
+  );
 });

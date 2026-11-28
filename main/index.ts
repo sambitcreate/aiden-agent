@@ -83,7 +83,13 @@ import { usageLimits } from "./services/usage-limit-main.js";
 import { usageStore } from "./services/usage-store.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
-import { closeRendererBeforeShutdown, type DeadlineOutcome, joinInFlight, requireWithinDeadline, withDeadline } from "./services/quit-barrier.js";
+import {
+  closeRendererBeforeShutdown,
+  type DeadlineOutcome,
+  joinInFlight,
+  requireWithinDeadline,
+  withDeadline,
+} from "./services/quit-barrier.js";
 import { disposeDictation, prepareDictationPill, toggleDictation } from "./services/dictation.js";
 import { disposeLocalSpeech } from "./services/local-speech.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
@@ -100,8 +106,14 @@ import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { scheduleService } from "./services/schedule-service.js";
-import { startScheduledTaskTriggers, stopScheduledTaskTriggers } from "./services/scheduled-task-triggers-main.js";
-import { analyticsService, installAnalyticsCrashCapture } from "./services/analytics/analytics-main.js";
+import {
+  startScheduledTaskTriggers,
+  stopScheduledTaskTriggers,
+} from "./services/scheduled-task-triggers-main.js";
+import {
+  analyticsService,
+  installAnalyticsCrashCapture,
+} from "./services/analytics/analytics-main.js";
 import { initializeHookService } from "./services/hooks/hook-service-main.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
@@ -137,9 +149,17 @@ import { generativeUiArtifactStore } from "./services/generative-ui-artifact-sto
 import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
 import { registerChatAttachmentProtocol } from "./services/chat-attachment-protocol.js";
 import { createMainVisualSnapshotQueue } from "./services/visual-snapshot-main.js";
-import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/visual-snapshot-service.js";
+import {
+  disposeVisualSnapshots,
+  installVisualSnapshotQueue,
+} from "./services/visual-snapshot-service.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
-import { createImagesEnabled, designModeEnabled, studioAssetsEnabled, studioCapabilities } from "./services/studio/feature-flags.js";
+import {
+  createImagesEnabled,
+  designModeEnabled,
+  studioAssetsEnabled,
+  studioCapabilities,
+} from "./services/studio/feature-flags.js";
 import { createDesignFrameNavigationGuard } from "./services/design-canvas/frame-navigation.js";
 import {
   closeGuardDiscardPrompt,
@@ -148,9 +168,15 @@ import {
 } from "./services/close-guard-prompt.js";
 import { startDesignProtocol } from "./services/design-canvas/protocol-main.js";
 import { createImagesRuntime } from "./services/create-images/main.js";
-import { ImageQuitCoverage, imageRunsAllowQuit } from "./services/create-images/quit-confirm-core.js";
+import {
+  ImageQuitCoverage,
+  imageRunsAllowQuit,
+} from "./services/create-images/quit-confirm-core.js";
 import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
-import { installStudioAssetProtocol, startStudioAssets } from "./services/studio-assets/startup-core.js";
+import {
+  installStudioAssetProtocol,
+  startStudioAssets,
+} from "./services/studio-assets/startup-core.js";
 import { studioAssetGrants, studioAssetStore } from "./services/studio-assets/main.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
 import { flushSubagentRuntimeDiagnostics } from "./services/subagents/subagent-runtime-diagnostics.js";
@@ -220,7 +246,11 @@ import {
   prepareQuickChat,
   toggleQuickChat,
 } from "./windows/quick-chat-window.js";
-import { destroyBotBubbleOverlays, releaseBotBubbleOverlays, startBotBubbles } from "./windows/bot-bubbles-window.js";
+import {
+  destroyBotBubbleOverlays,
+  releaseBotBubbleOverlays,
+  startBotBubbles,
+} from "./windows/bot-bubbles-window.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
 import { installElectronConnectorWatchTransport } from "./services/bot-routine-events/connector-watch-startup.js";
 import {
@@ -282,8 +312,7 @@ let closeGuard = {
   saving: false,
   sources: undefined as CloseGuardSources | undefined,
 };
-let protectedAction: "close" | "quit" | "reload" | "onboarding-reset" | null =
-  null;
+let protectedAction: "close" | "quit" | "reload" | "onboarding-reset" | null = null;
 let forceAppQuit = false;
 let cleanupStarted = false;
 const lifecycleCheck = createLifecycleCheck((error) =>
@@ -297,11 +326,9 @@ const updateInstall = createUpdateInstallIntent({
   onWithdrawn: () => appUpdateService.announceSnapshot(),
 });
 let pendingPackagedSubagentSoakReceipt: SubagentPackagedSoakSession | undefined;
-const disposeAppUpdateStateSubscription = appUpdateService.subscribe(
-  (snapshot) => {
-    ipcMain.broadcast("app:update-state", snapshot);
-  },
-);
+const disposeAppUpdateStateSubscription = appUpdateService.subscribe((snapshot) => {
+  ipcMain.broadcast("app:update-state", snapshot);
+});
 
 const SUBAGENT_PACKAGED_SOAK_WAIT_MS = 30_000;
 const SUBAGENT_PACKAGED_SOAK_POLL_MS = 25;
@@ -358,10 +385,7 @@ function hasCloseGuard(): boolean {
   return closeGuard.dirty || closeGuard.gitBusy || closeGuard.saving;
 }
 
-function confirmProtectedAction(
-  window: BrowserWindow,
-  action: "close" | "reload",
-): boolean {
+function confirmProtectedAction(window: BrowserWindow, action: "close" | "reload"): boolean {
   if (closeGuard.gitBusy) {
     dialog.showMessageBoxSync(window, {
       type: "info",
@@ -508,8 +532,16 @@ const PRE_SHUTDOWN_BUDGET_MS = {
 const SHUTDOWN_HARD_CEILING_MS = (() => {
   const b = SHUTDOWN_BUDGET_MS;
   const serial =
-    b.storageCleanup + b.geminiLive + b.parentGenerations + b.backgroundJobs +
-    b.subagentRuntime + b.subagentConversations + b.spending + b.analytics + b.soakReceipt + b.remoteAccess;
+    b.storageCleanup +
+    b.geminiLive +
+    b.parentGenerations +
+    b.backgroundJobs +
+    b.subagentRuntime +
+    b.subagentConversations +
+    b.spending +
+    b.analytics +
+    b.soakReceipt +
+    b.remoteAccess;
   const parallel = Math.max(
     b.providerSignIn,
     b.computerUseStatus,
@@ -567,7 +599,9 @@ function armShutdownCeiling(): () => void {
  * window was destroyed) is shutting down waits for that shutdown, so it sees
  * whether Aiden actually quit or stayed open.
  */
-const shutdownAndQuit = joinInFlight((settingsPrepared: boolean = false) => runShutdownAndQuit(settingsPrepared));
+const shutdownAndQuit = joinInFlight((settingsPrepared: boolean = false) =>
+  runShutdownAndQuit(settingsPrepared),
+);
 
 async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   if (shutdownStarted) return;
@@ -584,11 +618,7 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       updateInstall.withdraw();
       llmClient.setQuitInProgress(false);
       computerUseSettings.resumeAfterCancelledShutdown();
-      logger.error(
-        "main",
-        "Computer Use state was not durable; Aiden will stay open.",
-        error,
-      );
+      logger.error("main", "Computer Use state was not durable; Aiden will stay open.", error);
       return;
     }
   }
@@ -598,14 +628,21 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   // No goal reviews or rounds start while generations stop: the quit's aborts aren't the person's Stop.
   shutdownGoalLoop();
   // First, so no further chat or worktree is deleted while the rest of the app stops.
-  await settleShutdownStep("main", "Storage cleanup", SHUTDOWN_BUDGET_MS.storageCleanup, () => storageUsageService.shutdown());
-  await settleShutdownStep("voice", "Gemini Live", SHUTDOWN_BUDGET_MS.geminiLive, () => geminiLiveService.shutdown());
+  await settleShutdownStep("main", "Storage cleanup", SHUTDOWN_BUDGET_MS.storageCleanup, () =>
+    storageUsageService.shutdown(),
+  );
+  await settleShutdownStep("voice", "Gemini Live", SHUTDOWN_BUDGET_MS.geminiLive, () =>
+    geminiLiveService.shutdown(),
+  );
   // Settle parent generations before registry teardown. A child can still be
   // constructing tools before it is registered, and its bounded drain must
   // record any cleanup miss before a packaged-soak receipt is written.
   llmClient.abortAll();
-  const parentShutdown = await settleShutdownStep("main", "Parent generations", SHUTDOWN_BUDGET_MS.parentGenerations, () =>
-    llmClient.shutdown(),
+  const parentShutdown = await settleShutdownStep(
+    "main",
+    "Parent generations",
+    SHUTDOWN_BUDGET_MS.parentGenerations,
+    () => llmClient.shutdown(),
   );
   const parentSettled = parentShutdown.status === "fulfilled" && parentShutdown.value;
   if (parentShutdown.status === "fulfilled" && !parentSettled) {
@@ -616,9 +653,17 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   }
   // Background jobs and goal checks stop with the app; follows and
   // goals are saved for the next launch. Bounded so a stuck job never holds quit.
-  await settleShutdownStep("follow-through", "Background jobs", SHUTDOWN_BUDGET_MS.backgroundJobs, () => shutdownFollowThrough());
-  const subagentShutdown = await settleShutdownStep("main", "Subagent runtime", SHUTDOWN_BUDGET_MS.subagentRuntime, () =>
-    subagentRuntimeRegistry.shutdown(),
+  await settleShutdownStep(
+    "follow-through",
+    "Background jobs",
+    SHUTDOWN_BUDGET_MS.backgroundJobs,
+    () => shutdownFollowThrough(),
+  );
+  const subagentShutdown = await settleShutdownStep(
+    "main",
+    "Subagent runtime",
+    SHUTDOWN_BUDGET_MS.subagentRuntime,
+    () => subagentRuntimeRegistry.shutdown(),
   );
   const subagentsSettled = subagentShutdown.status === "fulfilled" && subagentShutdown.value;
   if (!subagentsSettled) {
@@ -629,28 +674,35 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   }
   // Stopped helpers save their conversations in the background; give those
   // saves a moment so a quit keeps the last of what each helper did.
-  await settleShutdownStep("subagents", "Helper conversations", SHUTDOWN_BUDGET_MS.subagentConversations, () =>
-    flushPendingSubagentTranscripts(),
+  await settleShutdownStep(
+    "subagents",
+    "Helper conversations",
+    SHUTDOWN_BUDGET_MS.subagentConversations,
+    () => flushPendingSubagentTranscripts(),
   );
   // Every reply has settled: save the last spending, usage-limit and usage changes.
-  await settleShutdownStep("main", "Spending, usage limits and usage", SHUTDOWN_BUDGET_MS.spending, () =>
-    Promise.all([spending.flush(), usageLimits.flush(), usageStore.flush()]),
+  await settleShutdownStep(
+    "main",
+    "Spending, usage limits and usage",
+    SHUTDOWN_BUDGET_MS.spending,
+    () => Promise.all([spending.flush(), usageLimits.flush(), usageStore.flush()]),
   );
   // Send queued usage data, bounded (the service caps itself at 1.5 s).
-  await settleShutdownStep("main", "Usage data", SHUTDOWN_BUDGET_MS.analytics, () => analyticsService().shutdown());
+  await settleShutdownStep("main", "Usage data", SHUTDOWN_BUDGET_MS.analytics, () =>
+    analyticsService().shutdown(),
+  );
   const session = pendingPackagedSubagentSoakReceipt;
   pendingPackagedSubagentSoakReceipt = undefined;
-  const quitReceiptFinalization =
-    await tryFinalizeSubagentPackagedSoakQuitReceipt(
-      session,
-      parentSettled,
-      subagentsSettled,
-      {
-        flushMetrics: () => subagentHealthMetrics.flush(),
-        snapshotMetrics: () => subagentHealthMetrics.snapshotForPackagedSoak(),
-        writeReceipt: writeSubagentPackagedSoakReceipt,
-      },
-    );
+  const quitReceiptFinalization = await tryFinalizeSubagentPackagedSoakQuitReceipt(
+    session,
+    parentSettled,
+    subagentsSettled,
+    {
+      flushMetrics: () => subagentHealthMetrics.flush(),
+      snapshotMetrics: () => subagentHealthMetrics.snapshotForPackagedSoak(),
+      writeReceipt: writeSubagentPackagedSoakReceipt,
+    },
+  );
   if (quitReceiptFinalization.status === "lifecycle_unsettled") {
     logger.warn(
       "main",
@@ -668,9 +720,7 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       quitReceiptFinalization.error,
     );
   }
-  if (
-    requiresSubagentPackagedSoakFailureExit(session, quitReceiptFinalization)
-  ) {
+  if (requiresSubagentPackagedSoakFailureExit(session, quitReceiptFinalization)) {
     logger.error(
       "main",
       "Packaged subagent soak finalization did not create a valid receipt; exiting with failure.",
@@ -687,54 +737,103 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   );
   cleanupApplication();
   await Promise.all([
-    settleShutdownStep("main", "Provider sign-in", SHUTDOWN_BUDGET_MS.providerSignIn, () => shutdownProviderAuthFlow()),
-    settleShutdownStep("computer-use", "Computer Use status", SHUTDOWN_BUDGET_MS.computerUseStatus, () => computerUseStatus.shutdown()),
+    settleShutdownStep("main", "Provider sign-in", SHUTDOWN_BUDGET_MS.providerSignIn, () =>
+      shutdownProviderAuthFlow(),
+    ),
+    settleShutdownStep(
+      "computer-use",
+      "Computer Use status",
+      SHUTDOWN_BUDGET_MS.computerUseStatus,
+      () => computerUseStatus.shutdown(),
+    ),
     (async () => {
       // Stop Bot ingress first so nothing reopens the runtime, then close
       // every Bot harness: a running turn is left interrupted (Resume on
       // next start) and the profile lock is released.
-      await settleShutdownStep("bots", "Bot schedules and Telegram", SHUTDOWN_BUDGET_MS.botIngress, () =>
-        Promise.all([scheduleService.stopAndSettle(), telegramService.stopAndSettle()]),
+      await settleShutdownStep(
+        "bots",
+        "Bot schedules and Telegram",
+        SHUTDOWN_BUDGET_MS.botIngress,
+        () => Promise.all([scheduleService.stopAndSettle(), telegramService.stopAndSettle()]),
       );
-      await settleShutdownStep("bots", "The Bot runtime", SHUTDOWN_BUDGET_MS.botRuntime, async () => {
-        const { shutdownBotSessionRuntime } = await import("./services/bot-runtime/bot-session-main.js");
-        await shutdownBotSessionRuntime();
-      });
+      await settleShutdownStep(
+        "bots",
+        "The Bot runtime",
+        SHUTDOWN_BUDGET_MS.botRuntime,
+        async () => {
+          const { shutdownBotSessionRuntime } =
+            await import("./services/bot-runtime/bot-session-main.js");
+          await shutdownBotSessionRuntime();
+        },
+      );
       // The Bots' stopped helpers save their conversations the same way.
-      await settleShutdownStep("bots", "Bot helper conversations", SHUTDOWN_BUDGET_MS.subagentConversations, () =>
-        flushPendingSubagentTranscripts(),
+      await settleShutdownStep(
+        "bots",
+        "Bot helper conversations",
+        SHUTDOWN_BUDGET_MS.subagentConversations,
+        () => flushPendingSubagentTranscripts(),
       );
     })(),
-    settleShutdownStep("subagents", "Subagent run store", SHUTDOWN_BUDGET_MS.subagentRunStore, async () => {
-      await subagentRunStore.flush();
-      await subagentRunStore.close();
-    }),
-    settleShutdownStep("terminal", "Terminal history", SHUTDOWN_BUDGET_MS.terminalHistory, () => terminalService.flushHistory()),
+    settleShutdownStep(
+      "subagents",
+      "Subagent run store",
+      SHUTDOWN_BUDGET_MS.subagentRunStore,
+      async () => {
+        await subagentRunStore.flush();
+        await subagentRunStore.close();
+      },
+    ),
+    settleShutdownStep("terminal", "Terminal history", SHUTDOWN_BUDGET_MS.terminalHistory, () =>
+      terminalService.flushHistory(),
+    ),
     (async () => {
       // Image runs record their end (and close the run ledger) before the asset store closes.
       // A ledger that was never opened (flag off) resolves at once.
       await settleShutdownStep("create-images", "Image runs", SHUTDOWN_BUDGET_MS.imageRuns, () =>
         createImagesRuntime.shutdown("app-quit"),
       );
-      await settleShutdownStep("studio", "Studio asset store", SHUTDOWN_BUDGET_MS.studioAssets, () => studioAssetStore.close());
+      await settleShutdownStep(
+        "studio",
+        "Studio asset store",
+        SHUTDOWN_BUDGET_MS.studioAssets,
+        () => studioAssetStore.close(),
+      );
     })(),
-    settleShutdownStep("browser", "The browser", SHUTDOWN_BUDGET_MS.browser, () => browserService.shutdown()),
+    settleShutdownStep("browser", "The browser", SHUTDOWN_BUDGET_MS.browser, () =>
+      browserService.shutdown(),
+    ),
     // Every running Bot computer is asked to stop, then forced, inside the budget;
     // a computer that never started (or no Apple silicon) resolves at once.
-    settleShutdownStep("bot-computers", "Bot computers", SHUTDOWN_BUDGET_MS.botComputers, async () => {
-      const { shutdownBotComputers } = await import("./services/bot-computers/bot-computers-main.js");
-      await shutdownBotComputers(4_000);
-    }),
-    settleShutdownStep("devices", "Devices", SHUTDOWN_BUDGET_MS.devices, () => shutdownDevices()).then((outcome) => {
+    settleShutdownStep(
+      "bot-computers",
+      "Bot computers",
+      SHUTDOWN_BUDGET_MS.botComputers,
+      async () => {
+        const { shutdownBotComputers } =
+          await import("./services/bot-computers/bot-computers-main.js");
+        await shutdownBotComputers(4_000);
+      },
+    ),
+    settleShutdownStep("devices", "Devices", SHUTDOWN_BUDGET_MS.devices, () =>
+      shutdownDevices(),
+    ).then((outcome) => {
       // The helpers' own stop timeouts can outlast this budget; end any still running before quit.
       if (outcome.status === "timed-out") terminateDeviceHelperCommands();
     }),
     // cleanupApplication() asked any running Foundation Models helper to stop; its
     // PID is checked asynchronously first, so wait (bounded) for the signal.
-    settleShutdownStep("main", "Foundation Models helper", SHUTDOWN_BUDGET_MS.foundationModelsHelper, () =>
-      settleFoundationModelsHelperStops(1_500).then((settled) => {
-        if (!settled) logger.warn("main", "Foundation Models helper stop did not settle within the shutdown budget.");
-      }),
+    settleShutdownStep(
+      "main",
+      "Foundation Models helper",
+      SHUTDOWN_BUDGET_MS.foundationModelsHelper,
+      () =>
+        settleFoundationModelsHelperStops(1_500).then((settled) => {
+          if (!settled)
+            logger.warn(
+              "main",
+              "Foundation Models helper stop did not settle within the shutdown budget.",
+            );
+        }),
     ),
     // Stdio children that miss the budget are still signalled by their transports' close.
     settleShutdownStep("main", "MCP servers", SHUTDOWN_BUDGET_MS.mcpServers, () =>
@@ -743,7 +842,9 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       }),
     ),
     // Agent processes TERM, then KILL after their grace; anything left at exit is killed synchronously.
-    settleShutdownStep("acp", "Agent harness processes", SHUTDOWN_BUDGET_MS.agentHarness, () => shutdownAntigravity()),
+    settleShutdownStep("acp", "Agent harness processes", SHUTDOWN_BUDGET_MS.agentHarness, () =>
+      shutdownAntigravity(),
+    ),
   ]);
   await flushSubagentRuntimeDiagnostics(1_000);
   await flushDiagnosticJournal(1_000);
@@ -854,7 +955,9 @@ async function refreshCloseGuardFromRenderer(
     const sourceList = (value: unknown) =>
       typeof value === "string" && value.length <= 256 ? value.split(" ").filter(Boolean) : [];
     const imagesLabel =
-      typeof latest?.imagesLabel === "string" && latest.imagesLabel.length > 0 && latest.imagesLabel.length <= 200
+      typeof latest?.imagesLabel === "string" &&
+      latest.imagesLabel.length > 0 &&
+      latest.imagesLabel.length <= 200
         ? latest.imagesLabel
         : undefined;
     closeGuard = {
@@ -868,8 +971,7 @@ async function refreshCloseGuardFromRenderer(
         ...(imagesLabel ? { imagesLabel } : {}),
       },
     };
-    return Number.isSafeInteger(latest?.revision) &&
-      Number(latest.revision) >= 0
+    return Number.isSafeInteger(latest?.revision) && Number(latest.revision) >= 0
       ? Number(latest.revision)
       : 0;
   } catch (error) {
@@ -927,7 +1029,8 @@ async function armRendererUnload(
   // leaving room for the answer to arrive) and lets any approval expire.
   const startedAt = Date.now();
   const armBy = startedAt + RENDERER_RESPONSE_DEADLINE_MS - 1_000;
-  const expiresAt = startedAt + RENDERER_RESPONSE_DEADLINE_MS + RENDERER_UNLOAD_APPROVAL_GRACE_MS + holdMs;
+  const expiresAt =
+    startedAt + RENDERER_RESPONSE_DEADLINE_MS + RENDERER_UNLOAD_APPROVAL_GRACE_MS + holdMs;
   try {
     return (
       (await executeRendererScript(
@@ -1009,8 +1112,7 @@ async function authorizeProtectedActionAttempts(
     const revision = await refreshCloseGuardFromRenderer(window, force);
     if (revision === "unresponsive") return "unresponsive";
     if (revision === null) return "declined";
-    if (hasCloseGuard() && !confirmProtectedAction(window, action))
-      return "declined";
+    if (hasCloseGuard() && !confirmProtectedAction(window, action)) return "declined";
     if (await armRendererUnload(window, revision, holdMs)) return "authorized";
   }
   if (!window.isDestroyed()) {
@@ -1031,7 +1133,10 @@ async function authorizeProtectedActionAttempts(
 async function persistMainWindowState(window: BrowserWindow): Promise<void> {
   // Window placement is a convenience preference. A failed or stuck write
   // must never trap the user in the app during Close or Quit.
-  const outcome = await withDeadline(() => mainWindowState.save(window), PRE_SHUTDOWN_BUDGET_MS.windowState);
+  const outcome = await withDeadline(
+    () => mainWindowState.save(window),
+    PRE_SHUTDOWN_BUDGET_MS.windowState,
+  );
   if (outcome.status === "rejected") {
     logger.warn("main-window", "Could not save the main window state", outcome.error);
   } else if (outcome.status === "timed-out") {
@@ -1057,12 +1162,23 @@ async function requestWindowClose(window: BrowserWindow): Promise<void> {
   try {
     // Closing the last window quits on Linux and Windows. On macOS it does not, and runs continue.
     // Asked before the renderer unload is armed, so "Keep Aiden Open" leaves no approved revision behind.
-    const closeQuitsApp = shouldQuitAfterAllWindowsClose(process.platform, aidenRemoteServiceKeepsApplicationAlive());
+    const closeQuitsApp = shouldQuitAfterAllWindowsClose(
+      process.platform,
+      aidenRemoteServiceKeepsApplicationAlive(),
+    );
     // Any earlier confirmation belonged to a close that did not complete.
     imageQuitCoverage.clear();
     if (closeQuitsApp && !confirmImageRequestsBeforeQuit(window)) return;
-    imageQuitCoverage.recordWindowCloseConfirmation(closeQuitsApp, createImagesRuntime.inFlightRequests());
-    const authorization = await authorizeProtectedActionOrForce(window, "close", "close", RENDERER_UNLOAD_HOLD_MS.close);
+    imageQuitCoverage.recordWindowCloseConfirmation(
+      closeQuitsApp,
+      createImagesRuntime.inFlightRequests(),
+    );
+    const authorization = await authorizeProtectedActionOrForce(
+      window,
+      "close",
+      "close",
+      RENDERER_UNLOAD_HOLD_MS.close,
+    );
     if (authorization === "declined") {
       imageQuitCoverage.clear();
       return;
@@ -1116,7 +1232,12 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
   if (!lifecycleCheck.tryBegin()) return quitNotStarted("lifecycle-check-in-flight");
   try {
     if (!confirmImageRequestsBeforeQuit(window)) return quitNotStarted("image-requests-kept");
-    const authorization = await authorizeProtectedActionOrForce(window, "close", "quit", RENDERER_UNLOAD_HOLD_MS.quit);
+    const authorization = await authorizeProtectedActionOrForce(
+      window,
+      "close",
+      "quit",
+      RENDERER_UNLOAD_HOLD_MS.quit,
+    );
     if (authorization === "declined") return quitNotStarted("renderer-declined");
     await persistMainWindowState(window);
     try {
@@ -1124,19 +1245,13 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
     } catch (error) {
       computerUseSettings.resumeAfterCancelledShutdown();
       clearRendererUnloadApproval(window);
-      logger.error(
-        "main",
-        "Computer Use state was not durable; quit was cancelled.",
-        error,
-      );
+      logger.error("main", "Computer Use state was not durable; quit was cancelled.", error);
       if (!window.isDestroyed()) {
         dialog.showMessageBoxSync(window, {
           type: "error",
           title: "Aiden couldn't save Computer Use",
-          message:
-            "Aiden will stay open because Computer Use could not be safely turned off.",
-          detail:
-            "Check that the app can write its settings, then try quitting again.",
+          message: "Aiden will stay open because Computer Use could not be safely turned off.",
+          detail: "Check that the app can write its settings, then try quitting again.",
           buttons: ["Keep Aiden Open"],
           defaultId: 0,
           noLink: true,
@@ -1178,9 +1293,7 @@ function continueApplicationQuit(window: BrowserWindow, stillWanted: () => boole
   });
 }
 
-async function clearRendererOnboardingCompletion(
-  window: BrowserWindow,
-): Promise<boolean> {
+async function clearRendererOnboardingCompletion(window: BrowserWindow): Promise<boolean> {
   try {
     return (
       (await executeRendererScript(
@@ -1194,14 +1307,8 @@ async function clearRendererOnboardingCompletion(
       )) === true
     );
   } catch (error) {
-    logger.error(
-      "main",
-      "Could not clear the onboarding completion marker.",
-      error,
-    );
-    throw new Error(
-      "Aiden couldn’t prepare onboarding for restart. Try again.",
-    );
+    logger.error("main", "Could not clear the onboarding completion marker.", error);
+    throw new Error("Aiden couldn’t prepare onboarding for restart. Try again.");
   }
 }
 
@@ -1216,11 +1323,7 @@ async function restoreRendererOnboardingCompletion(
       `localStorage.setItem(${JSON.stringify(ONBOARDING_COMPLETE_STORAGE_KEY)}, "true")`,
     );
   } catch (error) {
-    logger.error(
-      "main",
-      "Could not restore the onboarding completion marker.",
-      error,
-    );
+    logger.error("main", "Could not restore the onboarding completion marker.", error);
   }
 }
 
@@ -1235,7 +1338,8 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
   }
   let settingsPrepared = false;
   try {
-    if (!(await authorizeProtectedAction(window, "close", RENDERER_UNLOAD_HOLD_MS.onboardingReset))) return false;
+    if (!(await authorizeProtectedAction(window, "close", RENDERER_UNLOAD_HOLD_MS.onboardingReset)))
+      return false;
     try {
       await prepareComputerUseForQuit();
       settingsPrepared = true;
@@ -1251,8 +1355,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
         dialog.showMessageBoxSync(window, {
           type: "error",
           title: "Aiden couldn't save Computer Use",
-          message:
-            "Onboarding was not reset because Computer Use could not be safely turned off.",
+          message: "Onboarding was not reset because Computer Use could not be safely turned off.",
           detail: "Check that the app can write its settings, then try again.",
           buttons: ["Keep Aiden Open"],
           defaultId: 0,
@@ -1262,8 +1365,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
       return false;
     }
 
-    const onboardingWasComplete =
-      await clearRendererOnboardingCompletion(window);
+    const onboardingWasComplete = await clearRendererOnboardingCompletion(window);
     await persistMainWindowState(window);
     protectedAction = "onboarding-reset";
     if (!(await closeRendererBeforeShutdown(window))) {
@@ -1280,11 +1382,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
       computerUseSettings.resumeAfterCancelledShutdown();
       settingsPrepared = false;
       protectedAction = null;
-      logger.error(
-        "main",
-        "Onboarding reset was incomplete after the renderer closed.",
-        error,
-      );
+      logger.error("main", "Onboarding reset was incomplete after the renderer closed.", error);
       try {
         await createMainWindow();
       } catch (recoveryError) {
@@ -1298,10 +1396,8 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
         dialog.showMessageBoxSync(mainWindow, {
           type: "error",
           title: "Aiden couldn't finish the reset",
-          message:
-            "Some setup data could not be cleared. Retry Reset onboarding.",
-          detail:
-            "Aiden reopened without deleting your chats, projects, schedules, or skills.",
+          message: "Some setup data could not be cleared. Retry Reset onboarding.",
+          detail: "Aiden reopened without deleting your chats, projects, schedules, or skills.",
           buttons: ["Keep Aiden Open"],
           defaultId: 0,
           noLink: true,
@@ -1328,22 +1424,16 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
 }
 
 ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
     return false;
-  const input = (
-    typeof value === "object" && value !== null ? value : {}
-  ) as Record<string, unknown>;
+  const input = (typeof value === "object" && value !== null ? value : {}) as Record<
+    string,
+    unknown
+  >;
   closeGuard = {
     dirty: input.dirty === true,
     gitBusy: input.gitBusy === true,
-    path:
-      typeof input.path === "string" && input.path.length <= 4_096
-        ? input.path
-        : undefined,
+    path: typeof input.path === "string" && input.path.length <= 4_096 ? input.path : undefined,
     saving: input.saving === true,
     // The renderer's own close-guard read (just before any prompt) supplies the sources.
     sources: closeGuard.sources,
@@ -1353,21 +1443,12 @@ ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
 
 ipcMain.handle("app:resetOnboarding", async (event) => {
   const window = mainWindow;
-  if (
-    !window ||
-    window.isDestroyed() ||
-    event.sender.id !== window.webContents.id
-  )
-    return false;
+  if (!window || window.isDestroyed() || event.sender.id !== window.webContents.id) return false;
   return requestOnboardingReset(window);
 });
 
 ipcMain.handle("app:getOnboardingState", async (event, legacyComplete: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  ) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
     throw new Error("Onboarding state is unavailable outside the active application window.");
   }
   const owner = rendererDocumentOwner(
@@ -1380,11 +1461,7 @@ ipcMain.handle("app:getOnboardingState", async (event, legacyComplete: unknown) 
 ipcMain.handle(
   "app:setOnboardingOutcome",
   async (event, outcome: unknown, selectedProviderId: unknown) => {
-    if (
-      !mainWindow ||
-      mainWindow.isDestroyed() ||
-      event.sender.id !== mainWindow.webContents.id
-    ) {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
       throw new Error("Onboarding can only be changed from the active application window.");
     }
     if (outcome !== "incomplete" && outcome !== "deferred" && outcome !== "completed") {
@@ -1402,7 +1479,11 @@ ipcMain.handle(
       event,
       () => new Error("Onboarding can only be changed from the active application document."),
     );
-    const result = await setOnboardingOutcome(outcome, selectedProviderId, () => !owner.isDestroyed());
+    const result = await setOnboardingOutcome(
+      outcome,
+      selectedProviderId,
+      () => !owner.isDestroyed(),
+    );
     void analyticsService().onboardingFinished(outcome, selectedProviderId);
     return result;
   },
@@ -1411,11 +1492,7 @@ ipcMain.handle(
 ipcMain.handle(
   "app:setOnboardingProgress",
   async (event, step: unknown, selectedProviderId: unknown) => {
-    if (
-      !mainWindow ||
-      mainWindow.isDestroyed() ||
-      event.sender.id !== mainWindow.webContents.id
-    ) {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
       throw new Error("Onboarding can only be changed from the active application window.");
     }
     if (step !== "profile" && step !== "provider" && step !== "bots") {
@@ -1438,11 +1515,7 @@ ipcMain.handle(
 );
 
 ipcMain.handle("app:getUpdateState", (event) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  ) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
     return {
       status: "idle",
       version: null,
@@ -1451,26 +1524,15 @@ ipcMain.handle("app:getUpdateState", (event) => {
   return appUpdateService.snapshot();
 });
 
-ipcMain.handle(
-  "app:checkForUpdates",
-  async (event): Promise<AppUpdateCheckResult> => {
-    if (
-      !mainWindow ||
-      mainWindow.isDestroyed() ||
-      event.sender.id !== mainWindow.webContents.id
-    ) {
-      return { outcome: "unavailable" };
-    }
-    return appUpdateService.checkNow(false);
-  },
-);
+ipcMain.handle("app:checkForUpdates", async (event): Promise<AppUpdateCheckResult> => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
+    return { outcome: "unavailable" };
+  }
+  return appUpdateService.checkNow(false);
+});
 
 function restartToUpdateBlocker(event: IpcMainInvokeEvent): AppUpdateRestartResult | null {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  ) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
     return {
       accepted: false,
       reason: "unavailable",
@@ -1515,24 +1577,17 @@ ipcMain.handle("app:restartToUpdate", async (event): Promise<AppUpdateRestartRes
 });
 
 ipcMain.handle("app:renderer-ready", (event) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
     return false;
   rendererReadiness.markReady();
   return true;
 });
 
-async function applyDockIconPreference(
-  preference: DockIconPreference,
-): Promise<boolean> {
+async function applyDockIconPreference(preference: DockIconPreference): Promise<boolean> {
   if (process.platform !== "darwin" || !app.dock) return false;
   const iconPath = applicationIconPath(preference === "monochrome");
   const icon = nativeImage.createFromPath(iconPath);
-  if (icon.isEmpty())
-    throw new Error(`Dock icon is unavailable: ${path.basename(iconPath)}`);
+  if (icon.isEmpty()) throw new Error(`Dock icon is unavailable: ${path.basename(iconPath)}`);
   await applyDockIcon(app.dock, icon);
   return true;
 }
@@ -1544,9 +1599,7 @@ function applicationIconPath(monochrome = false): string {
     : path.join(app.getAppPath(), "resources", fileName);
 }
 
-async function restoreDockIconPreference(
-  preference: DockIconPreference,
-): Promise<void> {
+async function restoreDockIconPreference(preference: DockIconPreference): Promise<void> {
   try {
     await applyDockIconPreference(preference);
   } catch (error) {
@@ -1555,33 +1608,22 @@ async function restoreDockIconPreference(
     try {
       await applyDockIconPreference("aiden");
     } catch (fallbackError) {
-      logger.warn(
-        "main",
-        "Could not restore the default Dock icon",
-        fallbackError,
-      );
+      logger.warn("main", "Could not restore the default Dock icon", fallbackError);
     }
   }
 }
 
 ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
     return false;
-  if (value !== "aiden" && value !== "monochrome")
-    throw new Error("Invalid Dock icon preference.");
+  if (value !== "aiden" && value !== "monochrome") throw new Error("Invalid Dock icon preference.");
   return applyDockIconPreference(value);
 });
 
 // The Inbox switch and view, reported by the main window only.
 registerInboxDockBadgeIpc({
   isMainWindow: (event) =>
-    !!mainWindow &&
-    !mainWindow.isDestroyed() &&
-    event.sender.id === mainWindow.webContents.id,
+    !!mainWindow && !mainWindow.isDestroyed() && event.sender.id === mainWindow.webContents.id,
 });
 
 function openExternalUrl(value: string): void {
@@ -1617,9 +1659,7 @@ async function revealExistingMainWindow(existingWindow: BrowserWindow): Promise<
   existingWindow.focus();
 }
 
-async function createMainWindow(
-  options: { startupAdmissionHeld?: boolean } = {},
-): Promise<void> {
+async function createMainWindow(options: { startupAdmissionHeld?: boolean } = {}): Promise<void> {
   let rendererCrashTimes: number[] = [];
   // macOS activate, a second-instance event, or a newly registered global
   // shortcut can all arrive while whenReady is still initializing. Never let
@@ -1647,7 +1687,8 @@ async function createMainWindow(
 
   const windowChrome = resolveWindowChrome({
     platform: process.platform,
-    preference: normalizeAppearanceConfig((await configStore.getSettings()).appearance).linuxTitleBar,
+    preference: normalizeAppearanceConfig((await configStore.getSettings()).appearance)
+      .linuxTitleBar,
     env: process.env,
   });
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1682,7 +1723,8 @@ async function createMainWindow(
   if (windowChrome === "aiden") {
     // Aiden draws the window controls; keep their maximize/full-screen look current.
     const stopTracking = trackWindowControlsState(createdWindow, (state) => {
-      if (!createdWindow.isDestroyed()) createdWindow.webContents.send(WINDOW_STATE_NOTIFICATION_CHANNEL, state);
+      if (!createdWindow.isDestroyed())
+        createdWindow.webContents.send(WINDOW_STATE_NOTIFICATION_CHANNEL, state);
     });
     createdWindow.once("closed", stopTracking);
   }
@@ -1702,15 +1744,20 @@ async function createMainWindow(
     browserService.closeForWebContents(createdWebContentsId);
   });
   createdWindow.webContents.on("render-process-gone", (_event, details) => {
-    void pruneExpiredDiagnosticCrashDumps(currentRuntimeProfile().crashDumpsPath).catch(() => undefined);
-    writeDiagnosticEvent({
-      level: "error",
-      area: "renderer",
-      event: "renderer-process-gone",
-      outcome: "failed",
-      code: "renderer-crashed",
-      fields: { reason: details.reason, exitCode: details.exitCode },
-    }, { duringShutdown: cleanupStarted || shutdownStarted });
+    void pruneExpiredDiagnosticCrashDumps(currentRuntimeProfile().crashDumpsPath).catch(
+      () => undefined,
+    );
+    writeDiagnosticEvent(
+      {
+        level: "error",
+        area: "renderer",
+        event: "renderer-process-gone",
+        outcome: "failed",
+        code: "renderer-crashed",
+        fields: { reason: details.reason, exitCode: details.exitCode },
+      },
+      { duringShutdown: cleanupStarted || shutdownStarted },
+    );
     logger.error("renderer-lifecycle", "Main renderer process exited", {
       webContentsId: createdWebContentsId,
       reason: details.reason,
@@ -1751,7 +1798,8 @@ async function createMainWindow(
           shutdownStarted ||
           createdWindow.isDestroyed() ||
           mainWindow !== createdWindow
-        ) return;
+        )
+          return;
         await createdWindow.loadURL(mainWindowUrl);
       }),
     );
@@ -1772,7 +1820,8 @@ async function createMainWindow(
         shutdownStarted ||
         createdWindow.isDestroyed() ||
         mainWindow !== createdWindow
-      ) return;
+      )
+        return;
       writeDiagnosticEvent({
         level: "info",
         area: "renderer",
@@ -1791,11 +1840,7 @@ async function createMainWindow(
         code: projected.code,
         fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
       });
-      logger.error(
-        "main",
-        "Could not recover the main renderer after it exited.",
-        error,
-      );
+      logger.error("main", "Could not recover the main renderer after it exited.", error);
       if (!createdWindow.isDestroyed()) createdWindow.destroy();
     });
   });
@@ -1843,26 +1888,23 @@ async function createMainWindow(
       });
     },
   );
-  createdWindow.webContents.on(
-    "preload-error",
-    (_event, preloadPath, error) => {
-      const projected = projectDiagnosticError(error);
-      writeDiagnosticEvent({
-        level: "error",
-        area: "renderer",
-        event: "renderer-preload-failed",
-        outcome: "failed",
-        code: projected.code,
-        fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
-      });
-      logger.error(
-        "renderer-lifecycle",
-        "Renderer preload failed",
-        { webContentsId: createdWebContentsId, preloadPath },
-        error,
-      );
-    },
-  );
+  createdWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
+    const projected = projectDiagnosticError(error);
+    writeDiagnosticEvent({
+      level: "error",
+      area: "renderer",
+      event: "renderer-preload-failed",
+      outcome: "failed",
+      code: projected.code,
+      fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
+    });
+    logger.error(
+      "renderer-lifecycle",
+      "Renderer preload failed",
+      { webContentsId: createdWebContentsId, preloadPath },
+      error,
+    );
+  });
   createdWindow.once("ready-to-show", () => {
     writeDiagnosticEvent({
       level: "info",
@@ -1915,10 +1957,12 @@ async function createMainWindow(
       forceAppQuit = false;
       shutdownStarted = false;
       updateInstall.retryScheduled();
-      setImmediate(() => continueApplicationQuit(createdWindow, () => {
-        updateInstall.retryBegan();
-        return true;
-      }));
+      setImmediate(() =>
+        continueApplicationQuit(createdWindow, () => {
+          updateInstall.retryBegan();
+          return true;
+        }),
+      );
     } else if (interruptedAction === "close") {
       setImmediate(() => void requestWindowClose(createdWindow));
     } else if (interruptedAction === "reload") {
@@ -1928,7 +1972,10 @@ async function createMainWindow(
       // a close outside the app's own paths). Keeping the window as it is
       // matches what the renderer asked for; turning it into a reload prompt
       // would ask about an action the person never took.
-      logger.info("main", "The renderer kept the window open during an unload Aiden did not start.");
+      logger.info(
+        "main",
+        "The renderer kept the window open during an unload Aiden did not start.",
+      );
     }
   });
   createdWindow.webContents.on("did-finish-load", () => {
@@ -1937,9 +1984,20 @@ async function createMainWindow(
   let liveDiagnosticCount = 0;
   createdWindow.webContents.on("console-message", (details) => {
     // Only fixed local lifecycle markers; never forward arbitrary renderer console content.
-    if (liveDiagnosticCount >= 200 || !/^\[aiden-live\] (microphone-ready|input-first-packet|output-first-packet|playback-started|playback-failed|cue-connected|cue-disconnected|cue-failed)$/.test(details.message)) return;
+    if (
+      liveDiagnosticCount >= 200 ||
+      !/^\[aiden-live\] (microphone-ready|input-first-packet|output-first-packet|playback-started|playback-failed|cue-connected|cue-disconnected|cue-failed)$/.test(
+        details.message,
+      )
+    )
+      return;
     liveDiagnosticCount += 1;
-    writeDiagnosticEvent({ level: "info", area: "voice", event: "legacy-log", fields: { message: details.message } });
+    writeDiagnosticEvent({
+      level: "info",
+      area: "voice",
+      event: "legacy-log",
+      fields: { message: details.message },
+    });
   });
 
   createdWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -1984,7 +2042,10 @@ const RENDERER_READY_DEADLINE_MS = 30_000;
 let sharedRendererReadyWait: Promise<boolean> | null = null;
 
 function waitForRendererReady(): Promise<boolean> {
-  sharedRendererReadyWait ??= withDeadline(() => rendererReadiness.wait(), RENDERER_READY_DEADLINE_MS)
+  sharedRendererReadyWait ??= withDeadline(
+    () => rendererReadiness.wait(),
+    RENDERER_READY_DEADLINE_MS,
+  )
     .then((outcome) => outcome.status === "fulfilled")
     .finally(() => {
       sharedRendererReadyWait = null;
@@ -2044,15 +2105,9 @@ function deliverMainWindowNotificationSafely(
   channel: NotificationChannel,
   payload: Record<string, unknown>,
 ): void {
-  void deliverMainWindowNotification(channel, payload).catch(
-    (error: unknown) => {
-      logger.warn(
-        "main",
-        `Could not deliver renderer command "${channel}".`,
-        error,
-      );
-    },
-  );
+  void deliverMainWindowNotification(channel, payload).catch((error: unknown) => {
+    logger.warn("main", `Could not deliver renderer command "${channel}".`, error);
+  });
 }
 
 function showMainWindow(): void {
@@ -2062,9 +2117,7 @@ function showMainWindow(): void {
 }
 
 function pauseForPackagedSubagentSoak(): Promise<void> {
-  return new Promise((resolve) =>
-    setTimeout(resolve, SUBAGENT_PACKAGED_SOAK_POLL_MS),
-  );
+  return new Promise((resolve) => setTimeout(resolve, SUBAGENT_PACKAGED_SOAK_POLL_MS));
 }
 
 async function waitForPackagedSubagentSoak(
@@ -2079,9 +2132,7 @@ async function waitForPackagedSubagentSoak(
   throw new Error(`Packaged subagent soak did not reach ${step}.`);
 }
 
-async function runPackagedSubagentSoakRendererScript(
-  script: string,
-): Promise<boolean> {
+async function runPackagedSubagentSoakRendererScript(script: string): Promise<boolean> {
   const window = mainWindow;
   if (!window || window.isDestroyed()) {
     throw new Error("Packaged subagent soak lost its main window.");
@@ -2101,18 +2152,13 @@ async function packagedSubagentSoakGenerationError(): Promise<string | null> {
   return typeof result === "string" && result ? result : null;
 }
 
-async function settlePackagedSubagentSoak(
-  session: SubagentPackagedSoakSession,
-): Promise<void> {
+async function settlePackagedSubagentSoak(session: SubagentPackagedSoakSession): Promise<void> {
   if (!(await llmClient.waitForChatIdle(SUBAGENT_PACKAGED_SOAK_CHAT_ID))) {
-    throw new Error(
-      "Packaged subagent soak did not settle its parent generation.",
-    );
+    throw new Error("Packaged subagent soak did not settle its parent generation.");
   }
   await waitForPackagedSubagentSoak(
     "child settlement",
-    () =>
-      !subagentRuntimeRegistry.hasChatChildren(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
+    () => !subagentRuntimeRegistry.hasChatChildren(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
   );
   await subagentHealthMetrics.flush();
   await writeSubagentPackagedSoakReceipt(
@@ -2127,9 +2173,7 @@ async function settlePackagedSubagentSoak(
  * main-only and fixed-function: normal users have no new IPC, renderer API, or
  * automation endpoint.
  */
-async function runPackagedSubagentSoak(
-  session: SubagentPackagedSoakSession,
-): Promise<void> {
+async function runPackagedSubagentSoak(session: SubagentPackagedSoakSession): Promise<void> {
   await deliverMainWindowNotification("app:navigate", {
     path: SUBAGENT_PACKAGED_SOAK_CHAT_PATH,
   });
@@ -2139,35 +2183,26 @@ async function runPackagedSubagentSoak(
   await waitForPackagedSubagentSoak("child start", async () => {
     const generationError = await packagedSubagentSoakGenerationError();
     if (generationError) {
-      throw new Error(
-        `Packaged subagent soak parent generation failed: ${generationError}`,
-      );
+      throw new Error(`Packaged subagent soak parent generation failed: ${generationError}`);
     }
-    return subagentRuntimeRegistry.hasChatChildren(
-      SUBAGENT_PACKAGED_SOAK_CHAT_ID,
-    );
+    return subagentRuntimeRegistry.hasChatChildren(SUBAGENT_PACKAGED_SOAK_CHAT_ID);
   });
   // Ownership alone is intentionally insufficient: a child is registered
   // before it acquires a slot and dispatches provider work. Wait for Pi's
   // response callback so the loopback child request is actually in flight.
   await waitForPackagedSubagentSoak("child provider response", () =>
-    subagentRuntimeRegistry.hasChatProviderResponse(
-      SUBAGENT_PACKAGED_SOAK_CHAT_ID,
-    ),
+    subagentRuntimeRegistry.hasChatProviderResponse(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
   );
   await waitForPackagedSubagentSoak(
     "aggregate child start",
-    async () =>
-      (await subagentHealthMetrics.snapshotForPackagedSoak()).starts === 1,
+    async () => (await subagentHealthMetrics.snapshotForPackagedSoak()).starts === 1,
   );
 
   const action = subagentPackagedSoakAction(session.control.mode);
   switch (action.kind) {
     case "renderer_stop":
       await waitForPackagedSubagentSoak("user stop", () =>
-        runPackagedSubagentSoakRendererScript(
-          SUBAGENT_PACKAGED_SOAK_STOP_SCRIPT,
-        ),
+        runPackagedSubagentSoakRendererScript(SUBAGENT_PACKAGED_SOAK_STOP_SCRIPT),
       );
       await settlePackagedSubagentSoak(session);
       return;
@@ -2176,9 +2211,7 @@ async function runPackagedSubagentSoak(
         path: action.path,
       });
       await waitForPackagedSubagentSoak("Settings navigation", () =>
-        runPackagedSubagentSoakRendererScript(
-          SUBAGENT_PACKAGED_SOAK_SETTINGS_VISIBLE_SCRIPT,
-        ),
+        runPackagedSubagentSoakRendererScript(SUBAGENT_PACKAGED_SOAK_SETTINGS_VISIBLE_SCRIPT),
       );
       await settlePackagedSubagentSoak(session);
       return;
@@ -2212,28 +2245,26 @@ registerWindowControlHandlers<BrowserWindow>({
 });
 
 ipcMain.handle("app:setMenuCommands", (event, commandIds: unknown) => {
-  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) return false;
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
+    return false;
   const next = parseMenuCommandIds(commandIds);
   if (!next) return false;
   const current = applicationMenuAvailable;
-  if (current && current.size === next.size && [...next].every((id) => current.has(id))) return true;
+  if (current && current.size === next.size && [...next].every((id) => current.has(id)))
+    return true;
   applicationMenuAvailable = next;
-  if (applicationMenuInputs) setupApplicationMenu(applicationMenuInputs.settings, applicationMenuInputs.acceleratorsEnabled);
+  if (applicationMenuInputs)
+    setupApplicationMenu(applicationMenuInputs.settings, applicationMenuInputs.acceleratorsEnabled);
   return true;
 });
 
-function setupApplicationMenu(
-  settings: AppSettings,
-  acceleratorsEnabled = true,
-): void {
+function setupApplicationMenu(settings: AppSettings, acceleratorsEnabled = true): void {
   applicationMenuInputs = { settings, acceleratorsEnabled };
   if (!acceleratorsEnabled) {
     Menu.setApplicationMenu(null);
     return;
   }
-  const bindings = effectiveBindings(
-    migrateLegacyKeybindings(settings.keybindings, settings),
-  );
+  const bindings = effectiveBindings(migrateLegacyKeybindings(settings.keybindings, settings));
   const menu = Menu.buildFromTemplate(
     applicationMenuTemplate({
       platform: process.platform,
@@ -2268,23 +2299,26 @@ if (!ownsSingleInstanceLock) {
     },
   );
   registerBrowserHandlers();
-  terminalService.setOutputObserver((workspaceId, data) => browserService.observeTerminalOutput(workspaceId, data));
+  terminalService.setOutputObserver((workspaceId, data) =>
+    browserService.observeTerminalOutput(workspaceId, data),
+  );
 
   app.on("child-process-gone", (_event, details) => {
-    void pruneExpiredDiagnosticCrashDumps(currentRuntimeProfile().crashDumpsPath).catch(() => undefined);
-    writeDiagnosticEvent({
-      level: "error",
-      area: "electron",
-      event: "child-process-gone",
-      outcome: "failed",
-      code: "internal-error",
-      fields: { processType: details.type, reason: details.reason, exitCode: details.exitCode },
-    }, { duringShutdown: cleanupStarted || shutdownStarted });
-    logger.error(
-      "electron-lifecycle",
-      "Electron child process exited unexpectedly",
-      details,
+    void pruneExpiredDiagnosticCrashDumps(currentRuntimeProfile().crashDumpsPath).catch(
+      () => undefined,
     );
+    writeDiagnosticEvent(
+      {
+        level: "error",
+        area: "electron",
+        event: "child-process-gone",
+        outcome: "failed",
+        code: "internal-error",
+        fields: { processType: details.type, reason: details.reason, exitCode: details.exitCode },
+      },
+      { duringShutdown: cleanupStarted || shutdownStarted },
+    );
+    logger.error("electron-lifecycle", "Electron child process exited unexpectedly", details);
   });
 
   app.on("second-instance", () => showMainWindow());
@@ -2295,7 +2329,13 @@ if (!ownsSingleInstanceLock) {
       const remaining = BrowserWindow.getAllWindows()
         .filter((window) => !window.isDestroyed())
         .map((window) => ({ auxiliary: isAuxiliaryWindow(window) }));
-      if (shouldReleaseAuxiliaryWindows(process.platform, aidenRemoteServiceKeepsApplicationAlive(), remaining)) {
+      if (
+        shouldReleaseAuxiliaryWindows(
+          process.platform,
+          aidenRemoteServiceKeepsApplicationAlive(),
+          remaining,
+        )
+      ) {
         disposeVisualSnapshots();
         destroyPill();
         destroyQuickChat();
@@ -2310,12 +2350,7 @@ if (!ownsSingleInstanceLock) {
       platform: process.platform,
       backgroundServiceRunning,
     });
-    if (
-      shouldQuitAfterAllWindowsClose(
-        process.platform,
-        backgroundServiceRunning,
-      )
-    ) {
+    if (shouldQuitAfterAllWindowsClose(process.platform, backgroundServiceRunning)) {
       app.quit();
     }
   });
@@ -2375,21 +2410,14 @@ if (!ownsSingleInstanceLock) {
     reloadPortableConfig,
     async (previous, next) => {
       await Promise.all([
-        reconcileExternalProviderCredentialChanges(
-          previous.providers,
-          next.providers,
-        ),
-        reconcileExternalMcpCredentialChanges(
-          previous.mcpServers,
-          next.mcpServers,
-          (serverId) => mcpManager.disconnect(serverId),
+        reconcileExternalProviderCredentialChanges(previous.providers, next.providers),
+        reconcileExternalMcpCredentialChanges(previous.mcpServers, next.mcpServers, (serverId) =>
+          mcpManager.disconnect(serverId),
         ),
       ]);
     },
   );
-  setPortableCredentialSnapshotListener(() =>
-    reloadAndReconcilePortableConfig.syncCurrent(),
-  );
+  setPortableCredentialSnapshotListener(() => reloadAndReconcilePortableConfig.syncCurrent());
   const portableConfigWatcher = createPortableConfigWatcher(
     reloadAndReconcilePortableConfig,
     () => {
@@ -2404,11 +2432,7 @@ if (!ownsSingleInstanceLock) {
         .finally(() => ipcMain.broadcast("app:config-externally-changed", {}));
     },
     (error: unknown) =>
-      logger.warn(
-        "portable-config",
-        "Failed to re-read the portable config",
-        error,
-      ),
+      logger.warn("portable-config", "Failed to re-read the portable config", error),
   );
 
   let initialMainWindow: Promise<void> = Promise.resolve();
@@ -2429,10 +2453,7 @@ if (!ownsSingleInstanceLock) {
           electronVersion: process.versions.electron,
         },
       });
-      if (
-        runtimeProfile.id === "development" &&
-        process.platform === "darwin"
-      ) {
+      if (runtimeProfile.id === "development" && process.platform === "darwin") {
         app.dock?.setBadge("DEV");
       }
       // Inbox snoozes: one timer for the next wake, plus the early wake when
@@ -2452,15 +2473,10 @@ if (!ownsSingleInstanceLock) {
         isPackaged: isPackagedRuntime(),
       });
       if (packagedSubagentSoak && !subagentsEnabled()) {
-        throw new Error(
-          "Packaged subagent soak requires the internal subagent opt-in.",
-        );
+        throw new Error("Packaged subagent soak requires the internal subagent opt-in.");
       }
       if (!isPackagedRuntime()) {
-        logger.info(
-          "dev-log",
-          `Writing dev log to ${devLogPath() ?? "unknown"}`,
-        );
+        logger.info("dev-log", `Writing dev log to ${devLogPath() ?? "unknown"}`);
         logger.info("electron-lifecycle", "Electron application ready", {
           appName: app.getName(),
           appVersion: app.getVersion(),
@@ -2497,9 +2513,7 @@ if (!ownsSingleInstanceLock) {
       // Observed below after reconciliation; never an unhandled rejection.
       initialMainWindow.catch(() => undefined);
       try {
-        terminalService.installHistoryStore(
-          await TerminalHistoryStore.create(),
-        );
+        terminalService.installHistoryStore(await TerminalHistoryStore.create());
       } catch (error) {
         logger.warn(
           "terminal",
@@ -2537,7 +2551,8 @@ if (!ownsSingleInstanceLock) {
       installVisualSnapshotQueue(
         createMainVisualSnapshotQueue({
           htmlFor: (chatId, mediaId) => generativeUiArtifactStore.htmlFor(chatId, mediaId),
-          addVisualSnapshots: (chatId, messageId, snapshots) => chatStore.addVisualSnapshots(chatId, messageId, snapshots),
+          addVisualSnapshots: (chatId, messageId, snapshots) =>
+            chatStore.addVisualSnapshots(chatId, messageId, snapshots),
         }),
       );
       await startStudioAssets({
@@ -2590,17 +2605,27 @@ if (!ownsSingleInstanceLock) {
       void toolOutputStore.pruneExpired().catch(() => {
         logger.warn("pi", "Expired tool output cleanup could not complete.");
       });
-      const toolOutputCleanup = setInterval(() => {
-        void toolOutputStore.pruneExpired().catch(() => {
-          logger.warn("pi", "Expired tool output cleanup could not complete.");
-        });
-      }, 60 * 60 * 1_000);
+      const toolOutputCleanup = setInterval(
+        () => {
+          void toolOutputStore.pruneExpired().catch(() => {
+            logger.warn("pi", "Expired tool output cleanup could not complete.");
+          });
+        },
+        60 * 60 * 1_000,
+      );
       toolOutputCleanup.unref();
       // Stop prior-session shells before startup removes chats or worktrees.
-      const processRecoveryReady = await reapFollowThroughProcesses().then(() => true, (error: unknown) => {
-        logger.warn("background-jobs", "Could not finish recovery of prior-session processes.", error);
-        return false;
-      });
+      const processRecoveryReady = await reapFollowThroughProcesses().then(
+        () => true,
+        (error: unknown) => {
+          logger.warn(
+            "background-jobs",
+            "Could not finish recovery of prior-session processes.",
+            error,
+          );
+          return false;
+        },
+      );
       await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
         await toolOutputStore.deleteByChat(chatId);
         if (displayImageArtifactAvailability.available) {
@@ -2615,8 +2640,10 @@ if (!ownsSingleInstanceLock) {
         await chatStore.remove(chatId);
         // The same Inbox cleanup the live delete runs: no snooze or pin is left
         // behind for a chat whose delete a crash cut short.
-        await forgetChatInboxState({ readMarkers: chatReadMarkers, triage: chatTriage }, chatId, (area, message, error) =>
-          logger.warn(area, message, error),
+        await forgetChatInboxState(
+          { readMarkers: chatReadMarkers, triage: chatTriage },
+          chatId,
+          (area, message, error) => logger.warn(area, message, error),
         );
       });
       // Sweep any temporary floating chats left over from a prior crash, then
@@ -2625,15 +2652,19 @@ if (!ownsSingleInstanceLock) {
         logger.warn("chats", "Could not sweep orphaned temporary chats at startup.", error);
       });
       await workspaceApplicationService.prepareNoWorkspaceChats().catch((error: unknown) => {
-        logger.warn("workspace", "No workspace chats could not be prepared; they keep their current folders.", error);
+        logger.warn(
+          "workspace",
+          "No workspace chats could not be prepared; they keep their current folders.",
+          error,
+        );
       });
       if (displayImageArtifactAvailability.available) {
         try {
           const startupChats = (
             await Promise.all(
-              (await displayImageArtifactStore.pendingChatIds()).map((chatId) =>
-                chatStore.get(chatId),
-              ),
+              (
+                await displayImageArtifactStore.pendingChatIds()
+              ).map((chatId) => chatStore.get(chatId)),
             )
           ).filter((chat): chat is Chat => chat !== null);
           await displayImageArtifactStore.recover(
@@ -2666,9 +2697,9 @@ if (!ownsSingleInstanceLock) {
         try {
           const startupHtmlChats = (
             await Promise.all(
-              (await generativeUiArtifactStore.pendingChatIds()).map((chatId) =>
-                chatStore.get(chatId),
-              ),
+              (
+                await generativeUiArtifactStore.pendingChatIds()
+              ).map((chatId) => chatStore.get(chatId)),
             )
           ).filter((chat): chat is Chat => chat !== null);
           await generativeUiArtifactStore.recover(
@@ -2708,7 +2739,9 @@ if (!ownsSingleInstanceLock) {
       if (hostPlatformCapabilities().botComputers) {
         void import("./services/bot-computers/bot-computers-main.js")
           .then(({ reconcileBotComputers }) => reconcileBotComputers())
-          .catch((error) => logger.warn("bot-computers", "Bot computer startup check did not finish.", error));
+          .catch((error) =>
+            logger.warn("bot-computers", "Bot computer startup check did not finish.", error),
+          );
       }
       // One-time legacy cleanup runs after recoverable artifacts and Bot identity
       // restoration, but before renderers, schedules, or remote clients can write.
@@ -2718,18 +2751,18 @@ if (!ownsSingleInstanceLock) {
         // Do not admit new writers after an uncertain initial snapshot write:
         // otherwise a restart could mistake their new chats for legacy data.
         if (error instanceof EmptyChatMigrationSnapshotError) throw error;
-        logger.warn("chat", "Empty-chat migration is incomplete; it will resume on the next launch.", error);
+        logger.warn(
+          "chat",
+          "Empty-chat migration is incomplete; it will resume on the next launch.",
+          error,
+        );
       }
-      await reconcileChatScopedStores(chatStore, [
-        piRuntimeEffectStore,
-        piCompactionSessionStore,
-      ]);
+      await reconcileChatScopedStores(chatStore, [piRuntimeEffectStore, piCompactionSessionStore]);
       await reconcilePendingManagedWorktreeDeletions({
         listWorkspaces: () => configStore.listWorkspaces(),
         deletionPending: (workspace) => {
           const managed = workspace.managedWorktree;
-          if (!managed?.worktreeGitDir || !managed.ownershipToken)
-            return Promise.resolve(false);
+          if (!managed?.worktreeGitDir || !managed.ownershipToken) return Promise.resolve(false);
           return gitManagedWorktreeDeletionPending(
             managed.worktreePath,
             managed.worktreeGitDir,
@@ -2801,11 +2834,7 @@ if (!ownsSingleInstanceLock) {
       try {
         await reconcilePendingMcpCredentialCleanup();
       } catch (error) {
-        logger.error(
-          "mcp",
-          "Could not reconcile an interrupted MCP credential cleanup.",
-          error,
-        );
+        logger.error("mcp", "Could not reconcile an interrupted MCP credential cleanup.", error);
       }
       try {
         await cleanupRetiredMcpServerCredentials();
@@ -2829,11 +2858,7 @@ if (!ownsSingleInstanceLock) {
         void deliverMainWindowNotification("app:command", {
           commandId: "composer.focus",
         }).catch((error: unknown) => {
-          logger.warn(
-            "shortcut",
-            "Could not focus the composer from the global shortcut",
-            error,
-          );
+          logger.warn("shortcut", "Could not focus the composer from the global shortcut", error);
         });
       });
       initDictationShortcut(() => {
@@ -2841,22 +2866,14 @@ if (!ownsSingleInstanceLock) {
       });
       initQuickChatShortcut(() => {
         void toggleQuickChat("hotkey").catch((error: unknown) => {
-          logger.warn(
-            "quick-chat",
-            "Could not toggle Quick Chat from the global shortcut",
-            error,
-          );
+          logger.warn("quick-chat", "Could not toggle Quick Chat from the global shortcut", error);
         });
       });
       initAssistantShortcut(() => {
         void deliverMainWindowNotification("app:command", {
           commandId: "assistant.open",
         }).catch((error: unknown) => {
-          logger.warn(
-            "assistant",
-            "Could not open Aiden from the global shortcut",
-            error,
-          );
+          logger.warn("assistant", "Could not open Aiden from the global shortcut", error);
         });
       });
       try {
@@ -2896,7 +2913,9 @@ if (!ownsSingleInstanceLock) {
             logger.warn("quick-chat", "Could not pre-warm Quick Chat window", error);
           });
         }
-        void import("./services/local-voice-preload.js").then(({ preloadLocalVoice }) => preloadLocalVoice());
+        void import("./services/local-voice-preload.js").then(({ preloadLocalVoice }) =>
+          preloadLocalVoice(),
+        );
       }, 3_000).unref();
       resolveShortcutInitialization?.();
       resolveShortcutInitialization = null;
@@ -2917,7 +2936,11 @@ if (!ownsSingleInstanceLock) {
       // remote caller can start work and write this launch’s records.
       if (shutdownHasBegun()) return;
       await startFollowThrough().catch((error: unknown) => {
-        logger.warn("follow-through", "Could not finish restoring checks and pull request follows.", error);
+        logger.warn(
+          "follow-through",
+          "Could not finish restoring checks and pull request follows.",
+          error,
+        );
       });
       // Goals live in follow-through's saved state; ones active at quit come back paused.
       if (!shutdownHasBegun()) {
@@ -2931,12 +2954,18 @@ if (!ownsSingleInstanceLock) {
       if (!shutdownHasBegun()) {
         void import("./services/chat-orchestration/child-chats-main.js")
           .then(({ childChatCompletions }) => childChatCompletions.recoverOwed())
-          .catch((error: unknown) => logger.warn("chat-orchestration", "Could not post started chats' owed endings.", error));
+          .catch((error: unknown) =>
+            logger.warn("chat-orchestration", "Could not post started chats' owed endings.", error),
+          );
       }
       // Watches runs, jobs and checks to keep the computer awake while Aiden works.
       if (!shutdownHasBegun()) {
         await startKeepAwake().catch((error: unknown) => {
-          logger.warn("keep-awake", "Could not start keeping the computer awake while Aiden works.", error);
+          logger.warn(
+            "keep-awake",
+            "Could not start keeping the computer awake while Aiden works.",
+            error,
+          );
         });
       }
       // Back in front, awake or unlocked: followed pull requests may have
@@ -2982,9 +3011,7 @@ if (!ownsSingleInstanceLock) {
           () => powerMonitor.getSystemIdleState(1) === "locked",
         );
         powerMonitor.on("resume", () => scheduleService.reevaluateCatchUp());
-        powerMonitor.on("unlock-screen", () =>
-          scheduleService.reevaluateCatchUp(),
-        );
+        powerMonitor.on("unlock-screen", () => scheduleService.reevaluateCatchUp());
         if (!shutdownHasBegun()) await scheduleService.start();
         // Chat tasks that run when something happens; never hold keep-awake.
         if (!shutdownHasBegun()) {
@@ -3016,8 +3043,7 @@ if (!ownsSingleInstanceLock) {
       logger.error("main", "Failed to start Aiden Agent", error);
       // A startup window whose renderer was never admitted holds no user
       // state, and its held invokes could never answer a close handshake.
-      if (!startupIpcAdmitted && mainWindow && !mainWindow.isDestroyed())
-        mainWindow.destroy();
+      if (!startupIpcAdmitted && mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
       void shutdownAndQuit().then(() => {
         // Destroying the last window may already have started the shutdown
         // from before-quit; this joins it. It returns without quitting when

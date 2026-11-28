@@ -23,7 +23,12 @@
 
 import os from "node:os";
 import { isDeepStrictEqual } from "node:util";
-import type { AgentMessage, AgentTool, AfterToolCallContext, AfterToolCallResult } from "@earendil-works/pi-agent-core";
+import type {
+  AgentMessage,
+  AgentTool,
+  AfterToolCallContext,
+  AfterToolCallResult,
+} from "@earendil-works/pi-agent-core";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { fenceAsData } from "../../renderer/shared/agent-notices.js";
 import { getHookDispatcher } from "./hooks/index.js";
@@ -64,7 +69,9 @@ export interface WorkspaceChatHookTarget {
 export function workspaceChatHookScopes(target: WorkspaceChatHookTarget): HookScope[] {
   return [
     { kind: "global" },
-    ...(target.workspaceRoot ? [{ kind: "workspace" as const, workspaceRoot: target.workspaceRoot }] : []),
+    ...(target.workspaceRoot
+      ? [{ kind: "workspace" as const, workspaceRoot: target.workspaceRoot }]
+      : []),
     { kind: "chat", chatId: target.chatId },
   ];
 }
@@ -159,7 +166,9 @@ function modelReason(outcome: HookOutcome, fallback: string): string {
 export function hookNoticeLines(outcome: HookOutcome | undefined): string[] {
   if (!outcome) return [];
   return [
-    ...(outcome.systemMessages ?? []).map((message) => `${capitalized(hooksLabel(outcome))}: ${message}`),
+    ...(outcome.systemMessages ?? []).map(
+      (message) => `${capitalized(hooksLabel(outcome))}: ${message}`,
+    ),
     ...(outcome.notices ?? []),
   ];
 }
@@ -186,7 +195,13 @@ export function hookDispatchFailure(event: HookEvent, error: unknown): HookOutco
   if (event !== "PreToolUse") return undefined;
   const detail = error instanceof Error ? error.message : String(error);
   const reason = `Aiden could not run your hooks, so it blocked this tool call: ${detail}`;
-  return { ranHooks: [], decision: "deny", reason, reasonForModel: fenceAsData("Hook result", reason), notices: [`${reason}.`] };
+  return {
+    ranHooks: [],
+    decision: "deny",
+    reason,
+    reasonForModel: fenceAsData("Hook result", reason),
+    notices: [`${reason}.`],
+  };
 }
 
 /** What the person sees when a UserPromptSubmit hook refuses the prompt. */
@@ -325,7 +340,9 @@ export function createWorkspaceChatHooks(
     }
   };
   const dispatch: WorkspaceChatHooks["dispatch"] = async (event, payload, options) => {
-    if (!has(event, typeof payload.aiden_tool_name === "string" ? payload.aiden_tool_name : undefined)) {
+    if (
+      !has(event, typeof payload.aiden_tool_name === "string" ? payload.aiden_tool_name : undefined)
+    ) {
       return undefined;
     }
     let outcome: HookOutcome;
@@ -360,13 +377,23 @@ export function createWorkspaceChatHooks(
     dispatch,
     async preToolUse({ toolCallId, toolName, args, tools, signal }) {
       if (!has("PreToolUse", toolName)) return { kind: "none" };
-      const idempotencyKey = toolCallIdempotencyKey(`PreToolUse:${target.chatId}`, toolCallId, args);
-      const first = await dispatch("PreToolUse", toolPayload(toolName, args, toolCallId), { idempotencyKey, signal });
+      const idempotencyKey = toolCallIdempotencyKey(
+        `PreToolUse:${target.chatId}`,
+        toolCallId,
+        args,
+      );
+      const first = await dispatch("PreToolUse", toolPayload(toolName, args, toolCallId), {
+        idempotencyKey,
+        signal,
+      });
       if (!first) return { kind: "none" };
       let outcome = first;
       if (outcome.decision === "deny") {
         requestStop(outcome);
-        return { kind: "block", reason: `Blocked by ${hooksLabel(outcome)}: ${modelReason(outcome, "no reason given")}` };
+        return {
+          kind: "block",
+          reason: `Blocked by ${hooksLabel(outcome)}: ${modelReason(outcome, "no reason given")}`,
+        };
       }
       if (outcome.updatedInput && hookMayRewriteInput(toolName) && isRecord(args)) {
         const tool = tools?.find((candidate) => candidate.name === toolName);
@@ -392,19 +419,35 @@ export function createWorkspaceChatHooks(
         // really run too. Only this answer counts, its stop and context included,
         // and a hook that keeps changing the input has no stable input to approve.
         const checked = await dispatch("PreToolUse", toolPayload(toolName, validated, toolCallId), {
-          idempotencyKey: toolCallIdempotencyKey(`PreToolUse:${target.chatId}`, toolCallId, validated),
+          idempotencyKey: toolCallIdempotencyKey(
+            `PreToolUse:${target.chatId}`,
+            toolCallId,
+            validated,
+          ),
           signal,
         });
         if (!checked) {
           requestStop(outcome);
-          return { kind: "block", reason: `Blocked by ${hooksLabel(outcome)}: its updated input could not be checked.` };
+          return {
+            kind: "block",
+            reason: `Blocked by ${hooksLabel(outcome)}: its updated input could not be checked.`,
+          };
         }
         requestStop(checked);
         if (checked.decision === "deny") {
-          return { kind: "block", reason: `Blocked by ${hooksLabel(checked)}: ${modelReason(checked, "no reason given")}` };
+          return {
+            kind: "block",
+            reason: `Blocked by ${hooksLabel(checked)}: ${modelReason(checked, "no reason given")}`,
+          };
         }
-        if (checked.updatedInput && !isDeepStrictEqual(aidenToolInput(toolName, checked.updatedInput, validated), validated)) {
-          return { kind: "block", reason: `Blocked by ${hooksLabel(checked)}: it changed the tool's input again, so there is no settled input to run.` };
+        if (
+          checked.updatedInput &&
+          !isDeepStrictEqual(aidenToolInput(toolName, checked.updatedInput, validated), validated)
+        ) {
+          return {
+            kind: "block",
+            reason: `Blocked by ${hooksLabel(checked)}: it changed the tool's input again, so there is no settled input to run.`,
+          };
         }
         replaceArgsInPlace(args, validated);
         outcome = checked;
@@ -424,7 +467,9 @@ export function createWorkspaceChatHooks(
     },
     notify(message, notificationType) {
       if (!has("Notification")) return;
-      void dispatch("Notification", { message, notification_type: notificationType }).catch(() => {});
+      void dispatch("Notification", { message, notification_type: notificationType }).catch(
+        () => {},
+      );
     },
     stopRequested: () => stopReason,
     async onStop(event) {
@@ -451,7 +496,10 @@ export function createWorkspaceChatHooks(
           if (inputContext) {
             messages = messages.map((message) => {
               if (message.role !== "user") return message;
-              const own = inputContext({ timestamp: message.timestamp, text: plainText(message.content) });
+              const own = inputContext({
+                timestamp: message.timestamp,
+                text: plainText(message.content),
+              });
               return own ? appendText(message, own) : message;
             });
           }
@@ -497,8 +545,11 @@ export function createWorkspaceChatHooks(
             requestStop(outcome);
             if (outcome.flaggedResult) {
               const reason =
-                outcome.reasonForModel ?? (outcome.reason ? fenceAsData("Hook feedback", outcome.reason) : undefined);
-              additions.push(`${capitalized(hooksLabel(outcome))} flagged this result.${reason ? `\n${reason}` : ""}`);
+                outcome.reasonForModel ??
+                (outcome.reason ? fenceAsData("Hook feedback", outcome.reason) : undefined);
+              additions.push(
+                `${capitalized(hooksLabel(outcome))} flagged this result.${reason ? `\n${reason}` : ""}`,
+              );
             }
             if (outcome.additionalContext) additions.push(outcome.additionalContext);
           }
@@ -550,7 +601,8 @@ export function preCompactCompactionOptions(
   hasSummaryInstructions: () => boolean;
 } {
   return {
-    summaryInstructions: (reason, signal) => preCompactSummaryInstructions(hooks, { trigger, reason, signal }),
+    summaryInstructions: (reason, signal) =>
+      preCompactSummaryInstructions(hooks, { trigger, reason, signal }),
     hasSummaryInstructions: () => hooks.has("PreCompact"),
   };
 }
@@ -611,7 +663,9 @@ export async function runPromptIntakeHooks(input: PromptIntakeInput): Promise<st
           "SessionStart",
           { source },
           {
-            ...(input.idempotencyKeys.sessionStart ? { idempotencyKey: input.idempotencyKeys.sessionStart } : {}),
+            ...(input.idempotencyKeys.sessionStart
+              ? { idempotencyKey: input.idempotencyKeys.sessionStart }
+              : {}),
             ...(input.signal ? { signal: input.signal } : {}),
           },
         )
@@ -620,16 +674,17 @@ export async function runPromptIntakeHooks(input: PromptIntakeInput): Promise<st
     if (source) markWorkspaceChatSessionStarted(input.target);
     // A follow-up turn starts from Aiden's own notice, not the person's words,
     // so it isn't screened (as a notice queued mid-run isn't either).
-    const promptSubmit = prompt && prompt.notice === undefined && !screened
-      ? await dispatch(
-          "UserPromptSubmit",
-          { prompt: prompt.content },
-          {
-            idempotencyKey: input.idempotencyKeys.userPromptSubmit,
-            ...(input.signal ? { signal: input.signal } : {}),
-          },
-        )
-      : undefined;
+    const promptSubmit =
+      prompt && prompt.notice === undefined && !screened
+        ? await dispatch(
+            "UserPromptSubmit",
+            { prompt: prompt.content },
+            {
+              idempotencyKey: input.idempotencyKeys.userPromptSubmit,
+              ...(input.signal ? { signal: input.signal } : {}),
+            },
+          )
+        : undefined;
     if (promptSubmit?.blockPrompt || promptSubmit?.stopTurn) {
       // The prompt stays visible but is marked, so no later turn, fork or
       // summary ever projects it into a model's context.
@@ -641,18 +696,25 @@ export async function runPromptIntakeHooks(input: PromptIntakeInput): Promise<st
       }
       throw new Error(blocked);
     }
-    context = hookTurnContextText([sessionStart?.additionalContext, promptSubmit?.additionalContext]);
+    context = hookTurnContextText([
+      sessionStart?.additionalContext,
+      promptSubmit?.additionalContext,
+    ]);
   }
   // The screened context already says it came from the hooks for this message.
   const screenedContext = screened?.context?.trim();
   if (screenedContext) context = context ? `${context}\n\n${screenedContext}` : screenedContext;
   if (prompt?.id && isHookBlockedPrompt({ ...prompt, role: "user" })) {
     // Hooks don't run on this turn at all, so nothing has looked at it again.
-    if (!dispatch) throw new Error(hookBlockedField({ ...prompt, role: "user" }).hookBlocked?.reason);
+    if (!dispatch)
+      throw new Error(hookBlockedField({ ...prompt, role: "user" }).hookBlocked?.reason);
     // Sent now (a retry after the hook changed or was turned off), so it is
     // no longer a blocked prompt.
-    await clearPromptHookBlock(input.store, input.target.chatId, prompt as PromptIntakeMessage & { id: string }, (error) =>
-      input.onStoreError("Could not clear a hook-blocked prompt's mark.", error),
+    await clearPromptHookBlock(
+      input.store,
+      input.target.chatId,
+      prompt as PromptIntakeMessage & { id: string },
+      (error) => input.onStoreError("Could not clear a hook-blocked prompt's mark.", error),
     );
   }
   return context;
@@ -677,7 +739,9 @@ export async function screenRunInputWithHooks(input: {
   );
   if (outcome?.blockPrompt || outcome?.stopTurn) return { blocked: promptBlockedMessage(outcome) };
   const context = outcome?.additionalContext?.trim();
-  return context ? { context: `[Aiden hook] Context from the person's hooks for this message:\n\n${context}` } : {};
+  return context
+    ? { context: `[Aiden hook] Context from the person's hooks for this message:\n\n${context}` }
+    : {};
 }
 
 /**
@@ -737,7 +801,9 @@ export function endWorkspaceChatSession(
   if (!target) return;
   // The chat is gone, so its hooks' messages go where the caller says (the app log, or stderr).
   const hooks = createWorkspaceChatHooks(target, dispatcher, options);
-  void hooks.dispatch("SessionEnd", { reason: "other", aiden_reason: "chat_deleted" }).catch(() => {});
+  void hooks
+    .dispatch("SessionEnd", { reason: "other", aiden_reason: "chat_deleted" })
+    .catch(() => {});
 }
 
 /** Tests only: forget every session this process started. */

@@ -270,7 +270,8 @@ export const COMMANDS = [
   command({
     id: "agentSlider.previous",
     title: "Previous Agent Slider stop",
-    description: "Move the open chat to the Agent Slider's previous stop, skipping stops that can't run.",
+    description:
+      "Move the open chat to the Agent Slider's previous stop, skipping stops that can't run.",
     category: "Chat",
     keywords: ["model", "effort", "thinking", "slower", "faster", "agent"],
     defaultBinding: "Command+Alt+[",
@@ -284,7 +285,8 @@ export const COMMANDS = [
   command({
     id: "agentSlider.next",
     title: "Next Agent Slider stop",
-    description: "Move the open chat to the Agent Slider's next stop, skipping stops that can't run.",
+    description:
+      "Move the open chat to the Agent Slider's next stop, skipping stops that can't run.",
     category: "Chat",
     keywords: ["model", "effort", "thinking", "smarter", "agent"],
     defaultBinding: "Command+Alt+]",
@@ -439,7 +441,8 @@ export const COMMANDS = [
   command({
     id: "design.expand",
     title: "Expand design canvas",
-    description: "Collapse the sidebar so the chat and canvas fill the window, or bring the sidebar back.",
+    description:
+      "Collapse the sidebar so the chat and canvas fill the window, or bring the sidebar back.",
     category: "Tools",
     keywords: ["design", "canvas", "expand", "minimize", "maximize", "full", "sidebar"],
     // Figma's "minimize UI" chord. Claimed only while design mode is on.
@@ -580,9 +583,24 @@ export const COMMANDS = [
   }),
   ...(
     [
-      ["focus.sidebar", "Focus sidebar", "Move focus to the sidebar's current row.", ["sidebar", "list", "region", "f6"]],
-      ["focus.chat", "Focus conversation", "Move focus to the conversation so arrow keys scroll it.", ["conversation", "transcript", "messages", "region", "f6"]],
-      ["focus.panel", "Focus side panel", "Move focus into the open side panel.", ["panel", "environment", "region", "f6"]],
+      [
+        "focus.sidebar",
+        "Focus sidebar",
+        "Move focus to the sidebar's current row.",
+        ["sidebar", "list", "region", "f6"],
+      ],
+      [
+        "focus.chat",
+        "Focus conversation",
+        "Move focus to the conversation so arrow keys scroll it.",
+        ["conversation", "transcript", "messages", "region", "f6"],
+      ],
+      [
+        "focus.panel",
+        "Focus side panel",
+        "Move focus into the open side panel.",
+        ["panel", "environment", "region", "f6"],
+      ],
     ] as const
   ).map(([id, title, description, keywords]) =>
     command({
@@ -601,13 +619,48 @@ export const COMMANDS = [
   ),
   ...(
     [
-      ["tools.review", "Open Changes", "Show this folder's Git changes in the Environment panel.", ["review", "diff", "git", "changes"]],
-      ["tools.files", "Open Files", "Browse and edit this folder's files in the Environment panel.", ["files", "editor", "folder"]],
-      ["tools.browser", "Open Browser", "Open the shared browser in the Environment panel.", ["web", "browser", "preview"]],
-      ["tools.devices", "Open Device", "Open a simulator or emulator in the Environment panel.", ["device", "simulator", "emulator", "phone"]],
-      ["tools.context", "Open Context", "See what fills this chat's context in the Environment panel.", ["context", "tokens", "usage"]],
-      ["tools.subagents", "Open Subagents", "Inspect this chat's subagents in the Environment panel.", ["subagents", "children", "delegate"]],
-      ["tools.artifacts", "Open Artifacts", "Open this folder's artifact pages in the Environment panel.", ["artifacts", "pages", "dashboard"]],
+      [
+        "tools.review",
+        "Open Changes",
+        "Show this folder's Git changes in the Environment panel.",
+        ["review", "diff", "git", "changes"],
+      ],
+      [
+        "tools.files",
+        "Open Files",
+        "Browse and edit this folder's files in the Environment panel.",
+        ["files", "editor", "folder"],
+      ],
+      [
+        "tools.browser",
+        "Open Browser",
+        "Open the shared browser in the Environment panel.",
+        ["web", "browser", "preview"],
+      ],
+      [
+        "tools.devices",
+        "Open Device",
+        "Open a simulator or emulator in the Environment panel.",
+        ["device", "simulator", "emulator", "phone"],
+      ],
+      [
+        "tools.context",
+        "Open Context",
+        "See what fills this chat's context in the Environment panel.",
+        ["context", "tokens", "usage"],
+      ],
+      [
+        "tools.subagents",
+        "Open Subagents",
+        "Inspect this chat's subagents in the Environment panel.",
+        ["subagents", "children", "delegate"],
+      ],
+      [
+        "tools.artifacts",
+        "Open Artifacts",
+        "Open this folder's artifact pages in the Environment panel.",
+        ["artifacts", "pages", "dashboard"],
+      ],
     ] as const
   ).map(([id, title, description, keywords]) =>
     command({
@@ -628,14 +681,54 @@ export const COMMANDS = [
   ...(
     [
       ["chat.rename", "Rename chat…", "Rename the open chat.", ["title", "name"]],
-      ["chat.duplicate", "Duplicate chat", "Copy the open conversation into a new chat.", ["clone", "copy"]],
-      ["chat.delete", "Delete chat…", "Permanently delete the open chat after you confirm.", ["remove", "trash"]],
-      ["chat.export", "Export chat", "Save the open chat as an Aiden chat file.", ["save", "file", "download"]],
-      ["chat.compact", "Compact chat", "Summarize this chat's context with the engine chosen in Settings.", ["context", "summarize", "tokens"]],
-      ["chat.fork", "Fork chat…", "Start a new chat from a completed turn, with or without a summary.", ["branch", "fork", "turn"]],
-      ["chat.copyLatest", "Copy last reply", "Copy Aiden's latest reply in this chat.", ["clipboard", "response", "answer"]],
-      ["chat.details", "Chat details", "Review stored details for the open chat.", ["session", "info", "details"]],
-      ["workspace.access", "Change folder access", "Choose how much this chat may do in its folder.", ["permission", "access", "approval", "full"]],
+      [
+        "chat.duplicate",
+        "Duplicate chat",
+        "Copy the open conversation into a new chat.",
+        ["clone", "copy"],
+      ],
+      [
+        "chat.delete",
+        "Delete chat…",
+        "Permanently delete the open chat after you confirm.",
+        ["remove", "trash"],
+      ],
+      [
+        "chat.export",
+        "Export chat",
+        "Save the open chat as an Aiden chat file.",
+        ["save", "file", "download"],
+      ],
+      [
+        "chat.compact",
+        "Compact chat",
+        "Summarize this chat's context with the engine chosen in Settings.",
+        ["context", "summarize", "tokens"],
+      ],
+      [
+        "chat.fork",
+        "Fork chat…",
+        "Start a new chat from a completed turn, with or without a summary.",
+        ["branch", "fork", "turn"],
+      ],
+      [
+        "chat.copyLatest",
+        "Copy last reply",
+        "Copy Aiden's latest reply in this chat.",
+        ["clipboard", "response", "answer"],
+      ],
+      [
+        "chat.details",
+        "Chat details",
+        "Review stored details for the open chat.",
+        ["session", "info", "details"],
+      ],
+      [
+        "workspace.access",
+        "Change folder access",
+        "Choose how much this chat may do in its folder.",
+        ["permission", "access", "approval", "full"],
+      ],
     ] as const
   ).map(([id, title, description, keywords]) =>
     command({
@@ -972,20 +1065,8 @@ export function acceleratorFromKeyboardEvent(
   if (!key) key = normalizeBaseKey(event.key);
   if (!key) return null;
   const modifiers = [
-    platform === "darwin"
-      ? event.metaKey
-        ? "Command"
-        : null
-      : event.ctrlKey
-        ? "Command"
-        : null,
-    platform === "darwin"
-      ? event.ctrlKey
-        ? "Control"
-        : null
-      : event.metaKey
-        ? "Control"
-        : null,
+    platform === "darwin" ? (event.metaKey ? "Command" : null) : event.ctrlKey ? "Command" : null,
+    platform === "darwin" ? (event.ctrlKey ? "Control" : null) : event.metaKey ? "Control" : null,
     event.altKey ? "Alt" : null,
     event.shiftKey ? "Shift" : null,
   ].filter((part): part is string => Boolean(part));
@@ -1000,10 +1081,7 @@ export function matchesAccelerator(
   return acceleratorFromKeyboardEvent(event, platform) === normalizeAccelerator(accelerator);
 }
 
-export function electronAcceleratorForPlatform(
-  value: string,
-  platform: NodeJS.Platform,
-): string {
+export function electronAcceleratorForPlatform(value: string, platform: NodeJS.Platform): string {
   const normalized = normalizeAccelerator(value) ?? value;
   if (platform === "darwin") return normalized;
   return normalized

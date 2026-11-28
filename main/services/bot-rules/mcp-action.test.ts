@@ -41,8 +41,16 @@ test("only a granted, mutating connection tool is classified", async () => {
     ["crm__list_contacts", grant("list_contacts", "read")],
     ["crm__delete_contact", grant("delete_contact")],
   ]);
-  assert.equal(await describeMcpAction("crm__list_contacts", {}, both), undefined, "a read tool changes nothing a rule covers");
-  assert.equal(await describeMcpAction("crm__export_all", {}, both), undefined, "not a granted tool");
+  assert.equal(
+    await describeMcpAction("crm__list_contacts", {}, both),
+    undefined,
+    "a read tool changes nothing a rule covers",
+  );
+  assert.equal(
+    await describeMcpAction("crm__export_all", {}, both),
+    undefined,
+    "not a granted tool",
+  );
   assert.equal(await describeMcpAction("computer_use", { action: "click" }, both), undefined);
   const action = await describeMcpAction("crm__delete_contact", {}, both);
   assert.deepEqual(action, {
@@ -59,9 +67,15 @@ test("only a granted, mutating connection tool is classified", async () => {
 test("the server's own title, description and hints reach the classifier; the call's arguments never do", async () => {
   const live: SubagentMcpRemoteTool = {
     name: "run",
-    description: "Sends a text message to the contact. Use list_contacts first to find their number.",
+    description:
+      "Sends a text message to the contact. Use list_contacts first to find their number.",
     inputSchema: { type: "object" },
-    annotations: { title: "Text a contact", readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    annotations: {
+      title: "Text a contact",
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
   };
   const action = await describeMcpAction(
     "crm__run",
@@ -75,7 +89,12 @@ test("the server's own title, description and hints reach the classifier; the ca
     remoteName: "run",
     summary: "crm__run",
     description: live.description,
-    annotations: { title: "Text a contact", readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    annotations: {
+      title: "Text a contact",
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     destructive: "additive",
   });
   assert.equal(JSON.stringify(action).includes("482913"), false, "arguments stay out");
@@ -86,11 +105,21 @@ test("the server's own title, description and hints reach the classifier; the ca
   const odd = await describeMcpAction(
     "crm__run",
     {},
-    facts([["crm__run", grant("run")]], new Map([["crm__run", { ...live, annotations: { ...(live.annotations as object), sneaky: true } }]])),
+    facts(
+      [["crm__run", grant("run")]],
+      new Map([
+        ["crm__run", { ...live, annotations: { ...(live.annotations as object), sneaky: true } }],
+      ]),
+    ),
   );
   assert.ok(odd?.surface === "mcp");
   assert.equal(odd.destructive, "unknown");
-  assert.deepEqual(Object.keys(odd.annotations ?? {}).sort(), ["destructiveHint", "openWorldHint", "readOnlyHint", "title"]);
+  assert.deepEqual(Object.keys(odd.annotations ?? {}).sort(), [
+    "destructiveHint",
+    "openWorldHint",
+    "readOnlyHint",
+    "title",
+  ]);
 });
 
 test("the server's destructive hint decides whether a remove is a permanent delete", async () => {
@@ -103,7 +132,10 @@ test("the server's destructive hint decides whether a remove is a permanent dele
     const action = await describeMcpAction(
       "crm__remove_label",
       {},
-      facts([["crm__remove_label", grant("remove_label")]], new Map([["crm__remove_label", tool(destructiveHint)]])),
+      facts(
+        [["crm__remove_label", grant("remove_label")]],
+        new Map([["crm__remove_label", tool(destructiveHint)]]),
+      ),
     );
     return [...classifyBotAction(action!, []).classes];
   };
@@ -117,7 +149,11 @@ test("a long description and title are bounded before they reach the classifier"
     description: "Syncs records. ".repeat(500),
     annotations: { title: "T".repeat(1_000) },
   };
-  const action = await describeMcpAction("crm__sync", {}, facts([["crm__sync", grant("sync")]], new Map([["crm__sync", live]])));
+  const action = await describeMcpAction(
+    "crm__sync",
+    {},
+    facts([["crm__sync", grant("sync")]], new Map([["crm__sync", live]])),
+  );
   assert.ok(action?.surface === "mcp");
   assert.ok((action.description?.length ?? 0) <= 2_000);
   assert.ok((action.annotations?.title?.length ?? 0) <= 200);
@@ -125,28 +161,93 @@ test("a long description and title are bounded before they reach the classifier"
 
 test("a Composio call is classified by the app actions it runs, and code or raw API calls are never remembered", async () => {
   const descriptor = composioServiceToolDescriptor();
-  const composio = facts([["composio", grant(descriptor.name)]], new Map([["composio", descriptor]]));
-  const run = (...slugs: string[]) => ({ action: "call", tool: "COMPOSIO_MULTI_EXECUTE_TOOL", arguments: { tools: slugs.map((tool_slug) => ({ tool_slug, arguments: {} })) } });
+  const composio = facts(
+    [["composio", grant(descriptor.name)]],
+    new Map([["composio", descriptor]]),
+  );
+  const run = (...slugs: string[]) => ({
+    action: "call",
+    tool: "COMPOSIO_MULTI_EXECUTE_TOOL",
+    arguments: { tools: slugs.map((tool_slug) => ({ tool_slug, arguments: {} })) },
+  });
   const classesOf = async (args: unknown) => {
     const action = await describeMcpAction("composio", args, composio);
     assert.ok(action?.surface === "mcp");
-    return { classes: [...classifyBotAction(action, []).classes].sort(), neverRemembered: action.neverRemembered === true };
+    return {
+      classes: [...classifyBotAction(action, []).classes].sort(),
+      neverRemembered: action.neverRemembered === true,
+    };
   };
 
-  assert.deepEqual(await classesOf(run("GMAIL_SEND_EMAIL")), { classes: ["communicate"], neverRemembered: false });
-  assert.deepEqual(await classesOf(run("SLACK_CHAT_POST_MESSAGE")), { classes: ["communicate"], neverRemembered: false });
-  assert.deepEqual(await classesOf(run("GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_DELETE_EVENT")), { classes: ["delete"], neverRemembered: false });
-  assert.deepEqual(await classesOf(run("LINKEDIN_CREATE_LINKED_IN_POST")), { classes: ["publish"], neverRemembered: false });
-  assert.deepEqual(await classesOf(run("STRIPE_CREATE_PAYMENT_INTENT")), { classes: ["money"], neverRemembered: false });
-  assert.deepEqual(await classesOf(run("GMAIL_FETCH_EMAILS")), { classes: [], neverRemembered: false });
-  assert.deepEqual(await classesOf({ action: "call", tool: "COMPOSIO_SEARCH_TOOLS", arguments: { queries: [{ use_case: "send an email" }] } }), { classes: [], neverRemembered: false }, "searching for a send action sends nothing");
+  assert.deepEqual(await classesOf(run("GMAIL_SEND_EMAIL")), {
+    classes: ["communicate"],
+    neverRemembered: false,
+  });
+  assert.deepEqual(await classesOf(run("SLACK_CHAT_POST_MESSAGE")), {
+    classes: ["communicate"],
+    neverRemembered: false,
+  });
+  assert.deepEqual(await classesOf(run("GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_DELETE_EVENT")), {
+    classes: ["delete"],
+    neverRemembered: false,
+  });
+  assert.deepEqual(await classesOf(run("LINKEDIN_CREATE_LINKED_IN_POST")), {
+    classes: ["publish"],
+    neverRemembered: false,
+  });
+  assert.deepEqual(await classesOf(run("STRIPE_CREATE_PAYMENT_INTENT")), {
+    classes: ["money"],
+    neverRemembered: false,
+  });
+  assert.deepEqual(await classesOf(run("GMAIL_FETCH_EMAILS")), {
+    classes: [],
+    neverRemembered: false,
+  });
+  assert.deepEqual(
+    await classesOf({
+      action: "call",
+      tool: "COMPOSIO_SEARCH_TOOLS",
+      arguments: { queries: [{ use_case: "send an email" }] },
+    }),
+    { classes: [], neverRemembered: false },
+    "searching for a send action sends nothing",
+  );
 
-  for (const tool of ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS", "COMPOSIO_WAIT_FOR_CONNECTIONS"]) {
-    assert.equal((await classesOf({ action: "call", tool, arguments: {} })).neverRemembered, false, tool);
+  for (const tool of [
+    "COMPOSIO_SEARCH_TOOLS",
+    "COMPOSIO_GET_TOOL_SCHEMAS",
+    "COMPOSIO_WAIT_FOR_CONNECTIONS",
+  ]) {
+    assert.equal(
+      (await classesOf({ action: "call", tool, arguments: {} })).neverRemembered,
+      false,
+      tool,
+    );
   }
-  for (const tool of ["COMPOSIO_REMOTE_WORKBENCH", "COMPOSIO_MANAGE_CONNECTIONS", "COMPOSIO_SOMETHING_NEW"]) {
-    assert.equal((await classesOf({ action: "call", tool, arguments: {} })).neverRemembered, true, `${tool} keeps asking`);
+  for (const tool of [
+    "COMPOSIO_REMOTE_WORKBENCH",
+    "COMPOSIO_MANAGE_CONNECTIONS",
+    "COMPOSIO_SOMETHING_NEW",
+  ]) {
+    assert.equal(
+      (await classesOf({ action: "call", tool, arguments: {} })).neverRemembered,
+      true,
+      `${tool} keeps asking`,
+    );
   }
-  assert.equal((await classesOf(run("GMAIL_FETCH_EMAILS", "COMPOSIO_PROXY_EXECUTE"))).neverRemembered, true);
-  assert.equal((await classesOf({ action: "call", tool: "COMPOSIO_MULTI_EXECUTE_TOOL", arguments: { tools: [{ arguments: {} }] } })).neverRemembered, true, "app actions it can't read");
+  assert.equal(
+    (await classesOf(run("GMAIL_FETCH_EMAILS", "COMPOSIO_PROXY_EXECUTE"))).neverRemembered,
+    true,
+  );
+  assert.equal(
+    (
+      await classesOf({
+        action: "call",
+        tool: "COMPOSIO_MULTI_EXECUTE_TOOL",
+        arguments: { tools: [{ arguments: {} }] },
+      })
+    ).neverRemembered,
+    true,
+    "app actions it can't read",
+  );
 });

@@ -38,26 +38,26 @@ Phases 0–3 and 3.5 are implemented and uncommitted on `worktree-main-20260925`
 
 ## File map
 
-| Path | Responsibility | Phase |
-| --- | --- | --- |
-| `main/services/devices/feature-flag.ts` | `devicesEnabled(env, platform)` | 1 |
-| `renderer/lib/app-capabilities.tsx` | add `devices` capability | 1 |
-| `renderer/lib/environment-panel-state.ts` | `"devices"` tab, capability-aware normalization | 1 |
-| `renderer/components/environment-panel.tsx` | tab button and tabpanel wiring | 1 |
-| `renderer/components/devices-panel.tsx` | Simulator tab UI (setup → device list → stream) | 1 → 3 |
-| `renderer/shared/devices.ts` | shared wire types and parsers (renderer ↔ main) | 2 |
-| `main/services/devices/device-toolchain.ts` | pinned staged npm installs and version sentinel | 2 |
-| `main/services/devices/device-host.ts` | `DeviceHost` interface (local and SSH) | 2 |
-| `main/services/devices/local-device-host.ts` | supervised hub child, `simctl` runner, agent daemon | 2 |
-| `main/services/devices/device-hub-proxy.ts` | token-authenticated loopback allowlist proxy | 2 |
-| `main/services/devices/device-service.ts` | discovery, per-chat sessions, consent, state events | 2 |
-| `main/services/devices/device-actions.ts` | typed `simctl` settings actions | 3 |
-| `main/handlers/devices.ts` | `devices:*` IPC | 2 |
-| `renderer/lib/device-stream.ts` | AVCC/WebCodecs decoder, MJPEG fallback, input socket | 3 |
-| `main/services/devices/device-tools.ts` | `device_list/open/screenshot/close` agent tools | 4 |
-| `main/services/devices/agent-device-shim.ts` | PATH shim that enforces `--config/--session` | 4 |
-| `main/services/devices/ssh-device-host.ts` | SSH host with port forwarding | 5 |
-| `renderer/components/devices/phone-viewer/*` | three.js frame renderer | 6 |
+| Path                                         | Responsibility                                       | Phase |
+| -------------------------------------------- | ---------------------------------------------------- | ----- |
+| `main/services/devices/feature-flag.ts`      | `devicesEnabled(env, platform)`                      | 1     |
+| `renderer/lib/app-capabilities.tsx`          | add `devices` capability                             | 1     |
+| `renderer/lib/environment-panel-state.ts`    | `"devices"` tab, capability-aware normalization      | 1     |
+| `renderer/components/environment-panel.tsx`  | tab button and tabpanel wiring                       | 1     |
+| `renderer/components/devices-panel.tsx`      | Simulator tab UI (setup → device list → stream)      | 1 → 3 |
+| `renderer/shared/devices.ts`                 | shared wire types and parsers (renderer ↔ main)      | 2     |
+| `main/services/devices/device-toolchain.ts`  | pinned staged npm installs and version sentinel      | 2     |
+| `main/services/devices/device-host.ts`       | `DeviceHost` interface (local and SSH)               | 2     |
+| `main/services/devices/local-device-host.ts` | supervised hub child, `simctl` runner, agent daemon  | 2     |
+| `main/services/devices/device-hub-proxy.ts`  | token-authenticated loopback allowlist proxy         | 2     |
+| `main/services/devices/device-service.ts`    | discovery, per-chat sessions, consent, state events  | 2     |
+| `main/services/devices/device-actions.ts`    | typed `simctl` settings actions                      | 3     |
+| `main/handlers/devices.ts`                   | `devices:*` IPC                                      | 2     |
+| `renderer/lib/device-stream.ts`              | AVCC/WebCodecs decoder, MJPEG fallback, input socket | 3     |
+| `main/services/devices/device-tools.ts`      | `device_list/open/screenshot/close` agent tools      | 4     |
+| `main/services/devices/agent-device-shim.ts` | PATH shim that enforces `--config/--session`         | 4     |
+| `main/services/devices/ssh-device-host.ts`   | SSH host with port forwarding                        | 5     |
+| `renderer/components/devices/phone-viewer/*` | three.js frame renderer                              | 6     |
 
 ---
 
@@ -92,6 +92,7 @@ Delivers a visible, keyboard-accessible **Simulator** tab that follows the Brows
 ### Task 1.1: `devices` feature flag and app capability
 
 **Files:**
+
 - Create: `main/services/devices/feature-flag.ts`
 - Create: `main/services/devices/feature-flag.test.ts`
 - Modify: `main/handlers/app.ts:33-36`
@@ -100,6 +101,7 @@ Delivers a visible, keyboard-accessible **Simulator** tab that follows the Brows
 - Modify: `package.json` (new `test:devices`, appended to `test`)
 
 **Interfaces:**
+
 - Produces: `devicesEnabled(environment?, platform?): boolean`, `DEVICES_FEATURE_FLAG`, and `AppCapabilities.devices: boolean`.
 
 - [ ] **Step 1: Write the failing test**
@@ -200,12 +202,14 @@ git commit -m "feat(devices): add experimental devices capability flag"
 ### Task 1.2: `"devices"` Environment tab state
 
 **Files:**
+
 - Modify: `renderer/lib/environment-panel-state.ts:1-66`
 - Create: `renderer/lib/environment-panel-state.test.ts`
 - Modify: `renderer/components/environment-subagents-contract.test.ts:54-73`
 - Modify: `renderer/components/browser-panel.test.tsx:13`
 
 **Interfaces:**
+
 - Consumes: `AppCapabilities.devices` (Task 1.1).
 - Produces: `EnvironmentPanelTab` including `"devices"`, `parseEnvironmentPanelTab(value: string | null): EnvironmentPanelTab | null`, `availableEnvironmentPanelTabs(subagentsEnabled: boolean, devicesEnabled?: boolean)`, `normalizeEnvironmentPanelTab(tab, subagentsEnabled, devicesEnabled?)`, and `storedEnvironmentPanelTab(storage, key, subagentsEnabled, devicesEnabled?)`. `devicesEnabled` defaults to `false`, so existing two-argument callers keep today's behavior.
 
@@ -226,11 +230,30 @@ const storage = (value: string | null) => ({ getItem: () => value, setItem: () =
 
 test("Simulator tab sits after Browser only when the devices capability is on", () => {
   assert.deepEqual(availableEnvironmentPanelTabs(true, true), [
-    "review", "subagents", "files", "browser", "devices",
+    "review",
+    "subagents",
+    "files",
+    "browser",
+    "devices",
   ]);
-  assert.deepEqual(availableEnvironmentPanelTabs(false, true), ["review", "files", "browser", "devices"]);
-  assert.deepEqual(availableEnvironmentPanelTabs(true, false), ["review", "subagents", "files", "browser"]);
-  assert.deepEqual(availableEnvironmentPanelTabs(true), ["review", "subagents", "files", "browser"]);
+  assert.deepEqual(availableEnvironmentPanelTabs(false, true), [
+    "review",
+    "files",
+    "browser",
+    "devices",
+  ]);
+  assert.deepEqual(availableEnvironmentPanelTabs(true, false), [
+    "review",
+    "subagents",
+    "files",
+    "browser",
+  ]);
+  assert.deepEqual(availableEnvironmentPanelTabs(true), [
+    "review",
+    "subagents",
+    "files",
+    "browser",
+  ]);
 });
 
 test("a disabled Simulator tab normalizes to Review without rewriting storage", () => {
@@ -284,7 +307,13 @@ export type EnvironmentSurfaceAction =
   | { type: "activate"; surface: EnvironmentSurface }
   | { type: "close-all" };
 
-export const ENVIRONMENT_PANEL_TABS = ["review", "subagents", "files", "browser", "devices"] as const;
+export const ENVIRONMENT_PANEL_TABS = [
+  "review",
+  "subagents",
+  "files",
+  "browser",
+  "devices",
+] as const;
 
 interface EnvironmentPanelStorage {
   getItem(key: string): string | null;
@@ -367,12 +396,14 @@ git commit -m "feat(devices): add capability-gated Simulator environment tab sta
 Before starting, review `docs/chatgpt-desktop-ui-inspiration.md`, `docs/chatgpt-ui-element-specimen.html`, and `docs/design-guide.md`.
 
 **Files:**
+
 - Create: `renderer/components/devices-panel.tsx`
 - Create: `renderer/components/devices-panel.test.tsx`
 - Modify: `renderer/components/environment-panel.tsx` (lines 209–222, 256–263, 391, 461, 1141, 1282–1283, and a new tabpanel after line 1434)
 - Modify: `renderer/components/environment-subagents-contract.test.ts:240,278` (source regexes)
 
 **Interfaces:**
+
 - Consumes: `useAppCapabilities().devices`, plus the Task 1.2 helpers.
 - Produces: `<DevicesPanel workspaceId: string; active: boolean; compact: boolean />`, where `active` means the panel is presented and selected (it starts polling in Phase 3). The context value gains `devicesEnabled: boolean`.
 
@@ -396,7 +427,10 @@ test("Simulator panel explains setup before any tool is installed", () => {
 
 test("Environment panel renders the Simulator tab and panel only with the devices capability", () => {
   const source = readFileSync(new URL("./environment-panel.tsx", import.meta.url), "utf8");
-  assert.match(source, /availableEnvironmentPanelTabs\(panel\.subagentsEnabled, panel\.devicesEnabled\)/u);
+  assert.match(
+    source,
+    /availableEnvironmentPanelTabs\(panel\.subagentsEnabled, panel\.devicesEnabled\)/u,
+  );
   assert.match(source, /tab === "devices" \? Smartphone/u);
   assert.match(source, /tab === "devices" \? "Simulator"/u);
   assert.match(source, /id="environment-devices-panel"/u);
@@ -436,8 +470,8 @@ export function DevicesPanel({ compact }: DevicesPanelProps) {
         iOS Simulator
       </h2>
       <Text variant="small" color="secondary" className={compact ? "sr-only" : "max-w-72"}>
-        Watch and control Xcode simulators here, and let Aiden drive them while you watch.
-        Setup installs two pinned helper tools the first time.
+        Watch and control Xcode simulators here, and let Aiden drive them while you watch. Setup
+        installs two pinned helper tools the first time.
       </Text>
       <Button variant="muted" size="small" disabled>
         Set up simulator streaming
@@ -450,7 +484,6 @@ export function DevicesPanel({ compact }: DevicesPanelProps) {
 `Button` and `Text` come from `renderer/components/ui.tsx` (`variant` includes `muted`; `size` is `small | medium | large`). Confirm `bg-well` and `rounded-control` exist in `renderer/styles.css`; otherwise use the nearest existing surface token. Do not add new tokens.
 
 - [ ] **Step 4: Wire `environment-panel.tsx`**
-
   1. Import `Smartphone` from `lucide-react` beside `Globe`, and import `{ DevicesPanel } from "./devices-panel"`.
   2. `storedLastToolsTab(currentTab, subagentsEnabled, devicesEnabled)`: add `if (stored === "devices" && devicesEnabled) return stored;` and pass `devicesEnabled` through to `normalizeEnvironmentPanelTab`.
   3. `initialEnvironmentSurfaceState` takes `{ subagentsEnabled, devicesEnabled }`. Replace the four-way `rawTab === …` chain with `parseEnvironmentPanelTab(rawTab) ?? storedLastToolsTab("review", subagentsEnabled, devicesEnabled)`.
@@ -459,30 +492,48 @@ export function DevicesPanel({ compact }: DevicesPanelProps) {
   6. Lines 1282–1283:
 
      ```tsx
-     const Icon = tab === "review" ? GitCompareArrows : tab === "browser" ? Globe : tab === "devices" ? Smartphone : Files;
-     const label = tab === "review" ? "Review" : tab === "subagents" ? "Subagents" : tab === "browser" ? "Browser" : tab === "devices" ? "Simulator" : "Files";
+     const Icon =
+       tab === "review"
+         ? GitCompareArrows
+         : tab === "browser"
+           ? Globe
+           : tab === "devices"
+             ? Smartphone
+             : Files;
+     const label =
+       tab === "review"
+         ? "Review"
+         : tab === "subagents"
+           ? "Subagents"
+           : tab === "browser"
+             ? "Browser"
+             : tab === "devices"
+               ? "Simulator"
+               : "Files";
      ```
 
   7. After the browser tabpanel:
 
      ```tsx
-     {panel.devicesEnabled ? (
-       <div
-         id="environment-devices-panel"
-         role="tabpanel"
-         aria-labelledby="environment-devices-tab"
-         hidden={panel.tab !== "devices"}
-         className="h-full min-h-0"
-       >
-         {active && (
-           <DevicesPanel
-             workspaceId={active.id}
-             active={presented && panel.tab === "devices"}
-             compact={width < 540}
-           />
-         )}
-       </div>
-     ) : null}
+     {
+       panel.devicesEnabled ? (
+         <div
+           id="environment-devices-panel"
+           role="tabpanel"
+           aria-labelledby="environment-devices-tab"
+           hidden={panel.tab !== "devices"}
+           className="h-full min-h-0"
+         >
+           {active && (
+             <DevicesPanel
+               workspaceId={active.id}
+               active={presented && panel.tab === "devices"}
+               compact={width < 540}
+             />
+           )}
+         </div>
+       ) : null;
+     }
      ```
 
   8. In `environment-subagents-contract.test.ts`, change line 240 to `/availableEnvironmentPanelTabs\(panel\.subagentsEnabled, panel\.devicesEnabled\)/u` and line 278 to `/normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled, devicesEnabled\)/u`.
@@ -502,6 +553,7 @@ git commit -m "feat(devices): add Simulator tab to the Environment sidebar"
 ### Task 1.4: Electron E2E for tab reachability
 
 **Files:**
+
 - Create: `tests/e2e/environment-devices-tab.spec.ts`. This is discovered by the existing `**/*.spec.ts` match, so no package.json change is needed.
 
 - [ ] **Step 1:** Model the test on `tests/e2e/environment-focus.spec.ts`. Launch with `AIDEN_EXPERIMENTAL_DEVICES=1` and assert:
@@ -509,7 +561,7 @@ git commit -m "feat(devices): add Simulator tab to the Environment sidebar"
   - ArrowLeft/ArrowRight/Home/End cycle through all five tabs;
   - selecting it shows `#environment-devices-panel` with "Set up simulator streaming";
   - the selection persists across reload;
-  - after relaunching *without* the flag, the tab is absent and the panel shows Review, while the stored `"devices"` value is preserved.
+  - after relaunching _without_ the flag, the tab is absent and the panel shows Review, while the stored `"devices"` value is preserved.
 - [ ] **Step 2:** Run `npx playwright test tests/e2e/environment-devices-tab.spec.ts`. Expected: PASS at 900px (labels) and 560px (icons with `title`).
 - [ ] **Step 3:** Commit: `test(devices): cover Simulator tab keyboard, persistence and gating`.
 
@@ -530,13 +582,32 @@ export type DevicePlatform = "ios";
 export type DeviceHostKind = "local" | "ssh";
 export const LOCAL_DEVICE_HOST_ID = "local";
 export interface DeviceSummary {
-  hostId: string; id: string; name: string; platform: DevicePlatform;
-  version: string; booted: boolean; kind: "iphone" | "ipad" | "other";
+  hostId: string;
+  id: string;
+  name: string;
+  platform: DevicePlatform;
+  version: string;
+  booted: boolean;
+  kind: "iphone" | "ipad" | "other";
 }
 export type DeviceHostStatus =
-  | "disabled" | "needs-consent" | "installing" | "starting" | "ready" | "unavailable" | "error";
-export interface DeviceConsent { streaming: boolean; agentAccess: boolean }
-export interface DeviceSession { chatId: string; hostId: string; deviceId: string; openedBy: "user" | "agent" }
+  | "disabled"
+  | "needs-consent"
+  | "installing"
+  | "starting"
+  | "ready"
+  | "unavailable"
+  | "error";
+export interface DeviceConsent {
+  streaming: boolean;
+  agentAccess: boolean;
+}
+export interface DeviceSession {
+  chatId: string;
+  hostId: string;
+  deviceId: string;
+  openedBy: "user" | "agent";
+}
 export interface DeviceServiceState {
   hostStatus: DeviceHostStatus;
   hostStatuses: Record<string, { status: DeviceHostStatus; detail?: string }>;
@@ -546,7 +617,11 @@ export interface DeviceServiceState {
   toolVersions: { hub: string; agent: string };
   unavailableReason?: string; // e.g. "Install Xcode and run it once to accept the license."
 }
-export interface DeviceStreamGrant { origin: string; token: string; expiresAt: number }
+export interface DeviceStreamGrant {
+  origin: string;
+  token: string;
+  expiresAt: number;
+}
 export function parseDeviceServiceState(value: unknown): DeviceServiceState | null;
 export function parseDeviceStreamGrant(value: unknown): DeviceStreamGrant | null;
 ```
@@ -560,18 +635,40 @@ Port T3 `DeviceToolchain.ts:118-200` to plain async Node.
 **Produces:**
 
 ```ts
-export const DEVICE_HUB = { name: "expo-device-hub", version: "0.12.0", entry: ["dist", "server", "cli.mjs"] } as const; // entry paths: confirm in Phase 0.1
-export const AGENT_DEVICE = { name: "agent-device", version: "0.21.12", entry: ["bin", "agent-device.mjs"] } as const;
-export interface ToolSpec { name: string; version: string; entry: readonly string[] }
-export function deviceToolPaths(baseDir: string, spec: ToolSpec): { installDir: string; entryPath: string; sentinel: string };
+export const DEVICE_HUB = {
+  name: "expo-device-hub",
+  version: "0.12.0",
+  entry: ["dist", "server", "cli.mjs"],
+} as const; // entry paths: confirm in Phase 0.1
+export const AGENT_DEVICE = {
+  name: "agent-device",
+  version: "0.21.12",
+  entry: ["bin", "agent-device.mjs"],
+} as const;
+export interface ToolSpec {
+  name: string;
+  version: string;
+  entry: readonly string[];
+}
+export function deviceToolPaths(
+  baseDir: string,
+  spec: ToolSpec,
+): { installDir: string; entryPath: string; sentinel: string };
 export async function isToolInstalled(baseDir: string, spec: ToolSpec): Promise<boolean>;
-export async function ensureTool(baseDir: string, spec: ToolSpec, deps: { runNpm(args: string[], opts: { timeoutMs: number }): Promise<{ code: number; stderr: string }> }): Promise<string /* entryPath */>;
+export async function ensureTool(
+  baseDir: string,
+  spec: ToolSpec,
+  deps: {
+    runNpm(args: string[], opts: { timeoutMs: number }): Promise<{ code: number; stderr: string }>;
+  },
+): Promise<string /* entryPath */>;
 export async function pruneOldToolVersions(baseDir: string, spec: ToolSpec): Promise<void>;
 ```
 
 The base directory is `path.join(aidenConfigDir(), "devices")` (check `main/services/aiden-config-dir.ts` for the helper name).
 
 Test cases in `device-toolchain.test.ts`, using a temp dir and a fake `runNpm`:
+
 1. The npm args are exactly `["install", "--prefix", <staging>, "--no-fund", "--no-audit", "--ignore-scripts=false", "expo-device-hub@0.12.0"]`, with no caret or range.
 2. A missing entry after install throws `verifying the installed entry point`, and nothing is published.
 3. A published sentinel short-circuits the second call (zero npm runs).
@@ -585,18 +682,33 @@ Test cases in `device-toolchain.test.ts`, using a temp dir and a fake `runNpm`:
 **Produces:**
 
 ```ts
-export interface DeviceHubEndpoint { origin: string } // http://127.0.0.1:<port>
-export interface AgentDeviceEndpoint { baseUrl: string; token: string; entryPath: string }
+export interface DeviceHubEndpoint {
+  origin: string;
+} // http://127.0.0.1:<port>
+export interface AgentDeviceEndpoint {
+  baseUrl: string;
+  token: string;
+  entryPath: string;
+}
 export interface DeviceHostReady {
   nodePath: string;
   hub: DeviceHubEndpoint;
-  run(command: "xcrun" | string, args: readonly string[], options?: { timeoutMs?: number; stdin?: string }): Promise<{ stdout: string; stderr: string; code: number }>;
+  run(
+    command: "xcrun" | string,
+    args: readonly string[],
+    options?: { timeoutMs?: number; stdin?: string },
+  ): Promise<{ stdout: string; stderr: string; code: number }>;
 }
 export interface DeviceHost {
-  id: string; kind: DeviceHostKind;
+  id: string;
+  kind: DeviceHostKind;
   platformAvailability(): Promise<{ platform: "ios"; available: boolean; reason?: string }>;
-  ensureReady(onPhase: (phase: "installing" | "starting", detail?: string) => void): Promise<DeviceHostReady>;
-  ensureAgentReady(onPhase: (phase: "installing" | "starting", detail?: string) => void): Promise<DeviceHostReady & { agentDevice: AgentDeviceEndpoint }>;
+  ensureReady(
+    onPhase: (phase: "installing" | "starting", detail?: string) => void,
+  ): Promise<DeviceHostReady>;
+  ensureAgentReady(
+    onPhase: (phase: "installing" | "starting", detail?: string) => void,
+  ): Promise<DeviceHostReady & { agentDevice: AgentDeviceEndpoint }>;
   current(): DeviceHostReady | null;
   stopAgent(): Promise<void>;
   stop(): Promise<void>; // never shuts down simulators; the user owns those
@@ -605,6 +717,7 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost;
 ```
 
 Behavior to port from T3 `LocalDeviceHost.ts`:
+
 - `platformAvailability` requires `xcrun simctl help` to exit 0. It maps a missing Xcode or unaccepted license to a user-readable `reason`.
 - The hub gets a reserved loopback port and is spawned with the Phase 0 runtime and flags. Readiness polls HTTP for 30s. Restarts use exponential backoff from 1s, capped at 30s, and the backoff resets after 60s of stable uptime.
 - A pidfile of `{pid, commandLine}` is written beside the state. A leftover hub is killed at startup only if `ps -o command= -p <pid>` still matches.
@@ -635,8 +748,18 @@ export interface DeviceService {
   grantConsent(kind: "streaming" | "agentAccess"): Promise<DeviceServiceState>; // persists in configStore
   revokeConsent(kind: "streaming" | "agentAccess"): Promise<DeviceServiceState>; // stops agent / hub
   refresh(): Promise<DeviceServiceState>; // `xcrun simctl list devices --json` via host.run
-  open(input: { chatId: string; hostId?: string; deviceId: string; openedBy: "user" | "agent" }): Promise<DeviceSession>; // boots if needed
-  close(input: { chatId: string; hostId: string; deviceId: string; shutdown?: boolean }): Promise<void>;
+  open(input: {
+    chatId: string;
+    hostId?: string;
+    deviceId: string;
+    openedBy: "user" | "agent";
+  }): Promise<DeviceSession>; // boots if needed
+  close(input: {
+    chatId: string;
+    hostId: string;
+    deviceId: string;
+    shutdown?: boolean;
+  }): Promise<void>;
   sessionsForChat(chatId: string): DeviceSession[];
   screenshot(input: { hostId: string; deviceId: string }): Promise<Buffer /* PNG */>;
   streamGrant(): DeviceStreamGrant;
@@ -700,6 +823,7 @@ This phase ports T3 nightly's flat-viewer controls. Nothing here depends on thre
   - **Push notification:** sends to the frontmost app.
 
   The rail also gains a **Text size** menu.
+
 - **State:** `renderer/lib/device-controls.ts` (`createDeviceControls` and `useDeviceControls`) runs one action at a time. It drops results that arrive after the drawer hides and re-reads settings on reopen. The frontmost app comes from serve-sim's `/appstate` SSE, which `device-foreground.ts` reads through the token proxy using `fetch`. It uses `fetch` rather than `EventSource` because `file://` pages send an unreliable Origin. The feed runs only while the drawer is open.
 - **Main:**
   - Accessibility switches, Liquid Glass, and color filter spawn serve-sim's bundled `serve-sim-ax-settings` helper inside the simulator (`simctl spawn`).
@@ -723,17 +847,37 @@ This phase ports T3 nightly's flat-viewer controls. Nothing here depends on thre
 **Produces:**
 
 ```ts
-export const DEVICE_TOOL_NAMES = ["device_list", "device_open", "device_screenshot", "device_close"] as const;
-export const DEVICE_APPROVAL_TOOL_NAMES: ReadonlySet<string> = new Set(["device_open", "device_close"]);
+export const DEVICE_TOOL_NAMES = [
+  "device_list",
+  "device_open",
+  "device_screenshot",
+  "device_close",
+] as const;
+export const DEVICE_APPROVAL_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "device_open",
+  "device_close",
+]);
 export const isDeviceToolName: (name: string) => boolean;
 export const DEVICE_AGENT_GUIDANCE: string; // ≤ 5 lines
-export function canUseDeviceTools(input: { enabled: boolean; agentAccess: boolean; permission: string; rendererOwner: boolean; assistantMode: boolean; bot: boolean }): boolean;
+export function canUseDeviceTools(input: {
+  enabled: boolean;
+  agentAccess: boolean;
+  permission: string;
+  rendererOwner: boolean;
+  assistantMode: boolean;
+  bot: boolean;
+}): boolean;
 export function agentDeviceTargetArgs(device: DeviceSummary): string[]; // ["--platform","ios","--udid",id]
-export function agentDeviceQuickStart(device: DeviceSummary, targetArgs: string[], command: string): string;
+export function agentDeviceQuickStart(
+  device: DeviceSummary,
+  targetArgs: string[],
+  command: string,
+): string;
 export function deviceToolApprovalSummary(name: string): string;
 ```
 
 Test cases:
+
 - `canUseDeviceTools` is false when any gate is false, including `permission: "read"`, bots, and assistant mode.
 - `agentDeviceQuickStart` single-quotes a command path containing spaces or `'`. It includes `snapshot -i`, `click @e3`, and `fill @e5` lines, the "prefer agent-device; xcrun simctl is fine for builds, installs, logs, and diagnostics; do not shut down or erase this device or stop serve-sim" line, and the XCTest first-use note, and it contains no Android lines.
 - The target args quote a UDID that has shell metacharacters.
@@ -743,6 +887,7 @@ Port the wording from T3 `handlers.ts:14-60`, replacing "T3" with "Aiden" and "D
 ### Task 4.2: Tool factory and execution
 
 `createDeviceAgentTools(context: DeviceToolContext): AgentTool[]` follows the `createBrowserAgentTools` shape: a fixed `workspaceId`, `chatId`, and `generationId`, a `port: DeviceService`, `signal`, and `supportsImages`.
+
 - `device_list` returns hosts, devices, and the `open` entries for this chat. If consent is missing it returns the error "Device support is off. Ask the user to enable it in the Simulator tab."
 - `device_open` picks a device (the explicit id, then a booted device, then the first), ensures the agent is ready, and opens a session with `openedBy: "agent"`. It returns `{device, agentDevice: {command, targetArgs}, quickStart}` and shows the Simulator tab through the existing `showTools` event path used by the Browser `show` event.
 - `device_screenshot` returns an image content block when `supportsImages` is true; otherwise it saves the image to a temp path and returns that path.
@@ -781,6 +926,7 @@ A Playwright Electron test uses the faux provider pattern from the existing brow
 ## Phase 5: SSH device hosts
 
 This phase gets a separate detailed plan, `docs/plans/simulator-devices-phase-5-ssh.md`, written after Phase 4. Its scope:
+
 - Port T3 `SshDeviceHost.ts`, `sshDeviceScript.ts`, `localSshDeviceHost.ts`, and their tests behind the Phase 2 `DeviceHost` interface. The remote host runs the pinned hub and agent-device under its own Node. Both endpoints are forwarded to loopback with `ssh -L`, and the proxy and tools stay unchanged apart from carrying `hostId`.
 - Settings → **Simulator hosts** (new section per `docs/settings-design-system.md`): add/edit/remove `{id, label, destination(user@host), port?, identityFile?}`, "Test connection", and per-host tool versions (port T3 `DeviceHostsSettings.tsx`, `DeviceHostAvailability.tsx`, and `DeviceToolVersions.tsx`).
 - Uses the system `ssh` binary with the user's own config and agent. Aiden stores no private keys and no passwords. `BatchMode=yes` means an interactive prompt surfaces as a clear error.
@@ -789,6 +935,7 @@ This phase gets a separate detailed plan, `docs/plans/simulator-devices-phase-5-
 ## Phase 6: 3D device frames
 
 This phase also gets its own plan, `docs/plans/simulator-devices-phase-6-3d.md`. Its scope:
+
 - Add `three` (MIT) and port T3 `phoneViewer.ts`, `phoneScene.ts`, `modelScene.ts`, `deviceFraming.ts`, `deviceMotion.ts`, `renderScheduler.ts`, `shapeProfile.ts`, `deviceViewSnap.ts`, `screenshot.ts`, and their tests. The live stream canvas becomes the screen texture.
 - **Licensing blocker:** T3's `models/*.glb` are converted Apple AR assets and ship with "No open-source or redistribution license". Do **not** copy them. Options for the Phase 6 plan: (a) procedural bezels generated from `shapeProfile.ts` corner radii, which is the recommended default; (b) Aiden-authored GLBs; or (c) a user-supplied model directory. Duo and foldable viewers stay out of scope because they are Android-oriented or hypothetical hardware.
 - Respect `prefers-reduced-motion` (a static frame with no parallax) and cap the render loop to visible, active tabs only.
@@ -823,11 +970,11 @@ This phase also gets its own plan, `docs/plans/simulator-devices-phase-6-3d.md`.
 
 ## Risks
 
-| Risk | Mitigation |
-| --- | --- |
-| `node-datachannel` native ABI mismatch under Electron's Node | Phase 0.1 decides the runtime before any code depends on it |
-| `npm` missing in the packaged app's environment | Phase 0.1 fallback: integrity-pinned tarball plus a vendored lockfile |
-| The hub's unauthenticated exec route | Loopback-only bind, a proxy allowlist, and an adversarial proxy test suite (Task 2.4) |
-| The agent bypasses tools with raw `simctl` | Prompt line, `device_open` guidance, and the shim; no hard block (the agent's shell is general-purpose by design) |
-| XCTest runner build is slow on first `agent-device` use | Quick-start note; Phase 0.3 measures it |
-| Apple model licensing | Never bundle T3 GLBs (Phase 6) |
+| Risk                                                         | Mitigation                                                                                                        |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `node-datachannel` native ABI mismatch under Electron's Node | Phase 0.1 decides the runtime before any code depends on it                                                       |
+| `npm` missing in the packaged app's environment              | Phase 0.1 fallback: integrity-pinned tarball plus a vendored lockfile                                             |
+| The hub's unauthenticated exec route                         | Loopback-only bind, a proxy allowlist, and an adversarial proxy test suite (Task 2.4)                             |
+| The agent bypasses tools with raw `simctl`                   | Prompt line, `device_open` guidance, and the shim; no hard block (the agent's shell is general-purpose by design) |
+| XCTest runner build is slow on first `agent-device` use      | Quick-start note; Phase 0.3 measures it                                                                           |
+| Apple model licensing                                        | Never bundle T3 GLBs (Phase 6)                                                                                    |

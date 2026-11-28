@@ -63,7 +63,10 @@ async function fixture(
 
 const TEST_EXPIRY = 2_000_000_000_000;
 
-const oauth = (access: string, refresh = `refresh-${access}`): Extract<Credential, { type: "oauth" }> => ({
+const oauth = (
+  access: string,
+  refresh = `refresh-${access}`,
+): Extract<Credential, { type: "oauth" }> => ({
   type: "oauth",
   access,
   refresh,
@@ -94,7 +97,10 @@ test("a post-commit directory sync failure warns without rejecting the committed
     },
   );
   await store.modify("example-api-key-provider", async () => ({ type: "api_key", key: "secret" }));
-  assert.deepEqual(await store.read("example-api-key-provider"), { type: "api_key", key: "secret" });
+  assert.deepEqual(await store.read("example-api-key-provider"), {
+    type: "api_key",
+    key: "secret",
+  });
   assert.equal(warnings.length, 1);
   assert.match(warnings[0].message, /unsupported/u);
 });
@@ -112,7 +118,10 @@ test("a throwing durability reporter cannot turn a committed credential write in
     },
   );
   await store.modify("example-api-key-provider", async () => ({ type: "api_key", key: "secret" }));
-  assert.deepEqual(await store.read("example-api-key-provider"), { type: "api_key", key: "secret" });
+  assert.deepEqual(await store.read("example-api-key-provider"), {
+    type: "api_key",
+    key: "secret",
+  });
 });
 
 test("serializes same-provider refreshes and preserves rotated credentials", async () => {
@@ -280,7 +289,9 @@ test("fails closed for unavailable secure storage, corrupt files, and bad cipher
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
@@ -303,12 +314,17 @@ for (const operation of ["modify", "delete"] as const) {
     });
     const controller = new AbortController();
     let modifierCalls = 0;
-    const pending = operation === "modify"
-      ? other.modify("anthropic", async () => {
-          modifierCalls += 1;
-          return { type: "api_key", key: "cancelled" };
-        }, { signal: controller.signal })
-      : other.delete("anthropic", { signal: controller.signal });
+    const pending =
+      operation === "modify"
+        ? other.modify(
+            "anthropic",
+            async () => {
+              modifierCalls += 1;
+              return { type: "api_key", key: "cancelled" };
+            },
+            { signal: controller.signal },
+          )
+        : other.delete("anthropic", { signal: controller.signal });
     const rejected = assert.rejects(pending, { name: "AbortError" });
     await queued.promise;
     controller.abort();
@@ -328,15 +344,21 @@ test("cancelling an active refresh promptly rejects but retains its lock until c
   const release = deferred();
   const controller = new AbortController();
   const cancellable: CredentialStore = store;
-  const pending = cancellable.modify("anthropic", async () => {
-    entered.resolve();
-    await release.promise; // Simulate a provider that finishes after abort.
-    return { type: "api_key", key: "cancelled" };
-  }, { signal: controller.signal });
+  const pending = cancellable.modify(
+    "anthropic",
+    async () => {
+      entered.resolve();
+      await release.promise; // Simulate a provider that finishes after abort.
+      return { type: "api_key", key: "cancelled" };
+    },
+    { signal: controller.signal },
+  );
   await entered.promise;
   controller.abort();
   let settled = false;
-  const rejected = assert.rejects(pending, { name: "AbortError" }).then(() => { settled = true; });
+  const rejected = assert.rejects(pending, { name: "AbortError" }).then(() => {
+    settled = true;
+  });
   let followingStarted = false;
   const following = makeStore().modify("anthropic", async (current) => {
     followingStarted = true;
@@ -360,14 +382,19 @@ test("cancellation during encryption prevents publication and leaves the prior c
   const controller = new AbortController();
   const cancellable: CredentialStore = new EncryptedPiCredentialStore({
     filePath: () => file,
-    cipher: cipher({ encryptString: (value) => {
-      controller.abort();
-      return Buffer.from(`encrypted:${value}`, "utf8");
-    } }),
+    cipher: cipher({
+      encryptString: (value) => {
+        controller.abort();
+        return Buffer.from(`encrypted:${value}`, "utf8");
+      },
+    }),
   });
-  await assert.rejects(cancellable.modify("anthropic", async () => ({ type: "api_key", key: "cancelled" }), {
-    signal: controller.signal,
-  }), { name: "AbortError" });
+  await assert.rejects(
+    cancellable.modify("anthropic", async () => ({ type: "api_key", key: "cancelled" }), {
+      signal: controller.signal,
+    }),
+    { name: "AbortError" },
+  );
   await cancellable.modify("anthropic", async () => undefined);
   assert.deepEqual(await store.read("anthropic"), { type: "api_key", key: "current" });
 });
@@ -381,16 +408,22 @@ test("cancellation after file publication reports the committed credential", asy
     afterWritePublish: () => controller.abort(),
   });
   const credential = { type: "api_key" as const, key: "committed" };
-  assert.deepEqual(await store.modify("anthropic", async () => credential, {
-    signal: controller.signal,
-  }), credential);
+  assert.deepEqual(
+    await store.modify("anthropic", async () => credential, {
+      signal: controller.signal,
+    }),
+    credential,
+  );
   assert.deepEqual(await store.read("anthropic"), credential);
 });
 
 test("already aborted reads and metadata listings do not touch the credential file", async () => {
   let reads = 0;
   const store: CredentialStore = new EncryptedPiCredentialStore({
-    filePath: () => { reads += 1; throw new Error("must not access storage"); },
+    filePath: () => {
+      reads += 1;
+      throw new Error("must not access storage");
+    },
     cipher: cipher(),
   });
   const signal = AbortSignal.abort();
@@ -410,11 +443,14 @@ for (const operation of ["modify", "delete"] as const) {
       cipher: cipher(),
       beforeWritePublish: () => controller.abort(),
     });
-    await assert.rejects(operation === "modify"
-      ? cancellable.modify("anthropic", async () => ({ type: "api_key", key: "cancelled" }), {
-          signal: controller.signal,
-        })
-      : cancellable.delete("anthropic", { signal: controller.signal }), { name: "AbortError" });
+    await assert.rejects(
+      operation === "modify"
+        ? cancellable.modify("anthropic", async () => ({ type: "api_key", key: "cancelled" }), {
+            signal: controller.signal,
+          })
+        : cancellable.delete("anthropic", { signal: controller.signal }),
+      { name: "AbortError" },
+    );
     await store.modify("anthropic", async () => undefined); // Drain cleanup under the shared lock.
     assert.deepEqual(await store.read("anthropic"), original);
     assert.deepEqual(await fs.readdir(path.dirname(file)), [path.basename(file)]);
@@ -423,9 +459,17 @@ for (const operation of ["modify", "delete"] as const) {
 
 test("Azure identity migration durably moves ciphertext and survives restart and logout", async () => {
   const { store, makeStore, file } = await fixture();
-  await store.modify("azure-openai-responses", async () => ({ type: "api_key", key: "azure-secret", env: { AZURE_OPENAI_BASE_URL: "https://deployment.example" } }));
+  await store.modify("azure-openai-responses", async () => ({
+    type: "api_key",
+    key: "azure-secret",
+    env: { AZURE_OPENAI_BASE_URL: "https://deployment.example" },
+  }));
   const before = JSON.parse(await fs.readFile(file, "utf8"));
-  assert.deepEqual(await store.read("azure"), { type: "api_key", key: "azure-secret", env: { AZURE_OPENAI_BASE_URL: "https://deployment.example" } });
+  assert.deepEqual(await store.read("azure"), {
+    type: "api_key",
+    key: "azure-secret",
+    env: { AZURE_OPENAI_BASE_URL: "https://deployment.example" },
+  });
   const after = JSON.parse(await fs.readFile(file, "utf8"));
   assert.deepEqual(after.entries.azure, before.entries["azure-openai-responses"]);
   assert.equal(after.entries["azure-openai-responses"], undefined);
@@ -444,7 +488,11 @@ test("Azure collision preserves the current credential and encrypted recovery da
   await makeStore().modify("other-provider", async () => oauth("other"));
   assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")).retiredAzureCredential, legacy);
   await makeStore().delete("azure");
-  assert.equal(await makeStore().read("azure"), undefined, "logout must not resurrect the retired credential");
+  assert.equal(
+    await makeStore().read("azure"),
+    undefined,
+    "logout must not resurrect the retired credential",
+  );
   assert.deepEqual(await makeStore().list(), [{ providerId: "other-provider", type: "oauth" }]);
 });
 
@@ -454,15 +502,29 @@ test("Pi persists a rotated OAuth credential even when the requesting turn is ca
   const { store, makeStore } = await fixture();
   const models = createModels({ credentials: store });
   let begin!: () => void;
-  const started = new Promise<void>((resolve) => { begin = resolve; });
+  const started = new Promise<void>((resolve) => {
+    begin = resolve;
+  });
   let finish!: () => void;
-  const released = new Promise<void>((resolve) => { finish = resolve; });
+  const released = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
   const base = builtinProviders().find((provider) => provider.id === "openai-codex")!;
-  models.setProvider({ ...base, auth: { oauth: {
-    name: "Fixture", login: async () => oauth("unused"),
-    refresh: async () => { begin(); await released; return oauth("rotated-after-cancel"); },
-    toAuth: async (credential) => ({ apiKey: credential.access }),
-  } } });
+  models.setProvider({
+    ...base,
+    auth: {
+      oauth: {
+        name: "Fixture",
+        login: async () => oauth("unused"),
+        refresh: async () => {
+          begin();
+          await released;
+          return oauth("rotated-after-cancel");
+        },
+        toAuth: async (credential) => ({ apiKey: credential.access }),
+      },
+    },
+  });
   await store.modify(base.id, async () => ({ ...oauth("expired"), expires: 0 }));
   const controller = new AbortController();
   const pending = models.getAuth(base.id, { signal: controller.signal });
@@ -494,11 +556,20 @@ test("a Pi OAuth refresh publishes as the same grant, so a running Bot lease sur
   });
   const base = builtinProviders().find((provider) => provider.id === "openai-codex")!;
   const models = createModels({ credentials: store });
-  models.setProvider({ ...base, auth: { oauth: {
-    name: "Fixture", login: async () => oauth("unused"),
-    refresh: async (current) => ({ ...oauth("refreshed", "rotated-refresh"), accountId: current.accountId }),
-    toAuth: async (credential) => ({ apiKey: credential.access }),
-  } } });
+  models.setProvider({
+    ...base,
+    auth: {
+      oauth: {
+        name: "Fixture",
+        login: async () => oauth("unused"),
+        refresh: async (current) => ({
+          ...oauth("refreshed", "rotated-refresh"),
+          accountId: current.accountId,
+        }),
+        toAuth: async (credential) => ({ apiKey: credential.access }),
+      },
+    },
+  });
 
   await store.modify(base.id, async () => ({ ...oauth("expired"), expires: 0 }));
   assert.deepEqual(changes, [true], "signing in is a grant change");
@@ -524,7 +595,8 @@ test("an explicit sign-in to a token-only OAuth account is a new grant, and refr
     cipher: cipher(),
     beforeWritePublish: ({ grantChanged }: PiCredentialWriteChange) => changes.push(grantChanged),
   });
-  const signature = async () => JSON.stringify(piCredentialGrantIdentity((await store.read("anthropic"))!));
+  const signature = async () =>
+    JSON.stringify(piCredentialGrantIdentity((await store.read("anthropic"))!));
   // Token-only credentials (no account field), as Anthropic returns them.
   await store.modify("anthropic", async () => piCredentialWithFreshGrant(oauth("account-a")));
   const accountA = await signature();
@@ -552,8 +624,14 @@ test("writing an aiden-internal slot keeps running Bot turns, while a provider k
   });
 
   const turn = leases.acquire();
-  await store.modify("aiden-internal:image-gen:fal", async () => ({ type: "api_key", key: "fal-image-key" }));
-  await store.modify("aiden-internal:image-gen:fal", async () => ({ type: "api_key", key: "fal-image-key-2" }));
+  await store.modify("aiden-internal:image-gen:fal", async () => ({
+    type: "api_key",
+    key: "fal-image-key",
+  }));
+  await store.modify("aiden-internal:image-gen:fal", async () => ({
+    type: "api_key",
+    key: "fal-image-key-2",
+  }));
   await store.delete("aiden-internal:image-gen:fal");
   assert.doesNotThrow(() => turn.assertCurrent());
 

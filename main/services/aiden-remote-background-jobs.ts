@@ -10,7 +10,11 @@ import {
   type AidenRemoteBackgroundJob,
   type AidenRemoteBackgroundJobs,
 } from "./aiden-remote-protocol.js";
-import { backgroundJobLabel, isBackgroundJobId, type BackgroundJobView } from "../../renderer/shared/background-jobs.js";
+import {
+  backgroundJobLabel,
+  isBackgroundJobId,
+  type BackgroundJobView,
+} from "../../renderer/shared/background-jobs.js";
 
 export interface AidenRemoteBackgroundJobRegistry {
   list(chatId: string): BackgroundJobView[];
@@ -20,16 +24,21 @@ export interface AidenRemoteBackgroundJobRegistry {
 
 function clip(text: string, maximum: number): string {
   const characters = Array.from(text.replace(/\s+/gu, " ").trim());
-  return characters.length <= maximum ? characters.join("") : `${characters.slice(0, maximum - 1).join("")}…`;
+  return characters.length <= maximum
+    ? characters.join("")
+    : `${characters.slice(0, maximum - 1).join("")}…`;
 }
 
 export function projectAidenRemoteBackgroundJob(view: BackgroundJobView): AidenRemoteBackgroundJob {
   const running = view.state === "running";
   const exitCode =
-    (view.state === "exited" || view.state === "failed") && typeof view.exitCode === "number" ? view.exitCode : undefined;
+    (view.state === "exited" || view.state === "failed") && typeof view.exitCode === "number"
+      ? view.exitCode
+      : undefined;
   return {
     id: view.id,
-    label: clip(backgroundJobLabel(view), AIDEN_REMOTE_MAX_BACKGROUND_JOB_LABEL) || "Background job",
+    label:
+      clip(backgroundJobLabel(view), AIDEN_REMOTE_MAX_BACKGROUND_JOB_LABEL) || "Background job",
     state: view.state,
     startedAt: new Date(view.startedAt).toISOString(),
     ...(!running ? { endedAt: new Date(view.endedAt ?? view.startedAt).toISOString() } : {}),
@@ -47,7 +56,11 @@ export class AidenRemoteBackgroundJobService {
     return {
       jobs: this.jobs
         .list(chatId)
-        .sort((left, right) => Number(right.state === "running") - Number(left.state === "running") || right.startedAt - left.startedAt)
+        .sort(
+          (left, right) =>
+            Number(right.state === "running") - Number(left.state === "running") ||
+            right.startedAt - left.startedAt,
+        )
         .slice(0, AIDEN_REMOTE_MAX_BACKGROUND_JOBS)
         .map(projectAidenRemoteBackgroundJob),
     };

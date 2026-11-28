@@ -52,7 +52,13 @@ function localDateString(now: Date): string {
 }
 
 /** The schedule a new routine starts with: every day at 9:00. */
-function defaultSchedule(): { kind: BotRoutineScheduleKind; time: string; date: string; days: number[]; day: number } {
+function defaultSchedule(): {
+  kind: BotRoutineScheduleKind;
+  time: string;
+  date: string;
+  days: number[];
+  day: number;
+} {
   return { kind: "daily", time: "09:00", date: localDateString(new Date()), days: [1], day: 1 };
 }
 
@@ -74,14 +80,18 @@ export function routineScheduleFromForm(form: {
       return { schedule: { kind: form.kind, time: form.time } };
     case "weekly":
       if (form.days.length === 0) return { error: "Choose at least one day." };
-      return { schedule: { kind: "weekly", days: [...form.days].sort((a, b) => a - b), time: form.time } };
+      return {
+        schedule: { kind: "weekly", days: [...form.days].sort((a, b) => a - b), time: form.time },
+      };
     case "monthly":
       return { schedule: { kind: "monthly", day: form.day, time: form.time } };
   }
 }
 
 /** A routine to start the form from: a saved routine or a suggestion. */
-type RoutineFormSource = Pick<BotRoutine, "name" | "prompt"> & { schedule?: BotRoutineSchedule | null };
+type RoutineFormSource = Pick<BotRoutine, "name" | "prompt"> & {
+  schedule?: BotRoutineSchedule | null;
+};
 
 function formFromRoutine(routine: RoutineFormSource) {
   const base = defaultSchedule();
@@ -138,7 +148,11 @@ export function BotRoutineEditor({
     if (!routine || busy) return;
     setBusy(true);
     try {
-      await botsApi.routines.delete({ botId: bot.id, id: routine.id, expectedUpdatedAt: routine.updatedAt });
+      await botsApi.routines.delete({
+        botId: bot.id,
+        id: routine.id,
+        expectedUpdatedAt: routine.updatedAt,
+      });
       onDeleted?.(routine.id);
       onOpenChange(false);
     } catch (caught) {
@@ -220,7 +234,11 @@ export function BotRoutineEditor({
           <Text id={`${formId}-often`} variant="small-strong">
             How often
           </Text>
-          <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-labelledby={`${formId}-often`}>
+          <div
+            className="flex flex-wrap gap-1.5"
+            role="radiogroup"
+            aria-labelledby={`${formId}-often`}
+          >
             {FREQUENCIES.map((option) => {
               const selected = kind === option.kind;
               return (
@@ -293,16 +311,22 @@ export function BotRoutineEditor({
               <Text id={`${formId}-day`} variant="small-strong">
                 Day of the month
               </Text>
-              <Select value={String(day)} disabled={busy} onValueChange={(value) => setDay(Number(value))}>
+              <Select
+                value={String(day)}
+                disabled={busy}
+                onValueChange={(value) => setDay(Number(value))}
+              >
                 <SelectTrigger aria-labelledby={`${formId}-day`} className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {Array.from({ length: BOT_ROUTINE_MAX_MONTH_DAY }, (_, index) => index + 1).map((value) => (
-                    <SelectItem key={value} value={String(value)}>
-                      {value}
-                    </SelectItem>
-                  ))}
+                  {Array.from({ length: BOT_ROUTINE_MAX_MONTH_DAY }, (_, index) => index + 1).map(
+                    (value) => (
+                      <SelectItem key={value} value={String(value)}>
+                        {value}
+                      </SelectItem>
+                    ),
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -341,7 +365,13 @@ export function BotRoutineEditor({
         </div>
         {routine ? (
           <div className="pt-1">
-            <Button variant="transparent" size="small" className="text-status-red" disabled={busy} onClick={() => void remove()}>
+            <Button
+              variant="transparent"
+              size="small"
+              className="text-status-red"
+              disabled={busy}
+              onClick={() => void remove()}
+            >
               <Trash2 /> Delete routine
             </Button>
           </div>

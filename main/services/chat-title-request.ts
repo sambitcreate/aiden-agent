@@ -1,7 +1,12 @@
 // The one model request behind a generated chat title, kept apart from the
 // Electron wiring in chat-title.ts so its request shape can be tested.
 
-import { normalizeContext, type AssistantMessage, type ImageContent, type TextContent } from "@earendil-works/pi-ai";
+import {
+  normalizeContext,
+  type AssistantMessage,
+  type ImageContent,
+  type TextContent,
+} from "@earendil-works/pi-ai";
 import { buildChatTitlePrompt } from "./chat-title-policy.js";
 import { runtimeSupportsImages } from "./generation-runtime.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";

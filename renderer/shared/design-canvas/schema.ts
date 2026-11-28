@@ -29,7 +29,16 @@ export type DesignFrameKind =
 export type DesignWidth = 390 | 768 | 1280 | 1440;
 
 /** The fixed colours a drawn item can use; each follows the theme (`designColorVar`). */
-export type DesignColor = "ink" | "gray" | "blue" | "green" | "yellow" | "red" | "purple" | "teal" | "pink";
+export type DesignColor =
+  | "ink"
+  | "gray"
+  | "blue"
+  | "green"
+  | "yellow"
+  | "red"
+  | "purple"
+  | "teal"
+  | "pink";
 export const DESIGN_COLORS = [
   "ink",
   "gray",
@@ -48,7 +57,12 @@ export type DesignPrintMode = "flow" | "fixed";
 export type DesignPaper = "letter" | "a4";
 /** A layout guide drawn over a page, artifact or artboard: equal columns, or a square grid, in design pixels. */
 export type DesignGuide = "columns-4" | "columns-8" | "columns-12" | "grid-8";
-export const DESIGN_GUIDES = ["columns-4", "columns-8", "columns-12", "grid-8"] as const satisfies readonly DesignGuide[];
+export const DESIGN_GUIDES = [
+  "columns-4",
+  "columns-8",
+  "columns-12",
+  "grid-8",
+] as const satisfies readonly DesignGuide[];
 export type DesignTextSize = "small" | "medium" | "large";
 export type DesignSide = "top" | "right" | "bottom" | "left";
 
@@ -248,7 +262,10 @@ const DEFAULT_FILE_BOXES: Record<DesignWidth, { w: number; h: number }> = {
   1440: { w: 720, h: 486 },
 };
 
-export function defaultFileBox(designWidth: DesignWidth = DESIGN_DEFAULT_FILE_WIDTH): { w: number; h: number } {
+export function defaultFileBox(designWidth: DesignWidth = DESIGN_DEFAULT_FILE_WIDTH): {
+  w: number;
+  h: number;
+} {
   return { ...(DEFAULT_FILE_BOXES[designWidth] ?? DEFAULT_FILE_BOXES[DESIGN_DEFAULT_FILE_WIDTH]) };
 }
 
@@ -335,12 +352,18 @@ export function framesOnPage(doc: DesignCanvas, pageId: string = doc.activePageI
 /** The document with the page on screen looking at `viewport`. */
 export function withActiveViewport(doc: DesignCanvas, viewport: DesignViewport): DesignCanvas {
   const page = activeDesignPage(doc);
-  if (page.viewport.x === viewport.x && page.viewport.y === viewport.y && page.viewport.zoom === viewport.zoom) {
+  if (
+    page.viewport.x === viewport.x &&
+    page.viewport.y === viewport.y &&
+    page.viewport.zoom === viewport.zoom
+  ) {
     return doc;
   }
   return {
     ...doc,
-    pages: doc.pages.map((entry) => (entry.id === page.id ? { ...entry, viewport: { ...viewport } } : entry)),
+    pages: doc.pages.map((entry) =>
+      entry.id === page.id ? { ...entry, viewport: { ...viewport } } : entry,
+    ),
   };
 }
 
@@ -362,7 +385,8 @@ export function isDesignRelativePath(value: unknown): value is string {
 export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
   if (!isRecord(value)) return { ok: false, issues: ["The canvas document is not an object."] };
   const issues: string[] = [];
-  if (value.version !== 1 && value.version !== 2) issues.push("The canvas document is not version 1 or 2.");
+  if (value.version !== 1 && value.version !== 2)
+    issues.push("The canvas document is not version 1 or 2.");
   const revision = value.revision;
   if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) {
     issues.push("The canvas revision is not a non-negative integer.");
@@ -384,7 +408,9 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
     return id && pageIds.has(id) ? id : firstPageId;
   };
   const activePageId =
-    typeof value.activePageId === "string" && pageIds.has(value.activePageId) ? value.activePageId : firstPageId;
+    typeof value.activePageId === "string" && pageIds.has(value.activePageId)
+      ? value.activePageId
+      : firstPageId;
 
   const frames: DesignFrame[] = [];
   const frameIds = new Set<string>();
@@ -392,7 +418,8 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
   for (const raw of value.frames as unknown[]) {
     const pageId = pageOf(raw);
     const room =
-      frames.length < DESIGN_CANVAS_LIMITS.frames && (perPage.get(pageId) ?? 0) < DESIGN_CANVAS_LIMITS.framesPerPage;
+      frames.length < DESIGN_CANVAS_LIMITS.frames &&
+      (perPage.get(pageId) ?? 0) < DESIGN_CANVAS_LIMITS.framesPerPage;
     const frame = room ? parseFrame(raw, pageId) : null;
     if (!frame || frameIds.has(frame.id)) {
       dropped += 1;
@@ -404,7 +431,9 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
   }
   // A frame belongs to a group or artboard on its own page only, and those do not nest.
   const groupPages = new Map(
-    frames.filter((frame) => isDesignContainer(frame.kind)).map((frame) => [frame.id, frame.pageId]),
+    frames
+      .filter((frame) => isDesignContainer(frame.kind))
+      .map((frame) => [frame.id, frame.pageId]),
   );
   for (const frame of frames) {
     if (
@@ -419,7 +448,8 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
   const comments: DesignComment[] = [];
   const commentIds = new Set<string>();
   for (const raw of value.comments as unknown[]) {
-    const comment = comments.length < DESIGN_CANVAS_LIMITS.comments ? parseComment(raw, pageOf(raw)) : null;
+    const comment =
+      comments.length < DESIGN_CANVAS_LIMITS.comments ? parseComment(raw, pageOf(raw)) : null;
     if (!comment || commentIds.has(comment.id)) {
       dropped += 1;
       continue;
@@ -432,7 +462,9 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
   }
 
   const removedPagePaths = Array.isArray(value.removedPagePaths)
-    ? [...new Set((value.removedPagePaths as unknown[]).filter(isDesignRelativePath))].slice(-DESIGN_CANVAS_LIMITS.removedPagePaths)
+    ? [...new Set((value.removedPagePaths as unknown[]).filter(isDesignRelativePath))].slice(
+        -DESIGN_CANVAS_LIMITS.removedPagePaths,
+      )
     : [];
 
   return {
@@ -453,7 +485,9 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
 
 /** The workspace pages the frames of `doc` show. */
 export function shownPagePaths(doc: Pick<DesignCanvas, "frames">): Set<string> {
-  return new Set(doc.frames.flatMap((frame) => (frame.kind === "file" && frame.path ? [frame.path] : [])));
+  return new Set(
+    doc.frames.flatMap((frame) => (frame.kind === "file" && frame.path ? [frame.path] : [])),
+  );
 }
 
 /**
@@ -470,8 +504,12 @@ export function withRemovedPagePaths<T extends DesignCanvas>(
   undone: ReadonlySet<string> = new Set(),
 ): T {
   const shown = shownPagePaths(after);
-  const gone = byPerson ? [...shownPagePaths(before)].filter((entry) => !shown.has(entry) && !undone.has(entry)) : [];
-  const kept = (before.removedPagePaths ?? []).filter((entry) => !shown.has(entry) && !gone.includes(entry));
+  const gone = byPerson
+    ? [...shownPagePaths(before)].filter((entry) => !shown.has(entry) && !undone.has(entry))
+    : [];
+  const kept = (before.removedPagePaths ?? []).filter(
+    (entry) => !shown.has(entry) && !gone.includes(entry),
+  );
   const removedPagePaths = [...kept, ...gone].slice(-DESIGN_CANVAS_LIMITS.removedPagePaths);
   const { removedPagePaths: _ignored, ...rest } = after;
   return (removedPagePaths.length > 0 ? { ...rest, removedPagePaths } : rest) as T;
@@ -488,7 +526,11 @@ function parsePages(value: unknown): DesignPage[] {
       const id = identifier(raw.id);
       if (!id || ids.has(id)) continue;
       ids.add(id);
-      pages.push({ id, name: pageName(raw.name, pages.length), viewport: parseViewport(raw.viewport) });
+      pages.push({
+        id,
+        name: pageName(raw.name, pages.length),
+        viewport: parseViewport(raw.viewport),
+      });
     }
   }
   if (pages.length === 0) {
@@ -498,7 +540,8 @@ function parsePages(value: unknown): DesignPage[] {
 }
 
 function pageName(value: unknown, index: number): string {
-  const name = typeof value === "string" ? value.trim().slice(0, DESIGN_CANVAS_LIMITS.pageNameChars) : "";
+  const name =
+    typeof value === "string" ? value.trim().slice(0, DESIGN_CANVAS_LIMITS.pageNameChars) : "";
   return name || `Page ${index + 1}`;
 }
 
@@ -555,19 +598,26 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
     frame.text =
       typeof value.text === "string" ? value.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars) : "";
   }
-  if ((frame.kind === "text" || frame.kind === "note") && typeof value.size === "string" && TEXT_SIZES.has(value.size)) {
+  if (
+    (frame.kind === "text" || frame.kind === "note") &&
+    typeof value.size === "string" &&
+    TEXT_SIZES.has(value.size)
+  ) {
     frame.size = value.size as DesignTextSize;
   }
   if (frame.kind === "shape") {
     if (value.shape !== "rect" && value.shape !== "oval") return null;
     frame.shape = value.shape;
-    if (typeof value.text === "string" && value.text) frame.text = value.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars);
+    if (typeof value.text === "string" && value.text)
+      frame.text = value.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars);
     if (isColor(value.fill)) frame.fill = value.fill;
   }
-  if ((frame.kind === "note" || frame.kind === "frame") && isColor(value.fill)) frame.fill = value.fill;
+  if ((frame.kind === "note" || frame.kind === "frame") && isColor(value.fill))
+    frame.fill = value.fill;
   if (frame.kind === "frame" || (frame.kind === "shape" && frame.shape === "rect")) {
     const radius = finite(value.radius);
-    if (radius !== undefined) frame.radius = clamp(Math.round(radius), 0, DESIGN_CANVAS_LIMITS.maxRadius);
+    if (radius !== undefined)
+      frame.radius = clamp(Math.round(radius), 0, DESIGN_CANVAS_LIMITS.maxRadius);
   }
   if (canDesignGuide(frame.kind) && typeof value.guide === "string" && GUIDES.has(value.guide)) {
     frame.guide = value.guide as DesignGuide;
@@ -581,13 +631,22 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
     const versions = parseDesignTweakVersions(value.tweakVersions);
     if (versions) frame.tweakVersions = versions;
   }
-  if (frame.kind === "shape" || frame.kind === "text" || frame.kind === "note" || isDesignLine(frame.kind)) {
+  if (
+    frame.kind === "shape" ||
+    frame.kind === "text" ||
+    frame.kind === "note" ||
+    isDesignLine(frame.kind)
+  ) {
     if (isColor(value.color)) frame.color = value.color;
   }
   if (frame.kind === "shape" || isDesignLine(frame.kind)) {
     const width = finite(value.strokeWidth);
     if (width !== undefined) {
-      frame.strokeWidth = clamp(width, DESIGN_CANVAS_LIMITS.minStrokeWidth, DESIGN_CANVAS_LIMITS.maxStrokeWidth);
+      frame.strokeWidth = clamp(
+        width,
+        DESIGN_CANVAS_LIMITS.minStrokeWidth,
+        DESIGN_CANVAS_LIMITS.maxStrokeWidth,
+      );
     }
   }
   if (frame.kind === "connector") {
@@ -599,7 +658,8 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
     if (value.arrow === "end" || value.arrow === "both") frame.arrow = value.arrow;
   }
   if (isDesignPrintable(frame.kind)) {
-    if (value.printMode === "flow" || value.printMode === "fixed") frame.printMode = value.printMode;
+    if (value.printMode === "flow" || value.printMode === "fixed")
+      frame.printMode = value.printMode;
     if (value.paper === "letter" || value.paper === "a4") frame.paper = value.paper;
   }
   if (frame.kind === "stroke") {
@@ -626,7 +686,8 @@ function parseEnd(value: unknown): DesignConnectorEnd | null {
   const frameId = identifier(value.frameId);
   if (frameId) {
     end.frameId = frameId;
-    if (typeof value.side === "string" && SIDES.has(value.side)) end.side = value.side as DesignSide;
+    if (typeof value.side === "string" && SIDES.has(value.side))
+      end.side = value.side as DesignSide;
   }
   return end;
 }
@@ -679,7 +740,8 @@ function parseComment(value: unknown, pageId: string): DesignComment | null {
   if (resolvedAt && comment.state === "resolved") comment.resolvedAt = resolvedAt;
   if (isRecord(value.reply) && typeof value.reply.text === "string" && value.reply.text.trim()) {
     const at = timestamp(value.reply.at);
-    if (at) comment.reply = { text: value.reply.text.slice(0, DESIGN_CANVAS_LIMITS.replyChars), at };
+    if (at)
+      comment.reply = { text: value.reply.text.slice(0, DESIGN_CANVAS_LIMITS.replyChars), at };
   }
   return comment;
 }
@@ -702,7 +764,8 @@ function parseAnchor(value: unknown): DesignCommentAnchor | undefined {
     text: text.slice(0, DESIGN_CANVAS_LIMITS.noteChars),
     tag: tag.slice(0, MAX_TAG_CHARS),
   };
-  if (typeof value.sourcePath === "string" && isSourceStamp(value.sourcePath)) anchor.sourcePath = value.sourcePath;
+  if (typeof value.sourcePath === "string" && isSourceStamp(value.sourcePath))
+    anchor.sourcePath = value.sourcePath;
   const rect = parseRect(value.rect);
   if (rect) anchor.rect = rect;
   if (Array.isArray(value.point) && value.point.length === 2) {
@@ -710,7 +773,8 @@ function parseAnchor(value: unknown): DesignCommentAnchor | undefined {
     const py = finite(value.point[1]);
     if (px !== undefined && py !== undefined) anchor.point = [clampCoord(px), clampCoord(py)];
   }
-  if (typeof value.html === "string" && value.html) anchor.html = clippedUnicode(value.html, DESIGN_CANVAS_LIMITS.anchorHtmlChars, "");
+  if (typeof value.html === "string" && value.html)
+    anchor.html = clippedUnicode(value.html, DESIGN_CANVAS_LIMITS.anchorHtmlChars, "");
   return anchor;
 }
 
@@ -721,11 +785,18 @@ function parseRect(value: unknown): DesignRect | undefined {
   const w = finite(value.w);
   const h = finite(value.h);
   if (x === undefined || y === undefined || w === undefined || h === undefined) return undefined;
-  return { x: clampCoord(x), y: clampCoord(y), w: Math.max(0, clampCoord(w)), h: Math.max(0, clampCoord(h)) };
+  return {
+    x: clampCoord(x),
+    y: clampCoord(y),
+    w: Math.max(0, clampCoord(w)),
+    h: Math.max(0, clampCoord(h)),
+  };
 }
 
 function timestamp(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 && value.length <= MAX_TIMESTAMP_CHARS ? value : undefined;
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_TIMESTAMP_CHARS
+    ? value
+    : undefined;
 }
 
 /** A source stamp: a workspace-relative path with an optional `:line`. */

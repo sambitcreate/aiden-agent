@@ -1,11 +1,25 @@
 import * as React from "react";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, Text } from "../components/ui";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+  Text,
+} from "../components/ui";
 import type { GalleryItem } from "../shared/images/ipc-types";
 import { openContextMenuFromKeyboard } from "../lib/keyboard-context-menu";
 import { imageCountLabel } from "./gallery-core";
 import { gridMove, tileLabel, type GridKey, type LibraryDaySection } from "./library-core";
 
-const GRID_KEYS = new Set<string>(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
+const GRID_KEYS = new Set<string>([
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "ArrowDown",
+  "Home",
+  "End",
+]);
 
 export interface LibraryTileActions {
   open(index: number): void;
@@ -19,7 +33,9 @@ export interface LibraryTileActions {
 
 /** The thumbnail of this image, wherever the current filters and sort put it, or null when it is not shown. */
 export const libraryTileFor = (grid: HTMLElement | null, assetId: string) =>
-  Array.from(grid?.querySelectorAll<HTMLButtonElement>("[data-library-asset]") ?? []).find((tile) => tile.dataset.libraryAsset === assetId) ?? null;
+  Array.from(grid?.querySelectorAll<HTMLButtonElement>("[data-library-asset]") ?? []).find(
+    (tile) => tile.dataset.libraryAsset === assetId,
+  ) ?? null;
 
 /**
  * The library's day sections of thumbnails. The grid is one Tab stop: the arrow keys, Home
@@ -43,7 +59,10 @@ export function LibraryGrid({
 }) {
   const headingPrefix = React.useId();
   const [menuItem, setMenuItem] = React.useState<GalleryItem | null>(null);
-  const items = React.useMemo(() => sections.flatMap((section) => section.entries.map((entry) => entry.item)), [sections]);
+  const items = React.useMemo(
+    () => sections.flatMap((section) => section.entries.map((entry) => entry.item)),
+    [sections],
+  );
   const active = Math.min(Math.max(focusIndex, 0), Math.max(count - 1, 0));
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -54,7 +73,9 @@ export function LibraryGrid({
     const from = (event.target as HTMLElement).closest<HTMLElement>("[data-library-index]");
     if (!from) return;
     event.preventDefault();
-    const tiles = Array.from(gridRef.current?.querySelectorAll<HTMLElement>("[data-library-index]") ?? []);
+    const tiles = Array.from(
+      gridRef.current?.querySelectorAll<HTMLElement>("[data-library-index]") ?? [],
+    );
     const rects = tiles.map((tile) => {
       const box = tile.getBoundingClientRect();
       return { left: box.left, top: box.top, width: box.width, height: box.height };
@@ -84,10 +105,23 @@ export function LibraryGrid({
           }}
         >
           {sections.map((section) => (
-            <section key={section.key} aria-labelledby={`${headingPrefix}-${section.key}`} className="flex flex-col gap-2">
+            <section
+              key={section.key}
+              aria-labelledby={`${headingPrefix}-${section.key}`}
+              className="flex flex-col gap-2"
+            >
               <header className="flex items-baseline gap-2">
-                <Text as="h3" id={`${headingPrefix}-${section.key}`} variant="small-strong" color="secondary">{section.label}</Text>
-                <Text variant="small" color="tertiary">{imageCountLabel(section.entries.length)}</Text>
+                <Text
+                  as="h3"
+                  id={`${headingPrefix}-${section.key}`}
+                  variant="small-strong"
+                  color="secondary"
+                >
+                  {section.label}
+                </Text>
+                <Text variant="small" color="tertiary">
+                  {imageCountLabel(section.entries.length)}
+                </Text>
               </header>
               <ul className="image-library-grid">
                 {section.entries.map(({ item, index }) => (
@@ -104,7 +138,15 @@ export function LibraryGrid({
                       }}
                       onClick={() => actions.open(index)}
                     >
-                      {item.thumbUrl ? <img src={item.thumbUrl} alt="" loading="lazy" decoding="async" draggable={false} /> : null}
+                      {item.thumbUrl ? (
+                        <img
+                          src={item.thumbUrl}
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
+                          draggable={false}
+                        />
+                      ) : null}
                     </button>
                   </li>
                 ))}
@@ -118,9 +160,14 @@ export function LibraryGrid({
           <>
             <ContextMenuItem onSelect={() => actions.saveAs(menuItem)}>Save…</ContextMenuItem>
             <ContextMenuItem onSelect={() => actions.copy(menuItem)}>Copy Image</ContextMenuItem>
-            <ContextMenuItem onSelect={() => actions.reveal(menuItem)}>{actions.revealLabel}</ContextMenuItem>
+            <ContextMenuItem onSelect={() => actions.reveal(menuItem)}>
+              {actions.revealLabel}
+            </ContextMenuItem>
             <ContextMenuSeparator />
-            <ContextMenuItem disabled={!actions.canOpenWorkflow(menuItem)} onSelect={() => actions.openWorkflow(menuItem)}>
+            <ContextMenuItem
+              disabled={!actions.canOpenWorkflow(menuItem)}
+              onSelect={() => actions.openWorkflow(menuItem)}
+            >
               Open Workflow
             </ContextMenuItem>
           </>

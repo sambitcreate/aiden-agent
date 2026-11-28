@@ -1,6 +1,6 @@
 # Designer Mode Plan
 
-Status: superseded (see note below); Phase 0 is a go/no-go gate  
+Status: superseded (see note below); Phase 0 is a go/no-go gate
 
 > **Superseded (2026-10-07):** folded into [Design Studio + Create Images rebuild](design-studio-create-images-rebuild-plan.md) as DS-4 "Connected app". This document remains the reference for DS-4 entry criteria.
 >

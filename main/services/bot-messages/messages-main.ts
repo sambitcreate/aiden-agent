@@ -19,11 +19,17 @@ export async function botMessageRoster(): Promise<readonly BotRosterEntry[]> {
     paused: isBotPaused,
     hasModel: async (id) => (await botCapabilityStore.getBotModelAuthority(id)) !== undefined,
     spendingRefusal: (id, name) => spending.refusal({ kind: "bot", id }, name),
-    report: (id, error) => logger.warn("bots", `Bot ${id} messaging availability is unreadable.`, error),
+    report: (id, error) =>
+      logger.warn("bots", `Bot ${id} messaging availability is unreadable.`, error),
   });
 }
 const courier = createBotMessageLifecycle({
-  report: (error) => logger.warn("bots", "Bot messaging could not start; other Bot features remain available.", error),
+  report: (error) =>
+    logger.warn(
+      "bots",
+      "Bot messaging could not start; other Bot features remain available.",
+      error,
+    ),
   create: () =>
     createBotMessageCourier({
       ledger: createBotMessageLedger({
@@ -37,8 +43,10 @@ const courier = createBotMessageLifecycle({
         markSilent: async (...args) => (await botSessionRuntime()).markSilent(...args),
         appendEntry: async (...args) => (await botSessionRuntime()).appendEntry(...args),
         state: async (...args) => (await botSessionRuntime()).state(...args),
-        submissionForRequest: async (...args) => (await botSessionRuntime()).submissionForRequest(...args),
-      awaitMessageTaskSettlement: async (...args) => (await botSessionRuntime()).awaitMessageTaskSettlement(...args),
+        submissionForRequest: async (...args) =>
+          (await botSessionRuntime()).submissionForRequest(...args),
+        awaitMessageTaskSettlement: async (...args) =>
+          (await botSessionRuntime()).awaitMessageTaskSettlement(...args),
       },
       roster: botMessageRoster,
       enabled: async () => botMessagingEnabled(await configStore.getSettings()),

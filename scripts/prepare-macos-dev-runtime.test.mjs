@@ -1,13 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -90,18 +83,8 @@ async function fixtureElectronApp(root) {
   );
 
   for (const helper of macDevRuntimeLayout().helpers) {
-    const helperApp = path.join(
-      appPath,
-      "Contents",
-      "Frameworks",
-      `${helper.sourceName}.app`,
-    );
-    const executable = path.join(
-      helperApp,
-      "Contents",
-      "MacOS",
-      helper.sourceName,
-    );
+    const helperApp = path.join(appPath, "Contents", "Frameworks", `${helper.sourceName}.app`);
+    const executable = path.join(helperApp, "Contents", "MacOS", helper.sourceName);
     await mkdir(path.dirname(executable), { recursive: true });
     await writeFile(executable, `fixture-${helper.sourceName}`);
     await chmod(executable, 0o755);
@@ -138,14 +121,7 @@ async function plistRunner(command, args) {
 
 async function plistValue(plistPath, key) {
   return (
-    await plistRunner("/usr/bin/plutil", [
-      "-extract",
-      key,
-      "raw",
-      "-o",
-      "-",
-      plistPath,
-    ])
+    await plistRunner("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", plistPath])
   ).trim();
 }
 
@@ -224,17 +200,11 @@ test("branding mutates and validates the complete cached app layout", async (t) 
   }
 
   assert.equal(
-    await plistValue(
-      path.join(appPath, "Contents", "Info.plist"),
-      "NSMicrophoneUsageDescription",
-    ),
+    await plistValue(path.join(appPath, "Contents", "Info.plist"), "NSMicrophoneUsageDescription"),
     "Aiden Agent uses the microphone only when you choose voice input or dictation.",
   );
   assert.equal(
-    await plistValue(
-      path.join(appPath, "Contents", "Info.plist"),
-      "NSAppleEventsUsageDescription",
-    ),
+    await plistValue(path.join(appPath, "Contents", "Info.plist"), "NSAppleEventsUsageDescription"),
     "Aiden Agent pastes dictated text into the app you are typing in.",
   );
   assert.ok(

@@ -43,7 +43,9 @@ test("confirming calls bots:delete and returns to the Bots list", async () => {
   fireEvent.click(within(dialog).getByRole("button", { name: "Delete Bot" }));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots"));
   assert.deepEqual(
-    calls.filter((call) => call.channel.startsWith("bots:") && call.channel !== "bots:getCanonicalPhoto")[0],
+    calls.filter(
+      (call) => call.channel.startsWith("bots:") && call.channel !== "bots:getCanonicalPhoto",
+    )[0],
     { channel: "bots:delete", args: ["bot-1"] },
   );
 });
@@ -66,22 +68,30 @@ test("a failed delete keeps the dialog open and the Bot in place", async () => {
   assert.ok(screen.getByRole("alertdialog"));
 });
 
-const storedPreferences = () => parseBotSidebarPreferences(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY), Date.now());
+const storedPreferences = () =>
+  parseBotSidebarPreferences(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY), Date.now());
 
 test("deleting the pinned Bot unpins it, even when it was the last Bot, and a failed delete keeps the pin", async () => {
   localStorage.setItem(
     BOT_SIDEBAR_PREFERENCES_KEY,
-    serializeBotSidebarPreferences({ since: 1, pinnedBotId: "bot-1", lastViewed: { "bot-1": 5 }, seenReplyAt: { "bot-1": 4 } }),
+    serializeBotSidebarPreferences({
+      since: 1,
+      pinnedBotId: "bot-1",
+      lastViewed: { "bot-1": 5 },
+      seenReplyAt: { "bot-1": 4 },
+    }),
   );
   let fail = true;
   installBotTestIpc({
     "bots:delete": () => {
-      if (fail) throw new Error("Error invoking remote method 'bots:delete': Error: This Bot is busy.");
+      if (fail)
+        throw new Error("Error invoking remote method 'bots:delete': Error: This Bot is busy.");
     },
     "bots:list": () => [],
   });
   const { dialog, router } = await openDialog();
-  const confirm = () => within(dialog).getByRole("button", { name: "Delete Bot" }) as HTMLButtonElement;
+  const confirm = () =>
+    within(dialog).getByRole("button", { name: "Delete Bot" }) as HTMLButtonElement;
   fireEvent.click(confirm());
   await waitFor(() => assert.equal(confirm().disabled, false));
   assert.equal(storedPreferences().pinnedBotId, "bot-1", "nothing was deleted");
@@ -96,8 +106,14 @@ test("deleting the pinned Bot unpins it, even when it was the last Bot, and a fa
 
 test("deleting a Bot that is not on screen leaves the page, and any unsaved edits on it, where they are", async () => {
   const calls = installBotTestIpc({ "bots:delete": () => undefined, "bots:list": () => [] });
-  const { router } = await openDialog("/bots/bot-1?page=instructions", { id: "bot-2", name: "Scout" });
-  const confirm = () => within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete Bot" }) as HTMLButtonElement;
+  const { router } = await openDialog("/bots/bot-1?page=instructions", {
+    id: "bot-2",
+    name: "Scout",
+  });
+  const confirm = () =>
+    within(screen.getByRole("alertdialog")).getByRole("button", {
+      name: "Delete Bot",
+    }) as HTMLButtonElement;
   fireEvent.click(confirm());
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:delete")));
   // The confirm handler has finished once the button is no longer busy.
@@ -114,22 +130,34 @@ test("a deleted Bot leaves the cached list at once, before the list is read agai
     "bots:list": () => new Promise<never>(() => undefined),
   });
   const queryClient = createBotTestQueryClient();
-  queryClient.setQueryData([...queryKeys.bots, "active"], [botFixture(), botFixture({ id: "bot-2", name: "Scout" })]);
+  queryClient.setQueryData(
+    [...queryKeys.bots, "active"],
+    [botFixture(), botFixture({ id: "bot-2", name: "Scout" })],
+  );
   queryClient.setQueryData(["bot-open-work", bot.id], { note: "deleted Bot responsibility" });
-  queryClient.setQueryData(["bot-routine-models", bot.id, "routine-1"], { selection: "deleted Bot choice" });
-  queryClient.setQueryData(["bot-open-work", "bot-2"], { note: "other Bot responsibility" });
-  const harness = await mountWithBotRouter(<BotDeleteDialog bot={bot} open onOpenChange={() => undefined} />, {
-    initialPath: "/bots/bot-1",
-    queryClient,
+  queryClient.setQueryData(["bot-routine-models", bot.id, "routine-1"], {
+    selection: "deleted Bot choice",
   });
+  queryClient.setQueryData(["bot-open-work", "bot-2"], { note: "other Bot responsibility" });
+  const harness = await mountWithBotRouter(
+    <BotDeleteDialog bot={bot} open onOpenChange={() => undefined} />,
+    {
+      initialPath: "/bots/bot-1",
+      queryClient,
+    },
+  );
   const dialog = await screen.findByRole("alertdialog");
   fireEvent.click(within(dialog).getByRole("button", { name: "Delete Bot" }));
   await waitFor(() => assert.equal(harness.router.state.location.pathname, "/bots"));
   assert.deepEqual(
-    queryClient.getQueryData<ReturnType<typeof botFixture>[]>([...queryKeys.bots, "active"])?.map((row) => row.id),
+    queryClient
+      .getQueryData<ReturnType<typeof botFixture>[]>([...queryKeys.bots, "active"])
+      ?.map((row) => row.id),
     ["bot-2"],
   );
   assert.equal(queryClient.getQueryData(["bot-open-work", bot.id]), undefined);
   assert.equal(queryClient.getQueryData(["bot-routine-models", bot.id, "routine-1"]), undefined);
-  assert.deepEqual(queryClient.getQueryData(["bot-open-work", "bot-2"]), { note: "other Bot responsibility" });
+  assert.deepEqual(queryClient.getQueryData(["bot-open-work", "bot-2"]), {
+    note: "other Bot responsibility",
+  });
 });

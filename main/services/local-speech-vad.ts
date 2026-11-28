@@ -4,7 +4,10 @@
 // Padding never crosses the midpoint to a neighbouring region, so window
 // seams fall in silence and every detected region lands in exactly one window.
 
-export interface SampleRange { start: number; end: number }
+export interface SampleRange {
+  start: number;
+  end: number;
+}
 
 const DEFAULT_RATE = 16_000;
 export const VAD_PAD_SAMPLES = Math.round(0.45 * DEFAULT_RATE);
@@ -42,12 +45,16 @@ function paddedBounds(regions: readonly SampleRange[], total: number, pad: numbe
 
 /** Window length in samples: 2 s headroom under the model window, capped at 28 s, never below 1 s. */
 function windowLimit(maxWindowSeconds: number, sampleRate: number): number {
-  return Math.max(sampleRate, Math.floor(Math.min(maxWindowSeconds - 2, MAX_SEGMENT_SECONDS) * sampleRate));
+  return Math.max(
+    sampleRate,
+    Math.floor(Math.min(maxWindowSeconds - 2, MAX_SEGMENT_SECONDS) * sampleRate),
+  );
 }
 
 function split(range: SampleRange, limit: number): SampleRange[] {
   const out: SampleRange[] = [];
-  for (let start = range.start; start < range.end; start += limit) out.push({ start, end: Math.min(range.end, start + limit) });
+  for (let start = range.start; start < range.end; start += limit)
+    out.push({ start, end: Math.min(range.end, start + limit) });
   return out;
 }
 
@@ -57,9 +64,14 @@ export function planSegments(
   maxWindowSeconds: number | null,
   sampleRate = DEFAULT_RATE,
 ): SampleRange[] {
-  const bounds = paddedBounds(regions, totalSamples, Math.round(VAD_PAD_SAMPLES * (sampleRate / DEFAULT_RATE)));
+  const bounds = paddedBounds(
+    regions,
+    totalSamples,
+    Math.round(VAD_PAD_SAMPLES * (sampleRate / DEFAULT_RATE)),
+  );
   if (bounds.length === 0) return [];
-  if (maxWindowSeconds === null || !Number.isFinite(maxWindowSeconds)) return [{ start: bounds[0]!.start, end: bounds[bounds.length - 1]!.end }];
+  if (maxWindowSeconds === null || !Number.isFinite(maxWindowSeconds))
+    return [{ start: bounds[0]!.start, end: bounds[bounds.length - 1]!.end }];
   const limit = windowLimit(maxWindowSeconds, sampleRate);
   const windows: SampleRange[] = [];
   for (const range of bounds.flatMap((r) => (r.end - r.start > limit ? split(r, limit) : [r]))) {
@@ -70,8 +82,13 @@ export function planSegments(
   return windows;
 }
 
-export function fixedChunks(totalSamples: number, maxWindowSeconds: number | null, sampleRate = DEFAULT_RATE): SampleRange[] {
+export function fixedChunks(
+  totalSamples: number,
+  maxWindowSeconds: number | null,
+  sampleRate = DEFAULT_RATE,
+): SampleRange[] {
   if (totalSamples <= 0) return [];
-  if (maxWindowSeconds === null || !Number.isFinite(maxWindowSeconds)) return [{ start: 0, end: totalSamples }];
+  if (maxWindowSeconds === null || !Number.isFinite(maxWindowSeconds))
+    return [{ start: 0, end: totalSamples }];
   return split({ start: 0, end: totalSamples }, windowLimit(maxWindowSeconds, sampleRate));
 }

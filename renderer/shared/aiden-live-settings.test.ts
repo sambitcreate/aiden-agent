@@ -30,7 +30,12 @@ test("a stored value outside the offered choices falls back for that field only"
 
 test("a settings patch keeps valid Live fields and refuses wrong ones", () => {
   assert.deepEqual(
-    parseAidenLiveSettingsPatch({ aidenLiveVoice: "Kore", aidenLiveSpeed: 1.5, aidenLiveAppControl: false, other: 1 }),
+    parseAidenLiveSettingsPatch({
+      aidenLiveVoice: "Kore",
+      aidenLiveSpeed: 1.5,
+      aidenLiveAppControl: false,
+      other: 1,
+    }),
     { aidenLiveVoice: "Kore", aidenLiveSpeed: 1.5, aidenLiveAppControl: false },
   );
   assert.deepEqual(parseAidenLiveSettingsPatch({}), {});
@@ -40,5 +45,6 @@ test("a settings patch keeps valid Live fields and refuses wrong ones", () => {
     { aidenLiveSpeed: "1.5" },
     { aidenLiveRibbonColors: "rainbow" },
     { aidenLiveChatAccess: "yes" },
-  ]) assert.throws(() => parseAidenLiveSettingsPatch(patch), /Aiden Live/u);
+  ])
+    assert.throws(() => parseAidenLiveSettingsPatch(patch), /Aiden Live/u);
 });

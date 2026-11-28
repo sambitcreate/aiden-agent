@@ -30,10 +30,7 @@ export function createQuickChatPreloadApi(transport: QuickChatPreloadTransport) 
     return transport.invoke<T>(channel, ...args);
   }
 
-  function onNotification(
-    channel: string,
-    callback: (payload: unknown) => void,
-  ): () => void {
+  function onNotification(channel: string, callback: (payload: unknown) => void): () => void {
     if (!QUICK_CHAT_NOTIFICATION_CHANNELS.has(channel)) {
       throw new Error(`Notification is not available to quick chat: ${channel}`);
     }

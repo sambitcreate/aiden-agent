@@ -14,7 +14,9 @@ export function localModelsTestCatalog(
   installed: readonly string[] = [],
   options: { appleSilicon?: boolean } = {},
 ): LocalVoiceModel[] {
-  const specs = options.appleSilicon ? speechModelsForHost({ platform: "darwin", arch: "arm64" }) : PORTABLE_SPEECH_MODELS;
+  const specs = options.appleSilicon
+    ? speechModelsForHost({ platform: "darwin", arch: "arm64" })
+    : PORTABLE_SPEECH_MODELS;
   const recommended = recommendedSpeechModelId(specs);
   return specs.map((spec) => ({
     id: spec.id,

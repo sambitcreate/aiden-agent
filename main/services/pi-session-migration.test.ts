@@ -4,10 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { decodeLegacyPiSession } from "./pi-legacy-session.js";
-import {
-  migratePiSessionJournal,
-  rollbackPiSessionMigration,
-} from "./pi-session-migration.js";
+import { migratePiSessionJournal, rollbackPiSessionMigration } from "./pi-session-migration.js";
 
 const fixtures = path.resolve("main/services/fixtures/pi-legacy");
 
@@ -31,7 +28,12 @@ test("migration atomically promotes repeated checkpoints and preserves owner-onl
     const result = await migratePiSessionJournal(journalPath, "fixture-repeated");
     const header = JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!);
     assert.deepEqual(
-      { kind: header.kind, version: header.v, storageVersion: header.storageVersion, id: header.id },
+      {
+        kind: header.kind,
+        version: header.v,
+        storageVersion: header.storageVersion,
+        id: header.id,
+      },
       { kind: "header", version: 4, storageVersion: 1, id: "fixture-repeated" },
     );
     assert.equal(result.receipt.counts.compactions, 2);
@@ -47,7 +49,9 @@ test("migration atomically promotes repeated checkpoints and preserves owner-onl
 
     const promoted = await readFile(journalPath, "utf8");
     const alteredLines = promoted.split("\n");
-    const metadataIndex = alteredLines.findIndex((line) => line.includes('"key":"session-metadata"'));
+    const metadataIndex = alteredLines.findIndex((line) =>
+      line.includes('"key":"session-metadata"'),
+    );
     assert.ok(metadataIndex > 0);
     const alteredMetadata = JSON.parse(alteredLines[metadataIndex]!);
     alteredMetadata.value = { ...alteredMetadata.value, chatId: "different-chat" };
@@ -76,10 +80,7 @@ test("migration recovers a promoted journal whose receipt write was interrupted"
     await unlink(first.receiptPath);
     const recovered = await migratePiSessionJournal(journalPath, "fixture-uncompacted");
     assert.equal(recovered.receipt.sourceSha256, first.receipt.sourceSha256);
-    assert.equal(
-      JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).v,
-      4,
-    );
+    assert.equal(JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).v, 4);
   });
 });
 
@@ -108,10 +109,7 @@ test("migration accepts a torn final append but backup retains exact source byte
     const before = await readFile(journalPath);
     const result = await migratePiSessionJournal(journalPath, "fixture-torn");
     assert.deepEqual(await readFile(result.receipt.backupPath), before);
-    assert.equal(
-      JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).v,
-      4,
-    );
+    assert.equal(JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).v, 4);
   });
 });
 
@@ -164,17 +162,12 @@ test("randomized repeated checkpoint chains retain valid v4 context", async () =
           parentId = checkpointId;
         }
       }
-      await writeFile(
-        journalPath,
-        `${lines.map((value) => JSON.stringify(value)).join("\n")}\n`,
-        { mode: 0o600 },
-      );
+      await writeFile(journalPath, `${lines.map((value) => JSON.stringify(value)).join("\n")}\n`, {
+        mode: 0o600,
+      });
       const result = await migratePiSessionJournal(journalPath, chatId);
       assert.equal(result.receipt.validation, "passed");
-      assert.equal(
-        JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).v,
-        4,
-      );
+      assert.equal(JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).v, 4);
     } finally {
       await rm(temporary, { recursive: true, force: true });
     }

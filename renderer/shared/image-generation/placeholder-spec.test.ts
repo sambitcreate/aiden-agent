@@ -14,10 +14,15 @@ test("the scan slows and the caption changes once a job passes a minute", () => 
   assert.equal(imageScanElapsedLabel(59_999), "Generating · 59s");
   assert.equal(imageScanElapsedLabel(60_000), "Still generating · 1m 00s");
   assert.equal(imageScanElapsedLabel(72_400), "Still generating · 1m 12s");
-  assert.equal(imageScanElapsedLabel(-5), "Generating · 0s", "clock skew never shows a negative time");
+  assert.equal(
+    imageScanElapsedLabel(-5),
+    "Generating · 0s",
+    "clock skew never shows a negative time",
+  );
 });
 
 test("the placeholder shape is the call's ratio, or square", () => {
   assert.equal(placeholderAspectRatio("9:16"), "9:16");
-  for (const value of [undefined, "", "21:9", "16x9", 1.5, null]) assert.equal(placeholderAspectRatio(value), "1:1");
+  for (const value of [undefined, "", "21:9", "16x9", 1.5, null])
+    assert.equal(placeholderAspectRatio(value), "1:1");
 });

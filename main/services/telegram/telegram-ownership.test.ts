@@ -6,7 +6,9 @@ import { afterEach, test } from "node:test";
 import { createTelegramOwnershipLease } from "./telegram-ownership.js";
 
 const roots: string[] = [];
-afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
+afterEach(async () =>
+  Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))),
+);
 
 test("one live process owns each Telegram profile lease", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-telegram-owner-"));
@@ -25,13 +27,21 @@ test("a dead stale owner is quarantined and recovered", async () => {
   roots.push(root);
   const directory = path.join(root, "telegram-owners");
   await mkdir(directory, { recursive: true });
-  await writeFile(path.join(directory, "work.json"), JSON.stringify({
-    pid: 2_147_483_647,
-    generation: "old",
-    acquiredAt: 0,
-    heartbeatAt: 0,
-  }));
-  const lease = createTelegramOwnershipLease({ root: () => root, profile: "work", now: () => 50_000, staleMs: 1_000 });
+  await writeFile(
+    path.join(directory, "work.json"),
+    JSON.stringify({
+      pid: 2_147_483_647,
+      generation: "old",
+      acquiredAt: 0,
+      heartbeatAt: 0,
+    }),
+  );
+  const lease = createTelegramOwnershipLease({
+    root: () => root,
+    profile: "work",
+    now: () => 50_000,
+    staleMs: 1_000,
+  });
   assert.deepEqual(lease.acquire(), { acquired: true, recovered: true });
   lease.release();
 });

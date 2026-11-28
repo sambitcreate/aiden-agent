@@ -17,7 +17,10 @@ export type SubagentFileMutationOutcome =
   | { kind: "cleanup_unknown" }
   | { kind: "not_committed" | "unknown"; error: unknown };
 
-type TransactionClient = Pick<SubagentFileMutatorClient, "commit" | "finalize" | "preserve" | "currentState">;
+type TransactionClient = Pick<
+  SubagentFileMutatorClient,
+  "commit" | "finalize" | "preserve" | "currentState"
+>;
 
 async function preserveRecovery(client: TransactionClient, effectId: string): Promise<boolean> {
   if (client.currentState !== "committed" && client.currentState !== "indeterminate") return false;
@@ -49,6 +52,8 @@ export async function commitSubagentFileMutation(
     await client.finalize(effectId);
     return { kind: "committed" };
   } catch {
-    return { kind: (await preserveRecovery(client, effectId)) ? "recovery_kept" : "cleanup_unknown" };
+    return {
+      kind: (await preserveRecovery(client, effectId)) ? "recovery_kept" : "cleanup_unknown",
+    };
   }
 }

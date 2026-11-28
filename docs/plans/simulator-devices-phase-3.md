@@ -19,29 +19,29 @@
 
 ## Scope decisions
 
-- **Trackpad deferred to Phase 6.** T3 `phoneTrackpad.ts` only maps wheel and pinch gestures to *orbit/zoom of the 3D model* (`phoneWheelNavigation`). A flat stream has nothing to orbit, so the port lands with the 3D frames in Phase 6. The flat viewer uses pointer events for touch.
+- **Trackpad deferred to Phase 6.** T3 `phoneTrackpad.ts` only maps wheel and pinch gestures to _orbit/zoom of the 3D model_ (`phoneWheelNavigation`). A flat stream has nothing to orbit, so the port lands with the 3D frames in Phase 6. The flat viewer uses pointer events for touch.
 - **Actions subset (iOS):** `setAppearance`, `setTextSize`, `setIncreaseContrast`, `openUrl`, `setPermission` (the `simctl privacy` TCC services only; notifications need serve-sim's CLI, which is Phase 4+), `setLocation`, and `clearLocation`. Each action is one `xcrun simctl` exec with an argv array and no shell. Accessibility toggles through `serve-sim-ax-settings` are deferred.
 - **Screenshot to chat** uses main's existing `service.screenshot()`, which posts directly to the hub. The PNG reaches the renderer over IPC, and the composer ingests it through its existing clipboard-image path (`attachments.readClipboardImages`), so attachment limits and model support checks still apply.
 
 ## File map
 
-| Path | Responsibility |
-| --- | --- |
-| `renderer/lib/device-stream.ts` | AVCC demuxer, WebCodecs decoder, MJPEG fallback, input socket, HID map |
-| `renderer/lib/device-stream.test.ts` | Ported `stream.test.ts` and `streamFrames.test.ts` iOS cases (injected fake clock, fetch, and sockets) |
-| `main/services/devices/device-actions.ts` | Typed `simctl` actions and a settings read |
-| `main/services/devices/device-actions.test.ts` | argv per action, the unsupported inputs, parsing the settings read |
-| `renderer/shared/devices.ts` | `DeviceActionInput`, `DeviceSettings`, `parseDeviceActionInput`, `parseDeviceSettings` |
-| `main/services/devices/device-service.ts` | `action()`, `settings()`, `closeChat()` |
-| `main/services/devices/device-ipc.ts` | `devices:action`, `devices:settings`, `devices:screenshot` |
-| `main/handlers/chats.ts` | `chats:remove` closes that chat's device sessions |
-| `renderer/lib/composer-attach.ts` | Per-chat registry that hands image files to the one composer that can accept them |
-| `renderer/lib/composer-attach.test.ts` | Delivery needs exactly one available receiver |
-| `renderer/components/devices-panel.tsx` | Setup → device list → viewer state machine |
-| `renderer/components/device-viewer.tsx` | Canvas/img viewer, pointer and keyboard input, controls rail |
-| `renderer/components/devices-panel.test.tsx` | A render test per `DeviceHostStatus`, the list, and the viewer shell |
+| Path                                           | Responsibility                                                                                                    |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `renderer/lib/device-stream.ts`                | AVCC demuxer, WebCodecs decoder, MJPEG fallback, input socket, HID map                                            |
+| `renderer/lib/device-stream.test.ts`           | Ported `stream.test.ts` and `streamFrames.test.ts` iOS cases (injected fake clock, fetch, and sockets)            |
+| `main/services/devices/device-actions.ts`      | Typed `simctl` actions and a settings read                                                                        |
+| `main/services/devices/device-actions.test.ts` | argv per action, the unsupported inputs, parsing the settings read                                                |
+| `renderer/shared/devices.ts`                   | `DeviceActionInput`, `DeviceSettings`, `parseDeviceActionInput`, `parseDeviceSettings`                            |
+| `main/services/devices/device-service.ts`      | `action()`, `settings()`, `closeChat()`                                                                           |
+| `main/services/devices/device-ipc.ts`          | `devices:action`, `devices:settings`, `devices:screenshot`                                                        |
+| `main/handlers/chats.ts`                       | `chats:remove` closes that chat's device sessions                                                                 |
+| `renderer/lib/composer-attach.ts`              | Per-chat registry that hands image files to the one composer that can accept them                                 |
+| `renderer/lib/composer-attach.test.ts`         | Delivery needs exactly one available receiver                                                                     |
+| `renderer/components/devices-panel.tsx`        | Setup → device list → viewer state machine                                                                        |
+| `renderer/components/device-viewer.tsx`        | Canvas/img viewer, pointer and keyboard input, controls rail                                                      |
+| `renderer/components/devices-panel.test.tsx`   | A render test per `DeviceHostStatus`, the list, and the viewer shell                                              |
 | `tests/e2e/environment-devices-stream.spec.ts` | Real proxy and viewer against a fake hub: frame paint, input message, reconnect, screenshot to chat, and `Origin` |
-| `tests/e2e/device-hub-fake.mjs` | Fake `expo-device-hub` the spec seeds as the installed entry |
+| `tests/e2e/device-hub-fake.mjs`                | Fake `expo-device-hub` the spec seeds as the installed entry                                                      |
 
 ## Task 1: Stream client (`renderer/lib/device-stream.ts`)
 
@@ -49,8 +49,16 @@
 
 ```ts
 export type DeviceStreamStatus = "connecting" | "streaming" | "error";
-export type DeviceOrientation = "portrait" | "portrait_upside_down" | "landscape_left" | "landscape_right";
-export interface DeviceScreenSize { width: number; height: number; orientation: DeviceOrientation }
+export type DeviceOrientation =
+  | "portrait"
+  | "portrait_upside_down"
+  | "landscape_left"
+  | "landscape_right";
+export interface DeviceScreenSize {
+  width: number;
+  height: number;
+  orientation: DeviceOrientation;
+}
 export interface DeviceStreamEvents {
   onStatus(status: DeviceStreamStatus, detail?: string): void;
   onScreen(screen: DeviceScreenSize): void;
@@ -58,13 +66,34 @@ export interface DeviceStreamEvents {
   onMjpegFallback(url: string): void;
   onInputConnected(connected: boolean, detail?: string): void;
 }
-export interface DeviceStreamTarget { hostId: string; deviceId: string; grant: DeviceStreamGrant; preferMjpeg?: boolean }
-export interface DeviceStreamRuntime { fetch; WebSocket; VideoDecoder?; EncodedVideoChunk?; createImageBitmap?; setTimeout; clearTimeout }
-export class AvccDemuxer { push(bytes: Uint8Array): AvccChunk[]; reset(): void }
+export interface DeviceStreamTarget {
+  hostId: string;
+  deviceId: string;
+  grant: DeviceStreamGrant;
+  preferMjpeg?: boolean;
+}
+export interface DeviceStreamRuntime {
+  fetch;
+  WebSocket;
+  VideoDecoder?;
+  EncodedVideoChunk?;
+  createImageBitmap?;
+  setTimeout;
+  clearTimeout;
+}
+export class AvccDemuxer {
+  push(bytes: Uint8Array): AvccChunk[];
+  reset(): void;
+}
 export function avcCodecString(bytes: Uint8Array): string;
 export function hidUsageForCode(code: string): number | null;
 export function deviceHubUrl(target, path: string, protocol: "http" | "ws"): string;
-export function createDeviceStreamClient(target, output: HTMLCanvasElement | DeviceFrameSink, events, runtime?): DeviceStreamClient;
+export function createDeviceStreamClient(
+  target,
+  output: HTMLCanvasElement | DeviceFrameSink,
+  events,
+  runtime?,
+): DeviceStreamClient;
 ```
 
 - [x] Port the iOS path of `stream.ts`. Drop the Duo, panel, and Android code. URLs are `deviceHubUrl(target, "/vendor/serve-sim/helper/<udid>/stream.avcc", "http")` and `…/helper/<udid>/ws` over `ws`.

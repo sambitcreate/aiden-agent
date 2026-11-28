@@ -52,13 +52,21 @@ export interface FakeRfbConnection {
 
 type Rgb = readonly [number, number, number];
 
-const DEFAULT_FORMAT: FakeRfbPixelFormat = { bigEndian: false, redShift: 16, greenShift: 8, blueShift: 0 };
+const DEFAULT_FORMAT: FakeRfbPixelFormat = {
+  bigEndian: false,
+  redShift: 16,
+  greenShift: 8,
+  blueShift: 0,
+};
 
 function opensslDesKey(password: string): Buffer {
   const bytes = Buffer.from(password, "utf8");
   const key = Buffer.alloc(8);
   for (let index = 0; index < 8 && index < bytes.length; index += 1) {
-    key[index] = parseInt(bytes[index].toString(2).padStart(8, "0").split("").reverse().join(""), 2);
+    key[index] = parseInt(
+      bytes[index].toString(2).padStart(8, "0").split("").reverse().join(""),
+      2,
+    );
   }
   return key;
 }
@@ -82,8 +90,12 @@ export class FakeRfbServer {
   private readonly encodingsBySocket = new Map<Socket, number[]>();
   private readonly pendingIncremental = new Set<Socket>();
   /** Areas changed since a client's last update, sent with its next incremental request. */
-  private readonly dirty = new Map<Socket, { x: number; y: number; width: number; height: number }[]>();
-  private readonly options: Required<Omit<FakeRfbServerOptions, "password">> & Pick<FakeRfbServerOptions, "password">;
+  private readonly dirty = new Map<
+    Socket,
+    { x: number; y: number; width: number; height: number }[]
+  >();
+  private readonly options: Required<Omit<FakeRfbServerOptions, "password">> &
+    Pick<FakeRfbServerOptions, "password">;
 
   constructor(options: FakeRfbServerOptions = {}) {
     this.options = {
@@ -124,16 +136,22 @@ export class FakeRfbServer {
   }
 
   /** Copies a block on the server: a CopyRect to clients waiting now, the copied pixels to the rest later. */
-  copy(source: { x: number; y: number }, rect: { x: number; y: number; width: number; height: number }): void {
+  copy(
+    source: { x: number; y: number },
+    rect: { x: number; y: number; width: number; height: number },
+  ): void {
     const block = [];
     for (let y = 0; y < rect.height; y += 1) {
-      for (let x = 0; x < rect.width; x += 1) block.push(this.pixels[(source.y + y) * this.width + source.x + x]);
+      for (let x = 0; x < rect.width; x += 1)
+        block.push(this.pixels[(source.y + y) * this.width + source.x + x]);
     }
     for (let y = 0; y < rect.height; y += 1) {
-      for (let x = 0; x < rect.width; x += 1) this.pixels[(rect.y + y) * this.width + rect.x + x] = block[y * rect.width + x];
+      for (let x = 0; x < rect.width; x += 1)
+        this.pixels[(rect.y + y) * this.width + rect.x + x] = block[y * rect.width + x];
     }
     for (const socket of this.sockets) {
-      if (this.pendingIncremental.delete(socket)) this.sendRects(socket, [{ kind: "copy", rect, source }]);
+      if (this.pendingIncremental.delete(socket))
+        this.sendRects(socket, [{ kind: "copy", rect, source }]);
       else this.dirty.set(socket, [...(this.dirty.get(socket) ?? []), rect]);
     }
   }
@@ -170,7 +188,9 @@ export class FakeRfbServer {
 
   async close(): Promise<void> {
     this.dropClients();
-    await new Promise<void>((resolve) => (this.server ? this.server.close(() => resolve()) : resolve()));
+    await new Promise<void>((resolve) =>
+      this.server ? this.server.close(() => resolve()) : resolve(),
+    );
   }
 
   private accept(socket: Socket): void {
@@ -196,7 +216,8 @@ export class FakeRfbServer {
     let stage: "version" | "security" | "auth" | "init" | "messages" = "version";
     const minor = this.options.version === "3.3" ? 3 : this.options.version === "3.7" ? 7 : 8;
     const challenge = randomBytes(16);
-    const password = typeof this.options.password === "function" ? this.options.password() : this.options.password;
+    const password =
+      typeof this.options.password === "function" ? this.options.password() : this.options.password;
     const securityType = password === undefined ? 1 : 2;
     socket.write(`RFB 003.00${minor}\n`);
 
@@ -319,7 +340,9 @@ export class FakeRfbServer {
         if (buffer.length < 4) return 0;
         const count = buffer.readUInt16BE(2);
         if (buffer.length < 4 + count * 4) return 0;
-        const encodings = Array.from({ length: count }, (_, index) => buffer.readInt32BE(4 + index * 4));
+        const encodings = Array.from({ length: count }, (_, index) =>
+          buffer.readInt32BE(4 + index * 4),
+        );
         this.encodingsBySocket.set(socket, encodings);
         connection.encodings.push(encodings);
         return 4 + count * 4;
@@ -330,8 +353,15 @@ export class FakeRfbServer {
         connection.updateRequests.push({ incremental, at: Date.now() });
         const dirty = this.dirty.get(socket) ?? [];
         this.dirty.delete(socket);
-        if (!incremental) this.sendRects(socket, [{ kind: "raw", rect: { x: 0, y: 0, width: this.width, height: this.height } }]);
-        else if (dirty.length > 0) this.sendRects(socket, dirty.map((rect) => ({ kind: "raw" as const, rect })));
+        if (!incremental)
+          this.sendRects(socket, [
+            { kind: "raw", rect: { x: 0, y: 0, width: this.width, height: this.height } },
+          ]);
+        else if (dirty.length > 0)
+          this.sendRects(
+            socket,
+            dirty.map((rect) => ({ kind: "raw" as const, rect })),
+          );
         else this.pendingIncremental.add(socket);
         return 10;
       }
@@ -342,7 +372,11 @@ export class FakeRfbServer {
       }
       case 5: {
         if (buffer.length < 6) return 0;
-        connection.pointer.push({ x: buffer.readUInt16BE(2), y: buffer.readUInt16BE(4), buttons: buffer[1] });
+        connection.pointer.push({
+          x: buffer.readUInt16BE(2),
+          y: buffer.readUInt16BE(4),
+          buttons: buffer[1],
+        });
         return 6;
       }
       default:
@@ -355,7 +389,11 @@ export class FakeRfbServer {
     socket: Socket,
     rects: (
       | { kind: "raw"; rect: { x: number; y: number; width: number; height: number } }
-      | { kind: "copy"; rect: { x: number; y: number; width: number; height: number }; source: { x: number; y: number } }
+      | {
+          kind: "copy";
+          rect: { x: number; y: number; width: number; height: number };
+          source: { x: number; y: number };
+        }
       | { kind: "size"; rect: { x: number; y: number; width: number; height: number } }
     )[],
   ): void {
@@ -382,7 +420,8 @@ export class FakeRfbServer {
         for (let y = entry.rect.y; y < entry.rect.y + entry.rect.height; y += 1) {
           for (let x = entry.rect.x; x < entry.rect.x + entry.rect.width; x += 1) {
             const [r, g, b] = this.pixels[y * this.width + x];
-            const value = ((r << format.redShift) | (g << format.greenShift) | (b << format.blueShift)) >>> 0;
+            const value =
+              ((r << format.redShift) | (g << format.greenShift) | (b << format.blueShift)) >>> 0;
             if (format.bigEndian) pixels.writeUInt32BE(value, offset);
             else pixels.writeUInt32LE(value, offset);
             offset += 4;

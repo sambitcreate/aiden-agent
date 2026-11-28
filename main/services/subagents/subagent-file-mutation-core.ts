@@ -258,9 +258,7 @@ export interface SubagentFileMutationPreparerOptions {
 }
 
 /** Recompute every immutable binding before it crosses into the native helper. */
-export function assertPreparedSubagentFileMutation(
-  value: PreparedSubagentFileMutation,
-): void {
+export function assertPreparedSubagentFileMutation(value: PreparedSubagentFileMutation): void {
   if (
     typeof value !== "object" ||
     value === null ||
@@ -298,9 +296,7 @@ export function assertPreparedSubagentFileMutation(
   }
 }
 
-export function assertSubagentFileInspection(
-  value: Readonly<SubagentFileInspection>,
-): void {
+export function assertSubagentFileInspection(value: Readonly<SubagentFileInspection>): void {
   if (
     typeof value !== "object" ||
     value === null ||

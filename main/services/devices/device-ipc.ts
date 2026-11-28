@@ -31,7 +31,8 @@ export interface DeviceHandlerDeps {
 }
 
 function requireId(value: unknown, label: string): string {
-  if (typeof value !== "string" || !ID_PATTERN.test(value)) throw new Error(`A valid ${label} is required.`);
+  if (typeof value !== "string" || !ID_PATTERN.test(value))
+    throw new Error(`A valid ${label} is required.`);
   return value;
 }
 
@@ -50,7 +51,12 @@ function requireChatId(value: unknown): string {
 }
 
 function requireConsentKind(value: unknown): DeviceConsentKind {
-  if (value !== "streaming" && value !== "agentAccess" && value !== "peerSharing" && value !== "mobileSharing") {
+  if (
+    value !== "streaming" &&
+    value !== "agentAccess" &&
+    value !== "peerSharing" &&
+    value !== "mobileSharing"
+  ) {
     throw new Error("Unknown simulator consent.");
   }
   return value;
@@ -78,7 +84,10 @@ export function registerDeviceHandlersWith(deps: DeviceHandlerDeps): void {
     unsubscribeState ??= service.onState((state) => broadcast("devices:state", state));
     // An agent's device_open floats the device over its chat or shows its tab.
     unsubscribeReveal ??= service.onReveal((chatId, target) =>
-      broadcast("devices:reveal", target ? { chatId, hostId: target.hostId, deviceId: target.deviceId } : { chatId }),
+      broadcast(
+        "devices:reveal",
+        target ? { chatId, hostId: target.hostId, deviceId: target.deviceId } : { chatId },
+      ),
     );
     if (subscribers.has(owner)) return;
     subscribers.add(owner);
@@ -88,7 +97,10 @@ export function registerDeviceHandlersWith(deps: DeviceHandlerDeps): void {
     });
   };
 
-  const guarded = <T>(run: (service: DeviceService, owner: RendererDocumentOwner, args: unknown[]) => Promise<T>) =>
+  const guarded =
+    <T>(
+      run: (service: DeviceService, owner: RendererDocumentOwner, args: unknown[]) => Promise<T>,
+    ) =>
     async (event: DeviceIpcEvent, ...args: unknown[]): Promise<T> => {
       if (!deps.enabled()) throw new Error("Simulator devices are not enabled.");
       const owner = deps.owner(event);
@@ -208,7 +220,8 @@ export function registerDeviceHandlersWith(deps: DeviceHandlerDeps): void {
     "devices:update-tool",
     guarded(async (service, owner, [input]) => {
       const request = requireRecord(input);
-      if (request.tool !== "hub" && request.tool !== "agent") throw new Error("Unknown simulator helper.");
+      if (request.tool !== "hub" && request.tool !== "agent")
+        throw new Error("Unknown simulator helper.");
       subscribe(owner, service);
       return service.updateTool({ hostId: requireHostId(request.hostId), tool: request.tool });
     }),

@@ -70,17 +70,18 @@ test.use({ portableConfigSeed: "empty" });
 test("oversized provider artwork survives save-time recovery and relaunch", async ({ aiden }) => {
   const source = colorPng(128, 128).toString("base64");
   const saved = await aiden.page.evaluate(
-    async ({ providerId, dataBase64 }) => (window as unknown as ProviderArtworkBridge).aidenAPI.ipc.invoke<{
-      artwork?: { mimeType: "image/png"; dataBase64: string };
-    }>("providers:save", {
-      id: providerId,
-      kind: "openai",
-      label: "Oversized artwork test",
-      artwork: { mimeType: "image/png", dataBase64 },
-      baseUrl: "http://127.0.0.1:1234/v1",
-      models: ["e2e-artwork-model"],
-      needsKey: false,
-    }),
+    async ({ providerId, dataBase64 }) =>
+      (window as unknown as ProviderArtworkBridge).aidenAPI.ipc.invoke<{
+        artwork?: { mimeType: "image/png"; dataBase64: string };
+      }>("providers:save", {
+        id: providerId,
+        kind: "openai",
+        label: "Oversized artwork test",
+        artwork: { mimeType: "image/png", dataBase64 },
+        baseUrl: "http://127.0.0.1:1234/v1",
+        models: ["e2e-artwork-model"],
+        needsKey: false,
+      }),
     { providerId: PROVIDER_ID, dataBase64: source },
   );
 
@@ -100,15 +101,14 @@ test("oversized provider artwork survives save-time recovery and relaunch", asyn
   expect(decodedSize).toEqual({ width: 64, height: 64 });
 
   const relaunched = await aiden.relaunch();
-  const listed = await relaunched.evaluate(
-    async (providerId) => {
-      const providers = await (window as unknown as ProviderArtworkBridge).aidenAPI.ipc.invoke<Array<{
+  const listed = await relaunched.evaluate(async (providerId) => {
+    const providers = await (window as unknown as ProviderArtworkBridge).aidenAPI.ipc.invoke<
+      Array<{
         id: string;
         artwork?: { mimeType: "image/png"; dataBase64: string };
-      }>>("providers:list");
-      return providers.find((provider) => provider.id === providerId);
-    },
-    PROVIDER_ID,
-  );
+      }>
+    >("providers:list");
+    return providers.find((provider) => provider.id === providerId);
+  }, PROVIDER_ID);
   expect(listed?.artwork).toEqual(saved.artwork);
 });

@@ -17,11 +17,24 @@ const cli = join(pkg, "dist", "app", "cli.js");
 
 function sandbox(t) {
   const root = mkdtempSync(join(tmpdir(), "aiden-mcp-apps-"));
-  const home = join(root, "home"), agentDir = join(root, "agent"), workspace = join(root, "project");
-  mkdirSync(home, { recursive: true }); mkdirSync(workspace, { recursive: true });
+  const home = join(root, "home"),
+    agentDir = join(root, "agent"),
+    workspace = join(root, "project");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(workspace, { recursive: true });
   t.after(() => rmSync(root, { recursive: true, force: true }));
   // CI keeps analytics off for runs nobody started; the server would send nothing anyway.
-  return { agentDir, workspace, env: { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", AIDEN_ANALYTICS: "0" } };
+  return {
+    agentDir,
+    workspace,
+    env: {
+      ...process.env,
+      HOME: home,
+      AIDEN_CODING_AGENT_DIR: agentDir,
+      PI_OFFLINE: "1",
+      AIDEN_ANALYTICS: "0",
+    },
+  };
 }
 
 function runCli(args, env) {
@@ -34,10 +47,17 @@ function json(result) {
 }
 
 async function serve(t, env, args = []) {
-  const child = spawn(process.execPath, [cli, "serve", ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [cli, "serve", ...args], {
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   const output = { text: "" };
-  child.stdout.setEncoding("utf8").on("data", (chunk) => { output.text += chunk; });
-  child.stderr.setEncoding("utf8").on("data", (chunk) => { output.text += chunk; });
+  child.stdout.setEncoding("utf8").on("data", (chunk) => {
+    output.text += chunk;
+  });
+  child.stderr.setEncoding("utf8").on("data", (chunk) => {
+    output.text += chunk;
+  });
   const stop = async () => {
     if (child.exitCode !== null || child.signalCode !== null) return;
     const exited = once(child, "exit");
@@ -50,7 +70,8 @@ async function serve(t, env, args = []) {
   const ready = /Aiden Remote listening|Aiden Remote is off/;
   const deadline = Date.now() + 60_000;
   while (!ready.test(output.text)) {
-    if (child.exitCode !== null) throw new Error(`serve exited early (${child.exitCode}):\n${output.text}`);
+    if (child.exitCode !== null)
+      throw new Error(`serve exited early (${child.exitCode}):\n${output.text}`);
     if (Date.now() > deadline) throw new Error(`serve did not become ready:\n${output.text}`);
     await new Promise((done) => setTimeout(done, 100));
   }
@@ -63,13 +84,39 @@ async function fakeProvider(t, agentDir) {
     request.resume();
     await once(request, "end");
     response.writeHead(200, { "content-type": "text/event-stream" });
-    response.write(`data: ${JSON.stringify({ id: "x", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: "Hello from the server" }, finish_reason: null }] })}\n\n`);
-    response.write(`data: ${JSON.stringify({ id: "x", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+    response.write(
+      `data: ${JSON.stringify({ id: "x", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: "Hello from the server" }, finish_reason: null }] })}\n\n`,
+    );
+    response.write(
+      `data: ${JSON.stringify({ id: "x", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`,
+    );
     response.end("data: [DONE]\n\n");
   });
   await new Promise((done) => server.listen(0, "127.0.0.1", done));
-  t.after(() => { server.closeAllConnections(); server.close(); });
-  api.atomicJson(join(agentDir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  api.atomicJson(join(agentDir, "models.json"), {
+    providers: {
+      "cli-test": {
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
+        apiKey: "test-only",
+        models: [
+          {
+            id: "test",
+            name: "Test",
+            reasoning: false,
+            input: ["text"],
+            contextWindow: 32000,
+            maxTokens: 4096,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+    },
+  });
 }
 
 let rpcId = 0;
@@ -78,13 +125,37 @@ function mcp(url, token, method, params = {}) {
   const target = new URL(url);
   const body = JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params });
   return new Promise((done, reject) => {
-    const request = httpRequest({ host: target.hostname, port: target.port, path: target.pathname, method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "content-length": Buffer.byteLength(body),
-        ...(token ? { authorization: `Bearer ${token}` } : {}) } }, (response) => {
-      let data = ""; response.setEncoding("utf8"); response.on("data", (chunk) => { data += chunk; });
-      response.on("end", () => done({ status: response.statusCode, body: response.headers["content-type"]?.includes("json") && data ? JSON.parse(data) : data }));
-    });
-    request.setTimeout(60_000, () => request.destroy(new Error(`MCP request timed out: ${method}`)));
+    const request = httpRequest(
+      {
+        host: target.hostname,
+        port: target.port,
+        path: target.pathname,
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          "content-length": Buffer.byteLength(body),
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+      },
+      (response) => {
+        let data = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          data += chunk;
+        });
+        response.on("end", () =>
+          done({
+            status: response.statusCode,
+            body:
+              response.headers["content-type"]?.includes("json") && data ? JSON.parse(data) : data,
+          }),
+        );
+      },
+    );
+    request.setTimeout(60_000, () =>
+      request.destroy(new Error(`MCP request timed out: ${method}`)),
+    );
     request.on("error", reject);
     request.end(body);
   });
@@ -117,7 +188,10 @@ test("aiden serve keeps /mcp off until an app is connected, then the app runs a 
   assert.deepEqual(before.apps, []);
 
   // Piped output is a log: the token comes as JSON with a warning on stderr.
-  const connectedResult = runCli(["apps", "connect", "Claude", "Code", "--access", "supervised"], env);
+  const connectedResult = runCli(
+    ["apps", "connect", "Claude", "Code", "--access", "supervised"],
+    env,
+  );
   const connected = json(connectedResult);
   assert.match(connectedResult.stderr, /token.*keep it out of logs/);
   assert.equal(connected.app.name, "Claude Code");
@@ -148,26 +222,47 @@ test("aiden serve keeps /mcp off until an app is connected, then the app runs a 
   // A chat started by the app runs on the server's model and reads back.
   const workspaces = await callTool(url, connected.token, "aiden_workspace_list", {});
   assert.ok(JSON.stringify(workspaces).includes(workspaceId), JSON.stringify(workspaces));
-  const started = await callTool(url, connected.token, "aiden_chat_start",
-    { clientRequestId: "mcp-apps-test-0001", workspaceId, text: "Say hello", providerId: "cli-test", modelId: "test" });
+  const started = await callTool(url, connected.token, "aiden_chat_start", {
+    clientRequestId: "mcp-apps-test-0001",
+    workspaceId,
+    text: "Say hello",
+    providerId: "cli-test",
+    modelId: "test",
+  });
   let run = { state: "running" };
   for (let attempt = 0; attempt < 6 && run.state === "running"; attempt += 1) {
-    run = await callTool(url, connected.token, "aiden_chat_wait", { chatId: started.chatId, runId: started.runId, timeoutSeconds: 10 });
+    run = await callTool(url, connected.token, "aiden_chat_wait", {
+      chatId: started.chatId,
+      runId: started.runId,
+      timeoutSeconds: 10,
+    });
   }
   assert.equal(run.state, "done", JSON.stringify(run));
-  const transcript = await callTool(url, connected.token, "aiden_chat_read", { chatId: started.chatId });
-  assert.ok(JSON.stringify(transcript).includes("Hello from the server"), JSON.stringify(transcript));
+  const transcript = await callTool(url, connected.token, "aiden_chat_read", {
+    chatId: started.chatId,
+  });
+  assert.ok(
+    JSON.stringify(transcript).includes("Hello from the server"),
+    JSON.stringify(transcript),
+  );
   // The server notes, on this computer only, which app started the chat.
-  const provenance = JSON.parse(readFileSync(join(agentDir, "aiden-mcp-chat-provenance.json"), "utf8"));
-  assert.deepEqual(provenance.entries.map(({ chatId, appId, name }) => ({ chatId, appId, name })),
-    [{ chatId: started.chatId, appId: connected.app.id, name: "Claude Code" }]);
+  const provenance = JSON.parse(
+    readFileSync(join(agentDir, "aiden-mcp-chat-provenance.json"), "utf8"),
+  );
+  assert.deepEqual(
+    provenance.entries.map(({ chatId, appId, name }) => ({ chatId, appId, name })),
+    [{ chatId: started.chatId, appId: connected.app.id, name: "Claude Code" }],
+  );
 
   // Disconnecting ends that token at once; the other app keeps working.
   assert.deepEqual(json(runCli(["apps", "revoke", connected.app.id], env)), { revoked: true });
   assert.equal((await mcp(url, connected.token, "tools/list")).status, 401);
   assert.ok((await toolNames(url, reader.token)).length > 0);
   const listed = json(runCli(["apps", "list"], env));
-  assert.ok(listed.apps.find((app) => app.id === connected.app.id).revokedAt, JSON.stringify(listed.apps));
+  assert.ok(
+    listed.apps.find((app) => app.id === connected.app.id).revokedAt,
+    JSON.stringify(listed.apps),
+  );
   assert.equal(listed.apps.find((app) => app.id === reader.app.id).revokedAt, undefined);
 
   // Off closes the listener; the saved port comes back with it.
@@ -180,7 +275,10 @@ test("aiden serve keeps /mcp off until an app is connected, then the app runs a 
   // A restarted server opens the same URL, so a configured app keeps working.
   await first.stop();
   const second = await serve(t, env);
-  assert.match(second.output.text, new RegExp(`Aiden MCP server listening at ${url.replace(/[.]/g, "\\.")}`));
+  assert.match(
+    second.output.text,
+    new RegExp(`Aiden MCP server listening at ${url.replace(/[.]/g, "\\.")}`),
+  );
   assert.ok((await toolNames(url, reader.token)).length > 0);
 });
 
@@ -189,14 +287,19 @@ test("aiden serve counts a connected app and the chat it starts, and the admin c
   // A server whose person already saw the notice and left usage data on. Keyless,
   // so AIDEN_ANALYTICS_DEBUG prints each would-be event instead of sending it.
   const env = { ...base, AIDEN_ANALYTICS_DEBUG: "1" };
-  for (const name of ["AIDEN_ANALYTICS", "CI", "DO_NOT_TRACK", "INVOCATION_ID", "XPC_SERVICE_NAME"]) delete env[name];
+  for (const name of ["AIDEN_ANALYTICS", "CI", "DO_NOT_TRACK", "INVOCATION_ID", "XPC_SERVICE_NAME"])
+    delete env[name];
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-  writeFileSync(join(agentDir, "aiden-analytics.json"), JSON.stringify({ enabled: true, noticeShownAt: "2026-11-01T00:00:00.000Z" }));
+  writeFileSync(
+    join(agentDir, "aiden-analytics.json"),
+    JSON.stringify({ enabled: true, noticeShownAt: "2026-11-01T00:00:00.000Z" }),
+  );
   await fakeProvider(t, agentDir);
   const added = runCli(["workspace", "add", workspace], env);
   const { id: workspaceId } = json(added);
   const { output } = await serve(t, env);
-  const sent = (event) => output.text.split("\n").filter((line) => line.startsWith(`[analytics debug] ${event} `));
+  const sent = (event) =>
+    output.text.split("\n").filter((line) => line.startsWith(`[analytics debug] ${event} `));
   const until = async (event, count) => {
     const deadline = Date.now() + 30_000;
     while (sent(event).length < count) {
@@ -205,22 +308,36 @@ test("aiden serve counts a connected app and the chat it starts, and the admin c
     }
   };
 
-  const connectResult = runCli(["apps", "connect", "Claude", "Code", "--access", "supervised"], env);
+  const connectResult = runCli(
+    ["apps", "connect", "Claude", "Code", "--access", "supervised"],
+    env,
+  );
   const connected = json(connectResult);
   // The command only asks the running server; the server is the one that reports.
-  for (const result of [added, connectResult]) assert.doesNotMatch(result.stdout + result.stderr, /analytics debug/u);
+  for (const result of [added, connectResult])
+    assert.doesNotMatch(result.stdout + result.stderr, /analytics debug/u);
   await until("mcp_app_connected", 1);
   assert.match(sent("mcp_app_connected")[0], /"access":"supervised"/u);
   assert.match(sent("mcp_app_connected")[0], /"surface":"server"/u);
 
   const { url } = connected.server;
-  const args = { clientRequestId: "mcp-apps-analytics-0001", workspaceId, text: "Say hello privately", providerId: "cli-test", modelId: "test" };
+  const args = {
+    clientRequestId: "mcp-apps-analytics-0001",
+    workspaceId,
+    text: "Say hello privately",
+    providerId: "cli-test",
+    modelId: "test",
+  };
   const started = await callTool(url, connected.token, "aiden_chat_start", args);
   // The app retrying the same request is the same chat.
   assert.deepEqual(await callTool(url, connected.token, "aiden_chat_start", args), started);
   let run = { state: "running" };
   for (let attempt = 0; attempt < 6 && run.state === "running"; attempt += 1) {
-    run = await callTool(url, connected.token, "aiden_chat_wait", { chatId: started.chatId, runId: started.runId, timeoutSeconds: 10 });
+    run = await callTool(url, connected.token, "aiden_chat_wait", {
+      chatId: started.chatId,
+      runId: started.runId,
+      timeoutSeconds: 10,
+    });
   }
   assert.equal(run.state, "done", JSON.stringify(run));
   await until("mcp_chat_started", 1);
@@ -233,9 +350,23 @@ test("aiden serve counts a connected app and the chat it starts, and the admin c
   assert.match(sent("mcp_chat_started")[0], /"model_choice":"chosen"/u);
   assert.match(sent("mcp_app_connected")[1], /"access":"read"/u);
   // An app's chat is not a person's chat, and a disconnect is not reported.
-  for (const event of ["chat_created", "chat_message_sent", "mcp_app_revoked"]) assert.deepEqual(sent(event), [], event);
-  const reports = output.text.split("\n").filter((line) => line.startsWith("[analytics debug] ")).join("\n");
-  for (const secret of ["Claude Code", "Codex", "Say hello", connected.token, connected.app.id, started.chatId, workspaceId, workspace, "cli-test"]) {
+  for (const event of ["chat_created", "chat_message_sent", "mcp_app_revoked"])
+    assert.deepEqual(sent(event), [], event);
+  const reports = output.text
+    .split("\n")
+    .filter((line) => line.startsWith("[analytics debug] "))
+    .join("\n");
+  for (const secret of [
+    "Claude Code",
+    "Codex",
+    "Say hello",
+    connected.token,
+    connected.app.id,
+    started.chatId,
+    workspaceId,
+    workspace,
+    "cli-test",
+  ]) {
     assert.equal(reports.includes(secret), false, secret);
   }
 });
@@ -243,12 +374,24 @@ test("aiden serve counts a connected app and the chat it starts, and the admin c
 test("aiden apps refuses what it cannot do, and never disconnects a phone", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "aiden-mcp-apps-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const original = process.env.AIDEN_CLI_ENTRY; process.env.AIDEN_CLI_ENTRY = cli;
-  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
-  const daemon = api.createDaemonChats(dir), scheduler = api.createCliScheduler(dir);
+  const original = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = cli;
+  t.after(() => {
+    if (original === undefined) delete process.env.AIDEN_CLI_ENTRY;
+    else process.env.AIDEN_CLI_ENTRY = original;
+  });
+  const daemon = api.createDaemonChats(dir),
+    scheduler = api.createCliScheduler(dir);
   // Distinct from the other suites' Remote ports: test files run in parallel.
-  const remote = await api.createCliRemote(dir, daemon, scheduler, { port: 49378, mcpPort: 0, discovery: { async start() {}, stop() {} } });
-  t.after(async () => { await remote.stop(); await scheduler.service.stopAndSettle(); });
+  const remote = await api.createCliRemote(dir, daemon, scheduler, {
+    port: 49378,
+    mcpPort: 0,
+    discovery: { async start() {}, stop() {} },
+  });
+  t.after(async () => {
+    await remote.stop();
+    await scheduler.service.stopAndSettle();
+  });
   await remote.start();
 
   for (const [args, pattern] of [
@@ -260,7 +403,8 @@ test("aiden apps refuses what it cannot do, and never disconnects a phone", asyn
     [["connect", "Claude", "--scope", "user"], /Usage: apps/],
     [["revoke", "dev_unknown"], /No connected app/],
     [["rename"], /Usage: apps/],
-  ]) await assert.rejects(remote.apps(args), pattern, args.join(" "));
+  ])
+    await assert.rejects(remote.apps(args), pattern, args.join(" "));
   // A refused connect turned nothing on and connected nothing.
   const listed = await remote.apps(["list"]);
   assert.equal(listed.server.enabled, false);
@@ -268,27 +412,50 @@ test("aiden apps refuses what it cannot do, and never disconnects a phone", asyn
   assert.deepEqual(listed.apps, []);
 
   // A phone's id is not an app's, so `aiden apps revoke` leaves it paired.
-  const phone = await remote.state.issueDevice({ name: "Phone", type: "iphone", clientVersion: "test" });
+  const phone = await remote.state.issueDevice({
+    name: "Phone",
+    type: "iphone",
+    clientVersion: "test",
+  });
   await assert.rejects(remote.apps(["revoke", phone.device.id]), /No connected app/);
   const devices = await remote.state.listDevices();
-  assert.equal(devices.find((device) => device.id === phone.device.id)?.revokedAt, undefined, JSON.stringify(devices));
+  assert.equal(
+    devices.find((device) => device.id === phone.device.id)?.revokedAt,
+    undefined,
+    JSON.stringify(devices),
+  );
   // `aiden apps list` shows only the apps, never the phone.
   const app = await remote.apps(["connect", "Codex"]);
   assert.match(app.server.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
   const robots = "\u{1F916}".repeat(80);
   const emoji = await remote.apps(["connect", robots]);
   assert.equal(emoji.app.name, robots, "80 emoji is an 80-character name");
-  assert.deepEqual((await remote.apps(["list"])).apps.map(({ id }) => id).sort(), [app.app.id, emoji.app.id].sort());
+  assert.deepEqual(
+    (await remote.apps(["list"])).apps.map(({ id }) => id).sort(),
+    [app.app.id, emoji.app.id].sort(),
+  );
 });
 
 test("aiden apps revoke disconnects an app while Bot storage waits for repair", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "aiden-mcp-apps-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const original = process.env.AIDEN_CLI_ENTRY; process.env.AIDEN_CLI_ENTRY = cli;
-  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
-  const daemon = api.createDaemonChats(dir), scheduler = api.createCliScheduler(dir);
-  const remote = await api.createCliRemote(dir, daemon, scheduler, { port: 49380, mcpPort: 0, discovery: { async start() {}, stop() {} } });
-  t.after(async () => { await remote.stop(); await scheduler.service.stopAndSettle(); });
+  const original = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = cli;
+  t.after(() => {
+    if (original === undefined) delete process.env.AIDEN_CLI_ENTRY;
+    else process.env.AIDEN_CLI_ENTRY = original;
+  });
+  const daemon = api.createDaemonChats(dir),
+    scheduler = api.createCliScheduler(dir);
+  const remote = await api.createCliRemote(dir, daemon, scheduler, {
+    port: 49380,
+    mcpPort: 0,
+    discovery: { async start() {}, stop() {} },
+  });
+  t.after(async () => {
+    await remote.stop();
+    await scheduler.service.stopAndSettle();
+  });
   await remote.start();
   const app = await remote.apps(["connect", "Codex"]);
   const tools = await mcp(app.server.url, app.token, "tools/list");
@@ -296,7 +463,9 @@ test("aiden apps revoke disconnects an app while Bot storage waits for repair", 
 
   // A damaged rollback checkpoint leaves Bot access unavailable until repaired.
   writeFileSync(join(dir, "bot-service", "bot-capability-state-head.json"), "{}");
-  await assert.rejects(remote.bots.application.revokeNoticeAudience("dev_probe"), { name: "BotCapabilityUnavailableError" });
+  await assert.rejects(remote.bots.application.revokeNoticeAudience("dev_probe"), {
+    name: "BotCapabilityUnavailableError",
+  });
 
   assert.deepEqual(await remote.apps(["revoke", app.app.id]), { revoked: true });
   assert.equal((await mcp(app.server.url, app.token, "tools/list")).status, 401);
@@ -312,7 +481,10 @@ test("two apps set up in one shell profile each connect with their own token", (
     { app: { id: "device_k3j9qxa1", name: "Claude Code" }, token: "a".repeat(43) },
     { app: { id: "device_p7qd2mb2", name: "Claude Code" }, token: "b".repeat(43) },
     { app: { id: "device_zz81aa03", name: "Codex" }, token: "c".repeat(43) },
-  ].map((entry) => ({ ...entry, snippets: api.aidenMcpClientSnippets(url, entry.token, entry.app) }));
+  ].map((entry) => ({
+    ...entry,
+    snippets: api.aidenMcpClientSnippets(url, entry.token, entry.app),
+  }));
   const script = [
     String.raw`claude() { while [ "$1" != --header ]; do shift; done; eval "printf '%s\n' \"$2\""; }`,
     String.raw`codex() { while [ "$1" != --bearer-token-env-var ]; do shift; done; eval "printf 'Authorization: Bearer %s\n' \"\$$2\""; }`,
@@ -322,7 +494,10 @@ test("two apps set up in one shell profile each connect with their own token", (
   const output = execFileSync("/bin/sh", ["-c", script], { encoding: "utf8" });
   assert.deepEqual(
     output.trim().split("\n"),
-    apps.flatMap(({ token }) => [`Authorization: Bearer ${token}`, `Authorization: Bearer ${token}`]),
+    apps.flatMap(({ token }) => [
+      `Authorization: Bearer ${token}`,
+      `Authorization: Bearer ${token}`,
+    ]),
   );
 });
 
@@ -335,15 +510,19 @@ test("aiden serve --no-remote has no /mcp, and aiden apps says how to get it", a
 });
 
 test("the Claude Code and Codex commands keep the token out of their config files", () => {
-  const url = "http://127.0.0.1:49500/mcp", token = "t".repeat(43);
+  const url = "http://127.0.0.1:49500/mcp",
+    token = "t".repeat(43);
   const snippets = api.aidenMcpClientSnippets(url, token, { id: "dev_1", name: "Claude Code" });
   for (const command of [snippets.claude, snippets.codex]) {
     assert.ok(command.includes(url), command);
     assert.equal(command.includes(token), false, command);
   }
   // A server that could not start gives no commands to copy, only the way to retry.
-  const blocked = api.renderAppConnection({ token, app: { id: "dev_1", name: "Claude Code", access: "read" },
-    server: { supported: true, enabled: true, running: false, port: 49500, problem: "port_in_use" } });
+  const blocked = api.renderAppConnection({
+    token,
+    app: { id: "dev_1", name: "Claude Code", access: "read" },
+    server: { supported: true, enabled: true, running: false, port: 49500, problem: "port_in_use" },
+  });
   assert.equal(blocked.includes("claude mcp add"), false);
   assert.match(blocked, /aiden apps on/);
   assert.equal(blocked.split(token).length - 1, 1, "the token is shown once");

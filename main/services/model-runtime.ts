@@ -37,9 +37,7 @@ const codexRuntimeModels = new Proxy(providerRegistry.models, {
 /** A configured provider's limits, with Pi's exact record (thinking map, adaptive thinking) when Pi knows the model. */
 function exactRuntimeLimits(provider: StoredProvider, id: string) {
   const piProviderId = catalogProviderSlug(provider.id);
-  const piModel = piProviderId
-    ? providerRegistry.models.getModel(piProviderId, id)
-    : undefined;
+  const piModel = piProviderId ? providerRegistry.models.getModel(piProviderId, id) : undefined;
   const forceAdaptiveThinking =
     piModel?.api === "anthropic-messages"
       ? (piModel.compat as AnthropicMessagesCompat | undefined)?.forceAdaptiveThinking
@@ -151,7 +149,10 @@ export async function preflightBotModelAuth(
  * record and limits) but offline: no credentials, auth or network. Bot model
  * choices check thinking levels against this so the check agrees with the run.
  */
-export async function resolveRuntimeModelMetadata(providerId: string, modelId: string): Promise<Model<Api>> {
+export async function resolveRuntimeModelMetadata(
+  providerId: string,
+  modelId: string,
+): Promise<Model<Api>> {
   const resolvedProviderId = await configStore.resolveProviderId(providerId);
   if (!resolvedProviderId) throw new Error("Saved model metadata is unavailable.");
   if (resolvedProviderId === OPENAI_CODEX_PROVIDER_ID) {
@@ -167,7 +168,8 @@ export async function resolveRuntimeModelMetadata(providerId: string, modelId: s
     return model;
   }
   const provider = await configStore.getProvider(resolvedProviderId);
-  if (!provider || !provider.models.includes(modelId)) throw new Error("Saved model metadata is unavailable.");
+  if (!provider || !provider.models.includes(modelId))
+    throw new Error("Saved model metadata is unavailable.");
   return buildModel(provider, modelId, await exactRuntimeLimits(provider, modelId));
 }
 
@@ -182,8 +184,10 @@ export async function resolveCompactionModelMetadata(
   const provider = await configStore.getProvider(providerId);
   if (!provider || !provider.models.includes(modelId))
     throw new Error("Saved model metadata is unavailable.");
-  return withoutMessageThreads(withOpenCodeSessionAttribution(
-    buildModel(provider, modelId, await modelsCatalog.runtimeLimits(provider, modelId)),
-    conversationId,
-  ));
+  return withoutMessageThreads(
+    withOpenCodeSessionAttribution(
+      buildModel(provider, modelId, await modelsCatalog.runtimeLimits(provider, modelId)),
+      conversationId,
+    ),
+  );
 }

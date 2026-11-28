@@ -2,8 +2,15 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenOperationContractError } from "./aiden-remote-operation-contract.js";
 import { BOT_PERSON_INPUT_KIND } from "./bot-runtime/bot-input-entry.js";
 import { BOT_PEER_MESSAGE_ENTRY_KIND } from "../../renderer/shared/bot-peers.js";
-import { botPlanItemView, type BotPlanItem, type BotPlanView } from "../../renderer/shared/bot-plans.js";
-import { BotAccessRequestStaleError, createBotAccessRequests } from "./bot-runtime/bot-access-requests.js";
+import {
+  botPlanItemView,
+  type BotPlanItem,
+  type BotPlanView,
+} from "../../renderer/shared/bot-plans.js";
+import {
+  BotAccessRequestStaleError,
+  createBotAccessRequests,
+} from "./bot-runtime/bot-access-requests.js";
 import { createBotAccessAuthorizer } from "./bot-runtime/bot-access-authorization.js";
 import { createBotRunAccess } from "./bot-runtime/bot-run-access.js";
 import { BotRuntimeAuthorityError } from "./bot-runtime-authority.js";
@@ -14,7 +21,11 @@ import { accessRequestPrompt } from "./bot-runtime/test-support/access-request-f
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import type { BotMemoryEditInput, BotMemoryEditResult, BotMemoryView } from "../../renderer/shared/bot-memory.js";
+import type {
+  BotMemoryEditInput,
+  BotMemoryEditResult,
+  BotMemoryView,
+} from "../../renderer/shared/bot-memory.js";
 import type { BotRoutineProposalRespondInput } from "../../renderer/shared/bot-routine-proposals.js";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -46,7 +57,11 @@ import type { BotHandoffOpened } from "./bot-runtime/bot-handoff-open.js";
 import type { BotPendingHandoff } from "../../renderer/shared/bot-handoffs.js";
 import type { BotIssue, BotIssueAction } from "../../renderer/shared/bot-issues.js";
 import { BOT_LOCKED_RULES } from "../../renderer/shared/bot-rules.js";
-import { applyRemoteBotSessionEvent, remoteBotSessionView, type RemoteBotSessionView } from "../../renderer/lib/hosts/remote-bot-session.js";
+import {
+  applyRemoteBotSessionEvent,
+  remoteBotSessionView,
+  type RemoteBotSessionView,
+} from "../../renderer/lib/hosts/remote-bot-session.js";
 import { createBotQuestions } from "./bot-runtime/bot-questions.js";
 import { createBotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
 import { createBotLiveProjection, createBotRunStarts } from "./bot-runtime/live-projection.js";
@@ -95,7 +110,9 @@ function bot(id = BOT_ID, name = "Planner"): BotDefinition {
 }
 
 /** A Bot store with one live Bot and no other side effects. */
-function botService(options: { sessionStates?: Map<string, "needs_model" | "idle">; name?: string } = {}) {
+function botService(
+  options: { sessionStates?: Map<string, "needs_model" | "idle">; name?: string } = {},
+) {
   const application = {
     async get(botId: string) {
       return botId === BOT_ID ? bot(BOT_ID, options.name) : null;
@@ -107,9 +124,12 @@ function botService(options: { sessionStates?: Map<string, "needs_model" | "idle
   return new AidenRemoteBotService({
     application: application as never,
     chatStore: { get: async () => null },
-    sessionStates: async (ids) => new Map(
-      ids.flatMap((id) => (options.sessionStates?.has(id) ? [[id, options.sessionStates.get(id)!] as const] : [])),
-    ),
+    sessionStates: async (ids) =>
+      new Map(
+        ids.flatMap((id) =>
+          options.sessionStates?.has(id) ? [[id, options.sessionStates.get(id)!] as const] : [],
+        ),
+      ),
   });
 }
 
@@ -121,7 +141,9 @@ function fakeRuntime(initial: BotSessionState) {
   const conversation = {
     async watch() {
       let resolveClosed!: () => void;
-      const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
+      const closed = new Promise<void>((resolve) => {
+        resolveClosed = resolve;
+      });
       closeWatch = () => resolveClosed();
       return {
         value: { entries: [], docs: {} },
@@ -142,7 +164,8 @@ function fakeRuntime(initial: BotSessionState) {
     },
     async resume() {
       calls.resume += 1;
-      if (state.kind === "interrupted") state = { kind: "running", submissionId: state.submissionId };
+      if (state.kind === "interrupted")
+        state = { kind: "running", submissionId: state.submissionId };
       return state;
     },
     async dismiss() {
@@ -222,25 +245,100 @@ test("a second Resume with the same request key is a no-op that returns the curr
 });
 
 test("unknown provider cost Resume needs negotiated explicit consent and its accepted key replays once", async () => {
-  const fake = fakeRuntime({ kind: "interrupted", submissionId: "10" }); let effects = 0;
-  const service = sessionService({ ...fake.runtime, resume: async (botId, requestId, options) => {
-    if (options?.acknowledgeUnknownCost !== true || options.expectedCostReceiptId !== COST_RECEIPT) throw new BotSessionError("spending_unconfirmed");
-    effects++; return fake.runtime.resume(botId, requestId, options);
-  } });
+  const fake = fakeRuntime({ kind: "interrupted", submissionId: "10" });
+  let effects = 0;
+  const service = sessionService({
+    ...fake.runtime,
+    resume: async (botId, requestId, options) => {
+      if (
+        options?.acknowledgeUnknownCost !== true ||
+        options.expectedCostReceiptId !== COST_RECEIPT
+      )
+        throw new BotSessionError("spending_unconfirmed");
+      effects++;
+      return fake.runtime.resume(botId, requestId, options);
+    },
+  });
   try {
-    await assert.rejects(service.resume(DEVICE_ID, BOT_ID, "cost-unconfirmed-01", {}, { routineModels: true }), (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "operation_stale");
+    await assert.rejects(
+      service.resume(DEVICE_ID, BOT_ID, "cost-unconfirmed-01", {}, { routineModels: true }),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "operation_stale",
+    );
     assert.equal(effects, 0);
-    await assert.rejects(service.resume(DEVICE_ID, BOT_ID, "cost-legacy-client", { acknowledgeUnknownCost: true, expectedSubmissionId: "10", expectedCostReceiptId: COST_RECEIPT }), (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "invalid_request");
-    await assert.rejects(service.resume(DEVICE_ID, BOT_ID, "cost-invalid-false", { acknowledgeUnknownCost: false }, { routineModels: true }));
+    await assert.rejects(
+      service.resume(DEVICE_ID, BOT_ID, "cost-legacy-client", {
+        acknowledgeUnknownCost: true,
+        expectedSubmissionId: "10",
+        expectedCostReceiptId: COST_RECEIPT,
+      }),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "invalid_request",
+    );
+    await assert.rejects(
+      service.resume(
+        DEVICE_ID,
+        BOT_ID,
+        "cost-invalid-false",
+        { acknowledgeUnknownCost: false },
+        { routineModels: true },
+      ),
+    );
     assert.equal(effects, 0);
-    await assert.rejects(service.resume(DEVICE_ID, BOT_ID, "cost-missing-token", { acknowledgeUnknownCost: true, expectedSubmissionId: "10" }, { routineModels: true }), (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "invalid_request");
-    const accepted = await service.resume(DEVICE_ID, BOT_ID, "cost-confirmed-key1", { acknowledgeUnknownCost: true, expectedSubmissionId: "10", expectedCostReceiptId: COST_RECEIPT }, { routineModels: true });
+    await assert.rejects(
+      service.resume(
+        DEVICE_ID,
+        BOT_ID,
+        "cost-missing-token",
+        { acknowledgeUnknownCost: true, expectedSubmissionId: "10" },
+        { routineModels: true },
+      ),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "invalid_request",
+    );
+    const accepted = await service.resume(
+      DEVICE_ID,
+      BOT_ID,
+      "cost-confirmed-key1",
+      {
+        acknowledgeUnknownCost: true,
+        expectedSubmissionId: "10",
+        expectedCostReceiptId: COST_RECEIPT,
+      },
+      { routineModels: true },
+    );
     assert.equal(accepted.state, "running");
-    await service.resume(DEVICE_ID, BOT_ID, "cost-confirmed-key1", { acknowledgeUnknownCost: true, expectedSubmissionId: "10", expectedCostReceiptId: COST_RECEIPT }, { routineModels: true });
+    await service.resume(
+      DEVICE_ID,
+      BOT_ID,
+      "cost-confirmed-key1",
+      {
+        acknowledgeUnknownCost: true,
+        expectedSubmissionId: "10",
+        expectedCostReceiptId: COST_RECEIPT,
+      },
+      { routineModels: true },
+    );
     assert.equal(effects, 1);
-    await assert.rejects(service.resume(DEVICE_ID, BOT_ID, "cost-confirmed-key1", { acknowledgeUnknownCost: true, expectedSubmissionId: "10", expectedCostReceiptId: "cost_" + "b".repeat(64) }, { routineModels: true }), (error: unknown) => error instanceof AidenOperationContractError && error.code === "idempotency_conflict");
+    await assert.rejects(
+      service.resume(
+        DEVICE_ID,
+        BOT_ID,
+        "cost-confirmed-key1",
+        {
+          acknowledgeUnknownCost: true,
+          expectedSubmissionId: "10",
+          expectedCostReceiptId: "cost_" + "b".repeat(64),
+        },
+        { routineModels: true },
+      ),
+      (error: unknown) =>
+        error instanceof AidenOperationContractError && error.code === "idempotency_conflict",
+    );
     assert.equal(effects, 1);
-  } finally { await service.close(); }
+  } finally {
+    await service.close();
+  }
 });
 
 test("a Resume after the turn already resumed reads the current state without a second resume", async () => {
@@ -276,7 +374,11 @@ test("a model error that blocks a turn is reported as unavailable, not as an unk
     { state: "unavailable", interrupted: false },
   );
   assert.deepEqual(
-    projectBotSessionState({ kind: "interrupted", submissionId: "sub_1", blocked: "access_changed" }),
+    projectBotSessionState({
+      kind: "interrupted",
+      submissionId: "sub_1",
+      blocked: "access_changed",
+    }),
     { state: "interrupted", interrupted: true, blocked: "access_changed" },
   );
 });
@@ -287,7 +389,12 @@ test("Stop ends a running turn but leaves an interrupted one for Dismiss", async
   assert.equal(running.calls.abort, 1);
 
   const paused = fakeRuntime({ kind: "interrupted", submissionId: "sub_1" });
-  const view = await sessionService(paused.runtime).stop(DEVICE_ID, BOT_ID, "stop-request-0002", {});
+  const view = await sessionService(paused.runtime).stop(
+    DEVICE_ID,
+    BOT_ID,
+    "stop-request-0002",
+    {},
+  );
   assert.equal(paused.calls.abort, 0, "a paused turn is not aborted by Stop");
   assert.equal(view.state, "interrupted");
 });
@@ -355,7 +462,10 @@ const COLOUR: AskUserQuestionV1[] = [
     ],
   },
 ];
-const option = (answer: string) => ({ cancelled: false, answers: [{ questionIndex: 0, kind: "option" as const, answer }] });
+const option = (answer: string) => ({
+  cancelled: false,
+  answers: [{ questionIndex: 0, kind: "option" as const, answer }],
+});
 
 function questionSession(runtime: AidenRemoteBotSessionRuntime) {
   const questions = createBotQuestions();
@@ -367,7 +477,13 @@ function questionSession(runtime: AidenRemoteBotSessionRuntime) {
     projectorIdleMs: 60_000,
   });
   const ask = (signal?: AbortSignal) => {
-    const asked = questions.request({ botId: BOT_ID, waitId: WAIT_ID, toolCallId: "call_1", questions: COLOUR, signal });
+    const asked = questions.request({
+      botId: BOT_ID,
+      waitId: WAIT_ID,
+      toolCallId: "call_1",
+      questions: COLOUR,
+      signal,
+    });
     asked.catch(() => undefined);
     return asked;
   };
@@ -378,17 +494,25 @@ const isError = (code: string, status: number) => (error: { code?: string; statu
   error.code === code && error.status === status;
 
 test("a question asked and settled while a client watches moves the session forward with it", async () => {
-  const { service, ask, questions } = questionSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const { service, ask, questions } = questionSession(
+    fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+  );
   const before = await service.session(BOT_ID);
   assert.equal(before.question, null);
 
   ask();
   const asked = await service.session(BOT_ID);
   assert.equal(asked.question?.waitId, WAIT_ID);
-  assert.deepEqual(asked.question?.questions.map((item) => item.options.map((choice) => choice.label)), [["Blue", "Red"]]);
+  assert.deepEqual(
+    asked.question?.questions.map((item) => item.options.map((choice) => choice.label)),
+    [["Blue", "Red"]],
+  );
   assert.equal(asked.seq, before.seq + 1, "the question went out as one frame");
 
-  assert.equal(questions.answer(BOT_ID, WAIT_ID, { version: 1, promptId: WAIT_ID, ...option("Red") }), "answered");
+  assert.equal(
+    questions.answer(BOT_ID, WAIT_ID, { version: 1, promptId: WAIT_ID, ...option("Red") }),
+    "answered",
+  );
   const settled = await service.session(BOT_ID);
   assert.equal(settled.question, null);
   assert.equal(settled.seq, asked.seq + 1);
@@ -396,7 +520,9 @@ test("a question asked and settled while a client watches moves the session forw
 });
 
 test("answering is idempotent per request UUID, and a second device's answer is refused", async () => {
-  const { service, ask } = questionSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const { service, ask } = questionSession(
+    fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+  );
   const asked = ask();
   const [phone, tablet] = await Promise.allSettled([
     service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0001", option("Blue")),
@@ -405,7 +531,11 @@ test("answering is idempotent per request UUID, and a second device's answer is 
   assert.deepEqual(phone, { status: "fulfilled", value: { waitId: WAIT_ID } });
   assert.equal(tablet.status, "rejected");
   assert.ok(isError("question_expired", 409)((tablet as PromiseRejectedResult).reason));
-  assert.deepEqual((await asked).answers, option("Blue").answers, "the Bot gets the first answer only");
+  assert.deepEqual(
+    (await asked).answers,
+    option("Blue").answers,
+    "the Bot gets the first answer only",
+  );
 
   assert.deepEqual(
     await service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0001", option("Blue")),
@@ -420,7 +550,9 @@ test("answering is idempotent per request UUID, and a second device's answer is 
 });
 
 test("an answer after the question was withdrawn is refused and records nothing", async () => {
-  const { service, ask, questions } = questionSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const { service, ask, questions } = questionSession(
+    fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+  );
   const controller = new AbortController();
   const asked = ask(controller.signal);
   controller.abort(); // Stop, Dismiss, delete or quit
@@ -437,21 +569,39 @@ test("an answer after the question was withdrawn is refused and records nothing"
 });
 
 test("an answer the question does not accept is invalid and the question keeps waiting", async () => {
-  const { service, ask } = questionSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const { service, ask } = questionSession(
+    fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+  );
   ask();
   for (const [key, body] of [
     ["answer-request-0005", option("Purple")],
-    ["answer-request-0006", { cancelled: false, answers: [{ questionIndex: 3, kind: "option", answer: "Blue" }] }],
+    [
+      "answer-request-0006",
+      { cancelled: false, answers: [{ questionIndex: 3, kind: "option", answer: "Blue" }] },
+    ],
   ] as const) {
-    await assert.rejects(service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, key, body), isError("invalid_request", 400));
+    await assert.rejects(
+      service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, key, body),
+      isError("invalid_request", 400),
+    );
   }
   await assert.rejects(
-    service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0007", { cancelled: false, answers: [], extra: 1 }),
+    service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0007", {
+      cancelled: false,
+      answers: [],
+      extra: 1,
+    }),
     isError("invalid_request", 400),
     "a malformed body",
   );
   await assert.rejects(
-    service.answerQuestion(DEVICE_ID, "bot_missing", WAIT_ID, "answer-request-0008", option("Blue")),
+    service.answerQuestion(
+      DEVICE_ID,
+      "bot_missing",
+      WAIT_ID,
+      "answer-request-0008",
+      option("Blue"),
+    ),
     "an unknown Bot",
   );
   assert.equal((await service.session(BOT_ID)).question?.waitId, WAIT_ID);
@@ -463,18 +613,27 @@ test("an answered question reads as the person's message; a stopped one shows no
     {
       id: 7,
       kind: "pi.tool-result",
-      model: [{
-        role: "toolResult",
-        toolName: "ask_user_question",
-        isError: false,
-        content: [{ type: "text", text: "1. Which colour should the banner use?\nAnswer: Blue" }],
-        details: { answerText: "Blue" },
-      }],
+      model: [
+        {
+          role: "toolResult",
+          toolName: "ask_user_question",
+          isError: false,
+          content: [{ type: "text", text: "1. Which colour should the banner use?\nAnswer: Blue" }],
+          details: { answerText: "Blue" },
+        },
+      ],
     },
     {
       id: 8,
       kind: "pi.tool-result",
-      model: [{ role: "toolResult", toolName: "ask_user_question", isError: true, content: [{ type: "text", text: "aborted" }] }],
+      model: [
+        {
+          role: "toolResult",
+          toolName: "ask_user_question",
+          isError: true,
+          content: [{ type: "text", text: "aborted" }],
+        },
+      ],
     },
   ] as never);
   assert.deepEqual(entries, [{ type: "message", id: "entry_7", role: "user", text: "Blue" }]);
@@ -486,28 +645,42 @@ test("an answered question reads as the person's message; a stopped one shows no
 
 type RawEntry = { id: number; kind: string; model?: unknown[]; data?: unknown };
 const user = (id: number, text: string): RawEntry => ({
-  id, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text }], timestamp: 1_700_000_000_000 }],
+  id,
+  kind: "pi.user",
+  model: [{ role: "user", content: [{ type: "text", text }], timestamp: 1_700_000_000_000 }],
 });
-const assistant = (id: number, text: string, stopReason = "stop", content?: unknown[], errorMessage?: string): RawEntry => ({
+const assistant = (
+  id: number,
+  text: string,
+  stopReason = "stop",
+  content?: unknown[],
+  errorMessage?: string,
+): RawEntry => ({
   id,
   kind: "pi.assistant",
-  model: [{
-    role: "assistant",
-    content: content ?? [{ type: "text", text }],
-    stopReason,
-    timestamp: 1_700_000_001_000,
-    ...(errorMessage === undefined ? {} : { errorMessage }),
-  }],
+  model: [
+    {
+      role: "assistant",
+      content: content ?? [{ type: "text", text }],
+      stopReason,
+      timestamp: 1_700_000_001_000,
+      ...(errorMessage === undefined ? {} : { errorMessage }),
+    },
+  ],
 });
 const notice = (id: number, data: unknown): RawEntry => ({ id, kind: BOT_NOTICE_ENTRY_KIND, data });
 const card = (id: number, pluginId: string, status = "pending"): RawEntry => ({
-  id, kind: "aiden.connect-card", data: { type: "connect_card", pluginId, reason: "I can read your mail.", status },
+  id,
+  kind: "aiden.connect-card",
+  data: { type: "connect_card", pluginId, reason: "I can read your mail.", status },
 });
 
 test("photos sent without words read as a caption on phones, and words keep their own text", () => {
   const image = { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" };
   const withContent = (id: number, content: unknown[]): RawEntry => ({
-    id, kind: "pi.user", model: [{ role: "user", content, timestamp: 1_700_000_000_000 }],
+    id,
+    kind: "pi.user",
+    model: [{ role: "user", content, timestamp: 1_700_000_000_000 }],
   });
   const texts = projectBotSessionEntries([
     withContent(1, [image]),
@@ -534,7 +707,9 @@ test("phones see what the Mac shows: no self-intro prompt, no [SILENT] turn, and
   ] as never);
 
   assert.deepEqual(
-    entries.map((entry) => entry.type === "message" ? [entry.role, entry.text, entry.label ?? null] : [entry.type]),
+    entries.map((entry) =>
+      entry.type === "message" ? [entry.role, entry.text, entry.label ?? null] : [entry.type],
+    ),
     [
       ["assistant", "Hi, I'm your Meal Planner.", null],
       ["user", "Plan the week.", "Weekly plan"],
@@ -564,7 +739,11 @@ test("a failed routine or self-intro turn has nothing to retry, and text written
   ] as never);
   assert.deepEqual(
     entries.map((entry) =>
-      entry.type === "failed_turn" ? ["failed_turn", entry.retryText ?? null] : entry.type === "message" ? [entry.role, entry.text] : [entry.type],
+      entry.type === "failed_turn"
+        ? ["failed_turn", entry.retryText ?? null]
+        : entry.type === "message"
+          ? [entry.role, entry.text]
+          : [entry.type],
     ),
     [
       ["user", "Plan the week."],
@@ -583,7 +762,15 @@ test("a routine label cut at the wire bound never splits an emoji, so the sessio
     user(2, "Cook something \uD83D"),
   ] as never);
   const session = parseAidenRemoteBotSession({
-    botId: BOT_ID, epoch: "epoch_1", seq: 0, state: "idle", interrupted: false, entries, hasOlder: false, question: null, approval: null,
+    botId: BOT_ID,
+    epoch: "epoch_1",
+    seq: 0,
+    state: "idle",
+    interrupted: false,
+    entries,
+    hasOlder: false,
+    question: null,
+    approval: null,
   });
   const message = session.entries[0];
   assert.equal(message?.type, "message");
@@ -609,13 +796,17 @@ test("routine errors reach phones without local paths or key-shaped secrets", ()
 function drivenConversation(initial: RawEntry[], initialDocs: Record<string, unknown> = {}) {
   let listener: ((change: unknown) => Promise<void>) | undefined;
   let resolveClosed!: () => void;
-  const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
   let active: RawEntry[] = initial;
   const conversation = {
     async watch() {
       return {
         value: { entries: initial, docs: initialDocs },
-        start(next: (change: unknown) => Promise<void>) { listener = next; },
+        start(next: (change: unknown) => Promise<void>) {
+          listener = next;
+        },
         stop: async () => {},
         closed,
       };
@@ -631,9 +822,14 @@ function drivenConversation(initial: RawEntry[], initialDocs: Record<string, unk
   return {
     conversation,
     async emit(entries: RawEntry[], partial?: string) {
-      const docs = partial === undefined
-        ? {}
-        : { "pi.live": { generation: { message: { content: [{ type: "text", text: partial }] } } } };
+      const docs =
+        partial === undefined
+          ? {}
+          : {
+              "pi.live": {
+                generation: { message: { content: [{ type: "text", text: partial }] } },
+              },
+            };
       await frame(entries, docs);
     },
     /** One watch frame with exactly these docs (`pi.live`, `pi.inbox`). */
@@ -645,7 +841,12 @@ function drivenConversation(initial: RawEntry[], initialDocs: Record<string, unk
   };
 }
 
-interface Frame { type: string; seq: number; epoch: string; payload: any }
+interface Frame {
+  type: string;
+  seq: number;
+  epoch: string;
+  payload: any;
+}
 
 /** Serve one Bot's SSE stream over HTTP and collect parsed frames. */
 async function openStream(service: AidenRemoteBotSessionService, botId = BOT_ID) {
@@ -667,14 +868,19 @@ async function openStream(service: AidenRemoteBotSessionService, botId = BOT_ID)
         const block = buffer.slice(0, index);
         buffer = buffer.slice(index + 2);
         const data = block.split("\n").find((line) => line.startsWith("data: "));
-        if (data) frames.push(parseAidenRemoteBotSessionEvent(JSON.parse(data.slice(6))) as unknown as Frame);
+        if (data)
+          frames.push(
+            parseAidenRemoteBotSessionEvent(JSON.parse(data.slice(6))) as unknown as Frame,
+          );
       }
     }
     state.ended = true;
   })();
   return {
     frames,
-    get ended() { return state.ended; },
+    get ended() {
+      return state.ended;
+    },
     async until(predicate: () => boolean, what: string) {
       const deadline = Date.now() + 10_000;
       while (!predicate()) {
@@ -704,22 +910,44 @@ test("the session stream is gapless, clears a finished partial, and rewrites his
     fake.setState({ kind: "idle" });
     await driven.emit([user(1, "Hi"), assistant(2, "Hello!")]);
     // A routine turn that turns out silent hides its already-shown input.
-    const routine = [notice(3, { notice: "routine", label: "Brief", requestId: "r" }), user(4, "Brief me")];
+    const routine = [
+      notice(3, { notice: "routine", label: "Brief", requestId: "r" }),
+      user(4, "Brief me"),
+    ];
     await driven.emit([user(1, "Hi"), assistant(2, "Hello!"), ...routine]);
-    await driven.emit([user(1, "Hi"), assistant(2, "Hello!"), ...routine, assistant(5, "[SILENT]")]);
-    await stream.until(() => stream.frames.filter((frame) => frame.type === "snapshot").length === 2, "the rewrite snapshot");
+    await driven.emit([
+      user(1, "Hi"),
+      assistant(2, "Hello!"),
+      ...routine,
+      assistant(5, "[SILENT]"),
+    ]);
+    await stream.until(
+      () => stream.frames.filter((frame) => frame.type === "snapshot").length === 2,
+      "the rewrite snapshot",
+    );
 
     const seqs = stream.frames.map((frame) => frame.seq);
-    assert.deepEqual(seqs, seqs.map((_, index) => seqs[0]! + index), "every frame is exactly one after the last");
+    assert.deepEqual(
+      seqs,
+      seqs.map((_, index) => seqs[0]! + index),
+      "every frame is exactly one after the last",
+    );
     assert.ok(stream.frames.every((frame) => frame.epoch === stream.frames[0]!.epoch));
     const types = stream.frames.map((frame) => frame.type);
     const answer = types.indexOf("entry", types.indexOf("partial") + 1);
     assert.equal(stream.frames[answer]!.payload.entry.text, "Hello!");
-    assert.equal(types[answer + 1], "partial", "the partial is cleared explicitly after the answer arrives");
+    assert.equal(
+      types[answer + 1],
+      "partial",
+      "the partial is cleared explicitly after the answer arrives",
+    );
     assert.equal(stream.frames[answer + 1]!.payload.text, "");
     const rewrite = stream.frames[stream.frames.length - 1]!;
     assert.equal(rewrite.type, "snapshot");
-    assert.deepEqual(rewrite.payload.session.entries.map((entry: { text: string }) => entry.text), ["Hi", "Hello!"]);
+    assert.deepEqual(
+      rewrite.payload.session.entries.map((entry: { text: string }) => entry.text),
+      ["Hi", "Hello!"],
+    );
   } finally {
     await stream.close();
     await service.close();
@@ -731,10 +959,16 @@ test("deleting a Bot while its stream is open ends the stream and the next read 
   const fake = fakeRuntime({ kind: "idle" });
   let exists = true;
   const bots = new AidenRemoteBotService({
-    application: { get: async (id: string) => (id === BOT_ID && exists ? bot() : null), list: async () => [] } as never,
+    application: {
+      get: async (id: string) => (id === BOT_ID && exists ? bot() : null),
+      list: async () => [],
+    } as never,
     chatStore: { get: async () => null },
   });
-  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never }, bots);
+  const service = sessionService(
+    { ...fake.runtime, conversation: async () => driven.conversation as never },
+    bots,
+  );
   const stream = await openStream(service);
   try {
     await stream.until(() => stream.frames.length >= 1, "the first snapshot");
@@ -756,12 +990,18 @@ test("a connect card finished on the Mac reads as connected on the next fetch, w
   const fake = fakeRuntime({ kind: "idle" });
   const service = new AidenRemoteBotSessionService({
     bots: botService(),
-    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+    runtime: async () => ({
+      ...fake.runtime,
+      conversation: async () => driven.conversation as never,
+    }),
     connectCardStatus: async (_botId, entry) =>
       connected.has(entry.pluginId) ? (granted ? "connected" : "needs_access") : entry.status,
   });
   const cardOf = (session: { entries: Array<{ type: string }> }) =>
-    session.entries.find((entry) => entry.type === "connect_card") as unknown as { status: string; name: string };
+    session.entries.find((entry) => entry.type === "connect_card") as unknown as {
+      status: string;
+      name: string;
+    };
   try {
     assert.equal(cardOf(await service.session(BOT_ID)).status, "pending");
     connected.add("gmail");
@@ -783,8 +1023,12 @@ test("a phone watching the chat sees a connect card turn connected once the app 
   const fake = fakeRuntime({ kind: "idle" });
   const service = new AidenRemoteBotSessionService({
     bots: botService(),
-    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
-    connectCardStatus: async (_botId, entry) => (connected.has(entry.pluginId) ? "connected" : entry.status),
+    runtime: async () => ({
+      ...fake.runtime,
+      conversation: async () => driven.conversation as never,
+    }),
+    connectCardStatus: async (_botId, entry) =>
+      connected.has(entry.pluginId) ? "connected" : entry.status,
   });
   const stream = await openStream(service);
   try {
@@ -797,7 +1041,9 @@ test("a phone watching the chat sees a connect card turn connected once the app 
         stream.frames.some(
           (frame) =>
             frame.type === "snapshot" &&
-            frame.payload.session.entries.some((entry: any) => entry.type === "connect_card" && entry.status === "connected"),
+            frame.payload.session.entries.some(
+              (entry: any) => entry.type === "connect_card" && entry.status === "connected",
+            ),
         ) && stream.frames.length >= 2,
       "the connected card",
     );
@@ -810,30 +1056,48 @@ test("a phone watching the chat sees a connect card turn connected once the app 
 });
 
 test("a connect card refreshed outside the phone's window does not reappear at the bottom of the chat", async () => {
-  const history = [card(1, "gmail"), ...Array.from({ length: 201 }, (_, index) => user(index + 2, `Message ${index + 2}`))];
+  const history = [
+    card(1, "gmail"),
+    ...Array.from({ length: 201 }, (_, index) => user(index + 2, `Message ${index + 2}`)),
+  ];
   const driven = drivenConversation(history);
   const connected = new Set<string>();
   const fake = fakeRuntime({ kind: "idle" });
   const service = new AidenRemoteBotSessionService({
     bots: botService(),
-    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
-    connectCardStatus: async (_botId, entry) => (connected.has(entry.pluginId) ? "connected" : entry.status),
+    runtime: async () => ({
+      ...fake.runtime,
+      conversation: async () => driven.conversation as never,
+    }),
+    connectCardStatus: async (_botId, entry) =>
+      connected.has(entry.pluginId) ? "connected" : entry.status,
   });
   const stream = await openStream(service);
   try {
     await stream.until(() => stream.frames.length >= 1, "the first snapshot");
     const first = stream.frames[0]!.payload.session;
     assert.equal(first.hasOlder, true);
-    assert.equal(first.entries.some((entry: any) => entry.type === "connect_card"), false, "the card starts outside the window");
+    assert.equal(
+      first.entries.some((entry: any) => entry.type === "connect_card"),
+      false,
+      "the card starts outside the window",
+    );
     connected.add("gmail");
     await service.refreshConnectCards();
     await stream.until(() => stream.frames.length >= 2, "the refresh");
-    assert.equal(stream.frames.some((frame) => frame.type === "entry"), false, "no entry event appends the old card");
+    assert.equal(
+      stream.frames.some((frame) => frame.type === "entry"),
+      false,
+      "no entry event appends the old card",
+    );
     const refreshed = stream.frames[stream.frames.length - 1]!;
     assert.equal(refreshed.type, "snapshot");
     const texts = refreshed.payload.session.entries.map((entry: any) => entry.text);
     assert.equal(texts.at(-1), "Message 202", "the newest message stays last");
-    assert.deepEqual(texts, first.entries.map((entry: any) => entry.text));
+    assert.deepEqual(
+      texts,
+      first.entries.map((entry: any) => entry.text),
+    );
   } finally {
     await stream.close();
     await service.close();
@@ -845,10 +1109,14 @@ test("a connection request for an app Aiden can't connect is refused without bot
   const service = new AidenRemoteBotSessionService({
     bots: botService(),
     runtime: async () => fakeRuntime({ kind: "idle" }).runtime,
-    connectionRequested: async ({ pluginId }) => { requested.push(pluginId); },
+    connectionRequested: async ({ pluginId }) => {
+      requested.push(pluginId);
+    },
   });
   await assert.rejects(
-    service.requestConnection(DEVICE_ID, BOT_ID, "connect-request-0001", { pluginId: "not-a-real-app" }),
+    service.requestConnection(DEVICE_ID, BOT_ID, "connect-request-0001", {
+      pluginId: "not-a-real-app",
+    }),
     { code: "not_found", status: 404 },
   );
   await assert.rejects(
@@ -856,7 +1124,9 @@ test("a connection request for an app Aiden can't connect is refused without bot
     { code: "invalid_request", status: 400 },
   );
   assert.deepEqual(requested, []);
-  const receipt = await service.requestConnection(DEVICE_ID, BOT_ID, "connect-request-0003", { pluginId: "gmail" });
+  const receipt = await service.requestConnection(DEVICE_ID, BOT_ID, "connect-request-0003", {
+    pluginId: "gmail",
+  });
   assert.deepEqual(receipt, { pluginId: "gmail", name: "Gmail", status: "sent" });
   assert.deepEqual(requested, ["gmail"]);
 });
@@ -864,8 +1134,15 @@ test("a connection request for an app Aiden can't connect is refused without bot
 test("a routine change with a stale If-Match is a revision conflict that changes nothing", async () => {
   const routine: BotRoutine = {
     pendingFireCount: 0,
-    id: "routine_1", botId: BOT_ID, name: "Brief", prompt: "Brief me", schedule: { kind: "daily", time: "08:00" },
-    timezone: "UTC", label: "Every day at 8:00 AM", enabled: true, updatedAt: 5_000,
+    id: "routine_1",
+    botId: BOT_ID,
+    name: "Brief",
+    prompt: "Brief me",
+    schedule: { kind: "daily", time: "08:00" },
+    timezone: "UTC",
+    label: "Every day at 8:00 AM",
+    enabled: true,
+    updatedAt: 5_000,
   };
   const writes: string[] = [];
   const service = new AidenRemoteBotSessionService({
@@ -873,21 +1150,29 @@ test("a routine change with a stale If-Match is a revision conflict that changes
     runtime: async () => fakeRuntime({ kind: "idle" }).runtime,
     routines: {
       list: async () => [routine],
-      create: async () => { throw new Error("unused"); },
+      create: async () => {
+        throw new Error("unused");
+      },
       update: async (input) => {
         writes.push(`update:${input.expectedUpdatedAt}`);
         return { ...routine, enabled: false, updatedAt: 6_000 };
       },
-      delete: async () => { writes.push("delete"); },
+      delete: async () => {
+        writes.push("delete");
+      },
     },
   });
   const current = (await service.listRoutines(BOT_ID)).routines[0]!.revision;
   await assert.rejects(
     service.updateRoutine(BOT_ID, "routine_1", "routine_revision_4000", { enabled: false }),
     (error: { code: string; status: number; details?: { currentRevision?: string } }) =>
-      error.code === "revision_conflict" && error.status === 409 && error.details?.currentRevision === current,
+      error.code === "revision_conflict" &&
+      error.status === 409 &&
+      error.details?.currentRevision === current,
   );
-  await assert.rejects(service.deleteRoutine(BOT_ID, "routine_1", "routine_revision_4000"), { code: "revision_conflict" });
+  await assert.rejects(service.deleteRoutine(BOT_ID, "routine_1", "routine_revision_4000"), {
+    code: "revision_conflict",
+  });
   assert.deepEqual(writes, []);
   const updated = await service.updateRoutine(BOT_ID, "routine_1", current, { enabled: false });
   assert.equal(updated.enabled, false);
@@ -910,7 +1195,7 @@ test("Start Chat from phones with different request keys and the Mac makes one B
   const starter = createBotStarter({
     async findBotByCreationKey(key) {
       const id = keys.get(key);
-      return id ? store.get(id) ?? null : null;
+      return id ? (store.get(id) ?? null) : null;
     },
     mintBotId: () => `bot_preset_${keys.size + created.length + 1}`,
     async reserveCreation(key, botId) {
@@ -919,12 +1204,18 @@ test("Start Chat from phones with different request keys and the Mac makes one B
     createBot: (input, _access, botId) => make(input, "desktop", botId),
     session: {
       state: async () => ({ kind: "idle" }),
-      send: async (botId) => { sent.push(botId); return { submissionId: "1", deduped: false }; },
+      send: async (botId) => {
+        sent.push(botId);
+        return { submissionId: "1", deduped: false };
+      },
       conversation: async () => ({ context: async () => ({ entries: [] }) }) as never,
     },
   });
   const bots = new AidenRemoteBotService({
-    application: { get: async (id: string) => store.get(id) ?? null, list: async () => [...store.values()] } as never,
+    application: {
+      get: async (id: string) => store.get(id) ?? null,
+      list: async () => [...store.values()],
+    } as never,
     chatStore: { get: async () => null },
   });
   const service = new AidenRemoteBotSessionService({
@@ -933,7 +1224,9 @@ test("Start Chat from phones with different request keys and the Mac makes one B
     presets: {
       list: () => BOT_PRESETS,
       create: async (presetId, { audienceId }) => {
-        const result = await starter.startFromPreset(presetId, { createBot: (input, botId) => make(input, audienceId, botId) });
+        const result = await starter.startFromPreset(presetId, {
+          createBot: (input, botId) => make(input, audienceId, botId),
+        });
         return { botId: result.bot.id, created: result.created };
       },
     },
@@ -960,13 +1253,21 @@ after(() => {
   for (const root of durableRoots) rmSync(root, { recursive: true, force: true });
 });
 
-async function interruptedDurableBot(options: { handoffs?: boolean; stateChanges?: boolean; holdResume?: Promise<void> } = {}) {
+async function interruptedDurableBot(
+  options: { handoffs?: boolean; stateChanges?: boolean; holdResume?: Promise<void> } = {},
+) {
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-session-"));
   durableRoots.push(profileDir);
   const child = spawnHarnessChild("stream", [profileDir, "bot:killed", "req-killed"]);
   await child.waitFor("STREAMING");
   await child.kill();
-  const fauxModels = createFauxModels([async () => { await options.holdResume; return fauxAssistantMessage("resumed answer"); }, fauxAssistantMessage("extra")]);
+  const fauxModels = createFauxModels([
+    async () => {
+      await options.holdResume;
+      return fauxAssistantMessage("resumed answer");
+    },
+    fauxAssistantMessage("extra"),
+  ]);
   // The runtime's own state bridge, as the desktop exposes it (`onBotSessionStateChange`).
   const stateListeners = new Set<(botId: string) => void>();
   const runtime = await createBotSessionService({
@@ -992,7 +1293,9 @@ async function interruptedDurableBot(options: { handoffs?: boolean; stateChanges
     bots,
     runtime: async () => runtime,
     // Revision 37: a host wired for hand-offs and pause on phones.
-    ...(options.handoffs ? { handoffs: createBotHandoffs(), openHandoffOnMac: async () => "focused" as const } : {}),
+    ...(options.handoffs
+      ? { handoffs: createBotHandoffs(), openHandoffOnMac: async () => "focused" as const }
+      : {}),
     ...(options.stateChanges
       ? {
           stateChanges: (listener: (botId: string) => void) => {
@@ -1002,11 +1305,22 @@ async function interruptedDurableBot(options: { handoffs?: boolean; stateChanges
         }
       : {}),
   });
-  return { runtime, service, fauxModels, stateListeners, markDeleted: () => { exists = false; } };
+  return {
+    runtime,
+    service,
+    fauxModels,
+    stateListeners,
+    markDeleted: () => {
+      exists = false;
+    },
+  };
 }
 
 test("two phones tapping Resume at once on a turn killed mid-stream make one provider request", async () => {
-  let release!: () => void; const holdResume = new Promise<void>((resolve) => { release = resolve; });
+  let release!: () => void;
+  const holdResume = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const { runtime, service, fauxModels } = await interruptedDurableBot({ holdResume });
   try {
     const paused = await service.session("bot:killed");
@@ -1020,12 +1334,16 @@ test("two phones tapping Resume at once on a turn killed mid-stream make one pro
     assert.equal(first.state, "running");
     assert.deepEqual(second, first);
     release();
-    await waitFor(async () => (await runtime.state("bot:killed")).kind === "idle", { what: "the resumed turn" });
+    await waitFor(async () => (await runtime.state("bot:killed")).kind === "idle", {
+      what: "the resumed turn",
+    });
     assert.equal(fauxModels.calls(), 1);
 
     const settled = await service.session("bot:killed");
     assert.equal(settled.state, "idle");
-    assert.ok(settled.entries.some((entry) => entry.type === "message" && entry.text === "resumed answer"));
+    assert.ok(
+      settled.entries.some((entry) => entry.type === "message" && entry.text === "resumed answer"),
+    );
   } finally {
     release();
     await service.close();
@@ -1034,7 +1352,10 @@ test("two phones tapping Resume at once on a turn killed mid-stream make one pro
 });
 
 test("a paused Bot reads as unavailable to phones on every surface the shipped contract decodes, and its writes are stale", async () => {
-  let release!: () => void; const holdResume = new Promise<void>((resolve) => { release = resolve; });
+  let release!: () => void;
+  const holdResume = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const { runtime, service, fauxModels } = await interruptedDurableBot({ holdResume });
   const stream = await openStream(service, "bot:killed");
   try {
@@ -1043,9 +1364,14 @@ test("a paused Bot reads as unavailable to phones on every surface the shipped c
     assert.equal(paused.kind, "paused");
 
     // Snapshot: the shipped (revision 35) parser decodes it, as unavailable, with its transcript.
-    const session = parseAidenRemoteBotSession(JSON.parse(JSON.stringify(await service.session("bot:killed"))));
+    const session = parseAidenRemoteBotSession(
+      JSON.parse(JSON.stringify(await service.session("bot:killed"))),
+    );
     assert.deepEqual([session.state, session.interrupted], ["unavailable", false]);
-    assert.ok(session.entries.some((entry) => entry.type === "message" && entry.text === "hello"), "the transcript still shows");
+    assert.ok(
+      session.entries.some((entry) => entry.type === "message" && entry.text === "hello"),
+      "the transcript still shows",
+    );
 
     // Stop has nothing to stop; its answer is the same unavailable view.
     assert.deepEqual(await service.stop("device_a", "bot:killed", "stop-request-00p1", {}), {
@@ -1054,13 +1380,26 @@ test("a paused Bot reads as unavailable to phones on every surface the shipped c
     });
     // Frames: every frame already went through the shipped event parser in `openStream`.
     await stream.until(
-      () => stream.frames.some((frame) => (frame.type === "snapshot" ? frame.payload.session.state : frame.payload?.state) === "unavailable"),
+      () =>
+        stream.frames.some(
+          (frame) =>
+            (frame.type === "snapshot" ? frame.payload.session.state : frame.payload?.state) ===
+            "unavailable",
+        ),
       "the paused state on the stream",
     );
     const views = stream.frames.flatMap((frame) =>
-      frame.type === "state" ? [frame.payload.state] : frame.type === "snapshot" ? [frame.payload.session.state] : [],
+      frame.type === "state"
+        ? [frame.payload.state]
+        : frame.type === "snapshot"
+          ? [frame.payload.session.state]
+          : [],
     );
-    assert.equal(views.includes("paused"), false, "no frame names a state shipped clients cannot decode");
+    assert.equal(
+      views.includes("paused"),
+      false,
+      "no frame names a state shipped clients cannot decode",
+    );
 
     // Writes: refused with a code shipped clients know, and nothing runs.
     for (const write of [
@@ -1075,9 +1414,14 @@ test("a paused Bot reads as unavailable to phones on every surface the shipped c
     // The refusals left no ledger record: once unpaused, the same request runs.
     await runtime.unpause("bot:killed");
     assert.equal((await service.session("bot:killed")).state, "interrupted");
-    assert.equal((await service.resume("device_a", "bot:killed", "resume-request-0p1", {})).state, "running");
+    assert.equal(
+      (await service.resume("device_a", "bot:killed", "resume-request-0p1", {})).state,
+      "running",
+    );
     release();
-    await waitFor(async () => (await runtime.state("bot:killed")).kind === "idle", { what: "the resumed turn" });
+    await waitFor(async () => (await runtime.state("bot:killed")).kind === "idle", {
+      what: "the resumed turn",
+    });
     assert.equal(fauxModels.calls(), 1);
   } finally {
     release();
@@ -1088,7 +1432,12 @@ test("a paused Bot reads as unavailable to phones on every surface the shipped c
 });
 
 test("a paused Bot's list row and summary decode with the shipped parsers and read unavailable", async () => {
-  const pausedState = projectBotSessionState({ kind: "paused", since: 1, by: "phone", interrupted: "sub_1" }).state;
+  const pausedState = projectBotSessionState({
+    kind: "paused",
+    since: 1,
+    by: "phone",
+    interrupted: "sub_1",
+  }).state;
   const bots = new AidenRemoteBotService({
     application: {
       async get(botId: string) {
@@ -1102,16 +1451,29 @@ test("a paused Bot's list row and summary decode with the shipped parsers and re
     sessionStates: async (ids) => new Map(ids.map((id) => [id, pausedState] as const)),
   });
   const list = parseAidenRemoteBotList(JSON.parse(JSON.stringify(await bots.list())));
-  assert.deepEqual(list.bots.map((summary) => summary.sessionState), ["unavailable"]);
-  assert.equal(parseAidenRemoteBotSummary(JSON.parse(JSON.stringify(await bots.summaryOf(BOT_ID)))).sessionState, "unavailable");
+  assert.deepEqual(
+    list.bots.map((summary) => summary.sessionState),
+    ["unavailable"],
+  );
+  assert.equal(
+    parseAidenRemoteBotSummary(JSON.parse(JSON.stringify(await bots.summaryOf(BOT_ID))))
+      .sessionState,
+    "unavailable",
+  );
 });
 
 test("a paused state is unavailable on the wire, whatever turn waits underneath", () => {
-  assert.deepEqual(projectBotSessionState({ kind: "paused", since: 1, by: "phone", interrupted: "sub_1" }), {
+  assert.deepEqual(
+    projectBotSessionState({ kind: "paused", since: 1, by: "phone", interrupted: "sub_1" }),
+    {
+      state: "unavailable",
+      interrupted: false,
+    },
+  );
+  assert.deepEqual(projectBotSessionState({ kind: "paused", since: 1, by: "mac" }), {
     state: "unavailable",
     interrupted: false,
   });
-  assert.deepEqual(projectBotSessionState({ kind: "paused", since: 1, by: "mac" }), { state: "unavailable", interrupted: false });
 });
 
 test("deleting a durable Bot while a phone streams its chat closes the stream", async () => {
@@ -1134,18 +1496,25 @@ test("deleting a durable Bot while a phone streams its chat closes the stream", 
 });
 
 /** A durable Bot whose `send_note` tool needs approval, watched by phones through the real Bot approval bridge. */
-async function approvalGatedBot(toolName = "send_note", extraArgs: Record<string, unknown> = {}, summary = "Send a note: lunch on Friday") {
+async function approvalGatedBot(
+  toolName = "send_note",
+  extraArgs: Record<string, unknown> = {},
+  summary = "Send a note: lunch on Friday",
+) {
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-approval-"));
   durableRoots.push(profileDir);
   const approvals = createBotApprovals({ publish: () => {} });
   const note = countingTool(toolName);
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall(toolName, { text: "lunch on Friday", ...extraArgs })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(toolName, { text: "lunch on Friday", ...extraArgs })], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("Sent."),
   ]);
   const extension = recordingDeps({
     tools: [{ tool: note, replay: "unsafe" }],
-    policy: (name) => (name === toolName ? { allowed: true, approval: { summary } } : { allowed: true }),
+    policy: (name) =>
+      name === toolName ? { allowed: true, approval: { summary } } : { allowed: true },
   });
   extension.requestApproval = (request) => approvals.request(request);
   const runtime = await createBotSessionService({
@@ -1155,7 +1524,11 @@ async function approvalGatedBot(toolName = "send_note", extraArgs: Record<string
     resolveModel: async () => FAUX_MODEL_REF,
     knownBotIds: async () => new Set([BOT_ID]),
   });
-  const service = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => runtime, approvals });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => runtime,
+    approvals,
+  });
   return { runtime, service, approvals, note, fauxModels };
 }
 
@@ -1177,13 +1550,28 @@ test("a phone sees a Bot's waiting approval and allowing it runs the tool and fi
     assert.equal(waiting?.summary, "Send a note: lunch on Friday");
     assert.equal(waiting?.toolName, "send_note");
     assert.equal(waiting?.canAllow, true);
-    assert.deepEqual(Object.keys(waiting!).sort(), ["canAllow", "summary", "toolCallId", "toolName", "waitId"]);
+    assert.deepEqual(Object.keys(waiting!).sort(), [
+      "canAllow",
+      "summary",
+      "toolCallId",
+      "toolName",
+      "waitId",
+    ]);
 
-    await stream.until(() => stream.frames.some((frame) => frame.type === "approval" && frame.payload.approval !== null), "the approval frame");
+    await stream.until(
+      () =>
+        stream.frames.some((frame) => frame.type === "approval" && frame.payload.approval !== null),
+      "the approval frame",
+    );
     assert.equal(note.executions.length, 0, "nothing runs before the person answers");
 
     assert.equal(service.ownsApproval(waiting!.waitId), true);
-    const resolved = await service.respondApproval(DEVICE_ID, waiting!.waitId, "allow", "approve-request-0001");
+    const resolved = await service.respondApproval(
+      DEVICE_ID,
+      waiting!.waitId,
+      "allow",
+      "approve-request-0001",
+    );
     assert.equal(resolved.approvalId, waiting!.waitId);
     assert.equal(resolved.decision, "allow");
     assert.deepEqual(
@@ -1192,13 +1580,17 @@ test("a phone sees a Bot's waiting approval and allowing it runs the tool and fi
     );
     assert.deepEqual(note.executions, [{ text: "lunch on Friday" }]);
     await stream.until(
-      () => stream.frames.some((frame) => frame.type === "approval" && frame.payload.approval === null),
+      () =>
+        stream.frames.some((frame) => frame.type === "approval" && frame.payload.approval === null),
       "the approval to clear",
     );
     assert.equal((await service.session(BOT_ID)).approval, null);
 
     // A retry of the same request replays its receipt; another request finds nothing waiting.
-    assert.deepEqual(await service.respondApproval(DEVICE_ID, waiting!.waitId, "allow", "approve-request-0001"), resolved);
+    assert.deepEqual(
+      await service.respondApproval(DEVICE_ID, waiting!.waitId, "allow", "approve-request-0001"),
+      resolved,
+    );
     await assert.rejects(
       service.respondApproval("device_2", waiting!.waitId, "deny", "approve-request-0002"),
       isError("approval_expired", 409),
@@ -1244,19 +1636,46 @@ test("a phone can deny a Bot approval but only the Mac can allow Computer Use", 
 // ---------------------------------------------------------------------------
 
 async function contractFixture(): Promise<Record<string, any>> {
-  return JSON.parse(await readFile(path.resolve(process.cwd(), "protocol/aiden-remote/v1/fixtures/contract.json"), "utf8"));
+  return JSON.parse(
+    await readFile(
+      path.resolve(process.cwd(), "protocol/aiden-remote/v1/fixtures/contract.json"),
+      "utf8",
+    ),
+  );
 }
 
 const memoryReview = (id: number): RawEntry => ({
-  id, kind: "aiden.memory-review", data: { source: "review", added: 1, targets: ["user"] },
+  id,
+  kind: "aiden.memory-review",
+  data: { source: "review", added: 1, targets: ["user"] },
 });
-const proposal = (id: number, proposalId: string, name: string, prompt: string, label: string): RawEntry => ({
+const proposal = (
+  id: number,
+  proposalId: string,
+  name: string,
+  prompt: string,
+  label: string,
+): RawEntry => ({
   id,
   kind: "aiden.routine-proposal",
-  data: { proposalId, name, prompt, schedule: { kind: "daily", time: "09:00" }, timezone: "UTC", label },
+  data: {
+    proposalId,
+    name,
+    prompt,
+    schedule: { kind: "daily", time: "09:00" },
+    timezone: "UTC",
+    label,
+  },
 });
-const proposalStatus = (id: number, proposalId: string, status: string, routineId?: string): RawEntry => ({
-  id, kind: "aiden.routine-proposal-status", data: { proposalId, status, ...(routineId ? { routineId } : {}) },
+const proposalStatus = (
+  id: number,
+  proposalId: string,
+  status: string,
+  routineId?: string,
+): RawEntry => ({
+  id,
+  kind: "aiden.routine-proposal-status",
+  data: { proposalId, status, ...(routineId ? { routineId } : {}) },
 });
 
 /** The conversation behind the shared `botSessionCards` fixture. */
@@ -1265,9 +1684,26 @@ function cardEntries(): RawEntry[] {
     user(1, "Plan my meals, please."),
     assistant(2, "Done. I'll remember you're vegetarian."),
     memoryReview(20),
-    proposal(21, "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11", "Daily check-in", "Check in briefly…", "Every day at 9:00 AM"),
-    proposal(22, "0b6b7a52-6d0a-4a59-8a1e-2a8b0c4f7e22", "Weekly meal plan", "Plan this week's meals.", "Every Sunday at 9:00 AM"),
-    proposalStatus(23, "0b6b7a52-6d0a-4a59-8a1e-2a8b0c4f7e22", "accepted", "task_fixture_routine_02"),
+    proposal(
+      21,
+      "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11",
+      "Daily check-in",
+      "Check in briefly…",
+      "Every day at 9:00 AM",
+    ),
+    proposal(
+      22,
+      "0b6b7a52-6d0a-4a59-8a1e-2a8b0c4f7e22",
+      "Weekly meal plan",
+      "Plan this week's meals.",
+      "Every Sunday at 9:00 AM",
+    ),
+    proposalStatus(
+      23,
+      "0b6b7a52-6d0a-4a59-8a1e-2a8b0c4f7e22",
+      "accepted",
+      "task_fixture_routine_02",
+    ),
   ];
 }
 
@@ -1278,15 +1714,26 @@ test("only a device holding bot:cards sees memory and routine proposal cards, as
   const fixture = await contractFixture();
   const driven = drivenConversation(cardEntries());
   const fake = fakeRuntime({ kind: "idle" });
-  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  const service = sessionService({
+    ...fake.runtime,
+    conversation: async () => driven.conversation as never,
+  });
   try {
     const cards = await service.session(BOT_ID, { cards: true });
-    const shown = cards.entries.filter((entry) => entry.type === "memory_update" || entry.type === "routine_proposal");
+    const shown = cards.entries.filter(
+      (entry) => entry.type === "memory_update" || entry.type === "routine_proposal",
+    );
     // Custom entries carry no timestamp, so createdAt appears only when the host knows it.
-    assert.deepEqual(withoutCreatedAt(shown as never), withoutCreatedAt(fixture.botSessionCards.entries));
+    assert.deepEqual(
+      withoutCreatedAt(shown as never),
+      withoutCreatedAt(fixture.botSessionCards.entries),
+    );
 
     const legacy = await service.session(BOT_ID);
-    assert.deepEqual(legacy.entries.map((entry) => entry.type), ["message", "message"]);
+    assert.deepEqual(
+      legacy.entries.map((entry) => entry.type),
+      ["message", "message"],
+    );
     assert.deepEqual(parseAidenRemoteBotSession(legacy), legacy);
   } finally {
     await service.close();
@@ -1296,26 +1743,65 @@ test("only a device holding bot:cards sees memory and routine proposal cards, as
 test("phones see only the newest card of a revised suggestion, and a trigger card's label names what starts it", async () => {
   const driven = drivenConversation([
     user(1, "Tell me when the report lands."),
-    proposal(2, "11111111-1111-4111-8111-111111111111", "Morning check-in", "Check in.", "Every day at 8:00 AM"),
-    { id: 3, kind: "aiden.routine-proposal-status", data: { proposalId: "11111111-1111-4111-8111-111111111111", status: "dismissed", supersededBy: "22222222-2222-4222-8222-222222222222" } },
-    proposal(4, "22222222-2222-4222-8222-222222222222", "Morning check-in", "Check in.", "Every day at 9:00 AM"),
+    proposal(
+      2,
+      "11111111-1111-4111-8111-111111111111",
+      "Morning check-in",
+      "Check in.",
+      "Every day at 8:00 AM",
+    ),
+    {
+      id: 3,
+      kind: "aiden.routine-proposal-status",
+      data: {
+        proposalId: "11111111-1111-4111-8111-111111111111",
+        status: "dismissed",
+        supersededBy: "22222222-2222-4222-8222-222222222222",
+      },
+    },
+    proposal(
+      4,
+      "22222222-2222-4222-8222-222222222222",
+      "Morning check-in",
+      "Check in.",
+      "Every day at 9:00 AM",
+    ),
     {
       id: 5,
       kind: "aiden.routine-proposal",
-      data: { proposalId: "33333333-3333-4333-8333-333333333333", name: "Report landed", prompt: "Summarize the report.", trigger: { kind: "webhook" }, label: "When this routine's link is called" },
+      data: {
+        proposalId: "33333333-3333-4333-8333-333333333333",
+        name: "Report landed",
+        prompt: "Summarize the report.",
+        trigger: { kind: "webhook" },
+        label: "When this routine's link is called",
+      },
     },
   ]);
   const fake = fakeRuntime({ kind: "idle" });
-  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  const service = sessionService({
+    ...fake.runtime,
+    conversation: async () => driven.conversation as never,
+  });
   try {
     const session = await service.session(BOT_ID, { cards: true });
     assert.deepEqual(parseAidenRemoteBotSession(session), session);
     const cards = session.entries.flatMap((entry) =>
-      entry.type === "routine_proposal" ? [{ proposalId: entry.proposalId, label: entry.label, status: entry.status }] : [],
+      entry.type === "routine_proposal"
+        ? [{ proposalId: entry.proposalId, label: entry.label, status: entry.status }]
+        : [],
     );
     assert.deepEqual(cards, [
-      { proposalId: "22222222-2222-4222-8222-222222222222", label: "Every day at 9:00 AM · UTC", status: "pending" },
-      { proposalId: "33333333-3333-4333-8333-333333333333", label: "When this routine's link is called", status: "pending" },
+      {
+        proposalId: "22222222-2222-4222-8222-222222222222",
+        label: "Every day at 9:00 AM · UTC",
+        status: "pending",
+      },
+      {
+        proposalId: "33333333-3333-4333-8333-333333333333",
+        label: "When this routine's link is called",
+        status: "pending",
+      },
     ]);
   } finally {
     await service.close();
@@ -1325,7 +1811,9 @@ test("phones see only the newest card of a revised suggestion, and a trigger car
 /** Serve one Bot's SSE stream for a device with or without `bot:cards`. */
 async function openCardStream(service: AidenRemoteBotSessionService, cards: boolean) {
   const server = createServer((_request, response) => {
-    void service.openEvents("device_1", BOT_ID, response, () => {}, { cards }).catch(() => response.destroy());
+    void service
+      .openEvents("device_1", BOT_ID, response, () => {}, { cards })
+      .catch(() => response.destroy());
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
@@ -1343,7 +1831,10 @@ async function openCardStream(service: AidenRemoteBotSessionService, cards: bool
         const data = block.split("\n").find((line) => line.startsWith("data: "));
         // Every frame must parse with the revision-27 parser; legacy devices also
         // must never see a card type.
-        if (data) frames.push(parseAidenRemoteBotSessionEvent(JSON.parse(data.slice(6))) as unknown as Frame);
+        if (data)
+          frames.push(
+            parseAidenRemoteBotSessionEvent(JSON.parse(data.slice(6))) as unknown as Frame,
+          );
       }
     }
   })();
@@ -1367,25 +1858,47 @@ async function openCardStream(service: AidenRemoteBotSessionService, cards: bool
 test("a new card reaches bot:cards streams as an entry and other streams as a no-op at the same seq", async () => {
   const driven = drivenConversation([user(1, "Hi"), assistant(2, "Hello!")]);
   const fake = fakeRuntime({ kind: "idle" });
-  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  const service = sessionService({
+    ...fake.runtime,
+    conversation: async () => driven.conversation as never,
+  });
   const cards = await openCardStream(service, true);
   const legacy = await openCardStream(service, false);
   try {
     await cards.until(() => cards.frames.length >= 1, "the cards snapshot");
     await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
     await driven.emit([user(1, "Hi"), assistant(2, "Hello!"), memoryReview(3)]);
-    await driven.emit([user(1, "Hi"), assistant(2, "Hello!"), memoryReview(3), assistant(4, "Anything else?")]);
+    await driven.emit([
+      user(1, "Hi"),
+      assistant(2, "Hello!"),
+      memoryReview(3),
+      assistant(4, "Anything else?"),
+    ]);
     await cards.until(() => cards.frames.length >= 3, "two frames after the snapshot");
     await legacy.until(() => legacy.frames.length >= 3, "two frames after the snapshot");
 
-    assert.deepEqual(cards.frames.map((frame) => frame.type), ["snapshot", "entry", "entry"]);
+    assert.deepEqual(
+      cards.frames.map((frame) => frame.type),
+      ["snapshot", "entry", "entry"],
+    );
     assert.equal(cards.frames[1]!.payload.entry.type, "memory_update");
-    assert.deepEqual(legacy.frames.map((frame) => frame.type), ["snapshot", "state", "entry"]);
-    assert.deepEqual(legacy.frames[1]!.payload, { state: "idle", interrupted: false }, "the state it already had");
+    assert.deepEqual(
+      legacy.frames.map((frame) => frame.type),
+      ["snapshot", "state", "entry"],
+    );
+    assert.deepEqual(
+      legacy.frames[1]!.payload,
+      { state: "idle", interrupted: false },
+      "the state it already had",
+    );
     assert.equal(legacy.frames[2]!.payload.entry.text, "Anything else?");
     for (const stream of [cards, legacy]) {
       const seqs = stream.frames.map((frame) => frame.seq);
-      assert.deepEqual(seqs, seqs.map((_, index) => seqs[0]! + index), "gapless for every device");
+      assert.deepEqual(
+        seqs,
+        seqs.map((_, index) => seqs[0]! + index),
+        "gapless for every device",
+      );
     }
   } finally {
     await cards.close();
@@ -1399,8 +1912,18 @@ function memoryView(overrides: Partial<BotMemoryView> = {}): BotMemoryView {
     botId: BOT_ID,
     revision: "9f2c1a0b7d3e4f51",
     readable: true,
-    memory: { entries: [{ id: "a1b2c3d4e5f60718", text: "Weekly meal plan is vegetarian except Fridays." }], usedChars: 46, limitChars: 2_200, overBudget: false },
-    user: { entries: [{ id: "0f1e2d3c4b5a6978", text: "Prefers short answers." }], usedChars: 22, limitChars: 1_375, overBudget: false },
+    memory: {
+      entries: [{ id: "a1b2c3d4e5f60718", text: "Weekly meal plan is vegetarian except Fridays." }],
+      usedChars: 46,
+      limitChars: 2_200,
+      overBudget: false,
+    },
+    user: {
+      entries: [{ id: "0f1e2d3c4b5a6978", text: "Prefers short answers." }],
+      usedChars: 22,
+      limitChars: 1_375,
+      overBudget: false,
+    },
     updatedAt: Date.parse("2026-08-19T15:00:00.000Z"),
     ...overrides,
   };
@@ -1433,10 +1956,16 @@ test("phones read memory in the shared fixture's shape", async () => {
   const fresh = projectAidenRemoteBotMemory(memoryView({ updatedAt: null }));
   assert.equal(fresh.updatedAt, null);
   assert.deepEqual(
-    projectAidenRemoteBotMemory({ ...fixture.botMemory, updatedAt: Date.parse(fixture.botMemory.updatedAt) }),
+    projectAidenRemoteBotMemory({
+      ...fixture.botMemory,
+      updatedAt: Date.parse(fixture.botMemory.updatedAt),
+    }),
     fixture.botMemory,
   );
-  await assert.rejects(service.memory("bot_missing"), (error: { code?: string }) => error.code === "not_found");
+  await assert.rejects(
+    service.memory("bot_missing"),
+    (error: { code?: string }) => error.code === "not_found",
+  );
 });
 
 test("every memory view the store can load is one phones accept", async () => {
@@ -1454,14 +1983,24 @@ test("every memory view the store can load is one phones accept", async () => {
     assert.equal(projectAidenRemoteBotMemory(saved).user.entries.length, 64);
 
     // A shell edit can plant any number of entries: the view stays loadable and holds what the Bot reads.
-    writeFileSync(botMemoryFile(root, BOT_ID, "user"), Array.from({ length: 90 }, (_, index) => `Planted ${index + 1}.`).join("\n§\n"));
+    writeFileSync(
+      botMemoryFile(root, BOT_ID, "user"),
+      Array.from({ length: 90 }, (_, index) => `Planted ${index + 1}.`).join("\n§\n"),
+    );
     const planted = projectAidenRemoteBotMemory(memoryStoreView(await store.load(BOT_ID)));
     assert.equal(planted.user.entries.length, 64);
     assert.equal(planted.user.entries[0]!.text, "Planted 1.");
     // The person can still erase from the phone view.
-    const erased = await store.edit(BOT_ID, { kind: "remove", target: "user", entryId: planted.user.entries[0]!.id });
+    const erased = await store.edit(BOT_ID, {
+      kind: "remove",
+      target: "user",
+      entryId: planted.user.entries[0]!.id,
+    });
     assert.equal(erased.ok, true);
-    assert.equal(projectAidenRemoteBotMemory(memoryStoreView(await store.load(BOT_ID))).user.entries[0]!.text, "Planted 2.");
+    assert.equal(
+      projectAidenRemoteBotMemory(memoryStoreView(await store.load(BOT_ID))).user.entries[0]!.text,
+      "Planted 2.",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1487,17 +2026,26 @@ test("a memory edit is idempotent per request key and its failures carry the doc
   assert.deepEqual(edits, [{ botId: BOT_ID, edit: request.edit }], "a replay never edits twice");
 
   const documented = fixture.botMemoryEdit.errors as Array<{ status: number; code: string }>;
-  for (const [index, expected] of [...documented, { status: 422, code: "invalid_request" }].entries()) {
+  for (const [index, expected] of [
+    ...documented,
+    { status: 422, code: "invalid_request" },
+  ].entries()) {
     await assert.rejects(
       service.editMemory(DEVICE_ID, BOT_ID, `memory-edit-key-01${index}0`, request),
-      (error: { status?: number; code?: string }) => error.status === expected.status && error.code === expected.code,
+      (error: { status?: number; code?: string }) =>
+        error.status === expected.status && error.code === expected.code,
       expected.code,
     );
   }
-  for (const body of [{ edit: { kind: "replace", target: "user", entryId: "bad", text: "x" } }, { edit: { kind: "rewrite" } }, {}]) {
+  for (const body of [
+    { edit: { kind: "replace", target: "user", entryId: "bad", text: "x" } },
+    { edit: { kind: "rewrite" } },
+    {},
+  ]) {
     await assert.rejects(
       service.editMemory(DEVICE_ID, BOT_ID, "memory-edit-key-0900", body),
-      (error: { status?: number; code?: string }) => error.status === 400 && error.code === "invalid_request",
+      (error: { status?: number; code?: string }) =>
+        error.status === 400 && error.code === "invalid_request",
     );
   }
 });
@@ -1525,23 +2073,47 @@ test("answering a proposal from a phone is idempotent and an unknown proposal is
         return { status: "accepted", routineId: "task_fixture_routine_03" };
       },
     },
-    routineNotifications: { list: async () => ({ notifications: [], now: new Date(0).toISOString() }) },
+    routineNotifications: {
+      list: async () => ({ notifications: [], now: new Date(0).toISOString() }),
+    },
     defaultTimezone: () => "UTC",
     now: () => Date.parse("2026-08-19T15:00:00.000Z"),
   });
   const proposalId = "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11";
-  const first = await service.respondRoutineProposal(DEVICE_ID, BOT_ID, proposalId, "proposal-key-00001", fixture.botRoutineProposalRespond.request);
-  const replay = await service.respondRoutineProposal(DEVICE_ID, BOT_ID, proposalId, "proposal-key-00001", fixture.botRoutineProposalRespond.request);
+  const first = await service.respondRoutineProposal(
+    DEVICE_ID,
+    BOT_ID,
+    proposalId,
+    "proposal-key-00001",
+    fixture.botRoutineProposalRespond.request,
+  );
+  const replay = await service.respondRoutineProposal(
+    DEVICE_ID,
+    BOT_ID,
+    proposalId,
+    "proposal-key-00001",
+    fixture.botRoutineProposalRespond.request,
+  );
   assert.deepEqual(first, fixture.botRoutineProposalRespond.response);
   assert.deepEqual(replay, first);
   assert.equal(answers.length, 1);
   assert.deepEqual(answers[0], { botId: BOT_ID, proposalId, decision: "accept" });
 
   await assert.rejects(
-    service.respondRoutineProposal(DEVICE_ID, BOT_ID, "0b6b7a52-6d0a-4a59-8a1e-2a8b0c4f7e22", "proposal-key-00002", { decision: "dismiss" }),
-    (error: { status?: number; code?: string }) => error.status === 404 && error.code === "routine_proposal_not_found",
+    service.respondRoutineProposal(
+      DEVICE_ID,
+      BOT_ID,
+      "0b6b7a52-6d0a-4a59-8a1e-2a8b0c4f7e22",
+      "proposal-key-00002",
+      { decision: "dismiss" },
+    ),
+    (error: { status?: number; code?: string }) =>
+      error.status === 404 && error.code === "routine_proposal_not_found",
   );
-  for (const [id, body] of [["not-a-uuid", { decision: "accept" }], [proposalId, { decision: "later" }]] as const) {
+  for (const [id, body] of [
+    ["not-a-uuid", { decision: "accept" }],
+    [proposalId, { decision: "later" }],
+  ] as const) {
     await assert.rejects(
       service.respondRoutineProposal(DEVICE_ID, BOT_ID, id, "proposal-key-00003", body),
       (error: { code?: string }) => error.code === "invalid_request",
@@ -1576,11 +2148,24 @@ function activityBots() {
 /** Serve one Bot's SSE stream to a device with these opt-ins; keep the raw data lines too. */
 async function openAudienceStream(
   service: AidenRemoteBotSessionService,
-  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean; peers?: boolean; accessRequests?: boolean; plans?: boolean; allowed?: boolean },
+  audience: {
+    cards?: boolean;
+    activity?: boolean;
+    handoffs?: boolean;
+    handoffNotes?: boolean;
+    images?: boolean;
+    issues?: boolean;
+    peers?: boolean;
+    accessRequests?: boolean;
+    plans?: boolean;
+    allowed?: boolean;
+  },
   botId = BOT_ID,
 ) {
   const server = createServer((_request, response) => {
-    void service.openEvents("device_1", botId, response, () => {}, audience).catch(() => response.destroy());
+    void service
+      .openEvents("device_1", botId, response, () => {}, audience)
+      .catch(() => response.destroy());
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
@@ -1626,12 +2211,17 @@ async function openAudienceStream(
 }
 
 /** The activity a device holds after each frame that carries one; null is "no turn running". */
-function activitiesOf(frames: Frame[]): Array<{ phase: string; app?: string; startedAt: number } | null> {
+function activitiesOf(
+  frames: Frame[],
+): Array<{ phase: string; app?: string; startedAt: number } | null> {
   const activities: Array<{ phase: string; app?: string; startedAt: number } | null> = [];
   for (const frame of frames) {
-    const activity = frame.type === "activity"
-      ? frame.payload.activity
-      : frame.type === "snapshot" ? frame.payload.session.activity : undefined;
+    const activity =
+      frame.type === "activity"
+        ? frame.payload.activity
+        : frame.type === "snapshot"
+          ? frame.payload.session.activity
+          : undefined;
     if (activity !== undefined) activities.push(activity);
   }
   return activities;
@@ -1654,7 +2244,10 @@ function runningOn(
 ) {
   return new AidenRemoteBotSessionService({
     bots: activityBots(),
-    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+    runtime: async () => ({
+      ...fake.runtime,
+      conversation: async () => driven.conversation as never,
+    }),
     turnIntents: createBotTurnIntents(),
     ...options,
   });
@@ -1662,20 +2255,25 @@ function runningOn(
 
 const last = <Item>(items: readonly Item[]): Item | undefined => items[items.length - 1];
 
-const gapless = (frames: Frame[]) => frames.map((frame) => frame.seq).every((seq, index, seqs) => seq === seqs[0]! + index);
+const gapless = (frames: Frame[]) =>
+  frames.map((frame) => frame.seq).every((seq, index, seqs) => seq === seqs[0]! + index);
 
 test("a phone holding bot:activity follows a real turn's phases and never sees what the tool was given", async () => {
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-activity-"));
   durableRoots.push(profileDir);
   let release!: () => void;
-  const held = new Promise<void>((resolve) => { release = resolve; });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const command = countingTool("run_command", async () => {
     await held;
     return "done";
   });
   const planted = "cat /Users/dana/Documents/plan.md && echo sk-live-0123456789abcdef";
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall("run_command", { text: planted })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("run_command", { text: planted })], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("Tidied."),
   ]);
   const runtime = await createBotSessionService({
@@ -1705,10 +2303,17 @@ test("a phone holding bot:activity follows a real turn's phases and never sees w
     );
 
     for (const phase of phasesOf(stream.frames)) {
-      assert.ok(phase === null || (BOT_ACTIVITY_PHASES as readonly string[]).includes(phase), String(phase));
+      assert.ok(
+        phase === null || (BOT_ACTIVITY_PHASES as readonly string[]).includes(phase),
+        String(phase),
+      );
     }
     for (const activity of activitiesOf(stream.frames)) {
-      if (activity) assert.deepEqual(Object.keys(activity).filter((key) => !["phase", "app", "startedAt"].includes(key)), []);
+      if (activity)
+        assert.deepEqual(
+          Object.keys(activity).filter((key) => !["phase", "app", "startedAt"].includes(key)),
+          [],
+        );
     }
     const wire = stream.raw.join("\n");
     for (const secret of ["/Users/dana", "plan.md", "sk-live", "echo "]) {
@@ -1732,30 +2337,52 @@ test("a device without bot:activity gets the state it already has at each activi
   try {
     await activity.until(() => activity.frames.length >= 1, "the activity snapshot");
     await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
-    assert.equal(activity.frames[0]!.payload.session.activity.phase, "preparing", "running with nothing from the model yet");
+    assert.equal(
+      activity.frames[0]!.payload.session.activity.phase,
+      "preparing",
+      "running with nothing from the model yet",
+    );
     assert.equal("activity" in legacy.frames[0]!.payload.session, false);
     assert.equal("queued" in legacy.frames[0]!.payload.session, false);
 
     await driven.emitView([user(1, "Plan dinners")], {
       "pi.live": { run: {}, tools: [{ callId: "call_1", name: "web_search", status: "running" }] },
-      "pi.inbox": { items: [{ id: 18, mode: "followUp", content: [{ type: "text", text: "Also lunches." }] }] },
+      "pi.inbox": {
+        items: [{ id: 18, mode: "followUp", content: [{ type: "text", text: "Also lunches." }] }],
+      },
     });
     await activity.until(() => activity.frames.length >= 3, "the searching and queued frames");
     await legacy.until(() => legacy.frames.length >= 3, "the no-op frames");
 
     assert.equal(activity.frames[1]!.type, "activity");
-    assert.deepEqual(Object.keys(activity.frames[1]!.payload.activity).sort(), ["phase", "startedAt"]);
+    assert.deepEqual(Object.keys(activity.frames[1]!.payload.activity).sort(), [
+      "phase",
+      "startedAt",
+    ]);
     assert.equal(activity.frames[1]!.payload.activity.phase, "searching");
     assert.equal(activity.frames[2]!.type, "queued");
     for (const frame of legacy.frames.slice(1)) {
       assert.equal(frame.type, "state");
       assert.deepEqual(frame.payload, { state: "running", interrupted: false });
     }
-    assert.deepEqual(legacy.frames.map((frame) => frame.seq), activity.frames.map((frame) => frame.seq), "every device stays on one seq");
+    assert.deepEqual(
+      legacy.frames.map((frame) => frame.seq),
+      activity.frames.map((frame) => frame.seq),
+      "every device stays on one seq",
+    );
     assert.ok(gapless(legacy.frames));
-    assert.equal(legacy.raw.some((data) => /web_search|searching|Also lunches|"activity"|"queued"/u.test(data)), false);
+    assert.equal(
+      legacy.raw.some((data) =>
+        /web_search|searching|Also lunches|"activity"|"queued"/u.test(data),
+      ),
+      false,
+    );
     const fetched = await service.session(BOT_ID);
-    assert.equal("activity" in fetched || "queued" in fetched, false, "a fetch without bot:activity has no new keys");
+    assert.equal(
+      "activity" in fetched || "queued" in fetched,
+      false,
+      "a fetch without bot:activity has no new keys",
+    );
   } finally {
     await activity.close();
     await legacy.close();
@@ -1771,10 +2398,20 @@ test("a phone that reconnects mid-run gets the phase and the waiting messages in
   try {
     await first.until(() => first.frames.length >= 1, "the first snapshot");
     await driven.emitView([user(1, "Plan dinners")], {
-      "pi.live": { run: { inputs: [1] }, tools: [{ callId: "call_1", name: "web_search", status: "running" }] },
-      "pi.inbox": { items: [{ id: 18, mode: "steer", content: [{ type: "text", text: "Keep it vegetarian." }] }] },
+      "pi.live": {
+        run: { inputs: [1] },
+        tools: [{ callId: "call_1", name: "web_search", status: "running" }],
+      },
+      "pi.inbox": {
+        items: [
+          { id: 18, mode: "steer", content: [{ type: "text", text: "Keep it vegetarian." }] },
+        ],
+      },
     });
-    await first.until(() => first.frames.some((frame) => frame.type === "queued"), "the queued frame");
+    await first.until(
+      () => first.frames.some((frame) => frame.type === "queued"),
+      "the queued frame",
+    );
   } finally {
     await first.close(); // Wi-Fi drops
   }
@@ -1784,7 +2421,9 @@ test("a phone that reconnects mid-run gets the phase and the waiting messages in
     const session = again.frames[0]!.payload.session;
     assert.equal(again.frames[0]!.type, "snapshot");
     assert.equal(session.activity.phase, "searching");
-    assert.deepEqual(session.queued, [{ submissionId: "18", mode: "steer", text: "Keep it vegetarian." }]);
+    assert.deepEqual(session.queued, [
+      { submissionId: "18", mode: "steer", text: "Keep it vegetarian." },
+    ]);
   } finally {
     await again.close();
     await service.close();
@@ -1797,17 +2436,42 @@ test("an app step shows the app's name cut to 40 code points; other phases never
     projectBotSessionActivity({ phase: "app", app: emoji, startedAt: 1_760_450_000_000.7 }),
     { phase: "app", app: "😀".repeat(40), startedAt: 1_760_450_000_000 },
   );
-  assert.deepEqual(projectBotSessionActivity({ phase: "app", app: "Notion", startedAt: 5 }), { phase: "app", app: "Notion", startedAt: 5 });
+  assert.deepEqual(projectBotSessionActivity({ phase: "app", app: "Notion", startedAt: 5 }), {
+    phase: "app",
+    app: "Notion",
+    startedAt: 5,
+  });
   // No name to show: the phone reads its generic app word.
-  assert.deepEqual(projectBotSessionActivity({ phase: "app", app: "   ", startedAt: 5 }), { phase: "app", startedAt: 5 });
-  assert.deepEqual(projectBotSessionActivity({ phase: "reading", app: "Notion", startedAt: 5 }), { phase: "reading", startedAt: 5 });
-  assert.deepEqual(projectBotSessionActivity({ phase: "thinking", startedAt: -3 }), { phase: "thinking", startedAt: 0 });
+  assert.deepEqual(projectBotSessionActivity({ phase: "app", app: "   ", startedAt: 5 }), {
+    phase: "app",
+    startedAt: 5,
+  });
+  assert.deepEqual(projectBotSessionActivity({ phase: "reading", app: "Notion", startedAt: 5 }), {
+    phase: "reading",
+    startedAt: 5,
+  });
+  assert.deepEqual(projectBotSessionActivity({ phase: "thinking", startedAt: -3 }), {
+    phase: "thinking",
+    startedAt: 0,
+  });
   // Every cut is one the strict parser accepts.
-  const cut = projectBotSessionActivity({ phase: "app", app: `${"x".repeat(39)}😀😀`, startedAt: 5 });
+  const cut = projectBotSessionActivity({
+    phase: "app",
+    app: `${"x".repeat(39)}😀😀`,
+    startedAt: 5,
+  });
   assert.equal([...cut.app!].length, 40);
-  assert.deepEqual(parseAidenRemoteBotSessionEvent({
-    protocolVersion: 1, botId: BOT_ID, epoch: "epoch_1", seq: 1, type: "activity", payload: { activity: cut },
-  }).payload, { activity: cut });
+  assert.deepEqual(
+    parseAidenRemoteBotSessionEvent({
+      protocolVersion: 1,
+      botId: BOT_ID,
+      epoch: "epoch_1",
+      seq: 1,
+      type: "activity",
+      payload: { activity: cut },
+    }).payload,
+    { activity: cut },
+  );
 });
 
 test("a frame that leaves the phase as it was sends no activity frame", async () => {
@@ -1817,15 +2481,26 @@ test("a frame that leaves the phase as it was sends no activity frame", async ()
   const stream = await openAudienceStream(service, { activity: true });
   try {
     await stream.until(() => stream.frames.length >= 1, "the snapshot");
-    const searching = { run: { inputs: [1] }, tools: [{ callId: "call_1", name: "web_search", status: "running" }] };
+    const searching = {
+      run: { inputs: [1] },
+      tools: [{ callId: "call_1", name: "web_search", status: "running" }],
+    };
     await driven.emitView([user(1, "Plan dinners")], { "pi.live": searching });
     // The tool's output grows; the line still reads Searching the web.
     await driven.emitView([user(1, "Plan dinners")], {
       "pi.live": { ...searching, tools: [{ ...searching.tools[0], output: "3 results" }] },
     });
-    await driven.emitView([user(1, "Plan dinners"), assistant(2, "Found three.")], { "pi.live": searching });
-    await stream.until(() => stream.frames.some((frame) => frame.type === "entry"), "the reply entry");
-    assert.deepEqual(stream.frames.slice(1).map((frame) => frame.type), ["activity", "entry"]);
+    await driven.emitView([user(1, "Plan dinners"), assistant(2, "Found three.")], {
+      "pi.live": searching,
+    });
+    await stream.until(
+      () => stream.frames.some((frame) => frame.type === "entry"),
+      "the reply entry",
+    );
+    assert.deepEqual(
+      stream.frames.slice(1).map((frame) => frame.type),
+      ["activity", "entry"],
+    );
   } finally {
     await stream.close();
     await service.close();
@@ -1868,7 +2543,11 @@ test("a Stop pressed anywhere reads Stopping on phones until the run ends, and a
     await stream.until(() => last(phasesOf(stream.frames)) !== null, "the next run");
     // The lane is serial: anything the intent had published would have come before the next run's frames.
     assert.equal(stream.frames[settled]!.seq, settledSeq + 1);
-    assert.deepEqual(phasesOf(stream.frames.slice(settled)), ["preparing"], "the next turn starts at Getting ready");
+    assert.deepEqual(
+      phasesOf(stream.frames.slice(settled)),
+      ["preparing"],
+      "the next turn starts at Getting ready",
+    );
     assert.ok(gapless(stream.frames));
   } finally {
     await stream.close();
@@ -1886,7 +2565,10 @@ test("a follow-up that replaces the run while the Bot stays running gets its own
   try {
     await stream.until(() => stream.frames.length >= 1, "the snapshot");
     await driven.emitView([user(1, "Plan dinners")], {
-      "pi.live": { run: { inputs: [1] }, generation: { message: { content: [{ type: "text", text: "Mon" }] } } },
+      "pi.live": {
+        run: { inputs: [1] },
+        generation: { message: { content: [{ type: "text", text: "Mon" }] } },
+      },
     });
     intents.announce(BOT_ID, "stopping");
     await stream.until(() => last(phasesOf(stream.frames)) === "stopping", "Stopping");
@@ -1896,7 +2578,10 @@ test("a follow-up that replaces the run while the Bot stays running gets its own
     await driven.emitView([user(1, "Plan dinners"), assistant(2, "Mon"), user(3, "And lunches")], {
       "pi.live": { run: { inputs: [3] } },
     });
-    await stream.until(() => last(activitiesOf(stream.frames))?.startedAt === 5_000, "the follow-up's run");
+    await stream.until(
+      () => last(activitiesOf(stream.frames))?.startedAt === 5_000,
+      "the follow-up's run",
+    );
     assert.deepEqual(last(activitiesOf(stream.frames)), { phase: "preparing", startedAt: 5_000 });
     assert.equal(activitiesOf(stream.frames)[0]!.startedAt, 1_000);
   } finally {
@@ -1906,7 +2591,9 @@ test("a follow-up that replaces the run while the Bot stays running gets its own
 });
 
 test("a phone or desktop chat that opens mid-run, or after the projector's idle close, sees when the run really started", async () => {
-  const driven = drivenConversation([user(1, "Plan dinners")], { "pi.live": { run: { inputs: [1] } } });
+  const driven = drivenConversation([user(1, "Plan dinners")], {
+    "pi.live": { run: { inputs: [1] } },
+  });
   const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
   let clock = 1_000;
   const runStarts = createBotRunStarts();
@@ -1926,7 +2613,11 @@ test("a phone or desktop chat that opens mid-run, or after the projector's idle 
 
     clock = 31_000; // the Mac's chat opens half a minute in
     const { snapshot, unsubscribe } = await desktop.subscribe(BOT_ID, { send() {} });
-    assert.equal(snapshot.activity?.startedAt, 1_000, "the desktop line counts from the run's start");
+    assert.equal(
+      snapshot.activity?.startedAt,
+      1_000,
+      "the desktop line counts from the run's start",
+    );
     unsubscribe();
 
     await stream.close();
@@ -1938,14 +2629,21 @@ test("a phone or desktop chat that opens mid-run, or after the projector's idle 
       await new Promise((resolve) => setTimeout(resolve, 10));
       reopened = await service.session(BOT_ID, { activity: true });
     }
-    assert.deepEqual(reopened.activity, { phase: "preparing", startedAt: 1_000 }, "a new projector, the same run");
+    assert.deepEqual(
+      reopened.activity,
+      { phase: "preparing", startedAt: 1_000 },
+      "a new projector, the same run",
+    );
 
     // The run ends; the next one, even for the same input, is timed from its own start.
     fake.setState({ kind: "idle" });
     assert.equal((await service.session(BOT_ID, { activity: true })).activity, null);
     fake.setState({ kind: "running", submissionId: "sub_1" });
     clock = 120_000;
-    assert.deepEqual((await service.session(BOT_ID, { activity: true })).activity, { phase: "preparing", startedAt: 120_000 });
+    assert.deepEqual((await service.session(BOT_ID, { activity: true })).activity, {
+      phase: "preparing",
+      startedAt: 120_000,
+    });
   } finally {
     await stream.close();
     await desktop.close();
@@ -1954,7 +2652,10 @@ test("a phone or desktop chat that opens mid-run, or after the projector's idle 
 });
 
 test("a Resume after a crash mid-reply reads Picking up where it left off on phones until the resumed run moves", async () => {
-  const stale = { run: { taskId: 3, inputs: [1] }, generation: { attempt: 1, message: { content: [{ type: "text", text: "Monday: soup" }] } } };
+  const stale = {
+    run: { taskId: 3, inputs: [1] },
+    generation: { attempt: 1, message: { content: [{ type: "text", text: "Monday: soup" }] } },
+  };
   const driven = drivenConversation([user(1, "Plan dinners")], { "pi.live": stale });
   const fake = fakeRuntime({ kind: "interrupted", submissionId: "sub_1" });
   const intents = createBotTurnIntents();
@@ -1968,11 +2669,19 @@ test("a Resume after a crash mid-reply reads Picking up where it left off on pho
     // The session resumed and announced it (`onResumed`), before any event from the resumed run.
     fake.setState({ kind: "running", submissionId: "sub_1" });
     intents.announce(BOT_ID, "resuming");
-    await stream.until(() => last(phasesOf(stream.frames)) === "resuming", "Picking up where it left off");
+    await stream.until(
+      () => last(phasesOf(stream.frames)) === "resuming",
+      "Picking up where it left off",
+    );
 
-    await driven.emitView([user(1, "Plan dinners")], { "pi.live": { run: { taskId: 4, inputs: [1] }, generation: { attempt: 1 } } });
     await driven.emitView([user(1, "Plan dinners")], {
-      "pi.live": { run: { taskId: 4, inputs: [1] }, generation: { attempt: 1, message: { content: [{ type: "text", text: "Monday" }] } } },
+      "pi.live": { run: { taskId: 4, inputs: [1] }, generation: { attempt: 1 } },
+    });
+    await driven.emitView([user(1, "Plan dinners")], {
+      "pi.live": {
+        run: { taskId: 4, inputs: [1] },
+        generation: { attempt: 1, message: { content: [{ type: "text", text: "Monday" }] } },
+      },
     });
     await stream.until(() => last(phasesOf(stream.frames)) === "writing", "the resumed reply");
     assert.deepEqual(phasesOf(stream.frames), [null, "resuming", "writing"]);
@@ -1991,7 +2700,10 @@ test("Steer and Queue reach the runtime as steer and followUp, and only the pers
     runtime: async () => ({
       ...fake.runtime,
       conversation: async () => driven.conversation as never,
-      async send(_botId: string, input: { text: string; requestId: string; whenBusy?: "steer" | "followUp" }) {
+      async send(
+        _botId: string,
+        input: { text: string; requestId: string; whenBusy?: "steer" | "followUp" },
+      ) {
         sends.push({ text: input.text, ...(input.whenBusy ? { whenBusy: input.whenBusy } : {}) });
         return { submissionId: String(17 + sends.length), deduped: false };
       },
@@ -2004,8 +2716,14 @@ test("Steer and Queue reach the runtime as steer and followUp, and only the pers
   });
   const stream = await openAudienceStream(service, { activity: true });
   try {
-    await service.send(DEVICE_ID, BOT_ID, "send-request-steer-0001", { text: "Keep it vegetarian.", whenBusy: "steer" });
-    await service.send(DEVICE_ID, BOT_ID, "send-request-queue-0001", { text: "Also a shopping list.", whenBusy: "queue" });
+    await service.send(DEVICE_ID, BOT_ID, "send-request-steer-0001", {
+      text: "Keep it vegetarian.",
+      whenBusy: "steer",
+    });
+    await service.send(DEVICE_ID, BOT_ID, "send-request-queue-0001", {
+      text: "Also a shopping list.",
+      whenBusy: "queue",
+    });
     await service.send(DEVICE_ID, BOT_ID, "send-request-plain-0001", { text: "Thanks!" });
     assert.deepEqual(sends, [
       { text: "Keep it vegetarian.", whenBusy: "steer" },
@@ -2019,22 +2737,48 @@ test("Steer and Queue reach the runtime as steer and followUp, and only the pers
       "pi.inbox": {
         items: [
           { id: 18, mode: "steer", content: [{ type: "text", text: "Keep it vegetarian." }] },
-          { id: 19, mode: "write", entry: { kind: BOT_NOTICE_ENTRY_KIND, data: { notice: "routine" } } },
-          { id: 20, mode: "followUp", content: [{ type: "text", text: "Weekly reset: plan the week." }] },
+          {
+            id: 19,
+            mode: "write",
+            entry: { kind: BOT_NOTICE_ENTRY_KIND, data: { notice: "routine" } },
+          },
+          {
+            id: 20,
+            mode: "followUp",
+            content: [{ type: "text", text: "Weekly reset: plan the week." }],
+          },
           { id: 21, mode: "followUp", content: [{ type: "text", text: "Also a shopping list." }] },
           // A photo with no words has nothing to show in a text bubble.
-          { id: 22, mode: "followUp", content: [{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" }] },
+          {
+            id: 22,
+            mode: "followUp",
+            content: [{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" }],
+          },
         ],
       },
     });
-    await stream.until(() => stream.frames.some((frame) => frame.type === "queued"), "the queued frame");
+    await stream.until(
+      () => stream.frames.some((frame) => frame.type === "queued"),
+      "the queued frame",
+    );
     const expected = [
       { submissionId: "18", mode: "steer", text: "Keep it vegetarian." },
       { submissionId: "21", mode: "queue", text: "Also a shopping list." },
     ];
-    assert.deepEqual(stream.frames.find((frame) => frame.type === "queued")!.payload.queued, expected);
-    assert.deepEqual((await service.session(BOT_ID, { activity: true })).queued, expected, "the snapshot agrees");
-    assert.equal(stream.raw.some((data) => data.includes("Weekly reset")), false, "a routine's input is not the person's message");
+    assert.deepEqual(
+      stream.frames.find((frame) => frame.type === "queued")!.payload.queued,
+      expected,
+    );
+    assert.deepEqual(
+      (await service.session(BOT_ID, { activity: true })).queued,
+      expected,
+      "the snapshot agrees",
+    );
+    assert.equal(
+      stream.raw.some((data) => data.includes("Weekly reset")),
+      false,
+      "a routine's input is not the person's message",
+    );
   } finally {
     await stream.close();
     await service.close();
@@ -2050,7 +2794,11 @@ function cjkMessage(label: string, codePoints = 32_000): string {
 function waitingInbox(texts: readonly string[]): Record<string, unknown> {
   return {
     "pi.inbox": {
-      items: texts.map((text, index) => ({ id: 30 + index, mode: "followUp", content: [{ type: "text", text }] })),
+      items: texts.map((text, index) => ({
+        id: 30 + index,
+        mode: "followUp",
+        content: [{ type: "text", text }],
+      })),
     },
   };
 }
@@ -2059,7 +2807,10 @@ function waitingInbox(texts: readonly string[]): Record<string, unknown> {
 function assertEveryFrameFits(blocks: readonly string[]) {
   assert.ok(blocks.length > 0, "the device was sent frames");
   for (const block of blocks) {
-    assert.ok(Buffer.byteLength(block, "utf8") <= AIDEN_REMOTE_MAX_SSE_FRAME_BYTES, "a frame exceeds the transport limit");
+    assert.ok(
+      Buffer.byteLength(block, "utf8") <= AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
+      "a frame exceeds the transport limit",
+    );
     assert.equal(parseAidenSseFrames(block).length, 1);
   }
 }
@@ -2075,14 +2826,23 @@ test("twenty maximum-length CJK queued messages keep every frame and snapshot in
       [user(1, "Plan dinners")],
       waitingInbox(Array.from({ length: 20 }, (_, index) => cjkMessage(`m${index}`))),
     );
-    await stream.until(() => stream.frames.some((frame) => frame.type === "queued"), "the queued frame");
+    await stream.until(
+      () => stream.frames.some((frame) => frame.type === "queued"),
+      "the queued frame",
+    );
     assertEveryFrameFits(stream.blocks);
 
     const session = await service.session(BOT_ID, { activity: true });
-    assert.ok(Buffer.byteLength(JSON.stringify(session), "utf8") <= AIDEN_REMOTE_MAX_SSE_FRAME_BYTES, "the snapshot fits");
+    assert.ok(
+      Buffer.byteLength(JSON.stringify(session), "utf8") <= AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
+      "the snapshot fits",
+    );
     const queuedFrames = stream.frames.filter((frame) => frame.type === "queued");
     const shown = queuedFrames[queuedFrames.length - 1]!.payload.queued;
-    assert.ok(shown.length >= 1 && shown.length < 20, "some of the twenty fit, and the rest are left out");
+    assert.ok(
+      shown.length >= 1 && shown.length < 20,
+      "some of the twenty fit, and the rest are left out",
+    );
     assert.deepEqual(session.queued, shown, "the snapshot agrees with the queued frame");
   } finally {
     await stream.close();
@@ -2097,16 +2857,36 @@ test("the queued frame keeps the oldest messages that fit, in the order sent, an
   const stream = await openAudienceStream(service, { activity: true });
   try {
     await stream.until(() => stream.frames.length >= 1, "the first snapshot");
-    const texts = [...Array.from({ length: 19 }, (_, index) => cjkMessage(`m${index}`)), "Last, a short one."];
+    const texts = [
+      ...Array.from({ length: 19 }, (_, index) => cjkMessage(`m${index}`)),
+      "Last, a short one.",
+    ];
     await driven.emitView([user(1, "Plan dinners")], waitingInbox(texts));
-    await stream.until(() => stream.frames.some((frame) => frame.type === "queued"), "the queued frame");
+    await stream.until(
+      () => stream.frames.some((frame) => frame.type === "queued"),
+      "the queued frame",
+    );
 
     const queuedFrames = stream.frames.filter((frame) => frame.type === "queued");
-    const queued = queuedFrames[queuedFrames.length - 1]!.payload.queued as Array<{ submissionId: string; text: string }>;
-    assert.ok(queued.length >= 1 && queued.length < texts.length, "some of the messages fit, and the rest are left out");
+    const queued = queuedFrames[queuedFrames.length - 1]!.payload.queued as Array<{
+      submissionId: string;
+      text: string;
+    }>;
+    assert.ok(
+      queued.length >= 1 && queued.length < texts.length,
+      "some of the messages fit, and the rest are left out",
+    );
     const sentIds = texts.map((_, index) => String(30 + index));
-    assert.deepEqual(queued.map((item) => item.submissionId), sentIds.slice(0, queued.length), "the oldest that fit, in order");
-    assert.deepEqual(queued.map((item) => item.text), texts.slice(0, queued.length), "no kept text is cut");
+    assert.deepEqual(
+      queued.map((item) => item.submissionId),
+      sentIds.slice(0, queued.length),
+      "the oldest that fit, in order",
+    );
+    assert.deepEqual(
+      queued.map((item) => item.text),
+      texts.slice(0, queued.length),
+      "no kept text is cut",
+    );
   } finally {
     await stream.close();
     await service.close();
@@ -2129,18 +2909,30 @@ test("a transcript near its own budget with a long partial and a full queue stil
       assistant(5, cjkMessage("d", 64_000)),
     ];
     await driven.emitView(transcript, {
-      "pi.live": { generation: { message: { content: [{ type: "text", text: cjkMessage("p", 32_000) }] } } },
+      "pi.live": {
+        generation: { message: { content: [{ type: "text", text: cjkMessage("p", 32_000) }] } },
+      },
       ...waitingInbox(Array.from({ length: 20 }, (_, index) => cjkMessage(`m${index}`))),
     });
-    await stream.until(() => stream.frames.some((frame) => frame.type === "queued"), "the queued frame");
+    await stream.until(
+      () => stream.frames.some((frame) => frame.type === "queued"),
+      "the queued frame",
+    );
     assertEveryFrameFits(stream.blocks);
 
     const session = await service.session(BOT_ID, { activity: true });
-    assert.ok(Buffer.byteLength(JSON.stringify(session), "utf8") <= AIDEN_REMOTE_MAX_SSE_FRAME_BYTES, "the snapshot fits");
+    assert.ok(
+      Buffer.byteLength(JSON.stringify(session), "utf8") <= AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
+      "the snapshot fits",
+    );
     assert.ok(session.partial, "the partial is in the snapshot");
     assert.ok((session.queued?.length ?? 0) >= 1, "the queued list is in the snapshot");
     assert.equal(session.hasOlder, true, "the transcript gave way to the partial and the queue");
-    assert.equal(session.entries[session.entries.length - 1]!.id, "entry_5", "the newest replies stay");
+    assert.equal(
+      session.entries[session.entries.length - 1]!.id,
+      "entry_5",
+      "the newest replies stay",
+    );
   } finally {
     await stream.close();
     await service.close();
@@ -2175,7 +2967,11 @@ test("the parts that ship whole at the protocol maxima take well under half the 
   // and activity add a few hundred bytes, so the group is under 300 KB, under
   // the 512 KiB half of the 1 MiB frame limit. The partial (600,000 bytes) and
   // the queued list (at most 256 KiB) share what is left of the snapshot budget.
-  const question = parseAidenRemoteBotQuestion({ waitId: WAIT_ID, toolCallId: ESCAPED.repeat(128), questions: maximalQuestions() });
+  const question = parseAidenRemoteBotQuestion({
+    waitId: WAIT_ID,
+    toolCallId: ESCAPED.repeat(128),
+    questions: maximalQuestions(),
+  });
   const approval = parseAidenRemoteBotApproval({
     waitId: WAIT_ID,
     toolCallId: ESCAPED.repeat(128),
@@ -2184,7 +2980,10 @@ test("the parts that ship whole at the protocol maxima take well under half the 
     canAllow: true,
   });
   const bytes = Buffer.byteLength(JSON.stringify({ question, approval }), "utf8");
-  assert.ok(bytes < AIDEN_REMOTE_MAX_SSE_FRAME_BYTES / 2, `the question and approval take ${bytes} bytes`);
+  assert.ok(
+    bytes < AIDEN_REMOTE_MAX_SSE_FRAME_BYTES / 2,
+    `the question and approval take ${bytes} bytes`,
+  );
 });
 
 test("a partial over its share is cut from the front on a code-point boundary, keeping the newest words", () => {
@@ -2195,7 +2994,10 @@ test("a partial over its share is cut from the front on a code-point boundary, k
   assert.equal(tail, `${ESCAPED}一一一一一😀`);
   const contentBytes = (value: string) => Buffer.byteLength(JSON.stringify(value), "utf8") - 2;
   assert.ok(contentBytes(tail) <= 25, "the tail fits its share");
-  assert.ok(contentBytes(`${ESCAPED}${tail}`) > 25, "one more code point would not fit: the cut is as long as it can be");
+  assert.ok(
+    contentBytes(`${ESCAPED}${tail}`) > 25,
+    "one more code point would not fit: the cut is as long as it can be",
+  );
   assert.equal(tailWithinJsonBytes("short", 100), "short", "text that fits is kept whole");
   assert.equal(tailWithinJsonBytes("a😀", 3), "", "an emoji is never split, even to its lone half");
 });
@@ -2212,13 +3014,12 @@ test("the probe at the protocol maxima keeps every frame and the snapshot inside
   const asking = new AbortController();
   try {
     await stream.until(() => stream.frames.length >= 1, "the first snapshot");
-    await driven.emitView(
-      [user(1, "Plan dinners"), assistant(2, ESCAPED.repeat(100_000))],
-      {
-        "pi.live": { generation: { message: { content: [{ type: "text", text: ESCAPED.repeat(100_000) }] } } },
-        ...waitingInbox(Array.from({ length: 3 }, (_, index) => escapedMessage(`m${index}`, 14_000))),
+    await driven.emitView([user(1, "Plan dinners"), assistant(2, ESCAPED.repeat(100_000))], {
+      "pi.live": {
+        generation: { message: { content: [{ type: "text", text: ESCAPED.repeat(100_000) }] } },
       },
-    );
+      ...waitingInbox(Array.from({ length: 3 }, (_, index) => escapedMessage(`m${index}`, 14_000))),
+    });
     const asked = questions.request({
       botId: BOT_ID,
       waitId: WAIT_ID,
@@ -2237,16 +3038,24 @@ test("the probe at the protocol maxima keeps every frame and the snapshot inside
 
     const session = await service.session(BOT_ID, { activity: true });
     const wire = JSON.stringify(session);
-    assert.ok(Buffer.byteLength(wire, "utf8") < AIDEN_REMOTE_MAX_SSE_FRAME_BYTES, "the snapshot is inside the frame limit");
-    assert.deepEqual(parseAidenRemoteBotSession(JSON.parse(wire)), session, "the snapshot parses back to itself");
+    assert.ok(
+      Buffer.byteLength(wire, "utf8") < AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
+      "the snapshot is inside the frame limit",
+    );
+    assert.deepEqual(
+      parseAidenRemoteBotSession(JSON.parse(wire)),
+      session,
+      "the snapshot parses back to itself",
+    );
     // Priority order: the question (about 268 KB) and the whole partial (600,000 bytes) ship.
     // What is left, about 115 KB of 983,040, takes one 84,000-byte queued message: the second
     // would bring the list to 168,000 bytes. The transcript gets nothing and says so.
     assert.deepEqual(session.question?.questions, maximalQuestions(), "the question ships whole");
     assert.equal(session.partial, ESCAPED.repeat(100_000), "the partial ships whole");
-    assert.deepEqual(session.queued?.map((item) => [item.submissionId, item.text]), [
-      ["30", escapedMessage("m0", 14_000)],
-    ]);
+    assert.deepEqual(
+      session.queued?.map((item) => [item.submissionId, item.text]),
+      [["30", escapedMessage("m0", 14_000)]],
+    );
     assert.deepEqual(session.entries, [], "the reply that no longer fits is left out");
     assert.equal(session.hasOlder, true);
   } finally {
@@ -2282,22 +3091,44 @@ test("a waiting input that can't be classified stays off phones and is retried, 
       "pi.live": { run: { inputs: [1] } },
       "pi.inbox": {
         items: [
-          { id: 20, mode: "followUp", content: [{ type: "text", text: "Weekly reset: plan the week." }] },
+          {
+            id: 20,
+            mode: "followUp",
+            content: [{ type: "text", text: "Weekly reset: plan the week." }],
+          },
           { id: 21, mode: "followUp", content: [{ type: "text", text: "Also a shopping list." }] },
         ],
       },
     };
     await driven.emitView([user(1, "Plan dinners")], docs);
     await driven.emitView([user(1, "Plan dinners")], docs);
-    assert.deepEqual((await service.session(BOT_ID, { activity: true })).queued, [], "withheld while it can't be classified");
-    assert.equal(asked.length, 1, "a failing classification is throttled, not retried on every frame");
+    assert.deepEqual(
+      (await service.session(BOT_ID, { activity: true })).queued,
+      [],
+      "withheld while it can't be classified",
+    );
+    assert.equal(
+      asked.length,
+      1,
+      "a failing classification is throttled, not retried on every frame",
+    );
 
     failing = false;
-    await stream.until(() => stream.frames.some((frame) => frame.type === "queued"), "the retried classification");
-    const queued = stream.frames.filter((frame) => frame.type === "queued").map((frame) => frame.payload.queued);
-    assert.deepEqual(queued, [[{ submissionId: "21", mode: "queue", text: "Also a shopping list." }]]);
+    await stream.until(
+      () => stream.frames.some((frame) => frame.type === "queued"),
+      "the retried classification",
+    );
+    const queued = stream.frames
+      .filter((frame) => frame.type === "queued")
+      .map((frame) => frame.payload.queued);
+    assert.deepEqual(queued, [
+      [{ submissionId: "21", mode: "queue", text: "Also a shopping list." }],
+    ]);
     assert.equal(asked.length, 2);
-    assert.equal(stream.raw.some((data) => data.includes("Weekly reset")), false);
+    assert.equal(
+      stream.raw.some((data) => data.includes("Weekly reset")),
+      false,
+    );
   } finally {
     await stream.close();
     await service.close();
@@ -2328,7 +3159,11 @@ test("the classification pause runs on the host's clock: once it has passed, the
     await service.session(BOT_ID, { activity: true });
     const docs = {
       "pi.live": { run: { inputs: [1] } },
-      "pi.inbox": { items: [{ id: 21, mode: "followUp", content: [{ type: "text", text: "Also a shopping list." }] }] },
+      "pi.inbox": {
+        items: [
+          { id: 21, mode: "followUp", content: [{ type: "text", text: "Also a shopping list." }] },
+        ],
+      },
     };
     await driven.emitView([user(1, "Plan dinners")], docs);
     await driven.emitView([user(1, "Plan dinners")], docs);
@@ -2355,7 +3190,11 @@ test("a host without bot-activity-v1 refuses whenBusy instead of guessing", asyn
     isError("invalid_request", 400),
   );
   // Turn intents alone are not the token: the Bot service's Chat activity gate is needed too.
-  const ungated = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => fake.runtime, turnIntents: createBotTurnIntents() });
+  const ungated = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => fake.runtime,
+    turnIntents: createBotTurnIntents(),
+  });
   assert.equal(ungated.supportsActivity, false);
   await assert.rejects(
     ungated.send(DEVICE_ID, BOT_ID, "send-request-queue-0002", { text: "Hi", whenBusy: "queue" }),
@@ -2390,12 +3229,20 @@ test("staged Bot uploads reach the runtime once: images as images, text files af
     const text = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.textUpload.request);
     assert.deepEqual(
       [image.kind, image.size, text.kind, text.size],
-      [fixture.imageUpload.response.kind, fixture.imageUpload.response.size, fixture.textUpload.response.kind, fixture.textUpload.response.size],
+      [
+        fixture.imageUpload.response.kind,
+        fixture.imageUpload.response.size,
+        fixture.textUpload.response.kind,
+        fixture.textUpload.response.size,
+      ],
     );
 
     // Another device can't spend this phone's references, and the refusal leaves them usable.
     await assert.rejects(
-      service.send("device_2", BOT_ID, "send-request-attach-0000", { text: "Mine now", attachmentIds: [image.id] }),
+      service.send("device_2", BOT_ID, "send-request-attach-0000", {
+        text: "Mine now",
+        attachmentIds: [image.id],
+      }),
       isError("handle_wrong_device", 403),
     );
 
@@ -2410,18 +3257,27 @@ test("staged Bot uploads reach the runtime once: images as images, text files af
     ]);
 
     await assert.rejects(
-      service.send(DEVICE_ID, BOT_ID, "send-request-attach-0002", { text: "Again", attachmentIds: [image.id] }),
+      service.send(DEVICE_ID, BOT_ID, "send-request-attach-0002", {
+        text: "Again",
+        attachmentIds: [image.id],
+      }),
       isError("handle_invalid", 409),
     );
 
     // Words are optional with attachments; a removed upload can't be sent.
     const only = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.imageUpload.request);
-    await service.send(DEVICE_ID, BOT_ID, "send-request-attach-0003", { text: "", attachmentIds: [only.id] });
+    await service.send(DEVICE_ID, BOT_ID, "send-request-attach-0003", {
+      text: "",
+      attachmentIds: [only.id],
+    });
     assert.equal(sends[1]!.text, "");
     const removed = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.textUpload.request);
     await service.removeAttachment(DEVICE_ID, BOT_ID, removed.id);
     await assert.rejects(
-      service.send(DEVICE_ID, BOT_ID, "send-request-attach-0004", { text: "Hi", attachmentIds: [removed.id] }),
+      service.send(DEVICE_ID, BOT_ID, "send-request-attach-0004", {
+        text: "Hi",
+        attachmentIds: [removed.id],
+      }),
       isError("handle_invalid", 409),
     );
     for (const [index, sample] of (fixture.rejectedSends as unknown[]).entries()) {
@@ -2466,7 +3322,9 @@ test("a send refused before the turn starts keeps its uploads for the same reque
     duringRefusal = async () => {
       for (let index = 0; index < 20; index += 1) {
         try {
-          later.push((await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.textUpload.request)).id);
+          later.push(
+            (await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.textUpload.request)).id,
+          );
         } catch (error) {
           assert.ok(isError("handle_capacity", 429)(error as { code?: string; status?: number }));
         }
@@ -2488,10 +3346,18 @@ test("a send refused before the turn starts keeps its uploads for the same reque
     // A failure that may have reached the runtime leaves them spent.
     const other = await service.uploadAttachment(DEVICE_ID, BOT_ID, fixture.imageUpload.request);
     refusal = new Error("connection reset");
-    await assert.rejects(service.send(DEVICE_ID, BOT_ID, "send-request-refused-0002", { text: "", attachmentIds: [other.id] }));
+    await assert.rejects(
+      service.send(DEVICE_ID, BOT_ID, "send-request-refused-0002", {
+        text: "",
+        attachmentIds: [other.id],
+      }),
+    );
     refusal = undefined;
     await assert.rejects(
-      service.send(DEVICE_ID, BOT_ID, "send-request-refused-0003", { text: "", attachmentIds: [other.id] }),
+      service.send(DEVICE_ID, BOT_ID, "send-request-refused-0003", {
+        text: "",
+        attachmentIds: [other.id],
+      }),
       isError("handle_invalid", 409),
     );
   } finally {
@@ -2505,11 +3371,19 @@ test("a host without Bot attachments refuses attachmentIds and the upload routes
   try {
     assert.equal(service.supportsAttachments, false);
     await assert.rejects(
-      service.send(DEVICE_ID, BOT_ID, "send-request-attach-0009", { text: "Hi", attachmentIds: [`att_${"A".repeat(43)}`] }),
+      service.send(DEVICE_ID, BOT_ID, "send-request-attach-0009", {
+        text: "Hi",
+        attachmentIds: [`att_${"A".repeat(43)}`],
+      }),
       isError("invalid_request", 400),
     );
     await assert.rejects(
-      service.uploadAttachment(DEVICE_ID, BOT_ID, { name: "a.txt", mimeType: "text/plain", kind: "text", text: "a" }),
+      service.uploadAttachment(DEVICE_ID, BOT_ID, {
+        name: "a.txt",
+        mimeType: "text/plain",
+        kind: "text",
+        text: "a",
+      }),
       isError("not_found", 404),
     );
   } finally {
@@ -2527,45 +3401,148 @@ function submissionIdKeys(value: unknown): number {
 }
 
 /** The user bubbles a device holds, as `[text, submissionId]`. */
-function userBubbles(entries: readonly { type: string; role?: string; text?: string; submissionId?: string }[]) {
-  return entries.filter((entry) => entry.type === "message" && entry.role === "user").map((entry) => [entry.text, entry.submissionId ?? null]);
+function userBubbles(
+  entries: readonly { type: string; role?: string; text?: string; submissionId?: string }[],
+) {
+  return entries
+    .filter((entry) => entry.type === "message" && entry.role === "user")
+    .map((entry) => [entry.text, entry.submissionId ?? null]);
 }
 
 test("peer navigation is negotiated in fetch, incremental frames and reconnect snapshots with gapless legacy streams", async () => {
-  const peer: RawEntry = { id: 2, kind: BOT_PEER_MESSAGE_ENTRY_KIND, data: { exchangeId: "exchange_one", direction: "sent", peerBotId: "bot_researcher", peerName: "Researcher", messageKind: "request", at: 1000 } };
+  const peer: RawEntry = {
+    id: 2,
+    kind: BOT_PEER_MESSAGE_ENTRY_KIND,
+    data: {
+      exchangeId: "exchange_one",
+      direction: "sent",
+      peerBotId: "bot_researcher",
+      peerName: "Researcher",
+      messageKind: "request",
+      at: 1000,
+    },
+  };
   const driven = drivenConversation([user(1, "Coordinate the review")]);
-  const runtime = fakeRuntime({ kind: "idle" }).runtime; runtime.conversation = async () => driven.conversation as never;
-  const service = sessionService(runtime), holder = await openAudienceStream(service, { peers: true }), legacy = await openAudienceStream(service, {}), combined = await openAudienceStream(service, { peers: true, accessRequests: true, plans: true, allowed: true }), approvalsOnly = await openAudienceStream(service, { accessRequests: true, plans: true, allowed: true });
+  const runtime = fakeRuntime({ kind: "idle" }).runtime;
+  runtime.conversation = async () => driven.conversation as never;
+  const service = sessionService(runtime),
+    holder = await openAudienceStream(service, { peers: true }),
+    legacy = await openAudienceStream(service, {}),
+    combined = await openAudienceStream(service, {
+      peers: true,
+      accessRequests: true,
+      plans: true,
+      allowed: true,
+    }),
+    approvalsOnly = await openAudienceStream(service, {
+      accessRequests: true,
+      plans: true,
+      allowed: true,
+    });
   try {
-    await holder.until(() => holder.frames.length > 0, "peer holder snapshot"); await legacy.until(() => legacy.frames.length > 0, "legacy snapshot");
-    await driven.emit([user(1, "Coordinate the review"), peer, assistant(3, "The review is underway.")]);
-    await holder.until(() => holder.frames.some((frame) => frame.type === "entry" && frame.payload.entry.type === "peer"), "peer navigation frame");
-    await legacy.until(() => legacy.frames.some((frame) => frame.type === "entry" && frame.payload.entry.text === "The review is underway."), "legacy ordinary reply");
-    await combined.until(() => combined.frames.some(frame => frame.type === "entry" && frame.payload.entry.type === "peer"), "combined audience peer frame");
-    await approvalsOnly.until(() => approvalsOnly.frames.some(frame => frame.type === "entry" && frame.payload.entry.text === "The review is underway."), "approval-only audience reply");
-    assert.equal(approvalsOnly.raw.some(data => data.includes("exchange_one") || data.includes("peerBotId")), false, "plan/access/allow-list grants do not grant peer visibility or reuse its cached frame");
-    assert.ok(gapless(combined.frames)); assert.ok(gapless(approvalsOnly.frames));
-    const entry = holder.frames.find((frame) => frame.type === "entry" && frame.payload.entry.type === "peer")!.payload.entry;
-    assert.equal(entry.exchangeId, "exchange_one"); assert.equal(entry.createdAt, new Date(1000).toISOString()); assert.equal("at" in entry, false);
+    await holder.until(() => holder.frames.length > 0, "peer holder snapshot");
+    await legacy.until(() => legacy.frames.length > 0, "legacy snapshot");
+    await driven.emit([
+      user(1, "Coordinate the review"),
+      peer,
+      assistant(3, "The review is underway."),
+    ]);
+    await holder.until(
+      () =>
+        holder.frames.some(
+          (frame) => frame.type === "entry" && frame.payload.entry.type === "peer",
+        ),
+      "peer navigation frame",
+    );
+    await legacy.until(
+      () =>
+        legacy.frames.some(
+          (frame) =>
+            frame.type === "entry" && frame.payload.entry.text === "The review is underway.",
+        ),
+      "legacy ordinary reply",
+    );
+    await combined.until(
+      () =>
+        combined.frames.some(
+          (frame) => frame.type === "entry" && frame.payload.entry.type === "peer",
+        ),
+      "combined audience peer frame",
+    );
+    await approvalsOnly.until(
+      () =>
+        approvalsOnly.frames.some(
+          (frame) =>
+            frame.type === "entry" && frame.payload.entry.text === "The review is underway.",
+        ),
+      "approval-only audience reply",
+    );
+    assert.equal(
+      approvalsOnly.raw.some((data) => data.includes("exchange_one") || data.includes("peerBotId")),
+      false,
+      "plan/access/allow-list grants do not grant peer visibility or reuse its cached frame",
+    );
+    assert.ok(gapless(combined.frames));
+    assert.ok(gapless(approvalsOnly.frames));
+    const entry = holder.frames.find(
+      (frame) => frame.type === "entry" && frame.payload.entry.type === "peer",
+    )!.payload.entry;
+    assert.equal(entry.exchangeId, "exchange_one");
+    assert.equal(entry.createdAt, new Date(1000).toISOString());
+    assert.equal("at" in entry, false);
     assert.deepEqual(parseAidenRemoteBotSessionEntry(entry), entry);
-    assert.equal((await service.session(BOT_ID)).entries.some((entry) => entry.type === "peer"), false);
-    assert.equal((await service.session(BOT_ID, { peers: true })).entries.some((entry) => entry.type === "peer"), true);
+    assert.equal(
+      (await service.session(BOT_ID)).entries.some((entry) => entry.type === "peer"),
+      false,
+    );
+    assert.equal(
+      (await service.session(BOT_ID, { peers: true })).entries.some(
+        (entry) => entry.type === "peer",
+      ),
+      true,
+    );
     const reconnect = await openAudienceStream(service, { peers: true });
-    try { await reconnect.until(() => reconnect.frames.length > 0, "peer reconnect snapshot"); assert.equal(reconnect.frames[0].payload.session.entries.some((entry: { type: string }) => entry.type === "peer"), true); }
-    finally { await reconnect.close(); }
-    assert.equal(legacy.raw.some((data) => data.includes("peerBotId") || data.includes("exchange_one")), false);
-    assert.ok(gapless(holder.frames)); assert.ok(gapless(legacy.frames));
-  } finally { await holder.close(); await legacy.close(); await combined.close(); await approvalsOnly.close(); await service.close(); }
+    try {
+      await reconnect.until(() => reconnect.frames.length > 0, "peer reconnect snapshot");
+      assert.equal(
+        reconnect.frames[0].payload.session.entries.some(
+          (entry: { type: string }) => entry.type === "peer",
+        ),
+        true,
+      );
+    } finally {
+      await reconnect.close();
+    }
+    assert.equal(
+      legacy.raw.some((data) => data.includes("peerBotId") || data.includes("exchange_one")),
+      false,
+    );
+    assert.ok(gapless(holder.frames));
+    assert.ok(gapless(legacy.frames));
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await combined.close();
+    await approvalsOnly.close();
+    await service.close();
+  }
 });
 test("a person's send carries its submissionId on its bubble in frames and on a reconnect snapshot, and a routine's input never does", async () => {
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-submission-"));
   durableRoots.push(profileDir);
   const releases: Array<() => void> = [];
-  const command = countingTool("run_command", () => new Promise<string>((resolve) => releases.push(() => resolve("done"))));
+  const command = countingTool(
+    "run_command",
+    () => new Promise<string>((resolve) => releases.push(() => resolve("done"))),
+  );
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall("run_command", { text: "tidy" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "tidy" })], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("Tidied."),
-    fauxAssistantMessage([fauxToolCall("run_command", { text: "brief" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "brief" })], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("Inbox is quiet."),
   ]);
   const runtime = await createBotSessionService({
@@ -2575,35 +3552,65 @@ test("a person's send carries its submissionId on its bubble in frames and on a 
     resolveModel: async () => FAUX_MODEL_REF,
     knownBotIds: async () => new Set([BOT_ID]),
   });
-  const service = new AidenRemoteBotSessionService({ bots: activityBots(), runtime: async () => runtime, turnIntents: createBotTurnIntents() });
+  const service = new AidenRemoteBotSessionService({
+    bots: activityBots(),
+    runtime: async () => runtime,
+    turnIntents: createBotTurnIntents(),
+  });
   const holder = await openAudienceStream(service, { activity: true });
   const legacy = await openAudienceStream(service, {});
   const idle = async () => {
-    await waitFor(async () => (await runtime.state(BOT_ID)).kind === "idle", { what: "the turn to end" });
+    await waitFor(async () => (await runtime.state(BOT_ID)).kind === "idle", {
+      what: "the turn to end",
+    });
   };
   try {
     await holder.until(() => holder.frames.length >= 1, "the first snapshot");
-    const receipt = await service.send(DEVICE_ID, BOT_ID, "send-request-submission-0001", { text: "Tidy my notes" });
+    const receipt = await service.send(DEVICE_ID, BOT_ID, "send-request-submission-0001", {
+      text: "Tidy my notes",
+    });
     await waitFor(() => command.executions.length === 1, { what: "the person's turn to work" });
     // While the turn works, the session lists the person's placed input under its entry.
-    assert.deepEqual([...(await runtime.placedSubmissions(BOT_ID)).values()], [receipt.submissionId]);
+    assert.deepEqual(
+      [...(await runtime.placedSubmissions(BOT_ID)).values()],
+      [receipt.submissionId],
+    );
     releases.shift()!();
     await idle();
 
     // A routine's input, worked on while the projector watches.
-    await runtime.send(BOT_ID, { text: "Check my inbox.", requestId: "routine:task_1:1", label: "Morning brief" });
+    await runtime.send(BOT_ID, {
+      text: "Check my inbox.",
+      requestId: "routine:task_1:1",
+      label: "Morning brief",
+    });
     await waitFor(() => command.executions.length === 2, { what: "the routine's turn to work" });
-    assert.deepEqual([...(await runtime.placedSubmissions(BOT_ID)).values()], [], "a routine's input is not the person's message");
+    assert.deepEqual(
+      [...(await runtime.placedSubmissions(BOT_ID)).values()],
+      [],
+      "a routine's input is not the person's message",
+    );
     releases.shift()!();
     await idle();
     await holder.until(
-      () => holder.frames.some((frame) => frame.type === "entry" && frame.payload.entry.text === "Inbox is quiet."),
+      () =>
+        holder.frames.some(
+          (frame) => frame.type === "entry" && frame.payload.entry.text === "Inbox is quiet.",
+        ),
       "the routine's reply",
     );
 
-    const sentFrame = holder.frames.find((frame) => frame.type === "entry" && frame.payload.entry.text === "Tidy my notes")!;
-    assert.equal(sentFrame.payload.entry.submissionId, receipt.submissionId, "the bubble's frame names the send it settles");
-    const routineFrame = holder.frames.find((frame) => frame.type === "entry" && frame.payload.entry.text === "Check my inbox.")!;
+    const sentFrame = holder.frames.find(
+      (frame) => frame.type === "entry" && frame.payload.entry.text === "Tidy my notes",
+    )!;
+    assert.equal(
+      sentFrame.payload.entry.submissionId,
+      receipt.submissionId,
+      "the bubble's frame names the send it settles",
+    );
+    const routineFrame = holder.frames.find(
+      (frame) => frame.type === "entry" && frame.payload.entry.text === "Check my inbox.",
+    )!;
     assert.equal("submissionId" in routineFrame.payload.entry, false);
 
     // Both turns are done, so the session no longer lists them; the projector remembers.
@@ -2611,14 +3618,25 @@ test("a person's send carries its submissionId on its bubble in frames and on a 
     const reconnect = await openAudienceStream(service, { activity: true });
     try {
       await reconnect.until(() => reconnect.frames.length >= 1, "the reconnect snapshot");
-      const expected = [["Tidy my notes", receipt.submissionId], ["Check my inbox.", null]];
+      const expected = [
+        ["Tidy my notes", receipt.submissionId],
+        ["Check my inbox.", null],
+      ];
       assert.deepEqual(userBubbles(reconnect.frames[0]!.payload.session.entries), expected);
-      assert.deepEqual(userBubbles((await service.session(BOT_ID, { activity: true })).entries), expected, "a fetch agrees");
+      assert.deepEqual(
+        userBubbles((await service.session(BOT_ID, { activity: true })).entries),
+        expected,
+        "a fetch agrees",
+      );
     } finally {
       await reconnect.close();
     }
 
-    assert.equal(legacy.raw.some((data) => data.includes("submissionId")), false, "a device without bot:activity never sees the key");
+    assert.equal(
+      legacy.raw.some((data) => data.includes("submissionId")),
+      false,
+      "a device without bot:activity never sees the key",
+    );
     assert.equal(submissionIdKeys(await service.session(BOT_ID)), 0);
     assert.ok(gapless(holder.frames) && gapless(legacy.frames));
   } finally {
@@ -2639,16 +3657,34 @@ test("only the person's own message is tagged: a routine's input and a question 
       {
         id: 4,
         kind: "pi.tool-result",
-        model: [{ role: "toolResult", toolName: "ask_user_question", isError: false, content: [{ type: "text", text: "Answer: Blue" }], details: { answerText: "Blue" } }],
+        model: [
+          {
+            role: "toolResult",
+            toolName: "ask_user_question",
+            isError: false,
+            content: [{ type: "text", text: "Answer: Blue" }],
+            details: { answerText: "Blue" },
+          },
+        ],
       },
       assistant(5, "Done."),
       user(6, "Thanks"),
     ] as never,
     // A runtime that wrongly listed every entry: only the person's own messages take an id.
-    new Map([["1", "17"], ["3", "18"], ["4", "19"], ["5", "20"], ["6", "bad id"]]),
+    new Map([
+      ["1", "17"],
+      ["3", "18"],
+      ["4", "19"],
+      ["5", "20"],
+      ["6", "bad id"],
+    ]),
   );
   assert.deepEqual(
-    entries.map((entry) => (entry.type === "message" ? [entry.role, entry.text, entry.submissionId ?? null] : [entry.type])),
+    entries.map((entry) =>
+      entry.type === "message"
+        ? [entry.role, entry.text, entry.submissionId ?? null]
+        : [entry.type],
+    ),
     [
       ["user", "Plan dinners", "17"],
       ["user", "Check my inbox.", null],
@@ -2659,40 +3695,72 @@ test("only the person's own message is tagged: a routine's input and a question 
   );
 });
 
-for (const kind of ["pi.user", BOT_PERSON_INPUT_KIND]) test(`a device without bot:activity gets each tagged ${kind} bubble without its id, at the same seq`, async () => {
-  const driven = drivenConversation([]);
-  const fake = fakeRuntime({ kind: "running", submissionId: "17" });
-  let placed = new Map<string, string>();
-  const service = runningOn(driven, { ...fake, runtime: { ...fake.runtime, placedSubmissions: async () => placed } });
-  const holder = await openAudienceStream(service, { activity: true });
-  const legacy = await openAudienceStream(service, {});
-  try {
-    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
-    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
-    placed = new Map([["1", "17"]]);
-    await driven.emit([{ ...user(1, "Plan dinners"), kind }]);
-    // The turn ended: the session forgets the submission, the projector does not.
-    placed = new Map();
-    fake.setState({ kind: "idle" });
-    await driven.emit([{ ...user(1, "Plan dinners"), kind }, assistant(2, "Monday: soup.")]);
-    await holder.until(() => holder.frames.some((frame) => frame.type === "entry" && frame.payload.entry.role === "assistant"), "the reply");
-    await legacy.until(() => legacy.frames.length === holder.frames.length, "the same frames");
+for (const kind of ["pi.user", BOT_PERSON_INPUT_KIND])
+  test(`a device without bot:activity gets each tagged ${kind} bubble without its id, at the same seq`, async () => {
+    const driven = drivenConversation([]);
+    const fake = fakeRuntime({ kind: "running", submissionId: "17" });
+    let placed = new Map<string, string>();
+    const service = runningOn(driven, {
+      ...fake,
+      runtime: { ...fake.runtime, placedSubmissions: async () => placed },
+    });
+    const holder = await openAudienceStream(service, { activity: true });
+    const legacy = await openAudienceStream(service, {});
+    try {
+      await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+      await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+      placed = new Map([["1", "17"]]);
+      await driven.emit([{ ...user(1, "Plan dinners"), kind }]);
+      // The turn ended: the session forgets the submission, the projector does not.
+      placed = new Map();
+      fake.setState({ kind: "idle" });
+      await driven.emit([{ ...user(1, "Plan dinners"), kind }, assistant(2, "Monday: soup.")]);
+      await holder.until(
+        () =>
+          holder.frames.some(
+            (frame) => frame.type === "entry" && frame.payload.entry.role === "assistant",
+          ),
+        "the reply",
+      );
+      await legacy.until(() => legacy.frames.length === holder.frames.length, "the same frames");
 
-    const bubbles = (frames: Frame[]) => frames.filter((frame) => frame.type === "entry" && frame.payload.entry.role === "user");
-    assert.deepEqual(bubbles(holder.frames).map((frame) => frame.payload.entry.submissionId), ["17"], "one entry frame, never updated");
-    const { submissionId: _submissionId, ...untagged } = bubbles(holder.frames)[0]!.payload.entry;
-    assert.deepEqual(bubbles(legacy.frames).map((frame) => frame.payload.entry), [untagged], "the same bubble, without its id");
-    assert.deepEqual(legacy.frames.map((frame) => frame.seq), holder.frames.map((frame) => frame.seq), "every device stays on one seq");
-    assert.equal(legacy.raw.some((data) => data.includes("submissionId")), false);
+      const bubbles = (frames: Frame[]) =>
+        frames.filter((frame) => frame.type === "entry" && frame.payload.entry.role === "user");
+      assert.deepEqual(
+        bubbles(holder.frames).map((frame) => frame.payload.entry.submissionId),
+        ["17"],
+        "one entry frame, never updated",
+      );
+      const { submissionId: _submissionId, ...untagged } = bubbles(holder.frames)[0]!.payload.entry;
+      assert.deepEqual(
+        bubbles(legacy.frames).map((frame) => frame.payload.entry),
+        [untagged],
+        "the same bubble, without its id",
+      );
+      assert.deepEqual(
+        legacy.frames.map((frame) => frame.seq),
+        holder.frames.map((frame) => frame.seq),
+        "every device stays on one seq",
+      );
+      assert.equal(
+        legacy.raw.some((data) => data.includes("submissionId")),
+        false,
+      );
 
-    assert.deepEqual(userBubbles((await service.session(BOT_ID, { activity: true })).entries), [["Plan dinners", "17"]]);
-    assert.equal(submissionIdKeys(await service.session(BOT_ID)), 0, "a fetch without bot:activity has no submissionId");
-  } finally {
-    await holder.close();
-    await legacy.close();
-    await service.close();
-  }
-});
+      assert.deepEqual(userBubbles((await service.session(BOT_ID, { activity: true })).entries), [
+        ["Plan dinners", "17"],
+      ]);
+      assert.equal(
+        submissionIdKeys(await service.session(BOT_ID)),
+        0,
+        "a fetch without bot:activity has no submissionId",
+      );
+    } finally {
+      await holder.close();
+      await legacy.close();
+      await service.close();
+    }
+  });
 
 test("tags stay on every bubble in view, past the window, and no old bubble is ever sent again", async () => {
   const driven = drivenConversation([]);
@@ -2734,7 +3802,10 @@ test("tags stay on every bubble in view, past the window, and no old bubble is e
       );
       assert.ok(gapless(stream.frames));
     }
-    assert.deepEqual(legacy.frames.map((frame) => frame.seq), holder.frames.map((frame) => frame.seq));
+    assert.deepEqual(
+      legacy.frames.map((frame) => frame.seq),
+      holder.frames.map((frame) => frame.seq),
+    );
     assert.deepEqual(
       entryFrames(holder.frames).map((frame) => frame.payload.entry.submissionId),
       Array.from({ length: total }, (_, index) => `sub_${index + 1}`),
@@ -2744,8 +3815,14 @@ test("tags stay on every bubble in view, past the window, and no old bubble is e
     // Long after their turns ended, every bubble in view still names its send.
     const bubbles = userBubbles((await service.session(BOT_ID, { activity: true })).entries);
     assert.equal(bubbles.length, AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES);
-    assert.deepEqual(bubbles.map(([, id]) => id), bubbles.map(([text]) => `sub_${String(text).slice("Message ".length)}`));
-    assert.equal(legacy.raw.some((data) => data.includes("submissionId")), false);
+    assert.deepEqual(
+      bubbles.map(([, id]) => id),
+      bubbles.map(([text]) => `sub_${String(text).slice("Message ".length)}`),
+    );
+    assert.equal(
+      legacy.raw.some((data) => data.includes("submissionId")),
+      false,
+    );
     // The memo forgot the bubbles that left view: it holds no more tags than the window shows.
     assert.equal(await service.submissionTagsHeld(BOT_ID), AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES);
   } finally {
@@ -2787,26 +3864,46 @@ test("a failed placement lookup is reported, and that bubble falls back to its t
       ["And lunches", "sub_3"],
     ]);
     failing = true;
-    await driven.emit([user(1, "Plan dinners"), user(2, "And snacks"), user(3, "And lunches"), user(4, "And breakfasts")]);
-    assert.deepEqual(reports.map((error) => (error as Error).message), [
-      "The session could not be inspected.",
-      "The session could not be inspected.",
-    ], "a new streak after a success is reported again");
+    await driven.emit([
+      user(1, "Plan dinners"),
+      user(2, "And snacks"),
+      user(3, "And lunches"),
+      user(4, "And breakfasts"),
+    ]);
+    assert.deepEqual(
+      reports.map((error) => (error as Error).message),
+      ["The session could not be inspected.", "The session could not be inspected."],
+      "a new streak after a success is reported again",
+    );
   } finally {
     await service.close();
   }
 });
 
 /** Publish order: frames one publish emits never go back in this order. */
-const PUBLISH_ORDER = ["entry", "partial", "state", "question", "approval", "handoff", "activity", "queued"];
+const PUBLISH_ORDER = [
+  "entry",
+  "partial",
+  "state",
+  "question",
+  "approval",
+  "handoff",
+  "activity",
+  "queued",
+];
 
 test("a steer and a follow-up placed mid-turn take their queued ids, two at one boundary each their own, in the publish that drops them from Queued", async () => {
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-placed-"));
   durableRoots.push(profileDir);
   const releases: Array<() => void> = [];
-  const command = countingTool("run_command", () => new Promise<string>((resolve) => releases.push(() => resolve("done"))));
+  const command = countingTool(
+    "run_command",
+    () => new Promise<string>((resolve) => releases.push(() => resolve("done"))),
+  );
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall("run_command", { text: "plan" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "plan" })], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("Vegetarian, no mushrooms."),
     fauxAssistantMessage("Here is the shopping list."),
   ]);
@@ -2817,54 +3914,103 @@ test("a steer and a follow-up placed mid-turn take their queued ids, two at one 
     resolveModel: async () => FAUX_MODEL_REF,
     knownBotIds: async () => new Set([BOT_ID]),
   });
-  const service = new AidenRemoteBotSessionService({ bots: activityBots(), runtime: async () => runtime, turnIntents: createBotTurnIntents() });
+  const service = new AidenRemoteBotSessionService({
+    bots: activityBots(),
+    runtime: async () => runtime,
+    turnIntents: createBotTurnIntents(),
+  });
   const stream = await openAudienceStream(service, { activity: true });
   try {
     await stream.until(() => stream.frames.length >= 1, "the first snapshot");
-    const first = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0001", { text: "Plan dinners" });
+    const first = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0001", {
+      text: "Plan dinners",
+    });
     await waitFor(() => command.executions.length === 1, { what: "the turn to work" });
-    const followUp = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0002", { text: "Also a shopping list.", whenBusy: "queue" });
-    const steer = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0003", { text: "Keep it vegetarian.", whenBusy: "steer" });
-    const second = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0004", { text: "No mushrooms.", whenBusy: "steer" });
+    const followUp = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0002", {
+      text: "Also a shopping list.",
+      whenBusy: "queue",
+    });
+    const steer = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0003", {
+      text: "Keep it vegetarian.",
+      whenBusy: "steer",
+    });
+    const second = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0004", {
+      text: "No mushrooms.",
+      whenBusy: "steer",
+    });
     const ids = [followUp, steer, second].map((receipt) => receipt.submissionId);
     await stream.until(
-      () => stream.frames.some((frame) => frame.type === "queued" && frame.payload.queued.length === 3),
+      () =>
+        stream.frames.some((frame) => frame.type === "queued" && frame.payload.queued.length === 3),
       "all three waiting",
     );
     releases.shift()!();
     await stream.until(
-      () => stream.frames.some((frame) => frame.type === "entry" && frame.payload.entry.text === "Here is the shopping list."),
+      () =>
+        stream.frames.some(
+          (frame) =>
+            frame.type === "entry" && frame.payload.entry.text === "Here is the shopping list.",
+        ),
       "the follow-up's reply",
     );
 
     const bubbleFrame = (text: string) =>
-      stream.frames.findIndex((frame) => frame.type === "entry" && frame.payload.entry.role === "user" && frame.payload.entry.text === text);
-    const placedIds = ["Plan dinners", "Also a shopping list.", "Keep it vegetarian.", "No mushrooms."].map(
-      (text) => stream.frames[bubbleFrame(text)]!.payload.entry.submissionId,
-    );
+      stream.frames.findIndex(
+        (frame) =>
+          frame.type === "entry" &&
+          frame.payload.entry.role === "user" &&
+          frame.payload.entry.text === text,
+      );
+    const placedIds = [
+      "Plan dinners",
+      "Also a shopping list.",
+      "Keep it vegetarian.",
+      "No mushrooms.",
+    ].map((text) => stream.frames[bubbleFrame(text)]!.payload.entry.submissionId);
     assert.deepEqual(placedIds, [first.submissionId, ...ids], "each bubble names its own send");
     assert.equal(new Set(placedIds).size, 4);
 
-    for (const [text, id] of [["Also a shopping list.", ids[0]], ["Keep it vegetarian.", ids[1]], ["No mushrooms.", ids[2]]] as const) {
+    for (const [text, id] of [
+      ["Also a shopping list.", ids[0]],
+      ["Keep it vegetarian.", ids[1]],
+      ["No mushrooms.", ids[2]],
+    ] as const) {
       const at = bubbleFrame(text);
-      const listing = stream.frames.map((frame) =>
-        frame.type === "queued" && frame.payload.queued.some((item: { submissionId: string }) => item.submissionId === id));
+      const listing = stream.frames.map(
+        (frame) =>
+          frame.type === "queued" &&
+          frame.payload.queued.some((item: { submissionId: string }) => item.submissionId === id),
+      );
       const lastListed = listing.lastIndexOf(true);
-      const dropped = stream.frames.findIndex((frame, index) => index > lastListed && frame.type === "queued");
+      const dropped = stream.frames.findIndex(
+        (frame, index) => index > lastListed && frame.type === "queued",
+      );
       assert.ok(lastListed < at && at < dropped, `${text}: listed, then placed, then dropped`);
       // From the bubble to the Queued change, the frames follow one publish's order.
-      const order = stream.frames.slice(at, dropped + 1).map((frame) => PUBLISH_ORDER.indexOf(frame.type));
-      assert.deepEqual(order, [...order].sort((left, right) => left - right), `${text}: dropped in the publish that placed it`);
+      const order = stream.frames
+        .slice(at, dropped + 1)
+        .map((frame) => PUBLISH_ORDER.indexOf(frame.type));
+      assert.deepEqual(
+        order,
+        [...order].sort((left, right) => left - right),
+        `${text}: dropped in the publish that placed it`,
+      );
     }
     // Pi places waiting inputs at a boundary: at least two of them landed in one publish
     // (consecutive bubble frames), and each still named its own send.
     const together = stream.frames.findIndex((frame, index) => {
       const next = stream.frames[index + 1];
-      return frame.type === "entry" && frame.payload.entry.role === "user"
-        && next?.type === "entry" && next.payload.entry.role === "user";
+      return (
+        frame.type === "entry" &&
+        frame.payload.entry.role === "user" &&
+        next?.type === "entry" &&
+        next.payload.entry.role === "user"
+      );
     });
     assert.ok(together > 0, "two inputs placed at one boundary");
-    const pair = [stream.frames[together]!, stream.frames[together + 1]!].map((frame) => frame.payload.entry.submissionId);
+    const pair = [stream.frames[together]!, stream.frames[together + 1]!].map(
+      (frame) => frame.payload.entry.submissionId,
+    );
     assert.ok(pair.every((id) => ids.includes(id)) && pair[0] !== pair[1], JSON.stringify(pair));
     assert.ok(gapless(stream.frames));
   } finally {
@@ -2912,17 +4058,25 @@ function scoutConversation(): RawEntry[] {
     {
       id: 40,
       kind: "pi.user",
-      model: [{ role: "user", content: [{ type: "text", text: "Pay the electricity bill." }], timestamp: Date.parse("2026-10-20T09:00:00.000Z") }],
+      model: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Pay the electricity bill." }],
+          timestamp: Date.parse("2026-10-20T09:00:00.000Z"),
+        },
+      ],
     },
     {
       id: 41,
       kind: "pi.assistant",
-      model: [{
-        role: "assistant",
-        content: [{ type: "text", text: "I've filled in the payment form." }],
-        stopReason: "stop",
-        timestamp: Date.parse("2026-10-20T09:00:30.000Z"),
-      }],
+      model: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "I've filled in the payment form." }],
+          stopReason: "stop",
+          timestamp: Date.parse("2026-10-20T09:00:30.000Z"),
+        },
+      ],
     },
   ];
 }
@@ -2936,30 +4090,37 @@ function handoffResult(
   return {
     id,
     kind: "pi.tool-result",
-    model: [{
-      role: "toolResult",
-      toolCallId: options.toolCallId ?? "call_fixture_36",
-      toolName: details.kind === "sign_in" ? "sign_in" : "hand_off",
-      isError: options.isError ?? false,
-      content: [{ type: "text", text: "The person answered the card." }],
-      details,
-      timestamp: Date.parse("2026-10-20T09:02:00.000Z"),
-    }],
+    model: [
+      {
+        role: "toolResult",
+        toolCallId: options.toolCallId ?? "call_fixture_36",
+        toolName: details.kind === "sign_in" ? "sign_in" : "hand_off",
+        isError: options.isError ?? false,
+        content: [{ type: "text", text: "The person answered the card." }],
+        details,
+        timestamp: Date.parse("2026-10-20T09:02:00.000Z"),
+      },
+    ],
   };
 }
 
 /** A host wired for hand-offs and pause on phones, with a Bot named as the fixture's. */
 function handoffSession(
   runtime: AidenRemoteBotSessionRuntime,
-  options: { wired?: boolean; opened?: BotHandoffOpened; conversation?: ReturnType<typeof drivenConversation> } = {},
+  options: {
+    wired?: boolean;
+    opened?: BotHandoffOpened;
+    conversation?: ReturnType<typeof drivenConversation>;
+  } = {},
 ) {
   const handoffs = createBotHandoffs();
   const openedOnMac: Array<[string, string]> = [];
   const service = new AidenRemoteBotSessionService({
     bots: botService({ name: "Scout" }),
-    runtime: async () => (options.conversation
-      ? { ...runtime, conversation: async () => options.conversation!.conversation as never }
-      : runtime),
+    runtime: async () =>
+      options.conversation
+        ? { ...runtime, conversation: async () => options.conversation!.conversation as never }
+        : runtime,
     ...(options.wired === false
       ? {}
       : {
@@ -2981,16 +4142,31 @@ function handoffSession(
 }
 
 /** A session without its Bot id and stream cursor, which differ between a test host and the fixture. */
-const withoutCursor = ({ botId: _botId, epoch: _epoch, seq: _seq, ...session }: Record<string, unknown>) => session;
+const withoutCursor = ({
+  botId: _botId,
+  epoch: _epoch,
+  seq: _seq,
+  ...session
+}: Record<string, unknown>) => session;
 const framesOf = (frames: Frame[]) =>
-  frames.map(({ type, payload }) => ({ type, payload: type === "snapshot" ? { session: withoutCursor(payload.session) } : payload }));
+  frames.map(({ type, payload }) => ({
+    type,
+    payload: type === "snapshot" ? { session: withoutCursor(payload.session) } : payload,
+  }));
 
 test("a waiting hand-off reads as the shared fixture shows it, to holders and to every other device", async () => {
   const fixture = (await contractFixture()).botHandoffs;
   const driven = drivenConversation(scoutConversation());
-  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, { conversation: driven });
+  const { service, handOff } = handoffSession(
+    fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+    { conversation: driven },
+  );
   try {
-    assert.equal((await service.session(BOT_ID, HOLDER)).handoff, null, "a holder always gets the key");
+    assert.equal(
+      (await service.session(BOT_ID, HOLDER)).handoff,
+      null,
+      "a holder always gets the key",
+    );
     handOff();
     const holder = await service.session(BOT_ID, HOLDER);
     assert.deepEqual(withoutCursor(holder as never), withoutCursor(fixture.session));
@@ -3009,7 +4185,9 @@ test("a waiting hand-off reads as the shared fixture shows it, to holders and to
 
 test("only a device that also asked for hand-off notes is told a password card takes no note; a rev-37 holder gets the card it can decode", async () => {
   const fixture = (await contractFixture()).botHandoffs;
-  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const { service, handOff } = handoffSession(
+    fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+  );
   const NOTES = { handoffs: true, handoffNotes: true };
   const holder = await openAudienceStream(service, HOLDER);
   const notes = await openAudienceStream(service, NOTES);
@@ -3031,7 +4209,8 @@ test("only a device that also asked for hand-off notes is told a password card t
     // Asking for notes without hand-offs is still a legacy device.
     assert.equal("handoff" in (await service.session(BOT_ID, { handoffNotes: true })), false);
 
-    const card = (stream: typeof holder) => stream.frames.find((frame) => frame.type === "handoff")?.payload.handoff;
+    const card = (stream: typeof holder) =>
+      stream.frames.find((frame) => frame.type === "handoff")?.payload.handoff;
     await holder.until(() => card(holder) !== undefined, "the holder's hand-off frame");
     await notes.until(() => card(notes) !== undefined, "the notes hand-off frame");
     assert.deepEqual(card(notes), fixture.noNoteHandoff);
@@ -3045,7 +4224,9 @@ test("only a device that also asked for hand-off notes is told a password card t
 
 test("only a device that asked for on-Mac steps is told one is on the Bot's own screen; others get the card without its page", async () => {
   const fixture = (await contractFixture()).botHandoffs;
-  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const { service, handOff } = handoffSession(
+    fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+  );
   const ON_MAC = { handoffs: true, handoffOnMac: true };
   const holder = await openAudienceStream(service, HOLDER);
   const onMac = await openAudienceStream(service, ON_MAC);
@@ -3066,7 +4247,8 @@ test("only a device that asked for on-Mac steps is told one is on the Bot's own 
     assert.deepEqual((await service.session(BOT_ID, HOLDER)).handoff, rev40Card);
     assert.equal("handoff" in (await service.session(BOT_ID, { handoffOnMac: true })), false);
 
-    const card = (stream: typeof holder) => stream.frames.find((frame) => frame.type === "handoff")?.payload.handoff;
+    const card = (stream: typeof holder) =>
+      stream.frames.find((frame) => frame.type === "handoff")?.payload.handoff;
     await holder.until(() => card(holder) !== undefined, "the holder's hand-off frame");
     await onMac.until(() => card(onMac) !== undefined, "the on-Mac hand-off frame");
     assert.deepEqual(card(onMac), fixture.onMacHandoff);
@@ -3091,7 +4273,14 @@ test("a hand-off, its answer and a pause reach holders and other devices frame f
     const asked = handOff();
     await holder.until(() => holder.frames.length >= 2, "the hand-off frame");
 
-    const receipt = await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0001", fixture.answer.request, HOLDER);
+    const receipt = await service.answerHandoff(
+      DEVICE_ID,
+      BOT_ID,
+      HANDOFF_WAIT_ID,
+      "handoff-request-0001",
+      fixture.answer.request,
+      HOLDER,
+    );
     assert.deepEqual(receipt, fixture.answer.response);
     assert.deepEqual(await asked, fixture.answer.request, "the Bot gets the person's answer");
     await holder.until(() => holder.frames.length >= 3, "the settled frame");
@@ -3099,11 +4288,20 @@ test("a hand-off, its answer and a pause reach holders and other devices frame f
     // The runtime records the answer; it reads as the person's message for everyone.
     await driven.emit([
       ...scoutConversation(),
-      handoffResult(42, { kind: "action", outcome: "done", action: "Enter the 2FA code your bank sent you", note: "The code was from 9:01.", toolCallId: "call_fixture_36" }),
+      handoffResult(42, {
+        kind: "action",
+        outcome: "done",
+        action: "Enter the 2FA code your bank sent you",
+        note: "The code was from 9:01.",
+        toolCallId: "call_fixture_36",
+      }),
     ]);
     await holder.until(() => holder.frames.length >= 4, "the answer entry");
 
-    assert.deepEqual(await service.pause(DEVICE_ID, BOT_ID, "pause-request-000001", {}, HOLDER), fixture.pause.response);
+    assert.deepEqual(
+      await service.pause(DEVICE_ID, BOT_ID, "pause-request-000001", {}, HOLDER),
+      fixture.pause.response,
+    );
     assert.deepEqual(fake.calls.pause, ["phone"], "a phone's pause is recorded as the phone's");
     await holder.until(() => holder.frames.length >= 5, "the paused state");
     await legacy.until(() => legacy.frames.length >= 5, "the legacy view of the pause");
@@ -3111,24 +4309,53 @@ test("a hand-off, its answer and a pause reach holders and other devices frame f
     assert.deepEqual(framesOf(holder.frames.slice(1)), framesOf(fixture.events));
     assert.deepEqual(framesOf(legacy.frames.slice(1)), framesOf(fixture.legacy.events));
     for (const stream of [holder, legacy]) assert.ok(gapless(stream.frames));
-    assert.deepEqual(legacy.frames.map((frame) => frame.seq), holder.frames.map((frame) => frame.seq));
+    assert.deepEqual(
+      legacy.frames.map((frame) => frame.seq),
+      holder.frames.map((frame) => frame.seq),
+    );
     for (const line of legacy.raw) assert.doesNotMatch(line, /"handoff"|"paused"/u);
 
     // A reconnect after the pause: the snapshot both views expect.
-    assert.deepEqual(withoutCursor(await service.session(BOT_ID, HOLDER) as never), withoutCursor(fixture.pausedSession));
-    assert.deepEqual(withoutCursor(await service.session(BOT_ID) as never), withoutCursor(fixture.legacy.pausedSession));
+    assert.deepEqual(
+      withoutCursor((await service.session(BOT_ID, HOLDER)) as never),
+      withoutCursor(fixture.pausedSession),
+    );
+    assert.deepEqual(
+      withoutCursor((await service.session(BOT_ID)) as never),
+      withoutCursor(fixture.legacy.pausedSession),
+    );
 
     // A write to the paused Bot is refused with the code each device knows, and nothing is sent.
-    for (const [options, expected] of [[HOLDER, fixture.pausedError], [{}, fixture.legacy.pausedError]] as const) {
+    for (const [options, expected] of [
+      [HOLDER, fixture.pausedError],
+      [{}, fixture.legacy.pausedError],
+    ] as const) {
       await assert.rejects(
-        service.send(DEVICE_ID, BOT_ID, "send-request-paused-01", { text: "Are you there?" }, options),
+        service.send(
+          DEVICE_ID,
+          BOT_ID,
+          "send-request-paused-01",
+          { text: "Are you there?" },
+          options,
+        ),
         (error: { code?: string; status?: number; message?: string }) =>
-          error.code === expected.error.code && error.status === 409 && error.message === expected.error.message,
+          error.code === expected.error.code &&
+          error.status === 409 &&
+          error.message === expected.error.message,
       );
     }
-    assert.deepEqual(await service.unpause(DEVICE_ID, BOT_ID, "unpause-request-0001", HOLDER), fixture.unpause.response);
     assert.deepEqual(
-      await service.send(DEVICE_ID, BOT_ID, "send-request-paused-01", { text: "Are you there?" }, HOLDER),
+      await service.unpause(DEVICE_ID, BOT_ID, "unpause-request-0001", HOLDER),
+      fixture.unpause.response,
+    );
+    assert.deepEqual(
+      await service.send(
+        DEVICE_ID,
+        BOT_ID,
+        "send-request-paused-01",
+        { text: "Are you there?" },
+        HOLDER,
+      ),
       { submissionId: "sub_1", deduped: false, state: "idle", interrupted: false },
       "the refusal recorded nothing, so the same request runs once the Bot is unpaused",
     );
@@ -3143,7 +4370,9 @@ test("a hand-off, its answer and a pause reach holders and other devices frame f
 function reducedView(frames: Frame[]): RemoteBotSessionView {
   const [first, ...rest] = frames as unknown as AidenRemoteBotSessionEvent[];
   assert.equal(first?.type, "snapshot", "a stream opens with a snapshot");
-  let view = remoteBotSessionView((first as Extract<AidenRemoteBotSessionEvent, { type: "snapshot" }>).payload.session);
+  let view = remoteBotSessionView(
+    (first as Extract<AidenRemoteBotSessionEvent, { type: "snapshot" }>).payload.session,
+  );
   for (const event of rest) {
     const next = applyRemoteBotSessionEvent(view, event);
     assert.ok(next, `frame ${event.seq} follows the one before it`);
@@ -3153,16 +4382,24 @@ function reducedView(frames: Frame[]): RemoteBotSessionView {
 }
 
 const noticesOf = (view: RemoteBotSessionView) =>
-  view.snapshot.entries.flatMap((entry) => (entry.id.startsWith("handoff-notice:") ? [entry.id] : []));
+  view.snapshot.entries.flatMap((entry) =>
+    entry.id.startsWith("handoff-notice:") ? [entry.id] : [],
+  );
 
 test("a device without bot:handoffs drops a hand-off's line once it is answered, withdrawn or replaced, as a fresh read shows it", async () => {
   const driven = drivenConversation(scoutConversation());
-  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, { conversation: driven });
+  const { service, handOff } = handoffSession(
+    fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+    { conversation: driven },
+  );
   const legacy = await openAudienceStream(service, {});
   /** What the stream shows once it reached the seq a fresh read is at, beside that read. */
   const shownAndRead = async () => {
     const read = await service.session(BOT_ID);
-    await legacy.until(() => last(legacy.frames)?.seq === read.seq, `the stream at seq ${read.seq}`);
+    await legacy.until(
+      () => last(legacy.frames)?.seq === read.seq,
+      `the stream at seq ${read.seq}`,
+    );
     return { shown: reducedView(legacy.frames), read: remoteBotSessionView(read) };
   };
   try {
@@ -3171,24 +4408,47 @@ test("a device without bot:handoffs drops a hand-off's line once it is answered,
     // Done from a phone that holds `bot:handoffs`, then the answer's row.
     const asked = handOff();
     let { shown, read } = await shownAndRead();
-    assert.deepEqual(noticesOf(shown), [`handoff-notice:${HANDOFF_WAIT_ID}`], "the waiting hand-off's line");
+    assert.deepEqual(
+      noticesOf(shown),
+      [`handoff-notice:${HANDOFF_WAIT_ID}`],
+      "the waiting hand-off's line",
+    );
     assert.deepEqual(shown, read);
-    await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0201", { outcome: "done" }, HOLDER);
+    await service.answerHandoff(
+      DEVICE_ID,
+      BOT_ID,
+      HANDOFF_WAIT_ID,
+      "handoff-request-0201",
+      { outcome: "done" },
+      HOLDER,
+    );
     await asked;
     ({ shown, read } = await shownAndRead());
     assert.deepEqual(noticesOf(shown), [], "an answered hand-off leaves no line");
     assert.deepEqual(shown, read);
     await driven.emit([
       ...scoutConversation(),
-      handoffResult(42, { kind: "action", outcome: "done", action: "Enter the 2FA code your bank sent you", toolCallId: "call_fixture_36" }),
+      handoffResult(42, {
+        kind: "action",
+        outcome: "done",
+        action: "Enter the 2FA code your bank sent you",
+        toolCallId: "call_fixture_36",
+      }),
     ]);
     ({ shown, read } = await shownAndRead());
-    assert.equal(last(shown.snapshot.entries)?.type, "user", "the person's answer is the newest line");
+    assert.equal(
+      last(shown.snapshot.entries)?.type,
+      "user",
+      "the person's answer is the newest line",
+    );
     assert.deepEqual(shown, read);
 
     // Withdrawn by Stop, Dismiss, delete or quit.
     const controller = new AbortController();
-    const withdrawn = handOff({ waitId: "5a0d3e2f-8b4c-4d6e-8f90-1b2c3d4e5f60" }, controller.signal);
+    const withdrawn = handOff(
+      { waitId: "5a0d3e2f-8b4c-4d6e-8f90-1b2c3d4e5f60" },
+      controller.signal,
+    );
     ({ shown } = await shownAndRead());
     assert.deepEqual(noticesOf(shown), ["handoff-notice:5a0d3e2f-8b4c-4d6e-8f90-1b2c3d4e5f60"]);
     controller.abort();
@@ -3199,16 +4459,45 @@ test("a device without bot:handoffs drops a hand-off's line once it is answered,
 
     // Two cards wait; answering the first puts the second in its place.
     const first = handOff({ waitId: "6b1e4f30-9c5d-4e7f-9a01-2c3d4e5f6071" });
-    const second = handOff({ waitId: "7c2f5041-ad6e-4f80-ab12-3d4e5f607182", action: "Approve the transfer in your bank's app" });
+    const second = handOff({
+      waitId: "7c2f5041-ad6e-4f80-ab12-3d4e5f607182",
+      action: "Approve the transfer in your bank's app",
+    });
     ({ shown } = await shownAndRead());
-    assert.deepEqual(noticesOf(shown), ["handoff-notice:6b1e4f30-9c5d-4e7f-9a01-2c3d4e5f6071"], "the older card is the one shown");
-    await service.answerHandoff(DEVICE_ID, BOT_ID, "6b1e4f30-9c5d-4e7f-9a01-2c3d4e5f6071", "handoff-request-0202", { outcome: "skipped" }, HOLDER);
+    assert.deepEqual(
+      noticesOf(shown),
+      ["handoff-notice:6b1e4f30-9c5d-4e7f-9a01-2c3d4e5f6071"],
+      "the older card is the one shown",
+    );
+    await service.answerHandoff(
+      DEVICE_ID,
+      BOT_ID,
+      "6b1e4f30-9c5d-4e7f-9a01-2c3d4e5f6071",
+      "handoff-request-0202",
+      { outcome: "skipped" },
+      HOLDER,
+    );
     await first;
     ({ shown, read } = await shownAndRead());
-    assert.deepEqual(noticesOf(shown), ["handoff-notice:7c2f5041-ad6e-4f80-ab12-3d4e5f607182"], "only the replacement's line");
-    assert.equal(last(shown.snapshot.entries)?.id, "handoff-notice:7c2f5041-ad6e-4f80-ab12-3d4e5f607182", "and it is the newest line");
+    assert.deepEqual(
+      noticesOf(shown),
+      ["handoff-notice:7c2f5041-ad6e-4f80-ab12-3d4e5f607182"],
+      "only the replacement's line",
+    );
+    assert.equal(
+      last(shown.snapshot.entries)?.id,
+      "handoff-notice:7c2f5041-ad6e-4f80-ab12-3d4e5f607182",
+      "and it is the newest line",
+    );
     assert.deepEqual(shown, read);
-    await service.answerHandoff(DEVICE_ID, BOT_ID, "7c2f5041-ad6e-4f80-ab12-3d4e5f607182", "handoff-request-0203", { outcome: "done" }, HOLDER);
+    await service.answerHandoff(
+      DEVICE_ID,
+      BOT_ID,
+      "7c2f5041-ad6e-4f80-ab12-3d4e5f607182",
+      "handoff-request-0203",
+      { outcome: "done" },
+      HOLDER,
+    );
     await second;
     ({ shown, read } = await shownAndRead());
     assert.deepEqual(noticesOf(shown), []);
@@ -3222,12 +4511,28 @@ test("a device without bot:handoffs drops a hand-off's line once it is answered,
 });
 
 test("a hand-off answer is idempotent per request UUID, and a card that stopped waiting is handoff_expired", async () => {
-  const { service, handOff, handoffs } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const { service, handOff, handoffs } = handoffSession(
+    fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+  );
   try {
     const asked = handOff();
     const [phone, tablet] = await Promise.allSettled([
-      service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0002", { outcome: "skipped" }, HOLDER),
-      service.answerHandoff("device_2", BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0003", { outcome: "done" }, HOLDER),
+      service.answerHandoff(
+        DEVICE_ID,
+        BOT_ID,
+        HANDOFF_WAIT_ID,
+        "handoff-request-0002",
+        { outcome: "skipped" },
+        HOLDER,
+      ),
+      service.answerHandoff(
+        "device_2",
+        BOT_ID,
+        HANDOFF_WAIT_ID,
+        "handoff-request-0003",
+        { outcome: "done" },
+        HOLDER,
+      ),
     ]);
     assert.deepEqual(phone, { status: "fulfilled", value: { waitId: HANDOFF_WAIT_ID } });
     assert.equal(tablet.status, "rejected");
@@ -3235,12 +4540,26 @@ test("a hand-off answer is idempotent per request UUID, and a card that stopped 
     assert.deepEqual(await asked, { outcome: "skipped" }, "the first answer wins");
 
     assert.deepEqual(
-      await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0002", { outcome: "skipped" }, HOLDER),
+      await service.answerHandoff(
+        DEVICE_ID,
+        BOT_ID,
+        HANDOFF_WAIT_ID,
+        "handoff-request-0002",
+        { outcome: "skipped" },
+        HOLDER,
+      ),
       { waitId: HANDOFF_WAIT_ID },
       "a retry with the same request UUID replays the receipt",
     );
     await assert.rejects(
-      service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0002", { outcome: "done" }, HOLDER),
+      service.answerHandoff(
+        DEVICE_ID,
+        BOT_ID,
+        HANDOFF_WAIT_ID,
+        "handoff-request-0002",
+        { outcome: "done" },
+        HOLDER,
+      ),
       "the same request UUID with another answer is not a replay",
     );
 
@@ -3250,11 +4569,25 @@ test("a hand-off answer is idempotent per request UUID, and a card that stopped 
     controller.abort();
     await assert.rejects(withdrawn);
     await assert.rejects(
-      service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0004", { outcome: "done" }, HOLDER),
+      service.answerHandoff(
+        DEVICE_ID,
+        BOT_ID,
+        HANDOFF_WAIT_ID,
+        "handoff-request-0004",
+        { outcome: "done" },
+        HOLDER,
+      ),
       isError("handoff_expired", 409),
     );
     await assert.rejects(
-      service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0004", { outcome: "done" }, HOLDER),
+      service.answerHandoff(
+        DEVICE_ID,
+        BOT_ID,
+        HANDOFF_WAIT_ID,
+        "handoff-request-0004",
+        { outcome: "done" },
+        HOLDER,
+      ),
       isError("handoff_expired", 409),
       "a retry of the refused answer gets the same refusal, not a server error",
     );
@@ -3265,7 +4598,9 @@ test("a hand-off answer is idempotent per request UUID, and a card that stopped 
 });
 
 test("an answer the card does not accept is invalid and the card keeps waiting; a phone may only skip a sign-in", async () => {
-  const { service, handOff, handoffs } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const { service, handOff, handoffs } = handoffSession(
+    fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+  );
   try {
     handOff();
     for (const [key, body] of [
@@ -3274,15 +4609,33 @@ test("an answer the card does not accept is invalid and the card keeps waiting; 
       ["handoff-request-0007", { outcome: "done", note: "x".repeat(4_001) }],
       ["handoff-request-0008", { outcome: "done", waitId: HANDOFF_WAIT_ID }],
     ] as const) {
-      await assert.rejects(service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, key, body, HOLDER), isError("invalid_request", 400), key);
+      await assert.rejects(
+        service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, key, body, HOLDER),
+        isError("invalid_request", 400),
+        key,
+      );
     }
     await assert.rejects(
-      service.answerHandoff(DEVICE_ID, BOT_ID, "wait id", "handoff-request-0009", { outcome: "done" }, HOLDER),
+      service.answerHandoff(
+        DEVICE_ID,
+        BOT_ID,
+        "wait id",
+        "handoff-request-0009",
+        { outcome: "done" },
+        HOLDER,
+      ),
       isError("invalid_request", 400),
       "a malformed wait id",
     );
     await assert.rejects(
-      service.answerHandoff(DEVICE_ID, "bot_missing", HANDOFF_WAIT_ID, "handoff-request-0010", { outcome: "done" }, HOLDER),
+      service.answerHandoff(
+        DEVICE_ID,
+        "bot_missing",
+        HANDOFF_WAIT_ID,
+        "handoff-request-0010",
+        { outcome: "done" },
+        HOLDER,
+      ),
       isError("not_found", 404),
     );
     assert.equal((await service.session(BOT_ID, HOLDER)).handoff?.waitId, HANDOFF_WAIT_ID);
@@ -3291,14 +4644,30 @@ test("an answer the card does not accept is invalid and the card keeps waiting; 
     const signIn = handOff(SIGN_IN);
     for (const attempt of ["first", "retry"]) {
       await assert.rejects(
-        service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0011", { outcome: "done" }, HOLDER),
+        service.answerHandoff(
+          DEVICE_ID,
+          BOT_ID,
+          HANDOFF_WAIT_ID,
+          "handoff-request-0011",
+          { outcome: "done" },
+          HOLDER,
+        ),
         (error: { code?: string; status?: number; message?: string }) =>
-          error.code === "invalid_request" && error.status === 400 && /signing in on your computer/u.test(error.message ?? ""),
+          error.code === "invalid_request" &&
+          error.status === 400 &&
+          /signing in on your computer/u.test(error.message ?? ""),
         `${attempt}: the same request UUID gets the same refusal`,
       );
     }
     assert.equal(handoffs.pending(BOT_ID).length, 1, "the sign-in still waits");
-    await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0012", { outcome: "skipped", note: "Not today." }, HOLDER);
+    await service.answerHandoff(
+      DEVICE_ID,
+      BOT_ID,
+      HANDOFF_WAIT_ID,
+      "handoff-request-0012",
+      { outcome: "skipped", note: "Not today." },
+      HOLDER,
+    );
     assert.deepEqual(await signIn, { outcome: "skipped", note: "Not today." });
   } finally {
     await service.close();
@@ -3306,25 +4675,34 @@ test("an answer the card does not accept is invalid and the card keeps waiting; 
 });
 
 test("a sign-in the Bot asks for reaches a holder as a sign_in card and other devices as a needs-you line, Finish on your Mac opens it there, and Skip from the phone answers the Bot", async () => {
-  const { service, handoffs, openedOnMac } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, {
-    opened: "browser",
-  });
+  const { service, handoffs, openedOnMac } = handoffSession(
+    fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+    {
+      opened: "browser",
+    },
+  );
   const holder = await openAudienceStream(service, HOLDER);
   try {
     await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
     // The Bot's sign_in call, as its tool runs it in a turn.
-    const asked = signInCandidate(BOT_ID, handoffs)
-      .bind!({
-        callId: "call_sign_in_1",
-        signal: new AbortController().signal,
-        entries: async () => [],
-        submissions: async () => [],
-        appendEntry: async () => {},
-        memo: async (_name, candidate) => candidate,
-      })
-      .execute("call_sign_in_1", { site: "GitHub.com/login", why: "To read your issues." } as never);
-    await holder.until(() => holder.frames.some((frame) => frame.type === "handoff"), "the sign-in frame");
-    const card = holder.frames.find((frame) => frame.type === "handoff")!.payload.handoff as { waitId: string };
+    const asked = signInCandidate(BOT_ID, handoffs).bind!({
+      callId: "call_sign_in_1",
+      signal: new AbortController().signal,
+      entries: async () => [],
+      submissions: async () => [],
+      appendEntry: async () => {},
+      memo: async (_name, candidate) => candidate,
+    }).execute("call_sign_in_1", {
+      site: "GitHub.com/login",
+      why: "To read your issues.",
+    } as never);
+    await holder.until(
+      () => holder.frames.some((frame) => frame.type === "handoff"),
+      "the sign-in frame",
+    );
+    const card = holder.frames.find((frame) => frame.type === "handoff")!.payload.handoff as {
+      waitId: string;
+    };
     // The phone gets what it shows: the site's name, never the Bot's own page.
     assert.deepEqual(card, {
       waitId: card.waitId,
@@ -3335,28 +4713,52 @@ test("a sign-in the Bot asks for reaches a holder as a sign_in card and other de
     });
     const legacy = await service.session(BOT_ID);
     const notice = last(legacy.entries);
-    assert.equal(notice?.type === "message" && notice.text, "Scout needs you on your computer: Sign in to github.com");
+    assert.equal(
+      notice?.type === "message" && notice.text,
+      "Scout needs you on your computer: Sign in to github.com",
+    );
 
     // Finish on your Mac: the Mac opens this card where the Bot signs in, and the card still waits.
-    assert.deepEqual(await service.openHandoffOnMac(DEVICE_ID, BOT_ID, card.waitId, "open-request-000101", {}), {
-      waitId: card.waitId,
-      opened: true,
-    });
+    assert.deepEqual(
+      await service.openHandoffOnMac(DEVICE_ID, BOT_ID, card.waitId, "open-request-000101", {}),
+      {
+        waitId: card.waitId,
+        opened: true,
+      },
+    );
     assert.deepEqual(openedOnMac, [[BOT_ID, card.waitId]]);
     assert.equal(handoffs.get(BOT_ID, card.waitId)?.kind, "sign_in", "opening it answers nothing");
     // Signing in happens on the Mac: a phone can't say it is done.
     await assert.rejects(
-      service.answerHandoff(DEVICE_ID, BOT_ID, card.waitId, "handoff-request-0100", { outcome: "done" }, HOLDER),
+      service.answerHandoff(
+        DEVICE_ID,
+        BOT_ID,
+        card.waitId,
+        "handoff-request-0100",
+        { outcome: "done" },
+        HOLDER,
+      ),
       isError("invalid_request", 400),
     );
 
-    await service.answerHandoff(DEVICE_ID, BOT_ID, card.waitId, "handoff-request-0101", { outcome: "skipped" }, HOLDER);
+    await service.answerHandoff(
+      DEVICE_ID,
+      BOT_ID,
+      card.waitId,
+      "handoff-request-0101",
+      { outcome: "skipped" },
+      HOLDER,
+    );
     const result = await asked;
     assert.equal(
       result.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
       "The person chose not to do this: Sign in to github.com. Do not try another way to do it; say what you will do instead.",
     );
-    await holder.until(() => last(holder.frames.filter((frame) => frame.type === "handoff"))?.payload.handoff === null, "the settled frame");
+    await holder.until(
+      () =>
+        last(holder.frames.filter((frame) => frame.type === "handoff"))?.payload.handoff === null,
+      "the settled frame",
+    );
   } finally {
     await holder.close();
     await service.close();
@@ -3365,10 +4767,18 @@ test("a sign-in the Bot asks for reaches a holder as a sign_in card and other de
 
 test("Open on Mac brings the waiting card forward once per request UUID and says when nothing could open", async () => {
   const fixture = (await contractFixture()).botHandoffs;
-  const { service, handOff, openedOnMac } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const { service, handOff, openedOnMac } = handoffSession(
+    fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+  );
   try {
     const asked = handOff();
-    const receipt = await service.openHandoffOnMac(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "open-request-000001", fixture.openOnMac.request);
+    const receipt = await service.openHandoffOnMac(
+      DEVICE_ID,
+      BOT_ID,
+      HANDOFF_WAIT_ID,
+      "open-request-000001",
+      fixture.openOnMac.request,
+    );
     assert.deepEqual(receipt, fixture.openOnMac.response);
     assert.deepEqual(
       await service.openHandoffOnMac(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "open-request-000001", {}),
@@ -3376,12 +4786,25 @@ test("Open on Mac brings the waiting card forward once per request UUID and says
       "a retry replays without opening it again",
     );
     assert.deepEqual(openedOnMac, [[BOT_ID, HANDOFF_WAIT_ID]]);
-    assert.equal((await service.session(BOT_ID, HOLDER)).handoff?.waitId, HANDOFF_WAIT_ID, "opening it answers nothing");
+    assert.equal(
+      (await service.session(BOT_ID, HOLDER)).handoff?.waitId,
+      HANDOFF_WAIT_ID,
+      "opening it answers nothing",
+    );
     await assert.rejects(
-      service.openHandoffOnMac(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "open-request-000002", { focus: true }),
+      service.openHandoffOnMac(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "open-request-000002", {
+        focus: true,
+      }),
       isError("invalid_request", 400),
     );
-    await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0013", { outcome: "done" }, HOLDER);
+    await service.answerHandoff(
+      DEVICE_ID,
+      BOT_ID,
+      HANDOFF_WAIT_ID,
+      "handoff-request-0013",
+      { outcome: "done" },
+      HOLDER,
+    );
     await asked;
     for (const attempt of ["first", "retry"]) {
       await assert.rejects(
@@ -3394,11 +4817,19 @@ test("Open on Mac brings the waiting card forward once per request UUID and says
     await service.close();
   }
 
-  const nothing = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, { opened: "none" });
+  const nothing = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, {
+    opened: "none",
+  });
   try {
     nothing.handOff();
     assert.deepEqual(
-      await nothing.service.openHandoffOnMac(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "open-request-000004", {}),
+      await nothing.service.openHandoffOnMac(
+        DEVICE_ID,
+        BOT_ID,
+        HANDOFF_WAIT_ID,
+        "open-request-000004",
+        {},
+      ),
       { waitId: HANDOFF_WAIT_ID, opened: false },
     );
   } finally {
@@ -3412,9 +4843,21 @@ test("a host without the hand-off bridge has no hand-off or pause routes and sen
   try {
     assert.equal(service.supportsHandoffs, false);
     handOff();
-    assert.equal("handoff" in (await service.session(BOT_ID, HOLDER)), false, "a claimed opt-in the host never offered changes nothing");
+    assert.equal(
+      "handoff" in (await service.session(BOT_ID, HOLDER)),
+      false,
+      "a claimed opt-in the host never offered changes nothing",
+    );
     for (const call of [
-      () => service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0014", { outcome: "done" }, HOLDER),
+      () =>
+        service.answerHandoff(
+          DEVICE_ID,
+          BOT_ID,
+          HANDOFF_WAIT_ID,
+          "handoff-request-0014",
+          { outcome: "done" },
+          HOLDER,
+        ),
       () => service.openHandoffOnMac(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "open-request-000005", {}),
       () => service.pause(DEVICE_ID, BOT_ID, "pause-request-000002", {}, HOLDER),
       () => service.unpause(DEVICE_ID, BOT_ID, "unpause-request-0002", HOLDER),
@@ -3453,15 +4896,38 @@ test("a phone's pause holds a real Bot: holders read paused and bot_paused, othe
       "a retried pause replays",
     );
 
-    await holder.until(() => holder.frames.some((frame) => frame.type === "state" && frame.payload.state === "paused"), "the paused frame");
-    await legacy.until(() => legacy.frames.some((frame) => frame.type === "state" && frame.payload.state === "unavailable"), "the unavailable frame");
-    assert.deepEqual(legacy.frames.map((frame) => frame.seq), holder.frames.map((frame) => frame.seq));
+    await holder.until(
+      () =>
+        holder.frames.some((frame) => frame.type === "state" && frame.payload.state === "paused"),
+      "the paused frame",
+    );
+    await legacy.until(
+      () =>
+        legacy.frames.some(
+          (frame) => frame.type === "state" && frame.payload.state === "unavailable",
+        ),
+      "the unavailable frame",
+    );
+    assert.deepEqual(
+      legacy.frames.map((frame) => frame.seq),
+      holder.frames.map((frame) => frame.seq),
+    );
     assert.equal((await service.session("bot:killed", HOLDER)).state, "paused");
     assert.equal((await service.session("bot:killed")).state, "unavailable");
 
-    for (const [options, code] of [[HOLDER, "bot_paused"], [{}, "operation_stale"]] as const) {
+    for (const [options, code] of [
+      [HOLDER, "bot_paused"],
+      [{}, "operation_stale"],
+    ] as const) {
       for (const write of [
-        () => service.send("device_a", "bot:killed", "send-request-00p2", { text: "are you there?" }, options),
+        () =>
+          service.send(
+            "device_a",
+            "bot:killed",
+            "send-request-00p2",
+            { text: "are you there?" },
+            options,
+          ),
         () => service.resume("device_a", "bot:killed", "resume-request-0p2", {}, options),
         () => service.dismiss("device_a", "bot:killed", "dismiss-request-0p2", {}, options),
       ]) {
@@ -3475,8 +4941,13 @@ test("a phone's pause holds a real Bot: holders read paused and bot_paused, othe
       await service.unpause("device_a", "bot:killed", "unpause-request-0003", HOLDER),
       { state: "interrupted", interrupted: true },
     );
-    assert.equal((await service.resume("device_a", "bot:killed", "resume-request-0p2", {}, HOLDER)).state, "running");
-    await waitFor(async () => (await runtime.state("bot:killed")).kind === "idle", { what: "the resumed turn" });
+    assert.equal(
+      (await service.resume("device_a", "bot:killed", "resume-request-0p2", {}, HOLDER)).state,
+      "running",
+    );
+    await waitFor(async () => (await runtime.state("bot:killed")).kind === "idle", {
+      what: "the resumed turn",
+    });
     assert.equal(fauxModels.calls(), 1);
   } finally {
     await holder.close();
@@ -3487,26 +4958,42 @@ test("a phone's pause holds a real Bot: holders read paused and bot_paused, othe
 });
 
 test("a pause and unpause made on the Mac reach open phone streams at once, as each device names them", async () => {
-  const { runtime, service, stateListeners } = await interruptedDurableBot({ handoffs: true, stateChanges: true });
+  const { runtime, service, stateListeners } = await interruptedDurableBot({
+    handoffs: true,
+    stateChanges: true,
+  });
   const holder = await openAudienceStream(service, HOLDER, "bot:killed");
   const legacy = await openAudienceStream(service, {}, "bot:killed");
-  const statesOf = (frames: Frame[]) => frames.flatMap((frame) => (frame.type === "state" ? [frame.payload.state] : []));
+  const statesOf = (frames: Frame[]) =>
+    frames.flatMap((frame) => (frame.type === "state" ? [frame.payload.state] : []));
   try {
     await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
     await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
     // The Mac pauses: no phone route runs and the conversation does not change.
     await runtime.pause("bot:killed", "mac");
     await holder.until(() => statesOf(holder.frames).includes("paused"), "the paused frame");
-    await legacy.until(() => statesOf(legacy.frames).includes("unavailable"), "the unavailable frame");
+    await legacy.until(
+      () => statesOf(legacy.frames).includes("unavailable"),
+      "the unavailable frame",
+    );
     assert.equal(statesOf(legacy.frames).includes("paused"), false);
 
     // The Mac unpauses: the interrupted turn is back, waiting for Resume, on both.
     await runtime.unpause("bot:killed");
-    await holder.until(() => last(statesOf(holder.frames)) === "interrupted", "the holder's interrupted frame");
-    await legacy.until(() => last(statesOf(legacy.frames)) === "interrupted", "the legacy interrupted frame");
+    await holder.until(
+      () => last(statesOf(holder.frames)) === "interrupted",
+      "the holder's interrupted frame",
+    );
+    await legacy.until(
+      () => last(statesOf(legacy.frames)) === "interrupted",
+      "the legacy interrupted frame",
+    );
     assert.deepEqual(statesOf(holder.frames), ["paused", "interrupted"]);
     assert.deepEqual(statesOf(legacy.frames), ["unavailable", "interrupted"]);
-    assert.deepEqual(legacy.frames.map((frame) => frame.seq), holder.frames.map((frame) => frame.seq));
+    assert.deepEqual(
+      legacy.frames.map((frame) => frame.seq),
+      holder.frames.map((frame) => frame.seq),
+    );
   } finally {
     await holder.close();
     await legacy.close();
@@ -3524,24 +5011,42 @@ test("a hand-off holds a running turn at Waiting for you on bot:activity phones,
   const stream = await openAudienceStream(service, { activity: true, handoffs: true });
   try {
     await stream.until(() => stream.frames.length >= 1, "the snapshot");
-    const searching = { run: { inputs: [1] }, tools: [{ callId: "call_1", name: "web_search", status: "running" }] };
+    const searching = {
+      run: { inputs: [1] },
+      tools: [{ callId: "call_1", name: "web_search", status: "running" }],
+    };
     await driven.emitView([user(1, "Pay the bill")], { "pi.live": searching });
     await stream.until(() => phasesOf(stream.frames).includes("searching"), "the tool phase");
     const asked = handoffs.request({ ...handoffPrompt(), signal: undefined });
     await stream.until(() => last(phasesOf(stream.frames)) === "waiting", "the waiting phase");
     const opened = stream.frames.findIndex((frame) => frame.type === "handoff");
-    const waiting = stream.frames.findIndex((frame) => frame.type === "activity" && frame.payload.activity?.phase === "waiting");
-    assert.ok(opened > 0 && opened < waiting, "a phone has the card before the line says it waits on the person");
+    const waiting = stream.frames.findIndex(
+      (frame) => frame.type === "activity" && frame.payload.activity?.phase === "waiting",
+    );
+    assert.ok(
+      opened > 0 && opened < waiting,
+      "a phone has the card before the line says it waits on the person",
+    );
 
     // A reconnect mid-wait gets both in its first snapshot.
     const snapshot = await service.session(BOT_ID, { activity: true, handoffs: true });
     assert.equal(snapshot.handoff?.waitId, HANDOFF_WAIT_ID);
     assert.equal(snapshot.activity?.phase, "waiting");
 
-    assert.equal(handoffs.answer(BOT_ID, HANDOFF_WAIT_ID, { outcome: "done" }), "answered", "answered on the Mac");
+    assert.equal(
+      handoffs.answer(BOT_ID, HANDOFF_WAIT_ID, { outcome: "done" }),
+      "answered",
+      "answered on the Mac",
+    );
     await asked;
-    await stream.until(() => last(phasesOf(stream.frames)) === "searching", "the turn back at work");
-    assert.equal(last(stream.frames.filter((frame) => frame.type === "handoff"))?.payload.handoff, null);
+    await stream.until(
+      () => last(phasesOf(stream.frames)) === "searching",
+      "the turn back at work",
+    );
+    assert.equal(
+      last(stream.frames.filter((frame) => frame.type === "handoff"))?.payload.handoff,
+      null,
+    );
     assert.ok(gapless(stream.frames));
   } finally {
     await stream.close();
@@ -3551,35 +5056,77 @@ test("a hand-off holds a running turn at Waiting for you on bot:activity phones,
 
 test("a hand-off answer reads as the person's message, and a call id the wire refuses gets a stable id", async () => {
   const fixture = (await contractFixture()).botHandoffs;
-  const done = { kind: "action", outcome: "done", action: "Enter the 2FA code your bank sent you", note: "The code was from 9:01." };
-  const answerEntry = fixture.events.find((event: { type: string }) => event.type === "entry").payload.entry;
+  const done = {
+    kind: "action",
+    outcome: "done",
+    action: "Enter the 2FA code your bank sent you",
+    note: "The code was from 9:01.",
+  };
+  const answerEntry = fixture.events.find((event: { type: string }) => event.type === "entry")
+    .payload.entry;
   assert.deepEqual(projectBotSessionEntries([handoffResult(42, done)] as never), [answerEntry]);
 
-  const [skipped] = projectBotSessionEntries([handoffResult(43, { ...done, outcome: "skipped", note: undefined })] as never);
-  assert.equal(skipped?.type === "message" && skipped.text, "You skipped this: Enter the 2FA code your bank sent you");
+  const [skipped] = projectBotSessionEntries([
+    handoffResult(43, { ...done, outcome: "skipped", note: undefined }),
+  ] as never);
+  assert.equal(
+    skipped?.type === "message" && skipped.text,
+    "You skipped this: Enter the 2FA code your bank sent you",
+  );
   const [signedIn] = projectBotSessionEntries([
-    handoffResult(44, { kind: "sign_in", outcome: "done", action: "Sign in to bank.example.com", origin: "https://bank.example.com" }),
+    handoffResult(44, {
+      kind: "sign_in",
+      outcome: "done",
+      action: "Sign in to bank.example.com",
+      origin: "https://bank.example.com",
+    }),
   ] as never);
   assert.equal(signedIn?.type === "message" && signedIn.text, "You signed in to bank.example.com");
   // A stopped card records no answer: nothing on the person's side.
-  assert.deepEqual(projectBotSessionEntries([handoffResult(45, done, { isError: true })] as never).filter((entry) => entry.type === "message"), []);
+  assert.deepEqual(
+    projectBotSessionEntries([handoffResult(45, done, { isError: true })] as never).filter(
+      (entry) => entry.type === "message",
+    ),
+    [],
+  );
 
-  const odd = (toolCallId: string) => projectBotSessionEntries([handoffResult(46, done, { toolCallId })] as never)[0]!;
+  const odd = (toolCallId: string) =>
+    projectBotSessionEntries([handoffResult(46, done, { toolCallId })] as never)[0]!;
   const first = odd("call/with spaces and ünïcode");
   assert.match(first.id, /^entry_handoff_[0-9a-f]{32}$/u);
   assert.deepEqual(parseAidenRemoteBotSessionEntry(first), first);
-  assert.equal(odd("call/with spaces and ünïcode").id, first.id, "the same row keys the same bubble on every snapshot");
+  assert.equal(
+    odd("call/with spaces and ünïcode").id,
+    first.id,
+    "the same row keys the same bubble on every snapshot",
+  );
   assert.notEqual(odd("call/other").id, first.id);
-  assert.equal(odd(`call_${"x".repeat(200)}`).id.length, "entry_handoff_".length + 32, "a call id past the wire bound");
+  assert.equal(
+    odd(`call_${"x".repeat(200)}`).id.length,
+    "entry_handoff_".length + 32,
+    "a call id past the wire bound",
+  );
 });
 
 test("a legacy phone's hand-off line leaves its next snapshot once the card settles", async () => {
-  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const { service, handOff } = handoffSession(
+    fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+  );
   try {
     const asked = handOff();
-    const notices = async () => (await service.session(BOT_ID)).entries.filter((entry) => entry.id.startsWith("handoff-notice:"));
+    const notices = async () =>
+      (await service.session(BOT_ID)).entries.filter((entry) =>
+        entry.id.startsWith("handoff-notice:"),
+      );
     assert.equal((await notices()).length, 1);
-    await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0015", { outcome: "done" }, HOLDER);
+    await service.answerHandoff(
+      DEVICE_ID,
+      BOT_ID,
+      HANDOFF_WAIT_ID,
+      "handoff-request-0015",
+      { outcome: "done" },
+      HOLDER,
+    );
     await asked;
     assert.deepEqual(await notices(), []);
   } finally {
@@ -3590,8 +5137,14 @@ test("a legacy phone's hand-off line leaves its next snapshot once the card sett
 // --- Contract revision 45: images a Bot shares reach phones -------------------------
 
 /** A 1×1 PNG, as `share_image` stores it. */
-const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
-const sharedImage = (id: number, name: string, data = PNG_BASE64, mimeType = "image/png"): RawEntry => ({
+const PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+const sharedImage = (
+  id: number,
+  name: string,
+  data = PNG_BASE64,
+  mimeType = "image/png",
+): RawEntry => ({
   id,
   kind: "aiden.bot-shared-image",
   data: { id: `img-${id}`, name, mimeType, size: Buffer.from(data, "base64").length, data },
@@ -3605,18 +5158,31 @@ test("an image the Bot shares reaches bot:images phones as the shared fixture sh
     assistant(3, "Here's the chart."),
   ]);
   const fake = fakeRuntime({ kind: "idle" });
-  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  const service = sessionService({
+    ...fake.runtime,
+    conversation: async () => driven.conversation as never,
+  });
   try {
     const holder = await service.session(BOT_ID, { images: true });
     const image = holder.entries.find((entry) => entry.type === "shared_image");
     assert.ok(image, "the holder sees the image");
     const { id: _fixtureId, size: _fixtureSize, ...expected } = fixture.entry;
-    assert.deepEqual({ ...image, id: undefined, size: undefined }, { ...expected, id: undefined, size: undefined });
+    assert.deepEqual(
+      { ...image, id: undefined, size: undefined },
+      { ...expected, id: undefined, size: undefined },
+    );
     assert.equal(image.size, Buffer.from(PNG_BASE64, "base64").length);
-    assert.equal(JSON.stringify(holder).includes(PNG_BASE64), false, "bytes never ride the session");
+    assert.equal(
+      JSON.stringify(holder).includes(PNG_BASE64),
+      false,
+      "bytes never ride the session",
+    );
 
     const legacy = await service.session(BOT_ID);
-    assert.equal(legacy.entries.some((entry) => entry.type === "shared_image"), false);
+    assert.equal(
+      legacy.entries.some((entry) => entry.type === "shared_image"),
+      false,
+    );
     const line = legacy.entries.find((entry) => entry.id === image.id);
     assert.deepEqual({ ...line, id: undefined }, { ...fixture.legacyEntry, id: undefined });
     assert.deepEqual(parseAidenRemoteBotSession(legacy), legacy);
@@ -3632,13 +5198,22 @@ test("an image the Bot shares reaches bot:images phones as the shared fixture sh
 
 test("a shared image whose bytes don't match its type is never offered to phones as readable", async () => {
   const notAPng = Buffer.from("this is not an image").toString("base64");
-  const driven = drivenConversation([sharedImage(1, "broken.png", notAPng), sharedImage(2, "notes.gif", PNG_BASE64, "image/gif")]);
+  const driven = drivenConversation([
+    sharedImage(1, "broken.png", notAPng),
+    sharedImage(2, "notes.gif", PNG_BASE64, "image/gif"),
+  ]);
   const fake = fakeRuntime({ kind: "idle" });
-  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  const service = sessionService({
+    ...fake.runtime,
+    conversation: async () => driven.conversation as never,
+  });
   try {
     const holder = await service.session(BOT_ID, { images: true });
     // A type outside the contract is left out; a PNG whose bytes are wrong is listed but refused on read.
-    assert.deepEqual(holder.entries.map((entry) => entry.type === "shared_image" ? entry.name : entry.type), ["broken.png"]);
+    assert.deepEqual(
+      holder.entries.map((entry) => (entry.type === "shared_image" ? entry.name : entry.type)),
+      ["broken.png"],
+    );
     await assert.rejects(service.sharedImage(BOT_ID, holder.entries[0]!.id), { code: "not_found" });
   } finally {
     await service.close();
@@ -3648,7 +5223,10 @@ test("a shared image whose bytes don't match its type is never offered to phones
 test("a newly shared image reaches bot:images streams as an image and other streams as its line, at the same seq", async () => {
   const driven = drivenConversation([user(1, "Draw it.")]);
   const fake = fakeRuntime({ kind: "idle" });
-  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  const service = sessionService({
+    ...fake.runtime,
+    conversation: async () => driven.conversation as never,
+  });
   const holder = await openAudienceStream(service, { images: true });
   const legacy = await openAudienceStream(service, {});
   try {
@@ -3722,7 +5300,12 @@ function issueHost(
     settle(issueId: string) {
       cards = cards.map((card) =>
         card.id === issueId
-          ? { ...card, actions: [], resolvedAt: Date.parse("2026-10-27T09:20:00.000Z"), resolution: "fixed" as const }
+          ? {
+              ...card,
+              actions: [],
+              resolvedAt: Date.parse("2026-10-27T09:20:00.000Z"),
+              resolution: "fixed" as const,
+            }
           : card,
       );
       for (const listener of listeners) listener(BOT_ID);
@@ -3744,45 +5327,86 @@ function issueSession(
 }
 
 test("access_needed issues and their private authorization never reach bot:issues-only devices", async () => {
-  const access: BotIssue = { ...ISSUE_CARD, id: "issue_access", kind: "access_needed", actions: [{ kind: "allow_folder" }], access: { label: "Taxes", folderPath: "/private/Taxes", authorization: { policyRevision: "private-revision", requestIds: ["routine:private:1"], target: "folder", root: "/private/Taxes", identity: { device: "1", inode: "2" }, choices: ["not_now", "always", "once"] } } };
+  const access: BotIssue = {
+    ...ISSUE_CARD,
+    id: "issue_access",
+    kind: "access_needed",
+    actions: [{ kind: "allow_folder" }],
+    access: {
+      label: "Taxes",
+      folderPath: "/private/Taxes",
+      authorization: {
+        policyRevision: "private-revision",
+        requestIds: ["routine:private:1"],
+        target: "folder",
+        root: "/private/Taxes",
+        identity: { device: "1", inode: "2" },
+        choices: ["not_now", "always", "once"],
+      },
+    },
+  };
   const host = issueHost({ cards: [access, ISSUE_CARD] });
   const service = issueSession(host.service);
   try {
     const session = await service.session(BOT_ID, ISSUES_HOLDER);
-    assert.deepEqual(session.issues?.map((issue) => issue.id), [ISSUE_CARD.id]);
+    assert.deepEqual(
+      session.issues?.map((issue) => issue.id),
+      [ISSUE_CARD.id],
+    );
     const serialized = JSON.stringify(session);
     assert.equal(serialized.includes("private-revision"), false);
     assert.equal(serialized.includes("/private/Taxes"), false);
     assert.equal(serialized.includes("issue_access"), false);
-  } finally { await service.close(); }
+  } finally {
+    await service.close();
+  }
 });
 
 test("issues are omitted unless bot:issues is negotiated, and a settled card reaches holders at its own seq", async () => {
   const host = issueHost();
   const service = issueSession(host.service);
   const holder = await openAudienceStream(service, ISSUES_HOLDER);
-  const legacy = await openAudienceStream(service, { cards: true, handoffs: true, handoffNotes: true });
+  const legacy = await openAudienceStream(service, {
+    cards: true,
+    handoffs: true,
+    handoffNotes: true,
+  });
   try {
     await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
     await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
 
     const fetched = await service.session(BOT_ID, ISSUES_HOLDER);
-    assert.deepEqual(fetched.issues?.map((issue) => [issue.id, issue.kind, issue.resolved]), [
-      ["issue_card_1", "run_stalled", false],
+    assert.deepEqual(
+      fetched.issues?.map((issue) => [issue.id, issue.kind, issue.resolved]),
+      [["issue_card_1", "run_stalled", false]],
+    );
+    assert.deepEqual(fetched.issues?.[0]?.actions, [
+      { kind: "stop_run" },
+      { kind: "keep_waiting" },
     ]);
-    assert.deepEqual(fetched.issues?.[0]?.actions, [{ kind: "stop_run" }, { kind: "keep_waiting" }]);
     // Another device with every other opt-in is still a legacy device here.
-    const other = await service.session(BOT_ID, { cards: true, activity: true, handoffs: true, handoffNotes: true });
+    const other = await service.session(BOT_ID, {
+      cards: true,
+      activity: true,
+      handoffs: true,
+      handoffNotes: true,
+    });
     assert.equal("issues" in other, false);
     assert.deepEqual(holder.frames[0]?.payload.session.issues, fetched.issues);
     assert.equal("issues" in legacy.frames[0]!.payload.session, false);
 
     host.settle("issue_card_1");
-    await holder.until(() => holder.frames.some((frame) => frame.type === "issues"), "the issues frame");
+    await holder.until(
+      () => holder.frames.some((frame) => frame.type === "issues"),
+      "the issues frame",
+    );
     await legacy.until(() => legacy.frames.length >= 2, "the legacy state frame");
     const frame = holder.frames.find((candidate) => candidate.type === "issues")!;
     assert.deepEqual(
-      frame.payload.issues?.map((issue: { id: string; resolved: boolean }) => [issue.id, issue.resolved]),
+      frame.payload.issues?.map((issue: { id: string; resolved: boolean }) => [
+        issue.id,
+        issue.resolved,
+      ]),
       [["issue_card_1", true]],
     );
     const legacyFrame = legacy.frames[1]!;
@@ -3802,7 +5426,9 @@ test("an unwired host sends no issues even when the device asks for them", async
     assert.equal(service.supportsIssues, false);
     assert.equal("issues" in (await service.session(BOT_ID, ISSUES_HOLDER)), false);
     await assert.rejects(
-      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0009", { action: { kind: "stop_run" } }),
+      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0009", {
+        action: { kind: "stop_run" },
+      }),
       isError("not_found", 404),
     );
     assert.deepEqual(host.calls, []);
@@ -3825,7 +5451,9 @@ test("act stop_run reaches the issue service once, and an action the card never 
       await service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0001", request),
       { result: "done" },
     );
-    assert.deepEqual(host.calls, [{ botId: BOT_ID, issueId: ISSUE_CARD.id, action: { kind: "stop_run" } }]);
+    assert.deepEqual(host.calls, [
+      { botId: BOT_ID, issueId: ISSUE_CARD.id, action: { kind: "stop_run" } },
+    ]);
 
     // An action the card no longer offers is `409 operation_stale`, and
     // nothing is recorded: the same key runs once the card offers it again.
@@ -3835,7 +5463,13 @@ test("act stop_run reaches the issue service once, and an action the card never 
       isError("operation_stale", 409),
     );
     assert.deepEqual(
-      await service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0002", keepWaiting),
+      await service.actIssue(
+        DEVICE_ID,
+        BOT_ID,
+        ISSUE_CARD.id,
+        "issue-act-request-0002",
+        keepWaiting,
+      ),
       { result: "done" },
     );
     assert.equal(host.calls.length, 3);
@@ -3870,11 +5504,16 @@ test("unknown and desktop-only issue actions are 400 and run nothing", async () 
       );
     }
     await assert.rejects(
-      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0011", { action: { kind: "stop_run" }, extra: true }),
+      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0011", {
+        action: { kind: "stop_run" },
+        extra: true,
+      }),
       isError("invalid_request", 400),
     );
     await assert.rejects(
-      service.actIssue(DEVICE_ID, BOT_ID, "not an issue id", "issue-act-request-0012", { action: { kind: "stop_run" } }),
+      service.actIssue(DEVICE_ID, BOT_ID, "not an issue id", "issue-act-request-0012", {
+        action: { kind: "stop_run" },
+      }),
       isError("invalid_request", 400),
     );
     assert.deepEqual(host.calls, []);
@@ -3901,7 +5540,10 @@ test("a card's desktop-only settings action never crosses the wire, and a settle
   try {
     const issues = (await service.session(BOT_ID, ISSUES_HOLDER)).issues ?? [];
     // The store holds them newest first; the wire carries them oldest first.
-    assert.deepEqual(issues.map((issue) => issue.id), ["issue_settled_1", "issue_settings_1"]);
+    assert.deepEqual(
+      issues.map((issue) => issue.id),
+      ["issue_settled_1", "issue_settings_1"],
+    );
     const settings = issues.find((issue) => issue.id === "issue_settings_1");
     const settled = issues.find((issue) => issue.id === "issue_settled_1");
     assert.deepEqual(settings?.actions, [], "settings stay on the Mac");
@@ -3915,27 +5557,120 @@ test("a card's desktop-only settings action never crosses the wire, and a settle
 
 test("Bot messaging projects to existing labelled messages, including bounded saved answers", () => {
   const rows = projectBotSessionEntries([
-    {id: 1, kind: "aiden.bot-notice", data: {notice: "bot_message", kind: "request", botId: "j", botName: "Jester", text: "Clean question"}},
-    {id: 2, kind: "aiden.bot-message-input", data: {kind: "request", deliveryId: "d", botId: "j", botName: "Jester", text: "Clean question", deadline: 100}, model: [{role: "user", content: "<bot_message>frame instructions</bot_message>", timestamp: 1}]},
-    {id: 3, kind: "aiden.bot-message-status", data: {deliveryId: "d", botId: "c", botName: "COS", outcome: "waiting_approval", summary: "Create 3 events"}},
-    {id: 4, kind: "aiden.bot-message-status", data: {deliveryId: "d", botId: "c", botName: "COS", outcome: "replied_while_paused", text: "Saved answer. ".repeat(900)}},
+    {
+      id: 1,
+      kind: "aiden.bot-notice",
+      data: {
+        notice: "bot_message",
+        kind: "request",
+        botId: "j",
+        botName: "Jester",
+        text: "Clean question",
+      },
+    },
+    {
+      id: 2,
+      kind: "aiden.bot-message-input",
+      data: {
+        kind: "request",
+        deliveryId: "d",
+        botId: "j",
+        botName: "Jester",
+        text: "Clean question",
+        deadline: 100,
+      },
+      model: [
+        { role: "user", content: "<bot_message>frame instructions</bot_message>", timestamp: 1 },
+      ],
+    },
+    {
+      id: 3,
+      kind: "aiden.bot-message-status",
+      data: {
+        deliveryId: "d",
+        botId: "c",
+        botName: "COS",
+        outcome: "waiting_approval",
+        summary: "Create 3 events",
+      },
+    },
+    {
+      id: 4,
+      kind: "aiden.bot-message-status",
+      data: {
+        deliveryId: "d",
+        botId: "c",
+        botName: "COS",
+        outcome: "replied_while_paused",
+        text: "Saved answer. ".repeat(900),
+      },
+    },
   ] as never);
   assert.equal(rows.length, 3);
-  assert.deepEqual(rows[0], {type: "message", id: "entry_2", role: "user", label: "Jester asked", text: "Clean question", createdAt: new Date(1).toISOString()});
-  assert.deepEqual(rows[1], {type: "message", id: "entry_3", role: "user", label: "COS", text: "COS is waiting for you to approve: Create 3 events"});
+  assert.deepEqual(rows[0], {
+    type: "message",
+    id: "entry_2",
+    role: "user",
+    label: "Jester asked",
+    text: "Clean question",
+    createdAt: new Date(1).toISOString(),
+  });
+  assert.deepEqual(rows[1], {
+    type: "message",
+    id: "entry_3",
+    role: "user",
+    label: "COS",
+    text: "COS is waiting for you to approve: Create 3 events",
+  });
   assert.ok(rows[2]?.type === "message");
   assert.match(rows[2].text, /^COS replied\n\nSaved answer/u);
   assert.ok(rows[2].text.length <= 16000);
   for (const row of rows) assert.deepEqual(parseAidenRemoteBotSessionEntry(row), row);
   assert.equal(JSON.stringify(rows).includes("frame instructions"), false);
   const afterCrash = projectBotSessionEntries([
-    {id: 5, kind: "aiden.bot-notice", data: {notice: "bot_message", kind: "request", deliveryId: "old", botId: "j", botName: "Jester", text: "Stale Bot text"}},
-    {id: 6, kind: "pi.user", model: [{role: "user", content: "My own message", timestamp: 2}]},
-    {id: 7, kind: "aiden.bot-message-input", data: {kind: "reply", deliveryId: "new", botId: "c", botName: "COS", text: "Current Bot answer", deadline: 100}, model: [{role: "user", content: "<bot_message>private frame</bot_message>", timestamp: 3}]},
+    {
+      id: 5,
+      kind: "aiden.bot-notice",
+      data: {
+        notice: "bot_message",
+        kind: "request",
+        deliveryId: "old",
+        botId: "j",
+        botName: "Jester",
+        text: "Stale Bot text",
+      },
+    },
+    { id: 6, kind: "pi.user", model: [{ role: "user", content: "My own message", timestamp: 2 }] },
+    {
+      id: 7,
+      kind: "aiden.bot-message-input",
+      data: {
+        kind: "reply",
+        deliveryId: "new",
+        botId: "c",
+        botName: "COS",
+        text: "Current Bot answer",
+        deadline: 100,
+      },
+      model: [{ role: "user", content: "<bot_message>private frame</bot_message>", timestamp: 3 }],
+    },
   ] as never);
   assert.deepEqual(afterCrash, [
-    {type: "message", id: "entry_6", role: "user", text: "My own message", createdAt: new Date(2).toISOString()},
-    {type: "message", id: "entry_7", role: "user", label: "COS replied", text: "Current Bot answer", createdAt: new Date(3).toISOString()},
+    {
+      type: "message",
+      id: "entry_6",
+      role: "user",
+      text: "My own message",
+      createdAt: new Date(2).toISOString(),
+    },
+    {
+      type: "message",
+      id: "entry_7",
+      role: "user",
+      label: "COS replied",
+      text: "Current Bot answer",
+      createdAt: new Date(3).toISOString(),
+    },
   ]);
 });
 
@@ -3944,9 +5679,16 @@ function accessSession(options: { issues?: ReturnType<typeof issueHost>["service
   const accessRequests = createBotAccessRequests();
   let authorizations = 0;
   const service = new AidenRemoteBotSessionService({
-    bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
-    accessRequests, ...options,
-    answerAccessRequest: async (botId, waitId, choice) => ({ answered: await accessRequests.answer(botId, waitId, choice, async () => { authorizations += 1; }) === "answered" }),
+    bots: botService(),
+    runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+    accessRequests,
+    ...options,
+    answerAccessRequest: async (botId, waitId, choice) => ({
+      answered:
+        (await accessRequests.answer(botId, waitId, choice, async () => {
+          authorizations += 1;
+        })) === "answered",
+    }),
   });
   return { service, accessRequests, authorizations: () => authorizations };
 }
@@ -3960,23 +5702,58 @@ test("access requests reach holders, while legacy phones and paired desktops fol
     await legacy.until(() => legacy.frames.length === 1, "legacy snapshot");
     const asked = accessRequests.request(accessRequestPrompt({ botId: BOT_ID }));
     const card = accessRequests.pending(BOT_ID)[0]!;
-    await holder.until(() => holder.frames.some((frame) => frame.type === "access_request"), "access frame");
-    await legacy.until(() => legacy.frames.some((frame) => frame.type === "entry"), "legacy access notice");
-    assert.equal((await service.session(BOT_ID, { accessRequests: true })).accessRequest?.waitId, card.waitId);
+    await holder.until(
+      () => holder.frames.some((frame) => frame.type === "access_request"),
+      "access frame",
+    );
+    await legacy.until(
+      () => legacy.frames.some((frame) => frame.type === "entry"),
+      "legacy access notice",
+    );
+    assert.equal(
+      (await service.session(BOT_ID, { accessRequests: true })).accessRequest?.waitId,
+      card.waitId,
+    );
     assert.equal(holder.raw.join("").includes("authorization"), false);
     assert.equal(holder.raw.join("").includes("folderPath"), false);
     const read = await service.session(BOT_ID);
     assert.equal("accessRequest" in read, false);
-    assert.deepEqual(last(read.entries), { type: "message", role: "assistant", id: `access-notice:${card.waitId}`, text: "Planner needs you on your computer: allow access to Taxes" });
+    assert.deepEqual(last(read.entries), {
+      type: "message",
+      role: "assistant",
+      id: `access-notice:${card.waitId}`,
+      text: "Planner needs you on your computer: allow access to Taxes",
+    });
     assert.deepEqual(reducedView(legacy.frames), remoteBotSessionView(read));
-    await service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-001", { choice: "once" });
+    await service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-001", {
+      choice: "once",
+    });
     assert.equal((await asked).choice, "once");
-    await legacy.until(() => last(legacy.frames)?.type === "snapshot", "notice removed by snapshot");
-    await holder.until(() => last(holder.frames)?.payload.accessRequest === null, "holder card removed");
-    assert.deepEqual(reducedView(legacy.frames), remoteBotSessionView(await service.session(BOT_ID)));
-    assert.equal(reducedView(legacy.frames).snapshot.entries.some((entry) => entry.id.startsWith("access-notice:")), false);
-    assert.ok(gapless(holder.frames)); assert.ok(gapless(legacy.frames));
-  } finally { await holder.close(); await legacy.close(); await service.close(); }
+    await legacy.until(
+      () => last(legacy.frames)?.type === "snapshot",
+      "notice removed by snapshot",
+    );
+    await holder.until(
+      () => last(holder.frames)?.payload.accessRequest === null,
+      "holder card removed",
+    );
+    assert.deepEqual(
+      reducedView(legacy.frames),
+      remoteBotSessionView(await service.session(BOT_ID)),
+    );
+    assert.equal(
+      reducedView(legacy.frames).snapshot.entries.some((entry) =>
+        entry.id.startsWith("access-notice:"),
+      ),
+      false,
+    );
+    assert.ok(gapless(holder.frames));
+    assert.ok(gapless(legacy.frames));
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+  }
 });
 
 test("access answer replay survives a lost response and never authorizes twice; unoffered and settled choices are refused", async () => {
@@ -3984,227 +5761,706 @@ test("access answer replay survives a lost response and never authorizes twice; 
   const asked = accessRequests.request(accessRequestPrompt({ botId: BOT_ID }));
   const card = accessRequests.pending(BOT_ID)[0]!;
   try {
-    await service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-002", { choice: "always" }); // response lost
-    assert.deepEqual(await service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-002", { choice: "always" }), { answered: true });
+    await service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-002", {
+      choice: "always",
+    }); // response lost
+    assert.deepEqual(
+      await service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-002", {
+        choice: "always",
+      }),
+      { answered: true },
+    );
     assert.equal(authorizations(), 1);
     assert.equal((await asked).choice, "always");
-    await assert.rejects(service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-003", { choice: "once" }), (e: { code?: string }) => e.code === "access_request_expired");
-    await assert.rejects(service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-002", { choice: "not_now" }), (e: { code?: string }) => e.code === "idempotency_conflict");
-    const whole = accessRequests.request(accessRequestPrompt({ botId: BOT_ID, logicalRequestId: "whole", target: "whole_mac", label: "your whole Mac", place: undefined, choices: ["not_now", "once"], grant: undefined, authorization: { policyRevision: "rev-1", requestIds: ["run-1"], target: "whole_mac", root: "/", choices: ["not_now", "once"] } }));
+    await assert.rejects(
+      service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-003", {
+        choice: "once",
+      }),
+      (e: { code?: string }) => e.code === "access_request_expired",
+    );
+    await assert.rejects(
+      service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-002", {
+        choice: "not_now",
+      }),
+      (e: { code?: string }) => e.code === "idempotency_conflict",
+    );
+    const whole = accessRequests.request(
+      accessRequestPrompt({
+        botId: BOT_ID,
+        logicalRequestId: "whole",
+        target: "whole_mac",
+        label: "your whole Mac",
+        place: undefined,
+        choices: ["not_now", "once"],
+        grant: undefined,
+        authorization: {
+          policyRevision: "rev-1",
+          requestIds: ["run-1"],
+          target: "whole_mac",
+          root: "/",
+          choices: ["not_now", "once"],
+        },
+      }),
+    );
     const wholeId = accessRequests.pending(BOT_ID)[0]!.waitId;
-    await assert.rejects(service.answerAccessRequest(DEVICE_ID, BOT_ID, wholeId, "access-answer-key-004", { choice: "always" }), (e: { code?: string; status?: number }) => e.code === "invalid_request" && e.status === 400);
+    await assert.rejects(
+      service.answerAccessRequest(DEVICE_ID, BOT_ID, wholeId, "access-answer-key-004", {
+        choice: "always",
+      }),
+      (e: { code?: string; status?: number }) => e.code === "invalid_request" && e.status === 400,
+    );
     assert.equal(accessRequests.pending(BOT_ID).length, 1);
-    await service.answerAccessRequest(DEVICE_ID, BOT_ID, wholeId, "access-answer-key-004", { choice: "not_now" });
+    await service.answerAccessRequest(DEVICE_ID, BOT_ID, wholeId, "access-answer-key-004", {
+      choice: "not_now",
+    });
     assert.equal((await whole).choice, "not_now");
-  } finally { await service.close(); }
+  } finally {
+    await service.close();
+  }
 });
 
 test("access issues and allow_folder reach holders only, including settled issue events", async () => {
-  const access: BotIssue = { ...ISSUE_CARD, id: "issue_access_holder", kind: "access_needed", actions: [{ kind: "allow_folder" }], access: { label: "Taxes", folderPath: "/private/Taxes", authorization: accessRequestPrompt().authorization } };
+  const access: BotIssue = {
+    ...ISSUE_CARD,
+    id: "issue_access_holder",
+    kind: "access_needed",
+    actions: [{ kind: "allow_folder" }],
+    access: {
+      label: "Taxes",
+      folderPath: "/private/Taxes",
+      authorization: accessRequestPrompt().authorization,
+    },
+  };
   const host = issueHost({ cards: [access, ISSUE_CARD] });
   const { service } = accessSession({ issues: host.service });
   const holder = await openAudienceStream(service, { issues: true, accessRequests: true });
   const old = await openAudienceStream(service, { issues: true });
   try {
-    await holder.until(() => holder.frames.length === 1, "holder issues"); await old.until(() => old.frames.length === 1, "legacy issues");
-    assert.deepEqual((await service.session(BOT_ID, { issues: true, accessRequests: true })).issues?.map((i) => i.kind), ["run_stalled", "access_needed"]);
+    await holder.until(() => holder.frames.length === 1, "holder issues");
+    await old.until(() => old.frames.length === 1, "legacy issues");
+    assert.deepEqual(
+      (await service.session(BOT_ID, { issues: true, accessRequests: true })).issues?.map(
+        (i) => i.kind,
+      ),
+      ["run_stalled", "access_needed"],
+    );
     assert.equal(holder.raw.join("").includes("/private/Taxes"), false);
     assert.equal(old.raw.join("").includes("access_needed"), false);
-    await assert.rejects(service.actIssue(DEVICE_ID, BOT_ID, access.id, "access-issue-key-001", { action: { kind: "allow_folder" } }), (e: { code?: string }) => e.code === "capability_denied");
-    assert.deepEqual(await service.actIssue(DEVICE_ID, BOT_ID, access.id, "access-issue-key-001", { action: { kind: "allow_folder" } }, { accessRequests: true }), { result: "done" });
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, access.id, "access-issue-key-001", {
+        action: { kind: "allow_folder" },
+      }),
+      (e: { code?: string }) => e.code === "capability_denied",
+    );
+    assert.deepEqual(
+      await service.actIssue(
+        DEVICE_ID,
+        BOT_ID,
+        access.id,
+        "access-issue-key-001",
+        { action: { kind: "allow_folder" } },
+        { accessRequests: true },
+      ),
+      { result: "done" },
+    );
     host.settle(access.id);
-    await holder.until(() => holder.frames.some((f) => f.type === "issues"), "settled access issue");
+    await holder.until(
+      () => holder.frames.some((f) => f.type === "issues"),
+      "settled access issue",
+    );
     await old.until(() => old.frames.some((f) => f.type === "issues"), "legacy issues advance");
     assert.equal(old.raw.join("").includes("access_needed"), false);
     assert.equal(old.raw.join("").includes("allow_folder"), false);
-  } finally { await holder.close(); await old.close(); await service.close(); }
+  } finally {
+    await holder.close();
+    await old.close();
+    await service.close();
+  }
 });
 
 test("public open issue counts exclude hidden access requests for nonholders", async () => {
-  const host = issueHost({ cards: [ISSUE_CARD, { ...ISSUE_CARD, id: "issue_access_count", kind: "access_needed" }, { ...ISSUE_CARD, id: "issue_settled_count", resolvedAt: 123 }] });
+  const host = issueHost({
+    cards: [
+      ISSUE_CARD,
+      { ...ISSUE_CARD, id: "issue_access_count", kind: "access_needed" },
+      { ...ISSUE_CARD, id: "issue_settled_count", resolvedAt: 123 },
+    ],
+  });
   const { service } = accessSession({ issues: host.service });
   try {
     assert.equal(await service.openIssueCount(BOT_ID), 1);
     assert.equal(await service.openIssueCount(BOT_ID, { accessRequests: true }), 2);
-  } finally { await service.close(); }
+  } finally {
+    await service.close();
+  }
 });
 
 test("stale access policy or inode returns retryable 409 on same-key replay without ledger internal_error", async () => {
   for (const reason of ["policy", "inode", "admission"]) {
-    const bridge = createBotAccessRequests(), store = createBotRunAccess({now:Date.now});
-    let revision = "rev-1", inode = "2", admissionDrift = false;
-    const authorize = createBotAccessAuthorizer({now:Date.now,audienceId:"desktop",runAccess:store,
-      revalidate:async (_id,expected)=>{if(admissionDrift) throw new BotRuntimeAuthorityError("capability_changed");if(expected!==revision) throw new BotAccessRequestStaleError("policy changed");},
-      resolveTarget:async()=>({kind:"folder",root:"/home/person/Documents/Taxes",label:"Taxes",place:"~/Documents/Taxes",device:"1",inode,always:{kind:"new"}}),
-      grantFolder:async()=>{throw new Error("must not save");},changed(){}
+    const bridge = createBotAccessRequests(),
+      store = createBotRunAccess({ now: Date.now });
+    let revision = "rev-1",
+      inode = "2",
+      admissionDrift = false;
+    const authorize = createBotAccessAuthorizer({
+      now: Date.now,
+      audienceId: "desktop",
+      runAccess: store,
+      revalidate: async (_id, expected) => {
+        if (admissionDrift) throw new BotRuntimeAuthorityError("capability_changed");
+        if (expected !== revision) throw new BotAccessRequestStaleError("policy changed");
+      },
+      resolveTarget: async () => ({
+        kind: "folder",
+        root: "/home/person/Documents/Taxes",
+        label: "Taxes",
+        place: "~/Documents/Taxes",
+        device: "1",
+        inode,
+        always: { kind: "new" },
+      }),
+      grantFolder: async () => {
+        throw new Error("must not save");
+      },
+      changed() {},
     });
     const service = new AidenRemoteBotSessionService({
-      bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+      bots: botService(),
+      runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
       accessRequests: bridge,
-      answerAccessRequest: async (botId, waitId, choice) => ({ answered: await bridge.answer(botId, waitId, choice, authorize) === "answered" }),
+      answerAccessRequest: async (botId, waitId, choice) => ({
+        answered: (await bridge.answer(botId, waitId, choice, authorize)) === "answered",
+      }),
     });
     const controller = new AbortController();
-    const owner = {signal:controller.signal,deadline:Date.now()+60_000,validate:async()=>{}};
+    const owner = {
+      signal: controller.signal,
+      deadline: Date.now() + 60_000,
+      validate: async () => {},
+    };
     const waiting = bridge.request(accessRequestPrompt({ botId: BOT_ID, owner }));
     const withdrawn = assert.rejects(waiting, BotAccessRequestStaleError);
     const id = bridge.pending()[0]!.waitId;
-    if(reason==="policy") revision="rev-2"; else if(reason==="inode") inode="3"; else admissionDrift=true;
+    if (reason === "policy") revision = "rev-2";
+    else if (reason === "inode") inode = "3";
+    else admissionDrift = true;
     try {
-      await assert.rejects(service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"stale-access-key-001",{choice:"once"}), (e:{code?:string;status?:number;retryable?:boolean})=>e.code==="access_request_expired"&&e.status===409&&e.retryable===true);
-      await assert.rejects(service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"stale-access-key-001",{choice:"once"}), (e:{code?:string;status?:number})=>e.code==="access_request_expired"&&e.status===409);
-      await withdrawn; assert.deepEqual(bridge.pending(),[]);
-      assert.equal(store.location(BOT_ID,["run-1"],revision),undefined);
-      admissionDrift=false;
-      const input=accessRequestPrompt({botId:BOT_ID,owner});
-      const fresh=bridge.request({...input,authorization:{...input.authorization,policyRevision:revision,identity:{device:"1",inode}}});
-      const freshId=bridge.pending()[0]!.waitId; assert.notEqual(freshId,id);
-      assert.deepEqual(await service.answerAccessRequest(DEVICE_ID,BOT_ID,freshId,"stale-access-key-002",{choice:"once"}),{answered:true});
-      await fresh; assert.equal(store.location(BOT_ID,["run-1"],revision)?.root,"/home/person/Documents/Taxes");
-    } finally { await service.close(); }
+      await assert.rejects(
+        service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "stale-access-key-001", {
+          choice: "once",
+        }),
+        (e: { code?: string; status?: number; retryable?: boolean }) =>
+          e.code === "access_request_expired" && e.status === 409 && e.retryable === true,
+      );
+      await assert.rejects(
+        service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "stale-access-key-001", {
+          choice: "once",
+        }),
+        (e: { code?: string; status?: number }) =>
+          e.code === "access_request_expired" && e.status === 409,
+      );
+      await withdrawn;
+      assert.deepEqual(bridge.pending(), []);
+      assert.equal(store.location(BOT_ID, ["run-1"], revision), undefined);
+      admissionDrift = false;
+      const input = accessRequestPrompt({ botId: BOT_ID, owner });
+      const fresh = bridge.request({
+        ...input,
+        authorization: {
+          ...input.authorization,
+          policyRevision: revision,
+          identity: { device: "1", inode },
+        },
+      });
+      const freshId = bridge.pending()[0]!.waitId;
+      assert.notEqual(freshId, id);
+      assert.deepEqual(
+        await service.answerAccessRequest(DEVICE_ID, BOT_ID, freshId, "stale-access-key-002", {
+          choice: "once",
+        }),
+        { answered: true },
+      );
+      await fresh;
+      assert.equal(
+        store.location(BOT_ID, ["run-1"], revision)?.root,
+        "/home/person/Documents/Taxes",
+      );
+    } finally {
+      await service.close();
+    }
   }
 });
 test("saved access receipt replays after card disappears without executing authority twice", async () => {
-  const bridge = createBotAccessRequests(); let effects = 0;
+  const bridge = createBotAccessRequests();
+  let effects = 0;
   const service = new AidenRemoteBotSessionService({
-    bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+    bots: botService(),
+    runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
     accessRequests: bridge,
     answerAccessRequest: async (botId, waitId, choice) => {
-      const result = await bridge.answer(botId, waitId, choice, async () => { effects++; return { savedForFuture: true }; });
-      return { answered: result === "saved_for_future", ...(result === "saved_for_future" ? { savedForFuture: true as const } : {}) };
+      const result = await bridge.answer(botId, waitId, choice, async () => {
+        effects++;
+        return { savedForFuture: true };
+      });
+      return {
+        answered: result === "saved_for_future",
+        ...(result === "saved_for_future" ? { savedForFuture: true as const } : {}),
+      };
     },
   });
-  const asked = bridge.request(accessRequestPrompt({ botId: BOT_ID })); const id = bridge.pending()[0]!.waitId;
+  const asked = bridge.request(accessRequestPrompt({ botId: BOT_ID }));
+  const id = bridge.pending()[0]!.waitId;
   try {
     const receipt = { answered: true, savedForFuture: true };
-    assert.deepEqual(await service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "saved-access-key-001", { choice: "always" }), receipt);
+    assert.deepEqual(
+      await service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "saved-access-key-001", {
+        choice: "always",
+      }),
+      receipt,
+    );
     await asked;
-    assert.deepEqual(await service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "saved-access-key-001", { choice: "always" }), receipt);
-    assert.deepEqual(await service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "saved-access-key-002", { choice: "always" }), receipt);
+    assert.deepEqual(
+      await service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "saved-access-key-001", {
+        choice: "always",
+      }),
+      receipt,
+    );
+    assert.deepEqual(
+      await service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "saved-access-key-002", {
+        choice: "always",
+      }),
+      receipt,
+    );
     assert.equal(effects, 1);
-  } finally { await service.close(); }
+  } finally {
+    await service.close();
+  }
 });
 
 test("a known pre-grant stale access issue refusal stays typed and its same-key retry can observe settlement", async () => {
-  const host = issueHost(); let attempts = 0;
-  const service = issueSession({...host.service, act: async () => {
-    if (++attempts === 1) throw new BotAccessRequestStaleError("This folder request changed. Ask again.");
-    return "not_open" as const;
-  }});
+  const host = issueHost();
+  let attempts = 0;
+  const service = issueSession({
+    ...host.service,
+    act: async () => {
+      if (++attempts === 1)
+        throw new BotAccessRequestStaleError("This folder request changed. Ask again.");
+      return "not_open" as const;
+    },
+  });
   try {
-    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"stale-issue-key-001",{action:{kind:"allow_folder"}},{accessRequests:true}),
-      (error:{code?:string;status?:number;retryable?:boolean})=>error.code==="operation_stale"&&error.status===409&&error.retryable===true);
-    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"stale-issue-key-001",{action:{kind:"allow_folder"}},{accessRequests:true}),{result:"not_open"});
-  } finally {await service.close();}
+    await assert.rejects(
+      service.actIssue(
+        DEVICE_ID,
+        BOT_ID,
+        ISSUE_CARD.id,
+        "stale-issue-key-001",
+        { action: { kind: "allow_folder" } },
+        { accessRequests: true },
+      ),
+      (error: { code?: string; status?: number; retryable?: boolean }) =>
+        error.code === "operation_stale" && error.status === 409 && error.retryable === true,
+    );
+    assert.deepEqual(
+      await service.actIssue(
+        DEVICE_ID,
+        BOT_ID,
+        ISSUE_CARD.id,
+        "stale-issue-key-001",
+        { action: { kind: "allow_folder" } },
+        { accessRequests: true },
+      ),
+      { result: "not_open" },
+    );
+  } finally {
+    await service.close();
+  }
 });
 
 test("transient access failures retry the same ledger key through the real bridge and exact receipt", async () => {
   for (const failure of ["before_publication", "after_publication"] as const) {
-    const bridge = createBotAccessRequests(), runAccess = createBotRunAccess({now:Date.now});
-    let portCalls=0, publications=0, attempts=0, readable=true, committed=false;
-    const authorize=createBotAccessAuthorizer({now:Date.now,audienceId:"desktop",runAccess,
-      revalidate:async()=>{if(committed) throw new BotAccessRequestStaleError("policy changed");},
-      resolveTarget:async()=>({kind:"folder",root:"/home/person/Documents/Taxes",label:"Taxes",place:"~/Documents/Taxes",device:"1",inode:"2",always:{kind:"new"}}),
-      grantFolder:async()=>{
+    const bridge = createBotAccessRequests(),
+      runAccess = createBotRunAccess({ now: Date.now });
+    let portCalls = 0,
+      publications = 0,
+      attempts = 0,
+      readable = true,
+      committed = false;
+    const authorize = createBotAccessAuthorizer({
+      now: Date.now,
+      audienceId: "desktop",
+      runAccess,
+      revalidate: async () => {
+        if (committed) throw new BotAccessRequestStaleError("policy changed");
+      },
+      resolveTarget: async () => ({
+        kind: "folder",
+        root: "/home/person/Documents/Taxes",
+        label: "Taxes",
+        place: "~/Documents/Taxes",
+        device: "1",
+        inode: "2",
+        always: { kind: "new" },
+      }),
+      grantFolder: async () => {
         attempts++;
-        if(attempts===1 && failure==="before_publication") throw new Error("disk temporarily unavailable");
-        publications++;committed=true;
-        if(failure==="after_publication") {readable=false;throw new Error("publication receipt lookup unavailable");}
+        if (attempts === 1 && failure === "before_publication")
+          throw new Error("disk temporarily unavailable");
+        publications++;
+        committed = true;
+        if (failure === "after_publication") {
+          readable = false;
+          throw new Error("publication receipt lookup unavailable");
+        }
         return "rev-2";
       },
-      folderCommitted:async()=>{if(!readable) throw new Error("journal temporarily unavailable");return committed;},changed(){}
+      folderCommitted: async () => {
+        if (!readable) throw new Error("journal temporarily unavailable");
+        return committed;
+      },
+      changed() {},
     });
-    const service=new AidenRemoteBotSessionService({bots:botService(),runtime:async()=>fakeRuntime({kind:"running",submissionId:"sub_1"}).runtime,accessRequests:bridge,
-      answerAccessRequest:async(botId,waitId,choice)=>{portCalls++;const result=await bridge.answer(botId,waitId,choice,authorize);return {answered:result==="answered"||result==="saved_for_future",...(result==="saved_for_future"?{savedForFuture:true as const}:{})};}
+    const service = new AidenRemoteBotSessionService({
+      bots: botService(),
+      runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+      accessRequests: bridge,
+      answerAccessRequest: async (botId, waitId, choice) => {
+        portCalls++;
+        const result = await bridge.answer(botId, waitId, choice, authorize);
+        return {
+          answered: result === "answered" || result === "saved_for_future",
+          ...(result === "saved_for_future" ? { savedForFuture: true as const } : {}),
+        };
+      },
     });
-    const waiting=bridge.request(accessRequestPrompt({botId:BOT_ID,owner:{signal:new AbortController().signal,deadline:Date.now()+60_000,validate:async()=>{}}}));
-    const id=bridge.pending()[0]!.waitId;
+    const waiting = bridge.request(
+      accessRequestPrompt({
+        botId: BOT_ID,
+        owner: {
+          signal: new AbortController().signal,
+          deadline: Date.now() + 60_000,
+          validate: async () => {},
+        },
+      }),
+    );
+    const id = bridge.pending()[0]!.waitId;
     try {
-      await assert.rejects(service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"transient-access-key-001",{choice:"always"}),/temporarily unavailable/u);
-      assert.equal(bridge.pending()[0]!.waitId,id);
-      readable=true;
-      assert.deepEqual(await service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"transient-access-key-001",{choice:"always"}),{answered:true,savedForFuture:true});
-      assert.deepEqual(await service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"transient-access-key-001",{choice:"always"}),{answered:true,savedForFuture:true});
-      await waiting;assert.equal(portCalls,2);assert.equal(publications,1);
-      assert.equal(attempts,failure==="before_publication"?2:1);
+      await assert.rejects(
+        service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "transient-access-key-001", {
+          choice: "always",
+        }),
+        /temporarily unavailable/u,
+      );
+      assert.equal(bridge.pending()[0]!.waitId, id);
+      readable = true;
+      assert.deepEqual(
+        await service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "transient-access-key-001", {
+          choice: "always",
+        }),
+        { answered: true, savedForFuture: true },
+      );
+      assert.deepEqual(
+        await service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "transient-access-key-001", {
+          choice: "always",
+        }),
+        { answered: true, savedForFuture: true },
+      );
+      await waiting;
+      assert.equal(portCalls, 2);
+      assert.equal(publications, 1);
+      assert.equal(attempts, failure === "before_publication" ? 2 : 1);
     } finally {
-      if(bridge.pending().length) await bridge.answer(BOT_ID,id,"not_now",async()=>{});
-      await waiting;await service.close();
+      if (bridge.pending().length) await bridge.answer(BOT_ID, id, "not_now", async () => {});
+      await waiting;
+      await service.close();
     }
   }
 });
 
 test("a transient allow_folder failure retries the issue port under the same ledger key only for access", async () => {
-  const host=issueHost();let attempts=0;
-  const service=issueSession({...host.service,act:async()=>{if(++attempts===1) throw new Error("grant journal temporarily unavailable");return "done" as const;}});
+  const host = issueHost();
+  let attempts = 0;
+  const service = issueSession({
+    ...host.service,
+    act: async () => {
+      if (++attempts === 1) throw new Error("grant journal temporarily unavailable");
+      return "done" as const;
+    },
+  });
   try {
-    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"transient-issue-key-001",{action:{kind:"allow_folder"}},{accessRequests:true}),/temporarily unavailable/u);
-    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"transient-issue-key-001",{action:{kind:"allow_folder"}},{accessRequests:true}),{result:"done"});
-    assert.equal(attempts,2);
-  } finally {await service.close();}
+    await assert.rejects(
+      service.actIssue(
+        DEVICE_ID,
+        BOT_ID,
+        ISSUE_CARD.id,
+        "transient-issue-key-001",
+        { action: { kind: "allow_folder" } },
+        { accessRequests: true },
+      ),
+      /temporarily unavailable/u,
+    );
+    assert.deepEqual(
+      await service.actIssue(
+        DEVICE_ID,
+        BOT_ID,
+        ISSUE_CARD.id,
+        "transient-issue-key-001",
+        { action: { kind: "allow_folder" } },
+        { accessRequests: true },
+      ),
+      { result: "done" },
+    );
+    assert.equal(attempts, 2);
+  } finally {
+    await service.close();
+  }
 });
 
 test("ordinary issue failure retains its existing cached rejection rather than gaining access retry semantics", async () => {
-  const host=issueHost();let attempts=0;
-  const service=issueSession({...host.service,act:async()=>{attempts++;throw new Error("ordinary action failed");}});
+  const host = issueHost();
+  let attempts = 0;
+  const service = issueSession({
+    ...host.service,
+    act: async () => {
+      attempts++;
+      throw new Error("ordinary action failed");
+    },
+  });
   try {
-    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"ordinary-issue-key-001",{action:{kind:"stop_run"}}),/ordinary action failed/u);
-    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"ordinary-issue-key-001",{action:{kind:"stop_run"}}),(error:{code?:string})=>error.code==="internal_error");
-    assert.equal(attempts,1);
-  } finally {await service.close();}
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "ordinary-issue-key-001", {
+        action: { kind: "stop_run" },
+      }),
+      /ordinary action failed/u,
+    );
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "ordinary-issue-key-001", {
+        action: { kind: "stop_run" },
+      }),
+      (error: { code?: string }) => error.code === "internal_error",
+    );
+    assert.equal(attempts, 1);
+  } finally {
+    await service.close();
+  }
 });
 
 test("access dismissal retries the same ledger key after a transient failure", async () => {
-  const action = {kind:"dismiss_access"} as const;
-  const access: BotIssue = {...ISSUE_CARD,kind:"access_needed",actions:[{kind:"dismiss_access"},{kind:"open_settings",section:"access"}]};
-  const host=issueHost({cards:[access]});let attempts=0;
-  const service=issueSession({...host.service,act:async()=>{if(++attempts===1)throw new Error("access action temporarily unavailable");return "done" as const;}});
+  const action = { kind: "dismiss_access" } as const;
+  const access: BotIssue = {
+    ...ISSUE_CARD,
+    kind: "access_needed",
+    actions: [{ kind: "dismiss_access" }, { kind: "open_settings", section: "access" }],
+  };
+  const host = issueHost({ cards: [access] });
+  let attempts = 0;
+  const service = issueSession({
+    ...host.service,
+    act: async () => {
+      if (++attempts === 1) throw new Error("access action temporarily unavailable");
+      return "done" as const;
+    },
+  });
   try {
-    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,access.id,"retry-access-action-key-01",{action},{accessRequests:true}),/temporarily unavailable/u);
-    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,access.id,"retry-access-action-key-01",{action},{accessRequests:true}),{result:"done"});
-    assert.equal(attempts,2);
-    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,access.id,"retry-access-action-key-01",{action},{accessRequests:true}),{result:"done"});
-    assert.equal(attempts,2,"successful retry remains cached");
-  } finally {await service.close();}
+    await assert.rejects(
+      service.actIssue(
+        DEVICE_ID,
+        BOT_ID,
+        access.id,
+        "retry-access-action-key-01",
+        { action },
+        { accessRequests: true },
+      ),
+      /temporarily unavailable/u,
+    );
+    assert.deepEqual(
+      await service.actIssue(
+        DEVICE_ID,
+        BOT_ID,
+        access.id,
+        "retry-access-action-key-01",
+        { action },
+        { accessRequests: true },
+      ),
+      { result: "done" },
+    );
+    assert.equal(attempts, 2);
+    assert.deepEqual(
+      await service.actIssue(
+        DEVICE_ID,
+        BOT_ID,
+        access.id,
+        "retry-access-action-key-01",
+        { action },
+        { accessRequests: true },
+      ),
+      { result: "done" },
+    );
+    assert.equal(attempts, 2, "successful retry remains cached");
+  } finally {
+    await service.close();
+  }
 });
 
-test("an access dismissal settles despite unrelated failed status writes and its retry observes not_open", {timeout:10_000}, async () => {
-  const profile=mkdtempSync(path.join(os.tmpdir(),"bot-access-dismiss-recovery-"));
-  const store=createBotIssueStore({profileDir:()=>profile});let failing=false,attempts=0;
-  const issues=createBotIssueService({store,now:()=>2000,
-    appendEntry:async(_botId,kind)=>{if(failing&&kind===BOT_ISSUE_STATUS_ENTRY_KIND)throw new Error("transcript status unavailable");},
-    funnel:{deliver:async()=>"sent"},actions:{resumeRoutine:async()=>"missing",stopRun:async()=>{},snoozeStall(){},openSettings(){}}});
-  const issue=await issues.raise({botId:BOT_ID,title:"Use your whole Mac",body:"Needs a broader folder",dedupeKey:"access:whole-mac",kind:"access_needed",actions:[{kind:"dismiss_access"},{kind:"open_settings",section:"access"}]});
-  await store.change(BOT_ID,rows=>({issues:[{...ISSUE_CARD,id:"other-settled",resolvedAt:1000,resolution:"fixed" as const,statusAppended:false},...rows],result:undefined}));
-  const service=issueSession({...issues,act:async(...args)=>{attempts++;return issues.act(...args);}});
-  try {
-    failing=true;
-    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,issue.id,"dismiss-after-write-key-01",{action:{kind:"dismiss_access"}},{accessRequests:true}),/transcript status unavailable/u);
-    assert.equal((await store.read(BOT_ID)).find(row=>row.id===issue.id)?.resolution,"dismissed");
-    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,issue.id,"dismiss-after-write-key-01",{action:{kind:"dismiss_access"}},{accessRequests:true}),{result:"not_open"});
-    assert.equal(attempts,2);
-    failing=false;
-    const repaired=new Promise<void>(resolve=>{issues.onChange(()=>{void store.read(BOT_ID).then(rows=>{if(rows.every(row=>row.statusAppended!==false))resolve();});});});
-    await issues.list(BOT_ID);await repaired;
-    assert.equal((await store.read(BOT_ID)).every(row=>row.statusAppended!==false),true);
-  } finally {failing=false;await service.close();rmSync(profile,{recursive:true,force:true});}
-});
+test(
+  "an access dismissal settles despite unrelated failed status writes and its retry observes not_open",
+  { timeout: 10_000 },
+  async () => {
+    const profile = mkdtempSync(path.join(os.tmpdir(), "bot-access-dismiss-recovery-"));
+    const store = createBotIssueStore({ profileDir: () => profile });
+    let failing = false,
+      attempts = 0;
+    const issues = createBotIssueService({
+      store,
+      now: () => 2000,
+      appendEntry: async (_botId, kind) => {
+        if (failing && kind === BOT_ISSUE_STATUS_ENTRY_KIND)
+          throw new Error("transcript status unavailable");
+      },
+      funnel: { deliver: async () => "sent" },
+      actions: {
+        resumeRoutine: async () => "missing",
+        stopRun: async () => {},
+        snoozeStall() {},
+        openSettings() {},
+      },
+    });
+    const issue = await issues.raise({
+      botId: BOT_ID,
+      title: "Use your whole Mac",
+      body: "Needs a broader folder",
+      dedupeKey: "access:whole-mac",
+      kind: "access_needed",
+      actions: [{ kind: "dismiss_access" }, { kind: "open_settings", section: "access" }],
+    });
+    await store.change(BOT_ID, (rows) => ({
+      issues: [
+        {
+          ...ISSUE_CARD,
+          id: "other-settled",
+          resolvedAt: 1000,
+          resolution: "fixed" as const,
+          statusAppended: false,
+        },
+        ...rows,
+      ],
+      result: undefined,
+    }));
+    const service = issueSession({
+      ...issues,
+      act: async (...args) => {
+        attempts++;
+        return issues.act(...args);
+      },
+    });
+    try {
+      failing = true;
+      await assert.rejects(
+        service.actIssue(
+          DEVICE_ID,
+          BOT_ID,
+          issue.id,
+          "dismiss-after-write-key-01",
+          { action: { kind: "dismiss_access" } },
+          { accessRequests: true },
+        ),
+        /transcript status unavailable/u,
+      );
+      assert.equal(
+        (await store.read(BOT_ID)).find((row) => row.id === issue.id)?.resolution,
+        "dismissed",
+      );
+      assert.deepEqual(
+        await service.actIssue(
+          DEVICE_ID,
+          BOT_ID,
+          issue.id,
+          "dismiss-after-write-key-01",
+          { action: { kind: "dismiss_access" } },
+          { accessRequests: true },
+        ),
+        { result: "not_open" },
+      );
+      assert.equal(attempts, 2);
+      failing = false;
+      const repaired = new Promise<void>((resolve) => {
+        issues.onChange(() => {
+          void store.read(BOT_ID).then((rows) => {
+            if (rows.every((row) => row.statusAppended !== false)) resolve();
+          });
+        });
+      });
+      await issues.list(BOT_ID);
+      await repaired;
+      assert.equal(
+        (await store.read(BOT_ID)).every((row) => row.statusAppended !== false),
+        true,
+      );
+    } finally {
+      failing = false;
+      await service.close();
+      rmSync(profile, { recursive: true, force: true });
+    }
+  },
+);
 
 // Revision 56: plans share the desktop core and the real Bot idempotency ledger.
 async function planSession(items: BotPlanItem[] = [{ id: "i1", kind: "shell" }]) {
   const { createBotPlans } = await import("./bot-plans/plans.js");
   const dir = mkdtempSync(path.join(os.tmpdir(), "remote-plan-"));
   let validator = async () => {};
-  const plans = createBotPlans({ profileDir: dir, knownBot: async () => true, revalidate: async () => validator(), revokeAccess() {} });
+  const plans = createBotPlans({
+    profileDir: dir,
+    knownBot: async () => true,
+    revalidate: async () => validator(),
+    revokeAccess() {},
+  });
   const runtime = fakeRuntime({ kind: "running", submissionId: "sub_1" });
-  const service = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => runtime.runtime, plans });
-  const folder = items.find((item): item is Extract<BotPlanItem, { kind: "files" }> => item.kind === "files" && item.grant);
-  const proposal = { title: "Prepare a draft", why: "Review it together", steps: ["Prepare a draft"], items,
-    authorization: { policyRevision: "private-policy", bindingRevision: "private-binding", proposalFingerprint: "private-proposal", rules: [],
-      ...(folder ? { folder: { ...accessRequestPrompt().authorization, root: folder.path } } : {}) } };
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => runtime.runtime,
+    plans,
+  });
+  const folder = items.find(
+    (item): item is Extract<BotPlanItem, { kind: "files" }> => item.kind === "files" && item.grant,
+  );
+  const proposal = {
+    title: "Prepare a draft",
+    why: "Review it together",
+    steps: ["Prepare a draft"],
+    items,
+    authorization: {
+      policyRevision: "private-policy",
+      bindingRevision: "private-binding",
+      proposalFingerprint: "private-proposal",
+      rules: [],
+      ...(folder ? { folder: { ...accessRequestPrompt().authorization, root: folder.path } } : {}),
+    },
+  };
   const { botPlanProposalFingerprint } = await import("./bot-plans/validate.js");
   proposal.authorization.proposalFingerprint = botPlanProposalFingerprint(proposal);
-  const request = (planId = "plan-56") => plans.request({ botId: BOT_ID, planId, toolCallId: "private-tool-call", requestIds: ["private-request"], proposal, signal: undefined });
-  return { plans, service, request, setValidator: (next: typeof validator) => { validator = next; }, cleanup: async () => { await plans.endRuns(BOT_ID, "stopped"); await service.close(); rmSync(dir, { recursive: true, force: true }); } };
+  const request = (planId = "plan-56") =>
+    plans.request({
+      botId: BOT_ID,
+      planId,
+      toolCallId: "private-tool-call",
+      requestIds: ["private-request"],
+      proposal,
+      signal: undefined,
+    });
+  return {
+    plans,
+    service,
+    request,
+    setValidator: (next: typeof validator) => {
+      validator = next;
+    },
+    cleanup: async () => {
+      await plans.endRuns(BOT_ID, "stopped");
+      await service.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
 }
 
 test("plan is omitted unless bot:plans is negotiated; pending snapshots, events and reconnect stay public", async () => {
@@ -4218,45 +6474,140 @@ test("plan is omitted unless bot:plans is negotiated; pending snapshots, events 
     await waitFor(async () => (await host.plans.current(BOT_ID))?.status === "pending");
     const snapshot = await host.service.session(BOT_ID, { plans: true });
     assert.equal(snapshot.plan?.status, "pending");
-    assert.equal(Object.prototype.hasOwnProperty.call(await host.service.session(BOT_ID), "plan"), false);
-    await holder.until(() => holder.frames.some(f => f.type === "plan"), "pending plan frame");
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(await host.service.session(BOT_ID), "plan"),
+      false,
+    );
+    await holder.until(() => holder.frames.some((f) => f.type === "plan"), "pending plan frame");
     const wire = JSON.stringify(snapshot.plan);
-    for (const privateText of ["private-", "authorization", "toolCallId", "requestIds", "revision", "shell-1", BOT_ID]) assert.equal(wire.includes(privateText), false, privateText);
-    assert.equal(legacy.frames.some(f => f.type === "plan" || (f.type === "snapshot" && Object.prototype.hasOwnProperty.call(f.payload.session, "plan"))), false);
-    await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-approve-key-0001", { decision: "approve" });
+    for (const privateText of [
+      "private-",
+      "authorization",
+      "toolCallId",
+      "requestIds",
+      "revision",
+      "shell-1",
+      BOT_ID,
+    ])
+      assert.equal(wire.includes(privateText), false, privateText);
+    assert.equal(
+      legacy.frames.some(
+        (f) =>
+          f.type === "plan" ||
+          (f.type === "snapshot" &&
+            Object.prototype.hasOwnProperty.call(f.payload.session, "plan")),
+      ),
+      false,
+    );
+    await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-approve-key-0001", {
+      decision: "approve",
+    });
     assert.equal((await waiting).status, "approved");
     assert.equal((await host.service.session(BOT_ID, { plans: true })).plan?.status, "active");
-    assert.equal((await host.service.session(BOT_ID, { plans: true })).plan?.expiresAt !== undefined, true);
-  } finally { await holder.close(); await legacy.close(); await host.cleanup(); }
+    assert.equal(
+      (await host.service.session(BOT_ID, { plans: true })).plan?.expiresAt !== undefined,
+      true,
+    );
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await host.cleanup();
+  }
 });
 
 test("respond approve reaches core once per key; settled refusals are forgotten and unknown decisions are 400", async () => {
   const host = await planSession();
   try {
-    await assert.rejects(host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-retry-key-0001", { decision: "approve" }), isError("plan_expired", 409));
+    await assert.rejects(
+      host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-retry-key-0001", {
+        decision: "approve",
+      }),
+      isError("plan_expired", 409),
+    );
     const waiting = host.request();
     await waitFor(async () => (await host.plans.current(BOT_ID))?.status === "pending");
-    await assert.rejects(host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-bad-key-000001", { decision: "allow" }), isError("invalid_request", 400));
-    const calls: string[] = []; const original = host.plans.respond.bind(host.plans);
-    host.plans.respond = async (...args) => { calls.push(args[2]); return original(...args); };
-    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-retry-key-0001", { decision: "approve" });
-    assert.deepEqual(await Promise.all([answer(), answer()]), [{ planId: "plan-56", status: "active" }, { planId: "plan-56", status: "active" }]);
+    await assert.rejects(
+      host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-bad-key-000001", {
+        decision: "allow",
+      }),
+      isError("invalid_request", 400),
+    );
+    const calls: string[] = [];
+    const original = host.plans.respond.bind(host.plans);
+    host.plans.respond = async (...args) => {
+      calls.push(args[2]);
+      return original(...args);
+    };
+    const answer = () =>
+      host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-retry-key-0001", {
+        decision: "approve",
+      });
+    assert.deepEqual(await Promise.all([answer(), answer()]), [
+      { planId: "plan-56", status: "active" },
+      { planId: "plan-56", status: "active" },
+    ]);
     assert.equal((await waiting).status, "approved");
-    await answer(); assert.deepEqual(calls, ["approve"]);
-    await assert.rejects(host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-retry-key-0001", { decision: "stop" }), error => (error as { code?: string }).code === "idempotency_conflict");
-    await assert.rejects(host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-other-key-0001", { decision: "approve" }), isError("plan_expired", 409));
-    assert.deepEqual(await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-stop-key-00001", { decision: "stop" }), { planId: "plan-56", status: "stopped" });
-  } finally { await host.cleanup(); }
+    await answer();
+    assert.deepEqual(calls, ["approve"]);
+    await assert.rejects(
+      host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-retry-key-0001", {
+        decision: "stop",
+      }),
+      (error) => (error as { code?: string }).code === "idempotency_conflict",
+    );
+    await assert.rejects(
+      host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-other-key-0001", {
+        decision: "approve",
+      }),
+      isError("plan_expired", 409),
+    );
+    assert.deepEqual(
+      await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-stop-key-00001", {
+        decision: "stop",
+      }),
+      { planId: "plan-56", status: "stopped" },
+    );
+  } finally {
+    await host.cleanup();
+  }
 });
 
 test("plan text is bounded and redacted member by member without projecting private proposal identities", () => {
-  const view = { planId: "plan-56", botId: "private-bot", revision: 78, status: "pending" as const,
-    title: "Read /Users/owner/private/report sk-abcdefghijklmnop and prepare", why: "\u202e" + "😀".repeat(301), from: "COS\u0000",
+  const view = {
+    planId: "plan-56",
+    botId: "private-bot",
+    revision: 78,
+    status: "pending" as const,
+    title: "Read /Users/owner/private/report sk-abcdefghijklmnop and prepare",
+    why: "\u202e" + "😀".repeat(301),
+    from: "COS\u0000",
     steps: [{ text: "\ud800" + "😀".repeat(201), status: "pending" as const }],
-    items: [{ id: "private-item", line: "Files · change /Users/owner/" + "folder/".repeat(100), details: ["/Users/owner/private/folder", "Tool " + "😀".repeat(200)] }, { id: "private-count", line: "Create events", details: [], used: 3, max: 5 }] };
+    items: [
+      {
+        id: "private-item",
+        line: "Files · change /Users/owner/" + "folder/".repeat(100),
+        details: ["/Users/owner/private/folder", "Tool " + "😀".repeat(200)],
+      },
+      { id: "private-count", line: "Create events", details: [], used: 3, max: 5 },
+    ],
+  };
   const dto = projectAidenRemoteBotPlan(view);
   assert.ok(dto);
-  assert.deepEqual(parseAidenRemoteBotSession({ botId: BOT_ID, epoch: "e1", seq: 0, state: "running", interrupted: false, entries: [], hasOlder: false, question: null, approval: null, plan: dto }).plan, dto);
+  assert.deepEqual(
+    parseAidenRemoteBotSession({
+      botId: BOT_ID,
+      epoch: "e1",
+      seq: 0,
+      state: "running",
+      interrupted: false,
+      entries: [],
+      hasOlder: false,
+      question: null,
+      approval: null,
+      plan: dto,
+    }).plan,
+    dto,
+  );
   assert.equal(dto.title, "Read [path] [redacted] and prepare");
   assert.equal(dto.items[0]!.line, "Files · change [path]");
   assert.equal(dto.items[0]!.details[0], "[path]");
@@ -4267,20 +6618,53 @@ test("plan text is bounded and redacted member by member without projecting priv
   assert.equal(dto.steps[0]!.text.startsWith("�"), true);
   assert.deepEqual(dto.items[1], { line: "Create events (up to 5)", details: [], used: 3, max: 5 });
   const wire = JSON.stringify(dto);
-  for (const secret of ["owner", "abcdefghijklmnop", "private-bot", "private-item", "revision", "authorization"]) assert.equal(wire.includes(secret), false, secret);
+  for (const secret of [
+    "owner",
+    "abcdefghijklmnop",
+    "private-bot",
+    "private-item",
+    "revision",
+    "authorization",
+  ])
+    assert.equal(wire.includes(secret), false, secret);
 });
 
 test("maximum plan members are budgeted before partial, queued messages and transcript", async () => {
-  const driven = drivenConversation([user(1, "Plan dinners")], { "pi.live": { run: { inputs: [1] } } });
+  const driven = drivenConversation([user(1, "Plan dinners")], {
+    "pi.live": { run: { inputs: [1] } },
+  });
   const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
   let plan: import("../../renderer/shared/bot-plans.js").BotPlanView | null = {
-    planId: "plan-budget", botId: BOT_ID, revision: 1, status: "pending", title: "界".repeat(80), why: "界".repeat(300), from: "界".repeat(120),
+    planId: "plan-budget",
+    botId: BOT_ID,
+    revision: 1,
+    status: "pending",
+    title: "界".repeat(80),
+    why: "界".repeat(300),
+    from: "界".repeat(120),
     steps: Array.from({ length: 10 }, () => ({ text: "界".repeat(200), status: "pending" })),
-    items: Array.from({ length: 8 }, (_, n) => ({ id: `i${n}`, line: "界".repeat(120), details: Array.from({ length: 6 }, () => "界".repeat(160)), used: 25, max: 25 })),
+    items: Array.from({ length: 8 }, (_, n) => ({
+      id: `i${n}`,
+      line: "界".repeat(120),
+      details: Array.from({ length: 6 }, () => "界".repeat(160)),
+      used: 25,
+      max: 25,
+    })),
   };
   let changed: (id: string) => void = () => {};
   let off = 0;
-  const service = runningOn(driven, fake, { plans: { current: async () => plan, respond: async () => "not_waiting", onChange: fn => { changed = fn; return () => { off++; }; } } });
+  const service = runningOn(driven, fake, {
+    plans: {
+      current: async () => plan,
+      respond: async () => "not_waiting",
+      onChange: (fn) => {
+        changed = fn;
+        return () => {
+          off++;
+        };
+      },
+    },
+  });
   const holder = await openAudienceStream(service, { activity: true, plans: true });
   const legacy = await openAudienceStream(service, { activity: true });
   try {
@@ -4289,136 +6673,269 @@ test("maximum plan members are budgeted before partial, queued messages and tran
     assert.equal(holder.frames[0]!.payload.session.activity.phase, "waiting");
     assert.equal(legacy.frames[0]!.payload.session.activity.phase, "waiting");
     await driven.emitView([user(1, "Plan dinners"), assistant(2, ESCAPED.repeat(100_000))], {
-      "pi.live": { generation: { message: { content: [{ type: "text", text: ESCAPED.repeat(100_000) }] } } },
+      "pi.live": {
+        generation: { message: { content: [{ type: "text", text: ESCAPED.repeat(100_000) }] } },
+      },
       ...waitingInbox(Array.from({ length: 3 }, (_, n) => escapedMessage(`m${n}`, 32_000))),
     });
     const snapshot = await service.session(BOT_ID, { activity: true, plans: true });
     assert.deepEqual(snapshot.plan, projectAidenRemoteBotPlan(plan));
     assert.equal(snapshot.hasOlder, true);
     assert.ok(Buffer.byteLength(JSON.stringify(snapshot)) < AIDEN_REMOTE_MAX_SSE_FRAME_BYTES);
-    plan = null; changed(BOT_ID);
-    await holder.until(() => holder.frames.some(f => f.type === "plan" && f.payload.plan === null), "plan cleared");
-    await legacy.until(() => legacy.frames[legacy.frames.length - 1]!.seq === holder.frames[holder.frames.length - 1]!.seq, "legacy caught up");
-    assert.equal(legacy.frames.some(f => f.type === "plan"), false);
-    assert.equal(gapless(holder.frames), true); assert.equal(gapless(legacy.frames), true);
-    assertEveryFrameFits(holder.blocks); assertEveryFrameFits(legacy.blocks);
-  } finally { await holder.close(); await legacy.close(); await service.close(); }
+    plan = null;
+    changed(BOT_ID);
+    await holder.until(
+      () => holder.frames.some((f) => f.type === "plan" && f.payload.plan === null),
+      "plan cleared",
+    );
+    await legacy.until(
+      () =>
+        legacy.frames[legacy.frames.length - 1]!.seq ===
+        holder.frames[holder.frames.length - 1]!.seq,
+      "legacy caught up",
+    );
+    assert.equal(
+      legacy.frames.some((f) => f.type === "plan"),
+      false,
+    );
+    assert.equal(gapless(holder.frames), true);
+    assert.equal(gapless(legacy.frames), true);
+    assertEveryFrameFits(holder.blocks);
+    assertEveryFrameFits(legacy.blocks);
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+  }
   assert.equal(off, 1);
 });
 
 test("a transient plan read leaves the pending card answerable with the same key", async () => {
   const host = await planSession();
   try {
-    const wait = host.request(); await host.plans.current(BOT_ID);
-    const current = host.plans.current.bind(host.plans); let failed = false;
-    host.plans.current = async (...args) => { if (!failed) { failed = true; throw new Error("plan storage temporarily unavailable"); } return current(...args); };
-    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-transient-key-01", { decision: "approve" });
+    const wait = host.request();
+    await host.plans.current(BOT_ID);
+    const current = host.plans.current.bind(host.plans);
+    let failed = false;
+    host.plans.current = async (...args) => {
+      if (!failed) {
+        failed = true;
+        throw new Error("plan storage temporarily unavailable");
+      }
+      return current(...args);
+    };
+    const answer = () =>
+      host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-transient-key-01", {
+        decision: "approve",
+      });
     await assert.rejects(answer(), /temporarily unavailable/u);
     assert.equal((await current(BOT_ID))?.status, "pending");
     assert.deepEqual(await answer(), { planId: "plan-56", status: "active" });
     assert.equal((await wait).status, "approved");
-  } finally { await host.cleanup(); }
+  } finally {
+    await host.cleanup();
+  }
 });
 
 test("a lost post-effect read never reapproves the same plan; distinct choices use distinct keys", async () => {
   const host = await planSession();
   try {
-    const wait = host.request(); await host.plans.current(BOT_ID);
-    const original = host.plans.respond.bind(host.plans); let decisions = 0; let fail = true;
-    host.plans.respond = async (...args) => { decisions++; const result = await original(...args); if (fail) { fail = false; throw new Error("lost after settlement"); } return result; };
-    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-lost-key-00001", { decision: "approve" });
+    const wait = host.request();
+    await host.plans.current(BOT_ID);
+    const original = host.plans.respond.bind(host.plans);
+    let decisions = 0;
+    let fail = true;
+    host.plans.respond = async (...args) => {
+      decisions++;
+      const result = await original(...args);
+      if (fail) {
+        fail = false;
+        throw new Error("lost after settlement");
+      }
+      return result;
+    };
+    const answer = () =>
+      host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-lost-key-00001", {
+        decision: "approve",
+      });
     await assert.rejects(answer(), /lost after settlement/u);
     assert.equal((await wait).status, "approved");
     await assert.rejects(answer(), isError("plan_expired", 409));
     assert.equal(decisions, 1);
-    assert.deepEqual(await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-stop-new-key-01", { decision: "stop" }), { planId: "plan-56", status: "stopped" });
+    assert.deepEqual(
+      await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-stop-new-key-01", {
+        decision: "stop",
+      }),
+      { planId: "plan-56", status: "stopped" },
+    );
     assert.equal(decisions, 2);
-  } finally { await host.cleanup(); }
+  } finally {
+    await host.cleanup();
+  }
 });
 
 test("exact host status survives replacement and a Stop after core settlement", async () => {
-  const host = await planSession(); let next: ReturnType<typeof host.request> | undefined;
+  const host = await planSession();
+  let next: ReturnType<typeof host.request> | undefined;
   try {
-    const wait = host.request(); await host.plans.current(BOT_ID);
+    const wait = host.request();
+    await host.plans.current(BOT_ID);
     const original = host.plans.respond.bind(host.plans);
-    host.plans.respond = async (...args) => { const result = await original(...args); await original(BOT_ID, "plan-56", "stop"); next = host.request("plan-next"); await host.plans.current(BOT_ID); return result; };
-    assert.deepEqual(await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-race-key-00001", { decision: "approve" }), { planId: "plan-56", status: "stopped" });
+    host.plans.respond = async (...args) => {
+      const result = await original(...args);
+      await original(BOT_ID, "plan-56", "stop");
+      next = host.request("plan-next");
+      await host.plans.current(BOT_ID);
+      return result;
+    };
+    assert.deepEqual(
+      await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-race-key-00001", {
+        decision: "approve",
+      }),
+      { planId: "plan-56", status: "stopped" },
+    );
     assert.equal((await wait).status, "approved");
     assert.equal((await host.plans.current(BOT_ID))?.planId, "plan-next");
-    await original(BOT_ID, "plan-next", "not_now"); await next;
-  } finally { await host.cleanup(); }
+    await original(BOT_ID, "plan-next", "not_now");
+    await next;
+  } finally {
+    await host.cleanup();
+  }
 });
 
 test("approval revalidation failure grants nothing and does not poison a later exact same-key attempt", async () => {
   const host = await planSession();
   try {
-    host.setValidator(async () => { throw new Error("binding changed"); });
-    const wait = host.request(); const rejected = assert.rejects(wait, /binding changed/u); await host.plans.current(BOT_ID);
-    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-policy-key-001", { decision: "approve" });
-    await assert.rejects(answer(), /binding changed/u); await rejected;
+    host.setValidator(async () => {
+      throw new Error("binding changed");
+    });
+    const wait = host.request();
+    const rejected = assert.rejects(wait, /binding changed/u);
+    await host.plans.current(BOT_ID);
+    const answer = () =>
+      host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-policy-key-001", {
+        decision: "approve",
+      });
+    await assert.rejects(answer(), /binding changed/u);
+    await rejected;
     assert.equal(await host.plans.current(BOT_ID), null);
     await assert.rejects(answer(), isError("plan_expired", 409));
     host.setValidator(async () => {});
-    const retry = host.request(); await host.plans.current(BOT_ID);
-    assert.deepEqual(await answer(), { planId: "plan-56", status: "active" }); assert.equal((await retry).status, "approved");
-  } finally { await host.cleanup(); }
+    const retry = host.request();
+    await host.plans.current(BOT_ID);
+    assert.deepEqual(await answer(), { planId: "plan-56", status: "active" });
+    assert.equal((await retry).status, "approved");
+  } finally {
+    await host.cleanup();
+  }
 });
 
 test("Not now clears the core wait and reconnect reflects ended and missing plans", async () => {
   const host = await planSession();
   try {
-    const wait = host.request(); await host.plans.current(BOT_ID);
-    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-decline-key-01", { decision: "not_now" });
+    const wait = host.request();
+    await host.plans.current(BOT_ID);
+    const answer = () =>
+      host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-decline-key-01", {
+        decision: "not_now",
+      });
     assert.deepEqual(await answer(), { planId: "plan-56", status: "stopped" });
-    assert.equal((await wait).status, "declined"); assert.deepEqual(await answer(), { planId: "plan-56", status: "stopped" });
+    assert.equal((await wait).status, "declined");
+    assert.deepEqual(await answer(), { planId: "plan-56", status: "stopped" });
     const reconnect = await openAudienceStream(host.service, { plans: true });
-    try { await reconnect.until(() => reconnect.frames.length === 1, "reconnect snapshot"); assert.equal(reconnect.frames[0]!.payload.session.plan, null); } finally { await reconnect.close(); }
-  } finally { await host.cleanup(); }
+    try {
+      await reconnect.until(() => reconnect.frames.length === 1, "reconnect snapshot");
+      assert.equal(reconnect.frames[0]!.payload.session.plan, null);
+    } finally {
+      await reconnect.close();
+    }
+  } finally {
+    await host.cleanup();
+  }
 });
 
 test("opposing plan decisions with independent keys settle exactly once", async () => {
   const host = await planSession();
   try {
-    const wait = host.request(); await host.plans.current(BOT_ID);
+    const wait = host.request();
+    await host.plans.current(BOT_ID);
     const answers = await Promise.allSettled([
-      host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-race-approve-01", { decision: "approve" }),
-      host.service.respondPlan("other-phone", BOT_ID, "plan-56", "plan-race-not-now-01", { decision: "not_now" }),
+      host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-race-approve-01", {
+        decision: "approve",
+      }),
+      host.service.respondPlan("other-phone", BOT_ID, "plan-56", "plan-race-not-now-01", {
+        decision: "not_now",
+      }),
     ]);
-    assert.equal(answers.filter(a => a.status === "fulfilled").length, 1);
-    const loser = answers.find(a => a.status === "rejected") as PromiseRejectedResult;
+    assert.equal(answers.filter((a) => a.status === "fulfilled").length, 1);
+    const loser = answers.find((a) => a.status === "rejected") as PromiseRejectedResult;
     assert.ok(isError("plan_expired", 409)(loser.reason));
     const result = await wait;
     const current = await host.plans.current(BOT_ID);
     assert.equal(current?.status === "active", result.status === "approved");
-    const success = answers.find(a => a.status === "fulfilled") as PromiseFulfilledResult<{ planId: string; status: string }>;
+    const success = answers.find((a) => a.status === "fulfilled") as PromiseFulfilledResult<{
+      planId: string;
+      status: string;
+    }>;
     assert.equal(success.value.status, result.status === "approved" ? "active" : "stopped");
-  } finally { await host.cleanup(); }
+  } finally {
+    await host.cleanup();
+  }
 });
 
 test("host lifecycle changes reach reconnect; a host without plans never advertises or emits them", async () => {
   const host = await planSession();
   try {
-    const wait = host.request(); await host.plans.current(BOT_ID);
+    const wait = host.request();
+    await host.plans.current(BOT_ID);
     assert.equal(host.service.supportsPlans, true);
-    await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-lifecycle-key-1", { decision: "approve" }); await wait;
+    await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-lifecycle-key-1", {
+      decision: "approve",
+    });
+    await wait;
     await host.plans.endRuns(BOT_ID, "finished");
     const reconnect = await openAudienceStream(host.service, { plans: true });
-    try { await reconnect.until(() => reconnect.frames.length === 1, "ended reconnect"); assert.equal(reconnect.frames[0]!.payload.session.plan.status, "finished"); } finally { await reconnect.close(); }
+    try {
+      await reconnect.until(() => reconnect.frames.length === 1, "ended reconnect");
+      assert.equal(reconnect.frames[0]!.payload.session.plan.status, "finished");
+    } finally {
+      await reconnect.close();
+    }
     await host.plans.forgetBot(BOT_ID);
     assert.equal((await host.service.session(BOT_ID, { plans: true })).plan, null);
-  } finally { await host.cleanup(); }
+  } finally {
+    await host.cleanup();
+  }
   const bare = sessionService(fakeRuntime({ kind: "idle" }).runtime);
   try {
     assert.equal(bare.supportsPlans, false);
-    assert.equal(Object.prototype.hasOwnProperty.call(await bare.session(BOT_ID, { plans: true }), "plan"), false);
-    await assert.rejects(bare.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-no-host-key-001", { decision: "approve" }), isError("not_found", 404));
-  } finally { await bare.close(); }
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(await bare.session(BOT_ID, { plans: true }), "plan"),
+      false,
+    );
+    await assert.rejects(
+      bare.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-no-host-key-001", {
+        decision: "approve",
+      }),
+      isError("not_found", 404),
+    );
+  } finally {
+    await bare.close();
+  }
 });
 
 function hostPlanForItem(item: BotPlanItem): BotPlanView {
-  return { planId: "folder-plan", botId: BOT_ID, revision: 1, status: "pending",
-    title: "Read /Users/owner/private/report", why: "Review ~/private/why", from: "/Users/owner/private/from",
-    steps: [{ text: "Open /Users/owner/private/step", status: "pending" }], items: [botPlanItemView(item, 0)] };
+  return {
+    planId: "folder-plan",
+    botId: BOT_ID,
+    revision: 1,
+    status: "pending",
+    title: "Read /Users/owner/private/report",
+    why: "Review ~/private/why",
+    from: "/Users/owner/private/from",
+    steps: [{ text: "Open /Users/owner/private/step", status: "pending" }],
+    items: [botPlanItemView(item, 0)],
+  };
 }
 
 function phonePlanForItem(item: BotPlanItem) {
@@ -4428,7 +6945,8 @@ function phonePlanForItem(item: BotPlanItem) {
 }
 
 test("phone file approval distinguishes enforced sensitive folders through the real host formatter", () => {
-  const file = (folder: string) => phonePlanForItem({ id: "files", kind: "files", path: folder, access: "write", grant: true });
+  const file = (folder: string) =>
+    phonePlanForItem({ id: "files", kind: "files", path: folder, access: "write", grant: true });
   const taxes = file("/Users/sam/Documents/Taxes");
   const keys = file("/Users/sam/.ssh");
   assert.notDeepEqual(taxes.items, keys.items);
@@ -4442,23 +6960,50 @@ test("phone file approval distinguishes enforced sensitive folders through the r
 
 test("phone file approval retains the whole outside folder with spaces and read/change lifetime", () => {
   for (const access of ["read", "write"] as const) {
-    const item = phonePlanForItem({ id: "files", kind: "files", path: "/Volumes/Backup/Family Photos", access, grant: true }).items[0]!;
-    assert.equal(item.line, `Files · ${access === "read" ? "read" : "change"} /Volumes/Backup/Family Photos for this plan`);
-    assert.deepEqual(item.details, ["/Volumes/Backup/Family Photos", `${access === "read" ? "Read only" : "Read and change"} · allowed once, for this plan only`]);
+    const item = phonePlanForItem({
+      id: "files",
+      kind: "files",
+      path: "/Volumes/Backup/Family Photos",
+      access,
+      grant: true,
+    }).items[0]!;
+    assert.equal(
+      item.line,
+      `Files · ${access === "read" ? "read" : "change"} /Volumes/Backup/Family Photos for this plan`,
+    );
+    assert.deepEqual(item.details, [
+      "/Volumes/Backup/Family Photos",
+      `${access === "read" ? "Read only" : "Read and change"} · allowed once, for this plan only`,
+    ]);
   }
 });
 
 test("phone pending long rule keeps its cap after trimming the actual host-built label", () => {
-  const label = "Ask before changing any calendar invitation for anyone outside the house ".repeat(2).slice(0, 120);
-  const item = phonePlanForItem({ id: "rule", kind: "rule", ruleId: "custom-rule", ruleFingerprint: "fp", label, max: 25 }).items[0]!;
+  const label = "Ask before changing any calendar invitation for anyone outside the house "
+    .repeat(2)
+    .slice(0, 120);
+  const item = phonePlanForItem({
+    id: "rule",
+    kind: "rule",
+    ruleId: "custom-rule",
+    ruleFingerprint: "fp",
+    label,
+    max: 25,
+  }).items[0]!;
   assert.ok(item.line.endsWith(" (up to 25)"), item.line);
   assert.ok([...item.line].length <= 120);
-  assert.equal(item.used, 0); assert.equal(item.max, 25);
+  assert.equal(item.used, 0);
+  assert.equal(item.max, 25);
 });
 
 test("phone files use home-relative locations and preserve root, Unicode and long folder names", () => {
-  const project = (folder: string) => phonePlanForItem({ id: "files", kind: "files", path: folder, access: "read", grant: false }).items[0]!;
-  assert.equal(project(path.join(os.homedir(), "Documents", "Tax Records")).line, "Files · read ~/Documents/Tax Records");
+  const project = (folder: string) =>
+    phonePlanForItem({ id: "files", kind: "files", path: folder, access: "read", grant: false })
+      .items[0]!;
+  assert.equal(
+    project(path.join(os.homedir(), "Documents", "Tax Records")).line,
+    "Files · read ~/Documents/Tax Records",
+  );
   assert.equal(project(os.homedir()).line, "Files · read ~");
   assert.equal(project("/").line, "Files · read /");
   assert.equal(project("/Volumes/家族/👩‍👧 Photos").line, "Files · read /Volumes/家族/👩‍👧 Photos");
@@ -4479,14 +7024,36 @@ test("phone files use home-relative locations and preserve root, Unicode and lon
 
 test("phone counted caps survive long connector/site labels and redaction", () => {
   for (const item of [
-    { id: "c", kind: "connector", app: "Calendar ".repeat(20), action: "change /Users/owner/private/files", tools: [{ modelName: "private", serverId: "private", remoteName: "private", title: "Open ~/private/tool" }], max: 25 },
+    {
+      id: "c",
+      kind: "connector",
+      app: "Calendar ".repeat(20),
+      action: "change /Users/owner/private/files",
+      tools: [
+        {
+          modelName: "private",
+          serverId: "private",
+          remoteName: "private",
+          title: "Open ~/private/tool",
+        },
+      ],
+      max: 25,
+    },
     { id: "s", kind: "site", host: "a".repeat(150) + ".example.com", max: 25 },
-    { id: "r", kind: "rule", ruleId: "private", ruleFingerprint: "private", label: "😀".repeat(120), max: 25 },
+    {
+      id: "r",
+      kind: "rule",
+      ruleId: "private",
+      ruleFingerprint: "private",
+      label: "😀".repeat(120),
+      max: 25,
+    },
   ] satisfies BotPlanItem[]) {
     const dto = phonePlanForItem(item).items[0]!;
     assert.ok(dto.line.endsWith(" (up to 25)"), dto.line);
     assert.ok([...dto.line].length <= 120);
-    assert.equal(dto.used, 0); assert.equal(dto.max, 25);
+    assert.equal(dto.used, 0);
+    assert.equal(dto.max, 25);
     assert.equal(JSON.stringify(dto).includes("/Users/owner"), false);
     assert.equal(JSON.stringify(dto).includes("~/private"), false);
   }
@@ -4494,61 +7061,162 @@ test("phone counted caps survive long connector/site labels and redaction", () =
 
 test("Files-looking connector/server/tool/rule prose cannot acquire trusted folder display", () => {
   for (const item of [
-    { id: "c", kind: "connector", app: "Files", action: "change /Users/owner/private", tools: [{ modelName: "Files", serverId: "Files", remoteName: "private", title: "Files · read /Volumes/Backup/Secret" }], max: 2 },
-    { id: "r", kind: "rule", ruleId: "Files", ruleFingerprint: "private", label: "Files · change /Users/owner/private for this plan", max: 2 },
+    {
+      id: "c",
+      kind: "connector",
+      app: "Files",
+      action: "change /Users/owner/private",
+      tools: [
+        {
+          modelName: "Files",
+          serverId: "Files",
+          remoteName: "private",
+          title: "Files · read /Volumes/Backup/Secret",
+        },
+      ],
+      max: 2,
+    },
+    {
+      id: "r",
+      kind: "rule",
+      ruleId: "Files",
+      ruleFingerprint: "private",
+      label: "Files · change /Users/owner/private for this plan",
+      max: 2,
+    },
   ] satisfies BotPlanItem[]) {
     const wire = JSON.stringify(phonePlanForItem(item));
     assert.ok(wire.includes("[path]"));
-    for (const location of ["/Users/owner/private", "/Volumes/Backup/Secret"]) assert.equal(wire.includes(location), false);
+    for (const location of ["/Users/owner/private", "/Volumes/Backup/Secret"])
+      assert.equal(wire.includes(location), false);
   }
 });
 
 test("unrepresentable pending file scope offers no phone approval but active/ended plans retain Stop summaries", () => {
-  for (const folder of ["/Volumes/" + "parent/".repeat(140) + "Family Photos", "/Volumes/Hidden\u202e Photos", "/Volumes/bad\ud800name", "/Volumes/line\nbreak"]) {
-    const view = hostPlanForItem({ id: "files", kind: "files", path: folder, access: "write", grant: true });
+  for (const folder of [
+    "/Volumes/" + "parent/".repeat(140) + "Family Photos",
+    "/Volumes/Hidden\u202e Photos",
+    "/Volumes/bad\ud800name",
+    "/Volumes/line\nbreak",
+  ]) {
+    const view = hostPlanForItem({
+      id: "files",
+      kind: "files",
+      path: folder,
+      access: "write",
+      grant: true,
+    });
     assert.equal(projectAidenRemoteBotPlan(view), null);
     for (const status of ["active", "finished", "stopped", "expired"] as const) {
       const dto = projectAidenRemoteBotPlan({ ...view, status });
-      assert.ok(dto); assert.equal(dto.status, status);
+      assert.ok(dto);
+      assert.equal(dto.status, status);
       const item = dto.items[0]!;
-      assert.ok(item.line.startsWith("Files · change ")); assert.ok(item.line.endsWith(" for this plan"));
-      assert.ok(item.details.includes("Review the full folder location in Aiden Agent on your computer."));
+      assert.ok(item.line.startsWith("Files · change "));
+      assert.ok(item.line.endsWith(" for this plan"));
+      assert.ok(
+        item.details.includes("Review the full folder location in Aiden Agent on your computer."),
+      );
       assert.ok(item.details.includes("Read and change · allowed once, for this plan only"));
       assert.ok([...item.line].length <= 120);
-      assert.equal(parseAidenRemoteBotSession({ botId: BOT_ID, epoch: "e1", seq: 0, state: "running", interrupted: false, entries: [], hasOlder: false, question: null, approval: null, plan: dto }).plan?.status, status);
+      assert.equal(
+        parseAidenRemoteBotSession({
+          botId: BOT_ID,
+          epoch: "e1",
+          seq: 0,
+          state: "running",
+          interrupted: false,
+          entries: [],
+          hasOlder: false,
+          question: null,
+          approval: null,
+          plan: dto,
+        }).plan?.status,
+        status,
+      );
     }
   }
 });
 
 test("unrepresentable phone approval is a forgotten pre-effect refusal and desktop approval keeps phone Stop", async () => {
-  const host = await planSession([{ id: "i1", kind: "files", path: "/Volumes/" + "parent/".repeat(140) + "Family Photos", access: "write", grant: true }]);
-  const waiting = host.request(); let settled = false; let grants = 0;
-  const installation = waiting.then(async result => {
+  const host = await planSession([
+    {
+      id: "i1",
+      kind: "files",
+      path: "/Volumes/" + "parent/".repeat(140) + "Family Photos",
+      access: "write",
+      grant: true,
+    },
+  ]);
+  const waiting = host.request();
+  let settled = false;
+  let grants = 0;
+  const installation = waiting.then(async (result) => {
     settled = true;
-    if (result.status === "approved" && result.fresh) await host.plans.grantFreshAccess(BOT_ID, "plan-56", async () => { grants++; });
+    if (result.status === "approved" && result.fresh)
+      await host.plans.grantFreshAccess(BOT_ID, "plan-56", async () => {
+        grants++;
+      });
   });
   try {
     await host.plans.current(BOT_ID);
     assert.equal((await host.service.session(BOT_ID, { plans: true })).plan, null);
-    let calls = 0; const respond = host.plans.respond.bind(host.plans);
-    host.plans.respond = async (...args) => { calls++; return respond(...args); };
-    for (let n = 0; n < 2; n++) await assert.rejects(host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "unrepresented-key-001", { decision: "approve" }), isError("plan_expired", 409));
-    assert.equal(calls, 0); assert.equal(settled, false); assert.equal(grants, 0);
+    let calls = 0;
+    const respond = host.plans.respond.bind(host.plans);
+    host.plans.respond = async (...args) => {
+      calls++;
+      return respond(...args);
+    };
+    for (let n = 0; n < 2; n++)
+      await assert.rejects(
+        host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "unrepresented-key-001", {
+          decision: "approve",
+        }),
+        isError("plan_expired", 409),
+      );
+    assert.equal(calls, 0);
+    assert.equal(settled, false);
+    assert.equal(grants, 0);
     assert.equal((await host.plans.current(BOT_ID))?.status, "pending");
-    await respond(BOT_ID, "plan-56", "approve"); await installation;
+    await respond(BOT_ID, "plan-56", "approve");
+    await installation;
     assert.equal(grants, 1);
     assert.equal((await host.service.session(BOT_ID, { plans: true })).plan?.status, "active");
-    assert.deepEqual(await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "unrepresented-stop-01", { decision: "stop" }), { planId: "plan-56", status: "stopped" });
+    assert.deepEqual(
+      await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "unrepresented-stop-01", {
+        decision: "stop",
+      }),
+      { planId: "plan-56", status: "stopped" },
+    );
     assert.equal(calls, 1);
-  } finally { await host.cleanup(); }
+  } finally {
+    await host.cleanup();
+  }
 });
 
 test("hidden pending folder scope preserves waiting activity and gapless legacy streams", async () => {
-  const driven = drivenConversation([user(1, "Review the folder")], { "pi.live": { run: { inputs: [1] } } });
+  const driven = drivenConversation([user(1, "Review the folder")], {
+    "pi.live": { run: { inputs: [1] } },
+  });
   const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
-  let plan: BotPlanView | null = hostPlanForItem({ id: "files", kind: "files", path: "/Volumes/" + "parent/".repeat(140) + "Family Photos", access: "read", grant: true });
+  let plan: BotPlanView | null = hostPlanForItem({
+    id: "files",
+    kind: "files",
+    path: "/Volumes/" + "parent/".repeat(140) + "Family Photos",
+    access: "read",
+    grant: true,
+  });
   let changed: (id: string) => void = () => {};
-  const service = runningOn(driven, fake, { plans: { current: async () => plan, respond: async () => "not_waiting", onChange: fn => { changed = fn; return () => {}; } } });
+  const service = runningOn(driven, fake, {
+    plans: {
+      current: async () => plan,
+      respond: async () => "not_waiting",
+      onChange: (fn) => {
+        changed = fn;
+        return () => {};
+      },
+    },
+  });
   const holder = await openAudienceStream(service, { activity: true, plans: true });
   const legacy = await openAudienceStream(service, { activity: true });
   try {
@@ -4557,73 +7225,176 @@ test("hidden pending folder scope preserves waiting activity and gapless legacy 
     assert.equal(holder.frames[0]!.payload.session.plan, null);
     assert.equal(holder.frames[0]!.payload.session.activity.phase, "waiting");
     assert.equal(legacy.frames[0]!.payload.session.activity.phase, "waiting");
-    assert.equal(Object.prototype.hasOwnProperty.call(legacy.frames[0]!.payload.session, "plan"), false);
-    plan = hostPlanForItem({ id: "files", kind: "files", path: "/Volumes/Family Photos", access: "read", grant: true }); changed(BOT_ID);
-    await holder.until(() => holder.frames.some(f => f.type === "plan" && f.payload.plan !== null), "representable card");
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(legacy.frames[0]!.payload.session, "plan"),
+      false,
+    );
+    plan = hostPlanForItem({
+      id: "files",
+      kind: "files",
+      path: "/Volumes/Family Photos",
+      access: "read",
+      grant: true,
+    });
+    changed(BOT_ID);
+    await holder.until(
+      () => holder.frames.some((f) => f.type === "plan" && f.payload.plan !== null),
+      "representable card",
+    );
     await legacy.until(() => last(legacy.frames)?.seq === last(holder.frames)?.seq, "legacy no-op");
-    plan = null; changed(BOT_ID);
-    await holder.until(() => holder.frames.some(f => f.type === "plan" && f.payload.plan === null), "clear card");
-    await legacy.until(() => last(legacy.frames)?.seq === last(holder.frames)?.seq, "legacy clear caught up");
-    assert.ok(gapless(holder.frames)); assert.ok(gapless(legacy.frames));
-    assert.equal(legacy.frames.some(f => f.type === "plan"), false);
-    assertEveryFrameFits(holder.blocks); assertEveryFrameFits(legacy.blocks);
-  } finally { await holder.close(); await legacy.close(); await service.close(); }
+    plan = null;
+    changed(BOT_ID);
+    await holder.until(
+      () => holder.frames.some((f) => f.type === "plan" && f.payload.plan === null),
+      "clear card",
+    );
+    await legacy.until(
+      () => last(legacy.frames)?.seq === last(holder.frames)?.seq,
+      "legacy clear caught up",
+    );
+    assert.ok(gapless(holder.frames));
+    assert.ok(gapless(legacy.frames));
+    assert.equal(
+      legacy.frames.some((f) => f.type === "plan"),
+      false,
+    );
+    assertEveryFrameFits(holder.blocks);
+    assertEveryFrameFits(legacy.blocks);
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+  }
 });
 
 test("canonical file displays are produced by real host items without forwarding display metadata", async () => {
-  const fixture = JSON.parse(await readFile(path.resolve("protocol/aiden-remote/v1/fixtures/contract.json"), "utf8"));
+  const fixture = JSON.parse(
+    await readFile(path.resolve("protocol/aiden-remote/v1/fixtures/contract.json"), "utf8"),
+  );
   const projected = [
-    phonePlanForItem({ id: "i1", kind: "files", path: "/Volumes/Backup/Family Photos", access: "write", grant: true }).items[0],
-    phonePlanForItem({ id: "i1", kind: "files", path: "~/Documents/Tax Records", access: "read", grant: false }).items[0],
+    phonePlanForItem({
+      id: "i1",
+      kind: "files",
+      path: "/Volumes/Backup/Family Photos",
+      access: "write",
+      grant: true,
+    }).items[0],
+    phonePlanForItem({
+      id: "i1",
+      kind: "files",
+      path: "~/Documents/Tax Records",
+      access: "read",
+      grant: false,
+    }).items[0],
   ];
   assert.deepEqual(projected, fixture.botPlans.pending.items.slice(2));
-  assert.deepEqual(phonePlanForItem({ id: "i1", kind: "files", path: "/Volumes/Archive/Tax Records", access: "read", grant: true }).items, fixture.botPlans.readOnlyFolderPlan.items);
+  assert.deepEqual(
+    phonePlanForItem({
+      id: "i1",
+      kind: "files",
+      path: "/Volumes/Archive/Tax Records",
+      access: "read",
+      grant: true,
+    }).items,
+    fixture.botPlans.readOnlyFolderPlan.items,
+  );
   const wire = JSON.stringify(projected);
-  for (const privateMember of ["fileScope", "\"path\"", "\"access\"", "\"grant\"", "\"id\""]) assert.equal(wire.includes(privateMember), false);
+  for (const privateMember of ["fileScope", '"path"', '"access"', '"grant"', '"id"'])
+    assert.equal(wire.includes(privateMember), false);
 });
 
-
 test("phone file review fits every detail slot exactly and refuses the next scalar without losing scope", () => {
-  for (const [grant, capacity] of [[true, 800], [false, 960]] as const) {
+  for (const [grant, capacity] of [
+    [true, 800],
+    [false, 960],
+  ] as const) {
     const folder = "/" + "界".repeat(capacity - 1);
-    const view = hostPlanForItem({ id: "files", kind: "files", path: folder, access: "read", grant });
+    const view = hostPlanForItem({
+      id: "files",
+      kind: "files",
+      path: folder,
+      access: "read",
+      grant,
+    });
     const dto = projectAidenRemoteBotPlan(view);
     assert.ok(dto);
     const details = dto.items[0]!.details;
     assert.equal(details.length, 6);
     assert.equal(details.slice(0, grant ? 5 : 6).join(""), folder);
-    assert.equal(projectAidenRemoteBotPlan(hostPlanForItem({ id: "files", kind: "files", path: folder + "界", access: "read", grant })), null);
+    assert.equal(
+      projectAidenRemoteBotPlan(
+        hostPlanForItem({ id: "files", kind: "files", path: folder + "界", access: "read", grant }),
+      ),
+      null,
+    );
   }
 });
 
 test("an active unsafe ancestor still shows a safe folder name without changing its location", () => {
-  const view = hostPlanForItem({ id: "files", kind: "files", path: "/Volumes/hidden\u202e/Family Photos", access: "read", grant: true });
+  const view = hostPlanForItem({
+    id: "files",
+    kind: "files",
+    path: "/Volumes/hidden\u202e/Family Photos",
+    access: "read",
+    grant: true,
+  });
   assert.equal(projectAidenRemoteBotPlan(view), null);
   const dto = projectAidenRemoteBotPlan({ ...view, status: "active" });
   assert.ok(dto);
   assert.equal(dto.items[0]!.line, "Files · read …/Family Photos for this plan");
-  assert.deepEqual(dto.items[0]!.details, ["Review the full folder location in Aiden Agent on your computer.", "Read only · allowed once, for this plan only"]);
+  assert.deepEqual(dto.items[0]!.details, [
+    "Review the full folder location in Aiden Agent on your computer.",
+    "Read only · allowed once, for this plan only",
+  ]);
 });
 
-
 test("a refused phone key retries only after the host folder display becomes representable", async () => {
-  let view: BotPlanView = hostPlanForItem({ id: "i1", kind: "files", path: "/Volumes/" + "parent/".repeat(140) + "Family Photos", access: "write", grant: true });
+  let view: BotPlanView = hostPlanForItem({
+    id: "i1",
+    kind: "files",
+    path: "/Volumes/" + "parent/".repeat(140) + "Family Photos",
+    access: "write",
+    grant: true,
+  });
   let responses = 0;
-  const service = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => fakeRuntime({ kind: "idle" }).runtime,
-    plans: { current: async (_botId, planId) => !planId || planId === view.planId ? view : null,
-      onChange: () => () => {}, respond: async () => { responses++; view = { ...view, status: "active" }; return "done"; } } });
-  const approve = () => service.respondPlan(DEVICE_ID, BOT_ID, "folder-plan", "display-retry-key-001", { decision: "approve" });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => fakeRuntime({ kind: "idle" }).runtime,
+    plans: {
+      current: async (_botId, planId) => (!planId || planId === view.planId ? view : null),
+      onChange: () => () => {},
+      respond: async () => {
+        responses++;
+        view = { ...view, status: "active" };
+        return "done";
+      },
+    },
+  });
+  const approve = () =>
+    service.respondPlan(DEVICE_ID, BOT_ID, "folder-plan", "display-retry-key-001", {
+      decision: "approve",
+    });
   try {
     await assert.rejects(approve(), isError("plan_expired", 409));
     await assert.rejects(approve(), isError("plan_expired", 409));
-    assert.equal(responses, 0); assert.equal(view.status, "pending");
+    assert.equal(responses, 0);
+    assert.equal(view.status, "pending");
     // A corrected authoritative display read is the only change. No rejected ledger
     // receipt may prevent a newly representable view from being reviewed and answered.
-    view = hostPlanForItem({ id: "i1", kind: "files", path: "/Volumes/Family Photos", access: "write", grant: true });
+    view = hostPlanForItem({
+      id: "i1",
+      kind: "files",
+      path: "/Volumes/Family Photos",
+      access: "write",
+      grant: true,
+    });
     assert.deepEqual(await approve(), { planId: "folder-plan", status: "active" });
     assert.equal(responses, 1);
-    await approve(); assert.equal(responses, 1);
-  } finally { await service.close(); }
+    await approve();
+    assert.equal(responses, 1);
+  } finally {
+    await service.close();
+  }
 });
 
 test("D folder approval count cannot break legacy snapshots or leak through SSE", async () => {
@@ -4635,143 +7406,423 @@ test("D folder approval count cannot break legacy snapshots or leak through SSE"
   const waiting = accessRequests.request(accessRequestPrompt({ botId: BOT_ID, approvalCount: 3 }));
   try {
     const legacy = await service.session(BOT_ID, { accessRequests: true });
-    assert.ok(legacy.accessRequest); assert.equal(Object.prototype.hasOwnProperty.call(legacy.accessRequest, "approvalCount"), false);
+    assert.ok(legacy.accessRequest);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(legacy.accessRequest, "approvalCount"),
+      false,
+    );
     const holder = await service.session(BOT_ID, { accessRequests: true, allowed: true });
     assert.equal(holder.accessRequest?.approvalCount, 3);
-    assert.equal(Object.prototype.hasOwnProperty.call(await service.session(BOT_ID, { allowed: true }), "accessRequest"), false);
-    await holderStream.until(() => holderStream.frames.some(f => f.type === "access_request" && f.payload.accessRequest?.approvalCount === 3), "holder folder count");
-    await legacyStream.until(() => legacyStream.frames.some(f => f.type === "access_request" && f.payload.accessRequest !== null), "legacy folder");
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        await service.session(BOT_ID, { allowed: true }),
+        "accessRequest",
+      ),
+      false,
+    );
+    await holderStream.until(
+      () =>
+        holderStream.frames.some(
+          (f) => f.type === "access_request" && f.payload.accessRequest?.approvalCount === 3,
+        ),
+      "holder folder count",
+    );
+    await legacyStream.until(
+      () =>
+        legacyStream.frames.some(
+          (f) => f.type === "access_request" && f.payload.accessRequest !== null,
+        ),
+      "legacy folder",
+    );
     assert.equal(JSON.stringify(legacyStream.frames).includes("approvalCount"), false);
-    assert.equal(gapless(holderStream.frames), true); assert.equal(gapless(legacyStream.frames), true);
+    assert.equal(gapless(holderStream.frames), true);
+    assert.equal(gapless(legacyStream.frames), true);
   } finally {
-    await accessRequests.answer(BOT_ID, accessRequests.pending(BOT_ID)[0]!.waitId, "not_now", async () => {}); await waiting;
-    await holderStream.close(); await legacyStream.close(); await service.close();
+    await accessRequests.answer(
+      BOT_ID,
+      accessRequests.pending(BOT_ID)[0]!.waitId,
+      "not_now",
+      async () => {},
+    );
+    await waiting;
+    await holderStream.close();
+    await legacyStream.close();
+    await service.close();
   }
 });
 
 test("D Always counts are holder-only in snapshots/SSE and an offered scoped answer preserves private provenance", async () => {
   const approvals = createBotApprovals({ publish() {} });
-  const service = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, approvals });
-  const holder = await openAudienceStream(service, { allowed: true }); const legacy = await openAudienceStream(service, {});
-  const wait = approvals.request({ botId: BOT_ID, waitId: "allowed-wait-57", toolCallId: "call-57", toolName: "send_note", summary: "Send a note", signal: undefined, authorizationFingerprint: "private-fingerprint", always: { key: '["connection","private-server","private-tool"]', count: 3 } });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+    approvals,
+  });
+  const holder = await openAudienceStream(service, { allowed: true });
+  const legacy = await openAudienceStream(service, {});
+  const wait = approvals.request({
+    botId: BOT_ID,
+    waitId: "allowed-wait-57",
+    toolCallId: "call-57",
+    toolName: "send_note",
+    summary: "Send a note",
+    signal: undefined,
+    authorizationFingerprint: "private-fingerprint",
+    always: { key: '["connection","private-server","private-tool"]', count: 3 },
+  });
   try {
     await waitFor(() => approvals.pending(BOT_ID).length === 1);
-    const current = await service.session(BOT_ID, { allowed: true }); assert.equal(current.approval?.alwaysCount, 3);
-    assert.deepEqual(Object.keys((await service.session(BOT_ID)).approval!).sort(), ["canAllow", "summary", "toolCallId", "toolName", "waitId"]);
-    await holder.until(() => holder.frames.some(f => f.type === "approval" && f.payload.approval?.alwaysCount === 3), "holder count");
-    await legacy.until(() => legacy.frames.some(f => f.type === "approval" && f.payload.approval !== null), "legacy approval");
+    const current = await service.session(BOT_ID, { allowed: true });
+    assert.equal(current.approval?.alwaysCount, 3);
+    assert.deepEqual(Object.keys((await service.session(BOT_ID)).approval!).sort(), [
+      "canAllow",
+      "summary",
+      "toolCallId",
+      "toolName",
+      "waitId",
+    ]);
+    await holder.until(
+      () =>
+        holder.frames.some((f) => f.type === "approval" && f.payload.approval?.alwaysCount === 3),
+      "holder count",
+    );
+    await legacy.until(
+      () => legacy.frames.some((f) => f.type === "approval" && f.payload.approval !== null),
+      "legacy approval",
+    );
     assert.equal(JSON.stringify(holder.frames).includes("private-"), false);
     assert.equal(JSON.stringify(legacy.frames).includes("alwaysCount"), false);
-    await assert.rejects(service.respondApproval(DEVICE_ID, "allowed-wait-57", "allow", "no-grant-key-000057", "always"), isError("invalid_request", 400));
-    await assert.rejects(service.respondApproval(DEVICE_ID, "allowed-wait-57", "deny", "deny-scope-key-0057", "always", { allowed: true }), isError("invalid_request", 400));
-    const answer = () => service.respondApproval(DEVICE_ID, "allowed-wait-57", "allow", "holder-key-00000057", "always", { allowed: true });
-    const response = await answer(); assert.deepEqual(await answer(), response);
-    assert.deepEqual(await wait, { id: "allowed-wait-57", authorizationFingerprint: "private-fingerprint", answer: "allow_always", source: "person" });
-  } finally { approvals.decide("allowed-wait-57", "deny"); await holder.close(); await legacy.close(); await service.close(); }
+    await assert.rejects(
+      service.respondApproval(
+        DEVICE_ID,
+        "allowed-wait-57",
+        "allow",
+        "no-grant-key-000057",
+        "always",
+      ),
+      isError("invalid_request", 400),
+    );
+    await assert.rejects(
+      service.respondApproval(
+        DEVICE_ID,
+        "allowed-wait-57",
+        "deny",
+        "deny-scope-key-0057",
+        "always",
+        { allowed: true },
+      ),
+      isError("invalid_request", 400),
+    );
+    const answer = () =>
+      service.respondApproval(
+        DEVICE_ID,
+        "allowed-wait-57",
+        "allow",
+        "holder-key-00000057",
+        "always",
+        { allowed: true },
+      );
+    const response = await answer();
+    assert.deepEqual(await answer(), response);
+    assert.deepEqual(await wait, {
+      id: "allowed-wait-57",
+      authorizationFingerprint: "private-fingerprint",
+      answer: "allow_always",
+      source: "person",
+    });
+  } finally {
+    approvals.decide("allowed-wait-57", "deny");
+    await holder.close();
+    await legacy.close();
+    await service.close();
+  }
 });
 
 test("the first Bot approval card offers Always to carded phones without a repeat count, and an Always answer is accepted", async () => {
   const approvals = createBotApprovals({ publish() {} });
-  const service = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, approvals });
-  const wait = approvals.request({ botId: BOT_ID, waitId: "first-wait", toolCallId: "call-first", toolName: "composio", summary: "Composio · Gmail: Send email", signal: undefined, authorizationFingerprint: "private", always: { key: '["connection","composio","composio"]', count: 0 } });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+    approvals,
+  });
+  const wait = approvals.request({
+    botId: BOT_ID,
+    waitId: "first-wait",
+    toolCallId: "call-first",
+    toolName: "composio",
+    summary: "Composio · Gmail: Send email",
+    signal: undefined,
+    authorizationFingerprint: "private",
+    always: { key: '["connection","composio","composio"]', count: 0 },
+  });
   try {
     await waitFor(() => approvals.pending(BOT_ID).length === 1);
     const plain = (await service.session(BOT_ID, { allowed: true })).approval!;
-    assert.equal(plain.alwaysCount, undefined, "a phone that reads only the count keeps its old behaviour");
-    const carded = (await service.session(BOT_ID, { allowed: true, approvalCards: true })).approval!;
-    assert.ok(carded.card!.buttons.some((button) => button.decision === "allow" && button.scope === "always"), "the card has an Always button");
-    assert.equal(carded.card?.notes, undefined, "no \"You've allowed this N times\" note on a first card");
+    assert.equal(
+      plain.alwaysCount,
+      undefined,
+      "a phone that reads only the count keeps its old behaviour",
+    );
+    const carded = (await service.session(BOT_ID, { allowed: true, approvalCards: true }))
+      .approval!;
+    assert.ok(
+      carded.card!.buttons.some(
+        (button) => button.decision === "allow" && button.scope === "always",
+      ),
+      "the card has an Always button",
+    );
+    assert.equal(
+      carded.card?.notes,
+      undefined,
+      'no "You\'ve allowed this N times" note on a first card',
+    );
     const session = await service.session(BOT_ID, { allowed: true, approvalCards: true });
     assert.deepEqual(parseAidenRemoteBotSession(session), session);
-    assert.equal((await service.session(BOT_ID, { approvalCards: true })).approval!.card!.buttons.some((button) => button.scope === "always"), false, "only a bot:allowed holder sees Always");
-    await service.respondApproval(DEVICE_ID, "first-wait", "allow", "first-always-key-001", "always", { allowed: true });
+    assert.equal(
+      (await service.session(BOT_ID, { approvalCards: true })).approval!.card!.buttons.some(
+        (button) => button.scope === "always",
+      ),
+      false,
+      "only a bot:allowed holder sees Always",
+    );
+    await service.respondApproval(
+      DEVICE_ID,
+      "first-wait",
+      "allow",
+      "first-always-key-001",
+      "always",
+      { allowed: true },
+    );
     assert.equal((await wait).answer, "allow_always");
-  } finally { approvals.decide("first-wait", "deny"); await service.close(); }
+  } finally {
+    approvals.decide("first-wait", "deny");
+    await service.close();
+  }
 });
 
 test("D Always refuses unoffered and Computer Use scopes without consuming the waiting card", async () => {
   for (const toolName of ["send_note", "computer_use"]) {
     const approvals = createBotApprovals({ publish() {} });
-    const service = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, approvals });
-    const wait = approvals.request({ botId: BOT_ID, waitId: "not-offered-57", toolCallId: "call-57", toolName, summary: "An action", signal: undefined, authorizationFingerprint: "private", ...(toolName === "computer_use" ? { always: { key: "forged", count: 3 } } : {}) });
+    const service = new AidenRemoteBotSessionService({
+      bots: botService(),
+      runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+      approvals,
+    });
+    const wait = approvals.request({
+      botId: BOT_ID,
+      waitId: "not-offered-57",
+      toolCallId: "call-57",
+      toolName,
+      summary: "An action",
+      signal: undefined,
+      authorizationFingerprint: "private",
+      ...(toolName === "computer_use" ? { always: { key: "forged", count: 3 } } : {}),
+    });
     try {
       await waitFor(() => approvals.pending().length === 1);
-      assert.equal((await service.session(BOT_ID, { allowed: true })).approval?.alwaysCount, undefined);
-      await assert.rejects(service.respondApproval(DEVICE_ID, "not-offered-57", "allow", "unoffered-key-00057", "always", { allowed: true }), isError("invalid_request", 400));
+      assert.equal(
+        (await service.session(BOT_ID, { allowed: true })).approval?.alwaysCount,
+        undefined,
+      );
+      await assert.rejects(
+        service.respondApproval(
+          DEVICE_ID,
+          "not-offered-57",
+          "allow",
+          "unoffered-key-00057",
+          "always",
+          { allowed: true },
+        ),
+        isError("invalid_request", 400),
+      );
       assert.equal(approvals.pending().length, 1);
-      await service.respondApproval(DEVICE_ID, "not-offered-57", "deny", "deny-key-0000000057"); assert.equal((await wait).answer, "deny");
-    } finally { approvals.decide("not-offered-57", "deny"); await service.close(); }
+      await service.respondApproval(DEVICE_ID, "not-offered-57", "deny", "deny-key-0000000057");
+      assert.equal((await wait).answer, "deny");
+    } finally {
+      approvals.decide("not-offered-57", "deny");
+      await service.close();
+    }
   }
 });
 
 test("revision 61: settings changes and suggestions reach only devices that opted in, and answers go through the Bot's services", async () => {
-  const { BOT_SETTINGS_CHANGE_ENTRY_KIND } = await import("../../renderer/shared/bot-settings-changes.js");
+  const { BOT_SETTINGS_CHANGE_ENTRY_KIND } =
+    await import("../../renderer/shared/bot-settings-changes.js");
   const { BOT_LESSON_LEARNED_ENTRY_KIND } = await import("../../renderer/shared/bot-lessons.js");
-  const { BOT_SKILL_PROPOSAL_ENTRY_KIND } = await import("../../renderer/shared/bot-skill-proposals.js");
+  const { BOT_SKILL_PROPOSAL_ENTRY_KIND } =
+    await import("../../renderer/shared/bot-skill-proposals.js");
   const driven = drivenConversation([
     user(1, "Rename yourself Planner."),
-    { id: 2, kind: BOT_SETTINGS_CHANGE_ENTRY_KIND, data: { changeId: "change_61", mode: "held", fields: ["name"], lines: ["Name: Chief → Planner"] } },
-    { id: 3, kind: BOT_LESSON_LEARNED_ENTRY_KIND, data: { lessonId: "lesson_61", lesson: "Prices in euros." } },
-    { id: 4, kind: BOT_SKILL_PROPOSAL_ENTRY_KIND, data: { proposalId: "skill_short", name: "Invoices", description: "Read invoices", origin: "bot", preview: "# Invoices\nRead the total first.", update: false } },
-    { id: 5, kind: BOT_SKILL_PROPOSAL_ENTRY_KIND, data: { proposalId: "skill_long", name: "Reports", description: "Write reports", origin: "bot", preview: `# Reports\n${"Use plain words. ".repeat(4_000)}`, update: false } },
+    {
+      id: 2,
+      kind: BOT_SETTINGS_CHANGE_ENTRY_KIND,
+      data: {
+        changeId: "change_61",
+        mode: "held",
+        fields: ["name"],
+        lines: ["Name: Chief → Planner"],
+      },
+    },
+    {
+      id: 3,
+      kind: BOT_LESSON_LEARNED_ENTRY_KIND,
+      data: { lessonId: "lesson_61", lesson: "Prices in euros." },
+    },
+    {
+      id: 4,
+      kind: BOT_SKILL_PROPOSAL_ENTRY_KIND,
+      data: {
+        proposalId: "skill_short",
+        name: "Invoices",
+        description: "Read invoices",
+        origin: "bot",
+        preview: "# Invoices\nRead the total first.",
+        update: false,
+      },
+    },
+    {
+      id: 5,
+      kind: BOT_SKILL_PROPOSAL_ENTRY_KIND,
+      data: {
+        proposalId: "skill_long",
+        name: "Reports",
+        description: "Write reports",
+        origin: "bot",
+        preview: `# Reports\n${"Use plain words. ".repeat(4_000)}`,
+        update: false,
+      },
+    },
   ]);
   const fake = fakeRuntime({ kind: "idle" });
   const answers: unknown[][] = [];
   const service = new AidenRemoteBotSessionService({
     bots: botService(),
-    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+    runtime: async () => ({
+      ...fake.runtime,
+      conversation: async () => driven.conversation as never,
+    }),
     presets: { list: () => [], create: async () => ({ botId: BOT_ID, created: true }) },
     settingsChanges: {
       respond: async (...args) => {
         answers.push(["settings", ...args]);
-        return args[2] === "undo" ? { ok: false, message: "This setting changed since. Undo it in Settings." } : { ok: true, status: "applied" };
+        return args[2] === "undo"
+          ? { ok: false, message: "This setting changed since. Undo it in Settings." }
+          : { ok: true, status: "applied" };
       },
     },
     suggestions: {
-      respondSkill: async (...args) => { answers.push(["skill", ...args]); return { ok: true, status: args[2] === "add" ? "added" : "dismissed" }; },
-      respondLesson: async (_botId, lessonId) => (lessonId === "lesson_answered" ? { ok: false, code: "answered" } : { ok: false, code: "not_found" }),
+      respondSkill: async (...args) => {
+        answers.push(["skill", ...args]);
+        return { ok: true, status: args[2] === "add" ? "added" : "dismissed" };
+      },
+      respondLesson: async (_botId, lessonId) =>
+        lessonId === "lesson_answered"
+          ? { ok: false, code: "answered" }
+          : { ok: false, code: "not_found" },
       removeLesson: async (...args) => {
         answers.push(["remove", ...args]);
         return args[1] === "lesson_61" ? { ok: true } : { ok: false, code: "not_found" };
       },
-      undoLearning: async (_botId, changeId) => ({ ok: false, code: changeId === "learning_gone" ? "not_found" : "conflict" }),
+      undoLearning: async (_botId, changeId) => ({
+        ok: false,
+        code: changeId === "learning_gone" ? "not_found" : "conflict",
+      }),
     },
     notifyBotsChanged: () => {},
     projectorIdleMs: 60_000,
   });
   try {
-    const types = async (options: Parameters<typeof service.session>[1]) => (await service.session(BOT_ID, options)).entries.map((entry) => entry.type);
+    const types = async (options: Parameters<typeof service.session>[1]) =>
+      (await service.session(BOT_ID, options)).entries.map((entry) => entry.type);
     assert.deepEqual(await types({}), ["message"], "an older phone sees neither card");
     assert.deepEqual(await types({ settingsChanges: true }), ["message", "settings_change"]);
-    assert.deepEqual(await types({ suggestions: true }), ["message", "lesson", "skill_proposal", "skill_proposal"]);
+    assert.deepEqual(await types({ suggestions: true }), [
+      "message",
+      "lesson",
+      "skill_proposal",
+      "skill_proposal",
+    ]);
     const session = await service.session(BOT_ID, { settingsChanges: true, suggestions: true });
     assert.deepEqual(parseAidenRemoteBotSession(session), session);
     const skills = session.entries.filter((entry) => entry.type === "skill_proposal");
-    assert.deepEqual(skills.map((entry) => entry.type === "skill_proposal" && entry.previewTruncated === true), [false, true], "a preview cut to fit says so");
+    assert.deepEqual(
+      skills.map((entry) => entry.type === "skill_proposal" && entry.previewTruncated === true),
+      [false, true],
+      "a preview cut to fit says so",
+    );
 
-    assert.deepEqual(await service.respondSettingsChange(BOT_ID, "change_61", { decision: "apply" }), { changeId: "change_61", status: "applied" });
-    await assert.rejects(service.respondSettingsChange(BOT_ID, "change_61", { decision: "undo" }), isError("revision_conflict", 409));
-    await assert.rejects(service.respondSettingsChange(BOT_ID, "change_61", { decision: "edit" }), isError("invalid_request", 400), "Edit happens on the desktop");
-    await assert.rejects(service.respondLesson(BOT_ID, "lesson_bogus", { decision: "keep" }), isError("not_found", 404));
-    await assert.rejects(service.respondLesson(BOT_ID, "lesson_answered", { decision: "keep" }), isError("not_found", 404), "an already-answered lesson is gone");
-    await assert.rejects(service.undoLearning(BOT_ID, "learning_61", {}), isError("revision_conflict", 409));
-    await assert.rejects(service.undoLearning(BOT_ID, "learning_gone", {}), isError("not_found", 404));
-    await assert.rejects(service.removeLesson(BOT_ID, "lesson_61", { extra: true }), isError("invalid_request", 400));
-    await assert.rejects(service.removeLesson(BOT_ID, "lesson_bogus", {}), isError("not_found", 404));
-    assert.deepEqual(await service.removeLesson(BOT_ID, "lesson_61", {}), { lessonId: "lesson_61", status: "retired" });
+    assert.deepEqual(
+      await service.respondSettingsChange(BOT_ID, "change_61", { decision: "apply" }),
+      { changeId: "change_61", status: "applied" },
+    );
+    await assert.rejects(
+      service.respondSettingsChange(BOT_ID, "change_61", { decision: "undo" }),
+      isError("revision_conflict", 409),
+    );
+    await assert.rejects(
+      service.respondSettingsChange(BOT_ID, "change_61", { decision: "edit" }),
+      isError("invalid_request", 400),
+      "Edit happens on the desktop",
+    );
+    await assert.rejects(
+      service.respondLesson(BOT_ID, "lesson_bogus", { decision: "keep" }),
+      isError("not_found", 404),
+    );
+    await assert.rejects(
+      service.respondLesson(BOT_ID, "lesson_answered", { decision: "keep" }),
+      isError("not_found", 404),
+      "an already-answered lesson is gone",
+    );
+    await assert.rejects(
+      service.undoLearning(BOT_ID, "learning_61", {}),
+      isError("revision_conflict", 409),
+    );
+    await assert.rejects(
+      service.undoLearning(BOT_ID, "learning_gone", {}),
+      isError("not_found", 404),
+    );
+    await assert.rejects(
+      service.removeLesson(BOT_ID, "lesson_61", { extra: true }),
+      isError("invalid_request", 400),
+    );
+    await assert.rejects(
+      service.removeLesson(BOT_ID, "lesson_bogus", {}),
+      isError("not_found", 404),
+    );
+    assert.deepEqual(await service.removeLesson(BOT_ID, "lesson_61", {}), {
+      lessonId: "lesson_61",
+      status: "retired",
+    });
 
-    await assert.rejects(service.respondSkillProposal(BOT_ID, "skill_long", { decision: "add" }), isError("revision_conflict", 409), "a skill the phone saw only in part is added on the Mac");
-    await assert.rejects(service.respondSkillProposal(BOT_ID, "skill_unseen", { decision: "add" }), isError("not_found", 404));
-    assert.deepEqual(await service.respondSkillProposal(BOT_ID, "skill_long", { decision: "dismiss" }), { proposalId: "skill_long", status: "dismissed" });
-    assert.deepEqual(await service.respondSkillProposal(BOT_ID, "skill_short", { decision: "add" }), { proposalId: "skill_short", status: "added" });
-    assert.deepEqual(answers, [
-      ["settings", BOT_ID, "change_61", "apply"],
-      ["settings", BOT_ID, "change_61", "undo"],
-      ["remove", BOT_ID, "lesson_bogus"],
-      ["remove", BOT_ID, "lesson_61"],
-      ["skill", BOT_ID, "skill_long", "dismiss"],
-      ["skill", BOT_ID, "skill_short", "add"],
-    ], "a refused Add never reaches the Bot's skill service");
+    await assert.rejects(
+      service.respondSkillProposal(BOT_ID, "skill_long", { decision: "add" }),
+      isError("revision_conflict", 409),
+      "a skill the phone saw only in part is added on the Mac",
+    );
+    await assert.rejects(
+      service.respondSkillProposal(BOT_ID, "skill_unseen", { decision: "add" }),
+      isError("not_found", 404),
+    );
+    assert.deepEqual(
+      await service.respondSkillProposal(BOT_ID, "skill_long", { decision: "dismiss" }),
+      { proposalId: "skill_long", status: "dismissed" },
+    );
+    assert.deepEqual(
+      await service.respondSkillProposal(BOT_ID, "skill_short", { decision: "add" }),
+      { proposalId: "skill_short", status: "added" },
+    );
+    assert.deepEqual(
+      answers,
+      [
+        ["settings", BOT_ID, "change_61", "apply"],
+        ["settings", BOT_ID, "change_61", "undo"],
+        ["remove", BOT_ID, "lesson_bogus"],
+        ["remove", BOT_ID, "lesson_61"],
+        ["skill", BOT_ID, "skill_long", "dismiss"],
+        ["skill", BOT_ID, "skill_short", "add"],
+      ],
+      "a refused Add never reaches the Bot's skill service",
+    );
   } finally {
     await service.close();
   }
@@ -4788,7 +7839,8 @@ test("revision 61 templates: holders see versions and Open, and a stale version 
       list: () => BOT_PRESETS,
       create: async (presetId, options) => {
         created.push({ presetId, ...options });
-        if (options.version !== undefined && options.version !== preset.version) throw new Error(BOT_TEMPLATE_STALE_MESSAGE);
+        if (options.version !== undefined && options.version !== preset.version)
+          throw new Error(BOT_TEMPLATE_STALE_MESSAGE);
         return { botId: BOT_ID, created: false };
       },
       presetBots: async () => ({ [preset.id]: BOT_ID }),
@@ -4803,32 +7855,62 @@ test("revision 61 templates: holders see versions and Open, and a stale version 
     assert.equal(listed.existingBotId, BOT_ID, "a template that already made a Bot offers Open");
     assert.equal(listed.instructions, preset.instructions);
     await assert.rejects(
-      service.createFromPreset(DEVICE_ID, "template-key-0000000061a", { presetId: preset.id, version: preset.version + 1 }, { templates: true }),
-      (error: unknown) => isError("revision_conflict", 409)(error as never) && (error as Error).message === BOT_TEMPLATE_STALE_MESSAGE,
+      service.createFromPreset(
+        DEVICE_ID,
+        "template-key-0000000061a",
+        { presetId: preset.id, version: preset.version + 1 },
+        { templates: true },
+      ),
+      (error: unknown) =>
+        isError("revision_conflict", 409)(error as never) &&
+        (error as Error).message === BOT_TEMPLATE_STALE_MESSAGE,
     );
     await assert.rejects(
-      service.createFromPreset(DEVICE_ID, "template-key-0000000061b", { presetId: preset.id, version: preset.version }),
+      service.createFromPreset(DEVICE_ID, "template-key-0000000061b", {
+        presetId: preset.id,
+        version: preset.version,
+      }),
       isError("invalid_request", 400),
       "an older client's body never carries a version",
     );
-    const opened = await service.createFromPreset(DEVICE_ID, "template-key-0000000061c", { presetId: preset.id, version: preset.version }, { templates: true });
+    const opened = await service.createFromPreset(
+      DEVICE_ID,
+      "template-key-0000000061c",
+      { presetId: preset.id, version: preset.version },
+      { templates: true },
+    );
     assert.equal(opened.created, false);
-    assert.deepEqual(created.map((entry) => (entry as { version?: number }).version), [preset.version + 1, preset.version]);
+    assert.deepEqual(
+      created.map((entry) => (entry as { version?: number }).version),
+      [preset.version + 1, preset.version],
+    );
   } finally {
     await service.close();
   }
 });
 
 test("revision 69: a Bot's command approval carries its plain words only to approval:plain-words holders", async () => {
-  const { runtime, service, approvals } = await approvalGatedBot("run_command", { command: "rm -rf build", description: "Deletes the old build folder" }, "Run command: rm -rf build");
+  const { runtime, service, approvals } = await approvalGatedBot(
+    "run_command",
+    { command: "rm -rf build", description: "Deletes the old build folder" },
+    "Run command: rm -rf build",
+  );
   try {
     const sent = await runtime.send(BOT_ID, { text: "go", requestId: "send-request-69" });
     await waitFor(() => approvals.pending(BOT_ID).length === 1, { what: "the approval prompt" });
-    const words = (await service.session(BOT_ID, { approvalCards: true, approvalPlainWords: true })).approval!;
+    const words = (await service.session(BOT_ID, { approvalCards: true, approvalPlainWords: true }))
+      .approval!;
     assert.equal(words.card?.explanation, "Deletes the old build folder");
     assert.deepEqual(words.card?.tags, [{ label: "Deletes files", tone: "risk" }]);
-    const session = await service.session(BOT_ID, { approvalCards: true, approvalPlainWords: true });
-    assert.deepEqual(parseAidenRemoteBotSession(session), session, "the card decodes under the shipped contract");
+    const session = await service.session(BOT_ID, {
+      approvalCards: true,
+      approvalPlainWords: true,
+    });
+    assert.deepEqual(
+      parseAidenRemoteBotSession(session),
+      session,
+      "the card decodes under the shipped contract",
+    );
 
     const cards = (await service.session(BOT_ID, { approvalCards: true })).approval!;
     assert.ok(cards.card, "a cards holder still gets the card");
@@ -4850,18 +7932,31 @@ test("revision 61: a Bot approval carries the typed card only for approval:cards
   for (const toolName of ["send_note", "computer_use"]) {
     const { runtime, service, approvals } = await approvalGatedBot(toolName);
     try {
-      const sent = await runtime.send(BOT_ID, { text: "go", requestId: `send-request-61-${toolName}` });
+      const sent = await runtime.send(BOT_ID, {
+        text: "go",
+        requestId: `send-request-61-${toolName}`,
+      });
       await waitFor(() => approvals.pending(BOT_ID).length === 1, { what: "the approval prompt" });
-      assert.equal("card" in (await service.session(BOT_ID)).approval!, false, "an older phone gets no card");
+      assert.equal(
+        "card" in (await service.session(BOT_ID)).approval!,
+        false,
+        "an older phone gets no card",
+      );
       const carded = (await service.session(BOT_ID, { approvalCards: true })).approval!;
       assert.equal(carded.card?.buttons[0]?.decision, "deny");
       const allows = carded.card!.buttons.some((button) => button.decision === "allow");
       assert.equal(allows, toolName !== "computer_use");
       assert.equal(allows, carded.canAllow, "the card and canAllow agree");
-      if (toolName === "computer_use") assert.equal(carded.card?.allowOnMac, "Allow it on your Mac.");
+      if (toolName === "computer_use")
+        assert.equal(carded.card?.allowOnMac, "Allow it on your Mac.");
       const session = await service.session(BOT_ID, { approvalCards: true });
       assert.deepEqual(parseAidenRemoteBotSession(session), session);
-      await service.respondApproval(DEVICE_ID, carded.waitId, "deny", `approve-request-61-${toolName}`);
+      await service.respondApproval(
+        DEVICE_ID,
+        carded.waitId,
+        "deny",
+        `approve-request-61-${toolName}`,
+      );
       await runtime.awaitReply(BOT_ID, sent.submissionId, new AbortController().signal);
     } finally {
       await service.close();
@@ -4871,12 +7966,17 @@ test("revision 61: a Bot approval carries the typed card only for approval:cards
 });
 
 test("a device pages back from the oldest entry it holds to the start of the chat, in order and without repeats", async () => {
-  const history = Array.from({ length: 260 }, (_, index) => user(index + 1, `Message ${index + 1}`));
+  const history = Array.from({ length: 260 }, (_, index) =>
+    user(index + 1, `Message ${index + 1}`),
+  );
   const driven = drivenConversation(history);
   const fake = fakeRuntime({ kind: "idle" });
   const service = new AidenRemoteBotSessionService({
     bots: botService(),
-    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+    runtime: async () => ({
+      ...fake.runtime,
+      conversation: async () => driven.conversation as never,
+    }),
   });
   try {
     const session = await service.session(BOT_ID);
@@ -4895,9 +7995,16 @@ test("a device pages back from the oldest entry it holds to the start of the cha
       pages += 1;
     }
     assert.ok(pages >= 3);
-    assert.deepEqual(texts, history.map((_, index) => `Message ${index + 1}`));
-    await assert.rejects(service.olderEntries(BOT_ID, { before: "entry_this_device_never_saw" }), { code: "operation_stale" });
-    await assert.rejects(service.olderEntries(BOT_ID, { before, limit: 0 }), { code: "invalid_request" });
+    assert.deepEqual(
+      texts,
+      history.map((_, index) => `Message ${index + 1}`),
+    );
+    await assert.rejects(service.olderEntries(BOT_ID, { before: "entry_this_device_never_saw" }), {
+      code: "operation_stale",
+    });
+    await assert.rejects(service.olderEntries(BOT_ID, { before, limit: 0 }), {
+      code: "invalid_request",
+    });
   } finally {
     await service.close();
   }
@@ -4907,9 +8014,14 @@ test("the person takes back a queued message before its turn: it never runs, and
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-withdraw-"));
   durableRoots.push(profileDir);
   const releases: Array<() => void> = [];
-  const command = countingTool("run_command", () => new Promise<string>((resolve) => releases.push(() => resolve("done"))));
+  const command = countingTool(
+    "run_command",
+    () => new Promise<string>((resolve) => releases.push(() => resolve("done"))),
+  );
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall("run_command", { text: "tidy" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "tidy" })], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("Tidied."),
     fauxAssistantMessage("Inbox is quiet."),
   ]);
@@ -4920,34 +8032,71 @@ test("the person takes back a queued message before its turn: it never runs, and
     resolveModel: async () => FAUX_MODEL_REF,
     knownBotIds: async () => new Set([BOT_ID]),
   });
-  const service = new AidenRemoteBotSessionService({ bots: activityBots(), runtime: async () => runtime, turnIntents: createBotTurnIntents() });
+  const service = new AidenRemoteBotSessionService({
+    bots: activityBots(),
+    runtime: async () => runtime,
+    turnIntents: createBotTurnIntents(),
+  });
   const holder = await openAudienceStream(service, { activity: true });
   const queuedNow = () => {
-    const frames = holder.frames.filter((frame) => frame.type === "queued" || frame.type === "snapshot");
+    const frames = holder.frames.filter(
+      (frame) => frame.type === "queued" || frame.type === "snapshot",
+    );
     const last = frames[frames.length - 1];
-    return ((last?.type === "queued" ? last.payload.queued : last?.payload.session.queued) ?? []) as Array<{ submissionId: string }>;
+    return ((last?.type === "queued" ? last.payload.queued : last?.payload.session.queued) ??
+      []) as Array<{ submissionId: string }>;
   };
   try {
     await holder.until(() => holder.frames.length >= 1, "the first snapshot");
     await service.send(DEVICE_ID, BOT_ID, "send-request-withdraw-00001", { text: "Tidy my notes" });
     await waitFor(() => command.executions.length === 1, { what: "the first turn to work" });
-    const queued = await service.send(DEVICE_ID, BOT_ID, "send-request-withdraw-00002", { text: "Then forget it", whenBusy: "queue" });
-    await holder.until(() => queuedNow().some((message) => message.submissionId === queued.submissionId), "the queued message");
+    const queued = await service.send(DEVICE_ID, BOT_ID, "send-request-withdraw-00002", {
+      text: "Then forget it",
+      whenBusy: "queue",
+    });
+    await holder.until(
+      () => queuedNow().some((message) => message.submissionId === queued.submissionId),
+      "the queued message",
+    );
 
-    const receipt = await service.withdrawQueued(DEVICE_ID, BOT_ID, queued.submissionId, "withdraw-request-0000001", {});
+    const receipt = await service.withdrawQueued(
+      DEVICE_ID,
+      BOT_ID,
+      queued.submissionId,
+      "withdraw-request-0000001",
+      {},
+    );
     assert.deepEqual(receipt, { submissionId: queued.submissionId, outcome: "withdrawn" });
     await holder.until(() => queuedNow().length === 0, "the queue to empty");
     assert.deepEqual(
-      await service.withdrawQueued(DEVICE_ID, BOT_ID, queued.submissionId, "withdraw-request-0000001", {}),
+      await service.withdrawQueued(
+        DEVICE_ID,
+        BOT_ID,
+        queued.submissionId,
+        "withdraw-request-0000001",
+        {},
+      ),
       receipt,
       "a retried request replays its receipt",
     );
     assert.equal(
-      (await service.withdrawQueued(DEVICE_ID, BOT_ID, queued.submissionId, "withdraw-request-0000002", {})).outcome,
+      (
+        await service.withdrawQueued(
+          DEVICE_ID,
+          BOT_ID,
+          queued.submissionId,
+          "withdraw-request-0000002",
+          {},
+        )
+      ).outcome,
       "gone",
     );
 
-    const routine = await runtime.send(BOT_ID, { text: "Check my inbox.", requestId: "routine:task_1:1", label: "Morning brief" });
+    const routine = await runtime.send(BOT_ID, {
+      text: "Check my inbox.",
+      requestId: "routine:task_1:1",
+      label: "Morning brief",
+    });
     // A request that raced the routine's send could only have looked before the
     // id existed, when nothing marked it as a routine's. Whose message it is must
     // be decided with the abort, so even that request leaves the routine queued.
@@ -4957,31 +8106,63 @@ test("the person takes back a queued message before its turn: it never runs, and
           ? async (_botId: string, ids: readonly string[]) => new Map(ids.map((id) => [id, false]))
           : Reflect.get(target, property, receiver),
     });
-    const raced = new AidenRemoteBotSessionService({ bots: activityBots(), runtime: async () => lookedTooEarly, turnIntents: createBotTurnIntents() });
+    const raced = new AidenRemoteBotSessionService({
+      bots: activityBots(),
+      runtime: async () => lookedTooEarly,
+      turnIntents: createBotTurnIntents(),
+    });
     try {
       assert.equal(
-        (await raced.withdrawQueued(DEVICE_ID, BOT_ID, routine.submissionId, "withdraw-request-0000003", {})).outcome,
+        (
+          await raced.withdrawQueued(
+            DEVICE_ID,
+            BOT_ID,
+            routine.submissionId,
+            "withdraw-request-0000003",
+            {},
+          )
+        ).outcome,
         "gone",
         "a routine's input stays queued",
       );
       assert.equal(
-        (await raced.withdrawQueued(DEVICE_ID, BOT_ID, String(Number(routine.submissionId) + 1000), "withdraw-request-0000005", {})).outcome,
+        (
+          await raced.withdrawQueued(
+            DEVICE_ID,
+            BOT_ID,
+            String(Number(routine.submissionId) + 1000),
+            "withdraw-request-0000005",
+            {},
+          )
+        ).outcome,
         "gone",
         "an id the Bot doesn't hold is gone",
       );
     } finally {
       await raced.close();
     }
-    await assert.rejects(service.withdrawQueued(DEVICE_ID, BOT_ID, "not a submission", "withdraw-request-0000004", {}), { code: "invalid_request" });
+    await assert.rejects(
+      service.withdrawQueued(DEVICE_ID, BOT_ID, "not a submission", "withdraw-request-0000004", {}),
+      { code: "invalid_request" },
+    );
 
     releases.shift()!();
     await holder.until(
-      () => holder.frames.some((frame) => frame.type === "entry" && frame.payload.entry.text === "Inbox is quiet."),
+      () =>
+        holder.frames.some(
+          (frame) => frame.type === "entry" && frame.payload.entry.text === "Inbox is quiet.",
+        ),
       "the routine's reply",
     );
-    await waitFor(async () => (await runtime.state(BOT_ID)).kind === "idle", { what: "the turns to end" });
+    await waitFor(async () => (await runtime.state(BOT_ID)).kind === "idle", {
+      what: "the turns to end",
+    });
     const texts = (await service.session(BOT_ID)).entries.map((entry: any) => entry.text);
-    assert.equal(texts.includes("Then forget it"), false, "the withdrawn message never joined the chat");
+    assert.equal(
+      texts.includes("Then forget it"),
+      false,
+      "the withdrawn message never joined the chat",
+    );
     assert.ok(texts.includes("Check my inbox."));
   } finally {
     for (const release of releases) release();

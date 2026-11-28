@@ -76,7 +76,9 @@ export type ComposioCallShape =
     };
 
 function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 /** The call's shape, or `undefined` when its arguments are not a Composio service call. */
@@ -84,9 +86,11 @@ export function composioCallShape(args: unknown): ComposioCallShape | undefined 
   const input = record(args);
   if (!input) return undefined;
   if (input.action === "describe") return { kind: "describe" };
-  if (input.action !== "call" || typeof input.tool !== "string" || !SLUG.test(input.tool)) return undefined;
+  if (input.action !== "call" || typeof input.tool !== "string" || !SLUG.test(input.tool))
+    return undefined;
   const tool = input.tool.toUpperCase();
-  if (tool !== MULTI_EXECUTE) return { kind: "call", tool, slugs: [], unbounded: !REMEMBERABLE_META_OPERATIONS.has(tool) };
+  if (tool !== MULTI_EXECUTE)
+    return { kind: "call", tool, slugs: [], unbounded: !REMEMBERABLE_META_OPERATIONS.has(tool) };
   const tools = record(input.arguments)?.tools;
   const slugs: string[] = [];
   let readable = Array.isArray(tools) && tools.length > 0 && tools.length <= MAX_SLUGS;
@@ -100,11 +104,18 @@ export function composioCallShape(args: unknown): ComposioCallShape | undefined 
       slugs.push(slug.toUpperCase());
     }
   }
-  return { kind: "call", tool, slugs: readable ? slugs : [], unbounded: !readable || slugs.some(unboundedAppAction) };
+  return {
+    kind: "call",
+    tool,
+    slugs: readable ? slugs : [],
+    unbounded: !readable || slugs.some(unboundedAppAction),
+  };
 }
 
 /** The names the Bot rules classifier reads for this call: its app actions, or the meta-tool. */
-export function composioClassifiedOperations(shape: ComposioCallShape | undefined): readonly string[] {
+export function composioClassifiedOperations(
+  shape: ComposioCallShape | undefined,
+): readonly string[] {
   if (!shape || shape.kind === "describe") return [];
   return shape.slugs.length > 0 ? shape.slugs : [shape.tool];
 }

@@ -68,7 +68,9 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-function eventAndMatcher(listing: Pick<HookListing, "event" | "configuredEvent" | "matcher">): string {
+function eventAndMatcher(
+  listing: Pick<HookListing, "event" | "configuredEvent" | "matcher">,
+): string {
   const event = listing.event === "unknown" ? listing.configuredEvent : listing.event;
   const matcher = hookMatcherLabel(listing);
   return matcher ? `${event} · ${matcher}` : event;
@@ -78,11 +80,16 @@ function eventAndMatcher(listing: Pick<HookListing, "event" | "configuredEvent" 
  * Control and text-direction characters shown as `\u{…}` escapes, so a hooks
  * file Aiden refuses still can't reorder how its command reads.
  */
-// eslint-disable-next-line no-control-regex -- matching these characters is the point
-const HIDDEN_COMMAND_CHARACTER = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]/gu;
+/* eslint-disable no-control-regex -- matching these characters is the point */
+const HIDDEN_COMMAND_CHARACTER =
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]/gu;
+/* eslint-enable no-control-regex */
 
 function visibleCommand(command: string): string {
-  return command.replace(HIDDEN_COMMAND_CHARACTER, (character) => `\\u{${(character.codePointAt(0) ?? 0).toString(16)}}`);
+  return command.replace(
+    HIDDEN_COMMAND_CHARACTER,
+    (character) => `\\u{${(character.codePointAt(0) ?? 0).toString(16)}}`,
+  );
 }
 
 function CommandBlock({ command, className }: { command: string; className?: string }) {
@@ -119,10 +126,15 @@ function sourceLabel(listing: Pick<HookListing, "source">): string {
 
 function formatWhen(timestamp: number): string {
   const date = new Date(timestamp);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  return Number.isNaN(date.getTime())
+    ? ""
+    : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-const RUN_RESULT_LABEL: Record<HookRunRecord["result"], { label: string; color: "green" | "red" | "warning" | "blue" }> = {
+const RUN_RESULT_LABEL: Record<
+  HookRunRecord["result"],
+  { label: string; color: "green" | "red" | "warning" | "blue" }
+> = {
   ok: { label: "OK", color: "green" },
   blocked: { label: "Blocked", color: "warning" },
   asked: { label: "Asked you", color: "blue" },
@@ -166,7 +178,9 @@ function HookRow({
             <StatusBadge listing={listing} />
           </span>
           {listing.status === "missing" ? null : <CommandBlock command={listing.handler.command} />}
-          {unsupported && listing.unsupportedReason ? <span>{listing.unsupportedReason}</span> : null}
+          {unsupported && listing.unsupportedReason ? (
+            <span>{listing.unsupportedReason}</span>
+          ) : null}
         </span>
       }
     >
@@ -206,13 +220,23 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 function HookRunDetailRows({ listing }: { listing: Pick<HookListing, "event" | "handler"> }) {
   return (
     <>
-      <DetailRow label="Timeout">{listing.handler.timeout ?? HOOK_DEFAULT_TIMEOUT_SECONDS} seconds</DetailRow>
-      <DetailRow label="In the background">{listing.handler.async ? "Yes, Aiden doesn’t wait for it" : "No"}</DetailRow>
+      <DetailRow label="Timeout">
+        {listing.handler.timeout ?? HOOK_DEFAULT_TIMEOUT_SECONDS} seconds
+      </DetailRow>
+      <DetailRow label="In the background">
+        {listing.handler.async ? "Yes, Aiden doesn’t wait for it" : "No"}
+      </DetailRow>
       {listing.event === "PreToolUse" && !listing.handler.async ? (
-        <DetailRow label="If it fails">{listing.handler.failClosed ? "Block the tool" : "Let the tool run"}</DetailRow>
+        <DetailRow label="If it fails">
+          {listing.handler.failClosed ? "Block the tool" : "Let the tool run"}
+        </DetailRow>
       ) : null}
       <DetailRow label="Extra environment">
-        {listing.handler.envAllow?.length ? <span className="font-mono">{listing.handler.envAllow.join(", ")}</span> : "None"}
+        {listing.handler.envAllow?.length ? (
+          <span className="font-mono">{listing.handler.envAllow.join(", ")}</span>
+        ) : (
+          "None"
+        )}
       </DetailRow>
     </>
   );
@@ -264,7 +288,10 @@ function HookDetailSheet({
   onDeleted: () => void;
 }) {
   const { platform } = useAppCapabilities();
-  const runLog = useQuery({ queryKey: runLogKey(listing.id), queryFn: () => hooksApi.runLog(listing.id) });
+  const runLog = useQuery({
+    queryKey: runLogKey(listing.id),
+    queryFn: () => hooksApi.runLog(listing.id),
+  });
   const [testing, setTesting] = React.useState(false);
   const [confirmTest, setConfirmTest] = React.useState(false);
   const [testResult, setTestResult] = React.useState<HookTestResult | null>(null);
@@ -332,20 +359,29 @@ function HookDetailSheet({
         onConfirm={approve}
       >
         <div className="flex flex-col gap-4">
-          {unsupported && listing.unsupportedReason ? <Callout>{listing.unsupportedReason}</Callout> : null}
+          {unsupported && listing.unsupportedReason ? (
+            <Callout>{listing.unsupportedReason}</Callout>
+          ) : null}
           {listing.status === "changed" ? (
             <Callout color="warning">
-              This hook changed since you approved it. It won’t run until you approve the new version.
-              {listing.handler.failClosed ? " It blocks when it fails, so the tools it covers stay blocked until then." : ""}
+              This hook changed since you approved it. It won’t run until you approve the new
+              version.
+              {listing.handler.failClosed
+                ? " It blocks when it fails, so the tools it covers stay blocked until then."
+                : ""}
             </Callout>
           ) : null}
           {missing ? (
             <Callout color="red">
-              This hook blocks when it fails, and it’s gone from where you approved it. The tools it covered stay blocked until you restore it or remove it here.
+              This hook blocks when it fails, and it’s gone from where you approved it. The tools it
+              covered stay blocked until you restore it or remove it here.
             </Callout>
           ) : null}
           {listing.status === "disabled-after-failures" ? (
-            <Callout color="red">It failed several times in a row, so Aiden turned it off. Turn it back on once it’s fixed.</Callout>
+            <Callout color="red">
+              It failed several times in a row, so Aiden turned it off. Turn it back on once it’s
+              fixed.
+            </Callout>
           ) : null}
           {missing ? null : (
             <div className="flex flex-col gap-1.5">
@@ -370,32 +406,45 @@ function HookDetailSheet({
           <div className="flex flex-col gap-2">
             <Text variant="small-strong">Last runs</Text>
             {runLog.isError ? (
-              <Text variant="small" color="secondary">Couldn’t read its runs.</Text>
+              <Text variant="small" color="secondary">
+                Couldn’t read its runs.
+              </Text>
             ) : !runLog.isSuccess ? (
               <span role="status" aria-label="Reading its runs" className="flex flex-col gap-2">
                 <span className="h-3 w-48 max-w-full rounded-full bg-control motion-safe:animate-pulse" />
                 <span className="h-3 w-32 max-w-full rounded-full bg-control motion-safe:animate-pulse" />
               </span>
             ) : runs.length === 0 ? (
-              <Text variant="small" color="secondary">It hasn’t run yet.</Text>
+              <Text variant="small" color="secondary">
+                It hasn’t run yet.
+              </Text>
             ) : (
               <ul aria-label="Last runs" className="flex flex-col gap-2">
-                {runs.slice(-10).reverse().map((run, index) => {
-                  const result = RUN_RESULT_LABEL[run.result];
-                  return (
-                    // Two runs can share a start time and event, so the position keeps keys unique.
-                    <li key={`${index}:${run.startedAt}:${run.event}`} className="flex flex-col gap-1">
-                      <span className="flex flex-wrap items-center gap-2 text-small text-secondary">
-                        <Badge color={result.color}>{result.label}</Badge>
-                        <span>{formatWhen(run.startedAt)}</span>
-                        <span>
-                          {run.timedOut ? "Timed out" : `Exit ${run.exitCode ?? "none"}`} · {run.durationMs} ms
+                {runs
+                  .slice(-10)
+                  .reverse()
+                  .map((run, index) => {
+                    const result = RUN_RESULT_LABEL[run.result];
+                    return (
+                      // Two runs can share a start time and event, so the position keeps keys unique.
+                      <li
+                        key={`${index}:${run.startedAt}:${run.event}`}
+                        className="flex flex-col gap-1"
+                      >
+                        <span className="flex flex-wrap items-center gap-2 text-small text-secondary">
+                          <Badge color={result.color}>{result.label}</Badge>
+                          <span>{formatWhen(run.startedAt)}</span>
+                          <span>
+                            {run.timedOut ? "Timed out" : `Exit ${run.exitCode ?? "none"}`} ·{" "}
+                            {run.durationMs} ms
+                          </span>
                         </span>
-                      </span>
-                      {run.outputExcerpt ? <CommandBlock command={run.outputExcerpt} className="text-secondary" /> : null}
-                    </li>
-                  );
-                })}
+                        {run.outputExcerpt ? (
+                          <CommandBlock command={run.outputExcerpt} className="text-secondary" />
+                        ) : null}
+                      </li>
+                    );
+                  })}
               </ul>
             )}
           </div>
@@ -416,7 +465,11 @@ function HookDetailSheet({
               {testing ? "Testing…" : "Test"}
             </Button>
             {repoHook && needsApproval ? null : (
-              <Button variant="destructive" disabled={deleting} onClick={() => setConfirmDelete(true)}>
+              <Button
+                variant="destructive"
+                disabled={deleting}
+                onClick={() => setConfirmDelete(true)}
+              >
                 {repoHook ? "Remove approval" : missing ? "Remove" : "Delete"}
               </Button>
             )}
@@ -432,7 +485,10 @@ function HookDetailSheet({
         title="Run this command now?"
         description={
           <span className="flex flex-col gap-2">
-            <span>You haven’t approved this version. Testing runs it once on this {localComputerNoun(platform)}.</span>
+            <span>
+              You haven’t approved this version. Testing runs it once on this{" "}
+              {localComputerNoun(platform)}.
+            </span>
             <CommandBlock command={listing.handler.command} />
           </span>
         }
@@ -445,7 +501,13 @@ function HookDetailSheet({
       <AlertDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
-        title={repoHook ? `Remove approval for ${listing.name}?` : missing ? `Remove ${listing.name}?` : `Delete ${listing.name}?`}
+        title={
+          repoHook
+            ? `Remove approval for ${listing.name}?`
+            : missing
+              ? `Remove ${listing.name}?`
+              : `Delete ${listing.name}?`
+        }
         description={
           repoHook
             ? "It stays in the repo’s .aiden/hooks.json and won’t run until you approve it again."
@@ -453,7 +515,9 @@ function HookDetailSheet({
               ? "The tools it covered can run again, with nothing checking them."
               : "It stops running and is removed from Aiden. This can’t be undone."
         }
-        confirmLabel={deleting ? "Deleting…" : repoHook ? "Remove approval" : missing ? "Remove" : "Delete"}
+        confirmLabel={
+          deleting ? "Deleting…" : repoHook ? "Remove approval" : missing ? "Remove" : "Delete"
+        }
         confirmVariant="destructive"
         busy={deleting}
         keepOpenOnConfirm
@@ -472,21 +536,32 @@ interface DiffLine {
   after?: string;
 }
 
-function definitionFields(definition: Pick<HookListing, "event" | "matcher" | "handler" | "scope">, workspaces: readonly HooksWorkspaceLabel[]) {
+function definitionFields(
+  definition: Pick<HookListing, "event" | "matcher" | "handler" | "scope">,
+  workspaces: readonly HooksWorkspaceLabel[],
+) {
   return {
     Event: String(definition.event),
-    Matcher: definition.matcher.trim() === "" || definition.matcher === "*" ? "Every tool" : definition.matcher,
+    Matcher:
+      definition.matcher.trim() === "" || definition.matcher === "*"
+        ? "Every tool"
+        : definition.matcher,
     Command: definition.handler.command,
     Timeout: `${definition.handler.timeout ?? HOOK_DEFAULT_TIMEOUT_SECONDS} seconds`,
     "In the background": definition.handler.async ? "Yes" : "No",
     "If it fails": definition.handler.failClosed ? "Block the tool" : "Let the tool run",
-    "Extra environment": definition.handler.envAllow?.length ? definition.handler.envAllow.join(", ") : "None",
+    "Extra environment": definition.handler.envAllow?.length
+      ? definition.handler.envAllow.join(", ")
+      : "None",
     Where: hookScopeLabel(definition.scope, workspaces),
   };
 }
 
 /** Where a proposed hook would run, as the end of a sentence. */
-function proposalWhere(scope: HookListing["scope"], workspaces: readonly HooksWorkspaceLabel[]): string {
+function proposalWhere(
+  scope: HookListing["scope"],
+  workspaces: readonly HooksWorkspaceLabel[],
+): string {
   switch (scope.kind) {
     case "global":
       return "in every chat";
@@ -530,7 +605,10 @@ function ProposalCard({
   const definition = proposal.definition;
   const action =
     proposal.action === "create" ? "New hook" : proposal.action === "update" ? "Change" : "Delete";
-  const diff = proposal.action === "update" && existing ? hookProposalDiff(existing, definition, workspaces) : null;
+  const diff =
+    proposal.action === "update" && existing
+      ? hookProposalDiff(existing, definition, workspaces)
+      : null;
   return (
     <Field
       orientation="vertical"
@@ -545,7 +623,9 @@ function ProposalCard({
       <div aria-label={`What ${definition.name} will run`} className="flex flex-col gap-2">
         {diff ? (
           diff.length === 0 ? (
-            <Text variant="small" color="secondary">Nothing that runs changes.</Text>
+            <Text variant="small" color="secondary">
+              Nothing that runs changes.
+            </Text>
           ) : (
             <dl className="flex flex-col gap-2">
               {diff.map((line) => (
@@ -576,7 +656,8 @@ function ProposalCard({
         ) : (
           <>
             <Text variant="small" color="secondary">
-              {proposal.action === "delete" ? "Stops running" : "Runs"} on {eventAndMatcher({ ...definition, configuredEvent: definition.event })},{" "}
+              {proposal.action === "delete" ? "Stops running" : "Runs"} on{" "}
+              {eventAndMatcher({ ...definition, configuredEvent: definition.event })},{" "}
               {proposalWhere(definition.scope, workspaces)}
             </Text>
             <CommandBlock command={definition.handler.command} />
@@ -598,7 +679,11 @@ function ProposalCard({
           <Button variant="filled" disabled={busy} onClick={onReject}>
             Reject
           </Button>
-          <Button variant={proposal.action === "delete" ? "destructive" : "accent"} disabled={busy} onClick={onApprove}>
+          <Button
+            variant={proposal.action === "delete" ? "destructive" : "accent"}
+            disabled={busy}
+            onClick={onApprove}
+          >
             {proposal.action === "delete" ? "Approve delete" : "Approve"}
           </Button>
         </div>
@@ -610,7 +695,17 @@ function ProposalCard({
 // ---------------------------------------------------------------------------
 // Add hook sheet
 
-function FormRow({ label, htmlFor, hint, children }: { label: string; htmlFor?: string; hint?: React.ReactNode; children: React.ReactNode }) {
+function FormRow({
+  label,
+  htmlFor,
+  hint,
+  children,
+}: {
+  label: string;
+  htmlFor?: string;
+  hint?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={htmlFor} className="text-small-strong">
@@ -654,14 +749,19 @@ function AddHookSheet({
 
   const save = async () => {
     if (!ready || parsedTimeout === null) return;
-    const workspace = workspaces.find((entry) => hookScopeKey({ kind: "workspace", workspaceRoot: entry.workspaceRoot }) === scopeKey);
+    const workspace = workspaces.find(
+      (entry) =>
+        hookScopeKey({ kind: "workspace", workspaceRoot: entry.workspaceRoot }) === scopeKey,
+    );
     // A workspace that left the list while the sheet was open never turns into a global hook.
     if (scopeKey !== "global" && !workspace) {
       setError("That workspace is no longer available. Choose another place for this hook.");
       return;
     }
     const request: HookSaveRequest = {
-      scope: workspace ? { kind: "workspace", workspaceRoot: workspace.workspaceRoot } : { kind: "global" },
+      scope: workspace
+        ? { kind: "workspace", workspaceRoot: workspace.workspaceRoot }
+        : { kind: "global" },
       event,
       command: command.trim(),
       ...(toolEvent && matcher.trim() ? { matcher: matcher.trim() } : {}),
@@ -713,7 +813,13 @@ function AddHookSheet({
               <SelectContent>
                 <SelectItem value="global">Every chat</SelectItem>
                 {workspaces.map((workspace) => (
-                  <SelectItem key={workspace.workspaceRoot} value={hookScopeKey({ kind: "workspace", workspaceRoot: workspace.workspaceRoot })}>
+                  <SelectItem
+                    key={workspace.workspaceRoot}
+                    value={hookScopeKey({
+                      kind: "workspace",
+                      workspaceRoot: workspace.workspaceRoot,
+                    })}
+                  >
                     {workspace.name}
                   </SelectItem>
                 ))}
@@ -774,7 +880,11 @@ function AddHookSheet({
           />
         </FormRow>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <FormRow label="Name" htmlFor={`${ids}-name`} hint="Optional. Shown in chats when it runs.">
+          <FormRow
+            label="Name"
+            htmlFor={`${ids}-name`}
+            hint="Optional. Shown in chats when it runs."
+          >
             <Input
               id={`${ids}-name`}
               value={name}
@@ -783,7 +893,11 @@ function AddHookSheet({
               onChange={(change) => setName(change.target.value)}
             />
           </FormRow>
-          <FormRow label="Timeout" htmlFor={`${ids}-timeout`} hint={`Seconds, up to ${HOOK_MAX_TIMEOUT_SECONDS}.`}>
+          <FormRow
+            label="Timeout"
+            htmlFor={`${ids}-timeout`}
+            hint={`Seconds, up to ${HOOK_MAX_TIMEOUT_SECONDS}.`}
+          >
             <Input
               id={`${ids}-timeout`}
               value={timeout}
@@ -804,7 +918,11 @@ function AddHookSheet({
                 If it crashes or times out, block the tool instead of letting it run.
               </Text>
             </span>
-            <Switch id={`${ids}-fail-closed`} checked={failClosed} onCheckedChange={setFailClosed} />
+            <Switch
+              id={`${ids}-fail-closed`}
+              checked={failClosed}
+              onCheckedChange={setFailClosed}
+            />
           </div>
         ) : null}
         {error ? (
@@ -830,7 +948,9 @@ function WhatHooksSeeSheet({ onOpenChange }: { onOpenChange: (open: boolean) => 
       {body}
     </section>
   );
-  const mono = (names: string[]) => <span className="font-mono text-small text-primary">{names.join(", ")}</span>;
+  const mono = (names: string[]) => (
+    <span className="font-mono text-small text-primary">{names.join(", ")}</span>
+  );
   return (
     <Dialog open onOpenChange={onOpenChange} title="What hooks can see" confirmHidden size="large">
       <div className="flex flex-col gap-4 text-small text-secondary">
@@ -838,30 +958,34 @@ function WhatHooksSeeSheet({ onOpenChange }: { onOpenChange: (open: boolean) => 
           "The event, as JSON on stdin",
           <p>
             Every hook gets {mono(["hook_event_name", "session_id", "cwd"])}. Tool hooks also get{" "}
-            {mono(["tool_name", "tool_input"])}, and {mono(["tool_response"])} after the tool runs. Message hooks get{" "}
-            {mono(["prompt"])}; others get {mono(["source", "message", "trigger"])} when they apply.
+            {mono(["tool_name", "tool_input"])}, and {mono(["tool_response"])} after the tool runs.
+            Message hooks get {mono(["prompt"])}; others get{" "}
+            {mono(["source", "message", "trigger"])} when they apply.
           </p>,
         )}
         {section(
           "A minimal environment",
           <p>
-            Only {mono(["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER", "SHELL"])} come from this {localComputerNoun(platform)}, plus{" "}
-            {mono(["AIDEN_PROJECT_DIR", "AIDEN_HOOK_EVENT", "AIDEN_SESSION_ID"])}. API keys and other variables reach a hook only if it
-            names them, and that list is part of what you approve.
+            Only {mono(["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER", "SHELL"])} come from
+            this {localComputerNoun(platform)}, plus{" "}
+            {mono(["AIDEN_PROJECT_DIR", "AIDEN_HOOK_EVENT", "AIDEN_SESSION_ID"])}. API keys and
+            other variables reach a hook only if it names them, and that list is part of what you
+            approve.
           </p>,
         )}
         {section(
           "Its output is data",
           <p>
-            Text a hook adds is given to the model as data, never as instructions, and capped at 10,000 characters per hook and 20,000
-            per event. A hook can block a tool, ask you first or add context. It can never let a chat do more than it already may.
+            Text a hook adds is given to the model as data, never as instructions, and capped at
+            10,000 characters per hook and 20,000 per event. A hook can block a tool, ask you first
+            or add context. It can never let a chat do more than it already may.
           </p>,
         )}
         {section(
           "Only what you approve runs",
           <p>
-            Hooks from a repo’s .aiden/hooks.json and hooks the agent proposes wait for your approval. Any change to what runs needs
-            approval again.
+            Hooks from a repo’s .aiden/hooks.json and hooks the agent proposes wait for your
+            approval. Any change to what runs needs approval again.
           </p>,
         )}
       </div>
@@ -877,7 +1001,9 @@ export function HooksSettings() {
   const { platform } = useAppCapabilities();
   const overview = useQuery({ queryKey: HOOKS_QUERY_KEY, queryFn: hooksApi.list });
   const [pausedOverride, setPausedOverride] = React.useState<boolean | null>(null);
-  const [enabledOverrides, setEnabledOverrides] = React.useState<ReadonlyMap<string, boolean>>(new Map());
+  const [enabledOverrides, setEnabledOverrides] = React.useState<ReadonlyMap<string, boolean>>(
+    new Map(),
+  );
   const [busy, setBusy] = React.useState<ReadonlySet<string>>(new Set());
   const [detailId, setDetailId] = React.useState<string | null>(null);
   const [adding, setAdding] = React.useState(false);
@@ -917,7 +1043,9 @@ export function HooksSettings() {
     setPausedOverride(paused);
     try {
       await hooksApi.setPaused(paused);
-      queryClient.setQueryData<HooksOverview>(HOOKS_QUERY_KEY, (current) => (current ? { ...current, paused } : current));
+      queryClient.setQueryData<HooksOverview>(HOOKS_QUERY_KEY, (current) =>
+        current ? { ...current, paused } : current,
+      );
       await refresh();
     } catch {
       toast.error("Couldn’t change Pause all hooks.");
@@ -932,7 +1060,9 @@ export function HooksSettings() {
       if (!(await hooksApi.setEnabled(listing.id, enabled))) throw new Error("Hook not found.");
       await refresh();
     } catch {
-      toast.error(enabled ? `Couldn’t turn on ${listing.name}.` : `Couldn’t turn off ${listing.name}.`);
+      toast.error(
+        enabled ? `Couldn’t turn on ${listing.name}.` : `Couldn’t turn off ${listing.name}.`,
+      );
     } finally {
       setEnabledOverrides((current) => {
         const next = new Map(current);
@@ -957,13 +1087,20 @@ export function HooksSettings() {
     withBusy(proposal.id, async () => {
       // Instant: the card leaves at once and comes back if main refuses.
       queryClient.setQueryData<HooksOverview>(HOOKS_QUERY_KEY, (current) =>
-        current ? { ...current, proposals: current.proposals.filter((entry) => entry.id !== proposal.id) } : current,
+        current
+          ? { ...current, proposals: current.proposals.filter((entry) => entry.id !== proposal.id) }
+          : current,
       );
       try {
         if (approved) await hooksApi.approveProposal(proposal.id);
         else await hooksApi.rejectProposal(proposal.id);
       } catch (error) {
-        toast.error(errorMessage(error, approved ? "Couldn’t approve this hook." : "Couldn’t reject this hook."));
+        toast.error(
+          errorMessage(
+            error,
+            approved ? "Couldn’t approve this hook." : "Couldn’t reject this hook.",
+          ),
+        );
       }
       await refresh();
     });
@@ -971,12 +1108,15 @@ export function HooksSettings() {
   const data = overview.data;
   const listings = data?.hooks ?? [];
   const detail = detailId ? listings.find((listing) => listing.id === detailId) : undefined;
-  const enabledOf = (listing: HookListing) => enabledOverrides.get(listing.id) ?? hookSwitchOn(listing);
+  const enabledOf = (listing: HookListing) =>
+    enabledOverrides.get(listing.id) ?? hookSwitchOn(listing);
 
   return (
     <HooksSettingsView
       overview={data ?? null}
-      error={overview.isError ? errorMessage(overview.error, "Aiden could not read your hooks.") : null}
+      error={
+        overview.isError ? errorMessage(overview.error, "Aiden could not read your hooks.") : null
+      }
       paused={pausedOverride ?? data?.paused ?? false}
       pausePending={pausedOverride !== null}
       busy={busy}
@@ -1000,7 +1140,9 @@ export function HooksSettings() {
           onApproved={() => void refresh()}
           onDeleted={() => {
             setDetailId(null);
-            toast.success(`${detail.name} is ${detail.source === "workspace-file" ? "no longer approved" : "deleted"}.`);
+            toast.success(
+              `${detail.name} is ${detail.source === "workspace-file" ? "no longer approved" : "deleted"}.`,
+            );
             void refresh();
           }}
         />
@@ -1026,13 +1168,17 @@ export function HooksSettings() {
             <span className="flex flex-col gap-2">
               <span>
                 It will run this command on {eventAndMatcher(confirmApprove)} in{" "}
-                {hookScopeLabel(confirmApprove.scope, data?.workspaces ?? [])}, on this {localComputerNoun(platform)}.
+                {hookScopeLabel(confirmApprove.scope, data?.workspaces ?? [])}, on this{" "}
+                {localComputerNoun(platform)}.
               </span>
               <CommandBlock command={confirmApprove.handler.command} />
               <dl className="flex flex-col">
                 <HookRunDetailRows listing={confirmApprove} />
               </dl>
-              <HookScriptCoverage files={confirmApprove.scriptFiles} coverage={confirmApprove.scriptCoverage} />
+              <HookScriptCoverage
+                files={confirmApprove.scriptFiles}
+                coverage={confirmApprove.scriptCoverage}
+              />
             </span>
           ) : null
         }
@@ -1076,7 +1222,8 @@ function HooksHeading({ canAdd, onAdd }: { canAdd: boolean; onAdd: () => void })
           Hooks
         </Text>
         <Text as="p" variant="small" color="secondary" className="mt-0.5 block">
-          Run your own shell commands at points in a chat, such as before a tool runs. Each one runs only after you approve it.
+          Run your own shell commands at points in a chat, such as before a tool runs. Each one runs
+          only after you approve it.
         </Text>
       </div>
       <Button variant="filled" size="small" className="shrink-0" disabled={!canAdd} onClick={onAdd}>
@@ -1132,7 +1279,8 @@ export function HooksSettingsView({
       {heading}
       {overview.disabledByEnvironment ? (
         <Callout color="warning" role="status" className="mb-5">
-          AIDEN_HOOKS=0 is set for this launch, so no hook runs. Quit Aiden and open it without that variable to use hooks.
+          AIDEN_HOOKS=0 is set for this launch, so no hook runs. Quit Aiden and open it without that
+          variable to use hooks.
         </Callout>
       ) : null}
       {!overview.available ? (
@@ -1141,7 +1289,10 @@ export function HooksSettingsView({
         </Callout>
       ) : null}
       <FieldSet>
-        <Field label="Pause all hooks" description="Nothing runs while paused. Your hooks and approvals stay as they are.">
+        <Field
+          label="Pause all hooks"
+          description="Nothing runs while paused. Your hooks and approvals stay as they are."
+        >
           <Switch
             aria-label="Pause all hooks"
             checked={paused}
@@ -1149,7 +1300,10 @@ export function HooksSettingsView({
             onCheckedChange={onSetPaused}
           />
         </Field>
-        <Field label="What hooks can see" description="The data each hook gets, its environment, and what Aiden does with its output.">
+        <Field
+          label="What hooks can see"
+          description="The data each hook gets, its environment, and what Aiden does with its output."
+        >
           <span className="flex justify-end">
             <Button variant="filled" onClick={onExplain}>
               Show
@@ -1190,7 +1344,9 @@ export function HooksSettingsView({
                 <span className="flex min-w-0 flex-col">
                   <span>{group.title}</span>
                   {group.scope.kind === "workspace" && group.detail ? (
-                    <span className="truncate text-small font-normal text-secondary">{group.detail}</span>
+                    <span className="truncate text-small font-normal text-secondary">
+                      {group.detail}
+                    </span>
                   ) : null}
                 </span>
               }

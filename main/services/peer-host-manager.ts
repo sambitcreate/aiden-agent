@@ -42,11 +42,7 @@ import {
   type PeerRunTimers,
 } from "./peer-run-subscriptions.js";
 import { parsePeerSseFrame, parsePeerStreamEnvelope } from "./peer-sse.js";
-import {
-  PeerTransportError,
-  type PeerRequest,
-  type PeerStreamEnd,
-} from "./peer-transport.js";
+import { PeerTransportError, type PeerRequest, type PeerStreamEnd } from "./peer-transport.js";
 
 export const PEER_HOST_FEED_CHANNEL = "remote:host-feed";
 export const PEER_RUN_FRAME_CHANNEL = "remote:peer-run-frame";
@@ -77,9 +73,7 @@ export interface PeerManagerRegistry {
   setEnabled(id: string, enabled: boolean): Promise<void>;
   remove(id: string): Promise<void>;
   onChanged(listener: () => void): () => void;
-  attachConnectionState(
-    state: (id: string) => PeerConnectionState | undefined,
-  ): void;
+  attachConnectionState(state: (id: string) => PeerConnectionState | undefined): void;
 }
 
 export interface PeerHostManagerOptions {
@@ -126,9 +120,7 @@ const realTimers: PeerRunTimers = {
 
 export function peerBackoffDelay(failures: number, random: () => number): number {
   const step =
-    PEER_BACKOFF_STEPS_MS[
-      Math.min(Math.max(failures, 1), PEER_BACKOFF_STEPS_MS.length) - 1
-    ]!;
+    PEER_BACKOFF_STEPS_MS[Math.min(Math.max(failures, 1), PEER_BACKOFF_STEPS_MS.length) - 1]!;
   return Math.round(step * (1 + (random() * 2 - 1) * PEER_BACKOFF_JITTER));
 }
 
@@ -159,7 +151,10 @@ function blockedReason(error: unknown, view?: PeerHostView): PeerBlockedReason |
   return undefined;
 }
 
-const BLOCKED_CODES: Record<PeerBlockedReason, "authentication_required" | "identity_changed" | "unsupported_protocol"> = {
+const BLOCKED_CODES: Record<
+  PeerBlockedReason,
+  "authentication_required" | "identity_changed" | "unsupported_protocol"
+> = {
   auth: "authentication_required",
   identity_changed: "identity_changed",
   protocol: "unsupported_protocol",
@@ -170,9 +165,7 @@ function answered(error: unknown, status?: number): error is PeerTransportError 
     error instanceof PeerTransportError &&
     error.code === "request_failed" &&
     error.status !== undefined &&
-    (status === undefined
-      ? error.status >= 400 && error.status < 500
-      : error.status === status)
+    (status === undefined ? error.status >= 400 && error.status < 500 : error.status === status)
   );
 }
 
@@ -182,9 +175,7 @@ function operationError(error: unknown): PeerOperationError {
       code: error.code,
       message: error.message,
       ...(error.status === undefined ? {} : { status: error.status }),
-      ...(error.remote
-        ? { remoteCode: error.remote.code, retryable: error.remote.retryable }
-        : {}),
+      ...(error.remote ? { remoteCode: error.remote.code, retryable: error.remote.retryable } : {}),
       ...(error.remote?.details ? { details: { ...error.remote.details } } : {}),
     };
   return {
@@ -199,7 +190,10 @@ function shares(view: PeerHostView, capability: string, feature: string): boolea
 
 /** The host serves its durable Bot conversations and lets this Mac read them. */
 function sharesBotSessions(view: PeerHostView): boolean {
-  return shares(view, "bot:read", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE) && view.capabilities.includes("chat:read");
+  return (
+    shares(view, "bot:read", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE) &&
+    view.capabilities.includes("chat:read")
+  );
 }
 
 /** A stable digest of the non-internal addresses, to notice network changes. */
@@ -255,7 +249,8 @@ export class PeerHostManager {
     this.botSessions = new PeerBotSessionStreams({
       connection: (hostId) => {
         const sup = this.supervisors.get(hostId);
-        if (!sup || sup.state.kind !== "connected" || !sharesBotSessions(sup.view)) return undefined;
+        if (!sup || sup.state.kind !== "connected" || !sharesBotSessions(sup.view))
+          return undefined;
         const generation = sup.generation;
         return {
           signal: sup.controller.signal,
@@ -347,9 +342,14 @@ export class PeerHostManager {
           if (sup.probing) continue;
           sup.probing = true;
           const generation = sup.generation;
-          void this.options.registry.probe(sup.hostId, sup.controller.signal).catch((error: unknown) => {
-            if (this.current(sup, generation)) this.fail(sup, generation, error);
-          }).finally(() => { sup.probing = false; });
+          void this.options.registry
+            .probe(sup.hostId, sup.controller.signal)
+            .catch((error: unknown) => {
+              if (this.current(sup, generation)) this.fail(sup, generation, error);
+            })
+            .finally(() => {
+              sup.probing = false;
+            });
           void this.checkPreferredRoute(sup, generation);
           continue;
         }
@@ -390,7 +390,8 @@ export class PeerHostManager {
       return { ok: false, error: { code, message: new PeerTransportError(code).message } };
     }
     // Revision 50: a host that granted `attachments:raw` takes a picture as its own bytes.
-    if (sup?.view.capabilities.includes("attachments:raw")) request = peerRawUploadRequest(operation, request);
+    if (sup?.view.capabilities.includes("attachments:raw"))
+      request = peerRawUploadRequest(operation, request);
     // Only the connection that admitted the request may be blocked by its failure.
     const admitted = sup?.controller;
     const record = operation as Record<string, unknown>;
@@ -400,7 +401,10 @@ export class PeerHostManager {
         id,
         { ...request, ...(signal ? { signal } : {}) },
         undefined,
-        { ...(PEER_BINARY_OPERATIONS.has(String(record.operation)) ? { binary: true } : {}), ...options },
+        {
+          ...(PEER_BINARY_OPERATIONS.has(String(record.operation)) ? { binary: true } : {}),
+          ...options,
+        },
       );
     } catch (error) {
       if (
@@ -480,13 +484,18 @@ export class PeerHostManager {
    * conversation. Frames arrive on `remote:peer-bot-session`; each connection
    * opens with a full snapshot.
    */
-  async botSessionSubscribe(hostId: unknown, botId: unknown, owner: string): Promise<PeerBotSessionSubscription> {
+  async botSessionSubscribe(
+    hostId: unknown,
+    botId: unknown,
+    owner: string,
+  ): Promise<PeerBotSessionSubscription> {
     const id = hostIdentifier(hostId);
     await this.ready;
     if (this.closed) throw new Error("Device connections are closed.");
     const sup = this.supervisors.get(id);
     if (!sup) throw new Error("This device is disabled or unavailable.");
-    if (!sharesBotSessions(sup.view)) throw new Error("This device does not share its Bots' chats.");
+    if (!sharesBotSessions(sup.view))
+      throw new Error("This device does not share its Bots' chats.");
     return this.botSessions.subscribe(id, botId, owner);
   }
 
@@ -552,7 +561,8 @@ export class PeerHostManager {
         continue;
       }
       sup.view = view;
-      if (sup.state.kind === "connected" && sup.routeTimer === undefined) this.scheduleRouteCheck(sup, sup.generation);
+      if (sup.state.kind === "connected" && sup.routeTimer === undefined)
+        this.scheduleRouteCheck(sup, sup.generation);
       // Grants refreshed while connected may enable the feed.
       if (
         sup.state.kind === "connected" &&
@@ -597,9 +607,7 @@ export class PeerHostManager {
 
   private current(sup: Supervisor, generation: number): boolean {
     return (
-      !this.closed &&
-      this.supervisors.get(sup.hostId) === sup &&
-      sup.generation === generation
+      !this.closed && this.supervisors.get(sup.hostId) === sup && sup.generation === generation
     );
   }
 
@@ -655,26 +663,42 @@ export class PeerHostManager {
   private async checkPreferredRoute(sup: Supervisor, generation: number): Promise<void> {
     if (!this.options.registry.preferReachableRoute || !this.current(sup, generation)) return;
     try {
-      const better = await this.options.registry.preferReachableRoute(sup.hostId, sup.controller.signal);
+      const better = await this.options.registry.preferReachableRoute(
+        sup.hostId,
+        sup.controller.signal,
+      );
       if (better && this.current(sup, generation)) this.start(sup);
-    } catch { /* Route preference must never interrupt a working fallback. */ }
+    } catch {
+      /* Route preference must never interrupt a working fallback. */
+    }
   }
 
   private scheduleRouteDiscovery(sup: Supervisor, generation: number): void {
-    if (!this.options.registry.probe || sup.view.activeRouteKind !== "lan" || sup.view.hasSuppressedRoutes
-      || !sup.view.features.includes("peer-routes-v1")
-      || sup.view.routes?.some((route) => route.kind === "tailscale")) return;
+    if (
+      !this.options.registry.probe ||
+      sup.view.activeRouteKind !== "lan" ||
+      sup.view.hasSuppressedRoutes ||
+      !sup.view.features.includes("peer-routes-v1") ||
+      sup.view.routes?.some((route) => route.kind === "tailscale")
+    )
+      return;
     // Ownership inspection retries three times: two sequential 15s CLI reads
     // per attempt plus two 75ms pauses, then a 5s TLS check (95.15s total).
     // Collect once early and once after that bound, without an idle polling
     // loop. Each authenticated read retains the independent 5s probe deadline.
     // A failed lookup may remain unavailable; these reads do not promise a route.
     const collect = () => {
-      if (!this.current(sup, generation) || sup.view.hasSuppressedRoutes
-        || sup.view.routes?.some((route) => route.kind === "tailscale")) return;
-      void this.options.registry.probe!(sup.hostId, sup.controller.signal).catch((error: unknown) => {
-        if (this.current(sup, generation)) this.fail(sup, generation, error);
-      });
+      if (
+        !this.current(sup, generation) ||
+        sup.view.hasSuppressedRoutes ||
+        sup.view.routes?.some((route) => route.kind === "tailscale")
+      )
+        return;
+      void this.options.registry.probe!(sup.hostId, sup.controller.signal).catch(
+        (error: unknown) => {
+          if (this.current(sup, generation)) this.fail(sup, generation, error);
+        },
+      );
     };
     sup.discoveryTimer = this.timers.set(() => {
       sup.discoveryTimer = undefined;
@@ -687,7 +711,12 @@ export class PeerHostManager {
   }
 
   private scheduleRouteCheck(sup: Supervisor, generation: number): void {
-    if (!this.options.registry.preferReachableRoute || sup.view.activeRouteKind !== "tailscale" || !sup.view.routes?.some((route) => route.kind === "lan")) return;
+    if (
+      !this.options.registry.preferReachableRoute ||
+      sup.view.activeRouteKind !== "tailscale" ||
+      !sup.view.routes?.some((route) => route.kind === "lan")
+    )
+      return;
     // One chain per generation: a sync during an in-flight check must not start another.
     if (sup.routeTimer !== undefined || sup.routeChecking === generation) return;
     sup.routeTimer = this.timers.set(() => {
@@ -706,11 +735,15 @@ export class PeerHostManager {
     sup.controller.abort();
     this.leaveConnected(sup);
     const reason = blockedReason(error, sup.view);
-    sup.failure = error instanceof PeerTransportError && error.code === "invalid_response"
-      ? "invalid_response"
-      : error instanceof PeerTransportError
-        ? error.failure ?? (error.code === "identity_changed" && error.identitySource === "tls" ? "tls" : "unreachable")
-        : "unreachable";
+    sup.failure =
+      error instanceof PeerTransportError && error.code === "invalid_response"
+        ? "invalid_response"
+        : error instanceof PeerTransportError
+          ? (error.failure ??
+            (error.code === "identity_changed" && error.identitySource === "tls"
+              ? "tls"
+              : "unreachable"))
+          : "unreachable";
     if (reason) {
       this.transition(sup, { kind: "blocked", reason });
     } else {
@@ -879,7 +912,11 @@ export class PeerHostManager {
    */
   private feedRun(hostId: string, run: PeerRunState): void {
     for (const stream of this.runs.forHost(hostId)) {
-      if (!("chatId" in stream.target) || stream.chatId !== run.chatId || stream.runId === run.runId)
+      if (
+        !("chatId" in stream.target) ||
+        stream.chatId !== run.chatId ||
+        stream.runId === run.runId
+      )
         continue;
       this.announced.set(stream, run.runId);
       this.wakeStream(stream);
@@ -997,7 +1034,8 @@ export class PeerHostManager {
             runCheckpoint: true,
             ...(resume && stream.cursor > 0 ? { lastEventId: String(stream.cursor) } : {}),
             onOpen: () => {
-              if (alive() && this.current(sup, generation)) this.setStreamState(stream, "streaming");
+              if (alive() && this.current(sup, generation))
+                this.setStreamState(stream, "streaming");
             },
           },
           (frame) => {
@@ -1059,10 +1097,7 @@ export class PeerHostManager {
     }
   }
 
-  private async reconcile(
-    hostId: string,
-    operation: Record<string, unknown>,
-  ): Promise<unknown> {
+  private async reconcile(hostId: string, operation: Record<string, unknown>): Promise<unknown> {
     const name = operation.operation;
     const resourceId = operation.resourceId;
     if (typeof name !== "string" || typeof resourceId !== "string") return undefined;

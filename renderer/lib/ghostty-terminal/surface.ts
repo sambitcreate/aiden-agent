@@ -403,9 +403,7 @@ export function isTerminalPasteShortcut(
  * unhandled Command chord fall through to Ghostty and type its base key into
  * the shell. Ctrl chords remain terminal input on every platform.
  */
-export function isTerminalHostReservedShortcut(
-  event: Pick<KeyboardEvent, "metaKey">,
-): boolean {
+export function isTerminalHostReservedShortcut(event: Pick<KeyboardEvent, "metaKey">): boolean {
   return event.metaKey;
 }
 
@@ -777,7 +775,12 @@ export class GhosttyTerminalSurface {
     }
     const fontFamily = await loadTerminalFontFamily(options.font?.family, fontSize);
     const metrics = measureGhosttyCell(context, fontSize, fontFamily);
-    const grid = terminalGridSize(canvas.clientWidth, canvas.clientHeight, metrics, CONTENT_PADDING);
+    const grid = terminalGridSize(
+      canvas.clientWidth,
+      canvas.clientHeight,
+      metrics,
+      CONTENT_PADDING,
+    );
     const core = await GhosttyTerminalCore.create(
       grid.cols,
       grid.rows,

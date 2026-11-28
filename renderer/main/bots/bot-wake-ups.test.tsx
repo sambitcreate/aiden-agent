@@ -1,13 +1,7 @@
 import { installBotTestIpc, type BotTestIpcCall } from "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import {
-  cleanup,
-  fireEvent,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { BotRoutine } from "../../../main/services/scheduled-bot-routines";
 import type { BotLiveSnapshot } from "../../shared/bot-live";
 import type { BotDefinition, BotUpdateInput } from "../../shared/bots";
@@ -75,9 +69,7 @@ function routinesIpc(initial: BotRoutine[]) {
   return {
     "bots:routines:list": () => routines,
     "bots:routines:delete": (input: unknown) => {
-      routines = routines.filter(
-        (routine) => routine.id !== (input as { id: string }).id,
-      );
+      routines = routines.filter((routine) => routine.id !== (input as { id: string }).id);
     },
   };
 }
@@ -104,10 +96,7 @@ test("the chat shows a waiting wake-up as one line, and Cancel deletes that wake
     ),
   );
   assert.ok(await screen.findByText(`Wake-up ${WHEN} (cancelled)`));
-  assert.equal(
-    screen.queryByRole("button", { name: `Cancel wake-up ${WHEN}` }),
-    null,
-  );
+  assert.equal(screen.queryByRole("button", { name: `Cancel wake-up ${WHEN}` }), null);
 });
 
 test("a wake-up that already fired or was cancelled elsewhere has no Cancel in the chat", async () => {
@@ -121,9 +110,7 @@ test("a wake-up that already fired or was cancelled elsewhere has no Cancel in t
   });
 
   assert.ok(await screen.findByText(`Wake-up ${WHEN}`));
-  await waitFor(() =>
-    assert.ok(callsTo(calls, "bots:routines:list").length > 0),
-  );
+  await waitFor(() => assert.ok(callsTo(calls, "bots:routines:list").length > 0));
   assert.equal(screen.queryByRole("button", { name: /Cancel wake-up/u }), null);
 });
 
@@ -162,16 +149,9 @@ test("the Routines tab lists a wake-up with its note and when, and Cancel remove
     ),
   );
   await waitFor(() =>
-    assert.equal(
-      within(list).queryByText("Ask whether the flight got rebooked."),
-      null,
-    ),
+    assert.equal(within(list).queryByText("Ask whether the flight got rebooked."), null),
   );
-  assert.equal(
-    screen.queryByRole("dialog"),
-    null,
-    "Cancel never opens the routine editor",
-  );
+  assert.equal(screen.queryByRole("dialog"), null, "Cancel never opens the routine editor");
 });
 
 test("a wake-up turned off before it fired can still be cancelled from the Routines tab, but not one mid-fire", async () => {
@@ -180,8 +160,19 @@ test("a wake-up turned off before it fired can still be cancelled from the Routi
     "bots:get": () => botFixture(),
     "bots:live:subscribe": () => snapshot(),
     ...routinesIpc([
-      wakeUpRoutine({ id: "wake-off", prompt: "Turned off early.", enabled: false, nextRunAt: undefined }),
-      wakeUpRoutine({ id: "wake-firing", prompt: "Firing now.", enabled: false, nextRunAt: undefined, pendingFireCount: 1 }),
+      wakeUpRoutine({
+        id: "wake-off",
+        prompt: "Turned off early.",
+        enabled: false,
+        nextRunAt: undefined,
+      }),
+      wakeUpRoutine({
+        id: "wake-firing",
+        prompt: "Firing now.",
+        enabled: false,
+        nextRunAt: undefined,
+        pendingFireCount: 1,
+      }),
     ]),
   });
   await mountRoutinesTab();
@@ -251,5 +242,9 @@ test("the Advanced tab's daily check-ins switch, on by default, turns the Bot's 
       "false",
     ),
   );
-  assert.equal(screen.queryByRole("region", { name: "Unsaved changes" }), null, "it saves on its own, with no Save to press");
+  assert.equal(
+    screen.queryByRole("region", { name: "Unsaved changes" }),
+    null,
+    "it saves on its own, with no Save to press",
+  );
 });

@@ -8,7 +8,12 @@ import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { currentPlatformKey, type AcpHarnessDefinition, type AcpPlatformAsset, type AcpRelease } from "../acp/harness.js";
+import {
+  currentPlatformKey,
+  type AcpHarnessDefinition,
+  type AcpPlatformAsset,
+  type AcpRelease,
+} from "../acp/harness.js";
 import { acpHosts } from "../acp/hosts.js";
 import { AcpRuntimeInstaller, type AcpRuntimeState } from "../acp/installer.js";
 import { AcpRuntimeLauncher } from "../acp/launcher.js";
@@ -74,7 +79,9 @@ export class AntigravityService {
           if ((options.platform ?? process.platform) !== "darwin") return;
           const { execFile } = await import("node:child_process");
           await new Promise<void>((resolve) =>
-            execFile("/usr/bin/xattr", ["-dr", "com.apple.quarantine", runtimeDir], () => resolve()),
+            execFile("/usr/bin/xattr", ["-dr", "com.apple.quarantine", runtimeDir], () =>
+              resolve(),
+            ),
           );
         },
       },
@@ -155,7 +162,8 @@ export class AntigravityService {
 
   async removeRuntime(): Promise<void> {
     await this.ready();
-    if (this.runtime.busy) throw new Error("Stop running Antigravity chats before removing the runtime.");
+    if (this.runtime.busy)
+      throw new Error("Stop running Antigravity chats before removing the runtime.");
     await this.runtime.closeSessions();
     await this.installer.remove();
   }
@@ -167,7 +175,10 @@ export class AntigravityService {
     const reopen = await this.runtime.closeAdmission();
     try {
       const installed = this.installer.state().status === "installed";
-      await signOutOfGoogle(this.stateDir, installed ? () => this.launcher.launch("auth", this.scratchDir()) : undefined);
+      await signOutOfGoogle(
+        this.stateDir,
+        installed ? () => this.launcher.launch("auth", this.scratchDir()) : undefined,
+      );
     } finally {
       reopen();
     }
@@ -189,7 +200,11 @@ export class AntigravityService {
 
   async discoverModels(signal: AbortSignal): Promise<Model<Api>[]> {
     await this.ready();
-    if (this.installer.state().status !== "installed" || !(await hasAntigravitySignIn(this.stateDir))) return [];
+    if (
+      this.installer.state().status !== "installed" ||
+      !(await hasAntigravitySignIn(this.stateDir))
+    )
+      return [];
     return (await this.runtime.discoverModels(this.scratchDir(), signal)).models;
   }
 
@@ -209,12 +224,21 @@ export class AntigravityService {
     return tmpdir();
   }
 
-  private async validate(runtimeDir: string, asset: AcpPlatformAsset, signal: AbortSignal): Promise<void> {
-    const launched = await this.launcher.launchWith("validate", await realpath(tmpdir()), {}, {
-      runtimeDir,
-      asset,
-      release() {},
-    });
+  private async validate(
+    runtimeDir: string,
+    asset: AcpPlatformAsset,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const launched = await this.launcher.launchWith(
+      "validate",
+      await realpath(tmpdir()),
+      {},
+      {
+        runtimeDir,
+        asset,
+        release() {},
+      },
+    );
     try {
       const initialize = await new AcpConnection(launched.process).initialize(signal);
       const reason = this.definition.validateInitialize(initialize, this.release.version);

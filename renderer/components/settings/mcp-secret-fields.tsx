@@ -25,15 +25,20 @@ const freshKey = () => `field-${++nextKey}`;
  * written in config.json (a local server added outside Aiden and not yet
  * approved) is shown as written, because saving from the editor approves it.
  */
-export function mcpSecretFieldDrafts(record: Record<string, string> | undefined): McpSecretFieldDraft[] {
+export function mcpSecretFieldDrafts(
+  record: Record<string, string> | undefined,
+): McpSecretFieldDraft[] {
   return Object.entries(record ?? {}).map(([name, value]) =>
     isMcpFieldSecretMarker(value)
       ? { key: freshKey(), name, value, saved: true }
-      : { key: freshKey(), name, value, saved: false, visible: true });
+      : { key: freshKey(), name, value, saved: false, visible: true },
+  );
 }
 
 /** Rows without a name are dropped; a later duplicate name wins, as it did for KEY=VALUE lines. */
-export function mcpSecretFieldRecord(fields: readonly McpSecretFieldDraft[]): Record<string, string> {
+export function mcpSecretFieldRecord(
+  fields: readonly McpSecretFieldDraft[],
+): Record<string, string> {
   const record: Record<string, string> = {};
   for (const field of fields) {
     const name = field.name.trim();
@@ -119,7 +124,9 @@ export function McpSecretFields({
         size="small"
         className="self-start"
         disabled={disabled}
-        onClick={() => onChange([...fields, { key: freshKey(), name: "", value: "", saved: false }])}
+        onClick={() =>
+          onChange([...fields, { key: freshKey(), name: "", value: "", saved: false }])
+        }
       >
         <Plus className="size-4" />
         Add {noun}

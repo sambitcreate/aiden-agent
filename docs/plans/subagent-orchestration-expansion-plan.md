@@ -46,6 +46,7 @@ snapshots record `providerId`, `thinkingLevel`, and `modelSelection`, and the
 desktop chips, roster, and detail display them.
 
 P1:
+
 - A Settings UI for these defaults.
 - Capability-gated Remote, iOS, and Android display.
 - Concurrent implementer worktree warnings and same-run continuation.

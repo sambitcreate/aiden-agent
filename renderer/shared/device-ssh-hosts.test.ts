@@ -13,7 +13,9 @@ import {
 } from "./device-ssh-hosts.js";
 import { parseDeviceServiceState } from "./devices.js";
 
-const draft = (overrides: Partial<Record<"id" | "label" | "target" | "identityFile" | "port", string>> = {}) => ({
+const draft = (
+  overrides: Partial<Record<"id" | "label" | "target" | "identityFile" | "port", string>> = {},
+) => ({
   id: "ssh-abc123",
   label: "Mac mini",
   target: "me@mini.local",
@@ -23,15 +25,21 @@ const draft = (overrides: Partial<Record<"id" | "label" | "target" | "identityFi
 });
 
 test("a valid draft trims fields, falls back to the target as its name, and drops empty options", () => {
-  assert.deepEqual(validateSshDeviceHostDraft(draft({ label: "  ", target: " build-mac ", port: " 2222 " })), {
-    config: { id: "ssh-abc123", label: "build-mac", target: "build-mac", port: 2222 },
-  });
-  assert.deepEqual(validateSshDeviceHostDraft(draft({ identityFile: " ~/.ssh/id_ed25519 " })).config, {
-    id: "ssh-abc123",
-    label: "Mac mini",
-    target: "me@mini.local",
-    identityFile: "~/.ssh/id_ed25519",
-  });
+  assert.deepEqual(
+    validateSshDeviceHostDraft(draft({ label: "  ", target: " build-mac ", port: " 2222 " })),
+    {
+      config: { id: "ssh-abc123", label: "build-mac", target: "build-mac", port: 2222 },
+    },
+  );
+  assert.deepEqual(
+    validateSshDeviceHostDraft(draft({ identityFile: " ~/.ssh/id_ed25519 " })).config,
+    {
+      id: "ssh-abc123",
+      label: "Mac mini",
+      target: "me@mini.local",
+      identityFile: "~/.ssh/id_ed25519",
+    },
+  );
 });
 
 test("each invalid field gets its own message, and a dash-led target can never become an ssh option", () => {
@@ -42,7 +50,10 @@ test("each invalid field gets its own message, and a dash-led target can never b
   assert.match(errors.target ?? "", /not starting with a dash/u);
   assert.match(errors.identityFile ?? "", /absolute path/u);
   assert.match(errors.port ?? "", /1 to 65535/u);
-  assert.match(validateSshDeviceHostDraft(draft({ target: "" })).errors?.target ?? "", /alias or user@host/u);
+  assert.match(
+    validateSshDeviceHostDraft(draft({ target: "" })).errors?.target ?? "",
+    /alias or user@host/u,
+  );
   assert.ok(validateSshDeviceHostDraft(draft({ target: "me@host name" })).errors?.target);
   assert.ok(validateSshDeviceHostDraft(draft({ label: "a\u0007b" })).errors?.label);
   assert.ok(validateSshDeviceHostDraft(draft({ port: "22a" })).errors?.port);
@@ -51,7 +62,13 @@ test("each invalid field gets its own message, and a dash-led target can never b
 });
 
 test("drafts round-trip through the editor shape", () => {
-  const host: SshDeviceHostConfig = { id: "ssh-abc123", label: "Mini", target: "mini", port: 22, identityFile: "/k" };
+  const host: SshDeviceHostConfig = {
+    id: "ssh-abc123",
+    label: "Mini",
+    target: "mini",
+    port: 22,
+    identityFile: "/k",
+  };
   assert.deepEqual(validateSshDeviceHostDraft(sshDeviceHostDraft(host)).config, host);
 });
 
@@ -69,19 +86,35 @@ test("adding, editing, and removing hosts keeps ids and refuses a second entry f
   const b: SshDeviceHostConfig = { id: "ssh-bbbbbb", label: "B", target: "b", port: 2200 };
   const added = updateSshDeviceHosts([a], b);
   assert.deepEqual(added, [a, b]);
-  assert.deepEqual(updateSshDeviceHosts(added, { ...b, label: "Build" }), [a, { ...b, label: "Build" }]);
-  assert.throws(() => updateSshDeviceHosts(added, { ...b, id: "ssh-cccccc" }), /already uses this destination/u);
+  assert.deepEqual(updateSshDeviceHosts(added, { ...b, label: "Build" }), [
+    a,
+    { ...b, label: "Build" },
+  ]);
+  assert.throws(
+    () => updateSshDeviceHosts(added, { ...b, id: "ssh-cccccc" }),
+    /already uses this destination/u,
+  );
   // The same name on a different port is a different destination.
   assert.equal(updateSshDeviceHosts(added, { ...b, id: "ssh-cccccc", port: 2201 }).length, 3);
   assert.deepEqual(updateSshDeviceHosts(added, a, true), [b]);
 });
 
 test("install progress is worded as an update only when an older version is on the host", () => {
-  const tool = { requiredVersion: "0.12.0", installedVersions: ["0.9.0", "0.11.2"], runningVersion: null };
-  assert.equal(deviceToolInstallMessage("the device hub", tool), "Updating the device hub from 0.11.2 to 0.12.0…");
+  const tool = {
+    requiredVersion: "0.12.0",
+    installedVersions: ["0.9.0", "0.11.2"],
+    runningVersion: null,
+  };
+  assert.equal(
+    deviceToolInstallMessage("the device hub", tool),
+    "Updating the device hub from 0.11.2 to 0.12.0…",
+  );
   assert.equal(toolNeedsUpdate(tool), true);
   const fresh = { ...tool, installedVersions: [] };
-  assert.equal(deviceToolInstallMessage("the device hub", fresh), "Installing the device hub 0.12.0…");
+  assert.equal(
+    deviceToolInstallMessage("the device hub", fresh),
+    "Installing the device hub 0.12.0…",
+  );
   assert.equal(toolNeedsUpdate(fresh), false, "a first install is not an update");
   const current = { ...tool, installedVersions: ["0.11.2", "0.12.0"] };
   assert.equal(toolNeedsUpdate(current), false);
@@ -99,8 +132,18 @@ test("connection checks parse fail-closed and read as one line", () => {
     },
   });
   assert.ok(connected);
-  assert.equal(describeDeviceHostCheck(connected), "Connected. Node 22.12.0. Xcode was not found on the host.");
-  assert.equal(parseDeviceHostCheck({ status: "connected", nodeVersion: "22", platforms: [{ platform: "android" }] }), null);
+  assert.equal(
+    describeDeviceHostCheck(connected),
+    "Connected. Node 22.12.0. Xcode was not found on the host.",
+  );
+  assert.equal(
+    parseDeviceHostCheck({
+      status: "connected",
+      nodeVersion: "22",
+      platforms: [{ platform: "android" }],
+    }),
+    null,
+  );
   assert.equal(parseDeviceHostCheck({ status: "failed", error: "" }), null);
   assert.deepEqual(parseDeviceHostCheck({ status: "local" }), { status: "local" });
   assert.match(describeDeviceHostCheck({ status: "local" }), /is this Mac/u);
@@ -117,11 +160,21 @@ test("service state carries SSH hosts and per-host tool versions, and rejects ma
         name: "This Mac",
         status: "ready",
         tools: {
-          hub: { requiredVersion: "0.12.0", installedVersions: ["0.12.0"], runningVersion: "0.12.0" },
+          hub: {
+            requiredVersion: "0.12.0",
+            installedVersions: ["0.12.0"],
+            runningVersion: "0.12.0",
+          },
           agent: { requiredVersion: "0.21.12", installedVersions: [], runningVersion: null },
         },
       },
-      { id: "ssh-abc123", kind: "ssh", name: "Mini", status: "stopped", toolInspectionError: "Could not check." },
+      {
+        id: "ssh-abc123",
+        kind: "ssh",
+        name: "Mini",
+        status: "stopped",
+        toolInspectionError: "Could not check.",
+      },
     ],
     consent: { streaming: true, agentAccess: false, peerSharing: false },
     devices: [],
@@ -133,9 +186,15 @@ test("service state carries SSH hosts and per-host tool versions, and rejects ma
   assert.equal(parsed?.hosts[0]?.tools?.hub.runningVersion, "0.12.0");
   assert.equal(parsed?.hosts[1]?.toolInspectionError, "Could not check.");
   assert.deepEqual(parsed?.sshHosts, base.sshHosts);
-  assert.equal(parseDeviceServiceState({ ...base, sshHosts: [{ id: "local", label: "x", target: "x" }] }), null);
   assert.equal(
-    parseDeviceServiceState({ ...base, hosts: [{ ...base.hosts[0], tools: { hub: { requiredVersion: "../x" } } }] }),
+    parseDeviceServiceState({ ...base, sshHosts: [{ id: "local", label: "x", target: "x" }] }),
+    null,
+  );
+  assert.equal(
+    parseDeviceServiceState({
+      ...base,
+      hosts: [{ ...base.hosts[0], tools: { hub: { requiredVersion: "../x" } } }],
+    }),
     null,
   );
 });

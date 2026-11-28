@@ -34,17 +34,23 @@ import type { Chat } from "../types.js";
 
 /** Why this chat cannot have a goal: Bots, the Assistant, agent harnesses and chats another feature owns. */
 export function goalChatRefusal(
-  chat: Pick<Chat, "botId" | "owner" | "workspaceId" | "providerId" | "model" | "ephemeral"> | null | undefined,
+  chat:
+    | Pick<Chat, "botId" | "owner" | "workspaceId" | "providerId" | "model" | "ephemeral">
+    | null
+    | undefined,
 ): string | undefined {
   if (!chat) return "This chat no longer exists.";
   if (chat.botId) return "Bots can't have a keep-going goal.";
   if (chat.owner !== undefined) return "This chat runs its own way, so it can't have a goal.";
   // A Temporary chat's window shows only the live reply, and an unsaved one is
   // deleted at the next launch, so it gets a goal once it's saved or attached.
-  if (chat.ephemeral === true) return "Save this Temporary chat or attach it to a workspace first, then give it a goal.";
-  if (chat.workspaceId === ASSISTANT_WORKSPACE_ID) return "The Assistant can't have a keep-going goal.";
+  if (chat.ephemeral === true)
+    return "Save this Temporary chat or attach it to a workspace first, then give it a goal.";
+  if (chat.workspaceId === ASSISTANT_WORKSPACE_ID)
+    return "The Assistant can't have a keep-going goal.";
   if (!chat.providerId || !chat.model) return "Choose a model for this chat first.";
-  if (isAcpHarnessProvider(chat.providerId)) return "Chats with an agent harness can't have a keep-going goal.";
+  if (isAcpHarnessProvider(chat.providerId))
+    return "Chats with an agent harness can't have a keep-going goal.";
   return undefined;
 }
 
@@ -89,7 +95,10 @@ export function createGoal(input: {
 }
 
 /** What the goal bar and `/goal` say for each cause. */
-export function goalCauseText(cause: GoalCause, goal: Pick<GoalRecordV1, "maxRounds" | "check">): string {
+export function goalCauseText(
+  cause: GoalCause,
+  goal: Pick<GoalRecordV1, "maxRounds" | "check">,
+): string {
   switch (cause) {
     case "person":
       return "Paused";
@@ -159,7 +168,10 @@ function nextRound(goal: GoalRecordV1, now: number, change: Partial<GoalRecordV1
 }
 
 /** Pauses an active goal. Anything else is returned unchanged. */
-export function pauseGoal(goal: GoalRecordV1, input: { now: number; cause: GoalCause; reason?: string }): GoalRecordV1 {
+export function pauseGoal(
+  goal: GoalRecordV1,
+  input: { now: number; cause: GoalCause; reason?: string },
+): GoalRecordV1 {
   if (goal.status !== "active") return goal;
   return stop(goal, input.now, "paused", input.cause, input.reason);
 }
@@ -233,7 +245,10 @@ export function goalRoundNotStarted(goal: GoalRecordV1, rounds: number, now: num
 }
 
 /** On load: a goal left active by another Aiden process comes back paused. */
-export function restoreGoal(goal: GoalRecordV1, input: { now: number; boot: string }): GoalRecordV1 {
+export function restoreGoal(
+  goal: GoalRecordV1,
+  input: { now: number; boot: string },
+): GoalRecordV1 {
   if (goal.status !== "active" || goal.boot === input.boot) return goal;
   return stop(goal, input.now, "paused", "restart");
 }
@@ -244,7 +259,8 @@ export function compareAndSetGoal(
   expected: GoalRef,
   update: (goal: GoalRecordV1) => GoalRecordV1,
 ): { ok: true; goal: GoalRecordV1 } | { ok: false } {
-  if (!current || current.id !== expected.id || current.revision !== expected.revision) return { ok: false };
+  if (!current || current.id !== expected.id || current.revision !== expected.revision)
+    return { ok: false };
   return { ok: true, goal: update(current) };
 }
 
@@ -272,12 +288,16 @@ export type GoalSettleStep =
 /** The checks before a review, after a run settles with nothing owed. */
 export function goalAfterSettle(goal: GoalRecordV1, input: GoalSettleInput): GoalSettleStep {
   if (goal.status !== "active") return { kind: "idle" };
-  if (goal.boot !== input.boot) return { kind: "paused", goal: stop(goal, input.now, "paused", "restart") };
+  if (goal.boot !== input.boot)
+    return { kind: "paused", goal: stop(goal, input.now, "paused", "restart") };
   if (input.stopped) return { kind: "paused", goal: stop(goal, input.now, "paused", "stopped") };
-  if (input.lastRunFailed) return { kind: "paused", goal: stop(goal, input.now, "paused", "failed") };
-  if (goal.rounds > goal.maxRounds) return { kind: "paused", goal: stop(goal, input.now, "paused", "round-limit") };
+  if (input.lastRunFailed)
+    return { kind: "paused", goal: stop(goal, input.now, "paused", "failed") };
+  if (goal.rounds > goal.maxRounds)
+    return { kind: "paused", goal: stop(goal, input.now, "paused", "round-limit") };
   if (input.helperRunning) {
-    if (goal.waitingSince === undefined) return { kind: "skip", goal: write(goal, input.now, { waitingSince: input.now }) };
+    if (goal.waitingSince === undefined)
+      return { kind: "skip", goal: write(goal, input.now, { waitingSince: input.now }) };
     if (input.now - goal.waitingSince >= GOAL_WAIT_LIMIT_MS) {
       return { kind: "paused", goal: stop(goal, input.now, "paused", "wait-limit") };
     }
@@ -289,7 +309,9 @@ export function goalAfterSettle(goal: GoalRecordV1, input: GoalSettleInput): Goa
 /** Pauses a goal whose `wait` (or running helper) has held it for 30 minutes. */
 export function goalWaitExpired(goal: GoalRecordV1, now: number): GoalRecordV1 | undefined {
   if (goal.status !== "active" || goal.waitingSince === undefined) return undefined;
-  return now - goal.waitingSince >= GOAL_WAIT_LIMIT_MS ? stop(goal, now, "paused", "wait-limit") : undefined;
+  return now - goal.waitingSince >= GOAL_WAIT_LIMIT_MS
+    ? stop(goal, now, "paused", "wait-limit")
+    : undefined;
 }
 
 export interface GoalRoundActivity {
@@ -328,7 +350,10 @@ export function applyGoalVerdict(
   if (!verdict) {
     const unusableReviews = goal.unusableReviews + 1;
     if (unusableReviews >= GOAL_MAX_UNUSABLE_REVIEWS) {
-      return { goal: stop({ ...goal, unusableReviews }, now, "paused", "reviewer"), next: "settled" };
+      return {
+        goal: stop({ ...goal, unusableReviews }, now, "paused", "reviewer"),
+        next: "settled",
+      };
     }
     return { goal: write(goal, now, { unusableReviews }), next: "retry-review" };
   }
@@ -352,22 +377,39 @@ export function applyGoalVerdict(
   }
 }
 
-function continueGoal(goal: GoalRecordV1, reason: string, round: GoalRoundActivity, now: number): GoalStep {
-  const repeated = goal.lastContinueReason !== undefined && sameReason(goal.lastContinueReason, reason);
+function continueGoal(
+  goal: GoalRecordV1,
+  reason: string,
+  round: GoalRoundActivity,
+  now: number,
+): GoalStep {
+  const repeated =
+    goal.lastContinueReason !== undefined && sameReason(goal.lastContinueReason, reason);
   const quiet = round.toolCalls === 0 && round.newTextChars < GOAL_SUBSTANTIAL_TEXT_CHARS;
   const stalls = repeated || quiet ? goal.stalls + 1 : 0;
   const base = { ...goal, stalls, lastContinueReason: reason };
-  if (stalls >= GOAL_MAX_STALLS) return { goal: stop(base, now, "paused", "stalled"), next: "settled" };
-  if (goal.rounds >= goal.maxRounds) return { goal: stop(base, now, "paused", "round-limit"), next: "settled" };
+  if (stalls >= GOAL_MAX_STALLS)
+    return { goal: stop(base, now, "paused", "stalled"), next: "settled" };
+  if (goal.rounds >= goal.maxRounds)
+    return { goal: stop(base, now, "paused", "round-limit"), next: "settled" };
   return { goal: nextRound(base, now, { rounds: goal.rounds + 1, reason }), next: "round" };
 }
 
 /** A command goal's check result: exit code 0 is done; otherwise the next round, up to the limit. */
-export function applyGoalCheck(goal: GoalRecordV1, result: { passed: boolean; summary: string }, now: number): GoalStep {
+export function applyGoalCheck(
+  goal: GoalRecordV1,
+  result: { passed: boolean; summary: string },
+  now: number,
+): GoalStep {
   if (goal.status !== "active" || !goal.check) return { goal, next: "settled" };
-  if (result.passed) return { goal: stop(goal, now, "done", "done", result.summary), next: "settled" };
-  if (goal.rounds >= goal.maxRounds) return { goal: stop(goal, now, "paused", "round-limit"), next: "settled" };
-  return { goal: nextRound(goal, now, { rounds: goal.rounds + 1, reason: result.summary }), next: "round" };
+  if (result.passed)
+    return { goal: stop(goal, now, "done", "done", result.summary), next: "settled" };
+  if (goal.rounds >= goal.maxRounds)
+    return { goal: stop(goal, now, "paused", "round-limit"), next: "settled" };
+  return {
+    goal: nextRound(goal, now, { rounds: goal.rounds + 1, reason: result.summary }),
+    next: "round",
+  };
 }
 
 function sameReason(left: string, right: string): boolean {

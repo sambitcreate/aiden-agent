@@ -1,6 +1,10 @@
 import * as React from "react";
 import { snoozeOptions } from "../../shared/chat-triage";
-import { formatSnoozeMenuTime, type InboxTriageKind, type InboxTriageOffer } from "../../lib/inbox-triage";
+import {
+  formatSnoozeMenuTime,
+  type InboxTriageKind,
+  type InboxTriageOffer,
+} from "../../lib/inbox-triage";
 import type { ChatRowMenu } from "./chat-row";
 
 type MenuParts = Parameters<ChatRowMenu>;
@@ -37,9 +41,15 @@ function SnoozeItems({
   return (
     <>
       {snoozeOptions(at).map((option) => (
-        <Item key={option.preset} data-snooze-preset={option.preset} onSelect={() => onSnooze(option.until)}>
+        <Item
+          key={option.preset}
+          data-snooze-preset={option.preset}
+          onSelect={() => onSnooze(option.until)}
+        >
           <span className="min-w-0 flex-1 truncate">{option.label}</span>
-          <span className="ml-4 shrink-0 text-small text-tertiary">{formatSnoozeMenuTime(option.until, at.getTime())}</span>
+          <span className="ml-4 shrink-0 text-small text-tertiary">
+            {formatSnoozeMenuTime(option.until, at.getTime())}
+          </span>
         </Item>
       ))}
     </>
@@ -64,7 +74,11 @@ export function inboxTriageMenuItems(
 ): React.ReactNode {
   return (
     <>
-      <Item icon={pinned ? "pin-off" : "pin"} disabled={disabled} onSelect={() => onAct(pinned ? "unpin" : "pin")}>
+      <Item
+        icon={pinned ? "pin-off" : "pin"}
+        disabled={disabled}
+        onSelect={() => onAct(pinned ? "unpin" : "pin")}
+      >
         {pinned ? "Unpin" : "Pin"}
       </Item>
       {offer.doneAndSnooze ? (

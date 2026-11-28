@@ -249,14 +249,14 @@ a second artifact:
 - Aiden's broker stays on the Mac and is not copied: inside the guest the
   virtual machine is the boundary. A LaunchAgent in the guest's logged-in
   session runs `cua-driver serve --socket <guest socket> --no-overlay
-  --no-permissions-gate` with the Mac driver's fixed environment (telemetry
+--no-permissions-gate` with the Mac driver's fixed environment (telemetry
   and update checks off, `DO_NOT_TRACK=1`, `CUA_DRIVER_DISABLE_RUN_SCRIPT=1`)
   but without the broker's host bundle identifier, since the guest driver
   holds its own grants. The grants of Accessibility and Screen
   Recording are made by the person in the base's live view and copied into
   every Bot computer made from it.
 - Each session is one SSH child running `cua-driver mcp --embedded --socket
-  <guest socket>`. `CuaDriverSession` checks the exact 0.36.0 catalog,
+<guest socket>`. `CuaDriverSession` checks the exact 0.36.0 catalog,
   Aiden's allowlist and every required tool before any call, and
   `ComputerUseController` keeps the same denied tools, safety refusals and
   element-token binding as on the Mac. Its per-action access cards don't

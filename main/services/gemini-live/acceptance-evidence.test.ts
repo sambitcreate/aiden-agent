@@ -11,9 +11,7 @@ import {
 } from "./acceptance-evidence.js";
 
 test("app evidence recorder fails closed without exact opt-in and isolated userData path", () => {
-  const userData = mkdtempSync(
-    path.join(os.tmpdir(), "aiden-live-evidence-test-"),
-  );
+  const userData = mkdtempSync(path.join(os.tmpdir(), "aiden-live-evidence-test-"));
   const expected = path.join(userData, GEMINI_LIVE_ACCEPTANCE_EVIDENCE_FILE);
   assert.equal(
     createGeminiLiveAcceptanceEvidenceRecorder(
@@ -26,10 +24,7 @@ test("app evidence recorder fails closed without exact opt-in and isolated userD
     createGeminiLiveAcceptanceEvidenceRecorder(
       {
         AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE: "1",
-        [GEMINI_LIVE_ACCEPTANCE_EVIDENCE_ENV]: path.join(
-          userData,
-          "other.jsonl",
-        ),
+        [GEMINI_LIVE_ACCEPTANCE_EVIDENCE_ENV]: path.join(userData, "other.jsonl"),
       },
       userData,
     ),
@@ -38,9 +33,7 @@ test("app evidence recorder fails closed without exact opt-in and isolated userD
 });
 
 test("app evidence is fixed, content-free, unique, and monotonic", () => {
-  const userData = mkdtempSync(
-    path.join(os.tmpdir(), "aiden-live-evidence-test-"),
-  );
+  const userData = mkdtempSync(path.join(os.tmpdir(), "aiden-live-evidence-test-"));
   const expected = path.join(userData, GEMINI_LIVE_ACCEPTANCE_EVIDENCE_FILE);
   let clock = 100;
   const recorder = createGeminiLiveAcceptanceEvidenceRecorder(
@@ -77,8 +70,5 @@ test("app evidence is fixed, content-free, unique, and monotonic", () => {
       },
     ],
   );
-  assert.doesNotMatch(
-    contents,
-    /prompt|transcript|audio|frame|tool|credential|key/iu,
-  );
+  assert.doesNotMatch(contents, /prompt|transcript|audio|frame|tool|credential|key/iu);
 });

@@ -22,7 +22,11 @@ import { Button, Text } from "../../components/ui";
 import { useAppearancePreference } from "../../lib/use-appearance-preference";
 import type { BotSettingsChangeStatus } from "../../shared/bot-settings-changes";
 import type { BotChatActivityLevel } from "../../shared/bots";
-import { BOT_FAILED_TURN_TEXT, type BotQueuedMessage, type BotTranscriptEntry } from "../../shared/bot-live";
+import {
+  BOT_FAILED_TURN_TEXT,
+  type BotQueuedMessage,
+  type BotTranscriptEntry,
+} from "../../shared/bot-live";
 import type { BotHandoffOutcome } from "../../shared/bot-handoffs";
 import type {
   BotRoutineProposalDecision,
@@ -69,7 +73,15 @@ export function BotFailedTurnCard({
 }
 
 /** A file the Bot wrote: a chip that opens the panel's Files tab at that file. */
-function BotFileChip({ path, operation, onOpen }: { path: string; operation: "written" | "edited"; onOpen(): void }) {
+function BotFileChip({
+  path,
+  operation,
+  onOpen,
+}: {
+  path: string;
+  operation: "written" | "edited";
+  onOpen(): void;
+}) {
   const name = path.split("/").pop() || path;
   return (
     <div>
@@ -91,7 +103,13 @@ function BotFileChip({ path, operation, onOpen }: { path: string; operation: "wr
 
 /** "Memory updated · Open": a receipt line that opens the panel's Memory tab. */
 function BotMemoryUpdatedCaption({ onOpen }: { onOpen(): void }) {
-  return <ReceiptLine icon={<MemoryCardIcon />} text="Memory updated" actions={[{ label: "Open", ariaLabel: "Memory updated. Open Memory", onClick: onOpen }]} />;
+  return (
+    <ReceiptLine
+      icon={<MemoryCardIcon />}
+      text="Memory updated"
+      actions={[{ label: "Open", ariaLabel: "Memory updated. Open Memory", onClick: onOpen }]}
+    />
+  );
 }
 
 /** The person's answer to a hand-off card, on their side of the chat: what they did, then their note. */
@@ -113,7 +131,9 @@ function BotHandoffResultBubble({
         <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-secondary" />
         <div className="min-w-0 [overflow-wrap:anywhere]">
           <p className="text-regular text-primary">{text}</p>
-          {note ? <p className="mt-0.5 whitespace-pre-wrap text-small text-secondary">{note}</p> : null}
+          {note ? (
+            <p className="mt-0.5 whitespace-pre-wrap text-small text-secondary">{note}</p>
+          ) : null}
         </div>
       </div>
     </div>
@@ -133,7 +153,10 @@ export function BotQueuedBubble({
   onRemove?(button: HTMLButtonElement): void;
 }) {
   const oneLine = text.replace(/\s+/gu, " ").trim();
-  const preview = oneLine.length > QUEUED_PREVIEW_CHARS ? `${oneLine.slice(0, QUEUED_PREVIEW_CHARS).trimEnd()}…` : oneLine;
+  const preview =
+    oneLine.length > QUEUED_PREVIEW_CHARS
+      ? `${oneLine.slice(0, QUEUED_PREVIEW_CHARS).trimEnd()}…`
+      : oneLine;
   return (
     <div className="flex flex-col items-end gap-1" data-bot-queued>
       <div className="max-w-full [&_.bg-control]:bg-[color-mix(in_srgb,var(--color-control)_55%,transparent)]">
@@ -226,11 +249,19 @@ export function TranscriptEntries({
   /** Undo on a "Settings updated" receipt; resolves to its settled status. */
   onUndoSettings?(changeId: string): Promise<BotSettingsChangeStatus>;
   /** Keep or decline a lesson from a routine's runs. */
-  onRespondToLesson?(lessonId: string, decision: "keep" | "dismiss"): Promise<"active" | "dismissed" | null>;
+  onRespondToLesson?(
+    lessonId: string,
+    decision: "keep" | "dismiss",
+  ): Promise<"active" | "dismissed" | null>;
   /** Undo a correction lesson or the newest memory tidy. */
-  onUndoLearning?(target: { kind: "lesson"; lessonId: string } | { kind: "change"; changeId: string }): Promise<void>;
+  onUndoLearning?(
+    target: { kind: "lesson"; lessonId: string } | { kind: "change"; changeId: string },
+  ): Promise<void>;
   /** Add or decline a proposed (or found) skill. */
-  onRespondToSkill?(proposalId: string, decision: "add" | "dismiss"): Promise<"added" | "dismissed" | null>;
+  onRespondToSkill?(
+    proposalId: string,
+    decision: "add" | "dismiss",
+  ): Promise<"added" | "dismissed" | null>;
   /** Whether a wake-up the Bot set still waits; `undefined` while that is unknown. */
   wakeUpPending?(wakeUpId: string): boolean | undefined;
   /** Cancel on a wake-up chip; rejects (after saying why) when it couldn't. */
@@ -245,13 +276,24 @@ export function TranscriptEntries({
   // the person chose to see; earlier ones fold to a line with Show.
   const [chosenSuggestion, setChosenSuggestion] = React.useState<string | null>(null);
   const waitingSuggestions = rows
-    .filter((row) =>
-      (row.kind === "routine_proposal" && row.status === "pending" && !row.supersededBy && onRespondToProposal !== undefined) ||
-      (row.kind === "skill_proposal" && row.status === "pending" && onRespondToSkill !== undefined) ||
-      (row.kind === "lesson_proposal" && row.status === "pending" && onRespondToLesson !== undefined))
+    .filter(
+      (row) =>
+        (row.kind === "routine_proposal" &&
+          row.status === "pending" &&
+          !row.supersededBy &&
+          onRespondToProposal !== undefined) ||
+        (row.kind === "skill_proposal" &&
+          row.status === "pending" &&
+          onRespondToSkill !== undefined) ||
+        (row.kind === "lesson_proposal" &&
+          row.status === "pending" &&
+          onRespondToLesson !== undefined),
+    )
     .map((row) => row.id);
   const shownSuggestion =
-    chosenSuggestion !== null && waitingSuggestions.includes(chosenSuggestion) ? chosenSuggestion : waitingSuggestions[waitingSuggestions.length - 1];
+    chosenSuggestion !== null && waitingSuggestions.includes(chosenSuggestion)
+      ? chosenSuggestion
+      : waitingSuggestions[waitingSuggestions.length - 1];
   const folded = (id: string, label: string) =>
     waitingSuggestions.includes(id) && id !== shownSuggestion ? (
       <FoldedSuggestion key={id} label={label} onShow={() => setChosenSuggestion(id)} />
@@ -260,7 +302,9 @@ export function TranscriptEntries({
   const collapseTiming = useAppearancePreference("workDetailsCollapseTiming");
   const retainedRecaps = React.useMemo(() => {
     let latestUserIndex = 0;
-    entries.forEach((entry, index) => { if (entry.type === "user" || entry.type === "bot_message") latestUserIndex = index; });
+    entries.forEach((entry, index) => {
+      if (entry.type === "user" || entry.type === "bot_message") latestUserIndex = index;
+    });
     return new Set(entries.slice(latestUserIndex).map((entry) => `${entry.id}:recap`));
   }, [entries]);
   return (
@@ -269,7 +313,13 @@ export function TranscriptEntries({
         switch (row.kind) {
           case "user":
             return (
-              <BotMessageActions key={row.id} text={row.text} from="You" align="end" onReply={onReply}>
+              <BotMessageActions
+                key={row.id}
+                text={row.text}
+                from="You"
+                align="end"
+                onReply={onReply}
+              >
                 <SafeMessageBubble role="user" content={row.text} showCopy={false} />
               </BotMessageActions>
             );
@@ -293,9 +343,16 @@ export function TranscriptEntries({
           case "bot_message":
             return (
               <div key={row.id} className="flex flex-col items-end gap-1">
-                <Text as="p" variant="small" color="secondary">{row.label}</Text>
+                <Text as="p" variant="small" color="secondary">
+                  {row.label}
+                </Text>
                 <div className="w-full min-w-0">
-                  <BotMessageActions text={row.text} from={row.botName} align="end" onReply={onReply}>
+                  <BotMessageActions
+                    text={row.text}
+                    from={row.botName}
+                    align="end"
+                    onReply={onReply}
+                  >
                     <SafeMessageBubble role="user" content={row.text} showCopy={false} />
                   </BotMessageActions>
                 </div>
@@ -304,8 +361,12 @@ export function TranscriptEntries({
           case "bot_message_status":
             return (
               <div key={row.id}>
-                <Text as="p" variant="small" color="secondary" role="note">{row.label}</Text>
-                {row.text ? <SafeMessageBubble role="assistant" content={row.text} showCopy={false} /> : null}
+                <Text as="p" variant="small" color="secondary" role="note">
+                  {row.label}
+                </Text>
+                {row.text ? (
+                  <SafeMessageBubble role="assistant" content={row.text} showCopy={false} />
+                ) : null}
               </div>
             );
           case "routine":
@@ -320,46 +381,123 @@ export function TranscriptEntries({
               </React.Fragment>
             );
           case "peer":
-            return <div key={row.id} className="flex flex-wrap items-center gap-2 py-1" role="note"><Text variant="small" color="secondary">{row.messageKind === "result" ? "Exchange update" : row.messageKind === "fyi" ? "FYI" : row.messageKind[0]!.toUpperCase() + row.messageKind.slice(1)} {row.direction === "sent" ? "to" : "from"} {row.peerName}</Text>{onViewExchange && <Button size="small" variant="transparent" onClick={() => onViewExchange(row.exchangeId)}>View exchange</Button>}</div>;
+            return (
+              <div key={row.id} className="flex flex-wrap items-center gap-2 py-1" role="note">
+                <Text variant="small" color="secondary">
+                  {row.messageKind === "result"
+                    ? "Exchange update"
+                    : row.messageKind === "fyi"
+                      ? "FYI"
+                      : row.messageKind[0]!.toUpperCase() + row.messageKind.slice(1)}{" "}
+                  {row.direction === "sent" ? "to" : "from"} {row.peerName}
+                </Text>
+                {onViewExchange && (
+                  <Button
+                    size="small"
+                    variant="transparent"
+                    onClick={() => onViewExchange(row.exchangeId)}
+                  >
+                    View exchange
+                  </Button>
+                )}
+              </div>
+            );
           case "assistant":
             return (
-              <BotMessageActions key={row.id} text={row.text} from={name} align="start" onReply={onReply}>
-                <SafeMessageBubble imageScope={row.id} role="assistant" content={row.text} showCopy={false} streaming={row.streaming} />
+              <BotMessageActions
+                key={row.id}
+                text={row.text}
+                from={name}
+                align="start"
+                onReply={onReply}
+              >
+                <SafeMessageBubble
+                  imageScope={row.id}
+                  role="assistant"
+                  content={row.text}
+                  showCopy={false}
+                  streaming={row.streaming}
+                />
               </BotMessageActions>
             );
           case "recap":
-            return <BotActivityRecap key={row.id} steps={row.steps} durationMs={row.durationMs} live={row.live} level={level} mode={workDetails} retainDetails={collapseTiming === "next-input" && retainedRecaps.has(row.id)} />;
+            return (
+              <BotActivityRecap
+                key={row.id}
+                steps={row.steps}
+                durationMs={row.durationMs}
+                live={row.live}
+                level={level}
+                mode={workDetails}
+                retainDetails={collapseTiming === "next-input" && retainedRecaps.has(row.id)}
+              />
+            );
           case "queued":
             return (
               <BotQueuedBubble
                 key={row.id}
                 text={row.text}
                 removing={removing.has(row.submissionId)}
-                {...(onRemoveQueued ? { onRemove: (button: HTMLButtonElement) => onRemoveQueued(row.submissionId, button) } : {})}
+                {...(onRemoveQueued
+                  ? {
+                      onRemove: (button: HTMLButtonElement) =>
+                        onRemoveQueued(row.submissionId, button),
+                    }
+                  : {})}
               />
             );
           case "stopped":
             return (
-              <Text key={row.id} as="p" variant="small" color="tertiary" role="note" className="py-1 text-center">
+              <Text
+                key={row.id}
+                as="p"
+                variant="small"
+                color="tertiary"
+                role="note"
+                className="py-1 text-center"
+              >
                 You stopped this reply.
               </Text>
             );
           case "file":
             return onOpenFile ? (
-              <BotFileChip key={row.id} path={row.path} operation={row.operation} onOpen={() => onOpenFile(row.path)} />
+              <BotFileChip
+                key={row.id}
+                path={row.path}
+                operation={row.operation}
+                onOpen={() => onOpenFile(row.path)}
+              />
             ) : null;
           case "image":
             return (
               <MessageAttachments
                 key={row.id}
                 role="assistant"
-                attachments={[{ id: row.id, name: row.name, mimeType: row.mimeType, kind: "image", size: row.size, data: row.data }]}
+                attachments={[
+                  {
+                    id: row.id,
+                    name: row.name,
+                    mimeType: row.mimeType,
+                    kind: "image",
+                    size: row.size,
+                    data: row.data,
+                  },
+                ]}
               />
             );
           case "notice":
             return (
-              <Text key={row.id} as="p" variant="small" color="tertiary" role="note" className="py-1 text-center">
-                {row.notice === "session_reset" ? "This conversation was reset." : BOT_INTERRUPTED_TEXT}
+              <Text
+                key={row.id}
+                as="p"
+                variant="small"
+                color="tertiary"
+                role="note"
+                className="py-1 text-center"
+              >
+                {row.notice === "session_reset"
+                  ? "This conversation was reset."
+                  : BOT_INTERRUPTED_TEXT}
               </Text>
             );
           case "connect":
@@ -386,31 +524,43 @@ export function TranscriptEntries({
               />
             );
           case "memory_update":
-            return onOpenMemory ? <BotMemoryUpdatedCaption key={row.id} onOpen={onOpenMemory} /> : null;
+            return onOpenMemory ? (
+              <BotMemoryUpdatedCaption key={row.id} onOpen={onOpenMemory} />
+            ) : null;
           case "routines_skipped":
-            return onRunRoutine ? <RoutinesSkippedCard key={row.id} routines={row.routines} onRunNow={onRunRoutine} /> : null;
+            return onRunRoutine ? (
+              <RoutinesSkippedCard key={row.id} routines={row.routines} onRunNow={onRunRoutine} />
+            ) : null;
           case "routine_proposal":
-            return folded(row.id, `Routine suggestion: ${row.proposal.name}`) ?? (onRespondToProposal ? (
-              <RoutineProposalCard
-                key={row.id}
-                proposal={row.proposal}
-                status={row.status}
-                {...(row.routineId ? { routineId: row.routineId } : {})}
-                {...(row.supersededBy ? { supersededBy: row.supersededBy } : {})}
-                onRespond={(decision, reason) => onRespondToProposal(row.proposal.proposalId, decision, reason)}
-                {...(onNewRoutineLink ? { onNewLink: onNewRoutineLink } : {})}
-                declineReasons={proposalDeclineReasons}
-              />
-            ) : null);
+            return (
+              folded(row.id, `Routine suggestion: ${row.proposal.name}`) ??
+              (onRespondToProposal ? (
+                <RoutineProposalCard
+                  key={row.id}
+                  proposal={row.proposal}
+                  status={row.status}
+                  {...(row.routineId ? { routineId: row.routineId } : {})}
+                  {...(row.supersededBy ? { supersededBy: row.supersededBy } : {})}
+                  onRespond={(decision, reason) =>
+                    onRespondToProposal(row.proposal.proposalId, decision, reason)
+                  }
+                  {...(onNewRoutineLink ? { onNewLink: onNewRoutineLink } : {})}
+                  declineReasons={proposalDeclineReasons}
+                />
+              ) : null)
+            );
           case "lesson_proposal":
-            return folded(row.id, `Lesson: ${row.lesson.lesson}`) ?? (onRespondToLesson ? (
-              <LessonProposalCard
-                key={row.id}
-                lesson={row.lesson}
-                status={row.status}
-                onRespond={(decision) => onRespondToLesson(row.lesson.lessonId, decision)}
-              />
-            ) : null);
+            return (
+              folded(row.id, `Lesson: ${row.lesson.lesson}`) ??
+              (onRespondToLesson ? (
+                <LessonProposalCard
+                  key={row.id}
+                  lesson={row.lesson}
+                  status={row.status}
+                  onRespond={(decision) => onRespondToLesson(row.lesson.lessonId, decision)}
+                />
+              ) : null)
+            );
           case "lesson_learned":
             return onUndoLearning ? (
               <LearnedLine
@@ -422,7 +572,12 @@ export function TranscriptEntries({
             ) : null;
           case "memory_tidy":
             return onUndoLearning && row.changeId ? (
-              <LearnedLine key={row.id} text="Tidied memory" undone={false} onUndo={() => onUndoLearning({ kind: "change", changeId: row.changeId! })} />
+              <LearnedLine
+                key={row.id}
+                text="Tidied memory"
+                undone={false}
+                onUndo={() => onUndoLearning({ kind: "change", changeId: row.changeId! })}
+              />
             ) : null;
           case "wake_up":
             return (
@@ -434,20 +589,29 @@ export function TranscriptEntries({
               />
             );
           case "skill_proposal":
-            return folded(row.id, `Skill: ${row.proposal.name}`) ?? (onRespondToSkill ? (
-              <SkillProposalCard
-                key={row.id}
-                proposal={row.proposal}
-                status={row.status}
-                onRespond={(decision) => onRespondToSkill(row.proposal.proposalId, decision)}
-              />
-            ) : null);
+            return (
+              folded(row.id, `Skill: ${row.proposal.name}`) ??
+              (onRespondToSkill ? (
+                <SkillProposalCard
+                  key={row.id}
+                  proposal={row.proposal}
+                  status={row.status}
+                  onRespond={(decision) => onRespondToSkill(row.proposal.proposalId, decision)}
+                />
+              ) : null)
+            );
           case "settings_change":
             return (
               <SettingsChangeReceipt
                 key={row.id}
                 change={row.change}
-                status={row.change.mode === "applied" ? row.status : row.status === "pending" ? "applied" : row.status}
+                status={
+                  row.change.mode === "applied"
+                    ? row.status
+                    : row.status === "pending"
+                      ? "applied"
+                      : row.status
+                }
                 onUndo={onUndoSettings ? () => onUndoSettings(row.change.changeId) : undefined}
               />
             );

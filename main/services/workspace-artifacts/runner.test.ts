@@ -11,15 +11,38 @@ import type {
   WorkspaceArtifactsChangedEvent,
   WorkspaceArtifactSourceV1,
 } from "../../../renderer/shared/workspace-artifacts.js";
-import { runBoundedShellCommand, type BoundedShellCommandOptions } from "../bounded-shell-command.js";
+import {
+  runBoundedShellCommand,
+  type BoundedShellCommandOptions,
+} from "../bounded-shell-command.js";
 import { runArgvPlan, type ArgvPlanOptions } from "./argv-runner.js";
-import { readWorkspaceArtifactFile, artifactFileAllowed, WorkspaceArtifactFileChangedError, WorkspaceArtifactFileUnsafeError } from "./file-policy.js";
+import {
+  readWorkspaceArtifactFile,
+  artifactFileAllowed,
+  WorkspaceArtifactFileChangedError,
+  WorkspaceArtifactFileUnsafeError,
+} from "./file-policy.js";
 import { createWorkspaceArtifactRunner, workspaceArtifactFolderKey } from "./runner.js";
 import { WorkspaceArtifactStore, workspaceArtifactDigest } from "./store.js";
 
-const SHELL: WorkspaceArtifactSourceV1 = { name: "pulls", kind: "shell", command: `printf '[{"number":12}]'`, parse: "json" };
-const FILE: WorkspaceArtifactSourceV1 = { name: "todo", kind: "file", file: "TODO.md", parse: "lines" };
-const ECHO: WorkspaceArtifactActionV1 = { name: "note", label: "Write note", command: "printf '%s' {{text}}", params: [{ name: "text", type: "string" }] };
+const SHELL: WorkspaceArtifactSourceV1 = {
+  name: "pulls",
+  kind: "shell",
+  command: `printf '[{"number":12}]'`,
+  parse: "json",
+};
+const FILE: WorkspaceArtifactSourceV1 = {
+  name: "todo",
+  kind: "file",
+  file: "TODO.md",
+  parse: "lines",
+};
+const ECHO: WorkspaceArtifactActionV1 = {
+  name: "note",
+  label: "Write note",
+  command: "printf '%s' {{text}}",
+  params: [{ name: "text", type: "string" }],
+};
 
 async function setup(
   t: test.TestContext,
@@ -40,7 +63,8 @@ async function setup(
   const folder = path.join(dir, "workspace");
   await fs.mkdir(folder);
   await fs.writeFile(path.join(folder, "TODO.md"), "ship it\n\nreview #12\n");
-  const openStore = () => new WorkspaceArtifactStore({ root: () => path.join(dir, "store"), newId: () => "art1" });
+  const openStore = () =>
+    new WorkspaceArtifactStore({ root: () => path.join(dir, "store"), newId: () => "art1" });
   let store = openStore();
   const events: WorkspaceArtifactsChangedEvent[] = [];
   const commands: string[] = [];
@@ -51,7 +75,15 @@ async function setup(
     "ws1",
     {
       title: "PRs",
-      visual: { version: 1, kind: "ui", id: "x", title: "PRs", catalogVersion: AIDEN_UI_CATALOG_VERSION, tree: compiled.tree!, fallbackText: "" },
+      visual: {
+        version: 1,
+        kind: "ui",
+        id: "x",
+        title: "PRs",
+        catalogVersion: AIDEN_UI_CATALOG_VERSION,
+        tree: compiled.tree!,
+        fallbackText: "",
+      },
       sources,
       actions: [ECHO],
       refresh: { onOpen: true },
@@ -73,7 +105,8 @@ async function setup(
       return runArgvPlan(plan);
     },
     readFile: async (root, file, signal) => {
-      if (options.readDelayMs) await new Promise((resolve) => setTimeout(resolve, options.readDelayMs));
+      if (options.readDelayMs)
+        await new Promise((resolve) => setTimeout(resolve, options.readDelayMs));
       return readWorkspaceArtifactFile(root, file, signal, { beforeRead: options.beforeRead });
     },
     env: () => process.env,
@@ -90,7 +123,9 @@ test("a refresh runs commands in the workspace folder, reads files, and saves wh
   const { runner, store, events, context } = await setup(t);
   const results = await runner.refresh("ws1", "art1", context("full"));
   assert.deepEqual(
-    Object.fromEntries(Object.entries(results).map(([name, result]) => [name, [result.status, result.dataJson]])),
+    Object.fromEntries(
+      Object.entries(results).map(([name, result]) => [name, [result.status, result.dataJson]]),
+    ),
     { pulls: ["ok", '[{"number":12}]'], todo: ["ok", '["ship it","review #12"]'] },
   );
   const saved = (await store.get("ws1", "art1"))!.snapshot!;
@@ -116,17 +151,30 @@ test("an approved page runs under Ask; no access runs nothing", async (t) => {
 });
 
 test("a refresh after a save keeps a fresh read of a source the save left unchanged and runs the ones it changed", async (t) => {
-  const counted: WorkspaceArtifactSourceV1 = { name: "count", kind: "shell", command: "printf '[1,2]'", parse: "json" };
+  const counted: WorkspaceArtifactSourceV1 = {
+    name: "count",
+    kind: "shell",
+    command: "printf '[1,2]'",
+    parse: "json",
+  };
   const { runner, store, commands, context } = await setup(t, { sources: [SHELL, counted] });
   await runner.refresh("ws1", "art1", context("full"));
   assert.equal(commands.length, 2);
   const first = (await store.get("ws1", "art1"))!;
   const save = (sources: WorkspaceArtifactSourceV1[], title: string) =>
-    store.replace("ws1", "art1", { title, visual: { ...first.artifact.visual, title }, sources, actions: [ECHO], refresh: first.artifact.refresh });
+    store.replace("ws1", "art1", {
+      title,
+      visual: { ...first.artifact.visual, title },
+      sources,
+      actions: [ECHO],
+      refresh: first.artifact.refresh,
+    });
 
   // Only the page's text changed: neither command runs again, and the reads keep their time.
   const renamed = await save([SHELL, counted], "Open PRs");
-  const kept = await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: first.artifact });
+  const kept = await runner.refresh("ws1", "art1", context("full"), undefined, {
+    reuseFrom: first.artifact,
+  });
   assert.equal(commands.length, 2);
   assert.equal(kept.pulls!.at, first.snapshot!.sources.pulls!.at);
   assert.equal(kept.count!.dataJson, "[1,2]");
@@ -135,7 +183,9 @@ test("a refresh after a save keeps a fresh read of a source the save left unchan
   // One command changed: only that one runs.
   const changed = { ...counted, command: "printf '[3]'" };
   await save([SHELL, changed], "Open PRs again");
-  const mixed = await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: renamed });
+  const mixed = await runner.refresh("ws1", "art1", context("full"), undefined, {
+    reuseFrom: renamed,
+  });
   assert.deepEqual(commands.slice(2), [changed.command]);
   assert.equal(mixed.count!.dataJson, "[3]");
 
@@ -150,14 +200,28 @@ test("a refresh after a save runs a source again once its last read is older tha
   const content = { title: "PRs", visual: before.visual, sources: [SHELL], actions: [ECHO] };
   // Read 90 seconds ago: fresh for a page that refreshes every two minutes, stale for one without an interval.
   const readAt = Date.now() - 90_000;
-  const read = { status: "ok", at: readAt, dataJson: "[]", folder: workspaceArtifactFolderKey(await fs.realpath(folder)) } as const;
+  const read = {
+    status: "ok",
+    at: readAt,
+    dataJson: "[]",
+    folder: workspaceArtifactFolderKey(await fs.realpath(folder)),
+  } as const;
   await store.saveSnapshot("ws1", before, { pulls: read });
-  const slow = await store.replace("ws1", "art1", { ...content, refresh: { onOpen: true, intervalSeconds: 120 } });
-  assert.equal((await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: before })).pulls!.at, readAt);
+  const slow = await store.replace("ws1", "art1", {
+    ...content,
+    refresh: { onOpen: true, intervalSeconds: 120 },
+  });
+  assert.equal(
+    (await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: before })).pulls!
+      .at,
+    readAt,
+  );
   assert.equal(commands.length, 0);
   await store.saveSnapshot("ws1", slow, { pulls: read });
   await store.replace("ws1", "art1", { ...content, title: "PRs now", refresh: { onOpen: true } });
-  const reread = await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: slow });
+  const reread = await runner.refresh("ws1", "art1", context("full"), undefined, {
+    reuseFrom: slow,
+  });
   assert.equal(commands.length, 1);
   assert.equal(reread.pulls!.dataJson, '[{"number":12}]');
 });
@@ -167,21 +231,37 @@ test("a refresh after a save runs a source again when the page is refreshed in a
   await runner.refresh("ws1", "art1", context("full"));
   const before = (await store.get("ws1", "art1"))!.artifact;
   const save = (title: string) =>
-    store.replace("ws1", "art1", { title, visual: { ...before.visual, title }, sources: [SHELL], actions: [ECHO], refresh: before.refresh });
+    store.replace("ws1", "art1", {
+      title,
+      visual: { ...before.visual, title },
+      sources: [SHELL],
+      actions: [ECHO],
+      refresh: before.refresh,
+    });
   const renamed = await save("Open PRs");
   // The workspace now points at another checkout: its read describes the other folder's files.
   const other = `${folder}-other`;
   await fs.mkdir(other);
-  const moved = await runner.refresh("ws1", "art1", { folderPath: other, permission: "full" }, undefined, { reuseFrom: before });
+  const moved = await runner.refresh(
+    "ws1",
+    "art1",
+    { folderPath: other, permission: "full" },
+    undefined,
+    { reuseFrom: before },
+  );
   assert.equal(commands.length, 2);
   assert.equal(moved.pulls!.status, "ok");
   // Back in that folder, the read just taken there is kept across the next save.
   await save("Open PRs again");
-  await runner.refresh("ws1", "art1", { folderPath: other, permission: "full" }, undefined, { reuseFrom: renamed });
+  await runner.refresh("ws1", "art1", { folderPath: other, permission: "full" }, undefined, {
+    reuseFrom: renamed,
+  });
   assert.equal(commands.length, 2);
   // A read saved before Aiden noted its folder is not handed back as fresh either.
   const current = (await store.get("ws1", "art1"))!.artifact;
-  await store.saveSnapshot("ws1", current, { pulls: { status: "ok", at: Date.now(), dataJson: "[]" } });
+  await store.saveSnapshot("ws1", current, {
+    pulls: { status: "ok", at: Date.now(), dataJson: "[]" },
+  });
   await save("Open PRs once more");
   await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: current });
   assert.equal(commands.length, 3);
@@ -191,9 +271,17 @@ test("a read kept across a save still follows the access the page has now", asyn
   const { runner, store, commands, context } = await setup(t, { sources: [SHELL] });
   await runner.refresh("ws1", "art1", context("full"));
   const before = (await store.get("ws1", "art1"))!.artifact;
-  await store.replace("ws1", "art1", { title: "Open PRs", visual: before.visual, sources: [SHELL], actions: [ECHO], refresh: before.refresh });
+  await store.replace("ws1", "art1", {
+    title: "Open PRs",
+    visual: before.visual,
+    sources: [SHELL],
+    actions: [ECHO],
+    refresh: before.refresh,
+  });
   // Under Ask the page's commands were never allowed, so its saved read is not handed back as fresh.
-  const results = await runner.refresh("ws1", "art1", context("ask"), undefined, { reuseFrom: before });
+  const results = await runner.refresh("ws1", "art1", context("ask"), undefined, {
+    reuseFrom: before,
+  });
   assert.equal(results.pulls!.status, "blocked");
   assert.equal(commands.length, 1);
 });
@@ -203,10 +291,18 @@ test("a file read kept across a save is read again, and refused, once the file h
   const first = await runner.refresh("ws1", "art1", context("full"));
   assert.equal(first.todo!.status, "ok");
   const before = (await store.get("ws1", "art1"))!.artifact;
-  await store.replace("ws1", "art1", { title: "Open PRs", visual: before.visual, sources: [FILE], actions: [ECHO], refresh: before.refresh });
+  await store.replace("ws1", "art1", {
+    title: "Open PRs",
+    visual: before.visual,
+    sources: [FILE],
+    actions: [ECHO],
+    refresh: before.refresh,
+  });
   // Unchanged, a fresh read is kept rather than read again.
   await fs.writeFile(path.join(folder, "TODO.md"), "edited since\n");
-  const kept = await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: before });
+  const kept = await runner.refresh("ws1", "art1", context("full"), undefined, {
+    reuseFrom: before,
+  });
   assert.equal(kept.todo!.at, first.todo!.at);
   // Now TODO.md leads outside the folder: the kept read is not handed back.
   const outside = path.join(path.dirname(folder), "secret.md");
@@ -214,8 +310,16 @@ test("a file read kept across a save is read again, and refused, once the file h
   await fs.rm(path.join(folder, "TODO.md"));
   await fs.symlink(outside, path.join(folder, "TODO.md"));
   const renamed = (await store.get("ws1", "art1"))!.artifact;
-  await store.replace("ws1", "art1", { title: "PRs again", visual: renamed.visual, sources: [FILE], actions: [ECHO], refresh: renamed.refresh });
-  const refused = await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: renamed });
+  await store.replace("ws1", "art1", {
+    title: "PRs again",
+    visual: renamed.visual,
+    sources: [FILE],
+    actions: [ECHO],
+    refresh: renamed.refresh,
+  });
+  const refused = await runner.refresh("ws1", "art1", context("full"), undefined, {
+    reuseFrom: renamed,
+  });
   assert.equal(refused.todo!.status, "error");
   assert.equal(refused.todo!.error, "TODO.md is missing or leads outside the workspace folder.");
   assert.equal(refused.todo!.dataJson, undefined, "the earlier data is not kept");
@@ -269,10 +373,22 @@ test("a file source's error does not tell a file that exists outside the workspa
   const seen = (name: string) => {
     const result = results[name]!;
     const file = sources.find((source) => source.name === name)!;
-    return [result.status, result.policyDenied ?? false, result.error!.replace(file.kind === "file" ? file.file : "", "FILE")];
+    return [
+      result.status,
+      result.policyDenied ?? false,
+      result.error!.replace(file.kind === "file" ? file.file : "", "FILE"),
+    ];
   };
-  assert.deepEqual(seen("there"), seen("gone"), "a link to a file outside reads like a link to nothing");
-  assert.deepEqual(seen("beyond"), seen("beyondGone"), "a file past a linked folder reads like a missing one");
+  assert.deepEqual(
+    seen("there"),
+    seen("gone"),
+    "a link to a file outside reads like a link to nothing",
+  );
+  assert.deepEqual(
+    seen("beyond"),
+    seen("beyondGone"),
+    "a file past a linked folder reads like a missing one",
+  );
   assert.equal(results.there!.error, "there.md is missing or leads outside the workspace folder.");
   // Inside the folder, with no link on the way, a missing file still says so plainly.
   assert.equal(results.inside!.error, "There is no file at nope.md.");
@@ -280,16 +396,29 @@ test("a file source's error does not tell a file that exists outside the workspa
 
 test("refreshes of the same page at once share one run", async (t) => {
   const { runner, commands, context } = await setup(t, { sources: [SHELL] });
-  await Promise.all([runner.refresh("ws1", "art1", context("full")), runner.refresh("ws1", "art1", context("full"))]);
+  await Promise.all([
+    runner.refresh("ws1", "art1", context("full")),
+    runner.refresh("ws1", "art1", context("full")),
+  ]);
   assert.equal(commands.length, 1);
 });
 
 test("a button runs its saved command with the page's value as one literal argument, without a shell", async (t) => {
   const { runner, folder, context, digest, buttonRuns, commands } = await setup(t);
   const value = "$(touch hacked); `id` 'quoted'";
-  const result = await runner.runAction("ws1", "art1", "note", [value], context("full"), undefined, await digest());
+  const result = await runner.runAction(
+    "ws1",
+    "art1",
+    "note",
+    [value],
+    context("full"),
+    undefined,
+    await digest(),
+  );
   assert.deepEqual(result, { ok: true, output: value });
-  assert.deepEqual(buttonRuns, [[{ connector: ";", pipeline: [{ argv: ["printf", "%s", value], redirects: [] }] }]]);
+  assert.deepEqual(buttonRuns, [
+    [{ connector: ";", pipeline: [{ argv: ["printf", "%s", value], redirects: [] }] }],
+  ]);
   assert.deepEqual(commands, [], "nothing went through a shell");
   await assert.rejects(fs.stat(path.join(folder, "hacked")));
 });
@@ -300,15 +429,37 @@ test("a button cancelled before its command starts runs nothing", async (t) => {
   const controller = new AbortController();
   controller.abort();
   // That nothing starts is the executor's to keep; argv-runner.test.ts checks it.
-  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("full"), controller.signal, await digest()), /Cancelled/u);
+  await assert.rejects(
+    runner.runAction(
+      "ws1",
+      "art1",
+      "note",
+      ["x"],
+      context("full"),
+      controller.signal,
+      await digest(),
+    ),
+    /Cancelled/u,
+  );
 });
 
 test("buttons follow the workspace's access and only exist if the page declared them", async (t) => {
   const { runner, context, digest } = await setup(t);
-  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("ask"), undefined, await digest()), /Allow this page/u);
-  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("none"), undefined, await digest()), /access is off/u);
-  await assert.rejects(runner.runAction("ws1", "art1", "rm", [], context("full"), undefined, await digest()), /no button named "rm"/u);
-  const failed = await runner.runAction("ws1", "art1", "note", ["-rf"], context("full"), undefined, await digest()).catch((error: Error) => error);
+  await assert.rejects(
+    runner.runAction("ws1", "art1", "note", ["x"], context("ask"), undefined, await digest()),
+    /Allow this page/u,
+  );
+  await assert.rejects(
+    runner.runAction("ws1", "art1", "note", ["x"], context("none"), undefined, await digest()),
+    /access is off/u,
+  );
+  await assert.rejects(
+    runner.runAction("ws1", "art1", "rm", [], context("full"), undefined, await digest()),
+    /no button named "rm"/u,
+  );
+  const failed = await runner
+    .runAction("ws1", "art1", "note", ["-rf"], context("full"), undefined, await digest())
+    .catch((error: Error) => error);
   assert.match(String(failed), /cannot start with "-"/u);
 });
 
@@ -322,7 +473,10 @@ test("a button pressed on an older version of the page does not run the newer co
     actions: [{ ...ECHO, command: "printf '%s!' {{text}}" }],
     refresh: before.artifact.refresh,
   });
-  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("full"), undefined, before.digest), /changed/u);
+  await assert.rejects(
+    runner.runAction("ws1", "art1", "note", ["x"], context("full"), undefined, before.digest),
+    /changed/u,
+  );
   assert.deepEqual(commands, []);
   assert.deepEqual(buttonRuns, []);
 });
@@ -335,12 +489,23 @@ async function until(check: () => boolean) {
 }
 
 test("a refresh asked for after the page's commands changed reads the new commands, and the old run saves nothing", async (t) => {
-  const slow: WorkspaceArtifactSourceV1 = { name: "v", kind: "shell", command: `sleep 0.3; printf '"OLD"'`, parse: "json" };
+  const slow: WorkspaceArtifactSourceV1 = {
+    name: "v",
+    kind: "shell",
+    command: `sleep 0.3; printf '"OLD"'`,
+    parse: "json",
+  };
   const { runner, store, commands, context } = await setup(t, { sources: [slow] });
   const old = runner.refresh("ws1", "art1", context("full"));
   await until(() => commands.length === 1);
   const artifact = (await store.get("ws1", "art1"))!.artifact;
-  await store.replace("ws1", "art1", { title: "PRs", visual: artifact.visual, sources: [{ ...slow, command: `printf '"NEW"'` }], actions: [ECHO], refresh: artifact.refresh });
+  await store.replace("ws1", "art1", {
+    title: "PRs",
+    visual: artifact.visual,
+    sources: [{ ...slow, command: `printf '"NEW"'` }],
+    actions: [ECHO],
+    refresh: artifact.refresh,
+  });
   const fresh = await runner.refresh("ws1", "art1", context("full"));
   assert.equal(fresh.v!.dataJson, '"NEW"');
   assert.equal((await old).v!.dataJson, '"OLD"');
@@ -348,7 +513,12 @@ test("a refresh asked for after the page's commands changed reads the new comman
 });
 
 test("one caller cancelling leaves a shared refresh running for the others; the last one out stops it", async (t) => {
-  const slow: WorkspaceArtifactSourceV1 = { name: "v", kind: "shell", command: "sleep 0.6; printf 1", parse: "json" };
+  const slow: WorkspaceArtifactSourceV1 = {
+    name: "v",
+    kind: "shell",
+    command: "sleep 0.6; printf 1",
+    parse: "json",
+  };
   const { runner, store, commands, context } = await setup(t, { sources: [slow] });
   const turn = new AbortController();
   const fromTab = runner.refresh("ws1", "art1", context("full"));
@@ -377,8 +547,14 @@ test("a folder that is gone runs nothing and says so", async (t) => {
   const { runner, folder, commands, context, digest } = await setup(t);
   await fs.rm(folder, { recursive: true });
   const results = await runner.refresh("ws1", "art1", context("full"));
-  assert.deepEqual([results.pulls!.error, results.todo!.error], ["The workspace folder is unavailable.", "The workspace folder is unavailable."]);
-  await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("full"), undefined, await digest()), /unavailable/u);
+  assert.deepEqual(
+    [results.pulls!.error, results.todo!.error],
+    ["The workspace folder is unavailable.", "The workspace folder is unavailable."],
+  );
+  await assert.rejects(
+    runner.runAction("ws1", "art1", "note", ["x"], context("full"), undefined, await digest()),
+    /unavailable/u,
+  );
   assert.deepEqual(commands, []);
 });
 
@@ -403,7 +579,10 @@ test("a command that cannot be started says so without the system's message, whi
   const { runner, folder, context } = await setup(t, {
     sources: [SHELL],
     runShell: async (shell) => {
-      throw Object.assign(new Error(`spawn /bin/sh ENOENT in ${shell.cwd}`), { code: "ENOENT", path: "/bin/sh" });
+      throw Object.assign(new Error(`spawn /bin/sh ENOENT in ${shell.cwd}`), {
+        code: "ENOENT",
+        path: "/bin/sh",
+      });
     },
   });
   const results = await runner.refresh("ws1", "art1", context("full"));
@@ -413,13 +592,26 @@ test("a command that cannot be started says so without the system's message, whi
 });
 
 test("a source named like a property every object has still runs when a refresh keeps other reads", async (t) => {
-  const named: WorkspaceArtifactSourceV1 = { name: "toString", kind: "shell", command: "printf '[7]'", parse: "json" };
+  const named: WorkspaceArtifactSourceV1 = {
+    name: "toString",
+    kind: "shell",
+    command: "printf '[7]'",
+    parse: "json",
+  };
   const { runner, store, context } = await setup(t, { sources: [SHELL, named] });
   await runner.refresh("ws1", "art1", context("full"));
   const first = (await store.get("ws1", "art1"))!;
   const changed = { ...named, command: "printf '[8]'" };
-  await store.replace("ws1", "art1", { title: "PRs", visual: first.artifact.visual, sources: [SHELL, changed], actions: [ECHO], refresh: first.artifact.refresh });
-  const results = await runner.refresh("ws1", "art1", context("full"), undefined, { reuseFrom: first.artifact });
+  await store.replace("ws1", "art1", {
+    title: "PRs",
+    visual: first.artifact.visual,
+    sources: [SHELL, changed],
+    actions: [ECHO],
+    refresh: first.artifact.refresh,
+  });
+  const results = await runner.refresh("ws1", "art1", context("full"), undefined, {
+    reuseFrom: first.artifact,
+  });
   assert.equal(results["toString"]!.status, "ok");
   assert.equal(results["toString"]!.dataJson, "[8]");
   assert.equal(results.pulls!.at, first.snapshot!.sources.pulls!.at);
@@ -428,11 +620,27 @@ test("a source named like a property every object has still runs when a refresh 
 test("a failing command reports the start and the end of what it printed, and bad JSON says where", async (t) => {
   const { runner, folder, context } = await setup(t, {
     sources: [
-      { name: "noisy", kind: "shell", command: "for i in $(seq 1 200); do echo \"line $i of the log\" >&2; done; exit 3", parse: "text" },
-      { name: "comma", kind: "shell", command: `printf '{"open": 2,\n "closed": 5,\n}'`, parse: "json" },
+      {
+        name: "noisy",
+        kind: "shell",
+        command: 'for i in $(seq 1 200); do echo "line $i of the log" >&2; done; exit 3',
+        parse: "text",
+      },
+      {
+        name: "comma",
+        kind: "shell",
+        command: `printf '{"open": 2,\n "closed": 5,\n}'`,
+        parse: "json",
+      },
       { name: "chatty", kind: "file", file: "report.json", parse: "json" },
       // Long enough to be cut, with the cuts landing between an emoji's two halves.
-      { name: "emoji", kind: "shell", command: "printf a >&2; for i in $(seq 1 400); do printf '\\360\\237\\230\\200' >&2; done; exit 3", parse: "text" },
+      {
+        name: "emoji",
+        kind: "shell",
+        command:
+          "printf a >&2; for i in $(seq 1 400); do printf '\\360\\237\\230\\200' >&2; done; exit 3",
+        parse: "text",
+      },
     ],
   });
   await fs.writeFile(path.join(folder, "report.json"), 'Fetching...\n[{"n":1}]');
@@ -442,7 +650,10 @@ test("a failing command reports the start and the end of what it printed, and ba
   assert.match(noisy, /line 200 of the log$/u);
   assert.ok(noisy.length <= 500, "within the stored error's limit");
   assert.match(results.comma!.error!, /not valid JSON: at line 3, column 1, near ".*⟨here⟩\}"/u);
-  assert.match(results.chatty!.error!, /not valid JSON: at line 1, column 1, near "⟨here⟩Fetching\.\.\./u);
+  assert.match(
+    results.chatty!.error!,
+    /not valid JSON: at line 1, column 1, near "⟨here⟩Fetching\.\.\./u,
+  );
   // Both the start and the end of the output keep whole emoji.
   assert.match(results.emoji!.error!, /^Exited with code 3\. a😀+ … 😀+$/u);
   assert.doesNotMatch(results.emoji!.error!, /[\uD800-\uDFFF]/u, "no lone surrogate");
@@ -469,7 +680,10 @@ test("a file replaced while it is read keeps the page's last data, marked as an 
   const saved = (await store.get("ws1", "art1"))!.snapshot!.sources.todo!;
   assert.deepEqual([saved.status, saved.dataJson], ["error", '["ship it","review #12"]']);
   swap = false;
-  assert.equal((await runner.refresh("ws1", "art1", context("full"))).todo!.dataJson, '["rewritten"]');
+  assert.equal(
+    (await runner.refresh("ws1", "art1", context("full"))).todo!.dataJson,
+    '["rewritten"]',
+  );
 });
 
 test("allowing a page while a refresh is running starts a fresh read rather than joining the blocked one", async (t) => {
@@ -485,7 +699,12 @@ test("allowing a page while a refresh is running starts a fresh read rather than
 });
 
 test("a run that started with more access never overwrites what a later, narrower refresh saved", async (t) => {
-  const slow: WorkspaceArtifactSourceV1 = { name: "v", kind: "shell", command: "sleep 0.3; printf 1", parse: "json" };
+  const slow: WorkspaceArtifactSourceV1 = {
+    name: "v",
+    kind: "shell",
+    command: "sleep 0.3; printf 1",
+    parse: "json",
+  };
   const { runner, store, commands, context } = await setup(t, { sources: [slow] });
   const full = runner.refresh("ws1", "art1", context("full"));
   await until(() => commands.length === 1);
@@ -496,7 +715,12 @@ test("a run that started with more access never overwrites what a later, narrowe
 });
 
 test("a newer refresh that is cancelled leaves the earlier one to save", async (t) => {
-  const slow: WorkspaceArtifactSourceV1 = { name: "v", kind: "shell", command: "sleep 0.3; printf 1", parse: "json" };
+  const slow: WorkspaceArtifactSourceV1 = {
+    name: "v",
+    kind: "shell",
+    command: "sleep 0.3; printf 1",
+    parse: "json",
+  };
   const { runner, store, commands, context } = await setup(t, { sources: [slow], approved: true });
   const fromTab = runner.refresh("ws1", "art1", context("full"));
   await until(() => commands.length === 1);
@@ -528,15 +752,22 @@ test("artifact reads deny canonical credential aliases and inode/path replacemen
   await assert.rejects(readWorkspaceArtifactFile(folder, "ordinary.txt"), /Credential files/u);
   assert.equal(await artifactFileAllowed(folder, "ordinary.txt"), false);
   assert.equal(await readWorkspaceArtifactFile(folder, "TODO.md"), "ship it\n\nreview #12\n");
-  await fs.mkdir(path.join(folder, "safe")); await fs.writeFile(path.join(folder, "safe", "data.txt"), "ordinary");
-  await fs.mkdir(path.join(folder, ".private")); await fs.writeFile(path.join(folder, ".private", "data.txt"), "PRIVATE_FIXTURE_VALUE");
-  await assert.rejects(readWorkspaceArtifactFile(folder, "safe/data.txt", undefined, {
-    beforeRead: async () => {
-      await fs.rename(path.join(folder, "safe"), path.join(folder, "held"));
-      await fs.symlink(".private", path.join(folder, "safe"));
-    },
-    // Linux's reader finds the link and calls it a change; the macOS helper refuses the folder as unsafe.
-  }), process.platform === "linux" ? WorkspaceArtifactFileChangedError : WorkspaceArtifactFileUnsafeError);
+  await fs.mkdir(path.join(folder, "safe"));
+  await fs.writeFile(path.join(folder, "safe", "data.txt"), "ordinary");
+  await fs.mkdir(path.join(folder, ".private"));
+  await fs.writeFile(path.join(folder, ".private", "data.txt"), "PRIVATE_FIXTURE_VALUE");
+  await assert.rejects(
+    readWorkspaceArtifactFile(folder, "safe/data.txt", undefined, {
+      beforeRead: async () => {
+        await fs.rename(path.join(folder, "safe"), path.join(folder, "held"));
+        await fs.symlink(".private", path.join(folder, "safe"));
+      },
+      // Linux's reader finds the link and calls it a change; the macOS helper refuses the folder as unsafe.
+    }),
+    process.platform === "linux"
+      ? WorkspaceArtifactFileChangedError
+      : WorkspaceArtifactFileUnsafeError,
+  );
 });
 
 test("a file read whose workspace folder is not a folder fails with that lasting reason, not as a change the next refresh fixes", async (t) => {
@@ -545,108 +776,167 @@ test("a file read whose workspace folder is not a folder fails with that lasting
   const notAFolder = path.join(folder, "TODO.md");
   await assert.rejects(readWorkspaceArtifactFile(notAFolder, "TODO.md"), (error: Error) => {
     assert.ok(error instanceof WorkspaceArtifactFileUnsafeError);
-    assert.match(error.message, /^Aiden could not safely read TODO\.md: the workspace folder, or a folder on the way to the file, is a link or not a folder/u);
+    assert.match(
+      error.message,
+      /^Aiden could not safely read TODO\.md: the workspace folder, or a folder on the way to the file, is a link or not a folder/u,
+    );
     assert.doesNotMatch(error.message, /changed while|next refresh|unsafe_source/u);
     return true;
   });
   // Not a policy refusal, so a listing keeps the page's cached data and asks again next time.
-  await assert.rejects(artifactFileAllowed(notAFolder, "TODO.md"), WorkspaceArtifactFileUnsafeError);
+  await assert.rejects(
+    artifactFileAllowed(notAFolder, "TODO.md"),
+    WorkspaceArtifactFileUnsafeError,
+  );
 });
 
-test("a file Aiden may not read says it cannot be read, not that it changed while it was read", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
-  const { runner, folder, context } = await setup(t, { sources: [FILE] });
-  await fs.chmod(path.join(folder, "TODO.md"), 0o000);
-  t.after(() => fs.chmod(path.join(folder, "TODO.md"), 0o644).catch(() => undefined));
-  const results = await runner.refresh("ws1", "art1", context("full"));
-  assert.equal(results.todo!.status, "error");
-  assert.equal(results.todo!.error, "TODO.md cannot be read.");
-});
+test(
+  "a file Aiden may not read says it cannot be read, not that it changed while it was read",
+  { skip: process.platform === "win32" || process.getuid?.() === 0 },
+  async (t) => {
+    const { runner, folder, context } = await setup(t, { sources: [FILE] });
+    await fs.chmod(path.join(folder, "TODO.md"), 0o000);
+    t.after(() => fs.chmod(path.join(folder, "TODO.md"), 0o644).catch(() => undefined));
+    const results = await runner.refresh("ws1", "art1", context("full"));
+    assert.equal(results.todo!.status, "error");
+    assert.equal(results.todo!.error, "TODO.md cannot be read.");
+  },
+);
 
-test("a file replaced mid-read by a link to a file Aiden may not read counts as a change, and never says whether the link's target can be read", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
-  const { folder } = await setup(t, { sources: [FILE] });
-  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-outside-"));
-  t.after(() => fs.rm(outside, { recursive: true, force: true }));
-  const locked = path.join(outside, "locked.txt");
-  await fs.writeFile(locked, "PRIVATE_FIXTURE_VALUE");
-  await fs.chmod(locked, 0o000);
-  t.after(() => fs.chmod(locked, 0o644).catch(() => undefined));
-  await assert.rejects(readWorkspaceArtifactFile(folder, "TODO.md", undefined, {
-    beforeRead: async () => {
-      await fs.rm(path.join(folder, "TODO.md"));
-      await fs.symlink(locked, path.join(folder, "TODO.md"));
-    },
-  }), (error: Error) => {
-    assert.ok(error instanceof WorkspaceArtifactFileChangedError, `${error.constructor.name}: ${error.message}`);
-    return true;
-  });
-});
+test(
+  "a file replaced mid-read by a link to a file Aiden may not read counts as a change, and never says whether the link's target can be read",
+  { skip: process.platform === "win32" || process.getuid?.() === 0 },
+  async (t) => {
+    const { folder } = await setup(t, { sources: [FILE] });
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-outside-"));
+    t.after(() => fs.rm(outside, { recursive: true, force: true }));
+    const locked = path.join(outside, "locked.txt");
+    await fs.writeFile(locked, "PRIVATE_FIXTURE_VALUE");
+    await fs.chmod(locked, 0o000);
+    t.after(() => fs.chmod(locked, 0o644).catch(() => undefined));
+    await assert.rejects(
+      readWorkspaceArtifactFile(folder, "TODO.md", undefined, {
+        beforeRead: async () => {
+          await fs.rm(path.join(folder, "TODO.md"));
+          await fs.symlink(locked, path.join(folder, "TODO.md"));
+        },
+      }),
+      (error: Error) => {
+        assert.ok(
+          error instanceof WorkspaceArtifactFileChangedError,
+          `${error.constructor.name}: ${error.message}`,
+        );
+        return true;
+      },
+    );
+  },
+);
 
-test("a file replaced mid-read by another file Aiden may not read counts as a change, not as a file that cannot be read", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
-  const { folder } = await setup(t, { sources: [FILE] });
-  const todo = path.join(folder, "TODO.md");
-  t.after(() => fs.chmod(todo, 0o644).catch(() => undefined));
-  await assert.rejects(readWorkspaceArtifactFile(folder, "TODO.md", undefined, {
-    beforeRead: async () => {
-      // A different file under the same name, closed to Aiden: the one admitted is gone, so this is a change.
-      await fs.rm(todo);
-      await fs.writeFile(todo, "PRIVATE_FIXTURE_VALUE");
-      await fs.chmod(todo, 0o000);
-    },
-  }), (error: Error) => {
-    assert.ok(error instanceof WorkspaceArtifactFileChangedError, `${error.constructor.name}: ${error.message}`);
-    assert.doesNotMatch(error.message, /cannot be read/u);
-    return true;
-  });
-});
+test(
+  "a file replaced mid-read by another file Aiden may not read counts as a change, not as a file that cannot be read",
+  { skip: process.platform === "win32" || process.getuid?.() === 0 },
+  async (t) => {
+    const { folder } = await setup(t, { sources: [FILE] });
+    const todo = path.join(folder, "TODO.md");
+    t.after(() => fs.chmod(todo, 0o644).catch(() => undefined));
+    await assert.rejects(
+      readWorkspaceArtifactFile(folder, "TODO.md", undefined, {
+        beforeRead: async () => {
+          // A different file under the same name, closed to Aiden: the one admitted is gone, so this is a change.
+          await fs.rm(todo);
+          await fs.writeFile(todo, "PRIVATE_FIXTURE_VALUE");
+          await fs.chmod(todo, 0o000);
+        },
+      }),
+      (error: Error) => {
+        assert.ok(
+          error instanceof WorkspaceArtifactFileChangedError,
+          `${error.constructor.name}: ${error.message}`,
+        );
+        assert.doesNotMatch(error.message, /cannot be read/u);
+        return true;
+      },
+    );
+  },
+);
 
-test("a folder on the path replaced mid-read by a link to a folder with a file Aiden may not read never says whether that file can be read", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
-  const { folder } = await setup(t, { sources: [FILE] });
-  await fs.mkdir(path.join(folder, "notes"));
-  await fs.writeFile(path.join(folder, "notes", "TODO.md"), "ship it\n");
-  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-outside-"));
-  t.after(() => fs.rm(outside, { recursive: true, force: true }));
-  const locked = path.join(outside, "TODO.md");
-  await fs.writeFile(locked, "PRIVATE_FIXTURE_VALUE");
-  await fs.chmod(locked, 0o000);
-  t.after(() => fs.chmod(locked, 0o644).catch(() => undefined));
-  await assert.rejects(readWorkspaceArtifactFile(folder, "notes/TODO.md", undefined, {
-    beforeRead: async () => {
-      await fs.rm(path.join(folder, "notes"), { recursive: true });
-      await fs.symlink(outside, path.join(folder, "notes"));
-    },
-  }), (error: Error) => {
-    // Linux's reader finds the link and calls it a change; the macOS helper refuses the folder as unsafe. Neither says whether the file out there can be read.
-    assert.doesNotMatch(error.message, /cannot be read/u);
-    assert.ok(error instanceof (process.platform === "linux" ? WorkspaceArtifactFileChangedError : WorkspaceArtifactFileUnsafeError), `${error.constructor.name}: ${error.message}`);
-    return true;
-  });
-});
+test(
+  "a folder on the path replaced mid-read by a link to a folder with a file Aiden may not read never says whether that file can be read",
+  { skip: process.platform === "win32" || process.getuid?.() === 0 },
+  async (t) => {
+    const { folder } = await setup(t, { sources: [FILE] });
+    await fs.mkdir(path.join(folder, "notes"));
+    await fs.writeFile(path.join(folder, "notes", "TODO.md"), "ship it\n");
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-outside-"));
+    t.after(() => fs.rm(outside, { recursive: true, force: true }));
+    const locked = path.join(outside, "TODO.md");
+    await fs.writeFile(locked, "PRIVATE_FIXTURE_VALUE");
+    await fs.chmod(locked, 0o000);
+    t.after(() => fs.chmod(locked, 0o644).catch(() => undefined));
+    await assert.rejects(
+      readWorkspaceArtifactFile(folder, "notes/TODO.md", undefined, {
+        beforeRead: async () => {
+          await fs.rm(path.join(folder, "notes"), { recursive: true });
+          await fs.symlink(outside, path.join(folder, "notes"));
+        },
+      }),
+      (error: Error) => {
+        // Linux's reader finds the link and calls it a change; the macOS helper refuses the folder as unsafe. Neither says whether the file out there can be read.
+        assert.doesNotMatch(error.message, /cannot be read/u);
+        assert.ok(
+          error instanceof
+            (process.platform === "linux"
+              ? WorkspaceArtifactFileChangedError
+              : WorkspaceArtifactFileUnsafeError),
+          `${error.constructor.name}: ${error.message}`,
+        );
+        return true;
+      },
+    );
+  },
+);
 
-test("a workspace folder swapped mid-read for a link to a folder with a file Aiden may not read never says whether that file can be read", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
-  const { folder } = await setup(t, { sources: [FILE] });
-  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-outside-"));
-  t.after(() => fs.rm(outside, { recursive: true, force: true }));
-  const locked = path.join(outside, "TODO.md");
-  await fs.writeFile(locked, "PRIVATE_FIXTURE_VALUE");
-  await fs.chmod(locked, 0o000);
-  t.after(() => fs.chmod(locked, 0o644).catch(() => undefined));
-  await assert.rejects(readWorkspaceArtifactFile(folder, "TODO.md", undefined, {
-    beforeRead: async () => {
-      await fs.rename(folder, `${folder}.held`);
-      await fs.symlink(outside, folder);
-    },
-  }), (error: Error) => {
-    // Linux's reader finds the link and calls it a change; the macOS helper refuses the folder as unsafe. Neither says whether the file out there can be read.
-    assert.doesNotMatch(error.message, /cannot be read/u);
-    assert.ok(error instanceof (process.platform === "linux" ? WorkspaceArtifactFileChangedError : WorkspaceArtifactFileUnsafeError), `${error.constructor.name}: ${error.message}`);
-    return true;
-  });
-});
+test(
+  "a workspace folder swapped mid-read for a link to a folder with a file Aiden may not read never says whether that file can be read",
+  { skip: process.platform === "win32" || process.getuid?.() === 0 },
+  async (t) => {
+    const { folder } = await setup(t, { sources: [FILE] });
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-outside-"));
+    t.after(() => fs.rm(outside, { recursive: true, force: true }));
+    const locked = path.join(outside, "TODO.md");
+    await fs.writeFile(locked, "PRIVATE_FIXTURE_VALUE");
+    await fs.chmod(locked, 0o000);
+    t.after(() => fs.chmod(locked, 0o644).catch(() => undefined));
+    await assert.rejects(
+      readWorkspaceArtifactFile(folder, "TODO.md", undefined, {
+        beforeRead: async () => {
+          await fs.rename(folder, `${folder}.held`);
+          await fs.symlink(outside, folder);
+        },
+      }),
+      (error: Error) => {
+        // Linux's reader finds the link and calls it a change; the macOS helper refuses the folder as unsafe. Neither says whether the file out there can be read.
+        assert.doesNotMatch(error.message, /cannot be read/u);
+        assert.ok(
+          error instanceof
+            (process.platform === "linux"
+              ? WorkspaceArtifactFileChangedError
+              : WorkspaceArtifactFileUnsafeError),
+          `${error.constructor.name}: ${error.message}`,
+        );
+        return true;
+      },
+    );
+  },
+);
 
 test("a file check or read in a workspace folder that is gone says the folder is gone, never the system's message, which names its full path", async (t) => {
   const { folder } = await setup(t, { sources: [FILE] });
   const gone = path.join(folder, "removed");
-  for (const attempt of [() => artifactFileAllowed(gone, "TODO.md"), () => readWorkspaceArtifactFile(gone, "TODO.md")]) {
+  for (const attempt of [
+    () => artifactFileAllowed(gone, "TODO.md"),
+    () => readWorkspaceArtifactFile(gone, "TODO.md"),
+  ]) {
     await assert.rejects(attempt, (error: Error) => {
       assert.equal(error.message, "The workspace folder is gone, so Aiden could not read TODO.md.");
       assert.ok(!error.message.includes(folder));
@@ -657,14 +947,25 @@ test("a file check or read in a workspace folder that is gone says the folder is
 
 test("denied file refreshes erase cached good data instead of preserving it as a transient failure", async (t) => {
   // No save accepts a credential path now, so the page is one an older Aiden saved.
-  const source: WorkspaceArtifactSourceV1 = { name: "private", kind: "file", file: "legacy.txt", parse: "text" };
+  const source: WorkspaceArtifactSourceV1 = {
+    name: "private",
+    kind: "file",
+    file: "legacy.txt",
+    parse: "text",
+  };
   const { store, runner, context } = await setup(t, {
     sources: [source],
     persisted: (document) => document.replace('"file":"legacy.txt"', '"file":".env"'),
   });
-  assert.deepEqual((await store.get("ws1", "art1"))!.artifact.sources, [{ ...source, file: ".env" }], "the older page loads");
+  assert.deepEqual(
+    (await store.get("ws1", "art1"))!.artifact.sources,
+    [{ ...source, file: ".env" }],
+    "the older page loads",
+  );
   const artifact = (await store.get("ws1", "art1"))!.artifact;
-  await store.saveSnapshot("ws1", artifact, { private: { status: "ok", at: 1, dataJson: '"PRIVATE_FIXTURE_VALUE"' } });
+  await store.saveSnapshot("ws1", artifact, {
+    private: { status: "ok", at: 1, dataJson: '"PRIVATE_FIXTURE_VALUE"' },
+  });
   const result = await runner.refresh("ws1", "art1", context("full"));
   assert.equal(result.private!.policyDenied, true);
   assert.equal(JSON.stringify(await store.list("ws1")).includes("PRIVATE_FIXTURE_VALUE"), false);

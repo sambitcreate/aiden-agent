@@ -40,7 +40,14 @@ export function moveDraftTo(draft: ReorderDraft, index: number): ReorderDraft {
 
 export function stepDraft(draft: ReorderDraft, step: ReorderStep): ReorderDraft {
   const index = draft.order.indexOf(draft.id);
-  const to = step === "first" ? 0 : step === "last" ? draft.order.length - 1 : step === "previous" ? index - 1 : index + 1;
+  const to =
+    step === "first"
+      ? 0
+      : step === "last"
+        ? draft.order.length - 1
+        : step === "previous"
+          ? index - 1
+          : index + 1;
   return moveDraftTo(draft, to);
 }
 
@@ -53,7 +60,12 @@ export function draftPosition(draft: ReorderDraft, original = false): number {
   return (original ? draft.original : draft.order).indexOf(draft.id) + 1;
 }
 
-export function reorderMessage(type: ReorderMessageType, label: string, position: number, total: number): string {
+export function reorderMessage(
+  type: ReorderMessageType,
+  label: string,
+  position: number,
+  total: number,
+): string {
   const at = `position ${position} of ${total}`;
   if (type === "pick") return `Picked up ${label}, ${at}.`;
   if (type === "move") return `${label}, ${at}.`;
@@ -63,7 +75,16 @@ export function reorderMessage(type: ReorderMessageType, label: string, position
 
 /** What a key on a handle does; null leaves the key alone. */
 export function reorderKeyAction(
-  event: { key: string; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; isComposing?: boolean; keyCode?: number; defaultPrevented: boolean },
+  event: {
+    key: string;
+    altKey?: boolean;
+    ctrlKey?: boolean;
+    metaKey?: boolean;
+    shiftKey?: boolean;
+    isComposing?: boolean;
+    keyCode?: number;
+    defaultPrevented: boolean;
+  },
   context: { held: boolean; orientation: "vertical" | "horizontal"; rtl: boolean },
 ): ReorderKeyAction | null {
   if (event.altKey || event.ctrlKey || event.metaKey) return null;
@@ -73,19 +94,27 @@ export function reorderKeyAction(
   if (isEscapeKey(event)) return "cancel";
   if (key === "Home") return "first";
   if (key === "End") return "last";
-  const back = context.orientation === "vertical" ? "ArrowUp" : context.rtl ? "ArrowRight" : "ArrowLeft";
-  const forward = context.orientation === "vertical" ? "ArrowDown" : context.rtl ? "ArrowLeft" : "ArrowRight";
+  const back =
+    context.orientation === "vertical" ? "ArrowUp" : context.rtl ? "ArrowRight" : "ArrowLeft";
+  const forward =
+    context.orientation === "vertical" ? "ArrowDown" : context.rtl ? "ArrowLeft" : "ArrowRight";
   if (key === back) return "previous";
   if (key === forward) return "next";
   return null;
 }
 
 /** Lays `list` out in the draft's order where its members are; other entries keep their places. */
-export function arrangeByDraft<T>(list: readonly T[], keyOf: (entry: T) => string, draft: ReorderDraft | null): readonly T[] {
+export function arrangeByDraft<T>(
+  list: readonly T[],
+  keyOf: (entry: T) => string,
+  draft: ReorderDraft | null,
+): readonly T[] {
   if (!draft || !list.some((entry) => keyOf(entry) === draft.id)) return list;
   const members = new Set(draft.order);
   const byKey = new Map(list.map((entry) => [keyOf(entry), entry]));
-  const queue = draft.order.map((key) => byKey.get(key)).filter((entry): entry is T => entry !== undefined);
+  const queue = draft.order
+    .map((key) => byKey.get(key))
+    .filter((entry): entry is T => entry !== undefined);
   return list.map((entry) => (members.has(keyOf(entry)) ? queue.shift()! : entry));
 }
 
@@ -125,7 +154,14 @@ export function useReorderDraft(options: ReorderDraftOptions) {
   }, [draft, groupKey]);
 
   const say = (type: ReorderMessageType, next: ReorderDraft, original = false) =>
-    setAnnouncement(reorderMessage(type, options.label(next.id), draftPosition(next, original), next.order.length));
+    setAnnouncement(
+      reorderMessage(
+        type,
+        options.label(next.id),
+        draftPosition(next, original),
+        next.order.length,
+      ),
+    );
 
   const cancel = (current: ReorderDraft, restoreFocus: boolean) => {
     setDraft(null);
@@ -189,7 +225,11 @@ export type ReorderHandleProps = ReturnType<ReturnType<typeof useReorderDraft>["
 
 /** The one assertive live region a reorderable list announces through; render it outside the keyed items. */
 export function ReorderAnnouncer({ message }: { message: string }): React.JSX.Element {
-  return React.createElement("div", { role: "status", "aria-live": "assertive", "aria-atomic": true, className: "sr-only" }, message);
+  return React.createElement(
+    "div",
+    { role: "status", "aria-live": "assertive", "aria-atomic": true, className: "sr-only" },
+    message,
+  );
 }
 
 // ---- Pointer --------------------------------------------------------------
@@ -243,10 +283,22 @@ export interface PointerReorderOptions {
   scroller(): HTMLElement | null;
 }
 
-type PointerSession = { id: string; pointerId: number; startY: number; y: number; element: Element; active: boolean; frame: number; over: PointerDropTarget | null; scroller: HTMLElement | null };
+type PointerSession = {
+  id: string;
+  pointerId: number;
+  startY: number;
+  y: number;
+  element: Element;
+  active: boolean;
+  frame: number;
+  over: PointerDropTarget | null;
+  scroller: HTMLElement | null;
+};
 
 export function usePointerReorder(options: PointerReorderOptions) {
-  const [drag, setDrag] = React.useState<{ id: string; over: PointerDropTarget | null } | null>(null);
+  const [drag, setDrag] = React.useState<{ id: string; over: PointerDropTarget | null } | null>(
+    null,
+  );
   const latest = React.useRef(options);
   const session = React.useRef<PointerSession | null>(null);
   const stopRef = React.useRef<(() => void) | null>(null);
@@ -257,7 +309,17 @@ export function usePointerReorder(options: PointerReorderOptions) {
 
   const onPointerDown = (id: string, event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0 || session.current) return;
-    const current: PointerSession = { id, pointerId: event.pointerId, startY: event.clientY, y: event.clientY, element: event.currentTarget, active: false, frame: 0, over: null, scroller: null };
+    const current: PointerSession = {
+      id,
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      y: event.clientY,
+      element: event.currentTarget,
+      active: false,
+      frame: 0,
+      over: null,
+      scroller: null,
+    };
     session.current = current;
 
     const measure = () => {
@@ -293,7 +355,8 @@ export function usePointerReorder(options: PointerReorderOptions) {
         click.stopPropagation();
         click.preventDefault();
       };
-      const unswallow = () => window.setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
+      const unswallow = () =>
+        window.setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
       window.addEventListener("click", swallow, { capture: true, once: true });
       if (released) unswallow();
       else {
@@ -344,7 +407,8 @@ export function usePointerReorder(options: PointerReorderOptions) {
       window.removeEventListener("pointercancel", onCancel);
       window.removeEventListener("keydown", onKey, { capture: true });
       try {
-        if (current.element.hasPointerCapture?.(current.pointerId)) current.element.releasePointerCapture(current.pointerId);
+        if (current.element.hasPointerCapture?.(current.pointerId))
+          current.element.releasePointerCapture(current.pointerId);
       } catch {
         // Already released.
       }

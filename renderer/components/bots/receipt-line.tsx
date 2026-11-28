@@ -30,10 +30,23 @@ export function ReceiptLine({
   text: React.ReactNode;
   actions?: readonly ReceiptAction[];
   className?: string;
-} & Pick<React.HTMLAttributes<HTMLDivElement>, "role" | "aria-label"> & { [data: `data-${string}`]: string | boolean | undefined }) {
+} & Pick<React.HTMLAttributes<HTMLDivElement>, "role" | "aria-label"> & {
+    [data: `data-${string}`]: string | boolean | undefined;
+  }) {
   return (
-    <div {...rest} className={cn("flex min-w-0 flex-wrap items-center justify-center gap-x-1.5 py-1 text-center", className)} data-receipt-line>
-      {icon ? <span aria-hidden="true" className="flex shrink-0 text-tertiary [&_svg]:size-3.5">{icon}</span> : null}
+    <div
+      {...rest}
+      className={cn(
+        "flex min-w-0 flex-wrap items-center justify-center gap-x-1.5 py-1 text-center",
+        className,
+      )}
+      data-receipt-line
+    >
+      {icon ? (
+        <span aria-hidden="true" className="flex shrink-0 text-tertiary [&_svg]:size-3.5">
+          {icon}
+        </span>
+      ) : null}
       <Text as="span" variant="small" color="tertiary" className="min-w-0 [overflow-wrap:anywhere]">
         {text}
       </Text>

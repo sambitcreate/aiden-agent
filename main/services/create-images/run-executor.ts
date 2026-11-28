@@ -6,19 +6,37 @@
 // never retries a provider request: a failed attempt stays failed until the
 // user starts a new, separately consented run.
 import type { Usage } from "@earendil-works/pi-ai";
-import type { ImageGenerationPort, ImageGenerationResult } from "../../../renderer/shared/images/port.js";
+import type {
+  ImageGenerationPort,
+  ImageGenerationResult,
+} from "../../../renderer/shared/images/port.js";
 import type { OutputRef, RunState } from "../../../renderer/shared/images/run-types.js";
 import { IMAGE_WORKFLOW_LIMITS } from "../../../renderer/shared/images/schema.js";
-import { STUDIO_ASSET_LIMITS, StudioAssetError, type StudioAssetLimits } from "../studio-assets/contract.js";
+import {
+  STUDIO_ASSET_LIMITS,
+  StudioAssetError,
+  type StudioAssetLimits,
+} from "../studio-assets/contract.js";
 import type { StudioAssetStore } from "../studio-assets/store.js";
 import { ImageRunLedgerError, type AttemptFinish, type ImageRunLedger } from "./run-ledger.js";
-import { runPlan, summarizeRunState, type PlannedStep, type RunPlan, type StepInputs, type StepOutcome } from "./scheduler-core.js";
+import {
+  runPlan,
+  summarizeRunState,
+  type PlannedStep,
+  type RunPlan,
+  type StepInputs,
+  type StepOutcome,
+} from "./scheduler-core.js";
 
 export interface RunExecutorDependencies {
-  ledger: Pick<ImageRunLedger, "claimProviderRequest" | "finishAttempts" | "finishRun" | "terminateRun" | "snapshot">;
+  ledger: Pick<
+    ImageRunLedger,
+    "claimProviderRequest" | "finishAttempts" | "finishRun" | "terminateRun" | "snapshot"
+  >;
   port: Pick<ImageGenerationPort, "preflight">;
   /** Without `usage` the storage headroom check is skipped; without `release` a fault after retain leaves the hold for pruning. */
-  assets: Pick<StudioAssetStore, "read" | "put" | "retain"> & Partial<Pick<StudioAssetStore, "usage" | "release" | "collectGarbage">>;
+  assets: Pick<StudioAssetStore, "read" | "put" | "retain"> &
+    Partial<Pick<StudioAssetStore, "usage" | "release" | "collectGarbage">>;
   /** The asset store's capacity, for the headroom check. Defaults to STUDIO_ASSET_LIMITS. */
   storageLimits?: Pick<StudioAssetLimits, "maxAssets" | "maxTotalBytes">;
   onChange(): void;
@@ -82,7 +100,8 @@ const WORST_CASE_OUTPUT = { assets: 4, bytes: 8 * 1024 * 1024 } as const;
 
 export const STORAGE_FULL_UNSENT =
   "Aiden's image storage is full, so this request was not sent. Delete unused workflows or Design Studio projects to free space.";
-export const STORAGE_FAILED_UNSENT = "Aiden's image storage is unavailable, so this request was not sent.";
+export const STORAGE_FAILED_UNSENT =
+  "Aiden's image storage is unavailable, so this request was not sent.";
 export const STORAGE_FULL_AFTER_SEND =
   "The image was generated and may have been billed, but Aiden's image storage is full, so it could not be kept. Delete unused workflows or Design Studio projects to free space.";
 export const STORAGE_FAILED_AFTER_SEND =
@@ -113,7 +132,10 @@ async function settleOrGiveUp(tasks: Promise<unknown>[], ms: number): Promise<vo
   }
 }
 
-export async function executeRun(deps: RunExecutorDependencies, run: RunExecution): Promise<RunState> {
+export async function executeRun(
+  deps: RunExecutorDependencies,
+  run: RunExecution,
+): Promise<RunState> {
   const changed = observer(deps.onChange);
   const requestStarted = observer(deps.onRequestStart);
   const requestEnded = observer(deps.onRequestEnd);
@@ -124,16 +146,29 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
   if (run.signal.aborted) relay();
   else run.signal.addEventListener("abort", relay, { once: true });
   const outstanding = new Set<Promise<unknown>>();
-  const abortReason = () => (typeof run.signal.reason === "string" ? run.signal.reason : "user-cancel");
+  const abortReason = () =>
+    typeof run.signal.reason === "string" ? run.signal.reason : "user-cancel";
   // An abort the user asked for is a cancel. The executor's own fault abort is a failure.
-  const stopped = (): { state: "cancelled" } | { state: "failed"; errorCode: string; errorMessage: string } =>
+  const stopped = ():
+    | { state: "cancelled" }
+    | { state: "failed"; errorCode: string; errorMessage: string } =>
     run.signal.aborted
       ? { state: "cancelled" }
       : { state: "failed", errorCode: "executor-fault", errorMessage: FAULT_MESSAGE };
   const finish = (step: PlannedStep, update: Omit<AttemptFinish, "runId" | "nodeId" | "variant">) =>
-    guarded(() => deps.ledger.finishAttempts([{ runId: run.runId, nodeId: step.nodeId, variant: step.variant, ...update }]), undefined);
+    guarded(
+      () =>
+        deps.ledger.finishAttempts([
+          { runId: run.runId, nodeId: step.nodeId, variant: step.variant, ...update },
+        ]),
+      undefined,
+    );
 
-  function generate(step: PlannedStep, inputs: StepInputs, signal: AbortSignal): Promise<StepOutcome> {
+  function generate(
+    step: PlannedStep,
+    inputs: StepInputs,
+    signal: AbortSignal,
+  ): Promise<StepOutcome> {
     const task = generateStep(step, inputs, signal);
     outstanding.add(task);
     const forget = () => outstanding.delete(task);
@@ -159,14 +194,19 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
   }
   const attemptLive = (step: PlannedStep) =>
     guarded(() => deps.ledger.snapshot(run.runId), null)?.attempts.some(
-      (attempt) => attempt.nodeId === step.nodeId && attempt.variant === step.variant && attempt.state === "running",
+      (attempt) =>
+        attempt.nodeId === step.nodeId &&
+        attempt.variant === step.variant &&
+        attempt.state === "running",
     ) ?? false;
 
   /**
    * Refuses locally when the store cannot keep one more request's worst-case output. Usage counts
    * unheld assets past their grace until they are collected, so collect once before refusing.
    */
-  async function reserveStorage(room: OutputCapacity): Promise<Pick<AttemptFinish, "errorCode" | "errorMessage"> | undefined> {
+  async function reserveStorage(
+    room: OutputCapacity,
+  ): Promise<Pick<AttemptFinish, "errorCode" | "errorMessage"> | undefined> {
     const refusal = tryReserveStorage(room);
     if (refusal?.errorCode !== "storage-full" || !deps.assets.collectGarbage) return refusal;
     try {
@@ -177,7 +217,9 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
     return tryReserveStorage(room);
   }
 
-  function tryReserveStorage(room: OutputCapacity): Pick<AttemptFinish, "errorCode" | "errorMessage"> | undefined {
+  function tryReserveStorage(
+    room: OutputCapacity,
+  ): Pick<AttemptFinish, "errorCode" | "errorMessage"> | undefined {
     const limits = deps.storageLimits ?? STUDIO_ASSET_LIMITS;
     if (deps.assets.usage) {
       let usage: OutputCapacity;
@@ -201,7 +243,11 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
     return undefined;
   }
 
-  async function generateStep(step: PlannedStep, inputs: StepInputs, signal: AbortSignal): Promise<StepOutcome> {
+  async function generateStep(
+    step: PlannedStep,
+    inputs: StepInputs,
+    signal: AbortSignal,
+  ): Promise<StepOutcome> {
     if (inputs.references.length > IMAGE_WORKFLOW_LIMITS.maxReferences) {
       finish(step, {
         state: "failed",
@@ -219,7 +265,11 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
         }),
       );
     } catch {
-      finish(step, { state: "failed", errorCode: "reference-unavailable", errorMessage: "A reference image is no longer available." });
+      finish(step, {
+        state: "failed",
+        errorCode: "reference-unavailable",
+        errorMessage: "A reference image is no longer available.",
+      });
       return { ok: false, state: "failed" };
     }
     if (signal.aborted) {
@@ -264,7 +314,10 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
     references = [];
     if (checked.kind === "failed") {
       const update = checked.code === "aborted" || signal.aborted ? stopped() : undefined;
-      finish(step, update ?? { state: "failed", errorCode: checked.code, errorMessage: checked.message });
+      finish(
+        step,
+        update ?? { state: "failed", errorCode: checked.code, errorMessage: checked.message },
+      );
       return { ok: false, state: update?.state ?? "failed" };
     }
     let claimed = false;
@@ -272,7 +325,10 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
     const claim = () => {
       if (signal.aborted) return false;
       try {
-        claimed = guarded(() => deps.ledger.claimProviderRequest(run.runId, step.nodeId, step.variant, prompt), false);
+        claimed = guarded(
+          () => deps.ledger.claimProviderRequest(run.runId, step.nodeId, step.variant, prompt),
+          false,
+        );
       } catch {
         claimFault = true;
         return false;
@@ -298,20 +354,37 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
       }
       return await storeResult(step, result, room);
     } catch {
-      finish(step, { state: "failed", errorCode: "executor-fault", errorMessage: FAULT_MESSAGE, ...cost(result?.usage) });
+      finish(step, {
+        state: "failed",
+        errorCode: "executor-fault",
+        errorMessage: FAULT_MESSAGE,
+        ...cost(result?.usage),
+      });
       return { ok: false, state: "failed" };
     }
   }
 
-  async function storeResult(step: PlannedStep, result: ImageGenerationResult, room: OutputCapacity): Promise<StepOutcome> {
+  async function storeResult(
+    step: PlannedStep,
+    result: ImageGenerationResult,
+    room: OutputCapacity,
+  ): Promise<StepOutcome> {
     if (result.kind === "failed") {
       if (result.code === "aborted") {
         const update = stopped();
-        const detail = update.state === "cancelled" ? { errorCode: result.code, errorMessage: result.message } : update;
+        const detail =
+          update.state === "cancelled"
+            ? { errorCode: result.code, errorMessage: result.message }
+            : update;
         finish(step, { ...detail, state: update.state, ...cost(result.usage) });
         return { ok: false, state: update.state };
       }
-      finish(step, { state: "failed", errorCode: result.code, errorMessage: result.message, ...cost(result.usage) });
+      finish(step, {
+        state: "failed",
+        errorCode: result.code,
+        errorMessage: result.message,
+        ...cost(result.usage),
+      });
       return { ok: false, state: "failed" };
     }
 
@@ -319,14 +392,24 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
     let storageFailure: Exclude<PutFailure, "invalid"> | undefined;
     for (const image of result.images) {
       if (!runReservations.has(room)) {
-        report(new Error(`An image for run ${run.runId} arrived after the run ended and was not kept.`));
+        report(
+          new Error(`An image for run ${run.runId} arrived after the run ended and was not kept.`),
+        );
         return { ok: false, state: "failed" };
       }
       try {
-        const record = await deps.assets.put({ bytes: image.bytes, declaredMimeType: image.mimeType });
+        const record = await deps.assets.put({
+          bytes: image.bytes,
+          declaredMimeType: image.mimeType,
+        });
         room.assets--;
         room.bytes -= image.bytes.byteLength;
-        output.push({ assetId: record.assetId, width: record.width, height: record.height, mediaType: record.mediaType });
+        output.push({
+          assetId: record.assetId,
+          width: record.width,
+          height: record.height,
+          mediaType: record.mediaType,
+        });
       } catch (error) {
         // An image the store rejects as invalid is dropped. A full or failing store is not the
         // provider's fault: the paid image is reported, never silently relabelled as bad output.
@@ -343,7 +426,10 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
           ? { errorCode: "storage-full", errorMessage: STORAGE_FULL_AFTER_SEND }
           : storageFailure === "storage-failed"
             ? { errorCode: "storage-failed", errorMessage: STORAGE_FAILED_AFTER_SEND }
-            : { errorCode: "output-invalid", errorMessage: "The provider returned images Aiden could not store." }),
+            : {
+                errorCode: "output-invalid",
+                errorMessage: "The provider returned images Aiden could not store.",
+              }),
         ...cost(result.usage),
       });
       return { ok: false, state: "failed" };
@@ -351,11 +437,15 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
     // A result that arrives after the run already ended (an executor fault gave up waiting, or quit)
     // cannot be recorded; holding its images would pin them to a run that never names them.
     if (!attemptLive(step)) {
-      report(new Error(`An image for run ${run.runId} arrived after the run ended and was not kept.`));
+      report(
+        new Error(`An image for run ${run.runId} arrived after the run ended and was not kept.`),
+      );
       return { ok: false, state: "failed" };
     }
     const holder = { kind: "images-run" as const, id: run.runId };
-    const added = [...new Set(output.map((ref) => ref.assetId))].filter((assetId) => !held.has(assetId));
+    const added = [...new Set(output.map((ref) => ref.assetId))].filter(
+      (assetId) => !held.has(assetId),
+    );
     deps.assets.retain(holder, added);
     try {
       finish(step, {
@@ -396,7 +486,9 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
             nodeId: transition.nodeId,
             variant: transition.variant,
             state: transition.state,
-            ...(transition.errorCode ? { errorCode: transition.errorCode, errorMessage: FAULT_MESSAGE } : {}),
+            ...(transition.errorCode
+              ? { errorCode: transition.errorCode, errorMessage: FAULT_MESSAGE }
+              : {}),
             ...(transition.value?.kind === "images" ? { output: transition.value.images } : {}),
           }));
         guarded(() => deps.ledger.finishAttempts(unrecorded), undefined);
@@ -426,13 +518,27 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
 
   // finishRun records a run as over; it is honest only when no attempt is still live.
   const snapshot = guarded(() => deps.ledger.snapshot(run.runId), null);
-  const live = snapshot?.attempts.some((attempt) => attempt.state === "queued" || attempt.state === "running") ?? false;
+  const live =
+    snapshot?.attempts.some(
+      (attempt) => attempt.state === "queued" || attempt.state === "running",
+    ) ?? false;
   if (live) {
     const state = run.signal.aborted ? "cancelled" : "failed";
-    guarded(() => deps.ledger.terminateRun(run.runId, state, run.signal.aborted ? abortReason() : "executor-fault"), undefined);
+    guarded(
+      () =>
+        deps.ledger.terminateRun(
+          run.runId,
+          state,
+          run.signal.aborted ? abortReason() : "executor-fault",
+        ),
+      undefined,
+    );
     return state;
   }
   const state = summarizeRunState(run.plan, states, run.signal.aborted);
-  guarded(() => deps.ledger.finishRun(run.runId, state, run.signal.aborted ? abortReason() : undefined), undefined);
+  guarded(
+    () => deps.ledger.finishRun(run.runId, state, run.signal.aborted ? abortReason() : undefined),
+    undefined,
+  );
   return state;
 }

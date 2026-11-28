@@ -17,7 +17,10 @@ test("hybrid applies only when the shortcut can report releases", () => {
   assert.equal(resolveDictationActivationMode(hybrid), "hybrid");
   assert.equal(resolveDictationActivationMode(hybrid, false), "toggle");
   assert.equal(
-    resolveDictationActivationMode({ dictationHoldToTalk: false, dictationActivationMode: "hybrid" }),
+    resolveDictationActivationMode({
+      dictationHoldToTalk: false,
+      dictationActivationMode: "hybrid",
+    }),
     "toggle",
     "a portal that could not bind a hold shortcut falls back to toggle",
   );

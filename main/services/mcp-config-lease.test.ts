@@ -46,9 +46,11 @@ test("abort observers synchronously acquire the already-published replacement ep
 test("epoch exhaustion is rejected before aborting the current lease", () => {
   const registry = new McpConfigurationLeaseRegistry();
   const controller = new AbortController();
-  const entries = (registry as unknown as {
-    entries: Map<string, { epoch: number; controller: AbortController }>;
-  }).entries;
+  const entries = (
+    registry as unknown as {
+      entries: Map<string, { epoch: number; controller: AbortController }>;
+    }
+  ).entries;
   entries.set("server-1", { epoch: Number.MAX_SAFE_INTEGER, controller });
   const lease = registry.acquire("server-1");
   assert.throws(() => registry.invalidate("server-1"), /epoch was exhausted/u);
@@ -94,11 +96,7 @@ test("two-sided publication invalidates a lease acquired while commit awaits", a
   const paused = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const publication = withMcpConfigurationPublication(
-    "server-1",
-    () => paused,
-    registry,
-  );
+  const publication = withMcpConfigurationPublication("server-1", () => paused, registry);
   const duringCommit = registry.acquire("server-1");
   duringCommit.assertCurrent();
   release();

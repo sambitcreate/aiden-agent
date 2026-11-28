@@ -6,11 +6,16 @@
 import type { BotDefinition } from "../../shared/bots";
 
 /** On only when the Bot both receives and sends. */
-export function botMessagingSwitchOn(bot: Pick<BotDefinition, "acceptsBotMessages" | "messagesOtherBots">): boolean {
+export function botMessagingSwitchOn(
+  bot: Pick<BotDefinition, "acceptsBotMessages" | "messagesOtherBots">,
+): boolean {
   return bot.acceptsBotMessages !== false && bot.messagesOtherBots !== false;
 }
 
 /** What the switch saves: both directions at once. */
-export function botMessagingPatch(on: boolean): { acceptsBotMessages: boolean; messagesOtherBots: boolean } {
+export function botMessagingPatch(on: boolean): {
+  acceptsBotMessages: boolean;
+  messagesOtherBots: boolean;
+} {
   return { acceptsBotMessages: on, messagesOtherBots: on };
 }

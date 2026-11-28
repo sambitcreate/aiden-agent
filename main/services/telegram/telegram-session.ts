@@ -23,7 +23,5 @@ const CLOSED_REASON_COPY: Record<
 
 /** Convert the content-free lifecycle result into Telegram-owned presentation copy. */
 export function telegramCompactionResult(result: CompactChatResult): TelegramCompactionResult {
-  return result.compacted
-    ? result
-    : { compacted: false, error: CLOSED_REASON_COPY[result.reason] };
+  return result.compacted ? result : { compacted: false, error: CLOSED_REASON_COPY[result.reason] };
 }

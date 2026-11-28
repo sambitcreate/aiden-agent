@@ -5,4 +5,5 @@ import { ComposerDeliveryRegistry } from "./composer-delivery";
 export class BrowserAnnotationDeliveryRegistry extends ComposerDeliveryRegistry<BrowserAnnotation> {}
 
 export const browserAnnotationDelivery = new BrowserAnnotationDeliveryRegistry();
-export const BROWSER_ANNOTATION_UNAVAILABLE = "The chat composer is not available. Finish the current question or return to a chat, then add this annotation again. Your selection is kept here.";
+export const BROWSER_ANNOTATION_UNAVAILABLE =
+  "The chat composer is not available. Finish the current question or return to a chat, then add this annotation again. Your selection is kept here.";

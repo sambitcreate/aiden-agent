@@ -17,7 +17,9 @@ interface ReasoningBlockProps {
 
 /** Folding motion is opt-in on the document, like the CSS that eases it. */
 function disclosureMotionAllowed(): boolean {
-  return typeof document !== "undefined" && document.documentElement.dataset.reduceMotion === "false";
+  return (
+    typeof document !== "undefined" && document.documentElement.dataset.reduceMotion === "false"
+  );
 }
 
 /**
@@ -38,8 +40,10 @@ export function ReasoningBlock({
   const expanded = phase === "open";
   const readable = Boolean(content.trim());
   const regionLabel = label === "Thinking" ? "Model reasoning" : label;
-  const { sectionRef, headerRef, noteCollapse, restoreAfterCollapse } =
-    useStickySectionCollapse<HTMLElement, HTMLButtonElement>();
+  const { sectionRef, headerRef, noteCollapse, restoreAfterCollapse } = useStickySectionCollapse<
+    HTMLElement,
+    HTMLButtonElement
+  >();
 
   // The live line keeps its last text once thinking ends so it can fade out
   // in place; stored reasoning never showed one.
@@ -82,7 +86,12 @@ export function ReasoningBlock({
         }}
         className="transcript-sticky-header flex h-9 w-full items-center gap-2.5 rounded-card px-3 text-left text-small-strong text-secondary outline-none transition-[background-color,color,box-shadow] duration-150 ease-out enabled:hover:text-primary focus-visible:outline-none disabled:cursor-default"
       >
-        <span ref={active ? pauseWhenUnseen : undefined} className={cn("shrink-0", active && "agent-thinking-shimmer")}>{label}</span>
+        <span
+          ref={active ? pauseWhenUnseen : undefined}
+          className={cn("shrink-0", active && "agent-thinking-shimmer")}
+        >
+          {label}
+        </span>
         <span
           aria-hidden="true"
           className={cn(
@@ -111,7 +120,10 @@ export function ReasoningBlock({
           className="reasoning-body"
           data-state={phase}
           onTransitionEnd={(event) => {
-            if (event.target === event.currentTarget && event.propertyName === "grid-template-rows") {
+            if (
+              event.target === event.currentTarget &&
+              event.propertyName === "grid-template-rows"
+            ) {
               dispatchPhase({ type: "closed" });
             }
           }}

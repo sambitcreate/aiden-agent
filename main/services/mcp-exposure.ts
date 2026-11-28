@@ -3,7 +3,11 @@
 // built; "Always visible" servers stay declared in codemode turns.
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { mcpServerExposure, mcpToolsOfferedToModel, type McpExposure } from "../../renderer/shared/mcp-exposure.js";
+import {
+  mcpServerExposure,
+  mcpToolsOfferedToModel,
+  type McpExposure,
+} from "../../renderer/shared/mcp-exposure.js";
 
 export interface McpServerExposurePlan<T> {
   /** The inventory entries to build agent tools for. */
@@ -38,5 +42,9 @@ export function markMcpToolExposure<T extends AgentTool>(
   discovery: object,
   plan: Pick<McpServerExposurePlan<unknown>, "alwaysDeclared">,
 ): T {
-  return Object.assign(tool, { codemode: true, discovery, ...(plan.alwaysDeclared ? { alwaysDeclared: true } : {}) });
+  return Object.assign(tool, {
+    codemode: true,
+    discovery,
+    ...(plan.alwaysDeclared ? { alwaysDeclared: true } : {}),
+  });
 }

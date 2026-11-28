@@ -101,19 +101,19 @@ A finished `svg` code block in a reply has **View** beside **Copy**. It opens th
 
 An HTML preview starts from a style sheet built from your Appearance settings, so a page with no styles of its own looks like the rest of Aiden: the theme's canvas, text and accent colors, your interface and code fonts, and your text size. Every rule sits under `:where()`, which has zero specificity, so any style the page sets for itself wins. Changing the theme reloads the preview. The variables have the same names as on the desktop:
 
-| Variable | Value |
-| --- | --- |
-| `--surface-background` | The theme's canvas |
-| `--surface-popover` | The raised surface |
-| `--text-primary` | Primary text |
-| `--text-secondary` | Secondary text |
-| `--border-separator` | Primary text at 8.7% opacity |
-| `--accent` | The accent, for links and marks |
-| `--fill-accent` | The accent fill for labelled buttons |
-| `--fill-accent-foreground` | Text on `--fill-accent` |
-| `--font-ui-family` | The interface font (System, Rounded or Humanist) |
-| `--font-code-family` | The code font (SF Mono, Menlo or Monaco) |
-| `--ui-font-size` | The body text size, which follows Dynamic Type |
+| Variable                   | Value                                            |
+| -------------------------- | ------------------------------------------------ |
+| `--surface-background`     | The theme's canvas                               |
+| `--surface-popover`        | The raised surface                               |
+| `--text-primary`           | Primary text                                     |
+| `--text-secondary`         | Secondary text                                   |
+| `--border-separator`       | Primary text at 8.7% opacity                     |
+| `--accent`                 | The accent, for links and marks                  |
+| `--fill-accent`            | The accent fill for labelled buttons             |
+| `--fill-accent-foreground` | Text on `--fill-accent`                          |
+| `--font-ui-family`         | The interface font (System, Rounded or Humanist) |
+| `--font-code-family`       | The code font (SF Mono, Menlo or Monaco)         |
+| `--ui-font-size`           | The body text size, which follows Dynamic Type   |
 
 To have an agent make pages that follow your theme, you can tell it:
 

@@ -7,14 +7,7 @@ import { LiveVoiceApprovalSettings } from "./live-voice-approval-settings";
 import { useNavigate } from "@tanstack/react-router";
 import { settingsLocation } from "../../lib/settings-section";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  CheckCircle2,
-  Clock3,
-  Mic,
-  MousePointer2,
-  Server,
-  TriangleAlert,
-} from "lucide-react";
+import { CheckCircle2, Clock3, Mic, MousePointer2, Server, TriangleAlert } from "lucide-react";
 import { assistantLiveApi, settingsApi } from "../../lib/ipc";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { queryKeys, useComputerUseStatus, useSettings, useShortcuts } from "../../lib/queries";
@@ -165,100 +158,103 @@ export function AidenLiveSettings(): React.ReactElement {
 
       {liveEnabled ? (
         <>
-        <FieldSet title="Live readiness">
-          <Field
-            label="Google Live model"
-            description={
-              live?.reason === "available"
-                ? `Using ${live.model ?? "Google Gemini"}.`
-                : "Connect a Google API key and choose an approved Live model."
-            }
-          >
-            <div className="flex items-center gap-2">
-              <StateBadge ready={liveReady} checking={live === null} />
-              <Button size="small" variant="filled" onClick={() => go("providers")}>
-                <Server />
-                Manage
-              </Button>
-            </div>
-          </Field>
-          {linuxMicrophone ? (
+          <FieldSet title="Live readiness">
             <Field
-              label="Microphone"
-              description="Linux doesn’t ask apps for microphone permission. Used only while a Live session is open."
-            >
-              <StateBadge ready />
-            </Field>
-          ) : (
-            <Field label="Microphone" description="Used only while a Live session is open.">
-              <div className="flex items-center gap-2">
-                <StateBadge
-                  ready={microphone === "granted"}
-                  checking={microphone === null}
-                  unknown={microphone === "unknown"}
-                />
-                <Button size="small" variant="filled" onClick={() => void requestMicrophone()}>
-                  <Mic />
-                  Allow
-                </Button>
-              </div>
-            </Field>
-          )}
-          {capabilities.computerUse ? (
-            <Field
-              label="Screen and Accessibility"
-              description={`Optional, to let Live use other apps. ${computerUse.data?.detail ?? "Checking the signed Computer Use helper."}`}
+              label="Google Live model"
+              description={
+                live?.reason === "available"
+                  ? `Using ${live.model ?? "Google Gemini"}.`
+                  : "Connect a Google API key and choose an approved Live model."
+              }
             >
               <div className="flex items-center gap-2">
-                <StateBadge ready={computerUse.data?.ready === true} checking={computerUse.isLoading} />
-                <Button size="small" variant="filled" onClick={() => go("computerUse")}>
-                  <MousePointer2 />
+                <StateBadge ready={liveReady} checking={live === null} />
+                <Button size="small" variant="filled" onClick={() => go("providers")}>
+                  <Server />
                   Manage
                 </Button>
               </div>
             </Field>
-          ) : null}
-        </FieldSet>
+            {linuxMicrophone ? (
+              <Field
+                label="Microphone"
+                description="Linux doesn’t ask apps for microphone permission. Used only while a Live session is open."
+              >
+                <StateBadge ready />
+              </Field>
+            ) : (
+              <Field label="Microphone" description="Used only while a Live session is open.">
+                <div className="flex items-center gap-2">
+                  <StateBadge
+                    ready={microphone === "granted"}
+                    checking={microphone === null}
+                    unknown={microphone === "unknown"}
+                  />
+                  <Button size="small" variant="filled" onClick={() => void requestMicrophone()}>
+                    <Mic />
+                    Allow
+                  </Button>
+                </div>
+              </Field>
+            )}
+            {capabilities.computerUse ? (
+              <Field
+                label="Screen and Accessibility"
+                description={`Optional, to let Live use other apps. ${computerUse.data?.detail ?? "Checking the signed Computer Use helper."}`}
+              >
+                <div className="flex items-center gap-2">
+                  <StateBadge
+                    ready={computerUse.data?.ready === true}
+                    checking={computerUse.isLoading}
+                  />
+                  <Button size="small" variant="filled" onClick={() => go("computerUse")}>
+                    <MousePointer2 />
+                    Manage
+                  </Button>
+                </div>
+              </Field>
+            ) : null}
+          </FieldSet>
 
-        <LiveAudioSettings />
-        <AidenLiveVoiceAndLook />
-        <LiveChatAccessSettings />
-        <LiveVoiceApprovalSettings />
+          <LiveAudioSettings />
+          <AidenLiveVoiceAndLook />
+          <LiveChatAccessSettings />
+          <LiveVoiceApprovalSettings />
 
-        <LiveAppControlSettings />
+          <LiveAppControlSettings />
 
-        <FieldSet title="Actions">
-          <Field
-            label="Scheduled tasks"
-            description="Create or review one-time and recurring work through Aiden’s existing scheduled-task interface."
-          >
-            <div className="flex items-center gap-2">
-              <Badge color={scheduledTasksOn ? "green" : undefined}>
-                {scheduledTasksOn ? "On" : "Off"}
-              </Badge>
-              <Button size="small" variant="filled" onClick={() => go("scheduledTasks")}>
-                <Clock3 />
-                Review
-              </Button>
-            </div>
-          </Field>
-          <Field
-            label="Global shortcut"
-            description="The Aiden shortcut now opens setup, starts Live, or reveals the active Live controls."
-          >
-            <div className="flex items-center gap-2">
-              {shortcut?.state === "active" ? (
-                <CheckCircle2 className="size-4 text-support-green" />
-              ) : (
-                <TriangleAlert className="size-4 text-support-warning" />
-              )}
-              <Badge>{shortcut?.state === "active" ? "Active" : "Not active"}</Badge>
-              <Button size="small" variant="filled" onClick={() => go("shortcut")}>
-                Manage
-              </Button>
-            </div>
-          </Field>
-        </FieldSet>
+          <FieldSet title="Actions">
+            <Field
+              label="Scheduled tasks"
+              description="Create or review one-time and recurring work through Aiden’s existing scheduled-task interface."
+            >
+              <div className="flex items-center gap-2">
+                <Badge color={scheduledTasksOn ? "green" : undefined}>
+                  {scheduledTasksOn ? "On" : "Off"}
+                </Badge>
+                <Button size="small" variant="filled" onClick={() => go("scheduledTasks")}>
+                  <Clock3 />
+                  Review
+                </Button>
+              </div>
+            </Field>
+            <Field
+              label="Global shortcut"
+              description="The Aiden shortcut now opens setup, starts Live, or reveals the active Live controls."
+            >
+              <div className="flex items-center gap-2">
+                {shortcut?.state === "active" ? (
+                  <CheckCircle2 className="size-4 text-support-green" />
+                ) : (
+                  <TriangleAlert className="size-4 text-support-warning" />
+                )}
+                <Badge>{shortcut?.state === "active" ? "Active" : "Not active"}</Badge>
+                <Button size="small" variant="filled" onClick={() => go("shortcut")}>
+                  Manage
+                </Button>
+              </div>
+            </Field>
+          </FieldSet>
         </>
       ) : null}
     </>

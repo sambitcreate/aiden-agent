@@ -57,7 +57,11 @@ export function webpContainerBytes(chunks: Array<{ type: string; data: Buffer }>
 }
 
 /** Minimal lossless (VP8L) or lossy (VP8) WebP carrying only the header dimensions. */
-export function webpBytes(width: number, height: number, format: "VP8L" | "VP8" = "VP8L"): Uint8Array {
+export function webpBytes(
+  width: number,
+  height: number,
+  format: "VP8L" | "VP8" = "VP8L",
+): Uint8Array {
   if (format === "VP8L") {
     const data = Buffer.alloc(6);
     data[0] = 0x2f;

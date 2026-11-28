@@ -3,8 +3,7 @@ import { localComputerNoun } from "../../../renderer/shared/computer-noun.js";
 import type { TelegramBotBindingSnapshot } from "./telegram-queue.js";
 
 export const TELEGRAM_BOT_BINDING_VALIDATION_COPY = Object.freeze({
-  temporarilyUnavailable:
-    `This bot is temporarily unavailable. Open Aiden on your ${localComputerNoun(process.platform)} to repair it.`,
+  temporarilyUnavailable: `This bot is temporarily unavailable. Open Aiden on your ${localComputerNoun(process.platform)} to repair it.`,
   unavailableOrArchived: "This bot is unavailable or archived.",
   bindingChanged: "This Telegram bot binding has changed or was disabled.",
   conversationMismatch:
@@ -18,9 +17,7 @@ export interface TelegramBotBindingValidationDependencies {
   getBot(botId: string): Promise<{ id: string } | null>;
   getProfileOwnerUserId(profile: string): Promise<number | undefined>;
   getActiveBinding(botId: string): Promise<TelegramBotBinding | null>;
-  resolveManagedWorkspace(
-    botId: string,
-  ): Promise<{ botId: string; workspaceId: string }>;
+  resolveManagedWorkspace(botId: string): Promise<{ botId: string; workspaceId: string }>;
   getChatAccess(chatId: string): Promise<{ botId: string; chatId: string }>;
 }
 
@@ -30,14 +27,14 @@ function sameActiveBinding(
 ): boolean {
   return Boolean(
     actual?.enabled === true &&
-      actual.botId === expected.botId &&
-      actual.profile === expected.profile &&
-      actual.chatId === expected.chatId &&
-      actual.threadId === expected.threadId &&
-      actual.ownerUserId === expected.ownerUserId &&
-      actual.workspaceId === expected.workspaceId &&
-      actual.backingWorkspaceId === expected.backingWorkspaceId &&
-      actual.backingChatId === expected.backingChatId,
+    actual.botId === expected.botId &&
+    actual.profile === expected.profile &&
+    actual.chatId === expected.chatId &&
+    actual.threadId === expected.threadId &&
+    actual.ownerUserId === expected.ownerUserId &&
+    actual.workspaceId === expected.workspaceId &&
+    actual.backingWorkspaceId === expected.backingWorkspaceId &&
+    actual.backingChatId === expected.backingChatId,
   );
 }
 
@@ -53,25 +50,18 @@ export function createTelegramBotBindingValidator(
     binding: TelegramBotBindingSnapshot,
   ): Promise<TelegramBotBindingValidationResult> => {
     let bot: Awaited<ReturnType<typeof dependencies.getBot>>;
-    let ownerUserId: Awaited<
-      ReturnType<typeof dependencies.getProfileOwnerUserId>
-    >;
-    let activeBinding: Awaited<
-      ReturnType<typeof dependencies.getActiveBinding>
-    >;
-    let managedWorkspace: Awaited<
-      ReturnType<typeof dependencies.resolveManagedWorkspace>
-    >;
+    let ownerUserId: Awaited<ReturnType<typeof dependencies.getProfileOwnerUserId>>;
+    let activeBinding: Awaited<ReturnType<typeof dependencies.getActiveBinding>>;
+    let managedWorkspace: Awaited<ReturnType<typeof dependencies.resolveManagedWorkspace>>;
     let access: Awaited<ReturnType<typeof dependencies.getChatAccess>>;
     try {
-      [bot, ownerUserId, activeBinding, managedWorkspace, access] =
-        await Promise.all([
-          dependencies.getBot(binding.botId),
-          dependencies.getProfileOwnerUserId(binding.profile),
-          dependencies.getActiveBinding(binding.botId),
-          dependencies.resolveManagedWorkspace(binding.botId),
-          dependencies.getChatAccess(binding.backingChatId),
-        ]);
+      [bot, ownerUserId, activeBinding, managedWorkspace, access] = await Promise.all([
+        dependencies.getBot(binding.botId),
+        dependencies.getProfileOwnerUserId(binding.profile),
+        dependencies.getActiveBinding(binding.botId),
+        dependencies.resolveManagedWorkspace(binding.botId),
+        dependencies.getChatAccess(binding.backingChatId),
+      ]);
     } catch {
       return TELEGRAM_BOT_BINDING_VALIDATION_COPY.temporarilyUnavailable;
     }

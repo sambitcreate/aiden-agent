@@ -48,7 +48,10 @@ export function ComposerHistoryPopoverPresence({
   if (!rendered || (!present && immediate)) return null;
   const content = present ? children : lastContentRef.current;
   return content
-    ? React.cloneElement(content, { presenceState: exiting ? "exiting" : "visible", presenceRef: ref })
+    ? React.cloneElement(content, {
+        presenceState: exiting ? "exiting" : "visible",
+        presenceRef: ref,
+      })
     : null;
 }
 
@@ -171,19 +174,14 @@ export function ComposerHistoryPopover({
                 </span>
               ) : null}
               {timeLabel ? (
-                <span className="shrink-0 text-mini text-tertiary tabular-nums">
-                  {timeLabel}
-                </span>
+                <span className="shrink-0 text-mini text-tertiary tabular-nums">{timeLabel}</span>
               ) : null}
             </div>
           );
         })}
       </div>
       {activeEntry ? (
-        <div
-          data-composer-history-reply
-          className="border-t border-separator bg-input px-3 py-2"
-        >
+        <div data-composer-history-reply className="border-t border-separator bg-input px-3 py-2">
           <div className="flex items-center justify-between gap-2">
             <span className="flex min-w-0 items-center gap-1.5 text-mini text-tertiary">
               <CornerDownRight aria-hidden="true" className="size-3 shrink-0" />

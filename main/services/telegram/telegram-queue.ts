@@ -74,9 +74,13 @@ export interface QueuedTelegramTurn {
 }
 
 export function assertTelegramQueueCapacity(turns: readonly QueuedTelegramTurn[]): void {
-  if (turns.length > MAX_TELEGRAM_QUEUE_TURNS ||
-    Buffer.byteLength(JSON.stringify(turns), "utf8") > MAX_TELEGRAM_QUEUE_BYTES) {
-    throw new TelegramQueueCapacityError("The Telegram queue is full. Remove a queued prompt or use /stop before sending more.");
+  if (
+    turns.length > MAX_TELEGRAM_QUEUE_TURNS ||
+    Buffer.byteLength(JSON.stringify(turns), "utf8") > MAX_TELEGRAM_QUEUE_BYTES
+  ) {
+    throw new TelegramQueueCapacityError(
+      "The Telegram queue is full. Remove a queued prompt or use /stop before sending more.",
+    );
   }
 }
 
@@ -93,9 +97,10 @@ export function createTelegramQueue(deps: TelegramQueueDependencies) {
   let nextId = 1;
 
   function enqueue(turn: QueuedTelegramTurn): QueuedTelegramTurn {
-    const duplicate = turn.sourceMessageId === undefined ? undefined : findBySource(
-      turn.chatId, turn.sourceMessageId, turn.threadId, turn.binding,
-    );
+    const duplicate =
+      turn.sourceMessageId === undefined
+        ? undefined
+        : findBySource(turn.chatId, turn.sourceMessageId, turn.threadId, turn.binding);
     if (duplicate) return duplicate;
     assertTelegramQueueCapacity([...list(), turn]);
     const accepted = turn.id === undefined ? { ...turn, id: nextId++ } : turn;
@@ -164,18 +169,19 @@ export function createTelegramQueue(deps: TelegramQueueDependencies) {
     threadId?: number,
     binding?: TelegramBotBindingSnapshot,
   ): QueuedTelegramTurn | undefined {
-    return list().find((turn) =>
-      turn.chatId === chatId &&
-      turn.sourceMessageId === messageId &&
-      turn.threadId === threadId &&
-      (binding === undefined
-        ? turn.binding === undefined
-        : turn.binding?.botId === binding.botId &&
-          turn.binding.profile === binding.profile &&
-          turn.binding.chatId === binding.chatId &&
-          turn.binding.threadId === binding.threadId &&
-          turn.binding.ownerUserId === binding.ownerUserId &&
-          turn.binding.backingChatId === binding.backingChatId)
+    return list().find(
+      (turn) =>
+        turn.chatId === chatId &&
+        turn.sourceMessageId === messageId &&
+        turn.threadId === threadId &&
+        (binding === undefined
+          ? turn.binding === undefined
+          : turn.binding?.botId === binding.botId &&
+            turn.binding.profile === binding.profile &&
+            turn.binding.chatId === binding.chatId &&
+            turn.binding.threadId === binding.threadId &&
+            turn.binding.ownerUserId === binding.ownerUserId &&
+            turn.binding.backingChatId === binding.backingChatId),
     );
   }
 
@@ -200,8 +206,15 @@ export function createTelegramQueue(deps: TelegramQueueDependencies) {
       const index = lane.findIndex((turn) => turn.id === id);
       if (index < 0) continue;
       const updated = { ...replacement, id, lane: lane[index]!.lane };
-      if (Buffer.byteLength(JSON.stringify(list().map((turn) => turn.id === id ? updated : turn)), "utf8") > MAX_TELEGRAM_QUEUE_BYTES) {
-        throw new TelegramQueueCapacityError("The Telegram queue is full. Remove attachments before editing this prompt.");
+      if (
+        Buffer.byteLength(
+          JSON.stringify(list().map((turn) => (turn.id === id ? updated : turn))),
+          "utf8",
+        ) > MAX_TELEGRAM_QUEUE_BYTES
+      ) {
+        throw new TelegramQueueCapacityError(
+          "The Telegram queue is full. Remove attachments before editing this prompt.",
+        );
       }
       lane[index] = updated;
       return true;
@@ -214,7 +227,21 @@ export function createTelegramQueue(deps: TelegramQueueDependencies) {
     return control.splice(0, control.length);
   }
 
-  return { enqueue, dequeue, peek, size, isEmpty, clear, list, find, findBySource, remove, replace, setPriority, drainControl };
+  return {
+    enqueue,
+    dequeue,
+    peek,
+    size,
+    isEmpty,
+    clear,
+    list,
+    find,
+    findBySource,
+    remove,
+    replace,
+    setPriority,
+    drainControl,
+  };
 }
 
 export interface TelegramQueue {

@@ -34,7 +34,11 @@ export type LiveRendererToolHandler = (
 ) => Promise<LiveRendererToolResult> | LiveRendererToolResult;
 
 export interface LiveSessionTransport {
-  toolResult(sessionId: string, requestId: string, response: LiveRendererToolResult): Promise<boolean>;
+  toolResult(
+    sessionId: string,
+    requestId: string,
+    response: LiveRendererToolResult,
+  ): Promise<boolean>;
   note(sessionId: string, text: string, options?: LiveNoteOptions): Promise<boolean>;
 }
 
@@ -72,7 +76,10 @@ export class LiveSessionBus {
   private readonly voiceListeners = new Set<Listener<LiveVoiceInput>>();
   private readonly fenceListeners = new Set<Listener<number>>();
   private readonly tools = new Map<string, LiveRendererToolHandler>();
-  private readonly inFlight = new Map<string, { abort: AbortController; committed: boolean; reported: boolean }>();
+  private readonly inFlight = new Map<
+    string,
+    { abort: AbortController; committed: boolean; reported: boolean }
+  >();
   private lastVoiceInputId = 0;
   private lastVoiceStart = 0;
 
@@ -122,7 +129,11 @@ export class LiveSessionBus {
 
   /** Publishes a finished utterance; without a start mark it counts as starting now. */
   publishVoiceInput(text: string, startedAt?: number): LiveVoiceInput {
-    const input = { id: ++this.lastVoiceInputId, startedAt: startedAt ?? this.beginVoiceInput(), text };
+    const input = {
+      id: ++this.lastVoiceInputId,
+      startedAt: startedAt ?? this.beginVoiceInput(),
+      text,
+    };
     for (const listener of [...this.voiceListeners]) listener(input);
     return input;
   }
@@ -138,7 +149,9 @@ export class LiveSessionBus {
     const transport = this.transport;
     if (!sessionId || !transport) return false;
     try {
-      return await (options ? transport.note(sessionId, text, options) : transport.note(sessionId, text));
+      return await (options
+        ? transport.note(sessionId, text, options)
+        : transport.note(sessionId, text));
     } catch {
       return false;
     }
@@ -255,7 +268,12 @@ export class LiveSessionBus {
     this.inFlight.delete(requestId);
     const transport = this.transport;
     if (transport) {
-      void this.report(transport, sessionId, requestId, toolError("cancelled", "The request was cancelled."));
+      void this.report(
+        transport,
+        sessionId,
+        requestId,
+        toolError("cancelled", "The request was cancelled."),
+      );
     }
   }
 

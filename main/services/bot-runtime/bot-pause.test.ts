@@ -10,13 +10,25 @@ import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { build } from "esbuild";
 import { getCurrentSystemPrompt, type Message } from "@earendil-works/pi-ai";
-import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
+import {
+  fauxAssistantMessage,
+  fauxToolCall,
+  type FauxResponseStep,
+} from "@earendil-works/pi-ai/providers/faux";
 import { BOT_MEMORY_REVIEW_ENTRY_KIND } from "../../../renderer/shared/bot-memory.js";
-import { applyBotLiveEvent, type BotLiveEvent, type BotLiveSnapshot } from "../../../renderer/shared/bot-live.js";
+import {
+  applyBotLiveEvent,
+  type BotLiveEvent,
+  type BotLiveSnapshot,
+} from "../../../renderer/shared/bot-live.js";
 import { createBotMemoryReview } from "../bot-memory/review.js";
 import { createBotMemoryService } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
-import { createBotPauseStore, type BotPauseRecord, type BotPauseStore } from "../bot-pause-store.js";
+import {
+  createBotPauseStore,
+  type BotPauseRecord,
+  type BotPauseStore,
+} from "../bot-pause-store.js";
 import { SUGGEST_CONNECTION_TOOL_NAME } from "../bot-runtime-tools/suggest-connection.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
 import { runBotPauseSteps } from "./bot-pause-steps.js";
@@ -43,7 +55,12 @@ import {
   waitFor,
   type FauxModels,
 } from "./test-support/faux.js";
-import { optionAnswer, QUESTION_ARGS, QUESTION_TOOL_NAME, questionEntries } from "./test-support/question-fixtures.js";
+import {
+  optionAnswer,
+  QUESTION_ARGS,
+  QUESTION_TOOL_NAME,
+  questionEntries,
+} from "./test-support/question-fixtures.js";
 
 const roots: string[] = [];
 function tempProfile(): string {
@@ -83,11 +100,18 @@ function refusedWhilePaused(error: unknown): boolean {
 }
 
 /** Start a long streaming reply and wait until the provider is answering it. */
-async function streaming(service: BotSessionRuntime, fauxModels: FauxModels, requestId = "desk-1"): Promise<string> {
+async function streaming(
+  service: BotSessionRuntime,
+  fauxModels: FauxModels,
+  requestId = "desk-1",
+): Promise<string> {
   const { submissionId } = await service.send(BOT, { text: "write a lot", requestId });
-  await waitFor(async () => (await service.state(BOT)).kind === "running" && fauxModels.calls() === 1, {
-    what: "the reply to start",
-  });
+  await waitFor(
+    async () => (await service.state(BOT)).kind === "running" && fauxModels.calls() === 1,
+    {
+      what: "the reply to start",
+    },
+  );
   return submissionId;
 }
 
@@ -99,7 +123,9 @@ const pausedAt = (submissionId?: string): BotSessionState => ({
 });
 
 test("pausing while a reply streams leaves it interrupted under the pause and runs nothing more", async () => {
-  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], {
+    tokensPerSecond: 40,
+  });
   const published: BotSessionState[] = [];
   const order: string[] = [];
   const service = await serviceFor(tempProfile(), fauxModels, {
@@ -112,9 +138,21 @@ test("pausing while a reply streams leaves it interrupted under the pause and ru
     const waiting = service.awaitReply(BOT, submissionId, never());
 
     assert.deepEqual(await service.pause(BOT, "mac"), pausedAt(submissionId));
-    assert.deepEqual(order, ["onPaused", "afterPaused:1"], "hooks run before and after the turn is closed");
-    assert.deepEqual(published[published.length - 1], pausedAt(submissionId), "the paused state is published");
-    assert.deepEqual(await waiting, { kind: "interrupted" }, "a waiting reply is interrupted, not settled");
+    assert.deepEqual(
+      order,
+      ["onPaused", "afterPaused:1"],
+      "hooks run before and after the turn is closed",
+    );
+    assert.deepEqual(
+      published[published.length - 1],
+      pausedAt(submissionId),
+      "the paused state is published",
+    );
+    assert.deepEqual(
+      await waiting,
+      { kind: "interrupted" },
+      "a waiting reply is interrupted, not settled",
+    );
     assert.deepEqual(await service.awaitReply(BOT, submissionId, never()), { kind: "interrupted" });
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(fauxModels.calls(), 1, "a paused Bot makes no provider request");
@@ -125,7 +163,9 @@ test("pausing while a reply streams leaves it interrupted under the pause and ru
 });
 
 test("a pause whose session can't reopen still stops the Bot's other work and tells every window it is paused", async () => {
-  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], {
+    tokensPerSecond: 40,
+  });
   const published: BotSessionState[] = [];
   const reports: unknown[] = [];
   const order: string[] = [];
@@ -143,9 +183,21 @@ test("a pause whose session can't reopen still stops the Bot's other work and te
   });
   try {
     await streaming(service, fauxModels);
-    assert.deepEqual(await service.pause(BOT, "mac"), pausedAt(), "the pause answers, with no turn it could read back");
-    assert.deepEqual(order, ["afterPaused"], "the Bot's computer and legacy chats are still stopped");
-    assert.deepEqual(published[published.length - 1], pausedAt(), "every window hears the Bot is paused");
+    assert.deepEqual(
+      await service.pause(BOT, "mac"),
+      pausedAt(),
+      "the pause answers, with no turn it could read back",
+    );
+    assert.deepEqual(
+      order,
+      ["afterPaused"],
+      "the Bot's computer and legacy chats are still stopped",
+    );
+    assert.deepEqual(
+      published[published.length - 1],
+      pausedAt(),
+      "every window hears the Bot is paused",
+    );
     assert.ok(reports.includes(reopenFailure), "the failure is reported");
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(fauxModels.calls(), 1, "nothing runs");
@@ -169,9 +221,17 @@ test("a connect card the Bot is suggesting as it pauses never wedges it: the pau
     isDismissed: async () => false,
   });
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall(SUGGEST_CONNECTION_TOOL_NAME, { pluginId: "gmail", reason: "To read your mail." })], {
-      stopReason: "toolUse",
-    }),
+    fauxAssistantMessage(
+      [
+        fauxToolCall(SUGGEST_CONNECTION_TOOL_NAME, {
+          pluginId: "gmail",
+          reason: "To read your mail.",
+        }),
+      ],
+      {
+        stopReason: "toolUse",
+      },
+    ),
     fauxAssistantMessage("never"),
     fauxAssistantMessage("Hello again."),
   ]);
@@ -194,7 +254,9 @@ test("a connect card the Bot is suggesting as it pauses never wedges it: the pau
   const within = <T>(work: Promise<T>, what: string) =>
     Promise.race([
       work,
-      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error(`${what} never finished`)), 5_000)),
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error(`${what} never finished`)), 5_000),
+      ),
     ]);
   try {
     await service.send(BOT, { text: "check my mail", requestId: "desk-1" });
@@ -233,11 +295,18 @@ test("pausing while a tool is running closes the turn; unpause and Resume finish
 
     assert.deepEqual(await service.pause(BOT, "mac"), pausedAt(submissionId));
     assert.deepEqual(await service.unpause(BOT), { kind: "interrupted", submissionId });
-    assert.deepEqual(unpaused, [{ since: 1_000, by: "mac" }], "the cleared pause reaches the unpause hook");
+    assert.deepEqual(
+      unpaused,
+      [{ since: 1_000, by: "mac" }],
+      "the cleared pause reaches the unpause hook",
+    );
     assert.equal(fauxModels.calls(), 1, "unpausing alone runs nothing");
 
     await service.resume(BOT, "resume-1");
-    assert.deepEqual(await service.awaitReply(BOT, submissionId, never()), { kind: "completed", text: "done after resume" });
+    assert.deepEqual(await service.awaitReply(BOT, submissionId, never()), {
+      kind: "completed",
+      text: "done after resume",
+    });
     assert.equal(tool.executions.length, 2, "the interrupted tool call runs again after Resume");
   } finally {
     await service.shutdown();
@@ -245,7 +314,10 @@ test("pausing while a tool is running closes the turn; unpause and Resume finish
 });
 
 test("while paused, sends, Resume, Dismiss and compaction are refused, and a redelivered request still dedupes", async () => {
-  const fauxModels = createFauxModels([fauxAssistantMessage("hello back"), fauxAssistantMessage("never")]);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage("hello back"),
+    fauxAssistantMessage("never"),
+  ]);
   const service = await serviceFor(tempProfile(), fauxModels);
   try {
     const first = await service.send(BOT, { text: "hello", requestId: "tg:1:2:0:3" });
@@ -256,7 +328,10 @@ test("while paused, sends, Resume, Dismiss and compaction are refused, and a red
       submissionId: first.submissionId,
       deduped: true,
     });
-    await assert.rejects(service.send(BOT, { text: "more", requestId: "desk-2" }), refusedWhilePaused);
+    await assert.rejects(
+      service.send(BOT, { text: "more", requestId: "desk-2" }),
+      refusedWhilePaused,
+    );
     await assert.rejects(service.resume(BOT, "resume-1"), refusedWhilePaused);
     await assert.rejects(service.dismiss(BOT, "dismiss-1"), refusedWhilePaused);
     await assert.rejects(service.compact(BOT), refusedWhilePaused);
@@ -268,7 +343,10 @@ test("while paused, sends, Resume, Dismiss and compaction are refused, and a red
 
     assert.equal((await service.unpause(BOT)).kind, "idle");
     const after = await service.send(BOT, { text: "more", requestId: "desk-2" });
-    assert.deepEqual(await service.awaitReply(BOT, after.submissionId, never()), { kind: "completed", text: "never" });
+    assert.deepEqual(await service.awaitReply(BOT, after.submissionId, never()), {
+      kind: "completed",
+      text: "never",
+    });
   } finally {
     await service.shutdown();
   }
@@ -277,7 +355,9 @@ test("while paused, sends, Resume, Dismiss and compaction are refused, and a red
 test("pausing again keeps the first time and origin, and unpausing twice is harmless", async () => {
   let clock = 1_000;
   const profile = tempProfile();
-  const service = await serviceFor(profile, createFauxModels(), { pauses: pauseStore(profile, () => clock) });
+  const service = await serviceFor(profile, createFauxModels(), {
+    pauses: pauseStore(profile, () => clock),
+  });
   try {
     assert.deepEqual(await service.pause(BOT, "mac"), pausedAt());
     clock = 9_000;
@@ -299,10 +379,16 @@ test("a pause survives a restart, with its interrupted turn still waiting undern
 
   const later = createFauxModels([fauxAssistantMessage("picked up")]);
   const published: BotSessionState[] = [];
-  const service = await serviceFor(profile, later, { onStateChange: (_botId, state) => published.push(state) });
+  const service = await serviceFor(profile, later, {
+    onStateChange: (_botId, state) => published.push(state),
+  });
   try {
     await service.initialize();
-    assert.deepEqual(published, [pausedAt(submissionId)], "startup reports the Bot as paused, not interrupted");
+    assert.deepEqual(
+      published,
+      [pausedAt(submissionId)],
+      "startup reports the Bot as paused, not interrupted",
+    );
     await assert.rejects(service.resume(BOT, "resume-after-restart"), refusedWhilePaused);
     assert.equal(later.calls(), 0);
     assert.deepEqual(await service.unpause(BOT), { kind: "interrupted", submissionId });
@@ -315,7 +401,9 @@ test("a pause survives a restart, with its interrupted turn still waiting undern
 
 test("entries written while paused never start the interrupted turn, and the skipped-routines notice shows", async () => {
   const profile = tempProfile();
-  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], {
+    tokensPerSecond: 40,
+  });
   const service = await serviceFor(profile, fauxModels);
   try {
     const submissionId = await streaming(service, fauxModels);
@@ -332,10 +420,18 @@ test("entries written while paused never start the interrupted turn, and the ski
     assert.deepEqual(await service.state(BOT), pausedAt(submissionId));
 
     const view = await (await service.conversation(BOT)).context(BACKGROUND_CONTEXT);
-    const skipped = projectBotTranscript(view.entries).filter((entry) => entry.type === "routines_skipped");
+    const skipped = projectBotTranscript(view.entries).filter(
+      (entry) => entry.type === "routines_skipped",
+    );
     assert.deepEqual(
       skipped.map(({ type, since, routines }) => ({ type, since, routines })),
-      [{ type: "routines_skipped", since: 1_000, routines: [{ routineId: "r1", name: "Daily digest", count: 3 }] }],
+      [
+        {
+          type: "routines_skipped",
+          since: 1_000,
+          routines: [{ routineId: "r1", name: "Daily digest", count: 3 }],
+        },
+      ],
     );
   } finally {
     await service.shutdown();
@@ -344,7 +440,9 @@ test("entries written while paused never start the interrupted turn, and the ski
 
 test("a paused Bot can be deleted, and the delete forgets its pause", async () => {
   const profile = tempProfile();
-  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], {
+    tokensPerSecond: 40,
+  });
   const pauses = pauseStore(profile);
   const service = await serviceFor(profile, fauxModels, {
     pauses,
@@ -372,7 +470,11 @@ test("an open chat gets a new-epoch snapshot showing the Bot paused, then the sk
     onStateChange: (botId, state) => projection?.notifyState(botId, state),
     // As the desktop does: the notice is appended once the pause is cleared.
     onUnpaused: (botId, record) =>
-      service.appendEntry(botId, BOT_NOTICE_ENTRY_KIND, { notice: "routines_skipped", since: record.since, routines: skipped }),
+      service.appendEntry(botId, BOT_NOTICE_ENTRY_KIND, {
+        notice: "routines_skipped",
+        since: record.since,
+        routines: skipped,
+      }),
   });
   projection = createBotLiveProjection({
     conversation: (botId) => service.conversation(botId),
@@ -398,16 +500,34 @@ test("an open chat gets a new-epoch snapshot showing the Bot paused, then the sk
       await service.pause(BOT, "mac");
       await waitFor(() => view?.state.kind === "paused", { what: "the paused state in the chat" });
       assert.deepEqual(view!.state, pausedAt(submissionId));
-      assert.notEqual(view!.epoch, subscribed.snapshot.epoch, "the reopened session is a new epoch");
-      assert.ok(events.some((event) => event.type === "snapshot" && event.epoch !== subscribed.snapshot.epoch));
+      assert.notEqual(
+        view!.epoch,
+        subscribed.snapshot.epoch,
+        "the reopened session is a new epoch",
+      );
+      assert.ok(
+        events.some(
+          (event) => event.type === "snapshot" && event.epoch !== subscribed.snapshot.epoch,
+        ),
+      );
 
       assert.deepEqual(await service.unpause(BOT), { kind: "interrupted", submissionId });
-      await waitFor(() => view?.entries.some((entry) => entry.type === "routines_skipped") === true, {
-        what: "the skipped-routines notice in the open chat",
-      });
+      await waitFor(
+        () => view?.entries.some((entry) => entry.type === "routines_skipped") === true,
+        {
+          what: "the skipped-routines notice in the open chat",
+        },
+      );
       const notice = view!.entries.find((entry) => entry.type === "routines_skipped");
-      assert.deepEqual(notice?.type === "routines_skipped" ? [notice.since, notice.routines] : null, [1_000, skipped]);
-      assert.deepEqual(view!.state, { kind: "interrupted", submissionId }, "the notice does not start the turn");
+      assert.deepEqual(
+        notice?.type === "routines_skipped" ? [notice.since, notice.routines] : null,
+        [1_000, skipped],
+      );
+      assert.deepEqual(
+        view!.state,
+        { kind: "interrupted", submissionId },
+        "the notice does not start the turn",
+      );
       assert.equal(fauxModels.calls(), 1);
       assert.equal(gaps, 0);
     } finally {
@@ -422,28 +542,42 @@ test("an open chat gets a new-epoch snapshot showing the Bot paused, then the sk
 test("a question waiting when the Bot pauses is withdrawn, then asked again under the same waitId after Resume", async () => {
   const questions = createBotQuestions();
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("Green, noted."),
   ]);
   const service = await serviceFor(tempProfile(), fauxModels, {
     extension: recordingDeps({ tools: questionEntries(questions, BOT) }),
   });
   try {
-    const { submissionId } = await service.send(BOT, { text: "pick a colour", requestId: "desk-1" });
+    const { submissionId } = await service.send(BOT, {
+      text: "pick a colour",
+      requestId: "desk-1",
+    });
     await waitFor(() => questions.pending(BOT).length === 1, { what: "the question card" });
     const asked = questions.pending(BOT)[0]!;
 
     await service.pause(BOT, "mac");
     assert.deepEqual(questions.pending(BOT), [], "pausing withdraws the card");
-    assert.equal(questions.answer(BOT, asked.waitId, optionAnswer(asked.waitId, "Blue")), "not_waiting");
+    assert.equal(
+      questions.answer(BOT, asked.waitId, optionAnswer(asked.waitId, "Blue")),
+      "not_waiting",
+    );
 
     await service.unpause(BOT);
     assert.deepEqual(questions.pending(BOT), [], "unpausing alone asks nothing");
     await service.resume(BOT, "resume-1");
     await waitFor(() => questions.pending(BOT).length === 1, { what: "the re-asked question" });
     assert.equal(questions.pending(BOT)[0]!.waitId, asked.waitId);
-    assert.equal(questions.answer(BOT, asked.waitId, optionAnswer(asked.waitId, "Green")), "answered");
-    assert.deepEqual(await service.awaitReply(BOT, submissionId, never()), { kind: "completed", text: "Green, noted." });
+    assert.equal(
+      questions.answer(BOT, asked.waitId, optionAnswer(asked.waitId, "Green")),
+      "answered",
+    );
+    assert.deepEqual(await service.awaitReply(BOT, submissionId, never()), {
+      kind: "completed",
+      text: "Green, noted.",
+    });
     assert.equal(fauxModels.calls(), 2, "the question is not generated again");
   } finally {
     await service.shutdown();
@@ -476,15 +610,23 @@ test("a pause whose close outlives its bound returns in time and reports the tur
     await waitFor(() => started, { what: "the tool to start" });
 
     const begun = Date.now();
-    assert.deepEqual(await service.pause(BOT, "mac"), pausedAt(), "paused at once; the turn is not known yet");
+    assert.deepEqual(
+      await service.pause(BOT, "mac"),
+      pausedAt(),
+      "paused at once; the turn is not known yet",
+    );
     assert.ok(Date.now() - begun < 3_000, "pause returned within its bound");
     assert.ok(reports.length >= 1, "the slow close is reported");
     assert.deepEqual(await service.state(BOT), pausedAt(), "state reads do not wait for the close");
 
     release();
-    await waitFor(() => published.some((state) => state.kind === "paused" && state.interrupted === submissionId), {
-      what: "the interrupted turn under the pause",
-    });
+    await waitFor(
+      () =>
+        published.some((state) => state.kind === "paused" && state.interrupted === submissionId),
+      {
+        what: "the interrupted turn under the pause",
+      },
+    );
     assert.deepEqual(await service.state(BOT), pausedAt(submissionId));
     assert.equal(fauxModels.calls(), 1);
   } finally {
@@ -499,9 +641,14 @@ test("an unreadable pause file refuses to run turns instead of guessing", async 
   writeFileSync(path.join(profile, "bot-service", "bot-pauses.json"), "{ torn");
   const fauxModels = createFauxModels([fauxAssistantMessage("never")]);
   const reports: unknown[] = [];
-  const service = await serviceFor(profile, fauxModels, { onReport: (_botId, error) => reports.push(error) });
+  const service = await serviceFor(profile, fauxModels, {
+    onReport: (_botId, error) => reports.push(error),
+  });
   try {
-    await assert.rejects(service.send(BOT, { text: "hi", requestId: "desk-1" }), /can't read which Bots are paused/u);
+    await assert.rejects(
+      service.send(BOT, { text: "hi", requestId: "desk-1" }),
+      /can't read which Bots are paused/u,
+    );
     await assert.rejects(service.pause(BOT, "mac"), /can't read which Bots are paused/u);
     assert.equal((await service.state(BOT)).kind, "idle", "state reads still answer");
     assert.ok(reports.length >= 1, "the unreadable file is reported");
@@ -527,7 +674,9 @@ async function reviewHeldAtItsMarker(cancelOnPause: boolean) {
   const lastUserText = (messages: Message[]) => {
     const users = messages.filter((message) => message.role === "user");
     const content = users[users.length - 1]?.content ?? "";
-    return typeof content === "string" ? content : content.map((part) => (part.type === "text" ? part.text : "")).join("");
+    return typeof content === "string"
+      ? content
+      : content.map((part) => (part.type === "text" ? part.text : "")).join("");
   };
   const answer: FauxResponseStep = (context) => {
     if ((getCurrentSystemPrompt(context.messages) ?? "").includes("long-term memory up to date")) {
@@ -535,9 +684,14 @@ async function reviewHeldAtItsMarker(cancelOnPause: boolean) {
       holdLookup = true;
       return fauxAssistantMessage("NOTHING");
     }
-    return fauxAssistantMessage(lastUserText(context.messages) === "write a lot" ? "word ".repeat(2_000) : "ok");
+    return fauxAssistantMessage(
+      lastUserText(context.messages) === "write a lot" ? "word ".repeat(2_000) : "ok",
+    );
   };
-  const fauxModels = createFauxModels(Array.from({ length: 30 }, () => answer), { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels(
+    Array.from({ length: 30 }, () => answer),
+    { tokensPerSecond: 40 },
+  );
   let service!: BotSessionRuntime;
   const review = createBotMemoryReview({
     memory: createBotMemoryService({ store: createBotMemoryStore({ profileDir: profile }) }),
@@ -552,25 +706,42 @@ async function reviewHeldAtItsMarker(cancelOnPause: boolean) {
     isIdle: async (botId) => (await service.state(botId)).kind === "idle",
     admit: async () => ({
       ok: true,
-      model: { models: fauxModels.models, model: fauxModels.models.getModel(FAUX_PROVIDER, FAUX_MODEL)! },
+      model: {
+        models: fauxModels.models,
+        model: fauxModels.models.getModel(FAUX_PROVIDER, FAUX_MODEL)!,
+      },
       lease: fakeMemoryAuthority().lease,
     }),
   });
   // As the desktop wires it, a pause cancels the Bot's memory review.
-  service = await serviceFor(profile, fauxModels, cancelOnPause ? { onPaused: (botId) => review.cancel(botId) } : {});
+  service = await serviceFor(
+    profile,
+    fauxModels,
+    cancelOnPause ? { onPaused: (botId) => review.cancel(botId) } : {},
+  );
   for (let index = 1; index <= 10; index += 1) {
-    const { submissionId } = await service.send(BOT, { text: `Person message ${index}`, requestId: `desk-${index}` });
+    const { submissionId } = await service.send(BOT, {
+      text: `Person message ${index}`,
+      requestId: `desk-${index}`,
+    });
     assert.equal((await service.awaitReply(BOT, submissionId, never())).kind, "completed");
   }
   const reviewing = review.runNow(BOT);
   await held;
   const { submissionId } = await service.send(BOT, { text: "write a lot", requestId: "desk-long" });
-  await waitFor(async () => (await service.state(BOT)).kind === "running" && fauxModels.calls() === 12, {
-    what: "the long reply to start after the review's request",
-  });
+  await waitFor(
+    async () => (await service.state(BOT)).kind === "running" && fauxModels.calls() === 12,
+    {
+      what: "the long reply to start after the review's request",
+    },
+  );
   const markers = async () => {
-    const page = await (await service.conversation(BOT)).entries({}, 500, undefined, BACKGROUND_CONTEXT);
-    return page.items.filter((entry) => entry.kind === BOT_MEMORY_REVIEW_ENTRY_KIND).map((entry) => entry.data);
+    const page = await (
+      await service.conversation(BOT)
+    ).entries({}, 500, undefined, BACKGROUND_CONTEXT);
+    return page.items
+      .filter((entry) => entry.kind === BOT_MEMORY_REVIEW_ENTRY_KIND)
+      .map((entry) => entry.data);
   };
   return { service, review, reviewing, submissionId, fauxModels, markers, releaseLookup };
 }
@@ -635,7 +806,13 @@ async function legacyChatHost() {
     "./computer-use/generation-gate.js": { ComputerUseGenerationGate: UnusedService },
     "./chat-deletion-gate.js": { ChatDeletionGate: UnusedService },
     "./chat-workspace-mutation-gate.js": { ChatWorkspaceMutationGate: UnusedService },
-    "./chat-turn-admission.js": { ChatTurnAdmission: class { isAdmitted() { return false; } } },
+    "./chat-turn-admission.js": {
+      ChatTurnAdmission: class {
+        isAdmitted() {
+          return false;
+        }
+      },
+    },
     "./generation-delta-coalescer.js": { GenerationDeltaCoalescer: UnusedService },
     "./chat-run-input-admission.js": {
       createChatRunInputAdmission: (ports: { active: Map<string, LegacyGenerationEntry> }) => {
@@ -663,16 +840,24 @@ async function legacyChatHost() {
         hasLiveChatChildren: () => false,
       },
     },
-    "./tool-approval.js": { ToolApprovalCoordinator: class { cancelStream() {} } },
+    "./tool-approval.js": {
+      ToolApprovalCoordinator: class {
+        cancelStream() {}
+      },
+    },
     "./approval-gate/approval-analytics.js": { ApprovalAnalytics: UnusedService },
     "./ask-user-question-coordinator.js": { AskUserQuestionCoordinator: UnusedService },
     "./workspace-files-touched.js": { createWorkspaceFilesTouchedNotifier: () => () => {} },
-    "./acp/scratch-directory.js": { createAcpScratchDirectories: () => ({ directoryFor: async () => "", forget: async () => {} }) },
+    "./acp/scratch-directory.js": {
+      createAcpScratchDirectories: () => ({ directoryFor: async () => "", forget: async () => {} }),
+    },
     "./desktop-stream-handoff.js": {
       DesktopLiveStreamAccumulator: class {
         begin() {}
         finish() {}
-        snapshotForChat() { return null; }
+        snapshotForChat() {
+          return null;
+        }
       },
     },
   };
@@ -699,7 +884,11 @@ async function legacyChatHost() {
  * step, until its agent is aborted; its tool then takes a moment to unwind
  * before the run settles and leaves the registry.
  */
-function runLegacyGeneration(host: Awaited<ReturnType<typeof legacyChatHost>>, streamId: string, chatId: string) {
+function runLegacyGeneration(
+  host: Awaited<ReturnType<typeof legacyChatHost>>,
+  streamId: string,
+  chatId: string,
+) {
   let effects = 0;
   let finish!: () => void;
   const completion = new Promise<void>((resolve) => (finish = resolve));
@@ -743,7 +932,9 @@ test("a pause answers without waiting for the Bot's computer to stop, which begi
       }),
   );
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall("run_command", { text: "build" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "build" })], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("never"),
   ]);
   const order: string[] = [];
@@ -765,7 +956,9 @@ test("a pause answers without waiting for the Bot's computer to stop, which begi
         {
           background: true,
           run: async () => {
-            order.push(runStopped ? "computer stopping after the run" : "computer stopping DURING the run");
+            order.push(
+              runStopped ? "computer stopping after the run" : "computer stopping DURING the run",
+            );
             await gracefulStop;
             order.push("computer stopped");
           },
@@ -783,7 +976,11 @@ test("a pause answers without waiting for the Bot's computer to stop, which begi
     ]);
     assert.notEqual(paused, "waited", "the pause answered while the computer was still stopping");
     assert.deepEqual(order, ["legacy chats", "computer stopping after the run"]);
-    assert.deepEqual(reports, [broken], "a step that fails is reported, and the next one still runs");
+    assert.deepEqual(
+      reports,
+      [broken],
+      "a step that fails is reported, and the next one still runs",
+    );
     computerStopped();
     await waitFor(() => order.includes("computer stopped"), { what: "the computer to stop" });
   } finally {
@@ -794,7 +991,10 @@ test("a pause answers without waiting for the Bot's computer to stop, which begi
 
 test("pausing stops the Bot's legacy chat streams and tools and waits for them, leaving other chats running", async () => {
   const host = await legacyChatHost();
-  const chatsByBot: Record<string, string[]> = { [BOT]: ["bot-chat", "bot-older-chat"], "bot:b": ["other-bot-chat"] };
+  const chatsByBot: Record<string, string[]> = {
+    [BOT]: ["bot-chat", "bot-older-chat"],
+    "bot:b": ["other-bot-chat"],
+  };
   const service = await serviceFor(tempProfile(), createFauxModels(), {
     // The legacy-chat step of `afterBotPaused` in bot-session-main.ts.
     afterPaused: (botId) =>
@@ -813,10 +1013,22 @@ test("pausing stops the Bot's legacy chat streams and tools and waits for them, 
 
     assert.deepEqual(await service.pause(BOT, "mac"), pausedAt());
     assert.equal(paired.settled(), true, "the pause returns once the Bot's legacy run has settled");
-    assert.equal(paired.entry.cancellationOrigin, "user_stop", "it ends as a Stop, and the chat is kept");
-    assert.deepEqual(host.subagentsStopped, ["bot-chat", "bot-older-chat"], "only the paused Bot's chats lose their subagents");
+    assert.equal(
+      paired.entry.cancellationOrigin,
+      "user_stop",
+      "it ends as a Stop, and the chat is kept",
+    );
+    assert.deepEqual(
+      host.subagentsStopped,
+      ["bot-chat", "bot-older-chat"],
+      "only the paused Bot's chats lose their subagents",
+    );
 
-    const [pairedAt, otherBotAt, workspaceAt] = [paired.effects(), otherBot.effects(), workspace.effects()];
+    const [pairedAt, otherBotAt, workspaceAt] = [
+      paired.effects(),
+      otherBot.effects(),
+      workspace.effects(),
+    ];
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(paired.effects(), pairedAt, "nothing more happens for the paused Bot");
     assert.ok(otherBot.effects() > otherBotAt, "another Bot keeps running");

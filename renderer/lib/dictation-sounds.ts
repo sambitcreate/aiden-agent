@@ -26,7 +26,10 @@ export function liveCueOscillatorConfig(kind: "connected" | "disconnected") {
     : { frequency: 440, durationMs: 160, gain: 0.12 };
 }
 
-export async function playLiveConnectionCue(kind: "connected" | "disconnected", outputDeviceId = "default"): Promise<void> {
+export async function playLiveConnectionCue(
+  kind: "connected" | "disconnected",
+  outputDeviceId = "default",
+): Promise<void> {
   return playTone(liveCueOscillatorConfig(kind), AudioContext, outputDeviceId);
 }
 

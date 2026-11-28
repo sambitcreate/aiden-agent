@@ -46,6 +46,9 @@ test("a trigger scrolled partly below the window keeps the menu 8px inside it", 
 });
 
 test("a trigger at the sidebar's edge still leaves an 8px gap, and a tiny window keeps a usable height", () => {
-  assert.equal(overflowMenuPlacement({ top: 100, bottom: 128, right: 260 }, SIDEBAR, VIEWPORT).sideOffset, 8);
+  assert.equal(
+    overflowMenuPlacement({ top: 100, bottom: 128, right: 260 }, SIDEBAR, VIEWPORT).sideOffset,
+    8,
+  );
   assert.equal(overflowMenuPlacement({ top: 0, bottom: 28, right: 240 }, SIDEBAR, 10).maxHeight, 1);
 });

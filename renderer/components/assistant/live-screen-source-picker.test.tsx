@@ -8,13 +8,22 @@ import type { LiveDisplaySourceSummary } from "../../shared/assistant-live";
 afterEach(cleanup);
 
 const sources: LiveDisplaySourceSummary[] = [
-  { id: "screen:0:0", name: "Entire screen", kind: "screen", thumbnail: "data:image/png;base64,AAAA" },
+  {
+    id: "screen:0:0",
+    name: "Entire screen",
+    kind: "screen",
+    thumbnail: "data:image/png;base64,AAAA",
+  },
   { id: "window:9:0", name: "Editor", kind: "window", thumbnail: "" },
 ];
 
 function mount(choices: readonly LiveDisplaySourceSummary[] | null) {
   const picks: Array<string | null> = [];
-  render(<LiveScreenSourcePicker live={{ screenSourceChoices: choices, pickScreenSource: (id) => picks.push(id) }} />);
+  render(
+    <LiveScreenSourcePicker
+      live={{ screenSourceChoices: choices, pickScreenSource: (id) => picks.push(id) }}
+    />,
+  );
   return picks;
 }
 

@@ -119,7 +119,11 @@ async function pickScratchSubfolder(targetRoot: string): Promise<string> {
   for (let suffix = 1; suffix <= 999; suffix += 1) {
     const name = suffix === 1 ? "aiden-scratch" : `aiden-scratch-${suffix}`;
     const candidate = path.join(targetRoot, name);
-    assertPathInside(targetRoot, candidate, "Scratch destination resolves outside the workspace folder.");
+    assertPathInside(
+      targetRoot,
+      candidate,
+      "Scratch destination resolves outside the workspace folder.",
+    );
     if (!(await pathExists(candidate))) return name;
   }
   throw new Error("Could not allocate a collision-free folder inside the target workspace.");
@@ -159,13 +163,16 @@ export async function copyScratchFilesToWorkspaceWithRollback(
   sourceFolderPath: string,
   targetWorkspaceRoot: string,
 ): Promise<ScratchCopyTransaction> {
-  const canonicalSource = await fs.realpath(sourceFolderPath).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return null;
-    throw error;
-  });
+  const canonicalSource = await fs
+    .realpath(sourceFolderPath)
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
   if (!canonicalSource) return { copiedPaths: [], rollback: async () => undefined };
   const canonicalTarget = await fs.realpath(targetWorkspaceRoot);
-  if (canonicalSource === canonicalTarget) return { copiedPaths: [], rollback: async () => undefined };
+  if (canonicalSource === canonicalTarget)
+    return { copiedPaths: [], rollback: async () => undefined };
 
   const collected: Array<{ sourceFull: string; relPath: string; size: number }> = [];
   let totalBytes = 0;
@@ -192,7 +199,9 @@ export async function copyScratchFilesToWorkspaceWithRollback(
       const directCandidate = path.join(canonicalTarget, relPath);
       if (isProtectedDestination(toPosixRelative(relPath), directCandidate)) continue;
       if (collected.length >= MAX_COPY_FILES) {
-        throw new Error(`Scratch folder contains more than ${MAX_COPY_FILES} files to copy automatically.`);
+        throw new Error(
+          `Scratch folder contains more than ${MAX_COPY_FILES} files to copy automatically.`,
+        );
       }
       totalBytes += stat.size;
       if (totalBytes > MAX_COPY_TOTAL_BYTES) {
@@ -235,7 +244,11 @@ export async function copyScratchFilesToWorkspaceWithRollback(
       const destRel = prefix ? path.join(prefix, item.relPath) : item.relPath;
       const destPosix = toPosixRelative(destRel);
       const destFull = path.join(canonicalTarget, destRel);
-      assertPathInside(canonicalTarget, destFull, `Destination "${destPosix}" resolves outside the workspace folder.`);
+      assertPathInside(
+        canonicalTarget,
+        destFull,
+        `Destination "${destPosix}" resolves outside the workspace folder.`,
+      );
       if (isProtectedDestination(destPosix, destFull)) continue;
       await ensureDirTrackingCreated(path.dirname(destFull), canonicalTarget, createdDirs);
       // COPYFILE_EXCL guarantees we never overwrite an existing file even under a race.
@@ -259,5 +272,6 @@ export async function copyScratchFilesToWorkspace(
   sourceFolderPath: string,
   targetWorkspaceRoot: string,
 ): Promise<string[]> {
-  return (await copyScratchFilesToWorkspaceWithRollback(sourceFolderPath, targetWorkspaceRoot)).copiedPaths;
+  return (await copyScratchFilesToWorkspaceWithRollback(sourceFolderPath, targetWorkspaceRoot))
+    .copiedPaths;
 }

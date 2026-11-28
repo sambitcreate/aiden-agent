@@ -39,7 +39,9 @@ function kindOf(id: string): "screen" | "window" {
 
 function summary(source: Electron.DesktopCapturerSource, index: number): LiveDisplaySourceSummary {
   const kind = kindOf(source.id);
-  const name = source.name.trim().slice(0, MAX_NAME_LENGTH) || (kind === "screen" ? `Screen ${index + 1}` : "Untitled window");
+  const name =
+    source.name.trim().slice(0, MAX_NAME_LENGTH) ||
+    (kind === "screen" ? `Screen ${index + 1}` : "Untitled window");
   let thumbnail = "";
   try {
     if (!source.thumbnail.isEmpty()) {

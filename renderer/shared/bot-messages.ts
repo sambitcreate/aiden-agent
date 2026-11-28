@@ -38,7 +38,10 @@ export type BotMessageTurnKind =
     };
 const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/iu;
 export function isBotMessageRequestId(id: string | undefined): boolean {
-  return id?.startsWith(BOT_MESSAGE_REQUEST_PREFIX) === true || id?.startsWith(BOT_REPLY_REQUEST_PREFIX) === true;
+  return (
+    id?.startsWith(BOT_MESSAGE_REQUEST_PREFIX) === true ||
+    id?.startsWith(BOT_REPLY_REQUEST_PREFIX) === true
+  );
 }
 export function botMessageTurnOf(id: string | undefined): BotMessageTurnKind {
   if (id?.startsWith(BOT_REPLY_REQUEST_PREFIX)) {

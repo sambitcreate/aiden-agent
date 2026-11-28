@@ -23,7 +23,9 @@ test("shared action buttons use the same squircle for labeled and icon-only acti
 });
 
 test("legacy actions and button links share the shape without clipping or changing selection controls", () => {
-  const rule = styles.match(/:root :is\(button, \[role="button"\], \[data-slot="button"\], \.squircle-control\)[^{]+\{([^}]+)\}/u);
+  const rule = styles.match(
+    /:root\s+:is\(\s*button,\s*\[role="button"\],\s*\[data-slot="button"\],\s*\.squircle-control\s*\)[^{]+\{([^}]+)\}/u,
+  );
   assert.ok(rule);
   for (const role of ["switch", "radio", "checkbox"]) {
     assert.ok(rule[0].includes(`:not([role="${role}"])`));
@@ -33,12 +35,18 @@ test("legacy actions and button links share the shape without clipping or changi
   assert.doesNotMatch(rule[1], /overflow|clip-path|outline/u);
   assert.match(styles, /--radius-button: 16px/u);
   assert.match(uiSource, /inline-flex h-6 w-10 shrink-0 items-center overflow-visible/u);
-  assert.doesNotMatch(styles, /\.settings-field-control > \[role="switch"\][\s\S]{0,60}display:\s*flex/u);
+  assert.doesNotMatch(
+    styles,
+    /\.settings-field-control > \[role="switch"\][\s\S]{0,60}display:\s*flex/u,
+  );
 });
 
 test("design guidance and interactive specimen document reusable button and composer geometry", () => {
   const guide = readFileSync(new URL("../../docs/design-guide.md", import.meta.url), "utf8");
-  const specimen = readFileSync(new URL("../../docs/chatgpt-ui-element-specimen.html", import.meta.url), "utf8");
+  const specimen = readFileSync(
+    new URL("../../docs/chatgpt-ui-element-specimen.html", import.meta.url),
+    "utf8",
+  );
   for (const token of ["--radius-button", "--radius-composer"]) {
     assert.ok(guide.includes(token));
     assert.ok(specimen.includes(token));

@@ -13,7 +13,10 @@ function recorder() {
   const opened: DraftWorkspaceMenuView[] = [];
   return {
     opened,
-    handle: { openFolder: async () => undefined, openMenu: (view: DraftWorkspaceMenuView) => opened.push(view) },
+    handle: {
+      openFolder: async () => undefined,
+      openMenu: (view: DraftWorkspaceMenuView) => opened.push(view),
+    },
   };
 }
 
@@ -54,7 +57,9 @@ test("a request for a pane that never mounts expires and is replaced by newer on
 
 test("only /chat/<id> paths name a chat", () => {
   assert.deepEqual(
-    ["/chat/abc", "/chat/a%20b/", "/chat/abc/extra", "/settings", "/chat/%E0%A4"].map(chatIdFromPath),
+    ["/chat/abc", "/chat/a%20b/", "/chat/abc/extra", "/settings", "/chat/%E0%A4"].map(
+      chatIdFromPath,
+    ),
     ["abc", "a b", undefined, undefined, undefined],
   );
 });

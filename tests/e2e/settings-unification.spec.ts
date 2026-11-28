@@ -1,39 +1,73 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { E2E_ASSISTANT_RESPONSE, expect, finishLmStudioOnboarding, connectOnboardingLmStudio, test } from "./fixtures";
+import {
+  E2E_ASSISTANT_RESPONSE,
+  expect,
+  finishLmStudioOnboarding,
+  connectOnboardingLmStudio,
+  test,
+} from "./fixtures";
 
 test.use({ workspaceSeed: true });
 
-test("Live audio selectors keep long labels and chevrons inside their bounds", async ({ aiden }) => {
+test("Live audio selectors keep long labels and chevrons inside their bounds", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.evaluate(() => {
-    localStorage.setItem("aiden.live.audio-devices.v1", JSON.stringify({ input: "fixture-mic", output: "fixture-speaker" }));
-    Object.defineProperty(navigator.mediaDevices, "enumerateDevices", { configurable: true, value: async () => [
-      { kind: "audioinput", deviceId: "fixture-mic", label: "MacBook Pro Microphone (Built-in) with a deliberately very long device name" },
-      { kind: "audiooutput", deviceId: "fixture-speaker", label: "MacBook Pro Speakers (Built-in) with a deliberately very long device name" },
-    ] });
+    localStorage.setItem(
+      "aiden.live.audio-devices.v1",
+      JSON.stringify({ input: "fixture-mic", output: "fixture-speaker" }),
+    );
+    Object.defineProperty(navigator.mediaDevices, "enumerateDevices", {
+      configurable: true,
+      value: async () => [
+        {
+          kind: "audioinput",
+          deviceId: "fixture-mic",
+          label: "MacBook Pro Microphone (Built-in) with a deliberately very long device name",
+        },
+        {
+          kind: "audiooutput",
+          deviceId: "fixture-speaker",
+          label: "MacBook Pro Speakers (Built-in) with a deliberately very long device name",
+        },
+      ],
+    });
   });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Voice & Speech", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Settings" })
+    .getByRole("button", { name: "Voice & Speech", exact: true })
+    .click();
   await page.getByRole("tab", { name: "Aiden Live", exact: true }).click();
   for (const width of [1280, 600, 390]) {
-    await aiden.app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 900), width);
+    await aiden.app.evaluate(
+      ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 900),
+      width,
+    );
     for (const name of ["Live input device", "Live output device"]) {
       const trigger = page.getByRole("combobox", { name });
       await expect(trigger).toContainText("MacBook Pro");
-      await expect.poll(async () => trigger.evaluate((element) => {
-        const outer = element.getBoundingClientRect();
-        const label = element.firstElementChild!;
-        const icon = element.lastElementChild!;
-        const labelRect = label.getBoundingClientRect();
-        const iconRect = icon.getBoundingClientRect();
-        return getComputedStyle(element).flexWrap === "nowrap"
-          && getComputedStyle(label).textOverflow === "ellipsis"
-          && labelRect.right <= iconRect.left + 1
-          && iconRect.right <= outer.right + 1
-          && iconRect.bottom <= outer.bottom + 1;
-      })).toBe(true);
+      await expect
+        .poll(async () =>
+          trigger.evaluate((element) => {
+            const outer = element.getBoundingClientRect();
+            const label = element.firstElementChild!;
+            const icon = element.lastElementChild!;
+            const labelRect = label.getBoundingClientRect();
+            const iconRect = icon.getBoundingClientRect();
+            return (
+              getComputedStyle(element).flexWrap === "nowrap" &&
+              getComputedStyle(label).textOverflow === "ellipsis" &&
+              labelRect.right <= iconRect.left + 1 &&
+              iconRect.right <= outer.right + 1 &&
+              iconRect.bottom <= outer.bottom + 1
+            );
+          }),
+        )
+        .toBe(true);
     }
   }
 });
@@ -207,7 +241,9 @@ test("theme tiles select a preset for both schemes, persist it, and reflow to th
 
   await openAppearance();
   await expect(themes().getByRole("radio")).toHaveCount(10);
-  await expect(page.getByRole("radiogroup", { name: "Theme mode", exact: true }).getByRole("radio")).toHaveCount(3);
+  await expect(
+    page.getByRole("radiogroup", { name: "Theme mode", exact: true }).getByRole("radio"),
+  ).toHaveCount(3);
 
   await tile("Dusk").click();
   await expect(tile("Dusk")).toHaveAttribute("aria-checked", "true");
@@ -258,7 +294,9 @@ test("chat width setting resizes the transcript and composer together and persis
   test.setTimeout(120_000);
   let page = aiden.page;
   await finishLmStudioOnboarding(page);
-  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1800, 900));
+  await aiden.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(1800, 900),
+  );
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1800);
 
   const prompt = "Chat width geometry probe";
@@ -271,7 +309,8 @@ test("chat width setting resizes the transcript and composer together and persis
       // The transcript column is the shared chat column holding the sent message.
       const transcript = [...document.querySelectorAll(".chat-content-column")].find(
         (element) =>
-          !element.matches('[data-browser-composer-inset="true"]') && element.textContent?.includes(text),
+          !element.matches('[data-browser-composer-inset="true"]') &&
+          element.textContent?.includes(text),
       );
       const composer = document.querySelector('[data-browser-composer-inset="true"]');
       const viewport = transcript?.closest<HTMLElement>(".scroll-edge-mask");
@@ -297,12 +336,13 @@ test("chat width setting resizes the transcript and composer together and persis
       };
     }, prompt);
 
-  const scrollbarGutter = () => page.evaluate((text) => {
-    const viewport = [...document.querySelectorAll<HTMLElement>(".scroll-edge-mask")].find(
-      (element) => element.querySelector("[data-scroll-content]")?.textContent?.includes(text),
-    );
-    return viewport ? viewport.offsetWidth - viewport.clientWidth : null;
-  }, prompt);
+  const scrollbarGutter = () =>
+    page.evaluate((text) => {
+      const viewport = [...document.querySelectorAll<HTMLElement>(".scroll-edge-mask")].find(
+        (element) => element.querySelector("[data-scroll-content]")?.textContent?.includes(text),
+      );
+      return viewport ? viewport.offsetWidth - viewport.clientWidth : null;
+    }, prompt);
   const forceClassicGutter = async () => {
     await page.evaluate((text) => {
       const viewport = [...document.querySelectorAll<HTMLElement>(".scroll-edge-mask")].find(
@@ -347,12 +387,14 @@ test("chat width setting resizes the transcript and composer together and persis
     // Chat-width changes may recreate the viewport; reapply the classic-gutter
     // fixture so every size, including Full, exercises scrollport compensation.
     await forceClassicGutter();
-    await expect.poll(async () => {
-      const current = await widths();
-      return current && current.transcript === current.composer && current.centerOffset <= 1
-        ? true
-        : current;
-    }, `${label} transcript and composer geometry`).toBe(true);
+    await expect
+      .poll(async () => {
+        const current = await widths();
+        return current && current.transcript === current.composer && current.centerOffset <= 1
+          ? true
+          : current;
+      }, `${label} transcript and composer geometry`)
+      .toBe(true);
     const geometry = (await widths())!;
     measured[label] = geometry.transcript;
     if (label === "Full") {
@@ -369,57 +411,77 @@ test("chat width setting resizes the transcript and composer together and persis
   // In a narrow window the column's side padding gives way before the composer
   // shrinks: no wide empty lanes beside it, and it stays centred.
   await chooseWidth("Default");
-  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 900));
+  await aiden.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(900, 900),
+  );
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(900);
-  await expect.poll(() => page.evaluate(() => {
-    const column = document.querySelector('[data-browser-composer-inset="true"]');
-    const card = column?.querySelector('[data-focus-region="composer"]');
-    if (!column || !card) return null;
-    const outer = column.getBoundingClientRect();
-    const inner = card.getBoundingClientRect();
-    const left = Math.round(inner.left - outer.left);
-    const right = Math.round(outer.right - inner.right);
-    return Math.abs(left - right) <= 1 && right <= 24 ? true : { left, right };
-  }), "narrow window composer gutters").toBe(true);
-  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1800, 900));
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const column = document.querySelector('[data-browser-composer-inset="true"]');
+          const card = column?.querySelector('[data-focus-region="composer"]');
+          if (!column || !card) return null;
+          const outer = column.getBoundingClientRect();
+          const inner = card.getBoundingClientRect();
+          const left = Math.round(inner.left - outer.left);
+          const right = Math.round(outer.right - inner.right);
+          return Math.abs(left - right) <= 1 && right <= 24 ? true : { left, right };
+        }),
+      "narrow window composer gutters",
+    )
+    .toBe(true);
+  await aiden.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(1800, 900),
+  );
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1800);
 
   // The preference is durable: a relaunch restores the same column width.
   await chooseWidth("Wide");
-  await expect.poll(async () => {
-    try {
-      const appearance = JSON.parse(
-        await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
-      ).settings?.appearance;
-      return appearance?.chatWidth;
-    } catch (error) {
-      // The preview precedes the first debounced durable write in a fresh profile.
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-      throw error;
-    }
-  }).toBe("wide");
+  await expect
+    .poll(async () => {
+      try {
+        const appearance = JSON.parse(
+          await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
+        ).settings?.appearance;
+        return appearance?.chatWidth;
+      } catch (error) {
+        // The preview precedes the first debounced durable write in a fresh profile.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      }
+    })
+    .toBe("wide");
   page = await aiden.relaunch();
-  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1800, 900));
+  await aiden.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(1800, 900),
+  );
   await page.getByText("Chat width geometry probe").first().click();
   await expect.poll(async () => (await widths())?.transcript).toBe(measured.Wide);
 });
 
-test("text fields rest on a fill and deepen it on focus without an accent edge", async ({ aiden }) => {
+test("text fields rest on a fill and deepen it on focus without an accent edge", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Voice & Speech", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Settings" })
+    .getByRole("button", { name: "Voice & Speech", exact: true })
+    .click();
   const field = page.getByRole("textbox", { name: "Heard as" });
   await expect(field).toBeVisible();
-  const look = () => field.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return {
-      background: style.backgroundColor,
-      border: `${style.borderTopWidth} ${style.borderTopColor}`,
-      outline: style.outlineStyle,
-      shadow: style.boxShadow,
-    };
-  });
+  const look = () =>
+    field.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        background: style.backgroundColor,
+        border: `${style.borderTopWidth} ${style.borderTopColor}`,
+        outline: style.outlineStyle,
+        shadow: style.boxShadow,
+      };
+    });
   const rest = await look();
   expect(rest.background).not.toBe("rgba(0, 0, 0, 0)");
   expect(rest.border.startsWith("1px")).toBe(true);
@@ -444,7 +506,8 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
   });
   const resizeWindow = async (width: number, height: number) => {
     await app.evaluate(
-      ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size.width, size.height),
+      ({ BrowserWindow }, size) =>
+        BrowserWindow.getAllWindows()[0].setSize(size.width, size.height),
       { width, height },
     );
     await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width);
@@ -452,7 +515,8 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
       // Wait for React's resize handler and the sidebar collapse before another
       // resize can make the one-shot Show sidebar check observe stale state.
       await expect(sidebar).toHaveAttribute("aria-hidden", "true");
-      await expect.poll(() => sidebar.evaluate((element) => element.getBoundingClientRect().width))
+      await expect
+        .poll(() => sidebar.evaluate((element) => element.getBoundingClientRect().width))
         .toBe(0);
     }
   };
@@ -507,16 +571,23 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
   }
 });
 
-test("model compaction budgets validate, survive relaunch and reset to defaults", async ({ aiden }) => {
+test("model compaction budgets validate, survive relaunch and reset to defaults", async ({
+  aiden,
+}) => {
   let page = aiden.page;
   await finishLmStudioOnboarding(page);
   const openContextAndLimits = async () => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Context & Limits", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Context & Limits", exact: true })
+      .click();
   };
   await openContextAndLimits();
   await page.getByText("Model compaction budgets", { exact: true }).click();
-  await page.getByRole("combobox", { name: "Model for compaction budget" }).fill("fixture/exact-model");
+  await page
+    .getByRole("combobox", { name: "Model for compaction budget" })
+    .fill("fixture/exact-model");
   await page.getByRole("spinbutton", { name: "Compaction reserved tokens" }).fill("-1");
   await page.getByRole("button", { name: "Save budget", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("whole numbers");
@@ -525,39 +596,57 @@ test("model compaction budgets validate, survive relaunch and reset to defaults"
   const modelKey = page.getByRole("combobox", { name: "Model for compaction budget" });
   await modelKey.fill("fixture/exact");
   await modelKey.pressSequentially("-model");
-  await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue("8192");
+  await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue(
+    "8192",
+  );
   await expect(page.getByRole("spinbutton", { name: "Compaction recent tokens" })).toHaveValue("0");
   await page.getByRole("button", { name: "Save budget", exact: true }).click();
-  await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "fixture/exact-model", exact: true }),
+  ).toBeVisible();
   await aiden.relaunch();
   page = aiden.page;
   await openContextAndLimits();
   await page.getByRole("button", { name: "fixture/exact-model", exact: true }).click();
-  await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue("8192");
+  await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue(
+    "8192",
+  );
   await expect(page.getByRole("spinbutton", { name: "Compaction recent tokens" })).toHaveValue("0");
   await page.getByRole("button", { name: "Reset model", exact: true }).click();
-  await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue("");
+  await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toHaveCount(
+    0,
+  );
+  await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue(
+    "",
+  );
   await expect(page.getByRole("spinbutton", { name: "Compaction recent tokens" })).toHaveValue("");
   await page.reload();
   await openContextAndLimits();
-  await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toHaveCount(
+    0,
+  );
 });
 
-
-test("paid cache warming stays off until explicitly enabled and can be disabled after relaunch", async ({ aiden }) => {
+test("paid cache warming stays off until explicitly enabled and can be disabled after relaunch", async ({
+  aiden,
+}) => {
   let page = aiden.page;
   const onboarding = page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill("E2E Local User");
   await onboarding.getByRole("button", { name: /^Next/u }).click();
   await connectOnboardingLmStudio(onboarding);
   await onboarding.getByText("Other features and privacy", { exact: true }).click();
-  await expect(onboarding.getByText(/optional prompt cache warming/u)).toContainText("off by default");
+  await expect(onboarding.getByText(/optional prompt cache warming/u)).toContainText(
+    "off by default",
+  );
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
   const openContextAndLimits = async () => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Context & Limits", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Context & Limits", exact: true })
+      .click();
   };
   await openContextAndLimits();
   const toggle = () => page.getByRole("switch", { name: "Warm prompt caches during active chats" });
@@ -571,17 +660,23 @@ test("paid cache warming stays off until explicitly enabled and can be disabled 
   await expect(toggle()).toBeChecked();
   await toggle().click();
   await expect(toggle()).not.toBeChecked();
-  expect(aiden.lmStudio.requests.filter((request) => request.url === "/v1/chat/completions")).toHaveLength(0);
+  expect(
+    aiden.lmStudio.requests.filter((request) => request.url === "/v1/chat/completions"),
+  ).toHaveLength(0);
 });
 
-
-test("inline visuals preference is chosen in Appearance and survives relaunch", async ({ aiden }) => {
+test("inline visuals preference is chosen in Appearance and survives relaunch", async ({
+  aiden,
+}) => {
   test.setTimeout(120_000);
   let page = aiden.page;
   await finishLmStudioOnboarding(page);
   const openAppearance = async () => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Appearance", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Appearance", exact: true })
+      .click();
   };
   await openAppearance();
   const control = page.getByRole("combobox", { name: "Inline visuals" });
@@ -620,7 +715,10 @@ test("composer context usage visibility updates immediately from Appearance", as
   await expect(page.getByRole("button", { name: "Open memory", exact: true })).toHaveCount(0);
   for (const enabled of [false, true]) {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Appearance", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Appearance", exact: true })
+      .click();
     const preference = page.getByRole("switch", { name: "Show context usage in composer" });
     await preference.click();
     await expect(preference).toBeChecked({ checked: enabled });
@@ -630,12 +728,17 @@ test("composer context usage visibility updates immediately from Appearance", as
   }
 });
 
-test("chat detail, collapse, busy-send and shared link preferences persist without overflowing", async ({ aiden }) => {
+test("chat detail, collapse, busy-send and shared link preferences persist without overflowing", async ({
+  aiden,
+}) => {
   let page = aiden.page;
   await finishLmStudioOnboarding(page);
   const openAppearance = async () => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Appearance", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Appearance", exact: true })
+      .click();
   };
   await openAppearance();
   for (const [name, value] of [
@@ -649,8 +752,16 @@ test("chat detail, collapse, busy-send and shared link preferences persist witho
     await expect(page.getByRole("combobox", { name, exact: true })).toHaveText(value);
   }
   for (const width of [1280, 600, 390]) {
-    await aiden.app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 900), width);
-    for (const name of ["Work details", "When to collapse work details", "Send behavior while busy", "Open chat links in"]) {
+    await aiden.app.evaluate(
+      ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 900),
+      width,
+    );
+    for (const name of [
+      "Work details",
+      "When to collapse work details",
+      "Send behavior while busy",
+      "Open chat links in",
+    ]) {
       const control = page.getByRole("combobox", { name, exact: true });
       await control.scrollIntoViewIfNeeded();
       const box = await control.boundingBox();
@@ -659,52 +770,93 @@ test("chat detail, collapse, busy-send and shared link preferences persist witho
       expect(box!.x + box!.width).toBeLessThanOrEqual(width);
     }
   }
-  await expect.poll(async () => {
-    try {
-      return JSON.parse(await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8")).settings?.appearance;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-      throw error;
-    }
-  }).toMatchObject({ workDetails: "verbose", workDetailsCollapseTiming: "next-input", busySendBehavior: "steer" });
-  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 900));
+  await expect
+    .poll(async () => {
+      try {
+        return JSON.parse(await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"))
+          .settings?.appearance;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      }
+    })
+    .toMatchObject({
+      workDetails: "verbose",
+      workDetailsCollapseTiming: "next-input",
+      busySendBehavior: "steer",
+    });
+  await aiden.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(1280, 900),
+  );
   page = await aiden.relaunch();
   await openAppearance();
-  await expect(page.getByRole("combobox", { name: "Work details", exact: true })).toHaveText("Verbose");
-  await expect(page.getByRole("combobox", { name: "When to collapse work details", exact: true })).toHaveText("On next message");
-  await expect(page.getByRole("combobox", { name: "Send behavior while busy", exact: true })).toHaveText("Steer");
-  await expect(page.getByRole("combobox", { name: "Open chat links in", exact: true })).toHaveText("System browser");
+  await expect(page.getByRole("combobox", { name: "Work details", exact: true })).toHaveText(
+    "Verbose",
+  );
+  await expect(
+    page.getByRole("combobox", { name: "When to collapse work details", exact: true }),
+  ).toHaveText("On next message");
+  await expect(
+    page.getByRole("combobox", { name: "Send behavior while busy", exact: true }),
+  ).toHaveText("Steer");
+  await expect(page.getByRole("combobox", { name: "Open chat links in", exact: true })).toHaveText(
+    "System browser",
+  );
 });
 
 test("the Bot messaging switch persists through the real settings handler", async ({ aiden }) => {
   let page = aiden.page;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Approvals", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Settings" })
+    .getByRole("button", { name: "Approvals", exact: true })
+    .click();
   const toggle = () => page.getByRole("switch", { name: "Bot messaging", exact: true });
   await expect(toggle()).toBeChecked();
   await toggle().click();
   await expect(toggle()).not.toBeChecked();
-  await expect.poll(() => page.evaluate(async () =>
-    (await window.aidenAPI.ipc.invoke("settings:get") as { botMessaging?: boolean }).botMessaging,
-  )).toBe(false);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        async () =>
+          ((await window.aidenAPI.ipc.invoke("settings:get")) as { botMessaging?: boolean })
+            .botMessaging,
+      ),
+    )
+    .toBe(false);
   page = await aiden.relaunch();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Approvals", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Settings" })
+    .getByRole("button", { name: "Approvals", exact: true })
+    .click();
   await expect(toggle()).not.toBeChecked();
   const invalid = await page.evaluate(async () => {
-    try { await window.aidenAPI.ipc.invoke("settings:set", { botMessaging: "false" }); return "accepted"; }
-    catch (error) { return String(error); }
+    try {
+      await window.aidenAPI.ipc.invoke("settings:set", { botMessaging: "false" });
+      return "accepted";
+    } catch (error) {
+      return String(error);
+    }
   });
   expect(invalid).toContain("Invalid Bot messaging setting");
   await toggle().click();
   await expect(toggle()).toBeChecked();
-  await expect.poll(() => page.evaluate(async () =>
-    (await window.aidenAPI.ipc.invoke("settings:get") as { botMessaging?: boolean }).botMessaging,
-  )).toBeUndefined();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        async () =>
+          ((await window.aidenAPI.ipc.invoke("settings:get")) as { botMessaging?: boolean })
+            .botMessaging,
+      ),
+    )
+    .toBeUndefined();
 });
 
-test("a merged Settings page switches tabs in place and Back to app leaves in one step", async ({ aiden }) => {
+test("a merged Settings page switches tabs in place and Back to app leaves in one step", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -713,38 +865,56 @@ test("a merged Settings page switches tabs in place and Back to app leaves in on
   await voice.click();
 
   const tabs = page.getByRole("tablist", { name: "Voice & Speech" });
-  await expect(tabs.getByRole("tab", { name: "Voice", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(tabs.getByRole("tab", { name: "Voice", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   for (const name of ["Text to Speech", "Aiden Live", "Voice"]) {
     await tabs.getByRole("tab", { name, exact: true }).click();
-    await expect(tabs.getByRole("tab", { name, exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(tabs.getByRole("tab", { name, exact: true })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     await expect(page.getByRole("tabpanel", { name, exact: true })).toBeVisible();
     await expect(voice).toHaveAttribute("aria-current", "page");
-    await expect(page.getByRole("heading", { level: 1, name: "Voice & Speech", exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Voice & Speech", exact: true }),
+    ).toBeVisible();
   }
 
   await page.getByRole("button", { name: "Back to app", exact: true }).click();
   await expect(navigation).toHaveCount(0);
 });
 
-test("a Settings page or tab opens at the top, not at the last page's offset", async ({ aiden }) => {
+test("a Settings page or tab opens at the top, not at the last page's offset", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   // Short enough that every page below scrolls.
-  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 560));
+  await aiden.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(1100, 560),
+  );
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const navigation = page.getByRole("navigation", { name: "Settings" });
   const content = page.locator('[data-scroll-restoration-id^="settings-"]');
   const scrollDown = async () => {
-    await expect.poll(() => content.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(200);
+    await expect
+      .poll(() => content.evaluate((element) => element.scrollHeight - element.clientHeight))
+      .toBeGreaterThan(200);
     await content.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
     await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(200);
   };
 
   await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Appearance", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Appearance", exact: true }),
+  ).toBeVisible();
   await scrollDown();
   await navigation.getByRole("button", { name: "Voice & Speech", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Voice & Speech", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Voice & Speech", exact: true }),
+  ).toBeVisible();
   await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBe(0);
 
   // A tab on a merged page starts at the top too, and the chosen tab keeps focus.
@@ -759,15 +929,21 @@ test("a Settings page or tab opens at the top, not at the last page's offset", a
   const search = page.getByRole("searchbox", { name: "Search settings" });
   await search.fill("open links");
   await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
-  await expect(page.getByRole("combobox", { name: "Open chat links in", exact: true })).toBeInViewport();
+  await expect(
+    page.getByRole("combobox", { name: "Open chat links in", exact: true }),
+  ).toBeInViewport();
   await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   await search.fill("");
   await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
   await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBe(0);
-  await expect(page.getByRole("heading", { level: 1, name: "Appearance", exact: true })).toBeInViewport();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Appearance", exact: true }),
+  ).toBeInViewport();
 });
 
-test("settings search opens the tab that matched, the Links row on Appearance and Bot messaging on Approvals", async ({ aiden }) => {
+test("settings search opens the tab that matched, the Links row on Appearance and Bot messaging on Approvals", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -776,16 +952,23 @@ test("settings search opens the tab that matched, the Links row on Appearance an
 
   await search.fill("read aloud");
   await navigation.getByRole("button", { name: "Voice & Speech", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "Text to Speech", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Text to Speech", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 
   await search.fill("open links");
   await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
   const links = page.getByRole("combobox", { name: "Open chat links in", exact: true });
   await expect(links).toBeInViewport();
-  await expect(page.getByRole("heading", { level: 1, name: "Appearance", exact: true })).toHaveCount(1);
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Appearance", exact: true }),
+  ).toHaveCount(1);
 
   // Asking again brings the row back after the page was scrolled away from it.
-  await page.getByRole("heading", { level: 1, name: "Appearance", exact: true }).scrollIntoViewIfNeeded();
+  await page
+    .getByRole("heading", { level: 1, name: "Appearance", exact: true })
+    .scrollIntoViewIfNeeded();
   await expect(links).not.toBeInViewport();
   await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
   await expect(links).toBeInViewport();
@@ -793,6 +976,9 @@ test("settings search opens the tab that matched, the Links row on Appearance an
   // Bot messaging is a spot on Approvals: its tab shows and the switch scrolls into view.
   await search.fill("message each other");
   await navigation.getByRole("button", { name: "Approvals", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "Approvals", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Approvals", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await expect(page.getByRole("switch", { name: "Bot messaging", exact: true })).toBeInViewport();
 });

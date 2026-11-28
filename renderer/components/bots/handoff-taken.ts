@@ -35,7 +35,10 @@ export function clearHandoffTaken(): void {
 
 /** Whether control of this card was taken here, and the function that records it. */
 export function useHandoffTaken(key: string | undefined): [boolean, () => void] {
-  const isTaken = React.useSyncExternalStore(subscribe, () => key !== undefined && taken.includes(key));
+  const isTaken = React.useSyncExternalStore(
+    subscribe,
+    () => key !== undefined && taken.includes(key),
+  );
   const take = React.useCallback(() => {
     if (key !== undefined) markHandoffTaken(key);
   }, [key]);

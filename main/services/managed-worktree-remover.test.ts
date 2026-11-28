@@ -78,7 +78,10 @@ test("managed worktree remover authorizes the exact scanned quarantine before co
   );
 
   assert.deepEqual(seen, [value.authorizationPath]);
-  assert.equal(await fs.readFile(path.join(path.dirname(value.identity.path), "finalized"), "utf8"), "");
+  assert.equal(
+    await fs.readFile(path.join(path.dirname(value.identity.path), "finalized"), "utf8"),
+    "",
+  );
   await assert.rejects(fs.access(value.identity.path));
   await assert.rejects(fs.access(value.authorizationPath));
 });

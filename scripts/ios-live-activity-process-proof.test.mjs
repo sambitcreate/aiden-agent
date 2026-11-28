@@ -20,7 +20,10 @@ test("physical ActivityKit proof requires exact physical-device identifiers", ()
     }),
     { xcodeDeviceId: XCODE_DEVICE_ID, coreDeviceId: CORE_DEVICE_ID },
   );
-  assert.throws(() => parseActivityProcessProofOptions([], {}), /exact physical --xcode-device-id/u);
+  assert.throws(
+    () => parseActivityProcessProofOptions([], {}),
+    /exact physical --xcode-device-id/u,
+  );
   assert.throws(
     () =>
       parseActivityProcessProofOptions([
@@ -74,7 +77,9 @@ test("CoreDevice details must match the Xcode UDID and report physical iOS hardw
       validatePhysicalDeviceDetails(
         {
           ...payload,
-          result: { hardwareProperties: { ...payload.result.hardwareProperties, reality: "simulated" } },
+          result: {
+            hardwareProperties: { ...payload.result.hardwareProperties, reality: "simulated" },
+          },
         },
         options,
       ),
@@ -85,7 +90,9 @@ test("CoreDevice details must match the Xcode UDID and report physical iOS hardw
       validatePhysicalDeviceDetails(
         {
           ...payload,
-          result: { hardwareProperties: { ...payload.result.hardwareProperties, udid: "00008110-OTHER" } },
+          result: {
+            hardwareProperties: { ...payload.result.hardwareProperties, udid: "00008110-OTHER" },
+          },
         },
         options,
       ),
@@ -114,7 +121,10 @@ test("the proof edits the unit test target whichever position the xctestrun list
     unitTestTargetPath(xctestrun("AidenOnTheGoUITests", "AidenOnTheGoTests")),
     ":TestConfigurations:0:TestTargets:1",
   );
-  assert.throws(() => unitTestTargetPath(xctestrun("AidenOnTheGoUITests")), /exactly one AidenOnTheGoTests/u);
+  assert.throws(
+    () => unitTestTargetPath(xctestrun("AidenOnTheGoUITests")),
+    /exactly one AidenOnTheGoTests/u,
+  );
   assert.throws(
     () => unitTestTargetPath(xctestrun("AidenOnTheGoTests", "AidenOnTheGoTests")),
     /exactly one AidenOnTheGoTests/u,

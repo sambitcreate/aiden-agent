@@ -16,17 +16,30 @@ function starter(): WorkflowDocV1 {
 }
 
 test("both templates produce documents the strict parser accepts unchanged", () => {
-  const blank = workflowFromTemplate({ template: "blank", workflowId: "wf-0", now: 5, nextId: () => "x" });
+  const blank = workflowFromTemplate({
+    template: "blank",
+    workflowId: "wf-0",
+    now: 5,
+    nextId: () => "x",
+  });
   assert.deepEqual(parseWorkflowDocV1(blank), { ok: true, value: blank });
   const doc = starter();
   assert.deepEqual(parseWorkflowDocV1(doc), { ok: true, value: doc });
-  assert.deepEqual(doc.nodes.map((node) => node.type), ["prompt", "generate-image", "output"]);
+  assert.deepEqual(
+    doc.nodes.map((node) => node.type),
+    ["prompt", "generate-image", "output"],
+  );
   assert.deepEqual(doc.settings, { concurrency: 2 });
   assert.equal(doc.revision, 1);
 });
 
 test("a starter without an available model leaves the Generate node unset", () => {
-  const doc = workflowFromTemplate({ template: "starter", workflowId: "wf-2", now: 1, nextId: () => crypto.randomUUID() });
+  const doc = workflowFromTemplate({
+    template: "starter",
+    workflowId: "wf-2",
+    now: 1,
+    nextId: () => crypto.randomUUID(),
+  });
   const generate = doc.nodes.find((node) => node.type === "generate-image");
   assert.deepEqual(generate?.data, { count: 1 });
 });
@@ -42,7 +55,16 @@ test("the parser rejects legacy fields, unknown keys and out-of-range values", (
     ["concurrency 0", (doc) => (doc.settings.concurrency = 0)],
     ["non-finite position", (doc) => (doc.nodes[0].position.x = Number.POSITIVE_INFINITY)],
     ["prompt over 16 KiB", (doc) => (doc.nodes[0].data.text = "é".repeat(8 * 1024 + 1))],
-    ["non-hex asset id", (doc) => doc.nodes.push({ id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: "../x" } })],
+    [
+      "non-hex asset id",
+      (doc) =>
+        doc.nodes.push({
+          id: "in",
+          type: "image-input",
+          position: { x: 0, y: 0 },
+          data: { assetId: "../x" },
+        }),
+    ],
     ["duplicate node id", (doc) => doc.nodes.push({ ...doc.nodes[0] })],
     ["unknown node type", (doc) => (doc.nodes[2].type = "output-gallery")],
     ["node comment", (doc) => (doc.nodes[0].comment = { text: "hi" })],
@@ -58,10 +80,22 @@ test("the parser rejects legacy fields, unknown keys and out-of-range values", (
     ["edge port with a path separator", (doc) => (doc.edges[0].targetPort = "a/b")],
     ["edge port over 32 characters", (doc) => (doc.edges[0].targetPort = "a".repeat(33))],
     ["non-string edge port", (doc) => (doc.edges[0].sourcePort = 3)],
-    ["node width below the minimum", (doc) => (doc.nodes[0].dimensions = { width: 119, height: 200 })],
-    ["node height above the maximum", (doc) => (doc.nodes[0].dimensions = { width: 200, height: 1_601 })],
-    ["non-finite node width", (doc) => (doc.nodes[0].dimensions = { width: Number.NaN, height: 200 })],
-    ["node dimensions with an extra key", (doc) => (doc.nodes[0].dimensions = { width: 200, height: 200, depth: 1 })],
+    [
+      "node width below the minimum",
+      (doc) => (doc.nodes[0].dimensions = { width: 119, height: 200 }),
+    ],
+    [
+      "node height above the maximum",
+      (doc) => (doc.nodes[0].dimensions = { width: 200, height: 1_601 }),
+    ],
+    [
+      "non-finite node width",
+      (doc) => (doc.nodes[0].dimensions = { width: Number.NaN, height: 200 }),
+    ],
+    [
+      "node dimensions with an extra key",
+      (doc) => (doc.nodes[0].dimensions = { width: 200, height: 200, depth: 1 }),
+    ],
     ["viewport zoom below the minimum", (doc) => (doc.viewport = { x: 0, y: 0, zoom: 0.05 })],
     ["viewport zoom above the maximum", (doc) => (doc.viewport = { x: 0, y: 0, zoom: 4.5 })],
     ["viewport position out of range", (doc) => (doc.viewport = { x: 1_000_001, y: 0, zoom: 1 })],
@@ -71,7 +105,16 @@ test("the parser rejects legacy fields, unknown keys and out-of-range values", (
     ["control character in the workflow title", (doc) => (doc.title = "Bike\u0007s")],
     ["NUL in the workflow title", (doc) => (doc.title = "A\u0000B")],
     ["control character in a node title", (doc) => (doc.nodes[0].title = "Line\u001b[31m")],
-    ["control character in an Image Input label", (doc) => doc.nodes.push({ id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { label: "a\u007fb" } })],
+    [
+      "control character in an Image Input label",
+      (doc) =>
+        doc.nodes.push({
+          id: "in",
+          type: "image-input",
+          position: { x: 0, y: 0 },
+          data: { label: "a\u007fb" },
+        }),
+    ],
     ["control character in an Output label", (doc) => (doc.nodes[2].data.label = "x\u0001")],
     ["title over 120 characters", (doc) => (doc.title = "t".repeat(121))],
   ];
@@ -101,7 +144,8 @@ test("ids that name an Object.prototype member are refused for the workflow, nod
   }
   // Only the exact names are reserved.
   const near = structuredClone(starter()) as any;
-  for (const edge of near.edges) if (edge.target === near.nodes[2].id) edge.target = "constructor-2";
+  for (const edge of near.edges)
+    if (edge.target === near.nodes[2].id) edge.target = "constructor-2";
   near.nodes[2].id = "constructor-2";
   near.id = "tostring-ify";
   assert.equal(parseWorkflowDocV1(near).ok, true);
@@ -126,11 +170,21 @@ test("ids are lowercase: an uppercase workflow, node or edge id is refused", () 
 
 test("the parser enforces node, edge and document size caps", () => {
   const doc = starter() as any;
-  doc.nodes = Array.from({ length: 501 }, (_, index) => ({ id: `p${index}`, type: "prompt", position: { x: 0, y: 0 }, data: { text: "" } }));
+  doc.nodes = Array.from({ length: 501 }, (_, index) => ({
+    id: `p${index}`,
+    type: "prompt",
+    position: { x: 0, y: 0 },
+    data: { text: "" },
+  }));
   doc.edges = [];
   assert.equal(parseWorkflowDocV1(doc).ok, false);
   // 200 nodes × 15 KiB prompts exceeds the 2 MiB document cap while each prompt is legal.
-  doc.nodes = Array.from({ length: 200 }, (_, index) => ({ id: `p${index}`, type: "prompt", position: { x: 0, y: 0 }, data: { text: "x".repeat(15 * 1024) } }));
+  doc.nodes = Array.from({ length: 200 }, (_, index) => ({
+    id: `p${index}`,
+    type: "prompt",
+    position: { x: 0, y: 0 },
+    data: { text: "x".repeat(15 * 1024) },
+  }));
   const result = parseWorkflowDocV1(doc);
   assert.equal(result.ok, false);
   assert.match(result.ok ? "" : result.issues.join(" "), /2 MiB/u);
@@ -138,7 +192,13 @@ test("the parser enforces node, edge and document size caps", () => {
 
 test("the parser caps connections at 2,000", () => {
   const doc = starter() as any;
-  const edge = (index: number) => ({ id: `e${index}`, source: doc.nodes[0].id, sourcePort: "text", target: doc.nodes[1].id, targetPort: "prompt" });
+  const edge = (index: number) => ({
+    id: `e${index}`,
+    source: doc.nodes[0].id,
+    sourcePort: "text",
+    target: doc.nodes[1].id,
+    targetPort: "prompt",
+  });
   doc.edges = Array.from({ length: 2_000 }, (_, index) => edge(index));
   assert.equal(parseWorkflowDocV1(doc).ok, true, "2,000 connections is the allowed maximum");
   doc.edges.push(edge(2_000));

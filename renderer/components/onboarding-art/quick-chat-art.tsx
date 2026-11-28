@@ -8,7 +8,10 @@ import { ArtChip, ArtIcon, ArtWindow, Bar, TrafficLights, type ArtProps } from "
  * Reduce Motion leaves a complete still pose.
  */
 export function QuickChatArt({ platform }: ArtProps) {
-  const hotkey = prettyAcceleratorForPlatform(COMMAND_BY_ID["quickChat.toggle"].defaultBinding, platform);
+  const hotkey = prettyAcceleratorForPlatform(
+    COMMAND_BY_ID["quickChat.toggle"].defaultBinding,
+    platform,
+  );
   return (
     <>
       <ArtWindow style={{ left: 6, top: 6, width: 178, height: 112, padding: 8 }}>
@@ -48,9 +51,19 @@ export function QuickChatArt({ platform }: ArtProps) {
           </div>
           <div className="oa-row" style={{ gap: 4 }}>
             <ArtIcon icon={MessageSquare} />
-            <Bar width={74} tone="soft" className="oa-anim-type" style={{ animationDelay: "0.35s" }} />
+            <Bar
+              width={74}
+              tone="soft"
+              className="oa-anim-type"
+              style={{ animationDelay: "0.35s" }}
+            />
           </div>
-          <Bar width={52} tone="soft" className="oa-anim-type" style={{ marginLeft: 14, animationDelay: "0.65s" }} />
+          <Bar
+            width={52}
+            tone="soft"
+            className="oa-anim-type"
+            style={{ marginLeft: 14, animationDelay: "0.65s" }}
+          />
         </div>
 
         <div className="oa-row" style={{ gap: 4, marginTop: 2 }}>

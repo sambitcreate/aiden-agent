@@ -52,7 +52,10 @@ export async function rehomeStrandedNoWorkspaceDrafts(
   workspaces: readonly Workspace[],
 ): Promise<string | undefined> {
   const stranded = drafts.filter(
-    (draft) => !draft.sending && draft.chat.workspaceId !== undefined && released.has(draft.chat.workspaceId),
+    (draft) =>
+      !draft.sending &&
+      draft.chat.workspaceId !== undefined &&
+      released.has(draft.chat.workspaceId),
   );
   if (stranded.length === 0) return undefined;
   const home = noWorkspaceHome(workspaces)?.id ?? (await api.createNoWorkspace()).id;

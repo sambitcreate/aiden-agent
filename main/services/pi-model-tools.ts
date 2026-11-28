@@ -1,4 +1,8 @@
-import { CLASSIFIER_JSON_BYTES, isClassifierApprovalDetails, type ClassifierApprovalDetails } from "../../renderer/shared/classifier-approval.js";
+import {
+  CLASSIFIER_JSON_BYTES,
+  isClassifierApprovalDetails,
+  type ClassifierApprovalDetails,
+} from "../../renderer/shared/classifier-approval.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   type ClassifierQuestion,
@@ -14,14 +18,16 @@ import {
   isImageAspectRatio,
   type ImageAspectRatio,
 } from "../../renderer/shared/image-generation/aspect-ratio.js";
-import { MAX_GENERATED_IMAGES as MAX_IMAGES, parseGeneratedImages } from "./pi-model-image-output.js";
+import {
+  MAX_GENERATED_IMAGES as MAX_IMAGES,
+  parseGeneratedImages,
+} from "./pi-model-image-output.js";
 import { copyBoundedJson, utf8Size } from "./bounded-json.js";
 import { SAVE_PATH_EXTENSION, checkImageSavePath } from "./image-save-path.js";
 
 export { checkImageSavePath };
 
-export const IMAGE_GENERATION_SETUP_HINT =
-  "Add an image key in Settings → Image Generation.";
+export const IMAGE_GENERATION_SETUP_HINT = "Add an image key in Settings → Image Generation.";
 
 /** System prompt for a folderless chat whose image generation is not set up (no image tools are registered). */
 export const IMAGE_GENERATION_UNAVAILABLE_PROMPT =
@@ -39,10 +45,12 @@ export interface PiModelOperationsDefaultImageModel {
  * The model-operations extension prompt. It names only the snapshot's default
  * image model, and mentions classifiers only when `classify` is registered.
  */
-export function piModelOperationsSystemPrompt(options: {
-  defaultImageModel?: PiModelOperationsDefaultImageModel;
-  classifiers?: boolean;
-} = {}): string {
+export function piModelOperationsSystemPrompt(
+  options: {
+    defaultImageModel?: PiModelOperationsDefaultImageModel;
+    classifiers?: boolean;
+  } = {},
+): string {
   const { defaultImageModel, classifiers = true } = options;
   return [
     classifiers
@@ -60,9 +68,7 @@ export function piModelOperationUsage(
   toolName: string,
   result: { usage?: Usage } | undefined,
 ): Usage | undefined {
-  return toolName === "generate_image" || toolName === "classify"
-    ? result?.usage
-    : undefined;
+  return toolName === "generate_image" || toolName === "classify" ? result?.usage : undefined;
 }
 
 export interface PiModelImageReference {
@@ -74,10 +80,7 @@ export interface PiModelImageReference {
 
 export interface PiModelToolsHost {
   listImages?(signal?: AbortSignal): Promise<readonly PiModelImageReference[]>;
-  resolveImage?(
-    id: string,
-    signal?: AbortSignal,
-  ): Promise<{ name: string; image: ImageContent }>;
+  resolveImage?(id: string, signal?: AbortSignal): Promise<{ name: string; image: ImageContent }>;
   /** Resolve several IDs against one inventory read, in request order. */
   resolveImages?(
     ids: readonly string[],
@@ -105,11 +108,7 @@ export interface PiModelToolsHost {
     usage?: Usage;
     status: "completed" | "failed" | "cancelled";
   }): Promise<void>;
-  onImage(
-    toolCallId: string,
-    image: ImageContent,
-    signal?: AbortSignal,
-  ): Promise<void>;
+  onImage(toolCallId: string, image: ImageContent, signal?: AbortSignal): Promise<void>;
   /**
    * Writes a generated image into the chat's workspace folder, with
    * write_file's protections, and returns the workspace-relative path written.
@@ -168,7 +167,9 @@ export function imageSavePaths(savePath: string, mimeTypes: readonly string[]): 
 
 function extensionType(extension: string): string | undefined {
   const lower = extension.toLowerCase();
-  return lower === ".jpeg" ? "image/jpeg" : Object.keys(IMAGE_FILE_EXTENSIONS).find((type) => IMAGE_FILE_EXTENSIONS[type] === lower);
+  return lower === ".jpeg"
+    ? "image/jpeg"
+    : Object.keys(IMAGE_FILE_EXTENSIONS).find((type) => IMAGE_FILE_EXTENSIONS[type] === lower);
 }
 
 /**
@@ -214,14 +215,19 @@ async function keepGeneratedImages(
   placeOnCanvas: boolean,
   signal: AbortSignal | undefined,
 ): Promise<string[]> {
-  const paths = imageSavePaths(savePath, images.map((image) => image.mimeType));
+  const paths = imageSavePaths(
+    savePath,
+    images.map((image) => image.mimeType),
+  );
   const saved: PiModelSavedImage[] = [];
   const problems: string[] = [];
   for (const [index, image] of images.entries()) {
     signal?.throwIfAborted();
     try {
       const target = paths[index]!;
-      const written = await host.saveImage!(target, image, signal, { replace: imageSaveMayReplace(savePath, target) });
+      const written = await host.saveImage!(target, image, signal, {
+        replace: imageSaveMayReplace(savePath, target),
+      });
       saved.push({ path: written, width: sizes[index]!.width, height: sizes[index]!.height });
     } catch (error) {
       if (signal?.aborted) throw error;
@@ -232,7 +238,9 @@ async function keepGeneratedImages(
       );
     }
   }
-  const notes = saved.length ? [`Saved in the workspace as ${saved.map((entry) => entry.path).join(", ")}.`] : [];
+  const notes = saved.length
+    ? [`Saved in the workspace as ${saved.map((entry) => entry.path).join(", ")}.`]
+    : [];
   notes.push(...problems);
   if (!placeOnCanvas || saved.length === 0) return notes;
   signal?.throwIfAborted();
@@ -254,15 +262,9 @@ async function keepGeneratedImages(
 const MAX_JSON_BYTES = CLASSIFIER_JSON_BYTES;
 const record = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
-const own = (value: object, key: string) =>
-  Object.prototype.hasOwnProperty.call(value, key);
+const own = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);
 
-function text(
-  value: unknown,
-  limit: number,
-  label: string,
-  empty = false,
-): string {
+function text(value: unknown, limit: number, label: string, empty = false): string {
   if (
     typeof value !== "string" ||
     (!empty && !value.trim()) ||
@@ -276,19 +278,23 @@ function fields(
   allowed: readonly string[],
   label: string,
 ): Record<string, unknown> {
-  if (
-    !record(value) ||
-    Object.keys(value).some((key) => !allowed.includes(key))
-  )
+  if (!record(value) || Object.keys(value).some((key) => !allowed.includes(key)))
     throw new Error(`Invalid ${label} fields.`);
   return value;
 }
 function jsonObject(value: unknown, label: string): JsonObject {
-  const output = copyBoundedJson(value, { maxNodes: 4096, maxDepth: 16, maxSize: MAX_JSON_BYTES, measure: utf8Size, ordinaryObjects: true });
+  const output = copyBoundedJson(value, {
+    maxNodes: 4096,
+    maxDepth: 16,
+    maxSize: MAX_JSON_BYTES,
+    measure: utf8Size,
+    ordinaryObjects: true,
+  });
   if (output === undefined)
-    throw new Error(`Invalid ${label}: expected plain JSON within its size, depth and node limits.`);
-  if (!record(output))
-    throw new Error(`Invalid ${label}: expected a JSON object.`);
+    throw new Error(
+      `Invalid ${label}: expected plain JSON within its size, depth and node limits.`,
+    );
+  if (!record(output)) throw new Error(`Invalid ${label}: expected a JSON object.`);
   // The copy's size charge omits escape expansion; measure the exact encoding.
   if (Buffer.byteLength(JSON.stringify(output), "utf8") > MAX_JSON_BYTES)
     throw new Error(`Invalid ${label}: JSON limits exceeded.`);
@@ -302,16 +308,8 @@ function questions(value: unknown): Record<string, ClassifierQuestion> {
   const output: Record<string, ClassifierQuestion> = Object.create(null);
   for (const [key, raw] of entries) {
     text(key, 64, "question name");
-    const question = fields(
-      raw,
-      ["type", "instructions", "criteria"],
-      "question",
-    );
-    const instructions = text(
-      question.instructions,
-      4096,
-      "question instructions",
-    );
+    const question = fields(raw, ["type", "instructions", "criteria"], "question");
+    const instructions = text(question.instructions, 4096, "question instructions");
     if (question.type === "score") {
       if (
         !Array.isArray(question.criteria) ||
@@ -327,8 +325,7 @@ function questions(value: unknown): Record<string, ClassifierQuestion> {
         ),
       };
     } else if (question.type === "choice" || question.type === "bool") {
-      if (!record(question.criteria))
-        throw new Error("Question criteria must be an object.");
+      if (!record(question.criteria)) throw new Error("Question criteria must be an object.");
       const criteria = Object.entries(question.criteria);
       if (
         question.type === "bool"
@@ -340,12 +337,7 @@ function questions(value: unknown): Record<string, ClassifierQuestion> {
         throw new Error("Invalid question criteria.");
       const normalized: Record<string, string> = Object.create(null);
       for (const [label, description] of criteria)
-        normalized[text(label, 64, "choice label")] = text(
-          description,
-          2048,
-          "criterion",
-          true,
-        );
+        normalized[text(label, 64, "choice label")] = text(description, 2048, "criterion", true);
       output[key] =
         question.type === "choice"
           ? { type: "choice", instructions, criteria: normalized }
@@ -359,30 +351,56 @@ function questions(value: unknown): Record<string, ClassifierQuestion> {
   return output;
 }
 /** Shared normalization makes the reviewed state/questions identical to provider inputs. */
-export function parsePiClassifierRequest(args: unknown): { provider: string; modelId: string; context: ClassifierContext } {
+export function parsePiClassifierRequest(args: unknown): {
+  provider: string;
+  modelId: string;
+  context: ClassifierContext;
+} {
   const input = fields(args, ["provider", "model", "state", "questions"], "classification request");
   return {
-    provider: text(input.provider, 128, "provider"), modelId: text(input.model, 256, "model"),
-    context: { state: jsonObject(input.state, "classifier state"), questions: questions(input.questions) },
+    provider: text(input.provider, 128, "provider"),
+    modelId: text(input.model, 256, "model"),
+    context: {
+      state: jsonObject(input.state, "classifier state"),
+      questions: questions(input.questions),
+    },
   };
 }
 
-export function piModelOperationProviderLabel(providerId: string, configured: readonly { id: string; label: string }[], builtinLabel?: string): string {
-  return configured.find((provider) => provider.id === providerId)?.label ?? builtinLabel ?? providerId;
+export function piModelOperationProviderLabel(
+  providerId: string,
+  configured: readonly { id: string; label: string }[],
+  builtinLabel?: string,
+): string {
+  return (
+    configured.find((provider) => provider.id === providerId)?.label ?? builtinLabel ?? providerId
+  );
 }
 
-export function classifierApprovalFor(args: unknown, providerLabel?: string): ClassifierApprovalDetails {
+export function classifierApprovalFor(
+  args: unknown,
+  providerLabel?: string,
+): ClassifierApprovalDetails {
   const { provider, modelId, context } = parsePiClassifierRequest(args);
   // Make directional controls visible without removing or changing any input bytes.
-  const display = (value: unknown) => JSON.stringify(value).replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  const display = (value: unknown) =>
+    JSON.stringify(value).replace(
+      /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu,
+      (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
   const details: ClassifierApprovalDetails = {
-    kind: "model-classification", providerId: provider, providerLabel: providerLabel ?? provider, modelId,
-    stateJson: display(context.state), questionsJson: display(context.questions),
-    stateBytes: Buffer.byteLength(JSON.stringify(context.state), "utf8"), questionsBytes: Buffer.byteLength(JSON.stringify(context.questions), "utf8"),
+    kind: "model-classification",
+    providerId: provider,
+    providerLabel: providerLabel ?? provider,
+    modelId,
+    stateJson: display(context.state),
+    questionsJson: display(context.questions),
+    stateBytes: Buffer.byteLength(JSON.stringify(context.state), "utf8"),
+    questionsBytes: Buffer.byteLength(JSON.stringify(context.questions), "utf8"),
     payloadComplete: true,
   };
-  if (!isClassifierApprovalDetails(details)) throw new Error("The complete classification payload cannot be displayed safely.");
+  if (!isClassifierApprovalDetails(details))
+    throw new Error("The complete classification payload cannot be displayed safely.");
   return details;
 }
 
@@ -404,8 +422,7 @@ export async function resolvePiModelImageInputs(
   if (!Array.isArray(value) || value.length > MAX_IMAGES)
     throw new Error("Use at most 4 reference image IDs.");
   const ids = value.map((id) => text(id, 128, "reference image ID"));
-  if (new Set(ids).size !== ids.length)
-    throw new Error("Reference image IDs must be unique.");
+  if (new Set(ids).size !== ids.length) throw new Error("Reference image IDs must be unique.");
   if (!ids.length) return { images: [], references: [] };
   if (!host.resolveImage && !host.resolveImages)
     throw new Error("Reference images are unavailable in this chat.");
@@ -422,15 +439,15 @@ export async function resolvePiModelImageInputs(
         return each;
       })();
   signal?.throwIfAborted();
-  if (results.length !== ids.length)
-    throw new Error("Reference images could not be resolved.");
+  if (results.length !== ids.length) throw new Error("Reference images could not be resolved.");
   const names = results.map((result) => text(result.name, 256, "reference image name"));
-  const { images, sizes } = parseGeneratedImages(results.map((result) => result.image), { name: "Reference image" });
+  const { images, sizes } = parseGeneratedImages(
+    results.map((result) => result.image),
+    { name: "Reference image" },
+  );
   const pixels = sizes.reduce((sum, size) => sum + size.pixels, 0);
   if (pixels > 40_000_000)
-    throw new Error(
-      "Reference images exceed the 40-million decoded-pixel limit.",
-    );
+    throw new Error("Reference images exceed the 40-million decoded-pixel limit.");
   return {
     images,
     references: images.map((image, index) => ({
@@ -442,10 +459,7 @@ export async function resolvePiModelImageInputs(
   };
 }
 
-function validAnswers(
-  value: unknown,
-  requested: Record<string, ClassifierQuestion>,
-): JsonObject {
+function validAnswers(value: unknown, requested: Record<string, ClassifierQuestion>): JsonObject {
   const answers = jsonObject(value, "classifier answers");
   if (
     Object.keys(answers).length !== Object.keys(requested).length ||
@@ -453,18 +467,14 @@ function validAnswers(
   )
     throw new Error("Classifier answers do not match the requested questions.");
   const probability = (value: unknown) =>
-    typeof value === "number" &&
-    Number.isFinite(value) &&
-    value >= 0 &&
-    value <= 1;
+    typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
   for (const [key, question] of Object.entries(requested)) {
     const answer = answers[key];
     if (!record(answer) || answer.type !== question.type)
       throw new Error("Classifier answer type mismatch.");
     if (question.type === "bool") {
       fields(answer, ["type", "probability"], "bool answer");
-      if (!probability(answer.probability))
-        throw new Error("Invalid classifier probability.");
+      if (!probability(answer.probability)) throw new Error("Invalid classifier probability.");
     } else if (question.type === "score") {
       fields(answer, ["type", "score", "confidence"], "score answer");
       if (
@@ -476,21 +486,15 @@ function validAnswers(
       )
         throw new Error("Invalid classifier score.");
     } else {
-      fields(
-        answer,
-        ["type", "choice", "probabilities", "confidence"],
-        "choice answer",
-      );
+      fields(answer, ["type", "choice", "probabilities", "confidence"], "choice answer");
       if (
         typeof answer.choice !== "string" ||
         !own(question.criteria, answer.choice) ||
         !probability(answer.confidence) ||
         !record(answer.probabilities) ||
-        Object.keys(answer.probabilities).length !==
-          Object.keys(question.criteria).length ||
+        Object.keys(answer.probabilities).length !== Object.keys(question.criteria).length ||
         Object.entries(answer.probabilities).some(
-          ([label, value]) =>
-            !own(question.criteria, label) || !probability(value),
+          ([label, value]) => !own(question.criteria, label) || !probability(value),
         )
       )
         throw new Error("Invalid classifier choice.");
@@ -545,9 +549,7 @@ const questionSchema = Type.Union([
 /** Operations use only the supplied runtime's authenticated providers; tools accept no auth or URLs. */
 export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
   const classifierModels = host.classifierModels;
-  const account = async (
-    record: Parameters<NonNullable<PiModelToolsHost["onUsage"]>>[0],
-  ) => {
+  const account = async (record: Parameters<NonNullable<PiModelToolsHost["onUsage"]>>[0]) => {
     // The production ledger logs persistence faults. Accounting must never hide
     // a paid provider result (or replace its original transport failure).
     try {
@@ -611,27 +613,21 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     async execute(_id, args, signal) {
       signal?.throwIfAborted();
       const input = fields(args, ["type"], "model list");
-      if (
-        input.type !== undefined &&
-        input.type !== "image" &&
-        input.type !== "classifier"
-      )
+      if (input.type !== undefined && input.type !== "image" && input.type !== "classifier")
         throw new Error("Model type must be image or classifier.");
       if (input.type === "classifier" && !classifierModels)
         throw new Error("Classifier models are not available in this chat.");
       const types: ("image" | "classifier")[] = input.type
         ? [input.type]
-        : classifierModels ? ["image", "classifier"] : ["image"];
+        : classifierModels
+          ? ["image", "classifier"]
+          : ["image"];
       const models: JsonObject[] = [];
       let truncated = false;
       let images = 0;
       for (const type of types) {
         const registry = type === "image" ? host.imageModels : classifierModels!;
-        const available = await registry.getAvailableOfType(
-          type,
-          undefined,
-          { signal },
-        );
+        const available = await registry.getAvailableOfType(type, undefined, { signal });
         signal?.throwIfAborted();
         for (const model of available) {
           if (model.type !== type) continue;
@@ -689,7 +685,10 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
         aspectRatio: Type.Optional(
           Type.Union(
             IMAGE_ASPECT_RATIOS.map((ratio) => Type.Literal(ratio)),
-            { description: "Image shape as width:height. Omit for the model's default (usually square)." },
+            {
+              description:
+                "Image shape as width:height. Omit for the model's default (usually square).",
+            },
           ),
         ),
         ...(host.saveImage
@@ -698,7 +697,8 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
                 Type.String({
                   minLength: 1,
                   maxLength: 512,
-                  description: "Workspace-relative file to save the image to, such as design/assets/hero.png.",
+                  description:
+                    "Workspace-relative file to save the image to, such as design/assets/hero.png.",
                 }),
               ),
             }
@@ -706,7 +706,9 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
         ...(host.saveImage && host.placeImages
           ? {
               placeOnCanvas: Type.Optional(
-                Type.Boolean({ description: "Also put the saved image on the design canvas (needs savePath)." }),
+                Type.Boolean({
+                  description: "Also put the saved image on the design canvas (needs savePath).",
+                }),
               ),
             }
           : {}),
@@ -731,23 +733,21 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
       if (input.aspectRatio !== undefined && !isImageAspectRatio(input.aspectRatio))
         throw new Error(`Aspect ratio must be one of ${IMAGE_ASPECT_RATIOS.join(", ")}.`);
       // Checked before the paid request, so a path that could never be saved costs nothing.
-      const savePath = input.savePath === undefined ? undefined : checkImageSavePath(input.savePath);
+      const savePath =
+        input.savePath === undefined ? undefined : checkImageSavePath(input.savePath);
       if (input.placeOnCanvas !== undefined && typeof input.placeOnCanvas !== "boolean")
         throw new Error("placeOnCanvas must be true or false.");
       const placeOnCanvas = input.placeOnCanvas === true;
       if (placeOnCanvas && savePath === undefined)
-        throw new Error("placeOnCanvas needs savePath: the canvas shows a file saved in the workspace, such as design/assets/hero.png.");
+        throw new Error(
+          "placeOnCanvas needs savePath: the canvas shows a file saved in the workspace, such as design/assets/hero.png.",
+        );
       const aspectRatio = input.aspectRatio as ImageAspectRatio | undefined;
       const provider = text(input.provider, 128, "provider"),
         modelId = text(input.model, 256, "model"),
         prompt = text(input.prompt, 16_384, "image prompt");
       const model = host.imageModels.getModelOfType("image", provider, modelId);
-      if (
-        !model ||
-        model.type !== "image" ||
-        model.provider !== provider ||
-        model.id !== modelId
-      )
+      if (!model || model.type !== "image" || model.provider !== provider || model.id !== modelId)
         throw new Error(
           `Unknown image model. Use list_operation_models to find an available image model. ${IMAGE_GENERATION_SETUP_HINT}`,
         );
@@ -755,7 +755,9 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
       const available = await host.imageModels.getAvailableOfType("image", provider, { signal });
       signal?.throwIfAborted();
       if (!available.some((entry) => entry.provider === provider && entry.id === modelId))
-        throw new Error(`This image model's provider has no image key. ${IMAGE_GENERATION_SETUP_HINT}`);
+        throw new Error(
+          `This image model's provider has no image key. ${IMAGE_GENERATION_SETUP_HINT}`,
+        );
       const { images: references } = await resolvePiModelImageInputs(
         host,
         input.referenceImageIds,
@@ -797,8 +799,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
             {
               type: "text",
               text: [
-                description ||
-                  `Generated ${images.length} image${images.length === 1 ? "" : "s"}.`,
+                description || `Generated ${images.length} image${images.length === 1 ? "" : "s"}.`,
                 ...kept,
               ].join("\n"),
             },
@@ -809,9 +810,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
         };
       } catch (error) {
         return errorResult(
-          error instanceof Error
-            ? error.message
-            : "Could not display generated images.",
+          error instanceof Error ? error.message : "Could not display generated images.",
           result.usage,
         );
       }
@@ -866,9 +865,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
         };
       } catch (error) {
         return errorResult(
-          error instanceof Error
-            ? error.message
-            : "Invalid classifier response.",
+          error instanceof Error ? error.message : "Invalid classifier response.",
           result.usage,
         );
       }
@@ -898,9 +895,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
               truncated: available.length > 100,
             };
             return {
-              content: [
-                { type: "text", text: JSON.stringify(structuredContent) },
-              ],
+              content: [{ type: "text", text: JSON.stringify(structuredContent) }],
               structuredContent,
               details: null,
             };

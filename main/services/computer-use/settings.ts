@@ -16,7 +16,9 @@ export const computerUseSettings = new ComputerUseSettingsCoordinator({
     // Turning the beta off also turns off Always allow, so re-enabling it
     // never silently means "always".
     await configStore.setSettings(
-      enabled ? { computerUseEnabled: true } : { computerUseEnabled: false, computerUseAlwaysAllow: false },
+      enabled
+        ? { computerUseEnabled: true }
+        : { computerUseEnabled: false, computerUseAlwaysAllow: false },
       isCurrent,
     );
   },

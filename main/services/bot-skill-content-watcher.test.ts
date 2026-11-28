@@ -170,9 +170,11 @@ test("each delivered skill event invalidates independently of delayed earlier ev
   await fs.writeFile(stagedFile, "Replacement");
   await fs.rename(stagedFile, skillFile);
   deliver("delayed temp notification", "rename", null);
-  assert.deepEqual(observed("delayed temp notification"), [
-    { event: "delayed temp notification", content: "Replacement" },
-  ], "A delayed earlier event can read the new content, so content alone is not causal proof");
+  assert.deepEqual(
+    observed("delayed temp notification"),
+    [{ event: "delayed temp notification", content: "Replacement" }],
+    "A delayed earlier event can read the new content, so content alone is not causal proof",
+  );
   assert.deepEqual(observed("atomic replacement"), []);
   deliver("atomic replacement", "rename", "SKILL.md");
   assert.deepEqual(observed("atomic replacement"), [
@@ -186,9 +188,7 @@ test("each delivered skill event invalidates independently of delayed earlier ev
   ]);
   assert.deepEqual(observed("later edit"), []);
   deliver("later edit", "change", "SKILL.md");
-  assert.deepEqual(observed("later edit"), [
-    { event: "later edit", content: "After replacement" },
-  ]);
+  assert.deepEqual(observed("later edit"), [{ event: "later edit", content: "After replacement" }]);
 });
 
 test("real filesystem smoke observes current content across an atomic save and edit", async (t) => {
@@ -215,7 +215,9 @@ test("real filesystem smoke observes current content across an atomic save and e
   await fs.writeFile(skillFile, "After replacement");
   // fs.watch may delay/coalesce events. This smoke check establishes eventual
   // current-content visibility, not attribution to either individual mutation.
-  await waitForChange(() => observedContents.filter((content) => content === "After replacement").length);
+  await waitForChange(
+    () => observedContents.filter((content) => content === "After replacement").length,
+  );
 });
 
 test("disposal fences an in-flight skill registration", async (t) => {
@@ -224,7 +226,9 @@ test("disposal fences an in-flight skill registration", async (t) => {
   const skillFile = path.join(root, "SKILL.md");
   await fs.writeFile(skillFile, "Before");
   let changes = 0;
-  const watcher = new BotSkillContentWatcher(() => { changes += 1; });
+  const watcher = new BotSkillContentWatcher(() => {
+    changes += 1;
+  });
   t.after(() => watcher.dispose());
   const pending = watcher.watchSkillFiles([skillFile]);
   watcher.dispose();
@@ -244,7 +248,9 @@ test("disposed skill watchers cannot be registered again", async (t) => {
   const skillFile = path.join(root, "SKILL.md");
   await fs.writeFile(skillFile, "Before");
   let changes = 0;
-  const watcher = new BotSkillContentWatcher(() => { changes += 1; });
+  const watcher = new BotSkillContentWatcher(() => {
+    changes += 1;
+  });
   t.after(() => watcher.dispose());
   watcher.dispose();
   await watcher.watchSkillFiles([skillFile]);
@@ -262,7 +268,9 @@ test("disposal closes installed watchers and permits a fresh independent instanc
   const skillFile = path.join(root, "SKILL.md");
   await fs.writeFile(skillFile, "Before");
   let retiredChanges = 0;
-  const retired = new BotSkillContentWatcher(() => { retiredChanges += 1; });
+  const retired = new BotSkillContentWatcher(() => {
+    retiredChanges += 1;
+  });
   t.after(() => retired.dispose());
   await retired.watchSkillFiles([skillFile]);
   await settleWatcherEvents();
@@ -273,12 +281,18 @@ test("disposal closes installed watchers and permits a fresh independent instanc
   const closed = once(nativeWatcher, "close");
   retired.dispose();
   retired.dispose();
-  assert.equal(close.mock.callCount(), 1, "Disposal must close the installed native watcher exactly once");
+  assert.equal(
+    close.mock.callCount(),
+    1,
+    "Disposal must close the installed native watcher exactly once",
+  );
   await closed;
   retiredChanges = 0;
 
   let freshChanges = 0;
-  const fresh = new BotSkillContentWatcher(() => { freshChanges += 1; });
+  const fresh = new BotSkillContentWatcher(() => {
+    freshChanges += 1;
+  });
   t.after(() => fresh.dispose());
   await fresh.watchSkillFiles([skillFile]);
   await settleWatcherEvents();

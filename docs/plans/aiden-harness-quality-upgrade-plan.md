@@ -14,27 +14,27 @@ If an upstream defect or missing public API prevents a slice, reproduce it indep
 
 The sitrep used three GPT-6.1 Sol subagents at high reasoning, followed by independent source inspection and focused parent-agent probes.
 
-| Reference | Audited snapshot and limits |
-| --- | --- |
-| Aiden checkout | `a74edb0f6b1f165196cc98969d73482c857f945a`, version 0.57.0; clean at audit start |
+| Reference              | Audited snapshot and limits                                                                                                                                                                                                                               |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Aiden checkout         | `a74edb0f6b1f165196cc98969d73482c857f945a`, version 0.57.0; clean at audit start                                                                                                                                                                          |
 | Remote main comparison | `13aa5763a32fb46619b61355166825b456905b1c`; 109 commits ahead, 155 changed files. Core finding files were unchanged; relevant harness, Remote, and chat-pane patches were inspected. This was a focused comparison, not a full audit of every new commit. |
-| Harness² | Google Research commit [`1cfe254e8d25b15f37048c3730134686abe60335`](https://github.com/google-research/harness2/tree/1cfe254e8d25b15f37048c3730134686abe60335); source inspected, no downloaded code executed |
-| Executed checks | Real temporary SQLite memory-capacity probe; real Assistant error-state function probe; six task-oracle fixtures with 7 valid controls accepted and 22 invalid controls rejected; 23 CI-policy/registration tests passed |
-| Not established | Live-model task success or billed-cost improvement, full current-main test acceptance, packaged performance, visual quality, or physical-device acceptance. The audit checkout had no installed dependencies. |
+| Harness²               | Google Research commit [`1cfe254e8d25b15f37048c3730134686abe60335`](https://github.com/google-research/harness2/tree/1cfe254e8d25b15f37048c3730134686abe60335); source inspected, no downloaded code executed                                             |
+| Executed checks        | Real temporary SQLite memory-capacity probe; real Assistant error-state function probe; six task-oracle fixtures with 7 valid controls accepted and 22 invalid controls rejected; 23 CI-policy/registration tests passed                                  |
+| Not established        | Live-model task success or billed-cost improvement, full current-main test acceptance, packaged performance, visual quality, or physical-device acceptance. The audit checkout had no installed dependencies.                                             |
 
 Before implementation, refresh this baseline against the then-current main. Preserve the recently merged audit fixes instead of treating old plans as current defect inventories.
 
 ### Verified findings
 
-| Finding | Evidence | Qualification |
-| --- | --- | --- |
+| Finding                                                         | Evidence                                                                                                                                                                                                                                         | Qualification                                                                                                                                        |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Newer chats lose cross-chat recall when metadata capacity fills | [`memory-store.ts`](../../main/services/memory-store.ts), `replaceChatMetadata`; [`llm-client.ts`](../../main/services/llm-client.ts), indexing call. Six chats inserted `[1000,1000,1000,1000,1000,0]`; newest unique term had no recall match. | Applies when workspace memory is enabled. Existing chats can refresh; deleting source chats frees space. Approved facts and Bot memory are separate. |
-| Assistant recovery treats independent errors as a repeated loop | [`tool-loop-guard.ts`](../../main/services/assistant/tool-loop-guard.ts), `advanceAttendedToolErrorState`; [`pi-turn-context.ts`](../../main/services/pi-turn-context.ts). Two batches, each with an error and a success, trigger tool removal. | Attended Assistant mode only, not all coding-workspace turns. The escape hatch is intentional and must remain effective. |
-| Later services disappear from large discovery inventories | [`pi-tool-discovery.ts`](../../main/services/pi-tool-discovery.ts), `inventory` slices 512 before ranking and namespace filtering. | Explicit bounded policy; preserve byte, authority, and upstream inventory limits. |
-| Lifecycle completion does not establish task correctness | [`pi-agent-runtime-harness.ts`](../../main/services/pi-agent-runtime-harness.ts), managed outcome; [`subagent-child-runner.ts`](../../main/services/subagents/subagent-child-runner.ts), terminal prose. | Existing [`claim-check.ts`](../../renderer/shared/claim-check.ts) flags narrow false-success cases; preserve and extend it. |
-| Independent task evaluation remains unfinished | [Six-task pilot](../research/experiments/task-quality-fixtures/pilot-manifest.json) and [research conclusions](../research/2609.20804-pi-harness-deep-dive.md). | Existing replay tests establish lifecycle invariants. Oracle-control passes are not model task-success measurements. |
-| CLI does not wire the durable Bot-session service | [`remote-bots.ts`](../../packages/cli/src/remote-bots.ts), [`remote.ts`](../../packages/cli/src/remote.ts), and [`aiden-remote-router.ts`](../../main/services/aiden-remote-router.ts). | Negotiation correctly withholds unavailable session/routine/preset/memory/proactivity features. This is a parity gap. |
-| Desktop renders every loaded transcript message | [`message-list.tsx`](../../renderer/components/message-list.tsx) and [`chat-pane.tsx`](../../renderer/main/chat-pane.tsx). | Structural observation; measure packaged latency and memory before claiming a regression or selecting a rendering strategy. |
+| Assistant recovery treats independent errors as a repeated loop | [`tool-loop-guard.ts`](../../main/services/assistant/tool-loop-guard.ts), `advanceAttendedToolErrorState`; [`pi-turn-context.ts`](../../main/services/pi-turn-context.ts). Two batches, each with an error and a success, trigger tool removal.  | Attended Assistant mode only, not all coding-workspace turns. The escape hatch is intentional and must remain effective.                             |
+| Later services disappear from large discovery inventories       | [`pi-tool-discovery.ts`](../../main/services/pi-tool-discovery.ts), `inventory` slices 512 before ranking and namespace filtering.                                                                                                               | Explicit bounded policy; preserve byte, authority, and upstream inventory limits.                                                                    |
+| Lifecycle completion does not establish task correctness        | [`pi-agent-runtime-harness.ts`](../../main/services/pi-agent-runtime-harness.ts), managed outcome; [`subagent-child-runner.ts`](../../main/services/subagents/subagent-child-runner.ts), terminal prose.                                         | Existing [`claim-check.ts`](../../renderer/shared/claim-check.ts) flags narrow false-success cases; preserve and extend it.                          |
+| Independent task evaluation remains unfinished                  | [Six-task pilot](../research/experiments/task-quality-fixtures/pilot-manifest.json) and [research conclusions](../research/2609.20804-pi-harness-deep-dive.md).                                                                                  | Existing replay tests establish lifecycle invariants. Oracle-control passes are not model task-success measurements.                                 |
+| CLI does not wire the durable Bot-session service               | [`remote-bots.ts`](../../packages/cli/src/remote-bots.ts), [`remote.ts`](../../packages/cli/src/remote.ts), and [`aiden-remote-router.ts`](../../main/services/aiden-remote-router.ts).                                                          | Negotiation correctly withholds unavailable session/routine/preset/memory/proactivity features. This is a parity gap.                                |
+| Desktop renders every loaded transcript message                 | [`message-list.tsx`](../../renderer/components/message-list.tsx) and [`chat-pane.tsx`](../../renderer/main/chat-pane.tsx).                                                                                                                       | Structural observation; measure packaged latency and memory before claiming a regression or selecting a rendering strategy.                          |
 
 ## Scope and existing work
 
@@ -55,21 +55,21 @@ Out of initial scope: automatic self-modification, replaying live external write
 
 Each row is a reviewable slice, not one large PR. H0 precedes implementation. Independent H1 fixes can land before evaluation. H3/H4 can proceed after H0 without delaying the first fixes. H5 requires the evidence and evaluation foundations.
 
-| Slice | Deliverable | Depends on | Status |
-| --- | --- | --- | --- |
-| H0 | Current-main baseline, ownership, and acceptance inventory | None | Complete; fresh review passed |
-| H1a | Bounded workspace metadata retention and indexing status | H0 | Implemented; fresh review passed |
-| H1b | Progress-aware attended Assistant recovery | H0 | Implemented; fresh review findings addressed |
-| H1c | Discovery across admitted namespaces with bounded output | H0 | Implemented; fresh review findings addressed |
-| H1d | Failed CLI advisor accounting and useful CI receipts | H0 | Implemented; fresh review passed |
-| H2a | Versioned, host-owned verification/evidence receipts | H0 | Private command/lifecycle foundation accepted; predicates/consumer H2b |
-| H2b | Protected six-task evaluation adapter and offline falsification | H2a | Implemented; fresh review passed on macOS |
-| H2c | One bounded baseline/candidate live pilot | H2b and resolved pilot budget/configuration | Planned; no trial started |
-| H3 | Portable durable Bot-session parity for CLI/native consumers | H0; portability decision below | Implemented; fresh review passed, physical pairing pending |
-| H4a | Packaged long-chat and idle performance baselines | H0 | Local production package measured; signed release separate |
-| H4b | Measured transcript rendering improvement | H4a | Implemented; fresh review and local budgets/browser checks passed |
-| H5a | Versioned workflow evidence and lesson candidates | H2a, H2b | Implemented private foundation; fresh review passed |
-| H5b | Explicit workflow experiment and adoption UI | H5a, completed H2c with usable measurement pipeline | Planned; off by default |
+| Slice | Deliverable                                                     | Depends on                                          | Status                                                                 |
+| ----- | --------------------------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------- |
+| H0    | Current-main baseline, ownership, and acceptance inventory      | None                                                | Complete; fresh review passed                                          |
+| H1a   | Bounded workspace metadata retention and indexing status        | H0                                                  | Implemented; fresh review passed                                       |
+| H1b   | Progress-aware attended Assistant recovery                      | H0                                                  | Implemented; fresh review findings addressed                           |
+| H1c   | Discovery across admitted namespaces with bounded output        | H0                                                  | Implemented; fresh review findings addressed                           |
+| H1d   | Failed CLI advisor accounting and useful CI receipts            | H0                                                  | Implemented; fresh review passed                                       |
+| H2a   | Versioned, host-owned verification/evidence receipts            | H0                                                  | Private command/lifecycle foundation accepted; predicates/consumer H2b |
+| H2b   | Protected six-task evaluation adapter and offline falsification | H2a                                                 | Implemented; fresh review passed on macOS                              |
+| H2c   | One bounded baseline/candidate live pilot                       | H2b and resolved pilot budget/configuration         | Planned; no trial started                                              |
+| H3    | Portable durable Bot-session parity for CLI/native consumers    | H0; portability decision below                      | Implemented; fresh review passed, physical pairing pending             |
+| H4a   | Packaged long-chat and idle performance baselines               | H0                                                  | Local production package measured; signed release separate             |
+| H4b   | Measured transcript rendering improvement                       | H4a                                                 | Implemented; fresh review and local budgets/browser checks passed      |
+| H5a   | Versioned workflow evidence and lesson candidates               | H2a, H2b                                            | Implemented private foundation; fresh review passed                    |
+| H5b   | Explicit workflow experiment and adoption UI                    | H5a, completed H2c with usable measurement pipeline | Planned; off by default                                                |
 
 ### H0 — Freeze the baseline and reconcile ownership
 
@@ -184,14 +184,14 @@ Acceptance: useful candidates can be adopted/rolled back; harmful/inconclusive c
 
 Run narrow suites before hosted CI. Confirm current script membership/native prerequisites at implementation time rather than copying old counts. Starting points:
 
-| Surface | Behavioral validation |
-| --- | --- |
+| Surface                                       | Behavioral validation                                                                                                                                                                                                                     |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Memory, recovery, discovery, runtime receipts | Focused `memory-store`, `memory-context`, `assistant/tool-loop-guard`, `pi-tool-discovery`, `claim-check`, harness/effect tests; relevant `test:compaction`, `test:assistant-automations`, `test:mcp`, `test:compaction:evaluate` scripts |
-| Evaluation | Frozen controls plus registered host-adapter, protected-verifier, isolation, accounting, and baseline/candidate tests |
-| Advisor and CI receipts | Advisor/usage tests, CLI bundle/parity tests, diagnostic policy and `test:ci-policy` |
-| CLI Bots/shared contracts | Bot-session/router tests, `test:aiden-remote`, CLI build/test/type-check, relevant iOS/Android suites and protocol fixtures |
-| Transcript/verification UI | Mounted renderer/Playwright behavior, relevant native suites, packaged measurements, accessibility/reduced motion |
-| Cross-cutting | Root/CLI types and scoped lint; broader integration/build checks where dependencies/contracts justify them; exact-head hosted CI |
+| Evaluation                                    | Frozen controls plus registered host-adapter, protected-verifier, isolation, accounting, and baseline/candidate tests                                                                                                                     |
+| Advisor and CI receipts                       | Advisor/usage tests, CLI bundle/parity tests, diagnostic policy and `test:ci-policy`                                                                                                                                                      |
+| CLI Bots/shared contracts                     | Bot-session/router tests, `test:aiden-remote`, CLI build/test/type-check, relevant iOS/Android suites and protocol fixtures                                                                                                               |
+| Transcript/verification UI                    | Mounted renderer/Playwright behavior, relevant native suites, packaged measurements, accessibility/reduced motion                                                                                                                         |
+| Cross-cutting                                 | Root/CLI types and scoped lint; broader integration/build checks where dependencies/contracts justify them; exact-head hosted CI                                                                                                          |
 
 Extend existing behavioral suites where possible. Register new files in package test scripts and the CI registry. Do not grow source-grep contracts or tests that mirror implementation. A passed retry remains a flake: rerun at most once and record spec, symptom, and run link without weakening gates.
 

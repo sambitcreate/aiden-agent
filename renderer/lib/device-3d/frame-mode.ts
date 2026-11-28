@@ -16,7 +16,9 @@ function defaultStorage(): StorageLike | null {
 }
 
 /** A per-viewer convenience. Unreadable storage falls back to the 3D view. */
-export function readFramePreference(storage: StorageLike | null = defaultStorage()): DeviceFramePreference {
+export function readFramePreference(
+  storage: StorageLike | null = defaultStorage(),
+): DeviceFramePreference {
   try {
     return storage?.getItem(DEVICE_FRAME_PREFERENCE_KEY) === "flat" ? "flat" : "3d";
   } catch {

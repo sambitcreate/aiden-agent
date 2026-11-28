@@ -13,21 +13,21 @@ const managed = {
 test("resolves the canonical managed home for Bot-bound inbound attachments", async () => {
   const calls: string[] = [];
   const lease = await resolveBotInboundAttachmentHome({
-      botId: managed.botId,
-      workspaceId: managed.workspaceId,
-      resolveManagedWorkspace: async (botId) => {
-        calls.push(`resolve:${botId}`);
-        return managed;
-      },
-      canonicalize: async (candidate) => {
-        calls.push(`canonical:${candidate}`);
-        return candidate;
-      },
-      revalidateManagedWorkspace: async (expected) => {
-        calls.push(`revalidate:${expected.workspaceId}`);
-        return managed;
-      },
-    });
+    botId: managed.botId,
+    workspaceId: managed.workspaceId,
+    resolveManagedWorkspace: async (botId) => {
+      calls.push(`resolve:${botId}`);
+      return managed;
+    },
+    canonicalize: async (candidate) => {
+      calls.push(`canonical:${candidate}`);
+      return candidate;
+    },
+    revalidateManagedWorkspace: async (expected) => {
+      calls.push(`revalidate:${expected.workspaceId}`);
+      return managed;
+    },
+  });
   assert.equal(lease?.homePath, managed.homePath);
   assert.deepEqual(lease?.identity, managed.incarnation);
   assert.deepEqual(calls, [
@@ -130,8 +130,5 @@ test("re-proves the exact managed-home incarnation around attachment effects", a
   });
   assert.ok(lease);
   valid = false;
-  await assert.rejects(
-    lease.revalidateBeforeEffect(),
-    /managed home workspace changed/u,
-  );
+  await assert.rejects(lease.revalidateBeforeEffect(), /managed home workspace changed/u);
 });

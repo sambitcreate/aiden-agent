@@ -159,23 +159,84 @@ const searchOperands: Pick<SlotSpec, "operand" | "operandForms"> = {
 };
 
 /** test's operators whose operand is a file (`test -e {{file}}`); a value there could ask whether an outside path exists. */
-const TEST_FILE_OPERATORS = new Set(["-e", "-f", "-d", "-r", "-w", "-x", "-s", "-L", "-h", "-b", "-c", "-p", "-S", "-g", "-u", "-k", "-O", "-G", "-N"]);
+const TEST_FILE_OPERATORS = new Set([
+  "-e",
+  "-f",
+  "-d",
+  "-r",
+  "-w",
+  "-x",
+  "-s",
+  "-L",
+  "-h",
+  "-b",
+  "-c",
+  "-p",
+  "-S",
+  "-g",
+  "-u",
+  "-k",
+  "-O",
+  "-G",
+  "-N",
+]);
 /** test's operators that compare two files (`test {{a}} -nt notes.md`). */
 const TEST_FILE_PAIRS = new Set(["-nt", "-ot", "-ef"]);
 
 const PROGRAM_SPECS: Readonly<Record<string, SlotSpec>> = {
-  ls: { name: "ls", flags: "1aAlhrtSRdFGipcu", long: ["all", "almost-all", "human-readable", "recursive", "reverse"], ...files() },
+  ls: {
+    name: "ls",
+    flags: "1aAlhrtSRdFGipcu",
+    long: ["all", "almost-all", "human-readable", "recursive", "reverse"],
+    ...files(),
+  },
   cat: { name: "cat", flags: "nbsvetuAET", ...files() },
-  head: { name: "head", flags: "qv", digits: true, values: { "-n --lines": N, "-c --bytes": N }, ...files() },
-  tail: { name: "tail", flags: "fFqrv", digits: true, values: { "-n --lines": N, "-c --bytes": N }, ...files() },
-  wc: { name: "wc", flags: "lwcmL", long: ["lines", "words", "bytes", "chars", "max-line-length"], ...files() },
+  head: {
+    name: "head",
+    flags: "qv",
+    digits: true,
+    values: { "-n --lines": N, "-c --bytes": N },
+    ...files(),
+  },
+  tail: {
+    name: "tail",
+    flags: "fFqrv",
+    digits: true,
+    values: { "-n --lines": N, "-c --bytes": N },
+    ...files(),
+  },
+  wc: {
+    name: "wc",
+    flags: "lwcmL",
+    long: ["lines", "words", "bytes", "chars", "max-line-length"],
+    ...files(),
+  },
   grep: {
     name: "grep",
     flags: "rRnicLlwvFEGqhHosxzZbUaIP",
     long: [
-      "recursive", "line-number", "ignore-case", "count", "files-with-matches", "files-without-match", "word-regexp", "invert-match", "fixed-strings",
-      "extended-regexp", "basic-regexp", "quiet", "silent", "no-filename", "with-filename", "only-matching", "no-messages", "line-regexp", "null", "text",
-      "color", "colour",
+      "recursive",
+      "line-number",
+      "ignore-case",
+      "count",
+      "files-with-matches",
+      "files-without-match",
+      "word-regexp",
+      "invert-match",
+      "fixed-strings",
+      "extended-regexp",
+      "basic-regexp",
+      "quiet",
+      "silent",
+      "no-filename",
+      "with-filename",
+      "only-matching",
+      "no-messages",
+      "line-regexp",
+      "null",
+      "text",
+      "color",
+      "colour",
     ],
     values: {
       "-e --regexp": TD,
@@ -197,10 +258,43 @@ const PROGRAM_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "rg",
     flags: "iSsnNlcvwxFUuHhLq0pzaPbo.I",
     long: [
-      "json", "hidden", "no-ignore", "files", "count", "count-matches", "ignore-case", "smart-case", "case-sensitive", "fixed-strings", "line-number",
-      "no-line-number", "files-with-matches", "files-without-match", "invert-match", "word-regexp", "line-regexp", "follow", "no-heading", "heading",
-      "vimgrep", "only-matching", "multiline", "text", "unrestricted", "with-filename", "no-filename", "stats", "quiet", "trim", "column", "no-messages",
-      "null", "pcre2", "search-zip", "byte-offset", "no-config",
+      "json",
+      "hidden",
+      "no-ignore",
+      "files",
+      "count",
+      "count-matches",
+      "ignore-case",
+      "smart-case",
+      "case-sensitive",
+      "fixed-strings",
+      "line-number",
+      "no-line-number",
+      "files-with-matches",
+      "files-without-match",
+      "invert-match",
+      "word-regexp",
+      "line-regexp",
+      "follow",
+      "no-heading",
+      "heading",
+      "vimgrep",
+      "only-matching",
+      "multiline",
+      "text",
+      "unrestricted",
+      "with-filename",
+      "no-filename",
+      "stats",
+      "quiet",
+      "trim",
+      "column",
+      "no-messages",
+      "null",
+      "pcre2",
+      "search-zip",
+      "byte-offset",
+      "no-config",
     ],
     values: {
       "-e --regexp": TD,
@@ -224,7 +318,13 @@ const PROGRAM_SPECS: Readonly<Record<string, SlotSpec>> = {
   sort: {
     name: "sort",
     flags: "bdfgiMhnRrsucCmzV",
-    values: { "-k --key": T, "-t --field-separator": T, "-o --output": WRITES_FILE, "-T --temporary-directory": WRITES_FILE, "-S --buffer-size": null },
+    values: {
+      "-k --key": T,
+      "-t --field-separator": T,
+      "-o --output": WRITES_FILE,
+      "-T --temporary-directory": WRITES_FILE,
+      "-S --buffer-size": null,
+    },
     ...files(),
   },
   uniq: {
@@ -238,7 +338,13 @@ const PROGRAM_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "cut",
     flags: "sn",
     long: ["complement", "only-delimited"],
-    values: { "-f --fields": T, "-b --bytes": T, "-c --characters": T, "-d --delimiter": T, "--output-delimiter": T },
+    values: {
+      "-f --fields": T,
+      "-b --bytes": T,
+      "-c --characters": T,
+      "-d --delimiter": T,
+      "--output-delimiter": T,
+    },
     ...files(),
   },
   tr: { name: "tr", flags: "cdsC", ...text },
@@ -248,13 +354,28 @@ const PROGRAM_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "test",
     plain: true,
     operand: (_index, _afterDashes, _has, near) =>
-      TEST_FILE_OPERATORS.has(near(-1) ?? "") || TEST_FILE_PAIRS.has(near(-1) ?? "") || TEST_FILE_PAIRS.has(near(1) ?? "") ? P : T,
+      TEST_FILE_OPERATORS.has(near(-1) ?? "") ||
+      TEST_FILE_PAIRS.has(near(-1) ?? "") ||
+      TEST_FILE_PAIRS.has(near(1) ?? "")
+        ? P
+        : T,
     operandForms: "text, or a file in the workspace after -e, -f, -d and the other file tests",
   },
   true: plain("true"),
   false: plain("false"),
-  date: { name: "date", flags: "uRj", values: { "-d --date": T, "-r --reference": READS_ANY_FILE, "-f --file": READS_ANY_FILE }, ...text },
-  basename: { name: "basename", flags: "az", long: ["multiple", "zero"], values: { "-s --suffix": T }, ...text },
+  date: {
+    name: "date",
+    flags: "uRj",
+    values: { "-d --date": T, "-r --reference": READS_ANY_FILE, "-f --file": READS_ANY_FILE },
+    ...text,
+  },
+  basename: {
+    name: "basename",
+    flags: "az",
+    long: ["multiple", "zero"],
+    values: { "-s --suffix": T },
+    ...text,
+  },
   dirname: { name: "dirname", flags: "z", long: ["zero"], ...text },
 };
 
@@ -284,10 +405,47 @@ const LONG_SCORES: Readonly<Record<string, RegExp | null>> = {
   "--find-copies-harder": null,
 };
 const LOG_LONG = [
-  "oneline", "graph", "all", "decorate", "no-decorate", "stat", "shortstat", "numstat", "name-only", "name-status", "patch", "no-patch", "no-merges",
-  "merges", "first-parent", "reverse", "follow", "abbrev-commit", "date-order", "topo-order", "author-date-order", "no-color", "raw", "full-history",
-  "left-right", "cherry-pick", "cherry-mark", "regexp-ignore-case", "all-match", "invert-grep", "fixed-strings", "extended-regexp", "basic-regexp",
-  "perl-regexp", "source", "tags", "branches", "remotes", "summary", "color", ...RENAME_LONG,
+  "oneline",
+  "graph",
+  "all",
+  "decorate",
+  "no-decorate",
+  "stat",
+  "shortstat",
+  "numstat",
+  "name-only",
+  "name-status",
+  "patch",
+  "no-patch",
+  "no-merges",
+  "merges",
+  "first-parent",
+  "reverse",
+  "follow",
+  "abbrev-commit",
+  "date-order",
+  "topo-order",
+  "author-date-order",
+  "no-color",
+  "raw",
+  "full-history",
+  "left-right",
+  "cherry-pick",
+  "cherry-mark",
+  "regexp-ignore-case",
+  "all-match",
+  "invert-grep",
+  "fixed-strings",
+  "extended-regexp",
+  "basic-regexp",
+  "perl-regexp",
+  "source",
+  "tags",
+  "branches",
+  "remotes",
+  "summary",
+  "color",
+  ...RENAME_LONG,
 ];
 const LOG_VALUES: Record<string, ValueEntry> = {
   "-n --max-count": N,
@@ -310,7 +468,11 @@ const LOG_VALUES: Record<string, ValueEntry> = {
 };
 /** git diff, log and show take -U's value (lines of context) only joined: `-U {{n}}` reads the value as a revision or file. */
 const UNIFIED_JOINED = { "-U --unified": "a fixed -U5 or --unified=5" };
-const LOG_JOINED = { "--format": "a fixed --format=%h", "--pretty": "a fixed --pretty=oneline", ...UNIFIED_JOINED };
+const LOG_JOINED = {
+  "--format": "a fixed --format=%h",
+  "--pretty": "a fixed --pretty=oneline",
+  ...UNIFIED_JOINED,
+};
 const logLike = (name: string): SlotSpec => ({
   name,
   flags: "pcmsuziEFP",
@@ -327,14 +489,38 @@ const logLike = (name: string): SlotSpec => ({
 /** fetch and pull: the first operand is the remote, which can be a URL, a path or a transport that runs a command. */
 const remoteOperands = (sub: string): Pick<SlotSpec, "operand" | "operandForms"> => ({
   operand: (index, _afterDashes, has) => {
-    if (has("--multiple", "--all")) return `as an operand of git ${sub} with --multiple or --all, where every operand is a remote to connect to`;
-    return index === 0 ? `as the remote git ${sub} connects to (write it literally, such as origin)` : RR;
+    if (has("--multiple", "--all"))
+      return `as an operand of git ${sub} with --multiple or --all, where every operand is a remote to connect to`;
+    return index === 0
+      ? `as the remote git ${sub} connects to (write it literally, such as origin)`
+      : RR;
   },
   operandForms: "branch names after a literal remote (git " + sub + " origin {{branch}})",
 });
 const FETCH_LONG = [
-  "quiet", "verbose", "prune", "prune-tags", "tags", "no-tags", "force", "append", "all", "multiple", "dry-run", "atomic", "update-head-ok", "keep",
-  "progress", "unshallow", "recurse-submodules", "no-recurse-submodules", "set-upstream", "ipv4", "ipv6", "write-fetch-head", "no-write-fetch-head",
+  "quiet",
+  "verbose",
+  "prune",
+  "prune-tags",
+  "tags",
+  "no-tags",
+  "force",
+  "append",
+  "all",
+  "multiple",
+  "dry-run",
+  "atomic",
+  "update-head-ok",
+  "keep",
+  "progress",
+  "unshallow",
+  "recurse-submodules",
+  "no-recurse-submodules",
+  "set-upstream",
+  "ipv4",
+  "ipv6",
+  "write-fetch-head",
+  "no-write-fetch-head",
 ];
 const FETCH_VALUES: Record<string, ValueEntry> = {
   "--depth": N,
@@ -349,7 +535,12 @@ const FETCH_VALUES: Record<string, ValueEntry> = {
   "--upload-pack": RUNS_PROGRAM,
 };
 /** git branch and tag filters that take a commit (`--merged main`); each also turns on list mode. */
-const REACH_FILTERS: Record<string, ValueEntry> = { "--merged": R, "--no-merged": R, "--contains": R, "--no-contains": R };
+const REACH_FILTERS: Record<string, ValueEntry> = {
+  "--merged": R,
+  "--no-merged": R,
+  "--contains": R,
+  "--no-contains": R,
+};
 const REACH_FILTER_NAMES = Object.keys(REACH_FILTERS);
 /**
  * A pattern git branch or tag lists by (`--list 'feat/*'`): text, with no
@@ -358,17 +549,61 @@ const REACH_FILTER_NAMES = Object.keys(REACH_FILTERS);
  */
 const LIST_PATTERN = T;
 const BRANCH_CHANGES = [
-  "-d", "-D", "-m", "-M", "-c", "-C", "-f", "-t", "-u", "--delete", "--move", "--copy", "--force", "--track", "--no-track", "--set-upstream-to",
+  "-d",
+  "-D",
+  "-m",
+  "-M",
+  "-c",
+  "-C",
+  "-f",
+  "-t",
+  "-u",
+  "--delete",
+  "--move",
+  "--copy",
+  "--force",
+  "--track",
+  "--no-track",
+  "--set-upstream-to",
   "--unset-upstream",
 ];
-const TAG_CHANGES = ["-a", "-d", "-f", "-m", "-F", "-u", "--annotate", "--delete", "--force", "--message", "--file", "--local-user"];
-const PICK_VALUES: Record<string, ValueEntry> = { "-m --mainline": N, "-X --strategy-option": RUNS_PROGRAM, "--strategy": RUNS_PROGRAM };
+const TAG_CHANGES = [
+  "-a",
+  "-d",
+  "-f",
+  "-m",
+  "-F",
+  "-u",
+  "--annotate",
+  "--delete",
+  "--force",
+  "--message",
+  "--file",
+  "--local-user",
+];
+const PICK_VALUES: Record<string, ValueEntry> = {
+  "-m --mainline": N,
+  "-X --strategy-option": RUNS_PROGRAM,
+  "--strategy": RUNS_PROGRAM,
+};
 
 const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
   status: {
     name: "git status",
     flags: "sbuvz",
-    long: ["short", "branch", "porcelain", "long", "ignored", "untracked-files", "ahead-behind", "no-ahead-behind", "renames", "no-renames", "show-stash"],
+    long: [
+      "short",
+      "branch",
+      "porcelain",
+      "long",
+      "ignored",
+      "untracked-files",
+      "ahead-behind",
+      "no-ahead-behind",
+      "renames",
+      "no-renames",
+      "show-stash",
+    ],
     ...files(),
   },
   log: logLike("git log"),
@@ -378,21 +613,60 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     flags: "pusbwRaz",
     scores: RENAME_SCORES,
     long: [
-      "stat", "shortstat", "numstat", "name-only", "name-status", "cached", "staged", "patch", "no-patch", "no-color", "quiet", "exit-code",
-      "ignore-all-space", "ignore-space-change", "text", "minimal", "histogram", "patience", "color", "word-diff", "merge-base",
+      "stat",
+      "shortstat",
+      "numstat",
+      "name-only",
+      "name-status",
+      "cached",
+      "staged",
+      "patch",
+      "no-patch",
+      "no-color",
+      "quiet",
+      "exit-code",
+      "ignore-all-space",
+      "ignore-space-change",
+      "text",
+      "minimal",
+      "histogram",
+      "patience",
+      "color",
+      "word-diff",
+      "merge-base",
       ...RENAME_LONG,
     ],
-    values: { "-O": READS_ANY_FILE, "--output": WRITES_FILE, "-U --unified": null, "--diff-filter": null },
+    values: {
+      "-O": READS_ANY_FILE,
+      "--output": WRITES_FILE,
+      "-U --unified": null,
+      "--diff-filter": null,
+    },
     joined: UNIFIED_JOINED,
     ...files("revisions or files in the workspace"),
   },
   branch: {
     name: "git branch",
     flags: "avrdDmMcClfqt",
-    long: ["list", "all", "remotes", "verbose", "delete", "move", "copy", "force", "quiet", "show-current", "track", "no-track", "unset-upstream"],
+    long: [
+      "list",
+      "all",
+      "remotes",
+      "verbose",
+      "delete",
+      "move",
+      "copy",
+      "force",
+      "quiet",
+      "show-current",
+      "track",
+      "no-track",
+      "unset-upstream",
+    ],
     values: { "-u --set-upstream-to": R, ...REACH_FILTERS, "--sort": null },
     operand: (_index, _afterDashes, has) => {
-      if (has("-l", "--list", ...REACH_FILTER_NAMES) && !has(...BRANCH_CHANGES)) return LIST_PATTERN;
+      if (has("-l", "--list", ...REACH_FILTER_NAMES) && !has(...BRANCH_CHANGES))
+        return LIST_PATTERN;
       // `git branch -v NAME` is not a listing: git creates the branch NAME.
       if (has("-v", "--verbose") && !has(...BRANCH_CHANGES)) {
         return "as a name after -v without --list, where git branch creates that branch (add --list to filter the listing by a pattern, or drop -v to create a branch)";
@@ -404,7 +678,17 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
   switch: {
     name: "git switch",
     flags: "dfqmt",
-    long: ["detach", "discard-changes", "force", "merge", "quiet", "track", "no-track", "guess", "no-guess"],
+    long: [
+      "detach",
+      "discard-changes",
+      "force",
+      "merge",
+      "quiet",
+      "track",
+      "no-track",
+      "guess",
+      "no-guess",
+    ],
     values: { "-c --create": R, "-C --force-create": R, "--orphan": R },
     ...refs(),
   },
@@ -416,15 +700,46 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     operand: (index, afterDashes) => (index === 0 && !afterDashes ? VO : P),
     operandForms: "a branch or revision first, then files in the workspace",
   },
-  fetch: { name: "git fetch", flags: "qvpPtfanu46", long: FETCH_LONG, values: FETCH_VALUES, ...remoteOperands("fetch") },
+  fetch: {
+    name: "git fetch",
+    flags: "qvpPtfanu46",
+    long: FETCH_LONG,
+    values: FETCH_VALUES,
+    ...remoteOperands("fetch"),
+  },
   pull: {
     name: "git pull",
     flags: "qvrnf46",
     long: [
-      "quiet", "verbose", "rebase", "no-rebase", "ff", "no-ff", "ff-only", "squash", "no-squash", "commit", "no-commit", "autostash", "no-autostash",
-      "stat", "no-stat", "all", "prune", "tags", "no-tags", "force", "dry-run", "unshallow",
+      "quiet",
+      "verbose",
+      "rebase",
+      "no-rebase",
+      "ff",
+      "no-ff",
+      "ff-only",
+      "squash",
+      "no-squash",
+      "commit",
+      "no-commit",
+      "autostash",
+      "no-autostash",
+      "stat",
+      "no-stat",
+      "all",
+      "prune",
+      "tags",
+      "no-tags",
+      "force",
+      "dry-run",
+      "unshallow",
     ],
-    values: { ...FETCH_VALUES, "-j --jobs": null, "-s --strategy": RUNS_PROGRAM, "-X --strategy-option": RUNS_PROGRAM },
+    values: {
+      ...FETCH_VALUES,
+      "-j --jobs": null,
+      "-s --strategy": RUNS_PROGRAM,
+      "-X --strategy-option": RUNS_PROGRAM,
+    },
     joined: { "-j --jobs": "a fixed -j4 or --jobs=4" },
     ...remoteOperands("pull"),
   },
@@ -432,14 +747,47 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "git push",
     flags: "qvfnud46",
     long: [
-      "quiet", "verbose", "force", "force-with-lease", "dry-run", "set-upstream", "delete", "tags", "follow-tags", "no-verify", "atomic", "porcelain",
-      "progress", "no-progress", "force-if-includes",
+      "quiet",
+      "verbose",
+      "force",
+      "force-with-lease",
+      "dry-run",
+      "set-upstream",
+      "delete",
+      "tags",
+      "follow-tags",
+      "no-verify",
+      "atomic",
+      "porcelain",
+      "progress",
+      "no-progress",
+      "force-if-includes",
     ],
-    values: { "--repo": "which names the remote to connect to", "--receive-pack": RUNS_PROGRAM, "--exec": RUNS_PROGRAM, "-o --push-option": null },
-    operand: (index) => (index === 0 ? "as the remote git push connects to (write it literally, such as origin)" : RR),
+    values: {
+      "--repo": "which names the remote to connect to",
+      "--receive-pack": RUNS_PROGRAM,
+      "--exec": RUNS_PROGRAM,
+      "-o --push-option": null,
+    },
+    operand: (index) =>
+      index === 0 ? "as the remote git push connects to (write it literally, such as origin)" : RR,
     operandForms: "branch names after a literal remote (git push origin {{branch}})",
   },
-  add: { name: "git add", flags: "AnvfuN", long: ["all", "update", "dry-run", "force", "verbose", "intent-to-add", "ignore-errors", "renormalize"], ...files() },
+  add: {
+    name: "git add",
+    flags: "AnvfuN",
+    long: [
+      "all",
+      "update",
+      "dry-run",
+      "force",
+      "verbose",
+      "intent-to-add",
+      "ignore-errors",
+      "renormalize",
+    ],
+    ...files(),
+  },
   restore: {
     name: "git restore",
     flags: "SWq",
@@ -451,8 +799,21 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "git commit",
     flags: "aqvns",
     long: [
-      "all", "amend", "no-edit", "allow-empty", "allow-empty-message", "quiet", "verbose", "no-verify", "signoff", "only", "include", "dry-run", "short",
-      "porcelain", "no-status",
+      "all",
+      "amend",
+      "no-edit",
+      "allow-empty",
+      "allow-empty-message",
+      "quiet",
+      "verbose",
+      "no-verify",
+      "signoff",
+      "only",
+      "include",
+      "dry-run",
+      "short",
+      "porcelain",
+      "no-status",
     ],
     values: {
       "-m --message": TD,
@@ -480,13 +841,21 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "git tag",
     flags: "adlfn",
     long: ["annotate", "delete", "list", "force"],
-    values: { "-m --message": TD, "-F --file": READS_ANY_FILE, "-u --local-user": null, ...REACH_FILTERS, "--sort": null },
+    values: {
+      "-m --message": TD,
+      "-F --file": READS_ANY_FILE,
+      "-u --local-user": null,
+      ...REACH_FILTERS,
+      "--sort": null,
+    },
     operand: (index, _afterDashes, has) => {
-      if (has("-l", "--list", "-n", ...REACH_FILTER_NAMES) && !has(...TAG_CHANGES)) return LIST_PATTERN;
+      if (has("-l", "--list", "-n", ...REACH_FILTER_NAMES) && !has(...TAG_CHANGES))
+        return LIST_PATTERN;
       // `git tag NAME COMMIT`: the second operand is the commit the tag points at.
       return index === 1 && !has("-d", "--delete") ? VO : R;
     },
-    operandForms: "a tag name, then the revision it points at; tag names with -d; or a pattern (text) with -l/--list, -n, --merged or --contains",
+    operandForms:
+      "a tag name, then the revision it points at; tag names with -d; or a pattern (text) with -l/--list, -n, --merged or --contains",
   },
   stash: {
     name: "git stash",
@@ -506,7 +875,8 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
             name: `git stash ${verb}`,
             flags: verb === "show" ? "qp" : "q",
             long: ["index", "quiet", "stat", "patch", "name-only", "include-untracked"],
-            operand: (index: number) => (index === 0 ? STASH : `as a second argument to git stash ${verb}`),
+            operand: (index: number) =>
+              index === 0 ? STASH : `as a second argument to git stash ${verb}`,
             operandForms: "one stash name (stash@{n}, n, or a branch or tag name)",
           } satisfies SlotSpec,
         ]),
@@ -522,9 +892,21 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
       add: {
         name: "git worktree add",
         flags: "fq",
-        long: ["force", "detach", "checkout", "no-checkout", "lock", "quiet", "track", "no-track", "guess-remote", "orphan"],
+        long: [
+          "force",
+          "detach",
+          "checkout",
+          "no-checkout",
+          "lock",
+          "quiet",
+          "track",
+          "no-track",
+          "guess-remote",
+          "orphan",
+        ],
         values: { "-b": R, "-B": R, "--reason": null },
-        operand: () => "as the path or commit git worktree add uses (write it literally; a {{param}} may follow -b or -B)",
+        operand: () =>
+          "as the path or commit git worktree add uses (write it literally; a {{param}} may follow -b or -B)",
       },
       remove: { name: "git worktree remove", flags: "f", long: ["force"] },
     },
@@ -534,8 +916,23 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "git rev-parse",
     flags: "q",
     long: [
-      "verify", "quiet", "short", "abbrev-ref", "symbolic", "symbolic-full-name", "show-toplevel", "git-dir", "absolute-git-dir", "is-inside-work-tree",
-      "is-bare-repository", "show-prefix", "show-cdup", "all", "branches", "tags", "remotes",
+      "verify",
+      "quiet",
+      "short",
+      "abbrev-ref",
+      "symbolic",
+      "symbolic-full-name",
+      "show-toplevel",
+      "git-dir",
+      "absolute-git-dir",
+      "is-inside-work-tree",
+      "is-bare-repository",
+      "show-prefix",
+      "show-cdup",
+      "all",
+      "branches",
+      "tags",
+      "remotes",
     ],
     ...text,
   },
@@ -543,23 +940,75 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "git merge",
     flags: "qvn",
     long: [
-      "no-ff", "ff", "ff-only", "squash", "no-squash", "commit", "no-commit", "no-edit", "abort", "continue", "quit", "quiet", "verbose", "stat",
-      "no-stat", "autostash", "no-autostash", "allow-unrelated-histories", "no-verify",
+      "no-ff",
+      "ff",
+      "ff-only",
+      "squash",
+      "no-squash",
+      "commit",
+      "no-commit",
+      "no-edit",
+      "abort",
+      "continue",
+      "quit",
+      "quiet",
+      "verbose",
+      "stat",
+      "no-stat",
+      "autostash",
+      "no-autostash",
+      "allow-unrelated-histories",
+      "no-verify",
     ],
-    values: { "-m --message": TD, "-s --strategy": RUNS_PROGRAM, "-X --strategy-option": RUNS_PROGRAM, "-F --file": READS_ANY_FILE },
+    values: {
+      "-m --message": TD,
+      "-s --strategy": RUNS_PROGRAM,
+      "-X --strategy-option": RUNS_PROGRAM,
+      "-F --file": READS_ANY_FILE,
+    },
     ...refs(),
   },
   rebase: {
     name: "git rebase",
     flags: "qv",
-    long: ["abort", "continue", "skip", "quit", "autostash", "no-autostash", "quiet", "verbose", "keep-empty", "root", "autosquash", "no-autosquash", "update-refs", "no-update-refs"],
-    values: { "--onto": R, "-x --exec": RUNS_PROGRAM, "-s --strategy": RUNS_PROGRAM, "-X --strategy-option": RUNS_PROGRAM },
+    long: [
+      "abort",
+      "continue",
+      "skip",
+      "quit",
+      "autostash",
+      "no-autostash",
+      "quiet",
+      "verbose",
+      "keep-empty",
+      "root",
+      "autosquash",
+      "no-autosquash",
+      "update-refs",
+      "no-update-refs",
+    ],
+    values: {
+      "--onto": R,
+      "-x --exec": RUNS_PROGRAM,
+      "-s --strategy": RUNS_PROGRAM,
+      "-X --strategy-option": RUNS_PROGRAM,
+    },
     ...refs(),
   },
   "cherry-pick": {
     name: "git cherry-pick",
     flags: "nsx",
-    long: ["no-commit", "signoff", "abort", "continue", "skip", "quit", "ff", "allow-empty", "keep-redundant-commits"],
+    long: [
+      "no-commit",
+      "signoff",
+      "abort",
+      "continue",
+      "skip",
+      "quit",
+      "ff",
+      "allow-empty",
+      "keep-redundant-commits",
+    ],
     values: PICK_VALUES,
     ...revs("commits"),
   },
@@ -574,10 +1023,38 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "git grep",
     flags: "inwvlLcEFGPhHIoqzrapW",
     long: [
-      "cached", "untracked", "ignore-case", "word-regexp", "invert-match", "files-with-matches", "files-without-match", "count", "extended-regexp",
-      "fixed-strings", "basic-regexp", "perl-regexp", "line-number", "column", "full-name", "heading", "break", "show-function", "function-context",
-      "only-matching", "quiet", "null", "text", "and", "or", "not", "all-match", "recurse-submodules", "exclude-standard", "no-exclude-standard",
-      "recursive", "no-recursive",
+      "cached",
+      "untracked",
+      "ignore-case",
+      "word-regexp",
+      "invert-match",
+      "files-with-matches",
+      "files-without-match",
+      "count",
+      "extended-regexp",
+      "fixed-strings",
+      "basic-regexp",
+      "perl-regexp",
+      "line-number",
+      "column",
+      "full-name",
+      "heading",
+      "break",
+      "show-function",
+      "function-context",
+      "only-matching",
+      "quiet",
+      "null",
+      "text",
+      "and",
+      "or",
+      "not",
+      "all-match",
+      "recurse-submodules",
+      "exclude-standard",
+      "no-exclude-standard",
+      "recursive",
+      "no-recursive",
     ],
     values: {
       "-e": TD,
@@ -594,18 +1071,53 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
   blame: {
     name: "git blame",
     flags: "selwptfncbCM",
-    long: ["porcelain", "line-porcelain", "incremental", "root", "show-stats", "show-name", "show-number", "show-email", "minimal"],
-    values: { "-L": T, "--contents": READS_ANY_FILE, "-S": READS_ANY_FILE, "--ignore-revs-file": READS_ANY_FILE, "--date": null },
+    long: [
+      "porcelain",
+      "line-porcelain",
+      "incremental",
+      "root",
+      "show-stats",
+      "show-name",
+      "show-number",
+      "show-email",
+      "minimal",
+    ],
+    values: {
+      "-L": T,
+      "--contents": READS_ANY_FILE,
+      "-S": READS_ANY_FILE,
+      "--ignore-revs-file": READS_ANY_FILE,
+      "--date": null,
+    },
     ...files("a revision or files in the workspace"),
   },
   "ls-files": {
     name: "git ls-files",
     flags: "cdmoisukztv",
     long: [
-      "cached", "deleted", "modified", "others", "ignored", "stage", "unmerged", "killed", "directory", "no-empty-directory", "full-name", "error-unmatch",
-      "exclude-standard", "eol", "recurse-submodules",
+      "cached",
+      "deleted",
+      "modified",
+      "others",
+      "ignored",
+      "stage",
+      "unmerged",
+      "killed",
+      "directory",
+      "no-empty-directory",
+      "full-name",
+      "error-unmatch",
+      "exclude-standard",
+      "eol",
+      "recurse-submodules",
     ],
-    values: { "-x --exclude": T, "-X --exclude-from": READS_ANY_FILE, "--exclude-per-directory": READS_ANY_FILE, "--with-tree": null, "--format": null },
+    values: {
+      "-x --exclude": T,
+      "-X --exclude-from": READS_ANY_FILE,
+      "--exclude-per-directory": READS_ANY_FILE,
+      "--with-tree": null,
+      "--format": null,
+    },
     ...files(),
   },
 };
@@ -614,30 +1126,49 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
 // gh, by group and verb. pflag takes the word after a value option as its
 // value whatever it holds, so those values may start with "-".
 
-const GH_REPO: Record<string, ValueEntry> = { "-R --repo": "which points the command at another repository" };
+const GH_REPO: Record<string, ValueEntry> = {
+  "-R --repo": "which points the command at another repository",
+};
 const GH_EXPORT: Record<string, ValueEntry> = {
   "--json": null,
   "-q --jq": "which runs a jq program that can read the environment",
   "-t --template": "which runs a template that can read the environment",
 };
-const GH_BODY_FILE: Record<string, ValueEntry> = { "-F --body-file": "which reads a file from anywhere and posts it" };
+const GH_BODY_FILE: Record<string, ValueEntry> = {
+  "-F --body-file": "which reads a file from anywhere and posts it",
+};
 const one = (name: string): Pick<SlotSpec, "operand" | "operandForms"> => ({
   operand: (index) => (index === 0 ? G : `as a second argument to ${name}`),
   operandForms: "a number, branch or name",
 });
-const none = (name: string): Pick<SlotSpec, "operand"> => ({ operand: () => `as an argument to ${name}, which takes none` });
+const none = (name: string): Pick<SlotSpec, "operand"> => ({
+  operand: () => `as an argument to ${name}, which takes none`,
+});
 /** gh repo view and list: the operand names a repository or owner, so a value could read any repository or organisation. */
 const repository = (name: string): Pick<SlotSpec, "operand"> => ({
-  operand: () => `as the repository or owner ${name} reads, which could name any repository or organisation (write it literally, or leave it out for this repository)`,
+  operand: () =>
+    `as the repository or owner ${name} reads, which could name any repository or organisation (write it literally, or leave it out for this repository)`,
 });
-const gh = (name: string, spec: Omit<SlotSpec, "name" | "gh">, operands: "one" | "none" | "repository" = "one"): SlotSpec => ({
+const gh = (
+  name: string,
+  spec: Omit<SlotSpec, "name" | "gh">,
+  operands: "one" | "none" | "repository" = "one",
+): SlotSpec => ({
   name,
   gh: true,
   ...spec,
   long: [...(spec.long ?? []), "help"],
   ...(operands === "one" ? one(name) : operands === "none" ? none(name) : repository(name)),
 });
-const SEARCHES: Record<string, ValueEntry> = { "-S --search": SEARCH, "-l --label": TD, "-a --assignee": TD, "-A --author": TD, "-s --state": T, "--app": T, "-L --limit": N };
+const SEARCHES: Record<string, ValueEntry> = {
+  "-S --search": SEARCH,
+  "-l --label": TD,
+  "-a --assignee": TD,
+  "-A --author": TD,
+  "-s --state": T,
+  "--app": T,
+  "-L --limit": N,
+};
 const COMMENT: Record<string, ValueEntry> = { ...GH_REPO, "-b --body": TD, ...GH_BODY_FILE };
 const COMMENT_LONG = ["web", "edit-last", "create-if-none", "delete-last", "yes"];
 const editValues = (extra: Record<string, ValueEntry>): Record<string, ValueEntry> => ({
@@ -669,16 +1200,40 @@ const createValues = (extra: Record<string, ValueEntry>): Record<string, ValueEn
 });
 
 const GH_SPECS: Readonly<Record<string, SlotSpec>> = {
-  "pr view": gh("gh pr view", { flags: "wc", long: ["web", "comments"], values: { ...GH_REPO, ...GH_EXPORT } }),
+  "pr view": gh("gh pr view", {
+    flags: "wc",
+    long: ["web", "comments"],
+    values: { ...GH_REPO, ...GH_EXPORT },
+  }),
   "pr list": gh(
     "gh pr list",
-    { flags: "wd", long: ["web", "draft"], values: { ...GH_REPO, ...GH_EXPORT, ...SEARCHES, "-B --base": R, "-H --head": R } },
+    {
+      flags: "wd",
+      long: ["web", "draft"],
+      values: { ...GH_REPO, ...GH_EXPORT, ...SEARCHES, "-B --base": R, "-H --head": R },
+    },
     "none",
   ),
-  "pr status": gh("gh pr status", { flags: "c", long: ["conflict-status"], values: { ...GH_REPO, ...GH_EXPORT } }, "none"),
-  "pr diff": gh("gh pr diff", { flags: "w", long: ["name-only", "patch", "web"], values: { ...GH_REPO, "--color": null } }),
-  "pr checks": gh("gh pr checks", { flags: "w", long: ["watch", "fail-fast", "required", "web"], values: { ...GH_REPO, ...GH_EXPORT, "-i --interval": N } }),
-  "pr checkout": gh("gh pr checkout", { flags: "f", long: ["force", "detach", "recurse-submodules"], values: { ...GH_REPO, "-b --branch": R } }),
+  "pr status": gh(
+    "gh pr status",
+    { flags: "c", long: ["conflict-status"], values: { ...GH_REPO, ...GH_EXPORT } },
+    "none",
+  ),
+  "pr diff": gh("gh pr diff", {
+    flags: "w",
+    long: ["name-only", "patch", "web"],
+    values: { ...GH_REPO, "--color": null },
+  }),
+  "pr checks": gh("gh pr checks", {
+    flags: "w",
+    long: ["watch", "fail-fast", "required", "web"],
+    values: { ...GH_REPO, ...GH_EXPORT, "-i --interval": N },
+  }),
+  "pr checkout": gh("gh pr checkout", {
+    flags: "f",
+    long: ["force", "detach", "recurse-submodules"],
+    values: { ...GH_REPO, "-b --branch": R },
+  }),
   "pr create": gh(
     "gh pr create",
     {
@@ -688,28 +1243,59 @@ const GH_SPECS: Readonly<Record<string, SlotSpec>> = {
     },
     "none",
   ),
-  "pr edit": gh("gh pr edit", { values: editValues({ "-B --base": R, "--add-reviewer": TD, "--remove-reviewer": TD }) }),
+  "pr edit": gh("gh pr edit", {
+    values: editValues({ "-B --base": R, "--add-reviewer": TD, "--remove-reviewer": TD }),
+  }),
   "pr ready": gh("gh pr ready", { long: ["undo"], values: GH_REPO }),
   "pr merge": gh("gh pr merge", {
     flags: "msrd",
     long: ["merge", "squash", "rebase", "delete-branch", "auto", "disable-auto", "admin"],
-    values: { ...GH_REPO, "-t --subject": TD, "-b --body": TD, ...GH_BODY_FILE, "--match-head-commit": T, "-A --author-email": null },
+    values: {
+      ...GH_REPO,
+      "-t --subject": TD,
+      "-b --body": TD,
+      ...GH_BODY_FILE,
+      "--match-head-commit": T,
+      "-A --author-email": null,
+    },
   }),
   "pr comment": gh("gh pr comment", { flags: "w", long: COMMENT_LONG, values: COMMENT }),
-  "pr review": gh("gh pr review", { flags: "arc", long: ["approve", "request-changes", "comment"], values: COMMENT }),
-  "pr close": gh("gh pr close", { flags: "d", long: ["delete-branch"], values: { ...GH_REPO, "-c --comment": TD } }),
+  "pr review": gh("gh pr review", {
+    flags: "arc",
+    long: ["approve", "request-changes", "comment"],
+    values: COMMENT,
+  }),
+  "pr close": gh("gh pr close", {
+    flags: "d",
+    long: ["delete-branch"],
+    values: { ...GH_REPO, "-c --comment": TD },
+  }),
   "pr reopen": gh("gh pr reopen", { values: { ...GH_REPO, "-c --comment": TD } }),
-  "issue view": gh("gh issue view", { flags: "wc", long: ["web", "comments"], values: { ...GH_REPO, ...GH_EXPORT } }),
+  "issue view": gh("gh issue view", {
+    flags: "wc",
+    long: ["web", "comments"],
+    values: { ...GH_REPO, ...GH_EXPORT },
+  }),
   "issue list": gh(
     "gh issue list",
-    { flags: "w", long: ["web"], values: { ...GH_REPO, ...GH_EXPORT, ...SEARCHES, "--mention": TD, "-m --milestone": TD } },
+    {
+      flags: "w",
+      long: ["web"],
+      values: { ...GH_REPO, ...GH_EXPORT, ...SEARCHES, "--mention": TD, "-m --milestone": TD },
+    },
     "none",
   ),
   "issue status": gh("gh issue status", { values: { ...GH_REPO, ...GH_EXPORT } }, "none"),
-  "issue create": gh("gh issue create", { flags: "w", long: ["web"], values: createValues({}) }, "none"),
+  "issue create": gh(
+    "gh issue create",
+    { flags: "w", long: ["web"], values: createValues({}) },
+    "none",
+  ),
   "issue edit": gh("gh issue edit", { long: ["remove-milestone"], values: editValues({}) }),
   "issue comment": gh("gh issue comment", { flags: "w", long: COMMENT_LONG, values: COMMENT }),
-  "issue close": gh("gh issue close", { values: { ...GH_REPO, "-c --comment": TD, "-r --reason": T } }),
+  "issue close": gh("gh issue close", {
+    values: { ...GH_REPO, "-c --comment": TD, "-r --reason": T },
+  }),
   "issue reopen": gh("gh issue reopen", { values: { ...GH_REPO, "-c --comment": TD } }),
   "run view": gh("gh run view", {
     flags: "vw",
@@ -721,32 +1307,89 @@ const GH_SPECS: Readonly<Record<string, SlotSpec>> = {
     {
       flags: "a",
       long: ["all"],
-      values: { ...GH_REPO, ...GH_EXPORT, "-L --limit": N, "-b --branch": R, "-w --workflow": T, "-u --user": T, "-s --status": T, "-e --event": T, "-c --commit": T, "--created": T },
+      values: {
+        ...GH_REPO,
+        ...GH_EXPORT,
+        "-L --limit": N,
+        "-b --branch": R,
+        "-w --workflow": T,
+        "-u --user": T,
+        "-s --status": T,
+        "-e --event": T,
+        "-c --commit": T,
+        "--created": T,
+      },
     },
     "none",
   ),
-  "run watch": gh("gh run watch", { long: ["exit-status", "compact"], values: { ...GH_REPO, "-i --interval": N } }),
-  "run rerun": gh("gh run rerun", { flags: "d", long: ["failed", "debug"], values: { ...GH_REPO, "-j --job": N } }),
+  "run watch": gh("gh run watch", {
+    long: ["exit-status", "compact"],
+    values: { ...GH_REPO, "-i --interval": N },
+  }),
+  "run rerun": gh("gh run rerun", {
+    flags: "d",
+    long: ["failed", "debug"],
+    values: { ...GH_REPO, "-j --job": N },
+  }),
   "run cancel": gh("gh run cancel", { values: GH_REPO }),
-  "repo view": gh("gh repo view", { flags: "w", long: ["web"], values: { ...GH_EXPORT, "-b --branch": R } }, "repository"),
-  "repo list": gh(
-    "gh repo list",
-    { long: ["fork", "source", "archived", "no-archived"], values: { ...GH_EXPORT, "-L --limit": N, "-l --language": T, "--topic": T, "--visibility": T } },
+  "repo view": gh(
+    "gh repo view",
+    { flags: "w", long: ["web"], values: { ...GH_EXPORT, "-b --branch": R } },
     "repository",
   ),
-  "release view": gh("gh release view", { flags: "w", long: ["web"], values: { ...GH_REPO, ...GH_EXPORT } }),
+  "repo list": gh(
+    "gh repo list",
+    {
+      long: ["fork", "source", "archived", "no-archived"],
+      values: {
+        ...GH_EXPORT,
+        "-L --limit": N,
+        "-l --language": T,
+        "--topic": T,
+        "--visibility": T,
+      },
+    },
+    "repository",
+  ),
+  "release view": gh("gh release view", {
+    flags: "w",
+    long: ["web"],
+    values: { ...GH_REPO, ...GH_EXPORT },
+  }),
   "release list": gh(
     "gh release list",
-    { long: ["exclude-drafts", "exclude-pre-releases"], values: { ...GH_REPO, ...GH_EXPORT, "-L --limit": N, "-O --order": T } },
+    {
+      long: ["exclude-drafts", "exclude-pre-releases"],
+      values: { ...GH_REPO, ...GH_EXPORT, "-L --limit": N, "-O --order": T },
+    },
     "none",
   ),
   "label list": gh(
     "gh label list",
-    { flags: "w", long: ["web"], values: { ...GH_REPO, ...GH_EXPORT, "-S --search": SEARCH, "-L --limit": N, "--sort": T, "--order": T } },
+    {
+      flags: "w",
+      long: ["web"],
+      values: {
+        ...GH_REPO,
+        ...GH_EXPORT,
+        "-S --search": SEARCH,
+        "-L --limit": N,
+        "--sort": T,
+        "--order": T,
+      },
+    },
     "none",
   ),
-  "workflow view": gh("gh workflow view", { flags: "wy", long: ["web", "yaml"], values: { ...GH_REPO, "-r --ref": R } }),
-  "workflow list": gh("gh workflow list", { flags: "a", long: ["all"], values: { ...GH_REPO, ...GH_EXPORT, "-L --limit": N } }, "none"),
+  "workflow view": gh("gh workflow view", {
+    flags: "wy",
+    long: ["web", "yaml"],
+    values: { ...GH_REPO, "-r --ref": R },
+  }),
+  "workflow list": gh(
+    "gh workflow list",
+    { flags: "a", long: ["all"], values: { ...GH_REPO, ...GH_EXPORT, "-L --limit": N } },
+    "none",
+  ),
   browse: gh("gh browse", {
     flags: "cnprsw",
     long: ["commit", "no-browser", "projects", "releases", "settings", "wiki", "actions"],
@@ -760,10 +1403,14 @@ const GH_SPECS: Readonly<Record<string, SlotSpec>> = {
 
 /** The table for a plain program, a git subcommand or a gh command (`"pr view"`, `"browse"`). */
 export function programSlotSpec(program: string): SlotSpec | undefined {
-  return Object.prototype.hasOwnProperty.call(PROGRAM_SPECS, program) ? PROGRAM_SPECS[program] : undefined;
+  return Object.prototype.hasOwnProperty.call(PROGRAM_SPECS, program)
+    ? PROGRAM_SPECS[program]
+    : undefined;
 }
 export function gitSlotSpec(subcommand: string): SlotSpec | undefined {
-  return Object.prototype.hasOwnProperty.call(GIT_SPECS, subcommand) ? GIT_SPECS[subcommand] : undefined;
+  return Object.prototype.hasOwnProperty.call(GIT_SPECS, subcommand)
+    ? GIT_SPECS[subcommand]
+    : undefined;
 }
 export function ghSlotSpec(command: string): SlotSpec | undefined {
   return Object.prototype.hasOwnProperty.call(GH_SPECS, command) ? GH_SPECS[command] : undefined;
@@ -814,7 +1461,11 @@ type Args = readonly (string | undefined)[];
  * everything after a literal `--` an operand. Refuses an option the table
  * does not know, wherever it is, since it could change what the rest mean.
  */
-function walk(spec: SlotSpec, args: Args, from: number): { positions: Map<number, Position>; has: Set<string> } | { problem: string } {
+function walk(
+  spec: SlotSpec,
+  args: Args,
+  from: number,
+): { positions: Map<number, Position>; has: Set<string> } | { problem: string } {
   const values = valuesOf(spec);
   const positions = new Map<number, Position>();
   const has = new Set<string>();
@@ -826,7 +1477,8 @@ function walk(spec: SlotSpec, args: Args, from: number): { positions: Map<number
     problem: `to ${spec.name} with ${option} apart from its value: ${spec.name} takes ${option}'s value only joined to it and reads the next word as an argument of its own. Write ${joined}`,
   });
   const takesNext = (index: number) => index + 1 < args.length;
-  const loneNext = (index: number) => takesNext(index) && (args[index + 1] === undefined || !args[index + 1]!.startsWith("-"));
+  const loneNext = (index: number) =>
+    takesNext(index) && (args[index + 1] === undefined || !args[index + 1]!.startsWith("-"));
   let ended = false;
   let operand = 0;
   for (let index = from; index < args.length; index += 1) {
@@ -861,8 +1513,15 @@ function walk(spec: SlotSpec, args: Args, from: number): { positions: Map<number
       if (spec.long?.includes(name.slice(2))) {
         // A rename option's score is read as git reads it, so a word git
         // refuses (`--find-renames=--output=…`) is refused here too.
-        const score = Object.prototype.hasOwnProperty.call(LONG_SCORES, name) ? LONG_SCORES[name] : undefined;
-        if (equals >= 0 && score !== undefined && (score === null || !score.test(arg.slice(equals + 1)))) return unknown(arg);
+        const score = Object.prototype.hasOwnProperty.call(LONG_SCORES, name)
+          ? LONG_SCORES[name]
+          : undefined;
+        if (
+          equals >= 0 &&
+          score !== undefined &&
+          (score === null || !score.test(arg.slice(equals + 1)))
+        )
+          return unknown(arg);
         has.add(name);
         continue;
       }
@@ -886,7 +1545,8 @@ function walk(spec: SlotSpec, args: Args, from: number): { positions: Map<number
       if (spec.scores?.includes(letters[at]!)) {
         // The rest of the word, if any, is a fixed score such as 50%, read as git does.
         const score = letters.slice(at + 1).join("");
-        if (!(letters[at] === "B" ? BREAK_SCORE : SIMILARITY_SCORE).test(score)) return unknown(arg);
+        if (!(letters[at] === "B" ? BREAK_SCORE : SIMILARITY_SCORE).test(score))
+          return unknown(arg);
         has.add(name);
         break;
       }
@@ -909,10 +1569,15 @@ export function locateSlot(spec: SlotSpec, args: Args, from: number, at: number)
   if (spec.verbs) {
     const verb = args[from];
     const verbs = Object.keys(spec.verbs).join(", ");
-    if (verb === undefined && from < args.length) return { problem: `as the ${spec.name} verb. Write the verb literally: ${verbs}.` };
-    if (verb !== undefined && Object.prototype.hasOwnProperty.call(spec.verbs, verb)) return locateSlot(spec.verbs[verb]!, args, from + 1, at);
-    if (spec.implicitVerb && (verb === undefined || verb.startsWith("-"))) return locateSlot(spec.verbs[spec.implicitVerb]!, args, from, at);
-    return { problem: `to ${spec.name} ${verb ?? ""}, a verb Aiden does not check. ${spec.name} takes page data only after a literal verb: ${verbs}.` };
+    if (verb === undefined && from < args.length)
+      return { problem: `as the ${spec.name} verb. Write the verb literally: ${verbs}.` };
+    if (verb !== undefined && Object.prototype.hasOwnProperty.call(spec.verbs, verb))
+      return locateSlot(spec.verbs[verb]!, args, from + 1, at);
+    if (spec.implicitVerb && (verb === undefined || verb.startsWith("-")))
+      return locateSlot(spec.verbs[spec.implicitVerb]!, args, from, at);
+    return {
+      problem: `to ${spec.name} ${verb ?? ""}, a verb Aiden does not check. ${spec.name} takes page data only after a literal verb: ${verbs}.`,
+    };
   }
   const found = locateIn(spec, args, from, at);
   return "problem" in found ? { problem: `${found.problem}. ${allowedSlotForms(spec)}` } : found;
@@ -931,7 +1596,9 @@ function locateIn(spec: SlotSpec, args: Args, from: number, at: number): SlotLoo
   }
   const has = (...names: string[]) => names.some((name) => read.has.has(name));
   const near = (offset: number) => args[at + offset];
-  const rule = spec.operand ? spec.operand(position.index, position.afterDashes, has, near) : `as an argument to ${spec.name}`;
+  const rule = spec.operand
+    ? spec.operand(position.index, position.afterDashes, has, near)
+    : `as an argument to ${spec.name}`;
   return typeof rule === "string" ? { problem: rule } : { slot: rule };
 }
 
@@ -944,11 +1611,18 @@ function locateIn(spec: SlotSpec, args: Args, from: number, at: number): SlotLoo
  * `checkout b -q --`, not `checkout b -- -q`). `optionAfter` is an option
  * written after that file, which the `--` would turn into a file name.
  */
-export function revisionsEnd(spec: SlotSpec, args: Args, from: number, last: number): { at: number; optionAfter?: OptionWords } {
+export function revisionsEnd(
+  spec: SlotSpec,
+  args: Args,
+  from: number,
+  last: number,
+): { at: number; optionAfter?: OptionWords } {
   if (spec.verbs) {
     const verb = args[from];
-    if (verb !== undefined && Object.prototype.hasOwnProperty.call(spec.verbs, verb)) return revisionsEnd(spec.verbs[verb]!, args, from + 1, last);
-    if (spec.implicitVerb && (verb === undefined || verb.startsWith("-"))) return revisionsEnd(spec.verbs[spec.implicitVerb]!, args, from, last);
+    if (verb !== undefined && Object.prototype.hasOwnProperty.call(spec.verbs, verb))
+      return revisionsEnd(spec.verbs[verb]!, args, from + 1, last);
+    if (spec.implicitVerb && (verb === undefined || verb.startsWith("-")))
+      return revisionsEnd(spec.verbs[spec.implicitVerb]!, args, from, last);
     return { at: args.length };
   }
   const read = walk(spec, args, from);
@@ -957,7 +1631,12 @@ export function revisionsEnd(spec: SlotSpec, args: Args, from: number, last: num
   for (let index = last + 1; index < args.length; index += 1) {
     const position = read.positions.get(index);
     if (position?.kind !== "operand") continue;
-    const rule = spec.operand(position.index, position.afterDashes, has, (offset) => args[index + offset]);
+    const rule = spec.operand(
+      position.index,
+      position.afterDashes,
+      has,
+      (offset) => args[index + offset],
+    );
     if (typeof rule !== "string" && rule.refOnly) continue;
     const option = optionWordsAfter(read.positions, args, index);
     return option === undefined ? { at: index } : { at: index, optionAfter: option };
@@ -972,8 +1651,14 @@ export interface OptionWords {
 }
 
 /** The first option after the word at `after`, with the value word it takes. */
-function optionWordsAfter(positions: ReadonlyMap<number, Position>, args: Args, after: number): OptionWords | undefined {
-  const index = args.findIndex((_arg, later) => later > after && positions.get(later)?.kind === "option");
+function optionWordsAfter(
+  positions: ReadonlyMap<number, Position>,
+  args: Args,
+  after: number,
+): OptionWords | undefined {
+  const index = args.findIndex(
+    (_arg, later) => later > after && positions.get(later)?.kind === "option",
+  );
   if (index < 0) return undefined;
   return { index, words: positions.get(index + 1)?.kind === "value" ? 2 : 1 };
 }
@@ -983,11 +1668,18 @@ function optionWordsAfter(positions: ReadonlyMap<number, Position>, args: Args, 
  * reads no option after a file (`optionsBeforeFiles`), so a value there that
  * names a file would leave the option unread (`git log {{x}} --oneline`).
  */
-export function optionAfterFile(spec: SlotSpec, args: Args, from: number, first: number): OptionWords | undefined {
+export function optionAfterFile(
+  spec: SlotSpec,
+  args: Args,
+  from: number,
+  first: number,
+): OptionWords | undefined {
   if (spec.verbs) {
     const verb = args[from];
-    if (verb !== undefined && Object.prototype.hasOwnProperty.call(spec.verbs, verb)) return optionAfterFile(spec.verbs[verb]!, args, from + 1, first);
-    if (spec.implicitVerb && (verb === undefined || verb.startsWith("-"))) return optionAfterFile(spec.verbs[spec.implicitVerb]!, args, from, first);
+    if (verb !== undefined && Object.prototype.hasOwnProperty.call(spec.verbs, verb))
+      return optionAfterFile(spec.verbs[verb]!, args, from + 1, first);
+    if (spec.implicitVerb && (verb === undefined || verb.startsWith("-")))
+      return optionAfterFile(spec.verbs[spec.implicitVerb]!, args, from, first);
     return undefined;
   }
   if (!spec.optionsBeforeFiles) return undefined;
@@ -998,8 +1690,22 @@ export function optionAfterFile(spec: SlotSpec, args: Args, from: number, first:
 
 const JQ_FLAGS = "nrjascCMSeRh";
 const JQ_LONG = [
-  "null-input", "raw-output", "join-output", "ascii-output", "slurp", "compact-output", "color-output", "monochrome-output", "sort-keys", "exit-status",
-  "raw-input", "seq", "stream", "tab", "raw-output0", "help",
+  "null-input",
+  "raw-output",
+  "join-output",
+  "ascii-output",
+  "slurp",
+  "compact-output",
+  "color-output",
+  "monochrome-output",
+  "sort-keys",
+  "exit-status",
+  "raw-input",
+  "seq",
+  "stream",
+  "tab",
+  "raw-output0",
+  "help",
 ];
 const JQ_VARIABLE = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const JQ_FILTER = "as a jq filter or file";
@@ -1022,7 +1728,8 @@ function jqSlotIn(args: Args, at: number): SlotLookup {
     if (arg === undefined || arg === "-" || !arg.startsWith("-")) continue;
     if (arg === "--arg" || arg === "--argjson") {
       const name = args[index + 1];
-      if (name === undefined || !JQ_VARIABLE.test(name)) return { problem: `as a jq ${arg} name, or after one that is not a literal variable name` };
+      if (name === undefined || !JQ_VARIABLE.test(name))
+        return { problem: `as a jq ${arg} name, or after one that is not a literal variable name` };
       if (index + 2 === at) slot = { slot: TD };
       index += 2;
       continue;
@@ -1033,11 +1740,13 @@ function jqSlotIn(args: Args, at: number): SlotLookup {
       continue;
     }
     if (arg.startsWith("--")) {
-      if (!JQ_LONG.includes(arg.slice(2))) return { problem: `to jq with ${arg}, an option Aiden does not check there` };
+      if (!JQ_LONG.includes(arg.slice(2)))
+        return { problem: `to jq with ${arg}, an option Aiden does not check there` };
       continue;
     }
     const letter = [...arg.slice(1)].find((char) => !JQ_FLAGS.includes(char));
-    if (letter !== undefined) return { problem: `to jq with -${letter}, an option Aiden does not check there` };
+    if (letter !== undefined)
+      return { problem: `to jq with -${letter}, an option Aiden does not check there` };
   }
   return slot;
 }
@@ -1073,13 +1782,18 @@ function checkedOptions(spec: SlotSpec): string {
 
 /** The forms a command takes page data in, for a refusal: "git commit takes page data only as: -m/--message {{x}} (text, …); operands: …". */
 function allowedSlotForms(spec: SlotSpec): string {
-  if (spec.verbs) return `${spec.name} takes page data only after a literal verb (${Object.keys(spec.verbs).join(", ")}).`;
+  if (spec.verbs)
+    return `${spec.name} takes page data only after a literal verb (${Object.keys(spec.verbs).join(", ")}).`;
   const forms: string[] = [];
   for (const [key, entry] of Object.entries(spec.values ?? {})) {
-    if (entry !== null && typeof entry === "object") forms.push(`${key.split(" ").join("/")} {{x}} (${describe(entry)})`);
+    if (entry !== null && typeof entry === "object")
+      forms.push(`${key.split(" ").join("/")} {{x}} (${describe(entry)})`);
   }
   if (spec.operandForms) forms.push(`operands: ${spec.operandForms}`);
-  return forms.length ? `${spec.name} takes page data only as: ${forms.join("; ")}.` : `${spec.name} takes no page data.`;
+  return forms.length
+    ? `${spec.name} takes page data only as: ${forms.join("; ")}.`
+    : `${spec.name} takes no page data.`;
 }
 
-const JQ_SLOT_FORMS = "jq takes page data only as --arg NAME {{x}} or --argjson NAME {{x}}, read in the filter as $NAME.";
+const JQ_SLOT_FORMS =
+  "jq takes page data only as --arg NAME {{x}} or --argjson NAME {{x}}, read in the filter as $NAME.";

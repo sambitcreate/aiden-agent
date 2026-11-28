@@ -95,9 +95,11 @@ export function excludePortalDictationShortcut(
   desired: readonly DesiredGlobalShortcut[],
   portalActive: boolean,
 ): DesiredGlobalShortcut[] {
-  return desired.map((shortcut) => portalActive && shortcut.commandId === "dictation.toggle"
-    ? { ...shortcut, accelerator: null }
-    : shortcut);
+  return desired.map((shortcut) =>
+    portalActive && shortcut.commandId === "dictation.toggle"
+      ? { ...shortcut, accelerator: null }
+      : shortcut,
+  );
 }
 
 export function canBindPortalDictationShortcut(
@@ -105,5 +107,10 @@ export function canBindPortalDictationShortcut(
   dictationBinding: string | null | undefined,
   recordingSuspended: boolean,
 ): boolean {
-  return globalShortcutsEnabled && typeof dictationBinding === "string" && dictationBinding.length > 0 && !recordingSuspended;
+  return (
+    globalShortcutsEnabled &&
+    typeof dictationBinding === "string" &&
+    dictationBinding.length > 0 &&
+    !recordingSuspended
+  );
 }

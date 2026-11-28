@@ -24,7 +24,8 @@ const SECRET_KEY_PATTERN =
 const VALUE_KEY_PATTERN = /^(?:default)?value$/iu;
 /** On a credential field only these describe the field rather than hold its contents. */
 const SENSITIVE_FIELD_SAFE_KEYS = new Set(["type", "autocomplete", "inputmode"]);
-const CREDENTIAL_AUTOCOMPLETE_PATTERN = /(?:^|\s)(?:current-password|new-password|one-time-code|cc-[a-z-]+)(?:\s|$)/iu;
+const CREDENTIAL_AUTOCOMPLETE_PATTERN =
+  /(?:^|\s)(?:current-password|new-password|one-time-code|cc-[a-z-]+)(?:\s|$)/iu;
 const SECRET_VALUE_PATTERN =
   /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|Bearer\s+[A-Za-z0-9._~+/=-]{12,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b/gu;
 
@@ -82,10 +83,18 @@ function sanitizeSourceHint(raw: unknown): RawGrabSourceHint | undefined {
   if (typeof rec.fileName === "string" && rec.fileName.trim()) {
     hint.fileName = rec.fileName.trim().slice(0, 512);
   }
-  if (typeof rec.lineNumber === "number" && Number.isSafeInteger(rec.lineNumber) && rec.lineNumber >= 1) {
+  if (
+    typeof rec.lineNumber === "number" &&
+    Number.isSafeInteger(rec.lineNumber) &&
+    rec.lineNumber >= 1
+  ) {
     hint.lineNumber = rec.lineNumber;
   }
-  if (typeof rec.columnNumber === "number" && Number.isSafeInteger(rec.columnNumber) && rec.columnNumber >= 1) {
+  if (
+    typeof rec.columnNumber === "number" &&
+    Number.isSafeInteger(rec.columnNumber) &&
+    rec.columnNumber >= 1
+  ) {
     hint.columnNumber = rec.columnNumber;
   }
   if (typeof rec.debugStack === "string" && rec.debugStack.length > 0) {
@@ -114,11 +123,19 @@ function sanitizeProps(
   let count = 0;
   for (const [key, val] of Object.entries(entries)) {
     if (count >= 12) break;
-    if (!key || key.length > 80 || key === "__proto__" || key === "constructor" || key === "prototype") continue;
+    if (
+      !key ||
+      key.length > 80 ||
+      key === "__proto__" ||
+      key === "constructor" ||
+      key === "prototype"
+    )
+      continue;
     if (
       SECRET_KEY_PATTERN.test(key) ||
       VALUE_KEY_PATTERN.test(key) ||
-      (sensitive && (typeof val === "string" || typeof val === "number") &&
+      (sensitive &&
+        (typeof val === "string" || typeof val === "number") &&
         !SENSITIVE_FIELD_SAFE_KEYS.has(key.toLowerCase()))
     ) {
       out[key] = "[redacted]";
@@ -145,7 +162,14 @@ function sanitizeAttributes(raw: unknown): Record<string, string> | undefined {
   let count = 0;
   for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
     if (count >= 20) break;
-    if (!key || key.length > 80 || key === "__proto__" || key === "constructor" || key === "prototype") continue;
+    if (
+      !key ||
+      key.length > 80 ||
+      key === "__proto__" ||
+      key === "constructor" ||
+      key === "prototype"
+    )
+      continue;
     const lower = key.toLowerCase();
     if (lower === "value" || /^on[a-z]/u.test(lower)) continue;
     if (typeof val !== "string") continue;
@@ -161,7 +185,14 @@ function sanitizeComputedStyles(raw: unknown): Record<string, string> | undefine
   let count = 0;
   for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
     if (count >= 24) break;
-    if (!key || key.length > 80 || key === "__proto__" || key === "constructor" || key === "prototype") continue;
+    if (
+      !key ||
+      key.length > 80 ||
+      key === "__proto__" ||
+      key === "constructor" ||
+      key === "prototype"
+    )
+      continue;
     if (typeof val !== "string" || !val.trim()) continue;
     out[key] = val.trim().slice(0, 256);
     count += 1;
@@ -229,7 +260,8 @@ export async function sanitizeRawGrabPayload(
   // The resolver binds source-map reads to this authoritative page origin.
   const sourceAuthority = { pageUrl: options.pageUrl };
   const sourceHintsTrusted =
-    options.grabPageUrl === undefined || sameGrabSourceAuthority(options.grabPageUrl, options.pageUrl);
+    options.grabPageUrl === undefined ||
+    sameGrabSourceAuthority(options.grabPageUrl, options.pageUrl);
 
   const rawTag = typeof rec.tagName === "string" ? rec.tagName.trim().toLowerCase() : "div";
   const tagName = TAG_NAME_PATTERN.test(rawTag) ? rawTag : "div";
@@ -250,7 +282,9 @@ export async function sanitizeRawGrabPayload(
       if (!name) return;
       const env = (frame as { environment?: unknown }).environment;
       const minified = (frame as { minified?: unknown }).minified === true;
-      const hint = sourceHintsTrusted ? sanitizeSourceHint((frame as { source?: unknown }).source) : undefined;
+      const hint = sourceHintsTrusted
+        ? sanitizeSourceHint((frame as { source?: unknown }).source)
+        : undefined;
       // Symbolicate up to the top 5 component frames to stay fast.
       const source =
         index < 5 && hint
@@ -277,21 +311,26 @@ export async function sanitizeRawGrabPayload(
 
   const attributes = sanitizeAttributes(rec.attributes);
   const props = sanitizeProps(rec.props, rec.sensitiveTarget === true);
-  const label = (componentName ? `<${componentName} />` : semanticDomLabel(tagName, attributes)).slice(0, 160);
+  const label = (
+    componentName ? `<${componentName} />` : semanticDomLabel(tagName, attributes)
+  ).slice(0, 160);
   const selector = cleanString(rec.selector, 1024) ?? tagName;
   const htmlSnippet =
-    typeof rec.htmlSnippet === "string"
-      ? redactGrabSecrets(rec.htmlSnippet).slice(0, 4096)
-      : "";
+    typeof rec.htmlSnippet === "string" ? redactGrabSecrets(rec.htmlSnippet).slice(0, 4096) : "";
   const boundingBox = sanitizeRect(rec.boundingBox);
 
   const measuredViewport = browserMeasuredViewport(rec.viewport);
-  const rawViewport = rec.viewport && typeof rec.viewport === "object" ? (rec.viewport as Record<string, unknown>) : undefined;
+  const rawViewport =
+    rec.viewport && typeof rec.viewport === "object"
+      ? (rec.viewport as Record<string, unknown>)
+      : undefined;
   const rawDpr = rawViewport?.devicePixelRatio;
   const devicePixelRatio =
     typeof rawDpr === "number" && Number.isFinite(rawDpr) && rawDpr > 0 ? rawDpr : undefined;
   const zoomFactor =
-    typeof options.zoomFactor === "number" && Number.isFinite(options.zoomFactor) && options.zoomFactor > 0
+    typeof options.zoomFactor === "number" &&
+    Number.isFinite(options.zoomFactor) &&
+    options.zoomFactor > 0
       ? options.zoomFactor
       : undefined;
 
@@ -310,9 +349,13 @@ export async function sanitizeRawGrabPayload(
     tagName,
     selector,
     ...(cleanString(rec.role, 80) ? { role: cleanString(rec.role, 80) } : {}),
-    ...(cleanString(rec.accessibleName, 256) ? { accessibleName: cleanString(rec.accessibleName, 256) } : {}),
+    ...(cleanString(rec.accessibleName, 256)
+      ? { accessibleName: cleanString(rec.accessibleName, 256) }
+      : {}),
     htmlSnippet,
-    ...(cleanString(rec.textPreview, 1024) ? { textPreview: cleanString(rec.textPreview, 1024) } : {}),
+    ...(cleanString(rec.textPreview, 1024)
+      ? { textPreview: cleanString(rec.textPreview, 1024) }
+      : {}),
     ...(attributes ? { attributes } : {}),
     ...(sanitizeComputedStyles(rec.computedStyles)
       ? { computedStyles: sanitizeComputedStyles(rec.computedStyles) }

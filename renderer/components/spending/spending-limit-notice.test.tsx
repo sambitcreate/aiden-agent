@@ -23,9 +23,14 @@ const base: SpendingStatusView = {
 
 async function render(status: SpendingStatusView, allowing = false) {
   const root = createRootRoute({
-    component: () => <SpendingLimitNotice status={status} name="Ada" allowing={allowing} onAllowMore={() => {}} />,
+    component: () => (
+      <SpendingLimitNotice status={status} name="Ada" allowing={allowing} onAllowMore={() => {}} />
+    ),
   });
-  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const router = createRouter({
+    routeTree: root,
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
   await router.load();
   const { document } = new Window();
   document.body.innerHTML = renderToStaticMarkup(<RouterProvider router={router} />);
@@ -51,6 +56,8 @@ test("at its limit the Bot's chat announces it and offers Allow more and Change 
   assert.deepEqual(buttons, ["Change limits", "Allow $20.00 more"]);
 
   const busy = await render({ ...base, state: "reached", spentUsd: 20.4 }, true);
-  const allow = [...busy.querySelectorAll("button")].find((button) => button.textContent === "Allow $20.00 more");
+  const allow = [...busy.querySelectorAll("button")].find(
+    (button) => button.textContent === "Allow $20.00 more",
+  );
   assert.equal(allow?.hasAttribute("disabled"), true, "a second tap waits for the first");
 });

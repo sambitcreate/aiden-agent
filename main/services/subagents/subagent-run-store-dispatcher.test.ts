@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { SubagentRunSnapshotV1, SubagentRunSnapshotV2 } from "../../../renderer/shared/subagent-runs.js";
+import type {
+  SubagentRunSnapshotV1,
+  SubagentRunSnapshotV2,
+} from "../../../renderer/shared/subagent-runs.js";
 import { createSubagentRunStoreDispatcher } from "./subagent-run-store-dispatcher.js";
 import type { MutableSubagentPrivateRunManifestV2 } from "./subagent-run-store-v2-core.js";
 
@@ -54,27 +57,75 @@ const importedManifest: MutableSubagentPrivateRunManifestV2 = {
   reusableAuthority: false,
 };
 
-function stores(log: string[], overrides: { v1Get?: () => Promise<SubagentRunSnapshotV1 | null>; v2Get?: () => Promise<SubagentRunSnapshotV2 | null>; v2Delete?: () => Promise<void>; v2PreflightDelete?: () => Promise<void> } = {}) {
+function stores(
+  log: string[],
+  overrides: {
+    v1Get?: () => Promise<SubagentRunSnapshotV1 | null>;
+    v2Get?: () => Promise<SubagentRunSnapshotV2 | null>;
+    v2Delete?: () => Promise<void>;
+    v2PreflightDelete?: () => Promise<void>;
+  } = {},
+) {
   const v1Store = {
-    async initialize() { log.push("v1.initialize"); },
-    async upsert(snapshot: unknown) { log.push("v1.upsert"); return snapshot as SubagentRunSnapshotV1; },
-    async get() { log.push("v1.get"); return overrides.v1Get ? overrides.v1Get() : v1(); },
-    async listByChat() { log.push("v1.list"); return [v1()]; },
-    async deleteChat() { log.push("v1.delete"); },
-    async pendingChatDeletions() { log.push("v1.pending"); return ["chat-v1"]; },
-    async completeChatDeletion() { log.push("v1.complete"); },
+    async initialize() {
+      log.push("v1.initialize");
+    },
+    async upsert(snapshot: unknown) {
+      log.push("v1.upsert");
+      return snapshot as SubagentRunSnapshotV1;
+    },
+    async get() {
+      log.push("v1.get");
+      return overrides.v1Get ? overrides.v1Get() : v1();
+    },
+    async listByChat() {
+      log.push("v1.list");
+      return [v1()];
+    },
+    async deleteChat() {
+      log.push("v1.delete");
+    },
+    async pendingChatDeletions() {
+      log.push("v1.pending");
+      return ["chat-v1"];
+    },
+    async completeChatDeletion() {
+      log.push("v1.complete");
+    },
     async flush() {},
     async close() {},
   };
   const v2Store = {
-    async initialize() { log.push("v2.initialize"); },
-    async upsert(snapshot: unknown) { log.push("v2.upsert"); return snapshot as SubagentRunSnapshotV2; },
-    async get() { log.push("v2.get"); return overrides.v2Get ? overrides.v2Get() : v2(); },
-    async listByChat() { log.push("v2.list"); return [v2()]; },
-    async preflightChatDeletion() { log.push("v2.preflight-delete"); await overrides.v2PreflightDelete?.(); },
-    async deleteChat() { log.push("v2.delete"); await overrides.v2Delete?.(); },
-    async pendingChatDeletions() { log.push("v2.pending"); return ["chat-v2"]; },
-    async completeChatDeletion() { log.push("v2.complete"); },
+    async initialize() {
+      log.push("v2.initialize");
+    },
+    async upsert(snapshot: unknown) {
+      log.push("v2.upsert");
+      return snapshot as SubagentRunSnapshotV2;
+    },
+    async get() {
+      log.push("v2.get");
+      return overrides.v2Get ? overrides.v2Get() : v2();
+    },
+    async listByChat() {
+      log.push("v2.list");
+      return [v2()];
+    },
+    async preflightChatDeletion() {
+      log.push("v2.preflight-delete");
+      await overrides.v2PreflightDelete?.();
+    },
+    async deleteChat() {
+      log.push("v2.delete");
+      await overrides.v2Delete?.();
+    },
+    async pendingChatDeletions() {
+      log.push("v2.pending");
+      return ["chat-v2"];
+    },
+    async completeChatDeletion() {
+      log.push("v2.complete");
+    },
     async flush() {},
     async close() {},
   };
@@ -84,7 +135,11 @@ function stores(log: string[], overrides: { v1Get?: () => Promise<SubagentRunSna
 test("explicit V1 rollback never opens V2 and drops V2-only fields through the exact adapter", async () => {
   const log: string[] = [];
   const { v1Store, v2Store } = stores(log);
-  const dispatcher = createSubagentRunStoreDispatcher({ selection: "v1", v1: v1Store as never, v2: v2Store as never });
+  const dispatcher = createSubagentRunStoreDispatcher({
+    selection: "v1",
+    v1: v1Store as never,
+    v2: v2Store as never,
+  });
   await dispatcher.initialize();
   const saved = await dispatcher.upsert(v2("stopped"), importedManifest);
   assert.equal(saved.version, 1);
@@ -95,13 +150,21 @@ test("explicit V1 rollback never opens V2 and drops V2-only fields through the e
 test("V2 selection never falls back to V1 when canonical history fails", async () => {
   const log: string[] = [];
   const failure = new Error("canonical V2 is corrupt");
-  const { v1Store, v2Store } = stores(log, { v2Get: async () => { throw failure; } });
+  const { v1Store, v2Store } = stores(log, {
+    v2Get: async () => {
+      throw failure;
+    },
+  });
   const dispatcher = createSubagentRunStoreDispatcher({
     selection: "v2",
     v1: v1Store as never,
     v2: v2Store as never,
-    prepareV2: async () => { log.push("v2.prepare"); },
-    checkpointV1Mutation: async () => { log.push("v2.checkpoint"); },
+    prepareV2: async () => {
+      log.push("v2.prepare");
+    },
+    checkpointV1Mutation: async () => {
+      log.push("v2.checkpoint");
+    },
   });
   await dispatcher.initialize();
   await assert.rejects(dispatcher.get("run-1"), failure);
@@ -117,8 +180,12 @@ test("V2 can expose an exact V1 renderer projection without mutating canonical d
     projection: "v1",
     v1: v1Store as never,
     v2: v2Store as never,
-    prepareV2: async () => { log.push("v2.prepare"); },
-    checkpointV1Mutation: async () => { log.push("v2.checkpoint"); },
+    prepareV2: async () => {
+      log.push("v2.prepare");
+    },
+    checkpointV1Mutation: async () => {
+      log.push("v2.checkpoint");
+    },
   });
   await dispatcher.initialize();
   const projected = await dispatcher.get("run-1");
@@ -136,8 +203,12 @@ test("V2 deletion installs V1 first, unions recovery markers, and clears V1 last
     selection: "v2",
     v1: v1Store as never,
     v2: v2Store as never,
-    prepareV2: async () => { log.push("v2.prepare"); },
-    checkpointV1Mutation: async () => { log.push("v2.checkpoint"); },
+    prepareV2: async () => {
+      log.push("v2.prepare");
+    },
+    checkpointV1Mutation: async () => {
+      log.push("v2.checkpoint");
+    },
   });
   await dispatcher.initialize();
   await dispatcher.deleteChat("chat-1");
@@ -161,8 +232,15 @@ test("V2 deletion installs V1 first, unions recovery markers, and clears V1 last
 test("V2 activation refuses to open canonical storage without production migration seams", async () => {
   const log: string[] = [];
   const { v1Store, v2Store } = stores(log);
-  const dispatcher = createSubagentRunStoreDispatcher({ selection: "v2", v1: v1Store as never, v2: v2Store as never });
-  await assert.rejects(dispatcher.initialize(), /requires migration preparation and V1 checkpoint coordination/u);
+  const dispatcher = createSubagentRunStoreDispatcher({
+    selection: "v2",
+    v1: v1Store as never,
+    v2: v2Store as never,
+  });
+  await assert.rejects(
+    dispatcher.initialize(),
+    /requires migration preparation and V1 checkpoint coordination/u,
+  );
   assert.deepEqual(log, []);
 });
 
@@ -178,12 +256,22 @@ test("V2 deletion never advances the V1 checkpoint before its own tombstone", as
     selection: "v2",
     v1: v1Store as never,
     v2: v2Store as never,
-    prepareV2: async () => { log.push("v2.prepare"); },
-    checkpointV1Mutation: async () => { log.push("v2.checkpoint"); },
+    prepareV2: async () => {
+      log.push("v2.prepare");
+    },
+    checkpointV1Mutation: async () => {
+      log.push("v2.checkpoint");
+    },
   });
   await dispatcher.initialize();
   await assert.rejects(dispatcher.deleteChat("chat-1"), failure);
-  assert.deepEqual(log, ["v2.prepare", "v2.initialize", "v2.preflight-delete", "v1.delete", "v2.delete"]);
+  assert.deepEqual(log, [
+    "v2.prepare",
+    "v2.initialize",
+    "v2.preflight-delete",
+    "v1.delete",
+    "v2.delete",
+  ]);
 });
 
 test("V2 active-effect preflight leaves both stores untouched", async () => {
@@ -198,8 +286,12 @@ test("V2 active-effect preflight leaves both stores untouched", async () => {
     selection: "v2",
     v1: v1Store as never,
     v2: v2Store as never,
-    prepareV2: async () => { log.push("v2.prepare"); },
-    checkpointV1Mutation: async () => { log.push("v2.checkpoint"); },
+    prepareV2: async () => {
+      log.push("v2.prepare");
+    },
+    checkpointV1Mutation: async () => {
+      log.push("v2.checkpoint");
+    },
   });
   await dispatcher.initialize();
   await assert.rejects(dispatcher.deleteChat("chat-1"), failure);

@@ -45,7 +45,8 @@ export function resolveVoiceProvider(input: VoiceProviderInputs): VoiceProviderR
     if (!input.engineReady) return { kind: "needs-setup", reason: "local-engine-unavailable" };
     return { kind: "ready", provider: "local", modelId: localModel, automatic: false };
   }
-  if (localModel && input.engineReady) return { kind: "ready", provider: "local", modelId: localModel, automatic: true };
+  if (localModel && input.engineReady)
+    return { kind: "ready", provider: "local", modelId: localModel, automatic: true };
   if (input.hasOpenAIKey) return { kind: "ready", provider: "openai", automatic: true };
   if (input.hasGeminiVoice) return { kind: "ready", provider: "gemini", automatic: true };
   return { kind: "needs-setup", reason: "no-provider" };

@@ -100,7 +100,11 @@ export class BatchedPullRequestReader implements PullRequestEntryReader {
     this.maxDocuments = options.maxDocuments ?? DEFAULT_MAX_DOCUMENTS;
   }
 
-  read(host: string, entry: PullRequestQueryEntry, options: PullRequestReadOptions): Promise<PullRequestEntryResult> {
+  read(
+    host: string,
+    entry: PullRequestQueryEntry,
+    options: PullRequestReadOptions,
+  ): Promise<PullRequestEntryResult> {
     if (options.signal?.aborted) return Promise.reject(abortError());
     const key = `${pullRequestEntryKey(host, entry)}${options.version ? `|${options.version}` : ""}`;
     const interactive = options.interactive === true;
@@ -114,7 +118,14 @@ export class BatchedPullRequestReader implements PullRequestEntryReader {
       if (queued && interactive) queued.interactive = true;
     } else {
       pending = new Promise<PullRequestEntryResult>((settle) => {
-        this.queued.set(key, { host, entry, key, operation: options.operation, interactive, settle });
+        this.queued.set(key, {
+          host,
+          entry,
+          key,
+          operation: options.operation,
+          interactive,
+          settle,
+        });
       }).finally(() => this.inflight.delete(key));
       this.inflight.set(key, pending);
       if (!this.flushScheduled) {
@@ -128,7 +139,8 @@ export class BatchedPullRequestReader implements PullRequestEntryReader {
   private flush(): void {
     this.flushScheduled = false;
     const byHost = new Map<string, QueuedRead[]>();
-    for (const read of this.queued.values()) byHost.set(read.host, [...(byHost.get(read.host) ?? []), read]);
+    for (const read of this.queued.values())
+      byHost.set(read.host, [...(byHost.get(read.host) ?? []), read]);
     this.queued.clear();
     for (const [host, reads] of byHost) {
       for (let start = 0; start < reads.length; start += this.maxEntries) {
@@ -159,7 +171,10 @@ export class BatchedPullRequestReader implements PullRequestEntryReader {
       const answers = splitFailedBatch ? [] : pullRequestEntryResults(host, entries, result);
       results = entryKeys.map((entryKey) => answers[unique.indexOf(entryKey)]!);
     } catch {
-      results = reads.map(() => ({ kind: "failed", message: "Aiden could not read pull requests from GitHub." }));
+      results = reads.map(() => ({
+        kind: "failed",
+        message: "Aiden could not read pull requests from GitHub.",
+      }));
     } finally {
       release();
     }
@@ -170,7 +185,10 @@ export class BatchedPullRequestReader implements PullRequestEntryReader {
     reads.forEach((read, index) => {
       const result = results[index]!;
       if (result.kind === "ok") {
-        this.cache.set(read.key, { result, expiresAt: this.now() + pullRequestCacheTtl(read.entry, result) });
+        this.cache.set(read.key, {
+          result,
+          expiresAt: this.now() + pullRequestCacheTtl(read.entry, result),
+        });
       } else {
         this.cache.delete(read.key);
       }

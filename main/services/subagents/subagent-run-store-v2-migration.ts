@@ -81,8 +81,6 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
   return actual.length === keys.length && actual.every((key) => keys.includes(key));
 }
 
-
-
 function safeTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
@@ -290,10 +288,7 @@ function sameCheckpoint(checkpoint: V1Checkpoint, migration: SubagentRunMigratio
   // same-process compare-before-write operations, but it is not stable durable
   // evidence. Migration equivalence is content-addressed: an identical source
   // and digest require no merge even when filesystem identity has changed.
-  return (
-    checkpoint.source === migration.source &&
-    checkpoint.sha256 === migration.sourceSha256
-  );
+  return checkpoint.source === migration.source && checkpoint.sha256 === migration.sourceSha256;
 }
 
 function parseV2Read(read: SubagentRunStoreReadResult): {
@@ -319,8 +314,7 @@ function parseV2Read(read: SubagentRunStoreReadResult): {
   // canonical, however, the same file may also contain native manifests. The
   // activation verifier must understand both exact schemas or it would reject
   // its own first native write on the next restart.
-  const database =
-    parseSubagentRunDatabaseV2(parsed) ?? parseMutableSubagentRunDatabaseV2(parsed);
+  const database = parseSubagentRunDatabaseV2(parsed) ?? parseMutableSubagentRunDatabaseV2(parsed);
   if (!database) {
     throw new Error("Subagent V2 migration evidence is invalid and was preserved.");
   }
@@ -329,9 +323,10 @@ function parseV2Read(read: SubagentRunStoreReadResult): {
 
 function migratedDatabase(checkpoint: V1Checkpoint, now: number): SubagentRunDatabaseV2 {
   if (!Number.isFinite(now) || now < 0) throw new Error("Invalid subagent migration clock.");
-  const source = checkpoint.serialized !== undefined
-    ? parseSubagentRunDatabaseV1ForMigration(checkpoint.serialized)
-    : { version: 1 as const, runs: [], pendingChatDeletions: [] };
+  const source =
+    checkpoint.serialized !== undefined
+      ? parseSubagentRunDatabaseV1ForMigration(checkpoint.serialized)
+      : { version: 1 as const, runs: [], pendingChatDeletions: [] };
   const snapshots = source.runs.map((snapshot) => {
     const migrated = adaptSubagentRunSnapshotV1ToV2(snapshot);
     if (!migrated) throw new Error("Subagent V1 run could not be migrated losslessly.");
@@ -390,9 +385,7 @@ export async function migrateSubagentRunStoreV2(
     }
     return existing.database;
   }
-  let prepared = existing.database
-    ? parseSubagentRunDatabaseV2(existing.database)
-    : undefined;
+  let prepared = existing.database ? parseSubagentRunDatabaseV2(existing.database) : undefined;
   if (existing.database && !prepared) {
     throw new Error("A prepared subagent V2 migration cannot contain native run manifests.");
   }

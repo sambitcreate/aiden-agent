@@ -166,9 +166,7 @@ function isTimestamp(value: unknown): value is number {
 
 function isStatIdentity(value: unknown, allowZero: boolean): value is string {
   return (
-    typeof value === "string" &&
-    /^(?:0|[1-9][0-9]*)$/u.test(value) &&
-    (allowZero || value !== "0")
+    typeof value === "string" && /^(?:0|[1-9][0-9]*)$/u.test(value) && (allowZero || value !== "0")
   );
 }
 
@@ -276,9 +274,7 @@ export function parseBotManagedHomeProvisioningReceipt(
     value.directoryName !== botManagedHomeDirectoryName(value.workspaceId) ||
     !isTimestamp(value.createdAt)
   ) {
-    throw new BotManagedWorkspaceStateError(
-      "Bot managed home provisioning receipt is corrupt.",
-    );
+    throw new BotManagedWorkspaceStateError("Bot managed home provisioning receipt is corrupt.");
   }
   return {
     version: BOT_MANAGED_WORKSPACE_VERSION,
@@ -605,9 +601,7 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
      * Re-proves a prior resolution immediately before an effect. A directory
      * replacement, binding change, or stale path fails closed.
      */
-    revalidate(
-      expected: BotManagedWorkspaceResolution,
-    ): Promise<BotManagedWorkspaceResolution> {
+    revalidate(expected: BotManagedWorkspaceResolution): Promise<BotManagedWorkspaceResolution> {
       return serialized(async () => {
         if (
           !isPathSafeBotManagedIdentifier(expected.botId) ||

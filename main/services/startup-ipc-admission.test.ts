@@ -2,10 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { IpcMainInvokeEvent } from "electron";
 
-import {
-  installStartupIpcAdmission,
-  type InvokeHandlerTarget,
-} from "./startup-ipc-admission.js";
+import { installStartupIpcAdmission, type InvokeHandlerTarget } from "./startup-ipc-admission.js";
 
 type Listener = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 

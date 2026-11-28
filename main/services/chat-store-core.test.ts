@@ -34,9 +34,7 @@ import {
 import { generationModelMeta } from "./chat-model-selection-meta.js";
 
 async function testStore(t: test.TestContext) {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-store-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   return createChatStore(async () => directory);
 }
@@ -141,9 +139,7 @@ test("Bot model authority changes durably without changing history or activity t
 });
 
 test("persists canonical Pi assistant provenance across restart without crossing the visible-copy boundary", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-pi-provenance-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-pi-provenance-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const first = createChatStore(async () => directory);
   const chat = await first.create({ providerId: "google", model: "new-model" });
@@ -195,9 +191,7 @@ test("persists canonical Pi assistant provenance across restart without crossing
 });
 
 test("canonicalizes privacy-safe provider failure metadata across restart and IPC projection", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-provider-failure-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-provider-failure-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const first = createChatStore(async () => directory);
   const chat = await first.create({});
@@ -316,9 +310,7 @@ test("migrates legacy provider errors to closed metadata and scrubs the chat pay
 });
 
 test("chat payload writes are atomic when staged-file sync fails", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-sync-failure-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-sync-failure-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let rejectPayloadSync = false;
   const store = createChatStore(async () => directory, undefined, {
@@ -346,17 +338,13 @@ test("chat payload writes are atomic when staged-file sync fails", async (t) => 
   assert.equal(await fs.readFile(payload, "utf-8"), before);
   assert.equal((await store.get(chat.id))?.messages.length, 0);
   assert.equal(
-    (await fs.readdir(directory)).some((entry) =>
-      entry.endsWith(".chat-write.tmp"),
-    ),
+    (await fs.readdir(directory)).some((entry) => entry.endsWith(".chat-write.tmp")),
     false,
   );
 });
 
 test("post-rename directory sync failure never publishes a partial chat or advances the index", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-dir-sync-failure-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-dir-sync-failure-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let rejectDirectorySyncAt: number | undefined;
   let directorySyncs = 0;
@@ -370,10 +358,7 @@ test("post-rename directory sync failure never publishes a partial chat or advan
     },
   });
   const chat = await store.create({ title: "Durable assistant reference" });
-  const indexBefore = await fs.readFile(
-    path.join(directory, "index.json"),
-    "utf-8",
-  );
+  const indexBefore = await fs.readFile(path.join(directory, "index.json"), "utf-8");
 
   // The intent creation has its own durability barrier. Fail the following
   // payload-rename barrier so the installed payload must be reconciled.
@@ -405,28 +390,18 @@ test("post-rename directory sync failure never publishes a partial chat or advan
   assert.equal(installed.messages.length, 1);
   assert.equal(installed.messages[0]?.content, "whole message");
   assert.deepEqual(installed.messages[0]?.subagents?.runIds, ["run-durable"]);
+  assert.equal(await fs.readFile(path.join(directory, "index.json"), "utf-8"), indexBefore);
   assert.equal(
-    await fs.readFile(path.join(directory, "index.json"), "utf-8"),
-    indexBefore,
-  );
-  assert.equal(
-    (await fs.readdir(directory)).some((entry) =>
-      entry.endsWith(".chat-write.tmp"),
-    ),
+    (await fs.readdir(directory)).some((entry) => entry.endsWith(".chat-write.tmp")),
     false,
   );
   const syncsBeforeRetry = directorySyncs;
-  assert.equal(
-    (await store.get(chat.id))?.messages[0]?.content,
-    "whole message",
-  );
+  assert.equal((await store.get(chat.id))?.messages[0]?.content, "whole message");
   assert.ok(directorySyncs > syncsBeforeRetry);
 });
 
 test("a directory-sync failure while creating the transaction marker does not wedge later writes to that chat", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-marker-sync-failure-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-marker-sync-failure-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let failNextDirectorySync = false;
   const store = createChatStore(async () => directory, undefined, {
@@ -467,9 +442,7 @@ test("a directory-sync failure while creating the transaction marker does not we
 });
 
 test("a stale transaction marker found by an initialized store is reconciled on the next write", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-stale-marker-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-stale-marker-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory, undefined, {
     syncFile: async () => undefined,
@@ -494,9 +467,7 @@ test("a stale transaction marker found by an initialized store is reconciled on 
 });
 
 test("chat payloads use owner-only mode and leave no staging files", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-payload-mode-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-payload-mode-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "Private payload" });
@@ -505,22 +476,15 @@ test("chat payloads use owner-only mode and leave no staging files", async (t) =
     content: "persisted",
   });
 
+  assert.equal((await fs.stat(path.join(directory, `${chat.id}.json`))).mode & 0o777, 0o600);
   assert.equal(
-    (await fs.stat(path.join(directory, `${chat.id}.json`))).mode & 0o777,
-    0o600,
-  );
-  assert.equal(
-    (await fs.readdir(directory)).some((entry) =>
-      entry.endsWith(".chat-write.tmp"),
-    ),
+    (await fs.readdir(directory)).some((entry) => entry.endsWith(".chat-write.tmp")),
     false,
   );
 });
 
 test("create reconciles a newly installed payload after a transient index installation failure", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-create-recovery-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-create-recovery-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let remainingIndexFailures = 1;
   const interrupted = createChatStore(async () => directory, undefined, {
@@ -544,9 +508,7 @@ test("create reconciles a newly installed payload after a transient index instal
 });
 
 test("create reconciles a payload installed before a transient directory-sync failure", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-create-payload-recovery-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-create-payload-recovery-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let directorySyncs = 0;
   let rejectAt = 2;
@@ -571,9 +533,7 @@ test("create reconciles a payload installed before a transient directory-sync fa
 });
 
 test("create reports a private reconciliation error when installed metadata cannot be repaired", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-create-indeterminate-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-create-indeterminate-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory, undefined, {
     syncDirectory: async () => undefined,
@@ -595,9 +555,7 @@ test("create reports a private reconciliation error when installed metadata cann
 });
 
 test("transaction intent reconciles title metadata after payload commit", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-title-recovery-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-title-recovery-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let failIndexSync = false;
   const interrupted = createChatStore(async () => directory, undefined, {
@@ -617,17 +575,12 @@ test("transaction intent reconciles title metadata after payload commit", async 
 
   const restarted = createChatStore(async () => directory);
   const listed = await restarted.list();
-  assert.equal(
-    listed.find((entry) => entry.id === chat.id)?.title,
-    "After rename",
-  );
+  assert.equal(listed.find((entry) => entry.id === chat.id)?.title, "After rename");
   assert.equal((await restarted.get(chat.id))?.title, "After rename");
 });
 
 test("transaction intent preserves assistant subagent references and index time", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-reference-recovery-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-reference-recovery-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let failIndexSync = false;
   const interrupted = createChatStore(async () => directory, undefined, {
@@ -663,10 +616,7 @@ test("transaction intent preserves assistant subagent references and index time"
   const persisted = await restarted.get(chat.id);
   const listed = await restarted.list();
   assert.deepEqual(persisted?.messages[0]?.subagents, subagents);
-  assert.equal(
-    listed.find((entry) => entry.id === chat.id)?.updatedAt,
-    persisted?.updatedAt,
-  );
+  assert.equal(listed.find((entry) => entry.id === chat.id)?.updatedAt, persisted?.updatedAt);
   assert.equal(
     (await fs.readdir(directory)).some((entry) => entry.endsWith(".pending")),
     false,
@@ -674,16 +624,11 @@ test("transaction intent preserves assistant subagent references and index time"
 });
 
 test("transaction intent removes same-id metadata for a mismatched payload before clearing", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-transaction-mismatch-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-transaction-mismatch-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "Mismatched pending payload" });
-  const transaction = path.join(
-    directory,
-    `.chat-transaction.${chat.id}.pending`,
-  );
+  const transaction = path.join(directory, `.chat-transaction.${chat.id}.pending`);
   await fs.writeFile(
     path.join(directory, `${chat.id}.json`),
     JSON.stringify({ ...chat, id: "different-chat-id" }),
@@ -693,30 +638,19 @@ test("transaction intent removes same-id metadata for a mismatched payload befor
 
   const restarted = createChatStore(async () => directory);
   assert.deepEqual(await restarted.list(), []);
-  assert.deepEqual(
-    JSON.parse(await fs.readFile(path.join(directory, "index.json"), "utf-8")),
-    [],
-  );
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(directory, "index.json"), "utf-8")), []);
   await assert.rejects(fs.access(transaction));
 });
 
 test("transaction reconciliation preserves its marker and index on operational payload reads", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-transaction-io-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-transaction-io-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const initial = createChatStore(async () => directory);
   const chat = await initial.create({ title: "Retry pending payload read" });
   const payload = path.join(directory, `${chat.id}.json`);
-  const transaction = path.join(
-    directory,
-    `.chat-transaction.${chat.id}.pending`,
-  );
+  const transaction = path.join(directory, `.chat-transaction.${chat.id}.pending`);
   await fs.writeFile(transaction, "1\n", { encoding: "utf-8", mode: 0o600 });
-  const indexBefore = await fs.readFile(
-    path.join(directory, "index.json"),
-    "utf-8",
-  );
+  const indexBefore = await fs.readFile(path.join(directory, "index.json"), "utf-8");
   let failPayloadRead = true;
   const restarted = createChatStore(async () => directory, undefined, {
     readFile: async (target) => {
@@ -734,10 +668,7 @@ test("transaction reconciliation preserves its marker and index on operational p
   await assert.rejects(restarted.list(), (error: unknown) => {
     return (error as NodeJS.ErrnoException).code === "EIO";
   });
-  assert.equal(
-    await fs.readFile(path.join(directory, "index.json"), "utf-8"),
-    indexBefore,
-  );
+  assert.equal(await fs.readFile(path.join(directory, "index.json"), "utf-8"), indexBefore);
   await fs.access(transaction);
 
   failPayloadRead = false;
@@ -763,10 +694,7 @@ test("persists reasoning only on assistant messages", async (t) => {
   });
 
   const updated = await store.get(chat.id);
-  assert.equal(
-    updated?.messages[0]?.reasoning,
-    "Compare the available options.",
-  );
+  assert.equal(updated?.messages[0]?.reasoning, "Compare the available options.");
   assert.equal(updated?.messages[1]?.reasoning, undefined);
 });
 
@@ -779,7 +707,14 @@ test("assistant turn stats survive restart and reach the renderer; malformed or 
     version: 1 as const,
     startedAt: 10_000,
     finishedAt: 22_400,
-    usage: { input: 1_200, output: 830, cacheRead: 11_200, cacheWrite: 0, total: 13_230, requests: 2 },
+    usage: {
+      input: 1_200,
+      output: 830,
+      cacheRead: 11_200,
+      cacheWrite: 0,
+      total: 13_230,
+      requests: 2,
+    },
   };
   await store.appendMessage(chat.id, { role: "assistant", content: "Answer.", turnStats });
   await store.appendMessage(chat.id, {
@@ -831,8 +766,18 @@ test("follow-up notices survive a restart on user messages only, in their exact 
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
   const chat = await store.create({});
-  const notice = { version: 1, source: "background_job", tone: "failure", title: "Background job ended", summary: "npm run dev · exit code 1" } as const;
-  await store.appendMessage(chat.id, { role: "user", content: "[Aiden follow-up: background job]\n…", notice });
+  const notice = {
+    version: 1,
+    source: "background_job",
+    tone: "failure",
+    title: "Background job ended",
+    summary: "npm run dev · exit code 1",
+  } as const;
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "[Aiden follow-up: background job]\n…",
+    notice,
+  });
   await store.appendMessage(chat.id, { role: "assistant", content: "Looking.", notice } as never);
   await store.appendMessage(chat.id, {
     role: "user",
@@ -852,9 +797,21 @@ test("the By voice marker survives a restart on user messages only", async (t) =
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
   const chat = await store.create({});
-  await store.appendMessage(chat.id, { role: "user", content: "Check the reset page too.", inputSource: "voice" });
-  await store.appendMessage(chat.id, { role: "assistant", content: "On it.", inputSource: "voice" } as never);
-  await store.appendMessage(chat.id, { role: "user", content: "Thanks.", inputSource: "dictation" } as never);
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "Check the reset page too.",
+    inputSource: "voice",
+  });
+  await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "On it.",
+    inputSource: "voice",
+  } as never);
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "Thanks.",
+    inputSource: "dictation",
+  } as never);
 
   const loaded = await createChatStore(async () => directory).get(chat.id);
   assert.deepEqual(
@@ -870,9 +827,21 @@ test("the From-the-lead-chat marker survives a restart on plain user messages on
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
   const chat = await store.create({});
-  await store.appendMessage(chat.id, { role: "user", content: "Run the tests.", fromLeadChat: true });
-  await store.appendMessage(chat.id, { role: "assistant", content: "On it.", fromLeadChat: true } as never);
-  await store.appendMessage(chat.id, { role: "user", content: "Also lint.", fromLeadChat: "yes" } as never);
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "Run the tests.",
+    fromLeadChat: true,
+  });
+  await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "On it.",
+    fromLeadChat: true,
+  } as never);
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "Also lint.",
+    fromLeadChat: "yes",
+  } as never);
   await store.appendMessage(chat.id, { role: "user", content: "Typed by the person." });
 
   const loaded = await createChatStore(async () => directory).get(chat.id);
@@ -885,9 +854,7 @@ test("the From-the-lead-chat marker survives a restart on plain user messages on
 });
 
 test("renderer ownership is checked again at the atomic append commit", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-owner-guard-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-owner-guard-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let current = true;
   const store = createChatStore(async () => directory, undefined, {
@@ -911,9 +878,7 @@ test("renderer ownership is checked again at the atomic append commit", async (t
 });
 
 test("chat creation rechecks renderer authority at its atomic commit", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-create-owner-guard-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-create-owner-guard-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let current = true;
   const store = createChatStore(async () => directory, undefined, {
@@ -926,8 +891,7 @@ test("chat creation rechecks renderer authority at its atomic commit", async (t)
     store.create({
       title: "Must not commit",
       assertCurrent: () => {
-        if (!current)
-          throw new Error("The renderer document is no longer active.");
+        if (!current) throw new Error("The renderer document is no longer active.");
       },
     }),
     /no longer active/iu,
@@ -1054,9 +1018,7 @@ test("persists safe assistant milestones and drops invalid timeline data", async
 });
 
 test("drops a timeline injected into a stored non-assistant message", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-store-tampered-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-tampered-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
   const chat = await store.create({});
@@ -1108,10 +1070,7 @@ test("drops a timeline injected into a stored non-assistant message", async (t) 
   const loaded = (await store.get(chat.id))?.messages[0];
   assert.equal(loaded?.timeline, undefined);
   assert.equal(loaded?.skill, undefined);
-  assert.equal(
-    "instructions" in (loaded as unknown as Record<string, unknown>),
-    false,
-  );
+  assert.equal("instructions" in (loaded as unknown as Record<string, unknown>), false);
   assert.equal("path" in (loaded as unknown as Record<string, unknown>), false);
   assert.deepEqual(loaded?.attachments, [
     {
@@ -1143,9 +1102,7 @@ test("an explicit generated rename preserves a newer manual title", async (t) =>
 test("preserves every index entry during concurrent chat creation", async (t) => {
   const store = await testStore(t);
   await Promise.all(
-    Array.from({ length: 12 }, (_, index) =>
-      store.create({ title: `Chat ${index}` }),
-    ),
+    Array.from({ length: 12 }, (_, index) => store.create({ title: `Chat ${index}` })),
   );
   const chats = await store.list();
   assert.equal(chats.length, 12);
@@ -1153,9 +1110,7 @@ test("preserves every index entry during concurrent chat creation", async (t) =>
 });
 
 test("removes an indexed chat even when its payload is corrupt", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-corrupt-remove-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-corrupt-remove-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "Corrupt payload" });
@@ -1173,9 +1128,7 @@ test("removes an indexed chat even when its payload is corrupt", async (t) => {
 });
 
 test("a torn chat payload is set aside with its bytes intact and counted", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-quarantine-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-quarantine-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let notices = 0;
   const store = createChatStore(async () => directory, undefined, {
@@ -1191,10 +1144,13 @@ test("a torn chat payload is set aside with its bytes intact and counted", async
   assert.equal(await store.get(damaged.id), null);
 
   // The damaged chat leaves the list, but its original bytes survive aside.
-  assert.deepEqual((await store.list()).map((chat) => chat.id), [survivor.id]);
+  assert.deepEqual(
+    (await store.list()).map((chat) => chat.id),
+    [survivor.id],
+  );
   await assert.rejects(fs.access(path.join(directory, `${damaged.id}.json`)));
-  const aside = (await fs.readdir(directory)).filter((name) =>
-    name.startsWith(`.${damaged.id}.json.`) && name.endsWith(".corrupt"),
+  const aside = (await fs.readdir(directory)).filter(
+    (name) => name.startsWith(`.${damaged.id}.json.`) && name.endsWith(".corrupt"),
   );
   assert.equal(aside.length, 1);
   assert.equal(await fs.readFile(path.join(directory, aside[0]!), "utf-8"), torn);
@@ -1204,13 +1160,14 @@ test("a torn chat payload is set aside with its bytes intact and counted", async
   // A later chat with the same identity cannot overwrite the rescued bytes.
   const restarted = createChatStore(async () => directory);
   assert.equal(await restarted.quarantinedPayloadCount(), 1);
-  assert.deepEqual((await restarted.list()).map((chat) => chat.id), [survivor.id]);
+  assert.deepEqual(
+    (await restarted.list()).map((chat) => chat.id),
+    [survivor.id],
+  );
 });
 
 test("legacy indented chat payloads still load and are rewritten compactly", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-indented-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-indented-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const chat = {
     id: "indented-chat",
@@ -1237,9 +1194,7 @@ test("legacy indented chat payloads still load and are rewritten compactly", asy
 });
 
 test("appending to one chat reads only that chat's payload once the index is verified", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-read-amplification-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-read-amplification-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const reads: string[] = [];
   const store = createChatStore(async () => directory, undefined, {
@@ -1265,9 +1220,7 @@ test("appending to one chat reads only that chat's payload once the index is ver
 });
 
 test("a slow write to one chat does not block writes to another chat", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-per-chat-queue-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-per-chat-queue-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let blockedId: string | undefined;
   let releaseBlocked!: () => void;
@@ -1304,18 +1257,19 @@ test("a slow write to one chat does not block writes to another chat", async (t)
   await slowAppend;
   const renamed = await sameChatFollowUp;
   // Same-chat operations stay ordered: the rename saw the appended message.
-  assert.deepEqual(renamed.messages.map((message) => message.content), ["large"]);
-  const listed = await store.list();
   assert.deepEqual(
-    listed.map((chat) => [chat.title, chat.preview]).sort(),
-    [["Fast", "quick"], ["Renamed after append", "large"]],
+    renamed.messages.map((message) => message.content),
+    ["large"],
   );
+  const listed = await store.list();
+  assert.deepEqual(listed.map((chat) => [chat.title, chat.preview]).sort(), [
+    ["Fast", "quick"],
+    ["Renamed after append", "large"],
+  ]);
 });
 
 test("same-chat calls commit in call order even when index checks finish out of order", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-admission-order-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-admission-order-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let delayNextLookup = false;
   const store = createChatStore(async () => {
@@ -1341,9 +1295,7 @@ test("same-chat calls commit in call order even when index checks finish out of 
 });
 
 test("rejects a valid chat payload whose identity differs from its storage key", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-mismatched-id-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-mismatched-id-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "Storage-bound chat" });
@@ -1357,18 +1309,12 @@ test("rejects a valid chat payload whose identity differs from its storage key",
 });
 
 test("quarantines a corrupt index and reconstructs surviving chats during deletion", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-corrupt-index-remove-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-corrupt-index-remove-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
   const removed = await store.create({ title: "Remove me" });
   const survivor = await store.create({ title: "Keep me" });
-  await fs.writeFile(
-    path.join(directory, "index.json"),
-    '[{"id":"truncated"',
-    "utf-8",
-  );
+  await fs.writeFile(path.join(directory, "index.json"), '[{"id":"truncated"', "utf-8");
 
   await store.remove(removed.id);
 
@@ -1395,17 +1341,13 @@ test("quarantines a corrupt index and reconstructs surviving chats during deleti
 });
 
 test("corrupt-index recovery aborts on operational payload reads without publishing an empty index", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-recovery-io-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-recovery-io-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let rejectedPayload: string | undefined;
   const store = createChatStore(async () => directory, undefined, {
     readFile: async (target) => {
       if (target === rejectedPayload) {
-        const error = new Error(
-          "injected payload I/O failure",
-        ) as NodeJS.ErrnoException;
+        const error = new Error("injected payload I/O failure") as NodeJS.ErrnoException;
         error.code = "EIO";
         throw error;
       }
@@ -1421,14 +1363,9 @@ test("corrupt-index recovery aborts on operational payload reads without publish
   await assert.rejects(store.list(), (error: unknown) => {
     return (error as NodeJS.ErrnoException).code === "EIO";
   });
+  assert.equal(await fs.readFile(path.join(directory, "index.json"), "utf-8"), corruptIndex);
   assert.equal(
-    await fs.readFile(path.join(directory, "index.json"), "utf-8"),
-    corruptIndex,
-  );
-  assert.equal(
-    (await fs.readdir(directory)).some((entry) =>
-      /^\.index\.json\..+\.corrupt$/u.test(entry),
-    ),
+    (await fs.readdir(directory)).some((entry) => /^\.index\.json\..+\.corrupt$/u.test(entry)),
     false,
   );
 
@@ -1440,9 +1377,7 @@ test("corrupt-index recovery aborts on operational payload reads without publish
 });
 
 test("a fully valid index is rebound to same-id payloads and canonical payload metadata", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-valid-index-binding-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-valid-index-binding-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const initial = createChatStore(async () => directory);
   const missing = await initial.create({ title: "Missing payload ghost" });
@@ -1481,25 +1416,18 @@ test("a fully valid index is rebound to same-id payloads and canonical payload m
 
   const restarted = createChatStore(async () => directory);
   assert.deepEqual(await restarted.list("stale-index-workspace"), []);
-  assert.deepEqual(await restarted.list("payload-workspace"), [
+  assert.deepEqual(await restarted.list("payload-workspace"), [metadata(survivor)]);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(directory, "index.json"), "utf-8")), [
     metadata(survivor),
   ]);
-  assert.deepEqual(
-    JSON.parse(await fs.readFile(path.join(directory, "index.json"), "utf-8")),
-    [metadata(survivor)],
-  );
   assert.equal(
-    (await fs.readdir(directory)).some((entry) =>
-      /^\.index\.json\..+\.corrupt$/u.test(entry),
-    ),
+    (await fs.readdir(directory)).some((entry) => /^\.index\.json\..+\.corrupt$/u.test(entry)),
     false,
   );
 });
 
 test("a valid index remains intact when canonical payload validation hits transient I/O", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-valid-index-io-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-valid-index-io-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const initial = createChatStore(async () => directory);
   const chat = await initial.create({ title: "Retry valid index payload" });
@@ -1525,9 +1453,7 @@ test("a valid index remains intact when canonical payload validation hits transi
   });
   assert.equal(await fs.readFile(indexPath, "utf-8"), indexBefore);
   assert.equal(
-    (await fs.readdir(directory)).some((entry) =>
-      /^\.index\.json\..+\.corrupt$/u.test(entry),
-    ),
+    (await fs.readdir(directory)).some((entry) => /^\.index\.json\..+\.corrupt$/u.test(entry)),
     false,
   );
 
@@ -1547,9 +1473,7 @@ test("a valid index remains intact when canonical payload validation hits transi
 });
 
 test("summary metadata fails closed when chat state exists without an index", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-summary-missing-index-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-summary-missing-index-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const payload = path.join(directory, "crash-left-chat.json");
   await fs.writeFile(payload, JSON.stringify({ messages: ["must not be read"] }), "utf-8");
@@ -1568,9 +1492,7 @@ test("summary metadata fails closed when chat state exists without an index", as
 });
 
 test("mixed-index recovery reconstructs only successfully validated same-id payloads", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-mixed-index-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-mixed-index-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
   const missing = await store.create({ title: "Missing payload ghost" });
@@ -1603,9 +1525,7 @@ test("mixed-index recovery reconstructs only successfully validated same-id payl
   );
   assert.deepEqual(
     (
-      JSON.parse(
-        await fs.readFile(path.join(directory, "index.json"), "utf-8"),
-      ) as Array<{
+      JSON.parse(await fs.readFile(path.join(directory, "index.json"), "utf-8")) as Array<{
         id: string;
       }>
     ).map((entry) => entry.id),
@@ -1614,9 +1534,7 @@ test("mixed-index recovery reconstructs only successfully validated same-id payl
 });
 
 test("keeps the chat index when payload removal fails operationally", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-remove-failure-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-remove-failure-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "Keep indexed" });
@@ -1632,9 +1550,7 @@ test("keeps the chat index when payload removal fails operationally", async (t) 
   });
   assert.equal(
     (
-      JSON.parse(
-        await fs.readFile(path.join(directory, "index.json"), "utf-8"),
-      ) as Array<{
+      JSON.parse(await fs.readFile(path.join(directory, "index.json"), "utf-8")) as Array<{
         id: string;
       }>
     ).some((entry) => entry.id === chat.id),
@@ -1648,9 +1564,7 @@ test("rejects a traversal-shaped chat id before removing any payload", async (t)
 });
 
 test("loads legacy Gemini chat identities through the native Google provider", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-google-migration-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-google-migration-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const chat = {
     id: "legacy-chat",
@@ -1662,16 +1576,8 @@ test("loads legacy Gemini chat identities through the native Google provider", a
     updatedAt: 20,
     messages: [],
   };
-  await fs.writeFile(
-    path.join(directory, "index.json"),
-    JSON.stringify([chat]),
-    "utf-8",
-  );
-  await fs.writeFile(
-    path.join(directory, "legacy-chat.json"),
-    JSON.stringify(chat),
-    "utf-8",
-  );
+  await fs.writeFile(path.join(directory, "index.json"), JSON.stringify([chat]), "utf-8");
+  await fs.writeFile(path.join(directory, "legacy-chat.json"), JSON.stringify(chat), "utf-8");
   const store = createChatStore(async () => directory);
 
   assert.equal((await store.list())[0]?.providerId, "google");
@@ -1679,9 +1585,7 @@ test("loads legacy Gemini chat identities through the native Google provider", a
 });
 
 test("persists a protected custom alias for historical chats", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-provider-alias-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-provider-alias-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const chat = {
     id: "legacy-openai-chat",
@@ -1693,11 +1597,7 @@ test("persists a protected custom alias for historical chats", async (t) => {
     updatedAt: 20,
     messages: [],
   };
-  await fs.writeFile(
-    path.join(directory, "index.json"),
-    JSON.stringify([chat]),
-    "utf-8",
-  );
+  await fs.writeFile(path.join(directory, "index.json"), JSON.stringify([chat]), "utf-8");
   await fs.writeFile(
     path.join(directory, "legacy-openai-chat.json"),
     JSON.stringify(chat),
@@ -1705,8 +1605,7 @@ test("persists a protected custom alias for historical chats", async (t) => {
   );
   const store = createChatStore(
     async () => directory,
-    async (providerId) =>
-      providerId === "openai" ? "custom:openai-legacy" : providerId,
+    async (providerId) => (providerId === "openai" ? "custom:openai-legacy" : providerId),
   );
 
   assert.equal((await store.list())[0]?.providerId, "custom:openai-legacy");
@@ -1806,7 +1705,10 @@ test("a Computer Use continue marker survives reopening the store until cleared"
 
   const cleared = await reopened.setComputerUsePendingContinue(chat.id, false);
   assert.equal(cleared.computerUsePendingContinue, undefined);
-  assert.equal((await createChatStore(async () => directory).get(chat.id))?.computerUsePendingContinue, undefined);
+  assert.equal(
+    (await createChatStore(async () => directory).get(chat.id))?.computerUsePendingContinue,
+    undefined,
+  );
 });
 
 test("Computer Use access setters reject a missing chat", async (t) => {
@@ -1858,7 +1760,10 @@ test("a failed turn counts as new assistant output and is marked failed until a 
 
   // The flag survives a cold index read.
   const reopened = createChatStore(async () => directory);
-  assert.equal((await reopened.list()).find((meta) => meta.id === chat.id)?.lastAssistantFailed, true);
+  assert.equal(
+    (await reopened.list()).find((meta) => meta.id === chat.id)?.lastAssistantFailed,
+    true,
+  );
 
   await store.appendMessage(chat.id, { role: "user", content: "Try again" });
   await store.appendMessage(chat.id, { role: "assistant", content: "Done this time" });
@@ -1871,25 +1776,39 @@ test("a failed turn counts as new assistant output and is marked failed until a 
   await store.appendMessage(chat.id, {
     role: "assistant",
     content: "Partial",
-    timeline: { version: 3, generationId: "gen-stop", status: "cancelled", startedAt: 1, finishedAt: 2, steps: [] },
+    timeline: {
+      version: 3,
+      generationId: "gen-stop",
+      status: "cancelled",
+      startedAt: 1,
+      finishedAt: 2,
+      steps: [],
+    },
   });
-  assert.equal((await store.list()).find((meta) => meta.id === chat.id)?.lastAssistantFailed, undefined);
+  assert.equal(
+    (await store.list()).find((meta) => meta.id === chat.id)?.lastAssistantFailed,
+    undefined,
+  );
 
   // A runtime failure after partial text has no provider failure, only a failed timeline.
   await store.appendMessage(chat.id, { role: "user", content: "Once more" });
   await store.appendMessage(chat.id, {
     role: "assistant",
     content: "Partial before the runtime failed",
-    timeline: { version: 3, generationId: "gen-host", status: "failed", startedAt: 1, finishedAt: 2, steps: [] },
+    timeline: {
+      version: 3,
+      generationId: "gen-host",
+      status: "failed",
+      startedAt: 1,
+      finishedAt: 2,
+      steps: [],
+    },
   });
   assert.equal((await store.list()).find((meta) => meta.id === chat.id)?.lastAssistantFailed, true);
 });
 
-
 test("loads legacy Azure chat identities through the renamed native provider", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-chat-google-migration-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-google-migration-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const chat = {
     id: "legacy-chat",
@@ -1901,16 +1820,8 @@ test("loads legacy Azure chat identities through the renamed native provider", a
     updatedAt: 20,
     messages: [],
   };
-  await fs.writeFile(
-    path.join(directory, "index.json"),
-    JSON.stringify([chat]),
-    "utf-8",
-  );
-  await fs.writeFile(
-    path.join(directory, "legacy-chat.json"),
-    JSON.stringify(chat),
-    "utf-8",
-  );
+  await fs.writeFile(path.join(directory, "index.json"), JSON.stringify([chat]), "utf-8");
+  await fs.writeFile(path.join(directory, "legacy-chat.json"), JSON.stringify(chat), "utf-8");
   const store = createChatStore(async () => directory);
 
   assert.equal((await store.list())[0]?.providerId, "azure");
@@ -1931,7 +1842,10 @@ test("feature-owned chats leave regular listings but stay in the full index acro
     new Set((await store.listRegular()).map(({ id }) => id)),
     new Set([regular.id, assistant.id]),
   );
-  assert.deepEqual((await store.listRegular("default")).map(({ id }) => id), [regular.id]);
+  assert.deepEqual(
+    (await store.listRegular("default")).map(({ id }) => id),
+    [regular.id],
+  );
 
   const restarted = createChatStore(async () => directory);
   assert.deepEqual(
@@ -1943,7 +1857,10 @@ test("feature-owned chats leave regular listings but stay in the full index acro
     owner,
   );
   assert.deepEqual((await restarted.get(owned.id))?.owner, owner);
-  assert.deepEqual((await restarted.listRegular("default")).map(({ id }) => id), [regular.id]);
+  assert.deepEqual(
+    (await restarted.listRegular("default")).map(({ id }) => id),
+    [regular.id],
+  );
 });
 
 test("an owner is main-only, exclusive with Bots, and never copied", async (t) => {
@@ -1968,14 +1885,22 @@ test("renderer-authored appends cannot write into a feature-owned conversation",
   const owned = await store.create({ owner: { kind: "design-project", projectId: "project-1" } });
   const regular = await store.create({ workspaceId: "default" });
   await assert.rejects(
-    store.appendMessage(owned.id, { role: "user", content: "steer the design" }, { rejectFeatureOwned: true }),
+    store.appendMessage(
+      owned.id,
+      { role: "user", content: "steer the design" },
+      { rejectFeatureOwned: true },
+    ),
     /belongs to another Aiden feature/u,
   );
   assert.equal((await store.get(owned.id))?.messages.length, 0);
   // The main-owned design run still writes its own turns.
   await store.appendMessage(owned.id, { role: "user", content: "Explore a pricing page" });
   assert.equal((await store.get(owned.id))?.messages.length, 1);
-  await store.appendMessage(regular.id, { role: "user", content: "hello" }, { rejectFeatureOwned: true });
+  await store.appendMessage(
+    regular.id,
+    { role: "user", content: "hello" },
+    { rejectFeatureOwned: true },
+  );
   assert.equal((await store.get(regular.id))?.messages.length, 1);
 });
 
@@ -2021,7 +1946,10 @@ test("a fork or copy of a design-mode chat starts in the normal layout", async (
   const store = await testStore(t);
   const chat = await store.create({ workspaceId: "workspace-1" });
   await store.appendMessage(chat.id, { role: "user", content: "Make a pricing page" });
-  const saved = await store.appendMessage(chat.id, { role: "assistant", content: "Here are three." });
+  const saved = await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Here are three.",
+  });
   await store.setDesignMode(chat.id, true);
   const forked = await store.copyVisibleHistory({
     sourceChatId: chat.id,
@@ -2040,7 +1968,8 @@ test("design mode is refused for Bot, Assistant and feature-owned chats", async 
   for (const chat of [bot, assistant, owned]) {
     await assert.rejects(
       store.setDesignMode(chat.id, true),
-      (error: unknown) => error instanceof ChatStoreError && error.code === "design-mode-unavailable",
+      (error: unknown) =>
+        error instanceof ChatStoreError && error.code === "design-mode-unavailable",
     );
     assert.equal("designMode" in (await store.get(chat.id))!, false);
   }
@@ -2105,7 +2034,9 @@ const GRAB_TINY_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
 const GRAB_TINY_PNG_BYTES = Buffer.byteLength(GRAB_TINY_PNG, "base64");
 
-function sampleGrabbedElement(overrides: Partial<GrabbedElementContextV1> = {}): GrabbedElementContextV1 {
+function sampleGrabbedElement(
+  overrides: Partial<GrabbedElementContextV1> = {},
+): GrabbedElementContextV1 {
   const id = overrides.id ?? "el_card_1";
   const base: GrabbedElementContextV1 = {
     version: GRABBED_ELEMENT_SCHEMA_VERSION,
@@ -2180,7 +2111,10 @@ test("grabbedElements round-trip across createWithFirstMessage, append, restart,
   const withRefs = await reopened.getWithImageReferences(created.id);
   const forRenderer = chatForRenderer(withRefs);
   assert.deepEqual(forRenderer?.messages[2]?.grabbedElements, [secondElement]);
-  assert.match(forRenderer?.messages[2]?.attachments?.[0]?.url ?? "", /^aiden-attachment:\/\/image\//u);
+  assert.match(
+    forRenderer?.messages[2]?.attachments?.[0]?.url ?? "",
+    /^aiden-attachment:\/\/image\//u,
+  );
 
   // Copy/fork preserves grabbedElements on user messages.
   const copied = await reopened.copyVisibleHistory({ sourceChatId: created.id });
@@ -2201,11 +2135,18 @@ test("grabbedElements round-trip across createWithFirstMessage, append, restart,
       },
     ],
   });
-  assert.equal(exportedMissingThumb.chat.messages[0]?.grabbedElements?.[0]?.thumbnailAttachmentId, undefined);
+  assert.equal(
+    exportedMissingThumb.chat.messages[0]?.grabbedElements?.[0]?.thumbnailAttachmentId,
+    undefined,
+  );
 
   // Title policy seeds from grabbed element and avoids grab-thumb_* filename noise.
   assert.equal(
-    deriveChatTitleSeed({ content: "", attachments: [thumbAttachment], grabbedElements: [secondElement] }),
+    deriveChatTitleSeed({
+      content: "",
+      attachments: [thumbAttachment],
+      grabbedElements: [secondElement],
+    }),
     "Element: <HeroCta />",
   );
   const titlePrompt = buildChatTitlePrompt({
@@ -2222,7 +2163,9 @@ test("grabbedElements round-trip across createWithFirstMessage, append, restart,
 
   // Corrupt entry on disk is dropped leniently on readChat without losing valid siblings.
   const file = path.join(directory, `${created.id}.json`);
-  const raw = JSON.parse(await fs.readFile(file, "utf8")) as { messages: Array<Record<string, unknown>> };
+  const raw = JSON.parse(await fs.readFile(file, "utf8")) as {
+    messages: Array<Record<string, unknown>>;
+  };
   raw.messages[0]!.grabbedElements = [{ broken: true }, firstElement];
   await fs.writeFile(file, JSON.stringify(raw));
   const recovered = await createChatStore(async () => directory).get(created.id);
@@ -2249,7 +2192,8 @@ test("first-message committer reports browser_grab_sent once on commit and not o
     requiresReconciliation: (ownerId) => turns.requiresAppendReconciliation(ownerId),
     markReconciliation: (ownerId) => turns.markAppendReconciliationRequired(ownerId),
     clearReconciliation: (ownerId) => turns.clearAppendReconciliationRequired(ownerId),
-    admitWorkspace: (workspaceId, document) => admitOwnedWorkspaceOperation(workspaces, document, workspaceId),
+    admitWorkspace: (workspaceId, document) =>
+      admitOwnedWorkspaceOperation(workspaces, document, workspaceId),
     getWorkspace: async () => ({}),
     resolveSkill: async () => {
       throw new Error("Skill unavailable");
@@ -2296,16 +2240,30 @@ test("first-message committer reports browser_grab_sent once on commit and not o
 test("an in-chat task run on another model leaves the chat's own model unchanged", async (t) => {
   const store = await testStore(t);
   const taskModel = { providerId: "task-provider", model: "task-model" };
-  const chosen = await store.create({ workspaceId: "workspace", providerId: "person-provider", model: "person-model" });
+  const chosen = await store.create({
+    workspaceId: "workspace",
+    providerId: "person-provider",
+    model: "person-model",
+  });
   const unset = await store.create({ workspaceId: "workspace" });
   for (const chat of [chosen, unset]) {
     // What a scheduled run saves in the chat it was made in: its notice prompt,
     // guidance the person queued while it ran, and the answer.
-    await store.appendMessage(chat.id, { role: "user", content: "Scheduled task prompt" }, { expectedWorkspaceId: "workspace" });
-    await store.appendMessage(chat.id, { role: "user", content: "Queued guidance", model: taskModel.model },
-      { ...generationModelMeta(taskModel, true), expectedWorkspaceId: "workspace" });
-    await store.appendMessage(chat.id, { role: "assistant", content: "Task answer", model: taskModel.model },
-      { ...generationModelMeta(taskModel, true), expectedWorkspaceId: "workspace" });
+    await store.appendMessage(
+      chat.id,
+      { role: "user", content: "Scheduled task prompt" },
+      { expectedWorkspaceId: "workspace" },
+    );
+    await store.appendMessage(
+      chat.id,
+      { role: "user", content: "Queued guidance", model: taskModel.model },
+      { ...generationModelMeta(taskModel, true), expectedWorkspaceId: "workspace" },
+    );
+    await store.appendMessage(
+      chat.id,
+      { role: "assistant", content: "Task answer", model: taskModel.model },
+      { ...generationModelMeta(taskModel, true), expectedWorkspaceId: "workspace" },
+    );
   }
   const afterChosen = await store.get(chosen.id);
   assert.equal(afterChosen?.providerId, "person-provider");
@@ -2317,8 +2275,14 @@ test("an in-chat task run on another model leaves the chat's own model unchanged
   assert.equal(afterChosen?.messages[afterChosen.messages.length - 1]?.model, "task-model");
 
   // An ordinary turn keeps the chat on the model it answered with.
-  await store.appendMessage(chosen.id, { role: "assistant", content: "Chat answer" },
-    { ...generationModelMeta({ providerId: "other-provider", model: "other-model" }, false), expectedWorkspaceId: "workspace" });
+  await store.appendMessage(
+    chosen.id,
+    { role: "assistant", content: "Chat answer" },
+    {
+      ...generationModelMeta({ providerId: "other-provider", model: "other-model" }, false),
+      expectedWorkspaceId: "workspace",
+    },
+  );
   assert.equal((await store.get(chosen.id))?.model, "other-model");
 });
 
@@ -2327,9 +2291,15 @@ test("a started chat keeps who started it across a restart, and a damaged record
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
   const startedBy = { version: 1 as const, kind: "chat" as const, chatId: "lead-1", at: 1_000 };
-  const child = await store.create({ workspaceId: "workspace-1", title: "Run the tests", startedBy });
+  const child = await store.create({
+    workspaceId: "workspace-1",
+    title: "Run the tests",
+    startedBy,
+  });
   const plain = await store.create({ workspaceId: "workspace-1" });
-  await assert.rejects(store.create({ workspaceId: "workspace-1", startedBy: { ...startedBy, kind: "app" } as never }));
+  await assert.rejects(
+    store.create({ workspaceId: "workspace-1", startedBy: { ...startedBy, kind: "app" } as never }),
+  );
 
   const restarted = createChatStore(async () => directory);
   assert.deepEqual((await restarted.get(child.id))?.startedBy, startedBy);
@@ -2349,11 +2319,21 @@ test("a turn's thinking level is saved in the same write as its message, survive
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-thinking-level-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const first = createChatStore(async () => directory);
-  const chat = await first.create({ workspaceId: "workspace", providerId: "openai", model: "model-a" });
-
-  const saved = await first.appendMessage(chat.id, { role: "user", content: "Think harder" }, {
-    providerId: "openai", model: "model-b", thinkingLevel: "high",
+  const chat = await first.create({
+    workspaceId: "workspace",
+    providerId: "openai",
+    model: "model-a",
   });
+
+  const saved = await first.appendMessage(
+    chat.id,
+    { role: "user", content: "Think harder" },
+    {
+      providerId: "openai",
+      model: "model-b",
+      thinkingLevel: "high",
+    },
+  );
   assert.equal(saved.model, "model-b");
   assert.equal(saved.thinkingLevel, "high");
   const restored = await createChatStore(async () => directory).get(chat.id);
@@ -2362,9 +2342,15 @@ test("a turn's thinking level is saved in the same write as its message, survive
 
   // An invalid level writes nothing at all, not even the message.
   await assert.rejects(
-    first.appendMessage(chat.id, { role: "user", content: "Never stored" }, {
-      providerId: "openai", model: "model-b", thinkingLevel: "extreme" as never,
-    }),
+    first.appendMessage(
+      chat.id,
+      { role: "user", content: "Never stored" },
+      {
+        providerId: "openai",
+        model: "model-b",
+        thinkingLevel: "extreme" as never,
+      },
+    ),
     /Invalid thinking level/u,
   );
   const afterRefusal = await createChatStore(async () => directory).get(chat.id);
@@ -2372,15 +2358,34 @@ test("a turn's thinking level is saved in the same write as its message, survive
   assert.equal(afterRefusal?.thinkingLevel, "high");
 
   // Omitted leaves the level; null clears it.
-  assert.equal((await first.appendMessage(chat.id, { role: "user", content: "Same" })).thinkingLevel, "high");
-  const cleared = await first.appendMessage(chat.id, { role: "user", content: "Default" }, {
-    providerId: "openai", model: "model-b", thinkingLevel: null,
-  });
+  assert.equal(
+    (await first.appendMessage(chat.id, { role: "user", content: "Same" })).thinkingLevel,
+    "high",
+  );
+  const cleared = await first.appendMessage(
+    chat.id,
+    { role: "user", content: "Default" },
+    {
+      providerId: "openai",
+      model: "model-b",
+      thinkingLevel: null,
+    },
+  );
   assert.equal("thinkingLevel" in cleared, false);
 
-  const bot = await first.create({ botId: "bot:level-owner", providerId: "openai", model: "model-a" });
-  const botSaved = await first.appendMessage(bot.id, { role: "user", content: "Hi" }, {
-    providerId: "openai", model: "model-a", thinkingLevel: "high",
+  const bot = await first.create({
+    botId: "bot:level-owner",
+    providerId: "openai",
+    model: "model-a",
   });
+  const botSaved = await first.appendMessage(
+    bot.id,
+    { role: "user", content: "Hi" },
+    {
+      providerId: "openai",
+      model: "model-a",
+      thinkingLevel: "high",
+    },
+  );
   assert.equal("thinkingLevel" in botSaved, false, "a Bot chat never takes a chat level");
 });

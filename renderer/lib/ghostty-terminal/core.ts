@@ -1062,7 +1062,10 @@ export class GhosttyTerminalCore {
       }
       let wide = 0;
       // A wrap spacer in the final column can follow a spacer tail.
-      if (text.length === 0 && (cells[cells.length - 1]?.text.length || cells.length === cols - 1)) {
+      if (
+        text.length === 0 &&
+        (cells[cells.length - 1]?.text.length || cells.length === cols - 1)
+      ) {
         this.assertSuccess(
           "ghostty_render_state_row_cells_get(raw)",
           this.runtime.call(

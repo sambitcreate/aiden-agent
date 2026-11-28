@@ -20,7 +20,10 @@ export const WEB_FETCH_CHANNELS = Object.freeze([
 ] as const);
 
 export interface WebFetchHandlerDependencies<Event> {
-  readonly handle: (channel: string, handler: (event: Event, ...args: unknown[]) => unknown) => void;
+  readonly handle: (
+    channel: string,
+    handler: (event: Event, ...args: unknown[]) => unknown,
+  ) => void;
   /** Returns a liveness check for the sender document; throws for a foreign sender. */
   readonly owner: (event: Event) => { isDestroyed(): boolean };
   readonly snapshot: () => Promise<WebFetchRendererSnapshot>;
@@ -32,7 +35,9 @@ export interface WebFetchHandlerDependencies<Event> {
 
 const INACTIVE = "The renderer document is no longer active.";
 
-export function registerWebFetchHandlers<Event>(dependencies: WebFetchHandlerDependencies<Event>): void {
+export function registerWebFetchHandlers<Event>(
+  dependencies: WebFetchHandlerDependencies<Event>,
+): void {
   const live = (event: Event) => {
     const owner = dependencies.owner(event);
     if (owner.isDestroyed()) throw new Error(INACTIVE);
@@ -64,13 +69,16 @@ export function registerWebFetchHandlers<Event>(dependencies: WebFetchHandlerDep
     live(event);
     // Turning it on needs a working model; turning it off never does.
     if (enabled && !(await dependencies.snapshot()).extract.ready) {
-      throw new Error("Add the Cloudflare account ID and at least one API key before turning on extract mode.");
+      throw new Error(
+        "Add the Cloudflare account ID and at least one API key before turning on extract mode.",
+      );
     }
     return change(event, (current) => ({ ...current, extract: { ...current.extract, enabled } }));
   });
 
   dependencies.handle("webSearch:pages:setExtractAccountId", (event, value) => {
-    if (value !== null && typeof value !== "string") throw new Error("The account ID must be text.");
+    if (value !== null && typeof value !== "string")
+      throw new Error("The account ID must be text.");
     const trimmed = typeof value === "string" ? value.trim() : "";
     const accountId = trimmed ? normalizeWebExtractAccountId(trimmed) : undefined;
     if (trimmed && accountId === undefined) {

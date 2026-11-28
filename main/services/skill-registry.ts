@@ -183,9 +183,7 @@ export class SkillRegistry {
     return this.snapshotResolved(workspace);
   }
 
-  async snapshotResolved(
-    workspace: RegistryWorkspace,
-  ): Promise<SkillRegistrySnapshot> {
+  async snapshotResolved(workspace: RegistryWorkspace): Promise<SkillRegistrySnapshot> {
     if (!workspace.id || workspace.id.length > 256) {
       throw new SkillInvocationError("workspace_changed", "Invalid skill workspace.");
     }
@@ -253,7 +251,10 @@ export class SkillRegistry {
       throw new SkillInvocationError("invalid_reference", "Skill selection expired or changed.");
     }
     if (skill.userInvocable === false) {
-      throw new SkillInvocationError("skill_unavailable", "This skill does not allow user invocation.");
+      throw new SkillInvocationError(
+        "skill_unavailable",
+        "This skill does not allow user invocation.",
+      );
     }
     if (!skill.available) {
       throw new SkillInvocationError(
@@ -272,10 +273,7 @@ export class SkillRegistry {
     this.#dependencies.onInvalidate();
   }
 
-  async #load(
-    workspace: RegistryWorkspace,
-    fresh = false,
-  ): Promise<SkillRegistrySnapshot> {
+  async #load(workspace: RegistryWorkspace, fresh = false): Promise<SkillRegistrySnapshot> {
     if (!(await this.#dependencies.isEnabled())) return this.#project(workspace, []);
     const discover =
       fresh || !this.#dependencies.discoverWithCachedGlobals
@@ -285,9 +283,7 @@ export class SkillRegistry {
       this.#dependencies.listConfigured(),
       // No Access is also a discovery boundary: do not read workspace skill
       // files merely to mark them unavailable in a renderer catalog.
-      discover(
-        workspace.permission === "none" ? undefined : workspace.folderPath,
-      ),
+      discover(workspace.permission === "none" ? undefined : workspace.folderPath),
       this.#dependencies.listBuiltin(),
     ]);
     // A disable may race an in-flight disk scan. Never publish that snapshot.
@@ -360,9 +356,7 @@ export interface WorkspaceSkillChoice {
   userOnly: boolean;
 }
 
-export function workspaceSkillChoices(
-  snapshot: SkillRegistrySnapshot,
-): WorkspaceSkillChoice[] {
+export function workspaceSkillChoices(snapshot: SkillRegistrySnapshot): WorkspaceSkillChoice[] {
   // One row per name: the skill the model would actually get, else the first
   // unavailable one so the row can say why.
   const winners = new Map<string, RegisteredSkill>();
@@ -408,9 +402,13 @@ export function withoutSkills(
   const invocationIds = new Set(skills.map(({ invocationId }) => invocationId));
   return Object.freeze({
     ...snapshot,
-    catalog: Object.freeze(snapshot.catalog.filter(({ invocationId }) => invocationIds.has(invocationId))),
+    catalog: Object.freeze(
+      snapshot.catalog.filter(({ invocationId }) => invocationIds.has(invocationId)),
+    ),
     skills: Object.freeze(skills),
-    available: Object.freeze(snapshot.available.filter(({ invocationId }) => invocationIds.has(invocationId))),
+    available: Object.freeze(
+      snapshot.available.filter(({ invocationId }) => invocationIds.has(invocationId)),
+    ),
   });
 }
 
@@ -420,7 +418,8 @@ export function modelInvocableSkills(
   allowWorkspaceSkills = true,
 ): RegisteredSkill[] {
   return snapshot.available.filter(
-    (skill) => skill.modelInvocable !== false && (allowWorkspaceSkills || skill.source !== "workspace"),
+    (skill) =>
+      skill.modelInvocable !== false && (allowWorkspaceSkills || skill.source !== "workspace"),
   );
 }
 
@@ -440,18 +439,24 @@ export function findSkillByName<T extends Pick<RegisteredSkill, "name" | "toolKe
   } catch {
     canonical = undefined;
   }
-  const byName = canonical === undefined ? undefined : skills.find((skill) => {
-    try {
-      return canonicalSkillIdentity(skill.name) === canonical;
-    } catch {
-      return false;
-    }
-  });
+  const byName =
+    canonical === undefined
+      ? undefined
+      : skills.find((skill) => {
+          try {
+            return canonicalSkillIdentity(skill.name) === canonical;
+          } catch {
+            return false;
+          }
+        });
   return byName ?? skills.find((skill) => skill.toolKey === value);
 }
 
 /** The internal key of the model-invocable skill `requested` names, if any. */
-export function skillToolKeyForName(snapshot: SkillRegistrySnapshot, requested: string): string | undefined {
+export function skillToolKeyForName(
+  snapshot: SkillRegistrySnapshot,
+  requested: string,
+): string | undefined {
   return findSkillByName(modelInvocableSkills(snapshot), requested)?.toolKey;
 }
 

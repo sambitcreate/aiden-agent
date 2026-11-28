@@ -29,7 +29,8 @@ async function withRouter<T, A = undefined>(
   return page.evaluate(
     async ({ source, arg }) => {
       const container = document.getElementById("root") ?? document.body.firstElementChild;
-      const key = container && Object.keys(container).find((name) => name.startsWith("__reactContainer$"));
+      const key =
+        container && Object.keys(container).find((name) => name.startsWith("__reactContainer$"));
       if (!container || !key) throw new Error("React root not found.");
       const stack: unknown[] = [(container as unknown as Record<string, unknown>)[key]];
       let router: RendererRouter | undefined;
@@ -47,10 +48,12 @@ async function withRouter<T, A = undefined>(
         stack.push(fiber.sibling, fiber.child);
       }
       if (!router) throw new Error("Router context not found.");
-      return (new Function("router", "arg", `return (${source})(router, arg);`) as (
-        router: RendererRouter,
-        arg: unknown,
-      ) => unknown)(router, arg);
+      return (
+        new Function("router", "arg", `return (${source})(router, arg);`) as (
+          router: RendererRouter,
+          arg: unknown,
+        ) => unknown
+      )(router, arg);
     },
     { source: run.toString(), arg },
   ) as Promise<T>;
@@ -75,7 +78,9 @@ function studioChunkCount(page: Page): Promise<number> {
   return page.evaluate(
     (pattern) =>
       [...document.querySelectorAll<HTMLElement>("script[src], link[href]")].filter((element) =>
-        new RegExp(pattern, "u").test(element.getAttribute("src") ?? element.getAttribute("href") ?? ""),
+        new RegExp(pattern, "u").test(
+          element.getAttribute("src") ?? element.getAttribute("href") ?? "",
+        ),
       ).length,
     STUDIO_CHUNK.source,
   );
@@ -159,9 +164,13 @@ test.describe("Studio foundation with both flags on", () => {
     const nav = page.getByRole("navigation", { name: "Primary" });
     // Icon-only helpers (the New chat in… chevron) have no text, so each row is named by its aria-label or text.
     const readRowNames = () =>
-      nav.getByRole("button").evaluateAll((buttons) =>
-        buttons.map((button) => (button.getAttribute("aria-label") ?? button.textContent ?? "").trim()),
-      );
+      nav
+        .getByRole("button")
+        .evaluateAll((buttons) =>
+          buttons.map((button) =>
+            (button.getAttribute("aria-label") ?? button.textContent ?? "").trim(),
+          ),
+        );
     await expect
       .poll(async () => (await readRowNames()).slice(0, 3))
       .toEqual(["New Agent", "New chat in…", "Scheduled"]);
@@ -200,7 +209,9 @@ test.describe("Studio foundation with both flags on", () => {
 
     // The detail route keeps its sidebar row selected.
     await navigateTo(page, "/images/workflow-1");
-    await expect(page.getByText("This workflow could not be opened", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("This workflow could not be opened", { exact: true }),
+    ).toBeVisible();
     await expect.poll(() => currentPath(page)).toBe("/images/workflow-1");
     await expect(imagesRow).toHaveAttribute("aria-current", "page");
 
@@ -216,7 +227,9 @@ test.describe("Studio foundation with both flags on", () => {
     page = await aiden.relaunch(undefined, {});
     await expectHomeChat(page);
     const relaunchedNav = page.getByRole("navigation", { name: "Primary" });
-    await expect(relaunchedNav.getByRole("button", { name: "Scheduled", exact: true })).toBeVisible();
+    await expect(
+      relaunchedNav.getByRole("button", { name: "Scheduled", exact: true }),
+    ).toBeVisible();
     await expect(relaunchedNav.getByRole("button", { name: "Images", exact: true })).toHaveCount(0);
     const relaunchedSearch = await openCommandPalette(page);
     await relaunchedSearch.fill("Open Create Images");

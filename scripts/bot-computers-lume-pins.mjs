@@ -59,7 +59,9 @@ export const LUME_ARCHIVE_MEMBERS = Object.freeze([
 
 /** `type:relative/path` entries of the extracted bundle, relative to lume.app, sorted. */
 export const LUME_APP_TREE = Object.freeze(
-  LUME_ARCHIVE_MEMBERS.filter((member) => member.startsWith(`${LUME_ARTIFACT_PROVENANCE.appBundle}/`))
+  LUME_ARCHIVE_MEMBERS.filter((member) =>
+    member.startsWith(`${LUME_ARTIFACT_PROVENANCE.appBundle}/`),
+  )
     .map((member) => member.slice(LUME_ARTIFACT_PROVENANCE.appBundle.length + 1))
     .filter((member) => member.length > 0)
     .map((member) =>
@@ -102,7 +104,9 @@ export function assertLumeArtifactProvenance(artifact) {
   const actualKeys = Object.keys(artifact).sort();
   const expectedKeys = [...LUME_ARTIFACT_KEYS].sort();
   if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys)) {
-    throw new Error(`The Lume provenance keys differ from the compiled set: ${actualKeys.join(", ")}`);
+    throw new Error(
+      `The Lume provenance keys differ from the compiled set: ${actualKeys.join(", ")}`,
+    );
   }
   for (const field of LUME_ARTIFACT_KEYS) {
     if (artifact[field] !== LUME_ARTIFACT_PROVENANCE[field]) {

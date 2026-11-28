@@ -1,11 +1,19 @@
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 import { isContextOverflow, type AssistantMessage } from "@earendil-works/pi-ai/compat";
-import { BTW_LIMITS, type BtwEventV1, type BtwStartReceiptV1 } from "../../../renderer/shared/btw.js";
+import {
+  BTW_LIMITS,
+  type BtwEventV1,
+  type BtwStartReceiptV1,
+} from "../../../renderer/shared/btw.js";
 import { chatSurface } from "../../../renderer/shared/chat-visibility.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import type { Chat } from "../types.js";
-import { assistantUsageRecord, isLocalModelProvider, unreportedUsageRecord } from "../usage-accounting.js";
+import {
+  assistantUsageRecord,
+  isLocalModelProvider,
+  unreportedUsageRecord,
+} from "../usage-accounting.js";
 import type { UsageRequestRecord } from "../usage-store-core.js";
 import {
   assistantText,
@@ -16,7 +24,12 @@ import {
   BTW_SYSTEM_PROMPT,
   type BtwHistoryTurn,
 } from "./context.js";
-import { oneOffCallOptions, sideCallContinuation, sideCallModelKey, type SideCallPrefix } from "../side-call-prefix.js";
+import {
+  oneOffCallOptions,
+  sideCallContinuation,
+  sideCallModelKey,
+  type SideCallPrefix,
+} from "../side-call-prefix.js";
 import { BtwOperationRegistry } from "./operation-registry.js";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 
@@ -40,7 +53,12 @@ type BtwEventBody = BtwEventV1 extends infer Event
 
 export interface BtwServiceDependencies {
   getChat(chatId: string): Promise<Chat | null>;
-  resolveRuntime(providerId: string, modelId: string, signal?: AbortSignal, conversationId?: string): Promise<ResolvedModelRuntime>;
+  resolveRuntime(
+    providerId: string,
+    modelId: string,
+    signal?: AbortSignal,
+    conversationId?: string,
+  ): Promise<ResolvedModelRuntime>;
   isChatBusy(chatId: string): boolean;
   recordUsage(record: UsageRequestRecord): Promise<void>;
   registry: BtwOperationRegistry;
@@ -53,19 +71,32 @@ export interface BtwServiceDependencies {
   parentPrefix?(chatId: string): Promise<SideCallPrefix | undefined>;
 }
 
-type BtwAttempt = { kind: "continuation"; prefix: SideCallPrefix } | { kind: "isolated"; retry: boolean };
+type BtwAttempt =
+  | { kind: "continuation"; prefix: SideCallPrefix }
+  | { kind: "isolated"; retry: boolean };
 
 /**
  * The parent prefix a side question may continue: the same model, and a reply
  * that is still the chat's latest message, so no later turn, edit or
  * compaction is missing from it.
  */
-function continuablePrefix(prefix: SideCallPrefix | undefined, chat: Chat, runtime: ResolvedModelRuntime): SideCallPrefix | undefined {
-  if (!prefix || prefix.conversationId !== chat.id || prefix.modelKey !== sideCallModelKey(runtime.model)) return undefined;
+function continuablePrefix(
+  prefix: SideCallPrefix | undefined,
+  chat: Chat,
+  runtime: ResolvedModelRuntime,
+): SideCallPrefix | undefined {
+  if (
+    !prefix ||
+    prefix.conversationId !== chat.id ||
+    prefix.modelKey !== sideCallModelKey(runtime.model)
+  )
+    return undefined;
   const last = chat.messages[chat.messages.length - 1];
   const reply = prefix.response;
   if (last?.role !== "assistant" || !last.pi) return undefined;
-  return last.pi.timestamp === reply.timestamp && last.pi.provider === reply.provider && last.pi.model === reply.model
+  return last.pi.timestamp === reply.timestamp &&
+    last.pi.provider === reply.provider &&
+    last.pi.model === reply.model
     ? prefix
     : undefined;
 }
@@ -124,7 +155,11 @@ export class BtwService {
     return created;
   }
 
-  async start(chatIdValue: unknown, questionValue: unknown, owner: BtwOwner): Promise<BtwStartReceiptV1> {
+  async start(
+    chatIdValue: unknown,
+    questionValue: unknown,
+    owner: BtwOwner,
+  ): Promise<BtwStartReceiptV1> {
     if (typeof chatIdValue !== "string" || !/^[a-zA-Z0-9._:-]{1,200}$/u.test(chatIdValue)) {
       throw new Error("Invalid chat for side question.");
     }
@@ -133,7 +168,9 @@ export class BtwService {
     const chat = await this.deps.getChat(chatIdValue);
     if (!chat) throw new Error("This chat is no longer available.");
     if (chatSurface(chat) !== "regular") {
-      throw new Error("Side questions are currently available only in ordinary chats in Aiden Agent.");
+      throw new Error(
+        "Side questions are currently available only in ordinary chats in Aiden Agent.",
+      );
     }
     const binding = fingerprint(chat);
     if (!binding || !chat.providerId || !chat.model) {
@@ -173,8 +210,9 @@ export class BtwService {
     }
     const receipt = { version: 1 as const, chatId: chat.id, requestId };
     setTimeout(() => {
-      void this.run({ chat, binding, question, requestId, owner, controller, thread })
-        .finally(settle);
+      void this.run({ chat, binding, question, requestId, owner, controller, thread }).finally(
+        settle,
+      );
     }, 0).unref?.();
     return receipt;
   }
@@ -194,7 +232,8 @@ export class BtwService {
       if (
         input.owner.isDestroyed() ||
         !this.deps.registry.isCurrent(input.chat.id, input.requestId)
-      ) return;
+      )
+        return;
       try {
         input.owner.send("chats:btw-event", {
           version: 1,
@@ -215,7 +254,9 @@ export class BtwService {
     let runtime: ResolvedModelRuntime | undefined;
     try {
       if (isAcpHarnessProvider(input.chat.providerId ?? "")) {
-        throw new Error("Side questions are not available with agent-backed models. Switch models to ask one.");
+        throw new Error(
+          "Side questions are not available with agent-backed models. Switch models to ask one.",
+        );
       }
       runtime = await this.deps.resolveRuntime(
         input.chat.providerId!,
@@ -241,7 +282,11 @@ export class BtwService {
 
       // A side question on a live parent prefix reads the parent's cache. Any
       // failure there falls back to the isolated, tool-free request.
-      const prefix = continuablePrefix(await this.deps.parentPrefix?.(input.chat.id), latest, runtime);
+      const prefix = continuablePrefix(
+        await this.deps.parentPrefix?.(input.chat.id),
+        latest,
+        runtime,
+      );
       const attempts: BtwAttempt[] = [
         ...(prefix ? [{ kind: "continuation" as const, prefix }] : []),
         { kind: "isolated", retry: false },
@@ -252,14 +297,18 @@ export class BtwService {
       for (const attempt of attempts) {
         let request;
         if (attempt.kind === "continuation") {
-          request = sideCallContinuation(attempt.prefix, [btwContinuationPrompt(input.thread.history, input.question)], {
-            apiKey: runtime.apiKey,
-            headers: runtime.headers,
-            signal: input.controller.signal,
-            maxTokens,
-            maxRetries: 0,
-            timeoutMs: BTW_LIMITS.timeoutMs,
-          });
+          request = sideCallContinuation(
+            attempt.prefix,
+            [btwContinuationPrompt(input.thread.history, input.question)],
+            {
+              apiKey: runtime.apiKey,
+              headers: runtime.headers,
+              signal: input.controller.signal,
+              maxTokens,
+              maxRetries: 0,
+              timeoutMs: BTW_LIMITS.timeoutMs,
+            },
+          );
         } else {
           const built = buildBtwContext({
             branch,
@@ -270,7 +319,11 @@ export class BtwService {
           });
           contextTrimmed ||= built.trimmed;
           request = {
-            context: normalizeContext({ systemPrompt: BTW_SYSTEM_PROMPT, messages: built.messages, tools: [] }),
+            context: normalizeContext({
+              systemPrompt: BTW_SYSTEM_PROMPT,
+              messages: built.messages,
+              tools: [],
+            }),
             options: oneOffCallOptions({
               apiKey: runtime.apiKey,
               headers: runtime.headers,
@@ -283,7 +336,11 @@ export class BtwService {
         }
         let streamed = "";
         try {
-          const stream = runtime.streams.streamSimple(runtime.model, request.context, request.options);
+          const stream = runtime.streams.streamSimple(
+            runtime.model,
+            request.context,
+            request.options,
+          );
           for await (const event of stream) {
             input.controller.signal.throwIfAborted();
             if (event.type !== "text_delta" || !event.delta) continue;
@@ -297,29 +354,38 @@ export class BtwService {
             if (delta) publish({ type: "delta", delta });
           }
           response = await stream.result();
-          await this.deps.recordUsage(assistantUsageRecord({
-            message: response,
-            provider: runtime.provider,
-            model: runtime.model,
-            source: "btw",
-          }));
+          await this.deps.recordUsage(
+            assistantUsageRecord({
+              message: response,
+              provider: runtime.provider,
+              model: runtime.model,
+              source: "btw",
+            }),
+          );
         } catch (error) {
-          await this.deps.recordUsage(unreportedUsageRecord({
-            source: "btw",
-            providerId: runtime.provider.id,
-            providerLabel: runtime.provider.label,
-            modelId: runtime.model.id,
-            modelLabel: runtime.model.name,
-            local: isLocalModelProvider(runtime.provider),
-            status: input.controller.signal.aborted ? "cancelled" : "failed",
-          }));
+          await this.deps.recordUsage(
+            unreportedUsageRecord({
+              source: "btw",
+              providerId: runtime.provider.id,
+              providerLabel: runtime.provider.label,
+              modelId: runtime.model.id,
+              modelLabel: runtime.model.name,
+              local: isLocalModelProvider(runtime.provider),
+              status: input.controller.signal.aborted ? "cancelled" : "failed",
+            }),
+          );
           if (attempt.kind !== "continuation" || input.controller.signal.aborted) throw error;
           response = undefined;
           publish({ type: "reset" });
           continue;
         }
         if (attempt.kind === "continuation") {
-          if (response.stopReason !== "error" && response.stopReason !== "aborted" && assistantText(response).trim()) break;
+          if (
+            response.stopReason !== "error" &&
+            response.stopReason !== "aborted" &&
+            assistantText(response).trim()
+          )
+            break;
           response = undefined;
           publish({ type: "reset" });
           continue;
@@ -336,7 +402,10 @@ export class BtwService {
       }
       const answer = boundedAnswer(assistantText(response).trim());
       if (!answer) throw new Error("Provider returned no text.");
-      if (this.threads.get(input.chat.id) === input.thread && input.thread.fingerprint === input.binding) {
+      if (
+        this.threads.get(input.chat.id) === input.thread &&
+        input.thread.fingerprint === input.binding
+      ) {
         input.thread.history = boundedHistory([
           ...input.thread.history,
           { question: input.question, answer, timestamp: Date.now() },

@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ASK_USER_QUESTION_VERSION, type AskUserQuestionPromptV1 } from "../shared/ask-user-question.js";
+import {
+  ASK_USER_QUESTION_VERSION,
+  type AskUserQuestionPromptV1,
+} from "../shared/ask-user-question.js";
 import { AskUserQuestionComposer } from "./ask-user-question-composer.js";
 
 function prompt(multiSelect: boolean): AskUserQuestionPromptV1 {
@@ -54,8 +57,14 @@ test("single-select options are action buttons, multi-select options are checkbo
 
 test("questions expose one active panel and a tab for every question", () => {
   const value = prompt(false);
-  value.questions.push({ ...value.questions[0]!, header: "Timing", question: "When should it run?" });
-  const markup = renderToStaticMarkup(createElement(AskUserQuestionComposer, { prompt: value, onRespond: () => undefined }));
+  value.questions.push({
+    ...value.questions[0]!,
+    header: "Timing",
+    question: "When should it run?",
+  });
+  const markup = renderToStaticMarkup(
+    createElement(AskUserQuestionComposer, { prompt: value, onRespond: () => undefined }),
+  );
   assert.equal((markup.match(/role="tab"/g) ?? []).length, 2);
   assert.equal((markup.match(/role="tabpanel"/g) ?? []).length, 1);
   assert.match(markup, /1. Database/);

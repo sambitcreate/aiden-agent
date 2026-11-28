@@ -41,7 +41,8 @@ export function useWorkspacePathIntake(
     const timer = setTimeout(() => {
       workspacesApi.inspectPath(input, relativeToWorkspaceId).then(
         (inspection) => {
-          if (current) setAnswer({ input, row: workspacePathRow(input, inspection, workspacesRef.current) });
+          if (current)
+            setAnswer({ input, row: workspacePathRow(input, inspection, workspacesRef.current) });
         },
         (error: unknown) => {
           if (!current) return;
@@ -50,7 +51,10 @@ export function useWorkspacePathIntake(
             row: {
               action: "invalid",
               input,
-              message: error instanceof Error && error.message ? error.message : "Aiden couldn't check that path.",
+              message:
+                error instanceof Error && error.message
+                  ? error.message
+                  : "Aiden couldn't check that path.",
             },
           });
         },

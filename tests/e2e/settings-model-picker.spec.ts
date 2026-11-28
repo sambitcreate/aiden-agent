@@ -1,4 +1,10 @@
-import { E2E_MODEL_DISPLAY_NAME, expect, expectSquircleButtons, finishLmStudioOnboarding, test } from "./fixtures";
+import {
+  E2E_MODEL_DISPLAY_NAME,
+  expect,
+  expectSquircleButtons,
+  finishLmStudioOnboarding,
+  test,
+} from "./fixtures";
 
 const SETTINGS_SECTIONS = [
   "Providers",
@@ -23,9 +29,7 @@ async function assertRenderedSettingsDestination(
 ): Promise<void> {
   switch (section) {
     case "Providers":
-      await expect(
-        page.getByRole("button", { name: "Connect another AI" }),
-      ).toBeVisible();
+      await expect(page.getByRole("button", { name: "Connect another AI" })).toBeVisible();
       return;
     case "Agent Slider":
       await expect(
@@ -54,9 +58,20 @@ async function assertRenderedSettingsDestination(
       await expect(
         page.getByRole("heading", { level: 1, name: "Connections", exact: true }),
       ).toBeVisible();
-      await expect(page.getByRole("button", { name: "Connect a device", exact: true })).toBeVisible();
-      await expect(page.getByText(process.platform === "darwin" ? "This Mac settings" : "This computer settings", { exact: true })).toBeVisible();
-      await page.getByText(process.platform === "darwin" ? "This Mac settings" : "This computer settings", { exact: true }).click();
+      await expect(
+        page.getByRole("button", { name: "Connect a device", exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByText(
+          process.platform === "darwin" ? "This Mac settings" : "This computer settings",
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await page
+        .getByText(process.platform === "darwin" ? "This Mac settings" : "This computer settings", {
+          exact: true,
+        })
+        .click();
       await expect(
         page.getByRole("switch", { name: "Enable Aiden Remote Access" }),
       ).toHaveAttribute("data-state", "unchecked");
@@ -73,21 +88,32 @@ async function assertRenderedSettingsDestination(
       ).toBeVisible();
       return;
     case "Computer Use":
-      await expect(page.getByRole("heading", { level: 1, name: "Computer Use", exact: true })).toBeVisible();
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Computer Use", exact: true }),
+      ).toBeVisible();
       await expect(page.getByRole("tablist", { name: "Computer Use" })).toHaveCount(0);
       return;
     case "Computers & VMs":
-      await expect(page.getByRole("heading", { level: 1, name: "Computers & VMs", exact: true })).toBeVisible();
-      await expect(page.getByRole("tab", { name: "Computer Use", exact: true })).toHaveAttribute("aria-selected", "true");
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Computers & VMs", exact: true }),
+      ).toBeVisible();
+      await expect(page.getByRole("tab", { name: "Computer Use", exact: true })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
       await page.getByRole("tab", { name: "Bot computers", exact: true }).click();
-      await expect(page.getByRole("heading", { level: 1, name: "Computers & VMs", exact: true })).toBeVisible();
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Computers & VMs", exact: true }),
+      ).toBeVisible();
       return;
     case "Voice & Speech":
       await expect(
         page.getByRole("heading", { level: 2, name: "Use your voice", exact: true }),
       ).toBeVisible();
       await page.getByRole("tab", { name: "Aiden Live", exact: true }).click();
-      await expect(page.getByRole("heading", { level: 1, name: "Voice & Speech", exact: true })).toBeVisible();
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Voice & Speech", exact: true }),
+      ).toBeVisible();
       await expect(page.getByText("Beta", { exact: true })).toBeVisible();
       return;
     case "Keyboard shortcuts":
@@ -145,32 +171,43 @@ test("every Settings destination renders and a one-model local inventory stays u
     if (section === "Appearance") {
       const light = page.locator('.appearance-mode-preview-light [data-preview-scheme="light"]');
       const dark = page.locator('.appearance-mode-preview-dark [data-preview-scheme="dark"]');
-      const colors = async () => [await light.evaluate(el => getComputedStyle(el).backgroundColor), await dark.evaluate(el => getComputedStyle(el).backgroundColor)];
+      const colors = async () => [
+        await light.evaluate((el) => getComputedStyle(el).backgroundColor),
+        await dark.evaluate((el) => getComputedStyle(el).backgroundColor),
+      ];
       const assertRestingPreviews = async () => {
         await page.getByRole("heading", { level: 1, name: "Appearance", exact: true }).click();
-        for (const preview of await page.locator('.appearance-mode-preview, .appearance-mode-scene').all()) {
+        for (const preview of await page
+          .locator(".appearance-mode-preview, .appearance-mode-scene")
+          .all()) {
           const bounds = await preview.boundingBox();
           expect(bounds?.width).toBeGreaterThan(40);
           expect(bounds?.height).toBeGreaterThan(40);
         }
-        const selected = page.locator('.appearance-mode-option[aria-checked="true"] .appearance-mode-option-label');
+        const selected = page.locator(
+          '.appearance-mode-option[aria-checked="true"] .appearance-mode-option-label',
+        );
         await expect(selected).toHaveCount(1);
-        const selectedFill = await selected.evaluate(el => getComputedStyle(el).backgroundColor);
-        expect(selectedFill).not.toBe('rgba(0, 0, 0, 0)');
-        for (const label of await page.locator('.appearance-mode-option[aria-checked="false"] .appearance-mode-option-label').all()) {
-          expect(await label.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(selectedFill);
+        const selectedFill = await selected.evaluate((el) => getComputedStyle(el).backgroundColor);
+        expect(selectedFill).not.toBe("rgba(0, 0, 0, 0)");
+        for (const label of await page
+          .locator('.appearance-mode-option[aria-checked="false"] .appearance-mode-option-label')
+          .all()) {
+          expect(await label.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(
+            selectedFill,
+          );
         }
       };
       await assertRestingPreviews();
       const before = await colors();
       expect(before[0]).not.toBe(before[1]);
-      await page.locator('.appearance-mode-option').filter({hasText: 'Dark'}).click();
-      await expect(page.locator('html')).toHaveClass(/dark/u);
+      await page.locator(".appearance-mode-option").filter({ hasText: "Dark" }).click();
+      await expect(page.locator("html")).toHaveClass(/dark/u);
       await expectSquircleButtons(page);
       expect(await colors()).toEqual(before);
       await assertRestingPreviews();
-      await page.locator('.appearance-mode-option').filter({hasText: 'Light'}).click();
-      await expect(page.locator('html')).not.toHaveClass(/dark/u);
+      await page.locator(".appearance-mode-option").filter({ hasText: "Light" }).click();
+      await expect(page.locator("html")).not.toHaveClass(/dark/u);
       await expectSquircleButtons(page);
       expect(await colors()).toEqual(before);
       await assertRestingPreviews();
@@ -228,9 +265,13 @@ test("every Settings destination renders and a one-model local inventory stays u
     ).toBeVisible();
 
     // The development fixture disables global shortcuts; setup must honor that policy.
-    await expect(page.getByRole("combobox", { name: "Dictation shortcut behavior" })).toHaveCount(0);
+    await expect(page.getByRole("combobox", { name: "Dictation shortcut behavior" })).toHaveCount(
+      0,
+    );
     await expect(
-      page.getByText("Press the global dictation shortcut once to start and again to stop.", { exact: true }),
+      page.getByText("Press the global dictation shortcut once to start and again to stop.", {
+        exact: true,
+      }),
     ).toBeVisible();
 
     await settingsNavigation.getByRole("button", { name: "About", exact: true }).click();
@@ -281,7 +322,10 @@ test("every Settings destination renders and a one-model local inventory stays u
   await filter.press("Enter");
   await expect(modelTrigger).toHaveAttribute(
     "aria-label",
-    new RegExp(`^Selected model: ${E2E_MODEL_DISPLAY_NAME}(, .+ on the Agent Slider)?\\. Choose a model\\.$`, "u"),
+    new RegExp(
+      `^Selected model: ${E2E_MODEL_DISPLAY_NAME}(, .+ on the Agent Slider)?\\. Choose a model\\.$`,
+      "u",
+    ),
   );
 
   await page.getByRole("button", { name: "Settings", exact: true }).click();

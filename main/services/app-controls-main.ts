@@ -1,4 +1,8 @@
-import { AppControlsService, appControlRevision, newChatModelChoices } from "./app-controls-core.js";
+import {
+  AppControlsService,
+  appControlRevision,
+  newChatModelChoices,
+} from "./app-controls-core.js";
 import { listConfiguredProviders } from "./provider-list-main.js";
 import { ipcMain } from "../platform.js";
 import type { StoredAppOperation } from "./app-controls-core.js";

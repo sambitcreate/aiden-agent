@@ -11,7 +11,15 @@ import { BotComputerError } from "./types.js";
 
 const last = <T>(items: readonly T[]): T | undefined => items[items.length - 1];
 
-type Mode = "normal" | "ignore-range" | "cut-after-half" | "oversize" | "unsatisfiable" | "tampered" | "redirect" | "stall";
+type Mode =
+  | "normal"
+  | "ignore-range"
+  | "cut-after-half"
+  | "oversize"
+  | "unsatisfiable"
+  | "tampered"
+  | "redirect"
+  | "stall";
 
 const body = randomBytes(256 * 1024);
 const pin = (url: string, overrides: Partial<RestoreImagePin> = {}): RestoreImagePin => ({
@@ -23,7 +31,10 @@ const pin = (url: string, overrides: Partial<RestoreImagePin> = {}): RestoreImag
   ...overrides,
 });
 
-async function serve(state: { mode: Mode; ranges: (string | undefined)[] }): Promise<{ server: Server; url: string }> {
+async function serve(state: {
+  mode: Mode;
+  ranges: (string | undefined)[];
+}): Promise<{ server: Server; url: string }> {
   const server = createServer((request, response) => {
     state.ranges.push(request.headers.range);
     if (state.mode === "redirect") {
@@ -41,7 +52,9 @@ async function serve(state: { mode: Mode; ranges: (string | undefined)[] }): Pro
     const slice = payload.subarray(start);
     response.writeHead(start > 0 ? 206 : 200, {
       "content-length": String(slice.length),
-      ...(start > 0 ? { "content-range": `bytes ${start}-${payload.length - 1}/${payload.length}` } : {}),
+      ...(start > 0
+        ? { "content-range": `bytes ${start}-${payload.length - 1}/${payload.length}` }
+        : {}),
     });
     if (state.mode === "stall") {
       response.write(slice.subarray(0, 1024));
@@ -86,7 +99,9 @@ test("a whole download is verified and kept under its build name, owner-only", a
   const { server, downloader } = await context.start();
   const phases: string[] = [];
   try {
-    const file = await downloader.download({ onProgress: (progress) => phases.push(progress.phase) });
+    const file = await downloader.download({
+      onProgress: (progress) => phases.push(progress.phase),
+    });
     assert.deepEqual(readFileSync(file), body);
     assert.equal(path.basename(file), "UniversalMac_25G83_Restore.ipsw");
     assert.equal(statSync(file).mode & 0o777, 0o600);
@@ -101,7 +116,10 @@ test("an interrupted download keeps its partial and resumes with Range", async (
   const context = setup("cut-after-half");
   const { server, downloader } = await context.start();
   try {
-    await assert.rejects(downloader.download(), (error: unknown) => error instanceof BotComputerError && error.code === "download_failed");
+    await assert.rejects(
+      downloader.download(),
+      (error: unknown) => error instanceof BotComputerError && error.code === "download_failed",
+    );
     const kept = await downloader.partialBytes();
     assert.ok(kept > 0 && kept < body.length);
     context.state.mode = "normal";
@@ -159,7 +177,10 @@ test("low disk space is reported before anything is downloaded", async () => {
   const context = setup("normal", 1000);
   const { server, downloader } = await context.start();
   try {
-    await assert.rejects(downloader.download(), (error: unknown) => error instanceof BotComputerError && error.code === "low_disk");
+    await assert.rejects(
+      downloader.download(),
+      (error: unknown) => error instanceof BotComputerError && error.code === "low_disk",
+    );
     assert.equal(context.state.ranges.length, 0);
     assert.equal(await downloader.requiredFreeBytes(), body.length + 1024);
   } finally {
@@ -171,7 +192,10 @@ test("a redirect is refused: only the pinned URL is fetched", async () => {
   const context = setup("redirect");
   const { server, downloader } = await context.start();
   try {
-    await assert.rejects(downloader.download(), (error: unknown) => error instanceof BotComputerError && error.code === "download_failed");
+    await assert.rejects(
+      downloader.download(),
+      (error: unknown) => error instanceof BotComputerError && error.code === "download_failed",
+    );
     assert.equal(context.state.ranges.length, 1);
   } finally {
     server.close();
@@ -187,7 +211,10 @@ test("cancel keeps the partial, concurrent calls share one download, and remove 
     assert.equal(first, second);
     await new Promise((resolve) => setTimeout(resolve, 100));
     downloader.cancel();
-    await assert.rejects(first, (error: unknown) => error instanceof BotComputerError && error.code === "cancelled");
+    await assert.rejects(
+      first,
+      (error: unknown) => error instanceof BotComputerError && error.code === "cancelled",
+    );
     assert.equal(context.state.ranges.length, 1);
     assert.equal(await downloader.partialBytes(), 1024);
     await downloader.remove();

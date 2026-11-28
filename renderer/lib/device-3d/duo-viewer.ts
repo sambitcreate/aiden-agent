@@ -20,7 +20,13 @@ import { duoScreenSettled, type DuoPose } from "../device-duo-control";
 import { createDeviceFraming } from "./framing";
 import { createDeviceMotion } from "./device-motion";
 import { buildDuoModel, DUO_COVER_PIXELS, DUO_INNER_PIXELS } from "./duo-model";
-import { createDuoScene, duoDisplayKey, duoFrameMatches, type DuoHingeLeaf, type DuoPanelId } from "./duo-scene";
+import {
+  createDuoScene,
+  duoDisplayKey,
+  duoFrameMatches,
+  type DuoHingeLeaf,
+  type DuoPanelId,
+} from "./duo-scene";
 import { duoViewSnaps, nearestDuoView, type DuoRestFace } from "./duo-snap";
 import { createRenderScheduler } from "./interaction";
 import { disposeDeviceModel, loadDeviceModel, type LoadedDeviceModel } from "./model-scene";
@@ -41,7 +47,11 @@ export interface DuoViewer {
   readonly rejectOrientation: () => void;
   readonly frameUpdated: (panel: DuoPanelId, primary?: HTMLCanvasElement) => void;
   readonly resize: (width: number, height: number, pixelRatio: number) => void;
-  readonly screenPoint: (x: number, y: number, captured?: boolean) => { x: number; y: number } | null;
+  readonly screenPoint: (
+    x: number,
+    y: number,
+    captured?: boolean,
+  ) => { x: number; y: number } | null;
   readonly orbit: (x: number, y: number) => void;
   readonly beginHinge: (x: number, y: number) => boolean;
   readonly resetPose: () => void;
@@ -130,12 +140,20 @@ export function createDuoViewer(options: {
     requestedPanel = null;
   };
   const activeSnaps = () =>
-    model ? duoViewSnaps(model.restFrames(screen?.screenId === 1 ? 1 : 3), screen?.screenId === 1 ? 1 : 3) : [];
+    model
+      ? duoViewSnaps(
+          model.restFrames(screen?.screenId === 1 ? 1 : 3),
+          screen?.screenId === 1 ? 1 : 3,
+        )
+      : [];
   const snaps = () => {
-    if (!model || !screen?.supportsPhysicalOrientation || !options.onPanelRequested) return activeSnaps();
+    if (!model || !screen?.supportsPhysicalOrientation || !options.onPanelRequested)
+      return activeSnaps();
     const cover = duoViewSnaps(model.restFrames(1), 1);
     // A shut inner display is occluded and cannot become a useful rest view.
-    return angle > 20 && angle < 180 ? [...duoViewSnaps(model.restFrames(3), 3), ...cover] : activeSnaps();
+    return angle > 20 && angle < 180
+      ? [...duoViewSnaps(model.restFrames(3), 3), ...cover]
+      : activeSnaps();
   };
   const orbit = createDeviceMotion({
     choose(rotation) {
@@ -157,7 +175,12 @@ export function createDuoViewer(options: {
           }
           scheduler.invalidate();
         }, DUO_HANDOFF_TIMEOUT_MS);
-      } else if (screen && requestedPanel === null && snap.orientation !== viewOrientation && options.onOrientationRequested) {
+      } else if (
+        screen &&
+        requestedPanel === null &&
+        snap.orientation !== viewOrientation &&
+        options.onOrientationRequested
+      ) {
         viewOrientation = snap.orientation;
         requestedOrientation = snap.orientation;
         options.onOrientationRequested(snap.orientation);
@@ -218,7 +241,8 @@ export function createDuoViewer(options: {
     );
     updateCamera();
   };
-  const moving = () => Math.abs(angle - targetAngle) > 0.01 || pivot.distanceTo(targetPivot) > 0.001;
+  const moving = () =>
+    Math.abs(angle - targetAngle) > 0.01 || pivot.distanceTo(targetPivot) > 0.001;
   const fail = () => {
     if (disposed || failed) return;
     failed = true;
@@ -226,7 +250,11 @@ export function createDuoViewer(options: {
     options.onUnavailable();
   };
   const draw = () => {
-    if (buffer.width !== viewport.width || buffer.height !== viewport.height || buffer.ratio !== viewport.ratio) {
+    if (
+      buffer.width !== viewport.width ||
+      buffer.height !== viewport.height ||
+      buffer.ratio !== viewport.ratio
+    ) {
       renderer.setDrawingBufferSize(viewport.width, viewport.height, viewport.ratio);
       buffer = viewport;
     }
@@ -239,7 +267,9 @@ export function createDuoViewer(options: {
         const now = runtime.now();
         const elapsed = Math.max(0, (now - lastTime) / 1000);
         // Exponential hinge ease, independent of frame rate.
-        const amount = reduced ? 1 : 1 - Math.exp(-14 * Math.max(0, (now - lastTime) / 1000 || 0.016));
+        const amount = reduced
+          ? 1
+          : 1 - Math.exp(-14 * Math.max(0, (now - lastTime) / 1000 || 0.016));
         lastTime = now;
         const inMotion = moving();
         const orbitChanged = orbit.advance(now, reduced);
@@ -258,7 +288,8 @@ export function createDuoViewer(options: {
         }
         if (framing.advance(now, reduced)) updateCamera();
         draw();
-        if (inMotion || moving() || orbit.needsFrame() || framing.needsFrame()) scheduler.invalidate();
+        if (inMotion || moving() || orbit.needsFrame() || framing.needsFrame())
+          scheduler.invalidate();
       } catch {
         fail();
       }
@@ -329,7 +360,9 @@ export function createDuoViewer(options: {
     const context = probe.getContext("2d", { willReadFrequently: true });
     if (!context) return false;
     context.drawImage(source, 0, 0, 8, 8);
-    return !context.getImageData(0, 0, 8, 8).data.some((value, index) => index % 4 !== 3 && value > 3);
+    return !context
+      .getImageData(0, 0, 8, 8)
+      .data.some((value, index) => index % 4 !== 3 && value > 3);
   };
   return {
     setScreen(next) {
@@ -366,7 +399,12 @@ export function createDuoViewer(options: {
         next?.hingeAngle === previous?.hingeAngle &&
         next?.orientation !== previous?.orientation;
       const leftPhysicalPose =
-        rotated && !ownedRotation && !ownedHandoff && !folding && !next?.hingePose && previewAngle === null;
+        rotated &&
+        !ownedRotation &&
+        !ownedHandoff &&
+        !folding &&
+        !next?.hingePose &&
+        previewAngle === null;
       if (firstPose || changedPose || leftPhysicalPose || landedFold) {
         physicalPose = next?.hingePose ?? (next?.screenId === 1 ? "closed" : "open");
         presentationAngle = next?.hingeAngle ?? (next?.screenId === 1 ? 0 : 180);
@@ -376,7 +414,12 @@ export function createDuoViewer(options: {
       // Native angle commands clear hingePose. While a leaf is held (a pinch, or a
       // fold on a stand) they change articulation only and preserve the viewing
       // pose. A separate rotation clears the physical preset and follows panel orientation.
-      if (firstPose || changedPose || landedFold || (rotated && !ownedRotation && !ownedHandoff && !folding)) {
+      if (
+        firstPose ||
+        changedPose ||
+        landedFold ||
+        (rotated && !ownedRotation && !ownedHandoff && !folding)
+      ) {
         hingeLeaf = null;
         viewOrientation = next?.orientation ?? null;
         const poseAngle = presentationAngle;
@@ -395,7 +438,9 @@ export function createDuoViewer(options: {
               : new Euler(0, (Math.PI / 2) * Math.pow(1 - poseAngle / 180, 3), 0, "YXZ");
         targetPresentation = new Quaternion().setFromEuler(physical);
         if (physicalPose !== "laptop" && physicalPose !== "tent") {
-          targetPresentation.premultiply(new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), roll));
+          targetPresentation.premultiply(
+            new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), roll),
+          );
         }
         if (next?.screenId === 1 && !landedFold && physicalPose !== "tent") {
           // Native readback can retain the cover even for an open physical preset.
@@ -494,7 +539,13 @@ export function createDuoViewer(options: {
       const surface = surfaces[id === 1 ? 0 : 1]!;
       const { context, canvas } = surface;
       // Ignore native shutdown blanks only while waiting for an activation. Steady black application content remains valid.
-      if (!primary && !readyKey && runtime.now() - activationAt < DUO_BLANK_PROBE_MS && blank(source)) return;
+      if (
+        !primary &&
+        !readyKey &&
+        runtime.now() - activationAt < DUO_BLANK_PROBE_MS &&
+        blank(source)
+      )
+        return;
       context.save();
       context.fillStyle = BLANK_FILL;
       context.fillRect(0, 0, canvas.width, canvas.height);
@@ -520,13 +571,20 @@ export function createDuoViewer(options: {
       scheduler.invalidate();
     },
     resize(width, height, ratio) {
-      if (disposed || ![width, height, ratio].every(Number.isFinite) || width <= 0 || height <= 0) return;
+      if (disposed || ![width, height, ratio].every(Number.isFinite) || width <= 0 || height <= 0)
+        return;
       viewport = { width, height, ratio: viewerPixelRatio(ratio) };
       fit(true);
       scheduler.invalidate();
     },
     screenPoint(x, y, captured = false) {
-      if (disposed || moving() || previewAngle !== null || requestedOrientation !== null || requestedPanel !== null) {
+      if (
+        disposed ||
+        moving() ||
+        previewAngle !== null ||
+        requestedOrientation !== null ||
+        requestedPanel !== null
+      ) {
         return null;
       }
       applyPose();
@@ -574,7 +632,8 @@ export function createDuoViewer(options: {
       scheduler.invalidate();
     },
     capture() {
-      if (disposed || failed || !model || !viewport.width || !viewport.height) return Promise.resolve(null);
+      if (disposed || failed || !model || !viewport.width || !viewport.height)
+        return Promise.resolve(null);
       return captureCanvas(options.canvas, () => {
         applyPose();
         updateCamera();
@@ -603,4 +662,3 @@ export function createDuoViewer(options: {
     },
   };
 }
-

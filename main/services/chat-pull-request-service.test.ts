@@ -40,10 +40,7 @@ interface FakeCalls {
   currentPullRequest: number;
 }
 
-function summary(
-  number: number,
-  overrides: Partial<GitHubPullRequestSummary> = {},
-) {
+function summary(number: number, overrides: Partial<GitHubPullRequestSummary> = {}) {
   return {
     number,
     title: `PR ${number}`,
@@ -63,9 +60,7 @@ function ready<T extends Record<string, unknown>>(value: T) {
 
 function fakeService(
   directory: string,
-  github: Partial<
-    Record<keyof FakeCalls, (...args: never[]) => Promise<unknown>>
-  > = {},
+  github: Partial<Record<keyof FakeCalls, (...args: never[]) => Promise<unknown>>> = {},
   options: {
     workspaceFolderPath?: string | undefined;
     chatWorkspaceId?: string | undefined;
@@ -99,12 +94,9 @@ function fakeService(
       getPullRequest: call<GitHubPullRequestStatus>("getPullRequest", {
         availability: "no-pull-request",
       }),
-      getPullRequestByUrl: call<GitHubPullRequestStatus>(
-        "getPullRequestByUrl",
-        {
-          availability: "no-pull-request",
-        },
-      ),
+      getPullRequestByUrl: call<GitHubPullRequestStatus>("getPullRequestByUrl", {
+        availability: "no-pull-request",
+      }),
       findForBranch: call<GitHubPullRequestListStatus>("findForBranch", {
         availability: "ready",
         pullRequests: [],
@@ -113,29 +105,22 @@ function fakeService(
         availability: "ready",
         pullRequests: [],
       }),
-      createPullRequest: call<GitHubPullRequestCreateResult>(
-        "createPullRequest",
-        {
-          kind: "failed",
-          availability: "error",
-          message: "not configured",
-        },
-      ),
+      createPullRequest: call<GitHubPullRequestCreateResult>("createPullRequest", {
+        kind: "failed",
+        availability: "error",
+        message: "not configured",
+      }),
       currentPullRequest: call<GitHubPullRequestStatus>("currentPullRequest", {
         availability: "no-pull-request",
       }),
     },
     gitInfo: async () => ({
       isRepo: true,
-      ...(options.branch !== undefined
-        ? { branch: options.branch }
-        : { branch: "feature/x" }),
+      ...(options.branch !== undefined ? { branch: options.branch } : { branch: "feature/x" }),
     }),
     chatWorkspaceId: async () => options.chatWorkspaceId ?? "workspace-1",
     workspaceFolderPath: async () =>
-      options.workspaceFolderPath === undefined
-        ? "/work/repo"
-        : options.workspaceFolderPath,
+      options.workspaceFolderPath === undefined ? "/work/repo" : options.workspaceFolderPath,
     onChanged: options.onChanged,
   };
   return { service: new ChatPullRequestService(deps), calls, deps };
@@ -145,8 +130,7 @@ test("link resolves canonical identity through gh and stores it", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { service, calls } = fakeService(directory, {
-    getPullRequestByUrl: async () =>
-      ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
+    getPullRequestByUrl: async () => ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
   });
 
   const result = await service.link(CHAT, {
@@ -179,8 +163,7 @@ test("linking the same PR twice deduplicates; unlink removes it", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { service } = fakeService(directory, {
-    getPullRequestByUrl: async () =>
-      ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
+    getPullRequestByUrl: async () => ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
   });
   const url = "https://github.com/owner/repo/pull/12";
   assert.equal((await service.link(CHAT, { url })).ok, true);
@@ -197,10 +180,8 @@ test("detectAfterPush offers unlinked open PRs and refreshes linked ones", async
   t.after(() => rm(directory, { recursive: true, force: true }));
   let found: GitHubPullRequestSummary[] = [summary(41, { title: "Old title" })];
   const { service } = fakeService(directory, {
-    getPullRequestByUrl: async () =>
-      ready({ pullRequest: summary(41) }) as GitHubPullRequestStatus,
-    findForBranch: async () =>
-      ready({ pullRequests: found }) as GitHubPullRequestListStatus,
+    getPullRequestByUrl: async () => ready({ pullRequest: summary(41) }) as GitHubPullRequestStatus,
+    findForBranch: async () => ready({ pullRequests: found }) as GitHubPullRequestListStatus,
   });
   await service.link(CHAT, { url: "https://github.com/owner/repo/pull/41" });
 
@@ -297,8 +278,7 @@ test("an unknown outcome with zero matches stays pending instead of allowing a d
         kind: "unknown",
         message: "timed out",
       }) as GitHubPullRequestCreateResult,
-    findForBranch: async () =>
-      ready({ pullRequests: [] }) as GitHubPullRequestListStatus,
+    findForBranch: async () => ready({ pullRequests: [] }) as GitHubPullRequestListStatus,
   });
   const result = await service.create(CHAT, {
     workspaceId: "workspace-1",
@@ -323,8 +303,7 @@ test("an unknown outcome with several matches is ambiguous and keeps the intent"
       ready({
         pullRequests: [summary(1), summary(2)],
       }) as GitHubPullRequestListStatus,
-    getPullRequest: async () =>
-      ready({ pullRequest: summary(2) }) as GitHubPullRequestStatus,
+    getPullRequest: async () => ready({ pullRequest: summary(2) }) as GitHubPullRequestStatus,
   });
   const result = await service.create(CHAT, {
     workspaceId: "workspace-1",
@@ -340,15 +319,11 @@ test("an unknown outcome with several matches is ambiguous and keeps the intent"
   assert.equal(pending[0]?.candidates?.length, 2);
 
   // Adopting a candidate links it and clears the intent.
-  const adopted = await service.adoptCandidate(
-    CHAT,
-    pending[0]!.intent.operationId,
-    {
-      host: "github.com",
-      repository: REPO,
-      number: 2,
-    },
-  );
+  const adopted = await service.adoptCandidate(CHAT, pending[0]!.intent.operationId, {
+    host: "github.com",
+    repository: REPO,
+    number: 2,
+  });
   assert.equal(adopted.ok, true);
   assert.deepEqual(await service.pendingCreates(CHAT), []);
   assert.equal((await service.list(CHAT)).links[0]?.number, 2);
@@ -491,8 +466,7 @@ test("current resolves through the precedence model with workspace context", asy
       ready({
         pullRequest: summary(12, { headBranch: "other" }),
       }) as GitHubPullRequestStatus,
-    currentPullRequest: async () =>
-      ready({ pullRequest: summary(9) }) as GitHubPullRequestStatus,
+    currentPullRequest: async () => ready({ pullRequest: summary(9) }) as GitHubPullRequestStatus,
   });
   // Discovered workspace PR wins when nothing is linked.
   const discovered = await service.current(CHAT);
@@ -526,9 +500,7 @@ test("a branch that pushes under another name resolves to the pull request on th
         }) as GitHubPullRequestStatus;
       },
       listPullRequests: async (...args: never[]) => {
-        listedBranches.push(
-          (args as unknown as [string, { headBranch?: string }])[1]?.headBranch,
-        );
+        listedBranches.push((args as unknown as [string, { headBranch?: string }])[1]?.headBranch);
         return { availability: "ready", pullRequests: [] };
       },
     },
@@ -614,8 +586,7 @@ test("deleteChat removes the link file and never calls GitHub", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { service, calls } = fakeService(directory, {
-    getPullRequestByUrl: async () =>
-      ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
+    getPullRequestByUrl: async () => ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
   });
   await service.link(CHAT, { url: "https://github.com/owner/repo/pull/12" });
   const callsBefore = { ...calls };
@@ -680,10 +651,7 @@ test("invalid supplied SHA cannot start detection or creation", async (t) => {
       headBranch: "feature/x",
       expectedHeadSha,
     };
-    await assert.rejects(
-      service.detectAfterPush(CHAT, input),
-      /expectedHeadSha/,
-    );
+    await assert.rejects(service.detectAfterPush(CHAT, input), /expectedHeadSha/);
     await assert.rejects(
       service.create(CHAT, { ...input, title: "Title", baseBranch: "main" }),
       /expectedHeadSha/,
@@ -715,11 +683,7 @@ test("failed link publication retains the successful create intent for restart",
     }),
     /disk full/,
   );
-  assert.equal(
-    (await new ChatPullRequestStore(() => directory).listCreateIntents(CHAT))
-      .length,
-    1,
-  );
+  assert.equal((await new ChatPullRequestStore(() => directory).listCreateIntents(CHAT)).length, 1);
 });
 
 test("unlink survives restart and suppresses automatic current-PR discovery until explicitly relinked", async (t) => {
@@ -791,10 +755,7 @@ test("chat deletion fences a delayed GitHub link response", async (t) => {
   await service.deleteChat(CHAT);
   release(ready({ pullRequest: summary(12) }));
   await rejected;
-  assert.deepEqual(
-    await new ChatPullRequestStore(() => directory).list(CHAT),
-    [],
-  );
+  assert.deepEqual(await new ChatPullRequestStore(() => directory).list(CHAT), []);
   assert.deepEqual(await readdir(directory), []);
 });
 
@@ -826,10 +787,7 @@ test("chat deletion fences a delayed successful remote create", async (t) => {
   await service.deleteChat(CHAT);
   release({ kind: "created", pullRequest: summary(12) });
   await rejected;
-  assert.deepEqual(
-    await new ChatPullRequestStore(() => directory).listCreateIntents(CHAT),
-    [],
-  );
+  assert.deepEqual(await new ChatPullRequestStore(() => directory).listCreateIntents(CHAT), []);
   assert.deepEqual(await readdir(directory), []);
 });
 
@@ -853,9 +811,7 @@ test("every unresolved create outcome notifies after its durable intent is visib
       },
       {
         onChanged: (chatId) => {
-          visible.push(
-            new ChatPullRequestStore(() => directory).listCreateIntents(chatId),
-          );
+          visible.push(new ChatPullRequestStore(() => directory).listCreateIntents(chatId));
         },
       },
     );
@@ -880,7 +836,8 @@ test("a rate limit keeps cached snapshots and tells the caller when reads resume
   const { service, calls } = fakeService(
     directory,
     {
-      getPullRequestByUrl: async () => ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
+      getPullRequestByUrl: async () =>
+        ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
       getPullRequest: async () =>
         (limited
           ? { availability: "rate-limited", message: "paused", retryAt }
@@ -923,7 +880,9 @@ test("refresh reads every link together and announces only real changes", async 
         maxInFlight = Math.max(maxInFlight, inFlight);
         await new Promise((resolve) => setImmediate(resolve));
         inFlight -= 1;
-        return ready({ pullRequest: summary(number, number === 13 ? { checksState } : {}) }) as GitHubPullRequestStatus;
+        return ready({
+          pullRequest: summary(number, number === 13 ? { checksState } : {}),
+        }) as GitHubPullRequestStatus;
       },
     } as never,
     { onChanged: () => (changes += 1) },
@@ -989,7 +948,9 @@ test("explicit refresh bypasses a fresh background cache after remote CI changes
 
   const linked = await service.link(CHAT, { url: "https://github.com/owner/repo/pull/12" });
   assert.equal(linked.ok && linked.pullRequest?.checksState, "passing");
-  github.pullRequest("owner/repo", 12).checks = [{ name: "ci", status: "COMPLETED", conclusion: "FAILURE" }];
+  github.pullRequest("owner/repo", 12).checks = [
+    { name: "ci", status: "COMPLETED", conclusion: "FAILURE" },
+  ];
   const afterLink = recorded.requests.length;
   const stale = await pullRequests.getPullRequest("/work/repo", "github.com/owner/repo", 12);
   assert.equal(stale.pullRequest?.checksState, "passing");
@@ -1063,13 +1024,19 @@ test("the link chooser and post-push detection may spend the reserve kept for us
     // The first read observes the budget; a background read is then refused.
     const observed = await pullRequests.getPullRequest("/work/repo", "github.com/owner/repo", 12);
     assert.equal(observed.availability, "ready");
-    const background = await pullRequests.listPullRequests("/work/repo", { state: "open", limit: 30 });
+    const background = await pullRequests.listPullRequests("/work/repo", {
+      state: "open",
+      limit: 30,
+    });
     assert.equal(background.availability, "rate-limited");
 
     if (action === "chooser") {
       const candidates = await service.candidates(CHAT);
       assert.equal(candidates.availability, "ready", candidates.message);
-      assert.deepEqual(candidates.pullRequests.map((pullRequest) => pullRequest.number), [12]);
+      assert.deepEqual(
+        candidates.pullRequests.map((pullRequest) => pullRequest.number),
+        [12],
+      );
     } else {
       const detected = await service.detectAfterPush(CHAT, {
         workspaceId: "workspace-1",
@@ -1078,7 +1045,10 @@ test("the link chooser and post-push detection may spend the reserve kept for us
         repository: "github.com/owner/repo",
       });
       assert.equal(detected.availability, "ready", detected.message);
-      assert.deepEqual(detected.matches.map((pullRequest) => pullRequest.number), [12]);
+      assert.deepEqual(
+        detected.matches.map((pullRequest) => pullRequest.number),
+        [12],
+      );
     }
   }
 });

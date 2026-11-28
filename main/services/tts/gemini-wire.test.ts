@@ -29,9 +29,7 @@ test("the interaction body carries the exact transcript, no history, tools, or s
   const [content] = step!.content;
   assert.equal(content!.type, "text");
   assert.equal(content!.text, "Hello there.");
-  assert.deepEqual(content!.annotations, [
-    { type: "speech_metadata", style: "calm delivery" },
-  ]);
+  assert.deepEqual(content!.annotations, [{ type: "speech_metadata", style: "calm delivery" }]);
   // No conversation history, no previous interaction, no tools, no prompts.
   const json = JSON.stringify(body);
   assert.doesNotMatch(json, /previous_interaction|tools|system_instruction/u);
@@ -70,7 +68,11 @@ test("body builder rejects empty transcripts, oversized segments, and missing vo
   );
 });
 
-function wavBytes(options?: { sampleRate?: number; channels?: number; extraChunk?: boolean }): Uint8Array {
+function wavBytes(options?: {
+  sampleRate?: number;
+  channels?: number;
+  extraChunk?: boolean;
+}): Uint8Array {
   const sampleRate = options?.sampleRate ?? 24000;
   const channels = options?.channels ?? 1;
   const samples = new Uint8Array(32);
@@ -128,10 +130,7 @@ test("WAV validation parses chunks, not a fixed 44-byte header", () => {
 
 test("WAV validation rejects truncated, non-RIFF, and non-PCM containers", () => {
   assert.throws(() => validateWavContainer(new Uint8Array(8)), TtsWireError);
-  assert.throws(
-    () => validateWavContainer(ascii("JUNKJUNKJUNKJUNKJUNKJUNK")),
-    /not WAV/u,
-  );
+  assert.throws(() => validateWavContainer(ascii("JUNKJUNKJUNKJUNKJUNKJUNK")), /not WAV/u);
   const badFormat = wavBytes();
   // Overwrite the audio format to something unsupported (IEEE float = 3).
   new DataView(badFormat.buffer).setUint16(20, 3, true);
@@ -151,7 +150,13 @@ function synthResponse(wav: Uint8Array, status = "completed") {
       {
         type: "model_output",
         content: [
-          { type: "audio", mime_type: "audio/wav", data: base64(wav), sample_rate: 24000, channels: 1 },
+          {
+            type: "audio",
+            mime_type: "audio/wav",
+            data: base64(wav),
+            sample_rate: 24000,
+            channels: 1,
+          },
         ],
       },
     ],
@@ -185,8 +190,7 @@ test("unary parsing falls back to output_audio without duplication", () => {
 test("unary parsing rejects failures, incompletes, non-audio, and bad payloads", () => {
   assert.throws(
     () => parseUnarySynthesisResponse({ status: "failed", errors: [{ code: 500 }] }),
-    (error: unknown) =>
-      error instanceof TtsWireError && error.code === "provider_unavailable",
+    (error: unknown) => error instanceof TtsWireError && error.code === "provider_unavailable",
   );
   assert.throws(
     () => parseUnarySynthesisResponse({ status: "in_progress" }),
@@ -197,14 +201,18 @@ test("unary parsing rejects failures, incompletes, non-audio, and bad payloads",
   );
   assert.throws(
     () => parseUnarySynthesisResponse({ status: "completed", steps: [] }),
-    (error: unknown) =>
-      error instanceof TtsWireError && error.code === "invalid_response",
+    (error: unknown) => error instanceof TtsWireError && error.code === "invalid_response",
   );
   assert.throws(
     () =>
       parseUnarySynthesisResponse({
         status: "completed",
-        steps: [{ type: "model_output", content: [{ type: "audio", mime_type: "audio/wav", data: "!!!" }] }],
+        steps: [
+          {
+            type: "model_output",
+            content: [{ type: "audio", mime_type: "audio/wav", data: "!!!" }],
+          },
+        ],
       }),
     TtsWireError,
   );
@@ -215,9 +223,7 @@ test("unary parsing rejects failures, incompletes, non-audio, and bad payloads",
         steps: [
           {
             type: "model_output",
-            content: [
-              { type: "audio", mime_type: "audio/mp3", data: base64(wavBytes()) },
-            ],
+            content: [{ type: "audio", mime_type: "audio/mp3", data: base64(wavBytes()) }],
           },
         ],
       }),
@@ -238,9 +244,7 @@ test("provider errors collapse onto the closed union without leaking details", (
     const classified = classifyTtsProviderError(error);
     assert.equal(classified.code, code);
     assert.equal(classified.retryable, retryable);
-    assert.ok(
-      !classified.message.includes("123") && !classified.message.includes("SECRET"),
-    );
+    assert.ok(!classified.message.includes("123") && !classified.message.includes("SECRET"));
   }
 });
 
@@ -275,21 +279,40 @@ test("starter prebuilt voices are unique and valid", () => {
   }
 });
 
-
 test("unary audio matches every playback client: only 24 kHz mono WAV", () => {
-  for (const options of [{sampleRate: 48000}, {channels: 2}, {sampleRate: 0}, {channels: 0}]) {
-    assert.throws(() => parseUnarySynthesisResponse(synthResponse(wavBytes(options))), /24 kHz mono/u);
+  for (const options of [
+    { sampleRate: 48000 },
+    { channels: 2 },
+    { sampleRate: 0 },
+    { channels: 0 },
+  ]) {
+    assert.throws(
+      () => parseUnarySynthesisResponse(synthResponse(wavBytes(options))),
+      /24 kHz mono/u,
+    );
   }
-  assert.throws(() => parseUnarySynthesisResponse({ status: "completed", output_audio: {
-    mime_type: "audio/l16", data: base64(new Uint8Array([1, 2])), sample_rate: 24000, channels: 1,
-  }}), /Unexpected audio format/u);
+  assert.throws(
+    () =>
+      parseUnarySynthesisResponse({
+        status: "completed",
+        output_audio: {
+          mime_type: "audio/l16",
+          data: base64(new Uint8Array([1, 2])),
+          sample_rate: 24000,
+          channels: 1,
+        },
+      }),
+    /Unexpected audio format/u,
+  );
 });
 
 test("usage treats malformed or missing counts as unknown, preserving explicit zero", () => {
   for (const value of [-1, 1.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1]) {
-    const response = synthResponse(wavBytes()); response.usage.total_input_tokens = value;
+    const response = synthResponse(wavBytes());
+    response.usage.total_input_tokens = value;
     assert.equal(parseUnarySynthesisResponse(response).usage.inputTokens, null);
   }
-  const response = synthResponse(wavBytes()); response.usage.total_input_tokens = 0;
+  const response = synthResponse(wavBytes());
+  response.usage.total_input_tokens = 0;
   assert.equal(parseUnarySynthesisResponse(response).usage.inputTokens, 0);
 });

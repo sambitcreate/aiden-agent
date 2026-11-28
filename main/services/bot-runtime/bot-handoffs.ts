@@ -20,7 +20,11 @@ import {
   type BotPendingHandoff,
 } from "../../../renderer/shared/bot-handoffs.js";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import type { BotRuleHandoffRecord, BotRuleHandoffRequest, BotRuleHandoffRowTarget } from "./bot-extension.js";
+import type {
+  BotRuleHandoffRecord,
+  BotRuleHandoffRequest,
+  BotRuleHandoffRowTarget,
+} from "./bot-extension.js";
 
 export interface BotHandoffRequest extends BotPendingHandoff {
   browserTarget?: Readonly<BrowserApprovalTarget>;
@@ -33,7 +37,10 @@ export interface BotHandoffRequest extends BotPendingHandoff {
  * Open. `target` is where that call would have acted: the Bot's own browser or
  * computer, which the card's Open brings forward.
  */
-export function ruleHandoffRequest(request: BotRuleHandoffRequest, target?: BotHandoffTarget): BotHandoffRequest {
+export function ruleHandoffRequest(
+  request: BotRuleHandoffRequest,
+  target?: BotHandoffTarget,
+): BotHandoffRequest {
   return {
     botId: request.botId,
     waitId: request.waitId,
@@ -86,7 +93,10 @@ export async function recordRuleHandoffEntry(
         (entry.data as { toolCallId?: unknown } | null)?.toolCallId === record.toolCallId,
     );
   if (recorded) return false;
-  await conversation.append(BOT_HANDOFF_RESULT_ENTRY_KIND, { ...details, rule: { ...details.rule } });
+  await conversation.append(BOT_HANDOFF_RESULT_ENTRY_KIND, {
+    ...details,
+    rule: { ...details.rule },
+  });
   return true;
 }
 
@@ -113,7 +123,9 @@ export interface BotHandoffs {
   /** Called with the Bot id whenever its waiting cards change (opened, answered, withdrawn). */
   onChange(listener: (botId: string) => void): () => void;
   /** Called once per settled card: with the answer, or `null` when it was withdrawn (abort, asked again). */
-  onSettled(listener: (prompt: BotPendingHandoff, answer: BotHandoffAnswer | null) => void): () => void;
+  onSettled(
+    listener: (prompt: BotPendingHandoff, answer: BotHandoffAnswer | null) => void,
+  ): () => void;
 }
 
 interface Waiting {
@@ -139,7 +151,9 @@ function promptOf(request: BotHandoffRequest): BotPendingHandoff {
     ...(request.origin === undefined ? {} : { origin: request.origin }),
     ...(request.target === undefined ? {} : { target: request.target }),
     source: request.source,
-    ...(request.rule === undefined ? {} : { rule: { id: request.rule.id, label: request.rule.label } }),
+    ...(request.rule === undefined
+      ? {}
+      : { rule: { id: request.rule.id, label: request.rule.label } }),
   };
 }
 
@@ -156,7 +170,9 @@ function each<T extends unknown[]>(listeners: ReadonlySet<(...args: T) => void>,
 export function createBotHandoffs(): BotHandoffs {
   const waiting = new Map<string, Waiting>();
   const changeListeners = new Set<(botId: string) => void>();
-  const settledListeners = new Set<(prompt: BotPendingHandoff, answer: BotHandoffAnswer | null) => void>();
+  const settledListeners = new Set<
+    (prompt: BotPendingHandoff, answer: BotHandoffAnswer | null) => void
+  >();
 
   return {
     request(request) {
@@ -164,7 +180,9 @@ export function createBotHandoffs(): BotHandoffs {
       const prompt = promptOf(request);
       // A wait under the same id can only be a stale invocation of the same
       // call that nobody can answer any more: withdraw it before asking again.
-      waiting.get(request.waitId)?.settle(null, new DOMException("The hand-off was asked again.", "AbortError"));
+      waiting
+        .get(request.waitId)
+        ?.settle(null, new DOMException("The hand-off was asked again.", "AbortError"));
       return new Promise<BotHandoffAnswer>((resolve, reject) => {
         const onAbort = () => settle(null, abortReason(request.signal!));
         const settle = (answer: BotHandoffAnswer | null, reason?: unknown) => {

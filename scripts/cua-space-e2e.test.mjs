@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -51,11 +62,29 @@ if (command === "ls") {
 // Ignore the developer's git config (signing, hooks) and Space choice and sizing, so the fixture behaves the same anywhere.
 // Run in a UTF-8 locale like a normal Mac shell (and CI): macOS's bash 3.2 then reads non-ASCII bytes after `$NAME`
 // as part of the variable name, which `set -u` turns into an abort.
-const isolatedEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", LANG: "en_US.UTF-8" };
-for (const name of ["CUA_HOME", "CUA_SPACE", "CUA_SPACE_CPUS", "CUA_SPACE_KEEP", "CUA_SPACE_MEMORY", "LC_ALL", "LC_CTYPE"]) delete isolatedEnv[name];
+const isolatedEnv = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  LANG: "en_US.UTF-8",
+};
+for (const name of [
+  "CUA_HOME",
+  "CUA_SPACE",
+  "CUA_SPACE_CPUS",
+  "CUA_SPACE_KEEP",
+  "CUA_SPACE_MEMORY",
+  "LC_ALL",
+  "LC_CTYPE",
+])
+  delete isolatedEnv[name];
 
 async function git(cwd, ...args) {
-  await execFileAsync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { cwd, env: isolatedEnv });
+  await execFileAsync(
+    "git",
+    ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args],
+    { cwd, env: isolatedEnv },
+  );
 }
 
 async function checkout() {
@@ -81,9 +110,19 @@ async function checkout() {
 
 async function run({ repo, fake }, args, env = {}) {
   try {
-    const { stdout, stderr } = await execFileAsync("bash", [path.join(repo, "scripts", "cua-space-e2e.sh"), ...args], {
-      env: { ...isolatedEnv, CUA_BIN: path.join(fake, "cua"), CUA_HOME: path.join(fake, "home"), FAKE_CUA_DIR: fake, ...env },
-    });
+    const { stdout, stderr } = await execFileAsync(
+      "bash",
+      [path.join(repo, "scripts", "cua-space-e2e.sh"), ...args],
+      {
+        env: {
+          ...isolatedEnv,
+          CUA_BIN: path.join(fake, "cua"),
+          CUA_HOME: path.join(fake, "home"),
+          FAKE_CUA_DIR: fake,
+          ...env,
+        },
+      },
+    );
     return { status: 0, stdout, stderr };
   } catch (error) {
     return { status: error.code, stdout: error.stdout, stderr: error.stderr };
@@ -92,11 +131,18 @@ async function run({ repo, fake }, args, env = {}) {
 
 // Status checks carry the script's own output, so a failure (on CI especially) shows where it stopped.
 function assertStatus(result, expected, message = "") {
-  assert.equal(result.status, expected, `${message}\n--- stdout\n${result.stdout}\n--- stderr\n${result.stderr ?? ""}`);
+  assert.equal(
+    result.status,
+    expected,
+    `${message}\n--- stdout\n${result.stdout}\n--- stderr\n${result.stderr ?? ""}`,
+  );
 }
 
 async function calls(fake) {
-  return (await readFile(path.join(fake, "calls.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  return (await readFile(path.join(fake, "calls.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
 }
 
 test("syncs uncommitted work into the Space but keeps untracked secrets and deletions out", async (t) => {
@@ -108,7 +154,19 @@ test("syncs uncommitted work into the Space but keeps untracked secrets and dele
   await writeFile(path.join(repo, "ignored.log"), "noise\n");
   await rm(path.join(repo, "removed.ts"));
   await mkdir(path.join(repo, "keys"));
-  for (const secret of [".env.local", ".npmrc", "keys/AuthKey_ABC123.p8", "keys/dev.pem", "keys/release.jks", "keys/signing.p12", "keys/id_ed25519", "keys/id_rsa.pub", "keys/dev.mobileprovision", ".netrc", ".git-credentials"]) {
+  for (const secret of [
+    ".env.local",
+    ".npmrc",
+    "keys/AuthKey_ABC123.p8",
+    "keys/dev.pem",
+    "keys/release.jks",
+    "keys/signing.p12",
+    "keys/id_ed25519",
+    "keys/id_rsa.pub",
+    "keys/dev.mobileprovision",
+    ".netrc",
+    ".git-credentials",
+  ]) {
     await writeFile(path.join(repo, secret), "secret\n");
   }
   // An untracked nested repository (a scratch clone or worktree) is listed by git as a single directory.
@@ -126,25 +184,59 @@ test("syncs uncommitted work into the Space but keeps untracked secrets and dele
   const archive = (await readdir(fake)).find((name) => name.startsWith("aiden-src-"));
   assert.ok(archive, "the source archive was copied into the Space");
   const { stdout: listing } = await execFileAsync("tar", ["-tzf", path.join(fake, archive)]);
-  const files = listing.trim().split("\n").map((name) => name.replace(/^\.\//, ""));
+  const files = listing
+    .trim()
+    .split("\n")
+    .map((name) => name.replace(/^\.\//, ""));
   assert.ok(files.includes("tracked.ts"));
   assert.ok(files.includes("src/new-feature.ts"));
   assert.ok(files.includes("scripts/cua-space-e2e.sh"));
-  for (const excluded of ["removed.ts", "ignored.log", ".env.local", ".npmrc", "keys/AuthKey_ABC123.p8", "keys/dev.pem", "keys/release.jks", "keys/signing.p12", "keys/id_ed25519", "keys/id_rsa.pub", "keys/dev.mobileprovision", ".netrc", ".git-credentials"]) {
+  for (const excluded of [
+    "removed.ts",
+    "ignored.log",
+    ".env.local",
+    ".npmrc",
+    "keys/AuthKey_ABC123.p8",
+    "keys/dev.pem",
+    "keys/release.jks",
+    "keys/signing.p12",
+    "keys/id_ed25519",
+    "keys/id_rsa.pub",
+    "keys/dev.mobileprovision",
+    ".netrc",
+    ".git-credentials",
+  ]) {
     assert.ok(!files.includes(excluded), `${excluded} stays on the host`);
   }
-  assert.deepEqual(files.filter((name) => name.startsWith("scratch-clone")), [], "an untracked nested repository stays on the host");
+  assert.deepEqual(
+    files.filter((name) => name.startsWith("scratch-clone")),
+    [],
+    "an untracked nested repository stays on the host",
+  );
 
   assert.equal(
-    await readFile(path.join(fake, `aiden-run-${archive.slice("aiden-src-".length, -".tgz".length)}.sh`), "utf8"),
+    await readFile(
+      path.join(fake, `aiden-run-${archive.slice("aiden-src-".length, -".tgz".length)}.sh`),
+      "utf8",
+    ),
     await readFile(guest, "utf8"),
     "the guest script copied into the Space is scripts/cua-space-e2e-guest.sh",
   );
   const exec = (await calls(fake)).find((call) => call[1] === "exec");
   const runId = archive.slice("aiden-src-".length, -".tgz".length);
   assert.deepEqual(exec, [
-    "sb", "exec", "-i", "local:aiden-e2e", "--",
-    "bash", `/home/cua/aiden-run-${runId}.sh`, runId, "--run", "echo", "a b", "$HOME;x",
+    "sb",
+    "exec",
+    "-i",
+    "local:aiden-e2e",
+    "--",
+    "bash",
+    `/home/cua/aiden-run-${runId}.sh`,
+    runId,
+    "--run",
+    "echo",
+    "a b",
+    "$HOME;x",
   ]);
 });
 
@@ -165,7 +257,10 @@ test("packs a replaced directory as a symlink without reading tracked children t
   const archive = (await readdir(space.fake)).find((name) => name.startsWith("aiden-src-"));
   const { stdout } = await execFileAsync("tar", ["-tzf", path.join(space.fake, archive)]);
   assert.ok(stdout.split("\n").includes("config"), "the symlink itself is synced");
-  assert.ok(!stdout.split("\n").includes("config/nested/settings.json"), "the external file stays on the host");
+  assert.ok(
+    !stdout.split("\n").includes("config/nested/settings.json"),
+    "the external file stays on the host",
+  );
 });
 
 // Exercise the full host-to-guest path with real tar and offline npm. Substitute only
@@ -185,15 +280,31 @@ async function runnableSpace(t) {
   for (const [name, body] of Object.entries(stubs)) {
     await writeFile(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   }
-  const manifest = { name: "fixture", version: "1.0.0", scripts: { postinstall: "mkdir -p node_modules" } };
+  const manifest = {
+    name: "fixture",
+    version: "1.0.0",
+    scripts: { postinstall: "mkdir -p node_modules" },
+  };
   await writeFile(path.join(space.repo, "package.json"), JSON.stringify(manifest));
-  await writeFile(path.join(space.repo, "package-lock.json"), JSON.stringify({
-    name: "fixture", version: "1.0.0", lockfileVersion: 3, packages: { "": { name: "fixture", version: "1.0.0" } },
-  }));
+  await writeFile(
+    path.join(space.repo, "package-lock.json"),
+    JSON.stringify({
+      name: "fixture",
+      version: "1.0.0",
+      lockfileVersion: 3,
+      packages: { "": { name: "fixture", version: "1.0.0" } },
+    }),
+  );
   const env = {
-    HOME: space.fake, FAKE_CUA_RUN_GUEST: "1", TEST_NODE: process.execPath, PATH: `${bin}:${process.env.PATH}`,
-    AIDEN_E2E_NODE_PREFIX: space.root, AIDEN_E2E_LOCK: path.join(space.root, "lock"), npm_config_offline: "true",
-    npm_config_cache: path.join(space.root, "npm-cache"), npm_config_ignore_scripts: "false",
+    HOME: space.fake,
+    FAKE_CUA_RUN_GUEST: "1",
+    TEST_NODE: process.execPath,
+    PATH: `${bin}:${process.env.PATH}`,
+    AIDEN_E2E_NODE_PREFIX: space.root,
+    AIDEN_E2E_LOCK: path.join(space.root, "lock"),
+    npm_config_offline: "true",
+    npm_config_cache: path.join(space.root, "npm-cache"),
+    npm_config_ignore_scripts: "false",
   };
   return { ...space, bin, manifest, command: (...args) => run(space, ["--run", ...args], env) };
 }
@@ -204,7 +315,11 @@ test("a failed guest cleanup prevents command execution against stale files", as
   await mkdir(checkoutDir);
   await writeFile(path.join(checkoutDir, "stale"), "old source");
   // Model an undeletable entry even when the CI user can override file permissions.
-  await writeFile(path.join(space.bin, "rm"), '#!/bin/sh\nfor arg do [ "$arg" != "./stale" ] || exit 1; done\nexec /bin/rm "$@"\n', { mode: 0o755 });
+  await writeFile(
+    path.join(space.bin, "rm"),
+    '#!/bin/sh\nfor arg do [ "$arg" != "./stale" ] || exit 1; done\nexec /bin/rm "$@"\n',
+    { mode: 0o755 },
+  );
   const marker = path.join(space.root, "command-ran");
   const result = await space.command("cp", "stale", marker);
   assertStatus(result, 2);
@@ -217,10 +332,17 @@ test("a warm guest rejects a manifest dependency missing from the unchanged lock
   assertStatus(await space.command("touch", "node_modules/warm-marker"), 0);
   assertStatus(await space.command("test", "-f", "node_modules/warm-marker"), 0);
   await mkdir(path.join(space.repo, "addon"));
-  await writeFile(path.join(space.repo, "addon", "package.json"), '{"name":"addon","version":"1.0.0"}');
-  await writeFile(path.join(space.repo, "package.json"), JSON.stringify({
-    ...space.manifest, dependencies: { addon: "file:addon" },
-  }));
+  await writeFile(
+    path.join(space.repo, "addon", "package.json"),
+    '{"name":"addon","version":"1.0.0"}',
+  );
+  await writeFile(
+    path.join(space.repo, "package.json"),
+    JSON.stringify({
+      ...space.manifest,
+      dependencies: { addon: "file:addon" },
+    }),
+  );
   const result = await space.command("true");
   assertStatus(result, 2);
   assert.match(result.stderr, /Missing: addon/);
@@ -230,12 +352,30 @@ test("creates a missing Space and reports the guest's exit status", async (t) =>
   const space = await checkout();
   t.after(() => rm(space.root, { recursive: true, force: true }));
 
-  const result = await run(space, ["tests/e2e/example.spec.ts"], { CUA_SPACE: "aiden-e2e-2", FAKE_CUA_EXEC_STATUS: "3" });
+  const result = await run(space, ["tests/e2e/example.spec.ts"], {
+    CUA_SPACE: "aiden-e2e-2",
+    FAKE_CUA_EXEC_STATUS: "3",
+  });
   assertStatus(result, 3);
   const recorded = await calls(space.fake);
-  assert.deepEqual(recorded.find((call) => call[1] === "create"), [
-    "sb", "create", "linux", "--on", "local", "--name", "aiden-e2e-2", "--cpu", "4", "--memory", "8GB", "--wait", "desktop",
-  ]);
+  assert.deepEqual(
+    recorded.find((call) => call[1] === "create"),
+    [
+      "sb",
+      "create",
+      "linux",
+      "--on",
+      "local",
+      "--name",
+      "aiden-e2e-2",
+      "--cpu",
+      "4",
+      "--memory",
+      "8GB",
+      "--wait",
+      "desktop",
+    ],
+  );
   assert.equal(recorded.find((call) => call[1] === "exec")[3], "local:aiden-e2e-2");
 });
 
@@ -243,12 +383,20 @@ test("resumes a stopped Space instead of creating another", async (t) => {
   const space = await checkout();
   t.after(() => rm(space.root, { recursive: true, force: true }));
 
-  const result = await run(space, ["--run", "true"], { FAKE_CUA_LS: '[{"id":"local:aiden-e2e","status":"stopped"}]' });
+  const result = await run(space, ["--run", "true"], {
+    FAKE_CUA_LS: '[{"id":"local:aiden-e2e","status":"stopped"}]',
+  });
   assertStatus(result, 0);
   const recorded = await calls(space.fake);
-  assert.deepEqual(recorded.find((call) => call[1] === "resume"), ["sb", "resume", "local:aiden-e2e"]);
+  assert.deepEqual(
+    recorded.find((call) => call[1] === "resume"),
+    ["sb", "resume", "local:aiden-e2e"],
+  );
   assert.ok(recorded.every((call) => call[1] !== "create"));
-  assert.ok(recorded.some((call) => call[1] === "exec"), "the run continues in the resumed Space");
+  assert.ok(
+    recorded.some((call) => call[1] === "exec"),
+    "the run continues in the resumed Space",
+  );
 });
 
 test("a finished run suspends the shared Space and keeps it for the next run", async (t) => {
@@ -256,9 +404,15 @@ test("a finished run suspends the shared Space and keeps it for the next run", a
   t.after(() => rm(space.root, { recursive: true, force: true }));
 
   // A failing run tears down too, and still reports the guest's status.
-  for (const [listing, status] of [["[]", "0"], ['[{"id":"local:aiden-e2e","status":"ready"}]', "3"]]) {
+  for (const [listing, status] of [
+    ["[]", "0"],
+    ['[{"id":"local:aiden-e2e","status":"ready"}]', "3"],
+  ]) {
     await rm(path.join(space.fake, "calls.jsonl"), { force: true });
-    assertStatus(await run(space, ["--run", "true"], { FAKE_CUA_LS: listing, FAKE_CUA_EXEC_STATUS: status }), Number(status));
+    assertStatus(
+      await run(space, ["--run", "true"], { FAKE_CUA_LS: listing, FAKE_CUA_EXEC_STATUS: status }),
+      Number(status),
+    );
     const recorded = await calls(space.fake);
     assert.deepEqual(recorded.at(-1), ["sb", "suspend", "local:aiden-e2e"]);
     assert.ok(recorded.every((call) => call[1] !== "rm"));
@@ -277,11 +431,21 @@ test("a run that fails before the guest starts still tears the Space down and ke
     ["a failed pack of the checkout", { PATH: `${bin}:${process.env.PATH}` }, 2],
   ];
   for (const [name, env, status] of cases) {
-    for (const [spaceName, teardown] of [["aiden-e2e", ["sb", "suspend", "local:aiden-e2e"]], ["aiden-pr-1", ["sb", "rm", "-f", "local:aiden-pr-1"]]]) {
+    for (const [spaceName, teardown] of [
+      ["aiden-e2e", ["sb", "suspend", "local:aiden-e2e"]],
+      ["aiden-pr-1", ["sb", "rm", "-f", "local:aiden-pr-1"]],
+    ]) {
       await rm(path.join(space.fake, "calls.jsonl"), { force: true });
-      assertStatus(await run(space, ["--run", "true"], { CUA_SPACE: spaceName, ...env }), status, name);
+      assertStatus(
+        await run(space, ["--run", "true"], { CUA_SPACE: spaceName, ...env }),
+        status,
+        name,
+      );
       const recorded = await calls(space.fake);
-      assert.ok(recorded.every((call) => call[1] !== "exec" || call.includes("flock")), `${name} never starts the guest`);
+      assert.ok(
+        recorded.every((call) => call[1] !== "exec" || call.includes("flock")),
+        `${name} never starts the guest`,
+      );
       assert.deepEqual(recorded.at(-1), teardown, `${name} still tears down ${spaceName}`);
     }
   }
@@ -296,7 +460,10 @@ test("only a custom-named Space created by this run is deleted", async (t) => {
 
   await rm(path.join(space.fake, "calls.jsonl"));
   const existing = '[{"id":"local:aiden-pr-1","status":"ready"}]';
-  assertStatus(await run(space, ["--run", "true"], { CUA_SPACE: "aiden-pr-1", FAKE_CUA_LS: existing }), 0);
+  assertStatus(
+    await run(space, ["--run", "true"], { CUA_SPACE: "aiden-pr-1", FAKE_CUA_LS: existing }),
+    0,
+  );
   const recorded = await calls(space.fake);
   assert.deepEqual(recorded.at(-1), ["sb", "suspend", "local:aiden-pr-1"]);
   assert.ok(recorded.every((call) => call[1] !== "rm"));
@@ -323,7 +490,10 @@ test("leaves the Space running when another run has taken it or the lock check f
   t.after(() => rm(space.root, { recursive: true, force: true }));
 
   for (const name of ["aiden-e2e", "aiden-pr-1"]) {
-    const result = await run(space, ["--run", "true"], { CUA_SPACE: name, FAKE_CUA_LOCK_STATUS: "1" });
+    const result = await run(space, ["--run", "true"], {
+      CUA_SPACE: name,
+      FAKE_CUA_LOCK_STATUS: "1",
+    });
     assertStatus(result, 0);
     assert.match(result.stdout, /leaving it running/);
   }
@@ -337,7 +507,10 @@ test("trims the runtime's disk after teardown, and a failed or missing trim chan
   const bin = path.join(home, "runtimes", "linux", "colima-1", "lima", "bin");
   const record = path.join(space.fake, "limactl.log");
   await mkdir(bin, { recursive: true });
-  await writeFile(path.join(bin, "limactl"), `#!/bin/sh\necho "$LIMA_HOME $*" >> "${record}"\nexit \${FAKE_LIMACTL_STATUS:-0}\n`);
+  await writeFile(
+    path.join(bin, "limactl"),
+    `#!/bin/sh\necho "$LIMA_HOME $*" >> "${record}"\nexit \${FAKE_LIMACTL_STATUS:-0}\n`,
+  );
   await chmod(path.join(bin, "limactl"), 0o755);
 
   assertStatus(await run(space, ["--run", "true"]), 0);
@@ -346,7 +519,10 @@ test("trims the runtime's disk after teardown, and a failed or missing trim chan
     `${path.join(home, "runtimes", "linux", "vm", "_lima")} shell --workdir / colima-cua sudo fstrim /mnt/lima-colima-cua\n`,
   );
 
-  const failed = await run(space, ["--run", "true"], { FAKE_CUA_EXEC_STATUS: "3", FAKE_LIMACTL_STATUS: "1" });
+  const failed = await run(space, ["--run", "true"], {
+    FAKE_CUA_EXEC_STATUS: "3",
+    FAKE_LIMACTL_STATUS: "1",
+  });
   assertStatus(failed, 3);
   assert.equal(failed.stderr, "", "a failed trim is silent");
 
@@ -388,10 +564,17 @@ test("--reset succeeds on a clean Space and surfaces real failures", async (t) =
   assert.match(stopped.stdout, /Stopped leftover e2e processes/);
   assertStatus(await run(space, ["--reset"], { ...ready, FAKE_CUA_EXEC_STATUS: "2" }), 2);
   const recorded = await calls(space.fake);
-  assert.ok(recorded.every((call) => call[1] !== "cp"), "--reset copies nothing into the Space");
+  assert.ok(
+    recorded.every((call) => call[1] !== "cp"),
+    "--reset copies nothing into the Space",
+  );
   const exec = recorded.find((call) => call[1] === "exec");
   assert.deepEqual(exec.slice(2, 7), ["-i", "local:aiden-e2e", "--", "bash", "-c"]);
-  assert.equal(exec[7], (await readFile(reset, "utf8")).replace(/\n$/, ""), "the Space runs the reset script as written");
+  assert.equal(
+    exec[7],
+    (await readFile(reset, "utf8")).replace(/\n$/, ""),
+    "the Space runs the reset script as written",
+  );
 });
 
 test("brings the run's artifacts back and keeps the previous ones when an archive is unreadable, empty or missing", async (t) => {
@@ -409,7 +592,10 @@ test("brings the run's artifacts back and keeps the previous ones when an archiv
   const good = await run(space, ["--run", "true"], { ...ready, FAKE_CUA_RESULTS: archive });
   assertStatus(good, 0);
   assert.match(good.stdout, /Artifacts copied to/);
-  assert.equal(await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"), "<p>report</p>\n");
+  assert.equal(
+    await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"),
+    "<p>report</p>\n",
+  );
 
   const corrupt = path.join(root, "corrupt.tgz");
   await writeFile(corrupt, "not a gzip archive");
@@ -417,7 +603,10 @@ test("brings the run's artifacts back and keeps the previous ones when an archiv
   assertStatus(bad, 0, "the tests' own result still decides the exit status");
   assert.doesNotMatch(bad.stdout, /Artifacts copied to/);
   assert.match(bad.stderr, /artifacts were unreadable or empty/);
-  assert.equal(await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"), "<p>report</p>\n");
+  assert.equal(
+    await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"),
+    "<p>report</p>\n",
+  );
 
   // A guest that found nothing to pack still writes a valid, empty archive.
   const empty = path.join(root, "empty.tgz");
@@ -425,14 +614,20 @@ test("brings the run's artifacts back and keeps the previous ones when an archiv
   const hollow = await run(space, ["--run", "true"], { ...ready, FAKE_CUA_RESULTS: empty });
   assert.doesNotMatch(hollow.stdout, /Artifacts copied to/);
   assert.match(hollow.stderr, /artifacts were unreadable or empty/);
-  assert.equal(await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"), "<p>report</p>\n");
+  assert.equal(
+    await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"),
+    "<p>report</p>\n",
+  );
 
   // No archive at all: a Playwright run warns, while --run (which never writes one) stays quiet.
   const missing = await run(space, ["tests/e2e/example.spec.ts"], ready);
   assertStatus(missing, 0);
   assert.match(missing.stderr, /This run left no artifacts/);
   assert.doesNotMatch((await run(space, ["--run", "true"], ready)).stderr, /artifacts/);
-  assert.equal(await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"), "<p>report</p>\n");
+  assert.equal(
+    await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"),
+    "<p>report</p>\n",
+  );
 });
 
 // The guest half runs inside the Space; these run it on the host with stand-ins for the Space's tools. Node is looked
@@ -446,7 +641,10 @@ async function guestRun({ flockStatus, curlStatus = 22 }) {
   await writeFile(path.join(bin, "flock"), `#!/bin/sh\nexit ${flockStatus}\n`);
   await writeFile(path.join(bin, "curl"), `#!/bin/sh\nexit ${curlStatus}\n`);
   for (const tool of ["sudo", "apt-get"]) {
-    await writeFile(path.join(bin, tool), `#!/bin/sh\necho "UNEXPECTED_${tool}" >> "${path.join(root, "provisioning.log")}"\nexit 97\n`);
+    await writeFile(
+      path.join(bin, tool),
+      `#!/bin/sh\necho "UNEXPECTED_${tool}" >> "${path.join(root, "provisioning.log")}"\nexit 97\n`,
+    );
   }
   for (const tool of ["flock", "curl", "sudo", "apt-get"]) await chmod(path.join(bin, tool), 0o755);
   const script = path.join(home, "aiden-run-test.sh");
@@ -456,8 +654,13 @@ async function guestRun({ flockStatus, curlStatus = 22 }) {
   let result;
   try {
     const { stdout } = await execFileAsync("bash", [script, "test", "--run", "true"], {
-      env: { ...isolatedEnv, HOME: home, PATH: `${bin}:${process.env.PATH ?? ""}`, AIDEN_E2E_LOCK: path.join(root, "lock"),
-        AIDEN_E2E_NODE_PREFIX: path.join(root, "node") },
+      env: {
+        ...isolatedEnv,
+        HOME: home,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        AIDEN_E2E_LOCK: path.join(root, "lock"),
+        AIDEN_E2E_NODE_PREFIX: path.join(root, "node"),
+      },
     });
     result = { status: 0, stdout };
   } catch (error) {
@@ -508,22 +711,34 @@ test("--reset in the Space stops only processes in the checkout or holding the r
     const exited = new Promise((resolve) => child.once("exit", (_code, signal) => resolve(signal)));
     const entry = path.join(proc, String(child.pid));
     await mkdir(path.join(entry, "fd"), { recursive: true });
-    for (const [link, target] of Object.entries(links)) await symlink(target, path.join(entry, link));
+    for (const [link, target] of Object.entries(links))
+      await symlink(target, path.join(entry, link));
     const record = { name, child, exited, entry };
     decoys.push(record);
     return record;
   }
   const inCheckout = await decoy("cwd in the checkout", { cwd: path.join(checkoutDir, "tests") });
-  const fromCheckout = await decoy("binary from the checkout", { cwd: root, exe: path.join(checkoutDir, "node_modules", ".bin", "electron") });
+  const fromCheckout = await decoy("binary from the checkout", {
+    cwd: root,
+    exe: path.join(checkoutDir, "node_modules", ".bin", "electron"),
+  });
   const lockHolder = await decoy("lock holder", { cwd: root, "fd/9": lock });
-  const elsewhere = await decoy("unrelated", { cwd: root, exe: "/bin/sleep", "fd/9": path.join(root, "other.lock") });
+  const elsewhere = await decoy("unrelated", {
+    cwd: root,
+    exe: "/bin/sleep",
+    "fd/9": path.join(root, "other.lock"),
+  });
   const lookalike = await decoy("sibling directory", { cwd: path.join(home, "aiden-agent-old") });
 
   async function runReset() {
     try {
-      const { stdout, stderr } = await execFileAsync("bash", ["-c", await readFile(reset, "utf8")], {
-        env: { ...isolatedEnv, HOME: home, AIDEN_E2E_PROC: proc, AIDEN_E2E_LOCK: lock },
-      });
+      const { stdout, stderr } = await execFileAsync(
+        "bash",
+        ["-c", await readFile(reset, "utf8")],
+        {
+          env: { ...isolatedEnv, HOME: home, AIDEN_E2E_PROC: proc, AIDEN_E2E_LOCK: lock },
+        },
+      );
       return { status: 0, stdout, stderr };
     } catch (error) {
       return { status: error.code, stdout: error.stdout, stderr: error.stderr };

@@ -103,7 +103,10 @@ test("telegramChatId returns telegram-<userId>", () => {
 test("telegramChatId namespaces named Telegram profiles without changing the default legacy id", () => {
   assert.equal(telegramChatId(123, undefined, "default"), "telegram-123");
   assert.equal(telegramChatId(123, undefined, "work"), "telegram-work-123");
-  assert.notEqual(telegramChatId(123, "workspace-a", "work"), telegramChatId(123, "workspace-a", "notes"));
+  assert.notEqual(
+    telegramChatId(123, "workspace-a", "work"),
+    telegramChatId(123, "workspace-a", "notes"),
+  );
 });
 
 test("workspace Telegram turn starts assistant automation with the selected workspace", async () => {
@@ -173,7 +176,12 @@ test("assistant-only Telegram turn preserves the owner chat and assistant mode",
 test("bot-bound Telegram turn omits assistant mode while retaining the Pi admission path", async () => {
   let startedParams: { chatId: string; workspaceId?: string; mode?: string } | undefined;
   let botAudienceId: string | undefined;
-  let approvalCeiling: Pick<Parameters<TelegramLlmClient["start"]>[3], "allowComputerUse" | "allowSubagents" | "allowMcpTools" | "interactionSurface"> | undefined;
+  let approvalCeiling:
+    | Pick<
+        Parameters<TelegramLlmClient["start"]>[3],
+        "allowComputerUse" | "allowSubagents" | "allowMcpTools" | "interactionSurface"
+      >
+    | undefined;
   const llm = mockLlm(async (streamId, params, owner, options) => {
     startedParams = params;
     botAudienceId = options.botAudienceId;
@@ -541,16 +549,7 @@ test("ensureTelegramChat refuses to reuse an untagged or differently tagged bot 
   });
 
   await assert.rejects(
-    ensureTelegramChat(
-      deps,
-      123,
-      "Bot A",
-      "openai",
-      "gpt-4o",
-      "bot-home-a",
-      "work",
-      binding,
-    ),
+    ensureTelegramChat(deps, 123, "Bot A", "openai", "gpt-4o", "bot-home-a", "work", binding),
     /different bot or workspace binding/u,
   );
 });
@@ -564,22 +563,33 @@ test("owner.send throws after destroy is called", () => {
   assert.throws(() => bg.owner.send("chat:done", { content: "late" }), /no longer active/);
 });
 
-
 test("Telegram skill provenance reaches generation while only raw user text is persisted", async () => {
   const chat = mockChatStore();
   const selection = { workspaceId: "project", invocationId: "opaque-skill" };
-  const { deps } = mockDeps({ store: chat.store, llm: mockLlm(async (streamId, params, owner, options) => {
-    assert.deepEqual(options.telegramSkillInvocation, selection);
-    assert.equal(params.messages[0]?.content, "inspect this patch");
-    owner.send("chat:done", { streamId, content: "Reviewed" });
-    return true;
-  }) });
-  const result = await sendTelegramTurn(deps, "telegram-test", "inspect this patch",
-    { kind: "project", workspaceId: "project" }, undefined, undefined, { skillInvocation: selection });
+  const { deps } = mockDeps({
+    store: chat.store,
+    llm: mockLlm(async (streamId, params, owner, options) => {
+      assert.deepEqual(options.telegramSkillInvocation, selection);
+      assert.equal(params.messages[0]?.content, "inspect this patch");
+      owner.send("chat:done", { streamId, content: "Reviewed" });
+      return true;
+    }),
+  });
+  const result = await sendTelegramTurn(
+    deps,
+    "telegram-test",
+    "inspect this patch",
+    { kind: "project", workspaceId: "project" },
+    undefined,
+    undefined,
+    { skillInvocation: selection },
+  );
   assert.equal(result.ok, true);
-  assert.deepEqual(chat.appended.map(({ content }) => content), ["inspect this patch"]);
+  assert.deepEqual(
+    chat.appended.map(({ content }) => content),
+    ["inspect this patch"],
+  );
 });
-
 
 test("Stop during transcript append prevents a later generation start", async () => {
   const controller = new AbortController();
@@ -591,8 +601,22 @@ test("Stop during transcript append prevents a later generation start", async ()
     return result;
   };
   let starts = 0;
-  const { deps } = mockDeps({ store: chat.store, llm: mockLlm(async () => { starts++; return true; }) });
-  const result = await sendTelegramTurn(deps, "telegram-42", "work", undefined, undefined, undefined, { signal: controller.signal });
+  const { deps } = mockDeps({
+    store: chat.store,
+    llm: mockLlm(async () => {
+      starts++;
+      return true;
+    }),
+  });
+  const result = await sendTelegramTurn(
+    deps,
+    "telegram-42",
+    "work",
+    undefined,
+    undefined,
+    undefined,
+    { signal: controller.signal },
+  );
   assert.equal(result.ok, false);
   assert.match(result.error!, /stopped before/);
   assert.equal(starts, 0);

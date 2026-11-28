@@ -10,13 +10,8 @@ interface OnboardingProviderValidationInput {
 }
 
 /** Pi currently reports Anthropic's API origin without its versioned REST path. */
-export function normalizeOnboardingValidationProvider(
-  provider: StoredProvider,
-): StoredProvider {
-  if (
-    provider.id === "anthropic" &&
-    /^https:\/\/api\.anthropic\.com\/?$/u.test(provider.baseUrl)
-  ) {
+export function normalizeOnboardingValidationProvider(provider: StoredProvider): StoredProvider {
+  if (provider.id === "anthropic" && /^https:\/\/api\.anthropic\.com\/?$/u.test(provider.baseUrl)) {
     return { ...provider, baseUrl: "https://api.anthropic.com/v1" };
   }
   return provider;

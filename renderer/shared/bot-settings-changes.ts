@@ -136,12 +136,16 @@ function quietMinutes(quiet: BotInterruptions["quietHours"]): Set<number> {
  * longer cover every minute they did (turned off, shortened or moved).
  * Those always wait for the person, whoever started the run.
  */
-export function botSettingsPatchWidens(current: BotSettingsValues, patch: BotSettingsPatch): boolean {
+export function botSettingsPatchWidens(
+  current: BotSettingsValues,
+  patch: BotSettingsPatch,
+): boolean {
   if (patch.dailyCheckIns === true && !current.dailyCheckIns) return true;
   if (patch.notifications === undefined) return false;
   if (patch.notifications.dailyLimit > current.notifications.dailyLimit) return true;
   const after = quietMinutes(patch.notifications.quietHours);
-  for (const minute of quietMinutes(current.notifications.quietHours)) if (!after.has(minute)) return true;
+  for (const minute of quietMinutes(current.notifications.quietHours))
+    if (!after.has(minute)) return true;
   return false;
 }
 
@@ -159,13 +163,21 @@ export function botInstructionsDiff(before: string, after: string): BotInstructi
   const a = before.split(/\r?\n/u);
   const b = after.split(/\r?\n/u);
   if (a.length > DIFF_LINES_COMPARED || b.length > DIFF_LINES_COMPARED) {
-    return [...a.map((text) => ({ kind: "removed" as const, text })), ...b.map((text) => ({ kind: "added" as const, text }))];
+    return [
+      ...a.map((text) => ({ kind: "removed" as const, text })),
+      ...b.map((text) => ({ kind: "added" as const, text })),
+    ];
   }
   // lengths[i][j]: the longest common run of a[i..] and b[j..].
-  const lengths = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+  const lengths = Array.from({ length: a.length + 1 }, () =>
+    new Array<number>(b.length + 1).fill(0),
+  );
   for (let i = a.length - 1; i >= 0; i -= 1) {
     for (let j = b.length - 1; j >= 0; j -= 1) {
-      lengths[i]![j] = a[i] === b[j] ? lengths[i + 1]![j + 1]! + 1 : Math.max(lengths[i + 1]![j]!, lengths[i]![j + 1]!);
+      lengths[i]![j] =
+        a[i] === b[j]
+          ? lengths[i + 1]![j + 1]! + 1
+          : Math.max(lengths[i + 1]![j]!, lengths[i]![j + 1]!);
     }
   }
   const out: BotInstructionsDiffLine[] = [];
@@ -192,7 +204,12 @@ export function botInstructionsDiff(before: string, after: string): BotInstructi
  * changed them again since, so Undo left them. `applied`, `edited` and
  * `dismissed` answer a held change.
  */
-export type BotSettingsChangeStatus = "restored" | "undo_refused" | "applied" | "edited" | "dismissed";
+export type BotSettingsChangeStatus =
+  | "restored"
+  | "undo_refused"
+  | "applied"
+  | "edited"
+  | "dismissed";
 
 export interface BotSettingsChangeStatusEntryData {
   changeId: string;
@@ -201,11 +218,14 @@ export interface BotSettingsChangeStatusEntryData {
 
 export type BotSettingsChangeDecision = "undo" | "apply" | "edited" | "dismiss";
 
-export const BOT_SETTINGS_UNDO_REFUSED_MESSAGE = "These settings changed again since, so Undo left them as they are.";
+export const BOT_SETTINGS_UNDO_REFUSED_MESSAGE =
+  "These settings changed again since, so Undo left them as they are.";
 
 /** "Instructions updated" when only the instructions changed, else "Settings updated". */
 export function botSettingsReceiptLabel(fields: readonly BotSettingsField[]): string {
-  return fields.length === 1 && fields[0] === "instructions" ? "Instructions updated" : "Settings updated";
+  return fields.length === 1 && fields[0] === "instructions"
+    ? "Instructions updated"
+    : "Settings updated";
 }
 
 /** "Update instructions?" when the held change touches the instructions, else "Update settings?". */
@@ -242,14 +262,16 @@ export function botSettingsLine(
 }
 
 /** Whether two values of one field are the same. */
-export function sameBotSettingsValue(field: BotSettingsField, left: BotSettingsValues, right: BotSettingsValues): boolean {
+export function sameBotSettingsValue(
+  field: BotSettingsField,
+  left: BotSettingsValues,
+  right: BotSettingsValues,
+): boolean {
   return JSON.stringify(left[field]) === JSON.stringify(right[field]);
 }
 
 /** The result of reading `update_bot`'s arguments. */
-export type BotSettingsArgs =
-  | { ok: true; patch: BotSettingsPatch }
-  | { ok: false; error: string };
+export type BotSettingsArgs = { ok: true; patch: BotSettingsPatch } | { ok: false; error: string };
 
 const CLOCK = /^(?:[01]\d|2[0-3]):[0-5]\d$/u;
 
@@ -261,7 +283,11 @@ function boundedText(value: unknown, maximum: number, allowEmpty: boolean): stri
   // No control characters other than line breaks and tabs.
   for (const character of trimmed) {
     const code = character.codePointAt(0)!;
-    if ((code < 0x20 && character !== "\n" && character !== "\r" && character !== "\t") || code === 0x7f) return undefined;
+    if (
+      (code < 0x20 && character !== "\n" && character !== "\r" && character !== "\t") ||
+      code === 0x7f
+    )
+      return undefined;
   }
   return trimmed;
 }
@@ -279,25 +305,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function parseBotSettingsArgs(raw: unknown, current: BotSettingsValues): BotSettingsArgs {
   if (raw === undefined || raw === null) return { ok: true, patch: {} };
   if (!isRecord(raw)) return { ok: false, error: "update_bot takes an object of settings." };
-  const unknown = Object.keys(raw).filter((key) => !(BOT_SETTINGS_FIELDS as readonly string[]).includes(key));
+  const unknown = Object.keys(raw).filter(
+    (key) => !(BOT_SETTINGS_FIELDS as readonly string[]).includes(key),
+  );
   if (unknown.length > 0) {
     const personOnly = unknown.filter((key) => BOT_SETTINGS_PERSON_ONLY.has(key));
     return {
       ok: false,
-      error: personOnly.length > 0
-        ? `You can't change ${personOnly.join(", ")} from chat. Only the person changes that, in this Bot's settings.`
-        : `update_bot can't change ${unknown.join(", ")}. It changes only: ${BOT_SETTINGS_FIELDS.join(", ")}.`,
+      error:
+        personOnly.length > 0
+          ? `You can't change ${personOnly.join(", ")} from chat. Only the person changes that, in this Bot's settings.`
+          : `update_bot can't change ${unknown.join(", ")}. It changes only: ${BOT_SETTINGS_FIELDS.join(", ")}.`,
     };
   }
   const patch: BotSettingsPatch = {};
   if (raw.name !== undefined) {
     const name = boundedText(raw.name, BOT_LIMITS.nameChars, false);
-    if (name === undefined) return { ok: false, error: `name must be 1–${BOT_LIMITS.nameChars} characters.` };
+    if (name === undefined)
+      return { ok: false, error: `name must be 1–${BOT_LIMITS.nameChars} characters.` };
     patch.name = name;
   }
   if (raw.description !== undefined) {
     const description = boundedText(raw.description, BOT_LIMITS.descriptionChars, true);
-    if (description === undefined) return { ok: false, error: `description must be at most ${BOT_LIMITS.descriptionChars} characters.` };
+    if (description === undefined)
+      return {
+        ok: false,
+        error: `description must be at most ${BOT_LIMITS.descriptionChars} characters.`,
+      };
     patch.description = description;
   }
   if (raw.instructions !== undefined) {
@@ -306,43 +340,65 @@ export function parseBotSettingsArgs(raw: unknown, current: BotSettingsValues): 
     patch.instructions = instructions;
   }
   if (raw.look !== undefined) {
-    if (!isRecord(raw.look) || Object.keys(raw.look).some((key) => key !== "color" && key !== "shape")) {
+    if (
+      !isRecord(raw.look) ||
+      Object.keys(raw.look).some((key) => key !== "color" && key !== "shape")
+    ) {
       return { ok: false, error: "look takes color and shape." };
     }
     const color = raw.look.color ?? current.look.color;
     const shape = raw.look.shape ?? current.look.shape;
-    if (!(BOT_AVATAR_COLORS as readonly unknown[]).includes(color)) return { ok: false, error: `color must be one of ${BOT_AVATAR_COLORS.join(", ")}.` };
-    if (!(BOT_AVATAR_SHAPES as readonly unknown[]).includes(shape)) return { ok: false, error: `shape must be one of ${BOT_AVATAR_SHAPES.join(", ")}.` };
+    if (!(BOT_AVATAR_COLORS as readonly unknown[]).includes(color))
+      return { ok: false, error: `color must be one of ${BOT_AVATAR_COLORS.join(", ")}.` };
+    if (!(BOT_AVATAR_SHAPES as readonly unknown[]).includes(shape))
+      return { ok: false, error: `shape must be one of ${BOT_AVATAR_SHAPES.join(", ")}.` };
     patch.look = { color: color as BotAvatarColor, shape: shape as BotAvatarShape };
   }
   if (raw.dailyCheckIns !== undefined) {
-    if (typeof raw.dailyCheckIns !== "boolean") return { ok: false, error: "dailyCheckIns is true or false." };
+    if (typeof raw.dailyCheckIns !== "boolean")
+      return { ok: false, error: "dailyCheckIns is true or false." };
     patch.dailyCheckIns = raw.dailyCheckIns;
   }
   if (raw.notifications !== undefined) {
     const value = raw.notifications;
-    if (!isRecord(value) || Object.keys(value).some((key) => key !== "perDay" && key !== "quietHours")) {
+    if (
+      !isRecord(value) ||
+      Object.keys(value).some((key) => key !== "perDay" && key !== "quietHours")
+    ) {
       return { ok: false, error: "notifications takes perDay and quietHours." };
     }
     const next: BotInterruptions = structuredClone(current.notifications);
     if (value.perDay !== undefined) {
-      if (typeof value.perDay !== "number" || !Number.isInteger(value.perDay) || value.perDay < 0 || value.perDay > BOT_INTERRUPTIONS_MAX_DAILY_LIMIT) {
-        return { ok: false, error: `notifications.perDay is a whole number from 0 to ${BOT_INTERRUPTIONS_MAX_DAILY_LIMIT}.` };
+      if (
+        typeof value.perDay !== "number" ||
+        !Number.isInteger(value.perDay) ||
+        value.perDay < 0 ||
+        value.perDay > BOT_INTERRUPTIONS_MAX_DAILY_LIMIT
+      ) {
+        return {
+          ok: false,
+          error: `notifications.perDay is a whole number from 0 to ${BOT_INTERRUPTIONS_MAX_DAILY_LIMIT}.`,
+        };
       }
       next.dailyLimit = value.perDay;
     }
     if (value.quietHours !== undefined) {
       const quiet = value.quietHours;
-      if (!isRecord(quiet) || Object.keys(quiet).some((key) => key !== "enabled" && key !== "start" && key !== "end")) {
+      if (
+        !isRecord(quiet) ||
+        Object.keys(quiet).some((key) => key !== "enabled" && key !== "start" && key !== "end")
+      ) {
         return { ok: false, error: "quietHours takes enabled, start and end." };
       }
       if (quiet.enabled !== undefined) {
-        if (typeof quiet.enabled !== "boolean") return { ok: false, error: "quietHours.enabled is true or false." };
+        if (typeof quiet.enabled !== "boolean")
+          return { ok: false, error: "quietHours.enabled is true or false." };
         next.quietHours.enabled = quiet.enabled;
       }
       for (const key of ["start", "end"] as const) {
         if (quiet[key] === undefined) continue;
-        if (typeof quiet[key] !== "string" || !CLOCK.test(quiet[key])) return { ok: false, error: `quietHours.${key} is a 24-hour time like 22:00.` };
+        if (typeof quiet[key] !== "string" || !CLOCK.test(quiet[key]))
+          return { ok: false, error: `quietHours.${key} is a 24-hour time like 22:00.` };
         next.quietHours[key] = quiet[key];
       }
     }
@@ -350,10 +406,20 @@ export function parseBotSettingsArgs(raw: unknown, current: BotSettingsValues): 
   }
   if (raw.model !== undefined) {
     const model = raw.model;
-    if (!isRecord(model) || Object.keys(model).some((key) => key !== "providerId" && key !== "modelId")
-      || typeof model.providerId !== "string" || typeof model.modelId !== "string"
-      || !model.providerId || !model.modelId || model.providerId.length > 200 || model.modelId.length > 200) {
-      return { ok: false, error: "model takes providerId and modelId, from the models update_bot lists." };
+    if (
+      !isRecord(model) ||
+      Object.keys(model).some((key) => key !== "providerId" && key !== "modelId") ||
+      typeof model.providerId !== "string" ||
+      typeof model.modelId !== "string" ||
+      !model.providerId ||
+      !model.modelId ||
+      model.providerId.length > 200 ||
+      model.modelId.length > 200
+    ) {
+      return {
+        ok: false,
+        error: "model takes providerId and modelId, from the models update_bot lists.",
+      };
     }
     patch.model = { providerId: model.providerId, modelId: model.modelId };
   }
@@ -361,20 +427,36 @@ export function parseBotSettingsArgs(raw: unknown, current: BotSettingsValues): 
 }
 
 /** The fields a patch changes against `current`, in the fixed order above. */
-export function changedBotSettingsFields(current: BotSettingsValues, patch: BotSettingsPatch): BotSettingsField[] {
+export function changedBotSettingsFields(
+  current: BotSettingsValues,
+  patch: BotSettingsPatch,
+): BotSettingsField[] {
   const next = { ...current, ...patch };
-  return BOT_SETTINGS_FIELDS.filter((field) => patch[field] !== undefined && !sameBotSettingsValue(field, current, next));
+  return BOT_SETTINGS_FIELDS.filter(
+    (field) => patch[field] !== undefined && !sameBotSettingsValue(field, current, next),
+  );
 }
 
 /** Exact parse of a change entry; `undefined` when it isn't one. */
 export function botSettingsChangeOf(data: unknown): BotSettingsChangeEntryData | undefined {
   if (!isRecord(data)) return undefined;
-  if (typeof data.changeId !== "string" || (data.mode !== "applied" && data.mode !== "held")) return undefined;
-  if (!Array.isArray(data.fields) || !data.fields.every((field) => (BOT_SETTINGS_FIELDS as readonly unknown[]).includes(field))) return undefined;
-  if (!Array.isArray(data.lines) || !data.lines.every((line) => typeof line === "string")) return undefined;
+  if (typeof data.changeId !== "string" || (data.mode !== "applied" && data.mode !== "held"))
+    return undefined;
+  if (
+    !Array.isArray(data.fields) ||
+    !data.fields.every((field) => (BOT_SETTINGS_FIELDS as readonly unknown[]).includes(field))
+  )
+    return undefined;
+  if (!Array.isArray(data.lines) || !data.lines.every((line) => typeof line === "string"))
+    return undefined;
   if (data.instructions !== undefined && typeof data.instructions !== "string") return undefined;
-  if (data.previousInstructions !== undefined && typeof data.previousInstructions !== "string") return undefined;
-  if (data.heldReason !== undefined && !HELD_REASONS.includes(data.heldReason as BotSettingsHeldReason)) return undefined;
+  if (data.previousInstructions !== undefined && typeof data.previousInstructions !== "string")
+    return undefined;
+  if (
+    data.heldReason !== undefined &&
+    !HELD_REASONS.includes(data.heldReason as BotSettingsHeldReason)
+  )
+    return undefined;
   if (data.undoable !== undefined && data.undoable !== false) return undefined;
   return {
     changeId: data.changeId,
@@ -382,15 +464,27 @@ export function botSettingsChangeOf(data: unknown): BotSettingsChangeEntryData |
     fields: data.fields as BotSettingsField[],
     lines: data.lines as string[],
     ...(typeof data.instructions === "string" ? { instructions: data.instructions } : {}),
-    ...(typeof data.previousInstructions === "string" ? { previousInstructions: data.previousInstructions } : {}),
-    ...(data.heldReason !== undefined ? { heldReason: data.heldReason as BotSettingsHeldReason } : {}),
+    ...(typeof data.previousInstructions === "string"
+      ? { previousInstructions: data.previousInstructions }
+      : {}),
+    ...(data.heldReason !== undefined
+      ? { heldReason: data.heldReason as BotSettingsHeldReason }
+      : {}),
     ...(data.undoable === false ? { undoable: false as const } : {}),
   };
 }
 
-const STATUSES: readonly BotSettingsChangeStatus[] = ["restored", "undo_refused", "applied", "edited", "dismissed"];
+const STATUSES: readonly BotSettingsChangeStatus[] = [
+  "restored",
+  "undo_refused",
+  "applied",
+  "edited",
+  "dismissed",
+];
 
-export function botSettingsChangeStatusOf(data: unknown): BotSettingsChangeStatusEntryData | undefined {
+export function botSettingsChangeStatusOf(
+  data: unknown,
+): BotSettingsChangeStatusEntryData | undefined {
   if (!isRecord(data) || typeof data.changeId !== "string") return undefined;
   return STATUSES.includes(data.status as BotSettingsChangeStatus)
     ? { changeId: data.changeId, status: data.status as BotSettingsChangeStatus }

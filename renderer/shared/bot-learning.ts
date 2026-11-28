@@ -1,6 +1,11 @@
 // What a Bot learned, as one history with Undo (spec 2026-10-27 §7 L5).
 
-export type BotLearningChangeKind = "memory_review" | "memory_tidy" | "lesson_added" | "lesson_removed" | "skill_added";
+export type BotLearningChangeKind =
+  | "memory_review"
+  | "memory_tidy"
+  | "lesson_added"
+  | "lesson_removed"
+  | "skill_added";
 export type BotLearningTarget =
   | { kind: "memory" }
   | { kind: "lesson"; lessonId: string }
@@ -21,5 +26,9 @@ export interface BotLearningChange {
   undoOf?: string;
 }
 
-export const BOT_LEARNING_HISTORY_LIMITS = { changes: 100, bytes: 1_048_576, summaryChars: 160 } as const;
+export const BOT_LEARNING_HISTORY_LIMITS = {
+  changes: 100,
+  bytes: 1_048_576,
+  summaryChars: 160,
+} as const;
 export const BOT_LEARNING_DAILY_LIMITS = { requests: 12, outputTokens: 24_000 } as const;

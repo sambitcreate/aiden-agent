@@ -34,7 +34,7 @@ Effort tags from the review: S = hours, M = 1–2 days, L = 3+ days.
 8. Canvas status line moves to a conversation note (see decisions).
 9. No-op artifact saves make no version; one turn's saves fold into one undo step.
 10. Auto-place shell-made design pages (see decisions).
-33. Artifact action argument safety (see decisions).
+11. Artifact action argument safety (see decisions).
 
 ### B. Aiden checks its own work (items 11, 26, 27; idea 1)
 

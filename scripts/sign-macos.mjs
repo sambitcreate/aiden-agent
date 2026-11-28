@@ -98,7 +98,10 @@ export async function verifyPinnedLume(appPath, { hash = sha256, execute = execu
     throw new Error(`The packaged Lume binary is not a regular, non-symlinked file: ${binary}`);
   }
   const actualHash = await hash(binary);
-  if (info.size !== LUME_ARTIFACT_PROVENANCE.binaryBytes || actualHash !== LUME_ARTIFACT_PROVENANCE.binarySha256) {
+  if (
+    info.size !== LUME_ARTIFACT_PROVENANCE.binaryBytes ||
+    actualHash !== LUME_ARTIFACT_PROVENANCE.binarySha256
+  ) {
     throw new Error(
       `Packaging changed the pinned Lume binary: expected ${LUME_ARTIFACT_PROVENANCE.binarySha256}, received ${actualHash}`,
     );

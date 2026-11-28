@@ -174,7 +174,8 @@ export function createPeerHostFeedBatcher(
       const messages = held.get(message.hostId);
       if (messages === FEED_RESYNC) return;
       if (!messages) held.set(message.hostId, [message]);
-      else if (messages.length >= PEER_FEED_BATCH_MAX_MESSAGES) held.set(message.hostId, FEED_RESYNC);
+      else if (messages.length >= PEER_FEED_BATCH_MAX_MESSAGES)
+        held.set(message.hostId, FEED_RESYNC);
       else messages.push(message);
       if (scheduled) return;
       scheduled = true;
@@ -243,10 +244,7 @@ export function createPeerHostStatusSync(
     },
     async read() {
       const incoming = await readAll();
-      const merged = mergePeerHostStatuses(
-        mergePeerHostStatuses(cached(), incoming, true),
-        early,
-      );
+      const merged = mergePeerHostStatuses(mergePeerHostStatuses(cached(), incoming, true), early);
       early = [];
       return merged;
     },

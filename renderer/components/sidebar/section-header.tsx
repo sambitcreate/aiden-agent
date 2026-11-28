@@ -16,9 +16,7 @@ export interface SectionHeaderProps {
 /** A sidebar section's heading row: label, optional count and collapse control, then actions. */
 export function SectionHeader({ label, count, accessory, actions, collapse }: SectionHeaderProps) {
   const countBadge =
-    count === undefined ? null : (
-      <span className="tabular-nums text-quaternary">{count}</span>
-    );
+    count === undefined ? null : <span className="tabular-nums text-quaternary">{count}</span>;
   const heading = collapse ? (
     <button
       type="button"

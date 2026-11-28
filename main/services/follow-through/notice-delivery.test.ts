@@ -15,7 +15,12 @@ import {
 function post(text: string, wake = true, chatId = "chat-1"): AgentNoticePost {
   return {
     chatId,
-    notice: agentNotice({ source: "background_job", tone: "failure", title: "Background job ended", summary: text }),
+    notice: agentNotice({
+      source: "background_job",
+      tone: "failure",
+      title: "Background job ended",
+      summary: text,
+    }),
     text,
     wake,
   };
@@ -58,7 +63,11 @@ function fakeChat(options: { running?: boolean; scheduledRun?: boolean; now?: ()
       if (running || scheduledRun) return { kind: "busy" };
       running = true;
       if (item) transcript.push({ text: item.text, via: "woke" });
-      return { kind: "started", streamId: `s-${chatId}-${ids}`, ...(item ? { messageId: `m${++ids}` } : {}) };
+      return {
+        kind: "started",
+        streamId: `s-${chatId}-${ids}`,
+        ...(item ? { messageId: `m${++ids}` } : {}),
+      };
     },
     async append(item) {
       calls.push("append");
@@ -120,7 +129,11 @@ test("a running turn takes the notice as queued input instead of starting anothe
   const outcome = await delivery.post(post("npm test exited with code 1"));
   assert.equal(outcome.kind, "queued");
   assert.deepEqual(chat.transcript, [{ text: "npm test exited with code 1", via: "queued" }]);
-  assert.equal(delivery.wakesLeft("chat-1"), MAX_WAKES_PER_CHAT_PER_HOUR, "queueing spends no wake");
+  assert.equal(
+    delivery.wakesLeft("chat-1"),
+    MAX_WAKES_PER_CHAT_PER_HOUR,
+    "queueing spends no wake",
+  );
 });
 
 test("an idle chat is woken for news the agent must act on, and only recorded otherwise", async () => {
@@ -182,7 +195,10 @@ test("a turn that ended just as the notice was saved is followed by a turn of it
   const outcome = await new NoticeDelivery(chat.deps).post(post("dev server crashed"));
   assert.equal(outcome.kind, "woke");
   assert.equal(outcome.kind === "woke" && outcome.messageId, "saved-1");
-  assert.ok(chat.calls.includes("start"), "the saved notice is answered without appending it again");
+  assert.ok(
+    chat.calls.includes("start"),
+    "the saved notice is answered without appending it again",
+  );
   assert.ok(!chat.calls.includes("start-with-notice"));
   assert.ok(!chat.calls.includes("append"));
 });
@@ -239,19 +255,35 @@ test("a notice outlasts another feature's run that holds the chat past the long 
     settled = true;
   });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(delivery.hasPending("chat-1"), false, "a goal is not held back while the other run keeps the chat busy");
+  assert.equal(
+    delivery.hasPending("chat-1"),
+    false,
+    "a goal is not held back while the other run keeps the chat busy",
+  );
   // The long wait ends with the scheduled run still holding the chat.
   chat.runWaitTimedOut();
   for (let tick = 0; tick < 20; tick += 1) await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(settled, false, "the notice is neither dropped nor recorded while that run holds the chat");
+  assert.equal(
+    settled,
+    false,
+    "the notice is neither dropped nor recorded while that run holds the chat",
+  );
   assert.deepEqual(chat.transcript, []);
   assert.equal(delivery.hasPending("chat-1"), false, "and still doesn't hold a goal back");
   assert.equal(chat.calls.includes("append"), false, "nothing tries to save into the held chat");
   chat.finishScheduledRun();
   const outcome = await pending;
   assert.deepEqual(outcome.kind === "recorded" ? outcome.reason : outcome.kind, "wake-unavailable");
-  assert.deepEqual(chat.transcript, [{ text: "checks failed", via: "recorded" }], "recorded, not woken: the news is hours old");
-  assert.equal(chat.calls.filter((call) => call === "wait-run").length, 1, "the long wait runs once");
+  assert.deepEqual(
+    chat.transcript,
+    [{ text: "checks failed", via: "recorded" }],
+    "recorded, not woken: the news is hours old",
+  );
+  assert.equal(
+    chat.calls.filter((call) => call === "wait-run").length,
+    1,
+    "the long wait runs once",
+  );
   assert.equal(delivery.hasPending("chat-1"), false);
 });
 
@@ -263,18 +295,33 @@ test("behind a run that never ends, only the first notice waits the day out; lat
   chat.deps.waitForIdle = async () => void chat.calls.push("wait");
   const delivery = new NoticeDelivery(chat.deps);
   const first = delivery.post(post("checks failed"));
-  const later = [delivery.post(post("checks passed", false)), delivery.post(post("review requested"))];
+  const later = [
+    delivery.post(post("checks passed", false)),
+    delivery.post(post("review requested")),
+  ];
   await new Promise((resolve) => setImmediate(resolve));
   chat.runWaitTimedOut();
   await new Promise((resolve) => setImmediate(resolve));
   chat.runEndWaitTimedOut();
   const outcome = await first;
   assert.equal(outcome.kind, "dropped");
-  assert.equal(outcome.kind === "dropped" ? outcome.gone : undefined, undefined, "not gone: the chat is still there");
+  assert.equal(
+    outcome.kind === "dropped" ? outcome.gone : undefined,
+    undefined,
+    "not gone: the chat is still there",
+  );
   // No further waits: each later notice is settled without anyone finishing a wait.
   for (const notice of await Promise.all(later)) assert.equal(notice.kind, "dropped");
-  assert.equal(chat.calls.filter((call) => call === "wait-run").length, 1, "the 30-minute wait ran once for that run");
-  assert.equal(chat.calls.filter((call) => call === "wait-run-end").length, 1, "and the day-long wait once");
+  assert.equal(
+    chat.calls.filter((call) => call === "wait-run").length,
+    1,
+    "the 30-minute wait ran once for that run",
+  );
+  assert.equal(
+    chat.calls.filter((call) => call === "wait-run-end").length,
+    1,
+    "and the day-long wait once",
+  );
   assert.equal(errors.length, 1, "reported once for that run");
   assert.deepEqual(chat.transcript, []);
 
@@ -310,8 +357,21 @@ test("a notice joins only the chat's own running turn, never a run another featu
   const scheduled = { chatId: "chat-1", cancelRequested: false, chatTurn: false };
   assert.deepEqual(agentNoticeRun([["s-own", own]], "chat-1"), { streamId: "s-own" });
   assert.deepEqual(agentNoticeRun([["s-task", scheduled]], "chat-1"), { busyWith: "s-task" });
-  assert.deepEqual(agentNoticeRun([["s-task", scheduled], ["s-own", own]], "chat-1"), { streamId: "s-own" });
-  assert.equal(agentNoticeRun([["s-own", { ...own, cancelRequested: true }]], "chat-1"), undefined, "a stopping run takes nothing");
+  assert.deepEqual(
+    agentNoticeRun(
+      [
+        ["s-task", scheduled],
+        ["s-own", own],
+      ],
+      "chat-1",
+    ),
+    { streamId: "s-own" },
+  );
+  assert.equal(
+    agentNoticeRun([["s-own", { ...own, cancelRequested: true }]], "chat-1"),
+    undefined,
+    "a stopping run takes nothing",
+  );
   assert.equal(agentNoticeRun([["s-own", { ...own, chatId: "chat-2" }]], "chat-1"), undefined);
   assert.equal(agentNoticeRun([], "chat-1"), undefined);
 });
@@ -365,7 +425,11 @@ test("while the chat has an active goal, waking news starts a goal round that sp
   chat.deps.startGoalRound = async (chatId, item) => {
     if (!goalActive) return undefined;
     rounds.push(item?.text ?? "(saved)");
-    return { kind: "started", streamId: `goal-${chatId}-${rounds.length}`, ...(item ? { messageId: `g${rounds.length}` } : {}) };
+    return {
+      kind: "started",
+      streamId: `goal-${chatId}-${rounds.length}`,
+      ...(item ? { messageId: `g${rounds.length}` } : {}),
+    };
   };
   const delivery = new NoticeDelivery(chat.deps);
   for (let index = 0; index < MAX_WAKES_PER_CHAT_PER_HOUR + 2; index += 1) {
@@ -373,9 +437,16 @@ test("while the chat has an active goal, waking news starts a goal round that sp
     assert.equal(outcome.kind, "woke", `notice ${index}`);
     now += 60_000;
   }
-  assert.equal(rounds.length, MAX_WAKES_PER_CHAT_PER_HOUR + 2, "no hourly limit on rounds the goal owns");
+  assert.equal(
+    rounds.length,
+    MAX_WAKES_PER_CHAT_PER_HOUR + 2,
+    "no hourly limit on rounds the goal owns",
+  );
   assert.equal(delivery.wakesLeft("chat-1"), MAX_WAKES_PER_CHAT_PER_HOUR);
-  assert.ok(!chat.calls.includes("start-with-notice"), "no unattended turn while the goal is active");
+  assert.ok(
+    !chat.calls.includes("start-with-notice"),
+    "no unattended turn while the goal is active",
+  );
 
   // A notice that needs no answer is only recorded, goal or not.
   assert.equal((await delivery.post(post("checks passed", false))).kind, "recorded");
@@ -384,7 +455,11 @@ test("while the chat has an active goal, waking news starts a goal round that sp
   // A notice saved as a run ended is answered by a goal round too.
   chat.deps.queueAnswer = () => ({ kind: "saved", messageId: "saved-1" });
   const saved = await delivery.post(post("dev server crashed"));
-  assert.deepEqual(saved, { kind: "woke", messageId: "saved-1", streamId: `goal-chat-1-${rounds.length}` });
+  assert.deepEqual(saved, {
+    kind: "woke",
+    messageId: "saved-1",
+    streamId: `goal-chat-1-${rounds.length}`,
+  });
   assert.equal(rounds[rounds.length - 1], "(saved)");
   chat.deps.queueAnswer = undefined;
 

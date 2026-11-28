@@ -2,7 +2,11 @@
 import * as React from "react";
 import { devicesApi } from "../lib/ipc";
 import type { DeviceScreenSize } from "../lib/device-stream";
-import { createPhoneInteraction, type PhoneInteraction, type Point } from "../lib/device-3d/interaction";
+import {
+  createPhoneInteraction,
+  type PhoneInteraction,
+  type Point,
+} from "../lib/device-3d/interaction";
 import type { DeviceModelId } from "../lib/device-3d/model-registry";
 import type { DeviceAssetModelId } from "../lib/device-3d/model-source";
 import type { PhoneViewer } from "../lib/device-3d/phone-viewer";
@@ -133,7 +137,9 @@ export function DevicePhoneViewport({
           profile: profileRef.current,
           model: modelRef.current,
           asset: assets?.deviceModelSource(wanted.asset) ?? null,
-          accessory: wanted.keyboardAttached ? (assets?.deviceKeyboardSource(wanted.asset) ?? null) : null,
+          accessory: wanted.keyboardAttached
+            ? (assets?.deviceKeyboardSource(wanted.asset) ?? null)
+            : null,
           // A model that cannot load keeps the procedural body; the 3D view stays up.
           onModelError: (cause) => console.warn("Device 3D model could not load", cause),
           foldAngle: foldAngleRef.current,
@@ -194,7 +200,9 @@ export function DevicePhoneViewport({
           if (!interactionRef.current?.begin(event.pointerId, point(event), event.altKey)) return;
           event.preventDefault();
           event.currentTarget.setPointerCapture(event.pointerId);
-          (event.currentTarget.closest('[role="application"]') as HTMLElement | null)?.focus({ preventScroll: true });
+          (event.currentTarget.closest('[role="application"]') as HTMLElement | null)?.focus({
+            preventScroll: true,
+          });
         }}
         onPointerMove={(event) => interactionRef.current?.move(event.pointerId, point(event))}
         onPointerUp={(event) => {

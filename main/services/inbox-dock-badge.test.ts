@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ChatPendingAttention } from "../../renderer/shared/chat-pending-attention.js";
-import type { PeerFeedRow, PeerHostFeedSnapshot, PeerHostStatus, PeerRunState } from "../../renderer/shared/peer-host.js";
+import type {
+  PeerFeedRow,
+  PeerHostFeedSnapshot,
+  PeerHostStatus,
+  PeerRunState,
+} from "../../renderer/shared/peer-host.js";
 import {
   badgeSurface,
   createInboxBadgeDriver,
@@ -34,26 +39,56 @@ function chat(id: string, extra: Partial<InboxBadgeLocalChat> = {}): InboxBadgeL
   return { id, workspaceId: "ws-1", updatedAt: NOW - HOUR, lastAssistantAt: NOW - HOUR, ...extra };
 }
 
-function status(hostId: string, state: PeerHostStatus["state"] = { kind: "connected", since: NOW - HOUR }, stale = false): PeerHostStatus {
+function status(
+  hostId: string,
+  state: PeerHostStatus["state"] = { kind: "connected", since: NOW - HOUR },
+  stale = false,
+): PeerHostStatus {
   return { hostId, generation: 1, state, feed: "live", stale };
 }
 
 function feed(hostId: string, rows: Partial<PeerHostFeedSnapshot> = {}): PeerHostFeedSnapshot {
-  return { hostId, epoch: "e1", sequence: 1, stale: false, summaries: [], workspaces: [], bots: [], runs: [], ...rows };
+  return {
+    hostId,
+    epoch: "e1",
+    sequence: 1,
+    stale: false,
+    summaries: [],
+    workspaces: [],
+    bots: [],
+    runs: [],
+    ...rows,
+  };
 }
 
 function summary(id: string, extra: Record<string, unknown> = {}): PeerFeedRow {
   return { id, workspaceId: "remote-ws", rowState: "idle", unread: false, ...extra };
 }
 
-const approvalRun = (chatId: string): PeerRunState => ({ chatId, runId: `run-${chatId}`, state: "needs_approval", unread: false });
+const approvalRun = (chatId: string): PeerRunState => ({
+  chatId,
+  runId: `run-${chatId}`,
+  state: "needs_approval",
+  unread: false,
+});
 
 const count = (localInput: InboxBadgeLocal, peers: InboxBadgePeer[] = []) =>
   inboxBadgeCount({ now: NOW, local: localInput, peers });
 
 test("counts this Mac's approvals, questions, detached waits, goals at Needs you, unseen failures and Bots that need you", () => {
-  const detached: ChatPendingAttention = { chatId: "detached", kind: "detached", summary: "npm test", count: 1 };
-  const goal: ChatPendingAttention = { chatId: "goal", kind: "goal", summary: "Needs an API key", since: NOW - HOUR, count: 1 };
+  const detached: ChatPendingAttention = {
+    chatId: "detached",
+    kind: "detached",
+    summary: "npm test",
+    count: 1,
+  };
+  const goal: ChatPendingAttention = {
+    chatId: "goal",
+    kind: "goal",
+    summary: "Needs an API key",
+    since: NOW - HOUR,
+    count: 1,
+  };
   const result = count(
     local({
       chats: [
@@ -67,8 +102,15 @@ test("counts this Mac's approvals, questions, detached waits, goals at Needs you
         // A failure the person already read is not waiting on them.
         chat("read-failure", { lastAssistantFailed: true, lastAssistantAt: NOW - 11 * HOUR }),
       ],
-      activity: { activeChatIds: ["approval", "question", "working"], approvalChatIds: ["approval"], inputChatIds: ["question"] },
-      pending: new Map([["detached", detached], ["goal", goal]]),
+      activity: {
+        activeChatIds: ["approval", "question", "working"],
+        approvalChatIds: ["approval"],
+        inputChatIds: ["question"],
+      },
+      pending: new Map([
+        ["detached", detached],
+        ["goal", goal],
+      ]),
       botsNeedingYou: ["bot-a"],
     }),
   );
@@ -76,7 +118,12 @@ test("counts this Mac's approvals, questions, detached waits, goals at Needs you
 });
 
 test("a chat reported twice counts once, and a working run's pending entry adds nothing", () => {
-  const working: ChatPendingAttention = { chatId: "approval", kind: "working", summary: "", count: 0 };
+  const working: ChatPendingAttention = {
+    chatId: "approval",
+    kind: "working",
+    summary: "",
+    count: 0,
+  };
   const twice = chat("approval");
   assert.equal(
     count(
@@ -98,7 +145,10 @@ test("chats of removed workspaces, Bot chats and feature-owned chats don't count
         chats: [
           chat("gone", { workspaceId: "ws-removed", lastAssistantFailed: true }),
           chat("bot-chat", { botId: "bot-a", lastAssistantFailed: true }),
-          chat("feature", { owner: { kind: "feature", id: "x" } as never, lastAssistantFailed: true }),
+          chat("feature", {
+            owner: { kind: "feature", id: "x" } as never,
+            lastAssistantFailed: true,
+          }),
           chat("kept", { lastAssistantFailed: true }),
         ],
       }),
@@ -122,9 +172,17 @@ test("Done follows the sidebar: a failure read on Done is gone, a newer one come
         chat("snoozed-quiet"),
         chat("snoozed-approval"),
       ],
-      activity: { activeChatIds: ["snoozed-approval"], approvalChatIds: ["snoozed-approval"], inputChatIds: [] },
+      activity: {
+        activeChatIds: ["snoozed-approval"],
+        approvalChatIds: ["snoozed-approval"],
+        inputChatIds: [],
+      },
       // Marking Done reads the chat through its newest reply.
-      markers: { revision: 2, baselineAt: NOW - 10 * HOUR, readThrough: { "done-read": NOW - HOUR } },
+      markers: {
+        revision: 2,
+        baselineAt: NOW - 10 * HOUR,
+        readThrough: { "done-read": NOW - HOUR },
+      },
       triage,
     }),
   );
@@ -132,7 +190,10 @@ test("Done follows the sidebar: a failure read on Done is gone, a newer one come
 });
 
 test("unreadable read markers make no chat an unseen failure", () => {
-  assert.equal(count(local({ chats: [chat("failed", { lastAssistantFailed: true })], markers: null })), 0);
+  assert.equal(
+    count(local({ chats: [chat("failed", { lastAssistantFailed: true })], markers: null })),
+    0,
+  );
 });
 
 test("paired hosts count only while online, and their rows are keyed by host", () => {
@@ -141,7 +202,12 @@ test("paired hosts count only while online, and their rows are keyed by host", (
       summary("approval"),
       summary("failed", { lastRunFailed: true, unread: true }),
       summary("failed-read", { lastRunFailed: true, unread: false }),
-      summary("done", { rowState: "idle", unread: true, triageRevision: 2, doneAt: iso(NOW - HOUR) }),
+      summary("done", {
+        rowState: "idle",
+        unread: true,
+        triageRevision: 2,
+        doneAt: iso(NOW - HOUR),
+      }),
       summary("no-workspace", { workspaceId: undefined, rowState: "needs_input" }),
     ],
     runs: [approvalRun("approval")],
@@ -205,7 +271,10 @@ function harness(counts: number[] | (() => Promise<number>)) {
   const errors: unknown[] = [];
   const driver = createInboxBadgeDriver({
     surface: { show: (n) => void shown.push(n) },
-    count: typeof counts === "function" ? counts : async () => counts[Math.min(calls++, counts.length - 1)]!,
+    count:
+      typeof counts === "function"
+        ? counts
+        : async () => counts[Math.min(calls++, counts.length - 1)]!,
     onError: (error) => void errors.push(error),
     setTimer: (callback) => {
       timers.push(callback);
@@ -320,7 +389,8 @@ test("only the main window's request turns the badge on or off; other senders le
     { handle: (channel, listener) => void handlers.set(channel, listener) },
     { isMainWindow: (event) => event.main, apply: (enabled) => h.driver.setEnabled(enabled) },
   );
-  const invoke = (event: Sender, enabled: unknown) => handlers.get("app:setInboxDockBadge")!(event, enabled);
+  const invoke = (event: Sender, enabled: unknown) =>
+    handlers.get("app:setInboxDockBadge")!(event, enabled);
   const other = { main: false };
   const mainWindow = { main: true };
 

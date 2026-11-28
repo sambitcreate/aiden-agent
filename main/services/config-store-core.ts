@@ -1,11 +1,27 @@
-import { compactionEngineFrom, isCompactionEngine, parseCompactionModelOverrides, type CompactionEngine, type CompactionModelBudget, type CompactionModelOverrides } from "../../renderer/shared/compaction.js";
+import {
+  compactionEngineFrom,
+  isCompactionEngine,
+  parseCompactionModelOverrides,
+  type CompactionEngine,
+  type CompactionModelBudget,
+  type CompactionModelOverrides,
+} from "../../renderer/shared/compaction.js";
 import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
 import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
 import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
 import { randomBytes } from "node:crypto";
-import { getPresetVariant, normalizeAppearanceConfig, parseAppearanceConfig, type ThemePresetId } from "../../renderer/shared/appearance.js";
+import {
+  getPresetVariant,
+  normalizeAppearanceConfig,
+  parseAppearanceConfig,
+  type ThemePresetId,
+} from "../../renderer/shared/appearance.js";
 import { appControlPolicy, appControlRevision, type AppControlState } from "./app-controls-core.js";
-import { parseAppControlOperation, parseNewChatModelValue, type AppControlOperation } from "../../renderer/shared/app-controls.js";
+import {
+  parseAppControlOperation,
+  parseNewChatModelValue,
+  type AppControlOperation,
+} from "../../renderer/shared/app-controls.js";
 // Custom-provider configuration + lightweight app settings persistence.
 // Pi built-ins are derived from its runtime registry, not seeded into this file.
 //
@@ -48,10 +64,7 @@ import {
   PROVIDER_LEGACY_QUARANTINE_KEY_PREFIX,
 } from "./secret-map-core.js";
 import { parseTtsSettingsDocument } from "./tts/settings.js";
-import {
-  normalizeTtsSettings,
-  type TtsSettingsV1,
-} from "../../renderer/shared/tts.js";
+import { normalizeTtsSettings, type TtsSettingsV1 } from "../../renderer/shared/tts.js";
 import { migratePiProviderConfig } from "./provider-config-migration-core.js";
 import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
 import {
@@ -241,7 +254,15 @@ function normalizePortableConfig(value: unknown): {
 
 function normalizeWorkspace(workspace: Workspace): Workspace {
   // Only a literal `true` marks a scratch or No workspace record; anything else is dropped.
-  const { scratch, noWorkspace, disabledSkills, disabledMcpServerIds, approvalMode, macGrants, ...w } = workspace;
+  const {
+    scratch,
+    noWorkspace,
+    disabledSkills,
+    disabledMcpServerIds,
+    approvalMode,
+    macGrants,
+    ...w
+  } = workspace;
   return {
     ...w,
     ...(scratch === true ? { scratch } : {}),
@@ -249,10 +270,14 @@ function normalizeWorkspace(workspace: Workspace): Workspace {
     name: w.name.trim() || "Workspace",
     permission: PERMISSIONS.has(w.permission) ? w.permission : "ask",
     ...(parseApprovalMode(approvalMode) ? { approvalMode: parseApprovalMode(approvalMode) } : {}),
-    ...(parseWorkspaceMacGrants(macGrants) ? { macGrants: parseWorkspaceMacGrants(macGrants) } : {}),
+    ...(parseWorkspaceMacGrants(macGrants)
+      ? { macGrants: parseWorkspaceMacGrants(macGrants) }
+      : {}),
     ...(typeof w.memoryEnabled === "boolean" ? { memoryEnabled: w.memoryEnabled } : {}),
     // No workspace chats always use the global skills and connectors.
-    ...(noWorkspace === true ? {} : workspaceCapabilityFields({ disabledSkills, disabledMcpServerIds })),
+    ...(noWorkspace === true
+      ? {}
+      : workspaceCapabilityFields({ disabledSkills, disabledMcpServerIds })),
     managedWorktree:
       w.managedWorktree &&
       typeof w.managedWorktree.repositoryPath === "string" &&
@@ -494,7 +519,8 @@ export function createConfigStore(
   async function ensureApprovalModeSettings(): Promise<void> {
     if (await settingsStore.loadedFromCorruptFile()) return;
     const { settings } = await settingsStore.load();
-    if (settings.approvalModeOrigin === "fresh" || settings.approvalModeOrigin === "upgrade") return;
+    if (settings.approvalModeOrigin === "fresh" || settings.approvalModeOrigin === "upgrade")
+      return;
     const local = await localStore.load();
     // Read the outcome raw: an earlier release may have stored an older
     // onboarding version that today's parser no longer accepts.
@@ -506,12 +532,17 @@ export function createConfigStore(
     const inUse =
       (typeof onboardingOutcome === "string" && onboardingOutcome !== "incomplete") ||
       typeof settings.lastProviderId === "string" ||
-      workspaces.some((workspace) => workspace.id !== DEFAULT_WORKSPACE_ID || typeof workspace.folderPath === "string");
+      workspaces.some(
+        (workspace) =>
+          workspace.id !== DEFAULT_WORKSPACE_ID || typeof workspace.folderPath === "string",
+      );
     const mode = approvalModeAfterUpgrade({
       stored: parseApprovalMode(settings.approvalMode) !== undefined,
       // Every profile gets `aidenDirMigratedAt` when the split runs, so only the
       // durable fresh-vs-upgrade marker says whether an older Aiden used it.
-      upgradedProfile: local.webSearchProfileKind === "upgrade" || (local.webSearchProfileKind === undefined && local.seeded !== false),
+      upgradedProfile:
+        local.webSearchProfileKind === "upgrade" ||
+        (local.webSearchProfileKind === undefined && local.seeded !== false),
       inUse,
     });
     await settingsStore.update((next) => {
@@ -604,7 +635,8 @@ export function createConfigStore(
         // Apply identity changes to provider/model keyed preferences too. Custom
         // aliases retain precedence over the built-in Azure rename.
         const preferenceRoutes = new Map(cacheAliasEntries);
-        if (!preferenceRoutes.has("azure-openai-responses")) preferenceRoutes.set("azure-openai-responses", "azure");
+        if (!preferenceRoutes.has("azure-openai-responses"))
+          preferenceRoutes.set("azure-openai-responses", "azure");
         // The Agent Slider shares this file with the providers, so its stops
         // move in the same write that renames them. Only the matching
         // `providerId` values change; everything else, including a malformed
@@ -626,23 +658,33 @@ export function createConfigStore(
         const providerThinkingByModel = { ...currentSettings.providerThinkingByModel };
         const compactionModelOverrides = { ...currentSettings.compactionModelOverrides };
         for (const [legacyId, targetId] of preferenceRoutes) {
-          hiddenModelsByProvider = remapHiddenModelProvider(hiddenModelsByProvider, legacyId, targetId);
+          hiddenModelsByProvider = remapHiddenModelProvider(
+            hiddenModelsByProvider,
+            legacyId,
+            targetId,
+          );
           pinnedModels = remapPinnedModelsProvider(pinnedModels, legacyId, targetId);
           recentModels = remapRecentModelsProvider(recentModels, legacyId, targetId);
           if (Object.prototype.hasOwnProperty.call(providerThinkingByModel, legacyId)) {
-            providerThinkingByModel[targetId] = { ...providerThinkingByModel[legacyId], ...providerThinkingByModel[targetId] };
+            providerThinkingByModel[targetId] = {
+              ...providerThinkingByModel[legacyId],
+              ...providerThinkingByModel[targetId],
+            };
             delete providerThinkingByModel[legacyId];
           }
           for (const key of Object.keys(compactionModelOverrides)) {
             if (!key.startsWith(`${legacyId}/`)) continue;
             const target = `${targetId}/${key.slice(legacyId.length + 1)}`;
-            if (!Object.prototype.hasOwnProperty.call(compactionModelOverrides, target)) compactionModelOverrides[target] = compactionModelOverrides[key]!;
+            if (!Object.prototype.hasOwnProperty.call(compactionModelOverrides, target))
+              compactionModelOverrides[target] = compactionModelOverrides[key]!;
             delete compactionModelOverrides[key];
           }
         }
         if (
-          JSON.stringify(providerThinkingByModel) !== JSON.stringify(currentSettings.providerThinkingByModel ?? {}) ||
-          JSON.stringify(compactionModelOverrides) !== JSON.stringify(currentSettings.compactionModelOverrides ?? {}) ||
+          JSON.stringify(providerThinkingByModel) !==
+            JSON.stringify(currentSettings.providerThinkingByModel ?? {}) ||
+          JSON.stringify(compactionModelOverrides) !==
+            JSON.stringify(currentSettings.compactionModelOverrides ?? {}) ||
           lastProviderId !== currentSettings.lastProviderId ||
           JSON.stringify(hiddenModelsByProvider) !==
             JSON.stringify(currentSettings.hiddenModelsByProvider) ||
@@ -654,8 +696,10 @@ export function createConfigStore(
             config.settings.hiddenModelsByProvider = hiddenModelsByProvider;
             if (pinnedModels) config.settings.pinnedModels = pinnedModels;
             if (recentModels) config.settings.recentModels = recentModels;
-            if (Object.keys(providerThinkingByModel).length) config.settings.providerThinkingByModel = providerThinkingByModel;
-            if (Object.keys(compactionModelOverrides).length) config.settings.compactionModelOverrides = compactionModelOverrides;
+            if (Object.keys(providerThinkingByModel).length)
+              config.settings.providerThinkingByModel = providerThinkingByModel;
+            if (Object.keys(compactionModelOverrides).length)
+              config.settings.compactionModelOverrides = compactionModelOverrides;
           });
         }
         secretMigrationTargets = [
@@ -756,7 +800,10 @@ export function createConfigStore(
   // the file, so remember their ids until their credentials are cleaned up.
   const retiredMcpIds = new Set<string>();
   const noteRetiredMcpServers = (value: unknown) => {
-    const servers = value && typeof value === "object" ? (value as { mcpServers?: unknown }).mcpServers : undefined;
+    const servers =
+      value && typeof value === "object"
+        ? (value as { mcpServers?: unknown }).mcpServers
+        : undefined;
     for (const id of retiredMcpServerIds(servers)) retiredMcpIds.add(id);
   };
 
@@ -970,8 +1017,7 @@ export function createConfigStore(
           if (provider.modelMetadata !== undefined && intent.customModelOptions === undefined) {
             delete config.providers[idx].customModelOptions;
           }
-        }
-        else config.providers.push(intent);
+        } else config.providers.push(intent);
         return structuredClone(config.providers.find((p) => p.id === intent.id)!);
       }, isCurrent);
       const entry = await modelCache.update((draft) => {
@@ -1017,7 +1063,10 @@ export function createConfigStore(
       return parseAnalyticsState((await settingsStore.load()).analytics);
     },
 
-    async updateAnalyticsState(mutate: (state: AnalyticsState) => AnalyticsState, isCurrent?: () => boolean): Promise<AnalyticsState> {
+    async updateAnalyticsState(
+      mutate: (state: AnalyticsState) => AnalyticsState,
+      isCurrent?: () => boolean,
+    ): Promise<AnalyticsState> {
       return mutateSettings((config) => {
         const next = mutate(parseAnalyticsState(config.analytics));
         config.analytics = { ...next };
@@ -1042,12 +1091,20 @@ export function createConfigStore(
       if (compactionSnapshot?.source !== document) {
         let compactionModelOverrides: CompactionModelOverrides | undefined;
         if (document.settings.compactionModelOverrides !== undefined) {
-          try { compactionModelOverrides = parseCompactionModelOverrides(document.settings.compactionModelOverrides); }
-          catch { compactionModelOverrides = undefined; }
+          try {
+            compactionModelOverrides = parseCompactionModelOverrides(
+              document.settings.compactionModelOverrides,
+            );
+          } catch {
+            compactionModelOverrides = undefined;
+          }
         }
         compactionSnapshot = {
           source: document,
-          value: Object.freeze({ compactionEngine: compactionEngineFrom(document.settings.compactionEngine), compactionModelOverrides }),
+          value: Object.freeze({
+            compactionEngine: compactionEngineFrom(document.settings.compactionEngine),
+            compactionModelOverrides,
+          }),
         };
       }
       return compactionSnapshot.value;
@@ -1109,7 +1166,9 @@ export function createConfigStore(
             "Web page settings are invalid or from a newer version; repair settings.json before changing them.",
           );
         }
-        const next = parseWebFetchSettings(mutation(structuredClone(current ?? defaultWebFetchSettings())));
+        const next = parseWebFetchSettings(
+          mutation(structuredClone(current ?? defaultWebFetchSettings())),
+        );
         if (!next) throw new Error("Web page settings must be a supported version 1 document.");
         config.settings.webFetch = next;
         return structuredClone(config.settings);
@@ -1160,26 +1219,40 @@ export function createConfigStore(
     },
 
     /** Revision and nested appearance merge happen inside the settings lease. */
-    async updateAppControl(input: AppControlOperation, isCurrent: () => boolean, remote = false, authorize?: () => Promise<void>): Promise<AppSettings> {
+    async updateAppControl(
+      input: AppControlOperation,
+      isCurrent: () => boolean,
+      remote = false,
+      authorize?: () => Promise<void>,
+    ): Promise<AppSettings> {
       const operation = parseAppControlOperation(input);
-      if (operation.control === "memory.workspace") throw new Error("Workspace memory needs its workspace application service.");
+      if (operation.control === "memory.workspace")
+        throw new Error("Workspace memory needs its workspace application service.");
       const saved = await mutateSettings(async (config) => {
         await authorize?.();
         const state: AppControlState = { settings: runtimeSettingsFrom(config.settings) };
-        if (remote && state.settings.remoteAppControlsEnabled !== true) throw new Error("Chat controls from paired devices were disabled.");
-        if (!isCurrent() || appControlPolicy(state.settings) === "disabled") throw new Error("App control authority changed.");
-        if (appControlRevision(state, operation.control) !== operation.expectedRevision) throw new Error("Settings changed. Refresh this control.");
+        if (remote && state.settings.remoteAppControlsEnabled !== true)
+          throw new Error("Chat controls from paired devices were disabled.");
+        if (!isCurrent() || appControlPolicy(state.settings) === "disabled")
+          throw new Error("App control authority changed.");
+        if (appControlRevision(state, operation.control) !== operation.expectedRevision)
+          throw new Error("Settings changed. Refresh this control.");
         if (operation.control === "models.newChat") {
           const selection = parseNewChatModelValue(String(operation.value))!;
           // A level belongs to its model: another model starts without one.
-          if (config.settings.lastProviderId !== selection.providerId || config.settings.lastModel !== selection.model) {
+          if (
+            config.settings.lastProviderId !== selection.providerId ||
+            config.settings.lastModel !== selection.model
+          ) {
             delete config.settings.lastThinkingLevel;
           }
           config.settings.lastProviderId = selection.providerId;
           config.settings.lastModel = selection.model;
         } else if (operation.control === "appearance.theme") {
-          const current = config.settings.appearance === undefined
-            ? normalizeAppearanceConfig(undefined) : parseAppearanceConfig(config.settings.appearance);
+          const current =
+            config.settings.appearance === undefined
+              ? normalizeAppearanceConfig(undefined)
+              : parseAppearanceConfig(config.settings.appearance);
           // The same replacement Settings → Appearance makes when a theme is picked.
           const preset = operation.value as ThemePresetId;
           config.settings.appearance = parseAppearanceConfig({
@@ -1188,17 +1261,28 @@ export function createConfigStore(
             dark: getPresetVariant(preset, "dark"),
           });
         } else if (operation.control.startsWith("appearance.")) {
-          const current = config.settings.appearance === undefined
-            ? normalizeAppearanceConfig(undefined) : parseAppearanceConfig(config.settings.appearance);
+          const current =
+            config.settings.appearance === undefined
+              ? normalizeAppearanceConfig(undefined)
+              : parseAppearanceConfig(config.settings.appearance);
           const field = operation.control.slice("appearance.".length);
-          config.settings.appearance = parseAppearanceConfig({ ...current, [field]: operation.value });
+          config.settings.appearance = parseAppearanceConfig({
+            ...current,
+            [field]: operation.value,
+          });
         } else if (operation.control === "webSearch.enabled") {
           const raw = config.settings.webSearch;
           const current = parseWebSearchSettings(raw);
-          if (raw !== undefined && !current) throw new Error("Web Search settings need repair before changing them.");
-          config.settings.webSearch = normalizeWebSearchSettings({ ...(current ?? freshWebSearchSettings()), enabled: operation.value });
+          if (raw !== undefined && !current)
+            throw new Error("Web Search settings need repair before changing them.");
+          config.settings.webSearch = normalizeWebSearchSettings({
+            ...(current ?? freshWebSearchSettings()),
+            enabled: operation.value,
+          });
         } else {
-          config.settings[operation.control === "memory.enabled" ? "memoryEnabled" : "skillsEnabled"] = operation.value as boolean;
+          config.settings[
+            operation.control === "memory.enabled" ? "memoryEnabled" : "skillsEnabled"
+          ] = operation.value as boolean;
         }
         return structuredClone(config.settings);
       }, isCurrent);
@@ -1212,22 +1296,41 @@ export function createConfigStore(
       if (patch.compactionEngine !== undefined && !isCompactionEngine(patch.compactionEngine)) {
         throw new Error("Invalid compaction engine.");
       }
-      if (patch.cacheWarmingEnabled !== undefined && typeof patch.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
-      if (patch.longPromptCacheRetention !== undefined && typeof patch.longPromptCacheRetention !== "boolean") throw new Error("Invalid prompt cache lifetime setting.");
-      if (patch.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(patch.usageLimitWaitHours)) throw new Error("Invalid usage limit wait setting.");
-      if (patch.botMessaging !== undefined && typeof patch.botMessaging !== "boolean") throw new Error("Invalid Bot messaging setting.");
-      if (patch.childChats !== undefined && typeof patch.childChats !== "boolean") throw new Error("Invalid started chats setting.");
-      if (patch.botRoutinesGoAhead !== undefined && typeof patch.botRoutinesGoAhead !== "boolean") throw new Error("Invalid Bot routines setting.");
-      if (patch.approvalMode !== undefined && parseApprovalMode(patch.approvalMode) === undefined) throw new Error("Invalid approval mode.");
+      if (patch.cacheWarmingEnabled !== undefined && typeof patch.cacheWarmingEnabled !== "boolean")
+        throw new Error("Invalid cache warming setting.");
+      if (
+        patch.longPromptCacheRetention !== undefined &&
+        typeof patch.longPromptCacheRetention !== "boolean"
+      )
+        throw new Error("Invalid prompt cache lifetime setting.");
+      if (
+        patch.usageLimitWaitHours !== undefined &&
+        !isUsageLimitWaitHours(patch.usageLimitWaitHours)
+      )
+        throw new Error("Invalid usage limit wait setting.");
+      if (patch.botMessaging !== undefined && typeof patch.botMessaging !== "boolean")
+        throw new Error("Invalid Bot messaging setting.");
+      if (patch.childChats !== undefined && typeof patch.childChats !== "boolean")
+        throw new Error("Invalid started chats setting.");
+      if (patch.botRoutinesGoAhead !== undefined && typeof patch.botRoutinesGoAhead !== "boolean")
+        throw new Error("Invalid Bot routines setting.");
+      if (patch.approvalMode !== undefined && parseApprovalMode(patch.approvalMode) === undefined)
+        throw new Error("Invalid approval mode.");
       if (patch.spendingLimits !== undefined) {
         const spendingLimits = parseSpendingLimitsSettings(patch.spendingLimits);
         if (spendingLimits === undefined) throw new Error("Invalid spending limits.");
         patch = { ...patch, spendingLimits };
       }
       if (patch.compactionModelOverrides !== undefined) {
-        patch = { ...patch, compactionModelOverrides: parseCompactionModelOverrides(patch.compactionModelOverrides) };
+        patch = {
+          ...patch,
+          compactionModelOverrides: parseCompactionModelOverrides(patch.compactionModelOverrides),
+        };
       }
-      if (patch.lastThinkingLevel !== undefined && !isGenerationThinkingLevel(patch.lastThinkingLevel)) {
+      if (
+        patch.lastThinkingLevel !== undefined &&
+        !isGenerationThinkingLevel(patch.lastThinkingLevel)
+      ) {
         throw new Error("Invalid thinking level.");
       }
       if (Object.prototype.hasOwnProperty.call(patch, "agentSlider")) {
@@ -1262,7 +1365,8 @@ export function createConfigStore(
         if (Object.prototype.hasOwnProperty.call(patch, "webFetch")) {
           throw new Error("Web page settings change only through their own settings call.");
         }
-        approvalModeChanged = patch.approvalMode !== undefined && patch.approvalMode !== config.settings.approvalMode;
+        approvalModeChanged =
+          patch.approvalMode !== undefined && patch.approvalMode !== config.settings.approvalMode;
         const lastProviderId =
           typeof patch.lastProviderId === "string"
             ? (resolveProviderAlias(providerIdAliases, patch.lastProviderId) ??
@@ -1464,13 +1568,21 @@ export function createConfigStore(
      * overrides, so concurrent edits to other models are never lost. Stored
      * overrides that no longer validate are left for the user to repair.
      */
-    async setCompactionModelBudget(modelKey: string, budget: CompactionModelBudget | undefined): Promise<AppSettings> {
+    async setCompactionModelBudget(
+      modelKey: string,
+      budget: CompactionModelBudget | undefined,
+    ): Promise<AppSettings> {
       const saved = await mutateSettings((config) => {
         const stored = config.settings.compactionModelOverrides;
         let current: CompactionModelOverrides = {};
         if (stored !== undefined) {
-          try { current = parseCompactionModelOverrides(stored); }
-          catch { throw new Error("Model compaction budgets are invalid; repair settings.json before changing them."); }
+          try {
+            current = parseCompactionModelOverrides(stored);
+          } catch {
+            throw new Error(
+              "Model compaction budgets are invalid; repair settings.json before changing them.",
+            );
+          }
         }
         const next: Record<string, CompactionModelBudget> = { ...current };
         if (budget === undefined || Object.keys(budget).length === 0) delete next[modelKey];
@@ -1574,7 +1686,10 @@ export function createConfigStore(
     },
 
     /** Insert or update a workspace (upsert by id). */
-    async saveWorkspace(workspace: Workspace, assertCurrent?: (current: Workspace | undefined) => void | Promise<void>): Promise<Workspace> {
+    async saveWorkspace(
+      workspace: Workspace,
+      assertCurrent?: (current: Workspace | undefined) => void | Promise<void>,
+    ): Promise<Workspace> {
       // The Aiden assistant's threads live under this reserved id and it must
       // never resolve to a real folder: a workspace claiming it would hand the
       // assistant that folder's path and permission, and would cross-link its

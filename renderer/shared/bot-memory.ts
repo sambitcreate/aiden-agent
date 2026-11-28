@@ -9,7 +9,12 @@ export type BotMemoryTarget = "memory" | "user";
  * Agent's defaults; each view carries its own `limitChars`, so phones follow
  * whatever the host sets.
  */
-export const BOT_MEMORY_LIMITS = { memoryChars: 4_400, userChars: 2_750, entryChars: 500, maxEntries: 64 } as const;
+export const BOT_MEMORY_LIMITS = {
+  memoryChars: 4_400,
+  userChars: 2_750,
+  entryChars: 500,
+  maxEntries: 64,
+} as const;
 export const BOT_MEMORY_ENTRY_DELIMITER = "\n§\n";
 /** Conversation entry written by background review / compaction flush. */
 export const BOT_MEMORY_REVIEW_ENTRY_KIND = "aiden.memory-review";
@@ -21,7 +26,10 @@ export interface BotMemoryReviewEntryData {
   failed?: true;
 }
 /** `id` = first 16 hex of sha256(target + "\0" + text); content-addressed. */
-export interface BotMemoryEntry { id: string; text: string }
+export interface BotMemoryEntry {
+  id: string;
+  text: string;
+}
 export interface BotMemoryStoreView {
   entries: BotMemoryEntry[];
   usedChars: number;
@@ -43,14 +51,20 @@ export type BotMemoryEdit =
   | { kind: "replace"; target: BotMemoryTarget; entryId: string; text: string }
   | { kind: "remove"; target: BotMemoryTarget; entryId: string }
   | { kind: "clear" };
-export interface BotMemoryEditInput { botId: string; edit: BotMemoryEdit }
+export interface BotMemoryEditInput {
+  botId: string;
+  edit: BotMemoryEdit;
+}
 export type BotMemoryEditErrorCode = "entry_not_found" | "over_budget" | "blocked" | "invalid";
 export type BotMemoryEditResult =
   | { ok: true; view: BotMemoryView }
   | { ok: false; code: BotMemoryEditErrorCode; message: string; view: BotMemoryView };
-export interface BotMemoryChangedEvent { botId: string; revision: string }
+export interface BotMemoryChangedEvent {
+  botId: string;
+  revision: string;
+}
 export const BOT_MEMORY_CHANNELS = {
-  get: "bots:memory:get",       // invoke(botId) → BotMemoryView
-  edit: "bots:memory:edit",     // invoke(BotMemoryEditInput) → BotMemoryEditResult
+  get: "bots:memory:get", // invoke(botId) → BotMemoryView
+  edit: "bots:memory:edit", // invoke(BotMemoryEditInput) → BotMemoryEditResult
   changed: "bots:memory:changed", // push BotMemoryChangedEvent
 } as const;

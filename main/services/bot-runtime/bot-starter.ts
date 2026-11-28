@@ -41,7 +41,12 @@ export interface BotStarterDeps {
    * Create the Bot with exactly `botId` (the desktop default). `presetId` is
    * the template it came from; none for the first Bot.
    */
-  createBot(input: BotCreateInput, access: BotAccessUpdate | undefined, botId: string, presetId: string | undefined): Promise<BotDefinition>;
+  createBot(
+    input: BotCreateInput,
+    access: BotAccessUpdate | undefined,
+    botId: string,
+    presetId: string | undefined,
+  ): Promise<BotDefinition>;
   /**
    * Adds a template's routine to the Bot it just made, paused until the person
    * turns it on. Optional: a host without routines adds none.
@@ -93,13 +98,16 @@ export function createBotStarter(deps: BotStarterDeps): BotStarter {
       const botId = deps.mintBotId();
       await deps.reserveCreation(key, botId);
       const presetId = key.startsWith("preset:") ? key.slice("preset:".length) : undefined;
-      const bot = options.createBot && presetId !== undefined
-        ? await options.createBot(input, botId, presetId)
-        : await deps.createBot(input, options.access, botId, presetId);
+      const bot =
+        options.createBot && presetId !== undefined
+          ? await options.createBot(input, botId, presetId)
+          : await deps.createBot(input, options.access, botId, presetId);
       // A template's routine arrives paused; nothing runs until the person turns it on.
       const routine = presetId === undefined ? undefined : getBotPreset(presetId)?.suggestedRoutine;
       if (routine && deps.addPausedRoutine) {
-        await deps.addPausedRoutine(bot.id, routine).catch((error: unknown) => deps.onRoutineError?.(bot.id, error));
+        await deps
+          .addPausedRoutine(bot.id, routine)
+          .catch((error: unknown) => deps.onRoutineError?.(bot.id, error));
       }
       return bot;
     },
@@ -126,7 +134,8 @@ export function createBotStarter(deps: BotStarterDeps): BotStarter {
     if (owner) optionsByKey.set(key, options);
     try {
       const result = await make();
-      const introduced = result.created && options.introduce !== false ? await introduce(result.bot.id) : false;
+      const introduced =
+        result.created && options.introduce !== false ? await introduce(result.bot.id) : false;
       return { ...result, introduced };
     } finally {
       if (owner) optionsByKey.delete(key);
@@ -135,10 +144,14 @@ export function createBotStarter(deps: BotStarterDeps): BotStarter {
 
   return {
     startFromPreset(presetId, options = {}) {
-      return started(botPresetIdempotencyKey(presetId), options, () => create(presetId, options.version));
+      return started(botPresetIdempotencyKey(presetId), options, () =>
+        create(presetId, options.version),
+      );
     },
     startFirst(options = {}) {
-      return started(BOT_FIRST_BOT_KEY, options, () => createKeyed(BOT_FIRST_BOT_KEY, () => botFirstCreateInput()));
+      return started(BOT_FIRST_BOT_KEY, options, () =>
+        createKeyed(BOT_FIRST_BOT_KEY, () => botFirstCreateInput()),
+      );
     },
     async presetBots() {
       const found: Record<string, string> = {};

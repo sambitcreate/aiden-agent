@@ -30,10 +30,14 @@ export function useConnectionSetup(onSaved: () => void | Promise<void>) {
       const presetId = suggestion.setupEntry.presetId;
       const state = presets.data?.find((entry) => entry.preset.id === presetId);
       if (!state) {
-        toast.error(`${suggestion.name} isn't available to connect right now. Try again in a moment.`);
+        toast.error(
+          `${suggestion.name} isn't available to connect right now. Try again in a moment.`,
+        );
         return false;
       }
-      const server = servers.data?.find((entry) => entry.id === state.serverId && entry.presetId === presetId);
+      const server = servers.data?.find(
+        (entry) => entry.id === state.serverId && entry.presetId === presetId,
+      );
       setTarget({ state, ...(server ? { server } : {}) });
       return true;
     },
@@ -48,7 +52,9 @@ export function useConnectionSetup(onSaved: () => void | Promise<void>) {
     (pluginId: string): boolean => {
       const suggestion = connectionSuggestionFor(pluginId);
       if (suggestion?.setupEntry.kind !== "mcp-preset") return false;
-      const state = presets.data?.find((entry) => entry.preset.id === suggestion.setupEntry.presetId);
+      const state = presets.data?.find(
+        (entry) => entry.preset.id === suggestion.setupEntry.presetId,
+      );
       return Boolean(state?.configured && state.enabled && state.ready);
     },
     [presets.data],

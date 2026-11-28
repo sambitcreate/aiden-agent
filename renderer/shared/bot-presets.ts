@@ -206,13 +206,18 @@ export const BOT_FIRST_BOT_KEY = "first-bot";
 
 /** A random colour and shape. `random` returns [0, 1). */
 export function randomBotAvatar(random: () => number = Math.random): BotAvatarAppearance {
-  const pick = <Value,>(values: readonly Value[]) => values[Math.min(values.length - 1, Math.floor(random() * values.length))]!;
+  const pick = <Value>(values: readonly Value[]) =>
+    values[Math.min(values.length - 1, Math.floor(random() * values.length))]!;
   return { ...DEFAULT_BOT_AVATAR, color: pick(BOT_AVATAR_COLORS), shape: pick(BOT_AVATAR_SHAPES) };
 }
 
 /** The silent first Bot: "Chief", a random look, no job yet. */
 export function botFirstCreateInput(random: () => number = Math.random): BotCreateInput {
-  return { name: BOT_FIRST_BOT_NAME, instructions: BOT_STARTER_INSTRUCTIONS, avatar: randomBotAvatar(random) };
+  return {
+    name: BOT_FIRST_BOT_NAME,
+    instructions: BOT_STARTER_INSTRUCTIONS,
+    avatar: randomBotAvatar(random),
+  };
 }
 
 /** Persistence port for keyed creation. `createBot` must store the creation key. */
@@ -228,7 +233,10 @@ export interface BotPresetCreateResult {
 }
 
 /** `version` is the template version the person was shown; another refuses. */
-export type CreateBotFromPreset = (presetId: string, version?: number) => Promise<BotPresetCreateResult>;
+export type CreateBotFromPreset = (
+  presetId: string,
+  version?: number,
+) => Promise<BotPresetCreateResult>;
 
 /** The message a stale template preview gets. */
 export const BOT_TEMPLATE_STALE_MESSAGE = "This template changed. Close it and open it again.";
@@ -268,7 +276,8 @@ export function createBotPresetCreator(store: BotPresetStore): CreateBotFromPres
   return async (presetId, version) => {
     const preset = getBotPreset(presetId);
     if (!preset) throw new Error("That starter Bot isn't available.");
-    if (version !== undefined && version !== preset.version) throw new Error(BOT_TEMPLATE_STALE_MESSAGE);
+    if (version !== undefined && version !== preset.version)
+      throw new Error(BOT_TEMPLATE_STALE_MESSAGE);
     return create(botPresetIdempotencyKey(preset.id), () => botPresetCreateInput(preset));
   };
 }

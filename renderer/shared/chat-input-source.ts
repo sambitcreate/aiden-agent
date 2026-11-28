@@ -16,7 +16,10 @@ export function parseChatInputSource(value: unknown): ChatInputSourceV1 | undefi
 }
 
 /** Strict form for IPC envelopes: absent is fine, anything but "voice" is refused. */
-export function parseChatInputSourceStrict(value: unknown, label = "input source"): ChatInputSourceV1 | undefined {
+export function parseChatInputSourceStrict(
+  value: unknown,
+  label = "input source",
+): ChatInputSourceV1 | undefined {
   if (value === undefined) return undefined;
   const parsed = parseChatInputSource(value);
   if (!parsed) throw new Error(`Invalid ${label}.`);

@@ -17,14 +17,14 @@ import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import { CHAT_VOICE_INPUT_LABEL, type ChatInputSourceV1 } from "../shared/chat-input-source";
 import { GrabbedElementChips } from "./grabbed-element-chip";
 import { MessageAttachments } from "./message-attachments";
-import {
-  describeRichLink,
-  MAX_RICH_LINKS_PER_MESSAGE,
-  tokenizeWebLinks,
-} from "../lib/rich-link";
+import { describeRichLink, MAX_RICH_LINKS_PER_MESSAGE, tokenizeWebLinks } from "../lib/rich-link";
 import { RichLink, RichLinkBudget } from "./rich-link";
 import { cn } from "../lib/ui-utils";
-import { USER_MESSAGE_FOLD_LINES, userMessageFolds, userMessageMayFold } from "../lib/user-message-fold";
+import {
+  USER_MESSAGE_FOLD_LINES,
+  userMessageFolds,
+  userMessageMayFold,
+} from "../lib/user-message-fold";
 
 export interface MessageBubbleProps {
   imageScope?: string;
@@ -97,38 +97,38 @@ export function MessageBubble({
       <RichLinkBudget limit={MAX_RICH_LINKS_PER_MESSAGE}>
         <div className="flex justify-end">
           <div className="group flex min-w-0 max-w-[80%] flex-col items-end gap-2">
-          {skill ? (
-            <div
-              className="flex max-w-full items-center gap-1.5 rounded-lg bg-status-accent-surface px-2 py-1 text-small text-secondary"
-              aria-label={`${skill.name}, ${skill.source} skill`}
-            >
-              <AidenIcon aria-hidden="true" className="size-3.5 shrink-0 text-accent-text" />
-              <span className="truncate font-medium text-primary">{skill.name}</span>
-              <span className="text-mini capitalize text-tertiary">{skill.source}</span>
-            </div>
-          ) : null}
-          {grabbedElements && grabbedElements.length > 0 ? (
-            <GrabbedElementChips
-              elements={grabbedElements}
-              attachments={attachments}
-              mode="transcript"
-            />
-          ) : null}
-          {attachments && attachments.length > 0 ? (
-            <MessageAttachments attachments={attachments} role="user" />
-          ) : null}
-          {content ? <UserMessageBody content={content} showCopy={showCopy} /> : null}
-          {inputSource === "voice" ? <VoiceInputLabel /> : null}
-          {fromLeadChat ? <LeadChatLabel label={fromLeadChat} /> : null}
-          {fork ? (
-            <div className="flex items-center gap-0.5">
-              <ForkMessageButton
-                action={fork}
-                kind="edit"
-                className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+            {skill ? (
+              <div
+                className="flex max-w-full items-center gap-1.5 rounded-lg bg-status-accent-surface px-2 py-1 text-small text-secondary"
+                aria-label={`${skill.name}, ${skill.source} skill`}
+              >
+                <AidenIcon aria-hidden="true" className="size-3.5 shrink-0 text-accent-text" />
+                <span className="truncate font-medium text-primary">{skill.name}</span>
+                <span className="text-mini capitalize text-tertiary">{skill.source}</span>
+              </div>
+            ) : null}
+            {grabbedElements && grabbedElements.length > 0 ? (
+              <GrabbedElementChips
+                elements={grabbedElements}
+                attachments={attachments}
+                mode="transcript"
               />
-            </div>
-          ) : null}
+            ) : null}
+            {attachments && attachments.length > 0 ? (
+              <MessageAttachments attachments={attachments} role="user" />
+            ) : null}
+            {content ? <UserMessageBody content={content} showCopy={showCopy} /> : null}
+            {inputSource === "voice" ? <VoiceInputLabel /> : null}
+            {fromLeadChat ? <LeadChatLabel label={fromLeadChat} /> : null}
+            {fork ? (
+              <div className="flex items-center gap-0.5">
+                <ForkMessageButton
+                  action={fork}
+                  kind="edit"
+                  className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+                />
+              </div>
+            ) : null}
           </div>
         </div>
       </RichLinkBudget>
@@ -139,33 +139,33 @@ export function MessageBubble({
     <RichLinkBudget limit={MAX_RICH_LINKS_PER_MESSAGE}>
       <div className="group/reply flex w-full">
         <div className="flex min-w-0 flex-1 flex-col gap-2">
-        {attachments && attachments.length > 0 ? (
-          <MessageAttachments attachments={attachments} role="assistant" />
-        ) : null}
-        {revealed ? (
-          <StreamingMarkdownReveal
-            imageScope={imageScope}
-            content={content}
-            replayedTextLength={replayedTextLength}
-            // Text that settled or whose turn ended shows in full in the same
-            // tree; text a tool step closed still joins at the next release.
-            complete={streaming ? Boolean(streamComplete) : true}
-            closed={Boolean(streaming && textClosed)}
-            onHandoffComplete={streamComplete ? onStreamHandoffComplete : undefined}
-            richLinks
-          />
-        ) : (
-          <Markdown content={content} richLinks imageScope={imageScope} />
-        )}
-        {content && showCopy ? (
-          <MessageActions
-            copyText={copyText ?? content}
-            readAloud={readAloud}
-            hidden={Boolean(streaming && !streamComplete)}
-            footer={footer}
-            fork={streaming ? undefined : fork}
-          />
-        ) : null}
+          {attachments && attachments.length > 0 ? (
+            <MessageAttachments attachments={attachments} role="assistant" />
+          ) : null}
+          {revealed ? (
+            <StreamingMarkdownReveal
+              imageScope={imageScope}
+              content={content}
+              replayedTextLength={replayedTextLength}
+              // Text that settled or whose turn ended shows in full in the same
+              // tree; text a tool step closed still joins at the next release.
+              complete={streaming ? Boolean(streamComplete) : true}
+              closed={Boolean(streaming && textClosed)}
+              onHandoffComplete={streamComplete ? onStreamHandoffComplete : undefined}
+              richLinks
+            />
+          ) : (
+            <Markdown content={content} richLinks imageScope={imageScope} />
+          )}
+          {content && showCopy ? (
+            <MessageActions
+              copyText={copyText ?? content}
+              readAloud={readAloud}
+              hidden={Boolean(streaming && !streamComplete)}
+              footer={footer}
+              fork={streaming ? undefined : fork}
+            />
+          ) : null}
         </div>
       </div>
     </RichLinkBudget>
@@ -175,7 +175,10 @@ export function MessageBubble({
 /** A small, quiet mark under a message the chat that started this one sent. */
 function LeadChatLabel({ label }: { label: string }) {
   return (
-    <div data-message-from-lead-chat className="-mt-1 flex min-w-0 max-w-full items-center gap-1 px-1 text-mini text-tertiary">
+    <div
+      data-message-from-lead-chat
+      className="-mt-1 flex min-w-0 max-w-full items-center gap-1 px-1 text-mini text-tertiary"
+    >
       <MessagesSquare aria-hidden="true" className="size-3 shrink-0" />
       <span className="min-w-0 truncate">{label}</span>
     </div>
@@ -284,7 +287,9 @@ function UserMessageBody({ content, showCopy }: { content: string; showCopy: boo
       const bubble = bubbleRef.current;
       const scroller = bubble?.closest("[data-scroll-top]");
       restoreAfterCollapseRef.current = Boolean(
-        bubble && scroller && bubble.getBoundingClientRect().top < scroller.getBoundingClientRect().top,
+        bubble &&
+        scroller &&
+        bubble.getBoundingClientRect().top < scroller.getBoundingClientRect().top,
       );
     }
     setExpanded((open) => !open);
@@ -325,7 +330,10 @@ function UserMessageBody({ content, showCopy }: { content: string; showCopy: boo
           >
             <ChevronDown
               aria-hidden="true"
-              className={cn("size-3.5 transition-transform duration-150 ease-out", expanded && "rotate-180")}
+              className={cn(
+                "size-3.5 transition-transform duration-150 ease-out",
+                expanded && "rotate-180",
+              )}
             />
           </Button>
         </div>
@@ -355,9 +363,7 @@ function UserMessageContent({ content }: { content: string }) {
       {segments.map((segment) => {
         if (segment.kind === "text") return segment.text;
         const descriptor = describeRichLink(segment.href);
-        const canRenderRichLink = Boolean(
-          descriptor && richLinkCount < MAX_RICH_LINKS_PER_MESSAGE,
-        );
+        const canRenderRichLink = Boolean(descriptor && richLinkCount < MAX_RICH_LINKS_PER_MESSAGE);
         if (canRenderRichLink) richLinkCount += 1;
         const key = `${segment.start}:${segment.end}`;
         if (descriptor && canRenderRichLink) {
@@ -394,7 +400,11 @@ function UnrenderableMessage({ content }: { content: string }) {
       <Text variant="small-strong" color="red">
         This message could not be formatted
       </Text>
-      <Text variant="small" color="secondary" className="mt-0.5 block select-text whitespace-pre-wrap">
+      <Text
+        variant="small"
+        color="secondary"
+        className="mt-0.5 block select-text whitespace-pre-wrap"
+      >
         {content}
       </Text>
     </Callout>

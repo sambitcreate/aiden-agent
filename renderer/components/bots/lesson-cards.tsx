@@ -20,7 +20,9 @@ export function LessonProposalCard({
   const [answered, setAnswered] = React.useState<"active" | "dismissed" | null>(null);
   const [busy, setBusy] = React.useState(false);
   const settled = status !== "pending" ? status : answered;
-  const title = lesson.routineName ? `I learned something about ${lesson.routineName}` : "I learned something";
+  const title = lesson.routineName
+    ? `I learned something about ${lesson.routineName}`
+    : "I learned something";
   const respond = async (decision: "keep" | "dismiss") => {
     if (busy) return;
     setBusy(true);
@@ -35,7 +37,10 @@ export function LessonProposalCard({
   };
   if (settled) {
     return settled === "active" ? (
-      <ReceiptLine icon={<Check className="text-status-green" />} text={`Added lesson: ${lesson.lesson}`} />
+      <ReceiptLine
+        icon={<Check className="text-status-green" />}
+        text={`Added lesson: ${lesson.lesson}`}
+      />
     ) : (
       <ReceiptLine icon={<Lightbulb />} text={`Not added: ${lesson.lesson}`} />
     );
@@ -51,13 +56,23 @@ export function LessonProposalCard({
       onNotNow={() => void respond("dismiss")}
     >
       <p className="text-primary">{lesson.lesson}</p>
-      {lesson.runs ? <p className="mt-0.5">{`Based on ${lesson.runs} recent run${lesson.runs === 1 ? "" : "s"}`}</p> : null}
+      {lesson.runs ? (
+        <p className="mt-0.5">{`Based on ${lesson.runs} recent run${lesson.runs === 1 ? "" : "s"}`}</p>
+      ) : null}
     </SuggestionCard>
   );
 }
 
 /** "Learned: … · Undo" or "Tidied memory · Undo": a receipt line. */
-export function LearnedLine({ text, undone, onUndo }: { text: string; undone: boolean; onUndo(): Promise<void> }) {
+export function LearnedLine({
+  text,
+  undone,
+  onUndo,
+}: {
+  text: string;
+  undone: boolean;
+  onUndo(): Promise<void>;
+}) {
   const [busy, setBusy] = React.useState(false);
   const [done, setDone] = React.useState(false);
   return (
@@ -72,7 +87,12 @@ export function LearnedLine({ text, undone, onUndo }: { text: string; undone: bo
                 disabled: busy,
                 onClick: () => {
                   setBusy(true);
-                  void onUndo().then(() => setDone(true), () => undefined).finally(() => setBusy(false));
+                  void onUndo()
+                    .then(
+                      () => setDone(true),
+                      () => undefined,
+                    )
+                    .finally(() => setBusy(false));
                 },
               },
             ]

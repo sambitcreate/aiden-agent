@@ -49,37 +49,74 @@ test("legacy messages render unchanged without provenance", () => {
 
 test("a message Aiden Live sent shows By voice under it in the transcript; typed ones do not", () => {
   const markup = renderToStaticMarkup(
-    <MessageList chatId="chat-1" messages={[
-      { id: "voice-1", role: "user", content: "Check the reset page too.", inputSource: "voice", createdAt: 1 },
-      { id: "typed-1", role: "user", content: "And the login page.", createdAt: 2 },
-    ]} streamingText={null} streamingReasoning={null} timeline={null}
-      liveSubagents={[]} subagentsEnabled={false} onOpenSubagent={() => undefined}
-      agentActivity={null} error={null} />,
+    <MessageList
+      chatId="chat-1"
+      messages={[
+        {
+          id: "voice-1",
+          role: "user",
+          content: "Check the reset page too.",
+          inputSource: "voice",
+          createdAt: 1,
+        },
+        { id: "typed-1", role: "user", content: "And the login page.", createdAt: 2 },
+      ]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
   );
   assert.equal(markup.match(/By voice/gu)?.length, 1);
   const voice = markup.indexOf("Check the reset page too.");
   const label = markup.indexOf("By voice");
   const typed = markup.indexOf("And the login page.");
-  assert.ok(voice < label && label < typed, "the label sits with the voice message, not the typed one");
+  assert.ok(
+    voice < label && label < typed,
+    "the label sits with the voice message, not the typed one",
+  );
 });
 
 test("in a chat another chat started, messages that chat sent say where they came from; the person's do not", () => {
   const messages = [
-    { id: "lead-1", role: "user" as const, content: "Run the test suite and report.", fromLeadChat: true as const, createdAt: 1 },
+    {
+      id: "lead-1",
+      role: "user" as const,
+      content: "Run the test suite and report.",
+      fromLeadChat: true as const,
+      createdAt: 1,
+    },
     { id: "typed-1", role: "user" as const, content: "Also check lint.", createdAt: 2 },
   ];
   const list = (leadChatLabel?: string) =>
     renderToStaticMarkup(
-      <MessageList chatId="chat-1" {...(leadChatLabel ? { leadChatLabel } : {})} messages={messages} streamingText={null} streamingReasoning={null} timeline={null}
-        liveSubagents={[]} subagentsEnabled={false} onOpenSubagent={() => undefined}
-        agentActivity={null} error={null} />,
+      <MessageList
+        chatId="chat-1"
+        {...(leadChatLabel ? { leadChatLabel } : {})}
+        messages={messages}
+        streamingText={null}
+        streamingReasoning={null}
+        timeline={null}
+        liveSubagents={[]}
+        subagentsEnabled={false}
+        onOpenSubagent={() => undefined}
+        agentActivity={null}
+        error={null}
+      />,
     );
   const markup = list(fromLeadChatLabel("Release prep"));
   assert.equal(markup.match(/From “Release prep”/gu)?.length, 1);
   const sent = markup.indexOf("Run the test suite and report.");
   const label = markup.indexOf("From “Release prep”");
   const typed = markup.indexOf("Also check lint.");
-  assert.ok(sent < label && label < typed, "the label sits with the lead's message, not the person's");
+  assert.ok(
+    sent < label && label < typed,
+    "the label sits with the lead's message, not the person's",
+  );
   // A lead chat that was deleted is still named as the chat that started this one.
   assert.match(list(fromLeadChatLabel(undefined)), /From the chat that started this one/u);
   // Without lineage (an ordinary chat), nothing is labelled.
@@ -102,11 +139,15 @@ test("a long prompt folds behind a chevron but keeps its whole text and one full
 });
 
 test("a short prompt shows no chevron, and a surface with its own copy action can drop the bubble's", () => {
-  const short = renderToStaticMarkup(<MessageBubble role="user" content="Say hello to my Umbrel." />);
+  const short = renderToStaticMarkup(
+    <MessageBubble role="user" content="Say hello to my Umbrel." />,
+  );
   assert.doesNotMatch(short, /data-user-message-fold-toggle|data-folded/u);
   assert.equal(short.match(/aria-label="Copy message"/gu)?.length, 1);
   // Bot rows copy from their own message menu, so the bubble adds no second Copy.
-  const bot = renderToStaticMarkup(<MessageBubble role="user" content="Say hello." showCopy={false} />);
+  const bot = renderToStaticMarkup(
+    <MessageBubble role="user" content="Say hello." showCopy={false} />,
+  );
   assert.doesNotMatch(bot, /Copy message/u);
 });
 
@@ -118,7 +159,10 @@ test("assistant links show provider context while keeping their original anchors
   assert.match(markup, /data-rich-link-provider="github"/u);
   assert.match(markup, /data-rich-link-resource="pull-request"/u);
   assert.match(markup, /GitHub Pull request/u);
-  assert.match(markup, /href="https:\/\/github\.com\/openai\/codex\/pull\/247\?utm_source=test#files"/u);
+  assert.match(
+    markup,
+    /href="https:\/\/github\.com\/openai\/codex\/pull\/247\?utm_source=test#files"/u,
+  );
 });
 
 test("unsupported assistant links and links in code remain ordinary", () => {
@@ -165,24 +209,71 @@ test("one message renders at most fifty rich preview triggers", () => {
 
 test("saved reasoning disclosures stay in order around tools and prose", () => {
   const timeline: GenerationTimeline = {
-    version: 3, generationId: "stream-1", status: "completed", startedAt: 1, finishedAt: 5,
+    version: 3,
+    generationId: "stream-1",
+    status: "completed",
+    startedAt: 1,
+    finishedAt: 5,
     steps: [
-      { id: "think-1", order: 0, kind: "thinking", startedAt: 1, updatedAt: 2,
-        finishedAt: 2, contentOffset: 0, reasoningStartOffset: 0, reasoningEndOffset: 5 },
-      { id: "tool-1", order: 1, kind: "tool", toolCallId: "call-1", toolName: "read_file",
-        label: "Read file", status: "completed", startedAt: 2, updatedAt: 3,
-        finishedAt: 3, contentOffset: 0 },
-      { id: "think-2", order: 2, kind: "thinking", startedAt: 3, updatedAt: 4,
-        finishedAt: 4, contentOffset: 7, reasoningStartOffset: 7, reasoningEndOffset: 13 },
+      {
+        id: "think-1",
+        order: 0,
+        kind: "thinking",
+        startedAt: 1,
+        updatedAt: 2,
+        finishedAt: 2,
+        contentOffset: 0,
+        reasoningStartOffset: 0,
+        reasoningEndOffset: 5,
+      },
+      {
+        id: "tool-1",
+        order: 1,
+        kind: "tool",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        label: "Read file",
+        status: "completed",
+        startedAt: 2,
+        updatedAt: 3,
+        finishedAt: 3,
+        contentOffset: 0,
+      },
+      {
+        id: "think-2",
+        order: 2,
+        kind: "thinking",
+        startedAt: 3,
+        updatedAt: 4,
+        finishedAt: 4,
+        contentOffset: 7,
+        reasoningStartOffset: 7,
+        reasoningEndOffset: 13,
+      },
     ],
   };
   const markup = renderToStaticMarkup(
-    <MessageList chatId="chat-1" messages={[{
-      id: "assistant-1", role: "assistant", content: "Before.After.", reasoning: "First\n\nSecond",
-      timeline, createdAt: 1,
-    }]} streamingText={null} streamingReasoning={null} timeline={null}
-      liveSubagents={[]} subagentsEnabled={false} onOpenSubagent={() => undefined}
-      agentActivity={null} error={null} />,
+    <MessageList
+      chatId="chat-1"
+      messages={[
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "Before.After.",
+          reasoning: "First\n\nSecond",
+          timeline,
+          createdAt: 1,
+        },
+      ]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
   );
   const thoughtPositions = [...markup.matchAll(/reasoning-surface/gu)].map((match) => match.index);
   assert.equal(thoughtPositions.length, 2);
@@ -208,7 +299,14 @@ test("a settled response carries a turn footer; the live response does not", () 
             version: 1,
             startedAt: 10_000,
             finishedAt: 22_400,
-            usage: { input: 1_200, output: 830, cacheRead: 11_200, cacheWrite: 0, total: 13_230, requests: 2 },
+            usage: {
+              input: 1_200,
+              output: 830,
+              cacheRead: 11_200,
+              cacheWrite: 0,
+              total: 13_230,
+              requests: 2,
+            },
           },
         },
       ]}
@@ -231,14 +329,19 @@ test("a settled response carries a turn footer; the live response does not", () 
   assert.match(footer, /12s/u);
   assert.match(footer, /claude-sonnet-4-5/u);
   assert.match(footer, /12\.4k in · 830 out/u);
-  assert.match(footer, /Response details: Took 12s, Model claude-sonnet-4-5, 12,400 input tokens, 11,200 from cache, 830 output tokens across 2 requests\./u);
+  assert.match(
+    footer,
+    /Response details: Took 12s, Model claude-sonnet-4-5, 12,400 input tokens, 11,200 from cache, 830 output tokens across 2 requests\./u,
+  );
 });
 
 test("a response with no known facts renders no empty footer", () => {
   const markup = renderToStaticMarkup(
     <MessageList
       chatId="chat-1"
-      messages={[{ id: "assistant-1", role: "assistant", content: "Imported answer.", createdAt: 1 }]}
+      messages={[
+        { id: "assistant-1", role: "assistant", content: "Imported answer.", createdAt: 1 },
+      ]}
       streamingText={null}
       streamingReasoning={null}
       timeline={null}
@@ -613,7 +716,10 @@ test("a placed HTML artifact renders between the prose around its tool call", ()
   assert.equal(placedMarkup.match(/data-html-artifact="media-placed"/gu)?.length, 1);
 
   const legacyMarkup = render(false);
-  assert.ok(legacyMarkup.indexOf('data-html-artifact="media-placed"') > legacyMarkup.indexOf("After chart."));
+  assert.ok(
+    legacyMarkup.indexOf('data-html-artifact="media-placed"') >
+      legacyMarkup.indexOf("After chart."),
+  );
   assert.equal(legacyMarkup.match(/data-html-artifact="media-placed"/gu)?.length, 1);
 });
 
@@ -898,46 +1004,103 @@ test("persisted assistant failure renders once with fixed private-safe copy", ()
   assert.match(markup, /after retrying/iu);
 });
 
-
 const readAloud = {
-  active: true, phase: "playing" as const, omissions: ["Code blocks skipped"],
-  onActivate: () => undefined, onStop: () => undefined, onTogglePause: () => undefined,
+  active: true,
+  phase: "playing" as const,
+  omissions: ["Code blocks skipped"],
+  onActivate: () => undefined,
+  onStop: () => undefined,
+  onTogglePause: () => undefined,
 };
 
 test("read aloud is a response footer action after copy, never a user or code-copy action", () => {
-  const assistant = renderToStaticMarkup(<MessageBubble role="assistant" content="Answer" readAloud={readAloud} />);
-  assert.ok(assistant.indexOf('aria-label="Copy message"') < assistant.indexOf('aria-label="Stop reading aloud"'));
+  const assistant = renderToStaticMarkup(
+    <MessageBubble role="assistant" content="Answer" readAloud={readAloud} />,
+  );
+  assert.ok(
+    assistant.indexOf('aria-label="Copy message"') <
+      assistant.indexOf('aria-label="Stop reading aloud"'),
+  );
   assert.match(assistant, /aria-label="Pause reading aloud"/u);
   assert.match(assistant, /Code blocks skipped/u);
   assert.match(assistant, /focus-visible:outline-focus-ring/u);
   assert.doesNotMatch(assistant, /1 section skipped/u);
-  const user = renderToStaticMarkup(<MessageBubble role="user" content="Question" readAloud={readAloud} />);
+  const user = renderToStaticMarkup(
+    <MessageBubble role="user" content="Question" readAloud={readAloud} />,
+  );
   assert.doesNotMatch(user, /reading aloud/u);
-  const code = renderToStaticMarkup(<MessageBubble role="assistant" content={"```ts\nconst a = 1;\n```"} />);
+  const code = renderToStaticMarkup(
+    <MessageBubble role="assistant" content={"```ts\nconst a = 1;\n```"} />,
+  );
   assert.doesNotMatch(code, /reading aloud/u);
 });
 
 test("only the selected latest response tail has a speaker, with or without a timeline", () => {
   for (const withTimeline of [false, true]) {
-    const markup = renderToStaticMarkup(<MessageList chatId="chat-1" messages={[
-      { id: "old", role: "assistant", content: "Historical", createdAt: 1 },
-      { id: "user", role: "user", content: "Question", createdAt: 2 },
-      { id: "latest", role: "assistant", content: "Before.After.", createdAt: 3,
-        ...(withTimeline ? { timeline: { version: 3 as const, generationId: "g", status: "completed" as const,
-          startedAt: 1, finishedAt: 3, steps: [{ id: "tool", order: 0, kind: "tool" as const,
-          toolCallId: "call", toolName: "read_file", label: "Read file", status: "completed" as const,
-          startedAt: 1, updatedAt: 2, finishedAt: 2, contentOffset: 7 }] } } : {}) },
-    ]} streamingText={null} streamingReasoning={null} timeline={null} liveSubagents={[]}
-      subagentsEnabled={false} onOpenSubagent={() => undefined} agentActivity={null} error={null}
-      readAloudMessageId="latest" readAloud={readAloud} />);
+    const markup = renderToStaticMarkup(
+      <MessageList
+        chatId="chat-1"
+        messages={[
+          { id: "old", role: "assistant", content: "Historical", createdAt: 1 },
+          { id: "user", role: "user", content: "Question", createdAt: 2 },
+          {
+            id: "latest",
+            role: "assistant",
+            content: "Before.After.",
+            createdAt: 3,
+            ...(withTimeline
+              ? {
+                  timeline: {
+                    version: 3 as const,
+                    generationId: "g",
+                    status: "completed" as const,
+                    startedAt: 1,
+                    finishedAt: 3,
+                    steps: [
+                      {
+                        id: "tool",
+                        order: 0,
+                        kind: "tool" as const,
+                        toolCallId: "call",
+                        toolName: "read_file",
+                        label: "Read file",
+                        status: "completed" as const,
+                        startedAt: 1,
+                        updatedAt: 2,
+                        finishedAt: 2,
+                        contentOffset: 7,
+                      },
+                    ],
+                  },
+                }
+              : {}),
+          },
+        ]}
+        streamingText={null}
+        streamingReasoning={null}
+        timeline={null}
+        liveSubagents={[]}
+        subagentsEnabled={false}
+        onOpenSubagent={() => undefined}
+        agentActivity={null}
+        error={null}
+        readAloudMessageId="latest"
+        readAloud={readAloud}
+      />,
+    );
     assert.equal((markup.match(/aria-label="Stop reading aloud"/gu) ?? []).length, 1);
     assert.ok(markup.indexOf('aria-label="Stop reading aloud"') > markup.indexOf("After."));
   }
 });
 
 test("paused speech keeps both Resume and Stop available", () => {
-  const markup = renderToStaticMarkup(<MessageBubble role="assistant" content="Answer"
-    readAloud={{ ...readAloud, phase: "paused" }} />);
+  const markup = renderToStaticMarkup(
+    <MessageBubble
+      role="assistant"
+      content="Answer"
+      readAloud={{ ...readAloud, phase: "paused" }}
+    />,
+  );
   assert.match(markup, /aria-label="Resume reading aloud"/u);
   assert.match(markup, /aria-label="Stop reading aloud"/u);
   assert.match(markup, /data-active="true"/u);
@@ -959,7 +1122,9 @@ test("a live generation error is announced as an alert with its reason", () => {
     />,
   );
 
-  const alert = markup.match(/<[^>]*role="alert"[^>]*>([\s\S]*?)The model server closed the connection\./u);
+  const alert = markup.match(
+    /<[^>]*role="alert"[^>]*>([\s\S]*?)The model server closed the connection\./u,
+  );
   assert.ok(alert, "the failure reason sits inside the alert region");
   assert.match(alert[0], /Generation failed/u);
 });
@@ -995,7 +1160,10 @@ test("settled turns offer fork actions only when the chat can fork", () => {
   assert.ok(forkAt < enabled.indexOf("Second question"));
   assert.doesNotMatch(enabled, /aria-disabled="true"[^>]*data-fork-action/u);
 
-  const busy = render({ onFork: () => undefined, forkDisabledReason: "Finish the current response" });
+  const busy = render({
+    onFork: () => undefined,
+    forkDisabledReason: "Finish the current response",
+  });
   assert.equal((busy.match(/aria-disabled="true"/gu) ?? []).length, 3);
   assert.equal((busy.match(/title="Finish the current response"/gu) ?? []).length, 3);
 
@@ -1008,17 +1176,33 @@ test("settled replies without prose still offer Fork from here", () => {
     generationId: "generation-tool-only",
     status: "completed",
     startedAt: 1,
-    steps: [{
-      id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "read_file",
-      label: "Read file", status: "completed", startedAt: 1, updatedAt: 2, finishedAt: 2,
-    }],
+    steps: [
+      {
+        id: "tool-1",
+        order: 0,
+        kind: "tool",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        label: "Read file",
+        status: "completed",
+        startedAt: 1,
+        updatedAt: 2,
+        finishedAt: 2,
+      },
+    ],
   };
   const markup = renderToStaticMarkup(
     <MessageList
       chatId="chat-1"
       messages={[
         { id: "user-1", role: "user", content: "Draw it", createdAt: 1 },
-        { id: "assistant-image", role: "assistant", content: "", createdAt: 2, attachments: [imageAttachment()] },
+        {
+          id: "assistant-image",
+          role: "assistant",
+          content: "",
+          createdAt: 2,
+          attachments: [imageAttachment()],
+        },
         { id: "user-2", role: "user", content: "Check the file", createdAt: 3 },
         { id: "assistant-tool", role: "assistant", content: "", createdAt: 4, timeline: toolOnly },
       ]}
@@ -1055,7 +1239,10 @@ test("a fork's summary card sits after its last copied message", () => {
       onOpenSubagent={() => undefined}
       agentActivity={null}
       error={null}
-      forkSummary={{ afterMessageId: "assistant-1", node: <aside data-testid="fork-summary">Summary</aside> }}
+      forkSummary={{
+        afterMessageId: "assistant-1",
+        node: <aside data-testid="fork-summary">Summary</aside>,
+      }}
     />,
   );
   const card = markup.indexOf('data-testid="fork-summary"');
@@ -1100,6 +1287,14 @@ test("user messages render read-only grabbed element chips and filter linked gra
   assert.match(markup, /data-grabbed-element-chip="el-hero"/u);
   assert.match(markup, /&lt;LandingHeroClient \/&gt;/u);
   assert.doesNotMatch(markup, /data-grabbed-element-remove/u, "transcript chip is read-only");
-  assert.doesNotMatch(markup, /data-attachment-preview-id="grab-thumb_el-hero"/u, "linked thumbnail does not duplicate as photo card");
-  assert.match(markup, /data-attachment-preview-id="user-photo-1"/u, "ordinary user photo stays visible");
+  assert.doesNotMatch(
+    markup,
+    /data-attachment-preview-id="grab-thumb_el-hero"/u,
+    "linked thumbnail does not duplicate as photo card",
+  );
+  assert.match(
+    markup,
+    /data-attachment-preview-id="user-photo-1"/u,
+    "ordinary user photo stays visible",
+  );
 });

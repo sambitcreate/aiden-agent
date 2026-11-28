@@ -4,7 +4,11 @@ import {
   parseAskUserQuestionRecap,
   type AskUserQuestionRecapV1,
 } from "./ask-user-question.js";
-import { WEB_FETCH_TOOL_NAME, parseWebExtractRecap, type WebExtractRecapV1 } from "./web-extract.js";
+import {
+  WEB_FETCH_TOOL_NAME,
+  parseWebExtractRecap,
+  type WebExtractRecapV1,
+} from "./web-extract.js";
 import {
   BROWSER_RECORDING_STOP_TOOL_NAME,
   parseBrowserRecordingRecap,
@@ -148,9 +152,7 @@ const TIMELINE_STATUSES = new Set<GenerationTimelineStatus>([
   "failed",
   "cancelled",
 ]);
-const CANCELLATION_ORIGINS = new Set<GenerationCancellationOrigin>(
-  GENERATION_CANCELLATION_ORIGINS,
-);
+const CANCELLATION_ORIGINS = new Set<GenerationCancellationOrigin>(GENERATION_CANCELLATION_ORIGINS);
 const SAFE_ID = /^[a-z0-9._:-]+$/iu;
 const WINDOWS_ABSOLUTE_PATH = /^[a-z]:[\\/]/iu;
 const MAX_DETAIL_LENGTH = 120;
@@ -390,10 +392,13 @@ export function parseGenerationTimeline(
             (end as number) < (start as number) ||
             (reasoningLength !== undefined && (end as number) > reasoningLength))) ||
         (end === undefined && start !== undefined && step.finishedAt !== undefined)
-      ) return undefined;
+      )
+        return undefined;
       if (end !== undefined) previousReasoningEndOffset = end as number;
-    } else if (candidate.version !== GENERATION_TIMELINE_VERSION &&
-      (step.reasoningStartOffset !== undefined || step.reasoningEndOffset !== undefined)) {
+    } else if (
+      candidate.version !== GENERATION_TIMELINE_VERSION &&
+      (step.reasoningStartOffset !== undefined || step.reasoningEndOffset !== undefined)
+    ) {
       return undefined;
     }
     // Version 1 predates reasoning steps. Version 2 predates text offsets.
@@ -485,8 +490,12 @@ const ANCHOR_TOOLS = new Set([
 
 /** Reserve a media boundary before output arrives, including failed calls. */
 export function toolStepEndsActivityGroup(step: AgentToolStep): boolean {
-  return ANCHOR_TOOLS.has(step.toolName) || step.toolName === BROWSER_RECORDING_STOP_TOOL_NAME ||
-    step.recording !== undefined || step.extraction !== undefined;
+  return (
+    ANCHOR_TOOLS.has(step.toolName) ||
+    step.toolName === BROWSER_RECORDING_STOP_TOOL_NAME ||
+    step.recording !== undefined ||
+    step.extraction !== undefined
+  );
 }
 
 function carriesRecap(step: AgentToolStep): boolean {
@@ -512,8 +521,9 @@ function mergeThinking(steps: readonly AgentThinkingStep[]): AgentThinkingStep {
   const first = steps[0]!;
   const last = steps[steps.length - 1]!;
   const start = steps.find((step) => step.reasoningStartOffset !== undefined)?.reasoningStartOffset;
-  const end = [...steps].reverse().find((step) => step.reasoningEndOffset !== undefined)
-    ?.reasoningEndOffset;
+  const end = [...steps]
+    .reverse()
+    .find((step) => step.reasoningEndOffset !== undefined)?.reasoningEndOffset;
   const merged: AgentThinkingStep = {
     ...first,
     updatedAt: Math.max(...steps.map((step) => step.updatedAt)),
@@ -549,8 +559,14 @@ function isFinishedThinking(step: AgentStep | undefined): step is AgentThinkingS
 
 function sharesActivityRow(a: AgentStep | undefined, b: AgentStep | undefined): boolean {
   return Boolean(
-    a && b && isToolStep(a) && isToolStep(b) && !toolStepEndsActivityGroup(a) && !a.questionnaire && !b.questionnaire &&
-      a.contentOffset === b.contentOffset,
+    a &&
+    b &&
+    isToolStep(a) &&
+    isToolStep(b) &&
+    !toolStepEndsActivityGroup(a) &&
+    !a.questionnaire &&
+    !b.questionnaire &&
+    a.contentOffset === b.contentOffset,
   );
 }
 
@@ -570,8 +586,14 @@ function canDrop(list: readonly AgentStep[], index: number): boolean {
     // Removing a group's closing media call must not merge the next group's
     // image/player into this group's identity. The relaxed fallback may still
     // do so when keeping all boundaries would exceed the reader's limit.
-    return !(isToolStep(step) && toolStepEndsActivityGroup(step) && next &&
-      isToolStep(next) && !next.questionnaire && next.contentOffset === step.contentOffset);
+    return !(
+      isToolStep(step) &&
+      toolStepEndsActivityGroup(step) &&
+      next &&
+      isToolStep(next) &&
+      !next.questionnaire &&
+      next.contentOffset === step.contentOffset
+    );
   }
   for (let next = index + 1; sharesActivityRow(list[next - 1], list[next]); next += 1) {
     const later = list[next] as AgentToolStep;
@@ -646,7 +668,10 @@ export function boundGenerationTimelineSteps(
   for (const { careful, keepTail } of passes) {
     const lastRank = careful ? LAST_RESORT_RANK - 1 : LAST_RESORT_RANK;
     for (let rank = 0; rank <= lastRank && list.length > max; rank += 1) {
-      for (let index = 0; list.length > max && index < list.length - (keepTail ? BOUND_KEPT_TAIL : 0);) {
+      for (
+        let index = 0;
+        list.length > max && index < list.length - (keepTail ? BOUND_KEPT_TAIL : 0);
+      ) {
         if (mergeIntoPrevious(index, careful)) continue;
         const step = list[index]!;
         if (foldRank(step) !== rank || (careful && !canDrop(list, index))) {

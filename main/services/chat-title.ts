@@ -26,7 +26,11 @@ import {
 } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
 import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
-import { requestChatTitle, TITLE_TIMEOUT_MS, type ChatTitleFirstMessage } from "./chat-title-request.js";
+import {
+  requestChatTitle,
+  TITLE_TIMEOUT_MS,
+  type ChatTitleFirstMessage,
+} from "./chat-title-request.js";
 
 const inFlight = new Map<string, Promise<void>>();
 const manualRenameInFlight = new Map<string, Promise<ChatTitleRenameResult>>();
@@ -180,8 +184,7 @@ async function generateFirstTurnTitle(input: {
   const settings = await configStore.getSettings();
   const titleProviderId = settings.chatTitleProviderId ?? "automatic";
   const foundationModelsStatus =
-    titleProviderId === "chat-model" ||
-    !hostPlatformCapabilities().appleFoundationModels
+    titleProviderId === "chat-model" || !hostPlatformCapabilities().appleFoundationModels
       ? null
       : await foundationModelsConnection.status();
   const route = resolveChatTitleRoute(titleProviderId, foundationModelsStatus);
@@ -260,13 +263,11 @@ async function generateFoundationModelsRename(
       return { ...titleUpdate(chat), changed: false };
     }
 
-    const updated = await chatStore.replaceTitleIfUnchanged(
-      chatId,
-      expectedTitle,
-      generatedTitle,
-    );
+    const updated = await chatStore.replaceTitleIfUnchanged(chatId, expectedTitle, generatedTitle);
     if (!updated) {
-      throw new Error("The chat title changed while Apple was generating. The newer title was kept.");
+      throw new Error(
+        "The chat title changed while Apple was generating. The newer title was kept.",
+      );
     }
     return { ...publishTitleUpdate(updated), changed: true };
   } finally {

@@ -105,7 +105,10 @@ export function withBotReplySilenceLimit(
       if (finished) return;
       finish();
       output.end();
-      void source.result().then((message) => output.end(message), () => {});
+      void source.result().then(
+        (message) => output.end(message),
+        () => {},
+      );
     } catch (error) {
       // The request this wrapper cancelled may throw on its way out; the reply already ended.
       if (finished) return;
@@ -114,7 +117,11 @@ export function withBotReplySilenceLimit(
         output.end();
         return;
       }
-      const message: AssistantMessage = { ...latest, stopReason: "error", errorMessage: error instanceof Error ? error.message : String(error) };
+      const message: AssistantMessage = {
+        ...latest,
+        stopReason: "error",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
       output.push({ type: "error", reason: "error", error: message });
       output.end(message);
     }

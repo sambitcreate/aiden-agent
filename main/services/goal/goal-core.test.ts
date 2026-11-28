@@ -28,12 +28,23 @@ const quiet: GoalRoundActivity = { toolCalls: 0, newTextChars: 40 };
 const settle = { boot: BOOT, stopped: false, lastRunFailed: false, helperRunning: false };
 
 function goal(overrides: { check?: { command: string } } = {}): GoalRecordV1 {
-  const created = createGoal({ id: "goal-1", chatId: "chat-1", objective: "Make the tests pass", source: "slash", boot: BOOT, now: 0, ...overrides });
+  const created = createGoal({
+    id: "goal-1",
+    chatId: "chat-1",
+    objective: "Make the tests pass",
+    source: "slash",
+    boot: BOOT,
+    now: 0,
+    ...overrides,
+  });
   assert.ok(created.ok);
   return created.goal;
 }
 
-const verdict = (kind: GoalVerdict["verdict"], reason = `reason for ${kind}`): GoalVerdict => ({ verdict: kind, reason });
+const verdict = (kind: GoalVerdict["verdict"], reason = `reason for ${kind}`): GoalVerdict => ({
+  verdict: kind,
+  reason,
+});
 
 /** Drives a goal through review rounds, each with a verdict and what the round did. */
 function run(start: GoalRecordV1, steps: Array<[GoalVerdict | undefined, GoalRoundActivity]>) {
@@ -56,7 +67,14 @@ test("a new goal starts active at round 1 of 50; a command goal gets 5 checks", 
   assert.equal(command.maxRounds, 5);
   assert.deepEqual(command.check, { command: "npm test" });
   assert.deepEqual(
-    createGoal({ id: "g", chatId: "c", objective: "x".repeat(2_001), source: "menu", boot: BOOT, now: 0 }),
+    createGoal({
+      id: "g",
+      chatId: "c",
+      objective: "x".repeat(2_001),
+      source: "menu",
+      boot: BOOT,
+      now: 0,
+    }),
     { ok: false, message: "A goal can be up to 2,000 characters." },
   );
 });
@@ -70,12 +88,36 @@ test("verdict scenarios", () => {
     rounds: number;
     nexts: string[];
   }> = [
-    { name: "done settles Done", steps: [[verdict("done"), busy]], status: "done", cause: "done", rounds: 1, nexts: ["settled"] },
-    { name: "blocked needs the person", steps: [[verdict("blocked"), busy]], status: "needs-you", cause: "blocked", rounds: 1, nexts: ["settled"] },
-    { name: "paused when the person asked", steps: [[verdict("paused"), busy]], status: "paused", cause: "asked", rounds: 1, nexts: ["settled"] },
+    {
+      name: "done settles Done",
+      steps: [[verdict("done"), busy]],
+      status: "done",
+      cause: "done",
+      rounds: 1,
+      nexts: ["settled"],
+    },
+    {
+      name: "blocked needs the person",
+      steps: [[verdict("blocked"), busy]],
+      status: "needs-you",
+      cause: "blocked",
+      rounds: 1,
+      nexts: ["settled"],
+    },
+    {
+      name: "paused when the person asked",
+      steps: [[verdict("paused"), busy]],
+      status: "paused",
+      cause: "asked",
+      rounds: 1,
+      nexts: ["settled"],
+    },
     {
       name: "continue with progress starts the next round",
-      steps: [[verdict("continue", "tests still fail"), busy], [verdict("continue", "one test left"), busy]],
+      steps: [
+        [verdict("continue", "tests still fail"), busy],
+        [verdict("continue", "one test left"), busy],
+      ],
       status: "active",
       rounds: 3,
       nexts: ["round", "round"],
@@ -95,7 +137,11 @@ test("verdict scenarios", () => {
     },
     {
       name: "three rounds with no tool calls and little text pause",
-      steps: [[verdict("continue", "a"), quiet], [verdict("continue", "b"), quiet], [verdict("continue", "c"), quiet]],
+      steps: [
+        [verdict("continue", "a"), quiet],
+        [verdict("continue", "b"), quiet],
+        [verdict("continue", "c"), quiet],
+      ],
       status: "paused",
       cause: "stalled",
       rounds: 3,
@@ -103,21 +149,33 @@ test("verdict scenarios", () => {
     },
     {
       name: "substantial new text without tool calls is progress",
-      steps: [1, 2, 3, 4].map((n) => [verdict("continue", `section ${n} still missing`), { toolCalls: 0, newTextChars: 2_400 }]),
+      steps: [1, 2, 3, 4].map((n) => [
+        verdict("continue", `section ${n} still missing`),
+        { toolCalls: 0, newTextChars: 2_400 },
+      ]),
       status: "active",
       rounds: 5,
       nexts: ["round", "round", "round", "round"],
     },
     {
       name: "progress between stalls resets the count",
-      steps: [[verdict("continue", "a"), quiet], [verdict("continue", "b"), quiet], [verdict("continue", "c"), busy], [verdict("continue", "d"), quiet], [verdict("continue", "e"), quiet]],
+      steps: [
+        [verdict("continue", "a"), quiet],
+        [verdict("continue", "b"), quiet],
+        [verdict("continue", "c"), busy],
+        [verdict("continue", "d"), quiet],
+        [verdict("continue", "e"), quiet],
+      ],
       status: "active",
       rounds: 6,
       nexts: ["round", "round", "round", "round", "round"],
     },
     {
       name: "one unusable answer retries, two pause",
-      steps: [[undefined, busy], [undefined, busy]],
+      steps: [
+        [undefined, busy],
+        [undefined, busy],
+      ],
       status: "paused",
       cause: "reviewer",
       rounds: 1,
@@ -125,7 +183,11 @@ test("verdict scenarios", () => {
     },
     {
       name: "a usable answer clears the unusable count",
-      steps: [[undefined, busy], [verdict("continue", "x"), busy], [undefined, busy]],
+      steps: [
+        [undefined, busy],
+        [verdict("continue", "x"), busy],
+        [undefined, busy],
+      ],
       status: "active",
       rounds: 2,
       nexts: ["retry-review", "round", "retry-review"],
@@ -148,15 +210,28 @@ test("verdict scenarios", () => {
 });
 
 test("the reviewer's reason is shown, and a pause names its cause", () => {
-  assert.equal(run(goal(), [[verdict("continue", "two tests fail"), busy]]).goal.reason, "two tests fail");
-  assert.equal(run(goal(), [[verdict("blocked", "needs an API key"), busy]]).goal.reason, "needs an API key");
-  const stalled = run(goal(), [[verdict("continue", "a"), quiet], [verdict("continue", "b"), quiet], [verdict("continue", "c"), quiet]]);
+  assert.equal(
+    run(goal(), [[verdict("continue", "two tests fail"), busy]]).goal.reason,
+    "two tests fail",
+  );
+  assert.equal(
+    run(goal(), [[verdict("blocked", "needs an API key"), busy]]).goal.reason,
+    "needs an API key",
+  );
+  const stalled = run(goal(), [
+    [verdict("continue", "a"), quiet],
+    [verdict("continue", "b"), quiet],
+    [verdict("continue", "c"), quiet],
+  ]);
   assert.equal(stalled.goal.reason, "Not making progress");
 });
 
 test("round 50 pauses at the limit; Keep going starts again at round 1 of 50 with no stalls", () => {
   let current = goal();
-  const steps = Array.from({ length: 50 }, (_, index) => [verdict("continue", `step ${index}`), busy] as [GoalVerdict, GoalRoundActivity]);
+  const steps = Array.from(
+    { length: 50 },
+    (_, index) => [verdict("continue", `step ${index}`), busy] as [GoalVerdict, GoalRoundActivity],
+  );
   steps[48] = [verdict("continue", "step 48"), quiet];
   const result = run(current, steps);
   current = result.goal;
@@ -180,9 +255,13 @@ test("round 50 pauses at the limit; Keep going starts again at round 1 of 50 wit
 
 test("a done verdict on the last round still wins over the limit", () => {
   let current = goal();
-  for (let index = 0; index < 49; index += 1) current = applyGoalVerdict(current, verdict("continue", `s${index}`), busy, index).goal;
+  for (let index = 0; index < 49; index += 1)
+    current = applyGoalVerdict(current, verdict("continue", `s${index}`), busy, index).goal;
   assert.equal(current.rounds, 50);
-  assert.equal(applyGoalVerdict(current, verdict("done", "all green"), busy, 99).goal.status, "done");
+  assert.equal(
+    applyGoalVerdict(current, verdict("done", "all green"), busy, 99).goal.status,
+    "done",
+  );
 });
 
 test("pre-checks before a review", () => {
@@ -196,7 +275,10 @@ test("pre-checks before a review", () => {
   assert.equal(pausedBy({ boot: "boot-2" }), "restart");
   assert.equal(pausedBy({ stopped: true }), "stopped");
   assert.equal(pausedBy({ lastRunFailed: true }), "failed");
-  assert.deepEqual(goalAfterSettle(goal({ check: { command: "make" } }), { ...settle, now: 1 }), { kind: "check", command: "make" });
+  assert.deepEqual(goalAfterSettle(goal({ check: { command: "make" } }), { ...settle, now: 1 }), {
+    kind: "check",
+    command: "make",
+  });
   const done = run(active, [[verdict("done"), busy]]).goal;
   assert.deepEqual(goalAfterSettle(done, { ...settle, now: 1 }), { kind: "idle" });
 });
@@ -206,7 +288,10 @@ test("a running helper skips reviews for up to 30 minutes, then pauses", () => {
   assert.equal(first.kind, "skip");
   const waiting = first.kind === "skip" ? first.goal : goal();
   assert.equal(waiting.waitingSince, 0);
-  assert.equal(goalAfterSettle(waiting, { ...settle, helperRunning: true, now: 29 * MINUTE }).kind, "skip");
+  assert.equal(
+    goalAfterSettle(waiting, { ...settle, helperRunning: true, now: 29 * MINUTE }).kind,
+    "skip",
+  );
   const late = goalAfterSettle(waiting, { ...settle, helperRunning: true, now: 30 * MINUTE });
   assert.equal(late.kind === "paused" && late.goal.cause, "wait-limit");
   assert.equal(goalWaitExpired(waiting, 10 * MINUTE), undefined);
@@ -251,13 +336,28 @@ test("compare-and-set refuses a stale write, so the person's pause wins", () => 
   assert.equal(paused.reason, "Paused");
   // A review that read the goal before the pause lands afterwards.
   assert.deepEqual(
-    compareAndSetGoal(paused, read, (current) => applyGoalVerdict(current, verdict("continue"), busy, 6).goal),
+    compareAndSetGoal(
+      paused,
+      read,
+      (current) => applyGoalVerdict(current, verdict("continue"), busy, 6).goal,
+    ),
     { ok: false },
   );
-  assert.deepEqual(compareAndSetGoal(undefined, read, (current) => current), { ok: false }, "a cleared goal refuses too");
+  assert.deepEqual(
+    compareAndSetGoal(undefined, read, (current) => current),
+    { ok: false },
+    "a cleared goal refuses too",
+  );
   const replaced = { ...goal(), id: "goal-2" };
-  assert.deepEqual(compareAndSetGoal(replaced, read, (current) => current), { ok: false });
-  const fresh = compareAndSetGoal(active, read, (current) => applyGoalVerdict(current, verdict("done"), busy, 6).goal);
+  assert.deepEqual(
+    compareAndSetGoal(replaced, read, (current) => current),
+    { ok: false },
+  );
+  const fresh = compareAndSetGoal(
+    active,
+    read,
+    (current) => applyGoalVerdict(current, verdict("done"), busy, 6).goal,
+  );
   assert.ok(fresh.ok);
   assert.equal(fresh.goal.revision, active.revision + 1);
 });
@@ -285,17 +385,48 @@ test("Continue here is offered only while the stop came from a round that wanted
   const wanted = goalWindowWanted(goal(), true, MINUTE);
   const detail = (record: GoalRecordV1) => goalBarView(goalView(record)).detail;
 
-  const blocked = applyGoalVerdict(wanted, verdict("blocked", "I need the browser to sign in"), busy, 2 * MINUTE).goal;
-  assert.equal(detail(blocked), GOAL_WINDOW_WANTED_DETAIL, "the reviewer's Needs you after that round offers Continue here");
-  const stalled = run(wanted, [[verdict("continue", "same"), quiet], [verdict("continue", "same"), quiet], [verdict("continue", "same"), quiet]]).goal;
+  const blocked = applyGoalVerdict(
+    wanted,
+    verdict("blocked", "I need the browser to sign in"),
+    busy,
+    2 * MINUTE,
+  ).goal;
+  assert.equal(
+    detail(blocked),
+    GOAL_WINDOW_WANTED_DETAIL,
+    "the reviewer's Needs you after that round offers Continue here",
+  );
+  const stalled = run(wanted, [
+    [verdict("continue", "same"), quiet],
+    [verdict("continue", "same"), quiet],
+    [verdict("continue", "same"), quiet],
+  ]).goal;
   assert.equal(stalled.cause, "stalled");
-  assert.equal(stalled.windowWanted, undefined, "the next round started, so the earlier round's want is gone");
+  assert.equal(
+    stalled.windowWanted,
+    undefined,
+    "the next round started, so the earlier round's want is gone",
+  );
 
   // Anything else that stops the goal says its own reason.
   for (const [label, stopped] of [
     ["your Pause", pauseGoal(wanted, { now: 2 * MINUTE, cause: "person" })],
-    ["Stop", (goalAfterSettle(wanted, { ...settle, now: 2 * MINUTE, stopped: true }) as { goal: GoalRecordV1 }).goal],
-    ["a failed answer", (goalAfterSettle(wanted, { ...settle, now: 2 * MINUTE, lastRunFailed: true }) as { goal: GoalRecordV1 }).goal],
+    [
+      "Stop",
+      (
+        goalAfterSettle(wanted, { ...settle, now: 2 * MINUTE, stopped: true }) as {
+          goal: GoalRecordV1;
+        }
+      ).goal,
+    ],
+    [
+      "a failed answer",
+      (
+        goalAfterSettle(wanted, { ...settle, now: 2 * MINUTE, lastRunFailed: true }) as {
+          goal: GoalRecordV1;
+        }
+      ).goal,
+    ],
     ["an unanswered approval", goalPromptUnanswered(wanted, 2 * MINUTE)],
     ["the spending limit", pauseGoal(wanted, { now: 2 * MINUTE, cause: "spending" })],
   ] as const) {
@@ -307,19 +438,42 @@ test("Continue here is offered only while the stop came from a round that wanted
   // Keep going starts fresh, so a later Needs you shows the reviewer's own reason.
   const resumed = resumeGoal(blocked, { now: 3 * MINUTE, boot: BOOT });
   assert.equal(resumed.windowWanted, undefined);
-  const later = applyGoalVerdict(resumed, verdict("blocked", "The API key is missing"), busy, 4 * MINUTE).goal;
+  const later = applyGoalVerdict(
+    resumed,
+    verdict("blocked", "The API key is missing"),
+    busy,
+    4 * MINUTE,
+  ).goal;
   assert.equal(detail(later), "The API key is missing");
 });
 
 test("which chats can have a goal", () => {
   const chat = { workspaceId: "ws-1", providerId: "anthropic", model: "claude" };
   assert.equal(goalChatRefusal(chat), undefined, "an ordinary chat with a model");
-  assert.equal(goalChatRefusal({ ...chat, workspaceId: undefined }), undefined, "a chat without a folder");
+  assert.equal(
+    goalChatRefusal({ ...chat, workspaceId: undefined }),
+    undefined,
+    "a chat without a folder",
+  );
   assert.match(goalChatRefusal(null) ?? "", /no longer exists/u);
   assert.match(goalChatRefusal({ ...chat, botId: "bot-1" }) ?? "", /Bots/u);
-  assert.match(goalChatRefusal({ ...chat, workspaceId: ASSISTANT_WORKSPACE_ID }) ?? "", /Assistant/u);
+  assert.match(
+    goalChatRefusal({ ...chat, workspaceId: ASSISTANT_WORKSPACE_ID }) ?? "",
+    /Assistant/u,
+  );
   assert.match(goalChatRefusal({ ...chat, model: undefined }) ?? "", /Choose a model/u);
-  assert.match(goalChatRefusal({ ...chat, owner: { kind: "schedule" } as never }) ?? "", /runs its own way/u);
-  assert.match(goalChatRefusal({ ...chat, ephemeral: true }) ?? "", /Save this Temporary chat or attach it/u, "a Temporary Quick Chat");
-  assert.equal(goalChatRefusal({ ...chat, workspaceId: undefined, ephemeral: undefined }), undefined, "the same chat once saved");
+  assert.match(
+    goalChatRefusal({ ...chat, owner: { kind: "schedule" } as never }) ?? "",
+    /runs its own way/u,
+  );
+  assert.match(
+    goalChatRefusal({ ...chat, ephemeral: true }) ?? "",
+    /Save this Temporary chat or attach it/u,
+    "a Temporary Quick Chat",
+  );
+  assert.equal(
+    goalChatRefusal({ ...chat, workspaceId: undefined, ephemeral: undefined }),
+    undefined,
+    "the same chat once saved",
+  );
 });

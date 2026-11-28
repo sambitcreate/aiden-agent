@@ -1,6 +1,11 @@
 /** A failed close cannot establish that the descriptor was released. */
 export class ForegroundReadCleanupError extends Error {
-  constructor(message: string, readonly cause: unknown) { super(message); }
+  constructor(
+    message: string,
+    readonly cause: unknown,
+  ) {
+    super(message);
+  }
 }
 
 /**
@@ -38,25 +43,36 @@ export class ForegroundReadOperations {
         controller.abort(signal?.reason);
         finish({ error: controller.signal.reason });
       };
-      const timer = durationMs === undefined ? undefined : setTimeout(() => {
-        controller.abort(new Error("File search deadline reached."));
-        try { finish({ result: timeoutResult() }); }
-        catch (error) { finish({ error }); }
-      }, durationMs);
+      const timer =
+        durationMs === undefined
+          ? undefined
+          : setTimeout(() => {
+              controller.abort(new Error("File search deadline reached."));
+              try {
+                finish({ result: timeoutResult() });
+              } catch (error) {
+                finish({ error });
+              }
+            }, durationMs);
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted) abort();
       // Both handlers remain installed after caller settlement. Late failures
       // are observed and never produce a second result or release capacity early.
-      void Promise.resolve().then(() => {
-        controller.signal.throwIfAborted();
-        return operation(controller.signal);
-      }).then(
-        (result) => { this.active--; finish({ result }); },
-        (error: unknown) => {
-          if (!(error instanceof ForegroundReadCleanupError)) this.active--;
-          finish({ error });
-        },
-      );
+      void Promise.resolve()
+        .then(() => {
+          controller.signal.throwIfAborted();
+          return operation(controller.signal);
+        })
+        .then(
+          (result) => {
+            this.active--;
+            finish({ result });
+          },
+          (error: unknown) => {
+            if (!(error instanceof ForegroundReadCleanupError)) this.active--;
+            finish({ error });
+          },
+        );
     });
   }
 }
@@ -65,6 +81,9 @@ export async function closeForegroundResource(resource: { close(): Promise<void>
   try {
     await resource.close();
   } catch (error) {
-    throw new ForegroundReadCleanupError("Filesystem cleanup failed; capacity remains reserved.", error);
+    throw new ForegroundReadCleanupError(
+      "Filesystem cleanup failed; capacity remains reserved.",
+      error,
+    );
   }
 }

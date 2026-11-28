@@ -10,7 +10,9 @@ import {
   type AidenRemoteSimulatorHost,
 } from "../aiden-remote-simulators.js";
 
-type ShareHostProvider = (audience: AidenRemoteSimulatorAudience) => AidenRemoteSimulatorHost | null;
+type ShareHostProvider = (
+  audience: AidenRemoteSimulatorAudience,
+) => AidenRemoteSimulatorHost | null;
 
 let provider: ShareHostProvider | null = null;
 
@@ -19,4 +21,6 @@ export function registerSimulatorShareHost(next: ShareHostProvider | null): void
   if (!next) simulatorShareRelay.closeAll();
 }
 
-export const simulatorShareRelay = new AidenRemoteSimulatorRelay((audience) => provider?.(audience) ?? null);
+export const simulatorShareRelay = new AidenRemoteSimulatorRelay(
+  (audience) => provider?.(audience) ?? null,
+);

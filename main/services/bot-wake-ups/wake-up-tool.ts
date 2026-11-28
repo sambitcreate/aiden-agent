@@ -20,7 +20,10 @@ export interface BotWakeUpEntryData {
   note: string;
 }
 
-export type BotWakeUpAppend = (kind: typeof BOT_WAKE_UP_ENTRY_KIND, data: BotWakeUpEntryData) => Promise<unknown>;
+export type BotWakeUpAppend = (
+  kind: typeof BOT_WAKE_UP_ENTRY_KIND,
+  data: BotWakeUpEntryData,
+) => Promise<unknown>;
 
 function result(value: unknown, isError = false): AgentToolResult<null> {
   return {
@@ -54,9 +57,14 @@ export function createWakeUpTool(
       {
         action: Type.Union([Type.Literal("set"), Type.Literal("list"), Type.Literal("cancel")]),
         in_minutes: Type.Optional(
-          Type.Integer({ minimum: BOT_WAKE_UP_LIMITS.minMinutes, maximum: BOT_WAKE_UP_LIMITS.maxMinutes }),
+          Type.Integer({
+            minimum: BOT_WAKE_UP_LIMITS.minMinutes,
+            maximum: BOT_WAKE_UP_LIMITS.maxMinutes,
+          }),
         ),
-        at: Type.Optional(Type.String({ description: 'Local 24-hour time "HH:MM" within the next 24 hours.' })),
+        at: Type.Optional(
+          Type.String({ description: 'Local 24-hour time "HH:MM" within the next 24 hours.' }),
+        ),
         note: Type.Optional(Type.String({ maxLength: BOT_WAKE_UP_LIMITS.noteChars })),
         id: Type.Optional(Type.String({ description: "The wake-up to cancel." })),
       },
@@ -64,26 +72,49 @@ export function createWakeUpTool(
     ),
     execute: async (_toolCallId, rawParams, signal): Promise<AgentToolResult<null>> => {
       if (signal?.aborted) throw new Error("The wake-up action was cancelled.");
-      const params = rawParams as { action?: unknown; in_minutes?: unknown; at?: unknown; note?: unknown; id?: unknown };
+      const params = rawParams as {
+        action?: unknown;
+        in_minutes?: unknown;
+        at?: unknown;
+        note?: unknown;
+        id?: unknown;
+      };
       if (params.action === "list") {
         return result({ ok: true, pending: (await wakeUps.pending(botId)).map(modelView) });
       }
       if (params.action === "cancel") {
         if (typeof params.id !== "string" || !params.id.trim()) {
-          return result({ ok: false, code: "invalid_id", message: "cancel needs the id of a pending wake-up." }, true);
+          return result(
+            { ok: false, code: "invalid_id", message: "cancel needs the id of a pending wake-up." },
+            true,
+          );
         }
         const outcome = await wakeUps.cancel(botId, params.id.trim());
         return outcome.ok
           ? result({ ok: true, cancelled: modelView(outcome.cancelled) })
-          : result({ ok: false, code: outcome.code, message: outcome.message, pending: outcome.pending?.map(modelView) ?? [] }, true);
+          : result(
+              {
+                ok: false,
+                code: outcome.code,
+                message: outcome.message,
+                pending: outcome.pending?.map(modelView) ?? [],
+              },
+              true,
+            );
       }
       if (params.action !== "set") {
-        return result({ ok: false, code: "invalid_action", message: "Use set, list or cancel." }, true);
+        return result(
+          { ok: false, code: "invalid_action", message: "Use set, list or cancel." },
+          true,
+        );
       }
       const hasMinutes = params.in_minutes !== undefined;
       const hasAt = params.at !== undefined;
       if (hasMinutes === hasAt) {
-        return result({ ok: false, code: "invalid_time", message: "Give exactly one of in_minutes or at." }, true);
+        return result(
+          { ok: false, code: "invalid_time", message: "Give exactly one of in_minutes or at." },
+          true,
+        );
       }
       const when: BotWakeUpWhen | undefined = hasMinutes
         ? typeof params.in_minutes === "number"
@@ -92,8 +123,15 @@ export function createWakeUpTool(
         : typeof params.at === "string"
           ? { at: params.at }
           : undefined;
-      if (!when) return result({ ok: false, code: "invalid_time", message: "in_minutes is a number and at is \"HH:MM\"." }, true);
-      const outcome = await wakeUps.set(botId, { when, note: typeof params.note === "string" ? params.note : "" });
+      if (!when)
+        return result(
+          { ok: false, code: "invalid_time", message: 'in_minutes is a number and at is "HH:MM".' },
+          true,
+        );
+      const outcome = await wakeUps.set(botId, {
+        when,
+        note: typeof params.note === "string" ? params.note : "",
+      });
       if (!outcome.ok) {
         return result(
           {
@@ -106,11 +144,16 @@ export function createWakeUpTool(
         );
       }
       const { wakeUp } = outcome;
-      await append(BOT_WAKE_UP_ENTRY_KIND, { wakeUpId: wakeUp.id, fireAt: wakeUp.fireAt, note: wakeUp.note });
+      await append(BOT_WAKE_UP_ENTRY_KIND, {
+        wakeUpId: wakeUp.id,
+        fireAt: wakeUp.fireAt,
+        note: wakeUp.note,
+      });
       return result({
         ok: true,
         wakeUp: modelView(wakeUp),
-        message: "Set. The person sees it in the chat and can cancel it. Tell them briefly when you'll check back.",
+        message:
+          "Set. The person sees it in the chat and can cancel it. Tell them briefly when you'll check back.",
       });
     },
   };

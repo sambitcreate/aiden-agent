@@ -1,5 +1,15 @@
 import * as React from "react";
-import { CheckCircle2, Circle, Download, MousePointerClick, RefreshCw, RotateCcw, SkipForward, Trash2, X } from "lucide-react";
+import {
+  CheckCircle2,
+  Circle,
+  Download,
+  MousePointerClick,
+  RefreshCw,
+  RotateCcw,
+  SkipForward,
+  Trash2,
+  X,
+} from "lucide-react";
 
 import {
   AlertDialog,
@@ -52,17 +62,29 @@ function idleLabel(minutes: number): string {
   return minutes === 60 ? "1 hour" : `${minutes} minutes`;
 }
 
-type Action = "setUp" | "cancel" | "updateBase" | "remove" | "settings" | "elementControl" | "check" | "skip";
+type Action =
+  | "setUp"
+  | "cancel"
+  | "updateBase"
+  | "remove"
+  | "settings"
+  | "elementControl"
+  | "check"
+  | "skip";
 
 /** The guided step's title: what the person allows, and for what. */
-export const BOT_COMPUTER_PERMISSIONS_TITLE = "Allow Accessibility and Screen Recording for cua-driver";
+export const BOT_COMPUTER_PERMISSIONS_TITLE =
+  "Allow Accessibility and Screen Recording for cua-driver";
 
 /** One permission's row: its name and whether the base computer has it yet. */
 function PermissionRow({ name, allowed }: { name: string; allowed: boolean }) {
   const Icon = allowed ? CheckCircle2 : Circle;
   return (
     <li className="flex items-center gap-2" data-permission={name} data-allowed={allowed}>
-      <Icon aria-hidden className={allowed ? "size-4 shrink-0 text-status-green" : "size-4 shrink-0 text-tertiary"} />
+      <Icon
+        aria-hidden
+        className={allowed ? "size-4 shrink-0 text-status-green" : "size-4 shrink-0 text-tertiary"}
+      />
       <Text variant="small">{name}</Text>
       <Text variant="small" color={allowed ? "secondary" : "tertiary"}>
         {allowed ? "Allowed" : "Not yet"}
@@ -96,9 +118,15 @@ function PermissionsStep({
       <div className="flex flex-col gap-3">
         <BotComputerBaseScreen />
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <ul className="flex flex-wrap gap-x-5 gap-y-1" aria-label="Permissions in the base computer">
+          <ul
+            className="flex flex-wrap gap-x-5 gap-y-1"
+            aria-label="Permissions in the base computer"
+          >
             <PermissionRow name="Accessibility" allowed={permissions?.accessibility === true} />
-            <PermissionRow name="Screen Recording" allowed={permissions?.screenRecording === true} />
+            <PermissionRow
+              name="Screen Recording"
+              allowed={permissions?.screenRecording === true}
+            />
           </ul>
           <div className="flex flex-wrap justify-end gap-2">
             <Button size="small" variant="transparent" disabled={acting !== null} onClick={onSkip}>
@@ -144,7 +172,10 @@ export function BotComputersSettings() {
   if (!query.supported) {
     return (
       <FieldSet>
-        <Field label="Not available on this computer" description="Bot computers need a Mac with Apple silicon." />
+        <Field
+          label="Not available on this computer"
+          description="Bot computers need a Mac with Apple silicon."
+        />
       </FieldSet>
     );
   }
@@ -153,7 +184,10 @@ export function BotComputersSettings() {
       <FieldSet>
         <Field
           label="Couldn't check Bot computers"
-          description={userFacingErrorMessage(query.error, "Aiden couldn't read the Bot computer status.")}
+          description={userFacingErrorMessage(
+            query.error,
+            "Aiden couldn't read the Bot computer status.",
+          )}
         >
           <Button size="small" variant="filled" onClick={() => void query.refetch()}>
             <RefreshCw /> Try again
@@ -180,9 +214,17 @@ export function BotComputersSettings() {
   };
 
   const setUp = () =>
-    run("setUp", async () => cache.set(await botComputersApi.setUp()), "Aiden couldn't start setting up Bot computers.");
+    run(
+      "setUp",
+      async () => cache.set(await botComputersApi.setUp()),
+      "Aiden couldn't start setting up Bot computers.",
+    );
   const updateBase = () =>
-    run("updateBase", async () => cache.set(await botComputersApi.updateBase()), "Aiden couldn't start updating the base.");
+    run(
+      "updateBase",
+      async () => cache.set(await botComputersApi.updateBase()),
+      "Aiden couldn't start updating the base.",
+    );
   const cancel = () =>
     run(
       "cancel",
@@ -235,7 +277,8 @@ export function BotComputersSettings() {
   const percent = botComputerSetupPercent(setup);
   const summary = botComputerSetupSummary(setup);
   const offerSetUp = setup.kind === "not_set_up" || setup.kind === "failed";
-  const hasAnything = setup.kind !== "not_set_up" || status.diskUsedBytes > 0 || status.computers.length > 0;
+  const hasAnything =
+    setup.kind !== "not_set_up" || status.diskUsedBytes > 0 || status.computers.length > 0;
   const memory = botComputerMemoryLabel(status.requirements.memoryPerComputerBytes);
   const waitingForPermissions = setup.kind === "building_base" && setup.step === "permissions";
   const computerCount = status.computers.length;
@@ -248,10 +291,15 @@ export function BotComputersSettings() {
           description={
             <>
               <span className="block">{summary}</span>
-              {offerSetUp ? <span className="mt-1 block text-tertiary">{botComputersSetupDisclosure(status.requirements)}</span> : null}
+              {offerSetUp ? (
+                <span className="mt-1 block text-tertiary">
+                  {botComputersSetupDisclosure(status.requirements)}
+                </span>
+              ) : null}
               {setup.kind === "ready" ? (
                 <span className="mt-1 block text-tertiary">
-                  Give a Bot its own computer from its profile. Each one starts as a copy of this base.
+                  Give a Bot its own computer from its profile. Each one starts as a copy of this
+                  base.
                 </span>
               ) : null}
             </>
@@ -271,18 +319,33 @@ export function BotComputersSettings() {
             }}
           >
             {offerSetUp ? (
-              <Button size="small" variant="accent" disabled={acting !== null} onClick={() => void setUp()}>
+              <Button
+                size="small"
+                variant="accent"
+                disabled={acting !== null}
+                onClick={() => void setUp()}
+              >
                 {setup.kind === "failed" ? <RotateCcw /> : <Download />}
                 {setup.kind === "failed" ? "Try again" : "Set up"}
               </Button>
             ) : null}
             {busy ? (
-              <Button size="small" variant="transparent" disabled={acting === "cancel"} onClick={() => void cancel()}>
+              <Button
+                size="small"
+                variant="transparent"
+                disabled={acting === "cancel"}
+                onClick={() => void cancel()}
+              >
                 <X /> Cancel
               </Button>
             ) : null}
             {setup.kind === "ready" && setup.updateAvailable ? (
-              <Button size="small" variant="accent" disabled={acting !== null} onClick={() => void updateBase()}>
+              <Button
+                size="small"
+                variant="accent"
+                disabled={acting !== null}
+                onClick={() => void updateBase()}
+              >
                 <Download /> Update base
               </Button>
             ) : null}
@@ -320,7 +383,12 @@ export function BotComputersSettings() {
                 On
               </Text>
             ) : (
-              <Button size="small" variant="filled" disabled={acting !== null} onClick={() => void setUpElementControl()}>
+              <Button
+                size="small"
+                variant="filled"
+                disabled={acting !== null}
+                onClick={() => void setUpElementControl()}
+              >
                 <MousePointerClick aria-hidden /> Set up element control
               </Button>
             )}
@@ -336,7 +404,11 @@ export function BotComputersSettings() {
         <FieldSet title="Running">
           <Field
             label="Computers running at once"
-            hint={<InfoHint topic="running limit">At the limit, the computer used longest ago stops, or the next Bot waits its turn.</InfoHint>}
+            hint={
+              <InfoHint topic="running limit">
+                At the limit, the computer used longest ago stops, or the next Bot waits its turn.
+              </InfoHint>
+            }
             description={`Each running computer uses about ${memory} of memory.`}
           >
             <Select
@@ -392,7 +464,9 @@ export function BotComputersSettings() {
           >
             <Text variant="small" color="secondary" className="justify-self-end tabular-nums">
               {formatBotComputerBytes(status.diskUsedBytes)}
-              {status.freeDiskBytes !== undefined ? ` · ${formatBotComputerBytes(status.freeDiskBytes)} free` : ""}
+              {status.freeDiskBytes !== undefined
+                ? ` · ${formatBotComputerBytes(status.freeDiskBytes)} free`
+                : ""}
             </Text>
           </Field>
           <Field

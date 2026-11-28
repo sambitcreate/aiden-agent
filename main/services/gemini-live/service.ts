@@ -56,19 +56,19 @@ export class GeminiLiveStartError extends Error {
               ? "No Google Live model has passed Aiden's production contract probe yet."
               : reason === "aiden_live_disabled"
                 ? "Aiden Live is turned off in Settings."
-              : reason === "google_live_authentication_failed"
-                ? "Google rejected this API key for Live. Check the key's restrictions or replace it in Settings."
-                : reason === "google_live_quota_exceeded"
-                  ? "Google Live quota is unavailable for this API key or project. Check its usage tier and billing."
-                  : reason === "google_live_model_unavailable"
-                    ? "The approved Google Live model is unavailable for this API key or region."
-                    : reason === "google_live_service_unavailable"
-                      ? "Google Live is temporarily unavailable. Try again shortly."
-                      : reason === "google_live_configuration_unsupported"
-                        ? "Google Live rejected Aiden's session configuration."
-                        : reason === "google_live_network_failed"
-                          ? "Aiden could not establish a connection to Google Live. Check your network, VPN, or firewall and try again."
-                          : "The Live session could not start.",
+                : reason === "google_live_authentication_failed"
+                  ? "Google rejected this API key for Live. Check the key's restrictions or replace it in Settings."
+                  : reason === "google_live_quota_exceeded"
+                    ? "Google Live quota is unavailable for this API key or project. Check its usage tier and billing."
+                    : reason === "google_live_model_unavailable"
+                      ? "The approved Google Live model is unavailable for this API key or region."
+                      : reason === "google_live_service_unavailable"
+                        ? "Google Live is temporarily unavailable. Try again shortly."
+                        : reason === "google_live_configuration_unsupported"
+                          ? "Google Live rejected Aiden's session configuration."
+                          : reason === "google_live_network_failed"
+                            ? "Aiden could not establish a connection to Google Live. Check your network, VPN, or firewall and try again."
+                            : "The Live session could not start.",
     );
     this.name = "GeminiLiveStartError";
   }
@@ -94,9 +94,7 @@ export function safeGeminiLiveStartError(error: unknown): GeminiLiveStartError {
   }
   if (error instanceof GeminiLiveProtocolFailure) {
     return new GeminiLiveStartError(
-      error.code === "connect_timeout"
-        ? "google_live_network_failed"
-        : "live_start_failed",
+      error.code === "connect_timeout" ? "google_live_network_failed" : "live_start_failed",
     );
   }
   return new GeminiLiveStartError("live_start_failed");
@@ -144,15 +142,9 @@ export interface GeminiLiveServiceOptions {
   }): Promise<{
     bridge: GeminiLiveComputerUseBridge;
     tools: NonNullable<GeminiLiveProtocolOptions["tools"]>;
-    approve(
-      approvalId: string,
-      allowed: boolean,
-      ownerDocumentId: string,
-    ): boolean;
+    approve(approvalId: string, allowed: boolean, ownerDocumentId: string): boolean;
     bindSendResult(
-      send: (
-        result: Parameters<GeminiLiveProtocol["sendToolResult"]>[0],
-      ) => void,
+      send: (result: Parameters<GeminiLiveProtocol["sendToolResult"]>[0]) => void,
     ): void;
   } | null>;
 }
@@ -182,11 +174,7 @@ interface OwnedLiveSession {
   noteIds: number[];
   noteTimer: ReturnType<typeof setTimeout> | null;
   approveComputerUse:
-    | ((
-        approvalId: string,
-        allowed: boolean,
-        ownerDocumentId: string,
-      ) => boolean)
+    | ((approvalId: string, allowed: boolean, ownerDocumentId: string) => boolean)
     | null;
   threadRecorded: boolean;
   threadBegin: Promise<void> | null;
@@ -201,22 +189,13 @@ function documentKey(owner: RendererDocumentOwner): string {
 type CredentialEligibility =
   | { reason: "available"; apiKey: string }
   | {
-      reason: Exclude<
-        AssistantLiveAvailabilityReason,
-        "available" | "live_model_unverified"
-      >;
+      reason: Exclude<AssistantLiveAvailabilityReason, "available" | "live_model_unverified">;
     };
 
-function credentialEligibility(
-  credential: Credential | undefined,
-): CredentialEligibility {
+function credentialEligibility(credential: Credential | undefined): CredentialEligibility {
   if (!credential) return { reason: "missing_google_credential" };
-  if (credential.type !== "api_key")
-    return { reason: "google_oauth_unsupported" };
-  if (
-    typeof credential.key !== "string" ||
-    credential.key.trim().length === 0
-  ) {
+  if (credential.type !== "api_key") return { reason: "google_oauth_unsupported" };
+  if (typeof credential.key !== "string" || credential.key.trim().length === 0) {
     return { reason: "google_api_key_invalid" };
   }
   return { reason: "available", apiKey: credential.key.trim() };
@@ -278,9 +257,7 @@ export class GeminiLiveSessionStore {
 
   install(session: OwnedLiveSession): void {
     if (this.sessions.has(session.documentKey)) {
-      throw new Error(
-        "A Live session must be closed before its replacement is installed.",
-      );
+      throw new Error("A Live session must be closed before its replacement is installed.");
     }
     this.sessions.set(session.documentKey, session);
   }
@@ -323,11 +300,7 @@ export class GeminiLiveService {
     owner: RendererDocumentOwner,
     binding: GeminiLiveDisplayMediaBinding,
   ): string | null {
-    if (
-      this.shuttingDown ||
-      this.options.screenShareEnabled?.() !== true ||
-      owner.isDestroyed()
-    ) {
+    if (this.shuttingDown || this.options.screenShareEnabled?.() !== true || owner.isDestroyed()) {
       return null;
     }
     const key = documentKey(owner);
@@ -358,9 +331,7 @@ export class GeminiLiveService {
     return [...this.displayBindings.values()].map((entry) => entry.binding);
   }
 
-  async availability(
-    owner: RendererDocumentOwner,
-  ): Promise<AssistantLiveSnapshot> {
+  async availability(owner: RendererDocumentOwner): Promise<AssistantLiveSnapshot> {
     const active = this.sessions.get(owner);
     if (active) return this.snapshot(active, "available");
     let credential: Credential | undefined;
@@ -370,18 +341,14 @@ export class GeminiLiveService {
       return this.idleSnapshot("google_api_key_invalid");
     }
     const credentialStatus = credentialEligibility(credential);
-    if (credentialStatus.reason !== "available")
-      return this.idleSnapshot(credentialStatus.reason);
+    if (credentialStatus.reason !== "available") return this.idleSnapshot(credentialStatus.reason);
     let model: string | null;
     try {
       model = await this.options.resolveModel();
     } catch {
       return this.idleSnapshot("live_model_unverified");
     }
-    return this.idleSnapshot(
-      model ? "available" : "live_model_unverified",
-      model ?? undefined,
-    );
+    return this.idleSnapshot(model ? "available" : "live_model_unverified", model ?? undefined);
   }
 
   async start(
@@ -389,8 +356,7 @@ export class GeminiLiveService {
     _intent: AssistantLiveStartIntent,
   ): Promise<AssistantLiveSnapshot> {
     if (this.shuttingDown) throw new GeminiLiveStartError("live_start_failed");
-    if (owner.isDestroyed())
-      throw new GeminiLiveStartError("live_start_failed");
+    if (owner.isDestroyed()) throw new GeminiLiveStartError("live_start_failed");
     if (this.options.enabled && (await this.options.enabled()) !== true) {
       throw new GeminiLiveStartError("aiden_live_disabled");
     }
@@ -445,8 +411,7 @@ export class GeminiLiveService {
     try {
       const credential = await this.readGoogleCredential();
       const eligibility = credentialEligibility(credential);
-      if (eligibility.reason !== "available")
-        throw new GeminiLiveStartError(eligibility.reason);
+      if (eligibility.reason !== "available") throw new GeminiLiveStartError(eligibility.reason);
       if (!this.sessions.isCurrent(session) || session.abort.signal.aborted) {
         throw new Error("The Assistant Live start was superseded.");
       }
@@ -557,9 +522,7 @@ export class GeminiLiveService {
       this.closeSession(session, false, "failed");
       await this.finishThread(session, "failed");
       const safeError = safeGeminiLiveStartError(error);
-      process.stderr.write(
-        `[gemini-live] stage=start result=${safeError.reason}\n`,
-      );
+      process.stderr.write(`[gemini-live] stage=start result=${safeError.reason}\n`);
       throw safeError;
     } finally {
       this.activeStarts -= 1;
@@ -581,16 +544,9 @@ export class GeminiLiveService {
     return this.idleSnapshot("live_model_unverified");
   }
 
-  approveComputerUse(
-    owner: RendererDocumentOwner,
-    approvalId: string,
-    allowed: boolean,
-  ): boolean {
+  approveComputerUse(owner: RendererDocumentOwner, approvalId: string, allowed: boolean): boolean {
     const session = this.sessions.get(owner);
-    return (
-      session?.approveComputerUse?.(approvalId, allowed, owner.documentId) ??
-      false
-    );
+    return session?.approveComputerUse?.(approvalId, allowed, owner.documentId) ?? false;
   }
 
   revokeComputerUse(): void {
@@ -666,7 +622,11 @@ export class GeminiLiveService {
     });
   }
 
-  private settleNote(session: OwnedLiveSession, noteId: number | undefined, delivered: boolean): void {
+  private settleNote(
+    session: OwnedLiveSession,
+    noteId: number | undefined,
+    delivered: boolean,
+  ): void {
     if (noteId === undefined) return;
     const settle = session.noteDeliveries.get(noteId);
     session.noteDeliveries.delete(noteId);
@@ -703,22 +663,14 @@ export class GeminiLiveService {
     this.flushNotes(session);
   }
 
-  sendAudio(
-    owner: RendererDocumentOwner,
-    sessionId: string,
-    pcm: Uint8Array,
-  ): boolean {
+  sendAudio(owner: RendererDocumentOwner, sessionId: string, pcm: Uint8Array): boolean {
     const session = this.sessions.get(owner);
     // Preserve at most one second of microphone audio while the provider-owned
     // connection rotates. Latest packets win so a delayed reconnect cannot
     // grow memory without bound or replay stale speech indefinitely. The pinned
     // SDK rejects `transparent` in Gemini Developer API mode, so exact
     // last-consumed-index replay is unavailable on this transport.
-    if (
-      session?.sessionId === sessionId &&
-      session.microphone &&
-      session.state === "resuming"
-    ) {
+    if (session?.sessionId === sessionId && session.microphone && session.state === "resuming") {
       session.resumptionAudio.push(Uint8Array.from(pcm));
       if (session.resumptionAudio.length > 50) session.resumptionAudio.shift();
       return true;
@@ -740,11 +692,7 @@ export class GeminiLiveService {
     }
   }
 
-  sendFrame(
-    owner: RendererDocumentOwner,
-    sessionId: string,
-    jpeg: Uint8Array,
-  ): boolean {
+  sendFrame(owner: RendererDocumentOwner, sessionId: string, jpeg: Uint8Array): boolean {
     const session = this.sessions.get(owner);
     if (!session || session.sessionId !== sessionId || !session.screen) {
       return false;
@@ -782,28 +730,26 @@ export class GeminiLiveService {
     }
   }
 
-  private handleProtocolEvent(
-    session: OwnedLiveSession,
-    event: GeminiLiveProtocolEvent,
-  ): void {
-    if (!this.sessions.isCurrent(session) || session.owner.isDestroyed())
-      return;
-    if (event.type === "ready")
-      this.recordAcceptanceEvidence("ready", session.sessionId);
+  private handleProtocolEvent(session: OwnedLiveSession, event: GeminiLiveProtocolEvent): void {
+    if (!this.sessions.isCurrent(session) || session.owner.isDestroyed()) return;
+    if (event.type === "ready") this.recordAcceptanceEvidence("ready", session.sessionId);
     if (event.type === "audio")
       this.recordAcceptanceEvidence("provider_response", session.sessionId);
     if (event.type === "error") {
-      writeDiagnosticEvent({ level: "warn", area: "voice", event: "legacy-log", fields: {
-        message: `Live error: ${event.code}; stage: ${event.diagnostic ?? "unknown"}; detail: ${event.diagnosticDetail ?? "none"}`,
-      } });
+      writeDiagnosticEvent({
+        level: "warn",
+        area: "voice",
+        event: "legacy-log",
+        fields: {
+          message: `Live error: ${event.code}; stage: ${event.diagnostic ?? "unknown"}; detail: ${event.diagnosticDetail ?? "none"}`,
+        },
+      });
       // Content-free lifecycle evidence for development/runtime triage. Never
       // include provider payloads, close reasons, transcripts, or credentials.
       process.stderr.write(
         `[gemini-live] stage=runtime result=${event.code}${
           event.diagnostic ? ` schema=${event.diagnostic}` : ""
-        }${
-          event.diagnosticDetail ? ` detail=${event.diagnosticDetail}` : ""
-        }\n`,
+        }${event.diagnosticDetail ? ` detail=${event.diagnosticDetail}` : ""}\n`,
       );
     }
     if (event.type === "function_call") {
@@ -850,7 +796,12 @@ export class GeminiLiveService {
       session.tools?.interrupt();
     }
     if (event.type === "state") {
-      writeDiagnosticEvent({ level: "info", area: "voice", event: "legacy-log", fields: { message: `Live state: ${event.state}` } });
+      writeDiagnosticEvent({
+        level: "info",
+        area: "voice",
+        event: "legacy-log",
+        fields: { message: `Live state: ${event.state}` },
+      });
       session.state = event.state;
       if (event.state === "open") {
         const pendingAudio = session.resumptionAudio.splice(0);
@@ -871,12 +822,13 @@ export class GeminiLiveService {
         type: "snapshot",
         snapshot: this.snapshot(session, "available"),
       });
-      if (
-        event.state === "failed" ||
-        event.state === "disconnected" ||
-        event.state === "closed"
-      ) {
-        const outcome = event.state === "disconnected" ? "disconnected" : event.state === "failed" ? "failed" : "stopped";
+      if (event.state === "failed" || event.state === "disconnected" || event.state === "closed") {
+        const outcome =
+          event.state === "disconnected"
+            ? "disconnected"
+            : event.state === "failed"
+              ? "failed"
+              : "stopped";
         void this.finishThread(session, outcome);
         queueMicrotask(() => this.closeSession(session));
       }
@@ -886,12 +838,8 @@ export class GeminiLiveService {
     if (projected) this.send(session, projected);
   }
 
-  private send(
-    session: OwnedLiveSession,
-    event: AssistantLiveRendererEvent,
-  ): void {
-    if (!this.sessions.isCurrent(session) || session.owner.isDestroyed())
-      return;
+  private send(session: OwnedLiveSession, event: AssistantLiveRendererEvent): void {
+    if (!this.sessions.isCurrent(session) || session.owner.isDestroyed()) return;
     try {
       session.owner.send(ASSISTANT_LIVE_EVENT_CHANNEL, event);
     } catch {

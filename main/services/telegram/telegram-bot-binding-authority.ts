@@ -1,12 +1,6 @@
-import type {
-  TelegramBotBinding,
-  TelegramBotBindingStore,
-} from "./telegram-bot-binding-store.js";
+import type { TelegramBotBinding, TelegramBotBindingStore } from "./telegram-bot-binding-store.js";
 
-type TelegramBotBindingNarrowingStore = Pick<
-  TelegramBotBindingStore,
-  "unbind" | "unbindProfile"
->;
+type TelegramBotBindingNarrowingStore = Pick<TelegramBotBindingStore, "unbind" | "unbindProfile">;
 
 /**
  * The deliberately small authority-reduction surface for Telegram Bot routes.
@@ -18,9 +12,7 @@ type TelegramBotBindingNarrowingStore = Pick<
  * poisoned. A protected-store error is propagated; it is never converted into
  * a write, rebind, or wider fallback.
  */
-export function createTelegramBotBindingAuthorityNarrower(
-  store: TelegramBotBindingNarrowingStore,
-) {
+export function createTelegramBotBindingAuthorityNarrower(store: TelegramBotBindingNarrowingStore) {
   return Object.freeze({
     disableBot(botId: string): Promise<TelegramBotBinding> {
       return store.unbind(botId);

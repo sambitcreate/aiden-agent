@@ -27,13 +27,22 @@ const WORKSPACE: Workspace = {
   updatedAt: 1,
 };
 const ANSWERED = {
-  id: "answered-dictation", title: "Release", createdAt: 1, updatedAt: 2,
+  id: "answered-dictation",
+  title: "Release",
+  createdAt: 1,
+  updatedAt: 2,
   messages: [
     { id: "u1", role: "user", content: "Plan the release", createdAt: 1 },
     { id: "a1", role: "assistant", content: "Here is a plan.", createdAt: 2 },
   ],
 } as Chat;
-const DRAFT = { id: "draft-dictation", title: "New chat", messages: [], createdAt: 1, updatedAt: 1 } as unknown as Chat;
+const DRAFT = {
+  id: "draft-dictation",
+  title: "New chat",
+  messages: [],
+  createdAt: 1,
+  updatedAt: 1,
+} as unknown as Chat;
 
 class FakeAudioWorkletNode {
   readonly port = {
@@ -76,7 +85,12 @@ beforeEach(() => {
     "settings:get": () => null,
     "shortcut:get": () => null,
     "app:renderer-ready": () => null,
-    "voice:resolveProvider": () => ({ kind: "ready", provider: "local", modelId: "parakeet-v3-metal", automatic: true }),
+    "voice:resolveProvider": () => ({
+      kind: "ready",
+      provider: "local",
+      modelId: "parakeet-v3-metal",
+      automatic: true,
+    }),
     "localVoice:warm": () => undefined,
     "voice:localLiveStart": () => ({ sessionId: "live-1" }),
     "voice:localLivePush": () => undefined,
@@ -123,7 +137,9 @@ function Harness({ sessionChat = DRAFT }: { sessionChat?: Chat }) {
             onSend={async (text) => {
               sent.push(text);
             }}
-            onForkChat={async (messageId) => { forks.push(messageId); }}
+            onForkChat={async (messageId) => {
+              forks.push(messageId);
+            }}
             onStop={() => undefined}
             isGenerating={false}
           />
@@ -149,9 +165,19 @@ test("live dictation words appear in the draft at the caret and the final text r
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
-  act(() => emitBotTestNotification("voice:stream-text", { sessionId: "live-1", committed: "on", tentative: "safari" }));
+  act(() =>
+    emitBotTestNotification("voice:stream-text", {
+      sessionId: "live-1",
+      committed: "on",
+      tentative: "safari",
+    }),
+  );
   await waitFor(() => assert.equal(textbox.value, "Fix the bug on safari in login"));
-  assert.equal(textbox.readOnly, true, "the live words are not editable while they may still change");
+  assert.equal(
+    textbox.readOnly,
+    true,
+    "the live words are not editable while they may still change",
+  );
 
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop recording" }));
@@ -162,7 +188,10 @@ test("live dictation words appear in the draft at the caret and the final text r
   assert.equal(textbox.value, "Fix the bug on safari in login");
 
   // What shows is not yet the draft, so neither Enter nor Send sends it.
-  assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true);
+  assert.equal(
+    (screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled,
+    true,
+  );
   await act(async () => {
     fireEvent.keyDown(textbox, { key: "Enter" });
   });
@@ -184,9 +213,17 @@ test("live dictation words appear in the draft at the caret and the final text r
 test("↑ keeps live dictation in the current chat until its final transcript can be sent", async () => {
   render(<Harness sessionChat={ANSWERED} />);
   const textbox = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
-  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start voice input" })); });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Start voice input" }));
+  });
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "voice:localLiveStart")));
-  act(() => emitBotTestNotification("voice:stream-text", { sessionId: "live-1", committed: "Keep these", tentative: "words" }));
+  act(() =>
+    emitBotTestNotification("voice:stream-text", {
+      sessionId: "live-1",
+      committed: "Keep these",
+      tentative: "words",
+    }),
+  );
   await waitFor(() => assert.equal(textbox.value, "Keep these words"));
   textbox.focus();
   fireEvent.keyDown(textbox, { key: "ArrowUp" });
@@ -194,7 +231,9 @@ test("↑ keeps live dictation in the current chat until its final transcript ca
   assert.equal(textbox.value, "Keep these words");
   assert.ok(screen.getByRole("button", { name: "Stop recording" }), "capture stays active");
 
-  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Stop recording" })); });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Stop recording" }));
+  });
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "voice:transcribeLocal")));
   fireEvent.keyDown(textbox, { key: "ArrowUp" });
   assert.deepEqual(forks, [], "the pending final decode still belongs to this chat");
@@ -209,18 +248,34 @@ test("↑ keeps live dictation in the current chat until its final transcript ca
 test("↑ cannot abandon capture before any live words arrive, and works again after an empty decode", async () => {
   render(<Harness sessionChat={ANSWERED} />);
   const textbox = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
-  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start voice input" })); });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Start voice input" }));
+  });
   await screen.findByRole("button", { name: "Stop recording" });
   fireEvent.keyDown(textbox, { key: "ArrowUp" });
   assert.deepEqual(forks, [], "an empty preview does not mean there is no recording to lose");
-  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Stop recording" })); });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Stop recording" }));
+  });
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "voice:transcribeLocal")));
   fireEvent.keyDown(textbox, { key: "ArrowUp" });
   assert.deepEqual(forks, [], "an empty box still waits for its final decode");
   await act(async () => finishTranscription(""));
-  await waitFor(() => assert.equal((screen.getByRole("button", { name: "Start voice input" }) as HTMLButtonElement).disabled, false));
+  await waitFor(() =>
+    assert.equal(
+      (screen.getByRole("button", { name: "Start voice input" }) as HTMLButtonElement).disabled,
+      false,
+    ),
+  );
   fireEvent.keyDown(textbox, { key: "ArrowUp" });
-  assert.equal(textbox.value, "Plan the release", "a settled empty box can open message history again");
-  assert.ok(screen.getByRole("listbox", { name: "Message history" }), "history popover opens after decode settles");
+  assert.equal(
+    textbox.value,
+    "Plan the release",
+    "a settled empty box can open message history again",
+  );
+  assert.ok(
+    screen.getByRole("listbox", { name: "Message history" }),
+    "history popover opens after decode settles",
+  );
   assert.deepEqual(forks, [], "browsing history does not fork until requested");
 });

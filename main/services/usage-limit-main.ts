@@ -5,7 +5,11 @@ import { requestAppPath } from "./app-navigation.js";
 import { USAGE_LIMITS_CHANGED_CHANNEL } from "../../renderer/shared/usage-limits.js";
 import { configStore } from "./config-store.js";
 import { DataStore } from "./data-store.js";
-import { usageLimitGiveUpNotification, type UsageLimitEntriesDocument, type UsageLimitOwner } from "./usage-limit-core.js";
+import {
+  usageLimitGiveUpNotification,
+  type UsageLimitEntriesDocument,
+  type UsageLimitOwner,
+} from "./usage-limit-core.js";
 import { USAGE_LIMITS_FILE, UsageLimitService } from "./usage-limit-service.js";
 
 const store = new DataStore<unknown>(USAGE_LIMITS_FILE, { version: 1, entries: [] }, undefined, {
@@ -34,7 +38,10 @@ export const usageLimits = new UsageLimitService({
       `A ${owner.kind} reply waits for a ${model.provider} usage limit until ${new Date(entry?.nextTryAt ?? 0).toISOString()}.`,
     ),
   onGiveUp: ({ owner, model, decision, providerLabel, waited, maxWaitMs }) => {
-    logger.info("usage-limits", `A ${owner.kind} reply stopped waiting for a ${model.provider} usage limit (${decision?.reason}).`);
+    logger.info(
+      "usage-limits",
+      `A ${owner.kind} reply stopped waiting for a ${model.provider} usage limit (${decision?.reason}).`,
+    );
     if (!decision || maxWaitMs === undefined) return;
     const notification = usageLimitGiveUpNotification({
       providerLabel: providerLabel ?? model.provider,
@@ -53,9 +60,10 @@ function notifyGiveUp(owner: UsageLimitOwner, content: { title: string; body: st
     if (!Notification.isSupported()) return;
     const notification = new Notification(content);
     notification.on("click", () => {
-      const path = owner.kind === "bot"
-        ? `/bots/${encodeURIComponent(owner.id)}/chat`
-        : `/chat/${encodeURIComponent(owner.id)}`;
+      const path =
+        owner.kind === "bot"
+          ? `/bots/${encodeURIComponent(owner.id)}/chat`
+          : `/chat/${encodeURIComponent(owner.id)}`;
       void requestAppPath(path).catch(() => undefined);
     });
     notification.show();

@@ -37,14 +37,16 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "rows",
     title: "Move through the sidebar",
-    description: "Chats or Bots; Home and End jump to the first and last. Type a title's first letters to go to it.",
+    description:
+      "Chats or Bots; Home and End jump to the first and last. Type a title's first letters to go to it.",
     keys: ["Up", "Down"],
     section: "Moving around",
   },
   {
     id: "select-rows",
     title: "Select several chats",
-    description: "In the sidebar, from the focused chat. ⌘-click (Ctrl-click on Linux) adds or removes one, Shift-click selects a run, Esc clears.",
+    description:
+      "In the sidebar, from the focused chat. ⌘-click (Ctrl-click on Linux) adds or removes one, Shift-click selects a run, Esc clears.",
     keys: ["Shift+Up", "Shift+Down"],
     section: "Moving around",
   },
@@ -86,14 +88,16 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "mention",
     title: "Mention a workspace file",
-    description: "Type @ in the message box; Return or Tab adds it as a chip, Backspace at the start removes the last one.",
+    description:
+      "Type @ in the message box; Return or Tab adds it as a chip, Backspace at the start removes the last one.",
     keys: ["@"],
     section: "In a chat",
   },
   {
     id: "edit-last",
     title: "Browse sent message history",
-    description: "In an empty message box, shows earlier prompts with each paired reply; Down steps back, Return keeps the prompt, Esc restores the box, and Option+Return (Alt+Enter off macOS) edits a settled turn in a fork.",
+    description:
+      "In an empty message box, shows earlier prompts with each paired reply; Down steps back, Return keeps the prompt, Esc restores the box, and Option+Return (Alt+Enter off macOS) edits a settled turn in a fork.",
     keys: ["Up", "Down"],
     section: "In a chat",
   },
@@ -136,7 +140,8 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "agent-slider",
     title: "Move the Agent Slider",
-    description: "With the slider focused in the model popover; skips stops that can't run, and Home and End go to the first and last. Typing a letter opens the model list with it filled in.",
+    description:
+      "With the slider focused in the model popover; skips stops that can't run, and Home and End go to the first and last. Typing a letter opens the model list with it filled in.",
     keys: ["Left", "Right"],
     section: "In a chat",
   },
@@ -166,7 +171,8 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "canvas-draw",
     title: "Text / Frame tool",
-    description: "Click to place, or drag to size. Each drawing tool goes back to Select once it has made something.",
+    description:
+      "Click to place, or drag to size. Each drawing tool goes back to Select once it has made something.",
     keys: ["T", "F"],
     section: "Design canvas",
     requiresCapability: "designMode",
@@ -182,7 +188,8 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "canvas-lines",
     title: "Line / Arrow tool",
-    description: "Drag between two points; an end dropped on a frame stays joined to it. Shift keeps 45° steps.",
+    description:
+      "Drag between two points; an end dropped on a frame stays joined to it. Shift keeps 45° steps.",
     keys: ["L", "Shift+L"],
     section: "Design canvas",
     requiresCapability: "designMode",
@@ -198,7 +205,8 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "canvas-format",
     title: "Bold / Italic / Underline",
-    description: "Formats the selected words in a note or text item; links, lists, size and colours are on its formatting bar.",
+    description:
+      "Formats the selected words in a note or text item; links, lists, size and colours are on its formatting bar.",
     keys: ["Command+B", "Command+I", "Command+U"],
     section: "Design canvas",
     requiresCapability: "designMode",
@@ -206,7 +214,8 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "canvas-comment",
     title: "Comment tool",
-    description: "Click an element of a page, a frame or the canvas to comment. Alt picks the element's parent; Esc leaves.",
+    description:
+      "Click an element of a page, a frame or the canvas to comment. Alt picks the element's parent; Esc leaves.",
     keys: ["C"],
     section: "Design canvas",
     requiresCapability: "designMode",
@@ -222,7 +231,8 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "canvas-side-panel",
     title: "Show / hide the side panel",
-    description: "Properties, Layers and Code. In Layers, Option+Up and Option+Down reorder, or Space on a row's grip picks it up; F2 renames.",
+    description:
+      "Properties, Layers and Code. In Layers, Option+Up and Option+Down reorder, or Space on a row's grip picks it up; F2 renames.",
     keys: ["I"],
     section: "Design canvas",
     requiresCapability: "designMode",
@@ -230,7 +240,8 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "canvas-present",
     title: "Next / previous frame while presenting",
-    description: "Space and Enter also go on, Home and End jump to the first and last frame, Esc stops presenting.",
+    description:
+      "Space and Enter also go on, Home and End jump to the first and last frame, Esc stops presenting.",
     keys: ["Right", "Left"],
     section: "Design canvas",
     requiresCapability: "designMode",
@@ -262,7 +273,8 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "canvas-enter",
     title: "Enter / leave a page frame",
-    description: "Keys typed inside an entered page stay with that page. Return on text or a shape edits its words.",
+    description:
+      "Keys typed inside an entered page stay with that page. Return on text or a shape edits its words.",
     keys: ["Return", "Escape"],
     section: "Design canvas",
     requiresCapability: "designMode",

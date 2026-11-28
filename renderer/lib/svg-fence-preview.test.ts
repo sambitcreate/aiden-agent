@@ -59,7 +59,9 @@ test("an Inkscape or Illustrator doctype is allowed before the svg element", () 
   ].join("\n");
   const drawn = decode(svgPreviewSource(illustrator, "svg")!);
   assert.ok(
-    drawn.endsWith('<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>'),
+    drawn.endsWith(
+      '<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>',
+    ),
     "the namespace goes on the root, not inside the doctype",
   );
 

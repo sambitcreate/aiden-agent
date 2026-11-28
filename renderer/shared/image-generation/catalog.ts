@@ -91,61 +91,151 @@ const FAL_FLUX_SIZE: FalAspectRatioSupport = { field: "image_size", customSizes:
 
 export const CURATED_REPLICATE_IMAGE_MODELS: readonly ImageCatalogEntry[] = [
   replicate("black-forest-labs/flux-3-image", "FLUX.3", BFL, { field: "images", max: 10 }),
-  replicate("black-forest-labs/flux-2-max", "FLUX.2 Max", BFL, { field: "input_images", max: 8 }, ALL),
-  replicate("black-forest-labs/flux-2-pro", "FLUX.2 Pro", BFL, { field: "input_images", max: 8 }, ALL),
+  replicate(
+    "black-forest-labs/flux-2-max",
+    "FLUX.2 Max",
+    BFL,
+    { field: "input_images", max: 8 },
+    ALL,
+  ),
+  replicate(
+    "black-forest-labs/flux-2-pro",
+    "FLUX.2 Pro",
+    BFL,
+    { field: "input_images", max: 8 },
+    ALL,
+  ),
   replicate("black-forest-labs/flux-2-flex", "FLUX.2 Flex", BFL, undefined, ALL),
-  replicate("black-forest-labs/flux-kontext-max", "FLUX Kontext Max", BFL, { field: "input_image" }, ALL),
+  replicate(
+    "black-forest-labs/flux-kontext-max",
+    "FLUX Kontext Max",
+    BFL,
+    { field: "input_image" },
+    ALL,
+  ),
   replicate("black-forest-labs/flux-1.1-pro-ultra", "FLUX 1.1 Pro Ultra", BFL, undefined, ALL),
   replicate("black-forest-labs/flux-schnell", "FLUX Schnell", BFL, undefined, ALL),
-  replicate("google/nano-banana-2.1", "Nano Banana 2.1", "google", { field: "image_input", max: 14 }, ALL),
-  replicate("google/nano-banana-pro", "Nano Banana Pro", "google", { field: "image_input", max: 14 }, ALL),
+  replicate(
+    "google/nano-banana-2.1",
+    "Nano Banana 2.1",
+    "google",
+    { field: "image_input", max: 14 },
+    ALL,
+  ),
+  replicate(
+    "google/nano-banana-pro",
+    "Nano Banana Pro",
+    "google",
+    { field: "image_input", max: 14 },
+    ALL,
+  ),
   replicate("google/imagen-4-ultra", "Imagen 4 Ultra", "google", undefined, IMAGEN),
   replicate("google/imagen-4-fast", "Imagen 4 Fast", "google", undefined, IMAGEN),
   replicate("openai/gpt-image-2", "GPT Image 2", "openai", { field: "input_images" }, GPT_IMAGE),
-  replicate("openai/gpt-image-2.5-flare", "GPT Image 2.5 Flare", "openai", { field: "input_images" }, GPT_IMAGE),
-  replicate("bytedance/seedream-5-pro", "Seedream 5 Pro", "bytedance", { field: "image_input", max: 10 }, ALL),
-  replicate("bytedance/seedream-4.5", "Seedream 4.5", "bytedance", { field: "image_input", max: 10 }, ALL),
+  replicate(
+    "openai/gpt-image-2.5-flare",
+    "GPT Image 2.5 Flare",
+    "openai",
+    { field: "input_images" },
+    GPT_IMAGE,
+  ),
+  replicate(
+    "bytedance/seedream-5-pro",
+    "Seedream 5 Pro",
+    "bytedance",
+    { field: "image_input", max: 10 },
+    ALL,
+  ),
+  replicate(
+    "bytedance/seedream-4.5",
+    "Seedream 4.5",
+    "bytedance",
+    { field: "image_input", max: 10 },
+    ALL,
+  ),
   replicate("xai/grok-imagine-image-2", "Grok Imagine 2", "xai", { field: "image" }),
   replicate("ideogram-ai/ideogram-4-5", "Ideogram 4.5", "ideogram", undefined, ALL),
   replicate("ideogram-ai/ideogram-v4-turbo", "Ideogram 4 Turbo", "ideogram", undefined, ALL),
   replicate("recraft-ai/recraft-v4.1-pro", "Recraft 4.1 Pro", "recraft", undefined, ALL),
   replicate("qwen/qwen-image-2-pro", "Qwen Image 2 Pro", "qwen"),
   // Its `image` input is a list; Qwen documents 1–3 input images for multi-image edits.
-  replicate("qwen/qwen-image-edit-2511", "Qwen Image Edit 2511", "qwen", { field: "image", mode: "array", max: 3 }),
+  replicate("qwen/qwen-image-edit-2511", "Qwen Image Edit 2511", "qwen", {
+    field: "image",
+    mode: "array",
+    max: 3,
+  }),
   replicate("tencent/hunyuan-image-3", "Hunyuan Image 3", "tencent-hunyuan"),
   replicate("luma/photon", "Luma Photon", "luma"),
   replicate("minimax/image-01", "MiniMax Image 01", "minimax", { field: "subject_reference" }),
   replicate("bria/fibo", "Bria FIBO", "bria"),
-  replicate("stability-ai/stable-diffusion-3.5-large", "Stable Diffusion 3.5 Large", "stability-ai"),
+  replicate(
+    "stability-ai/stable-diffusion-3.5-large",
+    "Stable Diffusion 3.5 Large",
+    "stability-ai",
+  ),
   replicate("nvidia/sana", "NVIDIA Sana", "nvidia"),
 ];
 
 export const CURATED_FAL_IMAGE_MODELS: readonly ImageCatalogEntry[] = [
-  fal("blackforestlabs/flux-3/text-to-image", "FLUX.3", BFL, { endpoint: "blackforestlabs/flux-3/edit-image" }),
+  fal("blackforestlabs/flux-3/text-to-image", "FLUX.3", BFL, {
+    endpoint: "blackforestlabs/flux-3/edit-image",
+  }),
   fal("fal-ai/flux-2-max", "FLUX.2 Max", BFL, undefined, FAL_FLUX_SIZE),
   fal("fal-ai/flux-2-pro", "FLUX.2 Pro", BFL, undefined, FAL_FLUX_SIZE),
   fal("fal-ai/flux-2/klein/9b", "FLUX.2 Klein 9B", BFL, undefined, FAL_FLUX_SIZE),
-  fal("fal-ai/flux-pro/kontext/max/text-to-image", "FLUX Kontext Max", BFL, {
-    endpoint: "fal-ai/flux-pro/kontext/max",
-    field: "image_url",
-  }, FAL_ASPECT),
+  fal(
+    "fal-ai/flux-pro/kontext/max/text-to-image",
+    "FLUX Kontext Max",
+    BFL,
+    {
+      endpoint: "fal-ai/flux-pro/kontext/max",
+      field: "image_url",
+    },
+    FAL_ASPECT,
+  ),
   fal("fal-ai/flux/schnell", "FLUX Schnell", BFL, undefined, FAL_FLUX_SIZE),
-  fal("google/nano-banana-2.1", "Nano Banana 2.1", "google", { endpoint: "google/nano-banana-2.1/edit" }, FAL_ASPECT),
-  fal("fal-ai/nano-banana-pro", "Nano Banana Pro", "google", { endpoint: "fal-ai/nano-banana-pro/edit" }, FAL_ASPECT),
+  fal(
+    "google/nano-banana-2.1",
+    "Nano Banana 2.1",
+    "google",
+    { endpoint: "google/nano-banana-2.1/edit" },
+    FAL_ASPECT,
+  ),
+  fal(
+    "fal-ai/nano-banana-pro",
+    "Nano Banana Pro",
+    "google",
+    { endpoint: "fal-ai/nano-banana-pro/edit" },
+    FAL_ASPECT,
+  ),
   fal("openai/gpt-image-2", "GPT Image 2", "openai", { endpoint: "openai/gpt-image-2/edit" }),
   fal("openai/gpt-image-2.5/flare/text-to-image", "GPT Image 2.5 Flare", "openai", {
     endpoint: "openai/gpt-image-2.5/flare/edit",
   }),
-  fal("bytedance/seedream/v5/pro/text-to-image", "Seedream 5 Pro", "bytedance", {
-    endpoint: "bytedance/seedream/v5/pro/edit",
-  }, FAL_SIZE),
-  fal("bytedance/seedream/v5/flash/text-to-image", "Seedream 5 Flash", "bytedance", undefined, FAL_SIZE),
+  fal(
+    "bytedance/seedream/v5/pro/text-to-image",
+    "Seedream 5 Pro",
+    "bytedance",
+    {
+      endpoint: "bytedance/seedream/v5/pro/edit",
+    },
+    FAL_SIZE,
+  ),
+  fal(
+    "bytedance/seedream/v5/flash/text-to-image",
+    "Seedream 5 Flash",
+    "bytedance",
+    undefined,
+    FAL_SIZE,
+  ),
   fal("xai/grok-imagine-image/v2.0/text-to-image", "Grok Imagine 2", "xai", {
     endpoint: "xai/grok-imagine-image/v2.0/edit",
   }),
   fal("ideogram/v4.5", "Ideogram 4.5", "ideogram", { endpoint: "ideogram/v4.5/edit" }, FAL_SIZE),
   fal("fal-ai/recraft/v4.1/pro/text-to-image", "Recraft 4.1 Pro", "recraft", undefined, FAL_SIZE),
-  fal("alibaba/qwen-image-3/text-to-image", "Qwen Image 3", "qwen", { endpoint: "alibaba/qwen-image-3/edit" }),
+  fal("alibaba/qwen-image-3/text-to-image", "Qwen Image 3", "qwen", {
+    endpoint: "alibaba/qwen-image-3/edit",
+  }),
   fal("microsoft/mai-image-2.5-pro", "MAI Image 2.5 Pro", "microsoft", {
     endpoint: "microsoft/mai-image-2.5-pro/edit",
   }),
@@ -158,7 +248,9 @@ export const CURATED_FAL_IMAGE_MODELS: readonly ImageCatalogEntry[] = [
   fal("fal-ai/minimax/image-01", "MiniMax Image 01", "minimax"),
 ];
 
-export function curatedImageModels(provider: ImageGenerationProviderId): readonly ImageCatalogEntry[] {
+export function curatedImageModels(
+  provider: ImageGenerationProviderId,
+): readonly ImageCatalogEntry[] {
   if (provider === "replicate") return CURATED_REPLICATE_IMAGE_MODELS;
   if (provider === "fal") return CURATED_FAL_IMAGE_MODELS;
   return [];

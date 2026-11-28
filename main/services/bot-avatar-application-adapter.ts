@@ -4,10 +4,7 @@ import type {
   AidenRemoteBotAvatarUploadRequest,
   AidenRemoteBotAvatarView,
 } from "./aiden-remote-protocol.js";
-import type {
-  BotAvatarContent,
-  BotAvatarStore,
-} from "./bot-avatar-store-core.js";
+import type { BotAvatarContent, BotAvatarStore } from "./bot-avatar-store-core.js";
 
 export interface BotAvatarApplicationAdapterOptions {
   store: BotAvatarStore;
@@ -27,9 +24,7 @@ export interface BotAvatarApplicationMutation {
  * Remote adapter. Bot existence/archive/If-Match/device-grant checks remain in
  * those application layers; this adapter owns canonical asset isolation only.
  */
-export function createBotAvatarApplicationAdapter(
-  options: BotAvatarApplicationAdapterOptions,
-) {
+export function createBotAvatarApplicationAdapter(options: BotAvatarApplicationAdapterOptions) {
   return {
     async view(
       botId: string,

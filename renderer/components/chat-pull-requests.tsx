@@ -59,18 +59,17 @@ import {
 } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
 import { formatGitHubPausedUntil } from "../lib/github-pause";
-import { chatPullRequestChipLabels, chatPullRequestListStatus } from "../lib/chat-pull-request-chip";
+import {
+  chatPullRequestChipLabels,
+  chatPullRequestListStatus,
+} from "../lib/chat-pull-request-chip";
 import { useLinkOpener } from "../lib/link-opener";
 
-export function chatPullRequestRef(
-  view: ChatPullRequestView,
-): ChatPullRequestRef {
+export function chatPullRequestRef(view: ChatPullRequestView): ChatPullRequestRef {
   return { host: view.host, repository: view.repository, number: view.number };
 }
 
-export function chatPullRequestChecksTone(
-  state: ChatPullRequestView["checksState"],
-): string {
+export function chatPullRequestChecksTone(state: ChatPullRequestView["checksState"]): string {
   switch (state) {
     case "passing":
       return "bg-status-green-surface text-status-green";
@@ -105,42 +104,18 @@ export function chatPullRequestStateLabel(view: ChatPullRequestView): string {
   return "Open";
 }
 
-export function ChatPullRequestStateIcon({
-  view,
-}: {
-  view: ChatPullRequestView;
-}) {
+export function ChatPullRequestStateIcon({ view }: { view: ChatPullRequestView }) {
   const className = "size-3.5 shrink-0";
   if (view.state === "merged") {
-    return (
-      <GitMerge
-        className={cn(className, "text-secondary")}
-        aria-hidden="true"
-      />
-    );
+    return <GitMerge className={cn(className, "text-secondary")} aria-hidden="true" />;
   }
   if (view.state === "closed") {
-    return (
-      <GitPullRequestClosed
-        className={cn(className, "text-secondary")}
-        aria-hidden="true"
-      />
-    );
+    return <GitPullRequestClosed className={cn(className, "text-secondary")} aria-hidden="true" />;
   }
   if (view.isDraft) {
-    return (
-      <GitPullRequestDraft
-        className={cn(className, "text-secondary")}
-        aria-hidden="true"
-      />
-    );
+    return <GitPullRequestDraft className={cn(className, "text-secondary")} aria-hidden="true" />;
   }
-  return (
-    <GitPullRequest
-      className={cn(className, "text-status-green")}
-      aria-hidden="true"
-    />
-  );
+  return <GitPullRequest className={cn(className, "text-status-green")} aria-hidden="true" />;
 }
 
 function sourceHint(view: ChatPullRequestView): string | null {
@@ -154,13 +129,8 @@ function sourceHint(view: ChatPullRequestView): string | null {
   }
 }
 
-function samePullRequestRef(
-  a: ChatPullRequestRef,
-  b: ChatPullRequestRef,
-): boolean {
-  return (
-    a.host === b.host && a.repository === b.repository && a.number === b.number
-  );
+function samePullRequestRef(a: ChatPullRequestRef, b: ChatPullRequestRef): boolean {
+  return a.host === b.host && a.repository === b.repository && a.number === b.number;
 }
 
 function PullRequestRow({
@@ -250,9 +220,7 @@ function PullRequestRow({
                 .refresh(chatId, chatPullRequestRef(view))
                 .then(onChanged)
                 .catch((error: unknown) =>
-                  toast.error(
-                    error instanceof Error ? error.message : "Refresh failed.",
-                  ),
+                  toast.error(error instanceof Error ? error.message : "Refresh failed."),
                 )
                 .finally(() => setBusy(null));
             }}
@@ -293,9 +261,7 @@ function PullRequestRow({
                     });
                   })
                   .catch((error: unknown) =>
-                    toast.error(
-                      error instanceof Error ? error.message : "Unlink failed.",
-                    ),
+                    toast.error(error instanceof Error ? error.message : "Unlink failed."),
                   )
                   .finally(() => setBusy(null));
               }}
@@ -327,17 +293,13 @@ function PendingCreateRow({
   const [dismissOpen, setDismissOpen] = React.useState(false);
   const candidates = pending.candidates ?? [];
   return (
-    <div
-      className="mb-2 rounded-control bg-status-warning-surface px-2.5 py-2"
-      role="status"
-    >
+    <div className="mb-2 rounded-control bg-status-warning-surface px-2.5 py-2" role="status">
       <p className="flex items-center gap-1.5 text-small-strong text-status-warning">
         <AlertCircle className="size-3.5 shrink-0" aria-hidden="true" />
         PR creation needs review
       </p>
       <p className="mt-0.5 truncate text-small text-secondary">
-        {pending.intent.title} · {pending.intent.headBranch} →{" "}
-        {pending.intent.baseBranch}
+        {pending.intent.title} · {pending.intent.headBranch} → {pending.intent.baseBranch}
       </p>
       {candidates.length > 0 ? (
         <ul className="mt-2 flex flex-col gap-1">
@@ -359,22 +321,15 @@ function PendingCreateRow({
                     .adopt(chatId, pending.intent.operationId, candidate.ref)
                     .then((result) => {
                       if (result.ok) {
-                        toast.success(
-                          `Linked pull request #${candidate.ref.number}.`,
-                        );
+                        toast.success(`Linked pull request #${candidate.ref.number}.`);
                         onChanged();
                         return;
                       }
-                      toast.error(
-                        result.message ??
-                          "That pull request could not be adopted.",
-                      );
+                      toast.error(result.message ?? "That pull request could not be adopted.");
                     })
                     .catch((error: unknown) =>
                       toast.error(
-                        error instanceof Error
-                          ? error.message
-                          : "Could not link the pull request.",
+                        error instanceof Error ? error.message : "Could not link the pull request.",
                       ),
                     )
                     .finally(() => setBusy(false));
@@ -428,9 +383,7 @@ function PendingCreateRow({
             })
             .catch((error: unknown) =>
               toast.error(
-                error instanceof Error
-                  ? error.message
-                  : "Could not clear pending creation.",
+                error instanceof Error ? error.message : "Could not clear pending creation.",
               ),
             )
             .finally(() => setBusy(false));
@@ -478,11 +431,7 @@ export function PullRequestLinkDialog({
       }
       setError(result.message ?? "The pull request could not be linked.");
     } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "The pull request could not be linked.",
-      );
+      setError(cause instanceof Error ? cause.message : "The pull request could not be linked.");
     } finally {
       setBusy(false);
     }
@@ -500,9 +449,7 @@ export function PullRequestLinkDialog({
       confirmLabel={busy ? "Linking…" : "Link"}
       confirmDisabled={!url.trim() || busy}
       busy={busy}
-      onConfirm={() =>
-        void link(pullRequestsApi.link(chatId, { url: url.trim() }))
-      }
+      onConfirm={() => void link(pullRequestsApi.link(chatId, { url: url.trim() }))}
     >
       <div className="space-y-4">
         <div>
@@ -525,17 +472,12 @@ export function PullRequestLinkDialog({
             className="flex items-start gap-2 rounded-control bg-status-red-surface px-3 py-2 text-small text-status-red"
             role="alert"
           >
-            <AlertCircle
-              className="mt-0.5 size-4 shrink-0"
-              aria-hidden="true"
-            />
+            <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>{error}</span>
           </div>
         ) : null}
         <div>
-          <p className="mb-1.5 text-small-strong text-secondary">
-            Open pull requests
-          </p>
+          <p className="mb-1.5 text-small-strong text-secondary">Open pull requests</p>
           {candidates.isLoading ? (
             <p className="flex items-center gap-1.5 py-2 text-small text-tertiary">
               <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
@@ -550,18 +492,13 @@ export function PullRequestLinkDialog({
                   "Pull requests are not available for this workspace.")}
             </p>
           ) : candidates.data.pullRequests.length === 0 ? (
-            <p className="py-1 text-small text-tertiary">
-              No open pull requests found.
-            </p>
+            <p className="py-1 text-small text-tertiary">No open pull requests found.</p>
           ) : (
             <ul className="flex max-h-64 flex-col overflow-y-auto">
               {candidates.data.pullRequests.map((candidate) => {
                 const key = `${candidate.host}/${candidate.repository}#${candidate.number}`;
                 return (
-                  <li
-                    key={key}
-                    className="flex min-w-0 items-center gap-2 px-2 py-1.5"
-                  >
+                  <li key={key} className="flex min-w-0 items-center gap-2 px-2 py-1.5">
                     <ChatPullRequestStateIcon view={candidate} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-small-strong text-primary">
@@ -569,8 +506,7 @@ export function PullRequestLinkDialog({
                         {candidate.title ? ` ${candidate.title}` : ""}
                       </p>
                       <p className="truncate text-small text-tertiary">
-                        {candidate.repository} · {candidate.headBranch} →{" "}
-                        {candidate.baseBranch}
+                        {candidate.repository} · {candidate.headBranch} → {candidate.baseBranch}
                       </p>
                     </div>
                     {candidate.linked ? (
@@ -690,9 +626,7 @@ export function PullRequestCreateDialog({
         case "created":
           onOpenChange(false);
           onCreated?.(result.pullRequest);
-          toast.success(
-            `Pull request #${result.pullRequest.number} created and linked.`,
-          );
+          toast.success(`Pull request #${result.pullRequest.number} created and linked.`);
           return;
         case "ambiguous":
           setError(
@@ -707,11 +641,7 @@ export function PullRequestCreateDialog({
           return;
       }
     } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "The pull request could not be created.",
-      );
+      setError(cause instanceof Error ? cause.message : "The pull request could not be created.");
     } finally {
       setBusy(false);
     }
@@ -726,14 +656,12 @@ export function PullRequestCreateDialog({
       title="Create pull request"
       description={
         <>
-          Open a pull request for{" "}
-          <span className="font-medium text-primary">{headBranch}</span>.
+          Open a pull request for <span className="font-medium text-primary">{headBranch}</span>.
           {repository ? (
             <>
               {" "}
-              The destination repository is <strong>{repository}</strong>. To
-              target another repository, create the PR on GitHub and link its
-              URL here.
+              The destination repository is <strong>{repository}</strong>. To target another
+              repository, create the PR on GitHub and link its URL here.
             </>
           ) : (
             " The new PR is linked to this chat automatically."
@@ -741,11 +669,7 @@ export function PullRequestCreateDialog({
         </>
       }
       confirmLabel={
-        busy
-          ? "Creating…"
-          : draft
-            ? "Create draft pull request"
-            : "Create pull request"
+        busy ? "Creating…" : draft ? "Create draft pull request" : "Create pull request"
       }
       confirmDisabled={!title.trim() || !baseBranch || busy || !headBranch}
       busy={busy}
@@ -767,16 +691,8 @@ export function PullRequestCreateDialog({
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
           <div>
             <Label htmlFor="chat-pr-create-base">Base branch</Label>
-            <Select
-              value={baseBranch}
-              onValueChange={setBaseBranch}
-              disabled={busy}
-            >
-              <SelectTrigger
-                id="chat-pr-create-base"
-                className="mt-1.5"
-                aria-label="Base branch"
-              >
+            <Select value={baseBranch} onValueChange={setBaseBranch} disabled={busy}>
+              <SelectTrigger id="chat-pr-create-base" className="mt-1.5" aria-label="Base branch">
                 <SelectValue placeholder="Choose base branch" />
               </SelectTrigger>
               <SelectContent>
@@ -795,9 +711,7 @@ export function PullRequestCreateDialog({
               disabled={busy}
               aria-label="Create as draft"
             />
-            <span className="text-small text-secondary">
-              {draft ? "Draft" : "Ready"}
-            </span>
+            <span className="text-small text-secondary">{draft ? "Draft" : "Ready"}</span>
           </Label>
         </div>
         <div>
@@ -818,10 +732,7 @@ export function PullRequestCreateDialog({
             className="flex items-start gap-2 rounded-control bg-status-red-surface px-3 py-2 text-small text-status-red"
             role="alert"
           >
-            <AlertCircle
-              className="mt-0.5 size-4 shrink-0"
-              aria-hidden="true"
-            />
+            <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>{error}</span>
           </div>
         ) : null}
@@ -932,23 +843,15 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
   const currentView = current.data?.pullRequest;
   const rows = React.useMemo(() => {
     const merged = [...views];
-    if (
-      currentView &&
-      !merged.some((v) => samePullRequestRef(v, currentView))
-    ) {
+    if (currentView && !merged.some((v) => samePullRequestRef(v, currentView))) {
       merged.push(currentView);
     }
     return merged;
   }, [views, currentView]);
 
-  const pausedUntil = Math.max(
-    refresh.rateLimitedUntil ?? 0,
-    current.data?.rateLimitedUntil ?? 0,
-  );
+  const pausedUntil = Math.max(refresh.rateLimitedUntil ?? 0, current.data?.rateLimitedUntil ?? 0);
   const pausedLabel =
-    pausedUntil > Date.now()
-      ? formatGitHubPausedUntil(pausedUntil, Date.now())
-      : undefined;
+    pausedUntil > Date.now() ? formatGitHubPausedUntil(pausedUntil, Date.now()) : undefined;
 
   const pendingCount = pending.data?.length ?? 0;
   const chip = chatPullRequestChipLabels({
@@ -975,10 +878,7 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
             <GitPullRequest className="size-4 shrink-0" aria-hidden="true" />
             <span className="max-w-[14rem] truncate">{chip.text}</span>
             {pendingCount > 0 ? (
-              <span
-                className="size-1.5 rounded-full bg-status-warning"
-                aria-hidden="true"
-              />
+              <span className="size-1.5 rounded-full bg-status-warning" aria-hidden="true" />
             ) : null}
           </Button>
         </PopoverTrigger>
@@ -1011,7 +911,10 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
               />
             ))}
             {pausedLabel && listStatus !== "error" ? (
-              <p className="flex items-center gap-2 px-2 py-2 text-small text-secondary" role="status">
+              <p
+                className="flex items-center gap-2 px-2 py-2 text-small text-secondary"
+                role="status"
+              >
                 <Clock3 className="size-3.5 shrink-0" aria-hidden="true" />
                 <span className="min-w-0 flex-1">{pausedLabel}. Showing saved details.</span>
               </p>
@@ -1027,8 +930,14 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
               </div>
             ) : null}
             {listStatus === "loading" ? (
-              <p className="flex items-center gap-2 px-2 py-3 text-small text-tertiary" role="status">
-                <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              <p
+                className="flex items-center gap-2 px-2 py-3 text-small text-tertiary"
+                role="status"
+              >
+                <Loader2
+                  className="size-3.5 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
                 Loading pull requests…
               </p>
             ) : listStatus === "error" ? (
@@ -1059,8 +968,7 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
                     chatId={chatId}
                     view={view}
                     current={Boolean(
-                      currentView &&
-                      samePullRequestRef(view, chatPullRequestRef(currentView)),
+                      currentView && samePullRequestRef(view, chatPullRequestRef(currentView)),
                     )}
                     onChanged={invalidate}
                   />

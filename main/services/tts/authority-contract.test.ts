@@ -4,16 +4,29 @@ import test from "node:test";
 import { readSavedGoogleTtsKey } from "./credentials.js";
 
 test("saved Google TTS keys use the managed credential store, not legacy custom keys", async () => {
-  assert.equal(await readSavedGoogleTtsKey({ read: async (provider) => {
-    assert.equal(provider, "google");
-    return { type: "api_key", key: " test-google-key " };
-  } }), "test-google-key");
+  assert.equal(
+    await readSavedGoogleTtsKey({
+      read: async (provider) => {
+        assert.equal(provider, "google");
+        return { type: "api_key", key: " test-google-key " };
+      },
+    }),
+    "test-google-key",
+  );
   assert.equal(await readSavedGoogleTtsKey({ read: async () => undefined }), null);
   assert.equal(await readSavedGoogleTtsKey({ read: async () => ({ type: "api_key" }) }), null);
-  assert.equal(await readSavedGoogleTtsKey({ read: async () => ({ type: "api_key", key: " " }) }), null);
-  await assert.rejects(readSavedGoogleTtsKey({ read: async () => {
-    throw new Error("secure storage unavailable");
-  } }), /secure storage unavailable/u);
+  assert.equal(
+    await readSavedGoogleTtsKey({ read: async () => ({ type: "api_key", key: " " }) }),
+    null,
+  );
+  await assert.rejects(
+    readSavedGoogleTtsKey({
+      read: async () => {
+        throw new Error("secure storage unavailable");
+      },
+    }),
+    /secure storage unavailable/u,
+  );
   assert.match(bindings, /getGoogleKey: \(\) => readSavedGoogleTtsKey\(piCredentialStore\)/u);
   assert.doesNotMatch(bindings, /secrets\.getKeyStrict\("google"\)/u);
 });
@@ -51,7 +64,6 @@ test("credential mutations retain the document fence through the secret-store tr
   assert.match(bindings, /deleteKey\(TTS_DEDICATED_SECRET_ID, isCurrent\)/u);
 });
 
-
 test("production synthesis persists usage through the privacy-safe mapper", () => {
-  assert.match(bindings, /recordUsage:.*usageStore\.record\(ttsUsageRecord\(report\)\)/u);
+  assert.match(bindings, /recordUsage:[\s\S]*?usageStore\.record\(ttsUsageRecord\(report\)\)/u);
 });

@@ -78,12 +78,14 @@ async function mapBounded<Input, Output>(
 ): Promise<Output[]> {
   const output = new Array<Output>(values.length);
   let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, values.length) }, async () => {
-    while (next < values.length) {
-      const index = next++;
-      output[index] = await project(values[index]!);
-    }
-  }));
+  await Promise.all(
+    Array.from({ length: Math.min(limit, values.length) }, async () => {
+      while (next < values.length) {
+        const index = next++;
+        output[index] = await project(values[index]!);
+      }
+    }),
+  );
   return output;
 }
 
@@ -109,11 +111,7 @@ function parseRequest<Result>(
 function mapBotMutationError(error: unknown): never {
   if (error instanceof AidenRemoteServiceError) throw error;
   if (error instanceof BotApplicationUnavailableError) {
-    throw new AidenRemoteServiceError(
-      "not_found",
-      "This Bot no longer exists.",
-      404,
-    );
+    throw new AidenRemoteServiceError("not_found", "This Bot no longer exists.", 404);
   }
   if (error instanceof BotHistoricalChatReadOnlyError) {
     throw new AidenRemoteServiceError(
@@ -247,10 +245,7 @@ type BotApplicationPort = {
     /** Full → Custom from a device never adds Web search Full did not grant. */
     noWiderThanFull?: true;
   }): Promise<BotAccessView>;
-  withBotMutation?<Result>(
-    botId: string,
-    action: () => Promise<Result>,
-  ): Promise<Result>;
+  withBotMutation?<Result>(botId: string, action: () => Promise<Result>): Promise<Result>;
 };
 
 export interface AidenRemoteBotServiceOptions {
@@ -266,7 +261,9 @@ export interface AidenRemoteBotServiceOptions {
    * view of a `bot:handoffs` device: a person's pause is `paused`, which also
    * sets the summary's `paused` flag (revision 37).
    */
-  sessionStates?(botIds: readonly string[]): Promise<ReadonlyMap<string, AidenRemoteBotSessionStateKind>>;
+  sessionStates?(
+    botIds: readonly string[],
+  ): Promise<ReadonlyMap<string, AidenRemoteBotSessionStateKind>>;
   resolveProviderModel?: (input: {
     audienceId: string;
     botId: string;
@@ -286,9 +283,7 @@ export interface AidenRemoteBotServiceOptions {
     ): Promise<AidenRemoteBotConversationPage>;
   };
   health?: (botId: string) => Promise<AidenRemoteBotHealth>;
-  healthBatch?: (
-    botIds: readonly string[],
-  ) => Promise<ReadonlyMap<string, AidenRemoteBotHealth>>;
+  healthBatch?: (botIds: readonly string[]) => Promise<ReadonlyMap<string, AidenRemoteBotHealth>>;
   /**
    * Contract revision 42 (`bot:issues`): how many open "Needs you" cards the
    * Bot holds, for the summary's `issueCount`. The router sends it only to a
@@ -322,8 +317,12 @@ export class AidenRemoteBotService {
     return this.options.messaging !== undefined;
   }
 
-  async updateMessaging(input: unknown): Promise<{enabled: boolean}> {
-    const parsed = parseRequest(parseAidenRemoteBotMessagingSettings, input, "The Bot messaging settings are invalid.");
+  async updateMessaging(input: unknown): Promise<{ enabled: boolean }> {
+    const parsed = parseRequest(
+      parseAidenRemoteBotMessagingSettings,
+      input,
+      "The Bot messaging settings are invalid.",
+    );
     if (!this.options.messaging) {
       throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
     }
@@ -354,7 +353,8 @@ export class AidenRemoteBotService {
         ledger: this.idempotency,
         persist: this.options.persistIdempotency,
         notPreparedMessage: "Aiden could not durably prepare this Bot request.",
-        outcomeUnrecordedMessage: "The Bot change may have completed, but Aiden could not record its outcome.",
+        outcomeUnrecordedMessage:
+          "The Bot change may have completed, but Aiden could not record its outcome.",
       },
       scope,
       input,
@@ -457,9 +457,9 @@ export class AidenRemoteBotService {
     projectedHealth?: AidenRemoteBotHealth,
     projectedSession?: AidenRemoteBotSessionStateKind,
   ): Promise<Parameters<typeof projectAidenRemoteBotSummary>> {
-    const health = projectedHealth ?? await this.options.health?.(bot.id) ?? "ready";
-    const sessionState = projectedSession ??
-      (await this.options.sessionStates?.([bot.id]))?.get(bot.id);
+    const health = projectedHealth ?? (await this.options.health?.(bot.id)) ?? "ready";
+    const sessionState =
+      projectedSession ?? (await this.options.sessionStates?.([bot.id]))?.get(bot.id);
     const issueCount = this.options.issues
       ? await this.options.issues.openCount(bot.id).catch(() => 0)
       : undefined;
@@ -471,7 +471,9 @@ export class AidenRemoteBotService {
     projectedHealth?: AidenRemoteBotHealth,
     projectedSession?: AidenRemoteBotSessionStateKind,
   ): Promise<AidenRemoteBotSummary> {
-    return projectAidenRemoteBotSummary(...await this.summaryInputs(bot, projectedHealth, projectedSession));
+    return projectAidenRemoteBotSummary(
+      ...(await this.summaryInputs(bot, projectedHealth, projectedSession)),
+    );
   }
 
   /** The public summary of one live Bot (presets, list rows). */
@@ -479,10 +481,7 @@ export class AidenRemoteBotService {
     return this.summary(await this.bot(botId));
   }
 
-  private async detail(
-    bot: BotDefinition,
-    audienceId?: string,
-  ): Promise<AidenRemoteBotDetail> {
+  private async detail(bot: BotDefinition, audienceId?: string): Promise<AidenRemoteBotDetail> {
     const [summary, access, modelSelection, visionModelSelection] = await Promise.all([
       this.summary(bot),
       this.options.application.getBotAccess(bot.id),
@@ -496,18 +495,31 @@ export class AidenRemoteBotService {
     return parseAidenRemoteBotDetail({
       ...summary,
       instructions: bot.instructions,
-      ...(this.supportsBotMessaging ? {botMessaging: {receive: bot.acceptsBotMessages !== false, send: bot.messagesOtherBots !== false}} : {}),
+      ...(this.supportsBotMessaging
+        ? {
+            botMessaging: {
+              receive: bot.acceptsBotMessages !== false,
+              send: bot.messagesOtherBots !== false,
+            },
+          }
+        : {}),
       access: parseAidenRemoteBotAccessView(access),
       ...(modelSelection ? { modelSelection } : {}),
       ...(visionModelSelection ? { visionModelSelection } : {}),
-      ...(this.supportsChatActivity ? { chatActivity: resolveBotChatActivity(bot.chatActivity) } : {}),
+      ...(this.supportsChatActivity
+        ? { chatActivity: resolveBotChatActivity(bot.chatActivity) }
+        : {}),
     });
   }
 
   async list(): Promise<AidenRemoteBotList> {
     const bots = await this.options.application.list();
     if (bots.length > MAX_BOTS) {
-      throw new AidenRemoteServiceError("internal_error", "Aiden has too many Bots to project safely.", 500);
+      throw new AidenRemoteServiceError(
+        "internal_error",
+        "Aiden has too many Bots to project safely.",
+        500,
+      );
     }
     const ids = bots.map(({ id }) => id);
     const [health, sessions] = await Promise.all([
@@ -519,17 +531,31 @@ export class AidenRemoteBotService {
     // A read that fails (its session state, say) fails the whole list instead:
     // phones and paired Macs keep the Bots they last listed after a failed
     // read, but drop any Bot a successful list leaves out.
-    const summaries = (await mapBounded(bots, 8, async (bot) => {
-      const inputs = await this.summaryInputs(bot, health?.get(bot.id) ?? "ready", sessions?.get(bot.id));
-      try {
-        return projectAidenRemoteBotSummary(...inputs);
-      } catch (error) {
-        this.options.log?.(`Bot ${bot.id} is left out of the Bot list: its stored fields don't fit the contract.`, error);
-        return null;
-      }
-    }))
-      .filter((summary): summary is AidenRemoteBotSummary => summary !== null);
-    return parseAidenRemoteBotList({ bots: summaries, maxBots: MAX_BOTS, ...(this.options.messaging ? {messaging: {enabled: await this.options.messaging.enabled()}} : {}) });
+    const summaries = (
+      await mapBounded(bots, 8, async (bot) => {
+        const inputs = await this.summaryInputs(
+          bot,
+          health?.get(bot.id) ?? "ready",
+          sessions?.get(bot.id),
+        );
+        try {
+          return projectAidenRemoteBotSummary(...inputs);
+        } catch (error) {
+          this.options.log?.(
+            `Bot ${bot.id} is left out of the Bot list: its stored fields don't fit the contract.`,
+            error,
+          );
+          return null;
+        }
+      })
+    ).filter((summary): summary is AidenRemoteBotSummary => summary !== null);
+    return parseAidenRemoteBotList({
+      bots: summaries,
+      maxBots: MAX_BOTS,
+      ...(this.options.messaging
+        ? { messaging: { enabled: await this.options.messaging.enabled() } }
+        : {}),
+    });
   }
 
   async get(botId: string, audienceId?: string): Promise<AidenRemoteBotDetail> {
@@ -570,40 +596,33 @@ export class AidenRemoteBotService {
           key: idempotencyKey,
         },
         { expectedRevision, upload: parsed },
-        () => this.options.application.withBotMutation!(botId, async () => {
-          const current = await this.bot(botId);
-          const currentAsset = await this.options.avatar!.view(current.id, current.avatar);
-          this.requireAvatarRevision(
-            current,
-            currentAsset.asset?.assetRevision,
-            expectedRevision,
-          );
-          const result = await this.options.avatar!.put(
-            {
-              botId: current.id,
-              expectedAssetRevision: currentAsset.asset?.assetRevision ?? null,
-              operationId: this.avatarOperationId([
-                "put",
-                deviceId,
-                current.id,
-                idempotencyKey,
-              ]),
-            },
-            parsed as AidenRemoteBotAvatarUploadRequest,
-          );
-          this.options.notifyBotsChanged?.(current.id);
-          return result;
-        }),
+        () =>
+          this.options.application.withBotMutation!(botId, async () => {
+            const current = await this.bot(botId);
+            const currentAsset = await this.options.avatar!.view(current.id, current.avatar);
+            this.requireAvatarRevision(
+              current,
+              currentAsset.asset?.assetRevision,
+              expectedRevision,
+            );
+            const result = await this.options.avatar!.put(
+              {
+                botId: current.id,
+                expectedAssetRevision: currentAsset.asset?.assetRevision ?? null,
+                operationId: this.avatarOperationId(["put", deviceId, current.id, idempotencyKey]),
+              },
+              parsed as AidenRemoteBotAvatarUploadRequest,
+            );
+            this.options.notifyBotsChanged?.(current.id);
+            return result;
+          }),
       );
     } catch (error) {
       return this.mapAvatarError(error);
     }
   }
 
-  async deleteAvatar(
-    botId: string,
-    expectedRevision: string,
-  ): Promise<AidenRemoteBotDetail> {
+  async deleteAvatar(botId: string, expectedRevision: string): Promise<AidenRemoteBotDetail> {
     if (!this.options.avatar || !this.options.application.withBotMutation) {
       throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
     }
@@ -612,11 +631,7 @@ export class AidenRemoteBotService {
         const current = await this.bot(botId);
         const currentAsset = await this.options.avatar!.view(current.id, current.avatar);
         const assetRevision = currentAsset.asset?.assetRevision ?? null;
-        this.requireAvatarRevision(
-          current,
-          currentAsset.asset?.assetRevision,
-          expectedRevision,
-        );
+        this.requireAvatarRevision(current, currentAsset.asset?.assetRevision, expectedRevision);
         await this.options.avatar!.delete({
           botId: current.id,
           expectedAssetRevision: assetRevision,
@@ -636,10 +651,7 @@ export class AidenRemoteBotService {
     }
   }
 
-  async avatarContent(
-    botId: string,
-    assetRevision: string,
-  ): Promise<BotAvatarContent> {
+  async avatarContent(botId: string, assetRevision: string): Promise<BotAvatarContent> {
     if (!this.options.avatar) {
       throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
     }
@@ -708,7 +720,10 @@ export class AidenRemoteBotService {
   ): Promise<AidenRemoteBotDetail> {
     const parsed = parseRequest(
       (value: unknown) =>
-        parseAidenRemoteBotIdentityPatchRequest(value, { allowChatActivity: this.supportsChatActivity, allowBotMessaging: this.supportsBotMessaging }),
+        parseAidenRemoteBotIdentityPatchRequest(value, {
+          allowChatActivity: this.supportsChatActivity,
+          allowBotMessaging: this.supportsBotMessaging,
+        }),
       input,
       "The Bot identity update is invalid.",
     );
@@ -732,14 +747,22 @@ export class AidenRemoteBotService {
         expectedRevision,
         name: parsed.name ?? existing.name,
         ...(parsed.purpose !== undefined
-          ? parsed.purpose ? { description: parsed.purpose } : {}
-          : existing.description ? { description: existing.description } : {}),
+          ? parsed.purpose
+            ? { description: parsed.purpose }
+            : {}
+          : existing.description
+            ? { description: existing.description }
+            : {}),
         instructions: parsed.instructions ?? existing.instructions,
         avatar: recipe(parsed.avatar ?? existing.avatar),
         // Absent keeps the saved choice (slice B ruling 2); only an explicit pick changes it.
         ...(parsed.chatActivity ? { chatActivity: parsed.chatActivity } : {}),
-        ...(parsed.botMessaging?.receive === undefined ? {} : {acceptsBotMessages: parsed.botMessaging.receive}),
-        ...(parsed.botMessaging?.send === undefined ? {} : {messagesOtherBots: parsed.botMessaging.send}),
+        ...(parsed.botMessaging?.receive === undefined
+          ? {}
+          : { acceptsBotMessages: parsed.botMessaging.receive }),
+        ...(parsed.botMessaging?.send === undefined
+          ? {}
+          : { messagesOtherBots: parsed.botMessaging.send }),
       });
       this.options.notifyBotsChanged?.(updated.id);
       return this.detail(updated, audienceId);

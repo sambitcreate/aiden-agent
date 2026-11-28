@@ -76,7 +76,11 @@ test("a request stays on screen and alone shows as busy until its answer settles
   assert.equal(next.busy, false);
 
   // A request the host is still approving shows as busy even without a local answer.
-  const hostApproving = nextPairingRequest([prompt("pairreq_third", { approving: true })], new Set(), NOW);
+  const hostApproving = nextPairingRequest(
+    [prompt("pairreq_third", { approving: true })],
+    new Set(),
+    NOW,
+  );
   assert.equal(hostApproving.busy, true);
 
   // A pending answer for a request the host no longer lists falls back to the queue.
@@ -109,7 +113,13 @@ test("the approval sheet shows the code to compare, where the request came from 
 
 test("the connection request toggle reflects the saved choice and locks while saving", () => {
   const on = renderToStaticMarkup(
-    <AcceptConnectionRequestsField accept hostLabel="Mac" busy={false} disabled={false} onChange={() => {}} />,
+    <AcceptConnectionRequestsField
+      accept
+      hostLabel="Mac"
+      busy={false}
+      disabled={false}
+      onChange={() => {}}
+    />,
   );
   assert.match(on, /role="switch"[^>]*aria-checked="true"|aria-checked="true"[^>]*role="switch"/u);
   assert.match(on, /aria-label="Accept connection requests"/u);

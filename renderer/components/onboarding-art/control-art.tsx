@@ -36,7 +36,11 @@ import { ProviderIcon } from "../provider-icon";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { THEME_PRESETS, type ThemePresetId } from "../../shared/appearance";
 import { thisComputerLabel } from "../../shared/computer-noun";
-import { COMMAND_BY_ID, prettyAcceleratorForPlatform, type CommandId } from "../../shared/keybindings";
+import {
+  COMMAND_BY_ID,
+  prettyAcceleratorForPlatform,
+  type CommandId,
+} from "../../shared/keybindings";
 import {
   ArtButton,
   ArtChip,
@@ -62,7 +66,10 @@ const ACCESS_LEVELS = [
 export function PermissionsArt() {
   return (
     <>
-      <div className="oa-stack" style={{ position: "absolute", left: 12, top: 12, gap: 5, justifyItems: "start" }}>
+      <div
+        className="oa-stack"
+        style={{ position: "absolute", left: 12, top: 12, gap: 5, justifyItems: "start" }}
+      >
         <ArtChip icon={Folder}>
           <span className="oa-mono">aiden-macos</span>
         </ArtChip>
@@ -139,7 +146,12 @@ export function AidenLiveArt() {
             <span
               key={strand}
               className="oa-live-strand oa-anim-bars"
-              style={{ color: `var(--live-spectrum-${index + 1})`, transformOrigin: "center", animationDelay: `${index * 0.18}s`, opacity: 0.55 + index * 0.08 }}
+              style={{
+                color: `var(--live-spectrum-${index + 1})`,
+                transformOrigin: "center",
+                animationDelay: `${index * 0.18}s`,
+                opacity: 0.55 + index * 0.08,
+              }}
             >
               <svg viewBox="0 0 96 24" preserveAspectRatio="none">
                 <path d={strand} />
@@ -189,15 +201,29 @@ export function BotsArt() {
             <span>What should I help with?</span>
             <Bar width="82%" tone="soft" />
             <ul aria-label="Replies to tap" className="oa-bots-replies m-0 list-none p-0">
-              <li className="oa-chip"><Bar width={34} tone="soft" /></li>
-              <li className="oa-chip"><Bar width={26} tone="soft" /></li>
+              <li className="oa-chip">
+                <Bar width={34} tone="soft" />
+              </li>
+              <li className="oa-chip">
+                <Bar width={26} tone="soft" />
+              </li>
             </ul>
           </div>
-          <div aria-label="Your answer" role="group" className="oa-bots-bubble oa-anim-pop" style={{ animationDelay: "0.6s" }}>
+          <div
+            aria-label="Your answer"
+            role="group"
+            className="oa-bots-bubble oa-anim-pop"
+            style={{ animationDelay: "0.6s" }}
+          >
             <Bar width="90%" tone="ink" />
             <Bar width="62%" tone="ink" />
           </div>
-          <div role="group" aria-label="Chief set itself up" className="oa-bots-receipt oa-anim-pop" style={{ animationDelay: "1.2s" }}>
+          <div
+            role="group"
+            aria-label="Chief set itself up"
+            className="oa-bots-receipt oa-anim-pop"
+            style={{ animationDelay: "1.2s" }}
+          >
             <span>Instructions updated · Undo</span>
           </div>
           <Bar width="74%" tone="soft" className="oa-anim-type" />
@@ -210,7 +236,12 @@ export function BotsArt() {
         COS replied
       </ArtChip>
       {/* A Bot chat shrunk into a bubble: a floating head with its unread count. */}
-      <div role="group" aria-label="Chief in a bubble" className="oa-bots-head-bubble oa-anim-pop" style={{ right: 14, top: 44, animationDelay: "1.8s" }}>
+      <div
+        role="group"
+        aria-label="Chief in a bubble"
+        className="oa-bots-head-bubble oa-anim-pop"
+        style={{ right: 14, top: 44, animationDelay: "1.8s" }}
+      >
         <AvatarFace avatar={{ version: 1, shape: "drop", color: "peach" }} />
         <span className="oa-bots-head-count">2</span>
       </div>
@@ -231,7 +262,12 @@ export function BotComputersArt() {
         </span>
         <Bar width={40} tone="soft" />
         <span className="oa-grow" />
-        <ArtButton variant="ghost" icon={MousePointerClick} className="oa-anim-press" style={{ animationDelay: "1.2s" }}>
+        <ArtButton
+          variant="ghost"
+          icon={MousePointerClick}
+          className="oa-anim-press"
+          style={{ animationDelay: "1.2s" }}
+        >
           Take over
         </ArtButton>
         <ArtIcon icon={PictureInPicture2} />
@@ -250,7 +286,12 @@ export function BotComputersArt() {
           <div className="oa-stack" style={{ gap: 4, padding: "6px 8px 7px" }}>
             <Bar width="82%" />
             <Bar width="66%" tone="soft" />
-            <Bar width="74%" tone="soft" className="oa-anim-type" style={{ animationDelay: "0.4s" }} />
+            <Bar
+              width="74%"
+              tone="soft"
+              className="oa-anim-type"
+              style={{ animationDelay: "0.4s" }}
+            />
           </div>
           <span className="oa-bc-target">
             <Bar width={24} tone="ink" />
@@ -271,17 +312,29 @@ export function BotComputersArt() {
  */
 export function ScheduledAutomationsArt() {
   return (
-    <ArtWindow className="oa-schat" style={{ left: 10, top: 10, width: 176, height: "calc(100% + 20px)", minHeight: 260 }}>
+    <ArtWindow
+      className="oa-schat"
+      style={{ left: 10, top: 10, width: 176, height: "calc(100% + 20px)", minHeight: 260 }}
+    >
       <div className="oa-schat-head oa-separator-bottom">
         <ArtIcon icon={MessageSquare} />
         <Bar width={58} tone="ink" />
       </div>
-      <div className="oa-schat-chat" role="group" aria-label="A scheduled task's run in the chat it was made in">
+      <div
+        className="oa-schat-chat"
+        role="group"
+        aria-label="A scheduled task's run in the chat it was made in"
+      >
         <div className="oa-schat-bubble">
           <Bar width="100%" />
           <Bar width="56%" />
         </div>
-        <div className="oa-schat-card oa-anim-pop" role="group" aria-label="Scheduled task card" style={{ animationDelay: "0.3s" }}>
+        <div
+          className="oa-schat-card oa-anim-pop"
+          role="group"
+          aria-label="Scheduled task card"
+          style={{ animationDelay: "0.3s" }}
+        >
           <ArtIcon icon={CalendarClock} />
           <span className="oa-schat-card-text">
             <span className="oa-strong">Scheduled task</span>
@@ -314,13 +367,21 @@ export function ScheduledAutomationsArt() {
 /** A chat with a keep-going goal: a round's card in the transcript and the goal bar over the composer. */
 export function KeepGoingArt() {
   return (
-    <ArtWindow className="oa-goal" style={{ left: 10, top: 10, width: 176, height: "calc(100% + 20px)", minHeight: 220 }}>
+    <ArtWindow
+      className="oa-goal"
+      style={{ left: 10, top: 10, width: 176, height: "calc(100% + 20px)", minHeight: 220 }}
+    >
       <div className="oa-goal-chat" role="group" aria-label="A chat working toward its goal">
         <div className="oa-goal-reply">
           <Bar width="92%" tone="ink" />
           <Bar width="70%" />
         </div>
-        <div className="oa-goal-card oa-anim-pop" role="group" aria-label="Round card" style={{ animationDelay: "0.3s" }}>
+        <div
+          className="oa-goal-card oa-anim-pop"
+          role="group"
+          aria-label="Round card"
+          style={{ animationDelay: "0.3s" }}
+        >
           <ArtIcon icon={Repeat} />
           <span className="oa-strong">Keep going · round 3 of 50</span>
         </div>
@@ -448,7 +509,11 @@ export function TelegramArt() {
           <Bar width={96} tone="soft" />
           <Bar width={62} tone="soft" />
         </div>
-        <div className="oa-tg-bubble oa-tg-voice oa-anim-pop" data-out="" style={{ animationDelay: "0.6s" }}>
+        <div
+          className="oa-tg-bubble oa-tg-voice oa-anim-pop"
+          data-out=""
+          style={{ animationDelay: "0.6s" }}
+        >
           <span className="oa-tg-play">
             <ArtIcon icon={Play} />
           </span>
@@ -472,15 +537,7 @@ export function TelegramArt() {
 }
 
 /** QR modules for the pairing card: a stylised, static code with three finder corners. */
-const PAIRING_QR = [
-  "1110101",
-  "1010010",
-  "1110111",
-  "0001010",
-  "1011101",
-  "0100110",
-  "1101011",
-];
+const PAIRING_QR = ["1110101", "1010010", "1110111", "0001010", "1011101", "0100110", "1101011"];
 
 /** A paired phone beside the desktop's one-time pairing code. */
 export function AidenOnTheGoArt() {
@@ -503,9 +560,18 @@ export function AidenOnTheGoArt() {
       </div>
       <ArtWindow raised className="oa-otg-card" style={{ left: 82, top: 18, width: 100 }}>
         <div className="oa-row" style={{ gap: 6 }}>
-          <svg aria-hidden="true" className="oa-otg-qr" viewBox="0 0 7 7" width="26" height="26" shapeRendering="crispEdges">
+          <svg
+            aria-hidden="true"
+            className="oa-otg-qr"
+            viewBox="0 0 7 7"
+            width="26"
+            height="26"
+            shapeRendering="crispEdges"
+          >
             {PAIRING_QR.flatMap((row, y) =>
-              [...row].map((cell, x) => (cell === "1" ? <rect key={`${x}-${y}`} x={x} y={y} width="1" height="1" /> : null)),
+              [...row].map((cell, x) =>
+                cell === "1" ? <rect key={`${x}-${y}`} x={x} y={y} width="1" height="1" /> : null,
+              ),
             )}
           </svg>
           <span className="oa-stack" style={{ gap: 4, flex: 1 }}>
@@ -584,7 +650,11 @@ export function UsageProfileArt() {
           { id: "openai", label: "OpenAI", share: "54%" },
         ].map((model) => (
           <span key={model.id} className="oa-row" style={{ gap: 5 }}>
-            <ProviderIcon providerId={model.id} providerLabel={model.label} className="oa-usage-provider" />
+            <ProviderIcon
+              providerId={model.id}
+              providerLabel={model.label}
+              className="oa-usage-provider"
+            />
             <Bar width={40} />
             <span className="oa-usage-meter">
               <i style={{ width: model.share }} />
@@ -608,7 +678,11 @@ const THEME_TILES: ReadonlyArray<{ id: ThemePresetId; scheme: "light" | "dark" }
 
 const AIDEN_PRESET = THEME_PRESETS.find((preset) => preset.id === "aiden")!;
 
-const APPEARANCE_MODES: ReadonlyArray<{ label: string; icon: LucideIcon; schemes: ReadonlyArray<"light" | "dark"> }> = [
+const APPEARANCE_MODES: ReadonlyArray<{
+  label: string;
+  icon: LucideIcon;
+  schemes: ReadonlyArray<"light" | "dark">;
+}> = [
   { label: "System", icon: Monitor, schemes: ["light", "dark"] },
   { label: "Light", icon: Sun, schemes: ["light"] },
   { label: "Dark", icon: Moon, schemes: ["dark"] },
@@ -646,7 +720,10 @@ export function ThemesArt() {
           const selected = id === "aiden";
           return (
             <span key={id} className="oa-themes-tile">
-              <span className="oa-themes-swatch" style={{ background: palette.canvas, color: palette.foreground }}>
+              <span
+                className="oa-themes-swatch"
+                style={{ background: palette.canvas, color: palette.foreground }}
+              >
                 Aa
                 <i style={{ background: palette.accent }} />
                 {selected ? (
@@ -655,7 +732,9 @@ export function ThemesArt() {
                   </span>
                 ) : null}
               </span>
-              <span className={`oa-themes-label${selected ? " oa-selected" : ""}`}>{preset.label}</span>
+              <span className={`oa-themes-label${selected ? " oa-selected" : ""}`}>
+                {preset.label}
+              </span>
             </span>
           );
         })}
@@ -678,7 +757,10 @@ export function ChatControlsArt() {
       <div className="oa-ctl-ask" style={{ right: 12, top: 10, width: 96 }}>
         <Bar width="100%" />
       </div>
-      <div className="oa-stack" style={{ position: "absolute", left: 12, top: 30, width: 150, gap: 4 }}>
+      <div
+        className="oa-stack"
+        style={{ position: "absolute", left: 12, top: 30, width: 150, gap: 4 }}
+      >
         <Bar width="92%" tone="soft" />
         <Bar width="58%" tone="soft" />
       </div>
@@ -692,7 +774,10 @@ export function ChatControlsArt() {
         {CHAT_CONTROL_ROWS.map(({ label, on }, index) => (
           <div key={label} className="oa-ctl-row">
             <span className="oa-grow">{label}</span>
-            <span className={index === 1 ? "oa-anim-press" : undefined} style={{ display: "inline-flex" }}>
+            <span
+              className={index === 1 ? "oa-anim-press" : undefined}
+              style={{ display: "inline-flex" }}
+            >
               <Toggle on={on} />
             </span>
           </div>
@@ -702,15 +787,38 @@ export function ChatControlsArt() {
   );
 }
 
-
 /** The paired-project clone dialog, cropped to its destination and explicit file choices. */
 export function PeerProjectsArt() {
   const { platform } = useAppCapabilities();
-  return <ArtWindow raised className="oa-otg-card" style={{ left: 14, top: 12, width: 172 }}>
-    <span className="oa-row" style={{ gap: 6 }}><ArtIcon icon={Folder} /><span className="oa-mono">Add project</span></span>
-    <div className="oa-row" style={{ gap: 5, marginTop: 5 }}><ArtChip icon={Monitor}>{thisComputerLabel(platform)}</ArtChip><ArtIcon icon={ChevronRight} /><ArtChip icon={Monitor}>Studio</ArtChip></div>
-    <div className="oa-row" style={{ gap: 5, marginTop: 6 }}><ArtIcon icon={Folder} /><Bar width="70%" tone="soft" /></div>
-    <div className="oa-stack" style={{ gap: 5, marginTop: 6 }}><span className="oa-row" style={{ gap: 5 }}><Radio /><span className="oa-mono">.env</span><Bar width="40%" tone="soft" /></span><span className="oa-row" style={{ gap: 5 }}><Radio /><Bar width="55%" tone="soft" /></span></div>
-    <ArtButton variant="primary" style={{ marginTop: 7, justifySelf: "end" }}>Clone project</ArtButton>
-  </ArtWindow>;
+  return (
+    <ArtWindow raised className="oa-otg-card" style={{ left: 14, top: 12, width: 172 }}>
+      <span className="oa-row" style={{ gap: 6 }}>
+        <ArtIcon icon={Folder} />
+        <span className="oa-mono">Add project</span>
+      </span>
+      <div className="oa-row" style={{ gap: 5, marginTop: 5 }}>
+        <ArtChip icon={Monitor}>{thisComputerLabel(platform)}</ArtChip>
+        <ArtIcon icon={ChevronRight} />
+        <ArtChip icon={Monitor}>Studio</ArtChip>
+      </div>
+      <div className="oa-row" style={{ gap: 5, marginTop: 6 }}>
+        <ArtIcon icon={Folder} />
+        <Bar width="70%" tone="soft" />
+      </div>
+      <div className="oa-stack" style={{ gap: 5, marginTop: 6 }}>
+        <span className="oa-row" style={{ gap: 5 }}>
+          <Radio />
+          <span className="oa-mono">.env</span>
+          <Bar width="40%" tone="soft" />
+        </span>
+        <span className="oa-row" style={{ gap: 5 }}>
+          <Radio />
+          <Bar width="55%" tone="soft" />
+        </span>
+      </div>
+      <ArtButton variant="primary" style={{ marginTop: 7, justifySelf: "end" }}>
+        Clone project
+      </ArtButton>
+    </ArtWindow>
+  );
 }

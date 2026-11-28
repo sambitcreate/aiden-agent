@@ -6,7 +6,13 @@
 // the draft being written, the comment that is open, how far each live page
 // is scrolled, and which bridge requests are on their way.
 
-import { useReactFlow, useStore, ViewportPortal, type Node, type ReactFlowInstance } from "@xyflow/react";
+import {
+  useReactFlow,
+  useStore,
+  ViewportPortal,
+  type Node,
+  type ReactFlowInstance,
+} from "@xyflow/react";
 import { Check, Eraser, Mic, PenLine, Trash2, X } from "lucide-react";
 import * as React from "react";
 import { Button, Textarea, toast } from "../components/ui";
@@ -15,7 +21,11 @@ import { designCanvasApi } from "../lib/ipc";
 import { useSettings } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
-import { parseDesignBridgeMessage, postToDesignPage, type DesignBridgeMessage } from "../shared/design-canvas/bridge-messages";
+import {
+  parseDesignBridgeMessage,
+  postToDesignPage,
+  type DesignBridgeMessage,
+} from "../shared/design-canvas/bridge-messages";
 import {
   addComment,
   applyAnchorReport,
@@ -36,10 +46,25 @@ import {
   type DesignPageElement,
 } from "../shared/design-canvas/comments";
 import { showPage } from "../shared/design-canvas/pages";
-import type { DesignCanvas, DesignComment, DesignCommentAnchor, DesignFrame } from "../shared/design-canvas/schema";
+import type {
+  DesignCanvas,
+  DesignComment,
+  DesignCommentAnchor,
+  DesignFrame,
+} from "../shared/design-canvas/schema";
 import type { DesignNode } from "./canvas-adapter-core";
-import { commentNumbers, marksFromCanvas, marksOnCanvas, pinPlace, type FrameScroll } from "./comment-geometry";
-import { forgetCommentCrops, publishDesignCommentTray, rememberCommentCrop } from "./comment-tray-store";
+import {
+  commentNumbers,
+  marksFromCanvas,
+  marksOnCanvas,
+  pinPlace,
+  type FrameScroll,
+} from "./comment-geometry";
+import {
+  forgetCommentCrops,
+  publishDesignCommentTray,
+  rememberCommentCrop,
+} from "./comment-tray-store";
 import { DESIGN_DEFAULT_WIDTH } from "./nodes/design-node-context";
 import { isEscapeKey } from "../lib/dismiss-key";
 
@@ -71,17 +96,31 @@ type CommentsInput = {
 };
 
 /** Where a pin goes: a saved comment, or a draft's place. */
-type PinSource = Pick<DesignComment, "frameId" | "x" | "y"> & { anchor?: Omit<DesignCommentAnchor, "commentId"> };
+type PinSource = Pick<DesignComment, "frameId" | "x" | "y"> & {
+  anchor?: Omit<DesignCommentAnchor, "commentId">;
+};
 
 /** A stand-in comment for placing a pin that is not saved yet. */
 function asPinComment(id: string, source: PinSource): DesignComment {
-  const comment: DesignComment = { id, pageId: "", x: source.x, y: source.y, note: "", state: "open", anchorState: "anchored", createdAt: "" };
+  const comment: DesignComment = {
+    id,
+    pageId: "",
+    x: source.x,
+    y: source.y,
+    note: "",
+    state: "open",
+    anchorState: "anchored",
+    createdAt: "",
+  };
   if (source.frameId !== undefined) comment.frameId = source.frameId;
   if (source.anchor) comment.anchor = { ...source.anchor, commentId: id };
   return comment;
 }
 
-export function frameIframe(wrapper: HTMLElement | null, frameId: string): HTMLIFrameElement | null {
+export function frameIframe(
+  wrapper: HTMLElement | null,
+  frameId: string,
+): HTMLIFrameElement | null {
   if (!wrapper) return null;
   for (const iframe of wrapper.querySelectorAll<HTMLIFrameElement>("iframe[data-frame-id]")) {
     if (iframe.getAttribute("data-frame-id") === frameId) return iframe;
@@ -93,7 +132,16 @@ function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
-export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, live, versionOf }: CommentsInput) {
+export function useDesignComments({
+  chatId,
+  doc,
+  change,
+  flush,
+  flow,
+  wrapper,
+  live,
+  versionOf,
+}: CommentsInput) {
   const [active, setActiveState] = React.useState(false);
   const [draft, setDraft] = React.useState<CommentDraft | null>(null);
   const [openId, setOpenId] = React.useState<string | null>(null);
@@ -164,14 +212,19 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
     const receive = (event: MessageEvent) => {
       if (!event.source) return;
       let frameId: string | null = null;
-      for (const iframe of wrapper.current?.querySelectorAll<HTMLIFrameElement>("iframe[data-frame-id]") ?? []) {
-        if (iframe.contentWindow && iframe.contentWindow === event.source) frameId = iframe.getAttribute("data-frame-id");
+      for (const iframe of wrapper.current?.querySelectorAll<HTMLIFrameElement>(
+        "iframe[data-frame-id]",
+      ) ?? []) {
+        if (iframe.contentWindow && iframe.contentWindow === event.source)
+          frameId = iframe.getAttribute("data-frame-id");
       }
       if (!frameId) return;
       const message = parseDesignBridgeMessage(event.data);
       if (!message) return;
       if (message.type === "ready") {
-        setScroll((current) => (current.has(frameId) ? new Map(current).set(frameId, { x: 0, y: 0 }) : current));
+        setScroll((current) =>
+          current.has(frameId) ? new Map(current).set(frameId, { x: 0, y: 0 }) : current,
+        );
         locate(frameId);
       } else if (message.type === "scroll") {
         setScroll((current) => new Map(current).set(frameId, { x: message.x, y: message.y }));
@@ -191,13 +244,17 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
           if (comment.frameId !== frameId || !comment.anchor || !result) continue;
           const located = locateAnchor(comment.anchor, result);
           const sentAt = sentVersions.current.get(comment.id);
-          const changedSince = comment.state === "sent" && sentAt !== undefined && request.version > sentAt;
+          const changedSince =
+            comment.state === "sent" && sentAt !== undefined && request.version > sentAt;
           (changedSince ? resolving : plain)[comment.id] = located;
         }
         const at = new Date().toISOString();
         change(
           (latest) =>
-            applyAnchorReport(applyAnchorReport(latest, frameId, plain), frameId, resolving, { resolveSent: true, at }),
+            applyAnchorReport(applyAnchorReport(latest, frameId, plain), frameId, resolving, {
+              resolveSent: true,
+              at,
+            }),
           { record: false },
         );
       }
@@ -208,7 +265,12 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
 
   /** What a live page has under a screen point, or null when it does not answer. */
   const pickAt = React.useCallback(
-    (frame: DesignFrame, clientX: number, clientY: number, wide: boolean): Promise<Picked | null> => {
+    (
+      frame: DesignFrame,
+      clientX: number,
+      clientY: number,
+      wide: boolean,
+    ): Promise<Picked | null> => {
       const iframe = frameIframe(wrapper.current, frame.id);
       const target = iframe?.contentWindow;
       const rect = iframe?.getBoundingClientRect();
@@ -216,7 +278,8 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
       const factor = (frame.designWidth ?? DESIGN_DEFAULT_WIDTH) / rect.width;
       const x = (clientX - rect.left) * factor;
       const y = (clientY - rect.top) * factor;
-      if (x < 0 || y < 0 || x > rect.width * factor || y > rect.height * factor) return Promise.resolve(null);
+      if (x < 0 || y < 0 || x > rect.width * factor || y > rect.height * factor)
+        return Promise.resolve(null);
       const requestId = crypto.randomUUID();
       return new Promise((resolve) => {
         const timer = setTimeout(() => {
@@ -245,7 +308,9 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
   const openComment = (id: string | null) => {
     setDrawing(false);
     const comment = id ? docRef.current.comments.find((entry) => entry.id === id) : undefined;
-    const frame = comment?.frameId ? docRef.current.frames.find((entry) => entry.id === comment.frameId) : undefined;
+    const frame = comment?.frameId
+      ? docRef.current.frames.find((entry) => entry.id === comment.frameId)
+      : undefined;
     setStrokes(comment ? marksOnCanvas(frame, comment.marks) : []);
     setOpenId(id);
   };
@@ -290,12 +355,24 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
               frameId: frame.id,
               x,
               y,
-              anchor: { selector, text, tag, rect, point: picked.point, ...(sourcePath ? { sourcePath } : {}), ...(html ? { html } : {}) },
+              anchor: {
+                selector,
+                text,
+                tag,
+                rect,
+                point: picked.point,
+                ...(sourcePath ? { sourcePath } : {}),
+                ...(html ? { html } : {}),
+              },
             },
             label: `${frame.title} › ${elementLabel(picked.element)}`,
           });
         } else {
-          startDraft({ id: crypto.randomUUID(), place: { frameId: frame.id, x, y }, label: frame.title });
+          startDraft({
+            id: crypto.randomUUID(),
+            place: { frameId: frame.id, x, y },
+            label: frame.title,
+          });
         }
       });
       return true;
@@ -322,13 +399,24 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
   // queued there with the edit as its note.
   const elementPlace = (frame: DesignFrame, element: DesignPageElement): DesignCommentPlace => {
     const scale = frame.w / (frame.designWidth ?? DESIGN_DEFAULT_WIDTH);
-    const point: [number, number] = [Math.round(element.rect.x + element.rect.w / 2), Math.round(element.rect.y)];
+    const point: [number, number] = [
+      Math.round(element.rect.x + element.rect.w / 2),
+      Math.round(element.rect.y),
+    ];
     const { selector, text, tag, rect, sourcePath, html } = element;
     return {
       frameId: frame.id,
       x: Math.min(frame.w, Math.max(0, point[0] * scale)),
       y: Math.min(frame.h, Math.max(0, point[1] * scale)),
-      anchor: { selector, text, tag, rect, point, ...(sourcePath ? { sourcePath } : {}), ...(html ? { html } : {}) },
+      anchor: {
+        selector,
+        text,
+        tag,
+        rect,
+        point,
+        ...(sourcePath ? { sourcePath } : {}),
+        ...(html ? { html } : {}),
+      },
     };
   };
   const commentOnElement = React.useCallback((frameId: string, element: DesignPageElement) => {
@@ -340,7 +428,9 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
       label: `${frame.title} › ${elementLabel(element)}`,
     });
   }, []);
-  const captureSpotRef = React.useRef<(id: string, place: PinSource) => Promise<void>>(async () => undefined);
+  const captureSpotRef = React.useRef<(id: string, place: PinSource) => Promise<void>>(
+    async () => undefined,
+  );
   const queueOnElement = React.useCallback(
     (frameId: string, element: DesignPageElement, note: string): boolean => {
       const frame = docRef.current.frames.find((entry) => entry.id === frameId);
@@ -349,7 +439,13 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
       const place = elementPlace(frame, element);
       let added = false;
       change((latest) => {
-        const next = addComment(latest, { id, place, note, createdAt: new Date().toISOString(), queued: true });
+        const next = addComment(latest, {
+          id,
+          place,
+          note,
+          createdAt: new Date().toISOString(),
+          queued: true,
+        });
         added = next !== null;
         return next ?? latest;
       });
@@ -368,7 +464,13 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
       const place: DesignCommentPlace = { frameId: frame.id, x: Math.max(0, frame.w - 8), y: 8 };
       let added = false;
       change((latest) => {
-        const next = addComment(latest, { id, place, note, createdAt: new Date().toISOString(), queued: true });
+        const next = addComment(latest, {
+          id,
+          place,
+          note,
+          createdAt: new Date().toISOString(),
+          queued: true,
+        });
         added = next !== null;
         return next ?? latest;
       });
@@ -452,7 +554,10 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
           ? { frameId: comment.frameId, commentId: comment.id, selector: comment.anchor.selector }
           : null;
       })();
-  const highlightKey = highlighted && live.has(highlighted.frameId) ? `${highlighted.frameId}\n${highlighted.commentId}\n${highlighted.selector ?? ""}` : "";
+  const highlightKey =
+    highlighted && live.has(highlighted.frameId)
+      ? `${highlighted.frameId}\n${highlighted.commentId}\n${highlighted.selector ?? ""}`
+      : "";
   React.useEffect(() => {
     if (!highlightKey) return;
     const [frameId, commentId, selector] = highlightKey.split("\n") as [string, string, string];
@@ -465,7 +570,14 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
   const captureSpot = async (commentId: string, comment: PinSource): Promise<void> => {
     const region = wrapper.current?.getBoundingClientRect();
     const instance = flow.current;
-    if (!region || !instance || region.width < 1 || region.height < 1 || document.visibilityState === "hidden") return;
+    if (
+      !region ||
+      !instance ||
+      region.width < 1 ||
+      region.height < 1 ||
+      document.visibilityState === "hidden"
+    )
+      return;
     setCapturing(true);
     try {
       await nextFrame();
@@ -492,11 +604,20 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
     const current = draft;
     const createdAt = new Date().toISOString();
     let added = true;
-    const frame = current.place.frameId ? docRef.current.frames.find((entry) => entry.id === current.place.frameId) : undefined;
+    const frame = current.place.frameId
+      ? docRef.current.frames.find((entry) => entry.id === current.place.frameId)
+      : undefined;
     const marks = marksFromCanvas(frame, strokes);
     setDrawing(false);
     change((latest) => {
-      const next = addComment(latest, { id: current.id, place: current.place, note, createdAt, queued, marks });
+      const next = addComment(latest, {
+        id: current.id,
+        place: current.place,
+        note,
+        createdAt,
+        queued,
+        marks,
+      });
       if (!next) {
         added = false;
         return latest;
@@ -513,7 +634,9 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
 
   const saveComment = async (id: string, note: string, queued: boolean) => {
     const comment = docRef.current.comments.find((entry) => entry.id === id);
-    const frame = comment?.frameId ? docRef.current.frames.find((entry) => entry.id === comment.frameId) : undefined;
+    const frame = comment?.frameId
+      ? docRef.current.frames.find((entry) => entry.id === comment.frameId)
+      : undefined;
     const marks = marksFromCanvas(frame, strokes);
     setDrawing(false);
     change((latest) => setCommentQueued(editComment(latest, id, { note, marks }), id, queued));
@@ -549,13 +672,19 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
       queued.length === 0
         ? null
         : {
-            comments: queued.map((comment) => ({ id: comment.id, label: commentLabel(doc, comment), note: comment.note })),
+            comments: queued.map((comment) => ({
+              id: comment.id,
+              label: commentLabel(doc, comment),
+              note: comment.note,
+            })),
             block: (pictures) => designCommentsBlock(doc, queued, pictures),
             remove: (id) => change((latest) => setCommentQueued(latest, id, false)),
             markSent: async (ids) => {
               for (const id of ids) {
                 const comment = docRef.current.comments.find((entry) => entry.id === id);
-                const frame = comment?.frameId ? docRef.current.frames.find((entry) => entry.id === comment.frameId) : undefined;
+                const frame = comment?.frameId
+                  ? docRef.current.frames.find((entry) => entry.id === comment.frameId)
+                  : undefined;
                 sentVersions.current.set(id, versionOfRef.current(frame?.path));
               }
               const sentAt = new Date().toISOString();
@@ -654,7 +783,18 @@ type LayerProps = {
 const BOX_SPACE = { w: 340, h: 200 } as const;
 type BoxSide = { left: boolean; up: boolean };
 
-function CommentLayer({ doc, scroll, draft, openId, capturing, strokes, drawing, onDraw, onStrokes, ...actions }: LayerProps) {
+function CommentLayer({
+  doc,
+  scroll,
+  draft,
+  openId,
+  capturing,
+  strokes,
+  drawing,
+  onDraw,
+  onStrokes,
+  ...actions
+}: LayerProps) {
   const zoom = useStore((state) => state.transform[2]) || 1;
   const panX = useStore((state) => state.transform[0]);
   const panY = useStore((state) => state.transform[1]);
@@ -671,12 +811,12 @@ function CommentLayer({ doc, scroll, draft, openId, capturing, strokes, drawing,
     };
   };
   const comments = doc.comments.filter(
-    (comment) => comment.pageId === doc.activePageId && (comment.state !== "resolved" || comment.id === openId),
+    (comment) =>
+      comment.pageId === doc.activePageId &&
+      (comment.state !== "resolved" || comment.id === openId),
   );
   const open = openId ? comments.find((comment) => comment.id === openId) : undefined;
-  const draftPlace = draft
-    ? pinPlace(doc, asPinComment(draft.id, draft.place), scroll)
-    : null;
+  const draftPlace = draft ? pinPlace(doc, asPinComment(draft.id, draft.place), scroll) : null;
   const at = (x: number, y: number): React.CSSProperties => ({
     position: "absolute",
     left: 0,
@@ -689,20 +829,39 @@ function CommentLayer({ doc, scroll, draft, openId, capturing, strokes, drawing,
   // Saved marks of the other comments on the page, drawn faintly.
   const others = comments.flatMap((comment) => {
     if (comment.id === openId || !comment.marks || comment.state === "resolved") return [];
-    const frame = comment.frameId ? doc.frames.find((entry) => entry.id === comment.frameId) : undefined;
-    return marksOnCanvas(frame, comment.marks).map((stroke, index) => ({ key: `${comment.id}-${index}`, stroke }));
+    const frame = comment.frameId
+      ? doc.frames.find((entry) => entry.id === comment.frameId)
+      : undefined;
+    return marksOnCanvas(frame, comment.marks).map((stroke, index) => ({
+      key: `${comment.id}-${index}`,
+      stroke,
+    }));
   });
 
   return (
     <ViewportPortal>
       <div data-design-comments="" className="contents">
-        <svg aria-hidden className="pointer-events-none absolute left-0 top-0 overflow-visible" width="1" height="1">
+        <svg
+          aria-hidden
+          className="pointer-events-none absolute left-0 top-0 overflow-visible"
+          width="1"
+          height="1"
+        >
           {others.map(({ key, stroke }) => (
-            <polyline key={key} points={stroke.map(([x, y]) => `${x},${y}`).join(" ")} className="design-mark design-mark-quiet" />
+            <polyline
+              key={key}
+              points={stroke.map(([x, y]) => `${x},${y}`).join(" ")}
+              className="design-mark design-mark-quiet"
+            />
           ))}
-          {(draft || openId) && strokes.map((stroke, index) => (
-            <polyline key={index} points={stroke.map(([x, y]) => `${x},${y}`).join(" ")} className="design-mark" />
-          ))}
+          {(draft || openId) &&
+            strokes.map((stroke, index) => (
+              <polyline
+                key={index}
+                points={stroke.map(([x, y]) => `${x},${y}`).join(" ")}
+                className="design-mark"
+              />
+            ))}
         </svg>
         {drawing ? <DrawSurface strokes={strokes} onStrokes={onStrokes} /> : null}
         {comments.map((comment) => {
@@ -738,7 +897,9 @@ function CommentLayer({ doc, scroll, draft, openId, capturing, strokes, drawing,
         {draft && draftPlace ? (
           <div style={at(draftPlace.x, draftPlace.y)}>
             <CommentPin
-              number={doc.comments.filter((comment) => comment.pageId === doc.activePageId).length + 1}
+              number={
+                doc.comments.filter((comment) => comment.pageId === doc.activePageId).length + 1
+              }
               open
               label={draft.label}
             />
@@ -760,7 +921,13 @@ function CommentLayer({ doc, scroll, draft, openId, capturing, strokes, drawing,
 }
 
 /** Takes the pointer while the pen is on: each drag adds a stroke, in canvas units. */
-function DrawSurface({ strokes, onStrokes }: { strokes: Stroke[]; onStrokes(strokes: Stroke[]): void }) {
+function DrawSurface({
+  strokes,
+  onStrokes,
+}: {
+  strokes: Stroke[];
+  onStrokes(strokes: Stroke[]): void;
+}) {
   const flow = useReactFlow();
   const current = React.useRef<Stroke | null>(null);
   const base = React.useRef<Stroke[]>(strokes);
@@ -835,7 +1002,11 @@ function CommentPin({
         open && "scale-110",
       )}
     >
-      {state === "resolved" ? <Check aria-hidden className="size-3.5" /> : number > 0 ? number : null}
+      {state === "resolved" ? (
+        <Check aria-hidden className="size-3.5" />
+      ) : number > 0 ? (
+        number
+      ) : null}
     </button>
   );
 }
@@ -906,9 +1077,19 @@ function CommentBox({
         <span className="min-w-0 flex-1 truncate text-small text-secondary" title={label}>
           {label}
         </span>
-        {comment?.state === "sent" ? <span className="shrink-0 text-small text-secondary">Sent to Aiden</span> : null}
-        {comment?.state === "resolved" ? <span className="shrink-0 text-small text-secondary">Resolved</span> : null}
-        <Button variant="transparent" size="small" iconOnly aria-label="Close comment" onClick={onClose}>
+        {comment?.state === "sent" ? (
+          <span className="shrink-0 text-small text-secondary">Sent to Aiden</span>
+        ) : null}
+        {comment?.state === "resolved" ? (
+          <span className="shrink-0 text-small text-secondary">Resolved</span>
+        ) : null}
+        <Button
+          variant="transparent"
+          size="small"
+          iconOnly
+          aria-label="Close comment"
+          onClick={onClose}
+        >
           <X />
         </Button>
       </div>
@@ -939,7 +1120,9 @@ function CommentBox({
       {comment?.reply ? (
         <section aria-label="Aiden's reply" className="mt-2 rounded-button bg-control px-2 py-1.5">
           <p className="text-small text-secondary">Aiden</p>
-          <p className="whitespace-pre-wrap break-words text-regular text-primary">{comment.reply.text}</p>
+          <p className="whitespace-pre-wrap break-words text-regular text-primary">
+            {comment.reply.text}
+          </p>
         </section>
       ) : null}
       <div className="mt-2 flex items-center gap-1">
@@ -966,21 +1149,39 @@ function CommentBox({
               <PenLine />
             </Button>
             {pen.hasMarks ? (
-              <Button variant="transparent" size="small" iconOnly aria-label="Clear marks" title="Clear marks" onClick={pen.onClear}>
+              <Button
+                variant="transparent"
+                size="small"
+                iconOnly
+                aria-label="Clear marks"
+                title="Clear marks"
+                onClick={pen.onClear}
+              >
                 <Eraser />
               </Button>
             ) : null}
           </>
         ) : null}
         {comment && onDelete ? (
-          <Button variant="transparent" size="small" iconOnly aria-label="Delete comment" onClick={onDelete}>
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label="Delete comment"
+            onClick={onDelete}
+          >
             <Trash2 />
           </Button>
         ) : null}
         <div className="flex-1" />
         {editable ? (
           <>
-            <Checkbox checked={queued} onCheckedChange={setQueued} label="Send to Aiden" className="mr-1" />
+            <Checkbox
+              checked={queued}
+              onCheckedChange={setQueued}
+              label="Send to Aiden"
+              className="mr-1"
+            />
             <Button variant="accent" size="small" disabled={!note.trim()} onClick={save}>
               Save
             </Button>
@@ -1002,9 +1203,12 @@ function CommentBox({
 /** The comment box's microphone: the same voice input as the composer. */
 function CommentMic({ onText }: { onText(text: string): void }) {
   const settings = useSettings();
-  const voice = useVoiceRecorder((heard) => {
-    if (heard.trim()) onText(heard.trim());
-  }, { model: settings.data?.voiceModel });
+  const voice = useVoiceRecorder(
+    (heard) => {
+      if (heard.trim()) onText(heard.trim());
+    },
+    { model: settings.data?.voiceModel },
+  );
   const busy = voice.recording || voice.transcribing;
   return (
     <Button

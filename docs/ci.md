@@ -57,7 +57,12 @@ cancelling CI never cancels a release. Runner capacity can still cause queueing.
 
 ## Execution and coverage
 
-- TypeScript (including the e2e project) and lint run on Ubuntu. One macOS
+- TypeScript (including the e2e project), formatting (`npm run format:check`,
+  configured by `.oxfmtrc.json`; `npm run format` writes fixes and
+  `.git-blame-ignore-revs` records bulk normalization commits), ESLint, and
+  Aiden design rules run on Ubuntu in `static`. `npm run format:check` also
+  gates macOS and Linux release and Linux installer workflows, and
+  `.oxfmtrc.json` changes select the full CI matrix. One macOS
   `build` job runs `npm run build` and uploads `build/` as a tarred, one-day
   artifact; the Electron shards and `verify` download it instead of rebuilding.
   Diagnostics and branding remain in `verify`; the model-catalog suite runs in
@@ -278,8 +283,7 @@ One wall-clock ceiling was raised; the iOS item says which.
   `recording` and the live transcript reset straight after `onTranscript`. Those
   updates render from an async `onstop` callback outside `act`, so the checks now
   wait for that render too.
-- The subagent shell runner's stalled `setsid` cases (`runtime-subagents`, job
-  128208665607) raced the fixture's own one-second bound against the runner's
+- The subagent shell runner's stalled `setsid` cases (`runtime-subagents`, job 128208665607) raced the fixture's own one-second bound against the runner's
   two-second deadline. That deadline also covers helper and shell startup, so on
   a slow host it fired first. The fixture runs now take a deadline that only a
   real hang reaches, and the fixture's own bound decides the result.
@@ -309,6 +313,7 @@ One wall-clock ceiling was raised; the iOS item says which.
   while every other page, and a page whose neighbours changed, is still
   reported. The editor reloads the page itself when no frame shows the change in
   place.
+
 - Terminal docking (Electron, job 130153055685) lost the order of typed input.
   Each keystroke's access check waits on disk, and `ipcMain.handle` lets those
   handlers finish out of order. Input for one session is now written in the
@@ -367,6 +372,7 @@ and `testAnnouncedRunNotYetRegisteredIsAttachedByOneRetry`, the longer ceiling
 is the whole fix: nothing deterministic was found to wait on instead.
 
 The exception is justified on three counts:
+
 - The wait polls a condition against the wall clock instead of counting
   main-actor turns, so it ends as soon as the output appears and costs nothing
   on a healthy host.
@@ -440,8 +446,7 @@ showed `settingsPrepared:false`.
   startup milestones the bootstrap recorded, so a later hang shows how far
   launch got.
 
-On 2026-11-24 the blocking iOS job was failing or hanging on `main` (job
-138014789163) and on PRs that touch no iOS code (#890, #900, #901, #904, #915).
+On 2026-11-24 the blocking iOS job was failing or hanging on `main` (job 138014789163) and on PRs that touch no iOS code (#890, #900, #901, #904, #915).
 Different tests failed each time, and every failing test had stalled for
 minutes on a test that takes a fraction of a second locally:
 

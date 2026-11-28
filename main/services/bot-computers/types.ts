@@ -62,7 +62,11 @@ export interface BotComputerHost {
   deleteForBot(botId: string): Promise<void>;
   ensureRunning(
     botId: string,
-    options: { reason: BotComputerStartReason; signal?: AbortSignal; onProgress?(text: string): void },
+    options: {
+      reason: BotComputerStartReason;
+      signal?: AbortSignal;
+      onProgress?(text: string): void;
+    },
   ): Promise<BotComputerConnection>;
   /**
    * Stops the computer. A start in progress is cancelled, and this waits until what it launched
@@ -148,7 +152,11 @@ export interface BotComputerControl {
   takeOver(botId: string, by: BotComputerTakeOverSource): void;
   giveBack(botId: string): void;
   /** Throws `BotComputerTakenOverError` while, or once, the person has control. */
-  run<T>(botId: string, signal: AbortSignal | undefined, action: (signal: AbortSignal) => Promise<T>): Promise<T>;
+  run<T>(
+    botId: string,
+    signal: AbortSignal | undefined,
+    action: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T>;
   waitForBot(botId: string, signal: AbortSignal | undefined): Promise<void>;
   onChange(listener: (botId: string) => void): () => void;
 }

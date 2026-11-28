@@ -11,7 +11,10 @@ import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "./canvas-viewport-core";
 const noop = () => undefined;
 
 function parse(element: ReactElement) {
-  const document = new DOMParser().parseFromString(`<root>${renderToStaticMarkup(element)}</root>`, "text/xml");
+  const document = new DOMParser().parseFromString(
+    `<root>${renderToStaticMarkup(element)}</root>`,
+    "text/xml",
+  );
   const all = Array.from(document.getElementsByTagName("*"));
   return {
     all,
@@ -61,9 +64,9 @@ test("zoom controls read out the zoom and disable at the limits", () => {
 
 test("the overview map toggle reports its state", () => {
   const toggle = (minimapVisible: boolean) =>
-    parse(<CanvasZoomControls zoom={1} {...zoomProps} minimapVisible={minimapVisible} />).buttons.find(
-      (button) => button.getAttribute("aria-label") === "Overview map",
-    );
+    parse(
+      <CanvasZoomControls zoom={1} {...zoomProps} minimapVisible={minimapVisible} />,
+    ).buttons.find((button) => button.getAttribute("aria-label") === "Overview map");
   assert.equal(toggle(false)?.getAttribute("aria-pressed"), "false");
   assert.equal(toggle(true)?.getAttribute("aria-pressed"), "true");
 });
@@ -79,7 +82,13 @@ test("node chrome names the node, exposes selection, and shows status as text", 
   assert.equal(group?.getAttribute("data-selected"), "true");
   assert.ok(all.some((node) => node.textContent === "Generating"));
   assert.equal(
-    parse(<CanvasNodeChrome title="Idle" selected={false}><p /></CanvasNodeChrome>).byRole("group")[0]?.getAttribute("data-selected"),
+    parse(
+      <CanvasNodeChrome title="Idle" selected={false}>
+        <p />
+      </CanvasNodeChrome>,
+    )
+      .byRole("group")[0]
+      ?.getAttribute("data-selected"),
     "false",
   );
 });

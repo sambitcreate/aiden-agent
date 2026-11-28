@@ -57,7 +57,11 @@ export interface DisplayImageExtensionOptions {
 export interface DisplayImageExtensionRuntime {
   /** The `display_image` contribution; absent without a workspace root. */
   extension: PiAgentRuntimeExtension | undefined;
-  presentGeneratedImage(toolCallId: string, image: ImageContent, signal?: AbortSignal): Promise<void>;
+  presentGeneratedImage(
+    toolCallId: string,
+    image: ImageContent,
+    signal?: AbortSignal,
+  ): Promise<void>;
 }
 
 /** Which tool call presented an image; the call id is Pi's raw provider id. */
@@ -500,7 +504,8 @@ function sameIdentity(
 export function createDisplayImageExtensionRuntime(
   options: DisplayImageExtensionOptions,
 ): DisplayImageExtensionRuntime {
-  const workspace = options.workspaceRoot === undefined ? undefined : pinWorkspaceRoot(options.workspaceRoot);
+  const workspace =
+    options.workspaceRoot === undefined ? undefined : pinWorkspaceRoot(options.workspaceRoot);
   const existingChatImageBytes = options.existingChatImageBytes ?? 0;
   const existingChatImageCount = options.existingChatImageCount ?? 0;
   const existingChatImagePixels = options.existingChatImagePixels ?? 0;
@@ -529,15 +534,23 @@ export function createDisplayImageExtensionRuntime(
   ) => {
     signal?.throwIfAborted();
     const pixels = dimensions.width * dimensions.height;
-    if (displayedCount >= MAX_ATTACHMENTS_PER_MESSAGE || existingChatImageCount + displayedCount >= MAX_DISPLAY_IMAGES_PER_CHAT) {
+    if (
+      displayedCount >= MAX_ATTACHMENTS_PER_MESSAGE ||
+      existingChatImageCount + displayedCount >= MAX_DISPLAY_IMAGES_PER_CHAT
+    ) {
       throw new Error("Inline images reached this response or chat's image-count limit.");
     }
-    if (displayedBytes + artifact.attachment.size > MAX_DISPLAY_IMAGE_BYTES_PER_RESPONSE ||
-        existingChatImageBytes + displayedBytes + artifact.attachment.size > MAX_DISPLAY_IMAGE_BYTES_PER_CHAT) {
+    if (
+      displayedBytes + artifact.attachment.size > MAX_DISPLAY_IMAGE_BYTES_PER_RESPONSE ||
+      existingChatImageBytes + displayedBytes + artifact.attachment.size >
+        MAX_DISPLAY_IMAGE_BYTES_PER_CHAT
+    ) {
       throw new Error("Inline images reached this response or chat's storage limit.");
     }
-    if (displayedPixels + pixels > MAX_DISPLAY_IMAGE_PIXELS_PER_RESPONSE ||
-        existingChatImagePixels + displayedPixels + pixels > MAX_DISPLAY_IMAGE_PIXELS_PER_CHAT) {
+    if (
+      displayedPixels + pixels > MAX_DISPLAY_IMAGE_PIXELS_PER_RESPONSE ||
+      existingChatImagePixels + displayedPixels + pixels > MAX_DISPLAY_IMAGE_PIXELS_PER_CHAT
+    ) {
       throw new Error("Inline images reached this response or chat's decoded-pixel limit.");
     }
     const presented = (await options.onArtifact(artifact, dimensions, source)) !== false;
@@ -548,7 +561,11 @@ export function createDisplayImageExtensionRuntime(
     }
   };
 
-  const createDisplayTool = ({ lexicalRoot, canonicalRoot, rootIdentity }: PinnedWorkspaceRoot): AgentTool => {
+  const createDisplayTool = ({
+    lexicalRoot,
+    canonicalRoot,
+    rootIdentity,
+  }: PinnedWorkspaceRoot): AgentTool => {
     const assertWorkspaceRoot = async (): Promise<void> => {
       const [currentCanonical, currentIdentity] = await Promise.all([
         fs.realpath(lexicalRoot),
@@ -673,26 +690,49 @@ export function createDisplayImageExtensionRuntime(
     async presentGeneratedImage(toolCallId, image, signal) {
       const previous = serial;
       let release!: () => void;
-      serial = new Promise<void>((resolve) => { release = resolve; });
+      serial = new Promise<void>((resolve) => {
+        release = resolve;
+      });
       await previous;
       try {
         signal?.throwIfAborted();
-        if (!DISPLAY_IMAGE_MIME_TYPES.has(image.mimeType) || image.data.length > Math.ceil(MAX_DISPLAY_IMAGE_BYTES_PER_RESPONSE / 3) * 4) throw new Error("Invalid generated image.");
+        if (
+          !DISPLAY_IMAGE_MIME_TYPES.has(image.mimeType) ||
+          image.data.length > Math.ceil(MAX_DISPLAY_IMAGE_BYTES_PER_RESPONSE / 3) * 4
+        )
+          throw new Error("Invalid generated image.");
         const bytes = Buffer.from(image.data, "base64");
-        if (bytes.toString("base64") !== image.data) throw new Error("Invalid generated image encoding.");
+        if (bytes.toString("base64") !== image.data)
+          throw new Error("Invalid generated image encoding.");
         const dimensions = validateDisplayImageDimensions(bytes, image.mimeType, "Generated image");
         const extension = image.mimeType === "image/jpeg" ? "jpg" : image.mimeType.slice(6);
         await options.beforeArtifact?.();
-        await present({
-          version: CHAT_ARTIFACT_VERSION,
-          kind: "image",
-          attachment: {
-            id: createHash("sha256").update(artifactNamespace).update("\0generated\0").update(toolCallId).update("\0").update(image.data).digest("hex"),
-            name: `Generated image.${extension}`,
-            kind: "image", mimeType: image.mimeType, size: bytes.length, data: image.data,
+        await present(
+          {
+            version: CHAT_ARTIFACT_VERSION,
+            kind: "image",
+            attachment: {
+              id: createHash("sha256")
+                .update(artifactNamespace)
+                .update("\0generated\0")
+                .update(toolCallId)
+                .update("\0")
+                .update(image.data)
+                .digest("hex"),
+              name: `Generated image.${extension}`,
+              kind: "image",
+              mimeType: image.mimeType,
+              size: bytes.length,
+              data: image.data,
+            },
           },
-        }, dimensions, { tool: "generate_image", toolCallId }, signal);
-      } finally { release(); }
+          dimensions,
+          { tool: "generate_image", toolCallId },
+          signal,
+        );
+      } finally {
+        release();
+      }
     },
     extension: workspace
       ? {

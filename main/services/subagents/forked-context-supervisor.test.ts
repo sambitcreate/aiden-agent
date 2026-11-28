@@ -5,7 +5,11 @@ import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import { SUBAGENT_READ_TOOL_NAMES } from "./capability-profile.js";
 import type { SubagentTaskResult } from "./contracts.js";
 import { SubagentEventProjector } from "./subagent-event-projector.js";
-import { SubagentReplyClock, SubagentSupervisor, type PreparedSubagentRun } from "./subagent-supervisor.js";
+import {
+  SubagentReplyClock,
+  SubagentSupervisor,
+  type PreparedSubagentRun,
+} from "./subagent-supervisor.js";
 
 function runtime(): ResolvedModelRuntime {
   return {

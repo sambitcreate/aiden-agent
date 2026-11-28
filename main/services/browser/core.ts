@@ -85,19 +85,31 @@ export function browserDisplayUrl(value: string): string {
 
 /** CDP accessibility nodes also include the main-frame URL as a nested property. */
 export function browserRedactPreviewUrls<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value, (_key, entry: unknown) =>
-    typeof entry === "string" && entry.includes("__aiden_preview") ? browserDisplayUrl(entry) : entry,
-  )) as T;
+  return JSON.parse(
+    JSON.stringify(value, (_key, entry: unknown) =>
+      typeof entry === "string" && entry.includes("__aiden_preview")
+        ? browserDisplayUrl(entry)
+        : entry,
+    ),
+  ) as T;
 }
 
 /** Validate measured CSS pixels without coercing page values into dimensions. */
-export function browserMeasuredViewport(value: unknown): { width: number; height: number } | undefined {
+export function browserMeasuredViewport(
+  value: unknown,
+): { width: number; height: number } | undefined {
   if (!value || typeof value !== "object") return undefined;
   const { width, height } = value as { width?: unknown; height?: unknown };
   // Live CSS sizes include guest zoom and need not fit responsive preset limits.
-  if (typeof width !== "number" || typeof height !== "number" ||
-      !Number.isSafeInteger(width) || !Number.isSafeInteger(height) ||
-      width < 1 || height < 1) return undefined;
+  if (
+    typeof width !== "number" ||
+    typeof height !== "number" ||
+    !Number.isSafeInteger(width) ||
+    !Number.isSafeInteger(height) ||
+    width < 1 ||
+    height < 1
+  )
+    return undefined;
   return { width, height };
 }
 
@@ -156,10 +168,14 @@ export function browserGoogleSignInUserAgent(
   platform: NodeJS.Platform = process.platform,
   now = Date.now(),
 ): string {
-  const version = 91 + Math.max(0, Math.floor((now - FIREFOX_91_RELEASED_AT) / FIREFOX_RELEASE_STEP_MS));
-  const os = platform === "darwin"
-    ? "Macintosh; Intel Mac OS X 10.15"
-    : platform === "win32" ? "Windows NT 10.0; Win64; x64" : "X11; Linux x86_64";
+  const version =
+    91 + Math.max(0, Math.floor((now - FIREFOX_91_RELEASED_AT) / FIREFOX_RELEASE_STEP_MS));
+  const os =
+    platform === "darwin"
+      ? "Macintosh; Intel Mac OS X 10.15"
+      : platform === "win32"
+        ? "Windows NT 10.0; Win64; x64"
+        : "X11; Linux x86_64";
   return `Mozilla/5.0 (${os}; rv:${version}.0) Gecko/20100101 Firefox/${version}.0`;
 }
 
@@ -200,8 +216,12 @@ function browserTrustworthyRequestUrl(value: string): boolean {
     if (url.protocol === "https:" || url.protocol === "wss:") return true;
     if (url.protocol !== "http:" && url.protocol !== "ws:") return false;
     const host = url.hostname.toLowerCase();
-    return host === "localhost" || host.endsWith(".localhost") ||
-      /^127(?:\.\d+){3}$/u.test(host) || host === "[::1]";
+    return (
+      host === "localhost" ||
+      host.endsWith(".localhost") ||
+      /^127(?:\.\d+){3}$/u.test(host) ||
+      host === "[::1]"
+    );
   } catch {
     return false;
   }
@@ -345,7 +365,9 @@ export class BrowserActionQueue {
     for (const action of this.pending) if (matches(action)) action.cancelled = true;
     if (this.active && !matches(this.active.action)) return;
     this.epoch += 1;
-    this.active?.controller.abort(new Error("Browser action interrupted by user input or a closed tab."));
+    this.active?.controller.abort(
+      new Error("Browser action interrupted by user input or a closed tab."),
+    );
   }
   async run<T>(
     operation: (check: () => void) => Promise<T>,

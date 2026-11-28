@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { INVOKE_PREFIXES, NATIVE_INVOKE_CHANNELS, NOTIFICATION_CHANNELS } from "./preload-channels.js";
+import {
+  INVOKE_PREFIXES,
+  NATIVE_INVOKE_CHANNELS,
+  NOTIFICATION_CHANNELS,
+} from "./preload-channels.js";
 import {
   QUICK_CHAT_INVOKE_CHANNELS,
   QUICK_CHAT_NOTIFICATION_CHANNELS,
@@ -59,7 +63,7 @@ test("createQuickChatPreloadApi enforces invoke, notification, and microphone-on
   const calls: Array<{ channel: string; args: unknown[] }> = [];
   const subscribed: string[] = [];
   const api = createQuickChatPreloadApi({
-    invoke: async <T,>(channel: string, ...args: unknown[]) => {
+    invoke: async <T>(channel: string, ...args: unknown[]) => {
       calls.push({ channel, args });
       return true as T;
     },

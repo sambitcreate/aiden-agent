@@ -16,7 +16,11 @@ import {
 import { Badge, Button, Text } from "./ui";
 import { Tooltip } from "./ui-primitives";
 import type { CommandReading } from "../shared/command-reading";
-import { ApprovalActions, ApprovalIconTile, type ApprovalRememberOption } from "./approval-card-parts";
+import {
+  ApprovalActions,
+  ApprovalIconTile,
+  type ApprovalRememberOption,
+} from "./approval-card-parts";
 import { CopyButton } from "./copy-button";
 import { cn } from "../lib/ui-utils";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
@@ -28,7 +32,10 @@ import {
 } from "./subagent-mcp-mutation-approval";
 import { SubagentShellApproval } from "./subagent-shell-approval";
 import { HOOK_PROPOSAL_APPROVAL_FOOTER, HookProposalApproval } from "./hook-proposal-approval";
-import { HOOK_PROPOSAL_APPROVAL_KIND, isHookProposalApprovalDetails } from "../shared/hook-proposal-approval";
+import {
+  HOOK_PROPOSAL_APPROVAL_KIND,
+  isHookProposalApprovalDetails,
+} from "../shared/hook-proposal-approval";
 import { SubagentRunGrantApproval } from "./subagent-run-grant-approval";
 import { FormFillApproval } from "./form-fill-approval";
 import { useAppCapabilities } from "../lib/app-capabilities";
@@ -84,13 +91,15 @@ export function ApprovalIcon({
   command: boolean;
   icon?: LucideIcon;
 }) {
-  const Icon = icon ?? (command
-    ? SquareTerminal
-    : preview?.kind === "file"
-      ? preview.operation === "edit"
-        ? FilePen
-        : FilePlus
-      : ShieldQuestion);
+  const Icon =
+    icon ??
+    (command
+      ? SquareTerminal
+      : preview?.kind === "file"
+        ? preview.operation === "edit"
+          ? FilePen
+          : FilePlus
+        : ShieldQuestion);
   return <ApprovalIconTile icon={Icon} />;
 }
 
@@ -120,7 +129,11 @@ export function ApprovalCommand({
   return (
     <>
       <div className="approval-well relative mt-3 bg-well">
-        <div key={showWords ? "words" : "command"} className="approval-flip-face" data-flipped={flipped ? "" : undefined}>
+        <div
+          key={showWords ? "words" : "command"}
+          className="approval-flip-face"
+          data-flipped={flipped ? "" : undefined}
+        >
           {showWords ? (
             <Text
               variant="regular"
@@ -142,7 +155,9 @@ export function ApprovalCommand({
               data-approval-side="command"
               className={cn(wellClass, "font-mono", explanation !== undefined ? "pr-20" : "pr-10")}
             >
-              {explanation !== undefined ? <span className="block font-sans text-small text-tertiary">Command</span> : null}
+              {explanation !== undefined ? (
+                <span className="block font-sans text-small text-tertiary">Command</span>
+              ) : null}
               <span aria-hidden="true" className="select-none text-tertiary">
                 ${" "}
               </span>
@@ -172,7 +187,10 @@ export function ApprovalCommand({
         </div>
       </div>
       {tags.length > 0 ? (
-        <ul aria-label="What Aiden sees in this command" className="mt-2 flex shrink-0 flex-wrap justify-center gap-1.5">
+        <ul
+          aria-label="What Aiden sees in this command"
+          className="mt-2 flex shrink-0 flex-wrap justify-center gap-1.5"
+        >
           {tags.map((tag) => (
             <li key={tag.label}>
               <Badge
@@ -203,11 +221,17 @@ function ApprovalFileChange({
       id={descriptionId}
       tabIndex={0}
       role="group"
-      aria-label={preview.operation === "edit" ? `Change to ${preview.path}` : `New contents of ${preview.path}`}
+      aria-label={
+        preview.operation === "edit"
+          ? `Change to ${preview.path}`
+          : `New contents of ${preview.path}`
+      }
       className="approval-well approval-diff mt-3 max-h-56 select-text overflow-auto overscroll-contain bg-well py-2.5 font-mono text-small focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
     >
       {preview.lines.length === 0 ? (
-        <p className="px-4 font-sans text-tertiary">{preview.operation === "write" ? "Empty file" : "No visible change"}</p>
+        <p className="px-4 font-sans text-tertiary">
+          {preview.operation === "write" ? "Empty file" : "No visible change"}
+        </p>
       ) : (
         preview.lines.map((line, index) =>
           // A new or replaced file is all new text, so it reads as plain code.
@@ -229,7 +253,9 @@ function ApprovalFileChange({
               <span aria-hidden="true" className="select-none">
                 {line.type === "removed" ? "- " : line.type === "added" ? "+ " : "  "}
               </span>
-              <span className="sr-only">{line.type === "removed" ? "Removed: " : line.type === "added" ? "Added: " : ""}</span>
+              <span className="sr-only">
+                {line.type === "removed" ? "Removed: " : line.type === "added" ? "Added: " : ""}
+              </span>
               {line.text || " "}
             </div>
           ),
@@ -290,12 +316,19 @@ function LiveVoiceApprovalHint({ mode }: { mode: "voice" | "tap" }) {
       className="mt-1.5 flex shrink-0 items-center justify-center gap-1.5 text-center"
     >
       <Icon aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
-      {mode === "voice" ? "Live is listening. Say “allow” or “deny”." : "Live can’t answer this one. Tap to choose."}
+      {mode === "voice"
+        ? "Live is listening. Say “allow” or “deny”."
+        : "Live can’t answer this one. Tap to choose."}
     </Text>
   );
 }
 
-export { ApprovalActions, ApprovalStatusLine, approvalStatusLabel, type ApprovalStatus } from "./approval-card-parts";
+export {
+  ApprovalActions,
+  ApprovalStatusLine,
+  approvalStatusLabel,
+  type ApprovalStatus,
+} from "./approval-card-parts";
 
 export interface ChatApprovalDecisionOptions {
   formFillExcludedOrders?: number[];
@@ -331,21 +364,37 @@ export function revealApprovalCard(card: HTMLElement): void {
   // Reading layout restarts the tint when Go to approval is pressed again.
   void card.offsetWidth;
   card.dataset.approvalArrival = "";
-  approvalArrivalTimers.set(card, setTimeout(() => {
-    approvalArrivalTimers.delete(card);
-    delete card.dataset.approvalArrival;
-  }, APPROVAL_ARRIVAL_MS));
+  approvalArrivalTimers.set(
+    card,
+    setTimeout(() => {
+      approvalArrivalTimers.delete(card);
+      delete card.dataset.approvalArrival;
+    }, APPROVAL_ARRIVAL_MS),
+  );
 }
 
 /** What a pending approval asks for, and whether it claims a kind it fails. */
 function approvalRequestKinds(pending: ApprovalPrompt) {
   const details = pending.details as unknown;
-  const schedule = isScheduledTaskApprovalDetails(details) || isAssistantAutomationApprovalDetails(details) ? details : undefined;
-  const pendingWorkspaceWrite = isSubagentWorkspaceWriteApprovalDetails(pending.details) ? pending.details : undefined;
-  const pendingMcpMutation = isSubagentMcpMutationApprovalDetails(pending.details) ? pending.details : undefined;
-  const pendingShell = isSubagentShellApprovalDetails(pending.details) ? pending.details : undefined;
-  const pendingRunGrant = isSubagentRunGrantApprovalDetails(pending.details) ? pending.details : undefined;
-  const pendingFormFill = isFormFillBatchApprovalDetails(pending.details) ? pending.details : undefined;
+  const schedule =
+    isScheduledTaskApprovalDetails(details) || isAssistantAutomationApprovalDetails(details)
+      ? details
+      : undefined;
+  const pendingWorkspaceWrite = isSubagentWorkspaceWriteApprovalDetails(pending.details)
+    ? pending.details
+    : undefined;
+  const pendingMcpMutation = isSubagentMcpMutationApprovalDetails(pending.details)
+    ? pending.details
+    : undefined;
+  const pendingShell = isSubagentShellApprovalDetails(pending.details)
+    ? pending.details
+    : undefined;
+  const pendingRunGrant = isSubagentRunGrantApprovalDetails(pending.details)
+    ? pending.details
+    : undefined;
+  const pendingFormFill = isFormFillBatchApprovalDetails(pending.details)
+    ? pending.details
+    : undefined;
   const pendingHook = isHookProposalApprovalDetails(details) ? details : undefined;
   const pendingClassifier = classifierApprovalState(pending.toolName, details);
   const invalidPendingPrivilegedApproval =
@@ -380,7 +429,8 @@ function approvalStatusText({
   disabledReason,
 }: ChatApprovalCardProps): string {
   const position = pendingCount > 1 ? `, 1 of ${pendingCount}` : "";
-  if (isComputerUseAccessApprovalDetails(pending.details)) return `Approval needed for Computer Use${position}`;
+  if (isComputerUseAccessApprovalDetails(pending.details))
+    return `Approval needed for Computer Use${position}`;
   const kinds = approvalRequestKinds(pending);
   if (kinds.invalidPendingPrivilegedApproval) return "Invalid privileged approval blocked";
   const subject =
@@ -439,15 +489,15 @@ export function ChatApprovalCard(props: ChatApprovalCardProps) {
   return (
     // Approvals are the user's: Aiden Live can never press Allow, Always allow or their menu.
     <LiveGuard guard="you">
-    <div className="flex min-h-0 flex-col">
-      {/* The status line outlives each approval, so a screen reader announces
+      <div className="flex min-h-0 flex-col">
+        {/* The status line outlives each approval, so a screen reader announces
           the next one as its text changes; the card below it belongs to one
           approval and starts fresh for the next (its choices, its tint). */}
-      <p className="sr-only" role="status">
-        {approvalStatusText(props)}
-      </p>
-      <ApprovalCardBody key={props.pending.approvalId} {...props} />
-    </div>
+        <p className="sr-only" role="status">
+          {approvalStatusText(props)}
+        </p>
+        <ApprovalCardBody key={props.pending.approvalId} {...props} />
+      </div>
     </LiveGuard>
   );
 }
@@ -484,11 +534,16 @@ function ApprovalCardBody({
     invalidPendingPrivilegedApproval,
   } = approvalRequestKinds(pending);
   const [formFillExcludedOrders, setFormFillExcludedOrders] = React.useState<number[]>([]);
-  const pendingCanAllow = pending.canAllow !== false && !invalidPendingPrivilegedApproval && allowElsewhere === undefined;
+  const pendingCanAllow =
+    pending.canAllow !== false && !invalidPendingPrivilegedApproval && allowElsewhere === undefined;
   // Only plain workspace writes and shell commands can be remembered; the main
   // process offers scopes solely for those, and specialized cards keep once.
   const pendingRememberScopes =
-    !pendingClassifier.details && !pendingFormFill && !pendingMcpMutation && !pendingRunGrant && !pendingHook
+    !pendingClassifier.details &&
+    !pendingFormFill &&
+    !pendingMcpMutation &&
+    !pendingRunGrant &&
+    !pendingHook
       ? rememberableApprovalScopes(pending.scopes, pendingCanAllow)
       : [];
   const computerUseAccess = isComputerUseAccessApprovalDetails(details);
@@ -528,18 +583,31 @@ function ApprovalCardBody({
   const requestedById = `approval-requester-${pending.approvalId}`;
   // A card that can't be allowed here still shows its request when the reason
   // is only where it may be allowed.
-  const reviewable = pendingCanAllow || (allowElsewhere !== undefined && !invalidPendingPrivilegedApproval && pending.canAllow !== false);
+  const reviewable =
+    pendingCanAllow ||
+    (allowElsewhere !== undefined &&
+      !invalidPendingPrivilegedApproval &&
+      pending.canAllow !== false);
   // Plain coding approvals show the exact command or file change; specialized
   // and invalid approvals keep their own review bodies.
   const plainApproval =
-    !invalidPendingPrivilegedApproval && reviewable && !schedule && !pendingClassifier.details &&
-    !pendingWorkspaceWrite && !pendingMcpMutation && !pendingShell && !pendingRunGrant && !pendingFormFill && !pendingHook;
+    !invalidPendingPrivilegedApproval &&
+    reviewable &&
+    !schedule &&
+    !pendingClassifier.details &&
+    !pendingWorkspaceWrite &&
+    !pendingMcpMutation &&
+    !pendingShell &&
+    !pendingRunGrant &&
+    !pendingFormFill &&
+    !pendingHook;
   const plainPreview = plainApproval ? pending.preview : undefined;
   const plainCommand = plainApproval ? approvalCommand(pending) : undefined;
   const rememberOptions: ApprovalRememberOption[] = pendingRememberScopes.map((scope) => ({
     key: scope,
     label: scope === "always" && alwaysOption ? alwaysOption.label : toolApprovalScopeLabel(scope),
-    hint: scope === "always" && alwaysOption ? alwaysOption.hint : rememberScopeHint(scope, pending),
+    hint:
+      scope === "always" && alwaysOption ? alwaysOption.hint : rememberScopeHint(scope, pending),
     onSelect: () => onDecide("allow", { scope }),
   }));
 
@@ -549,7 +617,9 @@ function ApprovalCardBody({
       // Focusable as a whole, so moving here never lands on Allow or Deny.
       tabIndex={-1}
       aria-labelledby={
-        requestedBy ? `${requestedById} approval-title-${pending.approvalId}` : `approval-title-${pending.approvalId}`
+        requestedBy
+          ? `${requestedById} approval-title-${pending.approvalId}`
+          : `approval-title-${pending.approvalId}`
       }
       aria-describedby={summaryId}
       className={cn(
@@ -571,18 +641,31 @@ function ApprovalCardBody({
           command={plainCommand !== undefined}
           icon={schedule && pendingCanAllow ? CalendarClock : undefined}
         />
-        <Text variant="strong" as="p" id={`approval-title-${pending.approvalId}`} className="mt-2.5 text-balance">
+        <Text
+          variant="strong"
+          as="p"
+          id={`approval-title-${pending.approvalId}`}
+          className="mt-2.5 text-balance"
+        >
           {invalidPendingPrivilegedApproval
             ? "Invalid privileged approval blocked"
             : // A hook the person can't apply here reads as the plain card it falls back to.
-              (pendingHook && !pendingCanAllow ? undefined : approvalDetailsHeadline(details)) ?? approvalHeadline(pending)}
-          {pendingCount > 1 ? <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span> : null}
+              ((pendingHook && !pendingCanAllow ? undefined : approvalDetailsHeadline(details)) ??
+              approvalHeadline(pending))}
+          {pendingCount > 1 ? (
+            <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span>
+          ) : null}
         </Text>
       </div>
       {!reviewable ? (
-        <Text variant="small" as="p" id={summaryId} className="approval-well mt-3 bg-well px-4 py-3">
-          Aiden cannot safely authorize this action from this view. Deny it here or review the exact action on the
-          device that owns this chat.
+        <Text
+          variant="small"
+          as="p"
+          id={summaryId}
+          className="approval-well mt-3 bg-well px-4 py-3"
+        >
+          Aiden cannot safely authorize this action from this view. Deny it here or review the exact
+          action on the device that owns this chat.
         </Text>
       ) : schedule ? (
         <ScheduledTaskApproval details={schedule} descriptionId={summaryId} />
@@ -624,7 +707,12 @@ function ApprovalCardBody({
           {pending.summary}
         </Text>
       )}
-      <Text variant="small" color="secondary" as="p" className="mt-2.5 shrink-0 text-center text-pretty">
+      <Text
+        variant="small"
+        color="secondary"
+        as="p"
+        className="mt-2.5 shrink-0 text-center text-pretty"
+      >
         {invalidPendingPrivilegedApproval
           ? "This malformed privileged action cannot be allowed. Deny it to continue."
           : pendingWorkspaceWrite
@@ -638,37 +726,69 @@ function ApprovalCardBody({
                   : pendingHook && pendingCanAllow
                     ? HOOK_PROPOSAL_APPROVAL_FOOTER
                     : schedule
-                    ? scheduleApprovalFooter(platform)
-                    : approvalMeta(plainPreview, requester)}
+                      ? scheduleApprovalFooter(platform)
+                      : approvalMeta(plainPreview, requester)}
       </Text>
       {notes.map((note) => (
-        <Text key={note} variant="small" color="tertiary" as="p" className="mt-1 shrink-0 text-center text-pretty">
+        <Text
+          key={note}
+          variant="small"
+          color="tertiary"
+          as="p"
+          className="mt-1 shrink-0 text-center text-pretty"
+        >
           {note}
         </Text>
       ))}
       {suggestion ? (
-        <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-x-1.5" role="group" aria-label={suggestion.text}>
+        <div
+          className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-x-1.5"
+          role="group"
+          aria-label={suggestion.text}
+        >
           <Text variant="small" color="tertiary" as="span" className="text-pretty">
             {suggestion.text}
           </Text>
-          <Button variant="transparent" size="small" disabled={suggestion.busy === true || deciding} onClick={suggestion.onAction}>
+          <Button
+            variant="transparent"
+            size="small"
+            disabled={suggestion.busy === true || deciding}
+            onClick={suggestion.onAction}
+          >
             {suggestion.action}
           </Button>
         </div>
       ) : null}
       {allowElsewhere !== undefined ? (
-        <Text variant="small" color="secondary" as="p" role="note" className="mt-1.5 shrink-0 text-center">
+        <Text
+          variant="small"
+          color="secondary"
+          as="p"
+          role="note"
+          className="mt-1.5 shrink-0 text-center"
+        >
           {`Allow it on ${allowElsewhere}.`}
         </Text>
       ) : null}
       {disabledReason ? (
-        <Text variant="small" color="secondary" as="p" role="note" className="mt-1.5 shrink-0 text-center">
+        <Text
+          variant="small"
+          color="secondary"
+          as="p"
+          role="note"
+          className="mt-1.5 shrink-0 text-center"
+        >
           {disabledReason}
         </Text>
       ) : null}
       {liveVoice && !disabledReason ? <LiveVoiceApprovalHint mode={liveVoice} /> : null}
       {error ? (
-        <Text variant="small" as="p" role="alert" className="mt-1.5 shrink-0 text-center text-status-red">
+        <Text
+          variant="small"
+          as="p"
+          role="alert"
+          className="mt-1.5 shrink-0 text-center text-status-red"
+        >
           {error}
         </Text>
       ) : null}
@@ -690,7 +810,8 @@ function ApprovalCardBody({
                       : pendingHook
                         ? "Apply"
                         : "Allow once",
-              onAllow: () => onDecide("allow", pendingFormFill ? { formFillExcludedOrders } : undefined),
+              onAllow: () =>
+                onDecide("allow", pendingFormFill ? { formFillExcludedOrders } : undefined),
             }
           : {})}
         rememberOptions={rememberOptions}

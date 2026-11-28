@@ -20,11 +20,11 @@ export interface AidenRemoteLanHostnameOptions {
 }
 
 async function readMacLocalHostName(): Promise<string> {
-  const { stdout } = await execFileAsync(
-    "/usr/sbin/scutil",
-    ["--get", "LocalHostName"],
-    { timeout: 1_000, maxBuffer: 4_096, encoding: "utf8" },
-  );
+  const { stdout } = await execFileAsync("/usr/sbin/scutil", ["--get", "LocalHostName"], {
+    timeout: 1_000,
+    maxBuffer: 4_096,
+    encoding: "utf8",
+  });
   return stdout;
 }
 

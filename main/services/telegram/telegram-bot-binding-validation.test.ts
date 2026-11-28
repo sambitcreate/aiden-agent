@@ -68,7 +68,10 @@ test("stale route fields, disabled records, and profile-owner drift fail indepen
     ["owner", { ...binding, ownerUserId: 8 }],
     ["external workspace", { ...binding, workspaceId: "other" }],
     ["managed workspace", { ...binding, backingWorkspaceId: "other" }],
-    ["backing chat", { ...binding, backingChatId: "telegram-bot-22222222-2222-4222-8222-222222222222" }],
+    [
+      "backing chat",
+      { ...binding, backingChatId: "telegram-bot-22222222-2222-4222-8222-222222222222" },
+    ],
   ] as const) {
     await t.test(name, async () => {
       assert.equal(
@@ -89,9 +92,7 @@ test("stale route fields, disabled records, and profile-owner drift fail indepen
 });
 
 test("managed-home and chat-policy identity mismatches use fixed conversation copy", async (t) => {
-  const cases: Array<
-    readonly [string, Partial<TelegramBotBindingValidationDependencies>]
-  > = [
+  const cases: Array<readonly [string, Partial<TelegramBotBindingValidationDependencies>]> = [
     [
       "managed-home owner",
       {
@@ -140,9 +141,7 @@ test("managed-home and chat-policy identity mismatches use fixed conversation co
 });
 
 test("private dependency failures collapse to one fixed repair message", async (t) => {
-  const failures: Array<
-    readonly [string, keyof TelegramBotBindingValidationDependencies]
-  > = [
+  const failures: Array<readonly [string, keyof TelegramBotBindingValidationDependencies]> = [
     ["Bot", "getBot"],
     ["profile", "getProfileOwnerUserId"],
     ["binding", "getActiveBinding"],

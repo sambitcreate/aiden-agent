@@ -21,7 +21,9 @@ function helper(script: { commit: Step; finalize?: Step; preserve?: Step; recove
         throw new SubagentFileMutatorError("indeterminate");
       }
       client.currentState = "committed";
-      return script.recovery === false ? {} : { recoveryName: ".aiden-subagent-file-effect-recovery" };
+      return script.recovery === false
+        ? {}
+        : { recoveryName: ".aiden-subagent-file-effect-recovery" };
     },
     async finalize() {
       calls.push("finalize");
@@ -37,18 +39,26 @@ function helper(script: { commit: Step; finalize?: Step; preserve?: Step; recove
 
 const run = (script: Parameters<typeof helper>[0]) => {
   const { client, calls } = helper(script);
-  return commitSubagentFileMutation(client, "effect", new AbortController().signal).then((outcome) => ({
-    kind: outcome.kind,
-    calls,
-  }));
+  return commitSubagentFileMutation(client, "effect", new AbortController().signal).then(
+    (outcome) => ({
+      kind: outcome.kind,
+      calls,
+    }),
+  );
 };
 
 test("a clean commit removes its recovery file and reports success", async () => {
-  assert.deepEqual(await run({ commit: "ok" }), { kind: "committed", calls: ["commit", "finalize"] });
+  assert.deepEqual(await run({ commit: "ok" }), {
+    kind: "committed",
+    calls: ["commit", "finalize"],
+  });
 });
 
 test("creating a new file has no recovery file to finalize", async () => {
-  assert.deepEqual(await run({ commit: "ok", recovery: false }), { kind: "committed", calls: ["commit"] });
+  assert.deepEqual(await run({ commit: "ok", recovery: false }), {
+    kind: "committed",
+    calls: ["commit"],
+  });
 });
 
 test("a refusal before publishing touches nothing further", async () => {
@@ -56,7 +66,10 @@ test("a refusal before publishing touches nothing further", async () => {
 });
 
 test("an unknown commit keeps recovery evidence and never reads as a clean failure", async () => {
-  assert.deepEqual(await run({ commit: "indeterminate" }), { kind: "unknown", calls: ["commit", "preserve"] });
+  assert.deepEqual(await run({ commit: "indeterminate" }), {
+    kind: "unknown",
+    calls: ["commit", "preserve"],
+  });
   assert.deepEqual(await run({ commit: "indeterminate", preserve: "indeterminate" }), {
     kind: "unknown",
     calls: ["commit", "preserve"],
@@ -68,8 +81,11 @@ test("a cleanup failure after publishing is still a committed write", async () =
     kind: "recovery_kept",
     calls: ["commit", "finalize", "preserve"],
   });
-  assert.deepEqual(await run({ commit: "ok", finalize: "indeterminate", preserve: "indeterminate" }), {
-    kind: "cleanup_unknown",
-    calls: ["commit", "finalize", "preserve"],
-  });
+  assert.deepEqual(
+    await run({ commit: "ok", finalize: "indeterminate", preserve: "indeterminate" }),
+    {
+      kind: "cleanup_unknown",
+      calls: ["commit", "finalize", "preserve"],
+    },
+  );
 });

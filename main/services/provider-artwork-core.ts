@@ -65,7 +65,9 @@ export function decodeProviderArtworkSource(value: unknown): {
     throw new Error("The SVG file is invalid.");
   }
   if (
-    /<!DOCTYPE|<!ENTITY|<\?xml-stylesheet|<script|<foreignObject|<iframe|<object|<embed|<image|<use|\bon[a-z]+\s*=|\b(?:href|xlink:href)\s*=|\burl\s*\(|@import\b/iu.test(source)
+    /<!DOCTYPE|<!ENTITY|<\?xml-stylesheet|<script|<foreignObject|<iframe|<object|<embed|<image|<use|\bon[a-z]+\s*=|\b(?:href|xlink:href)\s*=|\burl\s*\(|@import\b/iu.test(
+      source,
+    )
   ) {
     throw new Error("SVG provider icons cannot contain scripts or external resources.");
   }
@@ -93,30 +95,29 @@ export function createProviderArtworkNormalizer(codec: ProviderArtworkImageCodec
   /** Validate, rasterize and downscale an uploaded PNG/SVG into display-contract artwork. */
   function normalizeInput(value: unknown): ProviderArtwork {
     const source = decodeProviderArtworkSource(value);
-    if (
-      source.pixelSize &&
-      (source.pixelSize.width > 8_192 || source.pixelSize.height > 8_192)
-    ) {
+    if (source.pixelSize && (source.pixelSize.width > 8_192 || source.pixelSize.height > 8_192)) {
       throw new Error("Provider artwork dimensions are invalid.");
     }
-    const image = source.kind === "png"
-      ? codec.fromPng(source.bytes)
-      : codec.fromSvgDataUrl(
-          `data:image/svg+xml;base64,${Buffer.from(source.safeSvg!, "utf8").toString("base64")}`,
-        );
+    const image =
+      source.kind === "png"
+        ? codec.fromPng(source.bytes)
+        : codec.fromSvgDataUrl(
+            `data:image/svg+xml;base64,${Buffer.from(source.safeSvg!, "utf8").toString("base64")}`,
+          );
     if (image.isEmpty()) throw new Error("Aiden could not decode that provider icon.");
     const size = image.getSize();
     if (size.width <= 0 || size.height <= 0 || size.width > 8_192 || size.height > 8_192) {
       throw new Error("Provider artwork dimensions are invalid.");
     }
     const scale = Math.min(1, TARGET_EDGE / Math.max(size.width, size.height));
-    const normalized = scale < 1
-      ? image.resize({
-          width: Math.max(1, Math.round(size.width * scale)),
-          height: Math.max(1, Math.round(size.height * scale)),
-          quality: "best",
-        })
-      : image;
+    const normalized =
+      scale < 1
+        ? image.resize({
+            width: Math.max(1, Math.round(size.width * scale)),
+            height: Math.max(1, Math.round(size.height * scale)),
+            quality: "best",
+          })
+        : image;
     const png = normalized.toPNG();
     if (png.length === 0 || png.length > PROVIDER_ARTWORK_MAX_PNG_BYTES) {
       throw new Error("The normalized provider icon is too complex. Choose a simpler image.");

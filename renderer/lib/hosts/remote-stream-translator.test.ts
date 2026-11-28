@@ -68,7 +68,10 @@ test("a live run streams text, reasoning and tool activity into the transcript i
   assert.equal(transcript.agentActivity?.phase, "searching");
 
   const writing = fold(
-    [event(6, "tool_finished", { toolId: "tool_1", status: "succeeded" }), event(7, "text_delta", { text: "Hello" })],
+    [
+      event(6, "tool_finished", { toolId: "tool_1", status: "succeeded" }),
+      event(7, "text_delta", { text: "Hello" }),
+    ],
     view,
   );
   transcript = remoteRunTranscript(writing.view, []);
@@ -79,7 +82,10 @@ test("a live run streams text, reasoning and tool activity into the transcript i
 });
 
 test("duplicate and replayed sequences are applied once", () => {
-  const events = [event(1, "run.started", { chatId: "chat-1" }), event(2, "text_delta", { text: "ab" })];
+  const events = [
+    event(1, "run.started", { chatId: "chat-1" }),
+    event(2, "text_delta", { text: "ab" }),
+  ];
   const once = fold(events).view;
   const twice = fold([...events, ...events]).view;
   assert.equal(twice.text, "ab");
@@ -100,7 +106,10 @@ test("run.ended repeats the terminal sequence and still settles the run exactly 
   const ended = applyRemoteRunEvent(done.view, event(3, "run.ended", { state: "done" }));
   assert.equal(ended.view.ended, true);
   assert.equal(ended.refetch, false, "the done event already asked for the persisted turn");
-  assert.equal(applyRemoteRunEvent(ended.view, event(3, "run.ended", { state: "done" })).view, ended.view);
+  assert.equal(
+    applyRemoteRunEvent(ended.view, event(3, "run.ended", { state: "done" })).view,
+    ended.view,
+  );
 
   // Until the refetched window holds the persisted reply, the streamed row stays.
   assert.equal(remoteRunTranscript(ended.view, []).streamingText, "Answer");
@@ -110,7 +119,10 @@ test("run.ended repeats the terminal sequence and still settles the run exactly 
 });
 
 test("a run.ended whose terminal event was missed settles from the host state and refetches", () => {
-  const { view, refetch } = fold([event(1, "run.started", {}), event(4, "run.ended", { state: "cancelled" })]);
+  const { view, refetch } = fold([
+    event(1, "run.started", {}),
+    event(4, "run.ended", { state: "cancelled" }),
+  ]);
   assert.equal(view.status, "cancelled");
   assert.equal(view.ended, true);
   assert.equal(refetch, true);
@@ -120,7 +132,12 @@ test("a reset snapshot restarts the reply without dropping prompts", () => {
   const { view } = fold([
     event(1, "run.started", {}),
     event(2, "text_delta", { text: "first try" }),
-    event(3, "approval_required", { approvalId: "ap-1", summary: "Run tests", toolCallId: "c1", toolName: "shell" }),
+    event(3, "approval_required", {
+      approvalId: "ap-1",
+      summary: "Run tests",
+      toolCallId: "c1",
+      toolName: "shell",
+    }),
     event(4, "snapshot", { reason: "reset", nextSequence: 5 }),
     event(5, "text_delta", { text: "second" }),
   ]);
@@ -129,7 +146,10 @@ test("a reset snapshot restarts the reply without dropping prompts", () => {
 });
 
 test("a gap snapshot reseeds pending prompts from the host and waits for the persisted transcript", () => {
-  const before = fold([event(1, "run.started", {}), event(2, "text_delta", { text: "partial" })]).view;
+  const before = fold([
+    event(1, "run.started", {}),
+    event(2, "text_delta", { text: "partial" }),
+  ]).view;
   const gap = applyRemoteRunEvent(
     before,
     event(40, "snapshot", {
@@ -137,7 +157,13 @@ test("a gap snapshot reseeds pending prompts from the host and waits for the per
       state: "needs_input",
       approvals: [
         { approvalId: "ap-9", summary: "Write file", toolCallId: "c9", toolName: "write_file" },
-        { approvalId: "ap-10", summary: "Huge edit", toolCallId: "c10", toolName: "edit_file", detailsOmitted: true },
+        {
+          approvalId: "ap-10",
+          summary: "Huge edit",
+          toolCallId: "c10",
+          toolName: "edit_file",
+          detailsOmitted: true,
+        },
       ],
       questions: [{ promptId: "q-1", toolCallId: "c2", questions: [question] }],
       nextSequence: 41,
@@ -146,11 +172,14 @@ test("a gap snapshot reseeds pending prompts from the host and waits for the per
   assert.equal(gap.refetch, true);
   assert.equal(gap.view.incomplete, true);
   assert.equal(gap.view.cursor, 40);
-  assert.deepEqual(gap.view.approvals.map((prompt) => [prompt.approvalId, prompt.canAllow, prompt.source]), [
-    ["ap-9", true, "remote"],
-    // Details too large to send can be denied here but must be allowed on the host.
-    ["ap-10", false, "remote"],
-  ]);
+  assert.deepEqual(
+    gap.view.approvals.map((prompt) => [prompt.approvalId, prompt.canAllow, prompt.source]),
+    [
+      ["ap-9", true, "remote"],
+      // Details too large to send can be denied here but must be allowed on the host.
+      ["ap-10", false, "remote"],
+    ],
+  );
   assert.equal(gap.view.questions[0]?.streamId, "run-1");
 
   // Text after the gap would start mid-sentence, so the row shows activity only.
@@ -160,7 +189,10 @@ test("a gap snapshot reseeds pending prompts from the host and waits for the per
   assert.equal(transcript.agentActivity?.phase, "waiting");
 
   const answered = fold(
-    [event(42, "approval_resolved", { approvalId: "ap-9" }), event(43, "approval_resolved", { approvalId: "ap-10" })],
+    [
+      event(42, "approval_resolved", { approvalId: "ap-9" }),
+      event(43, "approval_resolved", { approvalId: "ap-10" }),
+    ],
     resumed,
   ).view;
   assert.equal(remoteRunTranscript(answered, []).agentActivity?.label, "Waiting for an answer");
@@ -170,11 +202,28 @@ test("a legacy gap still shows later tool history through the saved-message hand
   const { view } = fold([
     event(40, "snapshot", { reason: "gap", state: "working" }),
     event(41, "text_delta", { text: "missing its prefix" }),
-    event(42, "timeline", { timeline: {
-      version: 3, generationId: "run-1", status: "running", startedAt: 1000,
-      steps: [{ kind: "tool", id: "tool-1", order: 0, contentOffset: 12, toolCallId: "call-1", toolName: "read_file",
-        label: "Inspect schema", status: "completed", startedAt: 1000, updatedAt: 1100 }],
-    } }),
+    event(42, "timeline", {
+      timeline: {
+        version: 3,
+        generationId: "run-1",
+        status: "running",
+        startedAt: 1000,
+        steps: [
+          {
+            kind: "tool",
+            id: "tool-1",
+            order: 0,
+            contentOffset: 12,
+            toolCallId: "call-1",
+            toolName: "read_file",
+            label: "Inspect schema",
+            status: "completed",
+            startedAt: 1000,
+            updatedAt: 1100,
+          },
+        ],
+      },
+    }),
   ]);
   const live = remoteRunTranscript(view, []);
   assert.equal(live.streamingText, "");
@@ -209,23 +258,38 @@ test("events from a newer run on the same chat start a fresh view", () => {
 });
 
 test("terminal outcomes surface the right transcript state", () => {
-  const failed = fold([event(1, "run.started", {}), event(2, "error", { code: "internal_error", message: "Provider down" })]);
+  const failed = fold([
+    event(1, "run.started", {}),
+    event(2, "error", { code: "internal_error", message: "Provider down" }),
+  ]);
   assert.equal(failed.refetch, true);
   assert.equal(remoteRunTranscript(failed.view, []).error, "Provider down");
   // Once the failed turn is persisted it renders its own notice instead.
   const persistedFailure = assistant("a-2", "", {
-    providerFailure: { version: 1, category: "service_unavailable", attempts: 1, retryExhausted: false },
+    providerFailure: {
+      version: 1,
+      category: "service_unavailable",
+      attempts: 1,
+      retryExhausted: false,
+    },
   });
   assert.equal(remoteRunTranscript(failed.view, [persistedFailure]).error, null);
 
-  const cancelled = fold([event(1, "run.started", {}), event(2, "text_delta", { text: "x" }), event(3, "cancelled", { source: "device" })]);
+  const cancelled = fold([
+    event(1, "run.started", {}),
+    event(2, "text_delta", { text: "x" }),
+    event(3, "cancelled", { source: "device" }),
+  ]);
   const transcript = remoteRunTranscript(cancelled.view, []);
   assert.equal(transcript.streamingText, null);
   assert.equal(transcript.agentActivity, null);
   assert.equal(transcript.error, null);
 
   // Nothing but run.ended applies after a terminal event.
-  assert.equal(applyRemoteRunEvent(cancelled.view, event(4, "text_delta", { text: "late" })).view, cancelled.view);
+  assert.equal(
+    applyRemoteRunEvent(cancelled.view, event(4, "text_delta", { text: "late" })).view,
+    cancelled.view,
+  );
 });
 
 test("a truncated subscription waits for the transcript before applying its buffered events", () => {
@@ -235,7 +299,10 @@ test("a truncated subscription waits for the transcript before applying its buff
     runId: "run-1",
     chatId: "chat-1",
     state: "streaming",
-    events: [event(600, "text_delta", { text: "middle" }), event(601, "tool_started", { toolId: "tool_9", name: "edit" })],
+    events: [
+      event(600, "text_delta", { text: "middle" }),
+      event(601, "tool_started", { toolId: "tool_9", name: "edit" }),
+    ],
     truncated: true,
   };
   const step = applyRemoteRunSubscription(initialRemoteRunView(null, "chat-1"), subscription);
@@ -280,14 +347,26 @@ test("a settled reply hands off to the persisted transcript even when its messag
     event(3, "done", { messageId: "assistant_turn-1" }),
   ]).view;
   const persisted = [assistant("a-1", "Answer")];
-  assert.equal(remoteRunTranscript(synthetic, []).streamingText, "Answer", "the row waits for the window read");
+  assert.equal(
+    remoteRunTranscript(synthetic, []).streamingText,
+    "Answer",
+    "the row waits for the window read",
+  );
   assert.equal(remoteRunTranscript(synthetic, persisted).streamingText, "Answer");
   const handed = handOffRemoteRun(synthetic);
-  assert.equal(remoteRunTranscript(handed, persisted).streamingText, null, "the window read after done owns the reply");
+  assert.equal(
+    remoteRunTranscript(handed, persisted).streamingText,
+    null,
+    "the window read after done owns the reply",
+  );
   assert.equal(remoteRunTranscript(handed, persisted).agentActivity, null);
 
   // A run whose done event was missed settles from run.ended alone.
-  const endedOnly = fold([event(1, "run.started", {}), event(2, "text_delta", { text: "Answer" }), event(4, "run.ended", { state: "done" })]).view;
+  const endedOnly = fold([
+    event(1, "run.started", {}),
+    event(2, "text_delta", { text: "Answer" }),
+    event(4, "run.ended", { state: "done" }),
+  ]).view;
   assert.equal(endedOnly.doneMessageId, null);
   assert.equal(remoteRunTranscript(handOffRemoteRun(endedOnly), persisted).streamingText, null);
 

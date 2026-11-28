@@ -6,11 +6,15 @@ import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 // hand-off card and the panel it opens are the shipped renderer. A step the
 // Bot hands over in its own browser (`target: "browser"`) opens there, never
 // in the person's own browser.
-test("a step on the Bot's own browser opens in the Bot's browser, not the person's, and is answered Done", async ({ aiden }) => {
+test("a step on the Bot's own browser opens in the Bot's browser, not the person's, and is answered Done", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   const bot = botFixture({ id: "bot-shop", name: "Grocer", description: "Orders the weekly shop" });
   await finishLmStudioOnboarding(page);
-  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1280, 800));
+  await aiden.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0]!.setSize(1280, 800),
+  );
 
   await aiden.app.evaluate(({ ipcMain }, fixture) => {
     const state = { answers: [] as unknown[], opened: [] as unknown[] };
@@ -24,8 +28,16 @@ test("a step on the Bot's own browser opens in the Bot's browser, not the person
       "bots:pendingApprovals",
       "bots:answerHandoff",
       "bots:openHandoff",
-    ]) ipcMain.removeHandler(channel);
-    const idle = { botId: fixture.id, preview: null, updatedAt: 1_000, state: { kind: "idle" }, needsYou: false, lastReplyAt: null };
+    ])
+      ipcMain.removeHandler(channel);
+    const idle = {
+      botId: fixture.id,
+      preview: null,
+      updatedAt: 1_000,
+      state: { kind: "idle" },
+      needsYou: false,
+      lastReplyAt: null,
+    };
     ipcMain.handle("bots:list", () => [fixture]);
     ipcMain.handle("bots:get", () => fixture);
     ipcMain.handle("bots:live:summary", () => idle);
@@ -40,7 +52,13 @@ test("a step on the Bot's own browser opens in the Bot's browser, not the person
       queued: [],
       entries: [
         { id: "u1", type: "user", text: "Order this week's groceries", imageCount: 0 },
-        { id: "a1", type: "assistant", text: "The basket is ready. One step is yours.", toolCalls: [], stopReason: "stop" },
+        {
+          id: "a1",
+          type: "assistant",
+          text: "The basket is ready. One step is yours.",
+          toolCalls: [],
+          stopReason: "stop",
+        },
       ],
     }));
     ipcMain.handle("bots:getCanonicalPhoto", () => null);
@@ -80,18 +98,32 @@ test("a step on the Bot's own browser opens in the Bot's browser, not the person
   }, bot.id);
 
   const card = page.getByRole("group", { name: "Grocer needs you" });
-  await expect(card.getByText("Needs you: Choose the delivery slot on the checkout page")).toBeVisible();
+  await expect(
+    card.getByText("Needs you: Choose the delivery slot on the checkout page"),
+  ).toBeVisible();
   await expect(card).toContainText("Opens in Grocer’s own browser at shop.example, not in yours.");
   await expect(card.getByRole("button", { name: "Open shop.example" })).toHaveCount(0);
   await card.getByRole("button", { name: "Take control of Grocer’s browser" }).click();
   await expect
-    .poll(() => aiden.app.evaluate(() => (globalThis as unknown as { ownScreenE2e: { opened: unknown[] } }).ownScreenE2e.opened))
+    .poll(() =>
+      aiden.app.evaluate(
+        () =>
+          (globalThis as unknown as { ownScreenE2e: { opened: unknown[] } }).ownScreenE2e.opened,
+      ),
+    )
     .toEqual([{ botId: "bot-shop", waitId: "3c7e9a1b-5d2f-4e8a-9b6c-0a1d2e3f4a5b" }]);
   // The Bot's panel opens beside the chat, on its browser.
   await expect(page.locator("#bot-panel")).toHaveAttribute("data-state", "open");
 
   await card.getByRole("button", { name: "I’m done", exact: true }).click();
   await expect
-    .poll(() => aiden.app.evaluate(() => (globalThis as unknown as { ownScreenE2e: { answers: unknown[] } }).ownScreenE2e.answers))
-    .toEqual([{ botId: "bot-shop", waitId: "3c7e9a1b-5d2f-4e8a-9b6c-0a1d2e3f4a5b", outcome: "done" }]);
+    .poll(() =>
+      aiden.app.evaluate(
+        () =>
+          (globalThis as unknown as { ownScreenE2e: { answers: unknown[] } }).ownScreenE2e.answers,
+      ),
+    )
+    .toEqual([
+      { botId: "bot-shop", waitId: "3c7e9a1b-5d2f-4e8a-9b6c-0a1d2e3f4a5b", outcome: "done" },
+    ]);
 });

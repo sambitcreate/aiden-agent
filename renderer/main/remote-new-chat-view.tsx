@@ -11,9 +11,21 @@ import {
   type NewChatMachineId,
 } from "../components/remote-new-chat-pickers";
 import { RemoteHostChip, RemoteHostStatusRow } from "../components/sidebar-remote";
-import { Button, Dialog, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
+import {
+  Button,
+  Dialog,
+  EmptyState,
+  ScrollArea,
+  ScrollAreaFooterStack,
+  Text,
+  toast,
+} from "../components/ui";
 import { composerSurfacesFor } from "../lib/hosts/composer-surfaces";
-import { hostResultValue, isOutcomeUnknown, type HostChatCapability } from "../lib/hosts/host-chat-adapter";
+import {
+  hostResultValue,
+  isOutcomeUnknown,
+  type HostChatCapability,
+} from "../lib/hosts/host-chat-adapter";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import {
   defaultHostModel,
@@ -102,7 +114,17 @@ function sendBlockedReason(props: RemoteNewChatPaneProps, platform: string): str
 
 /** The new remote chat's presentation; all state arrives in props. */
 export function RemoteNewChatPane(props: RemoteNewChatPaneProps) {
-  const { host, machines, capabilities, snapshot, projects, project, models, modelsLoading, model } = props;
+  const {
+    host,
+    machines,
+    capabilities,
+    snapshot,
+    projects,
+    project,
+    models,
+    modelsLoading,
+    model,
+  } = props;
   const { platform } = useAppCapabilities();
   const blocked = sendBlockedReason(props, platform);
   const unresolved = snapshot?.unresolved ?? null;
@@ -127,12 +149,20 @@ export function RemoteNewChatPane(props: RemoteNewChatPaneProps) {
                 data-remote-new-chat-unresolved="true"
                 className="flex items-start gap-2.5 rounded-card bg-status-warning-surface p-3"
               >
-                <TriangleAlert className="mt-0.5 size-4 shrink-0 text-status-warning" aria-hidden="true" />
+                <TriangleAlert
+                  className="mt-0.5 size-4 shrink-0 text-status-warning"
+                  aria-hidden="true"
+                />
                 <div className="min-w-0 flex-1">
                   <Text variant="small-strong" as="p">
                     {unresolved.message}
                   </Text>
-                  <Text variant="small" color="secondary" as="p" className="mt-0.5 line-clamp-3 break-words">
+                  <Text
+                    variant="small"
+                    color="secondary"
+                    as="p"
+                    className="mt-0.5 line-clamp-3 break-words"
+                  >
                     {unresolved.text}
                   </Text>
                   <Text variant="small" color="tertiary" as="p" className="mt-1">
@@ -140,20 +170,42 @@ export function RemoteNewChatPane(props: RemoteNewChatPaneProps) {
                   </Text>
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
-                  <Button variant="muted" size="small" disabled={unresolved.retrying} onClick={props.onDismiss}>
+                  <Button
+                    variant="muted"
+                    size="small"
+                    disabled={unresolved.retrying}
+                    onClick={props.onDismiss}
+                  >
                     Dismiss
                   </Button>
-                  <Button variant="muted" size="small" onClick={() => props.onOpenChat(unresolved.chatId)}>
+                  <Button
+                    variant="muted"
+                    size="small"
+                    onClick={() => props.onOpenChat(unresolved.chatId)}
+                  >
                     Open chat
                   </Button>
-                  <Button variant="accent" size="small" disabled={unresolved.retrying || unavailable} onClick={props.onRetry}>
-                    {unresolved.retrying ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : null}
+                  <Button
+                    variant="accent"
+                    size="small"
+                    disabled={unresolved.retrying || unavailable}
+                    onClick={props.onRetry}
+                  >
+                    {unresolved.retrying ? (
+                      <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                    ) : null}
                     Retry
                   </Button>
                 </div>
               </div>
             ) : null}
-            {unavailable ? <RemoteHostStatusRow host={host} onReconnect={props.onReconnect} onManage={props.onManage} /> : null}
+            {unavailable ? (
+              <RemoteHostStatusRow
+                host={host}
+                onReconnect={props.onReconnect}
+                onManage={props.onManage}
+              />
+            ) : null}
           </div>
           <Composer
             // Keyed by host, so a draft typed for one Mac never appears for another.
@@ -172,14 +224,21 @@ export function RemoteNewChatPane(props: RemoteNewChatPaneProps) {
             visionSupported={chosenModel ? chosenModel.supportsImages : undefined}
             remoteContext={
               <>
-                <RemoteMachinePicker machines={machines} selected={host.id} disabled={starting} onSelect={props.onSelectMachine} />
+                <RemoteMachinePicker
+                  machines={machines}
+                  selected={host.id}
+                  disabled={starting}
+                  onSelect={props.onSelectMachine}
+                />
                 <RemoteProjectPicker
                   hostLabel={host.label}
                   projects={projects}
                   selected={project}
                   disabled={starting || Boolean(host.disabledReason)}
                   canCreate={capabilities.has("createWorkspace")}
-                  canBrowse={capabilities.has("createWorkspace") && capabilities.has("browseFolders")}
+                  canBrowse={
+                    capabilities.has("createWorkspace") && capabilities.has("browseFolders")
+                  }
                   onSelect={props.onSelectProject}
                   onBrowse={props.onBrowse}
                 />
@@ -294,7 +353,9 @@ function RemoteFolderBrowserDialog({
         place={place}
         pages={children.data?.pages ?? []}
         loading={location ? children.isFetching : roots.isFetching}
-        error={children.isError ? errorText(children.error, "This folder could not be read.") : null}
+        error={
+          children.isError ? errorText(children.error, "This folder could not be read.") : null
+        }
         hasMore={children.hasNextPage}
         busy={busy}
         onOpen={setPlace}
@@ -343,22 +404,46 @@ export interface RemoteNewChatRouteProps {
 }
 
 /** The new remote chat route, fed by the host queries the sidebar keeps current. */
-export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMachine, onManage }: RemoteNewChatRouteProps) {
+export function RemoteNewChatRoute({
+  hostId,
+  workspaceId,
+  onOpenChat,
+  onSelectMachine,
+  onManage,
+}: RemoteNewChatRouteProps) {
   const { platform } = useAppCapabilities();
   const list = useQuery<PeerHostView[]>({ queryKey: hostQueryKeys.list(), queryFn: skipToken });
-  const statuses = useQuery<PeerHostStatus[]>({ queryKey: hostQueryKeys.statuses(), queryFn: skipToken });
-  const feed = useQuery<PeerHostFeedSnapshot | null>({ queryKey: hostQueryKeys.feed(hostId), queryFn: skipToken });
+  const statuses = useQuery<PeerHostStatus[]>({
+    queryKey: hostQueryKeys.statuses(),
+    queryFn: skipToken,
+  });
+  const feed = useQuery<PeerHostFeedSnapshot | null>({
+    queryKey: hostQueryKeys.feed(hostId),
+    queryFn: skipToken,
+  });
   const view = list.data?.find((entry) => entry.id === hostId && entry.enabled);
   const binding = useRemoteNewChat(view);
   const control = binding?.control ?? null;
-  const subscribe = React.useMemo(() => (control ? control.subscribe.bind(control) : subscribeNothing), [control]);
-  const getSnapshot = React.useMemo(() => (control ? control.getSnapshot.bind(control) : nothing), [control]);
+  const subscribe = React.useMemo(
+    () => (control ? control.subscribe.bind(control) : subscribeNothing),
+    [control],
+  );
+  const getSnapshot = React.useMemo(
+    () => (control ? control.getSnapshot.bind(control) : nothing),
+    [control],
+  );
   const snapshot = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  const capabilities = React.useMemo(() => binding?.adapter.capabilities() ?? new Set<HostChatCapability>(), [binding]);
+  const capabilities = React.useMemo(
+    () => binding?.adapter.capabilities() ?? new Set<HostChatCapability>(),
+    [binding],
+  );
   const models = useQuery({
     queryKey: hostQueryKeys.models(hostId),
     queryFn: async () => hostResultValue(await binding!.adapter.models()),
-    enabled: Boolean(binding) && capabilities.has("createChat") && snapshot?.status.availability === "online",
+    enabled:
+      Boolean(binding) &&
+      capabilities.has("createChat") &&
+      snapshot?.status.availability === "online",
     staleTime: 60_000,
   });
   // Projects created here are offered until the host's feed lists them, whichever answer arrives first.
@@ -433,7 +518,11 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
       adopt(scratch);
     }
     try {
-      const started = await binding.control.start({ workspaceId: target, ...(model ? { model } : {}) }, text, uploads);
+      const started = await binding.control.start(
+        { workspaceId: target, ...(model ? { model } : {}) },
+        text,
+        uploads,
+      );
       onOpenChat(started.chatId);
     } catch (error) {
       // The unresolved banner holds the message and offers Retry.
@@ -466,7 +555,11 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
         onSelectModel={setModel}
         onSend={send}
         onRetry={retry}
-        onDismiss={() => { void binding?.control.dismissUnresolved().catch(() => toast.error("Couldn’t dismiss this saved request. Try again.")); }}
+        onDismiss={() => {
+          void binding?.control
+            .dismissUnresolved()
+            .catch(() => toast.error("Couldn’t dismiss this saved request. Try again."));
+        }}
         onOpenChat={onOpenChat}
         onReconnect={reconnect}
         onManage={onManage}
@@ -485,19 +578,27 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
   );
 }
 
-export function RemoteNewChatView({ hostId, workspaceId }: { hostId: string; workspaceId?: string }) {
+export function RemoteNewChatView({
+  hostId,
+  workspaceId,
+}: {
+  hostId: string;
+  workspaceId?: string;
+}) {
   // A chat on a paired host is not a local workspace chat: a keep-going round this window owns stops.
   useReportGoalView(null);
   const navigate = useNavigate();
   const openChat = React.useCallback(
-    (chatId: string) => void navigate({ to: "/host/$hostId/chat/$chatId", params: { hostId, chatId } }),
+    (chatId: string) =>
+      void navigate({ to: "/host/$hostId/chat/$chatId", params: { hostId, chatId } }),
     [hostId, navigate],
   );
   const selectMachine = React.useCallback(
     (machine: NewChatMachineId) => {
       if (machine === "local") void navigate({ to: "/" });
       // Another Mac starts with no project: this one's project ID means nothing there.
-      else if (machine !== hostId) void navigate({ to: "/host/$hostId/new", params: { hostId: machine }, search: {} });
+      else if (machine !== hostId)
+        void navigate({ to: "/host/$hostId/new", params: { hostId: machine }, search: {} });
     },
     [hostId, navigate],
   );

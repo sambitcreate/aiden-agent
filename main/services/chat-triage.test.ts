@@ -5,7 +5,10 @@ import * as path from "node:path";
 import test from "node:test";
 import { ChatTriageStore, SNOOZE_WAKE_CHECK_MS, wakeTriageOnAttention } from "./chat-triage.js";
 import type { HostRunSummary } from "./host-run-registry.js";
-import { parseChatTriageRequest, setChatTriageFromRenderer } from "../handlers/chat-triage-params.js";
+import {
+  parseChatTriageRequest,
+  setChatTriageFromRenderer,
+} from "../handlers/chat-triage-params.js";
 import {
   MAX_CHAT_TRIAGE_ENTRIES,
   inverseTriagePatch,
@@ -48,7 +51,10 @@ test("pin, done and snooze are independent fields that persist across restarts",
   const root = await tmpDir(t);
   let now = 1_000;
   const published: ChatTriageSnapshot[] = [];
-  const store = new ChatTriageStore(() => root, { now: () => now, onChange: (snapshot) => published.push(snapshot) });
+  const store = new ChatTriageStore(() => root, {
+    now: () => now,
+    onChange: (snapshot) => published.push(snapshot),
+  });
 
   const pinned = await store.set("chat-a", { pinned: true });
   assert.equal(pinned.ok, true);
@@ -58,7 +64,13 @@ test("pin, done and snooze are independent fields that persist across restarts",
   await store.set("chat-a", { snoozeUntil: 10_000 });
 
   const entry = await store.get("chat-a");
-  assert.deepEqual(entry, { revision: 3, updatedAt: 3_000, pinnedAt: 1_000, doneAt: 2_000, snoozedUntil: 10_000 });
+  assert.deepEqual(entry, {
+    revision: 3,
+    updatedAt: 3_000,
+    pinnedAt: 1_000,
+    doneAt: 2_000,
+    snoozedUntil: 10_000,
+  });
   assert.equal(published.length, 3);
   assert.ok(published[2]!.revision > published[0]!.revision);
 
@@ -100,7 +112,10 @@ test("bad ids, empty patches and out-of-range snoozes are refused", async (t) =>
   const store = new ChatTriageStore(() => root, { now: () => 1_000 });
   assert.deepEqual(await store.set("../escape", { done: true }), { ok: false, code: "invalid" });
   assert.deepEqual(await store.set("chat-a", {}), { ok: false, code: "invalid" });
-  assert.deepEqual(await store.set("chat-a", { snoozeUntil: 1_000 + 367 * 86_400_000 }), { ok: false, code: "invalid" });
+  assert.deepEqual(await store.set("chat-a", { snoozeUntil: 1_000 + 367 * 86_400_000 }), {
+    ok: false,
+    code: "invalid",
+  });
   assert.deepEqual(await store.set("chat-a", { snoozeUntil: 1.5 }), { ok: false, code: "invalid" });
   assert.deepEqual((await store.snapshot()).chats, {});
 
@@ -138,7 +153,8 @@ test("the map stays bounded and drops empty entries before set ones", async (t) 
   const root = await tmpDir(t);
   const chats: Record<string, unknown> = {};
   for (let index = 0; index < MAX_CHAT_TRIAGE_ENTRIES; index += 1) {
-    chats[`chat-${index}`] = index === 0 ? { revision: 1, updatedAt: 1 } : { revision: 1, updatedAt: 1, doneAt: 1 };
+    chats[`chat-${index}`] =
+      index === 0 ? { revision: 1, updatedAt: 1 } : { revision: 1, updatedAt: 1, doneAt: 1 };
   }
   await fs.writeFile(path.join(root, "chat-triage.json"), JSON.stringify({ version: 1, chats }));
   const store = new ChatTriageStore(() => root, { now: () => 100 });
@@ -200,7 +216,9 @@ test("one timer wakes the next snooze and wake() brings a chat back early", asyn
   const fired = timers.live()[0]!;
   fired.cleared = true;
   fired.callback();
-  await waitFor(async () => (await store.get("soon"))?.snoozedUntil === undefined && timers.live().length === 1);
+  await waitFor(
+    async () => (await store.get("soon"))?.snoozedUntil === undefined && timers.live().length === 1,
+  );
   assert.equal((await store.get("soon"))?.snoozedUntil, undefined);
   assert.equal((await store.get("late"))?.snoozedUntil, 9_000);
   assert.equal(timers.live().length, 1);
@@ -241,7 +259,10 @@ test("remove forgets a deleted chat", async (t) => {
 
 test("inverse patches restore only the fields an action touched", () => {
   assert.deepEqual(inverseTriagePatch(null, { done: true }), { done: false });
-  assert.deepEqual(inverseTriagePatch({ revision: 2, updatedAt: 1, pinnedAt: 1 }, { pinned: false }), { pinned: true });
+  assert.deepEqual(
+    inverseTriagePatch({ revision: 2, updatedAt: 1, pinnedAt: 1 }, { pinned: false }),
+    { pinned: true },
+  );
   assert.deepEqual(
     inverseTriagePatch({ revision: 2, updatedAt: 1, snoozedUntil: 500 }, { snoozeUntil: 900 }),
     { snoozeUntil: 500 },
@@ -266,23 +287,36 @@ test("snooze presets land on the acting device's local clock", () => {
     options.map((option) => option.preset),
     ["hour", "evening", "tomorrow", "next_week"],
   );
-  const at = (preset: string) => new Date(options.find((option) => option.preset === preset)!.until);
+  const at = (preset: string) =>
+    new Date(options.find((option) => option.preset === preset)!.until);
   assert.equal(at("hour").getTime() - wednesday.getTime(), 3_600_000);
   assert.deepEqual([at("evening").getDate(), at("evening").getHours()], [4, 18]);
   assert.deepEqual([at("tomorrow").getDate(), at("tomorrow").getHours()], [5, 9]);
-  assert.deepEqual([at("next_week").getDay(), at("next_week").getDate(), at("next_week").getHours()], [1, 9, 9]);
+  assert.deepEqual(
+    [at("next_week").getDay(), at("next_week").getDate(), at("next_week").getHours()],
+    [1, 9, 9],
+  );
 
   // After 18:00 there is no "This evening".
   const late = snoozeOptions(new Date(2026, 10, 4, 18, 0, 0, 0));
-  assert.equal(late.some((option) => option.preset === "evening"), false);
+  assert.equal(
+    late.some((option) => option.preset === "evening"),
+    false,
+  );
 
   // At 17:30 "This evening" would land before "1 hour", so it drops out and
   // the presets stay earliest first.
   const halfPastFive = snoozeOptions(new Date(2026, 10, 4, 17, 30, 0, 0));
-  assert.deepEqual(halfPastFive.map((option) => option.preset), ["hour", "tomorrow", "next_week"]);
+  assert.deepEqual(
+    halfPastFive.map((option) => option.preset),
+    ["hour", "tomorrow", "next_week"],
+  );
   const times = (options: { until: number }[]) => options.map((option) => option.until);
   for (const list of [options, halfPastFive, late]) {
-    assert.deepEqual(times(list), [...times(list)].sort((left, right) => left - right));
+    assert.deepEqual(
+      times(list),
+      [...times(list)].sort((left, right) => left - right),
+    );
   }
 
   // On a Monday, next week means the following Monday, not today.
@@ -298,7 +332,10 @@ test("snooze presets land on the acting device's local clock", () => {
   assert.deepEqual([sundayTomorrow.getDay(), sundayTomorrow.getDate()], [1, 9]);
   // On a Saturday, Monday is two days away and counts as next week.
   const saturday = snoozeOptions(new Date(2026, 10, 7, 10, 0, 0, 0));
-  assert.equal(new Date(saturday.find((option) => option.preset === "next_week")!.until).getDate(), 9);
+  assert.equal(
+    new Date(saturday.find((option) => option.preset === "next_week")!.until).getDate(),
+    9,
+  );
 });
 
 type AttentionListener = Parameters<Parameters<typeof wakeTriageOnAttention>[0]["onChange"]>[0];
@@ -308,9 +345,19 @@ function attentionRuns() {
   const emit = (
     chatId: string,
     state: HostRunSummary["state"],
-    { removed = false, runId = `run-${chatId}`, approvals = [] as string[], questions = [] as string[] } = {},
-  ) => listeners.forEach((listener) =>
-    listener({ runId, chatId, state, pendingApprovalIds: approvals, pendingQuestionIds: questions }, removed));
+    {
+      removed = false,
+      runId = `run-${chatId}`,
+      approvals = [] as string[],
+      questions = [] as string[],
+    } = {},
+  ) =>
+    listeners.forEach((listener) =>
+      listener(
+        { runId, chatId, state, pendingApprovalIds: approvals, pendingQuestionIds: questions },
+        removed,
+      ),
+    );
   return {
     emit,
     runs: {
@@ -423,7 +470,11 @@ test("a listener that throws on a write is logged, and never fails the write or 
   // The writes stand and the calls succeed, so a Remote retry of the same write
   // doesn't read a conflict.
   failPublish = true;
-  const live = () => timers.live().map((timer) => timer.ms).join(",");
+  const live = () =>
+    timers
+      .live()
+      .map((timer) => timer.ms)
+      .join(",");
   assert.equal(await store.wake("soon"), true);
   assert.equal((await store.get("soon"))?.snoozedUntil, undefined);
   await waitFor(() => live() === "8000");
@@ -484,7 +535,10 @@ test("the desktop IPC parser copies only known fields and refuses bad input", ()
     patch: { done: true },
     ifRevision: 3,
   });
-  assert.deepEqual(parseChatTriageRequest("chat-a", { snoozeUntil: null }), { chatId: "chat-a", patch: { snoozeUntil: null } });
+  assert.deepEqual(parseChatTriageRequest("chat-a", { snoozeUntil: null }), {
+    chatId: "chat-a",
+    patch: { snoozeUntil: null },
+  });
   assert.throws(() => parseChatTriageRequest("../x", { done: true }));
   assert.throws(() => parseChatTriageRequest("chat-a", { done: true, extra: 1 }));
   assert.throws(() => parseChatTriageRequest("chat-a", { done: true }, -1));
@@ -503,12 +557,30 @@ test("the desktop IPC refuses chats this host doesn't list, Bot chats and featur
     ],
     triage: store,
   };
-  assert.equal((await setChatTriageFromRenderer(dependencies, "chat-a", { pinned: true })).ok, true);
-  assert.equal((await setChatTriageFromRenderer(dependencies, "assistant-chat", { done: true })).ok, true);
-  await assert.rejects(setChatTriageFromRenderer(dependencies, "gone", { pinned: true }), /no longer exists/u);
-  await assert.rejects(setChatTriageFromRenderer(dependencies, "bot-chat", { done: true }), /no longer exists/u);
-  await assert.rejects(setChatTriageFromRenderer(dependencies, "design-chat", { pinned: true }), /no longer exists/u);
-  assert.deepEqual(Object.keys((await store.snapshot()).chats).sort(), ["assistant-chat", "chat-a"]);
+  assert.equal(
+    (await setChatTriageFromRenderer(dependencies, "chat-a", { pinned: true })).ok,
+    true,
+  );
+  assert.equal(
+    (await setChatTriageFromRenderer(dependencies, "assistant-chat", { done: true })).ok,
+    true,
+  );
+  await assert.rejects(
+    setChatTriageFromRenderer(dependencies, "gone", { pinned: true }),
+    /no longer exists/u,
+  );
+  await assert.rejects(
+    setChatTriageFromRenderer(dependencies, "bot-chat", { done: true }),
+    /no longer exists/u,
+  );
+  await assert.rejects(
+    setChatTriageFromRenderer(dependencies, "design-chat", { pinned: true }),
+    /no longer exists/u,
+  );
+  assert.deepEqual(Object.keys((await store.snapshot()).chats).sort(), [
+    "assistant-chat",
+    "chat-a",
+  ]);
 });
 
 test("a failed snooze clear waits before retrying and recovers once storage is writable", async (t) => {
@@ -524,7 +596,10 @@ test("a failed snooze clear waits before retrying and recovers once storage is w
   await fs.mkdir(file);
   now = 200;
   await assert.rejects(store.checkSnoozes());
-  assert.deepEqual(timers.live().map((timer) => timer.ms), [SNOOZE_WAKE_CHECK_MS]);
+  assert.deepEqual(
+    timers.live().map((timer) => timer.ms),
+    [SNOOZE_WAKE_CHECK_MS],
+  );
   await fs.rmdir(file);
   await fs.rename(file + ".saved", file);
   await store.checkSnoozes();

@@ -12,9 +12,7 @@ import {
   withOpenCodeSessionAttribution,
 } from "./opencode-session-attribution.js";
 
-function model(
-  overrides: Partial<Model<Api>> = {},
-): Model<Api> {
+function model(overrides: Partial<Model<Api>> = {}): Model<Api> {
   return {
     id: "glm-5.3-flash",
     name: "GLM-5.3-Flash",
@@ -110,10 +108,8 @@ test("withOpenCodeSessionAttribution ignores malformed or foreign base urls", ()
     undefined,
   );
   assert.equal(
-    withOpenCodeSessionAttribution(
-      model({ provider: "custom", baseUrl: "not a url" }),
-      "chat-1",
-    ).headers,
+    withOpenCodeSessionAttribution(model({ provider: "custom", baseUrl: "not a url" }), "chat-1")
+      .headers,
     undefined,
   );
 });
@@ -132,12 +128,11 @@ test("openCodeSessionHeaders rejects ids that are not bounded tokens", () => {
   assert.equal(openCodeSessionHeaders({ provider: "opencode-go" }, "a\rb"), undefined);
   assert.equal(openCodeSessionHeaders({ provider: "opencode-go" }, "a\nb"), undefined);
   assert.equal(openCodeSessionHeaders({ provider: "opencode-go" }, "chat bad"), undefined);
-  assert.equal(
-    openCodeSessionHeaders({ provider: "opencode-go" }, "x".repeat(129)),
-    undefined,
-  );
+  assert.equal(openCodeSessionHeaders({ provider: "opencode-go" }, "x".repeat(129)), undefined);
   // UUIDs, chat ids, and request ids stay valid.
-  assert.ok(openCodeSessionHeaders({ provider: "opencode-go" }, "12375712-3dab-45dc-a97a-02b6bb36ac48"));
+  assert.ok(
+    openCodeSessionHeaders({ provider: "opencode-go" }, "12375712-3dab-45dc-a97a-02b6bb36ac48"),
+  );
   assert.ok(openCodeSessionHeaders({ provider: "opencode-go" }, "req-1.a_b:c"));
 });
 
@@ -146,7 +141,15 @@ test("withPinnedBotProviderAuth preserves the session header on the dispatched m
   const captured: Array<Model<Api>> = [];
   const pinned = withPinnedBotProviderAuth(
     {
-      provider: { id: "opencode-go", kind: "openai", label: "OpenCode Zen", baseUrl: "https://opencode.ai/zen/go/v1", models: [], needsKey: true, isPreset: true },
+      provider: {
+        id: "opencode-go",
+        kind: "openai",
+        label: "OpenCode Zen",
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        models: [],
+        needsKey: true,
+        isPreset: true,
+      },
       model: attributed,
       models: {} as never,
       apiKey: undefined,
@@ -160,11 +163,18 @@ test("withPinnedBotProviderAuth preserves the session header on the dispatched m
     } as never,
     (requestModel) => {
       captured.push(requestModel);
-      return { stream: async () => { throw new Error("unused"); }, result: async () => ({}) as never } as never;
+      return {
+        stream: async () => {
+          throw new Error("unused");
+        },
+        result: async () => ({}) as never,
+      } as never;
     },
   );
   try {
-    await pinned.streams.streamSimple(attributed, normalizeContext({ systemPrompt: "", messages: [] }), {}).result();
+    await pinned.streams
+      .streamSimple(attributed, normalizeContext({ systemPrompt: "", messages: [] }), {})
+      .result();
   } catch {
     // The stub provider stream intentionally throws; only the model matters.
   }
@@ -174,9 +184,14 @@ test("withPinnedBotProviderAuth preserves the session header on the dispatched m
 test("the attributed model's header reaches the outgoing HTTP request", async () => {
   const received: Array<Record<string, string | undefined>> = [];
   const server: Server = createServer((request, response) => {
-    received.push(Object.fromEntries(
-      Object.entries(request.headers).map(([name, value]) => [name, Array.isArray(value) ? value.join(",") : value]),
-    ));
+    received.push(
+      Object.fromEntries(
+        Object.entries(request.headers).map(([name, value]) => [
+          name,
+          Array.isArray(value) ? value.join(",") : value,
+        ]),
+      ),
+    );
     response.statusCode = 500;
     response.end('{"error":{"message":"unused"}}');
   });
@@ -186,7 +201,13 @@ test("the attributed model's header reaches the outgoing HTTP request", async ()
   const baseUrl = `http://127.0.0.1:${address.port}/v1`;
   const context = {
     systemPrompt: "",
-    messages: [{ role: "user" as const, content: [{ type: "text" as const, text: "hi" }], timestamp: Date.now() }],
+    messages: [
+      {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: "hi" }],
+        timestamp: Date.now(),
+      },
+    ],
   };
   // OpenCode Go models ship on three transports; pin the header on each so a
   // pi-ai change that stops merging model.headers fails loudly per transport.
@@ -195,9 +216,21 @@ test("the attributed model's header reaches the outgoing HTTP request", async ()
     api: Api;
     streamSimple: ReturnType<typeof openAICompletionsApi>["streamSimple"];
   }> = [
-    { name: "openai-completions", api: "openai-completions", streamSimple: openAICompletionsApi().streamSimple },
-    { name: "openai-responses", api: "openai-responses", streamSimple: openAIResponsesApi().streamSimple },
-    { name: "anthropic-messages", api: "anthropic-messages", streamSimple: anthropicMessagesApi().streamSimple },
+    {
+      name: "openai-completions",
+      api: "openai-completions",
+      streamSimple: openAICompletionsApi().streamSimple,
+    },
+    {
+      name: "openai-responses",
+      api: "openai-responses",
+      streamSimple: openAIResponsesApi().streamSimple,
+    },
+    {
+      name: "anthropic-messages",
+      api: "anthropic-messages",
+      streamSimple: anthropicMessagesApi().streamSimple,
+    },
   ];
   for (const transport of transports) {
     received.length = 0;
@@ -208,7 +241,9 @@ test("the attributed model's header reaches the outgoing HTTP request", async ()
     const control = model({ provider: "concentrate", api: transport.api, baseUrl });
     for (const candidate of [attributed, control]) {
       try {
-        await transport.streamSimple(candidate, normalizeContext(context), { apiKey: "test-key" }).result();
+        await transport
+          .streamSimple(candidate, normalizeContext(context), { apiKey: "test-key" })
+          .result();
       } catch {
         // The stub server rejects every request; only the headers matter.
       }

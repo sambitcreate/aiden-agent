@@ -63,7 +63,9 @@ function cardPage(url: string): string | undefined {
 export function toRemoteBotHandoff(prompt: BotPendingHandoff): AidenRemoteBotHandoff {
   const onMac = prompt.kind === "action" && prompt.target !== undefined;
   const url =
-    prompt.source === "rule" || onMac || prompt.open === undefined ? undefined : cardPage(prompt.open.url);
+    prompt.source === "rule" || onMac || prompt.open === undefined
+      ? undefined
+      : cardPage(prompt.open.url);
   const why = prompt.why?.trim();
   return parseAidenRemoteBotHandoff({
     waitId: prompt.waitId,
@@ -81,7 +83,10 @@ export function toRemoteBotHandoff(prompt: BotPendingHandoff): AidenRemoteBotHan
  * assistant line, "Ada needs you on your computer: Enter the 2FA code". It has no
  * `createdAt`, so it never moves a chat's preview or unread state.
  */
-export function legacyHandoffNotice(botName: string, prompt: BotPendingHandoff): AidenRemoteBotSessionEntry {
+export function legacyHandoffNotice(
+  botName: string,
+  prompt: BotPendingHandoff,
+): AidenRemoteBotSessionEntry {
   const name = botName.replace(/\s+/gu, " ").trim() || "Your Bot";
   return {
     type: "message",

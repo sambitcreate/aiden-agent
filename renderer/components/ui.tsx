@@ -16,7 +16,15 @@ import {
 } from "radix-ui";
 import { Command as CommandPrimitive } from "cmdk";
 import { createPortal } from "react-dom";
-import { ArrowDownToLine, PanelLeft, Check, ChevronDown, ChevronRight, Menu, Search } from "lucide-react";
+import {
+  ArrowDownToLine,
+  PanelLeft,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Menu,
+  Search,
+} from "lucide-react";
 import { Toaster as SonnerToaster, toast } from "sonner";
 import { reportRendererDiagnostic } from "../lib/dev-log";
 import {
@@ -244,7 +252,11 @@ export function Badge({
       )}
       {...props}
     >
-      {icon ? <span className="inline-flex shrink-0 [&_svg]:size-3.5" aria-hidden="true">{icon}</span> : null}
+      {icon ? (
+        <span className="inline-flex shrink-0 [&_svg]:size-3.5" aria-hidden="true">
+          {icon}
+        </span>
+      ) : null}
       {children}
     </span>
   );
@@ -254,12 +266,15 @@ export function Callout({
   color,
   className,
   ...props
-}: React.HTMLAttributes<HTMLDivElement> & { color?: "gray" | "green" | "red" | "blue" | "warning" | (string & {}) }) {
+}: React.HTMLAttributes<HTMLDivElement> & {
+  color?: "gray" | "green" | "red" | "blue" | "warning" | (string & {});
+}) {
   return (
     <div
       className={cn(
         "flex min-w-0 flex-col gap-1 break-words rounded-card bg-well p-3",
-        color === "red" && "bg-status-red-surface text-status-red [&_.text-red]:text-status-red [&_.text-support-red]:text-status-red",
+        color === "red" &&
+          "bg-status-red-surface text-status-red [&_.text-red]:text-status-red [&_.text-support-red]:text-status-red",
         color === "green" && "bg-status-green-surface text-status-green",
         color === "blue" && "bg-status-accent-surface text-status-accent",
         color === "warning" && "bg-status-warning-surface text-status-warning",
@@ -414,21 +429,21 @@ export function Field({
       )}
     >
       {label || description || orientation === "horizontal" ? (
-      <div className="min-w-0">
-        {label ? (
-          <div className="flex items-center gap-1.5">
-            <div id={labelId} className="min-w-0 text-strong text-primary">
-              {label}
+        <div className="min-w-0">
+          {label ? (
+            <div className="flex items-center gap-1.5">
+              <div id={labelId} className="min-w-0 text-strong text-primary">
+                {label}
+              </div>
+              {hint}
             </div>
-            {hint}
-          </div>
-        ) : null}
-        {description ? (
-          <div id={descriptionId} className="mt-0.5 max-w-[34rem] text-small text-secondary">
-            {description}
-          </div>
-        ) : null}
-      </div>
+          ) : null}
+          {description ? (
+            <div id={descriptionId} className="mt-0.5 max-w-[34rem] text-small text-secondary">
+              {description}
+            </div>
+          ) : null}
+        </div>
       ) : null}
       <div className="settings-field-control min-w-0">{children}</div>
     </div>
@@ -462,7 +477,10 @@ export function SettingsDisclosure({
   const [touched, setTouched] = React.useState(false);
   if (defaultOpen && !open && !touched) setOpen(true);
   return (
-    <details open={open} className={cn("settings-card group mb-7 overflow-hidden rounded-card bg-well", className)}>
+    <details
+      open={open}
+      className={cn("settings-card group mb-7 overflow-hidden rounded-card bg-well", className)}
+    >
       <summary
         className="flex min-h-14 cursor-default list-none items-center gap-3 px-4 py-3 transition-colors duration-150 hover:bg-list-hover [--keyboard-focus-offset:-2px] [&::-webkit-details-marker]:hidden"
         onClick={(event) => {
@@ -508,7 +526,9 @@ const SplitContext = React.createContext<{
  */
 export function useSplitViewCollapsedHeaderInset(): number | undefined {
   const chrome = useWindowChrome();
-  return React.useContext(SplitContext)?.collapsed === true ? collapsedHeaderInset(chrome) : undefined;
+  return React.useContext(SplitContext)?.collapsed === true
+    ? collapsedHeaderInset(chrome)
+    : undefined;
 }
 
 /** Whether the leading sidebar is collapsed, for full-height chrome that must clear the window controls. */
@@ -642,7 +662,9 @@ function SplitViewRoot({
       const divider = document.activeElement;
       toggle();
       requestAnimationFrame(() =>
-        restoreFocus([() => leadingAnchor?.querySelector<HTMLElement>("[data-sidebar-toggle]")], { closing: divider }),
+        restoreFocus([() => leadingAnchor?.querySelector<HTMLElement>("[data-sidebar-toggle]")], {
+          closing: divider,
+        }),
       );
     },
   });
@@ -678,7 +700,8 @@ function SplitViewRoot({
       compactSidebarFocusIntentRef.current === "first-control"
         ? requestAnimationFrame(() => {
             // A dialog that was already open keeps focus when the window narrows.
-            if (compactLayer.isTop() && !leadingAnchor?.contains(previousFocus)) getFocusable()[0]?.focus();
+            if (compactLayer.isTop() && !leadingAnchor?.contains(previousFocus))
+              getFocusable()[0]?.focus();
           })
         : null;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1030,13 +1053,21 @@ export function SidebarListItem({
  * Whether a vertical wheel over `target` would scroll some nested scroller
  * inside `viewport` rather than the viewport itself.
  */
-function nestedScrollerConsumesWheel(target: EventTarget | null, viewport: HTMLElement, deltaY: number): boolean {
+function nestedScrollerConsumesWheel(
+  target: EventTarget | null,
+  viewport: HTMLElement,
+  deltaY: number,
+): boolean {
   let node = target instanceof Element ? target : null;
   while (node && node !== viewport) {
     if (node instanceof HTMLElement && node.scrollHeight > node.clientHeight + 1) {
       const overflowY = getComputedStyle(node).overflowY;
       if (overflowY === "auto" || overflowY === "scroll") {
-        if (deltaY < 0 ? node.scrollTop > 0 : node.scrollTop + node.clientHeight < node.scrollHeight - 1) {
+        if (
+          deltaY < 0
+            ? node.scrollTop > 0
+            : node.scrollTop + node.clientHeight < node.scrollHeight - 1
+        ) {
           return true;
         }
       }
@@ -1164,7 +1195,8 @@ export function ScrollArea({
   scrollContentBottomOffset?: number;
   className?: string;
 }>) {
-  const replaced = bodyReplacement !== undefined && bodyReplacement !== null && bodyReplacement !== false;
+  const replaced =
+    bodyReplacement !== undefined && bodyReplacement !== null && bodyReplacement !== false;
   const bodyHidden = bodyHiddenProp || replaced;
   const viewport = React.useRef<HTMLDivElement>(null);
   const content = React.useRef<HTMLDivElement>(null);
@@ -1181,7 +1213,9 @@ export function ScrollArea({
   // The follow latch lives in a ref so scroll, wheel, and resize handlers read
   // the latest decision synchronously; React state only mirrors it for paint.
   const followRef = React.useRef<FollowState>(INITIAL_FOLLOW_STATE);
-  const scrollSampleRef = React.useRef<{ top: number; height: number; viewport: number } | null>(null);
+  const scrollSampleRef = React.useRef<{ top: number; height: number; viewport: number } | null>(
+    null,
+  );
   // Upward movement too small to count yet. Kept apart from the sample, which
   // content snaps overwrite, so fractional scrolls add up across a stream.
   const upwardDriftRef = React.useRef(0);
@@ -1212,13 +1246,16 @@ export function ScrollArea({
     }, JUMP_BUTTON_SHOW_DELAY_MS);
   }, []);
 
-  const dispatchFollow = React.useCallback((event: FollowEvent) => {
-    const next = followReducer(followRef.current, event);
-    followRef.current = next;
-    setFollowing(next.following);
-    syncJumpOffer();
-    return next;
-  }, [syncJumpOffer]);
+  const dispatchFollow = React.useCallback(
+    (event: FollowEvent) => {
+      const next = followReducer(followRef.current, event);
+      followRef.current = next;
+      setFollowing(next.following);
+      syncJumpOffer();
+      return next;
+    },
+    [syncJumpOffer],
+  );
 
   React.useEffect(() => syncJumpOffer(), [streaming, syncJumpOffer]);
   React.useEffect(
@@ -1241,56 +1278,74 @@ export function ScrollArea({
   }, []);
 
   /** Pins a following viewport to its true bottom and records where it landed. */
-  const snapIfFollowing = React.useCallback((element: HTMLElement) => {
-    const state = followRef.current;
-    if (autoScrollRef.current && state.following && !state.jumpPending && !state.scrollbarHeld) {
-      element.scrollTop = element.scrollHeight;
-    }
-    scrollSampleRef.current = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
-    dispatchFollow({ type: "contentResize", distance: measureDistance(element), scrollTop: element.scrollTop });
-  }, [dispatchFollow, measureDistance]);
+  const snapIfFollowing = React.useCallback(
+    (element: HTMLElement) => {
+      const state = followRef.current;
+      if (autoScrollRef.current && state.following && !state.jumpPending && !state.scrollbarHeld) {
+        element.scrollTop = element.scrollHeight;
+      }
+      scrollSampleRef.current = {
+        top: element.scrollTop,
+        height: element.scrollHeight,
+        viewport: element.clientHeight,
+      };
+      dispatchFollow({
+        type: "contentResize",
+        distance: measureDistance(element),
+        scrollTop: element.scrollTop,
+      });
+    },
+    [dispatchFollow, measureDistance],
+  );
 
-  const scrollToBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
-    const element = viewport.current;
-    if (!element) return;
-    const distance = distanceFromScrollBottom(element.scrollHeight, element.clientHeight, element.scrollTop);
-    // Streaming ticks cut animated scrolls short, and a smooth scroll that
-    // has nowhere to go never fires scrollend, so both snap instead, as does
-    // Reduce Motion (CSS scroll-behavior does not reach a scripted scroll).
-    const smooth =
-      behavior === "smooth" &&
-      !streamingRef.current &&
-      distance > 1 &&
-      document.documentElement.dataset.reduceMotion !== "true";
-    // A jump starts any small upward movement over; an instant one lands
-    // without a scroll event that would otherwise reset it.
-    upwardDriftRef.current = 0;
-    dispatchFollow({ type: "jump", smooth });
-    window.clearTimeout(jumpSettleTimerRef.current);
-    if (smooth) {
-      element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-      // scrollend normally lands the jump; this only covers an animation the
-      // engine dropped without one.
-      jumpSettleTimerRef.current = window.setTimeout(() => {
-        if (!followRef.current.jumpPending || !viewport.current) return;
-        dispatchFollow({
-          type: "settle",
-          distance: measureDistance(viewport.current),
-          scrollTop: viewport.current.scrollTop,
-          ended: true,
-        });
-        snapIfFollowing(viewport.current);
-      }, 1000);
-    } else {
-      snapIfFollowing(element);
-    }
-    // Re-check once layout settles: late images, fonts, and the jump button's
-    // own removal can all move the bottom after this frame.
-    requestAnimationFrame(() => {
-      const current = viewport.current;
-      if (current && followNeedsSnap(followRef.current)) snapIfFollowing(current);
-    });
-  }, [dispatchFollow, measureDistance, snapIfFollowing]);
+  const scrollToBottom = React.useCallback(
+    (behavior: ScrollBehavior = "smooth") => {
+      const element = viewport.current;
+      if (!element) return;
+      const distance = distanceFromScrollBottom(
+        element.scrollHeight,
+        element.clientHeight,
+        element.scrollTop,
+      );
+      // Streaming ticks cut animated scrolls short, and a smooth scroll that
+      // has nowhere to go never fires scrollend, so both snap instead, as does
+      // Reduce Motion (CSS scroll-behavior does not reach a scripted scroll).
+      const smooth =
+        behavior === "smooth" &&
+        !streamingRef.current &&
+        distance > 1 &&
+        document.documentElement.dataset.reduceMotion !== "true";
+      // A jump starts any small upward movement over; an instant one lands
+      // without a scroll event that would otherwise reset it.
+      upwardDriftRef.current = 0;
+      dispatchFollow({ type: "jump", smooth });
+      window.clearTimeout(jumpSettleTimerRef.current);
+      if (smooth) {
+        element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+        // scrollend normally lands the jump; this only covers an animation the
+        // engine dropped without one.
+        jumpSettleTimerRef.current = window.setTimeout(() => {
+          if (!followRef.current.jumpPending || !viewport.current) return;
+          dispatchFollow({
+            type: "settle",
+            distance: measureDistance(viewport.current),
+            scrollTop: viewport.current.scrollTop,
+            ended: true,
+          });
+          snapIfFollowing(viewport.current);
+        }, 1000);
+      } else {
+        snapIfFollowing(element);
+      }
+      // Re-check once layout settles: late images, fonts, and the jump button's
+      // own removal can all move the bottom after this frame.
+      requestAnimationFrame(() => {
+        const current = viewport.current;
+        if (current && followNeedsSnap(followRef.current)) snapIfFollowing(current);
+      });
+    },
+    [dispatchFollow, measureDistance, snapIfFollowing],
+  );
 
   React.useEffect(() => {
     const element = viewport.current;
@@ -1321,14 +1376,28 @@ export function ScrollArea({
     };
     const onTouchStart = () => {
       // Touching the viewport ends a smooth jump without breaking follow.
-      dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: false });
+      dispatchFollow({
+        type: "userIntent",
+        intent: "drag",
+        at: performance.now(),
+        canScrollUp: false,
+      });
     };
     const onTouchMove = () => {
       // Touch direction is not observable here, so a drag breaks follow only
       // once it has carried the viewport out of the re-arm band.
-      const distance = distanceFromScrollBottom(element.scrollHeight, element.clientHeight, element.scrollTop);
+      const distance = distanceFromScrollBottom(
+        element.scrollHeight,
+        element.clientHeight,
+        element.scrollTop,
+      );
       if (distance > FOLLOW_REARM_DISTANCE_PX) {
-        dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
+        dispatchFollow({
+          type: "userIntent",
+          intent: "drag",
+          at: performance.now(),
+          canScrollUp: true,
+        });
       }
     };
     const onPointerDown = (event: PointerEvent) => {
@@ -1336,7 +1405,11 @@ export function ScrollArea({
       // Only the viewport's own box (its scrollbar) starts a scrollbar hold.
       // The press itself keeps follow: only where the thumb settles counts.
       if (event.target !== element) return;
-      scrollSampleRef.current = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
+      scrollSampleRef.current = {
+        top: element.scrollTop,
+        height: element.scrollHeight,
+        viewport: element.clientHeight,
+      };
       upwardDriftRef.current = 0;
       dispatchFollow({ type: "scrollbarHold" });
     };
@@ -1410,14 +1483,16 @@ export function ScrollArea({
   React.useLayoutEffect(() => {
     const measure = () => {
       const nextToolbarHeight = toolbarRef.current?.getBoundingClientRect().height ?? 0;
-      setToolbarHeight((current) => current === nextToolbarHeight ? current : nextToolbarHeight);
+      setToolbarHeight((current) => (current === nextToolbarHeight ? current : nextToolbarHeight));
       const nextFooterHeight = footerRef.current?.getBoundingClientRect().height ?? 0;
       if (alignFooterToScrollContent) {
         const scrollViewport = viewport.current;
         const nextScrollbarGutter = scrollViewport
           ? Math.max(0, scrollViewport.offsetWidth - scrollViewport.clientWidth)
           : 0;
-        setScrollbarGutter((current) => current === nextScrollbarGutter ? current : nextScrollbarGutter);
+        setScrollbarGutter((current) =>
+          current === nextScrollbarGutter ? current : nextScrollbarGutter,
+        );
       }
       if (nextFooterHeight !== footerHeightRef.current) {
         footerHeightRef.current = nextFooterHeight;
@@ -1481,7 +1556,12 @@ export function ScrollArea({
         <div className="no-drag flex shrink-0 items-center">{leading}</div>
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {/* With an accessory beside it, the title keeps a readable minimum. */}
-          <h1 className={cn("min-w-0 truncate text-strong text-primary", titleAccessory && "min-w-24")}>
+          <h1
+            className={cn(
+              "min-w-0 truncate text-strong text-primary",
+              titleAccessory && "min-w-24",
+            )}
+          >
             {title}
           </h1>
           {titleAccessory}
@@ -1541,15 +1621,25 @@ export function ScrollArea({
             }}
             onScroll={(event) => {
               const element = event.currentTarget;
-              const sample = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
+              const sample = {
+                top: element.scrollTop,
+                height: element.scrollHeight,
+                viewport: element.clientHeight,
+              };
               const previous = scrollSampleRef.current;
-              const clamped = previous !== null &&
+              const clamped =
+                previous !== null &&
                 (sample.height < previous.height || sample.viewport !== previous.viewport);
               // Sandboxed frame input cannot reach our wheel/touch listeners. Its
               // chained host scroll can still reveal the reader moving upward.
               // Fractional upward movement adds up across events, including across
               // a streaming snap; a downward move or a jump starts over.
-              if (!previous || clamped || followRef.current.jumpPending || sample.top > previous.top) {
+              if (
+                !previous ||
+                clamped ||
+                followRef.current.jumpPending ||
+                sample.top > previous.top
+              ) {
                 upwardDriftRef.current = 0;
               } else {
                 upwardDriftRef.current += previous.top - sample.top;
@@ -1557,8 +1647,18 @@ export function ScrollArea({
               const movedUp = upwardDriftRef.current > 1;
               if (movedUp) upwardDriftRef.current = 0;
               scrollSampleRef.current = sample;
-              if (autoScrollRef.current && movedUp && !followRef.current.jumpPending && !followRef.current.scrollbarHeld) {
-                dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
+              if (
+                autoScrollRef.current &&
+                movedUp &&
+                !followRef.current.jumpPending &&
+                !followRef.current.scrollbarHeld
+              ) {
+                dispatchFollow({
+                  type: "userIntent",
+                  intent: "drag",
+                  at: performance.now(),
+                  canScrollUp: true,
+                });
               }
               dispatchFollow({
                 type: clamped ? "contentResize" : "settle",
@@ -1573,7 +1673,11 @@ export function ScrollArea({
           </div>
           {focusRegion ? (
             // The conversation's keyboard focus ring, drawn below the overlaid toolbar.
-            <div aria-hidden className="conversation-focus-ring pointer-events-none absolute inset-x-0 bottom-0 z-20" style={{ top: toolbarHeight }} />
+            <div
+              aria-hidden
+              className="conversation-focus-ring pointer-events-none absolute inset-x-0 bottom-0 z-20"
+              style={{ top: toolbarHeight }}
+            />
           ) : null}
           {overlay && !replaced ? (
             <div
@@ -1644,7 +1748,10 @@ export function ScrollArea({
  * opts in with min-h-0 (a pending approval) shrinks first, and anything still
  * too tall leaves through the top so the last row (the composer) stays in view.
  */
-export function ScrollAreaFooterStack({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+export function ScrollAreaFooterStack({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) {
   return <div className={cn("flex min-h-0 flex-col justify-end", className)} {...props} />;
 }
 
@@ -1670,7 +1777,10 @@ type OpenChangeProps = {
 };
 
 /** Tracks a Radix root's open state, controlled or not, and keeps it on the layer stack while open. */
-function useRootLayer({ open: openProp, defaultOpen, onOpenChange }: OpenChangeProps, kind: LayerKind) {
+function useRootLayer(
+  { open: openProp, defaultOpen, onOpenChange }: OpenChangeProps,
+  kind: LayerKind,
+) {
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false);
   const open = openProp ?? uncontrolledOpen;
   useLayer(open, kind);
@@ -1830,7 +1940,9 @@ export function Dialog({
                 <div className="mt-1.5 shrink-0 text-regular text-secondary">{description}</div>
               </DialogPrimitive.Description>
             ) : null}
-            <div className={cn("mt-4 min-h-0 overflow-y-auto px-0.5", size === "full" && "flex-1")}>{children}</div>
+            <div className={cn("mt-4 min-h-0 overflow-y-auto px-0.5", size === "full" && "flex-1")}>
+              {children}
+            </div>
             <div className="mt-5 flex shrink-0 justify-end gap-2">
               {cancelKeepsOpen ? (
                 <Button
@@ -1952,7 +2064,9 @@ export function AlertDialog({
               </AlertDialogPrimitive.Description>
             ) : null}
             {children ? (
-              <div className="mt-3 max-h-[46vh] min-h-0 overflow-y-auto text-small text-primary">{children}</div>
+              <div className="mt-3 max-h-[46vh] min-h-0 overflow-y-auto text-small text-primary">
+                {children}
+              </div>
             ) : null}
             <div className="mt-5 flex justify-end gap-2">
               <AlertDialogPrimitive.Cancel asChild>
@@ -2010,7 +2124,11 @@ export const DropdownMenuContent = React.forwardRef<
           // focus back to the menu button now would pull it out of whatever the
           // person has started typing in the dialog.
           const active = document.activeElement;
-          if (!event.defaultPrevented && active instanceof Element && active.closest('[role="dialog"], [role="alertdialog"]')) {
+          if (
+            !event.defaultPrevented &&
+            active instanceof Element &&
+            active.closest('[role="dialog"], [role="alertdialog"]')
+          ) {
             event.preventDefault();
           }
         }}
@@ -2044,9 +2162,13 @@ export const DropdownMenuItem = React.forwardRef<
     <DropdownMenuPrimitive.Item
       ref={ref}
       data-live-guard={color === "red" || color === "status-red" ? "confirm" : undefined}
-      className={cn(menuItemClass, color === "red" && "text-red",
+      className={cn(
+        menuItemClass,
+        color === "red" && "text-red",
         color === "status-red" && "text-status-red",
-        (color === "red" || color === "status-red") && destructiveHighlightClass, className)}
+        (color === "red" || color === "status-red") && destructiveHighlightClass,
+        className,
+      )}
       {...props}
     />
   );
@@ -2057,14 +2179,20 @@ const menuSubTriggerClass = cn(
   menuItemClass,
   "data-[state=open]:bg-fill-accent data-[state=open]:text-fill-accent-foreground data-[state=open]:**:text-current",
 );
-const menuSubChevron = <ChevronRight aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-tertiary" />;
+const menuSubChevron = (
+  <ChevronRight aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-tertiary" />
+);
 export const DropdownMenuSub = DropdownMenuPrimitive.Sub;
 export const DropdownMenuSubTrigger = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.SubTrigger>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubTrigger> & { icon?: string }
 >(function SubTrigger({ className, icon: _icon, children, ...props }, ref) {
   return (
-    <DropdownMenuPrimitive.SubTrigger ref={ref} className={cn(menuSubTriggerClass, className)} {...props}>
+    <DropdownMenuPrimitive.SubTrigger
+      ref={ref}
+      className={cn(menuSubTriggerClass, className)}
+      {...props}
+    >
       {children}
       {menuSubChevron}
     </DropdownMenuPrimitive.SubTrigger>
@@ -2109,11 +2237,7 @@ export const DropdownMenuCheckboxItem = React.forwardRef<
       </span>
       <span className="flex min-w-0 flex-col">
         <span>{children}</span>
-        {sublabel ? (
-          <span className="max-w-72 text-small text-tertiary">
-            {sublabel}
-          </span>
-        ) : null}
+        {sublabel ? <span className="max-w-72 text-small text-tertiary">{sublabel}</span> : null}
       </span>
     </DropdownMenuPrimitive.CheckboxItem>
   );
@@ -2184,9 +2308,19 @@ const SurfaceCoveredContext = React.createContext(false);
  * stays covered inside a nested one, but not inside a dialog or popover opened
  * from it, which is a new surface of its own.
  */
-export function SurfaceCovered({ covered, children }: { covered: boolean; children: React.ReactNode }) {
+export function SurfaceCovered({
+  covered,
+  children,
+}: {
+  covered: boolean;
+  children: React.ReactNode;
+}) {
   const parent = React.useContext(SurfaceCoveredContext);
-  return <SurfaceCoveredContext.Provider value={parent || covered}>{children}</SurfaceCoveredContext.Provider>;
+  return (
+    <SurfaceCoveredContext.Provider value={parent || covered}>
+      {children}
+    </SurfaceCoveredContext.Provider>
+  );
 }
 
 /** Starts a new, uncovered surface: dialog and popover content. */
@@ -2206,7 +2340,13 @@ const HoverSurfaceDismissalContext = React.createContext(0);
  * turns true: a side panel floating over the conversation would otherwise
  * leave a card open over it. They open again as usual afterwards.
  */
-export function DismissHoverSurfaces({ when, children }: { when: boolean; children: React.ReactNode }) {
+export function DismissHoverSurfaces({
+  when,
+  children,
+}: {
+  when: boolean;
+  children: React.ReactNode;
+}) {
   const parent = React.useContext(HoverSurfaceDismissalContext);
   const [state, setState] = React.useState({ when, count: 0 });
   let count = state.count;
@@ -2215,7 +2355,9 @@ export function DismissHoverSurfaces({ when, children }: { when: boolean; childr
     setState({ when, count });
   }
   return (
-    <HoverSurfaceDismissalContext.Provider value={parent + count}>{children}</HoverSurfaceDismissalContext.Provider>
+    <HoverSurfaceDismissalContext.Provider value={parent + count}>
+      {children}
+    </HoverSurfaceDismissalContext.Provider>
   );
 }
 
@@ -2329,9 +2471,13 @@ export const ContextMenuItem = React.forwardRef<
     <ContextMenuPrimitive.Item
       ref={ref}
       data-live-guard={color === "red" || color === "status-red" ? "confirm" : undefined}
-      className={cn(menuItemClass, color === "red" && "text-red",
+      className={cn(
+        menuItemClass,
+        color === "red" && "text-red",
         color === "status-red" && "text-status-red",
-        (color === "red" || color === "status-red") && destructiveHighlightClass, className)}
+        (color === "red" || color === "status-red") && destructiveHighlightClass,
+        className,
+      )}
       {...props}
     />
   );
@@ -2343,7 +2489,11 @@ export const ContextMenuSubTrigger = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubTrigger> & { icon?: string }
 >(function ContextSubTrigger({ className, icon: _icon, children, ...props }, ref) {
   return (
-    <ContextMenuPrimitive.SubTrigger ref={ref} className={cn(menuSubTriggerClass, className)} {...props}>
+    <ContextMenuPrimitive.SubTrigger
+      ref={ref}
+      className={cn(menuSubTriggerClass, className)}
+      {...props}
+    >
       {children}
       {menuSubChevron}
     </ContextMenuPrimitive.SubTrigger>

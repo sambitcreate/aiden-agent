@@ -6,7 +6,10 @@ import type { AskUserQuestionRecapV1 } from "../shared/ask-user-question.js";
 
 function cards(markup: string): string[] {
   return [...markup.matchAll(/<li[^>]*>(.*?)<\/li>/gu)].map((match) =>
-    match[1]!.replace(/<[^>]+>/gu, "|").replace(/\|+/gu, "|").replace(/^\||\|$/gu, ""),
+    match[1]!
+      .replace(/<[^>]+>/gu, "|")
+      .replace(/\|+/gu, "|")
+      .replace(/^\||\|$/gu, ""),
   );
 }
 
@@ -17,7 +20,12 @@ test("each answered question shows the question with the owner's choice beneath 
     items: [
       { question: "Which database?", header: "Database", kind: "option", answers: ["Postgres"] },
       { question: "Which extras?", header: "Extras", kind: "multi", answers: ["Tests", "Docs"] },
-      { question: "Where to deploy?", header: "Deploy", kind: "custom", answers: ["The staging bucket"] },
+      {
+        question: "Where to deploy?",
+        header: "Deploy",
+        kind: "custom",
+        answers: ["The staging bucket"],
+      },
       { question: "Ship it?", header: "Ship", kind: "skipped", answers: [] },
     ],
   };
@@ -32,7 +40,12 @@ test("each answered question shows the question with the owner's choice beneath 
 });
 
 test("a closed or expired questionnaire says why nothing was chosen", () => {
-  const item = { question: "Which database?", header: "Database", kind: "skipped" as const, answers: [] };
+  const item = {
+    question: "Which database?",
+    header: "Database",
+    kind: "skipped" as const,
+    answers: [],
+  };
   const dismissed = renderToStaticMarkup(
     <AskUserQuestionRecap recap={{ version: 1, outcome: "dismissed", items: [item] }} />,
   );

@@ -154,7 +154,10 @@ test("a recording that reaches the on-device limit keeps exactly the limit and a
   worklet.emit(new Float32Array(3_200).fill(0.5));
   assert.equal(limits, 1);
   // Live text only sees the kept audio, never samples past the limit.
-  assert.equal(live.reduce((total, samples) => total + samples, 0), 4_000);
+  assert.equal(
+    live.reduce((total, samples) => total + samples, 0),
+    4_000,
+  );
 
   recorder.stop();
   await untilStopped({ stops: () => stops });

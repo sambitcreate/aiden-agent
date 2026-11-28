@@ -16,13 +16,18 @@ export async function cleanUpRetiredModelScoring(): Promise<void> {
       directory: app.getPath("userData"),
       ...RETIRED_DESKTOP_MODEL_SCORING,
       credentials: {
-        has: async (id) => (await piCredentialStore.list()).some((entry) => entry.providerId === id),
+        has: async (id) =>
+          (await piCredentialStore.list()).some((entry) => entry.providerId === id),
         delete: (id) => piCredentialStore.delete(id),
       },
       onFailure: (item, error) =>
-        logger.debug("retired-model-scoring", `Could not remove ${item}; it will be retried next launch.`, {
-          errorType: error instanceof Error ? error.name : typeof error,
-        }),
+        logger.debug(
+          "retired-model-scoring",
+          `Could not remove ${item}; it will be retried next launch.`,
+          {
+            errorType: error instanceof Error ? error.name : typeof error,
+          },
+        ),
     });
   } catch (error) {
     logger.debug("retired-model-scoring", "Could not clean up retired model scoring data.", {

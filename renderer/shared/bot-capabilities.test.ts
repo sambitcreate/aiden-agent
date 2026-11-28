@@ -36,62 +36,76 @@ function selection(fileScopeIds: string[]): BotCustomSelection {
 test("Full Mac is a semantic ceiling for Bot-home and approved-location chat reductions", () => {
   const full = selection(["full"]);
   assert.equal(botCustomSelectionIsSubset(selection(["home"]), full, scopes), true);
-  assert.equal(
-    botCustomSelectionIsSubset(selection(["home", "documents"]), full, scopes),
-    true,
-  );
+  assert.equal(botCustomSelectionIsSubset(selection(["home", "documents"]), full, scopes), true);
   assert.equal(botCustomSelectionIsSubset(full, selection(["home"]), scopes), false);
 });
 
 test("Full Bot access accepts only an exact optional provider/model pair", () => {
-  assert.deepEqual(parseBotAccessUpdate({
-    accessMode: "full",
-    catalogRevision: "catalog:1",
-    confirmedForeground: true,
-    providerId: "provider:opaque",
-    modelId: "model/selected",
-  }), {
-    accessMode: "full",
-    catalogRevision: "catalog:1",
-    confirmedForeground: true,
-    providerId: "provider:opaque",
-    modelId: "model/selected",
-  });
-  assert.throws(() => parseBotAccessUpdate({
-    accessMode: "full",
-    catalogRevision: "catalog:1",
-    confirmedForeground: true,
-    providerId: "provider:opaque",
-  }), /Full Access/u);
+  assert.deepEqual(
+    parseBotAccessUpdate({
+      accessMode: "full",
+      catalogRevision: "catalog:1",
+      confirmedForeground: true,
+      providerId: "provider:opaque",
+      modelId: "model/selected",
+    }),
+    {
+      accessMode: "full",
+      catalogRevision: "catalog:1",
+      confirmedForeground: true,
+      providerId: "provider:opaque",
+      modelId: "model/selected",
+    },
+  );
+  assert.throws(
+    () =>
+      parseBotAccessUpdate({
+        accessMode: "full",
+        catalogRevision: "catalog:1",
+        confirmedForeground: true,
+        providerId: "provider:opaque",
+      }),
+    /Full Access/u,
+  );
 
-  assert.deepEqual(parseBotAccessUpdate({
-    accessMode: "full",
-    catalogRevision: "catalog:1",
-    confirmedForeground: true,
-    providerId: "provider:opaque",
-    modelId: "model/text",
-    visionModel: { providerId: "provider:vision", modelId: "model/vision" },
-  }), {
-    accessMode: "full",
-    catalogRevision: "catalog:1",
-    confirmedForeground: true,
-    providerId: "provider:opaque",
-    modelId: "model/text",
-    visionModel: { providerId: "provider:vision", modelId: "model/vision" },
-  });
-  assert.throws(() => parseBotAccessUpdate({
-    accessMode: "full",
-    catalogRevision: "catalog:1",
-    confirmedForeground: true,
-    visionModel: { providerId: "provider:vision" },
-  }), /foreground confirmation/u);
+  assert.deepEqual(
+    parseBotAccessUpdate({
+      accessMode: "full",
+      catalogRevision: "catalog:1",
+      confirmedForeground: true,
+      providerId: "provider:opaque",
+      modelId: "model/text",
+      visionModel: { providerId: "provider:vision", modelId: "model/vision" },
+    }),
+    {
+      accessMode: "full",
+      catalogRevision: "catalog:1",
+      confirmedForeground: true,
+      providerId: "provider:opaque",
+      modelId: "model/text",
+      visionModel: { providerId: "provider:vision", modelId: "model/vision" },
+    },
+  );
+  assert.throws(
+    () =>
+      parseBotAccessUpdate({
+        accessMode: "full",
+        catalogRevision: "catalog:1",
+        confirmedForeground: true,
+        visionModel: { providerId: "provider:vision" },
+      }),
+    /foreground confirmation/u,
+  );
 
   const defaultFull = parseBotAccessUpdate({
     accessMode: "full",
     catalogRevision: "catalog:1",
     confirmedForeground: true,
   });
-  assert.equal(defaultFull.accessMode === "full" ? defaultFull.webSearchEnabled : undefined, undefined);
+  assert.equal(
+    defaultFull.accessMode === "full" ? defaultFull.webSearchEnabled : undefined,
+    undefined,
+  );
   const enabledFull = parseBotAccessUpdate({
     accessMode: "full",
     catalogRevision: "catalog:1",
@@ -99,12 +113,16 @@ test("Full Bot access accepts only an exact optional provider/model pair", () =>
     webSearchEnabled: true,
   });
   assert.equal(enabledFull.accessMode === "full" ? enabledFull.webSearchEnabled : undefined, true);
-  assert.throws(() => parseBotAccessUpdate({
-    accessMode: "full",
-    catalogRevision: "catalog:1",
-    confirmedForeground: true,
-    webSearchEnabled: "true",
-  }), /Full Access/u);
+  assert.throws(
+    () =>
+      parseBotAccessUpdate({
+        accessMode: "full",
+        catalogRevision: "catalog:1",
+        confirmedForeground: true,
+        webSearchEnabled: "true",
+      }),
+    /Full Access/u,
+  );
 });
 
 test("Custom file-scope toggles stay binder-coherent", () => {
@@ -118,8 +136,14 @@ test("Custom file-scope toggles stay binder-coherent", () => {
     ["documents", "home"].sort(),
   );
   assert.deepEqual(nextBotFileScopeIds(["home", "documents"], scopes, "home", false), []);
-  assert.equal(botFileScopeSelectionGuidance("darwin").startsWith("Choose Full Mac, Bot folder"), true);
-  assert.equal(botFileScopeSelectionGuidance("linux").startsWith("Choose Full computer, Bot folder"), true);
+  assert.equal(
+    botFileScopeSelectionGuidance("darwin").startsWith("Choose Full Mac, Bot folder"),
+    true,
+  );
+  assert.equal(
+    botFileScopeSelectionGuidance("linux").startsWith("Choose Full computer, Bot folder"),
+    true,
+  );
   assert.equal(botFullComputerLabel("linux"), "Full computer");
 });
 
@@ -135,21 +159,53 @@ test("file-scope intersection preserves a chat reduction below Full Mac", () => 
   );
 });
 
-
 test("disabled catalog preserves only saved skill grants and leaves every other capability check strict", () => {
   const catalog: BotCapabilityCatalog = {
-    revision: "catalog:paused", providers: [{ id: "provider", label: "Provider", available: true,
-      models: [{ id: "model", label: "Model", available: true }] }],
-    fileScopes: scopes, shellAvailable: true, connections: [],
-    skills: [{ id: "saved", label: "Saved skill", available: false }, { id: "other", label: "Other skill", available: true }],
-    skillsEnabled: false, otherCapabilities: [],
+    revision: "catalog:paused",
+    providers: [
+      {
+        id: "provider",
+        label: "Provider",
+        available: true,
+        models: [{ id: "model", label: "Model", available: true }],
+      },
+    ],
+    fileScopes: scopes,
+    shellAvailable: true,
+    connections: [],
+    skills: [
+      { id: "saved", label: "Saved skill", available: false },
+      { id: "other", label: "Other skill", available: true },
+    ],
+    skillsEnabled: false,
+    otherCapabilities: [],
     notice: { version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true },
   };
   const chosen = { ...selection(["home"]), skillIds: ["saved"] };
   const retainedSkillIds = ["saved"];
   assert.doesNotThrow(() => validateSelectionAgainstCatalog(chosen, catalog, { retainedSkillIds }));
   assert.throws(() => validateSelectionAgainstCatalog(chosen, catalog), /disabled/u);
-  assert.throws(() => validateSelectionAgainstCatalog({ ...chosen, skillIds: ["other"] }, catalog, { retainedSkillIds }), /disabled/u);
-  assert.throws(() => validateSelectionAgainstCatalog({ ...chosen, connectionIds: ["unknown"] }, catalog, { retainedSkillIds }), /connection/u);
-  assert.throws(() => validateSelectionAgainstCatalog(chosen, { ...catalog, skillsEnabled: true }, { retainedSkillIds }), /skill/u);
+  assert.throws(
+    () =>
+      validateSelectionAgainstCatalog({ ...chosen, skillIds: ["other"] }, catalog, {
+        retainedSkillIds,
+      }),
+    /disabled/u,
+  );
+  assert.throws(
+    () =>
+      validateSelectionAgainstCatalog({ ...chosen, connectionIds: ["unknown"] }, catalog, {
+        retainedSkillIds,
+      }),
+    /connection/u,
+  );
+  assert.throws(
+    () =>
+      validateSelectionAgainstCatalog(
+        chosen,
+        { ...catalog, skillsEnabled: true },
+        { retainedSkillIds },
+      ),
+    /skill/u,
+  );
 });

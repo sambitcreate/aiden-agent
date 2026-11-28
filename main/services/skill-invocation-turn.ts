@@ -103,7 +103,10 @@ export function reportSkillUsed(provenance: SkillProvenanceV1): void {
     reportAnalyticsEvent("skill_used", { source: "user" });
     return;
   }
-  reportAnalyticsEvent("skill_used", { source: "builtin", skill_id: provenance.name.toLowerCase() });
+  reportAnalyticsEvent("skill_used", {
+    source: "builtin",
+    skill_id: provenance.name.toLowerCase(),
+  });
 }
 
 export function preparedSkillPromptForCurrentTurn(
@@ -141,7 +144,10 @@ export function formatPreparedSkillInvocation(
   userMessageId: string,
 ): PreparedSkillInvocation {
   if (skill.userInvocable === false) {
-    throw new SkillInvocationError("skill_unavailable", "This skill does not allow user invocation.");
+    throw new SkillInvocationError(
+      "skill_unavailable",
+      "This skill does not allow user invocation.",
+    );
   }
   const unsafePathCharacter = skill.path
     ? Array.from(skill.path).some((character) => {

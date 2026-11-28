@@ -14,8 +14,20 @@ import { fenceAsData } from "../../renderer/shared/agent-notices.js";
 import { claudeToolInput, claudeToolName } from "./hooks/hook-aliases.js";
 import { hookScopesFor } from "./hooks/hook-config.js";
 import { getHookDispatcher } from "./hooks/index.js";
-import type { HookDispatcher, HookEvent, HookOutcome, HookPayload, HookScope } from "./hooks/hook-types.js";
-import { MAX_STOP_HOOK_CONTINUATIONS, hookCheckFailed, hookDispatchFailure, hookNoticeLines, hookStopMessage } from "./workspace-chat-hooks.js";
+import type {
+  HookDispatcher,
+  HookEvent,
+  HookOutcome,
+  HookPayload,
+  HookScope,
+} from "./hooks/hook-types.js";
+import {
+  MAX_STOP_HOOK_CONTINUATIONS,
+  hookCheckFailed,
+  hookDispatchFailure,
+  hookNoticeLines,
+  hookStopMessage,
+} from "./workspace-chat-hooks.js";
 
 /** Stop hooks keep one run going at most this many times, on every surface. */
 export { MAX_STOP_HOOK_CONTINUATIONS };
@@ -76,7 +88,9 @@ export function createSurfaceHooks(
     }
   };
   const dispatch: SurfaceHooks["dispatch"] = async (event, payload, options) => {
-    if (!has(event, typeof payload.aiden_tool_name === "string" ? payload.aiden_tool_name : undefined)) {
+    if (
+      !has(event, typeof payload.aiden_tool_name === "string" ? payload.aiden_tool_name : undefined)
+    ) {
       return undefined;
     }
     const reportAsync = options?.report ?? surfaceOptions.report;
@@ -124,7 +138,11 @@ export function botSurfaceHooks(
   dispatcher?: () => HookDispatcher,
   options?: SurfaceHookOptions,
 ): SurfaceHooks {
-  return createSurfaceHooks({ scopes: hookScopesFor({ botId }), cwd: botFolder, sessionId: botId }, dispatcher, options);
+  return createSurfaceHooks(
+    { scopes: hookScopesFor({ botId }), cwd: botFolder, sessionId: botId },
+    dispatcher,
+    options,
+  );
 }
 
 /**
@@ -141,7 +159,9 @@ export function botHooksWithoutFolder(
   const unavailable = (): HookDispatcher => ({
     ...dispatcher(),
     dispatch: async () => {
-      throw new Error(`the Bot's folder could not be read (${error instanceof Error ? error.message : String(error)})`);
+      throw new Error(
+        `the Bot's folder could not be read (${error instanceof Error ? error.message : String(error)})`,
+      );
     },
   });
   return botSurfaceHooks(botId, "", unavailable, options);
@@ -159,7 +179,11 @@ export function chatSurfaceHooks(
   options?: SurfaceHookOptions,
 ): SurfaceHooks {
   return createSurfaceHooks(
-    { scopes: hookScopesFor({ workspaceRoot: input.workspaceRoot, chatId: input.chatId }), cwd: input.cwd, sessionId: input.chatId },
+    {
+      scopes: hookScopesFor({ workspaceRoot: input.workspaceRoot, chatId: input.chatId }),
+      cwd: input.cwd,
+      sessionId: input.chatId,
+    },
     dispatcher,
     options,
   );
@@ -173,7 +197,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * `tool_name` (Claude spelling), `aiden_tool_name`, `tool_input` and, when
  * the call has one, `tool_use_id` for a tool event.
  */
-export function hookToolPayload(toolName: string, input: unknown, toolUseId?: string): SurfaceHookPayload {
+export function hookToolPayload(
+  toolName: string,
+  input: unknown,
+  toolUseId?: string,
+): SurfaceHookPayload {
   return {
     tool_name: claudeToolName(toolName),
     aiden_tool_name: toolName,
@@ -223,8 +251,12 @@ export function hookPostToolAdditions(outcome: HookOutcome | undefined): string 
   if (!outcome) return undefined;
   const additions: string[] = [];
   if (outcome.flaggedResult) {
-    const reason = outcome.reasonForModel ?? (outcome.reason ? fenceAsData("Hook feedback", outcome.reason) : undefined);
-    additions.push(`${capitalized(hooksLabel(outcome))} flagged this result.${reason ? `\n${reason}` : ""}`);
+    const reason =
+      outcome.reasonForModel ??
+      (outcome.reason ? fenceAsData("Hook feedback", outcome.reason) : undefined);
+    additions.push(
+      `${capitalized(hooksLabel(outcome))} flagged this result.${reason ? `\n${reason}` : ""}`,
+    );
   }
   if (outcome.additionalContext) additions.push(outcome.additionalContext);
   return additions.length === 0 ? undefined : additions.join("\n\n");
@@ -235,7 +267,6 @@ export function hookContextText(context: string | undefined): string | undefined
   if (!context?.trim()) return undefined;
   return `[Aiden hook] Context from the person's hooks for this turn:\n\n${context}`;
 }
-
 
 /** What a WorktreeSetup hook is told about the new managed worktree. */
 export interface WorktreeSetupHookInput {
@@ -263,7 +294,11 @@ export async function runWorktreeSetupHooksWithResult(
   dispatcher?: () => HookDispatcher,
 ): Promise<{ notices: string[]; ranHooks: string[] }> {
   const hooks = createSurfaceHooks(
-    { scopes: hookScopesFor({ workspaceRoot: input.sourceFolderPath }), cwd: input.workspacePath, sessionId: input.workspaceId },
+    {
+      scopes: hookScopesFor({ workspaceRoot: input.sourceFolderPath }),
+      cwd: input.workspacePath,
+      sessionId: input.workspaceId,
+    },
     dispatcher,
   );
   const outcome = await hooks.dispatch(

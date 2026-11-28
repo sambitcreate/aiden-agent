@@ -18,7 +18,10 @@ interface AidenMcpAppRecord {
 export interface AidenMcpHandlerService {
   status(): Promise<AidenMcpServerStatusView>;
   setEnabled(enabled: boolean): Promise<AidenMcpServerStatusView>;
-  issueApp(input: { name: string; access: "read" | "supervised" }): Promise<{ credential: string; app: AidenMcpAppRecord }>;
+  issueApp(input: {
+    name: string;
+    access: "read" | "supervised";
+  }): Promise<{ credential: string; app: AidenMcpAppRecord }>;
   listApps(): Promise<AidenMcpAppRecord[]>;
   revokeApp(appId: string): Promise<boolean>;
   chatProvenance(chatId: string): Promise<{ name: string; startedAt: number } | undefined>;
@@ -27,13 +30,19 @@ export interface AidenMcpHandlerService {
 const MAX_APP_NAME_LENGTH = 80;
 
 /** The name and access level from Settings → Connections → Apps using Aiden → Add app. */
-export function parseAidenMcpAppInput(value: unknown): { name: string; access: "read" | "supervised" } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid app details.");
+export function parseAidenMcpAppInput(value: unknown): {
+  name: string;
+  access: "read" | "supervised";
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid app details.");
   const record = value as Record<string, unknown>;
   const name = typeof record.name === "string" ? record.name.trim() : "";
   // Characters are code points, as Aiden's Remote state and `aiden apps connect` count them.
-  if (!name || [...name].length > MAX_APP_NAME_LENGTH) throw new Error("Give the app a name of up to 80 characters.");
-  if (record.access !== "read" && record.access !== "supervised") throw new Error("Choose Read only or Supervised.");
+  if (!name || [...name].length > MAX_APP_NAME_LENGTH)
+    throw new Error("Give the app a name of up to 80 characters.");
+  if (record.access !== "read" && record.access !== "supervised")
+    throw new Error("Choose Read only or Supervised.");
   return { name, access: record.access };
 }
 
@@ -51,12 +60,19 @@ export function parseAidenMcpAppId(value: unknown): string {
 }
 
 function parseChatId(value: unknown): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > 128) throw new Error("Invalid chat identifier.");
+  if (typeof value !== "string" || value.length === 0 || value.length > 128)
+    throw new Error("Invalid chat identifier.");
   return value;
 }
 
 function appView(app: AidenMcpAppRecord): AidenMcpAppView {
-  return { id: app.id, name: app.name, access: app.access, createdAt: app.createdAt, lastSeenAt: app.lastSeenAt };
+  return {
+    id: app.id,
+    name: app.name,
+    access: app.access,
+    createdAt: app.createdAt,
+    lastSeenAt: app.lastSeenAt,
+  };
 }
 
 /**
@@ -111,10 +127,13 @@ export function registerAidenMcpHandlers<Event>(dependencies: {
     return { revoked: await service.revokeApp(id) };
   });
 
-  handle("remote:mcpChatProvenance", async (event, chatId): Promise<AidenMcpChatProvenanceView | null> => {
-    const id = parseChatId(chatId);
-    owner(event);
-    const provenance = await service.chatProvenance(id);
-    return provenance ? { name: provenance.name, startedAt: provenance.startedAt } : null;
-  });
+  handle(
+    "remote:mcpChatProvenance",
+    async (event, chatId): Promise<AidenMcpChatProvenanceView | null> => {
+      const id = parseChatId(chatId);
+      owner(event);
+      const provenance = await service.chatProvenance(id);
+      return provenance ? { name: provenance.name, startedAt: provenance.startedAt } : null;
+    },
+  );
 }

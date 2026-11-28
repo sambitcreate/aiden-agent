@@ -21,7 +21,11 @@ import {
   canReplaceGeneratedChatTitle,
   deriveChatTitleSeed,
 } from "./chat-title-policy.js";
-import { chatSurface, parseChatOwnerV1, type ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
+import {
+  chatSurface,
+  parseChatOwnerV1,
+  type ChatOwnerV1,
+} from "../../renderer/shared/chat-visibility.js";
 import { isFailedAssistantTurn } from "../../renderer/shared/chat-row-state.js";
 import type { Attachment, Chat, ChatMessage, ChatMeta } from "./types.js";
 import {
@@ -33,7 +37,10 @@ import {
   type ChatForkPosition,
   type ChatForkSummaryV1,
 } from "../../renderer/shared/chat-copy-contract.js";
-import { parseChatStartedByV1, type ChatStartedByV1 } from "../../renderer/shared/chat-started-by.js";
+import {
+  parseChatStartedByV1,
+  type ChatStartedByV1,
+} from "../../renderer/shared/chat-started-by.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
@@ -46,13 +53,28 @@ import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js
 import { parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { boundedHookBlockedReason, hookBlockedField } from "./hook-blocked-prompt.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
-import { CHAT_IMAGES_DIRECTORY, createChatImageStore, rememberImageHash, type ChatImageStore } from "./chat-image-store.js";
+import {
+  CHAT_IMAGES_DIRECTORY,
+  createChatImageStore,
+  rememberImageHash,
+  type ChatImageStore,
+} from "./chat-image-store.js";
 import { imagePixelSize } from "../../renderer/shared/image-dimensions.js";
-import { parseChatHtmlArtifacts, parseChatImagePlacements, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
+import {
+  parseChatHtmlArtifacts,
+  parseChatImagePlacements,
+  parseHtmlArtifactPlacements,
+} from "../../renderer/shared/chat-artifacts.js";
 import { parseChatUiVisualV1, parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
-import { isVisualSnapshotAttachmentId, parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import {
+  isVisualSnapshotAttachmentId,
+  parseVisualSnapshots,
+} from "../../renderer/shared/visual-snapshots.js";
 import { parseGrabbedElements } from "../../renderer/shared/browser-element-grab.js";
-import { MAX_ATTACHMENT_INLINE_BYTES, MAX_ATTACHMENTS_PER_MESSAGE } from "../../renderer/shared/attachment-contract.js";
+import {
+  MAX_ATTACHMENT_INLINE_BYTES,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+} from "../../renderer/shared/attachment-contract.js";
 import { remappedHtmlArtifactMediaId } from "./generative-ui-artifact-store.js";
 import { parseStoredPiAssistantMessage } from "./pi-message-storage.js";
 import { parseAssistantTurnStatsV1 } from "../../renderer/shared/assistant-turn-stats.js";
@@ -179,17 +201,15 @@ export function isChatCreateReconciliationRequiredError(
 
 export function createChatStore(
   resolveChatsDir: () => Promise<string>,
-  resolveProviderId: (
-    providerId: string | undefined,
-  ) => Promise<string | undefined> = async (providerId) =>
-    migrateLegacyPiProviderId(providerId),
+  resolveProviderId: (providerId: string | undefined) => Promise<string | undefined> = async (
+    providerId,
+  ) => migrateLegacyPiProviderId(providerId),
   durability: ChatStoreDurability = {},
 ) {
   const indexListeners = new Set<() => void>();
   const syncDirectory = durability.syncDirectory ?? syncPath;
   const syncFile = durability.syncFile ?? syncPath;
-  const readFile =
-    durability.readFile ?? ((target: string) => fs.readFile(target, "utf-8"));
+  const readFile = durability.readFile ?? ((target: string) => fs.readFile(target, "utf-8"));
   const images =
     durability.images ??
     createChatImageStore(resolveChatsDir, {
@@ -201,7 +221,10 @@ export function createChatStore(
   const imageReferencedAt = new Map<string, number>();
   const reportedMissingImages = new Set<string>();
   /** Recently linked chats' image lists, keyed by chat, valid while the chat file is unchanged. */
-  const storedImageLists = new Map<string, { stamp: string; images: Map<string, { mimeType: string; size: number }> }>();
+  const storedImageLists = new Map<
+    string,
+    { stamp: string; images: Map<string, { mimeType: string; size: number }> }
+  >();
   let imageSweepTimer: ReturnType<typeof setTimeout> | undefined;
   let imageSweepRunning: Promise<unknown> | undefined;
   let imageSweepRetryMs: number | undefined;
@@ -428,8 +451,7 @@ export function createChatStore(
   }
 
   function isValidMeta(value: unknown): value is ChatMeta {
-    if (!value || typeof value !== "object" || Array.isArray(value))
-      return false;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
     const meta = value as Record<string, unknown>;
     return (
       typeof meta.id === "string" &&
@@ -442,8 +464,7 @@ export function createChatStore(
       Number.isFinite(meta.createdAt) &&
       typeof meta.updatedAt === "number" &&
       Number.isFinite(meta.updatedAt) &&
-      (meta.workspaceId === undefined ||
-        typeof meta.workspaceId === "string") &&
+      (meta.workspaceId === undefined || typeof meta.workspaceId === "string") &&
       (meta.botId === undefined ||
         (typeof meta.botId === "string" &&
           meta.botId.length > 0 &&
@@ -459,12 +480,13 @@ export function createChatStore(
         (typeof meta.preview === "string" &&
           Array.from(meta.preview).length <= MAX_CHAT_META_PREVIEW_CHARS &&
           Buffer.byteLength(meta.preview, "utf8") <= MAX_CHAT_META_PREVIEW_BYTES)) &&
-      (meta.summaryRevision === undefined ||
-        isChatSummaryRevision(meta.summaryRevision)) &&
-      (meta.lastAssistantMessageId === undefined || typeof meta.lastAssistantMessageId === "string") &&
+      (meta.summaryRevision === undefined || isChatSummaryRevision(meta.summaryRevision)) &&
+      (meta.lastAssistantMessageId === undefined ||
+        typeof meta.lastAssistantMessageId === "string") &&
       (meta.lastAssistantSequence === undefined ||
         (typeof meta.lastAssistantSequence === "number" &&
-          Number.isSafeInteger(meta.lastAssistantSequence) && meta.lastAssistantSequence >= 0)) &&
+          Number.isSafeInteger(meta.lastAssistantSequence) &&
+          meta.lastAssistantSequence >= 0)) &&
       (meta.lastAssistantAt === undefined ||
         (typeof meta.lastAssistantAt === "number" &&
           Number.isSafeInteger(meta.lastAssistantAt) &&
@@ -502,10 +524,7 @@ export function createChatStore(
     if (removed) await syncDirectoryDurably(directory);
   }
 
-  async function removeStagedFileDurably(
-    staged: string,
-    directory: string,
-  ): Promise<void> {
+  async function removeStagedFileDurably(staged: string, directory: string): Promise<void> {
     try {
       await fs.rm(staged);
     } catch (error) {
@@ -522,10 +541,7 @@ export function createChatStore(
     const target = await indexPath();
     const directory = path.dirname(target);
     const sorted = [...index].sort((a, b) => b.updatedAt - a.updatedAt);
-    const staged = path.join(
-      directory,
-      `.${path.basename(target)}.${randomUUID()}.${purpose}.tmp`,
-    );
+    const staged = path.join(directory, `.${path.basename(target)}.${randomUUID()}.${purpose}.tmp`);
     // Whatever happens below, the previous memo no longer describes the file.
     invalidateIndexMemo();
     try {
@@ -606,8 +622,7 @@ export function createChatStore(
       const chat = await readChat(meta.id, policy);
       if (!chat || chat.id !== meta.id) continue;
       const recoveredMeta = metaOf(chat);
-      if (isValidMeta(recoveredMeta))
-        recovered.set(recoveredMeta.id, recoveredMeta);
+      if (isValidMeta(recoveredMeta)) recovered.set(recoveredMeta.id, recoveredMeta);
     }
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       if (
@@ -640,10 +655,7 @@ export function createChatStore(
       }),
     );
     if (quarantineExisting) {
-      const quarantine = path.join(
-        directory,
-        `.${path.basename(target)}.${randomUUID()}.corrupt`,
-      );
+      const quarantine = path.join(directory, `.${path.basename(target)}.${randomUUID()}.corrupt`);
       try {
         await fs.rename(target, quarantine);
         await syncDirectoryDurably(directory);
@@ -671,8 +683,7 @@ export function createChatStore(
     try {
       parsed = JSON.parse(await readFile(target)) as unknown;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT")
-        return recoverIndex(policy, false);
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return recoverIndex(policy, false);
       if (error instanceof SyntaxError) return recoverIndex(policy, true);
       throw error;
     }
@@ -735,11 +746,14 @@ export function createChatStore(
           if ((directoryError as NodeJS.ErrnoException).code === "ENOENT") return [];
           throw directoryError;
         }
-        const hasUnindexedChatState = entries.some((entry) =>
-          entry.isFile() &&
-          !entry.isSymbolicLink() &&
-          (CHAT_TRANSACTION.test(entry.name) ||
-            (entry.name !== INDEX && !entry.name.startsWith(".") && entry.name.endsWith(".json"))),
+        const hasUnindexedChatState = entries.some(
+          (entry) =>
+            entry.isFile() &&
+            !entry.isSymbolicLink() &&
+            (CHAT_TRANSACTION.test(entry.name) ||
+              (entry.name !== INDEX &&
+                !entry.name.startsWith(".") &&
+                entry.name.endsWith(".json"))),
         );
         if (!hasUnindexedChatState) return [];
         throw new Error("The chat summary index is unavailable.");
@@ -792,10 +806,7 @@ export function createChatStore(
   async function quarantinePayload(id: string, policy: ReadPolicy): Promise<void> {
     const payload = await chatPath(id);
     const directory = path.dirname(payload);
-    const quarantine = path.join(
-      directory,
-      `.${path.basename(payload)}.${randomUUID()}.corrupt`,
-    );
+    const quarantine = path.join(directory, `.${path.basename(payload)}.${randomUUID()}.corrupt`);
     try {
       await fs.rename(payload, quarantine);
     } catch (error) {
@@ -926,10 +937,7 @@ export function createChatStore(
       parsed.id !== id ||
       !Array.isArray(messages) ||
       !messages.every(
-        (message) =>
-          message !== null &&
-          typeof message === "object" &&
-          !Array.isArray(message),
+        (message) => message !== null && typeof message === "object" && !Array.isArray(message),
       )
     ) {
       return null;
@@ -942,8 +950,8 @@ export function createChatStore(
     chat.messages = chat.messages.map((message) => {
       const assistant = message.role === "assistant";
       const providerFailure = assistant
-        ? parseProviderFailureV1(message.providerFailure) ??
-          providerFailureFromLegacyPiMessage(message.pi)
+        ? (parseProviderFailureV1(message.providerFailure) ??
+          providerFailureFromLegacyPiMessage(message.pi))
         : undefined;
       if (assistant) {
         const pi =
@@ -957,10 +965,7 @@ export function createChatStore(
         ) {
           privacyMigrationRequired = true;
         }
-        if (
-          JSON.stringify(message.providerFailure) !==
-          JSON.stringify(providerFailure)
-        ) {
+        if (JSON.stringify(message.providerFailure) !== JSON.stringify(providerFailure)) {
           privacyMigrationRequired = true;
         }
       }
@@ -977,9 +982,7 @@ export function createChatStore(
         attachments: safeStoredAttachments(message.attachments),
         ...(grabbedElements ? { grabbedElements } : {}),
         appPanels: assistant ? parseAppControlPanels(message.appPanels) : undefined,
-        htmlArtifacts: assistant
-          ? parseChatHtmlArtifacts(message.htmlArtifacts)
-          : undefined,
+        htmlArtifacts: assistant ? parseChatHtmlArtifacts(message.htmlArtifacts) : undefined,
         htmlArtifactPlacements:
           assistant && message.htmlArtifacts
             ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
@@ -988,37 +991,24 @@ export function createChatStore(
         uiVisuals: assistant ? parseChatUiVisuals(message.uiVisuals) : undefined,
         visualSnapshots: assistant ? parseVisualSnapshots(message.visualSnapshots) : undefined,
         reasoning:
-          assistant &&
-          typeof message.reasoning === "string" &&
-          message.reasoning.trim()
+          assistant && typeof message.reasoning === "string" && message.reasoning.trim()
             ? message.reasoning
             : undefined,
-        pi: assistant
-          ? parseStoredPiAssistantMessage(message.pi)
-          : undefined,
+        pi: assistant ? parseStoredPiAssistantMessage(message.pi) : undefined,
         providerFailure,
         timeline: assistant
           ? parseGenerationTimeline(message.timeline, message.content.length)
           : undefined,
-        turnStats: assistant
-          ? parseAssistantTurnStatsV1(message.turnStats)
-          : undefined,
-        subagents: assistant
-          ? parseSubagentMessageReferenceV1(message.subagents)
-          : undefined,
-        skill:
-          message.role === "user"
-            ? parseSkillProvenanceV1(message.skill)
-            : undefined,
-        notice:
-          message.role === "user"
-            ? parseAgentNoticeV1(message.notice)
-            : undefined,
+        turnStats: assistant ? parseAssistantTurnStatsV1(message.turnStats) : undefined,
+        subagents: assistant ? parseSubagentMessageReferenceV1(message.subagents) : undefined,
+        skill: message.role === "user" ? parseSkillProvenanceV1(message.skill) : undefined,
+        notice: message.role === "user" ? parseAgentNoticeV1(message.notice) : undefined,
         inputSource:
-          message.role === "user"
-            ? parseChatInputSource(message.inputSource)
+          message.role === "user" ? parseChatInputSource(message.inputSource) : undefined,
+        fromLeadChat:
+          message.role === "user" && message.fromLeadChat === true && !message.notice
+            ? true
             : undefined,
-        fromLeadChat: message.role === "user" && message.fromLeadChat === true && !message.notice ? true : undefined,
         // Only a blocked prompt carries the key, so unmarked messages keep their old shape.
         ...hookBlockedField(message),
       };
@@ -1031,10 +1021,7 @@ export function createChatStore(
   }
 
   /** Read-modify-write one chat's Computer Use access fields under its lock. */
-  async function updateComputerUseAccess(
-    id: string,
-    mutate: (chat: Chat) => void,
-  ): Promise<Chat> {
+  async function updateComputerUseAccess(id: string, mutate: (chat: Chat) => void): Promise<Chat> {
     return shared([id], false, async () => {
       const chat = await readChat(id, "owner");
       if (!chat) throw new Error(`Chat ${id} not found`);
@@ -1047,16 +1034,10 @@ export function createChatStore(
     });
   }
 
-  async function writeChat(
-    chat: Chat,
-    beforeRename: () => void = () => undefined,
-  ): Promise<void> {
+  async function writeChat(chat: Chat, beforeRename: () => void = () => undefined): Promise<void> {
     const target = await chatPath(chat.id);
     const directory = path.dirname(target);
-    const staged = path.join(
-      directory,
-      `.${path.basename(target)}.${randomUUID()}.chat-write.tmp`,
-    );
+    const staged = path.join(directory, `.${path.basename(target)}.${randomUUID()}.chat-write.tmp`);
     try {
       const stored = await withStoredImages(chat);
       // Compact JSON: indentation roughly doubled base64-heavy payloads.
@@ -1101,7 +1082,11 @@ export function createChatStore(
           rememberImageHash(attachment, sha256);
           const pixels = imagePixelSize(attachment.mimeType, attachment.data);
           const { data: _bytes, url: _link, ...rest } = attachment;
-          reference = { ...rest, sha256, ...(pixels ? { width: pixels.width, height: pixels.height } : {}) };
+          reference = {
+            ...rest,
+            sha256,
+            ...(pixels ? { width: pixels.width, height: pixels.height } : {}),
+          };
         } else {
           const { url: _link, ...rest } = attachment;
           reference = rest;
@@ -1125,7 +1110,8 @@ export function createChatStore(
     if (!chat) return chat;
     const pending = chat.messages.flatMap((message) =>
       (message.attachments ?? []).filter(
-        (attachment) => attachment.kind === "image" && attachment.data === undefined && attachment.sha256,
+        (attachment) =>
+          attachment.kind === "image" && attachment.data === undefined && attachment.sha256,
       ),
     );
     let next = 0;
@@ -1148,7 +1134,9 @@ export function createChatStore(
         rememberImageHash(attachment, sha256);
       }
     };
-    await Promise.all(Array.from({ length: Math.min(IMAGE_READ_CONCURRENCY, pending.length) }, worker));
+    await Promise.all(
+      Array.from({ length: Math.min(IMAGE_READ_CONCURRENCY, pending.length) }, worker),
+    );
     return chat;
   }
 
@@ -1213,7 +1201,8 @@ export function createChatStore(
     const startedAt = Date.now();
     const result = await images.sweep(referenced, {
       graceMs: imageSweepGraceMs,
-      isProtected: (sha256) => Date.now() - (imageReferencedAt.get(sha256) ?? -Infinity) < imageSweepGraceMs,
+      isProtected: (sha256) =>
+        Date.now() - (imageReferencedAt.get(sha256) ?? -Infinity) < imageSweepGraceMs,
     });
     for (const [sha256, at] of imageReferencedAt) {
       if (startedAt - at >= imageSweepGraceMs) imageReferencedAt.delete(sha256);
@@ -1246,13 +1235,19 @@ export function createChatStore(
         return;
       }
       imageSweepRunning = sweepUnusedImages({ onlyWhenNeeded: true })
-        .catch((): { removed: number; nextDueInMs?: number; incomplete?: true } => ({ removed: 0, incomplete: true }))
+        .catch((): { removed: number; nextDueInMs?: number; incomplete?: true } => ({
+          removed: 0,
+          incomplete: true,
+        }))
         .then((result) => {
           imageSweepRunning = undefined;
           // A sweep that could not finish keeps its marker; try again later,
           // waiting twice as long each time (up to an hour).
           imageSweepRetryMs = result.incomplete
-            ? Math.min(Math.max(delay, (imageSweepRetryMs ?? delay / 2) * 2), IMAGE_SWEEP_MAX_RETRY_MS)
+            ? Math.min(
+                Math.max(delay, (imageSweepRetryMs ?? delay / 2) * 2),
+                IMAGE_SWEEP_MAX_RETRY_MS,
+              )
             : undefined;
           const nextDueInMs = imageSweepRetryMs ?? result.nextDueInMs;
           // A later request already restarted the wait; never sweep sooner than the usual delay.
@@ -1277,13 +1272,13 @@ export function createChatStore(
   function metaOf(chat: Chat): ChatMeta {
     const preview = [...chat.messages]
       .reverse()
-      .find((message) =>
-        (message.role === "user" || message.role === "assistant") &&
-        message.content.trim().length > 0,
+      .find(
+        (message) =>
+          (message.role === "user" || message.role === "assistant") &&
+          message.content.trim().length > 0,
       )?.content;
-    const lastAssistantReverseIndex = [...chat.messages]
-      .reverse()
-      .findIndex((message) =>
+    const lastAssistantReverseIndex = [...chat.messages].reverse().findIndex(
+      (message) =>
         message.role === "assistant" &&
         (message.content.trim().length > 0 ||
           (message.attachments?.length ?? 0) > 0 ||
@@ -1294,15 +1289,15 @@ export function createChatStore(
           isFailedAssistantTurn(message)) &&
         Number.isSafeInteger(message.createdAt) &&
         message.createdAt >= 0,
-      );
-    const lastAssistantSequence = lastAssistantReverseIndex < 0
-      ? -1
-      : chat.messages.length - 1 - lastAssistantReverseIndex;
+    );
+    const lastAssistantSequence =
+      lastAssistantReverseIndex < 0 ? -1 : chat.messages.length - 1 - lastAssistantReverseIndex;
     const lastAssistant = chat.messages[lastAssistantSequence];
     const lastAssistantAt = lastAssistant?.createdAt;
-    const boundedPreview = preview === undefined
-      ? undefined
-      : Array.from(preview).slice(0, MAX_CHAT_META_PREVIEW_CHARS).join("");
+    const boundedPreview =
+      preview === undefined
+        ? undefined
+        : Array.from(preview).slice(0, MAX_CHAT_META_PREVIEW_CHARS).join("");
     return {
       id: chat.id,
       title: chat.title,
@@ -1314,8 +1309,12 @@ export function createChatStore(
       ...(chat.thinkingLevel ? { thinkingLevel: chat.thinkingLevel } : {}),
       ...(boundedPreview ? { preview: boundedPreview } : {}),
       summaryRevision: chatSummaryRevision(chat),
-      ...(lastAssistantAt !== undefined ? { lastAssistantAt, lastAssistantSequence, lastAssistantMessageId: lastAssistant.id } : {}),
-      ...(lastAssistant && isFailedAssistantTurn(lastAssistant) ? { lastAssistantFailed: true } : {}),
+      ...(lastAssistantAt !== undefined
+        ? { lastAssistantAt, lastAssistantSequence, lastAssistantMessageId: lastAssistant.id }
+        : {}),
+      ...(lastAssistant && isFailedAssistantTurn(lastAssistant)
+        ? { lastAssistantFailed: true }
+        : {}),
       ...(chat.forkedFrom ? { forkedFrom: indexedForkLineage(chat.forkedFrom) } : {}),
       ...(chat.startedBy ? { startedBy: chat.startedBy } : {}),
       ...(chat.ephemeral === true ? { ephemeral: true as const } : {}),
@@ -1387,10 +1386,7 @@ export function createChatStore(
         continue;
       }
       const nextMeta = metaOf(chat);
-      if (
-        indexPosition < 0 ||
-        JSON.stringify(index[indexPosition]) !== JSON.stringify(nextMeta)
-      ) {
+      if (indexPosition < 0 || JSON.stringify(index[indexPosition]) !== JSON.stringify(nextMeta)) {
         if (indexPosition < 0) index.push(nextMeta);
         else index[indexPosition] = nextMeta;
         changed = true;
@@ -1400,10 +1396,7 @@ export function createChatStore(
     for (const id of transactionIds) await clearChatTransaction(id);
   }
 
-  async function installNewChat(
-    chat: Chat,
-    assertCurrent?: () => void,
-  ): Promise<Chat> {
+  async function installNewChat(chat: Chat, assertCurrent?: () => void): Promise<Chat> {
     try {
       await writeChatAndMeta(chat, () => assertCurrent?.());
       return chat;
@@ -1444,16 +1437,18 @@ export function createChatStore(
 
     /** List chats, newest first. Legacy chats without a workspace fall under the default one. */
     async list(workspaceId?: string): Promise<ChatMeta[]> {
-      return shared([], true, () => withIndexLock(async () => {
-        const index = (await loadIndex()).map((meta) => ({
-          ...meta,
-          workspaceId: meta.workspaceId ?? DEFAULT_WORKSPACE_ID,
-        }));
-        const filtered = workspaceId
-          ? index.filter((meta) => meta.workspaceId === workspaceId)
-          : index;
-        return filtered.sort((a, b) => b.updatedAt - a.updatedAt);
-      }));
+      return shared([], true, () =>
+        withIndexLock(async () => {
+          const index = (await loadIndex()).map((meta) => ({
+            ...meta,
+            workspaceId: meta.workspaceId ?? DEFAULT_WORKSPACE_ID,
+          }));
+          const filtered = workspaceId
+            ? index.filter((meta) => meta.workspaceId === workspaceId)
+            : index;
+          return filtered.sort((a, b) => b.updatedAt - a.updatedAt);
+        }),
+      );
     },
 
     /** Chats that may appear in chat listings: ordinary and Assistant chats, never Bot or feature-owned. */
@@ -1502,10 +1497,12 @@ export function createChatStore(
 
     /** One chat's index metadata, without reading its transcript. Null when unknown. */
     async getMeta(id: string): Promise<ChatMeta | null> {
-      return shared([id], true, () => withIndexLock(async () => {
-        const meta = (await loadIndex()).find((entry) => entry.id === id);
-        return meta ? { ...meta, workspaceId: meta.workspaceId ?? DEFAULT_WORKSPACE_ID } : null;
-      }));
+      return shared([id], true, () =>
+        withIndexLock(async () => {
+          const meta = (await loadIndex()).find((entry) => entry.id === id);
+          return meta ? { ...meta, workspaceId: meta.workspaceId ?? DEFAULT_WORKSPACE_ID } : null;
+        }),
+      );
     },
 
     /** One stored image's bytes, or undefined when its file is missing or damaged. */
@@ -1519,7 +1516,12 @@ export function createChatStore(
      */
     async messagesWithImageData(messages: readonly ChatMessage[]): Promise<ChatMessage[]> {
       const copies = messages.map((message) =>
-        message.attachments ? { ...message, attachments: message.attachments.map((attachment) => ({ ...attachment })) } : message,
+        message.attachments
+          ? {
+              ...message,
+              attachments: message.attachments.map((attachment) => ({ ...attachment })),
+            }
+          : message,
       );
       await withImageData({ messages: copies } as Chat);
       return copies;
@@ -1531,7 +1533,10 @@ export function createChatStore(
      * list until the chat file changes, so a transcript full of images costs
      * one parse instead of one per image.
      */
-    async findStoredImage(chatId: string, sha256: string): Promise<{ mimeType: string; size: number } | undefined> {
+    async findStoredImage(
+      chatId: string,
+      sha256: string,
+    ): Promise<{ mimeType: string; size: number } | undefined> {
       const file = await chatPath(chatId);
       let stamp: string;
       try {
@@ -1548,7 +1553,10 @@ export function createChatStore(
         for (const message of chat?.messages ?? []) {
           for (const attachment of message.attachments ?? []) {
             if (attachment.kind === "image" && attachment.sha256) {
-              listed.set(attachment.sha256, { mimeType: attachment.mimeType, size: attachment.size });
+              listed.set(attachment.sha256, {
+                mimeType: attachment.mimeType,
+                size: attachment.size,
+              });
             }
           }
         }
@@ -1583,68 +1591,81 @@ export function createChatStore(
       thinkingLevel?: GenerationThinkingLevel;
       turnId: string;
       fingerprint: string;
-      message: Pick<ChatMessage, "id" | "content" | "attachments" | "grabbedElements" | "skill" | "model" | "inputSource">;
+      message: Pick<
+        ChatMessage,
+        "id" | "content" | "attachments" | "grabbedElements" | "skill" | "model" | "inputSource"
+      >;
       assertCurrent: () => void;
     }): Promise<Chat> {
-      return withImageData(await shared([input.id], true, async () => {
-        input.assertCurrent();
-        // "pure": a corrupt payload at a colliding draft ID must stay in place
-        // so the guard below rejects the collision instead of quarantining it.
-        const existing = await readChat(input.id, "pure");
-        if (existing) {
-          if (existing.firstMessageCommit?.turnId !== input.turnId ||
-              existing.firstMessageCommit.fingerprint !== input.fingerprint) {
-            throw new Error("This draft identifier has already been used for a different message.");
+      return withImageData(
+        await shared([input.id], true, async () => {
+          input.assertCurrent();
+          // "pure": a corrupt payload at a colliding draft ID must stay in place
+          // so the guard below rejects the collision instead of quarantining it.
+          const existing = await readChat(input.id, "pure");
+          if (existing) {
+            if (
+              existing.firstMessageCommit?.turnId !== input.turnId ||
+              existing.firstMessageCommit.fingerprint !== input.fingerprint
+            ) {
+              throw new Error(
+                "This draft identifier has already been used for a different message.",
+              );
+            }
+            return existing;
           }
-          return existing;
-        }
-        // readChat returns null for malformed payloads as well as missing
-        // files. Never replace an unreadable existing conversation on an ID
-        // collision; only a genuinely absent path may receive a new draft.
-        try {
-          await fs.lstat(await chatPath(input.id));
-          throw new Error("This draft identifier belongs to an unreadable existing chat.");
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
-        // The same holds once a read has quarantined that payload: its bytes
-        // still belong to the earlier conversation, not to a new draft.
-        if (await hasQuarantinedPayload(input.id)) {
-          throw new Error("This draft identifier belongs to an unreadable existing chat.");
-        }
-        const grabbedElements = parseGrabbedElements(input.message.grabbedElements, "stored");
-        if (!input.message.content.trim() && !input.message.attachments?.length && !grabbedElements?.length) {
-          throw new Error("Add a message or attachment before sending.");
-        }
-        const now = Date.now();
-        const message: ChatMessage = {
-          id: input.message.id,
-          role: "user",
-          content: input.message.content,
-          model: input.message.model,
-          attachments: safeStoredAttachments(input.message.attachments),
-          ...(grabbedElements ? { grabbedElements } : {}),
-          skill: parseSkillProvenanceV1(input.message.skill),
-          inputSource: parseChatInputSource(input.message.inputSource),
-          createdAt: now,
-        };
-        const chat: Chat = {
-          id: input.id,
-          workspaceId: input.workspaceId,
-          ...(input.ephemeral === true ? { ephemeral: true as const } : {}),
-          providerId: await resolveProviderId(input.providerId),
-          model: input.model,
-          ...(input.model && isGenerationThinkingLevel(input.thinkingLevel)
-            ? { thinkingLevel: input.thinkingLevel }
-            : {}),
-          title: input.title?.trim() || deriveChatTitleSeed(message),
-          createdAt: now,
-          updatedAt: now,
-          messages: [message],
-          firstMessageCommit: { turnId: input.turnId, fingerprint: input.fingerprint },
-        };
-        return installNewChat(chat, input.assertCurrent);
-      }));
+          // readChat returns null for malformed payloads as well as missing
+          // files. Never replace an unreadable existing conversation on an ID
+          // collision; only a genuinely absent path may receive a new draft.
+          try {
+            await fs.lstat(await chatPath(input.id));
+            throw new Error("This draft identifier belongs to an unreadable existing chat.");
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+          // The same holds once a read has quarantined that payload: its bytes
+          // still belong to the earlier conversation, not to a new draft.
+          if (await hasQuarantinedPayload(input.id)) {
+            throw new Error("This draft identifier belongs to an unreadable existing chat.");
+          }
+          const grabbedElements = parseGrabbedElements(input.message.grabbedElements, "stored");
+          if (
+            !input.message.content.trim() &&
+            !input.message.attachments?.length &&
+            !grabbedElements?.length
+          ) {
+            throw new Error("Add a message or attachment before sending.");
+          }
+          const now = Date.now();
+          const message: ChatMessage = {
+            id: input.message.id,
+            role: "user",
+            content: input.message.content,
+            model: input.message.model,
+            attachments: safeStoredAttachments(input.message.attachments),
+            ...(grabbedElements ? { grabbedElements } : {}),
+            skill: parseSkillProvenanceV1(input.message.skill),
+            inputSource: parseChatInputSource(input.message.inputSource),
+            createdAt: now,
+          };
+          const chat: Chat = {
+            id: input.id,
+            workspaceId: input.workspaceId,
+            ...(input.ephemeral === true ? { ephemeral: true as const } : {}),
+            providerId: await resolveProviderId(input.providerId),
+            model: input.model,
+            ...(input.model && isGenerationThinkingLevel(input.thinkingLevel)
+              ? { thinkingLevel: input.thinkingLevel }
+              : {}),
+            title: input.title?.trim() || deriveChatTitleSeed(message),
+            createdAt: now,
+            updatedAt: now,
+            messages: [message],
+            firstMessageCommit: { turnId: input.turnId, fingerprint: input.fingerprint },
+          };
+          return installNewChat(chat, input.assertCurrent);
+        }),
+      );
     },
 
     async create(input: {
@@ -1661,33 +1682,39 @@ export function createChatStore(
       assertCurrent?: () => void;
     }): Promise<Chat> {
       const id = input.id ?? newId();
-      return withImageData(await shared([id], true, async () => {
-        input.assertCurrent?.();
-        const owner = input.owner === undefined ? undefined : parseChatOwnerV1(input.owner);
-        if (input.owner !== undefined && (owner === undefined || input.botId !== undefined)) {
-          throw new Error("Invalid chat owner.");
-        }
-        const startedBy = input.startedBy === undefined ? undefined : parseChatStartedByV1(input.startedBy);
-        if (input.startedBy !== undefined && (startedBy === undefined || input.botId !== undefined || owner !== undefined)) {
-          throw new Error("Invalid chat lineage.");
-        }
-        const now = Date.now();
-        const chat: Chat = {
-          id,
-          title: input.title?.trim() || DEFAULT_CHAT_TITLE,
-          workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
-          ...(input.botId ? { botId: input.botId } : {}),
-          ...(owner ? { owner } : {}),
-          ...(startedBy ? { startedBy } : {}),
-          ...(input.ephemeral === true ? { ephemeral: true as const } : {}),
-          providerId: await resolveProviderId(input.providerId),
-          model: input.model,
-          createdAt: now,
-          updatedAt: now,
-          messages: [],
-        };
-        return installNewChat(chat, input.assertCurrent);
-      }));
+      return withImageData(
+        await shared([id], true, async () => {
+          input.assertCurrent?.();
+          const owner = input.owner === undefined ? undefined : parseChatOwnerV1(input.owner);
+          if (input.owner !== undefined && (owner === undefined || input.botId !== undefined)) {
+            throw new Error("Invalid chat owner.");
+          }
+          const startedBy =
+            input.startedBy === undefined ? undefined : parseChatStartedByV1(input.startedBy);
+          if (
+            input.startedBy !== undefined &&
+            (startedBy === undefined || input.botId !== undefined || owner !== undefined)
+          ) {
+            throw new Error("Invalid chat lineage.");
+          }
+          const now = Date.now();
+          const chat: Chat = {
+            id,
+            title: input.title?.trim() || DEFAULT_CHAT_TITLE,
+            workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            ...(input.botId ? { botId: input.botId } : {}),
+            ...(owner ? { owner } : {}),
+            ...(startedBy ? { startedBy } : {}),
+            ...(input.ephemeral === true ? { ephemeral: true as const } : {}),
+            providerId: await resolveProviderId(input.providerId),
+            model: input.model,
+            createdAt: now,
+            updatedAt: now,
+            messages: [],
+          };
+          return installNewChat(chat, input.assertCurrent);
+        }),
+      );
     },
 
     /** Copy only visible linear history; private runtime fields never enter the new payload. */
@@ -1711,261 +1738,265 @@ export function createChatStore(
        * Prepare dependent durable records before this chat becomes visible.
        * `sourceMessageIds[i]` is the source message copied into `chat.messages[i]`.
        */
-      beforeInstall?: (
-        chat: Chat,
-        sourceMessageIds: readonly string[],
-      ) => void | Promise<void>;
+      beforeInstall?: (chat: Chat, sourceMessageIds: readonly string[]) => void | Promise<void>;
     }): Promise<Chat> {
       const newChatId = input.targetChatId ?? newChatUuid(randomUUID);
-      return withImageData(await shared([input.sourceChatId, newChatId], true, async () => {
-        input.assertCurrent?.();
-        const source = await readChat(input.sourceChatId, "owner");
-        if (!source) throw new ChatForkError("not_found", `Chat ${input.sourceChatId} not found`);
-        if (source.owner !== undefined) {
-          throw new ChatForkError(
-            "ineligible",
-            "This chat belongs to another Aiden feature and cannot be copied.",
-          );
-        }
-        input.assertSource?.(source);
-        if (
-          input.expectedWorkspaceId !== undefined &&
-          (source.workspaceId ?? DEFAULT_WORKSPACE_ID) !==
-            input.expectedWorkspaceId
-        ) {
-          throw new Error(
-            "The chat workspace changed before it could be copied.",
-          );
-        }
-
-        const cut =
-          input.forkAt ??
-          (input.throughAssistantMessageId !== undefined
-            ? { messageId: input.throughAssistantMessageId, position: "after" as const }
-            : undefined);
-        // Inclusive index of the last copied message.
-        let throughIndex = source.messages.length - 1;
-        if (cut?.position === "after") {
-          throughIndex = source.messages.findIndex(
-            (message) => message.id === cut.messageId && message.role === "assistant",
-          );
-          if (throughIndex < 0) {
-            throw new ChatForkError(
-              source.messages.some((message) => message.id === cut.messageId)
-                ? "ineligible"
-                : "message_not_found",
-              "Choose a completed assistant turn to fork from.",
-            );
-          }
-        } else if (cut?.position === "before") {
-          const userIndex = source.messages.findIndex(
-            (message) => message.id === cut.messageId && message.role === "user",
-          );
-          if (userIndex < 0) {
-            throw new ChatForkError(
-              source.messages.some((message) => message.id === cut.messageId)
-                ? "ineligible"
-                : "message_not_found",
-              "Choose one of your messages to edit in a fork.",
-            );
-          }
-          throughIndex = userIndex - 1;
-        }
-        if (cut) {
-          let hasVisibleUser = false;
-          for (let index = 0; index <= throughIndex; index += 1) {
-            if (source.messages[index]?.role === "user") {
-              hasVisibleUser = true;
-              break;
-            }
-          }
-          if (!hasVisibleUser) {
+      return withImageData(
+        await shared([input.sourceChatId, newChatId], true, async () => {
+          input.assertCurrent?.();
+          const source = await readChat(input.sourceChatId, "owner");
+          if (!source) throw new ChatForkError("not_found", `Chat ${input.sourceChatId} not found`);
+          if (source.owner !== undefined) {
             throw new ChatForkError(
               "ineligible",
-              cut.position === "before"
-                ? "Nothing comes before the first message to fork."
-                : "The selected turn has no user message to copy.",
+              "This chat belongs to another Aiden feature and cannot be copied.",
             );
           }
-        }
+          input.assertSource?.(source);
+          if (
+            input.expectedWorkspaceId !== undefined &&
+            (source.workspaceId ?? DEFAULT_WORKSPACE_ID) !== input.expectedWorkspaceId
+          ) {
+            throw new Error("The chat workspace changed before it could be copied.");
+          }
 
-        if (input.forkSummary && (!input.forkAt || source.botId)) {
-          throw new ChatForkError("ineligible", "Only a fork can carry a summary.");
-        }
-        if (input.forkSummary && throughIndex >= source.messages.length - 1) {
-          throw new ChatForkError("ineligible", "Nothing happened after this point to summarize.");
-        }
-
-        const copiedMessages: ChatMessage[] = [];
-        const sourceMessageIds: string[] = [];
-        let chargedBytes = 0;
-        const charge = (value: string | undefined) => {
-          if (value === undefined) return;
-          const remaining = MAX_VISIBLE_COPY_BYTES - chargedBytes;
-          if (value.length > remaining) {
-            throw new ChatForkError("too_large", "This chat is too large to copy safely.");
-          }
-          chargedBytes += jsonStringBytesBounded(value, remaining);
-          if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
-            throw new ChatForkError("too_large", "This chat is too large to copy safely.");
-          }
-        };
-        const metadata = projectVisibleChatMetadata(source);
-        let title: string;
-        if (cut) {
-          const destinationWorkspaceId =
-            input.targetWorkspaceId ?? metadata.workspaceId ?? DEFAULT_WORKSPACE_ID;
-          const siblings = (await withIndexLock(() => loadIndex())).filter(
-            (entry) => (entry.workspaceId ?? DEFAULT_WORKSPACE_ID) === destinationWorkspaceId,
-          );
-          title = nextForkTitle(metadata.title, siblings.map((entry) => entry.title));
-        } else {
-          const suffix = " (copy)";
-          const maximumBaseLength = Math.max(1, 120 - suffix.length);
-          title = `${Array.from(
-            metadata.title.slice(0, maximumBaseLength * 2),
-          )
-            .slice(0, maximumBaseLength)
-            .join("")}${suffix}`;
-        }
-        chargedBytes += 1_024;
-        charge(title);
-        charge(input.targetWorkspaceId ?? metadata.workspaceId);
-        charge(metadata.providerId);
-        charge(metadata.model);
-        for (let index = 0; index <= throughIndex; index += 1) {
-          const sourceMessage = source.messages[index];
-          const message = projectVisibleChatMessage(sourceMessage);
-          if (!message) continue;
-          if (copiedMessages.length >= MAX_VISIBLE_COPY_MESSAGES) {
-            throw new ChatForkError("too_large", "This chat has too many messages to copy safely.");
-          }
-          chargedBytes += 512;
-          const content = [message.content, ...(message.appPanels ?? []).map((panel) => panel.fallback)]
-            .filter(Boolean).join("\n\n");
-          charge(content);
-          charge(message.model);
-          charge(message.skill?.name);
-          for (const attachment of message.attachments ?? []) {
-            chargedBytes += 256;
-            charge(attachment.id);
-            charge(attachment.name);
-            charge(attachment.mimeType);
-            // A stored image is shared by hash, so only its reference is copied.
-            charge(
-              attachment.kind === "image" ? attachment.data ?? attachment.sha256 : attachment.text,
+          const cut =
+            input.forkAt ??
+            (input.throughAssistantMessageId !== undefined
+              ? { messageId: input.throughAssistantMessageId, position: "after" as const }
+              : undefined);
+          // Inclusive index of the last copied message.
+          let throughIndex = source.messages.length - 1;
+          if (cut?.position === "after") {
+            throughIndex = source.messages.findIndex(
+              (message) => message.id === cut.messageId && message.role === "assistant",
             );
+            if (throughIndex < 0) {
+              throw new ChatForkError(
+                source.messages.some((message) => message.id === cut.messageId)
+                  ? "ineligible"
+                  : "message_not_found",
+                "Choose a completed assistant turn to fork from.",
+              );
+            }
+          } else if (cut?.position === "before") {
+            const userIndex = source.messages.findIndex(
+              (message) => message.id === cut.messageId && message.role === "user",
+            );
+            if (userIndex < 0) {
+              throw new ChatForkError(
+                source.messages.some((message) => message.id === cut.messageId)
+                  ? "ineligible"
+                  : "message_not_found",
+                "Choose one of your messages to edit in a fork.",
+              );
+            }
+            throughIndex = userIndex - 1;
           }
-          for (const artifact of message.htmlArtifacts ?? []) {
-            chargedBytes += 128;
-            charge(artifact.title);
-            charge(artifact.mediaId);
-          }
-          for (const visual of message.uiVisuals ?? []) charge(JSON.stringify(visual));
-          for (const element of message.grabbedElements ?? []) {
-            chargedBytes += 256;
-            charge(JSON.stringify(element));
-          }
-          if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
-            throw new ChatForkError("too_large", "This chat is too large to copy safely.");
-          }
-          const copiedGrabbedElements =
-            message.role === "user"
-              ? parseGrabbedElements(message.grabbedElements, "stored")
-              : undefined;
-          sourceMessageIds.push(message.id);
-          copiedMessages.push({
-            id: randomUUID(),
-            role: message.role,
-            content,
-            createdAt: message.createdAt,
-            model: message.model,
-            attachments: safeStoredAttachments(message.attachments),
-            ...(copiedGrabbedElements ? { grabbedElements: copiedGrabbedElements } : {}),
-            htmlArtifacts:
-              message.role === "assistant"
-                ? (message.htmlArtifacts ?? []).map((artifact) => {
-                    const mediaId = remappedHtmlArtifactMediaId(newChatId, artifact.mediaId);
-                    return { ...artifact, mediaId };
-                  })
-                : undefined,
-            htmlArtifactPlacements:
-              message.role === "assistant" && message.htmlArtifactPlacements?.length
-                ? message.htmlArtifactPlacements.map((placement) => ({
-                    mediaId: remappedHtmlArtifactMediaId(newChatId, placement.mediaId),
-                    toolCallId: placement.toolCallId,
-                    ...(placement.layout === "wide" ? { layout: "wide" as const } : {}),
-                  }))
-                : undefined,
-            imagePlacements:
-              message.role === "assistant" ? parseChatImagePlacements(message.imagePlacements) : undefined,
-            uiVisuals:
-              message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
-            visualSnapshots:
-              message.role === "assistant" && message.visualSnapshots?.length
-                ? message.visualSnapshots.map((ref) => ({
-                    visualId: (message.htmlArtifacts ?? []).some((artifact) => artifact.mediaId === ref.visualId)
-                      ? remappedHtmlArtifactMediaId(newChatId, ref.visualId)
-                      : ref.visualId,
-                    attachmentId: ref.attachmentId,
-                  }))
-                : undefined,
-            skill:
-              message.role === "user"
-                ? parseSkillProvenanceV1(message.skill)
-                : undefined,
-            notice:
-              message.role === "user"
-                ? parseAgentNoticeV1(message.notice)
-                : undefined,
-            inputSource:
-              message.role === "user"
-                ? parseChatInputSource(message.inputSource)
-                : undefined,
-            ...hookBlockedField(message),
-            providerFailure:
-              message.role === "assistant"
-                ? parseProviderFailureV1(message.providerFailure)
-                : undefined,
-          });
-        }
-        const now = Date.now();
-        const copied: Chat = {
-          id: newChatId,
-          title,
-          workspaceId:
-            input.targetWorkspaceId ?? metadata.workspaceId ?? DEFAULT_WORKSPACE_ID,
-          botId: source.botId,
-          providerId: metadata.providerId,
-          model: metadata.model,
-          ...(input.forkAt && !source.botId
-            ? {
-                forkedFrom: {
-                  chatId: source.id,
-                  messageId: input.forkAt.messageId,
-                  position: input.forkAt.position,
-                  at: now,
-                  ...(input.forkSummary
-                    ? {
-                        summary: {
-                          state: "pending" as const,
-                          afterMessageId: copiedMessages[copiedMessages.length - 1]!.id,
-                          ...(input.forkSummary.instructions
-                            ? { instructions: input.forkSummary.instructions }
-                            : {}),
-                        },
-                      }
-                    : {}),
-                },
+          if (cut) {
+            let hasVisibleUser = false;
+            for (let index = 0; index <= throughIndex; index += 1) {
+              if (source.messages[index]?.role === "user") {
+                hasVisibleUser = true;
+                break;
               }
-            : {}),
-          createdAt: now,
-          updatedAt: now,
-          messages: copiedMessages,
-        };
-        await input.beforeInstall?.(copied, sourceMessageIds);
-        return installNewChat(copied, input.assertCurrent);
-      }));
+            }
+            if (!hasVisibleUser) {
+              throw new ChatForkError(
+                "ineligible",
+                cut.position === "before"
+                  ? "Nothing comes before the first message to fork."
+                  : "The selected turn has no user message to copy.",
+              );
+            }
+          }
+
+          if (input.forkSummary && (!input.forkAt || source.botId)) {
+            throw new ChatForkError("ineligible", "Only a fork can carry a summary.");
+          }
+          if (input.forkSummary && throughIndex >= source.messages.length - 1) {
+            throw new ChatForkError(
+              "ineligible",
+              "Nothing happened after this point to summarize.",
+            );
+          }
+
+          const copiedMessages: ChatMessage[] = [];
+          const sourceMessageIds: string[] = [];
+          let chargedBytes = 0;
+          const charge = (value: string | undefined) => {
+            if (value === undefined) return;
+            const remaining = MAX_VISIBLE_COPY_BYTES - chargedBytes;
+            if (value.length > remaining) {
+              throw new ChatForkError("too_large", "This chat is too large to copy safely.");
+            }
+            chargedBytes += jsonStringBytesBounded(value, remaining);
+            if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
+              throw new ChatForkError("too_large", "This chat is too large to copy safely.");
+            }
+          };
+          const metadata = projectVisibleChatMetadata(source);
+          let title: string;
+          if (cut) {
+            const destinationWorkspaceId =
+              input.targetWorkspaceId ?? metadata.workspaceId ?? DEFAULT_WORKSPACE_ID;
+            const siblings = (await withIndexLock(() => loadIndex())).filter(
+              (entry) => (entry.workspaceId ?? DEFAULT_WORKSPACE_ID) === destinationWorkspaceId,
+            );
+            title = nextForkTitle(
+              metadata.title,
+              siblings.map((entry) => entry.title),
+            );
+          } else {
+            const suffix = " (copy)";
+            const maximumBaseLength = Math.max(1, 120 - suffix.length);
+            title = `${Array.from(metadata.title.slice(0, maximumBaseLength * 2))
+              .slice(0, maximumBaseLength)
+              .join("")}${suffix}`;
+          }
+          chargedBytes += 1_024;
+          charge(title);
+          charge(input.targetWorkspaceId ?? metadata.workspaceId);
+          charge(metadata.providerId);
+          charge(metadata.model);
+          for (let index = 0; index <= throughIndex; index += 1) {
+            const sourceMessage = source.messages[index];
+            const message = projectVisibleChatMessage(sourceMessage);
+            if (!message) continue;
+            if (copiedMessages.length >= MAX_VISIBLE_COPY_MESSAGES) {
+              throw new ChatForkError(
+                "too_large",
+                "This chat has too many messages to copy safely.",
+              );
+            }
+            chargedBytes += 512;
+            const content = [
+              message.content,
+              ...(message.appPanels ?? []).map((panel) => panel.fallback),
+            ]
+              .filter(Boolean)
+              .join("\n\n");
+            charge(content);
+            charge(message.model);
+            charge(message.skill?.name);
+            for (const attachment of message.attachments ?? []) {
+              chargedBytes += 256;
+              charge(attachment.id);
+              charge(attachment.name);
+              charge(attachment.mimeType);
+              // A stored image is shared by hash, so only its reference is copied.
+              charge(
+                attachment.kind === "image"
+                  ? (attachment.data ?? attachment.sha256)
+                  : attachment.text,
+              );
+            }
+            for (const artifact of message.htmlArtifacts ?? []) {
+              chargedBytes += 128;
+              charge(artifact.title);
+              charge(artifact.mediaId);
+            }
+            for (const visual of message.uiVisuals ?? []) charge(JSON.stringify(visual));
+            for (const element of message.grabbedElements ?? []) {
+              chargedBytes += 256;
+              charge(JSON.stringify(element));
+            }
+            if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
+              throw new ChatForkError("too_large", "This chat is too large to copy safely.");
+            }
+            const copiedGrabbedElements =
+              message.role === "user"
+                ? parseGrabbedElements(message.grabbedElements, "stored")
+                : undefined;
+            sourceMessageIds.push(message.id);
+            copiedMessages.push({
+              id: randomUUID(),
+              role: message.role,
+              content,
+              createdAt: message.createdAt,
+              model: message.model,
+              attachments: safeStoredAttachments(message.attachments),
+              ...(copiedGrabbedElements ? { grabbedElements: copiedGrabbedElements } : {}),
+              htmlArtifacts:
+                message.role === "assistant"
+                  ? (message.htmlArtifacts ?? []).map((artifact) => {
+                      const mediaId = remappedHtmlArtifactMediaId(newChatId, artifact.mediaId);
+                      return { ...artifact, mediaId };
+                    })
+                  : undefined,
+              htmlArtifactPlacements:
+                message.role === "assistant" && message.htmlArtifactPlacements?.length
+                  ? message.htmlArtifactPlacements.map((placement) => ({
+                      mediaId: remappedHtmlArtifactMediaId(newChatId, placement.mediaId),
+                      toolCallId: placement.toolCallId,
+                      ...(placement.layout === "wide" ? { layout: "wide" as const } : {}),
+                    }))
+                  : undefined,
+              imagePlacements:
+                message.role === "assistant"
+                  ? parseChatImagePlacements(message.imagePlacements)
+                  : undefined,
+              uiVisuals:
+                message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
+              visualSnapshots:
+                message.role === "assistant" && message.visualSnapshots?.length
+                  ? message.visualSnapshots.map((ref) => ({
+                      visualId: (message.htmlArtifacts ?? []).some(
+                        (artifact) => artifact.mediaId === ref.visualId,
+                      )
+                        ? remappedHtmlArtifactMediaId(newChatId, ref.visualId)
+                        : ref.visualId,
+                      attachmentId: ref.attachmentId,
+                    }))
+                  : undefined,
+              skill: message.role === "user" ? parseSkillProvenanceV1(message.skill) : undefined,
+              notice: message.role === "user" ? parseAgentNoticeV1(message.notice) : undefined,
+              inputSource:
+                message.role === "user" ? parseChatInputSource(message.inputSource) : undefined,
+              ...hookBlockedField(message),
+              providerFailure:
+                message.role === "assistant"
+                  ? parseProviderFailureV1(message.providerFailure)
+                  : undefined,
+            });
+          }
+          const now = Date.now();
+          const copied: Chat = {
+            id: newChatId,
+            title,
+            workspaceId: input.targetWorkspaceId ?? metadata.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            botId: source.botId,
+            providerId: metadata.providerId,
+            model: metadata.model,
+            ...(input.forkAt && !source.botId
+              ? {
+                  forkedFrom: {
+                    chatId: source.id,
+                    messageId: input.forkAt.messageId,
+                    position: input.forkAt.position,
+                    at: now,
+                    ...(input.forkSummary
+                      ? {
+                          summary: {
+                            state: "pending" as const,
+                            afterMessageId: copiedMessages[copiedMessages.length - 1]!.id,
+                            ...(input.forkSummary.instructions
+                              ? { instructions: input.forkSummary.instructions }
+                              : {}),
+                          },
+                        }
+                      : {}),
+                  },
+                }
+              : {}),
+            createdAt: now,
+            updatedAt: now,
+            messages: copiedMessages,
+          };
+          await input.beforeInstall?.(copied, sourceMessageIds);
+          return installNewChat(copied, input.assertCurrent);
+        }),
+      );
     },
 
     async rename(
@@ -1973,15 +2004,17 @@ export function createChatStore(
       title: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat) throw new Error(`Chat ${id} not found`);
-        await assertCurrent(chat);
-        chat.title = title.trim() || chat.title;
-        chat.updatedAt = Date.now();
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+      return withImageData(
+        await shared([id], true, async () => {
+          const chat = await readChat(id, "owner");
+          if (!chat) throw new Error(`Chat ${id} not found`);
+          await assertCurrent(chat);
+          chat.title = title.trim() || chat.title;
+          chat.updatedAt = Date.now();
+          await writeChatAndMeta(chat);
+          return chat;
+        }),
+      );
     },
 
     /**
@@ -1992,18 +2025,23 @@ export function createChatStore(
      */
     async updateForkSummary(
       id: string,
-      next: (summary: ChatForkSummaryV1 | undefined, chat: Chat) => ChatForkSummaryV1 | undefined | null,
+      next: (
+        summary: ChatForkSummaryV1 | undefined,
+        chat: Chat,
+      ) => ChatForkSummaryV1 | undefined | null,
     ): Promise<Chat | null> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat?.forkedFrom) return null;
-        const summary = next(chat.forkedFrom.summary, chat);
-        if (summary === null) return null;
-        const { summary: _previous, ...lineage } = chat.forkedFrom;
-        chat.forkedFrom = summary ? { ...lineage, summary } : lineage;
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+      return withImageData(
+        await shared([id], true, async () => {
+          const chat = await readChat(id, "owner");
+          if (!chat?.forkedFrom) return null;
+          const summary = next(chat.forkedFrom.summary, chat);
+          if (summary === null) return null;
+          const { summary: _previous, ...lineage } = chat.forkedFrom;
+          chat.forkedFrom = summary ? { ...lineage, summary } : lineage;
+          await writeChatAndMeta(chat);
+          return chat;
+        }),
+      );
     },
 
     /** Apply an asynchronous rename only when no newer rename won the race. */
@@ -2012,16 +2050,18 @@ export function createChatStore(
       expectedTitle: string,
       title: string,
     ): Promise<Chat | null> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat || chat.title !== expectedTitle) return null;
-        const nextTitle = title.trim();
-        if (!nextTitle || nextTitle === chat.title) return null;
-        chat.title = nextTitle;
-        chat.updatedAt = Date.now();
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+      return withImageData(
+        await shared([id], true, async () => {
+          const chat = await readChat(id, "owner");
+          if (!chat || chat.title !== expectedTitle) return null;
+          const nextTitle = title.trim();
+          if (!nextTitle || nextTitle === chat.title) return null;
+          chat.title = nextTitle;
+          chat.updatedAt = Date.now();
+          await writeChatAndMeta(chat);
+          return chat;
+        }),
+      );
     },
 
     /** Move only an untouched new chat so its workspace can be chosen from the composer. */
@@ -2030,18 +2070,20 @@ export function createChatStore(
       workspaceId: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat) throw new Error(`Chat ${id} not found`);
-        await assertCurrent(chat);
-        if (chat.messages.length > 0) {
-          throw new Error("Only a new chat can change workspaces.");
-        }
-        chat.workspaceId = workspaceId;
-        chat.updatedAt = Date.now();
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+      return withImageData(
+        await shared([id], true, async () => {
+          const chat = await readChat(id, "owner");
+          if (!chat) throw new Error(`Chat ${id} not found`);
+          await assertCurrent(chat);
+          if (chat.messages.length > 0) {
+            throw new Error("Only a new chat can change workspaces.");
+          }
+          chat.workspaceId = workspaceId;
+          chat.updatedAt = Date.now();
+          await writeChatAndMeta(chat);
+          return chat;
+        }),
+      );
     },
 
     /** Clear the ephemeral marker so a temporary floating chat becomes a durable chat. */
@@ -2049,16 +2091,18 @@ export function createChatStore(
       id: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat) throw new Error(`Chat ${id} not found`);
-        await assertCurrent(chat);
-        if (chat.ephemeral !== true) return chat;
-        delete chat.ephemeral;
-        chat.updatedAt = Date.now();
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+      return withImageData(
+        await shared([id], true, async () => {
+          const chat = await readChat(id, "owner");
+          if (!chat) throw new Error(`Chat ${id} not found`);
+          await assertCurrent(chat);
+          if (chat.ephemeral !== true) return chat;
+          delete chat.ephemeral;
+          chat.updatedAt = Date.now();
+          await writeChatAndMeta(chat);
+          return chat;
+        }),
+      );
     },
 
     /**
@@ -2071,16 +2115,18 @@ export function createChatStore(
       workspaceId: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat) throw new Error(`Chat ${id} not found`);
-        await assertCurrent(chat);
-        chat.workspaceId = workspaceId;
-        delete chat.ephemeral;
-        chat.updatedAt = Date.now();
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+      return withImageData(
+        await shared([id], true, async () => {
+          const chat = await readChat(id, "owner");
+          if (!chat) throw new Error(`Chat ${id} not found`);
+          await assertCurrent(chat);
+          chat.workspaceId = workspaceId;
+          delete chat.ephemeral;
+          chat.updatedAt = Date.now();
+          await writeChatAndMeta(chat);
+          return chat;
+        }),
+      );
     },
 
     /**
@@ -2093,21 +2139,23 @@ export function createChatStore(
       model: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat) throw new Error(`Chat ${id} not found`);
-        await assertCurrent(chat);
-        if (!chat.botId) throw new Error("Only a Bot chat can change its Bot model authority.");
-        const resolvedProviderId = await resolveProviderId(providerId);
-        if (!resolvedProviderId || !model.trim()) {
-          throw new Error("A Bot model selection requires a provider and model.");
-        }
-        if (chat.providerId === resolvedProviderId && chat.model === model) return chat;
-        chat.providerId = resolvedProviderId;
-        chat.model = model;
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+      return withImageData(
+        await shared([id], true, async () => {
+          const chat = await readChat(id, "owner");
+          if (!chat) throw new Error(`Chat ${id} not found`);
+          await assertCurrent(chat);
+          if (!chat.botId) throw new Error("Only a Bot chat can change its Bot model authority.");
+          const resolvedProviderId = await resolveProviderId(providerId);
+          if (!resolvedProviderId || !model.trim()) {
+            throw new Error("A Bot model selection requires a provider and model.");
+          }
+          if (chat.providerId === resolvedProviderId && chat.model === model) return chat;
+          chat.providerId = resolvedProviderId;
+          chat.model = model;
+          await writeChatAndMeta(chat);
+          return chat;
+        }),
+      );
     },
 
     /**
@@ -2126,31 +2174,41 @@ export function createChatStore(
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
       thinkingLevel?: GenerationThinkingLevel | null,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat) throw new Error(`Chat ${id} not found`);
-        await assertCurrent(chat);
-        if (chat.botId) {
-          throw new Error("A Bot chat's model changes in the Bot's settings.");
-        }
-        const resolvedProviderId = await resolveProviderId(providerId);
-        if (!resolvedProviderId || !model.trim()) {
-          throw new Error("A chat model selection requires a provider and model.");
-        }
-        if (thinkingLevel !== undefined && thinkingLevel !== null && !isGenerationThinkingLevel(thinkingLevel)) {
-          throw new Error("Invalid thinking level.");
-        }
-        const sameModel = chat.providerId === resolvedProviderId && chat.model === model;
-        const nextLevel =
-          thinkingLevel === undefined ? (sameModel ? chat.thinkingLevel : undefined) : (thinkingLevel ?? undefined);
-        if (sameModel && chat.thinkingLevel === nextLevel) return chat;
-        chat.providerId = resolvedProviderId;
-        chat.model = model;
-        if (nextLevel) chat.thinkingLevel = nextLevel;
-        else delete chat.thinkingLevel;
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+      return withImageData(
+        await shared([id], true, async () => {
+          const chat = await readChat(id, "owner");
+          if (!chat) throw new Error(`Chat ${id} not found`);
+          await assertCurrent(chat);
+          if (chat.botId) {
+            throw new Error("A Bot chat's model changes in the Bot's settings.");
+          }
+          const resolvedProviderId = await resolveProviderId(providerId);
+          if (!resolvedProviderId || !model.trim()) {
+            throw new Error("A chat model selection requires a provider and model.");
+          }
+          if (
+            thinkingLevel !== undefined &&
+            thinkingLevel !== null &&
+            !isGenerationThinkingLevel(thinkingLevel)
+          ) {
+            throw new Error("Invalid thinking level.");
+          }
+          const sameModel = chat.providerId === resolvedProviderId && chat.model === model;
+          const nextLevel =
+            thinkingLevel === undefined
+              ? sameModel
+                ? chat.thinkingLevel
+                : undefined
+              : (thinkingLevel ?? undefined);
+          if (sameModel && chat.thinkingLevel === nextLevel) return chat;
+          chat.providerId = resolvedProviderId;
+          chat.model = model;
+          if (nextLevel) chat.thinkingLevel = nextLevel;
+          else delete chat.thinkingLevel;
+          await writeChatAndMeta(chat);
+          return chat;
+        }),
+      );
     },
 
     /**
@@ -2210,10 +2268,12 @@ export function createChatStore(
 
     /** Persist the user's per-chat Computer Use grant without reordering history. */
     async setComputerUseAllowed(id: string, allowed: boolean): Promise<Chat> {
-      return withImageData(await updateComputerUseAccess(id, (chat) => {
-        if (allowed) chat.computerUseAllowed = true;
-        else delete chat.computerUseAllowed;
-      }));
+      return withImageData(
+        await updateComputerUseAccess(id, (chat) => {
+          if (allowed) chat.computerUseAllowed = true;
+          else delete chat.computerUseAllowed;
+        }),
+      );
     },
 
     /**
@@ -2242,10 +2302,12 @@ export function createChatStore(
      * setup, so the chat can offer Continue after a restart.
      */
     async setComputerUsePendingContinue(id: string, pending: boolean): Promise<Chat> {
-      return withImageData(await updateComputerUseAccess(id, (chat) => {
-        if (pending) chat.computerUsePendingContinue = true;
-        else delete chat.computerUsePendingContinue;
-      }));
+      return withImageData(
+        await updateComputerUseAccess(id, (chat) => {
+          if (pending) chat.computerUsePendingContinue = true;
+          else delete chat.computerUsePendingContinue;
+        }),
+      );
     },
 
     /**
@@ -2260,7 +2322,9 @@ export function createChatStore(
     ): Promise<boolean> {
       return shared([chatId], true, async () => {
         const chat = await readChat(chatId, "owner");
-        const message = chat?.messages.find((candidate) => candidate.id === messageId && candidate.role === "user");
+        const message = chat?.messages.find(
+          (candidate) => candidate.id === messageId && candidate.role === "user",
+        );
         if (!chat || !message) return false;
         if (reason === undefined) {
           if (!message.hookBlocked) return false;
@@ -2286,7 +2350,9 @@ export function createChatStore(
     ): Promise<boolean> {
       return shared([chatId], true, async () => {
         const chat = await readChat(chatId, "owner");
-        const message = chat?.messages.find((candidate) => candidate.id === messageId && candidate.role === "assistant");
+        const message = chat?.messages.find(
+          (candidate) => candidate.id === messageId && candidate.role === "assistant",
+        );
         if (!chat || !message) return false;
         const visualIds = new Set([
           ...(message.htmlArtifacts ?? []).map((artifact) => artifact.mediaId),
@@ -2297,16 +2363,30 @@ export function createChatStore(
         let stored = false;
         let replaced = false;
         for (const snapshot of snapshots) {
-          if (!visualIds.has(snapshot.visualId) || !isVisualSnapshotAttachmentId(snapshot.attachment.id)) continue;
+          if (
+            !visualIds.has(snapshot.visualId) ||
+            !isVisualSnapshotAttachmentId(snapshot.attachment.id)
+          )
+            continue;
           const [attachment] = safeStoredAttachments([snapshot.attachment]) ?? [];
           if (!attachment || attachment.kind !== "image") continue;
           const previous = refs.find((ref) => ref.visualId === snapshot.visualId)?.attachmentId;
-          const remaining = attachments.filter((existing) => existing.id !== previous && existing.id !== attachment.id);
-          const bytes = remaining.reduce((total, existing) => total + existing.size, 0) + attachment.size;
-          if (remaining.length >= MAX_ATTACHMENTS_PER_MESSAGE || bytes > MAX_ATTACHMENT_INLINE_BYTES) continue;
+          const remaining = attachments.filter(
+            (existing) => existing.id !== previous && existing.id !== attachment.id,
+          );
+          const bytes =
+            remaining.reduce((total, existing) => total + existing.size, 0) + attachment.size;
+          if (
+            remaining.length >= MAX_ATTACHMENTS_PER_MESSAGE ||
+            bytes > MAX_ATTACHMENT_INLINE_BYTES
+          )
+            continue;
           if (previous !== undefined) replaced = true;
           attachments = [...remaining, attachment];
-          refs = [...refs.filter((ref) => ref.visualId !== snapshot.visualId), { visualId: snapshot.visualId, attachmentId: attachment.id }];
+          refs = [
+            ...refs.filter((ref) => ref.visualId !== snapshot.visualId),
+            { visualId: snapshot.visualId, attachmentId: attachment.id },
+          ];
           stored = true;
         }
         if (!stored) return false;
@@ -2331,12 +2411,16 @@ export function createChatStore(
     ): Promise<boolean> {
       return shared([chatId], false, async () => {
         const chat = await readChat(chatId, "owner");
-        const message = chat?.messages.find((candidate) => candidate.id === messageId && candidate.role === "assistant");
+        const message = chat?.messages.find(
+          (candidate) => candidate.id === messageId && candidate.role === "assistant",
+        );
         const current = message?.uiVisuals?.find((visual) => visual.id === visualId);
         if (!chat || !message || !current) return false;
         const next = parseChatUiVisualV1({ ...current, state });
         if (!next) return false;
-        message.uiVisuals = message.uiVisuals!.map((visual) => (visual.id === visualId ? next : visual));
+        message.uiVisuals = message.uiVisuals!.map((visual) =>
+          visual.id === visualId ? next : visual,
+        );
         await writeChat(chat);
         return true;
       });
@@ -2431,148 +2515,139 @@ export function createChatStore(
       ) {
         throw new Error("Invalid thinking level.");
       }
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat) throw new Error(`Chat ${id} not found`);
-        if (meta?.rejectFeatureOwned && chat.owner !== undefined) {
-          throw new Error("This conversation belongs to another Aiden feature and cannot be written from chat.");
-        }
-        if (meta?.isCurrent && !meta.isCurrent()) {
-          throw new Error("The renderer document is no longer active.");
-        }
-        if (
-          meta?.expectedWorkspaceId !== undefined &&
-          (chat.workspaceId ?? DEFAULT_WORKSPACE_ID) !==
-            meta.expectedWorkspaceId
-        ) {
-          throw new Error(
-            "The chat workspace changed before the message could be saved.",
-          );
-        }
-        if (message.role === "user" && forkSummaryHoldsSend(chat.forkedFrom)) {
-          throw new Error(FORK_SUMMARY_HOLD_MESSAGE);
-        }
-        const grabbedElements =
-          message.role === "user"
-            ? parseGrabbedElements(message.grabbedElements, "stored")
-            : undefined;
-        const full: ChatMessage = {
-          id: message.id ?? newId(),
-          role: message.role,
-          content: message.content,
-          model: message.model,
-          reasoning:
-            message.role === "assistant" &&
-            typeof message.reasoning === "string" &&
-            message.reasoning.trim()
-              ? message.reasoning
-              : undefined,
-          pi:
-            message.role === "assistant"
-              ? parseStoredPiAssistantMessage(message.pi)
-              : undefined,
-          providerFailure:
-            message.role === "assistant"
-              ? parseProviderFailureV1(message.providerFailure)
-              : undefined,
-          attachments: safeStoredAttachments(message.attachments),
-          ...(grabbedElements ? { grabbedElements } : {}),
-          appPanels: message.role === "assistant" ? parseAppControlPanels(message.appPanels) : undefined,
-          htmlArtifacts:
-            message.role === "assistant"
-              ? parseChatHtmlArtifacts(message.htmlArtifacts)
-              : undefined,
-          htmlArtifactPlacements:
-            message.role === "assistant" && message.htmlArtifacts
-              ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
-              : undefined,
-          imagePlacements:
-            message.role === "assistant" ? parseChatImagePlacements(message.imagePlacements) : undefined,
-          uiVisuals:
-            message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
-          visualSnapshots:
-            message.role === "assistant" ? parseVisualSnapshots(message.visualSnapshots) : undefined,
-          skill:
-            message.role === "user"
-              ? parseSkillProvenanceV1(message.skill)
-              : undefined,
-          notice:
-            message.role === "user"
-              ? parseAgentNoticeV1(message.notice)
-              : undefined,
-          inputSource:
-            message.role === "user"
-              ? parseChatInputSource(message.inputSource)
-              : undefined,
-          fromLeadChat: message.role === "user" && message.fromLeadChat === true && !message.notice ? true : undefined,
-          timeline:
-            message.role === "assistant"
-              ? parseGenerationTimeline(message.timeline, message.content.length)
-              : undefined,
-          turnStats:
-            message.role === "assistant"
-              ? parseAssistantTurnStatsV1(message.turnStats)
-              : undefined,
-          subagents:
-            message.role === "assistant"
-              ? parseSubagentMessageReferenceV1(message.subagents)
-              : undefined,
-          createdAt: message.createdAt ?? Date.now(),
-          ...(message.role === "user" && meta?.hookBlockedReason !== undefined
-            ? { hookBlocked: { reason: boundedHookBlockedReason(meta.hookBlockedReason) } }
-            : {}),
-        };
-        const isFirstUserMessage =
-          full.role === "user" &&
-          !chat.messages.some((entry) => entry.role === "user");
-        chat.messages.push(full);
-        chat.updatedAt = Date.now();
-        if (
-          (meta?.providerId && meta.providerId !== chat.providerId) ||
-          (meta?.model && meta.model !== chat.model)
-        ) {
-          // A chat's own effort belongs to the model it was chosen for.
-          delete chat.thinkingLevel;
-        }
-        if (meta?.providerId) chat.providerId = meta.providerId;
-        if (meta?.model) chat.model = meta.model;
-        if (meta?.thinkingLevel !== undefined && !chat.botId && chat.providerId && chat.model) {
-          if (meta.thinkingLevel) chat.thinkingLevel = meta.thinkingLevel;
-          else delete chat.thinkingLevel;
-        }
-        if (
-          meta?.autoTitle &&
-          isFirstUserMessage &&
-          isDefaultChatTitle(chat.title)
-        ) {
-          chat.title = deriveChatTitleSeed(full);
-        }
-        await writeChatAndMeta(chat, () => {
+      return withImageData(
+        await shared([id], true, async () => {
+          const chat = await readChat(id, "owner");
+          if (!chat) throw new Error(`Chat ${id} not found`);
+          if (meta?.rejectFeatureOwned && chat.owner !== undefined) {
+            throw new Error(
+              "This conversation belongs to another Aiden feature and cannot be written from chat.",
+            );
+          }
           if (meta?.isCurrent && !meta.isCurrent()) {
             throw new Error("The renderer document is no longer active.");
           }
-        });
-        return chat;
-      }));
+          if (
+            meta?.expectedWorkspaceId !== undefined &&
+            (chat.workspaceId ?? DEFAULT_WORKSPACE_ID) !== meta.expectedWorkspaceId
+          ) {
+            throw new Error("The chat workspace changed before the message could be saved.");
+          }
+          if (message.role === "user" && forkSummaryHoldsSend(chat.forkedFrom)) {
+            throw new Error(FORK_SUMMARY_HOLD_MESSAGE);
+          }
+          const grabbedElements =
+            message.role === "user"
+              ? parseGrabbedElements(message.grabbedElements, "stored")
+              : undefined;
+          const full: ChatMessage = {
+            id: message.id ?? newId(),
+            role: message.role,
+            content: message.content,
+            model: message.model,
+            reasoning:
+              message.role === "assistant" &&
+              typeof message.reasoning === "string" &&
+              message.reasoning.trim()
+                ? message.reasoning
+                : undefined,
+            pi:
+              message.role === "assistant" ? parseStoredPiAssistantMessage(message.pi) : undefined,
+            providerFailure:
+              message.role === "assistant"
+                ? parseProviderFailureV1(message.providerFailure)
+                : undefined,
+            attachments: safeStoredAttachments(message.attachments),
+            ...(grabbedElements ? { grabbedElements } : {}),
+            appPanels:
+              message.role === "assistant" ? parseAppControlPanels(message.appPanels) : undefined,
+            htmlArtifacts:
+              message.role === "assistant"
+                ? parseChatHtmlArtifacts(message.htmlArtifacts)
+                : undefined,
+            htmlArtifactPlacements:
+              message.role === "assistant" && message.htmlArtifacts
+                ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
+                : undefined,
+            imagePlacements:
+              message.role === "assistant"
+                ? parseChatImagePlacements(message.imagePlacements)
+                : undefined,
+            uiVisuals:
+              message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
+            visualSnapshots:
+              message.role === "assistant"
+                ? parseVisualSnapshots(message.visualSnapshots)
+                : undefined,
+            skill: message.role === "user" ? parseSkillProvenanceV1(message.skill) : undefined,
+            notice: message.role === "user" ? parseAgentNoticeV1(message.notice) : undefined,
+            inputSource:
+              message.role === "user" ? parseChatInputSource(message.inputSource) : undefined,
+            fromLeadChat:
+              message.role === "user" && message.fromLeadChat === true && !message.notice
+                ? true
+                : undefined,
+            timeline:
+              message.role === "assistant"
+                ? parseGenerationTimeline(message.timeline, message.content.length)
+                : undefined,
+            turnStats:
+              message.role === "assistant"
+                ? parseAssistantTurnStatsV1(message.turnStats)
+                : undefined,
+            subagents:
+              message.role === "assistant"
+                ? parseSubagentMessageReferenceV1(message.subagents)
+                : undefined,
+            createdAt: message.createdAt ?? Date.now(),
+            ...(message.role === "user" && meta?.hookBlockedReason !== undefined
+              ? { hookBlocked: { reason: boundedHookBlockedReason(meta.hookBlockedReason) } }
+              : {}),
+          };
+          const isFirstUserMessage =
+            full.role === "user" && !chat.messages.some((entry) => entry.role === "user");
+          chat.messages.push(full);
+          chat.updatedAt = Date.now();
+          if (
+            (meta?.providerId && meta.providerId !== chat.providerId) ||
+            (meta?.model && meta.model !== chat.model)
+          ) {
+            // A chat's own effort belongs to the model it was chosen for.
+            delete chat.thinkingLevel;
+          }
+          if (meta?.providerId) chat.providerId = meta.providerId;
+          if (meta?.model) chat.model = meta.model;
+          if (meta?.thinkingLevel !== undefined && !chat.botId && chat.providerId && chat.model) {
+            if (meta.thinkingLevel) chat.thinkingLevel = meta.thinkingLevel;
+            else delete chat.thinkingLevel;
+          }
+          if (meta?.autoTitle && isFirstUserMessage && isDefaultChatTitle(chat.title)) {
+            chat.title = deriveChatTitleSeed(full);
+          }
+          await writeChatAndMeta(chat, () => {
+            if (meta?.isCurrent && !meta.isCurrent()) {
+              throw new Error("The renderer document is no longer active.");
+            }
+          });
+          return chat;
+        }),
+      );
     },
 
     /** Replace only the untouched first-message seed, preserving any manual rename. */
-    async replaceAutoTitle(
-      id: string,
-      expectedSeed: string,
-      title: string,
-    ): Promise<Chat | null> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat || !canReplaceGeneratedChatTitle(chat.title, expectedSeed))
-          return null;
-        const nextTitle = title.trim();
-        if (!nextTitle || nextTitle === chat.title) return null;
-        chat.title = nextTitle;
-        chat.updatedAt = Date.now();
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+    async replaceAutoTitle(id: string, expectedSeed: string, title: string): Promise<Chat | null> {
+      return withImageData(
+        await shared([id], true, async () => {
+          const chat = await readChat(id, "owner");
+          if (!chat || !canReplaceGeneratedChatTitle(chat.title, expectedSeed)) return null;
+          const nextTitle = title.trim();
+          if (!nextTitle || nextTitle === chat.title) return null;
+          chat.title = nextTitle;
+          chat.updatedAt = Date.now();
+          await writeChatAndMeta(chat);
+          return chat;
+        }),
+      );
     },
   };
 }

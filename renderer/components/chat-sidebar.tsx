@@ -15,9 +15,17 @@ import { startedByChatLabel } from "../lib/chat-lineage";
 // Inbox (Beta) views, route-driven selection, and workspace/chat actions.
 
 import * as React from "react";
-import { workspaceDisplayName, workspaceSecondaryLabel, type WorkspacePathPreferences } from "../lib/workspace-path-display";
+import {
+  workspaceDisplayName,
+  workspaceSecondaryLabel,
+  type WorkspacePathPreferences,
+} from "../lib/workspace-path-display";
 import { WorkspacePathLabel } from "./workspace-path-label";
-import { isNoWorkspace, NO_WORKSPACE_GROUP_LABEL, sidebarGroupWorkspaceId } from "../lib/no-workspace";
+import {
+  isNoWorkspace,
+  NO_WORKSPACE_GROUP_LABEL,
+  sidebarGroupWorkspaceId,
+} from "../lib/no-workspace";
 import { useWorkspacePathPreferences } from "../lib/use-workspace-path-preferences";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -89,7 +97,12 @@ import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-up
 import { useChatActivityState, useChatReadMarkers } from "../lib/use-chat-activity";
 import { chatRowStateFor } from "../lib/chat-activity";
 import { isChatUnread } from "../shared/chat-row-state";
-import { CHAT_ROW_INBOX_ACTIONS, ChatRow, type ChatRowInbox, type ChatRowMenu } from "./sidebar/chat-row";
+import {
+  CHAT_ROW_INBOX_ACTIONS,
+  ChatRow,
+  type ChatRowInbox,
+  type ChatRowMenu,
+} from "./sidebar/chat-row";
 import { InboxView, type InboxRowContext, type InboxViewHandle } from "./sidebar/inbox-view";
 import {
   botInboxRows,
@@ -120,7 +133,13 @@ import { ChatRowContextGlyphs } from "./chat-row-context";
 import { sidebarPullRequestChatIds } from "../lib/chat-row-context";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
 import { useAppCapabilities } from "../lib/app-capabilities";
-import { botChatPath, botListLocation, botRouteBotId, hostBotChatRouteKey, sidebarShowsBotList } from "../lib/bot-routes";
+import {
+  botChatPath,
+  botListLocation,
+  botRouteBotId,
+  hostBotChatRouteKey,
+  sidebarShowsBotList,
+} from "../lib/bot-routes";
 import { useRemoteBots } from "../main/remote-bots";
 import { rovingItems, useRovingRows } from "../lib/roving-rows";
 import { useRowSelection } from "../lib/use-row-selection";
@@ -129,7 +148,10 @@ import { bulkFailureMessage, runInOrder } from "../lib/bulk-delete";
 import { SelectionBar } from "./sidebar/selection-bar";
 import { BotSidebar } from "../main/bots/bot-sidebar";
 import { useBotRows } from "../main/bots/bot-sidebar-rows";
-import { botSidebarPreferenceActions, useBotSidebarPreferencesWhen } from "../main/bots/use-bot-sidebar-preferences";
+import {
+  botSidebarPreferenceActions,
+  useBotSidebarPreferencesWhen,
+} from "../main/bots/use-bot-sidebar-preferences";
 import { isBotUnread } from "../lib/bot-sidebar-preferences";
 import { AvatarFace } from "./bot-avatar";
 import {
@@ -183,11 +205,7 @@ import {
   usePeerHostSidebar,
   type PeerHostSidebarData,
 } from "../lib/hosts/use-peer-host-sidebar";
-import {
-  MachineBadges,
-  MachineFilterChip,
-  RemoteHostStatusList,
-} from "./sidebar-remote";
+import { MachineBadges, MachineFilterChip, RemoteHostStatusList } from "./sidebar-remote";
 
 const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 const COLLAPSED_WORKSPACE_CHAT_LIMIT = 4;
@@ -237,10 +255,19 @@ interface RemoteRenameTarget {
   hostLabel: string;
 }
 
-function workspaceAccessibleName(workspace: Workspace, preferences: WorkspacePathPreferences, workspaces: readonly Workspace[]): string {
+function workspaceAccessibleName(
+  workspace: Workspace,
+  preferences: WorkspacePathPreferences,
+  workspaces: readonly Workspace[],
+): string {
   // The Chats group stands for every hidden No workspace folder; its own folder is no name for it.
   if (isNoWorkspace(workspace)) return NO_WORKSPACE_GROUP_LABEL;
-  return [workspaceDisplayName(workspace, workspaces), workspaceSecondaryLabel(workspace, preferences)].filter(Boolean).join(", ");
+  return [
+    workspaceDisplayName(workspace, workspaces),
+    workspaceSecondaryLabel(workspace, preferences),
+  ]
+    .filter(Boolean)
+    .join(", ");
 }
 
 function updateRestartError(result: AppUpdateRestartResult): string | null {
@@ -473,13 +500,17 @@ export function ChatSidebar(props: ChatSidebarProps) {
   const capabilities = useAppCapabilities();
   const { view } = useSidebarView();
   const inboxView = view === "inbox";
-  const showsBotList = useRouterState({ select: (state) => sidebarShowsBotList(state.location, inboxView) });
+  const showsBotList = useRouterState({
+    select: (state) => sidebarShowsBotList(state.location, inboxView),
+  });
   // Paired hosts' rows stay live whichever list shows: the Bot list and a
   // paired Mac's Bot chat read the same host caches this keeps current.
   const peerHosts = usePeerHostSidebar();
-  return capabilities.bots && showsBotList
-    ? <BotSidebar />
-    : <WorkspaceChatSidebar {...props} peerHosts={peerHosts} />;
+  return capabilities.bots && showsBotList ? (
+    <BotSidebar />
+  ) : (
+    <WorkspaceChatSidebar {...props} peerHosts={peerHosts} />
+  );
 }
 
 function WorkspaceChatSidebar({
@@ -525,9 +556,7 @@ function WorkspaceChatSidebar({
   const [projectSort, setProjectSort] = React.useState<SidebarProjectSort>(
     initialPreferences.projectSort,
   );
-  const [projectOrder, setProjectOrder] = React.useState<string[]>(
-    initialPreferences.projectOrder,
-  );
+  const [projectOrder, setProjectOrder] = React.useState<string[]>(initialPreferences.projectOrder);
   const [draggedProjectKey, setDraggedProjectKey] = React.useState<string | null>(null);
   const [projectDropTarget, setProjectDropTarget] = React.useState<{
     key: string;
@@ -537,7 +566,12 @@ function WorkspaceChatSidebar({
     () => new Set(initialPreferences.expandedWorkspaceIds),
   );
   const sidebarChatIds = React.useMemo(
-    () => sidebarPullRequestChatIds(chats.data ?? [], expandedWorkspaceIds, MAX_SIDEBAR_PULL_REQUEST_CHATS),
+    () =>
+      sidebarPullRequestChatIds(
+        chats.data ?? [],
+        expandedWorkspaceIds,
+        MAX_SIDEBAR_PULL_REQUEST_CHATS,
+      ),
     [chats.data, expandedWorkspaceIds],
   );
   const sidebarPullRequestsQuery = useSidebarChatPullRequests(sidebarChatIds);
@@ -564,7 +598,9 @@ function WorkspaceChatSidebar({
   const remoteCapabilities = React.useMemo(
     () =>
       new Map(
-        [...peerHosts.views].map(([hostId, view]) => [hostId, remoteHostCapabilities(view)] as const),
+        [...peerHosts.views].map(
+          ([hostId, view]) => [hostId, remoteHostCapabilities(view)] as const,
+        ),
       ),
     [peerHosts.views],
   );
@@ -583,7 +619,10 @@ function WorkspaceChatSidebar({
   const [bulkDeleting, setBulkDeleting] = React.useState<ChatMeta[] | null>(null);
   const deleteTaskNote = deleting ? chatDeleteTaskNote(scheduledTasks.data, [deleting.id]) : "";
   const bulkDeleteTaskNote = bulkDeleting
-    ? chatDeleteTaskNote(scheduledTasks.data, bulkDeleting.map((chat) => chat.id))
+    ? chatDeleteTaskNote(
+        scheduledTasks.data,
+        bulkDeleting.map((chat) => chat.id),
+      )
     : "";
   const [bulkDeleteBusy, setBulkDeleteBusy] = React.useState(false);
   const bulkDeleteReturnRef = React.useRef<HTMLElement | null>(null);
@@ -607,7 +646,10 @@ function WorkspaceChatSidebar({
   // scope, so it comes back as soon as the workspace has chats again.
   // A scoped sidebar is one project's chats, whatever view the person keeps.
   const shownView: SidebarView = scope ? "projects" : view;
-  const workspaceIds = React.useMemo(() => workspaces.map((workspace) => workspace.id), [workspaces]);
+  const workspaceIds = React.useMemo(
+    () => workspaces.map((workspace) => workspace.id),
+    [workspaces],
+  );
   const localRepositories = useLocalRepositoryIdentities(
     workspaceIds,
     hasHosts && projectGrouping !== "separate",
@@ -634,8 +676,15 @@ function WorkspaceChatSidebar({
     return reported;
   }, [remoteRows]);
   const inboxViewRef = React.useRef<InboxViewHandle>(null);
-  const restoreInboxRows = React.useCallback((keys: readonly string[]) => inboxViewRef.current?.touch(keys), []);
-  const triage = useInboxTriage({ views: peerHosts.views, reported: remoteTriageReported, onRestore: restoreInboxRows });
+  const restoreInboxRows = React.useCallback(
+    (keys: readonly string[]) => inboxViewRef.current?.touch(keys),
+    [],
+  );
+  const triage = useInboxTriage({
+    views: peerHosts.views,
+    reported: remoteTriageReported,
+    onRestore: restoreInboxRows,
+  });
   // Read by an in-flight remote rename, which outlives the render that started it.
   const remoteRowsRef = React.useRef(remoteRows);
   remoteRowsRef.current = remoteRows;
@@ -684,14 +733,26 @@ function WorkspaceChatSidebar({
   // The request names its ids by count and hash, and the query function sends
   // exactly those ids, so a response always answers the key it is cached under.
   const pendingAttentionReq = React.useMemo(
-    () => pendingAttentionRequest(
-      chats.data ?? [],
-      [chatActivity.approvalChatIds, chatActivity.inputChatIds, chatActivity.activeChatIds],
-    ),
-    [chats.data, chatActivity.activeChatIds, chatActivity.approvalChatIds, chatActivity.inputChatIds],
+    () =>
+      pendingAttentionRequest(chats.data ?? [], [
+        chatActivity.approvalChatIds,
+        chatActivity.inputChatIds,
+        chatActivity.activeChatIds,
+      ]),
+    [
+      chats.data,
+      chatActivity.activeChatIds,
+      chatActivity.approvalChatIds,
+      chatActivity.inputChatIds,
+    ],
   );
   const pendingAttention = useQuery({
-    queryKey: [...queryKeys.pendingAttention, chatActivity.revision, chats.dataUpdatedAt, pendingAttentionReq.key],
+    queryKey: [
+      ...queryKeys.pendingAttention,
+      chatActivity.revision,
+      chats.dataUpdatedAt,
+      pendingAttentionReq.key,
+    ],
     queryFn: () => chatsApi.pendingAttention([...pendingAttentionReq.ids]),
     enabled: inboxActive && pendingAttentionReq.ids.length > 0,
     placeholderData: keepPreviousData,
@@ -723,32 +784,47 @@ function WorkspaceChatSidebar({
   const remoteBotInbox = React.useMemo(
     () =>
       inboxActive
-        ? remoteBotInboxRows({ hosts: peerHosts.hosts, feeds: peerHosts.feeds, openKey: openRemoteBotKey })
+        ? remoteBotInboxRows({
+            hosts: peerHosts.hosts,
+            feeds: peerHosts.feeds,
+            openKey: openRemoteBotKey,
+          })
         : { listed: [], unlisted: [] },
     [inboxActive, openRemoteBotKey, peerHosts.feeds, peerHosts.hosts],
   );
   const rawInboxEntries = React.useMemo(() => {
     if (!inboxActive) return [];
-    const pending = new Map((pendingAttention.data ?? []).map((item) => [item.chatId, item] as const));
+    const pending = new Map(
+      (pendingAttention.data ?? []).map((item) => [item.chatId, item] as const),
+    );
     return [
       ...localInboxEntries({
         chats: chats.data ?? [],
         workspaces,
         activeChatId,
         rowState: (chatId) =>
-          chatRowStateFor(chatActivity, chatId, chatId === activeChatId && environmentPanel.agentBusy),
+          chatRowStateFor(
+            chatActivity,
+            chatId,
+            chatId === activeChatId && environmentPanel.agentBusy,
+          ),
         unread: (chat) =>
           chat.id !== activeChatId &&
           isChatUnread(chat.lastAssistantAt, readMarkers, chat.id, chat.lastAssistantSequence),
         pending,
         triage: (chatId) =>
-          triage.entryFor({ key: projectOrderKey(LOCAL_SIDEBAR_HOST_ID, chatId), hostId: LOCAL_SIDEBAR_HOST_ID, chatId }),
+          triage.entryFor({
+            key: projectOrderKey(LOCAL_SIDEBAR_HOST_ID, chatId),
+            hostId: LOCAL_SIDEBAR_HOST_ID,
+            chatId,
+          }),
         platform: capabilities.platform,
       }),
       ...remoteInboxEntries(
         remoteRows,
         peerHosts.hosts,
-        (hostId, chatId) => activeRemoteChat?.hostId === hostId && activeRemoteChat.chatId === chatId,
+        (hostId, chatId) =>
+          activeRemoteChat?.hostId === hostId && activeRemoteChat.chatId === chatId,
         (chat) => triage.entryFor(remoteTriageRow(chat)),
       ),
       ...botInbox.listed,
@@ -787,39 +863,60 @@ function WorkspaceChatSidebar({
     [allInboxEntries, search, shownMachines],
   );
   const inboxPresent = React.useMemo(
-    () => new Set([...allInboxEntries, ...botInbox.unlisted, ...remoteBotInbox.unlisted].map((entry) => entry.key)),
+    () =>
+      new Set(
+        [...allInboxEntries, ...botInbox.unlisted, ...remoteBotInbox.unlisted].map(
+          (entry) => entry.key,
+        ),
+      ),
     [allInboxEntries, botInbox.unlisted, remoteBotInbox.unlisted],
   );
   const inboxUnlisted = React.useMemo(
-    () => new Map([...botInbox.unlisted, ...remoteBotInbox.unlisted].map((entry) => [entry.key, entry] as const)),
+    () =>
+      new Map(
+        [...botInbox.unlisted, ...remoteBotInbox.unlisted].map(
+          (entry) => [entry.key, entry] as const,
+        ),
+      ),
     [botInbox.unlisted, remoteBotInbox.unlisted],
   );
   const inboxEntriesByKey = React.useMemo(
     () => new Map(inboxEntries.map((entry) => [entry.key, entry] as const)),
     [inboxEntries],
   );
-  const openRemoteBot = openRemoteBotKey ? remoteBotInbox.listed.find((entry) => entry.signals.isOpen) : undefined;
+  const openRemoteBot = openRemoteBotKey
+    ? remoteBotInbox.listed.find((entry) => entry.signals.isOpen)
+    : undefined;
   const activeInboxKey = openBotId
     ? botInboxKey(openBotId)
     : openRemoteBot
-    ? openRemoteBot.key
-    : activeRemoteChat
-    ? projectOrderKey(activeRemoteChat.hostId, activeRemoteChat.chatId)
-    : activeChatId
-      ? projectOrderKey(LOCAL_SIDEBAR_HOST_ID, activeChatId)
-      : null;
+      ? openRemoteBot.key
+      : activeRemoteChat
+        ? projectOrderKey(activeRemoteChat.hostId, activeRemoteChat.chatId)
+        : activeChatId
+          ? projectOrderKey(LOCAL_SIDEBAR_HOST_ID, activeChatId)
+          : null;
   // The Inbox reports its visible rows in on-screen (frozen) order.
   const [inboxShortcutKeys, setInboxShortcutKeys] = React.useState<readonly string[]>([]);
   // Keep the same array when the order didn't change, so the sidebar doesn't re-render for nothing.
   const updateInboxShortcutKeys = React.useCallback((keys: readonly string[]) => {
     setInboxShortcutKeys((current) =>
-      current.length === keys.length && current.every((key, index) => key === keys[index]) ? current : keys);
+      current.length === keys.length && current.every((key, index) => key === keys[index])
+        ? current
+        : keys,
+    );
   }, []);
   const inboxShortcutNumbers = React.useMemo(
-    () => new Map(inboxShortcutKeys.slice(0, INBOX_SHORTCUT_LIMIT).map((key, index) => [key, index + 1] as const)),
+    () =>
+      new Map(
+        inboxShortcutKeys
+          .slice(0, INBOX_SHORTCUT_LIMIT)
+          .map((key, index) => [key, index + 1] as const),
+      ),
     [inboxShortcutKeys],
   );
-  const manualReorderEnabled = !scope && view === "projects" && projectSort === "manual" && !searching;
+  const manualReorderEnabled =
+    !scope && view === "projects" && projectSort === "manual" && !searching;
   const displayOptions = React.useMemo(
     () => ({
       search,
@@ -836,20 +933,32 @@ function WorkspaceChatSidebar({
           : fullyRevealedWorkspaceIds.has(primary.workspace.id)),
       collapsedChatLimit: COLLAPSED_WORKSPACE_CHAT_LIMIT,
     }),
-    [expandedRemoteKeys, expandedWorkspaceIds, fullyRevealedWorkspaceIds, revealedRemoteKeys, scope, search],
+    [
+      expandedRemoteKeys,
+      expandedWorkspaceIds,
+      fullyRevealedWorkspaceIds,
+      revealedRemoteKeys,
+      scope,
+      search,
+    ],
   );
   // The chat list takes one Tab stop; arrow keys move between its rows. The
   // region spans the Inbox's Working shelf, which sits below the scrolling list.
   const rovingRef = React.useRef<HTMLDivElement>(null);
   useRovingRows(rovingRef);
   // This Mac's chat rows can be selected together outside the Inbox, which has its own triage.
-  const rowSelection = useRowSelection(rovingRef, { enabled: !inboxActive, platform: capabilities.platform });
+  const rowSelection = useRowSelection(rovingRef, {
+    enabled: !inboxActive,
+    platform: capabilities.platform,
+  });
   const [inboxShelfHost, setInboxShelfHost] = React.useState<HTMLDivElement | null>(null);
   // Jump shortcuts and previous/next cover this Mac's chats only.
   const shortcutGroups = React.useMemo(
     () =>
       displayedSidebarChats(organized, shownView, displayOptions).map((section) => ({
-        chats: section.chats.flatMap((summary) => (isRemoteSidebarChat(summary) ? [] : [summary.chat])),
+        chats: section.chats.flatMap((summary) =>
+          isRemoteSidebarChat(summary) ? [] : [summary.chat],
+        ),
       })),
     [displayOptions, organized, shownView],
   );
@@ -865,11 +974,7 @@ function WorkspaceChatSidebar({
     () => sidebarChatNavigationTargets(orderedChats, activeChatId),
     [activeChatId, orderedChats],
   );
-  const {
-    binding: commandBinding,
-    execute,
-    register: registerCommand,
-  } = useCommandSystem();
+  const { binding: commandBinding, execute, register: registerCommand } = useCommandSystem();
   const chatJumpBindings = Array.from({ length: 9 }, (_, index) =>
     commandBinding(`chat.jump.${index + 1}` as CommandId),
   );
@@ -911,7 +1016,11 @@ function WorkspaceChatSidebar({
       const targetWorkspaceId = chat.workspaceId;
       const previousWorkspaceId = activeId;
       // The Assistant and Scheduled chats have no workspace in the registry.
-      if (targetWorkspaceId && targetWorkspaceId !== activeId && workspacesById.has(targetWorkspaceId)) {
+      if (
+        targetWorkspaceId &&
+        targetWorkspaceId !== activeId &&
+        workspacesById.has(targetWorkspaceId)
+      ) {
         if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
         select(targetWorkspaceId);
       }
@@ -981,7 +1090,11 @@ function WorkspaceChatSidebar({
       const adapter = new RemoteHostAdapter(view);
       try {
         await adapter.ready();
-        const result = await adapter.markSummaryRead(chat.chatId, chat.lastAssistantMessageId, chat.revision);
+        const result = await adapter.markSummaryRead(
+          chat.chatId,
+          chat.lastAssistantMessageId,
+          chat.revision,
+        );
         if (!result.ok) throw new Error(result.error.message || MARK_READ_FAILED);
       } finally {
         adapter.dispose();
@@ -1006,7 +1119,9 @@ function WorkspaceChatSidebar({
     const view = peerHosts.views.get(target.hostId);
     if (!view) {
       setRemoteRenaming(null);
-      toast.error(`${target.hostLabel} is no longer paired with this ${localComputerNoun(capabilities.platform)}.`);
+      toast.error(
+        `${target.hostLabel} is no longer paired with this ${localComputerNoun(capabilities.platform)}.`,
+      );
       return;
     }
     const currentRevision = () =>
@@ -1050,7 +1165,9 @@ function WorkspaceChatSidebar({
     try {
       await peerHostsApi.reconnect(hostId);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Aiden could not reconnect to that computer.");
+      toast.error(
+        error instanceof Error ? error.message : "Aiden could not reconnect to that computer.",
+      );
     }
   }, []);
 
@@ -1142,7 +1259,10 @@ function WorkspaceChatSidebar({
     writtenPreferences.current = own;
     if (Object.keys(patch).length === 0 && prunedWorkspaces.current === workspaces) return;
     prunedWorkspaces.current = workspaces;
-    writeSidebarPreferences(patch, workspaces.map((workspace) => workspace.id));
+    writeSidebarPreferences(
+      patch,
+      workspaces.map((workspace) => workspace.id),
+    );
   }, [
     chatSort,
     expandedWorkspaceIds,
@@ -1178,14 +1298,29 @@ function WorkspaceChatSidebar({
     const remembered = activeInboxOrderRef.current;
     const lastOrder = remembered && remembered.key === activeInboxKey ? remembered.keys : undefined;
     const resolve = resolveInboxEntry(inboxEntriesByKey, inboxUnlisted);
-    const { jump, previous, next } = inboxShortcutTargets(inboxShortcutKeys, resolve, activeInboxKey, lastOrder);
+    const { jump, previous, next } = inboxShortcutTargets(
+      inboxShortcutKeys,
+      resolve,
+      activeInboxKey,
+      lastOrder,
+    );
     const unregister = jump.flatMap((entry, index) =>
-      entry ? [registerCommand(`chat.jump.${index + 1}` as CommandId, () => openInboxEntry(entry))] : [],
+      entry
+        ? [registerCommand(`chat.jump.${index + 1}` as CommandId, () => openInboxEntry(entry))]
+        : [],
     );
     if (previous) unregister.push(registerCommand("chat.previous", () => openInboxEntry(previous)));
     if (next) unregister.push(registerCommand("chat.next", () => openInboxEntry(next)));
     return () => unregister.forEach((dispose) => dispose());
-  }, [activeInboxKey, inboxActive, inboxEntriesByKey, inboxShortcutKeys, inboxUnlisted, openInboxEntry, registerCommand]);
+  }, [
+    activeInboxKey,
+    inboxActive,
+    inboxEntriesByKey,
+    inboxShortcutKeys,
+    inboxUnlisted,
+    openInboxEntry,
+    registerCommand,
+  ]);
 
   React.useEffect(() => {
     if (inboxActive) return;
@@ -1398,7 +1533,9 @@ function WorkspaceChatSidebar({
   const openBulkDelete = () => {
     const listed = new Map((chats.data ?? []).map((chat) => [chat.id, chat] as const));
     // A chat Apple is renaming can't be deleted yet, as with a single Delete.
-    const targets = rowSelection.ids.flatMap((id) => (id === renamingWithAppleId ? [] : (listed.get(id) ?? [])));
+    const targets = rowSelection.ids.flatMap((id) =>
+      id === renamingWithAppleId ? [] : (listed.get(id) ?? []),
+    );
     if (targets.length > 0) setBulkDeleting(targets);
   };
 
@@ -1566,7 +1703,9 @@ function WorkspaceChatSidebar({
       queryFn: () => chatsApi.get(chat.id),
       staleTime: 0,
     });
-    const through = session ? markReadThroughMessageId(session.messages, chat.lastAssistantAt, chat.lastAssistantSequence) : null;
+    const through = session
+      ? markReadThroughMessageId(session.messages, chat.lastAssistantAt, chat.lastAssistantSequence)
+      : null;
     if (!through) return false;
     // The host writes no marker when the chat or that message is gone by now.
     return await chatsApi.markRead(chat.id, through);
@@ -1590,7 +1729,8 @@ function WorkspaceChatSidebar({
     markRead: () => void,
   ): ChatRowInbox => {
     const remoteCanMarkRead =
-      entry.source.kind === "remote" && (remoteCapabilities.get(entry.hostId)?.has("markRead") ?? false);
+      entry.source.kind === "remote" &&
+      (remoteCapabilities.get(entry.hostId)?.has("markRead") ?? false);
     // A dimmed row (held after it left, or its host offline) offers no action.
     const action = context.dimmed
       ? null
@@ -1630,14 +1770,18 @@ function WorkspaceChatSidebar({
     markRead: (() => Promise<void>) | null,
   ) => {
     const offered = inboxTriageOffer(entry.signals, Date.now());
-    const offer = offered.alsoMarkRead && !markRead ? { ...offered, doneAndSnooze: false } : offered;
+    const offer =
+      offered.alsoMarkRead && !markRead ? { ...offered, doneAndSnooze: false } : offered;
     return inboxTriageMenuItems(parts, {
       pinned: entry.signals.pinnedAt !== undefined,
       offer,
       disabled,
       onAct: (kind, until) => {
         context.touch();
-        const readAfter = offer.alsoMarkRead && markRead && (kind === "done" || kind === "snooze") ? markRead : null;
+        const readAfter =
+          offer.alsoMarkRead && markRead && (kind === "done" || kind === "snooze")
+            ? markRead
+            : null;
         // The output the row shows: a read sent with the action covers it, and Undo knows whether an older Done still held.
         const { lastAssistantAt, lastAssistantMessageId } = entry.signals;
         const target = { ...row, readThrough: { lastAssistantAt, lastAssistantMessageId } };
@@ -1664,11 +1808,15 @@ function WorkspaceChatSidebar({
       chat.id === activeChatId && environmentPanel.agentBusy,
     );
     // The open chat is being viewed, so its own output never reads as unread.
-    const unread = chat.id !== activeChatId && isChatUnread(chat.lastAssistantAt, readMarkers, chat.id, chat.lastAssistantSequence);
+    const unread =
+      chat.id !== activeChatId &&
+      isChatUnread(chat.lastAssistantAt, readMarkers, chat.id, chat.lastAssistantSequence);
     const forkedFrom = chat.forkedFrom
       ? forkedFromLabel(chatTitlesById.get(chat.forkedFrom.chatId))
       : undefined;
-    const startedByChat = chat.startedBy ? startedByChatLabel(chatTitlesById.get(chat.startedBy.chatId)) : undefined;
+    const startedByChat = chat.startedBy
+      ? startedByChatLabel(chatTitlesById.get(chat.startedBy.chatId))
+      : undefined;
     const titleContent =
       titleReveal?.chatId === chat.id ? (
         <GeneratedTitleReveal
@@ -1685,72 +1833,77 @@ function WorkspaceChatSidebar({
     const inboxAction = inboxParts?.action;
     const menuItems: ChatRowMenu = (Item, Separator, SubMenu) => (
       <>
-      {inboxAction ? (
-        <>
-          <Item icon={CHAT_ROW_INBOX_ACTIONS[inboxAction.kind].menuIcon} onSelect={inboxAction.onSelect}>
-            {CHAT_ROW_INBOX_ACTIONS[inboxAction.kind].label}
-          </Item>
-          {inbox ? null : <Separator />}
-        </>
-      ) : null}
-      {inbox ? (
-        <>
-          {inboxTriageItems(
-            [Item, Separator, SubMenu],
-            inbox.entry,
-            inbox.context,
-            { key: inbox.entry.key, hostId: LOCAL_SIDEBAR_HOST_ID, chatId: chat.id },
-            inbox.context.dimmed,
-            () => markLocalChatReadForTriage(chat),
-          )}
-          <Separator />
-        </>
-      ) : null}
-      <Item
-        icon="pencil"
-        disabled={renamingWithAppleId === chat.id}
-        onSelect={() => {
-          setRenameValue(chat.title);
-          setRenaming(chat);
-        }}
-      >
-        Rename
-      </Item>
-      {capabilities.appleFoundationModels && foundationModels.data !== null ? (
+        {inboxAction ? (
+          <>
+            <Item
+              icon={CHAT_ROW_INBOX_ACTIONS[inboxAction.kind].menuIcon}
+              onSelect={inboxAction.onSelect}
+            >
+              {CHAT_ROW_INBOX_ACTIONS[inboxAction.kind].label}
+            </Item>
+            {inbox ? null : <Separator />}
+          </>
+        ) : null}
+        {inbox ? (
+          <>
+            {inboxTriageItems(
+              [Item, Separator, SubMenu],
+              inbox.entry,
+              inbox.context,
+              { key: inbox.entry.key, hostId: LOCAL_SIDEBAR_HOST_ID, chatId: chat.id },
+              inbox.context.dimmed,
+              () => markLocalChatReadForTriage(chat),
+            )}
+            <Separator />
+          </>
+        ) : null}
         <Item
-          disabled={!appleRenameReady || renamingWithAppleId !== null}
-          aria-label={
-            renamingWithAppleId === chat.id
-              ? "Renaming with Apple"
-              : appleRenameReady
-                ? "Rename with Apple"
-                : `Rename with Apple. ${appleRenameDetail}`
-          }
-          onSelect={() => void renameWithApple(chat)}
+          icon="pencil"
+          disabled={renamingWithAppleId === chat.id}
+          onSelect={() => {
+            setRenameValue(chat.title);
+            setRenaming(chat);
+          }}
         >
-          <span className="min-w-0 flex-1">
-            {renamingWithAppleId === chat.id ? "Renaming with Apple…" : "Rename with Apple"}
-          </span>
-          {!appleRenameReady ? (
-            <span className="text-small text-tertiary">
-              {foundationModels.isLoading ? "Checking…" : "Unavailable"}
-            </span>
-          ) : null}
+          Rename
         </Item>
-      ) : null}
-      <Separator />
-      <Item
-        icon="trash"
-        color="red"
-        disabled={renamingWithAppleId === chat.id}
-        onSelect={() => {
-          deleteReturnRef.current =
-            rovingRef.current?.querySelector<HTMLElement>(`[data-select-id="${CSS.escape(chat.id)}"]`) ?? null;
-          setDeleting(chat);
-        }}
-      >
-        Delete
-      </Item>
+        {capabilities.appleFoundationModels && foundationModels.data !== null ? (
+          <Item
+            disabled={!appleRenameReady || renamingWithAppleId !== null}
+            aria-label={
+              renamingWithAppleId === chat.id
+                ? "Renaming with Apple"
+                : appleRenameReady
+                  ? "Rename with Apple"
+                  : `Rename with Apple. ${appleRenameDetail}`
+            }
+            onSelect={() => void renameWithApple(chat)}
+          >
+            <span className="min-w-0 flex-1">
+              {renamingWithAppleId === chat.id ? "Renaming with Apple…" : "Rename with Apple"}
+            </span>
+            {!appleRenameReady ? (
+              <span className="text-small text-tertiary">
+                {foundationModels.isLoading ? "Checking…" : "Unavailable"}
+              </span>
+            ) : null}
+          </Item>
+        ) : null}
+        <Separator />
+        <Item
+          icon="trash"
+          color="red"
+          disabled={renamingWithAppleId === chat.id}
+          onSelect={() => {
+            deleteReturnRef.current =
+              rovingRef.current?.querySelector<HTMLElement>(
+                `[data-select-id="${CSS.escape(chat.id)}"]`,
+              ) ?? null;
+            setDeleting(chat);
+          }}
+        >
+          Delete
+        </Item>
       </>
     );
     return (
@@ -1801,10 +1954,13 @@ function WorkspaceChatSidebar({
   ) => {
     const { bot } = source;
     const shortcutNumber = inboxShortcutNumbers.get(entry.key);
-    const shortcutBinding = shortcutNumber ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId) : null;
+    const shortcutBinding = shortcutNumber
+      ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId)
+      : null;
     // Mark read clears the unread reply only: it isn't a visit, so `/bots` still opens the Bot last viewed.
     const inboxParts = inboxRowParts(entry, context, () =>
-      botSidebarPreferenceActions.markReplySeen(bot.id, source.lastReplyAt));
+      botSidebarPreferenceActions.markReplySeen(bot.id, source.lastReplyAt),
+    );
     const inboxAction = inboxParts.action;
     const open = () => void navigate(botChatPath(bot.id));
     return (
@@ -1812,7 +1968,12 @@ function WorkspaceChatSidebar({
         key={entry.key}
         title={bot.name}
         status={{
-          state: entry.signals.rowState === "needs_input" ? "needs_input" : source.working ? "working" : "idle",
+          state:
+            entry.signals.rowState === "needs_input"
+              ? "needs_input"
+              : source.working
+                ? "working"
+                : "idle",
           unread: entry.signals.unread,
         }}
         selected={entry.signals.isOpen}
@@ -1824,7 +1985,10 @@ function WorkspaceChatSidebar({
         {...(inboxAction
           ? {
               menu: ((Item) => (
-                <Item icon={CHAT_ROW_INBOX_ACTIONS[inboxAction.kind].menuIcon} onSelect={inboxAction.onSelect}>
+                <Item
+                  icon={CHAT_ROW_INBOX_ACTIONS[inboxAction.kind].menuIcon}
+                  onSelect={inboxAction.onSelect}
+                >
                   {CHAT_ROW_INBOX_ACTIONS[inboxAction.kind].label}
                 </Item>
               )) satisfies ChatRowMenu,
@@ -1843,21 +2007,31 @@ function WorkspaceChatSidebar({
     context: InboxRowContext,
   ) => {
     const shortcutNumber = inboxShortcutNumbers.get(entry.key);
-    const shortcutBinding = shortcutNumber ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId) : null;
+    const shortcutBinding = shortcutNumber
+      ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId)
+      : null;
     const inboxParts = inboxRowParts(entry, context, () => undefined);
     return (
       <ChatRow
         key={entry.key}
         title={source.name}
         status={{
-          state: entry.signals.rowState === "needs_input" ? "needs_input" : source.working ? "working" : "idle",
+          state:
+            entry.signals.rowState === "needs_input"
+              ? "needs_input"
+              : source.working
+                ? "working"
+                : "idle",
           unread: entry.signals.unread,
           failed: entry.signals.failed,
         }}
         selected={entry.signals.isOpen}
         layout="inbox"
         remote={{ hostLabel: entry.hostLabel, stale: !entry.signals.hostOnline }}
-        inbox={{ ...inboxParts, ...(source.avatar ? { metaIcon: <AvatarFace avatar={source.avatar} small /> } : {}) }}
+        inbox={{
+          ...inboxParts,
+          ...(source.avatar ? { metaIcon: <AvatarFace avatar={source.avatar} small /> } : {}),
+        }}
         shortcutHint={shortcutBinding ? prettyAccelerator(shortcutBinding) : undefined}
         shortcutsRevealed={chatShortcutsVisible}
         ariaKeyShortcuts={ariaKeyShortcut(shortcutBinding)}
@@ -1873,7 +2047,10 @@ function WorkspaceChatSidebar({
     indented = false,
     inbox?: { entry: InboxEntry; context: InboxRowContext },
   ) => {
-    const actions = remoteChatRowActions(chat, remoteCapabilities.get(chat.hostId) ?? NO_REMOTE_CAPABILITIES);
+    const actions = remoteChatRowActions(
+      chat,
+      remoteCapabilities.get(chat.hostId) ?? NO_REMOTE_CAPABILITIES,
+    );
     const inboxParts = inbox
       ? inboxRowParts(inbox.entry, inbox.context, () => void markRemoteChatRead(chat))
       : undefined;
@@ -1969,16 +2146,18 @@ function WorkspaceChatSidebar({
         accessibleName={accessibleName}
         onToggle={() => toggleRemoteProject(projectKey)}
         title={
-              <span className="flex min-w-0 flex-col">
-                <span className={primary.stale ? "truncate text-secondary" : "truncate"}>{name}</span>
-                <span className="flex min-w-0 items-center gap-1 text-small text-tertiary">
-                  {primary.branchName ? (
-                    <span className="max-w-[45%] truncate">{primary.branchName} ·</span>
-                  ) : null}
-                  <span className="truncate">{primary.hostLabel}</span>
-                </span>
-                <MachineBadges labels={projectEntryMachineLabels(group.project, capabilities.platform)} />
-              </span>
+          <span className="flex min-w-0 flex-col">
+            <span className={primary.stale ? "truncate text-secondary" : "truncate"}>{name}</span>
+            <span className="flex min-w-0 items-center gap-1 text-small text-tertiary">
+              {primary.branchName ? (
+                <span className="max-w-[45%] truncate">{primary.branchName} ·</span>
+              ) : null}
+              <span className="truncate">{primary.hostLabel}</span>
+            </span>
+            <MachineBadges
+              labels={projectEntryMachineLabels(group.project, capabilities.platform)}
+            />
+          </span>
         }
         actions={
           <div className="group/workspace-actions relative size-7 shrink-0">
@@ -2010,18 +2189,23 @@ function WorkspaceChatSidebar({
           </div>
         }
       >
-            {visibleChats.map((summary) => renderSidebarChat(summary, true))}
-            {group.chats.length === 0 ? (
-              <SidebarListItem data-roving-item className="pl-9 text-secondary" title="No chats yet" disabled />
-            ) : null}
-            {remainingChatCount > 0 ? (
-              <SidebarListItem
-                data-roving-item
-                className="pl-9 text-secondary"
-                title={`Show ${remainingChatCount} more`}
-                onClick={() => setRevealedRemoteKeys((current) => new Set(current).add(projectKey))}
-              />
-            ) : null}
+        {visibleChats.map((summary) => renderSidebarChat(summary, true))}
+        {group.chats.length === 0 ? (
+          <SidebarListItem
+            data-roving-item
+            className="pl-9 text-secondary"
+            title="No chats yet"
+            disabled
+          />
+        ) : null}
+        {remainingChatCount > 0 ? (
+          <SidebarListItem
+            data-roving-item
+            className="pl-9 text-secondary"
+            title={`Show ${remainingChatCount} more`}
+            onClick={() => setRevealedRemoteKeys((current) => new Set(current).add(projectKey))}
+          />
+        ) : null}
       </RowGroup>
     );
   };
@@ -2037,7 +2221,9 @@ function WorkspaceChatSidebar({
   // drawn like its row in the full list, and every chat in it.
   const renderScopedProject = (workspace: Workspace) => {
     const chatsGroup = isNoWorkspace(workspace);
-    const name = chatsGroup ? NO_WORKSPACE_GROUP_LABEL : workspaceDisplayName(workspace, workspaces);
+    const name = chatsGroup
+      ? NO_WORKSPACE_GROUP_LABEL
+      : workspaceDisplayName(workspace, workspaces);
     const group = organized.projectGroups[0];
     const drafts = draftsByWorkspace.get(workspace.id) ?? [];
     return (
@@ -2062,9 +2248,14 @@ function WorkspaceChatSidebar({
               {!chatsGroup && workspace.folderPath ? (
                 <span className="flex min-w-0 items-center gap-1 text-small text-tertiary">
                   {workspace.managedWorktree?.branch ? (
-                    <span className="max-w-[45%] truncate">{workspace.managedWorktree.branch} ·</span>
+                    <span className="max-w-[45%] truncate">
+                      {workspace.managedWorktree.branch} ·
+                    </span>
                   ) : null}
-                  <WorkspacePathLabel path={workspace.folderPath} format={pathPreferences.workspacePathFormat} />
+                  <WorkspacePathLabel
+                    path={workspace.folderPath}
+                    format={pathPreferences.workspacePathFormat}
+                  />
                 </span>
               ) : null}
             </span>
@@ -2073,7 +2264,11 @@ function WorkspaceChatSidebar({
           {group ? (
             group.chats.map((summary) => renderSidebarChat(summary))
           ) : drafts.length === 0 ? (
-            <EmptyState placement="inline" title="No matches" description="Try a different search." />
+            <EmptyState
+              placement="inline"
+              title="No matches"
+              description="Try a different search."
+            />
           ) : null}
         </div>
       </div>
@@ -2082,7 +2277,8 @@ function WorkspaceChatSidebar({
   // After ‹ All workspaces, one row offers the design chat's workspace back,
   // while that workspace has chats to show.
   const restorableScopeWorkspace =
-    !scope && scopedLocalSidebar(restorableScopeWorkspaceId, workspaces, sidebarProjects, sidebarChats)
+    !scope &&
+    scopedLocalSidebar(restorableScopeWorkspaceId, workspaces, sidebarProjects, sidebarChats)
       ? workspaces.find((workspace) => workspace.id === restorableScopeWorkspaceId)
       : undefined;
   const restoreScopeRow = restorableScopeWorkspace ? (
@@ -2162,7 +2358,11 @@ function WorkspaceChatSidebar({
               className="dimmable relative z-1 flex min-h-0 shrink-0 flex-col empty:hidden"
             />
           ) : rowSelection.ids.length >= 2 ? (
-            <SelectionBar count={rowSelection.ids.length} onDelete={openBulkDelete} onClear={rowSelection.clear} />
+            <SelectionBar
+              count={rowSelection.ids.length}
+              onDelete={openBulkDelete}
+              onClear={rowSelection.clear}
+            />
           ) : undefined
         }
         searchable
@@ -2211,7 +2411,9 @@ function WorkspaceChatSidebar({
           onNewChatIn={() => execute("chat.newIn")}
           newChatInKeyShortcut={ariaKeyShortcut(commandBinding("chat.newIn"))}
           onNavigate={(to) => void navigate(to === "/bots" ? botListLocation() : { to })}
-          openBotShownBelow={botInbox.listed.some((entry) => entry.signals.isOpen && inboxEntriesByKey.has(entry.key))}
+          openBotShownBelow={botInbox.listed.some(
+            (entry) => entry.signals.isOpen && inboxEntriesByKey.has(entry.key),
+          )}
         />
 
         {hasHosts ? (
@@ -2344,7 +2546,9 @@ function WorkspaceChatSidebar({
                             searching || !canMoveProjectKey(organized.projectOrder, projectKey, -1)
                           }
                           onSelect={() =>
-                            commitProjectOrder(moveProjectKey(organized.projectOrder, projectKey, -1))
+                            commitProjectOrder(
+                              moveProjectKey(organized.projectOrder, projectKey, -1),
+                            )
                           }
                         >
                           Move up
@@ -2354,7 +2558,9 @@ function WorkspaceChatSidebar({
                             searching || !canMoveProjectKey(organized.projectOrder, projectKey, 1)
                           }
                           onSelect={() =>
-                            commitProjectOrder(moveProjectKey(organized.projectOrder, projectKey, 1))
+                            commitProjectOrder(
+                              moveProjectKey(organized.projectOrder, projectKey, 1),
+                            )
                           }
                         >
                           Move down
@@ -2375,8 +2581,12 @@ function WorkspaceChatSidebar({
                   }
                   const workspace = primary.workspace;
                   const chatsGroup = isNoWorkspace(workspace);
-                  const groupName = chatsGroup ? NO_WORKSPACE_GROUP_LABEL : workspaceDisplayName(workspace, workspaces);
-                  const secondaryLabel = chatsGroup ? undefined : workspaceSecondaryLabel(workspace, pathPreferences);
+                  const groupName = chatsGroup
+                    ? NO_WORKSPACE_GROUP_LABEL
+                    : workspaceDisplayName(workspace, workspaces);
+                  const secondaryLabel = chatsGroup
+                    ? undefined
+                    : workspaceSecondaryLabel(workspace, pathPreferences);
                   const explicitlyExpanded = expandedWorkspaceIds.has(workspace.id);
                   const expanded = searching || explicitlyExpanded;
                   return (
@@ -2387,125 +2597,153 @@ function WorkspaceChatSidebar({
                       dragProps={dragProps}
                       expanded={expanded}
                       icon={chatsGroup ? <MessageCircle /> : <Folder />}
-                      accessibleName={workspaceAccessibleName(workspace, pathPreferences, workspaces)}
+                      accessibleName={workspaceAccessibleName(
+                        workspace,
+                        pathPreferences,
+                        workspaces,
+                      )}
                       onToggle={() => toggleWorkspace(workspace.id)}
                       title={
-                            <span className="flex min-w-0 flex-col">
-                              <span className="truncate">{groupName}</span>
-                              {!chatsGroup && workspace.folderPath && pathPreferences.showWorkspacePaths ? (
-                                <span className="flex min-w-0 items-center gap-1 text-small text-tertiary">
-                                  {workspace.managedWorktree?.branch ? <span className="max-w-[45%] truncate">{workspace.managedWorktree.branch} ·</span> : null}
-                                  <WorkspacePathLabel path={workspace.folderPath} format={pathPreferences.workspacePathFormat} />
+                        <span className="flex min-w-0 flex-col">
+                          <span className="truncate">{groupName}</span>
+                          {!chatsGroup &&
+                          workspace.folderPath &&
+                          pathPreferences.showWorkspacePaths ? (
+                            <span className="flex min-w-0 items-center gap-1 text-small text-tertiary">
+                              {workspace.managedWorktree?.branch ? (
+                                <span className="max-w-[45%] truncate">
+                                  {workspace.managedWorktree.branch} ·
                                 </span>
-                              ) : secondaryLabel ? <span className="truncate text-small text-tertiary">{secondaryLabel}</span> : null}
-                              <MachineBadges labels={projectEntryMachineLabels(group.project, capabilities.platform)} />
+                              ) : null}
+                              <WorkspacePathLabel
+                                path={workspace.folderPath}
+                                format={pathPreferences.workspacePathFormat}
+                              />
                             </span>
+                          ) : secondaryLabel ? (
+                            <span className="truncate text-small text-tertiary">
+                              {secondaryLabel}
+                            </span>
+                          ) : null}
+                          <MachineBadges
+                            labels={projectEntryMachineLabels(group.project, capabilities.platform)}
+                          />
+                        </span>
                       }
                       actions={
                         <>
-                        <Button
-                          variant="transparent"
-                          size="small"
-                          iconOnly
-                          aria-label={chatsGroup ? "New chat without a workspace" : `New chat in ${groupName}`}
-                          disabled={Boolean(settingsBlockedReason) || appendReconciliationRequired}
-                          className="size-7 shrink-0 text-tertiary opacity-0 group-hover/workspace:opacity-100 group-focus-within/workspace:opacity-100 focus-visible:opacity-100"
-                          onClick={() => void newAgentInWorkspace(workspace.id)}
-                        >
-                          <Plus />
-                        </Button>
-                        <div className="group/workspace-actions relative size-7 shrink-0">
-                          <SidebarOverflowMenu
-                            ariaLabel={`Actions for ${workspaceAccessibleName(workspace, pathPreferences, workspaces)}`}
-                            triggerClassName="workspace-overflow-trigger pointer-events-none absolute inset-0 size-7 text-tertiary opacity-0 group-hover/workspace:pointer-events-auto group-hover/workspace:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100"
-                            contentClassName="w-64"
+                          <Button
+                            variant="transparent"
+                            size="small"
+                            iconOnly
+                            aria-label={
+                              chatsGroup
+                                ? "New chat without a workspace"
+                                : `New chat in ${groupName}`
+                            }
+                            disabled={
+                              Boolean(settingsBlockedReason) || appendReconciliationRequired
+                            }
+                            className="size-7 shrink-0 text-tertiary opacity-0 group-hover/workspace:opacity-100 group-focus-within/workspace:opacity-100 focus-visible:opacity-100"
+                            onClick={() => void newAgentInWorkspace(workspace.id)}
                           >
-                            <DropdownMenuItem
-                              disabled={
-                                Boolean(settingsBlockedReason) || appendReconciliationRequired
-                              }
-                              onSelect={() => void newAgentInWorkspace(workspace.id)}
+                            <Plus />
+                          </Button>
+                          <div className="group/workspace-actions relative size-7 shrink-0">
+                            <SidebarOverflowMenu
+                              ariaLabel={`Actions for ${workspaceAccessibleName(workspace, pathPreferences, workspaces)}`}
+                              triggerClassName="workspace-overflow-trigger pointer-events-none absolute inset-0 size-7 text-tertiary opacity-0 group-hover/workspace:pointer-events-auto group-hover/workspace:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100"
+                              contentClassName="w-64"
                             >
-                              New chat
-                            </DropdownMenuItem>
-                            {workspaceHasOwnSettings(workspace) ? (
-                              <DropdownMenuItem onSelect={() => openWorkspaceSettings(workspace.id)}>
-                                Workspace settings…
-                              </DropdownMenuItem>
-                            ) : null}
-                            <DropdownMenuItem
-                              disabled={workspaceSwitchBlocked || group.chats.length === 0}
-                              title={
-                                group.chats.length === 0
-                                  ? "Choose New chat to start this workspace."
-                                  : undefined
-                              }
-                              onSelect={() => openSidebarChat(latestProjectChat(group))}
-                            >
-                              Open latest chat
-                            </DropdownMenuItem>
-                            {!chatsGroup && workspace.folderPath ? (
                               <DropdownMenuItem
-                                onSelect={() => void revealWorkspace(workspace)}
+                                disabled={
+                                  Boolean(settingsBlockedReason) || appendReconciliationRequired
+                                }
+                                onSelect={() => void newAgentInWorkspace(workspace.id)}
                               >
-                                Show in file manager
+                                New chat
                               </DropdownMenuItem>
-                            ) : null}
-                            {moveItems}
-                            {/* The Chats group is a view over hidden folders: nothing to remove. */}
-                            {!chatsGroup && workspaces.length > 1 ? <DropdownMenuSeparator /> : null}
-                            {workspaces.length > 1 && workspace.managedWorktree ? (
+                              {workspaceHasOwnSettings(workspace) ? (
+                                <DropdownMenuItem
+                                  onSelect={() => openWorkspaceSettings(workspace.id)}
+                                >
+                                  Workspace settings…
+                                </DropdownMenuItem>
+                              ) : null}
                               <DropdownMenuItem
-                                disabled={workspaceActionBlocked}
-                                icon="trash"
-                                color="red"
-                                onSelect={() => setDeletingWorktree(workspace)}
+                                disabled={workspaceSwitchBlocked || group.chats.length === 0}
+                                title={
+                                  group.chats.length === 0
+                                    ? "Choose New chat to start this workspace."
+                                    : undefined
+                                }
+                                onSelect={() => openSidebarChat(latestProjectChat(group))}
                               >
-                                Delete worktree…
+                                Open latest chat
                               </DropdownMenuItem>
-                            ) : null}
-                            {!chatsGroup && workspaces.length > 1 && !workspace.managedWorktree ? (
-                              <DropdownMenuItem
-                                disabled={workspaceActionBlocked}
-                                icon="trash"
-                                color="red"
-                                onSelect={() => setRemovingWorkspace(workspace)}
-                              >
-                                Remove “{workspace.name}”
-                              </DropdownMenuItem>
-                            ) : null}
-                          </SidebarOverflowMenu>
-                        </div>
+                              {!chatsGroup && workspace.folderPath ? (
+                                <DropdownMenuItem onSelect={() => void revealWorkspace(workspace)}>
+                                  Show in file manager
+                                </DropdownMenuItem>
+                              ) : null}
+                              {moveItems}
+                              {/* The Chats group is a view over hidden folders: nothing to remove. */}
+                              {!chatsGroup && workspaces.length > 1 ? (
+                                <DropdownMenuSeparator />
+                              ) : null}
+                              {workspaces.length > 1 && workspace.managedWorktree ? (
+                                <DropdownMenuItem
+                                  disabled={workspaceActionBlocked}
+                                  icon="trash"
+                                  color="red"
+                                  onSelect={() => setDeletingWorktree(workspace)}
+                                >
+                                  Delete worktree…
+                                </DropdownMenuItem>
+                              ) : null}
+                              {!chatsGroup &&
+                              workspaces.length > 1 &&
+                              !workspace.managedWorktree ? (
+                                <DropdownMenuItem
+                                  disabled={workspaceActionBlocked}
+                                  icon="trash"
+                                  color="red"
+                                  onSelect={() => setRemovingWorkspace(workspace)}
+                                >
+                                  Remove “{workspace.name}”
+                                </DropdownMenuItem>
+                              ) : null}
+                            </SidebarOverflowMenu>
+                          </div>
                         </>
                       }
                     >
-                          {draftsByWorkspace.get(workspace.id)?.map((draft) => renderDraftRow(draft))}
-                          {visibleChats.map((summary) => renderSidebarChat(summary, true, explicitlyExpanded))}
-                          {group.chats.length === 0 &&
-                          !draftsByWorkspace.has(workspace.id) ? (
-                            <SidebarListItem
-                              data-roving-item
-                              className="pl-9 text-secondary"
-                              icon={<SquarePen />}
-                              title="New chat"
-                              disabled={
-                                Boolean(settingsBlockedReason) || appendReconciliationRequired
-                              }
-                              onClick={() => void newAgentInWorkspace(workspace.id)}
-                            />
-                          ) : null}
-                          {remainingChatCount > 0 ? (
-                            <SidebarListItem
-                              data-roving-item
-                              className="pl-9 text-secondary"
-                              title={`Show ${remainingChatCount} more`}
-                              onClick={() =>
-                                setFullyRevealedWorkspaceIds((current) =>
-                                  new Set(current).add(workspace.id),
-                                )
-                              }
-                            />
-                          ) : null}
+                      {draftsByWorkspace.get(workspace.id)?.map((draft) => renderDraftRow(draft))}
+                      {visibleChats.map((summary) =>
+                        renderSidebarChat(summary, true, explicitlyExpanded),
+                      )}
+                      {group.chats.length === 0 && !draftsByWorkspace.has(workspace.id) ? (
+                        <SidebarListItem
+                          data-roving-item
+                          className="pl-9 text-secondary"
+                          icon={<SquarePen />}
+                          title="New chat"
+                          disabled={Boolean(settingsBlockedReason) || appendReconciliationRequired}
+                          onClick={() => void newAgentInWorkspace(workspace.id)}
+                        />
+                      ) : null}
+                      {remainingChatCount > 0 ? (
+                        <SidebarListItem
+                          data-roving-item
+                          className="pl-9 text-secondary"
+                          title={`Show ${remainingChatCount} more`}
+                          onClick={() =>
+                            setFullyRevealedWorkspaceIds((current) =>
+                              new Set(current).add(workspace.id),
+                            )
+                          }
+                        />
+                      ) : null}
                     </RowGroup>
                   );
                 })
@@ -2711,7 +2949,8 @@ function WorkspaceChatSidebar({
             <Text variant="small" color="secondary">
               The clean checkout for “{deletingWorktree.name}” will be removed. Its branch is
               deleted only if it has no commits beyond where Aiden created it. Chats stay on disk.
-              Dirty worktrees are refused. Target: {deletingWorktree.folderPath ?? deletingWorktree.name}.
+              Dirty worktrees are refused. Target:{" "}
+              {deletingWorktree.folderPath ?? deletingWorktree.name}.
               {environmentPanel.editorState.workspaceId === deletingWorktree.id &&
               environmentPanel.editorState.dirty
                 ? ` The unsaved edit to ${environmentPanel.editorState.path ?? "the open file"} will be discarded.`

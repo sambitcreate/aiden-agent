@@ -84,7 +84,11 @@ export function AgentSlider({
   const fraction = drag ? drag.fraction : stopFraction(position.thumbIndex, count);
   const thumbIndex = drag ? drag.index : position.thumbIndex;
   const valueText = drag
-    ? agentSliderValueText(views, { stopIndex: drag.index, thumbIndex: drag.index, custom: false }, customDetail)
+    ? agentSliderValueText(
+        views,
+        { stopIndex: drag.index, thumbIndex: drag.index, custom: false },
+        customDetail,
+      )
     : agentSliderValueText(views, position, customDetail);
   const heading = shown ? shown.label : "Custom";
   const detail = shown
@@ -195,9 +199,7 @@ export function AgentSlider({
           aria-label={`Reset to ${home?.label ?? "the home stop"}`}
           title={`Reset to ${home?.label ?? "the home stop"}`}
           disabled={
-            disabled ||
-            !home?.available ||
-            (!position.custom && position.stopIndex === homeIndex)
+            disabled || !home?.available || (!position.custom && position.stopIndex === homeIndex)
           }
           onClick={() => {
             if (home?.available) onSelectStop(homeIndex);
@@ -228,7 +230,9 @@ export function AgentSlider({
             drag ? "transition-none" : "transition-[width,opacity] duration-(--motion-duration)",
             custom && "opacity-0",
           )}
-          style={{ width: `calc(${THUMB + INSET * 2}px + (100% - ${THUMB + INSET * 2}px) * ${fraction})` }}
+          style={{
+            width: `calc(${THUMB + INSET * 2}px + (100% - ${THUMB + INSET * 2}px) * ${fraction})`,
+          }}
         />
         {views.map((view, index) => {
           const lit = !custom && view.available && index <= thumbIndex;
@@ -280,7 +284,8 @@ export function AgentSlider({
           ref={(node) => {
             localThumbRef.current = node;
             if (typeof thumbRef === "function") thumbRef(node);
-            else if (thumbRef) (thumbRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+            else if (thumbRef)
+              (thumbRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
           }}
           role="slider"
           tabIndex={0}

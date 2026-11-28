@@ -2,10 +2,16 @@
 // "chat:delta" / "chat:done" / "chat:error" broadcasts (see llm-client).
 
 import { ipcMain, logger } from "../platform.js";
-import { reportChatMessageSent, reportDesignCommentsSent } from "../services/analytics/analytics-feature-reports.js";
+import {
+  reportChatMessageSent,
+  reportDesignCommentsSent,
+} from "../services/analytics/analytics-feature-reports.js";
 import { analyticsWorkspaceKind } from "../services/analytics/analytics-ids.js";
 import { configStore } from "../services/config-store.js";
-import { desktopChatExecutionOptions, startGenerationAndMaybeTitle } from "../services/chat-generation-start.js";
+import {
+  desktopChatExecutionOptions,
+  startGenerationAndMaybeTitle,
+} from "../services/chat-generation-start.js";
 import { isExplicitUserStop, parseChatCancelOrigin } from "../services/chat-cancel.js";
 import { chatTitleService } from "../services/chat-title.js";
 import { llmClient, type TurnSettingsSnapshot } from "../services/llm-client.js";
@@ -59,8 +65,12 @@ export function registerChatGenerationHandlers(): void {
                 owner,
                 desktopChatExecutionOptions(
                   messageTurnId,
-                  () => { accepted = true; },
-                  (snapshot) => { turnSettings = snapshot; },
+                  () => {
+                    accepted = true;
+                  },
+                  (snapshot) => {
+                    turnSettings = snapshot;
+                  },
                 ),
               ),
             startTitle: (input) => chatTitleService.startForFirstTurn(input),
@@ -128,29 +138,26 @@ export function registerChatGenerationHandlers(): void {
   // Shared foreground admission for mid-flight input (Remote Slice 2). The
   // Remote API inputs route reaches the same Mac-owned boundary; the renderer
   // document must own the generation just like chat:cancel.
-  ipcMain.handle(
-    "chat:admitRunInput",
-    async (event, streamId: unknown, input: unknown) => {
-      if (!isSafeSubagentIdentifier(streamId)) {
-        throw new Error("Invalid chat stream identifier.");
-      }
-      const parsed = parseChatRunInput(input);
-      const owner = chatGenerationOwner(event);
-      const result = await llmClient.admitChatRunInput({
-        streamId,
-        mode: parsed.mode,
-        text: parsed.text,
-        ...(parsed.inputSource ? { inputSource: parsed.inputSource } : {}),
-        ownerDocumentId: owner.documentId,
-      });
-      // A committed input mutates the transcript for every observing document,
-      // matching the remote path's chats:changed broadcast.
-      if (result.committed) {
-        ipcMain.broadcast("chats:changed", {});
-      }
-      return result;
-    },
-  );
+  ipcMain.handle("chat:admitRunInput", async (event, streamId: unknown, input: unknown) => {
+    if (!isSafeSubagentIdentifier(streamId)) {
+      throw new Error("Invalid chat stream identifier.");
+    }
+    const parsed = parseChatRunInput(input);
+    const owner = chatGenerationOwner(event);
+    const result = await llmClient.admitChatRunInput({
+      streamId,
+      mode: parsed.mode,
+      text: parsed.text,
+      ...(parsed.inputSource ? { inputSource: parsed.inputSource } : {}),
+      ownerDocumentId: owner.documentId,
+    });
+    // A committed input mutates the transcript for every observing document,
+    // matching the remote path's chats:changed broadcast.
+    if (result.committed) {
+      ipcMain.broadcast("chats:changed", {});
+    }
+    return result;
+  });
 
   // Resolve a pending tool-approval request ("ask" mode).
   ipcMain.handle(
@@ -259,8 +266,12 @@ export function registerChatGenerationHandlers(): void {
           chatId: chatTicket.chatId,
           liveStream,
           ...(chatTicket.draftText !== undefined ? { draftText: chatTicket.draftText } : {}),
-          ...(chatTicket.draftAttachments !== undefined ? { draftAttachments: chatTicket.draftAttachments } : {}),
-          ...(chatTicket.queuedMessages !== undefined ? { queuedMessages: chatTicket.queuedMessages } : {}),
+          ...(chatTicket.draftAttachments !== undefined
+            ? { draftAttachments: chatTicket.draftAttachments }
+            : {}),
+          ...(chatTicket.queuedMessages !== undefined
+            ? { queuedMessages: chatTicket.queuedMessages }
+            : {}),
         };
       }
       return null;

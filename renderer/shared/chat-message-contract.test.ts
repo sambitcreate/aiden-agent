@@ -21,7 +21,7 @@ test("append reconciliation errors survive Electron error wrapping without false
   );
   assert.equal(
     appendReconciliationFailureKind(
-      new Error('Shadowed by configured skill “AIDEN_APPEND_RECONCILIATION_REQUIRED”.'),
+      new Error("Shadowed by configured skill “AIDEN_APPEND_RECONCILIATION_REQUIRED”."),
     ),
     null,
   );

@@ -4,20 +4,34 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createChatStore } from "./chat-store-core.js";
-import { isEmptyChatMigrationState, isLegacyEmptyWorkspaceChat, migrateEmptyWorkspaceChats, type EmptyChatMigrationState } from "./empty-chat-migration.js";
+import {
+  isEmptyChatMigrationState,
+  isLegacyEmptyWorkspaceChat,
+  migrateEmptyWorkspaceChats,
+  type EmptyChatMigrationState,
+} from "./empty-chat-migration.js";
 import type { Chat } from "./types.js";
 
 const empty = (id: string, overrides: Partial<Chat> = {}): Chat => ({
-  id, title: "New chat", workspaceId: "default", createdAt: 1, updatedAt: 1, messages: [], ...overrides,
+  id,
+  title: "New chat",
+  workspaceId: "default",
+  createdAt: 1,
+  updatedAt: 1,
+  messages: [],
+  ...overrides,
 });
-const eligible = async (chat: Chat) => isLegacyEmptyWorkspaceChat(chat, new Set(["default", "worktree"]), new Set(["scheduled"]));
+const eligible = async (chat: Chat) =>
+  isLegacyEmptyWorkspaceChat(chat, new Set(["default", "worktree"]), new Set(["scheduled"]));
 function harness(chats: Chat[]) {
   const records = new Map(chats.map((chat) => [chat.id, chat]));
   let state: EmptyChatMigrationState = { version: 1, pending: null, complete: false };
   const removed: string[] = [];
   const deps = {
     load: async () => structuredClone(state),
-    save: async (next: EmptyChatMigrationState) => { state = structuredClone(next); },
+    save: async (next: EmptyChatMigrationState) => {
+      state = structuredClone(next);
+    },
     list: async () => [...records.values()],
     get: async (id: string) => records.get(id) ?? null,
     eligible,
@@ -32,13 +46,20 @@ function harness(chats: Chat[]) {
 
 test("only zero-message ordinary workspace chats qualify, regardless of title", async () => {
   const h = harness([
-    empty("blank"), empty("renamed", { title: "User title" }), empty("legacy", { workspaceId: undefined }),
+    empty("blank"),
+    empty("renamed", { title: "User title" }),
+    empty("legacy", { workspaceId: undefined }),
     empty("tree", { workspaceId: "worktree" }),
-    empty("bot", { botId: "bot-1" }), empty("assistant", { workspaceId: "assistant" }),
-    empty("telegram-123-default"), empty("assistant-live:123", { workspaceId: "assistant" }),
-    empty("unknown", { workspaceId: "missing" }), empty("scheduled"),
+    empty("bot", { botId: "bot-1" }),
+    empty("assistant", { workspaceId: "assistant" }),
+    empty("telegram-123-default"),
+    empty("assistant-live:123", { workspaceId: "assistant" }),
+    empty("unknown", { workspaceId: "missing" }),
+    empty("scheduled"),
     empty("message", { messages: [{ id: "m", role: "user", content: "", createdAt: 1 }] }),
-    empty("assistant-message", { messages: [{ id: "m", role: "assistant", content: "hello", createdAt: 1 }] }),
+    empty("assistant-message", {
+      messages: [{ id: "m", role: "assistant", content: "hello", createdAt: 1 }],
+    }),
   ]);
   assert.equal(await migrateEmptyWorkspaceChats(h.deps), 4);
   assert.deepEqual(h.removed, ["blank", "renamed", "legacy", "tree"]);
@@ -53,11 +74,17 @@ test("partial deletion resumes only original snapshot, rechecking nonempty chats
   const remove = h.deps.remove;
   let failed = false;
   h.deps.remove = async (id, check) => {
-    if (id === "two" && !failed) { failed = true; throw new Error("disk unavailable"); }
+    if (id === "two" && !failed) {
+      failed = true;
+      throw new Error("disk unavailable");
+    }
     await remove(id, check);
   };
   await assert.rejects(migrateEmptyWorkspaceChats(h.deps), /disk unavailable/u);
-  assert.deepEqual(h.state().pending?.map((candidate) => candidate.id), ["two", "three"]);
+  assert.deepEqual(
+    h.state().pending?.map((candidate) => candidate.id),
+    ["two", "three"],
+  );
   h.records.set("newer", empty("newer"));
   h.records.get("three")!.messages.push({ id: "m", role: "user", content: "sent", createdAt: 2 });
   assert.equal(await migrateEmptyWorkspaceChats(h.deps), 1);
@@ -69,11 +96,16 @@ test("partial deletion resumes only original snapshot, rechecking nonempty chats
 test("failure saving initial snapshot deletes nothing; failure recording deletion is retryable", async () => {
   const h = harness([empty("one")]);
   const save = h.deps.save;
-  h.deps.save = async () => { throw new Error("receipt unavailable"); };
+  h.deps.save = async () => {
+    throw new Error("receipt unavailable");
+  };
   await assert.rejects(migrateEmptyWorkspaceChats(h.deps), /snapshot could not be saved/u);
   assert.deepEqual(h.removed, []);
   let writes = 0;
-  h.deps.save = async (next) => { if (++writes === 2) throw new Error("receipt unavailable"); await save(next); };
+  h.deps.save = async (next) => {
+    if (++writes === 2) throw new Error("receipt unavailable");
+    await save(next);
+  };
   await assert.rejects(migrateEmptyWorkspaceChats(h.deps), /receipt unavailable/u);
   assert.deepEqual(h.removed, ["one"]);
   h.deps.save = save;
@@ -82,11 +114,15 @@ test("failure saving initial snapshot deletes nothing; failure recording deletio
 });
 
 test("corrupt and incomplete migration receipts fail closed", () => {
-  for (const state of [null, {}, { version: 2, pending: [], complete: true },
+  for (const state of [
+    null,
+    {},
+    { version: 2, pending: [], complete: true },
     { version: 1, pending: ["../chat"], complete: false },
     { version: 1, pending: ["a", "a"], complete: false },
     { version: 1, pending: ["a"], complete: true },
-    { version: 1, pending: null, complete: true }]) {
+    { version: 1, pending: null, complete: true },
+  ]) {
     assert.equal(isEmptyChatMigrationState(state), false);
   }
 });
@@ -101,26 +137,39 @@ test("real chat files and summary rows are deleted while corrupt and populated p
     await store.appendMessage("populated", { role: "user", content: "hello" });
     await fs.writeFile(path.join(root, "corrupt.json"), "{broken");
     const h = harness([]);
-    assert.equal(await migrateEmptyWorkspaceChats({ ...h.deps,
-      list: () => store.list(), get: (id) => store.get(id),
-      remove: (id, check) => store.remove(id, async (chat) => { if (chat) await check(chat); }),
-    }), 1);
+    assert.equal(
+      await migrateEmptyWorkspaceChats({
+        ...h.deps,
+        list: () => store.list(),
+        get: (id) => store.get(id),
+        remove: (id, check) =>
+          store.remove(id, async (chat) => {
+            if (chat) await check(chat);
+          }),
+      }),
+      1,
+    );
     await assert.rejects(fs.stat(path.join(root, "empty.json")), { code: "ENOENT" });
     // The unreadable payload is set aside under a hidden sibling, never deleted.
-    const kept = (await fs.readdir(root)).filter((name) => name.startsWith(".corrupt.json.") && name.endsWith(".corrupt"));
+    const kept = (await fs.readdir(root)).filter(
+      (name) => name.startsWith(".corrupt.json.") && name.endsWith(".corrupt"),
+    );
     assert.equal(kept.length, 1);
     assert.equal(await fs.readFile(path.join(root, kept[0]!), "utf8"), "{broken");
     const reopened = createChatStore(async () => root);
     assert.equal((await reopened.get("populated"))?.messages[0]?.content, "hello");
     assert.ok(!(await reopened.listSummaryMetadata()).some((chat) => chat.id === "empty"));
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
-
 
 test("resume preserves a replacement chat reusing a candidate ID", async () => {
   const h = harness([empty("reused")]);
   const remove = h.deps.remove;
-  h.deps.remove = async () => { throw new Error("interrupted"); };
+  h.deps.remove = async () => {
+    throw new Error("interrupted");
+  };
   await assert.rejects(migrateEmptyWorkspaceChats(h.deps), /interrupted/u);
   h.records.set("reused", empty("reused", { createdAt: 2, updatedAt: 2 }));
   h.deps.remove = remove;
@@ -137,7 +186,10 @@ test("eligibility errors occur after snapshot and preserve candidates without a 
     return true;
   };
   const warnings: unknown[] = [];
-  assert.equal(await migrateEmptyWorkspaceChats({ ...h.deps, onPreserved: (error) => warnings.push(error) }), 1);
+  assert.equal(
+    await migrateEmptyWorkspaceChats({ ...h.deps, onPreserved: (error) => warnings.push(error) }),
+    1,
+  );
   assert.equal(warnings.length, 1);
   assert.ok(h.records.has("uncertain"));
   assert.equal(h.state().complete, true);
@@ -149,8 +201,12 @@ test("eligibility errors occur after snapshot and preserve candidates without a 
 
 test("initial enumeration errors use the startup-blocking snapshot error", async () => {
   const h = harness([empty("one")]);
-  h.deps.list = async () => { throw new Error("unreadable index"); };
-  await assert.rejects(migrateEmptyWorkspaceChats(h.deps), { name: "EmptyChatMigrationSnapshotError" });
+  h.deps.list = async () => {
+    throw new Error("unreadable index");
+  };
+  await assert.rejects(migrateEmptyWorkspaceChats(h.deps), {
+    name: "EmptyChatMigrationSnapshotError",
+  });
   assert.equal(h.state().pending, null);
   assert.deepEqual(h.removed, []);
 });
@@ -158,7 +214,10 @@ test("initial enumeration errors use the startup-blocking snapshot error", async
 test("unreadable payloads are preserved without preventing healthy empty cleanup", async () => {
   const h = harness([empty("unreadable"), empty("healthy")]);
   const get = h.deps.get;
-  h.deps.get = async (id) => { if (id === "unreadable") throw new Error("unreadable payload"); return get(id); };
+  h.deps.get = async (id) => {
+    if (id === "unreadable") throw new Error("unreadable payload");
+    return get(id);
+  };
   assert.equal(await migrateEmptyWorkspaceChats(h.deps), 1);
   assert.ok(h.records.has("unreadable"));
   assert.equal(h.state().complete, true);
@@ -167,7 +226,10 @@ test("unreadable payloads are preserved without preventing healthy empty cleanup
 test("cross-store final assertion does not reopen already-deleted private stores", async () => {
   const h = harness([empty("one")]);
   let eligibilityReads = 0;
-  h.deps.eligible = async () => { assert.equal(++eligibilityReads, 1); return true; };
+  h.deps.eligible = async () => {
+    assert.equal(++eligibilityReads, 1);
+    return true;
+  };
   const remove = h.deps.remove;
   h.deps.remove = async (id, check) => {
     await check(h.records.get(id)!); // pre-delete fence

@@ -1,15 +1,12 @@
 import path from "node:path";
 
-export const GEMINI_LIVE_CAPTURE_ACCEPTANCE_ENV =
-  "AIDEN_GEMINI_LIVE_DISPLAY_CAPTURE_ACCEPTANCE";
+export const GEMINI_LIVE_CAPTURE_ACCEPTANCE_ENV = "AIDEN_GEMINI_LIVE_DISPLAY_CAPTURE_ACCEPTANCE";
 export const GEMINI_LIVE_CAPTURE_ACCEPTANCE_TOKEN_ENV =
   "AIDEN_GEMINI_LIVE_DISPLAY_CAPTURE_ACCEPTANCE_TOKEN";
 export const GEMINI_LIVE_CAPTURE_ACCEPTANCE_PROFILE_ENV =
   "AIDEN_GEMINI_LIVE_DISPLAY_CAPTURE_ACCEPTANCE_PROFILE";
-export const GEMINI_LIVE_CAPTURE_ACCEPTANCE_SWITCH =
-  "aiden-gemini-live-display-capture-acceptance";
-export const GEMINI_LIVE_CAPTURE_ACCEPTANCE_RECEIPT =
-  "gemini-live-display-capture-acceptance.json";
+export const GEMINI_LIVE_CAPTURE_ACCEPTANCE_SWITCH = "aiden-gemini-live-display-capture-acceptance";
+export const GEMINI_LIVE_CAPTURE_ACCEPTANCE_RECEIPT = "gemini-live-display-capture-acceptance.json";
 
 const TOKEN_PATTERN = /^[0-9a-f]{64}$/u;
 
@@ -95,9 +92,10 @@ export interface DisplayCaptureAcceptanceEvidence {
   replacementDocumentDenied: boolean;
 }
 
-export function evaluateDisplayCaptureAcceptance(
-  evidence: DisplayCaptureAcceptanceEvidence,
-): { accepted: boolean; checks: string[] } {
+export function evaluateDisplayCaptureAcceptance(evidence: DisplayCaptureAcceptanceEvidence): {
+  accepted: boolean;
+  checks: string[];
+} {
   const checks = [
     evidence.displayPermissionPath && "display_permission_path",
     evidence.externalSourceEnded && "external_source_ended",
@@ -108,8 +106,7 @@ export function evaluateDisplayCaptureAcceptance(
       "picker_cancellation_rejected",
     evidence.navigationRejected && "replacement_navigation_rejected",
     evidence.replacementDocumentDenied && "replacement_document_denied",
-    evidence.replacementChooserFallbackRequests === 0 &&
-      "replacement_without_chooser_fallback",
+    evidence.replacementChooserFallbackRequests === 0 && "replacement_without_chooser_fallback",
   ].filter((value): value is string => typeof value === "string");
   return { accepted: checks.length === 8, checks };
 }

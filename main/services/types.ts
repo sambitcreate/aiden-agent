@@ -4,7 +4,10 @@ import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
 import type { BotRoutineFailure } from "../../renderer/shared/bot-routine-failure.js";
 import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
 import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
-import type { CompactionEngine, CompactionModelOverrides } from "../../renderer/shared/compaction.js";
+import type {
+  CompactionEngine,
+  CompactionModelOverrides,
+} from "../../renderer/shared/compaction.js";
 // Shared backend/renderer data types for the AI chat client.
 
 import type { AppearanceConfig } from "../../renderer/shared/appearance.js";
@@ -18,7 +21,11 @@ import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
-import type { ChatHtmlArtifactV1, HtmlArtifactPlacementV1, ChatImagePlacementV1 } from "../../renderer/shared/chat-artifacts.js";
+import type {
+  ChatHtmlArtifactV1,
+  HtmlArtifactPlacementV1,
+  ChatImagePlacementV1,
+} from "../../renderer/shared/chat-artifacts.js";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import type { VisualSnapshotRefV1 } from "../../renderer/shared/visual-snapshots.js";
 import type { GrabbedElementContextV1 } from "../../renderer/shared/browser-element-grab.js";
@@ -414,11 +421,7 @@ export interface ModelCost {
   cacheWrite?: number;
 }
 
-export type ModelMetadataSource =
-  | "local"
-  | "provider"
-  | "models-dev"
-  | "fallback";
+export type ModelMetadataSource = "local" | "provider" | "models-dev" | "fallback";
 
 /** Normalized model metadata after applying local and bundled-source precedence. */
 export interface ModelInfo {

@@ -17,7 +17,10 @@
  *   rejected with a ValidationException, so a model outside the table keeps the
  *   default lifetime.
  */
-export const LONG_PROMPT_CACHE_PROVIDER_IDS: readonly string[] = Object.freeze(["anthropic", "amazon-bedrock"]);
+export const LONG_PROMPT_CACHE_PROVIDER_IDS: readonly string[] = Object.freeze([
+  "anthropic",
+  "amazon-bedrock",
+]);
 
 export const LONG_PROMPT_CACHE_TTL_MS = 60 * 60_000;
 
@@ -34,19 +37,28 @@ interface RetentionModel {
 }
 
 // Pi 1.5.2 sends the hour for any caching Claude on Bedrock, so this is the only gate.
-const BEDROCK_HOUR_CLAUDE = /claude-(?:(?:opus|haiku)-(?:4-[5-9]|5)|sonnet-(?:4-[6-9]|5)|(?:fable|mythos)-5)(?:[-.:@]|$)/u;
+const BEDROCK_HOUR_CLAUDE =
+  /claude-(?:(?:opus|haiku)-(?:4-[5-9]|5)|sonnet-(?:4-[6-9]|5)|(?:fable|mythos)-5)(?:[-.:@]|$)/u;
 
 /** Whether Pi sends an hour-long cache for this resolved model when asked for "long". */
 export function supportsLongPromptCacheRetention(model: RetentionModel): boolean {
   if (!providerSupportsLongPromptCache(model.provider)) return false;
   const names = [model.id, model.name ?? ""].map((value) => value.toLowerCase());
   if (model.provider === "anthropic") {
-    const compat = model.compat && typeof model.compat === "object"
-      ? (model.compat as { supportsLongCacheRetention?: unknown }).supportsLongCacheRetention
-      : undefined;
-    return model.api === "anthropic-messages" && compat !== false && names.some((value) => value.includes("claude"));
+    const compat =
+      model.compat && typeof model.compat === "object"
+        ? (model.compat as { supportsLongCacheRetention?: unknown }).supportsLongCacheRetention
+        : undefined;
+    return (
+      model.api === "anthropic-messages" &&
+      compat !== false &&
+      names.some((value) => value.includes("claude"))
+    );
   }
-  return model.api === "bedrock-converse-stream" && names.some((value) => BEDROCK_HOUR_CLAUDE.test(value));
+  return (
+    model.api === "bedrock-converse-stream" &&
+    names.some((value) => BEDROCK_HOUR_CLAUDE.test(value))
+  );
 }
 
 /** The retention a foreground chat request asks for under the person's setting. */
@@ -54,5 +66,7 @@ export function chatPromptCacheRetention(
   settings: { longPromptCacheRetention?: boolean },
   model: RetentionModel,
 ): "short" | "long" {
-  return settings.longPromptCacheRetention === true && supportsLongPromptCacheRetention(model) ? "long" : "short";
+  return settings.longPromptCacheRetention === true && supportsLongPromptCacheRetention(model)
+    ? "long"
+    : "short";
 }

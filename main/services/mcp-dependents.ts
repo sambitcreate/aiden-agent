@@ -36,7 +36,9 @@ export function scheduledTasksUsingMcpServer(
 export async function botsGrantingMcpServer(
   serverId: string,
   bots: readonly McpDependent[],
-  customBinding: (botId: string) => Promise<{ connections: ReadonlyArray<{ sourceId: string }> } | undefined>,
+  customBinding: (
+    botId: string,
+  ) => Promise<{ connections: ReadonlyArray<{ sourceId: string }> } | undefined>,
 ): Promise<McpDependent[]> {
   const dependents: McpDependent[] = [];
   for (const bot of bots) {

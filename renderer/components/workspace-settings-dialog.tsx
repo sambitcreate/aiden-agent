@@ -83,7 +83,10 @@ interface OpenRequest {
 const openListeners = new Set<(request: OpenRequest) => void>();
 
 /** Opens Workspace settings for one workspace, on the given tab. */
-export function openWorkspaceSettings(workspaceId: string, tab: WorkspaceSettingsTab = "general"): void {
+export function openWorkspaceSettings(
+  workspaceId: string,
+  tab: WorkspaceSettingsTab = "general",
+): void {
   for (const listener of openListeners) listener({ workspaceId, tab });
 }
 
@@ -95,8 +98,16 @@ const TABS: ReadonlyArray<{ id: WorkspaceSettingsTab; title: string; icon: React
 
 // Access is separate from approvals (plan §3.1): a workspace either lets its
 // chats work in the folder, under the approval mode, or is Chat only.
-const ACCESS_OPTIONS: ReadonlyArray<{ value: "work" | "none"; label: string; description: string }> = [
-  { value: "work", label: "Work in this folder", description: "Chats can read, change files and run commands here, as Approvals allow." },
+const ACCESS_OPTIONS: ReadonlyArray<{
+  value: "work" | "none";
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "work",
+    label: "Work in this folder",
+    description: "Chats can read, change files and run commands here, as Approvals allow.",
+  },
   { value: "none", label: "Chat only", description: "Chats can't read or change this folder." },
 ];
 
@@ -124,13 +135,17 @@ function useWorkspacePatch(workspaceId: string | undefined) {
       if (!workspaceId) return;
       const previous = qc.getQueryData<Workspace[]>(queryKeys.workspaces);
       qc.setQueryData<Workspace[]>(queryKeys.workspaces, (list) =>
-        list?.map((workspace) => (workspace.id === workspaceId ? patchedWorkspace(workspace, patch) : workspace)),
+        list?.map((workspace) =>
+          workspace.id === workspaceId ? patchedWorkspace(workspace, patch) : workspace,
+        ),
       );
       try {
         await workspacesApi.update(workspaceId, patch);
       } catch (error) {
         qc.setQueryData(queryKeys.workspaces, previous);
-        toast.error(error instanceof Error && error.message ? `${failure} ${error.message}` : failure);
+        toast.error(
+          error instanceof Error && error.message ? `${failure} ${error.message}` : failure,
+        );
       } finally {
         void qc.invalidateQueries({ queryKey: queryKeys.workspaces });
         if ("disabledSkills" in patch || "permission" in patch) {
@@ -155,7 +170,8 @@ export function WorkspaceSettingsDialog() {
   const workspace = workspaceHasOwnSettings(found) ? found : undefined;
 
   const show = React.useCallback((next: OpenRequest) => {
-    returnTo.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    returnTo.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setRequest(next);
     setTab(next.tab);
     setOpen(true);
@@ -185,37 +201,45 @@ export function WorkspaceSettingsDialog() {
   // Folder access, memory, skills and connectors are the user's to change.
   return (
     <LiveGuard guard="you" wrap={false}>
-    <Dialog
-      open={open && Boolean(workspace)}
-      onOpenChange={setOpen}
-      size="wide"
-      title="Workspace settings"
-      description={
-        workspace ? (
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-primary">{workspace.name}</span>
-            {workspace.folderPath ? (
-              <span className="min-w-0 truncate text-tertiary" title={workspace.folderPath}>
-                · {workspace.folderPath}
-              </span>
-            ) : null}
-          </span>
-        ) : null
-      }
-      confirmHidden
-      cancelLabel="Done"
-      returnFocus={() => returnTo.current}
-      onEscapeKeyDown={(event) => {
-        // Escape in an edited name field undoes the edit instead of closing.
-        if (event.target instanceof HTMLElement && event.target.dataset.escapeReverts === "true") {
-          event.preventDefault();
+      <Dialog
+        open={open && Boolean(workspace)}
+        onOpenChange={setOpen}
+        size="wide"
+        title="Workspace settings"
+        description={
+          workspace ? (
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-primary">{workspace.name}</span>
+              {workspace.folderPath ? (
+                <span className="min-w-0 truncate text-tertiary" title={workspace.folderPath}>
+                  · {workspace.folderPath}
+                </span>
+              ) : null}
+            </span>
+          ) : null
         }
-      }}
-    >
-      {workspace ? (
-        <WorkspaceSettingsBody workspace={workspace} tab={tab} onTabChange={setTab} onClose={() => setOpen(false)} />
-      ) : null}
-    </Dialog>
+        confirmHidden
+        cancelLabel="Done"
+        returnFocus={() => returnTo.current}
+        onEscapeKeyDown={(event) => {
+          // Escape in an edited name field undoes the edit instead of closing.
+          if (
+            event.target instanceof HTMLElement &&
+            event.target.dataset.escapeReverts === "true"
+          ) {
+            event.preventDefault();
+          }
+        }}
+      >
+        {workspace ? (
+          <WorkspaceSettingsBody
+            workspace={workspace}
+            tab={tab}
+            onTabChange={setTab}
+            onClose={() => setOpen(false)}
+          />
+        ) : null}
+      </Dialog>
     </LiveGuard>
   );
 }
@@ -319,18 +343,16 @@ export function WorkspaceApprovalFields({
   const globalMode = effectiveApprovalMode(settings.data, usableModel);
   const policy = workspaceApprovalPolicy(workspace, globalMode);
   const choice: WorkspaceModeChoice = policy.customized ? policy.mode : "global";
-  const modes = APPROVAL_MODES.filter((mode) => mode !== "auto" || usableModel || policy.mode === "auto");
+  const modes = APPROVAL_MODES.filter(
+    (mode) => mode !== "auto" || usableModel || policy.mode === "auto",
+  );
   const grants = MAC_GRANT_CLASSES.filter((kind) => policy.macGrants.has(kind));
   const help = approvalModeHelp(policy.mode, localComputerNoun(useAppCapabilities().platform));
   return (
     <>
       <Field
         label="Approvals"
-        description={
-          policy.customized
-            ? help
-            : `Follows Settings → Approvals. ${help}`
-        }
+        description={policy.customized ? help : `Follows Settings → Approvals. ${help}`}
       >
         <Select
           value={choice}
@@ -356,12 +378,18 @@ export function WorkspaceApprovalFields({
         </Select>
       </Field>
       {grants.map((kind) => (
-        <Field key={kind} label={MAC_GRANT_LABELS[kind]} description="Allowed in this workspace without asking.">
+        <Field
+          key={kind}
+          label={MAC_GRANT_LABELS[kind]}
+          description="Allowed in this workspace without asking."
+        >
           <Button
             variant="transparent"
             size="small"
             aria-label={`Remove: ${MAC_GRANT_LABELS[kind]}`}
-            onClick={() => void onPatch({ revokeMacGrant: kind }, "Couldn't remove that permission.")}
+            onClick={() =>
+              void onPatch({ revokeMacGrant: kind }, "Couldn't remove that permission.")
+            }
           >
             Remove
           </Button>
@@ -390,7 +418,8 @@ function GeneralTab({ workspace, onClose }: { workspace: Workspace; onClose: () 
       setName(workspace.name);
       return;
     }
-    if (trimmed !== workspace.name) void patch({ name: trimmed }, "Couldn't rename this workspace.");
+    if (trimmed !== workspace.name)
+      void patch({ name: trimmed }, "Couldn't rename this workspace.");
   };
 
   return (
@@ -429,7 +458,9 @@ function GeneralTab({ workspace, onClose }: { workspace: Workspace; onClose: () 
               size="small"
               onClick={() => {
                 void workspacesApi.openFolder(workspace.id).catch((error: unknown) => {
-                  toast.error(error instanceof Error ? error.message : "Couldn't open this folder.");
+                  toast.error(
+                    error instanceof Error ? error.message : "Couldn't open this folder.",
+                  );
                 });
               }}
             >
@@ -528,7 +559,13 @@ function ListHeader({
       {showSearch ? <ListSearchField noun={noun} value={query} onChange={onQuery} /> : null}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="transparent" size="small" iconOnly aria-label={`More ${noun} actions`} disabled={allDisabled}>
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label={`More ${noun} actions`}
+            disabled={allDisabled}
+          >
             <MoreHorizontal className="size-4" />
           </Button>
         </DropdownMenuTrigger>
@@ -556,7 +593,10 @@ function SkillsTab({ workspace, onClose }: { workspace: Workspace; onClose: () =
   const patch = useWorkspacePatch(workspace.id);
   const [query, setQuery] = React.useState("");
   const globallyOff = settings.data?.skillsEnabled === false;
-  const off = React.useMemo(() => new Set(workspace.disabledSkills ?? []), [workspace.disabledSkills]);
+  const off = React.useMemo(
+    () => new Set(workspace.disabledSkills ?? []),
+    [workspace.disabledSkills],
+  );
   const all = choices.data ?? [];
   const switchable = all.filter((skill) => skill.available && !skill.userOnly);
   const onCount = switchable.filter((skill) => !off.has(skill.key)).length;
@@ -597,7 +637,12 @@ function SkillsTab({ workspace, onClose }: { workspace: Workspace; onClose: () =
         query={query}
         onQuery={setQuery}
         showSearch={all.length > LIST_SEARCH_THRESHOLD}
-        onAll={(turnOff) => setOff(switchable.map((skill) => skill.key), turnOff)}
+        onAll={(turnOff) =>
+          setOff(
+            switchable.map((skill) => skill.key),
+            turnOff,
+          )
+        }
         allDisabled={switchable.length === 0}
         noun="skills"
       />
@@ -640,7 +685,10 @@ function SkillsTab({ workspace, onClose }: { workspace: Workspace; onClose: () =
               return (
                 <React.Fragment key={skill.key}>
                   {index > 0 ? <Separator className="mx-4 w-auto" /> : null}
-                  <div className="flex items-center gap-3 px-4 py-3" data-workspace-skill={skill.key}>
+                  <div
+                    className="flex items-center gap-3 px-4 py-3"
+                    data-workspace-skill={skill.key}
+                  >
                     <div className="min-w-0 flex-1">
                       <div className="flex min-w-0 items-center gap-2">
                         <Text variant="strong" truncate className="block">
@@ -686,7 +734,10 @@ function ConnectorsTab({ workspace, onClose }: { workspace: Workspace; onClose: 
     [workspace.disabledMcpServerIds],
   );
   const all = servers.data ?? [];
-  const rows = all.map((server) => ({ server, view: connectorRowView(server, off.has(server.id)) }));
+  const rows = all.map((server) => ({
+    server,
+    view: connectorRowView(server, off.has(server.id)),
+  }));
   const switchable = rows.filter(({ view }) => !view.lockedBySettings);
   const onCount = switchable.filter(({ view }) => view.on).length;
   const needle = query.trim().toLocaleLowerCase();
@@ -713,12 +764,18 @@ function ConnectorsTab({ workspace, onClose }: { workspace: Workspace; onClose: 
         query={query}
         onQuery={setQuery}
         showSearch={all.length > LIST_SEARCH_THRESHOLD}
-        onAll={(turnOff) => setOff(switchable.map(({ server }) => server.id), turnOff)}
+        onAll={(turnOff) =>
+          setOff(
+            switchable.map(({ server }) => server.id),
+            turnOff,
+          )
+        }
         allDisabled={switchable.length === 0}
         noun="connectors"
       />
       <Text variant="small" color="secondary" className="mb-4 block px-1">
-        Chats here can use only the connectors that are on. Bots and scheduled tasks keep their own choices.
+        Chats here can use only the connectors that are on. Bots and scheduled tasks keep their own
+        choices.
       </Text>
       {servers.isError ? (
         <Callout color="red">
@@ -749,13 +806,17 @@ function ConnectorsTab({ workspace, onClose }: { workspace: Workspace; onClose: 
       ) : (
         <FieldSet className="mb-5">
           {shown.map(({ server, view }, index) => {
-            const status = server.enabled && view.on ? mcpLiveStatusView(live.get(server.id), true) : null;
+            const status =
+              server.enabled && view.on ? mcpLiveStatusView(live.get(server.id), true) : null;
             const failing = status?.tone === "red";
             const name = server.name || "Untitled connector";
             return (
               <React.Fragment key={server.id}>
                 {index > 0 ? <Separator className="mx-4 w-auto" /> : null}
-                <div className="flex items-center gap-3 px-4 py-3" data-workspace-connector={server.id}>
+                <div
+                  className="flex items-center gap-3 px-4 py-3"
+                  data-workspace-connector={server.id}
+                >
                   <div
                     aria-hidden
                     className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-control text-strong"

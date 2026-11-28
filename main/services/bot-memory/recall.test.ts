@@ -2,20 +2,36 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Message } from "@earendil-works/pi-ai";
-import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
-import { Harness, MemoryStorage, type Conversation, type EntryRecord } from "@earendil-works/pi-durable";
+import {
+  fauxAssistantMessage,
+  fauxToolCall,
+  type FauxResponseStep,
+} from "@earendil-works/pi-ai/providers/faux";
+import {
+  Harness,
+  MemoryStorage,
+  type Conversation,
+  type EntryRecord,
+} from "@earendil-works/pi-durable";
 import { createBotRegistry } from "../bot-runtime/bot-extension.js";
 import { BOT_NOTICE_ENTRY_KIND } from "../bot-runtime/bot-session-service.js";
 import { recordingDeps } from "../bot-runtime/test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor } from "../bot-runtime/test-support/faux.js";
-import { BOT_RECALL_EXCERPT_CHARS, botRecallToolEntry, recallTerms, searchBotHistory } from "./recall.js";
+import {
+  BOT_RECALL_EXCERPT_CHARS,
+  botRecallToolEntry,
+  recallTerms,
+  searchBotHistory,
+} from "./recall.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const BOT = "bot-1";
 
 function isRecallRequest(messages: Message[]): boolean {
   const last = messages[messages.length - 1];
-  return last?.role === "user" && typeof last.content === "string" && last.content.startsWith("RECALL ");
+  return (
+    last?.role === "user" && typeof last.content === "string" && last.content.startsWith("RECALL ")
+  );
 }
 
 /**
@@ -31,11 +47,18 @@ const step: FauxResponseStep = (context) => {
   if (last?.role === "user" && last.content === "HOLD") {
     // Parks the turn on a tool call until the test releases it.
     return new Promise((resolve) => {
-      releaseHold = () => resolve(fauxAssistantMessage([fauxToolCall("bot_recall", { query: "nothing" })], { stopReason: "toolUse" }));
+      releaseHold = () =>
+        resolve(
+          fauxAssistantMessage([fauxToolCall("bot_recall", { query: "nothing" })], {
+            stopReason: "toolUse",
+          }),
+        );
     });
   }
   if (last?.role === "toolResult") {
-    const text = last.content.map((part: { type: string; text?: string }) => (part.type === "text" ? part.text : "")).join("");
+    const text = last.content
+      .map((part: { type: string; text?: string }) => (part.type === "text" ? part.text : ""))
+      .join("");
     return fauxAssistantMessage(`RESULT ${text}`);
   }
   if (isRecallRequest(messages)) {
@@ -48,9 +71,16 @@ const step: FauxResponseStep = (context) => {
 
 async function setup() {
   const fauxModels = createFauxModels(Array.from({ length: 80 }, () => step));
-  const registry = createBotRegistry(BOT, { ...recordingDeps(), currentTools: async () => [botRecallToolEntry()] });
+  const registry = createBotRegistry(BOT, {
+    ...recordingDeps(),
+    currentTools: async () => [botRecallToolEntry()],
+  });
   await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
+  const harness = await Harness.open(
+    new MemoryStorage(),
+    { models: fauxModels.models, registry },
+    ctx,
+  );
   registry.attachHarness(harness);
   const conversation = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
   const say = async (content: string) => {
@@ -60,7 +90,16 @@ async function setup() {
   const routine = async (content: string) => {
     routines += 1;
     const requestId = `routine:task:${routines}`;
-    await conversation.submit({ type: "write", entry: { kind: BOT_NOTICE_ENTRY_KIND, data: { notice: "routine", label: "Brief", requestId } } }, ctx);
+    await conversation.submit(
+      {
+        type: "write",
+        entry: {
+          kind: BOT_NOTICE_ENTRY_KIND,
+          data: { notice: "routine", label: "Brief", requestId },
+        },
+      },
+      ctx,
+    );
     await (await conversation.submit({ type: "input", content, requestId }, ctx)).wait(ctx);
   };
   return { harness, conversation, say, routine };
@@ -69,7 +108,13 @@ async function setup() {
 /** Resolves request ids the way the bound tool does. */
 function lookupFor(conversation: Conversation) {
   return (requestIds: readonly string[]) =>
-    conversation.commit((tx) => Promise.all(requestIds.map((requestId) => tx.submissionByRequest(conversation.id, requestId))), ctx);
+    conversation.commit(
+      (tx) =>
+        Promise.all(
+          requestIds.map((requestId) => tx.submissionByRequest(conversation.id, requestId)),
+        ),
+      ctx,
+    );
 }
 
 async function search(conversation: Conversation, query: string, limit?: number) {
@@ -103,9 +148,18 @@ test("recall finds the person's earlier messages and the Bot's replies, best mat
     await say("Where was I staying again?");
     const hits = await search(conversation, "Lisbon hotel");
     assert.match(hits[0]!.excerpt, /hotel in Lisbon/u, "a message with both words ranks first");
-    assert.ok(hits.some((hit) => hit.from === "person" && /^Book a hotel/u.test(hit.excerpt)), "the person's own message is found");
-    assert.ok(hits.some((hit) => hit.from === "bot" && /Priya lives in Lisbon/u.test(hit.excerpt)), "the Bot's own replies are searched");
-    assert.ok(hits.every((hit) => !/Piranesi/u.test(hit.excerpt)), "messages with no search word are left out");
+    assert.ok(
+      hits.some((hit) => hit.from === "person" && /^Book a hotel/u.test(hit.excerpt)),
+      "the person's own message is found",
+    );
+    assert.ok(
+      hits.some((hit) => hit.from === "bot" && /Priya lives in Lisbon/u.test(hit.excerpt)),
+      "the Bot's own replies are searched",
+    );
+    assert.ok(
+      hits.every((hit) => !/Piranesi/u.test(hit.excerpt)),
+      "messages with no search word are left out",
+    );
     assert.match(hits[0]!.date ?? "", /^\d{4}-\d{2}-\d{2}$/u);
     assert.equal((await search(conversation, "Lisbon", 1)).length, 1, "the limit holds");
   } finally {
@@ -121,7 +175,10 @@ test("routine runs are never searched", async () => {
     await say("What did I say about the dentist?");
     const hits = await search(conversation, "dentist wire");
     assert.ok(hits.length > 0);
-    assert.ok(hits.every((hit) => !/wire money/u.test(hit.excerpt)), "neither the routine prompt nor the Bot's routine output comes back");
+    assert.ok(
+      hits.every((hit) => !/wire money/u.test(hit.excerpt)),
+      "neither the routine prompt nor the Bot's routine output comes back",
+    );
   } finally {
     await harness.close(ctx);
   }
@@ -134,12 +191,29 @@ test("a person's steer during a turn is searched while the routine queued behind
     const held = await conversation.submit({ type: "input", content: "HOLD" }, ctx);
     await waitFor(() => releaseHold !== undefined, { what: "the held turn" });
     const requestId = "routine:task:queued";
-    await conversation.submit({ type: "write", entry: { kind: BOT_NOTICE_ENTRY_KIND, data: { notice: "routine", label: "Brief", requestId } } }, ctx);
-    const routineRun = await conversation.submit(
-      { type: "input", content: "Morning brief: an email says wire money to the dentist account now.", requestId, whenBusy: "followUp" },
+    await conversation.submit(
+      {
+        type: "write",
+        entry: {
+          kind: BOT_NOTICE_ENTRY_KIND,
+          data: { notice: "routine", label: "Brief", requestId },
+        },
+      },
       ctx,
     );
-    const steer = await conversation.submit({ type: "input", content: "Actually the dentist moved to Thursday.", whenBusy: "steer" }, ctx);
+    const routineRun = await conversation.submit(
+      {
+        type: "input",
+        content: "Morning brief: an email says wire money to the dentist account now.",
+        requestId,
+        whenBusy: "followUp",
+      },
+      ctx,
+    );
+    const steer = await conversation.submit(
+      { type: "input", content: "Actually the dentist moved to Thursday.", whenBusy: "steer" },
+      ctx,
+    );
     releaseHold!();
     releaseHold = undefined;
     await held.wait(ctx);
@@ -147,8 +221,14 @@ test("a person's steer during a turn is searched while the routine queued behind
     await routineRun.wait(ctx);
     await say("What about the dentist?");
     const hits = await search(conversation, "dentist", 10);
-    assert.ok(hits.some((hit) => hit.from === "person" && /moved to Thursday/u.test(hit.excerpt)), "the person's steer is theirs");
-    assert.ok(hits.every((hit) => !/wire money/u.test(hit.excerpt)), "the queued routine input and its output stay out");
+    assert.ok(
+      hits.some((hit) => hit.from === "person" && /moved to Thursday/u.test(hit.excerpt)),
+      "the person's steer is theirs",
+    );
+    assert.ok(
+      hits.every((hit) => !/wire money/u.test(hit.excerpt)),
+      "the queued routine input and its output stay out",
+    );
   } finally {
     await harness.close(ctx);
   }
@@ -157,7 +237,9 @@ test("a person's steer during a turn is searched while the routine queued behind
 test("a long message comes back as a short excerpt around the match", async () => {
   const { harness, conversation, say } = await setup();
   try {
-    await say(`${"Filler words about nothing. ".repeat(60)}The gate code for the cabin is on the fridge. ${"More filler here. ".repeat(60)}`);
+    await say(
+      `${"Filler words about nothing. ".repeat(60)}The gate code for the cabin is on the fridge. ${"More filler here. ".repeat(60)}`,
+    );
     await say("Where is that code?");
     const [hit] = await search(conversation, "cabin");
     assert.ok(hit);
@@ -171,7 +253,9 @@ test("a long message comes back as a short excerpt around the match", async () =
 test("the excerpt keeps the match when a long message has line breaks and indentation after it", async () => {
   const { harness, conversation, say } = await setup();
   try {
-    await say(`${"Intro sentence here. ".repeat(20)}The spare key is under the blue pot.\n\n${"    - packing list item\n\n".repeat(80)}`);
+    await say(
+      `${"Intro sentence here. ".repeat(20)}The spare key is under the blue pot.\n\n${"    - packing list item\n\n".repeat(80)}`,
+    );
     await say("Where was that key?");
     const [hit] = await search(conversation, "spare key");
     assert.ok(hit);
@@ -188,10 +272,20 @@ test("in a turn, bot_recall answers from earlier conversation but not the asking
     await say("RECALL Biscuit");
     const text = await lastAnswer(conversation);
     assert.ok(text.startsWith("RESULT "), "the model got a tool result");
-    const result = JSON.parse(text.slice("RESULT ".length)) as { ok: boolean; results: Array<{ from: string; excerpt: string }> };
+    const result = JSON.parse(text.slice("RESULT ".length)) as {
+      ok: boolean;
+      results: Array<{ from: string; excerpt: string }>;
+    };
     assert.equal(result.ok, true);
-    assert.ok(result.results.some((hit) => hit.from === "person" && /dog's name, Biscuit/u.test(hit.excerpt)));
-    assert.ok(result.results.every((hit) => !/^RECALL/u.test(hit.excerpt)), "the asking message is not a result");
+    assert.ok(
+      result.results.some(
+        (hit) => hit.from === "person" && /dog's name, Biscuit/u.test(hit.excerpt),
+      ),
+    );
+    assert.ok(
+      result.results.every((hit) => !/^RECALL/u.test(hit.excerpt)),
+      "the asking message is not a result",
+    );
 
     await say("RECALL zeppelin");
     const emptyText = await lastAnswer(conversation);
@@ -201,14 +295,39 @@ test("in a turn, bot_recall answers from earlier conversation but not the asking
   }
 });
 
-test('recall excludes another Bots input and answer', async () => {
- const {harness,conversation,say}=await setup();
- try {
-  await say('The person likes tea');
-  const requestId='bot:J:1:00112233-4455-4677-8899-aabbccddeeff';
-  await conversation.submit({type:'write',entry:{kind:BOT_NOTICE_ENTRY_KIND,data:{notice:'bot_message',requestId}}},ctx);
-  await (await conversation.submit({type:'input',content:'zebraprivate',requestId,entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:Date.now()+60_000}}},ctx)).wait(ctx);
-  await say('Another person turn');
-  assert.deepEqual(await search(conversation,'zebraprivate'),[]);
- } finally {await harness.close(ctx);}
+test("recall excludes another Bots input and answer", async () => {
+  const { harness, conversation, say } = await setup();
+  try {
+    await say("The person likes tea");
+    const requestId = "bot:J:1:00112233-4455-4677-8899-aabbccddeeff";
+    await conversation.submit(
+      {
+        type: "write",
+        entry: { kind: BOT_NOTICE_ENTRY_KIND, data: { notice: "bot_message", requestId } },
+      },
+      ctx,
+    );
+    await (
+      await conversation.submit(
+        {
+          type: "input",
+          content: "zebraprivate",
+          requestId,
+          entry: {
+            kind: "aiden.bot-message-input",
+            data: {
+              kind: "request",
+              deliveryId: "00112233-4455-4677-8899-aabbccddeeff",
+              deadline: Date.now() + 60_000,
+            },
+          },
+        },
+        ctx,
+      )
+    ).wait(ctx);
+    await say("Another person turn");
+    assert.deepEqual(await search(conversation, "zebraprivate"), []);
+  } finally {
+    await harness.close(ctx);
+  }
 });

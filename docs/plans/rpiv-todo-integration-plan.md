@@ -12,13 +12,13 @@ The original delivery deliberately excluded Assistant mode, Bots, Telegram/mobil
 
 ## Renderer state model
 
-| Snapshot state | Presentation | Rationale |
-| --- | --- | --- |
-| No snapshot, ready with no visible tasks, or all tasks deleted | Hidden | There is no active progress to communicate. |
-| Storage intentionally unavailable | Hidden | Rollout-ineligible and journalless chats offer no user action; diagnostics retain the capability decision. |
-| Ready with pending or in-progress checkpoints | Floating progress chip and expandable checkpoint list | Substantive ongoing work benefits from glanceable, determinate progress. |
-| All visible checkpoints completed | Visual chrome hidden; one bounded polite completion announcement remains | Completion is confirmed without leaving permanent status UI behind. |
-| Saved snapshot fails verification | Floating unavailable warning | Potentially affected saved work remains a visible fail-closed condition. |
+| Snapshot state                                                 | Presentation                                                             | Rationale                                                                                                  |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| No snapshot, ready with no visible tasks, or all tasks deleted | Hidden                                                                   | There is no active progress to communicate.                                                                |
+| Storage intentionally unavailable                              | Hidden                                                                   | Rollout-ineligible and journalless chats offer no user action; diagnostics retain the capability decision. |
+| Ready with pending or in-progress checkpoints                  | Floating progress chip and expandable checkpoint list                    | Substantive ongoing work benefits from glanceable, determinate progress.                                   |
+| All visible checkpoints completed                              | Visual chrome hidden; one bounded polite completion announcement remains | Completion is confirmed without leaving permanent status UI behind.                                        |
+| Saved snapshot fails verification                              | Floating unavailable warning                                             | Potentially affected saved work remains a visible fail-closed condition.                                   |
 
 ## Delivered architecture
 

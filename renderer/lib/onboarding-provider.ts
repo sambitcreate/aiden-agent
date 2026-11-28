@@ -25,9 +25,12 @@ function providerIntent(provider: Provider): OnboardingProviderDraft {
  * reuse the live provider intent exactly; onboarding may refresh their model
  * cache, but must never reset an edited endpoint, protocol, auth, or label.
  */
-export function localProviderDraft(runtime: LocalRuntime, providers: readonly Provider[] = []): OnboardingProviderDraft {
+export function localProviderDraft(
+  runtime: LocalRuntime,
+  providers: readonly Provider[] = [],
+): OnboardingProviderDraft {
   const id = `custom:${runtime}`;
-  const existing = providers.find(p => p.id === id && !p.isBuiltin);
+  const existing = providers.find((p) => p.id === id && !p.isBuiltin);
   if (existing) return providerIntent(existing);
   return {
     id,
@@ -55,9 +58,10 @@ export function discoveredDefaultModel(
 }
 
 export function onboardingModelDescription(platform: string): string {
-  const providers = platform === "darwin"
-    ? "30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints"
-    : "30+ Pi providers, ChatGPT sign-in, or custom endpoints";
+  const providers =
+    platform === "darwin"
+      ? "30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints"
+      : "30+ Pi providers, ChatGPT sign-in, or custom endpoints";
   return `Choose from ${providers}. Enable local llama.cpp classification in a custom provider’s Advanced panel under Model options. Configured classifiers evaluate structured data after you approve sending it; provider charges may apply.`;
 }
 
@@ -66,31 +70,48 @@ export function visibleOnboardingFeatures<
   T extends { id: string; description: string | ((computer: LocalComputerNoun) => string) },
 >(
   features: readonly T[],
-  capabilities: { computerUse: boolean; bots: boolean; botComputers: boolean; platform: string; designMode?: boolean; mcpServer?: boolean; childChats?: boolean },
+  capabilities: {
+    computerUse: boolean;
+    bots: boolean;
+    botComputers: boolean;
+    platform: string;
+    designMode?: boolean;
+    mcpServer?: boolean;
+    childChats?: boolean;
+  },
 ): (T & { description: string })[] {
-  return features.filter((feature) =>
-    (capabilities.computerUse || feature.id !== "computerUse") &&
-    // Only AIDEN_DESIGN_MODE=0 turns design mode off.
-    (capabilities.designMode !== false || feature.id !== "designMode") &&
-    // Apps using Aiden exists only where the desktop can host the MCP server.
-    (capabilities.mcpServer === true || feature.id !== "otherApps") &&
-    // Chats start other chats only where the desktop can run them (Mac and Linux).
-    (capabilities.childChats === true || feature.id !== "chatsRunChats") &&
-    (capabilities.bots || feature.id !== "bots") &&
-    (capabilities.bots || feature.id !== "botOpenWork") &&
-    (capabilities.bots || feature.id !== "botRoutineModels") &&
-    (capabilities.bots || feature.id !== "botPeers") &&
-    (capabilities.bots || feature.id !== "botWatches") &&
-    // A Bot's own macOS VM needs Apple silicon, and a Bot to give it to.
-    ((capabilities.botComputers && capabilities.bots) || feature.id !== "botComputers"),
-  ).map((feature) => feature.id === "models"
-    ? { ...feature, description: onboardingModelDescription(capabilities.platform) }
-    : feature.id === "commands" && capabilities.platform === "linux"
-    ? { ...feature, description: "Use Ctrl-K or / for app commands, and $ to attach a reusable skill." }
-    : {
-        ...feature,
-        description: typeof feature.description === "function"
-          ? feature.description(localComputerNoun(capabilities.platform))
-          : feature.description,
-      });
+  return features
+    .filter(
+      (feature) =>
+        (capabilities.computerUse || feature.id !== "computerUse") &&
+        // Only AIDEN_DESIGN_MODE=0 turns design mode off.
+        (capabilities.designMode !== false || feature.id !== "designMode") &&
+        // Apps using Aiden exists only where the desktop can host the MCP server.
+        (capabilities.mcpServer === true || feature.id !== "otherApps") &&
+        // Chats start other chats only where the desktop can run them (Mac and Linux).
+        (capabilities.childChats === true || feature.id !== "chatsRunChats") &&
+        (capabilities.bots || feature.id !== "bots") &&
+        (capabilities.bots || feature.id !== "botOpenWork") &&
+        (capabilities.bots || feature.id !== "botRoutineModels") &&
+        (capabilities.bots || feature.id !== "botPeers") &&
+        (capabilities.bots || feature.id !== "botWatches") &&
+        // A Bot's own macOS VM needs Apple silicon, and a Bot to give it to.
+        ((capabilities.botComputers && capabilities.bots) || feature.id !== "botComputers"),
+    )
+    .map((feature) =>
+      feature.id === "models"
+        ? { ...feature, description: onboardingModelDescription(capabilities.platform) }
+        : feature.id === "commands" && capabilities.platform === "linux"
+          ? {
+              ...feature,
+              description: "Use Ctrl-K or / for app commands, and $ to attach a reusable skill.",
+            }
+          : {
+              ...feature,
+              description:
+                typeof feature.description === "function"
+                  ? feature.description(localComputerNoun(capabilities.platform))
+                  : feature.description,
+            },
+    );
 }

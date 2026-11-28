@@ -6,11 +6,11 @@ The format is Claude Code's, so most Claude Code command hooks work unchanged. A
 
 ## Where hooks live
 
-| Where | What it holds | Who edits it |
-| --- | --- | --- |
-| Settings → Hooks | Hooks for **Every chat** (global) or one workspace, plus hooks you approved from the agent. Stored in `<userData>/hooks/hooks.json`, with approvals and the paused state in `<userData>/hooks/hooks-trust.json`. | You, in Settings. A hook you save there is approved when you save it. |
-| `<workspace>/.aiden/hooks.json` | A repo's own hooks, in the Claude format below. At most 256 KiB, and `.aiden` must be a real folder, not a symlink. | Whoever commits it. Every hook in it waits for your approval. Aiden never writes this file. |
-| Agent proposals | Workspace or chat hooks the agent suggests through its `hooks` tool. An approved one is stored in `<userData>/hooks/hooks.json`, keyed by the workspace, never written into the repo. | The agent proposes; you approve on the host. |
+| Where                           | What it holds                                                                                                                                                                                                    | Who edits it                                                                                |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Settings → Hooks                | Hooks for **Every chat** (global) or one workspace, plus hooks you approved from the agent. Stored in `<userData>/hooks/hooks.json`, with approvals and the paused state in `<userData>/hooks/hooks-trust.json`. | You, in Settings. A hook you save there is approved when you save it.                       |
+| `<workspace>/.aiden/hooks.json` | A repo's own hooks, in the Claude format below. At most 256 KiB, and `.aiden` must be a real folder, not a symlink.                                                                                              | Whoever commits it. Every hook in it waits for your approval. Aiden never writes this file. |
+| Agent proposals                 | Workspace or chat hooks the agent suggests through its `hooks` tool. An approved one is stored in `<userData>/hooks/hooks.json`, keyed by the workspace, never written into the repo.                            | The agent proposes; you approve on the host.                                                |
 
 Scopes run in order: global, then the workspace (when the chat has a folder), then the chat. A file holds at most 200 hooks.
 
@@ -23,7 +23,13 @@ Scopes run in order: global, then the workspace (when the chat has a folder), th
       {
         "matcher": "Edit|Write",
         "hooks": [
-          { "type": "command", "command": "./script.sh", "timeout": 30, "failClosed": false, "envAllow": ["GH_TOKEN"] }
+          {
+            "type": "command",
+            "command": "./script.sh",
+            "timeout": 30,
+            "failClosed": false,
+            "envAllow": ["GH_TOKEN"]
+          }
         ]
       }
     ]
@@ -50,7 +56,16 @@ Block `rm -rf` before a command runs (exit 2 blocks; stderr is the reason):
 {
   "hooks": {
     "PreToolUse": [
-      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "\"$AIDEN_PROJECT_DIR\"/.aiden/hooks/no-rm-rf.sh", "failClosed": true }] }
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$AIDEN_PROJECT_DIR\"/.aiden/hooks/no-rm-rf.sh",
+            "failClosed": true
+          }
+        ]
+      }
     ]
   }
 }
@@ -71,7 +86,12 @@ Format a file after the agent edits or writes it (`AIDEN_HOOK_FILE` is the absol
 {
   "hooks": {
     "PostToolUse": [
-      { "matcher": "Edit|Write", "hooks": [{ "type": "command", "command": "npx --no-install prettier --write \"$AIDEN_HOOK_FILE\"" }] }
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "npx --no-install prettier --write \"$AIDEN_HOOK_FILE\"" }
+        ]
+      }
     ]
   }
 }
@@ -83,7 +103,12 @@ Give each new or resumed chat some context (plain stdout from SessionStart becom
 {
   "hooks": {
     "SessionStart": [
-      { "matcher": "startup|resume", "hooks": [{ "type": "command", "command": "git status --short --branch && git log --oneline -5" }] }
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          { "type": "command", "command": "git status --short --branch && git log --oneline -5" }
+        ]
+      }
     ]
   }
 }
@@ -95,7 +120,11 @@ Ask the agent to run tests before it finishes:
 {
   "hooks": {
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "\"$AIDEN_PROJECT_DIR\"/.aiden/hooks/tests-first.sh" }] }
+      {
+        "hooks": [
+          { "type": "command", "command": "\"$AIDEN_PROJECT_DIR\"/.aiden/hooks/tests-first.sh" }
+        ]
+      }
     ]
   }
 }
@@ -110,20 +139,20 @@ echo '{"decision":"block","reason":"Run the test suite and report the result bef
 
 ## Events
 
-| Event | When it fires | Matcher | What its output can do |
-| --- | --- | --- | --- |
-| PreToolUse | Before a tool runs, after Computer Use and Form Fill access checks and before the approval decision. Not for tools a subagent calls: see below. | Tool name | Deny, ask you first, or allow; change the tool's input; add context to the tool's result. |
-| PostToolUse | After a tool returns. Not for tools a subagent calls. | Tool name | Flag the result and add context to it. |
-| UserPromptSubmit | When you send a message, before any model call, including guidance you steer into a running reply or queue behind it. | Ignored | Refuse the message; add context for this turn (for steered or queued guidance, for that message). |
-| SessionStart | On a chat's first turn in this run of Aiden. | `startup` (new chat), `resume` (first turn after a restart), `compact` (first turn after compaction) | Add context for this turn. |
-| SessionEnd | When a chat whose hooks ran in this run of Aiden is deleted. Not awaited. | Ignored | Nothing; observe only. |
-| Stop | When a reply finishes normally. Never after Stop, an error, a cut-off or a spending block. | Ignored | Keep the agent working, up to 8 times per message you send. For a Bot the count restarts if Aiden does. |
-| SubagentStop | When a subagent run ends (completed, failed, timed out or stopped), once per run, for subagents of desktop chats and of Bots on the desktop and `aiden serve`. Not awaited. | Ignored | Nothing; observe only. |
-| Notification | When an approval card (`permission_prompt`, including a subagent's and Computer Use access) or a question (`elicitation_dialog`) waits for you. Not awaited. | `notification_type` | Nothing; observe only. |
-| PreCompact | Before a long chat is compacted: `manual` when you choose Compact, `auto` when Aiden compacts during a turn or to recover. Desktop chats, Bot chats and `aiden serve` chats fire it. | `manual` or `auto` | In a desktop chat, `additionalContext` tells the summary what to keep; the compaction waits at most the hook's timeout and goes ahead if the hook fails. While a chat has a PreCompact hook configured, Aiden writes no summary in the background ahead of the compaction, so the hook always speaks before the summary is written. Bots and `aiden serve` only observe. |
-| WorktreeSetup | After Aiden creates a managed worktree, on the desktop and on `aiden serve`. Global and the source workspace's hooks run, in the new worktree. Awaited, but a failure never undoes the worktree; mark a slow setup step (such as `npm install`) `async: true` and the agent starts while it runs. | Ignored | `systemMessage` and notices go to Aiden's log (stderr on `aiden serve`). |
-| RoutineRun | After a Bot routine run succeeds (including a silent run), in the Bot's folder, on the desktop and on `aiden serve`. Skipped or blocked runs fire nothing. | Ignored | Nothing; observe only. |
-| RoutineFailed | When a Bot routine run fails, with `error`, `failure_kind` and `will_retry`. Each failed attempt fires, including one that will be retried. | Ignored | Nothing; observe only. |
+| Event            | When it fires                                                                                                                                                                                                                                                                                     | Matcher                                                                                              | What its output can do                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| PreToolUse       | Before a tool runs, after Computer Use and Form Fill access checks and before the approval decision. Not for tools a subagent calls: see below.                                                                                                                                                   | Tool name                                                                                            | Deny, ask you first, or allow; change the tool's input; add context to the tool's result.                                                                                                                                                                                                                                                                                |
+| PostToolUse      | After a tool returns. Not for tools a subagent calls.                                                                                                                                                                                                                                             | Tool name                                                                                            | Flag the result and add context to it.                                                                                                                                                                                                                                                                                                                                   |
+| UserPromptSubmit | When you send a message, before any model call, including guidance you steer into a running reply or queue behind it.                                                                                                                                                                             | Ignored                                                                                              | Refuse the message; add context for this turn (for steered or queued guidance, for that message).                                                                                                                                                                                                                                                                        |
+| SessionStart     | On a chat's first turn in this run of Aiden.                                                                                                                                                                                                                                                      | `startup` (new chat), `resume` (first turn after a restart), `compact` (first turn after compaction) | Add context for this turn.                                                                                                                                                                                                                                                                                                                                               |
+| SessionEnd       | When a chat whose hooks ran in this run of Aiden is deleted. Not awaited.                                                                                                                                                                                                                         | Ignored                                                                                              | Nothing; observe only.                                                                                                                                                                                                                                                                                                                                                   |
+| Stop             | When a reply finishes normally. Never after Stop, an error, a cut-off or a spending block.                                                                                                                                                                                                        | Ignored                                                                                              | Keep the agent working, up to 8 times per message you send. For a Bot the count restarts if Aiden does.                                                                                                                                                                                                                                                                  |
+| SubagentStop     | When a subagent run ends (completed, failed, timed out or stopped), once per run, for subagents of desktop chats and of Bots on the desktop and `aiden serve`. Not awaited.                                                                                                                       | Ignored                                                                                              | Nothing; observe only.                                                                                                                                                                                                                                                                                                                                                   |
+| Notification     | When an approval card (`permission_prompt`, including a subagent's and Computer Use access) or a question (`elicitation_dialog`) waits for you. Not awaited.                                                                                                                                      | `notification_type`                                                                                  | Nothing; observe only.                                                                                                                                                                                                                                                                                                                                                   |
+| PreCompact       | Before a long chat is compacted: `manual` when you choose Compact, `auto` when Aiden compacts during a turn or to recover. Desktop chats, Bot chats and `aiden serve` chats fire it.                                                                                                              | `manual` or `auto`                                                                                   | In a desktop chat, `additionalContext` tells the summary what to keep; the compaction waits at most the hook's timeout and goes ahead if the hook fails. While a chat has a PreCompact hook configured, Aiden writes no summary in the background ahead of the compaction, so the hook always speaks before the summary is written. Bots and `aiden serve` only observe. |
+| WorktreeSetup    | After Aiden creates a managed worktree, on the desktop and on `aiden serve`. Global and the source workspace's hooks run, in the new worktree. Awaited, but a failure never undoes the worktree; mark a slow setup step (such as `npm install`) `async: true` and the agent starts while it runs. | Ignored                                                                                              | `systemMessage` and notices go to Aiden's log (stderr on `aiden serve`).                                                                                                                                                                                                                                                                                                 |
+| RoutineRun       | After a Bot routine run succeeds (including a silent run), in the Bot's folder, on the desktop and on `aiden serve`. Skipped or blocked runs fire nothing.                                                                                                                                        | Ignored                                                                                              | Nothing; observe only.                                                                                                                                                                                                                                                                                                                                                   |
+| RoutineFailed    | When a Bot routine run fails, with `error`, `failure_kind` and `will_retry`. Each failed attempt fires, including one that will be retried.                                                                                                                                                       | Ignored                                                                                              | Nothing; observe only.                                                                                                                                                                                                                                                                                                                                                   |
 
 Some events can't run in every scope, and a hook saved where its event never fires is refused (or, in `.aiden/hooks.json`, listed as **Not supported in Aiden**): RoutineRun and RoutineFailed are global only (or Bot, a scope nothing creates yet); WorktreeSetup is global or workspace only; UserPromptSubmit, SessionEnd and Notification are global, workspace or chat, never Bot.
 
@@ -133,23 +162,23 @@ A matcher that is empty or `*` matches everything. One made only of letters, dig
 
 Tool matchers match Aiden's name or its Claude Code name. The payload's `tool_name` uses the Claude spelling and `aiden_tool_name` the Aiden one. When `tool_input` has `path`, Aiden also adds `file_path`. A `Bash` or `run_command` matcher covers every tool that runs a shell, so a guard on shell commands can't be stepped around with a background job. `background_job` also lists, reads and stops jobs, and those calls have no `command` in `tool_input`. Likewise a `Write` or `write_file` matcher also covers `generate_image`, which can save its image as a workspace file: its `tool_name` stays `generate_image`, and when it saves (`savePath`) `tool_input` also carries the workspace path the image is written to as `file_path`, tidied the way the tool tidies it (`./design//hero.png` becomes `design/hero.png`); a `savePath` the tool would refuse gets no `file_path`. Calls that only show the image have no `savePath` or `file_path`. A PreToolUse hook that rewrites `file_path` changes where the image is saved.
 
-| Aiden | Claude Code |
-| --- | --- |
-| `run_command`, `background_job`, `computer_shell` | `Bash` |
-| `write_file` (and `generate_image` for matching only) | `Write` |
-| `edit_file` | `Edit`, `MultiEdit` |
-| `read_file` | `Read` |
-| `glob` | `Glob` |
-| `grep` | `Grep` |
-| `list_dir` | `LS` |
-| `web_fetch` | `WebFetch` |
-| `web_search` | `WebSearch` |
-| `subagent` | `Task`, `Agent` |
-| `todo` | `TodoWrite` |
-| `ask_user_question` | `AskUserQuestion` |
-| `skill` | `Skill` |
-| `computer_use` | `computer` |
-| `<server>__<tool>` (MCP) | `mcp__<server>__<tool>` |
+| Aiden                                                 | Claude Code             |
+| ----------------------------------------------------- | ----------------------- |
+| `run_command`, `background_job`, `computer_shell`     | `Bash`                  |
+| `write_file` (and `generate_image` for matching only) | `Write`                 |
+| `edit_file`                                           | `Edit`, `MultiEdit`     |
+| `read_file`                                           | `Read`                  |
+| `glob`                                                | `Glob`                  |
+| `grep`                                                | `Grep`                  |
+| `list_dir`                                            | `LS`                    |
+| `web_fetch`                                           | `WebFetch`              |
+| `web_search`                                          | `WebSearch`             |
+| `subagent`                                            | `Task`, `Agent`         |
+| `todo`                                                | `TodoWrite`             |
+| `ask_user_question`                                   | `AskUserQuestion`       |
+| `skill`                                               | `Skill`                 |
+| `computer_use`                                        | `computer`              |
+| `<server>__<tool>` (MCP)                              | `mcp__<server>__<tool>` |
 
 ## Input and output
 
@@ -157,25 +186,25 @@ Every hook gets JSON on stdin: `hook_event_name`, `session_id` and `cwd`, plus t
 
 ### Exit codes
 
-| Exit | Meaning |
-| --- | --- |
-| 0 | Success. Stdout that starts with `{` is read as JSON. Other stdout becomes context for SessionStart and UserPromptSubmit and is ignored elsewhere. |
-| 2 | Block, with stderr as the reason. PreToolUse denies the tool; PostToolUse flags the result; UserPromptSubmit refuses the message; Stop keeps the agent working. For other events, stderr is shown to you only. |
-| Anything else | An error. So is a command that can't start, a timeout, or output over 64 KiB. Aiden shows a notice and continues without the hook, unless it is a `failClosed` PreToolUse hook, which blocks the tool. |
+| Exit          | Meaning                                                                                                                                                                                                        |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0             | Success. Stdout that starts with `{` is read as JSON. Other stdout becomes context for SessionStart and UserPromptSubmit and is ignored elsewhere.                                                             |
+| 2             | Block, with stderr as the reason. PreToolUse denies the tool; PostToolUse flags the result; UserPromptSubmit refuses the message; Stop keeps the agent working. For other events, stderr is shown to you only. |
+| Anything else | An error. So is a command that can't start, a timeout, or output over 64 KiB. Aiden shows a notice and continues without the hook, unless it is a `failClosed` PreToolUse hook, which blocks the tool.         |
 
 If Aiden can't load your hooks at all, it blocks every tool call with "Aiden could not load your hooks, so it blocked this tool call", and other events continue with a notice. That covers a hook store in `<userData>/hooks/` that can't be read, isn't valid JSON or has an approval Aiden can't read, and a workspace's `.aiden/hooks.json` that can't be read or parsed once you've approved one of its hooks (deleting the file just removes its hooks). Aiden leaves a damaged store where it is and won't save Settings changes over it; it tries loading again on every event, so fixing or removing the file takes effect without a restart. Aiden blocks a tool call the same way when your hooks can't run at all: "Aiden could not run your hooks" for a hook runner that fails, or for a call a Bot's hooks could match while that Bot's folder can't be read.
 
 ### JSON fields
 
-| Field | Events | Effect |
-| --- | --- | --- |
-| `hookSpecificOutput.permissionDecision`: `allow`, `deny`, `ask` | PreToolUse | Allow, block or ask. `decision: "approve"` and `"block"` also work. |
-| `hookSpecificOutput.permissionDecisionReason` or `reason` | PreToolUse | Why. |
-| `hookSpecificOutput.updatedInput` | PreToolUse | Replaces the tool's input. Applied only with `allow`, never to a tool that runs code (`run_command`, `background_job`, `computer_shell`, `codemode`, `workspace_artifact`), and checked against the tool's schema; invalid input blocks the tool. The hooks then run again on the new input, and that second answer is the one that counts, including its `continue: false` and `additionalContext`, so no hook is skipped and an ask or deny still applies. A hook that keeps changing the input blocks the tool, so write a rewriter that leaves its own output alone. Bots and `aiden serve` chats never apply it, and there an `allow` changes nothing: Aiden's own rules already decided the call. |
-| `hookSpecificOutput.additionalContext` | All that add context | Text for the model. PreToolUse context joins the tool's result, ahead of any PostToolUse context. |
-| `decision: "block"` and `reason` | PostToolUse, UserPromptSubmit, Stop | As exit 2. |
-| `systemMessage` | All | Shown to you, never to the model. |
-| `continue: false` and `stopReason` | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop | Ends the turn. On SessionStart it ends the turn before the model runs, and SessionStart runs again with your next message. On UserPromptSubmit it refuses the message. On PreToolUse and PostToolUse the tool's result is kept, the turn ends once that tool batch finishes, and you see "Stopped by hook name: reason". It wins over a Stop hook that asks to continue. Events that only observe (SessionEnd, SubagentStop, PreCompact, Notification, WorktreeSetup, RoutineRun, RoutineFailed) ignore it, and Bots don't end the run this way yet. |
+| Field                                                           | Events                                                        | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hookSpecificOutput.permissionDecision`: `allow`, `deny`, `ask` | PreToolUse                                                    | Allow, block or ask. `decision: "approve"` and `"block"` also work.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `hookSpecificOutput.permissionDecisionReason` or `reason`       | PreToolUse                                                    | Why.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `hookSpecificOutput.updatedInput`                               | PreToolUse                                                    | Replaces the tool's input. Applied only with `allow`, never to a tool that runs code (`run_command`, `background_job`, `computer_shell`, `codemode`, `workspace_artifact`), and checked against the tool's schema; invalid input blocks the tool. The hooks then run again on the new input, and that second answer is the one that counts, including its `continue: false` and `additionalContext`, so no hook is skipped and an ask or deny still applies. A hook that keeps changing the input blocks the tool, so write a rewriter that leaves its own output alone. Bots and `aiden serve` chats never apply it, and there an `allow` changes nothing: Aiden's own rules already decided the call. |
+| `hookSpecificOutput.additionalContext`                          | All that add context                                          | Text for the model. PreToolUse context joins the tool's result, ahead of any PostToolUse context.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `decision: "block"` and `reason`                                | PostToolUse, UserPromptSubmit, Stop                           | As exit 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `systemMessage`                                                 | All                                                           | Shown to you, never to the model.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `continue: false` and `stopReason`                              | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop | Ends the turn. On SessionStart it ends the turn before the model runs, and SessionStart runs again with your next message. On UserPromptSubmit it refuses the message. On PreToolUse and PostToolUse the tool's result is kept, the turn ends once that tool batch finishes, and you see "Stopped by hook name: reason". It wins over a Stop hook that asks to continue. Events that only observe (SessionEnd, SubagentStop, PreCompact, Notification, WorktreeSetup, RoutineRun, RoutineFailed) ignore it, and Bots don't end the run this way yet.                                                                                                                                                    |
 
 When several hooks match, they run four at a time and the strictest answer wins: deny, then ask, then allow. Each reason is credited to its hook's name.
 
@@ -242,12 +271,12 @@ This protects file tools only. `run_command` isn't blocked: a workspace hook who
 
 ## Which chats run hooks
 
-| Surface | Hooks |
-| --- | --- |
-| Desktop chats, with or without a workspace | Global, workspace (when there's a folder) and chat hooks for PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, SessionEnd, Stop, Notification and PreCompact. The chat's subagents fire SubagentStop with the same hooks. |
-| Bots and their routines | Global hooks, in the Bot's folder: PreToolUse (after the Bot's own rules allow the call), PostToolUse, Stop, SessionStart and PreCompact. SessionStart fires on a Bot's first request after Aiden starts, and again after each compaction. Bot subagents fire SubagentStop, and routines fire RoutineRun and RoutineFailed. On an attended turn a hook's ask shows its own card, ahead of any card the Bot's rules need: a remembered Always or allow-list entry answers the rule, never the hook, so a call that needs both shows two cards. On an unattended turn the ask blocks the call. After a hook's card Aiden decides the call again on the rules as they stand then, without asking the hook again. Aiden can run hooks scoped to one Bot, but nothing creates them yet: Settings adds global and workspace hooks, and the agent proposes workspace and chat hooks. |
-| `aiden serve` | Hooks from the server's own `<agentDir>/hooks/` store and each registered workspace's `.aiden/hooks.json`. Workspace chats, including Telegram and scheduled turns, run PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, Stop, PreCompact and SessionEnd; on a Telegram or scheduled turn an ask blocks the tool. Bots work as on the desktop, except that older non-durable Bot chats run as workspace chats without Stop or SessionStart until you run `aiden bots enable-durable`. `aiden hooks list`, `approve`, `enable`, `disable`, `pause`, `resume` and `test` manage them. `approve <id> <digest>` and `test <id> <digest>` take the digest `aiden hooks list` printed, and `approve`, `enable`, `resume` and `test` refuse unless stdin and stdout are both a terminal. That check stops a casual agent command, but it is not a security boundary: anything that can reach the server's socket or write `hooks-trust.json` as your user can still turn a hook on. See the [CLI guide](../packages/cli/README.md). |
-| Not run on the desktop | Telegram, the Assistant, agent harness providers (such as Antigravity), side questions, title generation and other background model calls. |
+| Surface                                    | Hooks                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Desktop chats, with or without a workspace | Global, workspace (when there's a folder) and chat hooks for PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, SessionEnd, Stop, Notification and PreCompact. The chat's subagents fire SubagentStop with the same hooks.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Bots and their routines                    | Global hooks, in the Bot's folder: PreToolUse (after the Bot's own rules allow the call), PostToolUse, Stop, SessionStart and PreCompact. SessionStart fires on a Bot's first request after Aiden starts, and again after each compaction. Bot subagents fire SubagentStop, and routines fire RoutineRun and RoutineFailed. On an attended turn a hook's ask shows its own card, ahead of any card the Bot's rules need: a remembered Always or allow-list entry answers the rule, never the hook, so a call that needs both shows two cards. On an unattended turn the ask blocks the call. After a hook's card Aiden decides the call again on the rules as they stand then, without asking the hook again. Aiden can run hooks scoped to one Bot, but nothing creates them yet: Settings adds global and workspace hooks, and the agent proposes workspace and chat hooks.                                                                                                                                                        |
+| `aiden serve`                              | Hooks from the server's own `<agentDir>/hooks/` store and each registered workspace's `.aiden/hooks.json`. Workspace chats, including Telegram and scheduled turns, run PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, Stop, PreCompact and SessionEnd; on a Telegram or scheduled turn an ask blocks the tool. Bots work as on the desktop, except that older non-durable Bot chats run as workspace chats without Stop or SessionStart until you run `aiden bots enable-durable`. `aiden hooks list`, `approve`, `enable`, `disable`, `pause`, `resume` and `test` manage them. `approve <id> <digest>` and `test <id> <digest>` take the digest `aiden hooks list` printed, and `approve`, `enable`, `resume` and `test` refuse unless stdin and stdout are both a terminal. That check stops a casual agent command, but it is not a security boundary: anything that can reach the server's socket or write `hooks-trust.json` as your user can still turn a hook on. See the [CLI guide](../packages/cli/README.md). |
+| Not run on the desktop                     | Telegram, the Assistant, agent harness providers (such as Antigravity), side questions, title generation and other background model calls.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 Phones and paired Macs don't configure hooks; hooks run on the host that runs the chat. A phone routine step for hooks is a planned follow-up.
 

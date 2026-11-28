@@ -32,10 +32,7 @@ export interface BackgroundSubagentChildStartV2 {
 
 export interface BackgroundSubagentCoordinatorDependenciesV2<Child> {
   createChild(run: Readonly<PreparedBackgroundSubagentRunV2>): Child;
-  startChild(
-    child: Child,
-    input: BackgroundSubagentChildStartV2,
-  ): Promise<void>;
+  startChild(child: Child, input: BackgroundSubagentChildStartV2): Promise<void>;
   /** Delivery acknowledges queue insertion at a safe boundary, not compliance. */
   deliverSteer(child: Child, instruction: string): Promise<void> | void;
   stopChild?(child: Child, reason: Error): void;
@@ -65,9 +62,7 @@ function immutablePrepared(
   return Object.freeze(cloned);
 }
 
-function statusProof(
-  run: BackgroundSubagentRunV2,
-): BackgroundSubagentManagementRequestV2 {
+function statusProof(run: BackgroundSubagentRunV2): BackgroundSubagentManagementRequestV2 {
   const authority = run.manifest.authority;
   return {
     version: 2,
@@ -181,9 +176,7 @@ export class BackgroundSubagentCoordinatorV2<Child> {
         // Report why the child is missing; the recording failure is the cause
         // the run is still queued until startup reconciliation settles it.
         const failure: Error & { cause?: unknown } = new Error(
-          error instanceof Error
-            ? error.message
-            : "Background child could not be created.",
+          error instanceof Error ? error.message : "Background child could not be created.",
         );
         failure.cause = recordError;
         throw failure;
@@ -284,11 +277,7 @@ export class BackgroundSubagentCoordinatorV2<Child> {
       const current = await this.lifecycle.manage(asStatus(request));
       // A launch that began during that read owns the answer now.
       if (this.installing.has(request.runId) || this.active.has(request.runId)) continue;
-      if (
-        request.action === "status" ||
-        request.action === "wait" ||
-        request.action === "stop"
-      ) {
+      if (request.action === "status" || request.action === "wait" || request.action === "stop") {
         return current;
       }
       throw new Error("Background run is not active for steering.");
@@ -310,18 +299,13 @@ export class BackgroundSubagentCoordinatorV2<Child> {
         return updated;
       }
       if (request.action === "stop") {
-        this.abortEntry(
-          entry,
-          new Error("Background subagent stopped by its owner."),
-        );
+        this.abortEntry(entry, new Error("Background subagent stopped by its owner."));
         this.notifyTerminal(entry);
         return updated;
       }
       return updated;
     });
-    return request.action === "wait"
-      ? this.waitForTerminal(entry, request.timeoutMs!)
-      : updated;
+    return request.action === "wait" ? this.waitForTerminal(entry, request.timeoutMs!) : updated;
   }
 
   async chatDeleted(chatId: string): Promise<number> {
@@ -376,7 +360,7 @@ export class BackgroundSubagentCoordinatorV2<Child> {
       this.abortMatching(matches, reason, state);
       // The scan reads one snapshot, and aborting only ends a run in memory. A run
       // that went live after that read is durably terminal only after a second pass.
-      return count + await scan();
+      return count + (await scan());
     } finally {
       this.invalidations.delete(invalidation);
     }
@@ -444,9 +428,7 @@ export class BackgroundSubagentCoordinatorV2<Child> {
     }
   }
 
-  private async deliverAtSafeBoundary(
-    entry: ActiveBackgroundRunV2<Child>,
-  ): Promise<void> {
+  private async deliverAtSafeBoundary(entry: ActiveBackgroundRunV2<Child>): Promise<void> {
     await this.enqueue(entry, async () => {
       const pending = entry.pendingSteering.splice(0);
       for (const instruction of pending) {
@@ -455,10 +437,7 @@ export class BackgroundSubagentCoordinatorV2<Child> {
     });
   }
 
-  private enqueue<T>(
-    entry: ActiveBackgroundRunV2<Child>,
-    operation: () => Promise<T>,
-  ): Promise<T> {
+  private enqueue<T>(entry: ActiveBackgroundRunV2<Child>, operation: () => Promise<T>): Promise<T> {
     const result = entry.tail.then(operation, operation);
     entry.tail = result.then(
       () => undefined,
@@ -488,8 +467,7 @@ export class BackgroundSubagentCoordinatorV2<Child> {
   }
 
   private notifyTerminal(entry: ActiveBackgroundRunV2<Child>): void {
-    if (!terminal(entry.run) && this.active.has(entry.prepared.snapshot.runId))
-      return;
+    if (!terminal(entry.run) && this.active.has(entry.prepared.snapshot.runId)) return;
     for (const notify of [...entry.terminalWaiters]) notify();
   }
 

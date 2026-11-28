@@ -64,7 +64,9 @@ export function sidebarRowPullRequest(
 }
 
 /** The checks state worth showing: closed, merged and draft PRs show none. */
-export function rowPullRequestChecks(pullRequest: SidebarRowPullRequest): GitHubPullRequestChecksState | undefined {
+export function rowPullRequestChecks(
+  pullRequest: SidebarRowPullRequest,
+): GitHubPullRequestChecksState | undefined {
   if (pullRequest.state !== "open" || pullRequest.isDraft) return undefined;
   return pullRequest.checksState ?? undefined;
 }

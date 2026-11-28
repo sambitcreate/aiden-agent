@@ -14,7 +14,13 @@ export type LiveRibbonMotion = "listening" | "thinking" | "speaking" | "waiting"
  * values only stand in where the stylesheet is absent. "Theme accent" draws
  * with `--accent` instead.
  */
-export const LIVE_RIBBON_SPECTRUM = ["#FF5A5F", "#FFB020", "#FFF6D6", "#3E97F6", "#8B5CF6"] as const;
+export const LIVE_RIBBON_SPECTRUM = [
+  "#FF5A5F",
+  "#FFB020",
+  "#FFF6D6",
+  "#3E97F6",
+  "#8B5CF6",
+] as const;
 
 interface Strand {
   /** Index into the palette, or -1 for the gradient core. */
@@ -53,7 +59,14 @@ export function liveRibbonAmplitude(motion: LiveRibbonMotion, level: number): nu
   }
 }
 
-function strandY(strand: Strand, x: number, width: number, mid: number, amplitude: number, time: number): number {
+function strandY(
+  strand: Strand,
+  x: number,
+  width: number,
+  mid: number,
+  amplitude: number,
+  time: number,
+): number {
   const u = x / width;
   // A hump in the middle that fades to a flat line at both ends.
   const envelope = Math.sin(Math.PI * u) ** 2;
@@ -73,12 +86,15 @@ function drawRibbon(
   context.clearRect(0, 0, width, height);
   const mid = height * 0.62;
   const core = context.createLinearGradient(0, 0, width, 0);
-  palette.forEach((color, index) => core.addColorStop(index / Math.max(1, palette.length - 1), color));
+  palette.forEach((color, index) =>
+    core.addColorStop(index / Math.max(1, palette.length - 1), color),
+  );
   for (const strand of STRANDS) {
     context.save();
     context.globalAlpha = strand.alpha * (dim ? 0.5 : 1);
     context.filter = strand.blur > 0 ? `blur(${strand.blur}px)` : "none";
-    context.strokeStyle = strand.color < 0 ? core : (palette[strand.color % palette.length] ?? palette[0]!);
+    context.strokeStyle =
+      strand.color < 0 ? core : (palette[strand.color % palette.length] ?? palette[0]!);
     context.lineWidth = strand.width;
     context.lineCap = "round";
     context.beginPath();
@@ -107,7 +123,8 @@ function ribbonPalette(element: Element, colors: AidenLiveRibbonColors): readonl
   const style = getComputedStyle(element);
   if (colors === "spectrum") {
     return LIVE_RIBBON_SPECTRUM.map(
-      (fallback, index) => style.getPropertyValue(`--live-spectrum-${index + 1}`).trim() || fallback,
+      (fallback, index) =>
+        style.getPropertyValue(`--live-spectrum-${index + 1}`).trim() || fallback,
     );
   }
   const accent = style.getPropertyValue("--accent").trim() || LIVE_RIBBON_SPECTRUM[3];
@@ -172,7 +189,15 @@ export function LiveRibbonWave({
       if (document.visibilityState !== "hidden") {
         const target = levelRef.current();
         smoothed += (target - smoothed) * (target > smoothed ? 0.35 : 0.12);
-        drawRibbon(context, width, height, liveRibbonAmplitude(motion, smoothed), ((now - started) / 1_000) * pace, palette, dim);
+        drawRibbon(
+          context,
+          width,
+          height,
+          liveRibbonAmplitude(motion, smoothed),
+          ((now - started) / 1_000) * pace,
+          palette,
+          dim,
+        );
       }
       frame = window.requestAnimationFrame(draw);
     };

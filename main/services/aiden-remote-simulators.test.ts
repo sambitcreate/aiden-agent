@@ -19,7 +19,9 @@ const OTHER = "99999999-2222-3333-4444-555555555555";
 
 function listen(server: Server): Promise<string> {
   return new Promise((resolve) =>
-    server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)),
+    server.listen(0, "127.0.0.1", () =>
+      resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`),
+    ),
   );
 }
 
@@ -31,7 +33,16 @@ function fakeHost(overrides: Partial<AidenRemoteSimulatorHost> & { hub?: string 
     sharing: true,
     status: "ready",
     detail: "/Users/me/Library/Application Support/Aiden/devices",
-    devices: [{ id: UDID, name: "iPhone 17", platform: "ios", version: "iOS 27.0", booted: true, kind: "iphone" }],
+    devices: [
+      {
+        id: UDID,
+        name: "iPhone 17",
+        platform: "ios",
+        version: "iOS 27.0",
+        booted: true,
+        kind: "iphone",
+      },
+    ],
   };
   const host: AidenRemoteSimulatorHost = {
     sharing: () => sharing,
@@ -98,7 +109,8 @@ async function front(
         ...(as.chatId ? { chatId: as.chatId } : {}),
         readJson: async (maximum) => {
           const body = await readBody(req);
-          if (body.length > maximum) throw new AidenRemoteServiceError("payload_too_large", "Too large.", 413);
+          if (body.length > maximum)
+            throw new AidenRemoteServiceError("payload_too_large", "Too large.", 413);
           return JSON.parse(body.toString("utf8") || "null") as unknown;
         },
         writeJson: (status, value) => {
@@ -135,22 +147,28 @@ async function front(
 }
 
 function call(origin: string, method: string, path: string, body?: unknown) {
-  return new Promise<{ status: number; json: Record<string, unknown>; text: string }>((resolve, reject) => {
-    const req = request(`${origin}${path}`, { method, headers: { "content-type": "application/json" } }, (res) => {
-      void readBody(res).then((buffer) => {
-        const text = buffer.toString("utf8");
-        let json: Record<string, unknown> = {};
-        try {
-          json = JSON.parse(text) as Record<string, unknown>;
-        } catch {
-          // Relayed hub bodies may be plain text.
-        }
-        resolve({ status: res.statusCode ?? 0, json, text });
-      });
-    });
-    req.once("error", reject);
-    req.end(body === undefined ? undefined : JSON.stringify(body));
-  });
+  return new Promise<{ status: number; json: Record<string, unknown>; text: string }>(
+    (resolve, reject) => {
+      const req = request(
+        `${origin}${path}`,
+        { method, headers: { "content-type": "application/json" } },
+        (res) => {
+          void readBody(res).then((buffer) => {
+            const text = buffer.toString("utf8");
+            let json: Record<string, unknown> = {};
+            try {
+              json = JSON.parse(text) as Record<string, unknown>;
+            } catch {
+              // Relayed hub bodies may be plain text.
+            }
+            resolve({ status: res.statusCode ?? 0, json, text });
+          });
+        },
+      );
+      req.once("error", reject);
+      req.end(body === undefined ? undefined : JSON.stringify(body));
+    },
+  );
 }
 
 test("a Mac that is not sharing reveals no simulators or local detail", async (t) => {
@@ -183,15 +201,24 @@ test("mutations take exactly a listed deviceId and hide host failures", async (t
   const { server, origin } = await front(new AidenRemoteSimulatorRelay(() => fake.host));
   t.after(() => server.close());
   assert.equal((await call(origin, "GET", "/simulators?x=1")).status, 400);
-  assert.equal((await call(origin, "POST", "/simulators/open", { deviceId: UDID, hostId: "local" })).status, 400);
-  assert.equal((await call(origin, "POST", "/simulators/open", { deviceId: "../etc" })).status, 400);
+  assert.equal(
+    (await call(origin, "POST", "/simulators/open", { deviceId: UDID, hostId: "local" })).status,
+    400,
+  );
+  assert.equal(
+    (await call(origin, "POST", "/simulators/open", { deviceId: "../etc" })).status,
+    400,
+  );
   assert.equal((await call(origin, "POST", "/simulators/open", { deviceId: OTHER })).status, 404);
   assert.equal((await call(origin, "POST", "/simulators/reboot", { deviceId: UDID })).status, 404);
   assert.equal((await call(origin, "DELETE", "/simulators/open")).status, 404);
   const opened = await call(origin, "POST", "/simulators/open", { deviceId: UDID });
   assert.equal(opened.status, 200);
   assert.equal((opened.json.device as { id: string }).id, UDID);
-  assert.equal((await call(origin, "POST", "/simulators/shutdown", { deviceId: UDID })).status, 200);
+  assert.equal(
+    (await call(origin, "POST", "/simulators/shutdown", { deviceId: UDID })).status,
+    200,
+  );
   const failed = await call(origin, "POST", "/simulators/settings", { deviceId: UDID });
   assert.equal(failed.status, 500);
   assert.doesNotMatch(failed.text, /xcrun|\/Users/u);
@@ -212,10 +239,19 @@ test("actions always target the serving Mac", async (t) => {
     value: "dark",
   });
   assert.equal(done.status, 200);
-  assert.deepEqual(fake.calls, [["action", { hostId: "local", deviceId: UDID, type: "setAppearance", value: "dark" }]]);
-  const unknown = await call(origin, "POST", "/simulators/action", { deviceId: OTHER, type: "setAppearance", value: "dark" });
+  assert.deepEqual(fake.calls, [
+    ["action", { hostId: "local", deviceId: UDID, type: "setAppearance", value: "dark" }],
+  ]);
+  const unknown = await call(origin, "POST", "/simulators/action", {
+    deviceId: OTHER,
+    type: "setAppearance",
+    value: "dark",
+  });
   assert.equal(unknown.status, 404);
-  assert.equal((await call(origin, "POST", "/simulators/action", { deviceId: UDID, type: "exec" })).status, 400);
+  assert.equal(
+    (await call(origin, "POST", "/simulators/action", { deviceId: UDID, type: "exec" })).status,
+    400,
+  );
 });
 
 test("the hub relay applies the allowlist, listed devices, and a filtered screenshot body", async (t) => {
@@ -229,7 +265,11 @@ test("the hub relay applies the allowlist, listed devices, and a filtered screen
         auth: req.headers.authorization,
         body: body.toString("utf8"),
       });
-      res.writeHead(200, { "content-type": "text/plain", "access-control-allow-origin": "*", "set-cookie": "a=b" });
+      res.writeHead(200, {
+        "content-type": "text/plain",
+        "access-control-allow-origin": "*",
+        "set-cookie": "a=b",
+      });
       res.end("hub-ok");
     });
   });
@@ -239,31 +279,59 @@ test("the hub relay applies the allowlist, listed devices, and a filtered screen
   const { server, origin } = await front(new AidenRemoteSimulatorRelay(() => fake.host));
   t.after(() => server.close());
 
-  const health = await call(origin, "GET", `/simulators/hub/vendor/serve-sim/helper/${UDID}/health`);
+  const health = await call(
+    origin,
+    "GET",
+    `/simulators/hub/vendor/serve-sim/helper/${UDID}/health`,
+  );
   assert.equal(health.status, 200);
   assert.equal(health.text, "hub-ok");
   assert.equal(seen[0]!.url, `/vendor/serve-sim/helper/${UDID}/health`);
   assert.equal(seen[0]!.origin, hubOrigin, "the hub sees its own origin");
   assert.equal(seen[0]!.auth, undefined);
 
-  assert.equal((await call(origin, "GET", `/simulators/hub/vendor/serve-sim/helper/${OTHER}/health`)).status, 404);
+  assert.equal(
+    (await call(origin, "GET", `/simulators/hub/vendor/serve-sim/helper/${OTHER}/health`)).status,
+    404,
+  );
   assert.equal((await call(origin, "GET", "/simulators/hub/exec")).status, 404);
-  assert.equal((await call(origin, "GET", "/simulators/hub/vendor/serve-sim/helper/..%2fexec/health")).status, 404);
-  assert.equal((await call(origin, "POST", `/simulators/hub/vendor/serve-sim/helper/${UDID}/health`, {})).status, 405);
+  assert.equal(
+    (await call(origin, "GET", "/simulators/hub/vendor/serve-sim/helper/..%2fexec/health")).status,
+    404,
+  );
+  assert.equal(
+    (await call(origin, "POST", `/simulators/hub/vendor/serve-sim/helper/${UDID}/health`, {}))
+      .status,
+    405,
+  );
 
-  const shot = await call(origin, "POST", "/simulators/hub/vendor/serve-sim/api/screenshot", { udid: UDID, path: "/tmp/x" });
+  const shot = await call(origin, "POST", "/simulators/hub/vendor/serve-sim/api/screenshot", {
+    udid: UDID,
+    path: "/tmp/x",
+  });
   assert.equal(shot.status, 200);
   assert.deepEqual(JSON.parse(seen[1]!.body), { udid: UDID });
-  assert.equal((await call(origin, "POST", "/simulators/hub/vendor/serve-sim/api/screenshot", { udid: OTHER })).status, 404);
   assert.equal(
-    (await call(origin, "POST", "/simulators/hub/vendor/serve-sim/api/screenshot", { udid: UDID, pad: "x".repeat(2_000) }))
+    (await call(origin, "POST", "/simulators/hub/vendor/serve-sim/api/screenshot", { udid: OTHER }))
       .status,
+    404,
+  );
+  assert.equal(
+    (
+      await call(origin, "POST", "/simulators/hub/vendor/serve-sim/api/screenshot", {
+        udid: UDID,
+        pad: "x".repeat(2_000),
+      })
+    ).status,
     413,
   );
   assert.equal(seen.length, 2, "refused requests never reach the hub");
 
   fake.setSharing(false);
-  assert.equal((await call(origin, "GET", `/simulators/hub/vendor/serve-sim/helper/${UDID}/health`)).status, 404);
+  assert.equal(
+    (await call(origin, "GET", `/simulators/hub/vendor/serve-sim/helper/${UDID}/health`)).status,
+    404,
+  );
 });
 
 test("revoking a device or turning sharing off closes live relays", async (t) => {
@@ -283,7 +351,10 @@ test("revoking a device or turning sharing off closes live relays", async (t) =>
 
   const stream = () =>
     new Promise<IncomingMessage>((resolve, reject) => {
-      const req = request(`${origin}/simulators/hub/vendor/serve-sim/helper/${UDID}/stream.mjpeg`, resolve);
+      const req = request(
+        `${origin}/simulators/hub/vendor/serve-sim/helper/${UDID}/stream.mjpeg`,
+        resolve,
+      );
       req.once("error", reject);
       req.end();
     });
@@ -322,7 +393,10 @@ test("a paired device may hold only a bounded number of relays", async (t) => {
   });
   const stream = () =>
     new Promise<IncomingMessage>((resolve, reject) => {
-      const req = request(`${origin}/simulators/hub/vendor/serve-sim/helper/${UDID}/stream.mjpeg`, resolve);
+      const req = request(
+        `${origin}/simulators/hub/vendor/serve-sim/helper/${UDID}/stream.mjpeg`,
+        resolve,
+      );
       req.once("error", reject);
       req.end();
     });
@@ -353,7 +427,9 @@ test("WebSocket upgrades relay only allowlisted sockets for listed devices", asy
   const hub = createServer();
   hub.on("upgrade", (req, socket) => {
     upgrades.push(`${req.url} origin=${req.headers.origin}`);
-    socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+    socket.write(
+      "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+    );
     socket.end();
   });
   const hubOrigin = await listen(hub);
@@ -376,9 +452,15 @@ test("WebSocket upgrades relay only allowlisted sockets for listed devices", asy
       );
     });
 
-  assert.equal(await upgrade(`/simulators/hub/vendor/serve-sim/helper/ws?device=${UDID}`), "HTTP/1.1 101 Switching Protocols");
+  assert.equal(
+    await upgrade(`/simulators/hub/vendor/serve-sim/helper/ws?device=${UDID}`),
+    "HTTP/1.1 101 Switching Protocols",
+  );
   assert.deepEqual(upgrades, [`/vendor/serve-sim/helper/ws?device=${UDID} origin=${hubOrigin}`]);
-  assert.equal(await upgrade(`/simulators/hub/vendor/serve-sim/helper/ws?device=${OTHER}`), "HTTP/1.1 404 Not Found");
+  assert.equal(
+    await upgrade(`/simulators/hub/vendor/serve-sim/helper/ws?device=${OTHER}`),
+    "HTTP/1.1 404 Not Found",
+  );
   assert.equal(await upgrade("/simulators/hub/exec"), "HTTP/1.1 404 Not Found");
   assert.equal(await upgrade("/simulators/open"), "HTTP/1.1 404 Not Found");
   assert.equal(upgrades.length, 1);
@@ -408,7 +490,9 @@ test("a phone reaches only the MJPEG stream, the screen config reads and the inp
   });
   hub.on("upgrade", (req, socket) => {
     seen.push(`UPGRADE ${req.url}`);
-    socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+    socket.write(
+      "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+    );
     socket.end();
   });
   const hubOrigin = await listen(hub);
@@ -417,7 +501,9 @@ test("a phone reaches only the MJPEG stream, the screen config reads and the inp
   // Paired Macs are not shared with, so the phone's consent alone lets it in.
   const desktops = fakeHost({ hub: hubOrigin });
   desktops.setSharing(false);
-  const relay = new AidenRemoteSimulatorRelay((audience) => (audience === "mobile" ? phones.host : desktops.host));
+  const relay = new AidenRemoteSimulatorRelay((audience) =>
+    audience === "mobile" ? phones.host : desktops.host,
+  );
   const { server, origin } = await front(relay, { deviceId: "phone-1", audience: "mobile" });
   t.after(() => server.close());
 
@@ -441,11 +527,23 @@ test("a phone reaches only the MJPEG stream, the screen config reads and the inp
   ] as const) {
     const refused = await call(origin, method, path, body);
     assert.equal(refused.status, 403, path);
-    assert.deepEqual(refused.json, { code: "capability_denied", message: MOBILE_SIMULATOR_REFUSAL });
+    assert.deepEqual(refused.json, {
+      code: "capability_denied",
+      message: MOBILE_SIMULATOR_REFUSAL,
+    });
   }
-  assert.equal(await upgradeStatus(origin, `/simulators/hub/vendor/serve-sim/helper/ws?device=${UDID}`), "HTTP/1.1 101 Switching Protocols");
-  assert.equal(await upgradeStatus(origin, "/simulators/hub/api/devices/ws"), "HTTP/1.1 403 Refused");
-  assert.equal(await upgradeStatus(origin, `/simulators/hub/vendor/serve-sim/helper/ws?device=${OTHER}`), "HTTP/1.1 404 Not Found");
+  assert.equal(
+    await upgradeStatus(origin, `/simulators/hub/vendor/serve-sim/helper/ws?device=${UDID}`),
+    "HTTP/1.1 101 Switching Protocols",
+  );
+  assert.equal(
+    await upgradeStatus(origin, "/simulators/hub/api/devices/ws"),
+    "HTTP/1.1 403 Refused",
+  );
+  assert.equal(
+    await upgradeStatus(origin, `/simulators/hub/vendor/serve-sim/helper/ws?device=${OTHER}`),
+    "HTTP/1.1 404 Not Found",
+  );
   assert.deepEqual(seen, [
     `GET /vendor/serve-sim/helper/${UDID}/stream.mjpeg`,
     `GET /vendor/serve-sim/helper/${UDID}/config`,
@@ -455,12 +553,19 @@ test("a phone reaches only the MJPEG stream, the screen config reads and the inp
 
   // Settings and device actions stay desktop-only; open and shut down are allowed.
   for (const path of ["/simulators/settings", "/simulators/action"]) {
-    const refused = await call(origin, "POST", path, { deviceId: UDID, type: "setAppearance", value: "dark" });
+    const refused = await call(origin, "POST", path, {
+      deviceId: UDID,
+      type: "setAppearance",
+      value: "dark",
+    });
     assert.equal(refused.status, 403, path);
     assert.equal(refused.json.code, "capability_denied");
   }
   assert.equal((await call(origin, "POST", "/simulators/open", { deviceId: UDID })).status, 200);
-  assert.equal((await call(origin, "POST", "/simulators/shutdown", { deviceId: UDID })).status, 200);
+  assert.equal(
+    (await call(origin, "POST", "/simulators/shutdown", { deviceId: UDID })).status,
+    200,
+  );
   assert.deepEqual(phones.calls, [
     ["open", UDID],
     ["shutdown", UDID],
@@ -470,7 +575,11 @@ test("a phone reaches only the MJPEG stream, the screen config reads and the inp
   phones.setSharing(false);
   const listing = await call(origin, "GET", "/simulators");
   assert.deepEqual(listing.json, { sharing: false, status: "ready", devices: [] });
-  assert.equal((await call(origin, "GET", `/simulators/hub/vendor/serve-sim/helper/${UDID}/stream.mjpeg`)).status, 404);
+  assert.equal(
+    (await call(origin, "GET", `/simulators/hub/vendor/serve-sim/helper/${UDID}/stream.mjpeg`))
+      .status,
+    404,
+  );
 });
 
 test("a chat-scoped listing names the chat to the host and is refused anywhere else", async (t) => {
@@ -482,7 +591,11 @@ test("a chat-scoped listing names the chat to the host and is refused anywhere e
   assert.equal(listed.status, 200);
   assert.deepEqual(phones.calls, [["list", { chatId: "chat-1" }]]);
   assert.equal((await call(origin, "POST", "/simulators/open", { deviceId: UDID })).status, 400);
-  assert.equal((await call(origin, "GET", `/simulators/hub/vendor/serve-sim/helper/${UDID}/stream.mjpeg`)).status, 400);
+  assert.equal(
+    (await call(origin, "GET", `/simulators/hub/vendor/serve-sim/helper/${UDID}/stream.mjpeg`))
+      .status,
+    400,
+  );
 });
 
 test("each audience's consent closes only its own live relays", async (t) => {
@@ -497,7 +610,9 @@ test("each audience's consent closes only its own live relays", async (t) => {
   });
   const phones = fakeHost({ hub: hubOrigin });
   const desktops = fakeHost({ hub: hubOrigin });
-  const relay = new AidenRemoteSimulatorRelay((audience) => (audience === "mobile" ? phones.host : desktops.host));
+  const relay = new AidenRemoteSimulatorRelay((audience) =>
+    audience === "mobile" ? phones.host : desktops.host,
+  );
   const phoneFront = await front(relay, { deviceId: "phone-1", audience: "mobile" });
   const macFront = await front(relay, { deviceId: "mac-1", audience: "desktop" });
   t.after(() => {
@@ -509,7 +624,10 @@ test("each audience's consent closes only its own live relays", async (t) => {
   });
   const stream = (origin: string) =>
     new Promise<IncomingMessage>((resolve, reject) => {
-      const req = request(`${origin}/simulators/hub/vendor/serve-sim/helper/${UDID}/stream.mjpeg`, resolve);
+      const req = request(
+        `${origin}/simulators/hub/vendor/serve-sim/helper/${UDID}/stream.mjpeg`,
+        resolve,
+      );
       req.once("error", reject);
       req.end();
     });
@@ -549,20 +667,40 @@ test("a paired Mac watches and folds a listed Android emulator, and stream tunin
   assert.equal((await call(origin, "GET", `${emu}/fold?device=${SERIAL}`)).status, 200);
   assert.equal((await call(origin, "GET", `${emu}/screenshot?device=${SERIAL}`)).status, 200);
   // The fold body is rebuilt from its posture alone.
-  assert.equal((await call(origin, "POST", `${emu}/fold?device=${SERIAL}`, { posture: "closed", extra: 1 })).status, 200);
-  assert.equal((await call(origin, "POST", `${emu}/fold?device=${SERIAL}`, { posture: "tent" })).status, 400);
+  assert.equal(
+    (await call(origin, "POST", `${emu}/fold?device=${SERIAL}`, { posture: "closed", extra: 1 }))
+      .status,
+    200,
+  );
+  assert.equal(
+    (await call(origin, "POST", `${emu}/fold?device=${SERIAL}`, { posture: "tent" })).status,
+    400,
+  );
   // Every device-scoped route must name a listed emulator.
   assert.equal((await call(origin, "GET", `${emu}/fold?device=emulator-5556`)).status, 404);
   assert.equal((await call(origin, "GET", `${emu}/fold`)).status, 404);
-  assert.equal((await call(origin, "PUT", `${emu}/stream-mode?device=${SERIAL}`, { mode: "scrcpy" })).status, 405);
-  assert.equal((await call(origin, "PATCH", `${emu}/stream-settings?device=${SERIAL}`, {})).status, 405);
-  assert.equal((await call(origin, "POST", `${emu}/tap?device=${SERIAL}`, { x: 1, y: 1 })).status, 404);
+  assert.equal(
+    (await call(origin, "PUT", `${emu}/stream-mode?device=${SERIAL}`, { mode: "scrcpy" })).status,
+    405,
+  );
+  assert.equal(
+    (await call(origin, "PATCH", `${emu}/stream-settings?device=${SERIAL}`, {})).status,
+    405,
+  );
+  assert.equal(
+    (await call(origin, "POST", `${emu}/tap?device=${SERIAL}`, { x: 1, y: 1 })).status,
+    404,
+  );
   assert.deepEqual(
     seen.map((record) => [record.method, record.url, record.body]),
     [
       ["GET", `/vendor/serve-emu/api/fold?device=${SERIAL}`, ""],
       ["GET", `/vendor/serve-emu/api/screenshot?device=${SERIAL}`, ""],
-      ["POST", `/vendor/serve-emu/api/fold?device=${SERIAL}`, JSON.stringify({ posture: "closed" })],
+      [
+        "POST",
+        `/vendor/serve-emu/api/fold?device=${SERIAL}`,
+        JSON.stringify({ posture: "closed" }),
+      ],
     ],
   );
 });
@@ -596,7 +734,11 @@ test("Android listings and opens use AVD names and serials as device ids", async
 });
 
 /** A client frame, masked as a phone's WebSocket sends it unless told otherwise. */
-function clientFrame(opcode: number, payload: Buffer, options: { fin?: boolean; masked?: boolean } = {}): Buffer {
+function clientFrame(
+  opcode: number,
+  payload: Buffer,
+  options: { fin?: boolean; masked?: boolean } = {},
+): Buffer {
   const key = Buffer.from([0x5a, 0x13, 0xc4, 0x7e]);
   const masked = options.masked ?? true;
   const maskBit = masked ? 0x80 : 0;
@@ -621,7 +763,8 @@ async function waitUntil(condition: () => boolean, what: string): Promise<void> 
 
 /** A hub whose input socket records every byte a client sends after the upgrade. */
 async function recordingHub(t: { after(fn: () => void): void }) {
-  const sockets: Array<{ headers: IncomingMessage["headers"]; bytes: Buffer; closed: boolean }> = [];
+  const sockets: Array<{ headers: IncomingMessage["headers"]; bytes: Buffer; closed: boolean }> =
+    [];
   const hub = createServer();
   hub.on("upgrade", (req, socket, head) => {
     const record = { headers: req.headers, bytes: Buffer.from(head), closed: false };
@@ -631,7 +774,9 @@ async function recordingHub(t: { after(fn: () => void): void }) {
     socket.on("end", () => socket.end());
     socket.on("close", () => (record.closed = true));
     socket.on("error", () => undefined);
-    socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+    socket.write(
+      "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+    );
   });
   const origin = await listen(hub);
   t.after(() => hub.close());
@@ -660,13 +805,19 @@ async function openInputSocket(origin: string) {
 test("a phone's input socket carries only touch, button, orientation and keyboard-mode messages", async (t) => {
   const hub = await recordingHub(t);
   const phones = fakeHost({ hub: hub.origin });
-  const relay = new AidenRemoteSimulatorRelay((audience) => (audience === "mobile" ? phones.host : null));
+  const relay = new AidenRemoteSimulatorRelay((audience) =>
+    audience === "mobile" ? phones.host : null,
+  );
   const { server, origin } = await front(relay, { deviceId: "phone-1", audience: "mobile" });
   t.after(() => server.close());
 
   const { socket, state } = await openInputSocket(origin);
   await waitUntil(() => hub.sockets.length === 1, "the hub saw the upgrade");
-  assert.equal(hub.sockets[0]!.headers["sec-websocket-extensions"], undefined, "no extension rewrites a phone's frames");
+  assert.equal(
+    hub.sockets[0]!.headers["sec-websocket-extensions"],
+    undefined,
+    "no extension rewrites a phone's frames",
+  );
 
   const longTouch = inputFrame(0x03, { type: "move", x: 0.5, y: 0.5, padding: "x".repeat(180) });
   const rest = [
@@ -682,16 +833,28 @@ test("a phone's input socket carries only touch, button, orientation and keyboar
   socket.write(longTouch.subarray(5));
   for (const frame of rest) socket.write(frame);
   const expected = Buffer.concat([longTouch, ...rest]);
-  await waitUntil(() => hub.sockets[0]!.bytes.length >= expected.length, "the hub received every allowed frame");
+  await waitUntil(
+    () => hub.sockets[0]!.bytes.length >= expected.length,
+    "the hub received every allowed frame",
+  );
   assert.deepEqual(hub.sockets[0]!.bytes, expected, "allowed frames pass byte for byte");
 
   // A keyboard key (0x06) is desktop-only: the phone is closed with 1008 and the hub never sees it.
-  socket.write(Buffer.concat([inputFrame(0x06, { usage: 4, down: true }), inputFrame(0x03, { type: "end", x: 0, y: 0 })]));
+  socket.write(
+    Buffer.concat([
+      inputFrame(0x06, { usage: 4, down: true }),
+      inputFrame(0x03, { type: "end", x: 0, y: 0 }),
+    ]),
+  );
   await waitUntil(() => state.closed, "the phone was closed");
   await waitUntil(() => hub.sockets[0]!.closed, "the hub socket was closed");
   assert.equal(state.received[0], 0x88, "the phone got a close frame");
   assert.equal(state.received.readUInt16BE(2), 1008);
-  assert.deepEqual(hub.sockets[0]!.bytes, expected, "nothing from the violation on reached the hub");
+  assert.deepEqual(
+    hub.sockets[0]!.bytes,
+    expected,
+    "nothing from the violation on reached the hub",
+  );
 
   // Text, unmasked and empty messages are violations too.
   for (const frame of [
@@ -717,14 +880,20 @@ test("a paired Mac's input socket stays an opaque pipe", async (t) => {
 
   const { socket, state } = await openInputSocket(origin);
   await waitUntil(() => hub.sockets.length === 1, "the hub saw the upgrade");
-  assert.equal(hub.sockets[0]!.headers["sec-websocket-extensions"], "permessage-deflate; client_max_window_bits");
+  assert.equal(
+    hub.sockets[0]!.headers["sec-websocket-extensions"],
+    "permessage-deflate; client_max_window_bits",
+  );
   const frames = Buffer.concat([
     inputFrame(0x06, { usage: 4, down: true }),
     inputFrame(0x05, { touches: [] }),
     clientFrame(0x1, Buffer.from("text")),
   ]);
   socket.write(frames);
-  await waitUntil(() => hub.sockets[0]!.bytes.length >= frames.length, "the hub received every frame");
+  await waitUntil(
+    () => hub.sockets[0]!.bytes.length >= frames.length,
+    "the hub received every frame",
+  );
   assert.deepEqual(hub.sockets[0]!.bytes, frames);
   assert.equal(state.closed, false);
   socket.destroy();

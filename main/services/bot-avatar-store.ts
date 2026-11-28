@@ -1,15 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import {
-  chmod,
-  lstat,
-  mkdir,
-  open,
-  readdir,
-  rename,
-  rm,
-  stat,
-} from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   BOT_AVATAR_CANONICAL_MAX_BYTES,
@@ -26,14 +17,18 @@ import { syncDirectory } from "./durable-fs.js";
 export const BOT_AVATAR_MANIFEST = "manifest.json";
 export const BOT_AVATAR_ASSETS_DIRECTORY = "assets";
 const MANIFEST_MAX_BYTES = 4 * 1_048_576;
-const ASSET_FILENAME = /^avatar-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.png$/u;
+const ASSET_FILENAME =
+  /^avatar-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.png$/u;
 
 export interface FileBotAvatarStorageOptions {
   root(): string;
   beforeManifestPublish?: () => Promise<void>;
 }
 
-function incarnation(info: { dev: number | bigint; ino: number | bigint }): BotAvatarAssetIncarnation {
+function incarnation(info: {
+  dev: number | bigint;
+  ino: number | bigint;
+}): BotAvatarAssetIncarnation {
   return { device: String(info.dev), inode: String(info.ino) };
 }
 
@@ -46,8 +41,9 @@ function sameIncarnation(
 
 function ownedRegular(info: Awaited<ReturnType<typeof stat>>): boolean {
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  return info.isFile() && (uid === undefined || info.uid === uid) &&
-    (Number(info.mode) & 0o077) === 0;
+  return (
+    info.isFile() && (uid === undefined || info.uid === uid) && (Number(info.mode) & 0o077) === 0
+  );
 }
 
 async function ensureOwnedDirectory(directory: string): Promise<BotAvatarAssetIncarnation> {
@@ -69,9 +65,7 @@ function assetFilename(assetId: string): string {
   return candidate;
 }
 
-export function createFileBotAvatarStorage(
-  options: FileBotAvatarStorageOptions,
-): BotAvatarStorage {
+export function createFileBotAvatarStorage(options: FileBotAvatarStorageOptions): BotAvatarStorage {
   let directories: Promise<{
     root: string;
     assets: string;
@@ -95,17 +89,18 @@ export function createFileBotAvatarStorage(
     let rootInfo: Awaited<ReturnType<typeof lstat>>;
     let assetsInfo: Awaited<ReturnType<typeof lstat>>;
     try {
-      [rootInfo, assetsInfo] = await Promise.all([
-        lstat(resolved.root),
-        lstat(resolved.assets),
-      ]);
+      [rootInfo, assetsInfo] = await Promise.all([lstat(resolved.root), lstat(resolved.assets)]);
     } catch {
       throw new BotAvatarStateError("The Bot avatar directory changed outside Aiden.");
     }
-    if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory() ||
-        assetsInfo.isSymbolicLink() || !assetsInfo.isDirectory() ||
-        !sameIncarnation(rootInfo, resolved.rootIncarnation) ||
-        !sameIncarnation(assetsInfo, resolved.assetsIncarnation)) {
+    if (
+      rootInfo.isSymbolicLink() ||
+      !rootInfo.isDirectory() ||
+      assetsInfo.isSymbolicLink() ||
+      !assetsInfo.isDirectory() ||
+      !sameIncarnation(rootInfo, resolved.rootIncarnation) ||
+      !sameIncarnation(assetsInfo, resolved.assetsIncarnation)
+    ) {
       throw new BotAvatarStateError("The Bot avatar directory changed outside Aiden.");
     }
   };
@@ -139,12 +134,19 @@ export function createFileBotAvatarStorage(
     }
     try {
       const info = await handle.stat();
-      if (!ownedRegular(info) || (expected && (!sameIncarnation(info, expected.incarnation) ||
-          info.size !== expected.byteSize))) {
+      if (
+        !ownedRegular(info) ||
+        (expected &&
+          (!sameIncarnation(info, expected.incarnation) || info.size !== expected.byteSize))
+      ) {
         throw new BotAvatarStateError("The Bot avatar asset changed outside Aiden.");
       }
       const current = await lstat(filePath);
-      if (!current.isFile() || current.isSymbolicLink() || !sameIncarnation(current, incarnation(info))) {
+      if (
+        !current.isFile() ||
+        current.isSymbolicLink() ||
+        !sameIncarnation(current, incarnation(info))
+      ) {
         throw new BotAvatarStateError("The Bot avatar asset changed outside Aiden.");
       }
       await assertDirectoriesCurrent(resolved);
@@ -176,8 +178,11 @@ export function createFileBotAvatarStorage(
         }
         const bytes = await handle.readFile();
         const after = await handle.stat();
-        if (!sameIncarnation(after, incarnation(before)) || after.size !== before.size ||
-            bytes.length !== before.size) {
+        if (
+          !sameIncarnation(after, incarnation(before)) ||
+          after.size !== before.size ||
+          bytes.length !== before.size
+        ) {
           throw new BotAvatarStateError("The Bot avatar manifest changed while it was read.");
         }
         return JSON.parse(bytes.toString("utf8")) as unknown;
@@ -230,7 +235,11 @@ export function createFileBotAvatarStorage(
     },
 
     async writeAsset(assetId: string, bytes: Buffer): Promise<BotAvatarStoredAsset> {
-      if (!Buffer.isBuffer(bytes) || bytes.length < 1 || bytes.length > BOT_AVATAR_CANONICAL_MAX_BYTES) {
+      if (
+        !Buffer.isBuffer(bytes) ||
+        bytes.length < 1 ||
+        bytes.length > BOT_AVATAR_CANONICAL_MAX_BYTES
+      ) {
         throw new BotAvatarStateError("The canonical Bot avatar bytes are invalid.");
       }
       const resolved = await resolveDirectories();
@@ -281,14 +290,21 @@ export function createFileBotAvatarStorage(
       }
       try {
         const before = await handle.stat();
-        if (!ownedRegular(before) || !sameIncarnation(before, asset.incarnation) ||
-            before.size !== asset.byteSize || before.size > BOT_AVATAR_CANONICAL_MAX_BYTES) {
+        if (
+          !ownedRegular(before) ||
+          !sameIncarnation(before, asset.incarnation) ||
+          before.size !== asset.byteSize ||
+          before.size > BOT_AVATAR_CANONICAL_MAX_BYTES
+        ) {
           throw new BotAvatarStateError("The Bot avatar asset changed outside Aiden.");
         }
         const bytes = await handle.readFile();
         const after = await handle.stat();
-        if (!sameIncarnation(after, asset.incarnation) || after.size !== before.size ||
-            bytes.length !== before.size) {
+        if (
+          !sameIncarnation(after, asset.incarnation) ||
+          after.size !== before.size ||
+          bytes.length !== before.size
+        ) {
           throw new BotAvatarStateError("The Bot avatar asset changed while it was read.");
         }
         return bytes;

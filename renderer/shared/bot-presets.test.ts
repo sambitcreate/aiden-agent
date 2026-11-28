@@ -10,7 +10,12 @@ import {
   type BotPresetStore,
 } from "./bot-presets.js";
 import { connectionSuggestionFor } from "./bot-connections.js";
-import { BOT_LIMITS, isBotAvatarAppearance, type BotCreateInput, type BotDefinition } from "./bots.js";
+import {
+  BOT_LIMITS,
+  isBotAvatarAppearance,
+  type BotCreateInput,
+  type BotDefinition,
+} from "./bots.js";
 
 test("the four starter Bots are available by id", () => {
   assert.deepEqual(
@@ -51,8 +56,12 @@ test("starter characters are distinct so the carousel never shows twins", () => 
 
 test("preset copy avoids internal jargon", () => {
   for (const preset of BOT_PRESETS) {
-    const copy = [preset.name, preset.subtitle, preset.instructions, preset.suggestedRoutine?.name ?? ""]
-      .join(" ");
+    const copy = [
+      preset.name,
+      preset.subtitle,
+      preset.instructions,
+      preset.suggestedRoutine?.name ?? "",
+    ].join(" ");
     assert.doesNotMatch(copy, /\b(Pi|provider|workspace|capability|canonical|MCP)\b/iu, preset.id);
   }
 });
@@ -136,7 +145,15 @@ test("a failed create can be retried", async () => {
     async createBot(input) {
       attempts += 1;
       if (attempts === 1) throw new Error("disk full");
-      return { id: "bot-1", revision: "1", name: input.name, instructions: input.instructions, avatar: input.avatar, createdAt: 1, updatedAt: 1 };
+      return {
+        id: "bot-1",
+        revision: "1",
+        name: input.name,
+        instructions: input.instructions,
+        avatar: input.avatar,
+        createdAt: 1,
+        updatedAt: 1,
+      };
     },
   });
   await assert.rejects(createFromPreset("researcher"), /disk full/u);

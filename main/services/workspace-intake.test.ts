@@ -30,8 +30,21 @@ const FIXTURE_URL = "https://example.invalid/acme/widget.git";
 function git(cwd: string, ...args: string[]): string {
   return execFileSync(
     "git",
-    ["-c", "user.name=Aiden Test", "-c", "user.email=test@example.invalid", "-c", "core.hooksPath=/dev/null", ...args],
-    { cwd, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, stdio: ["ignore", "pipe", "pipe"] },
+    [
+      "-c",
+      "user.name=Aiden Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "-c",
+      "core.hooksPath=/dev/null",
+      ...args,
+    ],
+    {
+      cwd,
+      encoding: "utf8",
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
   );
 }
 
@@ -64,9 +77,12 @@ async function fixture(
     configStore: {
       listWorkspaces: async () => [...workspaces],
       getWorkspace: async (id: string) => workspaces.find((workspace) => workspace.id === id),
-      saveWorkspace: async (workspace: Workspace, guard?: (current: Workspace | undefined) => void | Promise<void>) => {
+      saveWorkspace: async (
+        workspace: Workspace,
+        guard?: (current: Workspace | undefined) => void | Promise<void>,
+      ) => {
         await options.beforeSave?.();
-        await guard?.(workspaces.find(row => row.id === workspace.id));
+        await guard?.(workspaces.find((row) => row.id === workspace.id));
         workspaces.push(workspace);
         return workspace;
       },
@@ -101,7 +117,9 @@ async function fixture(
       await options.beforeCreate?.();
       return application.createFromFolder(folderPath, undefined, creationOptions);
     },
-    ...(options.caseInsensitivePaths === undefined ? {} : { caseInsensitivePaths: options.caseInsensitivePaths }),
+    ...(options.caseInsensitivePaths === undefined
+      ? {}
+      : { caseInsensitivePaths: options.caseInsensitivePaths }),
     runClone: async (request) => {
       cloneRequests.push(request);
       return options.runClone ? options.runClone(request) : assert.fail("no clone expected");
@@ -124,7 +142,10 @@ async function bareRepository(root: string, ignorePattern?: string): Promise<str
   return bare;
 }
 
-const cloneOptions = (progress: WorkspaceCloneProgress[] = [], signal = new AbortController().signal) => ({
+const cloneOptions = (
+  progress: WorkspaceCloneProgress[] = [],
+  signal = new AbortController().signal,
+) => ({
   cloneId: "clone-test-0001",
   signal,
   onProgress: (event: WorkspaceCloneProgress) => progress.push(event),
@@ -143,7 +164,11 @@ test("typed paths normalise ~, absolute and workspace-relative forms and reject 
     ["../sibling", base, "/Users/me/projects/sibling"],
   ];
   for (const [input, relativeBase, expected] of cases) {
-    assert.deepEqual(parseWorkspacePathInput(input, { home, relativeBase }), { ok: true, path: expected }, String(input));
+    assert.deepEqual(
+      parseWorkspacePathInput(input, { home, relativeBase }),
+      { ok: true, path: expected },
+      String(input),
+    );
   }
   const rejected: Array<[unknown, string | undefined, string]> = [
     ["", undefined, "empty"],
@@ -176,12 +201,20 @@ test("inspection reports folders, repositories, creatable paths and invalid pare
   await fs.writeFile(file, "x");
 
   assert.deepEqual(await service.inspect(plain), { kind: "folder", path: plain, isGitRepo: false });
-  assert.deepEqual(await service.inspect(`${repo}/`), { kind: "folder", path: repo, isGitRepo: true });
+  assert.deepEqual(await service.inspect(`${repo}/`), {
+    kind: "folder",
+    path: repo,
+    isGitRepo: true,
+  });
   assert.deepEqual(await service.inspect(path.join(root, "new-app")), {
     kind: "creatable",
     path: path.join(root, "new-app"),
   });
-  assert.equal(await exists(path.join(root, "new-app")), false, "inspection must not create folders");
+  assert.equal(
+    await exists(path.join(root, "new-app")),
+    false,
+    "inspection must not create folders",
+  );
   assert.deepEqual(await service.inspect("~"), { kind: "folder", path: home, isGitRepo: false });
 
   const invalid = async (input: string, code: string) => {
@@ -289,13 +322,26 @@ test("a real clone runs without hooks, reports progress and registers the worksp
   const marker = path.join(root, "hook-ran");
   const templates = path.join(root, "templates");
   await fs.mkdir(path.join(templates, "hooks"), { recursive: true });
-  await fs.writeFile(path.join(templates, "hooks", "post-checkout"), `#!/bin/sh\necho ran >> "${marker}"\n`, {
-    mode: 0o755,
-  });
+  await fs.writeFile(
+    path.join(templates, "hooks", "post-checkout"),
+    `#!/bin/sh\necho ran >> "${marker}"\n`,
+    {
+      mode: 0o755,
+    },
+  );
   // Oracle: without Aiden's settings this template hook does run on clone.
   execFileSync(
     "git",
-    ["-c", "protocol.file.allow=always", "-c", `init.templateDir=${templates}`, "clone", "-q", `file://${bare}`, "control"],
+    [
+      "-c",
+      "protocol.file.allow=always",
+      "-c",
+      `init.templateDir=${templates}`,
+      "clone",
+      "-q",
+      `file://${bare}`,
+      "control",
+    ],
     { cwd: root, stdio: "ignore" },
   );
   assert.equal(await exists(marker), true, "control clone must run the template hook");
@@ -317,13 +363,18 @@ test("a real clone runs without hooks, reports progress and registers the worksp
   const destination = path.join(home, "projects", "widget");
   assert.equal(result.destination, destination);
   assert.equal(result.workspace.folderPath, destination);
-  assert.deepEqual(workspaces.map((workspace) => workspace.folderPath), [destination]);
+  assert.deepEqual(
+    workspaces.map((workspace) => workspace.folderPath),
+    [destination],
+  );
   assert.equal(await fs.readFile(path.join(destination, "README.md"), "utf8"), "# Widget\n");
   assert.equal(git(destination, "remote", "get-url", "origin").trim(), FIXTURE_URL);
   assert.equal(await exists(marker), false, "clone hooks must not run");
   assert.deepEqual(await stagingFolders(path.join(home, "projects")), [], "staging is removed");
   assert.ok(progress.length > 0, "progress events were reported");
-  assert.ok(progress.every((event) => event.cloneId === "clone-test-0001" && event.phase.length > 0));
+  assert.ok(
+    progress.every((event) => event.cloneId === "clone-test-0001" && event.phase.length > 0),
+  );
 });
 
 test("a real clone that Git rejects leaves no destination behind", async (t) => {
@@ -332,14 +383,20 @@ test("a real clone that Git rejects leaves no destination behind", async (t) => 
       extraConfig: [
         ["protocol.file.allow", "always"],
         // Points at a path that is not a repository; no network is involved.
-        [`url.file://${path.join(os.tmpdir(), "aiden-intake-missing-repo.git")}.insteadOf`, FIXTURE_URL],
+        [
+          `url.file://${path.join(os.tmpdir(), "aiden-intake-missing-repo.git")}.insteadOf`,
+          FIXTURE_URL,
+        ],
       ],
     }),
   });
   const result = await service.clone({ url: FIXTURE_URL, destination: "~/widget" }, cloneOptions());
   assert.equal(result.ok, false);
   assert.equal(!result.ok && result.code, "not-found");
-  assert.ok(!result.ok && result.detail && !result.detail.includes(home), "detail redacts the home folder");
+  assert.ok(
+    !result.ok && result.detail && !result.detail.includes(home),
+    "detail redacts the home folder",
+  );
   assert.equal(await exists(path.join(home, "widget")), false);
   assert.equal(workspaces.length, 0);
 });
@@ -358,7 +415,10 @@ test("clone refuses bad URLs and occupied destinations before running Git", asyn
     [{ url: "file:///etc" }, "invalid-url"],
     [{ url: "acme/widget", destination: occupied }, "destination-exists"],
     [{ url: "acme/widget", destination: file }, "invalid-destination"],
-    [{ url: "acme/widget", destination: path.join(root, "missing", "widget") }, "invalid-destination"],
+    [
+      { url: "acme/widget", destination: path.join(root, "missing", "widget") },
+      "invalid-destination",
+    ],
     [{ url: "acme/widget", destination: "relative/widget" }, "invalid-destination"],
     [{ url: "acme/widget", destination: "./widget" }, "invalid-destination"],
     [{ url: "acme/widget", destination: "/" }, "invalid-destination"],
@@ -379,7 +439,8 @@ test("a failed clone removes only its staging folder and never writes the destin
     return {
       ok: false as const,
       reason: "exit" as const,
-      stderrTail: "Cloning into 'repo'...\nfatal: could not read Username for 'https://github.com': terminal prompts disabled\n",
+      stderrTail:
+        "Cloning into 'repo'...\nfatal: could not read Username for 'https://github.com': terminal prompts disabled\n",
     };
   };
   const { root, home, service, cloneRequests } = await fixture(t, { runClone: partialThenFail });
@@ -390,7 +451,11 @@ test("a failed clone removes only its staging folder and never writes the destin
   assert.equal(request?.url, "https://github.com/acme/widget.git");
   assert.equal(path.dirname(request?.cwd ?? ""), home, "staging sits beside the destination");
   assert.match(path.basename(request?.cwd ?? ""), /^\.aiden-clone-/u);
-  assert.equal(request?.destination, path.join(request?.cwd ?? "", "repo"), "Git clones inside the staging folder");
+  assert.equal(
+    request?.destination,
+    path.join(request?.cwd ?? "", "repo"),
+    "Git clones inside the staging folder",
+  );
   assert.equal(await exists(path.join(home, "widget")), false);
   assert.deepEqual(await stagingFolders(home), []);
 
@@ -405,12 +470,21 @@ test("a failed clone removes only its staging folder and never writes the destin
 test("clone never targets a .git folder, whatever the URL or destination", async (t) => {
   const { root, home, service, cloneRequests } = await fixture(t);
   await fs.mkdir(path.join(home, "projects"));
-  for (const url of ["https://evil.example/x/.git.git", "acme/.git.git", "git@evil.example:x/.GIT.git"]) {
+  for (const url of [
+    "https://evil.example/x/.git.git",
+    "acme/.git.git",
+    "git@evil.example:x/.GIT.git",
+  ]) {
     const result = await service.clone({ url }, cloneOptions());
     assert.equal(!result.ok && result.code, "invalid-url", url);
   }
   await fs.mkdir(path.join(root, "repo"));
-  for (const destination of ["~/.git", "~/projects/.GIT", path.join(root, "repo", ".git", "nested"), path.join(root, ".Git")]) {
+  for (const destination of [
+    "~/.git",
+    "~/projects/.GIT",
+    path.join(root, "repo", ".git", "nested"),
+    path.join(root, ".Git"),
+  ]) {
     const result = await service.clone({ url: "acme/widget", destination }, cloneOptions());
     assert.equal(!result.ok && result.code, "invalid-destination", destination);
   }
@@ -433,13 +507,17 @@ async function stagingFolders(dir: string): Promise<string[]> {
 
 const earlyEof = { ok: false as const, reason: "exit" as const, stderrTail: "fatal: early EOF" };
 /** The user-visible destination for `acme/widget` in a fixture without ~/projects. */
-const visibleDestination = (request: GitCloneRequest) => path.join(path.dirname(request.cwd), "widget");
+const visibleDestination = (request: GitCloneRequest) =>
+  path.join(path.dirname(request.cwd), "widget");
 
 test("a failed clone never touches whatever occupies the destination", async (t) => {
   // The destination path becomes a link to unrelated data while Git runs.
   const linked = await fixture(t, {
     runClone: async (request) => {
-      await fs.symlink(await outsider(path.dirname(path.dirname(request.cwd))), visibleDestination(request));
+      await fs.symlink(
+        await outsider(path.dirname(path.dirname(request.cwd))),
+        visibleDestination(request),
+      );
       return earlyEof;
     },
   });
@@ -453,7 +531,10 @@ test("a failed clone never touches whatever occupies the destination", async (t)
   const adopted = await fixture(t, {
     runClone: async (request) => {
       await fs.rmdir(visibleDestination(request));
-      await fs.symlink(await outsider(path.dirname(path.dirname(request.cwd))), visibleDestination(request));
+      await fs.symlink(
+        await outsider(path.dirname(path.dirname(request.cwd))),
+        visibleDestination(request),
+      );
       return earlyEof;
     },
   });
@@ -558,7 +639,10 @@ test("a destination that appears during a successful clone is never overwritten"
   const linked = await fixture(t, {
     runClone: async (request) => {
       await finishedClone(request);
-      await fs.symlink(await outsider(path.dirname(path.dirname(request.cwd))), visibleDestination(request));
+      await fs.symlink(
+        await outsider(path.dirname(path.dirname(request.cwd))),
+        visibleDestination(request),
+      );
       return { ok: true as const };
     },
   });
@@ -609,7 +693,10 @@ test("clones into aliases of one folder cannot run at the same time", async (t) 
   await fs.mkdir(real);
   await fs.symlink(real, path.join(root, "link"));
 
-  const first = service.clone({ url: "acme/widget", destination: path.join(real, "widget") }, cloneOptions());
+  const first = service.clone(
+    { url: "acme/widget", destination: path.join(real, "widget") },
+    cloneOptions(),
+  );
   for (let attempt = 0; attempt < 200 && cloneRequests.length === 0; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
@@ -621,7 +708,11 @@ test("clones into aliases of one folder cannot run at the same time", async (t) 
   release?.();
   const result = await first;
   assert.ok(result.ok, JSON.stringify(result));
-  assert.equal(await exists(path.join(real, "widget", ".git")), true, "the running clone was left intact");
+  assert.equal(
+    await exists(path.join(real, "widget", ".git")),
+    true,
+    "the running clone was left intact",
+  );
   assert.equal(cloneRequests.length, 1);
 });
 
@@ -645,8 +736,13 @@ test("the real runner streams progress, and cancel or timeout stops Git", async 
   const controller = new AbortController();
   const progress: Array<{ phase: string; percent?: number }> = [];
   const started = Date.now();
-  const running = createGitCloneRunner({ gitBinary: slowGit })(request(controller.signal, progress));
-  while (!progress.some((event) => event.phase === "Receiving objects") && Date.now() - started < 5_000) {
+  const running = createGitCloneRunner({ gitBinary: slowGit })(
+    request(controller.signal, progress),
+  );
+  while (
+    !progress.some((event) => event.phase === "Receiving objects") &&
+    Date.now() - started < 5_000
+  ) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.equal(progress[0]?.phase, "Cloning");
@@ -668,7 +764,13 @@ test("a cancelled clone settles only after Git helpers that ignore SIGTERM are g
   const helperPidFile = path.join(root, "helper.pid");
   let helperPid = 0;
   t.after(async () => {
-    if (helperPid > 0) { try { process.kill(helperPid, "SIGKILL"); } catch { /* gone */ } }
+    if (helperPid > 0) {
+      try {
+        process.kill(helperPid, "SIGKILL");
+      } catch {
+        /* gone */
+      }
+    }
     await fs.rm(root, { recursive: true, force: true });
   });
   const slowGit = path.join(root, "slow-git");
@@ -710,18 +812,38 @@ test("clone progress lines and failures are parsed into short user-facing result
     phase: "Counting objects",
     percent: 100,
   });
-  assert.deepEqual(parseGitCloneProgress("Receiving objects:  45% (450/1000), 1.20 MiB | 2.00 MiB/s"), {
-    phase: "Receiving objects",
-    percent: 45,
+  assert.deepEqual(
+    parseGitCloneProgress("Receiving objects:  45% (450/1000), 1.20 MiB | 2.00 MiB/s"),
+    {
+      phase: "Receiving objects",
+      percent: 45,
+    },
+  );
+  assert.deepEqual(parseGitCloneProgress("remote: Enumerating objects: 1234, done."), {
+    phase: "Enumerating objects",
   });
-  assert.deepEqual(parseGitCloneProgress("remote: Enumerating objects: 1234, done."), { phase: "Enumerating objects" });
-  assert.equal(parseGitCloneProgress("warning: You appear to have cloned an empty repository."), undefined);
+  assert.equal(
+    parseGitCloneProgress("warning: You appear to have cloned an empty repository."),
+    undefined,
+  );
 
   const cases: Array<[string, string]> = [
-    ["fatal: could not read Username for 'https://github.com': terminal prompts disabled", "auth-failed"],
-    ["git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.", "auth-failed"],
-    ["remote: Repository not found.\nfatal: repository 'https://github.com/a/b.git/' not found", "not-found"],
-    ["fatal: unable to access 'https://nope.invalid/a.git/': Could not resolve host: nope.invalid", "network"],
+    [
+      "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+      "auth-failed",
+    ],
+    [
+      "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+      "auth-failed",
+    ],
+    [
+      "remote: Repository not found.\nfatal: repository 'https://github.com/a/b.git/' not found",
+      "not-found",
+    ],
+    [
+      "fatal: unable to access 'https://nope.invalid/a.git/': Could not resolve host: nope.invalid",
+      "network",
+    ],
     ["ssh: Could not resolve hostname nope.invalid: nodename nor servname provided", "network"],
     ["Host key verification failed.\nfatal: Could not read from remote repository.", "host-key"],
     ["fatal: early EOF", "failed"],
@@ -737,23 +859,61 @@ test("clone progress lines and failures are parsed into short user-facing result
   );
 });
 
-
-test("remote clone publishes optional environment files privately before registration and replays without another clone", async t => {
+test("remote clone publishes optional environment files privately before registration and replays without another clone", async (t) => {
   const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-clone-bare-"));
   t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
   const bare = await bareRepository(repositoryRoot, ".env*");
-  const fixture_ = await fixture(t, { runClone: createGitCloneRunner({ extraConfig: [["protocol.file.allow", "always"], [`url.file://${bare}.insteadOf`, FIXTURE_URL]] }) });
+  const fixture_ = await fixture(t, {
+    runClone: createGitCloneRunner({
+      extraConfig: [
+        ["protocol.file.allow", "always"],
+        [`url.file://${bare}.insteadOf`, FIXTURE_URL],
+      ],
+    }),
+  });
   let consumed = 0;
   let revalidated = 0;
-  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
+  const claim = {
+    instanceId: "instance",
+    deviceId: "device",
+    rootId: "root",
+    policyRevision: "policy",
+    canonicalRootPath: fixture_.home,
+    canonicalPath: fixture_.home,
+    filesystemDevice: "1",
+    filesystemInode: "2",
+    expiresAt: Date.now() + 120_000,
+  };
   const snapshots: unknown[] = [];
-  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, persistIdempotency: async snapshot => { snapshots.push(snapshot); }, browser: {
-    consumeSelection: async () => { consumed++; return claim; }, revalidateConsumedSelection: async () => { revalidated++; return claim; },
-  } });
-  const input = { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [{ name: ".env.local", content: "KEY=synthetic-private" }] };
+  const remote = new AidenRemoteWorkspaceService({
+    application: fixture_.application,
+    clone: fixture_.service.clone,
+    persistIdempotency: async (snapshot) => {
+      snapshots.push(snapshot);
+    },
+    browser: {
+      consumeSelection: async () => {
+        consumed++;
+        return claim;
+      },
+      revalidateConsumedSelection: async () => {
+        revalidated++;
+        return claim;
+      },
+    },
+  });
+  const input = {
+    mode: "clone",
+    selection: `sel_${"a".repeat(43)}`,
+    url: FIXTURE_URL,
+    files: [{ name: ".env.local", content: "KEY=synthetic-private" }],
+  };
   const result = await remote.create("device", "clone-idempotent-key", input);
   const destination = path.join(fixture_.home, "widget");
-  assert.equal(await fs.readFile(path.join(destination, ".env.local"), "utf8"), "KEY=synthetic-private");
+  assert.equal(
+    await fs.readFile(path.join(destination, ".env.local"), "utf8"),
+    "KEY=synthetic-private",
+  );
   assert.equal((await fs.stat(path.join(destination, ".env.local"))).mode & 0o777, 0o600);
   git(destination, "add", "-A", "--", ".");
   assert.equal(git(destination, "diff", "--cached", "--name-only").includes(".env.local"), false);
@@ -767,7 +927,7 @@ test("remote clone publishes optional environment files privately before registr
   assert.ok(revalidated >= 3);
 });
 
-test("remote clone refuses environment files that the destination does not ignore", async t => {
+test("remote clone refuses environment files that the destination does not ignore", async (t) => {
   const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-clone-ignore-"));
   t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
   const bare = await bareRepository(repositoryRoot);
@@ -775,52 +935,157 @@ test("remote clone refuses environment files that the destination does not ignor
   await fs.appendFile(path.join(sourcePath, ".git", "info", "exclude"), "\n.env.local\n");
   await fs.writeFile(path.join(sourcePath, ".env.local"), "SECRET=synthetic");
   git(sourcePath, "remote", "add", "origin", FIXTURE_URL);
-  const source = createPeerProjectSource({ getWorkspace: async () => ({ id: "source", name: "Source", folderPath: sourcePath, permission: "ask", createdAt: 0, updatedAt: 0 }) });
+  const source = createPeerProjectSource({
+    getWorkspace: async () => ({
+      id: "source",
+      name: "Source",
+      folderPath: sourcePath,
+      permission: "ask",
+      createdAt: 0,
+      updatedAt: 0,
+    }),
+  });
   const files = (await source.read("source", [".env.local"])).files;
   assert.equal(files[0]?.content, "SECRET=synthetic");
-  const fixture_ = await fixture(t, { runClone: createGitCloneRunner({ extraConfig: [["protocol.file.allow", "always"], [`url.file://${bare}.insteadOf`, FIXTURE_URL]] }) });
-  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
-  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: { consumeSelection: async () => claim, revalidateConsumedSelection: async () => claim } });
-  await assert.rejects(remote.create("device", "clone-unignored-file", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files }), /destination repository must ignore/);
+  const fixture_ = await fixture(t, {
+    runClone: createGitCloneRunner({
+      extraConfig: [
+        ["protocol.file.allow", "always"],
+        [`url.file://${bare}.insteadOf`, FIXTURE_URL],
+      ],
+    }),
+  });
+  const claim = {
+    instanceId: "instance",
+    deviceId: "device",
+    rootId: "root",
+    policyRevision: "policy",
+    canonicalRootPath: fixture_.home,
+    canonicalPath: fixture_.home,
+    filesystemDevice: "1",
+    filesystemInode: "2",
+    expiresAt: Date.now() + 120_000,
+  };
+  const remote = new AidenRemoteWorkspaceService({
+    application: fixture_.application,
+    clone: fixture_.service.clone,
+    browser: {
+      consumeSelection: async () => claim,
+      revalidateConsumedSelection: async () => claim,
+    },
+  });
+  await assert.rejects(
+    remote.create("device", "clone-unignored-file", {
+      mode: "clone",
+      selection: `sel_${"a".repeat(43)}`,
+      url: FIXTURE_URL,
+      files,
+    }),
+    /destination repository must ignore/,
+  );
   assert.deepEqual(await fs.readdir(fixture_.home), []);
   assert.equal(fixture_.workspaces.length, 0);
 });
 
-test("destination ignore admission does not depend on case-insensitive Git configuration", async t => {
+test("destination ignore admission does not depend on case-insensitive Git configuration", async (t) => {
   const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-ignore-case-"));
   t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
   const bare = await bareRepository(repositoryRoot, ".ENV*");
-  const clone = createGitCloneRunner({ extraConfig: [["protocol.file.allow", "always"], [`url.file://${bare}.insteadOf`, FIXTURE_URL]] });
-  const fixture_ = await fixture(t, { runClone: async request => {
-    const result = await clone(request);
-    if (result.ok) git(request.destination, "config", "core.ignorecase", "true");
-    return result;
-  } });
-  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
-  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: { consumeSelection: async () => claim, revalidateConsumedSelection: async () => claim } });
-  await assert.rejects(remote.create("device", "clone-ignore-case-key", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [{ name: ".env.local", content: "SECRET=synthetic" }] }), /destination repository must ignore/);
+  const clone = createGitCloneRunner({
+    extraConfig: [
+      ["protocol.file.allow", "always"],
+      [`url.file://${bare}.insteadOf`, FIXTURE_URL],
+    ],
+  });
+  const fixture_ = await fixture(t, {
+    runClone: async (request) => {
+      const result = await clone(request);
+      if (result.ok) git(request.destination, "config", "core.ignorecase", "true");
+      return result;
+    },
+  });
+  const claim = {
+    instanceId: "instance",
+    deviceId: "device",
+    rootId: "root",
+    policyRevision: "policy",
+    canonicalRootPath: fixture_.home,
+    canonicalPath: fixture_.home,
+    filesystemDevice: "1",
+    filesystemInode: "2",
+    expiresAt: Date.now() + 120_000,
+  };
+  const remote = new AidenRemoteWorkspaceService({
+    application: fixture_.application,
+    clone: fixture_.service.clone,
+    browser: {
+      consumeSelection: async () => claim,
+      revalidateConsumedSelection: async () => claim,
+    },
+  });
+  await assert.rejects(
+    remote.create("device", "clone-ignore-case-key", {
+      mode: "clone",
+      selection: `sel_${"a".repeat(43)}`,
+      url: FIXTURE_URL,
+      files: [{ name: ".env.local", content: "SECRET=synthetic" }],
+    }),
+    /destination repository must ignore/,
+  );
   assert.deepEqual(await fs.readdir(fixture_.home), []);
   assert.equal(fixture_.workspaces.length, 0);
 });
 
-test("destination rejects mixed-case negation under normal Git staging", async t => {
+test("destination rejects mixed-case negation under normal Git staging", async (t) => {
   const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-negation-"));
   t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
   const bare = await bareRepository(repositoryRoot, ".env*\n!.ENV.local");
-  const clone = createGitCloneRunner({ extraConfig: [["protocol.file.allow", "always"], [`url.file://${bare}.insteadOf`, FIXTURE_URL]] });
-  const fixture_ = await fixture(t, { runClone: async request => {
-    const result = await clone(request);
-    if (result.ok) git(request.destination, "config", "core.ignorecase", "true");
-    return result;
-  } });
-  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
-  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: { consumeSelection: async () => claim, revalidateConsumedSelection: async () => claim } });
-  await assert.rejects(remote.create("device", "clone-ignore-negation", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [{ name: ".env.local", content: "SECRET=synthetic" }] }), /destination repository must ignore/);
+  const clone = createGitCloneRunner({
+    extraConfig: [
+      ["protocol.file.allow", "always"],
+      [`url.file://${bare}.insteadOf`, FIXTURE_URL],
+    ],
+  });
+  const fixture_ = await fixture(t, {
+    runClone: async (request) => {
+      const result = await clone(request);
+      if (result.ok) git(request.destination, "config", "core.ignorecase", "true");
+      return result;
+    },
+  });
+  const claim = {
+    instanceId: "instance",
+    deviceId: "device",
+    rootId: "root",
+    policyRevision: "policy",
+    canonicalRootPath: fixture_.home,
+    canonicalPath: fixture_.home,
+    filesystemDevice: "1",
+    filesystemInode: "2",
+    expiresAt: Date.now() + 120_000,
+  };
+  const remote = new AidenRemoteWorkspaceService({
+    application: fixture_.application,
+    clone: fixture_.service.clone,
+    browser: {
+      consumeSelection: async () => claim,
+      revalidateConsumedSelection: async () => claim,
+    },
+  });
+  await assert.rejects(
+    remote.create("device", "clone-ignore-negation", {
+      mode: "clone",
+      selection: `sel_${"a".repeat(43)}`,
+      url: FIXTURE_URL,
+      files: [{ name: ".env.local", content: "SECRET=synthetic" }],
+    }),
+    /destination repository must ignore/,
+  );
   assert.deepEqual(await fs.readdir(fixture_.home), []);
   assert.equal(fixture_.workspaces.length, 0);
 });
 
-test("destination cannot rely on a user-level Git exclude", async t => {
+test("destination cannot rely on a user-level Git exclude", async (t) => {
   const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-global-ignore-"));
   t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
   const bare = await bareRepository(repositoryRoot);
@@ -830,131 +1095,326 @@ test("destination cannot rely on a user-level Git exclude", async t => {
   await fs.writeFile(config, `[core]\n  excludesFile = ${excludes}\n`);
   const previous = process.env.GIT_CONFIG_GLOBAL;
   process.env.GIT_CONFIG_GLOBAL = config;
-  t.after(() => { if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = previous; });
-  const clone = createGitCloneRunner({ extraConfig: [["protocol.file.allow", "always"], [`url.file://${bare}.insteadOf`, FIXTURE_URL]] });
+  t.after(() => {
+    if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = previous;
+  });
+  const clone = createGitCloneRunner({
+    extraConfig: [
+      ["protocol.file.allow", "always"],
+      [`url.file://${bare}.insteadOf`, FIXTURE_URL],
+    ],
+  });
   const fixture_ = await fixture(t, { runClone: clone });
-  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
-  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: { consumeSelection: async () => claim, revalidateConsumedSelection: async () => claim } });
-  await assert.rejects(remote.create("device", "clone-global-ignore-key", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [{ name: ".env.local", content: "SECRET=synthetic" }] }), /destination repository must ignore/);
+  const claim = {
+    instanceId: "instance",
+    deviceId: "device",
+    rootId: "root",
+    policyRevision: "policy",
+    canonicalRootPath: fixture_.home,
+    canonicalPath: fixture_.home,
+    filesystemDevice: "1",
+    filesystemInode: "2",
+    expiresAt: Date.now() + 120_000,
+  };
+  const remote = new AidenRemoteWorkspaceService({
+    application: fixture_.application,
+    clone: fixture_.service.clone,
+    browser: {
+      consumeSelection: async () => claim,
+      revalidateConsumedSelection: async () => claim,
+    },
+  });
+  await assert.rejects(
+    remote.create("device", "clone-global-ignore-key", {
+      mode: "clone",
+      selection: `sel_${"a".repeat(43)}`,
+      url: FIXTURE_URL,
+      files: [{ name: ".env.local", content: "SECRET=synthetic" }],
+    }),
+    /destination repository must ignore/,
+  );
   assert.deepEqual(await fs.readdir(fixture_.home), []);
   assert.equal(fixture_.workspaces.length, 0);
 });
 
-test("a cloned symlink cannot receive transferred environment secrets and failure removes only private staging", async t => {
-  const fixture_ = await fixture(t, { runClone: async request => {
-    await fs.mkdir(request.destination);
-    git(request.destination, "init", "-q");
-    await fs.writeFile(path.join(request.destination, ".gitignore"), ".env\n");
-    await fs.symlink("/tmp/never-write-environment", path.join(request.destination, ".env"));
-    return { ok: true };
-  } });
-  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
-  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: { consumeSelection: async () => claim, revalidateConsumedSelection: async () => claim } });
-  await assert.rejects(remote.create("device", "clone-fails-safely", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [{ name: ".env", content: "KEY=synthetic" }] }), /could not be cloned/);
+test("a cloned symlink cannot receive transferred environment secrets and failure removes only private staging", async (t) => {
+  const fixture_ = await fixture(t, {
+    runClone: async (request) => {
+      await fs.mkdir(request.destination);
+      git(request.destination, "init", "-q");
+      await fs.writeFile(path.join(request.destination, ".gitignore"), ".env\n");
+      await fs.symlink("/tmp/never-write-environment", path.join(request.destination, ".env"));
+      return { ok: true };
+    },
+  });
+  const claim = {
+    instanceId: "instance",
+    deviceId: "device",
+    rootId: "root",
+    policyRevision: "policy",
+    canonicalRootPath: fixture_.home,
+    canonicalPath: fixture_.home,
+    filesystemDevice: "1",
+    filesystemInode: "2",
+    expiresAt: Date.now() + 120_000,
+  };
+  const remote = new AidenRemoteWorkspaceService({
+    application: fixture_.application,
+    clone: fixture_.service.clone,
+    browser: {
+      consumeSelection: async () => claim,
+      revalidateConsumedSelection: async () => claim,
+    },
+  });
+  await assert.rejects(
+    remote.create("device", "clone-fails-safely", {
+      mode: "clone",
+      selection: `sel_${"a".repeat(43)}`,
+      url: FIXTURE_URL,
+      files: [{ name: ".env", content: "KEY=synthetic" }],
+    }),
+    /could not be cloned/,
+  );
   assert.deepEqual(await fs.readdir(fixture_.home), []);
   assert.equal(fixture_.workspaces.length, 0);
 });
 
-test("cancellation before publishing discards the clone rather than registering it", async t => {
-  const fixture_ = await fixture(t, { runClone: async request => { await fs.mkdir(request.destination); return { ok: true }; } });
+test("cancellation before publishing discards the clone rather than registering it", async (t) => {
+  const fixture_ = await fixture(t, {
+    runClone: async (request) => {
+      await fs.mkdir(request.destination);
+      return { ok: true };
+    },
+  });
   const controller = new AbortController();
-  const result = await fixture_.service.clone({ url: FIXTURE_URL }, { ...cloneOptions([], controller.signal), beforePublish: async () => { controller.abort(); } });
+  const result = await fixture_.service.clone(
+    { url: FIXTURE_URL },
+    {
+      ...cloneOptions([], controller.signal),
+      beforePublish: async () => {
+        controller.abort();
+      },
+    },
+  );
   assert.equal(result.ok, false);
   assert.equal(!result.ok && result.code, "cancelled");
   assert.equal(fixture_.workspaces.length, 0);
   assert.deepEqual(await fs.readdir(fixture_.home), []);
 });
 
-
-test("revoking an approved root during clone prevents environment writes and registration", async t => {
+test("revoking an approved root during clone prevents environment writes and registration", async (t) => {
   let approved = true;
-  const fixture_ = await fixture(t, { runClone: async request => {
-    await fs.mkdir(request.destination);
-    approved = false;
-    return { ok: true };
-  } });
-  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
-  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: {
-    consumeSelection: async () => claim,
-    revalidateConsumedSelection: async () => { if (!approved) throw new Error("policy changed"); return claim; },
-  } });
-  await assert.rejects(remote.create("device", "clone-root-policy-key", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [{ name: ".env", content: "KEY=synthetic" }] }), /could not be cloned/);
+  const fixture_ = await fixture(t, {
+    runClone: async (request) => {
+      await fs.mkdir(request.destination);
+      approved = false;
+      return { ok: true };
+    },
+  });
+  const claim = {
+    instanceId: "instance",
+    deviceId: "device",
+    rootId: "root",
+    policyRevision: "policy",
+    canonicalRootPath: fixture_.home,
+    canonicalPath: fixture_.home,
+    filesystemDevice: "1",
+    filesystemInode: "2",
+    expiresAt: Date.now() + 120_000,
+  };
+  const remote = new AidenRemoteWorkspaceService({
+    application: fixture_.application,
+    clone: fixture_.service.clone,
+    browser: {
+      consumeSelection: async () => claim,
+      revalidateConsumedSelection: async () => {
+        if (!approved) throw new Error("policy changed");
+        return claim;
+      },
+    },
+  });
+  await assert.rejects(
+    remote.create("device", "clone-root-policy-key", {
+      mode: "clone",
+      selection: `sel_${"a".repeat(43)}`,
+      url: FIXTURE_URL,
+      files: [{ name: ".env", content: "KEY=synthetic" }],
+    }),
+    /could not be cloned/,
+  );
   assert.equal(fixture_.workspaces.length, 0);
   assert.deepEqual(await fs.readdir(fixture_.home), []);
 });
 
 for (const replacement of ["symlink", "directory"] as const) {
-  test(`remote clone rejects a published-child ${replacement} substitution without deleting unrelated data`, async t => {
-    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-outside-")));
+  test(`remote clone rejects a published-child ${replacement} substitution without deleting unrelated data`, async (t) => {
+    const outside = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-outside-")),
+    );
     t.after(() => fs.rm(outside, { recursive: true, force: true }));
     await fs.writeFile(path.join(outside, "kept.txt"), "unrelated data");
-    const fixture_ = await fixture(t, { runClone: async request => {
-      await fs.mkdir(request.destination);
-      git(request.destination, "init", "-q");
-      await fs.writeFile(path.join(request.destination, ".gitignore"), ".env\n");
-      return { ok: true };
-    } });
+    const fixture_ = await fixture(t, {
+      runClone: async (request) => {
+        await fs.mkdir(request.destination);
+        git(request.destination, "init", "-q");
+        await fs.writeFile(path.join(request.destination, ".gitignore"), ".env\n");
+        return { ok: true };
+      },
+    });
     const destination = path.join(fixture_.home, "widget");
     let checks = 0;
-    const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
-    const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: {
-      consumeSelection: async () => claim,
-      revalidateConsumedSelection: async () => {
-        checks++;
-        if (checks === 4) {
-          await fs.rename(destination, `${destination}-moved`);
-          if (replacement === "symlink") await fs.symlink(outside, destination);
-          else await fs.rename(outside, destination);
-        }
-        return claim;
+    const claim = {
+      instanceId: "instance",
+      deviceId: "device",
+      rootId: "root",
+      policyRevision: "policy",
+      canonicalRootPath: fixture_.home,
+      canonicalPath: fixture_.home,
+      filesystemDevice: "1",
+      filesystemInode: "2",
+      expiresAt: Date.now() + 120_000,
+    };
+    const remote = new AidenRemoteWorkspaceService({
+      application: fixture_.application,
+      clone: fixture_.service.clone,
+      browser: {
+        consumeSelection: async () => claim,
+        revalidateConsumedSelection: async () => {
+          checks++;
+          if (checks === 4) {
+            await fs.rename(destination, `${destination}-moved`);
+            if (replacement === "symlink") await fs.symlink(outside, destination);
+            else await fs.rename(outside, destination);
+          }
+          return claim;
+        },
       },
-    } });
-    await assert.rejects(remote.create("device", "clone-child-identity-key", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [{ name: ".env", content: "KEY=synthetic" }] }), /could not be registered/);
+    });
+    await assert.rejects(
+      remote.create("device", "clone-child-identity-key", {
+        mode: "clone",
+        selection: `sel_${"a".repeat(43)}`,
+        url: FIXTURE_URL,
+        files: [{ name: ".env", content: "KEY=synthetic" }],
+      }),
+      /could not be registered/,
+    );
     assert.equal(fixture_.workspaces.length, 0);
     assert.equal(await fs.readFile(path.join(destination, "kept.txt"), "utf8"), "unrelated data");
-    assert.equal(await fs.readFile(path.join(`${destination}-moved`, ".env"), "utf8"), "KEY=synthetic");
+    assert.equal(
+      await fs.readFile(path.join(`${destination}-moved`, ".env"), "utf8"),
+      "KEY=synthetic",
+    );
     assert.deepEqual(await stagingFolders(fixture_.home), []);
   });
 }
 
-test("remote clone repeats its child identity guard inside persistence after save admission awaits", async t => {
-  const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-save-outside-")));
+test("remote clone repeats its child identity guard inside persistence after save admission awaits", async (t) => {
+  const outside = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-save-outside-")),
+  );
   t.after(() => fs.rm(outside, { recursive: true, force: true }));
   await fs.writeFile(path.join(outside, "kept.txt"), "unrelated");
   let destination = "";
   const fixture_ = await fixture(t, {
-    runClone: async request => { await fs.mkdir(request.destination); return { ok: true }; },
+    runClone: async (request) => {
+      await fs.mkdir(request.destination);
+      return { ok: true };
+    },
     beforeSave: async () => {
       await fs.rename(destination, `${destination}-moved`);
       await fs.symlink(outside, destination);
     },
   });
   destination = path.join(fixture_.home, "widget");
-  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
-  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: { consumeSelection: async () => claim, revalidateConsumedSelection: async () => claim } });
-  await assert.rejects(remote.create("device", "clone-child-save-key", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [] }), /could not be registered/);
+  const claim = {
+    instanceId: "instance",
+    deviceId: "device",
+    rootId: "root",
+    policyRevision: "policy",
+    canonicalRootPath: fixture_.home,
+    canonicalPath: fixture_.home,
+    filesystemDevice: "1",
+    filesystemInode: "2",
+    expiresAt: Date.now() + 120_000,
+  };
+  const remote = new AidenRemoteWorkspaceService({
+    application: fixture_.application,
+    clone: fixture_.service.clone,
+    browser: {
+      consumeSelection: async () => claim,
+      revalidateConsumedSelection: async () => claim,
+    },
+  });
+  await assert.rejects(
+    remote.create("device", "clone-child-save-key", {
+      mode: "clone",
+      selection: `sel_${"a".repeat(43)}`,
+      url: FIXTURE_URL,
+      files: [],
+    }),
+    /could not be registered/,
+  );
   assert.equal(fixture_.workspaces.length, 0);
   assert.equal(await fs.readFile(path.join(destination, "kept.txt"), "utf8"), "unrelated");
 });
 
-test("remote clone's duplicate-existing fallback cannot admit a substituted child", async t => {
-  const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-duplicate-outside-")));
+test("remote clone's duplicate-existing fallback cannot admit a substituted child", async (t) => {
+  const outside = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-duplicate-outside-")),
+  );
   t.after(() => fs.rm(outside, { recursive: true, force: true }));
   let destination = "";
   let existing: Workspace[] = [];
   const fixture_ = await fixture(t, {
-    runClone: async request => { await fs.mkdir(request.destination); return { ok: true }; },
+    runClone: async (request) => {
+      await fs.mkdir(request.destination);
+      return { ok: true };
+    },
     beforeCreate: async () => {
       await fs.rename(destination, `${destination}-moved`);
       await fs.symlink(outside, destination);
-      existing.push({ id: "unrelated-existing", name: "Existing", folderPath: outside, permission: "ask", createdAt: 0, updatedAt: 0 });
+      existing.push({
+        id: "unrelated-existing",
+        name: "Existing",
+        folderPath: outside,
+        permission: "ask",
+        createdAt: 0,
+        updatedAt: 0,
+      });
     },
   });
   existing = fixture_.workspaces;
   destination = path.join(fixture_.home, "widget");
-  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
-  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: { consumeSelection: async () => claim, revalidateConsumedSelection: async () => claim } });
-  await assert.rejects(remote.create("device", "clone-child-duplicate-key", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [] }), /could not be registered/);
+  const claim = {
+    instanceId: "instance",
+    deviceId: "device",
+    rootId: "root",
+    policyRevision: "policy",
+    canonicalRootPath: fixture_.home,
+    canonicalPath: fixture_.home,
+    filesystemDevice: "1",
+    filesystemInode: "2",
+    expiresAt: Date.now() + 120_000,
+  };
+  const remote = new AidenRemoteWorkspaceService({
+    application: fixture_.application,
+    clone: fixture_.service.clone,
+    browser: {
+      consumeSelection: async () => claim,
+      revalidateConsumedSelection: async () => claim,
+    },
+  });
+  await assert.rejects(
+    remote.create("device", "clone-child-duplicate-key", {
+      mode: "clone",
+      selection: `sel_${"a".repeat(43)}`,
+      url: FIXTURE_URL,
+      files: [],
+    }),
+    /could not be registered/,
+  );
   assert.equal(fixture_.workspaces.length, 1);
   assert.equal(fixture_.workspaces[0]?.id, "unrelated-existing");
 });

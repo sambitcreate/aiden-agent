@@ -11,8 +11,14 @@ import {
 import { presentationOrder } from "./presentation";
 import type { DesignFrame } from "./schema";
 
-const box = (id: string, x: number, y: number, w = 100, h = 100, extra: Partial<DesignFrame> = {}) =>
-  ({ id, kind: "file", x, y, w, h, ...extra }) as DesignFrame;
+const box = (
+  id: string,
+  x: number,
+  y: number,
+  w = 100,
+  h = 100,
+  extra: Partial<DesignFrame> = {},
+) => ({ id, kind: "file", x, y, w, h, ...extra }) as DesignFrame;
 
 test("pages and artifacts save as a picture, a PDF or the original; images only as themselves", () => {
   assert.deepEqual(designExportFormats({ kind: "file" }), ["png", "pdf", "source"]);
@@ -24,14 +30,24 @@ test("pages and artifacts save as a picture, a PDF or the original; images only 
 });
 
 test("a download is named after the frame, safely, and the original keeps its own name", () => {
-  const page = { kind: "file" as const, title: "Checkout: step 2 / mobile", path: "site/checkout v2.html" };
+  const page = {
+    kind: "file" as const,
+    title: "Checkout: step 2 / mobile",
+    path: "site/checkout v2.html",
+  };
   assert.equal(designExportFileName(page, "png"), "Checkout-step-2-mobile.png");
   assert.equal(designExportFileName(page, "pdf"), "Checkout-step-2-mobile.pdf");
   assert.equal(designExportFileName(page, "source"), "checkout v2.html");
   assert.equal(designExportFileName({ kind: "file", title: "index.html" }, "png"), "index.png");
-  assert.equal(designExportFileName({ kind: "artifact", title: "../../etc" }, "source"), "etc.html");
+  assert.equal(
+    designExportFileName({ kind: "artifact", title: "../../etc" }, "source"),
+    "etc.html",
+  );
   assert.equal(designExportFileName({ kind: "artifact", title: "???" }, "pdf"), "design.pdf");
-  assert.equal(designExportFileName({ kind: "artifact", title: "Ünïcode café" }, "png"), "Ünïcode-café.png");
+  assert.equal(
+    designExportFileName({ kind: "artifact", title: "Ünïcode café" }, "png"),
+    "Ünïcode-café.png",
+  );
 });
 
 test("a page exports at its design width; an artifact at its box width within sensible bounds", () => {
@@ -43,7 +59,12 @@ test("a page exports at its design width; an artifact at its box width within se
 });
 
 test("flow prints at full size; fixed scales the design width to the paper's printable width", () => {
-  assert.deepEqual(designPdfLayout({ width: 1280 }), { paper: "letter", pageSize: "Letter", marginInches: 0.4, scale: 1 });
+  assert.deepEqual(designPdfLayout({ width: 1280 }), {
+    paper: "letter",
+    pageSize: "Letter",
+    marginInches: 0.4,
+    scale: 1,
+  });
   const letter = designPdfLayout({ width: 1280, printMode: "fixed" });
   const a4 = designPdfLayout({ width: 1280, printMode: "fixed", paper: "a4" });
   assert.equal(a4.pageSize, "A4");
@@ -69,9 +90,18 @@ test("Present reads a page row by row from the top, left to right, and skips lin
 });
 
 test("a tall frame beside short ones is one row, and a frame below the row's middle starts the next", () => {
-  const frames = [box("tall", 0, 0, 100, 1000), box("short", 200, 100, 100, 100), box("later", 400, 600, 100, 100)];
+  const frames = [
+    box("tall", 0, 0, 100, 1000),
+    box("short", 200, 100, 100, 100),
+    box("later", 400, 600, 100, 100),
+  ];
   assert.deepEqual(presentationOrder(frames), ["tall", "short", "later"]);
   // `later` starts below the tall row's middle (500), so it starts a row of its own;
   // `left-later` starts above that row's middle (650), so it joins it, on the left.
-  assert.deepEqual(presentationOrder([...frames, box("left-later", -100, 620)]), ["tall", "short", "left-later", "later"]);
+  assert.deepEqual(presentationOrder([...frames, box("left-later", -100, 620)]), [
+    "tall",
+    "short",
+    "left-later",
+    "later",
+  ]);
 });

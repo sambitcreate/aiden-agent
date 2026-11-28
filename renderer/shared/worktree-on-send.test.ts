@@ -11,10 +11,34 @@ import {
 
 test("branch names follow git check-ref-format --branch", () => {
   const cases = [
-    "main", "aiden/fix-login", "feature/a/b", "v1.2", "naïve", "a-b_c",
-    "", "-lead", "a..b", "a b", "a~1", "a^", "a:b", "a?", "a*", "a[b", "a\\b",
-    "/lead", "trail/", "a//b", "a/.hidden", ".hidden", "trail.", "x.lock", "a/x.lock/b",
-    "a@{1}", "tab\tname", "del\u007fname",
+    "main",
+    "aiden/fix-login",
+    "feature/a/b",
+    "v1.2",
+    "naïve",
+    "a-b_c",
+    "",
+    "-lead",
+    "a..b",
+    "a b",
+    "a~1",
+    "a^",
+    "a:b",
+    "a?",
+    "a*",
+    "a[b",
+    "a\\b",
+    "/lead",
+    "trail/",
+    "a//b",
+    "a/.hidden",
+    ".hidden",
+    "trail.",
+    "x.lock",
+    "a/x.lock/b",
+    "a@{1}",
+    "tab\tname",
+    "del\u007fname",
   ];
   for (const name of cases) {
     // Git itself is the oracle.
@@ -35,7 +59,10 @@ test("the auto name is a short ascii slug of the first message", () => {
     ["", "aiden/new-chat"],
     ["!!!", "aiden/new-chat"],
     // Whole words up to 40 characters; later words are dropped, not cut.
-    ["Investigate why the nightly build fails on the release branch", "aiden/investigate-why-the-nightly-build-fails"],
+    [
+      "Investigate why the nightly build fails on the release branch",
+      "aiden/investigate-why-the-nightly-build-fails",
+    ],
     ["a".repeat(60), `aiden/${"a".repeat(40)}`],
   ];
   for (const [seed, expected] of cases) {
@@ -59,12 +86,22 @@ test("unique names add -2, -3… past equal, case-folded, and folder-conflicting
 
 test("the worktree request parser accepts only a complete, valid request", () => {
   const key = "0b8f3c3e-6a4f-4c1e-9d2a-5b7e1f0c2d3a";
-  const valid = { sourceWorkspaceId: "ws-1", baseRef: "origin/main", fromOrigin: false, idempotencyKey: key.toUpperCase() };
+  const valid = {
+    sourceWorkspaceId: "ws-1",
+    baseRef: "origin/main",
+    fromOrigin: false,
+    idempotencyKey: key.toUpperCase(),
+  };
   assert.deepEqual(parseFirstMessageWorktreeRequest(valid), { ...valid, idempotencyKey: key });
   assert.equal(parseFirstMessageWorktreeRequest({ ...valid, baseRef: "HEAD" }).baseRef, "HEAD");
-  assert.equal(parseFirstMessageWorktreeRequest({ ...valid, branchName: "aiden/x" }).branchName, "aiden/x");
+  assert.equal(
+    parseFirstMessageWorktreeRequest({ ...valid, branchName: "aiden/x" }).branchName,
+    "aiden/x",
+  );
   for (const bad of [
-    null, [], "x",
+    null,
+    [],
+    "x",
     { ...valid, idempotencyKey: "draft-1" },
     { ...valid, sourceWorkspaceId: "../ws" },
     { ...valid, baseRef: "" },

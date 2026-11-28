@@ -42,11 +42,21 @@ export async function resolveMcpConnectionCredentials(
   assertCurrent(deps.isCurrent);
   const preset = assertMcpPresetServer(configured);
   // A local command runs only once this exact launch was approved on this device.
-  if (deps.isLaunchApproved && configured.transport === "stdio" && !(await deps.isLaunchApproved(configured))) {
+  if (
+    deps.isLaunchApproved &&
+    configured.transport === "stdio" &&
+    !(await deps.isLaunchApproved(configured))
+  ) {
     throw new McpStdioApprovalRequiredError(configured.name || configured.id);
   }
-  if (deps.isLaunchApproved && configured.transport === "stdio" && hasPlaintextMcpFields(configured)) {
-    throw new Error("This connector’s environment must be saved in secure storage before it can run.");
+  if (
+    deps.isLaunchApproved &&
+    configured.transport === "stdio" &&
+    hasPlaintextMcpFields(configured)
+  ) {
+    throw new Error(
+      "This connector’s environment must be saved in secure storage before it can run.",
+    );
   }
   if (preset?.transport === "stdio" && deps.isMacAppOpen && !(await deps.isMacAppOpen(preset))) {
     throw new Error(`${preset.name} isn’t open. Open ${preset.name}, then try again.`);

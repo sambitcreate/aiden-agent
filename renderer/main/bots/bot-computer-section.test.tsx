@@ -16,13 +16,29 @@ import { mountWithBotRouter } from "./test-providers";
 afterEach(cleanup);
 
 const bot = { id: "bot-1", name: "Ada" };
-const READY: BotComputerSetupState = { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: false };
+const READY: BotComputerSetupState = {
+  kind: "ready",
+  baseVersion: "26.6.2",
+  baseBuild: "25G83",
+  updateAvailable: false,
+};
 
 function computer(extra: Partial<BotComputerStatus> = {}): BotComputerStatus {
-  return { botId: bot.id, vmName: "aiden-bot-0123456789abcdef", state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot", ...extra };
+  return {
+    botId: bot.id,
+    vmName: "aiden-bot-0123456789abcdef",
+    state: "stopped",
+    baseBuild: "25G83",
+    outdated: false,
+    controller: "bot",
+    ...extra,
+  };
 }
 
-function status(setup: BotComputerSetupState, computers: BotComputerStatus[] = []): BotComputersStatus {
+function status(
+  setup: BotComputerSetupState,
+  computers: BotComputerStatus[] = [],
+): BotComputersStatus {
   return {
     setup,
     settings: { ...DEFAULT_BOT_COMPUTERS_SETTINGS },
@@ -53,24 +69,38 @@ function botComputersIpc(initial: BotComputersStatus) {
     "botComputers:reset": (botId) => {
       made += 1;
       const next = computer({ botId: String(botId), baseBuild: "25G90" });
-      current = { ...current, computers: [...current.computers.filter((entry) => entry.botId !== botId), next] };
+      current = {
+        ...current,
+        computers: [...current.computers.filter((entry) => entry.botId !== botId), next],
+      };
       return next;
     },
     "botComputers:remove": (botId) => {
-      current = { ...current, computers: current.computers.filter((entry) => entry.botId !== botId) };
+      current = {
+        ...current,
+        computers: current.computers.filter((entry) => entry.botId !== botId),
+      };
     },
     "botComputers:stop": () => undefined,
   });
-  const sent = (channel: string) => calls.filter((call) => call.channel === channel).map((call) => call.args);
-  return { calls, sent, made: () => made, push: (next: BotComputersStatus) => {
-    current = next;
-    emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, next);
-  } };
+  const sent = (channel: string) =>
+    calls.filter((call) => call.channel === channel).map((call) => call.args);
+  return {
+    calls,
+    sent,
+    made: () => made,
+    push: (next: BotComputersStatus) => {
+      current = next;
+      emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, next);
+    },
+  };
 }
 
 async function mount(botComputers = true) {
   return mountWithBotRouter(
-    <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: "darwin", bots: true, botComputers }}>
+    <AppCapabilitiesProvider
+      capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: "darwin", bots: true, botComputers }}
+    >
       <BotComputerSection bot={bot} />
     </AppCapabilitiesProvider>,
     { initialPath: "/bots/bot-1" },
@@ -89,7 +119,9 @@ test("with a ready base, Give makes the Bot a computer and the section shows its
 });
 
 test("a running computer can be stopped, and a waiting one says it is waiting for another Bot's", async () => {
-  const ipc = botComputersIpc(status(READY, [computer({ state: "running", activity: "Opening Safari" })]));
+  const ipc = botComputersIpc(
+    status(READY, [computer({ state: "running", activity: "Opening Safari" })]),
+  );
   await mount();
   await screen.findByText("Ada's computer is running.");
   assert.ok(screen.getByText("Opening Safari"));
@@ -100,7 +132,11 @@ test("a running computer can be stopped, and a waiting one says it is waiting fo
 });
 
 test("Reset and Remove each ask first, and only the confirmed one reaches main", async () => {
-  const ipc = botComputersIpc(status({ ...READY, baseBuild: "25G90", updateAvailable: false }, [computer({ outdated: true })]));
+  const ipc = botComputersIpc(
+    status({ ...READY, baseBuild: "25G90", updateAvailable: false }, [
+      computer({ outdated: true }),
+    ]),
+  );
   await mount();
   await screen.findByText(/Made from an older base/u);
 
@@ -137,5 +173,8 @@ test("without the Bot computers capability there is no Computer section and no I
   const ipc = botComputersIpc(status(READY));
   await mount(false);
   assert.equal(screen.queryByText("Computer"), null);
-  assert.deepEqual(ipc.calls.filter((call) => call.channel.startsWith("botComputers:")), []);
+  assert.deepEqual(
+    ipc.calls.filter((call) => call.channel.startsWith("botComputers:")),
+    [],
+  );
 });

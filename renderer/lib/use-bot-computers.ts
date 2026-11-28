@@ -21,7 +21,9 @@ export function useBotComputersStatus() {
   });
   React.useEffect(() => {
     if (!supported) return undefined;
-    return botComputersApi.onChanged((status) => queryClient.setQueryData(BOT_COMPUTERS_QUERY_KEY, status));
+    return botComputersApi.onChanged((status) =>
+      queryClient.setQueryData(BOT_COMPUTERS_QUERY_KEY, status),
+    );
   }, [supported, queryClient]);
   return { ...query, supported };
 }
@@ -31,7 +33,9 @@ export function useBotComputersCache() {
   const queryClient = useQueryClient();
   return React.useMemo(() => {
     const update = (change: (status: BotComputersStatus) => BotComputersStatus): void => {
-      queryClient.setQueryData<BotComputersStatus>(BOT_COMPUTERS_QUERY_KEY, (current) => (current ? change(current) : current));
+      queryClient.setQueryData<BotComputersStatus>(BOT_COMPUTERS_QUERY_KEY, (current) =>
+        current ? change(current) : current,
+      );
     };
     return {
       set: (status: BotComputersStatus): void => {
@@ -41,11 +45,18 @@ export function useBotComputersCache() {
       putComputer: (computer: BotComputerStatus): void =>
         update((current) => ({
           ...current,
-          computers: [...current.computers.filter((entry) => entry.botId !== computer.botId), computer],
+          computers: [
+            ...current.computers.filter((entry) => entry.botId !== computer.botId),
+            computer,
+          ],
         })),
       dropComputer: (botId: string): void =>
-        update((current) => ({ ...current, computers: current.computers.filter((entry) => entry.botId !== botId) })),
-      refresh: (): Promise<void> => queryClient.invalidateQueries({ queryKey: BOT_COMPUTERS_QUERY_KEY }),
+        update((current) => ({
+          ...current,
+          computers: current.computers.filter((entry) => entry.botId !== botId),
+        })),
+      refresh: (): Promise<void> =>
+        queryClient.invalidateQueries({ queryKey: BOT_COMPUTERS_QUERY_KEY }),
     };
   }, [queryClient]);
 }

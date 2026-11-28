@@ -4,10 +4,7 @@ import type { TelegramBotBinding } from "./telegram-bot-binding-store.js";
 import { telegramBotNoticeAudienceId } from "./telegram-profile-config.js";
 
 interface TelegramBotMutationOperations {
-  createChat(input: {
-    audienceId: string;
-    chatId: string;
-  }): Promise<Chat>;
+  createChat(input: { audienceId: string; chatId: string }): Promise<Chat>;
   managedWorkspace: BotManagedWorkspaceResolution;
 }
 
@@ -60,10 +57,7 @@ export async function reconcileTelegramBotBindings(
         const existing = await deps.getChat(binding.backingChatId);
         if (!existing) {
           const created = await operations.createChat({
-            audienceId: telegramBotNoticeAudienceId(
-              binding.profile,
-              binding.ownerUserId,
-            ),
+            audienceId: telegramBotNoticeAudienceId(binding.profile, binding.ownerUserId),
             chatId: binding.backingChatId,
           });
           assertBackingChat(binding, created);

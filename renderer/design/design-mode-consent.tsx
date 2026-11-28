@@ -99,8 +99,12 @@ export function DesignModeConsentCard({ request }: { request: DesignModeConsentR
           <PencilRuler className="mt-0.5 size-3.5 shrink-0 text-secondary" aria-hidden="true" />
           <div className="min-w-0 flex-1">
             <p className="text-small font-medium text-primary">Open design mode?</p>
-            {request.reason ? <p className="mt-0.5 text-small text-secondary">{request.reason}</p> : null}
-            <p className="mt-0.5 text-small text-tertiary">A design canvas opens beside this chat. You can leave it any time.</p>
+            {request.reason ? (
+              <p className="mt-0.5 text-small text-secondary">{request.reason}</p>
+            ) : null}
+            <p className="mt-0.5 text-small text-tertiary">
+              A design canvas opens beside this chat. You can leave it any time.
+            </p>
           </div>
         </div>
         <div className="mt-2 flex flex-wrap justify-end gap-1.5">

@@ -49,16 +49,25 @@ function errorType(error: unknown): string {
 
 // Reads only strings and sends them as they are: deciding what is safe to keep
 // is main's job, never this process's.
-function errorDetails(kind: RendererDiagnosticKind, error: unknown): RendererErrorDetails | undefined {
+function errorDetails(
+  kind: RendererDiagnosticKind,
+  error: unknown,
+): RendererErrorDetails | undefined {
   if (!errorDetailsAllowed || !RENDERER_CRASH_KINDS.includes(kind)) return undefined;
   try {
-    if (typeof error === "string") return { message: error.slice(0, MAX_RENDERER_ERROR_MESSAGE_LENGTH) };
+    if (typeof error === "string")
+      return { message: error.slice(0, MAX_RENDERER_ERROR_MESSAGE_LENGTH) };
     if (!(error instanceof Error)) return {};
     return {
       name: String(error.name).slice(0, MAX_RENDERER_ERROR_NAME_LENGTH),
       message: String(error.message).slice(0, MAX_RENDERER_ERROR_MESSAGE_LENGTH),
       ...(typeof error.stack === "string"
-        ? { stack: stackWithoutMessage(error.stack, error.message).slice(0, MAX_RENDERER_ERROR_STACK_LENGTH) }
+        ? {
+            stack: stackWithoutMessage(error.stack, error.message).slice(
+              0,
+              MAX_RENDERER_ERROR_STACK_LENGTH,
+            ),
+          }
         : {}),
     };
   } catch {

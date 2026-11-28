@@ -88,14 +88,31 @@ export interface McpFailureClassification {
 }
 
 const NETWORK_ERRNOS = new Set([
-  "ECONNABORTED", "ECONNREFUSED", "ECONNRESET", "EAI_AGAIN", "EAI_FAIL", "EHOSTDOWN", "EHOSTUNREACH",
-  "ENETDOWN", "ENETRESET", "ENETUNREACH", "ENOTFOUND", "EPIPE", "UND_ERR_CLOSED", "UND_ERR_SOCKET",
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EAI_AGAIN",
+  "EAI_FAIL",
+  "EHOSTDOWN",
+  "EHOSTUNREACH",
+  "ENETDOWN",
+  "ENETRESET",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+  "UND_ERR_CLOSED",
+  "UND_ERR_SOCKET",
 ]);
 const TIMEOUT_ERRNOS = new Set([
-  "ETIMEDOUT", "ESOCKETTIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT",
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
 ]);
 const SPAWN_ERRNOS = new Set(["ENOENT", "EACCES", "EPERM", "ENOEXEC", "E2BIG"]);
-const TLS_ERRNO = /^(?:ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_|DEPTH_ZERO_SELF_SIGNED_CERT$|SELF_SIGNED_CERT_IN_CHAIN$|HOSTNAME_MISMATCH$|ERR_OSSL_)/u;
+const TLS_ERRNO =
+  /^(?:ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_|DEPTH_ZERO_SELF_SIGNED_CERT$|SELF_SIGNED_CERT_IN_CHAIN$|HOSTNAME_MISMATCH$|ERR_OSSL_)/u;
 const ERRNO_GRAMMAR = /^[A-Z][A-Z0-9_]{1,47}$/u;
 const OVERSIZED_MESSAGE = /\bexceed(?:s|ed) (?:the transport limit|\d+ bytes)/u;
 const OAUTH_ERROR_SET: ReadonlySet<string> = new Set(MCP_OAUTH_ERROR_CODES);
@@ -140,7 +157,8 @@ function errnoOf(error: unknown): string | undefined {
 function statusOf(error: unknown): number | undefined {
   for (const key of ["status", "statusCode"]) {
     const value = own(error, key);
-    if (typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599) return value;
+    if (typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599)
+      return value;
   }
   return undefined;
 }
@@ -156,7 +174,9 @@ function registrationOAuthError(error: unknown): string | undefined {
   if (typeof body !== "string" || body.length > 8_192) return undefined;
   try {
     const parsed: unknown = JSON.parse(body);
-    return parsed && typeof parsed === "object" ? oauthErrorCode((parsed as { error?: unknown }).error) : undefined;
+    return parsed && typeof parsed === "object"
+      ? oauthErrorCode((parsed as { error?: unknown }).error)
+      : undefined;
   } catch {
     return undefined;
   }
@@ -195,17 +215,25 @@ function nameOf(error: unknown): unknown {
 }
 
 /** One level of the cause chain, or undefined when it says nothing specific. */
-function classifyLevel(error: unknown, transport: McpServer["transport"] | undefined): McpFailureCode | undefined {
+function classifyLevel(
+  error: unknown,
+  transport: McpServer["transport"] | undefined,
+): McpFailureCode | undefined {
   if (isInstance(error, McpOAuthCancelledError)) return "cancelled";
   const name = nameOf(error);
   if (name === "AbortError") return "cancelled";
-  if (isInstance(error, McpOAuthSignInRequiredError) || isInstance(error, McpOAuthAuthorizationRequiredError)) return "auth-required";
+  if (
+    isInstance(error, McpOAuthSignInRequiredError) ||
+    isInstance(error, McpOAuthAuthorizationRequiredError)
+  )
+    return "auth-required";
   if (isInstance(error, McpOAuthVerificationRejectedError)) return "auth-rejected";
   if (isInstance(error, McpOAuthRefreshUnavailableError)) return "auth-refresh-unavailable";
   if (isInstance(error, OAuthRegistrationError)) return "oauth-registration-rejected";
   if (isInstance(error, OAuthIssuerMismatchError)) return "oauth-issuer-mismatch";
   if (isInstance(error, OAuthInsecureEndpointError)) return "oauth-insecure-endpoint";
-  if (isInstance(error, OAuthError) || isInstance(error, McpOAuthCallbackError)) return "oauth-error";
+  if (isInstance(error, OAuthError) || isInstance(error, McpOAuthCallbackError))
+    return "oauth-error";
   if (isInstance(error, McpSessionExpiredError)) return "session-expired";
   if (isInstance(error, McpHttpError)) {
     const status = statusOf(error);
@@ -213,9 +241,14 @@ function classifyLevel(error: unknown, transport: McpServer["transport"] | undef
   }
   if (isInstance(error, McpTimeoutError) || name === "TimeoutError") return "timeout";
   if (isInstance(error, McpStdioApprovalRequiredError)) return "stdio-approval";
-  if (isInstance(error, McpOAuthCredentialStorageError) || isInstance(error, McpFieldSecretMissingError)) return "credentials-unavailable";
+  if (
+    isInstance(error, McpOAuthCredentialStorageError) ||
+    isInstance(error, McpFieldSecretMissingError)
+  )
+    return "credentials-unavailable";
   if (isInstance(error, McpError) || name === "SyntaxError") return "protocol";
-  if (isInstance(error, McpConnectionClosedError)) return transport === "stdio" ? "stdio-exit" : "connection-closed";
+  if (isInstance(error, McpConnectionClosedError))
+    return transport === "stdio" ? "stdio-exit" : "connection-closed";
   const message = own(error, "message");
   if (typeof message === "string" && OVERSIZED_MESSAGE.test(message)) return "oversized";
   const errno = errnoOf(error);
@@ -224,7 +257,10 @@ function classifyLevel(error: unknown, transport: McpServer["transport"] | undef
     if (TIMEOUT_ERRNOS.has(errno)) return "timeout";
     if (NETWORK_ERRNOS.has(errno)) return "network";
     const syscall = own(error, "syscall");
-    if (SPAWN_ERRNOS.has(errno) && (transport === "stdio" || (typeof syscall === "string" && syscall.startsWith("spawn")))) {
+    if (
+      SPAWN_ERRNOS.has(errno) &&
+      (transport === "stdio" || (typeof syscall === "string" && syscall.startsWith("spawn")))
+    ) {
       return "stdio-spawn";
     }
   }
@@ -269,12 +305,18 @@ function errorClassOf(error: unknown): string {
  * wins (a refresh that was unavailable because of ECONNREFUSED stays
  * `auth-refresh-unavailable`, with `errno` from its cause).
  */
-export function classifyMcpFailure(error: unknown, transport?: McpServer["transport"]): McpFailureClassification {
+export function classifyMcpFailure(
+  error: unknown,
+  transport?: McpServer["transport"],
+): McpFailureClassification {
   const chain = causeChain(error);
   let failure: McpFailureCode = "unknown";
   for (const level of chain) {
     const classified = classifyLevel(level, transport);
-    if (classified) { failure = classified; break; }
+    if (classified) {
+      failure = classified;
+      break;
+    }
   }
   let httpStatus: number | undefined;
   let oauthError: string | undefined;
@@ -283,8 +325,10 @@ export function classifyMcpFailure(error: unknown, transport?: McpServer["transp
     httpStatus ??= statusOf(level);
     errno ??= errnoOf(level);
     if (oauthError === undefined) {
-      if (isInstance(level, OAuthError) || isInstance(level, McpOAuthCallbackError)) oauthError = oauthErrorCode(own(level, "code"));
-      else if (isInstance(level, OAuthRegistrationError)) oauthError = registrationOAuthError(level);
+      if (isInstance(level, OAuthError) || isInstance(level, McpOAuthCallbackError))
+        oauthError = oauthErrorCode(own(level, "code"));
+      else if (isInstance(level, OAuthRegistrationError))
+        oauthError = registrationOAuthError(level);
     }
   }
   // Aiden's own lowercase codes (e.g. `mcp-oauth-cancelled`) fail the grammar.
@@ -312,20 +356,28 @@ let presetHosts: ReadonlySet<string> | undefined;
 
 /** Hosts of the bundled connector presets' own endpoints: public vendor services. */
 function bundledPresetHosts(): ReadonlySet<string> {
-  presetHosts ??= new Set(MCP_PRESETS.flatMap((preset) => {
-    // A Mac app preset (iMCP) runs a local command and has no host.
-    if (preset.transport !== "http") return [];
-    const host = hostnameOf(preset.url);
-    // Local presets (Figma desktop on 127.0.0.1) are recorded by category like any local host.
-    return host && mcpDiagnosticHostKind(host) === "custom" ? [host] : [];
-  }));
+  presetHosts ??= new Set(
+    MCP_PRESETS.flatMap((preset) => {
+      // A Mac app preset (iMCP) runs a local command and has no host.
+      if (preset.transport !== "http") return [];
+      const host = hostnameOf(preset.url);
+      // Local presets (Figma desktop on 127.0.0.1) are recorded by category like any local host.
+      return host && mcpDiagnosticHostKind(host) === "custom" ? [host] : [];
+    }),
+  );
   return presetHosts;
 }
 
 function ipv4Private(address: string): boolean {
   const [a = 0, b = 0] = address.split(".").map(Number);
-  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
-    (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) || a === 0;
+  return (
+    a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254) ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    a === 0
+  );
 }
 
 /** Where a remote server lives, without naming a host that could identify a person or tenant. */
@@ -357,7 +409,9 @@ export function mcpDiagnosticServerHost(
   if (server.transport === "stdio") return undefined;
   const host = hostnameOf(server.url);
   if (!host) return undefined;
-  return bundledPresetHosts().has(host) ? { serverHost: host } : { serverHostKind: mcpDiagnosticHostKind(host) };
+  return bundledPresetHosts().has(host)
+    ? { serverHost: host }
+    : { serverHostKind: mcpDiagnosticHostKind(host) };
 }
 
 /**
@@ -366,7 +420,12 @@ export function mcpDiagnosticServerHost(
  * (see diagnostic-ref-salt.ts).
  */
 export function mcpDiagnosticServerRef(serverId: string): string {
-  return createHash("sha256").update(diagnosticRefSalt()).update("\0mcp-server\0").update(serverId).digest("hex").slice(0, 16);
+  return createHash("sha256")
+    .update(diagnosticRefSalt())
+    .update("\0mcp-server\0")
+    .update(serverId)
+    .digest("hex")
+    .slice(0, 16);
 }
 
 export type McpDiagnosticPhase =
@@ -396,14 +455,23 @@ export function mcpFailureEvent(
   const classified = classifyMcpFailure(error, server?.transport);
   const projected = projectDiagnosticError(error);
   // An unapproved local command is a distinct, expected state, not a failure to connect.
-  const failurePhase = classified.failure === "stdio-approval" && report.phase !== "mcp-sign-in" ? "mcp-stdio-approval" : report.phase;
+  const failurePhase =
+    classified.failure === "stdio-approval" && report.phase !== "mcp-sign-in"
+      ? "mcp-stdio-approval"
+      : report.phase;
   return {
     level: "warn",
     area: "mcp",
     event,
-    outcome: report.outcome ?? (classified.failure === "cancelled" ? "cancelled"
-      : classified.failure === "timeout" ? "timed-out"
-        : event === "mcp-failed" ? "failed" : "degraded"),
+    outcome:
+      report.outcome ??
+      (classified.failure === "cancelled"
+        ? "cancelled"
+        : classified.failure === "timeout"
+          ? "timed-out"
+          : event === "mcp-failed"
+            ? "failed"
+            : "degraded"),
     code: classified.code,
     fields: {
       // Caller extras first: they can never replace the classification.
@@ -426,7 +494,11 @@ function serverFields(
   serverRef: (serverId: string) => string,
 ): Record<string, DiagnosticSafeFieldValue> {
   if (!server) return {};
-  return { transport: server.transport, serverRef: serverRef(server.id), ...mcpDiagnosticServerHost(server) };
+  return {
+    transport: server.transport,
+    serverRef: serverRef(server.id),
+    ...mcpDiagnosticServerHost(server),
+  };
 }
 
 export interface McpDiagnosticsReporterOptions {
@@ -469,17 +541,24 @@ export class McpDiagnosticsReporter {
 
   constructor(private readonly options: McpDiagnosticsReporterOptions) {
     this.windowMs = options.windowMs ?? MCP_DIAGNOSTIC_WINDOW_MS;
-    this.setTimer = options.setTimer ?? ((callback, ms) => {
-      const timer = setTimeout(callback, ms);
-      timer.unref?.();
-      return timer;
-    });
-    this.clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+    this.setTimer =
+      options.setTimer ??
+      ((callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        timer.unref?.();
+        return timer;
+      });
+    this.clearTimer =
+      options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
     this.serverRef = options.serverRef ?? mcpDiagnosticServerRef;
   }
 
   /** A background failure: coalesced per (server, failure). */
-  degraded(server: McpDiagnosticServer | undefined, error: unknown, report: McpFailureReport): void {
+  degraded(
+    server: McpDiagnosticServer | undefined,
+    error: unknown,
+    report: McpFailureReport,
+  ): void {
     const event = mcpFailureEvent("mcp-degraded", server, error, report, this.serverRef);
     // After shutdown nothing arms a timer: every line is written as it comes.
     if (!server || this.closed) {
@@ -495,12 +574,19 @@ export class McpDiagnosticsReporter {
     }
     this.degradedServers.add(server.id);
     this.options.write(event);
-    this.windows.set(key, { serverId: server.id, suppressed: 0, last: event, timer: this.setTimer(() => this.windowElapsed(key), this.windowMs) });
+    this.windows.set(key, {
+      serverId: server.id,
+      suppressed: 0,
+      last: event,
+      timer: this.setTimer(() => this.windowElapsed(key), this.windowMs),
+    });
   }
 
   /** An attended sign-in failure: written at once, never coalesced. */
   signInFailed(server: McpDiagnosticServer, error: unknown): void {
-    this.options.write(mcpFailureEvent("mcp-failed", server, error, { phase: "mcp-sign-in" }, this.serverRef));
+    this.options.write(
+      mcpFailureEvent("mcp-failed", server, error, { phase: "mcp-sign-in" }, this.serverRef),
+    );
   }
 
   /** The server works again; written once if it was degraded. */
@@ -537,7 +623,8 @@ export class McpDiagnosticsReporter {
   }
 
   private flushServer(serverId: string): void {
-    for (const [key, window] of [...this.windows]) if (window.serverId === serverId) this.close(key);
+    for (const [key, window] of [...this.windows])
+      if (window.serverId === serverId) this.close(key);
   }
 
   private close(key: string): void {
@@ -549,7 +636,10 @@ export class McpDiagnosticsReporter {
   }
 
   private writeSummary(window: CoalescingWindow): void {
-    this.options.write({ ...window.last, fields: { ...window.last.fields, suppressed: window.suppressed } });
+    this.options.write({
+      ...window.last,
+      fields: { ...window.last.fields, suppressed: window.suppressed },
+    });
   }
 }
 

@@ -1,7 +1,11 @@
 // The consent-gated front of Create Images runs. Provider-agnostic: it sees
 // ImageGenerationPort, the ledger, the studio assets and the workflow store.
 import { randomUUID } from "node:crypto";
-import { imageModelConsentLabel, type ImageGenerationPort, type ImageModelOption } from "../../../renderer/shared/images/port.js";
+import {
+  imageModelConsentLabel,
+  type ImageGenerationPort,
+  type ImageModelOption,
+} from "../../../renderer/shared/images/port.js";
 import type {
   ImageRunConsentPlan,
   OutputRef,
@@ -9,18 +13,30 @@ import type {
   RunSnapshot,
   RunSummary,
 } from "../../../renderer/shared/images/run-types.js";
-import { IMAGE_WORKFLOW_LIMITS, type WorkflowDocV1 } from "../../../renderer/shared/images/schema.js";
+import {
+  IMAGE_WORKFLOW_LIMITS,
+  type WorkflowDocV1,
+} from "../../../renderer/shared/images/schema.js";
 import { createThrottledTrigger } from "../portable-config-watch-core.js";
 import type { StudioAssetStore } from "../studio-assets/store.js";
 import { RunConsentStore } from "./consent-core.js";
 import type { CreateImagesExports } from "./image-export.js";
 import { executeRun } from "./run-executor.js";
 import { RUN_RETENTION, type GeneratedAttempt, type ImageRunLedger } from "./run-ledger.js";
-import { clampRunConcurrency, planDigest, planRun, staleNodeIds, type PlanIssue, type RunPlan } from "./scheduler-core.js";
+import {
+  clampRunConcurrency,
+  planDigest,
+  planRun,
+  staleNodeIds,
+  type PlanIssue,
+  type RunPlan,
+} from "./scheduler-core.js";
 import type { ImageWorkflowStore } from "./workflow-store.js";
 
 export type PrepareRunResult = { plan: ImageRunConsentPlan } | { issues: PlanIssue[] };
-export type StartRunResult = { runId: string } | { error: "expired" | "stale" | "model-unavailable" | "too-many-runs" };
+export type StartRunResult =
+  | { runId: string }
+  | { error: "expired" | "stale" | "model-unavailable" | "too-many-runs" };
 
 export interface RunCoordinatorDependencies {
   ledger: ImageRunLedger;
@@ -127,20 +143,26 @@ export class ImageRunCoordinator {
     this.requireOpen();
     const doc = await this.deps.workflows.get(request.workflowId);
     if (!doc) return refused("unknown_workflow", "This workflow no longer exists.");
-    if (doc.revision !== request.revision) return refused("stale_revision", "Aiden is still saving this workflow. Try again.");
-    if (this.deleting.has(doc.id)) return refused("workflow_deleting", "This workflow is being deleted.");
-    if (this.hasActiveRun(doc.id)) return refused("run_in_progress", "A run is already in progress for this workflow.");
+    if (doc.revision !== request.revision)
+      return refused("stale_revision", "Aiden is still saving this workflow. Try again.");
+    if (this.deleting.has(doc.id))
+      return refused("workflow_deleting", "This workflow is being deleted.");
+    if (this.hasActiveRun(doc.id))
+      return refused("run_in_progress", "A run is already in progress for this workflow.");
     if (this.atRunCapacity()) return refused("too_many_runs", TOO_MANY_RUNS);
     const models = await this.deps.port.listModels();
     const planned = this.plan(doc, request.scope, models);
     if (!planned.ok) return { issues: planned.issues };
-    const missing = planned.plan.requests.filter((item) => !findModel(models, item.provider, item.model));
+    const missing = planned.plan.requests.filter(
+      (item) => !findModel(models, item.provider, item.model),
+    );
     if (missing.length > 0) {
       return {
         issues: missing.map((item) => ({
           code: "model_unavailable",
           nodeId: item.nodeId,
-          message: "This image model is not available. Choose another model, or add an image key in Settings → Image Generation.",
+          message:
+            "This image model is not available. Choose another model, or add an image key in Settings → Image Generation.",
         })),
       };
     }
@@ -160,7 +182,10 @@ export class ImageRunCoordinator {
             model: item.model,
             modelLabel: imageModelConsentLabel(option),
             referenceCount: item.referenceCount,
-            referenceBytes: item.knownReferences.reduce((sum, ref) => sum + (this.deps.assets.get(ref.assetId)?.bytes ?? 0), 0),
+            referenceBytes: item.knownReferences.reduce(
+              (sum, ref) => sum + (this.deps.assets.get(ref.assetId)?.bytes ?? 0),
+              0,
+            ),
             pendingReferenceCount: item.pendingReferenceCount,
             pendingReferenceSteps: item.pendingReferenceSteps,
           };
@@ -186,7 +211,8 @@ export class ImageRunCoordinator {
       if (!doc || doc.revision !== consent.plan.workflowRevision) return { error: "stale" };
       const models = await this.deps.port.listModels();
       const planned = this.plan(doc, consent.plan.scope, models);
-      if (!planned.ok || planDigest(planned.plan) !== consent.internal.digest) return { error: "stale" };
+      if (!planned.ok || planDigest(planned.plan) !== consent.internal.digest)
+        return { error: "stale" };
       if (planned.plan.requests.some((item) => !findModel(models, item.provider, item.model))) {
         return { error: "model-unavailable" };
       }
@@ -239,7 +265,9 @@ export class ImageRunCoordinator {
   }
 
   /** `generatedAsset` for many assets in one pass; assets the ledger never generated are absent. */
-  generatedAssets(assetIds: Iterable<string>): Map<string, { attempt: GeneratedAttempt; ref: OutputRef }> {
+  generatedAssets(
+    assetIds: Iterable<string>,
+  ): Map<string, { attempt: GeneratedAttempt; ref: OutputRef }> {
     return this.deps.ledger.generatedAssets(assetIds);
   }
 
@@ -260,11 +288,18 @@ export class ImageRunCoordinator {
     };
     add(this.deps.ledger.imageAssetIds());
     add(await this.deps.workflows.imageInputAssets());
-    return Object.fromEntries([...found].filter(([, ids]) => ids.size > 0).map(([workflowId, ids]) => [workflowId, ids.size]));
+    return Object.fromEntries(
+      [...found]
+        .filter(([, ids]) => ids.size > 0)
+        .map(([workflowId, ids]) => [workflowId, ids.size]),
+    );
   }
 
   hasActiveRun(workflowId: string): boolean {
-    return this.starting.has(workflowId) || [...this.active.values()].some((run) => run.workflowId === workflowId);
+    return (
+      this.starting.has(workflowId) ||
+      [...this.active.values()].some((run) => run.workflowId === workflowId)
+    );
   }
 
   inFlightRequests(): number {
@@ -282,11 +317,17 @@ export class ImageRunCoordinator {
     try {
       // History first: if the ledger fails, nothing was removed and the workflow is intact. If the
       // document delete then fails, the workflow remains with an empty history, which holds nothing.
-      this.releaseRuns(this.deps.ledger.deleteWorkflowRuns(workflowId), `deleting workflow ${workflowId}`);
+      this.releaseRuns(
+        this.deps.ledger.deleteWorkflowRuns(workflowId),
+        `deleting workflow ${workflowId}`,
+      );
       try {
         return (await this.deps.workflows.delete(workflowId)) ? "deleted" : "not-found";
       } catch (error) {
-        this.deps.reportIssue?.(`Could not delete workflow ${workflowId} after clearing its runs.`, error);
+        this.deps.reportIssue?.(
+          `Could not delete workflow ${workflowId} after clearing its runs.`,
+          error,
+        );
         throw error;
       }
     } finally {
@@ -322,7 +363,9 @@ export class ImageRunCoordinator {
         }
       }
       this.active.clear();
-      await this.deps.exports?.whenIdle(this.deps.shutdownSaveWaitMs ?? DEFAULT_SHUTDOWN_SAVE_WAIT_MS);
+      await this.deps.exports?.whenIdle(
+        this.deps.shutdownSaveWaitMs ?? DEFAULT_SHUTDOWN_SAVE_WAIT_MS,
+      );
     } finally {
       this.deps.ledger.close();
     }
@@ -330,7 +373,8 @@ export class ImageRunCoordinator {
 
   /** Resolves once every active run, and every auto-save it started, has settled. Used by tests and by the perf lane. */
   async whenIdle(): Promise<void> {
-    while (this.active.size > 0) await Promise.all([...this.active.values()].map((run) => run.done));
+    while (this.active.size > 0)
+      await Promise.all([...this.active.values()].map((run) => run.done));
     await this.deps.exports?.whenIdle();
   }
 
@@ -351,7 +395,13 @@ export class ImageRunCoordinator {
     });
     const controller = new AbortController();
     const trigger = createThrottledTrigger(() => this.publish(runId), this.deps.throttleMs ?? 250);
-    const run: ActiveRun = { runId, workflowId: doc.id, controller, trigger, done: Promise.resolve() };
+    const run: ActiveRun = {
+      runId,
+      workflowId: doc.id,
+      controller,
+      trigger,
+      done: Promise.resolve(),
+    };
     this.active.set(runId, run);
     this.publish(runId);
     run.done = executeRun(
@@ -366,10 +416,25 @@ export class ImageRunCoordinator {
         onRequestEnd: () => {
           this.inFlight -= 1;
         },
-        ...(this.deps.reportIssue ? { reportIssue: (error: unknown) => this.deps.reportIssue!("An image run hit a secondary failure.", error) } : {}),
-        ...(this.deps.exports ? { onImagesStored: (_step: unknown, output: readonly OutputRef[]) => this.deps.exports!.autoSave(output, doc.title) } : {}),
+        ...(this.deps.reportIssue
+          ? {
+              reportIssue: (error: unknown) =>
+                this.deps.reportIssue!("An image run hit a secondary failure.", error),
+            }
+          : {}),
+        ...(this.deps.exports
+          ? {
+              onImagesStored: (_step: unknown, output: readonly OutputRef[]) =>
+                this.deps.exports!.autoSave(output, doc.title),
+            }
+          : {}),
       },
-      { runId, plan, concurrency: clampRunConcurrency(doc.settings.concurrency), signal: controller.signal },
+      {
+        runId,
+        plan,
+        concurrency: clampRunConcurrency(doc.settings.concurrency),
+        signal: controller.signal,
+      },
     )
       .then(
         () => undefined,
@@ -419,13 +484,20 @@ export class ImageRunCoordinator {
       priorOutputs: this.deps.ledger.latestOutputs(doc.id),
       asset: (assetId) => {
         const record = this.deps.assets.get(assetId);
-        return record ? { assetId, width: record.width, height: record.height, mediaType: record.mediaType } : undefined;
+        return record
+          ? { assetId, width: record.width, height: record.height, mediaType: record.mediaType }
+          : undefined;
       },
       maxRequests: Math.min(this.deps.maxRequestsPerRun ?? MAX_REQUESTS, MAX_REQUESTS),
       model: (provider, model) => {
         const option = findModel(models, provider, model);
         return option
-          ? { acceptsReferences: option.acceptsReferences, ...(option.maxReferences !== undefined ? { maxReferences: option.maxReferences } : {}) }
+          ? {
+              acceptsReferences: option.acceptsReferences,
+              ...(option.maxReferences !== undefined
+                ? { maxReferences: option.maxReferences }
+                : {}),
+            }
           : undefined;
       },
       assetBytes: (assetId) => this.deps.assets.get(assetId)?.bytes,
@@ -434,7 +506,10 @@ export class ImageRunCoordinator {
 
   private prune(): void {
     try {
-      this.releaseRuns(this.deps.ledger.pruneRuns(this.deps.retainRuns ?? RUN_RETENTION), "pruning old runs");
+      this.releaseRuns(
+        this.deps.ledger.pruneRuns(this.deps.retainRuns ?? RUN_RETENTION),
+        "pruning old runs",
+      );
     } catch (error) {
       this.deps.reportIssue?.("Could not prune old image runs.", error);
     }
@@ -446,7 +521,10 @@ export class ImageRunCoordinator {
       try {
         this.deps.assets.releaseAllForHolder({ kind: "images-run", id: runId });
       } catch (error) {
-        this.deps.reportIssue?.(`Could not release the images held by run ${runId} while ${context}.`, error);
+        this.deps.reportIssue?.(
+          `Could not release the images held by run ${runId} while ${context}.`,
+          error,
+        );
       } finally {
         this.versions.delete(runId);
       }

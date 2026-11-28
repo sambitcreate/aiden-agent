@@ -63,8 +63,16 @@ test("each card is announced once, however often its Bot's cards change", async 
   const { notifier, shown } = setup();
   const [first, again] = await Promise.all([notifier.opened(card()), notifier.opened(card())]);
   assert.deepEqual([first, again], [true, false]);
-  assert.equal(await notifier.opened(card()), false, "a later change for the same card stays quiet");
-  assert.equal(await notifier.opened(card({ waitId: "w-2", action: "Approve the payment" })), true, "a new card is announced");
+  assert.equal(
+    await notifier.opened(card()),
+    false,
+    "a later change for the same card stays quiet",
+  );
+  assert.equal(
+    await notifier.opened(card({ waitId: "w-2", action: "Approve the payment" })),
+    true,
+    "a new card is announced",
+  );
   assert.deepEqual(
     shown.map((notification) => notification.body),
     ["Ada needs you to: Enter the 2FA code for your bank", "Ada needs you to: Approve the payment"],
@@ -128,21 +136,32 @@ test("a notification that cannot be shown, or a click that cannot navigate, is r
 
 test("watching the hand-offs announces each card as its Bot opens it, once, and nothing after watching stops", async () => {
   const handoffs = createBotHandoffs();
-  const { notifier, shown } = setup({ botName: (botId) => ({ "bot:ada": "Ada", "bot:bea": "Bea" })[botId] });
+  const { notifier, shown } = setup({
+    botName: (botId) => ({ "bot:ada": "Ada", "bot:bea": "Bea" })[botId],
+  });
   const settle = () => new Promise((resolve) => setImmediate(resolve));
   const stop = watchBotHandoffs(handoffs, notifier);
 
   const bank = handoffs.request({ ...card(), signal: undefined });
   await settle();
-  assert.deepEqual(shown.map((notification) => notification.body), ["Ada needs you to: Enter the 2FA code for your bank"]);
+  assert.deepEqual(
+    shown.map((notification) => notification.body),
+    ["Ada needs you to: Enter the 2FA code for your bank"],
+  );
 
   // Bea's card opening while Ada's still waits announces Bea's alone.
-  const invite = handoffs.request({ ...card({ botId: "bot:bea", waitId: "w-b", action: "Accept the invite" }), signal: undefined });
+  const invite = handoffs.request({
+    ...card({ botId: "bot:bea", waitId: "w-b", action: "Accept the invite" }),
+    signal: undefined,
+  });
   await settle();
   // Ada's answer and the next card in the same run: only the new card is announced.
   assert.equal(handoffs.answer("bot:ada", "w-1", { outcome: "done" }), "answered");
   await bank;
-  const payment = handoffs.request({ ...card({ waitId: "w-2", action: "Approve the payment" }), signal: undefined });
+  const payment = handoffs.request({
+    ...card({ waitId: "w-2", action: "Approve the payment" }),
+    signal: undefined,
+  });
   await settle();
   assert.deepEqual(
     shown.map((notification) => [notification.title, notification.body]),
@@ -157,47 +176,63 @@ test("watching the hand-offs announces each card as its Bot opens it, once, and 
   handoffs.answer("bot:ada", "w-2", { outcome: "skipped" });
   handoffs.answer("bot:bea", "w-b", { outcome: "done" });
   await Promise.all([payment, invite]);
-  const later = handoffs.request({ ...card({ waitId: "w-3", action: "Sign the lease" }), signal: undefined });
+  const later = handoffs.request({
+    ...card({ waitId: "w-3", action: "Sign the lease" }),
+    signal: undefined,
+  });
   await settle();
   assert.equal(shown.length, 3, "nothing is posted once watching stops");
   handoffs.answer("bot:ada", "w-3", { outcome: "done" });
   await later;
 });
 
-
 test("an access card notifies once per attempt only away from the app; watching cleanup stops delivery", async () => {
   const requests = createBotAccessRequests();
-  const { notifier, shown, focus, opened } = setup({ isPending: (botId, waitId) => requests.get(botId, waitId) !== undefined });
+  const { notifier, shown, focus, opened } = setup({
+    isPending: (botId, waitId) => requests.get(botId, waitId) !== undefined,
+  });
   const stop = watchBotAccessRequests(requests, notifier);
   const settle = () => new Promise((resolve) => setImmediate(resolve));
   const ask = () => requests.request(accessRequestPrompt({ botId: "bot:ada" }));
-  const answer = async () => requests.answer("bot:ada", requests.pending()[0]!.waitId, "not_now", async () => {});
+  const answer = async () =>
+    requests.answer("bot:ada", requests.pending()[0]!.waitId, "not_now", async () => {});
   const first = ask();
   const card = requests.pending()[0]!;
   const repeat = notifier.opened(card);
   await settle();
   assert.equal(await repeat, false);
-  assert.deepEqual(shown.map((item) => item.body), ["Ada needs you to: use Taxes"]);
+  assert.deepEqual(
+    shown.map((item) => item.body),
+    ["Ada needs you to: use Taxes"],
+  );
   shown[0]!.onClick();
   await settle();
   assert.deepEqual(opened, ["bot:ada"]);
-  await answer(); await first;
+  await answer();
+  await first;
   focus(true);
   const focused = ask();
   await settle();
   assert.equal(shown.length, 1);
   focus(false);
-  assert.equal(await notifier.opened(requests.pending()[0]!), false, "a card seen while focused stays quiet");
-  await answer(); await focused;
+  assert.equal(
+    await notifier.opened(requests.pending()[0]!),
+    false,
+    "a card seen while focused stays quiet",
+  );
+  await answer();
+  await focused;
   const next = ask();
   await settle();
   assert.equal(shown.length, 2, "reapproval has a new wait id even with the same logical id");
-  await answer(); await next;
+  await answer();
+  await next;
   stop();
   const later = ask();
   await settle();
   assert.equal(shown.length, 2);
-  await answer(); await later;
+  await answer();
+  await later;
 });
 
 test("an access card settled or focused while its name loads never notifies, and racing opens read its name only once", async () => {
@@ -206,7 +241,12 @@ test("an access card settled or focused while its name loads never notifies, and
     let release!: (name: string) => void;
     let reads = 0;
     const { notifier, shown, focus } = setup({
-      botName: () => { reads += 1; return new Promise<string>((resolve) => { release = resolve; }); },
+      botName: () => {
+        reads += 1;
+        return new Promise<string>((resolve) => {
+          release = resolve;
+        });
+      },
       isPending: (botId, waitId) => requests.get(botId, waitId) !== undefined,
     });
     const stop = watchBotAccessRequests(requests, notifier);
@@ -221,7 +261,10 @@ test("an access card settled or focused while its name loads never notifies, and
     release("Ada");
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(shown, []);
-    if (race === "focused") { await requests.answer("bot:ada", card.waitId, "not_now", async () => {}); await asked; }
+    if (race === "focused") {
+      await requests.answer("bot:ada", card.waitId, "not_now", async () => {});
+      await asked;
+    }
     stop();
   }
 });

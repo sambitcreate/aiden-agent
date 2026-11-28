@@ -56,12 +56,18 @@ export function attachmentsShownWithVisuals<T extends { id: string }>(message: {
     ...(message.uiVisuals ?? []).map((visual) => visual.id),
     ...(message.htmlArtifacts ?? []).map((artifact) => artifact.mediaId),
   ]);
-  const hidden = new Set(refs.filter((ref) => drawn.has(ref.visualId)).map((ref) => ref.attachmentId));
-  return hidden.size > 0 ? attachments.filter((attachment) => !hidden.has(attachment.id)) : attachments;
+  const hidden = new Set(
+    refs.filter((ref) => drawn.has(ref.visualId)).map((ref) => ref.attachmentId),
+  );
+  return hidden.size > 0
+    ? attachments.filter((attachment) => !hidden.has(attachment.id))
+    : attachments;
 }
 
 /** Drops snapshot attachments; returns the same array when there were none. */
-export function withoutVisualSnapshots<T extends { id: string }>(attachments: readonly T[]): readonly T[] {
+export function withoutVisualSnapshots<T extends { id: string }>(
+  attachments: readonly T[],
+): readonly T[] {
   return attachments.some((attachment) => isVisualSnapshotAttachmentId(attachment.id))
     ? attachments.filter((attachment) => !isVisualSnapshotAttachmentId(attachment.id))
     : attachments;

@@ -33,9 +33,20 @@ test("every edit gives a slider main's parser accepts as it is", () => {
     removeAgentSliderStop(addAgentSliderStop(base, ids("new")), "b"),
     moveAgentSliderStop(base, "a", 1),
     renameAgentSliderStop(base, "a", "  Quick  "),
-    assignAgentSliderStop(base, "a", { providerId: "q", model: "m", levels: ["low", "high"], defaultLevel: "low" }),
-    effortLadderTemplate({ providerId: "p", model: "smart", levels: ["low", "medium", "high"] }, ids("lad"))!,
-    localToCloudTemplate({ local: undefined, cloud: { providerId: "p", model: "mid" } }, ids("ltc")),
+    assignAgentSliderStop(base, "a", {
+      providerId: "q",
+      model: "m",
+      levels: ["low", "high"],
+      defaultLevel: "low",
+    }),
+    effortLadderTemplate(
+      { providerId: "p", model: "smart", levels: ["low", "medium", "high"] },
+      ids("lad"),
+    )!,
+    localToCloudTemplate(
+      { local: undefined, cloud: { providerId: "p", model: "mid" } },
+      ids("ltc"),
+    ),
   ];
   for (const slider of edits) assert.deepEqual(parseAgentSliderPatch(slider), slider);
 });
@@ -57,14 +68,20 @@ test("stop counts stay within 3 to 7", () => {
 test("removing the home stop moves home to the middle of what is left", () => {
   const four = addAgentSliderStop(base, ids("new"));
   const removed = removeAgentSliderStop(four, "b");
-  assert.deepEqual(removed.stops.map((stop) => stop.id), ["a", "c", "new_1"]);
+  assert.deepEqual(
+    removed.stops.map((stop) => stop.id),
+    ["a", "c", "new_1"],
+  );
   assert.equal(removed.homeStopId, "c");
 });
 
 test("moves stop at the ends", () => {
   assert.equal(moveAgentSliderStop(base, "a", -1), base);
   assert.equal(moveAgentSliderStop(base, "c", 1), base);
-  assert.deepEqual(moveAgentSliderStop(base, "c", -1).stops.map((stop) => stop.id), ["a", "c", "b"]);
+  assert.deepEqual(
+    moveAgentSliderStop(base, "c", -1).stops.map((stop) => stop.id),
+    ["a", "c", "b"],
+  );
 });
 
 test("an invalid name says why and leaves the slider alone", () => {
@@ -95,12 +112,18 @@ test("a reassigned stop keeps its effort when the new model has it, else takes t
 });
 
 test("the effort ladder needs three levels and puts home in the middle", () => {
-  assert.equal(effortLadderTemplate({ providerId: "p", model: "m", levels: ["low", "high"] }), undefined);
+  assert.equal(
+    effortLadderTemplate({ providerId: "p", model: "m", levels: ["low", "high"] }),
+    undefined,
+  );
   const ladder = effortLadderTemplate(
     { providerId: "p", model: "m", levels: ["off", "low", "medium", "high", "xhigh"] },
     ids("lad"),
   )!;
-  assert.deepEqual(ladder.stops.map((stop) => stop.thinkingLevel), ["off", "low", "medium", "high", "xhigh"]);
+  assert.deepEqual(
+    ladder.stops.map((stop) => stop.thinkingLevel),
+    ["off", "low", "medium", "high", "xhigh"],
+  );
   assert.equal(ladder.homeStopId, ladder.stops[2]!.id);
 });
 

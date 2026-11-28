@@ -50,9 +50,7 @@ export interface TtsInteractionBody {
  * Build the synthesis request body. The transcript is never prefixed with
  * delivery instructions: it is the exact text to speak (plan §3.1).
  */
-export function buildTtsInteractionBody(
-  request: TtsSynthesisWireRequest,
-): TtsInteractionBody {
+export function buildTtsInteractionBody(request: TtsSynthesisWireRequest): TtsInteractionBody {
   if (!request.transcript.trim()) {
     throw new TtsWireError("invalid_response", "Nothing to synthesize.");
   }
@@ -75,9 +73,7 @@ export function buildTtsInteractionBody(
             text: request.transcript,
             ...(request.style
               ? {
-                  annotations: [
-                    { type: "speech_metadata" as const, style: request.style },
-                  ],
+                  annotations: [{ type: "speech_metadata" as const, style: request.style }],
                 }
               : {}),
           },
@@ -183,10 +179,7 @@ export function validateWavContainer(bytes: Uint8Array): WavInfo {
       const sampleRate = view.getUint32(body + 4, true);
       const bitsPerSample = view.getUint16(body + 14, true);
       if (audioFormat !== 1 || bitsPerSample !== 16) {
-        throw new TtsWireError(
-          "invalid_response",
-          "Audio format is not 16-bit PCM.",
-        );
+        throw new TtsWireError("invalid_response", "Audio format is not 16-bit PCM.");
       }
       fmt = { sampleRate, channels, bitsPerSample, dataBytes: 0 };
     } else if (chunkId === "data") {
@@ -223,9 +216,17 @@ function parseUsage(usage: unknown): TtsSynthesisUsage {
   if (!isRecord(usage)) return { inputTokens: null, outputTokens: null };
   return {
     inputTokens:
-      typeof usage.total_input_tokens === "number" && Number.isSafeInteger(usage.total_input_tokens) && usage.total_input_tokens >= 0 ? usage.total_input_tokens : null,
+      typeof usage.total_input_tokens === "number" &&
+      Number.isSafeInteger(usage.total_input_tokens) &&
+      usage.total_input_tokens >= 0
+        ? usage.total_input_tokens
+        : null,
     outputTokens:
-      typeof usage.total_output_tokens === "number" && Number.isSafeInteger(usage.total_output_tokens) && usage.total_output_tokens >= 0 ? usage.total_output_tokens : null,
+      typeof usage.total_output_tokens === "number" &&
+      Number.isSafeInteger(usage.total_output_tokens) &&
+      usage.total_output_tokens >= 0
+        ? usage.total_output_tokens
+        : null,
   };
 }
 
@@ -234,9 +235,7 @@ function parseUsage(usage: unknown): TtsSynthesisUsage {
  * steps; falls back to the convenience output_audio only when steps carry no
  * audio. Never merges both sources.
  */
-export function parseUnarySynthesisResponse(
-  response: unknown,
-): TtsUnarySynthesisResult {
+export function parseUnarySynthesisResponse(response: unknown): TtsUnarySynthesisResult {
   if (!isRecord(response)) {
     throw new TtsWireError("invalid_response", "Provider response is malformed.");
   }
@@ -292,12 +291,7 @@ export function classifyTtsProviderError(error: unknown): TtsWireError {
     return new TtsWireError("not_found", "The requested model or voice is unavailable.");
   }
   if (status === 429 || raw.includes("RESOURCE_EXHAUSTED") || raw.includes("quota")) {
-    return new TtsWireError(
-      "quota",
-      "Google usage limits were reached.",
-      true,
-      false,
-    );
+    return new TtsWireError("quota", "Google usage limits were reached.", true, false);
   }
   if (status !== undefined && status >= 500) {
     return new TtsWireError(
@@ -322,12 +316,7 @@ export function classifyTtsProviderError(error: unknown): TtsWireError {
       true,
     );
   }
-  return new TtsWireError(
-    "provider_unavailable",
-    "Speech generation failed.",
-    false,
-    true,
-  );
+  return new TtsWireError("provider_unavailable", "Speech generation failed.", false, true);
 }
 
 // --- Voices API helpers -----------------------------------------------------

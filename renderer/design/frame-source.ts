@@ -13,7 +13,9 @@ export type DesignFrameSourceResult =
 /** Reads a page's file or an artifact's HTML; the canvas saves first, since main reads the stored frame. */
 export type DesignReadSource = (frameId: string) => Promise<DesignFrameSourceResult>;
 
-export type DesignLoadedSource = { key: string; text: string; truncated: boolean } | { key: string; error: string };
+export type DesignLoadedSource =
+  | { key: string; text: string; truncated: boolean }
+  | { key: string; error: string };
 
 const SOURCE_ERRORS = {
   missing: "This file is missing.",
@@ -50,5 +52,9 @@ export function useFrameSource(
     };
     // The key changes with the frame, its file and each change on disk.
   }, [readSource, key]);
-  return loaded && identity !== null && loaded.key.slice(0, loaded.key.lastIndexOf(":")) === identity ? loaded : null;
+  return loaded &&
+    identity !== null &&
+    loaded.key.slice(0, loaded.key.lastIndexOf(":")) === identity
+    ? loaded
+    : null;
 }

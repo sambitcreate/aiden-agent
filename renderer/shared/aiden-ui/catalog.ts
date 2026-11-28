@@ -41,24 +41,38 @@ const TONES = { enum: ["primary", "secondary", "tertiary"] } as const;
 const STATUS_COLORS = { enum: ["gray", "green", "red", "blue", "warning"] } as const;
 const ALIGN = { enum: ["start", "center", "end", "stretch"] } as const;
 const VALUE_FORMATS = { enum: ["number", "currency", "percent", "date", "text"] } as const;
-const OPTIONS: Readonly<Record<string, ListShape>> = { options: { item: "{value, label} or a plain value", kind: "any" } };
+const OPTIONS: Readonly<Record<string, ListShape>> = {
+  options: { item: "{value, label} or a plain value", kind: "any" },
+};
 
 export const AIDEN_UI_CATALOG: Readonly<Record<string, CatalogEntry>> = {
   // Layout
   Visual: { props: { title: "string", state: "any" }, children: "nodes" },
   Stack: { props: { gap: "number", align: ALIGN }, children: "nodes" },
   Row: {
-    props: { gap: "number", align: ALIGN, wrap: "boolean", justify: { enum: ["start", "center", "end", "between"] } },
+    props: {
+      gap: "number",
+      align: ALIGN,
+      wrap: "boolean",
+      justify: { enum: ["start", "center", "end", "between"] },
+    },
     children: "nodes",
   },
   Grid: { props: { columns: "number", gap: "number", minWidth: "number" }, children: "nodes" },
-  Card: { props: { title: "string", tone: { enum: ["default", "accent", "green", "red", "warning"] } }, children: "nodes" },
+  Card: {
+    props: { title: "string", tone: { enum: ["default", "accent", "green", "red", "warning"] } },
+    children: "nodes",
+  },
   Section: { props: { title: "string", description: "string" }, children: "nodes" },
   Separator: { props: {}, children: "none" },
   Spacer: { props: { size: "number" }, children: "none" },
   // Text
   Text: {
-    props: { tone: TONES, size: { enum: ["small", "regular", "large"] }, weight: { enum: ["regular", "strong"] } },
+    props: {
+      tone: TONES,
+      size: { enum: ["small", "regular", "large"] },
+      weight: { enum: ["regular", "strong"] },
+    },
     children: "text",
   },
   Heading: { props: { level: { enum: ["1", "2", "3"] } }, children: "text" },
@@ -68,7 +82,14 @@ export const AIDEN_UI_CATALOG: Readonly<Record<string, CatalogEntry>> = {
   Kbd: { props: {}, children: "text" },
   // Data display
   Stat: {
-    props: { label: "string", value: "any", format: VALUE_FORMATS, trend: "number", caption: "string", currency: "string" },
+    props: {
+      label: "string",
+      value: "any",
+      format: VALUE_FORMATS,
+      trend: "number",
+      caption: "string",
+      currency: "string",
+    },
     children: "none",
     required: ["label", "value"],
   },
@@ -89,13 +110,23 @@ export const AIDEN_UI_CATALOG: Readonly<Record<string, CatalogEntry>> = {
   },
   List: { props: {}, children: "nodes" },
   ListRow: {
-    props: { title: "string", description: "string", icon: "icon", meta: "string", action: "action" },
+    props: {
+      title: "string",
+      description: "string",
+      icon: "icon",
+      meta: "string",
+      action: "action",
+    },
     children: "none",
     required: ["title"],
   },
   Badge: { props: { color: STATUS_COLORS, icon: "icon" }, children: "text" },
   Callout: { props: { color: STATUS_COLORS, title: "string" }, children: "nodes" },
-  Progress: { props: { value: "number", max: "number", label: "string" }, children: "none", required: ["value"] },
+  Progress: {
+    props: { value: "number", max: "number", label: "string" },
+    children: "none",
+    required: ["value"],
+  },
   Meter: {
     props: { value: "number", max: "number", label: "string", low: "number", high: "number" },
     children: "none",
@@ -113,9 +144,17 @@ export const AIDEN_UI_CATALOG: Readonly<Record<string, CatalogEntry>> = {
     required: ["items"],
     lists: { items: { item: "{title, time?, description?}", kind: "object", needs: ["title"] } },
   },
-  Image: { props: { attachment: "string", alt: "string" }, children: "none", required: ["attachment", "alt"] },
+  Image: {
+    props: { attachment: "string", alt: "string" },
+    children: "none",
+    required: ["attachment", "alt"],
+  },
   Icon: { props: { name: "icon", tone: TONES }, children: "none", required: ["name"] },
-  LinkCard: { props: { url: "string", title: "string", description: "string" }, children: "none", required: ["url", "title"] },
+  LinkCard: {
+    props: { url: "string", title: "string", description: "string" },
+    children: "none",
+    required: ["url", "title"],
+  },
   // Charts
   Chart: {
     props: {
@@ -141,7 +180,10 @@ export const AIDEN_UI_CATALOG: Readonly<Record<string, CatalogEntry>> = {
       items: {
         item: "{label, value} (other field names via label= and value=)",
         kind: "object",
-        needs: [{ prop: "label", fallback: "label" }, { prop: "value", fallback: "value" }],
+        needs: [
+          { prop: "label", fallback: "label" },
+          { prop: "value", fallback: "value" },
+        ],
       },
     },
   },
@@ -153,7 +195,11 @@ export const AIDEN_UI_CATALOG: Readonly<Record<string, CatalogEntry>> = {
       rows: {
         item: "{x, y, value} (other field names via x=, y= and value=)",
         kind: "object",
-        needs: [{ prop: "x", fallback: "x" }, { prop: "y", fallback: "y" }, { prop: "value", fallback: "value" }],
+        needs: [
+          { prop: "x", fallback: "x" },
+          { prop: "y", fallback: "y" },
+          { prop: "value", fallback: "value" },
+        ],
       },
     },
   },
@@ -164,27 +210,74 @@ export const AIDEN_UI_CATALOG: Readonly<Record<string, CatalogEntry>> = {
     lists: { values: { item: "number", kind: "number" } },
   },
   // Input and state
-  Segmented: { props: { bind: "stateKey", options: "any", label: "string" }, children: "none", required: ["bind", "options"], lists: OPTIONS },
-  Tabs: { props: { bind: "stateKey", options: "any", label: "string" }, children: "none", required: ["bind", "options"], lists: OPTIONS },
-  Switch: { props: { bind: "stateKey", label: "string" }, children: "none", required: ["bind", "label"] },
-  Checkbox: { props: { bind: "stateKey", label: "string" }, children: "none", required: ["bind", "label"] },
-  RadioGroup: { props: { bind: "stateKey", options: "any", label: "string" }, children: "none", required: ["bind", "options"], lists: OPTIONS },
-  Select: { props: { bind: "stateKey", options: "any", label: "string" }, children: "none", required: ["bind", "options"], lists: OPTIONS },
-  Slider: {
-    props: { bind: "stateKey", min: "number", max: "number", step: "number", label: "string", format: VALUE_FORMATS },
+  Segmented: {
+    props: { bind: "stateKey", options: "any", label: "string" },
+    children: "none",
+    required: ["bind", "options"],
+    lists: OPTIONS,
+  },
+  Tabs: {
+    props: { bind: "stateKey", options: "any", label: "string" },
+    children: "none",
+    required: ["bind", "options"],
+    lists: OPTIONS,
+  },
+  Switch: {
+    props: { bind: "stateKey", label: "string" },
     children: "none",
     required: ["bind", "label"],
   },
-  TextInput: { props: { bind: "stateKey", label: "string", placeholder: "string" }, children: "none", required: ["bind", "label"] },
+  Checkbox: {
+    props: { bind: "stateKey", label: "string" },
+    children: "none",
+    required: ["bind", "label"],
+  },
+  RadioGroup: {
+    props: { bind: "stateKey", options: "any", label: "string" },
+    children: "none",
+    required: ["bind", "options"],
+    lists: OPTIONS,
+  },
+  Select: {
+    props: { bind: "stateKey", options: "any", label: "string" },
+    children: "none",
+    required: ["bind", "options"],
+    lists: OPTIONS,
+  },
+  Slider: {
+    props: {
+      bind: "stateKey",
+      min: "number",
+      max: "number",
+      step: "number",
+      label: "string",
+      format: VALUE_FORMATS,
+    },
+    children: "none",
+    required: ["bind", "label"],
+  },
+  TextInput: {
+    props: { bind: "stateKey", label: "string", placeholder: "string" },
+    children: "none",
+    required: ["bind", "label"],
+  },
   // Actions
   Button: {
-    props: { variant: { enum: ["accent", "filled", "muted", "transparent"] }, action: "action", icon: "icon" },
+    props: {
+      variant: { enum: ["accent", "filled", "muted", "transparent"] },
+      action: "action",
+      icon: "icon",
+    },
     children: "text",
     required: ["action"],
   },
   ButtonGroup: { props: {}, children: "nodes" },
   // Disclosure
-  Disclosure: { props: { title: "string", open: "boolean" }, children: "nodes", required: ["title"] },
+  Disclosure: {
+    props: { title: "string", open: "boolean" },
+    children: "nodes",
+    required: ["title"],
+  },
   Tooltip: { props: { content: "string" }, children: "nodes", required: ["content"] },
   // Control flow
   Each: { props: { in: "any", as: "string" }, children: "nodes", required: ["in"] },
@@ -194,14 +287,81 @@ export const AIDEN_UI_CATALOG: Readonly<Record<string, CatalogEntry>> = {
 
 /** Lucide icons a visual may name (kebab-case, as in the Lucide docs). No brain glyphs. */
 export const AIDEN_UI_ICONS = [
-  "activity", "alert-triangle", "archive", "arrow-down", "arrow-right", "arrow-up", "bar-chart", "battery",
-  "book-open", "bug", "calendar", "camera", "check", "circle-alert", "circle-check", "circle-x", "clock",
-  "cloud", "code", "coffee", "cpu", "credit-card", "database", "dollar-sign", "download", "file-text", "flag",
-  "folder", "git-branch", "globe", "graduation-cap", "heart", "home", "image", "info", "leaf", "lightbulb",
-  "line-chart", "link", "lock", "mail", "map-pin", "message-square", "minus", "moon", "music", "package",
-  "phone", "pie-chart", "plus", "rocket", "search", "server", "settings", "shield", "shopping-cart",
-  "sparkles", "star", "sun", "target", "terminal", "thumbs-down", "thumbs-up", "timer", "trending-down",
-  "trending-up", "truck", "upload", "user", "users", "video", "wifi", "wrench", "x", "zap",
+  "activity",
+  "alert-triangle",
+  "archive",
+  "arrow-down",
+  "arrow-right",
+  "arrow-up",
+  "bar-chart",
+  "battery",
+  "book-open",
+  "bug",
+  "calendar",
+  "camera",
+  "check",
+  "circle-alert",
+  "circle-check",
+  "circle-x",
+  "clock",
+  "cloud",
+  "code",
+  "coffee",
+  "cpu",
+  "credit-card",
+  "database",
+  "dollar-sign",
+  "download",
+  "file-text",
+  "flag",
+  "folder",
+  "git-branch",
+  "globe",
+  "graduation-cap",
+  "heart",
+  "home",
+  "image",
+  "info",
+  "leaf",
+  "lightbulb",
+  "line-chart",
+  "link",
+  "lock",
+  "mail",
+  "map-pin",
+  "message-square",
+  "minus",
+  "moon",
+  "music",
+  "package",
+  "phone",
+  "pie-chart",
+  "plus",
+  "rocket",
+  "search",
+  "server",
+  "settings",
+  "shield",
+  "shopping-cart",
+  "sparkles",
+  "star",
+  "sun",
+  "target",
+  "terminal",
+  "thumbs-down",
+  "thumbs-up",
+  "timer",
+  "trending-down",
+  "trending-up",
+  "truck",
+  "upload",
+  "user",
+  "users",
+  "video",
+  "wifi",
+  "wrench",
+  "x",
+  "zap",
 ] as const;
 
 export type AidenUiIconName = (typeof AIDEN_UI_ICONS)[number];

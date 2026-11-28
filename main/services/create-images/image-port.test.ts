@@ -11,8 +11,14 @@ import { fakeImageModels, type FakeImageReply } from "./test-fixture.js";
 
 const NANO = "google/gemini-3.1-flash-image";
 
-function port(reply?: (index: number) => FakeImageReply, models?: NonNullable<Parameters<typeof fakeImageModels>[0]>["models"]) {
-  const fake = fakeImageModels({ ...(models ? { models } : {}), ...(reply ? { reply: (_call, index) => reply(index) } : {}) });
+function port(
+  reply?: (index: number) => FakeImageReply,
+  models?: NonNullable<Parameters<typeof fakeImageModels>[0]>["models"],
+) {
+  const fake = fakeImageModels({
+    ...(models ? { models } : {}),
+    ...(reply ? { reply: (_call, index) => reply(index) } : {}),
+  });
   const usage: ImageOperationUsage[] = [];
   const instance = createPiImageGenerationPort({
     models: fake.models,
@@ -40,24 +46,47 @@ test("listModels lists configured image models and hides auto routers", async ()
     { id: "black-forest-labs/flux.2-pro", name: "FLUX.2 Pro", input: ["text"] },
   ]);
   assert.deepEqual(await images.listModels(), [
-    { provider: "openrouter", providerLabel: "OpenRouter", model: "black-forest-labs/flux.2-pro", label: "FLUX.2 Pro", acceptsReferences: false, textOutput: true },
-    { provider: "openrouter", providerLabel: "OpenRouter", model: NANO, label: "Google: Nano Banana 2 (Gemini 3.1 Flash Image)", acceptsReferences: true, maxReferences: 4, textOutput: true },
+    {
+      provider: "openrouter",
+      providerLabel: "OpenRouter",
+      model: "black-forest-labs/flux.2-pro",
+      label: "FLUX.2 Pro",
+      acceptsReferences: false,
+      textOutput: true,
+    },
+    {
+      provider: "openrouter",
+      providerLabel: "OpenRouter",
+      model: NANO,
+      label: "Google: Nano Banana 2 (Gemini 3.1 Flash Image)",
+      acceptsReferences: true,
+      maxReferences: 4,
+      textOutput: true,
+    },
   ]);
 });
 
 test("a model's own reference limit is listed and enforced before anything is sent", async () => {
-  const fake = port(undefined, [{ id: "editor", maxReferences: 1 }, { id: NANO, maxReferences: 9 }]);
+  const fake = port(undefined, [
+    { id: "editor", maxReferences: 1 },
+    { id: NANO, maxReferences: 9 },
+  ]);
   assert.deepEqual(
     (await fake.port.listModels()).map(({ model, maxReferences }) => [model, maxReferences]),
-    [["editor", 1], [NANO, 4]],
+    [
+      ["editor", 1],
+      [NANO, 4],
+    ],
     "never above Aiden's four",
   );
   const reference = { mimeType: "image/png", bytes: pngBytes(8, 8, 1) };
-  const refused = await fake.port.preflight(request({ model: "editor", references: [reference, reference] }));
-  assert.deepEqual(
-    refused.kind === "failed" ? [refused.code, refused.message] : refused.kind,
-    ["references-unsupported", "This image request has 2 reference images. This model accepts at most 1."],
+  const refused = await fake.port.preflight(
+    request({ model: "editor", references: [reference, reference] }),
   );
+  assert.deepEqual(refused.kind === "failed" ? [refused.code, refused.message] : refused.kind, [
+    "references-unsupported",
+    "This image request has 2 reference images. This model accepts at most 1.",
+  ]);
   const ready = await fake.port.preflight(request({ model: "editor", references: [reference] }));
   assert.equal(ready.kind, "ready");
   assert.equal(fake.calls.length, 0, "a passed preflight still sends nothing");
@@ -78,7 +107,12 @@ test("listModels lists nothing, rather than failing, when the image registry can
 });
 
 test("listModels marks the Settings default and names each model's maker", async () => {
-  const fake = fakeImageModels({ models: [{ id: NANO, name: "Nano Banana 2" }, { id: "black-forest-labs/flux.2-pro", name: "FLUX.2 Pro" }] });
+  const fake = fakeImageModels({
+    models: [
+      { id: NANO, name: "Nano Banana 2" },
+      { id: "black-forest-labs/flux.2-pro", name: "FLUX.2 Pro" },
+    ],
+  });
   const images = createPiImageGenerationPort({
     models: fake.models,
     providerLabel: (id) => id,
@@ -93,7 +127,10 @@ test("listModels marks the Settings default and names each model's maker", async
       { model: NANO, isDefault: undefined, maker: "google" },
     ],
   );
-  assert.deepEqual(pickDefaultImageModel(listed), { provider: "openrouter", id: "black-forest-labs/flux.2-pro" });
+  assert.deepEqual(pickDefaultImageModel(listed), {
+    provider: "openrouter",
+    id: "black-forest-labs/flux.2-pro",
+  });
 
   const brokenDefault = createPiImageGenerationPort({
     models: fake.models,
@@ -102,7 +139,11 @@ test("listModels marks the Settings default and names each model's maker", async
       throw new Error("settings unreadable");
     },
   });
-  assert.equal((await brokenDefault.listModels()).length, 2, "a failed default lookup still lists models");
+  assert.equal(
+    (await brokenDefault.listModels()).length,
+    2,
+    "a failed default lookup still lists models",
+  );
 });
 
 test("one generate is one provider call with maxRetries 0 and one usage record", async () => {
@@ -111,14 +152,23 @@ test("one generate is one provider call with maxRetries 0 and one usage record",
   assert.equal(result.kind, "images");
   assert.equal(result.kind === "images" ? result.images.length : 0, 1);
   assert.deepEqual(
-    result.kind === "images" ? result.images.map(({ mimeType, width, height }) => ({ mimeType, width, height })) : [],
+    result.kind === "images"
+      ? result.images.map(({ mimeType, width, height }) => ({ mimeType, width, height }))
+      : [],
     [{ mimeType: "image/png", width: 16, height: 16 }],
   );
   assert.equal(fake.calls.length, 1);
   assert.equal(fake.calls[0]?.prompt, "A red bicycle at dawn");
   assert.equal(fake.calls[0]?.options?.maxRetries, 0);
   assert.equal(fake.usage.length, 1);
-  assert.deepEqual(Object.keys(fake.usage[0]!).sort(), ["model", "modelLabel", "provider", "providerLabel", "status", "usage"]);
+  assert.deepEqual(Object.keys(fake.usage[0]!).sort(), [
+    "model",
+    "modelLabel",
+    "provider",
+    "providerLabel",
+    "status",
+    "usage",
+  ]);
   assert.equal(fake.usage[0]?.status, "completed");
   assert.equal(fake.usage[0]?.usage?.cost.total, 0.039);
 });
@@ -129,8 +179,13 @@ test("references reach the provider as image inputs, and text-only models refuse
   await fake.port.generate(request({ references: [reference, reference] }));
   assert.equal(fake.calls[0]?.references, 2);
   const refused = await fake.port.generate(request({ model: "flux", references: [reference] }));
-  assert.deepEqual(refused.kind === "failed" ? refused.code : refused.kind, "references-unsupported");
-  const oversized = await fake.port.generate(request({ references: Array.from({ length: 5 }, () => reference) }));
+  assert.deepEqual(
+    refused.kind === "failed" ? refused.code : refused.kind,
+    "references-unsupported",
+  );
+  const oversized = await fake.port.generate(
+    request({ references: Array.from({ length: 5 }, () => reference) }),
+  );
   assert.deepEqual(
     oversized.kind === "failed" ? [oversized.code, oversized.message] : oversized.kind,
     ["references-unsupported", "This image request has 5 reference images. Aiden sends at most 4."],
@@ -140,32 +195,51 @@ test("references reach the provider as image inputs, and text-only models refuse
 });
 
 test("provider errors and aborts are outcomes, accounted exactly once", async () => {
-  const fake = port((index) => (index === 0 ? { kind: "error", message: "Rate limited (429)" } : { kind: "hold" }));
+  const fake = port((index) =>
+    index === 0 ? { kind: "error", message: "Rate limited (429)" } : { kind: "hold" },
+  );
   const failed = await fake.port.generate(request());
-  assert.deepEqual(failed.kind === "failed" ? [failed.code, failed.message] : [], ["provider-error", "Rate limited (429)"]);
+  assert.deepEqual(failed.kind === "failed" ? [failed.code, failed.message] : [], [
+    "provider-error",
+    "Rate limited (429)",
+  ]);
   const controller = new AbortController();
   const pending = fake.port.generate(request({ signal: controller.signal }));
   while (fake.calls.length < 2) await new Promise((resolve) => setImmediate(resolve));
   controller.abort();
   const aborted = await pending;
   assert.equal(aborted.kind === "failed" ? aborted.code : aborted.kind, "aborted");
-  assert.deepEqual(fake.usage.map((record) => record.status), ["failed", "cancelled"]);
+  assert.deepEqual(
+    fake.usage.map((record) => record.status),
+    ["failed", "cancelled"],
+  );
 });
 
 test("more than four images are truncated, not failed; undecodable output is output-invalid", async () => {
-  const fake = port((index) => (index === 0 ? { kind: "images", count: 6 } : { kind: "images", data: "AAAA" }));
+  const fake = port((index) =>
+    index === 0 ? { kind: "images", count: 6 } : { kind: "images", data: "AAAA" },
+  );
   const many = await fake.port.generate(request());
   assert.deepEqual(many.kind === "images" ? [many.images.length, many.truncated] : [], [4, true]);
   const broken = await fake.port.generate(request());
   assert.equal(broken.kind === "failed" ? broken.code : broken.kind, "output-invalid");
-  assert.deepEqual(fake.usage.map((record) => record.status), ["completed", "completed"]);
+  assert.deepEqual(
+    fake.usage.map((record) => record.status),
+    ["completed", "completed"],
+  );
 });
 
 test("unsupported image types are dropped before the four-image cap, so valid images are kept", async () => {
-  const fake = port(() => ({ kind: "images", count: 5, mimeTypes: ["image/gif", "image/gif", "image/gif", "image/gif", "image/png"] }));
+  const fake = port(() => ({
+    kind: "images",
+    count: 5,
+    mimeTypes: ["image/gif", "image/gif", "image/gif", "image/gif", "image/png"],
+  }));
   const result = await fake.port.generate(request());
   assert.deepEqual(
-    result.kind === "images" ? [result.images.map((image) => image.mimeType), result.truncated] : result,
+    result.kind === "images"
+      ? [result.images.map((image) => image.mimeType), result.truncated]
+      : result,
     [["image/png"], true],
   );
 });
@@ -173,17 +247,25 @@ test("unsupported image types are dropped before the four-image cap, so valid im
 test("a reply with text and no images surfaces the model's words on one bounded line", async () => {
   const fake = port((index) =>
     index === 0
-      ? { kind: "images", count: 0, text: "I can't create that image.\n\nIt depicts a real person." }
+      ? {
+          kind: "images",
+          count: 0,
+          text: "I can't create that image.\n\nIt depicts a real person.",
+        }
       : { kind: "images", count: 0, text: "x".repeat(1_000) },
   );
   const refused = await fake.port.generate(request());
-  assert.deepEqual(
-    refused.kind === "failed" ? [refused.code, refused.message] : refused,
-    ["output-invalid", "The model returned no images. It said: “I can't create that image. It depicts a real person.”"],
-  );
+  assert.deepEqual(refused.kind === "failed" ? [refused.code, refused.message] : refused, [
+    "output-invalid",
+    "The model returned no images. It said: “I can't create that image. It depicts a real person.”",
+  ]);
   const long = await fake.port.generate(request());
   assert.ok(long.kind === "failed" && long.message.length < 340 && long.message.endsWith("…”"));
-  assert.deepEqual(fake.usage.map((record) => record.status), ["completed", "completed"], "the paid call is still accounted");
+  assert.deepEqual(
+    fake.usage.map((record) => record.status),
+    ["completed", "completed"],
+    "the paid call is still accounted",
+  );
 });
 
 test("unknown and auto-router models are refused without a request", async () => {
@@ -197,14 +279,27 @@ test("unknown and auto-router models are refused without a request", async () =>
 });
 
 test("the default model is the Settings default, else Nano Banana 2, else the first available", () => {
-  const option = (provider: string, model: string, isDefault?: boolean): ImageModelOption =>
-    ({ provider, providerLabel: provider, model, label: model, acceptsReferences: true, textOutput: true, ...(isDefault ? { isDefault } : {}) });
+  const option = (provider: string, model: string, isDefault?: boolean): ImageModelOption => ({
+    provider,
+    providerLabel: provider,
+    model,
+    label: model,
+    acceptsReferences: true,
+    textOutput: true,
+    ...(isDefault ? { isDefault } : {}),
+  });
   assert.deepEqual(
     pickDefaultImageModel([option("openrouter", NANO), option("fal", "fal-ai/flux/schnell", true)]),
     { provider: "fal", id: "fal-ai/flux/schnell" },
   );
-  assert.deepEqual(pickDefaultImageModel([option("openrouter", "flux"), option("openrouter", NANO)]), { provider: "openrouter", id: NANO });
-  assert.deepEqual(pickDefaultImageModel([option("openrouter", "flux")]), { provider: "openrouter", id: "flux" });
+  assert.deepEqual(
+    pickDefaultImageModel([option("openrouter", "flux"), option("openrouter", NANO)]),
+    { provider: "openrouter", id: NANO },
+  );
+  assert.deepEqual(pickDefaultImageModel([option("openrouter", "flux")]), {
+    provider: "openrouter",
+    id: "flux",
+  });
   assert.equal(pickDefaultImageModel([]), undefined);
 });
 

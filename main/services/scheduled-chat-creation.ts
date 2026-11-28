@@ -1,7 +1,4 @@
-import {
-  isChatCreateReconciliationRequiredError,
-  type ChatStore,
-} from "./chat-store-core.js";
+import { isChatCreateReconciliationRequiredError, type ChatStore } from "./chat-store-core.js";
 
 /**
  * Preserve the exact main-minted chat identity when background creation is
@@ -22,9 +19,7 @@ export async function createScheduledChatClaim(
   } catch (error) {
     if (isChatCreateReconciliationRequiredError(error)) {
       if (error.chatId !== claimedChatId) {
-        throw new Error(
-          "Scheduled chat reconciliation returned the wrong identity.",
-        );
+        throw new Error("Scheduled chat reconciliation returned the wrong identity.");
       }
       return { id: error.chatId };
     }

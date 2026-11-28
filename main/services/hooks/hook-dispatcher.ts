@@ -26,7 +26,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { fenceAsData } from "../../../renderer/shared/agent-notices.js";
 import { claudeToolInput, claudeToolName, aidenToolName } from "./hook-aliases.js";
 import { clampHookTimeout } from "./hook-config.js";
-import { compileHookMatcher, matcherMatchesTool, matcherMatchesValue, type CompiledHookMatcher } from "./hook-matcher.js";
+import {
+  compileHookMatcher,
+  matcherMatchesTool,
+  matcherMatchesValue,
+  type CompiledHookMatcher,
+} from "./hook-matcher.js";
 import { mergeHookResults, type HookMergeEntry } from "./hook-merge.js";
 import { interpretHookRun, runHookCommand, type HookRawRun } from "./hook-runner.js";
 import { HOOK_FAILURE_LIMIT } from "./hook-trust-store.js";
@@ -81,10 +86,17 @@ export interface HookHealth {
    * which is never turned off. `autoDisabled` is true when this failure
    * turned the hook off; `consecutive` is the failures in a row so far.
    */
-  recordFailure(hook: HookDefinition, options: { canDisable: boolean }): Promise<{ autoDisabled: boolean; consecutive: number }>;
+  recordFailure(
+    hook: HookDefinition,
+    options: { canDisable: boolean },
+  ): Promise<{ autoDisabled: boolean; consecutive: number }>;
 }
 
-export type HookRunFunction = (hook: HookDefinition, payload: HookPayload, context: HookDispatchContext) => Promise<HookRawRun>;
+export type HookRunFunction = (
+  hook: HookDefinition,
+  payload: HookPayload,
+  context: HookDispatchContext,
+) => Promise<HookRawRun>;
 
 export interface HookDispatcherOptions {
   source: HookDispatcherSource;
@@ -142,9 +154,19 @@ export function dedupeHooks(hooks: readonly HookDefinition[]): HookDefinition[] 
 }
 
 /** Fill in Claude spellings so Claude Code scripts read Aiden's payloads unchanged. */
-export function normalizeHookPayload(event: HookEvent, payload: HookPayload, context: HookDispatchContext): HookPayload {
-  const normalized: HookPayload = { ...payload, hook_event_name: event, session_id: payload.session_id || context.sessionId, cwd: payload.cwd || context.cwd };
-  const name = payload.aiden_tool_name ?? (payload.tool_name ? aidenToolName(payload.tool_name) : undefined);
+export function normalizeHookPayload(
+  event: HookEvent,
+  payload: HookPayload,
+  context: HookDispatchContext,
+): HookPayload {
+  const normalized: HookPayload = {
+    ...payload,
+    hook_event_name: event,
+    session_id: payload.session_id || context.sessionId,
+    cwd: payload.cwd || context.cwd,
+  };
+  const name =
+    payload.aiden_tool_name ?? (payload.tool_name ? aidenToolName(payload.tool_name) : undefined);
   if (name) {
     normalized.aiden_tool_name = name;
     normalized.tool_name = claudeToolName(name);
@@ -157,7 +179,10 @@ function matchTarget(event: HookEvent, payload: HookPayload): { tool?: string; v
   if (TOOL_EVENTS.has(event)) return { tool: payload.aiden_tool_name ?? payload.tool_name };
   if (event === "SessionStart") return { value: payload.source };
   if (event === "PreCompact") return { value: payload.trigger };
-  if (event === "Notification") return { value: typeof payload.notification_type === "string" ? payload.notification_type : undefined };
+  if (event === "Notification")
+    return {
+      value: typeof payload.notification_type === "string" ? payload.notification_type : undefined,
+    };
   return {};
 }
 
@@ -198,7 +223,9 @@ function errorText(error: unknown): string {
 
 /** Fails closed only where failing matters: a fail-closed PreToolUse hook blocks the tool. */
 function blocksWhenFailing(hook: HookDefinition): boolean {
-  return hook.event === "PreToolUse" && hook.handler.failClosed === true && hook.handler.async !== true;
+  return (
+    hook.event === "PreToolUse" && hook.handler.failClosed === true && hook.handler.async !== true
+  );
 }
 
 interface BackgroundJob {
@@ -208,7 +235,11 @@ interface BackgroundJob {
   context: HookDispatchContext;
 }
 
-async function runBounded<T, R>(items: readonly T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
+async function runBounded<T, R>(
+  items: readonly T[],
+  limit: number,
+  task: (item: T) => Promise<R>,
+): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   const worker = async () => {
@@ -230,7 +261,15 @@ export function createHookDispatcher(options: HookDispatcherOptions): AidenHookD
   const failureLimit = options.failureLimit ?? HOOK_FAILURE_LIMIT;
   const run: HookRunFunction =
     options.run ??
-    ((hook, payload, context) => runHookCommand({ hook, payload, cwd: context.cwd, sessionId: context.sessionId, signal: context.signal, now }));
+    ((hook, payload, context) =>
+      runHookCommand({
+        hook,
+        payload,
+        cwd: context.cwd,
+        sessionId: context.sessionId,
+        signal: context.signal,
+        now,
+      }));
   const outcomes = new BoundedMap<string, Promise<HookOutcome>>(IDEMPOTENCY_CACHE_SIZE);
   const matchers = new BoundedMap<string, CompiledHookMatcher | null>(MATCHER_CACHE_SIZE);
   const runLogs = new Map<string, HookRunRecord[]>();
@@ -249,7 +288,11 @@ export function createHookDispatcher(options: HookDispatcherOptions): AidenHookD
     if (!matcher) return false;
     const target = matchTarget(event, payload);
     const kind = HOOK_EVENT_MATCH_TARGETS[event];
-    if (kind === "tool") return matcher.kind === "all" || (target.tool !== undefined && matcherMatchesTool(matcher, target.tool));
+    if (kind === "tool")
+      return (
+        matcher.kind === "all" ||
+        (target.tool !== undefined && matcherMatchesTool(matcher, target.tool))
+      );
     if (kind === "value") return matcherMatchesValue(matcher, target.value);
     // Events without a match target ignore the matcher, as in Claude Code.
     return true;
@@ -267,7 +310,12 @@ export function createHookDispatcher(options: HookDispatcherOptions): AidenHookD
     }
   };
 
-  const runOne = async (hook: HookDefinition, event: HookEvent, payload: HookPayload, context: HookDispatchContext): Promise<HookMergeEntry> => {
+  const runOne = async (
+    hook: HookDefinition,
+    event: HookEvent,
+    payload: HookPayload,
+    context: HookDispatchContext,
+  ): Promise<HookMergeEntry> => {
     const raw = await run(hook, payload, context);
     const result = interpretHookRun(event, raw, hook.handler);
     record(hook, {
@@ -326,15 +374,23 @@ export function createHookDispatcher(options: HookDispatcherOptions): AidenHookD
     let entry: HookMergeEntry;
     try {
       // The turn that started it may end first; only `stopBackgroundHooks` stops it.
-      entry = await runOne(hook, job.event, job.payload, { ...job.context, signal, idempotencyKey: undefined });
+      entry = await runOne(hook, job.event, job.payload, {
+        ...job.context,
+        signal,
+        idempotencyKey: undefined,
+      });
     } catch (error) {
-      report(job.context, [`Hook "${hook.name}" could not run in the background: ${errorText(error)}.`]);
+      report(job.context, [
+        `Hook "${hook.name}" could not run in the background: ${errorText(error)}.`,
+      ]);
       return;
     }
     if (signal.aborted) return;
     const lines: string[] = [];
-    if (entry.result.systemMessage) lines.push(`${hook.name}: ${cap(entry.result.systemMessage, MAX_ASYNC_MESSAGE_CHARS)}`);
-    if (entry.result.result === "error" && entry.result.error) lines.push(`Hook "${hook.name}" ${entry.result.error} in the background.`);
+    if (entry.result.systemMessage)
+      lines.push(`${hook.name}: ${cap(entry.result.systemMessage, MAX_ASYNC_MESSAGE_CHARS)}`);
+    if (entry.result.result === "error" && entry.result.error)
+      lines.push(`Hook "${hook.name}" ${entry.result.error} in the background.`);
     report(job.context, lines);
   };
 
@@ -356,7 +412,9 @@ export function createHookDispatcher(options: HookDispatcherOptions): AidenHookD
   const startBackground = (jobs: BackgroundJob[]) => {
     for (const job of jobs) {
       if (backgroundRunning.size >= asyncConcurrency && backgroundQueue.length >= asyncQueueLimit) {
-        report(job.context, [`Hook "${job.hook.name}" was skipped: too many background hooks are already waiting.`]);
+        report(job.context, [
+          `Hook "${job.hook.name}" was skipped: too many background hooks are already waiting.`,
+        ]);
         continue;
       }
       backgroundQueue.push(job);
@@ -367,7 +425,11 @@ export function createHookDispatcher(options: HookDispatcherOptions): AidenHookD
   /** Outcomes that must not be replayed from the idempotency cache. */
   const uncacheable = new WeakSet<HookOutcome>();
 
-  const execute = async (event: HookEvent, payload: HookPayload, context: HookDispatchContext): Promise<HookOutcome> => {
+  const execute = async (
+    event: HookEvent,
+    payload: HookPayload,
+    context: HookDispatchContext,
+  ): Promise<HookOutcome> => {
     let hooks: ActiveHook[];
     try {
       hooks = await options.source.activeHooks(event, context.scopes, context.cwd);
@@ -376,30 +438,52 @@ export function createHookDispatcher(options: HookDispatcherOptions): AidenHookD
       if (event === "PreToolUse") {
         // A hook that would have blocked this call can't be ruled out, so it doesn't run.
         const reason = `Aiden could not load your hooks, so it blocked this tool call: ${errorText(error)}`;
-        outcome = { ranHooks: [], decision: "deny", reason, reasonForModel: fenceAsData("Hook result", reason), notices: [`${reason}.`] };
+        outcome = {
+          ranHooks: [],
+          decision: "deny",
+          reason,
+          reasonForModel: fenceAsData("Hook result", reason),
+          notices: [`${reason}.`],
+        };
       } else {
-        outcome = { ranHooks: [], notices: [`Aiden could not load your hooks and continued without them: ${errorText(error)}.`] };
+        outcome = {
+          ranHooks: [],
+          notices: [
+            `Aiden could not load your hooks and continued without them: ${errorText(error)}.`,
+          ],
+        };
       }
       // The next try may load them; a replay must not reuse this answer.
       uncacheable.add(outcome);
       return outcome;
     }
     const normalized = normalizeHookPayload(event, payload, context);
-    const matched = hooks.filter((hook) => hook.event === event && matches(hook, event, normalized));
+    const matched = hooks.filter(
+      (hook) => hook.event === event && matches(hook, event, normalized),
+    );
     const selected = dedupeHooks(matched);
     if (selected.length === 0 || context.signal?.aborted) return { ranHooks: [] };
     const refusal = matched.find((hook) => hook.refusal)?.refusal;
     if (refusal) {
-      const outcome: HookOutcome = { ranHooks: [], decision: "deny", reason: refusal, reasonForModel: fenceAsData("Hook result", refusal), notices: [`${refusal}.`] };
+      const outcome: HookOutcome = {
+        ranHooks: [],
+        decision: "deny",
+        reason: refusal,
+        reasonForModel: fenceAsData("Hook result", refusal),
+        notices: [`${refusal}.`],
+      };
       // Approving the new version lifts this; a replay must look again.
       uncacheable.add(outcome);
       return outcome;
     }
     const background = selected.filter((hook) => hook.handler.async === true);
-    if (background.length > 0) startBackground(background.map((hook) => ({ hook, event, payload: normalized, context })));
+    if (background.length > 0)
+      startBackground(background.map((hook) => ({ hook, event, payload: normalized, context })));
     const waited = selected.filter((hook) => hook.handler.async !== true);
     if (waited.length === 0) return { ranHooks: [] };
-    const entries = await hookRunScope.run(true, () => runBounded(waited, concurrency, (hook) => runOne(hook, event, normalized, context)));
+    const entries = await hookRunScope.run(true, () =>
+      runBounded(waited, concurrency, (hook) => runOne(hook, event, normalized, context)),
+    );
     return mergeHookResults(event, entries, normalized);
   };
 

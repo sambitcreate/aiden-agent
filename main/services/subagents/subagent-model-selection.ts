@@ -96,7 +96,9 @@ export interface SubagentModelToolOptions {
   efforts: readonly GenerationThinkingLevel[];
 }
 
-export function subagentModelKey(candidate: Pick<SubagentModelCandidate, "providerId" | "modelId">): string {
+export function subagentModelKey(
+  candidate: Pick<SubagentModelCandidate, "providerId" | "modelId">,
+): string {
   return `${candidate.providerId}/${candidate.modelId}`;
 }
 
@@ -173,9 +175,11 @@ export function preferredSubagentModelKeys(settings?: SubagentModelSettings): st
 export function requestableSubagentModels(policy: SubagentModelPolicy): SubagentModelCandidate[] {
   const parentKey = subagentModelKey(policy.parent);
   if (!policy.overridesAllowed) return [policy.parent];
-  const byKey = new Map(policy.candidates
-    .filter((candidate) => canDispatchSubagentModel(candidate.providerId))
-    .map((candidate) => [subagentModelKey(candidate), candidate]));
+  const byKey = new Map(
+    policy.candidates
+      .filter((candidate) => canDispatchSubagentModel(candidate.providerId))
+      .map((candidate) => [subagentModelKey(candidate), candidate]),
+  );
   const ordered: SubagentModelCandidate[] = [policy.parent];
   const seen = new Set([parentKey]);
   const add = (candidate: SubagentModelCandidate | undefined) => {
@@ -199,14 +203,19 @@ export function requestableSubagentModels(policy: SubagentModelPolicy): Subagent
     queue.push(candidate);
     queues.set(candidate.providerId, queue);
   }
-  while (ordered.length < MAX_SUBAGENT_MODEL_CHOICES && [...queues.values()].some((queue) => queue.length > 0)) {
+  while (
+    ordered.length < MAX_SUBAGENT_MODEL_CHOICES &&
+    [...queues.values()].some((queue) => queue.length > 0)
+  ) {
     for (const queue of queues.values()) add(queue.shift());
   }
   return ordered;
 }
 
 /** Undefined when only the parent model is allowed, so the schema hides both fields. */
-export function subagentModelToolOptions(policy: SubagentModelPolicy): SubagentModelToolOptions | undefined {
+export function subagentModelToolOptions(
+  policy: SubagentModelPolicy,
+): SubagentModelToolOptions | undefined {
   const models = requestableSubagentModels(policy);
   if (models.length < 2) return undefined;
   const ceiling = policy.settings?.maxEffort;
@@ -260,7 +269,8 @@ export function planSubagentModel(
   if (request.effort !== undefined && !policy.overridesAllowed) {
     return {
       ok: false,
-      error: "Subagent effort overrides are not available for this response; omit effort to use the current setting.",
+      error:
+        "Subagent effort overrides are not available for this response; omit effort to use the current setting.",
     };
   }
   if (request.effort !== undefined && !locked) {
@@ -273,7 +283,10 @@ export function planSubagentModel(
     }
   }
 
-  const configured = (key: string | undefined, label: string): SubagentModelCandidate | undefined => {
+  const configured = (
+    key: string | undefined,
+    label: string,
+  ): SubagentModelCandidate | undefined => {
     if (key === undefined) return undefined;
     const candidate = connected.get(key);
     if (!candidate) {
@@ -302,15 +315,20 @@ export function planSubagentModel(
       effortSource = "role_locked";
     }
     if (request.model !== undefined || request.effort !== undefined) {
-      warnings.push(`The ${request.role} role is locked by settings; requested model and effort were ignored.`);
+      warnings.push(
+        `The ${request.role} role is locked by settings; requested model and effort were ignored.`,
+      );
     }
   } else {
-    const explicit = request.model === undefined
-      ? undefined
-      : requestable.find((entry) => subagentModelKey(entry) === request.model);
+    const explicit =
+      request.model === undefined
+        ? undefined
+        : requestable.find((entry) => subagentModelKey(entry) === request.model);
     const configuredModel = policy.overridesAllowed
-      ? configured(role?.model, `Configured ${request.role}`) ??
-        (role?.model === undefined ? configured(policy.settings?.defaultModel, "Configured default") : undefined)
+      ? (configured(role?.model, `Configured ${request.role}`) ??
+        (role?.model === undefined
+          ? configured(policy.settings?.defaultModel, "Configured default")
+          : undefined))
       : undefined;
     if (explicit) {
       candidate = explicit;
@@ -320,7 +338,7 @@ export function planSubagentModel(
       modelSource = "configured";
     }
     const configuredEffort = policy.overridesAllowed
-      ? role?.effort ?? policy.settings?.defaultEffort
+      ? (role?.effort ?? policy.settings?.defaultEffort)
       : undefined;
     if (request.effort !== undefined) {
       effort = request.effort;
@@ -339,7 +357,10 @@ export function planSubagentModel(
     // A different model starts from its own default, never the parent's effort.
     effortSource = modelSource;
   }
-  return { ok: true, value: { candidate, modelSource, effort, effortSource, strictEffort, warnings } };
+  return {
+    ok: true,
+    value: { candidate, modelSource, effort, effortSource, strictEffort, warnings },
+  };
 }
 
 /**
@@ -386,7 +407,10 @@ export function finalizeSubagentModel(
       .filter(withinCeiling)
       .sort((left, right) => effortRank(right) - effortRank(left))[0];
     if (!capped) {
-      return { ok: false, error: `${label} has no effort within the subagent ceiling (${ceiling}).` };
+      return {
+        ok: false,
+        error: `${label} has no effort within the subagent ceiling (${ceiling}).`,
+      };
     }
     warnings.push(`Effort ${effort} exceeds the subagent ceiling; using ${capped}.`);
     effort = capped;

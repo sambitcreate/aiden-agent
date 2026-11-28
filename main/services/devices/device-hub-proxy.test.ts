@@ -4,7 +4,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer as createHttpsServer } from "node:https";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingHttpHeaders,
+  type Server,
+} from "node:http";
 import { connect, type Socket } from "node:net";
 import test from "node:test";
 import { loadOrCreateAidenRemoteTlsIdentity } from "../aiden-remote-tls-identity.js";
@@ -47,7 +52,13 @@ async function startFakeHub(): Promise<FakeHub> {
       body += chunk;
     });
     request.on("end", () => {
-      records.push({ method: request.method!, url: request.url!, headers: request.headers, body, upgrade: false });
+      records.push({
+        method: request.method!,
+        url: request.url!,
+        headers: request.headers,
+        body,
+        upgrade: false,
+      });
       if (request.url?.includes("still=1")) {
         // serve-sim sends a frame only when the screen changes: one part, then silence.
         response.writeHead(200, { "content-type": "multipart/x-mixed-replace; boundary=frame" });
@@ -64,7 +75,10 @@ async function startFakeHub(): Promise<FakeHub> {
       }
       if (request.url?.includes("reset=1")) {
         // Promise more than is sent, then reset mid-body, as a hub that dies while streaming would.
-        response.writeHead(200, { "content-type": "application/octet-stream", "content-length": "1000" });
+        response.writeHead(200, {
+          "content-type": "application/octet-stream",
+          "content-length": "1000",
+        });
         response.write("partial", () => setTimeout(() => request.socket.destroy(), 10));
         return;
       }
@@ -78,7 +92,13 @@ async function startFakeHub(): Promise<FakeHub> {
     });
   });
   server.on("upgrade", (request, socket: Socket) => {
-    records.push({ method: request.method!, url: request.url!, headers: request.headers, body: "", upgrade: true });
+    records.push({
+      method: request.method!,
+      url: request.url!,
+      headers: request.headers,
+      body: "",
+      upgrade: true,
+    });
     upgradeSockets.push(socket);
     const accept = createHash("sha1")
       .update(`${request.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
@@ -104,7 +124,10 @@ interface Harness {
   hubRunning: { value: boolean };
 }
 
-async function withProxy(run: (harness: Harness) => Promise<void>, extra: { hubHeaders?: Record<string, string> } = {}) {
+async function withProxy(
+  run: (harness: Harness) => Promise<void>,
+  extra: { hubHeaders?: Record<string, string> } = {},
+) {
   const hub = await startFakeHub();
   const clock = { now: 1_000_000 };
   const hubRunning = { value: true };
@@ -145,7 +168,9 @@ function send(
         response.on("data", (chunk: string) => {
           body += chunk;
         });
-        response.on("end", () => resolve({ status: response.statusCode!, headers: response.headers, body }));
+        response.on("end", () =>
+          resolve({ status: response.statusCode!, headers: response.headers, body }),
+        );
       },
     );
     request.once("error", reject);
@@ -268,13 +293,23 @@ test("only allowlisted routes reach the hub, and never exec, tools, or traversal
       assert.equal((await send(proxy, `${path}?t=${token}`)).status, 200, path);
     }
     // The accessibility tree and the event log are read-only.
-    for (const path of [`/vendor/serve-sim/helper/${UDID}/ax`, "/vendor/serve-sim/api/event-log/events"]) {
+    for (const path of [
+      `/vendor/serve-sim/helper/${UDID}/ax`,
+      "/vendor/serve-sim/api/event-log/events",
+    ]) {
       assert.equal((await send(proxy, `${path}?t=${token}`, { method: "POST" })).status, 405, path);
     }
     // Android's event log is serve-emu's logcat stream: read-only, and only for the named emulator.
     const logcat = `/vendor/serve-emu/api/logcat?device=emulator-5554&t=${token}`;
     assert.equal((await send(proxy, logcat, { method: "POST" })).status, 405);
-    for (const route of ["screenshot", "stream-mode", "stream-settings", "accessibility", "fold", "logcat"]) {
+    for (const route of [
+      "screenshot",
+      "stream-mode",
+      "stream-settings",
+      "accessibility",
+      "fold",
+      "logcat",
+    ]) {
       const path = `/vendor/serve-emu/api/${route}?device=emulator-5554`;
       assert.equal((await send(proxy, `${path}&t=${token}`)).status, 200, path);
     }
@@ -301,14 +336,18 @@ test("only screenshot capture accepts POST, and read routes answer 405", async (
 test("the grant and host selector are stripped and credentials never cross", async () => {
   await withProxy(async ({ proxy, hub }) => {
     const { token } = proxy.mintGrant();
-    const response = await send(proxy, `/vendor/serve-sim/api/event-log?since=4&t=${token}&host=local`, {
-      headers: {
-        origin: "file://",
-        cookie: "session=secret",
-        authorization: "Bearer secret",
-        "accept-encoding": "gzip",
+    const response = await send(
+      proxy,
+      `/vendor/serve-sim/api/event-log?since=4&t=${token}&host=local`,
+      {
+        headers: {
+          origin: "file://",
+          cookie: "session=secret",
+          authorization: "Bearer secret",
+          "accept-encoding": "gzip",
+        },
       },
-    });
+    );
     assert.equal(response.status, 200);
     const [record] = hub.records;
     assert.equal(record.url, "/vendor/serve-sim/api/event-log?since=4");
@@ -327,16 +366,32 @@ test("the grant and host selector are stripped and credentials never cross", asy
 test("foreign origins and rebinding hosts are refused, and preflight is scoped", async () => {
   await withProxy(async ({ proxy, hub }) => {
     const { token } = proxy.mintGrant();
-    assert.equal((await send(proxy, `/api/devices?t=${token}`, { headers: { origin: "https://evil.example" } })).status, 403);
-    assert.equal((await send(proxy, `/api/devices?t=${token}`, { headers: { origin: "null" } })).status, 403);
-    assert.equal((await send(proxy, `/api/devices?t=${token}`, { headers: { host: "evil.example" } })).status, 403);
     assert.equal(
-      (await upgrade(proxy, `/api/devices/ws?t=${token}`, { origin: "https://evil.example" })).status,
+      (
+        await send(proxy, `/api/devices?t=${token}`, {
+          headers: { origin: "https://evil.example" },
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (await send(proxy, `/api/devices?t=${token}`, { headers: { origin: "null" } })).status,
+      403,
+    );
+    assert.equal(
+      (await send(proxy, `/api/devices?t=${token}`, { headers: { host: "evil.example" } })).status,
+      403,
+    );
+    assert.equal(
+      (await upgrade(proxy, `/api/devices/ws?t=${token}`, { origin: "https://evil.example" }))
+        .status,
       403,
     );
     assert.equal(hub.records.length, 0);
 
-    const devServer = await send(proxy, `/api/devices?t=${token}`, { headers: { origin: "http://localhost:5173" } });
+    const devServer = await send(proxy, `/api/devices?t=${token}`, {
+      headers: { origin: "http://localhost:5173" },
+    });
     assert.equal(devServer.status, 200);
     const preflight = await send(proxy, `/vendor/serve-sim/api/screenshot?t=${token}`, {
       method: "OPTIONS",
@@ -368,10 +423,15 @@ test("redirects and hop-by-hop headers never reach the renderer", () => {
 test("closing a host ends its open sockets and leaves other hosts alone", async () => {
   await withProxy(async ({ proxy }) => {
     const { token } = proxy.mintGrant();
-    const connection = await upgrade(proxy, `/vendor/serve-sim/helper/ws?device=${UDID}&t=${token}`);
+    const connection = await upgrade(
+      proxy,
+      `/vendor/serve-sim/helper/ws?device=${UDID}&t=${token}`,
+    );
     assert.equal(connection.status, 101);
     await connection.firstFrame;
-    const closed = new Promise<void>((resolve) => connection.socket!.once("close", () => resolve()));
+    const closed = new Promise<void>((resolve) =>
+      connection.socket!.once("close", () => resolve()),
+    );
     proxy.closeHost("studio");
     assert.equal(connection.socket!.destroyed, false);
     proxy.closeHost("local");
@@ -380,7 +440,10 @@ test("closing a host ends its open sockets and leaves other hosts alone", async 
 });
 
 test("a hub that resets mid-response ends that response without crashing the proxy", async () => {
-  const paths = ["/api/devices?reset=1", `/vendor/serve-sim/helper/${UDID}/stream.mjpeg?mjpegreset=1`];
+  const paths = [
+    "/api/devices?reset=1",
+    `/vendor/serve-sim/helper/${UDID}/stream.mjpeg?mjpegreset=1`,
+  ];
   await withProxy(async ({ proxy }) => {
     for (const path of paths) {
       const { token } = proxy.mintGrant();
@@ -399,39 +462,50 @@ test("a hub that resets mid-response ends that response without crashing the pro
       });
       await new Promise((resolve) => setTimeout(resolve, 20));
       // Still serving: the reset reached only that one response.
-      assert.equal((await send(proxy, `/api/devices?t=${proxy.mintGrant().token}`)).status, 200, path);
+      assert.equal(
+        (await send(proxy, `/api/devices?t=${proxy.mintGrant().token}`)).status,
+        200,
+        path,
+      );
     }
   });
 });
 
-test("a still MJPEG frame reaches the client twice, so a browser paints it", { timeout: 5_000 }, async () => {
-  await withProxy(async ({ proxy }) => {
-    const { token } = proxy.mintGrant();
-    const body = await new Promise<string>((resolve, reject) => {
-      const request = httpRequest(`${proxy.origin}/vendor/serve-sim/helper/${UDID}/stream.mjpeg?t=${token}&still=1`, {
-        headers: { origin: "file://" },
-      });
-      request.once("response", (response) => {
-        assert.equal(response.statusCode, 200);
-        let text = "";
-        response.setEncoding("latin1");
-        response.on("data", (chunk: string) => {
-          text += chunk;
-          if (text.split("JPEG\r\n").length - 1 >= 2) {
-            response.destroy();
-            resolve(text);
-          }
+test(
+  "a still MJPEG frame reaches the client twice, so a browser paints it",
+  { timeout: 5_000 },
+  async () => {
+    await withProxy(async ({ proxy }) => {
+      const { token } = proxy.mintGrant();
+      const body = await new Promise<string>((resolve, reject) => {
+        const request = httpRequest(
+          `${proxy.origin}/vendor/serve-sim/helper/${UDID}/stream.mjpeg?t=${token}&still=1`,
+          {
+            headers: { origin: "file://" },
+          },
+        );
+        request.once("response", (response) => {
+          assert.equal(response.statusCode, 200);
+          let text = "";
+          response.setEncoding("latin1");
+          response.on("data", (chunk: string) => {
+            text += chunk;
+            if (text.split("JPEG\r\n").length - 1 >= 2) {
+              response.destroy();
+              resolve(text);
+            }
+          });
         });
+        request.once("error", reject);
+        request.end();
       });
-      request.once("error", reject);
-      request.end();
+      const part = "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\n\r\nJPEG\r\n";
+      assert.equal(body, part + part);
+      // The proxy keeps serving after the client drops the stream.
+      assert.equal((await send(proxy, `/api/devices?t=${proxy.mintGrant().token}`)).status, 200);
     });
-    const part = "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\n\r\nJPEG\r\n";
-    assert.equal(body, part + part);
-    // The proxy keeps serving after the client drops the stream.
-    assert.equal((await send(proxy, `/api/devices?t=${proxy.mintGrant().token}`)).status, 200);
-  });
-});
+  },
+);
 
 test("a stopped hub answers 503", async () => {
   await withProxy(async ({ proxy, hubRunning }) => {
@@ -445,7 +519,10 @@ test("a stopped hub answers 503", async () => {
 test("allowlisted WebSocket upgrades are piped end to end", async () => {
   await withProxy(async ({ proxy, hub }) => {
     const { token } = proxy.mintGrant();
-    const connection = await upgrade(proxy, `/vendor/serve-sim/helper/ws?device=${UDID}&t=${token}&host=local`);
+    const connection = await upgrade(
+      proxy,
+      `/vendor/serve-sim/helper/ws?device=${UDID}&t=${token}&host=local`,
+    );
     assert.equal(connection.status, 101);
     assert.equal(await connection.firstFrame, `hub:/vendor/serve-sim/helper/ws?device=${UDID}`);
     const [record] = hub.records;
@@ -473,10 +550,14 @@ test("main's hub headers reach a loopback hub on requests and upgrades, and the 
         headers: { origin: "file://", "x-hub-key": "guessed" },
       });
       assert.equal(response.status, 200);
-      const connection = await upgrade(proxy, `/vendor/serve-sim/helper/ws?device=${UDID}&t=${token}&host=local`, {
-        origin: "file://",
-        "x-hub-key": "guessed",
-      });
+      const connection = await upgrade(
+        proxy,
+        `/vendor/serve-sim/helper/ws?device=${UDID}&t=${token}&host=local`,
+        {
+          origin: "file://",
+          "x-hub-key": "guessed",
+        },
+      );
       assert.equal(connection.status, 101);
       await connection.firstFrame;
       connection.socket!.destroy();
@@ -494,7 +575,10 @@ test("main's hub headers reach a loopback hub on requests and upgrades, and the 
 
 test("the renderer origins are the packaged file:// renderer plus a well-formed dev server", () => {
   assert.deepEqual(rendererProxyOrigins({}), ["file://"]);
-  assert.deepEqual(rendererProxyOrigins({ AIDEN_RENDERER_URL: "http://localhost:5173/index.html" }), ["file://", "http://localhost:5173"]);
+  assert.deepEqual(
+    rendererProxyOrigins({ AIDEN_RENDERER_URL: "http://localhost:5173/index.html" }),
+    ["file://", "http://localhost:5173"],
+  );
   assert.deepEqual(rendererProxyOrigins({ AIDEN_RENDERER_URL: "not a url" }), ["file://"]);
 });
 
@@ -573,20 +657,37 @@ test("a paired Mac's hub is reached over pinned TLS with main's credential, neve
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-hub-upstream-"));
   const identity = await loadOrCreateAidenRemoteTlsIdentity({ directory });
   const records: HubRecord[] = [];
-  const relay = createHttpsServer({ key: identity.privateKey, cert: identity.certificateChain }, (request, response) => {
-    records.push({ method: request.method!, url: request.url!, headers: request.headers, body: "", upgrade: false });
-    request.resume();
-    response.writeHead(200, { "content-type": "application/json", "set-cookie": "relay=1" });
-    response.end('{"ok":true}');
-  });
+  const relay = createHttpsServer(
+    { key: identity.privateKey, cert: identity.certificateChain },
+    (request, response) => {
+      records.push({
+        method: request.method!,
+        url: request.url!,
+        headers: request.headers,
+        body: "",
+        upgrade: false,
+      });
+      request.resume();
+      response.writeHead(200, { "content-type": "application/json", "set-cookie": "relay=1" });
+      response.end('{"ok":true}');
+    },
+  );
   const relaySockets: Socket[] = [];
   relay.on("upgrade", (request, socket: Socket) => {
-    records.push({ method: request.method!, url: request.url!, headers: request.headers, body: "", upgrade: true });
+    records.push({
+      method: request.method!,
+      url: request.url!,
+      headers: request.headers,
+      body: "",
+      upgrade: true,
+    });
     relaySockets.push(socket);
     const accept = createHash("sha1")
       .update(`${request.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
       .digest("base64");
-    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    socket.write(
+      `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
+    );
     const message = Buffer.from("relay");
     socket.write(Buffer.concat([Buffer.from([0x81, message.length]), message]));
     socket.on("error", () => undefined);
@@ -628,18 +729,35 @@ test("a paired Mac's hub is reached over pinned TLS with main's credential, neve
     assert.equal(record?.headers.origin, undefined);
     assert.equal(record?.headers.cookie, undefined);
 
-    const socket = await upgrade(proxy, `/vendor/serve-sim/helper/ws?device=UDID-1&host=studio&t=${token}`);
+    const socket = await upgrade(
+      proxy,
+      `/vendor/serve-sim/helper/ws?device=UDID-1&host=studio&t=${token}`,
+    );
     assert.equal(socket.status, 101);
     assert.equal(await socket.firstFrame, "relay");
     socket.socket?.destroy();
     const upgraded = records.find((entry) => entry.upgrade);
-    assert.equal(upgraded?.url, "/api/aiden/v1/simulators/hub/vendor/serve-sim/helper/ws?device=UDID-1");
+    assert.equal(
+      upgraded?.url,
+      "/api/aiden/v1/simulators/hub/vendor/serve-sim/helper/ws?device=UDID-1",
+    );
     assert.equal(upgraded?.headers.authorization, `Bearer ${"s".repeat(43)}`);
     assert.equal(upgraded?.headers.origin, undefined);
 
     const before = records.length;
-    assert.equal((await send(proxy, `/api/devices?host=impostor&t=${token}`, { headers: { origin: "file://" } })).status, 502);
-    assert.equal((await send(proxy, `/api/devices?host=nobody&t=${token}`, { headers: { origin: "file://" } })).status, 503);
+    assert.equal(
+      (
+        await send(proxy, `/api/devices?host=impostor&t=${token}`, {
+          headers: { origin: "file://" },
+        })
+      ).status,
+      502,
+    );
+    assert.equal(
+      (await send(proxy, `/api/devices?host=nobody&t=${token}`, { headers: { origin: "file://" } }))
+        .status,
+      503,
+    );
     assert.equal(records.length, before);
   } finally {
     await proxy.close();
@@ -651,8 +769,12 @@ test("a paired Mac's hub is reached over pinned TLS with main's credential, neve
 });
 
 test("each serve-emu route takes only its own mutating method, and fold writes need operate scope", () => {
-  const decide = (method: string, rawPath: string, query = "device=emulator-5554", upgrade = false) =>
-    decideDeviceHubRoute({ method, rawPath, search: new URLSearchParams(query), upgrade });
+  const decide = (
+    method: string,
+    rawPath: string,
+    query = "device=emulator-5554",
+    upgrade = false,
+  ) => decideDeviceHubRoute({ method, rawPath, search: new URLSearchParams(query), upgrade });
   const scope = (route: ReturnType<typeof decide>) => (route.ok ? route.scope : route.status);
   // Fold state is read with GET (watching) and changed with POST (driving).
   assert.equal(scope(decide("GET", "/vendor/serve-emu/api/fold")), "read");
@@ -667,7 +789,10 @@ test("each serve-emu route takes only its own mutating method, and fold writes n
   assert.equal(scope(decide("POST", "/vendor/serve-sim/api/screenshot", "")), "read");
   assert.equal(scope(decide("POST", "/vendor/serve-emu/api/accessibility")), 405);
   // The Android socket carries input, so it is operate; the device list socket only watches.
-  assert.equal(scope(decide("GET", "/vendor/serve-emu/ws", "device=emulator-5554&frame-meta=1", true)), "operate");
+  assert.equal(
+    scope(decide("GET", "/vendor/serve-emu/ws", "device=emulator-5554&frame-meta=1", true)),
+    "operate",
+  );
   assert.equal(scope(decide("GET", "/vendor/serve-emu/ws", "frame-meta=1", true)), 404);
   assert.equal(scope(decide("GET", "/api/devices/ws", "", true)), "read");
   const fold = decide("POST", "/vendor/serve-emu/api/fold");
@@ -679,11 +804,20 @@ test("each serve-emu route takes only its own mutating method, and fold writes n
 test("serve-emu's video and gesture socket is proxied for a named emulator", async () => {
   await withProxy(async ({ proxy, hub }) => {
     const { token } = proxy.mintGrant();
-    assert.equal((await upgrade(proxy, `/vendor/serve-emu/ws?frame-meta=1&t=${token}`)).status, 404);
-    const accepted = await upgrade(proxy, `/vendor/serve-emu/ws?device=emulator-5554&frame-meta=1&t=${token}`);
+    assert.equal(
+      (await upgrade(proxy, `/vendor/serve-emu/ws?frame-meta=1&t=${token}`)).status,
+      404,
+    );
+    const accepted = await upgrade(
+      proxy,
+      `/vendor/serve-emu/ws?device=emulator-5554&frame-meta=1&t=${token}`,
+    );
     assert.equal(accepted.status, 101);
     // The grant stays behind; the device and frame metadata reach serve-emu.
-    assert.equal(await accepted.firstFrame, "hub:/vendor/serve-emu/ws?device=emulator-5554&frame-meta=1");
+    assert.equal(
+      await accepted.firstFrame,
+      "hub:/vendor/serve-emu/ws?device=emulator-5554&frame-meta=1",
+    );
     accepted.socket?.destroy();
     assert.deepEqual(
       hub.records.filter((record) => record.upgrade).map((record) => record.url),
@@ -701,24 +835,40 @@ test("fold posture POSTs and stream-mode PUTs reach the hub with their bodies", 
       body: JSON.stringify({ posture: "closed" }),
     });
     assert.equal(fold.status, 200);
-    const mode = await send(proxy, `/vendor/serve-emu/api/stream-mode?device=emulator-5554&t=${token}`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "scrcpy" }),
-    });
+    const mode = await send(
+      proxy,
+      `/vendor/serve-emu/api/stream-mode?device=emulator-5554&t=${token}`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "scrcpy" }),
+      },
+    );
     assert.equal(mode.status, 200);
     const posted = hub.records.filter((record) => record.method !== "GET");
     assert.deepEqual(
       posted.map((record) => [record.method, record.url, record.body]),
       [
-        ["POST", "/vendor/serve-emu/api/fold?device=emulator-5554", JSON.stringify({ posture: "closed" })],
-        ["PUT", "/vendor/serve-emu/api/stream-mode?device=emulator-5554", JSON.stringify({ mode: "scrcpy" })],
+        [
+          "POST",
+          "/vendor/serve-emu/api/fold?device=emulator-5554",
+          JSON.stringify({ posture: "closed" }),
+        ],
+        [
+          "PUT",
+          "/vendor/serve-emu/api/stream-mode?device=emulator-5554",
+          JSON.stringify({ mode: "scrcpy" }),
+        ],
       ],
     );
-    const preflight = await send(proxy, `/vendor/serve-emu/api/fold?device=emulator-5554&t=${token}`, {
-      method: "OPTIONS",
-      headers: { origin: "file://" },
-    });
+    const preflight = await send(
+      proxy,
+      `/vendor/serve-emu/api/fold?device=emulator-5554&t=${token}`,
+      {
+        method: "OPTIONS",
+        headers: { origin: "file://" },
+      },
+    );
     assert.equal(preflight.headers["access-control-allow-methods"], "GET, HEAD, POST");
   });
 });

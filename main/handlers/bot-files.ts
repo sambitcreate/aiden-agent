@@ -23,14 +23,24 @@ export interface BotFileHandlerDependencies {
 }
 
 function botIdOf(value: unknown): string {
-  if (typeof value !== "string" || !value || value.length > MAX_BOT_ID_CHARS || !/^[A-Za-z0-9._:-]+$/u.test(value)) {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value.length > MAX_BOT_ID_CHARS ||
+    !/^[A-Za-z0-9._:-]+$/u.test(value)
+  ) {
     throw new Error("Invalid bot id.");
   }
   return value;
 }
 
 function pathOf(value: unknown): string {
-  if (typeof value !== "string" || !value.trim() || value.length > MAX_PATH_CHARS || value.includes("\0")) {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    value.length > MAX_PATH_CHARS ||
+    value.includes("\0")
+  ) {
     throw new Error("Invalid file path.");
   }
   return value;

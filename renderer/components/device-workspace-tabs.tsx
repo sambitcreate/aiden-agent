@@ -26,7 +26,11 @@ import {
   type DeviceTab,
   type DeviceTarget,
 } from "../lib/device-tabs";
-import { deviceWorkspace, useChatDeviceTabs, useFloatingDevice } from "../lib/device-workspace-store";
+import {
+  deviceWorkspace,
+  useChatDeviceTabs,
+  useFloatingDevice,
+} from "../lib/device-workspace-store";
 import { useDeviceServiceState } from "../lib/use-device-service-state";
 import type { DeviceServiceState } from "../shared/devices";
 import { isEscapeKey } from "../lib/dismiss-key";
@@ -87,18 +91,25 @@ export function useDeviceTabs(chatId: string | null, enabled: boolean): DeviceTa
         tabs,
         sessions,
         (target) =>
-          state?.devices.find((device) => device.hostId === target.hostId && device.id === target.deviceId)?.name,
+          state?.devices.find(
+            (device) => device.hostId === target.hostId && device.id === target.deviceId,
+          )?.name,
       ),
     [sessions, state, tabs],
   );
   // Dismissals only matter while their session still exists.
   React.useEffect(() => {
-    if (chatId && state) deviceWorkspace.updateTabs(chatId, (current) => pruneDismissedDeviceTabs(current, sessions));
+    if (chatId && state)
+      deviceWorkspace.updateTabs(chatId, (current) => pruneDismissedDeviceTabs(current, sessions));
   }, [chatId, sessions, state]);
   const selectedKey = selectedDeviceTab(tabs, visible);
   const picker = showsDevicePicker(tabs, visible);
   const entries: DeviceStripEntry[] = [
-    ...visible.map((tab: DeviceTab) => ({ key: tab.key, label: tab.title, selected: tab.key === selectedKey })),
+    ...visible.map((tab: DeviceTab) => ({
+      key: tab.key,
+      label: tab.title,
+      selected: tab.key === selectedKey,
+    })),
     ...(picker ? [{ key: null, label: DEVICE_PICKER_LABEL, selected: selectedKey === null }] : []),
   ];
   const update = (change: Parameters<typeof deviceWorkspace.updateTabs>[1]) => {
@@ -114,7 +125,8 @@ export function useDeviceTabs(chatId: string | null, enabled: boolean): DeviceTa
     selected: selectedKey ? parseDeviceTabKey(selectedKey) : null,
     floating,
     state,
-    select: (key) => update((current) => (key ? selectDeviceTab(current, key) : openDevicePicker(current))),
+    select: (key) =>
+      update((current) => (key ? selectDeviceTab(current, key) : openDevicePicker(current))),
     close(key) {
       if (!chatId) return true;
       if (key === null) {

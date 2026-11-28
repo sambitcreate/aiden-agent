@@ -1,7 +1,4 @@
-import {
-  parseSubagentRunSnapshotV2,
-  type SubagentRunSnapshotV2,
-} from "./subagent-runs";
+import { parseSubagentRunSnapshotV2, type SubagentRunSnapshotV2 } from "./subagent-runs";
 
 export type SubagentManagementRequestV2 =
   | { version: 2; action: "status" | "stop" | "retry"; runId: string }

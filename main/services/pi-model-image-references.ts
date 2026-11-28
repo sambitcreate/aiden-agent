@@ -1,9 +1,6 @@
 import type { Attachment } from "./types.js";
 import { isGrabbedElementThumbnailId } from "../../renderer/shared/browser-element-grab.js";
-import {
-  resolvePiModelImageInputs,
-  type PiModelToolsHost,
-} from "./pi-model-tools.js";
+import { resolvePiModelImageInputs, type PiModelToolsHost } from "./pi-model-tools.js";
 
 /** A generation can reference its admitted transcript plus images it presented itself. */
 export function createPiModelImageReferences(options: {
@@ -21,11 +18,10 @@ export function createPiModelImageReferences(options: {
     a.name === b.name;
   const nameFor = (item: Attachment) =>
     Array.from(item.name)
-      .map((char) =>
-        char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127 ? " " : char,
-      )
+      .map((char) => (char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127 ? " " : char))
       .slice(0, 64)
-      .join("").trim() || "Image";
+      .join("")
+      .trim() || "Image";
   const inventory = async (signal?: AbortSignal) => {
     signal?.throwIfAborted();
     const current = await options.readCurrent(signal);
@@ -34,10 +30,7 @@ export function createPiModelImageReferences(options: {
       ...initial.filter(
         (item) =>
           current.some((candidate) => sameImage(item, candidate)) &&
-          current.every(
-            (candidate) =>
-              candidate.id !== item.id || sameImage(item, candidate),
-          ),
+          current.every((candidate) => candidate.id !== item.id || sameImage(item, candidate)),
       ),
       ...options.generated(),
     ];
@@ -74,15 +67,10 @@ export function createPiModelImageReferences(options: {
       image: { type: "image" as const, mimeType: item.mimeType, data: item.data! },
     };
   };
-  const resolveImage: NonNullable<PiModelToolsHost["resolveImage"]> = async (
-    id,
-    signal,
-  ) => resolveFrom(await inventory(signal), id);
+  const resolveImage: NonNullable<PiModelToolsHost["resolveImage"]> = async (id, signal) =>
+    resolveFrom(await inventory(signal), id);
   // One chat read covers the whole batch instead of one per reference ID.
-  const resolveImages: NonNullable<PiModelToolsHost["resolveImages"]> = async (
-    ids,
-    signal,
-  ) => {
+  const resolveImages: NonNullable<PiModelToolsHost["resolveImages"]> = async (ids, signal) => {
     const images = await inventory(signal);
     return ids.map((id) => resolveFrom(images, id));
   };

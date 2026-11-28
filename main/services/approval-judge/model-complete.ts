@@ -3,10 +3,21 @@
 // "approval-judge" usage and its cost counts toward the run's spending limit.
 
 import { normalizeContext } from "@earendil-works/pi-ai";
-import type { Api, AssistantMessage, Model, Models, ProviderHeaders, TextContent } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  AssistantMessage,
+  Model,
+  Models,
+  ProviderHeaders,
+  TextContent,
+} from "@earendil-works/pi-ai";
 import type { StoredProvider } from "../types.js";
 import type { UsageRequestRecord } from "../usage-store-core.js";
-import { assistantUsageRecord, isLocalModelProvider, unreportedUsageRecord } from "../usage-accounting.js";
+import {
+  assistantUsageRecord,
+  isLocalModelProvider,
+  unreportedUsageRecord,
+} from "../usage-accounting.js";
 import type { ApprovalJudgeComplete } from "./judge.js";
 import { oneOffCallOptions } from "../side-call-prefix.js";
 
@@ -33,7 +44,10 @@ function replyText(message: AssistantMessage): string {
     .trim();
 }
 
-export function approvalJudgeComplete(runtime: ApprovalJudgeRuntime, accounting: ApprovalJudgeAccounting): ApprovalJudgeComplete {
+export function approvalJudgeComplete(
+  runtime: ApprovalJudgeRuntime,
+  accounting: ApprovalJudgeAccounting,
+): ApprovalJudgeComplete {
   return async (request, signal) => {
     let message: AssistantMessage;
     try {
@@ -42,7 +56,13 @@ export function approvalJudgeComplete(runtime: ApprovalJudgeRuntime, accounting:
           runtime.model,
           normalizeContext({
             systemPrompt: request.systemPrompt,
-            messages: [{ role: "user", content: [{ type: "text", text: request.prompt }], timestamp: Date.now() }],
+            messages: [
+              {
+                role: "user",
+                content: [{ type: "text", text: request.prompt }],
+                timestamp: Date.now(),
+              },
+            ],
           }),
           oneOffCallOptions({
             apiKey: runtime.apiKey,
@@ -71,7 +91,12 @@ export function approvalJudgeComplete(runtime: ApprovalJudgeRuntime, accounting:
     }
     accounting.countSpend(message);
     await accounting.recordUsage(
-      assistantUsageRecord({ message, provider: runtime.provider, model: runtime.model, source: "approval-judge" }),
+      assistantUsageRecord({
+        message,
+        provider: runtime.provider,
+        model: runtime.model,
+        source: "approval-judge",
+      }),
     );
     if (message.stopReason === "error" || message.stopReason === "aborted") {
       throw new Error(message.errorMessage || `The approval judge ${message.stopReason}.`);

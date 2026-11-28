@@ -3,7 +3,10 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DeviceSummary } from "../shared/devices.js";
 import { DeviceMiniPlayer } from "./device-mini-player.js";
-import { AUTO_FLOAT_DEVICE_LABEL, DeviceWorkspaceSettingsView } from "./settings/device-workspace-settings.js";
+import {
+  AUTO_FLOAT_DEVICE_LABEL,
+  DeviceWorkspaceSettingsView,
+} from "./settings/device-workspace-settings.js";
 
 const IPHONE: DeviceSummary = {
   hostId: "local",
@@ -18,7 +21,13 @@ const noop = () => undefined;
 
 test("the floating player is a labelled, keyboard-reachable surface with Home, Rotate, Dock and Close", () => {
   const html = renderToStaticMarkup(
-    <DeviceMiniPlayer device={IPHONE} title="Checkout flow" active={false} onDock={noop} onClose={noop} />,
+    <DeviceMiniPlayer
+      device={IPHONE}
+      title="Checkout flow"
+      active={false}
+      onDock={noop}
+      onClose={noop}
+    />,
   );
   assert.match(html, /aria-roledescription="floating device"/u);
   assert.match(html, /aria-labelledby="[^"]+"/u);
@@ -30,7 +39,10 @@ test("the floating player is a labelled, keyboard-reachable surface with Home, R
   assert.match(html, /role="group" aria-label="Move Checkout flow" tabindex="0"/u);
   assert.match(html, /tabindex="0" role="application" aria-roledescription="simulator screen"/u);
   // The screen is a reserved typing surface, so the composer's type-to-focus never takes its keys.
-  assert.match(html, /data-typing-surface="device"[^>]*role="application" aria-roledescription="simulator screen"/u);
+  assert.match(
+    html,
+    /data-typing-surface="device"[^>]*role="application" aria-roledescription="simulator screen"/u,
+  );
   assert.match(html, /Escape to put it back in its tab/u);
   // Home and Rotate wait for a live stream.
   assert.match(html, /disabled=""[^>]*aria-label="Home"|aria-label="Home"[^>]*disabled=""/u);
@@ -53,7 +65,13 @@ test("a floating Android emulator offers Back, Home and Recents instead of the i
     <DeviceMiniPlayer device={pixel} title="Pixel 9" active={false} onDock={noop} onClose={noop} />,
   );
   const labels = [...html.matchAll(/<button[^>]*aria-label="([^"]+)"/gu)].map((match) => match[1]);
-  assert.deepEqual(labels, ["Back", "Home", "Recents", "Dock device in its tab", "Close floating device"]);
+  assert.deepEqual(labels, [
+    "Back",
+    "Home",
+    "Recents",
+    "Dock device in its tab",
+    "Close floating device",
+  ]);
   const ios = renderToStaticMarkup(
     <DeviceMiniPlayer device={IPHONE} title="iPhone" active={false} onDock={noop} onClose={noop} />,
   );
@@ -64,9 +82,19 @@ test("a floating Android emulator offers Back, Home and Recents instead of the i
 });
 
 test("Settings offers the auto-show floating device switch", () => {
-  const on = renderToStaticMarkup(<DeviceWorkspaceSettingsView autoFloat onAutoFloatChange={noop} />);
-  assert.match(on, new RegExp(`role="switch"[^>]*aria-checked="true"[^>]*aria-label="${AUTO_FLOAT_DEVICE_LABEL}"`, "u"));
+  const on = renderToStaticMarkup(
+    <DeviceWorkspaceSettingsView autoFloat onAutoFloatChange={noop} />,
+  );
+  assert.match(
+    on,
+    new RegExp(
+      `role="switch"[^>]*aria-checked="true"[^>]*aria-label="${AUTO_FLOAT_DEVICE_LABEL}"`,
+      "u",
+    ),
+  );
   assert.match(on, /Environment tab instead/u);
-  const off = renderToStaticMarkup(<DeviceWorkspaceSettingsView autoFloat={false} onAutoFloatChange={noop} />);
+  const off = renderToStaticMarkup(
+    <DeviceWorkspaceSettingsView autoFloat={false} onAutoFloatChange={noop} />,
+  );
   assert.match(off, /role="switch"[^>]*aria-checked="false"/u);
 });

@@ -8,7 +8,16 @@ import {
   parseChangedAreaDecisions,
 } from "./ci-required.mjs";
 
-const allTrue = { android: true, apple: true, catalog: true, cli: true, desktop: true, ios: true, linux: true, "mac-e2e": true };
+const allTrue = {
+  android: true,
+  apple: true,
+  catalog: true,
+  cli: true,
+  desktop: true,
+  ios: true,
+  linux: true,
+  "mac-e2e": true,
+};
 
 function needsFor(decisions = allTrue, overrides = {}) {
   const needs = {
@@ -38,7 +47,13 @@ test("the aggregate gate accepts successful required jobs", () => {
 });
 
 test("a conditional job may be skipped only for its explicitly false area", () => {
-  const decisions = { ...allTrue, desktop: false, android: false, catalog: false, "mac-e2e": false };
+  const decisions = {
+    ...allTrue,
+    desktop: false,
+    android: false,
+    catalog: false,
+    "mac-e2e": false,
+  };
   const { needs } = needsFor(decisions, {
     android: { result: "skipped" },
     build: { result: "skipped" },
@@ -57,7 +72,16 @@ test("a conditional job may be skipped only for its explicitly false area", () =
 
 test("a job selected by several areas may skip only when all of them are false", () => {
   // Static checks lint the CLI packages, so a CLI-only change keeps them.
-  const cliOnly = { ...allTrue, desktop: false, apple: false, ios: false, android: false, linux: false, catalog: false, "mac-e2e": false };
+  const cliOnly = {
+    ...allTrue,
+    desktop: false,
+    apple: false,
+    ios: false,
+    android: false,
+    linux: false,
+    catalog: false,
+    "mac-e2e": false,
+  };
   const { needs: cliNeeds } = needsFor(cliOnly, {
     android: { result: "skipped" },
     apple: { result: "skipped" },
@@ -69,25 +93,44 @@ test("a job selected by several areas may skip only when all of them are false",
     unit: { result: "skipped" },
     verify: { result: "skipped" },
   });
-  assert.deepEqual(evaluateRequiredGate(cliNeeds, cliOnly).failures, [{ job: "static", reason: "unexpected-skip" }]);
+  assert.deepEqual(evaluateRequiredGate(cliNeeds, cliOnly).failures, [
+    { job: "static", reason: "unexpected-skip" },
+  ]);
 
   // A catalog-only change runs the catalog contracts and the desktop unit lanes.
-  const catalogOnly = Object.fromEntries(Object.keys(allTrue).map((area) => [area, area === "catalog"]));
+  const catalogOnly = Object.fromEntries(
+    Object.keys(allTrue).map((area) => [area, area === "catalog"]),
+  );
   const skipped = Object.fromEntries(
     Object.keys(REQUIRED_JOB_RULES)
       .filter((job) => !["changes", "policy", "catalog", "unit"].includes(job))
       .map((job) => [job, { result: "skipped" }]),
   );
   assert.equal(evaluateRequiredGate(needsFor(catalogOnly, skipped).needs, catalogOnly).ok, true);
-  const missingCatalog = evaluateRequiredGate(needsFor(catalogOnly, { ...skipped, catalog: { result: "skipped" } }).needs, catalogOnly);
+  const missingCatalog = evaluateRequiredGate(
+    needsFor(catalogOnly, { ...skipped, catalog: { result: "skipped" } }).needs,
+    catalogOnly,
+  );
   assert.deepEqual(missingCatalog.failures, [{ job: "catalog", reason: "unexpected-skip" }]);
-  const missingUnit = evaluateRequiredGate(needsFor(catalogOnly, { ...skipped, unit: { result: "skipped" } }).needs, catalogOnly);
+  const missingUnit = evaluateRequiredGate(
+    needsFor(catalogOnly, { ...skipped, unit: { result: "skipped" } }).needs,
+    catalogOnly,
+  );
   assert.deepEqual(missingUnit.failures, [{ job: "unit", reason: "unexpected-skip" }]);
 });
 
 test("a desktop PR without macOS-only specs skips macOS E2E but still needs the Linux shards", () => {
   // A renderer-only PR: desktop selected, Linux packaging not, no macOS-only spec.
-  const rendererPr = { ...allTrue, apple: false, ios: false, android: false, cli: false, linux: false, catalog: false, "mac-e2e": false };
+  const rendererPr = {
+    ...allTrue,
+    apple: false,
+    ios: false,
+    android: false,
+    cli: false,
+    linux: false,
+    catalog: false,
+    "mac-e2e": false,
+  };
   const skippedPlatforms = {
     android: { result: "skipped" },
     apple: { result: "skipped" },
@@ -96,7 +139,10 @@ test("a desktop PR without macOS-only specs skips macOS E2E but still needs the 
     e2e: { result: "skipped" },
     ios: { result: "skipped" },
   };
-  assert.equal(evaluateRequiredGate(needsFor(rendererPr, skippedPlatforms).needs, rendererPr).ok, true);
+  assert.equal(
+    evaluateRequiredGate(needsFor(rendererPr, skippedPlatforms).needs, rendererPr).ok,
+    true,
+  );
 
   const linuxSkipped = evaluateRequiredGate(
     needsFor(rendererPr, { ...skippedPlatforms, "linux-e2e": { result: "skipped" } }).needs,
@@ -132,16 +178,10 @@ test("failed, canceled, unknown, and missing results fail the aggregate", () => 
 
 test("GitHub matrix jobs expose one aggregate result on their needs entry", () => {
   const { needs, decisions } = needsFor();
-  const successful = evaluateRequiredGate(
-    { ...needs, unit: { result: "success" } },
-    decisions,
-  );
+  const successful = evaluateRequiredGate({ ...needs, unit: { result: "success" } }, decisions);
   assert.equal(successful.ok, true);
 
-  const failed = evaluateRequiredGate(
-    { ...needs, unit: { result: "failure" } },
-    decisions,
-  );
+  const failed = evaluateRequiredGate({ ...needs, unit: { result: "failure" } }, decisions);
   assert.deepEqual(failed.failures, [{ job: "unit", reason: "result-failure" }]);
 });
 
@@ -150,26 +190,63 @@ test("malformed needs entries fail closed instead of authorizing a skip", () => 
   for (const entry of ["skipped", ["skipped"], { results: "skipped" }, { result: ["skipped"] }]) {
     const result = evaluateRequiredGate({ ...needs, unit: entry }, decisions);
     assert.equal(result.ok, false, JSON.stringify(entry));
-    assert.deepEqual(result.failures, [{ job: "unit", reason: "missing-result" }], JSON.stringify(entry));
+    assert.deepEqual(
+      result.failures,
+      [{ job: "unit", reason: "missing-result" }],
+      JSON.stringify(entry),
+    );
   }
 });
 
 test("changes decisions reject malformed or incomplete values", () => {
   assert.deepEqual(
     parseChangedAreaDecisions({
-      outputs: { desktop: "true", apple: "false", ios: true, android: false, cli: "true", linux: "false", catalog: "true", "mac-e2e": "false" },
+      outputs: {
+        desktop: "true",
+        apple: "false",
+        ios: true,
+        android: false,
+        cli: "true",
+        linux: "false",
+        catalog: "true",
+        "mac-e2e": "false",
+      },
     }),
-    { desktop: true, apple: false, ios: true, android: false, cli: true, linux: false, catalog: true, "mac-e2e": false },
+    {
+      desktop: true,
+      apple: false,
+      ios: true,
+      android: false,
+      cli: true,
+      linux: false,
+      catalog: true,
+      "mac-e2e": false,
+    },
   );
   // A detector that does not report the macOS E2E plan cannot authorize its skip.
   assert.throws(
-    () => parseChangedAreaDecisions({ desktop: true, apple: true, ios: true, android: true, cli: true, linux: true, catalog: true }),
+    () =>
+      parseChangedAreaDecisions({
+        desktop: true,
+        apple: true,
+        ios: true,
+        android: true,
+        cli: true,
+        linux: true,
+        catalog: true,
+      }),
     /changes-invalid/u,
   );
   assert.throws(() => parseChangedAreaDecisions({ desktop: "maybe" }), /changes-invalid/u);
-  assert.throws(() => parseChangedAreaDecisions({ desktop: true, apple: true, ios: true }), /changes-invalid/u);
+  assert.throws(
+    () => parseChangedAreaDecisions({ desktop: true, apple: true, ios: true }),
+    /changes-invalid/u,
+  );
   // An older detector that omits the newer areas cannot authorize skips.
-  assert.throws(() => parseChangedAreaDecisions({ desktop: true, apple: true, ios: true, android: true }), /changes-invalid/u);
+  assert.throws(
+    () => parseChangedAreaDecisions({ desktop: true, apple: true, ios: true, android: true }),
+    /changes-invalid/u,
+  );
   assert.throws(() => parseChangedAreaDecisions("[]"), /changes-malformed/u);
 
   const { needs } = needsFor();
@@ -190,7 +267,10 @@ test("the environment adapter requires both JSON inputs and keeps failures safe"
   assert.equal(missing.ok, false);
   assert.ok(missing.failures.some(({ job }) => job === "needs"));
 
-  const malformed = evaluateRequiredEnvironment({ CI_CHANGES_JSON: "not-json", CI_NEEDS_JSON: "{}" });
+  const malformed = evaluateRequiredEnvironment({
+    CI_CHANGES_JSON: "not-json",
+    CI_NEEDS_JSON: "{}",
+  });
   assert.equal(malformed.ok, false);
   assert.ok(malformed.failures.length > 0);
 });

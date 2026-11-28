@@ -5,7 +5,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
-import { parseDesignBridgeMessage, type DesignBridgeMessage } from "../../../renderer/shared/design-canvas/bridge-messages.js";
+import {
+  parseDesignBridgeMessage,
+  type DesignBridgeMessage,
+} from "../../../renderer/shared/design-canvas/bridge-messages.js";
 import { DESIGN_BRIDGE_SOURCE } from "./bridge-source.js";
 
 type Page = {
@@ -44,7 +47,7 @@ function page(html: string, url = "aiden-design://grant/design/page.html"): Page
   };
 }
 
-const last = <T,>(items: readonly T[]): T | undefined => items[items.length - 1];
+const last = <T>(items: readonly T[]): T | undefined => items[items.length - 1];
 
 const HERO = `<!doctype html><html><head><title>Hero</title></head><body>
   <main>
@@ -65,8 +68,15 @@ test("a pick describes the element under the point: selector, text, tag, nearest
   assert.equal(picked.element?.text, "Two bold");
   assert.equal(picked.element?.sourcePath, "design/hero.html:3");
   assert.equal(picked.element?.commentId, undefined);
-  assert.equal(view.window.document.querySelectorAll(picked.element!.selector).length, 1, "the selector names one element");
-  assert.equal(view.window.document.querySelector(picked.element!.selector)?.textContent, "Two bold");
+  assert.equal(
+    view.window.document.querySelectorAll(picked.element!.selector).length,
+    1,
+    "the selector names one element",
+  );
+  assert.equal(
+    view.window.document.querySelector(picked.element!.selector)?.textContent,
+    "Two bold",
+  );
 
   view.pointAt("#pricing button");
   view.send({ type: "aiden-design:pick-at", requestId: "r2", x: 1, y: 1 });
@@ -87,21 +97,31 @@ test("a pick describes the element under the point: selector, text, tag, nearest
     "the picked element's markup, without Aiden's own stamps",
   );
 
-  const long = page(`<!doctype html><html><body><ul>${"<li>  An item   with words </li>".repeat(200)}</ul></body></html>`);
+  const long = page(
+    `<!doctype html><html><body><ul>${"<li>  An item   with words </li>".repeat(200)}</ul></body></html>`,
+  );
   long.pointAt("ul");
   long.send({ type: "aiden-design:pick-at", requestId: "r5", x: 1, y: 1 });
   const list = last(long.sent);
   assert.ok(list?.type === "picked");
-  assert.ok(list.element?.html?.startsWith("<ul><li> An item with words </li>"), "whitespace is collapsed");
+  assert.ok(
+    list.element?.html?.startsWith("<ul><li> An item with words </li>"),
+    "whitespace is collapsed",
+  );
   assert.equal(list.element?.html?.length, 1500, "a big element's markup is cut short");
 
-  const emoji = page(`<!doctype html><html><body><ul><li>${"😀".repeat(1000)}</li></ul></body></html>`);
+  const emoji = page(
+    `<!doctype html><html><body><ul><li>${"😀".repeat(1000)}</li></ul></body></html>`,
+  );
   emoji.pointAt("ul");
   emoji.send({ type: "aiden-design:pick-at", requestId: "r6", x: 1, y: 1 });
   const faces = last(emoji.sent);
   assert.ok(faces?.type === "picked");
   assert.ok(faces.element?.html?.endsWith("😀…"), "the cut falls before a pair, not inside it");
-  assert.doesNotMatch(faces.element?.html ?? "", /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+  assert.doesNotMatch(
+    faces.element?.html ?? "",
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+  );
 
   view.pointAt(null);
   view.send({ type: "aiden-design:pick-at", requestId: "r4", x: 1, y: 1 });
@@ -117,7 +137,12 @@ test("locate finds an element by its comment id first, else lists candidates wit
     requestId: "l1",
     items: [
       { commentId: "c-9", selector: "nope", text: "", tag: "div" },
-      { commentId: "c-new", selector: "main > section:nth-of-type(1) > h1", text: "Ship faster", tag: "h1" },
+      {
+        commentId: "c-new",
+        selector: "main > section:nth-of-type(1) > h1",
+        text: "Ship faster",
+        tag: "h1",
+      },
       { commentId: "c-bad", selector: "::not a selector((", text: "Pricing", tag: "h3" },
     ],
   });
@@ -127,16 +152,29 @@ test("locate finds an element by its comment id first, else lists candidates wit
   assert.equal(anchors.results["c-9"]?.byId?.selector, "#pricing");
   const heading = anchors.results["c-new"]!;
   assert.equal(heading.byId, undefined);
-  assert.deepEqual(heading.candidates.map((candidate) => [candidate.tag, candidate.selectorMatch]), [["h1", true]]);
-  assert.equal(heading.candidates[0]!.html, "<h1>Ship faster</h1>", "the selector's match carries its markup");
+  assert.deepEqual(
+    heading.candidates.map((candidate) => [candidate.tag, candidate.selectorMatch]),
+    [["h1", true]],
+  );
+  assert.equal(
+    heading.candidates[0]!.html,
+    "<h1>Ship faster</h1>",
+    "the selector's match carries its markup",
+  );
   assert.equal(anchors.results["c-9"]?.byId?.html?.startsWith('<section id="pricing">'), true);
   const bad = anchors.results["c-bad"]!;
   assert.ok(
-    bad.candidates.some((candidate) => candidate.tag === "h2" && candidate.text === "Pricing" && !candidate.selectorMatch),
+    bad.candidates.some(
+      (candidate) =>
+        candidate.tag === "h2" && candidate.text === "Pricing" && !candidate.selectorMatch,
+    ),
     "an element with the same text is a candidate",
   );
   assert.ok(bad.candidates.every((candidate) => candidate.text === "Pricing"));
-  assert.ok(bad.candidates.every((candidate) => candidate.html === undefined), "fuzzy candidates carry no markup");
+  assert.ok(
+    bad.candidates.every((candidate) => candidate.html === undefined),
+    "fuzzy candidates carry no markup",
+  );
 });
 
 test("the hover outline and highlight are drawn inside the page and never picked", () => {
@@ -169,14 +207,25 @@ test("the canvas refuses malformed bridge messages", () => {
   assert.equal(parseDesignBridgeMessage({ type: "aiden-design:ready", docHeight: -1 }), null);
   assert.equal(parseDesignBridgeMessage({ type: "ready", docHeight: 10 }), null);
   assert.equal(
-    parseDesignBridgeMessage({ type: "aiden-design:picked", requestId: "r", point: [1, 2], element: { selector: "a", text: "", tag: "<script>", rect: { x: 0, y: 0, w: 1, h: 1 } } }),
+    parseDesignBridgeMessage({
+      type: "aiden-design:picked",
+      requestId: "r",
+      point: [1, 2],
+      element: { selector: "a", text: "", tag: "<script>", rect: { x: 0, y: 0, w: 1, h: 1 } },
+    }),
     null,
   );
   const picked = parseDesignBridgeMessage({
     type: "aiden-design:picked",
     requestId: "r",
     point: [1, 2],
-    element: { selector: "a", text: "x".repeat(500), tag: "a", rect: { x: 0, y: 0, w: 1, h: 1 }, sourcePath: "/etc/passwd:1" },
+    element: {
+      selector: "a",
+      text: "x".repeat(500),
+      tag: "a",
+      rect: { x: 0, y: 0, w: 1, h: 1 },
+      sourcePath: "/etc/passwd:1",
+    },
   });
   assert.ok(picked?.type === "picked");
   assert.equal(picked.element?.text.length, 200);
@@ -201,7 +250,12 @@ test("set-tweaks puts dark mode and the values on the root, and anything left ou
   assert.equal(root.getAttribute("data-density"), "compact");
   assert.equal(root.getAttribute("data-promo"), "false");
 
-  view.send({ type: "aiden-design:set-tweaks", dark: false, vars: { "--radius": "4px" }, attrs: {} });
+  view.send({
+    type: "aiden-design:set-tweaks",
+    dark: false,
+    vars: { "--radius": "4px" },
+    attrs: {},
+  });
   assert.equal(root.getAttribute("data-theme"), "light", "the page's own theme comes back");
   assert.equal(root.style.getPropertyValue("--accent"), "#111111");
   assert.equal(root.style.getPropertyValue("--radius"), "4px");
@@ -210,7 +264,11 @@ test("set-tweaks puts dark mode and the values on the root, and anything left ou
 
   view.send({ type: "aiden-design:set-tweaks", dark: true, vars: {}, attrs: {} });
   view.send({ type: "aiden-design:set-tweaks", dark: false, vars: {}, attrs: {} });
-  assert.equal(root.getAttribute("data-theme"), "light", "a second round trip still restores the page's theme");
+  assert.equal(
+    root.getAttribute("data-theme"),
+    "light",
+    "a second round trip still restores the page's theme",
+  );
   assert.equal(root.style.getPropertyValue("--radius"), "");
 });
 
@@ -230,13 +288,21 @@ test("set-tweaks takes only safe names and values, and only from the canvas", ()
   assert.equal(root.hasAttribute("data-x"), false);
   assert.equal(root.getAttribute("data-y"), "yes");
 
-  view.send({ type: "aiden-design:set-tweaks", dark: true, vars: {}, attrs: {} }, { postMessage() {} });
+  view.send(
+    { type: "aiden-design:set-tweaks", dark: true, vars: {}, attrs: {} },
+    { postMessage() {} },
+  );
   assert.equal(root.getAttribute("data-theme"), "light", "another window cannot change the page");
 });
 
 test("the page's address carries the same state, applied before the page draws", () => {
-  const state = encodeURIComponent(JSON.stringify({ vars: { "--accent": "#00aa00" }, attrs: { "data-density": "compact" } }));
-  const view = page(THEMED, `aiden-design://grant/design/page.html?v=2&aiden-dark=1&aiden-tweaks=${state}`);
+  const state = encodeURIComponent(
+    JSON.stringify({ vars: { "--accent": "#00aa00" }, attrs: { "data-density": "compact" } }),
+  );
+  const view = page(
+    THEMED,
+    `aiden-design://grant/design/page.html?v=2&aiden-dark=1&aiden-tweaks=${state}`,
+  );
   const root = view.window.document.documentElement;
   assert.equal(root.getAttribute("data-theme"), "dark");
   assert.equal(root.style.getPropertyValue("--accent"), "#00aa00");
@@ -248,7 +314,9 @@ test("the page's address carries the same state, applied before the page draws",
 
 test("a page drawn on its own, as an export or an inspect draws it, still takes its look from its address", () => {
   const state = encodeURIComponent(JSON.stringify({ vars: { "--accent": "#00aa00" }, attrs: {} }));
-  const window = new Window({ url: `aiden-design://grant/design/page.html?aiden-dark=1&aiden-tweaks=${state}` });
+  const window = new Window({
+    url: `aiden-design://grant/design/page.html?aiden-dark=1&aiden-tweaks=${state}`,
+  });
   window.document.write(THEMED);
   // A top-level page is its own parent.
   Object.defineProperty(window, "parent", { value: window, configurable: true });
@@ -269,20 +337,52 @@ const WORDS = `<!doctype html><html><head></head><body>
 test("a text tweak fills its marked elements and their own words come back when it goes", () => {
   const view = page(WORDS);
   const doc = view.window.document;
-  view.send({ type: "aiden-design:set-tweaks", dark: false, vars: {}, attrs: { "data-cta": "Book a call", "data-headline": "Hi" } });
+  view.send({
+    type: "aiden-design:set-tweaks",
+    dark: false,
+    vars: {},
+    attrs: { "data-cta": "Book a call", "data-headline": "Hi" },
+  });
   assert.equal(doc.querySelector("h1")?.textContent, "Hi");
-  assert.deepEqual([...doc.querySelectorAll("[data-aiden-text=cta]")].map((element) => element.textContent), ["Book a call", "Book a call"]);
-  assert.equal(doc.documentElement.getAttribute("data-cta"), "Book a call", "the root carries the value too, for CSS");
-  view.send({ type: "aiden-design:set-tweaks", dark: false, vars: {}, attrs: { "data-headline": "Hi" } });
+  assert.deepEqual(
+    [...doc.querySelectorAll("[data-aiden-text=cta]")].map((element) => element.textContent),
+    ["Book a call", "Book a call"],
+  );
+  assert.equal(
+    doc.documentElement.getAttribute("data-cta"),
+    "Book a call",
+    "the root carries the value too, for CSS",
+  );
+  view.send({
+    type: "aiden-design:set-tweaks",
+    dark: false,
+    vars: {},
+    attrs: { "data-headline": "Hi" },
+  });
   assert.equal(doc.querySelector("button")?.textContent, "Save");
   view.send({ type: "aiden-design:set-tweaks", dark: false, vars: {}, attrs: {} });
-  assert.equal(doc.querySelector("h1")?.innerHTML, "Make <em>room</em> to play", "its own markup comes back too");
-  view.send({ type: "aiden-design:set-tweaks", dark: false, vars: {}, attrs: { "data-headline": "<b>x</b>" } });
-  assert.equal(doc.querySelector("h1")?.textContent, "Make room to play", "an unsafe value never reaches the page");
+  assert.equal(
+    doc.querySelector("h1")?.innerHTML,
+    "Make <em>room</em> to play",
+    "its own markup comes back too",
+  );
+  view.send({
+    type: "aiden-design:set-tweaks",
+    dark: false,
+    vars: {},
+    attrs: { "data-headline": "<b>x</b>" },
+  });
+  assert.equal(
+    doc.querySelector("h1")?.textContent,
+    "Make room to play",
+    "an unsafe value never reaches the page",
+  );
 });
 
 test("words in the address fill elements once the page has them", () => {
-  const state = encodeURIComponent(JSON.stringify({ vars: {}, attrs: { "data-headline": "From the link" } }));
+  const state = encodeURIComponent(
+    JSON.stringify({ vars: {}, attrs: { "data-headline": "From the link" } }),
+  );
   const view = page(WORDS, `aiden-design://grant/design/page.html?aiden-tweaks=${state}`);
   view.window.document.dispatchEvent(new view.window.Event("DOMContentLoaded"));
   assert.equal(view.window.document.querySelector("h1")?.textContent, "From the link");
@@ -291,7 +391,9 @@ test("words in the address fill elements once the page has them", () => {
 test("an action control reaches the page as an event, only with a plain id and only from the canvas", () => {
   const view = page(WORDS);
   const heard: unknown[] = [];
-  view.window.addEventListener("aiden-tweak-action", (event) => heard.push((event as unknown as { detail: unknown }).detail));
+  view.window.addEventListener("aiden-tweak-action", (event) =>
+    heard.push((event as unknown as { detail: unknown }).detail),
+  );
   view.send({ type: "aiden-design:tweak-action", id: "replay" });
   view.send({ type: "aiden-design:tweak-action", id: "re play" });
   view.send({ type: "aiden-design:tweak-action", id: "replay" }, { postMessage() {} });
@@ -311,14 +413,20 @@ function dblclick(view: Page, selector: string): void {
 }
 
 function key(view: Page, name: string): void {
-  view.window.document.dispatchEvent(new view.window.KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }));
+  view.window.document.dispatchEvent(
+    new view.window.KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }),
+  );
 }
 
 test("a double-click edits an element's words only while the canvas allows it, and Enter reports each changed text", () => {
   const view = page(EDITABLE_PAGE);
   const heading = view.window.document.querySelector("h1")!;
   dblclick(view, "h1");
-  assert.equal(heading.hasAttribute("contenteditable"), false, "outside the page, a double-click edits nothing");
+  assert.equal(
+    heading.hasAttribute("contenteditable"),
+    false,
+    "outside the page, a double-click edits nothing",
+  );
 
   view.send({ type: "aiden-design:edit-enable", on: true });
   dblclick(view, "h1");
@@ -337,7 +445,11 @@ test("a double-click edits an element's words only while the canvas allows it, a
   assert.ok(ended?.type === "edit-end");
   assert.equal(ended.cancelled, false);
   assert.equal(ended.plain, true);
-  assert.deepEqual(ended.changes, [{ before: "Ship   faster", after: "Ship sooner" }], "a typed no-break space is a space");
+  assert.deepEqual(
+    ended.changes,
+    [{ before: "Ship   faster", after: "Ship sooner" }],
+    "a typed no-break space is a space",
+  );
   assert.equal(heading.hasAttribute("style"), false, "an empty style is no style");
 });
 

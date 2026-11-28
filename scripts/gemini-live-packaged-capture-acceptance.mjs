@@ -29,16 +29,18 @@ const FINAL_RECEIPT = path.join(
   "gemini-live-display-capture-acceptance-receipt.json",
 );
 const ACCEPTANCE_TIMEOUT_MS = 15 * 60 * 1_000;
-const EXPECTED_CHECKS = Object.freeze([
-  "display_permission_path",
-  "external_source_ended",
-  "native_picker_without_handler_fallback",
-  "picker_cancelled",
-  "picker_cancellation_rejected",
-  "replacement_navigation_rejected",
-  "replacement_document_denied",
-  "replacement_without_chooser_fallback",
-].sort());
+const EXPECTED_CHECKS = Object.freeze(
+  [
+    "display_permission_path",
+    "external_source_ended",
+    "native_picker_without_handler_fallback",
+    "picker_cancelled",
+    "picker_cancellation_rejected",
+    "replacement_navigation_rejected",
+    "replacement_document_denied",
+    "replacement_without_chooser_fallback",
+  ].sort(),
+);
 
 function argumentValue(name) {
   const index = process.argv.indexOf(name);
@@ -61,8 +63,7 @@ async function codeSignatureMetadata(appPath) {
     const requirementDisplay = `${requirementResult.stdout}\n${requirementResult.stderr}`;
     const codeDisplay = `${displayResult.stdout}\n${displayResult.stderr}`;
     return {
-      designatedRequirement:
-        requirementDisplay.match(/designated => (.+)$/m)?.[1]?.trim() ?? null,
+      designatedRequirement: requirementDisplay.match(/designated => (.+)$/m)?.[1]?.trim() ?? null,
       identifier: codeDisplay.match(/^Identifier=(.+)$/m)?.[1]?.trim() ?? null,
       teamIdentifier: codeDisplay.match(/^TeamIdentifier=(.+)$/m)?.[1]?.trim() ?? null,
     };
@@ -111,10 +112,7 @@ async function beforeDeadline(promise) {
 async function terminate(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGTERM");
-  await Promise.race([
-    monitorChild(child),
-    new Promise((resolve) => setTimeout(resolve, 5_000)),
-  ]);
+  await Promise.race([monitorChild(child), new Promise((resolve) => setTimeout(resolve, 5_000))]);
   if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
 }
 
@@ -193,25 +191,18 @@ async function runAcceptance() {
   const token = randomBytes(32).toString("hex");
   let child;
   try {
-    child = spawn(
-      executable,
-      [
-        `--user-data-dir=${profile}`,
-        `--${ACCEPTANCE_SWITCH}=${token}`,
-      ],
-      {
-        env: {
-          ...process.env,
-          AIDEN_CONFIG_DIR: configDir,
-          AIDEN_RUNTIME_PROFILE: "production",
-          AIDEN_ANALYTICS: "0",
-          [ACCEPTANCE_ENV]: "1",
-          [TOKEN_ENV]: token,
-          [PROFILE_ENV]: profile,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
+    child = spawn(executable, [`--user-data-dir=${profile}`, `--${ACCEPTANCE_SWITCH}=${token}`], {
+      env: {
+        ...process.env,
+        AIDEN_CONFIG_DIR: configDir,
+        AIDEN_RUNTIME_PROFILE: "production",
+        AIDEN_ANALYTICS: "0",
+        [ACCEPTANCE_ENV]: "1",
+        [TOKEN_ENV]: token,
+        [PROFILE_ENV]: profile,
       },
-    );
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     if (!child.pid) throw new Error("The exact packaged Aiden executable did not start.");
     child.stdout.pipe(process.stdout);
     child.stderr.pipe(process.stderr);
@@ -221,11 +212,15 @@ async function runAcceptance() {
     console.log("2. Select one disposable screen or window in the macOS chooser.");
     console.log("3. Stop sharing from the macOS sharing control so the track ends externally.");
     console.log("4. Cancel the second chooser without selecting a source.");
-    console.log("No frames, source names, screenshots, audio, or prompts are written to the receipt.\n");
+    console.log(
+      "No frames, source names, screenshots, audio, or prompts are written to the receipt.\n",
+    );
 
     const exit = await beforeDeadline(monitorChild(child));
     if (exit.code !== 0 || exit.signal !== null) {
-      throw new Error(`Packaged Aiden acceptance exited unsuccessfully (${exit.code ?? exit.signal}).`);
+      throw new Error(
+        `Packaged Aiden acceptance exited unsuccessfully (${exit.code ?? exit.signal}).`,
+      );
     }
     child = null;
     const artifactAfter = await packagedArtifactIdentity(appPath);

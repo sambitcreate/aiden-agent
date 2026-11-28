@@ -61,19 +61,10 @@ function passingReceipt() {
 test("real Google acceptance fails closed without both independent opt-ins", () => {
   assert.equal(googleLiveAcceptanceEnabled({}, true), false);
   assert.equal(
-    googleLiveAcceptanceEnabled(
-      { AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE: "1" },
-      false,
-    ),
+    googleLiveAcceptanceEnabled({ AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE: "1" }, false),
     false,
   );
-  assert.equal(
-    googleLiveAcceptanceEnabled(
-      { AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE: "1" },
-      true,
-    ),
-    true,
-  );
+  assert.equal(googleLiveAcceptanceEnabled({ AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE: "1" }, true), true);
 });
 
 test("acceptance arguments allow only an explicit confirmation and reviewed model", () => {
@@ -85,10 +76,7 @@ test("acceptance arguments allow only an explicit confirmation and reviewed mode
     ]),
     { confirmed: true, model: GOOGLE_LIVE_ACCEPTANCE_MODEL },
   );
-  assert.throws(
-    () => parseGoogleLiveAcceptanceArgs(["--api-key", "SECRET"]),
-    /Unknown/u,
-  );
+  assert.throws(() => parseGoogleLiveAcceptanceArgs(["--api-key", "SECRET"]), /Unknown/u);
   assert.throws(
     () =>
       parseGoogleLiveAcceptanceArgs([
@@ -119,10 +107,7 @@ test("receipt schema permits only content-free evidence and requires visible Sto
   const receipt = passingReceipt();
   assert.equal(receipt.result, "pass");
   assert.equal(receipt.durationMs, 9_000);
-  assert.doesNotMatch(
-    JSON.stringify(receipt),
-    /prompt|transcript|audio|frame|toolArgs|apiKey/iu,
-  );
+  assert.doesNotMatch(JSON.stringify(receipt), /prompt|transcript|audio|frame|toolArgs|apiKey/iu);
 
   assert.throws(
     () =>

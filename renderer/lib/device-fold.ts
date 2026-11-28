@@ -29,7 +29,13 @@ export const ANDROID_FOLD_RETRY_MS = 3_000;
 export const ANDROID_FOLD_TIMEOUT_MS = 12_000;
 export const ANDROID_FOLD_TIMEOUT_MESSAGE = "Fold command timed out.";
 
-const POSTURES: readonly AndroidFoldReportedPosture[] = ["closed", "half_opened", "opened", "flipped", "tent"];
+const POSTURES: readonly AndroidFoldReportedPosture[] = [
+  "closed",
+  "half_opened",
+  "opened",
+  "flipped",
+  "tent",
+];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -46,7 +52,11 @@ export function parseAndroidFold(payload: unknown): AndroidFoldState {
   ) {
     throw new Error("Unexpected Android fold response.");
   }
-  return { supported, posture: posture as AndroidFoldReportedPosture | null, hingeAngle: hingeAngle as number | null };
+  return {
+    supported,
+    posture: posture as AndroidFoldReportedPosture | null,
+    hingeAngle: hingeAngle as number | null,
+  };
 }
 
 /** The hinge angle to render: the reported angle, else 0 when closed and 180 otherwise. Null when unsupported. */
@@ -64,7 +74,14 @@ export interface AndroidFoldTarget {
 export interface AndroidFoldRuntime {
   fetch(
     url: string,
-    init: { method: "GET" | "POST"; cache: "no-store"; credentials: "omit"; headers?: Record<string, string>; body?: string; signal: AbortSignal },
+    init: {
+      method: "GET" | "POST";
+      cache: "no-store";
+      credentials: "omit";
+      headers?: Record<string, string>;
+      body?: string;
+      signal: AbortSignal;
+    },
   ): Promise<Response>;
 }
 
@@ -85,12 +102,16 @@ export async function requestAndroidFold(
     cache: "no-store",
     credentials: "omit",
     signal,
-    ...(posture ? { headers: { "content-type": "application/json" }, body: JSON.stringify({ posture }) } : {}),
+    ...(posture
+      ? { headers: { "content-type": "application/json" }, body: JSON.stringify({ posture }) }
+      : {}),
   });
   if (!response.ok) {
     const payload: unknown = await response.json().catch(() => null);
     const error = isRecord(payload) ? payload.error : null;
-    throw new Error(typeof error === "string" && error ? error : `Fold command failed (${response.status}).`);
+    throw new Error(
+      typeof error === "string" && error ? error : `Fold command failed (${response.status}).`,
+    );
   }
   return parseAndroidFold(await response.json());
 }
@@ -200,7 +221,10 @@ export function createAndroidFoldController(options: {
       const timeout = schedule(() => controller.abort(), ANDROID_FOLD_TIMEOUT_MS);
       try {
         // The timeout covers the whole command, minting its grant included.
-        const fold = await untilAborted(options.write(posture, controller.signal), controller.signal);
+        const fold = await untilAborted(
+          options.write(posture, controller.signal),
+          controller.signal,
+        );
         set({ fold, angle: androidFoldAngle(fold) });
       } catch (cause) {
         set({

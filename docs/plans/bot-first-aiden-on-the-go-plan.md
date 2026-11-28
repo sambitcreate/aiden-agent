@@ -113,9 +113,9 @@ The currently used physical iPhone 13 Pro cannot exercise Apple Intelligence ima
 
 The current home logo becomes a native button/menu with exactly two rows:
 
-| Choice | Plain-language description | Destination |
-| --- | --- | --- |
-| Bots | Reusable helpers and their conversations | Last Bot thread/profile, otherwise Bots home |
+| Choice     | Plain-language description                | Destination                                   |
+| ---------- | ----------------------------------------- | --------------------------------------------- |
+| Bots       | Reusable helpers and their conversations  | Last Bot thread/profile, otherwise Bots home  |
 | Workspaces | Projects, folders, Files, review, and Git | Last Workspace/chat, otherwise Workspace home |
 
 Behavior:
@@ -184,18 +184,18 @@ The actions are **Continue with Full Access** and **Customize first**. Existing-
 
 Other first-release state copy is also fixed so degraded security state does not become a vague spinner:
 
-| State | Copy |
-| --- | --- |
-| Full summary | **Can use your Mac, shell, enabled connections, and skills.** |
-| Custom summary | **Uses only the access you select. This chat can reduce it further.** |
-| Offline | **Offline — showing saved bots. Reconnect to create, edit, or send.** |
-| Unsupported Mac | **Bots need a newer version of Aiden Agent on your Mac.** |
-| Device not granted | **Approve Bot access on your Mac, or pair this phone again.** |
-| Policy/home repair | **This bot's access needs repair on your Mac before it can work.** |
-| Selection drift | **Some selected access is unavailable. Review it on your Mac.** |
-| Archived | **Archived bots are read-only until restored.** |
-| No search result | **No bots or conversations match your search.** |
-| Empty | **Create your first bot to give a familiar helper its own conversations and tools.** |
+| State              | Copy                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------ |
+| Full summary       | **Can use your Mac, shell, enabled connections, and skills.**                        |
+| Custom summary     | **Uses only the access you select. This chat can reduce it further.**                |
+| Offline            | **Offline — showing saved bots. Reconnect to create, edit, or send.**                |
+| Unsupported Mac    | **Bots need a newer version of Aiden Agent on your Mac.**                            |
+| Device not granted | **Approve Bot access on your Mac, or pair this phone again.**                        |
+| Policy/home repair | **This bot's access needs repair on your Mac before it can work.**                   |
+| Selection drift    | **Some selected access is unavailable. Review it on your Mac.**                      |
+| Archived           | **Archived bots are read-only until restored.**                                      |
+| No search result   | **No bots or conversations match your search.**                                      |
+| Empty              | **Create your first bot to give a familiar helper its own conversations and tools.** |
 
 Drafts stay local until Save. Cancel on a dirty draft asks before discarding. Saving is one main-owned mutation with optimistic revision checking; a network ambiguity reconciles from the Mac instead of repeating creation.
 
@@ -237,16 +237,16 @@ The final implementation should express this in Aiden's established system-promp
 
 ### What people see
 
-| Area | Choices | Meaning |
-| --- | --- | --- |
-| Access mode | Full Access / Custom | Full uses everything currently enabled for ordinary Aiden work; Custom lets the person reduce it |
-| AI connection | one configured provider/model | Where replies are generated; account secrets stay on the Mac |
-| Mac files | Full Mac / Bot folder only / Chosen locations / Off | Work still starts and normally saves in the bot's managed folder |
-| Shell | On / Off | When on, commands start in the bot's managed folder; no repository is created automatically |
-| Connections | All enabled / selected / off | External apps and services this bot may use; “MCP” appears only as explanatory detail |
-| Skills | All available / selected / off | Instructions and workflows available to this bot |
+| Area            | Choices                                             | Meaning                                                                                                                                      |
+| --------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Access mode     | Full Access / Custom                                | Full uses everything currently enabled for ordinary Aiden work; Custom lets the person reduce it                                             |
+| AI connection   | one configured provider/model                       | Where replies are generated; account secrets stay on the Mac                                                                                 |
+| Mac files       | Full Mac / Bot folder only / Chosen locations / Off | Work still starts and normally saves in the bot's managed folder                                                                             |
+| Shell           | On / Off                                            | When on, commands start in the bot's managed folder; no repository is created automatically                                                  |
+| Connections     | All enabled / selected / off                        | External apps and services this bot may use; “MCP” appears only as explanatory detail                                                        |
+| Skills          | All available / selected / off                      | Instructions and workflows available to this bot                                                                                             |
 | Other abilities | enabled Aiden capabilities, individually selectable | Web, browser/Computer Use, schedules, subagents, and future groups stay understandable and controllable without exposing internal tool names |
-| This chat | inherit bot / customize | A conversation may turn capabilities off or back on up to the bot's limit; it cannot exceed the bot |
+| This chat       | inherit bot / customize                             | A conversation may turn capabilities off or back on up to the bot's limit; it cannot exceed the bot                                          |
 
 Full Access is selected for every valid new or migrated bot. The access screen leads with one sentence—**Can use your Mac, shell, enabled connections, and skills**—then offers **Customize**. The one-time notice described above appears before first use, not on every chat. A persistent, quiet **Full Access** label makes the state inspectable without turning the inbox into a security dashboard.
 
@@ -692,23 +692,23 @@ Cover strict required-field decoding, tolerant additive fields, per-installation
 
 ## Risks and mitigations
 
-| Risk | Mitigation |
-| --- | --- |
-| Attractive toggles lie about real authority | Build/enforce the main-owned policy before UI; test the effective tool list against the presented summary |
-| Full Access surprises a nontechnical person | One blocking versioned notice, persistent Full Access label, **Customize first**, and a direct Bot settings path |
-| A bot changes unrelated Mac files unnecessarily | Managed home as `cwd`/default save location, main-owned operating instructions, scoped-action guidance, and existing destructive-action approvals |
-| A managed home becomes a repository merely by existing | Provisioning asserts no `.git`; no automatic init/branch/commit; Git is used only when the task makes it relevant |
-| A newly enabled MCP tool or Skill appears unexpectedly | Disclose Full's dynamic behavior; Custom uses exact opaque grants and drift review and never grows silently |
-| Existing paired device is silently widened | Local Mac approval/re-pair for `bot:*`; distinguish server support from device grant |
-| Bot chats continue leaking into Workspaces | Fix `botId` projection and disjoint list semantics in Phase 1 before UI |
-| Mobile UI becomes a separate runtime | Shared application services and existing Chat/SSE engine; no HTTP-to-IPC bridge |
-| Inbox becomes slow or exposes history | One bounded paginated projection; only sanitized visible preview; no N+1 per bot |
-| Generated image is oversized, malicious, or leaks a path | iOS preprocessing plus independent Mac decode/normalize, bounded canonical store, opaque authenticated content route |
-| Apple processing is mislabeled | Say “Create with Apple Intelligence”; link/system disclosure; never promise universal offline/on-device behavior |
-| Image Playground is unavailable | Semantic avatar editor remains complete and first-class |
-| Old release removes new identity | Raster/policy companion stores; semantic fallback remains in rollback-compatible `bots.json` |
-| Policy corruption accidentally becomes Full | Full is an explicit valid record, never a fallback; corrupt/future state blocks and repairs |
-| Bot settings and chat settings disagree | Full chats inherit with explicit reductions; Custom chats use subsets; narrowing invalidates leases immediately |
+| Risk                                                     | Mitigation                                                                                                                                        |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Attractive toggles lie about real authority              | Build/enforce the main-owned policy before UI; test the effective tool list against the presented summary                                         |
+| Full Access surprises a nontechnical person              | One blocking versioned notice, persistent Full Access label, **Customize first**, and a direct Bot settings path                                  |
+| A bot changes unrelated Mac files unnecessarily          | Managed home as `cwd`/default save location, main-owned operating instructions, scoped-action guidance, and existing destructive-action approvals |
+| A managed home becomes a repository merely by existing   | Provisioning asserts no `.git`; no automatic init/branch/commit; Git is used only when the task makes it relevant                                 |
+| A newly enabled MCP tool or Skill appears unexpectedly   | Disclose Full's dynamic behavior; Custom uses exact opaque grants and drift review and never grows silently                                       |
+| Existing paired device is silently widened               | Local Mac approval/re-pair for `bot:*`; distinguish server support from device grant                                                              |
+| Bot chats continue leaking into Workspaces               | Fix `botId` projection and disjoint list semantics in Phase 1 before UI                                                                           |
+| Mobile UI becomes a separate runtime                     | Shared application services and existing Chat/SSE engine; no HTTP-to-IPC bridge                                                                   |
+| Inbox becomes slow or exposes history                    | One bounded paginated projection; only sanitized visible preview; no N+1 per bot                                                                  |
+| Generated image is oversized, malicious, or leaks a path | iOS preprocessing plus independent Mac decode/normalize, bounded canonical store, opaque authenticated content route                              |
+| Apple processing is mislabeled                           | Say “Create with Apple Intelligence”; link/system disclosure; never promise universal offline/on-device behavior                                  |
+| Image Playground is unavailable                          | Semantic avatar editor remains complete and first-class                                                                                           |
+| Old release removes new identity                         | Raster/policy companion stores; semantic fallback remains in rollback-compatible `bots.json`                                                      |
+| Policy corruption accidentally becomes Full              | Full is an explicit valid record, never a fallback; corrupt/future state blocks and repairs                                                       |
+| Bot settings and chat settings disagree                  | Full chats inherit with explicit reductions; Custom chats use subsets; narrowing invalidates leases immediately                                   |
 
 ## Owner decisions resolved — August 22, 2026
 

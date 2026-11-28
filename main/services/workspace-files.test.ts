@@ -32,8 +32,14 @@ test("workspace file index stays bounded to the workspace and skips generated di
   await fs.symlink(path.join(outside, "secret.txt"), path.join(root, "escape.txt"));
 
   const index = await listWorkspaceFiles(root);
-  assert.equal(index.entries.some((entry) => entry.path === "src/index.ts"), true);
-  assert.equal(index.entries.some((entry) => entry.path.includes("node_modules")), false);
+  assert.equal(
+    index.entries.some((entry) => entry.path === "src/index.ts"),
+    true,
+  );
+  assert.equal(
+    index.entries.some((entry) => entry.path.includes("node_modules")),
+    false,
+  );
   assert.equal(index.entries.find((entry) => entry.path === "escape.txt")?.kind, "symlink");
   await assert.rejects(readWorkspaceFile(root, "escape.txt"), /outside the workspace/);
 });
@@ -48,7 +54,10 @@ test("workspace file index cannot starve root files behind a large early directo
   for (let start = 0; start < 4_100; start += 100) {
     await Promise.all(
       Array.from({ length: 100 }, (_, offset) =>
-        fs.writeFile(path.join(archive, `entry-${String(start + offset).padStart(4, "0")}.txt`), ""),
+        fs.writeFile(
+          path.join(archive, `entry-${String(start + offset).padStart(4, "0")}.txt`),
+          "",
+        ),
       ),
     );
   }
@@ -56,8 +65,14 @@ test("workspace file index cannot starve root files behind a large early directo
   const index = await listWorkspaceFiles(root);
   assert.equal(index.truncated, true);
   assert.equal(index.entries.length, 4_000);
-  assert.equal(index.entries.some((entry) => entry.path === "package.json"), true);
-  assert.equal(index.entries.some((entry) => entry.path.startsWith(".build/")), false);
+  assert.equal(
+    index.entries.some((entry) => entry.path === "package.json"),
+    true,
+  );
+  assert.equal(
+    index.entries.some((entry) => entry.path.startsWith(".build/")),
+    false,
+  );
 });
 
 test("workspace editor saves only the version the user opened", async (t) => {
@@ -85,14 +100,9 @@ test("workspace editor preserves permission bits across atomic replacement", asy
   await fs.chmod(file, 0o664);
   const opened = await readWorkspaceFile(root, "shared.txt");
 
-  await writeWorkspaceFile(
-    root,
-    "shared.txt",
-    "saved\n",
-    opened.version,
-    undefined,
-    { recoveryUse: async () => "clear" },
-  );
+  await writeWorkspaceFile(root, "shared.txt", "saved\n", opened.version, undefined, {
+    recoveryUse: async () => "clear",
+  });
 
   assert.equal((await fs.stat(file)).mode & 0o7777, 0o664);
 });
@@ -104,18 +114,11 @@ test("workspace editor preserves an external save that races atomic replacement"
   const opened = await readWorkspaceFile(root, "notes.txt");
 
   await assert.rejects(
-    writeWorkspaceFile(
-      root,
-      "notes.txt",
-      "aiden draft\n",
-      opened.version,
-      undefined,
-      {
-        beforeDisplace: async () => {
-          await fs.writeFile(file, "external save\n");
-        },
+    writeWorkspaceFile(root, "notes.txt", "aiden draft\n", opened.version, undefined, {
+      beforeDisplace: async () => {
+        await fs.writeFile(file, "external save\n");
       },
-    ),
+    }),
     (error) => error instanceof WorkspaceFileError && error.code === "changed_on_disk",
   );
   assert.equal(await fs.readFile(file, "utf8"), "external save\n");
@@ -229,8 +232,14 @@ test("a caller's tighter byte limit holds even when the file grows after the pat
   const root = await workspace(t);
   await fs.writeFile(path.join(root, "fits.txt"), "x".repeat(1024));
   await fs.writeFile(path.join(root, "big.txt"), "x".repeat(1025));
-  assert.equal((await readWorkspaceFile(root, "fits.txt", undefined, { maxBytes: 1024 })).size, 1024);
-  await assert.rejects(readWorkspaceFile(root, "big.txt", undefined, { maxBytes: 1024 }), /too large/);
+  assert.equal(
+    (await readWorkspaceFile(root, "fits.txt", undefined, { maxBytes: 1024 })).size,
+    1024,
+  );
+  await assert.rejects(
+    readWorkspaceFile(root, "big.txt", undefined, { maxBytes: 1024 }),
+    /too large/,
+  );
 
   const file = path.join(root, "growing.txt");
   await fs.writeFile(file, "small");
@@ -251,7 +260,10 @@ test("a caller's tighter byte limit holds even when the file grows after the pat
     syncBuiltinESMExports();
   });
 
-  await assert.rejects(readWorkspaceFile(root, "growing.txt", undefined, { maxBytes: 1024 }), /too large/);
+  await assert.rejects(
+    readWorkspaceFile(root, "growing.txt", undefined, { maxBytes: 1024 }),
+    /too large/,
+  );
   assert.equal(grew, true);
 });
 
@@ -275,11 +287,15 @@ test("workspace editor bounds bytes even when a file grows after descriptor stat
       return info;
     });
     const originalRead = handle.read.bind(handle);
-    t.mock.method(handle, "read", async (buffer: Buffer, offset: number, length: number, position: number) => {
-      const result = await originalRead(buffer, offset, length, position);
-      bytesRead += result.bytesRead;
-      return result;
-    });
+    t.mock.method(
+      handle,
+      "read",
+      async (buffer: Buffer, offset: number, length: number, position: number) => {
+        const result = await originalRead(buffer, offset, length, position);
+        bytesRead += result.bytesRead;
+        return result;
+      },
+    );
     const originalClose = handle.close.bind(handle);
     t.mock.method(handle, "close", async () => {
       await originalClose();
@@ -320,45 +336,65 @@ test("workspace editor still follows a stable symlink to a file inside the works
   assert.equal(document.content, "linked content\n");
 });
 
-test("lazy directory scan rejects a directory symlink", { skip: process.platform !== "darwin" }, async (t) => {
-  const root = await workspace(t);
-  const outside = await workspace(t);
-  await fs.writeFile(path.join(outside, "secret"), "private");
-  await fs.symlink(outside, path.join(root, "child"));
-  await assert.rejects(listWorkspaceDirectory(root, "child"));
-});
+test(
+  "lazy directory scan rejects a directory symlink",
+  { skip: process.platform !== "darwin" },
+  async (t) => {
+    const root = await workspace(t);
+    const outside = await workspace(t);
+    await fs.writeFile(path.join(outside, "secret"), "private");
+    await fs.symlink(outside, path.join(root, "child"));
+    await assert.rejects(listWorkspaceDirectory(root, "child"));
+  },
+);
 
-test("lazy directory scan includes files at the legacy depth boundary", { skip: process.platform !== "darwin" }, async (t) => {
-  const root = await workspace(t);
-  const directory = Array.from({ length: 20 }, () => "a").join("/");
-  await fs.mkdir(path.join(root, directory), { recursive: true });
-  await fs.writeFile(path.join(root, directory, "last.txt"), "last");
-  assert.equal((await listWorkspaceDirectory(root, directory)).entries[0]?.name, "last.txt");
-});
+test(
+  "lazy directory scan includes files at the legacy depth boundary",
+  { skip: process.platform !== "darwin" },
+  async (t) => {
+    const root = await workspace(t);
+    const directory = Array.from({ length: 20 }, () => "a").join("/");
+    await fs.mkdir(path.join(root, directory), { recursive: true });
+    await fs.writeFile(path.join(root, directory, "last.txt"), "last");
+    assert.equal((await listWorkspaceDirectory(root, directory)).entries[0]?.name, "last.txt");
+  },
+);
 
-
-test("lazy listing preserves supplied root and directory identities across replacement", { skip: process.platform !== "darwin" }, async (t) => {
-  const root = await workspace(t);
-  await fs.mkdir(path.join(root, "inside"));
-  const rootStat = await fs.stat(root, { bigint: true });
-  const directoryStat = await fs.stat(path.join(root, "inside"), { bigint: true });
-  const identities = {
-    root: { path: await fs.realpath(root), device: rootStat.dev.toString(), inode: rootStat.ino.toString() },
-    directory: { device: directoryStat.dev.toString(), inode: directoryStat.ino.toString() },
-  };
-  await fs.rename(path.join(root, "inside"), path.join(root, "original"));
-  await fs.mkdir(path.join(root, "inside"));
-  await fs.writeFile(path.join(root, "inside", "private.txt"), "private");
-  await assert.rejects(listWorkspaceDirectory(root, "inside", undefined, identities));
-  await fs.rm(path.join(root, "inside"), { recursive: true });
-  await fs.rename(path.join(root, "original"), path.join(root, "inside"));
-  const moved = root + "-original";
-  await fs.rename(root, moved);
-  t.after(() => fs.rm(moved, { recursive: true, force: true }));
-  await fs.mkdir(root);
-  await fs.writeFile(path.join(root, "private.txt"), "private");
-  await assert.rejects(listWorkspaceDirectory(root, "", undefined, { root: identities.root, directory: identities.root }));
-});
+test(
+  "lazy listing preserves supplied root and directory identities across replacement",
+  { skip: process.platform !== "darwin" },
+  async (t) => {
+    const root = await workspace(t);
+    await fs.mkdir(path.join(root, "inside"));
+    const rootStat = await fs.stat(root, { bigint: true });
+    const directoryStat = await fs.stat(path.join(root, "inside"), { bigint: true });
+    const identities = {
+      root: {
+        path: await fs.realpath(root),
+        device: rootStat.dev.toString(),
+        inode: rootStat.ino.toString(),
+      },
+      directory: { device: directoryStat.dev.toString(), inode: directoryStat.ino.toString() },
+    };
+    await fs.rename(path.join(root, "inside"), path.join(root, "original"));
+    await fs.mkdir(path.join(root, "inside"));
+    await fs.writeFile(path.join(root, "inside", "private.txt"), "private");
+    await assert.rejects(listWorkspaceDirectory(root, "inside", undefined, identities));
+    await fs.rm(path.join(root, "inside"), { recursive: true });
+    await fs.rename(path.join(root, "original"), path.join(root, "inside"));
+    const moved = root + "-original";
+    await fs.rename(root, moved);
+    t.after(() => fs.rm(moved, { recursive: true, force: true }));
+    await fs.mkdir(root);
+    await fs.writeFile(path.join(root, "private.txt"), "private");
+    await assert.rejects(
+      listWorkspaceDirectory(root, "", undefined, {
+        root: identities.root,
+        directory: identities.root,
+      }),
+    );
+  },
+);
 
 test(
   "Linux recovery inspection detects current-user open descriptors",
@@ -378,7 +414,14 @@ test("workspace indexing overlaps at most four stats and preserves numeric tree 
   const root = await workspace(t);
   await fs.mkdir(path.join(root, "src"));
   await fs.mkdir(path.join(root, "dist"));
-  for (const name of ["file10.txt", "file2.txt", "file1.txt", "file3.txt", "file4.txt", "src/child.txt"]) {
+  for (const name of [
+    "file10.txt",
+    "file2.txt",
+    "file1.txt",
+    "file3.txt",
+    "file4.txt",
+    "src/child.txt",
+  ]) {
     await fs.writeFile(path.join(root, name), name);
   }
   const original = fsPromises.stat;
@@ -392,14 +435,20 @@ test("workspace indexing overlaps at most four stats and preserves numeric tree 
     try {
       await new Promise<void>((resolve) => setImmediate(resolve));
       return await original(...args);
-    } finally { active -= 1; }
+    } finally {
+      active -= 1;
+    }
   }) as typeof fsPromises.stat;
   syncBuiltinESMExports();
-  t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
+  t.after(() => {
+    fsPromises.stat = original;
+    syncBuiltinESMExports();
+  });
   const index = await listWorkspaceFiles(root);
-  assert.deepEqual(index.entries.map(entry => entry.path), [
-    "src", "src/child.txt", "file1.txt", "file2.txt", "file3.txt", "file4.txt", "file10.txt",
-  ]);
+  assert.deepEqual(
+    index.entries.map((entry) => entry.path),
+    ["src", "src/child.txt", "file1.txt", "file2.txt", "file3.txt", "file4.txt", "file10.txt"],
+  );
   assert.equal(index.skippedDirectories, 1);
   assert.equal(index.truncated, false);
   assert.equal(calls, 6);
@@ -410,7 +459,8 @@ test("workspace indexing overlaps at most four stats and preserves numeric tree 
 for (const failure of ["cancel", "stat failure"] as const) {
   test(`workspace indexing drains its bounded batch on ${failure}`, async (t) => {
     const root = await workspace(t);
-    for (let index = 0; index < 12; index += 1) await fs.writeFile(path.join(root, `${index}.txt`), "data");
+    for (let index = 0; index < 12; index += 1)
+      await fs.writeFile(path.join(root, `${index}.txt`), "data");
     const controller = new AbortController();
     const original = fsPromises.stat;
     let active = 0;
@@ -426,11 +476,19 @@ for (const failure of ["cancel", "stat failure"] as const) {
           else throw new Error("metadata unavailable");
         }
         return await original(...args);
-      } finally { active -= 1; }
+      } finally {
+        active -= 1;
+      }
     }) as typeof fsPromises.stat;
     syncBuiltinESMExports();
-    t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
-    await assert.rejects(listWorkspaceFiles(root, controller.signal), failure === "cancel" ? /cancelled/ : /metadata unavailable/);
+    t.after(() => {
+      fsPromises.stat = original;
+      syncBuiltinESMExports();
+    });
+    await assert.rejects(
+      listWorkspaceFiles(root, controller.signal),
+      failure === "cancel" ? /cancelled/ : /metadata unavailable/,
+    );
     assert.equal(active, 0, "operation must not release ownership before its reads settle");
     assert.ok(calls <= 4, `started ${calls} metadata operations after failure`);
   });
@@ -445,11 +503,17 @@ test("fresh workspace indexes observe external writes, renames and root replacem
   await fs.writeFile(path.join(root, "first.txt"), "longer external edit");
   await fs.rename(path.join(root, "first.txt"), path.join(root, "second.txt"));
   const refreshed = await listWorkspaceFiles(root);
-  assert.deepEqual(refreshed.entries.map(entry => [entry.path, entry.size]), [["second.txt", 20]]);
+  assert.deepEqual(
+    refreshed.entries.map((entry) => [entry.path, entry.size]),
+    [["second.txt", 20]],
+  );
   await fs.rename(root, path.join(parent, "previous"));
   await fs.mkdir(root);
   await fs.writeFile(path.join(root, "replacement.txt"), "new");
-  assert.deepEqual((await listWorkspaceFiles(root)).entries.map(entry => entry.path), ["replacement.txt"]);
+  assert.deepEqual(
+    (await listWorkspaceFiles(root)).entries.map((entry) => entry.path),
+    ["replacement.txt"],
+  );
 });
 
 test("workspace batches preserve depth cutoff and file versus directory symlinks", async (t) => {
@@ -466,34 +530,57 @@ test("workspace batches preserve depth cutoff and file versus directory symlinks
   await fs.symlink(path.join(root, "nested"), path.join(root, "linked-directory"));
   const index = await listWorkspaceFiles(root);
   assert.equal(index.truncated, true);
-  assert.equal(index.entries.filter(entry => entry.name === "leaf.txt").length, 20);
-  assert.equal(Math.max(...index.entries.map(entry => entry.depth)), 20);
-  assert.equal(index.entries.find(entry => entry.path === "alias.txt")?.kind, "file");
-  assert.equal(index.entries.find(entry => entry.path === "alias.txt")?.size, 4);
-  assert.equal(index.entries.find(entry => entry.path === "broken")?.kind, "symlink");
-  assert.equal(index.entries.find(entry => entry.path === "linked-directory")?.kind, "symlink");
-  assert.equal(index.entries.some(entry => entry.path.startsWith("linked-directory/")), false);
+  assert.equal(index.entries.filter((entry) => entry.name === "leaf.txt").length, 20);
+  assert.equal(Math.max(...index.entries.map((entry) => entry.depth)), 20);
+  assert.equal(index.entries.find((entry) => entry.path === "alias.txt")?.kind, "file");
+  assert.equal(index.entries.find((entry) => entry.path === "alias.txt")?.size, 4);
+  assert.equal(index.entries.find((entry) => entry.path === "broken")?.kind, "symlink");
+  assert.equal(index.entries.find((entry) => entry.path === "linked-directory")?.kind, "symlink");
+  assert.equal(
+    index.entries.some((entry) => entry.path.startsWith("linked-directory/")),
+    false,
+  );
 });
 
 test("queued metadata cancels promptly without releasing another request's active budget", async () => {
   let release!: () => void;
   let started!: () => void;
-  const entered = new Promise<void>(resolve => { started = resolve; });
-  const held = new Promise<void>(resolve => { release = resolve; });
-  const active = mapWorkspaceMetadata([1], async value => { started(); await held; return value; });
+  const entered = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const active = mapWorkspaceMetadata([1], async (value) => {
+    started();
+    await held;
+    return value;
+  });
   await entered;
   const controller = new AbortController();
   let cancelledCalls = 0;
-  const cancelled = mapWorkspaceMetadata([2], async value => { cancelledCalls += 1; return value; }, controller.signal);
+  const cancelled = mapWorkspaceMetadata(
+    [2],
+    async (value) => {
+      cancelledCalls += 1;
+      return value;
+    },
+    controller.signal,
+  );
   const rejection = assert.rejects(cancelled, /cancelled/);
   controller.abort();
   let nextStarted = false;
-  const next = mapWorkspaceMetadata([3], async value => { nextStarted = true; return value; });
+  const next = mapWorkspaceMetadata([3], async (value) => {
+    nextStarted = true;
+    return value;
+  });
   try {
     await rejection;
     assert.equal(cancelledCalls, 0);
     assert.equal(nextStarted, false);
-  } finally { release(); }
+  } finally {
+    release();
+  }
   assert.deepEqual(await active, [1]);
   assert.deepEqual(await next, [3]);
 });
@@ -501,46 +588,74 @@ test("queued metadata cancels promptly without releasing another request's activ
 test("metadata admission bounds its waiting queue and recovers after queued cancellation", async () => {
   let release!: () => void;
   let started!: () => void;
-  const entered = new Promise<void>(resolve => { started = resolve; });
-  const held = new Promise<void>(resolve => { release = resolve; });
-  const active = mapWorkspaceMetadata([1], async value => { started(); await held; return value; });
+  const entered = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const active = mapWorkspaceMetadata([1], async (value) => {
+    started();
+    await held;
+    return value;
+  });
   await entered;
   const controllers = Array.from({ length: 64 }, () => new AbortController());
   let waitingCalls = 0;
-  const queued = controllers.map(controller => mapWorkspaceMetadata([2], async value => {
-    waitingCalls += 1;
-    return value;
-  }, controller.signal).then(() => null, error => error as Error));
+  const queued = controllers.map((controller) =>
+    mapWorkspaceMetadata(
+      [2],
+      async (value) => {
+        waitingCalls += 1;
+        return value;
+      },
+      controller.signal,
+    ).then(
+      () => null,
+      (error) => error as Error,
+    ),
+  );
   try {
-    await assert.rejects(mapWorkspaceMetadata([3], async value => value), /Too many workspace metadata requests/);
-    controllers.forEach(controller => controller.abort());
-    assert.ok((await Promise.all(queued)).every(error => error?.message.includes("cancelled")));
+    await assert.rejects(
+      mapWorkspaceMetadata([3], async (value) => value),
+      /Too many workspace metadata requests/,
+    );
+    controllers.forEach((controller) => controller.abort());
+    assert.ok((await Promise.all(queued)).every((error) => error?.message.includes("cancelled")));
     assert.equal(waitingCalls, 0);
   } finally {
-    controllers.forEach(controller => controller.abort());
+    controllers.forEach((controller) => controller.abort());
     release();
     await active;
   }
-  assert.deepEqual(await mapWorkspaceMetadata([4], async value => value), [4]);
+  assert.deepEqual(await mapWorkspaceMetadata([4], async (value) => value), [4]);
 });
 
 test("a synchronous metadata inspector failure still drains its started siblings", async () => {
   let release!: () => void;
   let started!: () => void;
-  const held = new Promise<void>(resolve => { release = resolve; });
-  const entered = new Promise<void>(resolve => { started = resolve; });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise<void>((resolve) => {
+    started = resolve;
+  });
   let settled = false;
-  const operation = mapWorkspaceMetadata([1, 2], value => {
+  const operation = mapWorkspaceMetadata([1, 2], (value) => {
     if (value === 1) throw new Error("metadata failed synchronously");
     started();
     return held.then(() => value);
-  }).finally(() => { settled = true; });
+  }).finally(() => {
+    settled = true;
+  });
   const rejection = assert.rejects(operation, /metadata failed synchronously/);
   try {
     await entered;
-    await new Promise<void>(resolve => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(settled, false);
-  } finally { release(); }
+  } finally {
+    release();
+  }
   await rejection;
-  assert.deepEqual(await mapWorkspaceMetadata([3], async value => value), [3]);
+  assert.deepEqual(await mapWorkspaceMetadata([3], async (value) => value), [3]);
 });

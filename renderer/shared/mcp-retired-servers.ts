@@ -5,12 +5,19 @@
 
 /** A saved server entry with the retired `"sse"` transport. */
 export function isRetiredMcpServerEntry(entry: unknown): boolean {
-  return Boolean(entry && typeof entry === "object" && !Array.isArray(entry) && (entry as { transport?: unknown }).transport === "sse");
+  return Boolean(
+    entry &&
+    typeof entry === "object" &&
+    !Array.isArray(entry) &&
+    (entry as { transport?: unknown }).transport === "sse",
+  );
 }
 
 /** The list without retired entries; anything that is not an array is returned as is. */
 export function withoutRetiredMcpServers<T>(value: T): T {
-  return (Array.isArray(value) ? value.filter((entry) => !isRetiredMcpServerEntry(entry)) : value) as T;
+  return (
+    Array.isArray(value) ? value.filter((entry) => !isRetiredMcpServerEntry(entry)) : value
+  ) as T;
 }
 
 /** Ids of saved legacy SSE servers, whose stored credentials still need cleanup. */

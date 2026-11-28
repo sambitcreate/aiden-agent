@@ -42,13 +42,21 @@ if (mode === "lock") {
   holdForever();
 } else if (mode === "host") {
   const { models } = createFauxModels();
-  const host = await createBotHarnessHost({ profileDir: args[0], buildRegistry: () => createRegistry(), models });
+  const host = await createBotHarnessHost({
+    profileDir: args[0],
+    buildRegistry: () => createRegistry(),
+    models,
+  });
   emit("HOST", "unavailable" in host ? { unavailable: host.unavailable } : { ok: true });
   holdForever();
 } else if (mode === "stream") {
   const [profileDir, botId, requestId] = args;
   const { models } = createFauxModels([slowAnswer()], { tokensPerSecond: 40 });
-  const host = await createBotHarnessHost({ profileDir, buildRegistry: () => createRegistry(), models });
+  const host = await createBotHarnessHost({
+    profileDir,
+    buildRegistry: () => createRegistry(),
+    models,
+  });
   if ("unavailable" in host) throw new Error("profile locked");
   const { harness, conversation } = await host.open(botId);
   await conversation.configure({ model: FAUX_MODEL_REF }, ctx);
@@ -61,7 +69,10 @@ if (mode === "lock") {
     advance: (publication) => {
       if (announced) return;
       const stored = publication.changes.some(
-        (change) => change.type === "document" && change.kind === "change" && JSON.stringify(change.value).includes("word word word"),
+        (change) =>
+          change.type === "document" &&
+          change.kind === "change" &&
+          JSON.stringify(change.value).includes("word word word"),
       );
       if (stored) {
         announced = true;

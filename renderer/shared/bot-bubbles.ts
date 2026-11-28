@@ -152,7 +152,10 @@ export interface BotBubbleOverlayInfo {
   primary?: boolean;
 }
 
-export const DEFAULT_BOT_BUBBLE_SETTINGS: BotBubbleSettings = { enabled: true, floatOverApps: true };
+export const DEFAULT_BOT_BUBBLE_SETTINGS: BotBubbleSettings = {
+  enabled: true,
+  floatOverApps: true,
+};
 
 export const EMPTY_BOT_BUBBLE_STATE: BotBubbleState = {
   bubbles: [],
@@ -183,7 +186,8 @@ export function parseBotBubblePlacement(raw: unknown): BotBubblePlacement | null
   const value = raw as Record<string, unknown>;
   if (value.side !== "left" && value.side !== "right") return null;
   if (!finite(value.y)) return null;
-  const displayId = value.displayId === null || value.displayId === undefined ? null : value.displayId;
+  const displayId =
+    value.displayId === null || value.displayId === undefined ? null : value.displayId;
   if (displayId !== null && (!finite(displayId) || !Number.isInteger(displayId))) return null;
   return { side: value.side, y: clampBubbleShare(value.y), displayId };
 }
@@ -191,8 +195,10 @@ export function parseBotBubblePlacement(raw: unknown): BotBubblePlacement | null
 export function parseBotBubbleRect(raw: unknown): BotBubbleRect | null {
   if (typeof raw !== "object" || raw === null) return null;
   const value = raw as Record<string, unknown>;
-  if (!finite(value.x) || !finite(value.y) || !finite(value.width) || !finite(value.height)) return null;
-  if (value.width <= 0 || value.height <= 0 || value.width > 20_000 || value.height > 20_000) return null;
+  if (!finite(value.x) || !finite(value.y) || !finite(value.width) || !finite(value.height))
+    return null;
+  if (value.width <= 0 || value.height <= 0 || value.width > 20_000 || value.height > 20_000)
+    return null;
   return { x: value.x, y: value.y, width: value.width, height: value.height };
 }
 
@@ -214,16 +220,29 @@ export function parseBotBubbleState(raw: unknown): BotBubbleState {
     }
   }
   const recents = Array.isArray(value.recents)
-    ? value.recents.filter((id): id is string => isBotBubbleBotId(id) && !seen.has(id)).slice(0, BOT_BUBBLE_RECENT_LIMIT)
+    ? value.recents
+        .filter((id): id is string => isBotBubbleBotId(id) && !seen.has(id))
+        .slice(0, BOT_BUBBLE_RECENT_LIMIT)
     : [];
-  const openBotId = isBotBubbleBotId(value.openBotId) && seen.has(value.openBotId) ? value.openBotId : null;
-  const rawSettings = (typeof value.settings === "object" && value.settings !== null ? value.settings : {}) as Record<string, unknown>;
+  const openBotId =
+    isBotBubbleBotId(value.openBotId) && seen.has(value.openBotId) ? value.openBotId : null;
+  const rawSettings = (
+    typeof value.settings === "object" && value.settings !== null ? value.settings : {}
+  ) as Record<string, unknown>;
   const settings: BotBubbleSettings = {
     enabled: rawSettings.enabled !== false,
     floatOverApps: rawSettings.floatOverApps !== false,
   };
-  const host: BotBubbleHost = value.host === "overlay" || value.host === "window" ? value.host : "off";
-  return { bubbles, openBotId, recents, settings, host, floatOverAppsAvailable: value.floatOverAppsAvailable === true };
+  const host: BotBubbleHost =
+    value.host === "overlay" || value.host === "window" ? value.host : "off";
+  return {
+    bubbles,
+    openBotId,
+    recents,
+    settings,
+    host,
+    floatOverAppsAvailable: value.floatOverAppsAvailable === true,
+  };
 }
 
 export function isBotBubbled(state: BotBubbleState, botId: string): boolean {

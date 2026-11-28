@@ -12,14 +12,29 @@ const PORTRAIT_FRAME = { width: 1206, height: 2622 };
 
 test("a portrait-sized iOS frame reporting landscape or upside down is turned upright", () => {
   assert.equal(deviceDisplayRotation("ios", { ...PORTRAIT_FRAME, orientation: "portrait" }), 0);
-  assert.equal(deviceDisplayRotation("ios", { ...PORTRAIT_FRAME, orientation: "landscape_left" }), 90);
-  assert.equal(deviceDisplayRotation("ios", { ...PORTRAIT_FRAME, orientation: "landscape_right" }), -90);
-  assert.equal(deviceDisplayRotation("ios", { ...PORTRAIT_FRAME, orientation: "portrait_upside_down" }), 180);
+  assert.equal(
+    deviceDisplayRotation("ios", { ...PORTRAIT_FRAME, orientation: "landscape_left" }),
+    90,
+  );
+  assert.equal(
+    deviceDisplayRotation("ios", { ...PORTRAIT_FRAME, orientation: "landscape_right" }),
+    -90,
+  );
+  assert.equal(
+    deviceDisplayRotation("ios", { ...PORTRAIT_FRAME, orientation: "portrait_upside_down" }),
+    180,
+  );
 });
 
 test("frames that are already landscape, Android frames, and unknown screens are drawn as they come", () => {
-  assert.equal(deviceDisplayRotation("ios", { width: 2622, height: 1206, orientation: "landscape_left" }), 0);
-  assert.equal(deviceDisplayRotation("android", { ...PORTRAIT_FRAME, orientation: "landscape_left" }), 0);
+  assert.equal(
+    deviceDisplayRotation("ios", { width: 2622, height: 1206, orientation: "landscape_left" }),
+    0,
+  );
+  assert.equal(
+    deviceDisplayRotation("android", { ...PORTRAIT_FRAME, orientation: "landscape_left" }),
+    0,
+  );
   assert.equal(deviceDisplayRotation("ios", null), 0);
 });
 
@@ -48,7 +63,8 @@ test("the screen box keeps the displayed aspect whether its parent is width- or 
     const match = /^min\(100(cq[wh]), calc\(100(cq[wh]) ([*/]) ([\d.]+)\)\)$/u.exec(expression);
     assert.ok(match, expression);
     const unit = (name: string) => (name === "cqw" ? cqw : cqh);
-    const scaled = match[3] === "*" ? unit(match[2]!) * Number(match[4]) : unit(match[2]!) / Number(match[4]);
+    const scaled =
+      match[3] === "*" ? unit(match[2]!) * Number(match[4]) : unit(match[2]!) / Number(match[4]);
     return Math.min(unit(match[1]!), scaled);
   };
   for (const [cqw, cqh] of [
@@ -65,11 +81,18 @@ test("the screen box keeps the displayed aspect whether its parent is width- or 
 
 test("the overlay maps its tree into the displayed screen once a raw frame is turned", () => {
   const raw = { ...PORTRAIT_FRAME, orientation: "landscape_left" as const };
-  assert.deepEqual(displayedAxScreen(raw, 90), { width: 2622, height: 1206, orientation: "landscape_left" });
-  assert.deepEqual(displayedAxScreen({ ...PORTRAIT_FRAME, orientation: "portrait_upside_down" }, 180), {
-    ...PORTRAIT_FRAME,
-    orientation: "portrait",
+  assert.deepEqual(displayedAxScreen(raw, 90), {
+    width: 2622,
+    height: 1206,
+    orientation: "landscape_left",
   });
+  assert.deepEqual(
+    displayedAxScreen({ ...PORTRAIT_FRAME, orientation: "portrait_upside_down" }, 180),
+    {
+      ...PORTRAIT_FRAME,
+      orientation: "portrait",
+    },
+  );
   assert.equal(displayedAxScreen(raw, 0), raw);
   assert.equal(displayedAxScreen(null, 90), null);
 });

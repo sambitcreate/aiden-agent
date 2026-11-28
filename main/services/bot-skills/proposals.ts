@@ -4,7 +4,10 @@
 // Records live in `<profile>/bots/<dir>/skill-proposals.json`, which Bot file
 // tools cannot write.
 
-import { BOT_SUGGESTION_LIMIT_MESSAGE as SUGGESTION_LIMIT, type BotSuggestionBudget } from "../bot-runtime/bot-suggestion-budget.js";
+import {
+  BOT_SUGGESTION_LIMIT_MESSAGE as SUGGESTION_LIMIT,
+  type BotSuggestionBudget,
+} from "../bot-runtime/bot-suggestion-budget.js";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -43,12 +46,17 @@ export interface BotSkillProposalDependencies {
   homePath(botId: string): Promise<string>;
   approvals: Pick<BotSkillApprovals, "approve" | "revoke">;
   /** Skill names already in use, and where they come from. */
-  existingSources(botId: string): Promise<ReadonlyMap<string, "configured" | "workspace" | "global">>;
+  existingSources(
+    botId: string,
+  ): Promise<ReadonlyMap<string, "configured" | "workspace" | "global">>;
   appendEntry(botId: string, kind: string, data: Record<string, unknown>): Promise<void>;
   /** The skill set changed: reload skills and Bot authority. */
   invalidate(): void;
   /** Records an added skill in the learning history (before/after file text). */
-  recordAdded?(botId: string, change: { name: string; before: string | null; after: string }): Promise<void>;
+  recordAdded?(
+    botId: string,
+    change: { name: string; before: string | null; after: string },
+  ): Promise<void>;
   /** The shared cap on a Bot's own suggestions (routines, skills, lessons). */
   suggestionBudget?: BotSuggestionBudget;
   now?(): number;
@@ -63,12 +71,15 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
   const now = deps.now ?? Date.now;
   const newId = deps.newId ?? randomUUID;
   const serial = createKeyedSerial();
-  const fileOf = (botId: string) => path.join(botSessionDirectory(deps.profileDir(), botId), BOT_SKILL_PROPOSALS_FILE);
+  const fileOf = (botId: string) =>
+    path.join(botSessionDirectory(deps.profileDir(), botId), BOT_SKILL_PROPOSALS_FILE);
 
   async function load(botId: string): Promise<StoredProposal[]> {
     try {
       const parsed = JSON.parse(await fs.readFile(fileOf(botId), "utf8")) as unknown;
-      return Array.isArray(parsed) ? (parsed as StoredProposal[]).filter((record) => typeof record?.proposalId === "string") : [];
+      return Array.isArray(parsed)
+        ? (parsed as StoredProposal[]).filter((record) => typeof record?.proposalId === "string")
+        : [];
     } catch {
       return [];
     }
@@ -77,14 +88,20 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
   async function save(botId: string, records: StoredProposal[]): Promise<void> {
     const pending = records.filter((record) => record.status === "pending");
     const settled = records.filter((record) => record.status !== "pending").slice(-SETTLED_KEPT);
-    await writeJsonAtomic(fileOf(botId), [...records.filter((record) => pending.includes(record) || settled.includes(record))], {
-      mode: 0o600,
-      mkdirMode: 0o700,
-    });
+    await writeJsonAtomic(
+      fileOf(botId),
+      [...records.filter((record) => pending.includes(record) || settled.includes(record))],
+      {
+        mode: 0o600,
+        mkdirMode: 0o700,
+      },
+    );
   }
 
   async function currentFile(botId: string, name: string): Promise<string | undefined> {
-    return fs.readFile(botHomeSkillFile(await deps.homePath(botId), name), "utf8").catch(() => undefined);
+    return fs
+      .readFile(botHomeSkillFile(await deps.homePath(botId), name), "utf8")
+      .catch(() => undefined);
   }
 
   type Append = (kind: string, data: Record<string, unknown>) => Promise<void>;
@@ -95,15 +112,29 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
       botId: string,
       input: BotSkillDraft & { reason?: string },
       append: Append = (kind, data) => deps.appendEntry(botId, kind, data),
-    ): Promise<{ ok: true; proposalId: string } | { ok: false; code: "invalid" | "too_many_pending" | "suggestion_limit"; errors: string[] }> {
+    ): Promise<
+      | { ok: true; proposalId: string }
+      | { ok: false; code: "invalid" | "too_many_pending" | "suggestion_limit"; errors: string[] }
+    > {
       return serial(botId, async () => {
         const records = await load(botId);
-        if (records.filter((record) => record.status === "pending").length >= BOT_SKILL_PROPOSAL_LIMITS.pendingPerBot) {
-          return { ok: false, code: "too_many_pending", errors: ["The person has a skill to look at already. Wait for their answer."] };
+        if (
+          records.filter((record) => record.status === "pending").length >=
+          BOT_SKILL_PROPOSAL_LIMITS.pendingPerBot
+        ) {
+          return {
+            ok: false,
+            code: "too_many_pending",
+            errors: ["The person has a skill to look at already. Wait for their answer."],
+          };
         }
         const reason = input.reason?.trim();
         if (reason && [...reason].length > BOT_SKILL_PROPOSAL_LIMITS.reasonChars) {
-          return { ok: false, code: "invalid", errors: [`The reason is at most ${BOT_SKILL_PROPOSAL_LIMITS.reasonChars} characters.`] };
+          return {
+            ok: false,
+            code: "invalid",
+            errors: [`The reason is at most ${BOT_SKILL_PROPOSAL_LIMITS.reasonChars} characters.`],
+          };
         }
         const current = await currentFile(botId, input.name.trim());
         const checked = validateBotSkillProposal(input, {
@@ -138,7 +169,11 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
           return true;
         };
         // A skill the Bot offers is one of its own suggestions; a skill found in its folder is not.
-        if (deps.suggestionBudget ? !(await deps.suggestionBudget.offer(botId, "skill", show)) : !(await show())) {
+        if (
+          deps.suggestionBudget
+            ? !(await deps.suggestionBudget.offer(botId, "skill", show))
+            : !(await show())
+        ) {
           return { ok: false, code: "suggestion_limit", errors: [SUGGESTION_LIMIT] };
         }
         return { ok: true, proposalId: record.proposalId };
@@ -153,7 +188,13 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
         const records = await load(botId);
         const fingerprint = botSkillContentFingerprint(skill);
         // Asked once per content: a "Not now" stays answered after a restart.
-        if (records.some((record) => record.origin === "folder" && botSkillContentFingerprint(record) === fingerprint)) return;
+        if (
+          records.some(
+            (record) =>
+              record.origin === "folder" && botSkillContentFingerprint(record) === fingerprint,
+          )
+        )
+          return;
         const record: StoredProposal = {
           proposalId: newId(),
           origin: "folder",
@@ -177,14 +218,22 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
     },
 
     /** The person's answer. Add writes (for a proposal) and approves the exact content. */
-    async respond(input: { botId: string; proposalId: string; decision: "add" | "dismiss" }): Promise<{ status: "added" | "dismissed" }> {
+    async respond(input: {
+      botId: string;
+      proposalId: string;
+      decision: "add" | "dismiss";
+    }): Promise<{ status: "added" | "dismissed" }> {
       const result = await service.answer(input);
       if (!result.ok) throw new Error("This skill suggestion is no longer available.");
       return { status: result.status };
     },
 
     /** `respond` as a result: a suggestion gone by the time the answer is applied is `not_found`, never a throw. */
-    answer(input: { botId: string; proposalId: string; decision: "add" | "dismiss" }): Promise<{ ok: true; status: "added" | "dismissed" } | { ok: false; code: "not_found" }> {
+    answer(input: {
+      botId: string;
+      proposalId: string;
+      decision: "add" | "dismiss";
+    }): Promise<{ ok: true; status: "added" | "dismissed" } | { ok: false; code: "not_found" }> {
       return serial(input.botId, async () => {
         const records = await load(input.botId);
         const index = records.findIndex((record) => record.proposalId === input.proposalId);
@@ -200,14 +249,21 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
             const staging = `${target}.${process.pid}.${Date.now()}.tmp`;
             await fs.writeFile(staging, record.file!, { mode: 0o600 });
             await fs.rename(staging, target);
-            await deps.recordAdded?.(input.botId, { name: record.name, before, after: record.file! });
+            await deps.recordAdded?.(input.botId, {
+              name: record.name,
+              before,
+              after: record.file!,
+            });
           }
           const fingerprint = botSkillContentFingerprint(record);
           await deps.approvals.approve(input.botId, fingerprint, fingerprint);
           deps.invalidate();
         }
         const status = input.decision === "add" ? "added" : "dismissed";
-        await deps.appendEntry(input.botId, BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND, { proposalId: record.proposalId, status });
+        await deps.appendEntry(input.botId, BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND, {
+          proposalId: record.proposalId,
+          status,
+        });
         records[index] = { ...record, status, decidedAt: now() };
         await save(input.botId, records);
         return { ok: true as const, status };

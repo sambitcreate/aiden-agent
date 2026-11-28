@@ -126,7 +126,10 @@ test("a release build refreshes model capabilities before building and never run
   const refresh = scripts.indexOf("release:update-model-capabilities");
   assert.ok(refresh >= 0, "the release refreshes the packaged models.dev snapshot");
   assert.ok(refresh < scripts.indexOf("build"), "the refresh runs before the app is built");
-  assert.ok(refresh < scripts.indexOf("package:model-catalog"), "the refresh runs before the catalog is packaged");
+  assert.ok(
+    refresh < scripts.indexOf("package:model-catalog"),
+    "the refresh runs before the catalog is packaged",
+  );
   assert.equal(scripts.includes("release:update-model-snapshots"), false);
 });
 

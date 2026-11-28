@@ -1,7 +1,15 @@
 // Request and response shapes for the imageWorkflows IPC channels. Electron-free:
 // shared by the main-process handlers and the renderer client.
 import type { ImageModelOption } from "./port.js";
-import type { ImageRunConsentPlan, ImageMediaType, OutputRef, RunScope, RunSnapshot, RunState, RunSummary } from "./run-types.js";
+import type {
+  ImageRunConsentPlan,
+  ImageMediaType,
+  OutputRef,
+  RunScope,
+  RunSnapshot,
+  RunState,
+  RunSummary,
+} from "./run-types.js";
 import type { ImageWorkflowTemplate } from "./templates.js";
 import type { WorkflowDocV1, WorkflowSummary } from "./schema.js";
 
@@ -70,7 +78,14 @@ export type ImportImageRequest =
   | { source: "bytes"; name: string; mimeType: string; data: Uint8Array };
 
 export type ImportImageResponse =
-  | { assetId: string; mimeType: ImageMediaType; width: number; height: number; bytes: number; url: string }
+  | {
+      assetId: string;
+      mimeType: ImageMediaType;
+      width: number;
+      height: number;
+      bytes: number;
+      url: string;
+    }
   | { cancelled: true };
 
 export interface PrepareRunRequest {
@@ -81,7 +96,9 @@ export interface PrepareRunRequest {
 
 export type PrepareRunResponse = { plan: ImageRunConsentPlan } | { issues: GraphIssue[] };
 
-export type StartRunResponse = { runId: string } | { error: "expired" | "stale" | "model-unavailable" | "too-many-runs" };
+export type StartRunResponse =
+  | { runId: string }
+  | { error: "expired" | "stale" | "model-unavailable" | "too-many-runs" };
 
 export type GetRunRequest = { runId: string } | { workflowId: string };
 
@@ -158,4 +175,9 @@ export type ImageActionRequest =
 /** A failed save-all that still wrote some files carries `savedId`, so the folder can be shown. */
 export type ImageActionResponse =
   | { ok: true; url?: string; count?: number; savedId?: string }
-  | { ok: false; reason: "cancelled" | "not-found" | "unsupported" | "failed"; message?: string; savedId?: string };
+  | {
+      ok: false;
+      reason: "cancelled" | "not-found" | "unsupported" | "failed";
+      message?: string;
+      savedId?: string;
+    };

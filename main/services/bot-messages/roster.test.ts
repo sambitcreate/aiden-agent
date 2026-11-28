@@ -5,7 +5,9 @@ import { SpendingDispatchError } from "../spending-dispatch-ledger.js";
 import { projectBotMessageRoster } from "./roster.js";
 
 test("roster reports local model, budget and pause availability independently for each Bot", async () => {
-  const bots = ["ready", "paused", "no-model", "over-budget", "unreadable"].map((id) => botFixture({ id, name: id }));
+  const bots = ["ready", "paused", "no-model", "over-budget", "unreadable"].map((id) =>
+    botFixture({ id, name: id }),
+  );
   const reports: string[] = [];
   const rows = await projectBotMessageRoster(bots, {
     paused: async (id) => {
@@ -33,17 +35,21 @@ test("roster reports local model, budget and pause availability independently fo
 
 test("a Bot whose last request has an unknown cost stays reachable and is not reported as unreadable", async () => {
   const reports: unknown[] = [];
-  const rows = await projectBotMessageRoster([botFixture({ id: "unsure", name: "Unsure" }), botFixture({ id: "broken", name: "Broken" })], {
-    paused: async () => false,
-    hasModel: async () => true,
-    spendingRefusal: async (id) => {
-      if (id === "unsure") throw new SpendingDispatchError("uncertain", "A previous request may have been billed.");
-      throw new Error("spending file damaged");
+  const rows = await projectBotMessageRoster(
+    [botFixture({ id: "unsure", name: "Unsure" }), botFixture({ id: "broken", name: "Broken" })],
+    {
+      paused: async () => false,
+      hasModel: async () => true,
+      spendingRefusal: async (id) => {
+        if (id === "unsure")
+          throw new SpendingDispatchError("uncertain", "A previous request may have been billed.");
+        throw new Error("spending file damaged");
+      },
+      report: (id) => {
+        reports.push(id);
+      },
     },
-    report: (id) => {
-      reports.push(id);
-    },
-  });
+  );
   assert.deepEqual(
     rows.map((row) => [row.id, row.unavailable]),
     [

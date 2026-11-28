@@ -47,9 +47,17 @@ test("an open issue shows its title, body and action buttons and calls onAct", a
 
 test("an access issue offers Allow this folder and calls onAct with allow_folder", async () => {
   const actions: BotIssueAction[] = [];
-  render(<BotIssueCard issue={{ ...ISSUE, kind: "access_needed", actions: [{ kind: "allow_folder" }] }} onAct={(action) => { actions.push(action); }} />);
+  render(
+    <BotIssueCard
+      issue={{ ...ISSUE, kind: "access_needed", actions: [{ kind: "allow_folder" }] }}
+      onAct={(action) => {
+        actions.push(action);
+      }}
+    />,
+  );
   const button = screen.getByRole("button", { name: "Allow this folder" });
-  button.focus(); assert.equal(document.activeElement, button);
+  button.focus();
+  assert.equal(document.activeElement, button);
   fireEvent.click(button);
   await waitFor(() => assert.deepEqual(actions, [{ kind: "allow_folder" }]));
 });
@@ -59,7 +67,10 @@ test("buttons keep focus-visible styling", () => {
   const buttons = screen.getAllByRole("button");
   // Tab order is document order for controls at tabIndex 0; nothing is
   // removed from it, and each action can take keyboard focus.
-  assert.deepEqual(buttons.map((button) => button.tabIndex), [0, 0]);
+  assert.deepEqual(
+    buttons.map((button) => button.tabIndex),
+    [0, 0],
+  );
   for (const button of buttons) {
     button.focus();
     assert.equal(document.activeElement, button, button.textContent ?? "");
@@ -68,14 +79,24 @@ test("buttons keep focus-visible styling", () => {
   for (const button of buttons) assert.equal(button.tagName, "BUTTON");
 });
 
-
 test("an access issue has a Not now exit that sends only dismissal", async () => {
   const actions: BotIssueAction[] = [];
-  render(<BotIssueCard issue={{ ...ISSUE, kind: "access_needed", actions: [{kind: "dismiss_access"}, {kind: "open_settings", section: "access"}] }} onAct={(action) => { actions.push(action); }} />);
+  render(
+    <BotIssueCard
+      issue={{
+        ...ISSUE,
+        kind: "access_needed",
+        actions: [{ kind: "dismiss_access" }, { kind: "open_settings", section: "access" }],
+      }}
+      onAct={(action) => {
+        actions.push(action);
+      }}
+    />,
+  );
   assert.deepEqual(buttonNames(), ["Not now", "Review access"]);
-  const dismiss = screen.getByRole("button", {name: "Not now"});
+  const dismiss = screen.getByRole("button", { name: "Not now" });
   dismiss.focus();
   assert.equal(document.activeElement, dismiss);
   fireEvent.click(dismiss);
-  await waitFor(() => assert.deepEqual(actions, [{kind: "dismiss_access"}]));
+  await waitFor(() => assert.deepEqual(actions, [{ kind: "dismiss_access" }]));
 });

@@ -1,4 +1,12 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from "../../platform.js";
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  nativeImage,
+  shell,
+} from "../../platform.js";
 import { IMAGE_EXTENSIONS } from "../../services/create-images/image-export.js";
 import { createImagesRuntime } from "../../services/create-images/main.js";
 import { rendererDocumentOwner } from "../../services/renderer-document-owner.js";
@@ -19,9 +27,13 @@ function parentWindow(event: Electron.IpcMainInvokeEvent): Electron.BrowserWindo
 export function registerCreateImagesIpc(): void {
   registerCreateImagesHandlers<Electron.IpcMainInvokeEvent>({
     enabled: createImagesEnabled(),
-    handle: (channel, listener) => ipcMain.handle(channel, (event, input: unknown) => listener(event, input)),
+    handle: (channel, listener) =>
+      ipcMain.handle(channel, (event, input: unknown) => listener(event, input)),
     owner: (event) => {
-      const owner = rendererDocumentOwner(event, () => new Error("Images can only be used from the active Aiden window."));
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Images can only be used from the active Aiden window."),
+      );
       return { key: `${owner.id}:${owner.documentId}`, grants: owner };
     },
     services: () => createImagesRuntime.ready(),
@@ -32,7 +44,9 @@ export function registerCreateImagesIpc(): void {
         properties: ["openFile"],
         filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }],
       };
-      const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
+      const result = parent
+        ? await dialog.showOpenDialog(parent, options)
+        : await dialog.showOpenDialog(options);
       const file = result.canceled ? undefined : result.filePaths[0];
       if (!file) return null;
       return readPickedImage(file);
@@ -44,10 +58,17 @@ export function registerCreateImagesIpc(): void {
         const options: Electron.SaveDialogOptions = {
           title: "Save image",
           defaultPath,
-          filters: [{ name: extension.toUpperCase(), extensions: extension === "jpg" ? ["jpg", "jpeg"] : [extension] }],
+          filters: [
+            {
+              name: extension.toUpperCase(),
+              extensions: extension === "jpg" ? ["jpg", "jpeg"] : [extension],
+            },
+          ],
           properties: ["createDirectory", "showOverwriteConfirmation"],
         };
-        const result = parent ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options);
+        const result = parent
+          ? await dialog.showSaveDialog(parent, options)
+          : await dialog.showSaveDialog(options);
         return result.canceled || !result.filePath ? null : result.filePath;
       },
       chooseFolder: async (event, { defaultPath }) => {
@@ -58,7 +79,9 @@ export function registerCreateImagesIpc(): void {
           buttonLabel: "Save",
           properties: ["openDirectory", "createDirectory"],
         };
-        const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
+        const result = parent
+          ? await dialog.showOpenDialog(parent, options)
+          : await dialog.showOpenDialog(options);
         return result.canceled ? null : (result.filePaths[0] ?? null);
       },
       copyImage: (bytes) => {
@@ -77,7 +100,11 @@ export function registerCreateImagesIpc(): void {
         const image = nativeImage.createFromPath(file);
         const icon = image.isEmpty()
           ? nativeImage.createFromDataURL(FALLBACK_DRAG_ICON)
-          : image.resize(image.getSize().width >= image.getSize().height ? { width: DRAG_ICON_EDGE } : { height: DRAG_ICON_EDGE });
+          : image.resize(
+              image.getSize().width >= image.getSize().height
+                ? { width: DRAG_ICON_EDGE }
+                : { height: DRAG_ICON_EDGE },
+            );
         event.sender.startDrag({ file, icon });
       },
     },

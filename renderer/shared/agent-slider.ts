@@ -5,10 +5,7 @@
 
 import { BOT_THINKING_LEVEL_LABELS } from "./bot-routine-models.js";
 import { MAX_MODEL_ID_CHARS, MAX_PROVIDER_ID_CHARS } from "./chat-message-contract.js";
-import {
-  isGenerationThinkingLevel,
-  type GenerationThinkingLevel,
-} from "./generation-thinking.js";
+import { isGenerationThinkingLevel, type GenerationThinkingLevel } from "./generation-thinking.js";
 import { isModelHidden, type HiddenModelsByProvider } from "./model-visibility.js";
 
 export const AGENT_SLIDER_MIN_STOPS = 3;
@@ -77,11 +74,7 @@ function validProviderId(value: unknown): value is string {
 }
 
 function validModel(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.trim().length > 0 &&
-    value.length <= MAX_MODEL_ID_CHARS
-  );
+  return typeof value === "string" && value.trim().length > 0 && value.length <= MAX_MODEL_ID_CHARS;
 }
 
 type StopResult = { stop: AgentSliderStop } | { error: string };
@@ -118,7 +111,9 @@ function parseStop(value: unknown, strictLevel: boolean): StopResult {
     stop: {
       id: value.id,
       label,
-      ...(hasProvider ? { providerId: value.providerId as string, model: value.model as string } : {}),
+      ...(hasProvider
+        ? { providerId: value.providerId as string, model: value.model as string }
+        : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
     },
   };
@@ -185,9 +180,9 @@ export function parseAgentSliderPatch(value: unknown): AgentSliderSettings {
  * throws. The slider itself lives in the portable config and is refused here:
  * it changes only through `settings:setAgentSlider`.
  */
-export function parseAgentSliderSettingsPatch(
-  patch: Record<string, unknown>,
-): { lastThinkingLevel?: GenerationThinkingLevel | undefined } {
+export function parseAgentSliderSettingsPatch(patch: Record<string, unknown>): {
+  lastThinkingLevel?: GenerationThinkingLevel | undefined;
+} {
   if (patch.agentSlider !== undefined) {
     throw new Error("The Agent Slider changes only through its own settings call.");
   }
@@ -300,10 +295,13 @@ export function activeStopIndex(
 /** A fresh "stop_" + 8 hex id. */
 export function randomStopId(): string {
   const bytes = new Uint8Array(4);
-  const cryptoApi = (globalThis as { crypto?: { getRandomValues?: (array: Uint8Array) => Uint8Array } })
-    .crypto;
+  const cryptoApi = (
+    globalThis as { crypto?: { getRandomValues?: (array: Uint8Array) => Uint8Array } }
+  ).crypto;
   if (cryptoApi?.getRandomValues) cryptoApi.getRandomValues(bytes);
-  else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+  else
+    for (let index = 0; index < bytes.length; index += 1)
+      bytes[index] = Math.floor(Math.random() * 256);
   return `stop_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
@@ -329,9 +327,10 @@ export function seedAgentSlider(
     }
     throw new Error("Could not create a unique slider stop id.");
   };
-  const assigned = selection.providerId && selection.model
-    ? { providerId: selection.providerId, model: selection.model }
-    : {};
+  const assigned =
+    selection.providerId && selection.model
+      ? { providerId: selection.providerId, model: selection.model }
+      : {};
   const ladder = [...new Set(levels.filter(isGenerationThinkingLevel))];
   if (ladder.length >= AGENT_SLIDER_MIN_STOPS && "providerId" in assigned) {
     let kept = ladder.slice(0, AGENT_SLIDER_MAX_STOPS);

@@ -20,8 +20,11 @@ Before opening a PR, run the checks relevant to the areas you changed:
 ```bash
 npm test
 npm run type-check
+npm run format:check
 npm run lint
 ```
+
+Run `npm run format` to format modified files with `oxfmt` (`.oxfmtrc.json`). Bulk formatting revisions are recorded in `.git-blame-ignore-revs`; configure `git config blame.ignoreRevsFile .git-blame-ignore-revs` locally so `git blame` skips them. If an open PR branch needs updates across a formatting commit on `main`, merge `origin/main` into the branch (do not rebase or force-push) and run `npm run format`.
 
 For faster scoped runs, you can use `npm run test:ci:core-git`, `npm run test:ci:runtime-subagents`, or `npm run test:ci:renderer-other` (see [docs/development.md](docs/development.md)).
 

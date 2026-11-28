@@ -13,73 +13,94 @@ test("the Bots page lists only Bots, opens the latest one, and its panel shows a
   await finishLmStudioOnboarding(page);
   await page.locator("[data-environment-toggle]").click();
   await expect(page.locator("#environment-panel")).toHaveAttribute("data-state", "open");
-  const workspaceTabs = await page.evaluate(() => localStorage.getItem("aiden-agent.environment.open-tabs-v1"));
+  const workspaceTabs = await page.evaluate(() =>
+    localStorage.getItem("aiden-agent.environment.open-tabs-v1"),
+  );
 
-  await aiden.app.evaluate(({ ipcMain }, bots) => {
-    const byId = new Map(bots.map((bot) => [bot.id, bot]));
-    const [plannerBot] = bots;
-    for (const channel of [
-      "bots:list",
-      "bots:get",
-      "bots:live:subscribe",
-      "bots:live:summary",
-      "bots:getCanonicalPhoto",
-      "bots:pendingApprovals",
-      "bots:files:list",
-      "bots:files:read",
-    ]) ipcMain.removeHandler(channel);
-    ipcMain.handle("bots:list", () => bots);
-    ipcMain.handle("bots:get", (_event, botId: string) => byId.get(botId) ?? null);
-    const asking = new Set<string>();
-    // A test seam: the next summary read for this Bot reports a pending question.
-    (globalThis as { __aidenE2eAsk?: (botId: string) => void }).__aidenE2eAsk = (botId) => asking.add(botId);
-    ipcMain.handle("bots:live:summary", (_event, botId: string) => ({
-      botId,
-      preview: botId === plannerBot!.id ? "Here’s your week." : "Inbox is clear.",
-      updatedAt: botId === plannerBot!.id ? 2_000 : 1_000,
-      state: { kind: "idle" },
-      needsYou: asking.has(botId),
-      lastReplyAt: null,
-    }));
-    ipcMain.handle("bots:live:subscribe", (_event, botId: string) => ({
-      botId,
-      epoch: "e1",
-      seq: 0,
-      partial: null,
-      state: { kind: "idle" },
-      question: null,
-      activity: null,
-      queued: [],
-      entries:
-        botId === plannerBot!.id
-          ? [
-              { id: "u1", type: "user", text: "Plan dinners", imageCount: 0 },
-              { id: "f1", type: "file", path: "lists/groceries.md", operation: "written" },
-              { id: "a1", type: "assistant", text: "Here’s your week.", toolCalls: [], stopReason: "stop" },
-            ]
-          : [],
-    }));
-    ipcMain.handle("bots:getCanonicalPhoto", () => null);
-    ipcMain.handle("bots:pendingApprovals", () => []);
-    ipcMain.handle("bots:files:list", () => ({
-      entries: [
-        { path: "lists", name: "lists", parentPath: "", depth: 0, kind: "directory" },
-        { path: "lists/groceries.md", name: "groceries.md", parentPath: "lists", depth: 1, kind: "file" },
-      ],
-      truncated: false,
-      skippedDirectories: 0,
-    }));
-    ipcMain.handle("bots:files:read", (_event, _botId: string, path: string) => ({
-      path,
-      content: "eggs\nmilk",
-      size: 9,
-      modifiedAt: 1,
-      version: "v1",
-    }));
-  }, [planner, inbox]);
+  await aiden.app.evaluate(
+    ({ ipcMain }, bots) => {
+      const byId = new Map(bots.map((bot) => [bot.id, bot]));
+      const [plannerBot] = bots;
+      for (const channel of [
+        "bots:list",
+        "bots:get",
+        "bots:live:subscribe",
+        "bots:live:summary",
+        "bots:getCanonicalPhoto",
+        "bots:pendingApprovals",
+        "bots:files:list",
+        "bots:files:read",
+      ])
+        ipcMain.removeHandler(channel);
+      ipcMain.handle("bots:list", () => bots);
+      ipcMain.handle("bots:get", (_event, botId: string) => byId.get(botId) ?? null);
+      const asking = new Set<string>();
+      // A test seam: the next summary read for this Bot reports a pending question.
+      (globalThis as { __aidenE2eAsk?: (botId: string) => void }).__aidenE2eAsk = (botId) =>
+        asking.add(botId);
+      ipcMain.handle("bots:live:summary", (_event, botId: string) => ({
+        botId,
+        preview: botId === plannerBot!.id ? "Here’s your week." : "Inbox is clear.",
+        updatedAt: botId === plannerBot!.id ? 2_000 : 1_000,
+        state: { kind: "idle" },
+        needsYou: asking.has(botId),
+        lastReplyAt: null,
+      }));
+      ipcMain.handle("bots:live:subscribe", (_event, botId: string) => ({
+        botId,
+        epoch: "e1",
+        seq: 0,
+        partial: null,
+        state: { kind: "idle" },
+        question: null,
+        activity: null,
+        queued: [],
+        entries:
+          botId === plannerBot!.id
+            ? [
+                { id: "u1", type: "user", text: "Plan dinners", imageCount: 0 },
+                { id: "f1", type: "file", path: "lists/groceries.md", operation: "written" },
+                {
+                  id: "a1",
+                  type: "assistant",
+                  text: "Here’s your week.",
+                  toolCalls: [],
+                  stopReason: "stop",
+                },
+              ]
+            : [],
+      }));
+      ipcMain.handle("bots:getCanonicalPhoto", () => null);
+      ipcMain.handle("bots:pendingApprovals", () => []);
+      ipcMain.handle("bots:files:list", () => ({
+        entries: [
+          { path: "lists", name: "lists", parentPath: "", depth: 0, kind: "directory" },
+          {
+            path: "lists/groceries.md",
+            name: "groceries.md",
+            parentPath: "lists",
+            depth: 1,
+            kind: "file",
+          },
+        ],
+        truncated: false,
+        skippedDirectories: 0,
+      }));
+      ipcMain.handle("bots:files:read", (_event, _botId: string, path: string) => ({
+        path,
+        content: "eggs\nmilk",
+        size: 9,
+        modifiedAt: 1,
+        version: "v1",
+      }));
+    },
+    [planner, inbox],
+  );
 
   // The size the visual check found the panel covering the composer at.
-  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1280, 800));
+  await aiden.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0]!.setSize(1280, 800),
+  );
   await page.getByRole("button", { name: "Bots", exact: true }).click();
   const botsNav = page.getByRole("navigation", { name: "Bots" });
   await expect(botsNav.getByRole("button", { name: /^Planner/u })).toBeVisible();
@@ -90,14 +111,19 @@ test("the Bots page lists only Bots, opens the latest one, and its panel shows a
   // and nobody can see, read or tab into it.
   await expect(page.locator("#environment-panel")).toHaveAttribute("data-state", "covered");
   await expect(page.locator("#environment-panel")).toHaveAttribute("inert", "");
-  await expect(page.getByRole("complementary", { name: "Environment work surface" })).toHaveCount(0);
+  await expect(page.getByRole("complementary", { name: "Environment work surface" })).toHaveCount(
+    0,
+  );
 
   // A question from a Bot reaches its row through the app's own notification sync.
   await aiden.app.evaluate(({ BrowserWindow }, botId) => {
     (globalThis as { __aidenE2eAsk?: (botId: string) => void }).__aidenE2eAsk?.(botId);
-    for (const window of BrowserWindow.getAllWindows()) window.webContents.send("bots:attention", { botId });
+    for (const window of BrowserWindow.getAllWindows())
+      window.webContents.send("bots:attention", { botId });
   }, inbox.id);
-  await expect(botsNav.getByRole("button", { name: /^Inbox Helper/u }).getByText("Needs you")).toBeVisible();
+  await expect(
+    botsNav.getByRole("button", { name: /^Inbox Helper/u }).getByText("Needs you"),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Open groceries.md" }).click();
   const panel = page.getByRole("complementary", { name: "Bot panel" });
@@ -122,10 +148,14 @@ test("the Bots page lists only Bots, opens the latest one, and its panel shows a
   await expect(page.locator("#bot-panel")).toHaveAttribute("data-state", "closed");
   await sendToggle();
   await expect(page.locator("#bot-panel")).toHaveAttribute("data-state", "open");
-  expect(await page.evaluate(() => localStorage.getItem("aiden-agent.environment.open-tabs-v1"))).toBe(workspaceTabs);
+  expect(
+    await page.evaluate(() => localStorage.getItem("aiden-agent.environment.open-tabs-v1")),
+  ).toBe(workspaceTabs);
 
   await page.getByRole("button", { name: "Back to Aiden" }).click();
   await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
   await expect(page.locator("#environment-panel")).toHaveAttribute("data-state", "open");
-  expect(await page.evaluate(() => localStorage.getItem("aiden-agent.environment.open-tabs-v1"))).toBe(workspaceTabs);
+  expect(
+    await page.evaluate(() => localStorage.getItem("aiden-agent.environment.open-tabs-v1")),
+  ).toBe(workspaceTabs);
 });

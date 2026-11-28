@@ -15,8 +15,17 @@ import {
   type BotHarnessHostOptions,
 } from "./harness-host.js";
 import { spawnHarnessChild } from "./test-support/child.js";
-import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
-import { OPENROUTER_ATTRIBUTION_HEADERS, recordingOpenRouter } from "../openrouter-recording-test-support.js";
+import {
+  createFauxModels,
+  FAUX_MODEL_REF,
+  slowAnswer,
+  waitFor,
+  type FauxModels,
+} from "./test-support/faux.js";
+import {
+  OPENROUTER_ATTRIBUTION_HEADERS,
+  recordingOpenRouter,
+} from "../openrouter-recording-test-support.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const roots: string[] = [];
@@ -100,8 +109,12 @@ test("open waits for an overlapping close and returns a usable new session", asy
   const originalClose = first.harness.close.bind(first.harness);
   let closeStarted!: () => void;
   let finishClose!: () => void;
-  const entered = new Promise<void>((resolve) => { closeStarted = resolve; });
-  const gate = new Promise<void>((resolve) => { finishClose = resolve; });
+  const entered = new Promise<void>((resolve) => {
+    closeStarted = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    finishClose = resolve;
+  });
   first.harness.close = async (context) => {
     closeStarted();
     await gate;
@@ -145,11 +158,15 @@ test("failed close retains the profile guard and open retries teardown", async (
     const contender = spawnHarnessChild("lock", [path.join(profile, "bots")]);
     try {
       assert.equal(JSON.parse(await contender.waitFor("LOCK")).ok, false);
-    } finally { await contender.kill(); }
+    } finally {
+      await contender.kill();
+    }
     const reopened = await host.open("bot-close-retry");
     assert.notEqual(reopened.harness, first.harness);
     await reopened.conversation.context(ctx);
-  } finally { await host.shutdown(); }
+  } finally {
+    await host.shutdown();
+  }
 });
 
 test("(b) after SIGKILL mid-stream the scan reports the Bot without calling the provider", async () => {
@@ -191,7 +208,9 @@ test("(b1) a turn cut off by a crash runs again when the person resumes it", asy
     assert.equal((await harness.inspect(ctx)).scheduling, "paused");
     harness.resume();
     await waitFor(() => fauxModels.calls() > 0, { what: "the resumed turn to reach the provider" });
-    await waitFor(async () => (await harness.inspect(ctx)).submissions.length === 0, { what: "the resumed turn to finish" });
+    await waitFor(async () => (await harness.inspect(ctx)).submissions.length === 0, {
+      what: "the resumed turn to finish",
+    });
     const live = await harness.snapshot(LiveDoc, conversation.id, ctx);
     assert.equal(live?.runFailure, undefined);
   } finally {
@@ -206,11 +225,15 @@ test("(b1b) a turn cut off by a crash with no retry left ends as interrupted, an
   await first.kill();
 
   const fauxModels = createFauxModels([fauxAssistantMessage("next answer")]);
-  const host = await hostFor(profile, fauxModels, { settings: { retry: { ...QUICK_RETRY, maxRetries: 0 } } });
+  const host = await hostFor(profile, fauxModels, {
+    settings: { retry: { ...QUICK_RETRY, maxRetries: 0 } },
+  });
   try {
     const { harness, conversation } = await host.open("bot:spent");
     harness.resume();
-    await waitFor(async () => (await harness.inspect(ctx)).submissions.length === 0, { what: "the cut-off turn to end" });
+    await waitFor(async () => (await harness.inspect(ctx)).submissions.length === 0, {
+      what: "the cut-off turn to end",
+    });
     assert.equal(fauxModels.calls(), 0, "the cut-off request is not sent again");
     const live = await harness.snapshot(LiveDoc, conversation.id, ctx);
     assert.equal(live?.runFailure?.reason, "interrupted");
@@ -225,11 +248,18 @@ test("(b1b) a turn cut off by a crash with no retry left ends as interrupted, an
 
 test("a Bot's requests to OpenRouter carry no pi attribution headers", async (t) => {
   const router = await recordingOpenRouter(t);
-  const host = await createBotHarnessHost({ profileDir: tempProfile(), buildRegistry: () => createRegistry(), models: router.models });
+  const host = await createBotHarnessHost({
+    profileDir: tempProfile(),
+    buildRegistry: () => createRegistry(),
+    models: router.models,
+  });
   assert.ok(!isBotHarnessHostUnavailable(host), "profile lock should be free");
   try {
     const { conversation } = await host.open("bot-router");
-    await conversation.configure({ model: { provider: router.model.provider, modelId: router.model.id } }, ctx);
+    await conversation.configure(
+      { model: { provider: router.model.provider, modelId: router.model.id } },
+      ctx,
+    );
     const submission = await conversation.submit({ type: "input", content: "hello" }, ctx);
     assert.equal((await submission.wait(ctx)).status, "done");
   } finally {
@@ -237,7 +267,9 @@ test("a Bot's requests to OpenRouter carry no pi attribution headers", async (t)
   }
   assert.ok(router.requests.length > 0);
   assert.deepEqual(
-    OPENROUTER_ATTRIBUTION_HEADERS.filter((header) => router.requests.some((request) => header in request)),
+    OPENROUTER_ATTRIBUTION_HEADERS.filter((header) =>
+      router.requests.some((request) => header in request),
+    ),
     [],
   );
 });
@@ -262,15 +294,20 @@ test("(b2) the scan closes Bots that have nothing to recover", async () => {
 
 test("(c) destroy during a live stream aborts it and removes the Bot directory", async () => {
   const profile = tempProfile();
-  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], {
+    tokensPerSecond: 40,
+  });
   const host = await hostFor(profile, fauxModels);
   try {
     const { conversation } = await host.open("bot-doomed");
     await conversation.configure({ model: FAUX_MODEL_REF }, ctx);
     const submission = await conversation.submit({ type: "input", content: "go" }, ctx);
-    await waitFor(async () => (await submission.status(ctx)).status === "placed" && fauxModels.calls() === 1, {
-      what: "stream start",
-    });
+    await waitFor(
+      async () => (await submission.status(ctx)).status === "placed" && fauxModels.calls() === 1,
+      {
+        what: "stream start",
+      },
+    );
 
     await host.destroy("bot-doomed");
     assert.equal(existsSync(path.join(profile, "bots", "bot-doomed")), false);
@@ -278,7 +315,11 @@ test("(c) destroy during a live stream aborts it and removes the Bot directory",
 
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(fauxModels.calls(), 1, "no further provider requests after delete");
-    assert.equal(existsSync(path.join(profile, "bots", "bot-doomed")), false, "nothing reopened the files");
+    assert.equal(
+      existsSync(path.join(profile, "bots", "bot-doomed")),
+      false,
+      "nothing reopened the files",
+    );
     await assert.rejects(host.open("bot-doomed"), /deleted/u);
   } finally {
     await host.shutdown();
@@ -287,15 +328,20 @@ test("(c) destroy during a live stream aborts it and removes the Bot directory",
 
 test("(c2) suspend during a live stream leaves the turn placed and paused, with no further provider calls", async () => {
   const profile = tempProfile();
-  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("after resume")], { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("after resume")], {
+    tokensPerSecond: 40,
+  });
   const host = await hostFor(profile, fauxModels);
   try {
     const { conversation } = await host.open("bot-suspended");
     await conversation.configure({ model: FAUX_MODEL_REF }, ctx);
     const submission = await conversation.submit({ type: "input", content: "go" }, ctx);
-    await waitFor(async () => (await submission.status(ctx)).status === "placed" && fauxModels.calls() === 1, {
-      what: "stream start",
-    });
+    await waitFor(
+      async () => (await submission.status(ctx)).status === "placed" && fauxModels.calls() === 1,
+      {
+        what: "stream start",
+      },
+    );
 
     assert.equal(await host.suspend("bot-suspended"), "closed");
     assert.equal(host.isOpen("bot-suspended"), false);
@@ -328,11 +374,15 @@ test("(c3) suspend of a Bot that is not open reports not_open", async () => {
 test("(c4) suspend gives up within its bound when a close hangs, and the close keeps going", async () => {
   const profile = tempProfile();
   const reports: unknown[] = [];
-  const host = await hostFor(profile, createFauxModels(), { onReport: (_botId, error) => reports.push(error) });
+  const host = await hostFor(profile, createFauxModels(), {
+    onReport: (_botId, error) => reports.push(error),
+  });
   const first = await host.open("bot-stuck");
   const originalClose = first.harness.close.bind(first.harness);
   let finishClose!: () => void;
-  const gate = new Promise<void>((resolve) => { finishClose = resolve; });
+  const gate = new Promise<void>((resolve) => {
+    finishClose = resolve;
+  });
   first.harness.close = async (context) => {
     await gate;
     return originalClose(context);
@@ -369,7 +419,11 @@ test("(d) sweepOrphans removes directories with no known Bot", async () => {
     writeFileSync(path.join(profile, "bots", "bot-orphan", BOT_SESSION_FILE), "");
     const removed = await host.sweepOrphans(new Set(["bot:known"]));
     assert.deepEqual(removed, ["bot-orphan"]);
-    assert.deepEqual(readdirSync(path.join(profile, "bots")).sort(), ["bot~3aknown", "runtime.lease.lock", "runtime.lock"]);
+    assert.deepEqual(readdirSync(path.join(profile, "bots")).sort(), [
+      "bot~3aknown",
+      "runtime.lease.lock",
+      "runtime.lock",
+    ]);
   } finally {
     await host.shutdown();
   }
@@ -382,7 +436,9 @@ test("(e) a second host in another process is refused and touches nothing", asyn
   try {
     await host.open("bot-held");
     const before = readdirSync(path.join(profile, "bots")).sort();
-    assert.deepEqual(JSON.parse(await child.waitFor("HOST")), { unavailable: "held_by_live_process" });
+    assert.deepEqual(JSON.parse(await child.waitFor("HOST")), {
+      unavailable: "held_by_live_process",
+    });
     assert.deepEqual(readdirSync(path.join(profile, "bots")).sort(), before);
   } finally {
     await child.kill();
@@ -417,7 +473,9 @@ test("a shut down host cannot delete a replacement host's Bot", async () => {
     assert.throws(() => oldHost.touch("bot-replacement"), /shut down/);
     assert.equal(existsSync(session), true);
     assert.equal(replacement.isOpen("bot-replacement"), true);
-  } finally { await replacement.shutdown(); }
+  } finally {
+    await replacement.shutdown();
+  }
 });
 
 test("shutdown holds the profile guard until an admitted inspection finishes", async () => {
@@ -427,8 +485,12 @@ test("shutdown holds the profile guard until an admitted inspection finishes", a
   const inspect = entry.harness.inspect.bind(entry.harness);
   let started!: () => void;
   let resume!: () => void;
-  const entered = new Promise<void>((resolve) => { started = resolve; });
-  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const entered = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
   entry.harness.inspect = async (context) => {
     started();
     await gate;
@@ -462,7 +524,9 @@ test("(f) a corrupt session file is moved aside and a fresh conversation opens",
     assert.equal(opened.recoveredCorruptFile, `${BOT_SESSION_FILE}.corrupt-1700000000000`);
     assert.ok(existsSync(path.join(dir, `${BOT_SESSION_FILE}.corrupt-1700000000000`)));
     await opened.conversation.configure({ model: FAUX_MODEL_REF }, ctx);
-    const settled = await (await opened.conversation.submit({ type: "input", content: "hi" }, ctx)).wait(ctx);
+    const settled = await (
+      await opened.conversation.submit({ type: "input", content: "hi" }, ctx)
+    ).wait(ctx);
     assert.equal(settled.status, "done");
 
     // The notice is one-time.
@@ -475,9 +539,14 @@ test("(f) a corrupt session file is moved aside and a fresh conversation opens",
 
 test("(g) a storage failure drops the failed session, reports it, and the Bot reopens with its history", async () => {
   const profile = tempProfile();
-  const fauxModels = createFauxModels([fauxAssistantMessage("before"), fauxAssistantMessage("after")]);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage("before"),
+    fauxAssistantMessage("after"),
+  ]);
   const reports: unknown[] = [];
-  const host = await hostFor(profile, fauxModels, { onReport: (_botId, error) => reports.push(error) });
+  const host = await hostFor(profile, fauxModels, {
+    onReport: (_botId, error) => reports.push(error),
+  });
   try {
     const first = await host.open("bot-fail");
     await first.conversation.configure({ model: FAUX_MODEL_REF }, ctx);
@@ -488,7 +557,10 @@ test("(g) a storage failure drops the failed session, reports it, and the Bot re
     try {
       blocker.exec("BEGIN EXCLUSIVE");
       await assert.rejects(first.conversation.submit({ type: "input", content: "lost" }, ctx));
-      await waitFor(() => !host.isOpen("bot-fail"), { what: "failed session eviction", timeoutMs: 15_000 });
+      await waitFor(() => !host.isOpen("bot-fail"), {
+        what: "failed session eviction",
+        timeoutMs: 15_000,
+      });
     } finally {
       blocker.exec("ROLLBACK");
       blocker.close();

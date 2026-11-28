@@ -34,7 +34,14 @@ function crash() {
   return sanitizeException(error, { appRoots: [APP_ROOT] });
 }
 
-const context = { source: "main", level: "fatal", processType: "browser", origin: "uncaught_exception", uptimeSeconds: 4, appVersion: "1.40.0" } as const;
+const context = {
+  source: "main",
+  level: "fatal",
+  processType: "browser",
+  origin: "uncaught_exception",
+  uptimeSeconds: 4,
+  appVersion: "1.40.0",
+} as const;
 
 test("a fatal crash written during one run is read back once on the next", (t) => {
   const dir = tempDir(t);
@@ -68,9 +75,32 @@ test("a tampered record is discarded instead of sent", (t) => {
   const record = JSON.parse(readFileSync(join(dir, PENDING_CRASH_FILE), "utf8"));
 
   const tampered = [
-    { ...record, exception: { ...record.exception, errors: [{ ...record.exception.errors[0], frames: [{ filename: "/Users/jane/secret.js", function: "f", inApp: true }] }] } },
-    { ...record, exception: { ...record.exception, errors: [{ ...record.exception.errors[0], value: "x".repeat(10_000) }] } },
-    { ...record, exception: { ...record.exception, errors: [{ ...record.exception.errors[0], type: "Error at /Users/jane" }] } },
+    {
+      ...record,
+      exception: {
+        ...record.exception,
+        errors: [
+          {
+            ...record.exception.errors[0],
+            frames: [{ filename: "/Users/jane/secret.js", function: "f", inApp: true }],
+          },
+        ],
+      },
+    },
+    {
+      ...record,
+      exception: {
+        ...record.exception,
+        errors: [{ ...record.exception.errors[0], value: "x".repeat(10_000) }],
+      },
+    },
+    {
+      ...record,
+      exception: {
+        ...record.exception,
+        errors: [{ ...record.exception.errors[0], type: "Error at /Users/jane" }],
+      },
+    },
     { ...record, context: { ...record.context, origin: "/Users/jane" } },
     { ...record, version: 2 },
   ];
@@ -124,8 +154,16 @@ test("a damaged record is removed on read instead of being retried forever", (t)
 
 test("a record carries the install id it was captured under", () => {
   const installId = "0b6f4a6e-3c1d-4f8e-9a2b-7c5d1e0f9a8b";
-  assert.equal(parsePendingCrash(serializePendingCrash(crash(), context, { now: NOW, installId }))?.installId, installId);
-  assert.equal(parsePendingCrash(serializePendingCrash(crash(), context, { now: NOW, installId: "/Users/jane" })), undefined);
+  assert.equal(
+    parsePendingCrash(serializePendingCrash(crash(), context, { now: NOW, installId }))?.installId,
+    installId,
+  );
+  assert.equal(
+    parsePendingCrash(
+      serializePendingCrash(crash(), context, { now: NOW, installId: "/Users/jane" }),
+    ),
+    undefined,
+  );
 });
 
 test("process deaths map to crash events; clean exits, intended stops and quitting do not", () => {
@@ -136,10 +174,13 @@ test("process deaths map to crash events; clean exits, intended stops and quitti
     kind: "process_gone",
     props: { kind: "renderer", reason: "oom", exit_code: 9 },
   });
-  assert.deepEqual(gone("child-process-gone", { processType: "GPU", reason: "crashed", exitCode: 5 }), {
-    kind: "process_gone",
-    props: { kind: "gpu", reason: "crashed", exit_code: 5 },
-  });
+  assert.deepEqual(
+    gone("child-process-gone", { processType: "GPU", reason: "crashed", exitCode: 5 }),
+    {
+      kind: "process_gone",
+      props: { kind: "gpu", reason: "crashed", exit_code: 5 },
+    },
+  );
   assert.deepEqual(gone("browser-tab-process-gone", { reason: "launch-failed", exitCode: 1 }), {
     kind: "process_gone",
     props: { kind: "browser_tab", reason: "launch_failed", exit_code: 1 },
@@ -154,22 +195,45 @@ test("process deaths map to crash events; clean exits, intended stops and quitti
   });
 
   assert.equal(gone("renderer-process-gone", { reason: "clean-exit", exitCode: 0 }), undefined);
-  assert.equal(gone("child-process-gone", { processType: "Utility", reason: "clean-exit", exitCode: 0 }), undefined);
-  assert.equal(gone("child-process-gone", { processType: "Utility", reason: "killed", exitCode: 15 }), undefined);
+  assert.equal(
+    gone("child-process-gone", { processType: "Utility", reason: "clean-exit", exitCode: 0 }),
+    undefined,
+  );
+  assert.equal(
+    gone("child-process-gone", { processType: "Utility", reason: "killed", exitCode: 15 }),
+    undefined,
+  );
   assert.equal(gone("renderer-process-gone", { reason: "killed", exitCode: 15 }, true), undefined);
-  assert.equal(gone("child-process-gone", { processType: "GPU", reason: "crashed" }, true), undefined);
+  assert.equal(
+    gone("child-process-gone", { processType: "GPU", reason: "crashed" }, true),
+    undefined,
+  );
 });
 
 test("soft failures in the journal are not crashes", () => {
-  for (const event of ["provider-failed", "renderer-react-caught", "renderer-route-error", "renderer-react-recoverable", "mcp-failed", "store-write-failed"]) {
+  for (const event of [
+    "provider-failed",
+    "renderer-react-caught",
+    "renderer-route-error",
+    "renderer-react-recoverable",
+    "mcp-failed",
+    "store-write-failed",
+  ]) {
     assert.equal(crashSignalFor({ event }, { rawError: new Error("handled") }), undefined, event);
   }
 });
 
 test("a renderer report without raw fields has nothing to send", () => {
   assert.equal(crashSignalFor({ event: "renderer-global-error" }), undefined);
-  assert.deepEqual(crashSignalFor({ event: "unhandled-rejection" }, { rawError: "x" }), { kind: "main_rejection", error: "x" });
-  assert.deepEqual(crashSignalFor({ event: "bootstrap-import-failed" }, { rawError: "x" }), { kind: "fatal", error: "x", origin: "uncaught_exception" });
+  assert.deepEqual(crashSignalFor({ event: "unhandled-rejection" }, { rawError: "x" }), {
+    kind: "main_rejection",
+    error: "x",
+  });
+  assert.deepEqual(crashSignalFor({ event: "bootstrap-import-failed" }, { rawError: "x" }), {
+    kind: "fatal",
+    error: "x",
+    origin: "uncaught_exception",
+  });
   assert.deepEqual(crashSignalFor({ event: "renderer-unhandled-rejection" }, { rawError: {} }), {
     kind: "renderer_error",
     error: {},

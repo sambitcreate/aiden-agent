@@ -113,11 +113,16 @@ class DiskFailure extends Error {
  * get plain retry advice instead of the raw "Command failed: tar ..." text.
  */
 export function extractFailureMessage(error: unknown): string {
-  const failure = error as { stderr?: unknown; message?: unknown; killed?: unknown; code?: unknown } | undefined;
+  const failure = error as
+    | { stderr?: unknown; message?: unknown; killed?: unknown; code?: unknown }
+    | undefined;
   const detail = `${typeof failure?.stderr === "string" ? failure.stderr : ""}\n${typeof failure?.message === "string" ? failure.message : ""}`;
-  if (failure?.code === "ENOSPC" || /No space left on device/i.test(detail)) return diskFailureMessage({ code: "ENOSPC" });
-  if (failure?.code === "EDQUOT" || /Disk quota exceeded/i.test(detail)) return diskFailureMessage({ code: "EDQUOT" });
-  if (failure?.killed === true) return "Unpacking the voice model took too long. Check that the disk has free space and try again.";
+  if (failure?.code === "ENOSPC" || /No space left on device/i.test(detail))
+    return diskFailureMessage({ code: "ENOSPC" });
+  if (failure?.code === "EDQUOT" || /Disk quota exceeded/i.test(detail))
+    return diskFailureMessage({ code: "EDQUOT" });
+  if (failure?.killed === true)
+    return "Unpacking the voice model took too long. Check that the disk has free space and try again.";
   return "Aiden couldn't unpack the voice model. Press Download to try again.";
 }
 
@@ -215,7 +220,8 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
     return dir;
   }
 
-  const partialPath = (id: string) => path.join(modelsRoot(), PARTIAL_DIR, `${id}${PARTIAL_SUFFIX}`);
+  const partialPath = (id: string) =>
+    path.join(modelsRoot(), PARTIAL_DIR, `${id}${PARTIAL_SUFFIX}`);
   const stagingPath = (id: string) => path.join(modelsRoot(), `${id}${EXTRACTING_SUFFIX}`);
 
   /** Absolute directory for a model's installed files, or null for an unknown id. */
@@ -226,7 +232,9 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
   function isModelInstalled(id: string): boolean {
     const spec = specFor(id);
     const dir = modelDir(id);
-    return Boolean(spec && dir && Object.values(spec.files).every((file) => fs.existsSync(path.join(dir, file))));
+    return Boolean(
+      spec && dir && Object.values(spec.files).every((file) => fs.existsSync(path.join(dir, file))),
+    );
   }
 
   function listModels(): LocalModel[] {
@@ -388,7 +396,9 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
       if (reason === "stall") return new Error(STALLED);
       if (reason === "oversize") return new Error(OVERSIZE);
       if (error instanceof DiskFailure) {
-        deps.info?.(`Speech model download for "${spec.id}" could not write: ${String(error.original)}`);
+        deps.info?.(
+          `Speech model download for "${spec.id}" could not write: ${String(error.original)}`,
+        );
         return new Error(error.message);
       }
       if (error instanceof NetworkFailure) {
@@ -433,7 +443,9 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
     if (!res.body) throw new Error(`Download failed: ${res.status}`);
 
     const file = fs.createWriteStream(part, { flags: start > 0 ? "a" : "w", mode: 0o600 });
-    const fileError = new Promise<never>((_, reject) => file.once("error", (error) => reject(new DiskFailure(error))));
+    const fileError = new Promise<never>((_, reject) =>
+      file.once("error", (error) => reject(new DiskFailure(error))),
+    );
     fileError.catch(() => {});
     const reader = res.body.getReader();
     let downloaded = start;
@@ -469,7 +481,11 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
           // so a slow or nearly full volume reports its own error. A cancel
           // still ends the wait.
           clearTimeout(stallTimer);
-          await Promise.race([new Promise<void>((resolve) => file.once("drain", resolve)), fileError, aborted]);
+          await Promise.race([
+            new Promise<void>((resolve) => file.once("drain", resolve)),
+            fileError,
+            aborted,
+          ]);
           armStall();
         }
         downloaded += chunk.length;
@@ -485,7 +501,9 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
       emit("download", downloaded, total);
       if (downloaded < total) {
         // The server ended cleanly but early. Keep the partial so the next run resumes.
-        deps.info?.(`Speech model download for "${spec.id}" ended early at ${downloaded} of ${total} bytes`);
+        deps.info?.(
+          `Speech model download for "${spec.id}" ended early at ${downloaded} of ${total} bytes`,
+        );
         throw new Error(INTERRUPTED);
       }
     } catch (error) {
@@ -546,16 +564,22 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
     const root = modelsRoot();
     for (const entry of await fs.promises.readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      const extractingId = entry.name.endsWith(EXTRACTING_SUFFIX) ? entry.name.slice(0, -EXTRACTING_SUFFIX.length) : null;
+      const extractingId = entry.name.endsWith(EXTRACTING_SUFFIX)
+        ? entry.name.slice(0, -EXTRACTING_SUFFIX.length)
+        : null;
       const replacedId = REPLACED_DIR.exec(entry.name)?.[1] ?? null;
       if (replacedId !== null) {
         if (downloads.has(replacedId)) continue;
         const installed = path.join(root, replacedId);
-        if (!fs.existsSync(installed)) await fs.promises.rename(path.join(root, entry.name), installed);
+        if (!fs.existsSync(installed))
+          await fs.promises.rename(path.join(root, entry.name), installed);
         else await fs.promises.rm(path.join(root, entry.name), { recursive: true, force: true });
         continue;
       }
-      if ((extractingId !== null && !downloads.has(extractingId)) || LEGACY_STAGING.test(entry.name)) {
+      if (
+        (extractingId !== null && !downloads.has(extractingId)) ||
+        LEGACY_STAGING.test(entry.name)
+      ) {
         await fs.promises.rm(path.join(root, entry.name), { recursive: true, force: true });
       }
     }
@@ -567,7 +591,9 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
       return;
     }
     for (const entry of partials) {
-      const id = entry.name.endsWith(PARTIAL_SUFFIX) ? entry.name.slice(0, -PARTIAL_SUFFIX.length) : null;
+      const id = entry.name.endsWith(PARTIAL_SUFFIX)
+        ? entry.name.slice(0, -PARTIAL_SUFFIX.length)
+        : null;
       if (id !== null && downloads.has(id)) continue;
       const spec = id === null ? undefined : specFor(id);
       const full = path.join(partialDir, entry.name);

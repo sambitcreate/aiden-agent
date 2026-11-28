@@ -22,7 +22,11 @@ function hostElements(node: React.ReactNode): AnyElement[] {
   if (typeof type === "function") {
     return hostElements((type as (props: unknown) => React.ReactNode)(element.props));
   }
-  if (typeof type === "object" && type && (type as { $$typeof?: symbol }).$$typeof === FORWARD_REF) {
+  if (
+    typeof type === "object" &&
+    type &&
+    (type as { $$typeof?: symbol }).$$typeof === FORWARD_REF
+  ) {
     const render = (type as { render: (props: unknown, ref: null) => React.ReactNode }).render;
     return hostElements(render(element.props, null));
   }
@@ -34,7 +38,8 @@ function buttonNamed(node: React.ReactNode, name: string): AnyElement {
   const matches = hostElements(node).filter(
     (element) => element.type === "button" && element.props["aria-label"] === name,
   );
-  if (matches.length !== 1) throw new Error(`Expected one "${name}" button, found ${matches.length}.`);
+  if (matches.length !== 1)
+    throw new Error(`Expected one "${name}" button, found ${matches.length}.`);
   return matches[0]!;
 }
 
@@ -69,13 +74,15 @@ const card = (status: ConnectCardEntry["status"], pluginId = "gmail"): ConnectCa
 });
 
 test("a pending card shows the app's name and why, and offers Connect and Not now", () => {
-  const view = renderDocument(<ConnectCard card={card("pending")} onConnect={noop} onDismiss={noop} />);
+  const view = renderDocument(
+    <ConnectCard card={card("pending")} onConnect={noop} onDismiss={noop} />,
+  );
   assert.match(view.text, /^Gmail/u);
   assert.match(view.text, /So I can sort your inbox each morning\./u);
-  assert.deepEqual(
-    view.buttons.map((button) => button.name).sort(),
-    ["Connect Gmail", "Not now for Gmail"],
-  );
+  assert.deepEqual(view.buttons.map((button) => button.name).sort(), [
+    "Connect Gmail",
+    "Not now for Gmail",
+  ]);
   assert.equal(view.byRole("group")[0]?.getAttribute("aria-label"), "Connect Gmail");
 });
 
@@ -94,14 +101,18 @@ test("Connect and Not now call their handlers with the plugin id", () => {
 });
 
 test("a connected card shows Connected with no actions", () => {
-  const view = renderDocument(<ConnectCard card={card("connected")} onConnect={noop} onDismiss={noop} />);
+  const view = renderDocument(
+    <ConnectCard card={card("connected")} onConnect={noop} onDismiss={noop} />,
+  );
   assert.match(view.text, /Gmail/u);
   assert.match(view.text, /Connected ✓/u);
   assert.deepEqual(view.buttons, []);
 });
 
 test("a dismissed card stays as a quiet record with no actions", () => {
-  const view = renderDocument(<ConnectCard card={card("dismissed")} onConnect={noop} onDismiss={noop} />);
+  const view = renderDocument(
+    <ConnectCard card={card("dismissed")} onConnect={noop} onDismiss={noop} />,
+  );
   assert.match(view.text, /Gmail/u);
   assert.match(view.text, /Not connected/u);
   assert.doesNotMatch(view.text, /Connected ✓/u);
@@ -121,30 +132,57 @@ test("an app connected in Aiden but left out of the Bot's access is the same Con
   const view = renderDocument(element);
   assert.equal(view.byRole("group")[0]?.getAttribute("aria-label"), "Connect Notion");
   assert.match(view.text, /So I can sort your inbox each morning\./u);
-  assert.deepEqual(
-    view.buttons.map((button) => button.name).sort(),
-    ["Connect Notion", "Not now for Notion"],
-  );
+  assert.deepEqual(view.buttons.map((button) => button.name).sort(), [
+    "Connect Notion",
+    "Not now for Notion",
+  ]);
   press(buttonNamed(element, "Connect Notion"));
   press(buttonNamed(element, "Not now for Notion"));
-  assert.deepEqual(calls, ["add:notion", "dismiss:notion"], "nothing is added without the tap, and nothing new is connected");
+  assert.deepEqual(
+    calls,
+    ["add:notion", "dismiss:notion"],
+    "nothing is added without the tap, and nothing new is connected",
+  );
   assert.throws(
-    () => press(buttonNamed(<ConnectCard card={card("needs_access", "notion")} busy onConnect={noop} onAddToBot={noop} />, "Connect Notion")),
+    () =>
+      press(
+        buttonNamed(
+          <ConnectCard
+            card={card("needs_access", "notion")}
+            busy
+            onConnect={noop}
+            onAddToBot={noop}
+          />,
+          "Connect Notion",
+        ),
+      ),
     /disabled/u,
   );
 });
 
 test("where the Bot's access can't be changed, a needs-access card falls back to Connect", () => {
   const view = renderDocument(
-    <ConnectCard card={card("needs_access", "notion")} connectLabel="Finish on Studio" onConnect={noop} />,
+    <ConnectCard
+      card={card("needs_access", "notion")}
+      connectLabel="Finish on Studio"
+      onConnect={noop}
+    />,
   );
-  assert.deepEqual(view.buttons.map((button) => button.name), ["Connect Notion"]);
+  assert.deepEqual(
+    view.buttons.map((button) => button.name),
+    ["Connect Notion"],
+  );
   assert.doesNotMatch(view.text, /Connected ✓/u);
 });
 
 test("a busy card disables Connect", () => {
   const element = (
-    <ConnectCard card={card("pending")} busy onConnect={() => assert.fail("pressed")} onDismiss={noop} />
+    <ConnectCard
+      card={card("pending")}
+      busy
+      onConnect={() => assert.fail("pressed")}
+      onDismiss={noop}
+    />
   );
   assert.throws(() => press(buttonNamed(element, "Connect Gmail")), /disabled/u);
 });
@@ -167,7 +205,10 @@ test("a card on a paired Mac that cannot dismiss it offers only the host's Conne
     <ConnectCard card={card("pending")} connectLabel="Finish on Studio" onConnect={noop} />,
   );
   assert.match(view.text, /Finish on Studio/u);
-  assert.deepEqual(view.buttons.map((button) => button.name), ["Connect Gmail"]);
+  assert.deepEqual(
+    view.buttons.map((button) => button.name),
+    ["Connect Gmail"],
+  );
 });
 
 test("a card for an unknown plugin renders nothing", () => {

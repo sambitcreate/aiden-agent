@@ -52,7 +52,14 @@ export interface BotComputerLiveScreen extends BotComputerScreen {
   /** The picture's version; it changes when the screen does. */
   version(): number;
   /** Keeps updates flowing while subscribed; `listener` runs after each one. */
-  watch(listener: (update: { version: number; resized: boolean; width: number; height: number }) => void): () => void;
+  watch(
+    listener: (update: {
+      version: number;
+      resized: boolean;
+      width: number;
+      height: number;
+    }) => void,
+  ): () => void;
   /** The current picture as a JPEG, scaled to at most `maxWidth` wide. */
   jpeg(options: { quality: number; maxWidth: number }): Promise<BotComputerLiveFrame>;
   /** Runs when the VNC connection drops; the next use reconnects. */
@@ -83,7 +90,10 @@ function validMaxWidth(value: number): boolean {
 }
 
 /** Opens the first connection, so a computer whose screen can't be reached fails here. */
-export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortSignal): Promise<BotComputerLiveScreen> {
+export async function createRfbScreen(
+  options: RfbScreenOptions,
+  signal?: AbortSignal,
+): Promise<BotComputerLiveScreen> {
   const schedule =
     options.schedule ??
     ((callback: () => void, ms: number) => {
@@ -94,7 +104,9 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
   const captureTimeoutMs = options.captureTimeoutMs ?? 15_000;
   const reconnectDelayMs = options.reconnectDelayMs ?? 1_000;
   const maxReconnectDelayMs = options.maxReconnectDelayMs ?? 10_000;
-  const watchers = new Set<(update: { version: number; resized: boolean; width: number; height: number }) => void>();
+  const watchers = new Set<
+    (update: { version: number; resized: boolean; width: number; height: number }) => void
+  >();
   const disconnectListeners = new Set<() => void>();
   let client: RfbClient | undefined;
   let connecting: Promise<RfbClient> | undefined;
@@ -215,7 +227,9 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
     return new Promise<RfbClient>((resolve, reject) => {
       const onAbort = () => reject(abortError(operationSignal));
       operationSignal.addEventListener("abort", onAbort, { once: true });
-      connecting!.then(resolve, reject).finally(() => operationSignal.removeEventListener("abort", onAbort));
+      connecting!
+        .then(resolve, reject)
+        .finally(() => operationSignal.removeEventListener("abort", onAbort));
     });
   };
 
@@ -225,7 +239,11 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
   /** Waits for the whole screen once per connection, so no picture is taken of an unpainted framebuffer. */
   const pictureOf = async (current: RfbClient, operationSignal?: AbortSignal) => {
     if (pictured) return;
-    const full = current.nextUpdate({ full: true, signal: operationSignal, timeoutMs: captureTimeoutMs });
+    const full = current.nextUpdate({
+      full: true,
+      signal: operationSignal,
+      timeoutMs: captureTimeoutMs,
+    });
     full.catch(() => undefined);
     await current.requestUpdate(false);
     await full;
@@ -242,16 +260,27 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
   };
 
   return {
-    async capture({ format, maxWidth, quality, signal: captureSignal }): Promise<BotComputerCapture> {
-      if (format !== "png" && format !== "jpeg") throw new BotComputerError("invalid", "Captures are PNG or JPEG.");
-      if (!validMaxWidth(maxWidth)) throw new BotComputerError("invalid", "A capture's width must be 1 to 8192 pixels.");
+    async capture({
+      format,
+      maxWidth,
+      quality,
+      signal: captureSignal,
+    }): Promise<BotComputerCapture> {
+      if (format !== "png" && format !== "jpeg")
+        throw new BotComputerError("invalid", "Captures are PNG or JPEG.");
+      if (!validMaxWidth(maxWidth))
+        throw new BotComputerError("invalid", "A capture's width must be 1 to 8192 pixels.");
       const jpegQuality = quality ?? DEFAULT_JPEG_QUALITY;
       if (!Number.isInteger(jpegQuality) || jpegQuality < 1 || jpegQuality > 100) {
         throw new BotComputerError("invalid", "JPEG quality must be 1 to 100.");
       }
       notAborted(captureSignal);
       const current = await live(captureSignal);
-      const full = current.nextUpdate({ full: true, signal: captureSignal, timeoutMs: captureTimeoutMs });
+      const full = current.nextUpdate({
+        full: true,
+        signal: captureSignal,
+        timeoutMs: captureTimeoutMs,
+      });
       // A wait that loses to the request's failure must not reject unhandled.
       full.catch(() => undefined);
       await current.requestUpdate(false);
@@ -269,8 +298,16 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
     },
 
     async pointer(event, pointerSignal) {
-      if (![event.x, event.y].every(Number.isFinite) || !Number.isInteger(event.buttons) || event.buttons < 0 || event.buttons > 255) {
-        throw new BotComputerError("invalid", "A pointer event needs finite coordinates and a button mask from 0 to 255.");
+      if (
+        ![event.x, event.y].every(Number.isFinite) ||
+        !Number.isInteger(event.buttons) ||
+        event.buttons < 0 ||
+        event.buttons > 255
+      ) {
+        throw new BotComputerError(
+          "invalid",
+          "A pointer event needs finite coordinates and a button mask from 0 to 255.",
+        );
       }
       notAborted(pointerSignal);
       await (await live(pointerSignal)).pointer(event.x, event.y, event.buttons);
@@ -295,7 +332,8 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
       current?.close();
     },
 
-    size: () => (client && !client.closed ? { width: client.width, height: client.height } : undefined),
+    size: () =>
+      client && !client.closed ? { width: client.width, height: client.height } : undefined,
 
     version: () => version,
 
@@ -318,7 +356,8 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
     },
 
     async jpeg({ quality, maxWidth }) {
-      if (!validMaxWidth(maxWidth)) throw new BotComputerError("invalid", "A frame's width must be 1 to 8192 pixels.");
+      if (!validMaxWidth(maxWidth))
+        throw new BotComputerError("invalid", "A frame's width must be 1 to 8192 pixels.");
       const shot = await snapshot("jpeg", quality, maxWidth);
       return { image: shot.image, width: shot.width, height: shot.height, version: shot.version };
     },

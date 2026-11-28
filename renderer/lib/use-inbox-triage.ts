@@ -78,21 +78,30 @@ async function sendHostWrites(
     const outcomes: WriteOutcome[] = [];
     for (const write of writes) {
       try {
-        outcomes.push(outcomeOf(await chatsApi.setTriage(write.target.chatId, write.patch, write.ifRevision)));
+        outcomes.push(
+          outcomeOf(await chatsApi.setTriage(write.target.chatId, write.patch, write.ifRevision)),
+        );
       } catch (error) {
         outcomes.push({ ok: false, conflict: false, message: messageOf(error) });
       }
     }
     return outcomes;
   }
-  if (!view) return writes.map(() => ({ ok: false, conflict: false, message: "That computer is no longer paired with this one." }));
+  if (!view)
+    return writes.map(() => ({
+      ok: false,
+      conflict: false,
+      message: "That computer is no longer paired with this one.",
+    }));
   const adapter = new RemoteHostAdapter(view);
   try {
     await adapter.ready();
     const outcomes: WriteOutcome[] = [];
     for (const write of writes) {
       try {
-        outcomes.push(outcomeOf(await adapter.setTriage(write.target.chatId, write.patch, write.ifRevision)));
+        outcomes.push(
+          outcomeOf(await adapter.setTriage(write.target.chatId, write.patch, write.ifRevision)),
+        );
       } catch (error) {
         outcomes.push({ ok: false, conflict: false, message: messageOf(error) });
       }
@@ -178,7 +187,9 @@ export function useInboxTriage({
   onRestore?: (keys: readonly string[]) => void;
 }): InboxTriage {
   const local = useChatTriage();
-  const [overlay, setOverlay] = React.useState<ReadonlyMap<string, ChatTriageEntry>>(() => new Map());
+  const [overlay, setOverlay] = React.useState<ReadonlyMap<string, ChatTriageEntry>>(
+    () => new Map(),
+  );
   const overlayRef = React.useRef(overlay);
   const localRef = React.useRef(local);
   localRef.current = local;
@@ -206,18 +217,26 @@ export function useInboxTriage({
     });
   }, []);
 
-  const write = React.useCallback((changes: readonly (readonly [string, ChatTriageEntry | null])[]) => {
-    const next = new Map(overlayRef.current);
-    for (const [key, entry] of changes) {
-      if (entry) next.set(key, entry);
-      else next.delete(key);
-    }
-    overlayRef.current = next;
-    setOverlay(next);
-  }, []);
+  const write = React.useCallback(
+    (changes: readonly (readonly [string, ChatTriageEntry | null])[]) => {
+      const next = new Map(overlayRef.current);
+      for (const [key, entry] of changes) {
+        if (entry) next.set(key, entry);
+        else next.delete(key);
+      }
+      overlayRef.current = next;
+      setOverlay(next);
+    },
+    [],
+  );
 
-  const reportedFor = React.useCallback((row: InboxTriageRow) =>
-    row.hostId === LOCAL_SIDEBAR_HOST_ID ? localRef.current?.chats[row.chatId] : row.reported ?? undefined, []);
+  const reportedFor = React.useCallback(
+    (row: InboxTriageRow) =>
+      row.hostId === LOCAL_SIDEBAR_HOST_ID
+        ? localRef.current?.chats[row.chatId]
+        : (row.reported ?? undefined),
+    [],
+  );
 
   const currentFor = React.useCallback(
     (row: InboxTriageRow) => newerTriage(reportedFor(row), overlayRef.current.get(row.key)),
@@ -231,100 +250,145 @@ export function useInboxTriage({
     if (settled.length > 0) write(settled.map((key) => [key, null] as const));
   }, [local, reported, write]);
 
-  const undo = React.useCallback(async (batch: InboxTriageUndoBatch) => {
-    if (undoRef.current === batch) undoRef.current = null;
-    toast.dismiss(INBOX_TRIAGE_TOAST_ID);
-    const writes = inboxTriageUndoWrites(batch);
-    const rows: InboxTriageRow[] = batch.items.map((item) => item.target);
-    const shown = rows.map((row) => currentFor(row));
-    const now = Date.now();
-    onRestoreRef.current?.(rows.map((row) => row.key));
-    write(rows.map((row, index) => [row.key, predictTriage(shown[index], writes[index]!.patch, now)] as const));
-    const outcomes = await sendWrites(
-      writes.map((undoWrite, index) => ({ target: rows[index]!, patch: undoWrite.patch, ifRevision: undoWrite.ifRevision })),
-      viewsRef.current,
-    );
-    let conflicts = 0;
-    let failure: string | null = null;
-    write(outcomes.map((outcome, index) => {
-      const row = rows[index]!;
-      if (outcome.ok) return [row.key, outcome.entry] as const;
-      if (outcome.conflict) conflicts += 1;
-      else failure ??= outcome.message;
-      // Put back what the row showed. On this Mac the store's snapshot already holds the other write.
-      return [row.key, row.hostId === LOCAL_SIDEBAR_HOST_ID ? null : shown[index] ?? null] as const;
-    }));
-    if (conflicts > 0) {
-      toast(inboxTriageUndoConflictText(conflicts, rows.length), { id: INBOX_TRIAGE_TOAST_ID, duration: INBOX_TRIAGE_UNDO_MS });
-    } else if (failure) {
-      toast.error(failure, { id: INBOX_TRIAGE_TOAST_ID });
-    }
-  }, [currentFor, write]);
+  const undo = React.useCallback(
+    async (batch: InboxTriageUndoBatch) => {
+      if (undoRef.current === batch) undoRef.current = null;
+      toast.dismiss(INBOX_TRIAGE_TOAST_ID);
+      const writes = inboxTriageUndoWrites(batch);
+      const rows: InboxTriageRow[] = batch.items.map((item) => item.target);
+      const shown = rows.map((row) => currentFor(row));
+      const now = Date.now();
+      onRestoreRef.current?.(rows.map((row) => row.key));
+      write(
+        rows.map(
+          (row, index) =>
+            [row.key, predictTriage(shown[index], writes[index]!.patch, now)] as const,
+        ),
+      );
+      const outcomes = await sendWrites(
+        writes.map((undoWrite, index) => ({
+          target: rows[index]!,
+          patch: undoWrite.patch,
+          ifRevision: undoWrite.ifRevision,
+        })),
+        viewsRef.current,
+      );
+      let conflicts = 0;
+      let failure: string | null = null;
+      write(
+        outcomes.map((outcome, index) => {
+          const row = rows[index]!;
+          if (outcome.ok) return [row.key, outcome.entry] as const;
+          if (outcome.conflict) conflicts += 1;
+          else failure ??= outcome.message;
+          // Put back what the row showed. On this Mac the store's snapshot already holds the other write.
+          return [
+            row.key,
+            row.hostId === LOCAL_SIDEBAR_HOST_ID ? null : (shown[index] ?? null),
+          ] as const;
+        }),
+      );
+      if (conflicts > 0) {
+        toast(inboxTriageUndoConflictText(conflicts, rows.length), {
+          id: INBOX_TRIAGE_TOAST_ID,
+          duration: INBOX_TRIAGE_UNDO_MS,
+        });
+      } else if (failure) {
+        toast.error(failure, { id: INBOX_TRIAGE_TOAST_ID });
+      }
+    },
+    [currentFor, write],
+  );
 
-  const act = React.useCallback(async (
-    kind: InboxTriageKind,
-    rows: readonly InboxTriageRow[],
-    until?: number,
-    options?: InboxTriageActOptions,
-  ) => {
-    if (rows.length === 0) return;
-    const patch = inboxTriagePatch(kind, until);
-    const before = rows.map((row) => currentFor(row) ?? null);
-    const now = Date.now();
-    const markRead = options?.markRead;
-    if (markRead) markReadsPending(rows);
-    write(rows.map((row, index) => [row.key, predictTriage(before[index], patch, now)] as const));
-    const outcomes = await sendWrites(rows.map((row, index) => ({
-      target: row, patch, ifRevision: before[index]?.revision ?? 0,
-    })), viewsRef.current);
-    const items: InboxTriageUndoItem[] = [];
-    const written: InboxTriageRow[] = [];
-    let failure: string | null = null;
-    write(outcomes.map((outcome, index) => {
-      const row = rows[index]!;
-      if (outcome.ok) {
-        written.push(row);
-        items.push({
+  const act = React.useCallback(
+    async (
+      kind: InboxTriageKind,
+      rows: readonly InboxTriageRow[],
+      until?: number,
+      options?: InboxTriageActOptions,
+    ) => {
+      if (rows.length === 0) return;
+      const patch = inboxTriagePatch(kind, until);
+      const before = rows.map((row) => currentFor(row) ?? null);
+      const now = Date.now();
+      const markRead = options?.markRead;
+      if (markRead) markReadsPending(rows);
+      write(rows.map((row, index) => [row.key, predictTriage(before[index], patch, now)] as const));
+      const outcomes = await sendWrites(
+        rows.map((row, index) => ({
           target: row,
-          before: before[index] ?? null,
-          ...(row.readThrough?.lastAssistantAt !== undefined ? { lastAssistantAt: row.readThrough.lastAssistantAt } : {}),
           patch,
-          revision: outcome.entry.revision,
-        });
-        return [row.key, outcome.entry] as const;
+          ifRevision: before[index]?.revision ?? 0,
+        })),
+        viewsRef.current,
+      );
+      const items: InboxTriageUndoItem[] = [];
+      const written: InboxTriageRow[] = [];
+      let failure: string | null = null;
+      write(
+        outcomes.map((outcome, index) => {
+          const row = rows[index]!;
+          if (outcome.ok) {
+            written.push(row);
+            items.push({
+              target: row,
+              before: before[index] ?? null,
+              ...(row.readThrough?.lastAssistantAt !== undefined
+                ? { lastAssistantAt: row.readThrough.lastAssistantAt }
+                : {}),
+              patch,
+              revision: outcome.entry.revision,
+            });
+            return [row.key, outcome.entry] as const;
+          }
+          failure ??= outcome.conflict
+            ? "That chat changed on another device. Try again."
+            : outcome.message;
+          return [
+            row.key,
+            row.hostId === LOCAL_SIDEBAR_HOST_ID ? null : (before[index] ?? null),
+          ] as const;
+        }),
+      );
+      if (failure) toast.error(failure);
+      if (markRead) {
+        const refused = rows.filter((row) => !written.includes(row));
+        if (refused.length > 0) settleReads(refused.map((row) => row.key));
+        for (const row of written) {
+          void markRead(row).catch((error: unknown) => {
+            settleReads([row.key]);
+            toast.error(userFacingErrorMessage(error, READ_FAILED_MESSAGE));
+          });
+        }
       }
-      failure ??= outcome.conflict ? "That chat changed on another device. Try again." : outcome.message;
-      return [row.key, row.hostId === LOCAL_SIDEBAR_HOST_ID ? null : before[index] ?? null] as const;
-    }));
-    if (failure) toast.error(failure);
-    if (markRead) {
-      const refused = rows.filter((row) => !written.includes(row));
-      if (refused.length > 0) settleReads(refused.map((row) => row.key));
-      for (const row of written) {
-        void markRead(row).catch((error: unknown) => {
-          settleReads([row.key]);
-          toast.error(userFacingErrorMessage(error, READ_FAILED_MESSAGE));
-        });
-      }
-    }
-    if (items.length === 0) return;
-    const batch = mergeInboxTriageUndo(undoRef.current, {
-      kind,
-      items,
-      at: Date.now(),
-      ...(until !== undefined ? { until } : {}),
-    });
-    undoRef.current = batch;
-    toast(inboxTriageToastTitle(batch, (at) => formatSnoozeUntil(at, Date.now())), {
-      id: INBOX_TRIAGE_TOAST_ID,
-      duration: INBOX_TRIAGE_UNDO_MS,
-      action: { label: "Undo", onClick: () => void undo(batch) },
-    });
-  }, [currentFor, markReadsPending, settleReads, undo, write]);
+      if (items.length === 0) return;
+      const batch = mergeInboxTriageUndo(undoRef.current, {
+        kind,
+        items,
+        at: Date.now(),
+        ...(until !== undefined ? { until } : {}),
+      });
+      undoRef.current = batch;
+      toast(
+        inboxTriageToastTitle(batch, (at) => formatSnoozeUntil(at, Date.now())),
+        {
+          id: INBOX_TRIAGE_TOAST_ID,
+          duration: INBOX_TRIAGE_UNDO_MS,
+          action: { label: "Undo", onClick: () => void undo(batch) },
+        },
+      );
+    },
+    [currentFor, markReadsPending, settleReads, undo, write],
+  );
 
   const entryFor = React.useCallback(
     (row: InboxTriageRow) =>
-      newerTriage(row.hostId === LOCAL_SIDEBAR_HOST_ID ? local?.chats[row.chatId] : row.reported ?? undefined, overlay.get(row.key)),
+      newerTriage(
+        row.hostId === LOCAL_SIDEBAR_HOST_ID
+          ? local?.chats[row.chatId]
+          : (row.reported ?? undefined),
+        overlay.get(row.key),
+      ),
     [local, overlay],
   );
 

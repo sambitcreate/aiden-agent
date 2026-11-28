@@ -25,7 +25,9 @@ export function TurnFooter({ items }: { items: readonly TurnFooterItem[] }) {
           }
         >
           {index > 0 ? <span>·</span> : null}
-          <span className={item.kind === "model" ? "min-w-0 truncate" : undefined}>{item.text}</span>
+          <span className={item.kind === "model" ? "min-w-0 truncate" : undefined}>
+            {item.text}
+          </span>
         </span>
       ))}
     </p>

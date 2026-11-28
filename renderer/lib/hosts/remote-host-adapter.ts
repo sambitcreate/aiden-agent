@@ -67,14 +67,18 @@ export type PeerHostTransport = Pick<
 export const DEFAULT_WINDOW_LIMIT = 50;
 
 /** What a paired host grants this Mac, from the features and capabilities it reported. */
-export function remoteHostCapabilities(host: Pick<PeerHostView, "features" | "capabilities">): Set<HostChatCapability> {
+export function remoteHostCapabilities(
+  host: Pick<PeerHostView, "features" | "capabilities">,
+): Set<HostChatCapability> {
   const features = new Set(host.features);
   const grants = new Set(host.capabilities);
   const capabilities = new Set<HostChatCapability>();
-  if (features.has("chat-messages-window-v1") && grants.has("chat:read")) capabilities.add("messagesWindow");
+  if (features.has("chat-messages-window-v1") && grants.has("chat:read"))
+    capabilities.add("messagesWindow");
   if (features.has("run-streams-v1") && grants.has("runs:observe")) capabilities.add("observe");
   if (features.has("chat-read-state-v1") && grants.has("chat:read")) capabilities.add("markRead");
-  if (features.has("chat-context-pressure-v1") && grants.has("chat:read")) capabilities.add("contextPressure");
+  if (features.has("chat-context-pressure-v1") && grants.has("chat:read"))
+    capabilities.add("contextPressure");
   if (features.has("inbox-signals-v1") && grants.has("chat:read")) capabilities.add("inboxSignals");
   if (grants.has("workspace:browse")) capabilities.add("browseFolders");
   if (grants.has("workspace:manage")) capabilities.add("createWorkspace");
@@ -122,9 +126,15 @@ export function hostControlRefusal(
     case "online":
       return null;
     case "connecting":
-      return { code: "host_unavailable", message: `Still connecting to ${object}. Try again once it is online.` };
+      return {
+        code: "host_unavailable",
+        message: `Still connecting to ${object}. Try again once it is online.`,
+      };
     case "offline":
-      return { code: "host_unavailable", message: `${subject} is offline. Nothing is sent until it is back online.` };
+      return {
+        code: "host_unavailable",
+        message: `${subject} is offline. Nothing is sent until it is back online.`,
+      };
     case "blocked":
       return {
         code: "host_blocked",
@@ -136,18 +146,24 @@ export function hostControlRefusal(
   }
 }
 
-const OUTCOME_UNKNOWN_MESSAGE = "The connection to that computer changed before it answered. It may or may not have applied this change.";
+const OUTCOME_UNKNOWN_MESSAGE =
+  "The connection to that computer changed before it answered. It may or may not have applied this change.";
 
 function text(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function record(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function failure(error: unknown): HostChatError {
-  return { code: "failed", message: error instanceof Error ? error.message : "The request to that computer failed." };
+  return {
+    code: "failed",
+    message: error instanceof Error ? error.message : "The request to that computer failed.",
+  };
 }
 
 /**
@@ -174,31 +190,45 @@ export function mapHostChatLineage(value: unknown): HostChatLineage {
   const chat = record(value);
   const revision = text(chat.revision);
   if (!revision) throw new Error("That computer's chat had no revision.");
-  return { revision, ...(chat.forkedFrom === undefined ? {} : { forkedFrom: mapHostForkLineage(chat.forkedFrom) }) };
+  return {
+    revision,
+    ...(chat.forkedFrom === undefined ? {} : { forkedFrom: mapHostForkLineage(chat.forkedFrom) }),
+  };
 }
 
 export function mapHostForkedChat(value: unknown): HostForkedChat {
   const body = record(value);
   const chat = record(body.chat);
   const id = text(chat.id);
-  if (!id || typeof chat.title !== "string") throw new Error("That computer's fork was incomplete.");
-  const forked: HostForkedChat = { id, title: chat.title, forkedFrom: mapHostForkLineage(chat.forkedFrom) };
+  if (!id || typeof chat.title !== "string")
+    throw new Error("That computer's fork was incomplete.");
+  const forked: HostForkedChat = {
+    id,
+    title: chat.title,
+    forkedFrom: mapHostForkLineage(chat.forkedFrom),
+  };
   if (body.prefill === undefined) return forked;
   const prefill = record(body.prefill);
-  if (typeof prefill.text !== "string") throw new Error("That computer's fork prefill was incomplete.");
+  if (typeof prefill.text !== "string")
+    throw new Error("That computer's fork prefill was incomplete.");
   const attachments = Array.isArray(prefill.attachments) ? prefill.attachments : [];
   const attachmentIds = attachments.map((attachment) => text(record(attachment).id));
-  if (attachmentIds.some((attachmentId) => !attachmentId)) throw new Error("That computer's fork prefill was incomplete.");
+  if (attachmentIds.some((attachmentId) => !attachmentId))
+    throw new Error("That computer's fork prefill was incomplete.");
   return { ...forked, prefill: { text: prefill.text, attachmentIds: attachmentIds as string[] } };
 }
 
 function pressureNumber(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error("That computer's context pressure was malformed.");
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
+    throw new Error("That computer's context pressure was malformed.");
   return value;
 }
 
 /** `GET /chats/{chatId}/context`, as main validated it: `null` when the host cannot project the chat. */
-export function mapHostContextPressure(value: unknown, chatId: string): RemoteContextPressure | null {
+export function mapHostContextPressure(
+  value: unknown,
+  chatId: string,
+): RemoteContextPressure | null {
   const body = record(value);
   if (body.chatId !== chatId) throw new Error("That computer answered for another chat.");
   if (body.pressure === null) return null;
@@ -246,7 +276,13 @@ function remoteTime(value: unknown): number | undefined {
 export function remoteTriageEntry(value: Record<string, unknown>): ChatTriageEntry | null {
   const revision = value.revision;
   const updatedAt = remoteTime(value.updatedAt);
-  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1 || updatedAt === undefined) return null;
+  if (
+    typeof revision !== "number" ||
+    !Number.isSafeInteger(revision) ||
+    revision < 1 ||
+    updatedAt === undefined
+  )
+    return null;
   const entry: ChatTriageEntry = { revision, updatedAt };
   const pinnedAt = remoteTime(value.pinnedAt);
   const doneAt = remoteTime(value.doneAt);
@@ -307,7 +343,8 @@ export class RemoteHostAdapter implements HostChatAdapter {
 
   private chatChanged(chatId: string): void {
     if (this.disposed) return;
-    for (const adapter of [...liveAdapters]) if (adapter.hostId === this.hostId) adapter.notifyChatChanged(chatId);
+    for (const adapter of [...liveAdapters])
+      if (adapter.hostId === this.hostId) adapter.notifyChatChanged(chatId);
   }
 
   private notifyChatChanged(chatId: string): void {
@@ -322,7 +359,9 @@ export class RemoteHostAdapter implements HostChatAdapter {
     } catch (error) {
       if (
         error instanceof HostChatControlError &&
-        (error.code === "outcome_unknown" || error.remoteCode === "revision_conflict" || error.status === 409)
+        (error.code === "outcome_unknown" ||
+          error.remoteCode === "revision_conflict" ||
+          error.status === 409)
       )
         this.chatChanged(chatId);
       throw error;
@@ -331,7 +370,12 @@ export class RemoteHostAdapter implements HostChatAdapter {
 
   private acceptStatus(status: PeerHostStatus): void {
     // Statuses are broadcast for every host and may arrive out of order.
-    if (this.disposed || status.hostId !== this.hostId || status.generation <= this.current.generation) return;
+    if (
+      this.disposed ||
+      status.hostId !== this.hostId ||
+      status.generation <= this.current.generation
+    )
+      return;
     this.current = { ...hostAvailability(status), generation: status.generation };
     for (const listener of [...this.listeners]) listener(this.current);
   }
@@ -345,11 +389,15 @@ export class RemoteHostAdapter implements HostChatAdapter {
     } catch (error) {
       result = { ok: false, error: failure(error) };
     }
-    if (this.disposed || this.current.generation !== generation) return { ok: false, error: FENCED_ERROR };
+    if (this.disposed || this.current.generation !== generation)
+      return { ok: false, error: FENCED_ERROR };
     return result;
   }
 
-  getMessagesWindow(chatId: string, request: HostChatWindowRequest = {}): Promise<HostChatResult<RemoteMessagesWindow>> {
+  getMessagesWindow(
+    chatId: string,
+    request: HostChatWindowRequest = {},
+  ): Promise<HostChatResult<RemoteMessagesWindow>> {
     return this.fenced(async () => {
       const outcome = await this.transport.call(this.hostId, {
         operation: "messagesWindow",
@@ -359,17 +407,28 @@ export class RemoteHostAdapter implements HostChatAdapter {
       });
       if (!outcome.ok) return outcome;
       const window = mapRemoteMessagesWindow(outcome.value);
-      if (window.chatId !== chatId) return { ok: false, error: { code: "failed", message: "That computer answered for another chat." } };
+      if (window.chatId !== chatId)
+        return {
+          ok: false,
+          error: { code: "failed", message: "That computer answered for another chat." },
+        };
       return { ok: true, value: window };
     });
   }
 
   /** A legacy row has no message ID. Capture its tail, then verify the list
    * still describes the revision the person acted on before acknowledging it. */
-  async markSummaryRead(chatId: string, messageId?: string, revision?: string): Promise<HostChatResult<void>> {
+  async markSummaryRead(
+    chatId: string,
+    messageId?: string,
+    revision?: string,
+  ): Promise<HostChatResult<void>> {
     if (messageId) return this.markRead(chatId, messageId);
     return this.fenced(async () => {
-      const changed = { ok: false, error: { code: "failed", message: "Open the chat to mark its latest reply read." } } as const;
+      const changed = {
+        ok: false,
+        error: { code: "failed", message: "Open the chat to mark its latest reply read." },
+      } as const;
       if (!revision) return changed;
       let messageId: string | undefined;
       if (this.granted.has("messagesWindow")) {
@@ -377,7 +436,10 @@ export class RemoteHostAdapter implements HostChatAdapter {
         if (!window.ok) return window;
         messageId = window.value.messages[window.value.messages.length - 1]?.id;
       } else {
-        const chat = await this.transport.call(this.hostId, { operation: "chat", resourceId: chatId });
+        const chat = await this.transport.call(this.hostId, {
+          operation: "chat",
+          resourceId: chatId,
+        });
         if (!chat.ok) return chat;
         const detail = record(chat.value);
         if (detail.id !== chatId || !Array.isArray(detail.messages)) return changed;
@@ -389,11 +451,17 @@ export class RemoteHostAdapter implements HostChatAdapter {
       const seen = new Set<string>();
       // A host snapshot holds at most 10,000 rows (100 default-sized pages).
       do {
-        const page = await this.transport.call(this.hostId, { operation: "summaries", ...(cursor ? { cursor } : {}) });
+        const page = await this.transport.call(this.hostId, {
+          operation: "summaries",
+          ...(cursor ? { cursor } : {}),
+        });
         if (!page.ok) return page;
         const data = record(page.value);
-        const row = Array.isArray(data.summaries) ? data.summaries.find((item) => record(item).id === chatId) : undefined;
-        if (row) return record(row).revision === revision ? this.markRead(chatId, messageId) : changed;
+        const row = Array.isArray(data.summaries)
+          ? data.summaries.find((item) => record(item).id === chatId)
+          : undefined;
+        if (row)
+          return record(row).revision === revision ? this.markRead(chatId, messageId) : changed;
         cursor = typeof data.nextCursor === "string" ? data.nextCursor : undefined;
         if (!cursor || seen.has(cursor)) break;
         seen.add(cursor);
@@ -421,14 +489,26 @@ export class RemoteHostAdapter implements HostChatAdapter {
    * applies it at most once. A stale `ifRevision` comes back as a conflict
    * carrying the host's current revision, not as an error.
    */
-  async setTriage(chatId: string, patch: ChatTriagePatch, ifRevision?: number): Promise<ChatTriageResult> {
+  async setTriage(
+    chatId: string,
+    patch: ChatTriagePatch,
+    ifRevision?: number,
+  ): Promise<ChatTriageResult> {
     const body: Record<string, unknown> = {};
     if (patch.pinned !== undefined) body.pinned = patch.pinned;
     if (patch.done !== undefined) body.done = patch.done;
-    if (patch.restoreDoneAt !== undefined) body.restoreDoneAt = new Date(patch.restoreDoneAt).toISOString();
-    if (patch.snoozeUntil !== undefined) body.snoozeUntil = patch.snoozeUntil === null ? null : new Date(patch.snoozeUntil).toISOString();
+    if (patch.restoreDoneAt !== undefined)
+      body.restoreDoneAt = new Date(patch.restoreDoneAt).toISOString();
+    if (patch.snoozeUntil !== undefined)
+      body.snoozeUntil =
+        patch.snoozeUntil === null ? null : new Date(patch.snoozeUntil).toISOString();
     if (ifRevision !== undefined) body.ifRevision = ifRevision;
-    const operation: PeerOperation = { operation: "setTriage", resourceId: chatId, body, idempotencyKey: mintPeerIdempotencyKey() };
+    const operation: PeerOperation = {
+      operation: "setTriage",
+      resourceId: chatId,
+      body,
+      idempotencyKey: mintPeerIdempotencyKey(),
+    };
     const conflict = (error: PeerOperationError) =>
       error.remoteCode === "revision_conflict"
         ? { value: { conflict: Number(error.details?.currentRevision ?? Number.NaN) } }
@@ -448,11 +528,17 @@ export class RemoteHostAdapter implements HostChatAdapter {
         ok: false,
         code: "revision_conflict",
         entry: null,
-        ...(typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0 ? { currentRevision: revision } : {}),
+        ...(typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0
+          ? { currentRevision: revision }
+          : {}),
       };
     }
     const entry = remoteTriageEntry(answer);
-    if (!entry || answer.chatId !== chatId) throw new HostChatControlError({ code: "invalid_response", message: "That computer's answer was incomplete." });
+    if (!entry || answer.chatId !== chatId)
+      throw new HostChatControlError({
+        code: "invalid_response",
+        message: "That computer's answer was incomplete.",
+      });
     return { ok: true, entry };
   }
 
@@ -470,7 +556,10 @@ export class RemoteHostAdapter implements HostChatAdapter {
   ): Promise<unknown> {
     if (this.disposed) throw new HostChatControlError(FENCED_ERROR);
     if (!this.granted.has(capability))
-      throw new HostChatControlError({ code: "unsupported", message: "That computer does not allow that from here." });
+      throw new HostChatControlError({
+        code: "unsupported",
+        message: "That computer does not allow that from here.",
+      });
     const refusal = hostControlRefusal(this.current);
     if (refusal) throw new HostChatControlError(refusal);
     const generation = this.current.generation;
@@ -486,7 +575,11 @@ export class RemoteHostAdapter implements HostChatAdapter {
     if (outcome.ok) return outcome.value;
     // The host answered, but not in the expected shape: it may have applied the change.
     if (outcome.error.code === "invalid_response")
-      throw new HostChatControlError({ ...outcome.error, code: "outcome_unknown", message: OUTCOME_UNKNOWN_MESSAGE });
+      throw new HostChatControlError({
+        ...outcome.error,
+        code: "outcome_unknown",
+        message: OUTCOME_UNKNOWN_MESSAGE,
+      });
     const recovered = recover?.(outcome.error);
     if (recovered) return recovered.value;
     throw new HostChatControlError(outcome.error);
@@ -494,28 +587,42 @@ export class RemoteHostAdapter implements HostChatAdapter {
 
   async send(chatId: string, input: HostChatSendInput): Promise<HostChatTurnReceipt> {
     const value = record(
-      await this.mutate("send", {
-        operation: "send",
-        resourceId: chatId,
-        body: {
-          text: input.text,
-          ...(input.attachmentIds?.length ? { attachmentIds: input.attachmentIds } : {}),
-          ...(input.skill ? { skill: input.skill } : {}),
-          ...turnSelectionBody(input),
+      await this.mutate(
+        "send",
+        {
+          operation: "send",
+          resourceId: chatId,
+          body: {
+            text: input.text,
+            ...(input.attachmentIds?.length ? { attachmentIds: input.attachmentIds } : {}),
+            ...(input.skill ? { skill: input.skill } : {}),
+            ...turnSelectionBody(input),
+          },
+          idempotencyKey: input.idempotencyKey,
         },
-        idempotencyKey: input.idempotencyKey,
-      }, undefined, input.savedIntent),
+        undefined,
+        input.savedIntent,
+      ),
     );
     const turnId = text(value.turnId);
     const streamId = text(value.streamId);
-    if (!turnId || !streamId) throw new HostChatControlError({ code: "invalid_response", message: "That computer's answer was incomplete." });
+    if (!turnId || !streamId)
+      throw new HostChatControlError({
+        code: "invalid_response",
+        message: "That computer's answer was incomplete.",
+      });
     return { turnId, streamId };
   }
 
   async cancel(_chatId: string, input: HostChatCancelInput): Promise<boolean> {
     const value = await this.mutate(
       "cancel",
-      { operation: "runCancel", resourceId: input.runId, body: {}, idempotencyKey: input.idempotencyKey ?? mintPeerIdempotencyKey() },
+      {
+        operation: "runCancel",
+        resourceId: input.runId,
+        body: {},
+        idempotencyKey: input.idempotencyKey ?? mintPeerIdempotencyKey(),
+      },
       // The run already finished and the host let it go: nothing is left to stop.
       (error) => (error.remoteCode === "run_gone" ? { value: { cancelRequested: false } } : null),
       input.savedIntent,
@@ -523,15 +630,25 @@ export class RemoteHostAdapter implements HostChatAdapter {
     return record(value).cancelRequested === true;
   }
 
-  async respondApproval(_chatId: string, input: HostChatApprovalInput): Promise<HostChatApprovalResult> {
-    if (!input.runId) throw new HostChatControlError({ code: "invalid", message: "This approval is no longer attached to a run." });
+  async respondApproval(
+    _chatId: string,
+    input: HostChatApprovalInput,
+  ): Promise<HostChatApprovalResult> {
+    if (!input.runId)
+      throw new HostChatControlError({
+        code: "invalid",
+        message: "This approval is no longer attached to a run.",
+      });
     const value = await this.mutate(
       "respondApproval",
       {
         operation: "runRespondApproval",
         resourceId: input.runId,
         itemId: input.approvalId,
-        body: { decision: input.decision, ...(input.decision === "allow" && input.scope ? { scope: input.scope } : {}) },
+        body: {
+          decision: input.decision,
+          ...(input.decision === "allow" && input.scope ? { scope: input.scope } : {}),
+        },
         idempotencyKey: input.idempotencyKey ?? mintPeerIdempotencyKey(),
       },
       // First responder wins: another device or the host's own screen answered.
@@ -543,21 +660,32 @@ export class RemoteHostAdapter implements HostChatAdapter {
     );
     const result = record(value);
     if (result.elsewhere === true) {
-      const decision = result.decision === "allow" || result.decision === "deny" ? result.decision : undefined;
+      const decision =
+        result.decision === "allow" || result.decision === "deny" ? result.decision : undefined;
       return { resolution: "elsewhere", ...(decision ? { decision } : {}) };
     }
     return { resolution: "applied" };
   }
 
-  async answerQuestion(_chatId: string, input: HostChatQuestionInput): Promise<HostChatQuestionResult> {
-    if (!input.runId) throw new HostChatControlError({ code: "invalid", message: "This question is no longer attached to a run." });
+  async answerQuestion(
+    _chatId: string,
+    input: HostChatQuestionInput,
+  ): Promise<HostChatQuestionResult> {
+    if (!input.runId)
+      throw new HostChatControlError({
+        code: "invalid",
+        message: "This question is no longer attached to a run.",
+      });
     const value = await this.mutate(
       "answerQuestion",
       {
         operation: "runRespondQuestion",
         resourceId: input.runId,
         itemId: input.promptId,
-        body: { cancelled: input.response.cancelled, answers: input.response.cancelled ? [] : input.response.answers },
+        body: {
+          cancelled: input.response.cancelled,
+          answers: input.response.cancelled ? [] : input.response.answers,
+        },
         idempotencyKey: input.idempotencyKey ?? mintPeerIdempotencyKey(),
       },
       (error) =>
@@ -567,21 +695,34 @@ export class RemoteHostAdapter implements HostChatAdapter {
       input.savedIntent,
     );
     const outcome = record(value).outcome;
-    return { status: outcome === "answered" || outcome === "expired" || outcome === "elsewhere" ? outcome : undefined };
+    return {
+      status:
+        outcome === "answered" || outcome === "expired" || outcome === "elsewhere"
+          ? outcome
+          : undefined,
+    };
   }
 
   async submitInput(_chatId: string, input: HostChatInput): Promise<ChatRunInputAdmissionResult> {
     const value = record(
-      await this.mutate("steer", {
-        operation: "runInputs",
-        resourceId: input.runId,
-        body: { mode: input.mode, text: input.text },
-        idempotencyKey: input.idempotencyKey ?? mintPeerIdempotencyKey(),
-      }, undefined, input.savedIntent),
+      await this.mutate(
+        "steer",
+        {
+          operation: "runInputs",
+          resourceId: input.runId,
+          body: { mode: input.mode, text: input.text },
+          idempotencyKey: input.idempotencyKey ?? mintPeerIdempotencyKey(),
+        },
+        undefined,
+        input.savedIntent,
+      ),
     );
     const queue = value.queue === "steer" || value.queue === "follow-up" ? value.queue : undefined;
     const reason =
-      value.reason === "run_not_active" || value.reason === "cancelled" || value.reason === "capacity" || value.reason === "invalid"
+      value.reason === "run_not_active" ||
+      value.reason === "cancelled" ||
+      value.reason === "capacity" ||
+      value.reason === "invalid"
         ? value.reason
         : undefined;
     const messageId = text(value.messageId);
@@ -595,33 +736,64 @@ export class RemoteHostAdapter implements HostChatAdapter {
   }
 
   async rename(chatId: string, input: HostChatRenameInput): Promise<void> {
-    if (!input.revision) throw new HostChatControlError({ code: "invalid", message: "Load the chat before renaming it." });
+    if (!input.revision)
+      throw new HostChatControlError({
+        code: "invalid",
+        message: "Load the chat before renaming it.",
+      });
     const revision = input.revision;
     await this.guarded(chatId, () =>
-      this.mutate("rename", { operation: "renameChat", resourceId: chatId, body: { title: input.title }, revision }),
+      this.mutate("rename", {
+        operation: "renameChat",
+        resourceId: chatId,
+        body: { title: input.title },
+        revision,
+      }),
     );
     // The rename gave the chat a new revision; reread it before another guarded change.
     this.chatChanged(chatId);
   }
 
   async remove(chatId: string, input: { revision?: string } = {}): Promise<void> {
-    if (!input.revision) throw new HostChatControlError({ code: "invalid", message: "Load the chat before deleting it." });
+    if (!input.revision)
+      throw new HostChatControlError({
+        code: "invalid",
+        message: "Load the chat before deleting it.",
+      });
     const revision = input.revision;
-    await this.guarded(chatId, () => this.mutate("remove", { operation: "deleteChat", resourceId: chatId, revision }));
+    await this.guarded(chatId, () =>
+      this.mutate("remove", { operation: "deleteChat", resourceId: chatId, revision }),
+    );
   }
 
-  async uploadAttachment(chatId: string, upload: HostChatAttachmentUpload): Promise<HostStagedAttachment> {
+  async uploadAttachment(
+    chatId: string,
+    upload: HostChatAttachmentUpload,
+  ): Promise<HostStagedAttachment> {
     // Not keyed: an unused upload expires on the host, so a retry after a
     // lost answer only leaves a short-lived orphan behind.
-    const value = record(await this.mutate("attach", { operation: "uploadAttachment", resourceId: chatId, body: upload }));
+    const value = record(
+      await this.mutate("attach", {
+        operation: "uploadAttachment",
+        resourceId: chatId,
+        body: upload,
+      }),
+    );
     const id = text(value.id);
     if (!id || typeof value.size !== "number")
-      throw new HostChatControlError({ code: "invalid_response", message: "That computer's answer was incomplete." });
+      throw new HostChatControlError({
+        code: "invalid_response",
+        message: "That computer's answer was incomplete.",
+      });
     return { id, name: text(value.name) ?? upload.name, size: value.size };
   }
 
   async removeAttachment(chatId: string, attachmentId: string): Promise<void> {
-    await this.mutate("attach", { operation: "removeAttachment", resourceId: chatId, itemId: attachmentId });
+    await this.mutate("attach", {
+      operation: "removeAttachment",
+      resourceId: chatId,
+      itemId: attachmentId,
+    });
   }
 
   async fork(chatId: string, input: HostChatForkInput): Promise<HostForkedChat> {
@@ -630,13 +802,18 @@ export class RemoteHostAdapter implements HostChatAdapter {
       : {};
     // A summary fork needs the summary feature too; a plain fork does not.
     const value = await this.guarded(chatId, () =>
-      this.mutate(input.summary ? "forkSummary" : "fork", {
-        operation: "forkChat",
-        resourceId: chatId,
-        body: { messageId: input.messageId, position: input.position, ...summary },
-        revision: input.revision,
-        idempotencyKey: input.idempotencyKey,
-      }, undefined, input.savedIntent),
+      this.mutate(
+        input.summary ? "forkSummary" : "fork",
+        {
+          operation: "forkChat",
+          resourceId: chatId,
+          body: { messageId: input.messageId, position: input.position, ...summary },
+          revision: input.revision,
+          idempotencyKey: input.idempotencyKey,
+        },
+        undefined,
+        input.savedIntent,
+      ),
     );
     // A fork leaves its source untouched, so the open transcript stays current.
     return this.shaped(value, mapHostForkedChat);
@@ -664,11 +841,18 @@ export class RemoteHostAdapter implements HostChatAdapter {
 
   /** The chat's lineage with its summary. It reads the whole chat, so a very long one may not fit the response cap. */
   forkLineage(chatId: string): Promise<HostChatResult<HostChatLineage>> {
-    return this.read("messagesWindow", { operation: "chat", resourceId: chatId }, mapHostChatLineage);
+    return this.read(
+      "messagesWindow",
+      { operation: "chat", resourceId: chatId },
+      mapHostChatLineage,
+    );
   }
 
   /** One image's bytes, checked by the host against the chat; a host without the route answers `not_found`. */
-  attachmentContent(chatId: string, attachmentId: string): Promise<HostChatResult<PeerAttachmentContent>> {
+  attachmentContent(
+    chatId: string,
+    attachmentId: string,
+  ): Promise<HostChatResult<PeerAttachmentContent>> {
     return this.read(
       "messagesWindow",
       { operation: "attachmentContent", resourceId: chatId, itemId: attachmentId },
@@ -677,9 +861,16 @@ export class RemoteHostAdapter implements HostChatAdapter {
   }
 
   /** Runs a read the host must grant first, dropping its answer when the connection moved on. */
-  private read<T>(capability: HostChatCapability, operation: PeerOperation, map: (value: unknown) => T): Promise<HostChatResult<T>> {
+  private read<T>(
+    capability: HostChatCapability,
+    operation: PeerOperation,
+    map: (value: unknown) => T,
+  ): Promise<HostChatResult<T>> {
     if (!this.granted.has(capability))
-      return Promise.resolve({ ok: false, error: { code: "unsupported", message: "That computer does not allow that from here." } });
+      return Promise.resolve({
+        ok: false,
+        error: { code: "unsupported", message: "That computer does not allow that from here." },
+      });
     return this.fenced(async () => {
       const outcome = await this.transport.call(this.hostId, operation);
       if (!outcome.ok) return outcome;
@@ -693,11 +884,16 @@ export class RemoteHostAdapter implements HostChatAdapter {
 
   /** The host's skill catalog for one of its chats. */
   skills(chatId: string): Promise<HostChatResult<SkillCatalogEntry[]>> {
-    return this.read("skills", { operation: "skills", resourceId: chatId }, (value) => parseSkillCatalog(record(value).skills));
+    return this.read("skills", { operation: "skills", resourceId: chatId }, (value) =>
+      parseSkillCatalog(record(value).skills),
+    );
   }
 
   /** The chat's next-request context pressure on the host, priced with `model` when given. */
-  contextPressure(chatId: string, model?: HostTurnModel): Promise<HostChatResult<RemoteContextPressure | null>> {
+  contextPressure(
+    chatId: string,
+    model?: HostTurnModel,
+  ): Promise<HostChatResult<RemoteContextPressure | null>> {
     return this.read(
       "contextPressure",
       {
@@ -735,7 +931,10 @@ export class RemoteHostAdapter implements HostChatAdapter {
     );
   }
 
-  async createWorkspace(body: HostWorkspaceCreate, idempotencyKey: string): Promise<HostCreatedWorkspace> {
+  async createWorkspace(
+    body: HostWorkspaceCreate,
+    idempotencyKey: string,
+  ): Promise<HostCreatedWorkspace> {
     return this.shaped(
       await this.mutate("createWorkspace", { operation: "createWorkspace", body, idempotencyKey }),
       mapHostCreatedWorkspace,
@@ -756,7 +955,12 @@ export class RemoteHostAdapter implements HostChatAdapter {
   /** Opens the Bot's chat on the host; the host returns the existing one when there is one. */
   async createBotChat(botId: string, idempotencyKey: string): Promise<HostCreatedChat> {
     return this.shaped(
-      await this.mutate("botChats", { operation: "createBotChat", resourceId: botId, body: {}, idempotencyKey }),
+      await this.mutate("botChats", {
+        operation: "createBotChat",
+        resourceId: botId,
+        body: {},
+        idempotencyKey,
+      }),
       mapHostCreatedChat,
     );
   }
@@ -765,7 +969,10 @@ export class RemoteHostAdapter implements HostChatAdapter {
     try {
       return map(value);
     } catch {
-      throw new HostChatControlError({ code: "invalid_response", message: "That computer's answer was incomplete." });
+      throw new HostChatControlError({
+        code: "invalid_response",
+        message: "That computer's answer was incomplete.",
+      });
     }
   }
 
@@ -822,7 +1029,9 @@ export class RemoteHostAdapter implements HostChatAdapter {
 }
 
 /** A turn's model and effort fields, exactly as the host's turn body takes them. */
-export function turnSelectionBody(input: Pick<HostChatSendInput, "model" | "thinkingLevel">): Record<string, string> {
+export function turnSelectionBody(
+  input: Pick<HostChatSendInput, "model" | "thinkingLevel">,
+): Record<string, string> {
   return {
     ...(input.model ? { providerId: input.model.providerId, modelId: input.model.modelId } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),

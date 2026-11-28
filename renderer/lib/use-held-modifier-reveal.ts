@@ -6,10 +6,7 @@ import {
   trackedModifiersFromSets,
 } from "./held-modifier-reveal";
 
-export function useHeldModifierReveal(
-  modifierSets: readonly string[][],
-  delayMs: number,
-): boolean {
+export function useHeldModifierReveal(modifierSets: readonly string[][], delayMs: number): boolean {
   const [visible, setVisible] = React.useState(false);
   const signature = modifierSets.map((modifiers) => modifiers.join("+")).join("|");
 

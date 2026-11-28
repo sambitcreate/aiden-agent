@@ -1,4 +1,7 @@
-import { mcpOAuthMetadataUrlForServer, validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
+import {
+  mcpOAuthMetadataUrlForServer,
+  validateMcpServerMetadata,
+} from "../../renderer/shared/mcp-oauth-config.js";
 import { normalizeMcpExposureFields } from "../../renderer/shared/mcp-exposure.js";
 // Pure parsing helpers for the phase-2 IPC handlers (Skills, MCP servers),
 // extracted so they can be unit-tested without importing Electron.
@@ -53,7 +56,9 @@ export function parseMcpServer(value: unknown): McpServer {
   if (typeof value !== "object" || value === null) throw new Error("Invalid MCP server payload.");
   const s = value as Record<string, unknown>;
   if (s.transport === "sse") {
-    throw new Error("Legacy SSE MCP servers are no longer supported. Use the server's Streamable HTTP URL instead.");
+    throw new Error(
+      "Legacy SSE MCP servers are no longer supported. Use the server's Streamable HTTP URL instead.",
+    );
   }
   const transport: McpTransport = s.transport === "http" ? "http" : "stdio";
   validateMcpServerMetadata({ ...s, transport });

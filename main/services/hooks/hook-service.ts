@@ -22,7 +22,13 @@
 import { randomBytes } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createHookDispatcher, normalizeHookPayload, type ActiveHook, type AidenHookDispatcher, type HookRunFunction } from "./hook-dispatcher.js";
+import {
+  createHookDispatcher,
+  normalizeHookPayload,
+  type ActiveHook,
+  type AidenHookDispatcher,
+  type HookRunFunction,
+} from "./hook-dispatcher.js";
 import { claudeToolName } from "./hook-aliases.js";
 import {
   hookDefinitionFor,
@@ -38,8 +44,18 @@ import {
 } from "./hook-config.js";
 import { compileHookMatcher, matcherMatchesTool, matcherMatchesValue } from "./hook-matcher.js";
 import { mergeHookResults } from "./hook-merge.js";
-import { interpretHookRun, runHookCommand, type HookHandlerResult, type HookRawRun, type ShellRunner } from "./hook-runner.js";
-import { digestWithScriptFiles, hookScriptFiles, type HookScriptScan } from "./hook-script-files.js";
+import {
+  interpretHookRun,
+  runHookCommand,
+  type HookHandlerResult,
+  type HookRawRun,
+  type ShellRunner,
+} from "./hook-runner.js";
+import {
+  digestWithScriptFiles,
+  hookScriptFiles,
+  type HookScriptScan,
+} from "./hook-script-files.js";
 import {
   HookEntryStore,
   listingDefinition,
@@ -202,7 +218,10 @@ export interface HookService {
    * A saved hook runs only when `digest` is still its current digest, so a
    * Test press never runs a command the owner wasn't shown.
    */
-  testHook(target: HookTestTarget | HookDraft, fixturePayload?: Partial<HookPayload>): Promise<HookResult<HookTestResult>>;
+  testHook(
+    target: HookTestTarget | HookDraft,
+    fixturePayload?: Partial<HookPayload>,
+  ): Promise<HookResult<HookTestResult>>;
   getRunLog(hookId: string): HookRunRecord[];
   onChange(listener: (change: HookChange) => void): () => void;
 }
@@ -235,7 +254,11 @@ function describeTrigger(event: HookEvent, matcher: string): string {
   const compiled = compileHookMatcher(matcher);
   const all = !compiled.ok || compiled.matcher.kind === "all";
   const list = compiled.ok && compiled.matcher.kind === "list" ? compiled.matcher.names : undefined;
-  const tools = all ? "every tool call" : list ? `${[...list].map((name) => claudeToolName(name)).join(", ")} calls` : `tool calls matching /${matcher}/`;
+  const tools = all
+    ? "every tool call"
+    : list
+      ? `${[...list].map((name) => claudeToolName(name)).join(", ")} calls`
+      : `tool calls matching /${matcher}/`;
   switch (event) {
     case "PreToolUse":
       return `before ${tools}`;
@@ -265,13 +288,28 @@ function describeTrigger(event: HookEvent, matcher: string): string {
 }
 
 /** Plain summary for an approval card, e.g. `Runs "./guard.sh" before Bash calls in this chat.` */
-export function summarizeHook(definition: Pick<HookDefinition, "event" | "matcher" | "handler" | "scope">): string {
-  const command = definition.handler.command.length > 200 ? `${definition.handler.command.slice(0, 200)}…` : definition.handler.command;
-  const parts = [`Runs "${command}" ${describeTrigger(definition.event, definition.matcher)} ${describeScope(definition.scope)}.`];
-  const details = [`Stops after ${clampHookTimeout(definition.handler.timeout, definition.handler.async)} s`];
+export function summarizeHook(
+  definition: Pick<HookDefinition, "event" | "matcher" | "handler" | "scope">,
+): string {
+  const command =
+    definition.handler.command.length > 200
+      ? `${definition.handler.command.slice(0, 200)}…`
+      : definition.handler.command;
+  const parts = [
+    `Runs "${command}" ${describeTrigger(definition.event, definition.matcher)} ${describeScope(definition.scope)}.`,
+  ];
+  const details = [
+    `Stops after ${clampHookTimeout(definition.handler.timeout, definition.handler.async)} s`,
+  ];
   if (definition.handler.async) details.push("runs in the background; Aiden doesn't wait for it");
-  if (definition.event === "PreToolUse") details.push(definition.handler.failClosed ? "blocks the tool if it fails" : "lets the tool run if it fails");
-  if (definition.handler.envAllow?.length) details.push(`can read ${definition.handler.envAllow.join(", ")}`);
+  if (definition.event === "PreToolUse")
+    details.push(
+      definition.handler.failClosed
+        ? "blocks the tool if it fails"
+        : "lets the tool run if it fails",
+    );
+  if (definition.handler.envAllow?.length)
+    details.push(`can read ${definition.handler.envAllow.join(", ")}`);
   parts.push(`${details.join("; ")}.`);
   return parts.join(" ");
 }
@@ -281,7 +319,12 @@ export function hookFixturePayload(event: HookEvent, cwd: string): HookPayload {
   const base = { hook_event_name: event, session_id: "hook-test", cwd };
   switch (event) {
     case "PreToolUse":
-      return { ...base, tool_name: "Bash", aiden_tool_name: "run_command", tool_input: { command: "echo hello", description: "Print hello" } };
+      return {
+        ...base,
+        tool_name: "Bash",
+        aiden_tool_name: "run_command",
+        tool_input: { command: "echo hello", description: "Print hello" },
+      };
     case "PostToolUse":
       return {
         ...base,
@@ -300,15 +343,28 @@ export function hookFixturePayload(event: HookEvent, cwd: string): HookPayload {
     case "SubagentStop":
       return { ...base, stop_hook_active: false };
     case "Notification":
-      return { ...base, message: "Aiden needs your approval to run a command.", notification_type: "permission_prompt" };
+      return {
+        ...base,
+        message: "Aiden needs your approval to run a command.",
+        notification_type: "permission_prompt",
+      };
     case "PreCompact":
       return { ...base, trigger: "manual", custom_instructions: "" };
     case "WorktreeSetup":
-      return { ...base, worktree_path: path.join(cwd, ".aiden", "worktrees", "example"), branch: "aiden/example" };
+      return {
+        ...base,
+        worktree_path: path.join(cwd, ".aiden", "worktrees", "example"),
+        branch: "aiden/example",
+      };
     case "RoutineRun":
       return { ...base, routine_id: "routine-example", routine_name: "Morning summary" };
     case "RoutineFailed":
-      return { ...base, routine_id: "routine-example", routine_name: "Morning summary", error: "The model provider was unavailable." };
+      return {
+        ...base,
+        routine_id: "routine-example",
+        routine_name: "Morning summary",
+        error: "The model provider was unavailable.",
+      };
   }
 }
 
@@ -317,12 +373,20 @@ function fixtureMatches(definition: HookDefinition, payload: HookPayload): boole
   if (!compiled.ok) return false;
   if (TOOL_EVENTS.has(definition.event)) {
     const tool = payload.aiden_tool_name ?? payload.tool_name;
-    return compiled.matcher.kind === "all" || (tool !== undefined && matcherMatchesTool(compiled.matcher, tool));
+    return (
+      compiled.matcher.kind === "all" ||
+      (tool !== undefined && matcherMatchesTool(compiled.matcher, tool))
+    );
   }
-  if (definition.event === "SessionStart") return matcherMatchesValue(compiled.matcher, payload.source);
-  if (definition.event === "PreCompact") return matcherMatchesValue(compiled.matcher, payload.trigger);
+  if (definition.event === "SessionStart")
+    return matcherMatchesValue(compiled.matcher, payload.source);
+  if (definition.event === "PreCompact")
+    return matcherMatchesValue(compiled.matcher, payload.trigger);
   if (definition.event === "Notification") {
-    return matcherMatchesValue(compiled.matcher, typeof payload.notification_type === "string" ? payload.notification_type : undefined);
+    return matcherMatchesValue(
+      compiled.matcher,
+      typeof payload.notification_type === "string" ? payload.notification_type : undefined,
+    );
   }
   return true;
 }
@@ -330,7 +394,11 @@ function fixtureMatches(definition: HookDefinition, payload: HookPayload): boole
 /** How many repo hooks' scripts are read at once. */
 const REPO_SCAN_CONCURRENCY = 4;
 
-async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   const worker = async () => {
@@ -356,7 +424,8 @@ function partialCoverageWarning(unfollowed: readonly string[]): string {
 }
 
 /** The refusal recorded when a workspace hook's scripts changed between the check and the start. */
-export const HOOK_SCRIPTS_CHANGED_ERROR = "a script it runs changed after Aiden checked it, so it didn't run";
+export const HOOK_SCRIPTS_CHANGED_ERROR =
+  "a script it runs changed after Aiden checked it, so it didn't run";
 
 /**
  * Wraps a runner so a workspace hook's script files are read again just
@@ -365,14 +434,25 @@ export const HOOK_SCRIPTS_CHANGED_ERROR = "a script it runs changed after Aiden 
  * reports a start failure, which a failClosed PreToolUse hook turns into a
  * deny. Other scopes run unchanged.
  */
-export function recheckScriptsBeforeRun(run: HookRunFunction, now: () => number = Date.now): HookRunFunction {
+export function recheckScriptsBeforeRun(
+  run: HookRunFunction,
+  now: () => number = Date.now,
+): HookRunFunction {
   return async (hook, payload, context) => {
     const root = workspaceRootOf(hook.scope);
     if (!root) return run(hook, payload, context);
     let unchanged = false;
     try {
-      const scan = await hookScriptFiles(hook.handler.command, { workspaceRoot: root, cwd: context.cwd });
-      const base = hookDigest({ event: hook.event, matcher: hook.matcher, handler: hook.handler, scope: hook.scope });
+      const scan = await hookScriptFiles(hook.handler.command, {
+        workspaceRoot: root,
+        cwd: context.cwd,
+      });
+      const base = hookDigest({
+        event: hook.event,
+        matcher: hook.matcher,
+        handler: hook.handler,
+        scope: hook.scope,
+      });
       unchanged = !scan.overLimit && digestWithScriptFiles(base, scan.files) === hook.digest;
     } catch {
       unchanged = false;
@@ -449,7 +529,16 @@ export function createHookService(deps: HookServiceDeps): HookService {
   const runOne: HookRunFunction =
     deps.run ??
     ((hook, payload, context) =>
-      runHookCommand({ hook, payload, cwd: context.cwd, sessionId: context.sessionId, signal: context.signal, baseEnv: env, shell: deps.shell, now }));
+      runHookCommand({
+        hook,
+        payload,
+        cwd: context.cwd,
+        sessionId: context.sessionId,
+        signal: context.signal,
+        baseEnv: env,
+        shell: deps.shell,
+        now,
+      }));
 
   const statusOf = (listing: HookListing): HookListing => {
     if (listing.status === "unsupported" || listing.event === "unknown") return listing;
@@ -473,7 +562,10 @@ export function createHookService(deps: HookServiceDeps): HookService {
   ): Promise<{ digest: string; scan?: HookScriptScan }> => {
     const root = workspaceRootOf(hook.scope);
     if (!root || typeof hook.handler?.command !== "string") return { digest: hook.digest };
-    const scan = await hookScriptFiles(hook.handler.command, { workspaceRoot: root, cwd: cwd ?? root });
+    const scan = await hookScriptFiles(hook.handler.command, {
+      workspaceRoot: root,
+      cwd: cwd ?? root,
+    });
     return { digest: digestWithScriptFiles(hook.digest, scan.files), scan };
   };
 
@@ -511,11 +603,19 @@ export function createHookService(deps: HookServiceDeps): HookService {
     try {
       file = await readWorkspaceFile(workspaceRoot);
     } catch (error) {
-      file = { present: true, unreadable: true, hooks: [], problems: [`The hooks file could not be read: ${(error as Error).message}`], warnings: [] };
+      file = {
+        present: true,
+        unreadable: true,
+        hooks: [],
+        problems: [`The hooks file could not be read: ${(error as Error).message}`],
+        warnings: [],
+      };
     }
     for (const hook of file.hooks) repoHookRoots.set(hook.id, workspaceRoot);
     const hooks = await mapWithConcurrency(file.hooks, REPO_SCAN_CONCURRENCY, (hook) =>
-      hook.status === "unsupported" || hook.event === "unknown" || !scan(hook) ? Promise.resolve(hook) : withScripts(hook, cwd),
+      hook.status === "unsupported" || hook.event === "unknown" || !scan(hook)
+        ? Promise.resolve(hook)
+        : withScripts(hook, cwd),
     );
     return { ...file, hooks };
   };
@@ -528,16 +628,27 @@ export function createHookService(deps: HookServiceDeps): HookService {
   };
 
   const storedListingsIn = async (scope: HookScope, cwd?: string): Promise<HookListing[]> =>
-    (await Promise.all(entries.entries().filter((entry) => hookScopesEqual(entry.scope, scope)).map((entry) => storedListing(entry, cwd)))).map(statusOf);
+    (
+      await Promise.all(
+        entries
+          .entries()
+          .filter((entry) => hookScopesEqual(entry.scope, scope))
+          .map((entry) => storedListing(entry, cwd)),
+      )
+    ).map(statusOf);
 
   /** Approved blocking hooks in this scope with no running version among `listings`. */
   const unmetGuards = (scope: HookScope, listings: readonly HookListing[]): HookApprovalRecord[] =>
-    trust.approvalsFor(scope).filter(
-      (record) =>
-        record.blocksWhenFailing === true &&
-        !trust.isDisabled({ scope, digest: record.digest }) &&
-        !listings.some((listing) => listing.status === "active" && listing.digest === record.digest),
-    );
+    trust
+      .approvalsFor(scope)
+      .filter(
+        (record) =>
+          record.blocksWhenFailing === true &&
+          !trust.isDisabled({ scope, digest: record.digest }) &&
+          !listings.some(
+            (listing) => listing.status === "active" && listing.digest === record.digest,
+          ),
+      );
 
   /** The row for a guard whose hook no longer exists, so the owner can see and clear it. */
   const missingGuardListing = (scope: HookScope, record: HookApprovalRecord): HookListing => ({
@@ -577,9 +688,16 @@ export function createHookService(deps: HookServiceDeps): HookService {
             // Every one is scanned, not just those whose saved id still matches:
             // ids follow position, and approval follows the full digest, so a
             // hook moved within the file still runs.
-            const eventApproved = trust.approvalsFor(scope).some((record) => record.event === event);
-            const file = await readRepo(workspaceRootOf(scope) as string, cwd, (hook) => eventApproved && hook.event === event);
-            if (file.unreadable) throw new Error(`.aiden/hooks.json could not be loaded: ${file.problems.join(" ")}`);
+            const eventApproved = trust
+              .approvalsFor(scope)
+              .some((record) => record.event === event);
+            const file = await readRepo(
+              workspaceRootOf(scope) as string,
+              cwd,
+              (hook) => eventApproved && hook.event === event,
+            );
+            if (file.unreadable)
+              throw new Error(`.aiden/hooks.json could not be loaded: ${file.problems.join(" ")}`);
             listings.push(...file.hooks.map(statusOf));
           }
           for (const listing of listings) {
@@ -611,16 +729,22 @@ export function createHookService(deps: HookServiceDeps): HookService {
         const matches = (matcher: string) => {
           if (!toolName || !TOOL_EVENTS.has(event)) return true;
           const compiled = compileHookMatcher(matcher);
-          return compiled.ok && (compiled.matcher.kind === "all" || matcherMatchesTool(compiled.matcher, toolName));
+          return (
+            compiled.ok &&
+            (compiled.matcher.kind === "all" || matcherMatchesTool(compiled.matcher, toolName))
+          );
         };
         return scopes.some((rawScope) => {
           const scope = normalizeHookScope(rawScope);
-          return trust
-            .approvalsFor(scope)
-            .some((record) => {
-              const flags = { scope, digest: record.digest };
-              return record.event === event && !trust.isDisabled(flags) && !trust.isDisabledAfterFailures(flags) && matches(record.matcher);
-            });
+          return trust.approvalsFor(scope).some((record) => {
+            const flags = { scope, digest: record.digest };
+            return (
+              record.event === event &&
+              !trust.isDisabled(flags) &&
+              !trust.isDisabledAfterFailures(flags) &&
+              matches(record.matcher)
+            );
+          });
         });
       },
     },
@@ -641,11 +765,14 @@ export function createHookService(deps: HookServiceDeps): HookService {
     const byKey = new Map<string, HookScope>([["global", { kind: "global" }]]);
     for (const entry of entries.entries()) byKey.set(hookScopeKey(entry.scope), entry.scope);
     for (const key of trust.approvedScopeKeys()) {
-      if (key.startsWith("workspace:")) byKey.set(key, { kind: "workspace", workspaceRoot: key.slice("workspace:".length) });
-      if (key.startsWith("chat:")) byKey.set(key, { kind: "chat", chatId: key.slice("chat:".length) });
+      if (key.startsWith("workspace:"))
+        byKey.set(key, { kind: "workspace", workspaceRoot: key.slice("workspace:".length) });
+      if (key.startsWith("chat:"))
+        byKey.set(key, { kind: "chat", chatId: key.slice("chat:".length) });
       if (key.startsWith("bot:")) byKey.set(key, { kind: "bot", botId: key.slice("bot:".length) });
     }
-    for (const root of repoHookRoots.values()) byKey.set(`workspace:${root}`, { kind: "workspace", workspaceRoot: root });
+    for (const root of repoHookRoots.values())
+      byKey.set(`workspace:${root}`, { kind: "workspace", workspaceRoot: root });
     return [...byKey.values()];
   };
 
@@ -662,12 +789,16 @@ export function createHookService(deps: HookServiceDeps): HookService {
   };
 
   /** A hook by id: stored entries first, then a repo file in a known workspace. */
-  const findListing = async (hookId: string): Promise<{ listing: HookListing; entry?: StoredHookEntry } | undefined> => {
+  const findListing = async (
+    hookId: string,
+  ): Promise<{ listing: HookListing; entry?: StoredHookEntry } | undefined> => {
     const entry = entries.get(hookId);
     if (entry) return { listing: statusOf(await storedListing(entry)), entry };
     const root = repoRootFor(hookId);
     if (!root) return undefined;
-    const listing = (await readRepo(root, undefined, (hook) => hook.id === hookId)).hooks.find((hook) => hook.id === hookId);
+    const listing = (await readRepo(root, undefined, (hook) => hook.id === hookId)).hooks.find(
+      (hook) => hook.id === hookId,
+    );
     return listing ? { listing: statusOf(listing) } : undefined;
   };
 
@@ -695,15 +826,20 @@ export function createHookService(deps: HookServiceDeps): HookService {
 
   const buildProposal = (input: HookProposalInput): HookResult<HookProposal> => {
     const origin: HookOrigin = input.origin ?? "agent";
-    if (!input.scope || typeof input.scope !== "object") return { ok: false, reason: "A hook needs a scope." };
+    if (!input.scope || typeof input.scope !== "object")
+      return { ok: false, reason: "A hook needs a scope." };
     if (input.scope.kind === "workspace" && !path.isAbsolute(input.scope.workspaceRoot ?? "")) {
       return { ok: false, reason: "A workspace hook needs an absolute workspace path." };
     }
-    if ((input.scope.kind === "chat" && !input.scope.chatId) || (input.scope.kind === "bot" && !input.scope.botId)) {
+    if (
+      (input.scope.kind === "chat" && !input.scope.chatId) ||
+      (input.scope.kind === "bot" && !input.scope.botId)
+    ) {
       return { ok: false, reason: "A chat or Bot hook needs its id." };
     }
     const scope = normalizeHookScope(input.scope);
-    if (origin === "agent" && scope.kind === "global") return { ok: false, reason: "Global hooks can only be added from Settings." };
+    if (origin === "agent" && scope.kind === "global")
+      return { ok: false, reason: "Global hooks can only be added from Settings." };
     const existing = input.existingId ? entries.get(input.existingId) : undefined;
     if (input.existingId && !existing) {
       return {
@@ -713,27 +849,51 @@ export function createHookService(deps: HookServiceDeps): HookService {
           : `There is no hook with the id ${input.existingId}.`,
       };
     }
-    if (existing && !hookScopesEqual(existing.scope, scope)) return { ok: false, reason: "A hook can't be moved to another scope; add a new one instead." };
-    if (existing && origin === "agent" && existing.scope.kind === "global") return { ok: false, reason: "Global hooks can only be changed from Settings." };
+    if (existing && !hookScopesEqual(existing.scope, scope))
+      return {
+        ok: false,
+        reason: "A hook can't be moved to another scope; add a new one instead.",
+      };
+    if (existing && origin === "agent" && existing.scope.kind === "global")
+      return { ok: false, reason: "Global hooks can only be changed from Settings." };
     const createdAt = now();
-    const base = { id: `hp_${randomId()}`, origin, createdAt, expiresAt: createdAt + HOOK_PROPOSAL_TTL_MS };
+    const base = {
+      id: `hp_${randomId()}`,
+      origin,
+      createdAt,
+      expiresAt: createdAt + HOOK_PROPOSAL_TTL_MS,
+    };
     if (input.delete) {
       if (!existing) return { ok: false, reason: "Say which hook to delete." };
       const definition = storedEntryListingDefinition(existing);
       return {
         ok: true,
-        value: { ...base, action: "delete", hookId: existing.id, definition, digest: definition.digest, targetDigest: definition.digest, summary: `Stops and deletes "${definition.name}". ${summarizeHook(definition)}`, warnings: [] },
+        value: {
+          ...base,
+          action: "delete",
+          hookId: existing.id,
+          definition,
+          digest: definition.digest,
+          targetDigest: definition.digest,
+          summary: `Stops and deletes "${definition.name}". ${summarizeHook(definition)}`,
+          warnings: [],
+        },
       };
     }
-    if (!isHookEvent(input.event)) return { ok: false, reason: `"${String(input.event)}" is not an event Aiden supports.` };
+    if (!isHookEvent(input.event))
+      return { ok: false, reason: `"${String(input.event)}" is not an event Aiden supports.` };
     const scopeProblem = hookEventScopeProblem(input.event, scope);
     if (scopeProblem) return { ok: false, reason: scopeProblem };
     const matcher = typeof input.matcher === "string" ? input.matcher : "";
     const compiled = compileHookMatcher(matcher);
     if (!compiled.ok) return { ok: false, reason: compiled.reason };
-    const validation = validateHookHandler(input.handler, origin === "agent" ? { maxTimeoutSeconds: MAX_AGENT_HOOK_TIMEOUT_SECONDS } : {});
+    const validation = validateHookHandler(
+      input.handler,
+      origin === "agent" ? { maxTimeoutSeconds: MAX_AGENT_HOOK_TIMEOUT_SECONDS } : {},
+    );
     if (!validation.ok) return { ok: false, reason: validation.reason };
-    if (validation.handler.failClosed && input.event !== "PreToolUse") return { ok: false, reason: "failClosed applies only to PreToolUse hooks." };
+    if (validation.handler.failClosed && input.event !== "PreToolUse")
+      return { ok: false, reason: "failClosed applies only to PreToolUse hooks." };
     const hookId = existing?.id ?? `hk_${randomId()}`;
     const definition = hookDefinitionFor({
       id: hookId,
@@ -744,7 +904,9 @@ export function createHookService(deps: HookServiceDeps): HookService {
       scope,
       // An edit keeps who added the hook: an approved agent edit of the owner's
       // hook must not make it one the agent may switch off.
-      source: existing?.source ?? (origin === "agent" ? "agent" : scope.kind === "bot" ? "bot" : "settings"),
+      source:
+        existing?.source ??
+        (origin === "agent" ? "agent" : scope.kind === "bot" ? "bot" : "settings"),
     });
     const summary = summarizeHook(definition);
     return {
@@ -758,7 +920,10 @@ export function createHookService(deps: HookServiceDeps): HookService {
         digest: definition.digest,
         summary: existing ? `Changes "${definition.name}". ${summary}` : summary,
         warnings: definition.handler.async
-          ? [...validation.warnings, "It runs in the background: Aiden doesn't wait for it, so it can't block or change anything."]
+          ? [
+              ...validation.warnings,
+              "It runs in the background: Aiden doesn't wait for it, so it can't block or change anything.",
+            ]
           : validation.warnings,
       },
     };
@@ -789,7 +954,9 @@ export function createHookService(deps: HookServiceDeps): HookService {
     }
     if (scan.overLimit) return { ok: false, reason: uncheckableScriptsReason(scan.overLimit) };
     const partial = scan.unfollowed.length > 0;
-    const warnings = partial ? [...proposal.warnings, partialCoverageWarning(scan.unfollowed)] : proposal.warnings;
+    const warnings = partial
+      ? [...proposal.warnings, partialCoverageWarning(scan.unfollowed)]
+      : proposal.warnings;
     return {
       ok: true,
       value: {
@@ -809,17 +976,27 @@ export function createHookService(deps: HookServiceDeps): HookService {
    * an edit made since (in Settings or by another approved proposal) is never
    * overwritten and a deleted hook is never brought back.
    */
-  const proposalTargetProblem = (proposal: HookProposal, existing: StoredHookEntry | undefined): string | undefined => {
+  const proposalTargetProblem = (
+    proposal: HookProposal,
+    existing: StoredHookEntry | undefined,
+  ): string | undefined => {
     if (proposal.action === "delete" && !existing) return "That hook was already deleted.";
-    if (proposal.action === "update" && !existing) return "The hook this proposal changes was deleted.";
+    if (proposal.action === "update" && !existing)
+      return "The hook this proposal changes was deleted.";
     if (proposal.action === "create" && existing) return "This proposal was already applied.";
-    if (existing && proposal.targetDigest !== undefined && storedEntryListingDefinition(existing).digest !== proposal.targetDigest) {
+    if (
+      existing &&
+      proposal.targetDigest !== undefined &&
+      storedEntryListingDefinition(existing).digest !== proposal.targetDigest
+    ) {
       return "The hook changed since this proposal was shown; propose it again so the owner sees the current version.";
     }
     return undefined;
   };
 
-  const applyProposal = async (proposal: HookProposal): Promise<HookResult<HookListing | undefined>> => {
+  const applyProposal = async (
+    proposal: HookProposal,
+  ): Promise<HookResult<HookListing | undefined>> => {
     const shown = entries.get(proposal.hookId);
     const problem = proposalTargetProblem(proposal, shown);
     if (problem) return { ok: false, reason: problem };
@@ -831,10 +1008,18 @@ export function createHookService(deps: HookServiceDeps): HookService {
       return { ok: true, value: undefined };
     }
     const { definition } = proposal;
-    const current = await scriptsOf({ ...definition, digest: hookDefinitionFor(definition).digest });
-    if (current.scan?.overLimit) return { ok: false, reason: uncheckableScriptsReason(current.scan.overLimit) };
+    const current = await scriptsOf({
+      ...definition,
+      digest: hookDefinitionFor(definition).digest,
+    });
+    if (current.scan?.overLimit)
+      return { ok: false, reason: uncheckableScriptsReason(current.scan.overLimit) };
     if (current.digest !== proposal.digest) {
-      return { ok: false, reason: "A script this hook runs changed after it was proposed; propose it again so the owner sees the current version." };
+      return {
+        ok: false,
+        reason:
+          "A script this hook runs changed after it was proposed; propose it again so the owner sees the current version.",
+      };
     }
     const time = now();
     const entry: StoredHookEntry = {
@@ -844,7 +1029,8 @@ export function createHookService(deps: HookServiceDeps): HookService {
       event: definition.event,
       matcher: definition.matcher,
       handler: definition.handler,
-      source: definition.source === "agent" ? "agent" : definition.source === "bot" ? "bot" : "settings",
+      source:
+        definition.source === "agent" ? "agent" : definition.source === "bot" ? "bot" : "settings",
       createdAt: shown?.createdAt ?? time,
       updatedAt: time,
     };
@@ -878,16 +1064,35 @@ export function createHookService(deps: HookServiceDeps): HookService {
         if (root) {
           const file = await readRepo(root);
           listings.push(...file.hooks.map(statusOf));
-          workspaceFiles.push({ workspaceRoot: root, present: file.present, problems: file.problems, warnings: file.warnings });
+          workspaceFiles.push({
+            workspaceRoot: root,
+            present: file.present,
+            problems: file.problems,
+            warnings: file.warnings,
+          });
         }
         hooks.push(...listings.map(withLastRun));
         // A saved hook's changed row can clear its guard with Delete. A repo hook's
         // changed row has nothing to delete, so its guard keeps a row of its own.
         const hasRow = (record: HookApprovalRecord) =>
-          listings.some((listing) => listing.status !== "active" && listing.id === record.hookId && listing.source !== "workspace-file");
-        hooks.push(...unmetGuards(scope, listings).filter((record) => !hasRow(record)).map((record) => missingGuardListing(scope, record)));
+          listings.some(
+            (listing) =>
+              listing.status !== "active" &&
+              listing.id === record.hookId &&
+              listing.source !== "workspace-file",
+          );
+        hooks.push(
+          ...unmetGuards(scope, listings)
+            .filter((record) => !hasRow(record))
+            .map((record) => missingGuardListing(scope, record)),
+        );
       }
-      return { hooks, paused: trust.paused, disabledByEnvironment: disabledByEnvironment(), workspaceFiles };
+      return {
+        hooks,
+        paused: trust.paused,
+        disabledByEnvironment: disabledByEnvironment(),
+        workspaceFiles,
+      };
     },
 
     async proposeHook(input) {
@@ -917,7 +1122,8 @@ export function createHookService(deps: HookServiceDeps): HookService {
         await ensureLoaded();
         pruneProposals();
         const proposal = proposals.get(proposalId);
-        if (!proposal) return { ok: false, reason: "That proposal expired or was already answered." };
+        if (!proposal)
+          return { ok: false, reason: "That proposal expired or was already answered." };
         proposals.delete(proposalId);
         emit({ reason: "proposals" });
         return applyProposal(proposal);
@@ -946,9 +1152,12 @@ export function createHookService(deps: HookServiceDeps): HookService {
         const found = await findListing(hookId);
         if (!found) return { ok: false, reason: `There is no hook with the id ${hookId}.` };
         const { listing } = found;
-        if (listing.status === "unsupported") return { ok: false, reason: listing.unsupportedReason ?? "This hook is not supported." };
-        if (typeof expectedDigest !== "string" || !expectedDigest) return { ok: false, reason: "Approving a hook needs the digest that was shown for it." };
-        if (expectedDigest !== listing.digest) return { ok: false, reason: "The hook changed since it was shown; review it again." };
+        if (listing.status === "unsupported")
+          return { ok: false, reason: listing.unsupportedReason ?? "This hook is not supported." };
+        if (typeof expectedDigest !== "string" || !expectedDigest)
+          return { ok: false, reason: "Approving a hook needs the digest that was shown for it." };
+        if (expectedDigest !== listing.digest)
+          return { ok: false, reason: "The hook changed since it was shown; review it again." };
         const definition = listingDefinition(listing);
         if (!definition) return { ok: false, reason: "This hook is not supported." };
         // A repo hook's id is its position in the file; let an approval displaced by
@@ -1009,16 +1218,28 @@ export function createHookService(deps: HookServiceDeps): HookService {
 
     async testHook(target, fixturePayload) {
       await ensureLoaded();
-      if (disabledByEnvironment()) return { ok: false, reason: "AIDEN_HOOKS=0 turns hooks off, so Test didn't run anything." };
-      if (trust.paused) return { ok: false, reason: "Hooks are paused, so Test didn't run anything. Resume them to test a hook." };
+      if (disabledByEnvironment())
+        return { ok: false, reason: "AIDEN_HOOKS=0 turns hooks off, so Test didn't run anything." };
+      if (trust.paused)
+        return {
+          ok: false,
+          reason: "Hooks are paused, so Test didn't run anything. Resume them to test a hook.",
+        };
       let definition: HookDefinition | undefined;
       const saved = "hookId" in target ? target : undefined;
       if (saved) {
         const found = await findListing(saved.hookId);
         if (!found) return { ok: false, reason: `There is no hook with the id ${saved.hookId}.` };
-        if (found.listing.status === "unsupported") return { ok: false, reason: found.listing.unsupportedReason ?? "This hook is not supported." };
+        if (found.listing.status === "unsupported")
+          return {
+            ok: false,
+            reason: found.listing.unsupportedReason ?? "This hook is not supported.",
+          };
         if (typeof saved.digest !== "string" || saved.digest !== found.listing.digest) {
-          return { ok: false, reason: "The hook changed since it was shown; review it again before testing it." };
+          return {
+            ok: false,
+            reason: "The hook changed since it was shown; review it again before testing it.",
+          };
         }
         definition = listingDefinition(found.listing);
       } else if ("scope" in target) {
@@ -1029,7 +1250,11 @@ export function createHookService(deps: HookServiceDeps): HookService {
       if (!definition) return { ok: false, reason: "This hook is not supported." };
       const cwd = workspaceRootOf(definition.scope) ?? homeDir();
       const context = { scopes: [definition.scope], cwd, sessionId: "hook-test" };
-      const payload = normalizeHookPayload(definition.event, { ...hookFixturePayload(definition.event, cwd), ...fixturePayload }, context);
+      const payload = normalizeHookPayload(
+        definition.event,
+        { ...hookFixturePayload(definition.event, cwd), ...fixturePayload },
+        context,
+      );
       const raw: HookRawRun = await runOne(definition, payload, context);
       const result = interpretHookRun(definition.event, raw, definition.handler);
       return {

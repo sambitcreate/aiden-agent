@@ -50,7 +50,9 @@ function identifier(value: unknown, label: string): string {
  * (a phone's turn, another window's). Frames go only to the subscribing
  * document and stop with it.
  */
-export function registerLocalRunHandlers<Event>(dependencies: LocalRunHandlerDependencies<Event>): void {
+export function registerLocalRunHandlers<Event>(
+  dependencies: LocalRunHandlerDependencies<Event>,
+): void {
   const { handle } = dependencies;
 
   const active = (event: Event): LocalRunOwner => {
@@ -91,7 +93,8 @@ export function registerLocalRunHandlers<Event>(dependencies: LocalRunHandlerDep
   // the chat stayed busy with a newer run (a phone's turn right after it).
   handle("runs:settledLocal", (event, runIds) => {
     active(event);
-    if (!Array.isArray(runIds) || runIds.length > MAX_SETTLED_QUERY) throw new Error("Invalid run identifiers.");
+    if (!Array.isArray(runIds) || runIds.length > MAX_SETTLED_QUERY)
+      throw new Error("Invalid run identifiers.");
     const ids = runIds.map((runId) => identifier(runId, "run identifier"));
     return [...new Set(ids)].filter((runId) => dependencies.isRunSettled(runId));
   });

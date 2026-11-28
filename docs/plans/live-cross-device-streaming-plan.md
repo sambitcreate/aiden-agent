@@ -3,6 +3,7 @@
 Status: Merged (2026-10-13) through #448, #450–#459 and shipped in 0.56.0. Originally planned 2026-10-12 on `fix/live-cross-device-streaming`, rebased onto `origin/main` at `19e55a67`. Line references are from the research pass at `23bade81`. Since then, `renderer/components/message-list.tsx` has changed substantially (generative-UI live visuals, commit 57a5ff34), so re-verify those references before editing.
 
 References used, both MIT-licensed:
+
 - T3 Code at `80664d5266` (© 2026 T3 Tools Inc.).
 - Hermex at `c9efaa9` (© 2026 Uzair Ansar).
 
@@ -10,15 +11,15 @@ We reimplement the ideas. If any code is copied verbatim, its notice goes in `TH
 
 ## Problems
 
-| # | Symptom | Root cause |
-|---|---------|------------|
-| P1 | "Response continues in the background…" appears twice | `composerPlaceholder` returns the readiness message as the placeholder (`renderer/lib/composer-placeholder.ts:42`), and `Composer` also prints it as a status line (`composer.tsx:2177`). This happens for every readiness message. |
-| P2 | A phone-started turn appears on the Mac only once it finishes | The remote owner (`chat-generation-owner.ts:49`, `id: 0`) publishes only to the Remote SSE journal (`aiden-remote-streams.ts:588`). No `chat:*` event reaches the renderer. The Mac re-reads the transcript on `chats:settled`. |
-| P3 | A Mac-started turn appears on the phone only once it finishes | The server already serves it at `GET /chats/:id/runs/current/events`, and both clients can render it. But the clients probe only at `load()` / `ON_START`, and stop for good after a 404. |
-| P4 | Desktop text arrives in lumps and jitters | Several causes: the reveal runs per-sentence or per-72-char units with a 4px `translateY`; lists and tables re-render as one growing block; text before a tool step dumps when the step arrives; and the finished reply renders twice during the handoff (the persisted `message:${id}` row and the `key="streaming"` row together, for up to 2s), then swaps to a different DOM tree, with `RichLinkBudget` remounted by its key. |
-| P5 | Desktop drops stick-to-bottom while streaming | `ScrollArea` sets `atBottom = distance < 24` on every scroll event (`ui.tsx:916-932`). One commit that grows the content by more than 24px turns follow off before the ResizeObserver follow runs. There is no `overflow-anchor: none`. |
-| P6 | iOS jump-to-bottom stops short; streaming doesn't stay pinned | Four causes. (1) The latch is purely distance-based (72pt). Frames during the 0.2s animated jump flip it back to "away", which also drops the `.sizeChanges` anchor. (2) `LazyVStack` uses estimated heights, so `scrollTo` lands short, and nothing scrolls again. (3) There is no per-tick follow, only `onChange(messages.count)`. (4) `liveText +=` runs per delta without coalescing, and the whole reply re-lays out as one `Markdown` view. |
-| P7 | Android has the same problems | `followLatest` counts as true when the offset is ≤ 80px, but nothing re-pins while text grows, so the newest lines sit under the composer. On completion, the plain-`Text` live card and the `RichFormattedMessage` final row coexist for a frame, then the format reflows. A jump issued during a fling may be cancelled. `animateContentSize` animates height under the pin. |
+| #   | Symptom                                                       | Root cause                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1  | "Response continues in the background…" appears twice         | `composerPlaceholder` returns the readiness message as the placeholder (`renderer/lib/composer-placeholder.ts:42`), and `Composer` also prints it as a status line (`composer.tsx:2177`). This happens for every readiness message.                                                                                                                                                                                                                |
+| P2  | A phone-started turn appears on the Mac only once it finishes | The remote owner (`chat-generation-owner.ts:49`, `id: 0`) publishes only to the Remote SSE journal (`aiden-remote-streams.ts:588`). No `chat:*` event reaches the renderer. The Mac re-reads the transcript on `chats:settled`.                                                                                                                                                                                                                    |
+| P3  | A Mac-started turn appears on the phone only once it finishes | The server already serves it at `GET /chats/:id/runs/current/events`, and both clients can render it. But the clients probe only at `load()` / `ON_START`, and stop for good after a 404.                                                                                                                                                                                                                                                          |
+| P4  | Desktop text arrives in lumps and jitters                     | Several causes: the reveal runs per-sentence or per-72-char units with a 4px `translateY`; lists and tables re-render as one growing block; text before a tool step dumps when the step arrives; and the finished reply renders twice during the handoff (the persisted `message:${id}` row and the `key="streaming"` row together, for up to 2s), then swaps to a different DOM tree, with `RichLinkBudget` remounted by its key.                 |
+| P5  | Desktop drops stick-to-bottom while streaming                 | `ScrollArea` sets `atBottom = distance < 24` on every scroll event (`ui.tsx:916-932`). One commit that grows the content by more than 24px turns follow off before the ResizeObserver follow runs. There is no `overflow-anchor: none`.                                                                                                                                                                                                            |
+| P6  | iOS jump-to-bottom stops short; streaming doesn't stay pinned | Four causes. (1) The latch is purely distance-based (72pt). Frames during the 0.2s animated jump flip it back to "away", which also drops the `.sizeChanges` anchor. (2) `LazyVStack` uses estimated heights, so `scrollTo` lands short, and nothing scrolls again. (3) There is no per-tick follow, only `onChange(messages.count)`. (4) `liveText +=` runs per delta without coalescing, and the whole reply re-lays out as one `Markdown` view. |
+| P7  | Android has the same problems                                 | `followLatest` counts as true when the offset is ≤ 80px, but nothing re-pins while text grows, so the newest lines sit under the composer. On completion, the plain-`Text` live card and the `RichFormattedMessage` final row coexist for a frame, then the format reflows. A jump issued during a fling may be cancelled. `animateContentSize` animates height under the pin.                                                                     |
 
 ## Shared design rules
 
@@ -44,6 +45,7 @@ There are three independent lanes, because they touch different directories and 
 ### Lane D: Desktop (`renderer/`, `main/`)
 
 **D1: One readiness line** (base `main`)
+
 - Change `composerPlaceholder` to return a short neutral placeholder whenever the composer shows the readiness status line. For the background case, the placeholder is "Waiting for the response…". The status line stays, because it is a `role="status"` region that wraps and carries the Settings action.
 - **Tests:**
   - Extend `composer-placeholder.test.ts`.
@@ -51,6 +53,7 @@ There are three independent lanes, because they touch different directories and 
   - Replace the source-grep assertions at `chat-transition.test.tsx:354` and `environment-subagents-contract.test.ts:592` with that render check.
 
 **D2: Stick-to-bottom latch** (on D1)
+
 - In `ScrollArea` (`renderer/components/ui.tsx:846-1105`) and `renderer/lib/scroll-follow.ts`, replace `atBottom = distance < 24` with a pure `followReducer`:
   - Inputs: `userIntent(wheelUp | drag | scrollbar | key)`, `settle(distance)`, `contentResize`, `jump`.
   - Outputs: `following`, `showJump`.
@@ -71,6 +74,7 @@ There are three independent lanes, because they touch different directories and 
     - clicking jump lands at `scrollTop + clientHeight === scrollHeight`.
 
 **D3: Settle in place** (on D2)
+
 - Hide `persistedHandoffMessageId` from `messages` while the streaming row is mounted. Better still, key the streaming row by the persisted message id once `chat:done` provides it, and flip it to `streaming=false` in place.
 - Make the streaming and settled paths render through one markdown tree:
   - memoized settled blocks for the stable prefix (`SettledMessageRow` memo);
@@ -85,6 +89,7 @@ There are three independent lanes, because they touch different directories and 
   - Update `message-bubble.test.tsx`, which covers the handoff and HTML artifacts.
 
 **D4: Paragraph reveal** (on D3)
+
 - Replace the per-unit timer in `streaming-markdown-reveal.tsx` and `streaming-reveal.ts:82-104` with a release gate. It releases at most every 300ms, at the parser's safe boundaries plus new list-item and heading-with-body boundaries, and flushes on terminal events.
 - Lists and tables grow one item or row at a time.
 - Replace the CSS fade with an opacity-only transition at `styles.css:1747-1765, 1960-1966`: 450ms, `@starting-style`, gated on `[data-streaming]`. Remove the `translateY`.
@@ -98,6 +103,7 @@ There are three independent lanes, because they touch different directories and 
   - Update `tests/e2e/chat-shell-interactions.spec.ts:541`, which counts `.streaming-reveal` nodes, to assert whole-block reveal instead.
 
 **D5: The Mac shows phone-started turns live** (base `main`, its own branch; it touches the detached-projection store and main IPC rather than the message-list files D2–D4 change)
+
 - Find what left the screenshot's chat draining with no projection. A phone-only turn cannot register a detached marker, so it was a held desktop-detached owner (`clearInactiveDetachedLifecycleChat` keeps it while `activeChatIds.has(chatId)`) or a window reload mid-turn. Clear the stale marker when the chat's run settles.
 - **Main:** add `runs:observeLocal(chatId, afterSequence)` and `runs:unobserveLocal(id)` over `hostRunRegistry.currentRunForChat`, `read` and `subscribe`. Push batched (16ms) run frames only to the subscribing `webContents`, and release them on destroy. Reuse `projectRunContentNotification`.
 - **Renderer:**
@@ -112,6 +118,7 @@ There are three independent lanes, because they touch different directories and 
 ### Lane I: iOS (`ios/`)
 
 **I1: Hermex follow latch and a reliable jump** (base `main`)
+
 - Port the `ChatScrollPolicy` `FollowLatch` / `resolveFollow` state machine into `AidenChatScrollPolicy.swift`, which today says it is "adapted from Hermex" but is distance-only:
   - follow turns off on pan `.began`;
   - follow turns back on only when a gesture settles within 12pt, after 160ms of momentum quiet and 50ms between ticks;
@@ -131,6 +138,7 @@ There are three independent lanes, because they touch different directories and 
   - Extend `testJumpToLatestThreshold…`, and add a view-model test that the jump generation cancels a stale snap.
 
 **I2: Word gate and per-chunk markdown** (on I1)
+
 - Add a 50ms `StreamingRevealGate` in `AidenChatViewModel` that buffers `textDelta` and flushes on terminal or non-delta events. This replaces per-delta `liveText +=`.
 - Render the live reply as one `Markdown` view per sealed chunk plus one tail view. Reuse the `AidenMarkdownBlockSplitter` boundaries and the `AidenMarkdownContentCache` entries instead of concatenating into one `MarkdownContent`. Keep the EXT-10 limits: 512 entries, 400k bytes, blank-line-safe splits.
 - New sealed chunks get a 180ms `.transition(.opacity)`, disabled under Reduce Motion or Low Power. Remove `.animation` from the streaming rows (`AidenLiveResponseView`).
@@ -140,6 +148,7 @@ There are three independent lanes, because they touch different directories and 
   - Splitter and cache tests proving settled chunks are not re-parsed per tick.
 
 **I3: Attach to Mac-started turns while open** (on I2)
+
 - When `applyProgress` sees a new non-null `agentRoster.turnId` while nothing is attached, call `startForeignRunObservationIfNeeded`. After a 404, retry once after 400ms.
 - For devices without `agents:read`: while foregrounded with no progress SSE, probe `runs/current` with backoff from 5s to 30s, stopping on background.
 - **Tests:**
@@ -149,6 +158,7 @@ There are three independent lanes, because they touch different directories and 
 ### Lane A: Android (`android/`)
 
 **A1: Follow latch, follow loop and jump** (base `main`)
+
 - Keep `reverseLayout = true`.
 - Change `AidenChatScroll.kt` as follows:
   - Drag start turns follow off. Detect it with a `NestedScrollConnection` (`onPreScroll` with `NestedScrollSource.UserInput`) or the list's `interactionSource` drag interaction.
@@ -164,6 +174,7 @@ There are three independent lanes, because they touch different directories and 
     - tap the button, keep streaming, and `firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset == 0`, with the last text node's bounds above the composer.
 
 **A2: Word gate and settle in place** (on A1)
+
 - Add the 50ms word gate on top of `AidenLiveTranscriptBuffer`'s 33ms frame.
 - Render the live card through `RichFormattedMessage`, as sealed chunks plus a tail, instead of plain `Text`.
 - Clear the live card atomically with the final message publish (`clearFinishedStream`, `AidenChatViewModel.kt:2903-2926`), or give both one stable key, so completion doesn't jump. Sealed chunks fade in once (180ms, off when animations are disabled).
@@ -172,6 +183,7 @@ There are three independent lanes, because they touch different directories and 
   - A Compose UI test proving no frame shows both the live card and the final message with the same text.
 
 **A3: Attach to Mac-started turns while open** (on A2)
+
 - Same as I3, implemented through `acceptAgentRoster` and `retryForeignRunObservation()`.
 - **Tests:** JVM tests mirroring I3.
 
@@ -205,4 +217,3 @@ The owner reported flicker and jitter in iOS workspace chats and asked for slowe
 - **Optimistic sends kept their row.** The server message ID replaced the local one in the `ForEach`, so the row was recreated and its thumbnails reloaded. Rows now keep the local ID as their render identity.
 - **Pacing revisited.** The 50ms gate above showed each burst whole, which reads as lumps when the Mac or network delivers text unevenly. The gate now ticks every 33ms and shows at least 1/8 of the backlog (minimum 3 characters, rounded up to whole words), so a burst drains over about a quarter second. A backlog over 600 characters is shown down to 600 at once, which addresses Hermex's lag concern. `done` keeps draining (a third of the backlog per tick) while the settled transcript is read instead of dumping it; error, cancel and other non-delta events still flush. Placeholders and visual cards in the live reply stay until it settles. Reduce Motion keeps the unpaced word gate. Bot session partials use the same gate. Android still uses the unpaced gate.
 - **Open Markdown in the tail.** While streaming, the open tail is drawn through `AidenStreamingMarkdownTail`, which closes open inline code, strong, emphasis and strike on the last line, shows a link that is still arriving as its label, and hides an unfinished line that is only a block marker. Sealed chunks and settled replies always use the real text.
-

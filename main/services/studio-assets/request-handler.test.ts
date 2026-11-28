@@ -71,7 +71,11 @@ test("unknown, malformed and revoked URLs are not found", async (t) => {
   const f = await fixture(t);
   const asset = await f.store.put({ bytes: pngBytes(8, 8, 3) });
   const url = f.grants.issue(f.owner, asset.assetId, "original");
-  for (const candidate of [`aiden-asset://grant/${"Z".repeat(43)}`, `${url}?download=1`, url.replace("grant", "other")]) {
+  for (const candidate of [
+    `aiden-asset://grant/${"Z".repeat(43)}`,
+    `${url}?download=1`,
+    url.replace("grant", "other"),
+  ]) {
     assert.equal((await f.handle(new Request(candidate))).status, 404, candidate);
   }
   f.navigate();

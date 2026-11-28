@@ -80,8 +80,9 @@ class FakeSession implements CuaDriverSessionLike {
   latestToken(index: number): string {
     const captures = this.results.filter((entry) => entry.name === "get_window_state");
     const capture = captures[captures.length - 1];
-    const elements = (capture?.result as { structuredContent: { elements: { element_token: string }[] } })
-      .structuredContent.elements;
+    const elements = (
+      capture?.result as { structuredContent: { elements: { element_token: string }[] } }
+    ).structuredContent.elements;
     return elements[index].element_token;
   }
 
@@ -190,7 +191,9 @@ test("capture without app or exact pid/window_id is rejected", async () => {
 test("refuses before approval any argument the pinned closed schema does not declare", async () => {
   const { controller, session } = harness(true);
   const drag = session.toolCatalog.get("drag")!;
-  const properties = { ...(drag.inputSchema as { properties: Record<string, unknown> }).properties };
+  const properties = {
+    ...(drag.inputSchema as { properties: Record<string, unknown> }).properties,
+  };
   delete properties.target;
   session.toolCatalog.set("drag", {
     ...drag,
@@ -198,7 +201,8 @@ test("refuses before approval any argument the pinned closed schema does not dec
   });
   await capture(controller, "som");
   await assert.rejects(
-    () => controller.approvalFor({ action: "drag", from_coordinate: [1, 1], to_coordinate: [5, 5] }),
+    () =>
+      controller.approvalFor({ action: "drag", from_coordinate: [1, 1], to_coordinate: [5, 5] }),
     /drag schema does not accept target/u,
   );
   assert.equal(
@@ -605,7 +609,12 @@ test("a background drag that started a drag-and-drop session drops the capture a
     call.name === "drag" ? dragAndDropSessionRefusal(42, 7) : fakeResponse(call, session.driver);
   let raised: (Error & { code?: string }) | undefined;
   await assert.rejects(
-    () => approved(controller, "drag-dnd", { action: "drag", from_coordinate: [1, 1], to_coordinate: [9, 9] }),
+    () =>
+      approved(controller, "drag-dnd", {
+        action: "drag",
+        from_coordinate: [1, 1],
+        to_coordinate: [9, 9],
+      }),
     (error: Error & { code?: string }) => {
       raised = error;
       return true;
@@ -640,14 +649,23 @@ test("a background drag refused before any input offers a foreground retry and k
   // drag.rs Electron route: refused before dispatch (effect refused).
   session.handler = (call) =>
     call.name === "drag"
-      ? codedRefusal("background_unavailable", "Background drag is unavailable for this Electron window.", {
-          event_kind: "mouse_drag",
-          suggestion: 'Retry this action with delivery_mode:"foreground".',
-          escalation: { recommended: "foreground", reason: "Electron windows lose the release" },
-        })
+      ? codedRefusal(
+          "background_unavailable",
+          "Background drag is unavailable for this Electron window.",
+          {
+            event_kind: "mouse_drag",
+            suggestion: 'Retry this action with delivery_mode:"foreground".',
+            escalation: { recommended: "foreground", reason: "Electron windows lose the release" },
+          },
+        )
       : fakeResponse(call, session.driver);
   await assert.rejects(
-    () => approved(controller, "drag-refused", { action: "drag", from_coordinate: [1, 1], to_coordinate: [9, 9] }),
+    () =>
+      approved(controller, "drag-refused", {
+        action: "drag",
+        from_coordinate: [1, 1],
+        to_coordinate: [9, 9],
+      }),
     (error: Error & { code?: string }) =>
       error.code === "foreground_required" && /delivery_mode "foreground"/u.test(error.message),
   );
@@ -662,7 +680,9 @@ test("a background_unavailable refusal after input was sent is an unknown execut
   await capture(controller, "ax");
   session.handler = (call) =>
     call.name === "type_text"
-      ? codedRefusal("background_unavailable", "Stopped after the first characters.", { effect: "partial" })
+      ? codedRefusal("background_unavailable", "Stopped after the first characters.", {
+          effect: "partial",
+        })
       : fakeResponse(call, session.driver);
   await assert.rejects(
     () => approved(controller, "bg-partial", { action: "type", text: "hello" }),
@@ -679,7 +699,9 @@ test("a WindowServer connection refusal is reported as setup, not a foreground r
   await capture(controller, "ax");
   // tools/mod.rs: code background_unavailable with reason windowserver_connection_invalid.
   session.handler = (call) =>
-    call.name === "type_text" ? windowServerConnectionRefusal(42, 7) : fakeResponse(call, session.driver);
+    call.name === "type_text"
+      ? windowServerConnectionRefusal(42, 7)
+      : fakeResponse(call, session.driver);
   let raised: (Error & { code?: string }) | undefined;
   await assert.rejects(
     () => approved(controller, "ws-invalid", { action: "type", text: "hi" }),
@@ -873,13 +895,22 @@ test("changes_only capture sends since and reports no_change", async () => {
     () => controller.approvalFor({ action: "click", element: 1 }),
     /latest capture/u,
   );
-  assert.equal(session.calls.some((call) => call.name === "click"), false);
+  assert.equal(
+    session.calls.some((call) => call.name === "click"),
+    false,
+  );
 
   // Something changed: the diff rows come back without element numbers, and
   // acting by number now needs a full capture.
   session.driver.elements = () => [
     { role: "AXButton", label: "First", frame: { x: 110, y: 60, w: 20, h: 20 }, depth: 1 },
-    { role: "AXButton", label: "Second", value: "on", frame: { x: 250, y: 100, w: 20, h: 20 }, depth: 1 },
+    {
+      role: "AXButton",
+      label: "Second",
+      value: "on",
+      frame: { x: 250, y: 100, w: 20, h: 20 },
+      depth: 1,
+    },
     { role: "AXButton", label: "Third", frame: { x: 150, y: 60, w: 20, h: 20 }, depth: 1 },
   ];
   const changed = payloadOf(await controller.execute("changes-some", changesOnly));
@@ -931,7 +962,12 @@ test("a no_change read after an unrendered row vanished never keeps the old elem
   // are identical, so the driver says no_change, yet every later index moved.
   session.driver.elements = () => ECHO_ROW_PRUNED_ELEMENTS;
   const unchanged = payloadOf(
-    await controller.execute("echo-gone", { action: "capture", mode: "ax", app: "Safari", changes_only: true }),
+    await controller.execute("echo-gone", {
+      action: "capture",
+      mode: "ax",
+      app: "Safari",
+      changes_only: true,
+    }),
   );
   assert.equal(unchanged.no_change, true);
   assert.equal(unchanged.elements, undefined);
@@ -950,10 +986,16 @@ test("a no_change read after an unrendered row vanished never keeps the old elem
   assert.equal(labelled(fresh, "Delete")?.element_index, cancel.element_index);
   const freshCancel = labelled(fresh, "Cancel");
   assert.ok(freshCancel);
-  await approved(controller, "cancel-after", { action: "click", element: freshCancel.element_index });
+  await approved(controller, "cancel-after", {
+    action: "click",
+    element: freshCancel.element_index,
+  });
   assert.equal(clicks().length, 1);
   assert.equal(clicks()[0].args.element_token, `${latestSnapshot()}:${freshCancel.element_index}`);
-  assert.equal((session.results[session.results.length - 1].result as { isError?: boolean }).isError, undefined);
+  assert.equal(
+    (session.results[session.results.length - 1].result as { isError?: boolean }).isError,
+    undefined,
+  );
   await controller.close();
 });
 
@@ -965,7 +1007,13 @@ test("changes_only reports the focused row on no_change and needs a baseline sna
   const reads = () => session.calls.filter((call) => call.name === "get_window_state");
   session.driver.elements = () => [
     { role: "AXButton", label: "First", frame: { x: 110, y: 60, w: 20, h: 20 }, depth: 1 },
-    { role: "AXTextField", label: "Search", focused: true, frame: { x: 250, y: 100, w: 20, h: 20 }, depth: 1 },
+    {
+      role: "AXTextField",
+      label: "Search",
+      focused: true,
+      frame: { x: 250, y: 100, w: 20, h: 20 },
+      depth: 1,
+    },
   ];
   await capture(controller, "ax");
   const unchanged = payloadOf(await controller.execute("focus-none", changesOnly));
@@ -976,7 +1024,9 @@ test("changes_only reports the focused row on no_change and needs a baseline sna
   // the next changes_only read is a full capture, not a diff against an
   // older snapshot.
   session.handler = (call) => {
-    const result = fakeResponse(call, session.driver) as { structuredContent?: Record<string, unknown> };
+    const result = fakeResponse(call, session.driver) as {
+      structuredContent?: Record<string, unknown>;
+    };
     if (call.name !== "get_window_state") return result;
     const { snapshot_id: _dropped, ...rest } = result.structuredContent ?? {};
     return { ...result, structuredContent: rest };
@@ -999,7 +1049,12 @@ test("capture with an open menu lists its items; a closed menu lists only titles
     menuBar[0],
     { role: "AXMenu", label: "File", frame: { x: 110, y: 68, w: 120, h: 60 }, depth: 2 },
     { role: "AXMenuItem", label: "New Window", frame: { x: 112, y: 70, w: 116, h: 18 }, depth: 3 },
-    { role: "AXMenuItem", label: "Close Window", frame: { x: 112, y: 90, w: 116, h: 18 }, depth: 3 },
+    {
+      role: "AXMenuItem",
+      label: "Close Window",
+      frame: { x: 112, y: 90, w: 116, h: 18 },
+      depth: 3,
+    },
     menuBar[1],
   ];
   const labelsAndRoles = (elements: Array<Record<string, unknown>>) =>
@@ -1201,7 +1256,9 @@ test("maps every action to arguments the pinned 0.36.0 schemas admit", async () 
     ],
   );
   // Every call reached the driver and came back as a closed ActionResult.
-  const actionResults = session.results.filter((entry) => calls.some((call) => call.name === entry.name));
+  const actionResults = session.results.filter((entry) =>
+    calls.some((call) => call.name === entry.name),
+  );
   for (const { result } of actionResults) {
     assert.equal((result as { isError?: boolean }).isError, undefined);
   }
@@ -1538,8 +1595,12 @@ test("cancellation poisons the generation and closes its helper", async () => {
 test("strict close retains teardown errors even when ordinary cancellation already closed", async () => {
   const { controller, session, host } = harness(false);
   await controller.execute("apps", { action: "list_apps" });
-  session.close = async () => { throw new Error("session failed"); };
-  host.shutdown = async () => { throw new Error("broker failed"); };
+  session.close = async () => {
+    throw new Error("session failed");
+  };
+  host.shutdown = async () => {
+    throw new Error("broker failed");
+  };
   await controller.close();
   await assert.rejects(controller.closeAndSettle(), /teardown failed/);
 });
@@ -1549,17 +1610,26 @@ test("strict close waits for an in-flight driver mutation to unwind after abort"
   await capture(controller, "ax");
   let release!: () => void;
   let entered!: () => void;
-  const started = new Promise<void>((resolve) => { entered = resolve; });
-  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   session.handler = async (call) => {
-    if (call.name === "set_value") { entered(); await gate; }
+    if (call.name === "set_value") {
+      entered();
+      await gate;
+    }
     return fakeResponse(call, session.driver);
   };
   const mutation = approved(controller, "fill", { action: "set_value", element: 1, value: "Blue" });
   const handled = mutation.catch(() => {});
   await started;
   let settled = false;
-  const close = controller.closeAndSettle().then(() => { settled = true; });
+  const close = controller.closeAndSettle().then(() => {
+    settled = true;
+  });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(settled, false);
   release();
@@ -1685,13 +1755,16 @@ test("menu is an approved foreground invoke_menu on the exact window", async () 
   controller.authorize("menu", args, approval);
   const result = await controller.execute("menu", args);
   const call = session.calls[session.calls.length - 1];
-  assert.deepEqual([call.name, call.args], [
-    "invoke_menu",
-    { pid: 42, window_id: 7, path: ["File", "Save As…"] },
-  ]);
+  assert.deepEqual(
+    [call.name, call.args],
+    ["invoke_menu", { pid: 42, window_id: 7, path: ["File", "Save As…"] }],
+  );
   assert.equal(result.details.driverEffect, "unverifiable");
   assert.equal(result.details.deliveryMode, "foreground");
-  await assert.rejects(() => controller.approvalFor({ action: "click", element: 0 }), /latest capture/u);
+  await assert.rejects(
+    () => controller.approvalFor({ action: "click", element: 0 }),
+    /latest capture/u,
+  );
 
   await capture(controller, "som");
   session.handler = (next) =>
@@ -1712,7 +1785,10 @@ test("menu is an approved foreground invoke_menu on the exact window", async () 
   assert.equal(controller.lifecycleState, "ready");
   // The refused path still focused the app and pressed "File", so the pre-menu
   // elements and pixels no longer describe the window.
-  await assert.rejects(() => controller.approvalFor({ action: "click", element: 0 }), /latest capture/u);
+  await assert.rejects(
+    () => controller.approvalFor({ action: "click", element: 0 }),
+    /latest capture/u,
+  );
   await assert.rejects(
     () => controller.approvalFor({ action: "click", coordinate: [5, 5] }),
     /fresh screenshot/u,
@@ -1726,15 +1802,16 @@ test("set_window_frame is an approved background frame change that invalidates t
   const args = { action: "set_window_frame" as const, x: 10, y: 20, width: 640, height: 480 };
   const approval = await controller.approvalFor(args);
   assert.ok(approval);
-  for (const value of ["10", "20", "640", "480"]) assert.ok(approval.summary.includes(value), value);
+  for (const value of ["10", "20", "640", "480"])
+    assert.ok(approval.summary.includes(value), value);
   assert.doesNotMatch(approval.summary, /FOREGROUND/u);
   controller.authorize("frame", args, approval);
   const result = await controller.execute("frame", args);
   const call = session.calls[session.calls.length - 1];
-  assert.deepEqual([call.name, call.args], [
-    "set_window_frame",
-    { pid: 42, window_id: 7, x: 10, y: 20, width: 640, height: 480 },
-  ]);
+  assert.deepEqual(
+    [call.name, call.args],
+    ["set_window_frame", { pid: 42, window_id: 7, x: 10, y: 20, width: 640, height: 480 }],
+  );
   assert.equal(result.details.driverEffect, "confirmed");
   assert.deepEqual(result.details.evidence, ["value_readback"]);
   await assert.rejects(
@@ -1805,7 +1882,15 @@ test("the system prompt carries Computer Use guidance only when the tool is offe
     undefined,
     new Set(["shell"]),
   );
-  const unscoped = await buildSystemPrompt(undefined, undefined, "none", false, false, undefined, new Set(["computer_use"]));
+  const unscoped = await buildSystemPrompt(
+    undefined,
+    undefined,
+    "none",
+    false,
+    false,
+    undefined,
+    new Set(["computer_use"]),
+  );
   assert.doesNotMatch(withoutTool, /computer_use|cua-driver/u);
   for (const prompt of [withTool, unscoped]) {
     const guidance = prompt.slice(prompt.indexOf("computer_use"));
@@ -1822,7 +1907,10 @@ test("the system prompt carries Computer Use guidance only when the tool is offe
     assert.match(guidance, /never contain line breaks or tabs/iu);
     assert.match(guidance, /only after a foreground_required error/u);
     assert.match(guidance, /write_not_applied[^.;]*another route/u);
-    assert.match(guidance, /For any action, use delivery_mode foreground only after a foreground_required error/u);
+    assert.match(
+      guidance,
+      /For any action, use delivery_mode foreground only after a foreground_required error/u,
+    );
     assert.match(guidance, /drag_released[^.;]*capture and check/u);
   }
   // The parameter schema repeats the rules where the model fills each field.
@@ -1830,7 +1918,10 @@ test("the system prompt carries Computer Use guidance only when the tool is offe
     String((ComputerUseParameters.properties[field] as { description?: string }).description);
   assert.match(describe("text"), /line breaks or tabs/u);
   assert.match(describe("delivery_mode"), /only after a foreground_required error/u);
-  assert.match(describe("delivery_mode"), /after drag_released once a fresh capture shows nothing changed/u);
+  assert.match(
+    describe("delivery_mode"),
+    /after drag_released once a fresh capture shows nothing changed/u,
+  );
   assert.match(describe("changes_only"), /never vision/u);
 });
 
@@ -1862,7 +1953,9 @@ for (const code of ["action_outcome_mismatch", "typed_output_mismatch", "tool_ou
       call.name === "type_text"
         ? {
             isError: true,
-            content: [{ type: "text", text: "internal output mismatch; the tool may have executed." }],
+            content: [
+              { type: "text", text: "internal output mismatch; the tool may have executed." },
+            ],
             structuredContent: { code, execution_state: "unknown" },
           }
         : fakeResponse(call, session.driver);
@@ -1875,7 +1968,10 @@ for (const code of ["action_outcome_mismatch", "typed_output_mismatch", "tool_ou
     );
     assert.equal(controller.lifecycleState, "ready");
     // Nothing captured before the uncertain action is reused.
-    await assert.rejects(() => controller.approvalFor({ action: "click", element: 0 }), /latest capture/u);
+    await assert.rejects(
+      () => controller.approvalFor({ action: "click", element: 0 }),
+      /latest capture/u,
+    );
     await assert.rejects(
       () => controller.approvalFor({ action: "click", coordinate: [1, 1] }),
       /fresh screenshot/u,
@@ -1897,7 +1993,10 @@ test("in an allowed chat, input actions run without a card but keep target bindi
   assert.ok(session.calls.some((call) => call.name === "click"));
 
   // The authorization is bound to that exact call, not reusable.
-  await assert.rejects(() => controller.execute("allowed-click", click), /already used|not approved/u);
+  await assert.rejects(
+    () => controller.execute("allowed-click", click),
+    /already used|not approved/u,
+  );
   await capture(controller, "ax");
   await authorizeAllowedComputerUseAction(controller, "bound", click);
   await assert.rejects(
@@ -1936,14 +2035,25 @@ test("a durable Bot's input action whose grant is revoked while its card waits n
   assert.ok(approval.approval?.onAllow);
   // Reset chat permissions runs while the card waits; then the person allows.
   granted = false;
-  await assert.rejects(async () => approval.approval?.onAllow?.(), new RegExp(BOT_COMPUTER_USE_REVOKED_REASON));
+  await assert.rejects(
+    async () => approval.approval?.onAllow?.(),
+    new RegExp(BOT_COMPUTER_USE_REVOKED_REASON),
+  );
   await assert.rejects(() => controller.execute("bot-click", click), /not approved/u);
-  assert.equal(session.calls.some((call) => call.name === "click"), false);
+  assert.equal(
+    session.calls.some((call) => call.name === "click"),
+    false,
+  );
   assert.equal(revoked, 1);
 
   // Later calls, observations included, are refused before any driver work.
   await assert.rejects(
-    () => botComputerUseApproval(controller, { callId: "bot-list", args: { action: "list_apps" }, signal: undefined }, access),
+    () =>
+      botComputerUseApproval(
+        controller,
+        { callId: "bot-list", args: { action: "list_apps" }, signal: undefined },
+        access,
+      ),
     new RegExp(BOT_COMPUTER_USE_REVOKED_REASON),
   );
   assert.equal(revoked, 2);
@@ -1952,9 +2062,27 @@ test("a durable Bot's input action whose grant is revoked while its card waits n
 
 /** A Safari sign-in and payment form (window bounds 100,50 200×100; screenshots at 2×). */
 const FORM_ELEMENTS = [
-  { role: "AXTextField", label: "Email", value: "ada@example.com", frame: { x: 110, y: 60, w: 80, h: 20 }, depth: 1 },
-  { role: "AXSecureTextField", label: "Password", value: "••••••••", frame: { x: 110, y: 90, w: 80, h: 20 }, depth: 1 },
-  { role: "AXTextField", label: "Card number", value: "4242 4242 4242 4242", frame: { x: 200, y: 60, w: 90, h: 20 }, depth: 1 },
+  {
+    role: "AXTextField",
+    label: "Email",
+    value: "ada@example.com",
+    frame: { x: 110, y: 60, w: 80, h: 20 },
+    depth: 1,
+  },
+  {
+    role: "AXSecureTextField",
+    label: "Password",
+    value: "••••••••",
+    frame: { x: 110, y: 90, w: 80, h: 20 },
+    depth: 1,
+  },
+  {
+    role: "AXTextField",
+    label: "Card number",
+    value: "4242 4242 4242 4242",
+    frame: { x: 200, y: 60, w: 90, h: 20 },
+    depth: 1,
+  },
   { role: "AXButton", label: "Pay now", frame: { x: 210, y: 90, w: 60, h: 20 }, depth: 1 },
 ];
 const ALWAYS_GRANTED = { granted: async () => true, revoke: async () => undefined };
@@ -1967,7 +2095,11 @@ test("a Bot's approval names the element an action touches by role and label, ne
   assert.deepEqual(descriptor?.element, { role: "AXTextField", label: "Card number" });
   assert.equal(descriptor?.secureFieldInCapture, true);
 
-  const live = await botComputerUseApproval(controller, { callId: "set-card", args: setCard, signal: undefined }, ALWAYS_GRANTED);
+  const live = await botComputerUseApproval(
+    controller,
+    { callId: "set-card", args: setCard, signal: undefined },
+    ALWAYS_GRANTED,
+  );
   assert.deepEqual(live.action, {
     surface: "computer_use",
     action: "set_value",
@@ -1983,13 +2115,20 @@ test("a Bot's approval names the element an action touches by role and label, ne
 
   // A pixel click names the innermost element under it.
   const payByPixel: ComputerUseArgs = { action: "click", coordinate: [230, 90] };
-  assert.deepEqual((await controller.approvalFor(payByPixel))?.element, { role: "AXButton", label: "Pay now" });
+  assert.deepEqual((await controller.approvalFor(payByPixel))?.element, {
+    role: "AXButton",
+    label: "Pay now",
+  });
   // A menu names its path.
   const menu: ComputerUseArgs = { action: "menu", menu_path: ["File", "Print…"] };
   assert.deepEqual((await controller.approvalFor(menu))?.menuPath, ["File", "Print…"]);
   // Observations need no approval and are not classified.
   assert.deepEqual(
-    await botComputerUseApproval(controller, { callId: "list", args: { action: "list_apps" }, signal: undefined }, ALWAYS_GRANTED),
+    await botComputerUseApproval(
+      controller,
+      { callId: "list", args: { action: "list_apps" }, signal: undefined },
+      ALWAYS_GRANTED,
+    ),
     { approval: null },
   );
   await controller.close();
@@ -2000,7 +2139,11 @@ test("typing carries the field an earlier click focused, since every action clea
   await capture(controller, "som");
   await approved(controller, "focus-password", { action: "click", element: 1 });
   const typePassword = { action: "type", text: "correct horse battery staple" } as const;
-  const typed = await botComputerUseApproval(controller, { callId: "type", args: typePassword, signal: undefined }, ALWAYS_GRANTED);
+  const typed = await botComputerUseApproval(
+    controller,
+    { callId: "type", args: typePassword, signal: undefined },
+    ALWAYS_GRANTED,
+  );
   assert.deepEqual(typed.action, {
     surface: "computer_use",
     action: "type",
@@ -2034,7 +2177,10 @@ test("typing carries the field an earlier click focused, since every action clea
 
 test("what a window's capture showed doesn't follow the Bot to another window", async () => {
   const { controller } = harness(true, 0, {
-    elements: (window: { app_name: string }) => (window.app_name === "Safari" ? FORM_ELEMENTS : [{ role: "AXButton", label: "Open", frame: { x: 10, y: 10, w: 40, h: 20 }, depth: 1 }]),
+    elements: (window: { app_name: string }) =>
+      window.app_name === "Safari"
+        ? FORM_ELEMENTS
+        : [{ role: "AXButton", label: "Open", frame: { x: 10, y: 10, w: 40, h: 20 }, depth: 1 }],
   });
   await capture(controller, "som");
   await approved(controller, "focus-password", { action: "click", element: 1 });
@@ -2162,10 +2308,14 @@ for (const code of ["desktop_coordinate_scope_required", "element_bounds_unavail
 }
 
 test("foreground_partial_unknown is an unknown execution that invalidates the capture", async () => {
-  const { controller, error } = await refuseAfterCapture("foreground_partial_unknown", "type_text", {
-    action: "type",
-    text: "hello",
-  });
+  const { controller, error } = await refuseAfterCapture(
+    "foreground_partial_unknown",
+    "type_text",
+    {
+      action: "type",
+      text: "hello",
+    },
+  );
   assert.equal(error.code, "execution_unknown");
   assert.match(error.message, /may already have taken effect/u);
   assert.match(error.message, /never repeat/u);

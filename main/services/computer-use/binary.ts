@@ -219,7 +219,12 @@ function vendoredHelperAppPath(options: CuaDriverPathOptions): string {
  * computer's guest, carries this notice beside it.
  */
 export function vendoredCuaDriverNoticePath(options: CuaDriverPathOptions): string {
-  return path.join(vendoredHelperAppPath(options), "Contents", "Resources", "LICENSE.cua-driver.md");
+  return path.join(
+    vendoredHelperAppPath(options),
+    "Contents",
+    "Resources",
+    "LICENSE.cua-driver.md",
+  );
 }
 
 /**
@@ -254,7 +259,10 @@ export async function resolveVendoredCuaDriverExecutable(
   const resolvedApp = await realpath(brokerAppPath);
   const resolvedDriver = await realpath(driverPath);
   if (!resolvedDriver.startsWith(`${resolvedApp}${path.sep}Contents${path.sep}MacOS${path.sep}`)) {
-    throw new CuaDriverError("invalid_driver_path", "The cua-driver executable escaped its helper bundle.");
+    throw new CuaDriverError(
+      "invalid_driver_path",
+      "The cua-driver executable escaped its helper bundle.",
+    );
   }
   if ((await hashFile(resolvedDriver, signal)) !== CUA_DRIVER_BINARY_SHA256) {
     throw new CuaDriverError(
@@ -262,13 +270,15 @@ export async function resolveVendoredCuaDriverExecutable(
       `The cua-driver executable does not match Aiden's pinned ${CUA_DRIVER_VERSION} release.`,
     );
   }
-  await verifyCode(resolvedDriver, CUA_DRIVER_UPSTREAM_PIN.signingRequirement, signal).catch((error: unknown) => {
-    if (error instanceof CuaDriverError && error.code === "cancelled") throw error;
-    throw new CuaDriverError(
-      "driver_integrity_failed",
-      "The cua-driver executable failed its pinned signing requirement.",
-    );
-  });
+  await verifyCode(resolvedDriver, CUA_DRIVER_UPSTREAM_PIN.signingRequirement, signal).catch(
+    (error: unknown) => {
+      if (error instanceof CuaDriverError && error.code === "cancelled") throw error;
+      throw new CuaDriverError(
+        "driver_integrity_failed",
+        "The cua-driver executable failed its pinned signing requirement.",
+      );
+    },
+  );
   return resolvedDriver;
 }
 

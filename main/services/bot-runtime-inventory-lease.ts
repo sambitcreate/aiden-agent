@@ -49,11 +49,7 @@ export class BotRuntimeInventoryLeaseRegistry {
     this.active.add(active);
     let released = false;
     const assertCurrent = () => {
-      if (
-        released ||
-        active.controller.signal.aborted ||
-        active.generation !== this.generation
-      ) {
+      if (released || active.controller.signal.aborted || active.generation !== this.generation) {
         throw new BotRuntimeInventoryLeaseInvalidError();
       }
     };
@@ -110,9 +106,7 @@ export class BotRuntimeInventoryLeaseRegistry {
 
 export const botRuntimeInventoryLeases = new BotRuntimeInventoryLeaseRegistry();
 
-export function invalidateBotRuntimeInventoryAuthority(
-  reason: BotRuntimeInventoryMutation,
-): void {
+export function invalidateBotRuntimeInventoryAuthority(reason: BotRuntimeInventoryMutation): void {
   botRuntimeInventoryLeases.invalidate(reason);
 }
 

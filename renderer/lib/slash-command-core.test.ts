@@ -117,10 +117,13 @@ test("optimistic skill clearing restores only the rejected send it still owns", 
     ...selected,
     invocation: { ...selected.invocation, invocationId: invocationId(2), displayName: "Test" },
   };
-  let state = selectedSkillComposerReducer({ selected, revision: 4 }, {
-    type: "send-started",
-    submittedRevision: 4,
-  });
+  let state = selectedSkillComposerReducer(
+    { selected, revision: 4 },
+    {
+      type: "send-started",
+      submittedRevision: 4,
+    },
+  );
   assert.deepEqual(state, { selected: undefined, revision: 5 });
   assert.deepEqual(
     selectedSkillComposerReducer(state, {
@@ -146,15 +149,9 @@ test("optimistic skill clearing restores only the rejected send it still owns", 
 test("rejected send reconciliation retains submitted and newer composer payloads", () => {
   assert.equal(failedSendDraft("First message", ""), "First message");
   assert.equal(failedSendDraft("First message", "First message"), "First message");
-  assert.equal(
-    failedSendDraft("First message", "Next message"),
-    "First message\n\nNext message",
-  );
+  assert.equal(failedSendDraft("First message", "Next message"), "First message\n\nNext message");
   assert.deepEqual(
-    failedSendAttachments(
-      [{ id: "sent" }, { id: "shared" }],
-      [{ id: "shared" }, { id: "new" }],
-    ),
+    failedSendAttachments([{ id: "sent" }, { id: "shared" }], [{ id: "shared" }, { id: "new" }]),
     [{ id: "sent" }, { id: "shared" }, { id: "new" }],
   );
 });

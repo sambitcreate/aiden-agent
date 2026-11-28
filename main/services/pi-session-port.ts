@@ -101,9 +101,7 @@ export interface PiSessionPort<Metadata extends PiSessionMetadata = PiSessionMet
   ): PiSessionPort<Metadata>;
 }
 
-class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
-  implements PiSessionPort<Metadata>
-{
+class CurrentPiSessionPort<Metadata extends PiSessionMetadata> implements PiSessionPort<Metadata> {
   readonly #session: Session;
   readonly #entryProjectors: Readonly<Record<string, PiEntryProjector>>;
 
@@ -117,8 +115,10 @@ class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
   }
 
   async #branch() {
-    return (await this.#session.branch("main", TODO_CONTEXT)) ??
-      this.#session.createBranch("main", null, TODO_CONTEXT);
+    return (
+      (await this.#session.branch("main", TODO_CONTEXT)) ??
+      this.#session.createBranch("main", null, TODO_CONTEXT)
+    );
   }
 
   async appendCompaction(
@@ -128,20 +128,23 @@ class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
     await this.#session.mutate(async (mutator) => {
       const tip = await mutator.getValue(branchTip("main"), TODO_CONTEXT);
       if (!tip) throw new Error("The Pi main branch is missing.");
-      await mutator.commit([
-        insertEntry({
-          type: "compaction",
-          id: input.id,
-          parentId: tip.value,
-          summary: input.summary,
-          retainedTail: withoutUndefined(input.retainedTail),
-          tokensBefore: input.tokensBefore,
-          ...(input.details === undefined ? {} : { details: jsonValue(input.details) }),
-          ...(input.usage === undefined ? {} : { usage: input.usage }),
-          fromHook: false,
-        }),
-        setValue(branchTip("main"), input.id),
-      ], TODO_CONTEXT);
+      await mutator.commit(
+        [
+          insertEntry({
+            type: "compaction",
+            id: input.id,
+            parentId: tip.value,
+            summary: input.summary,
+            retainedTail: withoutUndefined(input.retainedTail),
+            tokensBefore: input.tokensBefore,
+            ...(input.details === undefined ? {} : { details: jsonValue(input.details) }),
+            ...(input.usage === undefined ? {} : { usage: input.usage }),
+            fromHook: false,
+          }),
+          setValue(branchTip("main"), input.id),
+        ],
+        TODO_CONTEXT,
+      );
     }, TODO_CONTEXT);
     return input.id;
   }
@@ -153,29 +156,36 @@ class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
     await this.#session.mutate(async (mutator) => {
       const tip = await mutator.getValue(branchTip("main"), TODO_CONTEXT);
       if (!tip) throw new Error("The Pi main branch is missing.");
-      await mutator.commit([
-        insertEntry({
-          type: "branch_summary",
-          id: input.id,
-          parentId: tip.value,
-          fromId: input.fromId,
-          summary: input.summary,
-          ...(input.details === undefined ? {} : { details: jsonValue(input.details) }),
-          fromHook: false,
-        }),
-        setValue(branchTip("main"), input.id),
-      ], TODO_CONTEXT);
+      await mutator.commit(
+        [
+          insertEntry({
+            type: "branch_summary",
+            id: input.id,
+            parentId: tip.value,
+            fromId: input.fromId,
+            summary: input.summary,
+            ...(input.details === undefined ? {} : { details: jsonValue(input.details) }),
+            fromHook: false,
+          }),
+          setValue(branchTip("main"), input.id),
+        ],
+        TODO_CONTEXT,
+      );
     }, TODO_CONTEXT);
     return input.id;
   }
 
   appendCustomEntry: PiSessionPort<Metadata>["appendCustomEntry"] = async (customType, data) =>
-    (await this.#branch()).appendCustomEntry(customType, data === undefined ? undefined : jsonValue(data), TODO_CONTEXT);
+    (await this.#branch()).appendCustomEntry(
+      customType,
+      data === undefined ? undefined : jsonValue(data),
+      TODO_CONTEXT,
+    );
   appendMessage: PiSessionPort<Metadata>["appendMessage"] = async (message) =>
     (await this.#branch()).appendMessage(withoutUndefined(message), TODO_CONTEXT);
 
   async buildContext(given?: readonly PiSessionEntry[]): Promise<PiSessionContext> {
-    const branch = given ?? await this.getBranch();
+    const branch = given ?? (await this.getBranch());
     let thinkingLevel = "off";
     let model: PiSessionContext["model"] = null;
     let activeToolNames: string[] | null = null;
@@ -186,17 +196,32 @@ class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
       if (entry.type !== "custom" || !entry.customType.startsWith("aiden.pi-legacy.")) continue;
       const data = entry.data;
       if (!data || typeof data !== "object" || Array.isArray(data)) continue;
-      if (entry.customType === "aiden.pi-legacy.thinking_level_change" && typeof data.thinkingLevel === "string") {
+      if (
+        entry.customType === "aiden.pi-legacy.thinking_level_change" &&
+        typeof data.thinkingLevel === "string"
+      ) {
         thinkingLevel = data.thinkingLevel;
-      } else if (entry.customType === "aiden.pi-legacy.model_change" && typeof data.provider === "string" && typeof data.modelId === "string") {
+      } else if (
+        entry.customType === "aiden.pi-legacy.model_change" &&
+        typeof data.provider === "string" &&
+        typeof data.modelId === "string"
+      ) {
         model = { provider: data.provider, modelId: data.modelId };
-      } else if (entry.customType === "aiden.pi-legacy.active_tools_change" && Array.isArray(data.activeToolNames)) {
-        activeToolNames = data.activeToolNames.filter((name: unknown): name is string => typeof name === "string");
+      } else if (
+        entry.customType === "aiden.pi-legacy.active_tools_change" &&
+        Array.isArray(data.activeToolNames)
+      ) {
+        activeToolNames = data.activeToolNames.filter(
+          (name: unknown): name is string => typeof name === "string",
+        );
       }
     }
     let lastCompaction = -1;
     for (let index = branch.length - 1; index >= 0; index--) {
-      if (branch[index]?.type === "compaction") { lastCompaction = index; break; }
+      if (branch[index]?.type === "compaction") {
+        lastCompaction = index;
+        break;
+      }
     }
     const entries = lastCompaction < 0 ? branch : branch.slice(lastCompaction);
     const messages: AgentMessage[] = [];
@@ -204,12 +229,15 @@ class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
       if (entry.type === "message") {
         messages.push(entry.message);
       } else if (entry.type === "compaction") {
-        messages.push(createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp));
+        messages.push(
+          createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
+        );
         for (const message of entry.retainedTail) messages.push(message);
       } else if (entry.type === "branch_summary" && entry.summary) {
         messages.push(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp));
       } else if (entry.type === "custom") {
-        for (const message of this.#entryProjectors[entry.customType]?.(entry, index, entries) ?? []) {
+        for (const message of this.#entryProjectors[entry.customType]?.(entry, index, entries) ??
+          []) {
           messages.push(message);
         }
       }
@@ -218,16 +246,19 @@ class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
   }
 
   async getBranch(): Promise<PiSessionEntry[]> {
-    return (await (await this.#branch()).findEntries({ order: "oldestFirst" }, TODO_CONTEXT)) as PiSessionEntry[];
+    return (await (
+      await this.#branch()
+    ).findEntries({ order: "oldestFirst" }, TODO_CONTEXT)) as PiSessionEntry[];
   }
 
   async getEntries(): Promise<PiSessionEntry[]> {
     return (await this.#session.findEntries({ order: "asc" }, TODO_CONTEXT)) as PiSessionEntry[];
   }
 
-  getLeafId: PiSessionPort<Metadata>["getLeafId"] = async () => (await this.#branch()).getTipId(TODO_CONTEXT);
+  getLeafId: PiSessionPort<Metadata>["getLeafId"] = async () =>
+    (await this.#branch()).getTipId(TODO_CONTEXT);
   getMetadata: PiSessionPort<Metadata>["getMetadata"] = async () =>
-    this.metadataOverride ?? this.#session.metadata as unknown as Metadata;
+    this.metadataOverride ?? (this.#session.metadata as unknown as Metadata);
 
   async importBranch(entries: readonly PiSessionEntry[]): Promise<void> {
     const tipId = entries[entries.length - 1]?.id;
@@ -245,11 +276,15 @@ class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
       if (tip?.value != null) {
         throw new Error("A Pi branch can only be imported into an empty journal.");
       }
-      await mutator.commit([
-        ...entries.map(({ seq: _seq, timestamp: _timestamp, ...entry }) =>
-          insertEntry(entry as NewEntry)),
-        setValue(branchTip("main"), tipId),
-      ], TODO_CONTEXT);
+      await mutator.commit(
+        [
+          ...entries.map(({ seq: _seq, timestamp: _timestamp, ...entry }) =>
+            insertEntry(entry as NewEntry),
+          ),
+          setValue(branchTip("main"), tipId),
+        ],
+        TODO_CONTEXT,
+      );
     }, TODO_CONTEXT);
   }
 

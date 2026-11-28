@@ -144,7 +144,10 @@ export class AcpConnection {
         this.connection.initialize({
           protocolVersion: PROTOCOL_VERSION,
           clientCapabilities: {
-            fs: { readTextFile: this.capabilities.fileSystem, writeTextFile: this.capabilities.fileSystem },
+            fs: {
+              readTextFile: this.capabilities.fileSystem,
+              writeTextFile: this.capabilities.fileSystem,
+            },
             terminal: false,
           },
           clientInfo: { name: "aiden", title: "Aiden", version: "1" },
@@ -155,7 +158,11 @@ export class AcpConnection {
     );
   }
 
-  authenticate(methodId: string, signal?: AbortSignal, timeoutMs = SESSION_TIMEOUT_MS): Promise<unknown> {
+  authenticate(
+    methodId: string,
+    signal?: AbortSignal,
+    timeoutMs = SESSION_TIMEOUT_MS,
+  ): Promise<unknown> {
     return this.request(
       () => this.connection.authenticate({ methodId }),
       timeoutMs,
@@ -164,7 +171,11 @@ export class AcpConnection {
     );
   }
 
-  newSession(cwd: string, mcpServers: McpServer[], signal?: AbortSignal): Promise<NewSessionResponse> {
+  newSession(
+    cwd: string,
+    mcpServers: McpServer[],
+    signal?: AbortSignal,
+  ): Promise<NewSessionResponse> {
     return this.request(
       () => this.connection.newSession({ cwd, mcpServers }),
       SESSION_TIMEOUT_MS,
@@ -201,7 +212,12 @@ export class AcpConnection {
     );
   }
 
-  setConfigOption(sessionId: string, configId: string, value: string, signal?: AbortSignal): Promise<unknown> {
+  setConfigOption(
+    sessionId: string,
+    configId: string,
+    value: string,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     return this.request(
       () => this.connection.setSessionConfigOption({ sessionId, configId, value }),
       SESSION_TIMEOUT_MS,
@@ -232,7 +248,12 @@ export class AcpConnection {
   }
 
   logout(signal?: AbortSignal): Promise<unknown> {
-    return this.request(() => this.connection.logout({}), SESSION_TIMEOUT_MS, signal, "signing out");
+    return this.request(
+      () => this.connection.logout({}),
+      SESSION_TIMEOUT_MS,
+      signal,
+      "signing out",
+    );
   }
 
   close(): Promise<void> {
@@ -279,7 +300,8 @@ export class AcpConnection {
         callback();
       };
       const timer = setTimeout(
-        () => finish(() => reject(new AcpHarnessError("timeout", `The agent took too long ${label}.`))),
+        () =>
+          finish(() => reject(new AcpHarnessError("timeout", `The agent took too long ${label}.`))),
         timeoutMs,
       );
       timer.unref?.();
@@ -296,14 +318,18 @@ export class AcpConnection {
             reject(
               error instanceof AcpHarnessError
                 ? error
-                : Object.assign(new AcpHarnessError("protocol", errorMessage(error), { cause: error }), {
-                    rpcCode: rpcCodeOf(error),
-                  }),
+                : Object.assign(
+                    new AcpHarnessError("protocol", errorMessage(error), { cause: error }),
+                    {
+                      rpcCode: rpcCodeOf(error),
+                    },
+                  ),
             ),
           );
         },
       );
-      if (!settled) unsubscribeExit = this.onExitFailure((error: unknown) => finish(() => reject(error)));
+      if (!settled)
+        unsubscribeExit = this.onExitFailure((error: unknown) => finish(() => reject(error)));
     });
   }
 }

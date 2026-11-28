@@ -6,7 +6,14 @@ import {
 const MAX_CHAT_ID_CHARS = 160;
 const MAX_CHAT_ID_BYTES = 640;
 const MAX_DRAFT_TEXT_CHARS = 65_536;
-const COPY_KEYS = new Set(["chatId", "throughMessageId", "messageId", "position", "summary", "continueInWorkspaceId"]);
+const COPY_KEYS = new Set([
+  "chatId",
+  "throughMessageId",
+  "messageId",
+  "position",
+  "summary",
+  "continueInWorkspaceId",
+]);
 const FORK_SUMMARY_KEYS = new Set(["instructions"]);
 const CHAT_ONLY_KEYS = new Set(["chatId"]);
 const CONTEXT_PRESSURE_KEYS = new Set([
@@ -16,13 +23,7 @@ const CONTEXT_PRESSURE_KEYS = new Set([
   "modelId",
   "attachments",
 ]);
-const CONTEXT_PRESSURE_ATTACHMENT_KEYS = new Set([
-  "id",
-  "name",
-  "kind",
-  "mimeType",
-  "textLength",
-]);
+const CONTEXT_PRESSURE_ATTACHMENT_KEYS = new Set(["id", "name", "kind", "mimeType", "textLength"]);
 const MAX_CONTEXT_PRESSURE_ATTACHMENTS = 20;
 const MAX_ATTACHMENT_NAME_CHARS = 512;
 const MAX_ATTACHMENT_TEXT_CHARS = 16 * 1024 * 1024;
@@ -98,7 +99,10 @@ export function parseChatCopyRequest(value: unknown): ParsedChatCopyRequest {
     ) {
       throw new Error("Continuing in a new chat takes the whole conversation.");
     }
-    return { chatId, continueIn: { workspaceId: boundedId(record.continueInWorkspaceId, "workspace id") } };
+    return {
+      chatId,
+      continueIn: { workspaceId: boundedId(record.continueInWorkspaceId, "workspace id") },
+    };
   }
   const summary =
     record.summary === undefined ? undefined : { summary: parseForkSummaryRequest(record.summary) };
@@ -151,7 +155,11 @@ export interface ParsedChatContextPressureRequest {
 }
 
 function parseContextPressureAttachment(value: unknown): ParsedContextPressureAttachment {
-  const record = exactRecord(value, CONTEXT_PRESSURE_ATTACHMENT_KEYS, "context pressure attachment");
+  const record = exactRecord(
+    value,
+    CONTEXT_PRESSURE_ATTACHMENT_KEYS,
+    "context pressure attachment",
+  );
   if (record.kind !== "image" && record.kind !== "text") {
     throw new Error("Invalid attachment kind.");
   }

@@ -4,7 +4,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Writable } from "node:stream";
 import type { WorkspaceArtifactArgvStep } from "../../../renderer/shared/workspace-artifacts.js";
-import { createProcessGroupTerminator, decodeCappedUtf8, waitForChildExit, type ProcessGroupTerminator } from "../../shared/process-group.js";
+import {
+  createProcessGroupTerminator,
+  decodeCappedUtf8,
+  waitForChildExit,
+  type ProcessGroupTerminator,
+} from "../../shared/process-group.js";
 import type { BoundedShellCommandResult } from "../bounded-shell-command.js";
 
 export interface ArgvPlanOptions {
@@ -32,9 +37,15 @@ type Target = "out" | "err" | "null";
  * name without an extension is tried before PATHEXT, and a `.cmd` or `.bat`
  * found here cannot be spawned without a shell.
  */
-export async function findProgramOnPath(program: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+export async function findProgramOnPath(
+  program: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
   const pathValue = env.PATH ?? env.Path ?? "";
-  const extensions = process.platform === "win32" ? ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)] : [""];
+  const extensions =
+    process.platform === "win32"
+      ? ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)]
+      : [""];
   for (const dir of pathValue.split(path.delimiter)) {
     if (!dir || !path.isAbsolute(dir)) continue;
     for (const extension of extensions) {
@@ -82,7 +93,11 @@ function isWithin(root: string, real: string): boolean {
  * Both the path as the system resolves it and as git normalizes it must stay
  * inside the folder's real path.
  */
-async function leadsOutside(root: string | undefined, cwd: string, argument: string): Promise<boolean> {
+async function leadsOutside(
+  root: string | undefined,
+  cwd: string,
+  argument: string,
+): Promise<boolean> {
   if (root === undefined) return true;
   for (const candidate of [`${cwd}${path.sep}${argument}`, path.resolve(cwd, argument)]) {
     const real = await realPathOrAncestor(candidate);
@@ -109,7 +124,15 @@ function statusOf(code: number | null, signal: NodeJS.Signals | null): number {
 export async function runArgvPlan(options: ArgvPlanOptions): Promise<BoundedShellCommandResult> {
   const { signal } = options;
   if (signal?.aborted) {
-    return { stdout: "", stderr: "", exitCode: null, timedOut: false, outputLimitExceeded: false, aborted: true, backgroundStopped: false };
+    return {
+      stdout: "",
+      stderr: "",
+      exitCode: null,
+      timedOut: false,
+      outputLimitExceeded: false,
+      aborted: true,
+      backgroundStopped: false,
+    };
   }
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
@@ -167,7 +190,9 @@ export async function runArgvPlan(options: ArgvPlanOptions): Promise<BoundedShel
       for (const index of command.paths ?? []) {
         const argument = command.argv[index]!;
         if (await leadsOutside(await root(), options.cwd, argument)) {
-          captureStderr(`${command.argv[0]}: ${argument}: leads outside the workspace through a symbolic link, so it was not run\n`);
+          captureStderr(
+            `${command.argv[0]}: ${argument}: leads outside the workspace through a symbolic link, so it was not run\n`,
+          );
           return 126;
         }
       }
@@ -225,7 +250,10 @@ export async function runArgvPlan(options: ArgvPlanOptions): Promise<BoundedShel
       running.add(terminator);
       if (stopped) terminator.terminate();
       waits.unshift(
-        waitForChildExit(child, { drainMs: PIPE_DRAIN_MS, onPipesHeld: () => terminator.terminate() }).then(
+        waitForChildExit(child, {
+          drainMs: PIPE_DRAIN_MS,
+          onPipesHeld: () => terminator.terminate(),
+        }).then(
           ({ code, signal: exitSignal, pipesHeld }) => {
             if (pipesHeld) backgroundStopped = true;
             else running.delete(terminator);

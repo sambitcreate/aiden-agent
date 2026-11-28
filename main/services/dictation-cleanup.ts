@@ -12,10 +12,7 @@ import {
   sanitizeDictationCleanupOutput,
 } from "./dictation-cleanup-core.js";
 import { resolveModelRuntime } from "./model-runtime.js";
-import {
-  assistantUsageRecord,
-  unreportedUsageRecord,
-} from "./usage-accounting.js";
+import { assistantUsageRecord, unreportedUsageRecord } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
 import { unattendedFallbackProviderId } from "../../renderer/shared/acp-harness.js";
 

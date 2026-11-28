@@ -6,7 +6,13 @@ import { createDesignZoomGate } from "./zoom-gate.ts";
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /** Enters the gate and records when the window was let in. */
-function track(gate: ReturnType<typeof createDesignZoomGate>, zoom: number, order: string[], name: string, signal?: AbortSignal) {
+function track(
+  gate: ReturnType<typeof createDesignZoomGate>,
+  zoom: number,
+  order: string[],
+  name: string,
+  signal?: AbortSignal,
+) {
   let leave: (() => void) | null = null;
   const entered = gate.enter(zoom, signal).then((release) => {
     order.push(name);

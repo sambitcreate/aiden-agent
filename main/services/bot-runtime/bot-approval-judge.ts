@@ -5,8 +5,15 @@
 // Bot's spending as "approval-judge" usage. Fails closed: no model, an error,
 // a timeout or an unsure reply defers to the card.
 
-import { createApprovalJudge, type ApprovalJudge, type ApprovalJudgeComplete } from "../approval-judge/judge.js";
-import { approvalJudgeComplete, type ApprovalJudgeRuntime } from "../approval-judge/model-complete.js";
+import {
+  createApprovalJudge,
+  type ApprovalJudge,
+  type ApprovalJudgeComplete,
+} from "../approval-judge/judge.js";
+import {
+  approvalJudgeComplete,
+  type ApprovalJudgeRuntime,
+} from "../approval-judge/model-complete.js";
 import { responseCostUsd } from "../spending-service.js";
 import type { UsageRequestRecord } from "../usage-store-core.js";
 import type { BotApprovalJudgeInput, BotToolAssemblyPorts } from "./bot-tool-assembly.js";
@@ -19,10 +26,17 @@ export interface BotApprovalJudgeDeps {
    * (an API key, not a sign-in or a model on this Mac), or `undefined` when
    * no model can judge (an ACP agent).
    */
-  runtime(botId: string, signal?: AbortSignal): Promise<{ judge: ApprovalJudgeRuntime; countsSpend(): Promise<boolean> } | undefined>;
+  runtime(
+    botId: string,
+    signal?: AbortSignal,
+  ): Promise<{ judge: ApprovalJudgeRuntime; countsSpend(): Promise<boolean> } | undefined>;
   recordUsage(record: UsageRequestRecord): Promise<void> | void;
   /** A judge call's cost, toward the Bot's (and a routine run's) spending. */
-  recordSpend(botId: string, requestIds: readonly (string | undefined)[], usd: number): Promise<void>;
+  recordSpend(
+    botId: string,
+    requestIds: readonly (string | undefined)[],
+    usd: number,
+  ): Promise<void>;
   /** A cost that couldn't be counted. */
   onSpendError?(botId: string, error: unknown): void;
   timeoutMs?: number;
@@ -30,7 +44,9 @@ export interface BotApprovalJudgeDeps {
   runsKept?: number;
 }
 
-export function createBotApprovalJudge(deps: BotApprovalJudgeDeps): NonNullable<BotToolAssemblyPorts["judge"]> {
+export function createBotApprovalJudge(
+  deps: BotApprovalJudgeDeps,
+): NonNullable<BotToolAssemblyPorts["judge"]> {
   const runs = new Map<string, ApprovalJudge>();
   const kept = deps.runsKept ?? 100;
   const judgeFor = (botId: string, input: BotApprovalJudgeInput): ApprovalJudge => {
@@ -50,7 +66,8 @@ export function createBotApprovalJudge(deps: BotApprovalJudgeDeps): NonNullable<
         countSpend: (message) => {
           const usd = responseCostUsd(message);
           if (usd <= 0) return;
-          spent = resolved.countsSpend()
+          spent = resolved
+            .countsSpend()
             .catch(() => true)
             .then((counts) => (counts ? deps.recordSpend(botId, input.requestIds, usd) : undefined))
             .catch((error: unknown) => deps.onSpendError?.(botId, error));
@@ -59,7 +76,10 @@ export function createBotApprovalJudge(deps: BotApprovalJudgeDeps): NonNullable<
       await spent;
       return reply;
     };
-    const judge = createApprovalJudge({ complete, ...(deps.timeoutMs === undefined ? {} : { timeoutMs: deps.timeoutMs }) });
+    const judge = createApprovalJudge({
+      complete,
+      ...(deps.timeoutMs === undefined ? {} : { timeoutMs: deps.timeoutMs }),
+    });
     runs.set(key, judge);
     while (runs.size > kept) runs.delete(runs.keys().next().value!);
     return judge;
@@ -68,7 +88,12 @@ export function createBotApprovalJudge(deps: BotApprovalJudgeDeps): NonNullable<
     try {
       const job = (await deps.job(botId).catch(() => undefined)) ?? "";
       const verdict = await judgeFor(botId, input).judge(
-        { effect: input.effect, action: input.action, request: input.request, ...(job.trim() ? { job } : {}) },
+        {
+          effect: input.effect,
+          action: input.action,
+          request: input.request,
+          ...(job.trim() ? { job } : {}),
+        },
         signal,
       );
       return verdict.verdict;

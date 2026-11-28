@@ -10,7 +10,10 @@ import { ChatSettlement } from "./chat-settlement.js";
 
 const MINUTE = 60_000;
 
-function harness(t: test.TestContext, options: { stoppable?: Set<string>; busy?: Set<string> } = {}) {
+function harness(
+  t: test.TestContext,
+  options: { stoppable?: Set<string>; busy?: Set<string> } = {},
+) {
   mock.timers.enable({ apis: ["setTimeout"] });
   t.after(() => mock.timers.reset());
   const stoppable = options.stoppable ?? new Set(["chat-1"]);
@@ -155,7 +158,8 @@ test("a stop that could not be confirmed is tried again after another window", a
   });
   const advance = async (ms: number) => {
     mock.timers.tick(ms);
-    for (let round = 0; round < 3; round += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+    for (let round = 0; round < 3; round += 1)
+      await new Promise<void>((resolve) => setImmediate(resolve));
   };
   settlement.runEnded("chat-1", "run-1");
   await advance(20 * MINUTE);
@@ -196,7 +200,11 @@ test("an answer evicted from a full run registry still lets the chat settle, a f
   registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
   registry.begin({ runId: "run-2", chatId: "chat-2", origin: "renderer" });
   registry.begin({ runId: "run-3", chatId: "chat-3", origin: "renderer" });
-  assert.equal(registry.summary("run-1"), undefined, "the registry evicted chat-1's running answer to make room");
+  assert.equal(
+    registry.summary("run-1"),
+    undefined,
+    "the registry evicted chat-1's running answer to make room",
+  );
 
   // Step a minute at a time: a mocked tick only runs timers that were already due.
   const advanceMinutes = async (minutes: number) => {
@@ -209,7 +217,11 @@ test("an answer evicted from a full run registry still lets the chat settle, a f
   busy.delete("chat-1");
   registry.settle("run-1");
   await advanceMinutes(20);
-  assert.deepEqual(stopped, [], "the quiet window is a full twenty minutes from when the chat went idle");
+  assert.deepEqual(
+    stopped,
+    [],
+    "the quiet window is a full twenty minutes from when the chat went idle",
+  );
   await advanceMinutes(1);
   assert.deepEqual(stopped, ["chat-1"]);
 });

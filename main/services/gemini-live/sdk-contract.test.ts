@@ -21,10 +21,7 @@ const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const modulesRoot = path.join(repositoryRoot, "node_modules");
 
 interface LocalWebSocket {
-  on(
-    event: "message",
-    listener: (payload: { toString(): string }) => void,
-  ): this;
+  on(event: "message", listener: (payload: { toString(): string }) => void): this;
   on(event: "close", listener: () => void): this;
   send(payload: string): void;
   close(code?: number, data?: string): void;
@@ -48,10 +45,7 @@ interface LocalWebSocketServerConstructor {
 
 function deadline<T>(promise: Promise<T>, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`${label} timed out.`)),
-      2_000,
-    );
+    const timer = setTimeout(() => reject(new Error(`${label} timed out.`)), 2_000);
     void promise.then(
       (value) => {
         clearTimeout(timer);
@@ -67,24 +61,15 @@ function deadline<T>(promise: Promise<T>, label: string): Promise<T> {
 
 test("provider close diagnostics collapse to fixed content-free categories", () => {
   assert.equal(
-    classifyGeminiLiveConnectionFailure(
-      1008,
-      "API key was reported as leaked: SECRET",
-    ),
+    classifyGeminiLiveConnectionFailure(1008, "API key was reported as leaked: SECRET"),
     "authentication",
   );
   assert.equal(
-    classifyGeminiLiveConnectionFailure(
-      1011,
-      "RESOURCE_EXHAUSTED for private project 123",
-    ),
+    classifyGeminiLiveConnectionFailure(1011, "RESOURCE_EXHAUSTED for private project 123"),
     "quota",
   );
   assert.equal(
-    classifyGeminiLiveConnectionFailure(
-      1008,
-      "Operation is not implemented or enabled",
-    ),
+    classifyGeminiLiveConnectionFailure(1008, "Operation is not implemented or enabled"),
     "unsupported_configuration",
   );
   assert.equal(
@@ -92,10 +77,7 @@ test("provider close diagnostics collapse to fixed content-free categories", () 
     "service_unavailable",
   );
   assert.equal(
-    classifyGeminiLiveConnectionFailure(
-      1006,
-      "wss://private.example?key=SECRET",
-    ),
+    classifyGeminiLiveConnectionFailure(1006, "wss://private.example?key=SECRET"),
     "network",
   );
 });
@@ -105,19 +87,14 @@ test("HTTP upgrade statuses collapse to fixed content-free categories", () => {
   assert.equal(classifyGeminiLiveUpgradeFailure(403), "authentication");
   assert.equal(classifyGeminiLiveUpgradeFailure(429), "quota");
   assert.equal(classifyGeminiLiveUpgradeFailure(503), "service_unavailable");
-  assert.equal(
-    classifyGeminiLiveUpgradeFailure(400),
-    "unsupported_configuration",
-  );
+  assert.equal(classifyGeminiLiveUpgradeFailure(400), "unsupported_configuration");
   assert.equal(classifyGeminiLiveUpgradeFailure(undefined), "network");
 });
 
 test("an HTTP upgrade rejection preserves its safe category", async () => {
   const server = createServer();
   server.on("upgrade", (_request, socket) => {
-    socket.end(
-      "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
-    );
+    socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
   });
   await deadline(
     new Promise<void>((resolve, reject) => {
@@ -163,22 +140,16 @@ test("an HTTP upgrade rejection preserves its safe category", async () => {
 });
 
 async function packageVersion(packageRoot: string): Promise<string> {
-  const manifest = JSON.parse(
-    await readFile(path.join(packageRoot, "package.json"), "utf8"),
-  ) as {
+  const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8")) as {
     version?: unknown;
   };
-  if (typeof manifest.version !== "string")
-    throw new Error("Package version is unavailable.");
+  if (typeof manifest.version !== "string") throw new Error("Package version is unavailable.");
   return manifest.version;
 }
 
 test("uses the exact reviewed Google SDK without replacing Pi's own exact SDK", async () => {
   const directRoot = path.join(modulesRoot, "@google/genai");
-  const piGoogleRoot = path.join(
-    modulesRoot,
-    "@earendil-works/pi-ai/node_modules/@google/genai",
-  );
+  const piGoogleRoot = path.join(modulesRoot, "@earendil-works/pi-ai/node_modules/@google/genai");
 
   assert.equal(await packageVersion(directRoot), "2.24.0");
   assert.equal(await packageVersion(piGoogleRoot), "2.32.0");
@@ -191,9 +162,7 @@ test("the installed Node runtime exposes Live without opening a provider connect
 });
 
 test("the installed SDK completes its real Node WebSocket setup against loopback only", async () => {
-  const sdkRequire = createRequire(
-    path.join(modulesRoot, "@google/genai/package.json"),
-  );
+  const sdkRequire = createRequire(path.join(modulesRoot, "@google/genai/package.json"));
   const { WebSocketServer } = sdkRequire("ws") as {
     WebSocketServer: LocalWebSocketServerConstructor;
   };
@@ -233,8 +202,7 @@ test("the installed SDK completes its real Node WebSocket setup against loopback
         }
         const message = parsed as Record<string, unknown>;
         messages.push(message);
-        if ("setup" in message)
-          socket.send(JSON.stringify({ setupComplete: {} }));
+        if ("setup" in message) socket.send(JSON.stringify({ setupComplete: {} }));
         if ("realtimeInput" in message) {
           resolveRealtime();
           socket.send(
@@ -362,9 +330,7 @@ test("the installed SDK completes its real Node WebSocket setup against loopback
 });
 
 test("Gemini 3.1 protocol terminates empty initial history on the real SDK wire", async () => {
-  const sdkRequire = createRequire(
-    path.join(modulesRoot, "@google/genai/package.json"),
-  );
+  const sdkRequire = createRequire(path.join(modulesRoot, "@google/genai/package.json"));
   const { WebSocketServer } = sdkRequire("ws") as {
     WebSocketServer: LocalWebSocketServerConstructor;
   };
@@ -389,8 +355,7 @@ test("Gemini 3.1 protocol terminates empty initial history on the real SDK wire"
     socket.on("message", (payload) => {
       const message = JSON.parse(payload.toString()) as Record<string, unknown>;
       messages.push(message);
-      if ("setup" in message)
-        socket.send(JSON.stringify({ setupComplete: {} }));
+      if ("setup" in message) socket.send(JSON.stringify({ setupComplete: {} }));
       if ("clientContent" in message) resolveHistory();
     });
   });
@@ -426,9 +391,7 @@ test("Gemini 3.1 protocol terminates empty initial history on the real SDK wire"
 });
 
 test("the owned SDK connector aborts and settles while setupComplete is withheld", async () => {
-  const sdkRequire = createRequire(
-    path.join(modulesRoot, "@google/genai/package.json"),
-  );
+  const sdkRequire = createRequire(path.join(modulesRoot, "@google/genai/package.json"));
   const { WebSocketServer } = sdkRequire("ws") as {
     WebSocketServer: LocalWebSocketServerConstructor;
   };
@@ -446,12 +409,8 @@ test("the owned SDK connector aborts and settles while setupComplete is withheld
   let socket: LocalWebSocket | undefined;
   let resolveSetup!: () => void;
   let resolveClosed!: () => void;
-  const setupReceived = new Promise<void>(
-    (resolve) => (resolveSetup = resolve),
-  );
-  const socketClosed = new Promise<void>(
-    (resolve) => (resolveClosed = resolve),
-  );
+  const setupReceived = new Promise<void>((resolve) => (resolveSetup = resolve));
+  const socketClosed = new Promise<void>((resolve) => (resolveClosed = resolve));
   server.on("connection", (connected) => {
     socket = connected;
     connected.on("message", (payload) => {
@@ -496,9 +455,7 @@ test("the owned SDK connector aborts and settles while setupComplete is withheld
 });
 
 test("protocol timeout terminates the owned SDK socket before setupComplete", async () => {
-  const sdkRequire = createRequire(
-    path.join(modulesRoot, "@google/genai/package.json"),
-  );
+  const sdkRequire = createRequire(path.join(modulesRoot, "@google/genai/package.json"));
   const { WebSocketServer } = sdkRequire("ws") as {
     WebSocketServer: LocalWebSocketServerConstructor;
   };
@@ -514,9 +471,7 @@ test("protocol timeout terminates the owned SDK socket before setupComplete", as
   assert.ok(address && typeof address !== "string");
   let socket: LocalWebSocket | undefined;
   let resolveClosed!: () => void;
-  const socketClosed = new Promise<void>(
-    (resolve) => (resolveClosed = resolve),
-  );
+  const socketClosed = new Promise<void>((resolve) => (resolveClosed = resolve));
   server.on("connection", (connected) => {
     socket = connected;
     connected.on("close", resolveClosed);
@@ -555,9 +510,7 @@ test("protocol timeout terminates the owned SDK socket before setupComplete", as
 });
 
 test("the chosen Live voice reaches Google's setup message through the owned SDK connector", async () => {
-  const sdkRequire = createRequire(
-    path.join(modulesRoot, "@google/genai/package.json"),
-  );
+  const sdkRequire = createRequire(path.join(modulesRoot, "@google/genai/package.json"));
   const { WebSocketServer } = sdkRequire("ws") as {
     WebSocketServer: LocalWebSocketServerConstructor;
   };
@@ -615,9 +568,7 @@ test("the chosen Live voice reaches Google's setup message through the owned SDK
 });
 
 test("the owned connector rejects and settles an oversized loopback frame", async () => {
-  const sdkRequire = createRequire(
-    path.join(modulesRoot, "@google/genai/package.json"),
-  );
+  const sdkRequire = createRequire(path.join(modulesRoot, "@google/genai/package.json"));
   const { WebSocketServer } = sdkRequire("ws") as {
     WebSocketServer: LocalWebSocketServerConstructor;
   };
@@ -633,17 +584,13 @@ test("the owned connector rejects and settles an oversized loopback frame", asyn
   assert.ok(address && typeof address !== "string");
   let socket: LocalWebSocket | undefined;
   let resolveClosed!: () => void;
-  const socketClosed = new Promise<void>(
-    (resolve) => (resolveClosed = resolve),
-  );
+  const socketClosed = new Promise<void>((resolve) => (resolveClosed = resolve));
   server.on("connection", (connected) => {
     socket = connected;
     connected.on("message", (payload) => {
       const message = JSON.parse(payload.toString()) as Record<string, unknown>;
       if ("setup" in message) {
-        connected.send(
-          "x".repeat(GEMINI_LIVE_MAX_RAW_WEBSOCKET_PAYLOAD_BYTES + 1),
-        );
+        connected.send("x".repeat(GEMINI_LIVE_MAX_RAW_WEBSOCKET_PAYLOAD_BYTES + 1));
       }
     });
     connected.on("close", resolveClosed);
@@ -685,9 +632,7 @@ test("the owned connector rejects and settles an oversized loopback frame", asyn
 });
 
 test("the owned connector rejects malformed loopback text before the SDK parser", async () => {
-  const sdkRequire = createRequire(
-    path.join(modulesRoot, "@google/genai/package.json"),
-  );
+  const sdkRequire = createRequire(path.join(modulesRoot, "@google/genai/package.json"));
   const { WebSocketServer } = sdkRequire("ws") as {
     WebSocketServer: LocalWebSocketServerConstructor;
   };
@@ -703,9 +648,7 @@ test("the owned connector rejects malformed loopback text before the SDK parser"
   assert.ok(address && typeof address !== "string");
   let socket: LocalWebSocket | undefined;
   let resolveClosed!: () => void;
-  const socketClosed = new Promise<void>(
-    (resolve) => (resolveClosed = resolve),
-  );
+  const socketClosed = new Promise<void>((resolve) => (resolveClosed = resolve));
   server.on("connection", (connected) => {
     socket = connected;
     connected.on("message", (payload) => {
@@ -747,9 +690,7 @@ test("the owned connector rejects malformed loopback text before the SDK parser"
 });
 
 test("protocol start preserves the owned socket's fixed provider rejection category", async () => {
-  const sdkRequire = createRequire(
-    path.join(modulesRoot, "@google/genai/package.json"),
-  );
+  const sdkRequire = createRequire(path.join(modulesRoot, "@google/genai/package.json"));
   const { WebSocketServer } = sdkRequire("ws") as {
     WebSocketServer: LocalWebSocketServerConstructor;
   };
@@ -804,9 +745,7 @@ test("protocol start preserves the owned socket's fixed provider rejection categ
 });
 
 test("protocol start rejects a provider error envelope instead of timing out", async () => {
-  const sdkRequire = createRequire(
-    path.join(modulesRoot, "@google/genai/package.json"),
-  );
+  const sdkRequire = createRequire(path.join(modulesRoot, "@google/genai/package.json"));
   const { WebSocketServer } = sdkRequire("ws") as {
     WebSocketServer: LocalWebSocketServerConstructor;
   };
@@ -872,9 +811,7 @@ test("protocol start rejects a provider error envelope instead of timing out", a
 });
 
 test("a deeply nested provider error fails closed without recursive serialization", async () => {
-  const sdkRequire = createRequire(
-    path.join(modulesRoot, "@google/genai/package.json"),
-  );
+  const sdkRequire = createRequire(path.join(modulesRoot, "@google/genai/package.json"));
   const { WebSocketServer } = sdkRequire("ws") as {
     WebSocketServer: LocalWebSocketServerConstructor;
   };
@@ -890,9 +827,7 @@ test("a deeply nested provider error fails closed without recursive serializatio
   assert.ok(address && typeof address !== "string");
   let socket: LocalWebSocket | undefined;
   let resolveClosed!: () => void;
-  const socketClosed = new Promise<void>(
-    (resolve) => (resolveClosed = resolve),
-  );
+  const socketClosed = new Promise<void>((resolve) => (resolveClosed = resolve));
   const nestedError = `${"[".repeat(10_000)}0${"]".repeat(10_000)}`;
   server.on("connection", (connected) => {
     socket = connected;
@@ -959,42 +894,25 @@ test("the installed SDK declarations contain every Phase-0 Live transport surfac
     "contextWindowCompression?: ContextWindowCompressionConfig",
     "abortSignal?: AbortSignal",
   ]) {
-    assert.ok(
-      declarations.includes(symbol),
-      `missing reviewed SDK declaration: ${symbol}`,
-    );
+    assert.ok(declarations.includes(symbol), `missing reviewed SDK declaration: ${symbol}`);
   }
 });
 
 test("Aiden's exact Pi Google adapter remains ordinary generateContent streaming only", async () => {
   const googleAdapter = await readFile(
-    path.join(
-      modulesRoot,
-      "@earendil-works/pi-ai/dist/api/google-generative-ai.js",
-    ),
+    path.join(modulesRoot, "@earendil-works/pi-ai/dist/api/google-generative-ai.js"),
     "utf8",
   );
-  assert.match(
-    googleAdapter,
-    /client\.models\.generateContentStream\(params\)/u,
-  );
-  assert.doesNotMatch(
-    googleAdapter,
-    /live\.connect|bidiGenerateContent|sendRealtimeInput/u,
-  );
+  assert.match(googleAdapter, /client\.models\.generateContentStream\(params\)/u);
+  assert.doesNotMatch(googleAdapter, /live\.connect|bidiGenerateContent|sendRealtimeInput/u);
 });
 
 test("Electron 43 declares the display handler, exact-frame request, and system picker", async () => {
   const electronRoot = path.join(modulesRoot, "electron");
-  const manifest = JSON.parse(
-    await readFile(path.join(electronRoot, "package.json"), "utf8"),
-  ) as {
+  const manifest = JSON.parse(await readFile(path.join(electronRoot, "package.json"), "utf8")) as {
     version?: unknown;
   };
-  const declarations = await readFile(
-    path.join(electronRoot, "electron.d.ts"),
-    "utf8",
-  );
+  const declarations = await readFile(path.join(electronRoot, "electron.d.ts"), "utf8");
   assert.match(String(manifest.version), /^43\./u);
   assert.match(declarations, /setDisplayMediaRequestHandler\(/u);
   assert.match(declarations, /frame: \(WebFrameMain\) \| \(null\)/u);
@@ -1004,8 +922,5 @@ test("Electron 43 declares the display handler, exact-frame request, and system 
     declarations,
     /If the system picker[\s\S]{0,180}the handler will not be[\s\S]{0,30}invoked/u,
   );
-  assert.match(
-    declarations,
-    /permission: 'clipboard-read'[^\n]+'display-capture'/u,
-  );
+  assert.match(declarations, /permission: 'clipboard-read'[^\n]+'display-capture'/u);
 });

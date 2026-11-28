@@ -57,13 +57,17 @@ export function WebPageSettingsView({
   const savedAccountId = snapshot.settings.extract.accountId ?? "";
   const [accountDraft, setAccountDraft] = React.useState(savedAccountId);
   React.useEffect(() => setAccountDraft(savedAccountId), [savedAccountId]);
-  const draftValid = accountDraft.trim() === "" || normalizeWebExtractAccountId(accountDraft) !== undefined;
-  const draftChanged = (normalizeWebExtractAccountId(accountDraft) ?? accountDraft.trim()) !== savedAccountId;
+  const draftValid =
+    accountDraft.trim() === "" || normalizeWebExtractAccountId(accountDraft) !== undefined;
+  const draftChanged =
+    (normalizeWebExtractAccountId(accountDraft) ?? accountDraft.trim()) !== savedAccountId;
   const status = webExtractStatus(snapshot);
   const reading = snapshot.settings.enabled;
   // Anything saved, or a paused switch, keeps the form visible; removing the last piece doesn't fold it away.
   const configured =
-    snapshot.extract.hasAccountId || snapshot.extract.keyCount > 0 || snapshot.settings.extract.enabled;
+    snapshot.extract.hasAccountId ||
+    snapshot.extract.keyCount > 0 ||
+    snapshot.settings.extract.enabled;
   const [setupOpen, setSetupOpen] = React.useState(configured);
   if (configured && !setupOpen) setSetupOpen(true);
   // Opening and cancelling swap the control under the keyboard, so focus follows.
@@ -144,15 +148,16 @@ export function WebPageSettingsView({
                 label={model.accountIdLabel}
                 description={
                   <>
-                    Extract mode runs {model.label} on your own Cloudflare account. The account ID is
-                    the 32-character ID on your Cloudflare dashboard.{" "}
+                    Extract mode runs {model.label} on your own Cloudflare account. The account ID
+                    is the 32-character ID on your Cloudflare dashboard.{" "}
                     <a
                       href={model.keyHelpUrl}
                       target="_blank"
                       rel="noreferrer"
                       className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 hover:text-primary"
                     >
-                      How to get an ID and a key <ExternalLink aria-hidden="true" className="size-3.5" />
+                      How to get an ID and a key{" "}
+                      <ExternalLink aria-hidden="true" className="size-3.5" />
                     </a>
                   </>
                 }

@@ -44,13 +44,13 @@ ordinary Computer Use behaves exactly as it does today.
 
 All revisions are immutable content addresses — never mutable `main`:
 
-| Artifact | Location | Pinned revision |
-| --- | --- | --- |
-| CUA-S1-FORMS model card / weights | `huggingface.co/cua-ai/cua-s1-forms` | `f54adbf447f4ca6ec259f529ee3f2e3e09f8cc71` |
-| Core ML conversion (FP16 `.mlpackage`) | `huggingface.co/FluidInference/cua-s1-forms-coreml` | `ca2113d260559ee5d2d6463900e39916936aca65` |
-| Upstream planner / schema (Python) | `github.com/trycua/cua` `libs/cua-s1` | `b7f7e2d8714609853a29c7d049140bc46aec0954` |
-| FluidAudio Swift reference | `github.com/FluidInference/FluidAudio` `Sources/FluidAudio/Decision/CuaS1Forms` | `87a39dfe4068fef0f1c69bfe704b2b3ef4fbc5bc` |
-| Golden demo set (196 rows) | `huggingface.co/datasets/cua-ai/cua-s1-forms` `demo.jsonl` | `8273f34778b99ac2e12d9f6e7d57dad99ae20845`, SHA-256 `4f43b442e79ba2e2ce731e27e9b8e340c2b5dfcaffc92d8ff564c34f115ff1ca` |
+| Artifact                               | Location                                                                        | Pinned revision                                                                                                        |
+| -------------------------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| CUA-S1-FORMS model card / weights      | `huggingface.co/cua-ai/cua-s1-forms`                                            | `f54adbf447f4ca6ec259f529ee3f2e3e09f8cc71`                                                                             |
+| Core ML conversion (FP16 `.mlpackage`) | `huggingface.co/FluidInference/cua-s1-forms-coreml`                             | `ca2113d260559ee5d2d6463900e39916936aca65`                                                                             |
+| Upstream planner / schema (Python)     | `github.com/trycua/cua` `libs/cua-s1`                                           | `b7f7e2d8714609853a29c7d049140bc46aec0954`                                                                             |
+| FluidAudio Swift reference             | `github.com/FluidInference/FluidAudio` `Sources/FluidAudio/Decision/CuaS1Forms` | `87a39dfe4068fef0f1c69bfe704b2b3ef4fbc5bc`                                                                             |
+| Golden demo set (196 rows)             | `huggingface.co/datasets/cua-ai/cua-s1-forms` `demo.jsonl`                      | `8273f34778b99ac2e12d9f6e7d57dad99ae20845`, SHA-256 `4f43b442e79ba2e2ce731e27e9b8e340c2b5dfcaffc92d8ff564c34f115ff1ca` |
 
 The conversion's `assets.lock.json` (SHA-256
 `8e65ad70af6bb814b571cdcfe828ba4bc339147da2d2211cbeac416163ef18ba`) records the
@@ -61,14 +61,14 @@ upstream source revision `83f142c4290a0f7d9ed545ae8532858c6e4f8145`.
 Repository `FluidInference/cua-s1-forms-coreml` @ `ca2113d2…`. The specialist
 downloads exactly these files — nothing else:
 
-| Path | SHA-256 |
-| --- | --- |
-| `cua_s1_forms_fp16_options32.mlpackage/Data/com.apple.CoreML/model.mlmodel` | `70485fc18cbb21785df833cbddddc0b5b59acb00d22394b76e55307e2c135dd0` |
+| Path                                                                             | SHA-256                                                            |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `cua_s1_forms_fp16_options32.mlpackage/Data/com.apple.CoreML/model.mlmodel`      | `70485fc18cbb21785df833cbddddc0b5b59acb00d22394b76e55307e2c135dd0` |
 | `cua_s1_forms_fp16_options32.mlpackage/Data/com.apple.CoreML/weights/weight.bin` | `4da9259f798e44f5a1b50769ee1916fd3747c4d723dd9997b516c7fe238c7895` |
-| `cua_s1_forms_fp16_options32.mlpackage/Manifest.json` | `2bc0f5f62337b27fb6b0ecde248f1e3dc269e1ba4b65516aaeede2a60e293dcc` |
-| `LICENSE` | `c0779290c1d4783169aa3dbfb55feb505e563ef8a004bbf55298ceffcfbda8d9` |
-| `NOTICES.md` | `027c72741eaa695e60d7b6cebd3666372c81d443a96b673b72a897cf432ddfd0` |
-| `UPSTREAM-THIRD-PARTY-NOTICES.md` | `4091e69b45c8cc97e30a066fbbd56148dbef66ab716432c048d2333c9c464213` |
+| `cua_s1_forms_fp16_options32.mlpackage/Manifest.json`                            | `2bc0f5f62337b27fb6b0ecde248f1e3dc269e1ba4b65516aaeede2a60e293dcc` |
+| `LICENSE`                                                                        | `c0779290c1d4783169aa3dbfb55feb505e563ef8a004bbf55298ceffcfbda8d9` |
+| `NOTICES.md`                                                                     | `027c72741eaa695e60d7b6cebd3666372c81d443a96b673b72a897cf432ddfd0` |
+| `UPSTREAM-THIRD-PARTY-NOTICES.md`                                                | `4091e69b45c8cc97e30a066fbbd56148dbef66ab716432c048d2333c9c464213` |
 
 INT4/INT8 variants and the `ane-gather/` variant are intentionally not
 downloaded. Total package size is ~1.5 MB; the installer enforces a byte and
@@ -178,7 +178,7 @@ unit tests drive it with a stub scorer.
 
 - Context format (byte-exact port of upstream `render_context`):
   `TASK fill the form from the document, then submit\nFORM {title}\nELEMENT
-  {role} "{label}" {state}[ hint="{placeholder}"]` with title ≤64 bytes,
+{role} "{label}" {state}[ hint="{placeholder}"]` with title ≤64 bytes,
   label ≤72 bytes, value state `value="{≤48 bytes}"` or
   `checked/unchecked` for checkbox roles, placeholder hint ≤72 bytes.
 - Options: `fill {label}: {value}` per entity, then `check`, `click`, `skip`.
@@ -290,16 +290,21 @@ logged. Logs carry counts, states, error codes, and digests only.
   "formTitle": "Northwind Clinic - New Patient Registration",
   "elements": [
     {
-      "role": "AXTextField", "label": "First name", "value": "",
-      "index": 0, "actions": ["AXPress"], "checked": null,
-      "frame": {"x":0,"y":0,"w":0,"h":0}, "token": "…"
-    }
+      "role": "AXTextField",
+      "label": "First name",
+      "value": "",
+      "index": 0,
+      "actions": ["AXPress"],
+      "checked": null,
+      "frame": { "x": 0, "y": 0, "w": 0, "h": 0 },
+      "token": "…",
+    },
   ],
   "expected": [
-    {"index": 0, "outcome": "fill", "entityLabel": "First name"},
-    {"index": 1, "outcome": "needs_review", "reason": "skip_wins"}
+    { "index": 0, "outcome": "fill", "entityLabel": "First name" },
+    { "index": 1, "outcome": "needs_review", "reason": "skip_wins" },
   ],
-  "notes": "…"
+  "notes": "…",
 }
 ```
 
@@ -312,7 +317,6 @@ in encoding/formatting is caught on Linux.
 
 Recorded per slice; the final report lists files, revisions, hashes, tests,
 and remaining manual acceptance on macOS.
-
 
 ## 2026-09-22 initial remediation evidence (superseded for mutation safety)
 

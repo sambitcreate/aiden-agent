@@ -195,14 +195,24 @@ function assertAllowedKeys(
   }
 }
 
-function parseRequiredString(value: unknown, field: string, maxChars: number, allowEmpty = false): string {
+function parseRequiredString(
+  value: unknown,
+  field: string,
+  maxChars: number,
+  allowEmpty = false,
+): string {
   if (typeof value !== "string" || (!allowEmpty && value.length === 0) || value.length > maxChars) {
     throw new Error(`Invalid grabbed element ${field}.`);
   }
   return value;
 }
 
-function parseOptionalString(value: unknown, field: string, maxChars: number, allowEmpty = false): string | undefined {
+function parseOptionalString(
+  value: unknown,
+  field: string,
+  maxChars: number,
+  allowEmpty = false,
+): string | undefined {
   if (value === undefined) return undefined;
   return parseRequiredString(value, field, maxChars, allowEmpty);
 }
@@ -292,7 +302,13 @@ function parseProps(
   let count = 0;
   for (const [key, propValue] of entries) {
     if (count >= MAX_PROPS) break;
-    if (key.length === 0 || key.length > 80 || key === "__proto__" || key === "constructor" || key === "prototype") {
+    if (
+      key.length === 0 ||
+      key.length > 80 ||
+      key === "__proto__" ||
+      key === "constructor" ||
+      key === "prototype"
+    ) {
       if (mode === "append") throw new Error("Invalid grabbed element prop key.");
       continue;
     }
@@ -334,7 +350,13 @@ function parseStringRecord(
   let count = 0;
   for (const [key, entryValue] of entries) {
     if (count >= maxEntries) break;
-    if (key.length === 0 || key.length > 80 || key === "__proto__" || key === "constructor" || key === "prototype") {
+    if (
+      key.length === 0 ||
+      key.length > 80 ||
+      key === "__proto__" ||
+      key === "constructor" ||
+      key === "prototype"
+    ) {
       if (mode === "append") throw new Error(`Invalid grabbed element ${field} key.`);
       continue;
     }
@@ -352,15 +374,24 @@ function parseStringRecord(
   return count > 0 ? result : undefined;
 }
 
-function parseBoundingBox(value: unknown, mode: GrabbedElementsParseMode): GrabbedElementBoundingBox {
+function parseBoundingBox(
+  value: unknown,
+  mode: GrabbedElementsParseMode,
+): GrabbedElementBoundingBox {
   if (!isPlainObject(value)) throw new Error("Invalid grabbed element boundingBox.");
   assertAllowedKeys(value, BOX_KEYS, "boundingBox", mode);
   const { x, y, width, height } = value;
   if (
-    typeof x !== "number" || !Number.isFinite(x) ||
-    typeof y !== "number" || !Number.isFinite(y) ||
-    typeof width !== "number" || !Number.isFinite(width) || width < 0 ||
-    typeof height !== "number" || !Number.isFinite(height) || height < 0
+    typeof x !== "number" ||
+    !Number.isFinite(x) ||
+    typeof y !== "number" ||
+    !Number.isFinite(y) ||
+    typeof width !== "number" ||
+    !Number.isFinite(width) ||
+    width < 0 ||
+    typeof height !== "number" ||
+    !Number.isFinite(height) ||
+    height < 0
   ) {
     throw new Error("Invalid grabbed element boundingBox coordinates.");
   }
@@ -376,14 +407,22 @@ function parseViewport(
   assertAllowedKeys(value, VIEWPORT_KEYS, "viewport", mode);
   const { width, height, devicePixelRatio, zoomFactor } = value;
   if (
-    typeof width !== "number" || !Number.isFinite(width) || width <= 0 ||
-    typeof height !== "number" || !Number.isFinite(height) || height <= 0
+    typeof width !== "number" ||
+    !Number.isFinite(width) ||
+    width <= 0 ||
+    typeof height !== "number" ||
+    !Number.isFinite(height) ||
+    height <= 0
   ) {
     throw new Error("Invalid grabbed element viewport dimensions.");
   }
   const result: GrabbedElementViewport = { width, height };
   if (devicePixelRatio !== undefined) {
-    if (typeof devicePixelRatio !== "number" || !Number.isFinite(devicePixelRatio) || devicePixelRatio <= 0) {
+    if (
+      typeof devicePixelRatio !== "number" ||
+      !Number.isFinite(devicePixelRatio) ||
+      devicePixelRatio <= 0
+    ) {
       throw new Error("Invalid grabbed element viewport.devicePixelRatio.");
     }
     result.devicePixelRatio = devicePixelRatio;
@@ -423,7 +462,11 @@ function parseSingleGrabbedElement(
   const htmlSnippet = parseRequiredString(value.htmlSnippet, "htmlSnippet", 4096, true);
   const boundingBox = parseBoundingBox(value.boundingBox, mode);
   const pageUrl = parseRequiredString(value.pageUrl, "pageUrl", 2048);
-  if (typeof value.capturedAt !== "number" || !Number.isFinite(value.capturedAt) || value.capturedAt < 0) {
+  if (
+    typeof value.capturedAt !== "number" ||
+    !Number.isFinite(value.capturedAt) ||
+    value.capturedAt < 0
+  ) {
     throw new Error("Invalid grabbed element capturedAt.");
   }
 
@@ -434,8 +477,22 @@ function parseSingleGrabbedElement(
   const role = parseOptionalString(value.role, "role", 80);
   const accessibleName = parseOptionalString(value.accessibleName, "accessibleName", 256);
   const textPreview = parseOptionalString(value.textPreview, "textPreview", 1024, true);
-  const attributes = parseStringRecord(value.attributes, "attributes", MAX_ATTRIBUTES, 512, mode, true);
-  const computedStyles = parseStringRecord(value.computedStyles, "computedStyles", MAX_COMPUTED_STYLES, 256, mode, false);
+  const attributes = parseStringRecord(
+    value.attributes,
+    "attributes",
+    MAX_ATTRIBUTES,
+    512,
+    mode,
+    true,
+  );
+  const computedStyles = parseStringRecord(
+    value.computedStyles,
+    "computedStyles",
+    MAX_COMPUTED_STYLES,
+    256,
+    mode,
+    false,
+  );
   const pageTitle = parseOptionalString(value.pageTitle, "pageTitle", 256, true);
   const viewport = parseViewport(value.viewport, mode);
 
@@ -523,7 +580,10 @@ export function parseGrabbedElements(
   }
 
   if (parsed.length === 0) return undefined;
-  if (mode === "append" && grabbedElementsRepresentationBytes(parsed) > MAX_GRABBED_ELEMENTS_TOTAL_BYTES) {
+  if (
+    mode === "append" &&
+    grabbedElementsRepresentationBytes(parsed) > MAX_GRABBED_ELEMENTS_TOTAL_BYTES
+  ) {
     throw new Error("Grabbed elements exceed maximum total byte budget.");
   }
   return parsed;
@@ -639,7 +699,9 @@ export function formatGrabbedElementsForPrompt(
     const viewportSuffix = element.viewport
       ? ` (viewport ${Math.round(element.viewport.width)}x${Math.round(element.viewport.height)})`
       : "";
-    lines.push(`- Rect: x=${Math.round(x)}, y=${Math.round(y)}, ${Math.round(width)}x${Math.round(height)}${viewportSuffix}`);
+    lines.push(
+      `- Rect: x=${Math.round(x)}, y=${Math.round(y)}, ${Math.round(width)}x${Math.round(height)}${viewportSuffix}`,
+    );
 
     if (element.computedStyles) {
       const sortedStyleKeys = Object.keys(element.computedStyles).sort(compareCodepoints);
@@ -691,7 +753,11 @@ function parseCssRgb(color: string): [number, number, number] | null {
     const g = Number(rgbMatch[2]);
     const b = Number(rgbMatch[3]);
     if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
-      return [Math.max(0, Math.min(255, r)), Math.max(0, Math.min(255, g)), Math.max(0, Math.min(255, b))];
+      return [
+        Math.max(0, Math.min(255, r)),
+        Math.max(0, Math.min(255, g)),
+        Math.max(0, Math.min(255, b)),
+      ];
     }
   }
   return null;

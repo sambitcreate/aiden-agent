@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseChatArtifactEventV1, parseChatArtifactV1, parseHtmlArtifactPlacements } from "./chat-artifacts.js";
+import {
+  parseChatArtifactEventV1,
+  parseChatArtifactV1,
+  parseHtmlArtifactPlacements,
+} from "./chat-artifacts.js";
 import { MAX_HTML_ARTIFACT_BYTES } from "./generative-ui.js";
 
 const UI_VISUAL = {
@@ -10,7 +14,11 @@ const UI_VISUAL = {
   toolCallId: "call-2",
   title: "Board",
   catalogVersion: 1,
-  tree: { t: "Visual", k: "0", c: [{ t: "Text", k: "0.0", c: [{ t: "#text", k: "0.0.0", s: "Hi" }] }] },
+  tree: {
+    t: "Visual",
+    k: "0",
+    c: [{ t: "Text", k: "0.0", c: [{ t: "#text", k: "0.0.0", s: "Hi" }] }],
+  },
   fallbackText: "Hi",
 };
 
@@ -20,12 +28,20 @@ test("native visual events carry a validated visual", () => {
     operation: "ui",
     visual: UI_VISUAL,
   });
-  assert.deepEqual(parseChatArtifactEventV1({ version: 1, operation: "ui_draft", toolCallId: "call-2", visual: UI_VISUAL }), {
-    version: 1,
-    operation: "ui_draft",
-    toolCallId: "call-2",
-    visual: UI_VISUAL,
-  });
+  assert.deepEqual(
+    parseChatArtifactEventV1({
+      version: 1,
+      operation: "ui_draft",
+      toolCallId: "call-2",
+      visual: UI_VISUAL,
+    }),
+    {
+      version: 1,
+      operation: "ui_draft",
+      toolCallId: "call-2",
+      visual: UI_VISUAL,
+    },
+  );
   for (const bad of [
     { version: 1, operation: "ui", visual: { ...UI_VISUAL, tree: undefined } },
     { version: 1, operation: "ui", visual: UI_VISUAL, extra: 1 },
@@ -115,10 +131,11 @@ test("unknown kinds and mixed image/html shapes drop", () => {
     }),
     undefined,
   );
-  assert.deepEqual(
-    parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML }),
-    { version: 1, operation: "present", artifact: HTML },
-  );
+  assert.deepEqual(parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML }), {
+    version: 1,
+    operation: "present",
+    artifact: HTML,
+  });
 });
 
 const PLACED_MEDIA = "a".repeat(64);
@@ -162,25 +179,52 @@ test("placements carry a wide layout and tolerate fields from newer builds", () 
 test("present and draft events may mark a visual wide", () => {
   const src = `aiden-genui://preview/${"e".repeat(64)}`;
   const present = parseChatArtifactEventV1({
-    version: 1, operation: "present", artifact: HTML, toolCallId: "call_1", src, layout: "wide",
+    version: 1,
+    operation: "present",
+    artifact: HTML,
+    toolCallId: "call_1",
+    src,
+    layout: "wide",
   });
   assert.equal(present?.operation === "present" && present.layout, "wide");
   const draft = parseChatArtifactEventV1({
-    version: 1, operation: "draft", toolCallId: "call_1", title: "Chart", src, layout: "wide",
+    version: 1,
+    operation: "draft",
+    toolCallId: "call_1",
+    title: "Chart",
+    src,
+    layout: "wide",
   });
   assert.equal(draft?.operation === "draft" && draft.layout, "wide");
   // Any other layout reads as the reading column; it never hides the visual.
-  const narrowPresent = parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, layout: "huge" });
+  const narrowPresent = parseChatArtifactEventV1({
+    version: 1,
+    operation: "present",
+    artifact: HTML,
+    layout: "huge",
+  });
   assert.equal(narrowPresent?.operation, "present");
   assert.equal(narrowPresent && "layout" in narrowPresent, false);
-  const narrowDraft = parseChatArtifactEventV1({ version: 1, operation: "draft", toolCallId: "call_1", src, layout: "column" });
+  const narrowDraft = parseChatArtifactEventV1({
+    version: 1,
+    operation: "draft",
+    toolCallId: "call_1",
+    src,
+    layout: "column",
+  });
   assert.deepEqual(narrowDraft, { version: 1, operation: "draft", toolCallId: "call_1", src });
 });
 
 test("draft events carry a preview URL for one tool call and nothing else", () => {
   const src = `aiden-genui://preview/${"a".repeat(64)}`;
   assert.deepEqual(
-    parseChatArtifactEventV1({ version: 1, operation: "draft", toolCallId: "call_1", title: "Chart", src }),
+    parseChatArtifactEventV1({
+      version: 1,
+      operation: "draft",
+      toolCallId: "call_1",
+      title: "Chart",
+      src,
+    }),
     { version: 1, operation: "draft", toolCallId: "call_1", title: "Chart", src },
   );
   assert.deepEqual(
@@ -205,20 +249,42 @@ test("draft events carry a preview URL for one tool call and nothing else", () =
 
 test("present events may carry a ready preview URL and nothing else", () => {
   const src = `aiden-genui://preview/${"b".repeat(64)}`;
-  const parsed = parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, toolCallId: "call_1", src });
+  const parsed = parseChatArtifactEventV1({
+    version: 1,
+    operation: "present",
+    artifact: HTML,
+    toolCallId: "call_1",
+    src,
+  });
   assert.equal(parsed?.operation === "present" && parsed.src, src);
   assert.equal(
-    parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, toolCallId: "call_1", src: "https://x.test/a" }),
+    parseChatArtifactEventV1({
+      version: 1,
+      operation: "present",
+      artifact: HTML,
+      toolCallId: "call_1",
+      src: "https://x.test/a",
+    }),
     undefined,
   );
   assert.equal(
-    parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, src: "<p>html</p>" }),
+    parseChatArtifactEventV1({
+      version: 1,
+      operation: "present",
+      artifact: HTML,
+      src: "<p>html</p>",
+    }),
     undefined,
   );
 });
 
 test("present events may carry the producing toolCallId", () => {
-  const parsed = parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, toolCallId: "call_9" });
+  const parsed = parseChatArtifactEventV1({
+    version: 1,
+    operation: "present",
+    artifact: HTML,
+    toolCallId: "call_9",
+  });
   assert.equal(parsed?.operation === "present" && parsed.toolCallId, "call_9");
   assert.equal(
     parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, toolCallId: "" }),

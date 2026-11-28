@@ -27,10 +27,16 @@ export const TRACKPAD_ORBIT_FALLBACK_MS = 1_200;
  * Safari reports cumulative pinch scale instead of Ctrl-wheel.
  */
 export function bindPhoneTrackpad(
-  canvas: Pick<HTMLCanvasElement, "addEventListener" | "removeEventListener" | "getBoundingClientRect">,
+  canvas: Pick<
+    HTMLCanvasElement,
+    "addEventListener" | "removeEventListener" | "getBoundingClientRect"
+  >,
   interaction: Pick<PhoneInteraction, "navigate" | "endWheel">,
   pinch?: TrackpadPinch,
-  timers: TrackpadTimers = { setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: (timer) => clearTimeout(timer) },
+  timers: TrackpadTimers = {
+    setTimeout: (callback, ms) => setTimeout(callback, ms),
+    clearTimeout: (timer) => clearTimeout(timer),
+  },
 ) {
   let scale: number | null = null;
   let wheelActive = false;
@@ -62,14 +68,20 @@ export function bindPhoneTrackpad(
     event.stopPropagation();
   };
   const zoom = (delta: number) => {
-    if (Number.isFinite(delta) && delta) interaction.navigate({ type: "zoom", delta: Math.max(-1, Math.min(1, delta)) });
+    if (Number.isFinite(delta) && delta)
+      interaction.navigate({ type: "zoom", delta: Math.max(-1, Math.min(1, delta)) });
   };
   const wheel = (event: WheelEvent) => {
     consume(event);
     if (scale !== null) return;
     if (event.ctrlKey) {
       endOrbit();
-      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? canvas.getBoundingClientRect().height : 1;
+      const unit =
+        event.deltaMode === 1
+          ? 16
+          : event.deltaMode === 2
+            ? canvas.getBoundingClientRect().height
+            : 1;
       if (!pinch) {
         zoom((-event.deltaY * unit) / 100);
         return;
@@ -104,7 +116,12 @@ export function bindPhoneTrackpad(
     }
   };
   const gestureScale = (event: Event) => {
-    if (!("scale" in event) || typeof event.scale !== "number" || !Number.isFinite(event.scale) || event.scale <= 0) {
+    if (
+      !("scale" in event) ||
+      typeof event.scale !== "number" ||
+      !Number.isFinite(event.scale) ||
+      event.scale <= 0
+    ) {
       return null;
     }
     return event.scale;

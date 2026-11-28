@@ -5,7 +5,10 @@ import { whenAnimationsSettle } from "./use-presence";
  * Keeps a collapsing body laid out until its grid-row transition finishes, and lays out an
  * expanding body at 0fr for one frame so the rows grow instead of appearing at full height.
  */
-export function useCollapsibleBody(collapsed: boolean, body: React.RefObject<HTMLDivElement | null>) {
+export function useCollapsibleBody(
+  collapsed: boolean,
+  body: React.RefObject<HTMLDivElement | null>,
+) {
   const [rendered, setRendered] = React.useState(!collapsed);
   const [opened, setOpened] = React.useState(!collapsed);
 

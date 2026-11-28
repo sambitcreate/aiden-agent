@@ -27,7 +27,8 @@ export function thisComputerLabel(platform: string | null | undefined): string {
 export function runtimeComputerPlatform(): string | undefined {
   const node = (globalThis as { process?: { platform?: unknown } }).process;
   if (typeof node?.platform === "string") return node.platform;
-  const browser = (globalThis as { navigator?: { platform?: string; userAgent?: string } }).navigator;
+  const browser = (globalThis as { navigator?: { platform?: string; userAgent?: string } })
+    .navigator;
   if (!browser) return undefined;
   const identity = `${browser.platform ?? ""} ${browser.userAgent ?? ""}`;
   if (/linux/iu.test(identity)) return "linux";

@@ -107,11 +107,15 @@ export function rendererDocumentOwner(
 export function windowDocumentOwner(webContents: Electron.WebContents): RendererDocumentOwner {
   if (webContents.isDestroyed()) throw new Error("The application window is no longer active.");
   const frame = webContents.mainFrame;
-  if (!isCurrentMainFrame(webContents, frame)) throw new Error("The application window is no longer active.");
+  if (!isCurrentMainFrame(webContents, frame))
+    throw new Error("The application window is no longer active.");
   return documentOwner(webContents, frame);
 }
 
-function documentOwner(sender: Electron.WebContents, frame: Electron.WebFrameMain): RendererDocumentOwner {
+function documentOwner(
+  sender: Electron.WebContents,
+  frame: Electron.WebFrameMain,
+): RendererDocumentOwner {
   const documentState = rendererDocumentState(sender);
   const documentEpoch = documentState.epoch;
   const isInvalidated = (): boolean =>

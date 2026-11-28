@@ -318,10 +318,7 @@ export interface GitHubPullRequestCheck {
   url?: string;
 }
 
-export type GitHubPullRequestReviewDecision =
-  | "approved"
-  | "changes-requested"
-  | "review-required";
+export type GitHubPullRequestReviewDecision = "approved" | "changes-requested" | "review-required";
 
 export interface GitHubPullRequestSummary {
   number: number;
@@ -583,11 +580,7 @@ export interface ModelCost {
   cacheWrite?: number;
 }
 
-export type ModelMetadataSource =
-  | "local"
-  | "provider"
-  | "models-dev"
-  | "fallback";
+export type ModelMetadataSource = "local" | "provider" | "models-dev" | "fallback";
 
 export interface ModelInfo {
   detectedCapabilities?: CustomModelOptions;

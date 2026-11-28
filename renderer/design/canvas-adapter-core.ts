@@ -24,7 +24,10 @@ import {
 } from "../shared/design-canvas/schema";
 
 export type DesignNode = Node<
-  { frame: DesignFrame; /** A connector's two ends, in canvas units. */ ends?: [DesignPoint, DesignPoint] },
+  {
+    frame: DesignFrame;
+    /** A connector's two ends, in canvas units. */ ends?: [DesignPoint, DesignPoint];
+  },
   DesignFrame["kind"]
 >;
 
@@ -48,7 +51,9 @@ export function nodesFromCanvas(doc: DesignCanvas, selection: ReadonlySet<string
     const geometry = frame.kind === "connector" ? connectorGeometry(byId, frame) : undefined;
     const box = geometry?.box ?? frame;
     // An item in a hidden group or artboard is hidden with it.
-    const hidden = frame.hidden === true || (frame.groupId !== undefined && byId.get(frame.groupId)?.hidden === true);
+    const hidden =
+      frame.hidden === true ||
+      (frame.groupId !== undefined && byId.get(frame.groupId)?.hidden === true);
     return {
       id: frame.id,
       type: frame.kind,
@@ -164,7 +169,10 @@ export function applyNodeChanges(
       // A dragged connector moves its free ends by as much as its box moved.
       const drawn = connectorGeometry(original, frame).box;
       next = translateConnector(frame, box.x - drawn.x, box.y - drawn.y);
-    } else if (box && (box.x !== frame.x || box.y !== frame.y || box.w !== frame.w || box.h !== frame.h)) {
+    } else if (
+      box &&
+      (box.x !== frame.x || box.y !== frame.y || box.w !== frame.w || box.h !== frame.h)
+    ) {
       next = { ...frame, ...box };
     }
     if (next.groupId && removed.has(next.groupId)) {
@@ -229,7 +237,8 @@ export function resolveCanvasFocus(input: {
   const present = requestedVisible.filter((id) => visibleNodeIds.includes(id));
   const measuredIds = present.length > 0 ? present : visibleNodeIds;
   const measured = measuredIds.length > 0 && measuredIds.every((id) => input.isMeasured(id));
-  const arriving = present.length < requestedVisible.length || (visibleNodeIds.length > 0 && !measured);
+  const arriving =
+    present.length < requestedVisible.length || (visibleNodeIds.length > 0 && !measured);
   if (arriving && input.waitedMs < input.maxWaitMs) return { action: "wait" };
   if (input.requestedIds.length > 0 && present.length === 0) return { action: "drop" };
   return { action: "fit", ids: present };

@@ -41,12 +41,20 @@ async function setup() {
   const server = new FakeRfbServer({ width: 32, height: 24, password: "run-pass-1" });
   const port = await server.listen();
   const screen = await createRfbScreen({
-    connect: (signal) => connectRfb(connect({ host: "127.0.0.1", port }), { password: "run-pass-1", signal }),
+    connect: (signal) =>
+      connectRfb(connect({ host: "127.0.0.1", port }), { password: "run-pass-1", signal }),
     encode: async (_bgra, width, height) => ({ image: Buffer.from("JPEG"), width, height }),
     frameIntervalMs: 10,
   });
   const state: { computer?: BotComputerStatus } = {
-    computer: { botId: BOT, vmName: VM, state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot" },
+    computer: {
+      botId: BOT,
+      vmName: VM,
+      state: "stopped",
+      baseBuild: "25G83",
+      outdated: false,
+      controller: "bot",
+    },
   };
   const listeners = new Set<(botId: string | undefined) => void>();
   const starts: BotComputerStartReason[] = [];
@@ -182,7 +190,10 @@ test("closing the viewer stops its proxy, and later grants are refused", async (
 
 test("as main wires them, the Bot's screen and the viewer share one VNC connection per run, and a new run opens a new one", async () => {
   // Main's composition: P8's sessions with the RFB screen factory, and the viewer reading screens through them.
-  const servers = [new FakeRfbServer({ width: 32, height: 24, password: "run-pass-1" }), new FakeRfbServer({ width: 32, height: 24, password: "run-pass-2" })];
+  const servers = [
+    new FakeRfbServer({ width: 32, height: 24, password: "run-pass-1" }),
+    new FakeRfbServer({ width: 32, height: 24, password: "run-pass-2" }),
+  ];
   const ports = await Promise.all(servers.map((server) => server.listen()));
   let run = 0;
   const connection = (): BotComputerConnection => ({
@@ -192,7 +203,14 @@ test("as main wires them, the Bot's screen and the viewer share one VNC connecti
     ssh: { host: "192.168.64.5", user: "lume" },
   });
   const state: { computer: BotComputerStatus } = {
-    computer: { botId: BOT, vmName: VM, state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot" },
+    computer: {
+      botId: BOT,
+      vmName: VM,
+      state: "stopped",
+      baseBuild: "25G83",
+      outdated: false,
+      controller: "bot",
+    },
   };
   const listeners = new Set<(botId: string | undefined) => void>();
   const host = {
@@ -213,8 +231,18 @@ test("as main wires them, the Bot's screen and the viewer share one VNC connecti
   };
   const control = createBotComputerControl();
   const sessions = createBotComputerSessions({ host, control });
-  sessions.setScreenFactory(createRfbScreenFactory({ encode: async (_bgra, width, height) => ({ image: Buffer.from("JPEG"), width, height }) }));
-  const viewer = createBotComputerViewer({ host, sessions, control, botName: () => "Ada", allowedOrigins: ["file://"] });
+  sessions.setScreenFactory(
+    createRfbScreenFactory({
+      encode: async (_bgra, width, height) => ({ image: Buffer.from("JPEG"), width, height }),
+    }),
+  );
+  const viewer = createBotComputerViewer({
+    host,
+    sessions,
+    control,
+    botName: () => "Ada",
+    allowedOrigins: ["file://"],
+  });
   try {
     const lent = await viewer.grant(BOT, { start: true });
     const stream = await get(streamUrl(lent));
@@ -225,7 +253,11 @@ test("as main wires them, the Bot's screen and the viewer share one VNC connecti
     const shot = await botScreen.capture({ format: "jpeg", maxWidth: 32 });
     assert.deepEqual([shot.framebufferWidth, shot.framebufferHeight], [32, 24]);
     assert.equal(servers[0].connections.length, 1, "one VNC connection for the Bot and the viewer");
-    assert.equal(servers[0].connections[0].authenticated, true, "signed in with the run's password");
+    assert.equal(
+      servers[0].connections[0].authenticated,
+      true,
+      "signed in with the run's password",
+    );
 
     // The run ends: its screen closes, and the viewer's stream with it.
     let ended = false;
@@ -269,7 +301,14 @@ test("a computer that stopped after a status read said it was running is never s
   const starts: BotComputerStartReason[] = [];
   const host = {
     // A status read from just before the stop (Pause, the idle timer) landed: it still says running.
-    computer: async (): Promise<BotComputerStatus> => ({ botId: BOT, vmName: VM, state: "running", baseBuild: "25G83", outdated: false, controller: "bot" }),
+    computer: async (): Promise<BotComputerStatus> => ({
+      botId: BOT,
+      vmName: VM,
+      state: "running",
+      baseBuild: "25G83",
+      outdated: false,
+      controller: "bot",
+    }),
     runningConnection: () => (running ? connection : undefined),
     ensureRunning: async (_botId: string, options: { reason: BotComputerStartReason }) => {
       starts.push(options.reason);
@@ -281,8 +320,18 @@ test("a computer that stopped after a status read said it was running is never s
   };
   const control = createBotComputerControl();
   const sessions = createBotComputerSessions({ host, control });
-  sessions.setScreenFactory(createRfbScreenFactory({ encode: async (_bgra, width, height) => ({ image: Buffer.from("JPEG"), width, height }) }));
-  const viewer = createBotComputerViewer({ host, sessions, control, botName: () => "Ada", allowedOrigins: ["file://"] });
+  sessions.setScreenFactory(
+    createRfbScreenFactory({
+      encode: async (_bgra, width, height) => ({ image: Buffer.from("JPEG"), width, height }),
+    }),
+  );
+  const viewer = createBotComputerViewer({
+    host,
+    sessions,
+    control,
+    botName: () => "Ada",
+    allowedOrigins: ["file://"],
+  });
   try {
     const lent = await viewer.grant(BOT, { start: false });
     running = false;
@@ -342,7 +391,9 @@ test("Settings sees the base computer only while setup waits for the person, and
     // The grants are in (or skipped): the view closes and isn't lent again.
     waiting = undefined;
     for (const listener of listeners) listener(undefined);
-    await until(() => stream.response.readableEnded || stream.response.destroyed || stream.response.complete);
+    await until(
+      () => stream.response.readableEnded || stream.response.destroyed || stream.response.complete,
+    );
     await assert.rejects(viewer.grantBase(), /isn't waiting for you/u);
   } finally {
     await viewer.close();

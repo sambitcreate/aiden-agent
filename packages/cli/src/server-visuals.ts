@@ -4,15 +4,35 @@ import { accessSync, constants as fsConstants, mkdtempSync, rmSync, statSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
-import { inlineGenerativeUiHostLibraries, wrapGenerativeUiHtml } from "../../../main/services/generative-ui-html.js";
+import {
+  inlineGenerativeUiHostLibraries,
+  wrapGenerativeUiHtml,
+} from "../../../main/services/generative-ui-html.js";
 import { referencedLibrary } from "../../../main/services/visual-viewer-document.js";
-import { snapshotAttachment, type CapturedImage } from "../../../main/services/visual-snapshot-core.js";
+import {
+  snapshotAttachment,
+  type CapturedImage,
+} from "../../../main/services/visual-snapshot-core.js";
 import type { Attachment, ChatMessage } from "../../../main/services/types.js";
-import { GENERATIVE_UI_RESIZE_MESSAGE, MAX_INLINE_VISUAL_HEIGHT, MIN_INLINE_VISUAL_HEIGHT } from "../../../renderer/shared/generative-ui-bridge.js";
-import { GENERATIVE_UI_EXPORT_CSP, GENERATIVE_UI_HOST_LIBS, GENERATIVE_UI_IFRAME_SANDBOX } from "../../../renderer/shared/generative-ui.js";
-import { MAX_ATTACHMENT_INLINE_BYTES, MAX_ATTACHMENTS_PER_MESSAGE } from "../../../renderer/shared/attachment-contract.js";
+import {
+  GENERATIVE_UI_RESIZE_MESSAGE,
+  MAX_INLINE_VISUAL_HEIGHT,
+  MIN_INLINE_VISUAL_HEIGHT,
+} from "../../../renderer/shared/generative-ui-bridge.js";
+import {
+  GENERATIVE_UI_EXPORT_CSP,
+  GENERATIVE_UI_HOST_LIBS,
+  GENERATIVE_UI_IFRAME_SANDBOX,
+} from "../../../renderer/shared/generative-ui.js";
+import {
+  MAX_ATTACHMENT_INLINE_BYTES,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+} from "../../../renderer/shared/attachment-contract.js";
 import { AIDEN_UI_LIMITS, type ChatUiVisualV1 } from "../../../renderer/shared/aiden-ui/types.js";
-import type { ChatHtmlArtifactV1, HtmlArtifactPlacementV1 } from "../../../renderer/shared/chat-artifacts.js";
+import type {
+  ChatHtmlArtifactV1,
+  HtmlArtifactPlacementV1,
+} from "../../../renderer/shared/chat-artifacts.js";
 import type { VisualSnapshotRefV1 } from "../../../renderer/shared/visual-snapshots.js";
 
 /**
@@ -39,18 +59,19 @@ import type { VisualSnapshotRefV1 } from "../../../renderer/shared/visual-snapsh
  * snap-packaged Chromium (`/snap/bin`) is not listed: its private `/tmp` would
  * keep each temporary profile after the render.
  */
-export const SERVER_BROWSER_PATHS: Readonly<Record<"darwin" | "linux", readonly string[]>> = Object.freeze({
-  darwin: Object.freeze([
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-  ]),
-  linux: Object.freeze([
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-  ]),
-});
+export const SERVER_BROWSER_PATHS: Readonly<Record<"darwin" | "linux", readonly string[]>> =
+  Object.freeze({
+    darwin: Object.freeze([
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    ]),
+    linux: Object.freeze([
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/google-chrome",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+    ]),
+  });
 
 export interface ServerBrowserFs {
   isFile(path: string): boolean;
@@ -59,10 +80,19 @@ export interface ServerBrowserFs {
 
 export const nodeServerBrowserFs: ServerBrowserFs = {
   isFile(path) {
-    try { return statSync(path).isFile(); } catch { return false; }
+    try {
+      return statSync(path).isFile();
+    } catch {
+      return false;
+    }
   },
   isExecutable(path) {
-    try { accessSync(path, fsConstants.X_OK); return true; } catch { return false; }
+    try {
+      accessSync(path, fsConstants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
   },
 };
 
@@ -74,11 +104,17 @@ export type ServerBrowser = { kind: "found"; path: string } | { kind: "none" } |
  * runs as root with its sandbox turned off, which the server never does, so a
  * server running as root draws no HTML visuals at all.
  */
-export function findServerBrowser(options: { platform: NodeJS.Platform; isRoot: boolean; fs?: ServerBrowserFs }): ServerBrowser {
+export function findServerBrowser(options: {
+  platform: NodeJS.Platform;
+  isRoot: boolean;
+  fs?: ServerBrowserFs;
+}): ServerBrowser {
   if (options.platform !== "darwin" && options.platform !== "linux") return { kind: "none" };
   if (options.isRoot) return { kind: "root" };
   const fs = options.fs ?? nodeServerBrowserFs;
-  const path = SERVER_BROWSER_PATHS[options.platform].find((candidate) => fs.isFile(candidate) && fs.isExecutable(candidate));
+  const path = SERVER_BROWSER_PATHS[options.platform].find(
+    (candidate) => fs.isFile(candidate) && fs.isExecutable(candidate),
+  );
   return path ? { kind: "found", path } : { kind: "none" };
 }
 
@@ -99,15 +135,28 @@ export const SERVER_VISUAL_TIMEOUT_MS = 15_000;
 const MAX_PIPE_MESSAGE_BYTES = 24 * 1024 * 1024;
 
 /** The desktop's still-image palette, so a server picture matches a desktop snapshot. */
-const LIGHT_THEME = { colorScheme: "light" as const, canvas: CANVAS, foreground: "#181817", secondary: "#6b6b68", accent: "#0b7de5" };
+const LIGHT_THEME = {
+  colorScheme: "light" as const,
+  canvas: CANVAS,
+  foreground: "#181817",
+  secondary: "#6b6b68",
+  accent: "#0b7de5",
+};
 
 /** The host page frames its one srcdoc guest; libraries are inline, so no custom scheme is needed. */
-const HOST_PAGE_CSP = GENERATIVE_UI_EXPORT_CSP.replace("frame-src 'none'", "frame-src about:srcdoc");
+const HOST_PAGE_CSP = GENERATIVE_UI_EXPORT_CSP.replace(
+  "frame-src 'none'",
+  "frame-src about:srcdoc",
+);
 
 export type HostLibraryName = (typeof GENERATIVE_UI_HOST_LIBS)[number];
 
 function escapeAttribute(value: string): string {
-  return value.replace(/&/gu, "&amp;").replace(/"/gu, "&quot;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/"/gu, "&quot;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;");
 }
 
 export function serverVisualWidth(layout: "column" | "wide" | undefined): number {
@@ -120,11 +169,21 @@ export function serverVisualWidth(layout: "column" | "wide" | undefined): number
  * its source names inlined, inside a sandboxed srcdoc iframe that reports its
  * height. `library` returns a library's source; aiden-ui.css is built in.
  */
-export function serverVisualHostPage(html: string, title: string, width: number, library: (name: HostLibraryName) => string): string {
+export function serverVisualHostPage(
+  html: string,
+  title: string,
+  width: number,
+  library: (name: HostLibraryName) => string,
+): string {
   const include = referencedLibrary(html);
   const libraries: Record<string, string> = {};
-  for (const name of GENERATIVE_UI_HOST_LIBS) if (include(name) && name !== "aiden-ui.css") libraries[name] = library(name);
-  const guest = inlineGenerativeUiHostLibraries(wrapGenerativeUiHtml(html, title, LIGHT_THEME, { inline: true, stillImage: true }), libraries, include);
+  for (const name of GENERATIVE_UI_HOST_LIBS)
+    if (include(name) && name !== "aiden-ui.css") libraries[name] = library(name);
+  const guest = inlineGenerativeUiHostLibraries(
+    wrapGenerativeUiHtml(html, title, LIGHT_THEME, { inline: true, stillImage: true }),
+    libraries,
+    include,
+  );
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${HOST_PAGE_CSP}"><style>
 html,body{margin:0;background:${CANVAS};overflow:hidden;}
 body{padding:${PADDING}px;}
@@ -198,20 +257,36 @@ function browserEnvironment(profileDir: string): NodeJS.ProcessEnv {
     XDG_CACHE_HOME: join(profileDir, "cache"),
     NO_AT_BRIDGE: "1",
   };
-  for (const name of ["PATH", "LANG", "LC_ALL", "TZ"]) if (process.env[name]) env[name] = process.env[name];
+  for (const name of ["PATH", "LANG", "LC_ALL", "TZ"])
+    if (process.env[name]) env[name] = process.env[name];
   return env;
 }
 
-interface CdpMessage { id?: number; method?: string; params?: Record<string, unknown>; result?: Record<string, unknown>; error?: { message?: string }; sessionId?: string }
+interface CdpMessage {
+  id?: number;
+  method?: string;
+  params?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: { message?: string };
+  sessionId?: string;
+}
 
 /** The DevTools protocol over the browser's own pipe (fd 3 in, fd 4 out): NUL-separated JSON. */
 class PipeCdp {
   private nextId = 1;
-  private readonly pending = new Map<number, { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void }>();
+  private readonly pending = new Map<
+    number,
+    { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void }
+  >();
   private buffered: Buffer[] = [];
   private bufferedBytes = 0;
   private closed: Error | undefined;
-  constructor(private readonly output: Writable, input: Readable, private readonly onEvent: (message: CdpMessage) => void, private readonly onOverflow: () => void) {
+  constructor(
+    private readonly output: Writable,
+    input: Readable,
+    private readonly onEvent: (message: CdpMessage) => void,
+    private readonly onOverflow: () => void,
+  ) {
     input.on("data", (chunk: Buffer) => this.receive(chunk));
     input.on("error", () => this.close(new Error("The browser closed its pipe.")));
     input.on("close", () => this.close(new Error("The browser closed its pipe.")));
@@ -223,13 +298,20 @@ class PipeCdp {
     for (let index = chunk.indexOf(0); index !== -1; index = chunk.indexOf(0, start)) {
       this.buffered.push(chunk.subarray(start, index));
       const text = Buffer.concat(this.buffered).toString("utf8");
-      this.buffered = []; this.bufferedBytes = 0; start = index + 1;
+      this.buffered = [];
+      this.bufferedBytes = 0;
+      start = index + 1;
       let message: CdpMessage;
-      try { message = JSON.parse(text) as CdpMessage; } catch { continue; }
+      try {
+        message = JSON.parse(text) as CdpMessage;
+      } catch {
+        continue;
+      }
       if (typeof message.id === "number") {
         const waiter = this.pending.get(message.id);
         this.pending.delete(message.id);
-        if (message.error) waiter?.reject(new Error(message.error.message ?? "The browser refused a command."));
+        if (message.error)
+          waiter?.reject(new Error(message.error.message ?? "The browser refused a command."));
         else waiter?.resolve(message.result ?? {});
       } else if (message.method) {
         this.onEvent(message);
@@ -238,16 +320,25 @@ class PipeCdp {
     if (start < chunk.length) {
       this.buffered.push(chunk.subarray(start));
       this.bufferedBytes += chunk.length - start;
-      if (this.bufferedBytes > MAX_PIPE_MESSAGE_BYTES) { this.close(new Error("The browser sent too much.")); this.onOverflow(); }
+      if (this.bufferedBytes > MAX_PIPE_MESSAGE_BYTES) {
+        this.close(new Error("The browser sent too much."));
+        this.onOverflow();
+      }
     }
   }
 
-  send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<Record<string, unknown>> {
+  send(
+    method: string,
+    params: Record<string, unknown> = {},
+    sessionId?: string,
+  ): Promise<Record<string, unknown>> {
     if (this.closed) return Promise.reject(this.closed);
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      this.output.write(`${JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })}\0`);
+      this.output.write(
+        `${JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })}\0`,
+      );
     });
   }
 
@@ -263,8 +354,14 @@ class PipeCdp {
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.reject(new Error("Rendering was cancelled."));
   return new Promise((resolve, reject) => {
-    const onAbort = () => { clearTimeout(timer); reject(new Error("Rendering was cancelled.")); };
-    const timer = setTimeout(() => { signal.removeEventListener("abort", onAbort); resolve(); }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("Rendering was cancelled."));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
     signal.addEventListener("abort", onAbort, { once: true });
   });
 }
@@ -273,7 +370,10 @@ function waitForExit(child: ChildProcess, ms: number): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
-    child.once("exit", () => { clearTimeout(timer); resolve(); });
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
   });
 }
 
@@ -295,8 +395,13 @@ export interface RenderServerVisualOptions {
  * time runs out, or the picture is too large. Always ends the browser and
  * deletes its profile.
  */
-export function renderServerVisualImage(options: RenderServerVisualOptions): Promise<CapturedImage | null> {
-  const run = renderQueue.then(() => renderNow(options), () => renderNow(options));
+export function renderServerVisualImage(
+  options: RenderServerVisualOptions,
+): Promise<CapturedImage | null> {
+  const run = renderQueue.then(
+    () => renderNow(options),
+    () => renderNow(options),
+  );
   renderQueue = run.catch(() => undefined);
   return run;
 }
@@ -309,7 +414,9 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
   const profileDir = mkdtempSync(join(tmpdir(), "aiden-visual-"));
   let child: ChildProcess | undefined;
   let cdp: PipeCdp | undefined;
-  const kill = () => { if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); };
+  const kill = () => {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  };
   signal.addEventListener("abort", kill, { once: true });
   try {
     child = spawn(options.browserPath, serverBrowserArguments(profileDir, platform), {
@@ -323,43 +430,96 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
       started.once("exit", () => reject(new Error("The browser stopped.")));
     });
     exited.catch(() => undefined);
-    const connection = new PipeCdp(started.stdio[3] as Writable, started.stdio[4] as Readable, (message) => {
-      // Every request any frame makes is refused; frames in their own process
-      // (a sandboxed iframe can be one) are held until the same rule covers them.
-      if (message.method === "Fetch.requestPaused") {
-        void connection.send("Fetch.failRequest", { requestId: message.params?.requestId, errorReason: "BlockedByClient" }, message.sessionId).catch(() => undefined);
-      } else if (message.method === "Target.attachedToTarget") {
-        const child = (message.params?.sessionId as string | undefined);
-        if (!child) return;
-        void connection.send("Fetch.enable", { patterns: [{ urlPattern: "*" }] }, child)
-          .then(() => connection.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, child))
-          .catch(() => undefined)
-          .finally(() => connection.send("Runtime.runIfWaitingForDebugger", {}, child).catch(() => undefined));
-      }
-    }, kill);
+    const connection = new PipeCdp(
+      started.stdio[3] as Writable,
+      started.stdio[4] as Readable,
+      (message) => {
+        // Every request any frame makes is refused; frames in their own process
+        // (a sandboxed iframe can be one) are held until the same rule covers them.
+        if (message.method === "Fetch.requestPaused") {
+          void connection
+            .send(
+              "Fetch.failRequest",
+              { requestId: message.params?.requestId, errorReason: "BlockedByClient" },
+              message.sessionId,
+            )
+            .catch(() => undefined);
+        } else if (message.method === "Target.attachedToTarget") {
+          const child = message.params?.sessionId as string | undefined;
+          if (!child) return;
+          void connection
+            .send("Fetch.enable", { patterns: [{ urlPattern: "*" }] }, child)
+            .then(() =>
+              connection.send(
+                "Target.setAutoAttach",
+                { autoAttach: true, waitForDebuggerOnStart: true, flatten: true },
+                child,
+              ),
+            )
+            .catch(() => undefined)
+            .finally(() =>
+              connection.send("Runtime.runIfWaitingForDebugger", {}, child).catch(() => undefined),
+            );
+        }
+      },
+      kill,
+    );
     cdp = connection;
     const call = (method: string, params: Record<string, unknown> = {}, sessionId?: string) => {
       if (signal.aborted) return Promise.reject(new Error("Rendering was cancelled."));
       return Promise.race([connection.send(method, params, sessionId), exited]);
     };
     const { targetId } = await call("Target.createTarget", { url: "about:blank" });
-    const { sessionId } = await call("Target.attachToTarget", { targetId, flatten: true }) as { sessionId: string };
+    const { sessionId } = (await call("Target.attachToTarget", { targetId, flatten: true })) as {
+      sessionId: string;
+    };
     await call("Page.bringToFront", {}, sessionId);
     await call("Fetch.enable", { patterns: [{ urlPattern: "*" }] }, sessionId);
-    await call("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
+    await call(
+      "Target.setAutoAttach",
+      { autoAttach: true, waitForDebuggerOnStart: true, flatten: true },
+      sessionId,
+    );
     await call("Network.enable", {}, sessionId);
-    await call("Network.emulateNetworkConditions", { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 }, sessionId);
+    await call(
+      "Network.emulateNetworkConditions",
+      { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 },
+      sessionId,
+    );
     await call("Page.enable", {}, sessionId);
     const fullWidth = options.width + PADDING * 2;
-    await call("Emulation.setDeviceMetricsOverride", { width: fullWidth, height: 400, deviceScaleFactor: DEVICE_SCALE, mobile: false }, sessionId);
-    const { frameTree } = await call("Page.getFrameTree", {}, sessionId) as { frameTree: { frame: { id: string } } };
-    await call("Page.setDocumentContent", { frameId: frameTree.frame.id, html: options.hostPage }, sessionId);
+    await call(
+      "Emulation.setDeviceMetricsOverride",
+      { width: fullWidth, height: 400, deviceScaleFactor: DEVICE_SCALE, mobile: false },
+      sessionId,
+    );
+    const { frameTree } = (await call("Page.getFrameTree", {}, sessionId)) as {
+      frameTree: { frame: { id: string } };
+    };
+    await call(
+      "Page.setDocumentContent",
+      { frameId: frameTree.frame.id, html: options.hostPage },
+      sessionId,
+    );
     // Wait for the visual to report its height and then stop changing.
     let height = 0;
     while (!signal.aborted) {
-      const evaluated = await call("Runtime.evaluate", { expression: "JSON.stringify(window.__snap || null)", returnByValue: true }, sessionId) as { result?: { value?: unknown } };
-      const snap = typeof evaluated.result?.value === "string" ? JSON.parse(evaluated.result.value) as { height?: number; changedAt?: number } | null : null;
-      if (snap && typeof snap.height === "number" && snap.height > 0 && typeof snap.changedAt === "number" && Date.now() - snap.changedAt >= SETTLE_MS) {
+      const evaluated = (await call(
+        "Runtime.evaluate",
+        { expression: "JSON.stringify(window.__snap || null)", returnByValue: true },
+        sessionId,
+      )) as { result?: { value?: unknown } };
+      const snap =
+        typeof evaluated.result?.value === "string"
+          ? (JSON.parse(evaluated.result.value) as { height?: number; changedAt?: number } | null)
+          : null;
+      if (
+        snap &&
+        typeof snap.height === "number" &&
+        snap.height > 0 &&
+        typeof snap.changedAt === "number" &&
+        Date.now() - snap.changedAt >= SETTLE_MS
+      ) {
         height = snap.height;
         break;
       }
@@ -367,19 +527,47 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
     }
     if (!height) return null;
     const fullHeight = Math.min(height, MAX_INLINE_VISUAL_HEIGHT) + PADDING * 2;
-    await call("Emulation.setDeviceMetricsOverride", { width: fullWidth, height: fullHeight, deviceScaleFactor: DEVICE_SCALE, mobile: false }, sessionId);
-    await call("Runtime.evaluate", { expression: "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))", awaitPromise: true, returnByValue: true }, sessionId);
-    const png = Buffer.from(String((await call("Page.captureScreenshot", { format: "png" }, sessionId)).data ?? ""), "base64");
-    if (png.length > 0 && png.length <= SERVER_VISUAL_MAX_PNG_BYTES) return { bytes: png, mimeType: "image/png" };
-    const jpeg = Buffer.from(String((await call("Page.captureScreenshot", { format: "jpeg", quality: 88 }, sessionId)).data ?? ""), "base64");
-    return jpeg.length > 0 && jpeg.length <= SERVER_VISUAL_MAX_IMAGE_BYTES ? { bytes: jpeg, mimeType: "image/jpeg" } : null;
+    await call(
+      "Emulation.setDeviceMetricsOverride",
+      { width: fullWidth, height: fullHeight, deviceScaleFactor: DEVICE_SCALE, mobile: false },
+      sessionId,
+    );
+    await call(
+      "Runtime.evaluate",
+      {
+        expression:
+          "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))",
+        awaitPromise: true,
+        returnByValue: true,
+      },
+      sessionId,
+    );
+    const png = Buffer.from(
+      String((await call("Page.captureScreenshot", { format: "png" }, sessionId)).data ?? ""),
+      "base64",
+    );
+    if (png.length > 0 && png.length <= SERVER_VISUAL_MAX_PNG_BYTES)
+      return { bytes: png, mimeType: "image/png" };
+    const jpeg = Buffer.from(
+      String(
+        (await call("Page.captureScreenshot", { format: "jpeg", quality: 88 }, sessionId)).data ??
+          "",
+      ),
+      "base64",
+    );
+    return jpeg.length > 0 && jpeg.length <= SERVER_VISUAL_MAX_IMAGE_BYTES
+      ? { bytes: jpeg, mimeType: "image/jpeg" }
+      : null;
   } catch {
     return null;
   } finally {
     signal.removeEventListener("abort", kill);
     if (child) {
       if (cdp && child.exitCode === null) {
-        await Promise.race([cdp.send("Browser.close").catch(() => undefined), sleep(1_000, AbortSignal.timeout(2_000)).catch(() => undefined)]);
+        await Promise.race([
+          cdp.send("Browser.close").catch(() => undefined),
+          sleep(1_000, AbortSignal.timeout(2_000)).catch(() => undefined),
+        ]);
         await waitForExit(child, 1_000);
       }
       kill();
@@ -401,37 +589,58 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
 export type HtmlVisualOutcome = "image" | "no-browser" | "root" | "failed" | "full";
 
 /** The tool result for render_artifact: exactly what the person sees. */
-export function htmlVisualResultText(title: string, outcome: HtmlVisualOutcome, path: string): string {
+export function htmlVisualResultText(
+  title: string,
+  outcome: HtmlVisualOutcome,
+  path: string,
+): string {
   const name = JSON.stringify(title);
   if (outcome === "image") {
     return `Shown as an image: the person sees a still picture of the visual ${name} in the chat. It was drawn once on this server, so nothing in it moves or responds to taps. The HTML is saved at ${path}.`;
   }
-  const why = outcome === "no-browser"
-    ? "this server has no Chrome or Chromium installed to draw it"
-    : outcome === "root"
-      ? "this server runs as root, where it does not draw visuals"
-      : outcome === "full"
-        ? "this reply already carries as many pictures as one message can"
-        : "drawing it failed or took too long";
+  const why =
+    outcome === "no-browser"
+      ? "this server has no Chrome or Chromium installed to draw it"
+      : outcome === "root"
+        ? "this server runs as root, where it does not draw visuals"
+        : outcome === "full"
+          ? "this reply already carries as many pictures as one message can"
+          : "drawing it failed or took too long";
   return `Not shown: the person cannot see the visual ${name}, because ${why}. Give the key facts in your reply as text or a Markdown table. The HTML is saved at ${path}.`;
 }
 
 export type UiVisualOutcome = "text" | "full" | "failed";
 
 /** The tool result for render_ui: the text phones and paired Macs show in its place, or that it shows nothing. */
-export function uiVisualResultText(title: string, fallbackText: string, outcome: UiVisualOutcome, repairs: readonly string[]): string {
+export function uiVisualResultText(
+  title: string,
+  fallbackText: string,
+  outcome: UiVisualOutcome,
+  repairs: readonly string[],
+): string {
   const name = JSON.stringify(title);
-  const head = outcome === "text"
-    ? `Shown as text: phones and Macs paired to this server show ${name} as the text below, not as a drawn visual (charts appear as rows of values), so nothing in it can be tapped or changed.`
-    : `Not shown: the person cannot see ${name}, because ${outcome === "full" ? "this reply or chat already has as many visuals as it can hold" : "Aiden could not store it"}. Give the key facts in your reply as text or a Markdown table. Its text would have been:`;
-  return [head, "", fallbackText, ...(repairs.length ? ["", "Repairs:", ...repairs] : [])].join("\n");
+  const head =
+    outcome === "text"
+      ? `Shown as text: phones and Macs paired to this server show ${name} as the text below, not as a drawn visual (charts appear as rows of values), so nothing in it can be tapped or changed.`
+      : `Not shown: the person cannot see ${name}, because ${outcome === "full" ? "this reply or chat already has as many visuals as it can hold" : "Aiden could not store it"}. Give the key facts in your reply as text or a Markdown table. Its text would have been:`;
+  return [head, "", fallbackText, ...(repairs.length ? ["", "Repairs:", ...repairs] : [])].join(
+    "\n",
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Keeping them with the reply
 
-interface CollectedHtml { toolCallId: string; artifact: ChatHtmlArtifactV1; layout?: "wide"; image: CapturedImage }
-interface CollectedUi { toolCallId: string; visual: ChatUiVisualV1 }
+interface CollectedHtml {
+  toolCallId: string;
+  artifact: ChatHtmlArtifactV1;
+  layout?: "wide";
+  image: CapturedImage;
+}
+interface CollectedUi {
+  toolCallId: string;
+  visual: ChatUiVisualV1;
+}
 
 /** The visuals one turn produced, saved on its reply in the same write. */
 export interface ServerVisualCollector {
@@ -445,20 +654,33 @@ export interface ServerVisualCollector {
    * each picture as a reserved snapshot attachment. Raw tool call ids become
    * the timeline's public ones; a visual whose call has none keeps no placement.
    */
-  messageFields(chatId: string, messageId: string, publicToolCallId: (raw: string) => string | undefined): Pick<ChatMessage, "htmlArtifacts" | "htmlArtifactPlacements" | "uiVisuals" | "attachments" | "visualSnapshots">;
+  messageFields(
+    chatId: string,
+    messageId: string,
+    publicToolCallId: (raw: string) => string | undefined,
+  ): Pick<
+    ChatMessage,
+    "htmlArtifacts" | "htmlArtifactPlacements" | "uiVisuals" | "attachments" | "visualSnapshots"
+  >;
 }
 
-export function createServerVisualCollector(options: { existingUiVisuals?: number } = {}): ServerVisualCollector {
+export function createServerVisualCollector(
+  options: { existingUiVisuals?: number } = {},
+): ServerVisualCollector {
   const html: CollectedHtml[] = [];
   const ui: CollectedUi[] = [];
   let imageBytes = 0;
-  const canHoldImage = (bytes: number) => html.length < MAX_ATTACHMENTS_PER_MESSAGE && imageBytes + bytes <= MAX_ATTACHMENT_INLINE_BYTES;
-  const canHoldUi = () => ui.length < AIDEN_UI_LIMITS.perResponse && (options.existingUiVisuals ?? 0) + ui.length < AIDEN_UI_LIMITS.perChat;
+  const canHoldImage = (bytes: number) =>
+    html.length < MAX_ATTACHMENTS_PER_MESSAGE && imageBytes + bytes <= MAX_ATTACHMENT_INLINE_BYTES;
+  const canHoldUi = () =>
+    ui.length < AIDEN_UI_LIMITS.perResponse &&
+    (options.existingUiVisuals ?? 0) + ui.length < AIDEN_UI_LIMITS.perChat;
   return {
     canHoldImage,
     addHtml(entry) {
       if (!canHoldImage(entry.image.bytes.length)) return false;
-      html.push(entry); imageBytes += entry.image.bytes.length;
+      html.push(entry);
+      imageBytes += entry.image.bytes.length;
       return true;
     },
     canHoldUi,
@@ -473,18 +695,34 @@ export function createServerVisualCollector(options: { existingUiVisuals?: numbe
       const visualSnapshots: VisualSnapshotRefV1[] = [];
       const placements: HtmlArtifactPlacementV1[] = [];
       for (const entry of html) {
-        const attachment = snapshotAttachment(chatId, messageId, { ...entry.image, visualId: entry.artifact.mediaId, title: entry.artifact.title });
+        const attachment = snapshotAttachment(chatId, messageId, {
+          ...entry.image,
+          visualId: entry.artifact.mediaId,
+          title: entry.artifact.title,
+        });
         attachments.push(attachment);
         visualSnapshots.push({ visualId: entry.artifact.mediaId, attachmentId: attachment.id });
         const toolCallId = publicToolCallId(entry.toolCallId);
-        if (toolCallId) placements.push({ mediaId: entry.artifact.mediaId, toolCallId, ...(entry.layout ? { layout: entry.layout } : {}) });
+        if (toolCallId)
+          placements.push({
+            mediaId: entry.artifact.mediaId,
+            toolCallId,
+            ...(entry.layout ? { layout: entry.layout } : {}),
+          });
       }
       const uiVisuals = ui.map(({ toolCallId, visual }) => {
         const publicId = publicToolCallId(toolCallId);
         return publicId ? { ...visual, toolCallId: publicId } : visual;
       });
       return {
-        ...(html.length ? { htmlArtifacts: html.map((entry) => entry.artifact), htmlArtifactPlacements: placements, attachments, visualSnapshots } : {}),
+        ...(html.length
+          ? {
+              htmlArtifacts: html.map((entry) => entry.artifact),
+              htmlArtifactPlacements: placements,
+              attachments,
+              visualSnapshots,
+            }
+          : {}),
         ...(uiVisuals.length ? { uiVisuals } : {}),
       };
     },
@@ -492,7 +730,14 @@ export function createServerVisualCollector(options: { existingUiVisuals?: numbe
 }
 
 /** The opaque ids the desktop gives a visual, from the session and its tool call. */
-export function serverVisualIds(sessionId: string, toolCallId: string): { mediaId: string; uiId: string } {
-  const digest = createHash("sha256").update(sessionId).update("\0").update(toolCallId).digest("hex");
+export function serverVisualIds(
+  sessionId: string,
+  toolCallId: string,
+): { mediaId: string; uiId: string } {
+  const digest = createHash("sha256")
+    .update(sessionId)
+    .update("\0")
+    .update(toolCallId)
+    .digest("hex");
   return { mediaId: digest, uiId: `ui-${digest.slice(0, 40)}` };
 }

@@ -187,7 +187,6 @@ test("getUpdates with an already-aborted signal rejects immediately without call
   assert.equal(called, false, "transport must not be invoked for an aborted signal");
 });
 
-
 /** Replace `AbortSignal.timeout` with controllable deadlines and capture fetch signals. */
 function mockNetwork(t: import("node:test").TestContext) {
   const deadlines: Array<{ ms: number; controller: AbortController }> = [];
@@ -218,7 +217,10 @@ test("every Bot API request carries a deadline, and long polls get the poll wind
   ];
   for (const promise of pending) promise.catch(() => undefined);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(deadlines.map(({ ms }) => ms), [10_000, 35_000, 30_000]);
+  assert.deepEqual(
+    deadlines.map(({ ms }) => ms),
+    [10_000, 35_000, 30_000],
+  );
   assert.equal(requests.length, 3);
 
   // When a deadline fires, its fetch is actually aborted rather than abandoned.
@@ -245,7 +247,15 @@ test("stopping the poller aborts the in-flight getUpdates fetch", async (t) => {
 test("file transfers get deadlines scaled to their size", async (t) => {
   const { deadlines, requests } = mockNetwork(t);
   const api = new TelegramBotApi(
-    async () => ({ ok: true, result: { file_id: "f", file_unique_id: "u", file_path: "doc.bin", file_size: 8 * 1024 * 1024 } }),
+    async () => ({
+      ok: true,
+      result: {
+        file_id: "f",
+        file_unique_id: "u",
+        file_path: "doc.bin",
+        file_size: 8 * 1024 * 1024,
+      },
+    }),
     createFetchFileDownloader(async () => "test-token"),
     createFetchUploadTransport(async () => "test-token"),
   );
@@ -262,7 +272,10 @@ test("file transfers get deadlines scaled to their size", async (t) => {
   };
   const downloadDeadline = deadlineFor(/\/file\/bottest-token\/doc\.bin$/u);
   const uploadDeadline = deadlineFor(/\/sendDocument$/u);
-  assert.ok(downloadDeadline > uploadDeadline, "an 8 MB download must get longer than a 1 KB upload");
+  assert.ok(
+    downloadDeadline > uploadDeadline,
+    "an 8 MB download must get longer than a 1 KB upload",
+  );
   assert.ok(uploadDeadline >= 30_000 && uploadDeadline < 35_000);
   for (const { controller } of deadlines) controller.abort();
   await Promise.allSettled([download, upload]);

@@ -7,13 +7,23 @@
  * can be revealed in Finder.
  */
 import { Box, Camera, ChevronDown, Download } from "lucide-react";
-import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, toast } from "./ui";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  toast,
+} from "./ui";
 import { devicesApi } from "../lib/ipc";
 import type { DeviceSaveResult } from "../shared/device-features";
 
 const fileName = (path: string) => path.split("/").pop() ?? path;
 
-export function saveScreenshotWithFeedback(target: { hostId: string; deviceId: string }): Promise<void> {
+export function saveScreenshotWithFeedback(target: {
+  hostId: string;
+  deviceId: string;
+}): Promise<void> {
   return saveWithFeedback(() => devicesApi.saveScreenshot(target));
 }
 
@@ -35,7 +45,10 @@ async function saveWithFeedback(save: () => Promise<DeviceSaveResult>): Promise<
     const result = await save();
     if (result.status !== "saved") return;
     toast.success(`Saved ${fileName(result.path)}.`, {
-      action: { label: "Reveal in Finder", onClick: () => void devicesApi.revealSaved(result.path).catch(() => undefined) },
+      action: {
+        label: "Reveal in Finder",
+        onClick: () => void devicesApi.revealSaved(result.path).catch(() => undefined),
+      },
     });
   } catch (error) {
     toast.error(error instanceof Error ? error.message : "The screenshot could not be saved.");
@@ -50,7 +63,11 @@ export function DeviceScreenshotControl(props: {
   onSaveFramedScreenshot?: () => void;
 }) {
   return (
-    <div className="squircle-control squircle-action-group device-screenshot-group" role="group" aria-label="Screenshot">
+    <div
+      className="squircle-control squircle-action-group device-screenshot-group"
+      role="group"
+      aria-label="Screenshot"
+    >
       <Button
         variant="transparent"
         size="small"

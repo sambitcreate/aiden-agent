@@ -22,19 +22,19 @@ The published Multi Execute page exposes a `tools` array and workflow/session fi
 
 The following names and parameters come from public vendor references, including the Markdown reference snapshots used in W0. They are discovery candidates, not an executable allowlist or a verified installed response schema. No operation below was called.
 
-| Workflow | Candidate | Published contract to verify |
-| --- | --- | --- |
-| Gmail source selection | `GMAIL_LIST_LABELS`, `GMAIL_GET_PROFILE` | Exact account metadata and stable label IDs; never select by mailbox display name. |
-| Gmail ID traversal | `GMAIL_FETCH_EMAILS` | `user_id: "me"`, exact `label_ids`, bounded `max_results`, `ids_only: true`, `include_payload: false`, exact `page_token` continuation. |
-| Gmail selected metadata | `GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID` | Exact returned `message_id`, `format: "metadata"`; no body, attachment, raw or full format. |
-| Gmail changes | `GMAIL_LIST_HISTORY` | Numeric `start_history_id`, bounded pages, optional label/history filters; invalid/expired history requires a full baseline repair. |
-| Calendar source selection | `GOOGLECALENDAR_LIST_CALENDARS` | Stable returned calendar IDs, bounded `max_results`, exact `page_token`; exclude insufficient read roles. |
-| Calendar window | `GOOGLECALENDAR_EVENTS_LIST` | Explicit `calendarId`, `timeMin`, `timeMax`, `timeZone`, `singleEvents`, `showDeleted`, bounded `maxResults`, `pageToken` and partial-response `fields`. |
-| Calendar change/occurrence follow-up | `GOOGLECALENDAR_EVENTS_LIST`, `GOOGLECALENDAR_EVENTS_GET`, `GOOGLECALENDAR_EVENTS_INSTANCES` | Separate change/instance contracts; do not assume the window call is a complete cancellation feed. |
+| Workflow                             | Candidate                                                                                    | Published contract to verify                                                                                                                             |
+| ------------------------------------ | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gmail source selection               | `GMAIL_LIST_LABELS`, `GMAIL_GET_PROFILE`                                                     | Exact account metadata and stable label IDs; never select by mailbox display name.                                                                       |
+| Gmail ID traversal                   | `GMAIL_FETCH_EMAILS`                                                                         | `user_id: "me"`, exact `label_ids`, bounded `max_results`, `ids_only: true`, `include_payload: false`, exact `page_token` continuation.                  |
+| Gmail selected metadata              | `GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID`                                                          | Exact returned `message_id`, `format: "metadata"`; no body, attachment, raw or full format.                                                              |
+| Gmail changes                        | `GMAIL_LIST_HISTORY`                                                                         | Numeric `start_history_id`, bounded pages, optional label/history filters; invalid/expired history requires a full baseline repair.                      |
+| Calendar source selection            | `GOOGLECALENDAR_LIST_CALENDARS`                                                              | Stable returned calendar IDs, bounded `max_results`, exact `page_token`; exclude insufficient read roles.                                                |
+| Calendar window                      | `GOOGLECALENDAR_EVENTS_LIST`                                                                 | Explicit `calendarId`, `timeMin`, `timeMax`, `timeZone`, `singleEvents`, `showDeleted`, bounded `maxResults`, `pageToken` and partial-response `fields`. |
+| Calendar change/occurrence follow-up | `GOOGLECALENDAR_EVENTS_LIST`, `GOOGLECALENDAR_EVENTS_GET`, `GOOGLECALENDAR_EVENTS_INSTANCES` | Separate change/instance contracts; do not assume the window call is a complete cancellation feed.                                                       |
 
 Gmail's optimized detail fetch can skip individual 404/429/503 failures. Treating the shorter returned array as a complete mailbox would be unsafe. An IDs-only traversal plus explicitly checked metadata results is a possible design; its total read/deadline budget and error behavior still need proof. Public outputs remain generic action envelopes, not sufficient validators. [Gmail toolkit](https://docs.composio.dev/toolkits/gmail). Google's metadata format supports selected headers, but the Composio wrapper must independently expose and preserve that behavior. [Gmail message read](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/get).
 
-The Calendar wrapper uses different casing across operations: list-calendars uses snake_case, while events-list uses camelCase. `calendarId` must be a returned calendar ID, not a Composio `ca_…` ID, empty value or the mutable `primary` alias. Its published output envelope still does not prove event/page representation. [Google Calendar toolkit](https://docs.composio.dev/toolkits/googlecalendar).
+The Calendar wrapper uses different casing across operations: list-calendars uses snake*case, while events-list uses camelCase. `calendarId` must be a returned calendar ID, not a Composio `ca*…`ID, empty value or the mutable`primary` alias. Its published output envelope still does not prove event/page representation. [Google Calendar toolkit](https://docs.composio.dev/toolkits/googlecalendar).
 
 ## Calendar semantics the adapter must preserve
 
@@ -65,7 +65,6 @@ Retained host-private evidence contains hashes, allowlisted field names, read-hi
 
 The focused suite has seventeen behavioral cases using explicitly synthetic documented-contract fixtures, including cancellation, grant loss after an awaited read, metadata drift, noncooperative deadlines, slug restrictions, response limits, complete MCP representations, malformed/offloaded data and secret-free projection. Focused ESLint passes. No authenticated live inspection, execution adapter, Calendar activation or real-account acceptance was performed by this work. The host invokes it only from explicit **Find sources**, under the initiating renderer document or paired request lifetime and the Bot’s current service grant. The private diagnostic is stored beside that Bot’s session; ordinary listing, polling, startup and recovery do not inspect Composio.
 
-
 ## Foreground host review gate — 2026-11-03
 
 The single-tool projection and migration passed GPT-6.1 Sol high review. Foreground inspection separately passed that review after fixing document/request invalidation, production pagination, deadline placement and access ordering. The fifteen-second budget begins before the first await and includes offline access checks, authority admission, metadata reads and guarded publication. A late admission lease is released once and cannot restart work. Offline current policy, service identity, exact connection binding and Schedules access are checked before any metadata request and again at each boundary. Current Settings exclusions and disabled scheduling also refuse inspection for Full Access Bots.
@@ -80,13 +79,11 @@ Read-only signature inspection established that installed Aiden is Developer ID 
 
 A separate task-owned runtime was then prepared with the existing Developer ID signing identity, production bundle name/identifier and standard Aiden entitlements. Both it and the installed app satisfy each other's designated requirements, and its deep strict signature verification passes. The installed app, credential stores and access settings were not modified, no private key was exported, and preparation did not launch the app. The same reviewed source snapshot remains separate from later private-state changes. A new owner-run check is still required to establish secure-storage availability and the actual Composio result; Calendar remains gated meanwhile.
 
-
 ## Cold Settings metadata connection correction — 2026-11-03
 
 The owner-run signed check reached Settings, and the existing saved Composio credential passed **Test connection**. **Check watch support** still failed immediately without a structural record: its eligibility check required the main agent's cached client, while Test connection deliberately uses and closes a separate status client. A successful status test therefore could not satisfy the inspection's cache precondition. No access switch, Bot grant or saved connection setting was changed during that diagnosis.
 
 The Settings-only correction uses a disposable authenticated MCP metadata session at the saved canonical consumer endpoint. It reads only an already bound saved credential, performs no credential adoption or cleanup, and closes the session after completion, failure or cancellation. The private document lifetime, exact configuration snapshot, configuration lease and disposable-client generation fence credential resolution, transport start, metadata requests and structural publication. Its raw port permits only Search Tools and Get Tool Schemas under the existing bounds. It never populates the agent/watch cache; background watches and Bot source discovery retain their existing live-connection requirement. Account-routing verification and Calendar remain pending.
-
 
 ## Live foreground takeover — 2026-11-03
 
@@ -96,11 +93,9 @@ The actual **Check watch support** action now writes the private structural reco
 
 Current Composio guidance says an unpinned session resolves active accounts at execution time and that an explicit connected-account override does not fall back. Its multi-account execution contract can select an account by ID or alias. Those capabilities are not proof that this existing consumer connection exposes the same enforceable selector. The adapter must verify the installed metadata and bind an immutable account ID before any app-data acceptance read. [Tool Router account selection](https://docs.composio.dev/kb/guide/mcp-tool-router-sessions), [Multiple accounts](https://docs.composio.dev/docs/authentication/managing-multiple-connected-accounts).
 
-
 ## Observed metadata declaration — 2026-11-03
 
 The reviewed V3 diagnostic (`2e1266847`, isolated from the later feature state) identifies the actual initial rejection: `COMPOSIO_GET_TOOL_SCHEMAS` declares a read-only hint and a canonical JSON Schema draft-07 `$schema` annotation. Its root object, required-field vocabulary, tool-slug array and session field satisfy the probe's expected structural shape. The probe rejected the annotation itself before calling Search or Get Schemas. This is an observed installed-metadata fact, rather than an inference from the public snapshot. A narrowly bounded draft-07 compatibility correction is being reviewed; account routing and Calendar remain unverified.
-
 
 ## Bounded draft-07 correction — 2026-11-03
 
@@ -108,13 +103,11 @@ The probe now accepts only the four canonical HTTP/HTTPS draft-07 root annotatio
 
 The Bot-specific inspection writer also rechecks the initiating authority after its final directory, realpath and target checks, immediately before atomic publication. Revocation during any of those awaited checks preserves prior evidence and removes the staging file. Both changes passed the requested GPT-6.1 Sol high review; independent focused suites passed88/88 and strict probe types and lint passed. Live verification of the corrected snapshot follows separately.
 
-
 ## Live metadata response check — 2026-11-03
 
 The corrected V4 snapshot (`3e1b6ad2e`) passed its build,80 snapshot tests, signed-runtime preflight and isolated startup. Native computer use confirmed the running V4 build before the explicit Settings check. That check now advances past the draft-07 declaration and reports `invalid_response`. Its returned metadata format has not yet been established; no app-data operation or account selection was attempted.
 
 A separate closed `responseRejection` diagnostic now records the fixed validation stage, field and reason; call progress; completed-inventory flags; and capped type/count facts for known envelope fields. It retains no returned strings, numeric values, map keys, session identifiers, account information or vendor prose. Already-read account-selector declarations remain booleans and do not verify routing. Parsing, public output and all watch gates remain unchanged. The requested Sol high review is clear, with163 independent focused cases and strict types/lint passing. Live response evidence follows from a new isolated reviewed snapshot.
-
 
 ## Observed Search compatibility — 2026-11-03
 
@@ -122,13 +115,11 @@ V5 (`197227780`) passed its build,155 snapshot cases, signed preflight and isola
 
 The probe now permits either unused planning field to be absent. Present values must still be bounded, well-formed strings. Consumed result correlation, toolkit/slug checks, completeness, schema validation and all account/execution gates remain unchanged. The requested Sol high review is clear with180 independent cases, strict narrow types and lint passing. The selector's declaration does not establish its semantics, and no Calendar execution is enabled by this correction.
 
-
 ## Observed connection metadata compatibility — 2026-11-03
 
 V6 (`cd88a759b`) passed its build,172 snapshot tests, signed preflight and isolated startup. The explicit normal-profile check advanced through the successful Search results and rejected a missing legacy `connection_details` object on a status whose `has_active_connection` flag is true. That object supplies no account authority to the diagnostic. The metadata reader now permits its absence; present objects still undergo completeness checks.
 
 The current Search v3.1 reference also describes an `accounts` list and account-selection metadata. The private diagnostic now records only known account-field types/counts, an exact ACTIVE-status boolean and a conservative ID-format category. It retains no account ID, alias, default choice or routing authority. Installed account-list presence still needs live verification. The requested Sol high review is clear with203 independent cases, strict narrow types and lint passing. [Current Search contract](https://docs.composio.dev/reference/api-reference/tool-router/postToolRouterSessionBySessionIdSearch).
-
 
 ## Installed account-list and schema-label check — 2026-11-04
 
@@ -166,13 +157,11 @@ The binding fingerprint includes the host schema/version, `declared` versus `hos
 
 The compatibility fix was clear after Sol high rereview (105 independent cases, strict types/lint0) and committed as `a97da0659`. Immutable pre-Open-work snapshot `6e6fcf803` at `/tmp/aiden-composio-foreground-v10` passed its full build,341 snapshot cases, native/signature preflight and isolated startup. The owner-authorized live check confirmed `executorOutputSource:host_contract`, so the installed executor does omit its optional output-schema declaration. It then refused a Calendar read-output schema (`read_response`, unsupported, keyword previously collapsed to other, no dialect; `checkedAt:1793772012829`). Search/GetSchemas completed and one ACTIVE Calendar account was parsed; every executor-call count remained zero. No credential/access changes or app-data reads occurred. More precise closed compiler diagnostics are independently reviewed before the next foreground check; schema acceptance remains unchanged.
 
-
 ### V11 output-schema diagnosis and bounded correction — 2026-11-04
 
 Immutable pre-Open-work snapshot `6f7083e68` passed its build, 345 focused cases, signed/native preflight and isolated startup. Native computer use confirmed that snapshot before the explicit normal-profile Calendar check. The closed result (`checkedAt:1793772926485`) identifies the first unsupported keyword as `$defs` in the `listCalendars` output schema, with no declared dialect. Search/GetSchemas completed and one ACTIVE Calendar account was parsed; invalid-account, Calendar-list, events and GET executor calls all remained zero. Credentials and access settings were unchanged.
 
 The output-only correction expands a conservative subset of acyclic literal root-local definitions before the existing restricted compiler. Every unused semantic definition is also audited; remote/encoded/anchor references, cycles, validating siblings, nested definition tables and unsafe targets refuse. Original schema fingerprints and all account/read gates remain unchanged. A Sol high finding exposed separate expansion byte budgets; the corrected normalizer shares one 256 KiB budget across the expanded schema and unused-definition audit, alongside the 512-node/12-depth limits. The independent reproduction now refuses the 320,301-byte and escaped-byte overflows, accepts below-limit controls, and passes 236/236 focused cases, narrow types and lint. Live account/read acceptance remains pending.
-
 
 ### V12 installed schema acceptance — 2026-11-04
 
@@ -180,18 +169,15 @@ Immutable pre-Open-work snapshot `4e286efff` passed its full build, 356 focused 
 
 The check then stopped with `invalid_response` at `invalid_account`, reason `failed` (`checkedAt:1793774427823`). Its attempt flag alone does not establish whether transport, MCP envelope parsing or executor validation rejected the attempt; there was no negative-oracle result. No real-account Calendar-list, events or GET read ran. Exact account routing remains unverified and Calendar remains unavailable. A diagnostic-only change is being reviewed to retain closed failure-stage and response-shape categories without vendor prose or identities. No access or credential setting changed.
 
-
 ### V13 structured failed-operation envelope — 2026-11-04
 
 Immutable pre-Open-work snapshot `02e874d60` passed its build, 369 focused snapshot cases, signed/native preflight and isolated startup. The diagnostic-only implementation (`6c7e2a050`) was clear after independent Sol high review, including 105 focused cases and unchanged generic MCP guards. The owner-authorized native run again accepted all three curated installed schemas and then stopped at the invalid-account test (`checkedAt:1793775365215`).
 
 Closed facts identify Calendar validation of an MCP result with `isError:true`, one text block containing valid JSON, a structured action/data/results shape, and one result with string error and absent response. Its error-text category is account-not-found; no vendor text or identity is retained. These facts do not establish the exact negative oracle: the ordinary decoder rejects the MCP error flag first. A narrow failed-operation decoder is being implemented and reviewed separately; successful-read checks, account rejection and Calendar availability are unchanged. No real-account Calendar-list, event or GET read ran.
 
-
 ### V14 failed-operation shape gate — 2026-11-04
 
 The Calendar-only failed-item decoder (`a3af42a42`) was clear after Sol high review with 156 independent cases. Immutable pre-Open-work snapshot `e5b569ad5` passed its build, 373 focused snapshot cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793775930096`) advanced past MCP error decoding and then rejected an additional property in the fixed host executor-output schema. The three installed read schemas still passed; no exact account-rejection proof or real-account Calendar read followed. Additional-property location and known-field classification are diagnostic-only follow-up work. The strict account-error oracle, access settings and Calendar gate remain unchanged.
-
 
 ### V15 observed trace metadata — 2026-11-04
 
@@ -199,18 +185,15 @@ The closed executor-shape diagnostic (`eb9f95c40`) was clear after Sol high revi
 
 This establishes the trace-field compatibility gap, not account rejection. A bounded known-field correction and closed error-pattern diagnostics are being reviewed separately. Calendar remains unavailable; no real-account Calendar-list, event or GET read ran.
 
-
 ### V16 exact error-oracle gate — 2026-11-04
 
 Bounded action-only trace metadata and diagnostic error-grammar facts (`c2d05910b`) were clear after Sol high review with 160 independent cases. Immutable pre-Open-work snapshot `613f37a81` passed its build, 377 focused cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793776915474`) now passes the executor/failure contract and stops only at the account-error oracle. The correlated Calendar-list/index-zero item has counts1/0/1 and no response. Its error mentions this attempt's exact generated ID, but does not match any accepted literal or diagnostic full template; the returned text is not retained.
 
 Exact account-routing proof remains open. Narrow full-template lookup failures tied to the current attempted ID are being implemented and reviewed separately; broad diagnostic text categories do not authorize reads. No real-account Calendar-list, events or GET read ran.
 
-
 ### V17 account-lookup selector wording — 2026-11-04
 
 Exact-attempt refusal templates (`340f568fe`) were clear after Sol high review: 162 independent cases plus 23 independently authored adversarial controls. Immutable pre-Open-work snapshot `1e0c2a4f2` passed its build, 379 focused cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793777465308`) confirms the fixed no-account-found prefix and the current attempted ID, while the full selector wording remains outside the accepted templates. Counts1/0/1, Calendar-list/index-zero correlation and absent response still pass. No real-account Calendar read ran. A fixed vocabulary of selector wording and closed structural diagnostics is the next reviewed correction; broad text categories remain insufficient for proof.
-
 
 ### V18 invalid-account refusal and first Calendar-list response — 2026-11-04
 
@@ -218,13 +201,11 @@ Fixed selector vocabulary and literal backtick quoting (`b09f3e071`) were clear 
 
 The check then sent one explicit real-account Calendar-list read. Its executor envelope succeeded, but upstream output validation rejected a type before Calendar sources were accepted. No event or GET read ran. Precise expected/actual type and known-field diagnostics are the next reviewed step; the complete account/list/events/GET acceptance gate remains open. No returned identity, trace value, schema, vendor text or Calendar content was retained in the closed evidence.
 
-
 ### V19 null type at a classified output field — 2026-11-04
 
 Closed output-type diagnostics (`af8001af8`) were clear after Sol high review with 167 independent cases. Immutable pre-Open-work snapshot `2c140d68a` passed its build, 384 focused cases, a final 62-case test refresh, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793778505773`) again passed exact invalid-account refusal and reached one successful real-account Calendar-list response. Upstream validation identified expected string / actual null at the classified path data / other. No raw property name or value was retained, and no event or GET read ran.
 
 Diagnostic recognition of known ASCII case/snake aliases and safely derived required/default/nullable declaration facts is under review. Acceptance remains unchanged until the affected field and its meaning are established.
-
 
 ### V20 direct optional null metadata — 2026-11-04
 
@@ -232,13 +213,11 @@ Known-field alias and conservative declaration diagnostics (`91c758655`) were cl
 
 The owner-authorized actual check (`checkedAt:1793779492891`) again passed invalid-account refusal, then rejected one Calendar-list output null where its schema declares an optional string, no default and no null allowance. Its property name remains outside the known diagnostic vocabulary. No events or GET ran. A bounded compatibility step treating null as absence only for declared optional string metadata unused by every semantic/authority guard is being implemented and reviewed separately; meaningful fields and incomplete-result checks remain strict.
 
-
 ### V21 known null page cursor — 2026-11-04
 
 Bounded inert-null output compatibility (`b278f4e4b`) was clear after Sol high fix/review loops, including 189 independent cases, 28 protected-name probes and three neutral controls. The validation copy omits only eligible declared optional null string metadata; the original reply still feeds semantic guards. Explicit protected terms now cover plural, mixed-case and compound forms. Actual root ES2020 compilation and 487 proactive cases passed. Immutable pre-Open-work snapshot `530e76170` passed its build, 406 focused cases, signed/native preflight and isolated startup.
 
 The owner-authorized actual check (`checkedAt:1793781961316`) passed the previous inert-field gate and identified a null optional string at the known data.nextPageToken field. Exact invalid-account refusal remains verified. The existing page reader already treats a null cursor as end-of-pages; a paginated-read-specific compatibility correction is being implemented and reviewed without dropping or changing non-null cursors. No event or GET read ran; Calendar remains unavailable.
-
 
 ### V22 null-page policy context — 2026-11-04
 
@@ -246,20 +225,17 @@ The paginated-read null-cursor compatibility (`f7f0fc1a8`) was clear after Sol h
 
 Closed page-shape and schema-context diagnostics are being added to identify the actual representation before changing parser or validation acceptance. Calendar remains gated; credentials, access settings and the installed app remain unchanged.
 
-
 ### V23 declared Calendar-list collection — 2026-11-04
 
 Closed page/schema diagnostics (`9dd2765a1`) were clear after Sol high review: 196 independent cases, bounded projection and actual private-publication controls. Immutable pre-Open-work snapshot `abb76d8cd` passed its build, 413 focused cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793783873882`) again passed exact invalid-account refusal. Its successful Calendar-list output has a simple object data schema declaring a `calendars` array, rather than `items`, and an optional plain-string `next_page_token` returning null. The first collection record exposes the expected string `id`, `accessRole` and `summary` fields. No raw identities or content were retained.
 
 A curated Calendar-list collection correction is being implemented and reviewed; other aliases, event-list/GET collection changes and generic coercion remain excluded. No events or GET ran, and Calendar remains gated.
 
-
 ### V24 accepted Calendar sources and first event-list response — 2026-11-04
 
 The declared Calendar-list representation (`03cf8f2d3`) was clear after Sol high review: 200 independent cases and 24 adversarial source-reader controls. Immutable pre-Open-work snapshot `398c24c8b` passed its build, 417 focused cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793784760705`) passed exact invalid-account refusal and parsed seven readable Calendar sources. The event list uses the existing declared `items` collection with string identity/status/summary and object start/end fields. Upstream validation then rejected an optional string null in a direct event record; its name remains outside the retained vocabulary. No GET ran.
 
 The validation-only inert-metadata policy is being extended to explicitly declared simple page-item records, preserving original replies, meaningful fields and all semantic guards. Calendar remains gated until matching event GET acceptance completes.
-
 
 ### V25 authenticated Calendar list, events and matching GET accepted — 2026-11-04
 

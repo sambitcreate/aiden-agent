@@ -49,10 +49,7 @@ export function sidebarChatNavigationTargets<T extends { id: string }>(
   const activeIndex = chats.findIndex((chat) => chat.id === activeChatId);
   return {
     previous: activeIndex > 0 ? chats[activeIndex - 1] : null,
-    next:
-      activeIndex >= 0 && activeIndex < chats.length - 1
-        ? chats[activeIndex + 1]
-        : null,
+    next: activeIndex >= 0 && activeIndex < chats.length - 1 ? chats[activeIndex + 1] : null,
   };
 }
 

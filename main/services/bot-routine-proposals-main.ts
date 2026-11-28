@@ -49,11 +49,13 @@ export const botRoutineProposals = createBotRoutineProposalService({
   // An answered follow-up frees a slot for the next noted promise.
   onSettled(botId, proposalId, status) {
     void import("./bot-commitments/commitments-main.js").then(({ commitmentProposalSettled }) =>
-      commitmentProposalSettled(botId, proposalId, status));
+      commitmentProposalSettled(botId, proposalId, status),
+    );
   },
   // A revised follow-up card keeps its follow-up.
   onRevised(botId, replacedId, replacement) {
     void import("./bot-commitments/commitments-main.js").then(({ commitmentProposalRevised }) =>
-      commitmentProposalRevised(botId, replacedId, replacement));
+      commitmentProposalRevised(botId, replacedId, replacement),
+    );
   },
 });

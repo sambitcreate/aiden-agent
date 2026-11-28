@@ -23,14 +23,22 @@ test("a working run holds; a run waiting on an approval or a question doesn't", 
   assert.deepEqual(input.read(NOW).reasons, [{ kind: "chat", id: "chat-1" }]);
 
   for (const state of ["needs_approval", "needs_input", "done", "failed", "cancelled"]) {
-    const fixed = hostRunKeepAwakeInput({ runs: () => [{ chatId: "chat-2", state }], waits: () => [] });
+    const fixed = hostRunKeepAwakeInput({
+      runs: () => [{ chatId: "chat-2", state }],
+      waits: () => [],
+    });
     assert.deepEqual(fixed.read(NOW).reasons, [], state);
   }
 });
 
 test("a run waiting on a usage limit far away doesn't hold until the last 10 minutes", () => {
-  let waits: KeepAwakeUsageLimitWait[] = [{ owner: { kind: "chat", id: "chat-1" }, nextTryAt: NOW + minutes(45) }];
-  const runs = hostRunKeepAwakeInput({ runs: () => [{ chatId: "chat-1", state: "working" }], waits: () => waits });
+  let waits: KeepAwakeUsageLimitWait[] = [
+    { owner: { kind: "chat", id: "chat-1" }, nextTryAt: NOW + minutes(45) },
+  ];
+  const runs = hostRunKeepAwakeInput({
+    runs: () => [{ chatId: "chat-1", state: "working" }],
+    waits: () => waits,
+  });
   const limits = usageLimitKeepAwakeInput(() => waits);
 
   const far = runs.read(NOW);
@@ -44,7 +52,9 @@ test("a run waiting on a usage limit far away doesn't hold until the last 10 min
   assert.deepEqual(limits.read(later).reasons, [{ kind: "usage-limit", id: "chat:chat-1" }]);
 
   // A Bot's wait ending soon holds too; it never hides an ordinary chat's run.
-  waits = [{ owner: { kind: "bot", id: "chat-1" }, nextTryAt: NOW + KEEP_AWAKE_USAGE_LIMIT_WINDOW_MS }];
+  waits = [
+    { owner: { kind: "bot", id: "chat-1" }, nextTryAt: NOW + KEEP_AWAKE_USAGE_LIMIT_WINDOW_MS },
+  ];
   assert.deepEqual(runs.read(NOW).reasons, [{ kind: "chat", id: "chat-1" }]);
   assert.deepEqual(limits.read(NOW).reasons, [{ kind: "usage-limit", id: "bot:chat-1" }]);
 });
@@ -81,7 +91,11 @@ test("a check-back or Bot wake-up due within the hour holds on AC power; one lat
     { id: "wake_soon", fireAt: NOW + minutes(20) },
     { id: "wake_tomorrow", fireAt: NOW + minutes(24 * 60) },
   ];
-  const input = dueSoonKeepAwakeInput({ checkBacks: () => checkBacks, wakeUps: () => wakeUps, onBattery: () => false });
+  const input = dueSoonKeepAwakeInput({
+    checkBacks: () => checkBacks,
+    wakeUps: () => wakeUps,
+    onBattery: () => false,
+  });
 
   const reading = input.read(NOW);
   assert.deepEqual(reading.reasons, [
@@ -91,7 +105,10 @@ test("a check-back or Bot wake-up due within the hour holds on AC power; one lat
   // Read again no later than when the 61-minute check-back enters its hour.
   assert.ok(reading.recheckAt !== undefined && reading.recheckAt <= NOW + minutes(1));
 
-  assert.deepEqual(input.read(NOW + minutes(1)).reasons.map((reason) => reason.id), ["cb_soon", "cb_later", "wake_soon"]);
+  assert.deepEqual(
+    input.read(NOW + minutes(1)).reasons.map((reason) => reason.id),
+    ["cb_soon", "cb_later", "wake_soon"],
+  );
 });
 
 test("on battery nothing due soon holds, and the power source is read again while something is due", () => {
@@ -111,7 +128,11 @@ test("on battery nothing due soon holds, and the power source is read again whil
 });
 
 test("nothing pending (or only something far ahead) holds nothing, even on AC", () => {
-  const empty = dueSoonKeepAwakeInput({ checkBacks: () => [], wakeUps: () => [], onBattery: () => false });
+  const empty = dueSoonKeepAwakeInput({
+    checkBacks: () => [],
+    wakeUps: () => [],
+    onBattery: () => false,
+  });
   assert.deepEqual(empty.read(NOW), { reasons: [] });
 
   const far = dueSoonKeepAwakeInput({
@@ -126,7 +147,10 @@ test("nothing pending (or only something far ahead) holds nothing, even on AC", 
 
 test("a record overdue by more than an hour stops holding, so a stuck one can't keep the computer awake", () => {
   const input = dueSoonKeepAwakeInput({
-    checkBacks: () => [{ id: "cb_late", fireAt: NOW - minutes(30) }, { id: "cb_stuck", fireAt: NOW - minutes(61) }],
+    checkBacks: () => [
+      { id: "cb_late", fireAt: NOW - minutes(30) },
+      { id: "cb_stuck", fireAt: NOW - minutes(61) },
+    ],
     wakeUps: () => [],
     onBattery: () => false,
   });
@@ -162,7 +186,9 @@ test("the controller holds when a due-soon item enters its hour and lets go on u
   });
   const advanceTo = (at: number) => {
     for (;;) {
-      const due = timers.filter((timer) => timer.live && timer.at <= at).sort((a, b) => a.at - b.at)[0];
+      const due = timers
+        .filter((timer) => timer.live && timer.at <= at)
+        .sort((a, b) => a.at - b.at)[0];
       if (!due) break;
       now = due.at;
       due.live = false;

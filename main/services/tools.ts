@@ -9,7 +9,11 @@ import { selectedMcpServers } from "./mcp-selection.js";
 import { withoutWorkspaceDisabledMcpServers } from "./workspace-capabilities.js";
 import { assertScheduledMcpServerBindings } from "./schedule-mcp-binding.js";
 import { webSearchService } from "./web-search-main.js";
-import { assembleAgentTools, type AgentToolSources, type ToolContext } from "./agent-tool-assembly.js";
+import {
+  assembleAgentTools,
+  type AgentToolSources,
+  type ToolContext,
+} from "./agent-tool-assembly.js";
 
 export { skillToolKey } from "./skill-registry-core.js";
 export { buildSchedulingTools, type ToolContext } from "./agent-tool-assembly.js";

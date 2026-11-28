@@ -5,7 +5,15 @@ import { rendererDocumentOwner, windowDocumentOwner } from "./renderer-document-
 
 /** A main frame as Electron reports it: its identity changes when its document is replaced across processes. */
 function mainFrame(processId: number, routingId: number, frameToken: string) {
-  return { processId, routingId, frameToken, detached: false, parent: null, isDestroyed: () => false, send: () => undefined };
+  return {
+    processId,
+    routingId,
+    frameToken,
+    detached: false,
+    parent: null,
+    isDestroyed: () => false,
+    send: () => undefined,
+  };
 }
 
 /** A window's web contents: navigation and destruction are events, the main frame can be swapped. */
@@ -30,8 +38,16 @@ const asWebContents = (contents: Contents) => contents as unknown as Electron.We
 /** The owner an IPC request from the window's main frame captures. */
 function requestOwner(contents: Contents) {
   const frame = contents.mainFrame;
-  const event = { sender: contents, senderFrame: frame, processId: frame.processId, frameId: frame.routingId };
-  return rendererDocumentOwner(event as unknown as Electron.IpcMainInvokeEvent, () => new Error("not the active document"));
+  const event = {
+    sender: contents,
+    senderFrame: frame,
+    processId: frame.processId,
+    frameId: frame.routingId,
+  };
+  return rendererDocumentOwner(
+    event as unknown as Electron.IpcMainInvokeEvent,
+    () => new Error("not the active document"),
+  );
 }
 
 test("a window's document, minted in main, is the same owner its own requests name", () => {
@@ -55,7 +71,11 @@ test("a minted owner goes stale when its window navigates, swaps its main frame 
   assert.equal(before.isDestroyed(), true);
   assert.equal(invalidated, 1);
   assert.throws(() => before.send("browser:event" as never, {}), /no longer active/u);
-  assert.equal(windowDocumentOwner(asWebContents(navigated)).isDestroyed(), false, "the new document can own it again");
+  assert.equal(
+    windowDocumentOwner(asWebContents(navigated)).isDestroyed(),
+    false,
+    "the new document can own it again",
+  );
 
   const swapped = windowContents(2);
   const old = windowDocumentOwner(asWebContents(swapped));

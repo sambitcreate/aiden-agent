@@ -94,7 +94,10 @@ export function parseBrowserPreferences(saved: unknown): BrowserPreferences {
       if (!known.some((profile) => profile.id === profileId))
         throw new Error("This browser profile no longer exists.");
     };
-    for (const [field, value] of Object.entries({ ...current, linkOpening: savedLinkOpening(legacy) })) {
+    for (const [field, value] of Object.entries({
+      ...current,
+      linkOpening: savedLinkOpening(legacy),
+    })) {
       try {
         preferences.defaults = validBrowserDefaults(
           preferences.defaults,

@@ -97,9 +97,16 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps): BotMemoryRun
 
     async edit(input) {
       const outcome = await deps.store.edit(input.botId, input.edit);
-      if (!outcome.ok) return { ok: false, code: outcome.code, message: outcome.message, view: memoryView(outcome.loaded) };
+      if (!outcome.ok)
+        return {
+          ok: false,
+          code: outcome.code,
+          message: outcome.message,
+          view: memoryView(outcome.loaded),
+        };
       if (outcome.changed) {
-        const removed = outcome.previous === undefined ? {} : botMemoryRemovals(outcome.previous, outcome.loaded);
+        const removed =
+          outcome.previous === undefined ? {} : botMemoryRemovals(outcome.previous, outcome.loaded);
         markStale(input.botId);
         // A Bot that never read memory in this process has nothing to unlearn.
         if (snapshots.has(input.botId) && Object.keys(removed).length > 0) {
@@ -134,7 +141,6 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps): BotMemoryRun
       removals.delete(botId);
       return removed === undefined ? "" : renderBotMemoryRemovals(removed);
     },
-
 
     beginSession: markStale,
     markStale,

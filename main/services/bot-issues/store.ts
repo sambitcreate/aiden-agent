@@ -10,7 +10,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { botSessionDirectory, createKeyedSerial } from "../bot-routine-notes.js";
-import { BOT_ISSUE_LIMITS, botIssueOf, type BotIssue } from "../../../renderer/shared/bot-issues.js";
+import {
+  BOT_ISSUE_LIMITS,
+  botIssueOf,
+  type BotIssue,
+} from "../../../renderer/shared/bot-issues.js";
 import { writeJsonAtomic } from "../durable-fs.js";
 
 export const BOT_ISSUES_FILE = "issues.json";
@@ -45,7 +49,10 @@ export interface BotIssueStore {
    * One read-modify-write for this Bot, serialized with every other change to
    * it. The change returns the whole file, so a caller never patches a row.
    */
-  change<T>(botId: string, change: (issues: readonly StoredBotIssue[]) => BotIssueChange<T>): Promise<T>;
+  change<T>(
+    botId: string,
+    change: (issues: readonly StoredBotIssue[]) => BotIssueChange<T>,
+  ): Promise<T>;
   forgetBot(botId: string): Promise<void>;
 }
 
@@ -78,7 +85,9 @@ function storedOf(row: unknown, botId: string): StoredBotIssue | null {
     ...issue,
     ...(typeof fields.entryAppended === "boolean" ? { entryAppended: fields.entryAppended } : {}),
     ...(typeof fields.delivered === "boolean" ? { delivered: fields.delivered } : {}),
-    ...(typeof fields.statusAppended === "boolean" ? { statusAppended: fields.statusAppended } : {}),
+    ...(typeof fields.statusAppended === "boolean"
+      ? { statusAppended: fields.statusAppended }
+      : {}),
     ...(fields.quiet === true ? { quiet: true } : {}),
     ...(fields.reminded === true ? { reminded: true } : {}),
   };
@@ -102,7 +111,8 @@ function parseFile(text: string, botId: string): StoredBotIssue[] {
 
 export function createBotIssueStore(options: { profileDir(): string }): BotIssueStore {
   const serial = createKeyedSerial();
-  const fileOf = (botId: string) => path.join(botSessionDirectory(options.profileDir(), botId), BOT_ISSUES_FILE);
+  const fileOf = (botId: string) =>
+    path.join(botSessionDirectory(options.profileDir(), botId), BOT_ISSUES_FILE);
 
   async function load(botId: string): Promise<StoredBotIssue[]> {
     try {
@@ -120,7 +130,10 @@ export function createBotIssueStore(options: { profileDir(): string }): BotIssue
   return {
     read: (botId) => load(botId),
 
-    change<T>(botId: string, apply: (issues: readonly StoredBotIssue[]) => BotIssueChange<T>): Promise<T> {
+    change<T>(
+      botId: string,
+      apply: (issues: readonly StoredBotIssue[]) => BotIssueChange<T>,
+    ): Promise<T> {
       return serial(botId, async () => {
         const { issues, result } = apply(await load(botId));
         await save(botId, issues);

@@ -49,6 +49,7 @@ source.
 ## Today
 
 **Workspace binding**
+
 - ⌘N, sidebar **New Agent**, `/new`, the palette and the workspace row ⋯ menu
   all call `openNewChat`, which makes a draft in the active workspace
   (`renderer/main/root-view.tsx`, `renderer/lib/chat-draft.ts`).
@@ -57,6 +58,7 @@ source.
 
 **Composer top bar** (`composer.tsx` ~L1857, `ComposerContextBar` in
 `composer-context-bar.tsx`)
+
 - It shows the workspace picker, then a static "Local" label (or the machine
   picker), then `GitBranchPicker` (git repos only), then
   `ChatPullRequestsChip`.
@@ -66,12 +68,14 @@ source.
   (`autoHideComposerContext`, on by default, in Appearance), PR chip included.
 
 **Workspace picker** (`workspace-picker.tsx`)
+
 - A flat searchable list with no recents.
 - It cannot open a folder or clone.
 - "Don't work in a workspace" creates a scratch folder under `~/aiden`.
 - Worktree workspaces appear next to their repos.
 
 **Worktrees** (`git-branch-picker.tsx`, `/worktree`)
+
 - "Isolated worktree" asks for a typed branch name and creates the managed
   worktree straight away from the current branch, through
   `git:createWorktree` → `workspaceWorktreeApplicationService.create`.
@@ -79,6 +83,7 @@ source.
   worktree behind.
 
 **Window header** (`chat-top-bar.tsx`, `.memory/chat-top-bar.md`)
+
 - Already has a `WorkspaceChip` with the name, branch or "Not a Git
   repository", and GitHub links.
 
@@ -87,6 +92,7 @@ source.
 ### 1. Defaults
 
 **What ⌘N opens**
+
 - ⌘N, **New Agent** and `/new` open a draft in the workspace of the chat being
   viewed. If no chat is being viewed, they use the last active workspace (the
   `aiden-agent.workspaceId` fallback, as today).
@@ -94,24 +100,26 @@ source.
 - A draft with text or attachments is never reused.
 
 **Remembered per workspace**
+
 - The git mode (This checkout / New worktree), defaulting to This checkout.
 - The base branch for new worktrees, defaulting to the repo's default branch.
 - "Start from origin", defaulting to on when a remote exists.
 
 **Draft headline**
+
 - Reads "What should we build in **[workspace]**?". Clicking the name opens the
   workspace menu.
 - A scratch chat reads "What's on your mind?".
 
 ### 2. Composer top bar: when each chip is shown
 
-| Chip | Shown when | Hidden when |
-| --- | --- | --- |
-| Workspace | Draft | After the first send. The header `WorkspaceChip` already shows it. |
-| Machine | A paired Mac is online, or the draft targets a paired Mac | No paired Macs. This removes the static "Local" label. |
-| Branch | The folder is a readable git repo | Plain folder, scratch chat, folder missing, or workspace access off |
-| Changes count (on the branch chip) | Uncommitted changes in this checkout | Clean checkout, or New worktree chosen |
-| Pull request | GitHub remote **and** any of: branch ahead of base, a linked PR, a pending create intent | Plain folder, no GitHub remote, or nothing to open yet. It never shows on a draft. |
+| Chip                               | Shown when                                                                               | Hidden when                                                                        |
+| ---------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Workspace                          | Draft                                                                                    | After the first send. The header `WorkspaceChip` already shows it.                 |
+| Machine                            | A paired Mac is online, or the draft targets a paired Mac                                | No paired Macs. This removes the static "Local" label.                             |
+| Branch                             | The folder is a readable git repo                                                        | Plain folder, scratch chat, folder missing, or workspace access off                |
+| Changes count (on the branch chip) | Uncommitted changes in this checkout                                                     | Clean checkout, or New worktree chosen                                             |
+| Pull request                       | GitHub remote **and** any of: branch ahead of base, a linked PR, a pending create intent | Plain folder, no GitHub remote, or nothing to open yet. It never shows on a draft. |
 
 **Draft, git repo:**
 
@@ -123,6 +131,7 @@ With New worktree chosen, the branch chip uses the soft note fill:
 `[🌲 New worktree · from main ▾]`.
 
 **After the first send:**
+
 - For a git repo, the bar shrinks to a one-line summary:
   `[⎇ aiden/fix-login]  ……  [⤴ Create PR | #482 · Open | Merged]`.
 - For anything else, the bar is hidden.
@@ -135,6 +144,7 @@ default) and **Hidden**. The control stays in Settings → Appearance and follow
 `docs/settings-design-system.md`.
 
 **Motion**
+
 - Chips enter and leave with the shared popup motion: 200 ms, fade plus a 4 px
   rise.
 - Reduce Motion removes the transition.
@@ -167,6 +177,7 @@ The menu opens with its search field focused. From top to bottom:
      `~/aiden` behaviour until a folderless chat is decided separately.
 
 Choosing a workspace:
+
 - keeps the draft's text, attachments and model;
 - resets the git mode to the remembered value for that workspace;
 - returns focus to the composer.
@@ -186,7 +197,7 @@ This menu appears only for git repos. **Work in** is a radio group at the top:
   - **Start from** lists base branches as radios.
   - **Start from origin/\<base\>** appears only when a remote exists.
   - **Branch name** defaults to Auto. The name is `aiden/<slug of the first
-    message>`, made unique if needed, and can be edited.
+message>`, made unique if needed, and can be edited.
   - Nothing touches disk until the first send.
 - **Existing worktrees** (shown only if the repo has any): one row each, most
   recent first. Picking one moves the draft to that worktree's workspace.
@@ -211,26 +222,26 @@ has already started, it keeps today's create-and-open behaviour.
 
 ### 5. Entry points
 
-| Entry | Result |
-| --- | --- |
-| ⌘N, **New Agent**, `/new` | Instant draft (§1) |
+| Entry                                                        | Result                                                                                                                                                    |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ⌘N, **New Agent**, `/new`                                    | Instant draft (§1)                                                                                                                                        |
 | ⌘⇧N (new `chat.newIn`), or the chevron next to **New Agent** | **New chat in…** palette: recent workspaces (current one marked), path rows, Open folder, Clone. ↵ opens a draft; ⌥↵ opens it with New worktree selected. |
-| Hover **+** on a sidebar workspace row | Draft in that workspace (today this is only in the ⋯ menu) |
-| Headline workspace name, composer workspace chip | Workspace menu (§3) |
+| Hover **+** on a sidebar workspace row                       | Draft in that workspace (today this is only in the ⋯ menu)                                                                                                |
+| Headline workspace name, composer workspace chip             | Workspace menu (§3)                                                                                                                                       |
 
 An open draft shows in the sidebar as an italic **New chat** row under its
 workspace. The row moves when the draft switches workspace.
 
 ### 6. What happens immediately and what waits for the first send
 
-| Action | Immediately | On first send |
-| --- | --- | --- |
-| New draft | Draft in memory, plus the sidebar row | Chat saved |
-| Switch workspace or choose an existing worktree | Draft moves | — |
-| New worktree, base branch, name | Draft fields only | Fetch (optional), create, register, save |
-| Checkout (This checkout) | `git checkout`, guarded as today | — |
-| Open folder or path | Workspace registered; a new folder is created only after choosing Create | — |
-| Clone | `git clone` with the user's credentials, after pressing Clone | — |
+| Action                                          | Immediately                                                              | On first send                            |
+| ----------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------- |
+| New draft                                       | Draft in memory, plus the sidebar row                                    | Chat saved                               |
+| Switch workspace or choose an existing worktree | Draft moves                                                              | —                                        |
+| New worktree, base branch, name                 | Draft fields only                                                        | Fetch (optional), create, register, save |
+| Checkout (This checkout)                        | `git checkout`, guarded as today                                         | —                                        |
+| Open folder or path                             | Workspace registered; a new folder is created only after choosing Create | —                                        |
+| Clone                                           | `git clone` with the user's credentials, after pressing Clone            | —                                        |
 
 Clone is a deliberate network action, comparable to a git push. It adds no
 background or startup network calls.
@@ -242,6 +253,7 @@ Each phase is its own PR off `main` and runs its narrow suites before review.
 ### Phase 1: Top-bar visibility (desktop renderer only, no contract change)
 
 **Changes**
+
 - A pure `composerContextChips(state)` in `renderer/lib/` decides which chips
   to show from workspace, git status, remote kind, paired hosts, stage and PR
   state.
@@ -252,10 +264,11 @@ Each phase is its own PR off `main` and runs its narrow suites before review.
     that read doesn't have it, start with linked or pending PRs only.
 - `ComposerContextBar` gains the summary variant. The
   `autoHideComposerContext` setting becomes Summary / Hidden, migrating `true`
-  to Summary and `false` to always-full. *(Check with the owner during review.)*
+  to Summary and `false` to always-full. _(Check with the owner during review.)_
 - The change count moves onto the branch chip.
 
 **Tests**
+
 - Unit tests for `composerContextChips`, written as a truth table over fixtures
   (not a copy of the implementation).
 - Extend `tests/e2e/chat-top-bar.spec.ts` (or a sibling composer spec) with:
@@ -268,6 +281,7 @@ Each phase is its own PR off `main` and runs its narrow suites before review.
 ### Phase 2: Workspace menu
 
 **Changes**
+
 - `workspace-picker.tsx`: recents, the All workspaces group, path rows, Open
   folder, the Clone sub-view, the renamed Scratch chat, worktree workspaces left
   out.
@@ -285,6 +299,7 @@ Each phase is its own PR off `main` and runs its narrow suites before review.
 ### Phase 3: Branch menu and worktrees created on send
 
 **Changes**
+
 - `renderer/lib/chat-draft.ts`: add `gitMode`, `baseRef`, `fromOrigin` and
   `branchName?` to drafts, plus the per-workspace mode memory.
 - `git-branch-picker.tsx`: the Work in radio group, the New worktree fields, and
@@ -296,6 +311,7 @@ Each phase is its own PR off `main` and runs its narrow suites before review.
 - The progress row in the transcript reuses the activity-row styling.
 
 **Tests**
+
 - Main-service tests:
   - a send that succeeds creates one worktree;
   - a retry after a failure creates no duplicate;

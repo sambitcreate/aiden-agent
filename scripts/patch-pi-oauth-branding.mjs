@@ -39,9 +39,9 @@ const BRANDED_ERROR_FUNCTION = `export function oauthErrorHtml(message, details)
     });
 }`;
 const CALLBACK_SUCCESS_CALL =
-  'oauthSuccessHtml(`Signed in to ${providerName}. You may now close this page.`)';
+  "oauthSuccessHtml(`Signed in to ${providerName}. You may now close this page.`)";
 const AIDEN_CALLBACK_SUCCESS_CALL =
-  'oauthSuccessHtml(`Your ${providerName} account is connected to Aiden Agent. You can close this window.`)';
+  "oauthSuccessHtml(`Your ${providerName} account is connected to Aiden Agent. You can close this window.`)";
 
 function replaceExact(source, before, after, label) {
   const beforeCount = source.split(before).length - 1;
@@ -69,7 +69,10 @@ function replaceLogo(source, brandedLogo) {
   return `${source.slice(0, start)}${brandedLogo}${source.slice(end + "</svg>`;".length)}`;
 }
 
-export async function patchPiOAuthBranding(projectRoot, packageRoot = path.join(projectRoot, PI_PACKAGE_PATH)) {
+export async function patchPiOAuthBranding(
+  projectRoot,
+  packageRoot = path.join(projectRoot, PI_PACKAGE_PATH),
+) {
   const packageJsonPath = path.join(packageRoot, "package.json");
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
   if (packageJson.version !== PI_AI_VERSION) {
@@ -98,18 +101,25 @@ export async function patchPiOAuthBranding(projectRoot, packageRoot = path.join(
 
   const chatgptPath = path.join(packageRoot, "dist", "auth", "oauth", "openai-chatgpt.js");
   const originalChatgpt = await readFile(chatgptPath, "utf8");
-  let chatgpt = replaceExact(originalChatgpt,
-    'const AGENT_NAME_HINT = "Pi";', 'const AGENT_NAME_HINT = "Aiden Agent";',
-    "ChatGPT registered agent name");
-  chatgpt = replaceExact(chatgpt,
+  let chatgpt = replaceExact(
+    originalChatgpt,
+    'const AGENT_NAME_HINT = "Pi";',
+    'const AGENT_NAME_HINT = "Aiden Agent";',
+    "ChatGPT registered agent name",
+  );
+  chatgpt = replaceExact(
+    chatgpt,
     'oauthSuccessHtml("ChatGPT authentication completed. You can close this window.")',
     'oauthSuccessHtml("Your ChatGPT account is connected to Aiden Agent. You can close this window.")',
-    "ChatGPT success message");
+    "ChatGPT success message",
+  );
 
   if (page !== originalPage) await writeFile(oauthPagePath, page);
   if (callback !== originalCallback) await writeFile(callbackServerPath, callback);
   if (chatgpt !== originalChatgpt) await writeFile(chatgptPath, chatgpt);
-  return { changed: page !== originalPage || callback !== originalCallback || chatgpt !== originalChatgpt };
+  return {
+    changed: page !== originalPage || callback !== originalCallback || chatgpt !== originalChatgpt,
+  };
 }
 
 const invokedDirectly =
@@ -118,7 +128,9 @@ if (invokedDirectly) {
   const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   patchPiOAuthBranding(projectRoot)
     .then(({ changed }) => {
-      console.log(changed ? "Applied Aiden OAuth branding to Pi." : "Aiden OAuth branding is current.");
+      console.log(
+        changed ? "Applied Aiden OAuth branding to Pi." : "Aiden OAuth branding is current.",
+      );
     })
     .catch((error) => {
       console.error(error instanceof Error ? error.message : String(error));

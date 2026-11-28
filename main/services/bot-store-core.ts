@@ -14,7 +14,10 @@ import {
   type BotUpdateInput,
 } from "../../renderer/shared/bots.js";
 import { isBoundedBotText } from "../../renderer/shared/bot-capabilities.js";
-import { BOT_ROUTINE_THINKING_LEVELS, type BotRoutineThinkingLevel } from "../../renderer/shared/bot-routine-models.js";
+import {
+  BOT_ROUTINE_THINKING_LEVELS,
+  type BotRoutineThinkingLevel,
+} from "../../renderer/shared/bot-routine-models.js";
 
 /*
  * Pre-1.0, no migrations: the record stores the current avatar recipe
@@ -41,9 +44,7 @@ export class BotIdentityRevisionConflictError extends Error {
 }
 
 function botIdentityRevision(bot: StoredBotDefinition): string {
-  return `botrev_${createHash("sha256")
-    .update(JSON.stringify(bot), "utf8")
-    .digest("base64url")}`;
+  return `botrev_${createHash("sha256").update(JSON.stringify(bot), "utf8").digest("base64url")}`;
 }
 
 interface BotState {
@@ -116,7 +117,8 @@ function projectBot(value: unknown): StoredBotDefinition | null {
   const chatActivity = parseBotChatActivity(bot.chatActivity);
   let interruptions: BotInterruptions | undefined;
   try {
-    interruptions = bot.interruptions === undefined ? undefined : parseBotInterruptions(bot.interruptions);
+    interruptions =
+      bot.interruptions === undefined ? undefined : parseBotInterruptions(bot.interruptions);
   } catch {
     interruptions = undefined;
   }
@@ -142,14 +144,20 @@ function projectBot(value: unknown): StoredBotDefinition | null {
     ...(bot.acceptsBotMessages === false ? { acceptsBotMessages: false as const } : {}),
     ...(bot.messagesOtherBots === false ? { messagesOtherBots: false as const } : {}),
     // Only a level other than "off" is stored; one this build does not know reads as off.
-    ...(storedThinkingLevel(bot.thinkingLevel) ? { thinkingLevel: storedThinkingLevel(bot.thinkingLevel)! } : {}),
-    ...(typeof bot.selfWakeUpGeneration === "string" ? { selfWakeUpGeneration: bot.selfWakeUpGeneration } : {}),
+    ...(storedThinkingLevel(bot.thinkingLevel)
+      ? { thinkingLevel: storedThinkingLevel(bot.thinkingLevel)! }
+      : {}),
+    ...(typeof bot.selfWakeUpGeneration === "string"
+      ? { selfWakeUpGeneration: bot.selfWakeUpGeneration }
+      : {}),
   };
   return projected;
 }
 
 function storedThinkingLevel(value: unknown): BotRoutineThinkingLevel | undefined {
-  return value !== "off" && BOT_ROUTINE_THINKING_LEVELS.includes(value as BotRoutineThinkingLevel) ? value as BotRoutineThinkingLevel : undefined;
+  return value !== "off" && BOT_ROUTINE_THINKING_LEVELS.includes(value as BotRoutineThinkingLevel)
+    ? (value as BotRoutineThinkingLevel)
+    : undefined;
 }
 
 function normalizeState(value: unknown): BotState {
@@ -203,10 +211,7 @@ function normalizeInput(input: BotCreateInput): BotCreateInput {
   };
 }
 
-export function createBotStore(options: {
-  root(): string;
-  now?: () => number;
-}) {
+export function createBotStore(options: { root(): string; now?: () => number }) {
   const store = new DataStore<BotState>("bots.json", { version: 1, bots: [] }, options.root, {
     maxBytes: 2 * 1024 * 1024,
     fileMode: 0o600,
@@ -277,8 +282,10 @@ export function createBotStore(options: {
     /** Null is off. The empty generation belongs to wake-ups made before the first revocation. */
     wakeUpGeneration(id: string): Promise<string | null> {
       return queueMutation(async () => {
-        const bot = (await loadBotState()).bots.find((entry) => entry.id === id && entry.archivedAt === undefined);
-        return !bot || bot.selfWakeUps === false ? null : bot.selfWakeUpGeneration ?? "";
+        const bot = (await loadBotState()).bots.find(
+          (entry) => entry.id === id && entry.archivedAt === undefined,
+        );
+        return !bot || bot.selfWakeUps === false ? null : (bot.selfWakeUpGeneration ?? "");
       });
     },
     async get(id: string): Promise<BotDefinition | null> {
@@ -291,14 +298,24 @@ export function createBotStore(options: {
     async update(input: BotUpdateInput): Promise<BotDefinition> {
       return queueMutation(async () => {
         const normalized = normalizeInput(input);
-        const chatActivity = input.chatActivity === undefined ? undefined : parseBotChatActivity(input.chatActivity);
-        if (input.chatActivity !== undefined && !chatActivity) throw new Error("Choose a valid chat activity.");
-        const interruptions = input.interruptions === undefined ? undefined : parseBotInterruptions(input.interruptions);
-        if (input.thinkingLevel !== undefined && !BOT_ROUTINE_THINKING_LEVELS.includes(input.thinkingLevel)) throw new Error("Choose a valid thinking level.");
+        const chatActivity =
+          input.chatActivity === undefined ? undefined : parseBotChatActivity(input.chatActivity);
+        if (input.chatActivity !== undefined && !chatActivity)
+          throw new Error("Choose a valid chat activity.");
+        const interruptions =
+          input.interruptions === undefined
+            ? undefined
+            : parseBotInterruptions(input.interruptions);
+        if (
+          input.thinkingLevel !== undefined &&
+          !BOT_ROUTINE_THINKING_LEVELS.includes(input.thinkingLevel)
+        )
+          throw new Error("Choose a valid thinking level.");
         await loadBotState();
         return store.update((draft) => {
           const bot = draft.bots.find((entry) => entry.id === input.id);
-          if (!bot || bot.archivedAt !== undefined) throw new Error("This bot is no longer available.");
+          if (!bot || bot.archivedAt !== undefined)
+            throw new Error("This bot is no longer available.");
           if (botIdentityRevision(bot) !== input.expectedRevision) {
             throw new BotIdentityRevisionConflictError(botIdentityRevision(bot));
           }
@@ -308,7 +325,11 @@ export function createBotStore(options: {
           delete (bot as { openingGreeting?: unknown }).openingGreeting;
           if (normalized.description) bot.description = normalized.description;
           else delete bot.description;
-          bot.avatar = { version: 1, shape: normalized.avatar.shape, color: normalized.avatar.color };
+          bot.avatar = {
+            version: 1,
+            shape: normalized.avatar.shape,
+            color: normalized.avatar.color,
+          };
           if (chatActivity) bot.chatActivity = chatActivity;
           // Always last, after chat activity, so the stored key order (and the
           // revision it hashes into) matches a reloaded record.
@@ -316,8 +337,12 @@ export function createBotStore(options: {
           delete bot.interruptions;
           if (keptInterruptions) bot.interruptions = keptInterruptions;
           // Last of all; only "off" is stored, so a Bot that never changed it stays unchanged.
-          const selfWakeUpsOff = input.selfWakeUps === undefined ? bot.selfWakeUps === false : input.selfWakeUps === false;
-          const generation = bot.selfWakeUps === false && !selfWakeUpsOff ? randomUUID() : bot.selfWakeUpGeneration;
+          const selfWakeUpsOff =
+            input.selfWakeUps === undefined
+              ? bot.selfWakeUps === false
+              : input.selfWakeUps === false;
+          const generation =
+            bot.selfWakeUps === false && !selfWakeUpsOff ? randomUUID() : bot.selfWakeUpGeneration;
           delete bot.selfWakeUps;
           delete bot.selfWakeUpGeneration;
           if (selfWakeUpsOff) bot.selfWakeUps = false;
@@ -326,7 +351,10 @@ export function createBotStore(options: {
             delete bot[key];
             if (off) bot[key] = false;
           }
-          const thinkingLevel = input.thinkingLevel === undefined ? storedThinkingLevel(bot.thinkingLevel) : storedThinkingLevel(input.thinkingLevel);
+          const thinkingLevel =
+            input.thinkingLevel === undefined
+              ? storedThinkingLevel(bot.thinkingLevel)
+              : storedThinkingLevel(input.thinkingLevel);
           delete bot.thinkingLevel;
           if (thinkingLevel) bot.thinkingLevel = thinkingLevel;
           if (generation !== undefined) bot.selfWakeUpGeneration = generation;
@@ -345,7 +373,9 @@ export function createBotStore(options: {
     /** Records a previous release archived. Startup erases them as deleted Bots. */
     async legacyArchivedIds(): Promise<string[]> {
       return queueMutation(async () =>
-        (await loadBotState()).bots.filter((bot) => bot.archivedAt !== undefined).map(({ id }) => id),
+        (await loadBotState()).bots
+          .filter((bot) => bot.archivedAt !== undefined)
+          .map(({ id }) => id),
       );
     },
     /** Hard-delete a Bot record. Idempotent: returns false when the record was already gone. */

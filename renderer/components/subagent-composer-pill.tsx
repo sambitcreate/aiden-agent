@@ -66,7 +66,9 @@ export function subagentPillModel(
 ): SubagentPillModel | null {
   const dismissed = new Set(dismissedRunIds);
   // A run waiting on the person comes back even after it was put away.
-  const visible = views.filter((view) => !dismissed.has(view.runId) || view.state === "needs_attention");
+  const visible = views.filter(
+    (view) => !dismissed.has(view.runId) || view.state === "needs_attention",
+  );
   const generations = new Set(latchedGenerationIds);
   for (const view of visible) {
     if (isSubagentRunViewStateActive(view.state)) generations.add(view.generationId);
@@ -121,7 +123,11 @@ export function useSubagentComposerPill(
   const presentKey = presentGenerationsKey(chatViews);
   const [latches, setLatches] = React.useState<Readonly<Record<string, BatchLatch>>>({});
   /** What this visit to the chat has shown: its generations, and whether any run was active. */
-  const visitRef = React.useRef<{ chatId: string | null; generationIds: Set<string>; sawActive: boolean }>({
+  const visitRef = React.useRef<{
+    chatId: string | null;
+    generationIds: Set<string>;
+    sawActive: boolean;
+  }>({
     chatId: null,
     generationIds: new Set(),
     sawActive: false,
@@ -136,7 +142,8 @@ export function useSubagentComposerPill(
       visitRef.current = { chatId, generationIds: new Set(), sawActive: false };
     }
     const visit = visitRef.current;
-    for (const generationId of presentKey ? presentKey.split("\n") : []) visit.generationIds.add(generationId);
+    for (const generationId of presentKey ? presentKey.split("\n") : [])
+      visit.generationIds.add(generationId);
     if (activeKey) visit.sawActive = true;
     const seen = new Set(visit.generationIds);
     const sawActive = visit.sawActive;
@@ -185,7 +192,10 @@ export function useSubagentComposerPill(
     setLatches((current) => {
       const latch = current[chatId];
       const dismissedRunIds = [
-        ...new Set([...(latch?.dismissedRunIds ?? []), ...(shownRunIds ? shownRunIds.split("\n") : [])]),
+        ...new Set([
+          ...(latch?.dismissedRunIds ?? []),
+          ...(shownRunIds ? shownRunIds.split("\n") : []),
+        ]),
       ].slice(-MAX_DISMISSED_RUN_IDS);
       return { ...current, [chatId]: { generationIds: [], ongoing: false, dismissedRunIds } };
     });
@@ -236,7 +246,9 @@ function RunFeed({
   const milestones = milestoneLabels.slice(-4);
   const latestText = snapshot?.latestText?.trim();
   const rawError = snapshot?.error?.trim();
-  const error = rawError ? (subagentFailureReason(rawError) ?? "This helper couldn't finish.") : undefined;
+  const error = rawError
+    ? (subagentFailureReason(rawError) ?? "This helper couldn't finish.")
+    : undefined;
   const catalog = useSubagentModelCatalog();
   const model = snapshot ? subagentModelName(snapshot, catalog) : null;
   const meta = [
@@ -246,24 +258,41 @@ function RunFeed({
   ].filter((part): part is string => part !== null);
 
   return (
-    <div className="mt-0.5 mb-1.5 ml-[2.375rem] mr-2 rounded-card bg-well px-3 py-2.5" data-subagent-pill-feed={run.runId}>
-      {meta.length ? <p className="m-0 truncate text-mini text-tertiary">{meta.join(" · ")}</p> : null}
-      <ol className="m-0 mt-1.5 list-none space-y-1 p-0 text-small text-secondary" aria-label={`${run.label} activity`}>
+    <div
+      className="mt-0.5 mb-1.5 ml-[2.375rem] mr-2 rounded-card bg-well px-3 py-2.5"
+      data-subagent-pill-feed={run.runId}
+    >
+      {meta.length ? (
+        <p className="m-0 truncate text-mini text-tertiary">{meta.join(" · ")}</p>
+      ) : null}
+      <ol
+        className="m-0 mt-1.5 list-none space-y-1 p-0 text-small text-secondary"
+        aria-label={`${run.label} activity`}
+      >
         {milestones.map((label, index) => (
           <li key={`${index}:${label}`} className="flex items-start gap-2">
-            <span aria-hidden="true" className="mt-[0.45rem] size-1 shrink-0 rounded-full bg-tertiary" />
+            <span
+              aria-hidden="true"
+              className="mt-[0.45rem] size-1 shrink-0 rounded-full bg-tertiary"
+            />
             <span className="min-w-0">{label}</span>
           </li>
         ))}
         {status && !statusShownAbove ? (
           <li className="flex items-start gap-2 font-medium text-primary">
-            <span aria-hidden="true" className="mt-[0.4rem] size-1.5 shrink-0 rounded-full bg-status-accent" />
+            <span
+              aria-hidden="true"
+              className="mt-[0.4rem] size-1.5 shrink-0 rounded-full bg-status-accent"
+            />
             <span className="min-w-0">{status}</span>
           </li>
         ) : null}
         {error ? (
           <li className="flex items-start gap-2 text-red">
-            <span aria-hidden="true" className="mt-[0.45rem] size-1 shrink-0 rounded-full bg-current" />
+            <span
+              aria-hidden="true"
+              className="mt-[0.45rem] size-1 shrink-0 rounded-full bg-current"
+            />
             <span className="min-w-0 break-words">{error}</span>
           </li>
         ) : null}
@@ -272,7 +301,9 @@ function RunFeed({
         ) : null}
       </ol>
       {latestText ? (
-        <p className="m-0 mt-1.5 line-clamp-2 text-small text-tertiary [overflow-wrap:anywhere]">{latestText}</p>
+        <p className="m-0 mt-1.5 line-clamp-2 text-small text-tertiary [overflow-wrap:anywhere]">
+          {latestText}
+        </p>
       ) : null}
       <div className="mt-2 flex flex-wrap gap-1.5">
         <Button
@@ -350,12 +381,19 @@ function TrayRun({
         onClick={onToggle}
         className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto_14px] items-center gap-2.5 rounded-control px-2.5 py-1 text-left transition-colors duration-150 ease-out [--keyboard-focus-offset:-2px] hover:bg-list-hover active:bg-list-selection motion-reduce:transition-none"
       >
-        <SubagentMark role={run.role} state={run.state} activity={run.snapshot?.activity} size={18} />
+        <SubagentMark
+          role={run.role}
+          state={run.state}
+          activity={run.snapshot?.activity}
+          size={18}
+        />
         <span className="flex min-w-0 flex-col">
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="min-w-0 truncate text-regular text-primary">{run.label}</span>
             {role ? (
-              <span className="shrink-0 rounded-full bg-control px-1.5 text-mini text-secondary">{role}</span>
+              <span className="shrink-0 rounded-full bg-control px-1.5 text-mini text-secondary">
+                {role}
+              </span>
             ) : null}
           </span>
           <span
@@ -371,7 +409,10 @@ function TrayRun({
             {error || status}
           </span>
         </span>
-        <span aria-hidden="true" className="text-small whitespace-nowrap text-tertiary tabular-nums">
+        <span
+          aria-hidden="true"
+          className="text-small whitespace-nowrap text-tertiary tabular-nums"
+        >
           {elapsed ?? ""}
         </span>
         <ChevronRight
@@ -430,20 +471,31 @@ export function SubagentComposerPill({
 }: SubagentComposerPillProps) {
   const active = model.activeCount > 0;
   const now = useNow(active);
-  const summary = allCompletedSummary(model) ?? subagentGroupSummary(model.runs.map((run) => run.state));
+  const summary =
+    allCompletedSummary(model) ?? subagentGroupSummary(model.runs.map((run) => run.state));
   const elapsed = longestSubagentElapsedLabel(
     model.runs.map((run) => run.snapshot),
     now,
   );
   const allCompleted = !active && model.runs.every((run) => run.state === "completed");
-  const marks = (active ? model.runs.filter((run) => isSubagentRunViewStateActive(run.state)) : model.runs).map(
-    (run) => ({ key: run.runId, role: run.role, state: run.state, activity: run.snapshot?.activity }),
-  );
-  const countText = active ? plural(model.activeCount, "subagent") : plural(model.runs.length, "subagent");
+  const marks = (
+    active ? model.runs.filter((run) => isSubagentRunViewStateActive(run.state)) : model.runs
+  ).map((run) => ({
+    key: run.runId,
+    role: run.role,
+    state: run.state,
+    activity: run.snapshot?.activity,
+  }));
+  const countText = active
+    ? plural(model.activeCount, "subagent")
+    : plural(model.runs.length, "subagent");
   const stopPending = React.useMemo(() => new Set(stopPendingRunIds), [stopPendingRunIds]);
   const stoppable = model.runs
     .map(subagentStoppableSnapshot)
-    .filter((snapshot): snapshot is SubagentRunSnapshot => snapshot !== undefined && !stopPending.has(snapshot.runId));
+    .filter(
+      (snapshot): snapshot is SubagentRunSnapshot =>
+        snapshot !== undefined && !stopPending.has(snapshot.runId),
+    );
   // Background runs keep working on their own and cannot be stopped here, so
   // once only they remain the person may put the pill away. A run of unknown
   // execution (an older host) counts as foreground, and a run waiting on the
@@ -527,7 +579,11 @@ export function SubagentComposerPill({
             <span
               className={cn(
                 "line-clamp-1 min-w-0 text-left font-medium tabular-nums [overflow-wrap:anywhere] @max-[30rem]:hidden",
-                model.attention ? "text-support-warning" : allCompleted ? "text-status-green" : "text-primary",
+                model.attention
+                  ? "text-support-warning"
+                  : allCompleted
+                    ? "text-status-green"
+                    : "text-primary",
               )}
             >
               {summary}
@@ -541,7 +597,9 @@ export function SubagentComposerPill({
               {active ? `${model.activeCount} running` : `${model.runs.length} done`}
             </span>
             {elapsed ? (
-              <span className="shrink-0 text-mini text-tertiary tabular-nums @max-[30rem]:hidden">{elapsed}</span>
+              <span className="shrink-0 text-mini text-tertiary tabular-nums @max-[30rem]:hidden">
+                {elapsed}
+              </span>
             ) : null}
             <ChevronUp
               aria-hidden="true"
@@ -598,9 +656,12 @@ export function SubagentComposerPill({
           // An action that already moved focus (Show in chat, Open) keeps it.
           const current = document.activeElement;
           const unclaimed =
-            !current || current === document.body || current.closest("[data-subagent-tray]") !== null;
+            !current ||
+            current === document.body ||
+            current.closest("[data-subagent-tray]") !== null;
           // Without a field to go back to, the default returns focus to the pill.
-          if (unclaimed && restoreFocus([target], { region: null, preventScroll: true })) event.preventDefault();
+          if (unclaimed && restoreFocus([target], { region: null, preventScroll: true }))
+            event.preventDefault();
         }}
         className="flex max-h-[min(30rem,60vh)] w-[min(34rem,calc(100vw-2rem))] flex-col p-1.5"
       >
@@ -625,14 +686,20 @@ export function SubagentComposerPill({
             </Button>
           ) : null}
         </div>
-        <ul ref={listRef} className="m-0 min-h-0 flex-1 overflow-y-auto p-0" aria-label="Subagent runs">
+        <ul
+          ref={listRef}
+          className="m-0 min-h-0 flex-1 overflow-y-auto p-0"
+          aria-label="Subagent runs"
+        >
           {model.runs.map((run) => (
             <TrayRun
               key={run.runId}
               run={run}
               now={now}
               expanded={expandedRunId === run.runId}
-              onToggle={() => setExpandedRunId((current) => (current === run.runId ? null : run.runId))}
+              onToggle={() =>
+                setExpandedRunId((current) => (current === run.runId ? null : run.runId))
+              }
               stopPending={stopPending.has(run.runId)}
               stopError={stopErrors[run.runId]}
               onOpen={(runId, trigger) => {
@@ -672,8 +739,7 @@ export function SubagentComposerPill({
           ) : null}
           {shortcut ? (
             <span className="ms-auto whitespace-nowrap text-mini text-tertiary">
-              Toggle{" "}
-              <Kbd>{prettyAccelerator(shortcut)}</Kbd>
+              Toggle <Kbd>{prettyAccelerator(shortcut)}</Kbd>
             </span>
           ) : null}
         </div>

@@ -5,9 +5,18 @@ import type { BotAllowedEntry } from "../../renderer/shared/tool-approval-scope.
 import { withoutBotHandoffControls } from "../../renderer/shared/bot-handoffs.js";
 import { nextBotFileScopeIds } from "../../renderer/shared/bot-capabilities.js";
 import type { BotRoutineThinkingLevel } from "../../renderer/shared/bot-routine-models.js";
-import { botAccessRootInventoryRevision, resolveBotAccessTarget, type BotAccessTargetDeps } from "./bot-runtime/bot-access-target.js";
+import {
+  botAccessRootInventoryRevision,
+  resolveBotAccessTarget,
+  type BotAccessTargetDeps,
+} from "./bot-runtime/bot-access-target.js";
 import type { AidenRemoteApprovedRoot } from "./aiden-remote-state.js";
-import type { BotFolderApprovalReceipt, BotFolderGrantInput, BotFolderGrantJournal, BotFolderGrantRecord } from "./bot-folder-grant-journal.js";
+import type {
+  BotFolderApprovalReceipt,
+  BotFolderGrantInput,
+  BotFolderGrantJournal,
+  BotFolderGrantRecord,
+} from "./bot-folder-grant-journal.js";
 import { BotFolderGrantReplayStaleError } from "./bot-folder-grant-journal.js";
 import { BotAccessRequestStaleError } from "./bot-runtime/bot-access-requests.js";
 import { analyticsBotPresetId } from "./analytics/analytics-ids.js";
@@ -19,11 +28,7 @@ import type {
   BotChatAccessUpdate,
   BotNoticeAcknowledgement,
 } from "../../renderer/shared/bot-capabilities.js";
-import type {
-  BotCreateInput,
-  BotDefinition,
-  BotUpdateInput,
-} from "../../renderer/shared/bots.js";
+import type { BotCreateInput, BotDefinition, BotUpdateInput } from "../../renderer/shared/bots.js";
 import { finalizeBotCapabilityCatalog } from "./bot-capability-catalog-core.js";
 import type { BotCapabilityCatalogMainService } from "./bot-capability-catalog-main.js";
 import {
@@ -110,7 +115,8 @@ type CapabilityStorePort = Pick<
   | "rollbackUncommittedBotPolicy"
   | "invalidateBotAuthority"
   | "invalidateChatAuthority"
-> & Partial<Pick<BotCapabilityStore, "getBotVisionModelAuthority">>;
+> &
+  Partial<Pick<BotCapabilityStore, "getBotVisionModelAuthority">>;
 
 type ManagedWorkspacePort = Pick<
   BotManagedWorkspaceCore,
@@ -132,7 +138,8 @@ type LifecycleJournalPort = Pick<
 type CatalogPort = Pick<
   BotCapabilityCatalogMainService,
   "snapshot" | "snapshotForRuntime" | "bindCustom" | "reconcile"
-> & Partial<Pick<BotCapabilityCatalogMainService, "bindProviderModel">>;
+> &
+  Partial<Pick<BotCapabilityCatalogMainService, "bindProviderModel">>;
 
 export interface BotApplicationDependencies {
   /**
@@ -143,7 +150,15 @@ export interface BotApplicationDependencies {
    */
   approvedFolders?: {
     list(): Promise<readonly AidenRemoteApprovedRoot[]>;
-    add(folderPath: string, input: { operationId: string; rootId: string; expectedIdentity: { device: string; inode: string }; assertCurrent(): void }): Promise<{ id: string }>;
+    add(
+      folderPath: string,
+      input: {
+        operationId: string;
+        rootId: string;
+        expectedIdentity: { device: string; inode: string };
+        assertCurrent(): void;
+      },
+    ): Promise<{ id: string }>;
     removeOwned(rootId: string, operationId: string): Promise<boolean>;
     withInventoryLock<T>(action: () => Promise<T>): Promise<T>;
     target: Pick<BotAccessTargetDeps, "homeDirectory" | "privateRoots">;
@@ -154,7 +169,10 @@ export interface BotApplicationDependencies {
   capabilityStore: CapabilityStorePort;
   catalog: CatalogPort;
   /** The thinking levels a provider model can run; throws when its metadata is unavailable. */
-  modelThinkingLevels?(sourceProviderId: string, sourceModelId: string): Promise<BotRoutineThinkingLevel[]>;
+  modelThinkingLevels?(
+    sourceProviderId: string,
+    sourceModelId: string,
+  ): Promise<BotRoutineThinkingLevel[]>;
   managedWorkspace: ManagedWorkspacePort;
   lifecycleJournal: LifecycleJournalPort;
   migrationSeal: {
@@ -212,7 +230,8 @@ interface UpdateBotAccessInput {
    */
   noWiderThanFull?: true;
 }
-export const BOT_FOLDER_GRANT_DRIFT_MESSAGE = "Some of this Bot's access changed since you last saved it. Review it in the Bot's settings first.";
+export const BOT_FOLDER_GRANT_DRIFT_MESSAGE =
+  "Some of this Bot's access changed since you last saved it. Review it in the Bot's settings first.";
 
 export interface CreateBotApplicationInput {
   audienceId: string;
@@ -279,9 +298,7 @@ function withCurrentCatalogRevision<T extends { catalogRevision: string }>(
   access: T,
   catalogRevision: string,
 ): T {
-  return access.catalogRevision === catalogRevision
-    ? access
-    : { ...access, catalogRevision };
+  return access.catalogRevision === catalogRevision ? access : { ...access, catalogRevision };
 }
 
 function createReservation(operation: BotLifecycleOperation): BotManagedWorkspaceReservation {
@@ -344,14 +361,18 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
   let recoveryFailure: unknown;
 
   // Counted in the background, so a slow store cannot hold the new Bot back.
-  const reportBotCreated = (presetId: string | undefined, source: CreateBotApplicationInput["source"]): void => {
+  const reportBotCreated = (
+    presetId: string | undefined,
+    source: CreateBotApplicationInput["source"],
+  ): void => {
     const report = captureAnalyticsReporter();
     void deps.botStore.list().then(
-      (bots) => report("bot_created", {
-        preset_id: analyticsBotPresetId(presetId),
-        bot_count: countBucket(bots.length),
-        ...(source === undefined ? {} : { source }),
-      }),
+      (bots) =>
+        report("bot_created", {
+          preset_id: analyticsBotPresetId(presetId),
+          bot_count: countBucket(bots.length),
+          ...(source === undefined ? {} : { source }),
+        }),
       () => undefined,
     );
   };
@@ -360,9 +381,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     chatId: string,
     assertCurrent: (chat: Chat | null) => void | Promise<void>,
     onDeletionRollForward?: () => void,
-  ): Promise<void> => deps.deleteChatWithEffects
-    ? deps.deleteChatWithEffects(chatId, assertCurrent, onDeletionRollForward)
-    : deps.chatStore.remove(chatId, assertCurrent);
+  ): Promise<void> =>
+    deps.deleteChatWithEffects
+      ? deps.deleteChatWithEffects(chatId, assertCurrent, onDeletionRollForward)
+      : deps.chatStore.remove(chatId, assertCurrent);
 
   const advance = async (
     operation: BotLifecycleOperation,
@@ -394,14 +416,18 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
   const retainedVisionProvider = async (botId: string): Promise<BotRetainedProvider[]> => {
     const vision = await deps.capabilityStore.getBotVisionModelAuthority?.(botId);
     return vision
-      ? [{
-          sourceProviderId: vision.binding.sourceProviderId,
-          sourceModelId: vision.binding.sourceModelId,
-        }]
+      ? [
+          {
+            sourceProviderId: vision.binding.sourceProviderId,
+            sourceModelId: vision.binding.sourceModelId,
+          },
+        ]
       : [];
   };
 
-  const bindVisionModel = async (input: Parameters<BotCapabilityCatalogMainService["bindProviderModel"]>[0]) => {
+  const bindVisionModel = async (
+    input: Parameters<BotCapabilityCatalogMainService["bindProviderModel"]>[0],
+  ) => {
     if (!deps.catalog.bindProviderModel) {
       throw new Error("The companion vision model binder is unavailable.");
     }
@@ -467,7 +493,11 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           catalogRevision: snapshot.catalog.revision,
           confirmedForeground: true,
         };
-    if (grantFullWebSearch && access.accessMode === "full" && access.webSearchEnabled === undefined) {
+    if (
+      grantFullWebSearch &&
+      access.accessMode === "full" &&
+      access.webSearchEnabled === undefined
+    ) {
       access = { ...access, webSearchEnabled: true };
     }
     if (
@@ -475,8 +505,8 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       access.providerId === undefined &&
       access.modelId === undefined
     ) {
-      const provider = snapshot.catalog.providers.find((candidate) =>
-        candidate.available && candidate.models.some((model) => model.available),
+      const provider = snapshot.catalog.providers.find(
+        (candidate) => candidate.available && candidate.models.some((model) => model.available),
       );
       const model = provider?.models.find((candidate) => candidate.available);
       if (!provider || !model) {
@@ -490,30 +520,34 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         modelId: model.id,
       };
     }
-    const binding = access.accessMode === "custom"
-      ? await deps.catalog.bindCustom({
-          audienceId,
-          selection: access.custom,
-          catalogRevision: access.catalogRevision,
-          snapshot,
-        })
-      : undefined;
-    const modelBinding = access.accessMode === "full" && access.providerId && access.modelId
-      ? (await deps.catalog.bindCustom({
-          audienceId,
-          selection: {
-            providerId: access.providerId,
-            modelId: access.modelId,
-            fileScopeIds: [],
-            shellEnabled: false,
-            connectionIds: [],
-            skillIds: [],
-            otherCapabilityIds: [],
-          },
-          catalogRevision: access.catalogRevision,
-          snapshot,
-        })).provider
-      : undefined;
+    const binding =
+      access.accessMode === "custom"
+        ? await deps.catalog.bindCustom({
+            audienceId,
+            selection: access.custom,
+            catalogRevision: access.catalogRevision,
+            snapshot,
+          })
+        : undefined;
+    const modelBinding =
+      access.accessMode === "full" && access.providerId && access.modelId
+        ? (
+            await deps.catalog.bindCustom({
+              audienceId,
+              selection: {
+                providerId: access.providerId,
+                modelId: access.modelId,
+                fileScopeIds: [],
+                shellEnabled: false,
+                connectionIds: [],
+                skillIds: [],
+                otherCapabilityIds: [],
+              },
+              catalogRevision: access.catalogRevision,
+              snapshot,
+            })
+          ).provider
+        : undefined;
     const visionModelBinding = access.visionModel
       ? await bindVisionModel({
           audienceId,
@@ -555,8 +589,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
   // Once an identity is visible, missing access state is corruption and must
   // fail closed. Only the sealed startup legacy migration below may mint an
   // explicit Full policy for a pre-policy Bot.
-  const requirePolicyForVisibleBot = (botId: string) =>
-    deps.capabilityStore.getBotPolicy(botId);
+  const requirePolicyForVisibleBot = (botId: string) => deps.capabilityStore.getBotPolicy(botId);
 
   const finishCreateBot = async (operation: BotLifecycleOperation): Promise<void> => {
     const bot = await deps.botStore.get(operation.botId);
@@ -653,9 +686,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     }
     let current = operation;
     const targetPolicy = await currentChatPolicy(targetChatId);
-    if (targetPolicy && (
-      targetPolicy.botId !== operation.botId || targetPolicy.chatId !== targetChatId
-    )) {
+    if (
+      targetPolicy &&
+      (targetPolicy.botId !== operation.botId || targetPolicy.chatId !== targetChatId)
+    ) {
       throw new Error("Recovered Bot chat-copy policy has the wrong identity.");
     }
     if (!targetPolicy) {
@@ -686,10 +720,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     if (current.stage === "policy_removed" && policy) {
       throw new Error("A removed Bot chat policy reappeared during recovery.");
     }
-    if (
-      (current.stage === "chat_deleted" || current.stage === "policy_removed") &&
-      chat
-    ) {
+    if ((current.stage === "chat_deleted" || current.stage === "policy_removed") && chat) {
       throw new Error("A deleted Bot chat reappeared during recovery.");
     }
 
@@ -741,8 +772,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
   const beginOrResumeDelete = async (botId: string): Promise<BotLifecycleOperation> =>
     (await deps.lifecycleJournal.listPending()).find(
       (operation) => operation.kind === "delete_bot" && operation.botId === botId,
-    ) ??
-    beginPending({ operationId: mintOperationId(), kind: "delete_bot", botId, subject: {} });
+    ) ?? beginPending({ operationId: mintOperationId(), kind: "delete_bot", botId, subject: {} });
 
   /**
    * Archive and restore were removed. An archived Bot is a deleted Bot, so an
@@ -801,15 +831,21 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
 
   const reconcileOperation = (operation: BotLifecycleOperation): Promise<void> => {
     switch (operation.kind) {
-      case "create_bot": return finishCreateBot(operation);
-      case "create_chat": return finishCreateChat(operation);
-      case "copy_chat": return finishCopyChat(operation);
-      case "delete_chat": return finishDeleteChat(operation);
-      case "delete_bot": return finishDeleteBot(operation);
+      case "create_bot":
+        return finishCreateBot(operation);
+      case "create_chat":
+        return finishCreateChat(operation);
+      case "copy_chat":
+        return finishCopyChat(operation);
+      case "delete_chat":
+        return finishDeleteChat(operation);
+      case "delete_bot":
+        return finishDeleteBot(operation);
       case "archive_bot":
       case "restore_bot":
         return finishLegacyArchiveOperation(operation);
-      case "update_model": return finishUpdateModel(operation);
+      case "update_model":
+        return finishUpdateModel(operation);
       default:
         throw new Error(`Unsupported pending Bot lifecycle: ${operation.kind}.`);
     }
@@ -820,8 +856,9 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     verify: () => Promise<void>,
   ): Promise<void> => {
     try {
-      const pending = (await deps.lifecycleJournal.listPending())
-        .find(({ operationId }) => operationId === expected.operationId);
+      const pending = (await deps.lifecycleJournal.listPending()).find(
+        ({ operationId }) => operationId === expected.operationId,
+      );
       if (pending) {
         if (pending.kind !== expected.kind || pending.botId !== expected.botId) {
           throw new Error("Bot lifecycle recovery found a mismatched operation.");
@@ -846,7 +883,9 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     }
     // Releases before hard delete archived Bots. An archived Bot is deleted.
     for (const botId of await deps.botStore.legacyArchivedIds()) {
-      await deps.mutationGate.run(botId, async () => finishDeleteBot(await beginOrResumeDelete(botId)));
+      await deps.mutationGate.run(botId, async () =>
+        finishDeleteBot(await beginOrResumeDelete(botId)),
+      );
     }
 
     const bots = await deps.botStore.list();
@@ -896,8 +935,9 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         const sourceModel = canonical?.model;
         const provider = sourceProvider
           ? snapshot.resources.providers.find(({ sourceId }) => sourceId === sourceProvider)
-          : snapshot.resources.providers.find(({ option, models }) =>
-              option.available && models.some((model) => model.option.available),
+          : snapshot.resources.providers.find(
+              ({ option, models }) =>
+                option.available && models.some((model) => model.option.available),
             );
         const model = sourceModel
           ? provider?.models.find(({ sourceId }) => sourceId === sourceModel)
@@ -1052,15 +1092,20 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         for (const chat of chats) {
           let removable = chat.id !== canonicalId;
           if (removable && deps.assertChatDeletionAllowed) {
-            removable = await deps.assertChatDeletionAllowed(bot.id, chat.id).then(() => true, () => false);
+            removable = await deps.assertChatDeletionAllowed(bot.id, chat.id).then(
+              () => true,
+              () => false,
+            );
           }
           if (removable) {
-            await finishDeleteChat(await beginPending({
-              operationId: mintOperationId(),
-              kind: "delete_chat",
-              botId: bot.id,
-              subject: { chatId: chat.id },
-            }));
+            await finishDeleteChat(
+              await beginPending({
+                operationId: mintOperationId(),
+                kind: "delete_chat",
+                botId: bot.id,
+                subject: { chatId: chat.id },
+              }),
+            );
             continue;
           }
           await deps.chatStore.clearMessages(chat.id, (current) => {
@@ -1096,15 +1141,13 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     assertOperational();
   };
 
-  const runBotMutation = <Result>(
-    botId: string,
-    action: () => Promise<Result>,
-  ): Promise<Result> => deps.mutationGate.run(botId, async () => {
-    // A same-Bot caller may have passed the outer check before another queued
-    // mutation poisoned live recovery. Recheck after acquiring the gate.
-    assertOperational();
-    return action();
-  });
+  const runBotMutation = <Result>(botId: string, action: () => Promise<Result>): Promise<Result> =>
+    deps.mutationGate.run(botId, async () => {
+      // A same-Bot caller may have passed the outer check before another queued
+      // mutation poisoned live recovery. Recheck after acquiring the gate.
+      assertOperational();
+      return action();
+    });
 
   const activeBot = async (botId: string): Promise<BotDefinition> => {
     const bot = await deps.botStore.get(botId);
@@ -1118,9 +1161,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     if (!selected) return null;
     const chat = await deps.chatStore.get(selected.id);
     if (!chat || chat.botId !== botId) {
-      throw new BotCapabilityUnavailableError(
-        "The canonical Bot chat could not be verified.",
-      );
+      throw new BotCapabilityUnavailableError("The canonical Bot chat could not be verified.");
     }
     const policy = await deps.capabilityStore.getChatPolicy(chat.id);
     if (policy.botId !== botId || policy.chatId !== chat.id) {
@@ -1133,14 +1174,15 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
 
   /** The catalog snapshot the model and tool pickers read, retaining the Bot's saved choices. */
   const capabilityCatalogSnapshot = async (audienceId: string, botId?: string) => {
-    const binding = botId === undefined
-      ? undefined
-      : await (async () => {
-          if (!(await deps.botStore.get(botId))) {
-            throw new Error("This Bot is no longer available.");
-          }
-          return deps.capabilityStore.getBotBinding(botId);
-        })();
+    const binding =
+      botId === undefined
+        ? undefined
+        : await (async () => {
+            if (!(await deps.botStore.get(botId))) {
+              throw new Error("This Bot is no longer available.");
+            }
+            return deps.capabilityStore.getBotBinding(botId);
+          })();
     const chat = botId === undefined ? undefined : await canonicalChatForBot(botId);
     return deps.catalog.snapshot({
       audienceId,
@@ -1157,9 +1199,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     });
   };
 
-  const createChatUnderMutation = async (
-    input: CreateBotChatApplicationInput,
-  ): Promise<Chat> => {
+  const createChatUnderMutation = async (input: CreateBotChatApplicationInput): Promise<Chat> => {
     const bot = await activeBot(input.botId);
     const home = await deps.managedWorkspace.resolve(input.botId);
     const existing = await canonicalChatForBot(input.botId);
@@ -1167,9 +1207,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       return existing;
     }
     const botPolicy = await deps.capabilityStore.getBotPolicy(input.botId);
-    const binding = botPolicy.accessMode === "custom"
-      ? await deps.capabilityStore.getBotBinding(input.botId)
-      : undefined;
+    const binding =
+      botPolicy.accessMode === "custom"
+        ? await deps.capabilityStore.getBotBinding(input.botId)
+        : undefined;
     const modelAuthority = await deps.capabilityStore.getBotModelAuthority(input.botId);
     if (botPolicy.accessMode === "custom" && !binding) {
       throw new BotCapabilityUnavailableError(
@@ -1182,91 +1223,91 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       input.assertCurrent?.();
     };
     try {
-    const snapshot = await deps.catalog.snapshot({
-      audienceId: input.audienceId,
-      botId: input.botId,
-      ...(binding ? { retainedBindings: [binding] } : {}),
-    });
-    if (binding) {
-      await deps.capabilityStore.assertAuthorityBindingsCurrent({
+      const snapshot = await deps.catalog.snapshot({
+        audienceId: input.audienceId,
         botId: input.botId,
-        snapshot,
+        ...(binding ? { retainedBindings: [binding] } : {}),
       });
-    }
-    if (!modelAuthority) {
-      throw new BotCapabilityUnavailableError(
-        "This Bot's saved provider and model selection is unavailable.",
-      );
-    }
-    const providerId = modelAuthority.binding.sourceProviderId;
-    const model = modelAuthority.binding.sourceModelId;
-    if (
-      modelAuthority &&
-      ((input.providerId !== undefined && input.providerId !== providerId) ||
-        (input.model !== undefined && input.model !== model))
-    ) {
-      throw new BotCapabilityUnavailableError(
-        "This Bot must use the provider and model saved in Bot settings.",
-      );
-    }
-    const chatId = input.chatId ?? mintChatId();
-    const workspaceId = home.workspaceId;
-    const operationId = mintOperationId();
-    let operation = await beginPending({
-      operationId,
-      kind: "create_chat",
-      botId: input.botId,
-      subject: { chatId, workspaceId },
-    });
-    try {
-      await deps.capabilityStore.createChatPolicy({
-        chatId,
-        botId: input.botId,
-        expectedBotPolicyRevision: botPolicy.revision,
-        catalog: snapshot.catalog,
-        assertCurrent,
-      });
-      operation = await advance(operation, "policy_committed");
-      const chat = await deps.chatStore.create({
-        id: chatId,
-        title: bot.name,
-        workspaceId,
-        botId: input.botId,
-        providerId,
-        model,
-        assertCurrent,
-      });
-      operation = await advance(operation, "chat_committed");
-      await deps.lifecycleJournal.complete(operationId, "chat_committed");
-      return chat;
-    } catch (error) {
-      const visible = await deps.chatStore.get(chatId);
-      if (visible) {
-        await reconcileVisibleCommit(operation, async () => {
-          const committed = await deps.chatStore.get(chatId);
-          if (
-            !committed ||
-            committed.botId !== input.botId ||
-            committed.workspaceId !== workspaceId ||
-            committed.providerId !== providerId ||
-            committed.model !== model
-          ) {
-            throw new Error("The visible Bot chat does not match its committed operation.");
-          }
-          const policy = await deps.capabilityStore.getChatPolicy(chatId);
-          if (policy.botId !== input.botId) {
-            throw new Error("The visible Bot chat has the wrong access policy.");
-          }
+      if (binding) {
+        await deps.capabilityStore.assertAuthorityBindingsCurrent({
+          botId: input.botId,
+          snapshot,
         });
-        return (await deps.chatStore.get(chatId))!;
       }
+      if (!modelAuthority) {
+        throw new BotCapabilityUnavailableError(
+          "This Bot's saved provider and model selection is unavailable.",
+        );
+      }
+      const providerId = modelAuthority.binding.sourceProviderId;
+      const model = modelAuthority.binding.sourceModelId;
+      if (
+        modelAuthority &&
+        ((input.providerId !== undefined && input.providerId !== providerId) ||
+          (input.model !== undefined && input.model !== model))
+      ) {
+        throw new BotCapabilityUnavailableError(
+          "This Bot must use the provider and model saved in Bot settings.",
+        );
+      }
+      const chatId = input.chatId ?? mintChatId();
+      const workspaceId = home.workspaceId;
+      const operationId = mintOperationId();
+      let operation = await beginPending({
+        operationId,
+        kind: "create_chat",
+        botId: input.botId,
+        subject: { chatId, workspaceId },
+      });
       try {
-        await rollbackChatPolicy(operation, chatId);
-      } catch {
-        // Preserve the original error and pending journal for startup repair.
+        await deps.capabilityStore.createChatPolicy({
+          chatId,
+          botId: input.botId,
+          expectedBotPolicyRevision: botPolicy.revision,
+          catalog: snapshot.catalog,
+          assertCurrent,
+        });
+        operation = await advance(operation, "policy_committed");
+        const chat = await deps.chatStore.create({
+          id: chatId,
+          title: bot.name,
+          workspaceId,
+          botId: input.botId,
+          providerId,
+          model,
+          assertCurrent,
+        });
+        operation = await advance(operation, "chat_committed");
+        await deps.lifecycleJournal.complete(operationId, "chat_committed");
+        return chat;
+      } catch (error) {
+        const visible = await deps.chatStore.get(chatId);
+        if (visible) {
+          await reconcileVisibleCommit(operation, async () => {
+            const committed = await deps.chatStore.get(chatId);
+            if (
+              !committed ||
+              committed.botId !== input.botId ||
+              committed.workspaceId !== workspaceId ||
+              committed.providerId !== providerId ||
+              committed.model !== model
+            ) {
+              throw new Error("The visible Bot chat does not match its committed operation.");
+            }
+            const policy = await deps.capabilityStore.getChatPolicy(chatId);
+            if (policy.botId !== input.botId) {
+              throw new Error("The visible Bot chat has the wrong access policy.");
+            }
+          });
+          return (await deps.chatStore.get(chatId))!;
+        }
+        try {
+          await rollbackChatPolicy(operation, chatId);
+        } catch {
+          // Preserve the original error and pending journal for startup repair.
+        }
+        throw error;
       }
-      throw error;
-    }
     } finally {
       inventoryLease?.release();
     }
@@ -1302,13 +1343,21 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           );
           if (input.noWiderThanFull && access.accessMode === "custom") {
             const current = await deps.capabilityStore.getBotPolicy(input.botId);
-            if (current.accessMode === "full" && !(await deps.capabilityStore.getBotWebSearchEnabled(input.botId))) {
+            if (
+              current.accessMode === "full" &&
+              !(await deps.capabilityStore.getBotWebSearchEnabled(input.botId))
+            ) {
               const web = new Set(
-                snapshot.resources.otherCapabilities.filter(({ kind }) => kind === "web").map(({ option }) => option.id),
+                snapshot.resources.otherCapabilities
+                  .filter(({ kind }) => kind === "web")
+                  .map(({ option }) => option.id),
               );
               access = {
                 ...access,
-                custom: { ...access.custom, otherCapabilityIds: access.custom.otherCapabilityIds.filter((id) => !web.has(id)) },
+                custom: {
+                  ...access.custom,
+                  otherCapabilityIds: access.custom.otherCapabilityIds.filter((id) => !web.has(id)),
+                },
               };
             }
           }
@@ -1435,8 +1484,11 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
             }
           }
           for (const listener of accessListeners) {
-            try { listener(input.botId); }
-            catch { /* A closed reader cannot turn a saved policy into a failed mutation. */ }
+            try {
+              listener(input.botId);
+            } catch {
+              /* A closed reader cannot turn a saved policy into a failed mutation. */
+            }
           }
           return result;
         });
@@ -1524,7 +1576,8 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     );
     if (
       input.expectedInventoryRevision &&
-      botAccessRootInventoryRevision(inventory, input.folderPath) !== input.expectedInventoryRevision
+      botAccessRootInventoryRevision(inventory, input.folderPath) !==
+        input.expectedInventoryRevision
     )
       throw new BotAccessRequestStaleError("The approved folders changed. Ask for access again.");
     if (
@@ -1575,13 +1628,16 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           policy.revision !== prior.resultRevision ||
           !(await folderRootSelected(input.botId, prior.rootId))
         )
-          throw new BotFolderGrantReplayStaleError("This Bot's access changed. The earlier folder approval is recorded; ask for access again.");
+          throw new BotFolderGrantReplayStaleError(
+            "This Bot's access changed. The earlier folder approval is recorded; ask for access again.",
+          );
         try {
           await validateFolder(input, prior.rootId);
         } catch (error) {
           // This operation already published authority. A replay refusal must
           // not claim that the original decision had no durable effect.
-          if (error instanceof BotAccessRequestStaleError) throw new BotFolderGrantReplayStaleError(error.message);
+          if (error instanceof BotAccessRequestStaleError)
+            throw new BotFolderGrantReplayStaleError(error.message);
           throw error;
         }
         return "already_allowed";
@@ -1600,7 +1656,9 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
             current.accessMode !== "custom" ||
             !current.custom.fileScopeIds.length
           )
-            throw new BotAccessRequestStaleError("This Bot's access changed. Ask for access again.");
+            throw new BotAccessRequestStaleError(
+              "This Bot's access changed. Ask for access again.",
+            );
         };
         await requirePolicy();
         if (policy.accessMode !== "custom")
@@ -1653,7 +1711,9 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
               assertCurrent,
             });
             if (root.id !== rootId)
-              throw new BotAccessRequestStaleError("The approved folders changed. Ask for access again.");
+              throw new BotAccessRequestStaleError(
+                "The approved folders changed. Ask for access again.",
+              );
           }
           await requirePolicy();
           await validateFolder(input, rootId);
@@ -1742,22 +1802,43 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
   const service = {
     grantBotFolder,
     /** Historical D bookkeeping only. This never grants or restores access. */
-    async botFolderApprovalReceipts(filter: { botId?: string; decisionId?: string } = {}): Promise<BotFolderApprovalReceipt[]> {
+    async botFolderApprovalReceipts(
+      filter: { botId?: string; decisionId?: string } = {},
+    ): Promise<BotFolderApprovalReceipt[]> {
       const captured = { ...filter };
       await ensureOperational();
-      const records = await deps.approvedFolders?.journal.list() ?? [];
-      const active = new Set((await deps.botStore.list()).map(bot => bot.id));
-      const deleting = new Set((await deps.lifecycleJournal.listPending())
-        .filter(operation => operation.kind === "delete_bot").map(operation => operation.botId));
-      return records.flatMap(record => {
-        const { input } = record, tally = input.approvalTally;
-        if (record.state !== "committed" || input.audienceId !== "desktop:local" || !tally ||
-            !active.has(input.botId) || deleting.has(input.botId) ||
-            (captured.botId !== undefined && input.botId !== captured.botId) ||
-            (captured.decisionId !== undefined && input.operationId !== captured.decisionId)) return [];
-        return [{ botId: input.botId, decisionId: input.operationId, path: input.folderPath,
-          authorizationFingerprint: tally.authorizationFingerprint, offered: tally.offered,
-          decidedAt: tally.decidedAt, answer: "always" as const, source: "person" as const }];
+      const records = (await deps.approvedFolders?.journal.list()) ?? [];
+      const active = new Set((await deps.botStore.list()).map((bot) => bot.id));
+      const deleting = new Set(
+        (await deps.lifecycleJournal.listPending())
+          .filter((operation) => operation.kind === "delete_bot")
+          .map((operation) => operation.botId),
+      );
+      return records.flatMap((record) => {
+        const { input } = record,
+          tally = input.approvalTally;
+        if (
+          record.state !== "committed" ||
+          input.audienceId !== "desktop:local" ||
+          !tally ||
+          !active.has(input.botId) ||
+          deleting.has(input.botId) ||
+          (captured.botId !== undefined && input.botId !== captured.botId) ||
+          (captured.decisionId !== undefined && input.operationId !== captured.decisionId)
+        )
+          return [];
+        return [
+          {
+            botId: input.botId,
+            decisionId: input.operationId,
+            path: input.folderPath,
+            authorizationFingerprint: tally.authorizationFingerprint,
+            offered: tally.offered,
+            decidedAt: tally.decidedAt,
+            answer: "always" as const,
+            source: "person" as const,
+          },
+        ];
       });
     },
     async botFolderEntries(botId?: string): Promise<BotAllowedEntry[]> {
@@ -1766,8 +1847,11 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       if (!folders) return [];
       return folders.withInventoryLock(async () => {
         const roots = await folders.list();
-        const deleting = new Set((await deps.lifecycleJournal.listPending())
-          .filter(operation => operation.kind === "delete_bot").map(operation => operation.botId));
+        const deleting = new Set(
+          (await deps.lifecycleJournal.listPending())
+            .filter((operation) => operation.kind === "delete_bot")
+            .map((operation) => operation.botId),
+        );
         const result: BotAllowedEntry[] = [];
         for (const bot of await deps.botStore.list()) {
           if ((botId !== undefined && bot.id !== botId) || deleting.has(bot.id)) continue;
@@ -1775,20 +1859,39 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           if (policy.accessMode !== "custom" || !policy.custom) continue;
           const binding = await deps.capabilityStore.getBotBinding(bot.id);
           for (const scope of binding?.fileScopes ?? []) {
-            if (scope.option.kind !== "approved_location" || !policy.custom.fileScopeIds.includes(scope.option.id)) continue;
-            const root = roots.find(entry => entry.id === scope.sourceId);
+            if (
+              scope.option.kind !== "approved_location" ||
+              !policy.custom.fileScopeIds.includes(scope.option.id)
+            )
+              continue;
+            const root = roots.find((entry) => entry.id === scope.sourceId);
             if (!root) continue;
             const relative = path.relative(folders.target.homeDirectory(), root.folderPath);
-            const place = relative === "" ? "~" : !path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`)
-              ? `~/${relative.split(path.sep).join("/")}` : root.folderPath;
-            result.push({ kind: "folder", id: `folder_${root.id}`, botId: bot.id,
-              what: `Folder · ${withoutBotHandoffControls(place).replace(/\s+/gu, " ").trim()}`, createdAt: new Date(root.createdAt).toISOString() });
+            const place =
+              relative === ""
+                ? "~"
+                : !path.isAbsolute(relative) &&
+                    relative !== ".." &&
+                    !relative.startsWith(`..${path.sep}`)
+                  ? `~/${relative.split(path.sep).join("/")}`
+                  : root.folderPath;
+            result.push({
+              kind: "folder",
+              id: `folder_${root.id}`,
+              botId: bot.id,
+              what: `Folder · ${withoutBotHandoffControls(place).replace(/\s+/gu, " ").trim()}`,
+              createdAt: new Date(root.createdAt).toISOString(),
+            });
           }
         }
         return result.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       });
     },
-    async revokeBotFolder(input: { audienceId: string; botId: string; sourceId: string }): Promise<boolean> {
+    async revokeBotFolder(input: {
+      audienceId: string;
+      botId: string;
+      sourceId: string;
+    }): Promise<boolean> {
       const captured = { ...input };
       await ensureOperational();
       if (!deps.approvedFolders) return false;
@@ -1799,32 +1902,67 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         const policy = await deps.capabilityStore.getBotPolicy(captured.botId);
         if (policy.accessMode !== "custom" || !policy.custom) return false;
         const binding = await deps.capabilityStore.getBotBinding(captured.botId);
-        const scope = binding?.fileScopes.find(entry => entry.sourceId === captured.sourceId &&
-          entry.option.kind === "approved_location" && policy.custom!.fileScopeIds.includes(entry.option.id));
+        const scope = binding?.fileScopes.find(
+          (entry) =>
+            entry.sourceId === captured.sourceId &&
+            entry.option.kind === "approved_location" &&
+            policy.custom!.fileScopeIds.includes(entry.option.id),
+        );
         if (!scope) return false;
         const chat = await canonicalChatForBot(captured.botId);
         const snapshot = await snapshotForAudience(captured.audienceId, captured.botId, [
-          ...(chat ? retainedBotProviderForChat(chat) : []), ...(await retainedVisionProvider(captured.botId)),
+          ...(chat ? retainedBotProviderForChat(chat) : []),
+          ...(await retainedVisionProvider(captured.botId)),
         ]);
-        await saveBotAccess({ audienceId: captured.audienceId, botId: captured.botId,
-          expectedRevision: policy.revision, refuseDriftedGrants: { message: BOT_FOLDER_GRANT_DRIFT_MESSAGE },
-          access: { accessMode: "custom", catalogRevision: snapshot.catalog.revision,
-            custom: { ...policy.custom, fileScopeIds: nextBotFileScopeIds(policy.custom.fileScopeIds, snapshot.catalog.fileScopes, scope.option.id, false) } } });
+        await saveBotAccess({
+          audienceId: captured.audienceId,
+          botId: captured.botId,
+          expectedRevision: policy.revision,
+          refuseDriftedGrants: { message: BOT_FOLDER_GRANT_DRIFT_MESSAGE },
+          access: {
+            accessMode: "custom",
+            catalogRevision: snapshot.catalog.revision,
+            custom: {
+              ...policy.custom,
+              fileScopeIds: nextBotFileScopeIds(
+                policy.custom.fileScopeIds,
+                snapshot.catalog.fileScopes,
+                scope.option.id,
+                false,
+              ),
+            },
+          },
+        });
         return true;
       });
     },
     /** A receipt acknowledges a past durable effect; it never authorizes a tool call. */
     async botFolderGrantCommitted(botId: string, operationId: string): Promise<boolean> {
-      return (await deps.approvedFolders?.journal.list())?.some((entry) =>
-        entry.input.operationId === operationId && entry.input.botId === botId &&
-        entry.input.audienceId === "desktop:local" && entry.state === "committed",
-      ) ?? false;
+      return (
+        (await deps.approvedFolders?.journal.list())?.some(
+          (entry) =>
+            entry.input.operationId === operationId &&
+            entry.input.botId === botId &&
+            entry.input.audienceId === "desktop:local" &&
+            entry.state === "committed",
+        ) ?? false
+      );
     },
     /** The exact publication receipt; answer handlers never adopt a fresh revision. */
     async botFolderGrantPolicyRevision(botId: string, operationId: string): Promise<string> {
-      const record = (await deps.approvedFolders?.journal.list())?.find((entry) => entry.input.operationId === operationId && entry.input.botId === botId && entry.state === "committed");
+      const record = (await deps.approvedFolders?.journal.list())?.find(
+        (entry) =>
+          entry.input.operationId === operationId &&
+          entry.input.botId === botId &&
+          entry.state === "committed",
+      );
       const policy = await deps.capabilityStore.getBotPolicy(botId);
-      if (!record?.resultRevision || record.resultRevision !== policy.revision || !await folderRootSelected(botId, record.rootId)) throw new Error("This Bot's access changed. Ask for access again.");
+      if (
+        !record?.resultRevision ||
+        record.resultRevision !== policy.revision ||
+        !(await folderRootSelected(botId, record.rootId))
+      )
+        throw new Error("This Bot's access changed. Ask for access again.");
       return record.resultRevision;
     },
     initialize: ensureOperational,
@@ -1910,7 +2048,9 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     updateBotAccess: (input: UpdateBotAccessInput) => saveBotAccess(input),
     onAccessChange(listener: (botId: string) => void): () => void {
       accessListeners.add(listener);
-      return () => { accessListeners.delete(listener); };
+      return () => {
+        accessListeners.delete(listener);
+      };
     },
 
     /**
@@ -2014,7 +2154,9 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         // tombstones so native readers/editors can preserve those reductions.
         // Never turn these IDs into runtime resources or new positive grants.
         const chats = await deps.chatStore.listByBot(botId);
-        const policies = await Promise.all(chats.map(({ id }) => deps.capabilityStore.getChatPolicy(id)));
+        const policies = await Promise.all(
+          chats.map(({ id }) => deps.capabilityStore.getChatPolicy(id)),
+        );
         const skills = new Map(snapshot.catalog.skills.map((option) => [option.id, option]));
         for (const policy of policies) {
           if (policy.botId !== botId || policy.mode !== "custom") continue;
@@ -2035,7 +2177,12 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
      * the model picker shows. Null when the catalog has no such model or its
      * record can't be read. Only that one model is resolved.
      */
-    async modelThinkingLevels(audienceId: string, botId: string | undefined, providerId: string, modelId: string): Promise<BotRoutineThinkingLevel[] | null> {
+    async modelThinkingLevels(
+      audienceId: string,
+      botId: string | undefined,
+      providerId: string,
+      modelId: string,
+    ): Promise<BotRoutineThinkingLevel[] | null> {
       await ensureOperational();
       const levelsFor = deps.modelThinkingLevels;
       if (!levelsFor) return null;
@@ -2198,9 +2345,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           return false;
         }
 
-        const binding = botPolicy.accessMode === "custom"
-          ? await deps.capabilityStore.getBotBinding(input.botId)
-          : undefined;
+        const binding =
+          botPolicy.accessMode === "custom"
+            ? await deps.capabilityStore.getBotBinding(input.botId)
+            : undefined;
         if (botPolicy.accessMode === "custom" && !binding) return false;
         const snapshot = await deps.catalog.snapshotForRuntime({
           botId: input.botId,

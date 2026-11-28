@@ -1,10 +1,4 @@
-import type {
-  Api,
-  ImageContent,
-  Message,
-  Model,
-  TextContent,
-} from "@earendil-works/pi-ai";
+import type { Api, ImageContent, Message, Model, TextContent } from "@earendil-works/pi-ai";
 import { SkillInvocationError } from "../../renderer/shared/slash-commands.js";
 import type { ChatMessage, ChatStartParams } from "./types.js";
 import { visionAttachmentAlias } from "./vision-attachment-reference.js";
@@ -40,15 +34,10 @@ function userMessage(
   const nonGrabAttachments = withoutGrabbedElementThumbnails(attachmentList);
   const parts: (TextContent | ImageContent)[] = [];
   const textFiles = includeTextAttachments
-    ? attachmentList.filter(
-        (attachment) => attachment.kind === "text" && attachment.text,
-      )
+    ? attachmentList.filter((attachment) => attachment.kind === "text" && attachment.text)
     : [];
   const textPrefix = textFiles
-    .map(
-      (attachment) =>
-        `Attached file: ${attachment.name}\n\`\`\`\n${attachment.text}\n\`\`\``,
-    )
+    .map((attachment) => `Attached file: ${attachment.name}\n\`\`\`\n${attachment.text}\n\`\`\``)
     .join("\n\n");
   const readableImagesById = new Map(
     attachmentList
@@ -78,8 +67,9 @@ function userMessage(
     ? ""
     : nonGrabAttachments
         .filter((attachment) => attachment.kind === "image" && attachment.data)
-        .map((attachment) =>
-          `Attached image reference: ${visionAttachmentAlias(attachment)} (${attachment.name}).`,
+        .map(
+          (attachment) =>
+            `Attached image reference: ${visionAttachmentAlias(attachment)} (${attachment.name}).`,
         )
         .join("\n");
   // An image whose stored file is gone is named, so the model knows the
@@ -171,7 +161,15 @@ export function draftUserPiMessage(
   supportsImages: boolean,
   grabbedElements?: readonly GrabbedElementContextV1[],
 ): Message {
-  return userMessage(content, attachments, supportsImages, Date.now(), false, true, grabbedElements);
+  return userMessage(
+    content,
+    attachments,
+    supportsImages,
+    Date.now(),
+    false,
+    true,
+    grabbedElements,
+  );
 }
 
 /** Rehydrate Aiden chat history using the generation's exact Pi image gate. */

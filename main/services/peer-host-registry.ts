@@ -82,7 +82,12 @@ function isRetryableLanTlsIdentityError(
 }
 
 function routeHost(host: StoredPeerHost, route: PeerRoute): StoredPeerHost {
-  return { ...host, endpoint: route.endpoint, serverSpkiSha256: route.serverSpkiSha256, caCertificateDerBase64: route.caCertificateDerBase64 };
+  return {
+    ...host,
+    endpoint: route.endpoint,
+    serverSpkiSha256: route.serverSpkiSha256,
+    caCertificateDerBase64: route.caCertificateDerBase64,
+  };
 }
 
 /**
@@ -118,10 +123,7 @@ export interface PeerHostStorage {
 export interface PeerClient {
   json(input: PeerRequest): Promise<unknown>;
   /** Resolves when the stream ends cleanly; `void` means the server ended it (`eof`). */
-  events(
-    input: PeerRequest,
-    onFrame: (frame: string) => void,
-  ): Promise<PeerStreamEnd | void>;
+  events(input: PeerRequest, onFrame: (frame: string) => void): Promise<PeerStreamEnd | void>;
   binary?(input: PeerRequest): Promise<PeerBinary>;
 }
 
@@ -147,7 +149,9 @@ export interface PeerClient {
  * folder access cards and plans this Mac answers, instead of the host's
  * "open it on that Mac" notice.
  */
-const NEGOTIATED_GRANTS: ReadonlyArray<readonly [grant: string, feature: string | null, call?: "own_call"]> = [
+const NEGOTIATED_GRANTS: ReadonlyArray<
+  readonly [grant: string, feature: string | null, call?: "own_call"]
+> = [
   ["tasks:read", AIDEN_REMOTE_CHAT_TASKS_FEATURE],
   ["agents:read", AIDEN_REMOTE_CHAT_AGENTS_FEATURE],
   ["questions:respond", AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE],
@@ -201,13 +205,9 @@ function failed(message: string): PeerPairingOutcomeError {
   return new PeerPairingOutcomeError({ status: "failed", message });
 }
 
-function sameStrings(
-  left: readonly string[],
-  right: readonly string[],
-): boolean {
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
   return (
-    left.length === right.length &&
-    [...left].sort().join("\n") === [...right].sort().join("\n")
+    left.length === right.length && [...left].sort().join("\n") === [...right].sort().join("\n")
   );
 }
 
@@ -218,11 +218,7 @@ export function parseStoredPeerHosts(value: unknown): StoredPeerHost[] {
   return value.map((item) => {
     const record = peerRecord(item);
     const id = hostIdentifier(record.id);
-    if (
-      ids.has(id) ||
-      id === LOCAL_HOST_ID ||
-      typeof record.enabled !== "boolean"
-    )
+    if (ids.has(id) || id === LOCAL_HOST_ID || typeof record.enabled !== "boolean")
       throw new Error("Invalid paired-host identity.");
     ids.add(id);
     const credential = peerText(record.credential, 43);
@@ -235,10 +231,7 @@ export function parseStoredPeerHosts(value: unknown): StoredPeerHost[] {
         ...(record.caCertificateDerBase64 === undefined
           ? {}
           : {
-              caCertificateDerBase64: peerText(
-                record.caCertificateDerBase64,
-                8192,
-              ),
+              caCertificateDerBase64: peerText(record.caCertificateDerBase64, 8192),
             }),
       }),
       id,
@@ -249,7 +242,9 @@ export function parseStoredPeerHosts(value: unknown): StoredPeerHost[] {
       capabilities: peerStrings(record.capabilities),
       features: peerStrings(record.features, PEER_MAX_SERVER_FEATURES),
       ...(record.routes === undefined ? {} : { routes: parsePeerRoutes(record.routes) }),
-      ...(record.suppressedRoutes === undefined ? {} : { suppressedRoutes: peerStrings(record.suppressedRoutes, 2) }),
+      ...(record.suppressedRoutes === undefined
+        ? {}
+        : { suppressedRoutes: peerStrings(record.suppressedRoutes, 2) }),
     };
   });
 }
@@ -270,9 +265,7 @@ export class PeerHostRegistry {
   private agents = new Map<string, https.Agent>();
   private negotiated = new Set<string>();
   private listeners = new Set<() => void>();
-  private stateOverride:
-    | ((id: string) => PeerHostView["state"] | undefined)
-    | undefined;
+  private stateOverride: ((id: string) => PeerHostView["state"] | undefined) | undefined;
   private states = new Map<string, PeerHostView["state"]>();
   private activeRoutes = new Map<string, PeerRoute>();
   private routeSwitchedAt = new Map<string, number>();
@@ -301,17 +294,13 @@ export class PeerHostRegistry {
     },
   ) {}
 
-  private bootstrap(
-    ...args: Parameters<PeerBootstrapFactory>
-  ): ReturnType<PeerBootstrapFactory> {
+  private bootstrap(...args: Parameters<PeerBootstrapFactory>): ReturnType<PeerBootstrapFactory> {
     return (this.options.bootstrap ?? createPeerBootstrapTransport)(...args);
   }
 
   private locked<T>(work: () => Promise<T>): Promise<T> {
-    if (this.closed)
-      return Promise.reject(new Error("Device connections are closed."));
-    if (this.queued >= 64)
-      return Promise.reject(new Error("Too many pending device operations."));
+    if (this.closed) return Promise.reject(new Error("Device connections are closed."));
+    if (this.queued >= 64) return Promise.reject(new Error("Too many pending device operations."));
     this.queued++;
     const run = this.tail
       .then(() => {
@@ -325,8 +314,7 @@ export class PeerHostRegistry {
     return run;
   }
   private async load(): Promise<StoredPeerHost[]> {
-    if (!this.hosts)
-      this.hosts = parseStoredPeerHosts(await this.options.storage.load());
+    if (!this.hosts) this.hosts = parseStoredPeerHosts(await this.options.storage.load());
     return this.hosts;
   }
   private get lanAddresses(): PeerLanAddresses {
@@ -348,8 +336,14 @@ export class PeerHostRegistry {
     if (hostId === undefined) return new PeerTransport(trust, lookup);
     // A request admitted before a re-pin must not pool a socket on the old key.
     const stored = this.hosts?.find((host) => host.id === hostId);
-    const liveTrust = stored && [stored, ...(stored.routes ?? [])].find((route) => route.endpoint === trust.endpoint);
-    if (liveTrust && (liveTrust.serverSpkiSha256 !== trust.serverSpkiSha256 || liveTrust.caCertificateDerBase64 !== trust.caCertificateDerBase64))
+    const liveTrust =
+      stored &&
+      [stored, ...(stored.routes ?? [])].find((route) => route.endpoint === trust.endpoint);
+    if (
+      liveTrust &&
+      (liveTrust.serverSpkiSha256 !== trust.serverSpkiSha256 ||
+        liveTrust.caCertificateDerBase64 !== trust.caCertificateDerBase64)
+    )
       return new PeerTransport(trust, lookup);
     const poolId = `${hostId}:${trust.endpoint}:${trust.serverSpkiSha256}:${trust.caCertificateDerBase64 ?? "system"}`;
     let agent = this.agents.get(poolId);
@@ -379,7 +373,11 @@ export class PeerHostRegistry {
     for (const controller of this.streams.get(id) ?? []) controller.abort();
     this.active.delete(id);
     this.streams.delete(id);
-    for (const [key, agent] of this.agents) if (key.startsWith(`${id}:`)) { agent.destroy(); this.agents.delete(key); }
+    for (const [key, agent] of this.agents)
+      if (key.startsWith(`${id}:`)) {
+        agent.destroy();
+        this.agents.delete(key);
+      }
     this.activeRoutes.delete(id);
     this.routeSwitchedAt.delete(id);
   }
@@ -389,12 +387,21 @@ export class PeerHostRegistry {
 
   private routes(host: StoredPeerHost): PeerRoute[] {
     const advertised = host.routes?.find((route) => route.endpoint === host.endpoint);
-    const paired = { ...peerRoute(host, "paired"), ...(advertised?.addresses ? { addresses: advertised.addresses } : {}) };
-    const learned = (host.routes ?? []).filter((route) => route.id !== paired.id && !host.suppressedRoutes?.includes(route.id));
+    const paired = {
+      ...peerRoute(host, "paired"),
+      ...(advertised?.addresses ? { addresses: advertised.addresses } : {}),
+    };
+    const learned = (host.routes ?? []).filter(
+      (route) => route.id !== paired.id && !host.suppressedRoutes?.includes(route.id),
+    );
     return [paired, ...learned].sort((a, b) => Number(a.kind !== "lan") - Number(b.kind !== "lan"));
   }
 
-  private async learnRoutes(id: string, routes: PeerRoute[], current: () => boolean): Promise<void> {
+  private async learnRoutes(
+    id: string,
+    routes: PeerRoute[],
+    current: () => boolean,
+  ): Promise<void> {
     await this.locked(async () => {
       if (!current()) return;
       const hosts = await this.load();
@@ -405,9 +412,12 @@ export class PeerHostRegistry {
       // still useful. New observations replace trust for that endpoint; explicit
       // user suppression remains authoritative and the stored slots stay bounded.
       const observed = new Set(routes.map((route) => route.id));
-      const merged = [...routes, ...(host.routes ?? []).filter((route) => !observed.has(route.id))].slice(0, 2);
+      const merged = [
+        ...routes,
+        ...(host.routes ?? []).filter((route) => !observed.has(route.id)),
+      ].slice(0, 2);
       if (JSON.stringify(host.routes) === JSON.stringify(merged)) return;
-      const next = hosts.map((entry) => entry.id === id ? { ...entry, routes: merged } : entry);
+      const next = hosts.map((entry) => (entry.id === id ? { ...entry, routes: merged } : entry));
       await this.options.storage.save(next, current);
       this.hosts = next;
       this.notify();
@@ -423,9 +433,13 @@ export class PeerHostRegistry {
     await this.locked(async () => {
       const hosts = await this.load();
       const host = hosts.find((entry) => entry.id === id);
-      if (!host || !this.routes(host).some((route) => route.id === routeId && route.origin === "learned")) throw new Error("Only a learned route can be removed.");
+      if (
+        !host ||
+        !this.routes(host).some((route) => route.id === routeId && route.origin === "learned")
+      )
+        throw new Error("Only a learned route can be removed.");
       const suppressedRoutes = [...new Set([...(host.suppressedRoutes ?? []), routeId])].slice(-2);
-      const next = hosts.map((entry) => entry.id === id ? { ...entry, suppressedRoutes } : entry);
+      const next = hosts.map((entry) => (entry.id === id ? { ...entry, suppressedRoutes } : entry));
       await this.options.storage.save(next);
       this.hosts = next;
       if (this.activeRoutes.get(id)?.id === routeId) this.invalidate(id);
@@ -437,7 +451,9 @@ export class PeerHostRegistry {
     await this.locked(async () => {
       const hosts = await this.load();
       if (!hosts.some((entry) => entry.id === id)) throw new Error("Unknown paired device.");
-      const next = hosts.map((entry) => entry.id === id ? { ...entry, suppressedRoutes: [] } : entry);
+      const next = hosts.map((entry) =>
+        entry.id === id ? { ...entry, suppressedRoutes: [] } : entry,
+      );
       await this.options.storage.save(next);
       this.hosts = next;
       this.notify();
@@ -461,9 +477,7 @@ export class PeerHostRegistry {
     };
   }
   /** Once a supervisor is attached, it owns each enabled host's coarse state. */
-  attachConnectionState(
-    state: (id: string) => PeerHostView["state"] | undefined,
-  ): void {
+  attachConnectionState(state: (id: string) => PeerHostView["state"] | undefined): void {
     this.stateOverride = state;
   }
 
@@ -485,8 +499,7 @@ export class PeerHostRegistry {
       }),
     );
     if (!current()) throw new Error("Device operation was superseded.");
-    if (server.protocolVersion !== 1)
-      throw new PeerTransportError("unsupported_protocol");
+    if (server.protocolVersion !== 1) throw new PeerTransportError("unsupported_protocol");
     if (server.instanceId !== host.id) {
       // The pinned key answered as another installation: never re-pin or retry this.
       throw new PeerTransportError("identity_changed", undefined, undefined, undefined, {
@@ -509,9 +522,15 @@ export class PeerHostRegistry {
         hinted = undefined;
       }
       if (hinted) {
-        const routes = hinted.map((route) => route.endpoint === host.endpoint
-          ? { ...route, serverSpkiSha256: host.serverSpkiSha256, caCertificateDerBase64: host.caCertificateDerBase64 }
-          : route);
+        const routes = hinted.map((route) =>
+          route.endpoint === host.endpoint
+            ? {
+                ...route,
+                serverSpkiSha256: host.serverSpkiSha256,
+                caCertificateDerBase64: host.caCertificateDerBase64,
+              }
+            : route,
+        );
         await this.learnRoutes(host.id, routes, current);
       }
     }
@@ -554,16 +573,14 @@ export class PeerHostRegistry {
         }),
       );
       if (current())
-        await this.refreshGrants(
-          host.id,
-          peerStrings(upgraded.capabilities),
-          features,
-          current,
-        );
+        await this.refreshGrants(host.id, peerStrings(upgraded.capabilities), features, current);
     } catch (error) {
       // An older host without the route, or a refusal, leaves the existing grants in place.
       // A lost answer is tried again on the next reconnect.
-      const answered = error instanceof PeerTransportError && error.code === "request_failed" && (error.status ?? 500) < 500;
+      const answered =
+        error instanceof PeerTransportError &&
+        error.code === "request_failed" &&
+        (error.status ?? 500) < 500;
       if (!answered) this.negotiated.delete(host.id);
       // A credential the host no longer takes fails the connection like any other call,
       // so the Mac asks to pair again instead of sending on with it.
@@ -583,8 +600,7 @@ export class PeerHostRegistry {
     const stored = this.hosts?.find((entry) => entry.id === id);
     if (
       !stored ||
-      (sameStrings(stored.capabilities, capabilities) &&
-        sameStrings(stored.features, features))
+      (sameStrings(stored.capabilities, capabilities) && sameStrings(stored.features, features))
     )
       return;
     await this.locked(async () => {
@@ -606,21 +622,22 @@ export class PeerHostRegistry {
       name: host.name,
       enabled: host.enabled,
       state: host.enabled
-        ? (this.stateOverride?.(host.id) ??
-          this.states.get(host.id) ??
-          "disconnected")
+        ? (this.stateOverride?.(host.id) ?? this.states.get(host.id) ?? "disconnected")
         : "disabled",
       features: [...host.features],
       capabilities: [...host.capabilities],
-      routes: this.routes(host).map((route) => ({ id: route.id, kind: route.kind, origin: route.origin, active: active?.id === route.id })),
+      routes: this.routes(host).map((route) => ({
+        id: route.id,
+        kind: route.kind,
+        origin: route.origin,
+        active: active?.id === route.id,
+      })),
       ...(active ? { activeRouteKind: active.kind } : {}),
       hasSuppressedRoutes: Boolean(host.suppressedRoutes?.length),
     };
   }
   list(): Promise<PeerHostView[]> {
-    return this.locked(async () =>
-      (await this.load()).map((host) => this.view(host)),
-    );
+    return this.locked(async () => (await this.load()).map((host) => this.view(host)));
   }
 
   /** Link a pairing to its caller's signal; the registry's close aborts it too. */
@@ -657,10 +674,7 @@ export class PeerHostRegistry {
       } catch {
         throw failed("Unlock secure storage before pairing devices.");
       }
-      if (
-        instanceId === (await this.options.localInstanceId()) ||
-        instanceId === LOCAL_HOST_ID
-      )
+      if (instanceId === (await this.options.localInstanceId()) || instanceId === LOCAL_HOST_ID)
         throw failed("This is the current Aiden installation.");
       attempt.assertCurrent();
       const replacing = options.replaceHostId !== undefined;
@@ -872,8 +886,7 @@ export class PeerHostRegistry {
       reportAnalyticsEvent("peer_mac_paired", { method: "discovery" });
       return host;
     } catch (error) {
-      if (!attempt.current())
-        throw new PeerPairingOutcomeError({ status: "cancelled" });
+      if (!attempt.current()) throw new PeerPairingOutcomeError({ status: "cancelled" });
       throw error instanceof PeerPairingOutcomeError
         ? error
         : new PeerPairingOutcomeError(peerPairingFailure(error));
@@ -920,9 +933,7 @@ export class PeerHostRegistry {
         pairing = decryptPeerPairing(
           envelope,
           input.code,
-          input.instanceId === undefined
-            ? input.endpoint
-            : { instanceId: input.instanceId },
+          input.instanceId === undefined ? input.endpoint : { instanceId: input.instanceId },
         );
       } catch {
         throw new PeerPairingOutcomeError({ status: "invalid_code" });
@@ -964,11 +975,8 @@ export class PeerHostRegistry {
   setEnabled(id: string, enabled: boolean): Promise<void> {
     return this.locked(async () => {
       const hosts = await this.load();
-      if (!hosts.some((host) => host.id === id))
-        throw new Error("Unknown paired device.");
-      const next = hosts.map((host) =>
-        host.id === id ? { ...host, enabled } : host,
-      );
+      if (!hosts.some((host) => host.id === id)) throw new Error("Unknown paired device.");
+      const next = hosts.map((host) => (host.id === id ? { ...host, enabled } : host));
       await this.options.storage.save(next);
       this.hosts = next;
       this.invalidate(id);
@@ -1007,7 +1015,12 @@ export class PeerHostRegistry {
       try {
         await this.run(id, admitted, signal, async () => undefined);
         const latest = this.hosts?.find((entry) => entry.id === id);
-        this.activeRoutes.set(id, latest ? this.routes(latest).find((candidate) => candidate.id === route.id) ?? route : route);
+        this.activeRoutes.set(
+          id,
+          latest
+            ? (this.routes(latest).find((candidate) => candidate.id === route.id) ?? route)
+            : route,
+        );
         this.routeSwitchedAt.set(id, this.options.now?.() ?? Date.now());
         connected = true;
         this.notify();
@@ -1067,15 +1080,16 @@ export class PeerHostRegistry {
       throw (fallbackBlocked ? pairedError : lastError) ?? new PeerTransportError("unavailable");
     }
     const host = this.hosts?.find((entry) => entry.id === id);
-    if (!host?.enabled)
-      throw new Error("This device is disabled or unavailable.");
+    if (!host?.enabled) throw new Error("This device is disabled or unavailable.");
     return this.view(host);
   }
 
   /** Bounded identity check that leaves healthy streams and their cursors intact. */
   async probe(id: string, signal?: AbortSignal): Promise<void> {
     const credentialIdentity = await this.credentialIdentity(id);
-    const server = peerRecord(await this.request(id, { path: "/server", timeoutMs: 5_000, signal }));
+    const server = peerRecord(
+      await this.request(id, { path: "/server", timeoutMs: 5_000, signal }),
+    );
     if (server.protocolVersion !== 1) {
       this.states.set(id, "unavailable");
       this.clearVerification(id);
@@ -1089,7 +1103,10 @@ export class PeerHostRegistry {
         retryableIdentity: false,
       });
     }
-    const current = () => !signal?.aborted && !this.closed && this.hosts?.some((host) => host.id === id && host.deviceId === credentialIdentity) === true;
+    const current = () =>
+      !signal?.aborted &&
+      !this.closed &&
+      this.hosts?.some((host) => host.id === id && host.deviceId === credentialIdentity) === true;
     const features = peerStrings(server.features ?? [], PEER_MAX_SERVER_FEATURES);
     await this.refreshGrants(id, peerStrings(server.capabilities), features, current);
     if (features.includes("peer-routes-v1") && server.peerRoutes !== undefined) {
@@ -1106,32 +1123,51 @@ export class PeerHostRegistry {
   /** A fallback checks a better route at most once per 30 seconds; failures do not disturb it. */
   async preferReachableRoute(id: string, signal?: AbortSignal): Promise<boolean> {
     const active = this.activeRoutes.get(id);
-    if (!active || active.kind === "lan" || (this.options.now?.() ?? Date.now()) - (this.routeSwitchedAt.get(id) ?? 0) < 30_000) return false;
+    if (
+      !active ||
+      active.kind === "lan" ||
+      (this.options.now?.() ?? Date.now()) - (this.routeSwitchedAt.get(id) ?? 0) < 30_000
+    )
+      return false;
     const host = (await this.load()).find((entry) => entry.id === id);
     const preferred = host && this.routes(host).find((route) => route.kind === "lan");
     if (!host || !preferred) return false;
     this.routeSwitchedAt.set(id, this.options.now?.() ?? Date.now());
     if (preferred.addresses?.length) this.lanAddresses.rememberAll(id, preferred.addresses);
     try {
-      const server = peerRecord(await this.client(preferred, undefined, id).json({ path: "/server", credential: host.credential, timeoutMs: 3_000, signal }));
+      const server = peerRecord(
+        await this.client(preferred, undefined, id).json({
+          path: "/server",
+          credential: host.credential,
+          timeoutMs: 3_000,
+          signal,
+        }),
+      );
       return server.protocolVersion === 1 && server.instanceId === id;
     } catch (error) {
-      if (preferred.addresses?.length && error instanceof PeerTransportError && error.code === "identity_changed")
+      if (
+        preferred.addresses?.length &&
+        error instanceof PeerTransportError &&
+        error.code === "identity_changed"
+      )
         this.lanAddresses.forget(id);
       return false;
     }
   }
 
-  private admit(id: string, partition: PeerRequestPartition, credentialIdentity?: string): Promise<Admitted> {
+  private admit(
+    id: string,
+    partition: PeerRequestPartition,
+    credentialIdentity?: string,
+  ): Promise<Admitted> {
     return this.locked(async () => {
-      const found = (await this.load()).find(
-        (candidate) => candidate.id === hostIdentifier(id),
-      );
+      const found = (await this.load()).find((candidate) => candidate.id === hostIdentifier(id));
       if (this.closed) throw new Error("Device connections are closed.");
-      if (!found?.enabled)
-        throw new Error("This device is disabled or unavailable.");
+      if (!found?.enabled) throw new Error("This device is disabled or unavailable.");
       if (credentialIdentity !== undefined && found.deviceId !== credentialIdentity)
-        throw new Error("The saved request belongs to an earlier pairing. Its delivery must be checked before sending again.");
+        throw new Error(
+          "The saved request belongs to an earlier pairing. Its delivery must be checked before sending again.",
+        );
       const pool = partition === "stream" ? this.streams : this.active;
       const pending = pool.get(id) ?? new Set<AbortController>();
       const total = [...pool.values()].reduce((sum, set) => sum + set.size, 0);
@@ -1144,7 +1180,9 @@ export class PeerHostRegistry {
       pending.add(controller);
       pool.set(id, pending);
       return {
-        host: this.activeRoutes.has(id) ? routeHost(found, this.activeRoutes.get(id)!) : { ...found },
+        host: this.activeRoutes.has(id)
+          ? routeHost(found, this.activeRoutes.get(id)!)
+          : { ...found },
         epoch: this.epochs.get(id) ?? 0,
         controller,
         pool,
@@ -1156,20 +1194,14 @@ export class PeerHostRegistry {
     id: string,
     admitted: Admitted,
     signal: AbortSignal | undefined,
-    work: (
-      host: StoredPeerHost,
-      client: PeerClient,
-      current: () => boolean,
-    ) => Promise<T>,
+    work: (host: StoredPeerHost, client: PeerClient, current: () => boolean) => Promise<T>,
   ): Promise<T> {
     const { host, epoch, controller, pool } = admitted;
     const abort = () => controller.abort();
     if (signal?.aborted) abort();
     signal?.addEventListener("abort", abort, { once: true });
     const current = () =>
-      !this.closed &&
-      !controller.signal.aborted &&
-      (this.epochs.get(id) ?? 0) === epoch;
+      !this.closed && !controller.signal.aborted && (this.epochs.get(id) ?? 0) === epoch;
     let attempt = host;
     try {
       for (let retried = false; ; retried = true) {
@@ -1241,13 +1273,11 @@ export class PeerHostRegistry {
     }
     return pending;
   }
-  private async confirmRepin(
-    snapshot: StoredPeerHost,
-  ): Promise<StoredPeerHost | null> {
+  private async confirmRepin(snapshot: StoredPeerHost): Promise<StoredPeerHost | null> {
     const stored = this.hosts?.find((entry) => entry.id === snapshot.id);
-    const route = stored && this.routes(stored).find((candidate) => candidate.endpoint === snapshot.endpoint);
-    if (!stored?.enabled || !route || route.caCertificateDerBase64 !== undefined)
-      return null;
+    const route =
+      stored && this.routes(stored).find((candidate) => candidate.endpoint === snapshot.endpoint);
+    if (!stored?.enabled || !route || route.caCertificateDerBase64 !== undefined) return null;
     // Another request already confirmed the renewed key.
     if (route.serverSpkiSha256 !== snapshot.serverSpkiSha256) return routeHost(stored, route);
     const session = this.bootstrap({ endpoint: route.endpoint, mode: "webpki" });
@@ -1269,23 +1299,35 @@ export class PeerHostRegistry {
     return this.locked(async () => {
       const hosts = await this.load();
       const latest = hosts.find((entry) => entry.id === stored.id);
-      const latestRoute = latest && this.routes(latest).find((candidate) => candidate.id === route.id);
+      const latestRoute =
+        latest && this.routes(latest).find((candidate) => candidate.id === route.id);
       if (
         !latest?.enabled ||
-        !latestRoute || latestRoute.caCertificateDerBase64 !== undefined ||
+        !latestRoute ||
+        latestRoute.caCertificateDerBase64 !== undefined ||
         latest.credential !== stored.credential ||
         latestRoute.serverSpkiSha256 !== route.serverSpkiSha256
       )
         return null;
       const updatedRoute = { ...latestRoute, serverSpkiSha256: observed };
-      const updated = latest.endpoint === route.endpoint
-        ? { ...latest, serverSpkiSha256: observed }
-        : { ...latest, routes: latest.routes?.map((candidate) => candidate.id === route.id ? updatedRoute : candidate) };
+      const updated =
+        latest.endpoint === route.endpoint
+          ? { ...latest, serverSpkiSha256: observed }
+          : {
+              ...latest,
+              routes: latest.routes?.map((candidate) =>
+                candidate.id === route.id ? updatedRoute : candidate,
+              ),
+            };
       const next = hosts.map((entry) => (entry.id === updated.id ? updated : entry));
       await this.options.storage.save(next);
       this.hosts = next;
       // Pooled sockets were pinned to the old key; in-flight work keeps its epoch.
-      for (const [key, agent] of this.agents) if (key.startsWith(`${updated.id}:`)) { agent.destroy(); this.agents.delete(key); }
+      for (const [key, agent] of this.agents)
+        if (key.startsWith(`${updated.id}:`)) {
+          agent.destroy();
+          this.agents.delete(key);
+        }
       this.clearVerification(updated.id);
       this.activeRoutes.set(updated.id, updatedRoute);
       try {
@@ -1306,41 +1348,38 @@ export class PeerHostRegistry {
     id: string,
     input: Omit<PeerRequest, "credential">,
     onFrame?: (frame: string) => void,
-    options: { partition?: PeerRequestPartition; binary?: boolean; credentialIdentity?: string } = {},
+    options: {
+      partition?: PeerRequestPartition;
+      binary?: boolean;
+      credentialIdentity?: string;
+    } = {},
   ): Promise<unknown> {
     const admitted = await this.admit(id, options.partition ?? "unary", options.credentialIdentity);
-    return this.run(
-      id,
-      admitted,
-      input.signal,
-      async (host, client, current) => {
-        const request = {
-          ...input,
-          credential: host.credential,
-          signal: admitted.controller.signal,
-        };
-        if (onFrame) {
-          const end = await client.events(request, (frame) => {
-            if (current()) onFrame(frame);
-          });
-          return end ?? ({ reason: "eof" } satisfies PeerStreamEnd);
-        }
-        if (options.binary) {
-          if (!client.binary) throw new PeerTransportError("invalid_response");
-          return client.binary(request);
-        }
-        return client.json(request);
-      },
-    );
+    return this.run(id, admitted, input.signal, async (host, client, current) => {
+      const request = {
+        ...input,
+        credential: host.credential,
+        signal: admitted.controller.signal,
+      };
+      if (onFrame) {
+        const end = await client.events(request, (frame) => {
+          if (current()) onFrame(frame);
+        });
+        return end ?? ({ reason: "eof" } satisfies PeerStreamEnd);
+      }
+      if (options.binary) {
+        if (!client.binary) throw new PeerTransportError("invalid_response");
+        return client.binary(request);
+      }
+      return client.json(request);
+    });
   }
 
   /**
    * Pinned trust and credential for an enabled host, for main's simulator relay
    * upstream. Callers must never pass either to a renderer.
    */
-  relayTarget(
-    id: string,
-  ): Promise<{ trust: PeerTrust; credential: string } | null> {
+  relayTarget(id: string): Promise<{ trust: PeerTrust; credential: string } | null> {
     return this.locked(async () => {
       const found = (await this.load()).find((host) => host.id === id);
       if (!found?.enabled) return null;

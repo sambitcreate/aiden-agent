@@ -95,11 +95,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Shape check for the IPC answer; main builds it, so this guards drift, not attacks. */
 export function parseChatFollowThrough(value: unknown): ChatFollowThroughV1 | null {
-  if (!isRecord(value) || value.version !== FOLLOW_THROUGH_VERSION || typeof value.chatId !== "string") return null;
+  if (
+    !isRecord(value) ||
+    value.version !== FOLLOW_THROUGH_VERSION ||
+    typeof value.chatId !== "string"
+  )
+    return null;
   if (!Array.isArray(value.jobs) || !Array.isArray(value.pullRequests)) return null;
   const jobs = value.jobs.filter(
     (job): job is BackgroundJobView =>
-      isRecord(job) && typeof job.id === "string" && typeof job.command === "string" && typeof job.state === "string",
+      isRecord(job) &&
+      typeof job.id === "string" &&
+      typeof job.command === "string" &&
+      typeof job.state === "string",
   );
   const pullRequests = value.pullRequests.filter(
     (follow): follow is PullRequestFollowView =>

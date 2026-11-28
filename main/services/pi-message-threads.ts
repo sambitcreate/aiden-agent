@@ -17,5 +17,8 @@ export function withoutMessageThreads<T extends Model<Api>>(model: T): T {
   if (model.api !== "anthropic-messages") return model;
   const anthropic = model as Model<"anthropic-messages">;
   if (anthropic.compat?.supportsMessageThreads === false) return model;
-  return { ...anthropic, compat: { ...anthropic.compat, supportsMessageThreads: false } } as unknown as T;
+  return {
+    ...anthropic,
+    compat: { ...anthropic.compat, supportsMessageThreads: false },
+  } as unknown as T;
 }

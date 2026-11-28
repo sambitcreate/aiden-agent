@@ -1,7 +1,4 @@
-import {
-  isSubagentRunViewStateActive,
-  type SubagentRunView,
-} from "./subagent-view-state";
+import { isSubagentRunViewStateActive, type SubagentRunView } from "./subagent-view-state";
 
 export interface SubagentTreeNode {
   run: SubagentRunView;
@@ -25,14 +22,14 @@ function canAttach(parent: SubagentRunView | undefined, child: SubagentRunView):
   const childSnapshot = child.snapshot;
   return Boolean(
     parent &&
-      parentSnapshot?.version === 2 &&
-      parentSnapshot.depth === 1 &&
-      childSnapshot?.version === 2 &&
-      childSnapshot.depth === 2 &&
-      childSnapshot.parentRunId === parent.runId &&
-      childSnapshot.chatId === parentSnapshot.chatId &&
-      childSnapshot.workspaceId === parentSnapshot.workspaceId &&
-      childSnapshot.generationId === parentSnapshot.generationId,
+    parentSnapshot?.version === 2 &&
+    parentSnapshot.depth === 1 &&
+    childSnapshot?.version === 2 &&
+    childSnapshot.depth === 2 &&
+    childSnapshot.parentRunId === parent.runId &&
+    childSnapshot.chatId === parentSnapshot.chatId &&
+    childSnapshot.workspaceId === parentSnapshot.workspaceId &&
+    childSnapshot.generationId === parentSnapshot.generationId,
   );
 }
 
@@ -58,17 +55,19 @@ export function buildSubagentTree(runs: readonly SubagentRunView[]): SubagentTre
   const roots = runs.filter((run) => !attached.has(run.runId));
   const nodes = roots.map((run): SubagentTreeNode => {
     const childRuns = childrenByParent.get(run.runId) ?? [];
-    const children = childRuns.map((child, index): SubagentTreeNode => ({
-      run: child,
-      parentRunId: run.runId,
-      children: [],
-      level: 2,
-      position: index + 1,
-      setSize: childRuns.length,
-      branchActive: isSubagentRunViewStateActive(child.state),
-      descendantCount: 0,
-      activeDescendantCount: 0,
-    }));
+    const children = childRuns.map(
+      (child, index): SubagentTreeNode => ({
+        run: child,
+        parentRunId: run.runId,
+        children: [],
+        level: 2,
+        position: index + 1,
+        setSize: childRuns.length,
+        branchActive: isSubagentRunViewStateActive(child.state),
+        descendantCount: 0,
+        activeDescendantCount: 0,
+      }),
+    );
     const activeDescendantCount = children.filter(({ branchActive }) => branchActive).length;
     return {
       run,
@@ -111,13 +110,7 @@ export function visibleSubagentTreeNodes(
   return visible;
 }
 
-export type SubagentTreeKey =
-  | "ArrowUp"
-  | "ArrowDown"
-  | "ArrowRight"
-  | "ArrowLeft"
-  | "Home"
-  | "End";
+export type SubagentTreeKey = "ArrowUp" | "ArrowDown" | "ArrowRight" | "ArrowLeft" | "Home" | "End";
 
 export interface SubagentTreeKeyResult {
   focusRunId: string;
@@ -132,7 +125,10 @@ export function subagentTreeKeyResult(
 ): SubagentTreeKeyResult {
   const visible = visibleSubagentTreeNodes(groups, expansion);
   if (visible.length === 0) return { focusRunId: focusedRunId };
-  const index = Math.max(0, visible.findIndex(({ run }) => run.runId === focusedRunId));
+  const index = Math.max(
+    0,
+    visible.findIndex(({ run }) => run.runId === focusedRunId),
+  );
   const current = visible[index]!;
   if (key === "Home") return { focusRunId: visible[0]!.run.runId };
   if (key === "End") return { focusRunId: visible[visible.length - 1]!.run.runId };

@@ -35,7 +35,9 @@ export interface BotStepDescriptor {
 }
 
 function record(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function stringOf(value: unknown): string | undefined {
@@ -66,16 +68,25 @@ function bounded(value: string | undefined): string | undefined {
   const stripped = value.replace(FORMAT_CHARACTERS, "");
   const points = [...stripped];
   const window =
-    points.length > RAW_DETAIL_CHARS ? cutAtLastWhitespace(points.slice(0, RAW_DETAIL_CHARS).join("")) : stripped;
+    points.length > RAW_DETAIL_CHARS
+      ? cutAtLastWhitespace(points.slice(0, RAW_DETAIL_CHARS).join(""))
+      : stripped;
   const clean = sanitizeDiagnosticText(window, RAW_DETAIL_CHARS);
   if (!clean) return undefined;
   const shown = [...clean];
   return shown.length > BOT_STEP_DETAIL_CHARS
-    ? `${shown.slice(0, BOT_STEP_DETAIL_CHARS - 1).join("").trimEnd()}…`
+    ? `${shown
+        .slice(0, BOT_STEP_DETAIL_CHARS - 1)
+        .join("")
+        .trimEnd()}…`
     : clean;
 }
 
-function rawDetail(toolName: string, kind: BotToolPhase, args: Record<string, unknown>): string | undefined {
+function rawDetail(
+  toolName: string,
+  kind: BotToolPhase,
+  args: Record<string, unknown>,
+): string | undefined {
   switch (kind) {
     case "reading":
     case "editing":
@@ -96,7 +107,10 @@ function rawDetail(toolName: string, kind: BotToolPhase, args: Record<string, un
 }
 
 export function botStepDescriptor(toolName: string, args: unknown): BotStepDescriptor {
-  const app = toolName === "message_bot" ? bounded(stringOf(record(args).bot))?.slice(0, BOT_APP_LABEL_CHARS) : botToolApp(toolName);
+  const app =
+    toolName === "message_bot"
+      ? bounded(stringOf(record(args).bot))?.slice(0, BOT_APP_LABEL_CHARS)
+      : botToolApp(toolName);
   const kind = botToolPhase(toolName, app);
   const detail = bounded(rawDetail(toolName, kind, record(args)));
   const listedBots = toolName === "message_bot" && record(args).action === "list";

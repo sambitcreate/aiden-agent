@@ -120,8 +120,14 @@ function abortable<T>(value: Promise<T>, signal: AbortSignal | undefined): Promi
     const onAbort = () => reject(abortReason(signal));
     signal.addEventListener("abort", onAbort, { once: true });
     value.then(
-      (result) => { signal.removeEventListener("abort", onAbort); resolve(result); },
-      (error: unknown) => { signal.removeEventListener("abort", onAbort); reject(error); },
+      (result) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(result);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
     );
   });
 }
@@ -154,16 +160,40 @@ export class BotCapabilityCatalogMainService {
   }
 
   /** Model chooser/grant reads never inspect or connect unrelated MCP services. */
-  async snapshotModelsForRuntime(input: { retainedProviders?: readonly BotRetainedProvider[]; signal?: AbortSignal } = {}): Promise<BotCapabilityCatalogSnapshot> {
+  async snapshotModelsForRuntime(
+    input: { retainedProviders?: readonly BotRetainedProvider[]; signal?: AbortSignal } = {},
+  ): Promise<BotCapabilityCatalogSnapshot> {
     const signal = input.signal ?? new AbortController().signal;
     signal.throwIfAborted();
-    const [key, providers] = await Promise.all([this.selectionKey(), this.ports.listProviders(signal, input.retainedProviders)]);
+    const [key, providers] = await Promise.all([
+      this.selectionKey(),
+      this.ports.listProviders(signal, input.retainedProviders),
+    ]);
     signal.throwIfAborted();
     return buildBotCapabilityCatalogSnapshot({
-      inventory: { providers: [...providers], fileScopes: [
-        { sourceId: "builtin.full_mac.v1", label: botFullComputerLabel(process.platform), available: false, kind: "full_mac", scopeFingerprint: "0".repeat(64) },
-        { sourceId: "builtin.bot_home.v1", label: "Bot folder", available: false, kind: "bot_home", scopeFingerprint: "0".repeat(64) },
-      ], shell: { available: false, shellFingerprint: "0".repeat(64) }, connections: [], skills: [], otherCapabilities: [] },
+      inventory: {
+        providers: [...providers],
+        fileScopes: [
+          {
+            sourceId: "builtin.full_mac.v1",
+            label: botFullComputerLabel(process.platform),
+            available: false,
+            kind: "full_mac",
+            scopeFingerprint: "0".repeat(64),
+          },
+          {
+            sourceId: "builtin.bot_home.v1",
+            label: "Bot folder",
+            available: false,
+            kind: "bot_home",
+            scopeFingerprint: "0".repeat(64),
+          },
+        ],
+        shell: { available: false, shellFingerprint: "0".repeat(64) },
+        connections: [],
+        skills: [],
+        otherCapabilities: [],
+      },
       notice: { version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true },
       mintOpaqueId: createBotCapabilityOpaqueIdMint(key),
     });
@@ -208,16 +238,13 @@ export class BotCapabilityCatalogMainService {
       ] = await Promise.all([
         this.selectionKey(),
         input.notice,
-        this.ports.listProviders(
-          controller.signal,
-          [
-            ...(input.retainedBindings?.map(({ provider }) => ({
-              sourceProviderId: provider.sourceProviderId,
-              sourceModelId: provider.sourceModelId,
-            })) ?? []),
-            ...(input.retainedProviders ?? []),
-          ],
-        ),
+        this.ports.listProviders(controller.signal, [
+          ...(input.retainedBindings?.map(({ provider }) => ({
+            sourceProviderId: provider.sourceProviderId,
+            sourceModelId: provider.sourceModelId,
+          })) ?? []),
+          ...(input.retainedProviders ?? []),
+        ]),
         this.ports.inspectMacFiles(controller.signal),
         this.ports.inspectShell(controller.signal),
         this.ports.inspectConnections(controller.signal),
@@ -264,7 +291,11 @@ export class BotCapabilityCatalogMainService {
       });
       if (!skillsEnabled) {
         current.resources.skills = [];
-        current.catalog = finalizeBotCapabilityCatalog({ ...current.catalog, skills: [], skillsEnabled: false });
+        current.catalog = finalizeBotCapabilityCatalog({
+          ...current.catalog,
+          skills: [],
+          skillsEnabled: false,
+        });
       }
       const mintOpaqueId = createBotCapabilityOpaqueIdMint(selectionKey);
       for (const binding of input.retainedBindings ?? []) {
@@ -313,7 +344,9 @@ export class BotCapabilityCatalogMainService {
     // A snapshot reads only each retained provider's identity. Callers pass
     // richer authority objects (with fingerprints) or the bare pair; both
     // must read, and share, the same inspection.
-    const retainedProviders = input.retainedProviders?.map(({ sourceProviderId, sourceModelId }) => ({ sourceProviderId, sourceModelId }));
+    const retainedProviders = input.retainedProviders?.map(
+      ({ sourceProviderId, sourceModelId }) => ({ sourceProviderId, sourceModelId }),
+    );
     const build = async (signal: AbortSignal | undefined) => {
       const snapshot = await this.buildSnapshot({
         notice: {
@@ -333,13 +366,21 @@ export class BotCapabilityCatalogMainService {
     // One turn admits and re-checks its authority many times before a single
     // model request. While nothing changed, those reads share one inspection
     // instead of each reading every provider, connection and skill again.
-    const key = JSON.stringify([input.botId ?? null, input.retainedBindings ?? [], retainedProviders ?? []]);
+    const key = JSON.stringify([
+      input.botId ?? null,
+      input.retainedBindings ?? [],
+      retainedProviders ?? [],
+    ]);
     const revision = reuse.revision();
     const now = reuse.now?.() ?? performance.now();
     let entry = this.runtimeSnapshots.get(key);
     if (entry === undefined || entry.revision !== revision || entry.expiresAt <= now) {
       // Shared by every caller, so no one caller's cancellation stops it.
-      const fresh: RuntimeSnapshotEntry = { revision, expiresAt: now + reuse.ttlMs, snapshot: build(undefined) };
+      const fresh: RuntimeSnapshotEntry = {
+        revision,
+        expiresAt: now + reuse.ttlMs,
+        snapshot: build(undefined),
+      };
       entry = fresh;
       this.runtimeSnapshots.delete(key);
       this.runtimeSnapshots.set(key, fresh);
@@ -366,12 +407,14 @@ export class BotCapabilityCatalogMainService {
     /** A snapshot already captured under the caller's live inventory lease. */
     snapshot?: BotCapabilityCatalogSnapshot;
   }): Promise<BoundBotCustomSelection> {
-    const snapshot = input.snapshot ?? (await this.snapshot({
-      audienceId: input.audienceId,
-      retainedBindings: input.retainedBindings,
-      signal: input.signal,
-      botId: input.botId,
-    }));
+    const snapshot =
+      input.snapshot ??
+      (await this.snapshot({
+        audienceId: input.audienceId,
+        retainedBindings: input.retainedBindings,
+        signal: input.signal,
+        botId: input.botId,
+      }));
     return bindBotCustomSelection({
       selection: input.selection,
       catalogRevision: input.catalogRevision,
@@ -391,12 +434,14 @@ export class BotCapabilityCatalogMainService {
     botId?: string;
     snapshot?: BotCapabilityCatalogSnapshot;
   }) {
-    const snapshot = input.snapshot ?? (await this.snapshot({
-      audienceId: input.audienceId,
-      retainedBindings: input.retainedBindings,
-      signal: input.signal,
-      botId: input.botId,
-    }));
+    const snapshot =
+      input.snapshot ??
+      (await this.snapshot({
+        audienceId: input.audienceId,
+        retainedBindings: input.retainedBindings,
+        signal: input.signal,
+        botId: input.botId,
+      }));
     return bindBotProviderModel({
       providerId: input.providerId,
       modelId: input.modelId,

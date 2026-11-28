@@ -70,7 +70,9 @@ export async function isBotConnectionReady(
  */
 export function connectionSourceIdFor(pluginId: string): string | undefined {
   const suggestion = connectionSuggestionFor(pluginId);
-  return suggestion?.setupEntry.kind === "mcp-preset" ? presetServerId(suggestion.setupEntry.presetId) : undefined;
+  return suggestion?.setupEntry.kind === "mcp-preset"
+    ? presetServerId(suggestion.setupEntry.presetId)
+    : undefined;
 }
 
 export interface ConnectCardStatusDeps {
@@ -93,7 +95,8 @@ export async function resolveConnectCardStatus(
 ): Promise<ConnectCardStatus> {
   if (await deps.isConnected(card.pluginId)) {
     const sourceId = connectionSourceIdFor(card.pluginId);
-    if (sourceId === undefined || !(await deps.botLacksConnection(botId, sourceId))) return "connected";
+    if (sourceId === undefined || !(await deps.botLacksConnection(botId, sourceId)))
+      return "connected";
     // Not now on "Add to this Bot" settles the card without granting anything.
     return (await deps.isDismissed(botId, card.pluginId)) ? "dismissed" : "needs_access";
   }
@@ -147,17 +150,17 @@ function oneLine(value: string): string {
   const chars = Array.from(flat);
   return chars.length <= CONNECT_CARD_REASON_MAX_CHARS
     ? flat
-    : `${chars.slice(0, CONNECT_CARD_REASON_MAX_CHARS - 1).join("").trimEnd()}…`;
+    : `${chars
+        .slice(0, CONNECT_CARD_REASON_MAX_CHARS - 1)
+        .join("")
+        .trimEnd()}…`;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw signal.reason ?? new Error("The suggestion was cancelled.");
 }
 
-export function createSuggestConnectionTool(
-  botId: string,
-  deps: SuggestConnectionDeps,
-): AgentTool {
+export function createSuggestConnectionTool(botId: string, deps: SuggestConnectionDeps): AgentTool {
   return declarePiRuntimeReplay(
     {
       name: SUGGEST_CONNECTION_TOOL_NAME,
@@ -166,7 +169,8 @@ export function createSuggestConnectionTool(
         "Show the person a card offering to connect an app (for example Gmail, Google Calendar, Notion, or Composio for 500+ apps) when that would clearly help with what they asked. The card has a Connect button and a Not now button; you do not connect anything yourself. Give one short, plain reason written to the person. Do not suggest an app that is already connected or that they turned down. Mention a missing app at most once: if the person doesn't connect it, don't suggest it or bring it up again.",
       parameters: Type.Object({
         pluginId: Type.String({
-          description: "Catalog id, for example gmail, google-calendar, notion, outlook-email, or composio.",
+          description:
+            "Catalog id, for example gmail, google-calendar, notion, outlook-email, or composio.",
         }),
         reason: Type.String({
           description: "One short sentence to the person explaining why connecting helps.",

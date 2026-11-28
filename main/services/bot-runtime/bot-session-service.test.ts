@@ -21,7 +21,13 @@ import type { ScheduledRun, ScheduledTask } from "../types.js";
 import { createBotMemoryService } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
 import { DataStore } from "../data-store.js";
-import { emptyToolApprovalRulesDocument, normalizeToolApprovalRulesDocument, ToolApprovalRuleBook, TOOL_APPROVAL_RULES_MAX_BYTES, type ToolApprovalRulesDocument } from "../tool-approval-rules.js";
+import {
+  emptyToolApprovalRulesDocument,
+  normalizeToolApprovalRulesDocument,
+  ToolApprovalRuleBook,
+  TOOL_APPROVAL_RULES_MAX_BYTES,
+  type ToolApprovalRulesDocument,
+} from "../tool-approval-rules.js";
 import { createBotAllowList } from "./bot-allow-list.js";
 import { BOT_APPROVAL_TALLIES_FILE, createBotApprovalTallies } from "./bot-approval-tallies.js";
 import { createBotApprovals } from "./bot-approvals.js";
@@ -41,16 +47,30 @@ import {
 import { createBotRuntimeModels } from "./bot-models.js";
 import { BOT_SESSION_FILE, botDirectoryName } from "./harness-host.js";
 import { spawnHarnessChild } from "./test-support/child.js";
-import { assemblyDeps, assemblyState, FULL_GRANTS, testAuthority } from "./test-support/assembly-fixtures.js";
+import {
+  assemblyDeps,
+  assemblyState,
+  FULL_GRANTS,
+  testAuthority,
+} from "./test-support/assembly-fixtures.js";
 import { blockingUntilAborted, countingTool, recordingDeps } from "./test-support/fixtures.js";
 import { QUESTION_ARGS, QUESTION_TOOL_NAME } from "./test-support/question-fixtures.js";
-import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
+import {
+  createFauxModels,
+  FAUX_MODEL_REF,
+  slowAnswer,
+  waitFor,
+  type FauxModels,
+} from "./test-support/faux.js";
 
 import { issueBotRoutineInputOrigin } from "./bot-input-entry.js";
 import { BotResumeOperationsDoc } from "./bot-resume-operations.js";
 import { createBotIssueService } from "../bot-issues/service.js";
 import { createBotIssueStore, type BotIssueStore } from "../bot-issues/store.js";
-import { BOT_ISSUE_STATUS_ENTRY_KIND, botIssueStatusOf } from "../../../renderer/shared/bot-issues.js";
+import {
+  BOT_ISSUE_STATUS_ENTRY_KIND,
+  botIssueStatusOf,
+} from "../../../renderer/shared/bot-issues.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const roots: string[] = [];
@@ -85,7 +105,9 @@ async function entryKinds(service: BotSessionRuntime, botId: string): Promise<st
 
 async function notices(service: BotSessionRuntime, botId: string): Promise<unknown[]> {
   const view = await (await service.conversation(botId)).context(ctx);
-  return view.entries.filter((entry) => entry.kind === BOT_NOTICE_ENTRY_KIND).map((entry) => entry.data);
+  return view.entries
+    .filter((entry) => entry.kind === BOT_NOTICE_ENTRY_KIND)
+    .map((entry) => entry.data);
 }
 
 function messageReceiptRow(taskId: string): BotMessageDelivery {
@@ -156,13 +178,7 @@ test("receipt observation after corrupt-session recovery preserves the next send
       requestId: "before-corruption",
     });
     assert.equal(
-      (
-        await first.awaitReply(
-          "bot:a",
-          sent.submissionId,
-          new AbortController().signal,
-        )
-      ).kind,
+      (await first.awaitReply("bot:a", sent.submissionId, new AbortController().signal)).kind,
       "completed",
     );
   } finally {
@@ -176,20 +192,12 @@ test("receipt observation after corrupt-session recovery preserves the next send
   const recovered = await serviceFor(profile, faux);
   try {
     assert.equal(
-      await recovered.awaitMessageTaskSettlement(
-        "bot:a",
-        row.taskId,
-        new AbortController().signal,
-      ),
+      await recovered.awaitMessageTaskSettlement("bot:a", row.taskId, new AbortController().signal),
       true,
     );
     await ledger.collectReceipt(row.id, row.taskId);
     assert.equal(await ledger.receipt(row.id), undefined);
-    assert.equal(
-      faux.calls(),
-      2,
-      "observing and collecting never runs a model",
-    );
+    assert.equal(faux.calls(), 2, "observing and collecting never runs a model");
     const [moved] = (await readdir(directory)).filter((name) =>
       name.startsWith(`${BOT_SESSION_FILE}.corrupt-`),
     );
@@ -200,11 +208,7 @@ test("receipt observation after corrupt-session recovery preserves the next send
       requestId: "after-corruption",
     });
     assert.deepEqual(
-      await recovered.awaitReply(
-        "bot:a",
-        sent.submissionId,
-        new AbortController().signal,
-      ),
+      await recovered.awaitReply("bot:a", sent.submissionId, new AbortController().signal),
       {
         kind: "completed",
         text: "fresh answer",
@@ -224,10 +228,7 @@ test("a damaged peer purge marker does not skip later Bot deletion effects", asy
   const file = path.join(profile, "bots", "bot-messages.json");
   const ledger = createBotMessageLedger({ file: () => file, now: Date.now });
   await ledger.forgetBot("peer");
-  const directory = path.join(
-    path.dirname(file),
-    ".bot-messages.json.pending-purges",
-  );
+  const directory = path.join(path.dirname(file), ".bot-messages.json.pending-purges");
   const [marker] = await readdir(directory);
   const damaged = "{damaged peer purge";
   writeFileSync(path.join(directory, marker!), damaged);
@@ -252,10 +253,7 @@ test("a damaged peer purge marker does not skip later Bot deletion effects", asy
     );
     await service.deleteBot("bot:a");
     assert.deepEqual(effects, ["bot:a"]);
-    assert.equal(
-      await readFile(path.join(directory, marker!), "utf8"),
-      damaged,
-    );
+    assert.equal(await readFile(path.join(directory, marker!), "utf8"), damaged);
     assert.equal((await readdir(directory)).length, 2);
     await assert.rejects(ledger.open(), /bookkeeping/);
     assert.equal(faux.calls(), 0);
@@ -282,7 +280,10 @@ test("the same requestId twice admits one user message and reports the repeat as
     const second = await service.send("bot:a", { text: "hello", requestId: "desk-1" });
     assert.equal(first.deduped, false);
     assert.deepEqual(second, { submissionId: first.submissionId, deduped: true });
-    assert.equal((await service.awaitReply("bot:a", first.submissionId, new AbortController().signal)).kind, "completed");
+    assert.equal(
+      (await service.awaitReply("bot:a", first.submissionId, new AbortController().signal)).kind,
+      "completed",
+    );
     assert.deepEqual(await entryKinds(service, "bot:a"), ["pi.user", "pi.assistant"]);
     assert.equal(fauxModels.calls(), 1);
   } finally {
@@ -317,7 +318,10 @@ test("startup reports the interrupted Bot and runs nothing", async () => {
   const fauxModels = createFauxModels([fauxAssistantMessage("never")]);
   const service = await serviceFor(profile, fauxModels);
   try {
-    assert.deepEqual(await service.initialize(), { removedOrphans: [], interrupted: ["bot:killed"] });
+    assert.deepEqual(await service.initialize(), {
+      removedOrphans: [],
+      interrupted: ["bot:killed"],
+    });
     assert.deepEqual(await service.state("bot:killed"), { kind: "interrupted", submissionId });
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.equal(fauxModels.calls(), 0);
@@ -334,13 +338,23 @@ test("sending while interrupted keeps the partial, marks it interrupted, and run
   try {
     await service.initialize();
     const sent = await service.send("bot:killed", { text: "new question", requestId: "desk-2" });
-    const outcome = await service.awaitReply("bot:killed", sent.submissionId, new AbortController().signal);
+    const outcome = await service.awaitReply(
+      "bot:killed",
+      sent.submissionId,
+      new AbortController().signal,
+    );
     assert.deepEqual(outcome, { kind: "completed", text: "fresh reply" });
     assert.equal(fauxModels.calls(), 1, "only the new turn reaches the provider");
     const view = await (await service.conversation("bot:killed")).context(ctx);
     const partial = view.entries.find((entry) => entry.kind === "pi.assistant");
-    assert.match(JSON.stringify(partial?.model), /word word/u, "the interrupted partial answer is kept");
-    assert.deepEqual(await notices(service, "bot:killed"), [{ notice: "interrupted", submissionId: killedSubmission }]);
+    assert.match(
+      JSON.stringify(partial?.model),
+      /word word/u,
+      "the interrupted partial answer is kept",
+    );
+    assert.deepEqual(await notices(service, "bot:killed"), [
+      { notice: "interrupted", submissionId: killedSubmission },
+    ]);
     assert.deepEqual(await service.state("bot:killed"), { kind: "idle" });
   } finally {
     await service.shutdown();
@@ -350,7 +364,10 @@ test("sending while interrupted keeps the partial, marks it interrupted, and run
 test("Resume called twice at once makes one fresh provider request", async () => {
   const profile = tempProfile();
   await killMidStream(profile);
-  const fauxModels = createFauxModels([fauxAssistantMessage("resumed answer"), fauxAssistantMessage("extra")]);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage("resumed answer"),
+    fauxAssistantMessage("extra"),
+  ]);
   const service = await serviceFor(profile, fauxModels);
   try {
     await service.initialize();
@@ -360,7 +377,9 @@ test("Resume called twice at once makes one fresh provider request", async () =>
     ]);
     assert.equal(first.kind, "running");
     assert.deepEqual(second, first);
-    await waitFor(async () => (await service.state("bot:killed")).kind === "idle", { what: "resumed turn to finish" });
+    await waitFor(async () => (await service.state("bot:killed")).kind === "idle", {
+      what: "resumed turn to finish",
+    });
     assert.equal(fauxModels.calls(), 1);
     // A retried control observes fresh state without running Resume again.
     assert.deepEqual(await service.resume("bot:killed", "phone-1"), { kind: "idle" });
@@ -375,12 +394,19 @@ test("Resume reports it resumed only for the call that did: not for a replay, a 
   await killMidStream(profile);
   const resumed: string[] = [];
   const fauxModels = createFauxModels([fauxAssistantMessage("resumed answer")]);
-  const service = await serviceFor(profile, fauxModels, { onResumed: (botId) => resumed.push(botId) });
+  const service = await serviceFor(profile, fauxModels, {
+    onResumed: (botId) => resumed.push(botId),
+  });
   try {
     await service.initialize();
-    await Promise.all([service.resume("bot:killed", "phone-1"), service.resume("bot:killed", "desk-1")]);
+    await Promise.all([
+      service.resume("bot:killed", "phone-1"),
+      service.resume("bot:killed", "desk-1"),
+    ]);
     await service.resume("bot:killed", "phone-1");
-    await waitFor(async () => (await service.state("bot:killed")).kind === "idle", { what: "resumed turn to finish" });
+    await waitFor(async () => (await service.state("bot:killed")).kind === "idle", {
+      what: "resumed turn to finish",
+    });
     await service.resume("bot:killed", "desk-2");
     assert.deepEqual(resumed, ["bot:killed"]);
   } finally {
@@ -389,10 +415,14 @@ test("Resume reports it resumed only for the call that did: not for a replay, a 
   const blockedProfile = tempProfile();
   await killMidStream(blockedProfile);
   const blocked: string[] = [];
-  const refused = await serviceFor(blockedProfile, createFauxModels([fauxAssistantMessage("must not run")]), {
-    extension: recordingDeps({ readmit: () => ({ ok: false, reason: "access_changed" }) }),
-    onResumed: (botId) => blocked.push(botId),
-  });
+  const refused = await serviceFor(
+    blockedProfile,
+    createFauxModels([fauxAssistantMessage("must not run")]),
+    {
+      extension: recordingDeps({ readmit: () => ({ ok: false, reason: "access_changed" }) }),
+      onResumed: (botId) => blocked.push(botId),
+    },
+  );
   try {
     await refused.initialize();
     await refused.resume("bot:killed", "r");
@@ -403,19 +433,52 @@ test("Resume reports it resumed only for the call that did: not for a replay, a 
 });
 
 test("paused Resume refusals do not consume the control key; accepted replay remains read-only while paused", async () => {
-  const profile = tempProfile(); await killMidStream(profile);
-  const fauxModels = createFauxModels([async (_messages, options) => { await new Promise<void>((resolve) => { if (options?.signal?.aborted) resolve(); else options?.signal?.addEventListener("abort", () => resolve(), { once: true }); }); return fauxAssistantMessage("interrupted again", { stopReason: "aborted" }); }, fauxAssistantMessage("fresh explicit Resume")]);
+  const profile = tempProfile();
+  await killMidStream(profile);
+  const fauxModels = createFauxModels([
+    async (_messages, options) => {
+      await new Promise<void>((resolve) => {
+        if (options?.signal?.aborted) resolve();
+        else options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return fauxAssistantMessage("interrupted again", { stopReason: "aborted" });
+    },
+    fauxAssistantMessage("fresh explicit Resume"),
+  ]);
   const service = await serviceFor(profile, fauxModels);
   try {
-    await service.initialize(); await service.pause("bot:killed", "mac");
-    for (let attempt = 0; attempt < 2; attempt++) await assert.rejects(service.resume("bot:killed", "paused-first-admission"), (error: unknown) => error instanceof BotSessionError && error.reason === "paused_by_person");
+    await service.initialize();
+    await service.pause("bot:killed", "mac");
+    for (let attempt = 0; attempt < 2; attempt++)
+      await assert.rejects(
+        service.resume("bot:killed", "paused-first-admission"),
+        (error: unknown) => error instanceof BotSessionError && error.reason === "paused_by_person",
+      );
     assert.equal(fauxModels.calls(), 0);
-    const conversation = await service.conversation("bot:killed"); const receiptCount = await conversation.commit(async (tx) => (await tx.doc(BotResumeOperationsDoc, conversation.id)).receipts.length, ctx); assert.equal(receiptCount, 0);
-    await service.unpause("bot:killed"); assert.equal((await service.resume("bot:killed", "paused-first-admission")).kind, "running"); await waitFor(() => fauxModels.calls() === 1);
-    await service.pause("bot:killed", "mac"); assert.equal((await service.resume("bot:killed", "paused-first-admission")).kind, "paused"); assert.equal(fauxModels.calls(), 1);
-    await service.unpause("bot:killed"); assert.equal((await service.resume("bot:killed", "paused-first-admission")).kind, "interrupted"); assert.equal(fauxModels.calls(), 1);
-    await service.resume("bot:killed", "fresh-explicit-after-pause"); await waitFor(async () => (await service.state("bot:killed")).kind === "idle"); assert.equal(fauxModels.calls(), 2);
-  } finally { await service.shutdown(); }
+    const conversation = await service.conversation("bot:killed");
+    const receiptCount = await conversation.commit(
+      async (tx) => (await tx.doc(BotResumeOperationsDoc, conversation.id)).receipts.length,
+      ctx,
+    );
+    assert.equal(receiptCount, 0);
+    await service.unpause("bot:killed");
+    assert.equal((await service.resume("bot:killed", "paused-first-admission")).kind, "running");
+    await waitFor(() => fauxModels.calls() === 1);
+    await service.pause("bot:killed", "mac");
+    assert.equal((await service.resume("bot:killed", "paused-first-admission")).kind, "paused");
+    assert.equal(fauxModels.calls(), 1);
+    await service.unpause("bot:killed");
+    assert.equal(
+      (await service.resume("bot:killed", "paused-first-admission")).kind,
+      "interrupted",
+    );
+    assert.equal(fauxModels.calls(), 1);
+    await service.resume("bot:killed", "fresh-explicit-after-pause");
+    await waitFor(async () => (await service.state("bot:killed")).kind === "idle");
+    assert.equal(fauxModels.calls(), 2);
+  } finally {
+    await service.shutdown();
+  }
 });
 
 test("Dismiss after a restart makes no provider request and keeps the partial as interrupted", async () => {
@@ -429,8 +492,14 @@ test("Dismiss after a restart makes no provider request and keeps the partial as
     assert.deepEqual(await service.dismiss("bot:killed", "phone-3"), { kind: "idle" });
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.equal(fauxModels.calls(), 0);
-    assert.deepEqual(await notices(service, "bot:killed"), [{ notice: "interrupted", submissionId }]);
-    assert.deepEqual(await entryKinds(service, "bot:killed"), ["pi.user", "pi.assistant", BOT_NOTICE_ENTRY_KIND]);
+    assert.deepEqual(await notices(service, "bot:killed"), [
+      { notice: "interrupted", submissionId },
+    ]);
+    assert.deepEqual(await entryKinds(service, "bot:killed"), [
+      "pi.user",
+      "pi.assistant",
+      BOT_NOTICE_ENTRY_KIND,
+    ]);
   } finally {
     await service.shutdown();
   }
@@ -473,10 +542,23 @@ test("a routine send never dismisses a paused turn", async () => {
       }),
       (error: unknown) => error instanceof BotSessionError && error.reason === "bot_paused",
     );
-    await assert.rejects(service.send("bot:killed", {
-      text: "framed Bot message", requestId: "bot:J:1:00112233-4455-4677-8899-aabbccddeeff", ifIdle: true, ifNotInterrupted: true,
-      botMessage: {kind: "request", deliveryId: "00112233-4455-4677-8899-aabbccddeeff", botId: "J", botName: "Jester", text: "help", deadline: Date.now()+60_000},
-    }), (error: unknown) => error instanceof BotSessionError && error.reason === "bot_paused");
+    await assert.rejects(
+      service.send("bot:killed", {
+        text: "framed Bot message",
+        requestId: "bot:J:1:00112233-4455-4677-8899-aabbccddeeff",
+        ifIdle: true,
+        ifNotInterrupted: true,
+        botMessage: {
+          kind: "request",
+          deliveryId: "00112233-4455-4677-8899-aabbccddeeff",
+          botId: "J",
+          botName: "Jester",
+          text: "help",
+          deadline: Date.now() + 60_000,
+        },
+      }),
+      (error: unknown) => error instanceof BotSessionError && error.reason === "bot_paused",
+    );
     assert.deepEqual(await service.state("bot:killed"), { kind: "interrupted", submissionId });
     assert.deepEqual(await notices(service, "bot:killed"), []);
     assert.equal(fauxModels.calls(), 0);
@@ -501,7 +583,11 @@ test("a labelled routine turn and a silent reply are recorded as notices", async
       ifNotInterrupted: true,
       label: "Inbox check",
     });
-    const outcome = await service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    const outcome = await service.awaitReply(
+      "bot:a",
+      sent.submissionId,
+      new AbortController().signal,
+    );
     assert.deepEqual(outcome, { kind: "completed", text: "[SILENT]" });
     assert.ok((await entryKinds(service, "bot:a")).includes("aiden.routine-input"));
     await service.markSilent("bot:a", sent.submissionId);
@@ -516,7 +602,9 @@ test("a labelled routine turn and a silent reply are recorded as notices", async
 
 test("deleteBot during a running turn erases the session and every owned record", async () => {
   const profile = tempProfile();
-  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], {
+    tokensPerSecond: 40,
+  });
   const routines = new Map([["bot:a", ["r1"]]]);
   const photos = new Set(["bot:a"]);
   const bindings = new Set(["bot:a"]);
@@ -530,9 +618,12 @@ test("deleteBot during a running turn erases the session and every owned record"
   });
   try {
     const sent = await service.send("bot:a", { text: "write a lot", requestId: "desk-del" });
-    await waitFor(async () => (await service.state("bot:a")).kind === "running" && fauxModels.calls() === 1, {
-      what: "turn start",
-    });
+    await waitFor(
+      async () => (await service.state("bot:a")).kind === "running" && fauxModels.calls() === 1,
+      {
+        what: "turn start",
+      },
+    );
     const waiting = service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
     await service.deleteBot("bot:a");
     assert.equal(existsSync(path.join(profile, "bots", botDirectoryName("bot:a"))), false);
@@ -543,7 +634,10 @@ test("deleteBot during a running turn erases the session and every owned record"
     assert.equal((await waiting).kind, "interrupted");
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.equal(fauxModels.calls(), 1);
-    await assert.rejects(service.send("bot:a", { text: "again", requestId: "desk-after" }), BotSessionError);
+    await assert.rejects(
+      service.send("bot:a", { text: "again", requestId: "desk-after" }),
+      BotSessionError,
+    );
     assert.equal(existsSync(path.join(profile, "bots", botDirectoryName("bot:a"))), false);
   } finally {
     await service.shutdown();
@@ -552,101 +646,201 @@ test("deleteBot during a running turn erases the session and every owned record"
 
 test("quarantined approval evidence permits deletion and startup roll-forward through every cleanup effect", async (t) => {
   for (const damage of ["malformed JSON", "unrelated Bot receipt"]) {
-    for (const pendingAtStartup of [false, true]) await t.test(`${damage}, ${pendingAtStartup ? "restart pending delete" : "person delete"}`, async () => {
-      const profile = tempProfile();
-      const file = path.join(profile, "tool-approval-rules.json");
-      const journal = path.join(profile, "bots", "pending-deletes.json");
-      const target = { kind: "connection", serverId: "gcal", tool: "create_event" } as const;
-      const bots = new Set(["bot:a", "bot:b"]);
-      const openRules = () => new ToolApprovalRuleBook(new DataStore<ToolApprovalRulesDocument>(
-        "tool-approval-rules.json", emptyToolApprovalRulesDocument(), () => profile,
-        { normalize: normalizeToolApprovalRulesDocument, reloadBeforeWrite: true, maxBytes: TOOL_APPROVAL_RULES_MAX_BYTES, fileMode: 0o600 },
-      ), undefined, undefined, { knownBot: async (id) => {
-        if (!bots.has(id)) return false;
-        try { return !JSON.parse(await readFile(journal, "utf8")).botIds.includes(id); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return true; throw error; }
-      } });
-      const rules = openRules();
-      await rules.grantBot("bot:a", target, "Calendar A", "own-decision");
-      await rules.grantBot("bot:b", target, "Calendar B", "peer-decision");
-      const healthy = JSON.parse(await readFile(file, "utf8"));
-      const evidence = damage === "malformed JSON" ? '{"version":1,"botGrantOperations":[' : JSON.stringify({
-        ...healthy, botGrantOperations: [...healthy.botGrantOperations, { botId: "bot:b", operationId: "damaged-peer" }],
-      }, null, 2) + "\n";
-      writeFileSync(file, evidence);
-      const tallies = createBotApprovalTallies({ profileDir: () => profile });
-      for (const botId of bots) await tallies.record(botId, target, {
-        id: `decision-${botId}`, authorizationFingerprint: `fingerprint-${botId}`, source: "person", answer: "allow", offered: false,
-      });
-      const allowed = createBotAllowList({ rules, tallies, approvals: createBotApprovals({ publish() {} }),
-        folderEntries: async () => [], revokeFolder: async () => false,
-        botName: async () => "Ada", connectionName: async () => "Calendar" });
-      const computer = path.join(profile, "computers", "bot-a");
-      const home = path.join(profile, "homes", "bot-a");
-      for (const directory of [computer, home]) {
-        mkdirSync(directory, { recursive: true });
-        writeFileSync(path.join(directory, "owned-data"), "private Bot data");
-      }
-      if (pendingAtStartup) writeFileSync(journal, JSON.stringify({ version: 1, botIds: ["bot:a"] }));
-      const order: string[] = [];
-      const reports: unknown[] = [];
-      const faux = createFauxModels([]);
-      const overrides: Partial<BotSessionServiceDeps> = {
-        knownBotIds: async () => new Set(bots), onReport: (_id, error) => { reports.push(error); },
-        deleteEffects: [
-          async (id) => {
-            assert.equal(await rules.matchBot(id, target).catch(() => undefined), undefined);
-            assert.ok(JSON.parse(await readFile(journal, "utf8")).botIds.includes(id), "intent is durable before cleanup");
-            await allowed.forgetBot(id); order.push("allowed");
-          },
-          async () => { order.push("rules"); },
-          async () => { await rm(computer, { recursive: true, force: true }); order.push("computer"); },
-          async () => { order.push("dismissals"); },
-          async () => { order.push("telegram"); },
-          async (id) => { await rm(home, { recursive: true, force: true }); bots.delete(id); order.push("data"); },
-        ],
-      };
-      const assertErased = async () => {
-        assert.equal(bots.has("bot:a"), false);
-        assert.equal(bots.has("bot:b"), true);
-        assert.equal(existsSync(computer), false);
-        assert.equal(existsSync(home), false);
-        assert.equal(existsSync(path.join(profile, "bots", botDirectoryName("bot:a"))), false);
-        assert.equal(existsSync(path.join(profile, "bots", botDirectoryName("bot:b"), BOT_APPROVAL_TALLIES_FILE)), true);
-        assert.deepEqual(JSON.parse(await readFile(journal, "utf8")), { version: 1, botIds: [] });
-        assert.equal(await readFile(file, "utf8"), evidence);
-        assert.deepEqual((await readdir(profile)).filter(name => name.startsWith("tool-approval-rules")), ["tool-approval-rules.json"]);
-        for (const book of [rules, openRules()]) {
-          await assert.rejects(book.matchBot("bot:a", target), /receipt/u);
-          await assert.rejects(book.matchBot("bot:b", target), /receipt/u);
-          await assert.rejects(book.grantBot("bot:a", target, "Calendar A", "own-decision"), /receipt/u);
-          await assert.rejects(book.grantBot("bot:a", target, "Calendar A", "new-decision"), /receipt/u);
-        }
-      };
-      const service = await serviceFor(profile, faux, overrides);
-      try {
-        if (pendingAtStartup) {
-          await assert.rejects(service.send("bot:a", { text: "cannot reopen", requestId: "pending" }), BotSessionError);
-          await service.initialize();
-        } else {
-          await service.deleteBot("bot:a");
-        }
-        assert.deepEqual(reports, []);
-        assert.deepEqual(order, ["allowed", "rules", "computer", "dismissals", "telegram", "data"]);
-        await assertErased();
-        await service.deleteBot("bot:a");
-        await assertErased();
-      } finally { await service.shutdown(); }
-      const restarted = await serviceFor(profile, faux, overrides);
-      try {
-        await restarted.initialize();
-        await restarted.deleteBot("bot:a");
-        await assertErased();
-        await assert.rejects(restarted.send("bot:a", { text: "cannot reopen", requestId: "deleted" }), BotSessionError);
-        assert.deepEqual(reports, []);
-        assert.equal(faux.calls(), 0);
-      } finally { await restarted.shutdown(); }
-    });
+    for (const pendingAtStartup of [false, true])
+      await t.test(
+        `${damage}, ${pendingAtStartup ? "restart pending delete" : "person delete"}`,
+        async () => {
+          const profile = tempProfile();
+          const file = path.join(profile, "tool-approval-rules.json");
+          const journal = path.join(profile, "bots", "pending-deletes.json");
+          const target = { kind: "connection", serverId: "gcal", tool: "create_event" } as const;
+          const bots = new Set(["bot:a", "bot:b"]);
+          const openRules = () =>
+            new ToolApprovalRuleBook(
+              new DataStore<ToolApprovalRulesDocument>(
+                "tool-approval-rules.json",
+                emptyToolApprovalRulesDocument(),
+                () => profile,
+                {
+                  normalize: normalizeToolApprovalRulesDocument,
+                  reloadBeforeWrite: true,
+                  maxBytes: TOOL_APPROVAL_RULES_MAX_BYTES,
+                  fileMode: 0o600,
+                },
+              ),
+              undefined,
+              undefined,
+              {
+                knownBot: async (id) => {
+                  if (!bots.has(id)) return false;
+                  try {
+                    return !JSON.parse(await readFile(journal, "utf8")).botIds.includes(id);
+                  } catch (error) {
+                    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+                    throw error;
+                  }
+                },
+              },
+            );
+          const rules = openRules();
+          await rules.grantBot("bot:a", target, "Calendar A", "own-decision");
+          await rules.grantBot("bot:b", target, "Calendar B", "peer-decision");
+          const healthy = JSON.parse(await readFile(file, "utf8"));
+          const evidence =
+            damage === "malformed JSON"
+              ? '{"version":1,"botGrantOperations":['
+              : JSON.stringify(
+                  {
+                    ...healthy,
+                    botGrantOperations: [
+                      ...healthy.botGrantOperations,
+                      { botId: "bot:b", operationId: "damaged-peer" },
+                    ],
+                  },
+                  null,
+                  2,
+                ) + "\n";
+          writeFileSync(file, evidence);
+          const tallies = createBotApprovalTallies({ profileDir: () => profile });
+          for (const botId of bots)
+            await tallies.record(botId, target, {
+              id: `decision-${botId}`,
+              authorizationFingerprint: `fingerprint-${botId}`,
+              source: "person",
+              answer: "allow",
+              offered: false,
+            });
+          const allowed = createBotAllowList({
+            rules,
+            tallies,
+            approvals: createBotApprovals({ publish() {} }),
+            folderEntries: async () => [],
+            revokeFolder: async () => false,
+            botName: async () => "Ada",
+            connectionName: async () => "Calendar",
+          });
+          const computer = path.join(profile, "computers", "bot-a");
+          const home = path.join(profile, "homes", "bot-a");
+          for (const directory of [computer, home]) {
+            mkdirSync(directory, { recursive: true });
+            writeFileSync(path.join(directory, "owned-data"), "private Bot data");
+          }
+          if (pendingAtStartup)
+            writeFileSync(journal, JSON.stringify({ version: 1, botIds: ["bot:a"] }));
+          const order: string[] = [];
+          const reports: unknown[] = [];
+          const faux = createFauxModels([]);
+          const overrides: Partial<BotSessionServiceDeps> = {
+            knownBotIds: async () => new Set(bots),
+            onReport: (_id, error) => {
+              reports.push(error);
+            },
+            deleteEffects: [
+              async (id) => {
+                assert.equal(await rules.matchBot(id, target).catch(() => undefined), undefined);
+                assert.ok(
+                  JSON.parse(await readFile(journal, "utf8")).botIds.includes(id),
+                  "intent is durable before cleanup",
+                );
+                await allowed.forgetBot(id);
+                order.push("allowed");
+              },
+              async () => {
+                order.push("rules");
+              },
+              async () => {
+                await rm(computer, { recursive: true, force: true });
+                order.push("computer");
+              },
+              async () => {
+                order.push("dismissals");
+              },
+              async () => {
+                order.push("telegram");
+              },
+              async (id) => {
+                await rm(home, { recursive: true, force: true });
+                bots.delete(id);
+                order.push("data");
+              },
+            ],
+          };
+          const assertErased = async () => {
+            assert.equal(bots.has("bot:a"), false);
+            assert.equal(bots.has("bot:b"), true);
+            assert.equal(existsSync(computer), false);
+            assert.equal(existsSync(home), false);
+            assert.equal(existsSync(path.join(profile, "bots", botDirectoryName("bot:a"))), false);
+            assert.equal(
+              existsSync(
+                path.join(profile, "bots", botDirectoryName("bot:b"), BOT_APPROVAL_TALLIES_FILE),
+              ),
+              true,
+            );
+            assert.deepEqual(JSON.parse(await readFile(journal, "utf8")), {
+              version: 1,
+              botIds: [],
+            });
+            assert.equal(await readFile(file, "utf8"), evidence);
+            assert.deepEqual(
+              (await readdir(profile)).filter((name) => name.startsWith("tool-approval-rules")),
+              ["tool-approval-rules.json"],
+            );
+            for (const book of [rules, openRules()]) {
+              await assert.rejects(book.matchBot("bot:a", target), /receipt/u);
+              await assert.rejects(book.matchBot("bot:b", target), /receipt/u);
+              await assert.rejects(
+                book.grantBot("bot:a", target, "Calendar A", "own-decision"),
+                /receipt/u,
+              );
+              await assert.rejects(
+                book.grantBot("bot:a", target, "Calendar A", "new-decision"),
+                /receipt/u,
+              );
+            }
+          };
+          const service = await serviceFor(profile, faux, overrides);
+          try {
+            if (pendingAtStartup) {
+              await assert.rejects(
+                service.send("bot:a", { text: "cannot reopen", requestId: "pending" }),
+                BotSessionError,
+              );
+              await service.initialize();
+            } else {
+              await service.deleteBot("bot:a");
+            }
+            assert.deepEqual(reports, []);
+            assert.deepEqual(order, [
+              "allowed",
+              "rules",
+              "computer",
+              "dismissals",
+              "telegram",
+              "data",
+            ]);
+            await assertErased();
+            await service.deleteBot("bot:a");
+            await assertErased();
+          } finally {
+            await service.shutdown();
+          }
+          const restarted = await serviceFor(profile, faux, overrides);
+          try {
+            await restarted.initialize();
+            await restarted.deleteBot("bot:a");
+            await assertErased();
+            await assert.rejects(
+              restarted.send("bot:a", { text: "cannot reopen", requestId: "deleted" }),
+              BotSessionError,
+            );
+            assert.deepEqual(reports, []);
+            assert.equal(faux.calls(), 0);
+          } finally {
+            await restarted.shutdown();
+          }
+        },
+      );
   }
 });
 
@@ -656,19 +850,29 @@ test("a reply whose session fails on a storage error and cannot reopen is failed
   const service = await serviceFor(profile, fauxModels);
   try {
     const sent = await service.send("bot:a", { text: "write a lot", requestId: "desk-storage" });
-    await waitFor(async () => (await service.state("bot:a")).kind === "running" && fauxModels.calls() === 1, {
-      what: "turn start",
-    });
+    await waitFor(
+      async () => (await service.state("bot:a")).kind === "running" && fauxModels.calls() === 1,
+      {
+        what: "turn start",
+      },
+    );
     const waiting = service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
     // Another connection holds the write lock past SQLite's busy timeout: the
     // next commit fails the session, and reopening it fails the same way.
-    const blocker = new DatabaseSync(path.join(profile, "bots", botDirectoryName("bot:a"), BOT_SESSION_FILE));
+    const blocker = new DatabaseSync(
+      path.join(profile, "bots", botDirectoryName("bot:a"), BOT_SESSION_FILE),
+    );
     try {
       blocker.exec("BEGIN EXCLUSIVE");
-      await assert.rejects(service.send("bot:a", { text: "and this", requestId: "desk-storage-2" }));
+      await assert.rejects(
+        service.send("bot:a", { text: "and this", requestId: "desk-storage-2" }),
+      );
       const outcome = await waiting;
       assert.equal(outcome.kind, "failed");
-      assert.ok(outcome.kind === "failed" && outcome.error.length > 0, "the failure has a message for the person");
+      assert.ok(
+        outcome.kind === "failed" && outcome.error.length > 0,
+        "the failure has a message for the person",
+      );
     } finally {
       blocker.exec("ROLLBACK");
       blocker.close();
@@ -685,18 +889,32 @@ test("a reply whose answer committed just before a storage failure is delivered,
   const original = SqliteStorage.prototype.commit;
   let failed = false;
   // The batch that settles the input lands on disk, then its commit reports a failure.
-  SqliteStorage.prototype.commit = async function (this: SqliteStorage, ...args: Parameters<typeof original>) {
+  SqliteStorage.prototype.commit = async function (
+    this: SqliteStorage,
+    ...args: Parameters<typeof original>
+  ) {
     const seq = await original.apply(this, args);
     const [writes] = args;
-    if (!failed && /"type":"input"/u.test(JSON.stringify(writes)) && /"status":"done"/u.test(JSON.stringify(writes))) {
+    if (
+      !failed &&
+      /"type":"input"/u.test(JSON.stringify(writes)) &&
+      /"status":"done"/u.test(JSON.stringify(writes))
+    ) {
       failed = true;
       throw new Error("disk I/O error");
     }
     return seq;
   };
   try {
-    const sent = await service.send("bot:a", { text: "plan dinner", requestId: "desk-commit-landed" });
-    const outcome = await service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    const sent = await service.send("bot:a", {
+      text: "plan dinner",
+      requestId: "desk-commit-landed",
+    });
+    const outcome = await service.awaitReply(
+      "bot:a",
+      sent.submissionId,
+      new AbortController().signal,
+    );
     assert.equal(failed, true, "the storage failure was injected");
     assert.deepEqual(outcome, { kind: "completed", text: "Dinner is pasta." });
     assert.equal(fauxModels.calls(), 1, "the answer is read back, not regenerated");
@@ -748,7 +966,10 @@ test("a configured model that fails to resolve shows its real error, not 'needs 
     assert.equal(fauxModels.calls(), 0);
     failure = null;
     const sent = await service.send("bot:a", { text: "hi", requestId: "m-2" });
-    assert.equal((await service.awaitReply("bot:a", sent.submissionId, new AbortController().signal)).kind, "completed");
+    assert.equal(
+      (await service.awaitReply("bot:a", sent.submissionId, new AbortController().signal)).kind,
+      "completed",
+    );
   } finally {
     await service.shutdown();
   }
@@ -763,11 +984,21 @@ function routineExecutor(service: BotSessionRuntime) {
         runs.push(recorded);
         return recorded;
       },
-      runById: async (taskId, runId) => runs.find((run) => run.taskId === taskId && run.id === runId),
+      runById: async (taskId, runId) =>
+        runs.find((run) => run.taskId === taskId && run.id === runId),
       get: async () => undefined,
       settleRoutineFire: async () => undefined,
     },
-    ports: () => ({ ...service, send: (botId, input) => service.send(botId, { ...input, ...(input.routineOrigin ? { routineOrigin: issueBotRoutineInputOrigin(input.routineOrigin) } : {}) }) }),
+    ports: () => ({
+      ...service,
+      send: (botId, input) =>
+        service.send(botId, {
+          ...input,
+          ...(input.routineOrigin
+            ? { routineOrigin: issueBotRoutineInputOrigin(input.routineOrigin) }
+            : {}),
+        }),
+    }),
     broadcast: () => undefined,
   });
 }
@@ -788,18 +1019,39 @@ test("a tool-free failed routine can retry between unrelated chat turns that use
   });
   try {
     const executor = routineExecutor(service);
-    const task = { id: "briefing", botId: "bot:a", prompt: "Brief me.", enabled: true } as ScheduledTask;
+    const task = {
+      id: "briefing",
+      botId: "bot:a",
+      prompt: "Brief me.",
+      enabled: true,
+    } as ScheduledTask;
     const signal = new AbortController().signal;
-    const earlier = await service.send("bot:a", { requestId: "desktop-calendar", text: "Check the calendar." });
-    assert.equal((await service.awaitReply("bot:a", earlier.submissionId, signal)).kind, "completed");
+    const earlier = await service.send("bot:a", {
+      requestId: "desktop-calendar",
+      text: "Check the calendar.",
+    });
+    assert.equal(
+      (await service.awaitReply("bot:a", earlier.submissionId, signal)).kind,
+      "completed",
+    );
     assert.equal(lookup.executions.length, 1);
-    const original = await executor.run(task, { trigger: { kind: "automatic", fireTime: 42 }, signal });
+    const original = await executor.run(task, {
+      trigger: { kind: "automatic", fireTime: 42 },
+      signal,
+    });
     assert.equal(original.failure?.kind, "temporary");
-    const chat = await service.send("bot:a", { requestId: "desktop-weather", text: "Check the weather." });
+    const chat = await service.send("bot:a", {
+      requestId: "desktop-weather",
+      text: "Check the weather.",
+    });
     assert.equal((await service.awaitReply("bot:a", chat.submissionId, signal)).kind, "completed");
     assert.equal(lookup.executions.length, 2);
     const requestId = `${original.id}:retry-1`;
-    const retry = await executor.run(task, { runId: requestId, trigger: { kind: "retry", requestId, failedRunId: original.id, attempt: 1 }, signal });
+    const retry = await executor.run(task, {
+      runId: requestId,
+      trigger: { kind: "retry", requestId, failedRunId: original.id, attempt: 1 },
+      signal,
+    });
     assert.equal(retry.output, "Briefing ready.");
     assert.equal(models.calls(), 6);
   } finally {
@@ -809,25 +1061,53 @@ test("a tool-free failed routine can retry between unrelated chat turns that use
 
 test("a delayed routine retry cannot repeat a tool after the next model call fails", async () => {
   const send = countingTool("send_email");
-  const sendMessage = () => fauxAssistantMessage([fauxToolCall("send_email", { text: "briefing" })], { stopReason: "toolUse" });
-  const failed = fauxAssistantMessage("", { stopReason: "error", errorMessage: "503 Service Unavailable" });
-  const models = createFauxModels([failed, sendMessage(), failed, sendMessage(), fauxAssistantMessage("Sent.")]);
+  const sendMessage = () =>
+    fauxAssistantMessage([fauxToolCall("send_email", { text: "briefing" })], {
+      stopReason: "toolUse",
+    });
+  const failed = fauxAssistantMessage("", {
+    stopReason: "error",
+    errorMessage: "503 Service Unavailable",
+  });
+  const models = createFauxModels([
+    failed,
+    sendMessage(),
+    failed,
+    sendMessage(),
+    fauxAssistantMessage("Sent."),
+  ]);
   const service = await serviceFor(tempProfile(), models, {
     extension: recordingDeps({ tools: [{ tool: send, replay: "unsafe" }] }),
     settings: { retry: { enabled: false } },
   });
   try {
     const executor = routineExecutor(service);
-    const task = { id: "email", botId: "bot:a", prompt: "Email the briefing.", enabled: true } as ScheduledTask;
+    const task = {
+      id: "email",
+      botId: "bot:a",
+      prompt: "Email the briefing.",
+      enabled: true,
+    } as ScheduledTask;
     const signal = new AbortController().signal;
     const greeting = await service.send("bot:a", { requestId: "desktop-greeting", text: "Hello." });
     assert.equal((await service.awaitReply("bot:a", greeting.submissionId, signal)).kind, "failed");
-    const original = await executor.run(task, { trigger: { kind: "automatic", fireTime: 42 }, signal });
+    const original = await executor.run(task, {
+      trigger: { kind: "automatic", fireTime: 42 },
+      signal,
+    });
     assert.equal(original.failure?.kind, "temporary");
     assert.equal(send.executions.length, 1);
     const requestId = `${original.id}:retry-1`;
-    await executor.run(task, { runId: requestId, trigger: { kind: "retry", requestId, failedRunId: original.id, attempt: 1 }, signal });
-    assert.equal(send.executions.length, 1, "sending the same message twice is externally observable");
+    await executor.run(task, {
+      runId: requestId,
+      trigger: { kind: "retry", requestId, failedRunId: original.id, attempt: 1 },
+      signal,
+    });
+    assert.equal(
+      send.executions.length,
+      1,
+      "sending the same message twice is externally observable",
+    );
     assert.equal(await service.submissionForRequest("bot:a", requestId), undefined);
   } finally {
     await service.shutdown();
@@ -837,7 +1117,9 @@ test("a delayed routine retry cannot repeat a tool after the next model call fai
 test("a watchdog stop while a routine tool is running cannot authorize a fresh submission", async () => {
   const send = countingTool("send_email", (_params, signal) => blockingUntilAborted(signal));
   const models = createFauxModels([
-    fauxAssistantMessage([fauxToolCall("send_email", { text: "briefing" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("send_email", { text: "briefing" })], {
+      stopReason: "toolUse",
+    }),
   ]);
   const service = await serviceFor(tempProfile(), models, {
     extension: recordingDeps({ tools: [{ tool: send, replay: "unsafe" }] }),
@@ -862,8 +1144,24 @@ test("a routine whose model was refused by runtime authority records access_chan
   });
   const executor = routineExecutor(service);
   try {
-    const task = { id: "routine-1", name: "Briefing", enabled: true, mode: "llm", cron: "0 9 * * *", timezone: "UTC", permission: "read-only", botId: "bot:a", prompt: "Brief me.", notify: true, createdAt: 1, updatedAt: 1 } as ScheduledTask;
-    const run = await executor.run(task, { trigger: { kind: "manual", key: "k1" }, signal: new AbortController().signal });
+    const task = {
+      id: "routine-1",
+      name: "Briefing",
+      enabled: true,
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      permission: "read-only",
+      botId: "bot:a",
+      prompt: "Brief me.",
+      notify: true,
+      createdAt: 1,
+      updatedAt: 1,
+    } as ScheduledTask;
+    const run = await executor.run(task, {
+      trigger: { kind: "manual", key: "k1" },
+      signal: new AbortController().signal,
+    });
     assert.equal(run.result, "error");
     assert.equal(run.failure?.kind, "access_changed");
     assert.equal(run.failure?.code, "model_changed");
@@ -876,12 +1174,17 @@ test("a routine whose model was refused by runtime authority records access_chan
 test("startup removes sessions of Bots that no longer exist", async () => {
   const profile = tempProfile();
   const fauxModels = createFauxModels([fauxAssistantMessage("hi")]);
-  const first = await serviceFor(profile, fauxModels, { knownBotIds: async () => new Set(["bot:gone"]) });
+  const first = await serviceFor(profile, fauxModels, {
+    knownBotIds: async () => new Set(["bot:gone"]),
+  });
   await first.conversation("bot:gone");
   await first.shutdown();
   const service = await serviceFor(profile, fauxModels, { knownBotIds: async () => new Set() });
   try {
-    assert.deepEqual(await service.initialize(), { removedOrphans: [botDirectoryName("bot:gone")], interrupted: [] });
+    assert.deepEqual(await service.initialize(), {
+      removedOrphans: [botDirectoryName("bot:gone")],
+      interrupted: [],
+    });
   } finally {
     await service.shutdown();
   }
@@ -893,7 +1196,10 @@ test("a second Aiden process holding the profile makes Bots unavailable", async 
   try {
     await child.waitFor("HOST");
     const service = await serviceFor(profile, createFauxModels());
-    assert.deepEqual(await service.state("bot:a"), { kind: "unavailable", reason: "held_by_live_process" });
+    assert.deepEqual(await service.state("bot:a"), {
+      kind: "unavailable",
+      reason: "held_by_live_process",
+    });
     await assert.rejects(
       service.send("bot:a", { text: "hi", requestId: "x" }),
       /Bots are open in another Aiden window\./u,
@@ -906,7 +1212,12 @@ test("a second Aiden process holding the profile makes Bots unavailable", async 
 
 test("two Bots on the same OpenCode model keep their own session header", async () => {
   const sessions: string[] = [];
-  const reply = (_context: unknown, _options: unknown, _state: unknown, model: { headers?: Record<string, string> }) => {
+  const reply = (
+    _context: unknown,
+    _options: unknown,
+    _state: unknown,
+    model: { headers?: Record<string, string> },
+  ) => {
     sessions.push(model.headers?.["x-opencode-session"] ?? "none");
     return fauxAssistantMessage("ok");
   };
@@ -968,10 +1279,16 @@ test("each queued input runs with the tool policy of its own ingress", async () 
       return reply();
     };
   const fauxModels = createFauxModels([
-    record(() => fauxAssistantMessage([fauxToolCall("run_command", { text: "x" })], { stopReason: "toolUse" })),
+    record(() =>
+      fauxAssistantMessage([fauxToolCall("run_command", { text: "x" })], { stopReason: "toolUse" }),
+    ),
     record(() => fauxAssistantMessage("first done")),
     // The routine asks a question anyway; nobody is there to answer it.
-    record(() => fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], { stopReason: "toolUse" })),
+    record(() =>
+      fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], {
+        stopReason: "toolUse",
+      }),
+    ),
     record(() => fauxAssistantMessage("routine done")),
     record(() => fauxAssistantMessage("second done")),
   ]);
@@ -1012,7 +1329,10 @@ test("each queued input runs with the tool policy of its own ingress", async () 
     const view = await (await service.conversation("bot:a")).context(ctx);
     const questionResults = view.entries
       .filter((entry) => entry.kind === ToolResultEntry.kind)
-      .map((entry) => (entry as unknown as { model: Array<{ toolName: string; isError: boolean }> }).model[0]!)
+      .map(
+        (entry) =>
+          (entry as unknown as { model: Array<{ toolName: string; isError: boolean }> }).model[0]!,
+      )
       .filter((result) => result.toolName === QUESTION_TOOL_NAME);
     assert.equal(questionResults.length, 1);
     assert.equal(questionResults[0]!.isError, true, "the routine's question call is refused");
@@ -1038,11 +1358,15 @@ test("a routine queued before a quit keeps its own tool policy after Resume", as
   ];
   const before = await serviceFor(
     profile,
-    createFauxModels([fauxAssistantMessage([fauxToolCall("run_command", { text: "x" })], { stopReason: "toolUse" })]),
+    createFauxModels([
+      fauxAssistantMessage([fauxToolCall("run_command", { text: "x" })], { stopReason: "toolUse" }),
+    ]),
     { extension: assemblyDeps(state, { candidates: candidates(createBotQuestions()) }) },
   );
   await before.send("bot:a", { text: "run it", requestId: "desk-1" });
-  await waitFor(async () => (await before.state("bot:a")).kind === "running", { what: "the first turn" });
+  await waitFor(async () => (await before.state("bot:a")).kind === "running", {
+    what: "the first turn",
+  });
   const routine = await before.send("bot:a", {
     text: "daily digest",
     requestId: "routine:task-1:2026-10-07T09:00:00.000Z",
@@ -1057,7 +1381,9 @@ test("a routine queued before a quit keeps its own tool policy after Resume", as
   };
   const askAnyway = (context: { messages: readonly { role: string }[] }) => {
     offered.push(getCurrentTools(context.messages).map((tool) => tool.name));
-    return fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], { stopReason: "toolUse" });
+    return fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], {
+      stopReason: "toolUse",
+    });
   };
   const questions = createBotQuestions();
   let asked = 0;
@@ -1071,17 +1397,26 @@ test("a routine queued before a quit keeps its own tool policy after Resume", as
     await service.initialize();
     assert.equal((await service.state("bot:a")).kind, "interrupted");
     await service.resume("bot:a", "resume-1");
-    assert.deepEqual(await service.awaitReply("bot:a", routine.submissionId, new AbortController().signal), {
-      kind: "completed",
-      text: "routine done",
-    });
-    assert.ok(offered[0]!.includes(QUESTION_TOOL_NAME), "the resumed desktop turn offers questions");
+    assert.deepEqual(
+      await service.awaitReply("bot:a", routine.submissionId, new AbortController().signal),
+      {
+        kind: "completed",
+        text: "routine done",
+      },
+    );
+    assert.ok(
+      offered[0]!.includes(QUESTION_TOOL_NAME),
+      "the resumed desktop turn offers questions",
+    );
     assert.deepEqual(offered[1], offered[0], "the queued routine declares the same tools");
     assert.equal(asked, 0, "the resumed routine never shows a question card");
     const view = await (await service.conversation("bot:a")).context(ctx);
     const questionResults = view.entries
       .filter((entry) => entry.kind === ToolResultEntry.kind)
-      .map((entry) => (entry as unknown as { model: Array<{ toolName: string; isError: boolean }> }).model[0]!)
+      .map(
+        (entry) =>
+          (entry as unknown as { model: Array<{ toolName: string; isError: boolean }> }).model[0]!,
+      )
       .filter((result) => result.toolName === QUESTION_TOOL_NAME);
     assert.equal(questionResults.length, 1);
     assert.equal(questionResults[0]!.isError, true, "the routine keeps its policy after Resume");
@@ -1126,7 +1461,8 @@ test("an open session keeps its memory snapshot; reopening after the idle close 
     onSessionOpen: (botId) => memory.beginSession(botId),
     extension: {
       ...recordingDeps(),
-      memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
+      memorySection: async (botId, offer) =>
+        renderBotMemorySection(await memory.snapshot(botId), offer),
     },
   });
   const turn = async (requestId: string) => {
@@ -1150,24 +1486,53 @@ test("an open session keeps its memory snapshot; reopening after the idle close 
   }
 });
 
-
 test("only host-issued routine origins reach the actual durable input; copied origins are refused before model preparation", async (t) => {
   const sent = captureAnalyticsEvents(t);
   const fauxModels = createFauxModels([fauxAssistantMessage("routine done")]);
   let prepared = 0;
-  const service = await serviceFor(tempProfile(), fauxModels, { resolveModel: async () => { prepared++; return FAUX_MODEL_REF; } });
-  const origin = issueBotRoutineInputOrigin({ version: 1, botId: "bot:a", routineId: "routine-one", runId: "routine:routine-one:manual-one", kind: "manual" });
+  const service = await serviceFor(tempProfile(), fauxModels, {
+    resolveModel: async () => {
+      prepared++;
+      return FAUX_MODEL_REF;
+    },
+  });
+  const origin = issueBotRoutineInputOrigin({
+    version: 1,
+    botId: "bot:a",
+    routineId: "routine-one",
+    runId: "routine:routine-one:manual-one",
+    kind: "manual",
+  });
   try {
-    await assert.rejects(service.send("bot:a", { text: "fake", requestId: origin.runId, routineOrigin: { ...origin } }), /origin/u);
+    await assert.rejects(
+      service.send("bot:a", {
+        text: "fake",
+        requestId: origin.runId,
+        routineOrigin: { ...origin },
+      }),
+      /origin/u,
+    );
     assert.equal(prepared, 0);
-    const admitted = await service.send("bot:a", { text: "Do the accepted routine", requestId: origin.runId, routineOrigin: origin });
+    const admitted = await service.send("bot:a", {
+      text: "Do the accepted routine",
+      requestId: origin.runId,
+      routineOrigin: origin,
+    });
     await service.awaitReply("bot:a", admitted.submissionId, new AbortController().signal);
-    const entry = (await (await service.conversation("bot:a")).context(ctx)).entries.find((item) => item.kind === "aiden.routine-input");
+    const entry = (await (await service.conversation("bot:a")).context(ctx)).entries.find(
+      (item) => item.kind === "aiden.routine-input",
+    );
     assert.deepEqual(entry?.data, { routineOrigin: { ...origin } });
     assert.equal(fauxModels.calls(), 1);
     await analyticsSettled();
-    assert.deepEqual(sent, [], "a host-issued routine without a display label is not a person message");
-  } finally { await service.shutdown(); }
+    assert.deepEqual(
+      sent,
+      [],
+      "a host-issued routine without a display label is not a person message",
+    );
+  } finally {
+    await service.shutdown();
+  }
 });
 
 test("a steer into a running Bot turn is not a new message; a queued follow-up is", async (t) => {
@@ -1179,9 +1544,12 @@ test("a steer into a running Bot turn is not a new message; a queued follow-up i
   const service = await serviceFor(tempProfile(), fauxModels);
   try {
     await service.send("bot:a", { text: "write a lot", requestId: "desk-1" });
-    await waitFor(async () => (await service.state("bot:a")).kind === "running" && fauxModels.calls() === 1, {
-      what: "turn start",
-    });
+    await waitFor(
+      async () => (await service.state("bot:a")).kind === "running" && fauxModels.calls() === 1,
+      {
+        what: "turn start",
+      },
+    );
     await service.send("bot:a", { text: "shorter", requestId: "desk-2", whenBusy: "steer" });
     await analyticsSettled();
     assert.equal(sent.length, 1, "the steer joined the turn that was already counted");
@@ -1195,7 +1563,11 @@ test("a steer into a running Bot turn is not a new message; a queued follow-up i
 
 test("a person's message to a Bot counts once; a repeat, a routine, Telegram and a refused send do not", async (t) => {
   const sent = captureAnalyticsEvents(t);
-  const fauxModels = createFauxModels([fauxAssistantMessage("hi"), fauxAssistantMessage("[SILENT]"), fauxAssistantMessage("Telegram answer")]);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage("hi"),
+    fauxAssistantMessage("[SILENT]"),
+    fauxAssistantMessage("Telegram answer"),
+  ]);
   let model: ModelRef | null = FAUX_MODEL_REF;
   const service = await serviceFor(tempProfile(), fauxModels, { resolveModel: async () => model });
   try {
@@ -1203,15 +1575,30 @@ test("a person's message to a Bot counts once; a repeat, a routine, Telegram and
     await service.send("bot:a", { text: "hello", requestId: "desk-1" });
     await service.awaitReply("bot:a", first.submissionId, new AbortController().signal);
     await analyticsSettled();
-    assert.deepEqual(sent, [{
-      event: "chat_message_sent",
-      props: { provider_id: "custom", model_id: "custom", in_workspace: false, thinking: "other", origin: "bot" },
-    }]);
+    assert.deepEqual(sent, [
+      {
+        event: "chat_message_sent",
+        props: {
+          provider_id: "custom",
+          model_id: "custom",
+          in_workspace: false,
+          thinking: "other",
+          origin: "bot",
+        },
+      },
+    ]);
 
     sent.length = 0;
-    const routine = await service.send("bot:a", { text: "new?", requestId: "routine:t1:1", label: "Inbox check" });
+    const routine = await service.send("bot:a", {
+      text: "new?",
+      requestId: "routine:t1:1",
+      label: "Inbox check",
+    });
     await service.awaitReply("bot:a", routine.submissionId, new AbortController().signal);
-    const telegram = await service.send("bot:a", { text: "Telegram person", requestId: "tg:123:456" });
+    const telegram = await service.send("bot:a", {
+      text: "Telegram person",
+      requestId: "tg:123:456",
+    });
     await service.awaitReply("bot:a", telegram.submissionId, new AbortController().signal);
     model = null;
     await assert.rejects(service.send("bot:a", { text: "hi", requestId: "desk-2" }));
@@ -1224,7 +1611,10 @@ test("a person's message to a Bot counts once; a repeat, a routine, Telegram and
 
 test("a message from another Bot is not a person's message", async (t) => {
   const sent = captureAnalyticsEvents(t);
-  const service = await serviceFor(tempProfile(), createFauxModels([fauxAssistantMessage("answer")]));
+  const service = await serviceFor(
+    tempProfile(),
+    createFauxModels([fauxAssistantMessage("answer")]),
+  );
   const deliveryId = "00112233-4455-4677-8899-aabbccddeeff";
   try {
     const delivered = await service.send("bot:a", {
@@ -1232,7 +1622,14 @@ test("a message from another Bot is not a person's message", async (t) => {
       requestId: `bot:J:1:${deliveryId}`,
       ifIdle: true,
       ifNotInterrupted: true,
-      botMessage: { kind: "request", deliveryId, botId: "J", botName: "Jester", text: "clean", deadline: Date.now() + 60_000 },
+      botMessage: {
+        kind: "request",
+        deliveryId,
+        botId: "J",
+        botName: "Jester",
+        text: "clean",
+        deadline: Date.now() + 60_000,
+      },
     });
     await service.awaitReply("bot:a", delivered.submissionId, new AbortController().signal);
     await analyticsSettled();
@@ -1242,140 +1639,427 @@ test("a message from another Bot is not a person's message", async (t) => {
   }
 });
 
-test('Bot message inputs persist host provenance and are quiet', async () => {
-  let release:()=>void=()=>undefined;
-  const gate=new Promise<void>(r=>{release=r;});
-  const hold=countingTool('hold',async()=>{await gate;return 'done';});
-  const service = await serviceFor(tempProfile(), createFauxModels([fauxAssistantMessage([fauxToolCall('hold',{text:'x'})],{stopReason:'toolUse'}),fauxAssistantMessage('answer')]),{extension:recordingDeps({tools:[{tool:hold,replay:'unsafe'}]})});
-  const deliveryId = '00112233-4455-4677-8899-aabbccddeeff';
-  const input = {text:'framed', requestId:`bot:J:1:${deliveryId}`, ifIdle:true, ifNotInterrupted:true,
-    botMessage:{kind:'request' as const, deliveryId, botId:'J', botName:'Jester',text:'clean',deadline:Date.now()+60_000}};
+test("Bot message inputs persist host provenance and are quiet", async () => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const hold = countingTool("hold", async () => {
+    await gate;
+    return "done";
+  });
+  const service = await serviceFor(
+    tempProfile(),
+    createFauxModels([
+      fauxAssistantMessage([fauxToolCall("hold", { text: "x" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("answer"),
+    ]),
+    { extension: recordingDeps({ tools: [{ tool: hold, replay: "unsafe" }] }) },
+  );
+  const deliveryId = "00112233-4455-4677-8899-aabbccddeeff";
+  const input = {
+    text: "framed",
+    requestId: `bot:J:1:${deliveryId}`,
+    ifIdle: true,
+    ifNotInterrupted: true,
+    botMessage: {
+      kind: "request" as const,
+      deliveryId,
+      botId: "J",
+      botName: "Jester",
+      text: "clean",
+      deadline: Date.now() + 60_000,
+    },
+  };
   try {
-    const sent = await service.send('bot:a',input);
-    assert.equal((await service.quietInputs('bot:a',[sent.submissionId])).get(sent.submissionId),true);
-    assert.equal((await service.placedSubmissions('bot:a')).size,0);
-    release();await service.awaitReply('bot:a',sent.submissionId,new AbortController().signal);
-    const entries = (await (await service.conversation('bot:a')).context(ctx)).entries;
-    const entry = entries.find(e=>e.kind === 'aiden.bot-message-input');
-    assert.equal((entry?.data as {deadline:number}).deadline,input.botMessage.deadline);
-    assert.deepEqual(await notices(service,'bot:a'),[{notice:'bot_message',requestId:input.requestId,...input.botMessage}]);
-    await assert.rejects(service.send('bot:a',{...input,requestId:'invalid',label:'routine'}),TypeError);
-  } finally {release();await service.shutdown();}
+    const sent = await service.send("bot:a", input);
+    assert.equal(
+      (await service.quietInputs("bot:a", [sent.submissionId])).get(sent.submissionId),
+      true,
+    );
+    assert.equal((await service.placedSubmissions("bot:a")).size, 0);
+    release();
+    await service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    const entries = (await (await service.conversation("bot:a")).context(ctx)).entries;
+    const entry = entries.find((e) => e.kind === "aiden.bot-message-input");
+    assert.equal((entry?.data as { deadline: number }).deadline, input.botMessage.deadline);
+    assert.deepEqual(await notices(service, "bot:a"), [
+      { notice: "bot_message", requestId: input.requestId, ...input.botMessage },
+    ]);
+    await assert.rejects(
+      service.send("bot:a", { ...input, requestId: "invalid", label: "routine" }),
+      TypeError,
+    );
+  } finally {
+    release();
+    await service.shutdown();
+  }
 });
 
-test('idle-only Bot delivery cannot queue behind person work', async () => {
-  let release:()=>void=()=>undefined;
-  const gate=new Promise<void>(r=>{release=r;});
-  const hold=countingTool('hold',async()=>{await gate;return 'done';});
-  const service = await serviceFor(tempProfile(),createFauxModels([fauxAssistantMessage([fauxToolCall('hold',{text:'x'})],{stopReason:'toolUse'}),fauxAssistantMessage('person answer'),fauxAssistantMessage('bot answer')]),{extension:recordingDeps({tools:[{tool:hold,replay:'unsafe'}]})});
+test("idle-only Bot delivery cannot queue behind person work", async () => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const hold = countingTool("hold", async () => {
+    await gate;
+    return "done";
+  });
+  const service = await serviceFor(
+    tempProfile(),
+    createFauxModels([
+      fauxAssistantMessage([fauxToolCall("hold", { text: "x" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("person answer"),
+      fauxAssistantMessage("bot answer"),
+    ]),
+    { extension: recordingDeps({ tools: [{ tool: hold, replay: "unsafe" }] }) },
+  );
   try {
-    const person = await service.send('bot:a',{text:'person',requestId:'person'});
-    const input = {text:'bot',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',ifIdle:true,ifNotInterrupted:true,botMessage:{kind:'request' as const,botId:'J',botName:'J',text:'bot',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:Date.now()+60_000}};
-    await assert.rejects(service.send('bot:a',input),(e:unknown)=>e instanceof BotSessionError && e.reason === 'bot_busy');
-    assert.equal(await service.submissionForRequest('bot:a',input.requestId),undefined);
-    release();await service.awaitReply('bot:a',person.submissionId,new AbortController().signal);
-    const sent = await service.send('bot:a',input);
-    assert.deepEqual(await service.send('bot:a',input),{...sent,deduped:true});
-  } finally {release();await service.shutdown();}
+    const person = await service.send("bot:a", { text: "person", requestId: "person" });
+    const input = {
+      text: "bot",
+      requestId: "bot:J:1:00112233-4455-4677-8899-aabbccddeeff",
+      ifIdle: true,
+      ifNotInterrupted: true,
+      botMessage: {
+        kind: "request" as const,
+        botId: "J",
+        botName: "J",
+        text: "bot",
+        deliveryId: "00112233-4455-4677-8899-aabbccddeeff",
+        deadline: Date.now() + 60_000,
+      },
+    };
+    await assert.rejects(
+      service.send("bot:a", input),
+      (e: unknown) => e instanceof BotSessionError && e.reason === "bot_busy",
+    );
+    assert.equal(await service.submissionForRequest("bot:a", input.requestId), undefined);
+    release();
+    await service.awaitReply("bot:a", person.submissionId, new AbortController().signal);
+    const sent = await service.send("bot:a", input);
+    assert.deepEqual(await service.send("bot:a", input), { ...sent, deduped: true });
+  } finally {
+    release();
+    await service.shutdown();
+  }
 });
 
 test("ordinary sends keep the attended preparation for their tools", async () => {
   const tool = countingTool("person_tool");
   const base = recordingDeps({ tools: [{ tool, replay: "unsafe" }] });
   const faux = createFauxModels([
-    fauxAssistantMessage([fauxToolCall("person_tool", { text: "person action" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("person_tool", { text: "person action" })], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("person complete"),
   ]);
-  const service = await serviceFor(tempProfile(), faux, { extension: { ...base,
-    currentTools: async (bot, turn) => turn.requestId === undefined ? base.currentTools(bot, turn) : [],
-  } });
+  const service = await serviceFor(tempProfile(), faux, {
+    extension: {
+      ...base,
+      currentTools: async (bot, turn) =>
+        turn.requestId === undefined ? base.currentTools(bot, turn) : [],
+    },
+  });
   try {
     const person = await service.send("bot:a", { text: "An ordinary action", requestId: "person" });
-    assert.deepEqual(await service.awaitReply("bot:a", person.submissionId, new AbortController().signal), { kind: "completed", text: "person complete" });
+    assert.deepEqual(
+      await service.awaitReply("bot:a", person.submissionId, new AbortController().signal),
+      { kind: "completed", text: "person complete" },
+    );
     assert.deepEqual(tool.executions, [{ text: "person action" }]);
-  } finally { await service.shutdown(); }
+  } finally {
+    await service.shutdown();
+  }
 });
 
 test("queued Bot replies preserve the active person's tool inventory", async () => {
   let entered!: () => void, release!: () => void;
-  const started = new Promise<void>(resolve => { entered = resolve; });
-  const held = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const tool = countingTool("person_tool");
   const base = recordingDeps({ tools: [{ tool, replay: "unsafe" }] });
   const faux = createFauxModels([
-    async () => { entered(); await held; return fauxAssistantMessage([fauxToolCall("person_tool", { text: "first" })], { stopReason: "toolUse" }); },
-    fauxAssistantMessage([fauxToolCall("person_tool", { text: "second" })], { stopReason: "toolUse" }),
-    fauxAssistantMessage("person complete"), fauxAssistantMessage("reply complete"),
+    async () => {
+      entered();
+      await held;
+      return fauxAssistantMessage([fauxToolCall("person_tool", { text: "first" })], {
+        stopReason: "toolUse",
+      });
+    },
+    fauxAssistantMessage([fauxToolCall("person_tool", { text: "second" })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("person complete"),
+    fauxAssistantMessage("reply complete"),
   ]);
-  const service = await serviceFor(tempProfile(), faux, { extension: { ...base,
-    currentTools: async (bot, turn) => turn.requestId?.startsWith("botreply:") ? [] : base.currentTools(bot, turn),
-  } });
+  const service = await serviceFor(tempProfile(), faux, {
+    extension: {
+      ...base,
+      currentTools: async (bot, turn) =>
+        turn.requestId?.startsWith("botreply:") ? [] : base.currentTools(bot, turn),
+    },
+  });
   try {
     const person = await service.send("bot:a", { text: "Two actions", requestId: "person" });
     await started;
     const deliveryId = "00112233-4455-4677-8899-aabbccddeeff";
-    const reply = await service.send("bot:a", { text: "A later reply", requestId: `botreply:${deliveryId}`,
-      botMessage: { kind: "reply", deliveryId, botId: "J", botName: "Jester", text: "Pong", deadline: Date.now() + 60_000 } });
+    const reply = await service.send("bot:a", {
+      text: "A later reply",
+      requestId: `botreply:${deliveryId}`,
+      botMessage: {
+        kind: "reply",
+        deliveryId,
+        botId: "J",
+        botName: "Jester",
+        text: "Pong",
+        deadline: Date.now() + 60_000,
+      },
+    });
     release();
-    assert.deepEqual(await service.awaitReply("bot:a", person.submissionId, new AbortController().signal), { kind: "completed", text: "person complete" });
+    assert.deepEqual(
+      await service.awaitReply("bot:a", person.submissionId, new AbortController().signal),
+      { kind: "completed", text: "person complete" },
+    );
     assert.deepEqual(tool.executions, [{ text: "first" }, { text: "second" }]);
-    assert.deepEqual(await service.awaitReply("bot:a", reply.submissionId, new AbortController().signal), { kind: "completed", text: "reply complete" });
-  } finally { release(); await service.shutdown(); }
+    assert.deepEqual(
+      await service.awaitReply("bot:a", reply.submissionId, new AbortController().signal),
+      { kind: "completed", text: "reply complete" },
+    );
+  } finally {
+    release();
+    await service.shutdown();
+  }
 });
 
-test('simultaneous cross-message tools remain host-free through pause, delete and shutdown', {timeout:15_000}, async () => {
- const {createBotMessageLedger}=await import('../bot-messages/ledger.js');
- const {createBotMessageCourier}=await import('../bot-messages/courier.js');
- const {messageBotCandidate}=await import('../bot-messages/candidate.js');
- const {createBotApprovals}=await import('./bot-approvals.js');
- const profile=tempProfile();
- const ledger=createBotMessageLedger({file:()=>path.join(profile,'bots','bot-messages.json'),now:Date.now});
- let count=0,release:()=>void=()=>undefined;
- const gate=new Promise<void>(r=>{release=r;});
- const listeners=new Set<(id:string)=>void>();
- const roster=['bot:a','bot:b'].map(id=>({id,name:id,purpose:'help',acceptsMessages:true,sendsMessages:true}));
- const faux=createFauxModels(Array.from({length:8},()=>context=>{
-  const last=context.messages[context.messages.length-1];
-  return last?.role==='toolResult'?fauxAssistantMessage('Done'):fauxAssistantMessage([fauxToolCall('message_bot',{bot:(getCurrentSystemPrompt(context.messages)??'').includes('bot:a')?'bot:b':'bot:a',message:'Help'})],{stopReason:'toolUse'});
- }));
- let service:BotSessionRuntime;
- const courier=createBotMessageCourier({ledger,sessions:{send:(...a)=>service.send(...a),awaitReply:(...a)=>service.awaitReply(...a),markSilent:(...a)=>service.markSilent(...a),appendEntry:(...a)=>service.appendEntry(...a),state:(...a)=>service.state(...a),submissionForRequest:(...a)=>service.submissionForRequest(...a)},roster:async()=>roster,enabled:async()=>true,approvals:createBotApprovals({publish:()=>undefined}),onStateChange:fn=>{listeners.add(fn);return ()=>void listeners.delete(fn);},now:Date.now,setTimer:(fn,ms)=>{const timer=setTimeout(fn,ms);return {cancel:()=>clearTimeout(timer)};}});
- service=await serviceFor(profile,faux,{knownBotIds:async()=>new Set(roster.map(b=>b.id)),extension:{...recordingDeps(),systemSections:async bot=>[bot.id],currentTools:async bot=>[{...await messageBotCandidate(bot.id,{roster:async()=>roster,post:async input=>{const result=await courier.post(input);assert.equal(result.status,'sent');count++;await gate;return result;}}),replay:'safe'}]},deleteEffects:[id=>courier.forgetBot(id)],onStateChange:id=>{for(const listener of listeners)listener(id);}});
- try {
-  await courier.start();await Promise.all(['bot:a','bot:b'].map(id=>service.send(id,{text:'ask the peer',requestId:`person-${id}`})));
-  await waitFor(()=>count===2,{what:'both host-free tool acceptances'});
-  const pause=service.pause('bot:a','mac');const deletion=service.deleteBot('bot:b');release();
-  await Promise.all([pause,deletion]);
-  await courier.dispose();await service.shutdown();
-  assert.equal((await ledger.open()).filter(r=>r.fromBotId==='bot:b'||r.toBotId==='bot:b').length,0);
- } finally {release();await courier.dispose();await service.shutdown();}
-});
+test(
+  "simultaneous cross-message tools remain host-free through pause, delete and shutdown",
+  { timeout: 15_000 },
+  async () => {
+    const { createBotMessageLedger } = await import("../bot-messages/ledger.js");
+    const { createBotMessageCourier } = await import("../bot-messages/courier.js");
+    const { messageBotCandidate } = await import("../bot-messages/candidate.js");
+    const { createBotApprovals } = await import("./bot-approvals.js");
+    const profile = tempProfile();
+    const ledger = createBotMessageLedger({
+      file: () => path.join(profile, "bots", "bot-messages.json"),
+      now: Date.now,
+    });
+    let count = 0,
+      release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const listeners = new Set<(id: string) => void>();
+    const roster = ["bot:a", "bot:b"].map((id) => ({
+      id,
+      name: id,
+      purpose: "help",
+      acceptsMessages: true,
+      sendsMessages: true,
+    }));
+    const faux = createFauxModels(
+      Array.from({ length: 8 }, () => (context) => {
+        const last = context.messages[context.messages.length - 1];
+        return last?.role === "toolResult"
+          ? fauxAssistantMessage("Done")
+          : fauxAssistantMessage(
+              [
+                fauxToolCall("message_bot", {
+                  bot: (getCurrentSystemPrompt(context.messages) ?? "").includes("bot:a")
+                    ? "bot:b"
+                    : "bot:a",
+                  message: "Help",
+                }),
+              ],
+              { stopReason: "toolUse" },
+            );
+      }),
+    );
+    let service: BotSessionRuntime;
+    const courier = createBotMessageCourier({
+      ledger,
+      sessions: {
+        send: (...a) => service.send(...a),
+        awaitReply: (...a) => service.awaitReply(...a),
+        markSilent: (...a) => service.markSilent(...a),
+        appendEntry: (...a) => service.appendEntry(...a),
+        state: (...a) => service.state(...a),
+        submissionForRequest: (...a) => service.submissionForRequest(...a),
+      },
+      roster: async () => roster,
+      enabled: async () => true,
+      approvals: createBotApprovals({ publish: () => undefined }),
+      onStateChange: (fn) => {
+        listeners.add(fn);
+        return () => void listeners.delete(fn);
+      },
+      now: Date.now,
+      setTimer: (fn, ms) => {
+        const timer = setTimeout(fn, ms);
+        return { cancel: () => clearTimeout(timer) };
+      },
+    });
+    service = await serviceFor(profile, faux, {
+      knownBotIds: async () => new Set(roster.map((b) => b.id)),
+      extension: {
+        ...recordingDeps(),
+        systemSections: async (bot) => [bot.id],
+        currentTools: async (bot) => [
+          {
+            ...(await messageBotCandidate(bot.id, {
+              roster: async () => roster,
+              post: async (input) => {
+                const result = await courier.post(input);
+                assert.equal(result.status, "sent");
+                count++;
+                await gate;
+                return result;
+              },
+            })),
+            replay: "safe",
+          },
+        ],
+      },
+      deleteEffects: [(id) => courier.forgetBot(id)],
+      onStateChange: (id) => {
+        for (const listener of listeners) listener(id);
+      },
+    });
+    try {
+      await courier.start();
+      await Promise.all(
+        ["bot:a", "bot:b"].map((id) =>
+          service.send(id, { text: "ask the peer", requestId: `person-${id}` }),
+        ),
+      );
+      await waitFor(() => count === 2, { what: "both host-free tool acceptances" });
+      const pause = service.pause("bot:a", "mac");
+      const deletion = service.deleteBot("bot:b");
+      release();
+      await Promise.all([pause, deletion]);
+      await courier.dispose();
+      await service.shutdown();
+      assert.equal(
+        (await ledger.open()).filter((r) => r.fromBotId === "bot:b" || r.toBotId === "bot:b")
+          .length,
+        0,
+      );
+    } finally {
+      release();
+      await courier.dispose();
+      await service.shutdown();
+    }
+  },
+);
 
-test('courier expiry leaves a busy real harness and queued human follow-ups intact',async()=>{
- const {createBotMessageLedger}=await import('../bot-messages/ledger.js');
- const {createBotMessageCourier}=await import('../bot-messages/courier.js');
- const {createBotApprovals}=await import('./bot-approvals.js');
- let release:()=>void=()=>undefined;
- const gate=new Promise<void>(r=>{release=r;});const hold=countingTool('hold',async()=>{await gate;return 'done';});
- const profile=tempProfile();let now=Date.now();
- const service=await serviceFor(profile,createFauxModels([fauxAssistantMessage([fauxToolCall('hold',{text:'x'})],{stopReason:'toolUse'}),fauxAssistantMessage('first human answer'),fauxAssistantMessage('queued human answer')]),{knownBotIds:async()=>new Set(['bot:a','bot:b']),extension:recordingDeps({tools:[{tool:hold,replay:'unsafe'}]})});
- const ledger=createBotMessageLedger({file:()=>path.join(profile,'bots','bot-messages.json'),now:()=>now});
- const deadlines:Array<()=>void>=[];
- const courier=createBotMessageCourier({ledger,sessions:service,roster:async()=>['bot:a','bot:b'].map(id=>({id,name:id,purpose:'help',acceptsMessages:true,sendsMessages:true})),enabled:async()=>true,approvals:createBotApprovals({publish:()=>undefined}),onStateChange:()=>()=>undefined,now:()=>now,setTimer:(fn,ms)=>{if(ms===0){const timer=setTimeout(fn,0);return {cancel:()=>clearTimeout(timer)};}deadlines.push(fn);return {cancel:()=>undefined};}});
- try {
-  const first=await service.send('bot:b',{text:'human work',requestId:'human-first'});
-  const queued=await service.send('bot:b',{text:'queued human',requestId:'human-second',whenBusy:'followUp'});
-  await courier.start();const accepted=await courier.post({fromBotId:'bot:a',target:'bot:b',message:'help',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',runRequestIds:['human-origin']});
-  assert.equal(accepted.status,'sent');await waitFor(()=>deadlines.length===1);
-  now+=1_800_001;deadlines[0]!();
-  await waitFor(async()=>((await (await service.conversation('bot:a')).context(ctx)).entries.some(e=>e.kind==='aiden.bot-message-status')));
-  assert.equal(await service.submissionForRequest('bot:b','bot:bot:a:1:00112233-4455-4677-8899-aabbccddeeff'),undefined);
-  assert.equal((await service.state('bot:b')).kind,'running');
-  release();const answers=await Promise.all([first,queued].map(s=>service.awaitReply('bot:b',s.submissionId,new AbortController().signal)));
-  assert.deepEqual(answers,[{kind:'completed',text:'first human answer'},{kind:'completed',text:'queued human answer'}]);
- } finally {release();await courier.dispose();await service.shutdown();}
+test("courier expiry leaves a busy real harness and queued human follow-ups intact", async () => {
+  const { createBotMessageLedger } = await import("../bot-messages/ledger.js");
+  const { createBotMessageCourier } = await import("../bot-messages/courier.js");
+  const { createBotApprovals } = await import("./bot-approvals.js");
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const hold = countingTool("hold", async () => {
+    await gate;
+    return "done";
+  });
+  const profile = tempProfile();
+  let now = Date.now();
+  const service = await serviceFor(
+    profile,
+    createFauxModels([
+      fauxAssistantMessage([fauxToolCall("hold", { text: "x" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("first human answer"),
+      fauxAssistantMessage("queued human answer"),
+    ]),
+    {
+      knownBotIds: async () => new Set(["bot:a", "bot:b"]),
+      extension: recordingDeps({ tools: [{ tool: hold, replay: "unsafe" }] }),
+    },
+  );
+  const ledger = createBotMessageLedger({
+    file: () => path.join(profile, "bots", "bot-messages.json"),
+    now: () => now,
+  });
+  const deadlines: Array<() => void> = [];
+  const courier = createBotMessageCourier({
+    ledger,
+    sessions: service,
+    roster: async () =>
+      ["bot:a", "bot:b"].map((id) => ({
+        id,
+        name: id,
+        purpose: "help",
+        acceptsMessages: true,
+        sendsMessages: true,
+      })),
+    enabled: async () => true,
+    approvals: createBotApprovals({ publish: () => undefined }),
+    onStateChange: () => () => undefined,
+    now: () => now,
+    setTimer: (fn, ms) => {
+      if (ms === 0) {
+        const timer = setTimeout(fn, 0);
+        return { cancel: () => clearTimeout(timer) };
+      }
+      deadlines.push(fn);
+      return { cancel: () => undefined };
+    },
+  });
+  try {
+    const first = await service.send("bot:b", { text: "human work", requestId: "human-first" });
+    const queued = await service.send("bot:b", {
+      text: "queued human",
+      requestId: "human-second",
+      whenBusy: "followUp",
+    });
+    await courier.start();
+    const accepted = await courier.post({
+      fromBotId: "bot:a",
+      target: "bot:b",
+      message: "help",
+      deliveryId: "00112233-4455-4677-8899-aabbccddeeff",
+      runRequestIds: ["human-origin"],
+    });
+    assert.equal(accepted.status, "sent");
+    await waitFor(() => deadlines.length === 1);
+    now += 1_800_001;
+    deadlines[0]!();
+    await waitFor(async () =>
+      (await (await service.conversation("bot:a")).context(ctx)).entries.some(
+        (e) => e.kind === "aiden.bot-message-status",
+      ),
+    );
+    assert.equal(
+      await service.submissionForRequest(
+        "bot:b",
+        "bot:bot:a:1:00112233-4455-4677-8899-aabbccddeeff",
+      ),
+      undefined,
+    );
+    assert.equal((await service.state("bot:b")).kind, "running");
+    release();
+    const answers = await Promise.all(
+      [first, queued].map((s) =>
+        service.awaitReply("bot:b", s.submissionId, new AbortController().signal),
+      ),
+    );
+    assert.deepEqual(answers, [
+      { kind: "completed", text: "first human answer" },
+      { kind: "completed", text: "queued human answer" },
+    ]);
+  } finally {
+    release();
+    await courier.dispose();
+    await service.shutdown();
+  }
 });
-
 
 test("issue status append remains one durable entry across marker failures and service/runtime restart", async () => {
   const profile = tempProfile();
@@ -1386,29 +2070,78 @@ test("issue status append remains one durable entry across marker failures and s
   const makeIssues = () => {
     const disk = createBotIssueStore({ profileDir: () => profile });
     const store: BotIssueStore = {
-      read: id => disk.read(id),
-      forgetBot: id => disk.forgetBot(id),
-      change: (id, apply) => disk.change(id, rows => {
-        const changed = apply(rows);
-        if (markerFails && changed.issues.some(row => row.statusAppended === true && rows.find(old => old.id === row.id)?.statusAppended === false)) throw new Error("marker disk busy");
-        return changed;
+      read: (id) => disk.read(id),
+      forgetBot: (id) => disk.forgetBot(id),
+      change: (id, apply) =>
+        disk.change(id, (rows) => {
+          const changed = apply(rows);
+          if (
+            markerFails &&
+            changed.issues.some(
+              (row) =>
+                row.statusAppended === true &&
+                rows.find((old) => old.id === row.id)?.statusAppended === false,
+            )
+          )
+            throw new Error("marker disk busy");
+          return changed;
+        }),
+    };
+    return {
+      disk,
+      issues: createBotIssueService({
+        store,
+        now: () => 2000,
+        appendEntry: async (id, kind, data) => {
+          await runtime.appendEntry(
+            id,
+            kind,
+            data as import("@earendil-works/chord/json").JsonValue,
+          );
+        },
+        onError: () => {
+          failures++;
+        },
+        funnel: { deliver: async () => "sent" },
+        actions: {
+          resumeRoutine: async () => "missing",
+          stopRun: async () => {},
+          snoozeStall() {},
+          openSettings() {},
+        },
       }),
     };
-    return { disk, issues: createBotIssueService({
-      store, now: () => 2000,
-      appendEntry: async (id, kind, data) => { await runtime.appendEntry(id, kind, data as import("@earendil-works/chord/json").JsonValue); },
-      onError: () => { failures++; },
-      funnel: { deliver: async () => "sent" },
-      actions: { resumeRoutine: async () => "missing", stopRun: async () => {}, snoozeStall() {}, openSettings() {} },
-    }) };
   };
-  const statuses = async () => (await (await runtime.conversation("bot:a")).context(ctx)).entries.filter(entry => entry.kind === BOT_ISSUE_STATUS_ENTRY_KIND);
+  const statuses = async () =>
+    (await (await runtime.conversation("bot:a")).context(ctx)).entries.filter(
+      (entry) => entry.kind === BOT_ISSUE_STATUS_ENTRY_KIND,
+    );
   try {
     let app = makeIssues();
-    const issue = await app.issues.raise({ botId: "bot:a", kind: "access_needed", dedupeKey: "access:taxes", title: "Needs you", body: "Waiting", actions: [{ kind: "dismiss_access" }],
-      access: { label: "Taxes", folderPath: "/Taxes", authorization: { policyRevision: "private-policy", requestIds: ["private-run"], target: "folder", root: "/Taxes", identity: { device: "1", inode: "2" }, choices: ["not_now", "always", "once"] } },
+    const issue = await app.issues.raise({
+      botId: "bot:a",
+      kind: "access_needed",
+      dedupeKey: "access:taxes",
+      title: "Needs you",
+      body: "Waiting",
+      actions: [{ kind: "dismiss_access" }],
+      access: {
+        label: "Taxes",
+        folderPath: "/Taxes",
+        authorization: {
+          policyRevision: "private-policy",
+          requestIds: ["private-run"],
+          target: "folder",
+          root: "/Taxes",
+          identity: { device: "1", inode: "2" },
+          choices: ["not_now", "always", "once"],
+        },
+      },
     });
-    await assert.rejects(app.issues.act("bot:a", issue.id, { kind: "dismiss_access" }), /marker disk busy/u);
+    await assert.rejects(
+      app.issues.act("bot:a", issue.id, { kind: "dismiss_access" }),
+      /marker disk busy/u,
+    );
     assert.equal((await statuses()).length, 1, "the append committed before the marker failed");
     assert.equal((await app.disk.read("bot:a"))[0]!.statusAppended, false);
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -1423,18 +2156,31 @@ test("issue status append remains one durable entry across marker failures and s
     const before = failures;
     await app.issues.list("bot:a");
     await waitFor(() => failures > before);
-    assert.equal((await statuses()).length, 1, "a fresh issue service and reopened SQLite session dedupe the same settlement");
+    assert.equal(
+      (await statuses()).length,
+      1,
+      "a fresh issue service and reopened SQLite session dedupe the same settlement",
+    );
     markerFails = false;
     await app.issues.list("bot:a");
     await waitFor(async () => (await app.disk.read("bot:a"))[0]!.statusAppended === true);
     const entries = await statuses();
     assert.equal(entries.length, 1);
-    assert.deepEqual(botIssueStatusOf(entries[0]!.data), { issueId: issue.id, resolution: "dismissed", resolvedAt: 2000 });
-    assert.deepEqual(Object.keys(entries[0]!.data as object).sort(), ["effectId", "issueId", "resolution", "resolvedAt"], "host metadata adds only dedupe identity, never private access authorization");
+    assert.deepEqual(botIssueStatusOf(entries[0]!.data), {
+      issueId: issue.id,
+      resolution: "dismissed",
+      resolvedAt: 2000,
+    });
+    assert.deepEqual(
+      Object.keys(entries[0]!.data as object).sort(),
+      ["effectId", "issueId", "resolution", "resolvedAt"],
+      "host metadata adds only dedupe identity, never private access authorization",
+    );
     assert.equal(faux.calls(), 0, "repairs never run inference");
-  } finally { await runtime.shutdown(); }
+  } finally {
+    await runtime.shutdown();
+  }
 });
-
 
 test("stop calls onStopped after aborting the running tool and before publishing settled state", async () => {
   const order: string[] = [];
@@ -1442,11 +2188,19 @@ test("stop calls onStopped after aborting the running tool and before publishing
     signal!.addEventListener("abort", () => order.push("aborted"), { once: true });
     return blockingUntilAborted(signal);
   });
-  const service = await serviceFor(tempProfile(), createFauxModels([fauxAssistantMessage([fauxToolCall("hold", { text: "wait" })], { stopReason: "toolUse" })]), {
-    extension: recordingDeps({ tools: [{ tool: hold, replay: "unsafe" }] }),
-    onStopped: (botId) => order.push(`stopped:${botId}`),
-    onStateChange: (_botId, state) => { if (state.kind !== "running") order.push(`state:${state.kind}`); },
-  });
+  const service = await serviceFor(
+    tempProfile(),
+    createFauxModels([
+      fauxAssistantMessage([fauxToolCall("hold", { text: "wait" })], { stopReason: "toolUse" }),
+    ]),
+    {
+      extension: recordingDeps({ tools: [{ tool: hold, replay: "unsafe" }] }),
+      onStopped: (botId) => order.push(`stopped:${botId}`),
+      onStateChange: (_botId, state) => {
+        if (state.kind !== "running") order.push(`state:${state.kind}`);
+      },
+    },
+  );
   try {
     await service.stop("bot:a");
     assert.deepEqual(order, [], "idle Stop has no stop callback");
@@ -1457,7 +2211,9 @@ test("stop calls onStopped after aborting the running tool and before publishing
     assert.deepEqual(order, ["aborted", "stopped:bot:a", "state:idle"]);
     await service.stop("bot:a");
     assert.deepEqual(order, ["aborted", "stopped:bot:a", "state:idle"]);
-  } finally { await service.shutdown(); }
+  } finally {
+    await service.shutdown();
+  }
 });
 
 test("stop with expectedSubmissionId stops only the intended submission and spares a successor turn", async () => {
@@ -1477,16 +2233,27 @@ test("stop with expectedSubmissionId stops only the intended submission and spar
   try {
     const first = await service.send("bot:a", { text: "First job", requestId: "tg:bot:a:1:0:10" });
     await waitFor(() => hold.executions.length === 1, { what: "first turn running" });
-    assert.deepEqual(await service.stop("bot:a", { expectedSubmissionId: first.submissionId }), { kind: "idle" });
+    assert.deepEqual(await service.stop("bot:a", { expectedSubmissionId: first.submissionId }), {
+      kind: "idle",
+    });
     assert.deepEqual(stopped, ["bot:a"]);
 
-    const second = await service.send("bot:a", { text: "Second job", requestId: "tg:bot:a:1:0:11" });
+    const second = await service.send("bot:a", {
+      text: "Second job",
+      requestId: "tg:bot:a:1:0:11",
+    });
     await waitFor(() => hold.executions.length === 2, { what: "second turn running" });
     const replayed = await service.stop("bot:a", { expectedSubmissionId: first.submissionId });
-    assert.deepEqual(replayed, { kind: "running", submissionId: second.submissionId }, "stale Stop replay leaves successor running");
+    assert.deepEqual(
+      replayed,
+      { kind: "running", submissionId: second.submissionId },
+      "stale Stop replay leaves successor running",
+    );
     assert.deepEqual(stopped, ["bot:a"]);
 
-    assert.deepEqual(await service.stop("bot:a", { expectedSubmissionId: second.submissionId }), { kind: "idle" });
+    assert.deepEqual(await service.stop("bot:a", { expectedSubmissionId: second.submissionId }), {
+      kind: "idle",
+    });
     assert.deepEqual(stopped, ["bot:a", "bot:a"]);
   } finally {
     await service.shutdown();
@@ -1498,10 +2265,19 @@ test("dismiss calls onStopped once after the interrupted turn settles, before pu
   const submissionId = await killMidStream(profile);
   const order: string[] = [];
   let inspected: Promise<unknown[]> | undefined;
-  const service = await serviceFor(profile, createFauxModels([fauxAssistantMessage("must not run")]), {
-    onStopped: (botId) => { order.push(`stopped:${botId}`); inspected = notices(service, botId); },
-    onStateChange: (_botId, state) => { if (state.kind === "idle") order.push("state:idle"); },
-  });
+  const service = await serviceFor(
+    profile,
+    createFauxModels([fauxAssistantMessage("must not run")]),
+    {
+      onStopped: (botId) => {
+        order.push(`stopped:${botId}`);
+        inspected = notices(service, botId);
+      },
+      onStateChange: (_botId, state) => {
+        if (state.kind === "idle") order.push("state:idle");
+      },
+    },
+  );
   try {
     await service.initialize();
     order.length = 0;
@@ -1509,29 +2285,85 @@ test("dismiss calls onStopped once after the interrupted turn settles, before pu
     assert.deepEqual(order, [], "Stop on interrupted is a no-op");
     assert.deepEqual(await service.dismiss("bot:killed", "dismiss-plan"), { kind: "idle" });
     assert.deepEqual(order, ["stopped:bot:killed", "state:idle"]);
-    assert.deepEqual(await inspected, [{ notice: "interrupted", submissionId }], "dismissal is already durable at the hook");
+    assert.deepEqual(
+      await inspected,
+      [{ notice: "interrupted", submissionId }],
+      "dismissal is already durable at the hook",
+    );
     await service.dismiss("bot:killed", "dismiss-plan");
     await service.dismiss("bot:killed", "another-dismiss");
     assert.deepEqual(order, ["stopped:bot:killed", "state:idle"]);
-  } finally { await service.shutdown(); }
+  } finally {
+    await service.shutdown();
+  }
 });
-
 
 function sessionPlanStore(profileDir: string) {
   const access = createBotRunAccess({ now: Date.now });
-  const options = { profileDir, knownBot: async () => true, revalidate: async () => {}, revokeAccess: (botId: string, planId: string) => access.revokeOwner(botId, { kind: "plan", id: planId }) };
+  const options = {
+    profileDir,
+    knownBot: async () => true,
+    revalidate: async () => {},
+    revokeAccess: (botId: string, planId: string) =>
+      access.revokeOwner(botId, { kind: "plan", id: planId }),
+  };
   const plans = createBotPlans(options);
   async function approve(botId: string, requestId: string) {
-    const proposal: BotPlanProposal = { title: "Calendar job", why: "Finish the task", steps: ["Do the work", "Finish the task"], items: [{ id: "i1", kind: "shell" }], authorization: { policyRevision: "policy", bindingRevision: "binding", proposalFingerprint: "", rules: [] } };
+    const proposal: BotPlanProposal = {
+      title: "Calendar job",
+      why: "Finish the task",
+      steps: ["Do the work", "Finish the task"],
+      items: [{ id: "i1", kind: "shell" }],
+      authorization: {
+        policyRevision: "policy",
+        bindingRevision: "binding",
+        proposalFingerprint: "",
+        rules: [],
+      },
+    };
     proposal.authorization.proposalFingerprint = botPlanProposalFingerprint(proposal);
-    const result = plans.request({ botId, planId: "p1", toolCallId: "plan-call", proposal, requestIds: [requestId], signal: undefined });
+    const result = plans.request({
+      botId,
+      planId: "p1",
+      toolCallId: "plan-call",
+      proposal,
+      requestIds: [requestId],
+      signal: undefined,
+    });
     assert.equal((await plans.current(botId))?.status, "pending");
     assert.equal(await plans.respond(botId, "p1", "approve"), "done");
     assert.equal((await result).status, "approved");
-    assert.equal(await plans.grantFreshAccess(botId, "p1", async () => {
-      access.grant(botId, { requestIds: [requestId], target: "folder", key: "/Plan", root: "/Plan", label: "Plan folder", identity: { device: "1", inode: "2" }, policyRevision: "policy", access: "write", owner: { kind: "plan", id: "p1" }, grantedAt: Date.now(), expiresAt: Date.now() + 60_000 });
-    }), true);
-    access.grant(botId, { requestIds: ["other-task"], target: "folder", key: "/Other", root: "/Other", label: "Other task", identity: { device: "1", inode: "3" }, policyRevision: "policy", access: "read", owner: { kind: "access", id: "other" }, grantedAt: Date.now(), expiresAt: Date.now() + 60_000 });
+    assert.equal(
+      await plans.grantFreshAccess(botId, "p1", async () => {
+        access.grant(botId, {
+          requestIds: [requestId],
+          target: "folder",
+          key: "/Plan",
+          root: "/Plan",
+          label: "Plan folder",
+          identity: { device: "1", inode: "2" },
+          policyRevision: "policy",
+          access: "write",
+          owner: { kind: "plan", id: "p1" },
+          grantedAt: Date.now(),
+          expiresAt: Date.now() + 60_000,
+        });
+      }),
+      true,
+    );
+    access.grant(botId, {
+      requestIds: ["other-task"],
+      target: "folder",
+      key: "/Other",
+      root: "/Other",
+      label: "Other task",
+      identity: { device: "1", inode: "3" },
+      policyRevision: "policy",
+      access: "read",
+      owner: { kind: "access", id: "other" },
+      grantedAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+    });
     assert.equal(access.location(botId, [requestId], "policy")?.root, "/Plan");
   }
   return { plans, access, approve, restart: () => createBotPlans(options) };
@@ -1540,16 +2372,24 @@ function sessionPlanStore(profileDir: string) {
 /** The main wiring is deliberately void: plan persistence never blocks the session serial. */
 function sessionPlanCallbacks(plans: BotPlans) {
   const pending: Promise<void>[] = [];
-  const lifecycle = createBotPlanLifecycle({ plans: { endRuns: (botId, reason) => {
-    const operation = plans.endRuns(botId, reason); pending.push(operation); return operation;
-  } } });
+  const lifecycle = createBotPlanLifecycle({
+    plans: {
+      endRuns: (botId, reason) => {
+        const operation = plans.endRuns(botId, reason);
+        pending.push(operation);
+        return operation;
+      },
+    },
+  });
   return {
     callbacks: {
       onStopped: lifecycle.stopped,
       onStateChange: lifecycle.stateChanged,
     },
     onRunSettled: lifecycle.settled,
-    async settled() { await Promise.all(pending); },
+    async settled() {
+      await Promise.all(pending);
+    },
   };
 }
 
@@ -1558,7 +2398,13 @@ test("real Stop ends a live plan and revokes only its grant before subsequent us
   const store = sessionPlanStore(profile);
   const hooks = sessionPlanCallbacks(store.plans);
   const hold = countingTool("hold", (_params, signal) => blockingUntilAborted(signal));
-  const service = await serviceFor(profile, createFauxModels([fauxAssistantMessage([fauxToolCall("hold", { text: "wait" })], { stopReason: "toolUse" })]), { extension: recordingDeps({ tools: [{ tool: hold, replay: "unsafe" }] }), ...hooks.callbacks });
+  const service = await serviceFor(
+    profile,
+    createFauxModels([
+      fauxAssistantMessage([fauxToolCall("hold", { text: "wait" })], { stopReason: "toolUse" }),
+    ]),
+    { extension: recordingDeps({ tools: [{ tool: hold, replay: "unsafe" }] }), ...hooks.callbacks },
+  );
   try {
     await service.send("bot:a", { text: "Work", requestId: "desk-plan-run" });
     await waitFor(() => hold.executions.length === 1, { what: "running tool" });
@@ -1568,7 +2414,9 @@ test("real Stop ends a live plan and revokes only its grant before subsequent us
     assert.equal((await store.plans.current("bot:a"))?.status, "stopped");
     assert.equal(store.access.location("bot:a", ["desk-plan-run"], "policy"), undefined);
     assert.equal(store.access.location("bot:a", ["other-task"], "policy")?.root, "/Other");
-  } finally { await service.shutdown(); }
+  } finally {
+    await service.shutdown();
+  }
 });
 
 test("recovered unfinished approval survives observation, Dismiss ends it and revokes its own grant", async () => {
@@ -1581,21 +2429,35 @@ test("recovered unfinished approval survives observation, Dismiss ends it and re
   const models = createFauxModels([fauxAssistantMessage("must not run")]);
   const service = await serviceFor(profile, models, hooks.callbacks);
   try {
-    assert.deepEqual(await service.state("bot:killed"), { kind: "idle" }, "initial state precedes unfinished-run recovery");
+    assert.deepEqual(
+      await service.state("bot:killed"),
+      { kind: "idle" },
+      "initial state precedes unfinished-run recovery",
+    );
     assert.equal((await restored.current("bot:killed"))?.status, "active");
     await service.initialize();
     assert.deepEqual(await service.state("bot:killed"), { kind: "interrupted", submissionId });
     await hooks.settled();
-    assert.equal((await restored.current("bot:killed"))?.status, "active", "opening and initial observations do not finish recovered approval");
+    assert.equal(
+      (await restored.current("bot:killed"))?.status,
+      "active",
+      "opening and initial observations do not finish recovered approval",
+    );
     await service.stop("bot:killed");
-    assert.equal((await restored.current("bot:killed"))?.status, "active", "idle/interrupted Stop is a no-op");
+    assert.equal(
+      (await restored.current("bot:killed"))?.status,
+      "active",
+      "idle/interrupted Stop is a no-op",
+    );
     await service.dismiss("bot:killed", "dismiss-plan-lifecycle");
     await hooks.settled();
     assert.equal((await restored.current("bot:killed"))?.status, "stopped");
     assert.equal(store.access.location("bot:killed", ["req-killed"], "policy"), undefined);
     assert.equal(store.access.location("bot:killed", ["other-task"], "policy")?.root, "/Other");
     assert.equal(models.calls(), 0);
-  } finally { await service.shutdown(); }
+  } finally {
+    await service.shutdown();
+  }
 });
 
 test("natural completion ends a real plan after a running observation and revokes its grant", async () => {
@@ -1603,57 +2465,127 @@ test("natural completion ends a real plan after a running observation and revoke
   const store = sessionPlanStore(profile);
   const hooks = sessionPlanCallbacks(store.plans);
   let finish!: (value: string) => void;
-  const held = new Promise<string>((resolve) => { finish = resolve; });
-  const hold = countingTool("hold", () => held);
-  const models = createFauxModels([fauxAssistantMessage([fauxToolCall("hold", { text: "wait" })], { stopReason: "toolUse" }), fauxAssistantMessage("Done")]);
-  let projection: BotLiveProjection | undefined;
-  const service = await serviceFor(profile, models, { extension: recordingDeps({ tools: [{ tool: hold, replay: "unsafe" }] }), ...hooks.callbacks,
-    onStateChange: (botId, state) => { hooks.callbacks.onStateChange(botId, state); projection?.notifyState(botId, state); },
+  const held = new Promise<string>((resolve) => {
+    finish = resolve;
   });
-  projection = createBotLiveProjection({ conversation: (id) => service.conversation(id), state: (id) => service.state(id), quietInputs: (id, ids) => service.quietInputs(id, ids), plan: (id) => store.plans.current(id), onRunSettled: hooks.onRunSettled });
+  const hold = countingTool("hold", () => held);
+  const models = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("hold", { text: "wait" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Done"),
+  ]);
+  let projection: BotLiveProjection | undefined;
+  const service = await serviceFor(profile, models, {
+    extension: recordingDeps({ tools: [{ tool: hold, replay: "unsafe" }] }),
+    ...hooks.callbacks,
+    onStateChange: (botId, state) => {
+      hooks.callbacks.onStateChange(botId, state);
+      projection?.notifyState(botId, state);
+    },
+  });
+  projection = createBotLiveProjection({
+    conversation: (id) => service.conversation(id),
+    state: (id) => service.state(id),
+    quietInputs: (id, ids) => service.quietInputs(id, ids),
+    plan: (id) => store.plans.current(id),
+    onRunSettled: hooks.onRunSettled,
+  });
   try {
     const sent = await service.send("bot:a", { text: "Work", requestId: "desk-plan-complete" });
     await waitFor(() => hold.executions.length === 1, { what: "running tool" });
     await store.approve("bot:a", "desk-plan-complete");
     const events: import("../../../renderer/shared/bot-live.js").BotLiveEvent[] = [];
-    const subscription = await projection.subscribe("bot:a", { send: (event) => { events.push(event); } });
+    const subscription = await projection.subscribe("bot:a", {
+      send: (event) => {
+        events.push(event);
+      },
+    });
     assert.equal(subscription.snapshot.plan?.status, "active");
-    for (const privateKey of ["authorization", "requestIds", "proposal", "toolCallId", "policyRevision", "bindingRevision", "proposalFingerprint"]) {
-      assert.equal(privateKey in subscription.snapshot.plan!, false, `${privateKey} stays main-only`);
+    for (const privateKey of [
+      "authorization",
+      "requestIds",
+      "proposal",
+      "toolCallId",
+      "policyRevision",
+      "bindingRevision",
+      "proposalFingerprint",
+    ]) {
+      assert.equal(
+        privateKey in subscription.snapshot.plan!,
+        false,
+        `${privateKey} stays main-only`,
+      );
     }
     await projection.refreshPlan("bot:a");
     await store.plans.markStep("bot:a", ["desk-plan-complete"], 1, "done");
     await projection.refreshPlan("bot:a");
-    await waitFor(() => events.some((event) => event.type === "plan"), { what: "real public plan event" });
+    await waitFor(() => events.some((event) => event.type === "plan"), {
+      what: "real public plan event",
+    });
     const planEvent = events.find((event) => event.type === "plan")!;
-    assert.equal(JSON.stringify(planEvent).includes("desk-plan-complete"), false, "raw request identity never enters the plan event");
+    assert.equal(
+      JSON.stringify(planEvent).includes("desk-plan-complete"),
+      false,
+      "raw request identity never enters the plan event",
+    );
     finish("Finished the work");
-    assert.equal((await service.awaitReply("bot:a", sent.submissionId, new AbortController().signal)).kind, "completed");
-    await waitFor(async () => (await store.plans.current("bot:a"))?.status === "finished", { what: "projection observes natural completion and ends the plan" });
+    assert.equal(
+      (await service.awaitReply("bot:a", sent.submissionId, new AbortController().signal)).kind,
+      "completed",
+    );
+    await waitFor(async () => (await store.plans.current("bot:a"))?.status === "finished", {
+      what: "projection observes natural completion and ends the plan",
+    });
     await hooks.settled();
     assert.equal((await store.plans.current("bot:a"))?.status, "finished");
     assert.equal(store.access.location("bot:a", ["desk-plan-complete"], "policy"), undefined);
     assert.equal(store.access.location("bot:a", ["other-task"], "policy")?.root, "/Other");
-  } finally { await projection.close(); await service.shutdown(); }
+  } finally {
+    await projection.close();
+    await service.shutdown();
+  }
 });
 
 test("metadata commits dedupe concurrent issue effects and cannot append after deletion begins", async () => {
   let enteredDelete!: () => void, releaseDelete!: () => void;
-  const deletingStarted = new Promise<void>(resolve => { enteredDelete = resolve; });
-  const deletionHeld = new Promise<void>(resolve => { releaseDelete = resolve; });
-  const service = await serviceFor(tempProfile(), createFauxModels([]), { beforeDelete: async () => { enteredDelete(); await deletionHeld; } });
+  const deletingStarted = new Promise<void>((resolve) => {
+    enteredDelete = resolve;
+  });
+  const deletionHeld = new Promise<void>((resolve) => {
+    releaseDelete = resolve;
+  });
+  const service = await serviceFor(tempProfile(), createFauxModels([]), {
+    beforeDelete: async () => {
+      enteredDelete();
+      await deletionHeld;
+    },
+  });
   try {
     const conversation = await service.conversation("bot:a");
-    const kind = "aiden.bot-issue-status", data = { effectId: "issue-settled-once", issueId: "issue-1", resolution: "fixed" };
-    await Promise.all([service.appendEntry("bot:a", kind, data), service.appendEntry("bot:a", kind, data)]);
-    assert.equal((await conversation.context(ctx)).entries.filter(entry => entry.kind === kind).length, 1);
+    const kind = "aiden.bot-issue-status",
+      data = { effectId: "issue-settled-once", issueId: "issue-1", resolution: "fixed" };
+    await Promise.all([
+      service.appendEntry("bot:a", kind, data),
+      service.appendEntry("bot:a", kind, data),
+    ]);
+    assert.equal(
+      (await conversation.context(ctx)).entries.filter((entry) => entry.kind === kind).length,
+      1,
+    );
     let entered!: () => void, release!: () => void;
-    const committing = new Promise<void>(resolve => { entered = resolve; });
-    const held = new Promise<void>(resolve => { release = resolve; });
+    const committing = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const commit = conversation.commit.bind(conversation);
     let hold = true;
     conversation.commit = async (...args) => {
-      if (hold) { hold = false; entered(); await held; }
+      if (hold) {
+        hold = false;
+        entered();
+        await held;
+      }
       return commit(...args);
     };
     const pending = service.appendEntry("bot:a", kind, { ...data, effectId: "late-old-owner" });
@@ -1665,7 +2597,9 @@ test("metadata commits dedupe concurrent issue effects and cannot append after d
     releaseDelete();
     await deleting;
     await assert.rejects(service.appendEntry("bot:a", kind, data), /no longer exists/u);
-  } finally { await service.shutdown(); }
+  } finally {
+    await service.shutdown();
+  }
 });
 
 test("shutdown interrupts in-flight awaitReply for Resume and rejects late appendEntry commits", async () => {
@@ -1677,7 +2611,11 @@ test("shutdown interrupts in-flight awaitReply for Resume and rejects late appen
       async () => (await service.state("bot:a")).kind === "running" && fauxModels.calls() === 1,
       { what: "turn start" },
     );
-    const replyPromise = service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    const replyPromise = service.awaitReply(
+      "bot:a",
+      sent.submissionId,
+      new AbortController().signal,
+    );
     // Let awaitReply attach to submission.wait before host shutdown begins.
     await new Promise((resolve) => setTimeout(resolve, 40));
     await service.shutdown();

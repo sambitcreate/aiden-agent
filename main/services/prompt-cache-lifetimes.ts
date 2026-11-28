@@ -1,6 +1,10 @@
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { Api, CacheRetention, Model } from "@earendil-works/pi-ai";
-import { chatPromptCacheRetention, LONG_PROMPT_CACHE_TTL_MS, supportsLongPromptCacheRetention } from "../../renderer/shared/prompt-cache-retention.js";
+import {
+  chatPromptCacheRetention,
+  LONG_PROMPT_CACHE_TTL_MS,
+  supportsLongPromptCacheRetention,
+} from "../../renderer/shared/prompt-cache-retention.js";
 
 type PromptCacheModel = Pick<Model<Api>, "provider" | "id" | "api" | "promptCache"> & {
   name?: string;
@@ -38,17 +42,22 @@ const HOUR = 60 * MINUTE;
  * - GitHub Copilot: https://docs.github.com/en/enterprise-cloud@latest/copilot/tutorials/optimize-ai-usage
  *   (24 h idle for OpenAI models, 1 h for Claude).
  */
-export function promptCacheTtlMs(model: PromptCacheModel, retention: CacheRetention = "short"): number {
+export function promptCacheTtlMs(
+  model: PromptCacheModel,
+  retention: CacheRetention = "short",
+): number {
   if (retention === "none") return 0;
   if (retention === "long") {
     // Pi sends Anthropic's default lifetime when the endpoint refuses the long one.
     if (refusesLongRetention(model)) return promptCacheTtlMs(model, "short");
     const declaredLong = model.promptCache?.long;
-    if (declaredLong !== undefined) return Number.isFinite(declaredLong) && declaredLong > 0 ? declaredLong * 1000 : 0;
+    if (declaredLong !== undefined)
+      return Number.isFinite(declaredLong) && declaredLong > 0 ? declaredLong * 1000 : 0;
     return supportsLongPromptCacheRetention(model) ? LONG_PROMPT_CACHE_TTL_MS : 0;
   }
   const declared = model.promptCache?.short;
-  if (declared !== undefined) return Number.isFinite(declared) && declared > 0 ? declared * 1000 : 0;
+  if (declared !== undefined)
+    return Number.isFinite(declared) && declared > 0 ? declared * 1000 : 0;
   const id = model.id.toLowerCase();
   if (model.provider === "github-copilot") {
     if (isClaude(model)) return HOUR;
@@ -58,28 +67,48 @@ export function promptCacheTtlMs(model: PromptCacheModel, retention: CacheRetent
   if (model.api === "bedrock-converse-stream") {
     return bedrockCaches(model) ? 5 * MINUTE : 0;
   }
-  if (isClaude(model) && (model.api === "anthropic-messages" || cacheControlFormat(model) === "anthropic")) {
+  if (
+    isClaude(model) &&
+    (model.api === "anthropic-messages" || cacheControlFormat(model) === "anthropic")
+  ) {
     return 5 * MINUTE;
   }
   // Explicit caching, which Pi's cache_control markers request, covers M2-series models only.
-  if ((model.provider === "minimax" || model.provider === "minimax-cn") && model.api === "anthropic-messages" && /^minimax-m2(?:[.-]|$)/u.test(id)) {
+  if (
+    (model.provider === "minimax" || model.provider === "minimax-cn") &&
+    model.api === "anthropic-messages" &&
+    /^minimax-m2(?:[.-]|$)/u.test(id)
+  ) {
     return 5 * MINUTE;
   }
   // Kimi documents cache writes, and so a lifetime, only for K3.
-  if ((model.provider === "moonshotai" || model.provider === "moonshotai-cn") && /^kimi-k3(?:[.-]|$)/u.test(id)) return 5 * MINUTE;
-  if ((model.provider === "openai" || model.provider === "azure") && isThirtyMinuteOpenAiModel(model)) {
+  if (
+    (model.provider === "moonshotai" || model.provider === "moonshotai-cn") &&
+    /^kimi-k3(?:[.-]|$)/u.test(id)
+  )
+    return 5 * MINUTE;
+  if (
+    (model.provider === "openai" || model.provider === "azure") &&
+    isThirtyMinuteOpenAiModel(model)
+  ) {
     return 30 * MINUTE;
   }
   return 0;
 }
 
 function refusesLongRetention(model: PromptCacheModel): boolean {
-  return model.api === "anthropic-messages" && !!model.compat && typeof model.compat === "object" &&
-    (model.compat as { supportsLongCacheRetention?: unknown }).supportsLongCacheRetention === false;
+  return (
+    model.api === "anthropic-messages" &&
+    !!model.compat &&
+    typeof model.compat === "object" &&
+    (model.compat as { supportsLongCacheRetention?: unknown }).supportsLongCacheRetention === false
+  );
 }
 
 function isClaude(model: PromptCacheModel): boolean {
-  return model.id.toLowerCase().includes("claude") || (model.name ?? "").toLowerCase().includes("claude");
+  return (
+    model.id.toLowerCase().includes("claude") || (model.name ?? "").toLowerCase().includes("claude")
+  );
 }
 
 function cacheControlFormat(model: PromptCacheModel): unknown {
@@ -146,9 +175,14 @@ export interface ChatTurnCacheScope {
  * retention, which the wrapper keeps.
  */
 export function keepsLongPromptCache(turn: ChatTurnCacheScope): boolean {
-  return turn.longPromptCacheRetention && !turn.agentHarness && !turn.bot &&
+  return (
+    turn.longPromptCacheRetention &&
+    !turn.agentHarness &&
+    !turn.bot &&
     (turn.usageSource === undefined || turn.usageSource === "chat") &&
-    turn.mode !== "assistant-automation" && turn.ownerKind !== "remote";
+    turn.mode !== "assistant-automation" &&
+    turn.ownerKind !== "remote"
+  );
 }
 
 /**
@@ -162,6 +196,9 @@ export function chatTurnPromptCache(
   model: PromptCacheModel,
 ): { streamFn: StreamFn; retention: "short" | "long" } {
   return keepsLongPromptCache(turn)
-    ? { streamFn: withLongPromptCacheRetention(streamFn), retention: chatPromptCacheRetention({ longPromptCacheRetention: true }, model) }
+    ? {
+        streamFn: withLongPromptCacheRetention(streamFn),
+        retention: chatPromptCacheRetention({ longPromptCacheRetention: true }, model),
+      }
     : { streamFn, retention: "short" };
 }

@@ -27,7 +27,11 @@ import {
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { DatabaseSync } from "node:sqlite";
 import { initializeSqliteReclamation, reclaimSqlitePages } from "../sqlite-reclamation.js";
-import { acquireBotProfileLock, BOT_PROFILE_LOCK_FILE, BOT_PROFILE_GUARD_FILE } from "./profile-lock.js";
+import {
+  acquireBotProfileLock,
+  BOT_PROFILE_LOCK_FILE,
+  BOT_PROFILE_GUARD_FILE,
+} from "./profile-lock.js";
 import { AIDEN_PI_CLIENT_IDENTITY } from "../pi-client-identity.js";
 import { MODEL_CALL_RETRY_POLICY } from "../model-call-retry.js";
 
@@ -160,7 +164,8 @@ export function botDirectoryName(botId: string): string {
       name += character;
       continue;
     }
-    for (const byte of Buffer.from(character, "utf8")) name += `~${byte.toString(16).padStart(2, "0")}`;
+    for (const byte of Buffer.from(character, "utf8"))
+      name += `~${byte.toString(16).padStart(2, "0")}`;
   }
   return name;
 }
@@ -190,10 +195,16 @@ export function botIdFromDirectoryName(name: string): string | null {
 function isCorruptDatabaseError(error: unknown): boolean {
   const candidate = error as { code?: unknown; errcode?: unknown; message?: unknown } | null;
   if (candidate === null || typeof candidate !== "object") return false;
-  if (candidate.code === "ERR_SQLITE_ERROR" && (candidate.errcode === 26 || candidate.errcode === 11)) {
+  if (
+    candidate.code === "ERR_SQLITE_ERROR" &&
+    (candidate.errcode === 26 || candidate.errcode === 11)
+  ) {
     return true;
   }
-  return typeof candidate.message === "string" && /file is not a database|database disk image is malformed/iu.test(candidate.message);
+  return (
+    typeof candidate.message === "string" &&
+    /file is not a database|database disk image is malformed/iu.test(candidate.message)
+  );
 }
 
 interface OpenEntry {
@@ -245,7 +256,9 @@ export async function createBotHarnessHost(
     return next;
   }
 
-  async function openHarness(botId: string): Promise<{ harness: Harness; conversation: Conversation }> {
+  async function openHarness(
+    botId: string,
+  ): Promise<{ harness: Harness; conversation: Conversation }> {
     // Configure an empty file before Pi enables WAL, which materializes the
     // SQLite header. Existing files preserve their format and schema.
     const database = new DatabaseSync(sessionFile(botId));
@@ -317,7 +330,9 @@ export async function createBotHarnessHost(
       // A harness that cannot be inspected is closed below.
     }
     if (!shutDown) {
-      await serialize(botId, () => open.get(botId) === entry ? closeEntry(botId) : Promise.resolve()).catch(() => undefined);
+      await serialize(botId, () =>
+        open.get(botId) === entry ? closeEntry(botId) : Promise.resolve(),
+      ).catch(() => undefined);
     }
   }
 
@@ -346,7 +361,11 @@ export async function createBotHarnessHost(
         notice = await moveCorruptAside(botId);
         opened = await openHarness(botId);
       }
-      const entry: OpenEntry = { ...opened, idleTimer: null, ...(notice === undefined ? {} : { pendingNotice: notice }) };
+      const entry: OpenEntry = {
+        ...opened,
+        idleTimer: null,
+        ...(notice === undefined ? {} : { pendingNotice: notice }),
+      };
       open.set(botId, entry);
       closing.delete(botId);
       scheduleIdle(botId, entry);
@@ -373,7 +392,9 @@ export async function createBotHarnessHost(
     // pi-ai keeps per-session provider state (Anthropic thread state, strict
     // tool limits) keyed by the conversation's provider session ID; release it
     // with the harness, as a deleted chat does.
-    const provider = await entry.harness.snapshot(ProviderDoc, entry.conversation.id, ctx).catch(() => undefined);
+    const provider = await entry.harness
+      .snapshot(ProviderDoc, entry.conversation.id, ctx)
+      .catch(() => undefined);
     await entry.harness.close(ctx);
     if (provider !== undefined) cleanupSessionResources(provider.sessionId);
     if (open.get(botId) === entry) open.delete(botId);
@@ -390,7 +411,8 @@ export async function createBotHarnessHost(
     }
     const result: string[] = [];
     for (const name of names) {
-      if (name === BOT_PROFILE_LOCK_FILE || name === BOT_PROFILE_GUARD_FILE || name.startsWith(".")) continue;
+      if (name === BOT_PROFILE_LOCK_FILE || name === BOT_PROFILE_GUARD_FILE || name.startsWith("."))
+        continue;
       const stat = await fs.lstat(path.join(botsDir, name)).catch(() => null);
       if (stat?.isDirectory()) result.push(name);
     }
@@ -398,16 +420,18 @@ export async function createBotHarnessHost(
   }
 
   const host: BotHarnessHost = {
-    open(botId) { return admit(async () => {
-      const entry = await ensureOpen(botId);
-      const notice = entry.pendingNotice;
-      delete entry.pendingNotice;
-      return {
-        harness: entry.harness,
-        conversation: entry.conversation,
-        ...(notice === undefined ? {} : { recoveredCorruptFile: notice }),
-      };
-    }); },
+    open(botId) {
+      return admit(async () => {
+        const entry = await ensureOpen(botId);
+        const notice = entry.pendingNotice;
+        delete entry.pendingNotice;
+        return {
+          harness: entry.harness,
+          conversation: entry.conversation,
+          ...(notice === undefined ? {} : { recoveredCorruptFile: notice }),
+        };
+      });
+    },
 
     touch(botId) {
       if (shutDown) throw new BotHarnessHostClosedError();
@@ -415,97 +439,117 @@ export async function createBotHarnessHost(
       if (entry !== undefined) scheduleIdle(botId, entry);
     },
 
-    inspect(botId) { return admit(async () => {
-      const entry = await ensureOpen(botId);
-      return entry.harness.inspect(ctx);
-    }); },
-
-    interruptedBots() { return admit(async () => {
-      const result: BotInterruption[] = [];
-      for (const name of await listBotDirectories()) {
-        const botId = botIdFromDirectoryName(name);
-        if (botId === null || deleted.has(botId)) continue;
-        const hasSession = await fs
-          .stat(sessionFile(botId))
-          .then(() => true)
-          .catch(() => false);
-        if (!hasSession) continue;
+    inspect(botId) {
+      return admit(async () => {
         const entry = await ensureOpen(botId);
-        const inspection = await entry.harness.inspect(ctx);
-        const unfinished = inspection.submissions.find((submission) => submission.type === "input");
-        if (unfinished !== undefined) {
-          result.push({ botId, submissionId: String(unfinished.id) });
-        } else if (inspection.tasks.length === 0 && inspection.submissions.length === 0) {
-          // Nothing to recover: do not keep this Bot's database open.
-          await serialize(botId, () => closeEntry(botId));
+        return entry.harness.inspect(ctx);
+      });
+    },
+
+    interruptedBots() {
+      return admit(async () => {
+        const result: BotInterruption[] = [];
+        for (const name of await listBotDirectories()) {
+          const botId = botIdFromDirectoryName(name);
+          if (botId === null || deleted.has(botId)) continue;
+          const hasSession = await fs
+            .stat(sessionFile(botId))
+            .then(() => true)
+            .catch(() => false);
+          if (!hasSession) continue;
+          const entry = await ensureOpen(botId);
+          const inspection = await entry.harness.inspect(ctx);
+          const unfinished = inspection.submissions.find(
+            (submission) => submission.type === "input",
+          );
+          if (unfinished !== undefined) {
+            result.push({ botId, submissionId: String(unfinished.id) });
+          } else if (inspection.tasks.length === 0 && inspection.submissions.length === 0) {
+            // Nothing to recover: do not keep this Bot's database open.
+            await serialize(botId, () => closeEntry(botId));
+          }
         }
-      }
-      return result;
-    }); },
+        return result;
+      });
+    },
 
     close(botId) {
       return admit(() => serialize(botId, () => closeEntry(botId)));
     },
 
-    suspend(botId, timeoutMs = DEFAULT_BOT_SUSPEND_TIMEOUT_MS) { return admit(async () => {
-      assertBotId(botId);
-      const closing = serialize(botId, async () => {
-        if (!open.has(botId)) return "not_open" as const;
-        await closeEntry(botId);
-        return "closed" as const;
-      });
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timedOut = new Promise<"timed_out">((resolve) => {
-        timer = setTimeout(() => resolve("timed_out"), timeoutMs);
-      });
-      try {
-        const outcome = await Promise.race([closing, timedOut]);
-        if (outcome === "timed_out") {
-          opts.onReport?.(botId, new Error(`The Bot's session did not close within ${timeoutMs} ms; it keeps closing.`));
-          void closing.catch((error: unknown) => opts.onReport?.(botId, error));
-        }
-        return outcome;
-      } finally {
-        clearTimeout(timer);
-      }
-    }); },
-
-    destroy(botId) { return admit(async () => {
-      assertBotId(botId);
-      deleted.add(botId);
-      await serialize(botId, async () => {
-        const entry = open.get(botId);
-        if (entry !== undefined) {
-          // Abort the live run (provider stream, tools) before closing, bounded
-          // so a tool that ignores its signal cannot block deletion.
-          const { context: abortCtx, cancel } = withCancel(ctx);
-          const timer = setTimeout(() => cancel(new Error("abort timed out")), DESTROY_ABORT_TIMEOUT_MS);
-          try {
-            await entry.conversation.abort(abortCtx, { background: true });
-          } catch {
-            // Closing below still stops scheduling.
-          } finally {
-            clearTimeout(timer);
+    suspend(botId, timeoutMs = DEFAULT_BOT_SUSPEND_TIMEOUT_MS) {
+      return admit(async () => {
+        assertBotId(botId);
+        const closing = serialize(botId, async () => {
+          if (!open.has(botId)) return "not_open" as const;
+          await closeEntry(botId);
+          return "closed" as const;
+        });
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timedOut = new Promise<"timed_out">((resolve) => {
+          timer = setTimeout(() => resolve("timed_out"), timeoutMs);
+        });
+        try {
+          const outcome = await Promise.race([closing, timedOut]);
+          if (outcome === "timed_out") {
+            opts.onReport?.(
+              botId,
+              new Error(
+                `The Bot's session did not close within ${timeoutMs} ms; it keeps closing.`,
+              ),
+            );
+            void closing.catch((error: unknown) => opts.onReport?.(botId, error));
           }
-          await closeEntry(botId).catch(() => undefined);
+          return outcome;
+        } finally {
+          clearTimeout(timer);
         }
-        await fs.rm(botDir(botId), { recursive: true, force: true });
       });
-    }); },
+    },
 
-    sweepOrphans(knownBotIds) { return admit(async () => {
-      const removed: string[] = [];
-      for (const name of await listBotDirectories()) {
-        const botId = botIdFromDirectoryName(name);
-        if (botId !== null && knownBotIds.has(botId)) continue;
-        if (botId !== null) {
-          await serialize(botId, () => closeEntry(botId)).catch(() => undefined);
+    destroy(botId) {
+      return admit(async () => {
+        assertBotId(botId);
+        deleted.add(botId);
+        await serialize(botId, async () => {
+          const entry = open.get(botId);
+          if (entry !== undefined) {
+            // Abort the live run (provider stream, tools) before closing, bounded
+            // so a tool that ignores its signal cannot block deletion.
+            const { context: abortCtx, cancel } = withCancel(ctx);
+            const timer = setTimeout(
+              () => cancel(new Error("abort timed out")),
+              DESTROY_ABORT_TIMEOUT_MS,
+            );
+            try {
+              await entry.conversation.abort(abortCtx, { background: true });
+            } catch {
+              // Closing below still stops scheduling.
+            } finally {
+              clearTimeout(timer);
+            }
+            await closeEntry(botId).catch(() => undefined);
+          }
+          await fs.rm(botDir(botId), { recursive: true, force: true });
+        });
+      });
+    },
+
+    sweepOrphans(knownBotIds) {
+      return admit(async () => {
+        const removed: string[] = [];
+        for (const name of await listBotDirectories()) {
+          const botId = botIdFromDirectoryName(name);
+          if (botId !== null && knownBotIds.has(botId)) continue;
+          if (botId !== null) {
+            await serialize(botId, () => closeEntry(botId)).catch(() => undefined);
+          }
+          await fs.rm(path.join(botsDir, name), { recursive: true, force: true });
+          removed.push(name);
         }
-        await fs.rm(path.join(botsDir, name), { recursive: true, force: true });
-        removed.push(name);
-      }
-      return removed;
-    }); },
+        return removed;
+      });
+    },
 
     isOpen(botId) {
       return open.has(botId);
@@ -516,8 +560,12 @@ export async function createBotHarnessHost(
         shutDown = true;
         shutdownPromise = (async () => {
           await Promise.allSettled([...admittedOperations]);
-          const closes = await Promise.allSettled([...open.keys()].map((botId) => serialize(botId, () => closeEntry(botId))));
-          const failed = closes.find((result): result is PromiseRejectedResult => result.status === "rejected");
+          const closes = await Promise.allSettled(
+            [...open.keys()].map((botId) => serialize(botId, () => closeEntry(botId))),
+          );
+          const failed = closes.find(
+            (result): result is PromiseRejectedResult => result.status === "rejected",
+          );
           if (failed) throw failed.reason;
           await Promise.all([...lifecycle.values()]);
           await lock.release();

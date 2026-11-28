@@ -71,9 +71,15 @@ function onDocumentKeyDown(event: KeyboardEvent): void {
 }
 
 export function openLayer(kind: LayerKind, options: LayerOptions = {}): LayerHandle {
-  const layer: Entry = { kind, name: options.name, order: (opened += 1), onEscape: options.onEscape };
+  const layer: Entry = {
+    kind,
+    name: options.name,
+    order: (opened += 1),
+    onEscape: options.onEscape,
+  };
   stack.push(layer);
-  if (layer.onEscape && (escapeLayers += 1) === 1) document.addEventListener("keydown", onDocumentKeyDown);
+  if (layer.onEscape && (escapeLayers += 1) === 1)
+    document.addEventListener("keydown", onDocumentKeyDown);
   let closed = false;
   return {
     isTop: () => !closed && uncovered(layer),
@@ -81,7 +87,8 @@ export function openLayer(kind: LayerKind, options: LayerOptions = {}): LayerHan
       if (closed) return;
       closed = true;
       stack.splice(stack.indexOf(layer), 1);
-      if (layer.onEscape && (escapeLayers -= 1) === 0) document.removeEventListener("keydown", onDocumentKeyDown);
+      if (layer.onEscape && (escapeLayers -= 1) === 0)
+        document.removeEventListener("keydown", onDocumentKeyDown);
     },
   };
 }
@@ -106,7 +113,11 @@ export function isOverlayLayer(layer: Layer): boolean {
  * first and sits below its parent. Layers that open one after another, the
  * usual case, are ordered correctly.
  */
-export function useLayer(open: boolean, kind: LayerKind, options: LayerOptions = {}): Pick<LayerHandle, "isTop"> {
+export function useLayer(
+  open: boolean,
+  kind: LayerKind,
+  options: LayerOptions = {},
+): Pick<LayerHandle, "isTop"> {
   const { name, onEscape } = options;
   const onEscapeRef = React.useRef(onEscape);
   React.useLayoutEffect(() => {

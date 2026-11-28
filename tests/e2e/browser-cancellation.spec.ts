@@ -56,7 +56,11 @@ async function blankGuestId(app: ElectronApplication): Promise<number> {
 }
 
 /** Holds the first CDP down event until the test releases it, counting up events. */
-async function holdFirstInputDown(app: ElectronApplication, guestId: number, kind: "mouse" | "key"): Promise<void> {
+async function holdFirstInputDown(
+  app: ElectronApplication,
+  guestId: number,
+  kind: "mouse" | "key",
+): Promise<void> {
   await app.evaluate(
     ({ webContents }, { guestId, kind }) => {
       const guest = webContents.fromId(guestId)!;
@@ -92,7 +96,9 @@ async function holdFirstInputDown(app: ElectronApplication, guestId: number, kin
   );
 }
 
-test("semantic clicks cannot hit an overlay introduced by hover or just before dispatch", async ({ aiden }) => {
+test("semantic clicks cannot hit an overlay introduced by hover or just before dispatch", async ({
+  aiden,
+}) => {
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     response.end(`<!doctype html><title>Browser click race</title>
@@ -108,17 +114,35 @@ test("semantic clicks cannot hit an overlay introduced by hover or just before d
     await finishLmStudioOnboarding(page);
     tabId = (await command(page, { action: "create" })).tabId!;
     await command(page, { action: "navigate", tabId, url, readiness: "load" });
-    const values = async () => (await command(page, { action: "evaluate", tabId: tabId!, expression: "({saved:window.saved||0,covered:window.covered||0,hovers:window.hovers||0})" })).value;
-    await expect(command(page, { action: "click", tabId, selector: "#save", timeoutMs: 1000 })).rejects.toThrow(/covers|covered|moved/);
+    const values = async () =>
+      (
+        await command(page, {
+          action: "evaluate",
+          tabId: tabId!,
+          expression: "({saved:window.saved||0,covered:window.covered||0,hovers:window.hovers||0})",
+        })
+      ).value;
+    await expect(
+      command(page, { action: "click", tabId, selector: "#save", timeoutMs: 1000 }),
+    ).rejects.toThrow(/covers|covered|moved/);
     expect(await values()).toEqual({ saved: 0, covered: 0, hovers: 1 });
 
     // A second race happens after the preliminary hit-test. Only interception of
     // the trusted down/click events prevents dispatch into this new overlay.
-    await command(page, { action: "evaluate", tabId, expression: "document.querySelector('#save').onpointerenter=null;document.querySelector('#cover').style.display='none'" });
+    await command(page, {
+      action: "evaluate",
+      tabId,
+      expression:
+        "document.querySelector('#save').onpointerenter=null;document.querySelector('#cover').style.display='none'",
+    });
     await app.evaluate(({ webContents }, targetUrl) => {
-      const guest = webContents.getAllWebContents().find(contents => contents.getURL() === targetUrl)!;
+      const guest = webContents
+        .getAllWebContents()
+        .find((contents) => contents.getURL() === targetUrl)!;
       const original = guest.debugger.sendCommand.bind(guest.debugger);
-      (globalThis as BrowserTestGlobal).__browserRestoreHitRace = () => { guest.debugger.sendCommand = original; };
+      (globalThis as BrowserTestGlobal).__browserRestoreHitRace = () => {
+        guest.debugger.sendCommand = original;
+      };
       guest.debugger.sendCommand = async (method, params, sessionId) => {
         if (method === "Input.dispatchMouseEvent" && params?.type === "mousePressed") {
           await guest.executeJavaScript("document.querySelector('#cover').style.display='block'");
@@ -126,97 +150,134 @@ test("semantic clicks cannot hit an overlay introduced by hover or just before d
         return original(method, params, sessionId);
       };
     }, url);
-    await expect(command(page, { action: "click", tabId, selector: "#save", timeoutMs: 1000 })).rejects.toThrow(/covered/);
+    await expect(
+      command(page, { action: "click", tabId, selector: "#save", timeoutMs: 1000 }),
+    ).rejects.toThrow(/covered/);
     expect(await values()).toEqual({ saved: 0, covered: 0, hovers: 1 });
-    await app.evaluate(() => { (globalThis as BrowserTestGlobal).__browserRestoreHitRace?.(); delete (globalThis as BrowserTestGlobal).__browserRestoreHitRace; });
-    await command(page, { action: "evaluate", tabId, expression: "document.querySelector('#cover').style.display='none'" });
+    await app.evaluate(() => {
+      (globalThis as BrowserTestGlobal).__browserRestoreHitRace?.();
+      delete (globalThis as BrowserTestGlobal).__browserRestoreHitRace;
+    });
+    await command(page, {
+      action: "evaluate",
+      tabId,
+      expression: "document.querySelector('#cover').style.display='none'",
+    });
     await command(page, { action: "click", tabId, selector: "#save", timeoutMs: 1000 });
     expect(await values()).toEqual({ saved: 1, covered: 0, hovers: 1 });
     await page.getByRole("button", { name: "Close environment panel", exact: true }).click();
     const prompt = "Browser cursor cleanup scenario: click Save on the shared tab.";
-    const scenario = lmStudio.enqueueToolScenario!({ prompt, calls: [
-      { name: "browser", arguments: {} },
-      { name: "browser_click", arguments: { selector: "#save" } },
-    ], finalText: "The browser cursor action is complete." });
+    const scenario = lmStudio.enqueueToolScenario!({
+      prompt,
+      calls: [
+        { name: "browser", arguments: {} },
+        { name: "browser_click", arguments: { selector: "#save" } },
+      ],
+      finalText: "The browser cursor action is complete.",
+    });
     await page.locator("textarea").first().fill(prompt);
     await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.getByText("The browser cursor action is complete.", { exact: true }).first()).toBeVisible({ timeout: 45_000 });
+    await expect(
+      page.getByText("The browser cursor action is complete.", { exact: true }).first(),
+    ).toBeVisible({ timeout: 45_000 });
     expect(scenario.error).toBeUndefined();
     expect(scenario.completed).toBe(true);
     // Read the guest directly: another browser service action could otherwise
     // mask a leaked cursor by running its own completion cleanup.
-    expect(await app.evaluate(async ({ webContents }, targetUrl) => {
-      const guest = webContents.getAllWebContents().find(contents => contents.getURL() === targetUrl)!;
-      return guest.executeJavaScript("({saved:window.saved||0,cursors:document.querySelectorAll('[data-aiden-browser-cursor]').length})");
-    }, url)).toEqual({ saved: 2, cursors: 0 });
+    expect(
+      await app.evaluate(async ({ webContents }, targetUrl) => {
+        const guest = webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL() === targetUrl)!;
+        return guest.executeJavaScript(
+          "({saved:window.saved||0,cursors:document.querySelectorAll('[data-aiden-browser-cursor]').length})",
+        );
+      }, url),
+    ).toEqual({ saved: 2, cursors: 0 });
   } finally {
-    await app.evaluate(() => { (globalThis as BrowserTestGlobal).__browserRestoreHitRace?.(); delete (globalThis as BrowserTestGlobal).__browserRestoreHitRace; });
+    await app.evaluate(() => {
+      (globalThis as BrowserTestGlobal).__browserRestoreHitRace?.();
+      delete (globalThis as BrowserTestGlobal).__browserRestoreHitRace;
+    });
     if (tabId) await command(page, { action: "close", tabId });
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 
-for (const kind of ["mouse", "key"] as const) for (const takeover of ["input", "access"] as const) {
-  test(`browser ${takeover === "input" ? "physical input preserves the person's action and" : "access revocation"} releases ${kind} input when the down response is pending`, async ({
-    aiden,
-  }) => {
-    const { page, app } = aiden;
-    await finishLmStudioOnboarding(page);
-    const opened = await command(page, { action: "create" });
-    const tabId = opened.tabId!;
-    const guestId = await blankGuestId(app);
-    await holdFirstInputDown(app, guestId, kind);
-    try {
-      const pending = command(
-        page,
-        kind === "mouse"
-          ? { action: "click", tabId, x: 20, y: 20 }
-          : { action: "press", tabId, key: "a" },
-      ).then(
-        () => ({ error: "" }),
-        (error) => ({ error: String(error) }),
-      );
-      await expect
-        .poll(() =>
-          app.evaluate(() =>
-            Boolean((globalThis as BrowserTestGlobal).__browserHeldInput?.downDelivered),
-          ),
-        )
-        .toBe(true);
-      if (takeover === "input") {
-        await app.evaluate(({ webContents }, id) => {
-          // The person's unrelated input must preserve the action they started.
-          webContents.fromId(id)!.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
-        }, guestId);
-        await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput!.release());
-      } else if (kind === "mouse") {
-        await command(page, { action: "agent_access", access: "off" });
-      } else {
-        const state = await page.evaluate((workspaceId) =>
-          (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>("browser:get-state", workspaceId), E2E_WORKSPACE_ID);
-        await command(page, { action: "defaults", defaults: { ...state.defaults, agentAccess: "off" } });
+for (const kind of ["mouse", "key"] as const)
+  for (const takeover of ["input", "access"] as const) {
+    test(`browser ${takeover === "input" ? "physical input preserves the person's action and" : "access revocation"} releases ${kind} input when the down response is pending`, async ({
+      aiden,
+    }) => {
+      const { page, app } = aiden;
+      await finishLmStudioOnboarding(page);
+      const opened = await command(page, { action: "create" });
+      const tabId = opened.tabId!;
+      const guestId = await blankGuestId(app);
+      await holdFirstInputDown(app, guestId, kind);
+      try {
+        const pending = command(
+          page,
+          kind === "mouse"
+            ? { action: "click", tabId, x: 20, y: 20 }
+            : { action: "press", tabId, key: "a" },
+        ).then(
+          () => ({ error: "" }),
+          (error) => ({ error: String(error) }),
+        );
+        await expect
+          .poll(() =>
+            app.evaluate(() =>
+              Boolean((globalThis as BrowserTestGlobal).__browserHeldInput?.downDelivered),
+            ),
+          )
+          .toBe(true);
+        if (takeover === "input") {
+          await app.evaluate(({ webContents }, id) => {
+            // The person's unrelated input must preserve the action they started.
+            webContents.fromId(id)!.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
+          }, guestId);
+          await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput!.release());
+        } else if (kind === "mouse") {
+          await command(page, { action: "agent_access", access: "off" });
+        } else {
+          const state = await page.evaluate(
+            (workspaceId) =>
+              (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>(
+                "browser:get-state",
+                workspaceId,
+              ),
+            E2E_WORKSPACE_ID,
+          );
+          await command(page, {
+            action: "defaults",
+            defaults: { ...state.defaults, agentAccess: "off" },
+          });
+        }
+        if (takeover === "input") await expect(pending).resolves.toEqual({ error: "" });
+        else
+          await expect(pending).resolves.toMatchObject({
+            error: expect.stringMatching(/interrupted/i),
+          });
+        expect(
+          await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput?.releases),
+        ).toBe(1);
+      } finally {
+        await app.evaluate(() => {
+          const state = (globalThis as BrowserTestGlobal).__browserHeldInput;
+          state?.release();
+          state?.restore();
+          delete (globalThis as BrowserTestGlobal).__browserHeldInput;
+        });
+        await command(page, { action: "close", tabId });
       }
-      if (takeover === "input") await expect(pending).resolves.toEqual({ error: "" });
-      else await expect(pending).resolves.toMatchObject({
-        error: expect.stringMatching(/interrupted/i),
-      });
-      expect(
-        await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput?.releases),
-      ).toBe(1);
-    } finally {
-      await app.evaluate(() => {
-        const state = (globalThis as BrowserTestGlobal).__browserHeldInput;
-        state?.release();
-        state?.restore();
-        delete (globalThis as BrowserTestGlobal).__browserHeldInput;
-      });
-      await command(page, { action: "close", tabId });
-    }
-  });
-}
+    });
+  }
 
-test("physical input cancels the agent's browser action and releases its held key", async ({ aiden }) => {
+test("physical input cancels the agent's browser action and releases its held key", async ({
+  aiden,
+}) => {
   const { page, app, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
   const tabId = (await command(page, { action: "create" })).tabId!;
@@ -235,7 +296,13 @@ test("physical input cancels the agent's browser action and releases its held ke
     await page.locator("textarea").first().fill(prompt);
     await page.getByRole("button", { name: "Send message" }).click();
     await expect
-      .poll(() => app.evaluate(() => Boolean((globalThis as BrowserTestGlobal).__browserHeldInput?.downDelivered)), { timeout: 45_000 })
+      .poll(
+        () =>
+          app.evaluate(() =>
+            Boolean((globalThis as BrowserTestGlobal).__browserHeldInput?.downDelivered),
+          ),
+        { timeout: 45_000 },
+      )
       .toBe(true);
     await app.evaluate(({ webContents }, id) => {
       // The person presses a key in the page while the agent's key is down.
@@ -263,73 +330,118 @@ test("physical input cancels the agent's browser action and releases its held ke
 });
 
 for (const kind of ["mouse", "key"] as const) {
-  test(`matching physical ${kind} input arriving before the CDP echo preserves the person's action`, async ({ aiden }) => {
+  test(`matching physical ${kind} input arriving before the CDP echo preserves the person's action`, async ({
+    aiden,
+  }) => {
     const { page, app } = aiden;
     await finishLmStudioOnboarding(page);
     const tabId = (await command(page, { action: "create" })).tabId!;
     const guestId = await blankGuestId(app);
-    await app.evaluate(({ webContents }, { guestId, kind }) => {
-      const guest = webContents.fromId(guestId)!;
-      guest.focus();
-      const original = guest.debugger.sendCommand.bind(guest.debugger);
-      let release!: () => void;
-      const held = new Promise<void>((resolve) => { release = resolve; });
-      const events: Array<Record<string, unknown>> = [];
-      const observe = (_event: unknown, input: object) => { events.push({ ...input }); };
-      guest.on("before-input-event", observe);
-      guest.on("before-mouse-event", observe);
-      const state: HeldInput = { downDelivered: false, releases: 0, release, events,
-        restore: () => { guest.debugger.sendCommand = original; guest.removeListener("before-input-event", observe); guest.removeListener("before-mouse-event", observe); } };
-      (globalThis as BrowserTestGlobal).__browserHeldInput = state;
-      const method = kind === "mouse" ? "Input.dispatchMouseEvent" : "Input.dispatchKeyEvent";
-      const down = kind === "mouse" ? "mousePressed" : "keyDown";
-      const up = kind === "mouse" ? "mouseReleased" : "keyUp";
-      guest.debugger.sendCommand = async (name, params, sessionId) => {
-        if (name === method && params?.type === down && !state.downDelivered) {
-          state.downDelivered = true;
-          await held;
-        }
-        if (name === method && params?.type === up) state.releases += 1;
-        return original(name, params, sessionId);
-      };
-    }, { guestId, kind });
-    try {
-      const pending = command(page, kind === "mouse"
-        ? { action: "click", tabId, x: 20, y: 20 }
-        : { action: "press", tabId, key: "a" }).then(() => ({ error: "" }), error => ({ error: String(error) }));
-      await expect.poll(() => app.evaluate(() => Boolean((globalThis as BrowserTestGlobal).__browserHeldInput?.downDelivered))).toBe(true);
-      await app.evaluate(async ({ webContents }, { guestId, kind }) => {
+    await app.evaluate(
+      ({ webContents }, { guestId, kind }) => {
         const guest = webContents.fromId(guestId)!;
-        // Physical keys are distinguished by their native source marker.
-        // Mouse events lack that marker, so a matching first event can consume
-        // the expectation. Neither event cancels a user-sourced action.
-        await new Promise<void>((resolve) => {
-          if (kind === "mouse") {
-            guest.once("before-mouse-event", () => resolve());
-            guest.sendInputEvent({ type: "mouseDown", x: 20, y: 20, button: "left", clickCount: 1 });
-          } else {
-            guest.once("before-input-event", () => resolve());
-            guest.sendInputEvent({ type: "keyDown", keyCode: "a" });
-          }
+        guest.focus();
+        const original = guest.debugger.sendCommand.bind(guest.debugger);
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => {
+          release = resolve;
         });
-        (globalThis as BrowserTestGlobal).__browserHeldInput!.release();
-      }, { guestId, kind });
+        const events: Array<Record<string, unknown>> = [];
+        const observe = (_event: unknown, input: object) => {
+          events.push({ ...input });
+        };
+        guest.on("before-input-event", observe);
+        guest.on("before-mouse-event", observe);
+        const state: HeldInput = {
+          downDelivered: false,
+          releases: 0,
+          release,
+          events,
+          restore: () => {
+            guest.debugger.sendCommand = original;
+            guest.removeListener("before-input-event", observe);
+            guest.removeListener("before-mouse-event", observe);
+          },
+        };
+        (globalThis as BrowserTestGlobal).__browserHeldInput = state;
+        const method = kind === "mouse" ? "Input.dispatchMouseEvent" : "Input.dispatchKeyEvent";
+        const down = kind === "mouse" ? "mousePressed" : "keyDown";
+        const up = kind === "mouse" ? "mouseReleased" : "keyUp";
+        guest.debugger.sendCommand = async (name, params, sessionId) => {
+          if (name === method && params?.type === down && !state.downDelivered) {
+            state.downDelivered = true;
+            await held;
+          }
+          if (name === method && params?.type === up) state.releases += 1;
+          return original(name, params, sessionId);
+        };
+      },
+      { guestId, kind },
+    );
+    try {
+      const pending = command(
+        page,
+        kind === "mouse"
+          ? { action: "click", tabId, x: 20, y: 20 }
+          : { action: "press", tabId, key: "a" },
+      ).then(
+        () => ({ error: "" }),
+        (error) => ({ error: String(error) }),
+      );
+      await expect
+        .poll(() =>
+          app.evaluate(() =>
+            Boolean((globalThis as BrowserTestGlobal).__browserHeldInput?.downDelivered),
+          ),
+        )
+        .toBe(true);
+      await app.evaluate(
+        async ({ webContents }, { guestId, kind }) => {
+          const guest = webContents.fromId(guestId)!;
+          // Physical keys are distinguished by their native source marker.
+          // Mouse events lack that marker, so a matching first event can consume
+          // the expectation. Neither event cancels a user-sourced action.
+          await new Promise<void>((resolve) => {
+            if (kind === "mouse") {
+              guest.once("before-mouse-event", () => resolve());
+              guest.sendInputEvent({
+                type: "mouseDown",
+                x: 20,
+                y: 20,
+                button: "left",
+                clickCount: 1,
+              });
+            } else {
+              guest.once("before-input-event", () => resolve());
+              guest.sendInputEvent({ type: "keyDown", keyCode: "a" });
+            }
+          });
+          (globalThis as BrowserTestGlobal).__browserHeldInput!.release();
+        },
+        { guestId, kind },
+      );
       const outcome = await pending;
-      const events = await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput?.events);
+      const events = await app.evaluate(
+        () => (globalThis as BrowserTestGlobal).__browserHeldInput?.events,
+      );
       expect(outcome, JSON.stringify(events)).toEqual({ error: "" });
       if (kind === "key") {
         // Pin Electron's native contract: physical inputs are unmarked, while
         // the mandatory cleanup keyUp carries Blink's debugger source flag.
-        expect(events?.find(event => event.type === "keyDown")?._modifiers).toBe(0);
-        expect(events?.some(event => (Number(event._modifiers) & (1 << 23)) !== 0)).toBe(true);
+        expect(events?.find((event) => event.type === "keyDown")?._modifiers).toBe(0);
+        expect(events?.some((event) => (Number(event._modifiers) & (1 << 23)) !== 0)).toBe(true);
       } else {
-        expect(events?.find(event => event.type === "mouseDown")?._modifiers).toBeUndefined();
+        expect(events?.find((event) => event.type === "mouseDown")?._modifiers).toBeUndefined();
       }
-      expect(await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput?.releases)).toBe(1);
+      expect(
+        await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput?.releases),
+      ).toBe(1);
     } finally {
       await app.evaluate(() => {
         const state = (globalThis as BrowserTestGlobal).__browserHeldInput;
-        state?.release(); state?.restore(); delete (globalThis as BrowserTestGlobal).__browserHeldInput;
+        state?.release();
+        state?.restore();
+        delete (globalThis as BrowserTestGlobal).__browserHeldInput;
       });
       await command(page, { action: "close", tabId });
     }

@@ -4,7 +4,10 @@
 import * as React from "react";
 import { useNowSecond } from "../lib/second-clock";
 import { ChevronRight, Square } from "lucide-react";
-import { groupSubagentRunsByStatus, type SubagentRunStatusGroup } from "../lib/subagent-panel-state";
+import {
+  groupSubagentRunsByStatus,
+  type SubagentRunStatusGroup,
+} from "../lib/subagent-panel-state";
 import {
   subagentElapsedLabel,
   subagentRoleLabel,
@@ -77,15 +80,24 @@ function RunRow({
         onClick={(event) => onOpen(run.runId, event.currentTarget)}
         className={ROW}
       >
-        <SubagentMark role={run.role} state={run.state} activity={run.snapshot?.activity} size={18} />
+        <SubagentMark
+          role={run.role}
+          state={run.state}
+          activity={run.snapshot?.activity}
+          size={18}
+        />
         <span className="flex min-w-0 flex-col">
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="min-w-0 truncate">{run.label}</span>
             {role ? (
-              <span className="shrink-0 rounded-full bg-control px-1.5 text-mini text-secondary">{role}</span>
+              <span className="shrink-0 rounded-full bg-control px-1.5 text-mini text-secondary">
+                {role}
+              </span>
             ) : null}
           </span>
-          <span className={cn("truncate text-small", line.error ? "text-red" : "text-tertiary")}>{line.text}</span>
+          <span className={cn("truncate text-small", line.error ? "text-red" : "text-tertiary")}>
+            {line.text}
+          </span>
           <span className="sr-only">{`, ${subagentStateLabel(run.state)}`}</span>
         </span>
         {elapsed ? (
@@ -195,7 +207,14 @@ export function SubagentStatusGroups({
               </button>
               {completedOpen ? (
                 <div id={completedListId}>
-                  <GroupRows group={group} now={now} stopPending={stopPending} stopErrors={stopErrors} onOpen={onOpen} onStop={onStop} />
+                  <GroupRows
+                    group={group}
+                    now={now}
+                    stopPending={stopPending}
+                    stopErrors={stopErrors}
+                    onOpen={onOpen}
+                    onStop={onStop}
+                  />
                 </div>
               ) : null}
             </div>
@@ -203,11 +222,21 @@ export function SubagentStatusGroups({
         }
         return (
           <div key={group.id} role="group" aria-label={label} className="pb-1">
-            <div aria-hidden="true" className="flex items-center gap-1.5 px-2.5 pt-2 pb-0.5 text-small font-medium text-tertiary">
+            <div
+              aria-hidden="true"
+              className="flex items-center gap-1.5 px-2.5 pt-2 pb-0.5 text-small font-medium text-tertiary"
+            >
               <span>{group.title}</span>
               <span className="tabular-nums">{group.runs.length}</span>
             </div>
-            <GroupRows group={group} now={now} stopPending={stopPending} stopErrors={stopErrors} onOpen={onOpen} onStop={onStop} />
+            <GroupRows
+              group={group}
+              now={now}
+              stopPending={stopPending}
+              stopErrors={stopErrors}
+              onOpen={onOpen}
+              onStop={onStop}
+            />
           </div>
         );
       })}

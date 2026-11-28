@@ -11,7 +11,16 @@ import { ImageWorkflowStore } from "./workflow-store.js";
 
 export type CreateImagesAssets = Pick<
   StudioAssetStore,
-  "status" | "get" | "read" | "put" | "retain" | "release" | "releaseAllForHolder" | "replaceHolder" | "holders" | "usage"
+  | "status"
+  | "get"
+  | "read"
+  | "put"
+  | "retain"
+  | "release"
+  | "releaseAllForHolder"
+  | "replaceHolder"
+  | "holders"
+  | "usage"
 > & {
   /**
    * Every holder id of one kind. When the store offers it, startup reconciliation finds orphaned
@@ -72,7 +81,10 @@ function unavailable(error: unknown): CreateImagesUnavailableError {
       { cause: error },
     );
   }
-  return new CreateImagesUnavailableError(`${UNAVAILABLE} Aiden will try again the next time you use Images.`, { cause: error });
+  return new CreateImagesUnavailableError(
+    `${UNAVAILABLE} Aiden will try again the next time you use Images.`,
+    { cause: error },
+  );
 }
 
 export class CreateImagesRuntime {
@@ -139,14 +151,22 @@ export class CreateImagesRuntime {
       const root = this.options.root();
       const now = this.options.now ? { now: this.options.now } : {};
       const reportIssue = this.options.reportIssue ? { reportIssue: this.options.reportIssue } : {};
-      const workflows = new ImageWorkflowStore({ root: () => root, assets: this.options.assets, ...now, ...reportIssue });
+      const workflows = new ImageWorkflowStore({
+        root: () => root,
+        assets: this.options.assets,
+        ...now,
+        ...reportIssue,
+      });
       await workflows.initialize();
       ledger = ImageRunLedger.open({
         directory: root,
         ...now,
         liveNodeIds: (workflowId) => workflows.nodeIds(workflowId),
         quarantineDamaged: (moved, error) =>
-          this.options.reportIssue?.(`The image run history could not be read and was moved to ${moved}. Aiden started an empty run history.`, error),
+          this.options.reportIssue?.(
+            `The image run history could not be read and was moved to ${moved}. Aiden started an empty run history.`,
+            error,
+          ),
       });
       const port = this.options.port();
       const exports = new CreateImagesExports({
@@ -215,7 +235,10 @@ export function reconcileImageHolds(input: {
   reportIssue(message: string, error: unknown): void;
 }): void {
   const { assets, reportIssue } = input;
-  const desired: Record<"images-run" | "images-workflow", ReadonlyMap<string, readonly string[]>> = {
+  const desired: Record<
+    "images-run" | "images-workflow",
+    ReadonlyMap<string, readonly string[]>
+  > = {
     "images-run": input.runs,
     "images-workflow": input.workflows,
   };
@@ -228,20 +251,31 @@ export function reconcileImageHolds(input: {
   };
   const existing = new Set<string>();
   for (const assetIds of [...input.runs.values(), ...input.workflows.values()]) {
-    for (const assetId of assetIds) if (!existing.has(assetId) && assets.get(assetId)) existing.add(assetId);
+    for (const assetId of assetIds)
+      if (!existing.has(assetId) && assets.get(assetId)) existing.add(assetId);
   }
   for (const kind of ["images-run", "images-workflow"] as const) {
     for (const id of currentHolderIds(assets, kind, existing)) {
-      if (desired[kind].has(id) || (kind === "images-workflow" && input.keepWorkflows?.has(id))) continue;
+      if (desired[kind].has(id) || (kind === "images-workflow" && input.keepWorkflows?.has(id)))
+        continue;
       attempt({ kind, id }, () => assets.releaseAllForHolder({ kind, id }));
     }
     for (const [id, assetIds] of desired[kind]) {
-      attempt({ kind, id }, () => assets.replaceHolder({ kind, id }, assetIds.filter((assetId) => existing.has(assetId))));
+      attempt({ kind, id }, () =>
+        assets.replaceHolder(
+          { kind, id },
+          assetIds.filter((assetId) => existing.has(assetId)),
+        ),
+      );
     }
   }
 }
 
-function currentHolderIds(assets: CreateImagesAssets, kind: StudioAssetHolderKind, known: ReadonlySet<string>): Set<string> {
+function currentHolderIds(
+  assets: CreateImagesAssets,
+  kind: StudioAssetHolderKind,
+  known: ReadonlySet<string>,
+): Set<string> {
   if (assets.holderIds) return new Set(assets.holderIds(kind));
   const found = new Set<string>();
   for (const assetId of known) {

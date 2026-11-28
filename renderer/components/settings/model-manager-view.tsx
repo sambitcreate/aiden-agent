@@ -20,7 +20,10 @@ function Meter({ label, value }: { label: string; value: number }) {
         {label}
       </Text>
       <div className="h-1.5 flex-1 overflow-hidden rounded-pill bg-well">
-        <div className="h-full rounded-pill bg-accent" style={{ width: `${Math.round(value * 100)}%` }} />
+        <div
+          className="h-full rounded-pill bg-accent"
+          style={{ width: `${Math.round(value * 100)}%` }}
+        />
       </div>
     </div>
   );
@@ -32,7 +35,13 @@ const PHASE_LABEL: Record<ModelDownloadProgress["phase"], string> = {
   extract: "Installing…",
 };
 
-function DownloadProgress({ percentage, phase }: { percentage: number; phase: ModelDownloadProgress["phase"] }) {
+function DownloadProgress({
+  percentage,
+  phase,
+}: {
+  percentage: number;
+  phase: ModelDownloadProgress["phase"];
+}) {
   return (
     <div className="flex flex-col gap-1">
       <div className="h-1.5 w-full overflow-hidden rounded-pill bg-well">
@@ -60,7 +69,16 @@ interface CardProps {
   onActivate: (id: string) => void;
 }
 
-function ModelCard({ model, active, progress, busy, onDownload, onCancel, onDelete, onActivate }: CardProps) {
+function ModelCard({
+  model,
+  active,
+  progress,
+  busy,
+  onDownload,
+  onCancel,
+  onDelete,
+  onActivate,
+}: CardProps) {
   return (
     <div
       role="group"
@@ -85,7 +103,12 @@ function ModelCard({ model, active, progress, busy, onDownload, onCancel, onDele
           <Text variant="small" color="tertiary">
             {model.description}
           </Text>
-          <Text as="p" variant="small" color="secondary" className="mt-1 flex items-center gap-1 tabular-nums">
+          <Text
+            as="p"
+            variant="small"
+            color="secondary"
+            className="mt-1 flex items-center gap-1 tabular-nums"
+          >
             <Globe className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
             <span className="min-w-0">
               {model.languagesLabel} · {model.sizeLabel}
@@ -126,7 +149,11 @@ function ModelCard({ model, active, progress, busy, onDownload, onCancel, onDele
                 onClick={() => onDelete(model.id)}
                 aria-label={`Delete ${model.name}`}
               >
-                {busy === "delete" ? <Loader2 className="animate-spin" /> : <Trash2 className="text-support-red" />}
+                {busy === "delete" ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Trash2 className="text-support-red" />
+                )}
               </Button>
             </>
           ) : (
@@ -144,7 +171,10 @@ function ModelCard({ model, active, progress, busy, onDownload, onCancel, onDele
       </Text>
 
       {busy === "download" ? (
-        <DownloadProgress percentage={progress?.percentage ?? 0} phase={progress?.phase ?? "download"} />
+        <DownloadProgress
+          percentage={progress?.percentage ?? 0}
+          phase={progress?.phase ?? "download"}
+        />
       ) : null}
     </div>
   );
@@ -184,7 +214,10 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
 
   const download = async (id: string) => {
     setBusy((b) => ({ ...b, [id]: "download" }));
-    setProgress((p) => ({ ...p, [id]: { id, downloaded: 0, total: 0, percentage: 0, phase: "download" } }));
+    setProgress((p) => ({
+      ...p,
+      [id]: { id, downloaded: 0, total: 0, percentage: 0, phase: "download" },
+    }));
     try {
       await localVoiceApi.downloadModel(id);
       await qc.invalidateQueries({ queryKey: queryKeys.localModels });
@@ -255,16 +288,25 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
       <div className="flex flex-col gap-1">
         <Text variant="heading1">Transcription Models</Text>
         <Text variant="small" color="tertiary">
-          Download and manage on-device models. Everything runs locally — no audio leaves your device.
+          Download and manage on-device models. Everything runs locally — no audio leaves your
+          device.
         </Text>
       </div>
 
-      <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search models by name…" />
+      <Input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search models by name…"
+      />
 
       {models.isLoading ? (
-        <Text variant="small" color="secondary">Loading models…</Text>
+        <Text variant="small" color="secondary">
+          Loading models…
+        </Text>
       ) : models.isError ? (
-        <Text variant="small" color="red">Couldn't load transcription models.</Text>
+        <Text variant="small" color="red">
+          Couldn't load transcription models.
+        </Text>
       ) : null}
 
       {downloaded.length > 0 ? (
@@ -295,7 +337,11 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
         open={deletingModel !== null}
         onOpenChange={(open) => !open && setDeletingModel(null)}
         title="Delete this model?"
-        description={deletingModel ? `“${deletingModel.name}” will be removed from this device. You can download it again later.` : null}
+        description={
+          deletingModel
+            ? `“${deletingModel.name}” will be removed from this device. You can download it again later.`
+            : null
+        }
         confirmLabel="Delete"
         confirmVariant="destructive"
         onConfirm={() => {

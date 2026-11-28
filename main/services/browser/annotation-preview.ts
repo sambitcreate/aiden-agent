@@ -14,9 +14,7 @@ export interface BrowserAnnotationPreviewChange {
 const MAX_TARGETS = 50;
 const MAX_PROPERTIES = 40;
 
-function inputs(
-  value: readonly BrowserAnnotationPreviewInput[],
-): BrowserAnnotationPreviewInput[] {
+function inputs(value: readonly BrowserAnnotationPreviewInput[]): BrowserAnnotationPreviewInput[] {
   if (!Array.isArray(value) || value.length > MAX_TARGETS)
     throw new Error("Preview at most 50 selected elements at once.");
   const selectors = new Set<string>();
@@ -31,38 +29,24 @@ function inputs(
       !item.selector.trim() ||
       item.selector.length > 4000
     )
-      throw new Error(
-        "Every style preview needs a valid element reference and selector.",
-      );
-    if (selectors.has(item.selector))
-      throw new Error("Preview each element selector only once.");
+      throw new Error("Every style preview needs a valid element reference and selector.");
+    if (selectors.has(item.selector)) throw new Error("Preview each element selector only once.");
     selectors.add(item.selector);
-    if (
-      !item.styles ||
-      typeof item.styles !== "object" ||
-      Array.isArray(item.styles)
-    )
+    if (!item.styles || typeof item.styles !== "object" || Array.isArray(item.styles))
       throw new Error("Element styles must be a property and value map.");
     const entries = Object.entries(item.styles);
-    if (entries.length > MAX_PROPERTIES)
-      throw new Error("Preview at most 40 styles per element.");
+    if (entries.length > MAX_PROPERTIES) throw new Error("Preview at most 40 styles per element.");
     const styles: Record<string, string> = Object.create(null);
     for (const [property, next] of entries) {
       if (
         property.length > 100 ||
-        !/^(?:--[a-zA-Z_][a-zA-Z\d_-]*|-?[a-zA-Z][a-zA-Z\d-]*)$/.test(
-          property,
-        ) ||
+        !/^(?:--[a-zA-Z_][a-zA-Z\d_-]*|-?[a-zA-Z][a-zA-Z\d-]*)$/.test(property) ||
         typeof next !== "string" ||
         next.length > 2000 ||
         next.includes("\0")
       )
-        throw new Error(
-          "Provide a valid CSS property and a value under 2000 characters.",
-        );
-      const normalized = property.startsWith("--")
-        ? property
-        : property.toLowerCase();
+        throw new Error("Provide a valid CSS property and a value under 2000 characters.");
+      const normalized = property.startsWith("--") ? property : property.toLowerCase();
       // Removing an editor value removes its preview and restores the original declaration.
       if (next.trim()) styles[normalized] = next.trim();
     }

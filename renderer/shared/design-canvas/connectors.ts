@@ -71,8 +71,13 @@ export function connectorGeometry(
   const fromFrame = targetOf(frames, connector, from);
   const toFrame = targetOf(frames, connector, to);
   // An end on a frame faces the other end's frame, or the other end itself.
-  const aim = (other: DesignConnectorEnd, frame: DesignFrame | undefined) => (frame ? center(frame) : other);
-  const place = (end: DesignConnectorEnd, frame: DesignFrame | undefined, other: DesignPoint): DesignPoint =>
+  const aim = (other: DesignConnectorEnd, frame: DesignFrame | undefined) =>
+    frame ? center(frame) : other;
+  const place = (
+    end: DesignConnectorEnd,
+    frame: DesignFrame | undefined,
+    other: DesignPoint,
+  ): DesignPoint =>
     frame ? sidePoint(frame, end.side ?? facingSide(frame, other)) : { x: end.x, y: end.y };
   const a = place(from, fromFrame, aim(to, toFrame));
   const b = place(to, toFrame, aim(from, fromFrame));
@@ -117,7 +122,8 @@ export function syncConnectors(doc: DesignCanvas): DesignCanvas {
       return { x, y };
     }) as [DesignConnectorEnd, DesignConnectorEnd];
     const sameEnds = synced[0] === frame.ends[0] && synced[1] === frame.ends[1];
-    const sameBox = box.x === frame.x && box.y === frame.y && box.w === frame.w && box.h === frame.h;
+    const sameBox =
+      box.x === frame.x && box.y === frame.y && box.w === frame.w && box.h === frame.h;
     if (sameEnds && sameBox) return frame;
     changed = true;
     return { ...frame, ...box, ends: synced };
@@ -133,7 +139,9 @@ const clampEndCoord = (value: number) =>
 export function translateConnector(frame: DesignFrame, dx: number, dy: number): DesignFrame {
   if (!frame.ends || (dx === 0 && dy === 0)) return frame;
   const ends = frame.ends.map((end) =>
-    end.frameId !== undefined ? end : { x: clampEndCoord(end.x + dx), y: clampEndCoord(end.y + dy) },
+    end.frameId !== undefined
+      ? end
+      : { x: clampEndCoord(end.x + dx), y: clampEndCoord(end.y + dy) },
   ) as [DesignConnectorEnd, DesignConnectorEnd];
   return { ...frame, ends };
 }
@@ -149,14 +157,21 @@ export function attachTargetAt(
   point: DesignPoint,
   exclude: ReadonlySet<string> = new Set(),
 ): DesignFrame | undefined {
-  const onPage = doc.frames.filter((frame) => frame.pageId === pageId && canAttachTo(frame) && !exclude.has(frame.id));
+  const onPage = doc.frames.filter(
+    (frame) => frame.pageId === pageId && canAttachTo(frame) && !exclude.has(frame.id),
+  );
   const drawOrder = [
     ...onPage.filter((frame) => CONTAINER_KINDS.has(frame.kind)),
     ...onPage.filter((frame) => !CONTAINER_KINDS.has(frame.kind)),
   ];
   for (let index = drawOrder.length - 1; index >= 0; index -= 1) {
     const frame = drawOrder[index]!;
-    if (point.x >= frame.x && point.x <= frame.x + frame.w && point.y >= frame.y && point.y <= frame.y + frame.h) {
+    if (
+      point.x >= frame.x &&
+      point.x <= frame.x + frame.w &&
+      point.y >= frame.y &&
+      point.y <= frame.y + frame.h
+    ) {
       return frame;
     }
   }

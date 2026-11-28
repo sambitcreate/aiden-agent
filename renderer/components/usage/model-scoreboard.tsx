@@ -103,7 +103,9 @@ export function ModelScoreboard({
                     providerId={model.providerId}
                     providerLabel={model.providerLabel}
                     modelId={model.modelId}
-                    artwork={providers.find((provider) => provider.id === model.providerId)?.artwork}
+                    artwork={
+                      providers.find((provider) => provider.id === model.providerId)?.artwork
+                    }
                     className="mt-0.5 size-4 text-tertiary"
                   />
                   <div className="min-w-0 flex-1">

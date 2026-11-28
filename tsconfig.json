@@ -29,10 +29,5 @@
       "*": ["./node_modules/@types/*", "./node_modules/*"]
     }
   },
-  "include": [
-    "renderer",
-    "main",
-    "vite.config.ts",
-    "vite.visual-viewer.config.ts"
-  ]
+  "include": ["renderer", "main", "vite.config.ts", "vite.visual-viewer.config.ts"]
 }

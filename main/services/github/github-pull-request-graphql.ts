@@ -42,7 +42,10 @@ export type PullRequestEntryResult =
       pullRequests: PullRequestHeadSummary[];
     }
   | { kind: "not-found"; message: string }
-  | Exclude<GitHubApiResult<never>, { kind: "ok" } | { kind: "not-found" } | { kind: "not-modified" }>;
+  | Exclude<
+      GitHubApiResult<never>,
+      { kind: "ok" } | { kind: "not-found" } | { kind: "not-modified" }
+    >;
 
 /** Stable identity of an entry, used to share in-flight reads and cache answers. */
 export function pullRequestEntryKey(host: string, entry: PullRequestQueryEntry): string {
@@ -59,10 +62,16 @@ export function pullRequestEntryKey(host: string, entry: PullRequestQueryEntry):
   }
 }
 
-function selection(entry: PullRequestQueryEntry, index: number): { fields: string; variables: string[] } {
+function selection(
+  entry: PullRequestQueryEntry,
+  index: number,
+): { fields: string; variables: string[] } {
   switch (entry.kind) {
     case "number":
-      return { fields: `pullRequest(number: $p${index}) { ...AidenPullRequest }`, variables: [`$p${index}: Int!`] };
+      return {
+        fields: `pullRequest(number: $p${index}) { ...AidenPullRequest }`,
+        variables: [`$p${index}: Int!`],
+      };
     case "head":
       return {
         fields: `pullRequests(headRefName: $h${index}, first: ${BRANCH_LOOKUP_LIMIT}, states: [OPEN, CLOSED, MERGED], orderBy: { field: CREATED_AT, direction: DESC }) { nodes { ...AidenPullRequest } }`,
@@ -99,7 +108,9 @@ export function buildPullRequestDocument(entries: readonly PullRequestQueryEntry
       variables[`f${index}`] = entry.first;
     }
     if (part.fields) needsFragment = true;
-    fields.push(`e${index}: repository(owner: $o${index}, name: $n${index}) { nameWithOwner ${part.fields} }`);
+    fields.push(
+      `e${index}: repository(owner: $o${index}, name: $n${index}) { nameWithOwner ${part.fields} }`,
+    );
   });
   const query = `query AidenPullRequests(${declarations.join(", ")}) { ${fields.join(" ")} }${needsFragment ? `\n${PULL_REQUEST_FRAGMENT}` : ""}`;
   return { query, variables };
@@ -133,10 +144,12 @@ function checkNode(node: unknown): Record<string, unknown> | undefined {
 }
 
 function rollupPayload(node: Record<string, unknown>): Record<string, unknown> {
-  const commits = isRecord(node.commits) && Array.isArray(node.commits.nodes) ? node.commits.nodes : [];
+  const commits =
+    isRecord(node.commits) && Array.isArray(node.commits.nodes) ? node.commits.nodes : [];
   const last = commits[commits.length - 1];
   const commit = isRecord(last) && isRecord(last.commit) ? last.commit : undefined;
-  const rollup = commit && isRecord(commit.statusCheckRollup) ? commit.statusCheckRollup : undefined;
+  const rollup =
+    commit && isRecord(commit.statusCheckRollup) ? commit.statusCheckRollup : undefined;
   const contexts = rollup && isRecord(rollup.contexts) ? rollup.contexts : undefined;
   const nodes = contexts && Array.isArray(contexts.nodes) ? contexts.nodes : [];
   const pageInfo = contexts && isRecord(contexts.pageInfo) ? contexts.pageInfo : undefined;
@@ -152,7 +165,9 @@ function rollupPayload(node: Record<string, unknown>): Record<string, unknown> {
 export function pullRequestFromGraphQl(node: unknown): PullRequestHeadSummary {
   if (!isRecord(node)) throw new Error("GitHub returned an invalid pull request response.");
   const summary = parseRawPullRequest({ ...node, statusCheckRollup: rollupPayload(node) });
-  const owner = isRecord(node.headRepositoryOwner) ? boundedString(node.headRepositoryOwner.login, 128) : undefined;
+  const owner = isRecord(node.headRepositoryOwner)
+    ? boundedString(node.headRepositoryOwner.login, 128)
+    : undefined;
   return owner ? { ...summary, headOwner: owner.toLowerCase() } : summary;
 }
 
@@ -170,27 +185,51 @@ function entryFromData(
   const missing = errors.length > 0 && errors.every((error) => error.type === "NOT_FOUND");
   if (!isRecord(value)) {
     if (missing || errors.length === 0) {
-      return { kind: "not-found", message: message ?? `GitHub could not find ${entry.owner}/${entry.name}.` };
+      return {
+        kind: "not-found",
+        message: message ?? `GitHub could not find ${entry.owner}/${entry.name}.`,
+      };
     }
     return { kind: "failed", message: message ?? "GitHub could not read the repository." };
   }
-  const nameWithOwner = normalizeGitHubRepositoryIdentity(value.nameWithOwner) ?? `${entry.owner}/${entry.name}`.toLowerCase();
+  const nameWithOwner =
+    normalizeGitHubRepositoryIdentity(value.nameWithOwner) ??
+    `${entry.owner}/${entry.name}`.toLowerCase();
   const repository = { host, nameWithOwner };
   try {
     if (entry.kind === "repository") return { kind: "ok", repository, pullRequests: [] };
     if (entry.kind === "number") {
       if (!isRecord(value.pullRequest)) {
         return missing || errors.length === 0
-          ? { kind: "not-found", message: message ?? `GitHub could not find pull request #${entry.number} in ${nameWithOwner}.` }
+          ? {
+              kind: "not-found",
+              message:
+                message ??
+                `GitHub could not find pull request #${entry.number} in ${nameWithOwner}.`,
+            }
           : { kind: "failed", message: message ?? "GitHub could not read the pull request." };
       }
       return { kind: "ok", repository, pullRequests: [pullRequestFromGraphQl(value.pullRequest)] };
     }
-    const connection = isRecord(value.pullRequests) && Array.isArray(value.pullRequests.nodes) ? value.pullRequests.nodes : undefined;
-    if (!connection) return { kind: "failed", message: message ?? "GitHub could not list pull requests." };
-    return { kind: "ok", repository, pullRequests: connection.filter(isRecord).map(pullRequestFromGraphQl) };
+    const connection =
+      isRecord(value.pullRequests) && Array.isArray(value.pullRequests.nodes)
+        ? value.pullRequests.nodes
+        : undefined;
+    if (!connection)
+      return { kind: "failed", message: message ?? "GitHub could not list pull requests." };
+    return {
+      kind: "ok",
+      repository,
+      pullRequests: connection.filter(isRecord).map(pullRequestFromGraphQl),
+    };
   } catch (error) {
-    return { kind: "failed", message: error instanceof Error ? error.message : "GitHub returned an invalid pull request response." };
+    return {
+      kind: "failed",
+      message:
+        error instanceof Error
+          ? error.message
+          : "GitHub returned an invalid pull request response.",
+    };
   }
 }
 
@@ -202,15 +241,22 @@ export function pullRequestEntryResults(
 ): PullRequestEntryResult[] {
   if (result.kind !== "ok" && result.kind !== "not-found") {
     const failure: PullRequestEntryResult =
-      result.kind === "not-modified" ? { kind: "failed", message: "GitHub returned an unexpected response." } : result;
+      result.kind === "not-modified"
+        ? { kind: "failed", message: "GitHub returned an unexpected response." }
+        : result;
     return entries.map(() => failure);
   }
   const data = result.data;
   const errors = result.errors ?? [];
   if (!isRecord(data)) {
-    return entries.map(() => ({ kind: "not-found" as const, message: result.kind === "not-found" ? result.message : "GitHub returned no data." }));
+    return entries.map(() => ({
+      kind: "not-found" as const,
+      message: result.kind === "not-found" ? result.message : "GitHub returned no data.",
+    }));
   }
-  return entries.map((entry, index) => entryFromData(host, entry, data[`e${index}`], aliasErrors(errors, `e${index}`)));
+  return entries.map((entry, index) =>
+    entryFromData(host, entry, data[`e${index}`], aliasErrors(errors, `e${index}`)),
+  );
 }
 
 export interface PullRequestReadOptions {
@@ -229,7 +275,11 @@ export interface PullRequestReadOptions {
 
 /** Reads one entry; implementations may batch, share, or cache reads. */
 export interface PullRequestEntryReader {
-  read(host: string, entry: PullRequestQueryEntry, options: PullRequestReadOptions): Promise<PullRequestEntryResult>;
+  read(
+    host: string,
+    entry: PullRequestQueryEntry,
+    options: PullRequestReadOptions,
+  ): Promise<PullRequestEntryResult>;
 }
 
 /** One GraphQL request per entry, without sharing or caching. */
@@ -240,7 +290,11 @@ export class DirectPullRequestReader implements PullRequestEntryReader {
     this.api = api;
   }
 
-  async read(host: string, entry: PullRequestQueryEntry, options: PullRequestReadOptions): Promise<PullRequestEntryResult> {
+  async read(
+    host: string,
+    entry: PullRequestQueryEntry,
+    options: PullRequestReadOptions,
+  ): Promise<PullRequestEntryResult> {
     const document = buildPullRequestDocument([entry]);
     const result = await this.api.graphql({
       host,

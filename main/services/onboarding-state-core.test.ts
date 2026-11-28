@@ -73,10 +73,7 @@ test("legacy migration retains a matching usable provider and model without trus
   );
 
   assert.equal(selected?.id, configured.id);
-  assert.equal(
-    shouldOpenOnboarding(legacyOnboardingOutcome(true, selected !== undefined)),
-    false,
-  );
+  assert.equal(shouldOpenOnboarding(legacyOnboardingOutcome(true, selected !== undefined)), false);
   assert.equal(
     legacyOnboardingEvidenceProvider([configured], configured.id, "removed-model"),
     undefined,

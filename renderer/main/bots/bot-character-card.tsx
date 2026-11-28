@@ -49,7 +49,15 @@ function useRovingRadio<Value extends string>(
 }
 
 /** The colour radios: one tab stop, arrows move and select. */
-function ColourRadios({ current, choose, disabled }: { current: BotAvatarAppearance; choose(color: BotAvatarColor): void; disabled: boolean }) {
+function ColourRadios({
+  current,
+  choose,
+  disabled,
+}: {
+  current: BotAvatarAppearance;
+  choose(color: BotAvatarColor): void;
+  disabled: boolean;
+}) {
   const colors = useRovingRadio<BotAvatarColor>(BOT_AVATAR_COLORS, current.color, choose);
   return (
     <div role="radiogroup" aria-label="Colour" className="flex flex-wrap gap-2">
@@ -70,7 +78,9 @@ function ColourRadios({ current, choose, disabled }: { current: BotAvatarAppeara
             className="grid size-8 place-items-center rounded-full outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-45"
             style={{ backgroundColor: `var(--bot-avatar-${color})` }}
           >
-            {checked ? <Check aria-hidden="true" className="size-4 text-[var(--bot-avatar-face)]" /> : null}
+            {checked ? (
+              <Check aria-hidden="true" className="size-4 text-[var(--bot-avatar-face)]" />
+            ) : null}
           </button>
         );
       })}
@@ -79,7 +89,15 @@ function ColourRadios({ current, choose, disabled }: { current: BotAvatarAppeara
 }
 
 /** The shape radios, each drawn in the current colour. */
-function ShapeRadios({ current, choose, disabled }: { current: BotAvatarAppearance; choose(shape: BotAvatarShape): void; disabled: boolean }) {
+function ShapeRadios({
+  current,
+  choose,
+  disabled,
+}: {
+  current: BotAvatarAppearance;
+  choose(shape: BotAvatarShape): void;
+  disabled: boolean;
+}) {
   const shapes = useRovingRadio<BotAvatarShape>(BOT_AVATAR_SHAPES, current.shape, choose);
   return (
     <div role="radiogroup" aria-label="Shape" className="flex flex-wrap gap-1">
@@ -134,4 +152,3 @@ export function BotLookPicker({
     </div>
   );
 }
-

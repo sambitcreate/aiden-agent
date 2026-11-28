@@ -38,8 +38,17 @@ export function activityPresentationDelay(
   next: AgentActivity | null,
   reduceMotion = false,
 ): number {
-  if (reduceMotion || !current || !next || next.phase === "stopping" || next.phase === "waiting" ||
-    next.phase === "limited" || next.phase === "preparing" || current.phase === next.phase) return 0;
+  if (
+    reduceMotion ||
+    !current ||
+    !next ||
+    next.phase === "stopping" ||
+    next.phase === "waiting" ||
+    next.phase === "limited" ||
+    next.phase === "preparing" ||
+    current.phase === next.phase
+  )
+    return 0;
   return 120;
 }
 
@@ -105,7 +114,12 @@ export function resolveAgentActivity({
 
   if (usageLimitWait && (isStarting || streamingText !== null)) {
     const trying = usageLimitWait.trying || usageLimitWait.nextTryAt <= now;
-    return { phase: "limited", label: usageLimitWaitLabel(usageLimitWait, now), mark: "glance", canRetryNow: !trying };
+    return {
+      phase: "limited",
+      label: usageLimitWaitLabel(usageLimitWait, now),
+      mark: "glance",
+      canRetryNow: !trying,
+    };
   }
 
   if (modelCallRetry) {
@@ -113,7 +127,10 @@ export function resolveAgentActivity({
   }
 
   if (toolActivity?.state === "running") {
-    if (toolActivity.toolName === RENDER_ARTIFACT_TOOL_NAME || toolActivity.toolName === RENDER_UI_TOOL_NAME) {
+    if (
+      toolActivity.toolName === RENDER_ARTIFACT_TOOL_NAME ||
+      toolActivity.toolName === RENDER_UI_TOOL_NAME
+    ) {
       return { phase: "visualizing", label: "Visualizing", mark: "scan-grid" };
     }
     return isSearchTool(toolActivity.toolName)

@@ -8,9 +8,10 @@ import { createImageGenerationSettingsStore } from "./settings-store.js";
 let bundledOpenRouter: readonly ImageModel<ImageApi>[] | undefined;
 
 function bundledOpenRouterImageModels(): readonly ImageModel<ImageApi>[] {
-  bundledOpenRouter ??= openrouterProvider()
-    .getAllModels?.()
-    .filter((model): model is ImageModel<ImageApi> => isModelType(model, "image")) ?? [];
+  bundledOpenRouter ??=
+    openrouterProvider()
+      .getAllModels?.()
+      .filter((model): model is ImageModel<ImageApi> => isModelType(model, "image")) ?? [];
   return bundledOpenRouter;
 }
 

@@ -13,7 +13,9 @@ const execFileAsync = promisify(execFile);
 function fixture(paths: Record<string, string>, developerDir?: string) {
   let probes = 0;
   return {
-    get probes() { return probes; },
+    get probes() {
+      return probes;
+    },
     deps: {
       platform: "darwin" as const,
       executablePath: async (candidate: string) => paths[candidate],
@@ -28,32 +30,65 @@ function fixture(paths: Record<string, string>, developerDir?: string) {
 
 test("missing developer tools never returns Apple's install-on-demand shim", async () => {
   const f = fixture({ "/usr/bin/git": "/usr/bin/git" });
-  await assert.rejects(resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, undefined, f.deps), /Git is not installed/);
+  await assert.rejects(
+    resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, undefined, f.deps),
+    /Git is not installed/,
+  );
   assert.equal(f.probes, 1);
 });
 
-for (const dir of ["/Library/Developer/CommandLineTools", "/Applications/Xcode.app/Contents/Developer"]) {
+for (const dir of [
+  "/Library/Developer/CommandLineTools",
+  "/Applications/Xcode.app/Contents/Developer",
+]) {
   test(`uses installed Git directly from ${dir}`, async () => {
     const binary = `${dir}/usr/bin/git`;
     const f = fixture({ "/usr/bin/git": "/usr/bin/git", [binary]: binary }, dir);
-    assert.equal(await resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, undefined, f.deps), binary);
+    assert.equal(
+      await resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, undefined, f.deps),
+      binary,
+    );
   });
 }
 
 test("stale developer directory cannot enable the shim", async () => {
   const f = fixture({ "/usr/bin/git": "/usr/bin/git" }, "/removed/Xcode.app/Contents/Developer");
-  await assert.rejects(resolveGitExecutable("/usr/bin/git", "/workspace", {}, undefined, f.deps), /Git is not installed/);
+  await assert.rejects(
+    resolveGitExecutable("/usr/bin/git", "/workspace", {}, undefined, f.deps),
+    /Git is not installed/,
+  );
 });
 
 test("Homebrew after the Apple shim works without developer tools", async () => {
-  const f = fixture({ "/usr/bin/git": "/usr/bin/git", "/opt/homebrew/bin/git": "/opt/homebrew/Cellar/git/bin/git" });
-  assert.equal(await resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin:/opt/homebrew/bin" }, undefined, f.deps), "/opt/homebrew/Cellar/git/bin/git");
+  const f = fixture({
+    "/usr/bin/git": "/usr/bin/git",
+    "/opt/homebrew/bin/git": "/opt/homebrew/Cellar/git/bin/git",
+  });
+  assert.equal(
+    await resolveGitExecutable(
+      "git",
+      "/workspace",
+      { PATH: "/usr/bin:/opt/homebrew/bin" },
+      undefined,
+      f.deps,
+    ),
+    "/opt/homebrew/Cellar/git/bin/git",
+  );
 });
 
 test("custom Git and non-macOS do not probe developer tools", async () => {
   const f = fixture({ "/custom/git": "/custom/git" });
-  assert.equal(await resolveGitExecutable("/custom/git", "/workspace", {}, undefined, f.deps), "/custom/git");
-  assert.equal(await resolveGitExecutable("git", "/workspace", { PATH: "/custom" }, undefined, { ...f.deps, platform: "linux" }), "/custom/git");
+  assert.equal(
+    await resolveGitExecutable("/custom/git", "/workspace", {}, undefined, f.deps),
+    "/custom/git",
+  );
+  assert.equal(
+    await resolveGitExecutable("git", "/workspace", { PATH: "/custom" }, undefined, {
+      ...f.deps,
+      platform: "linux",
+    }),
+    "/custom/git",
+  );
   assert.equal(f.probes, 0);
 });
 
@@ -61,21 +96,36 @@ test("Linux resolves Git from absolute PATH entries and never from the workspace
   const f = fixture({ "/workspace/git": "/workspace/git", "/usr/bin/git": "/usr/bin/git" });
   const linux = { ...f.deps, platform: "linux" as const };
   // On Linux /usr/bin/git is a real Git, not an installer shim.
-  assert.equal(await resolveGitExecutable("git", "/workspace", { PATH: ".::/usr/bin" }, undefined, linux), "/usr/bin/git");
-  await assert.rejects(resolveGitExecutable("git", "/workspace", { PATH: ":.:tools" }, undefined, linux), /Git is not installed/);
+  assert.equal(
+    await resolveGitExecutable("git", "/workspace", { PATH: ".::/usr/bin" }, undefined, linux),
+    "/usr/bin/git",
+  );
+  await assert.rejects(
+    resolveGitExecutable("git", "/workspace", { PATH: ":.:tools" }, undefined, linux),
+    /Git is not installed/,
+  );
   assert.equal(f.probes, 0);
 });
 
 test("symlink to Apple shim is detected", async () => {
   const f = fixture({ "/custom/git": "/usr/bin/git" });
-  await assert.rejects(resolveGitExecutable("/custom/git", "/workspace", {}, undefined, f.deps), /Git is not installed/);
+  await assert.rejects(
+    resolveGitExecutable("/custom/git", "/workspace", {}, undefined, f.deps),
+    /Git is not installed/,
+  );
 });
 
 test("cancellation during the non-installing probe remains cancellation", async () => {
   const controller = new AbortController();
   const f = fixture({ "/usr/bin/git": "/usr/bin/git" });
-  f.deps.developerDirectory = async () => { controller.abort(); throw new Error("aborted"); };
-  await assert.rejects(resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, controller.signal, f.deps), { name: "AbortError" });
+  f.deps.developerDirectory = async () => {
+    controller.abort();
+    throw new Error("aborted");
+  };
+  await assert.rejects(
+    resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, controller.signal, f.deps),
+    { name: "AbortError" },
+  );
 });
 
 for (const unsafePath of ["", ".", "tools", "../tools"]) {
@@ -88,7 +138,13 @@ for (const unsafePath of ["", ".", "tools", "../tools"]) {
       return candidate;
     };
     assert.equal(
-      await resolveGitExecutable("git", "/workspace", { PATH: `${unsafePath}:/opt/homebrew/bin` }, undefined, f.deps),
+      await resolveGitExecutable(
+        "git",
+        "/workspace",
+        { PATH: `${unsafePath}:/opt/homebrew/bin` },
+        undefined,
+        f.deps,
+      ),
       "/opt/homebrew/bin/git",
     );
     assert.deepEqual(visited, ["/opt/homebrew/bin/git"]);
@@ -98,14 +154,20 @@ for (const unsafePath of ["", ".", "tools", "../tools"]) {
 test("PATH with only relative components cannot execute workspace Git", async () => {
   const f = fixture({ "/workspace/git": "/workspace/git" });
   f.deps.executablePath = async () => assert.fail("must not inspect workspace-relative candidates");
-  await assert.rejects(resolveGitExecutable("git", "/workspace", { PATH: ":.:tools" }, undefined, f.deps), /Git is not installed/);
+  await assert.rejects(
+    resolveGitExecutable("git", "/workspace", { PATH: ":.:tools" }, undefined, f.deps),
+    /Git is not installed/,
+  );
 });
 
 for (const selected of [undefined, "/removed/Xcode.app/Contents/Developer"]) {
   test(`finds default CLT Git when selected directory is ${selected ?? "unavailable"}`, async () => {
     const binary = "/Library/Developer/CommandLineTools/usr/bin/git";
     const f = fixture({ "/usr/bin/git": "/usr/bin/git", [binary]: binary }, selected);
-    assert.equal(await resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, undefined, f.deps), binary);
+    assert.equal(
+      await resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, undefined, f.deps),
+      binary,
+    );
   });
 }
 
@@ -114,7 +176,10 @@ test("default CLT fallback cannot return a symlink to Apple's shim", async () =>
     "/usr/bin/git": "/usr/bin/git",
     "/Library/Developer/CommandLineTools/usr/bin/git": "/usr/bin/git",
   });
-  await assert.rejects(resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, undefined, f.deps), /Git is not installed/);
+  await assert.rejects(
+    resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, undefined, f.deps),
+    /Git is not installed/,
+  );
 });
 
 test("cancellation during default CLT fallback remains cancellation", async () => {
@@ -124,7 +189,10 @@ test("cancellation during default CLT fallback remains cancellation", async () =
     if (candidate.includes("CommandLineTools")) controller.abort();
     return candidate;
   };
-  await assert.rejects(resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, controller.signal, f.deps), { name: "AbortError" });
+  await assert.rejects(
+    resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, controller.signal, f.deps),
+    { name: "AbortError" },
+  );
 });
 
 function memoFixture(paths: Record<string, string>, developerDir?: string) {
@@ -141,7 +209,10 @@ function memoFixture(paths: Record<string, string>, developerDir?: string) {
 const CLT_GIT = "/Library/Developer/CommandLineTools/usr/bin/git";
 
 test("memoized resolution probes developer tools once and revalidates hits with one file check", async () => {
-  const f = memoFixture({ "/usr/bin/git": "/usr/bin/git", [CLT_GIT]: CLT_GIT }, "/Library/Developer/CommandLineTools");
+  const f = memoFixture(
+    { "/usr/bin/git": "/usr/bin/git", [CLT_GIT]: CLT_GIT },
+    "/Library/Developer/CommandLineTools",
+  );
   const resolve = createGitExecutableResolver(f.deps);
   const env = { PATH: "/usr/bin:/bin" };
   for (let i = 0; i < 5; i++) assert.equal(await resolve("git", "/workspace", env), CLT_GIT);
@@ -151,15 +222,27 @@ test("memoized resolution probes developer tools once and revalidates hits with 
 });
 
 test("a changed PATH or DEVELOPER_DIR resolves again", async () => {
-  const f = memoFixture({
-    "/usr/bin/git": "/usr/bin/git",
-    [CLT_GIT]: CLT_GIT,
-    "/opt/homebrew/bin/git": "/opt/homebrew/Cellar/git/bin/git",
-  }, "/Library/Developer/CommandLineTools");
+  const f = memoFixture(
+    {
+      "/usr/bin/git": "/usr/bin/git",
+      [CLT_GIT]: CLT_GIT,
+      "/opt/homebrew/bin/git": "/opt/homebrew/Cellar/git/bin/git",
+    },
+    "/Library/Developer/CommandLineTools",
+  );
   const resolve = createGitExecutableResolver(f.deps);
   assert.equal(await resolve("git", "/w", { PATH: "/usr/bin" }), CLT_GIT);
-  assert.equal(await resolve("git", "/w", { PATH: "/opt/homebrew/bin:/usr/bin" }), "/opt/homebrew/Cellar/git/bin/git");
-  assert.equal(await resolve("git", "/w", { PATH: "/usr/bin", DEVELOPER_DIR: "/Library/Developer/CommandLineTools" }), CLT_GIT);
+  assert.equal(
+    await resolve("git", "/w", { PATH: "/opt/homebrew/bin:/usr/bin" }),
+    "/opt/homebrew/Cellar/git/bin/git",
+  );
+  assert.equal(
+    await resolve("git", "/w", {
+      PATH: "/usr/bin",
+      DEVELOPER_DIR: "/Library/Developer/CommandLineTools",
+    }),
+    CLT_GIT,
+  );
   assert.equal(f.probes, 2);
 });
 
@@ -179,7 +262,10 @@ test("a removed Git is noticed on the next command instead of being reused", asy
 
 test("resolution is repeated after the trust window", async () => {
   let clock = 0;
-  const f = memoFixture({ "/usr/bin/git": "/usr/bin/git", [CLT_GIT]: CLT_GIT }, "/Library/Developer/CommandLineTools");
+  const f = memoFixture(
+    { "/usr/bin/git": "/usr/bin/git", [CLT_GIT]: CLT_GIT },
+    "/Library/Developer/CommandLineTools",
+  );
   const resolve = createGitExecutableResolver(f.deps, { ttlMs: 1_000, now: () => clock });
   await resolve("git", "/w", { PATH: "/usr/bin" });
   clock = 999;
@@ -202,11 +288,17 @@ test("failures are not cached, so installing Git later works without restarting"
 test("concurrent commands share one resolution and one caller's cancellation does not fail the rest", async () => {
   let release!: (dir: string) => void;
   const f = memoFixture({ "/usr/bin/git": "/usr/bin/git", [CLT_GIT]: CLT_GIT });
-  f.deps.developerDirectory = () => new Promise<string>((resolve) => { release = resolve; });
+  f.deps.developerDirectory = () =>
+    new Promise<string>((resolve) => {
+      release = resolve;
+    });
   const resolve = createGitExecutableResolver(f.deps);
   const controller = new AbortController();
   const cancelled = resolve("git", "/w", { PATH: "/usr/bin" }, controller.signal);
-  const others = [resolve("git", "/w", { PATH: "/usr/bin" }), resolve("git", "/w", { PATH: "/usr/bin" })];
+  const others = [
+    resolve("git", "/w", { PATH: "/usr/bin" }),
+    resolve("git", "/w", { PATH: "/usr/bin" }),
+  ];
   await new Promise((r) => setImmediate(r));
   controller.abort();
   await assert.rejects(cancelled, { name: "AbortError" });

@@ -70,7 +70,10 @@ function buildDetailRows(
       id: "source",
       label: "Source",
       content: (
-        <span className="block select-text break-all font-mono text-mini text-primary" title={formatted}>
+        <span
+          className="block select-text break-all font-mono text-mini text-primary"
+          title={formatted}
+        >
           {formatted}
         </span>
       ),
@@ -134,7 +137,10 @@ function buildDetailRows(
       content: (
         <span className="block select-text break-all font-mono text-mini text-secondary">
           {entries
-            .map(([key, value]) => `${key}=${typeof value === "string" ? JSON.stringify(value) : String(value)}`)
+            .map(
+              ([key, value]) =>
+                `${key}=${typeof value === "string" ? JSON.stringify(value) : String(value)}`,
+            )
             .join(", ")}
         </span>
       ),
@@ -142,7 +148,9 @@ function buildDetailRows(
   }
 
   if (element.computedStyles && Object.keys(element.computedStyles).length > 0) {
-    const entries = Object.entries(element.computedStyles).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const entries = Object.entries(element.computedStyles).sort(([a], [b]) =>
+      a < b ? -1 : a > b ? 1 : 0,
+    );
     rows.push({
       id: "styles",
       label: "Styles",
@@ -312,7 +320,10 @@ export function GrabbedElementChip({
     }
   }, [element, pinPopover]);
 
-  const componentHierarchy = React.useMemo(() => formatGrabbedComponentHierarchy(element), [element]);
+  const componentHierarchy = React.useMemo(
+    () => formatGrabbedComponentHierarchy(element),
+    [element],
+  );
   const detailRows = React.useMemo(
     () => buildDetailRows(element, Boolean(componentHierarchy)),
     [componentHierarchy, element],
@@ -419,7 +430,11 @@ export function GrabbedElementChip({
             onClick={() => void handleCopyContext()}
             className="size-7 text-tertiary hover:text-primary"
           >
-            {copied ? <Check aria-hidden="true" className="size-3.5 text-status-green" /> : <Copy aria-hidden="true" className="size-3.5" />}
+            {copied ? (
+              <Check aria-hidden="true" className="size-3.5 text-status-green" />
+            ) : (
+              <Copy aria-hidden="true" className="size-3.5" />
+            )}
           </Button>
         </div>
 
@@ -451,7 +466,10 @@ export function GrabbedElementChip({
           {componentHierarchy ? (
             <>
               <dt className="text-tertiary">Component</dt>
-              <dd className="min-w-0 break-words font-mono text-secondary" title={componentHierarchy}>
+              <dd
+                className="min-w-0 break-words font-mono text-secondary"
+                title={componentHierarchy}
+              >
                 {componentHierarchy}
               </dd>
             </>
@@ -559,10 +577,7 @@ export function GrabbedElementChips({
         ))}
       </ul>
       {mode === "composer" && textOnlyModel ? (
-        <p
-          data-grabbed-elements-text-only-hint=""
-          className="mt-1 px-0.5 text-mini text-tertiary"
-        >
+        <p data-grabbed-elements-text-only-hint="" className="mt-1 px-0.5 text-mini text-tertiary">
           Text context only for this model
         </p>
       ) : null}

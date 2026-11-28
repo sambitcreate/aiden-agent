@@ -35,12 +35,12 @@ curl -fsSL https://raw.githubusercontent.com/sambitcreate/aiden-agent/main/insta
 
 The installer selects the native package for your machine, checks its published SHA-256 checksum, verifies Apple signing/Gatekeeper on macOS, and verifies build provenance with `gh` on Linux.
 
-| Surface | Install | Notes |
-| --- | --- | --- |
-| **macOS** (Apple silicon) | `brew install --cask sambitcreate/tap/aiden-agent` | Download `Aiden-Agent-Beta-arm64.dmg` from [Releases](https://github.com/sambitcreate/aiden-agent/releases) (signed Intel x64 DMGs are not published yet) |
-| **Linux** (x64 & arm64) | `.deb`, `.rpm`, or `AppImage` | Download via `install.sh` or [Releases](https://github.com/sambitcreate/aiden-agent/releases); see the [Linux guide](docs/linux.md) |
-| **Headless server** | Build `aiden serve` from clone | Runs chats, Bots, and schedules over SSH; see [Server guide](packages/cli/README.md) |
-| **iOS / iPadOS & Android** | TestFlight / CI debug APK | Dev & test guides in [ios/README.md](ios/README.md) and [android/README.md](android/README.md); see [distribution notes](docs/development.md#companion-clients-and-headless-server) |
+| Surface                    | Install                                            | Notes                                                                                                                                                                               |
+| -------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **macOS** (Apple silicon)  | `brew install --cask sambitcreate/tap/aiden-agent` | Download `Aiden-Agent-Beta-arm64.dmg` from [Releases](https://github.com/sambitcreate/aiden-agent/releases) (signed Intel x64 DMGs are not published yet)                           |
+| **Linux** (x64 & arm64)    | `.deb`, `.rpm`, or `AppImage`                      | Download via `install.sh` or [Releases](https://github.com/sambitcreate/aiden-agent/releases); see the [Linux guide](docs/linux.md)                                                 |
+| **Headless server**        | Build `aiden serve` from clone                     | Runs chats, Bots, and schedules over SSH; see [Server guide](packages/cli/README.md)                                                                                                |
+| **iOS / iPadOS & Android** | TestFlight / CI debug APK                          | Dev & test guides in [ios/README.md](ios/README.md) and [android/README.md](android/README.md); see [distribution notes](docs/development.md#companion-clients-and-headless-server) |
 
 ### First run
 

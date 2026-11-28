@@ -6,10 +6,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import {
-  clearTimeout as nativeClearTimeout,
-  setTimeout as nativeSetTimeout,
-} from "node:timers";
+import { clearTimeout as nativeClearTimeout, setTimeout as nativeSetTimeout } from "node:timers";
 import { gzipSync } from "node:zlib";
 import {
   assertArchiveListing,

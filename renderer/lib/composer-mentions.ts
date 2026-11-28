@@ -87,7 +87,8 @@ export function rankMentionCandidates(
   limit = MAX_CANDIDATES,
 ): MentionCandidate[] {
   const pickable = entries.filter(
-    (entry): entry is MentionCandidate["entry"] => entry.kind === "file" || entry.kind === "directory",
+    (entry): entry is MentionCandidate["entry"] =>
+      entry.kind === "file" || entry.kind === "directory",
   );
   return rankMatches(pickable, query, (entry) => ({
     title: entry.name,
@@ -113,7 +114,8 @@ export function addMention(
  * folder, and `@"path"` when the path has whitespace or a quote.
  */
 export function formatMention(mention: ComposerMention): string {
-  const path = mention.kind === "directory" ? `${mention.path.replace(/\/+$/u, "")}/` : mention.path;
+  const path =
+    mention.kind === "directory" ? `${mention.path.replace(/\/+$/u, "")}/` : mention.path;
   return /[\s"]/u.test(path) ? `@"${path.replace(/"/gu, '\\"')}"` : `@${path}`;
 }
 

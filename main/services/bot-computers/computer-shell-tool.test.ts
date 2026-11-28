@@ -3,8 +3,15 @@ import test from "node:test";
 
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { createBotComputerControl } from "./control.js";
-import { BOT_COMPUTER_SHELL_OUTPUT_BYTES, createBotComputerShellTool } from "./computer-shell-tool.js";
-import type { BotComputerConnection, BotComputerGuestCommandResult, BotComputerStartReason } from "./types.js";
+import {
+  BOT_COMPUTER_SHELL_OUTPUT_BYTES,
+  createBotComputerShellTool,
+} from "./computer-shell-tool.js";
+import type {
+  BotComputerConnection,
+  BotComputerGuestCommandResult,
+  BotComputerStartReason,
+} from "./types.js";
 
 const connection: BotComputerConnection = {
   vmName: "aiden-bot-ada",
@@ -47,16 +54,26 @@ function harness(
       },
       control,
       botName: async () => "Ada",
-      ...(options.unattendedWaitMs === undefined ? {} : { unattendedWaitMs: options.unattendedWaitMs }),
+      ...(options.unattendedWaitMs === undefined
+        ? {}
+        : { unattendedWaitMs: options.unattendedWaitMs }),
     },
-    { routine: options.routine === true, ...(options.unattended === undefined ? {} : { unattended: options.unattended }) },
+    {
+      routine: options.routine === true,
+      ...(options.unattended === undefined ? {} : { unattended: options.unattended }),
+    },
   );
   const run = (command: string, signal?: AbortSignal) =>
-    tool.execute("call", { command, description: "List the home folder" }, signal) as Promise<AgentToolResult<null>>;
+    tool.execute("call", { command, description: "List the home folder" }, signal) as Promise<
+      AgentToolResult<null>
+    >;
   return { control, calls, reasons, touches: () => touches, run };
 }
 
-const ok = (stdout: string, extra: Partial<BotComputerGuestCommandResult> = {}): BotComputerGuestCommandResult => ({
+const ok = (
+  stdout: string,
+  extra: Partial<BotComputerGuestCommandResult> = {},
+): BotComputerGuestCommandResult => ({
   exitCode: 0,
   stdout,
   stderr: "",
@@ -83,17 +100,28 @@ test("a command runs in the Bot's computer within 120 seconds and 64 KiB", async
 });
 
 test("a timeout, a failure and cut output each say so", async () => {
-  const timedOut = await harness(async () => ok("partial", { exitCode: 142, timedOut: true })).run("sleep 999");
+  const timedOut = await harness(async () => ok("partial", { exitCode: 142, timedOut: true })).run(
+    "sleep 999",
+  );
   assert.equal(timedOut.isError, true);
   assert.equal(textOf(timedOut), "Command timed out after 120 seconds.\npartial");
 
-  const failed = await harness(async () => ({ ...ok(""), exitCode: 2, stderr: "ls: nope: No such file" })).run("ls nope");
+  const failed = await harness(async () => ({
+    ...ok(""),
+    exitCode: 2,
+    stderr: "ls: nope: No such file",
+  })).run("ls nope");
   assert.equal(failed.isError, true);
   assert.equal(textOf(failed), "Command exited with error (code 2).\nls: nope: No such file");
 
-  const cut = await harness(async () => ok("x".repeat(100), { truncated: true })).run("yes | head -c 1000000");
+  const cut = await harness(async () => ok("x".repeat(100), { truncated: true })).run(
+    "yes | head -c 1000000",
+  );
   assert.equal(cut.isError, undefined, "the command itself finished");
-  assert.match(textOf(cut), new RegExp(`\\[Output cut at ${BOT_COMPUTER_SHELL_OUTPUT_BYTES / 1024} KiB\\.\\]$`, "u"));
+  assert.match(
+    textOf(cut),
+    new RegExp(`\\[Output cut at ${BOT_COMPUTER_SHELL_OUTPUT_BYTES / 1024} KiB\\.\\]$`, "u"),
+  );
 });
 
 test("long output keeps its start and end for the model", async () => {
@@ -108,7 +136,9 @@ test("long output keeps its start and end for the model", async () => {
 test("Take over stops a running command; the call reports it after Give back", async () => {
   const h = harness(
     (call) =>
-      new Promise((_, reject) => call.signal?.addEventListener("abort", () => reject(call.signal?.reason), { once: true })),
+      new Promise((_, reject) =>
+        call.signal?.addEventListener("abort", () => reject(call.signal?.reason), { once: true }),
+      ),
   );
   let settled = false;
   const pending = h.run("brew install ffmpeg").finally(() => {
@@ -123,7 +153,10 @@ test("Take over stops a running command; the call reports it after Give back", a
   const result = await pending;
   assert.equal(result.isError, true);
   // Without a terminal the guest side keeps running, so the Bot must check before a rerun.
-  assert.match(textOf(result), /took over the computer.*still be running.*check before running it again/u);
+  assert.match(
+    textOf(result),
+    /took over the computer.*still be running.*check before running it again/u,
+  );
 });
 
 test("while the person has the computer a command waits, then runs after Give back", async () => {
@@ -163,7 +196,10 @@ test("on a routine or Telegram turn, a command waits for the person only so long
 
     // Taken over in the middle of a command: the call says it may still be running, and gives up too.
     const running = harness(
-      (call) => new Promise((_, reject) => call.signal?.addEventListener("abort", () => reject(call.signal?.reason), { once: true })),
+      (call) =>
+        new Promise((_, reject) =>
+          call.signal?.addEventListener("abort", () => reject(call.signal?.reason), { once: true }),
+        ),
       { ...turn, unattendedWaitMs: 40 },
     );
     const pending = running.run("brew install ffmpeg");
@@ -176,7 +212,11 @@ test("on a routine or Telegram turn, a command waits for the person only so long
       }),
     ]);
     clearTimeout(timer);
-    assert.notEqual(interrupted, "still waiting", `${JSON.stringify(turn)}: a command the person interrupted`);
+    assert.notEqual(
+      interrupted,
+      "still waiting",
+      `${JSON.stringify(turn)}: a command the person interrupted`,
+    );
     if (interrupted === "still waiting") continue;
     assert.equal(interrupted.isError, true);
     assert.match(textOf(interrupted), /still be running.*still using Ada's computer/su);

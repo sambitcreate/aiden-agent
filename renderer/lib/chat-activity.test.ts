@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyChatActivitySnapshot, chatRowStateFor, EMPTY_CHAT_ACTIVITY_STATE } from "./chat-activity.js";
+import {
+  applyChatActivitySnapshot,
+  chatRowStateFor,
+  EMPTY_CHAT_ACTIVITY_STATE,
+} from "./chat-activity.js";
 import { applyChatReadMarkersSnapshot } from "./chat-read-markers.js";
 import { parseChatActivitySnapshot } from "../shared/chat-activity.js";
 
@@ -34,12 +38,20 @@ test("activity recognizes only independently listed chat UUIDs when the privacy 
   const saved = "d2492706-6417-42f1-974d-0c12a2fad0b4";
   const privateId = "550e8400-e29b-41d4-a716-2f612f622f63";
   const known = new Set([saved, "/private/path"]);
-  const activity = { revision: 4, activeChatIds: [saved], approvalChatIds: [saved], inputChatIds: [saved] };
+  const activity = {
+    revision: 4,
+    activeChatIds: [saved],
+    approvalChatIds: [saved],
+    inputChatIds: [saved],
+  };
   assert.equal(parseChatActivitySnapshot(activity), null);
   assert.deepEqual(parseChatActivitySnapshot(activity, known), activity);
   for (const key of ["activeChatIds", "approvalChatIds", "inputChatIds"]) {
     assert.equal(parseChatActivitySnapshot({ ...activity, [key]: ["/private/path"] }, known), null);
-    assert.deepEqual(parseChatActivitySnapshot({ ...activity, [key]: [saved, privateId] }, known), activity);
+    assert.deepEqual(
+      parseChatActivitySnapshot({ ...activity, [key]: [saved, privateId] }, known),
+      activity,
+    );
   }
 });
 

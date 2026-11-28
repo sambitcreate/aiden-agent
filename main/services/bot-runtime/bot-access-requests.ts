@@ -19,24 +19,40 @@ export interface BotAccessRequestPrompt extends BotPendingAccessRequest {
   owner?: { signal: AbortSignal; deadline: number; validate(): Promise<void> };
 }
 export type BotAccessAnswerOutcome = "answered" | "saved_for_future" | "not_waiting" | "invalid";
-export interface BotAccessTallyProof { authorizationFingerprint: string; offered: boolean; decidedAt: number }
+export interface BotAccessTallyProof {
+  authorizationFingerprint: string;
+  offered: boolean;
+  decidedAt: number;
+}
 export interface BotAccessAuthorizationReceipt {
   savedForFuture?: true;
   hint?: string;
   effectiveChoice?: BotAccessChoice;
   tally?: BotAccessTallyProof;
 }
-export type BotAccessSettle = (prompt: BotAccessRequestPrompt, choice: BotAccessChoice, receipt: BotAccessAuthorizationReceipt | undefined) => Promise<BotAccessAuthorizationReceipt | undefined>;
-export interface BotAccessDecision extends BotAccessAuthorizationReceipt { choice: BotAccessChoice; waitId: string }
+export type BotAccessSettle = (
+  prompt: BotAccessRequestPrompt,
+  choice: BotAccessChoice,
+  receipt: BotAccessAuthorizationReceipt | undefined,
+) => Promise<BotAccessAuthorizationReceipt | undefined>;
+export interface BotAccessDecision extends BotAccessAuthorizationReceipt {
+  choice: BotAccessChoice;
+  waitId: string;
+}
 export interface BotAccessRequests {
   request(
-    prompt: Omit<BotAccessRequestPrompt, "waitId" | "authorizationFingerprint"> & { signal: AbortSignal | undefined },
+    prompt: Omit<BotAccessRequestPrompt, "waitId" | "authorizationFingerprint"> & {
+      signal: AbortSignal | undefined;
+    },
   ): Promise<BotAccessDecision>;
   answer(
     botId: string,
     waitId: string,
     choice: BotAccessChoice,
-    authorize: (prompt: BotAccessRequestPrompt, choice: BotAccessChoice) => Promise<void | BotAccessAuthorizationReceipt>,
+    authorize: (
+      prompt: BotAccessRequestPrompt,
+      choice: BotAccessChoice,
+    ) => Promise<void | BotAccessAuthorizationReceipt>,
     settle?: BotAccessSettle,
   ): Promise<BotAccessAnswerOutcome>;
   pending(botId?: string): BotPendingAccessRequest[];
@@ -104,7 +120,17 @@ export function createBotAccessRequests(): BotAccessRequests {
         ...freeze(structuredClone(data)),
         ...(owner ? { owner: Object.freeze({ ...owner }) } : {}),
         waitId,
-        authorizationFingerprint: createHash("sha256").update(JSON.stringify({ version: 1, waitId, botId: data.botId, authorization: data.authorization, ownerDeadline: owner?.deadline })).digest("hex"),
+        authorizationFingerprint: createHash("sha256")
+          .update(
+            JSON.stringify({
+              version: 1,
+              waitId,
+              botId: data.botId,
+              authorization: data.authorization,
+              ownerDeadline: owner?.deadline,
+            }),
+          )
+          .digest("hex"),
       });
       if (
         !botPendingAccessRequestOf(publicPrompt(prompt)) ||
@@ -112,8 +138,7 @@ export function createBotAccessRequests(): BotAccessRequests {
         JSON.stringify(prompt.choices) !== JSON.stringify(prompt.authorization.choices)
       )
         return Promise.reject(new Error("Invalid Bot access request."));
-      let resolve!: (answer: BotAccessDecision) => void,
-        reject!: (reason: unknown) => void;
+      let resolve!: (answer: BotAccessDecision) => void, reject!: (reason: unknown) => void;
       const promise = new Promise<BotAccessDecision>((yes, no) => {
         resolve = yes;
         reject = no;
@@ -158,11 +183,15 @@ export function createBotAccessRequests(): BotAccessRequests {
       try {
         if (!entry.authorized) {
           const authorized = await authorize(entry.prompt, choice);
-          entry.authorized = { choice: authorized?.savedForFuture ? "always" : authorized?.effectiveChoice ?? choice,
-            ...(authorized ? { receipt: structuredClone(authorized) } : {}) };
+          entry.authorized = {
+            choice: authorized?.savedForFuture ? "always" : (authorized?.effectiveChoice ?? choice),
+            ...(authorized ? { receipt: structuredClone(authorized) } : {}),
+          };
         }
         const effectiveChoice = entry.authorized.choice;
-        const receipt = settle ? await settle(entry.prompt, effectiveChoice, entry.authorized.receipt) : entry.authorized.receipt;
+        const receipt = settle
+          ? await settle(entry.prompt, effectiveChoice, entry.authorized.receipt)
+          : entry.authorized.receipt;
         if (receipt?.savedForFuture) {
           saved.set(waitId, botId);
           if (saved.size > 4096) saved.delete(saved.keys().next().value!);
@@ -175,11 +204,13 @@ export function createBotAccessRequests(): BotAccessRequests {
           saved.set(waitId, botId);
           if (saved.size > 4096) saved.delete(saved.keys().next().value!);
         }
-        if (waiting.get(waitId) !== entry) return effectiveChoice === "always" ? "saved_for_future" : "not_waiting";
+        if (waiting.get(waitId) !== entry)
+          return effectiveChoice === "always" ? "saved_for_future" : "not_waiting";
         entry.settle(effectiveChoice, undefined, receipt);
         return "answered";
       } catch (error) {
-        if (entry.authorized?.choice === "always") entry.authorized.receipt = { ...entry.authorized.receipt, savedForFuture: true };
+        if (entry.authorized?.choice === "always")
+          entry.authorized.receipt = { ...entry.authorized.receipt, savedForFuture: true };
         entry.claimed = false;
         if (error instanceof BotAccessRequestStaleError) entry.settle(undefined, error);
         throw error;

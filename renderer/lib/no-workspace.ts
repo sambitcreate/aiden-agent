@@ -9,12 +9,16 @@ import type { Workspace } from "./types";
 export const NO_WORKSPACE_LABEL = "No workspace";
 export const NO_WORKSPACE_GROUP_LABEL = "Chats";
 
-export function isNoWorkspace(workspace: Pick<Workspace, "noWorkspace"> | null | undefined): boolean {
+export function isNoWorkspace(
+  workspace: Pick<Workspace, "noWorkspace"> | null | undefined,
+): boolean {
   return workspace?.noWorkspace === true;
 }
 
 /** Workspaces a person can pick, open or configure: everything but the hidden No workspace records. */
-export function workspaceChoices<T extends Pick<Workspace, "noWorkspace">>(workspaces: readonly T[]): T[] {
+export function workspaceChoices<T extends Pick<Workspace, "noWorkspace">>(
+  workspaces: readonly T[],
+): T[] {
   return workspaces.filter((workspace) => !isNoWorkspace(workspace));
 }
 

@@ -40,7 +40,7 @@ jobs:
         run: npm ci
 
       - name: Verify Linux contracts and installer selection
-        run: npm run type-check && npm run lint && npm run test:linux-contracts && node --test scripts/install.test.mjs
+        run: npm run type-check && npm run format:check && npm run lint && npm run test:linux-contracts && node --test scripts/install.test.mjs
 
       - name: Build and verify Linux installers
         env:

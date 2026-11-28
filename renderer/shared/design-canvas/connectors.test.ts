@@ -6,14 +6,48 @@ import test from "node:test";
 import { applyNodeChanges } from "../../design/canvas-adapter-core.js";
 import { attachTargetAt, connectorGeometry, syncConnectors } from "./connectors.js";
 import { moveFramesToPage } from "./pages.js";
-import { emptyDesignCanvas, parseDesignCanvas, type DesignCanvas, type DesignFrame } from "./schema.js";
+import {
+  emptyDesignCanvas,
+  parseDesignCanvas,
+  type DesignCanvas,
+  type DesignFrame,
+} from "./schema.js";
 
 function box(id: string, x: number, y: number, overrides: Partial<DesignFrame> = {}): DesignFrame {
-  return { id, kind: "shape", shape: "rect", title: id, x, y, w: 100, h: 60, pageId: "page-1", createdBy: "person", ...overrides };
+  return {
+    id,
+    kind: "shape",
+    shape: "rect",
+    title: id,
+    x,
+    y,
+    w: 100,
+    h: 60,
+    pageId: "page-1",
+    createdBy: "person",
+    ...overrides,
+  };
 }
 
-function arrow(id: string, ends: NonNullable<DesignFrame["ends"]>, overrides: Partial<DesignFrame> = {}): DesignFrame {
-  return { id, kind: "connector", title: "Arrow", x: 0, y: 0, w: 1, h: 1, ends, arrow: "end", pageId: "page-1", createdBy: "person", ...overrides };
+function arrow(
+  id: string,
+  ends: NonNullable<DesignFrame["ends"]>,
+  overrides: Partial<DesignFrame> = {},
+): DesignFrame {
+  return {
+    id,
+    kind: "connector",
+    title: "Arrow",
+    x: 0,
+    y: 0,
+    w: 1,
+    h: 1,
+    ends,
+    arrow: "end",
+    pageId: "page-1",
+    createdBy: "person",
+    ...overrides,
+  };
 }
 
 function canvas(...frames: DesignFrame[]): DesignCanvas {
@@ -51,7 +85,9 @@ test("an arrow between two boxes leaves from the sides that face each other, and
   );
 
   // Drag b below a: the arrow now runs from a's bottom to b's top.
-  const moved = applyNodeChanges(doc, [{ type: "position", id: "b", position: { x: 0, y: 300 }, dragging: false }]);
+  const moved = applyNodeChanges(doc, [
+    { type: "position", id: "b", position: { x: 0, y: 300 }, dragging: false },
+  ]);
   assert.deepEqual(endsOf(moved, "ab"), [
     { x: 50, y: 60 },
     { x: 50, y: 300 },
@@ -86,7 +122,9 @@ test("removing a box leaves the arrow's end where it was, as a free end", () => 
   assert.deepEqual(ends[1], { x: 400, y: 30 });
   assert.equal(ends[0].frameId, "a", "the other end stays joined");
   // A free end stays put when the box it used to point at would have moved.
-  const after = applyNodeChanges(removed, [{ type: "position", id: "a", position: { x: 0, y: 500 }, dragging: false }]);
+  const after = applyNodeChanges(removed, [
+    { type: "position", id: "a", position: { x: 0, y: 500 }, dragging: false },
+  ]);
   assert.deepEqual(endsOf(after, "ab")[1], { x: 400, y: 30 });
 });
 
@@ -100,7 +138,12 @@ test("dragging an arrow moves its free ends and leaves the joined ones on their 
   );
   const before = frameOf(doc, "out");
   const dragged = applyNodeChanges(doc, [
-    { type: "position", id: "out", position: { x: before.x + 50, y: before.y + 100 }, dragging: false },
+    {
+      type: "position",
+      id: "out",
+      position: { x: before.x + 50, y: before.y + 100 },
+      dragging: false,
+    },
   ]);
   const ends = endsOf(dragged, "out");
   assert.deepEqual(ends[1], { x: 450, y: 130 });
@@ -118,15 +161,15 @@ test("an arrow moved to another page without its boxes lets go of them", () => {
       ]),
     ),
   };
-  const twoPages = { ...doc, pages: [...doc.pages, { id: "page-2", name: "Page 2", viewport: { x: 0, y: 0, zoom: 1 } }] };
+  const twoPages = {
+    ...doc,
+    pages: [...doc.pages, { id: "page-2", name: "Page 2", viewport: { x: 0, y: 0, zoom: 1 } }],
+  };
   const moved = moveFramesToPage(twoPages, ["ab"], "page-2");
-  assert.deepEqual(
-    frameOf(moved, "ab").ends,
-    [
-      { x: 100, y: 30 },
-      { x: 400, y: 30 },
-    ],
-  );
+  assert.deepEqual(frameOf(moved, "ab").ends, [
+    { x: 100, y: 30 },
+    { x: 400, y: 30 },
+  ]);
 });
 
 test("an end dropped on the canvas joins the topmost box there, never a line or the artboard under it", () => {
@@ -140,7 +183,11 @@ test("an end dropped on the canvas joins the topmost box there, never a line or 
   );
   const page = doc.activePageId;
   assert.equal(attachTargetAt(doc, page, { x: 120, y: 120 })?.id, "card");
-  assert.equal(attachTargetAt(doc, page, { x: 600, y: 600 })?.id, "board", "the artboard is a target where nothing is above it");
+  assert.equal(
+    attachTargetAt(doc, page, { x: 600, y: 600 })?.id,
+    "board",
+    "the artboard is a target where nothing is above it",
+  );
   assert.equal(attachTargetAt(doc, page, { x: 5000, y: 5000 }), undefined);
   assert.equal(attachTargetAt(doc, page, { x: 120, y: 120 }, new Set(["card"]))?.id, "board");
 });
@@ -157,7 +204,13 @@ test("reading a document lets go of an end on a frame that is not there, another
     frames: [
       { ...box("here", 0, 0), pageId: "p1" },
       { ...box("there", 0, 0), pageId: "p2" },
-      { ...arrow("other", [{ x: 1, y: 1 }, { x: 2, y: 2 }]), pageId: "p1" },
+      {
+        ...arrow("other", [
+          { x: 1, y: 1 },
+          { x: 2, y: 2 },
+        ]),
+        pageId: "p1",
+      },
       {
         ...arrow("a1", [
           { x: 10, y: 10, frameId: "there" },

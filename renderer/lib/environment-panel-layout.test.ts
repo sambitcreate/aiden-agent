@@ -81,10 +81,8 @@ test("keeps icon-only and Subagents compact breakpoints exact at their boundarie
   assert.equal(compactBoundary.width < SUBAGENTS_COMPACT_BREAKPOINT, false);
 
   assert.ok(
-    resolveEnvironmentPanelLayout(
-      MAX_PANEL_WIDTH,
-      PANEL_EDGE_GUTTER + COMPACT_TABS_BREAKPOINT - 1,
-    ).width < COMPACT_TABS_BREAKPOINT,
+    resolveEnvironmentPanelLayout(MAX_PANEL_WIDTH, PANEL_EDGE_GUTTER + COMPACT_TABS_BREAKPOINT - 1)
+      .width < COMPACT_TABS_BREAKPOINT,
   );
   assert.ok(
     resolveEnvironmentPanelLayout(
@@ -183,12 +181,25 @@ function describeQuickViewDocking() {
     dockedColumn(chatWidth, MAX, inset).right - GUTTER + SURFACE_GAP <= chatWidth - CARD;
 
   test("Quick View leaves a wide chat centered", () => {
-    assert.equal(resolveChatCardInset({ chatWidth: 2200, maxColumnWidth: MAX, cardInset: CARD, contentGutter: GUTTER }), 0);
+    assert.equal(
+      resolveChatCardInset({
+        chatWidth: 2200,
+        maxColumnWidth: MAX,
+        cardInset: CARD,
+        contentGutter: GUTTER,
+      }),
+      0,
+    );
   });
 
   test("on a narrower window the chat moves left only as far as the card needs", () => {
     for (const chatWidth of [1400, 1300, 1250]) {
-      const inset = resolveChatCardInset({ chatWidth, maxColumnWidth: MAX, cardInset: CARD, contentGutter: GUTTER });
+      const inset = resolveChatCardInset({
+        chatWidth,
+        maxColumnWidth: MAX,
+        cardInset: CARD,
+        contentGutter: GUTTER,
+      });
       assert.ok(inset > 0, `docks at ${chatWidth}`);
       assert.ok(contentClears(chatWidth, inset), `content clears the card at ${chatWidth}`);
       assert.ok(!contentClears(chatWidth, inset - 2), `no further than needed at ${chatWidth}`);
@@ -199,18 +210,36 @@ function describeQuickViewDocking() {
 
   test("the chat narrows only after reaching the left edge, then the card floats again", () => {
     const narrowing = 1100;
-    const inset = resolveChatCardInset({ chatWidth: narrowing, maxColumnWidth: MAX, cardInset: CARD, contentGutter: GUTTER });
+    const inset = resolveChatCardInset({
+      chatWidth: narrowing,
+      maxColumnWidth: MAX,
+      cardInset: CARD,
+      contentGutter: GUTTER,
+    });
     const column = dockedColumn(narrowing, MAX, inset);
     assert.equal(column.left, 0);
     assert.ok(column.width < MAX && column.width >= MIN_DOCKED_CHAT_COLUMN_WIDTH);
     assert.ok(contentClears(narrowing, inset));
     // Too narrow to dock without crushing the chat: nothing moves and Quick View floats over it.
-    assert.equal(resolveChatCardInset({ chatWidth: 860, maxColumnWidth: MAX, cardInset: CARD, contentGutter: GUTTER }), 0);
+    assert.equal(
+      resolveChatCardInset({
+        chatWidth: 860,
+        maxColumnWidth: MAX,
+        cardInset: CARD,
+        contentGutter: GUTTER,
+      }),
+      0,
+    );
   });
 
   test("a full-width chat keeps its content clear of the card", () => {
     const chatWidth = 1300;
-    const inset = resolveChatCardInset({ chatWidth, maxColumnWidth: Number.POSITIVE_INFINITY, cardInset: CARD, contentGutter: GUTTER });
+    const inset = resolveChatCardInset({
+      chatWidth,
+      maxColumnWidth: Number.POSITIVE_INFINITY,
+      cardInset: CARD,
+      contentGutter: GUTTER,
+    });
     assert.equal(inset, CARD + SURFACE_GAP - GUTTER);
     assert.equal(chatWidth - inset - GUTTER + SURFACE_GAP, chatWidth - CARD);
   });
@@ -232,7 +261,11 @@ test("the Bot panel sits beside the chat on a 1280px window with the sidebar ope
   // A 1280px window less the 272px sidebar.
   const chatArea = 1008;
   assert.equal(resolveEnvironmentPanelLayout(DEFAULT_PANEL_WIDTH, chatArea).inline, false);
-  const bot = resolveEnvironmentPanelLayout(BOT_PANEL_WIDTH_BOUNDS.default, chatArea, BOT_PANEL_WIDTH_BOUNDS);
+  const bot = resolveEnvironmentPanelLayout(
+    BOT_PANEL_WIDTH_BOUNDS.default,
+    chatArea,
+    BOT_PANEL_WIDTH_BOUNDS,
+  );
   assert.equal(bot.inline, true);
   assert.equal(bot.width, BOT_PANEL_WIDTH_BOUNDS.default);
   assert.ok(chatArea - bot.width >= MIN_CONVERSATION_WIDTH, "the chat keeps a usable column");
@@ -243,17 +276,30 @@ test("the Bot panel sits beside the chat on a 1280px window with the sidebar ope
 
 test("the Bot panel floats only where the workspace panel would float too", () => {
   for (let containerWidth = 300; containerWidth <= 1800; containerWidth += 10) {
-    const bot = resolveEnvironmentPanelLayout(BOT_PANEL_WIDTH_BOUNDS.default, containerWidth, BOT_PANEL_WIDTH_BOUNDS);
+    const bot = resolveEnvironmentPanelLayout(
+      BOT_PANEL_WIDTH_BOUNDS.default,
+      containerWidth,
+      BOT_PANEL_WIDTH_BOUNDS,
+    );
     const workspace = resolveEnvironmentPanelLayout(DEFAULT_PANEL_WIDTH, containerWidth);
     if (!bot.inline) assert.equal(workspace.inline, false, `at ${containerWidth}px`);
-    if (bot.inline) assert.ok(containerWidth - bot.width >= MIN_CONVERSATION_WIDTH, `at ${containerWidth}px`);
+    if (bot.inline)
+      assert.ok(containerWidth - bot.width >= MIN_CONVERSATION_WIDTH, `at ${containerWidth}px`);
   }
-  assert.equal(resolveEnvironmentPanelLayout(BOT_PANEL_WIDTH_BOUNDS.default, 900, BOT_PANEL_WIDTH_BOUNDS).inline, false);
+  assert.equal(
+    resolveEnvironmentPanelLayout(BOT_PANEL_WIDTH_BOUNDS.default, 900, BOT_PANEL_WIDTH_BOUNDS)
+      .inline,
+    false,
+  );
 });
 
 test("a saved Bot panel width narrower than the workspace's range survives, and its resize stops at its own minimum", () => {
   assert.equal(storedWorkbenchWidth("420", BOT_PANEL_WIDTH_BOUNDS), 420);
-  assert.equal(storedWorkbenchWidth("420"), DEFAULT_PANEL_WIDTH, "the workspace range is unchanged");
+  assert.equal(
+    storedWorkbenchWidth("420"),
+    DEFAULT_PANEL_WIDTH,
+    "the workspace range is unchanged",
+  );
   assert.equal(storedWorkbenchWidth(null, BOT_PANEL_WIDTH_BOUNDS), BOT_PANEL_WIDTH_BOUNDS.default);
   assert.deepEqual(resolveEnvironmentPanelResizeBounds(1600, true, BOT_PANEL_WIDTH_BOUNDS), {
     min: BOT_PANEL_WIDTH_BOUNDS.min,
@@ -262,21 +308,45 @@ test("a saved Bot panel width narrower than the workspace's range survives, and 
 });
 
 test("design mode gives the chat its preferred width and the canvas the rest", () => {
-  assert.deepEqual(resolveDesignCanvasLayout(undefined, 1400), { mode: "split", chatWidth: 420, canvasWidth: 980 });
+  assert.deepEqual(resolveDesignCanvasLayout(undefined, 1400), {
+    mode: "split",
+    chatWidth: 420,
+    canvasWidth: 980,
+  });
   assert.equal(resolveDesignCanvasLayout(300, 1400).chatWidth, 360);
-  assert.deepEqual(resolveDesignCanvasLayout(900, 1400), { mode: "split", chatWidth: 560, canvasWidth: 840 });
+  assert.deepEqual(resolveDesignCanvasLayout(900, 1400), {
+    mode: "split",
+    chatWidth: 560,
+    canvasWidth: 840,
+  });
   assert.equal(resolveDesignCanvasLayout(Number.NaN, 1400).chatWidth, 420);
   assert.equal(resolveDesignCanvasLayout(Number.POSITIVE_INFINITY, 1400).chatWidth, 420);
 });
 
 test("the design chat gives way to the 320 px canvas minimum before the two stack", () => {
-  assert.deepEqual(resolveDesignCanvasLayout(560, 740), { mode: "split", chatWidth: 420, canvasWidth: 320 });
-  assert.deepEqual(resolveDesignCanvasLayout(420, 680), { mode: "split", chatWidth: 360, canvasWidth: 320 });
+  assert.deepEqual(resolveDesignCanvasLayout(560, 740), {
+    mode: "split",
+    chatWidth: 420,
+    canvasWidth: 320,
+  });
+  assert.deepEqual(resolveDesignCanvasLayout(420, 680), {
+    mode: "split",
+    chatWidth: 360,
+    canvasWidth: 320,
+  });
 });
 
 test("below 680 px of content the chat and canvas stack, each at the full width", () => {
-  assert.deepEqual(resolveDesignCanvasLayout(420, 679), { mode: "stacked", chatWidth: 679, canvasWidth: 679 });
-  assert.deepEqual(resolveDesignCanvasLayout(420, 300), { mode: "stacked", chatWidth: 300, canvasWidth: 300 });
+  assert.deepEqual(resolveDesignCanvasLayout(420, 679), {
+    mode: "stacked",
+    chatWidth: 679,
+    canvasWidth: 679,
+  });
+  assert.deepEqual(resolveDesignCanvasLayout(420, 300), {
+    mode: "stacked",
+    chatWidth: 300,
+    canvasWidth: 300,
+  });
   assert.equal(resolveDesignCanvasLayout(420, Number.NaN).mode, "stacked");
 });
 
@@ -285,26 +355,51 @@ test("a split design layout always fills the container and respects both minimum
     for (const preferred of [360, 420, 560]) {
       const layout = resolveDesignCanvasLayout(preferred, containerWidth);
       assert.equal(layout.mode, "split", `${preferred}@${containerWidth}`);
-      assert.equal(layout.chatWidth + layout.canvasWidth, containerWidth, `${preferred}@${containerWidth}`);
+      assert.equal(
+        layout.chatWidth + layout.canvasWidth,
+        containerWidth,
+        `${preferred}@${containerWidth}`,
+      );
       assert.ok(layout.chatWidth >= DESIGN_CHAT_WIDTH_BOUNDS.min, `${preferred}@${containerWidth}`);
       assert.ok(layout.chatWidth <= DESIGN_CHAT_WIDTH_BOUNDS.max, `${preferred}@${containerWidth}`);
       assert.ok(layout.canvasWidth >= DESIGN_CANVAS_MIN_WIDTH, `${preferred}@${containerWidth}`);
       assert.ok(layout.chatWidth <= preferred, `${preferred}@${containerWidth}`);
-      assert.ok(layout.chatWidth <= designChatMaxWidth(containerWidth), `${preferred}@${containerWidth}`);
+      assert.ok(
+        layout.chatWidth <= designChatMaxWidth(containerWidth),
+        `${preferred}@${containerWidth}`,
+      );
     }
   }
 });
 
 test("a person's entry collapses the sidebar only when that makes room, and widens only when it can work", () => {
   // Already fits: nothing changes, even with the sidebar open.
-  assert.equal(resolveDesignEntryAction({ containerWidth: 728, sidebarWidth: 272, canWiden: true }), "none");
+  assert.equal(
+    resolveDesignEntryAction({ containerWidth: 728, sidebarWidth: 272, canWiden: true }),
+    "none",
+  );
   // 1000 px window, sidebar open: 728 px of content splits as is.
-  assert.equal(resolveDesignEntryAction({ containerWidth: 680, sidebarWidth: 272, canWiden: true }), "none");
+  assert.equal(
+    resolveDesignEntryAction({ containerWidth: 680, sidebarWidth: 272, canWiden: true }),
+    "none",
+  );
   // 900 px window, sidebar open: 628 px stacks, 900 without the sidebar splits.
-  assert.equal(resolveDesignEntryAction({ containerWidth: 628, sidebarWidth: 272, canWiden: true }), "collapseSidebar");
+  assert.equal(
+    resolveDesignEntryAction({ containerWidth: 628, sidebarWidth: 272, canWiden: true }),
+    "collapseSidebar",
+  );
   // 640 px window: collapsing is not enough, so widen when the display allows it.
-  assert.equal(resolveDesignEntryAction({ containerWidth: 368, sidebarWidth: 272, canWiden: true }), "widenWindow");
-  assert.equal(resolveDesignEntryAction({ containerWidth: 640, sidebarWidth: 0, canWiden: true }), "widenWindow");
+  assert.equal(
+    resolveDesignEntryAction({ containerWidth: 368, sidebarWidth: 272, canWiden: true }),
+    "widenWindow",
+  );
+  assert.equal(
+    resolveDesignEntryAction({ containerWidth: 640, sidebarWidth: 0, canWiden: true }),
+    "widenWindow",
+  );
   // Widening cannot work (full screen, maximized, small display): stay stacked.
-  assert.equal(resolveDesignEntryAction({ containerWidth: 640, sidebarWidth: 0, canWiden: false }), "none");
+  assert.equal(
+    resolveDesignEntryAction({ containerWidth: 640, sidebarWidth: 0, canWiden: false }),
+    "none",
+  );
 });

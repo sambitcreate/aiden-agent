@@ -36,25 +36,45 @@ test("catalog entries are unique, documented, and reachable only over HTTPS, thi
       assert.equal(entry.auth.kind, "none", "a local server never receives a credential");
     } else {
       assert.equal(url.protocol, "https:", `${entry.id} uses HTTPS`);
-      assert.notEqual(entry.auth.kind, "none", `${entry.id} is a hosted service that needs a credential`);
+      assert.notEqual(
+        entry.auth.kind,
+        "none",
+        `${entry.id} is a hosted service that needs a credential`,
+      );
     }
-    if (entry.auth.kind === "apiKey") assert.equal(new URL(entry.auth.keyHelpUrl).protocol, "https:");
+    if (entry.auth.kind === "apiKey")
+      assert.equal(new URL(entry.auth.keyHelpUrl).protocol, "https:");
   }
 });
 
 test("an unavailable connector explains why and names an alternative that can be set up", () => {
   const unavailable = CONNECTOR_CATALOG.filter((entry) => !isConnectorAvailable(entry));
-  assert.deepEqual(unavailable.map((entry) => entry.id), ["figma"]);
+  assert.deepEqual(
+    unavailable.map((entry) => entry.id),
+    ["figma"],
+  );
   for (const entry of unavailable) {
     assert.ok(entry.availability?.reason);
     const alternative = getConnectorCatalogEntry(entry.availability!.alternativeId!);
-    assert.ok(alternative && isConnectorAvailable(alternative), `${entry.id} points at a usable alternative`);
+    assert.ok(
+      alternative && isConnectorAvailable(alternative),
+      `${entry.id} points at a usable alternative`,
+    );
   }
   assert.equal(getConnectorCatalogEntry("figma")?.availability?.alternativeId, "figma-desktop");
 });
 
 test("searching for an app Composio reaches finds the Composio card with a hint", () => {
-  for (const app of ["Gmail", "google calendar", "Google Drive", "slack", "Teams", "outlook", "Zoom", "shopify"]) {
+  for (const app of [
+    "Gmail",
+    "google calendar",
+    "Google Drive",
+    "slack",
+    "Teams",
+    "outlook",
+    "Zoom",
+    "shopify",
+  ]) {
     const results = filterConnectorCatalog(CONNECTOR_CATALOG, app, "all");
     const composio = results.find((result) => result.entry.id === "composio");
     assert.ok(composio, `${app} finds Composio`);
@@ -70,7 +90,11 @@ test("a match on the card itself carries no alias hint, and category filters app
   assert.deepEqual(ids("jira"), ["atlassian-rovo"]);
   assert.ok(ids("figma").includes("figma-desktop"));
   assert.deepEqual(ids("gmail", "Developer Tools"), []);
-  assert.ok(ids("", "Developer Tools").every((id) => getConnectorCatalogEntry(id)?.category === "Developer Tools"));
+  assert.ok(
+    ids("", "Developer Tools").every(
+      (id) => getConnectorCatalogEntry(id)?.category === "Developer Tools",
+    ),
+  );
   assert.equal(ids("").length, CONNECTOR_CATALOG.length);
   assert.deepEqual(ids("no such connector anywhere"), []);
 });
@@ -87,7 +111,9 @@ test("a connector served by a Mac app is offered only where main reports Mac app
 
 test("searching for a Mac app iMCP reaches finds the iMCP card with its hint", () => {
   for (const app of ["iMessage", "messages", "reminders", "Apple Notes", "voice memos"]) {
-    const imcp = filterConnectorCatalog(CONNECTOR_CATALOG, app, "all").find((result) => result.entry.id === "imcp");
+    const imcp = filterConnectorCatalog(CONNECTOR_CATALOG, app, "all").find(
+      (result) => result.entry.id === "imcp",
+    );
     assert.ok(imcp?.matchedAlias, `${app} finds iMCP through an alias`);
     assert.match(imcp.entry.aliasHint ?? "", /through iMCP/u);
   }

@@ -42,7 +42,8 @@ function surfaces(list: readonly string[] | undefined, fallbackToEditor: boolean
 
 function nameOf(surface: Named, path: string | undefined, imagesLabel: string | undefined): string {
   if (surface === "editor") return path ? `“${path}”` : "the open file";
-  if (surface === "images") return imagesLabel ? `the image workflow “${imagesLabel}”` : "the image workflow";
+  if (surface === "images")
+    return imagesLabel ? `the image workflow “${imagesLabel}”` : "the image workflow";
   return "the design canvas";
 }
 
@@ -54,7 +55,11 @@ export function closeGuardSavingPrompt(
   const saving = surfaces(sources?.saving, true);
   const only = saving.length === 1 ? saving[0] : undefined;
   const title =
-    only === "images" ? "Image workflow save in progress" : only === "design" ? "Design canvas save in progress" : "File save in progress";
+    only === "images"
+      ? "Image workflow save in progress"
+      : only === "design"
+        ? "Design canvas save in progress"
+        : "File save in progress";
   const names = saving.map((surface) => nameOf(surface, undefined, sources?.imagesLabel));
   return {
     title,

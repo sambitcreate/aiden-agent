@@ -17,7 +17,12 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server as HttpServer,
+  type ServerResponse,
+} from "node:http";
 
 import type { AidenMcpApp, AidenMcpToolRunner } from "./aiden-mcp-tools.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
@@ -54,7 +59,10 @@ export interface AidenMcpServerOptions {
 }
 
 /** The ports to try, in order: the one saved earlier, or else the profile default and its neighbours. */
-export function aidenMcpPortCandidates(savedPort: number | undefined, defaultPort: number): number[] {
+export function aidenMcpPortCandidates(
+  savedPort: number | undefined,
+  defaultPort: number,
+): number[] {
   if (savedPort !== undefined) return [savedPort];
   return Array.from({ length: DEFAULT_PORT_ATTEMPTS }, (_, index) => defaultPort + index);
 }
@@ -70,7 +78,9 @@ export class AidenMcpServer {
   }
 
   get url(): string | undefined {
-    return this.boundPort === undefined ? undefined : `http://127.0.0.1:${this.boundPort}${AIDEN_MCP_PATH}`;
+    return this.boundPort === undefined
+      ? undefined
+      : `http://127.0.0.1:${this.boundPort}${AIDEN_MCP_PATH}`;
   }
 
   /**
@@ -87,8 +97,15 @@ export class AidenMcpServer {
       const server = createServer((request, response) => {
         void this.handle(request, response).catch(() => {
           this.options.log?.("request-failed");
-          if (!response.headersSent) response.writeHead(500, { "content-type": "application/json" });
-          response.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32603, message: "Aiden error" } }));
+          if (!response.headersSent)
+            response.writeHead(500, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: null,
+              error: { code: -32603, message: "Aiden error" },
+            }),
+          );
         });
       });
       server.maxConnections = MAX_CONNECTIONS;
@@ -132,7 +149,11 @@ export class AidenMcpServer {
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const port = this.boundPort;
-    if (port === undefined || !allowedHost(request.headers.host, port) || !allowedOrigin(request.headers.origin, port)) {
+    if (
+      port === undefined ||
+      !allowedHost(request.headers.host, port) ||
+      !allowedOrigin(request.headers.origin, port)
+    ) {
       // A DNS-rebinding page arrives with a foreign Host or Origin.
       response.writeHead(403, { "content-type": "text/plain; charset=utf-8" }).end("Forbidden");
       return;
@@ -168,7 +189,13 @@ export class AidenMcpServer {
         return;
       }
       response.writeHead(400, { "content-type": "application/json" });
-      response.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }));
+      response.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32700, message: "Parse error" },
+        }),
+      );
       return;
     }
 
@@ -180,11 +207,16 @@ export class AidenMcpServer {
       { name: "aiden", version: this.options.appVersion },
       { capabilities: { tools: {} } },
     );
-    protocol.setRequestHandler(ListToolsRequestSchema, () => ({ tools: this.options.tools.list(app) }));
+    protocol.setRequestHandler(ListToolsRequestSchema, () => ({
+      tools: this.options.tools.list(app),
+    }));
     protocol.setRequestHandler(CallToolRequestSchema, (call) =>
       this.options.tools.call(app, call.params.name, call.params.arguments, closed.signal),
     );
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
+    });
     try {
       await protocol.connect(transport);
       await transport.handleRequest(request, response, body);
@@ -213,7 +245,8 @@ class BodyTooLargeError extends Error {}
  */
 function readJson(request: IncomingMessage): Promise<unknown> {
   const declared = Number(request.headers["content-length"]);
-  if (Number.isFinite(declared) && declared > AIDEN_MCP_BODY_LIMIT) return Promise.reject(new BodyTooLargeError());
+  if (Number.isFinite(declared) && declared > AIDEN_MCP_BODY_LIMIT)
+    return Promise.reject(new BodyTooLargeError());
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -273,7 +306,12 @@ type AidenMcpListener = Pick<AidenMcpServer, "start" | "close" | "port" | "url">
 export interface AidenMcpHostDependencies {
   state: Pick<
     AidenRemoteStateRegistry,
-    "mcpServerSettings" | "setMcpServerEnabled" | "commitMcpServerPort" | "issueAgentApp" | "listAgentApps" | "authenticate"
+    | "mcpServerSettings"
+    | "setMcpServerEnabled"
+    | "commitMcpServerPort"
+    | "issueAgentApp"
+    | "listAgentApps"
+    | "authenticate"
   >;
   tools: AidenMcpToolRunner;
   /** `hostPlatformCapabilities().mcpServer`. */
@@ -343,7 +381,8 @@ export class AidenMcpHost {
     name: string;
     access: AidenRemoteAgentAccess;
   }): Promise<{ credential: string; app: AidenRemoteAgentAppProjection }> {
-    if (!this.dependencies.supported()) throw new Error("This computer cannot run Aiden's MCP server.");
+    if (!this.dependencies.supported())
+      throw new Error("This computer cannot run Aiden's MCP server.");
     const issued = await this.dependencies.state.issueAgentApp(input);
     // Only the access level: never the app's name, its id or the credential.
     reportAnalyticsEvent("mcp_app_connected", { access: issued.app.access });

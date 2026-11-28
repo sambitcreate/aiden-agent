@@ -16,21 +16,36 @@ afterEach(() => {
   for (const client of clients.splice(0)) client.clear();
 });
 
-function mount(views: StartedChatView[], handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
+function mount(
+  views: StartedChatView[],
+  handlers: Record<string, (...args: unknown[]) => unknown> = {},
+) {
   const calls = installBotTestIpc({
-    "chats:childChatsStop": () => ({ chatId: "child-1", title: "Tests", state: "done", outcome: "stopped" }),
+    "chats:childChatsStop": () => ({
+      chatId: "child-1",
+      title: "Tests",
+      state: "done",
+      outcome: "stopped",
+    }),
     "chats:childChatsStopAll": () => undefined,
     ...handlers,
   });
   const opened: string[] = [];
   let changed = 0;
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+  });
   clients.push(queryClient);
   const view = render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <div data-testid="bar">
-          <StartedChatsChipView leadChatId="lead-1" views={views} onOpen={(chatId) => opened.push(chatId)} onChanged={() => (changed += 1)} />
+          <StartedChatsChipView
+            leadChatId="lead-1"
+            views={views}
+            onOpen={(chatId) => opened.push(chatId)}
+            onChanged={() => (changed += 1)}
+          />
         </div>
       </TooltipProvider>
     </QueryClientProvider>,
@@ -39,8 +54,18 @@ function mount(views: StartedChatView[], handlers: Record<string, (...args: unkn
 }
 
 const running: StartedChatView = { chatId: "child-1", title: "Tests", state: "running" };
-const approval: StartedChatView = { chatId: "child-2", title: "Docs", state: "waiting_for_approval", branch: "aiden/docs" };
-const finished: StartedChatView = { chatId: "child-3", title: "Changelog", state: "done", outcome: "completed" };
+const approval: StartedChatView = {
+  chatId: "child-2",
+  title: "Docs",
+  state: "waiting_for_approval",
+  branch: "aiden/docs",
+};
+const finished: StartedChatView = {
+  chatId: "child-3",
+  title: "Changelog",
+  state: "done",
+  outcome: "completed",
+};
 
 test("nothing shows when the chat started no chats", () => {
   mount([]);
@@ -48,14 +73,22 @@ test("nothing shows when the chat started no chats", () => {
 });
 
 test("the chip counts working chats, says when one needs you, and lists each state", async () => {
-  mount([running, approval, finished, { chatId: "child-4", title: "Yours", state: "running", tookOver: true }]);
+  mount([
+    running,
+    approval,
+    finished,
+    { chatId: "child-4", title: "Yours", state: "running", tookOver: true },
+  ]);
   // A chat the person took over still runs, so it counts as working.
   const chip = screen.getByRole("button", { name: "3 chats working, 1 needs you" });
   assert.match(chip.textContent ?? "", /3 chats working/u);
   fireEvent.click(chip);
   const dialog = await screen.findByRole("dialog", { name: "Started chats" });
   assert.ok(within(dialog).getByText("Working"));
-  assert.ok(within(dialog).getByText("Needs your approval · aiden/docs"), "a chat in its own worktree names its branch");
+  assert.ok(
+    within(dialog).getByText("Needs your approval · aiden/docs"),
+    "a chat in its own worktree names its branch",
+  );
   assert.ok(within(dialog).getByText("Done"));
   assert.ok(within(dialog).getByText("Yours now"));
   // Stop is offered only where Aiden is still driving: not on a finished chat or one you took over.
@@ -88,11 +121,15 @@ test("Stop stops one chat for this lead and Stop all stops the rest", async () =
   const dialog = await screen.findByRole("dialog", { name: "Started chats" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Stop “Tests”" }));
   await waitFor(() => assert.equal(changed(), 1));
-  assert.deepEqual(calls.find((call) => call.channel === "chats:childChatsStop")?.args, [{ leadChatId: "lead-1", chatId: "child-1" }]);
+  assert.deepEqual(calls.find((call) => call.channel === "chats:childChatsStop")?.args, [
+    { leadChatId: "lead-1", chatId: "child-1" },
+  ]);
 
   fireEvent.click(within(dialog).getByRole("button", { name: "Stop all" }));
   await waitFor(() => assert.equal(changed(), 2));
-  assert.deepEqual(calls.find((call) => call.channel === "chats:childChatsStopAll")?.args, [{ leadChatId: "lead-1" }]);
+  assert.deepEqual(calls.find((call) => call.channel === "chats:childChatsStopAll")?.args, [
+    { leadChatId: "lead-1" },
+  ]);
 });
 
 test("a failed Stop puts the row back", async () => {
@@ -116,7 +153,13 @@ test("the list read from main drops damaged rows and keeps the rest", async () =
       { chatId: "", title: "No id", state: "running" },
       { chatId: "child-2", title: "Odd", state: "exploded" },
       "garbage",
-      { chatId: "child-3", title: "Docs", state: "done", outcome: "completed", branch: "aiden/docs" },
+      {
+        chatId: "child-3",
+        title: "Docs",
+        state: "done",
+        outcome: "completed",
+        branch: "aiden/docs",
+      },
     ],
   });
   const views = await chatsApi.startedChats("lead-1");

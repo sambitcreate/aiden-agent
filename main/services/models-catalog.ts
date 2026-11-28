@@ -12,7 +12,9 @@ const BUNDLED_MODELS_DEV_PARTS = ["resources", "model-capabilities.json"] as con
 
 export const modelsCatalog = createModelsCatalogReader({
   loadBundled: async () =>
-    JSON.parse(await readFile(join(app.getAppPath(), ...BUNDLED_MODELS_DEV_PARTS), "utf8")) as unknown,
+    JSON.parse(
+      await readFile(join(app.getAppPath(), ...BUNDLED_MODELS_DEV_PARTS), "utf8"),
+    ) as unknown,
   displayCache: modelsDevCacheRuntime,
   warn: (message, details) => logger.warn("models-catalog", message, details),
 });

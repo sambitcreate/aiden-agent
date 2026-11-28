@@ -93,15 +93,18 @@ export function closeRendererBeforeShutdown(
       return;
     }
     if (settled) return;
-    deadline = setTimeout(() => {
-      if (settled) return;
-      try {
-        if (!window.isDestroyed()) window.destroy();
-      } catch {
-        // Destruction is the last resort; the window is unusable either way.
-      }
-      finish(true);
-    }, Math.max(0, deadlineMs));
+    deadline = setTimeout(
+      () => {
+        if (settled) return;
+        try {
+          if (!window.isDestroyed()) window.destroy();
+        } catch {
+          // Destruction is the last resort; the window is unusable either way.
+        }
+        finish(true);
+      },
+      Math.max(0, deadlineMs),
+    );
   });
 }
 

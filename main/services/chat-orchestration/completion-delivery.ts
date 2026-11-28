@@ -10,7 +10,11 @@
 // After the person presses Stop in the lead, notices are only recorded, never
 // waking it, until the person next sends there.
 
-import { agentNotice, fenceAsData, type AgentNoticeTone } from "../../../renderer/shared/agent-notices.js";
+import {
+  agentNotice,
+  fenceAsData,
+  type AgentNoticeTone,
+} from "../../../renderer/shared/agent-notices.js";
 import type { AgentNoticeOutcome, AgentNoticePost } from "../follow-through/notice-delivery.js";
 import type { ChildChatRunEnded } from "./child-chats.js";
 import type { ChatLink, ChatLinkRunEnd, ChatLinkStore } from "./links.js";
@@ -62,7 +66,10 @@ export class ChildChatCompletions {
         return;
       }
       const chats = new Set([event.chatId]);
-      const timer = this.deps.setTimer(() => void this.flush(event.leadChatId), CHILD_COMPLETION_GROUP_MS);
+      const timer = this.deps.setTimer(
+        () => void this.flush(event.leadChatId),
+        CHILD_COMPLETION_GROUP_MS,
+      );
       this.groups.set(event.leadChatId, { timer, chats });
     } catch (error) {
       this.deps.onError?.(error);
@@ -109,8 +116,15 @@ export class ChildChatCompletions {
           // may have returned some of these meanwhile, so read them again.
           const owed = this.stillOwed(chatIds, leadChatId);
           if (owed.length === 0) continue;
-          const replies = await Promise.all(owed.map((link) => this.deps.lastReply(link.childChatId).catch(() => undefined)));
-          const outcome = await this.deps.post({ chatId: leadChatId, notice: noticeFor(owed), text: noticeText(owed, replies), wake: false });
+          const replies = await Promise.all(
+            owed.map((link) => this.deps.lastReply(link.childChatId).catch(() => undefined)),
+          );
+          const outcome = await this.deps.post({
+            chatId: leadChatId,
+            notice: noticeFor(owed),
+            text: noticeText(owed, replies),
+            wake: false,
+          });
           await this.settle(owed, outcome);
         } catch (error) {
           this.deps.onError?.(error);
@@ -126,7 +140,12 @@ export class ChildChatCompletions {
     const owed: OwedLink[] = [];
     for (const chatId of chatIds) {
       const link = this.deps.links.get(chatId);
-      if (link?.leadChatId === leadChatId && link.owed && !link.delivered?.includes(link.owed.runId)) owed.push(link as OwedLink);
+      if (
+        link?.leadChatId === leadChatId &&
+        link.owed &&
+        !link.delivered?.includes(link.owed.runId)
+      )
+        owed.push(link as OwedLink);
     }
     return owed;
   }
@@ -142,7 +161,8 @@ export class ChildChatCompletions {
     if (!delivered && outcome.gone !== true) return;
     for (const link of owed) {
       await this.deps.links.update(link.childChatId, (draft) => {
-        if (delivered && !draft.delivered?.includes(link.owed.runId)) draft.delivered = [...(draft.delivered ?? []), link.owed.runId];
+        if (delivered && !draft.delivered?.includes(link.owed.runId))
+          draft.delivered = [...(draft.delivered ?? []), link.owed.runId];
         if (draft.owed?.runId === link.owed.runId) delete draft.owed;
       });
     }
@@ -158,7 +178,9 @@ export class ChildChatCompletions {
       // `wait` may have returned some in the meantime.
       const owed = this.stillOwed(group.chats, leadChatId);
       if (owed.length === 0) return undefined;
-      const replies = await Promise.all(owed.map((link) => this.deps.lastReply(link.childChatId).catch(() => undefined)));
+      const replies = await Promise.all(
+        owed.map((link) => this.deps.lastReply(link.childChatId).catch(() => undefined)),
+      );
       const outcome = await this.deps.post({
         chatId: leadChatId,
         notice: noticeFor(owed),
@@ -175,39 +197,69 @@ export class ChildChatCompletions {
 }
 
 function noticeFor(links: readonly OwedLink[]) {
-  const troubled = links.some((link) => link.owed.end === "failed" || link.owed.end === "interrupted");
-  const tone: AgentNoticeTone = troubled ? "failure" : links.every((link) => link.owed.end === "done") ? "success" : "info";
+  const troubled = links.some(
+    (link) => link.owed.end === "failed" || link.owed.end === "interrupted",
+  );
+  const tone: AgentNoticeTone = troubled
+    ? "failure"
+    : links.every((link) => link.owed.end === "done")
+      ? "success"
+      : "info";
   const title =
     links.length === 1
       ? `“${links[0]!.title}” ${END_WORDS[links[0]!.owed.end]}`
       : `${links.length} started chats ${troubled ? "ended" : "finished"}`;
-  const summary = links.length === 1 ? "" : links.map((link) => `${link.title}: ${END_WORDS[link.owed.end]}`).join(" · ");
+  const summary =
+    links.length === 1
+      ? ""
+      : links.map((link) => `${link.title}: ${END_WORDS[link.owed.end]}`).join(" · ");
   // A chat whose run held outside content may quote it in its reply or result.
   const outside = links.some((link) => link.childTainted === true);
-  return agentNotice({ source: "chat", tone, title, summary, ...(outside ? { outside: true as const } : {}) });
+  return agentNotice({
+    source: "chat",
+    tone,
+    title,
+    summary,
+    ...(outside ? { outside: true as const } : {}),
+  });
 }
 
 function noticeText(
   links: readonly OwedLink[],
   replies: ReadonlyArray<string | undefined>,
 ): string {
-  const parts = [links.length === 1 ? "A chat this chat started has ended." : "Chats this chat started have ended."];
+  const parts = [
+    links.length === 1
+      ? "A chat this chat started has ended."
+      : "Chats this chat started have ended.",
+  ];
   links.forEach((link, index) => {
     parts.push(`“${link.title}” (chat_id ${link.childChatId}) ${END_WORDS[link.owed.end]}.`);
     if (link.result) {
       const json = JSON.stringify(link.result.value, null, 2);
       const cut = [...json].length > CHILD_COMPLETION_REPLY_CHARS;
       const text = cut ? [...json].slice(0, CHILD_COMPLETION_REPLY_CHARS).join("") : json;
-      parts.push(fenceAsData(`Its submitted result (JSON${cut ? "; cut, use child_chats wait or read for all of it" : ""})`, text));
-    }
-    else if (link.resultSchema) parts.push("It hasn't submitted a result yet.");
+      parts.push(
+        fenceAsData(
+          `Its submitted result (JSON${cut ? "; cut, use child_chats wait or read for all of it" : ""})`,
+          text,
+        ),
+      );
+    } else if (link.resultSchema) parts.push("It hasn't submitted a result yet.");
     const reply = replies[index];
     if (reply) {
       const cut = [...reply].length > CHILD_COMPLETION_REPLY_CHARS;
       const text = cut ? [...reply].slice(0, CHILD_COMPLETION_REPLY_CHARS).join("") : reply;
-      parts.push(fenceAsData(`Its last reply${cut ? " (cut; use child_chats read for the rest)" : ""}`, text));
+      parts.push(
+        fenceAsData(
+          `Its last reply${cut ? " (cut; use child_chats read for the rest)" : ""}`,
+          text,
+        ),
+      );
     }
   });
-  parts.push("Carry on with your task: read or send to these chats with child_chats, or tell the person what they found.");
+  parts.push(
+    "Carry on with your task: read or send to these chats with child_chats, or tell the person what they found.",
+  );
   return parts.join("\n\n");
 }

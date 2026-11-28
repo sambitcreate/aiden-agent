@@ -43,7 +43,12 @@ test("the recommended choice is the first model, paired with a photo model when 
 });
 
 test("choosing a model that reads images drops the photo model", () => {
-  const next = chooseBotModel(catalog(), recommendedBotModelChoice(catalog()), "prov-vision", "model-vision");
+  const next = chooseBotModel(
+    catalog(),
+    recommendedBotModelChoice(catalog()),
+    "prov-vision",
+    "model-vision",
+  );
   assert.deepEqual(next, {
     providerId: "prov-vision",
     modelId: "model-vision",
@@ -53,14 +58,24 @@ test("choosing a model that reads images drops the photo model", () => {
 });
 
 test("choosing a text-only model keeps a still-valid photo model the person picked", () => {
-  const picked = chooseBotVisionModel(catalog(), recommendedBotModelChoice(catalog()), "prov-more", "model-eye");
+  const picked = chooseBotVisionModel(
+    catalog(),
+    recommendedBotModelChoice(catalog()),
+    "prov-more",
+    "model-eye",
+  );
   const next = chooseBotModel(catalog(), picked, "prov-text", "model-text");
   assert.equal(next.visionProviderId, "prov-more");
   assert.equal(next.visionModelId, "model-eye");
 });
 
 test("choosing a text-only model with no photo model fills the first one available", () => {
-  const next = chooseBotModel(catalog(), { providerId: "prov-vision", modelId: "model-vision" }, "prov-text", "model-text");
+  const next = chooseBotModel(
+    catalog(),
+    { providerId: "prov-vision", modelId: "model-vision" },
+    "prov-text",
+    "model-text",
+  );
   assert.equal(next.visionProviderId, "prov-vision");
   assert.equal(next.visionModelId, "model-vision");
 });

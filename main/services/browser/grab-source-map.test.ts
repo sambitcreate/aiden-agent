@@ -72,11 +72,17 @@ test("normalizeBundlerSourcePath strips Webpack, Turbopack, Vite, RSC, and file:
     "app/page.tsx",
   );
   assert.equal(
-    normalizeBundlerSourcePath("rsc://React/Server/webpack-internal:///(rsc)/./app/layout.tsx", root),
+    normalizeBundlerSourcePath(
+      "rsc://React/Server/webpack-internal:///(rsc)/./app/layout.tsx",
+      root,
+    ),
     "app/layout.tsx",
   );
   assert.equal(
-    normalizeBundlerSourcePath("http://localhost:5173/@fs/Users/dev/project/src/Button.tsx?t=999", root),
+    normalizeBundlerSourcePath(
+      "http://localhost:5173/@fs/Users/dev/project/src/Button.tsx?t=999",
+      root,
+    ),
     "src/Button.tsx",
   );
   assert.equal(
@@ -106,7 +112,9 @@ test("LocalGrabSourceMapResolver symbolicates React 19 _debugStack via loopback 
       fetchedUrls.push(url);
       if (init) fetchOptions.push(init);
       if (url === "http://localhost:3000/chunks/hero.js") {
-        return new Response(`console.log(1);\n//# sourceMappingURL=${inlineData}\n`, { status: 200 });
+        return new Response(`console.log(1);\n//# sourceMappingURL=${inlineData}\n`, {
+          status: 200,
+        });
       }
       return new Response("Not Found", { status: 404 });
     }) as typeof fetch,
@@ -146,8 +154,16 @@ test("LocalGrabSourceMapResolver symbolicates React 19 _debugStack via loopback 
   });
 
   // A forged stack naming another loopback port (or the same port over another scheme) is never fetched.
-  for (const forged of ["http://localhost:5173/admin.js", "https://localhost:3000/chunk.js", "http://127.0.0.1:3000/chunk.js"]) {
-    const crossOrigin = await resolver.resolveSourceHint({ debugStack: `Error\n    at Probe (${forged}:1:1)` }, "/Users/dev/app", page);
+  for (const forged of [
+    "http://localhost:5173/admin.js",
+    "https://localhost:3000/chunk.js",
+    "http://127.0.0.1:3000/chunk.js",
+  ]) {
+    const crossOrigin = await resolver.resolveSourceHint(
+      { debugStack: `Error\n    at Probe (${forged}:1:1)` },
+      "/Users/dev/app",
+      page,
+    );
     assert.equal(crossOrigin?.symbolicated, false);
   }
   assert.deepEqual(fetchedUrls, ["http://localhost:3000/chunks/hero.js"]);
@@ -201,7 +217,10 @@ test("LocalGrabSourceMapResolver restricts file:// reads to script/map extension
   assert.deepEqual(readPaths, []);
 
   // Out-of-workspace script is rejected before reading disk.
-  assert.equal(allowedLocalSourceMapFilePath("file:///Users/other/secret.js", "/Users/dev/app"), null);
+  assert.equal(
+    allowedLocalSourceMapFilePath("file:///Users/other/secret.js", "/Users/dev/app"),
+    null,
+  );
   assert.equal(
     allowedLocalSourceMapFilePath("file:///Users/dev/app/../other/secret.js", "/Users/dev/app"),
     null,
@@ -252,22 +271,40 @@ test("LocalGrabSourceMapResolver refuses an in-workspace symlink that points out
     const outside = path.join(base, "outside");
     await mkdir(path.join(workspace, "dist"), { recursive: true });
     await mkdir(outside, { recursive: true });
-    const sourceMapJson = JSON.stringify({ version: 3, sources: ["src/Secret.tsx"], mappings: "AAUI" });
+    const sourceMapJson = JSON.stringify({
+      version: 3,
+      sources: ["src/Secret.tsx"],
+      mappings: "AAUI",
+    });
     await writeFile(path.join(outside, "bundle.js"), "//# sourceMappingURL=bundle.js.map\n");
     await writeFile(path.join(outside, "bundle.js.map"), sourceMapJson);
     await writeFile(path.join(workspace, "dist", "own.js"), "//# sourceMappingURL=own.js.map\n");
-    await writeFile(path.join(workspace, "dist", "own.js.map"), JSON.stringify({ version: 3, sources: ["src/Own.tsx"], mappings: "AAUI" }));
+    await writeFile(
+      path.join(workspace, "dist", "own.js.map"),
+      JSON.stringify({ version: 3, sources: ["src/Own.tsx"], mappings: "AAUI" }),
+    );
     await symlink(path.join(outside, "bundle.js"), path.join(workspace, "dist", "linked.js"));
-    await symlink(path.join(outside, "bundle.js.map"), path.join(workspace, "dist", "linked.js.map"));
+    await symlink(
+      path.join(outside, "bundle.js.map"),
+      path.join(workspace, "dist", "linked.js.map"),
+    );
 
     const resolver = new LocalGrabSourceMapResolver();
     const page = { pageUrl: pathToFileURL(path.join(workspace, "index.html")).href };
     const linkedUrl = pathToFileURL(path.join(workspace, "dist", "linked.js")).href;
-    const escaped = await resolver.resolveSourceHint({ debugStack: `Error\n    at Leak (${linkedUrl}:1:1)` }, workspace, page);
+    const escaped = await resolver.resolveSourceHint(
+      { debugStack: `Error\n    at Leak (${linkedUrl}:1:1)` },
+      workspace,
+      page,
+    );
     assert.equal(escaped?.symbolicated, false);
 
     const ownUrl = pathToFileURL(path.join(workspace, "dist", "own.js")).href;
-    const own = await resolver.resolveSourceHint({ debugStack: `Error\n    at Own (${ownUrl}:1:1)` }, workspace, page);
+    const own = await resolver.resolveSourceHint(
+      { debugStack: `Error\n    at Own (${ownUrl}:1:1)` },
+      workspace,
+      page,
+    );
     assert.deepEqual(own, { filePath: "src/Own.tsx", line: 11, column: 5, symbolicated: true });
   } finally {
     await rm(base, { recursive: true, force: true });

@@ -15,13 +15,25 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { declareOnDemandSummary } from "../on-demand-tools.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
-import { CANVAS_READ_FRAME_LIMIT, canvasReadCursorPage, canvasView, describeCanvas, parseCanvasReadCursor, summarizeFrame, type DesignViewState } from "../../../renderer/shared/design-canvas/canvas-summary.js";
+import {
+  CANVAS_READ_FRAME_LIMIT,
+  canvasReadCursorPage,
+  canvasView,
+  describeCanvas,
+  parseCanvasReadCursor,
+  summarizeFrame,
+  type DesignViewState,
+} from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import {
   commentsWithoutFrames,
   replyToComment,
   resolveComment,
 } from "../../../renderer/shared/design-canvas/comments.js";
-import { canAttachTo, syncConnectors, translateConnector } from "../../../renderer/shared/design-canvas/connectors.js";
+import {
+  canAttachTo,
+  syncConnectors,
+  translateConnector,
+} from "../../../renderer/shared/design-canvas/connectors.js";
 import {
   bringLayerToFront,
   reorderLayer,
@@ -99,7 +111,16 @@ export const DESIGN_BUILD_ITEMS = 100;
 const BUILD_REF_CHARS = 40;
 
 type PlacedKind = "file" | "image" | "note" | "group" | "text" | "shape" | "connector" | "frame";
-const PLACED_KINDS: readonly PlacedKind[] = ["file", "image", "note", "group", "text", "shape", "connector", "frame"];
+const PLACED_KINDS: readonly PlacedKind[] = [
+  "file",
+  "image",
+  "note",
+  "group",
+  "text",
+  "shape",
+  "connector",
+  "frame",
+];
 
 /** Default boxes, matching the canvas's Add menu and drawing tools. A text box's height follows its lines; a page's follows its design width. */
 const DEFAULT_BOX: Record<Exclude<PlacedKind, "connector" | "file">, { w: number; h: number }> = {
@@ -117,7 +138,8 @@ const SIDES: readonly DesignSide[] = ["top", "right", "bottom", "left"];
 const FRAME_REF = "Frame id or page path.";
 const BESIDE: readonly DesignBeside[] = ["right", "left", "below", "above"];
 /** `{type, enum}` validates the same as a union of string literals in a fraction of the tokens. */
-const enumOf = <T extends string>(values: readonly T[]) => Type.Unsafe<T>({ type: "string", enum: [...values] });
+const enumOf = <T extends string>(values: readonly T[]) =>
+  Type.Unsafe<T>({ type: "string", enum: [...values] });
 const BesideSchema = enumOf(BESIDE);
 /** Variants one canvas_duplicate call may make. */
 export const DESIGN_VARIANTS_PER_CALL = 6;
@@ -130,7 +152,9 @@ const EndSchema = Type.Object({
   y: Type.Optional(Type.Number()),
 });
 const BuildEndSchema = Type.Object({
-  ref: Type.Optional(Type.String({ maxLength: BUILD_REF_CHARS, description: "A box of this call, by its ref." })),
+  ref: Type.Optional(
+    Type.String({ maxLength: BUILD_REF_CHARS, description: "A box of this call, by its ref." }),
+  ),
   frameId: Type.Optional(Type.String({ description: FRAME_REF })),
   side: Type.Optional(enumOf(SIDES)),
   x: Type.Optional(Type.Number()),
@@ -140,13 +164,20 @@ const GuideSchema = enumOf([...DESIGN_GUIDES, "none"] as const);
 const PaperSchema = enumOf(["letter", "a4"] as const);
 const PrintModeSchema = enumOf(["flow", "fixed"] as const);
 const TweaksSchema = Type.Record(Type.String(), Type.Union([Type.String(), Type.Null()]), {
-  description: "Values for the tweaks the page declares (--accent, data-density); null resets one. Other names are refused.",
+  description:
+    "Values for the tweaks the page declares (--accent, data-density); null resets one. Other names are refused.",
 });
 /** What a page, artifact, artboard or shape can look like, shared by place and update. */
 const STYLE_PARAMETERS = {
   dark: Type.Optional(Type.Boolean({ description: "file or artifact: show its dark look." })),
   tweaks: Type.Optional(TweaksSchema),
-  radius: Type.Optional(Type.Number({ minimum: 0, maximum: DESIGN_CANVAS_LIMITS.maxRadius, description: "artboard or rect shape: corner radius." })),
+  radius: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      maximum: DESIGN_CANVAS_LIMITS.maxRadius,
+      description: "artboard or rect shape: corner radius.",
+    }),
+  ),
   guide: Type.Optional(GuideSchema),
   paper: Type.Optional(PaperSchema),
   printMode: Type.Optional(PrintModeSchema),
@@ -175,7 +206,9 @@ function designTurnEligible(turn: DesignTurn): boolean {
 }
 
 /** Which turns get the canvas tools. Pure, so the rule is tested on its own. */
-export function designCanvasToolsAllowed(turn: DesignTurn & { designMode: boolean | undefined }): boolean {
+export function designCanvasToolsAllowed(
+  turn: DesignTurn & { designMode: boolean | undefined },
+): boolean {
   return designTurnEligible(turn) && turn.designMode === true;
 }
 
@@ -187,7 +220,11 @@ export function designCanvasToolsAllowed(turn: DesignTurn & { designMode: boolea
 export function designModeToolAllowed(
   turn: DesignTurn & { regularChat: boolean; inlineVisuals: string | undefined },
 ): boolean {
-  return designTurnEligible(turn) && turn.regularChat && (turn.inlineVisuals ?? "automatic") === "automatic";
+  return (
+    designTurnEligible(turn) &&
+    turn.regularChat &&
+    (turn.inlineVisuals ?? "automatic") === "automatic"
+  );
 }
 
 /**
@@ -200,8 +237,8 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "This chat sits beside an infinite design canvas. The person sees its frames while you talk. Load the aiden-design skill before you design on it.",
   "- Call canvas_read before changing the canvas, and again if the person says they moved things. It lists every frame on the page, in view and outside it, with ids and boxes.",
   "- Screens and pages you design are workspace HTML files under design/ (a shared design/tokens.css plus one HTML file per screen), not render_artifact visuals; a page the person will keep coming back to, such as a dashboard they check daily, is still a workspace artifact. Each design/ page you write, edit or make with a command lands on the canvas by itself and reloads as you save it; HTML elsewhere in the workspace does not.",
-  "- Pick the design width that matches the screen: 390 phone, 768 tablet, 1280 or 1440 desktop. A page can declare it with <meta name=\"aiden-design-width\" content=\"390\">; canvas_place_frame or canvas_update_frame with designWidth resizes its frame to fit.",
-  "- canvas_place_frame on a page already on this canvas page reuses its frame, whoever placed it and whatever group it is in, and the result says placed: \"reused\"; a page shown only in locked frames is refused. Pass duplicate: true to show the same file twice (placed: \"copy\"), and nextTo: {frameId, side} to put a frame beside another. For light/dark, phone/desktop or density variants of a page, use canvas_duplicate with variants: one call lays them out side by side in one labelled group. canvas_duplicate and canvas_page load on demand: call load_tools for one that is not among your tools.",
+  '- Pick the design width that matches the screen: 390 phone, 768 tablet, 1280 or 1440 desktop. A page can declare it with <meta name="aiden-design-width" content="390">; canvas_place_frame or canvas_update_frame with designWidth resizes its frame to fit.',
+  '- canvas_place_frame on a page already on this canvas page reuses its frame, whoever placed it and whatever group it is in, and the result says placed: "reused"; a page shown only in locked frames is refused. Pass duplicate: true to show the same file twice (placed: "copy"), and nextTo: {frameId, side} to put a frame beside another. For light/dark, phone/desktop or density variants of a page, use canvas_duplicate with variants: one call lays them out side by side in one labelled group. canvas_duplicate and canvas_page load on demand: call load_tools for one that is not among your tools.',
   "- You can move, resize, retitle, restyle, regroup, hide, lock or reorder any unlocked frame, the person's too, with canvas_update_frame. A locked frame stays as it is unless the person asks you to unlock it. Remove a frame the person added only when they ask, with force: true.",
   "- Use canvas_arrange to lay frames out in a tidy row, column or grid, put them in a group (it fits itself around them) or take them out, in one call. Put each direction in its own group.",
   "- For a flow or diagram, draw it in one canvas_build call: boxes (shapes with their labels in text, text, notes) with refs of your own, and connectors between them by ref or frameId; a connector follows its frames when they move. A build counts as one of the turn's canvas calls.",
@@ -248,7 +285,9 @@ export type DesignCanvasToolDeps = {
   viewState?: DesignViewState;
 };
 
-type ToolContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
+type ToolContent =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
 type ToolResult = { content: ToolContent[]; details: null };
 /** A tool answer that also shows the model a picture. */
 class WithImage {
@@ -266,13 +305,15 @@ const result = (value: unknown): ToolResult => ({
 class CanvasToolError extends Error {}
 
 function text(value: unknown, field: string, max: number): string {
-  if (typeof value !== "string" || !value.trim()) throw new CanvasToolError(`${field} must be a non-empty string.`);
+  if (typeof value !== "string" || !value.trim())
+    throw new CanvasToolError(`${field} must be a non-empty string.`);
   return value.trim().slice(0, max);
 }
 
 function optionalNumber(value: unknown, field: string): number | undefined {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "number" || !Number.isFinite(value)) throw new CanvasToolError(`${field} must be a number.`);
+  if (typeof value !== "number" || !Number.isFinite(value))
+    throw new CanvasToolError(`${field} must be a number.`);
   return value;
 }
 
@@ -290,13 +331,22 @@ function designWidth(value: unknown): DesignWidth | undefined {
   return value as DesignWidth;
 }
 
-const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"]);
+const IMAGE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/svg+xml",
+]);
 
 async function checkedPath(root: string, value: unknown, kind: "file" | "image"): Promise<string> {
   if (!isDesignRelativePath(value)) {
     throw new CanvasToolError("path must be a workspace-relative path such as design/home.html.");
   }
-  const resolved = await resolveDesignFile(root, value.split("/").map(encodeURIComponent).join("/"));
+  const resolved = await resolveDesignFile(
+    root,
+    value.split("/").map(encodeURIComponent).join("/"),
+  );
   if (!resolved.ok) {
     throw new CanvasToolError(
       resolved.status === 413
@@ -305,7 +355,7 @@ async function checkedPath(root: string, value: unknown, kind: "file" | "image")
     );
   }
   if (kind === "file" && resolved.mimeType.split(";")[0] !== "text/html") {
-    throw new CanvasToolError("A file frame shows an HTML page; use kind \"image\" for a picture.");
+    throw new CanvasToolError('A file frame shows an HTML page; use kind "image" for a picture.');
   }
   if (kind === "image" && !IMAGE_TYPES.has(resolved.mimeType.split(";")[0]!)) {
     throw new CanvasToolError("An image frame needs a PNG, JPEG, GIF, WebP or SVG file.");
@@ -318,17 +368,29 @@ async function checkedPath(root: string, value: unknown, kind: "file" | "image")
  * members, since joining it would grow or refit it; the frame's own current
  * group (`currentGroupId`) still passes, as naming it changes nothing.
  */
-function groupOf(doc: DesignCanvas, groupId: unknown, pageId: string, currentGroupId?: string): string | undefined {
+function groupOf(
+  doc: DesignCanvas,
+  groupId: unknown,
+  pageId: string,
+  currentGroupId?: string,
+): string | undefined {
   if (groupId === undefined || groupId === null || groupId === "") return undefined;
   const group =
     typeof groupId === "string"
-      ? doc.frames.find((frame) => frame.id === groupId && isDesignContainer(frame.kind) && frame.pageId === pageId)
+      ? doc.frames.find(
+          (frame) =>
+            frame.id === groupId && isDesignContainer(frame.kind) && frame.pageId === pageId,
+        )
       : undefined;
   if (!group) {
-    throw new CanvasToolError("groupId must be the id of a group or frame (artboard) on the same page.");
+    throw new CanvasToolError(
+      "groupId must be the id of a group or frame (artboard) on the same page.",
+    );
   }
   if (group.locked && group.id !== currentGroupId) {
-    throw new CanvasToolError(`${JSON.stringify(group.title || group.id)} is locked, so nothing can be put in it. Unlock it only if the person asked.`);
+    throw new CanvasToolError(
+      `${JSON.stringify(group.title || group.id)} is locked, so nothing can be put in it. Unlock it only if the person asked.`,
+    );
   }
   return group.id;
 }
@@ -362,22 +424,44 @@ function takesFill(kind: DesignFrameKind): boolean {
 }
 
 /** A drawn or written frame's words and look from a tool call, with the canvas's defaults. */
-type DrawnLook = { words?: string; size?: DesignTextSize; fill?: DesignColor; outline?: DesignColor; shape?: DesignShapeKind };
+type DrawnLook = {
+  words?: string;
+  size?: DesignTextSize;
+  fill?: DesignColor;
+  outline?: DesignColor;
+  shape?: DesignShapeKind;
+};
 
 function drawnLook(kind: PlacedKind, p: Record<string, unknown>, field = ""): DrawnLook {
   const at = field.replace(/\.$/, "");
-  const words = typeof p.text === "string" ? p.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars) : undefined;
-  if (kind === "text" && !words?.trim()) throw new CanvasToolError(`${at ? `${at}: a` : "A"} text item needs text.`);
-  const size = kind === "text" ? (textSize(p.size) ?? "medium") : kind === "note" ? textSize(p.size) : undefined;
+  const words =
+    typeof p.text === "string" ? p.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars) : undefined;
+  if (kind === "text" && !words?.trim())
+    throw new CanvasToolError(`${at ? `${at}: a` : "A"} text item needs text.`);
+  const size =
+    kind === "text"
+      ? (textSize(p.size) ?? "medium")
+      : kind === "note"
+        ? textSize(p.size)
+        : undefined;
   if (p.fill !== undefined && p.fill !== null && !takesFill(kind)) {
-    throw new CanvasToolError(`${at ? `${at}: o` : "O"}nly a shape, a note or an artboard (kind frame) has a fill.`);
+    throw new CanvasToolError(
+      `${at ? `${at}: o` : "O"}nly a shape, a note or an artboard (kind frame) has a fill.`,
+    );
   }
-  const fill = kind === "shape" ? (color(p.fill, `${field}fill`) ?? "blue") : takesFill(kind) ? color(p.fill, `${field}fill`) : undefined;
+  const fill =
+    kind === "shape"
+      ? (color(p.fill, `${field}fill`) ?? "blue")
+      : takesFill(kind)
+        ? color(p.fill, `${field}fill`)
+        : undefined;
   const outline =
     kind === "shape" || kind === "text" || kind === "note" || kind === "connector"
-      ? (color(p.color, `${field}color`) ?? (kind === "shape" ? "blue" : kind === "connector" ? "gray" : undefined))
+      ? (color(p.color, `${field}color`) ??
+        (kind === "shape" ? "blue" : kind === "connector" ? "gray" : undefined))
       : undefined;
-  const shape: DesignShapeKind | undefined = kind === "shape" ? (p.shape === "oval" ? "oval" : "rect") : undefined;
+  const shape: DesignShapeKind | undefined =
+    kind === "shape" ? (p.shape === "oval" ? "oval" : "rect") : undefined;
   return { words, size, fill, outline, shape };
 }
 
@@ -396,7 +480,9 @@ function drawnFields(kind: PlacedKind, look: DrawnLook): Partial<DesignFrame> {
 
 /** A text box's height follows its lines at its size. */
 function drawnHeight(kind: PlacedKind, look: DrawnLook, fallback: number): number {
-  return kind === "text" && look.size ? TEXT_LINE[look.size] * (look.words ? look.words.split("\n").length : 1) : fallback;
+  return kind === "text" && look.size
+    ? TEXT_LINE[look.size] * (look.words ? look.words.split("\n").length : 1)
+    : fallback;
 }
 
 /** A change to how a frame looks: fields to set and fields to clear. */
@@ -420,19 +506,24 @@ function stylePatch(
   const patch: StylePatch = { set: {}, clear: [] };
   const dark = optionalBoolean(p.dark, "dark");
   if (dark !== undefined) {
-    if (!isDesignPrintable(kind)) throw new CanvasToolError("Only a file or artifact frame has a dark look.");
+    if (!isDesignPrintable(kind))
+      throw new CanvasToolError("Only a file or artifact frame has a dark look.");
     if (dark) patch.set.dark = true;
     else patch.clear.push("dark");
   }
   if (p.tweaks !== undefined && p.tweaks !== null) {
     if (kind !== "file") throw new CanvasToolError("Only a file frame has tweaks.");
     if (typeof p.tweaks !== "object" || Array.isArray(p.tweaks)) {
-      throw new CanvasToolError("tweaks must map CSS variables (--name) or data attributes (data-name) to values.");
+      throw new CanvasToolError(
+        "tweaks must map CSS variables (--name) or data attributes (data-name) to values.",
+      );
     }
     const next: DesignTweakValues = { ...tweaksBefore };
     for (const [name, value] of Object.entries(p.tweaks as Record<string, unknown>)) {
       if (!isDesignTweakTarget(name)) {
-        throw new CanvasToolError(`The tweak ${JSON.stringify(name)} must be a CSS variable (--name) or a data attribute (data-name).`);
+        throw new CanvasToolError(
+          `The tweak ${JSON.stringify(name)} must be a CSS variable (--name) or a data attribute (data-name).`,
+        );
       }
       if (value === null) {
         delete next[name];
@@ -453,7 +544,9 @@ function stylePatch(
       next[name] = value;
     }
     if (Object.keys(next).length > DESIGN_TWEAK_LIMITS.controls) {
-      throw new CanvasToolError(`A page keeps at most ${DESIGN_TWEAK_LIMITS.controls} tweak values.`);
+      throw new CanvasToolError(
+        `A page keeps at most ${DESIGN_TWEAK_LIMITS.controls} tweak values.`,
+      );
     }
     if (Object.keys(next).length > 0) patch.set.tweaks = next;
     else patch.clear.push("tweaks");
@@ -461,24 +554,33 @@ function stylePatch(
   const radius = optionalNumber(p.radius, "radius");
   if (radius !== undefined) {
     if (kind !== "frame" && !(kind === "shape" && shape === "rect")) {
-      throw new CanvasToolError("Only an artboard (kind frame) or a rect shape has a corner radius.");
+      throw new CanvasToolError(
+        "Only an artboard (kind frame) or a rect shape has a corner radius.",
+      );
     }
     patch.set.radius = Math.min(DESIGN_CANVAS_LIMITS.maxRadius, Math.max(0, Math.round(radius)));
   }
   if (p.guide !== undefined && p.guide !== null) {
-    if (!canDesignGuide(kind)) throw new CanvasToolError("Only a file, artifact or artboard has a layout guide.");
+    if (!canDesignGuide(kind))
+      throw new CanvasToolError("Only a file, artifact or artboard has a layout guide.");
     if (p.guide === "none") patch.clear.push("guide");
-    else if ((DESIGN_GUIDES as readonly unknown[]).includes(p.guide)) patch.set.guide = p.guide as DesignGuide;
-    else throw new CanvasToolError(`guide must be one of ${[...DESIGN_GUIDES, "none"].join(", ")}.`);
+    else if ((DESIGN_GUIDES as readonly unknown[]).includes(p.guide))
+      patch.set.guide = p.guide as DesignGuide;
+    else
+      throw new CanvasToolError(`guide must be one of ${[...DESIGN_GUIDES, "none"].join(", ")}.`);
   }
   if (p.paper !== undefined && p.paper !== null) {
-    if (!isDesignPrintable(kind)) throw new CanvasToolError("Only a file or artifact frame has a paper size.");
-    if (p.paper !== "letter" && p.paper !== "a4") throw new CanvasToolError('paper must be "letter" or "a4".');
+    if (!isDesignPrintable(kind))
+      throw new CanvasToolError("Only a file or artifact frame has a paper size.");
+    if (p.paper !== "letter" && p.paper !== "a4")
+      throw new CanvasToolError('paper must be "letter" or "a4".');
     patch.set.paper = p.paper;
   }
   if (p.printMode !== undefined && p.printMode !== null) {
-    if (!isDesignPrintable(kind)) throw new CanvasToolError("Only a file or artifact frame has a print mode.");
-    if (p.printMode !== "flow" && p.printMode !== "fixed") throw new CanvasToolError('printMode must be "flow" or "fixed".');
+    if (!isDesignPrintable(kind))
+      throw new CanvasToolError("Only a file or artifact frame has a print mode.");
+    if (p.printMode !== "flow" && p.printMode !== "fixed")
+      throw new CanvasToolError('printMode must be "flow" or "fixed".');
     patch.set.printMode = p.printMode;
   }
   return patch;
@@ -486,7 +588,11 @@ function stylePatch(
 
 /** Whether a call's tweaks set any value (a null only resets one). */
 function hasTweakValues(tweaks: unknown): boolean {
-  return typeof tweaks === "object" && tweaks !== null && Object.values(tweaks).some((value) => value !== null);
+  return (
+    typeof tweaks === "object" &&
+    tweaks !== null &&
+    Object.values(tweaks).some((value) => value !== null)
+  );
 }
 
 function applyStyle(frame: DesignFrame, patch: StylePatch): DesignFrame {
@@ -504,17 +610,28 @@ function applyStyle(frame: DesignFrame, patch: StylePatch): DesignFrame {
 function frameByRef(doc: DesignCanvas, value: unknown): DesignFrame | undefined {
   const frame = designFrameByIdOrPath(doc, value);
   if (!frame || frame.id === value) return frame;
-  const meant = doc.frames.filter((entry) => entry.kind === "file" && entry.path === frame.path && entry.pageId === frame.pageId);
+  const meant = doc.frames.filter(
+    (entry) => entry.kind === "file" && entry.path === frame.path && entry.pageId === frame.pageId,
+  );
   if (meant.length > 1) {
     throw new CanvasToolError(
-      `${frame.path} is shown in ${meant.length} frames (${meant.slice(0, 10).map((entry) => `"${entry.id}"`).join(", ")}). Name the one you mean by its id.`,
+      `${frame.path} is shown in ${meant.length} frames (${meant
+        .slice(0, 10)
+        .map((entry) => `"${entry.id}"`)
+        .join(", ")}). Name the one you mean by its id.`,
     );
   }
   return frame;
 }
 
 /** A connector end from a tool call: on a frame of the page (by id), or at a point. */
-function endOf(doc: DesignCanvas, value: unknown, field: string, pageId: string, self?: string): DesignConnectorEnd {
+function endOf(
+  doc: DesignCanvas,
+  value: unknown,
+  field: string,
+  pageId: string,
+  self?: string,
+): DesignConnectorEnd {
   if (typeof value !== "object" || value === null) {
     throw new CanvasToolError(`${field} must be { frameId } or { x, y }.`);
   }
@@ -540,13 +657,15 @@ function endOf(doc: DesignCanvas, value: unknown, field: string, pageId: string,
   }
   const x = optionalNumber(raw.x, `${field}.x`);
   const y = optionalNumber(raw.y, `${field}.y`);
-  if (x === undefined || y === undefined) throw new CanvasToolError(`${field} must be { frameId } or { x, y }.`);
+  if (x === undefined || y === undefined)
+    throw new CanvasToolError(`${field} must be { frameId } or { x, y }.`);
   return { x: clampCoord(x), y: clampCoord(y) };
 }
 
 function besideOf(value: unknown, field: string): DesignBeside {
   if (value === undefined || value === null) return "right";
-  if (!(BESIDE as readonly unknown[]).includes(value)) throw new CanvasToolError(`${field} must be right, left, below or above.`);
+  if (!(BESIDE as readonly unknown[]).includes(value))
+    throw new CanvasToolError(`${field} must be right, left, below or above.`);
   return value as DesignBeside;
 }
 
@@ -555,8 +674,14 @@ function besideOf(value: unknown, field: string): DesignBeside {
  * frames other than lines and drawings, and other than those in `skip` (the
  * frame itself, its anchor, and the group it joins, which surrounds both).
  */
-function blockersOn(doc: DesignCanvas, pageId: string, skip: ReadonlySet<string | undefined>): DesignFrame[] {
-  return doc.frames.filter((frame) => frame.pageId === pageId && !isDesignLine(frame.kind) && !skip.has(frame.id));
+function blockersOn(
+  doc: DesignCanvas,
+  pageId: string,
+  skip: ReadonlySet<string | undefined>,
+): DesignFrame[] {
+  return doc.frames.filter(
+    (frame) => frame.pageId === pageId && !isDesignLine(frame.kind) && !skip.has(frame.id),
+  );
 }
 
 /** The plain group a frame placed beside `anchor` joins: its unlocked group, if it has one. */
@@ -571,9 +696,12 @@ const VARIANT_LABEL_CHARS = 40;
 
 function variantsOf(value: unknown): Variant[] | undefined {
   if (value === undefined || value === null) return undefined;
-  if (!Array.isArray(value) || value.length === 0) throw new CanvasToolError("variants must list one or more variants.");
+  if (!Array.isArray(value) || value.length === 0)
+    throw new CanvasToolError("variants must list one or more variants.");
   if (value.length > DESIGN_VARIANTS_PER_CALL) {
-    throw new CanvasToolError(`One call makes at most ${DESIGN_VARIANTS_PER_CALL} variants; make the rest with another call.`);
+    throw new CanvasToolError(
+      `One call makes at most ${DESIGN_VARIANTS_PER_CALL} variants; make the rest with another call.`,
+    );
   }
   return value.map((entry, index) => {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
@@ -582,9 +710,15 @@ function variantsOf(value: unknown): Variant[] | undefined {
     const raw = entry as Record<string, unknown>;
     const label = text(raw.label, `variants[${index}].label`, VARIANT_LABEL_CHARS);
     // An empty tweaks object sets nothing either.
-    const noTweaks = raw.tweaks === undefined || (typeof raw.tweaks === "object" && raw.tweaks !== null && Object.keys(raw.tweaks).length === 0);
+    const noTweaks =
+      raw.tweaks === undefined ||
+      (typeof raw.tweaks === "object" &&
+        raw.tweaks !== null &&
+        Object.keys(raw.tweaks).length === 0);
     if (raw.dark === undefined && raw.designWidth === undefined && noTweaks) {
-      throw new CanvasToolError(`The variant ${JSON.stringify(label)} changes nothing: give it dark, designWidth or tweaks.`);
+      throw new CanvasToolError(
+        `The variant ${JSON.stringify(label)} changes nothing: give it dark, designWidth or tweaks.`,
+      );
     }
     return { ...raw, label };
   });
@@ -594,7 +728,8 @@ function variantsOf(value: unknown): Variant[] | undefined {
 function pageOf(doc: DesignCanvas, value: unknown): string {
   if (value === undefined || value === null || value === "") return doc.activePageId;
   const wanted = typeof value === "string" ? value.trim().toLocaleLowerCase() : "";
-  const page = doc.pages.find((entry) => entry.id === value) ??
+  const page =
+    doc.pages.find((entry) => entry.id === value) ??
     doc.pages.find((entry) => entry.name.toLocaleLowerCase() === wanted);
   if (!page) {
     throw new CanvasToolError(
@@ -612,7 +747,11 @@ const LOCKED_MESSAGE =
  * `after`: the new width's default box when it had the old one, or its
  * width scaled to match (as the side panel's Width menu does).
  */
-function boxForWidth(frame: DesignFrame, before: DesignWidth, after: DesignWidth): { w: number; h: number } {
+function boxForWidth(
+  frame: DesignFrame,
+  before: DesignWidth,
+  after: DesignWidth,
+): { w: number; h: number } {
   if (before === after) return { w: frame.w, h: frame.h };
   const old = defaultFileBox(before);
   if (frame.w === old.w && frame.h === old.h) return defaultFileBox(after);
@@ -620,7 +759,13 @@ function boxForWidth(frame: DesignFrame, before: DesignWidth, after: DesignWidth
 }
 
 /** Moves a frame by (dx, dy); a group or artboard takes its members along, except those in `skip`. */
-function translateFrames(frames: DesignFrame[], id: string, dx: number, dy: number, skip: ReadonlySet<string>): DesignFrame[] {
+function translateFrames(
+  frames: DesignFrame[],
+  id: string,
+  dx: number,
+  dy: number,
+  skip: ReadonlySet<string>,
+): DesignFrame[] {
   if (dx === 0 && dy === 0) return frames;
   const moved = frames.find((entry) => entry.id === id);
   const container = moved ? isDesignContainer(moved.kind) : false;
@@ -640,10 +785,18 @@ type Align = "start" | "center" | "end";
 /** Where each box goes in a row, column or grid laid from `anchor`. */
 export function layoutBoxes(
   boxes: readonly { w: number; h: number }[],
-  options: { layout: Layout; columns: number; gap: number; rowGap: number; align: Align; anchor: { x: number; y: number } },
+  options: {
+    layout: Layout;
+    columns: number;
+    gap: number;
+    rowGap: number;
+    align: Align;
+    anchor: { x: number; y: number };
+  },
 ): { x: number; y: number }[] {
   const { layout, gap, rowGap, align, anchor } = options;
-  const offset = (space: number, size: number) => (align === "center" ? (space - size) / 2 : align === "end" ? space - size : 0);
+  const offset = (space: number, size: number) =>
+    align === "center" ? (space - size) / 2 : align === "end" ? space - size : 0;
   if (layout === "column") {
     const widest = Math.max(...boxes.map((box) => box.w));
     let y = anchor.y;
@@ -653,7 +806,8 @@ export function layoutBoxes(
       return at;
     });
   }
-  const columns = layout === "row" ? boxes.length : Math.max(1, Math.min(options.columns, boxes.length));
+  const columns =
+    layout === "row" ? boxes.length : Math.max(1, Math.min(options.columns, boxes.length));
   const columnWidths: number[] = [];
   const rowHeights: number[] = [];
   boxes.forEach((box, index) => {
@@ -677,7 +831,10 @@ export function layoutBoxes(
  * the middle of the band's shortest frame, so a heading above a row stays its own band, ahead of what
  * it heads. A column reads columns left to right, each top to bottom, so frames stacked in a column stay together.
  */
-export function readingOrder<T extends { x: number; y: number; w: number; h: number }>(frames: readonly T[], layout: Layout): T[] {
+export function readingOrder<T extends { x: number; y: number; w: number; h: number }>(
+  frames: readonly T[],
+  layout: Layout,
+): T[] {
   const across = layout === "column";
   const start = (frame: T) => (across ? frame.x : frame.y);
   const size = (frame: T) => (across ? frame.w : frame.h);
@@ -696,7 +853,12 @@ export function readingOrder<T extends { x: number; y: number; w: number; h: num
 }
 
 type FrameBox = { x: number; y: number; w: number; h: number };
-const boxOf = (frame: DesignFrame): FrameBox => ({ x: frame.x, y: frame.y, w: frame.w, h: frame.h });
+const boxOf = (frame: DesignFrame): FrameBox => ({
+  x: frame.x,
+  y: frame.y,
+  w: frame.w,
+  h: frame.h,
+});
 const boxKey = (frame: DesignFrame) => `${frame.x},${frame.y},${frame.w},${frame.h}`;
 
 /**
@@ -714,7 +876,11 @@ function keepPersonsMoves(
   before: DesignCanvas,
   after: DesignCanvas,
   seen: ReadonlyMap<string, string>,
-): { doc: DesignCanvas; changed: { id: string; title: string; box: FrameBox }[]; kept: Set<string> } {
+): {
+  doc: DesignCanvas;
+  changed: { id: string; title: string; box: FrameBox }[];
+  kept: Set<string>;
+} {
   const earlier = new Map(before.frames.map((frame) => [frame.id, frame]));
   const changed: { id: string; title: string; box: FrameBox }[] = [];
   const kept = new Set<string>();
@@ -725,14 +891,20 @@ function keepPersonsMoves(
     if (!was || saw === undefined || saw === boxKey(was)) return frame;
     if (JSON.stringify(was) === JSON.stringify(frame)) return frame;
     changed.push({ id: frame.id, title: was.title, box: boxOf(was) });
-    if (boxKey(frame) === boxKey(was) || frame.kind === "group" || frame.kind === "connector") return frame;
+    if (boxKey(frame) === boxKey(was) || frame.kind === "group" || frame.kind === "connector")
+      return frame;
     const [sawX, sawY, sawW, sawH] = saw.split(",").map(Number);
-    const keepPlace = (was.x !== sawX || was.y !== sawY) && (frame.x !== was.x || frame.y !== was.y);
+    const keepPlace =
+      (was.x !== sawX || was.y !== sawY) && (frame.x !== was.x || frame.y !== was.y);
     const keepSize = (was.w !== sawW || was.h !== sawH) && (frame.w !== was.w || frame.h !== was.h);
     if (!keepPlace && !keepSize) return frame;
     kept.add(frame.id);
     refit.push(frame.groupId, was.groupId);
-    return { ...frame, ...(keepPlace ? { x: was.x, y: was.y } : {}), ...(keepSize ? { w: was.w, h: was.h } : {}) };
+    return {
+      ...frame,
+      ...(keepPlace ? { x: was.x, y: was.y } : {}),
+      ...(keepSize ? { w: was.w, h: was.h } : {}),
+    };
   });
   if (kept.size === 0) return { doc: after, changed, kept };
   return { doc: refitGroups(syncConnectors({ ...after, frames }), refit), changed, kept };
@@ -743,8 +915,19 @@ function keepPersonsMoves(
  * since Aiden last looked: their boxes now, and which kept the person's place
  * or size.
  */
-function withCoEditReport<T>(value: T, report: ReturnType<typeof keepPersonsMoves> | undefined, saved: DesignCanvas): T {
-  if (!report || report.changed.length === 0 || !value || typeof value !== "object" || Array.isArray(value)) return value;
+function withCoEditReport<T>(
+  value: T,
+  report: ReturnType<typeof keepPersonsMoves> | undefined,
+  saved: DesignCanvas,
+): T {
+  if (
+    !report ||
+    report.changed.length === 0 ||
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  )
+    return value;
   const now = new Map(saved.frames.map((frame) => [frame.id, frame]));
   const answer = value as Record<string, unknown>;
   // Once a frame kept the person's box, it and the groups fitted around it
@@ -759,7 +942,8 @@ function withCoEditReport<T>(value: T, report: ReturnType<typeof keepPersonsMove
       return frame ? { ...listed, box: boxOf(frame) } : entry;
     };
     for (const key of ["frame", "group"]) if (key in answer) restored[key] = stored(answer[key]);
-    for (const key of ["frames", "groups"]) if (Array.isArray(answer[key])) restored[key] = (answer[key] as unknown[]).map(stored);
+    for (const key of ["frames", "groups"])
+      if (Array.isArray(answer[key])) restored[key] = (answer[key] as unknown[]).map(stored);
   }
   const kept = [...report.kept];
   return {
@@ -783,8 +967,10 @@ function withCoEditReport<T>(value: T, report: ReturnType<typeof keepPersonsMove
  * request carries fewer tool definitions.
  */
 const CANVAS_CATALOG_LINES: Readonly<Record<string, string>> = {
-  canvas_page: "Add, rename, duplicate, reorder, show or delete design canvas pages, when the canvas needs another page.",
-  canvas_duplicate: "Copy a design canvas frame or group beside it, or lay out a page's light/dark, width or tweak variants in one labelled group.",
+  canvas_page:
+    "Add, rename, duplicate, reorder, show or delete design canvas pages, when the canvas needs another page.",
+  canvas_duplicate:
+    "Copy a design canvas frame or group beside it, or lay out a page's light/dark, width or tweak variants in one labelled group.",
 };
 
 export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[] {
@@ -814,7 +1000,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       }
       return result(value);
     } catch (error) {
-      if (error instanceof CanvasToolError) return result({ status: "error", message: error.message });
+      if (error instanceof CanvasToolError)
+        return result({ status: "error", message: error.message });
       throw error;
     }
   };
@@ -834,7 +1021,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
    * refuse. A frame the person moved since Aiden last saw it keeps the
    * person's box, and the answer says so with its box now.
    */
-  const edit = async <T>(change: (doc: DesignCanvas) => { doc: DesignCanvas; value: T }): Promise<T> => {
+  const edit = async <T>(
+    change: (doc: DesignCanvas) => { doc: DesignCanvas; value: T },
+  ): Promise<T> => {
     let value: T | undefined;
     let report: ReturnType<typeof keepPersonsMoves> | undefined;
     let touched = new Set<string>();
@@ -843,7 +1032,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       report = keepPersonsMoves(doc, next.doc, seen);
       const earlier = new Map(doc.frames.map((frame) => [frame.id, JSON.stringify(frame)]));
       touched = new Set(
-        report.doc.frames.filter((frame) => earlier.get(frame.id) !== JSON.stringify(frame)).map((frame) => frame.id),
+        report.doc.frames
+          .filter((frame) => earlier.get(frame.id) !== JSON.stringify(frame))
+          .map((frame) => frame.id),
       );
       value = next.value;
       return report.doc;
@@ -870,7 +1061,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
   /** A frame something goes beside: any frame but a connector, which has no side to go on. */
   const besideFrame = (doc: DesignCanvas, id: unknown): DesignFrame => {
     const frame = frameIn(doc, id);
-    if (frame.kind === "connector") throw new CanvasToolError("nextTo must name a frame, not a connector.");
+    if (frame.kind === "connector")
+      throw new CanvasToolError("nextTo must name a frame, not a connector.");
     return frame;
   };
 
@@ -887,36 +1079,64 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       {
         name: "canvas_read",
         label: "Read design canvas",
-        description:
-          `Read the design canvas: its pages, and on one page (the one on screen unless you name another) the view, the frames in it (id, kind, title, path, box, group, look, open comments), the frames outside it (outsideFrames, with ids and boxes), counts by group, the frames the person had selected when they sent their message (selected), and the page's open and sent comments with what each points at. Up to ${CANVAS_READ_FRAME_LIMIT} frames per call; for more, pass the answer's nextCursor as cursor. snapshot: true adds a picture of the canvas as the person sees it.`,
+        description: `Read the design canvas: its pages, and on one page (the one on screen unless you name another) the view, the frames in it (id, kind, title, path, box, group, look, open comments), the frames outside it (outsideFrames, with ids and boxes), counts by group, the frames the person had selected when they sent their message (selected), and the page's open and sent comments with what each points at. Up to ${CANVAS_READ_FRAME_LIMIT} frames per call; for more, pass the answer's nextCursor as cursor. snapshot: true adds a picture of the canvas as the person sees it.`,
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
-          cursor: Type.Optional(Type.String({ maxLength: 80, description: "An earlier answer's nextCursor." })),
+          cursor: Type.Optional(
+            Type.String({ maxLength: 80, description: "An earlier answer's nextCursor." }),
+          ),
           snapshot: Type.Optional(Type.Boolean()),
         }),
         execute: async (_id, raw, signal) =>
           run(async () => {
-            const p = (raw ?? {}) as { page?: unknown; cursor?: unknown; offset?: unknown; snapshot?: unknown };
+            const p = (raw ?? {}) as {
+              page?: unknown;
+              cursor?: unknown;
+              offset?: unknown;
+              snapshot?: unknown;
+            };
             if (p.offset !== undefined) {
-              throw new CanvasToolError("canvas_read no longer takes offset. To read the frames after an answer, pass its nextCursor as cursor.");
+              throw new CanvasToolError(
+                "canvas_read no longer takes offset. To read the frames after an answer, pass its nextCursor as cursor.",
+              );
             }
             const doc = await deps.store.get(deps.chatId);
-            const cursor = p.cursor === undefined ? undefined : typeof p.cursor === "string" ? parseCanvasReadCursor(p.cursor) : null;
+            const cursor =
+              p.cursor === undefined
+                ? undefined
+                : typeof p.cursor === "string"
+                  ? parseCanvasReadCursor(p.cursor)
+                  : null;
             if (cursor === null) {
-              throw new CanvasToolError("cursor must be the nextCursor an earlier canvas_read answer gave, copied as it is.");
+              throw new CanvasToolError(
+                "cursor must be the nextCursor an earlier canvas_read answer gave, copied as it is.",
+              );
             }
-            const named = p.page === undefined || p.page === null || p.page === "" ? undefined : pageOf(doc, p.page);
+            const named =
+              p.page === undefined || p.page === null || p.page === ""
+                ? undefined
+                : pageOf(doc, p.page);
             let pageId = named ?? doc.activePageId;
             if (cursor) {
               const read = canvasReadCursorPage(doc, cursor, named);
               if ("error" in read) throw new CanvasToolError(read.error);
               pageId = read.pageId;
             }
-            const answer = describeCanvas(doc, { pageId, ...(cursor ? { cursor } : {}), ...(deps.viewState ? { viewState: deps.viewState } : {}) });
-            const listed = new Set([...answer.inView, ...answer.outsideFrames].map((frame) => frame.id));
+            const answer = describeCanvas(doc, {
+              pageId,
+              ...(cursor ? { cursor } : {}),
+              ...(deps.viewState ? { viewState: deps.viewState } : {}),
+            });
+            const listed = new Set(
+              [...answer.inView, ...answer.outsideFrames].map((frame) => frame.id),
+            );
             remember(doc.frames.filter((frame) => listed.has(frame.id)));
             if (p.snapshot !== true) return answer;
-            const unavailable = (snapshotReason: string) => ({ ...answer, snapshot: "unavailable", snapshotReason });
+            const unavailable = (snapshotReason: string) => ({
+              ...answer,
+              snapshot: "unavailable",
+              snapshotReason,
+            });
             if (deps.seesImages === false) {
               return unavailable(
                 "This model can't see pictures, so no snapshot was taken. The frames listed here describe the page; canvas_inspect reports in words what a page frame draws.",
@@ -924,13 +1144,16 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             }
             // The snapshot shows the screen, so it only pictures the page on screen.
             if (answer.page.id !== doc.activePageId) {
-              const onScreen = doc.pages.find((entry) => entry.id === doc.activePageId)?.name ?? "another page";
+              const onScreen =
+                doc.pages.find((entry) => entry.id === doc.activePageId)?.name ?? "another page";
               return unavailable(
                 `A snapshot shows only the page on screen, which is "${onScreen}", not "${answer.page.name}". Call canvas_focus with page "${answer.page.name}" to bring it on screen first, or canvas_inspect for a picture of one of its page frames.`,
               );
             }
             const image = deps.snapshot ? await deps.snapshot(signal) : null;
-            return image ? new WithImage({ ...answer, snapshot: "attached" }, image) : unavailable("The canvas is not on screen right now.");
+            return image
+              ? new WithImage({ ...answer, snapshot: "attached" }, image)
+              : unavailable("The canvas is not on screen right now.");
           }),
       },
       "safe",
@@ -940,7 +1163,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_place_frame",
         label: "Place on design canvas",
         description:
-          "Put a frame on the design canvas: a workspace HTML page (kind file, path workspace-relative; write the file first), an image, a note, a group, text, a shape (rect or oval, label in text), a frame (an empty artboard) or a connector (an arrow or line between frames or points; an end on a frame follows it). Notes and text take **bold**, *italic*, <u>underline</u>, [links](https://…) and \"- \" or \"1. \" lists; size and color apply to the whole item, fill colours a note, shape or artboard. A page's frame is sized for its designWidth (390, 768, 1280, 1440) unless you pass w and h. It goes on the page on screen unless you name another. A page already on this canvas page reuses its frame, kept in its group unless you name another (placed: reused; refused if shown only in locked frames); duplicate: true adds another (placed: copy). nextTo puts it beside a frame, in that frame's group; with no x, y or nextTo it goes right of the last frame in its group or in view, wrapping inside an artboard. Groups fit their frames (one the person drew only grows).",
+          'Put a frame on the design canvas: a workspace HTML page (kind file, path workspace-relative; write the file first), an image, a note, a group, text, a shape (rect or oval, label in text), a frame (an empty artboard) or a connector (an arrow or line between frames or points; an end on a frame follows it). Notes and text take **bold**, *italic*, <u>underline</u>, [links](https://…) and "- " or "1. " lists; size and color apply to the whole item, fill colours a note, shape or artboard. A page\'s frame is sized for its designWidth (390, 768, 1280, 1440) unless you pass w and h. It goes on the page on screen unless you name another. A page already on this canvas page reuses its frame, kept in its group unless you name another (placed: reused; refused if shown only in locked frames); duplicate: true adds another (placed: copy). nextTo puts it beside a frame, in that frame\'s group; with no x, y or nextTo it goes right of the last frame in its group or in view, wrapping inside an artboard. Groups fit their frames (one the person drew only grows).',
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
           kind: enumOf(PLACED_KINDS),
@@ -960,8 +1183,15 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           h: Type.Optional(Type.Number()),
           groupId: Type.Optional(Type.String()),
           designWidth: Type.Optional(Type.Union(DESIGN_WIDTHS.map((width) => Type.Literal(width)))),
-          duplicate: Type.Optional(Type.Boolean({ description: "file: add a frame even when the page is on the canvas." })),
-          nextTo: Type.Optional(Type.Object({ frameId: Type.String({ description: FRAME_REF }), side: Type.Optional(BesideSchema) })),
+          duplicate: Type.Optional(
+            Type.Boolean({ description: "file: add a frame even when the page is on the canvas." }),
+          ),
+          nextTo: Type.Optional(
+            Type.Object({
+              frameId: Type.String({ description: FRAME_REF }),
+              side: Type.Optional(BesideSchema),
+            }),
+          ),
           ...STYLE_PARAMETERS,
         }),
         execute: async (_id, raw) =>
@@ -969,39 +1199,68 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const p = raw as Record<string, unknown>;
             const kind = p.kind as PlacedKind;
             if (!PLACED_KINDS.includes(kind)) {
-              throw new CanvasToolError(`kind must be one of ${PLACED_KINDS.map((entry) => `"${entry}"`).join(", ")}.`);
+              throw new CanvasToolError(
+                `kind must be one of ${PLACED_KINDS.map((entry) => `"${entry}"`).join(", ")}.`,
+              );
             }
             const title = text(p.title, "title", DESIGN_CANVAS_LIMITS.titleChars);
-            const path = kind === "file" || kind === "image" ? await checkedPath(deps.workspaceRoot, p.path, kind) : undefined;
+            const path =
+              kind === "file" || kind === "image"
+                ? await checkedPath(deps.workspaceRoot, p.path, kind)
+                : undefined;
             const x = optionalNumber(p.x, "x");
             const y = optionalNumber(p.y, "y");
             const look = drawnLook(kind, p);
             const shape = look.shape;
-            const width = kind === "file" ? (designWidth(p.designWidth) ?? DESIGN_DEFAULT_FILE_WIDTH) : undefined;
-            const box = kind === "connector" ? { w: 1, h: 1 } : kind === "file" ? defaultFileBox(width) : DEFAULT_BOX[kind];
+            const width =
+              kind === "file"
+                ? (designWidth(p.designWidth) ?? DESIGN_DEFAULT_FILE_WIDTH)
+                : undefined;
+            const box =
+              kind === "connector"
+                ? { w: 1, h: 1 }
+                : kind === "file"
+                  ? defaultFileBox(width)
+                  : DEFAULT_BOX[kind];
             const givenW = optionalNumber(p.w, "w");
             const givenH = optionalNumber(p.h, "h");
             const w = givenW ?? box.w;
             const h = givenH ?? drawnHeight(kind, look, box.h);
             const duplicate = optionalBoolean(p.duplicate, "duplicate") === true;
-            const nextTo = p.nextTo === undefined || p.nextTo === null ? undefined : (p.nextTo as Record<string, unknown>);
-            if (nextTo && (typeof nextTo !== "object" || Array.isArray(nextTo))) throw new CanvasToolError("nextTo must be { frameId, side }.");
-            if (nextTo && kind === "connector") throw new CanvasToolError("A connector goes between its ends; leave nextTo out.");
-            if (nextTo && (x !== undefined || y !== undefined)) throw new CanvasToolError("Pass nextTo or x and y, not both.");
+            const nextTo =
+              p.nextTo === undefined || p.nextTo === null
+                ? undefined
+                : (p.nextTo as Record<string, unknown>);
+            if (nextTo && (typeof nextTo !== "object" || Array.isArray(nextTo)))
+              throw new CanvasToolError("nextTo must be { frameId, side }.");
+            if (nextTo && kind === "connector")
+              throw new CanvasToolError("A connector goes between its ends; leave nextTo out.");
+            if (nextTo && (x !== undefined || y !== undefined))
+              throw new CanvasToolError("Pass nextTo or x and y, not both.");
             const side = nextTo ? besideOf(nextTo.side, "nextTo.side") : undefined;
-            const declared = kind === "file" && path && hasTweakValues(p.tweaks) ? { path, names: await designPageTweakNames(deps.workspaceRoot, path) } : undefined;
+            const declared =
+              kind === "file" && path && hasTweakValues(p.tweaks)
+                ? { path, names: await designPageTweakNames(deps.workspaceRoot, path) }
+                : undefined;
             const id = newId();
             return edit<Record<string, unknown>>((doc) => {
               // Beside a frame, on its page unless another is named.
               const anchor = nextTo ? besideFrame(doc, nextTo.frameId) : undefined;
-              const pageId = anchor && (p.page === undefined || p.page === null || p.page === "") ? anchor.pageId : pageOf(doc, p.page);
+              const pageId =
+                anchor && (p.page === undefined || p.page === null || p.page === "")
+                  ? anchor.pageId
+                  : pageOf(doc, p.page);
               if (anchor && anchor.pageId !== pageId) {
                 throw new CanvasToolError("nextTo must name a frame on the page it goes on.");
               }
               const ends: [DesignConnectorEnd, DesignConnectorEnd] | undefined =
-                kind === "connector" ? [endOf(doc, p.from, "from", pageId), endOf(doc, p.to, "to", pageId)] : undefined;
+                kind === "connector"
+                  ? [endOf(doc, p.from, "from", pageId), endOf(doc, p.to, "to", pageId)]
+                  : undefined;
               if (ends && ends[0].frameId !== undefined && ends[0].frameId === ends[1].frameId) {
-                throw new CanvasToolError("A connector joins two different frames, or a frame and a point.");
+                throw new CanvasToolError(
+                  "A connector joins two different frames, or a frame and a point.",
+                );
               }
               const arrow = kind === "connector" ? arrowOf(p.arrow) : undefined;
               // A page already on this canvas page, whoever placed it and
@@ -1010,7 +1269,10 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               // shown twice; one at the same width, then one Aiden placed, is
               // preferred. duplicate: true adds a copy instead. A page shown
               // only in locked frames is refused, since reusing would change one.
-              const sameFile = kind === "file" ? doc.frames.filter((entry) => entry.kind === "file" && entry.path === path) : [];
+              const sameFile =
+                kind === "file"
+                  ? doc.frames.filter((entry) => entry.kind === "file" && entry.path === path)
+                  : [];
               const onThisPage = sameFile.filter((entry) => entry.pageId === pageId);
               const candidates = duplicate ? [] : onThisPage.filter((entry) => !entry.locked);
               if (!duplicate && onThisPage.length > 0 && candidates.length === 0) {
@@ -1019,7 +1281,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 );
               }
               const adopted =
-                candidates.find((entry) => (entry.designWidth ?? DESIGN_DEFAULT_FILE_WIDTH) === width) ??
+                candidates.find(
+                  (entry) => (entry.designWidth ?? DESIGN_DEFAULT_FILE_WIDTH) === width,
+                ) ??
                 candidates.find((entry) => entry.createdBy === "aiden") ??
                 candidates[0];
               if (anchor && adopted && anchor.id === adopted.id) {
@@ -1029,14 +1293,32 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               }
               // A reused frame may name the locked group it is already in. Beside
               // a frame, it joins that frame's plain group unless one is named.
-              const namedGroup = p.groupId === undefined && anchor ? groupBeside(doc, anchor) : p.groupId;
-              const groupId = isDesignContainer(kind) ? undefined : groupOf(doc, namedGroup, pageId, adopted?.groupId);
+              const namedGroup =
+                p.groupId === undefined && anchor ? groupBeside(doc, anchor) : p.groupId;
+              const groupId = isDesignContainer(kind)
+                ? undefined
+                : groupOf(doc, namedGroup, pageId, adopted?.groupId);
               // The box the frame ends with: a reused one's, resized as asked, or the new one's.
-              const resized = adopted ? boxForWidth(adopted, adopted.designWidth ?? DESIGN_DEFAULT_FILE_WIDTH, width!) : undefined;
-              const nextW = adopted ? (givenW !== undefined ? clampSize(givenW, "file") : resized!.w) : clampSize(w, kind);
-              const nextH = adopted ? (givenH !== undefined ? clampSize(givenH, "file") : resized!.h) : clampSize(h, kind);
+              const resized = adopted
+                ? boxForWidth(adopted, adopted.designWidth ?? DESIGN_DEFAULT_FILE_WIDTH, width!)
+                : undefined;
+              const nextW = adopted
+                ? givenW !== undefined
+                  ? clampSize(givenW, "file")
+                  : resized!.w
+                : clampSize(w, kind);
+              const nextH = adopted
+                ? givenH !== undefined
+                  ? clampSize(givenH, "file")
+                  : resized!.h
+                : clampSize(h, kind);
               const at = anchor
-                ? besideBox(anchor, { w: nextW, h: nextH }, side!, blockersOn(doc, pageId, new Set([anchor.id, adopted?.id, groupId])))
+                ? besideBox(
+                    anchor,
+                    { w: nextW, h: nextH },
+                    side!,
+                    blockersOn(doc, pageId, new Set([anchor.id, adopted?.id, groupId])),
+                  )
                 : x !== undefined && y !== undefined
                   ? { x, y }
                   : undefined;
@@ -1047,7 +1329,13 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   ? {
                       otherFrames: others.slice(0, 10).map((entry) => ({
                         id: entry.id,
-                        ...(entry.pageId !== pageId ? { page: doc.pages.find((page) => page.id === entry.pageId)?.name ?? entry.pageId } : {}),
+                        ...(entry.pageId !== pageId
+                          ? {
+                              page:
+                                doc.pages.find((page) => page.id === entry.pageId)?.name ??
+                                entry.pageId,
+                            }
+                          : {}),
                       })),
                     }
                   : {};
@@ -1069,9 +1357,21 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               };
               if (adopted) {
                 // Keep what the person set on the adopted frame (tweaks, dark, guide); take the new look on top.
-                const merge = (box: Pick<DesignFrame, "x" | "y" | "w" | "h">, group?: string): DesignFrame => {
+                const merge = (
+                  box: Pick<DesignFrame, "x" | "y" | "w" | "h">,
+                  group?: string,
+                ): DesignFrame => {
                   const { groupId: _oldGroup, ...kept } = adopted;
-                  return applyStyle({ ...kept, title, designWidth: width!, ...box, ...(group ? { groupId: group } : {}) }, style);
+                  return applyStyle(
+                    {
+                      ...kept,
+                      title,
+                      designWidth: width!,
+                      ...box,
+                      ...(group ? { groupId: group } : {}),
+                    },
+                    style,
+                  );
                 };
                 const reused = {
                   status: "placed",
@@ -1084,7 +1384,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 const keptGroup = groupId ?? (anchor ? undefined : adopted.groupId);
                 if (!groupId && !at) {
                   const frames = doc.frames.map((entry) =>
-                    entry.id === adopted.id ? merge({ x: entry.x, y: entry.y, w: nextW, h: nextH }, adopted.groupId) : entry,
+                    entry.id === adopted.id
+                      ? merge({ x: entry.x, y: entry.y, w: nextW, h: nextH }, adopted.groupId)
+                      : entry,
                   );
                   // Its group fits itself to a member that changed size, and a
                   // new size moves the ends of connectors on the page's sides.
@@ -1092,7 +1394,10 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   const frame = next.frames.find((entry) => entry.id === adopted.id)!;
                   return { doc: next, value: { ...reused, frame: summarizeFrame(frame) } };
                 }
-                const base = { ...doc, frames: doc.frames.filter((entry) => entry.id !== adopted.id) };
+                const base = {
+                  ...doc,
+                  frames: doc.frames.filter((entry) => entry.id !== adopted.id),
+                };
                 const placed = placeFrame(
                   base,
                   { ...input, w: nextW, h: nextH, ...(keptGroup ? { groupId: keptGroup } : {}) },
@@ -1110,7 +1415,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   syncConnectors({
                     ...placed.doc,
                     frames: placed.doc.frames.map((entry) =>
-                      entry.id === adopted.id ? merge({ x: entry.x, y: entry.y, w: entry.w, h: entry.h }, entry.groupId) : entry,
+                      entry.id === adopted.id
+                        ? merge({ x: entry.x, y: entry.y, w: entry.w, h: entry.h }, entry.groupId)
+                        : entry,
                     ),
                   }),
                   [adopted.groupId, keptGroup],
@@ -1118,7 +1425,12 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 const frame = placedDoc.frames.find((entry) => entry.id === adopted.id)!;
                 return { doc: placedDoc, value: { ...reused, frame: summarizeFrame(frame) } };
               }
-              const placed = placeFrame(doc, input, canvasView(doc, deps.viewState?.viewSize, pageId), () => id);
+              const placed = placeFrame(
+                doc,
+                input,
+                canvasView(doc, deps.viewState?.viewSize, pageId),
+                () => id,
+              );
               if ("error" in placed) {
                 throw new CanvasToolError(
                   `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
@@ -1143,7 +1455,15 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   },
                 };
               }
-              return { doc: placedDoc, value: { status: "placed", ...(kind === "file" ? { placed: "new" } : {}), units: "canvas", frame: summarizeFrame(frame) } };
+              return {
+                doc: placedDoc,
+                value: {
+                  status: "placed",
+                  ...(kind === "file" ? { placed: "new" } : {}),
+                  units: "canvas",
+                  frame: summarizeFrame(frame),
+                },
+              };
             });
           }),
       },
@@ -1154,7 +1474,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_update_frame",
         label: "Update design canvas frame",
         description:
-          "Change any unlocked frame, the person's too: move, resize, retitle, regroup (groupId \"\" ungroups), move to another page, hide, lock, reorder (layer, or aboveFrameId / belowFrameId of a sibling), or change its words (Markdown as in canvas_place_frame), colours (fill \"none\" clears), size, connector ends, designWidth (the frame resizes unless you pass w and h), dark, tweaks, guide, radius, paper or print mode. A locked frame accepts only locked: false, and only when the person asked. A group or artboard moves with its frames.",
+          'Change any unlocked frame, the person\'s too: move, resize, retitle, regroup (groupId "" ungroups), move to another page, hide, lock, reorder (layer, or aboveFrameId / belowFrameId of a sibling), or change its words (Markdown as in canvas_place_frame), colours (fill "none" clears), size, connector ends, designWidth (the frame resizes unless you pass w and h), dark, tweaks, guide, radius, paper or print mode. A locked frame accepts only locked: false, and only when the person asked. A group or artboard moves with its frames.',
         parameters: Type.Object({
           id: Type.String({ description: FRAME_REF }),
           title: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.titleChars })),
@@ -1173,12 +1493,19 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           designWidth: Type.Optional(Type.Union(DESIGN_WIDTHS.map((width) => Type.Literal(width)))),
           hidden: Type.Optional(Type.Boolean()),
           locked: Type.Optional(Type.Boolean()),
-          page: Type.Optional(Type.String({ maxLength: 128, description: "Move it (with its members) to this page." })),
-          layer: Type.Optional(
-            enumOf(["front", "back", "forward", "backward"] as const),
+          page: Type.Optional(
+            Type.String({
+              maxLength: 128,
+              description: "Move it (with its members) to this page.",
+            }),
           ),
-          aboveFrameId: Type.Optional(Type.String({ description: "Put it just in front of this sibling." })),
-          belowFrameId: Type.Optional(Type.String({ description: "Put it just behind this sibling." })),
+          layer: Type.Optional(enumOf(["front", "back", "forward", "backward"] as const)),
+          aboveFrameId: Type.Optional(
+            Type.String({ description: "Put it just in front of this sibling." }),
+          ),
+          belowFrameId: Type.Optional(
+            Type.String({ description: "Put it just behind this sibling." }),
+          ),
           ...STYLE_PARAMETERS,
         }),
         execute: async (_id, raw) =>
@@ -1189,7 +1516,10 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const w = optionalNumber(p.w, "w");
             const h = optionalNumber(p.h, "h");
             const width = designWidth(p.designWidth);
-            const title = p.title === undefined ? undefined : text(p.title, "title", DESIGN_CANVAS_LIMITS.titleChars);
+            const title =
+              p.title === undefined
+                ? undefined
+                : text(p.title, "title", DESIGN_CANVAS_LIMITS.titleChars);
             const clearFill = p.fill === "none";
             const fill = clearFill ? undefined : color(p.fill, "fill");
             const outline = color(p.color, "color");
@@ -1197,49 +1527,80 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const hidden = optionalBoolean(p.hidden, "hidden");
             const locked = optionalBoolean(p.locked, "locked");
             const layer = p.layer;
-            if (layer !== undefined && layer !== null && !["front", "back", "forward", "backward"].includes(layer as string)) {
+            if (
+              layer !== undefined &&
+              layer !== null &&
+              !["front", "back", "forward", "backward"].includes(layer as string)
+            ) {
               throw new CanvasToolError('layer must be "front", "back", "forward" or "backward".');
             }
-            const layerOptions = [layer, p.aboveFrameId, p.belowFrameId].filter((value) => value !== undefined && value !== null && value !== "");
-            if (layerOptions.length > 1) throw new CanvasToolError("Pass only one of layer, aboveFrameId and belowFrameId.");
+            const layerOptions = [layer, p.aboveFrameId, p.belowFrameId].filter(
+              (value) => value !== undefined && value !== null && value !== "",
+            );
+            if (layerOptions.length > 1)
+              throw new CanvasToolError("Pass only one of layer, aboveFrameId and belowFrameId.");
             // A page's own tweak names, read before the edit (a frame's file never changes).
             let declared: { path: string; names: readonly string[] | null } | undefined;
             if (hasTweakValues(p.tweaks)) {
               const before = designFrameByIdOrPath(await deps.store.get(deps.chatId), p.id);
-              if (before?.kind === "file" && before.path) declared = { path: before.path, names: await designPageTweakNames(deps.workspaceRoot, before.path) };
+              if (before?.kind === "file" && before.path)
+                declared = {
+                  path: before.path,
+                  names: await designPageTweakNames(deps.workspaceRoot, before.path),
+                };
             }
             return edit((doc) => {
               const frame = frameIn(doc, p.id);
               if (frame.locked && locked !== false) throw new CanvasToolError(LOCKED_MESSAGE);
-              const worded = frame.kind === "note" || frame.kind === "text" || frame.kind === "shape";
-              if (p.text !== undefined && !worded) throw new CanvasToolError("Only a note, a text item or a shape has text.");
-              if (width !== undefined && frame.kind !== "file") throw new CanvasToolError("Only a file frame has a design width.");
+              const worded =
+                frame.kind === "note" || frame.kind === "text" || frame.kind === "shape";
+              if (p.text !== undefined && !worded)
+                throw new CanvasToolError("Only a note, a text item or a shape has text.");
+              if (width !== undefined && frame.kind !== "file")
+                throw new CanvasToolError("Only a file frame has a design width.");
               if ((fill !== undefined || clearFill) && !takesFill(frame.kind)) {
-                throw new CanvasToolError("Only a shape, a note or an artboard (kind frame) has a fill.");
+                throw new CanvasToolError(
+                  "Only a shape, a note or an artboard (kind frame) has a fill.",
+                );
               }
-              if (outline !== undefined && !["shape", "text", "note", "connector", "stroke"].includes(frame.kind)) {
-                throw new CanvasToolError("Only a shape, text, note, connector or drawing has a color.");
+              if (
+                outline !== undefined &&
+                !["shape", "text", "note", "connector", "stroke"].includes(frame.kind)
+              ) {
+                throw new CanvasToolError(
+                  "Only a shape, text, note, connector or drawing has a color.",
+                );
               }
               if (size !== undefined && frame.kind !== "text" && frame.kind !== "note") {
                 throw new CanvasToolError("Only a text item or a note has a size.");
               }
               const connector = frame.kind === "connector";
-              if (!connector && (p.from !== undefined || p.to !== undefined || p.arrow !== undefined)) {
+              if (
+                !connector &&
+                (p.from !== undefined || p.to !== undefined || p.arrow !== undefined)
+              ) {
                 throw new CanvasToolError("Only a connector has from, to and arrow.");
               }
               if (connector && (w !== undefined || h !== undefined)) {
-                throw new CanvasToolError("A connector's size follows its ends; move them with from and to.");
+                throw new CanvasToolError(
+                  "A connector's size follows its ends; move them with from and to.",
+                );
               }
               const style = stylePatch(frame.kind, frame.shape, p, frame.tweaks, declared);
               const targetPage =
-                p.page !== undefined && p.page !== null && p.page !== "" ? pageOf(doc, p.page) : frame.pageId;
+                p.page !== undefined && p.page !== null && p.page !== ""
+                  ? pageOf(doc, p.page)
+                  : frame.pageId;
               const movingPage = targetPage !== frame.pageId;
               const containerMembers = isDesignContainer(frame.kind)
-                ? doc.frames.filter((entry) => entry.groupId === frame.id && entry.pageId === frame.pageId)
+                ? doc.frames.filter(
+                    (entry) => entry.groupId === frame.id && entry.pageId === frame.pageId,
+                  )
                 : [];
               const willTranslate =
                 isDesignContainer(frame.kind) &&
-                ((x !== undefined && clampCoord(x) !== frame.x) || (y !== undefined && clampCoord(y) !== frame.y));
+                ((x !== undefined && clampCoord(x) !== frame.x) ||
+                  (y !== undefined && clampCoord(y) !== frame.y));
               if (willTranslate || movingPage) {
                 const lockedMember = containerMembers.find((entry) => entry.locked);
                 if (lockedMember) {
@@ -1251,7 +1612,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               if (movingPage) {
                 const onTarget = doc.frames.filter((entry) => entry.pageId === targetPage).length;
                 if (onTarget + 1 + containerMembers.length > DESIGN_CANVAS_LIMITS.framesPerPage) {
-                  throw new CanvasToolError(`That page is full (${DESIGN_CANVAS_LIMITS.framesPerPage} frames).`);
+                  throw new CanvasToolError(
+                    `That page is full (${DESIGN_CANVAS_LIMITS.framesPerPage} frames).`,
+                  );
                 }
               }
               const baseDoc = movingPage ? moveFramesToPage(doc, [frame.id], targetPage) : doc;
@@ -1264,7 +1627,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               let next: DesignFrame = {
                 ...current,
                 ...(title !== undefined ? { title } : {}),
-                ...(typeof p.text === "string" ? { text: p.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars) } : {}),
+                ...(typeof p.text === "string"
+                  ? { text: p.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars) }
+                  : {}),
                 ...(x !== undefined && !connector ? { x: clampCoord(x) } : {}),
                 ...(y !== undefined && !connector ? { y: clampCoord(y) } : {}),
                 ...(widthBox ?? {}),
@@ -1288,10 +1653,18 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   y !== undefined ? clampCoord(y) - current.y : 0,
                 );
                 const ends = next.ends!;
-                const from = p.from !== undefined ? endOf(baseDoc, p.from, "from", current.pageId, current.id) : ends[0];
-                const to = p.to !== undefined ? endOf(baseDoc, p.to, "to", current.pageId, current.id) : ends[1];
+                const from =
+                  p.from !== undefined
+                    ? endOf(baseDoc, p.from, "from", current.pageId, current.id)
+                    : ends[0];
+                const to =
+                  p.to !== undefined
+                    ? endOf(baseDoc, p.to, "to", current.pageId, current.id)
+                    : ends[1];
                 if (from.frameId !== undefined && from.frameId === to.frameId) {
-                  throw new CanvasToolError("A connector joins two different frames, or a frame and a point.");
+                  throw new CanvasToolError(
+                    "A connector joins two different frames, or a frame and a point.",
+                  );
                 }
                 const { arrow: _arrow, ...rest } = next;
                 const arrow = p.arrow !== undefined ? arrowOf(p.arrow) : current.arrow;
@@ -1299,7 +1672,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               }
               if (p.groupId !== undefined) {
                 if (isDesignContainer(current.kind)) {
-                  throw new CanvasToolError("A group or frame (artboard) cannot be put inside another.");
+                  throw new CanvasToolError(
+                    "A group or frame (artboard) cannot be put inside another.",
+                  );
                 }
                 const groupId = groupOf(baseDoc, p.groupId, current.pageId, current.groupId);
                 const { groupId: _old, ...rest } = next;
@@ -1308,12 +1683,17 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               // A moved group or artboard takes its frames with it, as dragging it does.
               const dx = isDesignContainer(current.kind) ? next.x - current.x : 0;
               const dy = isDesignContainer(current.kind) ? next.y - current.y : 0;
-              let frames = baseDoc.frames.map((entry) => (entry.id === current.id ? { ...next, x: current.x, y: current.y } : entry));
+              let frames = baseDoc.frames.map((entry) =>
+                entry.id === current.id ? { ...next, x: current.x, y: current.y } : entry,
+              );
               frames = translateFrames(frames, current.id, dx, dy, new Set());
               frames = frames.map((entry) => (entry.id === current.id ? next : entry));
               // Connectors on a moved frame follow it, and the group it left and
               // the group it is in fit themselves to their members again.
-              let updatedDoc = refitGroups(syncConnectors({ ...baseDoc, frames }), [frame.groupId, next.groupId]);
+              let updatedDoc = refitGroups(syncConnectors({ ...baseDoc, frames }), [
+                frame.groupId,
+                next.groupId,
+              ]);
               if (layerOptions.length === 1) {
                 const sibling = p.aboveFrameId ?? p.belowFrameId;
                 if (typeof sibling === "string" && sibling) {
@@ -1329,13 +1709,22 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                       "aboveFrameId and belowFrameId must name a sibling: another frame in the same group (or none) on the same page, and a group or artboard only beside another.",
                     );
                   }
-                  updatedDoc = reorderLayer(updatedDoc, frame.id, target.id, p.aboveFrameId ? "above" : "below");
+                  updatedDoc = reorderLayer(
+                    updatedDoc,
+                    frame.id,
+                    target.id,
+                    p.aboveFrameId ? "above" : "below",
+                  );
                 } else if (layer === "front") updatedDoc = bringLayerToFront(updatedDoc, frame.id);
                 else if (layer === "back") updatedDoc = sendLayerToBack(updatedDoc, frame.id);
-                else if (layer === "forward" || layer === "backward") updatedDoc = stepLayer(updatedDoc, frame.id, layer);
+                else if (layer === "forward" || layer === "backward")
+                  updatedDoc = stepLayer(updatedDoc, frame.id, layer);
               }
               const updated = updatedDoc.frames.find((entry) => entry.id === frame.id)!;
-              return { doc: updatedDoc, value: { status: "updated", units: "canvas", frame: summarizeFrame(updated) } };
+              return {
+                doc: updatedDoc,
+                value: { status: "updated", units: "canvas", frame: summarizeFrame(updated) },
+              };
             });
           }),
       },
@@ -1349,7 +1738,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           "Remove a frame from the design canvas. The file it shows is not deleted. A locked frame cannot be removed. A frame the person added needs force: true, and only after they asked you to delete it; say in your reply that you removed it. Removing a group or an artboard keeps what is in it; a connector on a removed frame keeps its place there.",
         parameters: Type.Object({
           id: Type.String({ description: FRAME_REF }),
-          force: Type.Optional(Type.Boolean({ description: "Only when the person asked to delete their items." })),
+          force: Type.Optional(
+            Type.Boolean({ description: "Only when the person asked to delete their items." }),
+          ),
           confirm: Type.Optional(Type.Boolean({ description: "The same as force." })),
         }),
         execute: async (_id, raw) =>
@@ -1358,7 +1749,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             return edit((doc) => {
               const frame = frameIn(doc, p.id);
               if (frame.locked) {
-                throw new CanvasToolError("That frame is locked, so it cannot be removed. The person can unlock it first.");
+                throw new CanvasToolError(
+                  "That frame is locked, so it cannot be removed. The person can unlock it first.",
+                );
               }
               if (frame.createdBy === "person" && p.force !== true && p.confirm !== true) {
                 throw new CanvasToolError(
@@ -1377,7 +1770,11 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               return {
                 // The group it was in fits itself to the members left.
                 doc: refitGroups(syncConnectors({ ...doc, frames, comments }), [frame.groupId]),
-                value: { status: "removed", id: frame.id, ...(frame.createdBy === "person" ? { personFrame: true } : {}) },
+                value: {
+                  status: "removed",
+                  id: frame.id,
+                  ...(frame.createdBy === "person" ? { personFrame: true } : {}),
+                },
               };
             });
           }),
@@ -1392,25 +1789,39 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           "Pan and zoom the design canvas so the person sees these frames (every frame on the page when ids is empty). Frames on another page bring that page on screen; pass page alone to show a page. The canvas leaves the view alone while the person is moving around it.",
         parameters: Type.Object({
           ids: Type.Optional(Type.Array(Type.String({ description: FRAME_REF }), { maxItems: 50 })),
-          page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id to show." })),
+          page: Type.Optional(
+            Type.String({ maxLength: 128, description: "A page's name or id to show." }),
+          ),
         }),
         execute: async (_id, raw) =>
           run(async () => {
-            if (!deps.focus) return { status: "unavailable", reason: "No window is showing this canvas." };
+            if (!deps.focus)
+              return { status: "unavailable", reason: "No window is showing this canvas." };
             const p = (raw ?? {}) as { ids?: unknown; page?: unknown };
             const ids = Array.isArray(p.ids) ? [...new Set(p.ids)] : [];
             const doc = await deps.store.get(deps.chatId);
             const shown = [...new Set(ids.map((id) => frameIn(doc, id).id))];
-            const pages = new Set(shown.map((id) => doc.frames.find((entry) => entry.id === id)!.pageId));
-            if (pages.size > 1) throw new CanvasToolError("Those frames are on different pages; show one page's frames at a time.");
-            const named = p.page !== undefined && p.page !== null && p.page !== "" ? pageOf(doc, p.page) : undefined;
+            const pages = new Set(
+              shown.map((id) => doc.frames.find((entry) => entry.id === id)!.pageId),
+            );
+            if (pages.size > 1)
+              throw new CanvasToolError(
+                "Those frames are on different pages; show one page's frames at a time.",
+              );
+            const named =
+              p.page !== undefined && p.page !== null && p.page !== ""
+                ? pageOf(doc, p.page)
+                : undefined;
             if (named && pages.size === 1 && !pages.has(named)) {
-              throw new CanvasToolError("Those frames are not on that page. Leave page out to show the page they are on.");
+              throw new CanvasToolError(
+                "Those frames are not on that page. Leave page out to show the page they are on.",
+              );
             }
             const [pageId = named ?? doc.activePageId] = pages;
             const onPage = framesOnPage(doc, pageId).length;
             // Frames on another page: that page comes on screen first.
-            if (pageId !== doc.activePageId) await edit((latest) => ({ doc: showPage(latest, pageId), value: null }));
+            if (pageId !== doc.activePageId)
+              await edit((latest) => ({ doc: showPage(latest, pageId), value: null }));
             if (onPage === 0) {
               if (named) return { status: "shown", page: pageId, frames: 0 };
               throw new CanvasToolError("This page of the canvas is empty.");
@@ -1428,12 +1839,33 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         description:
           "Lay out unlocked frames of one page in a row, column or grid, and put them in a group or artboard (groupId) or take them out (groupId null). frameIds sets the order; without it, a group's members (with groupId) or the page's top-level frames are arranged in reading order. Groups fit their members afterwards; fitGroupIds refits others. x and y set the top-left corner. The frames are shown unless focus is false.",
         parameters: Type.Object({
-          page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id, when frameIds are not given." })),
-          frameIds: Type.Optional(Type.Array(Type.String({ description: FRAME_REF }), { maxItems: DESIGN_CANVAS_LIMITS.framesPerPage })),
+          page: Type.Optional(
+            Type.String({
+              maxLength: 128,
+              description: "A page's name or id, when frameIds are not given.",
+            }),
+          ),
+          frameIds: Type.Optional(
+            Type.Array(Type.String({ description: FRAME_REF }), {
+              maxItems: DESIGN_CANVAS_LIMITS.framesPerPage,
+            }),
+          ),
           layout: Type.Optional(enumOf(["row", "column", "grid"] as const)),
           columns: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
-          gap: Type.Optional(Type.Number({ minimum: 0, maximum: 2000, description: "Space between columns (default 64)." })),
-          rowGap: Type.Optional(Type.Number({ minimum: 0, maximum: 2000, description: "Space between rows (default 80)." })),
+          gap: Type.Optional(
+            Type.Number({
+              minimum: 0,
+              maximum: 2000,
+              description: "Space between columns (default 64).",
+            }),
+          ),
+          rowGap: Type.Optional(
+            Type.Number({
+              minimum: 0,
+              maximum: 2000,
+              description: "Space between rows (default 80).",
+            }),
+          ),
           align: Type.Optional(enumOf(["start", "center", "end"] as const)),
           x: Type.Optional(Type.Number()),
           y: Type.Optional(Type.Number()),
@@ -1445,23 +1877,37 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           run(async () => {
             const p = (raw ?? {}) as Record<string, unknown>;
             const layoutValue = p.layout;
-            if (layoutValue !== undefined && layoutValue !== null && layoutValue !== "row" && layoutValue !== "column" && layoutValue !== "grid") {
+            if (
+              layoutValue !== undefined &&
+              layoutValue !== null &&
+              layoutValue !== "row" &&
+              layoutValue !== "column" &&
+              layoutValue !== "grid"
+            ) {
               throw new CanvasToolError('layout must be "row", "column" or "grid".');
             }
             const align = (p.align ?? "start") as Align;
             if (align !== "start" && align !== "center" && align !== "end") {
               throw new CanvasToolError('align must be "start", "center" or "end".');
             }
-            const gap = Math.min(2000, Math.max(0, optionalNumber(p.gap, "gap") ?? DESIGN_FRAME_GAP));
+            const gap = Math.min(
+              2000,
+              Math.max(0, optionalNumber(p.gap, "gap") ?? DESIGN_FRAME_GAP),
+            );
             const rowGap = Math.min(2000, Math.max(0, optionalNumber(p.rowGap, "rowGap") ?? 80));
             const columnsValue = optionalNumber(p.columns, "columns");
             const anchorX = optionalNumber(p.x, "x");
             const anchorY = optionalNumber(p.y, "y");
             const focus = optionalBoolean(p.focus, "focus") ?? true;
-            const requested = Array.isArray(p.frameIds) ? [...new Set(p.frameIds as unknown[])] : undefined;
-            const fitIds = Array.isArray(p.fitGroupIds) ? [...new Set(p.fitGroupIds as unknown[])] : [];
+            const requested = Array.isArray(p.frameIds)
+              ? [...new Set(p.frameIds as unknown[])]
+              : undefined;
+            const fitIds = Array.isArray(p.fitGroupIds)
+              ? [...new Set(p.fitGroupIds as unknown[])]
+              : [];
             const ungroup = p.groupId === null || p.groupId === "";
-            const intoGroup = typeof p.groupId === "string" && p.groupId !== "" ? p.groupId : undefined;
+            const intoGroup =
+              typeof p.groupId === "string" && p.groupId !== "" ? p.groupId : undefined;
             const answer = await edit((doc) => {
               // The page: the frames', the group's, or the named one.
               let pageId: string;
@@ -1469,23 +1915,43 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               const skippedLocked: string[] = [];
               const containerHasLockedMember = (container: DesignFrame) =>
                 isDesignContainer(container.kind) &&
-                doc.frames.some((entry) => entry.groupId === container.id && entry.pageId === container.pageId && entry.locked);
+                doc.frames.some(
+                  (entry) =>
+                    entry.groupId === container.id &&
+                    entry.pageId === container.pageId &&
+                    entry.locked,
+                );
               if (requested && requested.length > 0) {
-                chosen = [...new Map(requested.map((id) => frameIn(doc, id)).map((frame) => [frame.id, frame] as const)).values()];
+                chosen = [
+                  ...new Map(
+                    requested
+                      .map((id) => frameIn(doc, id))
+                      .map((frame) => [frame.id, frame] as const),
+                  ).values(),
+                ];
                 const pages = new Set(chosen.map((frame) => frame.pageId));
-                if (pages.size > 1) throw new CanvasToolError("Arrange frames of one page at a time.");
+                if (pages.size > 1)
+                  throw new CanvasToolError("Arrange frames of one page at a time.");
                 pageId = chosen[0]!.pageId;
-                const locked = chosen.filter((frame) => frame.locked || containerHasLockedMember(frame));
+                const locked = chosen.filter(
+                  (frame) => frame.locked || containerHasLockedMember(frame),
+                );
                 if (locked.length > 0) {
-                  throw new CanvasToolError(`${locked.map((frame) => JSON.stringify(frame.title || frame.id)).join(", ")} ${locked.length === 1 ? "is" : "are"} locked; leave ${locked.length === 1 ? "it" : "them"} out.`);
+                  throw new CanvasToolError(
+                    `${locked.map((frame) => JSON.stringify(frame.title || frame.id)).join(", ")} ${locked.length === 1 ? "is" : "are"} locked; leave ${locked.length === 1 ? "it" : "them"} out.`,
+                  );
                 }
                 if (chosen.some((frame) => frame.kind === "connector")) {
-                  throw new CanvasToolError("Connectors follow their frames; leave them out of frameIds.");
+                  throw new CanvasToolError(
+                    "Connectors follow their frames; leave them out of frameIds.",
+                  );
                 }
               } else {
                 const group = intoGroup ? frameIn(doc, intoGroup) : undefined;
                 const firstFit =
-                  !group && (p.page === undefined || p.page === null || p.page === "") && fitIds.length > 0
+                  !group &&
+                  (p.page === undefined || p.page === null || p.page === "") &&
+                  fitIds.length > 0
                     ? frameIn(doc, fitIds[0])
                     : undefined;
                 pageId = group ? group.pageId : firstFit ? firstFit.pageId : pageOf(doc, p.page);
@@ -1498,18 +1964,28 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                         frame.kind !== "connector" &&
                         (intoGroup ? frame.groupId === intoGroup : frame.groupId === undefined),
                     );
-                for (const frame of chosen) if (frame.locked || containerHasLockedMember(frame)) skippedLocked.push(frame.id);
-                chosen = chosen.filter((frame) => !frame.locked && !containerHasLockedMember(frame));
+                for (const frame of chosen)
+                  if (frame.locked || containerHasLockedMember(frame)) skippedLocked.push(frame.id);
+                chosen = chosen.filter(
+                  (frame) => !frame.locked && !containerHasLockedMember(frame),
+                );
               }
               const target = intoGroup ? groupOf(doc, intoGroup, pageId) : undefined;
               if (target && chosen.some((frame) => isDesignContainer(frame.kind))) {
-                throw new CanvasToolError("A group or frame (artboard) cannot be put inside another.");
+                throw new CanvasToolError(
+                  "A group or frame (artboard) cannot be put inside another.",
+                );
               }
               const fitTargets = fitIds.map((id) => {
                 const group = frameIn(doc, id);
-                if (!isDesignContainer(group.kind)) throw new CanvasToolError("fitGroupIds must name groups or artboards.");
-                if (group.pageId !== pageId) throw new CanvasToolError("Arrange frames of one page at a time.");
-                if (group.locked) throw new CanvasToolError(`${JSON.stringify(group.title || group.id)} is locked.`);
+                if (!isDesignContainer(group.kind))
+                  throw new CanvasToolError("fitGroupIds must name groups or artboards.");
+                if (group.pageId !== pageId)
+                  throw new CanvasToolError("Arrange frames of one page at a time.");
+                if (group.locked)
+                  throw new CanvasToolError(
+                    `${JSON.stringify(group.title || group.id)} is locked.`,
+                  );
                 return group;
               });
               if (chosen.length === 0 && fitTargets.length === 0) {
@@ -1517,25 +1993,49 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               }
               let frames = doc.frames;
               const chosenIds = new Set(chosen.map((frame) => frame.id));
-              if (!target && !ungroup && chosen.some((frame) => frame.groupId !== undefined && chosenIds.has(frame.groupId))) {
+              if (
+                !target &&
+                !ungroup &&
+                chosen.some((frame) => frame.groupId !== undefined && chosenIds.has(frame.groupId))
+              ) {
                 throw new CanvasToolError(
                   "A group or artboard moves with its frames; pass either the group or its members in frameIds, or pass groupId: null to ungroup them.",
                 );
               }
-              const layout: Layout = (layoutValue as Layout | undefined) ?? (chosen.length > 4 ? "grid" : "row");
+              const layout: Layout =
+                (layoutValue as Layout | undefined) ?? (chosen.length > 4 ? "grid" : "row");
               // Frames named in frameIds keep the order given; otherwise they keep the order they are read in on the canvas.
               if (!(requested && requested.length > 0)) chosen = readingOrder(chosen, layout);
               if (chosen.length > 0) {
-                const container = target ? doc.frames.find((frame) => frame.id === target)! : undefined;
+                const container = target
+                  ? doc.frames.find((frame) => frame.id === target)!
+                  : undefined;
                 const anchor = {
-                  x: anchorX ?? (container ? container.x + GROUP_PADDING.left : Math.min(...chosen.map((frame) => frame.x))),
-                  y: anchorY ?? (container ? container.y + GROUP_PADDING.top : Math.min(...chosen.map((frame) => frame.y))),
+                  x:
+                    anchorX ??
+                    (container
+                      ? container.x + GROUP_PADDING.left
+                      : Math.min(...chosen.map((frame) => frame.x))),
+                  y:
+                    anchorY ??
+                    (container
+                      ? container.y + GROUP_PADDING.top
+                      : Math.min(...chosen.map((frame) => frame.y))),
                 };
-                const columns = Math.min(50, Math.max(1, Math.round(columnsValue ?? Math.ceil(Math.sqrt(chosen.length)))));
+                const columns = Math.min(
+                  50,
+                  Math.max(1, Math.round(columnsValue ?? Math.ceil(Math.sqrt(chosen.length)))),
+                );
                 const spots = layoutBoxes(chosen, { layout, columns, gap, rowGap, align, anchor });
                 chosen.forEach((frame, index) => {
                   const spot = spots[index]!;
-                  frames = translateFrames(frames, frame.id, clampCoord(spot.x) - frame.x, clampCoord(spot.y) - frame.y, chosenIds);
+                  frames = translateFrames(
+                    frames,
+                    frame.id,
+                    clampCoord(spot.x) - frame.x,
+                    clampCoord(spot.y) - frame.y,
+                    chosenIds,
+                  );
                 });
                 if (target || ungroup) {
                   frames = frames.map((entry) => {
@@ -1558,9 +2058,14 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               for (const group of fitTargets) next = fitGroupToMembers(next, group.id);
               const fitted = [...new Set([...affected, ...fitTargets.map((group) => group.id)])]
                 .map((id) => next.frames.find((entry) => entry.id === id))
-                .filter((entry): entry is DesignFrame => entry !== undefined && (entry.kind === "group" || fitIds.includes(entry.id)));
+                .filter(
+                  (entry): entry is DesignFrame =>
+                    entry !== undefined && (entry.kind === "group" || fitIds.includes(entry.id)),
+                );
               if (focus && pageId !== next.activePageId) next = showPage(next, pageId);
-              const arranged = chosen.map((frame) => next.frames.find((entry) => entry.id === frame.id)!);
+              const arranged = chosen.map(
+                (frame) => next.frames.find((entry) => entry.id === frame.id)!,
+              );
               return {
                 doc: next,
                 value: {
@@ -1568,14 +2073,33 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   units: "canvas",
                   page: pageId,
                   ...(chosen.length > 0 ? { layout } : {}),
-                  frames: arranged.map((frame) => ({ id: frame.id, title: frame.title, box: { x: frame.x, y: frame.y, w: frame.w, h: frame.h }, ...(frame.groupId ? { groupId: frame.groupId } : {}) })),
-                  ...(fitted.length > 0 ? { groups: fitted.map((frame) => ({ id: frame.id, title: frame.title, box: { x: frame.x, y: frame.y, w: frame.w, h: frame.h } })) } : {}),
+                  frames: arranged.map((frame) => ({
+                    id: frame.id,
+                    title: frame.title,
+                    box: { x: frame.x, y: frame.y, w: frame.w, h: frame.h },
+                    ...(frame.groupId ? { groupId: frame.groupId } : {}),
+                  })),
+                  ...(fitted.length > 0
+                    ? {
+                        groups: fitted.map((frame) => ({
+                          id: frame.id,
+                          title: frame.title,
+                          box: { x: frame.x, y: frame.y, w: frame.w, h: frame.h },
+                        })),
+                      }
+                    : {}),
                   ...(skippedLocked.length > 0 ? { skippedLocked } : {}),
-                  focusIds: [...arranged.map((frame) => frame.id), ...fitted.map((frame) => frame.id)],
+                  focusIds: [
+                    ...arranged.map((frame) => frame.id),
+                    ...fitted.map((frame) => frame.id),
+                  ],
                 },
               };
             });
-            const { focusIds, ...value } = answer as { focusIds: string[] } & Record<string, unknown>;
+            const { focusIds, ...value } = answer as { focusIds: string[] } & Record<
+              string,
+              unknown
+            >;
             if (focus && deps.focus && focusIds.length > 0) deps.focus(focusIds);
             return value;
           }),
@@ -1611,10 +2135,14 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               let pageId: string;
               switch (action) {
                 case "add": {
-                  if (!canAddPage(doc)) throw new CanvasToolError(`The canvas has its most pages (${DESIGN_CANVAS_LIMITS.pages}).`);
+                  if (!canAddPage(doc))
+                    throw new CanvasToolError(
+                      `The canvas has its most pages (${DESIGN_CANVAS_LIMITS.pages}).`,
+                    );
                   pageId = newId();
                   next = addPage(doc, pageId, name);
-                  if (optionalBoolean(p.show, "show") === false) next = { ...next, activePageId: doc.activePageId };
+                  if (optionalBoolean(p.show, "show") === false)
+                    next = { ...next, activePageId: doc.activePageId };
                   break;
                 }
                 case "rename": {
@@ -1627,18 +2155,30 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 case "duplicate": {
                   pageNeeded();
                   const source = pageOf(doc, p.page);
-                  if (!canAddPage(doc)) throw new CanvasToolError(`The canvas has its most pages (${DESIGN_CANVAS_LIMITS.pages}).`);
+                  if (!canAddPage(doc))
+                    throw new CanvasToolError(
+                      `The canvas has its most pages (${DESIGN_CANVAS_LIMITS.pages}).`,
+                    );
                   pageId = newId();
                   next = duplicatePage(doc, source, pageId, newId);
-                  if (next === doc) throw new CanvasToolError(`A copy would pass the canvas's ${DESIGN_CANVAS_LIMITS.frames} frames.`);
+                  if (next === doc)
+                    throw new CanvasToolError(
+                      `A copy would pass the canvas's ${DESIGN_CANVAS_LIMITS.frames} frames.`,
+                    );
                   if (name) next = renamePage(next, pageId, name);
                   break;
                 }
                 case "delete": {
                   pageNeeded();
                   pageId = pageOf(doc, p.page);
-                  if (doc.pages.length <= 1) throw new CanvasToolError("The canvas keeps at least one page, so its only page cannot be deleted.");
-                  const kept = doc.frames.filter((frame) => frame.pageId === pageId && (frame.createdBy === "person" || frame.locked));
+                  if (doc.pages.length <= 1)
+                    throw new CanvasToolError(
+                      "The canvas keeps at least one page, so its only page cannot be deleted.",
+                    );
+                  const kept = doc.frames.filter(
+                    (frame) =>
+                      frame.pageId === pageId && (frame.createdBy === "person" || frame.locked),
+                  );
                   if (kept.length > 0 && p.force !== true) {
                     throw new CanvasToolError(
                       `That page holds ${kept.length} ${kept.length === 1 ? "frame" : "frames"} the person added or locked. Delete it only if they asked, and then pass force: true.`,
@@ -1650,7 +2190,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 case "move": {
                   pageNeeded();
                   pageId = pageOf(doc, p.page);
-                  if (p.step !== -1 && p.step !== 1) throw new CanvasToolError("move needs step -1 (earlier) or 1 (later).");
+                  if (p.step !== -1 && p.step !== 1)
+                    throw new CanvasToolError("move needs step -1 (earlier) or 1 (later).");
                   next = movePage(doc, pageId, p.step);
                   break;
                 }
@@ -1661,14 +2202,23 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   break;
                 }
                 default:
-                  throw new CanvasToolError('action must be "add", "rename", "duplicate", "delete", "move" or "show".');
+                  throw new CanvasToolError(
+                    'action must be "add", "rename", "duplicate", "delete", "move" or "show".',
+                  );
               }
               return {
                 doc: next,
                 value: {
                   status: action === "delete" ? "deleted" : "done",
                   action,
-                  ...(action !== "delete" ? { page: { id: pageId, name: next.pages.find((entry) => entry.id === pageId)?.name } } : { page: { id: pageId } }),
+                  ...(action !== "delete"
+                    ? {
+                        page: {
+                          id: pageId,
+                          name: next.pages.find((entry) => entry.id === pageId)?.name,
+                        },
+                      }
+                    : { page: { id: pageId } }),
                   pages: pagesAnswer(next),
                 },
               };
@@ -1685,13 +2235,28 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           "Draw one design page offline at its design width, with its frame's look and tweaks, and report script errors (file and line), files that did not load, sideways overflow and its cause, the page's height, the tweaks it reads and tweak names nothing reads. Comes with a picture when you can see images (top scrolls down a tall page). Name the page by frameId or path. Call it after a big change, fix what it finds once, and say what you fixed.",
         parameters: Type.Object({
           frameId: Type.Optional(Type.String({ maxLength: 128 })),
-          path: Type.Optional(Type.String({ maxLength: 1024, description: "A workspace-relative page path, such as design/home.html." })),
-          top: Type.Optional(Type.Number({ minimum: 0, description: "Where the picture starts, in CSS pixels from the top of the page." })),
+          path: Type.Optional(
+            Type.String({
+              maxLength: 1024,
+              description: "A workspace-relative page path, such as design/home.html.",
+            }),
+          ),
+          top: Type.Optional(
+            Type.Number({
+              minimum: 0,
+              description: "Where the picture starts, in CSS pixels from the top of the page.",
+            }),
+          ),
           picture: Type.Optional(Type.Boolean({ description: "false for the text report only." })),
         }),
         execute: async (_id, raw, signal) =>
           run(async () => {
-            const p = (raw ?? {}) as { frameId?: unknown; path?: unknown; top?: unknown; picture?: unknown };
+            const p = (raw ?? {}) as {
+              frameId?: unknown;
+              path?: unknown;
+              top?: unknown;
+              picture?: unknown;
+            };
             if (!deps.inspect) throw new CanvasToolError("Pages can't be inspected here.");
             const doc = await deps.store.get(deps.chatId);
             let frame: DesignFrame | undefined;
@@ -1700,11 +2265,15 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             } else if (typeof p.path === "string" && p.path.trim()) {
               const wanted = designPagePath(p.path);
               frame = frameShowingDesignPage(doc, wanted);
-              if (!frame) throw new CanvasToolError(`${wanted} is not on the canvas. Place it with canvas_place_frame first, or name a frameId.`);
+              if (!frame)
+                throw new CanvasToolError(
+                  `${wanted} is not on the canvas. Place it with canvas_place_frame first, or name a frameId.`,
+                );
             } else {
               throw new CanvasToolError("Name the page to inspect by frameId or path.");
             }
-            if (frame.kind !== "file" || !frame.path) throw new CanvasToolError("Only a page (a file frame) can be inspected.");
+            if (frame.kind !== "file" || !frame.path)
+              throw new CanvasToolError("Only a page (a file frame) can be inspected.");
             const top = optionalNumber(p.top, "top") ?? 0;
             const picture = optionalBoolean(p.picture, "picture") !== false;
             let answer: { text: string; image?: { data: string; mimeType: string } };
@@ -1712,7 +2281,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               answer = await deps.inspect(frame, { top: Math.max(0, top), picture }, signal);
             } catch (error) {
               if (signal?.aborted) throw error;
-              throw new CanvasToolError(`The page could not be drawn: ${error instanceof Error ? error.message : "it failed"}`);
+              throw new CanvasToolError(
+                `The page could not be drawn: ${error instanceof Error ? error.message : "it failed"}`,
+              );
             }
             const text = `Frame ${frame.id}. ${answer.text}`;
             return answer.image ? new WithImage(text, answer.image) : text;
@@ -1734,14 +2305,23 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         execute: async (_id, raw) =>
           run(async () => {
             const p = raw as Record<string, unknown>;
-            const reply = p.reply === undefined || p.reply === null ? undefined : text(p.reply, "reply", DESIGN_CANVAS_LIMITS.replyChars);
+            const reply =
+              p.reply === undefined || p.reply === null
+                ? undefined
+                : text(p.reply, "reply", DESIGN_CANVAS_LIMITS.replyChars);
             const resolve = optionalBoolean(p.resolve, "resolve") === true;
-            if (reply === undefined && !resolve) throw new CanvasToolError("Pass a reply, resolve: true, or both.");
+            if (reply === undefined && !resolve)
+              throw new CanvasToolError("Pass a reply, resolve: true, or both.");
             const at = (deps.now?.() ?? new Date()).toISOString();
             return edit((doc) => {
-              const comment = typeof p.commentId === "string" ? doc.comments.find((entry) => entry.id === p.commentId) : undefined;
+              const comment =
+                typeof p.commentId === "string"
+                  ? doc.comments.find((entry) => entry.id === p.commentId)
+                  : undefined;
               if (!comment) {
-                throw new CanvasToolError("No comment on this canvas has that id. Call canvas_read for the page's open comments.");
+                throw new CanvasToolError(
+                  "No comment on this canvas has that id. Call canvas_read for the page's open comments.",
+                );
               }
               if (comment.state === "open") {
                 // A draft may still be in the person's tray; answering it would take it out before they send it.
@@ -1756,7 +2336,12 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               const state = next.comments.find((entry) => entry.id === comment.id)!.state;
               return {
                 doc: next,
-                value: { status: "ok", commentId: comment.id, state, ...(reply !== undefined ? { replied: true } : {}) },
+                value: {
+                  status: "ok",
+                  commentId: comment.id,
+                  state,
+                  ...(reply !== undefined ? { replied: true } : {}),
+                },
               };
             });
           }),
@@ -1767,8 +2352,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       {
         name: "canvas_duplicate",
         label: "Duplicate on design canvas",
-        description:
-          `Copy any frame beside it (right unless side says). A group or artboard comes with its members and the arrows between them. With variants, copy a page once per variant (up to ${DESIGN_VARIANTS_PER_CALL}) into one new group named title, beside the original (a page in an unlocked group: into that group): each variant has a label and sets dark, designWidth and/or tweaks.`,
+        description: `Copy any frame beside it (right unless side says). A group or artboard comes with its members and the arrows between them. With variants, copy a page once per variant (up to ${DESIGN_VARIANTS_PER_CALL}) into one new group named title, beside the original (a page in an unlocked group: into that group): each variant has a label and sets dark, designWidth and/or tweaks.`,
         parameters: Type.Object({
           id: Type.String({ description: FRAME_REF }),
           side: Type.Optional(BesideSchema),
@@ -1778,7 +2362,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               Type.Object({
                 label: Type.String({ maxLength: VARIANT_LABEL_CHARS }),
                 dark: Type.Optional(Type.Boolean()),
-                designWidth: Type.Optional(Type.Union(DESIGN_WIDTHS.map((width) => Type.Literal(width)))),
+                designWidth: Type.Optional(
+                  Type.Union(DESIGN_WIDTHS.map((width) => Type.Literal(width))),
+                ),
                 tweaks: Type.Optional(TweaksSchema),
               }),
               { minItems: 1, maxItems: DESIGN_VARIANTS_PER_CALL },
@@ -1790,60 +2376,97 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const p = raw as Record<string, unknown>;
             const side = besideOf(p.side, "side");
             const variants = variantsOf(p.variants);
-            const groupTitle = p.title === undefined || p.title === null ? undefined : text(p.title, "title", DESIGN_CANVAS_LIMITS.titleChars);
+            const groupTitle =
+              p.title === undefined || p.title === null
+                ? undefined
+                : text(p.title, "title", DESIGN_CANVAS_LIMITS.titleChars);
             // A tweak a variant sets must be one the page declares.
             let declared: { path: string; names: readonly string[] | null } | undefined;
             if (variants?.some((variant) => hasTweakValues(variant.tweaks))) {
               const current = designFrameByIdOrPath(await deps.store.get(deps.chatId), p.id);
               if (current?.kind === "file" && current.path) {
-                declared = { path: current.path, names: await designPageTweakNames(deps.workspaceRoot, current.path) };
+                declared = {
+                  path: current.path,
+                  names: await designPageTweakNames(deps.workspaceRoot, current.path),
+                };
               }
             }
             return edit<Record<string, unknown>>((doc) => {
               const source = frameIn(doc, p.id);
               if (isDesignLine(source.kind)) {
-                throw new CanvasToolError("An arrow, line or drawing is copied with the frames it joins: duplicate the group they are in.");
+                throw new CanvasToolError(
+                  "An arrow, line or drawing is copied with the frames it joins: duplicate the group they are in.",
+                );
               }
               const full = () =>
                 new CanvasToolError(
                   `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
                 );
               if (!variants && groupTitle !== undefined) {
-                throw new CanvasToolError("title names the group variants go in; pass variants, or leave title out.");
+                throw new CanvasToolError(
+                  "title names the group variants go in; pass variants, or leave title out.",
+                );
               }
               if (!variants) {
                 // A group or artboard brings its members, and the arrows that join two of them.
-                const members = isDesignContainer(source.kind) ? doc.frames.filter((frame) => frame.groupId === source.id) : [];
+                const members = isDesignContainer(source.kind)
+                  ? doc.frames.filter((frame) => frame.groupId === source.id)
+                  : [];
                 const inside = new Set(members.map((frame) => frame.id));
                 const joining = doc.frames.filter(
                   (frame) =>
                     frame.kind === "connector" &&
                     !inside.has(frame.id) &&
-                    frame.ends?.every((end) => end.frameId !== undefined && inside.has(end.frameId)),
+                    frame.ends?.every(
+                      (end) => end.frameId !== undefined && inside.has(end.frameId),
+                    ),
                 );
                 // A frame copied alone joins its group (not a locked one), which then holds it.
                 const container =
                   !isDesignContainer(source.kind) && source.groupId !== undefined
                     ? doc.frames.find((frame) => frame.id === source.groupId && !frame.locked)
                     : undefined;
-                let at = besideBox(source, source, side, blockersOn(doc, source.pageId, new Set([source.id, container?.id, ...inside])));
+                let at = besideBox(
+                  source,
+                  source,
+                  side,
+                  blockersOn(doc, source.pageId, new Set([source.id, container?.id, ...inside])),
+                );
                 // An artboard keeps the width the person drew: a copy that would run past it starts a row below.
-                if (container?.kind === "frame" && at.x + source.w > container.x + container.w - GROUP_PADDING.right) {
+                if (
+                  container?.kind === "frame" &&
+                  at.x + source.w > container.x + container.w - GROUP_PADDING.right
+                ) {
                   const held = doc.frames.filter((frame) => frame.groupId === container.id);
-                  at = { x: container.x + GROUP_PADDING.left, y: Math.max(...held.map((frame) => frame.y + frame.h)) + DESIGN_FRAME_GAP };
+                  at = {
+                    x: container.x + GROUP_PADDING.left,
+                    y: Math.max(...held.map((frame) => frame.y + frame.h)) + DESIGN_FRAME_GAP,
+                  };
                 }
-                const copied = copyFrames(doc, [source.id, ...joining.map((frame) => frame.id)], newId, {
-                  dx: at.x - source.x,
-                  dy: at.y - source.y,
-                  createdBy: "aiden",
-                  keepGroupLock: false,
-                });
+                const copied = copyFrames(
+                  doc,
+                  [source.id, ...joining.map((frame) => frame.id)],
+                  newId,
+                  {
+                    dx: at.x - source.x,
+                    dy: at.y - source.y,
+                    createdBy: "aiden",
+                    keepGroupLock: false,
+                  },
+                );
                 if (!copied) throw full();
                 const copyId = copied.copies.get(source.id)!;
                 let next = refitGroups(copied.doc, [container?.id]);
                 if (container?.kind === "frame") {
                   const copy = next.frames.find((frame) => frame.id === copyId)!;
-                  next = { ...next, frames: next.frames.map((frame) => (frame.id === container.id ? { ...frame, h: growGroupToHold(frame, copy).h } : frame)) };
+                  next = {
+                    ...next,
+                    frames: next.frames.map((frame) =>
+                      frame.id === container.id
+                        ? { ...frame, h: growGroupToHold(frame, copy).h }
+                        : frame,
+                    ),
+                  };
                 }
                 const frame = next.frames.find((entry) => entry.id === copyId)!;
                 return {
@@ -1858,34 +2481,57 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 };
               }
               if (!isDesignPrintable(source.kind)) {
-                throw new CanvasToolError("Variants are of a page (kind file), or of an artifact for a dark look. Duplicate other frames without variants.");
+                throw new CanvasToolError(
+                  "Variants are of a page (kind file), or of an artifact for a dark look. Duplicate other frames without variants.",
+                );
               }
               const keepSource = !source.locked && source.groupId === undefined;
               // Groups do not nest, so the variants of a page in a group (or
               // artboard) that is not locked join it beside the page instead of
               // getting a group of their own.
               const container =
-                source.groupId !== undefined ? doc.frames.find((frame) => frame.id === source.groupId && !frame.locked) : undefined;
+                source.groupId !== undefined
+                  ? doc.frames.find((frame) => frame.id === source.groupId && !frame.locked)
+                  : undefined;
               const added = variants.length + (container ? 0 : 1);
               if (
                 doc.frames.length + added > DESIGN_CANVAS_LIMITS.frames ||
-                doc.frames.filter((frame) => frame.pageId === source.pageId).length + added > DESIGN_CANVAS_LIMITS.framesPerPage
+                doc.frames.filter((frame) => frame.pageId === source.pageId).length + added >
+                  DESIGN_CANVAS_LIMITS.framesPerPage
               ) {
                 throw full();
               }
               const sourceWidth = source.designWidth ?? DESIGN_DEFAULT_FILE_WIDTH;
               // A variant has its own look, so the versions the person saved of the original's stay with it.
-              const { groupId: _groupId, locked: _locked, tweakVersions: _versions, ...base } = source;
+              const {
+                groupId: _groupId,
+                locked: _locked,
+                tweakVersions: _versions,
+                ...base
+              } = source;
               const copies = variants.map((variant): DesignFrame => {
                 const width = designWidth(variant.designWidth);
-                if (width !== undefined && source.kind !== "file") throw new CanvasToolError("Only a page (kind file) has a design width.");
-                const style = stylePatch(source.kind, undefined, variant, source.tweaks, declared?.path === source.path ? declared : undefined);
-                const box = width !== undefined ? boxForWidth(source, sourceWidth, width) : { w: source.w, h: source.h };
+                if (width !== undefined && source.kind !== "file")
+                  throw new CanvasToolError("Only a page (kind file) has a design width.");
+                const style = stylePatch(
+                  source.kind,
+                  undefined,
+                  variant,
+                  source.tweaks,
+                  declared?.path === source.path ? declared : undefined,
+                );
+                const box =
+                  width !== undefined
+                    ? boxForWidth(source, sourceWidth, width)
+                    : { w: source.w, h: source.h };
                 return applyStyle(
                   {
                     ...base,
                     id: newId(),
-                    title: `${source.title} · ${variant.label}`.slice(0, DESIGN_CANVAS_LIMITS.titleChars),
+                    title: `${source.title} · ${variant.label}`.slice(
+                      0,
+                      DESIGN_CANVAS_LIMITS.titleChars,
+                    ),
                     ...(width !== undefined ? { designWidth: width } : {}),
                     ...box,
                     createdBy: "aiden",
@@ -1895,9 +2541,12 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               });
               // The copies in a row, top-aligned. Beside an original that stays out of
               // the group, the row leaves room for the group's own padding.
-              const rowW = copies.reduce((sum, copy) => sum + copy.w, 0) + DESIGN_FRAME_GAP * (copies.length - 1);
+              const rowW =
+                copies.reduce((sum, copy) => sum + copy.w, 0) +
+                DESIGN_FRAME_GAP * (copies.length - 1);
               const rowH = Math.max(...copies.map((copy) => copy.h));
-              const pad = keepSource || container ? { left: 0, top: 0, right: 0, bottom: 0 } : GROUP_PADDING;
+              const pad =
+                keepSource || container ? { left: 0, top: 0, right: 0, bottom: 0 } : GROUP_PADDING;
               let block = besideBox(
                 source,
                 { w: rowW + pad.left + pad.right, h: rowH + pad.top + pad.bottom },
@@ -1906,9 +2555,15 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               );
               if (container) {
                 // An artboard keeps the width the person drew: a row that would run past it starts below.
-                if (container.kind === "frame" && block.x + rowW > container.x + container.w - GROUP_PADDING.right) {
+                if (
+                  container.kind === "frame" &&
+                  block.x + rowW > container.x + container.w - GROUP_PADDING.right
+                ) {
                   const held = doc.frames.filter((frame) => frame.groupId === container.id);
-                  block = { x: container.x + GROUP_PADDING.left, y: Math.max(...held.map((frame) => frame.y + frame.h)) + DESIGN_FRAME_GAP };
+                  block = {
+                    x: container.x + GROUP_PADDING.left,
+                    y: Math.max(...held.map((frame) => frame.y + frame.h)) + DESIGN_FRAME_GAP,
+                  };
                 }
                 let cursor = block.x;
                 for (const copy of copies) {
@@ -1917,10 +2572,19 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   copy.groupId = container.id;
                   cursor += copy.w + DESIGN_FRAME_GAP;
                 }
-                let next: DesignCanvas = refitGroups({ ...doc, frames: [...doc.frames, ...copies] }, [container.id]);
+                let next: DesignCanvas = refitGroups(
+                  { ...doc, frames: [...doc.frames, ...copies] },
+                  [container.id],
+                );
                 if (container.kind === "frame") {
-                  const grown = copies.reduce((board, copy) => growGroupToHold(board, copy), container);
-                  next = { ...next, frames: next.frames.map((frame) => (frame.id === container.id ? grown : frame)) };
+                  const grown = copies.reduce(
+                    (board, copy) => growGroupToHold(board, copy),
+                    container,
+                  );
+                  next = {
+                    ...next,
+                    frames: next.frames.map((frame) => (frame.id === container.id ? grown : frame)),
+                  };
                 }
                 const joined = next.frames.find((frame) => frame.id === container.id)!;
                 return {
@@ -1930,7 +2594,11 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                     units: "canvas",
                     group: summarizeFrame(joined),
                     note: `The variants joined ${JSON.stringify(container.title || container.id)}, the ${container.kind === "frame" ? "artboard" : "group"} the page is in${groupTitle !== undefined ? ", so title was not used" : ""}.`,
-                    frames: copies.map((copy) => ({ id: copy.id, title: copy.title, box: { x: copy.x, y: copy.y, w: copy.w, h: copy.h } })),
+                    frames: copies.map((copy) => ({
+                      id: copy.id,
+                      title: copy.title,
+                      box: { x: copy.x, y: copy.y, w: copy.w, h: copy.h },
+                    })),
                   },
                 };
               }
@@ -1944,7 +2612,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               const group: DesignFrame = {
                 id: groupId,
                 kind: "group",
-                title: groupTitle ?? `${source.title} variants`.slice(0, DESIGN_CANVAS_LIMITS.titleChars),
+                title:
+                  groupTitle ??
+                  `${source.title} variants`.slice(0, DESIGN_CANVAS_LIMITS.titleChars),
                 pageId: source.pageId,
                 x: block.x,
                 y: block.y,
@@ -1953,7 +2623,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 createdBy: "aiden",
               };
               const frames = [
-                ...doc.frames.map((frame) => (keepSource && frame.id === source.id ? { ...frame, groupId } : frame)),
+                ...doc.frames.map((frame) =>
+                  keepSource && frame.id === source.id ? { ...frame, groupId } : frame,
+                ),
                 group,
                 ...copies.map((copy) => ({ ...copy, groupId })),
               ];
@@ -1967,7 +2639,11 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   group: summarizeFrame(placedGroup),
                   frames: [
                     ...(keepSource ? [{ id: source.id, title: source.title, original: true }] : []),
-                    ...copies.map((copy) => ({ id: copy.id, title: copy.title, box: { x: copy.x, y: copy.y, w: copy.w, h: copy.h } })),
+                    ...copies.map((copy) => ({
+                      id: copy.id,
+                      title: copy.title,
+                      box: { x: copy.x, y: copy.y, w: copy.w, h: copy.h },
+                    })),
                   ],
                 },
               };
@@ -1985,9 +2661,21 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
           x: Type.Optional(Type.Number()),
           y: Type.Optional(Type.Number()),
-          nextTo: Type.Optional(Type.Object({ frameId: Type.String({ description: FRAME_REF }), side: Type.Optional(BesideSchema) })),
-          groupId: Type.Optional(Type.String({ description: "An existing group or artboard to draw in." })),
-          groupTitle: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.titleChars, description: "Put the drawing in a new group with this title." })),
+          nextTo: Type.Optional(
+            Type.Object({
+              frameId: Type.String({ description: FRAME_REF }),
+              side: Type.Optional(BesideSchema),
+            }),
+          ),
+          groupId: Type.Optional(
+            Type.String({ description: "An existing group or artboard to draw in." }),
+          ),
+          groupTitle: Type.Optional(
+            Type.String({
+              maxLength: DESIGN_CANVAS_LIMITS.titleChars,
+              description: "Put the drawing in a new group with this title.",
+            }),
+          ),
           items: Type.Array(
             Type.Object({
               ref: Type.Optional(Type.String({ maxLength: BUILD_REF_CHARS })),
@@ -2012,91 +2700,172 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         execute: async (_id, raw) =>
           run(async () => {
             const p = raw as Record<string, unknown>;
-            if (!Array.isArray(p.items) || p.items.length === 0) throw new CanvasToolError("items must list one or more boxes or connectors.");
+            if (!Array.isArray(p.items) || p.items.length === 0)
+              throw new CanvasToolError("items must list one or more boxes or connectors.");
             if (p.items.length > DESIGN_BUILD_ITEMS) {
-              throw new CanvasToolError(`One call draws at most ${DESIGN_BUILD_ITEMS} items; draw the rest with another call.`);
+              throw new CanvasToolError(
+                `One call draws at most ${DESIGN_BUILD_ITEMS} items; draw the rest with another call.`,
+              );
             }
             const x = optionalNumber(p.x, "x");
             const y = optionalNumber(p.y, "y");
-            if ((x === undefined) !== (y === undefined)) throw new CanvasToolError("Pass both x and y, or neither.");
-            const nextTo = p.nextTo === undefined || p.nextTo === null ? undefined : (p.nextTo as Record<string, unknown>);
-            if (nextTo && (typeof nextTo !== "object" || Array.isArray(nextTo))) throw new CanvasToolError("nextTo must be { frameId, side }.");
-            if (nextTo && x !== undefined) throw new CanvasToolError("Pass nextTo or x and y, not both.");
+            if ((x === undefined) !== (y === undefined))
+              throw new CanvasToolError("Pass both x and y, or neither.");
+            const nextTo =
+              p.nextTo === undefined || p.nextTo === null
+                ? undefined
+                : (p.nextTo as Record<string, unknown>);
+            if (nextTo && (typeof nextTo !== "object" || Array.isArray(nextTo)))
+              throw new CanvasToolError("nextTo must be { frameId, side }.");
+            if (nextTo && x !== undefined)
+              throw new CanvasToolError("Pass nextTo or x and y, not both.");
             const side = nextTo ? besideOf(nextTo.side, "nextTo.side") : undefined;
             const groupTitle =
-              p.groupTitle === undefined || p.groupTitle === null ? undefined : text(p.groupTitle, "groupTitle", DESIGN_CANVAS_LIMITS.titleChars);
-            if (groupTitle !== undefined && p.groupId !== undefined && p.groupId !== null && p.groupId !== "") {
-              throw new CanvasToolError("Pass groupId to draw in an existing group or groupTitle for a new one, not both.");
+              p.groupTitle === undefined || p.groupTitle === null
+                ? undefined
+                : text(p.groupTitle, "groupTitle", DESIGN_CANVAS_LIMITS.titleChars);
+            if (
+              groupTitle !== undefined &&
+              p.groupId !== undefined &&
+              p.groupId !== null &&
+              p.groupId !== ""
+            ) {
+              throw new CanvasToolError(
+                "Pass groupId to draw in an existing group or groupTitle for a new one, not both.",
+              );
             }
 
             // Every item checked and laid out relative to the drawing before anything changes.
-            type Box = { ref?: string; kind: PlacedKind; title: string; look: DrawnLook; x: number; y: number; w: number; h: number };
-            type Line = { ref?: string; title?: string; look: DrawnLook; from: Record<string, unknown>; to: Record<string, unknown>; arrow: DesignFrame["arrow"]; index: number };
+            type Box = {
+              ref?: string;
+              kind: PlacedKind;
+              title: string;
+              look: DrawnLook;
+              x: number;
+              y: number;
+              w: number;
+              h: number;
+            };
+            type Line = {
+              ref?: string;
+              title?: string;
+              look: DrawnLook;
+              from: Record<string, unknown>;
+              to: Record<string, unknown>;
+              arrow: DesignFrame["arrow"];
+              index: number;
+            };
             const boxes: Box[] = [];
             const lines: Line[] = [];
             const refs = new Set<string>();
             let flow: { x: number; y: number } | undefined;
             p.items.forEach((entry: unknown, index) => {
               const field = `items[${index}].`;
-              if (typeof entry !== "object" || entry === null || Array.isArray(entry)) throw new CanvasToolError(`items[${index}] must be an object.`);
+              if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+                throw new CanvasToolError(`items[${index}] must be an object.`);
               const item = entry as Record<string, unknown>;
               const kind = item.kind;
               if (kind !== "text" && kind !== "shape" && kind !== "note" && kind !== "connector") {
-                throw new CanvasToolError(`${field}kind must be "text", "shape", "note" or "connector".`);
+                throw new CanvasToolError(
+                  `${field}kind must be "text", "shape", "note" or "connector".`,
+                );
               }
               let ref: string | undefined;
               if (item.ref !== undefined && item.ref !== null && item.ref !== "") {
                 ref = text(item.ref, `${field}ref`, BUILD_REF_CHARS).trim();
-                if (refs.has(ref)) throw new CanvasToolError(`${field}ref ${JSON.stringify(ref)} is used twice; give each item its own.`);
+                if (refs.has(ref))
+                  throw new CanvasToolError(
+                    `${field}ref ${JSON.stringify(ref)} is used twice; give each item its own.`,
+                  );
                 refs.add(ref);
               }
               const look = drawnLook(kind, item, field);
-              const title = item.title === undefined || item.title === null || item.title === "" ? undefined : text(item.title, `${field}title`, DESIGN_CANVAS_LIMITS.titleChars);
+              const title =
+                item.title === undefined || item.title === null || item.title === ""
+                  ? undefined
+                  : text(item.title, `${field}title`, DESIGN_CANVAS_LIMITS.titleChars);
               if (kind === "connector") {
                 for (const end of ["from", "to"] as const) {
-                  if (typeof item[end] !== "object" || item[end] === null) throw new CanvasToolError(`${field}${end} must be { ref }, { frameId } or { x, y }.`);
+                  if (typeof item[end] !== "object" || item[end] === null)
+                    throw new CanvasToolError(
+                      `${field}${end} must be { ref }, { frameId } or { x, y }.`,
+                    );
                 }
-                lines.push({ ref, title, look, from: item.from as Record<string, unknown>, to: item.to as Record<string, unknown>, arrow: arrowOf(item.arrow), index });
+                lines.push({
+                  ref,
+                  title,
+                  look,
+                  from: item.from as Record<string, unknown>,
+                  to: item.to as Record<string, unknown>,
+                  arrow: arrowOf(item.arrow),
+                  index,
+                });
                 return;
               }
               const box = DEFAULT_BOX[kind];
               const w = clampSize(optionalNumber(item.w, `${field}w`) ?? box.w, kind);
-              const h = clampSize(optionalNumber(item.h, `${field}h`) ?? drawnHeight(kind, look, box.h), kind);
+              const h = clampSize(
+                optionalNumber(item.h, `${field}h`) ?? drawnHeight(kind, look, box.h),
+                kind,
+              );
               const ix = optionalNumber(item.x, `${field}x`);
               const iy = optionalNumber(item.y, `${field}y`);
-              if ((ix === undefined) !== (iy === undefined)) throw new CanvasToolError(`items[${index}]: pass both x and y, or neither.`);
-              const at = ix !== undefined && iy !== undefined ? { x: ix, y: iy } : (flow ?? { x: 0, y: 0 });
+              if ((ix === undefined) !== (iy === undefined))
+                throw new CanvasToolError(`items[${index}]: pass both x and y, or neither.`);
+              const at =
+                ix !== undefined && iy !== undefined ? { x: ix, y: iy } : (flow ?? { x: 0, y: 0 });
               flow = { x: at.x + w + DESIGN_FRAME_GAP, y: at.y };
               const words = look.words?.trim();
-              boxes.push({ ref, kind, title: title ?? (words ? words.split("\n")[0]!.slice(0, DESIGN_CANVAS_LIMITS.titleChars) : kind), look, x: at.x, y: at.y, w, h });
+              boxes.push({
+                ref,
+                kind,
+                title:
+                  title ??
+                  (words ? words.split("\n")[0]!.slice(0, DESIGN_CANVAS_LIMITS.titleChars) : kind),
+                look,
+                x: at.x,
+                y: at.y,
+                w,
+                h,
+              });
             });
             // A connector's ends that name a ref must name a box of this call,
             // spelled the way the box's own ref is once its spaces are trimmed.
-            const endRef = (end: Record<string, unknown>) => (end.ref === undefined ? undefined : String(end.ref).trim());
+            const endRef = (end: Record<string, unknown>) =>
+              end.ref === undefined ? undefined : String(end.ref).trim();
             const boxRefs = new Set(boxes.flatMap((box) => (box.ref ? [box.ref] : [])));
             for (const line of lines) {
               for (const end of [line.from, line.to]) {
                 if (end.ref !== undefined && !boxRefs.has(endRef(end)!)) {
-                  throw new CanvasToolError(`items[${line.index}] names ref ${JSON.stringify(end.ref)}, which is no box of this call.`);
+                  throw new CanvasToolError(
+                    `items[${line.index}] names ref ${JSON.stringify(end.ref)}, which is no box of this call.`,
+                  );
                 }
               }
             }
 
             return edit<Record<string, unknown>>((doc) => {
               const anchor = nextTo ? besideFrame(doc, nextTo.frameId) : undefined;
-              const pageId = anchor && (p.page === undefined || p.page === null || p.page === "") ? anchor.pageId : pageOf(doc, p.page);
-              if (anchor && anchor.pageId !== pageId) throw new CanvasToolError("nextTo must name a frame on the page it goes on.");
+              const pageId =
+                anchor && (p.page === undefined || p.page === null || p.page === "")
+                  ? anchor.pageId
+                  : pageOf(doc, p.page);
+              if (anchor && anchor.pageId !== pageId)
+                throw new CanvasToolError("nextTo must name a frame on the page it goes on.");
               const added = boxes.length + lines.length + (groupTitle !== undefined ? 1 : 0);
               if (
                 doc.frames.length + added > DESIGN_CANVAS_LIMITS.frames ||
-                doc.frames.filter((frame) => frame.pageId === pageId).length + added > DESIGN_CANVAS_LIMITS.framesPerPage
+                doc.frames.filter((frame) => frame.pageId === pageId).length + added >
+                  DESIGN_CANVAS_LIMITS.framesPerPage
               ) {
                 throw new CanvasToolError(
                   `This drawing would pass the canvas's limits (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove frames first or draw less.`,
                 );
               }
-              const namedGroup = p.groupId === undefined && anchor ? groupBeside(doc, anchor) : p.groupId;
-              const groupId = groupTitle !== undefined ? undefined : groupOf(doc, namedGroup, pageId);
+              const namedGroup =
+                p.groupId === undefined && anchor ? groupBeside(doc, anchor) : p.groupId;
+              const groupId =
+                groupTitle !== undefined ? undefined : groupOf(doc, namedGroup, pageId);
               // The drawing's own bounds, then where its top-left goes.
               const left = boxes.length > 0 ? Math.min(...boxes.map((box) => box.x)) : 0;
               const top = boxes.length > 0 ? Math.min(...boxes.map((box) => box.y)) : 0;
@@ -2104,24 +2873,42 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 w: boxes.length > 0 ? Math.max(...boxes.map((box) => box.x + box.w)) - left : 1,
                 h: boxes.length > 0 ? Math.max(...boxes.map((box) => box.y + box.h)) - top : 1,
               };
-              const pad = groupTitle !== undefined ? GROUP_PADDING : { left: 0, top: 0, right: 0, bottom: 0 };
-              const padded = { w: bounds.w + pad.left + pad.right, h: bounds.h + pad.top + pad.bottom };
+              const pad =
+                groupTitle !== undefined ? GROUP_PADDING : { left: 0, top: 0, right: 0, bottom: 0 };
+              const padded = {
+                w: bounds.w + pad.left + pad.right,
+                h: bounds.h + pad.top + pad.bottom,
+              };
               let origin: { x: number; y: number };
               if (x !== undefined && y !== undefined) {
                 origin = { x, y };
               } else {
                 let corner: { x: number; y: number };
                 if (anchor) {
-                  corner = besideBox(anchor, padded, side!, blockersOn(doc, pageId, new Set([anchor.id, groupId])));
+                  corner = besideBox(
+                    anchor,
+                    padded,
+                    side!,
+                    blockersOn(doc, pageId, new Set([anchor.id, groupId])),
+                  );
                 } else {
                   // Where canvas_place_frame would put one frame the drawing's size.
                   const probe = placeFrame(
                     doc,
-                    { kind: "shape", title: "", pageId, w: padded.w, h: padded.h, createdBy: "aiden", ...(groupId ? { groupId } : {}) },
+                    {
+                      kind: "shape",
+                      title: "",
+                      pageId,
+                      w: padded.w,
+                      h: padded.h,
+                      createdBy: "aiden",
+                      ...(groupId ? { groupId } : {}),
+                    },
                     canvasView(doc, deps.viewState?.viewSize, pageId),
                     () => "probe",
                   );
-                  if ("error" in probe) throw new CanvasToolError("The canvas is full. Remove a frame first.");
+                  if ("error" in probe)
+                    throw new CanvasToolError("The canvas is full. Remove a frame first.");
                   const spot = probe.doc.frames.find((frame) => frame.id === "probe")!;
                   corner = { x: spot.x, y: spot.y };
                 }
@@ -2150,8 +2937,14 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               const made: string[] = [];
               const place = (input: PlaceFrameInput, ref: string | undefined) => {
                 const id = newId();
-                const placed = placeFrame(next, input, canvasView(next, deps.viewState?.viewSize, pageId), () => id);
-                if ("error" in placed) throw new CanvasToolError("The canvas is full. Remove a frame first.");
+                const placed = placeFrame(
+                  next,
+                  input,
+                  canvasView(next, deps.viewState?.viewSize, pageId),
+                  () => id,
+                );
+                if ("error" in placed)
+                  throw new CanvasToolError("The canvas is full. Remove a frame first.");
                 next = placed.doc;
                 made.push(id);
                 if (ref) ids.set(ref, id);
@@ -2177,28 +2970,47 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               }
               const endIn = (end: Record<string, unknown>, field: string): DesignConnectorEnd => {
                 if (end.ref !== undefined) {
-                  return endOf(next, { frameId: ids.get(endRef(end)!), ...(end.side !== undefined ? { side: end.side } : {}) }, field, pageId);
+                  return endOf(
+                    next,
+                    {
+                      frameId: ids.get(endRef(end)!),
+                      ...(end.side !== undefined ? { side: end.side } : {}),
+                    },
+                    field,
+                    pageId,
+                  );
                 }
-                if (end.frameId !== undefined && end.frameId !== null && end.frameId !== "") return endOf(next, end, field, pageId);
+                if (end.frameId !== undefined && end.frameId !== null && end.frameId !== "")
+                  return endOf(next, end, field, pageId);
                 const ex = optionalNumber(end.x, `${field}.x`);
                 const ey = optionalNumber(end.y, `${field}.y`);
-                if (ex === undefined || ey === undefined) throw new CanvasToolError(`${field} must be { ref }, { frameId } or { x, y }.`);
+                if (ex === undefined || ey === undefined)
+                  throw new CanvasToolError(`${field} must be { ref }, { frameId } or { x, y }.`);
                 return endOf(next, { x: origin.x + ex, y: origin.y + ey }, field, pageId);
               };
               const titleOf = (end: DesignConnectorEnd) =>
-                end.frameId ? (next.frames.find((frame) => frame.id === end.frameId)?.title ?? "point") : "point";
+                end.frameId
+                  ? (next.frames.find((frame) => frame.id === end.frameId)?.title ?? "point")
+                  : "point";
               for (const line of lines) {
                 const ends: [DesignConnectorEnd, DesignConnectorEnd] = [
                   endIn(line.from, `items[${line.index}].from`),
                   endIn(line.to, `items[${line.index}].to`),
                 ];
                 if (ends[0].frameId !== undefined && ends[0].frameId === ends[1].frameId) {
-                  throw new CanvasToolError(`items[${line.index}] joins a frame to itself; a connector joins two different frames, or a frame and a point.`);
+                  throw new CanvasToolError(
+                    `items[${line.index}] joins a frame to itself; a connector joins two different frames, or a frame and a point.`,
+                  );
                 }
                 place(
                   {
                     kind: "connector",
-                    title: line.title ?? `${titleOf(ends[0])} to ${titleOf(ends[1])}`.slice(0, DESIGN_CANVAS_LIMITS.titleChars),
+                    title:
+                      line.title ??
+                      `${titleOf(ends[0])} to ${titleOf(ends[1])}`.slice(
+                        0,
+                        DESIGN_CANVAS_LIMITS.titleChars,
+                      ),
                     pageId,
                     x: ends[0].x,
                     y: ends[0].y,
@@ -2220,8 +3032,20 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   {
                     ...next,
                     frames: [
-                      ...next.frames.map((frame) => (made.includes(frame.id) ? { ...frame, groupId: newGroupId } : frame)),
-                      { id: newGroupId, kind: "group", title: groupTitle, pageId, x: origin.x, y: origin.y, w: DEFAULT_BOX.group.w, h: DEFAULT_BOX.group.h, createdBy: "aiden" },
+                      ...next.frames.map((frame) =>
+                        made.includes(frame.id) ? { ...frame, groupId: newGroupId } : frame,
+                      ),
+                      {
+                        id: newGroupId,
+                        kind: "group",
+                        title: groupTitle,
+                        pageId,
+                        x: origin.x,
+                        y: origin.y,
+                        w: DEFAULT_BOX.group.w,
+                        h: DEFAULT_BOX.group.h,
+                        createdBy: "aiden",
+                      },
                     ],
                   },
                   newGroupId,
@@ -2230,14 +3054,20 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               } else {
                 next = refitGroups(next, [groupId]);
               }
-              const placedBoxes = next.frames.filter((frame) => made.includes(frame.id) && frame.kind !== "connector");
+              const placedBoxes = next.frames.filter(
+                (frame) => made.includes(frame.id) && frame.kind !== "connector",
+              );
               const box =
                 placedBoxes.length > 0
                   ? {
                       x: Math.min(...placedBoxes.map((frame) => frame.x)),
                       y: Math.min(...placedBoxes.map((frame) => frame.y)),
-                      w: Math.max(...placedBoxes.map((frame) => frame.x + frame.w)) - Math.min(...placedBoxes.map((frame) => frame.x)),
-                      h: Math.max(...placedBoxes.map((frame) => frame.y + frame.h)) - Math.min(...placedBoxes.map((frame) => frame.y)),
+                      w:
+                        Math.max(...placedBoxes.map((frame) => frame.x + frame.w)) -
+                        Math.min(...placedBoxes.map((frame) => frame.x)),
+                      h:
+                        Math.max(...placedBoxes.map((frame) => frame.y + frame.h)) -
+                        Math.min(...placedBoxes.map((frame) => frame.y)),
                     }
                   : undefined;
               return {
@@ -2257,5 +3087,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       },
       "never",
     ),
-  ].map((tool) => (CANVAS_CATALOG_LINES[tool.name] ? declareOnDemandSummary(tool, CANVAS_CATALOG_LINES[tool.name]!) : tool));
+  ].map((tool) =>
+    CANVAS_CATALOG_LINES[tool.name]
+      ? declareOnDemandSummary(tool, CANVAS_CATALOG_LINES[tool.name]!)
+      : tool,
+  );
 }

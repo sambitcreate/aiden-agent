@@ -19,10 +19,10 @@ The candidate uses Chromium layout/paint containment on older settled text rows,
 The [normalized receipts](experiments/harness-transcript-performance-2026-10-19.json) identify both actual packages by app.asar SHA-256. Three paired runs, pooling first/repeated opens per size:
 
 | Messages | Baseline median | Candidate median | Change |
-| --- | --- | --- | --- |
-| 50 | 139 ms | 142 ms | +2.1% |
-| 500 | 368 ms | 340 ms | −7.6% |
-| 2,000 | 1,282 ms | 1,047 ms | −18.3% |
+| -------- | --------------- | ---------------- | ------ |
+| 50       | 139 ms          | 142 ms           | +2.1%  |
+| 500      | 368 ms          | 340 ms           | −7.6%  |
+| 2,000    | 1,282 ms        | 1,047 ms         | −18.3% |
 
 All declared opening budgets passed. Three additional/updated streaming samples measured input at 42/49/47 ms while 1/2/2 synthetic SSE chunks were emitted during input, below 100 ms. The stream keeps emitting during input and holds only its final stop until measurement completes. First visible delta was 2.3–2.4 s; this includes host context preparation and reveal behavior, not model latency. These results do not establish better model performance.
 

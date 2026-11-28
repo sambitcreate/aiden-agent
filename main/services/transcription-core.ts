@@ -91,13 +91,20 @@ const LOCAL_AUDIO_MIME = /^audio\/(ogg|opus)\b/i;
  * The renderer's recorded-audio path never comes here: it sends PCM to the
  * on-device lane or calls the cloud provider directly.
  */
-export function createTranscribeRouter(deps: TranscribeRouterDeps): (input: TranscribeInput) => Promise<string> {
+export function createTranscribeRouter(
+  deps: TranscribeRouterDeps,
+): (input: TranscribeInput) => Promise<string> {
   return async (input) => {
     const resolution = await deps.resolve();
     if (resolution.kind === "needs-setup") throw new Error(voiceSetupMessage(resolution.reason));
     if (resolution.provider === "local") {
-      if (!LOCAL_AUDIO_MIME.test(input.mimeType)) throw new Error("This audio format needs a cloud voice provider.");
-      return deps.local.oggOpus(Buffer.from(input.audioBase64, "base64"), resolution.modelId, input.signal);
+      if (!LOCAL_AUDIO_MIME.test(input.mimeType))
+        throw new Error("This audio format needs a cloud voice provider.");
+      return deps.local.oggOpus(
+        Buffer.from(input.audioBase64, "base64"),
+        resolution.modelId,
+        input.signal,
+      );
     }
     return resolution.provider === "gemini" ? deps.gemini(input) : deps.openai(input);
   };

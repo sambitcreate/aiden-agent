@@ -14,7 +14,13 @@ import type { SpeechModelFamily, SpeechModelSpec } from "./local-speech-catalog.
 import { speechEngine } from "./local-speech-engine.js";
 import { LocalSpeechIdleUnloader } from "./local-speech-idle-unload.js";
 import { LocalSpeechLane } from "./local-speech-lane.js";
-import { deleteModel, isModelInstalled, listModels, modelDir, specFor } from "./local-speech-models.js";
+import {
+  deleteModel,
+  isModelInstalled,
+  listModels,
+  modelDir,
+  specFor,
+} from "./local-speech-models.js";
 import {
   LocalSpeechWorkerError,
   runWithCrashRetry,
@@ -28,7 +34,8 @@ import { LocalSpeechWorkerHost, type SpeechWorkerTarget } from "./local-speech-w
 import type { LocalSpeechState } from "../../renderer/shared/local-speech-state.js";
 import { LocalSpeechModelState } from "./local-speech-model-state.js";
 
-const MODEL_MISSING_MESSAGE = "The selected voice model isn't downloaded. Download it in Settings → Voice & Speech.";
+const MODEL_MISSING_MESSAGE =
+  "The selected voice model isn't downloaded. Download it in Settings → Voice & Speech.";
 
 const lane = new LocalSpeechLane();
 const stateListeners = new Set<(state: LocalSpeechState) => void>();
@@ -124,7 +131,9 @@ async function forkSpeechWorker(): Promise<UtilityProcess> {
 }
 
 function isolationUnavailable(error: unknown): boolean {
-  return /Cannot find package 'electron'|Cannot find module ['"]electron['"]/i.test(errorMessage(error));
+  return /Cannot find package 'electron'|Cannot find module ['"]electron['"]/i.test(
+    errorMessage(error),
+  );
 }
 
 async function vadModelPath(): Promise<string> {
@@ -143,7 +152,11 @@ async function inProcess(
 ): Promise<{ text: string; language: string | null; decodeMs: number }> {
   const reply = await handleLocalSpeechMessage(message);
   if (reply.kind === "failure") throw new LocalSpeechWorkerError(reply.message, reply.code);
-  return { text: reply.text ?? "", language: reply.language ?? null, decodeMs: reply.decodeMs ?? 0 };
+  return {
+    text: reply.text ?? "",
+    language: reply.language ?? null,
+    decodeMs: reply.decodeMs ?? 0,
+  };
 }
 
 type EngineStatus = { ready: boolean; error: string | null };
@@ -157,8 +170,13 @@ const knownEngineStatus = new Map<"metal" | "sherpa", EngineStatus>();
 async function statusFamily(modelId: string | undefined): Promise<SpeechModelFamily | undefined> {
   if (modelId) return specFor(modelId)?.family;
   const { configStore } = await import("./config-store.js");
-  const installed = listModels().filter((model) => model.installed).map((model) => model.id);
-  const effective = effectiveLocalModelId((await configStore.getSettings()).localVoiceModel || undefined, installed);
+  const installed = listModels()
+    .filter((model) => model.installed)
+    .map((model) => model.id);
+  const effective = effectiveLocalModelId(
+    (await configStore.getSettings()).localVoiceModel || undefined,
+    installed,
+  );
   return effective ? specFor(effective)?.family : undefined;
 }
 
@@ -224,7 +242,10 @@ export async function warmLocalVoice(modelId: string): Promise<void> {
       const request = modelState.request(modelId);
       // The language a transcription would use, so the warm-up builds the same recognizer and the first dictation reuses it.
       const { configStore } = await import("./config-store.js");
-      const language = effectiveLanguage(model.spec, (await configStore.getSettings()).voiceLanguage).language;
+      const language = effectiveLanguage(
+        model.spec,
+        (await configStore.getSettings()).voiceLanguage,
+      ).language;
       try {
         try {
           // The worker is chosen before the load is announced, so a retired model reports unloaded first.
@@ -275,7 +296,11 @@ export async function deleteLocalSpeechModel(modelId: string): Promise<void> {
   });
 }
 
-async function transcribeAudio(audio: LocalSpeechAudio, modelId: string, signal?: AbortSignal): Promise<string> {
+async function transcribeAudio(
+  audio: LocalSpeechAudio,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<string> {
   const model = installedModel(modelId);
   if (!model) throw new Error(MODEL_MISSING_MESSAGE);
   const { configStore } = await import("./config-store.js");
@@ -291,7 +316,11 @@ async function transcribeAudio(audio: LocalSpeechAudio, modelId: string, signal?
     vadModelPath: await vadModelPath(),
   };
 
-  const target: SpeechWorkerTarget = { modelId, family: model.spec.family, language: request.language };
+  const target: SpeechWorkerTarget = {
+    modelId,
+    family: model.spec.family,
+    language: request.language,
+  };
   let activeClient: LocalSpeechProcessClient | null = null;
   return lane.run(
     () =>
@@ -316,14 +345,22 @@ async function transcribeAudio(audio: LocalSpeechAudio, modelId: string, signal?
               isCrash: (error) => error instanceof WorkerCrashError,
               onCrash: (_error, attempt) => {
                 const crashed = activeClient;
-                void warn("worker crashed", { attempt, stderr: crashed?.stderrTail().join("\n") ?? "" });
+                void warn("worker crashed", {
+                  attempt,
+                  stderr: crashed?.stderrTail().join("\n") ?? "",
+                });
                 if (crashed) host.disposeIfCurrent(crashed);
               },
             },
           ).catch(async (error: unknown) => {
             if (!isolationUnavailable(error)) throw error;
             signal?.throwIfAborted();
-            return inProcess({ ...request, kind: "transcribe", version: LOCAL_SPEECH_PROTOCOL_VERSION, requestId: "in-process" });
+            return inProcess({
+              ...request,
+              kind: "transcribe",
+              version: LOCAL_SPEECH_PROTOCOL_VERSION,
+              requestId: "in-process",
+            });
           });
           load.succeed();
           return result.text;
@@ -343,12 +380,20 @@ async function transcribeAudio(audio: LocalSpeechAudio, modelId: string, signal?
   );
 }
 
-export function transcribeLocalPcm16(pcm: Int16Array, modelId: string, signal?: AbortSignal): Promise<string> {
+export function transcribeLocalPcm16(
+  pcm: Int16Array,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<string> {
   return transcribeAudio({ kind: "pcm16", pcm }, modelId, signal);
 }
 
 /** Ogg/Opus voice notes (Telegram). The worker decodes them to 16 kHz and rejects notes over 30 minutes. */
-export function transcribeLocalOggOpus(bytes: Uint8Array, modelId: string, signal?: AbortSignal): Promise<string> {
+export function transcribeLocalOggOpus(
+  bytes: Uint8Array,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<string> {
   return transcribeAudio({ kind: "ogg-opus", bytes }, modelId, signal);
 }
 

@@ -95,14 +95,11 @@ test("No workspace chats share one Chats group instead of a row per hidden folde
   const registry = [...workspaces, hidden("chat-b", 12), hidden("chat-a", 11)];
   const result = organizeSidebar({
     projects: localSidebarProjects(registry),
-    chats: localSidebarChats(
-      registry,
-      [
-        ...chats,
-        { id: "trip", title: "Trip ideas", workspaceId: "chat-a", createdAt: 9, updatedAt: 95 },
-        { id: "recipe", title: "Soup", workspaceId: "chat-b", createdAt: 9, updatedAt: 96 },
-      ],
-    ),
+    chats: localSidebarChats(registry, [
+      ...chats,
+      { id: "trip", title: "Trip ideas", workspaceId: "chat-a", createdAt: 9, updatedAt: 95 },
+      { id: "recipe", title: "Soup", workspaceId: "chat-b", createdAt: 9, updatedAt: 96 },
+    ]),
     search: "",
     view: "projects",
     chatSort: "last_activity",
@@ -113,6 +110,10 @@ test("No workspace chats share one Chats group instead of a row per hidden folde
   const chatsGroup = result.projectGroups.filter((group) => group.project.workspace.noWorkspace);
   assert.equal(chatsGroup.length, 1);
   assert.equal(chatsGroup[0].project.name, "Chats");
-  assert.equal(chatsGroup[0].project.workspace.id, "chat-a", "the oldest hidden record stands for the group");
+  assert.equal(
+    chatsGroup[0].project.workspace.id,
+    "chat-a",
+    "the oldest hidden record stands for the group",
+  );
   assert.deepEqual(chatIds(chatsGroup[0].chats), ["recipe", "trip"]);
 });

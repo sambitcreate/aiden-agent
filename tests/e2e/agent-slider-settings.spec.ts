@@ -25,7 +25,9 @@ test("a stop added in Settings → Agent Slider shows in the composer's slider a
     .getByRole("navigation", { name: "Settings" })
     .getByRole("button", { name: "Agent Slider", exact: true })
     .click();
-  await expect(page.getByRole("heading", { level: 1, name: "Agent Slider", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Agent Slider", exact: true }),
+  ).toBeVisible();
   // Onboarding seeded Fast / Balanced / Smart around the connected model.
   await expect(page.getByRole("textbox", { name: /^Name of stop/u })).toHaveCount(3);
 
@@ -45,7 +47,9 @@ test("a stop added in Settings → Agent Slider shows in the composer's slider a
     .filter({ hasText: /second/iu })
     .first()
     .click();
-  await expect(page.getByRole("button", { name: /^Model for Second: .+\. Choose a model\.$/u })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /^Model for Second: .+\. Choose a model\.$/u }),
+  ).toBeVisible();
 
   // Make it home; the preview rests there.
   await page.getByRole("radio", { name: "Home stop: Second", exact: true }).click();
@@ -53,7 +57,10 @@ test("a stop added in Settings → Agent Slider shows in the composer's slider a
     "aria-checked",
     "true",
   );
-  await expect(page.getByRole("slider", { name: "Agent Slider" })).toHaveAttribute("aria-valuenow", "4");
+  await expect(page.getByRole("slider", { name: "Agent Slider" })).toHaveAttribute(
+    "aria-valuenow",
+    "4",
+  );
 
   // The composer's popover shows the new stop, and Reset goes to the new home.
   await page.getByRole("button", { name: "Back to app" }).click();
@@ -64,5 +71,8 @@ test("a stop added in Settings → Agent Slider shows in the composer's slider a
   });
   await expect(agentSlider).toHaveAttribute("aria-valuemax", "4");
   await page.locator('[data-agent-slider-stop="3"]').click();
-  await expect(modelPicker).toHaveAttribute("aria-label", /, Second on the Agent Slider\. Choose a model\.$/u);
+  await expect(modelPicker).toHaveAttribute(
+    "aria-label",
+    /, Second on the Agent Slider\. Choose a model\.$/u,
+  );
 });

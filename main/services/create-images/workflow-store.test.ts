@@ -12,7 +12,10 @@ import { ImageWorkflowLoadError, ImageWorkflowStore } from "./workflow-store.js"
 async function fixture(t: TestContext) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-image-workflows-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const assets = new StudioAssetStore({ root: () => path.join(root, "assets"), thumbnailer: fakeThumbnailer().thumbnailer });
+  const assets = new StudioAssetStore({
+    root: () => path.join(root, "assets"),
+    thumbnailer: fakeThumbnailer().thumbnailer,
+  });
   await assets.initialize();
   t.after(() => assets.close());
   let clock = 1_000;
@@ -31,7 +34,10 @@ async function fixture(t: TestContext) {
         const isIndex = path.basename(target) === "index.json";
         if (isIndex ? faults.index : faults.document) return Promise.reject(new Error("disk full"));
         if (!isIndex && faults.documentSync) {
-          return writeJsonAtomic(target, value, { ...options, io: { syncDirectory: () => Promise.reject(new Error("EIO")) } });
+          return writeJsonAtomic(target, value, {
+            ...options,
+            io: { syncDirectory: () => Promise.reject(new Error("EIO")) },
+          });
         }
         return writeJsonAtomic(target, value, options);
       },
@@ -46,7 +52,9 @@ async function fixture(t: TestContext) {
 
 test("create, save and reopen round-trip through the documents and the index", async (t) => {
   const { store, open } = await fixture(t);
-  const created = await store.create("starter", { model: { provider: "openrouter", id: "google/gemini-3.1-flash-image" } });
+  const created = await store.create("starter", {
+    model: { provider: "openrouter", id: "google/gemini-3.1-flash-image" },
+  });
   const edited: WorkflowDocV1 = structuredClone(created);
   edited.title = "Bicycles";
   const prompt = edited.nodes.find((node) => node.type === "prompt")!;
@@ -62,16 +70,24 @@ test("create, save and reopen round-trip through the documents and the index", a
   assert.equal(loaded?.revision, 2);
   assert.equal(loaded?.createdAt, created.createdAt);
   assert.ok((loaded?.updatedAt ?? 0) > created.updatedAt);
-  assert.deepEqual(loaded?.nodes.find((node) => node.type === "prompt")?.data, { text: "A red bicycle at dawn" });
+  assert.deepEqual(loaded?.nodes.find((node) => node.type === "prompt")?.data, {
+    text: "A red bicycle at dawn",
+  });
 });
 
 test("a stale base revision is a conflict and leaves the file unchanged", async (t) => {
   const { store, documentFile } = await fixture(t);
   const created = await store.create("blank");
-  assert.deepEqual(await store.save(created.id, 1, { ...created, title: "One" }), { ok: true, revision: 2 });
+  assert.deepEqual(await store.save(created.id, 1, { ...created, title: "One" }), {
+    ok: true,
+    revision: 2,
+  });
   const file = documentFile(created.id);
   const before = await readFile(file, "utf8");
-  assert.deepEqual(await store.save(created.id, 1, { ...created, title: "Two" }), { ok: false, reason: "conflict" });
+  assert.deepEqual(await store.save(created.id, 1, { ...created, title: "Two" }), {
+    ok: false,
+    reason: "conflict",
+  });
   assert.equal(await readFile(file, "utf8"), before);
 });
 
@@ -93,7 +109,15 @@ test("invalid documents are rejected: unknown keys, cycles, foreign ids and miss
   const blank = await store.create("starter");
   const created: WorkflowDocV1 = {
     ...blank,
-    nodes: [...blank.nodes, { id: "keep", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: held.assetId } }],
+    nodes: [
+      ...blank.nodes,
+      {
+        id: "keep",
+        type: "image-input",
+        position: { x: 0, y: 0 },
+        data: { assetId: held.assetId },
+      },
+    ],
   };
   assert.deepEqual(await store.save(created.id, 1, created), { ok: true, revision: 2 });
   const generate = created.nodes.find((node) => node.type === "generate-image")!;
@@ -102,14 +126,36 @@ test("invalid documents are rejected: unknown keys, cycles, foreign ids and miss
   const cases: unknown[] = [
     { ...created, extra: true },
     { ...created, id: "another-id" },
-    { ...created, edges: [...created.edges, { id: "loop", source: generate.id, sourcePort: "images", target: generate.id, targetPort: "references" }] },
+    {
+      ...created,
+      edges: [
+        ...created.edges,
+        {
+          id: "loop",
+          source: generate.id,
+          sourcePort: "images",
+          target: generate.id,
+          targetPort: "references",
+        },
+      ],
+    },
     // One real new asset beside a missing one: the whole save is refused, so the real one is not held either.
     {
       ...created,
       nodes: [
         ...created.nodes,
-        { id: "fresh", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: other.assetId } },
-        { id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: "b".repeat(64) } },
+        {
+          id: "fresh",
+          type: "image-input",
+          position: { x: 0, y: 0 },
+          data: { assetId: other.assetId },
+        },
+        {
+          id: "in",
+          type: "image-input",
+          position: { x: 0, y: 0 },
+          data: { assetId: "b".repeat(64) },
+        },
       ],
     },
   ];
@@ -129,14 +175,38 @@ test("a save with a dangling edge or a two-node cycle is refused with readable i
   const { store } = await fixture(t);
   const created = await store.create("starter");
   const [first, second] = [created.nodes[1]!, { ...created.nodes[1]!, id: "generate-two" }];
-  const dangling = { ...created, edges: [...created.edges, { id: "ghost", source: first.id, sourcePort: "images", target: "nowhere", targetPort: "references" }] };
+  const dangling = {
+    ...created,
+    edges: [
+      ...created.edges,
+      {
+        id: "ghost",
+        source: first.id,
+        sourcePort: "images",
+        target: "nowhere",
+        targetPort: "references",
+      },
+    ],
+  };
   const cycle = {
     ...created,
     nodes: [...created.nodes, second],
     edges: [
       ...created.edges,
-      { id: "forward", source: first.id, sourcePort: "images", target: second.id, targetPort: "references" },
-      { id: "back", source: second.id, sourcePort: "images", target: first.id, targetPort: "references" },
+      {
+        id: "forward",
+        source: first.id,
+        sourcePort: "images",
+        target: second.id,
+        targetPort: "references",
+      },
+      {
+        id: "back",
+        source: second.id,
+        sourcePort: "images",
+        target: first.id,
+        targetPort: "references",
+      },
     ],
   };
   const refused = await store.save(created.id, 1, dangling);
@@ -154,7 +224,9 @@ test("Image Input assets are held by their workflow and released on delete", asy
   const created = await store.create("blank");
   const withImage: WorkflowDocV1 = {
     ...created,
-    nodes: [{ id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: asset.assetId } }],
+    nodes: [
+      { id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: asset.assetId } },
+    ],
   };
   assert.equal((await store.save(created.id, 1, withImage)).ok, true);
   assert.deepEqual(assets.holders(asset.assetId), [{ kind: "images-workflow", id: created.id }]);
@@ -162,14 +234,20 @@ test("Image Input assets are held by their workflow and released on delete", asy
   const copy = await store.duplicate(created.id);
   assert.ok(copy && copy.id !== created.id && copy.revision === 1);
   assert.deepEqual(
-    assets.holders(asset.assetId).map((holder) => holder.id).sort(),
+    assets
+      .holders(asset.assetId)
+      .map((holder) => holder.id)
+      .sort(),
     [created.id, copy.id].sort(),
   );
 
   assert.equal(await store.delete(created.id), true);
   assert.deepEqual(assets.holders(asset.assetId), [{ kind: "images-workflow", id: copy.id }]);
   assert.equal(await store.get(created.id), null);
-  assert.deepEqual(store.list().map((entry) => entry.id), [copy.id]);
+  assert.deepEqual(
+    store.list().map((entry) => entry.id),
+    [copy.id],
+  );
 });
 
 test("rename bumps the revision and a missing or corrupt index is rebuilt from the documents", async (t) => {
@@ -183,8 +261,14 @@ test("rename bumps the revision and a missing or corrupt index is rebuilt from t
   await writeFile(index, "{not json");
   const reopened = await open();
   assert.deepEqual(
-    reopened.list().map(({ id, title }) => ({ id, title })).sort((a, b) => a.id.localeCompare(b.id)),
-    [{ id: first.id, title: "Renamed" }, { id: second.id, title: second.title }].sort((a, b) => a.id.localeCompare(b.id)),
+    reopened
+      .list()
+      .map(({ id, title }) => ({ id, title }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+    [
+      { id: first.id, title: "Renamed" },
+      { id: second.id, title: second.title },
+    ].sort((a, b) => a.id.localeCompare(b.id)),
   );
   await rm(index);
   assert.equal((await open()).list().length, 2);
@@ -195,7 +279,10 @@ test("an index that disagrees with the directory is rebuilt", async (t) => {
   const kept = await store.create("blank", { title: "Kept" });
   const removed = await store.create("blank", { title: "Removed by hand" });
   await rm(documentFile(removed.id));
-  assert.deepEqual((await open()).list().map((entry) => entry.id), [kept.id]);
+  assert.deepEqual(
+    (await open()).list().map((entry) => entry.id),
+    [kept.id],
+  );
 });
 
 test("a hand-edited cycle or dangling edge refuses to open, and the other workflows still list and open", async (t) => {
@@ -214,12 +301,30 @@ test("a hand-edited cycle or dangling edge refuses to open, and the other workfl
     const first = doc.nodes[1]!;
     doc.nodes.push({ ...first, id: "generate-two" });
     doc.edges.push(
-      { id: "forward", source: first.id, sourcePort: "images", target: "generate-two", targetPort: "references" },
-      { id: "back", source: "generate-two", sourcePort: "images", target: first.id, targetPort: "references" },
+      {
+        id: "forward",
+        source: first.id,
+        sourcePort: "images",
+        target: "generate-two",
+        targetPort: "references",
+      },
+      {
+        id: "back",
+        source: "generate-two",
+        sourcePort: "images",
+        target: first.id,
+        targetPort: "references",
+      },
     );
   });
   await edit(dangling.id, (doc) => {
-    doc.edges.push({ id: "ghost", source: doc.nodes[1]!.id, sourcePort: "images", target: "nowhere", targetPort: "references" });
+    doc.edges.push({
+      id: "ghost",
+      source: doc.nodes[1]!.id,
+      sourcePort: "images",
+      target: "nowhere",
+      targetPort: "references",
+    });
   });
   await writeFile(documentFile(unreadable.id), "{ this is not json");
 
@@ -228,9 +333,15 @@ test("a hand-edited cycle or dangling edge refuses to open, and the other workfl
   const before = issues.length;
   const reopened = await open();
   // The unreadable file is reported by count, never by its contents.
-  assert.deepEqual(issues.slice(before), ["1 image workflow file could not be read and was left in place."]);
+  assert.deepEqual(issues.slice(before), [
+    "1 image workflow file could not be read and was left in place.",
+  ]);
   assert.deepEqual([...reopened.unreadableIds()], [unreadable.id]);
-  assert.equal(reopened.nodeIds(unreadable.id), "all", "retention must keep everything of a file kept for repair");
+  assert.equal(
+    reopened.nodeIds(unreadable.id),
+    "all",
+    "retention must keep everything of a file kept for repair",
+  );
   const listed = reopened.list().map((entry) => entry.id);
   assert.ok(listed.includes(good.id));
   assert.ok(!listed.includes(unreadable.id), "an unparseable file is left on disk but not indexed");
@@ -248,7 +359,9 @@ test("a hand-edited cycle or dangling edge refuses to open, and the other workfl
   }
   assert.match(refusals.get(cyclic.id)!.message, /can't be opened.*Cycles/u);
   assert.match(refusals.get(dangling.id)!.message, /can't be opened.*no longer exists/u);
-  assert.deepEqual(refusals.get(dangling.id)!.issues, ["This connection points at a node that no longer exists."]);
+  assert.deepEqual(refusals.get(dangling.id)!.issues, [
+    "This connection points at a node that no longer exists.",
+  ]);
 
   // Nothing else republishes a broken document either, and nothing repaired it on disk.
   assert.deepEqual(await reopened.rename(dangling.id, "Renamed"), {
@@ -257,7 +370,11 @@ test("a hand-edited cycle or dangling edge refuses to open, and the other workfl
     issues: ["This connection points at a node that no longer exists."],
   });
   await assert.rejects(reopened.duplicate(cyclic.id), ImageWorkflowLoadError);
-  assert.ok(JSON.parse(await readFile(documentFile(dangling.id), "utf8")).edges.some((edge: { id: string }) => edge.id === "ghost"));
+  assert.ok(
+    JSON.parse(await readFile(documentFile(dangling.id), "utf8")).edges.some(
+      (edge: { id: string }) => edge.id === "ghost",
+    ),
+  );
   assert.equal(reopened.list().find((entry) => entry.id === dangling.id)?.title, "Dangling");
 });
 
@@ -283,7 +400,10 @@ test("a failed document write leaves the old document and every hold it needs in
   assert.deepEqual(assets.holders(removed.assetId), [holder]);
 
   // A later successful save settles membership to exactly what the document references.
-  assert.deepEqual(await store.save(created.id, 2, withInput(added.assetId)), { ok: true, revision: 3 });
+  assert.deepEqual(await store.save(created.id, 2, withInput(added.assetId)), {
+    ok: true,
+    revision: 3,
+  });
   assert.deepEqual(assets.holders(removed.assetId), []);
   assert.deepEqual(assets.holders(added.assetId), [holder]);
 });
@@ -292,15 +412,24 @@ test("the index is a cache: a failed index write neither fails a save nor desync
   const { store, open, faults, issues } = await fixture(t);
   const created = await store.create("blank");
   faults.index = true;
-  assert.deepEqual(await store.save(created.id, 1, { ...created, title: "Saved anyway" }), { ok: true, revision: 2 });
+  assert.deepEqual(await store.save(created.id, 1, { ...created, title: "Saved anyway" }), {
+    ok: true,
+    revision: 2,
+  });
   assert.deepEqual(await store.rename(created.id, "Renamed anyway"), { ok: true, revision: 3 });
-  assert.deepEqual(store.list().map(({ title, revision }) => ({ title, revision })), [{ title: "Renamed anyway", revision: 3 }]);
+  assert.deepEqual(
+    store.list().map(({ title, revision }) => ({ title, revision })),
+    [{ title: "Renamed anyway", revision: 3 }],
+  );
   assert.ok(issues.length >= 2, "each failed index write is reported");
   faults.index = false;
   const reopened = await open();
   assert.equal((await reopened.get(created.id))?.revision, 3);
   // The stale index.json on disk lists the same ids: the summaries must still come from the documents.
-  assert.deepEqual(reopened.list().map(({ title, revision }) => ({ title, revision })), [{ title: "Renamed anyway", revision: 3 }]);
+  assert.deepEqual(
+    reopened.list().map(({ title, revision }) => ({ title, revision })),
+    [{ title: "Renamed anyway", revision: 3 }],
+  );
 });
 
 test("a document published before its directory flush fails counts as written: the copy keeps its holds and the list is current", async (t) => {
@@ -309,7 +438,9 @@ test("a document published before its directory flush fails counts as written: t
   const created = await store.create("blank");
   const withImage: WorkflowDocV1 = {
     ...created,
-    nodes: [{ id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: asset.assetId } }],
+    nodes: [
+      { id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: asset.assetId } },
+    ],
   };
   assert.equal((await store.save(created.id, 1, withImage)).ok, true);
 
@@ -317,20 +448,35 @@ test("a document published before its directory flush fails counts as written: t
   const copy = await store.duplicate(created.id);
   assert.ok(copy, "the duplicate is reported, since its file is complete on disk");
   assert.deepEqual(
-    assets.holders(asset.assetId).map((holder) => holder.id).sort(),
+    assets
+      .holders(asset.assetId)
+      .map((holder) => holder.id)
+      .sort(),
     [created.id, copy.id].sort(),
     "the copy keeps the holds on the image it shows",
   );
   // A save whose document landed is a save: the list reflects it at once, and
   // the next save from the new revision is not told it conflicts with itself.
-  assert.deepEqual(await store.save(created.id, 2, { ...withImage, title: "Landed" }), { ok: true, revision: 3 });
+  assert.deepEqual(await store.save(created.id, 2, { ...withImage, title: "Landed" }), {
+    ok: true,
+    revision: 3,
+  });
   assert.equal(store.list().find((entry) => entry.id === created.id)?.revision, 3);
   assert.ok(issues.length >= 1, "the missed flush is reported");
   faults.documentSync = false;
-  assert.deepEqual(await store.save(created.id, 3, { ...withImage, title: "Again" }), { ok: true, revision: 4 });
+  assert.deepEqual(await store.save(created.id, 3, { ...withImage, title: "Again" }), {
+    ok: true,
+    revision: 4,
+  });
 
   const reopened = await open();
-  assert.deepEqual(reopened.list().map((entry) => entry.id).sort(), [created.id, copy.id].sort());
+  assert.deepEqual(
+    reopened
+      .list()
+      .map((entry) => entry.id)
+      .sort(),
+    [created.id, copy.id].sort(),
+  );
   assert.deepEqual((await reopened.get(copy.id))?.nodes, withImage.nodes);
 });
 
@@ -338,7 +484,12 @@ test("delete releases the workflow's holds even if the index cannot be rewritten
   const { store, open, assets, faults, documentFile, root } = await fixture(t);
   const asset = await assets.put({ bytes: pngBytes(4, 4, 1) });
   const created = await store.create("blank");
-  const withImage = { ...created, nodes: [{ id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: asset.assetId } }] };
+  const withImage = {
+    ...created,
+    nodes: [
+      { id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: asset.assetId } },
+    ],
+  };
   assert.equal((await store.save(created.id, 1, withImage)).ok, true);
 
   faults.index = true;
@@ -364,7 +515,10 @@ test("an id differing only in case never deletes another workflow's file", async
   const created = await store.create("blank", { title: "Keep me" });
   assert.equal(await store.delete(created.id.toUpperCase()), false);
   assert.equal(JSON.parse(await readFile(documentFile(created.id), "utf8")).title, "Keep me");
-  assert.deepEqual(store.list().map((entry) => entry.id), [created.id]);
+  assert.deepEqual(
+    store.list().map((entry) => entry.id),
+    [created.id],
+  );
 });
 
 test("a duplicate's title is cut on a character boundary, never inside an emoji", async (t) => {
@@ -391,7 +545,10 @@ test("staging files left by a crash are swept on open; other files are left alon
   await assert.rejects(readFile(stagedIndex), { code: "ENOENT" });
   assert.equal(await readFile(unrelated, "utf8"), "partial");
   assert.ok(await readFile(documentFile(created.id), "utf8"));
-  assert.deepEqual(reopened.list().map((entry) => entry.id), [created.id]);
+  assert.deepEqual(
+    reopened.list().map((entry) => entry.id),
+    [created.id],
+  );
 });
 
 test("node ids follow the stored document through save, reopen and delete", async (t) => {
@@ -399,7 +556,11 @@ test("node ids follow the stored document through save, reopen and delete", asyn
   const created = await store.create("blank");
   assert.deepEqual([...(store.nodeIds(created.id) ?? [])], []);
   const at = { x: 0, y: 0 };
-  const edited = { ...created, nodes: [{ id: "p1", type: "prompt", position: at, data: { text: "" } }], edges: [] };
+  const edited = {
+    ...created,
+    nodes: [{ id: "p1", type: "prompt", position: at, data: { text: "" } }],
+    edges: [],
+  };
   assert.equal((await store.save(created.id, 1, edited)).ok, true);
   assert.deepEqual([...(store.nodeIds(created.id) ?? [])], ["p1"]);
   const reopened = await open();
@@ -427,14 +588,18 @@ test("imageInputAssets lists each workflow's distinct Image Input assets and ski
     { ok: true, revision: 2 },
   );
   await store.create("blank");
-  assert.deepEqual(await store.imageInputAssets(), { [withImages.id]: [first.assetId, second.assetId].sort() });
+  assert.deepEqual(await store.imageInputAssets(), {
+    [withImages.id]: [first.assetId, second.assetId].sort(),
+  });
 });
 
 test("imageInputAssets answers from what the store wrote, without re-reading every file", async (t) => {
   const { store, assets, documentFile } = await fixture(t);
   const asset = await assets.put({ bytes: pngBytes(4, 4, 13) });
   const created = await store.create("blank");
-  const nodes = [{ id: "a", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: asset.assetId } }];
+  const nodes = [
+    { id: "a", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: asset.assetId } },
+  ];
   assert.equal((await store.save(created.id, 1, { ...created, nodes, edges: [] })).ok, true);
   // A file damaged behind the store's back is not re-parsed by a list.
   await writeFile(documentFile(created.id), "{ damaged");

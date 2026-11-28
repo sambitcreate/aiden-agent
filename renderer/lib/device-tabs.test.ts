@@ -54,7 +54,10 @@ test("opening a device selects its tab and keeps the user's order", () => {
   let tabs = openDeviceTab(EMPTY_CHAT_DEVICE_TABS, deviceTabKey(PAD));
   tabs = openDeviceTab(tabs, deviceTabKey(PHONE));
   const visible = visibleDeviceTabs(tabs, [PHONE, PAD], name);
-  assert.deepEqual(visible.map((tab) => tab.title), ["iPad Air", "iPhone 17 Pro"]);
+  assert.deepEqual(
+    visible.map((tab) => tab.title),
+    ["iPad Air", "iPhone 17 Pro"],
+  );
   assert.equal(selectedDeviceTab(tabs, visible), deviceTabKey(PHONE));
   assert.equal(showsDevicePicker(tabs, visible), false);
 });
@@ -89,7 +92,10 @@ test("a closed tab stays closed while its session is still listed, and selection
   tabs = closeDeviceTab(tabs, deviceTabKey(PAD), visibleDeviceTabs(tabs, [PHONE, PAD], name));
   // A refresh still lists the iPad session (the close is in flight or failed): no resurrection.
   const visible = visibleDeviceTabs(tabs, [PHONE, PAD], name);
-  assert.deepEqual(visible.map((tab) => tab.title), ["iPhone 17 Pro"]);
+  assert.deepEqual(
+    visible.map((tab) => tab.title),
+    ["iPhone 17 Pro"],
+  );
   assert.equal(selectedDeviceTab(tabs, visible), deviceTabKey(PHONE));
   // Closing the last tab leaves the picker.
   tabs = closeDeviceTab(tabs, deviceTabKey(PHONE), visible);
@@ -114,14 +120,23 @@ test("once a closed session ends, opening that device again shows it with its sa
 test("stored tabs survive a reload, drop malformed entries, and forget the oldest chats", () => {
   const storage = memoryStorage();
   const first = createDeviceWorkspaceStore(storage);
-  first.updateTabs("chat-1", (tabs) => renameDeviceTab(openDeviceTab(tabs, deviceTabKey(PHONE)), deviceTabKey(PHONE), "Demo"));
-  first.updateTabs("chat-1", (tabs) => closeDeviceTab(tabs, deviceTabKey(PAD), visibleDeviceTabs(tabs, [PHONE, PAD], name)));
+  first.updateTabs("chat-1", (tabs) =>
+    renameDeviceTab(openDeviceTab(tabs, deviceTabKey(PHONE)), deviceTabKey(PHONE), "Demo"),
+  );
+  first.updateTabs("chat-1", (tabs) =>
+    closeDeviceTab(tabs, deviceTabKey(PAD), visibleDeviceTabs(tabs, [PHONE, PAD], name)),
+  );
   const reloaded = createDeviceWorkspaceStore(storage);
   assert.deepEqual(titles(reloaded.tabs("chat-1"), [PHONE, PAD]), ["Demo"]);
   assert.deepEqual(reloaded.tabs("chat-2"), EMPTY_CHAT_DEVICE_TABS);
 
   const corrupt = parseStoredDeviceTabs(
-    JSON.stringify({ version: 1, chats: { ok: { order: ["bad", deviceTabKey(PHONE), 4], titles: { nope: "x" }, active: "zz" } } }),
+    JSON.stringify({
+      version: 1,
+      chats: {
+        ok: { order: ["bad", deviceTabKey(PHONE), 4], titles: { nope: "x" }, active: "zz" },
+      },
+    }),
   );
   assert.deepEqual(corrupt.chats.ok.order, [deviceTabKey(PHONE)]);
   assert.deepEqual(corrupt.chats.ok.titles, {});
@@ -131,7 +146,11 @@ test("stored tabs survive a reload, drop malformed entries, and forget the oldes
 
   let stored = parseStoredDeviceTabs(null);
   for (let index = 0; index <= MAX_REMEMBERED_DEVICE_CHATS; index += 1) {
-    stored = withChatDeviceTabs(stored, `chat-${index}`, openDeviceTab(EMPTY_CHAT_DEVICE_TABS, deviceTabKey(PHONE)));
+    stored = withChatDeviceTabs(
+      stored,
+      `chat-${index}`,
+      openDeviceTab(EMPTY_CHAT_DEVICE_TABS, deviceTabKey(PHONE)),
+    );
   }
   assert.equal(Object.keys(stored.chats).length, MAX_REMEMBERED_DEVICE_CHATS);
   assert.equal(stored.chats["chat-0"], undefined);
@@ -167,7 +186,13 @@ test("the store notifies once per real change and keeps working when storage thr
 });
 
 test("an agent-opened device floats over its chat only when auto-show is on", () => {
-  const base = { chatId: "chat-1", activeChatId: "chat-1", target: PHONE, autoFloat: true, canFloat: true };
+  const base = {
+    chatId: "chat-1",
+    activeChatId: "chat-1",
+    target: PHONE,
+    autoFloat: true,
+    canFloat: true,
+  };
   assert.equal(deviceRevealAction(base), "float");
   assert.equal(deviceRevealAction({ ...base, autoFloat: false }), "tab");
   // An older reveal without a device, or a chat that cannot host the player, opens the tab.

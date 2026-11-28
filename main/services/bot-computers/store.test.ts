@@ -14,7 +14,11 @@ test("state round-trips through an owner-only file and concurrent updates all la
   await Promise.all(
     ["a", "b", "c"].map((botId, index) =>
       store.update((state) => {
-        state.computers[botId] = { vmName: `aiden-bot-${String(index).repeat(16)}`, baseBuild: "25G83", createdAt: index };
+        state.computers[botId] = {
+          vmName: `aiden-bot-${String(index).repeat(16)}`,
+          baseBuild: "25G83",
+          createdAt: index,
+        };
       }),
     ),
   );
@@ -29,7 +33,12 @@ test("a damaged file keeps what is valid and drops foreign VM names and bad sett
     settings: { maxRunning: 5, idleStopMinutes: 15 },
     setup: { baseBuild: "25G83", ipswPath: "relative.ipsw" },
     computers: {
-      good: { vmName: "aiden-bot-0123456789abcdef", baseBuild: "25G83", createdAt: 1, lastUsedAt: 2 },
+      good: {
+        vmName: "aiden-bot-0123456789abcdef",
+        baseBuild: "25G83",
+        createdAt: 1,
+        lastUsedAt: 2,
+      },
       foreign: { vmName: "my-own-vm", baseBuild: "25G83", createdAt: 1 },
       broken: "nope",
     },
@@ -49,15 +58,37 @@ test("the guest driver flag is kept for a base and its computers only when it is
   const parsed = parseBotComputersState({
     setup: { baseBuild: "25G83", guestDriver: driver },
     computers: {
-      ada: { vmName: `aiden-bot-${"a".repeat(16)}`, baseBuild: "25G83", createdAt: 1, guestDriver: driver },
-      bea: { vmName: `aiden-bot-${"b".repeat(16)}`, baseBuild: "25G83", createdAt: 2, guestDriver: { ...driver, home: "/var/root" } },
-      cy: { vmName: `aiden-bot-${"c".repeat(16)}`, baseBuild: "25G83", createdAt: 3, guestDriver: { ...driver, version: "latest" } },
+      ada: {
+        vmName: `aiden-bot-${"a".repeat(16)}`,
+        baseBuild: "25G83",
+        createdAt: 1,
+        guestDriver: driver,
+      },
+      bea: {
+        vmName: `aiden-bot-${"b".repeat(16)}`,
+        baseBuild: "25G83",
+        createdAt: 2,
+        guestDriver: { ...driver, home: "/var/root" },
+      },
+      cy: {
+        vmName: `aiden-bot-${"c".repeat(16)}`,
+        baseBuild: "25G83",
+        createdAt: 3,
+        guestDriver: { ...driver, version: "latest" },
+      },
     },
   });
   assert.deepEqual(parsed.setup.guestDriver, driver);
   assert.deepEqual(parsed.computers.ada?.guestDriver, driver);
-  assert.equal(parsed.computers.bea?.guestDriver, undefined, "a home outside /Users is dropped, the computer kept");
+  assert.equal(
+    parsed.computers.bea?.guestDriver,
+    undefined,
+    "a home outside /Users is dropped, the computer kept",
+  );
   assert.equal(parsed.computers.cy?.guestDriver, undefined);
   // Without a base there is nothing the flag could describe.
-  assert.equal(parseBotComputersState({ setup: { guestDriver: driver } }).setup.guestDriver, undefined);
+  assert.equal(
+    parseBotComputersState({ setup: { guestDriver: driver } }).setup.guestDriver,
+    undefined,
+  );
 });

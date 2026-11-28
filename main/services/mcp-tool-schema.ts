@@ -126,7 +126,9 @@ function normalizeSchema(value: unknown): unknown {
     for (const [key, entry] of Object.entries(source)) {
       if (SUBSCHEMA_MAP_KEYWORDS.has(key) && isRecord(entry)) {
         target[key] = Object.fromEntries(
-          Object.entries(entry).sort(byKey).map(([name, schema]) => [name, copySchema(schema)]),
+          Object.entries(entry)
+            .sort(byKey)
+            .map(([name, schema]) => [name, copySchema(schema)]),
         );
       } else if (SUBSCHEMA_ARRAY_KEYWORDS.has(key) && Array.isArray(entry)) {
         target[key] = entry.map(copySchema);

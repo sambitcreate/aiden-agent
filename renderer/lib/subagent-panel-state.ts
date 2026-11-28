@@ -26,7 +26,12 @@ export function subagentOverviewSummary(runs: readonly SubagentRunView[]): Subag
   };
 }
 
-export type SubagentRunStatusGroupId = "running" | "needs_attention" | "failed" | "stopped" | "completed";
+export type SubagentRunStatusGroupId =
+  | "running"
+  | "needs_attention"
+  | "failed"
+  | "stopped"
+  | "completed";
 
 export interface SubagentRunStatusGroup {
   id: SubagentRunStatusGroupId;
@@ -56,7 +61,9 @@ const STATUS_GROUPS: ReadonlyArray<{ id: SubagentRunStatusGroupId; title: string
 ];
 
 /** Every run in the chat by outcome, in display order; empty groups are omitted and run order is kept. */
-export function groupSubagentRunsByStatus(runs: readonly SubagentRunView[]): SubagentRunStatusGroup[] {
+export function groupSubagentRunsByStatus(
+  runs: readonly SubagentRunView[],
+): SubagentRunStatusGroup[] {
   const byGroup = new Map<SubagentRunStatusGroupId, SubagentRunView[]>();
   for (const run of runs) {
     const id = STATUS_GROUP_BY_STATE[run.state];
@@ -367,7 +374,8 @@ export function focusSubagentRosterRun(
 }
 
 /** Transcript subagent rows, and the header that collapses their group. */
-export const SUBAGENT_CHIP_FOCUS_SELECTOR = "[data-subagent-chip-run-id], [data-subagent-chip-group-toggle]";
+export const SUBAGENT_CHIP_FOCUS_SELECTOR =
+  "[data-subagent-chip-run-id], [data-subagent-chip-group-toggle]";
 
 export interface SubagentChipFocusTarget {
   dataset: {

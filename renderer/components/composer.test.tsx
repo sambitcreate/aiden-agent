@@ -37,8 +37,12 @@ test("uncertain composer submission restores text without automatically resendin
   const prior = globalThis.localStorage;
   globalThis.localStorage = {
     getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => { values.set(key, value); },
-    removeItem: (key: string) => { values.delete(key); },
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
   } as Storage;
   try {
     saveComposerDraftText("test-chat", "Change the plan");
@@ -58,7 +62,9 @@ test("uncertain composer submission restores text without automatically resendin
 test("submission refuses to clear a draft when its recovery marker cannot be saved", () => {
   const prior = globalThis.localStorage;
   globalThis.localStorage = {
-    setItem: () => { throw new Error("Quota exceeded"); },
+    setItem: () => {
+      throw new Error("Quota exceeded");
+    },
   } as unknown as Storage;
   try {
     assert.throws(
@@ -75,8 +81,12 @@ test("undelivered Steer guidance is appended to the draft, never resent", () => 
   const prior = globalThis.localStorage;
   globalThis.localStorage = {
     getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => { values.set(key, value); },
-    removeItem: (key: string) => { values.delete(key); },
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
   } as Storage;
   try {
     // Unmounted chat: the device-local draft keeps the existing text first.
@@ -137,11 +147,11 @@ test("composer focus tints the whole shell, not only the textarea", () => {
   );
   assert.match(
     styles,
-    /:root :where\(input, textarea\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
+    /:root\s+:where\(\s*input,\s*textarea\s*\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
   );
   assert.match(
     styles,
-    /:root :where\(button,[^}]+\):focus-visible\s*\{\s*outline: 2px solid var\(--focus-ring\) !important;\s*outline-offset: var\(--keyboard-focus-offset, 2px\) !important;/u,
+    /:root\s+:where\(\s*button,[^}]+\):focus-visible\s*\{\s*outline: 2px solid var\(--focus-ring\) !important;\s*outline-offset: var\(--keyboard-focus-offset, 2px\) !important;/u,
   );
 });
 
@@ -196,7 +206,13 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   const composer = source("./composer.tsx");
   const palette = source("./composer-slash-palette.tsx");
 
-  assert.doesNotMatch(composer.slice(composer.indexOf("<Textarea"), composer.indexOf("/>", composer.indexOf("<Textarea"))), /aria-expanded=/u);
+  assert.doesNotMatch(
+    composer.slice(
+      composer.indexOf("<Textarea"),
+      composer.indexOf("/>", composer.indexOf("<Textarea")),
+    ),
+    /aria-expanded=/u,
+  );
   assert.match(composer, /event\.key === "PageDown"/u);
   assert.match(palette, /data-browser-occluder/u);
   assert.doesNotMatch(palette, /role="group"/u);
@@ -244,11 +260,17 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   const optimisticClear = composer.indexOf('setText("");');
   const sendAwait = composer.indexOf("await submit(");
   assert.ok(optimisticClear >= 0 && optimisticClear < sendAwait);
-  assert.match(composer, /if \(sendPendingRef\.current \|\| firstSendPendingRef\.current\) return false;/u);
+  assert.match(
+    composer,
+    /if \(sendPendingRef\.current \|\| firstSendPendingRef\.current\) return false;/u,
+  );
   assert.match(composer, /type: "send-started"/u);
   assert.match(composer, /failedSendDraft\(payload\.draftText, currentDraft\)/u);
   assert.match(composer, /failedSendAttachments\([\s\S]{0,160}payload\.attachments/u);
-  assert.match(composer, /markComposerSubmission\(chatId, messageWithMentions\(payload\.mentions \?\? \[\], payload\.draftText\)\)/u);
+  assert.match(
+    composer,
+    /markComposerSubmission\(\s*chatId,\s*messageWithMentions\(payload\.mentions \?\? \[\], payload\.draftText\)\s*,?\s*\)/u,
+  );
   assert.match(composer, /settleComposerSubmission\(chatId, true, draftRef\.current\.text\)/u);
   assert.match(
     composer,
@@ -275,7 +297,10 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   assert.match(composer, /authenticatedProviders\.map\(\(provider\)/u);
   assert.match(composer, /openWorktreeOnMount=\{worktreeRequest > 0\}/u);
   assert.match(composer, /programmaticReturnFocusRef=\{inputRef\}/u);
-  assert.match(composer, /readOnly=\{composerInputLocked \|\| firstSendPending \|\| dictationPreviewing\}/u);
+  assert.match(
+    composer,
+    /readOnly=\{composerInputLocked \|\| firstSendPending \|\| dictationPreviewing\}/u,
+  );
   assert.match(composer, /role="status" aria-live="polite"/u);
   assert.match(branchPicker, /openManagedWorktree \? "worktree" : null/u);
   assert.match(chatPane, /logoutBuiltinProvider\(qc, providerId\)/u);
@@ -314,18 +339,26 @@ test("first-send draft freeze blocks edits and browser annotation delivery until
   const composer = source("./composer.tsx");
   assert.match(composer, /firstSendPendingRef\.current = freezeWhileSending/u);
   assert.match(composer, /inert=\{firstSendPending \|\| undefined\}/u);
-  assert.match(composer, /if \(firstSendPendingRef\.current \|\| sendPendingRef\.current \|\| !available\(\)\) return false/u);
-  assert.match(composer, /role="status"[^\n]*Sending…/u);
+  assert.match(
+    composer,
+    /if \(firstSendPendingRef\.current \|\| sendPendingRef\.current \|\| !available\(\)\) return false/u,
+  );
+  assert.match(composer, /role="status"[\s\S]{0,120}?Sending…/u);
 });
-
 
 test("reopening a draft uses its shared pending state instead of fresh composer state", () => {
   const composer = source("./composer.tsx");
   const pane = source("../main/chat-pane.tsx");
   assert.match(pane, /firstMessageSaving=\{draft\?\.sending === true\}/u);
-  assert.match(composer, /const firstSendPending = firstMessageSaving \|\| \(freezeWhileSending && sending\)/u);
+  assert.match(
+    composer,
+    /const firstSendPending = firstMessageSaving \|\| \(freezeWhileSending && sending\)/u,
+  );
   assert.match(composer, /!firstMessageSaving &&/u);
-  assert.match(composer, /if \(sendPendingRef\.current \|\| firstSendPendingRef\.current\) return false/u);
+  assert.match(
+    composer,
+    /if \(sendPendingRef\.current \|\| firstSendPendingRef\.current\) return false/u,
+  );
 });
 
 test("voice recovery preserves the draft and offers a direct settings action", () => {
@@ -343,7 +376,10 @@ test("all asynchronous attachment entry points fence completion and current draf
   const composer = source("./composer.tsx");
   assert.match(composer, /return \(\) => operation\.cancel\(\)/u);
   assert.match(composer, /attachmentVisionRef\.current = visionSupported/u);
-  assert.match(composer, /acceptComposerAttachments\(\s*attachmentsRef\.current,\s*added,\s*attachmentVisionRef\.current !== false/u);
+  assert.match(
+    composer,
+    /acceptComposerAttachments\(\s*attachmentsRef\.current,\s*added,\s*attachmentVisionRef\.current !== false/u,
+  );
   for (const [start, end] of [
     ["const handleAttach =", "const readDroppedAttachments ="],
     ["const readDroppedAttachments =", "const readClipboardImages ="],
@@ -351,18 +387,29 @@ test("all asynchronous attachment entry points fence completion and current draf
   ]) {
     const handler = composer.slice(composer.indexOf(start), composer.indexOf(end));
     assert.match(handler, /if \(token === null\) return/u);
-    assert.match(handler, /await attachmentsApi\.[\s\S]*?if \(!attachmentOperationRef\.current\.isCurrent\(token\)\) return;[\s\S]*?acceptReadAttachments/u);
-    assert.match(handler, /catch \(error\) \{\s*if \(!attachmentOperationRef\.current\.isCurrent\(token\)\) return/u);
+    assert.match(
+      handler,
+      /await attachmentsApi\.[\s\S]*?if \(!attachmentOperationRef\.current\.isCurrent\(token\)\) return;[\s\S]*?acceptReadAttachments/u,
+    );
+    assert.match(
+      handler,
+      /catch \(error\) \{\s*if \(!attachmentOperationRef\.current\.isCurrent\(token\)\) return/u,
+    );
     assert.match(handler, /finishAttachmentRead\(token\)/u);
   }
-  assert.match(composer, /if \(!attachmentOperationRef\.current\.isCurrent\(token\)\) return;\s*const added = await attachmentsApi\.readClipboardImages/u);
+  assert.match(
+    composer,
+    /if \(!attachmentOperationRef\.current\.isCurrent\(token\)\) return;\s*const added = await attachmentsApi\.readClipboardImages/u,
+  );
 });
-
 
 test("compaction keeps draft attachment and skill removal aligned with input locking", () => {
   const composer = source("./composer.tsx");
   assert.match(composer, /disabled=\{composerInputLocked\}\s*onClick=\{\(\) => removeAttachment/u);
-  assert.match(composer, /disabled=\{composerInputLocked\}\s*onClick=\{\(\) => \{\s*dispatchSkillSelection\(\{ type: "remove"/u);
+  assert.match(
+    composer,
+    /disabled=\{composerInputLocked\}\s*onClick=\{\(\) => \{\s*dispatchSkillSelection\(\{ type: "remove"/u,
+  );
 });
 
 afterEach(cleanup);
@@ -397,7 +444,17 @@ function mountApprovals(
           onStop={() => undefined}
           isGenerating={false}
           surfaces={LOCAL_COMPOSER_SURFACES}
-          workspace={{ id: "site", name: "Site", folderPath: "/tmp/site", permission: "ask", createdAt: 1, updatedAt: 1, ...workspace } as Workspace}
+          workspace={
+            {
+              id: "site",
+              name: "Site",
+              folderPath: "/tmp/site",
+              permission: "ask",
+              createdAt: 1,
+              updatedAt: 1,
+              ...workspace,
+            } as Workspace
+          }
           onChangeApprovals={(patch) => {
             patches.push(patch);
           }}
@@ -417,7 +474,10 @@ async function settled() {
 function approvalOptions() {
   return within(screen.getByRole("radiogroup", { name: "Approvals" }))
     .getAllByRole("radio")
-    .map((radio) => `${radio.getAttribute("aria-label")}${radio.getAttribute("aria-checked") === "true" ? " (on)" : ""}`);
+    .map(
+      (radio) =>
+        `${radio.getAttribute("aria-label")}${radio.getAttribute("aria-checked") === "true" ? " (on)" : ""}`,
+    );
 }
 
 test("a workspace that follows Settings → Approvals shows no approvals chip", async () => {
@@ -440,7 +500,9 @@ test("a customized workspace shows its mode, and Use Settings hands it back to t
   ]);
   fireEvent.click(screen.getByRole("radio", { name: "Approvals: Ask" }));
   // Choices wait while a change is saving.
-  await waitFor(() => assert.equal(screen.getByRole("button", { name: /^Approvals:/u }).textContent, "Never ask"));
+  await waitFor(() =>
+    assert.equal(screen.getByRole("button", { name: /^Approvals:/u }).textContent, "Never ask"),
+  );
   fireEvent.click(screen.getByRole("radio", { name: "Approvals: Use Settings (Ask)" }));
   assert.deepEqual(patches, [{ approvalMode: "ask" }, { approvalMode: null }]);
 });
@@ -459,15 +521,23 @@ test("choosing an approvals option from the keyboard keeps the menu open for the
 test("a workspace stored as Full access reads as Never ask, and Auto needs a usable model", async () => {
   mountApprovals({ permission: "full" }, { providers: [] });
   await settled();
-  fireEvent.click(await screen.findByRole("button", { name: "Approvals: Never ask. Show options." }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Approvals: Never ask. Show options." }),
+  );
   // With no usable model the global mode is Ask, and Auto isn't offered.
-  assert.deepEqual(approvalOptions(), ["Approvals: Use Settings (Ask)", "Approvals: Ask", "Approvals: Never ask (on)"]);
+  assert.deepEqual(approvalOptions(), [
+    "Approvals: Use Settings (Ask)",
+    "Approvals: Ask",
+    "Approvals: Never ask (on)",
+  ]);
 });
 
 test("a Chat only workspace keeps its chip and points to Workspace settings instead of changing it here", async () => {
   const patches = mountApprovals({ permission: "none" });
   await settled();
-  fireEvent.click(await screen.findByRole("button", { name: "Approvals: Chat only. Show options." }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Approvals: Chat only. Show options." }),
+  );
   assert.equal(screen.queryByRole("radiogroup", { name: "Approvals" }), null);
   fireEvent.click(screen.getByRole("button", { name: "Workspace settings…" }));
   assert.deepEqual(patches, []);
@@ -490,7 +560,9 @@ test("a No workspace chat always shows the chip and can switch to Chat only and 
 
   const fromChatOnly = mountApprovals({ noWorkspace: true, permission: "none" });
   await settled();
-  fireEvent.click(await screen.findByRole("button", { name: "Approvals: Chat only. Show options." }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Approvals: Chat only. Show options." }),
+  );
   fireEvent.click(screen.getByRole("radio", { name: "Approvals: Ask" }));
   // Leaving Chat only turns folder work back on with the chosen mode.
   assert.deepEqual(fromChatOnly, [{ approvalMode: "ask", permission: "ask" }]);
@@ -505,7 +577,10 @@ test("arrow keys move between approval choices without changing them; Enter choo
   fireEvent.keyDown(current, { key: "ArrowDown" });
   assert.equal(document.activeElement, screen.getByRole("radio", { name: "Approvals: Never ask" }));
   fireEvent.keyDown(document.activeElement!, { key: "Home" });
-  assert.equal(document.activeElement, screen.getByRole("radio", { name: "Approvals: Use Settings (Auto)" }));
+  assert.equal(
+    document.activeElement,
+    screen.getByRole("radio", { name: "Approvals: Use Settings (Auto)" }),
+  );
   assert.deepEqual(patches, []);
   fireEvent.keyDown(document.activeElement!, { key: "Enter" });
   assert.deepEqual(patches, [{ approvalMode: null }]);

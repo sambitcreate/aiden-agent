@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  MAX_WORKTREE_BRANCH_CHARS,
-  parseWorktreeCreateParams,
-} from "./worktree-create-params.js";
+import { MAX_WORKTREE_BRANCH_CHARS, parseWorktreeCreateParams } from "./worktree-create-params.js";
 
 test("worktree creation selectors are bounded and branch-safe before Git", () => {
   assert.deepEqual(parseWorktreeCreateParams("workspace", "feature/phase-four"), {

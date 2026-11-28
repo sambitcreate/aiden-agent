@@ -10,7 +10,7 @@ const IMPORT_SPEC =
 const LOCK_FILE =
   /(?:^|\/)(?:[^/]+\.(?:lock|lockfile)|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lock(?:b)?)$/u;
 const CONFIG_FILE =
-  /(?:^|\/)(?:[^/]*\.config\.[^/]+|(?:config|tsconfig)(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.prettierrc(?:\.[^/]+)?)$/u;
+  /(?:^|\/)(?:[^/]*\.config\.[^/]+|(?:config|tsconfig)(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.prettierrc(?:\.[^/]+)?|\.oxfmtrc(?:\.[^/]+)?)$/u;
 const ALIASES = Object.freeze([
   ["@renderer/", "renderer/"],
   ["@main/", "main/"],
@@ -64,7 +64,9 @@ export function validateE2ESpecMap(specs, map = readE2ESpecMap(), options = {}) 
   if (!isRecord(map) || map.version !== 1 || !isRecord(map.specs) || !Array.isArray(map.full)) {
     throw new Error("E2E spec-to-source map is missing or malformed");
   }
-  const runnable = specs.filter((file) => !file.endsWith(".live.spec.ts") && file !== "diagnostics-production.spec.ts");
+  const runnable = specs.filter(
+    (file) => !file.endsWith(".live.spec.ts") && file !== "diagnostics-production.spec.ts",
+  );
   const missing = runnable.filter((file) => !Array.isArray(map.specs[file]));
   if (missing.length > 0) {
     throw new Error(`E2E spec-to-source map is missing ${missing.join(", ")}`);
@@ -74,12 +76,18 @@ export function validateE2ESpecMap(specs, map = readE2ESpecMap(), options = {}) 
     throw new Error(`E2E spec-to-source map lists unknown specs ${unknown.join(", ")}`);
   }
   const macos = map.macos ?? [];
-  if (!Array.isArray(macos) || macos.some((file) => typeof file !== "string") || new Set(macos).size !== macos.length) {
+  if (
+    !Array.isArray(macos) ||
+    macos.some((file) => typeof file !== "string") ||
+    new Set(macos).size !== macos.length
+  ) {
     throw new Error("E2E spec-to-source map macos list is malformed");
   }
   const unknownMacos = macos.filter((file) => !runnable.includes(file));
   if (unknownMacos.length > 0) {
-    throw new Error(`E2E spec-to-source map macos list names unknown specs ${unknownMacos.join(", ")}`);
+    throw new Error(
+      `E2E spec-to-source map macos list names unknown specs ${unknownMacos.join(", ")}`,
+    );
   }
   if (options.requireMatchingFiles) {
     const unmatched = [];
@@ -157,7 +165,8 @@ export function parseImportSpecifiers(source) {
 // `resolve("main/services/x.ts")`. Treat any quoted path to a source file as a
 // dependency, so changing that file still selects the test. Extra edges only run
 // more tests; a missing edge would skip one.
-const SOURCE_PATH_LITERAL = /["'`]((?:\.{1,2}\/|(?:main|renderer|packages\/cli)\/)[^"'`\s$]+\.(?:cjs|mjs|js|ts|tsx|json))["'`]/gu;
+const SOURCE_PATH_LITERAL =
+  /["'`]((?:\.{1,2}\/|(?:main|renderer|packages\/cli)\/)[^"'`\s$]+\.(?:cjs|mjs|js|ts|tsx|json))["'`]/gu;
 
 export function sourcePathReferences(fromFile, source, present) {
   const references = new Set();
@@ -242,7 +251,8 @@ function parseExpr(text, index) {
   const member = parseMember(text, start);
   if (!member) return null;
   const afterName = skipSpace(text, member.next);
-  if (text[afterName] !== "(") return { value: { kind: "id", name: member.value }, next: member.next };
+  if (text[afterName] !== "(")
+    return { value: { kind: "id", name: member.value }, next: member.next };
   const args = parseArgList(text, afterName);
   if (!args) return null;
   const callee = member.value.slice(member.value.lastIndexOf(".") + 1);
@@ -339,12 +349,21 @@ function resolveAlias(specifier) {
 
 function candidateFiles(resolved) {
   const withoutJs = resolved.replace(/\.js$/u, "");
-  const stems = resolved.endsWith(".js") && withoutJs !== resolved ? [resolved, withoutJs] : [resolved];
+  const stems =
+    resolved.endsWith(".js") && withoutJs !== resolved ? [resolved, withoutJs] : [resolved];
   const files = [];
   for (const stem of stems) {
     files.push(stem);
     if (!SOURCE_FILE.test(stem)) {
-      files.push(`${stem}.ts`, `${stem}.tsx`, `${stem}.js`, `${stem}.mjs`, `${stem}.cjs`, `${stem}.json`, `${stem}.css`);
+      files.push(
+        `${stem}.ts`,
+        `${stem}.tsx`,
+        `${stem}.js`,
+        `${stem}.mjs`,
+        `${stem}.cjs`,
+        `${stem}.json`,
+        `${stem}.css`,
+      );
     }
     files.push(
       `${stem}/index.ts`,
@@ -360,8 +379,11 @@ function candidateFiles(resolved) {
 export function resolveImportedPath(fromFile, specifier, present) {
   if (typeof specifier !== "string" || specifier.length === 0) return null;
   const alias = resolveAlias(specifier);
-  const resolved = alias
-    ?? (specifier.startsWith(".") ? posix(path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), specifier))) : null);
+  const resolved =
+    alias ??
+    (specifier.startsWith(".")
+      ? posix(path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), specifier)))
+      : null);
   if (!resolved || resolved.startsWith("../") || resolved.includes("/node_modules/")) return null;
   for (const candidate of candidateFiles(resolved.replace(/^\.\//u, ""))) {
     if (present.has(candidate)) return candidate;
@@ -446,12 +468,7 @@ export function buildReverseImportGraph(files, readFile) {
   return { present, importers };
 }
 
-export function selectRelatedUnitFiles({
-  changedPaths,
-  testFiles,
-  sourceFiles,
-  readFile,
-} = {}) {
+export function selectRelatedUnitFiles({ changedPaths, testFiles, sourceFiles, readFile } = {}) {
   const changed = [...new Set((changedPaths ?? []).map(posix))];
   const tests = [...new Set((testFiles ?? []).map(posix))];
   if (changed.length === 0) return { mode: "all", reason: "invalid-path-list", files: tests };
@@ -485,14 +502,12 @@ export function selectRelatedUnitFiles({
   return { mode: "related", reason: "related", files };
 }
 
-export function selectRelatedE2ESpecs({
-  changedPaths,
-  specs,
-  map = readE2ESpecMap(),
-} = {}) {
+export function selectRelatedE2ESpecs({ changedPaths, specs, map = readE2ESpecMap() } = {}) {
   const changed = [...new Set((changedPaths ?? []).map(posix))];
   const discovered = [...new Set((specs ?? []).map(posix))];
-  const runnable = discovered.filter((file) => !file.endsWith(".live.spec.ts") && file !== "diagnostics-production.spec.ts");
+  const runnable = discovered.filter(
+    (file) => !file.endsWith(".live.spec.ts") && file !== "diagnostics-production.spec.ts",
+  );
   validateE2ESpecMap(discovered, map);
   if (changed.length === 0) return { mode: "all", reason: "invalid-path-list", specs: runnable };
   if (changed.some((file) => requiresFullE2E(file, map))) {
@@ -532,16 +547,28 @@ export function selectReachableTests({
 } = {}) {
   if (eventName !== "pull_request") {
     return {
-      reason: eventName === "push" || eventName === "merge_group" ? "forced-full" : "non-pull-request",
+      reason:
+        eventName === "push" || eventName === "merge_group" ? "forced-full" : "non-pull-request",
       unit: { mode: "all", reason: "forced-full", files: testFiles ?? [] },
-      e2e: { mode: "all", reason: "forced-full", specs: (specs ?? []).filter((file) => !file.endsWith(".live.spec.ts") && file !== "diagnostics-production.spec.ts") },
+      e2e: {
+        mode: "all",
+        reason: "forced-full",
+        specs: (specs ?? []).filter(
+          (file) => !file.endsWith(".live.spec.ts") && file !== "diagnostics-production.spec.ts",
+        ),
+      },
     };
   }
   const reader = readFile ?? ((file) => readFileSync(path.join(PROJECT_ROOT, file), "utf8"));
   const sources = sourceFiles ?? listSourceFiles();
   return {
     reason: "related",
-    unit: selectRelatedUnitFiles({ changedPaths, testFiles, sourceFiles: sources, readFile: reader }),
+    unit: selectRelatedUnitFiles({
+      changedPaths,
+      testFiles,
+      sourceFiles: sources,
+      readFile: reader,
+    }),
     e2e: selectRelatedE2ESpecs({ changedPaths, specs, map }),
   };
 }
@@ -553,8 +580,14 @@ export function selectReachableTests({
 export function planMacE2E({ eventName, desktop, e2e, map = readE2ESpecMap(), shardCount } = {}) {
   if (desktop !== true) return { run: false, scope: "none", shards: [], specs: [] };
   if (eventName !== "pull_request") {
-    if (!Number.isInteger(shardCount) || shardCount < 1) throw new Error("Invalid macOS E2E shard count");
-    return { run: true, scope: "all", shards: Array.from({ length: shardCount }, (_, index) => index + 1), specs: [] };
+    if (!Number.isInteger(shardCount) || shardCount < 1)
+      throw new Error("Invalid macOS E2E shard count");
+    return {
+      run: true,
+      scope: "all",
+      shards: Array.from({ length: shardCount }, (_, index) => index + 1),
+      specs: [],
+    };
   }
   const wanted = new Set(Array.isArray(e2e?.specs) ? e2e.specs : []);
   const specs = (map.macos ?? []).filter((file) => wanted.has(file));

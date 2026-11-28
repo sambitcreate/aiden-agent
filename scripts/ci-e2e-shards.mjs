@@ -90,30 +90,50 @@ export const FILE_SECONDS = Object.freeze({
   "workspace-folder-missing.spec.ts": 8,
   "workspace-panel.spec.ts": 140,
   "workspace-settings.spec.ts": 12,
-  "worktree-folder-deleted.spec.ts": 11
+  "worktree-folder-deleted.spec.ts": 11,
 });
 
 export function discoverSpecs(directory = path.join(root, "tests/e2e")) {
   return readdirSync(directory, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith(".spec.ts"))
-    .map((entry) => path.relative(directory, path.join(entry.parentPath, entry.name)).split(path.sep).join("/"))
+    .map((entry) =>
+      path.relative(directory, path.join(entry.parentPath, entry.name)).split(path.sep).join("/"),
+    )
     .sort();
 }
 
 export function planShards(specs, count = E2E_SHARD_COUNT, options = {}) {
-  if (!Number.isInteger(count) || count < 1 || count > 16) throw new Error("Invalid E2E shard count");
-  if (!Array.isArray(specs) || new Set(specs).size !== specs.length || specs.some((file) =>
-    typeof file !== "string" || !/^[\w/-]+(?:\.[\w-]+)*\.spec\.ts$/u.test(file) || file.includes(".."))) {
+  if (!Number.isInteger(count) || count < 1 || count > 16)
+    throw new Error("Invalid E2E shard count");
+  if (
+    !Array.isArray(specs) ||
+    new Set(specs).size !== specs.length ||
+    specs.some(
+      (file) =>
+        typeof file !== "string" ||
+        !/^[\w/-]+(?:\.[\w-]+)*\.spec\.ts$/u.test(file) ||
+        file.includes(".."),
+    )
+  ) {
     throw new Error("Invalid or duplicate E2E spec paths");
   }
-  const files = specs.filter((file) => !file.endsWith(".live.spec.ts") && file !== "diagnostics-production.spec.ts");
+  const files = specs.filter(
+    (file) => !file.endsWith(".live.spec.ts") && file !== "diagnostics-production.spec.ts",
+  );
   const recorded = options.recorded ?? {};
   const fallback = options.fallback ?? FILE_SECONDS;
-  const weight = (file) => specWeight(file, recorded, fallback, options.defaultSeconds ?? DEFAULT_SPEC_SECONDS);
+  const weight = (file) =>
+    specWeight(file, recorded, fallback, options.defaultSeconds ?? DEFAULT_SPEC_SECONDS);
   files.sort((a, b) => weight(b) - weight(a) || a.localeCompare(b, "en"));
-  const shards = Array.from({ length: count }, (_, index) => ({ index: index + 1, seconds: 0, files: [] }));
+  const shards = Array.from({ length: count }, (_, index) => ({
+    index: index + 1,
+    seconds: 0,
+    files: [],
+  }));
   for (const file of files) {
-    const shard = shards.reduce((best, candidate) => candidate.seconds < best.seconds ? candidate : best);
+    const shard = shards.reduce((best, candidate) =>
+      candidate.seconds < best.seconds ? candidate : best,
+    );
     shard.files.push(file);
     shard.seconds += weight(file);
   }
@@ -126,14 +146,26 @@ export function loadRecordedWeights(filePath = process.env.AIDEN_E2E_TIMINGS, pl
 
 export function shardArguments(specs, selection, options = {}) {
   const match = /^([1-9][0-9]*)\/([1-9][0-9]*)$/u.exec(selection ?? "");
-  if (!match || Number(match[1]) > Number(match[2])) throw new Error("Use an E2E shard such as 1/3");
+  if (!match || Number(match[1]) > Number(match[2]))
+    throw new Error("Use an E2E shard such as 1/3");
   const shard = planShards(specs, Number(match[2]), options)[Number(match[1]) - 1];
   if (!shard.files.length) {
     if (options.allowEmpty) return { shard, args: [], empty: true };
     throw new Error("E2E shard must contain tests");
   }
-  const patterns = shard.files.map((file) => `(?:^|/)tests/e2e/${file.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`);
-  return { shard, args: ["test", "--config=playwright.config.ts", "--workers=1", "--fail-on-flaky-tests", ...patterns] };
+  const patterns = shard.files.map(
+    (file) => `(?:^|/)tests/e2e/${file.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
+  );
+  return {
+    shard,
+    args: [
+      "test",
+      "--config=playwright.config.ts",
+      "--workers=1",
+      "--fail-on-flaky-tests",
+      ...patterns,
+    ],
+  };
 }
 
 export function selectedSpecs(discovered, selection) {
@@ -150,7 +182,13 @@ export function selectedSpecs(discovered, selection) {
 export function specsForRunner(discovered, selection, runner) {
   const specs = selectedSpecs(discovered, selection);
   const plan = selection?.macE2E;
-  if (runner !== "macos" || plan?.scope !== "macos" || !Array.isArray(plan.specs) || plan.specs.length === 0) return specs;
+  if (
+    runner !== "macos" ||
+    plan?.scope !== "macos" ||
+    !Array.isArray(plan.specs) ||
+    plan.specs.length === 0
+  )
+    return specs;
   const present = new Set(discovered);
   if (plan.specs.some((file) => !present.has(file))) return specs;
   return discovered.filter((file) => plan.specs.includes(file));
@@ -188,13 +226,22 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     if (empty) {
       process.stdout.write(`Electron shard ${shard.index}: 0 spec files selected; skipping.\n`);
       if (process.env.GITHUB_STEP_SUMMARY) {
-        appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Electron shard ${shard.index}: 0 spec files selected; skipped.\n`);
+        appendFileSync(
+          process.env.GITHUB_STEP_SUMMARY,
+          `Electron shard ${shard.index}: 0 spec files selected; skipped.\n`,
+        );
       }
     } else {
       const start = Date.now();
-      const result = spawnSync(process.execPath, [path.join(root, "node_modules/@playwright/test/cli.js"), ...args], {
-        cwd: root, env: process.env, stdio: "inherit",
-      });
+      const result = spawnSync(
+        process.execPath,
+        [path.join(root, "node_modules/@playwright/test/cli.js"), ...args],
+        {
+          cwd: root,
+          env: process.env,
+          stdio: "inherit",
+        },
+      );
       const seconds = Math.round((Date.now() - start) / 1000);
       const success = !result.error && result.status === 0;
       writeShardTimings(
@@ -202,8 +249,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         path.join(root, "test-results/e2e-shard-timings.json"),
       );
       if (process.env.GITHUB_STEP_SUMMARY) {
-        appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-          `Electron shard ${shard.index}: ${shard.files.length} spec files, ${seconds}s, ${success ? "passed" : "failed"}.\n`);
+        appendFileSync(
+          process.env.GITHUB_STEP_SUMMARY,
+          `Electron shard ${shard.index}: ${shard.files.length} spec files, ${seconds}s, ${success ? "passed" : "failed"}.\n`,
+        );
       }
       process.exitCode = success ? 0 : 1;
     }

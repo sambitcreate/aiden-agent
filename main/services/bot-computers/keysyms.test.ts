@@ -83,15 +83,39 @@ test("line breaks and tabs are keys, other characters are Unicode keysyms, and c
 });
 
 test("a chord presses modifiers in order, the key, then releases in reverse", () => {
-  assert.deepEqual(chordKeyStrokes("cmd+shift+t"), [down(XK.Shift_L), down(XK.Super_L), down(0x74), up(0x74), up(XK.Super_L), up(XK.Shift_L)]);
+  assert.deepEqual(chordKeyStrokes("cmd+shift+t"), [
+    down(XK.Shift_L),
+    down(XK.Super_L),
+    down(0x74),
+    up(0x74),
+    up(XK.Super_L),
+    up(XK.Shift_L),
+  ]);
   assert.deepEqual(chordKeyStrokes("Return"), [down(XK.Return), up(XK.Return)]);
-  assert.deepEqual(chordKeyStrokes("option+left"), [down(XK.Alt_L), down(XK.Left), up(XK.Left), up(XK.Alt_L)]);
+  assert.deepEqual(chordKeyStrokes("option+left"), [
+    down(XK.Alt_L),
+    down(XK.Left),
+    up(XK.Left),
+    up(XK.Alt_L),
+  ]);
   assert.deepEqual(chordKeyStrokes("f5"), [down(0xffc2), up(0xffc2)]);
 });
 
 test("a chord on a shifted symbol adds Shift once", () => {
-  assert.deepEqual(chordKeyStrokes("cmd+?"), [down(XK.Super_L), down(XK.Shift_L), down(0x2f), up(0x2f), up(XK.Shift_L), up(XK.Super_L)]);
-  assert.deepEqual(chordKeyStrokes("shift+?"), [down(XK.Shift_L), down(0x2f), up(0x2f), up(XK.Shift_L)]);
+  assert.deepEqual(chordKeyStrokes("cmd+?"), [
+    down(XK.Super_L),
+    down(XK.Shift_L),
+    down(0x2f),
+    up(0x2f),
+    up(XK.Shift_L),
+    up(XK.Super_L),
+  ]);
+  assert.deepEqual(chordKeyStrokes("shift+?"), [
+    down(XK.Shift_L),
+    down(0x2f),
+    up(0x2f),
+    up(XK.Shift_L),
+  ]);
 });
 
 test("Computer Use's blocked shortcuts, fn and unknown keys are refused", () => {

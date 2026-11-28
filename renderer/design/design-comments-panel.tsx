@@ -23,7 +23,13 @@ const EMPTY: Record<Filter, string> = {
   resolved: "No resolved comments yet.",
 };
 
-export function DesignCommentsPanel({ doc, onOpen }: { doc: DesignCanvas; onOpen(id: string): void }) {
+export function DesignCommentsPanel({
+  doc,
+  onOpen,
+}: {
+  doc: DesignCanvas;
+  onOpen(id: string): void;
+}) {
   const [open, setOpen] = React.useState(false);
   const [filter, setFilter] = React.useState<Filter>("open");
   const numbers = React.useMemo(() => commentNumbers(doc), [doc]);
@@ -47,7 +53,13 @@ export function DesignCommentsPanel({ doc, onOpen }: { doc: DesignCanvas; onOpen
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-80 p-2" aria-label="All comments">
-        <Segmented value={filter} onValueChange={setFilter} options={FILTERS} aria-label="Show" className="w-full [&>*]:flex-1" />
+        <Segmented
+          value={filter}
+          onValueChange={setFilter}
+          options={FILTERS}
+          aria-label="Show"
+          className="w-full [&>*]:flex-1"
+        />
         {shown.length === 0 ? (
           <p className="px-2 py-6 text-center text-small text-secondary">{EMPTY[filter]}</p>
         ) : (

@@ -11,7 +11,14 @@ import { decideCanvasConnection } from "./editor-core";
 import { WorkflowEditorContext, type WorkflowEditorContextValue } from "./editor-context";
 import { viewerItemsForOutputs, viewerPosition } from "./gallery-core";
 import { HistoryPanel } from "./history-panel";
-import { deletionOp, interpretEdgeChanges, interpretNodeChanges, toFlowEdges, toFlowNodes, type WorkflowFlowNode } from "./flow-adapter-core";
+import {
+  deletionOp,
+  interpretEdgeChanges,
+  interpretNodeChanges,
+  toFlowEdges,
+  toFlowNodes,
+  type WorkflowFlowNode,
+} from "./flow-adapter-core";
 import { LeaveGuard } from "./leave-guard";
 import { ADDABLE_NODES, NODE_COMPONENTS } from "./nodes/registry";
 import { RunPanel } from "./run-panel";
@@ -33,7 +40,10 @@ const SAVE_LABELS: Record<SaveState, string> = {
 };
 
 /** What the viewer shows: one Output node's images or the whole history, at one image. */
-type ViewerState = { source: { kind: "node"; nodeId: string } | { kind: "history" }; assetId: string };
+type ViewerState = {
+  source: { kind: "node"; nodeId: string } | { kind: "history" };
+  assetId: string;
+};
 
 const connectionOf = (connection: Connection | Edge) => ({
   source: connection.source,
@@ -50,7 +60,9 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
   const [minimap, setMinimap] = React.useState(false);
   const [dragging, setDragging] = React.useState<Map<string, WorkflowPosition>>(new Map());
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
-  const [measured, setMeasured] = React.useState<Map<string, { width: number; height: number }>>(new Map());
+  const [measured, setMeasured] = React.useState<Map<string, { width: number; height: number }>>(
+    new Map(),
+  );
   const [confirmReload, setConfirmReload] = React.useState(false);
   const [sideTab, setSideTab] = React.useState<SidePanelTab>("run");
   const [viewer, setViewer] = React.useState<ViewerState | null>(null);
@@ -64,7 +76,10 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
   const runAction = React.useRef<HTMLButtonElement>(null);
   const doc = controller.doc;
 
-  const flowNodes = React.useMemo(() => (doc ? toFlowNodes(doc, dragging, selected, measured) : []), [doc, dragging, selected, measured]);
+  const flowNodes = React.useMemo(
+    () => (doc ? toFlowNodes(doc, dragging, selected, measured) : []),
+    [doc, dragging, selected, measured],
+  );
   const flowEdges = React.useMemo(() => (doc ? toFlowEdges(doc, selected) : []), [doc, selected]);
   const attempts = React.useMemo(
     () => new Map((run.snapshot?.attempts ?? []).map((attempt) => [attempt.nodeId, attempt])),
@@ -75,8 +90,14 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
   const { apply, models, assetUrls, latestOutputs, staleNodeIds, importImage } = controller;
   const { snapshot, prepare } = run;
   const running = run.running || run.busy;
-  const outputsFor = React.useCallback((nodeId: string) => outputsForNode(snapshot, latestOutputs, nodeId), [snapshot, latestOutputs]);
-  const runFromHere = React.useCallback((nodeId: string) => prepare({ kind: "from-node", nodeId }), [prepare]);
+  const outputsFor = React.useCallback(
+    (nodeId: string) => outputsForNode(snapshot, latestOutputs, nodeId),
+    [snapshot, latestOutputs],
+  );
+  const runFromHere = React.useCallback(
+    (nodeId: string) => prepare({ kind: "from-node", nodeId }),
+    [prepare],
+  );
   const openImage = React.useCallback(
     (nodeId: string, index: number) => {
       const image = outputsFor(nodeId)[index];
@@ -85,17 +106,50 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
     [outputsFor],
   );
   const { saveAs, copy, reveal } = imageActions;
-  const nodeImageActions = React.useMemo(() => ({ saveAs, copy, reveal, revealLabel: REVEAL_LABEL }), [saveAs, copy, reveal]);
+  const nodeImageActions = React.useMemo(
+    () => ({ saveAs, copy, reveal, revealLabel: REVEAL_LABEL }),
+    [saveAs, copy, reveal],
+  );
   const context = React.useMemo<WorkflowEditorContextValue>(
-    () => ({ apply, models, assetUrls, attempts, outputsFor, running, stale: staleNodeIds, importImage, runFromHere, openImage, imageActions: nodeImageActions }),
-    [apply, models, assetUrls, attempts, outputsFor, running, staleNodeIds, importImage, runFromHere, openImage, nodeImageActions],
+    () => ({
+      apply,
+      models,
+      assetUrls,
+      attempts,
+      outputsFor,
+      running,
+      stale: staleNodeIds,
+      importImage,
+      runFromHere,
+      openImage,
+      imageActions: nodeImageActions,
+    }),
+    [
+      apply,
+      models,
+      assetUrls,
+      attempts,
+      outputsFor,
+      running,
+      staleNodeIds,
+      importImage,
+      runFromHere,
+      openImage,
+      nodeImageActions,
+    ],
   );
   // Resolved on every render, so a gallery refresh fills in details while the viewer is open.
   const viewerItems = React.useMemo(() => {
     if (!viewer) return [];
     if (viewer.source.kind === "history") return gallery.items;
     return viewerItemsForOutputs(outputsFor(viewer.source.nodeId), {
-      gallery: gallery.items, workflowId, nodeId: viewer.source.nodeId, assetUrls, attempts: snapshot?.attempts ?? [], runId: snapshot?.run.runId, runState: snapshot?.run.state,
+      gallery: gallery.items,
+      workflowId,
+      nodeId: viewer.source.nodeId,
+      assetUrls,
+      attempts: snapshot?.attempts ?? [],
+      runId: snapshot?.run.runId,
+      runState: snapshot?.run.state,
     });
   }, [viewer, gallery.items, outputsFor, workflowId, assetUrls, snapshot]);
   const viewerIndex = viewerPosition(viewerItems, viewer?.assetId);
@@ -105,16 +159,21 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
   }, [viewer, viewerIndex]);
   const { addImageInput } = controller;
   const viewerActions = React.useMemo<ViewerAction[]>(
-    () => [{
-      id: "use-as-input",
-      label: "Use as Input",
-      icon: <ImagePlus aria-hidden="true" />,
-      onSelect: (item) => {
-        const pane = canvasPane.current?.getBoundingClientRect();
-        addImageInput(item, item.thumbUrl || undefined, { width: pane?.width ?? 0, height: pane?.height ?? 0 });
-        setViewer(null);
+    () => [
+      {
+        id: "use-as-input",
+        label: "Use as Input",
+        icon: <ImagePlus aria-hidden="true" />,
+        onSelect: (item) => {
+          const pane = canvasPane.current?.getBoundingClientRect();
+          addImageInput(item, item.thumbUrl || undefined, {
+            width: pane?.width ?? 0,
+            height: pane?.height ?? 0,
+          });
+          setViewer(null);
+        },
       },
-    }],
+    ],
     [addImageInput],
   );
 
@@ -126,7 +185,9 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
             role="alert"
             title="This workflow could not be opened"
             description={controller.error ?? undefined}
-            action={<Button onClick={() => void navigate({ to: "/images" })}>Back to Images</Button>}
+            action={
+              <Button onClick={() => void navigate({ to: "/images" })}>Back to Images</Button>
+            }
           />
         ) : (
           <EmptyState placement="inline" role="status" title="Opening workflow…" />
@@ -135,7 +196,9 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
     );
   }
 
-  const nodeTitles = new Map(doc.nodes.map((node) => [node.id, node.title ?? IMAGE_NODE_DEFINITIONS[node.type].title]));
+  const nodeTitles = new Map(
+    doc.nodes.map((node) => [node.id, node.title ?? IMAGE_NODE_DEFINITIONS[node.type].title]),
+  );
   const notices = [
     ...(controller.message ? [{ key: "message", text: controller.message }] : []),
     ...issueNotices(run.issues, nodeTitles),
@@ -155,9 +218,27 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
         title={doc.title}
         actions={
           <>
-            <Text variant="small" color="secondary">{SAVE_LABELS[controller.saveState]}</Text>
-            <Button variant="transparent" iconOnly aria-label="Undo" disabled={!controller.canUndo} onClick={controller.undo}><Undo2 /></Button>
-            <Button variant="transparent" iconOnly aria-label="Redo" disabled={!controller.canRedo} onClick={controller.redo}><Redo2 /></Button>
+            <Text variant="small" color="secondary">
+              {SAVE_LABELS[controller.saveState]}
+            </Text>
+            <Button
+              variant="transparent"
+              iconOnly
+              aria-label="Undo"
+              disabled={!controller.canUndo}
+              onClick={controller.undo}
+            >
+              <Undo2 />
+            </Button>
+            <Button
+              variant="transparent"
+              iconOnly
+              aria-label="Redo"
+              disabled={!controller.canRedo}
+              onClick={controller.redo}
+            >
+              <Redo2 />
+            </Button>
             <Button
               ref={runAction}
               variant={run.running ? "muted" : "accent"}
@@ -186,7 +267,11 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
               deleteKeyCode={viewerIndex !== null ? null : undefined}
               onNodesChange={(changes) => {
                 const result = interpretNodeChanges(changes, flowState.current);
-                flowState.current = { dragging: result.dragging, selected: result.selected, measured: result.measured };
+                flowState.current = {
+                  dragging: result.dragging,
+                  selected: result.selected,
+                  measured: result.measured,
+                };
                 setDragging(result.dragging);
                 setSelected(result.selected);
                 setMeasured(result.measured);
@@ -201,13 +286,36 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
                 const op = deletionOp(deleted);
                 if (op) controller.apply(op);
               }}
-              isValidConnection={(connection) => decideCanvasConnection(doc, connectionOf(connection), "probe").allowed}
-              onConnect={(connection) => controller.apply({ type: "connect", edgeId: crypto.randomUUID(), ...connectionOf(connection) })}
-              emptyState={<EmptyState placement="inline" title="Add a node to start" description="Add a Prompt, a Generate Image and an Output node, then connect them." />}
+              isValidConnection={(connection) =>
+                decideCanvasConnection(doc, connectionOf(connection), "probe").allowed
+              }
+              onConnect={(connection) =>
+                controller.apply({
+                  type: "connect",
+                  edgeId: crypto.randomUUID(),
+                  ...connectionOf(connection),
+                })
+              }
+              emptyState={
+                <EmptyState
+                  placement="inline"
+                  title="Add a node to start"
+                  description="Add a Prompt, a Generate Image and an Output node, then connect them."
+                />
+              }
             />
-            <div role="toolbar" aria-label="Add node" className="glass-surface absolute left-1/2 top-3 flex -translate-x-1/2 gap-1 rounded-button p-1 shadow-control">
+            <div
+              role="toolbar"
+              aria-label="Add node"
+              className="glass-surface absolute left-1/2 top-3 flex -translate-x-1/2 gap-1 rounded-button p-1 shadow-control"
+            >
               {ADDABLE_NODES.map((entry) => (
-                <Button key={entry.type} size="small" variant="transparent" onClick={() => controller.addNode(entry.type)}>
+                <Button
+                  key={entry.type}
+                  size="small"
+                  variant="transparent"
+                  onClick={() => controller.addNode(entry.type)}
+                >
                   <Plus />
                   {entry.label}
                 </Button>
@@ -215,20 +323,47 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
             </div>
             {notices.length > 0 || saveError !== null || conflict || deleted ? (
               <Callout role="alert" color="red" className="absolute bottom-3 left-14 max-w-md">
-                {notices.map((notice) => <Text key={notice.key}>{notice.text}</Text>)}
-                {saveError !== null ? <Text>Aiden could not save your latest changes. {saveError}</Text> : null}
+                {notices.map((notice) => (
+                  <Text key={notice.key}>{notice.text}</Text>
+                ))}
+                {saveError !== null ? (
+                  <Text>Aiden could not save your latest changes. {saveError}</Text>
+                ) : null}
                 {notices.length > 0 || saveError !== null ? (
                   <div className="flex flex-wrap gap-1">
-                    {saveError !== null ? <Button size="small" variant="muted" onClick={controller.retrySave}>Retry</Button> : null}
-                    <Button size="small" variant="transparent" onClick={dismissNotices}>Dismiss</Button>
+                    {saveError !== null ? (
+                      <Button size="small" variant="muted" onClick={controller.retrySave}>
+                        Retry
+                      </Button>
+                    ) : null}
+                    <Button size="small" variant="transparent" onClick={dismissNotices}>
+                      Dismiss
+                    </Button>
                   </div>
                 ) : null}
                 {conflict ? (
                   <>
-                    <Text>This workflow changed somewhere else. Keep your version, or discard your changes and reload.</Text>
+                    <Text>
+                      This workflow changed somewhere else. Keep your version, or discard your
+                      changes and reload.
+                    </Text>
                     <div className="flex flex-wrap gap-1">
-                      <Button size="small" variant="muted" disabled={controller.resolving} onClick={controller.keepMine}>Keep My Version</Button>
-                      <Button size="small" variant="transparent" disabled={controller.resolving} onClick={() => setConfirmReload(true)}>Discard and Reload…</Button>
+                      <Button
+                        size="small"
+                        variant="muted"
+                        disabled={controller.resolving}
+                        onClick={controller.keepMine}
+                      >
+                        Keep My Version
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="transparent"
+                        disabled={controller.resolving}
+                        onClick={() => setConfirmReload(true)}
+                      >
+                        Discard and Reload…
+                      </Button>
                     </div>
                   </>
                 ) : null}
@@ -255,9 +390,17 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
           <EditorSidePanel
             tab={sideTab}
             onTabChange={setSideTab}
-            run={run.snapshot ? (
-              <RunPanel snapshot={run.snapshot} nodeTitles={nodeTitles} busy={run.busy} onStop={run.stop} onRetry={(nodeId, kind) => run.prepare({ kind, nodeId })} />
-            ) : null}
+            run={
+              run.snapshot ? (
+                <RunPanel
+                  snapshot={run.snapshot}
+                  nodeTitles={nodeTitles}
+                  busy={run.busy}
+                  onStop={run.stop}
+                  onRetry={(nodeId, kind) => run.prepare({ kind, nodeId })}
+                />
+              ) : null
+            }
             history={
               <HistoryPanel
                 status={gallery.status}
@@ -287,7 +430,13 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
           saveFolderLabel={gallery.saveFolderLabel}
           extraActions={viewerActions}
         />
-        <ConsentSheet plan={run.plan} busy={run.busy} onCancel={run.dismiss} onConfirm={run.confirm} returnFocus={() => runAction.current} />
+        <ConsentSheet
+          plan={run.plan}
+          busy={run.busy}
+          onCancel={run.dismiss}
+          onConfirm={run.confirm}
+          returnFocus={() => runAction.current}
+        />
         <AlertDialog
           open={confirmReload}
           onOpenChange={setConfirmReload}

@@ -2,16 +2,7 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, LoaderCircle, LogIn, MessageSquareCode, RefreshCw } from "lucide-react";
 
-import {
-  AlertDialog,
-  Badge,
-  Button,
-  Input,
-  Separator,
-  Text,
-  toast,
-  type DialogLayer,
-} from "../ui";
+import { AlertDialog, Badge, Button, Input, Separator, Text, toast, type DialogLayer } from "../ui";
 import { CopyButton } from "../copy-button";
 import { ProviderIcon } from "../provider-icon";
 import { providersApi } from "../../lib/ipc";
@@ -361,7 +352,8 @@ export function CodexProviderSettings({ layer = "default" }: { layer?: DialogLay
               </span>
             </div>
             <Text variant="small" color="secondary" className="mt-1 block">
-              Use your ChatGPT account for Codex models. Your sign-in is saved securely on this device.
+              Use your ChatGPT account for Codex models. Your sign-in is saved securely on this
+              device.
             </Text>
             <Text variant="small" color="tertiary" className="mt-1 block">
               {signingOut

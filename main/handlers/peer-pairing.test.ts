@@ -131,7 +131,8 @@ test("typed setup addresses normalize to the endpoint a host seals", () => {
     [42, undefined],
     ["a".repeat(301), undefined],
   ];
-  for (const [input, expected] of cases) assert.equal(peerSetupAddress(input), expected, String(input));
+  for (const [input, expected] of cases)
+    assert.equal(peerSetupAddress(input), expected, String(input));
 });
 
 test("discovery runs only while some document has the sheet open", async () => {
@@ -162,7 +163,10 @@ test("discovery runs only while some document has the sheet open", async () => {
   await assert.rejects(invoke("remote:peerDiscoveryRefresh", first), /not open/u);
   assert.equal(opened, 0, "nothing scans before a sheet opens");
 
-  assert.deepEqual(await invoke("remote:peerDiscoveryStart", first), { scanning: true, devices: [] });
+  assert.deepEqual(await invoke("remote:peerDiscoveryStart", first), {
+    scanning: true,
+    devices: [],
+  });
   await invoke("remote:peerDiscoveryStart", second);
   assert.equal(opened, 1, "a second sheet joins the open scan");
 
@@ -183,20 +187,32 @@ test("a connection request reports its match code to the requesting document onl
   t.after(() => host.close());
   const { registry, saved } = registryFor(host);
   const { invoke, reconnected } = setup({
-    discovery: foundDevices([{ instanceId: host.instanceId, endpoint: host.lanEndpoint, route: "lan" }]),
+    discovery: foundDevices([
+      { instanceId: host.instanceId, endpoint: host.lanEndpoint, route: "lan" },
+    ]),
     registry,
   });
   const requester = new FakeDocument("window-1");
   const bystander = new FakeDocument("window-2");
 
-  const unknown = (await invoke("remote:peerPairRequest", requester, "attempt-0001", "gone-device")) as PeerPairingResult;
+  const unknown = (await invoke(
+    "remote:peerPairRequest",
+    requester,
+    "attempt-0001",
+    "gone-device",
+  )) as PeerPairingResult;
   assert.deepEqual(unknown, {
     ok: false,
     outcome: { status: "failed", message: "That device is no longer listed. Search again." },
   });
   assert.equal(host.seen.length, 0);
 
-  const pairing = invoke("remote:peerPairRequest", requester, "attempt-0002", host.instanceId) as Promise<PeerPairingResult>;
+  const pairing = invoke(
+    "remote:peerPairRequest",
+    requester,
+    "attempt-0002",
+    host.instanceId,
+  ) as Promise<PeerPairingResult>;
   await eventually(() => requester.received.length === 1);
   const progress = requester.received[0]!;
   assert.equal(progress.channel, "remote:peer-pairing-progress");
@@ -223,12 +239,19 @@ test("cancelling, or reloading the requesting document, withdraws the request", 
   t.after(() => host.close());
   const { registry, saved } = registryFor(host);
   const { invoke } = setup({
-    discovery: foundDevices([{ instanceId: host.instanceId, endpoint: host.lanEndpoint, route: "lan" }]),
+    discovery: foundDevices([
+      { instanceId: host.instanceId, endpoint: host.lanEndpoint, route: "lan" },
+    ]),
     registry,
   });
   const page = new FakeDocument("window-1");
 
-  const cancelled = invoke("remote:peerPairRequest", page, "attempt-0001", host.instanceId) as Promise<PeerPairingResult>;
+  const cancelled = invoke(
+    "remote:peerPairRequest",
+    page,
+    "attempt-0001",
+    host.instanceId,
+  ) as Promise<PeerPairingResult>;
   await eventually(() => page.received.length === 1);
   await assert.rejects(
     invoke("remote:peerPairRequest", page, "attempt-0001", host.instanceId),
@@ -238,7 +261,12 @@ test("cancelling, or reloading the requesting document, withdraws the request", 
   assert.deepEqual(await cancelled, { ok: false, outcome: { status: "cancelled" } });
   await eventually(() => host.requests.list().length === 0);
 
-  const reloaded = invoke("remote:peerPairRequest", page, "attempt-0002", host.instanceId) as Promise<PeerPairingResult>;
+  const reloaded = invoke(
+    "remote:peerPairRequest",
+    page,
+    "attempt-0002",
+    host.instanceId,
+  ) as Promise<PeerPairingResult>;
   await eventually(() => page.received.length === 2);
   page.navigate();
   assert.deepEqual(await reloaded, { ok: false, outcome: { status: "cancelled" } });
@@ -258,8 +286,14 @@ test("a setup code re-pairs a discovered device in place and resumes its supervi
   const page = new FakeDocument("window-1");
 
   assert.deepEqual(
-    await invoke("remote:peerPairSetupCode", page, "attempt-0001", { address: "http://studio.local", code: "x" }),
-    { ok: false, outcome: { status: "failed", message: "Enter the address shown on the other device." } },
+    await invoke("remote:peerPairSetupCode", page, "attempt-0001", {
+      address: "http://studio.local",
+      code: "x",
+    }),
+    {
+      ok: false,
+      outcome: { status: "failed", message: "Enter the address shown on the other device." },
+    },
   );
   const first = (await invoke("remote:peerPairSetupCode", page, "attempt-0002", {
     deviceId: host.instanceId,
@@ -301,21 +335,37 @@ test("pairing links and renames are validated before reaching the registry", asy
     pairWithSetupCode: () => assert.fail("unused"),
     rename: async (id: string, name: string) => {
       renames.push([id, name]);
-      return { id, name, enabled: true, state: "connected" as const, features: [], capabilities: [] };
+      return {
+        id,
+        name,
+        enabled: true,
+        state: "connected" as const,
+        features: [],
+        capabilities: [],
+      };
     },
   } as unknown as ReturnType<typeof registryFor>["registry"];
   const { invoke, reconnected } = setup({ discovery: foundDevices([]), registry });
   const page = new FakeDocument("window-1");
 
-  assert.deepEqual(await invoke("remote:peerPairLink", page, "attempt-0001", "aiden://not-a-pairing"), {
-    ok: false,
-    outcome: { status: "failed", message: "That pairing link is not valid or has expired." },
-  });
-  await assert.rejects(invoke("remote:peerPairLink", page, "short", "x"), /Invalid pairing attempt/u);
+  assert.deepEqual(
+    await invoke("remote:peerPairLink", page, "attempt-0001", "aiden://not-a-pairing"),
+    {
+      ok: false,
+      outcome: { status: "failed", message: "That pairing link is not valid or has expired." },
+    },
+  );
+  await assert.rejects(
+    invoke("remote:peerPairLink", page, "short", "x"),
+    /Invalid pairing attempt/u,
+  );
   await assert.rejects(invoke("remote:peersRename", page, "../host", "Studio"), /Invalid host/u);
   await assert.rejects(invoke("remote:peersRename", page, "host_a", 7), /up to 80/u);
   await invoke("remote:peersRename", page, "host_a", "Studio");
-  await assert.rejects(invoke("remote:peersRename", null, "host_a", "Studio"), /active application document/u);
+  await assert.rejects(
+    invoke("remote:peersRename", null, "host_a", "Studio"),
+    /active application document/u,
+  );
   assert.deepEqual(renames, [["host_a", "Studio"]]);
   assert.deepEqual(reconnected, []);
 });

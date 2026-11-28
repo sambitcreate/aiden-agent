@@ -43,7 +43,11 @@ class RecordingResponse extends EventEmitter {
     return this;
   }
 
-  frames(): Array<{ id: string; event: string; data: { sequence: number; terminal: boolean; payload: Record<string, unknown> } }> {
+  frames(): Array<{
+    id: string;
+    event: string;
+    data: { sequence: number; terminal: boolean; payload: Record<string, unknown> };
+  }> {
     return this.body
       .split("\n\n")
       .filter((block) => block.startsWith("id: "))
@@ -129,14 +133,16 @@ function questionnaire(promptId: string, runId: string) {
     promptId,
     streamId: runId,
     toolCallId: "call-q",
-    questions: [{
-      question: "Which branch should I target?",
-      header: "Branch",
-      options: [
-        { label: "main", description: "The default branch." },
-        { label: "release", description: "The release branch." },
-      ],
-    }],
+    questions: [
+      {
+        question: "Which branch should I target?",
+        header: "Branch",
+        options: [
+          { label: "main", description: "The default branch." },
+          { label: "release", description: "The release branch." },
+        ],
+      },
+    ],
     expiresAt: "2026-10-02T12:00:00.000Z",
   };
 }
@@ -147,7 +153,11 @@ function questionnaire(promptId: string, runId: string) {
  */
 function harness(registryOptions: Partial<HostRunRegistryOptions> = {}) {
   const clock = { now: 10_000 };
-  const registry = new HostRunRegistry({ now: () => clock.now, epoch: "epoch-runs", ...registryOptions });
+  const registry = new HostRunRegistry({
+    now: () => clock.now,
+    epoch: "epoch-runs",
+    ...registryOptions,
+  });
   const effects = { cancels: 0, approvals: [] as string[], answers: 0, inputs: [] as string[] };
   const controls: AidenRemoteHostRunControls = {
     cancel(runId) {
@@ -171,7 +181,12 @@ function harness(registryOptions: Partial<HostRunRegistryOptions> = {}) {
     },
     async admitInput({ mode, text }) {
       effects.inputs.push(`${mode}:${text}`);
-      return { admitted: true, queue: mode === "steer" ? "steer" : "follow-up", committed: true, messageId: "message-1" };
+      return {
+        admitted: true,
+        queue: mode === "steer" ? "steer" : "follow-up",
+        committed: true,
+        messageId: "message-1",
+      };
     },
   };
   const service = new AidenRemoteHostRunService({ registry, controls, now: () => clock.now });
@@ -230,10 +245,20 @@ test("a run stream replays the journal, follows live events and ends with run.en
   await new Promise((resolve) => setImmediate(resolve));
 
   const frames = response.frames();
-  assert.deepEqual(frames[0]!.data.payload, { runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  assert.deepEqual(frames[0]!.data.payload, {
+    runId: "run-1",
+    chatId: "chat-1",
+    origin: "renderer",
+  });
   assert.equal(frames[0]!.event, "run.started");
   const tail = frames.slice(-2);
-  assert.deepEqual(tail.map((frame) => [frame.event, frame.data.terminal]), [["done", true], ["run.ended", true]]);
+  assert.deepEqual(
+    tail.map((frame) => [frame.event, frame.data.terminal]),
+    [
+      ["done", true],
+      ["run.ended", true],
+    ],
+  );
   // run.ended repeats the terminal event's sequence; it is not a duplicate.
   assert.equal(tail[1]!.id, tail[0]!.id);
   assert.deepEqual(tail[1]!.data.payload, { runId: "run-1", chatId: "chat-1", state: "done" });
@@ -251,7 +276,10 @@ test("Last-Event-ID resumes after the cursor, and a cursor ahead of the journal 
   const head = registry.summary("run-1")!.lastSequence;
 
   const resumed = open(service, controller("device-a"), "run-1", head - 1);
-  assert.deepEqual(resumed.frames().map((frame) => [Number(frame.id), frame.event]), [[head, "question_required"]]);
+  assert.deepEqual(
+    resumed.frames().map((frame) => [Number(frame.id), frame.event]),
+    [[head, "question_required"]],
+  );
 
   const error = thrown(() => open(service, controller("device-a"), "run-1", head + 1));
   assert.equal(error.code, "invalid_request");
@@ -267,7 +295,9 @@ test("a cursor behind retention gets a gap snapshot carrying every pending promp
   const response = open(service, controller("device-a"), "run-1", 0);
   const [snapshot, ...rest] = response.frames();
   assert.equal(snapshot!.event, "snapshot");
-  const payload = snapshot!.data.payload as Record<string, unknown> & { approvals: Array<Record<string, unknown>> };
+  const payload = snapshot!.data.payload as Record<string, unknown> & {
+    approvals: Array<Record<string, unknown>>;
+  };
   assert.equal(payload.reason, "gap");
   assert.equal(payload.epoch, "epoch-runs");
   assert.equal(payload.state, "needs_approval");
@@ -290,9 +320,18 @@ test("an unknown run is run_gone on every run route", async () => {
     thrown(() => service.chatIdForRun("run-missing")),
     thrown(() => service.currentRunId("chat-missing")),
     await rejection(service.cancel("device-a", "run-missing", KEY_A, access)),
-    await rejection(service.submitInput("device-a", "run-missing", { mode: "queue", text: "hi" }, KEY_A, access)),
     await rejection(
-      service.respondApproval("device-a", "run-missing", "approval-1", { decision: "deny" }, KEY_A, access),
+      service.submitInput("device-a", "run-missing", { mode: "queue", text: "hi" }, KEY_A, access),
+    ),
+    await rejection(
+      service.respondApproval(
+        "device-a",
+        "run-missing",
+        "approval-1",
+        { decision: "deny" },
+        KEY_A,
+        access,
+      ),
     ),
   ]) {
     assert.equal(error.code, "run_gone");
@@ -307,7 +346,9 @@ test("observers without runs:control see the approval summary but not its tool d
   const controlled = open(service, controller("device-control"), "run-1");
 
   const observedPrompt = observed.frames().find((frame) => frame.event === "approval_required")!;
-  const controlledPrompt = controlled.frames().find((frame) => frame.event === "approval_required")!;
+  const controlledPrompt = controlled
+    .frames()
+    .find((frame) => frame.event === "approval_required")!;
   assert.equal(observedPrompt.data.payload.summary, "Run npm test");
   assert.equal("details" in observedPrompt.data.payload, false);
   assert.deepEqual(controlledPrompt.data.payload.details, scheduleDetails());
@@ -315,16 +356,30 @@ test("observers without runs:control see the approval summary but not its tool d
 
 test("a phone attached to a foreign run sees the phone projection: summary, canAllow and no tool details", async () => {
   const { registry, service } = harness();
-  registry.publish("run-1", "chat:tool", { toolName: "run_command", phase: "call", args: { command: "secret" } });
+  registry.publish("run-1", "chat:tool", {
+    toolName: "run_command",
+    phase: "call",
+    args: { command: "secret" },
+  });
   registry.publish("run-1", "chat:approval", approval("approval-1"));
-  registry.publish("run-1", "chat:approval", approval("approval-2", { details: { kind: "unrecognized", secret: "x" } }));
+  registry.publish(
+    "run-1",
+    "chat:approval",
+    approval("approval-2", { details: { kind: "unrecognized", secret: "x" } }),
+  );
   const response = open(service, phone("device-phone"), "run-1");
 
   const frames = response.frames();
-  assert.deepEqual(frames[0]!.data.payload, { runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  assert.deepEqual(frames[0]!.data.payload, {
+    runId: "run-1",
+    chatId: "chat-1",
+    origin: "renderer",
+  });
   const tool = frames.find((frame) => frame.event === "tool_started")!;
   assert.deepEqual(tool.data.payload, { toolId: "tool_1", name: "run_command" });
-  const prompts = frames.filter((frame) => frame.event === "approval_required").map((frame) => frame.data.payload);
+  const prompts = frames
+    .filter((frame) => frame.event === "approval_required")
+    .map((frame) => frame.data.payload);
   // A scheduled-task approval may be allowed from the phone with its scopes, but its details never travel.
   assert.deepEqual(prompts[0], {
     approvalId: "approval-1",
@@ -349,19 +404,32 @@ test("a phone that opted into schedule cards sees the card on run approvals and 
   registry.publish("run-1", "chat:approval", approval("approval-1"));
   const carded = {
     ...phone("device-cards"),
-    capabilities: new Set<AidenRemoteCapability>(["runs:observe", "runs:control", "schedule:read", "schedule:cards"]),
+    capabilities: new Set<AidenRemoteCapability>([
+      "runs:observe",
+      "runs:control",
+      "schedule:read",
+      "schedule:cards",
+    ]),
   };
   // The opt-in alone is not enough: the card carries the task's instructions.
   const unreadable = {
     ...phone("device-no-read"),
-    capabilities: new Set<AidenRemoteCapability>(["runs:observe", "runs:control", "schedule:cards"]),
+    capabilities: new Set<AidenRemoteCapability>([
+      "runs:observe",
+      "runs:control",
+      "schedule:cards",
+    ]),
   };
   const live = (device: typeof carded) =>
-    open(service, device, "run-1").frames().find((frame) => frame.event === "approval_required")!.data.payload;
+    open(service, device, "run-1")
+      .frames()
+      .find((frame) => frame.event === "approval_required")!.data.payload;
 
   const plain = live(phone("device-plain"));
   const withCard = live(carded);
-  const { schedule, ...rest } = withCard as Record<string, unknown> & { schedule?: Record<string, unknown> };
+  const { schedule, ...rest } = withCard as Record<string, unknown> & {
+    schedule?: Record<string, unknown>;
+  };
   assert.deepEqual(rest, plain, "the card is the only difference");
   assert.equal(withCard.canAllow, true);
   assert.equal("details" in withCard, false);
@@ -377,21 +445,27 @@ test("a phone that opted into schedule cards sees the card on run approvals and 
   for (const delta of ["a", "b", "c", "d"]) registry.publish("run-1", "chat:delta", { delta });
   const snapshot = open(service, carded, "run-1").frames()[0]!;
   assert.equal(snapshot.event, "snapshot");
-  const [pending] = (snapshot.data.payload as { approvals: Array<Record<string, unknown>> }).approvals;
+  const [pending] = (snapshot.data.payload as { approvals: Array<Record<string, unknown>> })
+    .approvals;
   assert.deepEqual(pending!.schedule, schedule);
   assert.equal(pending!.canAllow, true);
 });
 
 test("a phone may allow the Computer Use access card from a foreign run with its scopes", async () => {
   const { registry, service } = harness();
-  registry.publish("run-1", "chat:approval", approval("approval-1", {
-    toolName: "computer_use",
-    details: { kind: "computer-use-access" },
-    scopes: ["chat", "always"],
-  }));
+  registry.publish(
+    "run-1",
+    "chat:approval",
+    approval("approval-1", {
+      toolName: "computer_use",
+      details: { kind: "computer-use-access" },
+      scopes: ["chat", "always"],
+    }),
+  );
   const response = open(service, phone("device-phone"), "run-1");
 
-  const prompt = response.frames().find((frame) => frame.event === "approval_required")!.data.payload;
+  const prompt = response.frames().find((frame) => frame.event === "approval_required")!
+    .data.payload;
   assert.equal(prompt.canAllow, true);
   assert.deepEqual(prompt.scopes, ["chat", "always"]);
   assert.equal("details" in prompt, false);
@@ -399,19 +473,37 @@ test("a phone may allow the Computer Use access card from a foreign run with its
 
 test("a phone may deny a host-only approval but allowing it is refused with no effect", async () => {
   const { registry, service, access, effects } = harness();
-  registry.publish("run-1", "chat:approval", approval("approval-1", { details: { kind: "unrecognized" } }));
+  registry.publish(
+    "run-1",
+    "chat:approval",
+    approval("approval-1", { details: { kind: "unrecognized" } }),
+  );
 
   const refused = await rejection(
-    service.respondApproval("device-phone", "run-1", "approval-1", { decision: "allow" }, KEY_A, access, {
-      phoneScoped: true,
-    }),
+    service.respondApproval(
+      "device-phone",
+      "run-1",
+      "approval-1",
+      { decision: "allow" },
+      KEY_A,
+      access,
+      {
+        phoneScoped: true,
+      },
+    ),
   );
   assert.equal(refused.code, "capability_denied");
   assert.equal(refused.status, 403);
   assert.deepEqual(effects.approvals, []);
 
   const denied = await service.respondApproval(
-    "device-phone", "run-1", "approval-1", { decision: "deny" }, KEY_B, access, { phoneScoped: true },
+    "device-phone",
+    "run-1",
+    "approval-1",
+    { decision: "deny" },
+    KEY_B,
+    access,
+    { phoneScoped: true },
   );
   assert.equal(denied.decision, "deny");
   assert.deepEqual(effects.approvals, ["approval-1:deny"]);
@@ -419,26 +511,43 @@ test("a phone may deny a host-only approval but allowing it is refused with no e
 
 test("a hook the agent proposed can be denied from a paired Mac but allowed only on the host", async () => {
   const { registry, service, access, effects } = harness();
-  registry.publish("run-1", "chat:approval", approval("approval-1", {
-    toolName: "hooks",
-    details: { kind: "hook-proposal" },
-  }));
+  registry.publish(
+    "run-1",
+    "chat:approval",
+    approval("approval-1", {
+      toolName: "hooks",
+      details: { kind: "hook-proposal" },
+    }),
+  );
   const controlled = open(service, controller("device-mac"), "run-1");
-  const prompt = controlled.frames().find((frame) => frame.event === "approval_required")!.data.payload;
+  const prompt = controlled.frames().find((frame) => frame.event === "approval_required")!
+    .data.payload;
   // The journal's details allowlist does not know the kind, so a paired
   // controller sees the summary marked as withheld, never the hook itself.
   assert.equal(prompt.detailsOmitted, true);
   assert.equal("details" in prompt, false);
 
   const refused = await rejection(
-    service.respondApproval("device-mac", "run-1", "approval-1", { decision: "allow" }, KEY_A, access),
+    service.respondApproval(
+      "device-mac",
+      "run-1",
+      "approval-1",
+      { decision: "allow" },
+      KEY_A,
+      access,
+    ),
   );
   assert.equal(refused.code, "capability_denied");
   assert.equal(refused.status, 403);
   assert.deepEqual(effects.approvals, []);
 
   const denied = await service.respondApproval(
-    "device-mac", "run-1", "approval-1", { decision: "deny" }, KEY_B, access,
+    "device-mac",
+    "run-1",
+    "approval-1",
+    { decision: "deny" },
+    KEY_B,
+    access,
   );
   assert.equal(denied.decision, "deny");
   assert.deepEqual(effects.approvals, ["approval-1:deny"]);
@@ -449,11 +558,26 @@ test("a phone losing an approval race to the Mac learns the Mac's decision and w
   registry.publish("run-1", "chat:approval", approval("approval-1"));
   const stream = open(service, phone("device-phone"), "run-1");
 
-  const mac = await service.respondApproval("device-mac", "run-1", "approval-1", { decision: "allow" }, KEY_A, access);
+  const mac = await service.respondApproval(
+    "device-mac",
+    "run-1",
+    "approval-1",
+    { decision: "allow" },
+    KEY_A,
+    access,
+  );
   const lost = await rejection(
-    service.respondApproval("device-phone", "run-1", "approval-1", { decision: "deny" }, KEY_B, access, {
-      phoneScoped: true,
-    }),
+    service.respondApproval(
+      "device-phone",
+      "run-1",
+      "approval-1",
+      { decision: "deny" },
+      KEY_B,
+      access,
+      {
+        phoneScoped: true,
+      },
+    ),
   );
   assert.equal(lost.code, "approval_resolved");
   assert.deepEqual(lost.details, { decision: "allow", resolvedAt: mac.resolvedAt });
@@ -468,12 +592,21 @@ test("two controllers racing one approval: one wins, the loser learns the winnin
   registry.publish("run-1", "chat:approval", approval("approval-1"));
 
   const [first, second] = await Promise.allSettled([
-    service.respondApproval("device-a", "run-1", "approval-1", { decision: "allow" }, KEY_A, access),
+    service.respondApproval(
+      "device-a",
+      "run-1",
+      "approval-1",
+      { decision: "allow" },
+      KEY_A,
+      access,
+    ),
     service.respondApproval("device-b", "run-1", "approval-1", { decision: "deny" }, KEY_B, access),
   ]);
   assert.equal(first.status, "fulfilled");
   assert.equal(second.status, "rejected");
-  const winner = (first as PromiseFulfilledResult<Awaited<ReturnType<typeof service.respondApproval>>>).value;
+  const winner = (
+    first as PromiseFulfilledResult<Awaited<ReturnType<typeof service.respondApproval>>>
+  ).value;
   assert.equal(winner.decision, "allow");
   assert.deepEqual(effects.approvals, ["approval-1:allow"]);
 
@@ -484,7 +617,14 @@ test("two controllers racing one approval: one wins, the loser learns the winnin
 
   // Each replay returns its original result without a second effect.
   assert.deepEqual(
-    await service.respondApproval("device-a", "run-1", "approval-1", { decision: "allow" }, KEY_A, access),
+    await service.respondApproval(
+      "device-a",
+      "run-1",
+      "approval-1",
+      { decision: "allow" },
+      KEY_A,
+      access,
+    ),
     winner,
   );
   const replayedLoss = await rejection(
@@ -498,15 +638,35 @@ test("two controllers racing one approval: one wins, the loser learns the winnin
 test("a reused Idempotency-Key with a different body is refused, and malformed keys are rejected", async () => {
   const { registry, service, access, effects } = harness();
   registry.publish("run-1", "chat:approval", approval("approval-1"));
-  await service.respondApproval("device-a", "run-1", "approval-1", { decision: "deny" }, KEY_A, access);
+  await service.respondApproval(
+    "device-a",
+    "run-1",
+    "approval-1",
+    { decision: "deny" },
+    KEY_A,
+    access,
+  );
 
   const conflict = await rejection(
-    service.respondApproval("device-a", "run-1", "approval-1", { decision: "allow" }, KEY_A, access),
+    service.respondApproval(
+      "device-a",
+      "run-1",
+      "approval-1",
+      { decision: "allow" },
+      KEY_A,
+      access,
+    ),
   );
   assert.equal(conflict.status, 409);
   assert.notEqual(conflict.code, "approval_resolved");
 
-  for (const key of ["", "short-key", "spaces are not allowed!", "k".repeat(129), "naïve-key-0000000000"]) {
+  for (const key of [
+    "",
+    "short-key",
+    "spaces are not allowed!",
+    "k".repeat(129),
+    "naïve-key-0000000000",
+  ]) {
     const invalid = await rejection(service.cancel("device-a", "run-1", key, access));
     assert.equal(invalid.code, "invalid_request", key);
   }
@@ -516,17 +676,35 @@ test("a reused Idempotency-Key with a different body is refused, and malformed k
 
 test("allowing an approval whose details were withheld must happen on the host", async () => {
   const { registry, service, access, effects } = harness({ maxEventBytesPerRun: 2_048 });
-  registry.publish("run-1", "chat:approval", approval("approval-1", { details: { blob: "x".repeat(4_096) } }));
+  registry.publish(
+    "run-1",
+    "chat:approval",
+    approval("approval-1", { details: { blob: "x".repeat(4_096) } }),
+  );
   assert.equal(registry.pendingPrompt("approval-1")!.payload.detailsOmitted, true);
 
   const refused = await rejection(
-    service.respondApproval("device-a", "run-1", "approval-1", { decision: "allow" }, KEY_A, access),
+    service.respondApproval(
+      "device-a",
+      "run-1",
+      "approval-1",
+      { decision: "allow" },
+      KEY_A,
+      access,
+    ),
   );
   assert.equal(refused.code, "capability_denied");
   assert.equal(refused.status, 403);
   assert.deepEqual(effects.approvals, []);
 
-  const denied = await service.respondApproval("device-a", "run-1", "approval-1", { decision: "deny" }, KEY_B, access);
+  const denied = await service.respondApproval(
+    "device-a",
+    "run-1",
+    "approval-1",
+    { decision: "deny" },
+    KEY_B,
+    access,
+  );
   assert.equal(denied.decision, "deny");
 });
 
@@ -534,18 +712,40 @@ test("a command whose summary was cut short can be denied remotely but allowed o
   const { registry, service, access, effects } = harness();
   // A generic command approval: the whole command is the summary, with no details.
   const command = `Run command: echo ${"x".repeat(2_100)}; rm -rf ~/work`;
-  registry.publish("run-1", "chat:approval", approval("approval-1", { summary: command, details: undefined }));
+  registry.publish(
+    "run-1",
+    "chat:approval",
+    approval("approval-1", { summary: command, details: undefined }),
+  );
   const journaled = registry.pendingPrompt("approval-1")!.payload;
-  assert.equal(String(journaled.summary).includes("rm -rf"), false, "the end of the command did not fit");
+  assert.equal(
+    String(journaled.summary).includes("rm -rf"),
+    false,
+    "the end of the command did not fit",
+  );
   assert.equal(journaled.detailsOmitted, true);
 
   const refused = await rejection(
-    service.respondApproval("device-a", "run-1", "approval-1", { decision: "allow" }, KEY_A, access),
+    service.respondApproval(
+      "device-a",
+      "run-1",
+      "approval-1",
+      { decision: "allow" },
+      KEY_A,
+      access,
+    ),
   );
   assert.equal(refused.code, "capability_denied");
   assert.deepEqual(effects.approvals, []);
 
-  const denied = await service.respondApproval("device-a", "run-1", "approval-1", { decision: "deny" }, KEY_B, access);
+  const denied = await service.respondApproval(
+    "device-a",
+    "run-1",
+    "approval-1",
+    { decision: "deny" },
+    KEY_B,
+    access,
+  );
   assert.equal(denied.decision, "deny");
 });
 
@@ -560,7 +760,14 @@ test("a prompt from another run is not_found and an unoffered scope is invalid",
   assert.equal(foreign.code, "not_found");
 
   const scope = await rejection(
-    service.respondApproval("device-a", "run-2", "approval-2", { decision: "allow", scope: "workspace" }, KEY_B, access),
+    service.respondApproval(
+      "device-a",
+      "run-2",
+      "approval-2",
+      { decision: "allow", scope: "workspace" },
+      KEY_B,
+      access,
+    ),
   );
   assert.equal(scope.code, "invalid_request");
 });
@@ -572,7 +779,9 @@ test("two controllers racing one question: the loser learns the outcome", async 
 
   const won = await service.respondQuestion("device-a", "run-1", "prompt-1", body, KEY_A, access);
   assert.equal(won.outcome, "answered");
-  const lost = await rejection(service.respondQuestion("device-b", "run-1", "prompt-1", body, KEY_B, access));
+  const lost = await rejection(
+    service.respondQuestion("device-b", "run-1", "prompt-1", body, KEY_B, access),
+  );
   assert.equal(lost.code, "question_already_resolved");
   assert.deepEqual(lost.details, { outcome: "answered", resolvedAt: won.resolvedAt });
   assert.equal(effects.answers, 1);
@@ -581,7 +790,12 @@ test("two controllers racing one question: the loser learns the outcome", async 
 test("cancel stops a live run once and a finished run is operation_stale", async () => {
   const { registry, service, access, accessed, effects } = harness();
   const cancelled = await service.cancel("device-a", "run-1", KEY_A, access);
-  assert.deepEqual(cancelled, { runId: "run-1", chatId: "chat-1", state: "cancelled", cancelRequested: true });
+  assert.deepEqual(cancelled, {
+    runId: "run-1",
+    chatId: "chat-1",
+    state: "cancelled",
+    cancelRequested: true,
+  });
   assert.deepEqual(accessed, ["chat-1"]);
   assert.equal(registry.summary("run-1")!.state, "cancelled");
 
@@ -610,7 +824,13 @@ test("chat access is checked inside the control and a refusal causes no effect",
 
 test("inputs are admitted once per key and malformed inputs are refused", async () => {
   const { service, access, effects } = harness();
-  const admitted = await service.submitInput("device-a", "run-1", { mode: "steer", text: "Use pnpm" }, KEY_A, access);
+  const admitted = await service.submitInput(
+    "device-a",
+    "run-1",
+    { mode: "steer", text: "Use pnpm" },
+    KEY_A,
+    access,
+  );
   assert.deepEqual(admitted, {
     runId: "run-1",
     chatId: "chat-1",
@@ -620,10 +840,20 @@ test("inputs are admitted once per key and malformed inputs are refused", async 
     committed: true,
     messageId: "message-1",
   });
-  await service.submitInput("device-a", "run-1", { mode: "steer", text: "Use pnpm" }, KEY_A, access);
+  await service.submitInput(
+    "device-a",
+    "run-1",
+    { mode: "steer", text: "Use pnpm" },
+    KEY_A,
+    access,
+  );
   assert.deepEqual(effects.inputs, ["steer:Use pnpm"]);
 
-  for (const body of [{ mode: "steer", text: "   " }, { mode: "shout", text: "hi" }, { mode: "queue", text: "hi", extra: 1 }]) {
+  for (const body of [
+    { mode: "steer", text: "   " },
+    { mode: "shout", text: "hi" },
+    { mode: "queue", text: "hi", extra: 1 },
+  ]) {
     const invalid = await rejection(service.submitInput("device-a", "run-1", body, KEY_B, access));
     assert.equal(invalid.code, "invalid_request");
   }
@@ -650,9 +880,16 @@ test("a run stream refused at admission writes nothing and never follows the run
   const { registry, service } = harness();
   const refusedResponse = new RecordingResponse();
   const refused = thrown(() =>
-    service.openRunEvents(controller("device-revoked"), "run-1", 0, refusedResponse.asServerResponse(), () => {
-      throw new AidenRemoteServiceError("credential_revoked", "This device was revoked.", 403);
-    }));
+    service.openRunEvents(
+      controller("device-revoked"),
+      "run-1",
+      0,
+      refusedResponse.asServerResponse(),
+      () => {
+        throw new AidenRemoteServiceError("credential_revoked", "This device was revoked.", 403);
+      },
+    ),
+  );
   assert.equal(refused.code, "credential_revoked");
   assert.equal(refusedResponse.status, 0);
 
@@ -666,9 +903,15 @@ test("a run stream refused at admission writes nothing and never follows the run
 
 test("a late reader joins a long active run in one frame and the next token advances its cursor", () => {
   const { registry, service } = harness();
-  registry.publish("run-1", "chat:timeline", { timeline: {
-    version: 3, generationId: "run-1", startedAt: 1000, status: "running", steps: [],
-  } });
+  registry.publish("run-1", "chat:timeline", {
+    timeline: {
+      version: 3,
+      generationId: "run-1",
+      startedAt: 1000,
+      status: "running",
+      steps: [],
+    },
+  });
   for (let i = 0; i < 70; i++) registry.publish("run-1", "chat:status", {});
   registry.publish("run-1", "chat:approval", approval("approval-1"));
   registry.publish("run-1", "chat:delta", { delta: "Before attach" });
@@ -682,10 +925,18 @@ test("a late reader joins a long active run in one frame and the next token adva
   assert.equal(prompt?.canAllow, true);
   assert.equal(prompt?.details, undefined);
   registry.publish("run-1", "chat:delta", { delta: " and after" });
-  assert.deepEqual(stream.frames().slice(1).map(({ event, data }) => [event, data.sequence, data.payload.text]),
-    [["text_delta", sequence + 1, " and after"]]);
+  assert.deepEqual(
+    stream
+      .frames()
+      .slice(1)
+      .map(({ event, data }) => [event, data.sequence, data.payload.text]),
+    [["text_delta", sequence + 1, " and after"]],
+  );
   const resumed = open(service, phone("another"), "run-1", sequence, true);
-  assert.deepEqual(resumed.frames().map(({ event }) => event), ["text_delta"]);
+  assert.deepEqual(
+    resumed.frames().map(({ event }) => event),
+    ["text_delta"],
+  );
 });
 
 test("a capped channel preserves the other live content and a provider reset starts both over", () => {
@@ -697,7 +948,10 @@ test("a capped channel preserves the other live content and a provider reset sta
   assert.equal(gap.replyText, "Visible answer");
   const legacy = open(service, observer("old"), "run-1").frames();
   assert.equal(legacy[0]!.data.payload.replyText, undefined);
-  assert.deepEqual(legacy.slice(1).map(({ event }) => event), ["reasoning_delta", "text_delta"]);
+  assert.deepEqual(
+    legacy.slice(1).map(({ event }) => event),
+    ["reasoning_delta", "text_delta"],
+  );
   registry.publish("run-1", "chat:delta", { reset: true });
   registry.publish("run-1", "chat:reasoning-delta", { delta: "Retrying" });
   const retry = open(service, observer("retry"), "run-1", 0, true).frames()[0]!.data.payload;
@@ -707,84 +961,207 @@ test("a capped channel preserves the other live content and a provider reset sta
 
 test("a Mac card's Allow in this workspace never reaches a Remote reader and cannot be answered from one", async () => {
   const { registry, service, access, effects } = harness();
-  registry.publish("run-1", "chat:approval", approval("approval-1", {
-    toolName: "computer_use",
-    details: { kind: "computer-use-access" },
-    scopes: ["once", "chat", "workspace"],
-  }));
+  registry.publish(
+    "run-1",
+    "chat:approval",
+    approval("approval-1", {
+      toolName: "computer_use",
+      details: { kind: "computer-use-access" },
+      scopes: ["once", "chat", "workspace"],
+    }),
+  );
   for (const device of [controller("device-a"), observer("device-o"), phone("device-phone")]) {
-    const prompt = open(service, device, "run-1").frames().find((frame) => frame.event === "approval_required")!.data.payload;
-    assert.equal(Array.isArray(prompt.scopes) && prompt.scopes.includes("workspace"), false, device.id);
+    const prompt = open(service, device, "run-1")
+      .frames()
+      .find((frame) => frame.event === "approval_required")!.data.payload;
+    assert.equal(
+      Array.isArray(prompt.scopes) && prompt.scopes.includes("workspace"),
+      false,
+      device.id,
+    );
   }
 
-  for (const [key, phoneScoped] of [[KEY_A, false], [KEY_B, true]] as const) {
+  for (const [key, phoneScoped] of [
+    [KEY_A, false],
+    [KEY_B, true],
+  ] as const) {
     const refused = await rejection(
-      service.respondApproval("device-a", "run-1", "approval-1", { decision: "allow", scope: "workspace" }, key, access, {
-        phoneScoped,
-      }),
+      service.respondApproval(
+        "device-a",
+        "run-1",
+        "approval-1",
+        { decision: "allow", scope: "workspace" },
+        key,
+        access,
+        {
+          phoneScoped,
+        },
+      ),
     );
     assert.equal(refused.code, "invalid_request");
   }
   assert.deepEqual(effects.approvals, []);
-  const denied = await service.respondApproval("device-a", "run-1", "approval-1", { decision: "deny" }, "key-controller-c-0001", access);
+  const denied = await service.respondApproval(
+    "device-a",
+    "run-1",
+    "approval-1",
+    { decision: "deny" },
+    "key-controller-c-0001",
+    access,
+  );
   assert.equal(denied.decision, "deny");
 });
 
 test("a Mac card left with only a one-time allow carries no scopes to any Remote reader", async () => {
   const { registry, service } = harness();
-  registry.publish("run-1", "chat:approval", approval("approval-1", {
-    toolName: "computer_use",
-    details: { kind: "computer-use-access" },
-    scopes: ["once", "workspace"],
-  }));
+  registry.publish(
+    "run-1",
+    "chat:approval",
+    approval("approval-1", {
+      toolName: "computer_use",
+      details: { kind: "computer-use-access" },
+      scopes: ["once", "workspace"],
+    }),
+  );
   for (const device of [controller("device-a"), observer("device-o"), phone("device-phone")]) {
-    const prompt = open(service, device, "run-1").frames().find((frame) => frame.event === "approval_required")!.data.payload;
+    const prompt = open(service, device, "run-1")
+      .frames()
+      .find((frame) => frame.event === "approval_required")!.data.payload;
     assert.equal("scopes" in prompt, false, device.id);
   }
 });
 
 test("revision 61: a phone holding approval:cards gets the typed card and may allow exactly what it offers", async () => {
   const { registry, service, access, effects } = harness();
-  registry.publish("run-1", "chat:approval", approval("approval-1", { summary: "Run command: npm test", details: undefined }));
-  registry.publish("run-1", "chat:approval", approval("approval-2", { details: { kind: "unrecognized" } }));
-  const carded = { ...phone("device-cards"), capabilities: new Set<AidenRemoteCapability>(["runs:observe", "runs:control", "approval:cards"]) };
-  const prompts = open(service, carded, "run-1").frames().filter((frame) => frame.event === "approval_required").map((frame) => frame.data.payload as Record<string, any>);
+  registry.publish(
+    "run-1",
+    "chat:approval",
+    approval("approval-1", { summary: "Run command: npm test", details: undefined }),
+  );
+  registry.publish(
+    "run-1",
+    "chat:approval",
+    approval("approval-2", { details: { kind: "unrecognized" } }),
+  );
+  const carded = {
+    ...phone("device-cards"),
+    capabilities: new Set<AidenRemoteCapability>([
+      "runs:observe",
+      "runs:control",
+      "approval:cards",
+    ]),
+  };
+  const prompts = open(service, carded, "run-1")
+    .frames()
+    .filter((frame) => frame.event === "approval_required")
+    .map((frame) => frame.data.payload as Record<string, any>);
   assert.equal(prompts[0]!.card.kind, "mac");
   assert.deepEqual(prompts[0]!.card.body, { format: "command", text: "npm test" });
-  assert.deepEqual(prompts[0]!.card.buttons.map((button: { label: string }) => button.label), ["Deny", "Allow once", "Allow in this chat"]);
+  assert.deepEqual(
+    prompts[0]!.card.buttons.map((button: { label: string }) => button.label),
+    ["Deny", "Allow once", "Allow in this chat"],
+  );
   assert.equal(prompts[0]!.canAllow, true);
   // A kind the card model does not know is deny-only, on the card and in canAllow.
-  assert.deepEqual(prompts[1]!.card.buttons.map((button: { decision: string }) => button.decision), ["deny"]);
+  assert.deepEqual(
+    prompts[1]!.card.buttons.map((button: { decision: string }) => button.decision),
+    ["deny"],
+  );
   assert.equal(prompts[1]!.canAllow, false);
   // A phone without the opt-in sees no card.
-  assert.equal(open(service, phone("device-plain"), "run-1").frames().some((frame) => frame.event === "approval_required" && "card" in (frame.data.payload as object)), false);
+  assert.equal(
+    open(service, phone("device-plain"), "run-1")
+      .frames()
+      .some(
+        (frame) => frame.event === "approval_required" && "card" in (frame.data.payload as object),
+      ),
+    false,
+  );
 
-  const always = await rejection(service.respondApproval("device-cards", "run-1", "approval-1", { decision: "allow", scope: "always" }, KEY_A, access, { phoneScoped: true, capabilities: carded.capabilities }));
+  const always = await rejection(
+    service.respondApproval(
+      "device-cards",
+      "run-1",
+      "approval-1",
+      { decision: "allow", scope: "always" },
+      KEY_A,
+      access,
+      { phoneScoped: true, capabilities: carded.capabilities },
+    ),
+  );
   assert.equal(always.code, "capability_denied", "a scope the card does not offer is refused");
-  const refused = await rejection(service.respondApproval("device-cards", "run-1", "approval-2", { decision: "allow" }, KEY_B, access, { phoneScoped: true, capabilities: carded.capabilities }));
+  const refused = await rejection(
+    service.respondApproval(
+      "device-cards",
+      "run-1",
+      "approval-2",
+      { decision: "allow" },
+      KEY_B,
+      access,
+      { phoneScoped: true, capabilities: carded.capabilities },
+    ),
+  );
   assert.equal(refused.code, "capability_denied");
   assert.deepEqual(effects.approvals, []);
-  await service.respondApproval("device-cards", "run-1", "approval-1", { decision: "allow", scope: "chat" }, "key-controller-c-0001", access, { phoneScoped: true, capabilities: carded.capabilities });
+  await service.respondApproval(
+    "device-cards",
+    "run-1",
+    "approval-1",
+    { decision: "allow", scope: "chat" },
+    "key-controller-c-0001",
+    access,
+    { phoneScoped: true, capabilities: carded.capabilities },
+  );
   assert.deepEqual(effects.approvals, ["approval-1:allow"]);
 });
 
 test("revision 69: only a phone holding approval:plain-words gets the command's plain words, and no reader sees the raw reading", () => {
   const { registry, service } = harness();
-  const reading = { explanation: "Runs the project's tests", tags: [{ label: "Uses the internet", tone: "risk" }] };
-  registry.publish("run-1", "chat:approval", approval("approval-1", { summary: "Run command: npm test", details: undefined, reading }));
+  const reading = {
+    explanation: "Runs the project's tests",
+    tags: [{ label: "Uses the internet", tone: "risk" }],
+  };
+  registry.publish(
+    "run-1",
+    "chat:approval",
+    approval("approval-1", { summary: "Run command: npm test", details: undefined, reading }),
+  );
   const prompt = (device: Parameters<typeof open>[1]) =>
-    open(service, device, "run-1").frames().find((frame) => frame.event === "approval_required")!.data.payload as Record<string, any>;
+    open(service, device, "run-1")
+      .frames()
+      .find((frame) => frame.event === "approval_required")!.data.payload as Record<string, any>;
 
-  const words = prompt({ ...phone("device-words"), capabilities: new Set<AidenRemoteCapability>(["runs:observe", "runs:control", "approval:cards", "approval:plain-words"]) });
+  const words = prompt({
+    ...phone("device-words"),
+    capabilities: new Set<AidenRemoteCapability>([
+      "runs:observe",
+      "runs:control",
+      "approval:cards",
+      "approval:plain-words",
+    ]),
+  });
   assert.equal(words.card.explanation, "Runs the project's tests");
   assert.deepEqual(words.card.tags, reading.tags);
   assert.deepEqual(words.card.body, { format: "command", text: "npm test" });
 
-  const cards = prompt({ ...phone("device-cards"), capabilities: new Set<AidenRemoteCapability>(["runs:observe", "runs:control", "approval:cards"]) });
+  const cards = prompt({
+    ...phone("device-cards"),
+    capabilities: new Set<AidenRemoteCapability>([
+      "runs:observe",
+      "runs:control",
+      "approval:cards",
+    ]),
+  });
   assert.equal("explanation" in cards.card, false);
   assert.equal("tags" in cards.card, false);
 
-  for (const reader of [words, cards, prompt(phone("device-plain")), prompt(controller("device-a")), prompt(observer("device-o"))]) {
+  for (const reader of [
+    words,
+    cards,
+    prompt(phone("device-plain")),
+    prompt(controller("device-a")),
+    prompt(observer("device-o")),
+  ]) {
     assert.equal("reading" in reader, false);
   }
 });

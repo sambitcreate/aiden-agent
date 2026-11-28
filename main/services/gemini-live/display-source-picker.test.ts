@@ -8,7 +8,11 @@ import {
   type LiveDisplayCapturer,
 } from "./display-source-picker.js";
 
-function source(id: string, name: string, thumbnail = "data:image/png;base64,AAAA"): Electron.DesktopCapturerSource {
+function source(
+  id: string,
+  name: string,
+  thumbnail = "data:image/png;base64,AAAA",
+): Electron.DesktopCapturerSource {
   return {
     id,
     name,
@@ -21,7 +25,9 @@ function source(id: string, name: string, thumbnail = "data:image/png;base64,AAA
   };
 }
 
-function capturer(sources: Electron.DesktopCapturerSource[]): LiveDisplayCapturer & { calls: Electron.SourcesOptions[] } {
+function capturer(
+  sources: Electron.DesktopCapturerSource[],
+): LiveDisplayCapturer & { calls: Electron.SourcesOptions[] } {
   const calls: Electron.SourcesOptions[] = [];
   return {
     calls,
@@ -65,13 +71,18 @@ test("the list puts screens first, names unnamed sources, and drops malformed id
 });
 
 test("the list is capped so a desktop with many windows can't flood the renderer", async () => {
-  const many = Array.from({ length: LIVE_DISPLAY_SOURCE_LIMIT + 10 }, (_, index) => source(`window:${index + 1}:0`, `W${index}`));
+  const many = Array.from({ length: LIVE_DISPLAY_SOURCE_LIMIT + 10 }, (_, index) =>
+    source(`window:${index + 1}:0`, `W${index}`),
+  );
   assert.equal((await listLiveDisplaySources(capturer(many))).length, LIVE_DISPLAY_SOURCE_LIMIT);
 });
 
 test("a chosen source must still exist; without one only the portal may choose", async () => {
   const sources = [source("screen:0:0", "Screen"), source("window:9:0", "Editor")];
-  assert.equal((await resolveLiveDisplaySource(capturer(sources), "list", "window:9:0"))?.name, "Editor");
+  assert.equal(
+    (await resolveLiveDisplaySource(capturer(sources), "list", "window:9:0"))?.name,
+    "Editor",
+  );
   assert.equal(await resolveLiveDisplaySource(capturer(sources), "list", "window:10:0"), null);
 
   // X11 without a choice never captures, and never even asks for sources.
@@ -80,6 +91,9 @@ test("a chosen source must still exist; without one only the portal may choose",
   assert.equal(unasked.calls.length, 0);
 
   // The portal returns what the person picked there, or nothing if they cancelled.
-  assert.equal((await resolveLiveDisplaySource(capturer([sources[1]!]), "portal", null))?.id, "window:9:0");
+  assert.equal(
+    (await resolveLiveDisplaySource(capturer([sources[1]!]), "portal", null))?.id,
+    "window:9:0",
+  );
   assert.equal(await resolveLiveDisplaySource(capturer([]), "portal", null), null);
 });

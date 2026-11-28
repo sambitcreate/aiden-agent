@@ -14,7 +14,8 @@ export interface AgentsInstructionNotice {
 const kib = (bytes: number) => `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
 export function agentsInstructionNoticeMessage(notice: AgentsInstructionNotice): string {
-  const file = notice.scope === "workspace" ? "This workspace's AGENTS.md" : "Your global AGENTS.md";
+  const file =
+    notice.scope === "workspace" ? "This workspace's AGENTS.md" : "Your global AGENTS.md";
   return notice.kind === "truncated"
     ? `${file} is ${kib(notice.sizeBytes)}, over the ${kib(notice.limitBytes)} limit. Aiden is using the first ${kib(notice.limitBytes)}.`
     : `${file} is ${kib(notice.sizeBytes)}, too large to read. Aiden is responding without it.`;
@@ -45,10 +46,14 @@ export function parseAgentsInstructionNotice(value: unknown): AgentsInstructionN
 }
 
 /** The full set for one response; an empty list means every AGENTS.md now fits. */
-export function parseAgentsInstructionNotices(value: unknown): AgentsInstructionNotice[] | undefined {
+export function parseAgentsInstructionNotices(
+  value: unknown,
+): AgentsInstructionNotice[] | undefined {
   if (!Array.isArray(value) || value.length > 2) return undefined;
   const notices = value.map(parseAgentsInstructionNotice);
-  return notices.every((notice): notice is AgentsInstructionNotice => notice !== undefined) ? notices : undefined;
+  return notices.every((notice): notice is AgentsInstructionNotice => notice !== undefined)
+    ? notices
+    : undefined;
 }
 
 /**

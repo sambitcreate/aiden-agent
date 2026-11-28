@@ -153,7 +153,8 @@ export class LocalHostAdapter implements HostChatAdapter {
     const offFrames = this.apis.onRunFrame((message) => {
       if (closed || message.chatId !== chatId) return;
       if (pending) pending.push(message);
-      else if (message.subscriptionId === subscriptionId) for (const frame of message.frames) deliver(frame);
+      else if (message.subscriptionId === subscriptionId)
+        for (const frame of message.frames) deliver(frame);
     });
     this.apis.observeRun(chatId).then(
       (subscription) => {
@@ -176,7 +177,8 @@ export class LocalHostAdapter implements HostChatAdapter {
         if (!closed) {
           observer.onError?.({
             code: "failed",
-            message: error instanceof Error ? error.message : "Couldn't follow this chat's response.",
+            message:
+              error instanceof Error ? error.message : "Couldn't follow this chat's response.",
           });
         }
       },
@@ -200,13 +202,24 @@ export class LocalHostAdapter implements HostChatAdapter {
       await this.apis.markRead(chatId, throughMessageId);
       return { ok: true, value: undefined };
     } catch (error) {
-      return { ok: false, error: { code: "failed", message: error instanceof Error ? error.message : "Couldn't mark this chat read." } };
+      return {
+        ok: false,
+        error: {
+          code: "failed",
+          message: error instanceof Error ? error.message : "Couldn't mark this chat read.",
+        },
+      };
     }
   }
 
   send(_chatId: string, _input: HostChatSendInput): Promise<HostChatTurnReceipt> {
     // Local turns stream through the pane's own generation, which owns the transcript cache.
-    return Promise.reject(new HostChatControlError({ code: "unsupported", message: "Local chats send through their own generation." }));
+    return Promise.reject(
+      new HostChatControlError({
+        code: "unsupported",
+        message: "Local chats send through their own generation.",
+      }),
+    );
   }
 
   async cancel(_chatId: string, input: HostChatCancelInput): Promise<boolean> {
@@ -218,7 +231,10 @@ export class LocalHostAdapter implements HostChatAdapter {
     return this.apis.stopHostRun(input.runId);
   }
 
-  async respondApproval(chatId: string, input: HostChatApprovalInput): Promise<HostChatApprovalResult> {
+  async respondApproval(
+    chatId: string,
+    input: HostChatApprovalInput,
+  ): Promise<HostChatApprovalResult> {
     if (input.source === "remote") {
       // A turn this Mac hosts for a paired phone resolves through the Remote service.
       await this.apis.respondRemoteApproval(
@@ -231,7 +247,9 @@ export class LocalHostAdapter implements HostChatAdapter {
       const options =
         input.formFillExcludedOrders !== undefined || input.scope !== undefined
           ? {
-              ...(input.formFillExcludedOrders !== undefined ? { formFillExcludedOrders: input.formFillExcludedOrders } : {}),
+              ...(input.formFillExcludedOrders !== undefined
+                ? { formFillExcludedOrders: input.formFillExcludedOrders }
+                : {}),
               ...(input.scope !== undefined ? { scope: input.scope } : {}),
             }
           : undefined;
@@ -240,7 +258,10 @@ export class LocalHostAdapter implements HostChatAdapter {
     return { resolution: "applied" };
   }
 
-  async answerQuestion(chatId: string, input: HostChatQuestionInput): Promise<HostChatQuestionResult> {
+  async answerQuestion(
+    chatId: string,
+    input: HostChatQuestionInput,
+  ): Promise<HostChatQuestionResult> {
     if (input.source === "remote") {
       return this.apis.respondRemoteQuestion(chatId, input.promptId, input.response);
     }

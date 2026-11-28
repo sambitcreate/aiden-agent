@@ -12,12 +12,25 @@
 import { ViewportPortal, type ReactFlowInstance } from "@xyflow/react";
 import * as React from "react";
 import type { DesignPoint } from "../shared/design-canvas/connectors";
-import { boxFromDrag, simplifyStroke, snapAngle, strokeFromCanvas } from "../shared/design-canvas/drawing";
+import {
+  boxFromDrag,
+  simplifyStroke,
+  snapAngle,
+  strokeFromCanvas,
+} from "../shared/design-canvas/drawing";
 import type { DesignConnectorEnd } from "../shared/design-canvas/schema";
 import type { DesignNode, PlaceFrameInput } from "./canvas-adapter-core";
 import { DESIGN_DRAW_DEFAULTS, DESIGN_TEXT_PX } from "./nodes/draw-style";
 
-export type DesignDrawTool = "text" | "frame" | "rect" | "oval" | "arrow" | "line" | "pencil" | "pen";
+export type DesignDrawTool =
+  | "text"
+  | "frame"
+  | "rect"
+  | "oval"
+  | "arrow"
+  | "line"
+  | "pencil"
+  | "pen";
 
 /** A press that moves less than this many screen pixels is a click. */
 const CLICK_SLOP_PX = 4;
@@ -36,11 +49,22 @@ const CLICK_SIZE = {
 const TEXT_LINE_PX = Math.ceil(DESIGN_TEXT_PX[DESIGN_DRAW_DEFAULTS.text.size] * 1.3);
 
 type Draft =
-  | { type: "box"; tool: "rect" | "oval" | "frame" | "text"; from: DesignPoint; to: DesignPoint; square: boolean }
+  | {
+      type: "box";
+      tool: "rect" | "oval" | "frame" | "text";
+      from: DesignPoint;
+      to: DesignPoint;
+      square: boolean;
+    }
   | { type: "line"; tool: "arrow" | "line"; from: DesignPoint; to: DesignPoint }
   | { type: "pencil"; points: DesignPoint[] };
 
-type PenPath = { anchors: DesignPoint[]; handles: DesignPoint[]; hover: DesignPoint | null; pressed: boolean };
+type PenPath = {
+  anchors: DesignPoint[];
+  handles: DesignPoint[];
+  hover: DesignPoint | null;
+  pressed: boolean;
+};
 
 export function useDesignDrawing({
   tool,
@@ -75,28 +99,34 @@ export function useDesignDrawing({
 
   const zoom = () => flow.current?.getViewport().zoom || 1;
   const toFlow = (event: { clientX: number; clientY: number }) =>
-    flow.current?.screenToFlowPosition({ x: event.clientX, y: event.clientY }) ?? { x: event.clientX, y: event.clientY };
+    flow.current?.screenToFlowPosition({ x: event.clientX, y: event.clientY }) ?? {
+      x: event.clientX,
+      y: event.clientY,
+    };
 
-  const finishPen = React.useCallback((closed: boolean) => {
-    const path = penRef.current;
-    setPen(null);
-    if (!path || path.anchors.length < 2) return path !== null;
-    const width = DESIGN_DRAW_DEFAULTS.stroke.strokeWidth;
-    const stroke = strokeFromCanvas(path.anchors, width, path.handles);
-    if (stroke) {
-      latest.current.create({
-        kind: "stroke",
-        title: "Pen path",
-        ...stroke,
-        color: DESIGN_DRAW_DEFAULTS.stroke.color,
-        strokeWidth: width,
-        ...(closed ? { closed: true as const } : {}),
-        createdBy: "person",
-      });
-    }
-    latest.current.onDone();
-    return true;
-  }, [setPen]);
+  const finishPen = React.useCallback(
+    (closed: boolean) => {
+      const path = penRef.current;
+      setPen(null);
+      if (!path || path.anchors.length < 2) return path !== null;
+      const width = DESIGN_DRAW_DEFAULTS.stroke.strokeWidth;
+      const stroke = strokeFromCanvas(path.anchors, width, path.handles);
+      if (stroke) {
+        latest.current.create({
+          kind: "stroke",
+          title: "Pen path",
+          ...stroke,
+          color: DESIGN_DRAW_DEFAULTS.stroke.color,
+          strokeWidth: width,
+          ...(closed ? { closed: true as const } : {}),
+          createdBy: "person",
+        });
+      }
+      latest.current.onDone();
+      return true;
+    },
+    [setPen],
+  );
 
   // A different tool, or none, drops anything half drawn; a pen path with two points is kept.
   React.useEffect(() => {
@@ -152,7 +182,8 @@ export function useDesignDrawing({
         return;
       }
       if (active === "pencil") set({ type: "pencil", points: [at] });
-      else if (active === "arrow" || active === "line") set({ type: "line", tool: active, from: at, to: at });
+      else if (active === "arrow" || active === "line")
+        set({ type: "line", tool: active, from: at, to: at });
       else if (active) set({ type: "box", tool: active, from: at, to: at, square: event.shiftKey });
     };
 
@@ -174,7 +205,8 @@ export function useDesignDrawing({
       }
       if (pointer !== event.pointerId || !current) return;
       if (current.type === "pencil") set({ type: "pencil", points: [...current.points, at] });
-      else if (current.type === "line") set({ ...current, to: event.shiftKey ? snapAngle(current.from, at) : at });
+      else if (current.type === "line")
+        set({ ...current, to: event.shiftKey ? snapAngle(current.from, at) : at });
       else set({ ...current, to: at, square: event.shiftKey });
     };
 
@@ -191,7 +223,8 @@ export function useDesignDrawing({
       const began = start;
       set(null);
       if (!made || !began) return;
-      const moved = Math.hypot(event.clientX - began.screen.x, event.clientY - began.screen.y) > CLICK_SLOP_PX;
+      const moved =
+        Math.hypot(event.clientX - began.screen.x, event.clientY - began.screen.y) > CLICK_SLOP_PX;
       if (make(made, moved)) {
         if (made.type !== "pencil") latest.current.onDone();
       }
@@ -286,7 +319,12 @@ export function useDesignDrawing({
       const size = CLICK_SIZE[kind];
       const box = moved
         ? boxFromDrag(from, made.to, { square: made.square })
-        : { x: Math.round(from.x - size.w / 2), y: Math.round(from.y - size.h / 2), w: size.w, h: size.h };
+        : {
+            x: Math.round(from.x - size.w / 2),
+            y: Math.round(from.y - size.h / 2),
+            w: size.w,
+            h: size.h,
+          };
       if (kind === "frame") {
         return place({ kind: "frame", title: "Frame", ...box, createdBy: "person" }) !== null;
       }
@@ -342,10 +380,19 @@ function DrawingDraft({ draft, pen }: { draft: Draft | null; pen: PenPath | null
       >
         {draft?.type === "box" ? <BoxDraft draft={draft} /> : null}
         {draft?.type === "line" ? (
-          <line className="design-draft-line" x1={draft.from.x} y1={draft.from.y} x2={draft.to.x} y2={draft.to.y} />
+          <line
+            className="design-draft-line"
+            x1={draft.from.x}
+            y1={draft.from.y}
+            x2={draft.to.x}
+            y2={draft.to.y}
+          />
         ) : null}
         {draft?.type === "pencil" ? (
-          <polyline className="design-draft-line" points={draft.points.map((point) => `${point.x},${point.y}`).join(" ")} />
+          <polyline
+            className="design-draft-line"
+            points={draft.points.map((point) => `${point.x},${point.y}`).join(" ")}
+          />
         ) : null}
         {pen ? <PenDraft pen={pen} /> : null}
       </svg>
@@ -356,9 +403,25 @@ function DrawingDraft({ draft, pen }: { draft: Draft | null; pen: PenPath | null
 function BoxDraft({ draft }: { draft: Extract<Draft, { type: "box" }> }) {
   const box = boxFromDrag(draft.from, draft.to, { square: draft.square && draft.tool !== "text" });
   if (draft.tool === "oval") {
-    return <ellipse className="design-draft" cx={box.x + box.w / 2} cy={box.y + box.h / 2} rx={box.w / 2} ry={box.h / 2} />;
+    return (
+      <ellipse
+        className="design-draft"
+        cx={box.x + box.w / 2}
+        cy={box.y + box.h / 2}
+        rx={box.w / 2}
+        ry={box.h / 2}
+      />
+    );
   }
-  return <rect className="design-draft" x={box.x} y={box.y} width={box.w} height={draft.tool === "text" ? TEXT_LINE_PX : box.h} />;
+  return (
+    <rect
+      className="design-draft"
+      x={box.x}
+      y={box.y}
+      width={box.w}
+      height={draft.tool === "text" ? TEXT_LINE_PX : box.h}
+    />
+  );
 }
 
 function PenDraft({ pen }: { pen: PenPath }) {
@@ -377,7 +440,14 @@ function PenDraft({ pen }: { pen: PenPath }) {
     <>
       <path className="design-draft-line" d={d} />
       {pen.hover && !pen.pressed ? (
-        <line className="design-draft-line" strokeDasharray="4 4" x1={last.x} y1={last.y} x2={pen.hover.x} y2={pen.hover.y} />
+        <line
+          className="design-draft-line"
+          strokeDasharray="4 4"
+          x1={last.x}
+          y1={last.y}
+          x2={pen.hover.x}
+          y2={pen.hover.y}
+        />
       ) : null}
       {pen.pressed && (lastHandle.x !== 0 || lastHandle.y !== 0) ? (
         <line

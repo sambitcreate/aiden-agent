@@ -45,8 +45,16 @@ export function RemoteFolderList({
   const { platform } = useAppCapabilities();
   return (
     <div className="flex min-h-64 flex-col gap-2" aria-busy={loading || busy || undefined}>
-      <nav aria-label={`Folders on ${hostLabel}`} className="flex min-w-0 flex-wrap items-center gap-0.5 text-small text-secondary">
-        <Button variant="transparent" size="small" disabled={busy || !location} onClick={() => onOpen(null)}>
+      <nav
+        aria-label={`Folders on ${hostLabel}`}
+        className="flex min-w-0 flex-wrap items-center gap-0.5 text-small text-secondary"
+      >
+        <Button
+          variant="transparent"
+          size="small"
+          disabled={busy || !location}
+          onClick={() => onOpen(null)}
+        >
           {hostLabel}
         </Button>
         {breadcrumbs.map((crumb, index) => (
@@ -75,12 +83,21 @@ export function RemoteFolderList({
           </Text>
         ) : rows.length === 0 ? (
           <Text as="p" variant="small" color="secondary" className="p-4">
-            {location ? "No folders inside this one." : `${hostLabel} hasn't shared any folders with this ${localComputerNoun(platform)}.`}
+            {location
+              ? "No folders inside this one."
+              : `${hostLabel} hasn't shared any folders with this ${localComputerNoun(platform)}.`}
           </Text>
         ) : (
-          <ul aria-label={location ? `Folders in ${location.label}` : `Shared folders on ${hostLabel}`}>
+          <ul
+            aria-label={
+              location ? `Folders in ${location.label}` : `Shared folders on ${hostLabel}`
+            }
+          >
             {rows.map((row, index) => (
-              <li key={row.location.location} className={index ? "border-t border-separator" : undefined}>
+              <li
+                key={row.location.location}
+                className={index ? "border-t border-separator" : undefined}
+              >
                 <button
                   type="button"
                   disabled={busy}
@@ -97,7 +114,13 @@ export function RemoteFolderList({
         )}
       </div>
       {location && hasMore ? (
-        <Button variant="filled" size="small" className="self-start" disabled={loading || busy} onClick={onLoadMore}>
+        <Button
+          variant="filled"
+          size="small"
+          className="self-start"
+          disabled={loading || busy}
+          onClick={onLoadMore}
+        >
           {loading ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : null}
           Show more
         </Button>

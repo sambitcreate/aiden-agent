@@ -19,7 +19,10 @@ const CHUNK_HEADROOM = 64;
 const TELEGRAM_HTML_BYTE_LIMIT = 32_768;
 
 const CODE_SPAN_SENTINEL = String.fromCharCode(0);
-const CODE_SPAN_PATTERN = new RegExp(`${CODE_SPAN_SENTINEL}CODESPAN(\\d+)${CODE_SPAN_SENTINEL}`, "g");
+const CODE_SPAN_PATTERN = new RegExp(
+  `${CODE_SPAN_SENTINEL}CODESPAN(\\d+)${CODE_SPAN_SENTINEL}`,
+  "g",
+);
 
 interface RichDraftState {
   codeTicks: number;
@@ -51,9 +54,19 @@ function richDraftState(): RichDraftState {
 }
 
 function richDraftClosed(state: RichDraftState): boolean {
-  return state.codeTicks === 0 && !state.comment && !state.displayMath && !state.fence &&
-    !state.strongAsterisk && !state.emphasisAsterisk && !state.strongUnderscore &&
-    !state.emphasisUnderscore && !state.strike && !state.linkText && !state.linkDestination;
+  return (
+    state.codeTicks === 0 &&
+    !state.comment &&
+    !state.displayMath &&
+    !state.fence &&
+    !state.strongAsterisk &&
+    !state.emphasisAsterisk &&
+    !state.strongUnderscore &&
+    !state.emphasisUnderscore &&
+    !state.strike &&
+    !state.linkText &&
+    !state.linkDestination
+  );
 }
 
 function repeated(text: string, index: number, character: string): number {
@@ -157,7 +170,8 @@ function safeRichDraftEnd(markdown: string): number {
     const lineEnd = offset + line.length;
     const fence = line.match(/^ {0,3}(`{3,}|~{3,})/u)?.[1];
     if (state.fence) {
-      if (new RegExp(`^ {0,3}${state.fence.marker}{${state.fence.length},}\\s*$`, "u").test(line)) state.fence = undefined;
+      if (new RegExp(`^ {0,3}${state.fence.marker}{${state.fence.length},}\\s*$`, "u").test(line))
+        state.fence = undefined;
     } else if (state.displayMath) {
       if (line.trim() === "$$") state.displayMath = false;
     } else if (fence) {
@@ -183,7 +197,8 @@ export function safeRichDraftPrefix(markdown: string): string | undefined {
   let cursor = source.length;
   while ((cursor = source.lastIndexOf(" ", cursor - 1)) > 0) {
     const candidate = source.slice(0, cursor).trimEnd();
-    if (/[\p{L}\p{N}]/u.test(candidate) && safeRichDraftEnd(candidate) === candidate.length) return candidate;
+    if (/[\p{L}\p{N}]/u.test(candidate) && safeRichDraftEnd(candidate) === candidate.length)
+      return candidate;
   }
   return undefined;
 }
@@ -195,7 +210,10 @@ export function safeRichDraftPrefix(markdown: string): string | undefined {
 export function chunkRichMarkdown(markdown: string): string[] {
   const normalized = markdown.replace(/\r\n/gu, "\n").trim();
   if (!normalized) return [];
-  if (richBlockCount(normalized) <= TELEGRAM_RICH_BLOCK_LIMIT && normalized.length <= TELEGRAM_RICH_MESSAGE_LIMIT) {
+  if (
+    richBlockCount(normalized) <= TELEGRAM_RICH_BLOCK_LIMIT &&
+    normalized.length <= TELEGRAM_RICH_MESSAGE_LIMIT
+  ) {
     return [normalized];
   }
 
@@ -206,7 +224,10 @@ export function chunkRichMarkdown(markdown: string): string[] {
     for (const block of splitLongRichBlock(rawBlock)) {
       const blockCount = richBlockCount(block);
       const candidate = current ? `${current}\n\n${block}` : block;
-      if (candidate.length <= TELEGRAM_RICH_MESSAGE_LIMIT && blocks + blockCount <= TELEGRAM_RICH_BLOCK_LIMIT) {
+      if (
+        candidate.length <= TELEGRAM_RICH_MESSAGE_LIMIT &&
+        blocks + blockCount <= TELEGRAM_RICH_BLOCK_LIMIT
+      ) {
         current = candidate;
         blocks += blockCount;
         continue;
@@ -236,7 +257,10 @@ function richBlocks(markdown: string): string[] {
     current.push(line);
     if (!fence && opening) {
       fence = { marker: opening[0]!, length: opening.length };
-    } else if (fence && new RegExp(`^ {0,3}${fence.marker}{${fence.length},}\\s*$`, "u").test(line)) {
+    } else if (
+      fence &&
+      new RegExp(`^ {0,3}${fence.marker}{${fence.length},}\\s*$`, "u").test(line)
+    ) {
       fence = undefined;
     }
   }
@@ -248,16 +272,28 @@ function richBlockCount(markdown: string): number {
   return richBlocks(markdown).reduce((total, block) => {
     if (/^ {0,3}(`{3,}|~{3,})/u.test(block)) return total + 1;
     const lines = block.split("\n").filter((line) => line.trim());
-    return total + (lines.some((line) => /^\s*(?:[-*+] |\d+\. |> |\|)/u.test(line)) ? Math.max(1, lines.length) : 1);
+    return (
+      total +
+      (lines.some((line) => /^\s*(?:[-*+] |\d+\. |> |\|)/u.test(line))
+        ? Math.max(1, lines.length)
+        : 1)
+    );
   }, 0);
 }
 
 function splitLongRichBlock(block: string): string[] {
-  if (block.length <= TELEGRAM_RICH_MESSAGE_LIMIT && richBlockCount(block) <= TELEGRAM_RICH_BLOCK_LIMIT) return [block];
+  if (
+    block.length <= TELEGRAM_RICH_MESSAGE_LIMIT &&
+    richBlockCount(block) <= TELEGRAM_RICH_BLOCK_LIMIT
+  )
+    return [block];
   const fenced = splitLongFence(block);
   if (fenced) return fenced;
   const wrapper = ["**", "__", "~~", "`", "*", "_"].find(
-    (delimiter) => block.startsWith(delimiter) && block.endsWith(delimiter) && block.length > delimiter.length * 2,
+    (delimiter) =>
+      block.startsWith(delimiter) &&
+      block.endsWith(delimiter) &&
+      block.length > delimiter.length * 2,
   );
   if (wrapper) {
     return splitRichContent(
@@ -274,13 +310,22 @@ function splitLongFence(block: string): string[] | undefined {
   const opening = lines[0] ?? "";
   const marker = opening.match(/^ {0,3}(`{3,}|~{3,})/u)?.[1];
   const closing = lines[lines.length - 1] ?? "";
-  if (!marker || !new RegExp(`^ {0,3}${marker[0]}{${marker.length},}\\s*$`, "u").test(closing)) return undefined;
+  if (!marker || !new RegExp(`^ {0,3}${marker[0]}{${marker.length},}\\s*$`, "u").test(closing))
+    return undefined;
   const limit = TELEGRAM_RICH_MESSAGE_LIMIT - opening.length - closing.length - 2;
   if (limit <= 0) return undefined;
-  return splitRichContent(lines.slice(1, -1).join("\n"), limit, (value) => `${opening}\n${value}${value.endsWith("\n") ? "" : "\n"}${closing}`);
+  return splitRichContent(
+    lines.slice(1, -1).join("\n"),
+    limit,
+    (value) => `${opening}\n${value}${value.endsWith("\n") ? "" : "\n"}${closing}`,
+  );
 }
 
-function splitRichContent(content: string, limit: number, wrap: (value: string) => string): string[] {
+function splitRichContent(
+  content: string,
+  limit: number,
+  wrap: (value: string) => string,
+): string[] {
   const chunks: string[] = [];
   let remaining = content;
   while (remaining.length > limit) {
@@ -288,7 +333,8 @@ function splitRichContent(content: string, limit: number, wrap: (value: string) 
     const paragraph = window.lastIndexOf("\n\n", limit);
     const line = window.lastIndexOf("\n", limit);
     const space = window.lastIndexOf(" ", limit);
-    const splitAt = paragraph > 0 ? paragraph + 2 : line > 0 ? line + 1 : space > 0 ? space + 1 : limit;
+    const splitAt =
+      paragraph > 0 ? paragraph + 2 : line > 0 ? line + 1 : space > 0 ? space + 1 : limit;
     chunks.push(wrap(remaining.slice(0, splitAt)));
     remaining = remaining.slice(splitAt);
   }
@@ -297,10 +343,7 @@ function splitRichContent(content: string, limit: number, wrap: (value: string) 
 }
 
 function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 /** Escape a URL for safe placement inside an HTML attribute value. */
@@ -340,8 +383,7 @@ function convertInline(markdown: string): string {
   // Links: [text](url) — escape quotes in the URL for safe attribute injection.
   working = working.replace(
     /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-    (_m, text: string, url: string) =>
-      `<a href="${escapeHref(url)}">${text}</a>`,
+    (_m, text: string, url: string) => `<a href="${escapeHref(url)}">${text}</a>`,
   );
 
   // Restore code spans.
@@ -361,7 +403,9 @@ function convertFencedBlock(raw: string): string {
   const lang = match?.[1];
   const code = match?.[2] ?? raw.slice(3, -3);
   const escaped = escapeHtml(code.replace(/\n$/, ""));
-  return lang ? `<pre><code class="language-${escapeHtml(lang)}">${escaped}</code></pre>` : `<pre>${escaped}</pre>`;
+  return lang
+    ? `<pre><code class="language-${escapeHtml(lang)}">${escaped}</code></pre>`
+    : `<pre>${escaped}</pre>`;
 }
 
 /**
@@ -459,7 +503,9 @@ function reopenTelegramTags(tag: TelegramHtmlTag | undefined): string {
 
 function decodeTelegramEntity(entity: string): string {
   if (entity.startsWith("#")) {
-    const codePoint = entity.startsWith("#x") ? Number.parseInt(entity.slice(2), 16) : Number(entity.slice(1));
+    const codePoint = entity.startsWith("#x")
+      ? Number.parseInt(entity.slice(2), 16)
+      : Number(entity.slice(1));
     // Invalid numeric input must not throw while measuring; this is not a sanitizer.
     return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : "�";
   }
@@ -467,18 +513,21 @@ function decodeTelegramEntity(entity: string): string {
 }
 
 function decodeTelegramText(text: string): string {
-  return text.replace(/&(amp|lt|gt|quot|#\d+|#x[\da-fA-F]+);/g,
-    (_match, value: string) => decodeTelegramEntity(value));
+  return text.replace(/&(amp|lt|gt|quot|#\d+|#x[\da-fA-F]+);/g, (_match, value: string) =>
+    decodeTelegramEntity(value),
+  );
 }
 
 /** Drop unsendable formatting while retaining visible labels and destinations. */
 function plainTelegramHtml(html: string): string {
-  const plain = html.replace(/<a href="([^"]*)">([\s\S]*?)<\/a>/g,
-    (_match, destination: string, label: string) => {
+  const plain = html
+    .replace(/<a href="([^"]*)">([\s\S]*?)<\/a>/g, (_match, destination: string, label: string) => {
       const renderedLabel = decodeTelegramText(label.replace(/<[^>]*>/g, ""));
-      return renderedLabel === decodeTelegramText(destination) ? label : `${label} (${destination})`;
-    },
-  ).replace(/<[^>]*>/g, "");
+      return renderedLabel === decodeTelegramText(destination)
+        ? label
+        : `${label} (${destination})`;
+    })
+    .replace(/<[^>]*>/g, "");
   return escapeHtml(decodeTelegramText(plain));
 }
 
@@ -497,7 +546,8 @@ export function chunkForTelegram(html: string): string[] {
   // Sticky matching scans only the next token. Attributes from the converter
   // contain escaped angle brackets; supported entities and code points remain
   // indivisible even when their serialized representation exceeds the budget.
-  const tokenPattern = /<(\/?)(b|i|s|u|a|pre|code|blockquote)(?:\s[^<>]*)?>|&(amp|lt|gt|quot|#\d+|#x[\da-fA-F]+);|[\s\S]/uy;
+  const tokenPattern =
+    /<(\/?)(b|i|s|u|a|pre|code|blockquote)(?:\s[^<>]*)?>|&(amp|lt|gt|quot|#\d+|#x[\da-fA-F]+);|[\s\S]/uy;
   const chunks: string[] = [];
   let start = 0;
   let tag: TelegramHtmlTag | undefined;
@@ -521,11 +571,19 @@ export function chunkForTelegram(html: string): string[] {
       const width = character.length;
       const nextTag = name
         ? closing
-          ? tag?.name === name ? tag.parent : tag
-          : { name, opening: token, closingBytes: (tag?.closingBytes ?? 0) + name.length + 3, parent: tag }
+          ? tag?.name === name
+            ? tag.parent
+            : tag
+          : {
+              name,
+              opening: token,
+              closingBytes: (tag?.closingBytes ?? 0) + name.length + 3,
+              parent: tag,
+            }
         : tag;
       const tokenBytes = Buffer.byteLength(token);
-      const exceedsByteLimit = bytes + tokenBytes + (nextTag?.closingBytes ?? 0) > TELEGRAM_HTML_BYTE_LIMIT;
+      const exceedsByteLimit =
+        bytes + tokenBytes + (nextTag?.closingBytes ?? 0) > TELEGRAM_HTML_BYTE_LIMIT;
       if (length + width > limit || exceedsByteLimit) {
         if (length === 0) {
           // An indivisible wrapper cannot carry even one text token. Deliver a
@@ -537,8 +595,10 @@ export function chunkForTelegram(html: string): string[] {
         // text token so a combining mark across a formatting seam stays attached.
         if (name) {
           let lookahead: RegExpExecArray | null;
-          while ((lookahead = tokenPattern.exec(html))?.[2]) { /* skip markup */ }
-          character = lookahead?.[3] ? decodeTelegramEntity(lookahead[3]) : lookahead?.[0] ?? "";
+          while ((lookahead = tokenPattern.exec(html))?.[2]) {
+            /* skip markup */
+          }
+          character = lookahead?.[3] ? decodeTelegramEntity(lookahead[3]) : (lookahead?.[0] ?? "");
         }
         // One code point of lookahead determines whether the last grapheme
         // continues across the tentative cut, including entities and tag seams.

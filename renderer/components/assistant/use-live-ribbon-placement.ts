@@ -35,7 +35,13 @@ export function readLiveRibbonOffset(): LiveRibbonOffset {
     const parsed: unknown = JSON.parse(window.localStorage.getItem(storageKey()) ?? "null");
     if (parsed && typeof parsed === "object") {
       const { x, y } = parsed as Record<string, unknown>;
-      if (typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+      if (
+        typeof x === "number" &&
+        typeof y === "number" &&
+        Number.isFinite(x) &&
+        Number.isFinite(y)
+      )
+        return { x, y };
     }
   } catch {
     // Missing, blocked or malformed storage means the default place.
@@ -54,7 +60,9 @@ function writeLiveRibbonOffset(offset: LiveRibbonOffset): void {
 
 /** The visible chat composer's box, or null when no chat composer is on screen. */
 export function measureChatComposer(doc: Document = document): DOMRect | null {
-  const composers = Array.from(doc.querySelectorAll<HTMLElement>('[data-browser-composer-inset="true"]'));
+  const composers = Array.from(
+    doc.querySelectorAll<HTMLElement>('[data-browser-composer-inset="true"]'),
+  );
   for (const inset of composers) {
     const target = inset.querySelector<HTMLElement>('[data-focus-region="composer"]') ?? inset;
     const rect = target.getBoundingClientRect();
@@ -64,10 +72,16 @@ export function measureChatComposer(doc: Document = document): DOMRect | null {
 }
 
 /** The chat composer's column, or the window's bottom centre when no chat is open. */
-export function measureLiveRibbonAnchor(doc: Document = document, view: Window = window): LiveRibbonAnchor {
+export function measureLiveRibbonAnchor(
+  doc: Document = document,
+  view: Window = window,
+): LiveRibbonAnchor {
   const rect = measureChatComposer(doc);
   if (rect) {
-    return { centerX: rect.left + rect.width / 2, bottom: Math.max(EDGE_MARGIN, view.innerHeight - rect.top + GAP_ABOVE_COMPOSER) };
+    return {
+      centerX: rect.left + rect.width / 2,
+      bottom: Math.max(EDGE_MARGIN, view.innerHeight - rect.top + GAP_ABOVE_COMPOSER),
+    };
   }
   return { centerX: view.innerWidth / 2, bottom: 24 };
 }
@@ -89,7 +103,8 @@ export function liveCornerClearance(input: {
 }): number {
   const { composer, dock, container, floatingPanel } = input;
   if (!composer) return 0;
-  const crosses = (box: { left: number; right: number }) => dock.left < box.right && dock.right > box.left;
+  const crosses = (box: { left: number; right: number }) =>
+    dock.left < box.right && dock.right > box.left;
   if (!crosses(composer)) return 0;
   if (floatingPanel && crosses(floatingPanel)) return 0;
   const wanted = Math.ceil(container.bottom - composer.top + GAP_ABOVE_COMPOSER);
@@ -102,7 +117,10 @@ export function liveCornerClearance(input: {
  * hints, errors, approvals). The captions card is wider than the pill and
  * overflows it equally on both sides.
  */
-export function measureLiveRibbonFootprint(section: HTMLElement): { width: number; height: number } {
+export function measureLiveRibbonFootprint(section: HTMLElement): {
+  width: number;
+  height: number;
+} {
   let width = section.offsetWidth;
   for (const child of Array.from(section.children)) {
     if (child instanceof HTMLElement) width = Math.max(width, child.offsetWidth);
@@ -142,7 +160,9 @@ export function useLiveRibbonPlacement(sectionRef: React.RefObject<HTMLElement |
     typeof window === "undefined" ? { x: 0, y: 0 } : readLiveRibbonOffset(),
   );
   const [viewport, setViewport] = React.useState(() =>
-    typeof window === "undefined" ? { width: 0, height: 0 } : { width: window.innerWidth, height: window.innerHeight },
+    typeof window === "undefined"
+      ? { width: 0, height: 0 }
+      : { width: window.innerWidth, height: window.innerHeight },
   );
   const [dragging, setDragging] = React.useState(false);
   const [size, setSize] = React.useState({ width: 380, height: 64 });
@@ -152,7 +172,9 @@ export function useLiveRibbonPlacement(sectionRef: React.RefObject<HTMLElement |
     const measure = () => {
       frame = 0;
       const next = measureLiveRibbonAnchor();
-      setAnchor((current) => (current.centerX === next.centerX && current.bottom === next.bottom ? current : next));
+      setAnchor((current) =>
+        current.centerX === next.centerX && current.bottom === next.bottom ? current : next,
+      );
       setViewport((current) =>
         current.width === window.innerWidth && current.height === window.innerHeight
           ? current
@@ -163,7 +185,9 @@ export function useLiveRibbonPlacement(sectionRef: React.RefObject<HTMLElement |
         const footprint = measureLiveRibbonFootprint(section);
         if (footprint.width > 0 && footprint.height > 0) {
           setSize((current) =>
-            current.width === footprint.width && current.height === footprint.height ? current : footprint,
+            current.width === footprint.width && current.height === footprint.height
+              ? current
+              : footprint,
           );
         }
       }
@@ -196,7 +220,8 @@ export function useLiveRibbonPlacement(sectionRef: React.RefObject<HTMLElement |
     (event: React.PointerEvent<HTMLElement>) => {
       if (event.button !== 0) return;
       // Buttons and menus keep their own clicks.
-      if ((event.target as Element).closest("button, a, input, [role='menu'], [role='menuitem']")) return;
+      if ((event.target as Element).closest("button, a, input, [role='menu'], [role='menuitem']"))
+        return;
       const element = event.currentTarget;
       const start = { x: event.clientX, y: event.clientY, offset };
       let latest = offset;
@@ -207,7 +232,10 @@ export function useLiveRibbonPlacement(sectionRef: React.RefObject<HTMLElement |
       }
       setDragging(true);
       const move = (moveEvent: PointerEvent) => {
-        const wanted = { x: start.offset.x + moveEvent.clientX - start.x, y: start.offset.y + moveEvent.clientY - start.y };
+        const wanted = {
+          x: start.offset.x + moveEvent.clientX - start.x,
+          y: start.offset.y + moveEvent.clientY - start.y,
+        };
         // Store only an offset the window can show, so dragging back responds at once.
         const layout = layoutRef.current;
         const at = placeLiveRibbon(layout.anchor, wanted, layout.size, layout.viewport);

@@ -15,18 +15,9 @@ const fileUrls = {
   ),
   ascRunbook: new URL("../ios/ASC_CLI.md", import.meta.url),
   testflight: new URL("../ios/TESTFLIGHT.md", import.meta.url),
-  appInfoMetadata: new URL(
-    "../ios/app-store/metadata/app-info/en-US.json",
-    import.meta.url,
-  ),
-  versionMetadata: new URL(
-    "../ios/app-store/metadata/version/0.1.0/en-US.json",
-    import.meta.url,
-  ),
-  mobilePrivacySupport: new URL(
-    "../ios/app-store/MOBILE_PRIVACY_SUPPORT_COPY.md",
-    import.meta.url,
-  ),
+  appInfoMetadata: new URL("../ios/app-store/metadata/app-info/en-US.json", import.meta.url),
+  versionMetadata: new URL("../ios/app-store/metadata/version/0.1.0/en-US.json", import.meta.url),
+  mobilePrivacySupport: new URL("../ios/app-store/MOBILE_PRIVACY_SUPPORT_COPY.md", import.meta.url),
   gitignore: new URL("../.gitignore", import.meta.url),
 };
 
@@ -51,11 +42,11 @@ test("public App Store identity stays aligned with shipping app links", async ()
   assert.equal(backtickValue(metadata, "App Store SKU"), "aiden-on-the-go-ios");
   assert.equal(backtickValue(metadata, "Marketing URL"), "https://chatwithaiden.com/");
   assert.equal(backtickValue(metadata, "Support URL"), "https://chatwithaiden.com/");
-  assert.equal(
-    backtickValue(metadata, "Privacy-policy URL"),
-    "https://chatwithaiden.com/privacy",
+  assert.equal(backtickValue(metadata, "Privacy-policy URL"), "https://chatwithaiden.com/privacy");
+  assert.match(
+    appConfig,
+    /privacyPolicyURL = URL\(staticString: "https:\/\/chatwithaiden\.com\/privacy"\)/u,
   );
-  assert.match(appConfig, /privacyPolicyURL = URL\(staticString: "https:\/\/chatwithaiden\.com\/privacy"\)/u);
   assert.match(appConfig, /supportURL = URL\(staticString: "https:\/\/chatwithaiden\.com\/"\)/u);
 });
 
@@ -63,21 +54,37 @@ test("release docs agree on the current processed TestFlight candidate, and it i
   const { metadata, ascRunbook, testflight } = await loadFiles();
 
   const sources = {
-    "APP_STORE_METADATA.md": [metadata, /build `(\d+)` is the current processed internal candidate/giu],
+    "APP_STORE_METADATA.md": [
+      metadata,
+      /build `(\d+)` is the current processed internal candidate/giu,
+    ],
     "ASC_CLI.md": [ascRunbook, /build `(\d+)` is the current processed internal candidate/giu],
     "TESTFLIGHT.md": [testflight, /build `(\d+)` is the current processed internal candidate/giu],
-    "ASC_CLI.md resource ID": [ascRunbook, /Current exact build resource ID: `[0-9a-f-]+` \(build `(\d+)`/gu],
+    "ASC_CLI.md resource ID": [
+      ascRunbook,
+      /Current exact build resource ID: `[0-9a-f-]+` \(build `(\d+)`/gu,
+    ],
   };
   const named = Object.entries(sources).flatMap(([source, [text, pattern]]) => {
     const builds = [...text.matchAll(pattern)].map((match) => Number(match[1]));
     assert.ok(builds.length > 0, `${source} names the current candidate`);
     return builds;
   });
-  assert.deepEqual(new Set(named), new Set([named[0]]), `every current-candidate statement names one build, saw ${named}`);
+  assert.deepEqual(
+    new Set(named),
+    new Set([named[0]]),
+    `every current-candidate statement names one build, saw ${named}`,
+  );
 
-  const recorded = [...ascRunbook.matchAll(/^## Internal build (\d+) /gmu)].map((match) => Number(match[1]));
+  const recorded = [...ascRunbook.matchAll(/^## Internal build (\d+) /gmu)].map((match) =>
+    Number(match[1]),
+  );
   assert.ok(recorded.length > 0, "the ASC runbook records each internal build");
-  assert.equal(named[0], Math.max(...recorded), "the current candidate is the newest build the runbook records");
+  assert.equal(
+    named[0],
+    Math.max(...recorded),
+    "the current candidate is the newest build the runbook records",
+  );
 });
 
 test("ASC owner operations are telemetry-off, strict, and credential-safe", async () => {
@@ -90,13 +97,19 @@ test("ASC owner operations are telemetry-off, strict, and credential-safe", asyn
   assert.match(ascRunbook, /721aeb9d-2b33-4729-8d10-5bc1783abbef/u);
   assert.match(ascRunbook, /IN_BETA_TESTING/u);
   assert.match(ascRunbook, /https:\/\/testflight\.apple\.com\/join\/s3T4T8y3/u);
-  assert.match(ascRunbook, /Zero accessible app records must not be treated as permission to auto-create one/u);
+  assert.match(
+    ascRunbook,
+    /Zero accessible app records must not be treated as permission to auto-create one/u,
+  );
   assert.match(ascRunbook, /resolve the existing record read-only/u);
   assert.match(ascRunbook, /asc web privacy pull/u);
   assert.match(ascRunbook, /asc screenshots validate/u);
   assert.match(ascRunbook, /npm run ios:asc-monitor/u);
   assert.match(ascRunbook, /builds info --build-id/u);
-  assert.match(ascRunbook, /never tester identity, feedback text, screenshot URLs, or crash content/u);
+  assert.match(
+    ascRunbook,
+    /never tester identity, feedback text, screenshot URLs, or crash content/u,
+  );
   assert.doesNotMatch(ascRunbook, /AuthKey_[A-Z0-9]+\.p8/u);
   assert.match(gitignore, /^\.asc\/config\.json$/mu);
   assert.match(gitignore, /^\.asc\/sessions\/$/mu);

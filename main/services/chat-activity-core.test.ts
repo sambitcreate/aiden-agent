@@ -89,7 +89,10 @@ test("attention prompts project to chat row signals and clear on answer or settl
   assert.deepEqual(registry.snapshot().activeChatIds, []);
   assert.equal(registry.snapshot().inputChatIds, undefined);
   const revisions = snapshots.map((snapshot) => snapshot.revision);
-  assert.deepEqual(revisions, [...revisions].sort((a, b) => a - b));
+  assert.deepEqual(
+    revisions,
+    [...revisions].sort((a, b) => a - b),
+  );
 });
 
 test("prompts from streams the registry does not own are ignored", () => {

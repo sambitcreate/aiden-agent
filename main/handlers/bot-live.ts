@@ -8,7 +8,11 @@
 // A subscription is also how main knows a Bot's chat is open: `shownInFront`
 // says whether a document that holds one is in front of the person now.
 
-import type { BotLiveEvent, BotLiveSnapshot, BotLiveSummary } from "../../renderer/shared/bot-live.js";
+import type {
+  BotLiveEvent,
+  BotLiveSnapshot,
+  BotLiveSummary,
+} from "../../renderer/shared/bot-live.js";
 import type { BotLiveProjection } from "../services/bot-runtime/live-projection.js";
 
 export const BOT_LIVE_EVENT_CHANNEL = "bots:live:event";
@@ -53,7 +57,11 @@ export interface BotChatFrontInput {
 
 /** Focused, on screen, someone used the Mac recently, and for an overlay, this Bot's mini chat is the open one. */
 export function isBotChatInFront(botId: string, input: BotChatFrontInput): boolean {
-  if (input.focusedWebContentsId === null || input.focusedWebContentsId !== input.ownerWebContentsId) return false;
+  if (
+    input.focusedWebContentsId === null ||
+    input.focusedWebContentsId !== input.ownerWebContentsId
+  )
+    return false;
   if (!input.visible || input.minimized) return false;
   if (input.isBubbleOverlay && input.openBubbleBotId !== botId) return false;
   return input.idleState === "active";
@@ -75,7 +83,9 @@ export interface BotLiveHandlerDependencies<Event> {
 const INACTIVE = "The application document changed.";
 const REVOKED = "This window no longer shows that Bot.";
 
-export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDependencies<Event>): BotLiveHandlers {
+export function registerBotLiveHandlers<Event>(
+  dependencies: BotLiveHandlerDependencies<Event>,
+): BotLiveHandlers {
   const { handle } = dependencies;
   /** owner key → botId → unsubscribe. */
   const subscriptions = new Map<string, Map<string, () => void>>();
@@ -139,7 +149,8 @@ export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDepen
           // Lost this Bot: send nothing more, and end the feed once the projection is done sending.
           revoked = true;
           queueMicrotask(() => {
-            if (unsubscribeThis && subscriptions.get(owner.key)?.get(botId) === unsubscribeThis) release(owner.key, botId);
+            if (unsubscribeThis && subscriptions.get(owner.key)?.get(botId) === unsubscribeThis)
+              release(owner.key, botId);
           });
           return;
         }

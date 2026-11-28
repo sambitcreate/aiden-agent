@@ -212,13 +212,16 @@ export function startWorktreeFirstSend<Input, C, W = unknown>(options: {
       }
       const existing = existingWorktreeOf(result);
       // A worktree that reported ready before the chat failed to save is kept.
-      const created = existing?.branch ?? (progress.phase === "ready" ? progress.branch : undefined);
+      const created =
+        existing?.branch ?? (progress.phase === "ready" ? progress.branch : undefined);
       show({
         status: "failed",
         request,
         progress,
         reason: result.reason,
-        ...("detail" in result && typeof result.detail === "string" ? { detail: result.detail } : {}),
+        ...("detail" in result && typeof result.detail === "string"
+          ? { detail: result.detail }
+          : {}),
         ...(existing ? { existing } : {}),
       });
       const decision = await new Promise<WorktreeSendDecision>((resolve) => {

@@ -184,10 +184,7 @@ export class BotCapabilityLeaseRegistry {
     const chat = entry.chats.get(safeChatId) ?? { generation: 1, policyEpoch: 1 };
     chat.generation = this.nextGeneration(chat.generation);
     entry.chats.set(safeChatId, chat);
-    this.abortMatching(
-      entry,
-      (lease) => lease.chatId === safeChatId,
-    );
+    this.abortMatching(entry, (lease) => lease.chatId === safeChatId);
   }
 
   invalidateAudience(audienceId: string): void {
@@ -224,10 +221,7 @@ export class BotCapabilityLeaseRegistry {
     chat.policyEpoch = nextEpoch;
     chat.generation = this.nextGeneration(chat.generation);
     entry.chats.set(safeChatId, chat);
-    this.abortMatching(
-      entry,
-      (lease) => lease.chatId === safeChatId,
-    );
+    this.abortMatching(entry, (lease) => lease.chatId === safeChatId);
   }
 
   activeCount(botId: string): number {

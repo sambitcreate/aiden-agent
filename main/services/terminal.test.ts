@@ -9,7 +9,13 @@ import {
   resolveNodePtyDiskPackageDir,
   resolveNodePtySpawnHelperPaths,
 } from "./terminal-spawn-helper.js";
-import { TerminalInputOrder, TerminalService, foregroundCommandName, parseForegroundState, type ForegroundState } from "./terminal.js";
+import {
+  TerminalInputOrder,
+  TerminalService,
+  foregroundCommandName,
+  parseForegroundState,
+  type ForegroundState,
+} from "./terminal.js";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 
 function deferred() {
@@ -91,7 +97,9 @@ test("invalid PTY identities never signal a process group or bypass the removal 
     const service = new TerminalService({
       prepareSpawnHelper: async () => undefined,
       spawnPty: (() => child.pty) as typeof spawn,
-      signalProcess: (target) => { signaled.push(target); },
+      signalProcess: (target) => {
+        signaled.push(target);
+      },
     });
     await assert.rejects(
       service.create("managed-workspace", "/tmp", owner.owner),
@@ -669,7 +677,9 @@ test("terminal cancellation during history restore prevents shell startup", asyn
         "/tmp",
         owner.owner,
         admission.signal,
-        async () => { revalidations += 1; },
+        async () => {
+          revalidations += 1;
+        },
       );
       await new Promise<void>((resolve) => setImmediate(resolve));
       if (cancellation === "document") owner.destroy();
@@ -716,18 +726,22 @@ test("concurrent terminal opens enforce the session cap before spawning", async 
           spawnCount += 1;
           return fakePty().pty;
         }) as typeof spawn,
-        historyStore: withHistory ? {
-          read: async () => {
-            await historyReady.promise;
-            return "prior output";
-          },
-          append: () => undefined,
-          flush: async () => undefined,
-        } : undefined,
+        historyStore: withHistory
+          ? {
+              read: async () => {
+                await historyReady.promise;
+                return "prior output";
+              },
+              append: () => undefined,
+              flush: async () => undefined,
+            }
+          : undefined,
       });
-      const opening = Promise.allSettled(Array.from({ length: 10 }, (_, index) =>
-        service.create(`workspace-${index}`, "/tmp", owner.owner),
-      ));
+      const opening = Promise.allSettled(
+        Array.from({ length: 10 }, (_, index) =>
+          service.create(`workspace-${index}`, "/tmp", owner.owner),
+        ),
+      );
       historyReady.resolve();
       const results = await opening;
       assert.equal(results.filter((result) => result.status === "fulfilled").length, 8);
@@ -821,7 +835,11 @@ test("terminal teardown is scoped by workspace and renderer web contents", async
   assert.equal(service.hasOpenSession("workspace-c"), false);
 
   service.closeForWorkspace("workspace-a");
-  assert.equal(service.hasOpenSession("workspace-a"), false, "a closed shell no longer holds the worktree");
+  assert.equal(
+    service.hasOpenSession("workspace-a"),
+    false,
+    "a closed shell no longer holds the worktree",
+  );
   assert.equal(service.hasOpenSession("workspace-b"), true);
   assert.equal(children[0]!.killed(), true);
   assert.equal(children[1]!.killed(), false);
@@ -851,8 +869,9 @@ test("managed worktree removal waits for owned terminal exit and reports a stuck
   await service.create("managed-workspace", "/tmp", owner.owner);
 
   let settled = false;
-  const closing = service.closeForWorkspaceAndWait("managed-workspace", 100)
-    .then(() => { settled = true; });
+  const closing = service.closeForWorkspaceAndWait("managed-workspace", 100).then(() => {
+    settled = true;
+  });
   assert.equal(child.killed(), true);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(settled, false, "signalling the PTY is not proof that it exited");
@@ -910,64 +929,79 @@ test("managed worktree removal refuses a surviving job in the PTY session after 
   await service.closeForWorkspaceAndWait("managed-workspace", 10);
 });
 
-test("a shell that ignores hangup is killed so worktree removal can finish", { skip: process.platform === "win32" }, async () => {
-  const owner = ownerState();
-  const child = fakePty();
-  const signals: Array<[number, NodeJS.Signals]> = [];
-  const service = new TerminalService({
-    prepareSpawnHelper: async () => undefined,
-    spawnPty: (() => child.pty) as typeof spawn,
-    killGraceMs: 20,
-    sessionHasMembers: async () => false,
-    // The shell traps SIGHUP and dies only to SIGKILL.
-    signalProcess: (target, signal) => {
-      signals.push([target, signal]);
-      if (signal === "SIGKILL") child.emitExit(0, 9);
-    },
-  });
-  await service.create("managed-workspace", "/tmp", owner.owner);
+test(
+  "a shell that ignores hangup is killed so worktree removal can finish",
+  { skip: process.platform === "win32" },
+  async () => {
+    const owner = ownerState();
+    const child = fakePty();
+    const signals: Array<[number, NodeJS.Signals]> = [];
+    const service = new TerminalService({
+      prepareSpawnHelper: async () => undefined,
+      spawnPty: (() => child.pty) as typeof spawn,
+      killGraceMs: 20,
+      sessionHasMembers: async () => false,
+      // The shell traps SIGHUP and dies only to SIGKILL.
+      signalProcess: (target, signal) => {
+        signals.push([target, signal]);
+        if (signal === "SIGKILL") child.emitExit(0, 9);
+      },
+    });
+    await service.create("managed-workspace", "/tmp", owner.owner);
 
-  await service.closeForWorkspaceAndWait("managed-workspace", 1_000);
-  assert.deepEqual(signals, [[-child.pty.pid, "SIGHUP"], [-child.pty.pid, "SIGKILL"]]);
-});
+    await service.closeForWorkspaceAndWait("managed-workspace", 1_000);
+    assert.deepEqual(signals, [
+      [-child.pty.pid, "SIGHUP"],
+      [-child.pty.pid, "SIGKILL"],
+    ]);
+  },
+);
 
-test("a shell that exits on hangup is never sent SIGKILL", { skip: process.platform === "win32" }, async () => {
-  const owner = ownerState();
-  const child = fakePty();
-  const signals: NodeJS.Signals[] = [];
-  const service = new TerminalService({
-    prepareSpawnHelper: async () => undefined,
-    spawnPty: (() => child.pty) as typeof spawn,
-    killGraceMs: 10,
-    sessionHasMembers: async () => false,
-    signalProcess: (_target, signal) => {
-      signals.push(signal);
-      if (signal === "SIGHUP") queueMicrotask(() => child.emitExit(0, 1));
-    },
-  });
-  await service.create("managed-workspace", "/tmp", owner.owner);
-  await service.closeForWorkspaceAndWait("managed-workspace", 1_000);
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.deepEqual(signals, ["SIGHUP"]);
-});
+test(
+  "a shell that exits on hangup is never sent SIGKILL",
+  { skip: process.platform === "win32" },
+  async () => {
+    const owner = ownerState();
+    const child = fakePty();
+    const signals: NodeJS.Signals[] = [];
+    const service = new TerminalService({
+      prepareSpawnHelper: async () => undefined,
+      spawnPty: (() => child.pty) as typeof spawn,
+      killGraceMs: 10,
+      sessionHasMembers: async () => false,
+      signalProcess: (_target, signal) => {
+        signals.push(signal);
+        if (signal === "SIGHUP") queueMicrotask(() => child.emitExit(0, 1));
+      },
+    });
+    await service.create("managed-workspace", "/tmp", owner.owner);
+    await service.closeForWorkspaceAndWait("managed-workspace", 1_000);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(signals, ["SIGHUP"]);
+  },
+);
 
-test("an exited shell whose session is empty no longer blocks removal if its PID is reused", { skip: process.platform === "win32" }, async () => {
-  const owner = ownerState();
-  const child = fakePty();
-  let pidReused = false;
-  const service = new TerminalService({
-    prepareSpawnHelper: async () => undefined,
-    spawnPty: (() => child.pty) as typeof spawn,
-    // Before reuse the session is empty; afterwards an unrelated process leads a session with that PID.
-    sessionHasMembers: async () => pidReused,
-  });
-  await service.create("managed-workspace", "/tmp", owner.owner);
-  child.emitExit(0);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  pidReused = true;
+test(
+  "an exited shell whose session is empty no longer blocks removal if its PID is reused",
+  { skip: process.platform === "win32" },
+  async () => {
+    const owner = ownerState();
+    const child = fakePty();
+    let pidReused = false;
+    const service = new TerminalService({
+      prepareSpawnHelper: async () => undefined,
+      spawnPty: (() => child.pty) as typeof spawn,
+      // Before reuse the session is empty; afterwards an unrelated process leads a session with that PID.
+      sessionHasMembers: async () => pidReused,
+    });
+    await service.create("managed-workspace", "/tmp", owner.owner);
+    child.emitExit(0);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    pidReused = true;
 
-  await service.closeForWorkspaceAndWait("managed-workspace", 10);
-});
+    await service.closeForWorkspaceAndWait("managed-workspace", 10);
+  },
+);
 
 test("terminal enforces the per-document session cap and history initialization order", async () => {
   const owner = ownerState();
@@ -1093,7 +1127,9 @@ async function foregroundHarness(t: TestContext) {
   });
   const session = await service.create("workspace-1", "/tmp", owner.owner);
   const activity = () =>
-    owner.sent.filter((entry) => entry.channel === "terminal:activity").map((entry) => entry.payload);
+    owner.sent
+      .filter((entry) => entry.channel === "terminal:activity")
+      .map((entry) => entry.payload);
   const poll = () => t.mock.timers.tick(5);
   const settle = () => {
     poll();
@@ -1130,7 +1166,10 @@ test("closing reads the foreground program fresh and only for its owner", async 
   const { owner, pty, service, session } = await foregroundHarness(t);
   pty.process = "vim";
   assert.equal(await service.foregroundCommand(session.id, owner.owner), "vim");
-  await assert.rejects(service.foregroundCommand(session.id, ownerState("document-2").owner), /unavailable/u);
+  await assert.rejects(
+    service.foregroundCommand(session.id, ownerState("document-2").owner),
+    /unavailable/u,
+  );
   service.close(session.id, owner.owner);
   await assert.rejects(service.foregroundCommand(session.id, owner.owner), /unavailable/u);
 });

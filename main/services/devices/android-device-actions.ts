@@ -43,7 +43,10 @@ export const ANDROID_RUNTIME_PERMISSIONS: Partial<Record<DevicePermission, reado
   photos: ["android.permission.READ_MEDIA_IMAGES", "android.permission.READ_EXTERNAL_STORAGE"],
   contacts: ["android.permission.READ_CONTACTS", "android.permission.WRITE_CONTACTS"],
   calendar: ["android.permission.READ_CALENDAR", "android.permission.WRITE_CALENDAR"],
-  location: ["android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION"],
+  location: [
+    "android.permission.ACCESS_FINE_LOCATION",
+    "android.permission.ACCESS_COARSE_LOCATION",
+  ],
   notifications: ["android.permission.POST_NOTIFICATIONS"],
   motion: ["android.permission.ACTIVITY_RECOGNITION"],
 };
@@ -63,7 +66,11 @@ const ANDROID_ROTATION: Record<DeviceOrientationValue, string> = {
   landscape_right: "3",
 };
 
-const ANIMATION_SCALES = ["animator_duration_scale", "transition_animation_scale", "window_animation_scale"] as const;
+const ANIMATION_SCALES = [
+  "animator_duration_scale",
+  "transition_animation_scale",
+  "window_animation_scale",
+] as const;
 
 const DEVICE_SHELL_SAFE = /^[A-Za-z0-9_./:=@%+,-]+$/u;
 
@@ -98,7 +105,16 @@ export function androidActionCommands(input: DeviceActionInput): AndroidActionSt
     case "setAppearance":
       return [adbShell(serial, "cmd", "uimode", "night", input.value === "dark" ? "yes" : "no")];
     case "setTextSize":
-      return [adbShell(serial, "settings", "put", "system", "font_scale", ANDROID_TEXT_SIZES[input.value])];
+      return [
+        adbShell(
+          serial,
+          "settings",
+          "put",
+          "system",
+          "font_scale",
+          ANDROID_TEXT_SIZES[input.value],
+        ),
+      ];
     case "setToggle":
       if (input.setting === "networkEnabled") {
         const state = input.value ? "enable" : "disable";
@@ -119,7 +135,9 @@ export function androidActionCommands(input: DeviceActionInput): AndroidActionSt
           adb(serial, "emu", "sensor", "set", "acceleration", ANDROID_GRAVITY[input.value]),
         ];
       }
-      return [adbShell(serial, "cmd", "window", "user-rotation", "lock", ANDROID_ROTATION[input.value])];
+      return [
+        adbShell(serial, "cmd", "window", "user-rotation", "lock", ANDROID_ROTATION[input.value]),
+      ];
     case "setLocation":
       // The emulator console takes longitude first.
       return [adb(serial, "emu", "geo", "fix", String(input.longitude), String(input.latitude))];
@@ -137,7 +155,17 @@ export function androidActionCommands(input: DeviceActionInput): AndroidActionSt
     case "openUrl":
       return [adbShell(serial, "am", "start", "-a", "android.intent.action.VIEW", "-d", input.url)];
     case "launchApp":
-      return [adbShell(serial, "monkey", "-p", input.appId, "-c", "android.intent.category.LAUNCHER", "1")];
+      return [
+        adbShell(
+          serial,
+          "monkey",
+          "-p",
+          input.appId,
+          "-c",
+          "android.intent.category.LAUNCHER",
+          "1",
+        ),
+      ];
     case "terminateApp":
       return [adbShell(serial, "am", "force-stop", input.appId)];
     default:
@@ -161,14 +189,19 @@ const ACTION_LABELS: Record<DeviceActionInput["type"], string> = {
   setOrientation: "rotate",
 };
 
-export async function runAndroidDeviceAction(ready: DeviceHostReady, input: DeviceActionInput): Promise<void> {
+export async function runAndroidDeviceAction(
+  ready: DeviceHostReady,
+  input: DeviceActionInput,
+): Promise<void> {
   for (const step of androidActionCommands(input)) {
     const result = await ready.run(step.command, step.args, { timeoutMs: ADB_ACTION_TIMEOUT_MS });
     // `adb emu` reports console failures as "KO:" on stdout with exit code 0.
     const failed = result.code !== 0 || /^KO\b/mu.test(result.stdout);
     if (failed && !step.optional) {
       const detail = `${result.stderr}\n${result.stdout}`.trim().split("\n").slice(-1)[0]?.trim();
-      throw new Error(`The emulator could not ${ACTION_LABELS[input.type]}${detail ? `: ${detail}` : "."}`);
+      throw new Error(
+        `The emulator could not ${ACTION_LABELS[input.type]}${detail ? `: ${detail}` : "."}`,
+      );
     }
   }
 }
@@ -181,11 +214,16 @@ export function parseAndroidFocusedPackage(dump: string): string | undefined {
 }
 
 /** Reads what `adb shell` reports. Each failed read just leaves its setting unknown. */
-export async function readAndroidDeviceSettings(ready: DeviceHostReady, serial: string): Promise<DeviceSettings> {
+export async function readAndroidDeviceSettings(
+  ready: DeviceHostReady,
+  serial: string,
+): Promise<DeviceSettings> {
   const read = async (...args: string[]): Promise<string | undefined> => {
     try {
       const step = adbShell(serial, ...args);
-      const result = await ready.run(step.command, step.args, { timeoutMs: ADB_SETTINGS_TIMEOUT_MS });
+      const result = await ready.run(step.command, step.args, {
+        timeoutMs: ADB_SETTINGS_TIMEOUT_MS,
+      });
       const value = result.stdout.trim();
       return result.code === 0 && value ? value : undefined;
     } catch {

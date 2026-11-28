@@ -21,7 +21,8 @@ export function resolveProductionSubagentMcpCredentialBoundary(
   return resolveSubagentMcpCredentialBoundary(server, signal, {
     revisionKey: PROCESS_CREDENTIAL_REVISION_KEY,
     resolveFieldSecrets: resolveStoredMcpFieldSecrets,
-    presetKey: (configured, binding) => secrets.getOrBindLegacyProviderKey(presetSecretId(configured.id), binding),
+    presetKey: (configured, binding) =>
+      secrets.getOrBindLegacyProviderKey(presetSecretId(configured.id), binding),
     oauthSession: (configured) => mcpOAuthStore.get(configured.id, () => !signal.aborted),
     oauthGeneration: mcpOAuthCredentialGeneration,
   });

@@ -13,17 +13,17 @@ import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { withPromptCacheBreakpointsPayload } from "../../../../main/services/prompt-cache-breakpoints.js";
 
 export function createPromptCacheBreakpointsInlineExtension(stableHead: () => string | undefined): {
-	name: string;
-	factory: ExtensionFactory;
+  name: string;
+  factory: ExtensionFactory;
 } {
-	return {
-		name: "aiden-prompt-cache-breakpoints",
-		factory: (pi) => {
-			pi.on("before_provider_request", (event, ctx) => {
-				const model = ctx.model;
-				if (!model) return undefined;
-				return withPromptCacheBreakpointsPayload(event.payload, model.api, stableHead(), model);
-			});
-		},
-	};
+  return {
+    name: "aiden-prompt-cache-breakpoints",
+    factory: (pi) => {
+      pi.on("before_provider_request", (event, ctx) => {
+        const model = ctx.model;
+        if (!model) return undefined;
+        return withPromptCacheBreakpointsPayload(event.payload, model.api, stableHead(), model);
+      });
+    },
+  };
 }

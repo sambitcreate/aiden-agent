@@ -47,7 +47,9 @@ export function BotRoutines({
   const placeSaved = (saved: BotRoutine) => {
     qc.setQueryData<BotRoutine[]>(key, (current) => {
       const rows = current ?? [];
-      return rows.some((row) => row.id === saved.id) ? rows.map((row) => (row.id === saved.id ? saved : row)) : [...rows, saved];
+      return rows.some((row) => row.id === saved.id)
+        ? rows.map((row) => (row.id === saved.id ? saved : row))
+        : [...rows, saved];
     });
     void qc.invalidateQueries({ queryKey: key });
   };
@@ -60,7 +62,9 @@ export function BotRoutines({
   // It leaves the list at once and comes back if main refuses.
   const cancelWakeUp = async (routine: BotRoutine) => {
     const before = qc.getQueryData<BotRoutine[]>(key);
-    qc.setQueryData<BotRoutine[]>(key, (current) => current?.filter((row) => row.id !== routine.id));
+    qc.setQueryData<BotRoutine[]>(key, (current) =>
+      current?.filter((row) => row.id !== routine.id),
+    );
     try {
       await botsApi.routines.delete({ botId: bot.id, id: routine.id });
     } catch (error) {
@@ -76,7 +80,10 @@ export function BotRoutines({
     "relative flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none";
 
   return (
-    <section aria-labelledby={titleId} className={compact ? "settings-group mb-5" : "settings-group mb-7"}>
+    <section
+      aria-labelledby={titleId}
+      className={compact ? "settings-group mb-5" : "settings-group mb-7"}
+    >
       <h2
         id={titleId}
         className={
@@ -89,7 +96,11 @@ export function BotRoutines({
       </h2>
       <div className="settings-group-card overflow-hidden rounded-card bg-well">
         {routines.isLoading ? (
-          <div role="status" aria-label="Loading routines" className="relative px-4 py-3 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator">
+          <div
+            role="status"
+            aria-label="Loading routines"
+            className="relative px-4 py-3 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator"
+          >
             <span className="grid gap-2">
               <span className="h-3 w-36 rounded-full bg-control motion-safe:animate-pulse" />
               <span className="h-2.5 w-48 max-w-full rounded-full bg-control motion-safe:animate-pulse" />
@@ -120,7 +131,9 @@ export function BotRoutines({
             <button type="button" className={rowClass} onClick={() => setEditing("suggestion")}>
               <CalendarClock aria-hidden="true" className="size-4 shrink-0 text-secondary" />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-regular text-primary">Try a daily check-in</span>
+                <span className="block truncate text-regular text-primary">
+                  Try a daily check-in
+                </span>
                 <span className="mt-0.5 block truncate text-small text-secondary">
                   {formatBotRoutineLabel(BOT_DAILY_CHECKIN_SUGGESTION.schedule)}
                 </span>
@@ -139,14 +152,23 @@ export function BotRoutines({
                       <span className="block truncate text-strong text-primary">
                         {routine.name}
                         {routine.nextRunAt !== undefined ? (
-                          <span className="font-normal text-secondary"> {botWakeUpWhen(routine.nextRunAt, Date.now())}</span>
+                          <span className="font-normal text-secondary">
+                            {" "}
+                            {botWakeUpWhen(routine.nextRunAt, Date.now())}
+                          </span>
                         ) : null}
                       </span>
-                      <span className="mt-0.5 block truncate text-small text-secondary">{routine.prompt}</span>
+                      <span className="mt-0.5 block truncate text-small text-secondary">
+                        {routine.prompt}
+                      </span>
                     </span>
                     {/* A wake-up turned off before it fired can still be cancelled; one mid-fire can't. */}
                     {routine.enabled || routine.pendingFireCount === 0 ? (
-                      <Button size="small" variant="filled" onClick={() => void cancelWakeUp(routine)}>
+                      <Button
+                        size="small"
+                        variant="filled"
+                        onClick={() => void cancelWakeUp(routine)}
+                      >
                         Cancel
                       </Button>
                     ) : null}
@@ -154,18 +176,32 @@ export function BotRoutines({
                 ) : (
                   <button type="button" className={rowClass} onClick={() => setEditing(routine)}>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-strong text-primary">{routine.name}</span>
-                      <span className="mt-0.5 block truncate text-small text-secondary">{routine.label}</span>
+                      <span className="block truncate text-strong text-primary">
+                        {routine.name}
+                      </span>
+                      <span className="mt-0.5 block truncate text-small text-secondary">
+                        {routine.label}
+                      </span>
                       {routine.pendingFireCount > 0 ? (
-                        <span className="mt-0.5 block text-small text-status-warning">Finishing an earlier run</span>
+                        <span className="mt-0.5 block text-small text-status-warning">
+                          Finishing an earlier run
+                        </span>
                       ) : routine.overdueSince !== undefined ? (
-                        <span className="mt-0.5 block text-small text-status-warning">Overdue since {new Date(routine.overdueSince).toLocaleString()}</span>
+                        <span className="mt-0.5 block text-small text-status-warning">
+                          Overdue since {new Date(routine.overdueSince).toLocaleString()}
+                        </span>
                       ) : null}
                     </span>
                     <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
                   </button>
                 )}
-                {!routine.wakeUp && <BotRoutineModelButton botId={bot.id} routineId={routine.id} routineName={routine.name} />}
+                {!routine.wakeUp && (
+                  <BotRoutineModelButton
+                    botId={bot.id}
+                    routineId={routine.id}
+                    routineName={routine.name}
+                  />
+                )}
               </li>
             ))}
           </ul>

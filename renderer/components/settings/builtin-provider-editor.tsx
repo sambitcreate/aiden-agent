@@ -69,7 +69,8 @@ export function BuiltinProviderEditor({
   const harnessReady = !harness || harnessStatus?.runtime.status === "installed";
   const signInHint = harness ? harnessSignInHint(harnessStatus?.runtime) : undefined;
   const interactiveMethods = (provider.authMethods ?? []).filter(
-    (method): method is { type: PiAuthMethod; label: string; canLogin: true } => method.canLogin && (!chosenMethod || method.type === chosenMethod),
+    (method): method is { type: PiAuthMethod; label: string; canLogin: true } =>
+      method.canLogin && (!chosenMethod || method.type === chosenMethod),
   );
 
   const releaseSession = React.useCallback(() => {
@@ -224,7 +225,9 @@ export function BuiltinProviderEditor({
           ? `${provider.label} runs ${harnessStatus?.publisher ? `${harnessStatus.publisher}'s` : "its own"} agent on this ${localComputerNoun(platform)}. It follows each folder's permission setting: in Ask, its changes and commands wait for your approval.`
           : "Pi owns this provider's endpoint, models, credentials, and request transport."
       }
-      confirmLabel={chosenMethod === "api_key" && prompt?.type === "secret" ? "Save key" : "Continue"}
+      confirmLabel={
+        chosenMethod === "api_key" && prompt?.type === "secret" ? "Save key" : "Continue"
+      }
       confirmHidden={!needsValue}
       confirmDisabled={responding || !value.trim()}
       busy={responding}
@@ -283,7 +286,11 @@ export function BuiltinProviderEditor({
         ) : interactiveMethods.length > 0 ? (
           <div className="grid gap-2">
             <Text variant="small" color="secondary">
-              {chosenMethod === "oauth" && provider.id === "openai" ? "OpenAI sign-in shares a random installation identifier with OpenAI. Your chats and workspace details are excluded." : chosenMethod === "api_key" ? "Your provider bills API usage." : "Choose how to connect this provider."}
+              {chosenMethod === "oauth" && provider.id === "openai"
+                ? "OpenAI sign-in shares a random installation identifier with OpenAI. Your chats and workspace details are excluded."
+                : chosenMethod === "api_key"
+                  ? "Your provider bills API usage."
+                  : "Choose how to connect this provider."}
             </Text>
             {interactiveMethods.map((method) => (
               <Button
@@ -314,7 +321,12 @@ export function BuiltinProviderEditor({
         ) : null}
         {authLink ? (
           <Button asChild variant="filled" size="small" className="justify-self-start">
-            <a href={authLink} target="_blank" rel="noopener noreferrer" data-link-target="external">
+            <a
+              href={authLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-link-target="external"
+            >
               Open sign-in page <ExternalLink className="size-3.5" />
             </a>
           </Button>

@@ -71,7 +71,10 @@ export function useDesignCommentTray(chatId: string): DesignCommentTray | null {
 export function rememberCommentCrop(chatId: string, commentId: string, dataUrl: string): void {
   const match = /^data:(image\/png|image\/jpeg);base64,([A-Za-z0-9+/]+={0,2})$/u.exec(dataUrl);
   if (!match) return;
-  crops.set(cropKey(chatId, commentId), { mimeType: match[1] as DesignCommentCrop["mimeType"], data: match[2]! });
+  crops.set(cropKey(chatId, commentId), {
+    mimeType: match[1] as DesignCommentCrop["mimeType"],
+    data: match[2]!,
+  });
 }
 
 export function forgetCommentCrops(chatId: string, commentIds: readonly string[]): void {
@@ -108,19 +111,23 @@ export function designCommentAttachments(input: {
   const offered = input.supportsImages
     ? input.comments.flatMap((comment, index) =>
         comment.picture
-          ? [{
-              commentId: comment.id,
-              index,
-              crop: comment.picture,
-              name: `Design comment ${index + 1}.${comment.picture.mimeType === "image/png" ? "png" : "jpg"}`,
-            }]
+          ? [
+              {
+                commentId: comment.id,
+                index,
+                crop: comment.picture,
+                name: `Design comment ${index + 1}.${comment.picture.mimeType === "image/png" ? "png" : "jpg"}`,
+              },
+            ]
           : [],
       )
     : [];
   // Naming a picture only lengthens the block, so the block naming every
   // offered picture bounds the one that goes: pictures are fitted in the room
   // that leaves, then the block names the ones that fit.
-  const widest = byteLength(input.block(Object.fromEntries(offered.map((picture) => [picture.commentId, picture.name]))));
+  const widest = byteLength(
+    input.block(Object.fromEntries(offered.map((picture) => [picture.commentId, picture.name]))),
+  );
   let pictureSlots = slots - 1;
   let pictureBytes = remaining - widest;
   const chosen: typeof offered = [];
@@ -131,18 +138,29 @@ export function designCommentAttachments(input: {
     pictureSlots -= 1;
     pictureBytes -= bytes;
   }
-  const block = input.block(Object.fromEntries(chosen.map((picture) => [picture.commentId, picture.name])));
+  const block = input.block(
+    Object.fromEntries(chosen.map((picture) => [picture.commentId, picture.name])),
+  );
   const size = byteLength(block);
   if (slots < 1 || size > remaining) return null;
   return [
-    { id: `${input.id}-comments`, name: "Design comments.txt", kind: "text", mimeType: "text/plain", text: block, size },
-    ...chosen.map((picture): Attachment => ({
-      id: `${input.id}-picture-${picture.index + 1}`,
-      name: picture.name,
-      kind: "image",
-      mimeType: picture.crop.mimeType,
-      data: picture.crop.data,
-      size: base64Bytes(picture.crop.data),
-    })),
+    {
+      id: `${input.id}-comments`,
+      name: "Design comments.txt",
+      kind: "text",
+      mimeType: "text/plain",
+      text: block,
+      size,
+    },
+    ...chosen.map(
+      (picture): Attachment => ({
+        id: `${input.id}-picture-${picture.index + 1}`,
+        name: picture.name,
+        kind: "image",
+        mimeType: picture.crop.mimeType,
+        data: picture.crop.data,
+        size: base64Bytes(picture.crop.data),
+      }),
+    ),
   ];
 }

@@ -48,7 +48,8 @@ function runState(value: unknown): PeerRunState {
   )
     malformed();
   // Revision 50: a summary that is not bounded text is left out rather than refusing the frame.
-  const summary = typeof attentionSummary === "string" ? clipPendingAttentionSummary(attentionSummary) : "";
+  const summary =
+    typeof attentionSummary === "string" ? clipPendingAttentionSummary(attentionSummary) : "";
   return { chatId, runId, state, unread, ...(summary ? { attentionSummary: summary } : {}) };
 }
 
@@ -146,7 +147,12 @@ export class PeerHostFeedCache {
       case "chat.upsert":
         return this.upsertChat(row(payload));
       case "workspace.upsert":
-        return this.upsertBounded(this.workspaces, row(payload), PEER_FEED_MAX_WORKSPACES, "workspace.upsert");
+        return this.upsertBounded(
+          this.workspaces,
+          row(payload),
+          PEER_FEED_MAX_WORKSPACES,
+          "workspace.upsert",
+        );
       case "bot.upsert":
         return this.upsertBounded(this.bots, row(payload), PEER_FEED_MAX_BOTS, "bot.upsert");
       case "chat.remove": {
@@ -164,8 +170,7 @@ export class PeerHostFeedCache {
         const run = runState(payload);
         this.runs.delete(run.runId);
         this.runs.set(run.runId, run);
-        if (this.runs.size > PEER_FEED_MAX_RUNS)
-          this.runs.delete(this.runs.keys().next().value!);
+        if (this.runs.size > PEER_FEED_MAX_RUNS) this.runs.delete(this.runs.keys().next().value!);
         return [{ type: "run.state", run }];
       }
       default:
@@ -184,10 +189,7 @@ export class PeerHostFeedCache {
       (payload.partial !== undefined && payload.partial !== true)
     )
       malformed();
-    if (
-      this.pending &&
-      (this.pending.epoch !== epoch || this.pending.sequence !== event.sequence)
-    )
+    if (this.pending && (this.pending.epoch !== epoch || this.pending.sequence !== event.sequence))
       this.pending = undefined;
     const pending = (this.pending ??= {
       epoch,
@@ -229,8 +231,7 @@ export class PeerHostFeedCache {
 
   private upsertChat(item: PeerFeedRow): PeerHostFeedChange[] {
     this.summaries.set(item.id, item);
-    if (this.summaries.size <= PEER_FEED_MAX_CHATS)
-      return [{ type: "chat.upsert", row: item }];
+    if (this.summaries.size <= PEER_FEED_MAX_CHATS) return [{ type: "chat.upsert", row: item }];
     let oldest: PeerFeedRow | undefined;
     for (const candidate of this.summaries.values())
       if (!oldest || newestFirst(candidate, oldest) > 0) oldest = candidate;

@@ -27,15 +27,27 @@ function Glyph({ children }: { children: React.ReactNode }) {
   );
 }
 
-const MinimizeGlyph = () => <Glyph><path d="M6 12h12" /></Glyph>;
-const MaximizeGlyph = () => <Glyph><rect x="6" y="6" width="12" height="12" rx="2" /></Glyph>;
+const MinimizeGlyph = () => (
+  <Glyph>
+    <path d="M6 12h12" />
+  </Glyph>
+);
+const MaximizeGlyph = () => (
+  <Glyph>
+    <rect x="6" y="6" width="12" height="12" rx="2" />
+  </Glyph>
+);
 const RestoreGlyph = () => (
   <Glyph>
     <rect x="5" y="9" width="10" height="10" rx="2" />
     <path d="M9 9V7a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-2" />
   </Glyph>
 );
-const CloseGlyph = () => <Glyph><path d="M7 7l10 10M17 7 7 17" /></Glyph>;
+const CloseGlyph = () => (
+  <Glyph>
+    <path d="M7 7l10 10M17 7 7 17" />
+  </Glyph>
+);
 
 /**
  * Minimize, maximize/restore and close, drawn by Aiden at the right end of the
@@ -51,9 +63,12 @@ export function WindowControls() {
   React.useEffect(() => {
     if (chrome !== "aiden") return;
     let active = true;
-    void windowControlsApi.state().then((state) => {
-      if (active && state) setWindowControlsState(state);
-    }, () => undefined);
+    void windowControlsApi.state().then(
+      (state) => {
+        if (active && state) setWindowControlsState(state);
+      },
+      () => undefined,
+    );
     const stop = windowControlsApi.onStateChanged(setWindowControlsState);
     return () => {
       active = false;
@@ -80,9 +95,12 @@ export function WindowControls() {
   if (chrome !== "aiden" || fullScreen) return null;
 
   const toggleMaximize = () => {
-    void windowControlsApi.toggleMaximize().then((state) => {
-      if (state) setWindowControlsState(state);
-    }, () => undefined);
+    void windowControlsApi.toggleMaximize().then(
+      (state) => {
+        if (state) setWindowControlsState(state);
+      },
+      () => undefined,
+    );
   };
 
   return (

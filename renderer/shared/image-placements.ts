@@ -42,7 +42,9 @@ export function withInferredImagePlacements(
     if (attachment.kind !== "image" || placements.has(attachment.id)) continue;
     // Visual snapshots come from visuals, never from an image call.
     if (isVisualSnapshotAttachmentId(attachment.id)) continue;
-    (attachment.id.startsWith(SHARED_IMAGE_ID_PREFIX) ? unplaced.shared : unplaced.displayed).push(attachment.id);
+    (attachment.id.startsWith(SHARED_IMAGE_ID_PREFIX) ? unplaced.shared : unplaced.displayed).push(
+      attachment.id,
+    );
   }
   let inferred: Map<string, string> | undefined;
   for (const source of ["shared", "displayed"] as const) {

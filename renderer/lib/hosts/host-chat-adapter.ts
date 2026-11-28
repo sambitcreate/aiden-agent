@@ -1,4 +1,7 @@
-import type { AskUserQuestionAnswerStatus, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
+import type {
+  AskUserQuestionAnswerStatus,
+  AskUserQuestionResponseV1,
+} from "../../shared/ask-user-question";
 import type { ChatForkLineageV1, ChatForkPosition } from "../../shared/chat-copy-contract";
 import type { ChatRunInputAdmissionResult, ChatRunInputMode } from "../../shared/chat-run-input";
 import type { ChatContextPressureV1 } from "../../shared/context-pressure";
@@ -259,7 +262,9 @@ export class HostChatControlError extends Error {
   readonly details?: PeerOperationErrorDetails;
   readonly reconciled?: unknown;
 
-  constructor(error: HostChatError & { details?: PeerOperationErrorDetails; reconciled?: unknown }) {
+  constructor(
+    error: HostChatError & { details?: PeerOperationErrorDetails; reconciled?: unknown },
+  ) {
     super(error.message);
     this.name = "HostChatControlError";
     this.code = error.code;
@@ -283,7 +288,11 @@ export function isOutcomeUnknown(error: unknown): error is HostChatControlError 
 
 /** The host refused a guarded change because the chat moved past the named revision. */
 export function isRevisionConflict(error: unknown): error is HostChatControlError {
-  return error instanceof HostChatControlError && (error.remoteCode === "revision_conflict" || (error.remoteCode === undefined && error.status === 409));
+  return (
+    error instanceof HostChatControlError &&
+    (error.remoteCode === "revision_conflict" ||
+      (error.remoteCode === undefined && error.status === 409))
+  );
 }
 
 export interface HostChatAdapter {
@@ -299,12 +308,18 @@ export interface HostChatAdapter {
    * stale), so an open transcript rereads before the next guarded change.
    */
   onChatChanged(listener: (chatId: string) => void): () => void;
-  getMessagesWindow(chatId: string, request?: HostChatWindowRequest): Promise<HostChatResult<RemoteMessagesWindow>>;
+  getMessagesWindow(
+    chatId: string,
+    request?: HostChatWindowRequest,
+  ): Promise<HostChatResult<RemoteMessagesWindow>>;
   /**
    * One listed image's bytes. Only a paired host's adapter has it: a remote
    * transcript lists images without their bytes, a local one carries them.
    */
-  attachmentContent?(chatId: string, attachmentId: string): Promise<HostChatResult<PeerAttachmentContent>>;
+  attachmentContent?(
+    chatId: string,
+    attachmentId: string,
+  ): Promise<HostChatResult<PeerAttachmentContent>>;
   /** Follows the chat's current run, wherever it was started. */
   observe(chatId: string, observer: HostChatObserver): () => void;
   markRead(chatId: string, throughMessageId?: string): Promise<HostChatResult<void>>;
@@ -319,7 +334,10 @@ export interface HostChatAdapter {
   rename(chatId: string, input: HostChatRenameInput): Promise<void>;
   remove(chatId: string, input?: { revision?: string }): Promise<void>;
   /** Stages one attachment on the chat's host. Adapters without staged uploads omit it. */
-  uploadAttachment?(chatId: string, upload: HostChatAttachmentUpload): Promise<HostStagedAttachment>;
+  uploadAttachment?(
+    chatId: string,
+    upload: HostChatAttachmentUpload,
+  ): Promise<HostStagedAttachment>;
   /** Drops a staged attachment no turn will use. */
   removeAttachment?(chatId: string, attachmentId: string): Promise<void>;
   /**
@@ -340,7 +358,10 @@ export interface HostChatAdapter {
    * meter. The local pane reads `chatsApi.contextPressure` directly, so only
    * a paired host's adapter has this.
    */
-  contextPressure?(chatId: string, model?: HostTurnModel): Promise<HostChatResult<RemoteContextPressure | null>>;
+  contextPressure?(
+    chatId: string,
+    model?: HostTurnModel,
+  ): Promise<HostChatResult<RemoteContextPressure | null>>;
   dispose(): void;
 }
 

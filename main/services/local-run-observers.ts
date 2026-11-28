@@ -96,7 +96,11 @@ export class LocalRunObservers {
    * before an observer without its cursor arrived is reported `ended` without
    * a replay, since the persisted transcript already holds it.
    */
-  observe(target: LocalRunObserverTarget, chatId: string, cursor?: LocalRunCursor): PeerRunSubscription {
+  observe(
+    target: LocalRunObserverTarget,
+    chatId: string,
+    cursor?: LocalRunCursor,
+  ): PeerRunSubscription {
     if (target.isDestroyed()) throw new Error("The application document changed.");
     const observation: Observation = {
       id: this.newId(),
@@ -112,12 +116,17 @@ export class LocalRunObservers {
     };
     this.observations.set(observation.id, observation);
     this.bindTarget(target, observation.id);
-    this.offChange ??= this.options.registry.onChange((summary, removed) => this.runChanged(summary, removed));
+    this.offChange ??= this.options.registry.onChange((summary, removed) =>
+      this.runChanged(summary, removed),
+    );
 
     const summary = this.options.registry.currentRunForChat(chatId);
     let events: PeerRunEvent[] = [];
     if (summary) {
-      const resumes = cursor !== undefined && cursor.runId === summary.runId && cursor.sequence <= summary.lastSequence;
+      const resumes =
+        cursor !== undefined &&
+        cursor.runId === summary.runId &&
+        cursor.sequence <= summary.lastSequence;
       observation.runId = summary.runId;
       if (isTerminal(summary.state) && !resumes) {
         observation.cursor = summary.lastSequence;
@@ -196,11 +205,14 @@ export class LocalRunObservers {
   private subscribeRun(observation: Observation): void {
     const runId = observation.runId;
     if (runId === null) return;
-    observation.releaseRun = this.options.registry.subscribe(runId, () => this.schedule(observation));
+    observation.releaseRun = this.options.registry.subscribe(runId, () =>
+      this.schedule(observation),
+    );
   }
 
   private schedule(observation: Observation): void {
-    if (observation.timer !== undefined || this.observations.get(observation.id) !== observation) return;
+    if (observation.timer !== undefined || this.observations.get(observation.id) !== observation)
+      return;
     observation.timer = this.options.setTimer(() => {
       observation.timer = undefined;
       this.flush(observation);
@@ -221,7 +233,12 @@ export class LocalRunObservers {
     while (events.length < this.maxEventsPerFlush) {
       let read;
       try {
-        read = this.options.registry.read(runId, observation.cursor, this.maxEventsPerFlush - events.length, true);
+        read = this.options.registry.read(
+          runId,
+          observation.cursor,
+          this.maxEventsPerFlush - events.length,
+          true,
+        );
       } catch {
         // The run was evicted while observed; the persisted transcript has the rest.
         this.endRun(observation, "gone");
@@ -242,7 +259,8 @@ export class LocalRunObservers {
         this.endRun(observation, "ended");
         return events;
       }
-      if (read.events.length === 0 || observation.cursor === read.summary.lastSequence) return events;
+      if (read.events.length === 0 || observation.cursor === read.summary.lastSequence)
+        return events;
     }
     // More remains than one flush carries; continue on the next frame.
     this.schedule(observation);
@@ -269,7 +287,11 @@ export class LocalRunObservers {
     if (observation.ended || observation.runId === null) this.adoptCurrentRun(observation, frames);
     if (frames.length === 0) return;
     try {
-      observation.target.send({ subscriptionId: observation.id, chatId: observation.chatId, frames });
+      observation.target.send({
+        subscriptionId: observation.id,
+        chatId: observation.chatId,
+        frames,
+      });
     } catch {
       // The document went away between the check and the send.
       this.releaseTarget(observation.target.key);
@@ -301,7 +323,10 @@ export class LocalRunObservers {
         continue;
       }
       // A new run in a parked chat: deliver it on the next frame.
-      if (summary.runId !== observation.runId && (observation.runId === null || observation.ended)) {
+      if (
+        summary.runId !== observation.runId &&
+        (observation.runId === null || observation.ended)
+      ) {
         this.schedule(observation);
       }
     }

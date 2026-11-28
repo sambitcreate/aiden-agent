@@ -7,7 +7,13 @@ import type { WorkflowController } from "./use-workflow-controller";
  * Leaving the editor saves first. When the save fails (changed elsewhere, invalid, or the save
  * itself failed), navigation stops and the user chooses: stay and resolve it, or discard the edits.
  */
-export function LeaveGuard({ title, controller }: { title: string; controller: Pick<WorkflowController, "settle" | "discard"> }) {
+export function LeaveGuard({
+  title,
+  controller,
+}: {
+  title: string;
+  controller: Pick<WorkflowController, "settle" | "discard">;
+}) {
   const { settle, discard } = controller;
   const shouldBlockFn = React.useCallback(async () => !(await settle()), [settle]);
   const blocker = useBlocker({ shouldBlockFn, withResolver: true, enableBeforeUnload: false });

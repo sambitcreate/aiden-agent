@@ -1549,10 +1549,7 @@ export function WebSearchSettings() {
           </Text>
         </header>
 
-        <section
-          aria-label="Current Web Search route"
-          className="rounded-card bg-well px-4 py-3"
-        >
+        <section aria-label="Current Web Search route" className="rounded-card bg-well px-4 py-3">
           <div className="flex flex-wrap items-center gap-2">
             <Text variant="small-strong">Current route</Text>
             <Badge color={routeStatusColor}>{routeModeSummary}</Badge>
@@ -2062,10 +2059,7 @@ export function WebSearchSettings() {
 
       <WebPageSettings />
 
-      <section
-        aria-labelledby="web-search-privacy"
-        className="rounded-card bg-well p-4"
-      >
+      <section aria-labelledby="web-search-privacy" className="rounded-card bg-well p-4">
         <div className="flex items-start gap-3">
           <LockKeyhole aria-hidden="true" className="mt-0.5 size-4.5 shrink-0 text-secondary" />
           <div className="min-w-0">
@@ -2077,8 +2071,9 @@ export function WebSearchSettings() {
               passed to the model.
             </Text>
             <Text as="p" variant="small" color="secondary" className="mt-1.5 leading-relaxed">
-              Turning Web Search off preserves routes and credentials. {capabilities.bots ? "Bots and schedules" : "Schedules"} still
-              require their own explicit Web Search grant.
+              Turning Web Search off preserves routes and credentials.{" "}
+              {capabilities.bots ? "Bots and schedules" : "Schedules"} still require their own
+              explicit Web Search grant.
             </Text>
             <div className="mt-3 flex flex-wrap gap-2">
               {capabilities.bots ? (

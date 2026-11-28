@@ -36,21 +36,21 @@ Aiden should explain its own shipped features accurately and perform supported a
 
 Examples:
 
-| User request | Required behavior |
-| --- | --- |
-| “What can this app do?” | Give a short Aiden overview from bundled product documentation, then offer relevant capabilities available on this platform. Do not describe unmerged PRs as shipped. |
-| “How does the agent work?” | Explain the selected model, host tool loop, workspace access, approvals, context/compaction, skills and optional memory. Distinguish local app execution from network inference. |
-| “Can you see my other chats?” | Explain scope from current capabilities. Do not imply transcript access merely because the app has a sidebar or a chat list. |
-| “Switch to dark mode.” | Set the desktop appearance mode, update the visible window, persist it, and report the verified value. In CLI, use a supported terminal theme and state its persistence scope. |
-| “Make this chat wider.” | Change the desktop chat-width preference. CLI explains that this is a desktop preference and offers its own supported layout options. |
-| “Turn memory off for this workspace.” | Resolve the exact workspace from host context; update its memory gate without deleting facts. Confirm the effective result and scope. |
+| User request                                    | Required behavior                                                                                                                                                                                   |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| “What can this app do?”                         | Give a short Aiden overview from bundled product documentation, then offer relevant capabilities available on this platform. Do not describe unmerged PRs as shipped.                               |
+| “How does the agent work?”                      | Explain the selected model, host tool loop, workspace access, approvals, context/compaction, skills and optional memory. Distinguish local app execution from network inference.                    |
+| “Can you see my other chats?”                   | Explain scope from current capabilities. Do not imply transcript access merely because the app has a sidebar or a chat list.                                                                        |
+| “Switch to dark mode.”                          | Set the desktop appearance mode, update the visible window, persist it, and report the verified value. In CLI, use a supported terminal theme and state its persistence scope.                      |
+| “Make this chat wider.”                         | Change the desktop chat-width preference. CLI explains that this is a desktop preference and offers its own supported layout options.                                                               |
+| “Turn memory off for this workspace.”           | Resolve the exact workspace from host context; update its memory gate without deleting facts. Confirm the effective result and scope.                                                               |
 | “How does memory work? Show its settings here.” | Explain memory and show current global/workspace controls inline. A click changes the real setting through its domain service, without another model turn; supported phones render native controls. |
-| “Show appearance options.” | Show a compact theme/width group for the chosen target. Phones distinguish their own preferences from the paired host; unsupported desktop-only controls are omitted with truthful guidance. |
-| “Turn web search off.” | Change the current host's Web Search enable flag, preserve routes/credentials, revoke subsequent search calls and report the effective state. |
-| “Show me provider settings.” | Navigate the originating desktop window to Providers, or show the CLI's actual setup commands. Opening the page must not initiate login or a fetch. |
-| “Enable Computer Use.” | Explain readiness and open the existing consent/setup flow. Preserve platform, feature, global and per-chat gates. Linux remains unsupported until its separate admission work ships. |
-| “Change the model.” | Discover configured models and ask which one when unspecified. Apply an exact selection to the named session only after the later model-action slice ships; no invented provider/model names. |
-| “What features are coming next?” | Say the installed help covers shipped features. Do not read local developer plans or contact GitHub unless the user separately asks for repository research. |
+| “Show appearance options.”                      | Show a compact theme/width group for the chosen target. Phones distinguish their own preferences from the paired host; unsupported desktop-only controls are omitted with truthful guidance.        |
+| “Turn web search off.”                          | Change the current host's Web Search enable flag, preserve routes/credentials, revoke subsequent search calls and report the effective state.                                                       |
+| “Show me provider settings.”                    | Navigate the originating desktop window to Providers, or show the CLI's actual setup commands. Opening the page must not initiate login or a fetch.                                                 |
+| “Enable Computer Use.”                          | Explain readiness and open the existing consent/setup flow. Preserve platform, feature, global and per-chat gates. Linux remains unsupported until its separate admission work ships.               |
+| “Change the model.”                             | Discover configured models and ask which one when unspecified. Apply an exact selection to the named session only after the later model-action slice ships; no invented provider/model names.       |
+| “What features are coming next?”                | Say the installed help covers shipped features. Do not read local developer plans or contact GitHub unless the user separately asks for repository research.                                        |
 
 The first release should deliver product knowledge, live capability reads, interactive appearance/Memory/Web Search panels, supported Skills controls, and navigation to existing setup. Desktop and both native clients share settings semantics; CLI uses a Pi-native TUI adapter. Direct requests can still use admitted typed actions without a redundant click. Wider app administration follows as separate, typed capabilities.
 
@@ -68,23 +68,23 @@ Pi 1.0's codemode reduces prompt size and supports tool discovery/composition an
 
 ### What Aiden already has and what is missing
 
-| Existing seam | Finding | Plan consequence |
-| --- | --- | --- |
-| `main/services/response-format-guidance.ts` | Normal desktop chat's base identity says “You are Pi.” The pending Pi stack does not change this. | Identify the product as Aiden and explain Pi as its engine only when relevant. |
-| `main/services/chat-system-prompt.ts` | Adds actual workspace, skills, browser and device guidance; no Aiden product knowledge source. | Add a compact product-help entry point, conditional on real admitted tools. |
-| `main/services/assistant/system-prompt.ts` | Has conditional guidance for `get_settings`/`set_setting`, but current tool assembly does not implement them. | Reuse the truthful-tool principle; replace speculative old settings tasks with this implementation plan. |
-| `main/services/tools.ts` | Supports folderless ambient tools and positive allowlists for Assistant, automations and children. | Register app tools independently of folder access, preserving restricted lane allowlists. |
-| `main/services/skill-registry*.ts` | Configured/workspace/global sources, deterministic collisions, fingerprinted invocation leases, model/user policy and global off switch. No built-in source. | Add first-class built-in ownership and deliberate compatibility; do not install a writable user copy on first launch. |
-| `main/handlers/providers.ts` | Settings writes also broadcast appearance changes, revoke skill authority, refresh Telegram commands and update Parakeet idle policy. | Extract domain services before adding agent mutations; calling `configStore.setSettings` alone is insufficient. |
-| `main/handlers/phase2.ts` | Web Search already has a versioned mutation seam and owner-fenced snapshot handling. | Reuse that application behavior, preserving routes and credentials. |
-| `main/handlers/chat-computer-use-setting.ts` | Computer Use requires readiness, owner fencing and run admission; disable revokes Live before persistence. | Keep its specific contract. Sensitive enablement cannot use a raw boolean setter. |
-| `packages/cli/scripts/build.mjs` and `patch-branding.mjs` | CLI bundles engine docs and brands their prompt section as Engine documentation. | Add Aiden product docs separately; do not relabel Pi docs as desktop instructions. Validate advertised README/example paths in the production bundle. |
-| `packages/cli/src/extensions/session-parity.ts` | `tool_call` gates every tool under workspace Full/Ask/None; None blocks app help too. | Add host-owned effect classification for a small exact built-in tool set. No prefix-based exemption. |
-| CLI memory/Web Search extensions | Some tools are registered only if enabled at extension construction. | Enabling a feature must rebuild/reload its admitted inventory or return `next_session`/`reload_required`; saving a flag is not proof a tool is available. |
-| CLI state layout | Engine settings, Aiden settings, workspace settings and Web Search live in distinct files. Shared memory does not mean shared settings. | Declare owners and scopes explicitly; CLI changes must not silently edit desktop preferences. |
-| Gemini Live | Currently exposes a session-owned Computer Use bridge, not these typed app tools. | Voice integration is a later adapter over the same service, not an assumption about existing parity. |
-| `renderer/shared/generative-ui.ts` and native chat views | Existing HTML artifacts are unprivileged and mobile displays a placeholder. | Add native structured chat panels; do not grant settings authority to generated HTML. |
-| `main/services/aiden-remote-memory-settings.ts` and Remote router | Memory already has revision-checked GET/PATCH, foreground confirmation and workspace read/manage grants. | Reuse the domain seam deliberately; specify narrower/new control grants without widening old permissions implicitly. |
+| Existing seam                                                     | Finding                                                                                                                                                      | Plan consequence                                                                                                                                          |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `main/services/response-format-guidance.ts`                       | Normal desktop chat's base identity says “You are Pi.” The pending Pi stack does not change this.                                                            | Identify the product as Aiden and explain Pi as its engine only when relevant.                                                                            |
+| `main/services/chat-system-prompt.ts`                             | Adds actual workspace, skills, browser and device guidance; no Aiden product knowledge source.                                                               | Add a compact product-help entry point, conditional on real admitted tools.                                                                               |
+| `main/services/assistant/system-prompt.ts`                        | Has conditional guidance for `get_settings`/`set_setting`, but current tool assembly does not implement them.                                                | Reuse the truthful-tool principle; replace speculative old settings tasks with this implementation plan.                                                  |
+| `main/services/tools.ts`                                          | Supports folderless ambient tools and positive allowlists for Assistant, automations and children.                                                           | Register app tools independently of folder access, preserving restricted lane allowlists.                                                                 |
+| `main/services/skill-registry*.ts`                                | Configured/workspace/global sources, deterministic collisions, fingerprinted invocation leases, model/user policy and global off switch. No built-in source. | Add first-class built-in ownership and deliberate compatibility; do not install a writable user copy on first launch.                                     |
+| `main/handlers/providers.ts`                                      | Settings writes also broadcast appearance changes, revoke skill authority, refresh Telegram commands and update Parakeet idle policy.                        | Extract domain services before adding agent mutations; calling `configStore.setSettings` alone is insufficient.                                           |
+| `main/handlers/phase2.ts`                                         | Web Search already has a versioned mutation seam and owner-fenced snapshot handling.                                                                         | Reuse that application behavior, preserving routes and credentials.                                                                                       |
+| `main/handlers/chat-computer-use-setting.ts`                      | Computer Use requires readiness, owner fencing and run admission; disable revokes Live before persistence.                                                   | Keep its specific contract. Sensitive enablement cannot use a raw boolean setter.                                                                         |
+| `packages/cli/scripts/build.mjs` and `patch-branding.mjs`         | CLI bundles engine docs and brands their prompt section as Engine documentation.                                                                             | Add Aiden product docs separately; do not relabel Pi docs as desktop instructions. Validate advertised README/example paths in the production bundle.     |
+| `packages/cli/src/extensions/session-parity.ts`                   | `tool_call` gates every tool under workspace Full/Ask/None; None blocks app help too.                                                                        | Add host-owned effect classification for a small exact built-in tool set. No prefix-based exemption.                                                      |
+| CLI memory/Web Search extensions                                  | Some tools are registered only if enabled at extension construction.                                                                                         | Enabling a feature must rebuild/reload its admitted inventory or return `next_session`/`reload_required`; saving a flag is not proof a tool is available. |
+| CLI state layout                                                  | Engine settings, Aiden settings, workspace settings and Web Search live in distinct files. Shared memory does not mean shared settings.                      | Declare owners and scopes explicitly; CLI changes must not silently edit desktop preferences.                                                             |
+| Gemini Live                                                       | Currently exposes a session-owned Computer Use bridge, not these typed app tools.                                                                            | Voice integration is a later adapter over the same service, not an assumption about existing parity.                                                      |
+| `renderer/shared/generative-ui.ts` and native chat views          | Existing HTML artifacts are unprivileged and mobile displays a placeholder.                                                                                  | Add native structured chat panels; do not grant settings authority to generated HTML.                                                                     |
+| `main/services/aiden-remote-memory-settings.ts` and Remote router | Memory already has revision-checked GET/PATCH, foreground confirmation and workspace read/manage grants.                                                     | Reuse the domain seam deliberately; specify narrower/new control grants without widening old permissions implicitly.                                      |
 
 ### What json-render changes
 
@@ -193,13 +193,13 @@ For CLI, supply the bundled skill through native resource discovery/public exten
 
 Use a small direct tool inventory. Every tool is also classified for codemode admission and replay through existing runtime metadata. These names are proposed, not implemented exports.
 
-| Tool | Inputs | Output/behavior |
-| --- | --- | --- |
-| `aiden_help` | Search string or topic ID; surface defaults to host context | Bounded product text, content revision and topic references. Offline read. |
-| `aiden_get_state` | Section IDs: capabilities, preferences, current-session, setup | Minimal projected values, scope, host/surface/platform, revision and availability reasons. No raw settings document or transcripts. |
-| `aiden_show_controls` | Manifest-owned topic, optional approved control IDs and host-issued scope handle | Bounded durable panel plus text fallback. Host supplies values, labels, allowed operations and scope. Rendering has no mutation effect. |
+| Tool                   | Inputs                                                                                                               | Output/behavior                                                                                                                                           |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `aiden_help`           | Search string or topic ID; surface defaults to host context                                                          | Bounded product text, content revision and topic references. Offline read.                                                                                |
+| `aiden_get_state`      | Section IDs: capabilities, preferences, current-session, setup                                                       | Minimal projected values, scope, host/surface/platform, revision and availability reasons. No raw settings document or transcripts.                       |
+| `aiden_show_controls`  | Manifest-owned topic, optional approved control IDs and host-issued scope handle                                     | Bounded durable panel plus text fallback. Host supplies values, labels, allowed operations and scope. Rendering has no mutation effect.                   |
 | `aiden_set_preference` | Exact allowlisted preference ID, absolute desired value, target scope and expected revision/value from a recent read | Validate, authorize, commit through domain service, apply runtime effects and return observed value plus application timing. No arbitrary patch/key path. |
-| `aiden_open` | Exact destination ID and optional host-issued target handle | Owned desktop navigation or CLI equivalent/help. No arbitrary IPC channel, URL, shell command or renderer JS. |
+| `aiden_open`           | Exact destination ID and optional host-issued target handle                                                          | Owned desktop navigation or CLI equivalent/help. No arbitrary IPC channel, URL, shell command or renderer JS.                                             |
 
 Later domain actions such as changing a session model, pausing schedules or stopping a run should have typed per-action schemas. Do not launch with a universal `execute_action(action: string, args: any)` dispatcher. A registry may share metadata internally while retaining exact parsers and effect boundaries.
 
@@ -220,29 +220,41 @@ Result envelope:
 
 ```ts
 type AppOutcome =
-  | { status: "applied" | "already_set"; observedValue: unknown;
-      revision: string; scope: "session" | "workspace" | "host" | "device";
+  | {
+      status: "applied" | "already_set";
+      observedValue: unknown;
+      revision: string;
+      scope: "session" | "workspace" | "host" | "device";
       effective: "now" | "next_turn" | "next_session" | "reload_required";
-      warnings?: string[] }
+      warnings?: string[];
+    }
   | { status: "opened"; destination: string }
-  | { status: "conflict" | "denied" | "unsupported" | "cancelled" |
-      "setup_required" | "outcome_unknown"; reason: string };
+  | {
+      status:
+        | "conflict"
+        | "denied"
+        | "unsupported"
+        | "cancelled"
+        | "setup_required"
+        | "outcome_unknown";
+      reason: string;
+    };
 ```
 
 Replace `unknown` with a discriminated preference-value mapping in production. Preserve the difference between saved and applied. A durable write can succeed while an active UI cannot apply it; return a verified persisted result with a warning instead of reporting total failure or claiming the screen changed. Failed writes must not report success. An ambiguous effect is reconciled from authoritative state before retry.
 
 ### Initial preference allowlist
 
-| Preference/action | Desktop owner | CLI owner | Initial policy |
-| --- | --- | --- | --- |
-| Appearance light/dark/system | Appearance config/parser and broadcast | Pi effective theme/session plus supported persistent theme setter | Reversible presentation; exact local attended request. CLI system theme means terminal system behavior, not Electron palette. |
-| Chat width | Appearance `chatWidth` | Unsupported | Desktop only; normalized enum. |
-| Reduce motion | Appearance config | Only if actual pinned terminal setting supports it; otherwise unsupported | Presentation; do not promise a terminal setting that does not exist. |
-| Memory global/workspace | Existing global/workspace memory gates | `aiden.json` and registered workspace settings | Explicit scope; does not delete facts. Enabling an unregistered workspace needs registration first. |
-| Web Search enabled | Versioned Web Search application seam | CLI `web-search.json` using current supported normalization/lease | Preserve provider selection and credentials; enabling must not make a network request. |
-| Skills enabled | Global gate, registry/turn revocation and command refresh | Separate implementation/validation of CLI resource gate needed | Desktop first. CLI reports unsupported until it has a real equivalent; native `enableSkillCommands` is not an execution off switch. |
-| Open Providers/Memory/Skills/Appearance | Existing settings routes | Actual native/Aiden commands and TUI destinations | Navigation only; never starts fetch/auth/install. |
-| Computer Use/Remote/provider-backed MCP enablement | Existing setup and domain approval flows | Help or actual setup commands | Open/setup only in MVP. No generic enable setter. |
+| Preference/action                                  | Desktop owner                                             | CLI owner                                                                 | Initial policy                                                                                                                      |
+| -------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Appearance light/dark/system                       | Appearance config/parser and broadcast                    | Pi effective theme/session plus supported persistent theme setter         | Reversible presentation; exact local attended request. CLI system theme means terminal system behavior, not Electron palette.       |
+| Chat width                                         | Appearance `chatWidth`                                    | Unsupported                                                               | Desktop only; normalized enum.                                                                                                      |
+| Reduce motion                                      | Appearance config                                         | Only if actual pinned terminal setting supports it; otherwise unsupported | Presentation; do not promise a terminal setting that does not exist.                                                                |
+| Memory global/workspace                            | Existing global/workspace memory gates                    | `aiden.json` and registered workspace settings                            | Explicit scope; does not delete facts. Enabling an unregistered workspace needs registration first.                                 |
+| Web Search enabled                                 | Versioned Web Search application seam                     | CLI `web-search.json` using current supported normalization/lease         | Preserve provider selection and credentials; enabling must not make a network request.                                              |
+| Skills enabled                                     | Global gate, registry/turn revocation and command refresh | Separate implementation/validation of CLI resource gate needed            | Desktop first. CLI reports unsupported until it has a real equivalent; native `enableSkillCommands` is not an execution off switch. |
+| Open Providers/Memory/Skills/Appearance            | Existing settings routes                                  | Actual native/Aiden commands and TUI destinations                         | Navigation only; never starts fetch/auth/install.                                                                                   |
+| Computer Use/Remote/provider-backed MCP enablement | Existing setup and domain approval flows                  | Help or actual setup commands                                             | Open/setup only in MVP. No generic enable setter.                                                                                   |
 
 A workspace-specific setting cannot silently become host-wide. When the request says “this chat” but only a host setting exists, explain the scope and obtain the choice rather than widening it. Ambiguous “toggle that” requires identification from current conversation/owned state. Prefer an absolute set after a read; a retried toggle must never flip the value twice.
 
@@ -258,15 +270,15 @@ The skill instructs action only on direct user requests. Host policy independent
 
 Existing Once/This chat/Always workspace approvals do not automatically authorize app changes. Reuse their UI/coordinator infrastructure with an app-specific exact descriptor and scope, or keep MVP app changes one-shot. Never map a remembered shell grant to app administration.
 
-| Origin | Product help | Sanitized live state | Mutations/navigation |
-| --- | --- | --- | --- |
-| Local desktop foreground | Yes | Current authorized host/session | Initial supported actions under app policy |
-| Local CLI TUI | Yes | Current CLI host/session | Initial supported actions; no desktop writes |
-| CLI print/JSON/RPC | Yes where app extension is enabled | Scoped state | No interactive approval; reject mutations initially. Explicit shell `aiden app set` is a separate human administration path. |
-| Child/subagent | Only if explicitly delegated read capability in a later slice | Same rule | No app mutations in MVP |
-| Bot/Telegram/scheduled run | Optional bounded static help in existing allowlist | Existing scoped facts only | No app mutations in MVP |
-| Paired iOS/Android/desktop peer | Static help and granted host facts | Negotiated sanitized control projection | MVP native panels with typed operations under explicit Remote/domain grants; no automatic grant from chat write access |
-| Aiden Live | Later read/action adapter | Live-session-owned context | Existing Computer Use consent does not imply app-admin consent |
+| Origin                          | Product help                                                  | Sanitized live state                    | Mutations/navigation                                                                                                         |
+| ------------------------------- | ------------------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Local desktop foreground        | Yes                                                           | Current authorized host/session         | Initial supported actions under app policy                                                                                   |
+| Local CLI TUI                   | Yes                                                           | Current CLI host/session                | Initial supported actions; no desktop writes                                                                                 |
+| CLI print/JSON/RPC              | Yes where app extension is enabled                            | Scoped state                            | No interactive approval; reject mutations initially. Explicit shell `aiden app set` is a separate human administration path. |
+| Child/subagent                  | Only if explicitly delegated read capability in a later slice | Same rule                               | No app mutations in MVP                                                                                                      |
+| Bot/Telegram/scheduled run      | Optional bounded static help in existing allowlist            | Existing scoped facts only              | No app mutations in MVP                                                                                                      |
+| Paired iOS/Android/desktop peer | Static help and granted host facts                            | Negotiated sanitized control projection | MVP native panels with typed operations under explicit Remote/domain grants; no automatic grant from chat write access       |
+| Aiden Live                      | Later read/action adapter                                     | Live-session-owned context              | Existing Computer Use consent does not imply app-admin consent                                                               |
 
 CLI's existing all-tool workspace gate must classify these exact built-in objects using host-owned metadata or a closed identity table. No exemption for arbitrary `aiden_*` names or extension-provided flags. Keep all existing file/MCP/child restrictions intact. Test attempts to register a colliding external tool.
 
@@ -313,17 +325,17 @@ No product-help reads contact models.dev, Artificial Analysis, OpenRouter benchm
 
 The estimates below are sequencing estimates for an engineer familiar with Aiden, excluding hosted queues, external approvals and physical-device availability. Keep each PR independently reviewable; avoid stacking this feature on all eight pending Pi branches.
 
-| Slice | Deliverables | Dependencies | Acceptance gate | Estimate |
-| --- | --- | --- | --- | --- |
-| 0 — reconcile baseline | Integrate/reconcile Pi stack through its existing owner workflow; audit output-budget fix, current main, packaging and plan status | Existing #299–#307 | Current-head CI, replay and installed acceptance per upgrade plan; no unpublished wholesale pin | Separate existing upgrade work |
-| A — profile/dependency spike | Restricted portable catalog, one Memory panel across React/SwiftUI/Compose/Pi TUI seams, scoped Zod 4 proof | No upgrade-stack duplication | No render effects; valid peers/build; measured bundle delta; same control semantics | 1–2 days |
-| B — knowledge and shared services | Help/package/core reads, corrected identity, built-in discovery and opt-out, domain service extraction, policy and receipts | Can author before slice 0; stable Pi adapter at runtime integration | Offline folderless help, collisions/old catalogs, real settings side effects and concurrent/replay correctness | 5–8 days |
-| C — desktop panels | `aiden_show_controls`, durable chat attachment, React registry, current-state subscriptions and normal Settings consistency | A/B | Conversation-to-toggle changes real state; keyboard, stale/failure and replay behavior | 3–4 days |
-| D — Remote contract | Negotiated panel projection, explicit grant matrix, typed operations/receipt lookup and invalidation | B/C contract settled | Old/new clients, revoked/denied/concurrent operations; no permission widening | 2–3 days |
-| E — native mobile panels | SwiftUI/Compose decoders/views, authenticated adapters, host/device scope and supported setup equivalents | D; shared fixtures | Both mobile behavioral suites and paired-host chat operation; no WebView placeholder workaround | 4–6 days combined |
-| F — CLI MVP | Pi-native panel component, settings adapters, exact tool gating, `/help-aiden` and supported app commands, packaging | A/B; pinned public Pi APIs | TUI/None controls work; external tools blocked; headless inert; custom dirs/leases and reload timing | 2–3 days |
-| G — acceptance/release | Desktop/mobile onboarding/grant disclosure, feature artwork, docs and installed release matrix | B–F | Desktop/CLI plus both native clients, accessibility, offline installed behavior and honest device evidence | 1–2 days plus operator time |
-| H — wider actions | Session model/thinking, exact schedule pause/resume, run Stop, sidebar Needs attention, optional Live adapter | MVP accepted; relevant #310/#311 services landed | Per-domain authority/results and no headless/background scope widening | Separate estimates after design |
+| Slice                             | Deliverables                                                                                                                       | Dependencies                                                        | Acceptance gate                                                                                                | Estimate                        |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| 0 — reconcile baseline            | Integrate/reconcile Pi stack through its existing owner workflow; audit output-budget fix, current main, packaging and plan status | Existing #299–#307                                                  | Current-head CI, replay and installed acceptance per upgrade plan; no unpublished wholesale pin                | Separate existing upgrade work  |
+| A — profile/dependency spike      | Restricted portable catalog, one Memory panel across React/SwiftUI/Compose/Pi TUI seams, scoped Zod 4 proof                        | No upgrade-stack duplication                                        | No render effects; valid peers/build; measured bundle delta; same control semantics                            | 1–2 days                        |
+| B — knowledge and shared services | Help/package/core reads, corrected identity, built-in discovery and opt-out, domain service extraction, policy and receipts        | Can author before slice 0; stable Pi adapter at runtime integration | Offline folderless help, collisions/old catalogs, real settings side effects and concurrent/replay correctness | 5–8 days                        |
+| C — desktop panels                | `aiden_show_controls`, durable chat attachment, React registry, current-state subscriptions and normal Settings consistency        | A/B                                                                 | Conversation-to-toggle changes real state; keyboard, stale/failure and replay behavior                         | 3–4 days                        |
+| D — Remote contract               | Negotiated panel projection, explicit grant matrix, typed operations/receipt lookup and invalidation                               | B/C contract settled                                                | Old/new clients, revoked/denied/concurrent operations; no permission widening                                  | 2–3 days                        |
+| E — native mobile panels          | SwiftUI/Compose decoders/views, authenticated adapters, host/device scope and supported setup equivalents                          | D; shared fixtures                                                  | Both mobile behavioral suites and paired-host chat operation; no WebView placeholder workaround                | 4–6 days combined               |
+| F — CLI MVP                       | Pi-native panel component, settings adapters, exact tool gating, `/help-aiden` and supported app commands, packaging               | A/B; pinned public Pi APIs                                          | TUI/None controls work; external tools blocked; headless inert; custom dirs/leases and reload timing           | 2–3 days                        |
+| G — acceptance/release            | Desktop/mobile onboarding/grant disclosure, feature artwork, docs and installed release matrix                                     | B–F                                                                 | Desktop/CLI plus both native clients, accessibility, offline installed behavior and honest device evidence     | 1–2 days plus operator time     |
+| H — wider actions                 | Session model/thinking, exact schedule pause/resume, run Stop, sidebar Needs attention, optional Live adapter                      | MVP accepted; relevant #310/#311 services landed                    | Per-domain authority/results and no headless/background scope widening                                         | Separate estimates after design |
 
 A practical expanded MVP is roughly **18–28 engineering days** for the bounded control vocabulary across all four surfaces. This replaces the original local-only 8–14-day estimate; it is not a delivery-date commitment. Existing Pi release work, later slice H, hosted queues and physical-device/operator delays are excluded. Knowledge remains useful independently and can ship before the full control system; that interim release does not complete this plan.
 
@@ -331,23 +343,23 @@ Suggested PR boundaries: profile/dependency spike; knowledge/package/core reads;
 
 ## Behavioral validation
 
-| Area | Independent oracle and failure modes |
-| --- | --- |
-| Knowledge | Real bundled fixtures and installed manifest. Unsupported platform/flag or unmerged capability never returned as available. Unknown topic/traversal/oversized query rejected; unavailable content yields explicit error. |
-| Product answers | Offline fake-provider evaluation prompts: “what can you do,” “how agent works,” “where data goes,” “what can you read,” and “why unavailable.” Check cited help/state facts, no fabricated current values and no unwanted action calls. Record model variability rather than hiding it with retries. |
-| Live capabilities | Actual admitted tool set after workspace, model, surface, feature and policy filters. No stale MCP inventory or credential values. Missing/partial state does not imply enabled. |
-| Preferences | Real temporary stores with concurrent independent edits. Wrong type/unknown key/read-only scope/invalid revision rejected; nested appearance siblings preserved; identical desired value returns already-set. |
-| Application effects | Register/invoke IPC and tools against the same real domain services. Verify appearance broadcasts, skill revocation, Web Search denial and memory gates, not merely mock argument equality. |
-| Ownership | Held approvals/commits then Stop, owner replacement, workspace deletion, app-policy revocation or CLI lease contention. No late effect on a different target; original operation result remains correctly scoped. |
-| Replay | Reopen actual effect/session receipts. Recover confirmed outcomes without executing a prior mutation or navigation; ambiguous writes reconcile or report unknown. |
-| CLI policy | Real bundled extension tool execution under Full/Ask/None. Exact built-in read tools work independently; fake external `aiden_*`/colliding tools and nested codemode effects cannot escape existing gates. |
-| CLI dynamic enablement | Start with memory/Web Search disabled, enable via supported action, and verify actual next-turn tool availability or explicit reload timing. Disable during pending call denies the next effect. |
-| UI | Electron scenario: ask to change appearance through an actual mocked model tool response, observe computed theme/width, relaunch and inspect persisted state. Navigate to Settings in the originating window; check no auth/fetch started. |
-| Chat panels | Actual fake-provider panel response, render and gesture against the real domain service. Verify current values, pending/failure/conflict state, two-client edits, idempotent receipts and zero writes from hydration/replay/subscriptions. |
-| Portable/native UI | Same semantic fixtures decoded on React/SwiftUI/Compose/Pi TUI; bad panel falls back without dropping chat. Both native control interactions, accessibility/scope, old-client projections, revocation/offline and paired-host acceptance. |
-| Built-in/native catalogs | Real parser/projection fixtures for new and old negotiated clients; disabled and colliding built-in entries; no path/instruction leakage. Inspect and run focused iOS and Android consumers. |
-| Packaging | Relocated CLI `dist/app` plus production Electron artifact offline, with source help unavailable. Documentation paths, native commands and `piConfig` remain valid; no developer plans/secrets bundled. |
-| Resource bounds | Run bounded adversarial docs/capabilities/result fixtures and isolated script output tests. Check bytes/count/deadlines/cleanup; avoid intentionally crashing the user's running app. |
+| Area                     | Independent oracle and failure modes                                                                                                                                                                                                                                                                 |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Knowledge                | Real bundled fixtures and installed manifest. Unsupported platform/flag or unmerged capability never returned as available. Unknown topic/traversal/oversized query rejected; unavailable content yields explicit error.                                                                             |
+| Product answers          | Offline fake-provider evaluation prompts: “what can you do,” “how agent works,” “where data goes,” “what can you read,” and “why unavailable.” Check cited help/state facts, no fabricated current values and no unwanted action calls. Record model variability rather than hiding it with retries. |
+| Live capabilities        | Actual admitted tool set after workspace, model, surface, feature and policy filters. No stale MCP inventory or credential values. Missing/partial state does not imply enabled.                                                                                                                     |
+| Preferences              | Real temporary stores with concurrent independent edits. Wrong type/unknown key/read-only scope/invalid revision rejected; nested appearance siblings preserved; identical desired value returns already-set.                                                                                        |
+| Application effects      | Register/invoke IPC and tools against the same real domain services. Verify appearance broadcasts, skill revocation, Web Search denial and memory gates, not merely mock argument equality.                                                                                                          |
+| Ownership                | Held approvals/commits then Stop, owner replacement, workspace deletion, app-policy revocation or CLI lease contention. No late effect on a different target; original operation result remains correctly scoped.                                                                                    |
+| Replay                   | Reopen actual effect/session receipts. Recover confirmed outcomes without executing a prior mutation or navigation; ambiguous writes reconcile or report unknown.                                                                                                                                    |
+| CLI policy               | Real bundled extension tool execution under Full/Ask/None. Exact built-in read tools work independently; fake external `aiden_*`/colliding tools and nested codemode effects cannot escape existing gates.                                                                                           |
+| CLI dynamic enablement   | Start with memory/Web Search disabled, enable via supported action, and verify actual next-turn tool availability or explicit reload timing. Disable during pending call denies the next effect.                                                                                                     |
+| UI                       | Electron scenario: ask to change appearance through an actual mocked model tool response, observe computed theme/width, relaunch and inspect persisted state. Navigate to Settings in the originating window; check no auth/fetch started.                                                           |
+| Chat panels              | Actual fake-provider panel response, render and gesture against the real domain service. Verify current values, pending/failure/conflict state, two-client edits, idempotent receipts and zero writes from hydration/replay/subscriptions.                                                           |
+| Portable/native UI       | Same semantic fixtures decoded on React/SwiftUI/Compose/Pi TUI; bad panel falls back without dropping chat. Both native control interactions, accessibility/scope, old-client projections, revocation/offline and paired-host acceptance.                                                            |
+| Built-in/native catalogs | Real parser/projection fixtures for new and old negotiated clients; disabled and colliding built-in entries; no path/instruction leakage. Inspect and run focused iOS and Android consumers.                                                                                                         |
+| Packaging                | Relocated CLI `dist/app` plus production Electron artifact offline, with source help unavailable. Documentation paths, native commands and `piConfig` remain valid; no developer plans/secrets bundled.                                                                                              |
+| Resource bounds          | Run bounded adversarial docs/capabilities/result fixtures and isolated script output tests. Check bytes/count/deadlines/cleanup; avoid intentionally crashing the user's running app.                                                                                                                |
 
 Extend existing behavioral suites rather than adding source-grep assertions. Candidate suites: skill discovery/registry/invocation, assistant prompt, settings/config/portable config, Web Search, memory policy, chat generation/effects, CLI bundle/runtime/extensions/parity, onboarding, and targeted Electron settings/chat specs. Run root/CLI types, appropriate lint/builds and narrow suites for every slice. Full test and exact-head CI are release/integration gates, not the first failure detector.
 

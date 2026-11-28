@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  DEFAULT_ASSISTANT_CONFIG,
-  assistantConfigFrom,
-} from "./assistant-parse.js";
+import { DEFAULT_ASSISTANT_CONFIG, assistantConfigFrom } from "./assistant-parse.js";
 
 test("defaults keep background activity off while the Aiden shortcut is available", () => {
   assert.equal(DEFAULT_ASSISTANT_CONFIG.enabled, false);

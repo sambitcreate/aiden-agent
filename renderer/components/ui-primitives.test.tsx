@@ -17,7 +17,13 @@ import {
 
 afterEach(() => cleanup());
 
-function Controlled<T>({ initial, children }: { initial: T; children: (value: T, set: (next: T) => void) => React.ReactNode }) {
+function Controlled<T>({
+  initial,
+  children,
+}: {
+  initial: T;
+  children: (value: T, set: (next: T) => void) => React.ReactNode;
+}) {
   const [value, setValue] = React.useState(initial);
   return <>{children(value, setValue)}</>;
 }
@@ -49,7 +55,12 @@ test("Segmented is a labelled single-choice group that follows arrow keys", asyn
   assert.equal(all.getAttribute("aria-checked"), "true");
   act(() => all.focus());
   fireEvent.keyDown(all, { key: "ArrowRight" });
-  await waitFor(() => assert.ok(document.activeElement === screen.getByRole("radio", { name: "Active" }), "focus moves to Active"));
+  await waitFor(() =>
+    assert.ok(
+      document.activeElement === screen.getByRole("radio", { name: "Active" }),
+      "focus moves to Active",
+    ),
+  );
   fireEvent.click(screen.getByRole("radio", { name: "Paused" }));
   assert.equal(changes[changes.length - 1], "paused");
   assert.equal(screen.getByRole("radio", { name: "Paused" }).getAttribute("aria-checked"), "true");
@@ -76,7 +87,12 @@ test("Tabs exposes the selected tab and supports Home and End", async () => {
   assert.equal(alpha.getAttribute("aria-selected"), "true");
   act(() => alpha.focus());
   fireEvent.keyDown(alpha, { key: "End" });
-  await waitFor(() => assert.ok(document.activeElement === screen.getByRole("tab", { name: "Gamma" }), "End focuses the last tab"));
+  await waitFor(() =>
+    assert.ok(
+      document.activeElement === screen.getByRole("tab", { name: "Gamma" }),
+      "End focuses the last tab",
+    ),
+  );
   fireEvent.mouseDown(screen.getByRole("tab", { name: "Beta" }), { button: 0 });
   fireEvent.click(screen.getByRole("tab", { name: "Beta" }));
   assert.equal(screen.getByRole("tab", { name: "Beta" }).getAttribute("aria-selected"), "true");
@@ -97,7 +113,17 @@ test("Checkbox toggles by click and is named by its label", () => {
 test("Slider moves by its step from the keyboard and shows its value", () => {
   render(
     <Controlled initial={3}>
-      {(value, set) => <Slider label="Rows" value={value} min={1} max={5} step={1} onValueChange={set} valueLabel={`${value} rows`} />}
+      {(value, set) => (
+        <Slider
+          label="Rows"
+          value={value}
+          min={1}
+          max={5}
+          step={1}
+          onValueChange={set}
+          valueLabel={`${value} rows`}
+        />
+      )}
     </Controlled>,
   );
   const thumb = screen.getByRole("slider", { name: "Rows" });
@@ -113,7 +139,10 @@ test("Progress is a named progressbar with its value, or indeterminate", () => {
   assert.equal(bar.getAttribute("aria-valuenow"), "42");
   assert.equal(bar.getAttribute("aria-valuemax"), "100");
   view.rerender(<Progress label="Working" indeterminate />);
-  assert.equal(screen.getByRole("progressbar", { name: "Working" }).hasAttribute("aria-valuenow"), false);
+  assert.equal(
+    screen.getByRole("progressbar", { name: "Working" }).hasAttribute("aria-valuenow"),
+    false,
+  );
 });
 
 test("Disclosure toggles its content and reports its state", () => {
@@ -130,13 +159,22 @@ test("DataTable renders column headers and rows as a real table", () => {
   render(
     <DataTable
       caption="Revenue by region"
-      columns={[{ key: "region", label: "Region" }, { key: "revenue", label: "Revenue", align: "end" }]}
-      rows={[{ region: "EMEA", revenue: "$2,400" }, { region: "AMER", revenue: "$3,100" }]}
+      columns={[
+        { key: "region", label: "Region" },
+        { key: "revenue", label: "Revenue", align: "end" },
+      ]}
+      rows={[
+        { region: "EMEA", revenue: "$2,400" },
+        { region: "AMER", revenue: "$3,100" },
+      ]}
     />,
   );
   const table = screen.getByRole("table", { name: "Revenue by region" });
   assert.ok(table);
-  assert.deepEqual(screen.getAllByRole("columnheader").map((cell) => cell.textContent), ["Region", "Revenue"]);
+  assert.deepEqual(
+    screen.getAllByRole("columnheader").map((cell) => cell.textContent),
+    ["Region", "Revenue"],
+  );
   assert.equal(screen.getAllByRole("row").length, 3);
 });
 

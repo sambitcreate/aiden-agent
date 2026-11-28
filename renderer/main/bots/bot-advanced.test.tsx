@@ -23,11 +23,25 @@ afterEach(cleanup);
  * round-trip like main: an update without a description clears it, and an
  * access save answers with the saved access view alone.
  */
-function settingsIpc(initial: BotDefinition = botFixture(), options: { messaging?: boolean; failUpdates?: boolean; failAccessUpdates?: boolean; thinkingLevels?: Record<string, BotRoutineThinkingLevel[]> } = {}) {
+function settingsIpc(
+  initial: BotDefinition = botFixture(),
+  options: {
+    messaging?: boolean;
+    failUpdates?: boolean;
+    failAccessUpdates?: boolean;
+    thinkingLevels?: Record<string, BotRoutineThinkingLevel[]>;
+  } = {},
+) {
   let bot = initial;
   const updates: BotUpdateInput[] = [];
   const accessUpdates: { access: Record<string, unknown> }[] = [];
-  let access: Record<string, unknown> = { botId: bot.id, revision: "acc-1", policyEpoch: "e", summary: "", accessMode: "full" };
+  let access: Record<string, unknown> = {
+    botId: bot.id,
+    revision: "acc-1",
+    policyEpoch: "e",
+    summary: "",
+    accessMode: "full",
+  };
   const calls = installBotTestIpc({
     "bots:list": () => [bot],
     "bots:get": () => bot,
@@ -46,7 +60,8 @@ function settingsIpc(initial: BotDefinition = botFixture(), options: { messaging
     "bots:routines:list": () => [],
     "settings:get": () => ({ botMessaging: options.messaging ?? true }),
     "bots:update": (input) => {
-      if (options.failUpdates) throw new Error("Error invoking remote method 'bots:update': Error: Bots are starting.");
+      if (options.failUpdates)
+        throw new Error("Error invoking remote method 'bots:update': Error: Bots are starting.");
       const update = input as BotUpdateInput;
       updates.push(update);
       const { id: _id, expectedRevision: _revision, ...fields } = update;
@@ -55,17 +70,25 @@ function settingsIpc(initial: BotDefinition = botFixture(), options: { messaging
       return bot;
     },
     "bots:getCapabilityCatalog": () => catalogFixture(),
-    "bots:getModelThinkingLevels": (input) => options.thinkingLevels?.[(input as { modelId: string }).modelId] ?? null,
+    "bots:getModelThinkingLevels": (input) =>
+      options.thinkingLevels?.[(input as { modelId: string }).modelId] ?? null,
     "bots:getBotAccess": () => ({
       access,
       modelSelection: { providerId: "prov-text", modelId: "model-text" },
       visionModelSelection: { providerId: "prov-vision", modelId: "model-vision" },
     }),
     "bots:updateBotAccess": (input) => {
-      if (options.failAccessUpdates) throw new Error("Error invoking remote method 'bots:updateBotAccess': Error: Bots are starting.");
+      if (options.failAccessUpdates)
+        throw new Error(
+          "Error invoking remote method 'bots:updateBotAccess': Error: Bots are starting.",
+        );
       const sent = input as { access: Record<string, unknown> };
       accessUpdates.push(sent);
-      access = { ...access, revision: `${String(access.revision)}+`, accessMode: sent.access.accessMode };
+      access = {
+        ...access,
+        revision: `${String(access.revision)}+`,
+        accessMode: sent.access.accessMode,
+      };
       return access;
     },
     "bots:getTelegramBinding": () => null,
@@ -89,10 +112,15 @@ async function openSettings(path = "/bots/bot-1", capabilities?: AppCapabilities
 const panel = () => document.getElementById("bot-panel")!;
 
 test("a Bot that uses everything names the computer it runs on: a Mac on macOS, a computer on Linux", async () => {
-  for (const [platform, noun] of [["darwin", "Mac"], ["linux", "computer"]] as const) {
+  for (const [platform, noun] of [
+    ["darwin", "Mac"],
+    ["linux", "computer"],
+  ] as const) {
     settingsIpc();
     await openSettings("/bots/bot-1", { ...DISABLED_APP_CAPABILITIES, platform, bots: true });
-    await within(panel()).findByText(`Everything Aiden can use on this ${noun}, including apps you connect later. Approvals and rules still apply.`);
+    await within(panel()).findByText(
+      `Everything Aiden can use on this ${noun}, including apps you connect later. Approvals and rules still apply.`,
+    );
     cleanup();
   }
 });
@@ -104,7 +132,9 @@ test("the settings read top to bottom in one order, and nothing waits to be save
   await within(panel()).findByRole("heading", { name: "Tools" });
   await within(panel()).findByRole("heading", { name: "Spending" });
   assert.deepEqual(
-    within(panel()).getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent),
+    within(panel())
+      .getAllByRole("heading", { level: 2 })
+      .map((heading) => heading.textContent),
     [
       "Notifications",
       "Open work",
@@ -130,7 +160,10 @@ test("renaming in the header waits for Save, which sends only the name and then 
   const name = screen.getByRole("textbox", { name: "Name" });
   fireEvent.change(name, { target: { value: "Ada" } });
   fireEvent.keyDown(name, { key: "Enter" });
-  assert.ok(await screen.findByRole("button", { name: "Rename Ada" }), "the header shows the new name at once");
+  assert.ok(
+    await screen.findByRole("button", { name: "Rename Ada" }),
+    "the header shows the new name at once",
+  );
   assert.equal(store.updates.length, 0, "nothing is sent before Save");
 
   fireEvent.click(within(saveBar()!).getByRole("button", { name: "Save" }));
@@ -175,23 +208,41 @@ test("clearing the subtitle saves the Bot without one", async () => {
 test("a failed save keeps the edit on screen to try again", async () => {
   settingsIpc(botFixture(), { failUpdates: true });
   await openSettings();
-  fireEvent.change(screen.getByRole("textbox", { name: "Subtitle" }), { target: { value: "Books flights" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Subtitle" }), {
+    target: { value: "Books flights" },
+  });
   fireEvent.click(within(saveBar()!).getByRole("button", { name: "Save" }));
-  await waitFor(() => assert.equal((within(saveBar()!).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, false));
-  assert.equal((screen.getByRole("textbox", { name: "Subtitle" }) as HTMLInputElement).value, "Books flights");
+  await waitFor(() =>
+    assert.equal(
+      (within(saveBar()!).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled,
+      false,
+    ),
+  );
+  assert.equal(
+    (screen.getByRole("textbox", { name: "Subtitle" }) as HTMLInputElement).value,
+    "Books flights",
+  );
 });
 
 test("an unsaved edit outlives the settings closing and comes back, saying so; Revert drops it", async () => {
   settingsIpc();
   await openSettings();
-  fireEvent.change(screen.getByRole("textbox", { name: "Subtitle" }), { target: { value: "Books flights" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Subtitle" }), {
+    target: { value: "Books flights" },
+  });
   // The chat, its panel and the tab all go away, as when the person leaves for another page.
   cleanup();
   await openSettings();
-  assert.equal((await screen.findByRole("textbox", { name: "Subtitle" }) as HTMLInputElement).value, "Books flights");
+  assert.equal(
+    ((await screen.findByRole("textbox", { name: "Subtitle" })) as HTMLInputElement).value,
+    "Books flights",
+  );
   assert.ok(screen.getByText("Your unsaved changes are back."));
   fireEvent.click(within(saveBar()!).getByRole("button", { name: "Revert" }));
-  assert.equal((screen.getByRole("textbox", { name: "Subtitle" }) as HTMLInputElement).value, "Plans trips");
+  assert.equal(
+    (screen.getByRole("textbox", { name: "Subtitle" }) as HTMLInputElement).value,
+    "Plans trips",
+  );
   assert.equal(saveBar(), null);
 });
 
@@ -203,7 +254,11 @@ test("a new model waits for Save, and a model that reads images drops the photo 
   assert.ok(screen.getByRole("button", { name: "Model for photos" }));
   fireEvent.click(model);
   fireEvent.click(await screen.findByRole("option", { name: /^Seer/u }));
-  assert.equal(screen.queryByRole("button", { name: "Model for photos" }), null, "Seer reads images");
+  assert.equal(
+    screen.queryByRole("button", { name: "Model for photos" }),
+    null,
+    "Seer reads images",
+  );
   assert.equal(store.accessUpdates.length, 0);
   fireEvent.click(within(saveBar()!).getByRole("button", { name: "Save" }));
   await waitFor(() => assert.equal(store.accessUpdates.length, 1));
@@ -214,34 +269,54 @@ test("a new model waits for Save, and a model that reads images drops the photo 
 
 test("Thinking offers the chosen model's levels, shows the level it will really use, and waits for Save with the model", async () => {
   const store = settingsIpc(botFixture(), {
-    thinkingLevels: { "model-text": ["low", "high", "max"], "model-vision": ["off", "low", "medium"] },
+    thinkingLevels: {
+      "model-text": ["low", "high", "max"],
+      "model-vision": ["off", "low", "medium"],
+    },
   });
   await openSettings();
   const thinking = await screen.findByRole("combobox", { name: "Thinking" });
   assert.match(thinking.textContent ?? "", /Low/u, "Writer can't think Off, so it runs Low");
   assert.ok(screen.getByText("This model can’t use Off, so it uses Low."));
   fireEvent.click(thinking);
-  assert.deepEqual(screen.getAllByRole("option").map((option) => option.textContent), ["Low", "High", "Maximum"]);
+  assert.deepEqual(
+    screen.getAllByRole("option").map((option) => option.textContent),
+    ["Low", "High", "Maximum"],
+  );
   fireEvent.click(screen.getByRole("option", { name: "Maximum" }));
-  await waitFor(() => assert.match(screen.getByRole("combobox", { name: "Thinking" }).textContent ?? "", /Maximum/u));
+  await waitFor(() =>
+    assert.match(screen.getByRole("combobox", { name: "Thinking" }).textContent ?? "", /Maximum/u),
+  );
   assert.equal(store.updates.length, 0, "nothing saves before Save");
 
   // The unsaved model's levels apply at once; Seer tops out at Medium.
   fireEvent.click(screen.getByRole("button", { name: "AI model" }));
   fireEvent.click(await screen.findByRole("option", { name: /^Seer/u }));
-  await waitFor(() => assert.match(screen.getByRole("combobox", { name: "Thinking" }).textContent ?? "", /Medium/u));
+  await waitFor(() =>
+    assert.match(screen.getByRole("combobox", { name: "Thinking" }).textContent ?? "", /Medium/u),
+  );
   assert.ok(screen.getByText("This model can’t use Maximum, so it uses Medium."));
 
   fireEvent.click(within(saveBar()!).getByRole("button", { name: "Save" }));
   await waitFor(() => assert.equal(store.accessUpdates.length, 1));
   assert.equal(store.updates.length, 1);
-  assert.equal(store.updates[0]!.thinkingLevel, "max", "the Bot keeps what was asked; the run uses the nearest level the model has");
+  assert.equal(
+    store.updates[0]!.thinkingLevel,
+    "max",
+    "the Bot keeps what was asked; the run uses the nearest level the model has",
+  );
   assert.equal(store.accessUpdates[0]!.access.modelId, "model-vision");
   await waitFor(() => assert.equal(saveBar(), null));
 });
 
 test("a Save whose model write fails keeps the model and thinking level together to try again", async () => {
-  const options = { failAccessUpdates: true, thinkingLevels: { "model-text": ["low", "high", "max"], "model-vision": ["off", "low", "medium"] } as Record<string, BotRoutineThinkingLevel[]> };
+  const options = {
+    failAccessUpdates: true,
+    thinkingLevels: {
+      "model-text": ["low", "high", "max"],
+      "model-vision": ["off", "low", "medium"],
+    } as Record<string, BotRoutineThinkingLevel[]>,
+  };
   const store = settingsIpc(botFixture(), options);
   await openSettings();
   fireEvent.click(await screen.findByRole("button", { name: "AI model" }));
@@ -249,7 +324,12 @@ test("a Save whose model write fails keeps the model and thinking level together
   fireEvent.click(await screen.findByRole("combobox", { name: "Thinking" }));
   fireEvent.click(screen.getByRole("option", { name: "Medium" }));
   fireEvent.click(within(saveBar()!).getByRole("button", { name: "Save" }));
-  await waitFor(() => assert.equal((within(saveBar()!).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, false));
+  await waitFor(() =>
+    assert.equal(
+      (within(saveBar()!).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled,
+      false,
+    ),
+  );
   assert.equal(store.updates.length, 0, "the level never lands without its model");
   assert.match(screen.getByRole("button", { name: "AI model" }).textContent ?? "", /Seer/u);
   assert.match(screen.getByRole("combobox", { name: "Thinking" }).textContent ?? "", /Medium/u);
@@ -263,12 +343,16 @@ test("a Save whose model write fails keeps the model and thinking level together
 });
 
 test("Revert puts the thinking level back with the rest", async () => {
-  const store = settingsIpc(botFixture({ thinkingLevel: "high" }), { thinkingLevels: { "model-text": ["low", "high", "max"] } });
+  const store = settingsIpc(botFixture({ thinkingLevel: "high" }), {
+    thinkingLevels: { "model-text": ["low", "high", "max"] },
+  });
   await openSettings();
   fireEvent.click(await screen.findByRole("combobox", { name: "Thinking" }));
   fireEvent.click(screen.getByRole("option", { name: "Low" }));
   fireEvent.click(within(await waitFor(() => saveBar()!)).getByRole("button", { name: "Revert" }));
-  await waitFor(() => assert.match(screen.getByRole("combobox", { name: "Thinking" }).textContent ?? "", /High/u));
+  await waitFor(() =>
+    assert.match(screen.getByRole("combobox", { name: "Thinking" }).textContent ?? "", /High/u),
+  );
   assert.equal(saveBar(), null);
   assert.equal(store.updates.length, 0);
 });
@@ -294,14 +378,25 @@ test("Disable a tool narrows the Bot to Custom access on Save", async () => {
 });
 
 test("When it finishes or needs input saves at once: off sends none a day, on puts the limit back", async () => {
-  const store = settingsIpc(botFixture({ interruptions: { quietHours: { enabled: true, start: "22:00", end: "07:00" }, dailyLimit: 8 } }));
+  const store = settingsIpc(
+    botFixture({
+      interruptions: { quietHours: { enabled: true, start: "22:00", end: "07:00" }, dailyLimit: 8 },
+    }),
+  );
   await openSettings();
   const toggle = screen.getByRole("switch", { name: "When it finishes or needs input" });
   assert.equal(toggle.getAttribute("aria-checked"), "true");
   fireEvent.click(toggle);
   await waitFor(() => assert.equal(store.updates.length, 1));
   assert.equal(store.updates[0]!.interruptions?.dailyLimit, 0);
-  await waitFor(() => assert.equal(screen.getByRole("switch", { name: "When it finishes or needs input" }).getAttribute("aria-checked"), "false"));
+  await waitFor(() =>
+    assert.equal(
+      screen
+        .getByRole("switch", { name: "When it finishes or needs input" })
+        .getAttribute("aria-checked"),
+      "false",
+    ),
+  );
   fireEvent.click(screen.getByRole("switch", { name: "When it finishes or needs input" }));
   await waitFor(() => assert.equal(store.updates.length, 2));
   assert.equal(store.updates[1]!.interruptions?.dailyLimit, 8);
@@ -329,17 +424,32 @@ test("Can message other Bots shows on only when the Bot both sends and receives,
   await waitFor(() => assert.equal(store.updates.length, 1));
   assert.equal(store.updates[0]!.acceptsBotMessages, true);
   assert.equal(store.updates[0]!.messagesOtherBots, true);
-  await waitFor(() => assert.equal(screen.getByRole("switch", { name: "Can message other Bots" }).getAttribute("aria-checked"), "true"));
+  await waitFor(() =>
+    assert.equal(
+      screen.getByRole("switch", { name: "Can message other Bots" }).getAttribute("aria-checked"),
+      "true",
+    ),
+  );
   fireEvent.click(screen.getByRole("switch", { name: "Can message other Bots" }));
   await waitFor(() => assert.equal(store.updates.length, 2));
-  assert.deepEqual([store.updates[1]!.acceptsBotMessages, store.updates[1]!.messagesOtherBots], [false, false]);
+  assert.deepEqual(
+    [store.updates[1]!.acceptsBotMessages, store.updates[1]!.messagesOtherBots],
+    [false, false],
+  );
 });
 
 test("with Bot messaging off for every Bot, the switch is off-limits and says where to turn it on", async () => {
   settingsIpc(botFixture(), { messaging: false });
   await openSettings();
-  await waitFor(() => assert.equal(screen.getByRole("switch", { name: "Can message other Bots" }).hasAttribute("disabled"), true));
-  assert.ok(screen.getByText("Bot messaging is off for every Bot in Settings → Approvals → Advanced."));
+  await waitFor(() =>
+    assert.equal(
+      screen.getByRole("switch", { name: "Can message other Bots" }).hasAttribute("disabled"),
+      true,
+    ),
+  );
+  assert.ok(
+    screen.getByText("Bot messaging is off for every Bot in Settings → Approvals → Advanced."),
+  );
 });
 
 test("Default look in the look popover puts the default colour and shape back at once", async () => {

@@ -6,8 +6,14 @@ import * as path from "node:path";
 import test from "node:test";
 import type { WorkspaceCloneProgress } from "../../renderer/shared/workspace-intake.js";
 import type { Workspace } from "../services/types.js";
-import { createWorkspaceApplicationService, type WorkspaceApplicationDependencies } from "../services/workspace-application-service.js";
-import { createWorkspaceIntakeService, type GitCloneRequest } from "../services/workspace-intake.js";
+import {
+  createWorkspaceApplicationService,
+  type WorkspaceApplicationDependencies,
+} from "../services/workspace-application-service.js";
+import {
+  createWorkspaceIntakeService,
+  type GitCloneRequest,
+} from "../services/workspace-intake.js";
 import { registerWorkspaceIntakeHandlers, type WorkspaceIntakeOwner } from "./workspace-intake.js";
 
 /** One renderer main-frame document; `navigate` invalidates it like a reload. */
@@ -49,7 +55,8 @@ function controllableClone() {
       release = () => resolve("done");
       request.signal.addEventListener("abort", () => resolve("cancelled"), { once: true });
     });
-    if (outcome === "cancelled") return { ok: false as const, reason: "cancelled" as const, stderrTail: "" };
+    if (outcome === "cancelled")
+      return { ok: false as const, reason: "cancelled" as const, stderrTail: "" };
     await fs.mkdir(path.join(request.destination, ".git"), { recursive: true });
     return { ok: true as const };
   };
@@ -94,7 +101,8 @@ async function setup(t: test.TestContext) {
     removeTree: (target) => fs.rm(target, { recursive: true, force: true }),
     listWorkspaces: async () => [...workspaces],
     getWorkspace: async (id) => workspaces.find((workspace) => workspace.id === id) ?? null,
-    createFromFolder: (folderPath, options) => application.createFromFolder(folderPath, undefined, options),
+    createFromFolder: (folderPath, options) =>
+      application.createFromFolder(folderPath, undefined, options),
     runClone: clone.runClone,
   });
   const handlers = new Map<string, (event: FakeEvent, ...args: unknown[]) => unknown>();
@@ -102,7 +110,8 @@ async function setup(t: test.TestContext) {
   registerWorkspaceIntakeHandlers<FakeEvent>({
     handle: (channel, handler) => handlers.set(channel, handler),
     owner: (event) => {
-      if (!event.document) throw new Error("Workspace access requires the active renderer document.");
+      if (!event.document)
+        throw new Error("Workspace access requires the active renderer document.");
       return event.document;
     },
     service: () => service,
@@ -130,14 +139,27 @@ test("path IPC inspects read-only and opens with validated options", async (t) =
   const document = new FakeDocument("window-1");
   const target = path.join(root, "new-app");
 
-  assert.deepEqual(await invoke("workspaces:inspectPath", document, target), { kind: "creatable", path: target });
-  await assert.rejects(invoke("workspaces:inspectPath", document, target, 42), /relativeToWorkspaceId/u);
+  assert.deepEqual(await invoke("workspaces:inspectPath", document, target), {
+    kind: "creatable",
+    path: target,
+  });
+  await assert.rejects(
+    invoke("workspaces:inspectPath", document, target, 42),
+    /relativeToWorkspaceId/u,
+  );
   await assert.rejects(invoke("workspaces:inspectPath", null, target), /active renderer document/u);
-  await assert.rejects(invoke("workspaces:openPath", document, target, { create: "yes" }), /boolean "create"/u);
+  await assert.rejects(
+    invoke("workspaces:openPath", document, target, { create: "yes" }),
+    /boolean "create"/u,
+  );
   await assert.rejects(invoke("workspaces:openPath", document, target, "create"), /object/u);
 
   const missing = await invoke("workspaces:openPath", document, target, { create: false });
-  assert.deepEqual(missing, { ok: false, code: "missing", reason: "That folder doesn't exist yet." });
+  assert.deepEqual(missing, {
+    ok: false,
+    code: "missing",
+    reason: "That folder doesn't exist yet.",
+  });
   assert.equal(changed(), 0);
 
   const created = (await invoke("workspaces:openPath", document, target, { create: true })) as {
@@ -174,40 +196,68 @@ test("clone IPC routes progress to its document and registers the result", async
     repoName: "widget",
     destination: path.join(root, "widget"),
   });
-  await assert.rejects(invoke("workspaces:clone", document, { cloneId: "bad id", url: "acme/widget" }), /clone identifier/u);
+  await assert.rejects(
+    invoke("workspaces:clone", document, { cloneId: "bad id", url: "acme/widget" }),
+    /clone identifier/u,
+  );
 
-  const running = invoke("workspaces:clone", document, { cloneId: "clone-0001", url: "acme/widget" });
+  const running = invoke("workspaces:clone", document, {
+    cloneId: "clone-0001",
+    url: "acme/widget",
+  });
   await eventually(() => clone.started.length === 1);
   await assert.rejects(
     invoke("workspaces:clone", document, { cloneId: "clone-0001", url: "acme/other" }),
     /already running/u,
   );
-  assert.equal(await invoke("workspaces:cloneCancel", other, "clone-0001"), false, "another document cannot cancel");
+  assert.equal(
+    await invoke("workspaces:cloneCancel", other, "clone-0001"),
+    false,
+    "another document cannot cancel",
+  );
   clone.release();
   const result = (await running) as { ok: true; workspace: Workspace; destination: string };
   assert.equal(result.ok, true);
   assert.equal(result.destination, path.join(root, "widget"));
-  assert.deepEqual(document.received, [{ cloneId: "clone-0001", phase: "Receiving objects", percent: 40 }]);
+  assert.deepEqual(document.received, [
+    { cloneId: "clone-0001", phase: "Receiving objects", percent: 40 },
+  ]);
   assert.deepEqual(other.received, []);
   assert.equal(changed(), 1);
-  assert.deepEqual(workspaces.map((workspace) => workspace.folderPath), [path.join(root, "widget")]);
-  assert.equal(await invoke("workspaces:cloneCancel", document, "clone-0001"), false, "finished clones are gone");
+  assert.deepEqual(
+    workspaces.map((workspace) => workspace.folderPath),
+    [path.join(root, "widget")],
+  );
+  assert.equal(
+    await invoke("workspaces:cloneCancel", document, "clone-0001"),
+    false,
+    "finished clones are gone",
+  );
 });
 
 test("clone IPC cancels on request and when its document goes away", async (t) => {
   const { root, clone, invoke, changed } = await setup(t);
   const document = new FakeDocument("window-1");
 
-  const cancelled = invoke("workspaces:clone", document, { cloneId: "clone-0002", url: "acme/widget" });
+  const cancelled = invoke("workspaces:clone", document, {
+    cloneId: "clone-0002",
+    url: "acme/widget",
+  });
   await eventually(() => clone.started.length === 1);
   assert.equal(await invoke("workspaces:cloneCancel", document, "clone-0002"), true);
   assert.deepEqual(await cancelled, { ok: false, code: "cancelled", reason: "Clone cancelled." });
 
-  const reloaded = invoke("workspaces:clone", document, { cloneId: "clone-0003", url: "acme/gadget" });
+  const reloaded = invoke("workspaces:clone", document, {
+    cloneId: "clone-0003",
+    url: "acme/gadget",
+  });
   await eventually(() => clone.started.length === 2);
   document.navigate();
   assert.deepEqual(await reloaded, { ok: false, code: "cancelled", reason: "Clone cancelled." });
   assert.equal(changed(), 0);
   assert.deepEqual(await fs.readdir(root), [], "cancelled clones leave nothing behind");
-  await assert.rejects(invoke("workspaces:cloneCancel", document, "clone-0003"), /document changed/u);
+  await assert.rejects(
+    invoke("workspaces:cloneCancel", document, "clone-0003"),
+    /document changed/u,
+  );
 });

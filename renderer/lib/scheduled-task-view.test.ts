@@ -213,10 +213,10 @@ test("editor model options keep a pinned hidden model selected and selectable un
     { models: ["gpt-5.2", "gpt-5.2-mini"], model: "gpt-5.2" },
     "a hidden pinned model is reported as the selected model and prepended",
   );
-  assert.deepEqual(
-    scheduledTaskProviderModelOptions(provider(), hidden, "gpt-5.2", undefined),
-    { models: ["gpt-5.2", "gpt-5.2-mini"], model: "gpt-5.2" },
-  );
+  assert.deepEqual(scheduledTaskProviderModelOptions(provider(), hidden, "gpt-5.2", undefined), {
+    models: ["gpt-5.2", "gpt-5.2-mini"],
+    model: "gpt-5.2",
+  });
   assert.deepEqual(
     scheduledTaskProviderModelOptions(provider(), undefined, "removed-model", "gpt-5.2"),
     { models: ["removed-model", "gpt-5.2", "gpt-5.2-mini"], model: "removed-model" },
@@ -231,7 +231,10 @@ test("editor model options keep a pinned hidden model selected and selectable un
 
 test("provider guardrail warns only for LLM tasks without a provider or usable app default", () => {
   const noDefault = "No provider pinned. If no app default is available, this task cannot run.";
-  assert.equal(scheduledTaskProviderGuardrail("llm", undefined, undefined, [provider()]), noDefault);
+  assert.equal(
+    scheduledTaskProviderGuardrail("llm", undefined, undefined, [provider()]),
+    noDefault,
+  );
   assert.equal(scheduledTaskProviderGuardrail("llm", undefined, "openai", [provider()]), undefined);
   assert.equal(
     scheduledTaskProviderGuardrail("llm", undefined, "openai", [provider({ hasKey: false })]),
@@ -244,34 +247,62 @@ test("provider guardrail warns only for LLM tasks without a provider or usable a
     "an app default provider missing from the list cannot run",
   );
   assert.equal(scheduledTaskProviderGuardrail("llm", "openai", undefined, [provider()]), undefined);
-  assert.equal(scheduledTaskProviderGuardrail("script", undefined, undefined, [provider()]), undefined);
+  assert.equal(
+    scheduledTaskProviderGuardrail("script", undefined, undefined, [provider()]),
+    undefined,
+  );
   assert.equal(scheduledTaskProviderGuardrail("llm", undefined, undefined, undefined), noDefault);
 });
 
 test("scheduled tasks never pin, or silently fall back to, an agent-backed provider", () => {
   const antigravity = provider({ id: "antigravity", models: ["gemini-3.8-flash"] });
   assert.equal(
-    scheduledTaskProviderPin([antigravity], { providerId: "antigravity", model: "gemini-3.8-flash" }, undefined),
+    scheduledTaskProviderPin(
+      [antigravity],
+      { providerId: "antigravity", model: "gemini-3.8-flash" },
+      undefined,
+    ),
     undefined,
   );
   // The agent-backed default is configured and works in chats; the warning says why it can't run a schedule.
   assert.equal(
-    scheduledTaskProviderGuardrail("llm", undefined, "antigravity", [{ ...antigravity, label: "Google Antigravity" }]),
+    scheduledTaskProviderGuardrail("llm", undefined, "antigravity", [
+      { ...antigravity, label: "Google Antigravity" },
+    ]),
     "No provider pinned, and the app default (Google Antigravity) runs only in chats you have open. Pin a provider so this task can run.",
   );
 });
 
 test("a task that runs when something changes reads and searches by what it watches, not a cron", () => {
   const watched = task({
-    id: "watch", name: "Status", cron: "",
-    trigger: { kind: "watch", source: { type: "url", url: "https://status.example.com/api/health?x=1" }, everyMinutes: 15 },
+    id: "watch",
+    name: "Status",
+    cron: "",
+    trigger: {
+      kind: "watch",
+      source: { type: "url", url: "https://status.example.com/api/health?x=1" },
+      everyMinutes: 15,
+    },
   });
   const script = task({
-    id: "script-watch", name: "Builds", cron: "", permission: "full",
-    trigger: { kind: "watch", source: { type: "script", script: "new-builds.sh" }, everyMinutes: 60 },
+    id: "script-watch",
+    name: "Builds",
+    cron: "",
+    permission: "full",
+    trigger: {
+      kind: "watch",
+      source: { type: "script", script: "new-builds.sh" },
+      everyMinutes: 60,
+    },
   });
   assert.equal(formatTaskWhen(watched), "Every 15 min, when status.example.com/api/health changes");
   assert.equal(formatTaskWhen(script), "Every hour, when new-builds.sh prints something");
-  assert.equal(formatTaskWhen(task({ id: "cron", name: "Daily" })), formatSchedule("0 9 * * 1-5", "UTC"));
-  assert.deepEqual(filterScheduledTasks([watched, script], "status.example", "all").map(({ id }) => id), ["watch"]);
+  assert.equal(
+    formatTaskWhen(task({ id: "cron", name: "Daily" })),
+    formatSchedule("0 9 * * 1-5", "UTC"),
+  );
+  assert.deepEqual(
+    filterScheduledTasks([watched, script], "status.example", "all").map(({ id }) => id),
+    ["watch"],
+  );
 });

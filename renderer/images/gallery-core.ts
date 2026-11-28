@@ -22,7 +22,12 @@ export function groupGalleryByRun(items: readonly GalleryItem[]): GalleryRunGrou
       group.entries.push({ item, index });
       group.createdAt = Math.max(group.createdAt, item.createdAt);
     } else {
-      groups.set(item.runId, { runId: item.runId, runState: item.runState, createdAt: item.createdAt, entries: [{ item, index }] });
+      groups.set(item.runId, {
+        runId: item.runId,
+        runState: item.runState,
+        createdAt: item.createdAt,
+        entries: [{ item, index }],
+      });
     }
   });
   return [...groups.values()];
@@ -42,7 +47,10 @@ const RUN_STATE_LABELS: Record<RunState, string> = {
  * replaced a node's outputs, or a refresh dropped it): the viewer then closes rather than
  * showing some other image.
  */
-export function viewerPosition(items: readonly Pick<GalleryItem, "assetId">[], assetId: string | null | undefined): number | null {
+export function viewerPosition(
+  items: readonly Pick<GalleryItem, "assetId">[],
+  assetId: string | null | undefined,
+): number | null {
   if (!assetId) return null;
   const index = items.findIndex((item) => item.assetId === assetId);
   return index >= 0 ? index : null;
@@ -61,7 +69,11 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
 /** "Just now", "5 min ago", "3 h ago", "Yesterday", then the date. */
-export function relativeTime(timestamp: number, now: number, formatDate: (timestamp: number) => string): string {
+export function relativeTime(
+  timestamp: number,
+  now: number,
+  formatDate: (timestamp: number) => string,
+): string {
   const elapsed = Math.max(0, now - timestamp);
   if (elapsed < MINUTE) return "Just now";
   if (elapsed < HOUR) return `${Math.floor(elapsed / MINUTE)} min ago`;
@@ -77,7 +89,10 @@ const TERMINAL = new Set<RunState>(["succeeded", "partial", "failed", "cancelled
  * workflow (any workflow when none is given) reaching a terminal state. A run is re-read
  * once per terminal state, however many times its final snapshot is broadcast.
  */
-export function galleryRefreshKey(snapshot: RunSnapshot, workflowId: string | undefined): string | null {
+export function galleryRefreshKey(
+  snapshot: RunSnapshot,
+  workflowId: string | undefined,
+): string | null {
   if (workflowId !== undefined && snapshot.run.workflowId !== workflowId) return null;
   if (!TERMINAL.has(snapshot.run.state)) return null;
   return `${snapshot.run.runId}:${snapshot.run.state}`;
@@ -103,7 +118,9 @@ export function viewerItemsForOutputs(
   return images.map((image, index) => {
     const listed = known.get(image.assetId);
     if (listed) return listed;
-    const attempt = context.attempts.find((candidate) => candidate.output.some((output) => output.assetId === image.assetId));
+    const attempt = context.attempts.find((candidate) =>
+      candidate.output.some((output) => output.assetId === image.assetId),
+    );
     return {
       ...image,
       runId: context.runId ?? "",

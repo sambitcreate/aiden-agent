@@ -26,7 +26,8 @@ export function registerChatPendingAttentionIpc(): void {
       readInterruptedRunWaits(chatIds, {
         waits: interruptedWaits,
         operations: piRuntimeEffectStore,
-        onError: (error) => logger.warn("chats", "Could not read interrupted waits for the Inbox.", error),
+        onError: (error) =>
+          logger.warn("chats", "Could not read interrupted waits for the Inbox.", error),
       }),
     goalNeedsYou,
     // A new activity revision reaches the Dock badge and the Inbox's waits query.

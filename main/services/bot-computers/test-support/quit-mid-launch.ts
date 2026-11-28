@@ -10,7 +10,8 @@ import path from "node:path";
 import { createBotComputerHost } from "../host.js";
 
 const [root, fake, configFile, botsDir, botId, budget] = process.argv.slice(2);
-if (!root || !fake || !configFile || !botsDir || !botId || !budget) throw new Error("quit-mid-launch needs six arguments");
+if (!root || !fake || !configFile || !botsDir || !botId || !budget)
+  throw new Error("quit-mid-launch needs six arguments");
 
 const logFile = (JSON.parse(readFileSync(configFile, "utf8")) as { log: string }).log;
 const runs = () =>
@@ -22,10 +23,17 @@ const runs = () =>
 
 const host = createBotComputerHost({
   root,
-  lume: async () => ({ command: process.execPath, prefixArgs: [fake, "--fake-config", configFile] }),
+  lume: async () => ({
+    command: process.execPath,
+    prefixArgs: [fake, "--fake-config", configFile],
+  }),
   support: () => ({ ok: true }),
   botComputerDir: async (id) => path.join(botsDir, id, "Computer"),
-  secrets: { get: async () => null, set: async () => undefined, deleteFamily: async () => undefined },
+  secrets: {
+    get: async () => null,
+    set: async () => undefined,
+    deleteFamily: async () => undefined,
+  },
   resources: { freeDiskBytes: async () => 1e13, availableMemoryBytes: async () => 64 * 1024 ** 3 },
   vncExposed: async () => false,
   pollIntervalMs: 20,

@@ -63,7 +63,8 @@ export interface StackInput {
   y: number;
 }
 
-const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), Math.max(min, max));
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(Math.max(value, min), Math.max(min, max));
 
 /** The lowest top edge a head may have in this area. */
 function maxHeadY(area: BubbleArea): number {
@@ -77,7 +78,9 @@ export function clampHeadY(y: number, area: BubbleArea): number {
 
 /** A head's left edge on a side. */
 export function headX(side: BotBubbleSide, area: BubbleArea): number {
-  return side === "left" ? EDGE_MARGIN : Math.max(EDGE_MARGIN, area.width - EDGE_MARGIN - HEAD_SIZE);
+  return side === "left"
+    ? EDGE_MARGIN
+    : Math.max(EDGE_MARGIN, area.width - EDGE_MARGIN - HEAD_SIZE);
 }
 
 /**
@@ -107,7 +110,10 @@ export function yToShare(y: number, area: BubbleArea): number {
  * up. A side with more heads than fit keeps the order and lets the top ones
  * sit at the top margin.
  */
-export function stackHeads(heads: readonly StackInput[], area: BubbleArea): Map<string, HeadPosition> {
+export function stackHeads(
+  heads: readonly StackInput[],
+  area: BubbleArea,
+): Map<string, HeadPosition> {
   const placed = new Map<string, HeadPosition>();
   const step = HEAD_SIZE + STACK_GAP;
   for (const side of ["left", "right"] as const) {
@@ -116,13 +122,16 @@ export function stackHeads(heads: readonly StackInput[], area: BubbleArea): Map<
       .filter(({ head }) => head.side === side)
       .sort((left, right) => left.head.y - right.head.y || left.index - right.index);
     const ys = column.map(({ head }) => clampHeadY(head.y, area));
-    for (let index = 1; index < ys.length; index += 1) ys[index] = Math.max(ys[index]!, ys[index - 1]! + step);
+    for (let index = 1; index < ys.length; index += 1)
+      ys[index] = Math.max(ys[index]!, ys[index - 1]! + step);
     const bottom = maxHeadY(area);
     for (let index = ys.length - 1; index >= 0; index -= 1) {
       const limit = index === ys.length - 1 ? bottom : ys[index + 1]! - step;
       ys[index] = Math.max(EDGE_MARGIN, Math.min(ys[index]!, limit));
     }
-    column.forEach(({ head }, index) => placed.set(head.id, { x: headX(side, area), y: ys[index]! }));
+    column.forEach(({ head }, index) =>
+      placed.set(head.id, { x: headX(side, area), y: ys[index]! }),
+    );
   }
   return placed;
 }
@@ -203,7 +212,8 @@ export function placeHeadInStack(
   // The wanted heights that draw where it was put.
   const drawn = clampHeadY(spot.y, area);
   const zoneLow = drawn <= EDGE_MARGIN ? 0 : drawn;
-  const zoneHigh = drawn <= EDGE_MARGIN ? Math.min(EDGE_MARGIN, free) : drawn >= maxHeadY(area) ? free : drawn;
+  const zoneHigh =
+    drawn <= EDGE_MARGIN ? Math.min(EDGE_MARGIN, free) : drawn >= maxHeadY(area) ? free : drawn;
   const from = Math.max(low, zoneLow);
   const to = Math.min(high, zoneHigh);
   const wanted = wantedHeadY(spot.y, area);
@@ -230,7 +240,12 @@ export function moveStackedHeadWithKey(
   const at = shown.get(id);
   if (!me || !at) return null;
   if (key === "ArrowLeft" || key === "ArrowRight")
-    return placeHeadInStack(heads, id, moveHeadWithKey({ side: me.side, y: at.y }, key, area), area);
+    return placeHeadInStack(
+      heads,
+      id,
+      moveHeadWithKey({ side: me.side, y: at.y }, key, area),
+      area,
+    );
   const step = HEAD_SIZE + STACK_GAP;
   const neighbours = heads
     .filter((head) => head.id !== id && head.side === me.side)
@@ -259,13 +274,28 @@ export interface MiniChatPlacement extends BotBubbleRect {
  * The mini chat beside its head, on the side away from the edge, kept inside
  * the area, with its pointer aimed at the head's centre.
  */
-export function miniChatPlacement(head: HeadPosition, side: BotBubbleSide, area: BubbleArea): MiniChatPlacement {
-  const width = clamp(area.width - HEAD_SIZE - 3 * EDGE_MARGIN, MINI_CHAT_MIN_WIDTH, MINI_CHAT_MAX_WIDTH);
+export function miniChatPlacement(
+  head: HeadPosition,
+  side: BotBubbleSide,
+  area: BubbleArea,
+): MiniChatPlacement {
+  const width = clamp(
+    area.width - HEAD_SIZE - 3 * EDGE_MARGIN,
+    MINI_CHAT_MIN_WIDTH,
+    MINI_CHAT_MAX_WIDTH,
+  );
   const height = Math.max(0, Math.min(MINI_CHAT_MAX_HEIGHT, area.height - 2 * EDGE_MARGIN));
-  const wantedX = side === "right" ? head.x - MINI_CHAT_HEAD_GAP - width : head.x + HEAD_SIZE + MINI_CHAT_HEAD_GAP;
+  const wantedX =
+    side === "right"
+      ? head.x - MINI_CHAT_HEAD_GAP - width
+      : head.x + HEAD_SIZE + MINI_CHAT_HEAD_GAP;
   const x = clamp(wantedX, EDGE_MARGIN, area.width - EDGE_MARGIN - width);
   const y = clamp(head.y - MINI_CHAT_RISE, EDGE_MARGIN, area.height - EDGE_MARGIN - height);
-  const caretY = clamp(head.y + HEAD_SIZE / 2 - y, MINI_CHAT_CARET_INSET, height - MINI_CHAT_CARET_INSET);
+  const caretY = clamp(
+    head.y + HEAD_SIZE / 2 - y,
+    MINI_CHAT_CARET_INSET,
+    height - MINI_CHAT_CARET_INSET,
+  );
   return { x, y, width, height, caretSide: side, caretY };
 }
 
@@ -279,7 +309,10 @@ export function peekPlacement(
   side: BotBubbleSide,
   area: BubbleArea,
 ): { side: BotBubbleSide; x: number; y: number; maxWidth: number } {
-  const room = side === "right" ? head.x - PEEK_GAP - EDGE_MARGIN : area.width - (head.x + HEAD_SIZE + PEEK_GAP) - EDGE_MARGIN;
+  const room =
+    side === "right"
+      ? head.x - PEEK_GAP - EDGE_MARGIN
+      : area.width - (head.x + HEAD_SIZE + PEEK_GAP) - EDGE_MARGIN;
   return {
     side,
     x: side === "right" ? head.x - PEEK_GAP : head.x + HEAD_SIZE + PEEK_GAP,

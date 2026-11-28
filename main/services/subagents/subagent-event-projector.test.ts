@@ -478,7 +478,8 @@ test("a stopped helper keeps its partial report as the Result and its warning se
     label: "Cookbook",
     status: "interrupted",
     summary: "Added the soup section.\n\nFiles it changed:\n- cookbook.html",
-    warning: "The child was interrupted before completion. These are incomplete, unverified partial findings.",
+    warning:
+      "The child was interrupted before completion. These are incomplete, unverified partial findings.",
   });
 
   const snapshot = projector.snapshot()[0]!;

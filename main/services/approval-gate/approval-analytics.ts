@@ -26,7 +26,12 @@ const DETAIL_KINDS: Readonly<Record<string, ApprovalAnalyticsKind>> = {
   "model-classification": "classifier",
 };
 
-const FILE_TOOLS: ReadonlySet<string> = new Set(["edit_file", "write_file", "delete_file", "move_file"]);
+const FILE_TOOLS: ReadonlySet<string> = new Set([
+  "edit_file",
+  "write_file",
+  "delete_file",
+  "move_file",
+]);
 const COMMAND_TOOLS: ReadonlySet<string> = new Set(["run_command", "background_job"]);
 
 function detailsKind(details: unknown): string | undefined {
@@ -36,7 +41,11 @@ function detailsKind(details: unknown): string | undefined {
 }
 
 /** The card's kind, from its tool and the specialized review it carries. */
-export function approvalAnalyticsKind(prompt: { toolName: string; details?: unknown; preview?: { kind: string } }): ApprovalAnalyticsKind {
+export function approvalAnalyticsKind(prompt: {
+  toolName: string;
+  details?: unknown;
+  preview?: { kind: string };
+}): ApprovalAnalyticsKind {
   const fromDetails = DETAIL_KINDS[detailsKind(prompt.details) ?? ""];
   if (fromDetails) return fromDetails;
   if (prompt.toolName === "classify") return "classifier";
@@ -48,7 +57,10 @@ export function approvalAnalyticsKind(prompt: { toolName: string; details?: unkn
 }
 
 /** Which chat asked: a subagent's card carries its own details. */
-export function approvalAnalyticsChat(surface: "workspace" | "bot", details: unknown): ApprovalAnalyticsChat {
+export function approvalAnalyticsChat(
+  surface: "workspace" | "bot",
+  details: unknown,
+): ApprovalAnalyticsChat {
   if (surface === "bot") return "bot";
   return detailsKind(details)?.startsWith("subagent-") ? "subagent" : "workspace";
 }
@@ -98,7 +110,13 @@ export class ApprovalAnalytics {
 
   constructor(private readonly source: ApprovalAnalyticsSource) {}
 
-  shown(prompt: { approvalId: string; streamId: string; toolName: string; details?: unknown; preview?: { kind: string } }): void {
+  shown(prompt: {
+    approvalId: string;
+    streamId: string;
+    toolName: string;
+    details?: unknown;
+    preview?: { kind: string };
+  }): void {
     try {
       const card: ShownApproval = {
         kind: approvalAnalyticsKind(prompt),
@@ -116,7 +134,10 @@ export class ApprovalAnalytics {
     const card = this.shownCards.get(approvalId);
     if (!card) return;
     this.shownCards.delete(approvalId);
-    reportAnalyticsEvent("approval_answered", { ...card, scope: approvalAnalyticsAnswer(allowed, scope, this.source.surface) });
+    reportAnalyticsEvent("approval_answered", {
+      ...card,
+      scope: approvalAnalyticsAnswer(allowed, scope, this.source.surface),
+    });
   }
 
   /** The card left without the person's answer (cancelled, expired, the run ended). */

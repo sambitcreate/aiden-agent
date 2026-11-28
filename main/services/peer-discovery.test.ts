@@ -30,7 +30,10 @@ function tailscaleStatus(peers: Record<string, unknown>[]): string {
 /** Records every published state and resolves waiters when one matches. */
 function publications() {
   const states: PeerDiscoveryState[] = [];
-  const waiters: { match(state: PeerDiscoveryState): boolean; resolve(state: PeerDiscoveryState): void }[] = [];
+  const waiters: {
+    match(state: PeerDiscoveryState): boolean;
+    resolve(state: PeerDiscoveryState): void;
+  }[] = [];
   return {
     states,
     publish(state: PeerDiscoveryState) {
@@ -119,21 +122,27 @@ test("the discovery runner reads a peer inventory past the Serve status bound an
 
 test("an oversized or unreadable tailnet status is reported rather than silently empty", async () => {
   const cases: [AidenTailscaleCommandRunner | null, string[]][] = [
-    [{
-      run: async () => {
-        throw Object.assign(new RangeError("stdout maxBuffer length exceeded"), {
-          code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
-          killed: true,
-        });
+    [
+      {
+        run: async () => {
+          throw Object.assign(new RangeError("stdout maxBuffer length exceeded"), {
+            code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+            killed: true,
+          });
+        },
       },
-    }, ["invalid-response"]],
+      ["invalid-response"],
+    ],
     [{ run: async () => " ".repeat(PEER_TAILSCALE_STATUS_MAX_BYTES + 1) }, ["invalid-response"]],
     [{ run: async () => "not json" }, ["invalid-response"]],
-    [{
-      run: async () => {
-        throw Object.assign(new Error("Command failed"), { killed: true, signal: "SIGTERM" });
+    [
+      {
+        run: async () => {
+          throw Object.assign(new Error("Command failed"), { killed: true, signal: "SIGTERM" });
+        },
       },
-    }, ["timed-out"]],
+      ["timed-out"],
+    ],
     // Tailscale is not installed: nothing to report.
     [null, []],
   ];
@@ -163,23 +172,39 @@ test("a failed Tailscale scan publishes its reason and refresh clears it", async
   const seen = publications();
   let fail = true;
   const subject = discovery({
-    tailscale: async () => fail ? { run: async () => { throw new Error("offline"); } } : { run: async () => tailscaleStatus([]) },
-    bootstrap: () => { throw new Error("no probe expected"); },
+    tailscale: async () =>
+      fail
+        ? {
+            run: async () => {
+              throw new Error("offline");
+            },
+          }
+        : { run: async () => tailscaleStatus([]) },
+    bootstrap: () => {
+      throw new Error("no probe expected");
+    },
     publish: seen.publish,
   });
   subject.start();
   assert.equal((await seen.until(settled)).tailscale?.reason, "command-failed");
   fail = false;
   subject.refresh();
-  assert.deepEqual(await seen.until((state) => settled(state) && !state.tailscale), { scanning: false, devices: [] });
+  assert.deepEqual(await seen.until((state) => settled(state) && !state.tailscale), {
+    scanning: false,
+    devices: [],
+  });
   subject.stop();
 });
 
 test("failure to create the Tailscale runner is visible as a command failure", async () => {
   const seen = publications();
   const subject = discovery({
-    tailscale: async () => { throw new Error("runner unavailable"); },
-    bootstrap: () => { throw new Error("no probe expected"); },
+    tailscale: async () => {
+      throw new Error("runner unavailable");
+    },
+    bootstrap: () => {
+      throw new Error("no probe expected");
+    },
     publish: seen.publish,
   });
   subject.start();
@@ -227,9 +252,7 @@ test("a desktop reachable over Tailscale and the LAN is listed once, by Tailscal
     addresses: ["fe80::1", "192.168.1.20"],
     txt: { v: "1", instance: host.instanceId },
   });
-  const state = await seen.until(
-    (next) => settled(next) && next.devices[0]?.route === "tailscale",
-  );
+  const state = await seen.until((next) => settled(next) && next.devices[0]?.route === "tailscale");
 
   assert.deepEqual(state.devices, [
     {
@@ -282,7 +305,10 @@ test("this installation is never offered and saved devices are marked paired", a
       return () => undefined;
     },
     bootstrap: (options) =>
-      new PeerBootstrapTransport({ ...options, endpoint: options.endpoint.replace("studio.local", "127.0.0.1") }),
+      new PeerBootstrapTransport({
+        ...options,
+        endpoint: options.endpoint.replace("studio.local", "127.0.0.1"),
+      }),
     publish: self.publish,
   });
   asSelf.start();
@@ -299,20 +325,31 @@ test("this installation is never offered and saved devices are marked paired", a
       return () => undefined;
     },
     bootstrap: (options) =>
-      new PeerBootstrapTransport({ ...options, endpoint: options.endpoint.replace("studio.local", "127.0.0.1") }),
+      new PeerBootstrapTransport({
+        ...options,
+        endpoint: options.endpoint.replace("studio.local", "127.0.0.1"),
+      }),
     publish: other.publish,
   });
   asPeer.start();
   const listed = await other.until((next) => settled(next) && next.devices.length === 1);
   assert.equal(listed.devices[0]?.route, "lan");
   assert.equal(listed.devices[0]?.paired, true);
-  assert.equal(asPeer.target(host.instanceId)?.endpoint, `https://studio.local:${port}/api/aiden/v1`);
+  assert.equal(
+    asPeer.target(host.instanceId)?.endpoint,
+    `https://studio.local:${port}/api/aiden/v1`,
+  );
   asPeer.stop();
 });
 
 /** A bootstrap client whose health answers are released by the test. */
 function heldProbes() {
-  const pending: { endpoint: string; request: PeerBootstrapRequest; answer(value: unknown): void; fail(error: Error): void }[] = [];
+  const pending: {
+    endpoint: string;
+    request: PeerBootstrapRequest;
+    answer(value: unknown): void;
+    fail(error: Error): void;
+  }[] = [];
   let inFlight = 0;
   let peak = 0;
   return {

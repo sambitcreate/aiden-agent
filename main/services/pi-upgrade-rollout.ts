@@ -1,6 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { chmod, link, lstat, mkdir, open, readFile, readdir, readlink, rename, rm, unlink } from "node:fs/promises";
+import {
+  chmod,
+  link,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  readlink,
+  rename,
+  rm,
+  unlink,
+} from "node:fs/promises";
 import path from "node:path";
 import type { Chat } from "./types.js";
 import {
@@ -10,10 +22,14 @@ import {
 } from "./pi-upgrade-evaluation.js";
 
 export const PI_UPGRADE_ROLLOUT_STAGES = [
-  "internal_fixtures", "developer_installs", "new_chats",
-  "migrated_low_risk_chats", "existing_long_chats", "v4_only",
+  "internal_fixtures",
+  "developer_installs",
+  "new_chats",
+  "migrated_low_risk_chats",
+  "existing_long_chats",
+  "v4_only",
 ] as const;
-export type PiUpgradeRolloutStage = typeof PI_UPGRADE_ROLLOUT_STAGES[number];
+export type PiUpgradeRolloutStage = (typeof PI_UPGRADE_ROLLOUT_STAGES)[number];
 export const PI_UPGRADE_BEHAVIOR_ENABLED_ENV = "AIDEN_PI_UPGRADE_BEHAVIOR_ENABLED";
 const POLICY_FILE = "pi-upgrade-rollout-v1.json";
 const EVALUATION_FILE = "pi-upgrade-evaluation-v1.json";
@@ -49,7 +65,10 @@ export interface PiUpgradeInstalledReceipt {
   recordedAt: string;
 }
 
-export interface PiUpgradeInstalledIdentity { packageSha256: string; buildId: string }
+export interface PiUpgradeInstalledIdentity {
+  packageSha256: string;
+  buildId: string;
+}
 
 function exactKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(record).sort().join(",") === [...keys].sort().join(",");
@@ -59,14 +78,20 @@ function parseDocument(value: unknown): PiUpgradeRolloutDocument | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   if (
-    !exactKeys(record, ["version", "stage", "activatedAt", "revision"]) || record.version !== 1 ||
+    !exactKeys(record, ["version", "stage", "activatedAt", "revision"]) ||
+    record.version !== 1 ||
     !PI_UPGRADE_ROLLOUT_STAGES.includes(record.stage as PiUpgradeRolloutStage) ||
-    !Number.isSafeInteger(record.activatedAt) || (record.activatedAt as number) < 0 ||
-    !Number.isSafeInteger(record.revision) || (record.revision as number) < 1
-  ) return undefined;
+    !Number.isSafeInteger(record.activatedAt) ||
+    (record.activatedAt as number) < 0 ||
+    !Number.isSafeInteger(record.revision) ||
+    (record.revision as number) < 1
+  )
+    return undefined;
   return {
-    version: 1, stage: record.stage as PiUpgradeRolloutStage,
-    activatedAt: record.activatedAt as number, revision: record.revision as number,
+    version: 1,
+    stage: record.stage as PiUpgradeRolloutStage,
+    activatedAt: record.activatedAt as number,
+    revision: record.revision as number,
   };
 }
 
@@ -84,12 +109,17 @@ export function piUpgradeMemoryEligible(
 ): boolean {
   if (options.behaviorEnabled === false) return false;
   switch (policy.stage) {
-    case "internal_fixtures": return false;
-    case "developer_installs": return options.development;
-    case "new_chats": return chat.createdAt >= policy.activatedAt;
-    case "migrated_low_risk_chats": return chat.createdAt >= policy.activatedAt || chat.messages.length <= 100;
+    case "internal_fixtures":
+      return false;
+    case "developer_installs":
+      return options.development;
+    case "new_chats":
+      return chat.createdAt >= policy.activatedAt;
+    case "migrated_low_risk_chats":
+      return chat.createdAt >= policy.activatedAt || chat.messages.length <= 100;
     case "existing_long_chats":
-    case "v4_only": return true;
+    case "v4_only":
+      return true;
   }
 }
 
@@ -120,26 +150,49 @@ export function piUpgradeLegacyMigrationEligible(
   return policy.stage !== "migrated_low_risk_chats" || entryCount <= 500;
 }
 
-function canonicalJson(value: unknown): string { return JSON.stringify(value); }
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value);
+}
 
 function parseEvaluationReceipt(value: unknown): PiUpgradeEvaluationReceipt | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  if (!exactKeys(record, ["schema", "version", "generatedAt", "packageSha256", "buildId", "measurements", "report"])) return undefined;
   if (
-    record.schema !== "aiden.pi-upgrade.evaluation" || record.version !== 1 ||
-    typeof record.generatedAt !== "string" || Number.isNaN(Date.parse(record.generatedAt)) ||
-    typeof record.packageSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(record.packageSha256) ||
-    typeof record.buildId !== "string" || !/^[A-Za-z0-9._+-]{1,100}$/u.test(record.buildId) ||
+    !exactKeys(record, [
+      "schema",
+      "version",
+      "generatedAt",
+      "packageSha256",
+      "buildId",
+      "measurements",
+      "report",
+    ])
+  )
+    return undefined;
+  if (
+    record.schema !== "aiden.pi-upgrade.evaluation" ||
+    record.version !== 1 ||
+    typeof record.generatedAt !== "string" ||
+    Number.isNaN(Date.parse(record.generatedAt)) ||
+    typeof record.packageSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(record.packageSha256) ||
+    typeof record.buildId !== "string" ||
+    !/^[A-Za-z0-9._+-]{1,100}$/u.test(record.buildId) ||
     !Array.isArray(record.measurements)
-  ) return undefined;
+  )
+    return undefined;
   try {
     const measurements = record.measurements as PiUpgradeReplayMeasurement[];
     const report = evaluatePiUpgradeReplay(measurements);
     if (canonicalJson(report) !== canonicalJson(record.report)) return undefined;
     return {
-      schema: "aiden.pi-upgrade.evaluation", version: 1, generatedAt: record.generatedAt,
-      packageSha256: record.packageSha256, buildId: record.buildId, measurements, report,
+      schema: "aiden.pi-upgrade.evaluation",
+      version: 1,
+      generatedAt: record.generatedAt,
+      packageSha256: record.packageSha256,
+      buildId: record.buildId,
+      measurements,
+      report,
     };
   } catch {
     return undefined;
@@ -149,19 +202,36 @@ function parseEvaluationReceipt(value: unknown): PiUpgradeEvaluationReceipt | un
 function parseInstalledReceipt(value: unknown): PiUpgradeInstalledReceipt | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  if (!exactKeys(record, [
-    "schema", "version", "packageSha256", "buildId", "evaluationSha256",
-    "packagedMigrationRestartPassed", "rollbackPassed", "signedInstallPassed", "recordedAt",
-  ])) return undefined;
   if (
-    record.schema !== "aiden.pi-upgrade.installed" || record.version !== 1 ||
-    typeof record.packageSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(record.packageSha256) ||
-    typeof record.buildId !== "string" || !/^[A-Za-z0-9._+-]{1,100}$/u.test(record.buildId) ||
-    typeof record.evaluationSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(record.evaluationSha256) ||
-    record.packagedMigrationRestartPassed !== true || record.rollbackPassed !== true ||
-    record.signedInstallPassed !== true || typeof record.recordedAt !== "string" ||
+    !exactKeys(record, [
+      "schema",
+      "version",
+      "packageSha256",
+      "buildId",
+      "evaluationSha256",
+      "packagedMigrationRestartPassed",
+      "rollbackPassed",
+      "signedInstallPassed",
+      "recordedAt",
+    ])
+  )
+    return undefined;
+  if (
+    record.schema !== "aiden.pi-upgrade.installed" ||
+    record.version !== 1 ||
+    typeof record.packageSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(record.packageSha256) ||
+    typeof record.buildId !== "string" ||
+    !/^[A-Za-z0-9._+-]{1,100}$/u.test(record.buildId) ||
+    typeof record.evaluationSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(record.evaluationSha256) ||
+    record.packagedMigrationRestartPassed !== true ||
+    record.rollbackPassed !== true ||
+    record.signedInstallPassed !== true ||
+    typeof record.recordedAt !== "string" ||
     Number.isNaN(Date.parse(record.recordedAt))
-  ) return undefined;
+  )
+    return undefined;
   return record as unknown as PiUpgradeInstalledReceipt;
 }
 
@@ -170,17 +240,26 @@ async function privateJson(file: string): Promise<unknown> {
   try {
     await handle.chmod(0o600);
     return JSON.parse(await handle.readFile("utf8"));
-  } finally { await handle.close(); }
+  } finally {
+    await handle.close();
+  }
 }
 
-async function atomicPrivateJson(root: string, file: string, value: unknown, exclusive = false): Promise<void> {
+async function atomicPrivateJson(
+  root: string,
+  file: string,
+  value: unknown,
+  exclusive = false,
+): Promise<void> {
   const staging = path.join(root, `.pi-upgrade.${randomUUID()}.tmp`);
   try {
     const handle = await open(staging, "wx", 0o600);
     try {
       await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
       await handle.sync();
-    } finally { await handle.close(); }
+    } finally {
+      await handle.close();
+    }
     if (exclusive) {
       // Publish complete bytes without replacing a competing creator's policy.
       await link(staging, file);
@@ -190,7 +269,11 @@ async function atomicPrivateJson(root: string, file: string, value: unknown, exc
     }
     await chmod(file, 0o600);
     const directory = await open(root, "r");
-    try { await directory.sync(); } finally { await directory.close(); }
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
   } catch (error) {
     await rm(staging, { force: true }).catch(() => undefined);
     throw error;
@@ -211,7 +294,11 @@ async function acquireAdvanceLock(file: string, now: number): Promise<() => Prom
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const handle = await open(file, "wx", 0o600);
-      try { await handle.writeFile(JSON.stringify(owner)); } finally { await handle.close(); }
+      try {
+        await handle.writeFile(JSON.stringify(owner));
+      } finally {
+        await handle.close();
+      }
       return async () => {
         try {
           const current = JSON.parse(await readFile(file, "utf8")) as { token?: unknown };
@@ -227,10 +314,15 @@ async function acquireAdvanceLock(file: string, now: number): Promise<() => Prom
       try {
         original = await readFile(file, "utf8");
         const prior = JSON.parse(original) as { pid?: unknown; createdAt?: unknown };
-        stale = Number.isSafeInteger(prior.pid) && Number.isSafeInteger(prior.createdAt) &&
-          now - Number(prior.createdAt) >= STALE_LOCK_MS && !(await processIsAlive(Number(prior.pid)));
-      } catch { stale = false; }
-      if (!stale || attempt > 0 || await readFile(file, "utf8").catch(() => "") !== original) {
+        stale =
+          Number.isSafeInteger(prior.pid) &&
+          Number.isSafeInteger(prior.createdAt) &&
+          now - Number(prior.createdAt) >= STALE_LOCK_MS &&
+          !(await processIsAlive(Number(prior.pid)));
+      } catch {
+        stale = false;
+      }
+      if (!stale || attempt > 0 || (await readFile(file, "utf8").catch(() => "")) !== original) {
         throw new Error("Another Pi upgrade rollout advance is in progress.");
       }
       await unlink(file);
@@ -248,7 +340,9 @@ export async function writePiUpgradeEvaluationReceipt(
   await mkdir(root, { recursive: true, mode: 0o700 });
   await chmod(root, 0o700);
   const receipt: PiUpgradeEvaluationReceipt = {
-    schema: "aiden.pi-upgrade.evaluation", version: 1, generatedAt,
+    schema: "aiden.pi-upgrade.evaluation",
+    version: 1,
+    generatedAt,
     packageSha256: identity.packageSha256,
     buildId: identity.buildId,
     measurements: measurements.map((measurement) => ({ ...measurement })),
@@ -271,7 +365,9 @@ export async function installedApplicationIdentity(
   const visit = async (candidate: string): Promise<void> => {
     const metadata = await lstat(candidate);
     const relative = path.relative(root, candidate) || path.basename(candidate);
-    hash.update(`${metadata.isDirectory() ? "d" : metadata.isSymbolicLink() ? "l" : "f"}:${relative}\0`);
+    hash.update(
+      `${metadata.isDirectory() ? "d" : metadata.isSymbolicLink() ? "l" : "f"}:${relative}\0`,
+    );
     if (metadata.isDirectory()) {
       for (const name of (await readdir(candidate)).sort()) await visit(path.join(candidate, name));
     } else if (metadata.isSymbolicLink()) {
@@ -282,29 +378,38 @@ export async function installedApplicationIdentity(
   };
   await visit(root);
   const packageSha256 = hash.digest("hex");
-  const buildId = explicitBuildId?.trim() || `${process.platform}-${process.arch}-${packageSha256.slice(0, 16)}`;
-  if (!/^[A-Za-z0-9._+-]{1,100}$/u.test(buildId)) throw new Error("Invalid Pi upgrade build identity.");
+  const buildId =
+    explicitBuildId?.trim() || `${process.platform}-${process.arch}-${packageSha256.slice(0, 16)}`;
+  if (!/^[A-Za-z0-9._+-]{1,100}$/u.test(buildId))
+    throw new Error("Invalid Pi upgrade build identity.");
   return { packageSha256, buildId };
 }
 
 export class PiUpgradeRolloutStore {
   private hasLoaded = false;
   private loadTail: Promise<void> = Promise.resolve();
-  constructor(private readonly options: {
-    root(): string | Promise<string>;
-    initialStage: PiUpgradeRolloutStage;
-    now?: () => number;
-    installedIdentity?: () => PiUpgradeInstalledIdentity | Promise<PiUpgradeInstalledIdentity>;
-  }) {}
-  private now(): number { return this.options.now?.() ?? Date.now(); }
+  constructor(
+    private readonly options: {
+      root(): string | Promise<string>;
+      initialStage: PiUpgradeRolloutStage;
+      now?: () => number;
+      installedIdentity?: () => PiUpgradeInstalledIdentity | Promise<PiUpgradeInstalledIdentity>;
+    },
+  ) {}
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
 
   private async paths() {
     const root = await this.options.root();
     await mkdir(root, { recursive: true, mode: 0o700 });
     await chmod(root, 0o700);
     return {
-      root, policy: path.join(root, POLICY_FILE), evaluation: path.join(root, EVALUATION_FILE),
-      installed: path.join(root, INSTALLED_FILE), lock: path.join(root, ".advance-lock"),
+      root,
+      policy: path.join(root, POLICY_FILE),
+      evaluation: path.join(root, EVALUATION_FILE),
+      installed: path.join(root, INSTALLED_FILE),
+      lock: path.join(root, ".advance-lock"),
     };
   }
 
@@ -316,12 +421,19 @@ export class PiUpgradeRolloutStore {
       this.hasLoaded = true;
       return parsed;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !create || this.hasLoaded) throw error;
-      const initial = { version: 1 as const, stage: this.options.initialStage, activatedAt: this.now(), revision: 1 };
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !create || this.hasLoaded)
+        throw error;
+      const initial = {
+        version: 1 as const,
+        stage: this.options.initialStage,
+        activatedAt: this.now(),
+        revision: 1,
+      };
       try {
         await atomicPrivateJson(paths.root, paths.policy, initial, true);
       } catch (createError) {
-        if ((createError as NodeJS.ErrnoException).code === "EEXIST") return this.readCurrent(false);
+        if ((createError as NodeJS.ErrnoException).code === "EEXIST")
+          return this.readCurrent(false);
         throw createError;
       }
       return initial;
@@ -338,7 +450,10 @@ export class PiUpgradeRolloutStore {
       this.hasLoaded = true;
       return current;
     });
-    this.loadTail = pending.then(() => undefined, () => undefined);
+    this.loadTail = pending.then(
+      () => undefined,
+      () => undefined,
+    );
     return pending;
   }
 
@@ -347,28 +462,46 @@ export class PiUpgradeRolloutStore {
     const releaseLock = await acquireAdvanceLock(paths.lock, this.now());
     try {
       const current = await this.readCurrent(false);
-      if (PI_UPGRADE_ROLLOUT_STAGES.indexOf(target) !== PI_UPGRADE_ROLLOUT_STAGES.indexOf(current.stage) + 1) {
-        throw new Error("Pi upgrade rollout must advance exactly one stage from current device state.");
+      if (
+        PI_UPGRADE_ROLLOUT_STAGES.indexOf(target) !==
+        PI_UPGRADE_ROLLOUT_STAGES.indexOf(current.stage) + 1
+      ) {
+        throw new Error(
+          "Pi upgrade rollout must advance exactly one stage from current device state.",
+        );
       }
       const rawEvaluation = await readFile(paths.evaluation);
       const evaluation = parseEvaluationReceipt(JSON.parse(rawEvaluation.toString("utf8")));
-      if (!evaluation?.report.passed) throw new Error("A validated passing Pi upgrade evaluation receipt is required.");
+      if (!evaluation?.report.passed)
+        throw new Error("A validated passing Pi upgrade evaluation receipt is required.");
       const identity = await this.options.installedIdentity?.();
-      if (identity && (
-        evaluation.packageSha256 !== identity.packageSha256 || evaluation.buildId !== identity.buildId
-      )) throw new Error("The Pi upgrade evaluation receipt belongs to a different installed build.");
+      if (
+        identity &&
+        (evaluation.packageSha256 !== identity.packageSha256 ||
+          evaluation.buildId !== identity.buildId)
+      )
+        throw new Error(
+          "The Pi upgrade evaluation receipt belongs to a different installed build.",
+        );
       if (target === "v4_only") {
         const installed = await privateJson(paths.installed)
           .then(parseInstalledReceipt)
           .catch(() => undefined);
         const evaluationSha256 = createHash("sha256").update(rawEvaluation).digest("hex");
         if (
-          !installed || !identity || installed.packageSha256 !== identity.packageSha256 ||
-          installed.buildId !== identity.buildId || installed.evaluationSha256 !== evaluationSha256
-        ) throw new Error("V4-only rollout requires receipts bound to this installed build and evaluation.");
+          !installed ||
+          !identity ||
+          installed.packageSha256 !== identity.packageSha256 ||
+          installed.buildId !== identity.buildId ||
+          installed.evaluationSha256 !== evaluationSha256
+        )
+          throw new Error(
+            "V4-only rollout requires receipts bound to this installed build and evaluation.",
+          );
       }
       const next = {
-        version: 1 as const, stage: target,
+        version: 1 as const,
+        stage: target,
         // Establish the new-chat cohort once; later stages only widen it.
         activatedAt: target === "new_chats" ? this.now() : current.activatedAt,
         revision: current.revision + 1,
@@ -376,6 +509,8 @@ export class PiUpgradeRolloutStore {
       await atomicPrivateJson(paths.root, paths.policy, next);
       this.hasLoaded = true;
       return next;
-    } finally { await releaseLock(); }
+    } finally {
+      await releaseLock();
+    }
   }
 }

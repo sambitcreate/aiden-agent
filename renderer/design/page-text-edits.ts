@@ -34,9 +34,11 @@ type FileEdit = { frameId: string; changes: DesignTextChange[]; stamp?: string }
 
 const HAND_OFF_NOTES = {
   format: "Aiden will make this formatting change with your next message.",
-  unplaced: "These words appear more than once in the file, so Aiden will make the change with your next message.",
+  unplaced:
+    "These words appear more than once in the file, so Aiden will make the change with your next message.",
   changed: "The file changed while saving, so Aiden will make this change with your next message.",
-  unsaved: "The canvas couldn't be saved yet, so Aiden will make this change with your next message.",
+  unsaved:
+    "The canvas couldn't be saved yet, so Aiden will make this change with your next message.",
 } as const;
 
 const squash = (text: string) => text.replace(/\s+/gu, " ").trim();
@@ -44,7 +46,9 @@ const squash = (text: string) => text.replace(/\s+/gu, " ").trim();
 /** The note Aiden gets for an edit it has to make: what the element was and what the person wants. */
 export function pageEditNote(message: Extract<EditMessage, { type: "edit-end" }>): string {
   if (message.plain && message.changes.length > 0) {
-    const lines = message.changes.map((change) => `"${squash(change.before)}" to "${squash(change.after)}"`);
+    const lines = message.changes.map(
+      (change) => `"${squash(change.before)}" to "${squash(change.after)}"`,
+    );
     return `Change the text ${lines.join(", and ")} in this element. Keep everything else as it is.`;
   }
   return `Change this element to match my edit, keeping the rest of the page as it is.\nIt was: ${message.beforeHtml}\nMake it: ${message.afterHtml}`;
@@ -138,14 +142,20 @@ export function usePageTextEdits({
           handToAiden(frameId, message, "unsaved");
           return;
         }
-        const result = await designCanvasApi.editDesignText(chatId, frameId, edit.changes, edit.stamp).catch(() => null);
+        const result = await designCanvasApi
+          .editDesignText(chatId, frameId, edit.changes, edit.stamp)
+          .catch(() => null);
         if (!result) {
           toast.error("The page's file couldn't be changed.");
         } else if (result.ok) {
           history.current = { undo: [...history.current.undo, edit].slice(-50), redo: [] };
           showWritten(frameId, true);
           toast.success(`Saved the words to ${fileName(frameId)}.`);
-        } else if (result.reason === "ambiguous" || result.reason === "not-found" || result.reason === "too-long") {
+        } else if (
+          result.reason === "ambiguous" ||
+          result.reason === "not-found" ||
+          result.reason === "too-long"
+        ) {
           handToAiden(frameId, message, "unplaced");
         } else if (result.reason === "changed") {
           handToAiden(frameId, message, "changed");
@@ -160,7 +170,11 @@ export function usePageTextEdits({
   const command = React.useCallback(
     (name: DesignTextCommand, value?: string) => {
       if (!editing) return;
-      postToDesignPage(pageWindow(editing.frameId), { type: "edit-command", command: name, ...(value !== undefined ? { value } : {}) });
+      postToDesignPage(pageWindow(editing.frameId), {
+        type: "edit-command",
+        command: name,
+        ...(value !== undefined ? { value } : {}),
+      });
     },
     [editing, pageWindow],
   );
@@ -188,17 +202,25 @@ export function usePageTextEdits({
         if (!(await flush().catch(() => false))) {
           // Nothing was written, so the step stays where it was for another try.
           history.current = { ...history.current, [from]: [...history.current[from], edit] };
-          toast.error("The canvas couldn't be saved, so the file wasn't changed. Try again in a moment.");
+          toast.error(
+            "The canvas couldn't be saved, so the file wasn't changed. Try again in a moment.",
+          );
           return;
         }
-        const result = await designCanvasApi.editDesignText(chatId, edit.frameId, changes, edit.stamp).catch(() => null);
+        const result = await designCanvasApi
+          .editDesignText(chatId, edit.frameId, changes, edit.stamp)
+          .catch(() => null);
         if (!result) {
           toast.error("The page's file couldn't be changed.");
         } else if (result.ok) {
           const other = from === "undo" ? "redo" : "undo";
           history.current = { ...history.current, [other]: [...history.current[other], edit] };
           showWritten(edit.frameId, false);
-          toast(from === "undo" ? `Put back the words in ${fileName(edit.frameId)}.` : `Saved the words to ${fileName(edit.frameId)} again.`);
+          toast(
+            from === "undo"
+              ? `Put back the words in ${fileName(edit.frameId)}.`
+              : `Saved the words to ${fileName(edit.frameId)} again.`,
+          );
         } else {
           toast.error("The file changed since, so those words can't be put back.");
         }
@@ -210,7 +232,8 @@ export function usePageTextEdits({
 
   /** A change on the canvas comes after the file edits, so ⌘Z goes to it first. */
   const forget = React.useCallback(() => {
-    if (history.current.undo.length > 0 || history.current.redo.length > 0) history.current = { undo: [], redo: [] };
+    if (history.current.undo.length > 0 || history.current.redo.length > 0)
+      history.current = { undo: [], redo: [] };
   }, []);
 
   return {

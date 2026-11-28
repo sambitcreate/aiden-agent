@@ -36,15 +36,18 @@ test("bot mutation and conversation envelopes are exact and bounded", () => {
     bot: fields,
     access: fullAccess,
   });
-  assert.deepEqual(parseBotUpdate({
-    id: "bot-1",
-    expectedRevision: "botrev:one",
-    ...fields,
-  }), {
-    id: "bot-1",
-    expectedRevision: "botrev:one",
-    ...fields,
-  });
+  assert.deepEqual(
+    parseBotUpdate({
+      id: "bot-1",
+      expectedRevision: "botrev:one",
+      ...fields,
+    }),
+    {
+      id: "bot-1",
+      expectedRevision: "botrev:one",
+      ...fields,
+    },
+  );
   assert.deepEqual(parseBotChatCreate({ botId: "bot-1", workspaceId: "workspace-1" }), {
     botId: "bot-1",
     providerId: undefined,
@@ -92,10 +95,7 @@ test("bot access update envelope is exact, bounded, and shares the wire parser",
     () => parseBotAccessUpdateInput({ ...full, extra: true }),
     /Invalid bot access update fields/u,
   );
-  assert.throws(
-    () => parseBotAccessUpdateInput({ ...full, botId: "" }),
-    /Invalid bot id/u,
-  );
+  assert.throws(() => parseBotAccessUpdateInput({ ...full, botId: "" }), /Invalid bot id/u);
   assert.throws(
     () => parseBotAccessUpdateInput({ ...full, expectedRevision: "has spaces" }),
     /Invalid bot revision/u,
@@ -138,22 +138,90 @@ test("Resume and Dismiss take an exact Bot id and a bounded request id", () => {
     requestId: "desk-7f3a",
   });
   assert.throws(() => parseBotSessionAction({ botId: "bot:1" }, "resume"), /request id/u);
-  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "" }, "dismiss"), /request id/u);
-  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "a b" }, "dismiss"), /request id/u);
-  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "x".repeat(201) }, "resume"), /request id/u);
-  assert.throws(() => parseBotSessionAction({ botId: "../x", requestId: "r" }, "resume"), /bot id/u);
-  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", extra: true }, "resume"), /fields/u);
-  assert.deepEqual(parseBotSessionAction({ botId: "bot:1", requestId: "consent", acknowledgeUnknownCost: true, expectedSubmissionId: "9007199254740993", expectedCostReceiptId: "cost_" + "a".repeat(64) }, "resume"), { botId: "bot:1", requestId: "consent", acknowledgeUnknownCost: true, expectedSubmissionId: "9007199254740993", expectedCostReceiptId: "cost_" + "a".repeat(64) });
-  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", acknowledgeUnknownCost: false }, "resume"));
-  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", acknowledgeUnknownCost: true, expectedSubmissionId: "10" }, "resume"));
-  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", acknowledgeUnknownCost: true, expectedSubmissionId: "10", expectedCostReceiptId: "another receipt" }, "resume"));
-  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", acknowledgeUnknownCost: true }, "dismiss"));
+  assert.throws(
+    () => parseBotSessionAction({ botId: "bot:1", requestId: "" }, "dismiss"),
+    /request id/u,
+  );
+  assert.throws(
+    () => parseBotSessionAction({ botId: "bot:1", requestId: "a b" }, "dismiss"),
+    /request id/u,
+  );
+  assert.throws(
+    () => parseBotSessionAction({ botId: "bot:1", requestId: "x".repeat(201) }, "resume"),
+    /request id/u,
+  );
+  assert.throws(
+    () => parseBotSessionAction({ botId: "../x", requestId: "r" }, "resume"),
+    /bot id/u,
+  );
+  assert.throws(
+    () => parseBotSessionAction({ botId: "bot:1", requestId: "r", extra: true }, "resume"),
+    /fields/u,
+  );
+  assert.deepEqual(
+    parseBotSessionAction(
+      {
+        botId: "bot:1",
+        requestId: "consent",
+        acknowledgeUnknownCost: true,
+        expectedSubmissionId: "9007199254740993",
+        expectedCostReceiptId: "cost_" + "a".repeat(64),
+      },
+      "resume",
+    ),
+    {
+      botId: "bot:1",
+      requestId: "consent",
+      acknowledgeUnknownCost: true,
+      expectedSubmissionId: "9007199254740993",
+      expectedCostReceiptId: "cost_" + "a".repeat(64),
+    },
+  );
+  assert.throws(() =>
+    parseBotSessionAction(
+      { botId: "bot:1", requestId: "r", acknowledgeUnknownCost: false },
+      "resume",
+    ),
+  );
+  assert.throws(() =>
+    parseBotSessionAction(
+      { botId: "bot:1", requestId: "r", acknowledgeUnknownCost: true, expectedSubmissionId: "10" },
+      "resume",
+    ),
+  );
+  assert.throws(() =>
+    parseBotSessionAction(
+      {
+        botId: "bot:1",
+        requestId: "r",
+        acknowledgeUnknownCost: true,
+        expectedSubmissionId: "10",
+        expectedCostReceiptId: "another receipt",
+      },
+      "resume",
+    ),
+  );
+  assert.throws(() =>
+    parseBotSessionAction(
+      { botId: "bot:1", requestId: "r", acknowledgeUnknownCost: true },
+      "dismiss",
+    ),
+  );
   assert.throws(() => parseBotSessionAction(null, "dismiss"), /fields/u);
 });
 
 test("a desktop Bot message carries text or images and its send UUID as request id", () => {
-  for (const requestId of ["routine:daily:42", "routine:task:42:retry-1", "tg:42", "remote:phone:key", "intro:bot"]) {
-    assert.throws(() => parseBotSend({ botId: "bot:1", text: "send it", requestId }), /request id/u);
+  for (const requestId of [
+    "routine:daily:42",
+    "routine:task:42:retry-1",
+    "tg:42",
+    "remote:phone:key",
+    "intro:bot",
+  ]) {
+    assert.throws(
+      () => parseBotSend({ botId: "bot:1", text: "send it", requestId }),
+      /request id/u,
+    );
   }
   assert.deepEqual(parseBotSend({ botId: "bot:1", text: "hi", requestId: "8f1c" }), {
     botId: "bot:1",
@@ -176,9 +244,15 @@ test("a desktop Bot message carries text or images and its send UUID as request 
       attachments: [{ type: "image", mimeType: "image/png", data: "iVBOR" }],
     },
   );
-  assert.throws(() => parseBotSend({ botId: "bot:1", text: "  ", requestId: "r" }), /text or an image/u);
+  assert.throws(
+    () => parseBotSend({ botId: "bot:1", text: "  ", requestId: "r" }),
+    /text or an image/u,
+  );
   assert.throws(() => parseBotSend({ botId: "bot:1", text: "hi" }), /request id/u);
-  assert.throws(() => parseBotSend({ botId: "bot:1", text: "hi", requestId: "r", whenBusy: "now" }), /busy/u);
+  assert.throws(
+    () => parseBotSend({ botId: "bot:1", text: "hi", requestId: "r", whenBusy: "now" }),
+    /busy/u,
+  );
   assert.throws(
     () =>
       parseBotSend({
@@ -189,19 +263,46 @@ test("a desktop Bot message carries text or images and its send UUID as request 
       }),
     /attachments/u,
   );
-  assert.throws(() => parseBotSend({ botId: "bot:1", text: "hi", requestId: "r", providerId: "x" }), /fields/u);
+  assert.throws(
+    () => parseBotSend({ botId: "bot:1", text: "hi", requestId: "r", providerId: "x" }),
+    /fields/u,
+  );
 });
 
 test("a Bot approval answer names its waitId and allow or deny, nothing else", () => {
   const waitId = "3f1c2b9a-7d4e-4a1b-9c2d-5e6f7a8b9c0d";
-  assert.deepEqual(parseBotApprovalDecision({ waitId, decision: "allow" }), { waitId, decision: "allow" });
-  assert.deepEqual(parseBotApprovalDecision({ waitId, decision: "deny" }), { waitId, decision: "deny" });
+  assert.deepEqual(parseBotApprovalDecision({ waitId, decision: "allow" }), {
+    waitId,
+    decision: "allow",
+  });
+  assert.deepEqual(parseBotApprovalDecision({ waitId, decision: "deny" }), {
+    waitId,
+    decision: "deny",
+  });
   assert.throws(() => parseBotApprovalDecision({ waitId, decision: "always" }), /decision/u);
-  assert.throws(() => parseBotApprovalDecision({ waitId: "a/b", decision: "allow" }), /approval id/u);
-  assert.throws(() => parseBotApprovalDecision({ waitId: "x".repeat(65), decision: "allow" }), /approval id/u);
-  assert.deepEqual(parseBotApprovalDecision({ waitId, decision: "allow", scope: "always" }), { waitId, decision: "allow", scope: "always" });
-  for (const fields of [{ decision: "deny", scope: "always" }, { decision: "allow", scope: "chat" }, { decision: "allow", scope: null }, { decision: "allow", extra: true }]) {
-    assert.throws(() => parseBotApprovalDecision({ waitId, ...fields }), /Invalid bot approval fields/u);
+  assert.throws(
+    () => parseBotApprovalDecision({ waitId: "a/b", decision: "allow" }),
+    /approval id/u,
+  );
+  assert.throws(
+    () => parseBotApprovalDecision({ waitId: "x".repeat(65), decision: "allow" }),
+    /approval id/u,
+  );
+  assert.deepEqual(parseBotApprovalDecision({ waitId, decision: "allow", scope: "always" }), {
+    waitId,
+    decision: "allow",
+    scope: "always",
+  });
+  for (const fields of [
+    { decision: "deny", scope: "always" },
+    { decision: "allow", scope: "chat" },
+    { decision: "allow", scope: null },
+    { decision: "allow", extra: true },
+  ]) {
+    assert.throws(
+      () => parseBotApprovalDecision({ waitId, ...fields }),
+      /Invalid bot approval fields/u,
+    );
   }
   assert.throws(() => parseBotApprovalDecision(null), /fields/u);
 });
@@ -210,14 +311,26 @@ test("allowed-list requests select one Bot or all and removals name one bounded 
   assert.equal(parseBotAllowedList(undefined), undefined);
   assert.equal(parseBotAllowedList({}), undefined);
   assert.equal(parseBotAllowedList({ botId: "bot:ada" }), "bot:ada");
-  assert.deepEqual(parseBotAllowedRemove({ botId: "bot:ada", entryId: "folder_root_a" }), { botId: "bot:ada", entryId: "folder_root_a" });
-  for (const input of [null, [], "bot:ada", { botId: "../bot" }, { botId: "bot:ada", extra: true }]) {
+  assert.deepEqual(parseBotAllowedRemove({ botId: "bot:ada", entryId: "folder_root_a" }), {
+    botId: "bot:ada",
+    entryId: "folder_root_a",
+  });
+  for (const input of [
+    null,
+    [],
+    "bot:ada",
+    { botId: "../bot" },
+    { botId: "bot:ada", extra: true },
+  ]) {
     assert.throws(() => parseBotAllowedList(input));
   }
   for (const entryId of ["", "../rule", "rule/x", "a\\b", "x".repeat(81), "rule\n", 42]) {
     assert.throws(() => parseBotAllowedRemove({ botId: "bot:ada", entryId }), /entry id/u);
   }
-  assert.throws(() => parseBotAllowedRemove({ botId: "bot:ada", entryId: "rule", target: "other" }), /fields/u);
+  assert.throws(
+    () => parseBotAllowedRemove({ botId: "bot:ada", entryId: "rule", target: "other" }),
+    /fields/u,
+  );
 });
 
 test("a hand-off answer names its Bot, its waitId and Done or Skip, with a bounded note, and says which part is wrong", () => {
@@ -227,14 +340,34 @@ test("a hand-off answer names its Bot, its waitId and Done or Skip, with a bound
     waitId,
     outcome: "skipped",
   });
-  assert.equal(parseBotHandoffAnswer({ botId: "bot:ada", waitId, outcome: "done", note: "x".repeat(4_000) }).note?.length, 4_000);
-  assert.throws(() => parseBotHandoffAnswer({ botId: "bot:ada", waitId: "a/b", outcome: "done" }), /hand-off id/u);
-  assert.throws(() => parseBotHandoffAnswer({ botId: "bot:ada", waitId, outcome: "allow" }), /hand-off answer\./u);
-  assert.throws(() => parseBotHandoffAnswer({ botId: "bot:ada", waitId, outcome: "done", note: "x".repeat(4_001) }), /hand-off note/u);
-  assert.throws(() => parseBotHandoffAnswer({ botId: "bot:ada", waitId, outcome: "done", url: "https://x" }), /fields/u);
+  assert.equal(
+    parseBotHandoffAnswer({ botId: "bot:ada", waitId, outcome: "done", note: "x".repeat(4_000) })
+      .note?.length,
+    4_000,
+  );
+  assert.throws(
+    () => parseBotHandoffAnswer({ botId: "bot:ada", waitId: "a/b", outcome: "done" }),
+    /hand-off id/u,
+  );
+  assert.throws(
+    () => parseBotHandoffAnswer({ botId: "bot:ada", waitId, outcome: "allow" }),
+    /hand-off answer\./u,
+  );
+  assert.throws(
+    () =>
+      parseBotHandoffAnswer({ botId: "bot:ada", waitId, outcome: "done", note: "x".repeat(4_001) }),
+    /hand-off note/u,
+  );
+  assert.throws(
+    () => parseBotHandoffAnswer({ botId: "bot:ada", waitId, outcome: "done", url: "https://x" }),
+    /fields/u,
+  );
   assert.throws(() => parseBotHandoffAnswer({ botId: "", waitId, outcome: "done" }), /bot id/u);
   assert.deepEqual(parseBotHandoffOpen({ botId: "bot:ada", waitId }), { botId: "bot:ada", waitId });
-  assert.throws(() => parseBotHandoffOpen({ botId: "bot:ada", waitId: "x".repeat(65) }), /hand-off id/u);
+  assert.throws(
+    () => parseBotHandoffOpen({ botId: "bot:ada", waitId: "x".repeat(65) }),
+    /hand-off id/u,
+  );
 });
 
 test("a Bot update may carry an exact chat activity choice, and nothing else new", () => {
@@ -245,31 +378,60 @@ test("a Bot update may carry an exact chat activity choice, and nothing else new
     instructions: "Plan.",
     avatar: { version: 1 as const, shape: "hex" as const, color: "sun" as const },
   };
-  assert.deepEqual(parseBotUpdate({ ...fields, chatActivity: { level: "detailed", wording: "thinking" } }), {
-    ...fields,
-    description: undefined,
-    chatActivity: { level: "detailed", wording: "thinking" },
-  });
+  assert.deepEqual(
+    parseBotUpdate({ ...fields, chatActivity: { level: "detailed", wording: "thinking" } }),
+    {
+      ...fields,
+      description: undefined,
+      chatActivity: { level: "detailed", wording: "thinking" },
+    },
+  );
   assert.equal("chatActivity" in parseBotUpdate(fields), false);
-  assert.throws(() => parseBotUpdate({ ...fields, chatActivity: { level: "loud", wording: "follows" } }), /chat activity/u);
   assert.throws(
-    () => parseBotUpdate({ ...fields, chatActivity: { level: "quiet", wording: "follows", extra: 1 } }),
+    () => parseBotUpdate({ ...fields, chatActivity: { level: "loud", wording: "follows" } }),
+    /chat activity/u,
+  );
+  assert.throws(
+    () =>
+      parseBotUpdate({ ...fields, chatActivity: { level: "quiet", wording: "follows", extra: 1 } }),
     /chat activity/u,
   );
   assert.throws(() => parseBotUpdate({ ...fields, chatActivity: "quiet" }), /chat activity/u);
 });
 
 test("Remove names an exact Bot and one numeric submission id", () => {
-  assert.deepEqual(parseBotWithdraw({ botId: "bot-1", submissionId: "42" }), { botId: "bot-1", submissionId: "42" });
-  assert.throws(() => parseBotWithdraw({ botId: "bot-1", submissionId: "42; drop" }), /submission/u);
-  assert.throws(() => parseBotWithdraw({ botId: "bot-1", submissionId: "9007199254740993" }), /submission/u, "too long to stay exact");
-  assert.deepEqual(parseBotWithdraw({ botId: "bot-1", submissionId: "999999999999999" }).submissionId, "999999999999999");
-  assert.throws(() => parseBotWithdraw({ botId: "bot-1", submissionId: "42", extra: true }), /withdraw fields/u);
+  assert.deepEqual(parseBotWithdraw({ botId: "bot-1", submissionId: "42" }), {
+    botId: "bot-1",
+    submissionId: "42",
+  });
+  assert.throws(
+    () => parseBotWithdraw({ botId: "bot-1", submissionId: "42; drop" }),
+    /submission/u,
+  );
+  assert.throws(
+    () => parseBotWithdraw({ botId: "bot-1", submissionId: "9007199254740993" }),
+    /submission/u,
+    "too long to stay exact",
+  );
+  assert.deepEqual(
+    parseBotWithdraw({ botId: "bot-1", submissionId: "999999999999999" }).submissionId,
+    "999999999999999",
+  );
+  assert.throws(
+    () => parseBotWithdraw({ botId: "bot-1", submissionId: "42", extra: true }),
+    /withdraw fields/u,
+  );
   assert.throws(() => parseBotWithdraw({ botId: "../x", submissionId: "1" }), /bot id/u);
 });
 
 test("the own-wake-ups switch crosses IPC only as a boolean", () => {
-  const base = { id: "bot-1", expectedRevision: "botrev:one", name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "hex", color: "sun" } };
+  const base = {
+    id: "bot-1",
+    expectedRevision: "botrev:one",
+    name: "Planner",
+    instructions: "Plan.",
+    avatar: { version: 1, shape: "hex", color: "sun" },
+  };
   assert.equal(parseBotUpdate({ ...base, selfWakeUps: false }).selfWakeUps, false);
   assert.equal(parseBotUpdate({ ...base, selfWakeUps: true }).selfWakeUps, true);
   assert.equal(parseBotUpdate(base).selfWakeUps, undefined);
@@ -279,7 +441,13 @@ test("the own-wake-ups switch crosses IPC only as a boolean", () => {
 });
 
 test("the Bot thinking level crosses IPC only as a known level", () => {
-  const base = { id: "bot-1", expectedRevision: "botrev:one", name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "hex", color: "sun" } };
+  const base = {
+    id: "bot-1",
+    expectedRevision: "botrev:one",
+    name: "Planner",
+    instructions: "Plan.",
+    avatar: { version: 1, shape: "hex", color: "sun" },
+  };
   assert.equal(parseBotUpdate({ ...base, thinkingLevel: "high" }).thinkingLevel, "high");
   assert.equal(parseBotUpdate({ ...base, thinkingLevel: "off" }).thinkingLevel, "off");
   assert.equal(parseBotUpdate(base).thinkingLevel, undefined);
@@ -289,15 +457,34 @@ test("the Bot thinking level crosses IPC only as a known level", () => {
 });
 
 test("a model thinking-level lookup takes exactly one picker model", () => {
-  assert.deepEqual(parseBotModelThinkingLevelsInput({ botId: "bot-1", providerId: "prov", modelId: "model" }), { botId: "bot-1", providerId: "prov", modelId: "model" });
-  assert.deepEqual(parseBotModelThinkingLevelsInput({ providerId: "prov", modelId: "model" }), { providerId: "prov", modelId: "model" });
-  for (const input of [null, "model", { providerId: "prov" }, { providerId: "", modelId: "m" }, { providerId: "p", modelId: "m".repeat(257) }, { providerId: "p", modelId: "m", sourceId: "x" }]) {
+  assert.deepEqual(
+    parseBotModelThinkingLevelsInput({ botId: "bot-1", providerId: "prov", modelId: "model" }),
+    { botId: "bot-1", providerId: "prov", modelId: "model" },
+  );
+  assert.deepEqual(parseBotModelThinkingLevelsInput({ providerId: "prov", modelId: "model" }), {
+    providerId: "prov",
+    modelId: "model",
+  });
+  for (const input of [
+    null,
+    "model",
+    { providerId: "prov" },
+    { providerId: "", modelId: "m" },
+    { providerId: "p", modelId: "m".repeat(257) },
+    { providerId: "p", modelId: "m", sourceId: "x" },
+  ]) {
     assert.throws(() => parseBotModelThinkingLevelsInput(input), /Invalid/u);
   }
 });
 
-test('messaging switch IPC rejects non-booleans',()=>{
- const base={id:'bot-1',expectedRevision:'botrev:one',name:'Ada',instructions:'help',avatar:{version:1,shape:'hex',color:'sun'}};
- assert.throws(()=>parseBotUpdate({...base,messagesOtherBots:'yes'}),/messaging/);
- assert.equal(parseBotUpdate({...base,acceptsBotMessages:false}).acceptsBotMessages,false);
+test("messaging switch IPC rejects non-booleans", () => {
+  const base = {
+    id: "bot-1",
+    expectedRevision: "botrev:one",
+    name: "Ada",
+    instructions: "help",
+    avatar: { version: 1, shape: "hex", color: "sun" },
+  };
+  assert.throws(() => parseBotUpdate({ ...base, messagesOtherBots: "yes" }), /messaging/);
+  assert.equal(parseBotUpdate({ ...base, acceptsBotMessages: false }).acceptsBotMessages, false);
 });

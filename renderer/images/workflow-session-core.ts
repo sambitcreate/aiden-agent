@@ -25,7 +25,14 @@ export type EditorOp =
   | { type: "add-node"; node: WorkflowNode }
   | { type: "move-nodes"; positions: readonly { id: string; position: WorkflowPosition }[] }
   | { type: "remove"; nodeIds: readonly string[]; edgeIds: readonly string[] }
-  | { type: "connect"; edgeId: string; source: string; sourcePort: string; target: string; targetPort: string }
+  | {
+      type: "connect";
+      edgeId: string;
+      source: string;
+      sourcePort: string;
+      target: string;
+      targetPort: string;
+    }
   | { type: "set-prompt"; nodeId: string; text: string }
   | { type: "set-model"; nodeId: string; model: ImageModelRef }
   | { type: "set-image"; nodeId: string; assetId: string; dimensions?: WorkflowNodeDimensions }
@@ -33,7 +40,11 @@ export type EditorOp =
 
 type OpResult = { ok: true; doc: WorkflowDocV1 } | { ok: false; message: string };
 
-function replaceNode(doc: WorkflowDocV1, nodeId: string, update: (node: WorkflowNode) => WorkflowNode | null): OpResult {
+function replaceNode(
+  doc: WorkflowDocV1,
+  nodeId: string,
+  update: (node: WorkflowNode) => WorkflowNode | null,
+): OpResult {
   const index = doc.nodes.findIndex((node) => node.id === nodeId);
   const next = index < 0 ? null : update(doc.nodes[index]!);
   if (!next) return { ok: false, message: "That node is no longer available." };
@@ -47,11 +58,27 @@ export function applyEditorOp(doc: WorkflowDocV1, op: EditorOp): OpResult {
     case "add-node": {
       const capacity = decideCanvasMutationCapacity(doc.nodes.length, doc.edges.length, 1, 0);
       if (!capacity.allowed) return { ok: false, message: capacity.message! };
-      return { ok: true, doc: { ...doc, nodes: [...doc.nodes, { ...op.node, position: boundedCanvasPosition(op.node.position) }] } };
+      return {
+        ok: true,
+        doc: {
+          ...doc,
+          nodes: [...doc.nodes, { ...op.node, position: boundedCanvasPosition(op.node.position) }],
+        },
+      };
     }
     case "move-nodes": {
-      const moved = new Map(op.positions.map((entry) => [entry.id, boundedCanvasPosition(entry.position)]));
-      return { ok: true, doc: { ...doc, nodes: doc.nodes.map((node) => (moved.has(node.id) ? { ...node, position: moved.get(node.id)! } : node)) } };
+      const moved = new Map(
+        op.positions.map((entry) => [entry.id, boundedCanvasPosition(entry.position)]),
+      );
+      return {
+        ok: true,
+        doc: {
+          ...doc,
+          nodes: doc.nodes.map((node) =>
+            moved.has(node.id) ? { ...node, position: moved.get(node.id)! } : node,
+          ),
+        },
+      };
     }
     case "remove": {
       const nodes = new Set(op.nodeIds);
@@ -61,29 +88,43 @@ export function applyEditorOp(doc: WorkflowDocV1, op: EditorOp): OpResult {
         doc: {
           ...doc,
           nodes: doc.nodes.filter((node) => !nodes.has(node.id)),
-          edges: doc.edges.filter((edge) => !edges.has(edge.id) && !nodes.has(edge.source) && !nodes.has(edge.target)),
+          edges: doc.edges.filter(
+            (edge) => !edges.has(edge.id) && !nodes.has(edge.source) && !nodes.has(edge.target),
+          ),
         },
       };
     }
     case "connect": {
       const decision = decideCanvasConnection(doc, op, op.edgeId);
-      return decision.allowed ? { ok: true, doc: { ...doc, edges: [...doc.edges, decision.edge] } } : { ok: false, message: decision.message };
+      return decision.allowed
+        ? { ok: true, doc: { ...doc, edges: [...doc.edges, decision.edge] } }
+        : { ok: false, message: decision.message };
     }
     case "set-prompt":
-      return replaceNode(doc, op.nodeId, (node) => (node.type === "prompt" ? { ...node, data: { text: boundedPromptText(op.text) } } : null));
+      return replaceNode(doc, op.nodeId, (node) =>
+        node.type === "prompt" ? { ...node, data: { text: boundedPromptText(op.text) } } : null,
+      );
     case "set-model":
       return replaceNode(doc, op.nodeId, (node) =>
-        node.type === "generate-image" ? { ...node, data: { ...node.data, model: { ...op.model } } } : null,
+        node.type === "generate-image"
+          ? { ...node, data: { ...node.data, model: { ...op.model } } }
+          : null,
       );
     case "set-image":
       return replaceNode(doc, op.nodeId, (node) =>
         node.type === "image-input"
-          ? { ...node, data: { ...node.data, assetId: op.assetId }, ...(op.dimensions ? { dimensions: op.dimensions } : {}) }
+          ? {
+              ...node,
+              data: { ...node.data, assetId: op.assetId },
+              ...(op.dimensions ? { dimensions: op.dimensions } : {}),
+            }
           : null,
       );
     case "set-title": {
       const title = op.title.slice(0, 120);
-      return title.trim() ? { ok: true, doc: { ...doc, title } } : { ok: false, message: "Give the workflow a name." };
+      return title.trim()
+        ? { ok: true, doc: { ...doc, title } }
+        : { ok: false, message: "Give the workflow a name." };
     }
   }
 }
@@ -104,7 +145,12 @@ export type SessionAction =
   | { type: "dismiss" };
 
 export function createSession(doc: WorkflowDocV1): EditorSession {
-  return { history: createEditorHistory(doc), ...(doc.viewport ? { viewport: doc.viewport } : {}), message: null, lastEdit: null };
+  return {
+    history: createEditorHistory(doc),
+    ...(doc.viewport ? { viewport: doc.viewport } : {}),
+    message: null,
+    lastEdit: null,
+  };
 }
 
 export function sessionReducer(state: EditorSession, action: SessionAction): EditorSession {
@@ -114,7 +160,9 @@ export function sessionReducer(state: EditorSession, action: SessionAction): Edi
       if (!result.ok) return { ...state, message: result.message };
       const edit = action.op.type === "set-prompt" ? `prompt:${action.op.nodeId}` : null;
       const coalesce = edit !== null && edit === state.lastEdit;
-      const history = coalesce ? { ...state.history, present: result.doc } : commitEditorHistory(state.history, result.doc);
+      const history = coalesce
+        ? { ...state.history, present: result.doc }
+        : commitEditorHistory(state.history, result.doc);
       return { ...state, history, message: null, lastEdit: edit };
     }
     case "undo":
@@ -159,14 +207,23 @@ export function createAutosave(options: {
   setTimer?: (callback: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
 }): Autosave {
-  const setTimer = options.setTimer ?? ((callback: () => void, ms: number) => setTimeout(callback, ms));
-  const clearTimer = options.clearTimer ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+  const setTimer =
+    options.setTimer ?? ((callback: () => void, ms: number) => setTimeout(callback, ms));
+  const clearTimer =
+    options.clearTimer ??
+    ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   let base = options.baseRevision;
   let pending: WorkflowDocV1 | null = null;
   let timer: unknown = null;
   let inFlight: Promise<void> | null = null;
   let disposed = false;
-  let state: AutosaveState = { dirty: false, saving: false, conflict: false, deleted: false, error: null };
+  let state: AutosaveState = {
+    dirty: false,
+    saving: false,
+    conflict: false,
+    deleted: false,
+    error: null,
+  };
   const publish = (patch: Partial<AutosaveState>) => {
     state = { ...state, ...patch };
     options.onState(state);
@@ -197,13 +254,16 @@ export function createAutosave(options: {
       } else {
         // Keep the edit: closing now must still warn that it is unsaved.
         pending ??= document;
-        if (result.reason === "invalid") publish({ error: result.issues?.[0] ?? "This workflow could not be saved." });
+        if (result.reason === "invalid")
+          publish({ error: result.issues?.[0] ?? "This workflow could not be saved." });
         else if (result.reason === "not-found") publish({ deleted: true });
         else publish({ conflict: true });
       }
     } catch (error) {
       pending ??= document;
-      publish({ error: error instanceof Error && error.message ? error.message : "Saving failed." });
+      publish({
+        error: error instanceof Error && error.message ? error.message : "Saving failed.",
+      });
     } finally {
       if (inFlight === attempt) inFlight = null;
       publish({ saving: false, dirty: pending !== null });
@@ -229,7 +289,10 @@ export function createAutosave(options: {
         if (state.error !== null && pending) break; // a failing transport must not spin
       }
       while (inFlight) await inFlight;
-      return { ok: !state.conflict && !state.deleted && !state.dirty && state.error === null, revision: base };
+      return {
+        ok: !state.conflict && !state.deleted && !state.dirty && state.error === null,
+        revision: base,
+      };
     },
     dispose() {
       disposed = true;

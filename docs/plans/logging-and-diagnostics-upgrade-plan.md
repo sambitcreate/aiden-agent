@@ -14,16 +14,16 @@ traffic is aggregate-only; support can reveal, export, and delete diagnostics;
 crash dumps remain explicit and local; and iOS/Android emit the shared categorical
 failure vocabulary. No upload path was added.
 
-| Phase | Implemented result |
-| --- | --- |
-| 0 | Closed event/error/field contracts, prohibited-data rules, inventory, profile, retention, export, and deletion contracts. |
-| 1 | Shared sanitizer/projector, structured development journal, active size/age rotation, queue-serialized status/export cleanup, an unref'd long-idle retention sweep, bounded queues/flushes, and direct-console policy. |
-| 2 | Production journal, synchronous bounded fatal evidence, renderer/process recovery evidence, crash-loop handling, and explicit local-only Crashpad mode. |
-| 3 | Named operational evidence plus content-free 90-day health aggregates; successful Remote requests are aggregate-only. |
-| 4 | Global/React/route renderer coverage with synchronous listener install, bounded pre-policy buffering, document authority, and main-owned limiting/references. |
-| 5 | Diagnostics status, reveal, manifest-first export, atomic destination replacement, separately confirmed dumps, and exhaustive scoped deletion. |
-| 6 | iOS OSLog/MetricKit and Android typed logging/ApplicationExitInfo coverage for auth, network, contract, cache, stream, speech, notification, Live Activity, and prior termination. |
-| 7 | Registered focused suite, source/privacy policy, sanitized seven-day CI receipt, production-profile E2E, and post-distribution packaged acceptance that invokes the real preload IPC and proves explicit upload-disabled Crashpad mode before release publication. |
+| Phase | Implemented result                                                                                                                                                                                                                                                 |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0     | Closed event/error/field contracts, prohibited-data rules, inventory, profile, retention, export, and deletion contracts.                                                                                                                                          |
+| 1     | Shared sanitizer/projector, structured development journal, active size/age rotation, queue-serialized status/export cleanup, an unref'd long-idle retention sweep, bounded queues/flushes, and direct-console policy.                                             |
+| 2     | Production journal, synchronous bounded fatal evidence, renderer/process recovery evidence, crash-loop handling, and explicit local-only Crashpad mode.                                                                                                            |
+| 3     | Named operational evidence plus content-free 90-day health aggregates; successful Remote requests are aggregate-only.                                                                                                                                              |
+| 4     | Global/React/route renderer coverage with synchronous listener install, bounded pre-policy buffering, document authority, and main-owned limiting/references.                                                                                                      |
+| 5     | Diagnostics status, reveal, manifest-first export, atomic destination replacement, separately confirmed dumps, and exhaustive scoped deletion.                                                                                                                     |
+| 6     | iOS OSLog/MetricKit and Android typed logging/ApplicationExitInfo coverage for auth, network, contract, cache, stream, speech, notification, Live Activity, and prior termination.                                                                                 |
+| 7     | Registered focused suite, source/privacy policy, sanitized seven-day CI receipt, production-profile E2E, and post-distribution packaged acceptance that invokes the real preload IPC and proves explicit upload-disabled Crashpad mode before release publication. |
 
 ## Verification evidence
 
@@ -103,19 +103,19 @@ and rollout.
 
 ## Audit baseline
 
-| Surface | Current behavior | Material gap |
-| --- | --- | --- |
-| Electron main | 157 non-test `logger.*` calls: 1 debug, 25 info, 78 warn, 53 error. Every level writes to `console.*`. | No level policy, structured schema, or dependable packaged-production sink. |
-| Development file | `aiden-dev.log`; serialized appends, ISO timestamps, 4,096-character line cap, partial credential redaction, startup-only rotation after 2 MiB. | Raw console output precedes redaction; file mode is not explicitly enforced; a long session can grow without bound; ordinary queued writes are not flushed on shutdown. |
-| Production file | No general application journal. | Failures commonly disappear when console output is unavailable. |
-| Renderer | Development-only global `error` and `unhandledrejection` forwarding. React boundaries show a fallback without recording caught failures. | Packaged renderer failures lack durable evidence; build-time `import.meta.env.DEV` can disagree with the main-owned runtime profile. |
-| Electron lifecycle | Renderer exit/unresponsive/load/preload failures, child-process exits, and quit lifecycle are logged. | Production records are console-only and have no crash-loop history. |
-| Subagents | `subagent-runtime.log` is structured, owner-only, strongly sanitized, actively rotated at 2 MiB, and available in both profiles. Aggregate health metrics retain at most 90 days. | This good design is isolated rather than shared by the rest of the app. Its focused diagnostics test is not registered in a package test script. |
-| Aiden Remote | Every request records request ID, route, status, latency, device-ID suffix, and safe error code through the main logger. | Persisting every successful request would be noisy; suffixes should not become durable identifiers. |
-| iOS | One OSLog error event records only a voice failure category. | Connection, persistence, contract, stream, and prior-termination failures are nearly invisible. |
-| Android | No explicit non-test application logging. | Cache, network, contract, and prior-termination failures are nearly invisible. |
-| Native helpers | Protocol stdout is generally clean; helpers emit terse fatal stderr. | Host diagnostics are inconsistent and may preserve unstructured helper text. |
-| Build/CI | Test and build commands produce ordinary stdout/stderr; selected Playwright/APK artifacts have retention. | No common sanitized failure receipt, content scan, or focused result-bundle policy. |
+| Surface            | Current behavior                                                                                                                                                                  | Material gap                                                                                                                                                            |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Electron main      | 157 non-test `logger.*` calls: 1 debug, 25 info, 78 warn, 53 error. Every level writes to `console.*`.                                                                            | No level policy, structured schema, or dependable packaged-production sink.                                                                                             |
+| Development file   | `aiden-dev.log`; serialized appends, ISO timestamps, 4,096-character line cap, partial credential redaction, startup-only rotation after 2 MiB.                                   | Raw console output precedes redaction; file mode is not explicitly enforced; a long session can grow without bound; ordinary queued writes are not flushed on shutdown. |
+| Production file    | No general application journal.                                                                                                                                                   | Failures commonly disappear when console output is unavailable.                                                                                                         |
+| Renderer           | Development-only global `error` and `unhandledrejection` forwarding. React boundaries show a fallback without recording caught failures.                                          | Packaged renderer failures lack durable evidence; build-time `import.meta.env.DEV` can disagree with the main-owned runtime profile.                                    |
+| Electron lifecycle | Renderer exit/unresponsive/load/preload failures, child-process exits, and quit lifecycle are logged.                                                                             | Production records are console-only and have no crash-loop history.                                                                                                     |
+| Subagents          | `subagent-runtime.log` is structured, owner-only, strongly sanitized, actively rotated at 2 MiB, and available in both profiles. Aggregate health metrics retain at most 90 days. | This good design is isolated rather than shared by the rest of the app. Its focused diagnostics test is not registered in a package test script.                        |
+| Aiden Remote       | Every request records request ID, route, status, latency, device-ID suffix, and safe error code through the main logger.                                                          | Persisting every successful request would be noisy; suffixes should not become durable identifiers.                                                                     |
+| iOS                | One OSLog error event records only a voice failure category.                                                                                                                      | Connection, persistence, contract, stream, and prior-termination failures are nearly invisible.                                                                         |
+| Android            | No explicit non-test application logging.                                                                                                                                         | Cache, network, contract, and prior-termination failures are nearly invisible.                                                                                          |
+| Native helpers     | Protocol stdout is generally clean; helpers emit terse fatal stderr.                                                                                                              | Host diagnostics are inconsistent and may preserve unstructured helper text.                                                                                            |
+| Build/CI           | Test and build commands produce ordinary stdout/stderr; selected Playwright/APK artifacts have retention.                                                                         | No common sanitized failure receipt, content scan, or focused result-bundle policy.                                                                                     |
 
 ## Goals
 
@@ -218,16 +218,16 @@ privacy boundary.
 
 ### 3. Profile-aware policy
 
-| Profile/surface | Console | General local journal | Detail policy |
-| --- | --- | --- | --- |
-| Desktop development | `debug` and above | `debug` and above | Sanitized stacks may include repository-relative source locations only; absolute local paths remain prohibited and development-only detail never enters an export. |
-| Desktop production | Optional concise warn/error console | Allowlisted info plus warn/error/fatal | No paths, URLs, stacks, stable user/device IDs, content, headers, or arbitrary messages. |
-| Renderer development | Global, React caught/recoverable, route failures | Forwarded to main under the runtime-profile policy | Sanitized component/route/module context; no props or rendered content. |
-| Renderer production | No raw browser-console dependency | Safe categorical failures forwarded to main | Error category, route identifier, build, recovery outcome, opaque reference ID. |
-| iOS debug | OSLog debug/info/warn/error | Platform unified log | Private-by-default interpolation; reviewed public enums only. |
-| iOS production | OSLog warn/error/fault plus selected lifecycle info | Platform unified log and local categorical aggregate where required | No user content or persistent identity. |
-| Android debug | Logcat debug/info/warn/error | Debug system log | Sanitized categories; no request/response logging. |
-| Android production | Warn/error plus selected lifecycle outcomes | Small app-owned categorical ring if system history is insufficient | No content, endpoints, tokens, stable identity, or raw throwable messages. |
+| Profile/surface      | Console                                             | General local journal                                               | Detail policy                                                                                                                                                      |
+| -------------------- | --------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Desktop development  | `debug` and above                                   | `debug` and above                                                   | Sanitized stacks may include repository-relative source locations only; absolute local paths remain prohibited and development-only detail never enters an export. |
+| Desktop production   | Optional concise warn/error console                 | Allowlisted info plus warn/error/fatal                              | No paths, URLs, stacks, stable user/device IDs, content, headers, or arbitrary messages.                                                                           |
+| Renderer development | Global, React caught/recoverable, route failures    | Forwarded to main under the runtime-profile policy                  | Sanitized component/route/module context; no props or rendered content.                                                                                            |
+| Renderer production  | No raw browser-console dependency                   | Safe categorical failures forwarded to main                         | Error category, route identifier, build, recovery outcome, opaque reference ID.                                                                                    |
+| iOS debug            | OSLog debug/info/warn/error                         | Platform unified log                                                | Private-by-default interpolation; reviewed public enums only.                                                                                                      |
+| iOS production       | OSLog warn/error/fault plus selected lifecycle info | Platform unified log and local categorical aggregate where required | No user content or persistent identity.                                                                                                                            |
+| Android debug        | Logcat debug/info/warn/error                        | Debug system log                                                    | Sanitized categories; no request/response logging.                                                                                                                 |
+| Android production   | Warn/error plus selected lifecycle outcomes         | Small app-owned categorical ring if system history is insufficient  | No content, endpoints, tokens, stable identity, or raw throwable messages.                                                                                         |
 
 Runtime profile, not Vite build mode, is the authority for renderer forwarding.
 Main exposes a read-only diagnostic-policy capability during renderer bootstrap;
@@ -350,21 +350,21 @@ source diagnostics. The app never sends the archive.
 
 ## Event coverage matrix
 
-| Area | Required production breadcrumbs | Required failure events |
-| --- | --- | --- |
-| Startup | bootstrap started, profile configured, Electron ready, main window created, renderer ready, providers ready | import failure, required store failure, window load/preload failure, startup timeout |
-| Renderer | navigation/reload/recovery outcome | uncaught, unhandled rejection, React caught/recoverable, unresponsive, render-process-gone |
-| Generation | admitted, provider dispatch, terminal outcome, cancellation origin category, compaction start/finish | provider category, persistence failure, durable-effect acknowledgement failure, stuck/unknown outcome |
-| Persistence | store class read/write/recovery outcome and duration bucket | corrupt/schema/permission/disk-full/atomic-write/directory-sync category |
-| Aiden Remote | listener start/stop, connection mode, request status/latency aggregates | listener collision, TLS/pairing/auth/revocation/route/stream failure category |
-| Updater | check/download/install-handoff terminal outcomes | validation, network, timeout/stall, installer launch, rollback category |
-| Schedules | engine start/stop and aggregate terminal outcomes | missed-run recovery, execution, persistence, shutdown timeout category |
-| Telegram | service start/stop/reconnect terminal outcomes | polling/auth/rate-limit/delivery/persistence category |
-| MCP | client connect/close outcome and duration bucket | auth, transport, schema, timeout, cleanup category |
-| Voice | permission/start/transcription terminal category | microphone/audio/session/provider/local-helper category |
-| Computer Use | broker/bridge/session lifecycle category | binary/signature/permission/protocol/timeout/cleanup category |
-| Subagents | existing structured failure plus aggregate lifecycle | launch/bootstrap/protocol/provider/runtime/cleanup categories |
-| Native mobile | launch, paired connection, cache hydration, stream resume, speech/notification lifecycle | contract/cache/network/auth/stream/speech/Live Activity/prior-termination category |
+| Area          | Required production breadcrumbs                                                                             | Required failure events                                                                               |
+| ------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Startup       | bootstrap started, profile configured, Electron ready, main window created, renderer ready, providers ready | import failure, required store failure, window load/preload failure, startup timeout                  |
+| Renderer      | navigation/reload/recovery outcome                                                                          | uncaught, unhandled rejection, React caught/recoverable, unresponsive, render-process-gone            |
+| Generation    | admitted, provider dispatch, terminal outcome, cancellation origin category, compaction start/finish        | provider category, persistence failure, durable-effect acknowledgement failure, stuck/unknown outcome |
+| Persistence   | store class read/write/recovery outcome and duration bucket                                                 | corrupt/schema/permission/disk-full/atomic-write/directory-sync category                              |
+| Aiden Remote  | listener start/stop, connection mode, request status/latency aggregates                                     | listener collision, TLS/pairing/auth/revocation/route/stream failure category                         |
+| Updater       | check/download/install-handoff terminal outcomes                                                            | validation, network, timeout/stall, installer launch, rollback category                               |
+| Schedules     | engine start/stop and aggregate terminal outcomes                                                           | missed-run recovery, execution, persistence, shutdown timeout category                                |
+| Telegram      | service start/stop/reconnect terminal outcomes                                                              | polling/auth/rate-limit/delivery/persistence category                                                 |
+| MCP           | client connect/close outcome and duration bucket                                                            | auth, transport, schema, timeout, cleanup category                                                    |
+| Voice         | permission/start/transcription terminal category                                                            | microphone/audio/session/provider/local-helper category                                               |
+| Computer Use  | broker/bridge/session lifecycle category                                                                    | binary/signature/permission/protocol/timeout/cleanup category                                         |
+| Subagents     | existing structured failure plus aggregate lifecycle                                                        | launch/bootstrap/protocol/provider/runtime/cleanup categories                                         |
+| Native mobile | launch, paired connection, cache hydration, stream resume, speech/notification lifecycle                    | contract/cache/network/auth/stream/speech/Live Activity/prior-termination category                    |
 
 Successful high-frequency operations must not create unbounded records. Remote
 2xx requests, IPC traffic, stream deltas, terminal chunks, filesystem bytes, and
@@ -653,16 +653,16 @@ Exit gate:
 
 ## Test inventory to add or extend
 
-| Test layer | Required coverage |
-| --- | --- |
-| Pure unit | event registry, serializer, safe fields, error mapping, redaction defense, fingerprints, byte caps, retention selection, aggregate normalization |
-| Storage | mode/ownership, append ordering, active rotation, crash during rotation, stale temp, ENOSPC/EACCES, queue overflow, shutdown flush timeout, deletion |
-| Main integration | runtime policy, sink fan-out, fatal tombstones, renderer/child lifecycle, service event mappings, Remote aggregation/rate policy |
-| Renderer | global/promise/React/router failures, runtime-profile matrix, rate limiting, safe fallback/reference UI |
-| Export security | containment, symlink/file-identity changes, unknown files, archive budgets, scanner, manifest, crash-dump consent, cancellation, cleanup |
-| Native | Swift/Kotlin category maps, privacy annotations/policy, cache/network/contract/stream failures, prior termination |
-| Packaged/E2E | production paths and modes, long-session bound, crash recovery, export/delete, zero network upload |
-| Release policy | no analytics/crash-upload SDK, no automatic endpoint, registered tests, artifact scanner and retention |
+| Test layer       | Required coverage                                                                                                                                    |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pure unit        | event registry, serializer, safe fields, error mapping, redaction defense, fingerprints, byte caps, retention selection, aggregate normalization     |
+| Storage          | mode/ownership, append ordering, active rotation, crash during rotation, stale temp, ENOSPC/EACCES, queue overflow, shutdown flush timeout, deletion |
+| Main integration | runtime policy, sink fan-out, fatal tombstones, renderer/child lifecycle, service event mappings, Remote aggregation/rate policy                     |
+| Renderer         | global/promise/React/router failures, runtime-profile matrix, rate limiting, safe fallback/reference UI                                              |
+| Export security  | containment, symlink/file-identity changes, unknown files, archive budgets, scanner, manifest, crash-dump consent, cancellation, cleanup             |
+| Native           | Swift/Kotlin category maps, privacy annotations/policy, cache/network/contract/stream failures, prior termination                                    |
+| Packaged/E2E     | production paths and modes, long-session bound, crash recovery, export/delete, zero network upload                                                   |
+| Release policy   | no analytics/crash-upload SDK, no automatic endpoint, registered tests, artifact scanner and retention                                               |
 
 ## Rollback and compatibility
 

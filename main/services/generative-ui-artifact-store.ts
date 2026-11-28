@@ -408,9 +408,7 @@ export class GenerativeUiArtifactStore {
       const copies: ChatHtmlArtifactV1[] = [];
       const source = database.records.filter(
         (record) =>
-          record.chatId === sourceChatId &&
-          record.committed &&
-          wanted.has(record.artifact.mediaId),
+          record.chatId === sourceChatId && record.committed && wanted.has(record.artifact.mediaId),
       );
       if (source.length !== wanted.size) {
         throw new Error("Some HTML artifacts could not be copied.");
@@ -440,9 +438,7 @@ export class GenerativeUiArtifactStore {
         database.records.push({
           ...record,
           chatId: targetChatId,
-          generationId: committed
-            ? record.generationId
-            : copyGenerationId(sourceChatId),
+          generationId: committed ? record.generationId : copyGenerationId(sourceChatId),
           artifact,
           committed,
           stagedAt: this.now(),
@@ -473,9 +469,7 @@ export class GenerativeUiArtifactStore {
     if (persistedIds.size === 0) return;
     const pending = (await this.data.load()).records.filter(
       (record) =>
-        record.chatId === chat.id &&
-        !record.committed &&
-        persistedIds.has(record.artifact.mediaId),
+        record.chatId === chat.id && !record.committed && persistedIds.has(record.artifact.mediaId),
     );
     if (pending.length === 0) return;
     await this.commit(

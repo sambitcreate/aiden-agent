@@ -40,7 +40,10 @@ export interface VoiceRecorderOptions {
   maxRecordingSamples?: number;
 }
 
-export function useVoiceRecorder(onTranscript: (text: string) => void, options: VoiceRecorderOptions) {
+export function useVoiceRecorder(
+  onTranscript: (text: string) => void,
+  options: VoiceRecorderOptions,
+) {
   const [lastError, setLastError] = React.useState<string | null>(null);
   const reportError = React.useCallback((message: string) => {
     setLastError(message);
@@ -149,7 +152,11 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       streamRef.current = stream;
       chunksRef.current = [];
       setLiveTranscript({ committed: "", tentative: "" });
-      const recorder = await createVoiceRecorder(stream, selected.provider, optionsRef.current.maxRecordingSamples);
+      const recorder = await createVoiceRecorder(
+        stream,
+        selected.provider,
+        optionsRef.current.maxRecordingSamples,
+      );
       if (!operationGate.isCurrent(token)) {
         if (recorder instanceof PcmRecorder) recorder.dispose();
         stopTracks();
@@ -201,7 +208,9 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
           selected.provider === "local" && selected.localModel
             ? beginSlowLoad(selected.localModel)
             : undefined;
-        const deadline = new DictationDeadline(transcriptionBudgetMs(selected.provider, audioSeconds));
+        const deadline = new DictationDeadline(
+          transcriptionBudgetMs(selected.provider, audioSeconds),
+        );
         try {
           let text = "";
           let live: GeminiLiveCapture | null = null;
@@ -345,7 +354,15 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       stopTracks();
       reportError(microphoneCaptureErrorMessage(error));
     }
-  }, [beginSlowLoad, endSlowLoad, onTranscript, operationGate, recordedRetryConsent, stopTracks, reportError]);
+  }, [
+    beginSlowLoad,
+    endSlowLoad,
+    onTranscript,
+    operationGate,
+    recordedRetryConsent,
+    stopTracks,
+    reportError,
+  ]);
 
   const stop = React.useCallback(() => {
     pendingStopRef.current = true;

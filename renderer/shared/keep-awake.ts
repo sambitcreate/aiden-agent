@@ -11,7 +11,15 @@ export const KEEP_AWAKE_CHANGED_CHANNEL = "schedule:keep-awake-changed";
  * is a keep-going goal being checked between rounds (its review, or a round
  * starting). Later inputs add their own kind and label here.
  */
-export const KEEP_AWAKE_REASON_KINDS = ["chat", "job", "check", "goal", "usage-limit", "check-back", "wake-up"] as const;
+export const KEEP_AWAKE_REASON_KINDS = [
+  "chat",
+  "job",
+  "check",
+  "goal",
+  "usage-limit",
+  "check-back",
+  "wake-up",
+] as const;
 export type KeepAwakeReasonKind = (typeof KEEP_AWAKE_REASON_KINDS)[number];
 
 export interface KeepAwakeStatus {
@@ -38,9 +46,10 @@ export const KEEP_AWAKE_UNSUPPORTED: KeepAwakeStatus = Object.freeze({
 export function parseKeepAwakeStatus(value: unknown): KeepAwakeStatus {
   if (typeof value !== "object" || value === null) return KEEP_AWAKE_UNSUPPORTED;
   const record = value as Record<string, unknown>;
-  const rawCounts = typeof record.counts === "object" && record.counts !== null
-    ? record.counts as Record<string, unknown>
-    : {};
+  const rawCounts =
+    typeof record.counts === "object" && record.counts !== null
+      ? (record.counts as Record<string, unknown>)
+      : {};
   const counts: Partial<Record<KeepAwakeReasonKind, number>> = {};
   for (const kind of KEEP_AWAKE_REASON_KINDS) {
     const count = rawCounts[kind];

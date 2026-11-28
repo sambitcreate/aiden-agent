@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { BackgroundJobs, defaultProcessGroupMembers, newBackgroundJobId } from "./follow-through/background-jobs.js";
+import {
+  BackgroundJobs,
+  defaultProcessGroupMembers,
+  newBackgroundJobId,
+} from "./follow-through/background-jobs.js";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,7 +21,11 @@ import {
   createWorkspaceApplicationService,
   type WorkspaceApplicationDependencies,
 } from "./workspace-application-service.js";
-import { AppControlsService, appControlRevision, type StoredAppOperation } from "./app-controls-core.js";
+import {
+  AppControlsService,
+  appControlRevision,
+  type StoredAppOperation,
+} from "./app-controls-core.js";
 import { createAidenAppTools } from "./aiden-app-tools.js";
 import { cancelWorkspaceGenerationsAndSettle } from "./workspace-mutation-gate.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
@@ -40,9 +48,12 @@ function fixture(options: { existing?: Workspace | null; saveError?: Error } = {
   let existing = options.existing === undefined ? workspace() : options.existing;
   const deps = {
     configStore: {
-      listWorkspaces: async () => existing ? [existing] : [],
+      listWorkspaces: async () => (existing ? [existing] : []),
       getWorkspace: async () => existing,
-      saveWorkspace: async (value: Workspace, guard?: (current: Workspace | undefined) => void | Promise<void>) => {
+      saveWorkspace: async (
+        value: Workspace,
+        guard?: (current: Workspace | undefined) => void | Promise<void>,
+      ) => {
         await guard?.(existing ?? undefined);
         events.push("save");
         if (options.saveError) throw options.saveError;
@@ -50,20 +61,33 @@ function fixture(options: { existing?: Workspace | null; saveError?: Error } = {
         saved.push(value);
         return value;
       },
-      removeWorkspace: async () => { events.push("remove-record"); existing = null; },
+      removeWorkspace: async () => {
+        events.push("remove-record");
+        existing = null;
+      },
     },
     llmClient: {
-      cancelWorkspaceAndSettle: async () => { events.push("cancel-generations"); },
+      cancelWorkspaceAndSettle: async () => {
+        events.push("cancel-generations");
+      },
     },
     scheduleService: {
-      cancelWorkspace: async () => { events.push("cancel-schedules"); },
-      resumeWorkspace: async () => { events.push("resume-schedules"); },
+      cancelWorkspace: async () => {
+        events.push("cancel-schedules");
+      },
+      resumeWorkspace: async () => {
+        events.push("resume-schedules");
+      },
     },
     terminalService: {
-      closeForWorkspace: () => { events.push("close-terminal"); },
+      closeForWorkspace: () => {
+        events.push("close-terminal");
+      },
     },
     browserService: {
-      closeForWorkspace: () => { events.push("close-browser"); },
+      closeForWorkspace: () => {
+        events.push("close-browser");
+      },
     },
     workspaceMutationGate: new WorkspaceMutationGate(),
     workspaceOperationRegistry: new WorkspaceOperationRegistry(),
@@ -73,7 +97,9 @@ function fixture(options: { existing?: Workspace | null; saveError?: Error } = {
     }),
     realpath: async (value: string) => value,
     stat: async () => ({ isDirectory: () => true }),
-    removeEmptyDirectory: async () => { events.push("remove-empty-directory"); },
+    removeEmptyDirectory: async () => {
+      events.push("remove-empty-directory");
+    },
     createId: () => "workspace-new",
     now: () => 123,
     logError: () => undefined,
@@ -125,42 +151,59 @@ test("shared workspace permission updates preserve cancellation and schedule res
   assert.equal(application.saved[application.saved.length - 1]?.name, "Again");
 });
 
-test("revoking access stops a server still being adopted when its generation is cancelled", {
-  skip: process.platform === "win32",
-}, async (t) => {
-  const application = fixture();
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-revoke-"));
-  let finishHandoff!: () => void;
-  const generationSettling = new Promise<void>((resolve) => { finishHandoff = resolve; });
-  const jobs = new BackgroundJobs({
-    logDir: dir, adoptSettleMs: 0, listeningPorts: null,
-    processGroupMembers: async (group) => {
-      await generationSettling;
-      return defaultProcessGroupMembers(group);
-    },
-  });
-  const id = newBackgroundJobId();
-  const server = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
-    detached: true, stdio: "ignore", env: { ...process.env, AIDEN_BACKGROUND_JOB: id },
-  });
-  t.after(async () => {
-    server.kill("SIGKILL");
-    await jobs.shutdown();
-    await fs.rm(dir, { recursive: true, force: true });
-  });
-  const adoption = jobs.adopt({
-    id, chatId: "chat", workspaceId: "workspace-1", cwd: dir, command: "server &", processGroup: server.pid!,
-  });
-  application.deps.llmClient.cancelWorkspaceAndSettle = async () => {
-    finishHandoff();
-    assert.ok(await adoption);
-  };
-  application.deps.followThrough = { closeForWorkspace: (workspaceId) => jobs.stopWorkspace(workspaceId, "access-changed") };
-  const saved = await application.service.update("workspace-1", { permission: "none" });
-  assert.equal(saved.permission, "none");
-  assert.equal(jobs.get("chat", id)?.endReason, "access-changed");
-  assert.throws(() => process.kill(server.pid!, 0), { code: "ESRCH" });
-});
+test(
+  "revoking access stops a server still being adopted when its generation is cancelled",
+  {
+    skip: process.platform === "win32",
+  },
+  async (t) => {
+    const application = fixture();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-revoke-"));
+    let finishHandoff!: () => void;
+    const generationSettling = new Promise<void>((resolve) => {
+      finishHandoff = resolve;
+    });
+    const jobs = new BackgroundJobs({
+      logDir: dir,
+      adoptSettleMs: 0,
+      listeningPorts: null,
+      processGroupMembers: async (group) => {
+        await generationSettling;
+        return defaultProcessGroupMembers(group);
+      },
+    });
+    const id = newBackgroundJobId();
+    const server = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, AIDEN_BACKGROUND_JOB: id },
+    });
+    t.after(async () => {
+      server.kill("SIGKILL");
+      await jobs.shutdown();
+      await fs.rm(dir, { recursive: true, force: true });
+    });
+    const adoption = jobs.adopt({
+      id,
+      chatId: "chat",
+      workspaceId: "workspace-1",
+      cwd: dir,
+      command: "server &",
+      processGroup: server.pid!,
+    });
+    application.deps.llmClient.cancelWorkspaceAndSettle = async () => {
+      finishHandoff();
+      assert.ok(await adoption);
+    };
+    application.deps.followThrough = {
+      closeForWorkspace: (workspaceId) => jobs.stopWorkspace(workspaceId, "access-changed"),
+    };
+    const saved = await application.service.update("workspace-1", { permission: "none" });
+    assert.equal(saved.permission, "none");
+    assert.equal(jobs.get("chat", id)?.endReason, "access-changed");
+    assert.throws(() => process.kill(server.pid!, 0), { code: "ESRCH" });
+  },
+);
 
 test("switching skills and connectors off for a workspace applies from the next message", async () => {
   const application = fixture();
@@ -190,17 +233,22 @@ test("shared workspace mutations assert the current revision inside their mutati
     application.service.update(
       "workspace-1",
       { name: "Must not save" },
-      { assertCurrent: () => { throw new Error("revision changed"); } },
+      {
+        assertCurrent: () => {
+          throw new Error("revision changed");
+        },
+      },
     ),
     /revision changed/u,
   );
   assert.deepEqual(application.events, []);
 
   await assert.rejects(
-    application.service.remove(
-      "workspace-1",
-      { assertCurrent: () => { throw new Error("revision changed"); } },
-    ),
+    application.service.remove("workspace-1", {
+      assertCurrent: () => {
+        throw new Error("revision changed");
+      },
+    }),
     /revision changed/u,
   );
   assert.deepEqual(application.events, []);
@@ -251,65 +299,106 @@ test("shared folder creation serializes duplicate registration and accepts a rev
   assert.equal(first.status, "fulfilled");
   assert.equal(first.status === "fulfilled" ? first.value.name : "", "Remote Project");
   assert.equal(second.status, "rejected");
-  assert.match(
-    second.status === "rejected" ? String(second.reason) : "",
-    /already registered/u,
-  );
+  assert.match(second.status === "rejected" ? String(second.reason) : "", /already registered/u);
   assert.equal(application.saved.length, 1);
 });
 
 test("shared folder creation revalidates selected identity before persistence", async () => {
   const application = fixture({ existing: null });
   await assert.rejects(
-    application.service.createFromFolder(
-      "/approved/project",
-      "Project",
-      {
-        assertCurrent: ({ canonicalPath }) => {
-          assert.equal(canonicalPath, "/approved/project");
-          throw new Error("selected folder changed");
-        },
+    application.service.createFromFolder("/approved/project", "Project", {
+      assertCurrent: ({ canonicalPath }) => {
+        assert.equal(canonicalPath, "/approved/project");
+        throw new Error("selected folder changed");
       },
-    ),
+    }),
     /selected folder changed/u,
   );
   assert.equal(application.saved.length, 0);
 });
 
-
 test("workspace authority revoked during cancellation is checked inside persistence and never saves", async () => {
-  const application = fixture(); let current = true;
-  application.deps.llmClient.cancelWorkspaceAndSettle = async () => { application.events.push("cancel-generations"); current = false; };
-  await assert.rejects(application.service.update("workspace-1", { memoryEnabled: false }, {
-    assertCurrent: () => { if (!current) throw new Error("revoked"); },
-    beforeSave: () => { if (!current) throw new Error("revoked"); },
-  }), /revoked/);
+  const application = fixture();
+  let current = true;
+  application.deps.llmClient.cancelWorkspaceAndSettle = async () => {
+    application.events.push("cancel-generations");
+    current = false;
+  };
+  await assert.rejects(
+    application.service.update(
+      "workspace-1",
+      { memoryEnabled: false },
+      {
+        assertCurrent: () => {
+          if (!current) throw new Error("revoked");
+        },
+        beforeSave: () => {
+          if (!current) throw new Error("revoked");
+        },
+      },
+    ),
+    /revoked/,
+  );
   assert.equal(application.saved.length, 0);
   assert.equal(application.events.includes("save"), false);
 });
 
-
 test("agent workspace Memory redirects before intent while the caller is awaiting its tool", async () => {
   const application = fixture();
   let finishCaller!: () => void;
-  const completion = new Promise<void>((resolve) => { finishCaller = resolve; });
-  const active = new Map([["caller", { workspaceId: "workspace-1", completion }]]);
-  application.deps.llmClient.cancelWorkspaceAndSettle = async () => cancelWorkspaceGenerationsAndSettle({
-    workspaceId: "workspace-1", initializations: () => new Map(), active: () => active,
-    cancel: () => {}, abortChildren: () => {}, hasChildren: () => false,
-    timeoutMs: 10, timeoutMessage: "caller cannot settle while awaiting its tool",
+  const completion = new Promise<void>((resolve) => {
+    finishCaller = resolve;
   });
+  const active = new Map([["caller", { workspaceId: "workspace-1", completion }]]);
+  application.deps.llmClient.cancelWorkspaceAndSettle = async () =>
+    cancelWorkspaceGenerationsAndSettle({
+      workspaceId: "workspace-1",
+      initializations: () => new Map(),
+      active: () => active,
+      cancel: () => {},
+      abortChildren: () => {},
+      hasChildren: () => false,
+      timeoutMs: 10,
+      timeoutMessage: "caller cannot settle while awaiting its tool",
+    });
   let ledger: StoredAppOperation[] = [];
   const state = { settings: {}, workspace: workspace() };
   const service = new AppControlsService({
-    read: async () => state, loadOperations: async () => ledger,
-    saveOperations: async (value) => { ledger = value; }, onChanged() {},
-    commit: async (operation) => { await application.service.update("workspace-1", { memoryEnabled: operation.value }); },
+    read: async () => state,
+    loadOperations: async () => ledger,
+    saveOperations: async (value) => {
+      ledger = value;
+    },
+    onChanged() {},
+    commit: async (operation) => {
+      await application.service.update("workspace-1", { memoryEnabled: operation.value });
+    },
   });
   const panels: unknown[] = [];
-  const tool = createAidenAppTools({ service, context: { actor: "agent", workspaceId: "workspace-1", target: "This desktop", humanGesture: false, isCurrent: () => true }, present: (panel) => { panels.push(panel); } }).find((tool) => tool.name === "aiden_set_preference")!;
-  const result = await tool.execute("call", { control: "memory.workspace", value: false,
-    expectedRevision: appControlRevision(state, "memory.workspace"), operationId: "active_caller" }, undefined, undefined);
+  const tool = createAidenAppTools({
+    service,
+    context: {
+      actor: "agent",
+      workspaceId: "workspace-1",
+      target: "This desktop",
+      humanGesture: false,
+      isCurrent: () => true,
+    },
+    present: (panel) => {
+      panels.push(panel);
+    },
+  }).find((tool) => tool.name === "aiden_set_preference")!;
+  const result = await tool.execute(
+    "call",
+    {
+      control: "memory.workspace",
+      value: false,
+      expectedRevision: appControlRevision(state, "memory.workspace"),
+      operationId: "active_caller",
+    },
+    undefined,
+    undefined,
+  );
   finishCaller();
   assert.match(JSON.stringify(result.content), /foreground_required/u);
   assert.equal(panels.length, 1);
@@ -323,16 +412,21 @@ test("removing a workspace drops its artifacts, and a failure there does not und
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const store = new WorkspaceArtifactStore({ root: () => dir });
   const compiled = compileAum('<Visual title="PRs"><Text>Open</Text></Visual>');
-  await store.create(
-    "workspace-1",
-    {
+  await store.create("workspace-1", {
+    title: "PRs",
+    visual: {
+      version: 1,
+      kind: "ui",
+      id: "x",
       title: "PRs",
-      visual: { version: 1, kind: "ui", id: "x", title: "PRs", catalogVersion: AIDEN_UI_CATALOG_VERSION, tree: compiled.tree!, fallbackText: "" },
-      sources: [],
-      actions: [],
-      refresh: { onOpen: true },
+      catalogVersion: AIDEN_UI_CATALOG_VERSION,
+      tree: compiled.tree!,
+      fallbackText: "",
     },
-  );
+    sources: [],
+    actions: [],
+    refresh: { onOpen: true },
+  });
   const application = fixture();
   (application.deps as { workspaceArtifacts?: unknown }).workspaceArtifacts = store;
   await application.service.remove("workspace-1");
@@ -351,17 +445,33 @@ test("removing a workspace drops its artifacts, and a failure there does not und
 
 test("removing a workspace forgets its own approval rules, and a failure there does not undo the removal", async () => {
   const book = new ApprovalRuleBook(memoryApprovalRuleStore());
-  await book.add({ target: { kind: "tool", tool: "web_fetch" }, decision: "block", owner: { kind: "workspace", workspaceId: "workspace-1" } });
-  await book.add({ target: { kind: "tool", tool: "web_fetch" }, decision: "block", owner: { kind: "workspace", workspaceId: "workspace-2" } });
+  await book.add({
+    target: { kind: "tool", tool: "web_fetch" },
+    decision: "block",
+    owner: { kind: "workspace", workspaceId: "workspace-1" },
+  });
+  await book.add({
+    target: { kind: "tool", tool: "web_fetch" },
+    decision: "block",
+    owner: { kind: "workspace", workspaceId: "workspace-2" },
+  });
   const application = fixture();
   (application.deps as { approvalRules?: unknown }).approvalRules = {
-    forgetWorkspace: async (workspaceId: string) => void (await book.forgetOwner({ kind: "workspace", workspaceId })),
+    forgetWorkspace: async (workspaceId: string) =>
+      void (await book.forgetOwner({ kind: "workspace", workspaceId })),
   };
   await application.service.remove("workspace-1");
-  assert.deepEqual((await book.list()).map((rule) => rule.owner), [{ kind: "workspace", workspaceId: "workspace-2" }]);
+  assert.deepEqual(
+    (await book.list()).map((rule) => rule.owner),
+    [{ kind: "workspace", workspaceId: "workspace-2" }],
+  );
 
   const failing = fixture();
-  (failing.deps as { approvalRules?: unknown }).approvalRules = { forgetWorkspace: async () => { throw new Error("unreadable"); } };
+  (failing.deps as { approvalRules?: unknown }).approvalRules = {
+    forgetWorkspace: async () => {
+      throw new Error("unreadable");
+    },
+  };
   await failing.service.remove("workspace-1");
   assert.ok(failing.events.includes("remove-record"));
 });
@@ -377,7 +487,10 @@ test("removing a workspace ends the design grants on its folder and no others", 
   assert.notEqual(designGrants.resolve(elsewhere), null);
 });
 
-async function noWorkspaceFixture(t: { after(fn: () => Promise<void>): void }, initial: Workspace[]) {
+async function noWorkspaceFixture(
+  t: { after(fn: () => Promise<void>): void },
+  initial: Workspace[],
+) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-no-workspace-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const registry = new Map(initial.map((entry) => [entry.id, entry]));
@@ -390,19 +503,29 @@ async function noWorkspaceFixture(t: { after(fn: () => Promise<void>): void }, i
     configStore: {
       listWorkspaces: async () => [...registry.values()],
       getWorkspace: async (id: string) => registry.get(id),
-      saveWorkspace: async (value: Workspace, guard?: (current: Workspace | undefined) => void | Promise<void>) => {
+      saveWorkspace: async (
+        value: Workspace,
+        guard?: (current: Workspace | undefined) => void | Promise<void>,
+      ) => {
         await guard?.(registry.get(value.id));
         registry.set(value.id, value);
         return value;
       },
-      removeWorkspace: async (id: string) => { registry.delete(id); },
+      removeWorkspace: async (id: string) => {
+        registry.delete(id);
+      },
     },
     llmClient: { cancelWorkspaceAndSettle: async () => undefined },
-    scheduleService: { cancelWorkspace: async () => undefined, resumeWorkspace: async () => undefined },
+    scheduleService: {
+      cancelWorkspace: async () => undefined,
+      resumeWorkspace: async () => undefined,
+    },
     terminalService: { closeForWorkspace: () => undefined },
     workspaceMutationGate: new WorkspaceMutationGate(),
     workspaceOperationRegistry: new WorkspaceOperationRegistry(),
-    createScratchWorkspaceDirectory: async () => { throw new Error("not used"); },
+    createScratchWorkspaceDirectory: async () => {
+      throw new Error("not used");
+    },
     realpath: async (value: string) => value,
     stat: (value: string) => fs.stat(value),
     removeEmptyDirectory: (value: string) => fs.rmdir(value),
@@ -419,10 +542,21 @@ async function noWorkspaceFixture(t: { after(fn: () => Promise<void>): void }, i
     now: () => 500,
     logError: () => undefined,
   } as unknown as WorkspaceApplicationDependencies;
-  return { service: createWorkspaceApplicationService(deps), registry, chatOwners, chatsIn, trashed, root };
+  return {
+    service: createWorkspaceApplicationService(deps),
+    registry,
+    chatOwners,
+    chatsIn,
+    trashed,
+    root,
+  };
 }
 
-const exists = (target: string) => fs.stat(target).then(() => true, () => false);
+const exists = (target: string) =>
+  fs.stat(target).then(
+    () => true,
+    () => false,
+  );
 
 test("each No workspace chat gets its own hidden folder in Aiden's app data", async (t) => {
   const app = await noWorkspaceFixture(t, []);
@@ -458,7 +592,12 @@ test("startup gives the folderless default workspace a hidden folder and keeps i
 
 test("startup releases hidden folders whose draft was never sent, but never the default home", async (t) => {
   const app = await noWorkspaceFixture(t, [
-    workspace({ id: "default", name: "No workspace", folderPath: "/data/chat-folders/home", noWorkspace: true }),
+    workspace({
+      id: "default",
+      name: "No workspace",
+      folderPath: "/data/chat-folders/home",
+      noWorkspace: true,
+    }),
   ]);
   const abandoned = await app.service.createNoWorkspace();
   const used = await app.service.createNoWorkspace();
@@ -472,7 +611,9 @@ test("startup releases hidden folders whose draft was never sent, but never the 
 });
 
 test("deleting the last chat of a No workspace folder moves the folder's files to the Trash", async (t) => {
-  const app = await noWorkspaceFixture(t, [workspace({ id: "project", folderPath: "/code/project" })]);
+  const app = await noWorkspaceFixture(t, [
+    workspace({ id: "project", folderPath: "/code/project" }),
+  ]);
   const hidden = await app.service.createNoWorkspace();
   app.chatOwners.add(hidden.id);
   await fs.writeFile(path.join(hidden.folderPath!, "notes.md"), "kept until deleted");
@@ -491,7 +632,12 @@ test("deleting the last chat of a No workspace folder moves the folder's files t
 
 test("a paired device's chat in a No workspace folder that holds another chat gets a folder of its own", async (t) => {
   const app = await noWorkspaceFixture(t, [
-    workspace({ id: "default", name: "No workspace", folderPath: "/data/chat-folders/home", noWorkspace: true }),
+    workspace({
+      id: "default",
+      name: "No workspace",
+      folderPath: "/data/chat-folders/home",
+      noWorkspace: true,
+    }),
     workspace({ id: "project", folderPath: "/code/project" }),
   ]);
   const first = await app.service.reserveNoWorkspaceChat("default");
@@ -505,27 +651,49 @@ test("a paired device's chat in a No workspace folder that holds another chat ge
   assert.equal(app.registry.get(fresh)?.noWorkspace, true);
 
   app.chatsIn.set("project", ["a", "b"]);
-  assert.equal((await app.service.reserveNoWorkspaceChat("project")).workspaceId, "project", "a real workspace is shared");
+  assert.equal(
+    (await app.service.reserveNoWorkspaceChat("project")).workspaceId,
+    "project",
+    "a real workspace is shared",
+  );
 
   // A phone still aims at a hidden home that was released with its last chat.
   const replacement = (await app.service.reserveNoWorkspaceChat("released-home")).workspaceId;
   assert.notEqual(replacement, "released-home");
-  assert.equal(app.registry.get(replacement)?.noWorkspace, true, "a gone home gets a fresh hidden folder");
+  assert.equal(
+    app.registry.get(replacement)?.noWorkspace,
+    true,
+    "a gone home gets a fresh hidden folder",
+  );
   assert.equal(app.registry.has("released-home"), false);
 });
 
 test("private workspace assignment excludes concurrent drafts and forks until commit settles", async (t) => {
-  const app = await noWorkspaceFixture(t, [workspace({ id: "home", folderPath: "/data/chat-folders/home", noWorkspace: true, permission: "none" })]);
+  const app = await noWorkspaceFixture(t, [
+    workspace({
+      id: "home",
+      folderPath: "/data/chat-folders/home",
+      noWorkspace: true,
+      permission: "none",
+    }),
+  ]);
   const [first, second] = await Promise.all([
-    app.service.reserveNoWorkspaceChat("home"), app.service.reserveNoWorkspaceChat("home"),
+    app.service.reserveNoWorkspaceChat("home"),
+    app.service.reserveNoWorkspaceChat("home"),
   ]);
   assert.equal(first.workspaceId, "home");
   assert.notEqual(second.workspaceId, first.workspaceId);
-  assert.equal(app.registry.get(first.workspaceId)?.permission, "none", "chosen draft access stays on its unused home");
+  assert.equal(
+    app.registry.get(first.workspaceId)?.permission,
+    "none",
+    "chosen draft access stays on its unused home",
+  );
   // A newly published private target is not free while its owning copy prepares.
   const third = await app.service.reserveNoWorkspaceChat(second.workspaceId);
   assert.notEqual(third.workspaceId, second.workspaceId);
-  first.release(); second.release(); third.release();
+  first.release();
+  second.release();
+  third.release();
   const retried = await app.service.reserveNoWorkspaceChat("home");
   assert.equal(retried.workspaceId, "home", "a failed uncommitted claim becomes reusable");
   retried.release();
@@ -549,7 +717,10 @@ test("each way of adding a workspace counts once, and a failed save counts nothi
   const failing = fixture({ existing: null, saveError: new Error("persistence failed") });
   await assert.rejects(failing.service.createScratch(), /persistence failed/u);
   await assert.rejects(failing.service.create({ name: "Named" }), /persistence failed/u);
-  await assert.rejects(failing.service.createFromFolder("/approved/project"), /persistence failed/u);
+  await assert.rejects(
+    failing.service.createFromFolder("/approved/project"),
+    /persistence failed/u,
+  );
   assert.deepEqual(sent, []);
 });
 
@@ -571,8 +742,14 @@ test("a workspace's own approval mode and Mac grants change without stopping its
     { event: "approval_mode_changed", props: { mode: "global", scope: "workspace" } },
   ]);
 
-  await assert.rejects(application.service.update("workspace-1", { approvalMode: "full" }), /approval mode/u);
-  await assert.rejects(application.service.update("workspace-1", { revokeMacGrant: "everything" }), /Mac permission/u);
+  await assert.rejects(
+    application.service.update("workspace-1", { approvalMode: "full" }),
+    /approval mode/u,
+  );
+  await assert.rejects(
+    application.service.update("workspace-1", { revokeMacGrant: "everything" }),
+    /Mac permission/u,
+  );
 });
 
 test("changing a Full workspace keeps its shell and file grants and stores Ask for an older release", async () => {
@@ -596,13 +773,25 @@ test("changing a Full workspace keeps its shell and file grants and stores Ask f
 test("Allow in this workspace saves the grant through the application, without stopping the chat that asked", async () => {
   let changed = 0;
   const application = fixture();
-  (application.deps as { onChanged?: () => void }).onChanged = () => { changed += 1; };
+  (application.deps as { onChanged?: () => void }).onChanged = () => {
+    changed += 1;
+  };
   const service = createWorkspaceApplicationService(application.deps);
   const saved = await service.grantMac("workspace-1", "shell");
   assert.deepEqual(saved?.macGrants, { shell: true });
   assert.equal(changed, 1, "the sidebar and Workspace settings refresh");
-  assert.deepEqual(application.events, ["save"], "nothing is cancelled: the card's own call is about to run");
-  assert.equal(await service.grantMac("missing", "shell").then(() => "ok", () => "threw"), "ok");
+  assert.deepEqual(
+    application.events,
+    ["save"],
+    "nothing is cancelled: the card's own call is about to run",
+  );
+  assert.equal(
+    await service.grantMac("missing", "shell").then(
+      () => "ok",
+      () => "threw",
+    ),
+    "ok",
+  );
 });
 
 test("a grant and a settings change that cross never lose the grant", async () => {
@@ -611,7 +800,10 @@ test("a grant and a settings change that cross never lose the grant", async () =
   const application = fixture();
   const store = application.deps.configStore as unknown as {
     getWorkspace: (id: string) => Promise<Workspace | undefined>;
-    saveWorkspace: (value: Workspace, guard?: (current: Workspace | undefined) => void | Promise<void>) => Promise<Workspace>;
+    saveWorkspace: (
+      value: Workspace,
+      guard?: (current: Workspace | undefined) => void | Promise<void>,
+    ) => Promise<Workspace>;
   };
   store.getWorkspace = async () => {
     const read = current;
@@ -628,7 +820,9 @@ test("a grant and a settings change that cross never lose the grant", async () =
   };
   const service = createWorkspaceApplicationService(application.deps);
 
-  racing = () => { current = { ...current, name: "Renamed elsewhere", updatedAt: current.updatedAt + 1 }; };
+  racing = () => {
+    current = { ...current, name: "Renamed elsewhere", updatedAt: current.updatedAt + 1 };
+  };
   await service.grantMac("workspace-1", "files");
   assert.equal(current.name, "Renamed elsewhere");
   assert.deepEqual(current.macGrants, { files: true });
@@ -640,7 +834,11 @@ test("a grant and a settings change that cross never lose the grant", async () =
     const read = current;
     if (!updateRead) {
       updateRead = true;
-      current = { ...current, macGrants: { files: true, shell: true }, updatedAt: current.updatedAt + 1 };
+      current = {
+        ...current,
+        macGrants: { files: true, shell: true },
+        updatedAt: current.updatedAt + 1,
+      };
     }
     return read;
   };

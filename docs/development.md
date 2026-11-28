@@ -55,13 +55,17 @@ Native builds discover the newest compatible full Xcode without changing the mac
 npm test                  # full CI suite (includes lanes needing Ruby, Cargo, Playwright Chromium)
 npm run test:native       # macOS + Xcode 26+ only (Apple Foundation Models Swift tests)
 npm run type-check
+npm run format:check      # check formatting with oxfmt (run `npm run format` to write fixes)
 npm run lint
 npm run build
 ```
 
+Configure `git config blame.ignoreRevsFile .git-blame-ignore-revs` once per clone so local `git blame` ignores bulk formatting commits. When updating an open PR branch across `main`, merge `origin/main` rather than rebasing, then run `npm run format`.
+
 For faster local iteration, run a scoped lane (`npm run test:ci:core-git`, `npm run test:ci:runtime-subagents`, or `npm run test:ci:renderer-other`).
 
 For Playwright Electron E2E runs:
+
 - On macOS, run window-opening E2E suites off-screen in a Cua Space with `npm run test:e2e:space -- [playwright args]`.
 - On Linux, run under `xvfb-run --auto-servernum npm run test:e2e` (with the CI prerequisites).
 

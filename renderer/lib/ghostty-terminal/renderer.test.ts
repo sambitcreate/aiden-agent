@@ -38,7 +38,14 @@ function recordingContext() {
 }
 
 async function drawn(output: string) {
-  const core = await GhosttyTerminalCore.create(20, 2, metrics.width, metrics.height, testTheme, () => undefined);
+  const core = await GhosttyTerminalCore.create(
+    20,
+    2,
+    metrics.width,
+    metrics.height,
+    testTheme,
+    () => undefined,
+  );
   try {
     core.write(output);
     const recording = recordingContext();

@@ -82,11 +82,28 @@ export function PageTextBar({
     </Button>
   );
   return (
-    <NodeToolbar isVisible position={Position.Top} align="start" offset={10} className="nodrag nopan nowheel">
-      <div role="toolbar" aria-label="Page text formatting" className="flex items-center gap-0.5 rounded-button bg-popover p-1 shadow-control">
+    <NodeToolbar
+      isVisible
+      position={Position.Top}
+      align="start"
+      offset={10}
+      className="nodrag nopan nowheel"
+    >
+      <div
+        role="toolbar"
+        aria-label="Page text formatting"
+        className="flex items-center gap-0.5 rounded-button bg-popover p-1 shadow-control"
+      >
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="transparent" size="small" aria-label={`Text style: ${shown}`} title="Text style" className="gap-0.5 px-1.5" onMouseDown={keepFocus}>
+            <Button
+              variant="transparent"
+              size="small"
+              aria-label={`Text style: ${shown}`}
+              title="Text style"
+              className="gap-0.5 px-1.5"
+              onMouseDown={keepFocus}
+            >
               {shown}
               <ChevronDown aria-hidden className="size-3 text-secondary" />
             </Button>
@@ -122,11 +139,22 @@ export function PageTextBar({
           }}
         >
           <PopoverTrigger asChild>
-            <Button variant="transparent" iconOnly aria-label="Link" title="Link" onMouseDown={keepFocus}>
+            <Button
+              variant="transparent"
+              iconOnly
+              aria-label="Link"
+              title="Link"
+              onMouseDown={keepFocus}
+            >
               <Link />
             </Button>
           </PopoverTrigger>
-          <PopoverContent align="start" className="w-72 p-2" aria-label="Link" onCloseAutoFocus={(event) => event.preventDefault()}>
+          <PopoverContent
+            align="start"
+            className="w-72 p-2"
+            aria-label="Link"
+            onCloseAutoFocus={(event) => event.preventDefault()}
+          >
             <form
               className="flex flex-col gap-2"
               onSubmit={(event) => {
@@ -174,15 +202,37 @@ export function PageTextBar({
         {mark("Bulleted list", "", "insertUnorderedList", List)}
         <div aria-hidden className="mx-1 h-5 w-px shrink-0 bg-separator" />
         {ALIGNS.map(({ value, label, Icon }) => (
-          <Button key={value} variant="transparent" iconOnly aria-label={label} title={label} onMouseDown={keepFocus} onClick={() => onCommand("align", value)}>
+          <Button
+            key={value}
+            variant="transparent"
+            iconOnly
+            aria-label={label}
+            title={label}
+            onMouseDown={keepFocus}
+            onClick={() => onCommand("align", value)}
+          >
             <Icon />
           </Button>
         ))}
         <div aria-hidden className="mx-1 h-5 w-px shrink-0 bg-separator" />
-        <Button variant="transparent" iconOnly aria-label="Comment on this text" title="Comment" onMouseDown={keepFocus} onClick={onComment}>
+        <Button
+          variant="transparent"
+          iconOnly
+          aria-label="Comment on this text"
+          title="Comment"
+          onMouseDown={keepFocus}
+          onClick={onComment}
+        >
           <MessageCircle />
         </Button>
-        <Button variant="transparent" size="small" className="gap-1 px-1.5" title="Done (Return)" onMouseDown={keepFocus} onClick={onDone}>
+        <Button
+          variant="transparent"
+          size="small"
+          className="gap-1 px-1.5"
+          title="Done (Return)"
+          onMouseDown={keepFocus}
+          onClick={onDone}
+        >
           <Check aria-hidden />
           Done
         </Button>

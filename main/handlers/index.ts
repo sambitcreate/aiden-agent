@@ -74,7 +74,11 @@ import { registerBotHandlers } from "./bots.js";
 import { registerBotBubbleHandlers } from "./bot-bubbles.js";
 import { parseBotId } from "./bot-params.js";
 import { botBubbleService } from "../services/bot-bubbles/bot-bubbles-main.js";
-import { botBubbleOverlayAccess, botBubbleWindowPort, isBotBubbleOverlayEvent } from "../windows/bot-bubbles-window.js";
+import {
+  botBubbleOverlayAccess,
+  botBubbleWindowPort,
+  isBotBubbleOverlayEvent,
+} from "../windows/bot-bubbles-window.js";
 import { guardBotBubbleOverlayHandlers } from "../windows/bot-bubbles-overlay-access.js";
 import { registerBotRoutineHandlers } from "./bot-routines.js";
 import { registerBotComputerHandlers } from "./bot-computers.js";
@@ -85,7 +89,13 @@ import { hostPlatformCapabilities } from "../services/host-platform-capabilities
 import { registerBtwHandlers } from "./btw.js";
 import { registerFollowThroughHandlers } from "./follow-through.js";
 import { registerGoalHandlers } from "./goals.js";
-import { declineGoalWindowRound, goalLoop, goalProposals, reportGoalWindowView, startGoalWindowRound } from "../services/goal/goal-main.js";
+import {
+  declineGoalWindowRound,
+  goalLoop,
+  goalProposals,
+  reportGoalWindowView,
+  startGoalWindowRound,
+} from "../services/goal/goal-main.js";
 import { chatGenerationOwner } from "../services/chat-generation-owner.js";
 import { registerChildChatsHandlers } from "./child-chats.js";
 import { registerTtsHandlers } from "./tts.js";
@@ -134,27 +144,40 @@ export function registerHandlers(
     chatVisual: async (chatId, messageId, visualId) => {
       const chat = await chatStore.get(chatId);
       if (!chat) return null;
-      const message = chat.messages.find((entry) => entry.id === messageId && entry.role === "assistant");
+      const message = chat.messages.find(
+        (entry) => entry.id === messageId && entry.role === "assistant",
+      );
       return { chat, visual: message?.uiVisuals?.find((visual) => visual.id === visualId) };
     },
     files: workspaceArtifactFiles,
     owner: (event) => {
-      const owner = rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Artifacts need the active window."));
+      const owner = rendererDocumentOwner(
+        event as IpcMainInvokeEvent,
+        () => new Error("Artifacts need the active window."),
+      );
       return `${owner.id}:${owner.documentId}`;
     },
     runner: workspaceArtifactRunner,
     runInWorkspace: (event, workspaceId, operation) =>
       workspaceEnvironmentApplicationService.run(
-        rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Artifacts need the active window.")),
+        rendererDocumentOwner(
+          event as IpcMainInvokeEvent,
+          () => new Error("Artifacts need the active window."),
+        ),
         workspaceId,
-        ({ folderPath, workspace }, signal) => operation({ folderPath, permission: workspace.permission }, signal),
+        ({ folderPath, workspace }, signal) =>
+          operation({ folderPath, permission: workspace.permission }, signal),
       ),
   });
   registerAttachmentHandlers();
   registerChatImageActionHandlers();
   registerTranscriptImageHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
-    owner: (event) => rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Image loading requires the active application window.")),
+    owner: (event) =>
+      rendererDocumentOwner(
+        event as IpcMainInvokeEvent,
+        () => new Error("Image loading requires the active application window."),
+      ),
     fetch: fetchTranscriptImage,
   });
   registerPhase2Handlers();
@@ -179,7 +202,9 @@ export function registerHandlers(
     service: getHookService,
     workspaces: async () =>
       (await workspaceApplicationService.list()).flatMap((workspace) =>
-        workspace.folderPath && !workspace.noWorkspace ? [{ workspaceRoot: workspace.folderPath, name: workspace.name }] : [],
+        workspace.folderPath && !workspace.noWorkspace
+          ? [{ workspaceRoot: workspace.folderPath, name: workspace.name }]
+          : [],
       ),
     broadcast: (change) => ipcMain.broadcast(HOOKS_CHANGED_CHANNEL, change),
     requireSender: (event) => {
@@ -192,14 +217,21 @@ export function registerHandlers(
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     page: approvalRulesPage(),
     onChange: (listener) => {
-      const stops = [approvalRules.onChange(listener), toolApprovalRules.onChange(listener), toolApprovalRules.onBotChange(() => listener())];
-      return () => { for (const stop of stops) stop(); };
+      const stops = [
+        approvalRules.onChange(listener),
+        toolApprovalRules.onChange(listener),
+        toolApprovalRules.onBotChange(() => listener()),
+      ];
+      return () => {
+        for (const stop of stops) stop();
+      };
     },
     broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
   });
   registerAnalyticsHandlers<IpcMainInvokeEvent>({
     owner: (event) => {
-      const inactive = () => new Error("Usage data changes require the active application document.");
+      const inactive = () =>
+        new Error("Usage data changes require the active application document.");
       if (!isMainWindow(event)) throw inactive();
       return rendererDocumentOwner(event, inactive);
     },
@@ -215,7 +247,8 @@ export function registerHandlers(
   // Bot routines are scheduled tasks owned by a Bot; they exist only where Bots do.
   if (hostPlatformCapabilities().bots) registerBotRoutineHandlers();
   // Bot computers are macOS VMs; only Apple silicon offers them, so Linux registers nothing.
-  if (hostPlatformCapabilities().botComputers) registerBotComputerHandlers(botComputerHandlerDependencies());
+  if (hostPlatformCapabilities().botComputers)
+    registerBotComputerHandlers(botComputerHandlerDependencies());
   registerShortcutHandlers();
   registerTelegramHandlers();
   registerSubagentHandlers();
@@ -223,7 +256,8 @@ export function registerHandlers(
   registerAidenRemoteHandlers();
   registerAidenMcpHandlers<IpcMainInvokeEvent>({
     owner: (event) => {
-      const inactive = () => new Error("Apps using Aiden can be changed only from the active Aiden window.");
+      const inactive = () =>
+        new Error("Apps using Aiden can be changed only from the active Aiden window.");
       if (!isMainWindow(event)) throw inactive();
       return rendererDocumentOwner(event, inactive);
     },
@@ -269,11 +303,17 @@ export function registerHandlers(
     loop: goalLoop,
     proposals: goalProposals,
     activeDocument: (event) => {
-      rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Goal changes require the active application document."));
+      rendererDocumentOwner(
+        event as IpcMainInvokeEvent,
+        () => new Error("Goal changes require the active application document."),
+      );
     },
     windowRounds: {
       report: (event, view) => {
-        const owner = rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Only the active application document can show a chat."));
+        const owner = rendererDocumentOwner(
+          event as IpcMainInvokeEvent,
+          () => new Error("Only the active application document can show a chat."),
+        );
         reportGoalWindowView(
           {
             documentId: owner.documentId,
@@ -283,9 +323,13 @@ export function registerHandlers(
           view,
         );
       },
-      start: (event, token, streamId) => startGoalWindowRound(chatGenerationOwner(event as IpcMainInvokeEvent), token, streamId),
+      start: (event, token, streamId) =>
+        startGoalWindowRound(chatGenerationOwner(event as IpcMainInvokeEvent), token, streamId),
       decline: (event, token) => {
-        const owner = rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Only the active application document can decline a round."));
+        const owner = rendererDocumentOwner(
+          event as IpcMainInvokeEvent,
+          () => new Error("Only the active application document can decline a round."),
+        );
         declineGoalWindowRound(owner.documentId, token);
       },
     },

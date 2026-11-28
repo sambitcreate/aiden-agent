@@ -6,31 +6,71 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { scheduledTaskProviderGuardrail } from "../lib/scheduled-task-view.js";
 import type { Provider } from "../lib/types.js";
-import { ScheduledTaskProviderWarning, WatchTriggerFields, parseLinkFilterLines, scheduledTaskMcpServerChoices } from "./scheduled-task-editor.js";
+import {
+  ScheduledTaskProviderWarning,
+  WatchTriggerFields,
+  parseLinkFilterLines,
+  scheduledTaskMcpServerChoices,
+} from "./scheduled-task-editor.js";
 import { ChatApprovalCard } from "./chat-approval-card";
 import type { ScheduledTaskApprovalDetails } from "../shared/assistant";
 
 const approval: ScheduledTaskApprovalDetails = {
-  kind: "scheduled-task", action: "create", taskId: null, expectedUpdatedAt: null,
-  enabled: true, name: "Inbox brief", prompt: "Summarize unread messages without sending replies.",
-  script: null, cron: "0 9 * * *", timezone: "America/New_York", nextRunAt: 1_900_000_000_000,
-  notify: true, mode: "llm", permission: "full", workspaceId: null, workspaceName: null,
-  mcpServerIds: ["mail-1"], mcpServerNames: ["Email"], providerId: "local",
-  providerName: "Local provider", model: "brief-model", modelName: "Brief model",
-  legacyGlobalMcp: false, schedulerEnabled: false,
+  kind: "scheduled-task",
+  action: "create",
+  taskId: null,
+  expectedUpdatedAt: null,
+  enabled: true,
+  name: "Inbox brief",
+  prompt: "Summarize unread messages without sending replies.",
+  script: null,
+  cron: "0 9 * * *",
+  timezone: "America/New_York",
+  nextRunAt: 1_900_000_000_000,
+  notify: true,
+  mode: "llm",
+  permission: "full",
+  workspaceId: null,
+  workspaceName: null,
+  mcpServerIds: ["mail-1"],
+  mcpServerNames: ["Email"],
+  providerId: "local",
+  providerName: "Local provider",
+  model: "brief-model",
+  modelName: "Brief model",
+  legacyGlobalMcp: false,
+  schedulerEnabled: false,
 };
 
 function renderApproval(details: unknown) {
-  return renderToStaticMarkup(createElement(ChatApprovalCard, {
-    pending: { approvalId: "approval-1", toolCallId: "call-1", toolName: "schedule_task", summary: "Create daily brief", details: details as ScheduledTaskApprovalDetails },
-    deciding: false, onDecide: () => undefined,
-    cardRef: createRef<HTMLElement>(), denyRef: createRef<HTMLButtonElement>(),
-  }));
+  return renderToStaticMarkup(
+    createElement(ChatApprovalCard, {
+      pending: {
+        approvalId: "approval-1",
+        toolCallId: "call-1",
+        toolName: "schedule_task",
+        summary: "Create daily brief",
+        details: details as ScheduledTaskApprovalDetails,
+      },
+      deciding: false,
+      onDecide: () => undefined,
+      cardRef: createRef<HTMLElement>(),
+      denyRef: createRef<HTMLButtonElement>(),
+    }),
+  );
 }
 
 test("task approval discloses instructions, runtime, exact connectors and paused scheduling", () => {
   const markup = renderApproval(approval);
-  for (const text of ["Summarize unread messages without sending replies.", "Local provider", "Brief model", "Email", "mail-1", "America/New_York", "will not run automatically"]) {
+  for (const text of [
+    "Summarize unread messages without sending replies.",
+    "Local provider",
+    "Brief model",
+    "Email",
+    "mail-1",
+    "America/New_York",
+    "will not run automatically",
+  ]) {
     assert.ok(markup.includes(text), `Missing approval disclosure: ${text}`);
   }
   assert.ok(markup.includes("Allow once"));
@@ -43,7 +83,10 @@ test("task approval says whether results post in this chat or the task's own cha
   const own = renderApproval({ ...approval, postsIn: "own_chat" });
   assert.ok(own.includes("Posts in") && own.includes("Its own chat"));
   assert.ok(!renderApproval(approval).includes("Posts in"), "older approvals carry no row");
-  assert.ok(!renderApproval({ ...approval, postsIn: "somewhere" }).includes("Allow once"), "an unknown value withholds Allow");
+  assert.ok(
+    !renderApproval({ ...approval, postsIn: "somewhere" }).includes("Allow once"),
+    "an unknown value withholds Allow",
+  );
 });
 
 test("malformed schedule approval withholds Allow instead of presenting incomplete consent", () => {
@@ -70,16 +113,27 @@ test("scheduled task editor offers an explicit App default and pins provider/mod
 test("provider guardrail is a soft inline warning only for LLM tasks that may not run", () => {
   const providers = [
     { id: "openai", label: "OpenAI", models: ["gpt-5.6"], hasKey: true, needsKey: true },
-    { id: "antigravity", label: "Google Antigravity", models: ["gemini-3.8-flash"], hasKey: true, needsKey: true },
+    {
+      id: "antigravity",
+      label: "Google Antigravity",
+      models: ["gemini-3.8-flash"],
+      hasKey: true,
+      needsKey: true,
+    },
   ] as unknown as Provider[];
   const warning = (appDefault: string | undefined, pinned?: string) =>
     renderToStaticMarkup(
-      <ScheduledTaskProviderWarning message={scheduledTaskProviderGuardrail("llm", pinned, appDefault, providers)} />,
+      <ScheduledTaskProviderWarning
+        message={scheduledTaskProviderGuardrail("llm", pinned, appDefault, providers)}
+      />,
     );
 
   // No app default at all.
   const absent = warning(undefined);
-  assert.match(absent, /role="status"[^>]*>.*No provider pinned\. If no app default is available, this task cannot run\./u);
+  assert.match(
+    absent,
+    /role="status"[^>]*>.*No provider pinned\. If no app default is available, this task cannot run\./u,
+  );
   // An agent-backed default exists but cannot run unattended; the warning says so by name.
   assert.match(
     warning("antigravity"),
@@ -159,27 +213,70 @@ test("a selected server switched off for the model is shown as unavailable with 
 });
 
 test("the watch fields flag a bad address and say a script watch needs Full permission", () => {
-  const render = (props: Parameters<typeof WatchTriggerFields>[0]) => renderToStaticMarkup(createElement(WatchTriggerFields, props));
-  const bad = render({ trigger: { kind: "watch", source: { type: "url", url: "http://example.com" }, everyMinutes: 15 }, scripts: [], fullAccess: false, onChange: () => undefined });
+  const render = (props: Parameters<typeof WatchTriggerFields>[0]) =>
+    renderToStaticMarkup(createElement(WatchTriggerFields, props));
+  const bad = render({
+    trigger: {
+      kind: "watch",
+      source: { type: "url", url: "http://example.com" },
+      everyMinutes: 15,
+    },
+    scripts: [],
+    fullAccess: false,
+    onChange: () => undefined,
+  });
   assert.ok(bad.includes('role="alert"') && bad.includes("Use an https address"));
-  const good = render({ trigger: { kind: "watch", source: { type: "url", url: "https://example.com" }, everyMinutes: 15 }, scripts: [], fullAccess: false, onChange: () => undefined });
+  const good = render({
+    trigger: {
+      kind: "watch",
+      source: { type: "url", url: "https://example.com" },
+      everyMinutes: 15,
+    },
+    scripts: [],
+    fullAccess: false,
+    onChange: () => undefined,
+  });
   assert.ok(!good.includes('role="alert"'));
-  const script = render({ trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 45 }, scripts: ["check.sh"], fullAccess: false, onChange: () => undefined });
+  const script = render({
+    trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 45 },
+    scripts: ["check.sh"],
+    fullAccess: false,
+    onChange: () => undefined,
+  });
   assert.ok(script.includes("needs Full permission"));
-  assert.ok(render({ trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 45 }, scripts: ["check.sh"], fullAccess: true, onChange: () => undefined }).includes("AIDEN_CHECK_STATE"));
+  assert.ok(
+    render({
+      trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 45 },
+      scripts: ["check.sh"],
+      fullAccess: true,
+      onChange: () => undefined,
+    }).includes("AIDEN_CHECK_STATE"),
+  );
 });
 
 test("link filters are written one field = value per line; lines without a field are ignored", () => {
-  assert.deepEqual(parseLinkFilterLines("action = opened\n= nope\nnot a filter\npull_request.state=closed = yes"), [
-    { path: "action", equals: "opened" },
-    { path: "pull_request.state", equals: "closed = yes" },
-  ]);
+  assert.deepEqual(
+    parseLinkFilterLines("action = opened\n= nope\nnot a filter\npull_request.state=closed = yes"),
+    [
+      { path: "action", equals: "opened" },
+      { path: "pull_request.state", equals: "closed = yes" },
+    ],
+  );
 });
 
 test("a trigger task's approval names its trigger instead of a schedule and promises no next run", () => {
-  const markup = renderApproval({ ...approval, cron: "", nextRunAt: 0, schedulerEnabled: true, whenLabel: "Every 15 min, when example.com/status changes" });
+  const markup = renderApproval({
+    ...approval,
+    cron: "",
+    nextRunAt: 0,
+    schedulerEnabled: true,
+    whenLabel: "Every 15 min, when example.com/status changes",
+  });
   assert.ok(markup.includes("Every 15 min, when example.com/status changes"));
   assert.ok(!markup.includes("Next run"));
   assert.ok(markup.includes("Allow once"));
-  assert.ok(!renderApproval({ ...approval, cron: "" }).includes("Allow once"), "an empty cron without a trigger withholds Allow");
+  assert.ok(
+    !renderApproval({ ...approval, cron: "" }).includes("Allow once"),
+    "an empty cron without a trigger withholds Allow",
+  );
 });

@@ -239,9 +239,10 @@ test("Bots is a stable sidebar destination and bot rosters do not open the termi
   assert.match(layout, /pathname\.startsWith\("\/bots"\) && !params\.chatId/u);
 });
 
-
 test("an old allowed deep link opens Settings → Approvals instead", async () => {
   installBotTestIpc({ "bots:get": () => botFixture({ id: "bot:a" }) });
-  const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot%3Aa?page=allowed" });
+  const { router } = await mountWithBotRouter(<BotsView />, {
+    initialPath: "/bots/bot%3Aa?page=allowed",
+  });
   await waitFor(() => assert.equal(router.state.location.href, "/settings?section=approvals"));
 });

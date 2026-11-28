@@ -2,7 +2,17 @@ import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { renameSync, symlinkSync, type PathLike } from "node:fs";
-import fsPromises, { link, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import fsPromises, {
+  link,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -16,7 +26,13 @@ async function roots() {
   const downloads = path.join(base, "Downloads");
   const outside = path.join(base, "outside");
   await Promise.all([workspace, downloads, outside].map((dir) => mkdir(dir, { recursive: true })));
-  return { base, workspace, downloads, outside, cleanup: () => rm(base, { recursive: true, force: true }) };
+  return {
+    base,
+    workspace,
+    downloads,
+    outside,
+    cleanup: () => rm(base, { recursive: true, force: true }),
+  };
 }
 
 test("relative paths land in the workspace; absolute paths may name the workspace or Downloads", async () => {
@@ -32,8 +48,14 @@ test("relative paths land in the workspace; absolute paths may name the workspac
       path.join(dirs.downloads, "a.PNG"),
     );
     // A folder gets the default file name.
-    assert.equal(resolveDeviceSavePath("shots/", allowed, "iPhone-1.png"), path.join(dirs.workspace, "shots", "iPhone-1.png"));
-    assert.equal(resolveDeviceSavePath(dirs.downloads, allowed, "iPhone-1.png"), path.join(dirs.downloads, "iPhone-1.png"));
+    assert.equal(
+      resolveDeviceSavePath("shots/", allowed, "iPhone-1.png"),
+      path.join(dirs.workspace, "shots", "iPhone-1.png"),
+    );
+    assert.equal(
+      resolveDeviceSavePath(dirs.downloads, allowed, "iPhone-1.png"),
+      path.join(dirs.downloads, "iPhone-1.png"),
+    );
   } finally {
     await dirs.cleanup();
   }
@@ -54,13 +76,23 @@ test("traversal, other folders, other file types, and control characters are ref
       "",
       42,
     ]) {
-      assert.throws(() => resolveDeviceSavePath(bad, allowed, "d.png"), /save path|PNG|Use an absolute/u, String(bad));
+      assert.throws(
+        () => resolveDeviceSavePath(bad, allowed, "d.png"),
+        /save path|PNG|Use an absolute/u,
+        String(bad),
+      );
     }
     // Without a workspace, only an absolute Downloads path works.
-    assert.throws(() => resolveDeviceSavePath("x.png", { downloads: dirs.downloads }, "d.png"), /absolute path/u);
+    assert.throws(
+      () => resolveDeviceSavePath("x.png", { downloads: dirs.downloads }, "d.png"),
+      /absolute path/u,
+    );
     assert.throws(() => resolveDeviceSavePath("/x.png", {}, "d.png"), /cannot be saved/u);
     // A sibling that merely shares the root's name as a prefix is outside it.
-    assert.throws(() => resolveDeviceSavePath(`${dirs.workspace}.png`, allowed, "d.png"), /outside/u);
+    assert.throws(
+      () => resolveDeviceSavePath(`${dirs.workspace}.png`, allowed, "d.png"),
+      /outside/u,
+    );
   } finally {
     await dirs.cleanup();
   }
@@ -78,7 +110,11 @@ test("writing creates folders inside the root and refuses symlinks that lead out
     await symlink(dirs.outside, path.join(dirs.workspace, "escape"));
     const escaping = resolveDeviceSavePath("escape/new/shot.png", allowed, "d.png");
     await assert.rejects(writeDeviceSaveFile(escaping, allowed, PNG), /leads outside/u);
-    await assert.rejects(readFile(path.join(dirs.outside, "new", "shot.png")), /ENOENT/u, "nothing is created outside");
+    await assert.rejects(
+      readFile(path.join(dirs.outside, "new", "shot.png")),
+      /ENOENT/u,
+      "nothing is created outside",
+    );
 
     // A file link inside the workspace is never followed.
     await writeFile(path.join(dirs.outside, "target.png"), "keep");
@@ -103,13 +139,18 @@ test("a link swapped in for a missing folder while writing creates nothing outsi
     // Another process replaces the missing `a` with a link out of the workspace
     // after the path was checked, just before the folder is created.
     const racing = (async (folder: PathLike, options?: unknown) => {
-      if (String(folder).startsWith(swapped)) await symlink(dirs.outside, swapped).catch(() => undefined);
+      if (String(folder).startsWith(swapped))
+        await symlink(dirs.outside, swapped).catch(() => undefined);
       return original(folder, options as never);
     }) as typeof fsPromises.mkdir;
     fsPromises.mkdir = racing;
     syncBuiltinESMExports();
     await assert.rejects(writeDeviceSaveFile(file, allowed, PNG), /leads outside/u);
-    assert.deepEqual(await readdir(dirs.outside), [], "no stray folder was created outside the workspace");
+    assert.deepEqual(
+      await readdir(dirs.outside),
+      [],
+      "no stray folder was created outside the workspace",
+    );
 
     // A link that stays inside the workspace is refused too: no folder below the root may be a link.
     await rm(swapped);
@@ -157,10 +198,25 @@ test("a checked folder swapped for an outside link just before the write changes
 
     await assert.rejects(writeDeviceSaveFile(file, allowed, PNG));
     assert.equal(swaps, 1, "the swap happened during the write");
-    assert.equal(await readFile(path.join(dirs.outside, "shot.png"), "utf8"), "outside", "the outside file is untouched");
-    assert.deepEqual(await readdir(dirs.outside), ["shot.png"], "nothing new is created outside the root");
-    assert.equal(await readFile(path.join(dirs.workspace, "shots-moved", "shot.png"), "utf8"), "inside");
-    assert.deepEqual(await readdir(path.join(dirs.workspace, "shots-moved")), ["shot.png"], "no temporary file is left behind");
+    assert.equal(
+      await readFile(path.join(dirs.outside, "shot.png"), "utf8"),
+      "outside",
+      "the outside file is untouched",
+    );
+    assert.deepEqual(
+      await readdir(dirs.outside),
+      ["shot.png"],
+      "nothing new is created outside the root",
+    );
+    assert.equal(
+      await readFile(path.join(dirs.workspace, "shots-moved", "shot.png"), "utf8"),
+      "inside",
+    );
+    assert.deepEqual(
+      await readdir(path.join(dirs.workspace, "shots-moved")),
+      ["shot.png"],
+      "no temporary file is left behind",
+    );
   } finally {
     fsPromises.open = originalOpen;
     childProcess.execFile = originalExecFile;
@@ -175,10 +231,18 @@ test("saving over an existing file replaces it without writing through a hard li
     const allowed = { workspace: dirs.workspace, downloads: dirs.downloads };
     await writeFile(path.join(dirs.outside, "target.png"), "keep");
     await link(path.join(dirs.outside, "target.png"), path.join(dirs.workspace, "hard.png"));
-    const written = await writeDeviceSaveFile(resolveDeviceSavePath("hard.png", allowed, "d.png"), allowed, PNG);
+    const written = await writeDeviceSaveFile(
+      resolveDeviceSavePath("hard.png", allowed, "d.png"),
+      allowed,
+      PNG,
+    );
     assert.deepEqual(new Uint8Array(await readFile(written)), PNG);
     assert.equal(await readFile(path.join(dirs.outside, "target.png"), "utf8"), "keep");
-    assert.deepEqual(await readdir(dirs.workspace), ["hard.png"], "no temporary file is left behind");
+    assert.deepEqual(
+      await readdir(dirs.workspace),
+      ["hard.png"],
+      "no temporary file is left behind",
+    );
   } finally {
     await dirs.cleanup();
   }

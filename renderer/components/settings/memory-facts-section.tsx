@@ -19,7 +19,11 @@ import { queryKeys } from "../../lib/queries";
 import type { Workspace } from "../../lib/types";
 import type { WorkspaceMemoryFactView } from "../../../main/services/workspace-memory-facts";
 
-const dateFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
+const dateFormat = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+});
 
 function factDetails(fact: WorkspaceMemoryFactView): string {
   return [
@@ -37,7 +41,10 @@ export function MemoryFactsSection({ workspaces: registry }: { workspaces: Works
   // No workspace chats share one memory, listed once under their home record.
   const workspaces = React.useMemo(() => {
     const home = noWorkspaceHome(registry);
-    return [...(home ? [{ ...home, name: "No workspace chats" }] : []), ...workspaceChoices(registry)];
+    return [
+      ...(home ? [{ ...home, name: "No workspace chats" }] : []),
+      ...workspaceChoices(registry),
+    ];
   }, [registry]);
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = React.useState<string>();
@@ -113,7 +120,9 @@ export function MemoryFactsSection({ workspaces: registry }: { workspaces: Works
               // again on every item but the last.
               <li key={fact.id} className="contents [&:not(:last-child)>*]:after:block">
                 <Field
-                  label={<span className="whitespace-pre-wrap break-words font-normal">{fact.text}</span>}
+                  label={
+                    <span className="whitespace-pre-wrap break-words font-normal">{fact.text}</span>
+                  }
                   description={factDetails(fact)}
                   className="grid-cols-[minmax(0,1fr)_auto] max-[540px]:grid-cols-[minmax(0,1fr)_auto]"
                 >
@@ -145,7 +154,9 @@ export function MemoryFactsSection({ workspaces: registry }: { workspaces: Works
           if (!open && !deleting) setPendingDelete(undefined);
         }}
         title="Delete this memory?"
-        description={pendingDelete ? `“${pendingDelete.text}” will be removed for good.` : undefined}
+        description={
+          pendingDelete ? `“${pendingDelete.text}” will be removed for good.` : undefined
+        }
         confirmLabel={deleting ? "Deleting…" : "Delete"}
         confirmVariant="destructive"
         busy={deleting}

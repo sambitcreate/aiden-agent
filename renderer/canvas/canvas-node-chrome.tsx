@@ -37,7 +37,9 @@ export function CanvasNodeChrome({
       style={tint ? { background: tint } : undefined}
     >
       <div data-canvas-chrome-header className="flex min-h-9 items-center gap-2 px-3">
-        {titleSlot ?? <span className="min-w-0 flex-1 truncate text-strong text-primary">{title}</span>}
+        {titleSlot ?? (
+          <span className="min-w-0 flex-1 truncate text-strong text-primary">{title}</span>
+        )}
         {status ? <span className="shrink-0 text-secondary">{status}</span> : null}
         {toolbar ? <div className="nodrag flex shrink-0 items-center gap-1">{toolbar}</div> : null}
       </div>

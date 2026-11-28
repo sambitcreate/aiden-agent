@@ -32,10 +32,7 @@ export class AppearancePreviewState {
   }
 
   persisted(config: AppearanceConfig): AppearanceConfig {
-    if (
-      this.pending
-      && fingerprint(this.pending) === fingerprint(config)
-    ) {
+    if (this.pending && fingerprint(this.pending) === fingerprint(config)) {
       this.pending = null;
     }
     return this.pending ?? config;

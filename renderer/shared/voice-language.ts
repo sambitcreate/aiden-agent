@@ -26,7 +26,8 @@ export function effectiveLanguage(
   if (normalized === "auto") return { language: autoChoice(model), fallback: null };
   const base = normalized.split("-")[0]!;
   for (const candidate of [normalized, base, ALIASES[base]]) {
-    if (candidate && model.languages.includes(candidate)) return { language: candidate, fallback: null };
+    if (candidate && model.languages.includes(candidate))
+      return { language: candidate, fallback: null };
   }
   const chosen = autoChoice(model);
   return { language: chosen, fallback: chosen ?? "auto" };

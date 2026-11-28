@@ -40,7 +40,10 @@ export function parseBrowserRecordingRecap(value: unknown): BrowserRecordingReca
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const input = value as Record<string, unknown>;
   const keys = Object.keys(input);
-  if (keys.length !== 4 || !["id", "mimeType", "durationMs", "sizeBytes"].every((key) => keys.includes(key))) {
+  if (
+    keys.length !== 4 ||
+    !["id", "mimeType", "durationMs", "sizeBytes"].every((key) => keys.includes(key))
+  ) {
     return undefined;
   }
   const { id, mimeType, durationMs, sizeBytes } = input;

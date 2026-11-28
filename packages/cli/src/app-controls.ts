@@ -19,7 +19,11 @@ export const CLI_APP_CONTROLS: ReadonlySet<AppControlId> = new Set([
   "webSearch.enabled",
 ]);
 /** The topics `aiden app status` and `aiden app get` show. Appearance is desktop-only. */
-export const CLI_APP_TOPICS = ["memory", "web-search", "skills"] as const satisfies readonly AppControlTopic[];
+export const CLI_APP_TOPICS = [
+  "memory",
+  "web-search",
+  "skills",
+] as const satisfies readonly AppControlTopic[];
 export type CliAppTopic = (typeof CLI_APP_TOPICS)[number];
 export function isCliAppTopic(value: unknown): value is CliAppTopic {
   return CLI_APP_TOPICS.includes(value as CliAppTopic);

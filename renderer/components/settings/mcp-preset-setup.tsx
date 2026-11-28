@@ -31,9 +31,11 @@ export interface PresetSetupDialogProps {
 
 export function PresetSetupDialog(props: PresetSetupDialogProps) {
   const { preset } = props.state;
-  return preset.transport === "stdio"
-    ? <MacAppSetupDialog {...props} preset={preset} />
-    : <HttpPresetSetupDialog {...props} preset={preset} />;
+  return preset.transport === "stdio" ? (
+    <MacAppSetupDialog {...props} preset={preset} />
+  ) : (
+    <HttpPresetSetupDialog {...props} preset={preset} />
+  );
 }
 
 function HttpPresetSetupDialog({
@@ -96,7 +98,16 @@ function HttpPresetSetupDialog({
       confirmed.current = false;
       closed.current = false;
     }
-  }, [open, server, preset, initialUrl, state.enabled, state.ready, state.needsSignIn, state.hasSession]);
+  }, [
+    open,
+    server,
+    preset,
+    initialUrl,
+    state.enabled,
+    state.ready,
+    state.needsSignIn,
+    state.hasSession,
+  ]);
 
   const build = (): McpServer => ({
     id: state.serverId,
@@ -136,7 +147,8 @@ function HttpPresetSetupDialog({
       // removed again if the dialog is cancelled; a configured one only takes
       // an address change, never its other unsaved edits.
       const address = url.trim() || preset.url;
-      const record: McpServer = server && !storedForSignIn.current ? { ...server, url: address } : build();
+      const record: McpServer =
+        server && !storedForSignIn.current ? { ...server, url: address } : build();
       if (!server || storedForSignIn.current) {
         signInSavePending.current = true;
         try {
@@ -154,7 +166,10 @@ function HttpPresetSetupDialog({
       setNeedsSignIn(false);
       setHasSession(true);
       await refresh();
-      if (result.connectionError) toast.error(`Signed in to ${preset.name}, but connecting failed: ${result.connectionError}`);
+      if (result.connectionError)
+        toast.error(
+          `Signed in to ${preset.name}, but connecting failed: ${result.connectionError}`,
+        );
       else toast.success(`Authorized — you're signed in to ${preset.name}.`);
     } catch (error) {
       if (!cancelledSignIn.current && !closed.current)
@@ -288,7 +303,8 @@ function HttpPresetSetupDialog({
         !credentialReady
       }
       onConfirm={async () => {
-        setSaving(true); setConnectionError(null);
+        setSaving(true);
+        setConnectionError(null);
         try {
           await mcpApi.save(build());
           confirmed.current = true;
@@ -296,13 +312,17 @@ function HttpPresetSetupDialog({
           await refresh();
           if (enabled) {
             const status = await mcpApi.status(build());
-            if (!status.connected) throw new Error(status.error ?? "Saved, but the connection is not ready. Try connecting again.");
+            if (!status.connected)
+              throw new Error(
+                status.error ?? "Saved, but the connection is not ready. Try connecting again.",
+              );
             toast.success(`Connected — ${status.toolCount} tools available.`);
           }
           onOpenChange(false);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          setConnectionError(message); toast.error(message);
+          setConnectionError(message);
+          toast.error(message);
         } finally {
           setSaving(false);
         }
@@ -344,26 +364,32 @@ function HttpPresetSetupDialog({
         ) : null}
 
         <details className="px-4 py-3">
-          <summary className="cursor-pointer rounded-control text-small-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">Connection details</summary>
-        <Field label="Name">
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={preset.name}
-            autoFocus
-          />
-        </Field>
-        <Field label="Server address" description={preset.local ? "Runs on this device." : "The URL where this MCP server is available."}>
-          <Input
-            value={url}
-            onChange={(e) => {
-              setUrl(e.target.value);
-              if (preset.auth.kind === "oauth") setAuthorized(false);
-            }}
-            placeholder={preset.url}
-          />
-        </Field>
-
+          <summary className="cursor-pointer rounded-control text-small-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
+            Connection details
+          </summary>
+          <Field label="Name">
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={preset.name}
+              autoFocus
+            />
+          </Field>
+          <Field
+            label="Server address"
+            description={
+              preset.local ? "Runs on this device." : "The URL where this MCP server is available."
+            }
+          >
+            <Input
+              value={url}
+              onChange={(e) => {
+                setUrl(e.target.value);
+                if (preset.auth.kind === "oauth") setAuthorized(false);
+              }}
+              placeholder={preset.url}
+            />
+          </Field>
         </details>
         {preset.auth.kind === "none" ? (
           <Field
@@ -381,7 +407,12 @@ function HttpPresetSetupDialog({
           </Field>
         ) : preset.auth.kind === "apiKey" ? (
           <Field
-            label={<span className="inline-flex items-center gap-1.5">{preset.auth.keyLabel}<ServiceAccessHint name={preset.name} /></span>}
+            label={
+              <span className="inline-flex items-center gap-1.5">
+                {preset.auth.keyLabel}
+                <ServiceAccessHint name={preset.name} />
+              </span>
+            }
             description={
               hasKey
                 ? "Saved encrypted on this device. Paste a new key to replace it."
@@ -419,7 +450,12 @@ function HttpPresetSetupDialog({
           </Field>
         ) : (
           <Field
-            label={<span className="inline-flex items-center gap-1.5">Authentication<ServiceAccessHint name={preset.name} /></span>}
+            label={
+              <span className="inline-flex items-center gap-1.5">
+                Authentication
+                <ServiceAccessHint name={preset.name} />
+              </span>
+            }
             description={
               authorizing
                 ? "Finish signing in in your browser, or cancel."
@@ -451,17 +487,29 @@ function HttpPresetSetupDialog({
               variant="filled"
               onClick={handleTest}
               disabled={
-                saving || testing || authorizing || toggling || !available || !name.trim() || !credentialReady
+                saving ||
+                testing ||
+                authorizing ||
+                toggling ||
+                !available ||
+                !name.trim() ||
+                !credentialReady
               }
             >
               {testing ? "Connecting…" : "Test connection"}
             </Button>
-            {credentialReady && preset.auth.kind !== "none" ? <Badge>Credentials saved</Badge> : null}
+            {credentialReady && preset.auth.kind !== "none" ? (
+              <Badge>Credentials saved</Badge>
+            ) : null}
           </div>
         </Field>
       </FieldSet>
 
-      {connectionError ? <Text as="p" variant="small" color="red" role="alert" className="mt-3">{connectionError}</Text> : null}
+      {connectionError ? (
+        <Text as="p" variant="small" color="red" role="alert" className="mt-3">
+          {connectionError}
+        </Text>
+      ) : null}
       <Text variant="small" color="tertiary" className="mt-2 block">
         Learn more in the{" "}
         <a
@@ -482,7 +530,8 @@ function HttpPresetSetupDialog({
 function ServiceAccessHint({ name }: { name: string }) {
   return (
     <InfoHint topic={`what ${name} receives`}>
-      {name} receives the requests made with its tools. Review its account permissions when you sign in.
+      {name} receives the requests made with its tools. Review its account permissions when you sign
+      in.
     </InfoHint>
   );
 }

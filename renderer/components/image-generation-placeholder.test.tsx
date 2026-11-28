@@ -19,7 +19,10 @@ afterEach(() => {
 const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
 
-function generateStep(status: AgentToolStep["status"], extra: Partial<AgentToolStep> = {}): AgentToolStep {
+function generateStep(
+  status: AgentToolStep["status"],
+  extra: Partial<AgentToolStep> = {},
+): AgentToolStep {
   return {
     id: "tool-1",
     order: 0,
@@ -34,7 +37,10 @@ function generateStep(status: AgentToolStep["status"], extra: Partial<AgentToolS
   };
 }
 
-function timeline(step: AgentToolStep, status: GenerationTimeline["status"] = "running"): GenerationTimeline {
+function timeline(
+  step: AgentToolStep,
+  status: GenerationTimeline["status"] = "running",
+): GenerationTimeline {
   return { version: 3, generationId: "generation-1", status, startedAt: 1, steps: [step] };
 }
 
@@ -42,7 +48,11 @@ function multiTimeline(steps: AgentToolStep[]): GenerationTimeline {
   return { version: 3, generationId: "generation-1", status: "running", startedAt: 1, steps };
 }
 
-function imageArtifact(id: string, name = "Generated image.png", mimeType = "image/png"): Extract<ChatArtifactV1, { kind: "image" }> {
+function imageArtifact(
+  id: string,
+  name = "Generated image.png",
+  mimeType = "image/png",
+): Extract<ChatArtifactV1, { kind: "image" }> {
   return {
     version: 1,
     kind: "image",
@@ -91,7 +101,11 @@ function placeholders(markup: string): string[] {
 
 test("a running generate_image call holds a placeholder at its requested shape, with a live caption", () => {
   const markup = renderToStaticMarkup(
-    list({ timeline: timeline(generateStep("running", { detail: "16:9", target: "fal/fal-ai/nano-banana-pro" })) }),
+    list({
+      timeline: timeline(
+        generateStep("running", { detail: "16:9", target: "fal/fal-ai/nano-banana-pro" }),
+      ),
+    }),
   );
   assert.deepEqual(placeholders(markup), ["Generating image, 16:9"]);
   assert.match(markup, /Generating · 0s/u);
@@ -100,18 +114,31 @@ test("a running generate_image call holds a placeholder at its requested shape, 
 
 test("a call without a known aspect ratio is square", () => {
   for (const detail of [undefined, "21:9", "wide"]) {
-    const markup = renderToStaticMarkup(list({ timeline: timeline(generateStep("running", detail ? { detail } : {})) }));
+    const markup = renderToStaticMarkup(
+      list({ timeline: timeline(generateStep("running", detail ? { detail } : {})) }),
+    );
     assert.deepEqual(placeholders(markup), ["Generating image, 1:1"], String(detail));
   }
 });
 
 test("no placeholder while the call is being written, awaits approval, or has finished", () => {
-  for (const status of ["pending", "awaiting_approval", "completed", "failed", "cancelled", "blocked"] as const) {
-    const markup = renderToStaticMarkup(list({ timeline: timeline(generateStep(status, { detail: "16:9" })) }));
+  for (const status of [
+    "pending",
+    "awaiting_approval",
+    "completed",
+    "failed",
+    "cancelled",
+    "blocked",
+  ] as const) {
+    const markup = renderToStaticMarkup(
+      list({ timeline: timeline(generateStep(status, { detail: "16:9" })) }),
+    );
     assert.deepEqual(placeholders(markup), [], status);
   }
   const otherTool = renderToStaticMarkup(
-    list({ timeline: timeline(generateStep("running", { toolName: "share_image", detail: "16:9" })) }),
+    list({
+      timeline: timeline(generateStep("running", { toolName: "share_image", detail: "16:9" })),
+    }),
   );
   assert.deepEqual(placeholders(otherTool), []);
 });
@@ -149,10 +176,11 @@ test("turning Reduce Motion on or off while an image generates switches the pose
   render(list({ timeline: timeline(generateStep("running", { detail: "3:4" })) }));
   const motion = () => document.querySelector(".image-scan")?.getAttribute("data-motion");
   assert.equal(motion(), "animate");
-  const applyReduceMotion = (on: boolean) => act(() => {
-    document.documentElement.dataset.reduceMotion = String(on);
-    window.dispatchEvent(new Event(APPEARANCE_CHANGE_EVENT));
-  });
+  const applyReduceMotion = (on: boolean) =>
+    act(() => {
+      document.documentElement.dataset.reduceMotion = String(on);
+      window.dispatchEvent(new Event(APPEARANCE_CHANGE_EVENT));
+    });
   applyReduceMotion(true);
   assert.equal(motion(), "still");
   applyReduceMotion(false);
@@ -162,7 +190,9 @@ test("turning Reduce Motion on or off while an image generates switches the pose
 test("an arriving image is revealed in the placeholder, then shown as an ordinary attachment", async () => {
   document.documentElement.dataset.reduceMotion = "true";
   const before = imageArtifact("earlier-image");
-  const view = render(list({ timeline: timeline(generateStep("running", { detail: "16:9" })), artifacts: [before] }));
+  const view = render(
+    list({ timeline: timeline(generateStep("running", { detail: "16:9" })), artifacts: [before] }),
+  );
   assert.ok(screen.getByRole("img", { name: "Generating image, 16:9" }));
   // An image not placed on this call is never its result.
   assert.ok(screen.getByRole("button", { name: "Open Generated image.png preview" }));
@@ -177,7 +207,10 @@ test("an arriving image is revealed in the placeholder, then shown as an ordinar
   );
   const slot = screen.getByRole("img", { name: "Generating image, 16:9" });
   assert.equal(slot.getAttribute("data-arrival"), "reveal");
-  assert.ok(slot.querySelector("img.image-scan-result"), "the image is revealed inside the placeholder");
+  assert.ok(
+    slot.querySelector("img.image-scan-result"),
+    "the image is revealed inside the placeholder",
+  );
   assert.equal(
     screen.getAllByRole("button", { name: "Open Generated image.png preview" }).length,
     1,
@@ -191,9 +224,15 @@ test("an arriving image is revealed in the placeholder, then shown as an ordinar
       placements,
     }),
   );
-  assert.ok(screen.queryByRole("img", { name: "Generating image, 16:9" }), "completion does not cut the reveal short");
+  assert.ok(
+    screen.queryByRole("img", { name: "Generating image, 16:9" }),
+    "completion does not cut the reveal short",
+  );
   await until(() => screen.queryByRole("img", { name: "Generating image, 16:9" }) === null);
-  assert.equal(screen.getAllByRole("button", { name: "Open Generated image.png preview" }).length, 2);
+  assert.equal(
+    screen.getAllByRole("button", { name: "Open Generated image.png preview" }).length,
+    2,
+  );
 });
 
 test("a failed call drops its placeholder without an image", () => {
@@ -206,7 +245,11 @@ test("a failed call drops its placeholder without an image", () => {
 });
 
 function revealedSource(stepId: string): string | null {
-  return document.querySelector(`[data-image-scan-slot="${stepId}"] img.image-scan-result`)?.getAttribute("src") ?? null;
+  return (
+    document
+      .querySelector(`[data-image-scan-slot="${stepId}"] img.image-scan-result`)
+      ?.getAttribute("src") ?? null
+  );
 }
 
 test("parallel calls each reveal only their own image, once, and never a display_image result", async () => {
@@ -214,7 +257,13 @@ test("parallel calls each reveal only their own image, once, and never a display
   const steps = (status1: AgentToolStep["status"], status2: AgentToolStep["status"]) => [
     generateStep(status1, { id: "tool-1", toolCallId: "call-1", detail: "16:9" }),
     generateStep(status2, { id: "tool-2", toolCallId: "call-2", order: 1, detail: "1:1" }),
-    generateStep("completed", { id: "tool-3", toolCallId: "call-3", order: 2, toolName: "display_image", label: "Display image" }),
+    generateStep("completed", {
+      id: "tool-3",
+      toolCallId: "call-3",
+      order: 2,
+      toolName: "display_image",
+      label: "Display image",
+    }),
   ];
   const first = imageArtifact("from-call-1", "First.gif", "image/gif");
   const second = imageArtifact("from-call-2", "Second.png", "image/png");
@@ -224,15 +273,35 @@ test("parallel calls each reveal only their own image, once, and never a display
 
   // Out of order: the second call's image and a display_image result land first.
   // The host places a shown image at its own display_image call; no placeholder claims it.
-  const early = new Map([["from-call-2", "call-2"], ["from-display", "call-3"]]);
-  view.rerender(list({ timeline: multiTimeline(steps("running", "running")), artifacts: [shown, second], placements: early }));
+  const early = new Map([
+    ["from-call-2", "call-2"],
+    ["from-display", "call-3"],
+  ]);
+  view.rerender(
+    list({
+      timeline: multiTimeline(steps("running", "running")),
+      artifacts: [shown, second],
+      placements: early,
+    }),
+  );
   assert.equal(revealedSource("tool-1"), null, "the first call keeps scanning");
   assert.match(revealedSource("tool-2") ?? "", /^data:image\/png/u);
-  assert.ok(screen.getByRole("button", { name: "Open Shown.webp preview" }), "display_image results are never claimed");
+  assert.ok(
+    screen.getByRole("button", { name: "Open Shown.webp preview" }),
+    "display_image results are never claimed",
+  );
 
-  const all = new Map([["from-call-2", "call-2"], ["from-call-1", "call-1"], ["from-display", "call-3"]]);
+  const all = new Map([
+    ["from-call-2", "call-2"],
+    ["from-call-1", "call-1"],
+    ["from-display", "call-3"],
+  ]);
   view.rerender(
-    list({ timeline: multiTimeline(steps("running", "completed")), artifacts: [shown, second, first], placements: all }),
+    list({
+      timeline: multiTimeline(steps("running", "completed")),
+      artifacts: [shown, second, first],
+      placements: all,
+    }),
   );
   assert.match(revealedSource("tool-1") ?? "", /^data:image\/gif/u);
   assert.match(revealedSource("tool-2") ?? "", /^data:image\/png/u);
@@ -240,7 +309,11 @@ test("parallel calls each reveal only their own image, once, and never a display
   assert.equal(screen.queryByRole("button", { name: "Open Second.png preview" }), null);
 
   view.rerender(
-    list({ timeline: multiTimeline(steps("completed", "completed")), artifacts: [shown, second, first], placements: all }),
+    list({
+      timeline: multiTimeline(steps("completed", "completed")),
+      artifacts: [shown, second, first],
+      placements: all,
+    }),
   );
   await until(() => screen.queryAllByRole("img", { name: /^Generating image/u }).length === 0);
   for (const name of ["First.gif", "Second.png", "Shown.webp"]) {
@@ -252,10 +325,23 @@ test("an arrived image keeps revealing even if the live list briefly drops it", 
   document.documentElement.dataset.reduceMotion = "true";
   const placements = new Map([["img-a", "call-1"]]);
   const view = render(
-    list({ timeline: timeline(generateStep("running", { detail: "4:3" })), artifacts: [imageArtifact("img-a")], placements }),
+    list({
+      timeline: timeline(generateStep("running", { detail: "4:3" })),
+      artifacts: [imageArtifact("img-a")],
+      placements,
+    }),
   );
-  assert.equal(screen.getByRole("img", { name: "Generating image, 4:3" }).getAttribute("data-arrival"), "reveal");
-  view.rerender(list({ timeline: timeline(generateStep("completed", { detail: "4:3" })), artifacts: [], placements }));
+  assert.equal(
+    screen.getByRole("img", { name: "Generating image, 4:3" }).getAttribute("data-arrival"),
+    "reveal",
+  );
+  view.rerender(
+    list({
+      timeline: timeline(generateStep("completed", { detail: "4:3" })),
+      artifacts: [],
+      placements,
+    }),
+  );
   const slot = screen.getByRole("img", { name: "Generating image, 4:3" });
   assert.equal(slot.getAttribute("data-arrival"), "reveal", "never back to scanning");
   assert.ok(slot.querySelector("img.image-scan-result"));
@@ -263,18 +349,38 @@ test("an arrived image keeps revealing even if the live list briefly drops it", 
 
 test("a call's extra images wait for its reveal, then all show at the call's row before later text", async () => {
   document.documentElement.dataset.reduceMotion = "true";
-  const step = (status: AgentToolStep["status"]) => generateStep(status, { detail: "1:1", contentOffset: 0 });
-  const placements = new Map([["one", "call-1"], ["two", "call-1"]]);
+  const step = (status: AgentToolStep["status"]) =>
+    generateStep(status, { detail: "1:1", contentOffset: 0 });
+  const placements = new Map([
+    ["one", "call-1"],
+    ["two", "call-1"],
+  ]);
   const artifacts = [imageArtifact("one", "One.png"), imageArtifact("two", "Two.png")];
-  const view = render(list({ timeline: timeline(step("running")), artifacts, placements, text: "After the image." }));
+  const view = render(
+    list({ timeline: timeline(step("running")), artifacts, placements, text: "After the image." }),
+  );
   assert.equal(screen.getAllByRole("img", { name: /^Generating image/u }).length, 1);
-  assert.equal(screen.queryByRole("button", { name: "Open Two.png preview" }), null, "held until the reveal ends");
+  assert.equal(
+    screen.queryByRole("button", { name: "Open Two.png preview" }),
+    null,
+    "held until the reveal ends",
+  );
   // The live reply's prose reveals progressively; its bubble is the streaming-reveal block.
   const prose = () => document.querySelector(".streaming-reveal")!;
   const slot = document.querySelector("[data-image-scan-slot]")!;
-  assert.ok(slot.compareDocumentPosition(prose()) & Node.DOCUMENT_POSITION_FOLLOWING, "the placeholder sits at its row");
+  assert.ok(
+    slot.compareDocumentPosition(prose()) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "the placeholder sits at its row",
+  );
 
-  view.rerender(list({ timeline: timeline(step("completed")), artifacts, placements, text: "After the image." }));
+  view.rerender(
+    list({
+      timeline: timeline(step("completed")),
+      artifacts,
+      placements,
+      text: "After the image.",
+    }),
+  );
   await until(() => screen.queryByRole("img", { name: /^Generating image/u }) === null);
   const one = screen.getByRole("button", { name: "Open One.png preview" });
   const two = screen.getByRole("button", { name: "Open Two.png preview" });
@@ -283,9 +389,7 @@ test("a call's extra images wait for its reveal, then all show at the call's row
 });
 
 test("a settled reply draws each generated image at its generate_image row", () => {
-  const steps = [
-    generateStep("completed", { contentOffset: 6, detail: "16:9" }),
-  ];
+  const steps = [generateStep("completed", { contentOffset: 6, detail: "16:9" })];
   const markupOrder = render(
     list({
       timeline: null,
@@ -296,10 +400,31 @@ test("a settled reply draws each generated image at its generate_image row", () 
           role: "assistant",
           content: "First. Then more.",
           createdAt: 1,
-          timeline: { version: 3, generationId: "g", status: "completed", startedAt: 1, finishedAt: 2, steps },
+          timeline: {
+            version: 3,
+            generationId: "g",
+            status: "completed",
+            startedAt: 1,
+            finishedAt: 2,
+            steps,
+          },
           attachments: [
-            { id: "gen", name: "Generated image.png", mimeType: "image/png", kind: "image", size: 68, data: PNG },
-            { id: "upload", name: "Shown.png", mimeType: "image/png", kind: "image", size: 68, data: PNG },
+            {
+              id: "gen",
+              name: "Generated image.png",
+              mimeType: "image/png",
+              kind: "image",
+              size: 68,
+              data: PNG,
+            },
+            {
+              id: "upload",
+              name: "Shown.png",
+              mimeType: "image/png",
+              kind: "image",
+              size: 68,
+              data: PNG,
+            },
           ],
           imagePlacements: [{ attachmentId: "gen", toolCallId: "call-1" }],
         },
@@ -309,26 +434,56 @@ test("a settled reply draws each generated image at its generate_image row", () 
   const generated = screen.getByRole("button", { name: "Open Generated image.png preview" });
   const unplaced = screen.getByRole("button", { name: "Open Shown.png preview" });
   const later = screen.getByText(/Then more\./u);
-  assert.ok(generated.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING, "anchored before later text");
-  assert.ok(later.compareDocumentPosition(unplaced) & Node.DOCUMENT_POSITION_FOLLOWING, "unplaced images stay trailing");
+  assert.ok(
+    generated.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "anchored before later text",
+  );
+  assert.ok(
+    later.compareDocumentPosition(unplaced) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "unplaced images stay trailing",
+  );
   markupOrder.unmount();
 });
 
-function displayStep(id: string, toolCallId: string, order: number, contentOffset: number, toolName = "display_image"): AgentToolStep {
-  return generateStep("completed", { id, toolCallId, order, contentOffset, toolName, label: "Display image" });
+function displayStep(
+  id: string,
+  toolCallId: string,
+  order: number,
+  contentOffset: number,
+  toolName = "display_image",
+): AgentToolStep {
+  return generateStep("completed", {
+    id,
+    toolCallId,
+    order,
+    contentOffset,
+    toolName,
+    label: "Display image",
+  });
 }
 
 function image(id: string, name: string) {
   return { id, name, mimeType: "image/png", kind: "image" as const, size: 68, data: PNG };
 }
 
-function settledReply(steps: AgentToolStep[], attachments: ReturnType<typeof image>[], content: string): ChatMessage {
+function settledReply(
+  steps: AgentToolStep[],
+  attachments: ReturnType<typeof image>[],
+  content: string,
+): ChatMessage {
   return {
     id: "assistant-1",
     role: "assistant",
     content,
     createdAt: 1,
-    timeline: { version: 3, generationId: "g", status: "completed", startedAt: 1, finishedAt: 2, steps },
+    timeline: {
+      version: 3,
+      generationId: "g",
+      status: "completed",
+      startedAt: 1,
+      finishedAt: 2,
+      steps,
+    },
     attachments,
   };
 }
@@ -337,13 +492,28 @@ test("a shown image stays at its display_image row while later text streams in b
   const steps = [displayStep("tool-1", "call-1", 0, 7)];
   const placements = new Map([["shown", "call-1"]]);
   const artifacts = [imageArtifact("shown", "Shown.png")];
-  const view = render(list({ timeline: multiTimeline(steps), artifacts, placements, text: "Before." }));
-  view.rerender(list({ timeline: multiTimeline(steps), artifacts, placements, text: "Before. And this streamed after it." }));
+  const view = render(
+    list({ timeline: multiTimeline(steps), artifacts, placements, text: "Before." }),
+  );
+  view.rerender(
+    list({
+      timeline: multiTimeline(steps),
+      artifacts,
+      placements,
+      text: "Before. And this streamed after it.",
+    }),
+  );
   const shown = screen.getByRole("button", { name: "Open Shown.png preview" });
   const prose = [...document.querySelectorAll(".streaming-reveal")];
   assert.equal(prose.length, 2, "the text before and after the call are separate rows");
-  assert.ok(prose[0]!.compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING, "below the earlier text");
-  assert.ok(shown.compareDocumentPosition(prose[1]!) & Node.DOCUMENT_POSITION_FOLLOWING, "above the later text");
+  assert.ok(
+    prose[0]!.compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "below the earlier text",
+  );
+  assert.ok(
+    shown.compareDocumentPosition(prose[1]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "above the later text",
+  );
 });
 
 test("a reply saved without image placements still draws shown and shared images at their calls", () => {
@@ -356,45 +526,101 @@ test("a reply saved without image placements still draws shown and shared images
     list({
       timeline: null,
       text: "",
-      messages: [settledReply(steps, [image("shared_1", "Shared.png"), image("shown", "Shown.png")], "First. Second. Third.")],
+      messages: [
+        settledReply(
+          steps,
+          [image("shared_1", "Shared.png"), image("shown", "Shown.png")],
+          "First. Second. Third.",
+        ),
+      ],
     }),
   );
   const shown = screen.getByRole("button", { name: "Open Shown.png preview" });
   const shared = screen.getByRole("button", { name: "Open Shared.png preview" });
   const second = screen.getByText(/Second\./u);
   const third = screen.getByText(/Third\./u);
-  assert.ok(shown.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING, "shown image before the text after its call");
-  assert.ok(second.compareDocumentPosition(shared) & Node.DOCUMENT_POSITION_FOLLOWING, "shared image after the text before its call");
-  assert.ok(shared.compareDocumentPosition(third) & Node.DOCUMENT_POSITION_FOLLOWING, "shared image before the text after its call");
+  assert.ok(
+    shown.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "shown image before the text after its call",
+  );
+  assert.ok(
+    second.compareDocumentPosition(shared) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "shared image after the text before its call",
+  );
+  assert.ok(
+    shared.compareDocumentPosition(third) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "shared image before the text after its call",
+  );
 });
 
 test("a saved reply whose images do not pair one for one with its calls keeps them trailing", () => {
   // Two display calls but one image: one call showed a duplicate, so which call owns it is unknown.
   const steps = [displayStep("tool-1", "call-1", 0, 7), displayStep("tool-2", "call-2", 1, 13)];
-  render(list({ timeline: null, text: "", messages: [settledReply(steps, [image("shown", "Shown.png")], "First. Second. Third.")] }));
+  render(
+    list({
+      timeline: null,
+      text: "",
+      messages: [settledReply(steps, [image("shown", "Shown.png")], "First. Second. Third.")],
+    }),
+  );
   const shown = screen.getByRole("button", { name: "Open Shown.png preview" });
-  assert.ok(screen.getByText(/Third\./u).compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.ok(
+    screen.getByText(/Third\./u).compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING,
+  );
 });
 
 test("adjacent image and recording calls keep media in call order, live and saved", () => {
   for (const imageFirst of [false, true]) {
     const imageStep = displayStep("image", imageFirst ? "call-1" : "call-2", imageFirst ? 0 : 1, 0);
     const recordingStep: AgentToolStep = {
-      ...displayStep("recording", imageFirst ? "call-2" : "call-1", imageFirst ? 1 : 0, 0, "browser_recording_stop"),
-      recording: { id: "recording-0f1e2d3c-4b5a-4678-9abc-def012345678", mimeType: "video/mp4", sizeBytes: 100, durationMs: 2000 },
+      ...displayStep(
+        "recording",
+        imageFirst ? "call-2" : "call-1",
+        imageFirst ? 1 : 0,
+        0,
+        "browser_recording_stop",
+      ),
+      recording: {
+        id: "recording-0f1e2d3c-4b5a-4678-9abc-def012345678",
+        mimeType: "video/mp4",
+        sizeBytes: 100,
+        durationMs: 2000,
+      },
     };
     const steps = imageFirst ? [imageStep, recordingStep] : [recordingStep, imageStep];
     const artifact = imageArtifact("photo", "Ordered.png");
-    const view = render(list({ timeline: multiTimeline(steps), artifacts: [artifact], placements: new Map([["photo", imageStep.toolCallId]]), text: "After both calls." }));
+    const view = render(
+      list({
+        timeline: multiTimeline(steps),
+        artifacts: [artifact],
+        placements: new Map([["photo", imageStep.toolCallId]]),
+        text: "After both calls.",
+      }),
+    );
     const checkOrder = () => {
       const photo = screen.getByRole("button", { name: "Open Ordered.png preview" });
       const video = screen.getByRole("region", { name: "Browser recording, 0:02" });
       const [first, second] = imageFirst ? [photo, video] : [video, photo];
-      assert.ok(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING, "the timeline, not media type, determines order");
+      assert.ok(
+        first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
+        "the timeline, not media type, determines order",
+      );
       return { photo, video };
     };
     const before = checkOrder();
-    view.rerender(list({ timeline: null, text: "", messages: [{ ...settledReply(steps, [image("photo", "Ordered.png")], "After both calls."), timeline: { ...multiTimeline(steps), status: "completed", finishedAt: 2 }, imagePlacements: [{ attachmentId: "photo", toolCallId: imageStep.toolCallId }] }] }));
+    view.rerender(
+      list({
+        timeline: null,
+        text: "",
+        messages: [
+          {
+            ...settledReply(steps, [image("photo", "Ordered.png")], "After both calls."),
+            timeline: { ...multiTimeline(steps), status: "completed", finishedAt: 2 },
+            imagePlacements: [{ attachmentId: "photo", toolCallId: imageStep.toolCallId }],
+          },
+        ],
+      }),
+    );
     const after = checkOrder();
     assert.equal(after.photo, before.photo, "the picture keeps its element across settlement");
     assert.equal(after.video, before.video, "the recording keeps its player across settlement");
@@ -403,34 +629,61 @@ test("adjacent image and recording calls keep media in call order, live and save
 });
 
 test("same-offset shown, shared and generated images follow call order rather than attachment order", () => {
-  const steps = [displayStep("shown", "call-1", 0, 0), displayStep("shared", "call-2", 1, 0, "share_image"), displayStep("generated", "call-3", 2, 0, "generate_image")];
-  const message = settledReply(steps, [image("generated", "Generated.png"), image("shared_1", "Shared.png"), image("shown", "Shown.png")], "After all images.");
-  message.imagePlacements = [{ attachmentId: "shown", toolCallId: "call-1" }, { attachmentId: "shared_1", toolCallId: "call-2" }, { attachmentId: "generated", toolCallId: "call-3" }];
+  const steps = [
+    displayStep("shown", "call-1", 0, 0),
+    displayStep("shared", "call-2", 1, 0, "share_image"),
+    displayStep("generated", "call-3", 2, 0, "generate_image"),
+  ];
+  const message = settledReply(
+    steps,
+    [
+      image("generated", "Generated.png"),
+      image("shared_1", "Shared.png"),
+      image("shown", "Shown.png"),
+    ],
+    "After all images.",
+  );
+  message.imagePlacements = [
+    { attachmentId: "shown", toolCallId: "call-1" },
+    { attachmentId: "shared_1", toolCallId: "call-2" },
+    { attachmentId: "generated", toolCallId: "call-3" },
+  ];
   render(list({ timeline: null, text: "", messages: [message] }));
-  assert.deepEqual(screen.getAllByRole("img").map((node) => node.getAttribute("alt")), ["Shown.png", "Shared.png", "Generated.png"]);
+  assert.deepEqual(
+    screen.getAllByRole("img").map((node) => node.getAttribute("alt")),
+    ["Shown.png", "Shared.png", "Generated.png"],
+  );
 });
 
 test("elapsed time counts from the step's own start, so a remount keeps it", () => {
   const startedAt = Date.now() - 12_000;
-  render(list({ timeline: timeline(generateStep("running", { startedAt, updatedAt: startedAt })) }));
+  render(
+    list({ timeline: timeline(generateStep("running", { startedAt, updatedAt: startedAt })) }),
+  );
   assert.ok(screen.getByText(/Generating · 1[23]s/u));
 });
 
-
 test("an arriving image keeps its stopped elapsed caption when another running label ticks", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 30_000 });
-  t.mock.method(window, "setTimeout", (callback: () => void, delay: number) =>
-    setTimeout(callback, delay) as unknown as number,
+  t.mock.method(
+    window,
+    "setTimeout",
+    (callback: () => void, delay: number) => setTimeout(callback, delay) as unknown as number,
   );
   t.mock.method(window, "clearTimeout", (handle: number) =>
     clearTimeout(handle as unknown as ReturnType<typeof setTimeout>),
   );
   const Preview = ({ arrived }: { arrived: boolean }) => (
     <>
-      <ImageScanPlaceholder slot={{
-        stepId: "image", toolCallId: "image-call", aspectRatio: "1:1", startedAt: 1_000,
-        ...(arrived ? { arrived: imageArtifact("result").attachment } : {}),
-      }} />
+      <ImageScanPlaceholder
+        slot={{
+          stepId: "image",
+          toolCallId: "image-call",
+          aspectRatio: "1:1",
+          startedAt: 1_000,
+          ...(arrived ? { arrived: imageArtifact("result").attachment } : {}),
+        }}
+      />
       <BotStatusLine activity={{ phase: "thinking", startedAt: 1_000 }} wording="thinking" />
     </>
   );

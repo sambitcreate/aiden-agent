@@ -62,7 +62,11 @@ export async function startFakeOpenRouter(): Promise<FakeOpenRouter> {
     if (request.method !== "POST" || url !== "/api/v1/chat/completions") {
       otherRequests.push(`${request.method ?? "GET"} ${url}`);
       response.writeHead(503, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { message: "The E2E OpenRouter fake serves only image generation." } }));
+      response.end(
+        JSON.stringify({
+          error: { message: "The E2E OpenRouter fake serves only image generation." },
+        }),
+      );
       return;
     }
     const chunks: Buffer[] = [];
@@ -74,19 +78,30 @@ export async function startFakeOpenRouter(): Promise<FakeOpenRouter> {
       // Answer instead of leaving the request open, so a malformed body fails the test quickly.
       otherRequests.push(`POST ${url} (malformed body)`);
       response.writeHead(400, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { message: "The E2E OpenRouter fake could not parse this request." } }));
+      response.end(
+        JSON.stringify({
+          error: { message: "The E2E OpenRouter fake could not parse this request." },
+        }),
+      );
       return;
     }
     const content = body.messages[0]?.content ?? [];
     imageRequests.push({
       model: body.model,
-      prompt: content.filter((part) => part.type === "text").map((part) => part.text ?? "").join(""),
+      prompt: content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text ?? "")
+        .join(""),
       references: content.filter((part) => part.type === "image_url").length,
     });
     if (failures > 0) {
       failures -= 1;
       response.writeHead(500, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { message: "The E2E OpenRouter fake failed this request on purpose." } }));
+      response.end(
+        JSON.stringify({
+          error: { message: "The E2E OpenRouter fake failed this request on purpose." },
+        }),
+      );
       return;
     }
     const image = pngFor(imageRequests.length);
@@ -105,7 +120,9 @@ export async function startFakeOpenRouter(): Promise<FakeOpenRouter> {
               message: {
                 role: "assistant",
                 content: "",
-                images: [{ type: "image_url", image_url: { url: `data:image/png;base64,${image}` } }],
+                images: [
+                  { type: "image_url", image_url: { url: `data:image/png;base64,${image}` } },
+                ],
               },
             },
           ],

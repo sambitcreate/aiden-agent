@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { spawn as nodeSpawn } from "node:child_process";
 import test from "node:test";
 import type { DeviceRecordingInfo } from "../../../renderer/shared/device-features.js";
-import { createDeviceRecorder, type DeviceRecordingRemote, type RecorderChild } from "./device-recording.js";
+import {
+  createDeviceRecorder,
+  type DeviceRecordingRemote,
+  type RecorderChild,
+} from "./device-recording.js";
 
 const UDID = "5C1E4B7A-0000-4000-8000-000000000001";
 
@@ -13,9 +17,7 @@ class FakeChild implements RecorderChild {
   signals: NodeJS.Signals[] = [];
   private exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
   private errorListeners: Array<(error: Error) => void> = [];
-  constructor(
-    private readonly onSignal: (child: FakeChild, signal: NodeJS.Signals) => void,
-  ) {}
+  constructor(private readonly onSignal: (child: FakeChild, signal: NodeJS.Signals) => void) {}
   kill(signal: NodeJS.Signals) {
     this.signals.push(signal);
     this.onSignal(this, signal);
@@ -25,7 +27,9 @@ class FakeChild implements RecorderChild {
   once(event: "error", listener: (error: Error) => void): this;
   once(event: "exit" | "error", listener: unknown) {
     if (event === "exit") {
-      this.exitListeners.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
+      this.exitListeners.push(
+        listener as (code: number | null, signal: NodeJS.Signals | null) => void,
+      );
     } else {
       this.errorListeners.push(listener as (error: Error) => void);
     }
@@ -61,7 +65,9 @@ function harness(
         if (signal === "SIGINT" && options.hangOnSigint) return;
         if (signal === "SIGINT") files.set(file, 2048);
         // simctl finalizes asynchronously after the signal.
-        queueMicrotask(() => self.exit(signal === "SIGKILL" ? null : 0, signal === "SIGKILL" ? "SIGKILL" : null));
+        queueMicrotask(() =>
+          self.exit(signal === "SIGKILL" ? null : 0, signal === "SIGKILL" ? "SIGKILL" : null),
+        );
       });
       spawned.push({ command, args, child });
       return child;
@@ -89,7 +95,9 @@ function harness(
   const advance = (ms: number) => {
     const end = now + ms;
     for (;;) {
-      const due = [...timers].filter(([, timer]) => timer.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+      const due = [...timers]
+        .filter(([, timer]) => timer.at <= end)
+        .sort((a, b) => a[1].at - b[1].at)[0];
       if (!due) break;
       timers.delete(due[0]);
       now = due[1].at;
@@ -106,7 +114,10 @@ const start = (h: ReturnType<typeof harness>, chatId = "chat-1", deviceId = UDID
     platform: "ios",
     hostId: "local",
     deviceId,
-    command: (file) => ({ command: "xcrun", args: ["simctl", "io", deviceId, "recordVideo", "--codec=h264", file] }),
+    command: (file) => ({
+      command: "xcrun",
+      args: ["simctl", "io", deviceId, "recordVideo", "--codec=h264", file],
+    }),
   });
 
 /** An emulator recording: `remote` stands in for the adb stop, pull, and delete steps. */
@@ -137,8 +148,17 @@ test("a recording starts one supervised child and stops with SIGINT into a finis
   assert.equal(started.status, "recording");
   assert.equal(started.endsBy, started.startedAt + 600_000);
   assert.equal(h.spawned.length, 1);
-  assert.deepEqual(h.spawned[0]!.args.slice(0, 5), ["simctl", "io", UDID, "recordVideo", "--codec=h264"]);
-  assert.equal(h.spawned[0]!.args[h.spawned[0]!.args.length - 1], "/private/recordings/recording-0001.mp4");
+  assert.deepEqual(h.spawned[0]!.args.slice(0, 5), [
+    "simctl",
+    "io",
+    UDID,
+    "recordVideo",
+    "--codec=h264",
+  ]);
+  assert.equal(
+    h.spawned[0]!.args[h.spawned[0]!.args.length - 1],
+    "/private/recordings/recording-0001.mp4",
+  );
 
   await assert.rejects(start(h), /already being recorded/u, "one recorder per simulator");
 
@@ -149,7 +169,10 @@ test("a recording starts one supervised child and stops with SIGINT into a finis
   assert.equal(stopped.reason, "user");
   assert.equal(stopped.stoppedAt, started.startedAt + 5_000);
   assert.equal(h.pendingTimers(), 0, "the duration cap and kill timers are cleared");
-  assert.ok(h.changes.some((list) => list[0]?.status === "stopping"), "listeners see the stopping state");
+  assert.ok(
+    h.changes.some((list) => list[0]?.status === "stopping"),
+    "listeners see the stopping state",
+  );
 
   const taken = h.recorder.take(started.id);
   assert.equal(taken?.file, "/private/recordings/recording-0001.mp4");
@@ -210,13 +233,21 @@ test("a failed recording nobody discarded is deleted with its file after an hour
   assert.equal(h.recorder.get(failed.id)?.status, "failed");
   h.advance(59 * 60_000);
   await settle();
-  assert.equal(h.recorder.get(failed.id)?.status, "failed", "the viewer can still report the failure for a while");
+  assert.equal(
+    h.recorder.get(failed.id)?.status,
+    "failed",
+    "the viewer can still report the failure for a while",
+  );
   h.advance(60_000);
   await settle();
   assert.equal(h.recorder.get(failed.id), null);
   assert.ok(h.removed.includes(failedFile), "its partial file is deleted");
   assert.ok(!h.files.has(failedFile));
-  assert.equal(h.recorder.get(ready.id)?.status, "ready", "a finished recording is still offered for saving");
+  assert.equal(
+    h.recorder.get(ready.id)?.status,
+    "ready",
+    "a finished recording is still offered for saving",
+  );
   assert.ok(h.recorder.take(ready.id));
 });
 
@@ -232,15 +263,26 @@ test("a failed recording the viewer discards leaves no sweep behind", async () =
 test("a child that fails to spawn fails its recording instead of wedging stop and discard", async () => {
   const h = harness();
   const started = await start(h);
-  h.spawned[0]!.child.failToSpawn(Object.assign(new Error("spawn xcrun ENOENT"), { code: "ENOENT" }));
+  h.spawned[0]!.child.failToSpawn(
+    Object.assign(new Error("spawn xcrun ENOENT"), { code: "ENOENT" }),
+  );
   await settle();
   const info = h.recorder.get(started.id);
   assert.equal(info?.status, "failed");
   assert.equal(info?.reason, "exited");
   assert.equal(h.recorder.take(started.id), null);
-  const timeout = () => new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 200));
-  assert.notEqual(await Promise.race([h.recorder.stop(started.id), timeout()]), "timeout", "stop returns");
-  assert.notEqual(await Promise.race([h.recorder.discardWhere(() => true), timeout()]), "timeout", "discard returns");
+  const timeout = () =>
+    new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 200));
+  assert.notEqual(
+    await Promise.race([h.recorder.stop(started.id), timeout()]),
+    "timeout",
+    "stop returns",
+  );
+  assert.notEqual(
+    await Promise.race([h.recorder.discardWhere(() => true), timeout()]),
+    "timeout",
+    "discard returns",
+  );
   assert.deepEqual(h.recorder.list(), []);
   assert.equal(h.pendingTimers(), 0);
 });
@@ -264,7 +306,10 @@ test("a recorder binary that cannot be spawned fails its recording on a real chi
     platform: "ios",
     hostId: "local",
     deviceId: UDID,
-    command: (file) => ({ command: "/nonexistent/aiden-test/xcrun", args: ["simctl", "io", UDID, "recordVideo", file] }),
+    command: (file) => ({
+      command: "/nonexistent/aiden-test/xcrun",
+      args: ["simctl", "io", UDID, "recordVideo", file],
+    }),
   });
   const failed = await new Promise<DeviceRecordingInfo | null>((resolve) => {
     const unsubscribe = recorder.onChange((list) => {
@@ -327,14 +372,22 @@ test("an emulator recording whose on-device stop was never confirmed fails inste
     },
   }));
   const stopped = await h.recorder.stop(started.id);
-  assert.deepEqual(h.spawned[0]!.child.signals, ["SIGINT"], "the local adb is signalled as a fallback");
+  assert.deepEqual(
+    h.spawned[0]!.child.signals,
+    ["SIGINT"],
+    "the local adb is signalled as a fallback",
+  );
   assert.equal(stopped.status, "failed");
   assert.match(stopped.error ?? "", /did not finish writing/u);
   assert.equal(h.recorder.take(started.id), null);
   assert.equal(local === "" || !h.files.has(local), true, "no unfinished copy is left behind");
   assert.ok(steps.includes("cleanup"), "the device copy is still deleted");
   h.advance(600_000);
-  assert.deepEqual(h.spawned[0]!.child.signals, ["SIGINT"], "no duration cap or kill timer fires later");
+  assert.deepEqual(
+    h.spawned[0]!.child.signals,
+    ["SIGINT"],
+    "no duration cap or kill timer fires later",
+  );
 });
 
 test("a start still preparing its temp file when its chat is discarded never spawns a recorder", async () => {
@@ -380,31 +433,39 @@ test("quit's deadline force-kills recorders still stopping, deletes their files,
   const h = harness({ hangOnSigint: true });
   const ios = await start(h, "chat-1", UDID);
   const steps: string[] = [];
-  await startAndroid(h, () => ({
-    async stop() {
-      steps.push("stop");
-      await new Promise<void>(() => undefined);
-    },
-    async collect() {
-      steps.push("collect");
-    },
-    async cleanup() {
-      steps.push("cleanup");
-    },
-  }), "chat-2");
+  await startAndroid(
+    h,
+    () => ({
+      async stop() {
+        steps.push("stop");
+        await new Promise<void>(() => undefined);
+      },
+      async collect() {
+        steps.push("collect");
+      },
+      async cleanup() {
+        steps.push("cleanup");
+      },
+    }),
+    "chat-2",
+  );
   const discarding = h.recorder.discardWhere(() => true);
   await settle();
-  assert.equal(h.recorder.get(ios.id)?.status, "stopping", "SIGINT alone does not end this recorder");
+  assert.equal(
+    h.recorder.get(ios.id)?.status,
+    "stopping",
+    "SIGINT alone does not end this recorder",
+  );
 
   h.recorder.terminate();
   await discarding;
   assert.deepEqual(h.spawned[0]!.child.signals, ["SIGINT", "SIGKILL"]);
   assert.deepEqual(h.spawned[1]!.child.signals, ["SIGKILL"]);
   assert.deepEqual(steps, ["stop", "cleanup"], "the device copy is deleted without being pulled");
-  assert.deepEqual(
-    [...new Set(h.removed)].sort(),
-    ["/private/recordings/recording-0001.mp4", "/private/recordings/recording-0002.mp4"],
-  );
+  assert.deepEqual([...new Set(h.removed)].sort(), [
+    "/private/recordings/recording-0001.mp4",
+    "/private/recordings/recording-0002.mp4",
+  ]);
   assert.deepEqual(h.recorder.list(), []);
   assert.equal(h.pendingTimers(), 0);
 });

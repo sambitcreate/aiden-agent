@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LivePreviewManager, LivePreviewSession, type LivePreviewOwner, type LiveTranscriptSnapshot } from "./local-speech-live-core.js";
+import {
+  LivePreviewManager,
+  LivePreviewSession,
+  type LivePreviewOwner,
+  type LiveTranscriptSnapshot,
+} from "./local-speech-live-core.js";
 
 const RATE = 16_000;
 
@@ -30,7 +35,11 @@ function fakeTime() {
 
 /** Decodes that the test resolves one at a time, recording each request's length. */
 function fakeDecoder() {
-  const pending: Array<{ samples: number; resolve: (text: string) => void; reject: (error: Error) => void }> = [];
+  const pending: Array<{
+    samples: number;
+    resolve: (text: string) => void;
+    reject: (error: Error) => void;
+  }> = [];
   const lengths: number[] = [];
   return {
     decode: (pcm: Int16Array) =>
@@ -66,7 +75,11 @@ const speech = (ms: number) => {
 const silence = (ms: number) => new Int16Array((RATE * ms) / 1_000);
 
 /** Feeds audio in 100 ms chunks, the recorder's chunk size, advancing the clock as it goes. */
-function feed(session: LivePreviewSession, time: ReturnType<typeof fakeTime>, pcm: Int16Array): void {
+function feed(
+  session: LivePreviewSession,
+  time: ReturnType<typeof fakeTime>,
+  pcm: Int16Array,
+): void {
   for (let offset = 0; offset < pcm.length; offset += 1_600) {
     session.push(pcm.subarray(offset, offset + 1_600));
     time.advance(100);
@@ -115,7 +128,10 @@ test("only one decode runs at a time, and a slow decode spaces out the next", as
   assert.equal(decoder.inFlight(), 0);
   time.advance(100);
   assert.equal(decoder.inFlight(), 1);
-  assert.ok(decoder.lengths[1]! > decoder.lengths[0]!, "the next decode covers the audio that arrived meanwhile");
+  assert.ok(
+    decoder.lengths[1]! > decoder.lengths[0]!,
+    "the next decode covers the audio that arrived meanwhile",
+  );
 });
 
 test("silence alone is never decoded", async () => {
@@ -141,8 +157,14 @@ test("a pause ends a phrase: its words stay, and later decodes cover only the ne
   await decoder.answer("second");
 
   const newPhraseDecode = decoder.lengths[decoder.lengths.length - 1]!;
-  assert.ok(newPhraseDecode < RATE * 1.5, `the new phrase alone is decoded, not ${newPhraseDecode} samples`);
-  assert.deepEqual(snapshots[snapshots.length - 1], { committed: "First phrase.", tentative: "second" });
+  assert.ok(
+    newPhraseDecode < RATE * 1.5,
+    `the new phrase alone is decoded, not ${newPhraseDecode} samples`,
+  );
+  assert.deepEqual(snapshots[snapshots.length - 1], {
+    committed: "First phrase.",
+    tentative: "second",
+  });
 });
 
 test("a long phrase without pauses is split, so no decode grows past 20 seconds", async () => {
@@ -188,7 +210,12 @@ function owner(id: number, documentId = "doc") {
       return () => listeners.delete(listener);
     },
   };
-  return { value, sent, invalidate: () => [...listeners].forEach((listener) => listener()), listeners };
+  return {
+    value,
+    sent,
+    invalidate: () => [...listeners].forEach((listener) => listener()),
+    listeners,
+  };
 }
 
 function newManager(supported = new Set(["parakeet-v3-metal"])) {
@@ -220,7 +247,9 @@ test("a preview publishes its words to the document that started it, tagged with
   manager.push(mine.value, session.sessionId, speech(400));
   await settle();
   assert.deepEqual(decodes, [{ samples: 6_400, modelId: "parakeet-v3-metal" }]);
-  assert.deepEqual(mine.sent, [{ sessionId: session.sessionId, committed: "", tentative: "hello" }]);
+  assert.deepEqual(mine.sent, [
+    { sessionId: session.sessionId, committed: "", tentative: "hello" },
+  ]);
 });
 
 test("another document cannot feed or stop someone else's preview", async () => {

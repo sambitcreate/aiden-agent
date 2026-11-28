@@ -37,7 +37,9 @@ export class DetachedPromptLog {
   private readonly chats = new Map<string, DetachedPrompt[]>();
 
   record(entry: DetachedPrompt): void {
-    const kept = (this.chats.get(entry.chatId) ?? []).filter((item) => item.promptId !== entry.promptId);
+    const kept = (this.chats.get(entry.chatId) ?? []).filter(
+      (item) => item.promptId !== entry.promptId,
+    );
     kept.push(entry);
     // Re-insert so the map's order is least recently recorded first.
     this.chats.delete(entry.chatId);
@@ -60,9 +62,12 @@ export class DetachedPromptLog {
 }
 
 function promptSummary(prompt: HostRunPendingPrompt): string {
-  if (prompt.type === "approval_required") return clipPendingAttentionSummary(prompt.payload.summary);
+  if (prompt.type === "approval_required")
+    return clipPendingAttentionSummary(prompt.payload.summary);
   const questions = prompt.payload.questions;
-  const first = Array.isArray(questions) ? (questions[0] as { question?: unknown } | undefined) : undefined;
+  const first = Array.isArray(questions)
+    ? (questions[0] as { question?: unknown } | undefined)
+    : undefined;
   return clipPendingAttentionSummary(first?.question);
 }
 
@@ -180,7 +185,10 @@ export async function readInterruptedRunWaits(
 }
 
 function isLive(run: HostRunSummary | undefined): run is HostRunSummary {
-  return run !== undefined && (run.state === "working" || run.state === "needs_approval" || run.state === "needs_input");
+  return (
+    run !== undefined &&
+    (run.state === "working" || run.state === "needs_approval" || run.state === "needs_input")
+  );
 }
 
 /** A keep-going goal that stopped at Needs you: when, and its reason. */
@@ -198,7 +206,12 @@ export interface GoalNeedsYou {
  */
 export function pendingAttentionForChat(
   chatId: string,
-  sources: { runs: PendingAttentionRuns; detached: DetachedPromptLog; interrupted?: InterruptedRunWaits; goal?: GoalNeedsYou },
+  sources: {
+    runs: PendingAttentionRuns;
+    detached: DetachedPromptLog;
+    interrupted?: InterruptedRunWaits;
+    goal?: GoalNeedsYou;
+  },
 ): ChatPendingAttention | undefined {
   const run = sources.runs.currentRunForChat(chatId);
   const live = isLive(run) ? run : undefined;
@@ -240,14 +253,18 @@ export function pendingAttentionForChat(
 
   const interrupted = sources.interrupted;
   const superseded =
-    interrupted !== undefined && runStartedAt !== undefined && interrupted.runStartedAt < runStartedAt;
+    interrupted !== undefined &&
+    runStartedAt !== undefined &&
+    interrupted.runStartedAt < runStartedAt;
   const waits = superseded ? [] : (interrupted?.waits ?? []);
   if (waits.length > 0) {
     const oldest = waits.reduce((left, right) => (right.askedAt < left.askedAt ? right : left));
     return {
       chatId,
       kind: "interrupted",
-      summary: clipPendingAttentionSummary(oldest.kind === "approval" ? oldest.summary : oldest.questions[0]?.question),
+      summary: clipPendingAttentionSummary(
+        oldest.kind === "approval" ? oldest.summary : oldest.questions[0]?.question,
+      ),
       since: oldest.askedAt,
       runStartedAt: interrupted?.runStartedAt,
       count: waits.length,
@@ -255,7 +272,13 @@ export function pendingAttentionForChat(
   }
 
   if (sources.goal && !live) {
-    return { chatId, kind: "goal", summary: clipPendingAttentionSummary(sources.goal.reason), since: sources.goal.since, count: 1 };
+    return {
+      chatId,
+      kind: "goal",
+      summary: clipPendingAttentionSummary(sources.goal.reason),
+      since: sources.goal.since,
+      count: 1,
+    };
   }
 
   if (live) return { chatId, kind: "working", summary: "", runStartedAt, count: 0 };
@@ -281,7 +304,10 @@ export interface LiveRunAttention {
  * Detached and interrupted waits are this Mac's own rows and are left out.
  * Undefined when no run is live.
  */
-export function liveRunAttention(chatId: string, runs: PendingAttentionRuns): LiveRunAttention | undefined {
+export function liveRunAttention(
+  chatId: string,
+  runs: PendingAttentionRuns,
+): LiveRunAttention | undefined {
   const attention = pendingAttentionForChat(chatId, { runs, detached: NO_DETACHED_PROMPTS });
   if (!attention) return undefined;
   const waiting = attention.kind === "approval" || attention.kind === "question";

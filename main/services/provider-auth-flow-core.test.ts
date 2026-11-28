@@ -38,7 +38,10 @@ test("provider login identity is lazy, private, stable across restarts and uniqu
     assert.equal(await readFile(file, "utf8"), `${id}\n`);
     if (process.platform !== "win32") assert.equal((await stat(file)).mode & 0o777, 0o600);
     assert.deepEqual(await readdir(join(root, "installation-a")), ["identity"]);
-    assert.notEqual(createProviderLoginDeviceId(() => join(root, "installation-b", "identity"))(), id);
+    assert.notEqual(
+      createProviderLoginDeviceId(() => join(root, "installation-b", "identity"))(),
+      id,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -50,7 +53,10 @@ test("provider login refuses corrupt, oversized and redirected identities withou
     const file = join(root, "identity");
     for (const invalid of ["broken", "x".repeat(129)]) {
       await writeFile(file, invalid);
-      assert.throws(createProviderLoginDeviceId(() => file), /Invalid provider login identity/u);
+      assert.throws(
+        createProviderLoginDeviceId(() => file),
+        /Invalid provider login identity/u,
+      );
       assert.equal(await readFile(file, "utf8"), invalid);
     }
     if (process.platform !== "win32") {
@@ -272,12 +278,14 @@ test("a committed credential reports catalog refresh failure as a nonfatal warni
 
   coordinator.start(owner, request());
   await waitForMessages(owner, "providers:auth:done");
-  assert.deepEqual(messages(owner, "providers:auth:done"), [{
-    flowId: FLOW_A,
-    providerId: PROVIDER_ID,
-    cancelled: false,
-    warning: "Credentials saved; retry catalog refresh.",
-  }]);
+  assert.deepEqual(messages(owner, "providers:auth:done"), [
+    {
+      flowId: FLOW_A,
+      providerId: PROVIDER_ID,
+      cancelled: false,
+      warning: "Credentials saved; retry catalog refresh.",
+    },
+  ]);
   assert.equal(messages(owner, "providers:auth:error").length, 0);
 });
 
@@ -1244,29 +1252,44 @@ test("a committed sign-in counts once by how it signed in, and a cancelled one c
   const authenticated = makeCoordinator({ login: async () => ({}) });
   authenticated.start(owner, request());
   await waitForMessages(owner, "providers:auth:done");
-  assert.deepEqual(sent, [{ event: "provider_connected", props: { provider_id: PROVIDER_ID, auth: "oauth" } }]);
+  assert.deepEqual(sent, [
+    { event: "provider_connected", props: { provider_id: PROVIDER_ID, auth: "oauth" } },
+  ]);
 
   sent.length = 0;
   const keyOwner = new FakeOwner(2);
   const keyed = new ProviderAuthFlowCoordinator({
-    backendFor: () => backend(async (interaction) => ({
-      type: "api_key",
-      key: await interaction.prompt({ type: "secret", message: "API token" }),
-    })),
+    backendFor: () =>
+      backend(async (interaction) => ({
+        type: "api_key",
+        key: await interaction.prompt({ type: "secret", message: "API token" }),
+      })),
     openExternal: async () => undefined,
     createId: ids(PROMPT_A),
   });
-  keyed.start(keyOwner, { flowId: FLOW_A, providerId: "cloudflare-workers-ai", authType: "api_key" });
+  keyed.start(keyOwner, {
+    flowId: FLOW_A,
+    providerId: "cloudflare-workers-ai",
+    authType: "api_key",
+  });
   await waitForMessages(keyOwner, "providers:auth:prompt");
   const prompt = messages<ProviderAuthPromptDto>(keyOwner, "providers:auth:prompt")[0];
-  keyed.respond(keyOwner, { flowId: FLOW_A, providerId: "cloudflare-workers-ai", promptId: prompt.promptId, value: "token" });
+  keyed.respond(keyOwner, {
+    flowId: FLOW_A,
+    providerId: "cloudflare-workers-ai",
+    promptId: prompt.promptId,
+    value: "token",
+  });
   await waitForMessages(keyOwner, "providers:auth:done");
-  assert.deepEqual(sent, [{ event: "provider_connected", props: { provider_id: "cloudflare-workers-ai", auth: "key" } }]);
+  assert.deepEqual(sent, [
+    { event: "provider_connected", props: { provider_id: "cloudflare-workers-ai", auth: "key" } },
+  ]);
 
   sent.length = 0;
   const cancelOwner = new FakeOwner(3);
   const cancelled = makeCoordinator({
-    login: async (interaction) => interaction.prompt({ type: "manual_code", message: "Paste a callback URL" }),
+    login: async (interaction) =>
+      interaction.prompt({ type: "manual_code", message: "Paste a callback URL" }),
   });
   cancelled.start(cancelOwner, request());
   await waitForMessages(cancelOwner, "providers:auth:prompt");

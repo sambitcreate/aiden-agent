@@ -42,11 +42,13 @@ function isTimestamp(value: unknown): value is number {
 function normalizeEntry(value: unknown): ChatTriageEntry | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  if (!isTimestamp(record.revision) || record.revision < 1 || !isTimestamp(record.updatedAt)) return null;
+  if (!isTimestamp(record.revision) || record.revision < 1 || !isTimestamp(record.updatedAt))
+    return null;
   const entry: ChatTriageEntry = { revision: record.revision, updatedAt: record.updatedAt };
   if (isTimestamp(record.pinnedAt)) entry.pinnedAt = record.pinnedAt;
   if (isTimestamp(record.doneAt)) entry.doneAt = record.doneAt;
-  if (isTimestamp(record.snoozedUntil) && record.snoozedUntil > 0) entry.snoozedUntil = record.snoozedUntil;
+  if (isTimestamp(record.snoozedUntil) && record.snoozedUntil > 0)
+    entry.snoozedUntil = record.snoozedUntil;
   return entry;
 }
 
@@ -67,7 +69,9 @@ function normalizeFile(value: unknown, now: number): ChatTriageFile {
 }
 
 function isEmpty(entry: ChatTriageEntry): boolean {
-  return entry.pinnedAt === undefined && entry.doneAt === undefined && entry.snoozedUntil === undefined;
+  return (
+    entry.pinnedAt === undefined && entry.doneAt === undefined && entry.snoozedUntil === undefined
+  );
 }
 
 /**
@@ -77,7 +81,11 @@ function isEmpty(entry: ChatTriageEntry): boolean {
  */
 function pruneTier(entry: ChatTriageEntry, now: number): number {
   if (isEmpty(entry)) return 2;
-  if (entry.pinnedAt !== undefined || (entry.snoozedUntil !== undefined && entry.snoozedUntil > now)) return 0;
+  if (
+    entry.pinnedAt !== undefined ||
+    (entry.snoozedUntil !== undefined && entry.snoozedUntil > now)
+  )
+    return 0;
   return 1;
 }
 
@@ -85,7 +93,11 @@ function pruneTier(entry: ChatTriageEntry, now: number): number {
  * Keep the map bounded. Empty entries go first, then Done marks and passed
  * snoozes, then pins and live snoozes; within each, the least recently changed.
  */
-function pruned(chats: Record<string, ChatTriageEntry>, now: number, keep?: string): Record<string, ChatTriageEntry> {
+function pruned(
+  chats: Record<string, ChatTriageEntry>,
+  now: number,
+  keep?: string,
+): Record<string, ChatTriageEntry> {
   const entries = Object.entries(chats);
   if (entries.length <= MAX_CHAT_TRIAGE_ENTRIES) return chats;
   entries.sort(([idA, a], [idB, b]) => {
@@ -123,7 +135,11 @@ export class ChatTriageStore {
       "chat-triage.json",
       { version: 1, chats: {} },
       root,
-      { normalize: (value) => normalizeFile(value, this.now()), fileMode: 0o600, maxBytes: 2 * 1_024 * 1_024 },
+      {
+        normalize: (value) => normalizeFile(value, this.now()),
+        fileMode: 0o600,
+        maxBytes: 2 * 1_024 * 1_024,
+      },
     );
   }
 
@@ -148,19 +164,34 @@ export class ChatTriageStore {
    * `ifRevision`, the write lands only when the chat's triage revision still
    * matches (0 for a chat with no triage yet).
    */
-  async set(chatId: string, patch: ChatTriagePatch, write: ChatTriageWrite = {}): Promise<ChatTriageResult> {
+  async set(
+    chatId: string,
+    patch: ChatTriagePatch,
+    write: ChatTriageWrite = {},
+  ): Promise<ChatTriageResult> {
     if (!SAFE_CHAT_ID.test(chatId)) return { ok: false, code: "invalid" };
     const keys = Object.keys(patch);
     if (keys.length === 0) return { ok: false, code: "invalid" };
     const now = this.now();
-    if (patch.restoreDoneAt !== undefined && (patch.done !== true || write.ifRevision === undefined ||
-      !isTimestamp(patch.restoreDoneAt) || patch.restoreDoneAt > now)) return { ok: false, code: "invalid" };
+    if (
+      patch.restoreDoneAt !== undefined &&
+      (patch.done !== true ||
+        write.ifRevision === undefined ||
+        !isTimestamp(patch.restoreDoneAt) ||
+        patch.restoreDoneAt > now)
+    )
+      return { ok: false, code: "invalid" };
     if (patch.snoozeUntil !== undefined && patch.snoozeUntil !== null) {
-      if (!isTimestamp(patch.snoozeUntil) || patch.snoozeUntil <= 0 || patch.snoozeUntil > now + MAX_SNOOZE_AHEAD_MS) {
+      if (
+        !isTimestamp(patch.snoozeUntil) ||
+        patch.snoozeUntil <= 0 ||
+        patch.snoozeUntil > now + MAX_SNOOZE_AHEAD_MS
+      ) {
         return { ok: false, code: "invalid" };
       }
     }
-    if (write.ifRevision !== undefined && !isTimestamp(write.ifRevision)) return { ok: false, code: "invalid" };
+    if (write.ifRevision !== undefined && !isTimestamp(write.ifRevision))
+      return { ok: false, code: "invalid" };
     let result: ChatTriageResult = { ok: false, code: "invalid" };
     await this.store.update((draft) => {
       const current = draft.chats[chatId];
@@ -182,7 +213,8 @@ export class ChatTriageStore {
       else if (patch.pinned === false) delete next.pinnedAt;
       if (patch.done === true) next.doneAt = patch.restoreDoneAt ?? now;
       else if (patch.done === false) delete next.doneAt;
-      if (typeof patch.snoozeUntil === "number" && patch.snoozeUntil > now) next.snoozedUntil = patch.snoozeUntil;
+      if (typeof patch.snoozeUntil === "number" && patch.snoozeUntil > now)
+        next.snoozedUntil = patch.snoozeUntil;
       else if (patch.snoozeUntil !== undefined) delete next.snoozedUntil;
       draft.chats = pruned({ ...draft.chats, [chatId]: next }, now, chatId);
       result = { ok: true, entry: copyEntry(next) };
@@ -281,39 +313,52 @@ export class ChatTriageStore {
 
   private clear(): void {
     if (this.timer === null) return;
-    (this.options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>)))(this.timer);
+    (
+      this.options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>))
+    )(this.timer);
     this.timer = null;
   }
 
   private arm(): void {
     this.clear();
     if (!this.started) return;
-    void this.store.load().then((file) => {
-      let next: number | undefined;
-      for (const entry of Object.values(file.chats)) {
-        if (entry.snoozedUntil !== undefined && (next === undefined || entry.snoozedUntil < next)) {
-          next = entry.snoozedUntil;
+    void this.store.load().then(
+      (file) => {
+        let next: number | undefined;
+        for (const entry of Object.values(file.chats)) {
+          if (
+            entry.snoozedUntil !== undefined &&
+            (next === undefined || entry.snoozedUntil < next)
+          ) {
+            next = entry.snoozedUntil;
+          }
         }
-      }
-      if (next !== undefined) this.schedule(Math.max(next - this.now(), 0));
-    }, () => {
-      // An unreadable store retries on the next check rather than never.
-      this.schedule(SNOOZE_WAKE_CHECK_MS);
-    });
+        if (next !== undefined) this.schedule(Math.max(next - this.now(), 0));
+      },
+      () => {
+        // An unreadable store retries on the next check rather than never.
+        this.schedule(SNOOZE_WAKE_CHECK_MS);
+      },
+    );
   }
 
   private schedule(delay: number): void {
     if (!this.started) return;
     this.clear();
-    const set = this.options.setTimer ?? ((callback: () => void, ms: number) => {
-      const handle = setTimeout(callback, ms);
-      (handle as { unref?: () => void }).unref?.();
-      return handle;
-    });
-    this.timer = set(() => {
-      this.timer = null;
-      void this.expire().catch(() => undefined);
-    }, Math.min(delay, SNOOZE_WAKE_CHECK_MS));
+    const set =
+      this.options.setTimer ??
+      ((callback: () => void, ms: number) => {
+        const handle = setTimeout(callback, ms);
+        (handle as { unref?: () => void }).unref?.();
+        return handle;
+      });
+    this.timer = set(
+      () => {
+        this.timer = null;
+        void this.expire().catch(() => undefined);
+      },
+      Math.min(delay, SNOOZE_WAKE_CHECK_MS),
+    );
   }
 
   /**
@@ -350,7 +395,10 @@ function wakingClass(state: string): "waiting" | "failed" | null {
   return null;
 }
 
-type AttentionRun = Pick<HostRunSummary, "runId" | "chatId" | "state" | "pendingApprovalIds" | "pendingQuestionIds">;
+type AttentionRun = Pick<
+  HostRunSummary,
+  "runId" | "chatId" | "state" | "pendingApprovalIds" | "pendingQuestionIds"
+>;
 
 /**
  * Wake a snoozed chat as soon as one of its runs starts waiting on the person

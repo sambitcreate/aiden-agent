@@ -23,7 +23,10 @@ import {
   PiAgentRuntimeHarness,
   resolvePiAgentRuntimeContributionSnapshot,
 } from "./pi-agent-runtime-harness.js";
-import { assertGenerationContextCapacity, estimateStaticContextTokens } from "./generation-context.js";
+import {
+  assertGenerationContextCapacity,
+  estimateStaticContextTokens,
+} from "./generation-context.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import type { Chat } from "./types.js";
 
@@ -32,7 +35,9 @@ function chat(id: string, workspaceId: string): Chat {
     id,
     title: id,
     workspaceId,
-    messages: [{ id: `${id}-message`, role: "user", content: "What is our launch policy?", createdAt: 1 }],
+    messages: [
+      { id: `${id}-message`, role: "user", content: "What is our launch policy?", createdAt: 1 },
+    ],
     createdAt: 1,
     updatedAt: 1,
   };
@@ -70,7 +75,10 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
 
   const attendedProvenance = memoryProvenanceForGeneration(macChat, "turn-mac", true);
   assert.ok(attendedProvenance);
-  assert.equal(memoryProvenanceForGeneration(sharedTelegramChat, "turn-telegram", false), undefined);
+  assert.equal(
+    memoryProvenanceForGeneration(sharedTelegramChat, "turn-telegram", false),
+    undefined,
+  );
   assert.deepEqual(prepareMemoryApproval({ fact: "Never commit headlessly." }, undefined), {
     ok: false,
     reason: "Memory writes require a current attended source turn.",
@@ -81,7 +89,11 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
   );
   assert.equal(preparedApproval.ok, true);
   if (preparedApproval.ok) assert.match(preparedApproval.summary, /turn:turn-mac/u);
-  const macExtension = await createMemoryExtension({ store, scope: sharedScope, provenance: attendedProvenance });
+  const macExtension = await createMemoryExtension({
+    store,
+    scope: sharedScope,
+    provenance: attendedProvenance,
+  });
   const boundTelegramExtension = await createMemoryExtension({
     store,
     scope: memoryScopeForChat(sharedTelegramChat),
@@ -91,33 +103,49 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
     scope: memoryScopeForChat(ordinaryTelegramChat),
   });
 
-  assert.deepEqual(macExtension.tools?.map(({ name }) => name), [
-    RECALL_MEMORY_TOOL_NAME,
-    REMEMBER_MEMORY_TOOL_NAME,
-    FORGET_MEMORY_TOOL_NAME,
-  ]);
-  assert.deepEqual(boundTelegramExtension.tools?.map(({ name }) => name), [RECALL_MEMORY_TOOL_NAME]);
-  assert.deepEqual(ordinaryTelegramExtension.tools?.map(({ name }) => name), [RECALL_MEMORY_TOOL_NAME]);
+  assert.deepEqual(
+    macExtension.tools?.map(({ name }) => name),
+    [RECALL_MEMORY_TOOL_NAME, REMEMBER_MEMORY_TOOL_NAME, FORGET_MEMORY_TOOL_NAME],
+  );
+  assert.deepEqual(
+    boundTelegramExtension.tools?.map(({ name }) => name),
+    [RECALL_MEMORY_TOOL_NAME],
+  );
+  assert.deepEqual(
+    ordinaryTelegramExtension.tools?.map(({ name }) => name),
+    [RECALL_MEMORY_TOOL_NAME],
+  );
   assert.equal(
-    piRuntimeReplayPolicy(macExtension.tools?.find(({ name }) => name === REMEMBER_MEMORY_TOOL_NAME)),
+    piRuntimeReplayPolicy(
+      macExtension.tools?.find(({ name }) => name === REMEMBER_MEMORY_TOOL_NAME),
+    ),
     "never",
   );
 
   const runProposal = async (allowed: boolean) => {
     const core = createFauxCore({ provider: `memory-approval-${allowed ? "allow" : "deny"}` });
     core.setResponses([
-      fauxAssistantMessage([
-        fauxToolCall(REMEMBER_MEMORY_TOOL_NAME, {
-          fact: allowed ? "Approved through the production gate." : "Denied by the production gate.",
-          alwaysOn: false,
-        }),
-      ], { stopReason: "toolUse" }),
+      fauxAssistantMessage(
+        [
+          fauxToolCall(REMEMBER_MEMORY_TOOL_NAME, {
+            fact: allowed
+              ? "Approved through the production gate."
+              : "Denied by the production gate.",
+            alwaysOn: false,
+          }),
+        ],
+        { stopReason: "toolUse" },
+      ),
       fauxAssistantMessage("done"),
     ]);
     const harness = new PiAgentRuntimeHarness({
-      convertToLlm: (messages) => messages.filter(
-        (message) => message.role === "user" || message.role === "assistant" || message.role === "toolResult",
-      ),
+      convertToLlm: (messages) =>
+        messages.filter(
+          (message) =>
+            message.role === "user" ||
+            message.role === "assistant" ||
+            message.role === "toolResult",
+        ),
       streamFn: core.streamSimple,
       extensions: [macExtension],
       initialState: {
@@ -141,9 +169,15 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
     await harness.prompt("remember the proposed fact");
   };
   await runProposal(false);
-  assert.equal((await store.list(sharedScope)).some(({ text }) => text.startsWith("Denied")), false);
+  assert.equal(
+    (await store.list(sharedScope)).some(({ text }) => text.startsWith("Denied")),
+    false,
+  );
   await runProposal(true);
-  assert.equal((await store.list(sharedScope)).some(({ text }) => text.startsWith("Approved")), true);
+  assert.equal(
+    (await store.list(sharedScope)).some(({ text }) => text.startsWith("Approved")),
+    true,
+  );
 
   const cancelled = new AbortController();
   cancelled.abort();
@@ -184,8 +218,12 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
     );
   }
 
-  const boundRecall = boundTelegramExtension.tools?.find(({ name }) => name === RECALL_MEMORY_TOOL_NAME)!;
-  const ordinaryRecall = ordinaryTelegramExtension.tools?.find(({ name }) => name === RECALL_MEMORY_TOOL_NAME)!;
+  const boundRecall = boundTelegramExtension.tools?.find(
+    ({ name }) => name === RECALL_MEMORY_TOOL_NAME,
+  )!;
+  const ordinaryRecall = ordinaryTelegramExtension.tools?.find(
+    ({ name }) => name === RECALL_MEMORY_TOOL_NAME,
+  )!;
   const sharedResult = await boundRecall.execute("recall", { query: "launch window" });
   const workspaceResult = await ordinaryRecall.execute("recall", { query: "launch window" });
   const text = (result: Awaited<ReturnType<typeof boundRecall.execute>>) =>
@@ -208,9 +246,11 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
     tools: withMemory.tools,
   });
   assert.ok(withTokens > withoutTokens);
-  assert.doesNotThrow(() => assertGenerationContextCapacity({
-    contextWindow: 8_192,
-    systemPrompt: withMemory.systemPrompt,
-    tools: withMemory.tools,
-  }));
+  assert.doesNotThrow(() =>
+    assertGenerationContextCapacity({
+      contextWindow: 8_192,
+      systemPrompt: withMemory.systemPrompt,
+      tools: withMemory.tools,
+    }),
+  );
 });

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { shouldSubmitDialogOnEnter, type DialogEnterKey, type DialogEnterTarget } from "./dialog-enter.js";
+import {
+  shouldSubmitDialogOnEnter,
+  type DialogEnterKey,
+  type DialogEnterTarget,
+} from "./dialog-enter.js";
 
 const enter: DialogEnterKey = {
   key: "Enter",
@@ -17,7 +21,10 @@ const button: DialogEnterTarget = { tagName: "BUTTON", inForm: false };
 
 test("plain Enter confirms from single-line text fields only", () => {
   assert.equal(shouldSubmitDialogOnEnter(enter, textInput), true);
-  assert.equal(shouldSubmitDialogOnEnter(enter, { tagName: "input", type: "", inForm: false }), true);
+  assert.equal(
+    shouldSubmitDialogOnEnter(enter, { tagName: "input", type: "", inForm: false }),
+    true,
+  );
   assert.equal(shouldSubmitDialogOnEnter(enter, { ...textInput, type: "url" }), true);
   // Multi-line text keeps Enter for new lines; buttons and toggles keep native activation.
   assert.equal(shouldSubmitDialogOnEnter(enter, textarea), false);

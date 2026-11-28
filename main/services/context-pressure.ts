@@ -86,7 +86,10 @@ export function rememberPromptCacheRefresh(chatId: string, refresh: PromptCacheR
  */
 const promptCacheRetentions = new Map<string, PromptCacheRetentionRecord>();
 
-export function rememberPromptCacheRetention(chatId: string, record: PromptCacheRetentionRecord): void {
+export function rememberPromptCacheRetention(
+  chatId: string,
+  record: PromptCacheRetentionRecord,
+): void {
   promptCacheRetentions.set(chatId, record);
 }
 
@@ -192,18 +195,26 @@ async function ambientContextOptions(
   // "Always visible" servers); other turns declare the MCP tools this process
   // already built (never connecting).
   const codemode = Boolean(workspaceId && folderPath) && permission !== "none";
-  const withRuntimeTools = async (options: GenerationContextOptions): Promise<GenerationContextOptions> => {
-    const mcpTools = await configStore.listMcpServers()
-      .then((servers) => mcpManager.peekBuiltTools(
-        withoutWorkspaceDisabledMcpServers(servers, workspace?.disabledMcpServerIds)
-          .filter((server) => server.enabled && mcpServerOffersTools(server))
-          .map((server) => server.id),
-      ))
+  const withRuntimeTools = async (
+    options: GenerationContextOptions,
+  ): Promise<GenerationContextOptions> => {
+    const mcpTools = await configStore
+      .listMcpServers()
+      .then((servers) =>
+        mcpManager.peekBuiltTools(
+          withoutWorkspaceDisabledMcpServers(servers, workspace?.disabledMcpServerIds)
+            .filter((server) => server.enabled && mcpServerOffersTools(server))
+            .map((server) => server.id),
+        ),
+      )
       .catch(() => []);
     const extra = ambientRuntimeToolEstimate({ codemode, mcpTools });
     if (!extra.length) return options;
     const names = new Set(options.tools.map((tool) => tool.name));
-    return { ...options, tools: [...options.tools, ...extra.filter((tool) => !names.has(tool.name))] };
+    return {
+      ...options,
+      tools: [...options.tools, ...extra.filter((tool) => !names.has(tool.name))],
+    };
   };
   const cached = ambientProfiles.get(chatId);
   if (cached?.key === key) return withRuntimeTools(cached.options);
@@ -338,7 +349,11 @@ export async function chatContextPressure(
     overrides,
   });
   const settings = await configStore.getCompactionSettings();
-  options.compactionReserveTokens = configuredCompactionReserveTokens(settings.compactionModelOverrides, model, settings.compactionEngine);
+  options.compactionReserveTokens = configuredCompactionReserveTokens(
+    settings.compactionModelOverrides,
+    model,
+    settings.compactionEngine,
+  );
   const hasDraft =
     (draft?.draftText !== undefined && draft.draftText.trim() !== "") ||
     (draft?.attachments?.length ?? 0) > 0;
@@ -353,7 +368,12 @@ export async function chatContextPressure(
       ]
     : messages;
   const pressure = projectChatContextPressure(projected, options);
-  const promptCache = promptCacheWindow(model, messages, promptCacheRefreshes.get(chatId), promptCacheRetentions.get(chatId));
+  const promptCache = promptCacheWindow(
+    model,
+    messages,
+    promptCacheRefreshes.get(chatId),
+    promptCacheRetentions.get(chatId),
+  );
   const lastCacheMiss = lastPromptCacheMiss(chatId);
   return {
     ...pressure,

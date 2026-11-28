@@ -34,17 +34,17 @@ Each phase follows the phased-build-review loop:
 
 At the end, four Opus high reviewers review the whole PR, and a CI watcher owns the PR checks. The PR is not merged without the owner asking.
 
-| Phase | Fix order step | Theme |
-| --- | --- | --- |
-| 0 | 2 | Measurement and the prefix harness |
-| 1 | 1 | Stable AGENTS.md nonce and turn-fixed system sections |
-| 2 | 3 | Fixed tool list |
-| 3 | 4, 10b | Hook context on its message, frozen per-chat state |
-| 4 | 7 | Side calls share the parent prefix; one-off calls write no cache |
-| 5 | 6 | Compaction on the cached prefix, then in the background |
-| 6 | 8 | Idle warming on real TTLs, `aiden serve` parity, long retention |
-| 7 | 9, 10a | Screenshot trimming in batches, retire the Gemini explicit cache |
-| 8 | 5, 11 | Codex WebSocket and TTL, message threads, provider routing |
+| Phase | Fix order step | Theme                                                            |
+| ----- | -------------- | ---------------------------------------------------------------- |
+| 0     | 2              | Measurement and the prefix harness                               |
+| 1     | 1              | Stable AGENTS.md nonce and turn-fixed system sections            |
+| 2     | 3              | Fixed tool list                                                  |
+| 3     | 4, 10b         | Hook context on its message, frozen per-chat state               |
+| 4     | 7              | Side calls share the parent prefix; one-off calls write no cache |
+| 5     | 6              | Compaction on the cached prefix, then in the background          |
+| 6     | 8              | Idle warming on real TTLs, `aiden serve` parity, long retention  |
+| 7     | 9, 10a         | Screenshot trimming in batches, retire the Gemini explicit cache |
+| 8     | 5, 11          | Codex WebSocket and TTL, message threads, provider routing       |
 
 ## Phase 0: measurement and the prefix harness
 
@@ -106,16 +106,16 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 
 **Baseline: the `todo` cases, all failing today.** Each row gives the first changed wire segment and what the telemetry reports.
 
-| Case | First changed segment | Telemetry reports |
-| --- | --- | --- |
-| AGENTS.md nonce, all three wires | system | `system:agents-instructions` |
-| On-demand tool loaded mid-turn (step 2 against step 1) | tools | `tools` |
-| Bot open work between turns | system | none: trailing section patch, hoisted by the wire |
-| A person's Bot memory edit (`aiden-memory`) | system | none: trailing section patch, hoisted by the wire |
-| Branch switch | system | `system:base` |
-| Permission mode change | system | `system:base` |
-| Memory edit | system | `system:base` |
-| Fourth `computer_use` screenshot trims an earlier image | messages | `messages` |
+| Case                                                    | First changed segment | Telemetry reports                                 |
+| ------------------------------------------------------- | --------------------- | ------------------------------------------------- |
+| AGENTS.md nonce, all three wires                        | system                | `system:agents-instructions`                      |
+| On-demand tool loaded mid-turn (step 2 against step 1)  | tools                 | `tools`                                           |
+| Bot open work between turns                             | system                | none: trailing section patch, hoisted by the wire |
+| A person's Bot memory edit (`aiden-memory`)             | system                | none: trailing section patch, hoisted by the wire |
+| Branch switch                                           | system                | `system:base`                                     |
+| Permission mode change                                  | system                | `system:base`                                     |
+| Memory edit                                             | system                | `system:base`                                     |
+| Fourth `computer_use` screenshot trims an earlier image | messages              | `messages`                                        |
 
 ## Phase 1: stable AGENTS.md nonce and turn-fixed system sections
 
@@ -357,6 +357,7 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
   - the isolated advisor review
 
   The approval judge, vision, btw and advisor already sent "none" inline; they now use the helper. Not one-offs: Bot model and execution passthroughs, `packages/cli/src/bot-durable.ts`, and `pi-compaction-core.ts` (phase 5).
+
 - **Phase 3 note decided.** A continuation sends the parent's messages unchanged, to the provider that already received them, for an ephemeral answer that is never stored. No memory fact reaches a permanent summary that way, so no fact is stripped and the shared prefix is the whole parent request. `withoutMemoryFacts` stays specific to the compaction summarizer; phase 5 must still resolve it there.
 
 The code differed from the plan in these ways:
@@ -427,6 +428,7 @@ The code differed from the plan in these ways:
   - The summary, the kept tail and the request's fixed overhead come to less than `start`. The overhead (system prompt and tools) is measured when the summary starts: the provider's count for the summarized prefix minus Pi's estimate of its messages. So the compacted chat lands below the point where the next background summary would start, and a small window never compacts again at once.
 
   Otherwise the summary is dropped quietly and the compaction runs as usual.
+
 - **Applied at the trigger, not the next turn boundary.** The plan applied a precomputed summary at the next turn boundary and dropped it once the chat moved on. As built, it is kept across appends and applied only when compaction is due, so a chat below the trigger is never compacted early.
 - **The final filter can fail a compaction.** A fact split across lines, or a summary line quoting an approved fact's text, removes that line or fails the compaction. A threshold compaction refused this way ends the turn `provider_failed`, as other compaction failures do.
 - **Forgotten lines in chatState mode.** The session wrapper hides a removed fact's lines from `getBranch()`, so the final filter cannot see them; they never reach the summarizer input either.
@@ -513,6 +515,7 @@ The code differed from the plan in these ways:
 - **No Remote contract change.** The setting is desktop-local and no Aiden Remote payload changed, so the iOS and Android clients need no update. No onboarding change.
 
 Tests:
+
 - `pi-cache-warming.test.ts` (fake clock): the period follows the lifetime for each retention; the idle phase stops after its limit, on release by the window that showed the chat, and on a chat write; another window cannot release it; an unattended chat never creates one; no refresh is sent once the spending limit refuses, while streaming or idle.
 - `prompt-cache-lifetimes.test.ts`: long and none lifetimes, the compat refusal, and the wrapper asking for "long" only on allowlisted models and never overriding a retention a request names.
 - `prompt-cache-lifetimes.test.ts` (`chatTurnPromptCache` fixtures): an attended workspace chat on Anthropic or a Bedrock Claude model AWS lists with a one-hour TTL asks for "long" while its side calls stay "short" or "none"; the setting off, a harness, a Bot, an automation, a scheduled run, a subagent, compaction, Telegram, a paired device's turn, OpenRouter routing to Anthropic, a custom endpoint, Bedrock Sonnet 4.5 and an older Bedrock Claude all stay short; every Bedrock Claude model in Pi's catalog keeps an hour exactly when the AWS table lists it.
@@ -563,6 +566,7 @@ The code differed from the plan in these ways:
 - **No CLI change.** The server never used the explicit cache; it runs the same Pi Google adapter, and Bot trimming reaches it through the shared `bot-extension.ts`.
 
 Tests:
+
 - `screenshot-trimming.test.ts`: over 24 screenshots, earlier messages change only at steps 9, 15 and 21 and each cut keeps the newest three; the byte limit cuts at its own steps to what fits in 8 MiB; the newest screenshot stays even when it alone passes both limits; the three screenshot tools share one count while file-tool and attached images are untouched.
 - `generation-context.test.ts`, `bot-browser-tools.test.ts`, `bot-computer-tools.test.ts`: the workspace and Bot projections cut at the batch thresholds with their tools' notes.
 - `prompt-prefix-stability.test.ts`: every per-wire case runs on Google Generative AI too, and a chat's tool loop and next turn, rendered through Pi's Google adapter, carry the system instruction and tools inline, name no `cachedContent`, extend the previous request byte for byte and make no network call. That test renders through the adapter, not llm-client: driving a full generation needs the data store, settings, credentials and workspace services, more than the llm-client test hosts can stand in for. What it shows is that Pi adds no cached content of its own (Pi's Google adapter only reads `cachedContentTokenCount`), and the explicit cache's only creator, `gemini-context-cache.ts`, is deleted.
@@ -650,6 +654,7 @@ The code differed from the plan in these ways:
 - **Forked subagents: not built.** A forked child sends a sanitized text projection of the parent's transcript and its role's tool set. That projection and the role-scoped tools are a security boundary (the child must not inherit the parent's tools or raw tool output), so sending the parent's tools and system as the child's prefix needs an owner decision first. The forked-subagent prefix test is not added.
 
 Tests:
+
 - `prompt-cache-breakpoints.test.ts`, rendered through Pi's real Anthropic and Bedrock adapters with no network:
   - a registered head gives 4 markers with the head as its own first system block, the blocks join to the unsplit system text, and a new memory tail leaves the tools and that block byte-identical;
   - no head, a mismatched head, caching off and the OAuth shape add nothing and never pass 4, and a payload already at 4 markers or 4 cachePoints is left alone;
@@ -664,7 +669,6 @@ Tests:
   - a pinned Bot runtime places the stable-head breakpoint on the wire.
 - `codex-provider.test.ts`: an in-process request uses the WebSocket transport when the runtime has one, SSE when asked, when it has none, or when a proxy is set for the Codex host (a NO_PROXY exemption restores the socket), and isolated dispatch stays on SSE.
 - `packages/cli/tests/daemon-turns.test.mjs`: a serve session's transport is plain websocket, SSE when settings.json asks or a proxy is set, and a helper agent worker's settings are SSE with no warming whatever settings.json asks (the worker's use of them is not driven by a test); an Anthropic serve chat whose turn tells always-on memory sends 4 markers with the memory in the second system block, and a turn without memory sends one block. The serve Bedrock path shares the tested rewrite and has no serve-level test.
-
 
 **As built, 8b: serve warming and the hour cache, serve compaction, replay and children (2026-11-19)**
 
@@ -710,15 +714,15 @@ This replaces phase 6's accepted limits that `aiden serve` warms only while stre
 
 ## Risks
 
-| Risk | Mitigation |
-| --- | --- |
-| Always-declared tools invite calls that are then blocked. | Clear block reasons, approval-gate decision tests, replay gate. |
-| State sent in the tail drifts from enforced state. | One source for both, and a behavioral test per state kind (phase 3). |
-| Warming costs money on abandoned chats. | Bounded warms, attended chats only, an off switch. |
-| Background compaction races the user. | Snapshot check, and the summary is thrown away on change. |
-| Threads or Codex WebSocket lower quality. | Replay gate decides; off by default unless it passes. Phase 8a waived it for plain Codex `"websocket"`, which sends the same full request as SSE; the delta modes stay off. |
-| A Codex socket fails. | A failure before the stream starts pins that chat to SSE for the rest of the process (Pi's fallback). A drop mid-stream fails the turn, as an SSE drop does; the person retries. |
-| A very large single PR is hard to review. | Self-contained phase commits, review loop per phase, final four-reviewer pass. |
+| Risk                                                      | Mitigation                                                                                                                                                                       |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Always-declared tools invite calls that are then blocked. | Clear block reasons, approval-gate decision tests, replay gate.                                                                                                                  |
+| State sent in the tail drifts from enforced state.        | One source for both, and a behavioral test per state kind (phase 3).                                                                                                             |
+| Warming costs money on abandoned chats.                   | Bounded warms, attended chats only, an off switch.                                                                                                                               |
+| Background compaction races the user.                     | Snapshot check, and the summary is thrown away on change.                                                                                                                        |
+| Threads or Codex WebSocket lower quality.                 | Replay gate decides; off by default unless it passes. Phase 8a waived it for plain Codex `"websocket"`, which sends the same full request as SSE; the delta modes stay off.      |
+| A Codex socket fails.                                     | A failure before the stream starts pins that chat to SSE for the rest of the process (Pi's fallback). A drop mid-stream fails the turn, as an SSE drop does; the person retries. |
+| A very large single PR is hard to review.                 | Self-contained phase commits, review loop per phase, final four-reviewer pass.                                                                                                   |
 
 ## Out of scope
 

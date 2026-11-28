@@ -61,7 +61,9 @@ export const STORAGE_PROFILE_LAYOUT: Readonly<Record<string, StorageCategoryId>>
 };
 
 export function storageCategoryForEntry(name: string): StorageCategoryId {
-  return Object.prototype.hasOwnProperty.call(STORAGE_PROFILE_LAYOUT, name) ? STORAGE_PROFILE_LAYOUT[name]! : "other";
+  return Object.prototype.hasOwnProperty.call(STORAGE_PROFILE_LAYOUT, name)
+    ? STORAGE_PROFILE_LAYOUT[name]!
+    : "other";
 }
 
 /**

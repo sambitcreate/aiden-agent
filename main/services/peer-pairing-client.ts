@@ -21,9 +21,7 @@ export type { PeerPairingFailure };
 
 export class PeerPairingOutcomeError extends Error {
   constructor(readonly outcome: PeerPairingFailure) {
-    super(
-      outcome.status === "failed" ? outcome.message : `Pairing ${outcome.status}.`,
-    );
+    super(outcome.status === "failed" ? outcome.message : `Pairing ${outcome.status}.`);
   }
 }
 
@@ -148,8 +146,7 @@ export async function requestPeerPairing<T>(input: PeerPairingRequestInput<T>): 
           path: "/pairing/requests",
           signal,
           body: {
-            deviceName:
-              sanitizePairingRequestDeviceName(input.deviceName) ?? "Aiden desktop",
+            deviceName: sanitizePairingRequestDeviceName(input.deviceName) ?? "Aiden desktop",
             deviceType: input.deviceType,
             publicKey: keys.publicKey,
             ...(version ? { clientVersion: version } : {}),

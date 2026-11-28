@@ -1,6 +1,4 @@
-import type {
-  TelegramBotBindingStore,
-} from "./telegram-bot-binding-store.js";
+import type { TelegramBotBindingStore } from "./telegram-bot-binding-store.js";
 
 export class TelegramBotBindingsUnsupportedError extends Error {
   readonly name = "TelegramBotBindingsUnsupportedError";

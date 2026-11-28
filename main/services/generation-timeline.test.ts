@@ -28,16 +28,23 @@ test("codemode and nested raw call IDs project to distinct renderer-safe activit
   projector.toolFinished("private-script/1", "completed");
   projector.toolFinished("private-script", "completed");
   const timeline = projector.finish("completed");
-  assert.deepEqual(toolSteps(timeline).map((step) => [step.id, step.toolCallId, step.toolName]), [
-    ["tool-1", "call-1", "codemode"], ["tool-2", "call-2", "read_file"],
-  ]);
+  assert.deepEqual(
+    toolSteps(timeline).map((step) => [step.id, step.toolCallId, step.toolName]),
+    [
+      ["tool-1", "call-1", "codemode"],
+      ["tool-2", "call-2", "read_file"],
+    ],
+  );
   assert.ok(parseGenerationTimeline(timeline));
   assert.doesNotMatch(JSON.stringify(timeline), /private-script|private script source/u);
 });
 
 test("MCP tool steps carry the server/tool label while toolName and the wire shape stay unchanged", () => {
   const mcpTool = (serverName: string, tool: { name: string; title?: string }, name: string) =>
-    markMcpAgentTool({ name, ...mcpAgentToolPresentation(serverName, tool) }, { serverId: serverName, toolName: tool.name });
+    markMcpAgentTool(
+      { name, ...mcpAgentToolPresentation(serverName, tool) },
+      { serverId: serverName, toolName: tool.name },
+    );
   const tools = [
     mcpTool("GitHub", { name: "create_issue", title: "Create issue" }, "github__create_issue"),
     mcpTool("S".repeat(64), { name: "t".repeat(64) }, "long__tool"),
@@ -55,15 +62,21 @@ test("MCP tool steps carry the server/tool label while toolName and the wire sha
   for (const id of ["a", "b", "c", "d"]) projector.toolFinished(id, "completed");
   const timeline = projector.finish("completed");
   const steps = toolSteps(timeline);
-  assert.deepEqual(steps.map((step) => [step.toolName, step.label]), [
-    ["github__create_issue", "GitHub/Create issue"],
-    ["long__tool", steps[1]!.label],
-    ["read_file", "Read file"],
-    ["other__unknown", "Other Unknown"],
-  ]);
+  assert.deepEqual(
+    steps.map((step) => [step.toolName, step.label]),
+    [
+      ["github__create_issue", "GitHub/Create issue"],
+      ["long__tool", steps[1]!.label],
+      ["read_file", "Read file"],
+      ["other__unknown", "Other Unknown"],
+    ],
+  );
   assert.ok(steps[1]!.label.startsWith(`${"S".repeat(64)}/t`), steps[1]!.label);
   assert.ok(steps[1]!.label.length <= 120, "labels stay within the native clients' 120-unit limit");
-  assert.ok(parseGenerationTimeline(timeline), "the relabelled timeline still parses on the shared contract");
+  assert.ok(
+    parseGenerationTimeline(timeline),
+    "the relabelled timeline still parses on the shared contract",
+  );
 });
 
 test("keeps tool order stable when parallel calls finish out of order", () => {
@@ -234,10 +247,16 @@ test("does not expose raw command, search, content, or absolute path arguments",
 });
 
 test("labels a workspace artifact restore as a restore, not an update", () => {
-  assert.deepEqual(safeToolDescriptor("workspace_artifact", { operation: "restore", id: "art1", revision: 2 }), {
-    label: "Restore artifact",
-  });
-  assert.equal(safeToolDescriptor("workspace_artifact", { operation: "update", id: "art1" }).label, "Update artifact");
+  assert.deepEqual(
+    safeToolDescriptor("workspace_artifact", { operation: "restore", id: "art1", revision: 2 }),
+    {
+      label: "Restore artifact",
+    },
+  );
+  assert.equal(
+    safeToolDescriptor("workspace_artifact", { operation: "update", id: "art1" }).label,
+    "Update artifact",
+  );
 });
 
 test("projects display_image as a safe relative GUI artifact action", () => {
@@ -260,14 +279,27 @@ test("projects display_image as a safe relative GUI artifact action", () => {
 });
 
 test("projects a Bot computer step with its intent, never typed text or the command", () => {
-  assert.deepEqual(safeToolDescriptor("computer", { action: "type", text: "SECRET TEXT", intent: "Type the search terms" }), {
-    label: "Use its computer",
-    detail: "Type the search terms",
-  });
-  assert.deepEqual(safeToolDescriptor("computer_shell", { command: "export TOKEN=SECRET", description: "Set up the project" }), {
-    label: "Run command in its computer",
-    detail: "Set up the project",
-  });
+  assert.deepEqual(
+    safeToolDescriptor("computer", {
+      action: "type",
+      text: "SECRET TEXT",
+      intent: "Type the search terms",
+    }),
+    {
+      label: "Use its computer",
+      detail: "Type the search terms",
+    },
+  );
+  assert.deepEqual(
+    safeToolDescriptor("computer_shell", {
+      command: "export TOKEN=SECRET",
+      description: "Set up the project",
+    }),
+    {
+      label: "Run command in its computer",
+      detail: "Set up the project",
+    },
+  );
 });
 
 test("projects generate_image with only its model and a known aspect ratio, never the prompt", () => {
@@ -277,7 +309,11 @@ test("projects generate_image with only its model and a known aspect ratio, neve
     prompt: "SECRET PROMPT",
     aspectRatio: "16:9",
   });
-  assert.deepEqual(descriptor, { label: "Generate image", target: "fal/fal-ai/flux", detail: "16:9" });
+  assert.deepEqual(descriptor, {
+    label: "Generate image",
+    target: "fal/fal-ai/flux",
+    detail: "16:9",
+  });
   assert.equal(JSON.stringify(descriptor).includes("SECRET"), false);
   assert.deepEqual(safeToolDescriptor("generate_image", { prompt: "x", aspectRatio: "21:9" }), {
     label: "Generate image",
@@ -293,10 +329,17 @@ test("projects generate_image with only its model and a known aspect ratio, neve
     ["replicate", "a".repeat(300)],
     ["openrouter", 42],
   ]) {
-    assert.equal(safeToolDescriptor("generate_image", { provider, model }).target, undefined, `${provider}/${model}`);
+    assert.equal(
+      safeToolDescriptor("generate_image", { provider, model }).target,
+      undefined,
+      `${provider}/${model}`,
+    );
   }
   assert.equal(
-    safeToolDescriptor("generate_image", { provider: "openrouter", model: "google/gemini-2.5-flash-image" }).target,
+    safeToolDescriptor("generate_image", {
+      provider: "openrouter",
+      model: "google/gemini-2.5-flash-image",
+    }).target,
     "openrouter/google/gemini-2.5-flash-image",
   );
 });
@@ -367,7 +410,12 @@ test("Stop marks exactly the steps it cancels, and the mark survives a reload", 
 });
 
 test("cancellations from any other origin, or none, never carry the Stop mark", () => {
-  for (const origin of [undefined, "application_shutdown", "chat_deletion", "scheduled_task_cancel"] as const) {
+  for (const origin of [
+    undefined,
+    "application_shutdown",
+    "chat_deletion",
+    "scheduled_task_cancel",
+  ] as const) {
     const projector = new GenerationTimelineProjector("generation-other", () => {});
     projector.toolStarted("swept", "grep", { pattern: "x" });
     projector.toolRunning("swept");
@@ -448,7 +496,9 @@ test("device tool rows name the simulator action and never keep the device ids",
   const args = { hostId: "local", deviceId: "5A1E2E00-0000-4000-8000-00000000E2E0" };
   assert.deepEqual(safeToolDescriptor("device_list", {}), { label: "List simulators" });
   assert.deepEqual(safeToolDescriptor("device_open", args), { label: "Open simulator" });
-  assert.deepEqual(safeToolDescriptor("device_screenshot", args), { label: "Screenshot simulator" });
+  assert.deepEqual(safeToolDescriptor("device_screenshot", args), {
+    label: "Screenshot simulator",
+  });
   assert.deepEqual(safeToolDescriptor("device_close", args), { label: "Close simulator" });
   assert.deepEqual(safeToolDescriptor("device_close", { ...args, shutdown: true }), {
     label: "Shut down simulator",
@@ -517,7 +567,9 @@ test("consecutive reasoning blocks merge into one timed stretch", () => {
 
 test("readable reasoning spans remain ordered across tools and reconcile to terminal content", () => {
   const snapshots: GenerationTimeline[] = [];
-  const projector = new GenerationTimelineProjector("generation-1", (value) => snapshots.push(value));
+  const projector = new GenerationTimelineProjector("generation-1", (value) =>
+    snapshots.push(value),
+  );
   const firstStep = projector.stepCount();
   projector.thinkingStarted();
   projector.reasoningDelta(0, 5);
@@ -527,19 +579,31 @@ test("readable reasoning spans remain ordered across tools and reconcile to term
   projector.thinkingStarted();
   projector.reasoningDelta(7, 13);
   projector.thinkingEnded();
-  projector.reconcileReasoningSegments(firstStep, [
-    { start: 0, end: 5 },
-    { start: 7, end: 14 },
-  ], 14);
+  projector.reconcileReasoningSegments(
+    firstStep,
+    [
+      { start: 0, end: 5 },
+      { start: 7, end: 14 },
+    ],
+    14,
+  );
   const final = projector.finish("completed");
   const thoughts = final.steps.filter((step) => step.kind === "thinking");
-  assert.deepEqual(thoughts.map((step) => [step.reasoningStartOffset, step.reasoningEndOffset]), [
-    [0, 5], [7, 14],
-  ]);
+  assert.deepEqual(
+    thoughts.map((step) => [step.reasoningStartOffset, step.reasoningEndOffset]),
+    [
+      [0, 5],
+      [7, 14],
+    ],
+  );
   assert.deepEqual(parseGenerationTimeline(final, 0, 14), final);
   assert.equal(parseGenerationTimeline(final, 0, 13), undefined);
-  assert.ok(snapshots.some((snapshot) => snapshot.steps[2]?.kind === "thinking" &&
-    snapshot.steps[2].reasoningEndOffset === 14));
+  assert.ok(
+    snapshots.some(
+      (snapshot) =>
+        snapshot.steps[2]?.kind === "thinking" && snapshot.steps[2].reasoningEndOffset === 14,
+    ),
+  );
 });
 
 test("redacted Pi thinking between readable blocks keeps one chronological span", () => {
@@ -551,11 +615,14 @@ test("redacted Pi thinking between readable blocks keeps one chronological span"
   projector.thinkingStarted();
   projector.reasoningDelta(15, 29);
   projector.thinkingEnded();
-  const segments = terminalAssistantThinkingSegments({ role: "assistant", content: [
-    { type: "thinking", thinking: "visible first" },
-    { type: "thinking", thinking: "private", redacted: true },
-    { type: "thinking", thinking: "visible second" },
-  ] });
+  const segments = terminalAssistantThinkingSegments({
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "visible first" },
+      { type: "thinking", thinking: "private", redacted: true },
+      { type: "thinking", thinking: "visible second" },
+    ],
+  });
   assert.ok(segments);
   projector.reconcileReasoningSegments(firstStep, segments, 29);
   const thought = projector.finish("completed").steps[0];
@@ -569,13 +636,17 @@ test("ambiguous terminal thinking and retry remove stale public spans", () => {
   projector.reasoningDelta(0, 5);
   projector.thinkingEnded();
   projector.reconcileReasoningSegments(0, [], 0);
-  assert.equal(projector.snapshot().steps.find((step) => step.kind === "thinking")
-    ?.reasoningStartOffset, undefined);
+  assert.equal(
+    projector.snapshot().steps.find((step) => step.kind === "thinking")?.reasoningStartOffset,
+    undefined,
+  );
   projector.thinkingStarted();
   projector.reasoningDelta(0, 3);
   projector.rewindReasoningOffset(0);
-  assert.equal(projector.snapshot().steps.find((step) => step.kind === "thinking")
-    ?.reasoningStartOffset, undefined);
+  assert.equal(
+    projector.snapshot().steps.find((step) => step.kind === "thinking")?.reasoningStartOffset,
+    undefined,
+  );
 });
 
 test("a reopened merged thinking step reads open again on the live timeline", () => {
@@ -724,7 +795,10 @@ test("terminal Pi block order reanchors tools after rewritten text", () => {
     thinkingOffsets: [4],
     toolOffsets: new Map([["call-a", 1]]),
   });
-  assert.deepEqual(projector.snapshot().steps.map((step) => step.contentOffset), [1, 4]);
+  assert.deepEqual(
+    projector.snapshot().steps.map((step) => step.contentOffset),
+    [1, 4],
+  );
 });
 
 test("version 1 timelines replay without pretending to have presentation offsets", () => {
@@ -779,10 +853,13 @@ test("version 2 reasoning timelines replay without presentation offsets", () => 
   const parsed = parseGenerationTimeline(legacy);
   assert.equal(parsed?.version, 2);
   assert.equal(parsed?.steps[0]?.contentOffset, undefined);
-  assert.equal(parseGenerationTimeline({
-    ...legacy,
-    steps: [{ ...legacy.steps[0], reasoningStartOffset: 0, reasoningEndOffset: 2 }],
-  }), undefined);
+  assert.equal(
+    parseGenerationTimeline({
+      ...legacy,
+      steps: [{ ...legacy.steps[0], reasoningStartOffset: 0, reasoningEndOffset: 2 }],
+    }),
+    undefined,
+  );
 });
 
 test("compaction is a renderer-safe bounded activity milestone", () => {
@@ -940,19 +1017,38 @@ test("automatic compaction publishes bounded engine metrics without summary cont
   assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE/);
 });
 
-
 test("produced files require completed host mutation provenance and survive timeline replay", () => {
   const file = { relativePath: "out/report.txt", operation: "written" as const, bytes: 12 };
-  const details = { kind: "file_line_changes", version: 1, additions: 1, deletions: 0, producedFile: file };
+  const details = {
+    kind: "file_line_changes",
+    version: 1,
+    additions: 1,
+    deletions: 0,
+    producedFile: file,
+  };
   const projector = new GenerationTimelineProjector("generation-1", () => {});
-  for (const [id, tool, status] of [["good", "write_file", "completed"], ["mcp", "mcp_write", "completed"], ["failed", "write_file", "failed"]] as const) {
+  for (const [id, tool, status] of [
+    ["good", "write_file", "completed"],
+    ["mcp", "mcp_write", "completed"],
+    ["failed", "write_file", "failed"],
+  ] as const) {
     projector.toolStarted(id, tool, { path: "out/report.txt" });
     projector.toolFinished(id, status, details);
   }
   const snapshot = projector.snapshot();
-  assert.deepEqual(toolSteps(snapshot).map((step) => step.producedFile), [file, undefined, undefined]);
+  assert.deepEqual(
+    toolSteps(snapshot).map((step) => step.producedFile),
+    [file, undefined, undefined],
+  );
   assert.deepEqual(toolSteps(parseGenerationTimeline(snapshot)!)[0]?.producedFile, file);
-  for (const relativePath of ["/Users/private.txt", "../secret", "out/../secret", "a\\b", "bad\nname", "a//b"]) {
+  for (const relativePath of [
+    "/Users/private.txt",
+    "../secret",
+    "out/../secret",
+    "a\\b",
+    "bad\nname",
+    "a//b",
+  ]) {
     const invalid = structuredClone(snapshot);
     (invalid.steps[0] as AgentToolStep).producedFile = { ...file, relativePath };
     assert.equal(parseGenerationTimeline(invalid), undefined);
@@ -963,7 +1059,9 @@ test("an answered questionnaire keeps its recap through timeline replay, and onl
   const recap = {
     version: 1,
     outcome: "answered",
-    items: [{ question: "Which database?", header: "Database", kind: "option", answers: ["Postgres"] }],
+    items: [
+      { question: "Which database?", header: "Database", kind: "option", answers: ["Postgres"] },
+    ],
   };
   const projector = new GenerationTimelineProjector("generation-1", () => {});
   for (const [id, tool, status, details] of [
@@ -996,7 +1094,15 @@ test("a web page step shows only the host, and an extract recap survives replay"
     version: 1,
     host: "acme.example",
     cut: false,
-    fields: [{ name: "price", status: "extracted", value: "20", confidence: 0.97, sourceLine: "Pro is $20 per month." }],
+    fields: [
+      {
+        name: "price",
+        status: "extracted",
+        value: "20",
+        confidence: 0.97,
+        sourceLine: "Pro is $20 per month.",
+      },
+    ],
   };
   const projector = new GenerationTimelineProjector("generation-1", () => {});
   for (const [id, tool, status, details, url] of [
@@ -1010,9 +1116,15 @@ test("a web page step shows only the host, and an extract recap survives replay"
   }
   const snapshot = projector.finish("completed");
   const steps = toolSteps(snapshot);
-  assert.deepEqual(steps.map((step) => step.detail), ["acme.example", "acme.example", undefined, "acme.example"]);
+  assert.deepEqual(
+    steps.map((step) => step.detail),
+    ["acme.example", "acme.example", undefined, "acme.example"],
+  );
   assert.doesNotMatch(JSON.stringify(snapshot), /token|secret|pricing/u);
-  assert.deepEqual(steps.map((step) => step.extraction), [recap, undefined, undefined, undefined]);
+  assert.deepEqual(
+    steps.map((step) => step.extraction),
+    [recap, undefined, undefined, undefined],
+  );
   assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(snapshot))), snapshot);
 
   const tampered = structuredClone(snapshot);
@@ -1034,8 +1146,18 @@ test("a recording stop step carries only the video's id, type, length and size, 
   for (const [id, tool, status, details] of [
     // What the browser tool returns: the path and tab stay in the model's text, not the step.
     ["stop", "browser_recording_stop", "completed", { recording }],
-    ["path", "browser_recording_stop", "completed", { recording: { ...recording, path: "/Users/me/Library/rec.mp4" } }],
-    ["gif", "browser_recording_stop", "completed", { recording: { ...recording, mimeType: "image/gif" } }],
+    [
+      "path",
+      "browser_recording_stop",
+      "completed",
+      { recording: { ...recording, path: "/Users/me/Library/rec.mp4" } },
+    ],
+    [
+      "gif",
+      "browser_recording_stop",
+      "completed",
+      { recording: { ...recording, mimeType: "image/gif" } },
+    ],
     ["other", "browser_snapshot", "completed", { recording }],
     ["failed", "browser_recording_stop", "failed", { recording }],
   ] as const) {
@@ -1043,7 +1165,10 @@ test("a recording stop step carries only the video's id, type, length and size, 
     projector.toolFinished(id, status, details);
   }
   const snapshot = projector.finish("completed");
-  assert.deepEqual(toolSteps(snapshot).map((step) => step.recording), [recording, undefined, undefined, undefined, undefined]);
+  assert.deepEqual(
+    toolSteps(snapshot).map((step) => step.recording),
+    [recording, undefined, undefined, undefined, undefined],
+  );
   assert.doesNotMatch(JSON.stringify(snapshot), /Users|rec\.mp4/u);
   assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(snapshot))), snapshot);
 
@@ -1057,8 +1182,18 @@ test("a recording stop step carries only the video's id, type, length and size, 
 
 test("form fill activity persists counts without source or field values", () => {
   const projector = new GenerationTimelineProjector("generation-1", () => {});
-  projector.toolStarted("call-a", "form_fill", { attachment_id: "private-document", pid: 42, window_id: 7 });
-  projector.toolFinished("call-a", "completed", { filled: 1, notAttempted: 1, stoppedEarly: true, sourceDocument: "private-document", rows: [{ label: "Secret field", value: "secret-value" }] });
+  projector.toolStarted("call-a", "form_fill", {
+    attachment_id: "private-document",
+    pid: 42,
+    window_id: 7,
+  });
+  projector.toolFinished("call-a", "completed", {
+    filled: 1,
+    notAttempted: 1,
+    stoppedEarly: true,
+    sourceDocument: "private-document",
+    rows: [{ label: "Secret field", value: "secret-value" }],
+  });
   const timeline = projector.finish("completed");
   assert.equal(toolSteps(timeline)[0].detail, "1 filled · 1 not attempted · stopped early");
   assert.doesNotMatch(JSON.stringify(timeline), /private-document|Secret field|secret-value/);
@@ -1067,7 +1202,11 @@ test("form fill activity persists counts without source or field values", () => 
 test("a long run's saved timeline stays readable past the step limit", () => {
   let now = 0;
   const published: GenerationTimeline[] = [];
-  const projector = new GenerationTimelineProjector("generation-1", (value) => published.push(value), () => (now += 100));
+  const projector = new GenerationTimelineProjector(
+    "generation-1",
+    (value) => published.push(value),
+    () => (now += 100),
+  );
   let reasoning = "";
   const think = () => {
     projector.thinkingStarted();
@@ -1078,7 +1217,12 @@ test("a long run's saved timeline stays readable past the step limit", () => {
   };
   think();
   projector.toolStarted("edit", "edit_file", { path: "src/app.ts" });
-  projector.toolFinished("edit", "completed", { kind: "file_line_changes", version: 1, additions: 4, deletions: 1 });
+  projector.toolFinished("edit", "completed", {
+    kind: "file_line_changes",
+    version: 1,
+    additions: 4,
+    deletions: 1,
+  });
   think();
   projector.toolStarted("image", "display_image", { path: "previews/page.png" });
   projector.toolFinished("image", "completed");
@@ -1106,31 +1250,49 @@ test("a long run's saved timeline stays readable past the step limit", () => {
   const rows = assistantPresentationRows("", final, reasoning);
   assert.ok(rows);
   assert.equal(
-    rows.filter((row) => row.kind === "reasoning").map((row) => row.content).join(""),
+    rows
+      .filter((row) => row.kind === "reasoning")
+      .map((row) => row.content)
+      .join(""),
     reasoning,
   );
-  const thinkingMs = final.steps.reduce((total, step) => total + (isToolStep(step) ? 0 : step.durationMs ?? 0), 0);
+  const thinkingMs = final.steps.reduce(
+    (total, step) => total + (isToolStep(step) ? 0 : (step.durationMs ?? 0)),
+    0,
+  );
   assert.equal(thinkingMs, 154 * 100);
   // Steps that carry something are kept: the edit's line counts, the image's anchor, the failure.
   const kept = toolSteps(final);
-  assert.deepEqual(kept.find((step) => step.toolName === "edit_file")?.lineChanges, { additions: 4, deletions: 1 });
+  assert.deepEqual(kept.find((step) => step.toolName === "edit_file")?.lineChanges, {
+    additions: 4,
+    deletions: 1,
+  });
   assert.ok(kept.some((step) => step.toolName === "display_image"));
   assert.ok(kept.some((step) => step.status === "failed"));
   // Thoughts stay where they happened: none sits above a call that started before it ended.
   final.steps.forEach((step, index) => {
     const next = final.steps[index + 1];
-    if (!isToolStep(step) && next) assert.ok((step.finishedAt ?? 0) <= next.startedAt, `${step.id} before ${next.id}`);
+    if (!isToolStep(step) && next)
+      assert.ok((step.finishedAt ?? 0) <= next.startedAt, `${step.id} before ${next.id}`);
   });
   // The oldest plain reads made the room; the reads still listed are the newest ones.
   const reads = kept.filter((step) => step.toolName === "read_file").map((step) => step.target);
   assert.ok(reads.length < 150);
-  assert.deepEqual(reads, Array.from({ length: reads.length }, (_, index) => `src/file-${150 - reads.length + index}.ts`));
+  assert.deepEqual(
+    reads,
+    Array.from({ length: reads.length }, (_, index) => `src/file-${150 - reads.length + index}.ts`),
+  );
 });
 
 test("a run of more tool calls than the step limit drops the oldest plain reads first", () => {
   const projector = new GenerationTimelineProjector("generation-1", () => {});
   projector.toolStarted("edit", "edit_file", { path: "src/app.ts" });
-  projector.toolFinished("edit", "completed", { kind: "file_line_changes", version: 1, additions: 4, deletions: 1 });
+  projector.toolFinished("edit", "completed", {
+    kind: "file_line_changes",
+    version: 1,
+    additions: 4,
+    deletions: 1,
+  });
   projector.toolStarted("image", "display_image", { path: "previews/page.png" });
   projector.toolFinished("image", "completed");
   projector.toolStarted("broken", "run_command", { description: "Run the tests" });
@@ -1143,7 +1305,10 @@ test("a run of more tool calls than the step limit drops the oldest plain reads 
   assert.equal(final.steps.length, 200);
   assert.deepEqual(parseGenerationTimeline(final), final);
   const kept = toolSteps(final);
-  assert.deepEqual(kept.slice(0, 3).map((step) => step.toolName), ["edit_file", "display_image", "run_command"]);
+  assert.deepEqual(
+    kept.slice(0, 3).map((step) => step.toolName),
+    ["edit_file", "display_image", "run_command"],
+  );
   assert.equal(kept[2]?.status, "failed");
   // The newest 197 reads remain; the 53 oldest went.
   assert.equal(kept[3]?.target, "src/file-53.ts");
@@ -1154,7 +1319,9 @@ test("a run of more tool calls than the step limit drops the oldest plain reads 
 
 test("a step folded out of a long run never comes back while the run goes on", () => {
   const published: GenerationTimeline[] = [];
-  const projector = new GenerationTimelineProjector("generation-1", (value) => published.push(value));
+  const projector = new GenerationTimelineProjector("generation-1", (value) =>
+    published.push(value),
+  );
   projector.toolStarted("slow", "read_file", { path: "src/slow.ts" });
   projector.toolRunning("slow");
   projector.toolStarted("write", "write_file", { path: "notes.md" });
@@ -1181,13 +1348,20 @@ test("a step folded out of a long run never comes back while the run goes on", (
 
 test("folding keeps a later image row's first step after an earlier media boundary", () => {
   const projector = new GenerationTimelineProjector("generation-images", () => {});
-  for (const [id, name] of [["first-image", "display_image"], ["lead", "read_file"], ["second-image", "share_image"]] as const) {
+  for (const [id, name] of [
+    ["first-image", "display_image"],
+    ["lead", "read_file"],
+    ["second-image", "share_image"],
+  ] as const) {
     projector.toolStarted(id, name, {});
     projector.toolFinished(id, "completed");
   }
-  const rowForSecondImage = (value: GenerationTimeline) => assistantPresentationRows("", value)?.find(
-    (row) => row.kind === "activity" && row.steps.some((step) => isToolStep(step) && step.toolCallId === "call-3"),
-  );
+  const rowForSecondImage = (value: GenerationTimeline) =>
+    assistantPresentationRows("", value)?.find(
+      (row) =>
+        row.kind === "activity" &&
+        row.steps.some((step) => isToolStep(step) && step.toolCallId === "call-3"),
+    );
   const before = rowForSecondImage(projector.snapshot());
   assert.ok(before);
   for (let index = 0; index < 210; index += 1) {
@@ -1196,18 +1370,30 @@ test("folding keeps a later image row's first step after an earlier media bounda
   }
   const final = projector.finish("completed");
   assert.equal(final.steps.length, 200);
-  assert.equal(rowForSecondImage(final)?.key, before.key, "folding must not remount the later image's activity row");
+  assert.equal(
+    rowForSecondImage(final)?.key,
+    before.key,
+    "folding must not remount the later image's activity row",
+  );
 });
 
 test("careful folding keeps a closing media boundary ahead of a retained image row", () => {
   const projector = new GenerationTimelineProjector("generation-images", () => {});
-  for (const [id, name] of [["lead-one", "read_file"], ["first-image", "display_image"], ["lead-two", "read_file"], ["second-image", "share_image"]] as const) {
+  for (const [id, name] of [
+    ["lead-one", "read_file"],
+    ["first-image", "display_image"],
+    ["lead-two", "read_file"],
+    ["second-image", "share_image"],
+  ] as const) {
     projector.toolStarted(id, name, {});
     projector.toolFinished(id, "completed");
   }
-  const imageRow = (value: GenerationTimeline) => assistantPresentationRows("", value)?.find(
-    (row) => row.kind === "activity" && row.steps.some((step) => isToolStep(step) && step.toolCallId === "call-4"),
-  );
+  const imageRow = (value: GenerationTimeline) =>
+    assistantPresentationRows("", value)?.find(
+      (row) =>
+        row.kind === "activity" &&
+        row.steps.some((step) => isToolStep(step) && step.toolCallId === "call-4"),
+    );
   const before = imageRow(projector.snapshot());
   assert.ok(before);
   // Failed plain calls rank after media calls, but they can make room without
@@ -1219,7 +1405,10 @@ test("careful folding keeps a closing media boundary ahead of a retained image r
   const final = projector.finish("completed");
   assert.equal(final.steps.length, 200);
   assert.equal(imageRow(final)?.key, before.key);
-  assert.ok(toolSteps(final).some((step) => step.toolCallId === "call-2"), "the preceding boundary stays while less disruptive folds exist");
+  assert.ok(
+    toolSteps(final).some((step) => step.toolCallId === "call-2"),
+    "the preceding boundary stays while less disruptive folds exist",
+  );
 });
 
 test("folding a long run never moves its reply text or an image's row", () => {
@@ -1248,7 +1437,11 @@ test("folding a long run never moves its reply text or an image's row", () => {
   const rows = assistantPresentationRows(content, full)!;
   const texts = rows.filter((row) => row.kind === "text").map((row) => row.content);
   assert.deepEqual(texts, ["First paragraph. ", "Second paragraph. "]);
-  const visualRow = rows.find((row) => row.kind === "activity" && row.steps.some((step) => isToolStep(step) && step.toolName === "render_ui"));
+  const visualRow = rows.find(
+    (row) =>
+      row.kind === "activity" &&
+      row.steps.some((step) => isToolStep(step) && step.toolName === "render_ui"),
+  );
   assert.ok(visualRow && visualRow.kind === "activity");
   assert.equal((visualRow.steps[0] as AgentToolStep).target, "src/lead.ts");
 });
@@ -1267,12 +1460,22 @@ test("a run that writes a line before every call still keeps a timeline past the
   assert.deepEqual(parseGenerationTimeline(final, content.length), final);
   // The reply's words all survive; only where some calls sat between them is lost.
   const rows = assistantPresentationRows(content, final)!;
-  assert.equal(rows.filter((row) => row.kind === "text").map((row) => row.content).join(""), content);
+  assert.equal(
+    rows
+      .filter((row) => row.kind === "text")
+      .map((row) => row.content)
+      .join(""),
+    content,
+  );
   assert.equal(toolSteps(final)[0]?.target, "src/file-30.ts");
 });
 
 test("a started-chats row names the action and how many chats, never a task or message", () => {
-  const projector = new GenerationTimelineProjector("generation-child-chats", () => {}, () => Date.UTC(2026, 10, 22, 14, 50));
+  const projector = new GenerationTimelineProjector(
+    "generation-child-chats",
+    () => {},
+    () => Date.UTC(2026, 10, 22, 14, 50),
+  );
   projector.toolStarted("start", "child_chats", {
     action: "start",
     chats: [
@@ -1280,7 +1483,11 @@ test("a started-chats row names the action and how many chats, never a task or m
       { title: "Tests", task: "another private task" },
     ],
   });
-  projector.toolStarted("send", "child_chats", { action: "send", chat_id: "c1", text: "private follow-up" });
+  projector.toolStarted("send", "child_chats", {
+    action: "send",
+    chat_id: "c1",
+    text: "private follow-up",
+  });
   projector.toolStarted("wait", "child_chats", { action: "wait", chat_ids: ["c1"] });
   projector.toolStarted("result", "submit_result", { result: { summary: "private result" } });
   const [start, send, wait, result] = toolSteps(projector.snapshot());
@@ -1293,10 +1500,20 @@ test("a started-chats row names the action and how many chats, never a task or m
 });
 
 test("a check-back row names its time once set, and never the note", () => {
-  const projector = new GenerationTimelineProjector("generation-check-back", () => {}, () => Date.UTC(2026, 10, 22, 14, 50));
-  projector.toolStarted("set", "check_back", { action: "set", in_minutes: 20, note: "private note about the deploy" });
+  const projector = new GenerationTimelineProjector(
+    "generation-check-back",
+    () => {},
+    () => Date.UTC(2026, 10, 22, 14, 50),
+  );
+  projector.toolStarted("set", "check_back", {
+    action: "set",
+    in_minutes: 20,
+    note: "private note about the deploy",
+  });
   projector.toolStarted("list", "check_back", { action: "list" });
-  projector.toolFinished("set", "completed", { checkBack: { fireAt: Date.UTC(2026, 10, 22, 15, 10) } });
+  projector.toolFinished("set", "completed", {
+    checkBack: { fireAt: Date.UTC(2026, 10, 22, 15, 10) },
+  });
   projector.toolFinished("list", "completed", {});
   const [set, list] = toolSteps(projector.snapshot());
   assert.equal(activityLineText(set!), `Will check back ${set!.detail}`);

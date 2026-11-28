@@ -79,9 +79,9 @@ export function ProviderEditor({
   );
   const [keyDraft, setKeyDraft] = React.useState("");
   const [models, setModels] = React.useState<string[]>(provider.models);
-  const [modelMetadata, setModelMetadata] = React.useState<
-    Record<string, ProviderModelMetadata>
-  >(provider.modelMetadata ?? {});
+  const [modelMetadata, setModelMetadata] = React.useState<Record<string, ProviderModelMetadata>>(
+    provider.modelMetadata ?? {},
+  );
   const [defaultModel, setDefaultModel] = React.useState(
     provider.defaultModel ?? provider.models[0] ?? "",
   );
@@ -100,22 +100,13 @@ export function ProviderEditor({
   const settings = useSettings();
   const visibleDefaultModels = settings.data
     ? models.filter(
-        (modelId) =>
-          !isModelHidden(
-            settings.data?.hiddenModelsByProvider,
-            provider.id,
-            modelId,
-          ),
+        (modelId) => !isModelHidden(settings.data?.hiddenModelsByProvider, provider.id, modelId),
       )
     : [];
   const defaultModelIsHidden = Boolean(
     settings.data &&
     defaultModel &&
-    isModelHidden(
-      settings.data.hiddenModelsByProvider,
-      provider.id,
-      defaultModel,
-    ),
+    isModelHidden(settings.data.hiddenModelsByProvider, provider.id, defaultModel),
   );
 
   // Reset drafts whenever a different provider is opened.
@@ -130,11 +121,7 @@ export function ProviderEditor({
       setKeyDraft("");
       setModels(provider.models);
       setMoreOptions(false);
-      setManualModels(
-        provider.models.filter(
-          (id) => provider.modelMetadata?.[id]?.manuallyAdded,
-        ),
-      );
+      setManualModels(provider.models.filter((id) => provider.modelMetadata?.[id]?.manuallyAdded));
       setModelMetadata(provider.modelMetadata ?? {});
       setDefaultModel(provider.defaultModel ?? provider.models[0] ?? "");
       setArtwork(provider.artwork);
@@ -154,7 +141,8 @@ export function ProviderEditor({
     defaultModel: defaultModel || undefined,
     needsKey,
     deployment,
-    llamaCppClassifierEnabled: kind === "openai" && deployment === "local" && llamaCppClassifierEnabled,
+    llamaCppClassifierEnabled:
+      kind === "openai" && deployment === "local" && llamaCppClassifierEnabled,
     isPreset: false,
     isBuiltin: false,
   });
@@ -179,14 +167,10 @@ export function ProviderEditor({
         reader.readAsDataURL(file);
       });
       const dataBase64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
-      setArtwork(
-        await providersApi.normalizeArtwork({ name: file.name, dataBase64 }),
-      );
+      setArtwork(await providersApi.normalizeArtwork({ name: file.name, dataBase64 }));
     } catch (error) {
       toast.error(
-        error instanceof Error
-          ? error.message
-          : "Aiden could not use that provider icon.",
+        error instanceof Error ? error.message : "Aiden could not use that provider icon.",
       );
     } finally {
       artworkBusyRef.current = false;
@@ -206,10 +190,7 @@ export function ProviderEditor({
       mergeDiscoveredModelMetadata(
         {
           ...Object.fromEntries(
-            manualModels.map((id) => [
-              id,
-              current[id] ?? { source: "provider" as const },
-            ]),
+            manualModels.map((id) => [id, current[id] ?? { source: "provider" as const }]),
           ),
           ...metadata,
         },
@@ -229,8 +210,7 @@ export function ProviderEditor({
   const markDiscoveryStale = () => {
     setModelsStale(true);
     setConnectionNotice({
-      message:
-        "Connection settings changed. Discover models again before saving.",
+      message: "Connection settings changed. Discover models again before saving.",
       error: true,
     });
   };
@@ -238,15 +218,8 @@ export function ProviderEditor({
   const handleTest = async () => {
     setTesting(true);
     try {
-      const result = await providersApi.test(
-        buildDraft(),
-        keyDraft.trim() || undefined,
-      );
-      applyDiscoveredModels(
-        result.models,
-        result.modelMetadata,
-        result.recommendedModel,
-      );
+      const result = await providersApi.test(buildDraft(), keyDraft.trim() || undefined);
+      applyDiscoveredModels(result.models, result.modelMetadata, result.recommendedModel);
       if (result.models.length > 0) {
         setConnectionNotice({
           message: `${result.modelCount} model${result.modelCount === 1 ? "" : "s"} found. Save to use them.`,
@@ -272,8 +245,7 @@ export function ProviderEditor({
 
   const handleSave = async () => {
     if (modelsStale) {
-      const message =
-        "Connection settings changed. Discover models again before saving.";
+      const message = "Connection settings changed. Discover models again before saving.";
       setConnectionNotice({ message, error: true });
       toast.error(message);
       return;
@@ -286,8 +258,7 @@ export function ProviderEditor({
         defaultModelIsHidden)
     ) {
       setConnectionNotice({
-        message:
-          "Discover models and choose an available default before continuing.",
+        message: "Discover models and choose an available default before continuing.",
         error: true,
       });
       return;
@@ -298,9 +269,7 @@ export function ProviderEditor({
         parseCustomModelOptions(metadata.overrides);
       await providersApi.save(buildDraft(), keyDraft.trim() || undefined);
       if (models.length === 0) {
-        toast.info(
-          "Saved without models. Discover models before sending a chat.",
-        );
+        toast.info("Saved without models. Discover models before sending a chat.");
       }
       await onSaved();
       onOpenChange(false);
@@ -399,9 +368,7 @@ export function ProviderEditor({
                 setKeyDraft(e.target.value);
                 markDiscoveryStale();
               }}
-              placeholder={
-                provider.hasKey ? "••••••••••••" : "Paste your API key"
-              }
+              placeholder={provider.hasKey ? "••••••••••••" : "Paste your API key"}
             />
           </Field>
         ) : null}
@@ -472,9 +439,11 @@ export function ProviderEditor({
                 </SelectContent>
               </Select>
               <Text as="p" variant="small" color="tertiary">
-                {(modelMetadata[defaultModel]?.overrides?.vision ?? modelMetadata[defaultModel]?.vision) === true && modelMetadata[defaultModel]?.overrides?.maxImages !== 0
-                    ? "Images enabled for this connection"
-                    : "Text only for this connection"}
+                {(modelMetadata[defaultModel]?.overrides?.vision ??
+                  modelMetadata[defaultModel]?.vision) === true &&
+                modelMetadata[defaultModel]?.overrides?.maxImages !== 0
+                  ? "Images enabled for this connection"
+                  : "Text only for this connection"}
                 {" · Change capabilities in Model options"}
               </Text>
             </div>
@@ -488,7 +457,9 @@ export function ProviderEditor({
       <details className="settings-card mb-6 min-w-0 rounded-card bg-well">
         <summary className="cursor-pointer px-4 py-3 text-small-strong text-primary">
           Advanced
-          <Text as="span" variant="small" color="tertiary" className="mt-1 block font-normal">Connection settings and model options</Text>
+          <Text as="span" variant="small" color="tertiary" className="mt-1 block font-normal">
+            Connection settings and model options
+          </Text>
         </summary>
         <FieldSet className="mb-0">
           <Field label="API format">
@@ -566,11 +537,7 @@ export function ProviderEditor({
                 disabled={artworkBusy}
                 onClick={() => artworkInputRef.current?.click()}
               >
-                {artworkBusy
-                  ? "Normalizing…"
-                  : artwork
-                    ? "Replace"
-                    : "Choose image"}
+                {artworkBusy ? "Normalizing…" : artwork ? "Replace" : "Choose image"}
               </Button>
               {artwork ? (
                 <Button
@@ -585,87 +552,84 @@ export function ProviderEditor({
               ) : null}
             </div>
           </Field>
-
         </FieldSet>
 
-      <Button
-        className="mt-4"
-        variant="transparent"
-        size="small"
-        aria-expanded={moreOptions}
-        aria-controls="custom-model-options"
-        onClick={() => setMoreOptions((value) => !value)}
-      >
-        Model options
-      </Button>
-      {moreOptions ? (
-        <section id="custom-model-options" className="mt-3 min-w-0">
-          <FieldSet>
-            <Field
-              label="llama.cpp classification"
-              description="Enable only for an existing llama-server. Saved models become available to the classifier tool with your approval. No models are downloaded or loaded by this option."
-            >
-              <Switch
-                aria-label="Enable llama.cpp classification"
-                checked={llamaCppClassifierEnabled}
-                onCheckedChange={setLlamaCppClassifierEnabled}
-                disabled={saving || testing || kind !== "openai" || deployment !== "local"}
-              />
-            </Field>
-          </FieldSet>
-          <CustomModelOptionsEditor
-            models={models}
-            metadata={modelMetadata}
-            info={modelInfo.data}
-            disabled={saving || testing}
-            modelsStale={modelsStale}
-            supportsEffortControl={kind === "openai"}
-            onAdd={(id) => {
-              if (modelsStale) {
-                const retained = [...new Set([...manualModels, id])];
-                setModels(retained);
-                setManualModels(retained);
-                setModelMetadata(
-                  Object.fromEntries(
-                    retained.map((modelId) => [
-                      modelId,
-                      {
-                        ...modelMetadata[modelId],
-                        source: modelMetadata[modelId]?.source ?? "provider",
-                        manuallyAdded: true,
-                      },
-                    ]),
-                  ),
-                );
-                if (!retained.includes(defaultModel)) setDefaultModel(id);
-                setModelsStale(false);
-                setConnectionNotice(null);
-                return;
+        <Button
+          className="mt-4"
+          variant="transparent"
+          size="small"
+          aria-expanded={moreOptions}
+          aria-controls="custom-model-options"
+          onClick={() => setMoreOptions((value) => !value)}
+        >
+          Model options
+        </Button>
+        {moreOptions ? (
+          <section id="custom-model-options" className="mt-3 min-w-0">
+            <FieldSet>
+              <Field
+                label="llama.cpp classification"
+                description="Enable only for an existing llama-server. Saved models become available to the classifier tool with your approval. No models are downloaded or loaded by this option."
+              >
+                <Switch
+                  aria-label="Enable llama.cpp classification"
+                  checked={llamaCppClassifierEnabled}
+                  onCheckedChange={setLlamaCppClassifierEnabled}
+                  disabled={saving || testing || kind !== "openai" || deployment !== "local"}
+                />
+              </Field>
+            </FieldSet>
+            <CustomModelOptionsEditor
+              models={models}
+              metadata={modelMetadata}
+              info={modelInfo.data}
+              disabled={saving || testing}
+              modelsStale={modelsStale}
+              supportsEffortControl={kind === "openai"}
+              onAdd={(id) => {
+                if (modelsStale) {
+                  const retained = [...new Set([...manualModels, id])];
+                  setModels(retained);
+                  setManualModels(retained);
+                  setModelMetadata(
+                    Object.fromEntries(
+                      retained.map((modelId) => [
+                        modelId,
+                        {
+                          ...modelMetadata[modelId],
+                          source: modelMetadata[modelId]?.source ?? "provider",
+                          manuallyAdded: true,
+                        },
+                      ]),
+                    ),
+                  );
+                  if (!retained.includes(defaultModel)) setDefaultModel(id);
+                  setModelsStale(false);
+                  setConnectionNotice(null);
+                  return;
+                }
+                setModels((current) => [...current, id]);
+                setManualModels((current) => [...current, id]);
+                setModelMetadata((current) => ({
+                  ...current,
+                  [id]: { source: "provider", manuallyAdded: true },
+                }));
+                if (!defaultModel) setDefaultModel(id);
+              }}
+              onChange={(id, overrides) =>
+                setModelMetadata((current) => ({
+                  ...current,
+                  [id]: {
+                    ...current[id],
+                    source: current[id]?.source ?? "provider",
+                    overrides,
+                  },
+                }))
               }
-              setModels((current) => [...current, id]);
-              setManualModels((current) => [...current, id]);
-              setModelMetadata((current) => ({
-                ...current,
-                [id]: { source: "provider", manuallyAdded: true },
-              }));
-              if (!defaultModel) setDefaultModel(id);
-            }}
-            onChange={(id, overrides) =>
-              setModelMetadata((current) => ({
-                ...current,
-                [id]: {
-                  ...current[id],
-                  source: current[id]?.source ?? "provider",
-                  overrides,
-                },
-              }))
-            }
-          />
-          <ProviderModelVisibility
-            provider={{ ...provider, models, modelMetadata }}
-          />
-        </section>
-      ) : null}
+            />
+            <ProviderModelVisibility provider={{ ...provider, models, modelMetadata }} />
+          </section>
+        ) : null}
       </details>
     </Dialog>
   );

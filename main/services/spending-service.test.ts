@@ -31,7 +31,10 @@ const model: Model<Api> = {
 function pricedStream(usd: number, text = "ok"): StreamFn {
   return () => {
     const message = fauxAssistantMessage(text);
-    message.usage = { ...message.usage, cost: { input: usd, output: 0, cacheRead: 0, cacheWrite: 0, total: usd } };
+    message.usage = {
+      ...message.usage,
+      cost: { input: usd, output: 0, cacheRead: 0, cacheWrite: 0, total: usd },
+    };
     const stream = createAssistantMessageEventStream();
     queueMicrotask(() => {
       stream.push({ type: "done", reason: "stop", message });
@@ -41,7 +44,12 @@ function pricedStream(usd: number, text = "ok"): StreamFn {
   };
 }
 
-function service(settings: unknown, saved: SpendingDocument[] = [], events: SpendingChangedEvent[] = [], load: unknown = undefined) {
+function service(
+  settings: unknown,
+  saved: SpendingDocument[] = [],
+  events: SpendingChangedEvent[] = [],
+  load: unknown = undefined,
+) {
   return new SpendingService({
     persistence: { load: async () => load, save: async (document) => void saved.push(document) },
     settings: async () => settings,
@@ -74,15 +82,38 @@ test("a sign-in or a model on this Mac counts as $0", async () => {
   const meter = createSpendingMeter({
     spending,
     owner: { kind: "chat", id: "chat-1" },
-    counts: () => spendCounts({ local: false, provider: { id: "anthropic" }, models: { checkAuth: async () => ({ type: "oauth" }) } }),
+    counts: () =>
+      spendCounts({
+        local: false,
+        provider: { id: "anthropic" },
+        models: { checkAuth: async () => ({ type: "oauth" }) },
+      }),
   });
   await drain(await meter.wrap(pricedStream(3))(model, context, {}));
   await meter.settled();
   assert.equal((await spending.status("chat", "chat-1"))?.spentUsd, 0);
-  assert.equal(await spendCounts({ local: true, provider: { id: "lm" }, models: { checkAuth: async () => ({ type: "api_key" }) } }), false);
-  assert.equal(await spendCounts({ local: false, provider: { id: "x" }, models: { checkAuth: async () => ({ type: "api_key" }) } }), true);
   assert.equal(
-    await spendCounts({ local: false, provider: { id: "x" }, models: { checkAuth: async () => Promise.reject(new Error("locked")) } }),
+    await spendCounts({
+      local: true,
+      provider: { id: "lm" },
+      models: { checkAuth: async () => ({ type: "api_key" }) },
+    }),
+    false,
+  );
+  assert.equal(
+    await spendCounts({
+      local: false,
+      provider: { id: "x" },
+      models: { checkAuth: async () => ({ type: "api_key" }) },
+    }),
+    true,
+  );
+  assert.equal(
+    await spendCounts({
+      local: false,
+      provider: { id: "x" },
+      models: { checkAuth: async () => Promise.reject(new Error("locked")) },
+    }),
     true,
     "an unreadable sign-in counts",
   );
@@ -102,7 +133,10 @@ test("a helper over its chat's limit is refused before the provider is asked", a
   assert.equal(asked, 0);
   const last = events[events.length - 1];
   assert.equal(last?.type, "error");
-  assert.equal(last?.type === "error" && last.error.errorMessage, "This chat reached its $1.00 spending limit. Allow more to keep going.");
+  assert.equal(
+    last?.type === "error" && last.error.errorMessage,
+    "This chat reached its $1.00 spending limit. Allow more to keep going.",
+  );
 });
 
 test("each spending change is durable before returning; unreadable limits refuse instead of removing the cap", async () => {
@@ -111,26 +145,54 @@ test("each spending change is durable before returning; unreadable limits refuse
   await first.record({ kind: "bot", id: "ada" }, 2);
   await first.setBotLimit("ada", 3);
   await first.flush();
-  assert.equal(Object.values(saved[0]?.botPeriods ?? {})[0]?.spentUsd, 2, "the charge was durable before the later settings write");
+  assert.equal(
+    Object.values(saved[0]?.botPeriods ?? {})[0]?.spentUsd,
+    2,
+    "the charge was durable before the later settings write",
+  );
   const second = service({ botMonthUsd: 5 }, [], [], saved[saved.length - 1]);
   assert.deepEqual(
     { ...(await second.status("bot", "ada")), periodStart: undefined, periodEnd: undefined },
-    { ownerKind: "bot", ownerId: "ada", period: "month", limitUsd: 3, extraUsd: 0, spentUsd: 2, state: "under", periodStart: undefined, periodEnd: undefined },
+    {
+      ownerKind: "bot",
+      ownerId: "ada",
+      period: "month",
+      limitUsd: 3,
+      extraUsd: 0,
+      spentUsd: 2,
+      state: "under",
+      periodStart: undefined,
+      periodEnd: undefined,
+    },
   );
   const bad = service({ chatUsd: -1 });
-  await assert.rejects(bad.record({ kind: "chat", id: "c" }, 9), /Spending limits could not be read safely/u);
+  await assert.rejects(
+    bad.record({ kind: "chat", id: "c" }, 9),
+    /Spending limits could not be read safely/u,
+  );
 });
 
 test("a meter whose response charge could not be saved refuses the next provider dispatch", async () => {
   let asked = 0;
   const meter = createSpendingMeter({
-    owner: { kind: "chat", id: "save-failed" }, counts: async () => true,
-    spending: { refusal: async () => undefined, record: async () => { throw new Error("charge publication failed"); } },
+    owner: { kind: "chat", id: "save-failed" },
+    counts: async () => true,
+    spending: {
+      refusal: async () => undefined,
+      record: async () => {
+        throw new Error("charge publication failed");
+      },
+    },
   });
-  const stream = meter.wrap((...args) => { asked++; return pricedStream(0.2)(...args); });
+  const stream = meter.wrap((...args) => {
+    asked++;
+    return pricedStream(0.2)(...args);
+  });
   await drain(await stream(model, context, {}));
   await assert.rejects(meter.settled(), /charge publication failed/u);
-  await assert.rejects(async () => { await stream(model, context, {}); }, /charge publication failed/u);
+  await assert.rejects(async () => {
+    await stream(model, context, {});
+  }, /charge publication failed/u);
   assert.equal(asked, 1);
 });
 

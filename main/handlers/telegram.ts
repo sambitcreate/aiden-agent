@@ -91,7 +91,8 @@ export function registerTelegramHandlers(): void {
       telegramModel: m,
     });
     await configStore.setSettings({ lastProviderId: pid, lastModel: m });
-    if (pid && m) ipcMain.broadcast("telegram:model-selection-changed", { providerId: pid, model: m });
+    if (pid && m)
+      ipcMain.broadcast("telegram:model-selection-changed", { providerId: pid, model: m });
     return { providerId: pid, model: m };
   });
 
@@ -117,12 +118,11 @@ export function registerTelegramHandlers(): void {
       : undefined;
     const draftPreviews = value.draftPreviews === true;
     const activity = ["quiet", "thinking", "tools", "verbose"].includes(String(value.activity))
-      ? value.activity as "quiet" | "thinking" | "tools" | "verbose"
+      ? (value.activity as "quiet" | "thinking" | "tools" | "verbose")
       : "quiet";
     const rendering = value.rendering === "html" ? "html" : "rich";
-    const voiceMode = value.voiceMode === "mirror" || value.voiceMode === "always"
-      ? value.voiceMode
-      : "hidden";
+    const voiceMode =
+      value.voiceMode === "mirror" || value.voiceMode === "always" ? value.voiceMode : "hidden";
     const threadedMode = value.threadedMode === true;
     const previous = await telegramService.getActiveSettings();
     await telegramService.setActiveSettings({
@@ -134,10 +134,14 @@ export function registerTelegramHandlers(): void {
       telegramThreadedMode: threadedMode,
     });
     try {
-      if (threadedMode && !previous.telegramThreadedMode) await telegramService.ensureActiveThreads();
-      if (!threadedMode && previous.telegramThreadedMode) await telegramService.clearActiveThreads();
+      if (threadedMode && !previous.telegramThreadedMode)
+        await telegramService.ensureActiveThreads();
+      if (!threadedMode && previous.telegramThreadedMode)
+        await telegramService.clearActiveThreads();
     } catch (cause) {
-      await telegramService.setActiveSettings({ telegramThreadedMode: previous.telegramThreadedMode });
+      await telegramService.setActiveSettings({
+        telegramThreadedMode: previous.telegramThreadedMode,
+      });
       throw cause;
     }
     return { thinkingLevel, draftPreviews, activity, rendering, voiceMode, threadedMode };

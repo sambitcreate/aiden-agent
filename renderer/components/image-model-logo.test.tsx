@@ -20,7 +20,11 @@ function maskFile(element: ReturnType<typeof root>): string {
 test("a known maker renders its mono mask mark, hidden from assistive tech", () => {
   const mark = root(
     renderToStaticMarkup(
-      <ImageModelLogo providerId="replicate" modelId="black-forest-labs/flux-2-pro" label="FLUX.2 Pro" />,
+      <ImageModelLogo
+        providerId="replicate"
+        modelId="black-forest-labs/flux-2-pro"
+        label="FLUX.2 Pro"
+      />,
     ),
   );
   assert.equal(mark.getAttribute("data-image-logo"), "black-forest-labs");
@@ -33,7 +37,12 @@ test("a known maker renders its mono mask mark, hidden from assistive tech", () 
 test("an explicit maker wins over inference and can reuse a chat-provider mark", () => {
   const mark = root(
     renderToStaticMarkup(
-      <ImageModelLogo maker="openai" providerId="fal" modelId="fal-ai/flux/dev" label="Odd entry" />,
+      <ImageModelLogo
+        maker="openai"
+        providerId="fal"
+        modelId="fal-ai/flux/dev"
+        label="Odd entry"
+      />,
     ),
   );
   assert.equal(mark.getAttribute("data-image-logo"), "openai");

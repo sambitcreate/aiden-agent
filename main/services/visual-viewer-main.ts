@@ -21,7 +21,11 @@ export function visualViewerInstalled(): boolean {
 let bundle: Promise<VisualViewerBundle> | undefined;
 let libraries: Promise<Record<string, string>> | undefined;
 
-function once<T>(load: () => Promise<T>, read: () => Promise<T> | undefined, store: (value: Promise<T> | undefined) => void): Promise<T> {
+function once<T>(
+  load: () => Promise<T>,
+  read: () => Promise<T> | undefined,
+  store: (value: Promise<T> | undefined) => void,
+): Promise<T> {
   const cached = read();
   if (cached) return cached;
   const pending = load();
@@ -37,10 +41,18 @@ export function loadVisualViewerBundle(): Promise<VisualViewerBundle> {
       style: await readFile(getRendererBuildPath(...STYLE), "utf8"),
     }),
     () => bundle,
-    (value) => { bundle = value; },
+    (value) => {
+      bundle = value;
+    },
   );
 }
 
 export function loadVisualViewerLibraries(): Promise<Record<string, string>> {
-  return once(loadGenerativeUiHostLibraries, () => libraries, (value) => { libraries = value; });
+  return once(
+    loadGenerativeUiHostLibraries,
+    () => libraries,
+    (value) => {
+      libraries = value;
+    },
+  );
 }

@@ -36,14 +36,18 @@ if (process.platform !== "darwin") {
   process.exit(2);
 }
 if (!args.includes("--allow-npm-install")) {
-  console.error("This installs expo-device-hub from npm. Re-run with --allow-npm-install to consent.");
+  console.error(
+    "This installs expo-device-hub from npm. Re-run with --allow-npm-install to consent.",
+  );
   process.exit(2);
 }
 
 const explicitBaseDir = option("--base-dir");
-const baseDir = explicitBaseDir ?? (await mkdtemp(path.join(os.tmpdir(), "aiden-devices-acceptance-")));
+const baseDir =
+  explicitBaseDir ?? (await mkdtemp(path.join(os.tmpdir(), "aiden-devices-acceptance-")));
 const started = Date.now();
-const step = (message) => console.log(`[${((Date.now() - started) / 1000).toFixed(1)}s] ${message}`);
+const step = (message) =>
+  console.log(`[${((Date.now() - started) / 1000).toFixed(1)}s] ${message}`);
 const check = (condition, message) => {
   if (!condition) throw new Error(`Acceptance failed: ${message}`);
   step(`✓ ${message}`);
@@ -77,7 +81,9 @@ try {
 
   const ready = await service.grantConsent("streaming");
   if (ready.hostStatus !== "ready") {
-    throw new Error(`Host did not become ready: ${ready.unavailableReason ?? ready.hostStatuses.local?.detail}`);
+    throw new Error(
+      `Host did not become ready: ${ready.unavailableReason ?? ready.hostStatuses.local?.detail}`,
+    );
   }
   check(ready.devices.length > 0, `simctl listed ${ready.devices.length} iOS simulators`);
 
@@ -89,22 +95,38 @@ try {
     ready.devices[0];
   step(`using ${device.name} (${device.version}, ${device.id}${device.booted ? ", booted" : ""})`);
 
-  const session = await service.open({ chatId: "acceptance", deviceId: device.id, openedBy: "user" });
+  const session = await service.open({
+    chatId: "acceptance",
+    deviceId: device.id,
+    openedBy: "user",
+  });
   check(session.deviceId === device.id, "boot and stream helper attach succeeded");
 
   const png = await service.screenshot({ hostId: device.hostId, deviceId: device.id });
-  check(png.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])), `screenshot is a PNG (${png.length} bytes)`);
+  check(
+    png.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])),
+    `screenshot is a PNG (${png.length} bytes)`,
+  );
   const screenshotPath = path.join(os.tmpdir(), `aiden-devices-acceptance-${Date.now()}.png`);
   await writeFile(screenshotPath, png);
   step(`screenshot saved to ${screenshotPath}`);
 
   const grant = await service.streamGrant();
-  const proxied = (pathname, init) => fetch(`${grant.origin}${pathname}`, { ...init, redirect: "error" });
+  const proxied = (pathname, init) =>
+    fetch(`${grant.origin}${pathname}`, { ...init, redirect: "error" });
   check((await proxied("/api/devices")).status === 401, "proxy refuses a request without a grant");
-  check((await proxied(`/api/exec?t=${grant.token}`, { method: "POST" })).status === 404, "proxy never exposes exec");
-  const listing = await proxied(`/api/devices?t=${grant.token}`, { headers: { origin: "file://" } });
+  check(
+    (await proxied(`/api/exec?t=${grant.token}`, { method: "POST" })).status === 404,
+    "proxy never exposes exec",
+  );
+  const listing = await proxied(`/api/devices?t=${grant.token}`, {
+    headers: { origin: "file://" },
+  });
   check(listing.ok, "proxy serves the hub device list with a grant");
-  check(listing.headers.get("access-control-allow-origin") === "file://", "proxy answers the packaged renderer origin");
+  check(
+    listing.headers.get("access-control-allow-origin") === "file://",
+    "proxy answers the packaged renderer origin",
+  );
   const config = await proxied(`/vendor/serve-sim/helper/${device.id}/config?t=${grant.token}`);
   check(config.ok, "proxy reaches the stream helper for the device");
 

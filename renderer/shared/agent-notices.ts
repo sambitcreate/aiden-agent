@@ -6,7 +6,15 @@
 // instead of a user bubble. The message content is the model-facing text and
 // fences any command output or GitHub text as data.
 
-export const AGENT_NOTICE_SOURCES = ["background_job", "pull_request", "check", "check_back", "schedule", "goal", "chat"] as const;
+export const AGENT_NOTICE_SOURCES = [
+  "background_job",
+  "pull_request",
+  "check",
+  "check_back",
+  "schedule",
+  "goal",
+  "chat",
+] as const;
 export type AgentNoticeSource = (typeof AGENT_NOTICE_SOURCES)[number];
 
 /** How the card reads at a glance. */
@@ -37,7 +45,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** One display line: control characters become spaces, then trimmed and cut. */
 export function noticeLine(value: string, maxChars: number): string {
-  const line = value.replace(/[\p{Cc}\p{Cf}]+/gu, " ").replace(/\s+/gu, " ").trim();
+  const line = value
+    .replace(/[\p{Cc}\p{Cf}]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
   if (line.length <= maxChars) return line;
   return `${line.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
 }
@@ -58,10 +69,14 @@ export function agentNotice(input: Omit<AgentNoticeV1, "version">): AgentNoticeV
 export function parseAgentNoticeV1(value: unknown): AgentNoticeV1 | undefined {
   if (!isRecord(value) || value.version !== 1) return undefined;
   const keys = Object.keys(value);
-  if (keys.some((key) => !["version", "source", "tone", "title", "summary", "outside"].includes(key))) return undefined;
+  if (
+    keys.some((key) => !["version", "source", "tone", "title", "summary", "outside"].includes(key))
+  )
+    return undefined;
   if (value.outside !== undefined && value.outside !== true) return undefined;
   if (!AGENT_NOTICE_SOURCES.includes(value.source as AgentNoticeSource)) return undefined;
-  if (value.tone !== "success" && value.tone !== "failure" && value.tone !== "info") return undefined;
+  if (value.tone !== "success" && value.tone !== "failure" && value.tone !== "info")
+    return undefined;
   if (typeof value.title !== "string" || typeof value.summary !== "string") return undefined;
   try {
     return agentNotice({

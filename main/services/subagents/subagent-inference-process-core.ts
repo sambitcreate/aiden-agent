@@ -140,7 +140,9 @@ export class SubagentInferenceProcessOwner {
     let workerMessageObserved = false;
     let exitCode: number | null | undefined;
     const outboundBudget = new SubagentInferenceOutboundBudget();
-    const postToWorker = (message: import("./subagent-inference-protocol.js").SubagentInferenceParentMessage) => {
+    const postToWorker = (
+      message: import("./subagent-inference-protocol.js").SubagentInferenceParentMessage,
+    ) => {
       if (!process) throw new Error("The isolated inference process is unavailable.");
       const wire = toSubagentInferenceWireMessage(message);
       outboundBudget.consume(wire);
@@ -336,11 +338,15 @@ export class SubagentInferenceProcessOwner {
           const message = raw as SubagentInferenceWorkerMessage;
           if (message.kind === "ready") {
             if (!process?.verifyReadyIdentity(message.launchToken)) {
-              fail("The isolated subagent inference process sent an invalid readiness identity.", "inference", {
-                stage: "protocol",
-                code: "invalid_message",
-                durationMs: performance.now() - startedAt,
-              });
+              fail(
+                "The isolated subagent inference process sent an invalid readiness identity.",
+                "inference",
+                {
+                  stage: "protocol",
+                  code: "invalid_message",
+                  durationMs: performance.now() - startedAt,
+                },
+              );
               void stopOwnedProcess();
               return;
             }

@@ -1,5 +1,9 @@
 import type { OutputRef } from "../shared/images/run-types";
-import { IMAGE_WORKFLOW_LIMITS, type ImageInputNode, type WorkflowNodeDimensions } from "../shared/images/schema";
+import {
+  IMAGE_WORKFLOW_LIMITS,
+  type ImageInputNode,
+  type WorkflowNodeDimensions,
+} from "../shared/images/schema";
 
 /** Every image node renders at this width unless its document stores a size. The only source of the width. */
 export const IMAGE_NODE_WIDTH = 280;
@@ -27,7 +31,12 @@ export function fitNodeToMediaAspect(
   mediaWidth: number,
   mediaHeight: number,
 ): WorkflowNodeDimensions | undefined {
-  if (!Number.isFinite(mediaWidth) || !Number.isFinite(mediaHeight) || mediaWidth <= 0 || mediaHeight <= 0) {
+  if (
+    !Number.isFinite(mediaWidth) ||
+    !Number.isFinite(mediaHeight) ||
+    mediaWidth <= 0 ||
+    mediaHeight <= 0
+  ) {
     return undefined;
   }
   const width = Math.round(clamp(current?.width ?? IMAGE_NODE_WIDTH, MIN_SIZE, MAX_WIDTH));
@@ -51,7 +60,10 @@ export function nodePositionAtPaneCentre(
   const centreX = (pane.width / 2 - viewport.x) / zoom;
   const centreY = (pane.height / 2 - viewport.y) / zoom;
   const offset = (cascade % 6) * 24;
-  return { x: Math.round(centreX - size.width / 2 + offset), y: Math.round(centreY - size.height / 2 + offset) };
+  return {
+    x: Math.round(centreX - size.width / 2 + offset),
+    y: Math.round(centreY - size.height / 2 + offset),
+  };
 }
 
 /**

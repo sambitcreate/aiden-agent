@@ -10,10 +10,7 @@ import {
   intentMatchesRef,
   type ReconciliationGitHub,
 } from "./pull-request-create-reconciliation.js";
-import type {
-  GitHubPullRequestListStatus,
-  GitHubPullRequestSummary,
-} from "./types.js";
+import type { GitHubPullRequestListStatus, GitHubPullRequestSummary } from "./types.js";
 
 const INTENT: ChatPullRequestCreateIntent = {
   operationId: "op-1",
@@ -26,10 +23,7 @@ const INTENT: ChatPullRequestCreateIntent = {
   requestedAt: 1_700,
 };
 
-function summary(
-  number: number,
-  overrides: Partial<GitHubPullRequestSummary> = {},
-) {
+function summary(number: number, overrides: Partial<GitHubPullRequestSummary> = {}) {
   return {
     number,
     title: `PR ${number}`,

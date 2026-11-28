@@ -46,9 +46,7 @@ export interface PeerBonjourService {
 }
 
 /** Browse `_aiden-agent._tcp` until the returned function is called. */
-export type PeerBonjourBrowse = (
-  onService: (service: PeerBonjourService) => void,
-) => () => void;
+export type PeerBonjourBrowse = (onService: (service: PeerBonjourService) => void) => () => void;
 
 export interface PeerDiscoveryOptions {
   /** The fixed-path Tailscale CLI, or null when it is not installed. */
@@ -81,13 +79,15 @@ export function createPeerDiscoveryTailscaleRunner(
 }
 
 function tailscaleStatusFailure(error: unknown): AidenTailscaleStatusReadFailureCategory {
-  const details = error !== null && typeof error === "object"
-    ? error as { code?: unknown; killed?: unknown; message?: unknown }
-    : undefined;
+  const details =
+    error !== null && typeof error === "object"
+      ? (error as { code?: unknown; killed?: unknown; message?: unknown })
+      : undefined;
   if (
-    details?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
-    || details?.message === "tailscale_status_invalid_response"
-  ) return "invalid-response";
+    details?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ||
+    details?.message === "tailscale_status_invalid_response"
+  )
+    return "invalid-response";
   if (details?.code === "ETIMEDOUT" || details?.killed === true) return "timed-out";
   return "command-failed";
 }
@@ -100,17 +100,20 @@ function tailscaleStatusFailure(error: unknown): AidenTailscaleStatusReadFailure
 function parseTailscalePeerNamesStrict(serialized: string): string[] {
   if (serialized.length > MAX_STATUS_CHARS) throw new Error("tailscale_status_invalid_response");
   let root: Record<string, unknown>;
-  try { root = peerRecord(JSON.parse(serialized)); }
-  catch { throw new Error("tailscale_status_invalid_response"); }
+  try {
+    root = peerRecord(JSON.parse(serialized));
+  } catch {
+    throw new Error("tailscale_status_invalid_response");
+  }
   const peers = root.Peer;
   if (peers == null) return [];
-  if (typeof peers !== "object" || Array.isArray(peers)) throw new Error("tailscale_status_invalid_response");
+  if (typeof peers !== "object" || Array.isArray(peers))
+    throw new Error("tailscale_status_invalid_response");
   const names: string[] = [];
   for (const value of Object.values(peers).slice(0, MAX_STATUS_PEERS)) {
     if (!value || typeof value !== "object") continue;
     const peer = value as Record<string, unknown>;
-    if (peer.Online !== true || typeof peer.OS !== "string" || !DESKTOP_OS.has(peer.OS))
-      continue;
+    if (peer.Online !== true || typeof peer.OS !== "string" || !DESKTOP_OS.has(peer.OS)) continue;
     const name = normalizeDnsName(peer.DNSName);
     if (!name?.includes(".") || names.includes(name)) continue;
     names.push(name);
@@ -121,8 +124,11 @@ function parseTailscalePeerNamesStrict(serialized: string): string[] {
 
 /** An invalid status has no usable peers when parsed outside discovery. */
 export function parseTailscalePeerNames(serialized: string): string[] {
-  try { return parseTailscalePeerNamesStrict(serialized); }
-  catch { return []; }
+  try {
+    return parseTailscalePeerNamesStrict(serialized);
+  } catch {
+    return [];
+  }
 }
 
 function txtInstance(txt: unknown): string | undefined {
@@ -139,8 +145,7 @@ function txtInstance(txt: unknown): string | undefined {
 /** Candidate LAN endpoints for one service: its `.local` name, then one IPv4 address. */
 export function lanEndpoints(service: PeerBonjourService): string[] {
   const port = service.port;
-  if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65_535)
-    return [];
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65_535) return [];
   const endpoints: string[] = [];
   const host = normalizeDnsName(service.host);
   if (host) endpoints.push(`https://${host}:${port}/api/aiden/v1`);
@@ -227,7 +232,9 @@ export class PeerDiscovery {
     const paired = new Set(await this.options.pairedIds().catch(() => []));
     const devices = [...session.found.values()]
       .map(({ endpoint: _endpoint, ...device }) => ({ ...device, paired: paired.has(device.id) }))
-      .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+      .sort(
+        (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+      );
     return {
       scanning:
         session.tailscaleScan !== undefined ||
@@ -236,7 +243,12 @@ export class PeerDiscovery {
         session.queue.length > 0,
       devices,
       ...(session.tailscaleUnavailableReason
-        ? { tailscale: { status: "unavailable" as const, reason: session.tailscaleUnavailableReason } }
+        ? {
+            tailscale: {
+              status: "unavailable" as const,
+              reason: session.tailscaleUnavailableReason,
+            },
+          }
         : {}),
     };
   }
@@ -287,8 +299,11 @@ export class PeerDiscovery {
     } catch {
       if (this.session === session) {
         session.tailscaleUnavailableReason = "command-failed";
-        try { this.options.tailscaleUnavailable?.("command-failed"); }
-        catch { /* Diagnostics cannot stop discovery. */ }
+        try {
+          this.options.tailscaleUnavailable?.("command-failed");
+        } catch {
+          /* Diagnostics cannot stop discovery. */
+        }
       }
       return;
     }
@@ -296,7 +311,8 @@ export class PeerDiscovery {
     let names: string[];
     try {
       const serialized = await runner.run(["status", "--json"]);
-      if (serialized.length > MAX_STATUS_CHARS) throw new Error("tailscale_status_invalid_response");
+      if (serialized.length > MAX_STATUS_CHARS)
+        throw new Error("tailscale_status_invalid_response");
       names = parseTailscalePeerNamesStrict(serialized);
     } catch (error) {
       if (this.session !== session) return;
@@ -323,7 +339,11 @@ export class PeerDiscovery {
       // A device Tailscale already reached needs no LAN probe to be listed.
       // A paired one is still probed, so a LAN pairing can relearn the
       // address its `.local` name stands for; Tailscale stays its route here.
-      if (instance && session.found.get(instance)?.route === "tailscale" && !(await this.paired(instance)))
+      if (
+        instance &&
+        session.found.get(instance)?.route === "tailscale" &&
+        !(await this.paired(instance))
+      )
         return;
       for (const endpoint of endpoints) if (await this.probe(session, endpoint, "lan")) return;
     });
@@ -381,7 +401,8 @@ export class PeerDiscovery {
     } catch {
       return false;
     }
-    if (this.session !== session || health.ok !== true || health.protocolVersion !== 1) return false;
+    if (this.session !== session || health.ok !== true || health.protocolVersion !== 1)
+      return false;
     let id: string;
     try {
       id = hostIdentifier(health.instanceId);
@@ -397,7 +418,12 @@ export class PeerDiscovery {
     // splits a surrogate pair.
     const name =
       typeof health.displayName === "string"
-        ? [...health.displayName.replace(/[\p{Cc}\p{Cf}]/gu, "").replace(/\s+/gu, " ").trim()]
+        ? [
+            ...health.displayName
+              .replace(/[\p{Cc}\p{Cf}]/gu, "")
+              .replace(/\s+/gu, " ")
+              .trim(),
+          ]
             .slice(0, 80)
             .join("")
         : "";

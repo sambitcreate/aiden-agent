@@ -6,7 +6,11 @@ import { botComputersApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { useBotComputersCache, useBotComputersStatus } from "../../lib/use-bot-computers";
 import type { BotDefinition } from "../../shared/bots";
-import { botComputerSetupSummary, botComputerStateLabel, type BotComputerStatus } from "../../shared/bot-computers";
+import {
+  botComputerSetupSummary,
+  botComputerStateLabel,
+  type BotComputerStatus,
+} from "../../shared/bot-computers";
 
 type ComputerBot = Pick<BotDefinition, "id" | "name">;
 type Confirm = "reset" | "remove" | null;
@@ -39,21 +43,35 @@ export function BotComputerSection({ bot }: { bot: ComputerBot }) {
       setActing(false);
     }
   };
-  const give = () => run(async () => cache.putComputer(await botComputersApi.give(bot.id)), `Aiden couldn't give ${bot.name} a computer.`);
-  const reset = () => run(async () => cache.putComputer(await botComputersApi.reset(bot.id)), `Aiden couldn't reset ${owner}.`);
+  const give = () =>
+    run(
+      async () => cache.putComputer(await botComputersApi.give(bot.id)),
+      `Aiden couldn't give ${bot.name} a computer.`,
+    );
+  const reset = () =>
+    run(
+      async () => cache.putComputer(await botComputersApi.reset(bot.id)),
+      `Aiden couldn't reset ${owner}.`,
+    );
   const remove = () =>
     run(async () => {
       await botComputersApi.remove(bot.id);
       cache.dropComputer(bot.id);
     }, `Aiden couldn't remove ${owner}.`);
   const stop = () => run(() => botComputersApi.stop(bot.id), `Aiden couldn't stop ${owner}.`);
-  const openSettings = () => void navigate({ to: "/settings", search: { section: "botComputers" } });
+  const openSettings = () =>
+    void navigate({ to: "/settings", search: { section: "botComputers" } });
 
   let row: React.ReactNode;
   if (!status) {
     row = query.isError ? (
       <Field label="Computer" description={`Aiden couldn't check ${owner}.`}>
-        <Button size="small" variant="filled" className="justify-self-end" onClick={() => void query.refetch()}>
+        <Button
+          size="small"
+          variant="filled"
+          className="justify-self-end"
+          onClick={() => void query.refetch()}
+        >
           <RefreshCw /> Try again
         </Button>
       </Field>
@@ -86,13 +104,27 @@ export function BotComputerSection({ bot }: { bot: ComputerBot }) {
         label="Computer"
         description={`Give ${bot.name} its own macOS computer, apart from yours. It starts when ${bot.name} needs it and stops when idle.`}
       >
-        <Button size="small" variant="accent" className="justify-self-end" disabled={acting} onClick={() => void give()}>
+        <Button
+          size="small"
+          variant="accent"
+          className="justify-self-end"
+          disabled={acting}
+          onClick={() => void give()}
+        >
           <Monitor /> Give a computer
         </Button>
       </Field>
     );
   } else {
-    row = <ComputerRow bot={bot} computer={computer} acting={acting} onStop={stop} onConfirm={setConfirm} />;
+    row = (
+      <ComputerRow
+        bot={bot}
+        computer={computer}
+        acting={acting}
+        onStop={stop}
+        onConfirm={setConfirm}
+      />
+    );
   }
 
   return (
@@ -141,7 +173,10 @@ function ComputerRow({
   onStop: () => void;
   onConfirm: (confirm: Confirm) => void;
 }) {
-  const running = computer.state === "running" || computer.state === "starting" || computer.state === "waiting_for_slot";
+  const running =
+    computer.state === "running" ||
+    computer.state === "starting" ||
+    computer.state === "waiting_for_slot";
   return (
     <Field
       label="Computer"
@@ -163,7 +198,12 @@ function ComputerRow({
     >
       <div className="flex flex-wrap justify-end gap-2">
         {running ? (
-          <Button size="small" variant="transparent" disabled={acting || computer.state === "stopping"} onClick={onStop}>
+          <Button
+            size="small"
+            variant="transparent"
+            disabled={acting || computer.state === "stopping"}
+            onClick={onStop}
+          >
             <Square /> Stop
           </Button>
         ) : null}
@@ -175,7 +215,12 @@ function ComputerRow({
         >
           <RotateCcw /> Reset
         </Button>
-        <Button size="small" variant="transparent" disabled={acting} onClick={() => onConfirm("remove")}>
+        <Button
+          size="small"
+          variant="transparent"
+          disabled={acting}
+          onClick={() => onConfirm("remove")}
+        >
           <Trash2 /> Remove
         </Button>
       </div>

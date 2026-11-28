@@ -55,7 +55,10 @@ export function MissingFrame({ path, onRemove }: { path: string | undefined; onR
   );
 }
 
-function visibleWithin(rect: DOMRect, bounds: { left: number; top: number; right: number; bottom: number }) {
+function visibleWithin(
+  rect: DOMRect,
+  bounds: { left: number; top: number; right: number; bottom: number },
+) {
   return (
     rect.width > 0 &&
     rect.height > 0 &&

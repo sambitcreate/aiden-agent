@@ -47,9 +47,15 @@ export interface GuestSshTarget {
  * Aiden's known_hosts entry under a fixed alias (no trust on first use here),
  * no agent, no forwarding, no password prompts.
  */
-export function guestSshArgs(target: GuestSshTarget, paths: GuestSshPaths, connectTimeoutSeconds = 10): string[] {
-  if (isIP(target.host) === 0) throw new BotComputerError("invalid", "The computer's address is not an IP address.");
-  if (target.user !== BOT_COMPUTER_GUEST_USER) throw new BotComputerError("invalid", "Unexpected guest user.");
+export function guestSshArgs(
+  target: GuestSshTarget,
+  paths: GuestSshPaths,
+  connectTimeoutSeconds = 10,
+): string[] {
+  if (isIP(target.host) === 0)
+    throw new BotComputerError("invalid", "The computer's address is not an IP address.");
+  if (target.user !== BOT_COMPUTER_GUEST_USER)
+    throw new BotComputerError("invalid", "Unexpected guest user.");
   return [
     "-F",
     "/dev/null",
@@ -98,7 +104,8 @@ export function guestSshArgs(target: GuestSshTarget, paths: GuestSshPaths, conne
 export function guestSshEnvironment(base: NodeJS.ProcessEnv, home: string): Record<string, string> {
   const env: Record<string, string> = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: home };
   for (const [key, value] of Object.entries(base)) {
-    if (!(key === "LANG" || key === "TMPDIR" || key === "USER" || /^LC_[A-Z]+$/u.test(key))) continue;
+    if (!(key === "LANG" || key === "TMPDIR" || key === "USER" || /^LC_[A-Z]+$/u.test(key)))
+      continue;
     if (typeof value === "string" && value.length > 0 && !value.includes("\0")) env[key] = value;
   }
   return env;
@@ -133,7 +140,13 @@ export interface GuestSshDependencies {
 export async function runGuestCommand(
   target: GuestSshTarget,
   command: string,
-  options: { timeoutMs: number; maxOutputBytes: number; signal?: AbortSignal; stdin?: string; stdinFile?: string },
+  options: {
+    timeoutMs: number;
+    maxOutputBytes: number;
+    signal?: AbortSignal;
+    stdin?: string;
+    stdinFile?: string;
+  },
   deps: GuestSshDependencies,
 ): Promise<BotComputerGuestCommandResult> {
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0) {
@@ -142,7 +155,10 @@ export async function runGuestCommand(
   if (!Number.isSafeInteger(options.maxOutputBytes) || options.maxOutputBytes <= 0) {
     throw new BotComputerError("invalid", "A guest command needs an output limit.");
   }
-  const args = [...guestSshArgs(target, deps.paths), guestRemoteCommand(command, options.timeoutMs)];
+  const args = [
+    ...guestSshArgs(target, deps.paths),
+    guestRemoteCommand(command, options.timeoutMs),
+  ];
   const run = deps.run ?? runBoundedProcess;
   const started = performance.now();
   const result = await run(deps.sshCommand ?? "/usr/bin/ssh", args, {
@@ -165,7 +181,9 @@ export async function runGuestCommand(
     // never fires before `timeoutMs` here. How its SIGALRM reaches ssh's exit status varies
     // (sh's 142, OpenSSH's 255 when the login shell exec'd perl, or no status at all), and a
     // command may exit 142 by itself; a failure once the time is up is the timeout.
-    timedOut: result.timedOut || (result.exitCode !== 0 && performance.now() - started >= options.timeoutMs),
+    timedOut:
+      result.timedOut ||
+      (result.exitCode !== 0 && performance.now() - started >= options.timeoutMs),
   };
 }
 
@@ -184,7 +202,12 @@ async function regularFile(file: string): Promise<boolean> {
  */
 export async function ensureKeyPair(
   paths: GuestSshPaths,
-  options: { env: Record<string, string>; run?: ProcessRunner; keygenCommand?: string; signal?: AbortSignal },
+  options: {
+    env: Record<string, string>;
+    run?: ProcessRunner;
+    keygenCommand?: string;
+    signal?: AbortSignal;
+  },
 ): Promise<string> {
   if ((await regularFile(paths.privateKey)) && (await regularFile(paths.publicKey))) {
     await chmod(paths.privateKey, 0o600);
@@ -196,7 +219,13 @@ export async function ensureKeyPair(
   const result = await run(
     options.keygenCommand ?? "/usr/bin/ssh-keygen",
     ["-q", "-t", "ed25519", "-N", "", "-C", BOT_COMPUTER_HOST_KEY_ALIAS, "-f", paths.privateKey],
-    { env: options.env, signal: options.signal, timeoutMs: 15_000, maxStdoutBytes: 16 * 1024, overflow: "fail" },
+    {
+      env: options.env,
+      signal: options.signal,
+      timeoutMs: 15_000,
+      maxStdoutBytes: 16 * 1024,
+      overflow: "fail",
+    },
   );
   if (result.exitCode !== 0 || result.timedOut) {
     throw new BotComputerError("start_failed", "Aiden couldn't make the key for Bot computers.");
@@ -237,5 +266,8 @@ export async function writeKnownHost(paths: GuestSshPaths, hostPublicKey: string
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   const lines = pinned.includes(line) ? pinned : [...pinned, line];
-  await writeFileAtomic(paths.knownHosts, `${lines.join("\n")}\n`, { mode: 0o600, mkdirMode: 0o700 });
+  await writeFileAtomic(paths.knownHosts, `${lines.join("\n")}\n`, {
+    mode: 0o600,
+    mkdirMode: 0o700,
+  });
 }

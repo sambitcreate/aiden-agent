@@ -24,17 +24,34 @@ test("Assistant Live audio admission accepts only one exact 20 ms PCM chunk", ()
     { sessionId: "", pcm },
     { sessionId: "session-1", pcm: pcm.buffer },
     { sessionId: "session-1", pcm, apiKey: "secret" },
-  ]) assert.throws(() => parseAssistantLiveAudioIntent(value), /audio request/u);
+  ])
+    assert.throws(() => parseAssistantLiveAudioIntent(value), /audio request/u);
 });
 
 test("Assistant Live start intent accepts only an exact bounded authorization record", () => {
-  assert.equal(parseAssistantLiveStartIntent({ microphone: true, screen: true, computerUseAuthorization: null }).screen, true);
-  assert.throws(() => parseAssistantLiveStartIntent({ microphone: true, screen: "true", computerUseAuthorization: null }));
+  assert.equal(
+    parseAssistantLiveStartIntent({
+      microphone: true,
+      screen: true,
+      computerUseAuthorization: null,
+    }).screen,
+    true,
+  );
+  assert.throws(() =>
+    parseAssistantLiveStartIntent({
+      microphone: true,
+      screen: "true",
+      computerUseAuthorization: null,
+    }),
+  );
   assert.throws(() => parseAssistantLiveStartIntent({ microphone: true, screen: true }));
-  assert.deepEqual(parseAssistantLiveStartIntent({ microphone: true, computerUseAuthorization: null }), {
-    microphone: true,
-    computerUseAuthorization: null,
-  });
+  assert.deepEqual(
+    parseAssistantLiveStartIntent({ microphone: true, computerUseAuthorization: null }),
+    {
+      microphone: true,
+      computerUseAuthorization: null,
+    },
+  );
   assert.equal(
     parseAssistantLiveStartIntent({ microphone: true, computerUseAuthorization: "token" })
       .computerUseAuthorization,
@@ -75,12 +92,15 @@ test("Assistant Live frame admission accepts only one bounded copied JPEG byte r
     { sessionId: "session-1", frame: frame.buffer },
     { sessionId: "session-1", frame, apiKey: "secret" },
     { frame },
-  ]) assert.throws(() => parseAssistantLiveFrameIntent(value), /frame request/u);
+  ])
+    assert.throws(() => parseAssistantLiveFrameIntent(value), /frame request/u);
 });
 
 test("Assistant Live display bind accepts an empty record or one well-formed chosen source", () => {
   assert.deepEqual(parseAssistantLiveDisplayBindIntent({}), { sourceId: null });
-  assert.deepEqual(parseAssistantLiveDisplayBindIntent({ sourceId: "screen:0:0" }), { sourceId: "screen:0:0" });
+  assert.deepEqual(parseAssistantLiveDisplayBindIntent({ sourceId: "screen:0:0" }), {
+    sourceId: "screen:0:0",
+  });
   assert.deepEqual(parseAssistantLiveDisplayBindIntent({ sourceId: "window:73400323:0" }), {
     sourceId: "window:73400323:0",
   });
@@ -94,13 +114,19 @@ test("Assistant Live display bind accepts an empty record or one well-formed cho
     { sourceId: `window:${"9".repeat(80)}:0` },
     { sourceId: 7 },
   ]) {
-    assert.throws(() => parseAssistantLiveDisplayBindIntent(bad), /Invalid Assistant Live display-bind/u);
+    assert.throws(
+      () => parseAssistantLiveDisplayBindIntent(bad),
+      /Invalid Assistant Live display-bind/u,
+    );
   }
 });
 
 test("Assistant Live display sources takes only an exact empty record", () => {
   assert.doesNotThrow(() => parseAssistantLiveEmptyIntent({}, "display-sources"));
-  assert.throws(() => parseAssistantLiveEmptyIntent({ all: true }, "display-sources"), /display-sources/u);
+  assert.throws(
+    () => parseAssistantLiveEmptyIntent({ all: true }, "display-sources"),
+    /display-sources/u,
+  );
 });
 
 test("Assistant Live display release requires one bounded binding token", () => {
@@ -123,7 +149,11 @@ test("Assistant Live tool results accept one bounded JSON record for a broker re
   });
   assert.equal(parsed.requestId, "r12");
   // The response is copied through JSON, so non-JSON values arrive as plain data.
-  assert.deepEqual(parsed.response, { ok: true, title: "Fix login", when: "1970-01-01T00:00:00.000Z" });
+  assert.deepEqual(parsed.response, {
+    ok: true,
+    title: "Fix login",
+    when: "1970-01-01T00:00:00.000Z",
+  });
   const cyclic: Record<string, unknown> = {};
   cyclic.self = cyclic;
   for (const value of [
@@ -132,15 +162,24 @@ test("Assistant Live tool results accept one bounded JSON record for a broker re
     { sessionId: "session-1", requestId: "r1", response: cyclic },
     { sessionId: "session-1", requestId: "r1", response: { ok: true }, extra: 1 },
     { sessionId: "", requestId: "r1", response: { ok: true } },
-  ]) assert.throws(() => parseAssistantLiveToolResultIntent(value));
+  ])
+    assert.throws(() => parseAssistantLiveToolResultIntent(value));
   assert.throws(
-    () => parseAssistantLiveToolResultIntent({ sessionId: "session-1", requestId: "r1", response: { text: "x".repeat(40_000) } }),
+    () =>
+      parseAssistantLiveToolResultIntent({
+        sessionId: "session-1",
+        requestId: "r1",
+        response: { text: "x".repeat(40_000) },
+      }),
     /too large/u,
   );
 });
 
 test("Assistant Live notes need a session and 1 to 2,000 characters of text", () => {
-  assert.equal(parseAssistantLiveNoteIntent({ sessionId: "session-1", text: "Tests passed." }).text, "Tests passed.");
+  assert.equal(
+    parseAssistantLiveNoteIntent({ sessionId: "session-1", text: "Tests passed." }).text,
+    "Tests passed.",
+  );
   for (const value of [
     { sessionId: "session-1", text: "   " },
     { sessionId: "session-1", text: "x".repeat(2_001) },
@@ -149,10 +188,18 @@ test("Assistant Live notes need a session and 1 to 2,000 characters of text", ()
     { sessionId: "session-1", text: "Run npm test?", awaitDelivery: false },
     { sessionId: "session-1", text: "Run npm test?", awaitDelivery: "yes" },
     { sessionId: "session-1", text: "Run npm test?", urgent: true },
-  ]) assert.throws(() => parseAssistantLiveNoteIntent(value), /note/u);
-  assert.equal(parseAssistantLiveNoteIntent({ sessionId: "session-1", text: "Tests passed." }).awaitDelivery, undefined);
+  ])
+    assert.throws(() => parseAssistantLiveNoteIntent(value), /note/u);
   assert.equal(
-    parseAssistantLiveNoteIntent({ sessionId: "session-1", text: "Run npm test?", awaitDelivery: true }).awaitDelivery,
+    parseAssistantLiveNoteIntent({ sessionId: "session-1", text: "Tests passed." }).awaitDelivery,
+    undefined,
+  );
+  assert.equal(
+    parseAssistantLiveNoteIntent({
+      sessionId: "session-1",
+      text: "Run npm test?",
+      awaitDelivery: true,
+    }).awaitDelivery,
     true,
   );
 });

@@ -204,7 +204,9 @@ function connectionInventory(
     const scope = offered ? scopeByServer.get(server.id) : undefined;
     return {
       sourceId: server.id,
-      ...(isComposioServiceServer(server) ? { accessIdentity: COMPOSIO_SERVICE_ACCESS_IDENTITY } : {}),
+      ...(isComposioServiceServer(server)
+        ? { accessIdentity: COMPOSIO_SERVICE_ACCESS_IDENTITY }
+        : {}),
       label: server.name,
       description: server.enabled
         ? !offered
@@ -292,21 +294,21 @@ function ordinaryInventory(input: {
     {
       kind: "browser",
       label: "Browser",
-      description: "Browse the web in its own browser, with its own sign-ins, which you can watch in its Browser tab.",
+      description:
+        "Browse the web in its own browser, with its own sign-ins, which you can watch in its Browser tab.",
       available: input.browserAgentAccess,
     },
     {
       kind: "computer_use",
       label: "Computer Use",
       description: "Use the Mac visually through Aiden's existing attended controls.",
-      available:
-        input.computerUseSupported &&
-        input.settings.computerUseEnabled === true,
+      available: input.computerUseSupported && input.settings.computerUseEnabled === true,
     },
     {
       kind: "computer",
       label: "Bot computer",
-      description: "Use its own computer, a macOS virtual machine apart from your Mac that you can watch and take over. Give it one in its profile.",
+      description:
+        "Use its own computer, a macOS virtual machine apart from your Mac that you can watch and take over. Give it one in its profile.",
       available: input.botComputersReady,
     },
     {
@@ -465,20 +467,20 @@ export function createBotCapabilityInventoryPorts(
       return skills;
     },
     async inspectOtherCapabilities(signal) {
-      const [settings, webSearchAvailability, browserAgentAccess, botComputersReady] = await Promise.all([
-        dependencies.getSettings(),
-        dependencies.webSearchAvailability(),
-        dependencies.browserAgentAccess?.() ?? Promise.resolve(false),
-        // An unreadable Bot computers state offers nothing rather than failing the catalog.
-        dependencies.botComputersReady?.().catch(() => false) ?? Promise.resolve(false),
-      ]);
+      const [settings, webSearchAvailability, browserAgentAccess, botComputersReady] =
+        await Promise.all([
+          dependencies.getSettings(),
+          dependencies.webSearchAvailability(),
+          dependencies.browserAgentAccess?.() ?? Promise.resolve(false),
+          // An unreadable Bot computers state offers nothing rather than failing the catalog.
+          dependencies.botComputersReady?.().catch(() => false) ?? Promise.resolve(false),
+        ]);
       if (signal.aborted) throw signal.reason;
       return ordinaryInventory({
         settings,
         webSearchReady: webSearchAvailability.ready === true,
         subagentsAvailable: dependencies.subagentsAvailable(),
-        computerUseSupported:
-          dependencies.computerUseSupported?.() === true,
+        computerUseSupported: dependencies.computerUseSupported?.() === true,
         browserAgentAccess: browserAgentAccess === true,
         botComputersReady: botComputersReady === true,
       });

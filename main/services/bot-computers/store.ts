@@ -58,9 +58,11 @@ function time(value: unknown): number | undefined {
 function guestDriver(value: unknown): BotComputerGuestDriverRecord | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const { version, home, uid } = value as Record<string, unknown>;
-  if (typeof version !== "string" || !/^\d{1,4}\.\d{1,4}\.\d{1,6}$/u.test(version)) return undefined;
+  if (typeof version !== "string" || !/^\d{1,4}\.\d{1,4}\.\d{1,6}$/u.test(version))
+    return undefined;
   if (typeof home !== "string" || !/^\/Users\/[A-Za-z0-9._-]{1,64}$/u.test(home)) return undefined;
-  if (typeof uid !== "number" || !Number.isSafeInteger(uid) || uid < 0 || uid > 9_999_999) return undefined;
+  if (typeof uid !== "number" || !Number.isSafeInteger(uid) || uid < 0 || uid > 9_999_999)
+    return undefined;
   return { version, home, uid };
 }
 
@@ -71,7 +73,8 @@ export function parseBotComputersState(value: unknown): BotComputersState {
   const input = value as Record<string, unknown>;
   const settings = input.settings as Record<string, unknown> | undefined;
   if (settings && typeof settings === "object") {
-    if (settings.maxRunning === 1 || settings.maxRunning === 2) state.settings.maxRunning = settings.maxRunning;
+    if (settings.maxRunning === 1 || settings.maxRunning === 2)
+      state.settings.maxRunning = settings.maxRunning;
     if ((BOT_COMPUTER_IDLE_STOP_CHOICES as readonly unknown[]).includes(settings.idleStopMinutes)) {
       state.settings.idleStopMinutes = settings.idleStopMinutes as number;
     }
@@ -93,9 +96,13 @@ export function parseBotComputersState(value: unknown): BotComputersState {
       if (!raw || typeof raw !== "object" || botId.length === 0 || botId.length > 200) continue;
       const entry = raw as Record<string, unknown>;
       const vmName = text(entry.vmName);
-      const baseBuild = typeof entry.baseBuild === "string" && entry.baseBuild.length <= 32 ? entry.baseBuild : undefined;
+      const baseBuild =
+        typeof entry.baseBuild === "string" && entry.baseBuild.length <= 32
+          ? entry.baseBuild
+          : undefined;
       const createdAt = time(entry.createdAt);
-      if (!vmName || !isAidenVmName(vmName) || baseBuild === undefined || createdAt === undefined) continue;
+      if (!vmName || !isAidenVmName(vmName) || baseBuild === undefined || createdAt === undefined)
+        continue;
       const lastUsedAt = time(entry.lastUsedAt);
       const driver = guestDriver(entry.guestDriver);
       state.computers[botId] = {
@@ -137,7 +144,12 @@ export function createBotComputersStore(file: string): BotComputersStore {
     }
   }
   async function save(state: BotComputersState): Promise<void> {
-    await writeJsonAtomic(file, state, { mode: 0o600, mkdirMode: 0o700, space: 2, trailingNewline: true });
+    await writeJsonAtomic(file, state, {
+      mode: 0o600,
+      mkdirMode: 0o700,
+      space: 2,
+      trailingNewline: true,
+    });
   }
   return {
     read: () => serialize(load),

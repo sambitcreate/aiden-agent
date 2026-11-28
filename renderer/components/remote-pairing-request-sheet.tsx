@@ -35,13 +35,14 @@ export function nextPairingRequest(
   now: number,
   pending: string | null = null,
 ): { current: AidenRemotePairingRequestPrompt | null; waiting: number; busy: boolean } {
-  const inFlight = pending === null
-    ? undefined
-    : prompts.find((prompt) => prompt.requestId === pending);
-  const live = prompts.filter((prompt) =>
-    prompt !== inFlight
-    && !answered.has(prompt.requestId)
-    && pairingRequestSecondsLeft(prompt.expiresAt, now) > 0);
+  const inFlight =
+    pending === null ? undefined : prompts.find((prompt) => prompt.requestId === pending);
+  const live = prompts.filter(
+    (prompt) =>
+      prompt !== inFlight &&
+      !answered.has(prompt.requestId) &&
+      pairingRequestSecondsLeft(prompt.expiresAt, now) > 0,
+  );
   if (inFlight) return { current: inFlight, waiting: live.length, busy: true };
   const current = live[0] ?? null;
   return {
@@ -75,7 +76,9 @@ export function PairingRequestSheetBody({
         className="flex flex-col items-center gap-1 rounded-control bg-well px-4 py-4 text-center"
         data-pairing-match-code={prompt.matchCode}
       >
-        <Text variant="small" color="secondary" className="block">Match code</Text>
+        <Text variant="small" color="secondary" className="block">
+          Match code
+        </Text>
         <span
           role="img"
           aria-label={`Match code ${digits}`}
@@ -87,14 +90,16 @@ export function PairingRequestSheetBody({
       <div className="flex items-center gap-2 text-small text-secondary">
         <Laptop className="size-4 shrink-0" aria-hidden="true" />
         <span className="min-w-0 flex-1 break-words">
-          {prompt.deviceType === "linux" ? "Linux" : "Mac"} · {prompt.transport === "tailscale" ? "Tailscale" : "Same network"}
+          {prompt.deviceType === "linux" ? "Linux" : "Mac"} ·{" "}
+          {prompt.transport === "tailscale" ? "Tailscale" : "Same network"}
         </span>
         <span role="timer" aria-live="off" className="shrink-0 tabular-nums">
           Expires in {formatCountdown(secondsLeft)}
         </span>
       </div>
       <Text variant="small" color="secondary" className="block">
-        This device name is supplied by the requester. Allow grants access to your workspaces, chats, Bots and available run controls.
+        This device name is supplied by the requester. Allow grants access to your workspaces,
+        chats, Bots and available run controls.
       </Text>
       {waiting > 0 ? (
         <Text variant="small" color="secondary" className="block">
@@ -122,17 +127,22 @@ export function PairingRequestSheet() {
   });
   const [answered, setAnswered] = React.useState<ReadonlySet<string>>(() => new Set());
   const [now, setNow] = React.useState(() => Date.now());
-  const [pending, setPending] = React.useState<
-    { requestId: string; decision: "allow" | "deny" } | null
-  >(null);
+  const [pending, setPending] = React.useState<{
+    requestId: string;
+    decision: "allow" | "deny";
+  } | null>(null);
   // The request whose Allow is live. A newly shown request starts unarmed.
   const [armedFor, setArmedFor] = React.useState<string | null>(null);
   const denyRef = React.useRef<HTMLButtonElement | null>(null);
 
-  React.useEffect(() => aidenRemoteApi.onPairingRequestsChanged(() => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemotePairingRequests });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemote });
-  }), [queryClient]);
+  React.useEffect(
+    () =>
+      aidenRemoteApi.onPairingRequestsChanged(() => {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemotePairingRequests });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemote });
+      }),
+    [queryClient],
+  );
 
   const prompts = requests.data ?? [];
   const { current, waiting, busy } = nextPairingRequest(
@@ -188,7 +198,9 @@ export function PairingRequestSheet() {
         }
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Aiden couldn't answer this connection request.");
+      toast.error(
+        error instanceof Error ? error.message : "Aiden couldn't answer this connection request.",
+      );
     } finally {
       // Only now move on, so the sheet stays on this request until it settles.
       setAnswered((previous) => new Set(previous).add(request.requestId));
@@ -206,30 +218,30 @@ export function PairingRequestSheet() {
   // Pairing is the user's decision: Aiden Live never answers it.
   return (
     <LiveGuard guard="you" wrap={false}>
-    <Dialog
-      open={current !== null}
-      cancelRef={denyRef}
-      busy={current !== null && busy}
-      confirmDisabled={current === null || armedFor !== current.requestId}
-      onOpenChange={(open) => {
-        if (!open) void respond("deny");
-      }}
-      title={(
-        <span className="break-words">
-          {shown.deviceName} wants to control this {hostLabel}
-        </span>
-      )}
-      description={`Allow only if you started this connection and the intended computer shows the same code. It will be able to use Aiden on this ${hostLabel} until you remove it in Connections settings.`}
-      cancelLabel="Deny"
-      confirmLabel={busyAllowing ? "Allowing…" : "Allow"}
-      onConfirm={() => respond("allow")}
-    >
-      <PairingRequestSheetBody
-        prompt={shown}
-        secondsLeft={pairingRequestSecondsLeft(shown.expiresAt, now)}
-        waiting={waiting}
-      />
-    </Dialog>
+      <Dialog
+        open={current !== null}
+        cancelRef={denyRef}
+        busy={current !== null && busy}
+        confirmDisabled={current === null || armedFor !== current.requestId}
+        onOpenChange={(open) => {
+          if (!open) void respond("deny");
+        }}
+        title={
+          <span className="break-words">
+            {shown.deviceName} wants to control this {hostLabel}
+          </span>
+        }
+        description={`Allow only if you started this connection and the intended computer shows the same code. It will be able to use Aiden on this ${hostLabel} until you remove it in Connections settings.`}
+        cancelLabel="Deny"
+        confirmLabel={busyAllowing ? "Allowing…" : "Allow"}
+        onConfirm={() => respond("allow")}
+      >
+        <PairingRequestSheetBody
+          prompt={shown}
+          secondsLeft={pairingRequestSecondsLeft(shown.expiresAt, now)}
+          waiting={waiting}
+        />
+      </Dialog>
     </LiveGuard>
   );
 }

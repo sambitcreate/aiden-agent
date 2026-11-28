@@ -21,7 +21,9 @@ export function AcceptConnectionRequestsField({
       description={`Other computers can ask to control this ${hostLabel} only while Add device is open. Compare the code and approve each connection you started.`}
     >
       <div className="flex items-center justify-end gap-2">
-        {busy ? <Loader2 className="size-4 animate-spin text-secondary" aria-hidden="true" /> : null}
+        {busy ? (
+          <Loader2 className="size-4 animate-spin text-secondary" aria-hidden="true" />
+        ) : null}
         <Switch
           checked={accept}
           onCheckedChange={onChange}

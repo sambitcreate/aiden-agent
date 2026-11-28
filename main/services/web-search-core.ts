@@ -392,4 +392,3 @@ export function webSearchSettingsHasSecretMetadata(value: unknown): boolean {
   };
   return visit(value);
 }
-

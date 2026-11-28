@@ -72,7 +72,12 @@ export function applyChatMetaListUpdate<
   return rows
     .map((row) => {
       if (row.id !== update.chatId) return row;
-      const next: T = { ...row, title: update.title, workspaceId: update.workspaceId, updatedAt: update.updatedAt };
+      const next: T = {
+        ...row,
+        title: update.title,
+        workspaceId: update.workspaceId,
+        updatedAt: update.updatedAt,
+      };
       applyThinkingLevel(next, update);
       return next;
     })

@@ -9,7 +9,11 @@ function resolver(known: Record<string, string>): LookupFunction {
   return (hostname, options, callback) => {
     const address = known[hostname];
     if (address === undefined) {
-      callback(Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), { code: "ENOTFOUND" }), "", 0);
+      callback(
+        Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), { code: "ENOTFOUND" }),
+        "",
+        0,
+      );
       return;
     }
     if (options.all) callback(null, [{ address, family: 4 }]);
@@ -28,11 +32,16 @@ function resolve(
 }
 
 test("a .local name the system cannot resolve reaches the address remembered for that installation", async () => {
-  const book = new PeerLanAddresses(resolver({ "known.local": "10.0.0.2", "example.com": "93.184.216.34" }));
+  const book = new PeerLanAddresses(
+    resolver({ "known.local": "10.0.0.2", "example.com": "93.184.216.34" }),
+  );
   book.remember("install_studio", "192.168.1.20");
   const studio = book.lookupFor("install_studio");
 
-  assert.deepEqual(await resolve(studio, "studio-mac.local"), { error: null, address: "192.168.1.20" });
+  assert.deepEqual(await resolve(studio, "studio-mac.local"), {
+    error: null,
+    address: "192.168.1.20",
+  });
   assert.deepEqual(await resolve(studio, "studio-mac.local.", { all: true }), {
     error: null,
     address: [{ address: "192.168.1.20", family: 4 }],
@@ -42,7 +51,10 @@ test("a .local name the system cannot resolve reaches the address remembered for
   // Other names, IPv6-only lookups and other installations are not redirected.
   assert.equal((await resolve(studio, "studio.example")).error?.code, "ENOTFOUND");
   assert.equal((await resolve(studio, "studio-mac.local", { family: 6 })).error?.code, "ENOTFOUND");
-  assert.equal((await resolve(book.lookupFor("install_other"), "studio-mac.local")).error?.code, "ENOTFOUND");
+  assert.equal(
+    (await resolve(book.lookupFor("install_other"), "studio-mac.local")).error?.code,
+    "ENOTFOUND",
+  );
 });
 
 test("only IPv4 addresses are kept, the latest per installation, for a bounded number of installations", () => {
@@ -65,7 +77,11 @@ test("authenticated interface hints retain all bounded alternatives and can be d
   const book = new PeerLanAddresses(resolver({}));
   book.rememberAll("studio", ["192.168.1.4", "10.1.0.7", "192.168.1.4", "fe80::1"]);
   assert.deepEqual(await resolve(book.lookupFor("studio"), "studio.local", { all: true }), {
-    error: null, address: [{ address: "192.168.1.4", family: 4 }, { address: "10.1.0.7", family: 4 }],
+    error: null,
+    address: [
+      { address: "192.168.1.4", family: 4 },
+      { address: "10.1.0.7", family: 4 },
+    ],
   });
   book.forget("studio");
   assert.equal((await resolve(book.lookupFor("studio"), "studio.local")).error?.code, "ENOTFOUND");

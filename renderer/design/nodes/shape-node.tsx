@@ -17,12 +17,18 @@ export function ShapeNode({ data, selected }: NodeProps<DesignNode>) {
   const outline = frame.color ? designColorVar(frame.color) : undefined;
   return (
     <>
-      <DesignNodeResizer selected={selected && canvas.editing !== frame.id} minSize={designMinSize("shape")} />
+      <DesignNodeResizer
+        selected={selected && canvas.editing !== frame.id}
+        minSize={designMinSize("shape")}
+      />
       <div
         role="group"
         aria-label={frame.text ? `${name}: ${frame.text.slice(0, 80)}` : name}
         data-selected={selected ? "true" : "false"}
-        className={cn("flex h-full w-full items-center justify-center overflow-hidden p-2", oval ? "rounded-full" : "rounded-[8px]")}
+        className={cn(
+          "flex h-full w-full items-center justify-center overflow-hidden p-2",
+          oval ? "rounded-full" : "rounded-[8px]",
+        )}
         style={{
           ...(!oval && frame.radius !== undefined ? { borderRadius: frame.radius } : {}),
           background: frame.fill ? designFillVar(frame.fill) : "transparent",
@@ -35,7 +41,11 @@ export function ShapeNode({ data, selected }: NodeProps<DesignNode>) {
             label={`${name} label`}
             placeholder="Label"
             className="h-auto max-h-full text-center"
-            style={{ fontSize: DESIGN_TEXT_PX.small, lineHeight: 1.3, color: "var(--text-primary)" }}
+            style={{
+              fontSize: DESIGN_TEXT_PX.small,
+              lineHeight: 1.3,
+              color: "var(--text-primary)",
+            }}
           />
         ) : (
           // An empty shape still takes a double-click to start its label.

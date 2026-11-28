@@ -30,23 +30,32 @@ export function useSettledPrimaryAction(wanted: "live" | "send"): {
 } {
   // A composer that mounts with Live already offered still starts on Send and
   // reaches Live through the same delay, so the press guard always applies.
-  const [settled, setSettled] = React.useState<{ action: "live" | "send"; shownAt: number }>(() => ({
-    action: "send",
-    shownAt: 0,
-  }));
+  const [settled, setSettled] = React.useState<{ action: "live" | "send"; shownAt: number }>(
+    () => ({
+      action: "send",
+      shownAt: 0,
+    }),
+  );
   React.useEffect(() => {
     if (wanted === "send") {
-      setSettled((current) => (current.action === "send" ? current : { action: "send", shownAt: Date.now() }));
+      setSettled((current) =>
+        current.action === "send" ? current : { action: "send", shownAt: Date.now() },
+      );
       return;
     }
     const timer = window.setTimeout(
-      () => setSettled((current) => (current.action === "live" ? current : { action: "live", shownAt: Date.now() })),
+      () =>
+        setSettled((current) =>
+          current.action === "live" ? current : { action: "live", shownAt: Date.now() },
+        ),
       LIVE_SWAP_DELAY_MS,
     );
     return () => window.clearTimeout(timer);
   }, [wanted]);
   // Send must win in the same render, even before the effect runs.
-  return wanted === "send" && settled.action === "live" ? { action: "send", shownAt: settled.shownAt } : settled;
+  return wanted === "send" && settled.action === "live"
+    ? { action: "send", shownAt: settled.shownAt }
+    : settled;
 }
 
 /** The Live button's name: first use opens setup rather than starting. */

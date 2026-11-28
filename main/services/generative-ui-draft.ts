@@ -4,7 +4,11 @@ import {
   RENDER_ARTIFACT_TOOL_NAME,
   isHtmlArtifactTitle,
 } from "../../renderer/shared/generative-ui.js";
-import { createGenerativeUiDraftCheck, isGenerativeUiDraftAcceptable, type GenerativeUiDraftCheck } from "./generative-ui-html.js";
+import {
+  createGenerativeUiDraftCheck,
+  isGenerativeUiDraftAcceptable,
+  type GenerativeUiDraftCheck,
+} from "./generative-ui-html.js";
 import { openGenerativeUiDraftStream } from "./generative-ui-preview-store.js";
 
 /**
@@ -88,7 +92,9 @@ interface DraftCall {
  * `cancel`/`dispose` retract drafts that will never be presented.
  */
 function requestsWide(args: unknown): boolean {
-  return Boolean(args && typeof args === "object" && (args as { layout?: unknown }).layout === "wide");
+  return Boolean(
+    args && typeof args === "object" && (args as { layout?: unknown }).layout === "wide",
+  );
 }
 
 export function createGenerativeUiDraftSession(options: GenerativeUiDraftSessionOptions) {

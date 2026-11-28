@@ -63,7 +63,10 @@ export function designInspectNoteText(input: readonly WrittenPageReport[]): stri
     );
   }
   const left = reports.length - shown.length;
-  if (left > 0) lines.push(`${left} more ${left === 1 ? "page was" : "pages were"} written; call canvas_inspect to check ${left === 1 ? "it" : "them"}.`);
+  if (left > 0)
+    lines.push(
+      `${left} more ${left === 1 ? "page was" : "pages were"} written; call canvas_inspect to check ${left === 1 ? "it" : "them"}.`,
+    );
   if (shown.some((report) => report.findings.length > 0)) lines.push(DESIGN_INSPECT_PAGE_DATA_LINE);
   return lines.join("\n");
 }
@@ -84,7 +87,12 @@ export function withDesignInspectNote<C extends { messages: readonly unknown[] }
     ...context,
     messages: [
       ...context.messages,
-      { role: "system", content: "", sections: { [DESIGN_PAGE_INSPECT_SECTION]: designInspectNoteText(reports) }, timestamp: now },
+      {
+        role: "system",
+        content: "",
+        sections: { [DESIGN_PAGE_INSPECT_SECTION]: designInspectNoteText(reports) },
+        timestamp: now,
+      },
     ],
   };
 }
@@ -127,7 +135,11 @@ export function createWrittenPageInspector(options: {
         try {
           const inspected = await options.inspect(path);
           if (inspected && writes.get(path) === generation) {
-            ready.set(path, { path, frameId: inspected.frameId, findings: [...inspected.findings] });
+            ready.set(path, {
+              path,
+              frameId: inspected.frameId,
+              findings: [...inspected.findings],
+            });
           }
         } catch (error) {
           options.onError(path, error);

@@ -30,18 +30,12 @@ test("admission is durable, deduplicated, profile-bound and reserves one unresol
     () => other.enqueue({ ...input, modelId: "other" }, "actor", "key"),
     code("conflict"),
   );
-  assert.throws(
-    () => other.enqueue(input, "actor", "new-key"),
-    code("conflict"),
-  );
+  assert.throws(() => other.enqueue(input, "actor", "new-key"), code("conflict"));
   assert.throws(
     () => other.enqueue({ ...input, profileId: "other" }, "actor", "new-key"),
     code("unsafe"),
   );
-  assert.throws(
-    () => new DurableJobStore({ root: f.root, profileId: "other" }),
-    code("unsafe"),
-  );
+  assert.throws(() => new DurableJobStore({ root: f.root, profileId: "other" }), code("unsafe"));
   assert.equal(other.get(job.id).state, "admitting");
 });
 
@@ -74,10 +68,7 @@ test("expired owner cannot renew or execute before another claimant arrives", (t
   const { lease } = f.store.claim("one")!;
   f.clock(1_000 + LEASE_MS);
   assert.throws(() => f.store.assertLease(lease), code("lost_lease"));
-  assert.throws(
-    () => f.store.beginExecution(lease, "start"),
-    code("lost_lease"),
-  );
+  assert.throws(() => f.store.beginExecution(lease, "start"), code("lost_lease"));
   assert.throws(() => f.store.heartbeat(lease), code("lost_lease"));
 });
 
@@ -96,11 +87,7 @@ test("persisted high-water clock prevents backward-clock resurrection", (t) => {
 test("global concurrent lease bound is shared by connections", (t) => {
   const f = fixture(t, 1);
   f.store.enqueue(input, "actor", "key");
-  f.store.enqueue(
-    { ...input, chatId: "other", messageId: "m2", turnId: "t2" },
-    "actor",
-    "key2",
-  );
+  f.store.enqueue({ ...input, chatId: "other", messageId: "m2", turnId: "t2" }, "actor", "key2");
   const other = f.open();
   const first = f.store.claim("one")!;
   assert.equal(other.claim("two"), null);
@@ -119,10 +106,7 @@ test("dispatch marker and attempt commit before execution; reclaim does not crea
   const next = f.open().claim("two")!;
   assert.equal(next.job.executionCount, 1);
   assert.equal(f.store.attempts(job.id).length, 1);
-  assert.throws(
-    () => f.store.beginExecution(next.lease, "start"),
-    code("unsafe"),
-  );
+  assert.throws(() => f.store.beginExecution(next.lease, "start"), code("unsafe"));
 });
 
 for (const action of ["pause", "cancel", "stop"] as const)
@@ -140,10 +124,7 @@ for (const action of ["pause", "cancel", "stop"] as const)
       action === "stop"
         ? f.store.interrupt({ ...request, turnId: input.turnId })
         : f.store.control({ ...request, action });
-    assert.throws(
-      () => f.store.admitted(first.lease, checkpoint),
-      code("lost_lease"),
-    );
+    assert.throws(() => f.store.admitted(first.lease, checkpoint), code("lost_lease"));
     const other = f.open();
     const duplicate =
       action === "stop"
@@ -154,11 +135,7 @@ for (const action of ["pause", "cancel", "stop"] as const)
     other.settle(next.lease, evidence("not_started"));
     assert.equal(
       other.get(job.id).state,
-      action === "pause"
-        ? "paused"
-        : action === "cancel"
-          ? "cancelled"
-          : "interrupted",
+      action === "pause" ? "paused" : action === "cancel" ? "cancelled" : "interrupted",
     );
     assert.equal(other.claim("three"), null);
   });
@@ -172,15 +149,9 @@ test("stale controls, wrong turn and changed idempotency payload cannot change w
     jobId: job.id,
     expectedRevision: job.revision,
   };
-  assert.throws(
-    () => f.store.interrupt({ ...request, turnId: "another-turn" }),
-    code("conflict"),
-  );
+  assert.throws(() => f.store.interrupt({ ...request, turnId: "another-turn" }), code("conflict"));
   f.store.control({ ...request, action: "pause" });
-  assert.throws(
-    () => f.store.control({ ...request, action: "cancel" }),
-    code("conflict"),
-  );
+  assert.throws(() => f.store.control({ ...request, action: "cancel" }), code("conflict"));
   assert.throws(
     () => f.store.control({ ...request, key: "new-key", action: "cancel" }),
     code("conflict"),
@@ -215,10 +186,7 @@ test("unknown evidence stays unresolved after cancel and cannot be resumed or re
   });
   f.store.settle(f.store.claim("two")!.lease, evidence("unknown"));
   assert.equal(f.store.get(job.id).state, "needs_attention");
-  assert.throws(
-    () => f.store.enqueue(input, "actor", "replacement"),
-    code("conflict"),
-  );
+  assert.throws(() => f.store.enqueue(input, "actor", "replacement"), code("conflict"));
 });
 
 test("completed evidence wins a cancellation race without losing its receipt", (t) => {
@@ -268,10 +236,7 @@ test("failed commit rolls back admission, dispatch and Stop acknowledgments", (t
   f.store.admitted(claim.lease, checkpoint);
   const before = f.store.get(job.id);
   f.failWrites(true);
-  assert.throws(
-    () => f.store.beginExecution(claim.lease, "start"),
-    /disk failure/u,
-  );
+  assert.throws(() => f.store.beginExecution(claim.lease, "start"), /disk failure/u);
   assert.throws(
     () =>
       f.store.interrupt({
@@ -292,18 +257,14 @@ test("private database and sidecars are repaired; symlinks and unsupported schem
   const f = fixture(t);
   f.store.enqueue(input, "actor", "key");
   chmodSync(f.root, 0o755);
-  for (const name of readdirSync(f.root))
-    chmodSync(path.join(f.root, name), 0o666);
+  for (const name of readdirSync(f.root)) chmodSync(path.join(f.root, name), 0o666);
   f.open();
   assert.equal(statSync(f.root).mode & 0o777, 0o700);
   for (const name of readdirSync(f.root))
     assert.equal(statSync(path.join(f.root, name)).mode & 0o777, 0o600);
   const alias = path.join(f.root, "alias");
   symlinkSync(f.root, alias);
-  assert.throws(
-    () => new DurableJobStore({ root: alias, profileId: "profile" }),
-    code("unsafe"),
-  );
+  assert.throws(() => new DurableJobStore({ root: alias, profileId: "profile" }), code("unsafe"));
   const raw = new DatabaseSync(path.join(f.root, "jobs-v1.sqlite"));
   raw.exec("PRAGMA user_version=99");
   raw.close();
@@ -403,15 +364,9 @@ test("new admission keys cannot reuse a terminal run's transcript/turn identity"
   f.store.enqueue(input, "actor", "key");
   f.store.settle(f.store.claim("owner")!.lease, evidence("completed"));
   assert.throws(() => f.store.enqueue(input, "actor", "new-key"));
-  assert.throws(() =>
-    f.store.enqueue({ ...input, messageId: "new-message" }, "actor", "new-key"),
-  );
+  assert.throws(() => f.store.enqueue({ ...input, messageId: "new-message" }, "actor", "new-key"));
   assert.ok(
-    f.store.enqueue(
-      { ...input, messageId: "new-message", turnId: "new-turn" },
-      "actor",
-      "new-key",
-    ),
+    f.store.enqueue({ ...input, messageId: "new-message", turnId: "new-turn" }, "actor", "new-key"),
   );
 });
 
@@ -456,19 +411,14 @@ test(
     process.send('ready');
   `;
     const children = [0, 1].map(() =>
-      spawn(
-        process.execPath,
-        ["--import", "tsx", "--input-type=module", "-e", script],
-        {
-          env: { ...process.env, JOB_TEST_ROOT: f.root },
-          stdio: ["ignore", "ignore", "pipe", "ipc"],
-        },
-      ),
+      spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+        env: { ...process.env, JOB_TEST_ROOT: f.root },
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
+      }),
     );
     t.after(() => {
       for (const child of children)
-        if (child.exitCode === null && child.signalCode === null)
-          child.kill("SIGKILL");
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     });
     const exits = children.map((child) => once(child, "exit"));
     await Promise.all(children.map((child) => once(child, "message")));
@@ -484,16 +434,11 @@ test(
 test("completed history and receipts do not exhaust active admission/control quotas", (t) => {
   const f = fixture(t);
   const first = f.store.enqueue(input, "actor", "key");
-  const completed = f.store.settle(
-    f.store.claim("one")!.lease,
-    evidence("completed"),
-  );
+  const completed = f.store.settle(f.store.claim("one")!.lease, evidence("completed"));
   const raw = new DatabaseSync(path.join(f.root, "jobs-v1.sqlite"));
   try {
     raw.exec("BEGIN IMMEDIATE");
-    const insert = raw.prepare(
-      "INSERT INTO jobs VALUES(?,?,?,?,NULL,NULL,NULL,0,?)",
-    );
+    const insert = raw.prepare("INSERT INTO jobs VALUES(?,?,?,?,NULL,NULL,NULL,0,?)");
     for (let i = 1; i < JOB_LIMITS.unresolvedJobs; i++) {
       const job = {
         ...completed,
@@ -505,19 +450,11 @@ test("completed history and receipts do not exhaust active admission/control quo
           turnId: `old-turn-${i}`,
         },
       };
-      insert.run(
-        job.id,
-        job.input.chatId,
-        job.state,
-        job.revision,
-        JSON.stringify(job),
-      );
+      insert.run(job.id, job.input.chatId, job.state, job.revision, JSON.stringify(job));
     }
     for (let i = 0; i < JOB_LIMITS.unresolvedControls; i++)
       raw
-        .prepare(
-          "INSERT INTO controls(actor,key,digest,response) VALUES(?,?,?,?)",
-        )
+        .prepare("INSERT INTO controls(actor,key,digest,response) VALUES(?,?,?,?)")
         .run("actor", `old-control-${i}`, "old", JSON.stringify(completed));
     raw.exec("COMMIT");
   } finally {
@@ -607,11 +544,7 @@ test("failed-safe evidence requires a checkpoint for an admissible retry", (t) =
   f.store.enqueue(input, "actor", "key");
   const claim = f.store.claim("one")!;
   assert.throws(
-    () =>
-      f.store.settle(
-        claim.lease,
-        evidence("failed_safe", { checkpoint: null }),
-      ),
+    () => f.store.settle(claim.lease, evidence("failed_safe", { checkpoint: null })),
     code("invalid"),
   );
 });
@@ -645,12 +578,6 @@ test("reconciliation lease does not authorize input admission or execution", (t)
   const blocked = f.store.settle(first.lease, evidence("stale_authority"));
   f.store.reconcile(job.id, blocked.revision);
   const reconciliation = f.store.claim("new")!;
-  assert.throws(
-    () => f.store.admitted(reconciliation.lease, checkpoint),
-    code("unsafe"),
-  );
-  assert.throws(
-    () => f.store.beginExecution(reconciliation.lease, "start"),
-    code("unsafe"),
-  );
+  assert.throws(() => f.store.admitted(reconciliation.lease, checkpoint), code("unsafe"));
+  assert.throws(() => f.store.beginExecution(reconciliation.lease, "start"), code("unsafe"));
 });

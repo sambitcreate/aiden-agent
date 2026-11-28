@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,11 +45,15 @@ test("a restarted app reads back the device key it created, so a chat's secret s
   assert.equal(first.length, 32);
 });
 
-test("the key file is readable by its owner only", { skip: process.platform === "win32" }, async () => {
-  const dir = await dataDir();
-  promptSectionDeviceKey(dir);
-  assert.equal((await stat(path.join(dir, PROMPT_SECTION_KEY_FILE))).mode & 0o777, 0o600);
-});
+test(
+  "the key file is readable by its owner only",
+  { skip: process.platform === "win32" },
+  async () => {
+    const dir = await dataDir();
+    promptSectionDeviceKey(dir);
+    assert.equal((await stat(path.join(dir, PROMPT_SECTION_KEY_FILE))).mode & 0o777, 0o600);
+  },
+);
 
 test("chats and devices get unrelated secrets", async () => {
   const key = promptSectionDeviceKey(await dataDir());
@@ -50,7 +66,10 @@ test("chats and devices get unrelated secrets", async () => {
 const POSIX = process.platform !== "win32";
 
 /** The files in `dir` that hold `key`, and whether each is private. */
-async function filesHolding(dir: string, key: Buffer): Promise<Array<{ name: string; private: boolean }>> {
+async function filesHolding(
+  dir: string,
+  key: Buffer,
+): Promise<Array<{ name: string; private: boolean }>> {
   const found: Array<{ name: string; private: boolean }> = [];
   for (const name of (await readdir(dir)).sort()) {
     const file = path.join(dir, name);
@@ -68,7 +87,10 @@ test("a damaged key file gives a private new key that later launches keep", asyn
   const holders = await filesHolding(dir, replaced);
   assert.equal(holders.length, 1, "the new key is stored once");
   if (POSIX) assert.equal(holders[0]?.private, true);
-  assert.ok((await readdir(dir)).every((name) => !name.endsWith(".tmp")), "no temp file is left behind");
+  assert.ok(
+    (await readdir(dir)).every((name) => !name.endsWith(".tmp")),
+    "no temp file is left behind",
+  );
   forgetPromptSectionDeviceKeys();
   assert.deepEqual(promptSectionDeviceKey(dir), replaced);
 });
@@ -93,17 +115,25 @@ test("a stored key others can read is made private and kept", { skip: !POSIX }, 
   assert.equal((await stat(file)).mode & 0o777, 0o600);
 });
 
-test("a symlink at the key path is never followed or written through", { skip: !POSIX }, async () => {
-  const dir = await dataDir();
-  const elsewhere = path.join(await dataDir(), "victim");
-  await writeFile(elsewhere, "untouched\n");
-  await symlink(elsewhere, path.join(dir, PROMPT_SECTION_KEY_FILE));
-  const key = promptSectionDeviceKey(dir);
-  assert.equal(await readFile(elsewhere, "utf8"), "untouched\n");
-  assert.equal((await filesHolding(dir, key)).length, 1, "the key is stored in a plain file of its own");
-  forgetPromptSectionDeviceKeys();
-  assert.deepEqual(promptSectionDeviceKey(dir), key);
-});
+test(
+  "a symlink at the key path is never followed or written through",
+  { skip: !POSIX },
+  async () => {
+    const dir = await dataDir();
+    const elsewhere = path.join(await dataDir(), "victim");
+    await writeFile(elsewhere, "untouched\n");
+    await symlink(elsewhere, path.join(dir, PROMPT_SECTION_KEY_FILE));
+    const key = promptSectionDeviceKey(dir);
+    assert.equal(await readFile(elsewhere, "utf8"), "untouched\n");
+    assert.equal(
+      (await filesHolding(dir, key)).length,
+      1,
+      "the key is stored in a plain file of its own",
+    );
+    forgetPromptSectionDeviceKeys();
+    assert.deepEqual(promptSectionDeviceKey(dir), key);
+  },
+);
 
 test("a missing data folder still gives one stable key for the whole run", async () => {
   const missing = path.join(await dataDir(), "missing", "nested");
@@ -114,35 +144,45 @@ test("a missing data folder still gives one stable key for the whole run", async
 
 const runningAsRoot = process.platform === "win32" || process.getuid?.() === 0;
 
-test("a read-only data folder gives one stable key for the run and creates nothing", { skip: runningAsRoot }, async () => {
-  const readOnly = path.join(await dataDir(), "read-only");
-  await mkdir(readOnly);
-  await chmod(readOnly, 0o500);
-  try {
-    const key = promptSectionDeviceKey(readOnly);
-    assert.equal(key.length, 32);
-    assert.deepEqual(promptSectionDeviceKey(readOnly), key);
-    assert.deepEqual(await readdir(readOnly), []);
-  } finally {
-    await chmod(readOnly, 0o700);
-  }
-});
+test(
+  "a read-only data folder gives one stable key for the run and creates nothing",
+  { skip: runningAsRoot },
+  async () => {
+    const readOnly = path.join(await dataDir(), "read-only");
+    await mkdir(readOnly);
+    await chmod(readOnly, 0o500);
+    try {
+      const key = promptSectionDeviceKey(readOnly);
+      assert.equal(key.length, 32);
+      assert.deepEqual(promptSectionDeviceKey(readOnly), key);
+      assert.deepEqual(await readdir(readOnly), []);
+    } finally {
+      await chmod(readOnly, 0o700);
+    }
+  },
+);
 
 /** Another app process asking for the key in `dir`; resolves to the key it settled on, in hex. */
 function keyInAnotherProcess(dir: string): Promise<string> {
   const moduleUrl = new URL("./prompt-section-secret.ts", import.meta.url).href;
   const script = `const m = await import(${JSON.stringify(moduleUrl)}); process.stdout.write(m.promptSectionDeviceKey(${JSON.stringify(dir)}).toString("hex"));`;
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
-      cwd: path.dirname(fileURLToPath(import.meta.url)),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", script],
+      {
+        cwd: path.dirname(fileURLToPath(import.meta.url)),
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     let out = "";
     let err = "";
     child.stdout.on("data", (chunk) => (out += chunk));
     child.stderr.on("data", (chunk) => (err += chunk));
     child.on("error", reject);
-    child.on("exit", (code) => (code === 0 ? resolve(out) : reject(new Error(`child exited ${code}: ${err}`))));
+    child.on("exit", (code) =>
+      code === 0 ? resolve(out) : reject(new Error(`child exited ${code}: ${err}`)),
+    );
   });
 }
 
@@ -173,8 +213,16 @@ test("a key whose creator stays paused past the wait is still the one every late
   await writeFile(file, `${published}\n`);
 
   assert.notEqual(await reader, "", "the reader went on with a key for its run");
-  assert.deepEqual(await readdir(dir), [PROMPT_SECTION_KEY_FILE], "the reader claimed no spare, so no second key was stored");
-  assert.equal(promptSectionDeviceKey(dir).toString("hex"), published, "a later launch reads the creator's key");
+  assert.deepEqual(
+    await readdir(dir),
+    [PROMPT_SECTION_KEY_FILE],
+    "the reader claimed no spare, so no second key was stored",
+  );
+  assert.equal(
+    promptSectionDeviceKey(dir).toString("hex"),
+    published,
+    "a later launch reads the creator's key",
+  );
 });
 
 test("a key file left unfinished long ago by a creator that died is skipped", async () => {
@@ -195,5 +243,9 @@ test("processes starting together on a damaged key file all settle on one key", 
   await writeFile(path.join(dir, PROMPT_SECTION_KEY_FILE), "not a key\n");
   const keys = await Promise.all(Array.from({ length: 6 }, () => keyInAnotherProcess(dir)));
   assert.equal(new Set(keys).size, 1);
-  assert.equal(promptSectionDeviceKey(dir).toString("hex"), keys[0], "a later launch reads the same key");
+  assert.equal(
+    promptSectionDeviceKey(dir).toString("hex"),
+    keys[0],
+    "a later launch reads the same key",
+  );
 });

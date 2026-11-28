@@ -40,23 +40,27 @@ const mint = (namespace: string, source: string, exact: string) =>
 
 test("provider selection must match the protected runtime pair exactly", () => {
   const authority = { sourceProviderId: "provider-a", sourceModelId: "model-a" };
-  assert.doesNotThrow(() => assertBotRuntimeProviderSelection(authority, {
-    providerId: "provider-a",
-    model: "model-a",
-  }));
-  assert.throws(
-    () => assertBotRuntimeProviderSelection(authority, {
-      providerId: "provider-b",
+  assert.doesNotThrow(() =>
+    assertBotRuntimeProviderSelection(authority, {
+      providerId: "provider-a",
       model: "model-a",
     }),
+  );
+  assert.throws(
+    () =>
+      assertBotRuntimeProviderSelection(authority, {
+        providerId: "provider-b",
+        model: "model-a",
+      }),
     (error: unknown) =>
       error instanceof BotRuntimeAuthorityError && error.classification === "provider_mismatch",
   );
   assert.throws(
-    () => assertBotRuntimeProviderSelection(authority, {
-      providerId: "provider-a",
-      model: "model-b",
-    }),
+    () =>
+      assertBotRuntimeProviderSelection(authority, {
+        providerId: "provider-a",
+        model: "model-b",
+      }),
     (error: unknown) =>
       error instanceof BotRuntimeAuthorityError && error.classification === "provider_mismatch",
   );
@@ -207,14 +211,17 @@ function acceptedNotice() {
   };
 }
 
-function selection(current: BotCapabilityCatalogSnapshot, input: {
-  connection?: boolean;
-  skill?: boolean;
-  other?: boolean;
-  shell?: boolean;
-  approved?: boolean;
-  fullMac?: boolean;
-} = {}): BotCustomSelection {
+function selection(
+  current: BotCapabilityCatalogSnapshot,
+  input: {
+    connection?: boolean;
+    skill?: boolean;
+    other?: boolean;
+    shell?: boolean;
+    approved?: boolean;
+    fullMac?: boolean;
+  } = {},
+): BotCustomSelection {
   const provider = current.catalog.providers.find(({ available }) => available)!;
   const home = current.catalog.fileScopes.find(({ kind }) => kind === "bot_home")!;
   const approved = current.catalog.fileScopes.find(({ kind }) => kind === "approved_location")!;
@@ -229,9 +236,7 @@ function selection(current: BotCapabilityCatalogSnapshot, input: {
     connectionIds: input.connection
       ? [current.catalog.connections.find(({ available }) => available)!.id]
       : [],
-    skillIds: input.skill
-      ? [current.catalog.skills.find(({ available }) => available)!.id]
-      : [],
+    skillIds: input.skill ? [current.catalog.skills.find(({ available }) => available)!.id] : [],
     otherCapabilityIds: input.other
       ? [current.catalog.otherCapabilities.find(({ available }) => available)!.id]
       : [],
@@ -308,16 +313,18 @@ function workspace(): BotManagedWorkspaceResolution {
   };
 }
 
-function fixture(input: {
-  customBot?: boolean;
-  customFullMac?: boolean;
-  chatCustom?: BotCustomSelection;
-  currentSnapshot?: BotCapabilityCatalogSnapshot;
-  chatWorkspaceId?: string;
-  omitModelAuthority?: boolean;
-  fullWebSearchEnabled?: boolean;
-  skillsEnabled?: boolean;
-} = {}) {
+function fixture(
+  input: {
+    customBot?: boolean;
+    customFullMac?: boolean;
+    chatCustom?: BotCustomSelection;
+    currentSnapshot?: BotCapabilityCatalogSnapshot;
+    chatWorkspaceId?: string;
+    omitModelAuthority?: boolean;
+    fullWebSearchEnabled?: boolean;
+    skillsEnabled?: boolean;
+  } = {},
+) {
   const inventoryLeases = new BotRuntimeInventoryLeaseRegistry();
   let currentSnapshot = input.currentSnapshot ?? snapshot();
   const botBinding = input.customBot
@@ -334,11 +341,13 @@ function fixture(input: {
         snapshot: currentSnapshot,
       })
     : undefined;
-  const modelBinding = botBinding?.provider ?? bindBotCustomSelection({
-    selection: selection(currentSnapshot),
-    catalogRevision: currentSnapshot.catalog.revision,
-    snapshot: currentSnapshot,
-  }).provider;
+  const modelBinding =
+    botBinding?.provider ??
+    bindBotCustomSelection({
+      selection: selection(currentSnapshot),
+      catalogRevision: currentSnapshot.catalog.revision,
+      snapshot: currentSnapshot,
+    }).provider;
   const modelAuthority: StoredBotModelAuthority = {
     selection: {
       providerId: modelBinding.providerOption.id,
@@ -400,10 +409,20 @@ function fixture(input: {
     retainedProviders?: readonly { sourceProviderId: string; sourceModelId: string }[];
   }> = [];
   const deps: BotRuntimeAuthorityDependencies = {
-    botStore: { async get() { return currentBot; } },
-    chatStore: { async get() { return currentChat; } },
+    botStore: {
+      async get() {
+        return currentBot;
+      },
+    },
+    chatStore: {
+      async get() {
+        return currentChat;
+      },
+    },
     capabilityStore: {
-      async getBotBinding() { return botBinding; },
+      async getBotBinding() {
+        return botBinding;
+      },
       async admit() {
         if (admissionError) throw admissionError;
         return admission();
@@ -445,7 +464,9 @@ function fixture(input: {
       },
     },
     managedWorkspace: {
-      async resolve() { return workspace(); },
+      async resolve() {
+        return workspace();
+      },
       async revalidate() {
         homeRevalidations += 1;
         if (revalidateHomeError) throw revalidateHomeError;
@@ -457,29 +478,59 @@ function fixture(input: {
   };
   return {
     resolver: createBotRuntimeAuthorityResolver(deps),
-    setSnapshot(value: BotCapabilityCatalogSnapshot) { currentSnapshot = value; },
-    setSkillsEnabled(value: boolean) { skillsEnabled = value; },
-    invalidateLease() { leaseValid = false; },
-    archive() { currentBot = bot(true); },
-    replaceHome() { revalidateHomeError = new Error("home replaced"); },
-    mismatchProvider() { currentChat = chat("provider-other", "model-other"); },
+    setSnapshot(value: BotCapabilityCatalogSnapshot) {
+      currentSnapshot = value;
+    },
+    setSkillsEnabled(value: boolean) {
+      skillsEnabled = value;
+    },
+    invalidateLease() {
+      leaseValid = false;
+    },
+    archive() {
+      currentBot = bot(true);
+    },
+    replaceHome() {
+      revalidateHomeError = new Error("home replaced");
+    },
+    mismatchProvider() {
+      currentChat = chat("provider-other", "model-other");
+    },
     narrowPolicy() {
       currentPolicy = { ...currentPolicy, revision: "bot-policy-2", policyEpoch: 2 };
       leaseValid = false;
     },
-    setPolicyReadHook(value: () => Promise<void>) { policyReadHook = value; },
-    requireNotice() { admissionError = new BotCapabilityNoticeRequiredError(); },
+    setPolicyReadHook(value: () => Promise<void>) {
+      policyReadHook = value;
+    },
+    requireNotice() {
+      admissionError = new BotCapabilityNoticeRequiredError();
+    },
     driftAtAdmission(group: BotCapabilityDriftGroup) {
-      admissionError = new BotCapabilityBindingDriftError([{ group, reason: "changed_or_removed" }]);
+      admissionError = new BotCapabilityBindingDriftError([
+        { group, reason: "changed_or_removed" },
+      ]);
     },
     driftBeforeEffect(group: BotCapabilityDriftGroup) {
-      revalidationError = new BotCapabilityBindingDriftError([{ group, reason: "changed_or_removed" }]);
+      revalidationError = new BotCapabilityBindingDriftError([
+        { group, reason: "changed_or_removed" },
+      ]);
     },
-    invalidateInventory() { inventoryLeases.invalidate("settings"); },
-    setSnapshotHook(value: () => void) { snapshotHook = value; },
-    get activeInventoryLeases() { return inventoryLeases.activeCount(); },
-    get homeRevalidations() { return homeRevalidations; },
-    get catalogInputs() { return catalogInputs; },
+    invalidateInventory() {
+      inventoryLeases.invalidate("settings");
+    },
+    setSnapshotHook(value: () => void) {
+      snapshotHook = value;
+    },
+    get activeInventoryLeases() {
+      return inventoryLeases.activeCount();
+    },
+    get homeRevalidations() {
+      return homeRevalidations;
+    },
+    get catalogInputs() {
+      return catalogInputs;
+    },
   };
 }
 
@@ -507,17 +558,31 @@ test("Full authority excludes available Web Search without an explicit grant", a
   assert.equal(authority.files.mode, "full_mac");
   assert.equal(authority.files.botHome, true);
   assert.equal(authority.shell.enabled, true);
-  assert.deepEqual(authority.connections.map(({ sourceId }) => sourceId), ["mcp-a"]);
-  assert.deepEqual(authority.connections[0]!.tools.map(({ effect }) => effect), ["read", "mutating"]);
-  assert.deepEqual(authority.skills.map(({ sourceId }) => sourceId), ["skill-a"]);
-  assert.deepEqual(authority.otherCapabilities.map(({ kind }) => kind), []);
+  assert.deepEqual(
+    authority.connections.map(({ sourceId }) => sourceId),
+    ["mcp-a"],
+  );
+  assert.deepEqual(
+    authority.connections[0]!.tools.map(({ effect }) => effect),
+    ["read", "mutating"],
+  );
+  assert.deepEqual(
+    authority.skills.map(({ sourceId }) => sourceId),
+    ["skill-a"],
+  );
+  assert.deepEqual(
+    authority.otherCapabilities.map(({ kind }) => kind),
+    [],
+  );
   assert.ok(Object.isFrozen(authority));
   assert.ok(Object.isFrozen(authority.connections));
   assert.ok(Object.isFrozen(authority.connections[0]!.tools));
-  assert.deepEqual(app.catalogInputs[0]?.retainedProviders, [{
-    sourceProviderId: "provider-a",
-    sourceModelId: "model-a",
-  }]);
+  assert.deepEqual(app.catalogInputs[0]?.retainedProviders, [
+    {
+      sourceProviderId: "provider-a",
+      sourceModelId: "model-a",
+    },
+  ]);
 });
 
 test("Full authority includes Web Search only after its explicit durable grant", async () => {
@@ -527,27 +592,46 @@ test("Full authority includes Web Search only after its explicit durable grant",
     botId: "bot-a",
     chatId: "chat-a",
   });
-  assert.deepEqual(authority.otherCapabilities.map(({ kind }) => kind), ["web"]);
+  assert.deepEqual(
+    authority.otherCapabilities.map(({ kind }) => kind),
+    ["web"],
+  );
 });
 
 test("Full authority includes the Bot's own browser once agent browser access makes it available", async () => {
   const closed = fixture();
-  const before = await closed.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" });
-  assert.equal(before.authority.otherCapabilities.some(({ kind }) => kind === "browser"), false);
+  const before = await closed.resolver.admit({
+    audienceId: "device-a",
+    botId: "bot-a",
+    chatId: "chat-a",
+  });
+  assert.equal(
+    before.authority.otherCapabilities.some(({ kind }) => kind === "browser"),
+    false,
+  );
 
   const base = inventory();
   const withBrowser = buildBotCapabilityCatalogSnapshot({
     inventory: {
       ...base,
-      otherCapabilities: base.otherCapabilities.map((entry) => (entry.kind === "browser" ? { ...entry, available: true } : entry)),
+      otherCapabilities: base.otherCapabilities.map((entry) =>
+        entry.kind === "browser" ? { ...entry, available: true } : entry,
+      ),
     },
     notice: acceptedNotice(),
     mintOpaqueId: mint,
   });
   const open = fixture({ currentSnapshot: withBrowser });
-  const { authority } = await open.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" });
+  const { authority } = await open.resolver.admit({
+    audienceId: "device-a",
+    botId: "bot-a",
+    chatId: "chat-a",
+  });
   // Web Search still needs its own grant; the browser follows its availability.
-  assert.deepEqual(authority.otherCapabilities.map(({ kind }) => kind), ["browser"]);
+  assert.deepEqual(
+    authority.otherCapabilities.map(({ kind }) => kind),
+    ["browser"],
+  );
 });
 
 test("legacy chats retain visible workspace identity but receive the managed home", async () => {
@@ -561,10 +645,12 @@ test("legacy chats retain visible workspace identity but receive the managed hom
   assert.equal(authority.managedHome.workspaceId, workspace().workspaceId);
   assert.equal(authority.workingDirectory, workspace().homePath);
   await admission.revalidateBeforeEffect();
-  assert.deepEqual(app.catalogInputs[1]?.retainedProviders, [{
-    sourceProviderId: "provider-a",
-    sourceModelId: "model-a",
-  }]);
+  assert.deepEqual(app.catalogInputs[1]?.retainedProviders, [
+    {
+      sourceProviderId: "provider-a",
+      sourceModelId: "model-a",
+    },
+  ]);
 });
 
 test("a Custom chat reduction intersects the Bot ceiling and retains exact tool effects", async () => {
@@ -581,7 +667,10 @@ test("a Custom chat reduction intersects the Bot ceiling and retains exact tool 
   assert.deepEqual(authority.skills, []);
   assert.deepEqual(authority.otherCapabilities, []);
   assert.equal(authority.connections.length, 1);
-  assert.deepEqual(authority.connections[0]!.tools.map(({ effect }) => effect), ["read", "mutating"]);
+  assert.deepEqual(
+    authority.connections[0]!.tools.map(({ effect }) => effect),
+    ["read", "mutating"],
+  );
   assert.equal(authority.files.mode, "scoped");
   assert.equal(authority.files.botHome, true);
 });
@@ -605,7 +694,10 @@ test("global Skills off suppresses Custom Bot skills without mutating saved gran
     botId: "bot-a",
     chatId: "chat-a",
   });
-  assert.deepEqual(enabledAdmission.authority.skills.map(({ sourceId }) => sourceId), ["skill-a"]);
+  assert.deepEqual(
+    enabledAdmission.authority.skills.map(({ sourceId }) => sourceId),
+    ["skill-a"],
+  );
   enabledAdmission.release();
 });
 
@@ -617,19 +709,24 @@ test("enabled Skills still fail closed when a saved Custom Bot skill is missing"
     catalogRevision: enabledSnapshot.catalog.revision,
     snapshot: enabledSnapshot,
   });
-  app.setSnapshot(withBotCapabilityTombstones(
-    buildBotCapabilityCatalogSnapshot({
-      inventory: { ...inventory(), skills: [] },
-      notice: acceptedNotice(),
-      mintOpaqueId: mint,
+  app.setSnapshot(
+    withBotCapabilityTombstones(
+      buildBotCapabilityCatalogSnapshot({
+        inventory: { ...inventory(), skills: [] },
+        notice: acceptedNotice(),
+        mintOpaqueId: mint,
+      }),
+      [binding],
+    ),
+  );
+  await expectFailure(
+    app.resolver.admit({
+      audienceId: "device-a",
+      botId: "bot-a",
+      chatId: "chat-a",
     }),
-    [binding],
-  ));
-  await expectFailure(app.resolver.admit({
-    audienceId: "device-a",
-    botId: "bot-a",
-    chatId: "chat-a",
-  }), "capability_changed");
+    "capability_changed",
+  );
 });
 
 test("a Full Bot with a Custom chat reduction keeps Custom access while using Bot model authority", async () => {
@@ -649,7 +746,10 @@ test("a Full Bot with a Custom chat reduction keeps Custom access while using Bo
   assert.equal(authority.shell.enabled, false);
   assert.deepEqual(authority.skills, []);
   assert.deepEqual(authority.otherCapabilities, []);
-  assert.deepEqual(authority.connections.map(({ sourceId }) => sourceId), ["mcp-a"]);
+  assert.deepEqual(
+    authority.connections.map(({ sourceId }) => sourceId),
+    ["mcp-a"],
+  );
 });
 
 test("a Custom chat cannot retain Web Search after its Full Bot ceiling is closed", async () => {
@@ -757,7 +857,11 @@ test("a credential write that fences inventory during the admission snapshot is 
       app.invalidateInventory();
     }
   });
-  const admitted = await app.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" });
+  const admitted = await app.resolver.admit({
+    audienceId: "device-a",
+    botId: "bot-a",
+    chatId: "chat-a",
+  });
   assert.equal(admitted.signal.aborted, false);
   assert.equal(app.activeInventoryLeases, 1);
   await admitted.revalidateBeforeEffect();
@@ -832,7 +936,6 @@ test("active narrowing and archive fail closed before the next effect", async ()
   });
   narrowed.narrowPolicy();
   await expectFailure(narrowingAdmission.revalidateBeforeEffect(), "capability_changed");
-
 });
 
 test("a concurrent narrowing that races policy reads is caught by the final lease fence", async () => {
@@ -843,9 +946,13 @@ test("a concurrent narrowing that races policy reads is caught by the final leas
     chatId: "chat-a",
   });
   let releaseRead!: () => void;
-  const blocked = new Promise<void>((resolve) => { releaseRead = resolve; });
+  const blocked = new Promise<void>((resolve) => {
+    releaseRead = resolve;
+  });
   let reachedRead!: () => void;
-  const reached = new Promise<void>((resolve) => { reachedRead = resolve; });
+  const reached = new Promise<void>((resolve) => {
+    reachedRead = resolve;
+  });
   app.setPolicyReadHook(async () => {
     reachedRead();
     await blocked;

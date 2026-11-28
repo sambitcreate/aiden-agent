@@ -14,10 +14,7 @@ export interface RemoteDeviceGroups {
   previous: AidenRemoteDeviceView[];
 }
 
-function newestFirst(
-  left: AidenRemoteDeviceView,
-  right: AidenRemoteDeviceView,
-): number {
+function newestFirst(left: AidenRemoteDeviceView, right: AidenRemoteDeviceView): number {
   const leftTimestamp = left.revokedAt ?? left.lastSeenAt;
   const rightTimestamp = right.revokedAt ?? right.lastSeenAt;
   return rightTimestamp - leftTimestamp;
@@ -65,11 +62,17 @@ export function remoteConnectionSummary(input: {
 /** Older paired phones use legacy wire types until re-paired. */
 export function remoteDeviceTypeLabel(type: string): string {
   switch (type) {
-    case "mac": return "Mac";
-    case "linux": return "Linux";
-    case "android": return "Android device";
-    case "ipad": return "iPad";
-    case "iphone": return "iPhone";
-    default: return "Device";
+    case "mac":
+      return "Mac";
+    case "linux":
+      return "Linux";
+    case "android":
+      return "Android device";
+    case "ipad":
+      return "iPad";
+    case "iphone":
+      return "iPhone";
+    default:
+      return "Device";
   }
 }

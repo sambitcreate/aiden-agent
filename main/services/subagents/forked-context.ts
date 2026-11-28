@@ -146,7 +146,12 @@ function parseAttachments(value: unknown): readonly ForkContextAttachment[] | un
 }
 
 function isUnreadableStoredImage(value: unknown): boolean {
-  return isRecord(value) && value.kind === "image" && value.data === undefined && isImageSha256(value.sha256);
+  return (
+    isRecord(value) &&
+    value.kind === "image" &&
+    value.data === undefined &&
+    isImageSha256(value.sha256)
+  );
 }
 
 function revisionHash(value: unknown): string {
@@ -201,8 +206,10 @@ function plainRecord(value: unknown, field: string): object {
 }
 
 function redactPrivateForkText(value: string): string {
-  return redactCredentialTokens(sanitizeSubagentText(value), "[credential redacted]")
-    .replace(/\/(?:Users|home)\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._@+,:=-]+)+/gu, "[private path redacted]");
+  return redactCredentialTokens(sanitizeSubagentText(value), "[credential redacted]").replace(
+    /\/(?:Users|home)\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._@+,:=-]+)+/gu,
+    "[private path redacted]",
+  );
 }
 
 function liveTimestamp(message: object): number {
@@ -267,17 +274,10 @@ export function captureLiveSubagentContext(
 ): SubagentContextCapture {
   const chatId = assertPrivateIdentity(input.chatId, "chat id");
   const parentRunId = assertPrivateIdentity(input.parentRunId, "parent run id");
-  if (
-    !Number.isFinite(input.descendantContextWindow) ||
-    input.descendantContextWindow < 1_024
-  ) {
+  if (!Number.isFinite(input.descendantContextWindow) || input.descendantContextWindow < 1_024) {
     throw new Error("Live fork context has no usable descendant model window.");
   }
-  const source = ownArrayValues(
-    input.messages,
-    "message transcript",
-    MAX_FORK_CONTEXT_MESSAGES,
-  );
+  const source = ownArrayValues(input.messages, "message transcript", MAX_FORK_CONTEXT_MESSAGES);
   const projected: ForkContextMessage[] = [];
   let attachmentBytes = 0;
   for (let messageIndex = 0; messageIndex < source.length; messageIndex += 1) {
@@ -401,12 +401,7 @@ export function capturePersistedSubagentContext(value: unknown): SubagentContext
     // A prompt a UserPromptSubmit hook refused never reaches any model.
     if (isHookBlockedPrompt(candidate)) continue;
     const content = sanitizeSubagentText(
-      boundedString(
-        candidate.content,
-        MAX_FORK_CONTEXT_TEXT_CHARS,
-        "message content",
-        true,
-      ),
+      boundedString(candidate.content, MAX_FORK_CONTEXT_TEXT_CHARS, "message content", true),
     );
     if (
       typeof candidate.createdAt !== "number" ||

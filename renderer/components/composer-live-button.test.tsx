@@ -27,7 +27,13 @@ const WORKSPACE: Workspace = {
   createdAt: 1,
   updatedAt: 1,
 };
-const DRAFT = { id: "draft-live", title: "New chat", messages: [], createdAt: 1, updatedAt: 1 } as unknown as Chat;
+const DRAFT = {
+  id: "draft-live",
+  title: "New chat",
+  messages: [],
+  createdAt: 1,
+  updatedAt: 1,
+} as unknown as Chat;
 const READY: LiveLaunchState = { offered: true, sessionActive: false, needsSetup: false };
 
 class FakeAudioWorkletNode {
@@ -67,7 +73,11 @@ let sent: string[] = [];
 let launches = 0;
 
 function offerLive(state: LiveLaunchState = READY) {
-  act(() => liveLauncher.publish(state, () => { launches += 1; }));
+  act(() =>
+    liveLauncher.publish(state, () => {
+      launches += 1;
+    }),
+  );
 }
 
 const wait = (ms: number) => act(() => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -80,7 +90,12 @@ beforeEach(() => {
     "settings:get": () => null,
     "shortcut:get": () => null,
     "app:renderer-ready": () => null,
-    "voice:resolveProvider": () => ({ kind: "ready", provider: "local", modelId: "parakeet-v3-metal", automatic: true }),
+    "voice:resolveProvider": () => ({
+      kind: "ready",
+      provider: "local",
+      modelId: "parakeet-v3-metal",
+      automatic: true,
+    }),
     "localVoice:warm": () => undefined,
     "voice:localLiveStart": () => ({ sessionId: "live-1" }),
     "voice:localLivePush": () => undefined,
@@ -110,7 +125,13 @@ afterEach(() => {
   queryClient.clear();
 });
 
-function Harness({ offer = true, isGenerating = false }: { offer?: boolean; isGenerating?: boolean }) {
+function Harness({
+  offer = true,
+  isGenerating = false,
+}: {
+  offer?: boolean;
+  isGenerating?: boolean;
+}) {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -177,7 +198,11 @@ test("an empty draft offers Live in Send's place; typing turns it back into Send
 test("first use names the setup step", async () => {
   offerLive({ ...READY, needsSetup: true });
   render(<Harness />);
-  const button = await screen.findByRole("button", { name: "Set up Aiden Live" }, { timeout: LIVE_SWAP_DELAY_MS * 4 });
+  const button = await screen.findByRole(
+    "button",
+    { name: "Set up Aiden Live" },
+    { timeout: LIVE_SWAP_DELAY_MS * 4 },
+  );
   assert.equal(button.getAttribute("aria-haspopup"), "dialog");
 });
 
@@ -220,11 +245,16 @@ test("dictation and Live never listen at once", async () => {
   // Starting Live from any entry point finishes the recording and keeps its words.
   await act(() => liveLauncher.prepareStart());
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "voice:transcribeLocal")));
-  await waitFor(() => assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).value, "kept words"));
+  await waitFor(() =>
+    assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).value, "kept words"),
+  );
 
   // While Live has the microphone, dictation can't start.
   offerLive({ ...READY, sessionActive: true });
-  assert.equal((screen.getByRole("button", { name: "Start voice input" }) as HTMLButtonElement).disabled, true);
+  assert.equal(
+    (screen.getByRole("button", { name: "Start voice input" }) as HTMLButtonElement).disabled,
+    true,
+  );
 });
 
 test("a dictation still opening the microphone is cancelled before Live starts", async () => {
@@ -235,7 +265,16 @@ test("a dictation still opening the microphone is cancelled before Live starts",
     value: {
       getUserMedia: () =>
         new Promise((resolve) => {
-          grantMicrophone = () => resolve({ getTracks: () => [{ stop() { stoppedTracks += 1; } }] });
+          grantMicrophone = () =>
+            resolve({
+              getTracks: () => [
+                {
+                  stop() {
+                    stoppedTracks += 1;
+                  },
+                },
+              ],
+            });
         }),
     },
   });
@@ -248,7 +287,9 @@ test("a dictation still opening the microphone is cancelled before Live starts",
   // Live asks for the microphone while dictation is still waiting for it.
   let released = false;
   await act(async () => {
-    void liveLauncher.prepareStart().then(() => { released = true; });
+    void liveLauncher.prepareStart().then(() => {
+      released = true;
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   assert.equal(released, true, "nothing was captured yet, so Live may go ahead");
@@ -257,7 +298,10 @@ test("a dictation still opening the microphone is cancelled before Live starts",
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
   assert.equal(stoppedTracks, 1, "the late microphone grant is closed at once");
-  assert.ok(!screen.queryByRole("button", { name: "Stop recording" }), "dictation never starts recording");
+  assert.ok(
+    !screen.queryByRole("button", { name: "Stop recording" }),
+    "dictation never starts recording",
+  );
 });
 
 function DockHarness({
@@ -287,8 +331,12 @@ test("the dock offers Live to the composer only where it can start, and a press 
   let started = 0;
   const live: AssistantLiveController = {
     ...idleLiveController,
-    setSetupOpen: (open: boolean) => { if (open) setupOpened += 1; },
-    start: async () => { started += 1; },
+    setSetupOpen: (open: boolean) => {
+      if (open) setupOpened += 1;
+    },
+    start: async () => {
+      started += 1;
+    },
   };
 
   const hidden = render(<DockHarness live={live} buttonVisible={false} />);
@@ -302,8 +350,12 @@ test("the dock offers Live to the composer only where it can start, and a press 
   render(<DockHarness live={live} />);
   assert.deepEqual(liveLauncher.get(), { offered: true, sessionActive: false, needsSetup: true });
   let dictationStopped = 0;
-  const release = liveLauncher.onBeforeStart(() => { dictationStopped += 1; });
-  act(() => { liveLauncher.launch(); });
+  const release = liveLauncher.onBeforeStart(() => {
+    dictationStopped += 1;
+  });
+  act(() => {
+    liveLauncher.launch();
+  });
   release();
   assert.equal(setupOpened, 1, "the first press opens setup rather than starting");
   assert.equal(started, 0);
@@ -316,13 +368,22 @@ test("once set up, a press starts Live only after dictation has let go of the mi
   const live: AssistantLiveController = {
     ...idleLiveController,
     setupComplete: true,
-    start: async () => { started += 1; },
+    start: async () => {
+      started += 1;
+    },
   };
   render(<DockHarness live={live} />);
   assert.equal(liveLauncher.get().needsSetup, false);
   let release: () => void = () => {};
-  const unregister = liveLauncher.onBeforeStart(() => new Promise<void>((resolve) => { release = resolve; }));
-  act(() => { liveLauncher.launch(); });
+  const unregister = liveLauncher.onBeforeStart(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  act(() => {
+    liveLauncher.launch();
+  });
   await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
   assert.equal(started, 0, "Live waits while the microphone is still held");
   await act(async () => {
@@ -339,13 +400,22 @@ test("setup's Start Live waits for dictation to let go of the microphone, and st
     ...idleLiveController,
     setupOpen: true,
     setupComplete: true,
-    start: async () => { started += 1; },
+    start: async () => {
+      started += 1;
+    },
   };
   render(<DockHarness live={live} />);
   let release: () => void = () => {};
-  const unregister = liveLauncher.onBeforeStart(() => new Promise<void>((resolve) => { release = resolve; }));
+  const unregister = liveLauncher.onBeforeStart(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
   let handoffs = 0;
-  const countHandoffs = liveLauncher.onBeforeStart(() => { handoffs += 1; });
+  const countHandoffs = liveLauncher.onBeforeStart(() => {
+    handoffs += 1;
+  });
   await act(async () => {
     const confirm = await screen.findByRole("button", { name: "Start Live" });
     fireEvent.click(confirm);
@@ -367,8 +437,16 @@ test("AssistantDock offers Live in the send button on Linux without Computer Use
   installBotTestIpc({
     "settings:get": () => ({ aidenLiveEnabled: true, aidenLiveButtonVisible: true }),
     "providers:list": () => [],
-    "assistant-live:status": () => ({ available: false, reason: "missing_google_credential", state: "idle" }),
-    "computerUse:status": () => ({ state: "unsupported", ready: false, detail: "Computer Use is macOS-only." }),
+    "assistant-live:status": () => ({
+      available: false,
+      reason: "missing_google_credential",
+      state: "idle",
+    }),
+    "computerUse:status": () => ({
+      state: "unsupported",
+      ready: false,
+      detail: "Computer Use is macOS-only.",
+    }),
     "shortcut:get": () => ({ global: [] }),
   });
   (window as unknown as { aidenAPI: Record<string, unknown> }).aidenAPI.systemPreferences = {
@@ -376,13 +454,23 @@ test("AssistantDock offers Live in the send button on Linux without Computer Use
     askForMediaAccess: async () => true,
   };
   await mountWithBotRouter(<AssistantDock />, {
-    capabilities: { ...DISABLED_APP_CAPABILITIES, platform: "linux", geminiLive: true, computerUse: false },
+    capabilities: {
+      ...DISABLED_APP_CAPABILITIES,
+      platform: "linux",
+      geminiLive: true,
+      computerUse: false,
+    },
   });
   await waitFor(() => assert.equal(liveLauncher.get().offered, true));
   cleanup();
 
   await mountWithBotRouter(<AssistantDock />, {
-    capabilities: { ...DISABLED_APP_CAPABILITIES, platform: "linux", geminiLive: false, computerUse: false },
+    capabilities: {
+      ...DISABLED_APP_CAPABILITIES,
+      platform: "linux",
+      geminiLive: false,
+      computerUse: false,
+    },
   });
   await waitFor(() => assert.equal(liveLauncher.get().offered, false));
 });
@@ -405,6 +493,8 @@ test("after setup, a press with missing microphone readiness opens Aiden Live se
       />
     </TooltipProvider>,
   );
-  act(() => { liveLauncher.launch(); });
+  act(() => {
+    liveLauncher.launch();
+  });
   assert.deepEqual(opened, ["geminiLive"]);
 });

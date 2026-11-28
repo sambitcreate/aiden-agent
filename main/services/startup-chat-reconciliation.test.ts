@@ -20,7 +20,10 @@ test("hidden feature chats stay in the startup reconciliation set", async (t) =>
       seen.push([...ids].sort());
     },
   };
-  const ids = await reconcileChatScopedStores(createChatStore(async () => directory), [recorder, recorder]);
+  const ids = await reconcileChatScopedStores(
+    createChatStore(async () => directory),
+    [recorder, recorder],
+  );
 
   const expected = [regular.id, bot.id, owned.id].sort();
   assert.deepEqual([...ids].sort(), expected);

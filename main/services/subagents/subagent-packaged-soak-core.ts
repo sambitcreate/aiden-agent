@@ -359,10 +359,7 @@ export async function tryFinalizeSubagentPackagedSoakQuitReceipt(
       return { status: "lifecycle_unsettled" };
     }
     const metrics = await withinDeadline(snapshotMetrics, deadline);
-    await withinDeadline(
-      () => writeReceipt(session, metrics, { canPublish }),
-      deadline,
-    );
+    await withinDeadline(() => writeReceipt(session, metrics, { canPublish }), deadline);
     return { status: "written" };
   } catch (error) {
     // A raced or injected timeout does not cancel the operation it started.

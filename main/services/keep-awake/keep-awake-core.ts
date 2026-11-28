@@ -116,7 +116,8 @@ export class KeepAwakeController<Handle = unknown, Timer = unknown> {
       }
       reasons.push(...reading.reasons);
       if (reading.recheckAt !== undefined && Number.isFinite(reading.recheckAt)) {
-        recheckAt = recheckAt === undefined ? reading.recheckAt : Math.min(recheckAt, reading.recheckAt);
+        recheckAt =
+          recheckAt === undefined ? reading.recheckAt : Math.min(recheckAt, reading.recheckAt);
       }
     }
     this.reasons = reasons;
@@ -238,10 +239,13 @@ export class KeepAwakeController<Handle = unknown, Timer = unknown> {
     if (this.recheckTimer !== undefined) this.options.clock.clearTimeout(this.recheckTimer);
     this.recheckTimer = undefined;
     if (at === undefined) return;
-    this.recheckTimer = this.options.clock.setTimeout(() => {
-      this.recheckTimer = undefined;
-      this.update();
-    }, Math.min(KEEP_AWAKE_MAX_RECHECK_MS, Math.max(KEEP_AWAKE_MIN_RECHECK_MS, at - now)));
+    this.recheckTimer = this.options.clock.setTimeout(
+      () => {
+        this.recheckTimer = undefined;
+        this.update();
+      },
+      Math.min(KEEP_AWAKE_MAX_RECHECK_MS, Math.max(KEEP_AWAKE_MIN_RECHECK_MS, at - now)),
+    );
   }
 
   private publish(): void {

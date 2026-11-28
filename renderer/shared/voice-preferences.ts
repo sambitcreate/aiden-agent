@@ -13,9 +13,11 @@ export function parseVoicePreferencePatch(patch: Record<string, unknown>): Voice
     const language = normalizeLanguageIntent(patch.voiceLanguage);
     if (language) result.voiceLanguage = language;
   }
-  if (typeof patch.voiceTranslateToEnglish === "boolean") result.voiceTranslateToEnglish = patch.voiceTranslateToEnglish;
+  if (typeof patch.voiceTranslateToEnglish === "boolean")
+    result.voiceTranslateToEnglish = patch.voiceTranslateToEnglish;
   if (typeof patch.voiceTrimSilence === "boolean") result.voiceTrimSilence = patch.voiceTrimSilence;
-  if (typeof patch.localVoicePreload === "boolean") result.localVoicePreload = patch.localVoicePreload;
+  if (typeof patch.localVoicePreload === "boolean")
+    result.localVoicePreload = patch.localVoicePreload;
   return result;
 }
 
@@ -34,9 +36,12 @@ export type VoiceProviderChoice = "openai" | "gemini" | "local";
  * Settings patch for the explicit voice provider. `null` means Automatic and
  * yields an own `voiceProvider: undefined` so the stored choice is removed.
  */
-export function parseVoiceProviderPatch(patch: Record<string, unknown>): { voiceProvider?: VoiceProviderChoice } {
+export function parseVoiceProviderPatch(patch: Record<string, unknown>): {
+  voiceProvider?: VoiceProviderChoice;
+} {
   const value = patch.voiceProvider;
   if (value === null) return { voiceProvider: undefined };
-  if (value === "openai" || value === "gemini" || value === "local") return { voiceProvider: value };
+  if (value === "openai" || value === "gemini" || value === "local")
+    return { voiceProvider: value };
   return {};
 }

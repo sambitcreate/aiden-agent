@@ -195,10 +195,17 @@ test("exposure changes move the runtime fence without touching credentials", () 
   const hiddenTool = { ...server, hiddenTools: ["lookup"] };
   for (const changed of [hidden, hiddenTool]) {
     assert.equal(
-      sameMcpRuntimeConnection(mcpRuntimeConnectionSnapshot(server), mcpRuntimeConnectionSnapshot(changed)),
+      sameMcpRuntimeConnection(
+        mcpRuntimeConnectionSnapshot(server),
+        mcpRuntimeConnectionSnapshot(changed),
+      ),
       false,
     );
-    assert.equal(pendingMcpCredentialCleanupForSave(server, changed), null, "hiding never signs out");
+    assert.equal(
+      pendingMcpCredentialCleanupForSave(server, changed),
+      null,
+      "hiding never signs out",
+    );
   }
   // Defaults and list order are not exposure changes.
   assert.deepEqual(
@@ -216,8 +223,18 @@ test("changing OAuth metadata authority rotates the credential identity and surv
   const pending = pendingMcpCredentialCleanupForSave(server, target);
   assert.ok(pending);
   assert.deepEqual(parsePendingMcpCredentialCleanup(pending), pending);
-  assert.equal(sameMcpRuntimeConnection(mcpRuntimeConnectionSnapshot(server), mcpRuntimeConnectionSnapshot(target)), false);
-  assert.deepEqual(mcpCredentialCleanupAfterConfig(pending!, target), { resolved: true, clearOAuth: true, clearPresetKey: true });
+  assert.equal(
+    sameMcpRuntimeConnection(
+      mcpRuntimeConnectionSnapshot(server),
+      mcpRuntimeConnectionSnapshot(target),
+    ),
+    false,
+  );
+  assert.deepEqual(mcpCredentialCleanupAfterConfig(pending!, target), {
+    resolved: true,
+    clearOAuth: true,
+    clearPresetKey: true,
+  });
 });
 
 test("a journal written before credentials stopped covering env/header values recovers an uncommitted edit without clearing anything", () => {
@@ -232,17 +249,32 @@ test("a journal written before credentials stopped covering env/header values re
     enabled: true,
   };
   // The previous writer stored full snapshots, env/header hashes included.
-  const persisted = JSON.parse(JSON.stringify({
-    version: 1,
-    kind: "replace",
-    serverId: "docs",
-    previous: mcpCredentialConnectionSnapshot(configured),
-    target: mcpCredentialConnectionSnapshot({ ...configured, url: "https://moved.example.test/mcp" }),
-  }));
+  const persisted = JSON.parse(
+    JSON.stringify({
+      version: 1,
+      kind: "replace",
+      serverId: "docs",
+      previous: mcpCredentialConnectionSnapshot(configured),
+      target: mcpCredentialConnectionSnapshot({
+        ...configured,
+        url: "https://moved.example.test/mcp",
+      }),
+    }),
+  );
   assert.match(JSON.stringify(persisted.previous), /headersHash/u);
   // The edit never committed: config still matches the journal's previous server.
   const pending = parsePendingMcpCredentialCleanup(persisted);
-  assert.deepEqual(mcpCredentialCleanupAfterConfig(pending, configured), { resolved: true, clearOAuth: false, clearPresetKey: false });
+  assert.deepEqual(mcpCredentialCleanupAfterConfig(pending, configured), {
+    resolved: true,
+    clearOAuth: false,
+    clearPresetKey: false,
+  });
   // Had the edit committed, the old credentials would still be cleared.
-  assert.equal(mcpCredentialCleanupAfterConfig(pending, { ...configured, url: "https://moved.example.test/mcp" }).clearOAuth, true);
+  assert.equal(
+    mcpCredentialCleanupAfterConfig(pending, {
+      ...configured,
+      url: "https://moved.example.test/mcp",
+    }).clearOAuth,
+    true,
+  );
 });

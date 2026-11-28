@@ -18,7 +18,7 @@ async function findApps(root) {
   for (const entry of await readdir(root, { withFileTypes: true })) {
     const candidate = path.join(root, entry.name);
     if (entry.isDirectory() && entry.name.endsWith(".app")) results.push(candidate);
-    else if (entry.isDirectory()) results.push(...await findApps(candidate));
+    else if (entry.isDirectory()) results.push(...(await findApps(candidate)));
   }
   return results;
 }
@@ -27,7 +27,9 @@ async function waitForReady(journal, child) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(`Packaged Aiden exited before diagnostics were ready (${child.exitCode ?? child.signalCode}).`);
+      throw new Error(
+        `Packaged Aiden exited before diagnostics were ready (${child.exitCode ?? child.signalCode}).`,
+      );
     }
     try {
       const records = (await readFile(journal, "utf8"))
@@ -35,10 +37,13 @@ async function waitForReady(journal, child) {
         .filter(Boolean)
         .map((line) => JSON.parse(line));
       if (
-        records.some((record) => record.event === "session-started" && record.fields?.profile === "production") &&
+        records.some(
+          (record) => record.event === "session-started" && record.fields?.profile === "production",
+        ) &&
         records.some((record) => record.event === "electron-ready") &&
         records.some((record) => record.event === "renderer-ready")
-      ) return;
+      )
+        return;
     } catch (error) {
       if ((error?.code ?? "") !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
     }
@@ -54,8 +59,11 @@ async function freePort() {
     server.listen(0, "127.0.0.1", resolve);
   });
   const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Could not reserve a DevTools port.");
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  if (!address || typeof address === "string")
+    throw new Error("Could not reserve a DevTools port.");
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
   return address.port;
 }
 
@@ -63,7 +71,10 @@ async function waitForJournalEvent(journal, eventName) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const records = (await readFile(journal, "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      const records = (await readFile(journal, "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
       if (records.some((record) => record.event === eventName)) return;
     } catch (error) {
       if ((error?.code ?? "") !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
@@ -98,7 +109,8 @@ end tell`;
 
 const supplied = process.argv[2] ? path.resolve(process.argv[2]) : null;
 const apps = supplied ? [supplied] : await findApps(distributionRoot);
-if (apps.length !== 1) throw new Error(`Expected exactly one packaged Aiden app, found ${apps.length}.`);
+if (apps.length !== 1)
+  throw new Error(`Expected exactly one packaged Aiden app, found ${apps.length}.`);
 const app = apps[0];
 const executable = path.join(app, "Contents", "MacOS", path.basename(app, ".app"));
 if (!(await stat(executable)).isFile()) throw new Error("Packaged Aiden executable is missing.");
@@ -109,10 +121,26 @@ const config = path.join(root, "config");
 const xdgCache = path.join(root, "xdg-cache");
 const xdgConfig = path.join(root, "xdg-config");
 const xdgData = path.join(root, "xdg-data");
-await Promise.all([userData, config, xdgCache, xdgConfig, xdgData].map((directory) => mkdir(directory, { recursive: true, mode: 0o700 })));
+await Promise.all(
+  [userData, config, xdgCache, xdgConfig, xdgData].map((directory) =>
+    mkdir(directory, { recursive: true, mode: 0o700 }),
+  ),
+);
 
 const environment = {};
-for (const name of ["LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "PATH", "SHELL", "TEMP", "TMP", "TMPDIR", "TZ", "USER"]) {
+for (const name of [
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LOGNAME",
+  "PATH",
+  "SHELL",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "TZ",
+  "USER",
+]) {
   if (process.env[name] !== undefined) environment[name] = process.env[name];
 }
 Object.assign(environment, {
@@ -127,15 +155,15 @@ Object.assign(environment, {
 });
 
 const devtoolsPort = await freePort();
-const child = spawn(executable, [
-  `--user-data-dir=${userData}`,
-  `--remote-debugging-port=${devtoolsPort}`,
-  "--disable-gpu",
-], {
-  cwd: root,
-  env: environment,
-  stdio: "ignore",
-});
+const child = spawn(
+  executable,
+  [`--user-data-dir=${userData}`, `--remote-debugging-port=${devtoolsPort}`, "--disable-gpu"],
+  {
+    cwd: root,
+    env: environment,
+    stdio: "ignore",
+  },
+);
 let browser;
 try {
   const logs = path.join(userData, "logs");
@@ -155,21 +183,26 @@ try {
     throw new Error("Packaged explicit crash capture did not become active.");
   }
   await waitForJournalEvent(journal, "diagnostic-mode-enabled");
-  if (((await stat(logs)).mode & 0o777) !== 0o700) throw new Error("Packaged diagnostics directory is not owner-only.");
-  for (const file of [journal, path.join(logs, "aiden-fatal.log"), path.join(logs, "subagent-runtime.log")]) {
-    if (((await stat(file)).mode & 0o777) !== 0o600) throw new Error(`Packaged diagnostic file is not owner-only: ${path.basename(file)}`);
+  if (((await stat(logs)).mode & 0o777) !== 0o700)
+    throw new Error("Packaged diagnostics directory is not owner-only.");
+  for (const file of [
+    journal,
+    path.join(logs, "aiden-fatal.log"),
+    path.join(logs, "subagent-runtime.log"),
+  ]) {
+    if (((await stat(file)).mode & 0o777) !== 0o600)
+      throw new Error(`Packaged diagnostic file is not owner-only: ${path.basename(file)}`);
   }
   if (((await stat(path.join(userData, "Crashpad"))).mode & 0o777) !== 0o700) {
     throw new Error("Packaged Crashpad storage is not owner-only.");
   }
-  process.stdout.write("Verified packaged production diagnostics and explicit local-only Crashpad mode.\n");
+  process.stdout.write(
+    "Verified packaged production diagnostics and explicit local-only Crashpad mode.\n",
+  );
 } finally {
   await browser?.close().catch(() => undefined);
   if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolve) => child.once("exit", resolve)),
-    delay(5_000),
-  ]);
+  await Promise.race([new Promise((resolve) => child.once("exit", resolve)), delay(5_000)]);
   if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
   await rm(root, { recursive: true, force: true });
 }

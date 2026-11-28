@@ -12,14 +12,21 @@ const GUIDANCE_SECTION = "browser-discovery";
  * tool results, so a later response, and a restart, sees the same answer.
  */
 export function browserDiscoveredIn(messages: readonly AgentMessage[]): boolean {
-  return messages.some((message) =>
-    message.role === "toolResult" && message.toolName === BROWSER_DISCOVERY_TOOL_NAME && message.isError !== true);
+  return messages.some(
+    (message) =>
+      message.role === "toolResult" &&
+      message.toolName === BROWSER_DISCOVERY_TOOL_NAME &&
+      message.isError !== true,
+  );
 }
 
 function hasGuidance(messages: readonly AgentMessage[]): boolean {
-  return messages.some((message) =>
-    message.role === "system"
-    && typeof (message as { sections?: Record<string, unknown> }).sections?.[GUIDANCE_SECTION] === "string");
+  return messages.some(
+    (message) =>
+      message.role === "system" &&
+      typeof (message as { sections?: Record<string, unknown> }).sections?.[GUIDANCE_SECTION] ===
+        "string",
+  );
 }
 
 /**
@@ -31,20 +38,37 @@ function hasGuidance(messages: readonly AgentMessage[]): boolean {
 export function createBrowserDiscovery(tools: AgentTool[], revalidate: () => Promise<void>) {
   // Survives a compaction that folds the discovery result away in this response.
   let requested = false;
-  const tool: AgentTool = declarePiRuntimeReplay({
-    name: BROWSER_DISCOVERY_TOOL_NAME,
-    label: "Discover browser tools",
-    description: "Load browser tools for the next turn: tabs, navigation, previews, inspection, input, recording.",
-    parameters: Type.Object({}, { additionalProperties: false }),
-    execute: async (id, args, signal) => {
-      validateToolArguments(tool, { type: "toolCall", id, name: tool.name, arguments: args as Record<string, never> });
-      signal?.throwIfAborted();
-      await revalidate();
-      signal?.throwIfAborted();
-      requested = true;
-      return { content: [{ type: "text", text: `Browser tools are available on your next turn: ${tools.map(({ name }) => name).join(", ")}.\n${BROWSER_AGENT_GUIDANCE}` }], details: null };
+  const tool: AgentTool = declarePiRuntimeReplay(
+    {
+      name: BROWSER_DISCOVERY_TOOL_NAME,
+      label: "Discover browser tools",
+      description:
+        "Load browser tools for the next turn: tabs, navigation, previews, inspection, input, recording.",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async (id, args, signal) => {
+        validateToolArguments(tool, {
+          type: "toolCall",
+          id,
+          name: tool.name,
+          arguments: args as Record<string, never>,
+        });
+        signal?.throwIfAborted();
+        await revalidate();
+        signal?.throwIfAborted();
+        requested = true;
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Browser tools are available on your next turn: ${tools.map(({ name }) => name).join(", ")}.\n${BROWSER_AGENT_GUIDANCE}`,
+            },
+          ],
+          details: null,
+        };
+      },
     },
-  }, "safe");
+    "safe",
+  );
   return {
     tool,
     async prepare(context: AgentContext): Promise<AgentContext> {
@@ -59,12 +83,17 @@ export function createBrowserDiscovery(tools: AgentTool[], revalidate: () => Pro
       // Appended once; a transcript that already carries it is left as is.
       return {
         ...context,
-        messages: hasGuidance(context.messages) ? context.messages : [...context.messages, {
-          role: "system",
-          content: "",
-          sections: { [GUIDANCE_SECTION]: BROWSER_AGENT_GUIDANCE },
-          timestamp: Date.now(),
-        }],
+        messages: hasGuidance(context.messages)
+          ? context.messages
+          : [
+              ...context.messages,
+              {
+                role: "system",
+                content: "",
+                sections: { [GUIDANCE_SECTION]: BROWSER_AGENT_GUIDANCE },
+                timestamp: Date.now(),
+              },
+            ],
         tools: [...context.tools, ...additions],
       };
     },

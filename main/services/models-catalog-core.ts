@@ -1,9 +1,6 @@
 import type { SamplingParamsByThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
-import {
-  catalogProviderSlug,
-  modelIdLeaf,
-} from "../../renderer/shared/model-catalog-provider.js";
+import { catalogProviderSlug, modelIdLeaf } from "../../renderer/shared/model-catalog-provider.js";
 import type { ModelCost, ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
 
 interface RawModel {
@@ -426,7 +423,8 @@ export function resolveRuntimeLimits(
         : CONSERVATIVE_RUNTIME_LIMITS.reasoning),
     input: vision ? ["text", "image"] : ["text"],
   };
-  if (exact?.samplingParamsByThinkingLevel !== undefined) limits.samplingParamsByThinkingLevel = exact.samplingParamsByThinkingLevel;
+  if (exact?.samplingParamsByThinkingLevel !== undefined)
+    limits.samplingParamsByThinkingLevel = exact.samplingParamsByThinkingLevel;
   if (exact?.thinkingLevelMap !== undefined) {
     limits.thinkingLevelMap = exact.thinkingLevelMap;
   }
@@ -448,7 +446,11 @@ function discoveredRuntimeMetadata(
     samplingParamsByThinkingLevel: metadata.overrides?.samplingParamsByThinkingLevel,
     reasoning: metadata.overrides?.reasoning ?? metadata.reasoning,
     input:
-      (metadata.overrides?.vision ?? metadata.vision) === undefined ? undefined : (metadata.overrides?.vision ?? metadata.vision) ? ["text", "image"] : ["text"],
+      (metadata.overrides?.vision ?? metadata.vision) === undefined
+        ? undefined
+        : (metadata.overrides?.vision ?? metadata.vision)
+          ? ["text", "image"]
+          : ["text"],
   };
 }
 
@@ -463,7 +465,8 @@ function mergeRuntimeMetadata(
     maxTokens: primary.maxTokens ?? fallback.maxTokens,
     reasoning: primary.reasoning ?? fallback.reasoning,
     input: primary.input ?? fallback.input,
-    samplingParamsByThinkingLevel: primary.samplingParamsByThinkingLevel ?? fallback.samplingParamsByThinkingLevel,
+    samplingParamsByThinkingLevel:
+      primary.samplingParamsByThinkingLevel ?? fallback.samplingParamsByThinkingLevel,
     thinkingLevelMap: primary.thinkingLevelMap ?? fallback.thinkingLevelMap,
     forceAdaptiveThinking: primary.forceAdaptiveThinking ?? fallback.forceAdaptiveThinking,
   };
@@ -491,7 +494,8 @@ export function resolveProviderRuntimeLimits(
     runtimeSlug ? mergeRuntimeMetadata(discovered, piExact) : discovered,
   );
   if (provider.modelMetadata?.[modelId]?.overrides?.maxImages === 0) limits.input = ["text"];
-  if (provider.modelMetadata?.[modelId]?.overrides) limits.maxTokens = Math.min(limits.maxTokens, limits.contextWindow);
+  if (provider.modelMetadata?.[modelId]?.overrides)
+    limits.maxTokens = Math.min(limits.maxTokens, limits.contextWindow);
   return limits;
 }
 

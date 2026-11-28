@@ -40,7 +40,8 @@ export function parseWorkspacePathInput(
   if (typeof value !== "string") return invalid("empty", "Enter a folder path.");
   const typed = value.trim();
   if (!typed) return invalid("empty", "Enter a folder path.");
-  if (typed.length > WORKSPACE_PATH_MAX_LENGTH) return invalid("too-long", "That path is too long.");
+  if (typed.length > WORKSPACE_PATH_MAX_LENGTH)
+    return invalid("too-long", "That path is too long.");
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/u.test(typed)) {
     return invalid("invalid-characters", "That path contains characters Aiden can't use.");
@@ -101,7 +102,10 @@ export interface WorkspaceIntakeDependencies {
   listWorkspaces(): Promise<Workspace[]>;
   getWorkspace(id: string): Promise<Workspace | null | undefined>;
   /** The shared registration path used by the native folder picker. */
-  createFromFolder(folderPath: string, options?: WorkspaceFolderCreationOptions): Promise<Workspace>;
+  createFromFolder(
+    folderPath: string,
+    options?: WorkspaceFolderCreationOptions,
+  ): Promise<Workspace>;
   runClone(request: GitCloneRequest): Promise<GitCloneOutcome>;
   /** Treat `Widget` and `widget` as one folder (default: macOS and Windows). */
   caseInsensitivePaths?: boolean;
@@ -135,12 +139,20 @@ function accessFailure(error: unknown, subject: "path" | "parent"): WorkspacePat
     return {
       kind: "invalid",
       code: "permission-denied",
-      reason: subject === "path" ? "Aiden can't access that folder." : "Aiden can't access the parent folder.",
+      reason:
+        subject === "path"
+          ? "Aiden can't access that folder."
+          : "Aiden can't access the parent folder.",
     };
   }
-  if (code === "ENAMETOOLONG") return { kind: "invalid", code: "too-long", reason: "That path is too long." };
+  if (code === "ENAMETOOLONG")
+    return { kind: "invalid", code: "too-long", reason: "That path is too long." };
   if (code === "ENOTDIR") {
-    return { kind: "invalid", code: "parent-not-a-folder", reason: "Part of that path is a file, not a folder." };
+    return {
+      kind: "invalid",
+      code: "parent-not-a-folder",
+      reason: "Part of that path is a file, not a folder.",
+    };
   }
   return { kind: "invalid", code: "unreadable", reason: "Aiden couldn't read that path." };
 }
@@ -158,13 +170,15 @@ export function cloneFailureDetail(stderrTail: string, home: string): string | u
 }
 
 /** Map Git's stderr to a short, typed failure the menu can show. */
-export function classifyCloneFailure(
-  stderrTail: string,
-): { code: WorkspaceCloneFailureCode; reason: string } {
+export function classifyCloneFailure(stderrTail: string): {
+  code: WorkspaceCloneFailureCode;
+  reason: string;
+} {
   if (/Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/iu.test(stderrTail)) {
     return {
       code: "host-key",
-      reason: "The host's SSH key isn't trusted yet. Connect to it once from Terminal, then try again.",
+      reason:
+        "The host's SSH key isn't trusted yet. Connect to it once from Terminal, then try again.",
     };
   }
   if (
@@ -182,14 +196,20 @@ export function classifyCloneFailure(
       stderrTail,
     )
   ) {
-    return { code: "not-found", reason: "That repository wasn't found, or you don't have access to it." };
+    return {
+      code: "not-found",
+      reason: "That repository wasn't found, or you don't have access to it.",
+    };
   }
   if (
     /Could not resolve host|Could not resolve hostname|Connection refused|Connection timed out|Network is unreachable|Operation timed out|unable to access|Failed to connect/iu.test(
       stderrTail,
     )
   ) {
-    return { code: "network", reason: "Git couldn't reach that host. Check the URL and your connection." };
+    return {
+      code: "network",
+      reason: "Git couldn't reach that host. Check the URL and your connection.",
+    };
   }
   return { code: "failed", reason: "Git couldn't clone that repository." };
 }
@@ -236,18 +256,30 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
       try {
         const parentStats = await deps.stat(parent);
         if (!parentStats.isDirectory()) {
-          return { kind: "invalid", code: "parent-not-a-folder", reason: "The parent is a file, not a folder." };
+          return {
+            kind: "invalid",
+            code: "parent-not-a-folder",
+            reason: "The parent is a file, not a folder.",
+          };
         }
       } catch (parentError) {
         if (errnoCode(parentError) === "ENOENT") {
-          return { kind: "invalid", code: "parent-missing", reason: "The parent folder doesn't exist." };
+          return {
+            kind: "invalid",
+            code: "parent-missing",
+            reason: "The parent folder doesn't exist.",
+          };
         }
         return accessFailure(parentError, "parent");
       }
       return { kind: "creatable", path: target };
     }
     if (!stats.isDirectory()) {
-      return { kind: "invalid", code: "not-a-folder", reason: "That path is a file, not a folder." };
+      return {
+        kind: "invalid",
+        code: "not-a-folder",
+        reason: "That path is a file, not a folder.",
+      };
     }
     let canonical: string;
     try {
@@ -285,9 +317,15 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
   const register = async (
     folderPath: string,
     options: WorkspaceFolderCreationOptions = {},
-  ): Promise<{ ok: true; workspace: Workspace; existing: boolean } | { ok: false; reason: string }> => {
+  ): Promise<
+    { ok: true; workspace: Workspace; existing: boolean } | { ok: false; reason: string }
+  > => {
     try {
-      return { ok: true, workspace: await deps.createFromFolder(folderPath, options), existing: false };
+      return {
+        ok: true,
+        workspace: await deps.createFromFolder(folderPath, options),
+        existing: false,
+      };
     } catch (error) {
       try {
         const canonicalPath = await deps.realpath(folderPath);
@@ -297,11 +335,13 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
             const currentPath = await deps.realpath(folderPath);
             const identity = await deps.stat(currentPath);
             if (!identity.isDirectory()) throw new Error("The workspace folder changed.");
-            await options.assertCurrent({ canonicalPath: currentPath,
+            await options.assertCurrent({
+              canonicalPath: currentPath,
               ...(identity.dev === undefined ? {} : { filesystemDevice: String(identity.dev) }),
               ...(identity.ino === undefined ? {} : { filesystemInode: String(identity.ino) }),
             });
-            if (existing.folderPath !== currentPath) throw new Error("The workspace folder changed.");
+            if (existing.folderPath !== currentPath)
+              throw new Error("The workspace folder changed.");
           }
           return { ok: true, workspace: existing, existing: true };
         }
@@ -310,7 +350,10 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
       }
       return {
         ok: false,
-        reason: error instanceof Error && error.message ? error.message : "Aiden couldn't add that folder.",
+        reason:
+          error instanceof Error && error.message
+            ? error.message
+            : "Aiden couldn't add that folder.",
       };
     }
   };
@@ -329,13 +372,23 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
         // Removed meanwhile: register it again below.
         const registered = await register(inspection.path);
         return registered.ok
-          ? { ok: true, workspace: registered.workspace, created: false, existing: registered.existing }
+          ? {
+              ok: true,
+              workspace: registered.workspace,
+              created: false,
+              existing: registered.existing,
+            }
           : { ok: false, code: "register-failed", reason: registered.reason };
       }
       case "folder": {
         const registered = await register(inspection.path);
         return registered.ok
-          ? { ok: true, workspace: registered.workspace, created: false, existing: registered.existing }
+          ? {
+              ok: true,
+              workspace: registered.workspace,
+              created: false,
+              existing: registered.existing,
+            }
           : { ok: false, code: "register-failed", reason: registered.reason };
       }
       case "creatable": {
@@ -364,7 +417,12 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
           if (created) await deps.rmdir(inspection.path).catch(() => undefined);
           return { ok: false, code: "register-failed", reason: registered.reason };
         }
-        return { ok: true, workspace: registered.workspace, created, existing: registered.existing };
+        return {
+          ok: true,
+          workspace: registered.workspace,
+          created,
+          existing: registered.existing,
+        };
       }
     }
   };
@@ -373,11 +431,20 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
     const parsed = parseCloneUrl(url);
     if (!parsed.ok) return { ok: false, code: "invalid-url", reason: parsed.reason };
     const base = await defaultCloneBaseDirectory(deps.home, deps.stat);
-    return { ok: true, url: parsed.url, repoName: parsed.repoName, destination: path.join(base, parsed.repoName) };
+    return {
+      ok: true,
+      url: parsed.url,
+      repoName: parsed.repoName,
+      destination: path.join(base, parsed.repoName),
+    };
   };
 
   type CloneFailure = Extract<WorkspaceCloneResult<Workspace>, { ok: false }>;
-  const fail = (code: WorkspaceCloneFailureCode, reason: string, extra: Partial<CloneFailure> = {}): CloneFailure => ({
+  const fail = (
+    code: WorkspaceCloneFailureCode,
+    reason: string,
+    extra: Partial<CloneFailure> = {},
+  ): CloneFailure => ({
     ok: false,
     code,
     reason,
@@ -400,17 +467,29 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
       stats = await deps.lstat(destination);
     } catch (error) {
       if (errnoCode(error) === "ENOENT") return { ok: true, state: "absent" };
-      return { ok: false, failure: fail("invalid-destination", "Aiden can't read the destination folder.") };
+      return {
+        ok: false,
+        failure: fail("invalid-destination", "Aiden can't read the destination folder."),
+      };
     }
     if (stats.isSymbolicLink()) {
-      return { ok: false, failure: fail("invalid-destination", "The destination is a link. Choose a real folder.") };
+      return {
+        ok: false,
+        failure: fail("invalid-destination", "The destination is a link. Choose a real folder."),
+      };
     }
-    const occupied = fail("destination-exists", "The destination folder already exists and isn't empty.");
+    const occupied = fail(
+      "destination-exists",
+      "The destination folder already exists and isn't empty.",
+    );
     if (!stats.isDirectory()) return { ok: false, failure: occupied };
     try {
       if ((await deps.readdir(destination)).length > 0) return { ok: false, failure: occupied };
     } catch {
-      return { ok: false, failure: fail("invalid-destination", "Aiden can't read the destination folder.") };
+      return {
+        ok: false,
+        failure: fail("invalid-destination", "Aiden can't read the destination folder."),
+      };
     }
     return { ok: true, state: "empty" };
   };
@@ -448,7 +527,11 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
         throw new Error("The clone staging folder no longer carries Aiden's owner marker.");
       }
     } catch (error) {
-      deps.logError("workspace", "Left a clone staging folder Aiden could not verify as its own.", error);
+      deps.logError(
+        "workspace",
+        "Left a clone staging folder Aiden could not verify as its own.",
+        error,
+      );
       return;
     }
     await deps.removeTree(staging).catch((error: unknown) => {
@@ -460,7 +543,10 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
    * Move a finished clone into place. The destination must still be absent or
    * an empty real folder; otherwise nothing of the user's is touched.
    */
-  const publishClone = async (staging: string, destination: string): Promise<CloneFailure | undefined> => {
+  const publishClone = async (
+    staging: string,
+    destination: string,
+  ): Promise<CloneFailure | undefined> => {
     const appeared = fail(
       "destination-exists",
       "Something appeared in the destination folder during the clone, so the clone was discarded.",
@@ -485,14 +571,24 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
 
   const clone = async (
     input: CloneRequestInput,
-    options: { cloneId: string; signal: AbortSignal; onProgress(progress: WorkspaceCloneProgress): void; beforePublish?(stagedRepository: string): Promise<void>; beforeRegister?(): Promise<void>; registration?: WorkspaceFolderCreationOptions },
+    options: {
+      cloneId: string;
+      signal: AbortSignal;
+      onProgress(progress: WorkspaceCloneProgress): void;
+      beforePublish?(stagedRepository: string): Promise<void>;
+      beforeRegister?(): Promise<void>;
+      registration?: WorkspaceFolderCreationOptions;
+    },
   ): Promise<WorkspaceCloneResult<Workspace>> => {
     const parsed = parseCloneUrl(input.url);
     if (!parsed.ok) return fail("invalid-url", parsed.reason);
 
     let destination: string;
     if (input.destination === undefined || input.destination === null || input.destination === "") {
-      destination = path.join(await defaultCloneBaseDirectory(deps.home, deps.stat), parsed.repoName);
+      destination = path.join(
+        await defaultCloneBaseDirectory(deps.home, deps.stat),
+        parsed.repoName,
+      );
     } else {
       const parsedDestination = parseWorkspacePathInput(input.destination, { home: deps.home });
       if (!parsedDestination.ok) return fail("invalid-destination", parsedDestination.reason);
@@ -516,7 +612,10 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
     try {
       key = await destinationKey(destination);
     } catch {
-      return fail("invalid-destination", "Aiden can't read the folder that would contain the repository.");
+      return fail(
+        "invalid-destination",
+        "Aiden can't read the folder that would contain the repository.",
+      );
     }
     if (activeDestinations.has(key)) {
       return fail("busy", "A clone into that folder is already running.");
@@ -541,10 +640,15 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
         });
         if (!outcome.ok) {
           if (outcome.reason === "cancelled") return fail("cancelled", "Clone cancelled.");
-          if (outcome.reason === "timeout") return fail("timeout", "The clone took too long and was stopped.");
+          if (outcome.reason === "timeout")
+            return fail("timeout", "The clone took too long and was stopped.");
           const detail = cloneFailureDetail(outcome.stderrTail, deps.home);
           if (outcome.reason === "spawn-failed") {
-            return fail("git-unavailable", "Aiden couldn't run Git. Install Git and try again.", detail ? { detail } : {});
+            return fail(
+              "git-unavailable",
+              "Aiden couldn't run Git. Install Git and try again.",
+              detail ? { detail } : {},
+            );
           }
           const classified = classifyCloneFailure(outcome.stderrTail);
           return fail(classified.code, classified.reason, detail ? { detail } : {});

@@ -6,17 +6,22 @@ import type { ChatForkSummaryV1 } from "../shared/chat-copy-contract.js";
 
 const noop = () => {};
 
-function render(summary: ChatForkSummaryV1, options: { busy?: boolean; defaultOpen?: boolean } = {}) {
+function render(
+  summary: ChatForkSummaryV1,
+  options: { busy?: boolean; defaultOpen?: boolean } = {},
+) {
   return renderToStaticMarkup(
     <ForkSummaryCard summary={summary} onCancel={noop} onRetry={noop} onSkip={noop} {...options} />,
   );
 }
 
 function buttons(markup: string): { label: string; disabled: boolean }[] {
-  return [...markup.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/gu)].map(([, attributes, body]) => ({
-    label: body!.replace(/<[^>]+>/gu, "").trim(),
-    disabled: /\sdisabled=""/u.test(attributes!),
-  }));
+  return [...markup.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/gu)].map(
+    ([, attributes, body]) => ({
+      label: body!.replace(/<[^>]+>/gu, "").trim(),
+      disabled: /\sdisabled=""/u.test(attributes!),
+    }),
+  );
 }
 
 test("a pending summary announces progress and offers only Cancel", () => {
@@ -65,6 +70,9 @@ test("a ready summary stays collapsed until opened, then shows its text and file
 });
 
 test("a ready summary without files lists none", () => {
-  const open = render({ state: "ready", afterMessageId: "a1", text: "Nothing changed." }, { defaultOpen: true });
+  const open = render(
+    { state: "ready", afterMessageId: "a1", text: "Nothing changed." },
+    { defaultOpen: true },
+  );
   assert.doesNotMatch(open, /files"/u);
 });

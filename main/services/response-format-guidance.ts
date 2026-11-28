@@ -6,5 +6,4 @@ export const RESPONSE_FORMAT_GUIDANCE = [
   "Use bold lead-ins sparingly, and do not turn every response into a checklist.",
 ].join(" ");
 
-export const PI_CHAT_SYSTEM_PROMPT =
-  `You are Aiden, a capable AI assistant. Respond clearly and concisely, using Markdown for formatting and fenced code blocks for code. ${RESPONSE_FORMAT_GUIDANCE}`;
+export const PI_CHAT_SYSTEM_PROMPT = `You are Aiden, a capable AI assistant. Respond clearly and concisely, using Markdown for formatting and fenced code blocks for code. ${RESPONSE_FORMAT_GUIDANCE}`;

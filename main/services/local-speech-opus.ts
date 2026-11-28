@@ -113,7 +113,10 @@ interface OpenStream {
  * before each batch is kept, and the trimmed total is checked against the cap
  * before returning.
  */
-export async function decodeOggOpusToPcm16k(bytes: Uint8Array, options: DecodeOggOpusOptions = {}): Promise<Float32Array> {
+export async function decodeOggOpusToPcm16k(
+  bytes: Uint8Array,
+  options: DecodeOggOpusOptions = {},
+): Promise<Float32Array> {
   const maxSamples = options.maxSamples ?? MAX_PCM_SAMPLES;
   // Loaded on first use so the main bundle does not pay for libopus at startup.
   const [{ default: CodecParser }, { OpusDecoder }] = await Promise.all([

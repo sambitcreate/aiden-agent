@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +26,10 @@ import {
   writePiUpgradeEvaluationReceipt,
 } from "./pi-upgrade-rollout.js";
 import { PiCompactionSessionStore } from "./pi-compaction-session-store.js";
-import { runPiUpgradeCachedPrefixReplay, runPiUpgradeReplayCases } from "./pi-upgrade-replay-runner.js";
+import {
+  runPiUpgradeCachedPrefixReplay,
+  runPiUpgradeReplayCases,
+} from "./pi-upgrade-replay-runner.js";
 
 async function passingMeasurements(): Promise<PiUpgradeReplayMeasurement[]> {
   return runPiUpgradeReplayCases();
@@ -67,14 +80,22 @@ test("executable replays emit the complete passing scorecard from observed outco
     "no_op_attempts",
     "migration_failures",
   ]);
-  assert.match(evaluatePiUpgradeReplay(failed.slice(1)).failures[0] ?? "", /missing:long_coding_chat/u);
-  const weakCase = measurements.map((measurement, index) => index === 0
-    ? { ...measurement, tokensAfter: Math.floor(measurement.tokensBefore * 0.9) }
-    : measurement);
+  assert.match(
+    evaluatePiUpgradeReplay(failed.slice(1)).failures[0] ?? "",
+    /missing:long_coding_chat/u,
+  );
+  const weakCase = measurements.map((measurement, index) =>
+    index === 0
+      ? { ...measurement, tokensAfter: Math.floor(measurement.tokensBefore * 0.9) }
+      : measurement,
+  );
   assert.ok(evaluatePiUpgradeReplay(weakCase).failures.includes("per_case_token_reduction"));
 
   assert.throws(
-    () => evaluatePiUpgradeReplay([{ ...measurements[0]!, unexpected: true } as PiUpgradeReplayMeasurement]),
+    () =>
+      evaluatePiUpgradeReplay([
+        { ...measurements[0]!, unexpected: true } as PiUpgradeReplayMeasurement,
+      ]),
     /required schema/u,
   );
   assert.throws(
@@ -82,7 +103,10 @@ test("executable replays emit the complete passing scorecard from observed outco
     /lacks executable measurements/u,
   );
   assert.throws(
-    () => evaluatePiUpgradeReplay([{ ...measurements[0]!, pendingReferencesExpected: 0, pendingReferencesRetained: 0 }]),
+    () =>
+      evaluatePiUpgradeReplay([
+        { ...measurements[0]!, pendingReferencesExpected: 0, pendingReferencesRetained: 0 },
+      ]),
     /pending-reference assertion/u,
   );
 });
@@ -133,7 +157,9 @@ test("the cached-prefix replay summarizes on the recorded turn's request and pas
     assert.equal(measurement.pendingReferencesRetained, measurement.pendingReferencesExpected);
   }
   const measurements = await passingMeasurements();
-  const withCached = measurements.map((measurement) => measurement.caseId === replay.caseId ? replay.cached : measurement);
+  const withCached = measurements.map((measurement) =>
+    measurement.caseId === replay.caseId ? replay.cached : measurement,
+  );
   assert.equal(evaluatePiUpgradeReplay(withCached).passed, true);
 });
 
@@ -144,7 +170,9 @@ test("the cached-prefix replay fails the gate when its summary loses old history
   assert.equal(replay.cached.continuationCorrect, false);
   const measurements = await passingMeasurements();
   const report = evaluatePiUpgradeReplay(
-    measurements.map((measurement) => measurement.caseId === replay.caseId ? replay.cached : measurement),
+    measurements.map((measurement) =>
+      measurement.caseId === replay.caseId ? replay.cached : measurement,
+    ),
   );
   assert.equal(report.passed, false);
   assert.ok(report.failures.includes("continuation_correctness"));
@@ -153,20 +181,51 @@ test("the cached-prefix replay fails the gate when its summary loses old history
 test("rollout eligibility is staged and the exact-zero rollback is fail-closed", () => {
   const oldChat = { createdAt: 1_000, messages: Array.from({ length: 150 }, () => ({})) } as never;
   const newChat = { createdAt: 3_000, messages: [] } as never;
-  const policy = (stage: "internal_fixtures" | "developer_installs" | "new_chats" | "migrated_low_risk_chats" | "existing_long_chats") => ({
+  const policy = (
+    stage:
+      | "internal_fixtures"
+      | "developer_installs"
+      | "new_chats"
+      | "migrated_low_risk_chats"
+      | "existing_long_chats",
+  ) => ({
     version: 1 as const,
     stage,
     activatedAt: 2_000,
     revision: 1,
   });
-  assert.equal(piUpgradeMemoryEligible(policy("internal_fixtures"), newChat, { development: true }), false);
-  assert.equal(piUpgradeMemoryEligible(policy("developer_installs"), newChat, { development: true }), true);
-  assert.equal(piUpgradeMemoryEligible(policy("developer_installs"), newChat, { development: false }), false);
-  assert.equal(piUpgradeMemoryEligible(policy("new_chats"), oldChat, { development: false }), false);
+  assert.equal(
+    piUpgradeMemoryEligible(policy("internal_fixtures"), newChat, { development: true }),
+    false,
+  );
+  assert.equal(
+    piUpgradeMemoryEligible(policy("developer_installs"), newChat, { development: true }),
+    true,
+  );
+  assert.equal(
+    piUpgradeMemoryEligible(policy("developer_installs"), newChat, { development: false }),
+    false,
+  );
+  assert.equal(
+    piUpgradeMemoryEligible(policy("new_chats"), oldChat, { development: false }),
+    false,
+  );
   assert.equal(piUpgradeMemoryEligible(policy("new_chats"), newChat, { development: false }), true);
-  assert.equal(piUpgradeMemoryEligible(policy("migrated_low_risk_chats"), oldChat, { development: false }), false);
-  assert.equal(piUpgradeMemoryEligible(policy("existing_long_chats"), oldChat, { development: false }), true);
-  assert.equal(piUpgradeMemoryEligible(policy("existing_long_chats"), newChat, { development: false, behaviorEnabled: false }), false);
+  assert.equal(
+    piUpgradeMemoryEligible(policy("migrated_low_risk_chats"), oldChat, { development: false }),
+    false,
+  );
+  assert.equal(
+    piUpgradeMemoryEligible(policy("existing_long_chats"), oldChat, { development: false }),
+    true,
+  );
+  assert.equal(
+    piUpgradeMemoryEligible(policy("existing_long_chats"), newChat, {
+      development: false,
+      behaviorEnabled: false,
+    }),
+    false,
+  );
   assert.equal(piUpgradeBehaviorEnabled({ AIDEN_PI_UPGRADE_BEHAVIOR_ENABLED: "0" }), false);
   assert.equal(piUpgradeBehaviorEnabled({ AIDEN_PI_UPGRADE_BEHAVIOR_ENABLED: "false" }), true);
 });
@@ -183,7 +242,12 @@ test("device-local rollout advances one stage and v4-only requires installed rol
   t.after(() => rm(root, { recursive: true, force: true }));
   const initial = await store.load();
   assert.equal(initial.stage, "existing_long_chats");
-  await writePiUpgradeEvaluationReceipt(root, await passingMeasurements(), identity, "2026-08-31T00:00:00.000Z");
+  await writePiUpgradeEvaluationReceipt(
+    root,
+    await passingMeasurements(),
+    identity,
+    "2026-08-31T00:00:00.000Z",
+  );
   await assert.rejects(store.advance("v4_only"), /receipts bound to this installed build/u);
   const evaluationBytes = await readFile(path.join(root, "pi-upgrade-evaluation-v1.json"));
   const installed = {
@@ -211,7 +275,11 @@ test("device-local rollout advances one stage and v4-only requires installed rol
 test("two rollout-store instances cannot regress device state from a stale cache", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-rollout-race-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const options = { root: () => root, initialStage: "internal_fixtures" as const, now: () => 20_000 };
+  const options = {
+    root: () => root,
+    initialStage: "internal_fixtures" as const,
+    now: () => 20_000,
+  };
   const first = new PiUpgradeRolloutStore(options);
   const stale = new PiUpgradeRolloutStore(options);
   await Promise.all([first.load(), stale.load()]);
@@ -228,13 +296,20 @@ test("two rollout-store instances cannot regress device state from a stale cache
     stale.advance("developer_installs"),
     /advance exactly one stage from current device state/u,
   );
-  assert.equal(JSON.parse(await readFile(path.join(root, "pi-upgrade-rollout-v1.json"), "utf8")).revision, 2);
+  assert.equal(
+    JSON.parse(await readFile(path.join(root, "pi-upgrade-rollout-v1.json"), "utf8")).revision,
+    2,
+  );
 });
 
 test("rollout reads reject invalid replacements and recover without rewriting device data", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-rollout-reload-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const store = new PiUpgradeRolloutStore({ root: () => root, initialStage: "new_chats", now: () => 100 });
+  const store = new PiUpgradeRolloutStore({
+    root: () => root,
+    initialStage: "new_chats",
+    now: () => 100,
+  });
   const initial = await store.load();
   const file = path.join(root, "pi-upgrade-rollout-v1.json");
   const original = await readFile(file, "utf8");
@@ -243,7 +318,11 @@ test("rollout reads reject invalid replacements and recover without rewriting de
     await writeFile(staging, bytes, { mode: 0o600 });
     await rename(staging, file);
   };
-  for (const invalid of ["{", JSON.stringify({ ...initial, unexpected: true }), JSON.stringify({ ...initial, revision: 0 })]) {
+  for (const invalid of [
+    "{",
+    JSON.stringify({ ...initial, unexpected: true }),
+    JSON.stringify({ ...initial, revision: 0 }),
+  ]) {
     await replace(invalid);
     await assert.rejects(store.load());
     await assert.rejects(store.load());
@@ -261,7 +340,10 @@ test("rollout reads reject invalid replacements and recover without rewriting de
 
   // A failed first read must not poison this instance's subsequent reads either.
   await replace("{");
-  const recovering = new PiUpgradeRolloutStore({ root: () => root, initialStage: "internal_fixtures" });
+  const recovering = new PiUpgradeRolloutStore({
+    root: () => root,
+    initialStage: "internal_fixtures",
+  });
   await assert.rejects(recovering.load());
   await replace(original);
   assert.deepEqual(await recovering.load(), initial);
@@ -274,11 +356,18 @@ test("an overlapping first load cannot recreate a policy deleted after the first
   let calls = 0;
   let release!: () => void;
   let arrived!: () => void;
-  const blocked = new Promise<void>((resolve) => { release = resolve; });
-  const secondArrived = new Promise<void>((resolve) => { arrived = resolve; });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const secondArrived = new Promise<void>((resolve) => {
+    arrived = resolve;
+  });
   const store = new PiUpgradeRolloutStore({
     root: async () => {
-      if (++calls === 2) { arrived(); await blocked; }
+      if (++calls === 2) {
+        arrived();
+        await blocked;
+      }
       return root;
     },
     initialStage: "new_chats",
@@ -298,16 +387,29 @@ test("failed advancement still records observation before a waiting first load c
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-observed-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const file = path.join(root, "pi-upgrade-rollout-v1.json");
-  await writeFile(file, JSON.stringify({ version: 1, stage: "existing_long_chats", activatedAt: 100, revision: 7 }));
+  await writeFile(
+    file,
+    JSON.stringify({ version: 1, stage: "existing_long_chats", activatedAt: 100, revision: 7 }),
+  );
   let release!: () => void;
   let arrived!: () => void;
-  const blocked = new Promise<void>((resolve) => { release = resolve; });
-  const started = new Promise<void>((resolve) => { arrived = resolve; });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    arrived = resolve;
+  });
   let calls = 0;
-  const store = new PiUpgradeRolloutStore({ initialStage: "new_chats", root: async () => {
-    if (++calls === 1) { arrived(); await blocked; }
-    return root;
-  } });
+  const store = new PiUpgradeRolloutStore({
+    initialStage: "new_chats",
+    root: async () => {
+      if (++calls === 1) {
+        arrived();
+        await blocked;
+      }
+      return root;
+    },
+  });
   const waiting = store.load();
   const rejection = assert.rejects(waiting, { code: "ENOENT" });
   await started;
@@ -322,11 +424,15 @@ test("failed advancement still records observation before a waiting first load c
 test("concurrent rollout initialization publishes one complete policy without losing the winner", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-rollout-create-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const stores = Array.from({ length: 24 }, (_, index) => new PiUpgradeRolloutStore({
-    root: () => root,
-    initialStage: index % 2 === 0 ? "new_chats" : "internal_fixtures",
-    now: () => 100 + index,
-  }));
+  const stores = Array.from(
+    { length: 24 },
+    (_, index) =>
+      new PiUpgradeRolloutStore({
+        root: () => root,
+        initialStage: index % 2 === 0 ? "new_chats" : "internal_fixtures",
+        now: () => 100 + index,
+      }),
+  );
   const results = await Promise.all(stores.flatMap((store) => [store.load(), store.load()]));
   const file = path.join(root, "pi-upgrade-rollout-v1.json");
   const bytes = await readFile(file, "utf8");
@@ -348,14 +454,18 @@ test("external rollout advancement preserves the activated new-chat cohort on su
   const operator = new PiUpgradeRolloutStore(options);
   await app.load();
   await writePiUpgradeEvaluationReceipt(root, await passingMeasurements(), {
-    packageSha256: "d".repeat(64), buildId: "cohort-test",
+    packageSha256: "d".repeat(64),
+    buildId: "cohort-test",
   });
   now = 200;
   await operator.advance("new_chats");
   const newChats = await app.load();
   assert.equal(newChats.activatedAt, 200);
   const longChat = { createdAt: 250, messages: Array.from({ length: 150 }, () => ({})) } as never;
-  const oldLongChat = { createdAt: 150, messages: Array.from({ length: 150 }, () => ({})) } as never;
+  const oldLongChat = {
+    createdAt: 150,
+    messages: Array.from({ length: 150 }, () => ({})),
+  } as never;
   assert.equal(piUpgradeMemoryEligible(newChats, longChat, { development: false }), true);
   now = 300;
   await operator.advance("migrated_low_risk_chats");
@@ -396,9 +506,15 @@ test("crashed rollout locks recover and installed identity includes app resource
   });
   await store.load();
   await writePiUpgradeEvaluationReceipt(root, await passingMeasurements(), secondIdentity);
-  await writeFile(path.join(root, ".advance-lock"), JSON.stringify({
-    token: "crashed-owner", pid: 999_999_999, createdAt: 1,
-  }), { mode: 0o600 });
+  await writeFile(
+    path.join(root, ".advance-lock"),
+    JSON.stringify({
+      token: "crashed-owner",
+      pid: 999_999_999,
+      createdAt: 1,
+    }),
+    { mode: 0o600 },
+  );
   assert.equal((await store.advance("developer_installs")).stage, "developer_installs");
 });
 
@@ -424,7 +540,9 @@ test("operator advancement command is registered and uses the guarded store", as
   assert.match(llmText, /piJournalless = true/u);
   assert.match(llmText, /!piJournalless[\s\S]{0,200}markRecoveryRecorded/u);
   assert.match(llmText, /!piJournalless[\s\S]{0,160}acknowledgeChatEffectsDurable/u);
-  const quarantineSites = [...llmText.matchAll(/piCompactionSessionStore\.quarantineChatUntilRecovered/gu)];
+  const quarantineSites = [
+    ...llmText.matchAll(/piCompactionSessionStore\.quarantineChatUntilRecovered/gu),
+  ];
   assert.equal(quarantineSites.length, 2);
   for (const site of quarantineSites) {
     assert.match(
@@ -442,7 +560,9 @@ test("production journal creation and legacy migration obey the device rollout w
   const directory = path.join(root, "--legacy--");
   await mkdir(directory, { recursive: true });
   const journal = path.join(directory, "legacy.jsonl");
-  const fixture = (await readFile(path.resolve("main/services/fixtures/pi-legacy/uncompacted.jsonl"), "utf8")).split("\n");
+  const fixture = (
+    await readFile(path.resolve("main/services/fixtures/pi-legacy/uncompacted.jsonl"), "utf8")
+  ).split("\n");
   const header = JSON.parse(fixture[0]!) as Record<string, unknown>;
   header.id = "rollout-legacy";
   header.cwd = root;
@@ -451,17 +571,32 @@ test("production journal creation and legacy migration obey the device rollout w
   const original = fixture.join("\n");
   await writeFile(journal, original, { mode: 0o600 });
 
-  const newChatsPolicy = { version: 1 as const, stage: "new_chats" as const, activatedAt: 1, revision: 1 };
+  const newChatsPolicy = {
+    version: 1 as const,
+    stage: "new_chats" as const,
+    activatedAt: 1,
+    revision: 1,
+  };
   const deferred = new PiCompactionSessionStore({
     root: async () => root,
     rollout: { load: async () => newChatsPolicy, development: false, behaviorEnabled: true },
   });
-  await assert.rejects(deferred.openChat("rollout-legacy", { createdAt: 0 }), /outside the active device rollout stage/u);
+  await assert.rejects(
+    deferred.openChat("rollout-legacy", { createdAt: 0 }),
+    /outside the active device rollout stage/u,
+  );
   assert.equal(await readFile(journal, "utf8"), original);
-  await assert.rejects(deferred.openChat("rollout-old-without-journal", { createdAt: 0 }), /v4 journal creation/u);
+  await assert.rejects(
+    deferred.openChat("rollout-old-without-journal", { createdAt: 0 }),
+    /v4 journal creation/u,
+  );
   assert.ok(await deferred.openChat("rollout-new", { createdAt: 2 }));
 
-  const migrationPolicy = { ...newChatsPolicy, stage: "migrated_low_risk_chats" as const, revision: 2 };
+  const migrationPolicy = {
+    ...newChatsPolicy,
+    stage: "migrated_low_risk_chats" as const,
+    revision: 2,
+  };
   const promoted = new PiCompactionSessionStore({
     root: async () => root,
     rollout: { load: async () => migrationPolicy, development: false, behaviorEnabled: true },
@@ -474,7 +609,10 @@ test("production journal creation and legacy migration obey the device rollout w
     rollout: { load: async () => migrationPolicy, development: false, behaviorEnabled: true },
   });
   assert.ok(await recovered.openChat("rollout-legacy", { createdAt: 0 }));
-  assert.equal(JSON.parse(await readFile(`${journal}.migration-v1.json`, "utf8")).validation, "passed");
+  assert.equal(
+    JSON.parse(await readFile(`${journal}.migration-v1.json`, "utf8")).validation,
+    "passed",
+  );
 
   const rollbackRoot = path.join(temporary, "rollback-sessions");
   await mkdir(rollbackRoot, { recursive: true });
@@ -482,7 +620,10 @@ test("production journal creation and legacy migration obey the device rollout w
     root: async () => rollbackRoot,
     rollout: { load: async () => migrationPolicy, development: false, behaviorEnabled: false },
   });
-  await assert.rejects(rolledBack.openChat("rollback-new", { createdAt: 2 }), /outside the active device rollout stage/u);
+  await assert.rejects(
+    rolledBack.openChat("rollback-new", { createdAt: 2 }),
+    /outside the active device rollout stage/u,
+  );
 });
 
 test("openChatIfEligible probes the rollout without creating or rewriting journals", async (t) => {
@@ -524,7 +665,9 @@ test("openChatIfEligible probes the rollout without creating or rewriting journa
   const legacyDirectory = path.join(legacyRoot, "--legacy--");
   await mkdir(legacyDirectory, { recursive: true });
   const journal = path.join(legacyDirectory, "legacy.jsonl");
-  const fixture = (await readFile(path.resolve("main/services/fixtures/pi-legacy/uncompacted.jsonl"), "utf8")).split("\n");
+  const fixture = (
+    await readFile(path.resolve("main/services/fixtures/pi-legacy/uncompacted.jsonl"), "utf8")
+  ).split("\n");
   const header = JSON.parse(fixture[0]!) as Record<string, unknown>;
   header.id = "deferred-legacy";
   header.cwd = legacyRoot;

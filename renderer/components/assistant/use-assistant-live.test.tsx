@@ -4,13 +4,19 @@ import { LiveAudioDeviceError } from "../../lib/live-audio-devices.js";
 import type { DisplayMediaStream } from "../../lib/gemini-live-media-core.js";
 
 test("Live device preparation failure prevents provider start and surfaces recovery", async () => {
-  const fixture = await mountHook({ prepareAudioSession: async () => { throw new LiveAudioDeviceError("Choose another output in Aiden Live settings."); } });
+  const fixture = await mountHook({
+    prepareAudioSession: async () => {
+      throw new LiveAudioDeviceError("Choose another output in Aiden Live settings.");
+    },
+  });
   try {
     await fixture.controller().start();
     await settle();
     assert.equal(fixture.startCalls(), 0);
     assert.match(fixture.controller().error ?? "", /Choose another output/);
-  } finally { await fixture.unmount(); }
+  } finally {
+    await fixture.unmount();
+  }
 });
 
 test("cancelling device preparation fences provider start", async () => {
@@ -23,13 +29,20 @@ test("cancelling device preparation fences provider start", async () => {
     pending.resolve();
     await starting;
     assert.equal(fixture.startCalls(), 0);
-  } finally { await fixture.unmount(); }
+  } finally {
+    await fixture.unmount();
+  }
 });
 
 test("output preparation closes its context when cancelled during sink selection", async () => {
   const pending = deferred<void>();
   let closed = false;
-  const context = { setSinkId: () => pending.promise, close: async () => { closed = true; } } as unknown as AudioContext;
+  const context = {
+    setSinkId: () => pending.promise,
+    close: async () => {
+      closed = true;
+    },
+  } as unknown as AudioContext;
   const player = new PcmPlayer(() => context);
   const abort = new AbortController();
   const preparing = player.prepareOutput("speaker", abort.signal);
@@ -78,7 +91,11 @@ async function settle(): Promise<void> {
  * a busy runner the render and its effects can take more ticks than a fixed
  * number of `settle()` calls allows.
  */
-async function settleUntil(condition: () => boolean, waitingFor: string, timeoutMs = 2_000): Promise<void> {
+async function settleUntil(
+  condition: () => boolean,
+  waitingFor: string,
+  timeoutMs = 2_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!condition()) {
     if (Date.now() > deadline) throw new Error(`Timed out waiting for ${waitingFor}.`);
@@ -87,7 +104,9 @@ async function settleUntil(condition: () => boolean, waitingFor: string, timeout
 }
 
 /** start() does nothing until the mount-time Live status and microphone checks land. */
-async function settleUntilReadyToStart(fixture: { controller: () => AssistantLiveController }): Promise<void> {
+async function settleUntilReadyToStart(fixture: {
+  controller: () => AssistantLiveController;
+}): Promise<void> {
   await settleUntil(
     () => fixture.controller().available && fixture.controller().microphonePermission === "granted",
     "Live to be ready to start",
@@ -176,7 +195,11 @@ interface HookFixture {
   contexts: FakeCaptureContext[];
   tracks: FakeTrack[];
   player: RecordingPlayer;
-  startIntents(): Array<{ microphone: boolean; screen?: boolean; computerUseAuthorization: string | null }>;
+  startIntents(): Array<{
+    microphone: boolean;
+    screen?: boolean;
+    computerUseAuthorization: string | null;
+  }>;
   refreshAvailability(): Promise<void>;
   refreshApi(): Promise<void>;
   unmount(): Promise<void>;
@@ -372,7 +395,9 @@ test("connection cues wait for microphone readiness, deduplicate resume, and sou
   const media = deferred<MediaStream>();
   const fixture = await mountHook({
     getUserMedia: () => media.promise,
-    playConnectionCue: async (cue) => { cues.push(cue); },
+    playConnectionCue: async (cue) => {
+      cues.push(cue);
+    },
   });
   try {
     await settleUntilReadyToStart(fixture);
@@ -385,33 +410,53 @@ test("connection cues wait for microphone readiness, deduplicate resume, and sou
     await settleUntil(() => cues.length > 0, "the connected cue");
     assert.deepEqual(cues, ["connected"]);
     for (const state of ["resuming", "open", "open"] as const) {
-      fixture.emit({ type: "snapshot", snapshot: { available: true, reason: "available", sessionId: "session-1", state } });
+      fixture.emit({
+        type: "snapshot",
+        snapshot: { available: true, reason: "available", sessionId: "session-1", state },
+      });
       await settle();
     }
     assert.deepEqual(cues, ["connected"]);
     await fixture.controller().stop();
     await settleUntil(() => cues.length > 1, "the disconnected cue");
     assert.deepEqual(cues, ["connected", "disconnected"]);
-  } finally { await fixture.unmount(); }
+  } finally {
+    await fixture.unmount();
+  }
 });
 
 test("unexpected disconnect sounds once even if cue playback fails", async () => {
   const cues: string[] = [];
-  const fixture = await mountHook({ playConnectionCue: async (cue) => {
-    cues.push(cue);
-    throw new Error("audio unavailable");
-  } });
+  const fixture = await mountHook({
+    playConnectionCue: async (cue) => {
+      cues.push(cue);
+      throw new Error("audio unavailable");
+    },
+  });
   try {
     await settleUntilReadyToStart(fixture);
     await fixture.controller().start();
     await settleUntil(() => cues.length > 0, "the connected cue");
-    fixture.emit({ type: "snapshot", snapshot: { available: true, reason: "available", sessionId: "session-1", state: "disconnected" } });
+    fixture.emit({
+      type: "snapshot",
+      snapshot: {
+        available: true,
+        reason: "available",
+        sessionId: "session-1",
+        state: "disconnected",
+      },
+    });
     await settle();
-    fixture.emit({ type: "snapshot", snapshot: { available: true, reason: "available", state: "disconnected" } });
+    fixture.emit({
+      type: "snapshot",
+      snapshot: { available: true, reason: "available", state: "disconnected" },
+    });
     await settle();
     assert.deepEqual(cues, ["connected", "disconnected"]);
     assert.equal(fixture.controller().microphoneActive, false);
-  } finally { await fixture.unmount(); }
+  } finally {
+    await fixture.unmount();
+  }
 });
 
 test("provider refresh rechecks Live availability without remounting or reconnecting", async () => {
@@ -689,7 +734,10 @@ test("Linux Live is ready with a Google key alone and starts voice-only", async 
   try {
     const live = fixture.controller();
     assert.equal(live.microphonePermission, "granted");
-    assert.match(live.microphonePermissionDetail, /Linux doesn’t ask apps for microphone permission/u);
+    assert.match(
+      live.microphonePermissionDetail,
+      /Linux doesn’t ask apps for microphone permission/u,
+    );
     assert.equal(live.computerUseOffered, false);
     assert.equal(live.setupComplete, true);
     assert.equal(live.startBlockedReason, null);
@@ -705,7 +753,10 @@ test("Linux Live is ready with a Google key alone and starts voice-only", async 
 });
 
 test("an unreadable microphone status still blocks Live on a Mac", async () => {
-  const fixture = await mountHook({ platform: "darwin", getMicrophoneStatus: async () => "unknown" });
+  const fixture = await mountHook({
+    platform: "darwin",
+    getMicrophoneStatus: async () => "unknown",
+  });
   try {
     assert.equal(fixture.controller().microphonePermission, "unavailable");
     assert.equal(fixture.controller().setupComplete, false);
@@ -728,7 +779,10 @@ test("a Mac without Computer Use set up can still start Live without screen acti
     canRequestPermissions: false,
     permissions: { accessibility: null, screenRecording: null },
   };
-  const fixture = await mountHook({ platform: "darwin", computerUse: { status: async () => notReady } });
+  const fixture = await mountHook({
+    platform: "darwin",
+    computerUse: { status: async () => notReady },
+  });
   try {
     assert.equal(fixture.controller().computerUseOffered, true);
     assert.equal(fixture.controller().computerUseEnabled, false);
@@ -1109,7 +1163,12 @@ test("local microphone activity keeps decaying while four audio sends are backpr
 });
 
 test("a muted microphone sends Live silence and shows no level until unmuted, and a new session starts unmuted", async () => {
-  let snapshot: AssistantLiveSnapshot = { available: true, reason: "available", model: "gemini-live-test", state: "idle" };
+  let snapshot: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    state: "idle",
+  };
   const sent: Uint8Array[] = [];
   let starts = 0;
   const fixture = await mountHook({
@@ -1143,13 +1202,17 @@ test("a muted microphone sends Live silence and shows no level until unmuted, an
   fixture.worklets[0]?.emit({ type: "pcm", data: loud() });
   await settle();
   assert.equal(sent.length, 1, "Live keeps receiving audio so it hears the user stop");
-  assert.ok(sent[0]!.every((byte) => byte === 0), "muted audio is silence");
+  assert.ok(
+    sent[0]!.every((byte) => byte === 0),
+    "muted audio is silence",
+  );
   assert.equal(fixture.controller().microphoneLevel, 0);
 
   fixture.controller().setMicrophoneMuted(false);
   await settle();
   // The level is published every fourth frame.
-  for (let frame = 0; frame < 3; frame += 1) fixture.worklets[0]?.emit({ type: "pcm", data: loud() });
+  for (let frame = 0; frame < 3; frame += 1)
+    fixture.worklets[0]?.emit({ type: "pcm", data: loud() });
   await settle();
   assert.ok(sent[1]!.some((byte) => byte !== 0));
   assert.ok(fixture.controller().microphoneLevel > 0.7);
@@ -1194,7 +1257,8 @@ test("a faster speaking speed shortens what plays without dropping the barge-in 
   const tone = (samples: number) => {
     const pcm = new Uint8Array(samples * 2);
     const view = new DataView(pcm.buffer);
-    for (let n = 0; n < samples; n += 1) view.setInt16(n * 2, Math.round(8_000 * Math.sin((2 * Math.PI * 220 * n) / 24_000)), true);
+    for (let n = 0; n < samples; n += 1)
+      view.setInt16(n * 2, Math.round(8_000 * Math.sin((2 * Math.PI * 220 * n) / 24_000)), true);
     return pcm;
   };
   const player = new PcmPlayer(() => context);
@@ -1267,7 +1331,11 @@ function speechTone(samples: number, offset = 0) {
   const pcm = new Uint8Array(samples * 2);
   const view = new DataView(pcm.buffer);
   for (let n = 0; n < samples; n += 1) {
-    view.setInt16(n * 2, Math.round(8_000 * Math.sin((2 * Math.PI * 220 * (n + offset)) / 24_000)), true);
+    view.setInt16(
+      n * 2,
+      Math.round(8_000 * Math.sin((2 * Math.PI * 220 * (n + offset)) / 24_000)),
+      true,
+    );
   }
   return pcm;
 }
@@ -1701,8 +1769,18 @@ test("a pending exact voice approval survives bounded receipt eviction", async (
   await fixture.unmount();
 });
 
-function hearUser(text: string, extra: Partial<Extract<AssistantLiveRendererEvent, { type: "caption" }>> = {}): AssistantLiveRendererEvent {
-  return { type: "caption", sessionId: "session-1", direction: "input", text, final: true, ...extra };
+function hearUser(
+  text: string,
+  extra: Partial<Extract<AssistantLiveRendererEvent, { type: "caption" }>> = {},
+): AssistantLiveRendererEvent {
+  return {
+    type: "caption",
+    sessionId: "session-1",
+    direction: "input",
+    text,
+    final: true,
+    ...extra,
+  };
 }
 
 async function listenToVoiceInput(
@@ -1711,7 +1789,9 @@ async function listenToVoiceInput(
   const fixture = await mountHook(overrides);
   await fixture.controller().start();
   const heard: string[] = [];
-  const unsubscribe = liveSessionBus.onVoiceInput((input: LiveVoiceInput) => heard.push(input.text));
+  const unsubscribe = liveSessionBus.onVoiceInput((input: LiveVoiceInput) =>
+    heard.push(input.text),
+  );
   return {
     fixture,
     heard,
@@ -1747,7 +1827,11 @@ function micPacket(
   const data = new ArrayBuffer(640);
   const view = new DataView(data);
   for (let offset = 0; offset < data.byteLength; offset += 2) view.setInt16(offset, sample, true);
-  fixture.worklets[0]!.emit({ type: "pcm", data, ...(capturedUntil === undefined ? {} : { capturedUntil }) });
+  fixture.worklets[0]!.emit({
+    type: "pcm",
+    data,
+    ...(capturedUntil === undefined ? {} : { capturedUntil }),
+  });
 }
 
 test("a microphone's reported input latency widens what counts as spoken before a fence", async () => {
@@ -1788,8 +1872,14 @@ test("a fence taken before the microphone starts lets the first stamped speech a
   for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192, 0.02 * (index + 1));
   fixture.emit(hearUser("Allow", { finished: true }));
   unsubscribe();
-  assert.deepEqual(inputs.map((input) => input.text), ["Allow"]);
-  assert.ok(inputs[0]!.startedAt > fence, "everything this microphone captured came after the fence");
+  assert.deepEqual(
+    inputs.map((input) => input.text),
+    ["Allow"],
+  );
+  assert.ok(
+    inputs[0]!.startedAt > fence,
+    "everything this microphone captured came after the fence",
+  );
   await fixture.unmount();
 });
 
@@ -1808,8 +1898,14 @@ test("speech captured before a fence but handled long after it stays before the 
   for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192, 32 + index * 0.02);
   fixture.emit(hearUser("Yes do it", { finished: true }));
   unsubscribe();
-  assert.deepEqual(inputs.map((input) => input.text), ["Yes do it", "Yes do it"]);
-  assert.ok(inputs[0]!.startedAt <= fence, "captured before the fence, past the handled-audio guard");
+  assert.deepEqual(
+    inputs.map((input) => input.text),
+    ["Yes do it", "Yes do it"],
+  );
+  assert.ok(
+    inputs[0]!.startedAt <= fence,
+    "captured before the fence, past the handled-audio guard",
+  );
   assert.ok(inputs[1]!.startedAt > fence, "captured after the fence");
   await stop();
 });
@@ -1829,7 +1925,10 @@ test("an utterance keeps the start mark of its first caption, so speech begun be
   fixture.emit(hearUser("Allow"));
   fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
   unsubscribe();
-  assert.deepEqual(inputs.map((input) => input.text), ["Allow", "Allow"]);
+  assert.deepEqual(
+    inputs.map((input) => input.text),
+    ["Allow", "Allow"],
+  );
   assert.ok(inputs[0]!.startedAt <= fence, "begun before the fence, finished after it");
   assert.ok(inputs[1]!.startedAt > fence, "begun after the fence");
   await stop();
@@ -1849,7 +1948,10 @@ test("a fresh utterance right after a finished one lands after a fence taken bet
   for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192);
   fixture.emit(hearUser("Allow", { finished: true }));
   unsubscribe();
-  assert.deepEqual(inputs.map((input) => input.text), ["What was that", "Allow"]);
+  assert.deepEqual(
+    inputs.map((input) => input.text),
+    ["What was that", "Allow"],
+  );
   assert.ok(inputs[0]!.startedAt <= fence);
   assert.ok(inputs[1]!.startedAt > fence, "the second utterance began after the fence");
   await stop();
@@ -1868,9 +1970,18 @@ test("speech whose onset the microphone cannot vouch for never lands after a fen
   // Speech too quiet for the microphone to mark, captioned after the fence.
   fixture.emit(hearUser("Allow", { finished: true }));
   unsubscribe();
-  assert.deepEqual(inputs.map((input) => input.text), ["Allow", "Allow"]);
-  assert.ok(inputs[0]!.startedAt <= fence, "a caption later than the onset window stays before the fence");
-  assert.ok(inputs[1]!.startedAt <= fence, "speech the microphone never marked stays before the fence");
+  assert.deepEqual(
+    inputs.map((input) => input.text),
+    ["Allow", "Allow"],
+  );
+  assert.ok(
+    inputs[0]!.startedAt <= fence,
+    "a caption later than the onset window stays before the fence",
+  );
+  assert.ok(
+    inputs[1]!.startedAt <= fence,
+    "speech the microphone never marked stays before the fence",
+  );
   await stop();
 });
 
@@ -1895,7 +2006,10 @@ test("speech heard at the microphone before a fence keeps that start even when i
   for (let index = 0; index < 20; index += 1) packet(8_192);
   fixture.emit(hearUser("Allow", { finished: true }));
   unsubscribe();
-  assert.deepEqual(inputs.map((input) => input.text), ["Allow", "Allow"]);
+  assert.deepEqual(
+    inputs.map((input) => input.text),
+    ["Allow", "Allow"],
+  );
   assert.ok(inputs[0]!.startedAt <= fence, "spoken before the fence, captioned after it");
   assert.ok(inputs[1]!.startedAt > fence, "spoken after the fence");
   await stop();
@@ -1914,16 +2028,36 @@ test("a phrase split across pieces is heard whole and still matches", async () =
 test("the user's turn ends once, at whichever comes first: Live's reply, a finished mark, or silence", async () => {
   const replying = await listenToVoiceInput();
   replying.fixture.emit(hearUser("Bye"));
-  replying.fixture.emit({ type: "caption", sessionId: "session-1", direction: "output", text: "Goodbye", final: true });
+  replying.fixture.emit({
+    type: "caption",
+    sessionId: "session-1",
+    direction: "output",
+    text: "Goodbye",
+    final: true,
+  });
   replying.fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
-  assert.deepEqual(replying.heard, ["Bye"], "Live's first words end the turn, and the later turn end adds nothing");
-  replying.fixture.emit({ type: "audio", sessionId: "session-1", pcm: new Uint8Array(4), sampleRate: 24_000 });
+  assert.deepEqual(
+    replying.heard,
+    ["Bye"],
+    "Live's first words end the turn, and the later turn end adds nothing",
+  );
+  replying.fixture.emit({
+    type: "audio",
+    sessionId: "session-1",
+    pcm: new Uint8Array(4),
+    sampleRate: 24_000,
+  });
   assert.deepEqual(replying.heard, ["Bye"]);
   await replying.stop();
 
   const audio = await listenToVoiceInput();
   audio.fixture.emit(hearUser("Deny"));
-  audio.fixture.emit({ type: "audio", sessionId: "session-1", pcm: new Uint8Array(4), sampleRate: 24_000 });
+  audio.fixture.emit({
+    type: "audio",
+    sessionId: "session-1",
+    pcm: new Uint8Array(4),
+    sampleRate: 24_000,
+  });
   assert.deepEqual(audio.heard, ["Deny"], "Live's first sound ends the turn");
   await audio.stop();
 
@@ -1945,11 +2079,22 @@ test("the user's turn ends once, at whichever comes first: Live's reply, a finis
 
 test("talking over Live keeps one utterance through the cut-off reply's leftovers", async () => {
   const { fixture, heard, stop } = await listenToVoiceInput({ utteranceQuietMs: 40 });
-  const liveAudio: AssistantLiveRendererEvent = { type: "audio", sessionId: "session-1", pcm: new Uint8Array(4), sampleRate: 24_000 };
+  const liveAudio: AssistantLiveRendererEvent = {
+    type: "audio",
+    sessionId: "session-1",
+    pcm: new Uint8Array(4),
+    sampleRate: 24_000,
+  };
   fixture.emit(liveAudio); // Live is speaking
   fixture.emit(hearUser("Don't"));
   fixture.emit({ type: "playback_flush", sessionId: "session-1" });
-  fixture.emit({ type: "caption", sessionId: "session-1", direction: "output", text: "and then I", final: true });
+  fixture.emit({
+    type: "caption",
+    sessionId: "session-1",
+    direction: "output",
+    text: "and then I",
+    final: true,
+  });
   fixture.emit(liveAudio);
   fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
   fixture.emit(hearUser(" allow once"));
@@ -2461,7 +2606,11 @@ test("on Wayland the desktop portal picks, so Aiden binds without a source of it
   try {
     await fixture.controller().chooseScreenSource();
     await settle();
-    assert.equal(fixture.controller().screenSourceChoices, null, "Aiden shows no picker of its own");
+    assert.equal(
+      fixture.controller().screenSourceChoices,
+      null,
+      "Aiden shows no picker of its own",
+    );
     assert.deepEqual(boundSources, [undefined]);
     assert.equal(fixture.controller().screenSourceLabel, "Aiden window");
   } finally {
@@ -2475,7 +2624,9 @@ test("closing setup while Aiden's screen picker is open cancels it", async () =>
     ...dependencies.api!,
     displaySources: async () => ({
       mode: "list" as const,
-      sources: [{ id: "screen:0:0", name: "Entire screen", kind: "screen" as const, thumbnail: "" }],
+      sources: [
+        { id: "screen:0:0", name: "Entire screen", kind: "screen" as const, thumbnail: "" },
+      ],
     }),
   };
   const fixture = await mountHook({ ...dependencies, api, platform: "linux" });
@@ -2496,7 +2647,10 @@ test("closing setup while Aiden's screen picker is open cancels it", async () =>
 
 test("a Linux desktop with nothing to share says so", async () => {
   const { dependencies, state } = screenDependencies();
-  const api = { ...dependencies.api!, displaySources: async () => ({ mode: "list" as const, sources: [] }) };
+  const api = {
+    ...dependencies.api!,
+    displaySources: async () => ({ mode: "list" as const, sources: [] }),
+  };
   const fixture = await mountHook({ ...dependencies, api, platform: "linux" });
   try {
     await fixture.controller().chooseScreenSource();

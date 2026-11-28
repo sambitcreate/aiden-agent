@@ -25,19 +25,31 @@ const MAX_FILE_BYTES = 256 * 1024;
 const MAX_REMEMBERED = 1_000;
 
 /** The colours and fonts the style files in `root` set up, reading at most a dozen small files. */
-export async function findWorkspaceDesignSystem(root: string, signal?: AbortSignal): Promise<DetectedDesignSystem> {
+export async function findWorkspaceDesignSystem(
+  root: string,
+  signal?: AbortSignal,
+): Promise<DetectedDesignSystem> {
   const index = await listWorkspaceFiles(root, signal);
   const candidates = index.entries
-    .filter((entry) => entry.kind === "file" && !entry.symbolic && (entry.size ?? 0) <= MAX_FILE_BYTES)
+    .filter(
+      (entry) => entry.kind === "file" && !entry.symbolic && (entry.size ?? 0) <= MAX_FILE_BYTES,
+    )
     .filter((entry) => !isProtectedCredentialPath(entry.path, "file"))
     .map((entry) => ({ path: entry.path, rank: designSystemFileRank(entry.path) }))
     .filter((entry) => entry.rank > 0)
-    .sort((left, right) => right.rank - left.rank || left.path.split("/").length - right.path.split("/").length || left.path.localeCompare(right.path))
+    .sort(
+      (left, right) =>
+        right.rank - left.rank ||
+        left.path.split("/").length - right.path.split("/").length ||
+        left.path.localeCompare(right.path),
+    )
     .slice(0, MAX_FILES);
   const files: DesignSystemFile[] = [];
   for (const candidate of candidates) {
     try {
-      const document = await readWorkspaceFile(root, candidate.path, signal, { maxBytes: MAX_FILE_BYTES });
+      const document = await readWorkspaceFile(root, candidate.path, signal, {
+        maxBytes: MAX_FILE_BYTES,
+      });
       files.push({ path: document.path, text: document.content });
     } catch (error) {
       if (signal?.aborted) throw error;
@@ -100,7 +112,9 @@ export class DesignSystemOffers {
     this.claimed.add(key);
     let line = "";
     try {
-      line = designSystemOfferLine(await (this.options.find ?? findWorkspaceDesignSystem)(folder, signal));
+      line = designSystemOfferLine(
+        await (this.options.find ?? findWorkspaceDesignSystem)(folder, signal),
+      );
     } catch (error) {
       // An aborted turn may look again next time; anything else is skipped for this run.
       if (signal?.aborted) this.claimed.delete(key);
@@ -130,7 +144,9 @@ export class DesignSystemOffers {
   }
 
   private async keyFor(folder: string): Promise<string> {
-    return createHmac("sha256", await this.loadHashKey()).update(folder).digest("hex");
+    return createHmac("sha256", await this.loadHashKey())
+      .update(folder)
+      .digest("hex");
   }
 
   /**
@@ -165,8 +181,16 @@ export class DesignSystemOffers {
       .readFile(this.options.file(), "utf8")
       .then((text) => {
         const parsed = JSON.parse(text) as Partial<OffersFile>;
-        const entries = parsed?.version === 2 && parsed.offered && typeof parsed.offered === "object" ? Object.entries(parsed.offered) : [];
-        return new Map(entries.filter((entry): entry is [string, number] => HEX_KEY.test(entry[0]) && Number.isFinite(entry[1])));
+        const entries =
+          parsed?.version === 2 && parsed.offered && typeof parsed.offered === "object"
+            ? Object.entries(parsed.offered)
+            : [];
+        return new Map(
+          entries.filter(
+            (entry): entry is [string, number] =>
+              HEX_KEY.test(entry[0]) && Number.isFinite(entry[1]),
+          ),
+        );
       })
       // A missing or unreadable log counts as empty: at worst a workspace is offered once more.
       .catch(() => new Map<string, number>());
@@ -175,14 +199,19 @@ export class DesignSystemOffers {
 
   private save(offered: Map<string, number>): Promise<void> {
     const write = this.writes.then(async () => {
-      const kept = [...offered.entries()].sort((left, right) => right[1] - left[1]).slice(0, MAX_REMEMBERED);
+      const kept = [...offered.entries()]
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, MAX_REMEMBERED);
       if (kept.length < offered.size) {
         offered.clear();
         for (const [key, at] of kept) offered.set(key, at);
       }
       const file = this.options.file();
       await fs.mkdir(path.dirname(file), { recursive: true });
-      await writeJsonAtomic(file, { version: 2, offered: Object.fromEntries(kept) } satisfies OffersFile);
+      await writeJsonAtomic(file, {
+        version: 2,
+        offered: Object.fromEntries(kept),
+      } satisfies OffersFile);
     });
     this.writes = write.catch(() => undefined);
     return write;

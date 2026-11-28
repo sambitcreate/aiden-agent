@@ -12,7 +12,12 @@ import { AppCommandPalette } from "./command-palette";
 
 afterEach(cleanup);
 
-const workspace = { id: "ws-1", name: "Project", folderPath: "/tmp/project", permission: "ask" } as Workspace;
+const workspace = {
+  id: "ws-1",
+  name: "Project",
+  folderPath: "/tmp/project",
+  permission: "ask",
+} as Workspace;
 const november = new Date(2026, 10, 11, 11, 11).getTime();
 
 function chat(id: string, title: string, updatedAt = november): ChatMeta {
@@ -103,11 +108,15 @@ test("a long chat list shows a page of chats and a Show more row that reveals th
     chat(`c${index}`, `Chat ${String(index).padStart(2, "0")}`, november - index),
   );
   const input = await openChatSearch(many);
-  const selected = () => document.querySelector("[cmdk-item][aria-selected='true']")?.textContent ?? "";
+  const selected = () =>
+    document.querySelector("[cmdk-item][aria-selected='true']")?.textContent ?? "";
 
   // New chat, the 50 newest chats, then Show more.
   await waitFor(() => assert.equal(optionNames().length, 52));
-  assert.equal(screen.getAllByRole("option")[51].getAttribute("aria-label"), "Show 20 more, 20 not shown");
+  assert.equal(
+    screen.getAllByRole("option")[51].getAttribute("aria-label"),
+    "Show 20 more, 20 not shown",
+  );
   assert.ok(!screen.queryByText("Chat 50"));
 
   fireEvent.keyDown(input, { key: "End" });
@@ -130,5 +139,8 @@ test("a long chat list shows a page of chats and a Show more row that reveals th
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 550));
   });
-  assert.equal(document.querySelector("[cmdk-root] [aria-live='polite']")?.textContent, "71 results");
+  assert.equal(
+    document.querySelector("[cmdk-root] [aria-live='polite']")?.textContent,
+    "71 results",
+  );
 });

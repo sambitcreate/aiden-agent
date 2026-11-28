@@ -12,16 +12,25 @@ import { MemoryStore } from "./memory-store.js";
  */
 export const memoryStore = new MemoryStore({
   root: () => path.join(aidenConfigDir(), "memory"),
-  imports: async () => [{
-    file: path.join((await import("../platform.js")).app.getPath("userData"), "memory", "memory-v1.sqlite"),
-  }],
-  scopeAliases: async () => (await configStore.listWorkspaces()).flatMap((workspace) =>
-    // No workspace chats keep the default workspace's id scope (see memoryScopeForChat).
-    workspace.folderPath && !workspace.noWorkspace
-      ? [{
-          from: { kind: "workspace" as const, id: workspace.id },
-          to: { kind: "workspace" as const, id: sharedWorkspaceScopeId(workspace.folderPath) },
-        }]
-      : [],
-  ),
+  imports: async () => [
+    {
+      file: path.join(
+        (await import("../platform.js")).app.getPath("userData"),
+        "memory",
+        "memory-v1.sqlite",
+      ),
+    },
+  ],
+  scopeAliases: async () =>
+    (await configStore.listWorkspaces()).flatMap((workspace) =>
+      // No workspace chats keep the default workspace's id scope (see memoryScopeForChat).
+      workspace.folderPath && !workspace.noWorkspace
+        ? [
+            {
+              from: { kind: "workspace" as const, id: workspace.id },
+              to: { kind: "workspace" as const, id: sharedWorkspaceScopeId(workspace.folderPath) },
+            },
+          ]
+        : [],
+    ),
 });

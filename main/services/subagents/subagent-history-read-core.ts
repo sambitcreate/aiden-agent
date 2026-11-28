@@ -26,9 +26,7 @@ interface HistoricalChat {
   }>;
 }
 
-export async function readSubagentHistoryDetailForOwner<
-  Snapshot extends SubagentRunSnapshot,
->(
+export async function readSubagentHistoryDetailForOwner<Snapshot extends SubagentRunSnapshot>(
   owner: RendererDocumentOwner,
   chatId: string,
   runId: string,
@@ -135,9 +133,7 @@ function requireActiveOwner(owner: RendererDocumentOwner): void {
 }
 
 /** Keep the exact invoking document authoritative across both asynchronous reads. */
-export async function readSubagentHistoryForOwner<
-  Snapshot extends SubagentRunSnapshot,
->(
+export async function readSubagentHistoryForOwner<Snapshot extends SubagentRunSnapshot>(
   owner: RendererDocumentOwner,
   chatId: string,
   runId: string,

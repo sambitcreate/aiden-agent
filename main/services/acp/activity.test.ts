@@ -40,14 +40,31 @@ test("large concurrent and completed tool payloads stay bounded without losing f
     globalThis.gc();
     console.log(JSON.stringify({ completedBytes, activeBytes, terminalBytes: process.memoryUsage().heapUsed - baseline, results: results.map(item => [item.status, item.lineChanges]), repeated: repeated.lineChanges }));
   `;
-  const measured = JSON.parse(execFileSync(process.execPath, ["--expose-gc", "--import", "tsx", "--input-type=module", "-e", script], { encoding: "utf8", timeout: 30_000 })) as {
-    completedBytes: number; activeBytes: number; terminalBytes: number;
+  const measured = JSON.parse(
+    execFileSync(
+      process.execPath,
+      ["--expose-gc", "--import", "tsx", "--input-type=module", "-e", script],
+      { encoding: "utf8", timeout: 30_000 },
+    ),
+  ) as {
+    completedBytes: number;
+    activeBytes: number;
+    terminalBytes: number;
     results: Array<[string, { additions: number; deletions: number }]>;
     repeated: { additions: number; deletions: number };
   };
-  assert.ok(measured.completedBytes < 16 * 1024 * 1024, `completed payloads retained ${measured.completedBytes} bytes`);
-  assert.ok(measured.activeBytes < 32 * 1024 * 1024, `active payloads retained ${measured.activeBytes} bytes`);
-  assert.ok(measured.terminalBytes < 16 * 1024 * 1024, `terminal payloads retained ${measured.terminalBytes} bytes`);
+  assert.ok(
+    measured.completedBytes < 16 * 1024 * 1024,
+    `completed payloads retained ${measured.completedBytes} bytes`,
+  );
+  assert.ok(
+    measured.activeBytes < 32 * 1024 * 1024,
+    `active payloads retained ${measured.activeBytes} bytes`,
+  );
+  assert.ok(
+    measured.terminalBytes < 16 * 1024 * 1024,
+    `terminal payloads retained ${measured.terminalBytes} bytes`,
+  );
   assert.equal(measured.results.length, 32);
   for (const [status, counts] of measured.results) {
     assert.equal(status, "completed");
@@ -58,11 +75,20 @@ test("large concurrent and completed tool payloads stay bounded without losing f
 
 test("argument-only chunks checkpoint on the tenth update; visible changes and terminals report immediately", () => {
   const tracker = new AcpToolCallTracker();
-  const first = tracker.merge({ toolCallId: "stream", title: "Edit", kind: "edit", status: "in_progress" });
+  const first = tracker.merge({
+    toolCallId: "stream",
+    title: "Edit",
+    kind: "edit",
+    status: "in_progress",
+  });
   assert.equal(shouldReportToolUpdate(undefined, first, "in_progress", 0), true);
   let previous = first;
   for (let chunk = 1; chunk <= 10; chunk += 1) {
-    const next = tracker.merge({ toolCallId: "stream", rawInput: { chunk }, content: [{ type: "diff", path: `${root}/a.ts`, oldText: "", newText: "x".repeat(chunk) }] });
+    const next = tracker.merge({
+      toolCallId: "stream",
+      rawInput: { chunk },
+      content: [{ type: "diff", path: `${root}/a.ts`, oldText: "", newText: "x".repeat(chunk) }],
+    });
     assert.equal(shouldReportToolUpdate(previous, next, undefined, chunk - 1), chunk === 10);
     previous = next;
   }
@@ -94,13 +120,30 @@ test("argument-only chunks checkpoint on the tenth update; visible changes and t
 
 test("an unprojected diff survives completion without content and replaces cached line counts", () => {
   const tracker = new AcpToolCallTracker();
-  const diff = { type: "diff" as const, path: `${root}/a.ts`, oldText: "keep\nold\n", newText: "keep\nnew\n" };
-  const first = tracker.apply({ toolCallId: "stream", title: "Edit", kind: "edit", status: "in_progress", content: [diff] });
+  const diff = {
+    type: "diff" as const,
+    path: `${root}/a.ts`,
+    oldText: "keep\nold\n",
+    newText: "keep\nnew\n",
+  };
+  const first = tracker.apply({
+    toolCallId: "stream",
+    title: "Edit",
+    kind: "edit",
+    status: "in_progress",
+    content: [diff],
+  });
   assert.deepEqual(first.lineChanges, { additions: 1, deletions: 1 });
-  const unchanged = tracker.apply({ toolCallId: "stream", content: [{ ...diff }, { type: "content", content: { type: "text", text: "working" } }] });
+  const unchanged = tracker.apply({
+    toolCallId: "stream",
+    content: [{ ...diff }, { type: "content", content: { type: "text", text: "working" } }],
+  });
   assert.deepEqual(unchanged.lineChanges, { additions: 1, deletions: 1 });
   tracker.merge({ toolCallId: "stream", content: [{ ...diff, newText: "keep\nnew\nextra\n" }] });
-  tracker.apply({ toolCallId: "stream", content: [{ type: "content", content: { type: "text", text: "done writing" } }] });
+  tracker.apply({
+    toolCallId: "stream",
+    content: [{ type: "content", content: { type: "text", text: "done writing" } }],
+  });
   const completed = tracker.apply({ toolCallId: "stream", status: "completed" });
   assert.equal(completed.status, "completed");
   assert.deepEqual(completed.lineChanges, { additions: 2, deletions: 1 });
@@ -108,7 +151,13 @@ test("an unprojected diff survives completion without content and replaces cache
 
 test("updates merge into one activity, keeping fields an update leaves out", () => {
   const tracker = new AcpToolCallTracker();
-  tracker.apply({ toolCallId: "1", title: "Edit file", kind: "edit", status: "pending", locations: [{ path: `${root}/a.ts` }] });
+  tracker.apply({
+    toolCallId: "1",
+    title: "Edit file",
+    kind: "edit",
+    status: "pending",
+    locations: [{ path: `${root}/a.ts` }],
+  });
   const updated = tracker.apply({
     toolCallId: "1",
     status: "completed",
@@ -135,7 +184,11 @@ test("a diff without previous text is a new file", () => {
 
 test("timeline steps use workspace-relative targets and never expose raw commands", () => {
   const tracker = new AcpToolCallTracker();
-  const command = tracker.apply({ toolCallId: "3", title: "rm -rf / --no-preserve-root", kind: "execute" });
+  const command = tracker.apply({
+    toolCallId: "3",
+    title: "rm -rf / --no-preserve-root",
+    kind: "execute",
+  });
   const step = timelineStepFor(command, [root]);
   assert.equal(step?.toolName, "run_command");
   const descriptor = safeToolDescriptor(step!.toolName, step!.args);
@@ -144,24 +197,46 @@ test("timeline steps use workspace-relative targets and never expose raw command
   assert.equal(descriptor.detail, "a command");
   assert.doesNotMatch(JSON.stringify(step), /rm -rf/u);
 
-  const read = tracker.apply({ toolCallId: "4", title: "Read", kind: "read", locations: [{ path: `${root}/src/a.ts` }] });
+  const read = tracker.apply({
+    toolCallId: "4",
+    title: "Read",
+    kind: "read",
+    locations: [{ path: `${root}/src/a.ts` }],
+  });
   const readStep = timelineStepFor(read, [root]);
-  assert.deepEqual(safeToolDescriptor(readStep!.toolName, readStep!.args), { label: "Read file", target: "src/a.ts" });
+  assert.deepEqual(safeToolDescriptor(readStep!.toolName, readStep!.args), {
+    label: "Read file",
+    target: "src/a.ts",
+  });
 
-  const outside = tracker.apply({ toolCallId: "5", title: "Read", kind: "read", locations: [{ path: "/etc/passwd" }] });
+  const outside = tracker.apply({
+    toolCallId: "5",
+    title: "Read",
+    kind: "read",
+    locations: [{ path: "/etc/passwd" }],
+  });
   assert.deepEqual(timelineStepFor(outside, [root])?.args, {});
 });
 
 test("thinking and mode switches produce no timeline row", () => {
   const tracker = new AcpToolCallTracker();
-  assert.equal(timelineStepFor(tracker.apply({ toolCallId: "6", title: "t", kind: "think" }), [root]), undefined);
-  assert.equal(timelineStepFor(tracker.apply({ toolCallId: "7", title: "m", kind: "switch_mode" }), [root]), undefined);
+  assert.equal(
+    timelineStepFor(tracker.apply({ toolCallId: "6", title: "t", kind: "think" }), [root]),
+    undefined,
+  );
+  assert.equal(
+    timelineStepFor(tracker.apply({ toolCallId: "7", title: "m", kind: "switch_mode" }), [root]),
+    undefined,
+  );
 });
 
 test("titles are single-line and bounded", () => {
   const tracker = new AcpToolCallTracker();
   const bell = String.fromCharCode(7);
-  const activity = tracker.apply({ toolCallId: "8", title: `line one\nline two${bell}${"x".repeat(500)}` });
+  const activity = tracker.apply({
+    toolCallId: "8",
+    title: `line one\nline two${bell}${"x".repeat(500)}`,
+  });
   assert.ok(!activity.title.includes("\n") && !activity.title.includes(bell));
   assert.ok(activity.title.length <= 240);
 });

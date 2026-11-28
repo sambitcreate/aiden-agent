@@ -15,7 +15,10 @@ import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import type { Attachment } from "./types.js";
 
-const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 function visualReferencing(markup: string): ChatUiVisualV1 {
   const compiled = compileAum(markup);
@@ -33,7 +36,15 @@ function visualReferencing(markup: string): ChatUiVisualV1 {
 }
 
 function image(id: string, overrides: Partial<Attachment> = {}): Attachment {
-  return { id, name: `${id}.png`, mimeType: "image/png", kind: "image", size: PNG.length, data: PNG.toString("base64"), ...overrides };
+  return {
+    id,
+    name: `${id}.png`,
+    mimeType: "image/png",
+    kind: "image",
+    size: PNG.length,
+    data: PNG.toString("base64"),
+    ...overrides,
+  };
 }
 
 const MESSAGE_IMAGES: Attachment[] = [
@@ -80,7 +91,11 @@ test("a computed image reference draws every eligible message image, since its i
 });
 
 function job(chatId: string, visualIds: string[]): VisualSnapshotJob {
-  return { chatId, messageId: "m-1", visuals: visualIds.map((visualId) => ({ kind: "html", visualId, title: visualId })) };
+  return {
+    chatId,
+    messageId: "m-1",
+    visuals: visualIds.map((visualId) => ({ kind: "html", visualId, title: visualId })),
+  };
 }
 
 function deferred() {
@@ -96,7 +111,12 @@ test("attachment ids are reserved and stable per chat, message, and visual", () 
   assert.equal(isVisualSnapshotAttachmentId(id), true);
   assert.equal(visualSnapshotAttachmentId("chat", "m-1", "ui-1"), id);
   assert.notEqual(visualSnapshotAttachmentId("chat", "m-1", "ui-2"), id);
-  const attachment = snapshotAttachment("chat", "m-1", { visualId: "ui-1", title: "Q3 / revenue", bytes: PNG, mimeType: "image/png" });
+  const attachment = snapshotAttachment("chat", "m-1", {
+    visualId: "ui-1",
+    title: "Q3 / revenue",
+    bytes: PNG,
+    mimeType: "image/png",
+  });
   assert.equal(attachment.id, id);
   assert.equal(attachment.name, "Q3 revenue.png");
   assert.equal(attachment.size, PNG.length);
@@ -124,7 +144,10 @@ test("jobs run one capture at a time, in order, and store only successes", async
   queue.enqueue(job("b", ["b1"]));
   await queue.idle();
   assert.deepEqual(order, ["a1", "bad", "a2", "b1"]);
-  assert.deepEqual(stored, [{ chatId: "a", ids: ["a1", "a2"] }, { chatId: "b", ids: ["b1"] }]);
+  assert.deepEqual(stored, [
+    { chatId: "a", ids: ["a1", "a2"] },
+    { chatId: "b", ids: ["b1"] },
+  ]);
 });
 
 test("a capture that never finishes is abandoned after the timeout and the queue moves on", async () => {

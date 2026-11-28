@@ -18,11 +18,13 @@ test("omits the Apple connection away from macOS", () => {
 
 test("reports OS and hardware gates before invoking the helper", () => {
   assert.equal(
-    platformFoundationModelsStatus({ platform: "darwin", arch: "arm64", systemVersion: "25.6" })?.state,
+    platformFoundationModelsStatus({ platform: "darwin", arch: "arm64", systemVersion: "25.6" })
+      ?.state,
     "unsupported_os",
   );
   assert.equal(
-    platformFoundationModelsStatus({ platform: "darwin", arch: "x64", systemVersion: "26.0" })?.state,
+    platformFoundationModelsStatus({ platform: "darwin", arch: "x64", systemVersion: "26.0" })
+      ?.state,
     "device_not_eligible",
   );
   assert.equal(
@@ -52,7 +54,9 @@ test("deduplicates and caches status reads", async () => {
   let now = 1_000;
   let calls = 0;
   let release!: () => void;
-  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const connection = createFoundationModelsConnection({
     platform: "darwin",
     arch: "arm64",
@@ -154,7 +158,11 @@ test("stopping the helper never signals a process that reused its recorded PID",
   assert.equal(await stopRecordedHelperProcess("4242\n", helperApp, dependencies), true);
   assert.equal(await stopRecordedHelperProcess("5151", helperApp, dependencies), false);
   assert.equal(await stopRecordedHelperProcess("6161", helperApp, dependencies), false);
-  assert.equal(await stopRecordedHelperProcess("7171", helperApp, dependencies), false, "an exited helper");
+  assert.equal(
+    await stopRecordedHelperProcess("7171", helperApp, dependencies),
+    false,
+    "an exited helper",
+  );
   assert.equal(await stopRecordedHelperProcess("1", helperApp, dependencies), false);
   assert.equal(await stopRecordedHelperProcess("42abc", helperApp, dependencies), false);
   assert.deepEqual(signalled, [[4242, "SIGTERM"]]);
@@ -195,7 +203,11 @@ test("quit waits for a helper stop whose identity lookup is still running, withi
   // The budget timer is unref'd so it never holds the process open; keep the test loop alive.
   const keepAlive = setInterval(() => undefined, 1_000);
   try {
-    assert.equal(await wedged.settleWithin(20), false, "a lookup that never answers cannot hold quit past the budget");
+    assert.equal(
+      await wedged.settleWithin(20),
+      false,
+      "a lookup that never answers cannot hold quit past the budget",
+    );
   } finally {
     clearInterval(keepAlive);
   }

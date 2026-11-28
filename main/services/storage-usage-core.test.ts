@@ -143,7 +143,10 @@ test("a sparse file counts the space it really occupies, not its reserved size",
     await handle.close();
     const measured = await measurePathBytes(root, createStorageScanBudget());
     if (process.platform !== "win32") {
-      assert.ok(measured.bytes < 16 * 1024 * 1024, `a 512 MB sparse file reported ${measured.bytes} bytes`);
+      assert.ok(
+        measured.bytes < 16 * 1024 * 1024,
+        `a 512 MB sparse file reported ${measured.bytes} bytes`,
+      );
     }
     assert.ok(measured.bytes > 0);
   } finally {
@@ -157,7 +160,10 @@ test("a hard-linked file counts once across the whole scan", async () => {
   try {
     await writeFileWithBytes(path.join(root, "chats", "images", "aa", "picture"), 200_000);
     await fs.mkdir(path.join(root, "create-images"), { recursive: true });
-    await fs.link(path.join(root, "chats", "images", "aa", "picture"), path.join(root, "create-images", "picture"));
+    await fs.link(
+      path.join(root, "chats", "images", "aa", "picture"),
+      path.join(root, "create-images", "picture"),
+    );
     const one = await allocated(path.join(root, "chats", "images", "aa", "picture"));
     const budget = createStorageScanBudget();
     const chats = await measurePathBytes(path.join(root, "chats"), budget);
@@ -259,13 +265,19 @@ test("the report total is the sum of its categories, and items are sorted by siz
       { id: "threads", bytes: 700, itemCount: 3 },
       { id: "worktrees", bytes: 300, itemCount: 1 },
     ],
-    worktrees: [classifyWorktree(worktreeFacts({ bytes: 10 }), NOW), classifyWorktree(worktreeFacts({ workspaceId: "ws-2", bytes: 90 }), NOW)],
+    worktrees: [
+      classifyWorktree(worktreeFacts({ bytes: 10 }), NOW),
+      classifyWorktree(worktreeFacts({ workspaceId: "ws-2", bytes: 90 }), NOW),
+    ],
     threads: [classifyThread(threadFacts({ bytes: 5 }), NOW)],
     browserCacheBytes: 0,
     scan: { status: "ready", scannedAt: NOW, error: null, truncated: false },
   });
   assert.equal(report.totalBytes, 1_000);
-  assert.deepEqual(report.worktrees.map((entry) => entry.workspaceId), ["ws-2", "ws-1"]);
+  assert.deepEqual(
+    report.worktrees.map((entry) => entry.workspaceId),
+    ["ws-2", "ws-1"],
+  );
 });
 
 test("an empty report still lists every category so the bar has a stable shape", () => {
@@ -296,7 +308,10 @@ test("a category's share of the bar adds up and is never above 100 percent", () 
   assert.equal(storageSharePercent(25, 100), 25);
   assert.equal(storageSharePercent(200, 100), 100);
   const quarters = [25, 25, 25, 25].map((bytes) => storageSharePercent(bytes, 100));
-  assert.equal(quarters.reduce((total, value) => total + value, 0), 100);
+  assert.equal(
+    quarters.reduce((total, value) => total + value, 0),
+    100,
+  );
 });
 
 test("idle days floor at zero and unknown use stays unknown", () => {
@@ -331,7 +346,10 @@ test("unpushed commits protect a worktree", () => {
 
 test("a worktree a chat is using, or Aiden is changing, is protected", () => {
   assert.equal(classifyWorktree(worktreeFacts({ active: true }), NOW).protectionReason, "active");
-  assert.equal(classifyWorktree(worktreeFacts({ changing: true }), NOW).protectionReason, "changing");
+  assert.equal(
+    classifyWorktree(worktreeFacts({ changing: true }), NOW).protectionReason,
+    "changing",
+  );
 });
 
 test("a worktree whose Git state could not be read is never treated as safe", () => {
@@ -340,12 +358,18 @@ test("a worktree whose Git state could not be read is never treated as safe", ()
   const view = classifyWorktree(worktreeFacts({ gitStateKnown: false }), NOW);
   assert.equal(view.protected, true);
   assert.equal(view.protectionReason, "unknown-git-state");
-  assert.equal(worktreeProtectionReason(worktreeFacts({ gitStateKnown: false })), "unknown-git-state");
+  assert.equal(
+    worktreeProtectionReason(worktreeFacts({ gitStateKnown: false })),
+    "unknown-git-state",
+  );
 });
 
 test("a worktree a scheduled task runs in is kept, and so is every worktree when tasks can't be read", () => {
   // Removing the workspace would stop its scheduled tasks for good.
-  assert.equal(classifyWorktree(worktreeFacts({ routineCount: 2 }), NOW).protectionReason, "routine");
+  assert.equal(
+    classifyWorktree(worktreeFacts({ routineCount: 2 }), NOW).protectionReason,
+    "routine",
+  );
   assert.equal(
     classifyWorktree(worktreeFacts({ routineCount: null }), NOW).protectionReason,
     "unknown-routines",
@@ -381,11 +405,17 @@ test("worktree cleanup removes only idle, clean worktrees and explains every ski
     classifyWorktree(worktreeFacts({ workspaceId: "idle", bytes: 4_000 }), NOW),
     classifyWorktree(worktreeFacts({ workspaceId: "dirty", uncommitted: 3, bytes: 3_000 }), NOW),
     classifyWorktree(worktreeFacts({ workspaceId: "unpushed", unpushed: 2, bytes: 2_000 }), NOW),
-    classifyWorktree(worktreeFacts({ workspaceId: "recent", lastUsedAt: NOW - 2 * DAY, bytes: 1_000 }), NOW),
+    classifyWorktree(
+      worktreeFacts({ workspaceId: "recent", lastUsedAt: NOW - 2 * DAY, bytes: 1_000 }),
+      NOW,
+    ),
     classifyWorktree(worktreeFacts({ workspaceId: "busy", active: true, bytes: 500 }), NOW),
   ];
   const plan = planWorktreeCleanup(worktrees, { inactiveDays: 14, now: NOW });
-  assert.deepEqual(plan.items.map((item) => item.id), ["idle"]);
+  assert.deepEqual(
+    plan.items.map((item) => item.id),
+    ["idle"],
+  );
   assert.equal(plan.totalBytes, 4_000);
   assert.deepEqual(
     plan.skipped.map((entry) => [entry.id, entry.reason]),
@@ -426,13 +456,21 @@ test("an explicitly chosen item is removable even when it was used recently", ()
     now: NOW,
     targetIds: ["warm"],
   });
-  assert.deepEqual(explicit.items.map((item) => item.id), ["warm"]);
+  assert.deepEqual(
+    explicit.items.map((item) => item.id),
+    ["warm"],
+  );
   const idleWindow = planWorktreeCleanup(worktrees, { inactiveDays: 14, now: NOW });
   assert.equal(idleWindow.items.length, 0);
 });
 
 test("an explicitly chosen pinned thread is still kept", () => {
-  const threads = [classifyThread(threadFacts({ chatId: "pinned", pinned: true, lastUsedAt: NOW - 400 * DAY }), NOW)];
+  const threads = [
+    classifyThread(
+      threadFacts({ chatId: "pinned", pinned: true, lastUsedAt: NOW - 400 * DAY }),
+      NOW,
+    ),
+  ];
   const plan = planThreadCleanup(threads, { inactiveDays: 30, now: NOW, targetIds: ["pinned"] });
   assert.equal(plan.items.length, 0);
   assert.equal(plan.skipped[0]?.reason, "pinned");
@@ -447,7 +485,10 @@ test("chat cleanup never sweeps: without a named chat nothing is planned", () =>
   assert.equal(sweep.items.length, 0);
   assert.equal(sweep.skipped.length, 0);
   const named = planThreadCleanup(threads, { inactiveDays: 7, now: NOW, targetIds: ["old"] });
-  assert.deepEqual(named.items.map((item) => item.id), ["old"]);
+  assert.deepEqual(
+    named.items.map((item) => item.id),
+    ["old"],
+  );
   assert.equal(named.totalBytes, 800);
 });
 
@@ -468,7 +509,11 @@ test("a default plan for each action reaches the right categories", () => {
   );
   assert.equal(worktrees.items.length, 1);
   const threads = planStorageCleanup(
-    { action: "delete-threads", inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS, targetIds: ["chat-1"] },
+    {
+      action: "delete-threads",
+      inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS,
+      targetIds: ["chat-1"],
+    },
     report,
     NOW,
   );
@@ -489,7 +534,11 @@ test("log cleanup offers nothing when there is nothing to clear", () => {
 test("every planned item has a positive-or-zero size and a label, so the dialog can list it", () => {
   const previews: StorageCleanupPreview[] = [
     planWorktreeCleanup([classifyWorktree(worktreeFacts(), NOW)], { inactiveDays: 14, now: NOW }),
-    planThreadCleanup([classifyThread(threadFacts(), NOW)], { inactiveDays: 30, now: NOW, targetIds: ["chat-1"] }),
+    planThreadCleanup([classifyThread(threadFacts(), NOW)], {
+      inactiveDays: 30,
+      now: NOW,
+      targetIds: ["chat-1"],
+    }),
     planBrowserCacheCleanup(14, 5_000),
     planStorageCleanup(
       { action: "clear-logs", inactiveDays: 14 },
@@ -514,7 +563,10 @@ test("browser cache cleanup offers the cached share only, and nothing when it is
   assert.equal(planBrowserCacheCleanup(14, 0).items.length, 0);
   const plan = planStorageCleanup(
     { action: "clear-browser-cache", inactiveDays: 14 },
-    { ...reportWith([], [], [{ id: "browser", bytes: 9_000, itemCount: 3 }]), browserCacheBytes: 4_000 },
+    {
+      ...reportWith([], [], [{ id: "browser", bytes: 9_000, itemCount: 3 }]),
+      browserCacheBytes: 4_000,
+    },
     NOW,
   );
   assert.equal(plan.totalBytes, 4_000, "sign-ins and site data are not part of what it frees");
@@ -527,7 +579,11 @@ test("browser cache cleanup offers the cached share only, and nothing when it is
     },
     NOW,
   );
-  assert.equal(partial.totalComplete, false, "a partly measured browser profile makes the cache amount a minimum");
+  assert.equal(
+    partial.totalComplete,
+    false,
+    "a partly measured browser profile makes the cache amount a minimum",
+  );
 });
 
 test("categories measured in several pieces are complete only when every piece is", () => {
@@ -536,12 +592,15 @@ test("categories measured in several pieces are complete only when every piece i
     { id: "browser", bytes: 2_000, itemCount: 2, complete: false },
     { id: "logs", bytes: 500, itemCount: 1 },
   ]);
-  assert.deepEqual(ordered.find((category) => category.id === "browser"), {
-    id: "browser",
-    bytes: 3_000,
-    itemCount: 3,
-    complete: false,
-  });
+  assert.deepEqual(
+    ordered.find((category) => category.id === "browser"),
+    {
+      id: "browser",
+      bytes: 3_000,
+      itemCount: 3,
+      complete: false,
+    },
+  );
   assert.equal(ordered.find((category) => category.id === "logs")?.complete, true);
 });
 
@@ -556,14 +615,8 @@ test("a worktree measured only partly marks the preview's total as a minimum", (
 
 test("rechecking a worktree right before removal keeps anything that changed", () => {
   assert.equal(recheckWorktreeRemoval(worktreeFacts()), null);
-  assert.equal(
-    recheckWorktreeRemoval(worktreeFacts({ uncommitted: 1 })),
-    "uncommitted",
-  );
-  assert.equal(
-    recheckWorktreeRemoval(worktreeFacts({ unpushed: 4 })),
-    "unpushed",
-  );
+  assert.equal(recheckWorktreeRemoval(worktreeFacts({ uncommitted: 1 })), "uncommitted");
+  assert.equal(recheckWorktreeRemoval(worktreeFacts({ unpushed: 4 })), "unpushed");
   assert.equal(
     recheckWorktreeRemoval(worktreeFacts({ gitStateKnown: false })),
     "unknown-git-state",
@@ -578,15 +631,26 @@ test("cleanup requests parse strictly and default their window", () => {
     inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS,
   });
   assert.deepEqual(
-    parseStorageCleanupRequest({ action: "delete-threads", inactiveDays: 90, targetIds: ["a", "a"] }),
+    parseStorageCleanupRequest({
+      action: "delete-threads",
+      inactiveDays: 90,
+      targetIds: ["a", "a"],
+    }),
     { action: "delete-threads", inactiveDays: 90, targetIds: ["a"] },
   );
   assert.deepEqual(
     parseStorageCleanupRequest({ action: "remove-worktrees", targetIds: ["a", "a", "b"] }),
-    { action: "remove-worktrees", inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS, targetIds: ["a", "b"] },
+    {
+      action: "remove-worktrees",
+      inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS,
+      targetIds: ["a", "b"],
+    },
   );
   // Chats are only ever deleted one at a time.
-  for (const sweep of [{ action: "delete-threads" }, { action: "delete-threads", targetIds: ["a", "b"] }]) {
+  for (const sweep of [
+    { action: "delete-threads" },
+    { action: "delete-threads", targetIds: ["a", "b"] },
+  ]) {
     assert.throws(() => parseStorageCleanupRequest(sweep), /one at a time/u);
   }
   for (const bad of [
@@ -598,6 +662,10 @@ test("cleanup requests parse strictly and default their window", () => {
     { action: "clear-logs", targetIds: [""] },
     { action: "clear-logs", targetIds: [1] },
   ]) {
-    assert.throws(() => parseStorageCleanupRequest(bad), /storage cleanup|cleanup selection|inactivity/i, JSON.stringify(bad));
+    assert.throws(
+      () => parseStorageCleanupRequest(bad),
+      /storage cleanup|cleanup selection|inactivity/i,
+      JSON.stringify(bad),
+    );
   }
 });

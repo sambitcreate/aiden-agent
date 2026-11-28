@@ -41,7 +41,8 @@ export function mjpegBoundary(contentType: string | string[] | undefined): strin
     const equals = parameter.indexOf("=");
     if (equals < 0 || parameter.slice(0, equals).trim().toLowerCase() !== "boundary") continue;
     let value = parameter.slice(equals + 1).trim();
-    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"'))
+      value = value.slice(1, -1);
     if (value.startsWith("--")) value = value.slice(2);
     if (value.length > 0 && Buffer.byteLength(value) <= 70) return value;
   }
@@ -262,7 +263,12 @@ export function repeatStillFrame(boundary: string, options: StillFrameOptions = 
   };
 
   return new Transform({
-    transform(this: Transform, chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
+    transform(
+      this: Transform,
+      chunk: Buffer,
+      _encoding: BufferEncoding,
+      callback: TransformCallback,
+    ) {
       // The timer runs from the latest complete part; while the next part is half-read it only re-arms.
       if (phase !== "passthrough" && !track(this, chunk)) giveUp();
       callback(null, chunk);

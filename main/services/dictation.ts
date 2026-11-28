@@ -20,11 +20,18 @@ import {
   type PasteDeps,
 } from "./dictation-paste.js";
 import { DictationCoordinator } from "./dictation-coordinator.js";
-import { applyDictationDictionary, parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
+import {
+  applyDictationDictionary,
+  parseDictationDictionary,
+} from "../../renderer/shared/dictation-dictionary.js";
 import { resolveDictationActivationMode } from "../../renderer/shared/dictation-preferences.js";
 import { createPressVoiceCheck } from "./dictation-voice-check.js";
 
-import { activeLinuxDictationHoldShortcut, initLinuxDictationSessionLost, subscribeLinuxDictationRelease } from "./shortcut.js";
+import {
+  activeLinuxDictationHoldShortcut,
+  initLinuxDictationSessionLost,
+  subscribeLinuxDictationRelease,
+} from "./shortcut.js";
 
 let lastPressAt = 0;
 // One resolution per press, shared by the provider check and the warm-up.
@@ -40,7 +47,10 @@ const secureInput = createSecureInputPrefetch({
 });
 
 function canAutoPaste(): boolean {
-  return dictationPlatformBehavior().accessibilityPaste && systemPreferences.isTrustedAccessibilityClient(false);
+  return (
+    dictationPlatformBehavior().accessibilityPaste &&
+    systemPreferences.isTrustedAccessibilityClient(false)
+  );
 }
 
 function livePasteDeps(): PasteDeps {
@@ -50,8 +60,7 @@ function livePasteDeps(): PasteDeps {
     // Delivery must never steal focus with a native permission prompt. Users
     // grant paste access explicitly from Settings; otherwise we copy safely.
     isAccessibilityTrusted: () =>
-      behavior.accessibilityPaste &&
-      systemPreferences.isTrustedAccessibilityClient(false),
+      behavior.accessibilityPaste && systemPreferences.isTrustedAccessibilityClient(false),
     isSecureInputActive: behavior.accessibilityPaste
       ? () => secureInput.isSecureInputActive()
       : async () => false,
@@ -107,7 +116,10 @@ const coordinator = new DictationCoordinator({
   },
   onTiming: (timing) => logger.info("dictation", "Dictation timing", timing),
   applyDictionary: async (text) =>
-    applyDictationDictionary(text, parseDictationDictionary((await configStore.getSettings()).dictationDictionary)),
+    applyDictationDictionary(
+      text,
+      parseDictationDictionary((await configStore.getSettings()).dictationDictionary),
+    ),
   shouldCleanup: async () => (await configStore.getSettings()).dictationCleanup === true,
   cleanupTranscript: cleanupDictationTranscript,
   ...(process.platform === "linux" ? { startReleaseWatch: subscribeLinuxDictationRelease } : {}),
@@ -125,7 +137,9 @@ const coordinator = new DictationCoordinator({
 
 // A portal can disappear before the queued press has installed its release watcher.
 // Queue cancellation behind that press so no recording survives lost ownership.
-initLinuxDictationSessionLost(() => { void coordinator.cancel(); });
+initLinuxDictationSessionLost(() => {
+  void coordinator.cancel();
+});
 
 /** Hotkey callback (fire-and-forget). Debounced against OS key chatter. */
 export function toggleDictation(): void {

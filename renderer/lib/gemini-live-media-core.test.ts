@@ -115,8 +115,7 @@ test("the local PCM meter reports bounded silence and signal without retaining a
   assert.equal(measureGeminiLivePcmLevel(new Uint8Array(640)), 0);
   const signal = new Uint8Array(640);
   const view = new DataView(signal.buffer);
-  for (let offset = 0; offset < signal.byteLength; offset += 2)
-    view.setInt16(offset, 8_192, true);
+  for (let offset = 0; offset < signal.byteLength; offset += 2) view.setInt16(offset, 8_192, true);
   assert.equal(measureGeminiLivePcmLevel(signal), 1);
   assert.equal(measureGeminiLivePcmLevel(new Uint8Array(3)), 0);
 });

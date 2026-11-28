@@ -29,7 +29,10 @@ export function selectGalleryImages(
   const limit = Math.min(options.limit ?? GALLERY_MAX_ITEMS, GALLERY_MAX_ITEMS);
   const ordered = attempts
     .map((attempt, position) => ({ attempt, position }))
-    .sort((left, right) => right.attempt.finishedAt - left.attempt.finishedAt || left.position - right.position);
+    .sort(
+      (left, right) =>
+        right.attempt.finishedAt - left.attempt.finishedAt || left.position - right.position,
+    );
   const seen = new Set<string>();
   const images: GalleryImage[] = [];
   for (const { attempt } of ordered) {
@@ -51,7 +54,10 @@ export interface GalleryLookups {
   thumbUrl(assetId: string): string | undefined;
 }
 
-export function toGalleryItems(images: readonly GalleryImage[], lookups: GalleryLookups): GalleryItem[] {
+export function toGalleryItems(
+  images: readonly GalleryImage[],
+  lookups: GalleryLookups,
+): GalleryItem[] {
   const items: GalleryItem[] = [];
   for (const { attempt, ref, index } of images) {
     const thumbUrl = lookups.thumbUrl(ref.assetId);

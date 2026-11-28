@@ -29,13 +29,16 @@ function terminateGroup(graceMs) {
     // The wrapper is an occupied member, so failure is unexpected; the parent
     // still has an exact direct-child fallback.
   }
-  setTimeout(() => {
-    try {
-      process.kill(-process.pid, "SIGKILL");
-    } finally {
-      process.exit(70);
-    }
-  }, Math.max(0, graceMs));
+  setTimeout(
+    () => {
+      try {
+        process.kill(-process.pid, "SIGKILL");
+      } finally {
+        process.exit(70);
+      }
+    },
+    Math.max(0, graceMs),
+  );
 }
 
 process.on("message", (message) => {

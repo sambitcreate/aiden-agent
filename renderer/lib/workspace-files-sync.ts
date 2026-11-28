@@ -8,9 +8,15 @@ import { queryKeys } from "./queries";
 
 type Subscribe = (channel: string, handler: (payload: unknown) => void) => () => void;
 
-export function subscribeWorkspaceFilesSync(queryClient: QueryClient, subscribe: Subscribe): () => void {
+export function subscribeWorkspaceFilesSync(
+  queryClient: QueryClient,
+  subscribe: Subscribe,
+): () => void {
   return subscribe("workspace:files-touched", (payload) => {
-    const workspaceId = payload && typeof payload === "object" ? (payload as { workspaceId?: unknown }).workspaceId : undefined;
+    const workspaceId =
+      payload && typeof payload === "object"
+        ? (payload as { workspaceId?: unknown }).workspaceId
+        : undefined;
     if (typeof workspaceId !== "string" || !workspaceId) return;
     void queryClient.invalidateQueries({ queryKey: queryKeys.skillCatalog(workspaceId) });
   });

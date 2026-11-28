@@ -9,21 +9,26 @@ import type { ChatMessage } from "./types.js";
 
 test("artifact selection stops at a fork boundary in one pass", () => {
   const messageCount = 20_000;
-  const messages = Array.from({ length: messageCount }, (_, index): ChatMessage => ({
-    id: `message-${index}`,
-    role: "assistant",
-    content: "",
-    createdAt: index,
-    htmlArtifacts: [{
-      version: 1,
-      kind: "html",
-      id: `artifact-${index}`,
-      title: `Artifact ${index}`,
-      mimeType: "text/html",
-      size: 1,
-      mediaId: `html_${String(index).padStart(43, "0")}`,
-    }],
-  }));
+  const messages = Array.from(
+    { length: messageCount },
+    (_, index): ChatMessage => ({
+      id: `message-${index}`,
+      role: "assistant",
+      content: "",
+      createdAt: index,
+      htmlArtifacts: [
+        {
+          version: 1,
+          kind: "html",
+          id: `artifact-${index}`,
+          title: `Artifact ${index}`,
+          mimeType: "text/html",
+          size: 1,
+          mediaId: `html_${String(index).padStart(43, "0")}`,
+        },
+      ],
+    }),
+  );
   Object.defineProperty(messages, "findIndex", {
     value: () => {
       throw new Error("artifact selection must not rescan the message list");
@@ -54,19 +59,28 @@ test("clone and fork copy visible linear history with fresh identities", async (
     role: "user",
     content: "First request",
     skill: { version: 1, name: "Review", source: "workspace" },
-    attachments: [{
-      id: "attachment-one",
-      name: "note.txt",
-      mimeType: "text/plain",
-      kind: "text",
-      size: 4,
-      text: "note",
-    }],
+    attachments: [
+      {
+        id: "attachment-one",
+        name: "note.txt",
+        mimeType: "text/plain",
+        kind: "text",
+        size: 4,
+        text: "note",
+      },
+    ],
   });
   const firstTurn = await store.appendMessage(chat.id, {
     role: "assistant",
     content: "First response",
-    appPanels: [{ version: 1, id: "source-controls", topic: "memory", fallback: "Memory controls on the original desktop." }],
+    appPanels: [
+      {
+        version: 1,
+        id: "source-controls",
+        topic: "memory",
+        fallback: "Memory controls on the original desktop.",
+      },
+    ],
     reasoning: "PRIVATE REASONING",
     providerFailure: {
       version: 1,
@@ -92,16 +106,22 @@ test("clone and fork copy visible linear history with fresh identities", async (
     expectedWorkspaceId: "workspace-copy",
     throughAssistantMessageId: firstAssistant.id,
   });
-  assert.deepEqual(clone.messages.map(({ role, content }) => [role, content]), [
-    ["user", "First request"],
-    ["assistant", "First response\n\nMemory controls on the original desktop."],
-    ["user", "Second request"],
-    ["assistant", "Second response"],
-  ]);
-  assert.deepEqual(fork.messages.map(({ role, content }) => [role, content]), [
-    ["user", "First request"],
-    ["assistant", "First response\n\nMemory controls on the original desktop."],
-  ]);
+  assert.deepEqual(
+    clone.messages.map(({ role, content }) => [role, content]),
+    [
+      ["user", "First request"],
+      ["assistant", "First response\n\nMemory controls on the original desktop."],
+      ["user", "Second request"],
+      ["assistant", "Second response"],
+    ],
+  );
+  assert.deepEqual(
+    fork.messages.map(({ role, content }) => [role, content]),
+    [
+      ["user", "First request"],
+      ["assistant", "First response\n\nMemory controls on the original desktop."],
+    ],
+  );
   assert.equal(clone.workspaceId, "workspace-copy");
   assert.equal(clone.providerId, "provider-copy");
   assert.equal(clone.model, "model-copy");
@@ -149,8 +169,16 @@ test("clone and fork copy visible linear history with fresh identities", async (
   await store.remove(chat.id);
   const afterDeletion = createChatStore(async () => directory);
   for (const copy of [clone, fork]) {
-    assert.deepEqual((await afterDeletion.get(copy.id))?.messages[0]?.attachments,
-      [{ id: "attachment-one", name: "note.txt", mimeType: "text/plain", kind: "text", size: 4, text: "note" }]);
+    assert.deepEqual((await afterDeletion.get(copy.id))?.messages[0]?.attachments, [
+      {
+        id: "attachment-one",
+        name: "note.txt",
+        mimeType: "text/plain",
+        kind: "text",
+        size: 4,
+        text: "note",
+      },
+    ]);
   }
 });
 
@@ -158,16 +186,28 @@ test("copies remap placement mediaIds together with their artifacts", async (t) 
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-placement-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
-  const chat = await store.create({ title: "Placed", workspaceId: "w", providerId: "p", model: "m" });
+  const chat = await store.create({
+    title: "Placed",
+    workspaceId: "w",
+    providerId: "p",
+    model: "m",
+  });
   const sourceMediaId = `html_${"1".repeat(43)}`;
   await store.appendMessage(chat.id, { role: "user", content: "Chart it" });
   await store.appendMessage(chat.id, {
     role: "assistant",
     content: "Here it is",
-    htmlArtifacts: [{
-      version: 1, kind: "html", id: "artifact-1", title: "Chart",
-      mimeType: "text/html", size: 1, mediaId: sourceMediaId,
-    }],
+    htmlArtifacts: [
+      {
+        version: 1,
+        kind: "html",
+        id: "artifact-1",
+        title: "Chart",
+        mimeType: "text/html",
+        size: 1,
+        mediaId: sourceMediaId,
+      },
+    ],
     htmlArtifactPlacements: [{ mediaId: sourceMediaId, toolCallId: "call_1", layout: "wide" }],
     imagePlacements: [{ attachmentId: "generated-1", toolCallId: "call_2" }],
   });
@@ -185,8 +225,12 @@ test("copies remap placement mediaIds together with their artifacts", async (t) 
     { mediaId: copiedMediaId, toolCallId: "call_1", layout: "wide" },
   ]);
   // Generated images keep their row after a restart and in a copy.
-  assert.deepEqual(source?.messages[1]?.imagePlacements, [{ attachmentId: "generated-1", toolCallId: "call_2" }]);
-  assert.deepEqual(copied?.imagePlacements, [{ attachmentId: "generated-1", toolCallId: "call_2" }]);
+  assert.deepEqual(source?.messages[1]?.imagePlacements, [
+    { attachmentId: "generated-1", toolCallId: "call_2" },
+  ]);
+  assert.deepEqual(copied?.imagePlacements, [
+    { attachmentId: "generated-1", toolCallId: "call_2" },
+  ]);
 });
 
 test("forks record lineage, number titles, and can cut before a prompt", async (t) => {
@@ -199,14 +243,16 @@ test("forks record lineage, number titles, and can cut before a prompt", async (
   const second = await store.appendMessage(chat.id, {
     role: "user",
     content: "And for food?",
-    attachments: [{
-      id: "attachment-menu",
-      name: "menu.txt",
-      mimeType: "text/plain",
-      kind: "text",
-      size: 4,
-      text: "menu",
-    }],
+    attachments: [
+      {
+        id: "attachment-menu",
+        name: "menu.txt",
+        mimeType: "text/plain",
+        kind: "text",
+        size: 4,
+        text: "menu",
+      },
+    ],
   });
   await store.appendMessage(chat.id, { role: "assistant", content: "Pastéis." });
   const firstUserId = first.messages[first.messages.length - 1]!.id;
@@ -218,7 +264,10 @@ test("forks record lineage, number titles, and can cut before a prompt", async (
     forkAt: { messageId: firstReplyId, position: "after" },
   });
   assert.equal(after.title, "Plan trip (fork)");
-  assert.deepEqual(after.messages.map(({ content }) => content), ["Where to go?", "Lisbon."]);
+  assert.deepEqual(
+    after.messages.map(({ content }) => content),
+    ["Where to go?", "Lisbon."],
+  );
   assert.deepEqual(
     { ...after.forkedFrom, at: undefined },
     { chatId: chat.id, messageId: firstReplyId, position: "after", at: undefined },
@@ -234,10 +283,19 @@ test("forks record lineage, number titles, and can cut before a prompt", async (
       pairs = installed.messages.map((message, index) => [sourceMessageIds[index]!, message.id]);
     },
   });
-  assert.deepEqual(pairs.map(([sourceId]) => sourceId), [firstUserId, firstReplyId]);
-  assert.deepEqual(pairs.map(([, id]) => id), before.messages.map(({ id }) => id));
+  assert.deepEqual(
+    pairs.map(([sourceId]) => sourceId),
+    [firstUserId, firstReplyId],
+  );
+  assert.deepEqual(
+    pairs.map(([, id]) => id),
+    before.messages.map(({ id }) => id),
+  );
   assert.equal(before.title, "Plan trip (fork 2)");
-  assert.deepEqual(before.messages.map(({ content }) => content), ["Where to go?", "Lisbon."]);
+  assert.deepEqual(
+    before.messages.map(({ content }) => content),
+    ["Where to go?", "Lisbon."],
+  );
   assert.equal(before.forkedFrom?.position, "before");
 
   // Forking a fork numbers against the shared base title instead of stacking suffixes.
@@ -311,7 +369,10 @@ test("a fork with a summary holds new messages until the summary settles", async
 
   // The sidebar index keeps the state without the summary text.
   await store.updateForkSummary(fork.id, (summary) => ({
-    ...summary!, state: "ready", text: "They asked a second question.", files: { read: [], modified: [] },
+    ...summary!,
+    state: "ready",
+    text: "They asked a second question.",
+    files: { read: [], modified: [] },
   }));
   const listed = await createChatStore(async () => directory).list("workspace-summary");
   assert.deepEqual(listed.find((meta) => meta.id === fork.id)?.forkedFrom?.summary, {
@@ -326,7 +387,10 @@ test("a fork with a summary holds new messages until the summary settles", async
   await assert.rejects(
     store.copyVisibleHistory({
       sourceChatId: chat.id,
-      forkAt: { messageId: lastReply.messages[lastReply.messages.length - 1]!.id, position: "after" },
+      forkAt: {
+        messageId: lastReply.messages[lastReply.messages.length - 1]!.id,
+        position: "after",
+      },
       forkSummary: {},
     }),
     /nothing happened after/iu,
@@ -415,7 +479,10 @@ test("dependent copy preparation fails before the target chat is installed", asy
 
   assert.equal(preparedChatId, targetChatId);
   assert.equal(await store.get(targetChatId), null);
-  assert.equal((await store.list()).some((chat) => chat.id === targetChatId), false);
+  assert.equal(
+    (await store.list()).some((chat) => chat.id === targetChatId),
+    false,
+  );
 });
 
 test("copy rejects malformed visible fields and unbounded retained metadata", async (t) => {
@@ -425,17 +492,16 @@ test("copy rejects malformed visible fields and unbounded retained metadata", as
   const chat = await store.create({ title: "Invalid copy", workspaceId: "workspace-copy" });
   const storedPath = path.join(directory, `${chat.id}.json`);
   const stored = JSON.parse(await fs.readFile(storedPath, "utf8")) as Record<string, unknown>;
-  stored.messages = [{
-    id: "bad",
-    role: "user",
-    content: "visible",
-    createdAt: { reasoning: "PRIVATE" },
-  }];
+  stored.messages = [
+    {
+      id: "bad",
+      role: "user",
+      content: "visible",
+      createdAt: { reasoning: "PRIVATE" },
+    },
+  ];
   await fs.writeFile(storedPath, JSON.stringify(stored), "utf8");
-  await assert.rejects(
-    store.copyVisibleHistory({ sourceChatId: chat.id }),
-    /timestamp/iu,
-  );
+  await assert.rejects(store.copyVisibleHistory({ sourceChatId: chat.id }), /timestamp/iu);
 
   stored.messages = [];
   stored.providerId = "p".repeat(2_048);
@@ -453,7 +519,11 @@ const NATIVE_VISUAL = {
   toolCallId: "call-1",
   title: "Board",
   catalogVersion: 1,
-  tree: { t: "Visual", k: "0", c: [{ t: "Text", k: "0.0", c: [{ t: "#text", k: "0.0.0", s: "Hi" }] }] },
+  tree: {
+    t: "Visual",
+    k: "0",
+    c: [{ t: "Text", k: "0.0", c: [{ t: "#text", k: "0.0.0", s: "Hi" }] }],
+  },
   fallbackText: "Hi",
 };
 
@@ -461,7 +531,12 @@ test("native visuals persist across restart, drop malformed entries, and survive
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-ui-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
-  const chat = await store.create({ title: "Native", workspaceId: "w", providerId: "p", model: "m" });
+  const chat = await store.create({
+    title: "Native",
+    workspaceId: "w",
+    providerId: "p",
+    model: "m",
+  });
   await store.appendMessage(chat.id, { role: "user", content: "Show it" });
   await store.appendMessage(chat.id, {
     role: "assistant",
@@ -474,7 +549,10 @@ test("native visuals persist across restart, drop malformed entries, and survive
   });
   const restarted = createChatStore(async () => directory);
   const stored = (await restarted.get(chat.id))?.messages[1];
-  assert.deepEqual(stored?.uiVisuals?.map((visual) => visual.id), ["ui-abc", "ui-wide"]);
+  assert.deepEqual(
+    stored?.uiVisuals?.map((visual) => visual.id),
+    ["ui-abc", "ui-wide"],
+  );
   assert.equal(stored?.uiVisuals?.[1]?.layout, "wide");
   const clone = await store.copyVisibleHistory({ sourceChatId: chat.id });
   assert.deepEqual(clone.messages[1]?.uiVisuals, stored?.uiVisuals);

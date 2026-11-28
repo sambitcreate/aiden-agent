@@ -1,9 +1,17 @@
 import * as React from "react";
-import { settingsTabFor, settingsTabLabel, type SettingsPageEntry, type SettingsSection } from "../../lib/settings-section";
+import {
+  settingsTabFor,
+  settingsTabLabel,
+  type SettingsPageEntry,
+  type SettingsSection,
+} from "../../lib/settings-section";
 import { Tabs, tabIds } from "../ui-primitives";
 
 /** The spot on the page to scroll into view, such as `links` on Appearance or `bots` on Approvals. A new `request` scrolls again. */
-export const SettingsAnchorContext = React.createContext<{ section: SettingsSection; request: number } | null>(null);
+export const SettingsAnchorContext = React.createContext<{
+  section: SettingsSection;
+  request: number;
+} | null>(null);
 
 /** Shared Settings page hierarchy. FieldSet and Field supply its grouped cards and rows. */
 export function SettingsPage({

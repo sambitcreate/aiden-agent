@@ -125,7 +125,9 @@ export function LiveChatToolsHost({
       used,
       watch: (chatId, title) => watcher.watch(chatId, title),
     });
-    const unregister = LIVE_CHAT_TOOL_NAMES.map((name) => liveSessionBus.registerTool(name, handlers[name]));
+    const unregister = LIVE_CHAT_TOOL_NAMES.map((name) =>
+      liveSessionBus.registerTool(name, handlers[name]),
+    );
     return () => {
       for (const release of unregister) release();
     };

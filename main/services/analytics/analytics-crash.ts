@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { EXCEPTION_PROPERTIES, isValidPropValue, type AnalyticsEventProps } from "./analytics-events.js";
+import {
+  EXCEPTION_PROPERTIES,
+  isValidPropValue,
+  type AnalyticsEventProps,
+} from "./analytics-events.js";
 import {
   MAX_CAUSE_DEPTH,
   parseSanitizedError,
@@ -49,7 +53,9 @@ const FINGERPRINT = /^[0-9a-f]{32}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 function record(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function parseContext(raw: unknown): ExceptionContext | undefined {
@@ -67,16 +73,33 @@ function parseContext(raw: unknown): ExceptionContext | undefined {
     if (!isValidPropValue(spec, value)) return undefined;
   }
   // Process uptime is fractional seconds, so any finite nonnegative number is valid.
-  if (context.uptimeSeconds !== undefined && !(typeof context.uptimeSeconds === "number" && Number.isFinite(context.uptimeSeconds) && context.uptimeSeconds >= 0)) {
+  if (
+    context.uptimeSeconds !== undefined &&
+    !(
+      typeof context.uptimeSeconds === "number" &&
+      Number.isFinite(context.uptimeSeconds) &&
+      context.uptimeSeconds >= 0
+    )
+  ) {
     return undefined;
   }
-  if (context.appVersion !== undefined && !isValidPropValue({ kind: "version" }, context.appVersion)) return undefined;
+  if (
+    context.appVersion !== undefined &&
+    !isValidPropValue({ kind: "version" }, context.appVersion)
+  )
+    return undefined;
   return {
     source: context.source as ExceptionContext["source"],
     level: context.level as ExceptionContext["level"],
-    ...(context.processType === undefined ? {} : { processType: context.processType as ExceptionContext["processType"] }),
-    ...(context.origin === undefined ? {} : { origin: context.origin as ExceptionContext["origin"] }),
-    ...(context.uptimeSeconds === undefined ? {} : { uptimeSeconds: context.uptimeSeconds as number }),
+    ...(context.processType === undefined
+      ? {}
+      : { processType: context.processType as ExceptionContext["processType"] }),
+    ...(context.origin === undefined
+      ? {}
+      : { origin: context.origin as ExceptionContext["origin"] }),
+    ...(context.uptimeSeconds === undefined
+      ? {}
+      : { uptimeSeconds: context.uptimeSeconds as number }),
     ...(context.appVersion === undefined ? {} : { appVersion: context.appVersion as string }),
   };
 }
@@ -110,12 +133,27 @@ export function parsePendingCrash(text: string): PendingCrash | undefined {
   const value = record(raw);
   if (!value || value.version !== PENDING_CRASH_VERSION) return undefined;
   if (typeof value.id !== "string" || !UUID.test(value.id)) return undefined;
-  if (typeof value.capturedAt !== "string" || !Number.isFinite(Date.parse(value.capturedAt))) return undefined;
-  if (value.installId !== undefined && (typeof value.installId !== "string" || !UUID.test(value.installId))) return undefined;
-  if (value.runId !== undefined && (typeof value.runId !== "string" || !UUID.test(value.runId))) return undefined;
+  if (typeof value.capturedAt !== "string" || !Number.isFinite(Date.parse(value.capturedAt)))
+    return undefined;
+  if (
+    value.installId !== undefined &&
+    (typeof value.installId !== "string" || !UUID.test(value.installId))
+  )
+    return undefined;
+  if (value.runId !== undefined && (typeof value.runId !== "string" || !UUID.test(value.runId)))
+    return undefined;
   const exception = record(value.exception);
-  if (!exception || typeof exception.fingerprint !== "string" || !FINGERPRINT.test(exception.fingerprint)) return undefined;
-  if (!Array.isArray(exception.errors) || exception.errors.length === 0 || exception.errors.length > MAX_CAUSE_DEPTH + 1) {
+  if (
+    !exception ||
+    typeof exception.fingerprint !== "string" ||
+    !FINGERPRINT.test(exception.fingerprint)
+  )
+    return undefined;
+  if (
+    !Array.isArray(exception.errors) ||
+    exception.errors.length === 0 ||
+    exception.errors.length > MAX_CAUSE_DEPTH + 1
+  ) {
     return undefined;
   }
   const errors: SanitizedError[] = [];
@@ -148,7 +186,10 @@ export function writePendingCrashSync(
   const target = join(directory, PENDING_CRASH_FILE);
   const temporary = `${target}.${process.pid}.tmp`;
   try {
-    writeFileSync(temporary, serializePendingCrash(exception, context, { ...identity, now }), { encoding: "utf8", mode: 0o600 });
+    writeFileSync(temporary, serializePendingCrash(exception, context, { ...identity, now }), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     renameSync(temporary, target);
     return true;
   } catch {
@@ -209,10 +250,18 @@ export function deletePendingCrash(directory: string): void {
 // are the single tap point: everything else in the journal is ignored, which
 // is what keeps handled failures out.
 export type CrashSignal =
-  | { readonly kind: "fatal"; readonly error: unknown; readonly origin: "uncaught_exception" | "unhandled_rejection" }
+  | {
+      readonly kind: "fatal";
+      readonly error: unknown;
+      readonly origin: "uncaught_exception" | "unhandled_rejection";
+    }
   // The process survives this one, so nothing is written to disk for the next launch.
   | { readonly kind: "main_rejection"; readonly error: unknown }
-  | { readonly kind: "renderer_error"; readonly error: unknown; readonly origin: "window_error" | "unhandled_rejection" }
+  | {
+      readonly kind: "renderer_error";
+      readonly error: unknown;
+      readonly origin: "window_error" | "unhandled_rejection";
+    }
   | { readonly kind: "process_gone"; readonly props: AnalyticsEventProps<"app_crashed"> }
   // The process is ending through JavaScript, so the next launch is not a crash.
   | { readonly kind: "orderly_exit" };
@@ -264,7 +313,10 @@ const RENDERER_ERROR_ORIGINS: Readonly<Record<string, "window_error" | "unhandle
   "renderer-unhandled-rejection": "unhandled_rejection",
 };
 
-export function crashSignalFor(event: CrashDiagnosticEvent, detail?: CrashDiagnosticDetail): CrashSignal | undefined {
+export function crashSignalFor(
+  event: CrashDiagnosticEvent,
+  detail?: CrashDiagnosticDetail,
+): CrashSignal | undefined {
   switch (event.event) {
     // Startup failed where Node raises no monitor event, such as a throw in an
     // ES module's top-level code.
@@ -274,7 +326,10 @@ export function crashSignalFor(event: CrashDiagnosticEvent, detail?: CrashDiagno
       return {
         kind: "fatal",
         error: detail?.rawError,
-        origin: event.fields?.origin === "unhandledRejection" ? "unhandled_rejection" : "uncaught_exception",
+        origin:
+          event.fields?.origin === "unhandledRejection"
+            ? "unhandled_rejection"
+            : "uncaught_exception",
       };
     case "unhandled-rejection":
       return { kind: "main_rejection", error: detail?.rawError };
@@ -285,7 +340,11 @@ export function crashSignalFor(event: CrashDiagnosticEvent, detail?: CrashDiagno
       // content-free form, which has nothing to send.
       return detail?.rawError === undefined
         ? undefined
-        : { kind: "renderer_error", error: detail.rawError, origin: RENDERER_ERROR_ORIGINS[event.event]! };
+        : {
+            kind: "renderer_error",
+            error: detail.rawError,
+            origin: RENDERER_ERROR_ORIGINS[event.event]!,
+          };
     case "renderer-process-gone":
       return detail?.duringShutdown ? undefined : processGone("renderer", event.fields);
     case "browser-tab-process-gone":
@@ -297,7 +356,10 @@ export function crashSignalFor(event: CrashDiagnosticEvent, detail?: CrashDiagno
       // on purpose, so a killed helper is not a crash.
       if (detail?.duringShutdown || event.fields?.reason === "killed") return undefined;
       const type = event.fields?.processType;
-      return processGone(type === "GPU" ? "gpu" : type === "Utility" ? "utility" : "other", event.fields);
+      return processGone(
+        type === "GPU" ? "gpu" : type === "Utility" ? "utility" : "other",
+        event.fields,
+      );
     }
     case "process-exit":
     case "process-signal":

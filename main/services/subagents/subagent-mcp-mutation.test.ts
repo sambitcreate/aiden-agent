@@ -309,22 +309,31 @@ test("denial and pre-dispatch journal failure remain no-effect", async () => {
 test("cancellation during request preparation blocks the delayed send without spending a network operation", async () => {
   const controller = new AbortController();
   let release!: () => void;
-  const held = new Promise<void>(resolve => { release = resolve; });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   let ready!: () => void;
-  const waiting = new Promise<void>(resolve => { ready = resolve; });
+  const waiting = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
   let sent = false;
   let delayed!: Promise<unknown>;
   const run = harness(undefined, {
     dispatch(beforeRawBytes) {
       ready();
-      delayed = held.then(() => { beforeRawBytes(); sent = true; });
+      delayed = held.then(() => {
+        beforeRawBytes();
+        sent = true;
+      });
       return delayed;
     },
   });
   await run.gate.beforeToolCall(toolContext());
   const call = run.gate.execute({
-    toolCallId: "call-1", toolName: binding.childAgentToolName,
-    arguments: { document: "release" }, signal: controller.signal,
+    toolCallId: "call-1",
+    toolName: binding.childAgentToolName,
+    arguments: { document: "release" },
+    signal: controller.signal,
   });
   await waiting;
   controller.abort();

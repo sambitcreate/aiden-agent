@@ -166,7 +166,13 @@ export function openCursorSse(
   // the first failed heartbeat.
   if (response.destroyed || response.writableEnded) {
     cleanup();
-    return { wake, close: abort, get closed() { return closed; } };
+    return {
+      wake,
+      close: abort,
+      get closed() {
+        return closed;
+      },
+    };
   }
   try {
     response.writeHead(200, {

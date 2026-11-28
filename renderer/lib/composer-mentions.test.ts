@@ -23,9 +23,17 @@ function entry(path: string, kind: WorkspaceFileEntry["kind"] = "file"): Workspa
 
 test("an @ at a word boundary starts a mention; one inside a word does not", () => {
   assert.deepEqual(findMentionTrigger("@", 1), { start: 0, end: 1, query: "" });
-  assert.deepEqual(findMentionTrigger("look at @src/ma", 15), { start: 8, end: 15, query: "src/ma" });
+  assert.deepEqual(findMentionTrigger("look at @src/ma", 15), {
+    start: 8,
+    end: 15,
+    query: "src/ma",
+  });
   assert.deepEqual(findMentionTrigger("see (@readme", 12), { start: 5, end: 12, query: "readme" });
-  assert.equal(findMentionTrigger("mail me@example.com", 19), null, "an email address is not a mention");
+  assert.equal(
+    findMentionTrigger("mail me@example.com", 19),
+    null,
+    "an email address is not a mention",
+  );
   assert.equal(findMentionTrigger("@ home", 6), null, "a space ends the query");
   assert.equal(findMentionTrigger("@a\nb", 4), null, "a new line ends the query");
 });
@@ -33,14 +41,24 @@ test("an @ at a word boundary starts a mention; one inside a word does not", () 
 test("the token runs past a caret that sits mid-word, and the full-width ＠ counts", () => {
   // Caret after "@comp" in "@composer.tsx": the query is what is before the caret,
   // the token is the whole word, so a pick replaces all of it.
-  assert.deepEqual(findMentionTrigger("@composer.tsx later", 5), { start: 0, end: 13, query: "comp" });
+  assert.deepEqual(findMentionTrigger("@composer.tsx later", 5), {
+    start: 0,
+    end: 13,
+    query: "comp",
+  });
   assert.deepEqual(findMentionTrigger("x ＠ab", 5), { start: 2, end: 5, query: "ab" });
 });
 
 test("removing the trigger leaves the surrounding text and one space", () => {
-  assert.deepEqual(removeMentionTrigger("see @comp here", { start: 4, end: 9 }), { text: "see here", caret: 4 });
+  assert.deepEqual(removeMentionTrigger("see @comp here", { start: 4, end: 9 }), {
+    text: "see here",
+    caret: 4,
+  });
   assert.deepEqual(removeMentionTrigger("@comp", { start: 0, end: 5 }), { text: "", caret: 0 });
-  assert.deepEqual(removeMentionTrigger("fix(@co)", { start: 4, end: 7 }), { text: "fix()", caret: 4 });
+  assert.deepEqual(removeMentionTrigger("fix(@co)", { start: 4, end: 7 }), {
+    text: "fix()",
+    caret: 4,
+  });
 });
 
 test("candidates rank name prefixes first, match on the path too, and skip symlinks that are not files", () => {
@@ -58,12 +76,20 @@ test("candidates rank name prefixes first, match on the path too, and skip symli
 
   // A path-only match finds the file and marks nothing in its name.
   const byPath = rankMentionCandidates(entries, "lib/text");
-  assert.deepEqual(byPath.map((candidate) => candidate.entry.path), ["renderer/lib/text-match.ts"]);
+  assert.deepEqual(
+    byPath.map((candidate) => candidate.entry.path),
+    ["renderer/lib/text-match.ts"],
+  );
   assert.deepEqual(byPath[0]!.ranges, []);
 
   assert.deepEqual(
     rankMentionCandidates(entries, "").map((candidate) => candidate.entry.path),
-    ["docs", "docs/composer-notes.md", "renderer/components/composer.tsx", "renderer/lib/text-match.ts"],
+    [
+      "docs",
+      "docs/composer-notes.md",
+      "renderer/components/composer.tsx",
+      "renderer/lib/text-match.ts",
+    ],
   );
   assert.equal(rankMentionCandidates(entries, "", 2).length, 2);
 
@@ -77,7 +103,10 @@ test("candidates rank name prefixes first, match on the path too, and skip symli
 test("mentions are written as @path, a folder with a slash, and a path with spaces quoted", () => {
   assert.equal(formatMention({ path: "src/app.ts", kind: "file" }), "@src/app.ts");
   assert.equal(formatMention({ path: "src", kind: "directory" }), "@src/");
-  assert.equal(formatMention({ path: "My Notes/a \"b\".md", kind: "file" }), '@"My Notes/a \\"b\\".md"');
+  assert.equal(
+    formatMention({ path: 'My Notes/a "b".md', kind: "file" }),
+    '@"My Notes/a \\"b\\".md"',
+  );
 });
 
 test("a message lists its mentions first in chip order, then the text", () => {

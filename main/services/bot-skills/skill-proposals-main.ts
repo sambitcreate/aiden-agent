@@ -22,5 +22,6 @@ export const botSkillProposals = createBotSkillProposalService({
   },
   invalidate: invalidateBotSkills,
   suggestionBudget: botSuggestionBudget,
-  recordAdded: async (botId, change) => (await import("../bot-learning/learning-main.js")).recordBotSkillAdded(botId, change),
+  recordAdded: async (botId, change) =>
+    (await import("../bot-learning/learning-main.js")).recordBotSkillAdded(botId, change),
 });

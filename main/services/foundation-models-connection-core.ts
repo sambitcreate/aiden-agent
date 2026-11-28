@@ -1,7 +1,4 @@
-import type {
-  FoundationModelsConnectionStatus,
-  FoundationModelsConnectionState,
-} from "./types.js";
+import type { FoundationModelsConnectionStatus, FoundationModelsConnectionState } from "./types.js";
 
 export const FOUNDATION_MODELS_PROTOCOL_VERSION = 1;
 const STATUS_TIMEOUT_MS = 5_000;
@@ -91,7 +88,12 @@ export interface NativeFoundationModelsResponse {
   version: number;
   ok: boolean;
   result?: {
-    state?: "ready" | "device_not_eligible" | "apple_intelligence_disabled" | "model_preparing" | "unavailable";
+    state?:
+      | "ready"
+      | "device_not_eligible"
+      | "apple_intelligence_disabled"
+      | "model_preparing"
+      | "unavailable";
     title?: string;
   };
   error?: {
@@ -161,10 +163,7 @@ export function platformFoundationModelsStatus(input: {
   if (input.platform !== "darwin") return null;
   const major = systemVersionMajor(input.systemVersion);
   if (major === null || major < 26) {
-    return connectionStatus(
-      "unsupported_os",
-      "Apple Foundation Models require macOS 26 or later.",
-    );
+    return connectionStatus("unsupported_os", "Apple Foundation Models require macOS 26 or later.");
   }
   if (input.arch !== "arm64") {
     return connectionStatus(
@@ -241,7 +240,10 @@ export function parseFoundationModelsResponse(value: string): NativeFoundationMo
       "model_preparing",
       "unavailable",
     ]);
-    if (result.state !== undefined && (typeof result.state !== "string" || !states.has(result.state))) {
+    if (
+      result.state !== undefined &&
+      (typeof result.state !== "string" || !states.has(result.state))
+    ) {
       throw new FoundationModelsConnectionError(
         "invalid_response",
         "The native helper returned an invalid availability state.",
@@ -282,7 +284,8 @@ export function parseFoundationModelsResponse(value: string): NativeFoundationMo
 }
 
 export function createFoundationModelsConnection(deps: ConnectionDependencies) {
-  let cachedStatus: { value: FoundationModelsConnectionStatus | null; expiresAt: number } | null = null;
+  let cachedStatus: { value: FoundationModelsConnectionStatus | null; expiresAt: number } | null =
+    null;
   let statusInFlight: Promise<FoundationModelsConnectionStatus | null> | null = null;
 
   const platformStatus = () =>
@@ -321,7 +324,9 @@ export function createFoundationModelsConnection(deps: ConnectionDependencies) {
   };
 
   return {
-    async status(options: { force?: boolean } = {}): Promise<FoundationModelsConnectionStatus | null> {
+    async status(
+      options: { force?: boolean } = {},
+    ): Promise<FoundationModelsConnectionStatus | null> {
       const gate = platformStatus();
       if (gate !== undefined) return gate;
       if (!options.force && cachedStatus && deps.now() < cachedStatus.expiresAt) {

@@ -80,7 +80,10 @@ export function isLocalModelProvider(
 /** Secondary operations are accounted against their own provider, independent of the chat model. */
 export function modelOperationUsageRecord(
   record: Parameters<NonNullable<PiModelToolsHost["onUsage"]>>[0],
-  providers: readonly Pick<StoredProvider, "id" | "label" | "baseUrl" | "needsKey" | "deployment">[],
+  providers: readonly Pick<
+    StoredProvider,
+    "id" | "label" | "baseUrl" | "needsKey" | "deployment"
+  >[],
   source: UsageRequestSource,
   // A host facade may have a newer authoritative local-provider snapshot.
   localOverride = false,
@@ -97,7 +100,11 @@ export function modelOperationUsageRecord(
     local,
     status: record.status,
     tokens: reportedTokens(record.usage),
-    costStatus: local ? "not-applicable" : typeof cost === "number" && Number.isFinite(cost) && cost > 0 ? "reported" : "unavailable",
+    costStatus: local
+      ? "not-applicable"
+      : typeof cost === "number" && Number.isFinite(cost) && cost > 0
+        ? "reported"
+        : "unavailable",
     ...(typeof cost === "number" && Number.isFinite(cost) ? { costUsd: Math.max(0, cost) } : {}),
   };
 }

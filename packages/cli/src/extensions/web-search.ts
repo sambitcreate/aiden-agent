@@ -8,32 +8,39 @@
 
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { WebSearchService } from "../../../../main/services/web-search.js";
-import { normalizeWebSearchSettings, defaultWebSearchSettings } from "../../../../main/services/web-search-provider-registry-core.js";
+import {
+  normalizeWebSearchSettings,
+  defaultWebSearchSettings,
+} from "../../../../main/services/web-search-provider-registry-core.js";
 import type { AppSettings } from "../../../../main/services/types.js";
 import { aidenExtensionToInlineFactory } from "../pi-bridge/adapt-aiden-extension.ts";
 import { readJson } from "../state.ts";
 import { join } from "node:path";
 
 export async function createWebSearchInlineExtension(options: {
-	agentDir: string;
+  agentDir: string;
 }): Promise<{ name: string; factory: ExtensionFactory } | undefined> {
-	const service = createCliWebSearch(options.agentDir);
-	const tool = await service.toolForGeneration();
-	if (!tool) return undefined;
-	return aidenExtensionToInlineFactory("aiden-web-search", {
-		id: "aiden.web-search",
-		tools: [tool],
-	});
+  const service = createCliWebSearch(options.agentDir);
+  const tool = await service.toolForGeneration();
+  if (!tool) return undefined;
+  return aidenExtensionToInlineFactory("aiden-web-search", {
+    id: "aiden.web-search",
+    tools: [tool],
+  });
 }
 
 export function createCliWebSearch(agentDir: string) {
-	return new WebSearchService({
-		getSettings: async (): Promise<AppSettings> => {
-			return { webSearch: normalizeWebSearchSettings(readJson(join(agentDir, "web-search.json"), defaultWebSearchSettings())) };
-		},
-		getCredential: async (providerId) => {
-			const envName = `${providerId.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
-			return process.env[envName] ?? null;
-		},
-	});
+  return new WebSearchService({
+    getSettings: async (): Promise<AppSettings> => {
+      return {
+        webSearch: normalizeWebSearchSettings(
+          readJson(join(agentDir, "web-search.json"), defaultWebSearchSettings()),
+        ),
+      };
+    },
+    getCredential: async (providerId) => {
+      const envName = `${providerId.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
+      return process.env[envName] ?? null;
+    },
+  });
 }

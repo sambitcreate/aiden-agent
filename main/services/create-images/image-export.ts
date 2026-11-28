@@ -6,7 +6,11 @@ import { randomUUID } from "node:crypto";
 import * as nodeFs from "node:fs/promises";
 import path from "node:path";
 import type { ImageMediaType, OutputRef } from "../../../renderer/shared/images/run-types.js";
-import { MAX_FILE_STEM_BYTES, safeFileNameStem, truncateFileNameText } from "../chat-image-actions.js";
+import {
+  MAX_FILE_STEM_BYTES,
+  safeFileNameStem,
+  truncateFileNameText,
+} from "../chat-image-actions.js";
 import type { StudioAssetStore } from "../studio-assets/store.js";
 import { ImageRunLedgerError, type ImageRunLedger } from "./run-ledger.js";
 
@@ -36,7 +40,12 @@ const SWEPT_DAY_FOLDERS = 14;
 const activeStagingFiles = new Set<string>();
 
 /** Writes `bytes` to a fresh hidden staging file in `directory`, marked live until `use` settles. */
-async function withStagedFile<T>(fs: ExportFileSystem, directory: string, bytes: Uint8Array, use: (staging: string) => Promise<T>): Promise<T> {
+async function withStagedFile<T>(
+  fs: ExportFileSystem,
+  directory: string,
+  bytes: Uint8Array,
+  use: (staging: string) => Promise<T>,
+): Promise<T> {
   const staging = path.join(directory, `.aiden-${randomUUID()}.tmp`);
   activeStagingFiles.add(staging);
   try {
@@ -54,7 +63,11 @@ async function withStagedFile<T>(fs: ExportFileSystem, directory: string, bytes:
 /** The slice of `node:fs/promises` the exporter uses; tests inject failures through it. */
 export interface ExportFileSystem {
   mkdir(target: string, options: { recursive: true }): Promise<unknown>;
-  open(target: string, flags: "wx" | "w", mode: number): Promise<{ writeFile(data: Uint8Array): Promise<unknown>; close(): Promise<void> }>;
+  open(
+    target: string,
+    flags: "wx" | "w",
+    mode: number,
+  ): Promise<{ writeFile(data: Uint8Array): Promise<unknown>; close(): Promise<void> }>;
   /** Fails with EEXIST when `newPath` exists, which makes publishing a finished file exclusive. */
   link(existingPath: string, newPath: string): Promise<void>;
   /** Replaces `newPath` in one step, so a reader never sees it half-written. */
@@ -77,10 +90,17 @@ export function exportDayFolder(at: number): string {
  * when empty, and cut between graphemes so the whole name, with a " (n)" suffix, stays well
  * under the 255-byte name limit of Linux file systems.
  */
-export function exportFileName(input: { at: number; workflowTitle?: string; assetId: string; mediaType: ImageMediaType }): string {
+export function exportFileName(input: {
+  at: number;
+  workflowTitle?: string;
+  assetId: string;
+  mediaType: ImageMediaType;
+}): string {
   const date = new Date(input.at);
   const time = `${two(date.getHours())}${two(date.getMinutes())}${two(date.getSeconds())}`;
-  const title = safeFileNameStem(truncateFileNameText(input.workflowTitle ?? "", MAX_TITLE_UNITS, MAX_FILE_STEM_BYTES));
+  const title = safeFileNameStem(
+    truncateFileNameText(input.workflowTitle ?? "", MAX_TITLE_UNITS, MAX_FILE_STEM_BYTES),
+  );
   return `${time} ${title} ${input.assetId.slice(0, 8)}.${IMAGE_EXTENSIONS[input.mediaType]}`;
 }
 
@@ -102,7 +122,8 @@ export async function writeUniqueFile(
   await fs.mkdir(directory, { recursive: true });
   const extension = path.extname(fileName);
   const stem = fileName.slice(0, fileName.length - extension.length);
-  const candidate = (attempt: number) => path.join(directory, attempt === 0 ? fileName : `${stem} (${attempt})${extension}`);
+  const candidate = (attempt: number) =>
+    path.join(directory, attempt === 0 ? fileName : `${stem} (${attempt})${extension}`);
   const linked = await withStagedFile(fs, directory, bytes, async (staging) => {
     for (let attempt = 0; attempt < MAX_UNIQUE_ATTEMPTS; attempt += 1) {
       const target = candidate(attempt);
@@ -125,7 +146,11 @@ export async function writeUniqueFile(
  * The bytes go to a hidden staging file beside it and are renamed into place, so a failed or
  * interrupted write leaves the previous file whole.
  */
-export async function replaceFile(fs: ExportFileSystem, target: string, bytes: Uint8Array): Promise<void> {
+export async function replaceFile(
+  fs: ExportFileSystem,
+  target: string,
+  bytes: Uint8Array,
+): Promise<void> {
   await withStagedFile(fs, path.dirname(target), bytes, (staging) => fs.rename(staging, target));
 }
 
@@ -150,7 +175,11 @@ async function writeUniqueDirectly(
 }
 
 /** Creates `target` exclusively and writes `bytes`; on a failed write the file is removed. */
-async function writeNewFile(fs: ExportFileSystem, target: string, bytes: Uint8Array): Promise<void> {
+async function writeNewFile(
+  fs: ExportFileSystem,
+  target: string,
+  bytes: Uint8Array,
+): Promise<void> {
   const handle = await fs.open(target, "wx", 0o644);
   try {
     await handle.writeFile(bytes);
@@ -224,11 +253,19 @@ export class CreateImagesExports {
   }
 
   /** The name and day folder an export made now would use. */
-  target(ref: Pick<OutputRef, "assetId" | "mediaType">, workflowTitle?: string): { directory: string; fileName: string } {
+  target(
+    ref: Pick<OutputRef, "assetId" | "mediaType">,
+    workflowTitle?: string,
+  ): { directory: string; fileName: string } {
     const at = this.now();
     return {
       directory: path.join(this.folder(), exportDayFolder(at)),
-      fileName: exportFileName({ at, assetId: ref.assetId, mediaType: ref.mediaType, ...(workflowTitle !== undefined ? { workflowTitle } : {}) }),
+      fileName: exportFileName({
+        at,
+        assetId: ref.assetId,
+        mediaType: ref.mediaType,
+        ...(workflowTitle !== undefined ? { workflowTitle } : {}),
+      }),
     };
   }
 
@@ -236,13 +273,19 @@ export class CreateImagesExports {
    * Saves each image in the background. Never throws and never delays the caller: a failure is
    * reported and the run's outcome is unaffected. Does nothing when this session saves nothing.
    */
-  autoSave(outputs: readonly Pick<OutputRef, "assetId" | "mediaType">[], workflowTitle?: string): void {
+  autoSave(
+    outputs: readonly Pick<OutputRef, "assetId" | "mediaType">[],
+    workflowTitle?: string,
+  ): void {
     if (!this.available()) return;
     for (const ref of outputs) {
       const task = this.ensureExported(ref, workflowTitle).catch((error: unknown) => {
         if (isClosedLedger(error)) return;
         try {
-          this.options.reportIssue?.("Could not auto-save a generated image to the Pictures folder.", fileErrorSummary(error));
+          this.options.reportIssue?.(
+            "Could not auto-save a generated image to the Pictures folder.",
+            fileErrorSummary(error),
+          );
         } catch {
           // Reporting is best effort.
         }
@@ -282,14 +325,19 @@ export class CreateImagesExports {
       const file = recorded.get(assetId);
       return file !== undefined && (await this.isFile(file)) ? assetId : undefined;
     });
-    return new Set((await Promise.all(checks)).filter((assetId): assetId is string => assetId !== undefined));
+    return new Set(
+      (await Promise.all(checks)).filter((assetId): assetId is string => assetId !== undefined),
+    );
   }
 
   /**
    * The auto-saved copy of an asset, writing it first when none is recorded or the recorded file
    * was moved or deleted. Throws on failure.
    */
-  ensureExported(ref: Pick<OutputRef, "assetId" | "mediaType">, workflowTitle?: string): Promise<string> {
+  ensureExported(
+    ref: Pick<OutputRef, "assetId" | "mediaType">,
+    workflowTitle?: string,
+  ): Promise<string> {
     const running = this.inFlight.get(ref.assetId);
     if (running) return running;
     const task = this.export(ref, workflowTitle).finally(() => this.inFlight.delete(ref.assetId));
@@ -297,7 +345,10 @@ export class CreateImagesExports {
     return task;
   }
 
-  private async export(ref: Pick<OutputRef, "assetId" | "mediaType">, workflowTitle?: string): Promise<string> {
+  private async export(
+    ref: Pick<OutputRef, "assetId" | "mediaType">,
+    workflowTitle?: string,
+  ): Promise<string> {
     const existing = await this.savedPath(ref.assetId);
     if (existing) return existing;
     // Before this session stages anything, so the sweep can only meet files no write still owns.
@@ -318,11 +369,16 @@ export class CreateImagesExports {
   private async removeLeftoverStagedFiles(): Promise<void> {
     try {
       const root = this.folder();
-      const days = (await this.fs.readdir(root)).filter((name) => DAY_FOLDER.test(name)).sort().reverse().slice(0, SWEPT_DAY_FOLDERS);
+      const days = (await this.fs.readdir(root))
+        .filter((name) => DAY_FOLDER.test(name))
+        .sort()
+        .reverse()
+        .slice(0, SWEPT_DAY_FOLDERS);
       for (const day of days) {
         const directory = path.join(root, day);
         for (const name of await this.fs.readdir(directory).catch(() => [])) {
-          if (STAGED_FILE.test(name) && !activeStagingFiles.has(path.join(directory, name))) await this.fs.rm(path.join(directory, name), { force: true }).catch(() => undefined);
+          if (STAGED_FILE.test(name) && !activeStagingFiles.has(path.join(directory, name)))
+            await this.fs.rm(path.join(directory, name), { force: true }).catch(() => undefined);
         }
       }
     } catch {

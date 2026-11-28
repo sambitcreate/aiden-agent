@@ -44,7 +44,9 @@ function chatReadResponse(id: string) {
     chat: {
       id,
       title: `Chat ${id}`,
-      messages: [{ id: `message-${id}`, role: "user", content: `Hello from chat ${id}`, createdAt: 1 }],
+      messages: [
+        { id: `message-${id}`, role: "user", content: `Hello from chat ${id}`, createdAt: 1 },
+      ],
       createdAt: 1,
       updatedAt: 1,
     },
@@ -94,7 +96,10 @@ async function mountRoutedChatPane(
 
   // Keep the real chat route (the component that decides ChatPane's key) and
   // swap only the app shell around it for the providers ChatPane reads.
-  const routes = router.routesById as unknown as Record<string, { options: { component?: unknown } }>;
+  const routes = router.routesById as unknown as Record<
+    string,
+    { options: { component?: unknown } }
+  >;
   routes.__root__.options.component = function ChatPaneProviders() {
     return (
       <WorkspaceProvider>
@@ -136,12 +141,14 @@ test("question countdown stays singular across chat updates and is removed after
     toolCallId: "call-question-1",
     source: "remote" as const,
     expiresAt: new Date(Date.now() + 180_000).toISOString(),
-    questions: [{
-      header: "URL",
-      question: "Where should the monitor connect?",
-      multiSelect: false,
-      options: [{ label: "Set later", description: "Use a placeholder for now." }],
-    }],
+    questions: [
+      {
+        header: "URL",
+        question: "Where should the monitor connect?",
+        multiSelect: false,
+        options: [{ label: "Set later", description: "Use a placeholder for now." }],
+      },
+    ],
   };
   let answers = 0;
   const { queryClient } = await mountRoutedChatPane("chat-a", {
@@ -160,14 +167,22 @@ test("question countdown stays singular across chat updates and is removed after
   try {
     await waitFor(() => assert.equal(countdowns().length, 1));
     const answer = screen.getByRole("button", { name: /Set later/u });
-    await act(async () => { fireEvent.click(answer); });
+    await act(async () => {
+      fireEvent.click(answer);
+    });
     for (let update = 0; update < 6; update += 1) {
       await refreshQuestion();
       assert.equal(countdowns().length, 1, "A chat update must not append another countdown");
       assert.ok(screen.getByRole("button", { name: /Set later/u }) === answer);
-      assert.equal(answer.getAttribute("aria-pressed"), "true", "Updates preserve the selected answer");
+      assert.equal(
+        answer.getAttribute("aria-pressed"),
+        "true",
+        "Updates preserve the selected answer",
+      );
     }
-    await act(async () => { fireEvent.keyDown(answer, { key: "Enter", metaKey: true }); });
+    await act(async () => {
+      fireEvent.keyDown(answer, { key: "Enter", metaKey: true });
+    });
     await waitFor(() => assert.equal(answers, 1));
     assert.equal(countdowns().length, 0, "Answering removes every countdown");
     assert.ok(screen.queryByRole("button", { name: "Close questionnaire" }) === null);
@@ -176,22 +191,37 @@ test("question countdown stays singular across chat updates and is removed after
     await refreshQuestion();
     assert.equal(countdowns().length, 1, "A later question starts with one countdown");
     const nextAnswer = screen.getByRole("button", { name: /Set later/u });
-    assert.equal(nextAnswer.getAttribute("aria-pressed"), "false", "A new prompt resets the selection");
+    assert.equal(
+      nextAnswer.getAttribute("aria-pressed"),
+      "false",
+      "A new prompt resets the selection",
+    );
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /Type your own answer/u }));
     });
-    const customAnswer = screen.getByRole("textbox", { name: /Custom answer for/u }) as HTMLTextAreaElement;
-    await act(async () => { fireEvent.change(customAnswer, { target: { value: "https://monitor.local" } }); });
+    const customAnswer = screen.getByRole("textbox", {
+      name: /Custom answer for/u,
+    }) as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.change(customAnswer, { target: { value: "https://monitor.local" } });
+    });
     await refreshQuestion();
     assert.equal(countdowns().length, 1);
     assert.ok(screen.getByRole("textbox", { name: /Custom answer for/u }) === customAnswer);
-    assert.equal(customAnswer.value, "https://monitor.local", "Updates preserve a typed custom answer");
+    assert.equal(
+      customAnswer.value,
+      "https://monitor.local",
+      "Updates preserve a typed custom answer",
+    );
 
     prompt = { ...prompt, promptId: "question-3", toolCallId: "call-question-3" };
     await refreshQuestion();
     assert.equal(countdowns().length, 1, "Replacing an open prompt removes the old countdown");
     assert.ok(!customAnswer.isConnected, "A replacement prompt does not inherit the custom draft");
-    assert.equal(screen.getByRole("button", { name: /Set later/u }).getAttribute("aria-pressed"), "false");
+    assert.equal(
+      screen.getByRole("button", { name: /Set later/u }).getAttribute("aria-pressed"),
+      "false",
+    );
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Close questionnaire" }));
     });
@@ -275,15 +305,22 @@ test("picking a model in one chat leaves other chats and the new-chat model alon
     "settings:get": () => ({}),
     "models:info": () => ({}),
   });
-  const trigger = () => screen.getByRole("button", { name: /^Selected model: .*Choose a model\.$/u });
+  const trigger = () =>
+    screen.getByRole("button", { name: /^Selected model: .*Choose a model\.$/u });
   try {
     await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Model A/iu));
 
-    await act(async () => { fireEvent.click(trigger()); });
+    await act(async () => {
+      fireEvent.click(trigger());
+    });
     // The composer's popover opens on the Agent Slider; the full list is one step in.
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Other models…/u })); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Other models…/u }));
+    });
     const optionB = await waitFor(() => {
-      const option = screen.queryAllByRole("option").find((row) => row.textContent?.includes("Model B"));
+      const option = screen
+        .queryAllByRole("option")
+        .find((row) => row.textContent?.includes("Model B"));
       assert.ok(option);
       return option;
     });
@@ -291,7 +328,9 @@ test("picking a model in one chat leaves other chats and the new-chat model alon
     holdNextRead = true;
     void queryClient.refetchQueries({ queryKey: queryKeys.chat("chat-a"), exact: true });
     await waitFor(() => assert.ok(releaseHeldRead));
-    await act(async () => { fireEvent.click(optionB); });
+    await act(async () => {
+      fireEvent.click(optionB);
+    });
     await waitFor(() => assert.deepEqual(setModelCalls, [["chat-a", "acme", "model-b"]]));
     await act(async () => {
       releaseHeldRead?.();
@@ -299,7 +338,11 @@ test("picking a model in one chat leaves other chats and the new-chat model alon
     });
     await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Model B/iu));
     assert.equal(queryClient.getQueryData<Chat>(queryKeys.chat("chat-a"))?.model, "model-b");
-    assert.equal(localStorage.getItem("aiden-agent.model"), "app-model", "new chats keep their model");
+    assert.equal(
+      localStorage.getItem("aiden-agent.model"),
+      "app-model",
+      "new chats keep their model",
+    );
 
     await act(async () => {
       await router.navigate({ to: "/chat/$chatId", params: { chatId: "chat-b" } });
@@ -349,30 +392,54 @@ test("an Agent Slider stop moves this chat to its model and effort, and a stop w
         homeStopId: "everyday",
         stops: [
           { id: "everyday", label: "Everyday", providerId: "acme", model: "model-a" },
-          { id: "deep", label: "Deep", providerId: "acme", model: "model-b", thinkingLevel: "high" },
+          {
+            id: "deep",
+            label: "Deep",
+            providerId: "acme",
+            model: "model-b",
+            thinkingLevel: "high",
+          },
           { id: "spare", label: "Spare" },
         ],
       },
     }),
     "models:info": () => ({}),
   });
-  const trigger = () => screen.getByRole("button", { name: /^Selected model: .*Choose a model\.$/u });
+  const trigger = () =>
+    screen.getByRole("button", { name: /^Selected model: .*Choose a model\.$/u });
   try {
-    await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Everyday on the Agent Slider/u));
-    await act(async () => { fireEvent.click(trigger()); });
+    await waitFor(() =>
+      assert.match(trigger().getAttribute("aria-label") ?? "", /Everyday on the Agent Slider/u),
+    );
+    await act(async () => {
+      fireEvent.click(trigger());
+    });
     const slider = await screen.findByRole("slider", { name: "Agent Slider" });
-    await act(async () => { fireEvent.keyDown(slider, { key: "ArrowRight" }); });
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: "ArrowRight" });
+    });
 
     await waitFor(() => assert.deepEqual(setModelCalls, [["chat-a", "acme", "model-b", "high"]]));
-    await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Deep on the Agent Slider/u));
+    await waitFor(() =>
+      assert.match(trigger().getAttribute("aria-label") ?? "", /Deep on the Agent Slider/u),
+    );
     assert.equal(queryClient.getQueryData<Chat>(queryKeys.chat("chat-a"))?.thinkingLevel, "high");
-    assert.equal(localStorage.getItem("aiden-agent.model"), "app-model", "new chats keep their model");
+    assert.equal(
+      localStorage.getItem("aiden-agent.model"),
+      "app-model",
+      "new chats keep their model",
+    );
 
     // Back on the home stop, which names no effort: the chat's own level is cleared.
-    await act(async () => { fireEvent.keyDown(screen.getByRole("slider", { name: "Agent Slider" }), { key: "Home" }); });
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("slider", { name: "Agent Slider" }), { key: "Home" });
+    });
     await waitFor(() => assert.deepEqual(setModelCalls[1], ["chat-a", "acme", "model-a", null]));
     await waitFor(() =>
-      assert.equal(queryClient.getQueryData<Chat>(queryKeys.chat("chat-a"))?.thinkingLevel, undefined),
+      assert.equal(
+        queryClient.getQueryData<Chat>(queryKeys.chat("chat-a"))?.thinkingLevel,
+        undefined,
+      ),
     );
   } finally {
     cleanup();
@@ -422,7 +489,9 @@ test("a refused follow-up side question keeps the card and the typed text", asyn
     });
 
     // main refused the start: the card, the earlier answer and the unsent text all remain.
-    const after = screen.queryByLabelText("Ask a follow-up side question") as HTMLTextAreaElement | null;
+    const after = screen.queryByLabelText(
+      "Ask a follow-up side question",
+    ) as HTMLTextAreaElement | null;
     assert.ok(after !== null, "The side-question card must stay mounted after a refused follow-up");
     assert.equal(after.value, "And the defaults?");
     assert.equal(after.disabled, false);
@@ -498,10 +567,18 @@ test("a late refusal from the previous chat cannot restore its side question int
     });
 
     assert.equal(screen.getByRole("heading", { level: 1 }).textContent, "Chat chat-b");
-    assert.ok(screen.queryByText("Answer from chat A.") === null, "Chat A's answer must not appear in chat B");
-    const followUp = screen.queryByLabelText("Ask a follow-up side question") as HTMLTextAreaElement | null;
+    assert.ok(
+      screen.queryByText("Answer from chat A.") === null,
+      "Chat A's answer must not appear in chat B",
+    );
+    const followUp = screen.queryByLabelText(
+      "Ask a follow-up side question",
+    ) as HTMLTextAreaElement | null;
     // B's own start is still pending, so its card stays in the starting state.
-    assert.ok(followUp === null || followUp.disabled, "Chat B's pending side question must stay pending");
+    assert.ok(
+      followUp === null || followUp.disabled,
+      "Chat B's pending side question must stay pending",
+    );
   } finally {
     cleanup();
     queryClient.clear();
@@ -510,7 +587,10 @@ test("a late refusal from the previous chat cannot restore its side question int
 
 test("chat pane hides the generic tool phase when a chronological row owns it", () => {
   const pane = source("./chat-pane.tsx");
-  assert.match(pane, /toolVisible:\s*chronologicalLiveRows\?\.some\(\(row\) => row\.kind === "activity"[\s\S]*?step\.status === "running"/u);
+  assert.match(
+    pane,
+    /toolVisible:\s*chronologicalLiveRows\?\.some\(\s*\(row\) =>\s*row\.kind === "activity"[\s\S]*?step\.status === "running"/u,
+  );
   assert.match(pane, /resolveVisibleAgentActivity\(timelineActivity/u);
 });
 
@@ -774,28 +854,58 @@ test("a revisited detached stream restores the responding window from its last t
 
 test("revisited generations expose Stop and queue/steer without admitting a second turn early", () => {
   const pane = source("./chat-pane.tsx");
-  const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
+  const send = between(
+    pane,
+    "const handleSend = React.useCallback(",
+    "const handleStop = React.useCallback",
+  );
   const stop = between(pane, "const handleStop = React.useCallback", "const { queue: messageQueue");
   // The visibility rule is now tested behaviorally in chat-terminal-sync.test.ts:
   // "a saved reply hides an own run, but a mirrored run only by its own reply"
-  assert.match(pane, /isGenerating=\{isGenerating \|\| isStartingGeneration \|\| Boolean\(visibleDetachedProjection\)\}/u);
-  assert.match(pane, /canStopGeneration=\{\(canStopGeneration \|\| Boolean\(visibleDetachedProjection\)\) && !isStoppingGeneration\}/u);
+  assert.match(
+    pane,
+    /isGenerating=\{\s*isGenerating \|\| isStartingGeneration \|\| Boolean\(visibleDetachedProjection\)\s*\}/u,
+  );
+  assert.match(
+    pane,
+    /canStopGeneration=\{\s*\(canStopGeneration \|\| Boolean\(visibleDetachedProjection\)\) &&\s*!isStoppingGeneration\s*\}/u,
+  );
   // Stop closes busy admission synchronously, before React re-renders.
   assert.match(pane, /if \(handleStop\(\)\) stopRequestedRef\.current = true;/u);
   assert.match(pane, /stoppingGeneration=\{isStoppingGeneration\}/u);
-  const queueAdmission = between(pane, "const queueMessage = React.useCallback(", "const steerMessage = React.useCallback(");
+  const queueAdmission = between(
+    pane,
+    "const queueMessage = React.useCallback(",
+    "const steerMessage = React.useCallback(",
+  );
   assert.match(queueAdmission, /if \(stopRequestedRef\.current\) \{\s*throw new Error/u);
-  assert.ok(queueAdmission.indexOf("stopRequestedRef.current") < queueAdmission.indexOf("messageQueue.add("));
-  assert.match(stop, /if \(visibleDetachedProjection && !generationRef\.current && !isStoppingGeneration\)/u);
-  assert.match(stop, /chatControl\.cancel\(streamId\)/u);
-  assert.match(pane, /if \(!detachedGenerationDraining && !generationRef\.current\) setIsStoppingGeneration\(false\)/u);
+  assert.ok(
+    queueAdmission.indexOf("stopRequestedRef.current") <
+      queueAdmission.indexOf("messageQueue.add("),
+  );
+  assert.match(
+    stop,
+    /if \(\s*visibleDetachedProjection &&\s*!generationRef\.current &&\s*!isStoppingGeneration\s*\)/u,
+  );
+  assert.match(stop, /chatControl\s*\.cancel\(streamId\)/u);
+  assert.match(
+    pane,
+    /if \(\s*!detachedGenerationDraining &&\s*!generationRef\.current\s*\)\s*setIsStoppingGeneration\(false\)/u,
+  );
   assert.match(send, /if \(detachedGenerationDraining\) \{\s*throw new Error/u);
-  assert.match(pane, /enabled:\s*!draft\s*&&\s*ready\s*&&\s*!isGenerating[\s\S]*?!detachedGenerationDraining/u);
+  assert.match(
+    pane,
+    /enabled:\s*!draft\s*&&\s*ready\s*&&\s*!isGenerating[\s\S]*?!detachedGenerationDraining/u,
+  );
 });
 
 test("a pre-append assistant read cannot hide controls for the newer user turn", async () => {
   const pane = source("./chat-pane.tsx");
-  const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
+  const send = between(
+    pane,
+    "const handleSend = React.useCallback(",
+    "const handleStop = React.useCallback",
+  );
   const install = send.indexOf("await installAppendedChatSnapshot(qc, chatId, updated)");
   const start = send.indexOf("runGeneration(messageTurnId)");
   assert.ok(install >= 0 && start > install);
@@ -816,7 +926,10 @@ test("a pre-append assistant read cannot hide controls for the newer user turn",
   let resolveOldRead!: (chat: Chat) => void;
   const oldRead = queryClient.fetchQuery({
     queryKey: queryKeys.chat(chatId),
-    queryFn: () => new Promise<Chat>((resolve) => { resolveOldRead = resolve; }),
+    queryFn: () =>
+      new Promise<Chat>((resolve) => {
+        resolveOldRead = resolve;
+      }),
   });
 
   await Promise.resolve();
@@ -838,16 +951,28 @@ test("root recovery reconciles missed detached terminals against authoritative a
   assert.match(recovery, /pendingDetachedLifecycleChats\(\)/u);
   assert.match(recovery, /!activeChatIds\.has\(owner\.chatId\)/u);
   assert.ok(
-    recovery.indexOf('onNotification("chats:activity-changed"') < recovery.indexOf(".activitySnapshot()"),
+    recovery.indexOf('onNotification("chats:activity-changed"') <
+      recovery.indexOf(".activitySnapshot()"),
     "Recovery must subscribe before its bootstrap snapshot",
   );
   assert.match(root, /captureDetachedLifecycleChat\(owner\)/u);
-  assert.match(root, /clearInactiveDetachedLifecycleChat\(captured, new Set\(snapshot\.activeChatIds\)\)/u);
-  assert.match(root, /subscribeChatSettlements[\s\S]{0,180}reconcileDetachedLifecycleChat\(settlement\)/u);
+  assert.match(
+    root,
+    /clearInactiveDetachedLifecycleChat\(captured, new Set\(snapshot\.activeChatIds\)\)/u,
+  );
+  assert.match(
+    root,
+    /subscribeChatSettlements[\s\S]{0,180}reconcileDetachedLifecycleChat\(settlement\)/u,
+  );
 });
 
 test("every ordinary new-agent entry opens a draft without eager creation", () => {
-  for (const file of ["./chat-layout.tsx", "./root-view.tsx", "./chat-pane.tsx", "../components/chat-sidebar.tsx"]) {
+  for (const file of [
+    "./chat-layout.tsx",
+    "./root-view.tsx",
+    "./chat-pane.tsx",
+    "../components/chat-sidebar.tsx",
+  ]) {
     const implementation = source(file);
     assert.match(implementation, /createChatDraft\(/u, file);
     assert.doesNotMatch(implementation, /chatsApi\s*\.create\(/u, file);
@@ -856,12 +981,18 @@ test("every ordinary new-agent entry opens a draft without eager creation", () =
 
 test("first-message promotion seeds the real cache before releasing draft state without navigation", () => {
   const pane = source("./chat-pane.tsx");
-  const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
+  const send = between(
+    pane,
+    "const handleSend = React.useCallback(",
+    "const handleStop = React.useCallback",
+  );
   assert.match(pane, /useChat\(draft \? undefined : chatId\)/u);
   assert.match(send, /chatsApi\.createWithFirstMessage\(/u);
   const seed = send.indexOf("await installAppendedChatSnapshot(qc, chatId, updated)");
   const promote = send.indexOf("finishChatDraftSend(chatId, true)");
-  const ownerGuard = send.indexOf("(firstDraft && (!mountedRef.current || chatIdRef.current !== chatId))");
+  const ownerGuard = send.indexOf(
+    "(firstDraft && (!mountedRef.current || chatIdRef.current !== chatId))",
+  );
   const start = send.indexOf("runGeneration(messageTurnId)");
   assert.ok(seed >= 0 && promote > seed && ownerGuard > promote && start > ownerGuard);
   assert.match(send, /await chatsApi\.abandonTurn\(chatId, messageTurnId\)/u);
@@ -869,12 +1000,21 @@ test("first-message promotion seeds the real cache before releasing draft state 
   assert.match(pane, /enabled:\s*!draft &&\s*ready/u);
 });
 
-
 test("ordinary sends retain their generation-intent guard while draft promotion also checks its view owner", () => {
   const pane = source("./chat-pane.tsx");
-  const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
-  assert.match(send, /if \(\s*generationIntentRef\.current !== generationIntent \|\|\s*\(firstDraft && \(!mountedRef\.current \|\| chatIdRef\.current !== chatId\)\)\s*\) \{/u);
-  assert.doesNotMatch(send, /if \(!mountedRef\.current \|\| chatIdRef\.current !== chatId \|\| generationIntentRef\.current/u);
+  const send = between(
+    pane,
+    "const handleSend = React.useCallback(",
+    "const handleStop = React.useCallback",
+  );
+  assert.match(
+    send,
+    /if \(\s*generationIntentRef\.current !== generationIntent \|\|\s*\(firstDraft && \(!mountedRef\.current \|\| chatIdRef\.current !== chatId\)\)\s*\) \{/u,
+  );
+  assert.doesNotMatch(
+    send,
+    /if \(!mountedRef\.current \|\| chatIdRef\.current !== chatId \|\| generationIntentRef\.current/u,
+  );
 });
 
 function failedChatResponse(id: string, category: string) {
@@ -894,8 +1034,12 @@ for (const compacted of [false, true]) {
     let settleCompaction!: (result: unknown) => void;
     const appended: string[] = [];
     const { router, queryClient } = await mountRoutedChatPane("chat-a", {
-      "chats:get": (id) => failedChatResponse(String(id), id === "chat-a" ? "context_window" : "network"),
-      "chats:compact": () => new Promise((resolve) => { settleCompaction = resolve; }),
+      "chats:get": (id) =>
+        failedChatResponse(String(id), id === "chat-a" ? "context_window" : "network"),
+      "chats:compact": () =>
+        new Promise((resolve) => {
+          settleCompaction = resolve;
+        }),
       "chats:appendMessage": (chatId) => {
         appended.push(String(chatId));
         throw new Error("The follow-up could not be saved.");
@@ -911,10 +1055,16 @@ for (const compacted of [false, true]) {
         await new Promise((resolve) => setTimeout(resolve, 20));
       });
       const tryAgain = await screen.findByRole("button", { name: "Try again" });
-      assert.equal((tryAgain as HTMLButtonElement).disabled, false, "Chat B must not inherit chat A's pending action");
+      assert.equal(
+        (tryAgain as HTMLButtonElement).disabled,
+        false,
+        "Chat B must not inherit chat A's pending action",
+      );
 
       await act(async () => {
-        settleCompaction(compacted ? { compacted: true } : { compacted: false, reason: "already_compact" });
+        settleCompaction(
+          compacted ? { compacted: true } : { compacted: false, reason: "already_compact" },
+        );
         await new Promise((resolve) => setTimeout(resolve, 20));
       });
       assert.deepEqual(appended, [], "Chat A's follow-up must not be sent from chat B's pane");
@@ -969,9 +1119,13 @@ test("a pending Resume in one chat leaves another interrupted chat's Resume usab
   let rejectAppend!: (error: Error) => void;
   const { router, queryClient } = await mountRoutedChatPane("chat-a", {
     "chats:replyInterrupted": () => true,
-    "chats:appendMessage": () => new Promise((_resolve, reject) => { rejectAppend = reject; }),
+    "chats:appendMessage": () =>
+      new Promise((_resolve, reject) => {
+        rejectAppend = reject;
+      }),
   });
-  const resume = async () => (await screen.findByRole("button", { name: "Resume" })) as HTMLButtonElement;
+  const resume = async () =>
+    (await screen.findByRole("button", { name: "Resume" })) as HTMLButtonElement;
   try {
     await act(async () => {
       fireEvent.click(await resume());
@@ -981,7 +1135,11 @@ test("a pending Resume in one chat leaves another interrupted chat's Resume usab
       await router.navigate({ to: "/chat/$chatId", params: { chatId: "chat-b" } });
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
-    assert.equal((await resume()).disabled, false, "Chat B must not inherit chat A's pending Resume");
+    assert.equal(
+      (await resume()).disabled,
+      false,
+      "Chat B must not inherit chat A's pending Resume",
+    );
     await act(async () => {
       rejectAppend(new Error("The follow-up could not be saved."));
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -995,20 +1153,24 @@ test("a pending Resume in one chat leaves another interrupted chat's Resume usab
 });
 
 function recoveredQuestionWaits(chatId: string) {
-  return [{
-    kind: "question" as const,
-    waitId: `wait-${chatId}`,
-    askedAt: 1,
-    questions: [{
-      question: "Which database?",
-      header: "Database",
-      multiSelect: false,
-      options: [
-        { label: "SQLite", description: "Embedded." },
-        { label: "Postgres", description: "Relational." },
+  return [
+    {
+      kind: "question" as const,
+      waitId: `wait-${chatId}`,
+      askedAt: 1,
+      questions: [
+        {
+          question: "Which database?",
+          header: "Database",
+          multiSelect: false,
+          options: [
+            { label: "SQLite", description: "Embedded." },
+            { label: "Postgres", description: "Relational." },
+          ],
+        },
       ],
-    }],
-  }];
+    },
+  ];
 }
 
 test("a recovered answer still sending in one chat leaves another chat's question usable", async () => {
@@ -1017,9 +1179,13 @@ test("a recovered answer still sending in one chat leaves another chat's questio
     "chats:replyInterrupted": () => true,
     "chats:interruptedWaits": (id) => recoveredQuestionWaits(String(id)),
     "chats:dismissInterruptedWait": () => undefined,
-    "chats:appendMessage": () => new Promise((_resolve, reject) => { rejectAppend = reject; }),
+    "chats:appendMessage": () =>
+      new Promise((_resolve, reject) => {
+        rejectAppend = reject;
+      }),
   });
-  const close = async () => (await screen.findByRole("button", { name: "Close questionnaire" })) as HTMLButtonElement;
+  const close = async () =>
+    (await screen.findByRole("button", { name: "Close questionnaire" })) as HTMLButtonElement;
   const visit = async (chatId: string) => {
     await act(async () => {
       await router.navigate({ to: "/chat/$chatId", params: { chatId } });
@@ -1033,7 +1199,11 @@ test("a recovered answer still sending in one chat leaves another chat's questio
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
     await visit("chat-b");
-    assert.equal((await close()).disabled, false, "Chat B must not inherit chat A's pending answer");
+    assert.equal(
+      (await close()).disabled,
+      false,
+      "Chat B must not inherit chat A's pending answer",
+    );
     await act(async () => {
       rejectAppend(new Error("The answer could not be saved."));
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -1158,7 +1328,10 @@ test("upsertCreatedWorkspaceInCache patches hydrated idle lists and falls back t
   let resolveFetch!: (list: Workspace[]) => void;
   const inflight = qc3.fetchQuery({
     queryKey: queryKeys.workspaces,
-    queryFn: () => new Promise<Workspace[]>((resolve) => { resolveFetch = resolve; }),
+    queryFn: () =>
+      new Promise<Workspace[]>((resolve) => {
+        resolveFetch = resolve;
+      }),
   });
   await Promise.resolve();
   upsertCreatedWorkspaceInCache(qc3, created);
@@ -1196,7 +1369,8 @@ test("a send waiting on its folder check sends nothing once the person moves to 
       return new Promise(() => undefined);
     },
   });
-  const resume = async () => (await screen.findByRole("button", { name: "Resume" })) as HTMLButtonElement;
+  const resume = async () =>
+    (await screen.findByRole("button", { name: "Resume" })) as HTMLButtonElement;
   try {
     await act(async () => {
       fireEvent.click(await resume());
@@ -1271,7 +1445,10 @@ test("ChatPane claims a pending desktop handoff, replays gap deltas, renders app
     });
     await waitFor(() => {
       const bodyText = document.body.textContent ?? "";
-      assert.ok(bodyText.includes("Streaming from floating and gap text"), `expected streaming text, got: ${bodyText}`);
+      assert.ok(
+        bodyText.includes("Streaming from floating and gap text"),
+        `expected streaming text, got: ${bodyText}`,
+      );
       assert.ok(bodyText.includes("Run npm test"), "expected pending approval card");
     });
     const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
@@ -1284,7 +1461,12 @@ test("ChatPane claims a pending desktop handoff, replays gap deltas, renders app
       title: "Chat chat-handoff",
       messages: [
         { id: "m-1", role: "user", content: "Hello from chat chat-handoff", createdAt: 1 },
-        { id: "m-2", role: "assistant", content: "Streaming from floating and gap text!", createdAt: 2 },
+        {
+          id: "m-2",
+          role: "assistant",
+          content: "Streaming from floating and gap text!",
+          createdAt: 2,
+        },
       ],
       createdAt: 1,
       updatedAt: 2,
@@ -1298,7 +1480,9 @@ test("ChatPane claims a pending desktop handoff, replays gap deltas, renders app
       await new Promise((resolve) => setTimeout(resolve, 40));
     });
     await waitFor(() => {
-      assert.ok((document.body.textContent ?? "").includes("Streaming from floating and gap text!"));
+      assert.ok(
+        (document.body.textContent ?? "").includes("Streaming from floating and gap text!"),
+      );
     });
   } finally {
     cleanup();

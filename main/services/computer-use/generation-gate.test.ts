@@ -23,8 +23,12 @@ test("closing the global gate invalidates old activation snapshots", () => {
 test("global close selects only streams that used Computer Use, not every stream offered it", () => {
   const gate = new ComputerUseGenerationGate();
   const snapshot = gate.snapshot();
-  const offered: { computerUse: unknown; computerUseActivated?: boolean } = { computerUse: { close: () => {} } };
-  const used: { computerUse: unknown; computerUseActivated?: boolean } = { computerUse: { close: () => {} } };
+  const offered: { computerUse: unknown; computerUseActivated?: boolean } = {
+    computerUse: { close: () => {} },
+  };
+  const used: { computerUse: unknown; computerUseActivated?: boolean } = {
+    computerUse: { close: () => {} },
+  };
   assert.equal(activateComputerUseStream(gate, snapshot, used), true);
   const ids = activatedComputerUseStreamIds(
     new Map<string, { computerUse?: unknown; computerUseActivated?: boolean }>([
@@ -50,7 +54,11 @@ test("the disable path cancels a stream that called computer_use and spares one 
   const gate = new ComputerUseGenerationGate();
   const closed: string[] = [];
   const entry = (id: string) => ({
-    computerUse: { closeAndSettle: async () => { closed.push(id); } },
+    computerUse: {
+      closeAndSettle: async () => {
+        closed.push(id);
+      },
+    },
     completion: Promise.resolve(),
   });
   const active = new Map<string, ReturnType<typeof entry> & { computerUseActivated?: boolean }>([
@@ -98,37 +106,74 @@ test("a failed status query overrides stale cached readiness", () => {
 
 function deferred() {
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
 test("cancel-and-settle waits for driver closure, generation completion and owner-map removal", async () => {
   const driver = deferred();
   const generation = deferred();
-  const active = new Map([["cu", { computerUseActivated: true, computerUse: { closeAndSettle: () => driver.promise }, completion: generation.promise }]]);
+  const active = new Map([
+    [
+      "cu",
+      {
+        computerUseActivated: true,
+        computerUse: { closeAndSettle: () => driver.promise },
+        completion: generation.promise,
+      },
+    ],
+  ]);
   const gate = new ComputerUseGenerationGate();
   const snapshot = gate.snapshot();
   const cancellations: string[] = [];
   let settled = false;
-  const done = cancelComputerUseAndSettle({ gate, initializations: () => new Map(), active: () => active,
-    cancel: (id) => { cancellations.push(id); }, timeoutMs: 1000,
-  }).then(() => { settled = true; });
+  const done = cancelComputerUseAndSettle({
+    gate,
+    initializations: () => new Map(),
+    active: () => active,
+    cancel: (id) => {
+      cancellations.push(id);
+    },
+    timeoutMs: 1000,
+  }).then(() => {
+    settled = true;
+  });
   assert.equal(gate.isCurrent(snapshot), false);
   assert.deepEqual(cancellations, ["cu"]);
   active.clear();
   generation.resolve();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(settled, false, "removed maps and completed generation do not prove the driver settled");
+  assert.equal(
+    settled,
+    false,
+    "removed maps and completed generation do not prove the driver settled",
+  );
   driver.resolve();
   await done;
   assert.equal(settled, true);
 });
 
 test("cancel-and-settle rejects timeout and teardown errors rather than authorizing deletion", async () => {
-  for (const close of [() => new Promise<void>(() => {}), () => Promise.reject(new Error("driver failed"))]) {
-    const active = new Map([["cu", { computerUseActivated: true, computerUse: { closeAndSettle: close } }]]);
-    await assert.rejects(cancelComputerUseAndSettle({ gate: new ComputerUseGenerationGate(),
-      initializations: () => new Map(), active: () => active, cancel: () => { active.clear(); }, timeoutMs: 10,
-    }), /model was not removed/);
+  for (const close of [
+    () => new Promise<void>(() => {}),
+    () => Promise.reject(new Error("driver failed")),
+  ]) {
+    const active = new Map([
+      ["cu", { computerUseActivated: true, computerUse: { closeAndSettle: close } }],
+    ]);
+    await assert.rejects(
+      cancelComputerUseAndSettle({
+        gate: new ComputerUseGenerationGate(),
+        initializations: () => new Map(),
+        active: () => active,
+        cancel: () => {
+          active.clear();
+        },
+        timeoutMs: 10,
+      }),
+      /model was not removed/,
+    );
   }
 });

@@ -15,7 +15,11 @@ class FakeProcess extends EventEmitter {
   readonly platform = "darwin" as const;
   readonly ppid = 45;
   readonly version = "v24.0.0";
-  readonly versions = { node: "24.0.0", electron: "43.0.0", chrome: "142.0.0" } as NodeJS.ProcessVersions;
+  readonly versions = {
+    node: "24.0.0",
+    electron: "43.0.0",
+    chrome: "142.0.0",
+  } as NodeJS.ProcessVersions;
   readonly killed: Array<{ pid: number; signal: string }> = [];
   readonly warnings: Array<{ warning: string; type: string }> = [];
 
@@ -97,7 +101,8 @@ test("an uncaught exception reaches the observer with its error, and no uncaught
   const target = new FakeProcess();
   const seen: { event: string; origin: unknown; rawError: unknown }[] = [];
   observeDiagnosticEvents((event, detail) => {
-    if (event.event === "uncaught-exception") seen.push({ event: event.event, origin: event.fields?.origin, rawError: detail?.rawError });
+    if (event.event === "uncaught-exception")
+      seen.push({ event: event.event, origin: event.fields?.origin, rawError: detail?.rawError });
   });
   t.after(() => observeDiagnosticEvents(undefined));
   installProcessDiagnostics(target as never);
@@ -118,7 +123,12 @@ test("an unhandled rejection reaches the observer with its reason, and Node's wa
   const target = new FakeProcess();
   const seen: { level: unknown; errorType: unknown; rawError: unknown }[] = [];
   observeDiagnosticEvents((event, detail) => {
-    if (event.event === "unhandled-rejection") seen.push({ level: event.level, errorType: event.fields?.errorType, rawError: detail?.rawError });
+    if (event.event === "unhandled-rejection")
+      seen.push({
+        level: event.level,
+        errorType: event.fields?.errorType,
+        rawError: detail?.rawError,
+      });
   });
   t.after(() => observeDiagnosticEvents(undefined));
   installProcessDiagnostics(target as never);
@@ -127,7 +137,9 @@ test("an unhandled rejection reaches the observer with its reason, and Node's wa
   target.emit("unhandledRejection", reason, Promise.resolve());
 
   assert.deepEqual(seen, [{ level: "error", errorType: "TypeError", rawError: reason }]);
-  assert.deepEqual(target.warnings, [{ warning: reason.stack, type: "UnhandledPromiseRejectionWarning" }]);
+  assert.deepEqual(target.warnings, [
+    { warning: reason.stack, type: "UnhandledPromiseRejectionWarning" },
+  ]);
 });
 
 test("a rejection value that cannot be read does not throw from the listener", (t) => {
@@ -140,7 +152,8 @@ test("a rejection value that cannot be read does not throw from the listener", (
   installProcessDiagnostics(target as never);
   const hostile = Object.create(null) as object;
 
-  for (const reason of [hostile, undefined, Symbol("s"), "text"]) target.emit("unhandledRejection", reason, Promise.resolve());
+  for (const reason of [hostile, undefined, Symbol("s"), "text"])
+    target.emit("unhandledRejection", reason, Promise.resolve());
 
   assert.equal(seen.length, 4);
   assert.equal(target.warnings.length, 3);

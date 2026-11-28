@@ -67,7 +67,8 @@ export function createDeviceWorkspaceStore(storage: WorkspaceStorage | null): De
   const notify = () => {
     for (const listener of [...listeners]) listener();
   };
-  const tabsState = () => (stored ??= parseStoredDeviceTabs(safeRead(storage, DEVICE_TABS_STORAGE_KEY)));
+  const tabsState = () =>
+    (stored ??= parseStoredDeviceTabs(safeRead(storage, DEVICE_TABS_STORAGE_KEY)));
   return {
     subscribe(listener) {
       listeners.add(listener);
@@ -89,7 +90,10 @@ export function createDeviceWorkspaceStore(storage: WorkspaceStorage | null): De
       else floating.delete(chatId);
       notify();
     },
-    geometry: () => (geometry ??= parseDeviceMiniPlayerGeometry(safeRead(storage, DEVICE_MINI_PLAYER_STORAGE_KEY))),
+    geometry: () =>
+      (geometry ??= parseDeviceMiniPlayerGeometry(
+        safeRead(storage, DEVICE_MINI_PLAYER_STORAGE_KEY),
+      )),
     setGeometry(next) {
       const current = geometry;
       if (
@@ -141,9 +145,17 @@ export function useFloatingDevice(chatId: string | null | undefined): string | n
 }
 
 export function useDeviceMiniPlayerGeometry(): DeviceMiniPlayerGeometry {
-  return React.useSyncExternalStore(deviceWorkspace.subscribe, deviceWorkspace.geometry, deviceWorkspace.geometry);
+  return React.useSyncExternalStore(
+    deviceWorkspace.subscribe,
+    deviceWorkspace.geometry,
+    deviceWorkspace.geometry,
+  );
 }
 
 export function useAutoFloatDevice(): boolean {
-  return React.useSyncExternalStore(deviceWorkspace.subscribe, deviceWorkspace.autoFloat, () => true);
+  return React.useSyncExternalStore(
+    deviceWorkspace.subscribe,
+    deviceWorkspace.autoFloat,
+    () => true,
+  );
 }

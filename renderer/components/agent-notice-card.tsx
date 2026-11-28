@@ -5,7 +5,16 @@
 // disclosure shows exactly what the agent was told, output included.
 
 import * as React from "react";
-import { AlarmClock, CalendarClock, ChevronDown, GitPullRequest, ListChecks, MessagesSquare, Repeat, TerminalSquare } from "lucide-react";
+import {
+  AlarmClock,
+  CalendarClock,
+  ChevronDown,
+  GitPullRequest,
+  ListChecks,
+  MessagesSquare,
+  Repeat,
+  TerminalSquare,
+} from "lucide-react";
 import type { AgentNoticeV1 } from "../shared/agent-notices";
 import { Markdown } from "./markdown";
 import { Button, Text } from "./ui";
@@ -31,7 +40,15 @@ const SOURCE_LABELS = {
   chat: "Started chat",
 } as const;
 
-export function AgentNoticeCard({ notice, content, imageScope }: { notice: AgentNoticeV1; content: string; imageScope?: string }) {
+export function AgentNoticeCard({
+  notice,
+  content,
+  imageScope,
+}: {
+  notice: AgentNoticeV1;
+  content: string;
+  imageScope?: string;
+}) {
   const [open, setOpen] = React.useState(false);
   const detailsId = React.useId();
   const Icon = SOURCE_ICONS[notice.source];
@@ -82,7 +99,10 @@ export function AgentNoticeCard({ notice, content, imageScope }: { notice: Agent
             Details
             <ChevronDown
               aria-hidden="true"
-              className={cn("size-3.5 transition-transform duration-200 ease-standard motion-reduce:transition-none", open && "rotate-180")}
+              className={cn(
+                "size-3.5 transition-transform duration-200 ease-standard motion-reduce:transition-none",
+                open && "rotate-180",
+              )}
             />
           </Button>
         </div>

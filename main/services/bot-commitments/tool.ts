@@ -9,7 +9,7 @@ export const NOTE_FOLLOW_UP_TOOL_NAME = "note_follow_up";
 
 /** The review prompt's lines for this tool. */
 export const NOTE_FOLLOW_UP_INSTRUCTIONS = [
-  "When the Bot promised to follow up on something by a date (\"I'll check on the invoice Friday\"), call note_follow_up with what to follow up on and the date, YYYY-MM-DD, between tomorrow and 60 days ahead. Add due_time (HH:MM) only when a time was promised.",
+  'When the Bot promised to follow up on something by a date ("I\'ll check on the invoice Friday"), call note_follow_up with what to follow up on and the date, YYYY-MM-DD, between tomorrow and 60 days ahead. Add due_time (HH:MM) only when a time was promised.',
   "Never note a follow-up the person did not ask for or the Bot did not promise.",
 ];
 
@@ -21,7 +21,8 @@ export function createNoteFollowUpTool(deps: {
   return {
     name: NOTE_FOLLOW_UP_TOOL_NAME,
     label: "Note follow-up",
-    description: "Record a dated follow-up the Bot promised. The person is asked before anything is scheduled.",
+    description:
+      "Record a dated follow-up the Bot promised. The person is asked before anything is scheduled.",
     parameters: Type.Object(
       {
         text: Type.String({ description: "What to follow up on, in a few words." }),
@@ -40,7 +41,9 @@ export function createNoteFollowUpTool(deps: {
         ...(typeof input.due_time === "string" ? { dueTime: input.due_time } : {}),
       });
       if (outcome.ok) deps.onAdded(deps.botId);
-      const body = outcome.ok ? { ok: true } : { ok: false, code: outcome.code, error: outcome.error };
+      const body = outcome.ok
+        ? { ok: true }
+        : { ok: false, code: outcome.code, error: outcome.error };
       return {
         content: [{ type: "text", text: JSON.stringify(body) }],
         details: null,

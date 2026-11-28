@@ -217,7 +217,11 @@ export function createSecureInputPrefetch(deps: {
 }
 
 /** Run an AppleScript handler with data passed as argv, never interpolated. */
-export function runOsascript(script: string, args: string[] = [], timeoutMs = 5_000): Promise<string> {
+export function runOsascript(
+  script: string,
+  args: string[] = [],
+  timeoutMs = 5_000,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       "/usr/bin/osascript",
@@ -237,7 +241,10 @@ export type RunOsascript = (script: string, args: string[]) => Promise<string>;
  * Runs the paste transaction. A failure after ⌘V was sent (the timeout killed
  * osascript before its restore step) becomes PasteAfterKeystrokeError.
  */
-export async function runAtomicMacPaste(text: string, run: RunOsascript = runOsascript): Promise<boolean> {
+export async function runAtomicMacPaste(
+  text: string,
+  run: RunOsascript = runOsascript,
+): Promise<boolean> {
   try {
     return (await run(ATOMIC_PASTE_SCRIPT, [text])) === "pasted";
   } catch (error) {
@@ -296,7 +303,10 @@ export async function pasteTranscript(text: string, deps: PasteDeps): Promise<Pa
       // late ⌘V paste it (maybe a password), so the transcript stays. The
       // transaction already put it there before ⌘V; writing it again would
       // overwrite anything the person copied since.
-      deps.log?.("Dictation paste timed out after the keystroke; the transcript stays on the clipboard.", error.original);
+      deps.log?.(
+        "Dictation paste timed out after the keystroke; the transcript stays on the clipboard.",
+        error.original,
+      );
       return {
         outcome: "copied",
         reason: "paste-unavailable",

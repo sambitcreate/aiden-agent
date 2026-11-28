@@ -31,7 +31,10 @@ export interface WorkbenchWidthState {
 }
 
 /** Preferred width and drag state for a workbench, persisted under `storageKey`. */
-export function useWorkbenchWidth(storageKey: string, bounds?: PanelWidthBounds): WorkbenchWidthState {
+export function useWorkbenchWidth(
+  storageKey: string,
+  bounds?: PanelWidthBounds,
+): WorkbenchWidthState {
   const [preferredWidth, setPreferredWidth] = React.useState(() =>
     storedWorkbenchWidth(localStorage.getItem(storageKey), bounds),
   );
@@ -108,7 +111,13 @@ export function focusStripTabNextFrame(activeTabRef: React.RefObject<HTMLElement
     if (!tab?.isConnected) return;
     const active = document.activeElement;
     const strip = tab.closest("[data-workbench-strip]");
-    if (active instanceof HTMLElement && active !== document.body && strip && !strip.contains(active)) return;
+    if (
+      active instanceof HTMLElement &&
+      active !== document.body &&
+      strip &&
+      !strip.contains(active)
+    )
+      return;
     tab.focus();
   });
 }
@@ -130,7 +139,7 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
 }: WorkbenchTabStripProps<T>) {
   const toggleShortcut = useShortcutLabel("environment.toggle");
   const toggleShortcutBinding = useShortcutBinding("environment.toggle");
-  const selectedBrowser = tabs.find(entry => entry.selected && entry.viewId === "browser");
+  const selectedBrowser = tabs.find((entry) => entry.selected && entry.viewId === "browser");
   const tabMenuSelectionRef = React.useRef(false);
   const headerRef = React.useRef<HTMLElement>(null);
   const listRef = React.useRef<HTMLDivElement>(null);
@@ -144,7 +153,9 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
     if (!list) return;
     const start = list.scrollLeft > 1;
     const end = list.scrollLeft + list.clientWidth < list.scrollWidth - 1;
-    setFade((current) => (current.start === start && current.end === end ? current : { start, end }));
+    setFade((current) =>
+      current.start === start && current.end === end ? current : { start, end },
+    );
   }, []);
   // The strip scrolls when its tabs outgrow the panel: keep the selected one in view, clear
   // of the faded edge, so a tab opened by a link or restored at launch is never hidden.
@@ -154,8 +165,10 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
     if (list && tab && selectedId !== undefined) {
       const listBox = list.getBoundingClientRect();
       const tabBox = tab.getBoundingClientRect();
-      if (tabBox.left < listBox.left + TAB_FADE_PX) list.scrollLeft = Math.max(0, list.scrollLeft - (listBox.left + TAB_FADE_PX - tabBox.left));
-      else if (tabBox.right > listBox.right - TAB_FADE_PX) list.scrollLeft += tabBox.right - (listBox.right - TAB_FADE_PX);
+      if (tabBox.left < listBox.left + TAB_FADE_PX)
+        list.scrollLeft = Math.max(0, list.scrollLeft - (listBox.left + TAB_FADE_PX - tabBox.left));
+      else if (tabBox.right > listBox.right - TAB_FADE_PX)
+        list.scrollLeft += tabBox.right - (listBox.right - TAB_FADE_PX);
     }
     measureFade();
   }, [activeTabRef, selectedId, tabs.length, measureFade]);
@@ -166,9 +179,10 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
     observer.observe(list);
     return () => observer.disconnect();
   }, [measureFade]);
-  const fadeMask = fade.start || fade.end
-    ? `linear-gradient(to right, ${fade.start ? "transparent" : "black"} 0, black ${TAB_FADE_PX}px, black calc(100% - ${TAB_FADE_PX}px), ${fade.end ? "transparent" : "black"} 100%)`
-    : undefined;
+  const fadeMask =
+    fade.start || fade.end
+      ? `linear-gradient(to right, ${fade.start ? "transparent" : "black"} 0, black ${TAB_FADE_PX}px, black calc(100% - ${TAB_FADE_PX}px), ${fade.end ? "transparent" : "black"} 100%)`
+      : undefined;
   return (
     <header
       ref={headerRef}
@@ -176,31 +190,167 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
       className="drag-region flex h-13 shrink-0 items-center gap-1 border-b border-separator px-2"
       style={trailingClearance ? { paddingRight: trailingClearance + 4 } : undefined}
     >
-      <div ref={listRef} onScroll={measureFade} style={fadeMask ? { maskImage: fadeMask, WebkitMaskImage: fadeMask } : undefined} data-fade-start={fade.start || undefined} data-fade-end={fade.end || undefined} className="no-drag flex min-w-0 flex-1 gap-1 overflow-x-auto py-1" role="tablist" aria-label={tabListLabel}>
+      <div
+        ref={listRef}
+        onScroll={measureFade}
+        style={fadeMask ? { maskImage: fadeMask, WebkitMaskImage: fadeMask } : undefined}
+        data-fade-start={fade.start || undefined}
+        data-fade-end={fade.end || undefined}
+        className="no-drag flex min-w-0 flex-1 gap-1 overflow-x-auto py-1"
+        role="tablist"
+        aria-label={tabListLabel}
+      >
         {tabs.map((entry, index) => {
           const Icon = entry.icon;
           const closable = entry.closable !== false;
-          const tabButton = <Button ref={entry.selected ? activeTabRef : undefined} id={entry.selected ? `${idPrefix}-${entry.viewId}-tab` : undefined} variant="transparent" size="small" role="tab" tabIndex={entry.selected ? 0 : -1} aria-selected={entry.selected} aria-controls={`${idPrefix}-${entry.viewId}-panel`} title={entry.title ?? entry.label} disabled={busy} onClick={() => onSelectTab(entry)} onDoubleClick={entry.onRename} onKeyDown={(event) => {
-              if (event.key === "Delete") { event.preventDefault(); if (closable) onCloseTab(entry); return; }
-              if (event.key === "F2" && entry.onRename) { event.preventDefault(); entry.onRename(); return; }
-              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-              event.preventDefault();
-              const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
-              onSelectTab(tabs[next]);
-            }}>{Icon ? <Icon className="size-4 shrink-0" /> : null}<span className="max-w-32 truncate">{entry.label}</span></Button>;
-          return <div key={entry.id} {...entry.dataAttributes} className={cn("flex min-w-0 shrink-0 items-center rounded-control", entry.selected && "bg-list-selection")}>
-            {entry.editor ?? (entry.wrap ? entry.wrap(tabButton) : tabButton)}
-            {closable ? <Button variant="transparent" size="small" iconOnly disabled={busy} aria-label={`Close ${entry.label} tab`} onClick={() => onCloseTab(entry)}><X className="size-3" /></Button> : null}
-          </div>;
+          const tabButton = (
+            <Button
+              ref={entry.selected ? activeTabRef : undefined}
+              id={entry.selected ? `${idPrefix}-${entry.viewId}-tab` : undefined}
+              variant="transparent"
+              size="small"
+              role="tab"
+              tabIndex={entry.selected ? 0 : -1}
+              aria-selected={entry.selected}
+              aria-controls={`${idPrefix}-${entry.viewId}-panel`}
+              title={entry.title ?? entry.label}
+              disabled={busy}
+              onClick={() => onSelectTab(entry)}
+              onDoubleClick={entry.onRename}
+              onKeyDown={(event) => {
+                if (event.key === "Delete") {
+                  event.preventDefault();
+                  if (closable) onCloseTab(entry);
+                  return;
+                }
+                if (event.key === "F2" && entry.onRename) {
+                  event.preventDefault();
+                  entry.onRename();
+                  return;
+                }
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const next =
+                  event.key === "Home"
+                    ? 0
+                    : event.key === "End"
+                      ? tabs.length - 1
+                      : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+                onSelectTab(tabs[next]);
+              }}
+            >
+              {Icon ? <Icon className="size-4 shrink-0" /> : null}
+              <span className="max-w-32 truncate">{entry.label}</span>
+            </Button>
+          );
+          return (
+            <div
+              key={entry.id}
+              {...entry.dataAttributes}
+              className={cn(
+                "flex min-w-0 shrink-0 items-center rounded-control",
+                entry.selected && "bg-list-selection",
+              )}
+            >
+              {entry.editor ?? (entry.wrap ? entry.wrap(tabButton) : tabButton)}
+              {closable ? (
+                <Button
+                  variant="transparent"
+                  size="small"
+                  iconOnly
+                  disabled={busy}
+                  aria-label={`Close ${entry.label} tab`}
+                  onClick={() => onCloseTab(entry)}
+                >
+                  <X className="size-3" />
+                </Button>
+              ) : null}
+            </div>
+          );
         })}
       </div>
-      {newTab ? <Button variant="transparent" size="small" iconOnly className="no-drag" disabled={busy} aria-label={newTab.label} onClick={newTab.onOpen}><Plus /></Button> : null}
-      {tabMenu && selectedBrowser ? <BrowserMenuButton scope={JSON.stringify([selectedBrowser.id, presented])} iconOnly className="no-drag" aria-label="Open tabs"
-        options={tabs.map(entry => ({ label: entry.label, checked: entry.selected, disabled: busy, select: () => {
-          onSelectTab(entry);
-          focusStripTabNextFrame(activeTabRef);
-        } }))}><List /></BrowserMenuButton> : tabMenu ? <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; focusStripTabNextFrame(activeTabRef); } }}>{tabs.map((entry) => <DropdownMenuItem key={entry.id} {...entry.dataAttributes} disabled={busy} onSelect={() => { tabMenuSelectionRef.current = true; onSelectTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null}
-      <Button variant="transparent" size="small" iconOnly onClick={onClose} aria-label={closeLabel} aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)} title={`${closeTitle} (${toggleShortcut})`} className="no-drag"><PanelRightClose /></Button>
+      {newTab ? (
+        <Button
+          variant="transparent"
+          size="small"
+          iconOnly
+          className="no-drag"
+          disabled={busy}
+          aria-label={newTab.label}
+          onClick={newTab.onOpen}
+        >
+          <Plus />
+        </Button>
+      ) : null}
+      {tabMenu && selectedBrowser ? (
+        <BrowserMenuButton
+          scope={JSON.stringify([selectedBrowser.id, presented])}
+          iconOnly
+          className="no-drag"
+          aria-label="Open tabs"
+          options={tabs.map((entry) => ({
+            label: entry.label,
+            checked: entry.selected,
+            disabled: busy,
+            select: () => {
+              onSelectTab(entry);
+              focusStripTabNextFrame(activeTabRef);
+            },
+          }))}
+        >
+          <List />
+        </BrowserMenuButton>
+      ) : tabMenu ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              className="no-drag"
+              aria-label="Open tabs"
+            >
+              <List />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            onCloseAutoFocus={(event) => {
+              if (tabMenuSelectionRef.current) {
+                event.preventDefault();
+                tabMenuSelectionRef.current = false;
+                focusStripTabNextFrame(activeTabRef);
+              }
+            }}
+          >
+            {tabs.map((entry) => (
+              <DropdownMenuItem
+                key={entry.id}
+                {...entry.dataAttributes}
+                disabled={busy}
+                onSelect={() => {
+                  tabMenuSelectionRef.current = true;
+                  onSelectTab(entry);
+                }}
+              >
+                {entry.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
+      <Button
+        variant="transparent"
+        size="small"
+        iconOnly
+        onClick={onClose}
+        aria-label={closeLabel}
+        aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)}
+        title={`${closeTitle} (${toggleShortcut})`}
+        className="no-drag"
+      >
+        <PanelRightClose />
+      </Button>
     </header>
   );
 }
@@ -223,8 +373,10 @@ export interface WorkbenchView {
   render: (context: WorkbenchViewContext) => React.ReactNode;
 }
 
-export interface WorkbenchPanelProps<T extends WorkbenchTab>
-  extends Omit<WorkbenchTabStripProps<T>, "activeTabRef"> {
+export interface WorkbenchPanelProps<T extends WorkbenchTab> extends Omit<
+  WorkbenchTabStripProps<T>,
+  "activeTabRef"
+> {
   id: string;
   /**
    * `data-environment-surface`: the workspace's focus and Escape rules act on

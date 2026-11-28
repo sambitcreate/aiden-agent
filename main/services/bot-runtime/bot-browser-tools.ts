@@ -33,8 +33,16 @@ import {
   type BrowserApprovalTarget,
   type BrowserToolApproval,
 } from "../browser/approval.js";
-import { browserWorkspacesOfBot, forgetBotBrowserWorkspace, registerBotBrowserWorkspace } from "../browser/bot-workspaces.js";
-import type { BrowserCommandContext, BrowserFieldProbe, BrowserProbeTarget } from "../browser/service.js";
+import {
+  browserWorkspacesOfBot,
+  forgetBotBrowserWorkspace,
+  registerBotBrowserWorkspace,
+} from "../browser/bot-workspaces.js";
+import type {
+  BrowserCommandContext,
+  BrowserFieldProbe,
+  BrowserProbeTarget,
+} from "../browser/service.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
 import { botBrowserApproval } from "./bot-browser-approval.js";
@@ -46,7 +54,11 @@ import { BOT_BROWSER_GATEWAY_TOOL } from "./bot-tool-disclosure.js";
 export interface BotBrowserService {
   getState(workspaceId: string): BrowserState;
   getBotState(workspaceId: string): BrowserState;
-  command(workspaceId: string, command: BrowserCommand, context: BrowserCommandContext): Promise<BrowserCommandResult>;
+  command(
+    workspaceId: string,
+    command: BrowserCommand,
+    context: BrowserCommandContext,
+  ): Promise<BrowserCommandResult>;
   getApprovalTarget(workspaceId: string, tabId?: string): BrowserApprovalTarget;
   hasOwner(workspaceId: string): boolean;
   transferOwner(workspaceId: string, owner: RendererDocumentOwner): void;
@@ -80,7 +92,11 @@ export interface BotBrowser {
   /** The gateway and browser tools for one refresh of the Bot's tools. */
   candidates(botId: string, turn: BotBrowserTurn): Promise<BotToolCandidate[]>;
   /** The live approval of a browser call, or `undefined` for any other tool. */
-  approvalFor(botId: string, toolName: string, call: BotToolCallCheck): Promise<BotLiveApproval | undefined>;
+  approvalFor(
+    botId: string,
+    toolName: string,
+    call: BotToolCallCheck,
+  ): Promise<BotLiveApproval | undefined>;
   /** The Bot is gone: close its tabs and forget its workspace and approvals. */
   forget(botId: string): Promise<void>;
   /** App quit. */
@@ -110,7 +126,13 @@ export function botVisibleBrowserState(state: BrowserState): BrowserState {
     tabs: state.tabs.map((tab) => {
       if (!tab.heldForPerson) return tab;
       const { favicon: _favicon, error: _error, ...rest } = tab;
-      return { ...rest, url: "", title: BOT_BROWSER_HELD_TAB_TITLE, canGoBack: false, canGoForward: false };
+      return {
+        ...rest,
+        url: "",
+        title: BOT_BROWSER_HELD_TAB_TITLE,
+        canGoBack: false,
+        canGoForward: false,
+      };
     }),
   };
 }
@@ -137,7 +159,9 @@ interface BotBrowserState {
 }
 
 function record(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? { ...(value as Record<string, unknown>) } : {};
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {};
 }
 
 function text(value: string): AgentToolResult<null> {
@@ -185,14 +209,17 @@ export function createBotBrowser(deps: BotBrowserDeps): BotBrowser {
         execute: async () => {
           const service = await ensureOwner(state);
           const current = botVisibleBrowserState(service.getBotState(state.workspaceId));
-          if (!current.agentAccessAllowed) throw new Error("Agent browser access is off in Browser settings.");
+          if (!current.agentAccessAllowed)
+            throw new Error("Agent browser access is off in Browser settings.");
           const tabs = current.tabs.map((tab) => ({
             tabId: tab.id,
             url: tab.url,
             title: tab.title,
             ...(tab.heldForPerson ? { usedByThePerson: true } : {}),
           }));
-          return text(`${BOT_BROWSER_GUIDANCE}\n\n${JSON.stringify({ tabs, currentTabId: state.selection.tabId ?? current.activeTabId })}`);
+          return text(
+            `${BOT_BROWSER_GUIDANCE}\n\n${JSON.stringify({ tabs, currentTabId: state.selection.tabId ?? current.activeTabId })}`,
+          );
         },
       } satisfies AgentTool,
       "safe",
@@ -210,10 +237,16 @@ export function createBotBrowser(deps: BotBrowserDeps): BotBrowser {
           if (approved) {
             const args = record(raw);
             const tabId = approved.approval.target.tabId;
-            if (args.tabId !== undefined && args.tabId !== tabId) throw new BrowserApprovalExpiredError("tab changed");
+            if (args.tabId !== undefined && args.tabId !== tabId)
+              throw new BrowserApprovalExpiredError("tab changed");
             const pinned = { ...args, tabId };
             const service = await deps.service();
-            assertBrowserToolApproval(approved.approval, tool.name, pinned, service.getApprovalTarget(state.workspaceId, tabId));
+            assertBrowserToolApproval(
+              approved.approval,
+              tool.name,
+              pinned,
+              service.getApprovalTarget(state.workspaceId, tabId),
+            );
             approved.args = pinned;
             params = pinned;
           }
@@ -238,7 +271,8 @@ export function createBotBrowser(deps: BotBrowserDeps): BotBrowser {
         selection: state.selection,
         profile: "bot",
         port: {
-          getState: async () => botVisibleBrowserState((await deps.service()).getBotState(state.workspaceId)),
+          getState: async () =>
+            botVisibleBrowserState((await deps.service()).getBotState(state.workspaceId)),
           command: async (command, signal, callId) => {
             const service = await ensureOwner(state);
             const approved = callId === undefined ? undefined : state.approvals.get(callId);
@@ -246,7 +280,8 @@ export function createBotBrowser(deps: BotBrowserDeps): BotBrowser {
             let beforeEffect: (() => void) | undefined;
             if (approved) {
               const tabId = approved.approval.target.tabId;
-              if (!("tabId" in command) || command.tabId !== tabId) throw new BrowserApprovalExpiredError("tab changed");
+              if (!("tabId" in command) || command.tabId !== tabId)
+                throw new BrowserApprovalExpiredError("tab changed");
               beforeEffect = () =>
                 assertBrowserToolApproval(
                   approved.approval,
@@ -263,16 +298,24 @@ export function createBotBrowser(deps: BotBrowserDeps): BotBrowser {
               credentialBoundary: true,
               ...(beforeEffect === undefined ? {} : { beforeEffect }),
             });
-            return { ...result, state: botVisibleBrowserState(service.getBotState(state.workspaceId)) };
+            return {
+              ...result,
+              state: botVisibleBrowserState(service.getBotState(state.workspaceId)),
+            };
           },
         },
       });
       return [
         { tool: gateway(state), replay: "safe" },
-        ...tools.map((tool): BotToolCandidate => ({
-          tool: bound(state, tool),
-          replay: tool.name === "browser_status" || tool.name === "browser_snapshot" ? "safe" : "unsafe",
-        })),
+        ...tools.map(
+          (tool): BotToolCandidate => ({
+            tool: bound(state, tool),
+            replay:
+              tool.name === "browser_status" || tool.name === "browser_snapshot"
+                ? "safe"
+                : "unsafe",
+          }),
+        ),
       ];
     },
 
@@ -284,11 +327,15 @@ export function createBotBrowser(deps: BotBrowserDeps): BotBrowser {
       const service = await ensureOwner(state);
       return botBrowserApproval(toolName, call, {
         currentTabId: () =>
-          state.selection.initialized ? state.selection.tabId : service.getState(state.workspaceId).activeTabId ?? undefined,
+          state.selection.initialized
+            ? state.selection.tabId
+            : (service.getState(state.workspaceId).activeTabId ?? undefined),
         heldReason: (tabId) =>
-          service.getState(state.workspaceId).tabs.find((tab) => tab.id === tabId)?.heldForPerson?.reason,
+          service.getState(state.workspaceId).tabs.find((tab) => tab.id === tabId)?.heldForPerson
+            ?.reason,
         approvalTarget: (tabId) => service.getApprovalTarget(state.workspaceId, tabId),
-        probe: (tabId, target, signal) => service.probeAgentTarget(state.workspaceId, tabId, target, signal),
+        probe: (tabId, target, signal) =>
+          service.probeAgentTarget(state.workspaceId, tabId, target, signal),
         authorize: (callId, approval, args) => {
           state.approvals.set(callId, { approval, args });
         },
@@ -300,7 +347,8 @@ export function createBotBrowser(deps: BotBrowserDeps): BotBrowser {
       bots.delete(botId);
       state?.controller.abort(new Error("This Bot was deleted."));
       try {
-        if (state || browserWorkspacesOfBot(botId).length > 0) (await deps.service()).closeBotTabs(botId);
+        if (state || browserWorkspacesOfBot(botId).length > 0)
+          (await deps.service()).closeBotTabs(botId);
       } finally {
         // Bot delete clears the profile itself (and closes any tab left), so a
         // failed close here never blocks it.

@@ -78,8 +78,13 @@ async function resolvedBotSkills(
   const homeSkills = home
     ? (await dependencies.discover(home)).filter(({ source }) => source === "workspace")
     : [];
-  const approval = await Promise.all(homeSkills.map(async (skill) =>
-    (await dependencies.isHomeSkillApproved?.(skill.id, botSkillContentFingerprint(skill))) === true));
+  const approval = await Promise.all(
+    homeSkills.map(
+      async (skill) =>
+        (await dependencies.isHomeSkillApproved?.(skill.id, botSkillContentFingerprint(skill))) ===
+        true,
+    ),
+  );
   const workspaceDiscovered = homeSkills.filter((_skill, index) => approval[index]);
   const unapproved = homeSkills.filter((_skill, index) => !approval[index]);
   if (unapproved.length) dependencies.onUnapprovedHomeSkills?.(unapproved);
@@ -95,9 +100,10 @@ async function resolvedBotSkills(
     ])
       // Retain unavailable entries for saved selections, but never let them
       // crowd eligible automatic skills out of the bounded Bot inventory.
-      .sort((left, right) =>
-        Number(right.available && right.modelInvocable !== false) -
-        Number(left.available && left.modelInvocable !== false),
+      .sort(
+        (left, right) =>
+          Number(right.available && right.modelInvocable !== false) -
+          Number(left.available && left.modelInvocable !== false),
       )
       .slice(0, BOT_CAPABILITY_LIMITS.skills),
   };

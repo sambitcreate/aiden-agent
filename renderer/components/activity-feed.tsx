@@ -63,7 +63,10 @@ function StepLine({ step, stopped }: { step: AgentStep; stopped: boolean }) {
       {line.object ? <span className="font-normal text-tertiary"> {line.object}</span> : null}
       {isToolStep(step) && step.lineChanges ? <LineChanges {...step.lineChanges} /> : null}
       {isToolStep(step) && step.producedFile ? (
-        <span className="ml-2 rounded-control bg-list-hover px-2 py-0.5 text-mini text-secondary" title={step.producedFile.relativePath}>
+        <span
+          className="ml-2 rounded-control bg-list-hover px-2 py-0.5 text-mini text-secondary"
+          title={step.producedFile.relativePath}
+        >
           File {step.producedFile.operation} · {step.producedFile.relativePath.split("/").pop()}
         </span>
       ) : null}
@@ -75,7 +78,13 @@ function StepLine({ step, stopped }: { step: AgentStep; stopped: boolean }) {
 // object between updates, so only the step that changed renders again.
 
 /** A single fixed-height ticker row. Height must stay in step with the CSS shift. */
-const TickerRow = React.memo(function TickerRow({ step, stopped }: { step: AgentStep; stopped: boolean }) {
+const TickerRow = React.memo(function TickerRow({
+  step,
+  stopped,
+}: {
+  step: AgentStep;
+  stopped: boolean;
+}) {
   // A pending tool step is the model still writing the call's arguments, so
   // it shimmers like any other work in progress. Approval waits do not.
   const active = !isToolStep(step)
@@ -98,7 +107,13 @@ const TickerRow = React.memo(function TickerRow({ step, stopped }: { step: Agent
   );
 });
 
-const TrailRow = React.memo(function TrailRow({ step, stopped }: { step: AgentStep; stopped: boolean }) {
+const TrailRow = React.memo(function TrailRow({
+  step,
+  stopped,
+}: {
+  step: AgentStep;
+  stopped: boolean;
+}) {
   return (
     <div
       className="flex min-h-5 min-w-0 items-start py-px"
@@ -131,14 +146,21 @@ export function ActivityFeed({
   const setRoot = React.useCallback((node: HTMLElement | null) => {
     rootRef.current = node;
   }, []);
-  const visible = rendered ? timeline ?? lastTimelineRef.current : null;
+  const visible = rendered ? (timeline ?? lastTimelineRef.current) : null;
   const [choice, setChoice] = React.useState<boolean | null>(null);
-  const attention = Boolean(visible?.claimCheck) || (visible ? activityIssueCount(visible) > 0 : false);
+  const attention =
+    Boolean(visible?.claimCheck) || (visible ? activityIssueCount(visible) > 0 : false);
   const eligible = visible?.status === "running" || retainDetails;
   const open = choice ?? (attention || workDetailsOpen(mode, eligible));
   const autoOpenKeyRef = React.useRef<string | null>(null);
-  const { sectionRef, headerRef, noteCollapse, noteAutomaticCollapse, restoreAfterCollapse, onFocusCapture } =
-    useStickySectionCollapse<HTMLDetailsElement, HTMLElement>();
+  const {
+    sectionRef,
+    headerRef,
+    noteCollapse,
+    noteAutomaticCollapse,
+    restoreAfterCollapse,
+    onFocusCapture,
+  } = useStickySectionCollapse<HTMLDetailsElement, HTMLElement>();
   const setSection = React.useCallback(
     (node: HTMLDetailsElement | null) => {
       sectionRef.current = node;
@@ -232,63 +254,67 @@ export function ActivityFeed({
   }
 
   return (
-    <DisclosureCollapseBoundary expanded={open} beforeCollapse={noteAutomaticCollapse} afterCollapse={restoreAfterCollapse}>
-    <details
-      ref={setSection}
-      onFocusCapture={onFocusCapture}
-      className="transcript-sticky-section activity-feed group/activity min-w-0"
-      data-presence={presence}
-      data-animate={animate ? "true" : "false"}
-      data-state={open ? "open" : "closed"}
-      open={open}
+    <DisclosureCollapseBoundary
+      expanded={open}
+      beforeCollapse={noteAutomaticCollapse}
+      afterCollapse={restoreAfterCollapse}
     >
-      <summary
-        ref={headerRef}
-        onClick={(event) => {
-          event.preventDefault();
-          if (open) noteCollapse();
-          setChoice(!open);
-        }}
-        className={`transcript-sticky-header -mx-1.5 flex min-w-0 list-none gap-2 rounded-control px-1.5 py-0.5 outline-none transition-colors focus-visible:outline-none ${
-          showTicker ? "items-end" : "items-center"
-        }`}
+      <details
+        ref={setSection}
+        onFocusCapture={onFocusCapture}
+        className="transcript-sticky-section activity-feed group/activity min-w-0"
+        data-presence={presence}
+        data-animate={animate ? "true" : "false"}
+        data-state={open ? "open" : "closed"}
+        open={open}
       >
-        {header}
-        <ChevronRight
-          className="agent-activity-chevron size-3.5 shrink-0 text-tertiary transition-transform group-open/activity:rotate-90"
-          aria-hidden="true"
-        />
-      </summary>
-      <div className="mt-0.5 flex flex-col">
-        {stepInHeader ? null : (
-          <div className="flex flex-col" role="list">
-            {visible.steps.map((step) => (
-              <TrailRow key={step.id} step={step} stopped={isStoppedByUser(visible, step)} />
-            ))}
-          </div>
-        )}
-        {visible.claimCheck ? (
-          <div
-            className="mt-1.5 flex items-start gap-2 rounded-control bg-status-warning-surface px-2.5 py-2"
-            role={animate ? "alert" : "note"}
-          >
-            <CircleAlert
-              className="mt-0.5 size-3.5 shrink-0 text-status-warning"
-              aria-hidden="true"
-            />
-            <span className="min-w-0">
-              <Text as="span" variant="small-strong" className="block text-status-warning">
-                Success not verified
-              </Text>
-              <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                A required action or check did not complete. Review the issues above before relying
-                on this response.
-              </Text>
-            </span>
-          </div>
-        ) : null}
-      </div>
-    </details>
+        <summary
+          ref={headerRef}
+          onClick={(event) => {
+            event.preventDefault();
+            if (open) noteCollapse();
+            setChoice(!open);
+          }}
+          className={`transcript-sticky-header -mx-1.5 flex min-w-0 list-none gap-2 rounded-control px-1.5 py-0.5 outline-none transition-colors focus-visible:outline-none ${
+            showTicker ? "items-end" : "items-center"
+          }`}
+        >
+          {header}
+          <ChevronRight
+            className="agent-activity-chevron size-3.5 shrink-0 text-tertiary transition-transform group-open/activity:rotate-90"
+            aria-hidden="true"
+          />
+        </summary>
+        <div className="mt-0.5 flex flex-col">
+          {stepInHeader ? null : (
+            <div className="flex flex-col" role="list">
+              {visible.steps.map((step) => (
+                <TrailRow key={step.id} step={step} stopped={isStoppedByUser(visible, step)} />
+              ))}
+            </div>
+          )}
+          {visible.claimCheck ? (
+            <div
+              className="mt-1.5 flex items-start gap-2 rounded-control bg-status-warning-surface px-2.5 py-2"
+              role={animate ? "alert" : "note"}
+            >
+              <CircleAlert
+                className="mt-0.5 size-3.5 shrink-0 text-status-warning"
+                aria-hidden="true"
+              />
+              <span className="min-w-0">
+                <Text as="span" variant="small-strong" className="block text-status-warning">
+                  Success not verified
+                </Text>
+                <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
+                  A required action or check did not complete. Review the issues above before
+                  relying on this response.
+                </Text>
+              </span>
+            </div>
+          ) : null}
+        </div>
+      </details>
     </DisclosureCollapseBoundary>
   );
 }

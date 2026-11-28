@@ -2,7 +2,11 @@ import * as React from "react";
 import { flushSync } from "react-dom";
 import { ChevronDown } from "lucide-react";
 import { subagentModelDisplay, subagentRunProgressLabel } from "../lib/subagent-panel-state";
-import { subagentModelLine, subagentModelName, useSubagentModelCatalog } from "../lib/subagent-model-name";
+import {
+  subagentModelLine,
+  subagentModelName,
+  useSubagentModelCatalog,
+} from "../lib/subagent-model-name";
 import {
   formatSubagentElapsed,
   isSubagentRunViewStateActive,
@@ -19,10 +23,7 @@ import { cn } from "../lib/ui-utils";
 import { useCollapsibleBody } from "../lib/use-collapsible-body";
 import { useNow } from "../lib/use-now";
 import { useObserveSubagentGroup } from "../lib/subagent-group-visibility";
-import {
-  type SubagentMessageReferenceV1,
-  type SubagentRunSnapshot,
-} from "../shared/subagent-runs";
+import { type SubagentMessageReferenceV1, type SubagentRunSnapshot } from "../shared/subagent-runs";
 import type { ActivityMark } from "../shared/activity-marks";
 import { AidenActivityMark } from "./aiden-activity-mark";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui";
@@ -41,11 +42,11 @@ export function subagentActivityMark(
   if (state === "queued" || state === "starting") return "bounce";
   // A waiting child is blocked on the user, whatever its free-form question says.
   if (state === "needs_attention") return "glance";
-  if (/^(?:Reading|Listing|Matching|Searching)\b/u.test(activity ?? ""))
-    return "scan-grid";
+  if (/^(?:Reading|Listing|Matching|Searching)\b/u.test(activity ?? "")) return "scan-grid";
   if (activity === "Reviewing workspace context") return "tri-step";
   // Older saved runs say "Writing a bounded report".
-  if (activity === "Writing its report" || activity === "Writing a bounded report") return "compose";
+  if (activity === "Writing its report" || activity === "Writing a bounded report")
+    return "compose";
   return fallbackMarkForRole(role);
 }
 
@@ -53,9 +54,7 @@ function isActiveState(state: SubagentRunViewState | "finished"): boolean {
   return state !== "finished" && isSubagentRunViewStateActive(state);
 }
 
-export function subagentStateLabel(
-  state: SubagentRunViewState | "finished",
-): string {
+export function subagentStateLabel(state: SubagentRunViewState | "finished"): string {
   return state === "finished" ? "Done" : subagentViewStatusLabel(state);
 }
 
@@ -74,13 +73,7 @@ export interface SubagentMarkProps {
   className?: string;
 }
 
-export function SubagentMark({
-  role,
-  state,
-  activity,
-  size = 20,
-  className,
-}: SubagentMarkProps) {
+export function SubagentMark({ role, state, activity, size = 20, className }: SubagentMarkProps) {
   const active = isActiveState(state);
 
   return (
@@ -152,9 +145,9 @@ export function subagentRunTranscriptTarget(
   runId: string,
   root: ParentNode = document,
 ): HTMLElement | null {
-  const row = Array.from(
-    root.querySelectorAll<HTMLElement>("[data-subagent-chip-run-id]"),
-  ).find((element) => element.dataset.subagentChipRunId === runId);
+  const row = Array.from(root.querySelectorAll<HTMLElement>("[data-subagent-chip-run-id]")).find(
+    (element) => element.dataset.subagentChipRunId === runId,
+  );
   if (!row) return null;
   if (!row.closest("[inert]")) return row;
   return (
@@ -202,7 +195,9 @@ function subagentGroupSummaryParts(
 }
 
 /** "1 waiting on you · 2 running · 1 done", most urgent first. */
-export function subagentGroupSummary(states: readonly (SubagentRunViewState | "finished")[]): string {
+export function subagentGroupSummary(
+  states: readonly (SubagentRunViewState | "finished")[],
+): string {
   return subagentGroupSummaryParts(states)
     .map((part) => part.text)
     .join(" · ");
@@ -218,7 +213,10 @@ export function subagentGroupSharedRole(
 }
 
 /** "3 implementers" when every run shares a role, otherwise "3 subagents". */
-export function subagentGroupCountLabel(count: number, role: SubagentRunViewRole | undefined): string {
+export function subagentGroupCountLabel(
+  count: number,
+  role: SubagentRunViewRole | undefined,
+): string {
   const noun = role && role !== "unknown" ? role : "subagent";
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
@@ -246,12 +244,7 @@ interface GroupRun {
  * side panel. Rows keep `data-subagent-chip-run-id` so focus survives the
  * live-to-saved handoff and the composer pill can reveal them.
  */
-export function SubagentChips({
-  reference,
-  runs = [],
-  onOpen,
-  className,
-}: SubagentChipsProps) {
+export function SubagentChips({ reference, runs = [], onOpen, className }: SubagentChipsProps) {
   const snapshotsById = React.useMemo(
     () => new Map(runs.map((run) => [run.runId, run] as const)),
     [runs],
@@ -349,11 +342,7 @@ export function SubagentChips({
               <React.Fragment key={part.word}>
                 {index > 0 ? " · " : null}
                 {/* Once settled, only the failures stand out. */}
-                <span
-                  className={cn(
-                    !active && part.word === "Failed" && "text-red",
-                  )}
-                >
+                <span className={cn(!active && part.word === "Failed" && "text-red")}>
                   {part.text}
                 </span>
               </React.Fragment>
@@ -419,7 +408,9 @@ function SubagentGroupRow({
   const modelName = run ? subagentModelName(run, catalog) : undefined;
   // Older snapshots never recorded a model choice; their label stays unchanged.
   const spokenModel =
-    run && run.modelSelection !== undefined ? `Model ${subagentModelLine(run, catalog)}` : undefined;
+    run && run.modelSelection !== undefined
+      ? `Model ${subagentModelLine(run, catalog)}`
+      : undefined;
   const elapsedMs = run ? subagentSnapshotElapsedMilliseconds(run, now) : undefined;
   const roleName = showRole ? subagentRoleLabel(role) : null;
   // One line per run: name, what it is doing, and how long it has run.
@@ -434,7 +425,9 @@ function SubagentGroupRow({
       <SubagentMark role={role} state={state} activity={run?.activity} size={16} />
       <span className="min-w-0 flex-1 truncate text-small text-primary">{label}</span>
       {roleName ? (
-        <span className="shrink-0 rounded-full bg-control px-1.5 text-mini text-secondary">{roleName}</span>
+        <span className="shrink-0 rounded-full bg-control px-1.5 text-mini text-secondary">
+          {roleName}
+        </span>
       ) : null}
       <span
         className={cn(

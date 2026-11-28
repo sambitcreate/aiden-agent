@@ -1,5 +1,9 @@
 import type { SamplingParamsByThinkingLevel } from "@earendil-works/pi-ai";
-import { GENERATION_THINKING_LEVELS, isGenerationThinkingLevel, type GenerationThinkingLevel } from "./generation-thinking";
+import {
+  GENERATION_THINKING_LEVELS,
+  isGenerationThinkingLevel,
+  type GenerationThinkingLevel,
+} from "./generation-thinking";
 
 /** Explicit user overrides, separate from rediscovered provider metadata. */
 export interface CustomModelOptions {
@@ -16,9 +20,7 @@ export interface CustomModelOptions {
   maxImages?: number;
 }
 
-export function parseCustomModelOptions(
-  value: unknown,
-): CustomModelOptions | undefined {
+export function parseCustomModelOptions(value: unknown): CustomModelOptions | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Invalid custom model options.");
@@ -32,27 +34,25 @@ export function parseCustomModelOptions(
     result.effortControl = raw.effortControl;
   }
   if (raw.effortLevels !== undefined) {
-    if (!Array.isArray(raw.effortLevels) || raw.effortLevels.length > 6 ||
-        !raw.effortLevels.every(isGenerationThinkingLevel) ||
-        new Set(raw.effortLevels).size !== raw.effortLevels.length) {
+    if (
+      !Array.isArray(raw.effortLevels) ||
+      raw.effortLevels.length > 6 ||
+      !raw.effortLevels.every(isGenerationThinkingLevel) ||
+      new Set(raw.effortLevels).size !== raw.effortLevels.length
+    ) {
       throw new Error("Invalid supported effort levels.");
     }
     const levels = raw.effortLevels;
     result.effortLevels = GENERATION_THINKING_LEVELS.filter((level) => levels.includes(level));
   }
   if (raw.samplingParamsByThinkingLevel !== undefined) {
-    result.samplingParamsByThinkingLevel = parseSamplingParamsByThinkingLevel(raw.samplingParamsByThinkingLevel);
+    result.samplingParamsByThinkingLevel = parseSamplingParamsByThinkingLevel(
+      raw.samplingParamsByThinkingLevel,
+    );
   }
-  for (const key of [
-    "vision",
-    "reasoning",
-    "toolCall",
-    "openWeights",
-    "video",
-  ] as const) {
+  for (const key of ["vision", "reasoning", "toolCall", "openWeights", "video"] as const) {
     if (raw[key] === undefined) continue;
-    if (typeof raw[key] !== "boolean")
-      throw new Error(`Invalid ${key} option.`);
+    if (typeof raw[key] !== "boolean") throw new Error(`Invalid ${key} option.`);
     result[key] = raw[key];
   }
   for (const key of ["contextLength", "outputLimit", "maxImages"] as const) {
@@ -85,7 +85,9 @@ export function customModelThinkingLevels(
 ): GenerationThinkingLevel[] | undefined {
   if (options?.reasoning !== true || !options.effortControl) return undefined;
   if (options.effortLevels !== undefined) {
-    const selected = GENERATION_THINKING_LEVELS.filter((level) => options.effortLevels?.includes(level));
+    const selected = GENERATION_THINKING_LEVELS.filter((level) =>
+      options.effortLevels?.includes(level),
+    );
     return selected.length ? selected : undefined;
   }
   if (options?.effortControl === "glm") return ["off", "low", "high", "max"];
@@ -95,21 +97,16 @@ export function customModelThinkingLevels(
 
 export function mergeDiscoveredModelMetadata<
   T extends { overrides?: CustomModelOptions; manuallyAdded?: boolean },
->(
-  discovered: Record<string, T>,
-  previous: Record<string, T>,
-): Record<string, T> {
+>(discovered: Record<string, T>, previous: Record<string, T>): Record<string, T> {
   return Object.fromEntries(
     Object.entries(discovered).map(([id, metadata]) => [
       id,
       {
         ...metadata,
-        ...(Object.prototype.hasOwnProperty.call(previous, id) &&
-        previous[id].overrides
+        ...(Object.prototype.hasOwnProperty.call(previous, id) && previous[id].overrides
           ? { overrides: previous[id].overrides }
           : {}),
-        ...(Object.prototype.hasOwnProperty.call(previous, id) &&
-        previous[id].manuallyAdded
+        ...(Object.prototype.hasOwnProperty.call(previous, id) && previous[id].manuallyAdded
           ? { manuallyAdded: true }
           : {}),
       },
@@ -130,8 +127,8 @@ export function assertCustomModelImageLimit(
     messages.some(
       (message) =>
         message.role === "user" &&
-        (message.attachments?.filter((item) => item.kind === "image").length ??
-          0) > options.maxImages!,
+        (message.attachments?.filter((item) => item.kind === "image").length ?? 0) >
+          options.maxImages!,
     )
   ) {
     throw new Error(
@@ -141,9 +138,10 @@ export function assertCustomModelImageLimit(
 }
 
 /** Filter the final composed snapshot, including tools contributed by extensions. */
-export function applyCustomModelToolPolicy<
-  T extends { tools: readonly unknown[] },
->(snapshot: T, options: CustomModelOptions | undefined): T {
+export function applyCustomModelToolPolicy<T extends { tools: readonly unknown[] }>(
+  snapshot: T,
+  options: CustomModelOptions | undefined,
+): T {
   return options?.toolCall === false ? { ...snapshot, tools: [] } : snapshot;
 }
 
@@ -158,15 +156,37 @@ export async function prepareCustomModelToolContext<T>(
 
 /** Sampling only: metadata must not overwrite messages, tools, model or auth. */
 export function parseSamplingParamsByThinkingLevel(value: unknown): SamplingParamsByThinkingLevel {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid per-thinking-level sampling parameters.");
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid per-thinking-level sampling parameters.");
   const result: SamplingParamsByThinkingLevel = {};
   const levels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-  const fields = new Set(["temperature", "top_p", "top_k", "min_p", "frequency_penalty", "presence_penalty", "repetition_penalty", "seed"]);
+  const fields = new Set([
+    "temperature",
+    "top_p",
+    "top_k",
+    "min_p",
+    "frequency_penalty",
+    "presence_penalty",
+    "repetition_penalty",
+    "seed",
+  ]);
   for (const [level, parameters] of Object.entries(value)) {
-    if (!levels.has(level) || !parameters || typeof parameters !== "object" || Array.isArray(parameters)) throw new Error("Invalid sampling thinking level.");
+    if (
+      !levels.has(level) ||
+      !parameters ||
+      typeof parameters !== "object" ||
+      Array.isArray(parameters)
+    )
+      throw new Error("Invalid sampling thinking level.");
     const parsed: Record<string, number> = {};
     for (const [key, number] of Object.entries(parameters)) {
-      if (!fields.has(key) || typeof number !== "number" || !Number.isFinite(number) || Math.abs(number) > 1_000_000) throw new Error("Invalid sampling parameter.");
+      if (
+        !fields.has(key) ||
+        typeof number !== "number" ||
+        !Number.isFinite(number) ||
+        Math.abs(number) > 1_000_000
+      )
+        throw new Error("Invalid sampling parameter.");
       parsed[key] = number;
     }
     result[level as keyof SamplingParamsByThinkingLevel] = parsed;

@@ -3,7 +3,20 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, mkdir, link, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  link,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -31,13 +44,20 @@ async function runWithCheckpoints(args, onCheckpoint) {
   });
   let stdout = "";
   let stderr = "";
-  child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
-  child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+  child.stdout.setEncoding("utf8").on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.setEncoding("utf8").on("data", (chunk) => {
+    stderr += chunk;
+  });
   let checkpointError;
   child.stdio[3].setEncoding("utf8").on("data", (marker) => {
     void Promise.resolve(onCheckpoint(marker)).then(
       () => child.stdio[4].write(marker),
-      (error) => { checkpointError = error; child.kill("SIGKILL"); },
+      (error) => {
+        checkpointError = error;
+        child.kill("SIGKILL");
+      },
     );
   });
   const code = await new Promise((resolve, reject) => {
@@ -57,12 +77,17 @@ async function runEditor(args, input = Buffer.alloc(0), onCheckpoint = async () 
   const chunks = [];
   let stderr = "";
   let checkpointError;
-  child.stdout.on("data", chunk => chunks.push(chunk));
-  child.stderr.setEncoding("utf8").on("data", chunk => { stderr += chunk; });
-  child.stdio[3].setEncoding("utf8").on("data", marker => {
+  child.stdout.on("data", (chunk) => chunks.push(chunk));
+  child.stderr.setEncoding("utf8").on("data", (chunk) => {
+    stderr += chunk;
+  });
+  child.stdio[3].setEncoding("utf8").on("data", (marker) => {
     void Promise.resolve(onCheckpoint(marker)).then(
       () => child.stdio[4].write(marker),
-      error => { checkpointError = error; child.kill("SIGKILL"); },
+      (error) => {
+        checkpointError = error;
+        child.kill("SIGKILL");
+      },
     );
   });
   // The editor can refuse its path and exit before reading stdin or the
@@ -87,8 +112,16 @@ test("source read stays on an opened directory when its pathname becomes an outs
   await mkdir(path.join(source, "inside"));
   await writeFile(path.join(source, "inside", "secret.txt"), "inside\n");
   await writeFile(path.join(outside, "secret.txt"), "outside\n");
-  const args = ["copy", ...await identity(source), "inside/secret.txt",
-    ...await identity(destination), "copied.txt", "4096", "-", "source"];
+  const args = [
+    "copy",
+    ...(await identity(source)),
+    "inside/secret.txt",
+    ...(await identity(destination)),
+    "copied.txt",
+    "4096",
+    "-",
+    "source",
+  ];
   const result = await runWithCheckpoints(args, async (marker) => {
     if (marker === "S") {
       await rename(path.join(source, "inside"), path.join(source, "moved"));
@@ -109,8 +142,16 @@ test("restore writes through its opened parent when the pathname becomes an outs
   const digest = createHash("sha256").update(bytes).digest("hex");
   await writeFile(path.join(source, "blob"), bytes);
   await writeFile(path.join(outside, "file.txt"), "outside\n");
-  const args = ["restore", ...await identity(source), "blob",
-    ...await identity(destination), "inside/file.txt", String(bytes.length), digest, "384"];
+  const args = [
+    "restore",
+    ...(await identity(source)),
+    "blob",
+    ...(await identity(destination)),
+    "inside/file.txt",
+    String(bytes.length),
+    digest,
+    "384",
+  ];
   await runWithCheckpoints(args, async (marker) => {
     if (marker === "D") {
       await rename(path.join(destination, "inside"), path.join(destination, "moved"));
@@ -131,18 +172,24 @@ test("directory listing stays on its held descriptor through a swap and swap-bac
   await writeFile(path.join(outside, "secret-one.txt"), "outside");
   await writeFile(path.join(outside, "secret-two.txt"), "outside");
   const insideIdentity = await identity(inside);
-  const result = await runWithCheckpoints(["list", ...await identity(source), "inside", ...insideIdentity.slice(1)], async (marker) => {
-    if (marker === "L") {
-      await rename(inside, path.join(source, "moved"));
-      await symlink(outside, inside);
-    } else {
-      assert.equal(marker, "E");
-      await rm(inside);
-      await rename(path.join(source, "moved"), inside);
-    }
-  });
+  const result = await runWithCheckpoints(
+    ["list", ...(await identity(source)), "inside", ...insideIdentity.slice(1)],
+    async (marker) => {
+      if (marker === "L") {
+        await rename(inside, path.join(source, "moved"));
+        await symlink(outside, inside);
+      } else {
+        assert.equal(marker, "E");
+        await rm(inside);
+        await rename(path.join(source, "moved"), inside);
+      }
+    },
+  );
   const allowed = await identity(path.join(inside, "allowed.txt"));
-  assert.equal(result, `f ${allowed[1]} ${allowed[2]} ${Buffer.from("allowed.txt").toString("hex")}\nc\n`);
+  assert.equal(
+    result,
+    `f ${allowed[1]} ${allowed[2]} ${Buffer.from("allowed.txt").toString("hex")}\nc\n`,
+  );
 });
 
 test("directory listing never follows a directory symlink", async (t) => {
@@ -151,10 +198,20 @@ test("directory listing never follows a directory symlink", async (t) => {
   const outside = await directory(t);
   await symlink(outside, path.join(source, "linked"));
   const outsideIdentity = await identity(outside);
-  const child = spawn(binary, ["list", ...await identity(source), "linked", ...outsideIdentity.slice(1)]);
+  const child = spawn(binary, [
+    "list",
+    ...(await identity(source)),
+    "linked",
+    ...outsideIdentity.slice(1),
+  ]);
   let output = "";
-  child.stdout.on("data", chunk => { output += chunk; });
-  const code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
+  child.stdout.on("data", (chunk) => {
+    output += chunk;
+  });
+  const code = await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
   assert.notEqual(code, 0);
   assert.equal(output, "");
 });
@@ -167,8 +224,13 @@ test("editor read binds file identity and opened parent through a symlink swap",
   const file = path.join(source, "inside", "file.txt");
   await writeFile(file, "inside\n");
   await writeFile(path.join(outside, "file.txt"), "outside\n");
-  const args = ["read", ...await identity(source), "inside/file.txt", ...(await identity(file)).slice(1)];
-  const result = await runEditor(args, Buffer.alloc(0), async marker => {
+  const args = [
+    "read",
+    ...(await identity(source)),
+    "inside/file.txt",
+    ...(await identity(file)).slice(1),
+  ];
+  const result = await runEditor(args, Buffer.alloc(0), async (marker) => {
     if (marker === "B") return;
     assert.equal(marker, "R");
     await rename(path.join(source, "inside"), path.join(source, "moved"));
@@ -179,7 +241,7 @@ test("editor read binds file identity and opened parent through a symlink swap",
   assert.match(result.stdout.subarray(0, divider).toString(), /^r 7 \d+ -?\d+ \d+ [0-9a-f]{64}$/u);
   assert.equal(result.stdout.subarray(divider + 1).toString(), "inside\n");
   assert.equal(await readFile(path.join(outside, "file.txt"), "utf8"), "outside\n");
-  const wrong = await runEditor(["read", ...await identity(source), "moved/file.txt", "0", "0"]);
+  const wrong = await runEditor(["read", ...(await identity(source)), "moved/file.txt", "0", "0"]);
   assert.notEqual(wrong.code, 0);
   assert.equal(wrong.stdout.length, 0);
 });
@@ -194,8 +256,15 @@ test("editor save stays in held parent and retains the original as recovery", as
   await writeFile(path.join(outside, "file.txt"), "outside\n");
   const expected = createHash("sha256").update("before\n").digest("hex");
   const input = Buffer.from("after\n");
-  const args = ["edit", ...await identity(source), "inside/file.txt", ...(await identity(file)).slice(1), expected, String(input.length)];
-  const result = await runEditor(args, input, async marker => {
+  const args = [
+    "edit",
+    ...(await identity(source)),
+    "inside/file.txt",
+    ...(await identity(file)).slice(1),
+    expected,
+    String(input.length),
+  ];
+  const result = await runEditor(args, input, async (marker) => {
     if (marker === "E") return;
     if (marker === "B") return;
     assert.equal(marker, "D");
@@ -224,12 +293,17 @@ test("editor operations reject a symlinked ancestor even when the root inode mat
   const moved = path.join(base, "moved");
   await rename(ancestor, moved);
   await symlink(moved, ancestor);
-  const readResult = await runEditor(["read", ...rootIdentity, "file.txt", ...fileIdentity.slice(1)]);
+  const readResult = await runEditor([
+    "read",
+    ...rootIdentity,
+    "file.txt",
+    ...fileIdentity.slice(1),
+  ]);
   assert.notEqual(readResult.code, 0);
   assert.equal(readResult.stdout.length, 0);
   const listChild = spawn(binary, ["list", ...rootIdentity, "", ...rootIdentity.slice(1)]);
   const listChunks = [];
-  listChild.stdout.on("data", chunk => listChunks.push(chunk));
+  listChild.stdout.on("data", (chunk) => listChunks.push(chunk));
   const listCode = await new Promise((resolve, reject) => {
     listChild.once("error", reject);
     listChild.once("close", resolve);
@@ -246,8 +320,22 @@ test("editor save rejects stale identity and version without creating recovery",
   const current = await identity(file);
   const input = Buffer.from("replacement\n");
   const hash = createHash("sha256").update("current\n").digest("hex");
-  for (const [device, inode, expected] of [["0", "0", hash], [current[1], current[2], "0".repeat(64)]]) {
-    const result = await runEditor(["edit", ...await identity(source), "file.txt", device, inode, expected, String(input.length)], input);
+  for (const [device, inode, expected] of [
+    ["0", "0", hash],
+    [current[1], current[2], "0".repeat(64)],
+  ]) {
+    const result = await runEditor(
+      [
+        "edit",
+        ...(await identity(source)),
+        "file.txt",
+        device,
+        inode,
+        expected,
+        String(input.length),
+      ],
+      input,
+    );
     assert.notEqual(result.code, 0);
     assert.equal(result.stdout.length, 0);
     assert.equal(await readFile(file, "utf8"), "current\n");
@@ -266,8 +354,17 @@ test("editor refuses a seventeenth retained recovery before changing the source"
   const before = (await readdir(source)).sort();
   const input = Buffer.from("replacement\n");
   const expected = createHash("sha256").update("current\n").digest("hex");
-  const result = await runEditor(["edit", ...await identity(source), "file.txt",
-    ...(await identity(file)).slice(1), expected, String(input.length)], input);
+  const result = await runEditor(
+    [
+      "edit",
+      ...(await identity(source)),
+      "file.txt",
+      ...(await identity(file)).slice(1),
+      expected,
+      String(input.length),
+    ],
+    input,
+  );
   assert.notEqual(result.code, 0);
   assert.equal(result.stderr.trim(), "recovery_limit");
   assert.equal(result.stdout.length, 0);
@@ -289,9 +386,19 @@ test("transfers reject root and ancestor substitutions after path canonicalizati
       // Identity paths are canonicalized before the local actor swaps them.
       const targetIdentity = await identity(target);
       const otherIdentity = await identity(other);
-      const args = operation === "copy"
-        ? [operation, ...targetIdentity, "file", ...otherIdentity, "result", "4096", "-", "384"]
-        : [operation, ...otherIdentity, "file", ...targetIdentity, "result", "8", createHash("sha256").update("original").digest("hex"), "384"];
+      const args =
+        operation === "copy"
+          ? [operation, ...targetIdentity, "file", ...otherIdentity, "result", "4096", "-", "384"]
+          : [
+              operation,
+              ...otherIdentity,
+              "file",
+              ...targetIdentity,
+              "result",
+              "8",
+              createHash("sha256").update("original").digest("hex"),
+              "384",
+            ];
       if (replacement === "root") {
         await rename(target, path.join(parent, "held"));
         await mkdir(target);
@@ -302,7 +409,9 @@ test("transfers reject root and ancestor substitutions after path canonicalizati
       }
       const child = spawn(binary, args);
       let stderr = "";
-      child.stderr.setEncoding("utf8").on("data", (data) => { stderr += data; });
+      child.stderr.setEncoding("utf8").on("data", (data) => {
+        stderr += data;
+      });
       const code = await new Promise((resolve, reject) => {
         child.on("error", reject);
         child.on("close", resolve);
@@ -323,25 +432,41 @@ test("lazy operations reject hard links and link-count changes during reads and 
   await link(path.join(outside, "secret"), path.join(root, "linked"));
   const rootId = await identity(root);
   const linkedId = await identity(path.join(root, "linked"));
-  const listing = await runWithCheckpoints(["list", ...rootId, "", ...rootId.slice(1)], async () => {});
+  const listing = await runWithCheckpoints(
+    ["list", ...rootId, "", ...rootId.slice(1)],
+    async () => {},
+  );
   assert.equal(listing, "c\n");
   for (const operation of ["read", "edit"]) {
     const args = [operation, ...rootId, "linked", ...linkedId.slice(1)];
     if (operation === "edit") args.push(createHash("sha256").update("secret").digest("hex"), "3");
-    const result = await runEditor(args, operation === "edit" ? Buffer.from("new") : Buffer.alloc(0));
+    const result = await runEditor(
+      args,
+      operation === "edit" ? Buffer.from("new") : Buffer.alloc(0),
+    );
     assert.notEqual(result.code, 0);
     assert.equal(result.stdout.length, 0);
   }
   // Capture an exclusive file identity, then add another link at each boundary.
-  for (const [operation, marker] of [["read", "R"], ["read", "B"], ["edit", "E"], ["edit", "B"], ["edit", "D"]]) {
+  for (const [operation, marker] of [
+    ["read", "R"],
+    ["read", "B"],
+    ["edit", "E"],
+    ["edit", "B"],
+    ["edit", "D"],
+  ]) {
     const name = `${operation}-${marker}`;
     await writeFile(path.join(root, name), "original");
     const fileId = await identity(path.join(root, name));
     const args = [operation, ...rootId, name, ...fileId.slice(1)];
     if (operation === "edit") args.push(createHash("sha256").update("original").digest("hex"), "3");
-    const result = await runEditor(args, operation === "edit" ? Buffer.from("new") : Buffer.alloc(0), async checkpoint => {
-      if (checkpoint === marker) await link(path.join(root, name), path.join(outside, name));
-    });
+    const result = await runEditor(
+      args,
+      operation === "edit" ? Buffer.from("new") : Buffer.alloc(0),
+      async (checkpoint) => {
+        if (checkpoint === marker) await link(path.join(root, name), path.join(outside, name));
+      },
+    );
     assert.notEqual(result.code, 0, name);
     assert.equal(result.stdout.length, 0, name);
     assert.equal(await readFile(path.join(root, name), "utf8"), "original");
@@ -358,15 +483,21 @@ test("save replaces through its held parent when the pathname becomes an outside
   const input = Buffer.from("after");
   // Swap after the parent is opened, then (second round) after the temporary
   // is written, just before it is renamed over the leaf.
-  for (const [moved, marker] of [["moved-p", "P"], ["moved-w", "W"]]) {
+  for (const [moved, marker] of [
+    ["moved-p", "P"],
+    ["moved-w", "W"],
+  ]) {
     await mkdir(path.join(root, "shots"));
     await writeFile(path.join(root, "shots", "shot.png"), "before");
-    const result = await runEditor(["save", ...await identity(root), "shots/shot.png", String(input.length)], input,
+    const result = await runEditor(
+      ["save", ...(await identity(root)), "shots/shot.png", String(input.length)],
+      input,
       async (checkpoint) => {
         if (checkpoint !== marker) return;
         await rename(path.join(root, "shots"), path.join(root, moved));
         await symlink(outside, path.join(root, "shots"));
-      });
+      },
+    );
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout.toString(), /^c \d+ \d+\n$/u);
     assert.equal(await readFile(path.join(root, moved, "shot.png"), "utf8"), "after");
@@ -399,12 +530,15 @@ test("save refuses a symlinked ancestor or leaf and never writes through a hard 
   assert.deepEqual(await readdir(outside), ["shot.png"]);
 });
 
-test("private file creation uses mode 0600 and refuses an existing environment file", async t => {
+test("private file creation uses mode 0600 and refuses an existing environment file", async (t) => {
   if (process.platform !== "darwin") return;
   const folder = await directory(t);
   const rootId = await identity(folder);
   const input = Buffer.from("KEY=synthetic");
-  const created = await runEditor(["create-private", ...rootId, ".env", String(input.length)], input);
+  const created = await runEditor(
+    ["create-private", ...rootId, ".env", String(input.length)],
+    input,
+  );
   assert.equal(created.code, 0, created.stderr);
   assert.equal((await stat(path.join(folder, ".env"))).mode & 0o777, 0o600);
   const existing = await runEditor(["create-private", ...rootId, ".env", "3"], Buffer.from("new"));
@@ -426,7 +560,12 @@ test("provision batch copies nested files, preserves rwx modes, strips setuid/st
   try {
     const payload = Buffer.from(".env\0config/nested/run.sh\0locked.txt\0", "utf8");
     const result = await runEditor(
-      ["provision", ...await identity(source), ...await identity(destination), String(1024 * 1024)],
+      [
+        "provision",
+        ...(await identity(source)),
+        ...(await identity(destination)),
+        String(1024 * 1024),
+      ],
       payload,
     );
     assert.equal(result.code, 0, result.stderr);
@@ -435,11 +574,18 @@ test("provision batch copies nested files, preserves rwx modes, strips setuid/st
     assert.equal((await stat(path.join(destination, ".env"))).mode & 0o7777, 0o600);
     const scriptStat = await stat(path.join(destination, "config", "nested", "run.sh"));
     assert.equal(scriptStat.mode & 0o7777, 0o755, "setuid bit must be stripped");
-    assert.equal(await readFile(path.join(destination, "locked.txt"), "utf8"), "immutable-source\n");
+    assert.equal(
+      await readFile(path.join(destination, "locked.txt"), "utf8"),
+      "immutable-source\n",
+    );
     // Destination copy must NOT inherit UF_IMMUTABLE — verify it can be removed cleanly.
     await rm(path.join(destination, "locked.txt"));
   } finally {
-    try { execFileSync("/usr/bin/chflags", ["nouchg", path.join(source, "locked.txt")]); } catch { /* ignore */ }
+    try {
+      execFileSync("/usr/bin/chflags", ["nouchg", path.join(source, "locked.txt")]);
+    } catch {
+      /* ignore */
+    }
   }
 });
 
@@ -453,7 +599,7 @@ test("provision enforces cumulative byte limits and emits progress for files ins
 
   const payload = Buffer.from("a.txt\0b.txt\0c.txt\0", "utf8");
   const result = await runEditor(
-    ["provision", ...await identity(source), ...await identity(destination), "10"],
+    ["provision", ...(await identity(source)), ...(await identity(destination)), "10"],
     payload,
   );
   assert.notEqual(result.code, 0);
@@ -475,7 +621,7 @@ test("provision stays on held descriptors through source and destination symlink
   await writeFile(path.join(outside, "a.txt"), "outside-secret");
 
   const result = await runEditor(
-    ["provision", ...await identity(source), ...await identity(destination), "4096"],
+    ["provision", ...(await identity(source)), ...(await identity(destination)), "4096"],
     Buffer.from("sub/a.txt\0", "utf8"),
     async (marker) => {
       if (marker === "S") {
@@ -488,7 +634,10 @@ test("provision stays on held descriptors through source and destination symlink
     },
   );
   assert.equal(result.code, 0, result.stderr);
-  assert.equal(await readFile(path.join(destination, "moved-dst", "a.txt"), "utf8"), "inside-source");
+  assert.equal(
+    await readFile(path.join(destination, "moved-dst", "a.txt"), "utf8"),
+    "inside-source",
+  );
   assert.equal(await readFile(path.join(outside, "a.txt"), "utf8"), "outside-secret");
 });
 
@@ -501,7 +650,7 @@ test("provision refuses existing destination, symlinks, self-copy, and malformed
   await symlink(path.join(source, "a.txt"), path.join(source, "link.txt"));
 
   const existsRes = await runEditor(
-    ["provision", ...await identity(source), ...await identity(destination), "4096"],
+    ["provision", ...(await identity(source)), ...(await identity(destination)), "4096"],
     Buffer.from("a.txt\0", "utf8"),
   );
   assert.notEqual(existsRes.code, 0);
@@ -509,35 +658,35 @@ test("provision refuses existing destination, symlinks, self-copy, and malformed
   assert.equal(await readFile(path.join(destination, "a.txt"), "utf8"), "existing");
 
   const symlinkRes = await runEditor(
-    ["provision", ...await identity(source), ...await identity(destination), "4096"],
+    ["provision", ...(await identity(source)), ...(await identity(destination)), "4096"],
     Buffer.from("link.txt\0", "utf8"),
   );
   assert.notEqual(symlinkRes.code, 0);
   assert.equal(symlinkRes.stderr.trim(), "unsafe_source");
 
   const selfRes = await runEditor(
-    ["provision", ...await identity(source), ...await identity(source), "4096"],
+    ["provision", ...(await identity(source)), ...(await identity(source)), "4096"],
     Buffer.from("a.txt\0", "utf8"),
   );
   assert.notEqual(selfRes.code, 0);
   assert.equal(selfRes.stderr.trim(), "unsafe_source");
 
   const unterminatedRes = await runEditor(
-    ["provision", ...await identity(source), ...await identity(destination), "4096"],
+    ["provision", ...(await identity(source)), ...(await identity(destination)), "4096"],
     Buffer.from("a.txt", "utf8"),
   );
   assert.notEqual(unterminatedRes.code, 0);
   assert.equal(unterminatedRes.stderr.trim(), "invalid_input");
 
   const escapeRes = await runEditor(
-    ["provision", ...await identity(source), ...await identity(destination), "4096"],
+    ["provision", ...(await identity(source)), ...(await identity(destination)), "4096"],
     Buffer.from("../a.txt\0", "utf8"),
   );
   assert.notEqual(escapeRes.code, 0);
   assert.equal(escapeRes.stderr.trim(), "invalid_input");
 
   const emptyEntryRes = await runEditor(
-    ["provision", ...await identity(source), ...await identity(destination), "4096"],
+    ["provision", ...(await identity(source)), ...(await identity(destination)), "4096"],
     Buffer.from("a.txt\0\0a.txt\0", "utf8"),
   );
   assert.notEqual(emptyEntryRes.code, 0);
@@ -556,7 +705,12 @@ test("provision handles >64 unique parent directories without leaking FDs", asyn
     paths.push(`${dir}/f.txt`);
   }
   const result = await runEditor(
-    ["provision", ...await identity(source), ...await identity(destination), String(1024 * 1024)],
+    [
+      "provision",
+      ...(await identity(source)),
+      ...(await identity(destination)),
+      String(1024 * 1024),
+    ],
     Buffer.from(`${paths.join("\0")}\0`, "utf8"),
   );
   assert.equal(result.code, 0, result.stderr);

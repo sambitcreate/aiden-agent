@@ -1,9 +1,4 @@
-import {
-  createHash,
-  randomBytes,
-  scrypt,
-  timingSafeEqual,
-} from "node:crypto";
+import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import type { RuntimeProfileId } from "../runtime-profile-core.js";
 import path from "node:path";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
@@ -52,13 +47,17 @@ const AGENT_CLIENT_VERSION = "mcp-1";
  * git, Bots, schedules and settings are deliberately absent: an outside app
  * can read chats and, when Supervised, start and stop turns, nothing more.
  */
-const AGENT_CAPABILITY_CEILING: Readonly<Record<AidenRemoteAgentAccess, readonly AidenRemoteCapability[]>> = {
+const AGENT_CAPABILITY_CEILING: Readonly<
+  Record<AidenRemoteAgentAccess, readonly AidenRemoteCapability[]>
+> = {
   read: ["server:read", "chat:read"],
   supervised: ["server:read", "chat:read", "chat:write"],
 };
 
 /** The capability set an outside app connected at `access` holds. */
-export function aidenRemoteAgentCapabilities(access: AidenRemoteAgentAccess): AidenRemoteCapability[] {
+export function aidenRemoteAgentCapabilities(
+  access: AidenRemoteAgentAccess,
+): AidenRemoteCapability[] {
   return [...AGENT_CAPABILITY_CEILING[access]];
 }
 
@@ -404,10 +403,10 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
       "acceptsProgressCapabilities",
       "revokedAt",
     ])
-  ) return null;
+  )
+    return null;
   const acceptsBotCapabilities = record.acceptsBotCapabilities === true;
-  const acceptsProgressCapabilities =
-    record.acceptsProgressCapabilities === true;
+  const acceptsProgressCapabilities = record.acceptsProgressCapabilities === true;
   const capabilities = parsePersistedCapabilities(
     record.capabilities,
     acceptsBotCapabilities,
@@ -455,15 +454,11 @@ function parseApprovedRoot(value: unknown): AidenRemoteApprovedRoot | null {
   const record = ownRecord(value);
   if (
     !record ||
-    !exactKeys(record, [
-      "id",
-      "label",
-      "folderPath",
-      "device",
-      "inode",
-      "policyRevision",
-      "createdAt",
-    ], ["botsOnly", "botGrantOperationId"]) ||
+    !exactKeys(
+      record,
+      ["id", "label", "folderPath", "device", "inode", "policyRevision", "createdAt"],
+      ["botsOnly", "botGrantOperationId"],
+    ) ||
     !boundedString(record.id, 128) ||
     !boundedString(record.label, 160) ||
     !boundedString(record.folderPath, 4_096) ||
@@ -472,7 +467,8 @@ function parseApprovedRoot(value: unknown): AidenRemoteApprovedRoot | null {
     !boundedString(record.policyRevision, 128) ||
     !safeTimestamp(record.createdAt) ||
     (record.botsOnly !== undefined && record.botsOnly !== true) ||
-    (record.botGrantOperationId !== undefined && (!boundedString(record.botGrantOperationId, 256) || record.botsOnly !== true))
+    (record.botGrantOperationId !== undefined &&
+      (!boundedString(record.botGrantOperationId, 256) || record.botsOnly !== true))
   ) {
     return null;
   }
@@ -497,8 +493,8 @@ function parsePendingOutcome(value: unknown): AidenTailscalePendingRouteOutcome 
   if (value === undefined) return undefined;
   const record = ownRecord(value);
   if (
-    !record
-    || !exactKeys(
+    !record ||
+    !exactKeys(
       record,
       [
         "operation",
@@ -509,16 +505,16 @@ function parsePendingOutcome(value: unknown): AidenTailscalePendingRouteOutcome 
         "createdAt",
       ],
       ["previousTarget"],
-    )
-    || !["connect", "takeover", "disconnect"].includes(String(record.operation))
-    || !boundedString(record.target, 2_048)
-    || (record.previousTarget !== undefined && !boundedString(record.previousTarget, 2_048))
-    || typeof record.beforeFingerprint !== "string"
-    || !/^[a-f0-9]{64}$/u.test(record.beforeFingerprint)
-    || typeof record.preservedFingerprint !== "string"
-    || !/^[a-f0-9]{64}$/u.test(record.preservedFingerprint)
-    || typeof record.normalizeListenerScaffolding !== "boolean"
-    || !safeTimestamp(record.createdAt)
+    ) ||
+    !["connect", "takeover", "disconnect"].includes(String(record.operation)) ||
+    !boundedString(record.target, 2_048) ||
+    (record.previousTarget !== undefined && !boundedString(record.previousTarget, 2_048)) ||
+    typeof record.beforeFingerprint !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(record.beforeFingerprint) ||
+    typeof record.preservedFingerprint !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(record.preservedFingerprint) ||
+    typeof record.normalizeListenerScaffolding !== "boolean" ||
+    !safeTimestamp(record.createdAt)
   ) {
     throw new Error("Aiden Remote state has an invalid pending Tailscale outcome.");
   }
@@ -558,15 +554,15 @@ export function normalizeAidenRemoteStateForRuntimeProfile(
   profile: RuntimeProfileId,
 ): AidenRemoteStateDocument {
   if (
-    profile !== "development"
-    || !isAidenRemoteReservedLanPort(document.lanPort, "production")
-    || document.tailscalePendingOutcome !== undefined
+    profile !== "development" ||
+    !isAidenRemoteReservedLanPort(document.lanPort, "production") ||
+    document.tailscalePendingOutcome !== undefined
   ) {
     return document;
   }
   const migrated = structuredClone(document);
-  migrated.lanPort = AIDEN_REMOTE_DEVELOPMENT_LAN_PORT
-    + (document.lanPort - AIDEN_REMOTE_PRODUCTION_LAN_PORT);
+  migrated.lanPort =
+    AIDEN_REMOTE_DEVELOPMENT_LAN_PORT + (document.lanPort - AIDEN_REMOTE_PRODUCTION_LAN_PORT);
   return migrated;
 }
 
@@ -580,7 +576,13 @@ export function parseAidenRemoteStateDocument(
     !exactKeys(
       record,
       ["version", "instanceId", "enabled", "connectionMode", "lanPort", "devices", "approvedRoots"],
-      ["displayName", "lanPortCommitted", "tailscaleOwnership", "tailscalePendingOutcome", "mcpServer"],
+      [
+        "displayName",
+        "lanPortCommitted",
+        "tailscaleOwnership",
+        "tailscalePendingOutcome",
+        "mcpServer",
+      ],
     ) ||
     record.version !== STATE_VERSION ||
     !boundedString(record.instanceId, 128) ||
@@ -620,15 +622,17 @@ export function parseAidenRemoteStateDocument(
   return {
     version: STATE_VERSION,
     instanceId: record.instanceId,
-    displayName: record.displayName === undefined
-      ? defaultAidenRemoteDisplayName(legacyDisplayName)
-      : normalizeAidenRemoteDisplayName(record.displayName),
+    displayName:
+      record.displayName === undefined
+        ? defaultAidenRemoteDisplayName(legacyDisplayName)
+        : normalizeAidenRemoteDisplayName(record.displayName),
     enabled: record.enabled,
     connectionMode: record.connectionMode as AidenRemoteConnectionMode,
     lanPort: Number(record.lanPort),
-    lanPortCommitted: record.lanPortCommitted === undefined
-      ? Boolean(record.enabled || devices.length > 0 || tailscaleOwnership)
-      : record.lanPortCommitted,
+    lanPortCommitted:
+      record.lanPortCommitted === undefined
+        ? Boolean(record.enabled || devices.length > 0 || tailscaleOwnership)
+        : record.lanPortCommitted,
     devices: devices as StoredAidenRemoteDevice[],
     approvedRoots: approvedRoots as AidenRemoteApprovedRoot[],
     ...(tailscaleOwnership ? { tailscaleOwnership } : {}),
@@ -733,8 +737,7 @@ export class AidenRemoteStateRegistry {
 
   constructor(
     private readonly storage: AidenRemoteStateStorage,
-    private readonly dependencies: AidenRemoteStateDependencies =
-      defaultAidenRemoteStateDependencies(),
+    private readonly dependencies: AidenRemoteStateDependencies = defaultAidenRemoteStateDependencies(),
     private readonly hostPolicy: AidenRemoteStateHostPolicy = {
       botCapabilitiesSupported: () => true,
     },
@@ -755,10 +758,10 @@ export class AidenRemoteStateRegistry {
       const raw = await this.storage.load();
       const loaded = parseAidenRemoteStateDocument(raw);
       const botCapabilitiesSupported = this.hostPolicy.botCapabilitiesSupported();
-      const devicesNeedHostPolicyMigration = !botCapabilitiesSupported
-        && loaded.devices.some(
-          (device) =>
-            device.acceptsBotCapabilities || device.capabilities.some(isBotCapability),
+      const devicesNeedHostPolicyMigration =
+        !botCapabilitiesSupported &&
+        loaded.devices.some(
+          (device) => device.acceptsBotCapabilities || device.capabilities.some(isBotCapability),
         );
       if (devicesNeedHostPolicyMigration) {
         for (const device of loaded.devices) {
@@ -772,30 +775,23 @@ export class AidenRemoteStateRegistry {
       const storageNeedsSave = this.storage.needsSaveAfterLoad
         ? await this.storage.needsSaveAfterLoad()
         : rawRecord?.displayName === undefined || rawRecord?.lanPortCommitted === undefined;
-      const devicesNeedVocabularyMigration = Array.isArray(rawRecord?.devices)
-        && rawRecord.devices.some((device) => {
+      const devicesNeedVocabularyMigration =
+        Array.isArray(rawRecord?.devices) &&
+        rawRecord.devices.some((device) => {
           const record = ownRecord(device);
-          return record !== null
-            && (
-              !Object.prototype.hasOwnProperty.call(record, "acceptsBotCapabilities") ||
-              (
-                record.acceptsBotCapabilities !== true &&
+          return (
+            record !== null &&
+            (!Object.prototype.hasOwnProperty.call(record, "acceptsBotCapabilities") ||
+              (record.acceptsBotCapabilities !== true &&
                 Array.isArray(record.capabilities) &&
-                record.capabilities.some(isBotCapability)
-              ) ||
+                record.capabilities.some(isBotCapability)) ||
               !Object.prototype.hasOwnProperty.call(record, "acceptsProgressCapabilities") ||
-              (
-                record.acceptsProgressCapabilities !== true &&
+              (record.acceptsProgressCapabilities !== true &&
                 Array.isArray(record.capabilities) &&
-                record.capabilities.some(isProgressCapability)
-              )
-            );
+                record.capabilities.some(isProgressCapability)))
+          );
         });
-      if (
-        storageNeedsSave ||
-        devicesNeedVocabularyMigration ||
-        devicesNeedHostPolicyMigration
-      ) {
+      if (storageNeedsSave || devicesNeedVocabularyMigration || devicesNeedHostPolicyMigration) {
         await this.storage.save(loaded);
       }
       this.document = loaded;
@@ -887,7 +883,9 @@ export class AidenRemoteStateRegistry {
   }
 
   /** Paired phones, tablets and computers. Outside apps are listed by `listAgentApps`. */
-  async listDevices(): Promise<Array<AidenRemoteDeviceProjection & { type: AidenRemotePairedDeviceType }>> {
+  async listDevices(): Promise<
+    Array<AidenRemoteDeviceProjection & { type: AidenRemotePairedDeviceType }>
+  > {
     const document = await this.snapshot();
     return document.devices.filter(isAidenRemotePairedDevice).map(projectDevice);
   }
@@ -906,7 +904,8 @@ export class AidenRemoteStateRegistry {
   async setMcpServerEnabled(enabled: boolean): Promise<void> {
     if (typeof enabled !== "boolean") throw new Error("Invalid MCP server setting.");
     await this.mutateIfChanged((draft) => {
-      if ((draft.mcpServer?.enabled ?? false) === enabled) return { changed: false, value: undefined };
+      if ((draft.mcpServer?.enabled ?? false) === enabled)
+        return { changed: false, value: undefined };
       draft.mcpServer = { ...draft.mcpServer, enabled };
       return { changed: true, value: undefined };
     });
@@ -982,12 +981,14 @@ export class AidenRemoteStateRegistry {
       accepts.length < 1 ||
       accepts.length > AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES.length ||
       new Set(accepts).size !== accepts.length ||
-      accepts.some((capability) =>
-        !isProgressCapability(capability) &&
-        !isSimulatorCapability(capability) &&
-        !isMobileSimulatorCapability(capability) &&
-        !isHostCapability(capability) &&
-        !isOptInCapability(capability))
+      accepts.some(
+        (capability) =>
+          !isProgressCapability(capability) &&
+          !isSimulatorCapability(capability) &&
+          !isMobileSimulatorCapability(capability) &&
+          !isHostCapability(capability) &&
+          !isOptInCapability(capability),
+      )
     ) {
       return null;
     }
@@ -999,8 +1000,7 @@ export class AidenRemoteStateRegistry {
       // Callers check the device type first; a phone can never be granted
       // simulator control or the host feed, only the phone-scoped run subset.
       if (
-        (accepts.some(isSimulatorCapability) &&
-          !mayHoldSimulatorCapabilities(device.type)) ||
+        (accepts.some(isSimulatorCapability) && !mayHoldSimulatorCapabilities(device.type)) ||
         (accepts.some(isMobileSimulatorCapability) &&
           !mayHoldMobileSimulatorCapabilities(device.type)) ||
         accepts.some(
@@ -1053,14 +1053,11 @@ export class AidenRemoteStateRegistry {
     ) {
       throw new Error("Invalid pairing device metadata.");
     }
-    const capabilities = parseCapabilities(
-      input.capabilities ?? AIDEN_REMOTE_LEGACY_CAPABILITIES,
-    );
+    const capabilities = parseCapabilities(input.capabilities ?? AIDEN_REMOTE_LEGACY_CAPABILITIES);
     if (
       !capabilities ||
       (input.acceptsBotCapabilities !== true && capabilities.some(isBotCapability)) ||
-      (input.acceptsProgressCapabilities !== true &&
-        capabilities.some(isProgressCapability)) ||
+      (input.acceptsProgressCapabilities !== true && capabilities.some(isProgressCapability)) ||
       (!mayHoldSimulatorCapabilities(input.type) &&
         (capabilities.some(isSimulatorCapability) || capabilities.some(isHostCapability))) ||
       // The phone simulator grant is negotiated after pairing, never issued by it.
@@ -1094,10 +1091,7 @@ export class AidenRemoteStateRegistry {
     const capabilities = input.capabilities;
     const credential = this.dependencies.randomBytes(32).toString("base64url");
     const salt = this.dependencies.randomBytes(32);
-    const credentialDigest = await this.dependencies.deriveCredentialDigest(
-      credential,
-      salt,
-    );
+    const credentialDigest = await this.dependencies.deriveCredentialDigest(credential, salt);
     if (credentialDigest.length !== 32) {
       throw new Error("Aiden Remote credential derivation failed.");
     }
@@ -1133,12 +1127,12 @@ export class AidenRemoteStateRegistry {
         (entry) => entry.revokedAt === undefined && (entry.type === "agent") === agent,
       ).length;
       if (active >= (agent ? MAX_AIDEN_REMOTE_AGENT_APPS : MAX_DEVICES)) {
-        throw new Error(agent ? "Aiden outside app capacity reached." : "Aiden Remote device capacity reached.");
+        throw new Error(
+          agent ? "Aiden outside app capacity reached." : "Aiden Remote device capacity reached.",
+        );
       }
       if (draft.devices.length >= MAX_RETAINED_DEVICES) {
-        const revokedIndex = draft.devices.findIndex(
-          (entry) => entry.revokedAt !== undefined,
-        );
+        const revokedIndex = draft.devices.findIndex((entry) => entry.revokedAt !== undefined);
         if (revokedIndex < 0) throw new Error("Aiden Remote device capacity reached.");
         draft.devices.splice(revokedIndex, 1);
       }
@@ -1152,9 +1146,7 @@ export class AidenRemoteStateRegistry {
     await this.mutationTail;
     const document = await this.current();
     const lookupDigest = fastLookupDigest(credential);
-    const device = document.devices.find(
-      (candidate) => candidate.lookupDigest === lookupDigest,
-    );
+    const device = document.devices.find((candidate) => candidate.lookupDigest === lookupDigest);
     if (!device) return null;
     const salt = decodeDigest(device.credentialSalt);
     const stored = decodeDigest(device.credentialDigest);
@@ -1169,8 +1161,7 @@ export class AidenRemoteStateRegistry {
       const current = draft.devices.find((candidate) => candidate.id === device.id);
       if (!current) return { changed: false, value: null };
       const acceptsBotCapabilities =
-        this.hostPolicy.botCapabilitiesSupported() &&
-        current.acceptsBotCapabilities === true;
+        this.hostPolicy.botCapabilitiesSupported() && current.acceptsBotCapabilities === true;
       const capabilities = parsePersistedCapabilities(
         current.capabilities,
         acceptsBotCapabilities,
@@ -1184,8 +1175,7 @@ export class AidenRemoteStateRegistry {
         type: current.type,
         capabilities: new Set(capabilities),
         acceptsBotCapabilities,
-        acceptsProgressCapabilities:
-          current.acceptsProgressCapabilities === true,
+        acceptsProgressCapabilities: current.acceptsProgressCapabilities === true,
         revoked: current.revokedAt !== undefined,
       };
       const shouldPersistLastSeen =
@@ -1274,18 +1264,14 @@ export class AidenRemoteStateRegistry {
     }
   }
 
-  async setTailscaleOwnership(
-    ownership: AidenTailscaleOwnership | undefined,
-  ): Promise<void> {
+  async setTailscaleOwnership(ownership: AidenTailscaleOwnership | undefined): Promise<void> {
     await this.mutate((draft) => {
       if (ownership) draft.tailscaleOwnership = ownership;
       else delete draft.tailscaleOwnership;
     });
   }
 
-  async beginTailscalePendingOutcome(
-    outcome: AidenTailscalePendingRouteOutcome,
-  ): Promise<void> {
+  async beginTailscalePendingOutcome(outcome: AidenTailscalePendingRouteOutcome): Promise<void> {
     const validated = parsePendingOutcome(outcome);
     if (!validated) throw new Error("Invalid pending Tailscale outcome.");
     await this.mutate((draft) => {
@@ -1302,9 +1288,7 @@ export class AidenRemoteStateRegistry {
     });
   }
 
-  async commitTailscaleOutcome(
-    ownership: AidenTailscaleOwnership | undefined,
-  ): Promise<void> {
+  async commitTailscaleOutcome(ownership: AidenTailscaleOwnership | undefined): Promise<void> {
     await this.mutate((draft) => {
       if (ownership) draft.tailscaleOwnership = ownership;
       else delete draft.tailscaleOwnership;
@@ -1312,7 +1296,10 @@ export class AidenRemoteStateRegistry {
     });
   }
 
-  async addApprovedRoot(root: AidenRemoteApprovedRoot, assertCurrent: () => void = () => {}): Promise<void> {
+  async addApprovedRoot(
+    root: AidenRemoteApprovedRoot,
+    assertCurrent: () => void = () => {},
+  ): Promise<void> {
     if (!parseApprovedRoot(root)) throw new Error("Invalid approved root.");
     await this.mutate((draft) => {
       assertCurrent();
@@ -1322,14 +1309,23 @@ export class AidenRemoteStateRegistry {
       if (draft.approvedRoots.some((candidate) => candidate.id === root.id)) {
         throw new Error("This approved root already exists.");
       }
-      if (draft.approvedRoots.some((candidate) => {
-        // An explicit phone approval may overlap a separate hidden Bot root.
-        // Keep exact paths unique and keep Bot-created roots from widening scope.
-        if (!root.botsOnly && candidate.botsOnly && candidate.folderPath !== root.folderPath) return false;
-        const a = path.relative(candidate.folderPath, root.folderPath), b = path.relative(root.folderPath, candidate.folderPath);
-        const contains = (relative: string) => relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
-        return contains(a) || contains(b);
-      })) throw new Error("This folder would overlap an existing approved root.");
+      if (
+        draft.approvedRoots.some((candidate) => {
+          // An explicit phone approval may overlap a separate hidden Bot root.
+          // Keep exact paths unique and keep Bot-created roots from widening scope.
+          if (!root.botsOnly && candidate.botsOnly && candidate.folderPath !== root.folderPath)
+            return false;
+          const a = path.relative(candidate.folderPath, root.folderPath),
+            b = path.relative(root.folderPath, candidate.folderPath);
+          const contains = (relative: string) =>
+            relative === "" ||
+            (relative !== ".." &&
+              !relative.startsWith(`..${path.sep}`) &&
+              !path.isAbsolute(relative));
+          return contains(a) || contains(b);
+        })
+      )
+        throw new Error("This folder would overlap an existing approved root.");
       draft.approvedRoots.push(root);
     });
   }
@@ -1349,7 +1345,12 @@ export class AidenRemoteStateRegistry {
     return this.mutate((draft) => {
       const index = draft.approvedRoots.findIndex((root) => root.id === rootId);
       if (index < 0) return false;
-      if (ownedBy !== undefined && (draft.approvedRoots[index]!.botGrantOperationId !== ownedBy || !draft.approvedRoots[index]!.botsOnly)) return false;
+      if (
+        ownedBy !== undefined &&
+        (draft.approvedRoots[index]!.botGrantOperationId !== ownedBy ||
+          !draft.approvedRoots[index]!.botsOnly)
+      )
+        return false;
       draft.approvedRoots.splice(index, 1);
       return true;
     });

@@ -44,9 +44,7 @@ test("provider dispatch preserves both the admitted connection identity and mode
   );
 });
 
-function fixture(
-  overrides: Partial<Parameters<typeof prepareBotGeneration>[0]> = {},
-) {
+function fixture(overrides: Partial<Parameters<typeof prepareBotGeneration>[0]> = {}) {
   const calls: string[] = [];
   return {
     calls,
@@ -142,7 +140,10 @@ test("rejects managed-home identity, requested workspace drift, and unsafe-path 
       prepareBotGeneration(candidate.input),
       /persisted workspace identity|managed home workspace is unavailable/u,
     );
-    assert.equal(candidate.calls.some((call) => call.startsWith("runtime:")), false);
+    assert.equal(
+      candidate.calls.some((call) => call.startsWith("runtime:")),
+      false,
+    );
   }
 });
 

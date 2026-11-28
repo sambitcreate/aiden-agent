@@ -12,14 +12,23 @@ const VISUAL = {
   id: "ui-abc",
   title: "Board",
   catalogVersion: 1,
-  tree: { t: "Visual", k: "0", c: [{ t: "Text", k: "0.0", c: [{ t: "#text", k: "0.0.0", s: "Hi" }] }] },
+  tree: {
+    t: "Visual",
+    k: "0",
+    c: [{ t: "Text", k: "0.0", c: [{ t: "#text", k: "0.0.0", s: "Hi" }] }],
+  },
   state: { tab: "a" },
   fallbackText: "Hi",
 };
 
 test("a visual's local state update is parsed strictly", () => {
   assert.deepEqual(
-    parseUiVisualStateUpdate({ chatId: "c", messageId: "m", visualId: "ui-abc", state: { tab: "b", seats: 5 } }),
+    parseUiVisualStateUpdate({
+      chatId: "c",
+      messageId: "m",
+      visualId: "ui-abc",
+      state: { tab: "b", seats: 5 },
+    }),
     { chatId: "c", messageId: "m", visualId: "ui-abc", state: { tab: "b", seats: 5 } },
   );
   for (const bad of [
@@ -38,14 +47,32 @@ test("the store keeps a visual's latest local state and refuses everything else"
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-ui-state-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = createChatStore(async () => directory);
-  const chat = await store.create({ title: "State", workspaceId: "w", providerId: "p", model: "m" });
+  const chat = await store.create({
+    title: "State",
+    workspaceId: "w",
+    providerId: "p",
+    model: "m",
+  });
   await store.appendMessage(chat.id, { role: "user", content: "Show it" });
-  const withVisual = await store.appendMessage(chat.id, { role: "assistant", content: "Here", uiVisuals: [VISUAL] });
+  const withVisual = await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Here",
+    uiVisuals: [VISUAL],
+  });
   const [user, assistant] = withVisual.messages;
-  assert.equal(await store.updateUiVisualState(chat.id, assistant!.id, "ui-abc", { tab: "b" }), true);
+  assert.equal(
+    await store.updateUiVisualState(chat.id, assistant!.id, "ui-abc", { tab: "b" }),
+    true,
+  );
   const reread = await createChatStore(async () => directory).get(chat.id);
   assert.deepEqual(reread?.messages[1]?.uiVisuals?.[0]?.state, { tab: "b" });
-  assert.equal(await store.updateUiVisualState(chat.id, assistant!.id, "ui-missing", { tab: "c" }), false);
+  assert.equal(
+    await store.updateUiVisualState(chat.id, assistant!.id, "ui-missing", { tab: "c" }),
+    false,
+  );
   assert.equal(await store.updateUiVisualState(chat.id, user!.id, "ui-abc", { tab: "c" }), false);
-  assert.equal(await store.updateUiVisualState("no-chat", assistant!.id, "ui-abc", { tab: "c" }), false);
+  assert.equal(
+    await store.updateUiVisualState("no-chat", assistant!.id, "ui-abc", { tab: "c" }),
+    false,
+  );
 });

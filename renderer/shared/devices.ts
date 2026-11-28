@@ -8,7 +8,10 @@ import {
 export const DEVICE_PLATFORMS = ["ios", "android"] as const;
 /** iOS Simulators (serve-sim) and Android Emulators (serve-emu), both streamed by expo-device-hub. */
 export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
-export const DEVICE_PLATFORM_LABELS: Record<DevicePlatform, string> = { ios: "iOS", android: "Android" };
+export const DEVICE_PLATFORM_LABELS: Record<DevicePlatform, string> = {
+  ios: "iOS",
+  android: "Android",
+};
 /**
  * A simulator UDID, an adb serial (`emulator-5554`), or an AVD name while the
  * emulator is not running (`Pixel_9_API_35`). The first character is
@@ -156,7 +159,8 @@ export function isDevicePlatform(value: unknown): value is DevicePlatform {
 }
 
 function parsePlatformAvailability(value: unknown): DevicePlatformAvailability | null {
-  if (!isRecord(value) || !isDevicePlatform(value.platform) || typeof value.available !== "boolean") return null;
+  if (!isRecord(value) || !isDevicePlatform(value.platform) || typeof value.available !== "boolean")
+    return null;
   if (value.reason !== undefined && typeof value.reason !== "string") return null;
   return {
     platform: value.platform,
@@ -177,7 +181,8 @@ function parseHostInfo(value: unknown): DeviceHostInfo | null {
     if (!parsed) return null;
     tools = parsed;
   }
-  if (value.toolInspectionError !== undefined && typeof value.toolInspectionError !== "string") return null;
+  if (value.toolInspectionError !== undefined && typeof value.toolInspectionError !== "string")
+    return null;
   let platforms: DevicePlatformAvailability[] | undefined;
   if (value.platforms !== undefined) {
     const parsed = parseList(value.platforms, parsePlatformAvailability);
@@ -190,7 +195,9 @@ function parseHostInfo(value: unknown): DeviceHostInfo | null {
     name,
     ...state,
     ...(tools ? { tools } : {}),
-    ...(typeof value.toolInspectionError === "string" ? { toolInspectionError: value.toolInspectionError } : {}),
+    ...(typeof value.toolInspectionError === "string"
+      ? { toolInspectionError: value.toolInspectionError }
+      : {}),
     ...(platforms ? { platforms } : {}),
   };
 }
@@ -199,7 +206,8 @@ function parseDevice(value: unknown): DeviceSummary | null {
   if (!isRecord(value)) return null;
   const { hostId, id, name, platform, version, booted, kind } = value;
   if (!isHostId(hostId) || !nonEmptyString(id) || !nonEmptyString(name)) return null;
-  if (!isDevicePlatform(platform) || typeof version !== "string" || typeof booted !== "boolean") return null;
+  if (!isDevicePlatform(platform) || typeof version !== "string" || typeof booted !== "boolean")
+    return null;
   if (kind !== "iphone" && kind !== "ipad" && kind !== "other") return null;
   return { hostId, id, name, platform, version, booted, kind };
 }
@@ -365,11 +373,22 @@ export const DEVICE_PLATFORM_TOGGLES: Record<DevicePlatform, readonly DeviceTogg
   ios: ["reduceMotion", "increaseContrast", "reduceTransparency", "showBorders", "voiceOver"],
   android: ["reduceMotion", "networkEnabled"],
 };
-export const DEVICE_ORIENTATIONS = ["portrait", "landscape_left", "portrait_upside_down", "landscape_right"] as const;
+export const DEVICE_ORIENTATIONS = [
+  "portrait",
+  "landscape_left",
+  "portrait_upside_down",
+  "landscape_right",
+] as const;
 export type DeviceOrientationValue = (typeof DEVICE_ORIENTATIONS)[number];
 export const DEVICE_LIQUID_GLASS = ["clear", "tinted"] as const;
 export type DeviceLiquidGlass = (typeof DEVICE_LIQUID_GLASS)[number];
-export const DEVICE_COLOR_FILTERS = ["none", "grayscale", "red-green", "green-red", "blue-yellow"] as const;
+export const DEVICE_COLOR_FILTERS = [
+  "none",
+  "grayscale",
+  "red-green",
+  "green-red",
+  "blue-yellow",
+] as const;
 export type DeviceColorFilter = (typeof DEVICE_COLOR_FILTERS)[number];
 /** APNs caps a payload at 4 KB; the simulator enforces the same limit. */
 export const MAX_DEVICE_PUSH_PAYLOAD_BYTES = 4096;
@@ -473,7 +492,11 @@ const MAX_DEVICE_URL_LENGTH = 2048;
 function isDeviceUrl(value: unknown): value is string {
   if (typeof value !== "string" || !value || value.length > MAX_DEVICE_URL_LENGTH) return false;
   if (/\s/u.test(value)) return false;
-  if (Array.from(value).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) {
+  if (
+    Array.from(value).some(
+      (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+    )
+  ) {
     return false;
   }
   const scheme = URL_SCHEME_PATTERN.exec(value)?.[1]?.toLowerCase();
@@ -493,7 +516,8 @@ function isAppId(value: unknown): value is string {
 }
 
 function isPushPayload(value: unknown): value is string | Record<string, unknown> {
-  if (typeof value === "string") return value.trim().length > 0 && value.length <= MAX_DEVICE_PUSH_PAYLOAD_BYTES;
+  if (typeof value === "string")
+    return value.trim().length > 0 && value.length <= MAX_DEVICE_PUSH_PAYLOAD_BYTES;
   if (!isRecord(value)) return false;
   try {
     return new TextEncoder().encode(JSON.stringify(value)).length <= MAX_DEVICE_PUSH_PAYLOAD_BYTES;
@@ -523,7 +547,8 @@ export function parseDeviceActionInput(value: unknown): DeviceActionInput | null
         ? { ...target, type, value: value.value as DeviceTextSize }
         : null;
     case "setToggle":
-      return (DEVICE_TOGGLES as readonly unknown[]).includes(value.setting) && typeof value.value === "boolean"
+      return (DEVICE_TOGGLES as readonly unknown[]).includes(value.setting) &&
+        typeof value.value === "boolean"
         ? { ...target, type, setting: value.setting as DeviceToggle, value: value.value }
         : null;
     case "setLiquidGlass":

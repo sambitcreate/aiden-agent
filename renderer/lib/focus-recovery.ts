@@ -76,7 +76,11 @@ export function watchFocusRecovery(
     holder = null;
     if (!focusLost(doc)) return;
     const listed = new Set(rows());
-    const next = focusAfterRemoval(snapshot, new Set([lost]), (row) => row.isConnected && listed.has(row));
+    const next = focusAfterRemoval(
+      snapshot,
+      new Set([lost]),
+      (row) => row.isConnected && listed.has(row),
+    );
     const stop = next ?? tabStop();
     if (stop) {
       stop.focus();

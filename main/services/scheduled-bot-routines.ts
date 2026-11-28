@@ -3,7 +3,10 @@ import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { eventTriggerBlock, type EventTriggerSource } from "./event-trigger-block.js";
 import { unverifiedRoutineLine } from "./bot-runtime/bot-claim-check.js";
 import { randomUUID } from "node:crypto";
-import { classifyBotRoutineFailure, type BotRoutineFailure } from "../../renderer/shared/bot-routine-failure.js";
+import {
+  classifyBotRoutineFailure,
+  type BotRoutineFailure,
+} from "../../renderer/shared/bot-routine-failure.js";
 import { formatBotRoutineLabel } from "../../renderer/shared/bot-routine-label.js";
 import {
   parseBotRoutineSchedule,
@@ -94,7 +97,9 @@ export function botRoutinePromptOf(text: string): string {
 function wakeUpClock(timestamp: number, zone: string): string {
   const options: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
   try {
-    return new Intl.DateTimeFormat("en-US", { ...options, timeZone: zone }).format(new Date(timestamp));
+    return new Intl.DateTimeFormat("en-US", { ...options, timeZone: zone }).format(
+      new Date(timestamp),
+    );
   } catch {
     return new Intl.DateTimeFormat("en-US", options).format(new Date(timestamp));
   }
@@ -125,7 +130,15 @@ export const BOT_ROUTINE_FAILED_PREVIEW = "I couldn't finish this routine.";
  */
 export interface BotRoutineExecutorPorts extends BotRoutinePorts {
   /** Write-ahead frozen model/grant claim, before state/default/notes work. */
-  claimExecution?(botId: string, input: { requestId: string; routineOrigin: BotRoutineInputOrigin; routineTiming?: BotRoutineTiming; retryOf?: string }): Promise<{ claimId: string }>;
+  claimExecution?(
+    botId: string,
+    input: {
+      requestId: string;
+      routineOrigin: BotRoutineInputOrigin;
+      routineTiming?: BotRoutineTiming;
+      retryOf?: string;
+    },
+  ): Promise<{ claimId: string }>;
   wakeUpAllowed?(botId: string, generation: string | undefined): Promise<boolean>;
   canRetryRoutineRequest?(botId: string, requestId: string): Promise<boolean>;
   /** The notes this routine kept from earlier runs, rendered; "" when none. */
@@ -165,7 +178,11 @@ export interface BotRoutineExecutorDependencies {
    * person must answer, pause a routine that keeps failing. Best effort: a
    * failure here never changes the run that was recorded.
    */
-  afterRun?(task: ScheduledTask, run: ScheduledRun, trigger: ScheduledRunTrigger): Promise<{ retrying?: boolean } | void>;
+  afterRun?(
+    task: ScheduledTask,
+    run: ScheduledRun,
+    trigger: ScheduledRunTrigger,
+  ): Promise<{ retrying?: boolean } | void>;
   /** The hook dispatcher for `RoutineRun` / `RoutineFailed`; the process-wide one by default. */
   hookDispatcher?: () => HookDispatcher;
   now?: () => number;
@@ -186,7 +203,12 @@ function observeRoutineHooks(
   trigger: ScheduledRunTrigger,
   retrying: boolean,
 ): void {
-  const event = run.result === "error" ? "RoutineFailed" : run.result === "success" || run.result === "silent" ? "RoutineRun" : undefined;
+  const event =
+    run.result === "error"
+      ? "RoutineFailed"
+      : run.result === "success" || run.result === "silent"
+        ? "RoutineRun"
+        : undefined;
   if (!event) return;
   void (async () => {
     const { hookCwd, hookReport } = await ports();
@@ -201,22 +223,26 @@ function observeRoutineHooks(
         }
       },
     });
-    hooks.observe(event, {
-      bot_id: task.botId,
-      routine_id: task.id,
-      routine_name: task.name?.trim() || "Routine",
-      run_id: run.id,
-      result: run.result,
-      trigger: trigger.kind,
-      ...(event === "RoutineFailed"
-        ? {
-            // Already credential-redacted when the run was recorded.
-            error: run.error ?? "",
-            failure_kind: run.failure?.kind ?? "other",
-            will_retry: retrying,
-          }
-        : {}),
-    }, { idempotencyKey: `${event}:${task.id}:${run.id}` });
+    hooks.observe(
+      event,
+      {
+        bot_id: task.botId,
+        routine_id: task.id,
+        routine_name: task.name?.trim() || "Routine",
+        run_id: run.id,
+        result: run.result,
+        trigger: trigger.kind,
+        ...(event === "RoutineFailed"
+          ? {
+              // Already credential-redacted when the run was recorded.
+              error: run.error ?? "",
+              failure_kind: run.failure?.kind ?? "other",
+              will_retry: retrying,
+            }
+          : {}),
+      },
+      { idempotencyKey: `${event}:${task.id}:${run.id}` },
+    );
   })().catch(() => undefined);
 }
 
@@ -262,7 +288,7 @@ function message(error: unknown): string {
  */
 function botSessionFailure(error: unknown): BotRoutineFailure | undefined {
   if (!(error instanceof Error)) return undefined;
-  const typed = (error as { authority?: unknown; classification?: unknown });
+  const typed = error as { authority?: unknown; classification?: unknown };
   // A runtime authority refusal, thrown as is or carried by a session error.
   if (error.name === "BotRuntimeAuthorityError" && typeof typed.classification === "string") {
     return classifyBotRoutineFailure({ authority: typed.classification, detail: error.message });
@@ -321,22 +347,50 @@ function routineLabel(task: ScheduledTask, trigger: ScheduledRunTrigger): string
   return trigger.kind === "retry" ? `${name} (trying again)` : name;
 }
 
-function routineOrigin(task: ScheduledTask & { botId: string }, trigger: ScheduledRunTrigger, requestId: string): BotRoutineInputOrigin {
-  return { version: 1, botId: task.botId, routineId: task.id, runId: requestId,
-    kind: trigger.kind === "automatic" ? "scheduled" : trigger.kind === "manual" ? "manual" : trigger.kind === "event" ? "event" : trigger.kind === "retry" ? "retry" : "catch_up" };
+function routineOrigin(
+  task: ScheduledTask & { botId: string },
+  trigger: ScheduledRunTrigger,
+  requestId: string,
+): BotRoutineInputOrigin {
+  return {
+    version: 1,
+    botId: task.botId,
+    routineId: task.id,
+    runId: requestId,
+    kind:
+      trigger.kind === "automatic"
+        ? "scheduled"
+        : trigger.kind === "manual"
+          ? "manual"
+          : trigger.kind === "event"
+            ? "event"
+            : trigger.kind === "retry"
+              ? "retry"
+              : "catch_up",
+  };
 }
 
 function routineTiming(task: ScheduledTask, trigger: ScheduledRunTrigger): BotRoutineTiming {
-  if (trigger.kind === "automatic") return trigger.routineTiming ?? { scheduledFor: trigger.fireTime, timezone: task.timezone };
+  if (trigger.kind === "automatic")
+    return trigger.routineTiming ?? { scheduledFor: trigger.fireTime, timezone: task.timezone };
   if (trigger.kind === "retry" || trigger.kind === "catch_up") return trigger.routineTiming ?? {};
   return { timezone: task.timezone };
 }
 
 /** Main-owned claim facts shared by scheduler/event write-ahead admission. */
-export function botRoutineExecutionInput(task: ScheduledTask, trigger: ScheduledRunTrigger): Parameters<NonNullable<BotRoutineExecutorPorts["claimExecution"]>>[1] {
-  if (!task.botId || task.wakeUp) throw new Error("This task is not a person-accepted Bot routine.");
+export function botRoutineExecutionInput(
+  task: ScheduledTask,
+  trigger: ScheduledRunTrigger,
+): Parameters<NonNullable<BotRoutineExecutorPorts["claimExecution"]>>[1] {
+  if (!task.botId || task.wakeUp)
+    throw new Error("This task is not a person-accepted Bot routine.");
   const requestId = botRoutineRequestId(task.id, trigger);
-  return { requestId, routineOrigin: routineOrigin(task as ScheduledTask & { botId: string }, trigger, requestId), routineTiming: routineTiming(task, trigger), ...(trigger.kind === "retry" ? { retryOf: trigger.failedRunId } : {}) };
+  return {
+    requestId,
+    routineOrigin: routineOrigin(task as ScheduledTask & { botId: string }, trigger, requestId),
+    routineTiming: routineTiming(task, trigger),
+    ...(trigger.kind === "retry" ? { retryOf: trigger.failedRunId } : {}),
+  };
 }
 
 export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDependencies) {
@@ -359,7 +413,16 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     const origin = task.wakeUp ? undefined : routineOrigin(task, trigger, requestId);
     const timing = routineTiming(task, trigger);
     const retry = origin && trigger.kind === "retry" ? { retryOf: trigger.failedRunId } : {};
-    if (origin && !existingSubmissionId && ports.claimExecution) await abortable(ports.claimExecution(task.botId, { requestId, routineOrigin: origin, routineTiming: timing, ...retry }), signal);
+    if (origin && !existingSubmissionId && ports.claimExecution)
+      await abortable(
+        ports.claimExecution(task.botId, {
+          requestId,
+          routineOrigin: origin,
+          routineTiming: timing,
+          ...retry,
+        }),
+        signal,
+      );
     const state = await abortable(ports.state(task.botId), signal);
     // A new fire cannot start while the person has paused the whole Bot.
     // An admitted fire remains pending so its reply can be observed after Resume.
@@ -392,17 +455,29 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
         const prior = [trigger.failedRunId];
         if (trigger.attempt === 2) prior.push(botRoutineRetryRequestId(trigger.failedRunId, 1));
         for (const id of prior) {
-          if (!await ports.canRetryRoutineRequest?.(task.botId, id).catch(() => false)) {
-            throw new RoutineFailure("This routine may already have taken action. Check its chat before running it again.",
-              { kind: "other", code: "retry_effect_unknown" });
+          if (!(await ports.canRetryRoutineRequest?.(task.botId, id).catch(() => false))) {
+            throw new RoutineFailure(
+              "This routine may already have taken action. Check its chat before running it again.",
+              { kind: "other", code: "retry_effect_unknown" },
+            );
           }
         }
       }
-      const notes = ports.routineNotes ? await abortable(ports.routineNotes(task.botId, task.id), signal) : "";
+      const notes = ports.routineNotes
+        ? await abortable(ports.routineNotes(task.botId, task.id), signal)
+        : "";
       const label = routineLabel(task, trigger);
-      if (task.wakeUp && (!ports.wakeUpAllowed ||
-        !await abortable(ports.wakeUpAllowed(task.botId, task.wakeUp.generation), signal))) {
-        return { result: "blocked", output: "", error: "This wake-up was turned off.", surface: false };
+      if (
+        task.wakeUp &&
+        (!ports.wakeUpAllowed ||
+          !(await abortable(ports.wakeUpAllowed(task.botId, task.wakeUp.generation), signal)))
+      ) {
+        return {
+          result: "blocked",
+          output: "",
+          error: "This wake-up was turned off.",
+          surface: false,
+        };
       }
       if (signal.aborted) throw new Error("Routine was cancelled.");
       try {
@@ -446,7 +521,10 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     }
     let outcome: Awaited<ReturnType<BotRoutineExecutorPorts["awaitReply"]>>;
     try {
-      outcome = await abortable(ports.awaitReply(task.botId, submission.submissionId, signal), signal);
+      outcome = await abortable(
+        ports.awaitReply(task.botId, submission.submissionId, signal),
+        signal,
+      );
     } catch (error) {
       if (replayable(trigger)) throw new RoutineOutcomeUnknown(message(error));
       throw error;
@@ -455,10 +533,10 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     // not the person's Stop.
     const stalled = ports.consumeStall?.(task.botId) === true;
     if (outcome.kind !== "completed" && stalled) {
-      throw new RoutineFailure(
-        "The routine stopped making progress.",
-        { kind: "stalled", code: "no_progress" },
-      );
+      throw new RoutineFailure("The routine stopped making progress.", {
+        kind: "stalled",
+        code: "no_progress",
+      });
     }
     if (outcome.kind === "failed") {
       // Pi's reason code alone ("model_error") says nothing a person can act on.
@@ -471,7 +549,9 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     if (outcome.kind === "interrupted") {
       // A spending limit stopped this run after its step: it failed, and the
       // next run starts fresh.
-      const spendingStop = outcome.settled ? ports.spendingStop?.(task.botId, requestId) : undefined;
+      const spendingStop = outcome.settled
+        ? ports.spendingStop?.(task.botId, requestId)
+        : undefined;
       if (spendingStop !== undefined) throw new Error(spendingStop);
       // Pi can report a paused submission without settling it. Keep the
       // automatic fire's receipt until the person resumes that same turn.
@@ -497,7 +577,9 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     }
     // A reply that says a failed step worked still reaches the person, with
     // one fixed line naming the step, and counts toward the failure streak.
-    const claim = ports.checkClaims ? await ports.checkClaims(task.botId).catch(() => undefined) : undefined;
+    const claim = ports.checkClaims
+      ? await ports.checkClaims(task.botId).catch(() => undefined)
+      : undefined;
     if (claim?.toolNames.length) {
       return {
         result: "success",
@@ -539,10 +621,14 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
               // crash between them leaves the answer saved but the routine's
               // visible last result stale.
               const current = await dependencies.store.get(task.id);
-              if (current && (current.lastRunAt ?? 0) <= prior.finishedAt && (
-                current.lastRunAt !== prior.finishedAt || current.lastResult !== prior.result ||
-                current.lastError !== prior.error
-              )) await dependencies.store.recordRun(prior);
+              if (
+                current &&
+                (current.lastRunAt ?? 0) <= prior.finishedAt &&
+                (current.lastRunAt !== prior.finishedAt ||
+                  current.lastResult !== prior.result ||
+                  current.lastError !== prior.error)
+              )
+                await dependencies.store.recordRun(prior);
               if (prior.result === "success" || prior.result === "error") {
                 await dependencies.deliver?.({
                   botId: task.botId,
@@ -551,7 +637,10 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
                   title: task.name?.trim() || "Routine",
                   // The Mac banner keeps the (redacted) failure detail; Telegram
                   // and phones swap in the fixed line for a failed row.
-                  body: prior.result === "error" ? prior.error ?? BOT_ROUTINE_FAILED_PREVIEW : prior.output,
+                  body:
+                    prior.result === "error"
+                      ? (prior.error ?? BOT_ROUTINE_FAILED_PREVIEW)
+                      : prior.output,
                   status: prior.result === "error" ? "failed" : "succeeded",
                   routineTask: task,
                   requestId,
@@ -574,10 +663,13 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
           throw error;
         }
         // The setup the run starts on, not whatever it changed into while running.
-        fingerprint = ports.fingerprint ? await ports.fingerprint(task.botId).catch(() => undefined) : undefined;
-        const previous = trigger.kind === "catch_up"
-          ? await dependencies.store.runById(task.id, requestId)
+        fingerprint = ports.fingerprint
+          ? await ports.fingerprint(task.botId).catch(() => undefined)
           : undefined;
+        const previous =
+          trigger.kind === "catch_up"
+            ? await dependencies.store.runById(task.id, requestId)
+            : undefined;
         let existingSubmissionId: string | undefined;
         if (recovering) {
           try {
@@ -594,17 +686,26 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
           }
           throw new UnclaimableScheduledFire("This routine retry was superseded.");
         }
-        outcome = recovering && !task.enabled && task.routineSchedule?.kind !== "once" && !existingSubmissionId
-          ? { result: "blocked", output: "", error: "Routine was paused.", surface: false }
-          : await execute(
-            task as ScheduledTask & { botId: string }, trigger, requestId, ports, options.signal,
-            recovering || (previous?.result === "skipped" && previous.reason === "bot_paused"),
-            existingSubmissionId,
-          );
+        outcome =
+          recovering &&
+          !task.enabled &&
+          task.routineSchedule?.kind !== "once" &&
+          !existingSubmissionId
+            ? { result: "blocked", output: "", error: "Routine was paused.", surface: false }
+            : await execute(
+                task as ScheduledTask & { botId: string },
+                trigger,
+                requestId,
+                ports,
+                options.signal,
+                recovering || (previous?.result === "skipped" && previous.reason === "bot_paused"),
+                existingSubmissionId,
+              );
       } catch (error) {
         if (error instanceof UnclaimableScheduledFire) throw error;
         const cancelled = options.signal.aborted;
-        const uncertain = error instanceof RoutineOutcomeUnknown || (cancelled && replayable(trigger));
+        const uncertain =
+          error instanceof RoutineOutcomeUnknown || (cancelled && replayable(trigger));
         outcome = {
           result: cancelled || uncertain ? "blocked" : "error",
           output: "",
@@ -615,9 +716,10 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
           // A doubtful fire is retried by receipt, never counted as a failure.
           ...(!cancelled && !uncertain
             ? {
-                failure: error instanceof RoutineFailure
-                  ? error.failure
-                  : botSessionFailure(error) ?? { kind: "other", code: "run_failed" },
+                failure:
+                  error instanceof RoutineFailure
+                    ? error.failure
+                    : (botSessionFailure(error) ?? { kind: "other", code: "run_failed" }),
               }
             : {}),
         };
@@ -626,9 +728,12 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
       // its own request id, so the catch-up after Resume submits that exact
       // id and any repeat of the catch-up dedupes against it.
       const run = await dependencies.store.recordRun({
-        id: outcome.reason === "duplicate" || outcome.uncertain
-          ? undefined
-          : durableFire(trigger) || trigger.kind === "catch_up" ? requestId : options.runId,
+        id:
+          outcome.reason === "duplicate" || outcome.uncertain
+            ? undefined
+            : durableFire(trigger) || trigger.kind === "catch_up"
+              ? requestId
+              : options.runId,
         taskId: task.id,
         startedAt,
         finishedAt: now(),
@@ -642,7 +747,11 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
         ...(fingerprint !== undefined ? { fingerprint } : {}),
       });
       // Skipped and blocked fires never ran, and a doubtful fire is settled by its retry.
-      if (outcome.result === "success" || outcome.result === "silent" || outcome.result === "error") {
+      if (
+        outcome.result === "success" ||
+        outcome.result === "silent" ||
+        outcome.result === "error"
+      ) {
         reportAnalyticsEvent("bot_routine_ran", {
           trigger: analyticsRunTrigger(trigger),
           result: outcome.result === "error" ? "failed" : "success",
@@ -693,7 +802,6 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     },
   };
 }
-
 
 export type BotRoutineExecutor = ReturnType<typeof createBotRoutineExecutor>;
 
@@ -769,7 +877,12 @@ function invalid(label: string): never {
   throw new Error(`Invalid ${label}.`);
 }
 
-function record(value: unknown, required: readonly string[], optional: readonly string[], label: string) {
+function record(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[],
+  label: string,
+) {
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid(label);
   const fields = value as Record<string, unknown>;
   const allowed = new Set([...required, ...optional]);
@@ -824,14 +937,19 @@ export function parseBotRoutineUpdate(value: unknown): BotRoutineUpdateInput {
   ) {
     invalid("routine revision");
   }
-  if (fields.enabled !== undefined && typeof fields.enabled !== "boolean") invalid("routine update");
+  if (fields.enabled !== undefined && typeof fields.enabled !== "boolean")
+    invalid("routine update");
   const zone = timezone(fields.timezone);
   return {
     botId: parseBotRoutineBotId(fields.botId),
     id: routineId(fields.id),
     expectedUpdatedAt: fields.expectedUpdatedAt,
-    ...(fields.name !== undefined ? { name: text(fields.name, "routine name", BOT_ROUTINE_NAME_LIMIT) } : {}),
-    ...(fields.schedule !== undefined ? { schedule: parseBotRoutineSchedule(fields.schedule) } : {}),
+    ...(fields.name !== undefined
+      ? { name: text(fields.name, "routine name", BOT_ROUTINE_NAME_LIMIT) }
+      : {}),
+    ...(fields.schedule !== undefined
+      ? { schedule: parseBotRoutineSchedule(fields.schedule) }
+      : {}),
     ...(fields.prompt !== undefined
       ? { prompt: text(fields.prompt, "routine message", BOT_ROUTINE_PROMPT_LIMIT) }
       : {}),
@@ -889,7 +1007,10 @@ export interface BotRoutineServiceDependencies {
       options?: { expectedUpdatedAt?: number },
     ): Promise<ScheduledTask>;
     remove(id: string, options?: { expectedUpdatedAt?: number }): Promise<void>;
-    runNow(id: string, options?: { runId?: string; expectedUpdatedAt?: number }): Promise<ScheduledRun>;
+    runNow(
+      id: string,
+      options?: { runId?: string; expectedUpdatedAt?: number },
+    ): Promise<ScheduledRun>;
   };
   botExists(botId: string): Promise<boolean>;
   /** Whether the person paused the Bot; throws when that can't be read, so Run now refuses. */
@@ -919,7 +1040,10 @@ export function botRoutineLabel(schedule: BotRoutineSchedule, zone: string, now:
   return formatBotRoutineLabel(schedule, { currentYear: yearIn(now, zone) });
 }
 
-export function projectBotRoutine(task: ScheduledTask & { botId: string }, now: number): BotRoutine {
+export function projectBotRoutine(
+  task: ScheduledTask & { botId: string },
+  now: number,
+): BotRoutine {
   const schedule = task.routineSchedule ?? null;
   return {
     id: task.id,
@@ -968,7 +1092,8 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
 
   const owned = async (botId: string, id: string) => {
     const task = await dependencies.store.get(id);
-    if (!isBotRoutine(task) || task.botId !== botId) throw new Error("This routine no longer exists.");
+    if (!isBotRoutine(task) || task.botId !== botId)
+      throw new Error("This routine no longer exists.");
     return task;
   };
 
@@ -976,7 +1101,10 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
     if (!(await dependencies.botExists(botId))) throw new Error("This Bot no longer exists.");
   };
 
-  const findBySourceProposal = async (botId: string, proposalId: string): Promise<BotRoutine | undefined> => {
+  const findBySourceProposal = async (
+    botId: string,
+    proposalId: string,
+  ): Promise<BotRoutine | undefined> => {
     const task = (await dependencies.store.list()).find(
       (candidate): candidate is ScheduledTask & { botId: string } =>
         candidate.botId === botId && candidate.sourceProposalId === proposalId,
@@ -988,7 +1116,10 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
     async list(botId: string): Promise<BotRoutine[]> {
       const at = now();
       return (await dependencies.store.list())
-        .filter((task): task is ScheduledTask & { botId: string } => task.botId === botId && !isSpentBotWakeUp(task))
+        .filter(
+          (task): task is ScheduledTask & { botId: string } =>
+            task.botId === botId && !isSpentBotWakeUp(task),
+        )
         .sort((a, b) => a.createdAt - b.createdAt)
         .map((task) => projectBotRoutine(task, at));
     },
@@ -1011,7 +1142,9 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
         permission: "read-only",
         botId: input.botId,
         routineSchedule: input.schedule,
-        ...(input.sourceProposalId !== undefined ? { sourceProposalId: input.sourceProposalId } : {}),
+        ...(input.sourceProposalId !== undefined
+          ? { sourceProposalId: input.sourceProposalId }
+          : {}),
         ...(input.wakeUp !== undefined ? { wakeUp: input.wakeUp } : {}),
         ...(input.enabled === false ? { enabled: false } : {}),
         notify: true,
@@ -1041,7 +1174,8 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
         },
         { expectedUpdatedAt: existing.updatedAt },
       );
-      if (!existing.enabled && task.enabled) await dependencies.routineResumed?.(input.botId, task.id).catch(() => undefined);
+      if (!existing.enabled && task.enabled)
+        await dependencies.routineResumed?.(input.botId, task.id).catch(() => undefined);
       dependencies.notifyChanged({ botId: input.botId, routineId: task.id });
       return projectBotRoutine(task as ScheduledTask & { botId: string }, now());
     },
@@ -1079,7 +1213,8 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
     async runNow(input: BotRoutineRunNowInput): Promise<{ runId: string }> {
       await requireBot(input.botId);
       const existing = await owned(input.botId, input.routineId);
-      if (await dependencies.isPaused?.(input.botId)) throw new Error("This Bot is paused. Resume it to continue.");
+      if (await dependencies.isPaused?.(input.botId))
+        throw new Error("This Bot is paused. Resume it to continue.");
       // Checked here: the scheduler checks it only once the run is under way,
       // after this call has already answered with a run id.
       if (input.expectedUpdatedAt !== undefined && existing.updatedAt !== input.expectedUpdatedAt) {
@@ -1089,7 +1224,9 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
       // Throws at once when the routine is already running.
       const completion = dependencies.service.runNow(existing.id, {
         runId,
-        ...(input.expectedUpdatedAt !== undefined ? { expectedUpdatedAt: input.expectedUpdatedAt } : {}),
+        ...(input.expectedUpdatedAt !== undefined
+          ? { expectedUpdatedAt: input.expectedUpdatedAt }
+          : {}),
       });
       void completion.catch(() => undefined);
       return { runId };
@@ -1101,7 +1238,10 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
      * that settlement appends to the Bot's chat, which waits for the tool's
      * turn to end, so awaiting it inside the tool could never finish.
      */
-    async delete(input: BotRoutineDeleteInput, options: { cleanup?: "await" | "background" } = {}): Promise<void> {
+    async delete(
+      input: BotRoutineDeleteInput,
+      options: { cleanup?: "await" | "background" } = {},
+    ): Promise<void> {
       const existing = await owned(input.botId, input.id);
       await dependencies.service.remove(existing.id, {
         expectedUpdatedAt: input.expectedUpdatedAt ?? existing.updatedAt,
@@ -1148,7 +1288,10 @@ export interface BotRoutineCatchUpDependencies {
     runs(taskId: string): Promise<ScheduledRun[]>;
   };
   scheduler: {
-    catchUp(id: string, missed: { runId: string; at: number; routineTiming?: BotRoutineTiming }): Promise<ScheduledRun> | undefined;
+    catchUp(
+      id: string,
+      missed: { runId: string; at: number; routineTiming?: BotRoutineTiming },
+    ): Promise<ScheduledRun> | undefined;
   };
   now?: () => number;
 }
@@ -1163,14 +1306,21 @@ export interface BotRoutineCatchUpDependencies {
 export function createBotRoutineCatchUp(dependencies: BotRoutineCatchUpDependencies) {
   const now = dependencies.now ?? Date.now;
   return {
-    async catchUp(botId: string): Promise<Array<{ taskId: string; completion: Promise<ScheduledRun> }>> {
+    async catchUp(
+      botId: string,
+    ): Promise<Array<{ taskId: string; completion: Promise<ScheduledRun> }>> {
       const dispatched: Array<{ taskId: string; completion: Promise<ScheduledRun> }> = [];
       for (const task of await dependencies.store.list()) {
-        if (task.botId !== botId || (!task.enabled && task.routineSchedule?.kind !== "once")) continue;
+        if (task.botId !== botId || (!task.enabled && task.routineSchedule?.kind !== "once"))
+          continue;
         const [newest] = await dependencies.store.runs(task.id);
         if (newest?.result !== "skipped" || newest.reason !== "bot_paused") continue;
         if (now() - newest.startedAt >= BOT_ROUTINE_CATCH_UP_WINDOW_MS) continue;
-        const completion = dependencies.scheduler.catchUp(task.id, { runId: newest.id, at: newest.routineTiming?.scheduledFor ?? newest.startedAt, ...(newest.routineTiming ? { routineTiming: newest.routineTiming } : {}) });
+        const completion = dependencies.scheduler.catchUp(task.id, {
+          runId: newest.id,
+          at: newest.routineTiming?.scheduledFor ?? newest.startedAt,
+          ...(newest.routineTiming ? { routineTiming: newest.routineTiming } : {}),
+        });
         if (completion) dispatched.push({ taskId: task.id, completion });
       }
       return dispatched;
@@ -1223,7 +1373,8 @@ export async function countSkippedWhilePaused(
       if (run.startedAt < since) continue;
       if (run.result === "skipped" && run.reason === "paused_by_person") count += 1;
     }
-    if (count > 0) skipped.push({ routineId: task.id, name: task.name?.trim() || "Routine", count });
+    if (count > 0)
+      skipped.push({ routineId: task.id, name: task.name?.trim() || "Routine", count });
   }
   return skipped;
 }

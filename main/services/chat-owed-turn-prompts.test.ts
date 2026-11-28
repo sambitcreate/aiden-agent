@@ -85,7 +85,11 @@ test("an owed turn's approval is shown for its chat only, with Allow and its las
     scopes: ["chat"],
   });
   assert.equal(b.prompts.canDecide("chat-1", "approval-1", "allow"), true);
-  assert.equal(b.prompts.canDecide("chat-2", "approval-1", "deny"), false, "another chat cannot answer it");
+  assert.equal(
+    b.prompts.canDecide("chat-2", "approval-1", "deny"),
+    false,
+    "another chat cannot answer it",
+  );
 });
 
 test("a model operation that needs its owning window can only be denied away from it", () => {
@@ -122,9 +126,15 @@ test("an approval nobody answers is denied after the phone card lifetime", () =>
 test("a goal round's approval waits 30 minutes, then is denied and its turn hears it expired", () => {
   const b = board();
   const heard: string[] = [];
-  const lifetime = { ms: ATTENDED_TURN_PROMPT_LIFETIME_MS, expired: (chatId: string, kind: string) => heard.push(`${chatId}:${kind}`) };
+  const lifetime = {
+    ms: ATTENDED_TURN_PROMPT_LIFETIME_MS,
+    expired: (chatId: string, kind: string) => heard.push(`${chatId}:${kind}`),
+  };
   b.prompts.publish("chat-1", "chat:approval", approval({ streamId: "goal-1" }), lifetime);
-  assert.equal(b.prompts.approvalForChat("chat-1")!.expiresAt, new Date(b.now() + 30 * 60_000).toISOString());
+  assert.equal(
+    b.prompts.approvalForChat("chat-1")!.expiresAt,
+    new Date(b.now() + 30 * 60_000).toISOString(),
+  );
   b.advance(OWED_TURN_PROMPT_LIFETIME_MS);
   // Still open past an owed turn's five minutes.
   assert.deepEqual(b.expired, []);
@@ -137,7 +147,10 @@ test("a goal round's approval waits 30 minutes, then is denied and its turn hear
 test("an answered goal-round card never reports expiry, nor does a question closed at the agent's own deadline", () => {
   const b = board();
   const heard: string[] = [];
-  const lifetime = { ms: ATTENDED_TURN_PROMPT_LIFETIME_MS, expired: (chatId: string, kind: string) => heard.push(`${chatId}:${kind}`) };
+  const lifetime = {
+    ms: ATTENDED_TURN_PROMPT_LIFETIME_MS,
+    expired: (chatId: string, kind: string) => heard.push(`${chatId}:${kind}`),
+  };
   b.prompts.publish("chat-1", "chat:approval", approval({ streamId: "goal-1" }), lifetime);
   b.prompts.settled("approval-1");
   b.prompts.publish(
@@ -158,7 +171,10 @@ test("a question closes at the agent's own deadline, never later than the card l
     "chat:questionnaire",
     question({ expiresAt: new Date(early.now() + 60_000).toISOString() }),
   );
-  assert.equal(early.prompts.questionForChat("chat-1")!.expiresAt, new Date(early.now() + 60_000).toISOString());
+  assert.equal(
+    early.prompts.questionForChat("chat-1")!.expiresAt,
+    new Date(early.now() + 60_000).toISOString(),
+  );
   early.advance(60_000);
   assert.deepEqual(early.expired, ["question:question-1"]);
   assert.equal(early.prompts.questionForChat("chat-1"), null);
@@ -194,11 +210,19 @@ test("the owed turn ending takes its open cards with it", () => {
   const b = board();
   b.prompts.publish("chat-1", "chat:approval", approval());
   b.prompts.publish("chat-1", "chat:questionnaire", question());
-  b.prompts.publish("chat-2", "chat:approval", approval({ approvalId: "approval-2", streamId: "owed-2" }));
+  b.prompts.publish(
+    "chat-2",
+    "chat:approval",
+    approval({ approvalId: "approval-2", streamId: "owed-2" }),
+  );
   b.prompts.publish("chat-1", "chat:done", { streamId: "owed-1" });
   assert.equal(b.prompts.approvalForChat("chat-1"), null);
   assert.equal(b.prompts.questionForChat("chat-1"), null);
-  assert.equal(b.prompts.approvalForChat("chat-2")?.approvalId, "approval-2", "another turn's card stays");
+  assert.equal(
+    b.prompts.approvalForChat("chat-2")?.approvalId,
+    "approval-2",
+    "another turn's card stays",
+  );
   b.advance(OWED_TURN_PROMPT_LIFETIME_MS);
   assert.deepEqual(b.expired, ["approval:approval-2"]);
 });
@@ -212,9 +236,18 @@ function windowRound() {
   const answered = new Set<string>();
   const expiredCards: string[] = [];
   const owner = withPromptLifetime(
-    { id: 7, documentId: "window-doc", isDestroyed: () => false, send: (channel) => sent.push(channel), onInvalidated: () => () => undefined },
+    {
+      id: 7,
+      documentId: "window-doc",
+      isDestroyed: () => false,
+      send: (channel) => sent.push(channel),
+      onInvalidated: () => () => undefined,
+    },
     "chat-1",
-    { ms: ATTENDED_TURN_PROMPT_LIFETIME_MS, expired: (chatId, kind) => expired.push(`${chatId}:${kind}`) },
+    {
+      ms: ATTENDED_TURN_PROMPT_LIFETIME_MS,
+      expired: (chatId, kind) => expired.push(`${chatId}:${kind}`),
+    },
     {
       now: () => now,
       setTimer: (run, ms) => {
@@ -252,9 +285,25 @@ function windowRound() {
 test("a goal round on screen shows its cards in the window, and one unanswered for 30 minutes is denied and reported", () => {
   const round = windowRound();
   assert.equal(round.owner.documentId, "window-doc", "the window still owns the round");
-  round.owner.send("chat:approval", { approvalId: "a1", streamId: "s1", toolName: "bash", toolCallId: "t1", summary: "Run tests" });
-  round.owner.send("chat:approval", { approvalId: "a2", streamId: "s1", toolName: "bash", toolCallId: "t2", summary: "Run lint" });
-  assert.deepEqual(round.sent, ["chat:approval", "chat:approval"], "the window gets its cards as usual");
+  round.owner.send("chat:approval", {
+    approvalId: "a1",
+    streamId: "s1",
+    toolName: "bash",
+    toolCallId: "t1",
+    summary: "Run tests",
+  });
+  round.owner.send("chat:approval", {
+    approvalId: "a2",
+    streamId: "s1",
+    toolName: "bash",
+    toolCallId: "t2",
+    summary: "Run lint",
+  });
+  assert.deepEqual(
+    round.sent,
+    ["chat:approval", "chat:approval"],
+    "the window gets its cards as usual",
+  );
   round.answered.add("a2"); // the person answered the second card in the window
   round.advance(ATTENDED_TURN_PROMPT_LIFETIME_MS - 1);
   assert.deepEqual(round.expired, [], "29 minutes is not long enough");
@@ -265,17 +314,35 @@ test("a goal round on screen shows its cards in the window, and one unanswered f
 
 test("a goal round on screen: a question past 30 minutes closes, its own sooner deadline doesn't count, and the round ending stops the clock", () => {
   const round = windowRound();
-  round.owner.send("chat:questionnaire", { promptId: "q1", streamId: "s1", toolCallId: "t1", questions: [] });
   round.owner.send("chat:questionnaire", {
-    promptId: "q2", streamId: "s1", toolCallId: "t2", questions: [],
+    promptId: "q1",
+    streamId: "s1",
+    toolCallId: "t1",
+    questions: [],
+  });
+  round.owner.send("chat:questionnaire", {
+    promptId: "q2",
+    streamId: "s1",
+    toolCallId: "t2",
+    questions: [],
     expiresAt: new Date(round.now() + 60_000).toISOString(),
   });
   round.advance(ATTENDED_TURN_PROMPT_LIFETIME_MS);
-  assert.deepEqual(round.expiredCards, ["question:q1"], "the agent's own one-minute question closes itself");
+  assert.deepEqual(
+    round.expiredCards,
+    ["question:q1"],
+    "the agent's own one-minute question closes itself",
+  );
   assert.deepEqual(round.expired, ["chat-1:question"]);
 
   const ended = windowRound();
-  ended.owner.send("chat:approval", { approvalId: "a1", streamId: "s1", toolName: "bash", toolCallId: "t1", summary: "Run tests" });
+  ended.owner.send("chat:approval", {
+    approvalId: "a1",
+    streamId: "s1",
+    toolName: "bash",
+    toolCallId: "t1",
+    summary: "Run tests",
+  });
   ended.owner.send("chat:done", { streamId: "s1" });
   ended.advance(ATTENDED_TURN_PROMPT_LIFETIME_MS);
   assert.deepEqual(ended.expired, [], "a round that ended has no card left to expire");

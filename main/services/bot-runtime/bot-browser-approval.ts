@@ -21,7 +21,10 @@ import {
   type BrowserApprovalTarget,
   type BrowserToolApproval,
 } from "../browser/approval.js";
-import { assertBoundarySelector, BROWSER_HELD_TAB_REFUSED } from "../browser/credential-boundary.js";
+import {
+  assertBoundarySelector,
+  BROWSER_HELD_TAB_REFUSED,
+} from "../browser/credential-boundary.js";
 import type { BrowserFieldProbe, BrowserProbeTarget } from "../browser/service.js";
 import { classifyBotAction, type BotClassifiableAction } from "../bot-rules/classify.js";
 import { LOCKED_CLASSES } from "../bot-rules/words.js";
@@ -29,7 +32,11 @@ import type { BotToolCallCheck } from "./bot-extension.js";
 import type { BotLiveApproval } from "./bot-tool-assembly.js";
 
 /** The Bot browser tools that ask the person before they run. */
-export const BOT_BROWSER_ASKING_TOOLS: ReadonlySet<string> = new Set(["browser_click", "browser_type", "browser_press"]);
+export const BOT_BROWSER_ASKING_TOOLS: ReadonlySet<string> = new Set([
+  "browser_click",
+  "browser_type",
+  "browser_press",
+]);
 
 export interface BotBrowserApprovalPort {
   /** The tab a call without `tabId` acts on: the Bot's current tab. */
@@ -37,7 +44,11 @@ export interface BotBrowserApprovalPort {
   /** Why the person holds `tabId`, if they do. */
   heldReason(tabId: string): BrowserHoldReason | undefined;
   approvalTarget(tabId: string): BrowserApprovalTarget;
-  probe(tabId: string, target: BrowserProbeTarget, signal: AbortSignal | undefined): Promise<BrowserFieldProbe | undefined>;
+  probe(
+    tabId: string,
+    target: BrowserProbeTarget,
+    signal: AbortSignal | undefined,
+  ): Promise<BrowserFieldProbe | undefined>;
   /** Bind the approved call to its execution. */
   authorize(callId: string, approval: BrowserToolApproval, args: Record<string, unknown>): void;
 }
@@ -45,7 +56,9 @@ export interface BotBrowserApprovalPort {
 type AskingTool = "browser_click" | "browser_type" | "browser_press";
 
 function record(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? { ...(value as Record<string, unknown>) } : {};
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {};
 }
 
 function bounded(text: string, maximum: number): string {
@@ -62,7 +75,9 @@ function stringField(args: Record<string, unknown>, key: string): string | undef
 function keyChord(args: Record<string, unknown>): string | undefined {
   const key = stringField(args, "key");
   if (key === undefined) return undefined;
-  const modifiers = Array.isArray(args.modifiers) ? args.modifiers.filter((value): value is string => typeof value === "string") : [];
+  const modifiers = Array.isArray(args.modifiers)
+    ? args.modifiers.filter((value): value is string => typeof value === "string")
+    : [];
   return [...modifiers, key].join("+");
 }
 
@@ -70,7 +85,8 @@ function keyChord(args: Record<string, unknown>): string | undefined {
 function described(args: Record<string, unknown>): string | undefined {
   const named = stringField(args, "locator") ?? stringField(args, "selector");
   if (named !== undefined) return bounded(named, 120);
-  if (typeof args.x === "number" && typeof args.y === "number") return `the point ${Math.round(args.x)}, ${Math.round(args.y)}`;
+  if (typeof args.x === "number" && typeof args.y === "number")
+    return `the point ${Math.round(args.x)}, ${Math.round(args.y)}`;
   return undefined;
 }
 
@@ -93,7 +109,11 @@ export function botBrowserApprovalSummary(
     case "browser_type": {
       const text = typeof args.text === "string" ? args.text : "";
       const typed =
-        text.length === 0 ? "Clear" : options.hideText ? "Type into" : `Type “${bounded(text.replace(/\s+/gu, " "), 160)}” into`;
+        text.length === 0
+          ? "Clear"
+          : options.hideText
+            ? "Type into"
+            : `Type “${bounded(text.replace(/\s+/gu, " "), 160)}” into`;
       action = `${typed} ${target ?? "the focused field"} in its browser`;
       break;
     }
@@ -109,11 +129,16 @@ function probeTarget(toolName: AskingTool, args: Record<string, unknown>): Brows
   const selector = stringField(args, "selector");
   if (toolName === "browser_press") return { focused: true };
   if (toolName === "browser_type") {
-    return locator !== undefined ? { locator } : selector !== undefined ? { selector } : { focused: true };
+    return locator !== undefined
+      ? { locator }
+      : selector !== undefined
+        ? { selector }
+        : { focused: true };
   }
   if (locator !== undefined) return { locator, click: true };
   if (selector !== undefined) return { selector, click: true };
-  if (typeof args.x === "number" && typeof args.y === "number") return { x: args.x, y: args.y, click: true };
+  if (typeof args.x === "number" && typeof args.y === "number")
+    return { x: args.x, y: args.y, click: true };
   return { click: true };
 }
 
@@ -136,7 +161,8 @@ export async function botBrowserApproval(
   assertBoundarySelector(stringField(args, "locator"));
   assertBoundarySelector(stringField(args, "selector"));
   const tabId = stringField(args, "tabId") ?? port.currentTabId();
-  if (tabId === undefined) throw new Error("No current browser tab is available. Call browser_open first.");
+  if (tabId === undefined)
+    throw new Error("No current browser tab is available. Call browser_open first.");
   if (port.heldReason(tabId) !== undefined) throw new Error(BROWSER_HELD_TAB_REFUSED);
   const pinned = { ...args, tabId };
   const approval = prepareBrowserToolApproval(tool, pinned, port.approvalTarget(tabId));
@@ -153,7 +179,9 @@ export async function botBrowserApproval(
     ...(key === undefined ? {} : { key }),
     ...(field === undefined ? {} : { field: { ...field } }),
   };
-  const secret = field === undefined || [...classifyBotAction(action, []).classes].some((entry) => LOCKED_CLASSES.has(entry));
+  const secret =
+    field === undefined ||
+    [...classifyBotAction(action, []).classes].some((entry) => LOCKED_CLASSES.has(entry));
   // A rule that hands this to the person opens the same page for them, in this tab.
   const page = approval.target.url;
   return {

@@ -30,12 +30,17 @@ const validTime = (value: unknown): value is number =>
 function newest(lastViewed: Record<string, number>): Record<string, number> {
   const entries = Object.entries(lastViewed);
   if (entries.length <= BOT_LAST_VIEWED_LIMIT) return lastViewed;
-  return Object.fromEntries(entries.sort((left, right) => right[1] - left[1]).slice(0, BOT_LAST_VIEWED_LIMIT));
+  return Object.fromEntries(
+    entries.sort((left, right) => right[1] - left[1]).slice(0, BOT_LAST_VIEWED_LIMIT),
+  );
 }
 
 // A view or start time in the future (clock skew, a hand-edited record) would
 // hide every later reply as already seen, so times are clamped to `now`.
-export function parseBotSidebarPreferences(raw: string | null, now: number = Date.now()): BotSidebarPreferences {
+export function parseBotSidebarPreferences(
+  raw: string | null,
+  now: number = Date.now(),
+): BotSidebarPreferences {
   if (raw === null) return fresh(now);
   let value: unknown;
   try {
@@ -48,7 +53,8 @@ export function parseBotSidebarPreferences(raw: string | null, now: number = Dat
   if (record.version !== 1) return fresh(now);
   return {
     since: validTime(record.since) ? Math.min(record.since, now) : now,
-    pinnedBotId: typeof record.pinnedBotId === "string" && record.pinnedBotId ? record.pinnedBotId : null,
+    pinnedBotId:
+      typeof record.pinnedBotId === "string" && record.pinnedBotId ? record.pinnedBotId : null,
     lastViewed: parseTimes(record.lastViewed, now),
     // Added after the first records were written; a record without it has seen nothing yet.
     seenReplyAt: parseTimes(record.seenReplyAt, now),
@@ -75,7 +81,10 @@ export function serializeBotSidebarPreferences(preferences: BotSidebarPreference
   });
 }
 
-export function withPinnedBot(preferences: BotSidebarPreferences, botId: string | null): BotSidebarPreferences {
+export function withPinnedBot(
+  preferences: BotSidebarPreferences,
+  botId: string | null,
+): BotSidebarPreferences {
   return preferences.pinnedBotId === botId ? preferences : { ...preferences, pinnedBotId: botId };
 }
 
@@ -139,20 +148,38 @@ export function withoutMissingBots(
 }
 
 /** A deleted Bot leaves no pin and no view behind, even when it was the last Bot (which `withoutMissingBots` can't tell). */
-export function withoutBot(preferences: BotSidebarPreferences, botId: string): BotSidebarPreferences {
+export function withoutBot(
+  preferences: BotSidebarPreferences,
+  botId: string,
+): BotSidebarPreferences {
   const pinned = preferences.pinnedBotId === botId;
-  if (!pinned && !(botId in preferences.lastViewed) && !(botId in preferences.seenReplyAt)) return preferences;
+  if (!pinned && !(botId in preferences.lastViewed) && !(botId in preferences.seenReplyAt))
+    return preferences;
   const { [botId]: _dropped, ...lastViewed } = preferences.lastViewed;
   const { [botId]: _droppedSeen, ...seenReplyAt } = preferences.seenReplyAt;
-  return { ...preferences, pinnedBotId: pinned ? null : preferences.pinnedBotId, lastViewed, seenReplyAt };
+  return {
+    ...preferences,
+    pinnedBotId: pinned ? null : preferences.pinnedBotId,
+    lastViewed,
+    seenReplyAt,
+  };
 }
 
 /** A reply newer than the newest one its chat showed here, or than the record's start when it never showed one. */
-export function isBotUnread(preferences: BotSidebarPreferences, botId: string, lastReplyAt: number | null): boolean {
-  return lastReplyAt !== null && lastReplyAt > (preferences.seenReplyAt[botId] ?? preferences.since);
+export function isBotUnread(
+  preferences: BotSidebarPreferences,
+  botId: string,
+  lastReplyAt: number | null,
+): boolean {
+  return (
+    lastReplyAt !== null && lastReplyAt > (preferences.seenReplyAt[botId] ?? preferences.since)
+  );
 }
 
-export function lastViewedBotId(preferences: BotSidebarPreferences, liveIds: ReadonlySet<string>): string | null {
+export function lastViewedBotId(
+  preferences: BotSidebarPreferences,
+  liveIds: ReadonlySet<string>,
+): string | null {
   let best: string | null = null;
   let bestAt = Number.NEGATIVE_INFINITY;
   for (const [botId, at] of Object.entries(preferences.lastViewed)) {

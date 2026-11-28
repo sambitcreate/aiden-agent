@@ -12,7 +12,12 @@ import {
 } from "./aiden-remote-protocol.js";
 import type { AidenRemoteChatSummaryProjection } from "./aiden-remote-chats.js";
 import type { AidenRemoteWorkspaceProjection } from "./aiden-remote-workspaces.js";
-import { openCursorSse, sseFrame, type CursorSseHandle, type CursorSsePull } from "./aiden-remote-sse.js";
+import {
+  openCursorSse,
+  sseFrame,
+  type CursorSseHandle,
+  type CursorSsePull,
+} from "./aiden-remote-sse.js";
 import type { HostRunSummary } from "./host-run-registry.js";
 import { clipPendingAttentionSummary } from "../../renderer/shared/chat-pending-attention.js";
 import type { BotLiveSummary } from "../../renderer/shared/bot-live.js";
@@ -59,18 +64,24 @@ export interface AidenRemoteHostFeedBotSignals {
 
 /** The Inbox signals and preview of one Bot from its live summary; none when the summary is unknown. */
 export function hostFeedBotSignals(
-  live: (Pick<BotLiveSummary, "state" | "needsYou" | "lastReplyAt"> & Partial<Pick<BotLiveSummary, "preview">>) | undefined,
+  live:
+    | (Pick<BotLiveSummary, "state" | "needsYou" | "lastReplyAt"> &
+        Partial<Pick<BotLiveSummary, "preview">>)
+    | undefined,
 ): AidenRemoteHostFeedBotSignals {
   if (!live) return {};
   const failed = isFailedBotSession(live.state);
-  const replied = live.lastReplyAt !== null && Number.isSafeInteger(live.lastReplyAt) && live.lastReplyAt >= 0
-    ? new Date(live.lastReplyAt)
-    : undefined;
+  const replied =
+    live.lastReplyAt !== null && Number.isSafeInteger(live.lastReplyAt) && live.lastReplyAt >= 0
+      ? new Date(live.lastReplyAt)
+      : undefined;
   const preview = clipPendingAttentionSummary(live.preview, AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX);
   return {
     ...(live.needsYou ? { needsYou: true as const } : {}),
     ...(failed ? { failed: true as const } : {}),
-    ...(replied && Number.isFinite(replied.getTime()) ? { lastReplyAt: replied.toISOString() } : {}),
+    ...(replied && Number.isFinite(replied.getTime())
+      ? { lastReplyAt: replied.toISOString() }
+      : {}),
     ...(preview ? { preview } : {}),
     summarized: true,
   };
@@ -78,7 +89,9 @@ export function hostFeedBotSignals(
 
 export interface HostFeedBotSignalsCache {
   /** Each listed Bot's signals: kept ones as they are, the rest read again. */
-  signals(bots: readonly { id: string }[]): Promise<ReadonlyMap<string, AidenRemoteHostFeedBotSignals>>;
+  signals(
+    bots: readonly { id: string }[],
+  ): Promise<ReadonlyMap<string, AidenRemoteHostFeedBotSignals>>;
   /** That Bot changed (`bots:changed`, `bots:attention`); with no Bot, every Bot did. */
   invalidate(botId?: string): void;
 }
@@ -122,16 +135,19 @@ export function createHostFeedBotSignalsCache(deps: {
     async signals(bots) {
       const listed = new Set(bots.map((bot) => bot.id));
       for (const botId of [...kept.keys()]) if (!listed.has(botId)) kept.delete(botId);
-      for (const botId of [...generations.keys()]) if (!listed.has(botId)) generations.delete(botId);
+      for (const botId of [...generations.keys()])
+        if (!listed.has(botId)) generations.delete(botId);
       const results = new Map<string, AidenRemoteHostFeedBotSignals>();
       const ids = [...listed];
       let next = 0;
-      await Promise.all(Array.from({ length: Math.min(concurrency, ids.length) }, async () => {
-        while (next < ids.length) {
-          const botId = ids[next++]!;
-          results.set(botId, await read(botId));
-        }
-      }));
+      await Promise.all(
+        Array.from({ length: Math.min(concurrency, ids.length) }, async () => {
+          while (next < ids.length) {
+            const botId = ids[next++]!;
+            results.set(botId, await read(botId));
+          }
+        }),
+      );
       return results;
     },
     invalidate(botId) {
@@ -380,7 +396,9 @@ export class AidenRemoteHostFeedService {
         if (entry.botOnly && !botVisible) continue;
         if (entry.audience !== "all" && entry.audience !== audience) continue;
         if (entry.deviceId !== undefined && (entry.deviceId !== device.id || !observer)) continue;
-        frames.push(observer && entry.observerFrame !== undefined ? entry.observerFrame : entry.frame);
+        frames.push(
+          observer && entry.observerFrame !== undefined ? entry.observerFrame : entry.frame,
+        );
       }
       return { frames };
     };
@@ -479,7 +497,13 @@ export class AidenRemoteHostFeedService {
     run: RunStateChange,
     summaries: ReadonlyMap<string, AidenRemoteChatSummaryProjection>,
     botChatIds: ReadonlySet<string>,
-  ): { payload: Record<string, unknown>; observerPayload?: Record<string, unknown>; botOnly: boolean } | undefined {
+  ):
+    | {
+        payload: Record<string, unknown>;
+        observerPayload?: Record<string, unknown>;
+        botOnly: boolean;
+      }
+    | undefined {
     const summary = summaries.get(run.chatId);
     const botOnly = !summary && botChatIds.has(run.chatId);
     if (!summary && !botOnly) return undefined;
@@ -492,7 +516,11 @@ export class AidenRemoteHostFeedService {
     const attentionSummary = isWaiting(run.state)
       ? clipAttentionSummary(this.options.attentionSummary?.(run.runId))
       : undefined;
-    return { payload, ...(attentionSummary ? { observerPayload: { ...payload, attentionSummary } } : {}), botOnly };
+    return {
+      payload,
+      ...(attentionSummary ? { observerPayload: { ...payload, attentionSummary } } : {}),
+      botOnly,
+    };
   }
 
   /**
@@ -559,9 +587,17 @@ export class AidenRemoteHostFeedService {
   private diffBots(previous: AidenRemoteHostFeedState, next: AidenRemoteHostFeedState): void {
     const rows = (bots: readonly AidenRemoteHostFeedBot[]) =>
       new Map(bots.map((bot) => [bot.id, { bot, json: this.serialized(bot) }]));
-    const before = { legacy: rows(previous.bots), handoffs: rows(previous.handoffBots ?? previous.bots) };
+    const before = {
+      legacy: rows(previous.bots),
+      handoffs: rows(previous.handoffBots ?? previous.bots),
+    };
     const after = { legacy: rows(next.bots), handoffs: rows(next.handoffBots ?? next.bots) };
-    const ids = new Set([...after.legacy.keys(), ...after.handoffs.keys(), ...before.legacy.keys(), ...before.handoffs.keys()]);
+    const ids = new Set([
+      ...after.legacy.keys(),
+      ...after.handoffs.keys(),
+      ...before.legacy.keys(),
+      ...before.handoffs.keys(),
+    ]);
     for (const id of ids) {
       const changes = (["legacy", "handoffs"] as const).flatMap((audience) => {
         const was = before[audience].get(id);
@@ -608,7 +644,9 @@ export class AidenRemoteHostFeedService {
   ): void {
     this.head += 1;
     const frame = this.frame(this.head, type, payload);
-    const observerFrame = observerPayload ? this.frame(this.head, type, observerPayload) : undefined;
+    const observerFrame = observerPayload
+      ? this.frame(this.head, type, observerPayload)
+      : undefined;
     const bytes = Buffer.byteLength(frame) + (observerFrame ? Buffer.byteLength(observerFrame) : 0);
     this.journal.push({
       sequence: this.head,
@@ -637,7 +675,13 @@ export class AidenRemoteHostFeedService {
   /** An entry no device is sent: it only moves the head past every earlier cursor. */
   private appendMarker(): void {
     this.head += 1;
-    this.journal.push({ sequence: this.head, frame: "", bytes: 0, botOnly: false, audience: "all" });
+    this.journal.push({
+      sequence: this.head,
+      frame: "",
+      bytes: 0,
+      botOnly: false,
+      audience: "all",
+    });
     this.trimJournal();
   }
 
@@ -683,12 +727,17 @@ export class AidenRemoteHostFeedService {
     chunks.push(current);
     return chunks.map((chunk, index) => {
       const final = index === chunks.length - 1;
-      return this.frame(this.head, "snapshot", {
-        epoch: this.epoch,
-        sequence: this.head,
-        ...chunk,
-        ...(final ? {} : { partial: true }),
-      }, final);
+      return this.frame(
+        this.head,
+        "snapshot",
+        {
+          epoch: this.epoch,
+          sequence: this.head,
+          ...chunk,
+          ...(final ? {} : { partial: true }),
+        },
+        final,
+      );
     });
   }
 

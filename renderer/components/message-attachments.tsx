@@ -6,7 +6,15 @@ import { imagePixelSize } from "../shared/image-dimensions";
 import { isCanonicalRasterImageMimeType } from "../shared/attachment-contract";
 import { withoutGrabbedElementThumbnails } from "../shared/browser-element-grab";
 import { chatsApi } from "../lib/ipc";
-import { Button, ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, Dialog, toast } from "./ui";
+import {
+  Button,
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+  Dialog,
+  toast,
+} from "./ui";
 
 const EMPTY_FAILED_IMAGE_IDS: ReadonlySet<string> = new Set();
 
@@ -23,7 +31,9 @@ export function inlineImageSource(attachment: Attachment): string | undefined {
 }
 
 /** Pixel size from the image's header bytes, or the size recorded when it was stored. */
-function attachmentPixelSize(attachment: Attachment): { width: number; height: number } | undefined {
+function attachmentPixelSize(
+  attachment: Attachment,
+): { width: number; height: number } | undefined {
   if (attachment.data) return imagePixelSize(attachment.mimeType, attachment.data);
   return attachment.width && attachment.height
     ? { width: attachment.width, height: attachment.height }
@@ -183,8 +193,11 @@ export function MessageAttachments({
   const controller = React.useContext(MessageAttachmentPreviewContext);
   const visible = React.useMemo(() => withoutGrabbedElementThumbnails(attachments), [attachments]);
   if (visible.length === 0) return null;
-  const content = <MessageAttachmentsContent attachments={visible} role={role} imageActions={imageActions} />;
-  if (!controller) return <MessageAttachmentPreviewProvider>{content}</MessageAttachmentPreviewProvider>;
+  const content = (
+    <MessageAttachmentsContent attachments={visible} role={role} imageActions={imageActions} />
+  );
+  if (!controller)
+    return <MessageAttachmentPreviewProvider>{content}</MessageAttachmentPreviewProvider>;
   return content;
 }
 
@@ -192,7 +205,10 @@ async function saveImageToDownloads(chatId: string, attachment: Attachment): Pro
   try {
     const saved = await chatsApi.saveImageToDownloads(chatId, attachment.id);
     toast("Saved to Downloads", {
-      action: { label: "Show in Finder", onClick: () => void chatsApi.showSavedImage(saved.path).catch(() => undefined) },
+      action: {
+        label: "Show in Finder",
+        onClick: () => void chatsApi.showSavedImage(saved.path).catch(() => undefined),
+      },
     });
   } catch (error) {
     toast.error(error instanceof Error ? error.message : "Aiden couldn't save the image.");
@@ -266,7 +282,10 @@ function AssistantImage({
       }
     : undefined;
   return (
-    <figure className="group/assistant-image m-0 flex w-fit min-w-[min(100%,9rem)] max-w-[min(100%,22.5rem)] flex-col" data-assistant-image={attachment.id}>
+    <figure
+      className="group/assistant-image m-0 flex w-fit min-w-[min(100%,9rem)] max-w-[min(100%,22.5rem)] flex-col"
+      data-assistant-image={attachment.id}
+    >
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <button
@@ -289,7 +308,11 @@ function AssistantImage({
               width={size?.width}
               height={size?.height}
               onError={() => controller.markDecodeFailed(attachment)}
-              className={size ? "block size-full object-contain" : "block h-auto max-h-[20rem] w-auto max-w-full"}
+              className={
+                size
+                  ? "block size-full object-contain"
+                  : "block h-auto max-h-[20rem] w-auto max-w-full"
+              }
             />
           </button>
         </ContextMenuTrigger>
@@ -299,7 +322,9 @@ function AssistantImage({
               <ContextMenuItem onSelect={() => void saveImageToDownloads(chatId, attachment)}>
                 Save to Downloads
               </ContextMenuItem>
-              <ContextMenuItem onSelect={() => void copyImage(chatId, attachment)}>Copy image</ContextMenuItem>
+              <ContextMenuItem onSelect={() => void copyImage(chatId, attachment)}>
+                Copy image
+              </ContextMenuItem>
             </>
           ) : null}
           <ContextMenuItem onSelect={open}>Open full view</ContextMenuItem>
@@ -319,7 +344,10 @@ function AssistantImage({
             <ImageCaptionAction label="Copy" onClick={() => void copyImage(chatId, attachment)}>
               <Copy aria-hidden="true" className="size-3.5" />
             </ImageCaptionAction>
-            <ImageCaptionAction label="Save" onClick={() => void saveImageToDownloads(chatId, attachment)}>
+            <ImageCaptionAction
+              label="Save"
+              onClick={() => void saveImageToDownloads(chatId, attachment)}
+            >
               <Download aria-hidden="true" className="size-3.5" />
             </ImageCaptionAction>
           </>
@@ -357,7 +385,12 @@ function MessageAttachmentsContent({
       {images.length && role === "assistant" ? (
         <div className="flex max-w-full flex-col gap-3">
           {images.map(({ attachment, source }) => (
-            <AssistantImage key={attachment.id} attachment={attachment} source={source} imageActions={imageActions} />
+            <AssistantImage
+              key={attachment.id}
+              attachment={attachment}
+              source={source}
+              imageActions={imageActions}
+            />
           ))}
         </div>
       ) : null}

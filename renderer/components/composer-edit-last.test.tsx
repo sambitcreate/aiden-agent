@@ -48,7 +48,14 @@ const ANSWERED = [
 ];
 
 function chat(messages: ChatMessage[], extra: Partial<Chat> = {}): Chat {
-  return { id: "chat-1", title: "Release", messages, createdAt: 1, updatedAt: 4, ...extra } as unknown as Chat;
+  return {
+    id: "chat-1",
+    title: "Release",
+    messages,
+    createdAt: 1,
+    updatedAt: 4,
+    ...extra,
+  } as unknown as Chat;
 }
 
 beforeEach(() => {

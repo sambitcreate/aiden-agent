@@ -41,8 +41,11 @@ export default [
     plugins: { "@typescript-eslint": tsPlugin },
     rules: {
       "no-unused-vars": "off",
-      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
-      "no-undef": "off"
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+      "no-undef": "off",
     },
   },
   {
@@ -58,12 +61,18 @@ export default [
     files: ["main/**/*.{ts,tsx,mjs}", "renderer/**/*.{ts,tsx}"],
     ignores: ["main/services/acp/**"],
     rules: {
-      "no-restricted-imports": ["error", {
-        patterns: [{
-          group: ["@modelcontextprotocol/sdk/client", "@modelcontextprotocol/sdk/client/*"],
-          message: "Use Pi's MCP client (@earendil-works/pi-mcp) for MCP client code. The SDK is only for hosting MCP servers.",
-        }],
-      }],
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@modelcontextprotocol/sdk/client", "@modelcontextprotocol/sdk/client/*"],
+              message:
+                "Use Pi's MCP client (@earendil-works/pi-mcp) for MCP client code. The SDK is only for hosting MCP servers.",
+            },
+          ],
+        },
+      ],
     },
   },
   {

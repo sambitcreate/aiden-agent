@@ -38,7 +38,9 @@ export function registerDraftWorkspaceMenu(
 }
 
 /** The menu of the draft shown as `chatId`, when that draft's pane is mounted. */
-export function draftWorkspaceMenu(chatId: string | undefined): DraftWorkspaceMenuHandle | undefined {
+export function draftWorkspaceMenu(
+  chatId: string | undefined,
+): DraftWorkspaceMenuHandle | undefined {
   return chatId ? handles.get(chatId) : undefined;
 }
 

@@ -43,16 +43,36 @@ test("a pasted redirect must match the pending sign-in exactly", () => {
   const pending = parseAuthorizationUrl(
     `${GOOGLE}?response_type=code&state=abc&redirect_uri=${encodeURIComponent("http://127.0.0.1:51234/")}`,
   )!;
-  assert.equal(parseCallbackUrl("http://127.0.0.1:51234/?state=abc&code=4/xyz", pending).searchParams.get("code"), "4/xyz");
-  assert.throws(() => parseCallbackUrl("http://127.0.0.1:51234/?state=other&code=1", pending), /does not belong/u);
-  assert.throws(() => parseCallbackUrl("http://127.0.0.1:9999/?state=abc&code=1", pending), /does not belong/u);
-  assert.throws(() => parseCallbackUrl("http://127.0.0.1:51234/?state=abc", pending), /not a Google sign-in response/u);
-  assert.throws(() => parseCallbackUrl("http://127.0.0.1:51234/?state=abc&code=1&error=x", pending), /not a Google/u);
+  assert.equal(
+    parseCallbackUrl("http://127.0.0.1:51234/?state=abc&code=4/xyz", pending).searchParams.get(
+      "code",
+    ),
+    "4/xyz",
+  );
+  assert.throws(
+    () => parseCallbackUrl("http://127.0.0.1:51234/?state=other&code=1", pending),
+    /does not belong/u,
+  );
+  assert.throws(
+    () => parseCallbackUrl("http://127.0.0.1:9999/?state=abc&code=1", pending),
+    /does not belong/u,
+  );
+  assert.throws(
+    () => parseCallbackUrl("http://127.0.0.1:51234/?state=abc", pending),
+    /not a Google sign-in response/u,
+  );
+  assert.throws(
+    () => parseCallbackUrl("http://127.0.0.1:51234/?state=abc&code=1&error=x", pending),
+    /not a Google/u,
+  );
   assert.throws(() => parseCallbackUrl("whatever", pending), /complete address/u);
 });
 
 test("agent failures become specific, actionable messages", () => {
-  assert.match(signInFailureMessage(new Error("SUBSCRIPTION_REQUIRED for account")), /eligible Antigravity subscription/u);
+  assert.match(
+    signInFailureMessage(new Error("SUBSCRIPTION_REQUIRED for account")),
+    /eligible Antigravity subscription/u,
+  );
   assert.match(signInFailureMessage(new Error("access_denied")), /not approved/u);
   assert.match(signInFailureMessage(new Error("boom")), /did not finish/u);
 });
@@ -76,7 +96,14 @@ function launcherFor(stateDir: string) {
   return new AcpRuntimeLauncher({
     definition,
     // The sign-in launch never touches the installer when a lease is supplied.
-    installer: { acquire: () => ({ runtimeDir: stateDir, asset: { url: "", sha256: "", archiveBytes: 0, members: [], executable: "", args: [] }, version: "1", release() {} }) } as never,
+    installer: {
+      acquire: () => ({
+        runtimeDir: stateDir,
+        asset: { url: "", sha256: "", archiveBytes: 0, members: [], executable: "", args: [] },
+        version: "1",
+        release() {},
+      }),
+    } as never,
     stateDir,
     tmpRoot: path.join(stateDir, "tmp"),
     ledger: new AcpPidLedger(path.join(stateDir, "processes.json")),
@@ -118,7 +145,10 @@ test("sign-in shows Google's URL, finishes when the browser redirects, and store
     redirect.searchParams.set("code", "4/approved");
     void fetch(redirect).catch(() => undefined);
   });
-  await signInWithGoogle(flow.value, { cwd: stateDir, launch: (onLine) => launcher.launch("auth", stateDir, { onStderrLine: onLine }) });
+  await signInWithGoogle(flow.value, {
+    cwd: stateDir,
+    launch: (onLine) => launcher.launch("auth", stateDir, { onStderrLine: onLine }),
+  });
   assert.ok(flow.events.some((event) => event.type === "auth_url" && event.url.startsWith(GOOGLE)));
   assert.equal(await hasAntigravitySignIn(stateDir), true);
   assert.ok(existsSync(antigravityTokenPath(stateDir)));
@@ -140,7 +170,10 @@ test("when the redirect page cannot load, a pasted address completes sign-in", a
       return redirect.toString();
     },
   );
-  await signInWithGoogle(flow.value, { cwd: stateDir, launch: (onLine) => launcher.launch("auth", stateDir, { onStderrLine: onLine }) });
+  await signInWithGoogle(flow.value, {
+    cwd: stateDir,
+    launch: (onLine) => launcher.launch("auth", stateDir, { onStderrLine: onLine }),
+  });
   assert.equal(flow.prompts[0]?.type, "manual_code");
   assert.equal(await hasAntigravitySignIn(stateDir), true);
 });
@@ -156,7 +189,10 @@ test("a declined consent fails with a clear message and stores nothing", async (
     void fetch(redirect).catch(() => undefined);
   });
   await assert.rejects(
-    signInWithGoogle(flow.value, { cwd: stateDir, launch: (onLine) => launcher.launch("auth", stateDir, { onStderrLine: onLine }) }),
+    signInWithGoogle(flow.value, {
+      cwd: stateDir,
+      launch: (onLine) => launcher.launch("auth", stateDir, { onStderrLine: onLine }),
+    }),
     /not approved/u,
   );
   assert.equal(await hasAntigravitySignIn(stateDir), false);
@@ -172,7 +208,10 @@ test("sign-out removes local credentials even when the agent cannot be started",
     redirect.searchParams.set("code", "4/ok");
     void fetch(redirect).catch(() => undefined);
   });
-  await signInWithGoogle(flow.value, { cwd: stateDir, launch: (onLine) => launcher.launch("auth", stateDir, { onStderrLine: onLine }) });
+  await signInWithGoogle(flow.value, {
+    cwd: stateDir,
+    launch: (onLine) => launcher.launch("auth", stateDir, { onStderrLine: onLine }),
+  });
   await signOutOfGoogle(stateDir, async () => {
     throw new Error("runtime missing");
   });

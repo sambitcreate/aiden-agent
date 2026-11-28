@@ -24,7 +24,8 @@ export interface MarkupEdit {
 function excerpt(text: string, from: "start" | "end" = "start"): string {
   const line = text.replace(/[ \t]+/gu, " ");
   if (line.length <= EXCERPT_CHARS) return JSON.stringify(line);
-  if (from === "start") return JSON.stringify(`${line.slice(0, safeCut(line, EXCERPT_CHARS - 1))}…`);
+  if (from === "start")
+    return JSON.stringify(`${line.slice(0, safeCut(line, EXCERPT_CHARS - 1))}…`);
   const at = line.length - (EXCERPT_CHARS - 1);
   return JSON.stringify(`…${line.slice(at === safeCut(line, at) ? at : at + 1)}`);
 }
@@ -35,14 +36,19 @@ export function parseMarkupEdits(value: unknown): MarkupEdit[] {
     throw new Error("edits must be a list of one or more { old, new } replacements.");
   }
   if (value.length > MAX_MARKUP_EDITS) {
-    throw new Error(`edits can hold at most ${MAX_MARKUP_EDITS} replacements; send the whole markup instead.`);
+    throw new Error(
+      `edits can hold at most ${MAX_MARKUP_EDITS} replacements; send the whole markup instead.`,
+    );
   }
   return value.map((entry, index) => {
     const edit = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
     if (typeof edit.old !== "string" || edit.old.length === 0) {
-      throw new Error(`edits[${index}] needs old: the exact text to replace, copied from the markup.`);
+      throw new Error(
+        `edits[${index}] needs old: the exact text to replace, copied from the markup.`,
+      );
     }
-    if (typeof edit.new !== "string") throw new Error(`edits[${index}] needs new: the text to put in its place ("" removes it).`);
+    if (typeof edit.new !== "string")
+      throw new Error(`edits[${index}] needs new: the text to put in its place ("" removes it).`);
     return { old: edit.old, new: edit.new };
   });
 }
@@ -111,7 +117,9 @@ function locate(markup: string, old: string, replacement: string): Located {
   const wanted = breaks ? lfOnly(old).text : "";
   const count = page ? exactMatches(page.text, wanted).length : 0;
   const exact = exactMatches(markup, old);
-  const whole = exact.filter((at) => !insideLineBreak(markup, at) && !insideLineBreak(markup, at + old.length));
+  const whole = exact.filter(
+    (at) => !insideLineBreak(markup, at) && !insideLineBreak(markup, at + old.length),
+  );
   if (whole.length > 0 || !page) {
     const start = whole[0] ?? -1;
     // On a page whose every line break is CRLF, new's line breaks become
@@ -119,11 +127,20 @@ function locate(markup: string, old: string, replacement: string): Located {
     const text = onlyCrlf(markup) ? replacement.replace(/\r\n|\r|\n/gu, "\r\n") : replacement;
     // An exact match is only one place if no other place matches once line
     // breaks are read alike, on a page that mixes CRLF and LF.
-    if (whole.length === 1 && count > 1) return { count, alike: true, start, end: start + old.length, text };
+    if (whole.length === 1 && count > 1)
+      return { count, alike: true, start, end: start + old.length, text };
     return { count: whole.length, alike: false, start, end: start + old.length, text };
   }
   const half = exact.find((at) => insideLineBreak(markup, at + old.length));
-  if (half !== undefined) return { count: 1, alike: false, start: half, end: half + old.length, text: replacement, halfLineBreak: true };
+  if (half !== undefined)
+    return {
+      count: 1,
+      alike: false,
+      start: half,
+      end: half + old.length,
+      text: replacement,
+      halfLineBreak: true,
+    };
   const at = page.text.indexOf(wanted);
   const start = page.from[at] ?? -1;
   const end = page.from[at + wanted.length] ?? markup.length;
@@ -145,7 +162,11 @@ function splitsCharacter(text: string, at: number): boolean {
  * caller changes nothing. Line breaks match whatever their style (see
  * `locate`).
  */
-export function applyMarkupEdits(markup: string, edits: readonly MarkupEdit[], retry: string): string {
+export function applyMarkupEdits(
+  markup: string,
+  edits: readonly MarkupEdit[],
+  retry: string,
+): string {
   let next = markup;
   edits.forEach((edit, index) => {
     const found = locate(next, edit.old, edit.new);
@@ -155,7 +176,9 @@ export function applyMarkupEdits(markup: string, edits: readonly MarkupEdit[], r
         found.count === 0
           ? "was not found"
           : `was found ${found.count} times${found.alike ? " with its line breaks and the markup's read alike" : ""}; add surrounding text to old so it matches one place`;
-      throw new Error(`edits[${index}] old ${excerpt(edit.old)} ${why} in the markup${after}. Nothing was changed. ${retry}`);
+      throw new Error(
+        `edits[${index}] old ${excerpt(edit.old)} ${why} in the markup${after}. Nothing was changed. ${retry}`,
+      );
     }
     if (found.halfLineBreak) {
       throw new Error(

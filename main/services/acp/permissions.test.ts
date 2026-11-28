@@ -5,7 +5,10 @@ import type { RequestPermissionRequest, ToolKind } from "@agentclientprotocol/sd
 import { answerPermission } from "./permissions.js";
 import { RecordingHost } from "./test-support.js";
 
-function request(kind: ToolKind, options = ["allow_once", "allow_always", "reject_once"] as const): RequestPermissionRequest {
+function request(
+  kind: ToolKind,
+  options = ["allow_once", "allow_always", "reject_once"] as const,
+): RequestPermissionRequest {
   return {
     sessionId: "s",
     toolCall: { toolCallId: "t1", title: "Do it", kind, locations: [{ path: "/w/file.ts" }] },
@@ -15,12 +18,19 @@ function request(kind: ToolKind, options = ["allow_once", "allow_always", "rejec
 
 const signal = new AbortController().signal;
 
-async function decide(kind: ToolKind, permission: RecordingHost["currentPermission"], answer = "allow_once" as RecordingHost["approvalAnswer"]) {
+async function decide(
+  kind: ToolKind,
+  permission: RecordingHost["currentPermission"],
+  answer = "allow_once" as RecordingHost["approvalAnswer"],
+) {
   const host = new RecordingHost("c", "/w");
   host.currentPermission = permission;
   host.approvalAnswer = answer;
   const response = await answerPermission(request(kind), { kind: "approval" }, host, signal);
-  return { host, chosen: response.outcome.outcome === "selected" ? response.outcome.optionId : "cancelled" };
+  return {
+    host,
+    chosen: response.outcome.outcome === "selected" ? response.outcome.optionId : "cancelled",
+  };
 }
 
 test("local read-like operations are allowed in every mode without asking", async () => {
@@ -74,18 +84,28 @@ test("an approval that throws is a refusal", async () => {
 test("a stopped turn cancels instead of answering", async () => {
   const controller = new AbortController();
   controller.abort();
-  const response = await answerPermission(request("edit"), { kind: "approval" }, new RecordingHost("c", "/w"), controller.signal);
+  const response = await answerPermission(
+    request("edit"),
+    { kind: "approval" },
+    new RecordingHost("c", "/w"),
+    controller.signal,
+  );
   assert.deepEqual(response.outcome, { outcome: "cancelled" });
 });
 
 test("questions return the chosen option, or cancel when unanswered", async () => {
   const host = new RecordingHost("c", "/w");
-  const question = { kind: "question" as const, question: { title: "Pick", options: [{ id: "allow_once", label: "A" }] } };
+  const question = {
+    kind: "question" as const,
+    question: { title: "Pick", options: [{ id: "allow_once", label: "A" }] },
+  };
   host.questionAnswer = "allow_once";
   assert.deepEqual((await answerPermission(request("other"), question, host, signal)).outcome, {
     outcome: "selected",
     optionId: "allow_once",
   });
   host.questionAnswer = "not-an-option";
-  assert.deepEqual((await answerPermission(request("other"), question, host, signal)).outcome, { outcome: "cancelled" });
+  assert.deepEqual((await answerPermission(request("other"), question, host, signal)).outcome, {
+    outcome: "cancelled",
+  });
 });

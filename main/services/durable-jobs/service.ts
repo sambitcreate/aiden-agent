@@ -3,13 +3,7 @@ import type {
   DurableJobInput,
   DurableJobSnapshot,
 } from "../../../renderer/shared/durable-jobs.js";
-import {
-  digest,
-  JobError,
-  parseEvidence,
-  parseInput,
-  type RecoveryEvidence,
-} from "./contract.js";
+import { digest, JobError, parseEvidence, parseInput, type RecoveryEvidence } from "./contract.js";
 import { DurableJobStore, type JobLease } from "./store.js";
 
 export interface JobExecutionContext {
@@ -44,10 +38,7 @@ export interface DurableJobRuntime {
    * and settle any live predecessor first. Null means unsettled, not safe to run.
    * This port is deliberately not wired to Pi in the foundation PR.
    */
-  acquire(
-    job: DurableJobSnapshot,
-    signal: AbortSignal,
-  ): Promise<JobRuntimeSession | null>;
+  acquire(job: DurableJobSnapshot, signal: AbortSignal): Promise<JobRuntimeSession | null>;
 }
 const missing = (): RecoveryEvidence => ({
   kind: "missing",
@@ -93,9 +84,7 @@ export class DurableJobService {
       guard();
       if (session && job.intent === "none") {
         let mode: JobExecutionContext["mode"] | undefined;
-        const canStart =
-          !job.dispatched &&
-          (job.state === "admitting" || job.state === "queued");
+        const canStart = !job.dispatched && (job.state === "admitting" || job.state === "queued");
         if (evidence.kind === "not_started" && canStart) {
           const checkpoint = await session.appendInput({
             signal,
@@ -105,10 +94,7 @@ export class DurableJobService {
           this.store.admitted(lease, checkpoint);
           mode = "start";
         } else if (canStart && evidence.kind === "checkpoint") {
-          if (
-            job.checkpoint &&
-            digest(evidence.checkpoint) === digest(job.checkpoint)
-          ) {
+          if (job.checkpoint && digest(evidence.checkpoint) === digest(job.checkpoint)) {
             // Both authorities agree on the input commit and no execution was
             // admitted in SQL. A missing SQL checkpoint is not a wildcard.
             this.store.admitted(lease, evidence.checkpoint!);
@@ -166,23 +152,14 @@ export class DurableJobService {
       // A failed settlement retains the lease/reservation; never publish a
       // terminal state that could allow another runtime into this chat.
       if (session && !closed) throw error;
-      if (
-        signal.aborted ||
-        (error instanceof JobError && error.code === "lost_lease")
-      )
-        return;
+      if (signal.aborted || (error instanceof JobError && error.code === "lost_lease")) return;
       try {
         this.store.settle(lease, missing());
       } catch (settleError) {
-        if (
-          !(
-            settleError instanceof JobError && settleError.code === "lost_lease"
-          )
-        )
+        if (!(settleError instanceof JobError && settleError.code === "lost_lease"))
           throw settleError;
       }
-      if (!(error instanceof JobError && error.code === "lost_lease"))
-        throw error;
+      if (!(error instanceof JobError && error.code === "lost_lease")) throw error;
     } finally {
       await closeSession();
     }

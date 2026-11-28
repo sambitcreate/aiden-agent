@@ -4,8 +4,14 @@ import { rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
-import { parseAttachments, withReadableImages } from "../../../main/services/attachment-contract.js";
-import { formatGrabbedElementsForPrompt, withoutGrabbedElementThumbnails } from "../../../renderer/shared/browser-element-grab.js";
+import {
+  parseAttachments,
+  withReadableImages,
+} from "../../../main/services/attachment-contract.js";
+import {
+  formatGrabbedElementsForPrompt,
+  withoutGrabbedElementThumbnails,
+} from "../../../renderer/shared/browser-element-grab.js";
 import { createChatForkService } from "../../../main/services/chat-fork-service.js";
 import { withoutHookBlockedPrompts } from "../../../main/services/hook-blocked-prompt.js";
 import { workspaceFolderMissing } from "../../../main/services/workspace-folder-presence.js";
@@ -16,9 +22,23 @@ import type { createCliWorkspaceApplication } from "./workspace-application.ts";
 /** The pi message a daemon turn would have produced for one visible message. */
 function journalMessage(message: ChatMessage): Message {
   if (message.role === "assistant") {
-    return { role: "assistant", content: [{ type: "text", text: message.content }], timestamp: message.createdAt,
-      api: "openai-completions", provider: "forked", model: message.model ?? "forked", stopReason: "stop",
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    return {
+      role: "assistant",
+      content: [{ type: "text", text: message.content }],
+      timestamp: message.createdAt,
+      api: "openai-completions",
+      provider: "forked",
+      model: message.model ?? "forked",
+      stopReason: "stop",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    };
   }
   const attachments = parseAttachments(withReadableImages(message.attachments)) ?? [];
   const readableImagesById = new Map(
@@ -34,7 +54,9 @@ function journalMessage(message: ChatMessage): Message {
     const { thumbnailAttachmentId: _omitted, ...withoutThumb } = element;
     return withoutThumb;
   });
-  const grabbedText = formatGrabbedElementsForPrompt(grabbedForPrompt, { includeThumbnailNote: true });
+  const grabbedText = formatGrabbedElementsForPrompt(grabbedForPrompt, {
+    includeThumbnailNote: true,
+  });
   const textContent = [grabbedText, message.content].filter(Boolean).join("\n\n");
   const nonGrabAttachments = withoutGrabbedElementThumbnails(attachments);
   const emittedThumbnails = new Set<string>();
@@ -51,9 +73,14 @@ function journalMessage(message: ChatMessage): Message {
     timestamp: message.createdAt,
     content: [
       { type: "text", text: textContent },
-      ...nonGrabAttachments.map((attachment) => attachment.kind === "image" && attachment.data
-        ? { type: "image" as const, data: attachment.data, mimeType: attachment.mimeType }
-        : { type: "text" as const, text: `Attachment: ${attachment.name}\n${attachment.text ?? ""}` }),
+      ...nonGrabAttachments.map((attachment) =>
+        attachment.kind === "image" && attachment.data
+          ? { type: "image" as const, data: attachment.data, mimeType: attachment.mimeType }
+          : {
+              type: "text" as const,
+              text: `Attachment: ${attachment.name}\n${attachment.text ?? ""}`,
+            },
+      ),
       ...thumbnailParts,
     ],
   };
@@ -65,12 +92,19 @@ function journalMessage(message: ChatMessage): Message {
  * journal seeded from the copied visible history. Tool results before the cut
  * are not carried; the model sees the conversation as the user saw it.
  */
-export function createCliChatForks(daemon: ReturnType<typeof createDaemonChats>, workspace: ReturnType<typeof createCliWorkspaceApplication>) {
+export function createCliChatForks(
+  daemon: ReturnType<typeof createDaemonChats>,
+  workspace: ReturnType<typeof createCliWorkspaceApplication>,
+) {
   const service = createChatForkService({
     chatStore: daemon.chatStore,
     // Holding the deletion gate closes turn admission while the source is copied.
-    beginChatCopy: (chatId) => daemon.deletion.isDeleting(chatId) || daemon.llmClient.isChatBusy(chatId) ? null : daemon.deletion.begin(chatId),
-    workspaceExists: async (workspaceId) => Boolean(await workspace.configStore.getWorkspace(workspaceId)),
+    beginChatCopy: (chatId) =>
+      daemon.deletion.isDeleting(chatId) || daemon.llmClient.isChatBusy(chatId)
+        ? null
+        : daemon.deletion.begin(chatId),
+    workspaceExists: async (workspaceId) =>
+      Boolean(await workspace.configStore.getWorkspace(workspaceId)),
     // Continue in a new chat is for a chat whose folder is gone, as on the desktop.
     workspaceFolderMissing: async (workspaceId) => {
       const record = await workspace.configStore.getWorkspace(workspaceId);
@@ -85,19 +119,31 @@ export function createCliChatForks(daemon: ReturnType<typeof createDaemonChats>,
         const manager = SessionManager.create(dirname(file), dirname(file));
         // A prompt a hook blocked never reached the model, so it is not journaled.
         // The copied history names stored images by hash; the journal needs their bytes.
-        for (const message of await daemon.chatStore.messagesWithImageData(withoutHookBlockedPrompts(input.visible))) {
+        for (const message of await daemon.chatStore.messagesWithImageData(
+          withoutHookBlockedPrompts(input.visible),
+        )) {
           manager.appendMessage(journalMessage(message));
         }
         // Pi defers persistence until a reply, so write the seeded journal now.
         mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
         const temporary = `${file}.${randomUUID()}.tmp`;
         try {
-          writeFileSync(temporary, [manager.getHeader(), ...manager.getEntries()].map((entry) => JSON.stringify(entry)).join("\n") + "\n", { flag: "wx", mode: 0o600 });
+          writeFileSync(
+            temporary,
+            [manager.getHeader(), ...manager.getEntries()]
+              .map((entry) => JSON.stringify(entry))
+              .join("\n") + "\n",
+            { flag: "wx", mode: 0o600 },
+          );
           renameSync(temporary, file);
-        } finally { rmSync(temporary, { force: true }); }
+        } finally {
+          rmSync(temporary, { force: true });
+        }
         return true;
       },
-      deleteChat: async (chatId) => { await rm(daemon.sessionPath(chatId), { force: true }); },
+      deleteChat: async (chatId) => {
+        await rm(daemon.sessionPath(chatId), { force: true });
+      },
     },
   });
   return {

@@ -63,7 +63,11 @@ export class PeerLanAddresses {
           callback(error, address, family);
           return;
         }
-        if (options.all) callback(null, remembered.map((address) => ({ address, family: 4 })));
+        if (options.all)
+          callback(
+            null,
+            remembered.map((address) => ({ address, family: 4 })),
+          );
         else callback(null, remembered[0]!, 4);
       });
     };

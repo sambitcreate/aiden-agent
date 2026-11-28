@@ -221,16 +221,22 @@ const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
  * Aiden's packaged native helper (openat/mkdirat with O_NOFOLLOW); Linux walks
  * /proc/self/fd, which resolves each step through the previous descriptor.
  */
-async function createAnchored(target: string, content: string, roots: readonly AcpRoot[]): Promise<void> {
+async function createAnchored(
+  target: string,
+  content: string,
+  roots: readonly AcpRoot[],
+): Promise<void> {
   let identity: AcpRootIdentity | undefined;
   for (const root of roots) {
-    const candidate = typeof root === "string" ? await captureRootIdentity(root).catch(() => undefined) : root;
+    const candidate =
+      typeof root === "string" ? await captureRootIdentity(root).catch(() => undefined) : root;
     if (candidate && within(target, candidate.path) && (await verifiedIdentity(candidate))) {
       identity = candidate;
       break;
     }
   }
-  if (!identity) throw new AcpHarnessError("invalid_input", "The file is outside this chat's folder.");
+  if (!identity)
+    throw new AcpHarnessError("invalid_input", "The file is outside this chat's folder.");
   const relative = path.relative(identity.path, target);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new AcpHarnessError("invalid_input", "The file is outside this chat's folder.");
@@ -245,9 +251,13 @@ async function createAnchored(target: string, content: string, roots: readonly A
       if (error instanceof ManagedWorktreeFileIoError && error.code === "destination_exists") {
         throw new AcpHarnessError("invalid_input", "The file changed while it was being created.");
       }
-      throw new AcpHarnessError("invalid_input", "The file could not be created safely in this chat's folder.", {
-        cause: error,
-      });
+      throw new AcpHarnessError(
+        "invalid_input",
+        "The file could not be created safely in this chat's folder.",
+        {
+          cause: error,
+        },
+      );
     }
     return;
   }
@@ -266,7 +276,10 @@ async function createAnchored(target: string, content: string, roots: readonly A
     }
     const rootInfo = await current.stat({ bigint: true });
     if (rootInfo.dev.toString() !== identity.device || rootInfo.ino.toString() !== identity.inode) {
-      throw new AcpHarnessError("invalid_input", "This chat's folder moved; the file was not created.");
+      throw new AcpHarnessError(
+        "invalid_input",
+        "This chat's folder moved; the file was not created.",
+      );
     }
     const parts = relative.split(path.sep);
     const leaf = parts.pop()!;
@@ -295,9 +308,13 @@ async function createAnchored(target: string, content: string, roots: readonly A
     }
   } catch (error) {
     if (error instanceof AcpHarnessError) throw error;
-    throw new AcpHarnessError("invalid_input", "The file could not be created safely in this chat's folder.", {
-      cause: error,
-    });
+    throw new AcpHarnessError(
+      "invalid_input",
+      "The file could not be created safely in this chat's folder.",
+      {
+        cause: error,
+      },
+    );
   } finally {
     await current.close().catch(() => undefined);
   }
@@ -325,7 +342,10 @@ export async function readClientTextFile(
     if (info.size > MAX_CLIENT_READ_BYTES) {
       throw new AcpHarnessError("invalid_input", "The file is too large to read (8 MiB limit).");
     }
-    await rejectEnvironmentSecret(await assertStillConfined(params.path, policy.roots, info), policy.roots);
+    await rejectEnvironmentSecret(
+      await assertStillConfined(params.path, policy.roots, info),
+      policy.roots,
+    );
     text = await handle.readFile("utf8");
   } finally {
     await handle.close();
@@ -366,7 +386,8 @@ export async function writeClientTextFile(
     handle = await open(target, fsConstants.O_RDWR | NO_FOLLOW);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ELOOP") throw new AcpHarnessError("invalid_input", "The file changed while it was being opened.");
+    if (code === "ELOOP")
+      throw new AcpHarnessError("invalid_input", "The file changed while it was being opened.");
     if (code !== "ENOENT") throw error;
     if (!policy.canWrite()) {
       throw new AcpHarnessError("unavailable", "This chat's folder is read-only for the agent.");

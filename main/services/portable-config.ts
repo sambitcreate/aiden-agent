@@ -13,54 +13,44 @@ import {
   invalidateChangedBotSettingsAuthority,
 } from "./bot-runtime-inventory-publication.js";
 
-export const configStores = createPortableConfigStores(
-  () => aidenConfigDir(),
-  undefined,
-  {
-    beforePortableExternalCacheCommit: (previous, next) => {
-      invalidateChangedBotPortableAuthority(previous, next, invalidateBotRuntimeInventoryAuthority);
-      if (!previous) return;
-      invalidateChangedMcpConfigurationLeases(
-        previous.mcpServers,
-        next.mcpServers,
-      );
-    },
-    beforePortableWritePublish: (previous, next) => {
-      invalidateChangedBotPortableAuthority(previous, next, invalidateBotRuntimeInventoryAuthority);
-      if (!previous) return;
-      invalidateChangedMcpConfigurationLeases(
-        previous.mcpServers,
-        next.mcpServers,
-      );
-    },
-    afterPortableWritePublish: (previous, next) =>
-      invalidateChangedBotPortableAuthority(previous, next, invalidateBotRuntimeInventoryAuthority),
-    beforeSettingsExternalCacheCommit: (previous, next) =>
-      invalidateChangedBotSettingsAuthority(previous, next, invalidateBotRuntimeInventoryAuthority),
-    beforeSettingsWritePublish: (previous, next) =>
-      invalidateChangedBotSettingsAuthority(previous, next, invalidateBotRuntimeInventoryAuthority),
-    afterSettingsWritePublish: (previous, next) =>
-      invalidateChangedBotSettingsAuthority(previous, next, invalidateBotRuntimeInventoryAuthority),
-    beforeProviderModelExternalCacheCommit: (previous, next) =>
-      invalidateChangedBotProviderModelAuthority(
-        previous,
-        next,
-        invalidateBotRuntimeInventoryAuthority,
-      ),
-    beforeProviderModelWritePublish: (previous, next) =>
-      invalidateChangedBotProviderModelAuthority(
-        previous,
-        next,
-        invalidateBotRuntimeInventoryAuthority,
-      ),
-    afterProviderModelWritePublish: (previous, next) =>
-      invalidateChangedBotProviderModelAuthority(
-        previous,
-        next,
-        invalidateBotRuntimeInventoryAuthority,
-      ),
+export const configStores = createPortableConfigStores(() => aidenConfigDir(), undefined, {
+  beforePortableExternalCacheCommit: (previous, next) => {
+    invalidateChangedBotPortableAuthority(previous, next, invalidateBotRuntimeInventoryAuthority);
+    if (!previous) return;
+    invalidateChangedMcpConfigurationLeases(previous.mcpServers, next.mcpServers);
   },
-);
+  beforePortableWritePublish: (previous, next) => {
+    invalidateChangedBotPortableAuthority(previous, next, invalidateBotRuntimeInventoryAuthority);
+    if (!previous) return;
+    invalidateChangedMcpConfigurationLeases(previous.mcpServers, next.mcpServers);
+  },
+  afterPortableWritePublish: (previous, next) =>
+    invalidateChangedBotPortableAuthority(previous, next, invalidateBotRuntimeInventoryAuthority),
+  beforeSettingsExternalCacheCommit: (previous, next) =>
+    invalidateChangedBotSettingsAuthority(previous, next, invalidateBotRuntimeInventoryAuthority),
+  beforeSettingsWritePublish: (previous, next) =>
+    invalidateChangedBotSettingsAuthority(previous, next, invalidateBotRuntimeInventoryAuthority),
+  afterSettingsWritePublish: (previous, next) =>
+    invalidateChangedBotSettingsAuthority(previous, next, invalidateBotRuntimeInventoryAuthority),
+  beforeProviderModelExternalCacheCommit: (previous, next) =>
+    invalidateChangedBotProviderModelAuthority(
+      previous,
+      next,
+      invalidateBotRuntimeInventoryAuthority,
+    ),
+  beforeProviderModelWritePublish: (previous, next) =>
+    invalidateChangedBotProviderModelAuthority(
+      previous,
+      next,
+      invalidateBotRuntimeInventoryAuthority,
+    ),
+  afterProviderModelWritePublish: (previous, next) =>
+    invalidateChangedBotProviderModelAuthority(
+      previous,
+      next,
+      invalidateBotRuntimeInventoryAuthority,
+    ),
+});
 
 /**
  * Re-read the portable file from disk. Resolves true when its contents changed,

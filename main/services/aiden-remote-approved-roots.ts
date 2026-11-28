@@ -4,10 +4,7 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isPathInside } from "../shared/path-containment.js";
-import type {
-  AidenRemoteApprovedRoot,
-  AidenRemoteStateRegistry,
-} from "./aiden-remote-state.js";
+import type { AidenRemoteApprovedRoot, AidenRemoteStateRegistry } from "./aiden-remote-state.js";
 
 export const AIDEN_REMOTE_ROOT_POLICY_REVISION = "remote-browser-v1:no-hidden-system";
 
@@ -58,7 +55,11 @@ export async function verifyApprovedRootIdentity(
       filesystem.realpath(root.folderPath),
       filesystem.stat(root.folderPath),
     ]);
-    if (canonical !== root.folderPath || !metadata.isDirectory() || metadata.ino.toString() !== root.inode) {
+    if (
+      canonical !== root.folderPath ||
+      !metadata.isDirectory() ||
+      metadata.ino.toString() !== root.inode
+    ) {
       return null;
     }
     if (metadata.dev.toString() !== root.device) {
@@ -82,13 +83,23 @@ export class AidenRemoteApprovedRootService {
   /** Root creation, compensation, phone approval and Bot policy saves share this lock. */
   withInventoryLock<T>(action: () => Promise<T>): Promise<T> {
     if (this.inventoryOwner.getStore()) return action();
-    const result = this.tail.then(() => this.inventoryOwner.run(true, action), () => this.inventoryOwner.run(true, action));
-    this.tail = result.then(() => undefined, () => undefined);
+    const result = this.tail.then(
+      () => this.inventoryOwner.run(true, action),
+      () => this.inventoryOwner.run(true, action),
+    );
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 
   constructor(
-    private readonly state: Pick<AidenRemoteStateRegistry, "snapshot" | "addApprovedRoot" | "removeApprovedRoot"> & Partial<Pick<AidenRemoteStateRegistry, "approveRootForPhones">>,
+    private readonly state: Pick<
+      AidenRemoteStateRegistry,
+      "snapshot" | "addApprovedRoot" | "removeApprovedRoot"
+    > &
+      Partial<Pick<AidenRemoteStateRegistry, "approveRootForPhones">>,
     private readonly dependencies: AidenRemoteApprovedRootDependencies = {
       now: Date.now,
       randomBytes,
@@ -98,19 +109,42 @@ export class AidenRemoteApprovedRootService {
 
   async addLocalFolder(
     selectedPath: string,
-    options: { confirmHomeDirectory?: boolean; botsOnly?: true; operationId?: string; rootId?: string; expectedIdentity?: { device: string; inode: string }; assertCurrent?: () => void } = {},
+    options: {
+      confirmHomeDirectory?: boolean;
+      botsOnly?: true;
+      operationId?: string;
+      rootId?: string;
+      expectedIdentity?: { device: string; inode: string };
+      assertCurrent?: () => void;
+    } = {},
   ): Promise<AidenRemoteApprovedRoot> {
     return this.withInventoryLock(() => this.addFolderUnlocked(selectedPath, options));
   }
 
-  private async addFolderUnlocked(selectedPath: string, options: { confirmHomeDirectory?: boolean; botsOnly?: true; operationId?: string; rootId?: string; expectedIdentity?: { device: string; inode: string }; assertCurrent?: () => void }): Promise<AidenRemoteApprovedRoot> {
+  private async addFolderUnlocked(
+    selectedPath: string,
+    options: {
+      confirmHomeDirectory?: boolean;
+      botsOnly?: true;
+      operationId?: string;
+      rootId?: string;
+      expectedIdentity?: { device: string; inode: string };
+      assertCurrent?: () => void;
+    },
+  ): Promise<AidenRemoteApprovedRoot> {
     if (!path.isAbsolute(selectedPath) || Buffer.byteLength(selectedPath, "utf8") > 4_096) {
       throw new Error("Select an absolute local folder.");
     }
     const canonicalPath = await fs.realpath(selectedPath);
     const metadata = await fs.stat(canonicalPath, { bigint: true });
     if (!metadata.isDirectory()) throw new Error("The approved root must be a directory.");
-    if (options.expectedIdentity && (canonicalPath !== selectedPath || options.expectedIdentity.device !== String(metadata.dev) || options.expectedIdentity.inode !== String(metadata.ino))) throw new Error("That folder changed. Ask for access again.");
+    if (
+      options.expectedIdentity &&
+      (canonicalPath !== selectedPath ||
+        options.expectedIdentity.device !== String(metadata.dev) ||
+        options.expectedIdentity.inode !== String(metadata.ino))
+    )
+      throw new Error("That folder changed. Ask for access again.");
     if (canonicalPath === path.parse(canonicalPath).root) {
       throw new Error("The filesystem root cannot be approved for remote browsing.");
     }
@@ -122,7 +156,8 @@ export class AidenRemoteApprovedRootService {
     const existing = (await this.state.snapshot()).approvedRoots;
     const exact = existing.find((root) => root.folderPath === canonicalPath);
     if (exact) {
-      if (exact.device !== String(metadata.dev) || exact.inode !== String(metadata.ino)) throw new Error("That folder changed. Approve it again in Settings.");
+      if (exact.device !== String(metadata.dev) || exact.inode !== String(metadata.ino))
+        throw new Error("That folder changed. Approve it again in Settings.");
       options.assertCurrent?.();
       if (!options.botsOnly && exact.botsOnly) {
         if (!this.state.approveRootForPhones) throw new Error("Folder approval is unavailable.");
@@ -147,7 +182,9 @@ export class AidenRemoteApprovedRootService {
       policyRevision: AIDEN_REMOTE_ROOT_POLICY_REVISION,
       createdAt: this.dependencies.now(),
       ...(options.botsOnly ? { botsOnly: true as const } : {}),
-      ...(options.botsOnly && options.operationId ? { botGrantOperationId: options.operationId } : {}),
+      ...(options.botsOnly && options.operationId
+        ? { botGrantOperationId: options.operationId }
+        : {}),
     };
     options.assertCurrent?.();
     await this.state.addApprovedRoot(root, options.assertCurrent);

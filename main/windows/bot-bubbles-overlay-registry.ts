@@ -22,5 +22,9 @@ export function isBotBubbleOverlayWebContents(webContentsId: number): boolean {
  */
 export function isAidenAppWindowFocused(): boolean {
   const focused = BrowserWindow.getFocusedWindow();
-  return focused !== null && !focused.isDestroyed() && !isBotBubbleOverlayWebContents(focused.webContents.id);
+  return (
+    focused !== null &&
+    !focused.isDestroyed() &&
+    !isBotBubbleOverlayWebContents(focused.webContents.id)
+  );
 }

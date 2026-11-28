@@ -45,7 +45,12 @@ export interface BotHandoffNotifier {
 export function botHandoffNotificationBody(botName: string, action: string): string {
   const body = `${botName} needs you to: ${action}`.replace(/\s+/gu, " ").trim();
   const points = [...body];
-  return points.length > BODY_MAX_CHARS ? `${points.slice(0, BODY_MAX_CHARS - 1).join("").trimEnd()}…` : body;
+  return points.length > BODY_MAX_CHARS
+    ? `${points
+        .slice(0, BODY_MAX_CHARS - 1)
+        .join("")
+        .trimEnd()}…`
+    : body;
 }
 
 export function createBotHandoffNotifier(deps: BotHandoffNotifierDeps): BotHandoffNotifier {
@@ -75,7 +80,10 @@ export function createBotHandoffNotifier(deps: BotHandoffNotifierDeps): BotHando
         if (deps.isAppFocused()) return false;
         deps.show({
           title: name,
-          body: botHandoffNotificationBody(name, "choices" in prompt ? `use ${prompt.label}` : prompt.action),
+          body: botHandoffNotificationBody(
+            name,
+            "choices" in prompt ? `use ${prompt.label}` : prompt.action,
+          ),
           onClick: () => {
             // Capture both synchronous throws and asynchronous navigation failures.
             void Promise.resolve()

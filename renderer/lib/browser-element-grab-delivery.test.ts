@@ -37,11 +37,21 @@ function makeElement(overrides: Partial<GrabbedElementContextV1> = {}): GrabbedE
   };
 }
 
-function makeCapture(overrides: Partial<GrabbedElementContextV1> = {}, withThumbnail = true): GrabbedElementCapture {
+function makeCapture(
+  overrides: Partial<GrabbedElementContextV1> = {},
+  withThumbnail = true,
+): GrabbedElementCapture {
   return {
     element: makeElement(overrides),
     ...(withThumbnail
-      ? { thumbnail: { data: VALID_PNG_BASE64, mimeType: "image/png" as const, width: 200, height: 100 } }
+      ? {
+          thumbnail: {
+            data: VALID_PNG_BASE64,
+            mimeType: "image/png" as const,
+            width: 200,
+            height: 100,
+          },
+        }
       : {}),
   };
 }
@@ -94,15 +104,22 @@ test("materializeGrabbedElementDraft adds element + linked thumbnail and dedupli
 });
 
 test("materializeGrabbedElementDraft enforces element limit and degrades thumbnail cleanly when attachment slots are full", () => {
-  const fullAttachments: Attachment[] = Array.from({ length: MAX_ATTACHMENTS_PER_MESSAGE }, (_, index) => ({
-    id: `file_${index}`,
-    name: `file_${index}.txt`,
-    kind: "text",
-    mimeType: "text/plain",
-    text: "hello",
-    size: 5,
-  }));
-  const degraded = materializeGrabbedElementDraft(makeCapture({ id: "el_no_slot" }), [], fullAttachments);
+  const fullAttachments: Attachment[] = Array.from(
+    { length: MAX_ATTACHMENTS_PER_MESSAGE },
+    (_, index) => ({
+      id: `file_${index}`,
+      name: `file_${index}.txt`,
+      kind: "text",
+      mimeType: "text/plain",
+      text: "hello",
+      size: 5,
+    }),
+  );
+  const degraded = materializeGrabbedElementDraft(
+    makeCapture({ id: "el_no_slot" }),
+    [],
+    fullAttachments,
+  );
   assert.equal(degraded.accepted, true);
   assert.equal(degraded.thumbnailSkipped, true);
   assert.equal(degraded.elements[0].thumbnailAttachmentId, undefined);

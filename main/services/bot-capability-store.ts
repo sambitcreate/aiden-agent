@@ -290,8 +290,10 @@ export class BotCapabilityStore {
     return this.serialized(async () => {
       this.leases.invalidateBot(botId);
       const state = await this.persistence.load();
-      if (!state.policies.some((entry) => entry.botId === botId) &&
-          !state.chats.some((entry) => entry.botId === botId)) {
+      if (
+        !state.policies.some((entry) => entry.botId === botId) &&
+        !state.chats.some((entry) => entry.botId === botId)
+      ) {
         return false;
       }
       const removed = await this.persistence.update((draft) =>
@@ -316,7 +318,11 @@ export class BotCapabilityStore {
       // each a `security` subprocess on macOS.
       const current = await this.persistence.load();
       const probe = structuredClone(current);
-      const unchanged = this.editor(probe).reconcileIncarnationNamespace(namespace, resources, options);
+      const unchanged = this.editor(probe).reconcileIncarnationNamespace(
+        namespace,
+        resources,
+        options,
+      );
       if (isDeepStrictEqual(probe, current)) return unchanged;
       return this.persistence.update((state) =>
         this.editor(state).reconcileIncarnationNamespace(namespace, resources, options),
@@ -355,29 +361,72 @@ export class BotCapabilityStore {
   /** Owner-only journal cleanup proof; corrupt or unverified authority never means absent. */
   async absentBotAuthorities(botIds: readonly string[]): Promise<string[]> {
     this.requireInitialized();
-    if (botIds.length > 256) throw new BotCapabilityUnavailableError("Too many Bot identities to inspect.");
+    if (botIds.length > 256)
+      throw new BotCapabilityUnavailableError("Too many Bot identities to inspect.");
     for (const id of botIds) assertBotIdentity(id, "bot");
-    return this.serialized(async () => { const state = await this.persistence.load(); return [...new Set(botIds)].filter((id) => !state.policies.some((row) => row.botId === id) && !state.chats.some((row) => row.botId === id)); });
+    return this.serialized(async () => {
+      const state = await this.persistence.load();
+      return [...new Set(botIds)].filter(
+        (id) =>
+          !state.policies.some((row) => row.botId === id) &&
+          !state.chats.some((row) => row.botId === id),
+      );
+    });
   }
 
-  async saveRoutineModelsState(previous: string | null, next: string, assertCurrent: () => Promise<void>, isCurrent: () => boolean): Promise<void> {
+  async saveRoutineModelsState(
+    previous: string | null,
+    next: string,
+    assertCurrent: () => Promise<void>,
+    isCurrent: () => boolean,
+  ): Promise<void> {
     this.requireInitialized();
-    if (Buffer.byteLength(next) > 4 * 1024 * 1024) throw new BotCapabilityUnavailableError("Saved routine model history is full. No admitted work was discarded.");
-    await this.publishPrivateDocument("routineModels",previous,next,assertCurrent,isCurrent);
+    if (Buffer.byteLength(next) > 4 * 1024 * 1024)
+      throw new BotCapabilityUnavailableError(
+        "Saved routine model history is full. No admitted work was discarded.",
+      );
+    await this.publishPrivateDocument("routineModels", previous, next, assertCurrent, isCurrent);
   }
 
   /** Revalidate read-only leases outside the mutex; an unrelated document write can retry safely. */
-  private async publishPrivateDocument(key:"routineModels"|"peerMessaging",previous:string|null,next:string,assertCurrent:()=>Promise<void>,isCurrent:()=>boolean):Promise<void>{
-    for(let attempt=0;attempt<8;attempt++){
-      const sequence=await this.serialized(async()=>(await this.persistence.load()).sequence);
-      await assertCurrent();let invalidated=false;
-      try{await this.serialized(async()=>this.persistence.update(state=>{
-        if((state[key]??null)!==previous)throw new BotCapabilityUnavailableError("Protected Bot authority changed concurrently.");
-        if(state.sequence!==sequence){invalidated=true;throw new BotCapabilityUnavailableError("Bot authority changed during protected publication.");}
-        if(state.sequence>=Number.MAX_SAFE_INTEGER)throw new BotCapabilityUnavailableError();
-        state.sequence++;state[key]=next;
-        if(Buffer.byteLength(JSON.stringify(state))>MAX_BOT_CAPABILITY_STATE_BYTES)throw new BotCapabilityUnavailableError("Protected Bot history is full. No admitted work was discarded.");
-      },isCurrent));return;}catch(error){if(!invalidated||attempt===7)throw error;}
+  private async publishPrivateDocument(
+    key: "routineModels" | "peerMessaging",
+    previous: string | null,
+    next: string,
+    assertCurrent: () => Promise<void>,
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const sequence = await this.serialized(async () => (await this.persistence.load()).sequence);
+      await assertCurrent();
+      let invalidated = false;
+      try {
+        await this.serialized(async () =>
+          this.persistence.update((state) => {
+            if ((state[key] ?? null) !== previous)
+              throw new BotCapabilityUnavailableError(
+                "Protected Bot authority changed concurrently.",
+              );
+            if (state.sequence !== sequence) {
+              invalidated = true;
+              throw new BotCapabilityUnavailableError(
+                "Bot authority changed during protected publication.",
+              );
+            }
+            if (state.sequence >= Number.MAX_SAFE_INTEGER)
+              throw new BotCapabilityUnavailableError();
+            state.sequence++;
+            state[key] = next;
+            if (Buffer.byteLength(JSON.stringify(state)) > MAX_BOT_CAPABILITY_STATE_BYTES)
+              throw new BotCapabilityUnavailableError(
+                "Protected Bot history is full. No admitted work was discarded.",
+              );
+          }, isCurrent),
+        );
+        return;
+      } catch (error) {
+        if (!invalidated || attempt === 7) throw error;
+      }
     }
   }
 
@@ -386,10 +435,18 @@ export class BotCapabilityStore {
     return this.serialized(async () => (await this.persistence.load()).peerMessaging ?? null);
   }
 
-  async savePeerMessagingState(previous: string | null, next: string, assertCurrent: () => Promise<void>, isCurrent: () => boolean): Promise<void> {
+  async savePeerMessagingState(
+    previous: string | null,
+    next: string,
+    assertCurrent: () => Promise<void>,
+    isCurrent: () => boolean,
+  ): Promise<void> {
     this.requireInitialized();
-    if (Buffer.byteLength(next) > 2 * 1024 * 1024) throw new BotCapabilityUnavailableError("Protected Bot messaging history is full. No unfinished exchange was discarded.");
-    await this.publishPrivateDocument("peerMessaging",previous,next,assertCurrent,isCurrent);
+    if (Buffer.byteLength(next) > 2 * 1024 * 1024)
+      throw new BotCapabilityUnavailableError(
+        "Protected Bot messaging history is full. No unfinished exchange was discarded.",
+      );
+    await this.publishPrivateDocument("peerMessaging", previous, next, assertCurrent, isCurrent);
   }
 
   async createBotPolicy(input: {
@@ -563,8 +620,12 @@ export class BotCapabilityStore {
       }
       if (access.mode === "custom") {
         validateSelectionAgainstCatalog(access.custom, input.catalog, {
-          retainedSkillIds: chat.mode === "custom" ? chat.custom.skillIds
-            : policy.accessMode === "custom" ? policy.custom.skillIds : [],
+          retainedSkillIds:
+            chat.mode === "custom"
+              ? chat.custom.skillIds
+              : policy.accessMode === "custom"
+                ? policy.custom.skillIds
+                : [],
         });
         if (
           policy.accessMode === "custom" &&
@@ -650,7 +711,9 @@ export class BotCapabilityStore {
     routineModelGrant?: BotRoutineModelGrant;
   }): Promise<BotCapabilityAdmission> {
     this.requireInitialized();
-    const routine = input.routineModelGrant ? inspectBotRoutineModelGrant(input.routineModelGrant) : undefined;
+    const routine = input.routineModelGrant
+      ? inspectBotRoutineModelGrant(input.routineModelGrant)
+      : undefined;
     if (routine && routine.claim.botId !== input.botId) throw new BotCapabilityUnavailableError();
     await routine?.assertCurrent();
     return this.serialized(async () => {
@@ -658,7 +721,8 @@ export class BotCapabilityStore {
       let editor = this.editor(state);
       editor.assertBotMayAct(input);
       if (
-        !routine && input.snapshot &&
+        !routine &&
+        input.snapshot &&
         editor.hasStaleModelBindings({ botId: input.botId, snapshot: input.snapshot })
       ) {
         const snapshot = input.snapshot;
@@ -669,11 +733,22 @@ export class BotCapabilityStore {
         editor = this.editor(state);
       }
       const authority = editor.assertBotMayAct(input);
-      const modelAuthority = routine ? { selection: { providerId: routine.binding.providerOption.id, modelId: routine.binding.modelOption.id }, binding: routine.binding } : editor.getBotModelAuthority(input.botId);
+      const modelAuthority = routine
+        ? {
+            selection: {
+              providerId: routine.binding.providerOption.id,
+              modelId: routine.binding.modelOption.id,
+            },
+            binding: routine.binding,
+          }
+        : editor.getBotModelAuthority(input.botId);
       let visionModelAuthority = editor.getBotVisionModelAuthority(input.botId);
       if (routine && visionModelAuthority && input.snapshot) {
-        try { assertBoundBotProviderModelCurrent(visionModelAuthority.binding, input.snapshot); }
-        catch { visionModelAuthority = undefined; }
+        try {
+          assertBoundBotProviderModelCurrent(visionModelAuthority.binding, input.snapshot);
+        } catch {
+          visionModelAuthority = undefined;
+        }
       }
       if (authority.effectiveCustom || modelAuthority || visionModelAuthority) {
         if (!input.snapshot) {
@@ -710,7 +785,13 @@ export class BotCapabilityStore {
   }
 
   /** Source reads have no inference/model authority and never repair model bindings. */
-  async admitConnectorSource(input: { audienceId: string; botId: string; chatId: string; serverId: string; sourceSelectionIds?: { connectionId: string; schedulesId: string } }): Promise<BotCapabilityAdmission & { connection?: BoundBotConnection }> {
+  async admitConnectorSource(input: {
+    audienceId: string;
+    botId: string;
+    chatId: string;
+    serverId: string;
+    sourceSelectionIds?: { connectionId: string; schedulesId: string };
+  }): Promise<BotCapabilityAdmission & { connection?: BoundBotConnection }> {
     this.requireInitialized();
     return this.serialized(async () => {
       const editor = this.editor(await this.persistence.load());
@@ -718,16 +799,40 @@ export class BotCapabilityStore {
       let connection: BoundBotConnection | undefined;
       if (authority.effectiveCustom) {
         const binding = editor.getBotBinding(input.botId);
-        connection = binding?.connections.find(item => item.sourceId === input.serverId && authority.effectiveCustom!.connectionIds.includes(item.option.id));
-        const schedules = binding?.otherCapabilities.some(item => item.kind === "schedules" && authority.effectiveCustom!.otherCapabilityIds.includes(item.option.id));
-        const fullReduction = authority.policy.accessMode === "full" && input.sourceSelectionIds
-          && authority.effectiveCustom.connectionIds.includes(input.sourceSelectionIds.connectionId)
-          && authority.effectiveCustom.otherCapabilityIds.includes(input.sourceSelectionIds.schedulesId);
-        if ((!connection || !schedules) && !fullReduction) throw new BotCapabilityUnavailableError("Allow this exact connector and Schedules in this Bot's current access.");
+        connection = binding?.connections.find(
+          (item) =>
+            item.sourceId === input.serverId &&
+            authority.effectiveCustom!.connectionIds.includes(item.option.id),
+        );
+        const schedules = binding?.otherCapabilities.some(
+          (item) =>
+            item.kind === "schedules" &&
+            authority.effectiveCustom!.otherCapabilityIds.includes(item.option.id),
+        );
+        const fullReduction =
+          authority.policy.accessMode === "full" &&
+          input.sourceSelectionIds &&
+          authority.effectiveCustom.connectionIds.includes(input.sourceSelectionIds.connectionId) &&
+          authority.effectiveCustom.otherCapabilityIds.includes(
+            input.sourceSelectionIds.schedulesId,
+          );
+        if ((!connection || !schedules) && !fullReduction)
+          throw new BotCapabilityUnavailableError(
+            "Allow this exact connector and Schedules in this Bot's current access.",
+          );
       }
-      const lease = this.leases.acquire({ audienceId: input.audienceId, botId: input.botId, botPolicyEpoch: authority.policy.policyEpoch,
-        chatId: input.chatId, chatPolicyEpoch: authority.chat!.policyEpoch });
-      return { ...authority, ...(connection ? { connection: structuredClone(connection) } : {}), lease };
+      const lease = this.leases.acquire({
+        audienceId: input.audienceId,
+        botId: input.botId,
+        botPolicyEpoch: authority.policy.policyEpoch,
+        chatId: input.chatId,
+        chatPolicyEpoch: authority.chat!.policyEpoch,
+      });
+      return {
+        ...authority,
+        ...(connection ? { connection: structuredClone(connection) } : {}),
+        lease,
+      };
     });
   }
 

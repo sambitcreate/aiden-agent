@@ -4,7 +4,18 @@ import type { DesignFrame } from "../shared/design-canvas/schema";
 import { DESIGN_LIVE_LIMIT, selectLiveFrames } from "./live-set-core";
 
 function file(id: string, x: number, y: number, w = 200, h = 200): DesignFrame {
-  return { id, kind: "file", title: id, x, y, w, h, path: `design/${id}.html`, pageId: "page-1", createdBy: "aiden" };
+  return {
+    id,
+    kind: "file",
+    title: id,
+    x,
+    y,
+    w,
+    h,
+    path: `design/${id}.html`,
+    pageId: "page-1",
+    createdBy: "aiden",
+  };
 }
 
 const view = { w: 1000, h: 800 };
@@ -34,30 +45,88 @@ function live(
 test("only file and artifact frames are ever live", () => {
   const frames: DesignFrame[] = [
     file("page", 0, 0),
-    { id: "art", kind: "artifact", title: "Art", x: 300, y: 0, w: 200, h: 200, mediaId: "a1", pageId: "page-1", createdBy: "aiden" },
-    { id: "note", kind: "note", title: "Note", x: 0, y: 300, w: 200, h: 200, text: "", pageId: "page-1", createdBy: "person" },
-    { id: "pic", kind: "image", title: "Pic", x: 300, y: 300, w: 200, h: 200, path: "a.png", pageId: "page-1", createdBy: "person" },
-    { id: "group", kind: "group", title: "Group", x: 0, y: 0, w: 900, h: 700, pageId: "page-1", createdBy: "person" },
+    {
+      id: "art",
+      kind: "artifact",
+      title: "Art",
+      x: 300,
+      y: 0,
+      w: 200,
+      h: 200,
+      mediaId: "a1",
+      pageId: "page-1",
+      createdBy: "aiden",
+    },
+    {
+      id: "note",
+      kind: "note",
+      title: "Note",
+      x: 0,
+      y: 300,
+      w: 200,
+      h: 200,
+      text: "",
+      pageId: "page-1",
+      createdBy: "person",
+    },
+    {
+      id: "pic",
+      kind: "image",
+      title: "Pic",
+      x: 300,
+      y: 300,
+      w: 200,
+      h: 200,
+      path: "a.png",
+      pageId: "page-1",
+      createdBy: "person",
+    },
+    {
+      id: "group",
+      kind: "group",
+      title: "Group",
+      x: 0,
+      y: 0,
+      w: 900,
+      h: 700,
+      pageId: "page-1",
+      createdBy: "person",
+    },
   ];
-  assert.deepEqual(sorted(live(frames, { selected: ["note", "group"], entered: "pic" })), ["art", "page"]);
+  assert.deepEqual(sorted(live(frames, { selected: ["note", "group"], entered: "pic" })), [
+    "art",
+    "page",
+  ]);
 });
 
 test("below 25 % zoom nothing is live, not even the selection or the entered frame", () => {
   const frames = [file("a", 0, 0), file("b", 300, 0)];
-  assert.deepEqual(sorted(live(frames, { viewport: { x: 0, y: 0, zoom: 0.2 }, selected: ["a"], entered: "b" })), []);
-  assert.deepEqual(sorted(live(frames, { viewport: { x: 0, y: 0, zoom: 0.25 }, entered: "b" })), ["a", "b"]);
+  assert.deepEqual(
+    sorted(live(frames, { viewport: { x: 0, y: 0, zoom: 0.2 }, selected: ["a"], entered: "b" })),
+    [],
+  );
+  assert.deepEqual(sorted(live(frames, { viewport: { x: 0, y: 0, zoom: 0.25 }, entered: "b" })), [
+    "a",
+    "b",
+  ]);
 });
 
 test("the entered frame is live even off-screen, ahead of everything else", () => {
-  const onScreen = Array.from({ length: 10 }, (_, index) => file(`on${index}`, (index % 5) * 200, Math.floor(index / 5) * 300));
+  const onScreen = Array.from({ length: 10 }, (_, index) =>
+    file(`on${index}`, (index % 5) * 200, Math.floor(index / 5) * 300),
+  );
   const result = live([...onScreen, file("far", 50_000, 50_000)], { entered: "far" });
   assert.equal(result.has("far"), true);
   assert.equal(result.size, DESIGN_LIVE_LIMIT);
 });
 
 test("selected frames come before frames that are only in view, even off-screen", () => {
-  const onScreen = Array.from({ length: 10 }, (_, index) => file(`on${index}`, (index % 5) * 200, Math.floor(index / 5) * 300));
-  const result = live([...onScreen, file("far", 50_000, 0), file("far2", -50_000, 0)], { selected: ["far", "far2"] });
+  const onScreen = Array.from({ length: 10 }, (_, index) =>
+    file(`on${index}`, (index % 5) * 200, Math.floor(index / 5) * 300),
+  );
+  const result = live([...onScreen, file("far", 50_000, 0), file("far2", -50_000, 0)], {
+    selected: ["far", "far2"],
+  });
   assert.equal(result.has("far"), true);
   assert.equal(result.has("far2"), true);
   assert.equal(result.size, DESIGN_LIVE_LIMIT);
@@ -79,7 +148,9 @@ test("frames in view are ranked by the screen area they cover", () => {
 });
 
 test("with 40 frames in view at most 6 are live", () => {
-  const frames = Array.from({ length: 40 }, (_, index) => file(`f${index}`, (index % 8) * 120, Math.floor(index / 8) * 150, 100, 100));
+  const frames = Array.from({ length: 40 }, (_, index) =>
+    file(`f${index}`, (index % 8) * 120, Math.floor(index / 8) * 150, 100, 100),
+  );
   assert.equal(live(frames).size, DESIGN_LIVE_LIMIT);
 });
 
@@ -91,12 +162,16 @@ test("frames fully off-screen are not live unless entered or selected", () => {
 });
 
 test("a live frame still half in view keeps its place over a newcomer of the same size", () => {
-  const row = Array.from({ length: 5 }, (_, index) => file(`f${index}`, 100 + index * 140, 0, 120, 200));
+  const row = Array.from({ length: 5 }, (_, index) =>
+    file(`f${index}`, 100 + index * 140, 0, 120, 200),
+  );
   // After a small pan "edge" is exactly half off the left edge: 60 x 200 px show.
   const edge = file("edge", -60, 300, 120, 200);
   // The newcomer shows the same 60 x 200 px, and comes first in the document.
   const newcomer = file("new", 400, 300, 60, 200);
-  const result = live([...row, newcomer, edge], { previous: ["f0", "f1", "f2", "f3", "f4", "edge"] });
+  const result = live([...row, newcomer, edge], {
+    previous: ["f0", "f1", "f2", "f3", "f4", "edge"],
+  });
   assert.equal(result.has("edge"), true, "a small pan does not swap the live frame out");
   assert.equal(result.has("new"), false);
   assert.equal(result.size, DESIGN_LIVE_LIMIT);
@@ -105,11 +180,15 @@ test("a live frame still half in view keeps its place over a newcomer of the sam
 });
 
 test("a live frame less than half in view gives way to a newcomer that shows more", () => {
-  const row = Array.from({ length: 5 }, (_, index) => file(`f${index}`, 100 + index * 140, 0, 120, 200));
+  const row = Array.from({ length: 5 }, (_, index) =>
+    file(`f${index}`, 100 + index * 140, 0, 120, 200),
+  );
   // Only 30 of its 120 px width shows.
   const edge = file("edge", -90, 300, 120, 200);
   const newcomer = file("new", 400, 300, 60, 200);
-  const result = live([...row, edge, newcomer], { previous: ["f0", "f1", "f2", "f3", "f4", "edge"] });
+  const result = live([...row, edge, newcomer], {
+    previous: ["f0", "f1", "f2", "f3", "f4", "edge"],
+  });
   assert.equal(result.has("edge"), false);
   assert.equal(result.has("new"), true);
 });

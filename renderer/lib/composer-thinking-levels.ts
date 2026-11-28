@@ -55,17 +55,26 @@ export function composerThinkingLevels(
     return { levels: [...levels], defaultLevel: normalizeGoogleThinkingLevel(levels, undefined) };
   }
   if (provider.id === OPENAI_CODEX_PROVIDER_ID) {
-    const levels = declared?.length ? CODEX_THINKING_LEVELS.filter((level) => declared.includes(level)) : [];
-    return levels.length ? { levels, defaultLevel: normalizeCodexThinkingLevel(levels, undefined) } : NONE;
+    const levels = declared?.length
+      ? CODEX_THINKING_LEVELS.filter((level) => declared.includes(level))
+      : [];
+    return levels.length
+      ? { levels, defaultLevel: normalizeCodexThinkingLevel(levels, undefined) }
+      : NONE;
   }
   if (provider.id === ANTHROPIC_PROVIDER_ID) {
     const levels = declared?.length
       ? ANTHROPIC_THINKING_LEVELS.filter((level) => declared.includes(level))
       : [];
-    return levels.length ? { levels, defaultLevel: normalizeAnthropicThinkingLevel(levels, undefined) } : NONE;
+    return levels.length
+      ? { levels, defaultLevel: normalizeAnthropicThinkingLevel(levels, undefined) }
+      : NONE;
   }
-  const custom = provider.kind === "openai" ? customModelThinkingLevels(metadata?.overrides) : undefined;
+  const custom =
+    provider.kind === "openai" ? customModelThinkingLevels(metadata?.overrides) : undefined;
   if (provider.isBuiltin !== true && !custom) return NONE;
   const levels = custom ?? declared?.filter(isGenerationThinkingLevel) ?? [];
-  return levels.length ? { levels, defaultLevel: normalizeProviderThinkingLevel(levels, undefined) } : NONE;
+  return levels.length
+    ? { levels, defaultLevel: normalizeProviderThinkingLevel(levels, undefined) }
+    : NONE;
 }

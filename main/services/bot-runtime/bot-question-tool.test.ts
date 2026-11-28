@@ -7,7 +7,12 @@ import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentTools } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
+import {
+  Harness,
+  MemoryStorage,
+  ToolResultEntry,
+  type Conversation,
+} from "@earendil-works/pi-durable";
 import { createBotRegistry, type BotRegistry } from "./bot-extension.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { createBotQuestions, type BotQuestions } from "./bot-questions.js";
@@ -17,11 +22,20 @@ import { projectBotTranscript } from "./live-projection.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 import { recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./test-support/faux.js";
-import { optionAnswer, QUESTION_ARGS, QUESTION_TOOL_NAME, questionEntries } from "./test-support/question-fixtures.js";
+import {
+  optionAnswer,
+  QUESTION_ARGS,
+  QUESTION_TOOL_NAME,
+  questionEntries,
+} from "./test-support/question-fixtures.js";
 import { botQuestionCandidate } from "./bot-question-tool.js";
 
 const ctx = BACKGROUND_CONTEXT;
-const scenarioFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "test-support", "question-scenario.ts");
+const scenarioFile = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "test-support",
+  "question-scenario.ts",
+);
 const roots: string[] = [];
 function tempProfile(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), "aiden-bot-question-"));
@@ -45,20 +59,31 @@ async function questionResults(conversation: Conversation): Promise<ToolResultMo
 /** What the person sees in the chat for their answers. */
 async function answerBubbles(conversation: Conversation): Promise<string[]> {
   const view = await conversation.context(ctx);
-  return projectBotTranscript(view.entries).flatMap((entry) => (entry.type === "question_answer" ? [entry.text] : []));
+  return projectBotTranscript(view.entries).flatMap((entry) =>
+    entry.type === "question_answer" ? [entry.text] : [],
+  );
 }
 
 async function memoryHarness(botId: string, questions: BotQuestions, fauxModels: FauxModels) {
   const deps = recordingDeps({ tools: questionEntries(questions, botId) });
   const registry: BotRegistry = createBotRegistry(botId, deps);
   await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
+  const harness = await Harness.open(
+    new MemoryStorage(),
+    { models: fauxModels.models, registry },
+    ctx,
+  );
   registry.attachHarness(harness);
   const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
   return { harness, root };
 }
 
-async function profileHost(profile: string, botId: string, questions: BotQuestions, fauxModels: FauxModels) {
+async function profileHost(
+  profile: string,
+  botId: string,
+  questions: BotQuestions,
+  fauxModels: FauxModels,
+) {
   const deps = recordingDeps({ tools: questionEntries(questions, botId) });
   let registry: BotRegistry | undefined;
   const host = (await createBotHarnessHost({
@@ -71,7 +96,10 @@ async function profileHost(profile: string, botId: string, questions: BotQuestio
   return { host, ...opened };
 }
 
-const askOnce = () => fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], { stopReason: "toolUse" });
+const askOnce = () =>
+  fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], {
+    stopReason: "toolUse",
+  });
 
 test("a Bot asks, waits, and the first valid answer becomes one tool result and one reply bubble", async () => {
   const offered: string[][] = [];
@@ -89,19 +117,49 @@ test("a Bot asks, waits, and the first valid answer becomes one tool result and 
     await waitFor(() => questions.pending("bot-q").length === 1, { what: "the question card" });
     const [prompt] = questions.pending("bot-q");
     const waitId = prompt!.waitId;
-    assert.ok(offered[0]!.includes(QUESTION_TOOL_NAME), "the question tool is offered on an attended turn");
-    assert.deepEqual(prompt!.questions[0]!.options.map((option) => option.label), ["Blue", "Red", "Green"]);
+    assert.ok(
+      offered[0]!.includes(QUESTION_TOOL_NAME),
+      "the question tool is offered on an attended turn",
+    );
+    assert.deepEqual(
+      prompt!.questions[0]!.options.map((option) => option.label),
+      ["Blue", "Red", "Green"],
+    );
 
-    assert.equal(questions.answer("bot-q", waitId, optionAnswer("q-other", "Blue")), "invalid", "another prompt id");
-    assert.equal(questions.answer("bot-q", waitId, optionAnswer(waitId, "Purple")), "invalid", "an option it does not have");
     assert.equal(
-      questions.answer("bot-q", waitId, { version: 1, promptId: waitId, cancelled: false, answers: [{ questionIndex: 3, kind: "option", answer: "Blue" }] }),
+      questions.answer("bot-q", waitId, optionAnswer("q-other", "Blue")),
+      "invalid",
+      "another prompt id",
+    );
+    assert.equal(
+      questions.answer("bot-q", waitId, optionAnswer(waitId, "Purple")),
+      "invalid",
+      "an option it does not have",
+    );
+    assert.equal(
+      questions.answer("bot-q", waitId, {
+        version: 1,
+        promptId: waitId,
+        cancelled: false,
+        answers: [{ questionIndex: 3, kind: "option", answer: "Blue" }],
+      }),
       "invalid",
       "a question index out of range",
     );
-    assert.equal(questions.answer("bot-other", waitId, optionAnswer(waitId, "Blue")), "not_waiting", "another Bot's question");
-    assert.equal(questions.answer("bot-q", "no-such-wait", optionAnswer("no-such-wait", "Blue")), "not_waiting");
-    assert.equal(questions.pending("bot-q").length, 1, "refused answers leave the question waiting");
+    assert.equal(
+      questions.answer("bot-other", waitId, optionAnswer(waitId, "Blue")),
+      "not_waiting",
+      "another Bot's question",
+    );
+    assert.equal(
+      questions.answer("bot-q", "no-such-wait", optionAnswer("no-such-wait", "Blue")),
+      "not_waiting",
+    );
+    assert.equal(
+      questions.pending("bot-q").length,
+      1,
+      "refused answers leave the question waiting",
+    );
 
     // Two clients answer at once: exactly one wins.
     const outcomes = [
@@ -115,7 +173,11 @@ test("a Bot asks, waits, and the first valid answer becomes one tool result and 
     assert.equal(results.length, 1, "the answer is recorded once");
     assert.equal(results[0]!.isError, false);
     assert.match(results[0]!.content[0]!.text ?? "", /Answer: Blue/u);
-    assert.deepEqual(await answerBubbles(root), ["Blue"], "the person's choice reads as their reply");
+    assert.deepEqual(
+      await answerBubbles(root),
+      ["Blue"],
+      "the person's choice reads as their reply",
+    );
     assert.equal(fauxModels.calls(), 2);
   } finally {
     await harness.close(ctx);
@@ -135,11 +197,21 @@ test("Stop while a question waits withdraws it without recording an answer; a la
     const outcome = await settled;
     assert.equal(outcome.status, "unanswered");
     assert.deepEqual(questions.pending("bot-stop"), [], "the card is withdrawn");
-    assert.equal(questions.answer("bot-stop", prompt!.waitId, optionAnswer(prompt!.waitId, "Blue")), "not_waiting");
+    assert.equal(
+      questions.answer("bot-stop", prompt!.waitId, optionAnswer(prompt!.waitId, "Blue")),
+      "not_waiting",
+    );
 
     const results = await questionResults(root);
-    assert.ok(results.every((result) => result.isError), "no successful answer was recorded");
-    assert.deepEqual(await answerBubbles(root), [], "no reply bubble for a question nobody answered");
+    assert.ok(
+      results.every((result) => result.isError),
+      "no successful answer was recorded",
+    );
+    assert.deepEqual(
+      await answerBubbles(root),
+      [],
+      "no reply bubble for a question nobody answered",
+    );
     assert.equal(fauxModels.calls(), 1, "the model is not asked to continue");
   } finally {
     await harness.close(ctx);
@@ -147,7 +219,9 @@ test("Stop while a question waits withdraws it without recording an answer; a la
 });
 
 test("two questions in one round are shown one at a time", async () => {
-  const second = { questions: [{ ...QUESTION_ARGS.questions[0]!, question: "Which size?", header: "Size" }] };
+  const second = {
+    questions: [{ ...QUESTION_ARGS.questions[0]!, question: "Which size?", header: "Size" }],
+  };
   const fauxModels = createFauxModels([
     fauxAssistantMessage(
       [fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS), fauxToolCall(QUESTION_TOOL_NAME, second)],
@@ -164,12 +238,20 @@ test("two questions in one round are shown one at a time", async () => {
     await waitFor(() => questions.pending("bot-two").length === 1, { what: "the first card" });
     const [first] = questions.pending("bot-two");
     assert.equal(first!.questions[0]!.header, "Colour");
-    assert.equal(questions.answer("bot-two", first!.waitId, optionAnswer(first!.waitId, "Red")), "answered");
+    assert.equal(
+      questions.answer("bot-two", first!.waitId, optionAnswer(first!.waitId, "Red")),
+      "answered",
+    );
 
-    await waitFor(() => questions.pending("bot-two")[0]?.questions[0]?.header === "Size", { what: "the second card" });
+    await waitFor(() => questions.pending("bot-two")[0]?.questions[0]?.header === "Size", {
+      what: "the second card",
+    });
     const [next] = questions.pending("bot-two");
     assert.notEqual(next!.waitId, first!.waitId);
-    assert.equal(questions.answer("bot-two", next!.waitId, optionAnswer(next!.waitId, "Green")), "answered");
+    assert.equal(
+      questions.answer("bot-two", next!.waitId, optionAnswer(next!.waitId, "Green")),
+      "answered",
+    );
     assert.equal((await settled).status, "done");
 
     assert.equal(most, 1, "never two cards at once");
@@ -190,7 +272,10 @@ test("quitting while a question waits withdraws it; Resume re-asks under the sam
 
   await before.host.shutdown();
   assert.deepEqual(firstRun.pending("bot-quit"), [], "quitting withdraws the card");
-  assert.equal(firstRun.answer("bot-quit", asked!.waitId, optionAnswer(asked!.waitId, "Blue")), "not_waiting");
+  assert.equal(
+    firstRun.answer("bot-quit", asked!.waitId, optionAnswer(asked!.waitId, "Blue")),
+    "not_waiting",
+  );
 
   const questions = createBotQuestions();
   const fauxModels = createFauxModels([fauxAssistantMessage("Green, noted.")]);
@@ -199,10 +284,18 @@ test("quitting while a question waits withdraws it; Resume re-asks under the sam
     assert.deepEqual(questions.pending("bot-quit"), [], "nothing is asked before Resume");
     const [placed] = (await reopened.harness.inspect(ctx)).submissions;
     reopened.harness.resume();
-    await waitFor(() => questions.pending("bot-quit").length === 1, { what: "the re-asked question" });
+    await waitFor(() => questions.pending("bot-quit").length === 1, {
+      what: "the re-asked question",
+    });
     assert.equal(questions.pending("bot-quit")[0]!.waitId, asked!.waitId);
-    assert.equal(questions.answer("bot-quit", asked!.waitId, optionAnswer(asked!.waitId, "Green")), "answered");
-    assert.equal((await (await reopened.harness.submission(placed!.id, ctx))!.wait(ctx)).status, "done");
+    assert.equal(
+      questions.answer("bot-quit", asked!.waitId, optionAnswer(asked!.waitId, "Green")),
+      "answered",
+    );
+    assert.equal(
+      (await (await reopened.harness.submission(placed!.id, ctx))!.wait(ctx)).status,
+      "done",
+    );
     assert.equal((await questionResults(reopened.conversation)).length, 1);
     assert.deepEqual(await answerBubbles(reopened.conversation), ["Green"]);
     assert.equal(fauxModels.calls(), 1, "the question is not re-generated, only the follow-up");
@@ -213,21 +306,41 @@ test("quitting while a question waits withdraws it; Resume re-asks under the sam
 
 test("after SIGKILL while a question waits, Resume re-asks it under the same waitId and applies one answer", async () => {
   const profile = tempProfile();
-  const child = spawnHarnessChild("scenario", [scenarioFile, JSON.stringify({ profileDir: profile, botId: "bot-q-kill" })]);
+  const child = spawnHarnessChild("scenario", [
+    scenarioFile,
+    JSON.stringify({ profileDir: profile, botId: "bot-q-kill" }),
+  ]);
   const childWaitId = await child.waitFor("QUESTION");
   await child.kill();
 
   const questions = createBotQuestions();
   const fauxModels = createFauxModels([fauxAssistantMessage("Thanks, going with Red.")]);
-  const { host, harness, conversation } = await profileHost(profile, "bot-q-kill", questions, fauxModels);
+  const { host, harness, conversation } = await profileHost(
+    profile,
+    "bot-q-kill",
+    questions,
+    fauxModels,
+  );
   try {
     const [placed] = (await harness.inspect(ctx)).submissions;
     harness.resume();
-    await waitFor(() => questions.pending("bot-q-kill").length === 1, { what: "the re-asked question" });
-    assert.equal(questions.pending("bot-q-kill")[0]!.waitId, childWaitId, "the question keeps its waitId");
+    await waitFor(() => questions.pending("bot-q-kill").length === 1, {
+      what: "the re-asked question",
+    });
+    assert.equal(
+      questions.pending("bot-q-kill")[0]!.waitId,
+      childWaitId,
+      "the question keeps its waitId",
+    );
 
-    assert.equal(questions.answer("bot-q-kill", childWaitId, optionAnswer(childWaitId, "Red")), "answered");
-    assert.equal(questions.answer("bot-q-kill", childWaitId, optionAnswer(childWaitId, "Blue")), "not_waiting");
+    assert.equal(
+      questions.answer("bot-q-kill", childWaitId, optionAnswer(childWaitId, "Red")),
+      "answered",
+    );
+    assert.equal(
+      questions.answer("bot-q-kill", childWaitId, optionAnswer(childWaitId, "Blue")),
+      "not_waiting",
+    );
     assert.equal((await (await harness.submission(placed!.id, ctx))!.wait(ctx)).status, "done");
 
     const results = await questionResults(conversation);
@@ -241,7 +354,10 @@ test("after SIGKILL while a question waits, Resume re-asks it under the same wai
 
 test("Dismiss after SIGKILL ends the paused question without asking it or recording an answer", async () => {
   const profile = tempProfile();
-  const child = spawnHarnessChild("scenario", [scenarioFile, JSON.stringify({ profileDir: profile, botId: "bot-q-dismiss" })]);
+  const child = spawnHarnessChild("scenario", [
+    scenarioFile,
+    JSON.stringify({ profileDir: profile, botId: "bot-q-dismiss" }),
+  ]);
   await child.waitFor("QUESTION");
   await child.kill();
 
@@ -264,7 +380,12 @@ test("Dismiss after SIGKILL ends the paused question without asking it or record
 test("deleting a Bot while its question waits withdraws the card", async () => {
   const profile = tempProfile();
   const questions = createBotQuestions();
-  const { host, conversation } = await profileHost(profile, "bot-del", questions, createFauxModels([askOnce()]));
+  const { host, conversation } = await profileHost(
+    profile,
+    "bot-del",
+    questions,
+    createFauxModels([askOnce()]),
+  );
   try {
     await conversation.configure({ model: FAUX_MODEL_REF }, ctx);
     await conversation.submit({ type: "input", content: "pick" }, ctx);
@@ -272,7 +393,10 @@ test("deleting a Bot while its question waits withdraws the card", async () => {
     const [prompt] = questions.pending("bot-del");
     await host.destroy("bot-del");
     assert.deepEqual(questions.pending("bot-del"), []);
-    assert.equal(questions.answer("bot-del", prompt!.waitId, optionAnswer(prompt!.waitId, "Blue")), "not_waiting");
+    assert.equal(
+      questions.answer("bot-del", prompt!.waitId, optionAnswer(prompt!.waitId, "Blue")),
+      "not_waiting",
+    );
   } finally {
     await host.shutdown();
   }
@@ -289,12 +413,18 @@ test("the question tool stays declared on routine or Telegram turns, and a call 
   const assembly = createBotToolAssembly({
     admit: async () => admission,
     sources: {
-      facts: async () => ({ mcpTools: async () => new Map(), skillToolNames: async () => new Set() }) as unknown as BotToolFacts,
+      facts: async () =>
+        ({
+          mcpTools: async () => new Map(),
+          skillToolNames: async () => new Set(),
+        }) as unknown as BotToolFacts,
       candidates: async () => ({ tools: [candidate] }),
     },
   });
   const names = async (requestId?: string) =>
-    (await assembly.currentTools("bot-gate", requestId === undefined ? {} : { requestId })).map((entry) => entry.tool.name);
+    (await assembly.currentTools("bot-gate", requestId === undefined ? {} : { requestId })).map(
+      (entry) => entry.tool.name,
+    );
 
   assert.deepEqual(await names(), [QUESTION_TOOL_NAME]);
   assert.deepEqual(await names("desk-1"), [QUESTION_TOOL_NAME]);
@@ -303,9 +433,15 @@ test("the question tool stays declared on routine or Telegram turns, and a call 
   assert.deepEqual(await names("tg:1:2:0:3"), [QUESTION_TOOL_NAME]);
 
   const call = { callId: "c1", args: {}, signal: new AbortController().signal };
-  assert.deepEqual(await assembly.checkPolicy("bot-gate", QUESTION_TOOL_NAME, { ...call, requestIds: ["desk-1"] }), { allowed: true });
+  assert.deepEqual(
+    await assembly.checkPolicy("bot-gate", QUESTION_TOOL_NAME, { ...call, requestIds: ["desk-1"] }),
+    { allowed: true },
+  );
   for (const requestIds of [["routine:task-1:2026-10-07T09:00:00.000Z"], ["tg:1:2:0:3"]]) {
-    const decision = await assembly.checkPolicy("bot-gate", QUESTION_TOOL_NAME, { ...call, requestIds });
+    const decision = await assembly.checkPolicy("bot-gate", QUESTION_TOOL_NAME, {
+      ...call,
+      requestIds,
+    });
     assert.equal(decision.allowed, false, `refused for ${requestIds.join(", ")}`);
   }
 });

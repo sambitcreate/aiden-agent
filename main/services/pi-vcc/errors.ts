@@ -19,7 +19,7 @@ export type VccFailureCode = keyof typeof compileMessages;
 
 export function parseVccFailureCode(value: unknown): VccFailureCode {
   return typeof value === "string" && Object.prototype.hasOwnProperty.call(compileMessages, value)
-    ? value as VccFailureCode
+    ? (value as VccFailureCode)
     : "worker_failed";
 }
 

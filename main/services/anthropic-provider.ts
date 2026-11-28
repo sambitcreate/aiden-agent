@@ -22,9 +22,7 @@ const LEGACY_DEFAULT_MODELS = [
 ] as const;
 
 const builtinAnthropicModels = getBuiltinModels(ANTHROPIC_PROVIDER_ID);
-const modelsById = new Map(
-  builtinAnthropicModels.map((model) => [model.id, model]),
-);
+const modelsById = new Map(builtinAnthropicModels.map((model) => [model.id, model]));
 
 function thinkingMetadata(model: Model<Api>): Partial<ProviderModelMetadata> {
   return {
@@ -35,9 +33,7 @@ function thinkingMetadata(model: Model<Api>): Partial<ProviderModelMetadata> {
 }
 
 /** Add pinned Pi thinking capabilities without replacing discovered display metadata. */
-export function enrichAnthropicProviders(
-  providers: Provider[],
-): Provider[] {
+export function enrichAnthropicProviders(providers: Provider[]): Provider[] {
   return providers.map((provider) => {
     if (provider.id !== ANTHROPIC_PROVIDER_ID) return provider;
     const modelMetadata = { ...provider.modelMetadata };
@@ -59,9 +55,8 @@ export function parseAnthropicThinkingSelection(
   levelValue: unknown,
   resolveModel: (
     modelId: string,
-  ) => Pick<Model<Api>, "reasoning" | "thinkingLevelMap"> | undefined = (
-    modelId,
-  ) => modelsById.get(modelId),
+  ) => Pick<Model<Api>, "reasoning" | "thinkingLevelMap"> | undefined = (modelId) =>
+    modelsById.get(modelId),
 ): { modelId: string; level: AnthropicThinkingLevel } {
   if (typeof modelIdValue !== "string") {
     throw new Error("Invalid Anthropic model.");
@@ -74,9 +69,7 @@ export function parseAnthropicThinkingSelection(
     !isAnthropicThinkingLevel(levelValue) ||
     !anthropicThinkingLevelsForModel(model).includes(levelValue)
   ) {
-    throw new Error(
-      "This thinking level is not supported by the selected Anthropic model.",
-    );
+    throw new Error("This thinking level is not supported by the selected Anthropic model.");
   }
   return { modelId: modelIdValue, level: levelValue };
 }
@@ -87,18 +80,12 @@ interface AnthropicProviderConfig {
 }
 
 /** Refresh only Aiden's untouched legacy preset; preserve user-discovered model lists. */
-export function migrateLegacyAnthropicPreset(
-  config: AnthropicProviderConfig,
-): boolean {
-  const provider = config.providers.find(
-    (candidate) => candidate.id === ANTHROPIC_PROVIDER_ID,
-  );
+export function migrateLegacyAnthropicPreset(config: AnthropicProviderConfig): boolean {
+  const provider = config.providers.find((candidate) => candidate.id === ANTHROPIC_PROVIDER_ID);
   if (
     !provider?.isPreset ||
     provider.models.length !== LEGACY_DEFAULT_MODELS.length ||
-    !LEGACY_DEFAULT_MODELS.every(
-      (modelId, index) => provider.models[index] === modelId,
-    )
+    !LEGACY_DEFAULT_MODELS.every((modelId, index) => provider.models[index] === modelId)
   ) {
     return false;
   }

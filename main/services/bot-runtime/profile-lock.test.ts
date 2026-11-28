@@ -1,9 +1,21 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
-import { acquireBotProfileLock, BOT_PROFILE_GUARD_FILE, BOT_PROFILE_LOCK_FILE } from "./profile-lock.js";
+import {
+  acquireBotProfileLock,
+  BOT_PROFILE_GUARD_FILE,
+  BOT_PROFILE_LOCK_FILE,
+} from "./profile-lock.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 
 const roots: string[] = [];
@@ -87,7 +99,9 @@ test("three ready processes competing after SIGKILL never overlap", async () => 
   try {
     await Promise.all(contenders.map((child) => child.waitFor("READY")));
     writeFileSync(gate, "go");
-    const results = await Promise.all(contenders.map(async (child) => JSON.parse(await child.waitFor("LOCK")) as { ok: boolean }));
+    const results = await Promise.all(
+      contenders.map(async (child) => JSON.parse(await child.waitFor("LOCK")) as { ok: boolean }),
+    );
     assert.equal(results.filter((result) => result.ok).length, 1);
     const winner = contenders[results.findIndex((result) => result.ok)]!;
     assert.equal((await acquireBotProfileLock(dir)).ok, false);
@@ -95,7 +109,9 @@ test("three ready processes competing after SIGKILL never overlap", async () => 
     const recovered = await acquireBotProfileLock(dir);
     assert.equal(recovered.ok, true);
     if (recovered.ok) await recovered.release();
-  } finally { await Promise.all(contenders.map((child) => child.kill())); }
+  } finally {
+    await Promise.all(contenders.map((child) => child.kill()));
+  }
 });
 
 test("a stopped live owner survives missing diagnostic metadata", async (t) => {
@@ -107,8 +123,11 @@ test("a stopped live owner survives missing diagnostic metadata", async (t) => {
     owner.child.kill("SIGSTOP");
     rmSync(path.join(dir, BOT_PROFILE_LOCK_FILE));
     const contender = spawnHarnessChild("lock", [dir]);
-    try { assert.equal(JSON.parse(await contender.waitFor("LOCK")).ok, false); }
-    finally { await contender.kill(); }
+    try {
+      assert.equal(JSON.parse(await contender.waitFor("LOCK")).ok, false);
+    } finally {
+      await contender.kill();
+    }
   } finally {
     owner.child.kill("SIGCONT");
     await owner.kill();
@@ -161,8 +180,15 @@ test("new-protocol metadata with a recycled live pid is reclaimed, while legacy 
   assert.equal(initial.ok, true);
   if (initial.ok) await initial.release();
   writeFileSync(file, JSON.stringify({ pid: process.pid, startedAt: 1, token: "legacy" }));
-  assert.deepEqual(await acquireBotProfileLock(dir), { ok: false, reason: "held_by_live_process", pid: process.pid });
-  writeFileSync(file, JSON.stringify({ protocol: "flock-v1", pid: process.pid, startedAt: 1, token: "retired" }));
+  assert.deepEqual(await acquireBotProfileLock(dir), {
+    ok: false,
+    reason: "held_by_live_process",
+    pid: process.pid,
+  });
+  writeFileSync(
+    file,
+    JSON.stringify({ protocol: "flock-v1", pid: process.pid, startedAt: 1, token: "retired" }),
+  );
   const recovered = await acquireBotProfileLock(dir);
   assert.equal(recovered.ok, true);
   if (recovered.ok) await recovered.release();

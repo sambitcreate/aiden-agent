@@ -13,12 +13,7 @@ import {
   typeSlashCommand,
   WORKSPACE_NAME,
 } from "./design-mode-helpers";
-import {
-  expect,
-  finishLmStudioOnboarding,
-  test,
-  waitForToastsToClear,
-} from "./fixtures";
+import { expect, finishLmStudioOnboarding, test, waitForToastsToClear } from "./fixtures";
 
 test.use({
   workspaceSeed: true,
@@ -104,10 +99,7 @@ function gradientPng(): Buffer {
 }
 
 /** Answers the next Open dialog with this file, the way a person picking it would. */
-async function answerNextPick(
-  app: ElectronApplication,
-  file: string,
-): Promise<void> {
+async function answerNextPick(app: ElectronApplication, file: string): Promise<void> {
   await app.evaluate(({ dialog }, chosen) => {
     dialog.showOpenDialog = (async () => ({
       canceled: false,
@@ -132,8 +124,7 @@ const frame = (page: Page, title: string) =>
   designCanvas(page).getByRole("group", { name: title, exact: true });
 const pageInFrame = (page: Page, title: string) =>
   designCanvas(page).frameLocator(`iframe[title="${title}"]`);
-const zoomToolbar = (page: Page) =>
-  designCanvas(page).getByRole("toolbar", { name: "Zoom" });
+const zoomToolbar = (page: Page) => designCanvas(page).getByRole("toolbar", { name: "Zoom" });
 
 /**
  * Brings one frame up close the way a person would: fit the whole canvas,
@@ -141,9 +132,7 @@ const zoomToolbar = (page: Page) =>
  * wide to run live once everything fits, so this is how a page goes live.
  */
 async function zoomToFrame(page: Page, title: string): Promise<void> {
-  await zoomToolbar(page)
-    .getByRole("button", { name: "Fit to screen" })
-    .click();
+  await zoomToolbar(page).getByRole("button", { name: "Fit to screen" }).click();
   await frame(page, title).click();
   await page.keyboard.press("Shift+Digit2");
   await expect.poll(() => zoomPercent(page)).toBeGreaterThanOrEqual(25);
@@ -156,8 +145,7 @@ async function framePositions(page: Page): Promise<Record<string, string>> {
     .evaluateAll((nodes) =>
       Object.fromEntries(
         nodes.map((node) => [
-          node.querySelector('[role="group"]')?.getAttribute("aria-label") ??
-            "",
+          node.querySelector('[role="group"]')?.getAttribute("aria-label") ?? "",
           (node as HTMLElement).style.transform,
         ]),
       ),
@@ -195,16 +183,11 @@ async function savedCanvases(userDataDir: string): Promise<
     return [];
   }
   return Promise.all(
-    names.map(async (name) =>
-      JSON.parse(await readFile(path.join(root, name), "utf8")),
-    ),
+    names.map(async (name) => JSON.parse(await readFile(path.join(root, name), "utf8"))),
   );
 }
 
-async function openDesignChat(
-  app: ElectronApplication,
-  page: Page,
-): Promise<void> {
+async function openDesignChat(app: ElectronApplication, page: Page): Promise<void> {
   await finishLmStudioOnboarding(page);
   await waitForToastsToClear(page);
   await setDisplayWidth(app, 1440);
@@ -213,9 +196,7 @@ async function openDesignChat(
   await sendFirstMessage(page, "Design the Northwind landing page");
   await typeSlashCommand(page, "/design");
   await expect(
-    designCanvas(page).getByText(
-      "Ask Aiden to design something, or add a note.",
-    ),
+    designCanvas(page).getByText("Ask Aiden to design something, or add a note."),
   ).toBeVisible();
 }
 
@@ -229,10 +210,7 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
   const hero = path.join(designDir, "hero.html");
   const pricing = path.join(designDir, "pricing.html");
   await writeFile(hero, page_("Hero", "Ship faster", "#3b6cf6"));
-  await writeFile(
-    pricing,
-    page_("Pricing", "Simple pricing for every team", "#1f9d6b"),
-  );
+  await writeFile(pricing, page_("Pricing", "Simple pricing for every team", "#1f9d6b"));
   await writeFile(path.join(designDir, "swatch.png"), gradientPng());
 
   await openDesignChat(app, page);
@@ -254,9 +232,7 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
   await answerNextPick(app, hero);
   await addFromMenu(page, "File…");
   await expect(frame(page, "hero.html")).toBeVisible();
-  await expect(pageInFrame(page, "hero.html").locator("h1")).toHaveText(
-    "Ship faster",
-  );
+  await expect(pageInFrame(page, "hero.html").locator("h1")).toHaveText("Ship faster");
   await answerNextPick(app, pricing);
   await addFromMenu(page, "File…");
   await expect(pageInFrame(page, "pricing.html").locator("h1")).toHaveText(
@@ -264,23 +240,20 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
   );
   await answerNextPick(app, path.join(designDir, "swatch.png"));
   await addFromMenu(page, "Image…");
-  await expect(
-    frame(page, "swatch.png").getByRole("img", { name: "swatch.png" }),
-  ).toHaveJSProperty("complete", true);
+  await expect(frame(page, "swatch.png").getByRole("img", { name: "swatch.png" })).toHaveJSProperty(
+    "complete",
+    true,
+  );
 
   // Frames added in a row sit side by side, so the whole canvas fits at a zoom
   // too small to run pages live.
-  await zoomToolbar(page)
-    .getByRole("button", { name: "Fit to screen" })
-    .click();
+  await zoomToolbar(page).getByRole("button", { name: "Fit to screen" }).click();
   await capture(page, "1440-canvas-overview");
 
   // Fitting the selected page brings it up close, live, with its resize handles.
   await zoomToFrame(page, "hero.html");
   await expect(pageInFrame(page, "hero.html").locator("h1")).toBeVisible();
-  await expect(
-    designCanvas(page).locator(".react-flow__node.selected"),
-  ).toHaveCount(1);
+  await expect(designCanvas(page).locator(".react-flow__node.selected")).toHaveCount(1);
   await capture(page, "1440-canvas-frames-selected");
 
   await designCanvas(page).getByRole("button", { name: "Add" }).click();
@@ -317,38 +290,35 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
   page = aiden.page;
   await expect(frame(page, "hero.html")).toBeVisible();
   await expect.poll(() => framePositions(page)).toEqual(before);
-  await expect(
-    frame(page, "Note").getByRole("textbox", { name: "Note text" }),
-  ).toHaveText(NOTE_TEXT);
-  await expect(pageInFrame(page, "hero.html").locator("h1")).toHaveText(
-    "Ship faster",
+  await expect(frame(page, "Note").getByRole("textbox", { name: "Note text" })).toHaveText(
+    NOTE_TEXT,
   );
+  await expect(pageInFrame(page, "hero.html").locator("h1")).toHaveText("Ship faster");
 
   // An edit on disk reaches the live page within two seconds.
   await writeFile(hero, page_("Hero", "Ship calmer", "#3b6cf6"));
-  await expect(pageInFrame(page, "hero.html").locator("h1")).toHaveText(
-    "Ship calmer",
-    { timeout: 2_000 },
-  );
+  await expect(pageInFrame(page, "hero.html").locator("h1")).toHaveText("Ship calmer", {
+    timeout: 2_000,
+  });
 
   // Double-clicking a page enters it; Escape leaves.
   await frame(page, "hero.html").dblclick();
-  await expect(
-    designCanvas(page).locator('iframe[title="hero.html"]'),
-  ).toHaveAttribute("tabindex", "0");
+  await expect(designCanvas(page).locator('iframe[title="hero.html"]')).toHaveAttribute(
+    "tabindex",
+    "0",
+  );
   await capture(page, "1440-canvas-frame-entered");
   await clickEmptyCanvas(page);
-  await expect(
-    designCanvas(page).locator('iframe[title="hero.html"]'),
-  ).toHaveAttribute("tabindex", "-1");
+  await expect(designCanvas(page).locator('iframe[title="hero.html"]')).toHaveAttribute(
+    "tabindex",
+    "-1",
+  );
 
   // A page removed from disk says so and offers to remove its frame.
   await zoomToFrame(page, "pricing.html");
   await expect(pageInFrame(page, "pricing.html").locator("h1")).toBeVisible();
   await rm(pricing);
-  await expect(
-    frame(page, "pricing.html").getByText("File not found"),
-  ).toBeVisible({
+  await expect(frame(page, "pricing.html").getByText("File not found")).toBeVisible({
     timeout: 10_000,
   });
   await expect(
@@ -359,15 +329,14 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
   // The same canvas at 1000 px, with the sidebar collapsed to give it room.
   await setWindowWidth(app, page, 1000);
   await page.getByRole("button", { name: "Hide sidebar" }).click();
-  await zoomToolbar(page)
-    .getByRole("button", { name: "Fit to screen" })
-    .click();
+  await zoomToolbar(page).getByRole("button", { name: "Fit to screen" }).click();
   await capture(page, "1000-canvas-frames");
   await zoomToFrame(page, "hero.html");
   await frame(page, "hero.html").dblclick();
-  await expect(
-    designCanvas(page).locator('iframe[title="hero.html"]'),
-  ).toHaveAttribute("tabindex", "0");
+  await expect(designCanvas(page).locator('iframe[title="hero.html"]')).toHaveAttribute(
+    "tabindex",
+    "0",
+  );
   await capture(page, "1000-canvas-frame-entered");
   await clickEmptyCanvas(page);
   await page.getByRole("button", { name: "Show sidebar" }).click();
@@ -406,7 +375,9 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
   await page.getByRole("menuitem", { name: "New page" }).click();
   await expect(picker).toHaveAccessibleName("Page: Page 2");
   await expect(frame(page, "hero.html")).toHaveCount(0);
-  await expect(designCanvas(page).getByText("Ask Aiden to design something, or add a note.")).toBeVisible();
+  await expect(
+    designCanvas(page).getByText("Ask Aiden to design something, or add a note."),
+  ).toBeVisible();
   await addNote(page);
   await page.keyboard.type("Second page");
   await capture(page, "1440-canvas-second-page");
@@ -425,7 +396,9 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
         pages: doc.pages.map((entry) => entry.name),
         onScreen: doc.pages.find((entry) => entry.id === doc.activePageId)?.name,
         renamed: doc.frames.some((saved) => saved.title === "Ideas"),
-        secondPage: doc.frames.filter((saved) => saved.pageId === doc.pages[1]?.id).map((saved) => saved.text),
+        secondPage: doc.frames
+          .filter((saved) => saved.pageId === doc.pages[1]?.id)
+          .map((saved) => saved.text),
       };
     })
     .toEqual({
@@ -443,8 +416,24 @@ function modelSaw(requests: Array<{ body: unknown }>, text: string): boolean {
 }
 
 /** The saved comments of the first canvas. */
-async function savedComments(userDataDir: string): Promise<Array<{ note: string; state: string; anchorState: string; queued?: boolean; anchor?: { tag: string; text: string } }>> {
-  const [doc] = (await savedCanvases(userDataDir)) as unknown as Array<{ comments: Array<{ note: string; state: string; anchorState: string; queued?: boolean; anchor?: { tag: string; text: string } }> }>;
+async function savedComments(userDataDir: string): Promise<
+  Array<{
+    note: string;
+    state: string;
+    anchorState: string;
+    queued?: boolean;
+    anchor?: { tag: string; text: string };
+  }>
+> {
+  const [doc] = (await savedCanvases(userDataDir)) as unknown as Array<{
+    comments: Array<{
+      note: string;
+      state: string;
+      anchorState: string;
+      queued?: boolean;
+      anchor?: { tag: string; text: string };
+    }>;
+  }>;
   return doc?.comments ?? [];
 }
 
@@ -465,7 +454,9 @@ test("a comment on a page's element goes to Aiden with the next send and resolve
 
   // C turns on the comment tool; a click on the headline picks it inside the live page.
   await designCanvas(page).getByRole("button", { name: "Comment", exact: true }).click();
-  await expect(designCanvas(page).getByRole("button", { name: "Comment", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    designCanvas(page).getByRole("button", { name: "Comment", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
   const iframe = (await designCanvas(page).locator('iframe[title="hero.html"]').boundingBox())!;
   const scale = iframe.width / 1280;
   // The headline sits about 160 px down a 1280 px wide page, 100 px in.
@@ -479,7 +470,9 @@ test("a comment on a page's element goes to Aiden with the next send and resolve
   await box.getByRole("textbox", { name: "Comment" }).press("Enter");
   await expect(box).toHaveCount(0);
 
-  const pin = designCanvas(page).getByRole("button", { name: /^Comment 1 on hero\.html › h1 "Ship faster"$/u });
+  const pin = designCanvas(page).getByRole("button", {
+    name: /^Comment 1 on hero\.html › h1 "Ship faster"$/u,
+  });
   await expect(pin).toBeVisible();
   const tray = page.getByRole("region", { name: "Design comments for Aiden" });
   await expect(tray).toContainText("1 comment for Aiden");
@@ -490,21 +483,32 @@ test("a comment on a page's element goes to Aiden with the next send and resolve
   await expect
     .poll(() => savedComments(userDataDir))
     .toEqual([
-      expect.objectContaining({ note: "Make the headline bigger and warmer", state: "open", queued: true, anchor: expect.objectContaining({ tag: "h1", text: "Ship faster" }) }),
+      expect.objectContaining({
+        note: "Make the headline bigger and warmer",
+        state: "open",
+        queued: true,
+        anchor: expect.objectContaining({ tag: "h1", text: "Ship faster" }),
+      }),
     ]);
 
   // Send gives Aiden the comments block; the comment turns sent and leaves the tray.
   await tray.getByRole("button", { name: "Send", exact: true }).click();
   await expect.poll(() => modelSaw(lmStudio.requests, "attached-design-comments")).toBe(true);
   expect(modelSaw(lmStudio.requests, "Make the headline bigger and warmer")).toBe(true);
-  expect(modelSaw(lmStudio.requests, "Change only these elements unless told otherwise")).toBe(true);
+  expect(modelSaw(lmStudio.requests, "Change only these elements unless told otherwise")).toBe(
+    true,
+  );
   await expect(tray).toHaveCount(0);
-  await expect(designCanvas(page).getByRole("button", { name: /^Comment 1 on .*, sent to Aiden$/u })).toBeVisible();
+  await expect(
+    designCanvas(page).getByRole("button", { name: /^Comment 1 on .*, sent to Aiden$/u }),
+  ).toBeVisible();
   await expect.poll(async () => (await savedComments(userDataDir))[0]?.state).toBe("sent");
 
   // Aiden's edit reloads the page; the headline is still there, so the comment resolves.
   await writeFile(hero, page_("Hero", "Ship faster", "#c2410c"));
-  await expect.poll(async () => (await savedComments(userDataDir))[0]?.state, { timeout: 10_000 }).toBe("resolved");
+  await expect
+    .poll(async () => (await savedComments(userDataDir))[0]?.state, { timeout: 10_000 })
+    .toBe("resolved");
   await expect(designCanvas(page).getByRole("button", { name: /^Comment 1 on / })).toHaveCount(0);
 
   // All comments lists it under Resolved, and it can be opened and reopened.
@@ -584,12 +588,17 @@ type SavedFrame = {
   locked?: boolean;
   dark?: boolean;
   tweaks?: Record<string, string>;
-  tweakVersions?: Array<{ id: string; name: string; tweaks?: Record<string, string>; dark?: boolean }>;
+  tweakVersions?: Array<{
+    id: string;
+    name: string;
+    tweaks?: Record<string, string>;
+    dark?: boolean;
+  }>;
 };
 
 async function savedFrames(userDataDir: string): Promise<SavedFrame[]> {
   const [doc] = await savedCanvases(userDataDir);
-  return ((doc?.frames ?? []) as unknown as SavedFrame[]);
+  return (doc?.frames ?? []) as unknown as SavedFrame[];
 }
 
 /** Drags across the canvas pane from one point to another, in pixels from the pane's top left. */
@@ -630,21 +639,27 @@ test("the drawing tools make text, an artboard, shapes, an arrow that follows it
 
   // Frame: drag out an artboard. The tool steps aside for Select once it has drawn.
   await tools.getByRole("button", { name: "Frame", exact: true }).click();
-  await expect(tools.getByRole("button", { name: "Frame", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(tools.getByRole("button", { name: "Frame", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await dragOnCanvas(page, { x: 60, y: 120 }, { x: 640, y: 560 });
-  await expect(tools.getByRole("button", { name: "Select", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect.poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.kind)).toEqual(["frame"]);
+  await expect(tools.getByRole("button", { name: "Select", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect
+    .poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.kind))
+    .toEqual(["frame"]);
 
   // R and O draw shapes inside it, so they belong to it.
   await page.keyboard.press("r");
   await dragOnCanvas(page, { x: 100, y: 200 }, { x: 260, y: 300 });
   await page.keyboard.press("o");
   await dragOnCanvas(page, { x: 420, y: 200 }, { x: 540, y: 320 });
-  await expect.poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.shape ?? entry.kind)).toEqual([
-    "frame",
-    "rect",
-    "oval",
-  ]);
+  await expect
+    .poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.shape ?? entry.kind))
+    .toEqual(["frame", "rect", "oval"]);
   const [board, rect, oval] = await savedFrames(userDataDir);
   expect([rect!.groupId, oval!.groupId]).toEqual([board!.id, board!.id]);
 
@@ -652,7 +667,11 @@ test("the drawing tools make text, an artboard, shapes, an arrow that follows it
   await page.keyboard.press("Shift+L");
   await dragOnCanvas(page, { x: 180, y: 250 }, { x: 480, y: 260 });
   await expect
-    .poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "connector")?.ends?.map((end) => end.frameId))
+    .poll(async () =>
+      (await savedFrames(userDataDir))
+        .find((entry) => entry.kind === "connector")
+        ?.ends?.map((end) => end.frameId),
+    )
     .toEqual([rect!.id, oval!.id]);
 
   // Text: click to place, type, Escape to finish.
@@ -663,7 +682,9 @@ test("the drawing tools make text, an artboard, shapes, an arrow that follows it
   await textField.pressSequentially("Sign-in flow");
   await capture(page, "1440-draw-text-editing");
   await textField.press("Escape");
-  await expect.poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "text")?.text).toBe("Sign-in flow");
+  await expect
+    .poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "text")?.text)
+    .toBe("Sign-in flow");
 
   // A double-click on a shape edits its label.
   await canvas.getByRole("group", { name: "Rectangle", exact: true }).dblclick();
@@ -682,9 +703,15 @@ test("the drawing tools make text, an artboard, shapes, an arrow that follows it
     { x: 230, y: 615 },
     { x: 290, y: 670 },
   ]);
-  await expect(tools.getByRole("button", { name: "Draw: Pencil" })).toHaveAttribute("aria-pressed", "true");
+  await expect(tools.getByRole("button", { name: "Draw: Pencil" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await page.keyboard.press("Shift+P");
-  await expect(tools.getByRole("button", { name: "Draw: Pen" })).toHaveAttribute("aria-pressed", "true");
+  await expect(tools.getByRole("button", { name: "Draw: Pen" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   // Each press shows its point. The path stays within 640 px of the top, so a
   // window the screen keeps shorter than 900 px (a Mac runner) still holds it.
   const penPoints = page.locator(".design-draft-point");
@@ -715,11 +742,16 @@ test("the drawing tools make text, an artboard, shapes, an arrow that follows it
   await clickEmptyCanvas(page);
 
   // Moving the oval brings the arrow along.
-  const arrowBefore = (await savedFrames(userDataDir)).find((entry) => entry.kind === "connector")!.ends!;
+  const arrowBefore = (await savedFrames(userDataDir)).find(
+    (entry) => entry.kind === "connector",
+  )!.ends!;
   await page.keyboard.press("v");
   await dragOnCanvas(page, { x: 480, y: 290 }, { x: 480, y: 450 });
   await expect
-    .poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "connector")!.ends![1]!.y)
+    .poll(
+      async () =>
+        (await savedFrames(userDataDir)).find((entry) => entry.kind === "connector")!.ends![1]!.y,
+    )
     .toBeGreaterThan(arrowBefore[1]!.y + 100);
 
   // The Shapes menu lists its tools with their keys.
@@ -733,16 +765,25 @@ test("the drawing tools make text, an artboard, shapes, an arrow that follows it
   await canvas.getByRole("group", { name: "Rectangle: Sign in" }).click();
   await page.keyboard.press("Backspace");
   await expect
-    .poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "connector")!.ends![0]!.frameId)
+    .poll(
+      async () =>
+        (await savedFrames(userDataDir)).find((entry) => entry.kind === "connector")!.ends![0]!
+          .frameId,
+    )
     .toBeUndefined();
   await page.keyboard.press(process.platform === "darwin" ? "Meta+z" : "Control+z");
   await expect
-    .poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "connector")!.ends![0]!.frameId)
+    .poll(
+      async () =>
+        (await savedFrames(userDataDir)).find((entry) => entry.kind === "connector")!.ends![0]!
+          .frameId,
+    )
     .toBe(rect!.id);
 });
 
-
-test("notes and text take formatting from the bar above them: marks, a link, a list, size and colours", async ({ aiden }) => {
+test("notes and text take formatting from the bar above them: marks, a link, a list, size and colours", async ({
+  aiden,
+}) => {
   const { app, page, userDataDir } = aiden;
   const mac = process.platform === "darwin";
   const mod = mac ? "Meta" : "Control";
@@ -766,7 +807,8 @@ test("notes and text take formatting from the bar above them: marks, a link, a l
   await expect(bar).toBeVisible();
 
   // Link on the selected word opens the link field; a bare address gets https://.
-  for (let index = 0; index < "brief".length; index += 1) await page.keyboard.press("Shift+ArrowLeft");
+  for (let index = 0; index < "brief".length; index += 1)
+    await page.keyboard.press("Shift+ArrowLeft");
   await bar.getByRole("button", { name: "Link" }).click();
   const linkField = page.getByRole("textbox", { name: "Link address" });
   await expect(linkField).toBeFocused();
@@ -843,13 +885,18 @@ test("notes and text take formatting from the bar above them: marks, a link, a l
   const reloaded = frame(aiden.page, "Note").getByRole("textbox", { name: "Note text" });
   await expect(reloaded.locator("b")).toHaveText("Launch plan");
   await expect(reloaded.locator('a[href="https://example.com/brief"]')).toHaveText("brief");
-  await expect(designCanvas(aiden.page).getByRole("group", { name: "Text: Checkout" }).locator("i")).toHaveText("Checkout");
+  await expect(
+    designCanvas(aiden.page).getByRole("group", { name: "Text: Checkout" }).locator("i"),
+  ).toHaveText("Checkout");
 });
 
 /** Answers the next Save dialog with this path, the way a person choosing it would. */
 async function answerNextSave(app: ElectronApplication, file: string): Promise<void> {
   await app.evaluate(({ dialog }, chosen) => {
-    dialog.showSaveDialog = (async () => ({ canceled: false, filePath: chosen })) as unknown as typeof dialog.showSaveDialog;
+    dialog.showSaveDialog = (async () => ({
+      canceled: false,
+      filePath: chosen,
+    })) as unknown as typeof dialog.showSaveDialog;
   }, file);
 }
 
@@ -859,26 +906,43 @@ async function answerNextSave(app: ElectronApplication, file: string): Promise<v
  */
 async function expectPresentedAlone(page: Page, title: string): Promise<void> {
   const frame = page.locator(`iframe[title="${title}"]`);
-  await expect.poll(async () => {
-    const first = await frame.boundingBox();
-    await page.waitForTimeout(100);
-    const second = await frame.boundingBox();
-    if (!first || !second || first.x !== second.x || first.width !== second.width) return "moving";
-    const [width, height] = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
-    const fits = second.x >= -1 && second.y >= -1 && second.x + second.width <= width + 1 && second.y + second.height <= height + 1;
-    const fills = second.width >= width * 0.85 || second.height >= height * 0.85;
-    return fits && fills ? "fitted" : `at ${JSON.stringify(second)}`;
-  }, { timeout: 10_000 }).toBe("fitted");
+  await expect
+    .poll(
+      async () => {
+        const first = await frame.boundingBox();
+        await page.waitForTimeout(100);
+        const second = await frame.boundingBox();
+        if (!first || !second || first.x !== second.x || first.width !== second.width)
+          return "moving";
+        const [width, height] = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+        const fits =
+          second.x >= -1 &&
+          second.y >= -1 &&
+          second.x + second.width <= width + 1 &&
+          second.y + second.height <= height + 1;
+        const fills = second.width >= width * 0.85 || second.height >= height * 0.85;
+        return fits && fills ? "fitted" : `at ${JSON.stringify(second)}`;
+      },
+      { timeout: 10_000 },
+    )
+    .toBe("fitted");
   const covered = await page.evaluate(() => {
     const wrapper = document.querySelector("[data-presenting]");
     // Where the sidebar, the middle of the page and the Live control would be.
-    const points = [[60, 400], [window.innerWidth / 2, window.innerHeight / 2], [window.innerWidth * 0.45, window.innerHeight - 32]];
-    return points.filter(([x, y]) => !wrapper?.contains(document.elementFromPoint(x!, y!) ?? null)).length;
+    const points = [
+      [60, 400],
+      [window.innerWidth / 2, window.innerHeight / 2],
+      [window.innerWidth * 0.45, window.innerHeight - 32],
+    ];
+    return points.filter(([x, y]) => !wrapper?.contains(document.elementFromPoint(x!, y!) ?? null))
+      .length;
   });
   expect(covered).toBe(0);
 }
 
-test("a page downloads as a PNG, a PDF and its own file, and Present walks the page and comes back", async ({ aiden }) => {
+test("a page downloads as a PNG, a PDF and its own file, and Present walks the page and comes back", async ({
+  aiden,
+}) => {
   const { app, page, workspaceDir, userDataDir } = aiden;
   const designDir = path.join(workspaceDir, "design");
   const outDir = path.join(userDataDir, "downloads-test");
@@ -886,7 +950,10 @@ test("a page downloads as a PNG, a PDF and its own file, and Present walks the p
   await mkdir(outDir, { recursive: true });
   const hero = path.join(designDir, "hero.html");
   await writeFile(hero, page_("Hero", "Ship faster", "#3b6cf6"));
-  await writeFile(path.join(designDir, "pricing.html"), page_("Pricing", "Simple pricing", "#1f9d6b"));
+  await writeFile(
+    path.join(designDir, "pricing.html"),
+    page_("Pricing", "Simple pricing", "#1f9d6b"),
+  );
 
   await openDesignChat(app, page);
   const canvas = designCanvas(page);
@@ -905,7 +972,11 @@ test("a page downloads as a PNG, a PDF and its own file, and Present walks the p
   await heroFrame.getByRole("button", { name: "Download hero.html" }).click();
   await capture(page, "1440-frame-download-menu");
   await page.getByRole("menuitem", { name: "PNG image" }).click();
-  await expect.poll(async () => (await readFile(pngPath).catch(() => Buffer.alloc(0))).length, { timeout: 30_000 }).toBeGreaterThan(1000);
+  await expect
+    .poll(async () => (await readFile(pngPath).catch(() => Buffer.alloc(0))).length, {
+      timeout: 30_000,
+    })
+    .toBeGreaterThan(1000);
   const png = await readFile(pngPath);
   expect(png.subarray(1, 4).toString("latin1")).toBe("PNG");
   // A 1 280 px design width drawn at twice its pixels.
@@ -914,21 +985,32 @@ test("a page downloads as a PNG, a PDF and its own file, and Present walks the p
   await heroFrame.getByRole("button", { name: "Download hero.html" }).click();
   await page.getByRole("menuitemradio", { name: "A4" }).click();
   await expect
-    .poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.title === "hero.html")?.paper)
+    .poll(
+      async () =>
+        (await savedFrames(userDataDir)).find((entry) => entry.title === "hero.html")?.paper,
+    )
     .toBe("a4");
   const pdfPath = path.join(outDir, "hero.pdf");
   await answerNextSave(app, pdfPath);
   await heroFrame.getByRole("button", { name: "Download hero.html" }).click();
   await page.getByRole("menuitem", { name: "PDF" }).click();
-  await expect.poll(async () => (await readFile(pdfPath).catch(() => Buffer.alloc(0))).subarray(0, 5).toString("latin1")).toBe("%PDF-");
+  await expect
+    .poll(async () =>
+      (await readFile(pdfPath).catch(() => Buffer.alloc(0))).subarray(0, 5).toString("latin1"),
+    )
+    .toBe("%PDF-");
   // A4 is 595 × 842 points.
-  expect((await readFile(pdfPath)).toString("latin1")).toMatch(/MediaBox\s*\[\s*0 0 595(?:\.\d+)? 842/u);
+  expect((await readFile(pdfPath)).toString("latin1")).toMatch(
+    /MediaBox\s*\[\s*0 0 595(?:\.\d+)? 842/u,
+  );
 
   const sourcePath = path.join(outDir, "hero-copy.html");
   await answerNextSave(app, sourcePath);
   await heroFrame.getByRole("button", { name: "Download hero.html" }).click();
   await page.getByRole("menuitem", { name: "Original file" }).click();
-  await expect.poll(async () => readFile(sourcePath, "utf8").catch(() => "")).toBe(await readFile(hero, "utf8"));
+  await expect
+    .poll(async () => readFile(sourcePath, "utf8").catch(() => ""))
+    .toBe(await readFile(hero, "utf8"));
 
   // Present fills the window and walks the page in reading order, then gives the canvas back.
   const before = (await savedCanvases(userDataDir))[0]!.pages[0]!.viewport;
@@ -941,10 +1023,12 @@ test("a page downloads as a PNG, a PDF and its own file, and Present walks the p
       const rect = element.getBoundingClientRect();
       return [rect.width, rect.height, window.innerWidth, window.innerHeight];
     });
-  await expect.poll(async () => {
-    const [w, h, iw, ih] = await wrapperBox();
-    return w === iw && h === ih;
-  }).toBe(true);
+  await expect
+    .poll(async () => {
+      const [w, h, iw, ih] = await wrapperBox();
+      return w === iw && h === ih;
+    })
+    .toBe(true);
   await expect(pageInFrame(page, "hero.html").locator("h1")).toBeVisible();
   await expectPresentedAlone(page, "hero.html");
   // Only the presented frame is drawn, not its neighbours on the page.
@@ -1009,19 +1093,19 @@ test("the side panel edits the selected item, lists the page's layers to hide, l
   await dragOnCanvas(page, { x: 60, y: top }, { x: 420, y: top + 160 });
   await page.keyboard.press("r");
   await dragOnCanvas(page, { x: 100, y: top + 30 }, { x: 240, y: top + 110 });
-  await expect.poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.shape ?? entry.kind)).toEqual([
-    "file",
-    "note",
-    "frame",
-    "rect",
-  ]);
+  await expect
+    .poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.shape ?? entry.kind))
+    .toEqual(["file", "note", "frame", "rect"]);
 
   // I opens the panel; Properties follows the selection.
   await canvas.focus();
   await page.keyboard.press("i");
   const panel = page.getByRole("complementary", { name: "Side panel" });
   await expect(panel).toBeVisible();
-  await expect(canvas.getByRole("button", { name: "Hide side panel" })).toHaveAttribute("aria-pressed", "true");
+  await expect(canvas.getByRole("button", { name: "Hide side panel" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   const rectangle = canvas.getByRole("group", { name: "Rectangle" });
   await rectangle.click();
   await expect(panel).toContainText("Rectangle");
@@ -1040,7 +1124,9 @@ test("the side panel edits the selected item, lists the page's layers to hide, l
   await capture(page, "1440-side-panel-properties");
 
   // An artboard takes a background and a layout guide drawn over it.
-  await canvas.getByRole("group", { name: "Frame", exact: true }).click({ position: { x: 320, y: 140 } });
+  await canvas
+    .getByRole("group", { name: "Frame", exact: true })
+    .click({ position: { x: 320, y: 140 } });
   await expect(panel).toContainText("Artboard");
   await panel.getByRole("combobox", { name: "Layout guide" }).click();
   await page.getByRole("option", { name: "12 columns" }).click();
@@ -1066,9 +1152,14 @@ test("the side panel edits the selected item, lists the page's layers to hide, l
   await layers.getByRole("button", { name: "Launch plan", exact: true }).focus();
   await page.keyboard.press("Alt+ArrowDown");
   await expect.poll(rows).toEqual(["hero.html", "Launch plan", "Frame", "Rectangle"]);
-  await expect.poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.kind).slice(0, 2)).toEqual(["note", "file"]);
+  await expect
+    .poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.kind).slice(0, 2))
+    .toEqual(["note", "file"]);
   const heroRow = layers.locator("[data-layer-id]").filter({ hasText: "hero.html" });
-  await layers.locator("[data-layer-id]").filter({ hasText: "Launch plan" }).dragTo(heroRow, { targetPosition: { x: 60, y: 4 } });
+  await layers
+    .locator("[data-layer-id]")
+    .filter({ hasText: "Launch plan" })
+    .dragTo(heroRow, { targetPosition: { x: 60, y: 4 } });
   await expect.poll(rows).toEqual(["Launch plan", "hero.html", "Frame", "Rectangle"]);
   // The grip: Space picks the note up, ↓ moves it in a draft, Escape puts it back, and Enter drops a move.
   const noteGrip = layers.getByRole("button", { name: "Move Launch plan" });
@@ -1083,7 +1174,9 @@ test("the side panel edits the selected item, lists the page's layers to hide, l
   await page.keyboard.press("Space");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
-  await expect.poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.kind).slice(0, 2)).toEqual(["note", "file"]);
+  await expect
+    .poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.kind).slice(0, 2))
+    .toEqual(["note", "file"]);
   await expect(noteGrip).toBeFocused();
   await page.keyboard.press("Space");
   await page.keyboard.press("Home");
@@ -1093,14 +1186,22 @@ test("the side panel edits the selected item, lists the page's layers to hide, l
   // Hide takes a page off the canvas until Show; it stays in the list.
   await layers.getByRole("button", { name: "Hide hero.html" }).click();
   await expect(frame(page, "hero.html")).toHaveCount(0);
-  await expect.poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "file")?.hidden).toBe(true);
+  await expect
+    .poll(
+      async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "file")?.hidden,
+    )
+    .toBe(true);
   await layers.getByRole("button", { name: "Show hero.html" }).click();
   await expect(frame(page, "hero.html")).toBeVisible();
 
   // A locked rectangle can still be selected, but stays where it is and survives Delete.
   await layers.getByRole("button", { name: "Lock Rectangle" }).click();
   await layers.getByRole("button", { name: "Rectangle", exact: true }).click();
-  await expect.poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.shape === "rect")?.locked).toBe(true);
+  await expect
+    .poll(
+      async () => (await savedFrames(userDataDir)).find((entry) => entry.shape === "rect")?.locked,
+    )
+    .toBe(true);
   const before = (await savedFrames(userDataDir)).find((entry) => entry.shape === "rect")!;
   const box = (await rectangle.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -1118,16 +1219,24 @@ test("the side panel edits the selected item, lists the page's layers to hide, l
   await layers.getByRole("button", { name: "Frame", exact: true }).dblclick();
   await panel.getByRole("textbox", { name: "Name" }).fill("Mobile home");
   await page.keyboard.press("Enter");
-  await expect.poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "frame")?.title).toBe("Mobile home");
+  await expect
+    .poll(
+      async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "frame")?.title,
+    )
+    .toBe("Mobile home");
 
   // Code: the selected page's file, read only, and Copy puts it on the clipboard.
   await layers.getByRole("button", { name: "hero.html", exact: true }).click();
   await panel.getByRole("radio", { name: "Code" }).click();
-  const code = panel.getByRole("region", { name: "Code" }).or(panel.locator('pre[aria-label="Code"]'));
+  const code = panel
+    .getByRole("region", { name: "Code" })
+    .or(panel.locator('pre[aria-label="Code"]'));
   await expect(code).toContainText("Ship faster");
   await capture(page, "1440-side-panel-code");
   await panel.getByRole("button", { name: "Copy code" }).click();
-  await expect.poll(async () => app.evaluate(({ clipboard }) => clipboard.readText())).toBe(await readFile(hero, "utf8"));
+  await expect
+    .poll(async () => app.evaluate(({ clipboard }) => clipboard.readText()))
+    .toBe(await readFile(hero, "utf8"));
 
   // I again closes it, and it comes back on the tab it was on.
   await canvas.focus();
@@ -1193,7 +1302,9 @@ test("the Tweaks tab shows a page dark and changes the page's own controls, kept
   await expect(live.getByRole("heading", { name: "Ship faster" })).toBeVisible();
   const root = live.locator("html");
   const styleOf = (selector: string, property: string) =>
-    live.locator(selector).evaluate((element, name) => getComputedStyle(element).getPropertyValue(name), property);
+    live
+      .locator(selector)
+      .evaluate((element, name) => getComputedStyle(element).getPropertyValue(name), property);
 
   await frame(page, "tweaks.html").click({ position: { x: 200, y: 12 } });
   await canvas.focus();
@@ -1225,7 +1336,12 @@ test("the Tweaks tab shows a page dark and changes the page's own controls, kept
   await expect.poll(() => styleOf("a.cta", "border-top-left-radius")).toBe("12px");
   await expect
     .poll(async () => (await savedFrames(userDataDir))[0]?.tweaks)
-    .toEqual({ "data-density": "compact", "data-promo": "false", "--accent": "#e5484d", "--radius": "12px" });
+    .toEqual({
+      "data-density": "compact",
+      "data-promo": "false",
+      "--accent": "#e5484d",
+      "--radius": "12px",
+    });
   await capture(page, "1440-tweaks");
   expect(await readFile(file, "utf8")).toBe(original);
 
@@ -1309,7 +1425,12 @@ test("the Tweaks panel folds a component's controls, saves versions, makes them 
   const live = pageInFrame(page, "picker.html");
   await expect(live.getByRole("heading", { name: "Pick a time" })).toBeVisible();
   const styleOf = (selector: string, property: string) =>
-    live.locator(selector).evaluate((element, name) => getComputedStyle(element).getPropertyValue(name).trim(), property);
+    live
+      .locator(selector)
+      .evaluate(
+        (element, name) => getComputedStyle(element).getPropertyValue(name).trim(),
+        property,
+      );
 
   await frame(page, "picker.html").click({ position: { x: 200, y: 12 } });
   await canvas.focus();
@@ -1344,7 +1465,9 @@ test("the Tweaks panel folds a component's controls, saves versions, makes them 
   // Save this look as V2; V1 is the file as it is.
   await panel.getByRole("button", { name: "Save version" }).click();
   await expect
-    .poll(async () => (await savedFrames(userDataDir))[0]?.tweakVersions?.map((version) => version.name))
+    .poll(async () =>
+      (await savedFrames(userDataDir))[0]?.tweakVersions?.map((version) => version.name),
+    )
     .toEqual(["V2"]);
   await expect(panel.getByRole("button", { name: "Save version" })).toBeDisabled();
   await capture(page, "1440-tweaks-panel");
@@ -1393,7 +1516,11 @@ test("the Tweaks panel folds a component's controls, saves versions, makes them 
   await canvas.focus();
   await page.keyboard.press("i");
   await panel.getByRole("button", { name: "Show all" }).click();
-  await expect.poll(async () => (await savedFrames(userDataDir)).filter((saved) => saved.kind === "group").length).toBe(1);
+  await expect
+    .poll(
+      async () => (await savedFrames(userDataDir)).filter((saved) => saved.kind === "group").length,
+    )
+    .toBe(1);
   const frames = await savedFrames(userDataDir);
   const group = frames.find((saved) => saved.kind === "group")!;
   expect(frames.filter((saved) => saved.groupId === group.id).map((saved) => saved.title)).toEqual([
@@ -1454,7 +1581,9 @@ test("words edited inside a page are written into its file and ⌘Z puts them ba
   await page.keyboard.type("Ship sooner");
   await capture(page, "1440-page-text-editing");
   await page.keyboard.press("Enter");
-  await expect.poll(async () => readFile(hero, "utf8")).toBe(original.replace("Ship faster", "Ship sooner"));
+  await expect
+    .poll(async () => readFile(hero, "utf8"))
+    .toBe(original.replace("Ship faster", "Ship sooner"));
   await expect(live.getByRole("heading", { name: "Ship sooner" })).toBeVisible();
   await expect(bar).toHaveCount(0);
 
@@ -1475,7 +1604,12 @@ test("words edited inside a page are written into its file and ⌘Z puts them ba
   await expect(paragraph.locator("b, strong")).toHaveCount(1);
   await bar.getByRole("button", { name: "Done" }).click();
   await expect
-    .poll(async () => (await savedComments(userDataDir)).map((comment) => ({ queued: comment.queued, tag: comment.anchor?.tag })))
+    .poll(async () =>
+      (await savedComments(userDataDir)).map((comment) => ({
+        queued: comment.queued,
+        tag: comment.anchor?.tag,
+      })),
+    )
     .toEqual([{ queued: true, tag: "p" }]);
   const [queued] = await savedComments(userDataDir);
   expect(queued!.note).toContain("Make it:");
@@ -1484,7 +1618,10 @@ test("words edited inside a page are written into its file and ⌘Z puts them ba
 
   // Esc throws an edit away.
   await dblclickInPage(page, "hero.html", live.getByRole("heading", { name: "Ship faster" }));
-  await expect(live.getByRole("heading", { name: "Ship faster" })).toHaveAttribute("contenteditable", "true");
+  await expect(live.getByRole("heading", { name: "Ship faster" })).toHaveAttribute(
+    "contenteditable",
+    "true",
+  );
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.type("Never mind");
   await page.keyboard.press("Escape");
@@ -1509,7 +1646,12 @@ test("pages Aiden writes land on the canvas by themselves and follow its edits, 
   const firstPrompt = "Live canvas test: write the home page.";
   const first = lmStudio.enqueueToolScenario!({
     prompt: firstPrompt,
-    calls: [{ name: "write_file", arguments: { path: "design/home.html", content: page_("Home", "Ship faster", "#3b6cf6") } }],
+    calls: [
+      {
+        name: "write_file",
+        arguments: { path: "design/home.html", content: page_("Home", "Ship faster", "#3b6cf6") },
+      },
+    ],
     finalText: "Wrote design/home.html.",
   });
   await composer.fill(firstPrompt);
@@ -1520,11 +1662,16 @@ test("pages Aiden writes land on the canvas by themselves and follow its edits, 
   // Opening design mode puts that page on the empty canvas.
   await typeSlashCommand(page, "/design");
   await expect(frame(page, "home.html")).toBeVisible();
-  await expect(designCanvas(page).getByText("Ask Aiden to design something, or add a note.")).toHaveCount(0);
+  await expect(
+    designCanvas(page).getByText("Ask Aiden to design something, or add a note."),
+  ).toHaveCount(0);
   // The canvas fits the page it was handed, so it is seen whole.
   await expect
     .poll(async () => {
-      const [box, region] = await Promise.all([frame(page, "home.html").boundingBox(), canvasRegion(page).boundingBox()]);
+      const [box, region] = await Promise.all([
+        frame(page, "home.html").boundingBox(),
+        canvasRegion(page).boundingBox(),
+      ]);
       if (!box || !region) return false;
       return box.x >= region.x && box.x + box.width <= region.x + region.width;
     })
@@ -1537,8 +1684,21 @@ test("pages Aiden writes land on the canvas by themselves and follow its edits, 
   const second = lmStudio.enqueueToolScenario!({
     prompt: secondPrompt,
     calls: [
-      { name: "write_file", arguments: { path: "design/library.html", content: page_("Library", "Every recipe in one place", "#1f9d6b") } },
-      { name: "edit_file", arguments: { path: "design/home.html", old_string: "Ship faster", new_string: "Ship calmer" } },
+      {
+        name: "write_file",
+        arguments: {
+          path: "design/library.html",
+          content: page_("Library", "Every recipe in one place", "#1f9d6b"),
+        },
+      },
+      {
+        name: "edit_file",
+        arguments: {
+          path: "design/home.html",
+          old_string: "Ship faster",
+          new_string: "Ship calmer",
+        },
+      },
     ],
     finalText: "Added design/library.html and changed the headline in design/home.html.",
   });
@@ -1549,7 +1709,9 @@ test("pages Aiden writes land on the canvas by themselves and follow its edits, 
   expect(second.error).toBeUndefined();
   expect(JSON.stringify(second.results)).toContain("Edited design/home.html.");
   // The new frame is brought into view and runs live.
-  await expect(pageInFrame(page, "library.html").locator("h1")).toHaveText("Every recipe in one place");
+  await expect(pageInFrame(page, "library.html").locator("h1")).toHaveText(
+    "Every recipe in one place",
+  );
   await zoomToFrame(page, "home.html");
   await expect(pageInFrame(page, "home.html").locator("h1")).toHaveText("Ship calmer");
 

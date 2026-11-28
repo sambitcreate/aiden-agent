@@ -100,7 +100,10 @@ test("an utterance split by a pause retires both of its stretches", () => {
   play(QUIET, LIVE_SPEECH_FENCE_GUARD_MS + PACKET_MS);
   play(SPEECH, 300);
   const next = onsets.claim();
-  assert.ok(next !== null && next > fence, "neither half of the finished sentence shadows the new answer");
+  assert.ok(
+    next !== null && next > fence,
+    "neither half of the finished sentence shadows the new answer",
+  );
 });
 
 test("fresh speech that has no caption yet survives an older utterance finishing", () => {
@@ -141,7 +144,8 @@ test("speech captured before a fence stays before it however long the backlog th
   let captureClock = 10;
   bus.onVoiceInputFence((fence) => onsets.fenced(fence, captureClock));
   const play = (level: number, ms: number, capturedUntil: () => number) => {
-    for (let elapsed = 0; elapsed < ms; elapsed += PACKET_MS) onsets.packet(level, PACKET_MS, capturedUntil());
+    for (let elapsed = 0; elapsed < ms; elapsed += PACKET_MS)
+      onsets.packet(level, PACKET_MS, capturedUntil());
   };
   const fence = bus.voiceInputFence();
   // A second of audio captured before the fence is still queued for the
@@ -179,7 +183,8 @@ test("speech spoken before a fence but rendered just after it, by the microphone
   const fence = bus.voiceInputFence();
   // The person spoke before the fence; the samples reached the render graph
   // 250 ms after it, so their render stamps are later than the fence.
-  for (let elapsed = 0; elapsed < 300; elapsed += PACKET_MS) onsets.packet(SPEECH, PACKET_MS, 10.25);
+  for (let elapsed = 0; elapsed < 300; elapsed += PACKET_MS)
+    onsets.packet(SPEECH, PACKET_MS, 10.25);
   const mark = onsets.claim();
   assert.ok(mark !== null && mark <= fence);
 });

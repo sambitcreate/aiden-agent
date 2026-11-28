@@ -1,4 +1,7 @@
-import { MAX_DISPLAY_IMAGE_DIMENSION, MAX_DISPLAY_IMAGE_PIXELS } from "../display-image-extension.js";
+import {
+  MAX_DISPLAY_IMAGE_DIMENSION,
+  MAX_DISPLAY_IMAGE_PIXELS,
+} from "../display-image-extension.js";
 
 export const STUDIO_ASSET_MEDIA_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
 export type StudioAssetMediaType = (typeof STUDIO_ASSET_MEDIA_TYPES)[number];
@@ -84,7 +87,10 @@ export function holderKey(holder: StudioAssetHolder): string {
 
 export function parseHolderKey(key: string): StudioAssetHolder {
   const separator = key.indexOf(":");
-  const holder = { kind: key.slice(0, separator), id: key.slice(separator + 1) } as StudioAssetHolder;
+  const holder = {
+    kind: key.slice(0, separator),
+    id: key.slice(separator + 1),
+  } as StudioAssetHolder;
   holderKey(holder);
   return holder;
 }

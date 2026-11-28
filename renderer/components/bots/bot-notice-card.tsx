@@ -52,35 +52,44 @@ export function BotNoticeCard({
 }) {
   return (
     <LiveGuard guard="you" wrap={false}>
-    <section
-      data-live-guard="you"
-      role={role}
-      aria-label={label}
-      className={cn(
-        "min-w-0 rounded-card p-3",
-        elevated ? "bg-popover shadow-popover" : "bg-well",
-        className,
-      )}
-    >
-      <div className="flex min-w-0 items-start gap-2.5">
-        {iconTile ??
-          (icon ? (
-            <span
-              aria-hidden="true"
-              className={cn("grid size-8 shrink-0 place-items-center rounded-full [&_svg]:size-4", TONE_CLASS[iconTone])}
-            >
-              {icon}
-            </span>
-          ) : null)}
-        <div className="min-w-0 flex-1 pt-1">
-          <Text as="p" variant="small-strong">
-            {title}
-          </Text>
-          {children ? <div className="mt-0.5 text-small text-secondary [overflow-wrap:anywhere]">{children}</div> : null}
+      <section
+        data-live-guard="you"
+        role={role}
+        aria-label={label}
+        className={cn(
+          "min-w-0 rounded-card p-3",
+          elevated ? "bg-popover shadow-popover" : "bg-well",
+          className,
+        )}
+      >
+        <div className="flex min-w-0 items-start gap-2.5">
+          {iconTile ??
+            (icon ? (
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "grid size-8 shrink-0 place-items-center rounded-full [&_svg]:size-4",
+                  TONE_CLASS[iconTone],
+                )}
+              >
+                {icon}
+              </span>
+            ) : null)}
+          <div className="min-w-0 flex-1 pt-1">
+            <Text as="p" variant="small-strong">
+              {title}
+            </Text>
+            {children ? (
+              <div className="mt-0.5 text-small text-secondary [overflow-wrap:anywhere]">
+                {children}
+              </div>
+            ) : null}
+          </div>
         </div>
-      </div>
-      {actions ? <div className="mt-2.5 flex flex-wrap items-center justify-end gap-2">{actions}</div> : null}
-    </section>
+        {actions ? (
+          <div className="mt-2.5 flex flex-wrap items-center justify-end gap-2">{actions}</div>
+        ) : null}
+      </section>
     </LiveGuard>
   );
 }

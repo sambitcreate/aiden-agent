@@ -1,10 +1,23 @@
 import type { ChatActivitySnapshot } from "../../renderer/shared/chat-activity.js";
 import type { ChatPendingAttention } from "../../renderer/shared/chat-pending-attention.js";
-import { chatRowState, isChatUnread, type ChatReadMarkersSnapshot } from "../../renderer/shared/chat-row-state.js";
+import {
+  chatRowState,
+  isChatUnread,
+  type ChatReadMarkersSnapshot,
+} from "../../renderer/shared/chat-row-state.js";
 import type { ChatTriageEntry } from "../../renderer/shared/chat-triage.js";
 import type { ChatSurfaceInput } from "../../renderer/shared/chat-visibility.js";
-import { inboxState, isLocalInboxChat, triageSignals, type InboxSignals } from "../../renderer/shared/inbox-state.js";
-import { latestPeerRuns, peerFeedBotAttention, peerFeedChatState } from "../../renderer/shared/peer-feed-inbox.js";
+import {
+  inboxState,
+  isLocalInboxChat,
+  triageSignals,
+  type InboxSignals,
+} from "../../renderer/shared/inbox-state.js";
+import {
+  latestPeerRuns,
+  peerFeedBotAttention,
+  peerFeedChatState,
+} from "../../renderer/shared/peer-feed-inbox.js";
 import type { PeerHostFeedSnapshot, PeerHostStatus } from "../../renderer/shared/peer-host.js";
 
 /**
@@ -84,14 +97,22 @@ export function inboxBadgeCount(input: InboxBadgeInput): number {
   for (const chat of local.chats) {
     if (!isLocalInboxChat(chat, (id) => local.workspaceIds.has(id))) continue;
     const pending = local.pending.get(chat.id);
-    const attention = pending?.kind === "detached" || pending?.kind === "interrupted" || pending?.kind === "goal" ? pending.kind : undefined;
+    const attention =
+      pending?.kind === "detached" || pending?.kind === "interrupted" || pending?.kind === "goal"
+        ? pending.kind
+        : undefined;
     const signals: InboxSignals = {
       rowState: chatRowState({
         active: active.has(chat.id),
         needsApproval: approval.has(chat.id),
         needsInput: question.has(chat.id),
       }),
-      unread: isChatUnread(chat.lastAssistantAt, local.markers, chat.id, chat.lastAssistantSequence),
+      unread: isChatUnread(
+        chat.lastAssistantAt,
+        local.markers,
+        chat.id,
+        chat.lastAssistantSequence,
+      ),
       failed: chat.lastAssistantFailed === true,
       ...(attention ? { attention } : {}),
       isOpen: false,
@@ -190,7 +211,10 @@ export const INBOX_BADGE_DEBOUNCE_MS = 250;
 export const INBOX_BADGE_REQUEST_CHANNEL = "app:setInboxDockBadge";
 
 export interface InboxBadgeRequestIpc<Event> {
-  handle(channel: typeof INBOX_BADGE_REQUEST_CHANNEL, listener: (event: Event, enabled: unknown) => void): void;
+  handle(
+    channel: typeof INBOX_BADGE_REQUEST_CHANNEL,
+    listener: (event: Event, enabled: unknown) => void,
+  ): void;
 }
 
 /**
@@ -239,7 +263,8 @@ export function distinctFailureReporter(report: (error: unknown) => void): Disti
 export function createInboxBadgeDriver(options: InboxBadgeDriverOptions): InboxBadgeDriver {
   const debounceMs = options.debounceMs ?? INBOX_BADGE_DEBOUNCE_MS;
   const setTimer = options.setTimer ?? ((callback, ms) => setTimeout(callback, ms));
-  const clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+  const clearTimer =
+    options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   let enabled = false;
   let disposed = false;
   let timer: unknown;

@@ -19,7 +19,11 @@ const counts = new Map<unknown, number>();
 /** Per React root: the tracked fibers in its last committed tree. */
 const seenByRoot = new WeakMap<object, Set<ProbeFiber>>();
 
-function walk(fiber: ProbeFiber | null, seen: ReadonlySet<ProbeFiber>, next: Set<ProbeFiber>): void {
+function walk(
+  fiber: ProbeFiber | null,
+  seen: ReadonlySet<ProbeFiber>,
+  next: Set<ProbeFiber>,
+): void {
   for (let node = fiber; node; node = node.sibling) {
     if (counts.has(node.type)) {
       next.add(node);

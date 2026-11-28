@@ -30,6 +30,9 @@ test("Vulkan suppression is Linux Wayland only and respects an explicit X11 ozon
 
 test("Vulkan suppression preserves existing disabled features without duplicates", () => {
   assert.equal(disableVulkanFeature(""), "Vulkan");
-  assert.equal(disableVulkanFeature("ExistingFeature, AnotherFeature"), "ExistingFeature,AnotherFeature,Vulkan");
+  assert.equal(
+    disableVulkanFeature("ExistingFeature, AnotherFeature"),
+    "ExistingFeature,AnotherFeature,Vulkan",
+  );
   assert.equal(disableVulkanFeature("ExistingFeature,Vulkan"), "ExistingFeature,Vulkan");
 });

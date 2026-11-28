@@ -48,7 +48,10 @@ async function writeControl(rootPath: string, control: unknown): Promise<string>
   return controlPath;
 }
 
-function input(controlPath: string, extra: Partial<Parameters<typeof loadSubagentPackagedSoakSession>[0]> = {}) {
+function input(
+  controlPath: string,
+  extra: Partial<Parameters<typeof loadSubagentPackagedSoakSession>[0]> = {},
+) {
   return {
     isPackaged: true,
     argv: ["Aiden Agent", `${SUBAGENT_PACKAGED_SOAK_CONTROL_SWITCH}=${controlPath}`],
@@ -153,7 +156,10 @@ test("receipts are aggregate-only, fixed to the action mode, and create-new", as
   });
   const stat = await fs.lstat(session.receiptPath);
   assert.equal(stat.mode & 0o777, 0o600);
-  assert.deepEqual(parseSubagentPackagedSoakReceipt(JSON.parse(await fs.readFile(session.receiptPath, "utf8"))), receipt);
+  assert.deepEqual(
+    parseSubagentPackagedSoakReceipt(JSON.parse(await fs.readFile(session.receiptPath, "utf8"))),
+    receipt,
+  );
   await assert.rejects(writeSubagentPackagedSoakReceipt(session, metrics));
 });
 
@@ -197,7 +203,10 @@ test("only an unfinished packaged-soak session requires an immediate failure exi
     controlPath: "/private/aiden-subagent-soak/control.json",
     receiptPath: "/private/aiden-subagent-soak/receipt.json",
   };
-  assert.equal(requiresSubagentPackagedSoakFailureExit(undefined, { status: "not_requested" }), false);
+  assert.equal(
+    requiresSubagentPackagedSoakFailureExit(undefined, { status: "not_requested" }),
+    false,
+  );
   assert.equal(requiresSubagentPackagedSoakFailureExit(session, { status: "written" }), false);
   assert.equal(
     requiresSubagentPackagedSoakFailureExit(session, { status: "lifecycle_unsettled" }),
@@ -205,7 +214,10 @@ test("only an unfinished packaged-soak session requires an immediate failure exi
   );
   assert.equal(requiresSubagentPackagedSoakFailureExit(session, { status: "timed_out" }), true);
   assert.equal(
-    requiresSubagentPackagedSoakFailureExit(session, { status: "failed", error: new Error("write") }),
+    requiresSubagentPackagedSoakFailureExit(session, {
+      status: "failed",
+      error: new Error("write"),
+    }),
     true,
   );
 });

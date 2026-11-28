@@ -51,12 +51,14 @@ export function openConnectionSetup(pluginId: string): boolean {
   trackConnectionSetupFocus();
   const target = connectionSetupTarget({
     all: () =>
-      BrowserWindow.getAllWindows().filter((window) => !isAuxiliaryWindow(window)).map((window) => ({
-        id: window.id,
-        isDestroyed: () => window.isDestroyed() || window.webContents.isDestroyed(),
-        isFocused: () => window.isFocused(),
-        send: (channel: string, payload: unknown) => window.webContents.send(channel, payload),
-      })),
+      BrowserWindow.getAllWindows()
+        .filter((window) => !isAuxiliaryWindow(window))
+        .map((window) => ({
+          id: window.id,
+          isDestroyed: () => window.isDestroyed() || window.webContents.isDestroyed(),
+          isFocused: () => window.isFocused(),
+          send: (channel: string, payload: unknown) => window.webContents.send(channel, payload),
+        })),
     focusHistory: () => focusHistory.list(),
   });
   try {

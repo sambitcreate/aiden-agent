@@ -10,12 +10,22 @@ import { QueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../../lib/queries";
 import { mountWithBotRouter } from "./test-providers";
 import { botFixture } from "./test-fixtures";
-import { BOT_SIDEBAR_PREFERENCES_KEY, serializeBotSidebarPreferences } from "../../lib/bot-sidebar-preferences";
+import {
+  BOT_SIDEBAR_PREFERENCES_KEY,
+  serializeBotSidebarPreferences,
+} from "../../lib/bot-sidebar-preferences";
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
 
-const idle = { botId: "bot-1", preview: null, updatedAt: null, state: { kind: "idle" }, needsYou: false, lastReplyAt: null };
+const idle = {
+  botId: "bot-1",
+  preview: null,
+  updatedAt: null,
+  state: { kind: "idle" },
+  needsYou: false,
+  lastReplyAt: null,
+};
 
 const PLANNER = botFixture();
 const INBOX = botFixture({ id: "bot-2", name: "Inbox" });
@@ -23,9 +33,23 @@ const INBOX = botFixture({ id: "bot-2", name: "Inbox" });
 function twoBots(updatedAt: Record<string, number>) {
   installBotTestIpc({
     "bots:list": () => [PLANNER, INBOX],
-    "bots:live:summary": (botId) => ({ ...idle, botId, updatedAt: updatedAt[botId as string] ?? null }),
+    "bots:live:summary": (botId) => ({
+      ...idle,
+      botId,
+      updatedAt: updatedAt[botId as string] ?? null,
+    }),
     "bots:get": (botId) => [PLANNER, INBOX].find((bot) => bot.id === botId) ?? null,
-    "bots:live:subscribe": (botId) => ({ ...idle, botId, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }),
+    "bots:live:subscribe": (botId) => ({
+      ...idle,
+      botId,
+      epoch: "e1",
+      seq: 0,
+      entries: [],
+      partial: null,
+      question: null,
+      activity: null,
+      queued: [],
+    }),
     "bots:pendingApprovals": () => [],
   });
 }
@@ -33,7 +57,12 @@ function twoBots(updatedAt: Record<string, number>) {
 test("/bots opens the chat of the Bot the person last looked at", async () => {
   localStorage.setItem(
     BOT_SIDEBAR_PREFERENCES_KEY,
-    serializeBotSidebarPreferences({ since: 1, pinnedBotId: null, lastViewed: { "bot-2": 50 }, seenReplyAt: {} }),
+    serializeBotSidebarPreferences({
+      since: 1,
+      pinnedBotId: null,
+      lastViewed: { "bot-2": 50 },
+      seenReplyAt: {},
+    }),
   );
   twoBots({ "bot-1": 900, "bot-2": 100 });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
@@ -48,7 +77,12 @@ test("with nothing viewed yet, or the last one deleted, /bots opens the Bot with
   cleanup();
   localStorage.setItem(
     BOT_SIDEBAR_PREFERENCES_KEY,
-    serializeBotSidebarPreferences({ since: 1, pinnedBotId: null, lastViewed: { "bot-gone": 999 }, seenReplyAt: {} }),
+    serializeBotSidebarPreferences({
+      since: 1,
+      pinnedBotId: null,
+      lastViewed: { "bot-gone": 999 },
+      seenReplyAt: {},
+    }),
   );
   twoBots({ "bot-1": 900, "bot-2": 100 });
   const second = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
@@ -70,7 +104,17 @@ function hungSummaryIpc(summary: (botId: unknown) => unknown = () => new Promise
     "bots:list": () => [planner, inbox],
     "bots:live:summary": summary,
     "bots:get": (botId) => [planner, inbox].find((bot) => bot.id === botId) ?? null,
-    "bots:live:subscribe": (botId) => ({ ...idle, botId, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }),
+    "bots:live:subscribe": (botId) => ({
+      ...idle,
+      botId,
+      epoch: "e1",
+      seq: 0,
+      entries: [],
+      partial: null,
+      question: null,
+      activity: null,
+      queued: [],
+    }),
     "bots:pendingApprovals": () => [],
   });
 }
@@ -80,7 +124,9 @@ test("a summary that never answers does not leave /bots blank: it shows a skelet
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
   assert.ok(await screen.findByRole("status", { name: "Opening your Bot" }));
   assert.equal(router.state.location.pathname, "/bots");
-  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"), { timeout: 3000 });
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"), {
+    timeout: 3000,
+  });
 });
 
 /** Counts the summaries' grace timers that are still pending (set, and neither fired nor cleared) and those that fired. */
@@ -159,7 +205,16 @@ test("an open create flow keeps /bots in place even when the list becomes non-em
     "bots:list": () => bots,
     "bots:live:summary": () => idle,
     "bots:get": () => PLANNER,
-    "bots:live:subscribe": () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }),
+    "bots:live:subscribe": () => ({
+      ...idle,
+      epoch: "e1",
+      seq: 0,
+      entries: [],
+      partial: null,
+      question: null,
+      activity: null,
+      queued: [],
+    }),
     "bots:pendingApprovals": () => [],
   });
   const { router, queryClient } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
@@ -176,14 +231,27 @@ test("an open create flow keeps /bots in place even when the list becomes non-em
 test("a stale cached Bots list does not navigate until the refetch settles", async () => {
   let release: (bots: ReturnType<typeof botFixture>[]) => void = () => {};
   installBotTestIpc({
-    "bots:list": () => new Promise<ReturnType<typeof botFixture>[]>((resolve) => (release = resolve)),
+    "bots:list": () =>
+      new Promise<ReturnType<typeof botFixture>[]>((resolve) => (release = resolve)),
     "bots:live:summary": () => idle,
     "bots:get": (botId) => [PLANNER, INBOX].find((bot) => bot.id === botId) ?? null,
-    "bots:live:subscribe": (botId) => ({ ...idle, botId, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }),
+    "bots:live:subscribe": (botId) => ({
+      ...idle,
+      botId,
+      epoch: "e1",
+      seq: 0,
+      entries: [],
+      partial: null,
+      question: null,
+      activity: null,
+      queued: [],
+    }),
     "bots:pendingApprovals": () => [],
   });
   // The cache still holds a Bot that has since been deleted; the app's default staleTime would refetch.
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: 0 } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: 0 } },
+  });
   queryClient.setQueryData([...queryKeys.bots, "active"], [INBOX]);
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots", queryClient });
   await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
@@ -218,7 +286,16 @@ test("a Bots list that fails to load offers Try again, then opens the Bot once i
     },
     "bots:live:summary": () => idle,
     "bots:get": () => PLANNER,
-    "bots:live:subscribe": () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }),
+    "bots:live:subscribe": () => ({
+      ...idle,
+      epoch: "e1",
+      seq: 0,
+      entries: [],
+      partial: null,
+      question: null,
+      activity: null,
+      queued: [],
+    }),
     "bots:pendingApprovals": () => [],
   });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
@@ -234,7 +311,11 @@ function openPanelTab(): string | null {
   const panel = document.getElementById("bot-panel");
   if (!panel || panel.getAttribute("data-state") !== "open") return null;
   // A dialog the link opened hides the rest of the page from the accessibility tree.
-  return within(panel).getAllByRole("tab", { hidden: true }).find((tab) => tab.getAttribute("aria-selected") === "true")?.textContent ?? null;
+  return (
+    within(panel)
+      .getAllByRole("tab", { hidden: true })
+      .find((tab) => tab.getAttribute("aria-selected") === "true")?.textContent ?? null
+  );
 }
 
 test("old Profile, Advanced and settings links open the Bot's chat with its settings beside it", async () => {
@@ -250,7 +331,9 @@ test("old Profile, Advanced and settings links open the Bot's chat with its sett
   for (const [query, tab, dialog] of cases) {
     localStorage.clear();
     twoBots({});
-    const { router } = await mountWithBotRouter(<BotsView />, { initialPath: `/bots/bot-2${query}` });
+    const { router } = await mountWithBotRouter(<BotsView />, {
+      initialPath: `/bots/bot-2${query}`,
+    });
     await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat", query));
     await waitFor(() => assert.equal(openPanelTab(), tab, query));
     if (dialog) assert.ok(await screen.findByRole("dialog", { name: dialog }), query);
@@ -266,14 +349,18 @@ function BotsPagesOnly() {
 
 test("the old Allowed without asking link opens Settings → Approvals", async () => {
   twoBots({});
-  const { router } = await mountWithBotRouter(<BotsPagesOnly />, { initialPath: "/bots/bot-2?page=allowed" });
+  const { router } = await mountWithBotRouter(<BotsPagesOnly />, {
+    initialPath: "/bots/bot-2?page=allowed",
+  });
   await waitFor(() => assert.equal(router.state.location.pathname, "/settings"));
   assert.equal((router.state.location.search as { section?: string }).section, "approvals");
 });
 
 test("Open work is still a page, and its back goes to the chat with the Bot's settings open", async () => {
   twoBots({});
-  const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-2?page=open-work" });
+  const { router } = await mountWithBotRouter(<BotsView />, {
+    initialPath: "/bots/bot-2?page=open-work",
+  });
   fireEvent.click(await screen.findByRole("button", { name: "Inbox" }));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"));
   await waitFor(() => assert.equal(openPanelTab(), "Advanced"));
@@ -307,17 +394,34 @@ test("a phone's Finish on your Mac opens the connection setup even with the Bots
 test("/bots opens the Bot last looked at from a recent cached list while that list refreshes", async () => {
   localStorage.setItem(
     BOT_SIDEBAR_PREFERENCES_KEY,
-    serializeBotSidebarPreferences({ since: 1, pinnedBotId: null, lastViewed: { "bot-2": 50 }, seenReplyAt: {} }),
+    serializeBotSidebarPreferences({
+      since: 1,
+      pinnedBotId: null,
+      lastViewed: { "bot-2": 50 },
+      seenReplyAt: {},
+    }),
   );
   installBotTestIpc({
     // The refresh never answers; the cached list, read moments ago, is enough.
     "bots:list": () => new Promise<never>(() => undefined),
     "bots:live:summary": () => idle,
     "bots:get": (botId) => [PLANNER, INBOX].find((bot) => bot.id === botId) ?? null,
-    "bots:live:subscribe": (botId) => ({ ...idle, botId, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }),
+    "bots:live:subscribe": (botId) => ({
+      ...idle,
+      botId,
+      epoch: "e1",
+      seq: 0,
+      entries: [],
+      partial: null,
+      question: null,
+      activity: null,
+      queued: [],
+    }),
     "bots:pendingApprovals": () => [],
   });
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: 0 } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: 0 } },
+  });
   queryClient.setQueryData([...queryKeys.bots, "active"], [PLANNER, INBOX]);
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots", queryClient });
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"));

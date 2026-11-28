@@ -1,8 +1,5 @@
 import type { PreparedSkillInvocation } from "./skill-invocation-turn.js";
-import {
-  SLASH_LIMITS,
-  SkillInvocationError,
-} from "../../renderer/shared/slash-commands.js";
+import { SLASH_LIMITS, SkillInvocationError } from "../../renderer/shared/slash-commands.js";
 import {
   INITIAL_CHAT_TURN_LIFECYCLE,
   canPrepareChatTurnSkill,
@@ -83,10 +80,8 @@ export class ChatTurnAdmission {
 
   constructor(options: ChatTurnAdmissionOptions = {}) {
     this.leaseTtlMs = options.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
-    this.maxPreparedTurns =
-      options.maxPreparedTurns ?? DEFAULT_MAX_PREPARED_TURNS;
-    this.maxPreparedBytes =
-      options.maxPreparedBytes ?? DEFAULT_MAX_PREPARED_BYTES;
+    this.maxPreparedTurns = options.maxPreparedTurns ?? DEFAULT_MAX_PREPARED_TURNS;
+    this.maxPreparedBytes = options.maxPreparedBytes ?? DEFAULT_MAX_PREPARED_BYTES;
     this.maxAppendTurns = options.maxAppendTurns ?? DEFAULT_MAX_APPEND_TURNS;
     this.maxAppendBytes = options.maxAppendBytes ?? DEFAULT_MAX_APPEND_BYTES;
   }
@@ -97,11 +92,7 @@ export class ChatTurnAdmission {
     ownerId: string,
     generationBusy: boolean,
   ): ChatTurnLease | null {
-    if (
-      generationBusy ||
-      this.turns.has(chatId) ||
-      this.requiresAppendReconciliation(ownerId)
-    ) {
+    if (generationBusy || this.turns.has(chatId) || this.requiresAppendReconciliation(ownerId)) {
       return null;
     }
 
@@ -169,9 +160,7 @@ export class ChatTurnAdmission {
       reserveAppendPayload: (bytes) => {
         const rejected = reject({ type: "reserve-append", bytes, pool: this.pool("append") });
         if (rejected === "capacity") {
-          throw new Error(
-            "Too many messages are waiting to be saved. Try again in a moment.",
-          );
+          throw new Error("Too many messages are waiting to be saved. Try again in a moment.");
         }
         if (rejected) throw new Error("This message turn is no longer available.");
       },
@@ -301,8 +290,7 @@ export class ChatTurnAdmission {
       if (next.refund) this.charge("skill", -1, -heldSkillBytes!);
     };
     try {
-      registerGeneration(record.preparedSkillInvocation, () =>
-        advanceCustody("release-requested"));
+      registerGeneration(record.preparedSkillInvocation, () => advanceCustody("release-requested"));
     } catch (error) {
       advanceCustody("registration-failed");
       record.commit({ type: "registration-failed" });

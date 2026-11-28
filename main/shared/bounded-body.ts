@@ -24,7 +24,9 @@ export interface BoundedBodyOptions {
   readonly errors: BoundedBodyErrors;
 }
 
-function cancelQuietly(source: { cancel(reason?: unknown): Promise<void> } | null | undefined): void {
+function cancelQuietly(
+  source: { cancel(reason?: unknown): Promise<void> } | null | undefined,
+): void {
   try {
     void source?.cancel().catch(() => undefined);
   } catch {

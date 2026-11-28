@@ -447,8 +447,10 @@ test("Computer Use access needs the beta plus a chat grant or Always allow", () 
     accessGranted: true,
   });
   assert.equal(
-    acceptanceGateEvidence({ settings: { computerUseEnabled: true, computerUseAlwaysAllow: true } }, {})
-      .accessGranted,
+    acceptanceGateEvidence(
+      { settings: { computerUseEnabled: true, computerUseAlwaysAllow: true } },
+      {},
+    ).accessGranted,
     true,
   );
   // A grant without the beta never runs.

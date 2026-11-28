@@ -34,7 +34,10 @@ class ManualTimers implements StillFrameTimers {
 function part(body: Buffer | string, boundary = "frame"): Buffer {
   const bytes = typeof body === "string" ? Buffer.from(body, "latin1") : body;
   return Buffer.concat([
-    Buffer.from(`--${boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: ${bytes.length}\r\n\r\n`, "latin1"),
+    Buffer.from(
+      `--${boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: ${bytes.length}\r\n\r\n`,
+      "latin1",
+    ),
     bytes,
     Buffer.from("\r\n"),
   ]);
@@ -66,21 +69,28 @@ function parseMultipart(stream: Buffer, boundary = "frame"): string[] {
   return bodies;
 }
 
-function harness(boundary = "frame", options: { maxPartBytes?: number; maxHeaderBytes?: number } = {}) {
+function harness(
+  boundary = "frame",
+  options: { maxPartBytes?: number; maxHeaderBytes?: number } = {},
+) {
   const timers = new ManualTimers();
   const stream = repeatStillFrame(boundary, { idleMs: 100, timers, ...options });
   const out: Buffer[] = [];
   stream.on("data", (chunk: Buffer) => out.push(chunk));
-  const write = (chunk: Buffer | string) => stream.write(typeof chunk === "string" ? Buffer.from(chunk, "latin1") : chunk);
+  const write = (chunk: Buffer | string) =>
+    stream.write(typeof chunk === "string" ? Buffer.from(chunk, "latin1") : chunk);
   const output = () => Buffer.concat(out);
   return { timers, stream, write, output };
 }
 
 test("mjpegBoundary reads multipart/x-mixed-replace only, as the phone parsers do", () => {
   assert.equal(mjpegBoundary("multipart/x-mixed-replace; boundary=frame"), "frame");
-  assert.equal(mjpegBoundary("Multipart/X-Mixed-Replace;BOUNDARY=\"--sim42\""), "sim42");
+  assert.equal(mjpegBoundary('Multipart/X-Mixed-Replace;BOUNDARY="--sim42"'), "sim42");
   assert.equal(mjpegBoundary("multipart/x-mixed-replace"), "frame");
-  assert.equal(mjpegBoundary("multipart/x-mixed-replace; charset=binary; boundary=sim-42"), "sim-42");
+  assert.equal(
+    mjpegBoundary("multipart/x-mixed-replace; charset=binary; boundary=sim-42"),
+    "sim-42",
+  );
   assert.equal(mjpegBoundary("image/jpeg"), null);
   assert.equal(mjpegBoundary("application/json; boundary=frame"), null);
   assert.equal(mjpegBoundary(undefined), null);
@@ -186,7 +196,10 @@ test("an oversized part or header block stops tracking and passes through", () =
   big.write(part("x".repeat(17)));
   big.write(part("small"));
   big.timers.advance(1_000);
-  assert.equal(Buffer.compare(big.output(), Buffer.concat([part("x".repeat(17)), part("small")])), 0);
+  assert.equal(
+    Buffer.compare(big.output(), Buffer.concat([part("x".repeat(17)), part("small")])),
+    0,
+  );
 
   const headers = harness("frame", { maxHeaderBytes: 64 });
   const longHeader = `--frame\r\nX-Pad: ${"p".repeat(80)}\r\nContent-Length: 1\r\n\r\nA\r\n`;
@@ -209,7 +222,6 @@ test("ending or destroying the stream clears the pending repeat", async () => {
   await new Promise((resolve) => destroyed.stream.once("close", resolve));
   assert.equal(destroyed.timers.size, 0);
 });
-
 
 test("a client that closes while the repeat is being sent stops it without an error", () => {
   const timers = new ManualTimers();

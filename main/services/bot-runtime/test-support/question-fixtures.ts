@@ -35,5 +35,11 @@ export function optionAnswer(promptId: string, label: string): AskUserQuestionRe
 /** The question tool as a Bot turn offers it, answered through `questions`. */
 export function questionEntries(questions: BotQuestions, botId = "bot-q"): BotToolEntry[] {
   const candidate = botQuestionCandidate(botId, questions);
-  return [{ tool: candidate.tool, replay: candidate.replay ?? "safe", ...(candidate.bind ? { bind: candidate.bind } : {}) }];
+  return [
+    {
+      tool: candidate.tool,
+      replay: candidate.replay ?? "safe",
+      ...(candidate.bind ? { bind: candidate.bind } : {}),
+    },
+  ];
 }

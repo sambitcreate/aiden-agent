@@ -8,10 +8,7 @@ import {
   prettyAccelerator,
   type CommandId,
 } from "../shared/keybindings";
-import {
-  commandExecutionAllowed,
-  resolveCommandForKeyEvent,
-} from "./command-system-core";
+import { commandExecutionAllowed, resolveCommandForKeyEvent } from "./command-system-core";
 import { toast } from "../components/ui";
 import { useAppCapabilities } from "./app-capabilities";
 import { handleAreaFocusKey } from "./focus-regions";
@@ -79,10 +76,7 @@ export function CommandSystemProvider({
   const bindings = React.useMemo(
     () =>
       shortcuts.data?.effective ??
-      (Object.fromEntries(COMMAND_IDS.map((id) => [id, null])) as Record<
-        CommandId,
-        string | null
-      >),
+      (Object.fromEntries(COMMAND_IDS.map((id) => [id, null])) as Record<CommandId, string | null>),
     [shortcuts.data?.effective],
   );
 
@@ -132,9 +126,7 @@ export function CommandSystemProvider({
           });
         }
       } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "The command could not be completed.",
-        );
+        toast.error(error instanceof Error ? error.message : "The command could not be completed.");
       }
       return true;
     },
@@ -147,11 +139,14 @@ export function CommandSystemProvider({
     [applicationModal],
   );
 
-  const openMode = React.useCallback((mode: CommandPaletteMode = "root") => {
-    if (applicationModal) return;
-    setPaletteMode(mode);
-    setPaletteOpen(true);
-  }, [applicationModal]);
+  const openMode = React.useCallback(
+    (mode: CommandPaletteMode = "root") => {
+      if (applicationModal) return;
+      setPaletteMode(mode);
+      setPaletteOpen(true);
+    },
+    [applicationModal],
+  );
 
   React.useLayoutEffect(() => {
     if (applicationModal && paletteOpen) setPaletteOpen(false);
@@ -175,7 +170,9 @@ export function CommandSystemProvider({
   const sentMenuCommands = React.useRef<string | null>(null);
   React.useEffect(() => {
     const timer = setTimeout(() => {
-      const ids = applicationModal ? [] : ["commandPalette.toggle", ...handlers.current.keys()].sort();
+      const ids = applicationModal
+        ? []
+        : ["commandPalette.toggle", ...handlers.current.keys()].sort();
       const key = ids.join(" ");
       if (key === sentMenuCommands.current) return;
       sentMenuCommands.current = key;
@@ -244,16 +241,7 @@ export function CommandSystemProvider({
       },
       binding: (commandId) => bindings[commandId],
     }),
-    [
-      bindings,
-      canExecute,
-      execute,
-      handlerRevision,
-      openMode,
-      paletteMode,
-      paletteOpen,
-      register,
-    ],
+    [bindings, canExecute, execute, handlerRevision, openMode, paletteMode, paletteOpen, register],
   );
 
   return <CommandSystemContext.Provider value={value}>{children}</CommandSystemContext.Provider>;

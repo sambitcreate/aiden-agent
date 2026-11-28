@@ -13,10 +13,10 @@ test("llm todo admission fails closed without an explicit chat usage source", ()
 });
 
 test("todo generation uses only durable sessions and publishes the same snapshot as chat-open", () => {
+  assert.match(source, /loadDurableTodoSnapshot\([\s\S]*?piJournalless \? undefined : piSession/u);
+  assert.match(source, /if \(todo\.state\) \{[\s\S]*?createTodoExtension/u);
   assert.match(
     source,
-    /loadDurableTodoSnapshot\([\s\S]*?piJournalless \? undefined : piSession/u,
+    /sendGeneration\(streamId, "chat:todo", \{ streamId, snapshot: todo\.snapshot \}\)/u,
   );
-  assert.match(source, /if \(todo\.state\) \{[\s\S]*?createTodoExtension/u);
-  assert.match(source, /sendGeneration\(streamId, "chat:todo", \{ streamId, snapshot: todo\.snapshot \}\)/u);
 });

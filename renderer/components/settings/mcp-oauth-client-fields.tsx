@@ -14,11 +14,16 @@ export interface McpOAuthClientSecretDraft {
 }
 
 export function mcpOAuthClientSecretDraft(value: string | undefined): McpOAuthClientSecretDraft {
-  return value !== undefined && isMcpFieldSecretMarker(value) ? { value, saved: true } : { value: value ?? "", saved: false };
+  return value !== undefined && isMcpFieldSecretMarker(value)
+    ? { value, saved: true }
+    : { value: value ?? "", saved: false };
 }
 
 /** The record's `oauthClientSecret`: the kept marker, the typed value, or nothing without a client ID. */
-export function mcpOAuthClientSecretValue(clientId: string, secret: McpOAuthClientSecretDraft): string | undefined {
+export function mcpOAuthClientSecretValue(
+  clientId: string,
+  secret: McpOAuthClientSecretDraft,
+): string | undefined {
   if (!clientId.trim()) return undefined;
   return secret.saved ? secret.value : secret.value || undefined;
 }

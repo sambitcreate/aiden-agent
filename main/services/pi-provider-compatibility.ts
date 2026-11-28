@@ -1,4 +1,10 @@
-import type { Api, Model, Provider, ProviderStreams, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  Model,
+  Provider,
+  ProviderStreams,
+  SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 
 /** Add reviewed transports to a pinned Pi provider without rebuilding its auth contract. */
@@ -10,7 +16,8 @@ export function withProviderStreamOverrides(
   return {
     ...provider,
     stream: (model, context, options) =>
-      streamsFor(model)?.stream(model, context, options) ?? provider.stream(model, context, options),
+      streamsFor(model)?.stream(model, context, options) ??
+      provider.stream(model, context, options),
     streamSimple: (model, context, options) =>
       streamsFor(model)?.streamSimple(model, context, options) ??
       provider.streamSimple(model, context, options),
@@ -116,11 +123,7 @@ export function withAidenPiCompatibility(provider: Provider): Provider {
       }),
     );
   }
-  if (
-    provider.id === "google" ||
-    provider.id === "google-vertex" ||
-    provider.id === "opencode"
-  ) {
+  if (provider.id === "google" || provider.id === "google-vertex" || provider.id === "opencode") {
     return withGoogleXHighCompatibility(provider);
   }
   return provider;

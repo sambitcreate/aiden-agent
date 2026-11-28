@@ -41,7 +41,11 @@ test("a damaged or unfamiliar settings file keeps connection requests off until 
     assert.equal(await store.load(), false, contents);
     // Choosing again replaces the damaged file.
     await store.save(true);
-    assert.equal(await createAidenPairingRequestSettingsStore(() => directory).load(), true, contents);
+    assert.equal(
+      await createAidenPairingRequestSettingsStore(() => directory).load(),
+      true,
+      contents,
+    );
   }
 });
 

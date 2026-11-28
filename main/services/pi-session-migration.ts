@@ -401,8 +401,13 @@ export async function migratePiSessionJournal(
     ) {
       throw new Error("The Pi migration receipt does not own this chat journal.");
     }
-    const promotedHeader = JSON.parse((await readFile(resolvedSource, "utf8")).split("\n", 1)[0] ?? "{}") as { kind?: unknown; version?: unknown; v?: unknown };
-    if (promotedHeader.kind !== "header" || (promotedHeader.version !== 4 && promotedHeader.v !== 4)) {
+    const promotedHeader = JSON.parse(
+      (await readFile(resolvedSource, "utf8")).split("\n", 1)[0] ?? "{}",
+    ) as { kind?: unknown; version?: unknown; v?: unknown };
+    if (
+      promotedHeader.kind !== "header" ||
+      (promotedHeader.version !== 4 && promotedHeader.v !== 4)
+    ) {
       throw new Error("The Pi migration target is not a header for the promoted v4 journal.");
     }
     await upgradeOldPiV4File(resolvedSource);
@@ -442,12 +447,7 @@ export async function migratePiSessionJournal(
   const projection = projectLegacyPiMigration(legacy);
   if (header.kind === "header" && (header.version === 4 || header.v === 4)) {
     await upgradeOldPiV4File(resolvedSource);
-    await validateStagedJournal(
-      resolvedSource,
-      expectedChatId,
-      projection,
-      details,
-    );
+    await validateStagedJournal(resolvedSource, expectedChatId, projection, details);
     const receipt: PiSessionMigrationReceipt = {
       version: PI_SESSION_MIGRATION_RECEIPT_VERSION,
       chatId: expectedChatId,
@@ -526,34 +526,24 @@ export async function rollbackPiSessionMigration(
   } catch {
     // The v4 validator below provides the closed diagnostic.
   }
-  if (promotedHeader.kind !== "header" || (promotedHeader.version !== 4 && (promotedHeader as { v?: number }).v !== 4)) {
+  if (
+    promotedHeader.kind !== "header" ||
+    (promotedHeader.version !== 4 && (promotedHeader as { v?: number }).v !== 4)
+  ) {
     if (sourceHash(promoted) !== receipt.sourceSha256) {
-      throw new Error("The Pi rollback target is neither the promoted v4 journal nor its v3 source.");
+      throw new Error(
+        "The Pi rollback target is neither the promoted v4 journal nor its v3 source.",
+      );
     }
-    await validateStagedJournal(
-      rollbackArtifact,
-      receipt.chatId,
-      projection,
-      details,
-    );
+    await validateStagedJournal(rollbackArtifact, receipt.chatId, projection, details);
     return rollbackArtifact;
   }
-  await validateStagedJournal(
-    receipt.promotedPath,
-    receipt.chatId,
-    projection,
-    details,
-  );
+  await validateStagedJournal(receipt.promotedPath, receipt.chatId, projection, details);
   try {
     await durableCopy(receipt.promotedPath, rollbackArtifact, { exclusive: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    await validateStagedJournal(
-      rollbackArtifact,
-      receipt.chatId,
-      projection,
-      details,
-    );
+    await validateStagedJournal(rollbackArtifact, receipt.chatId, projection, details);
   }
   const stagedPath = `${receipt.promotedPath}.${randomUUID()}.rollback.tmp`;
   try {

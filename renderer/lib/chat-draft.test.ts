@@ -1,12 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  beginChatDraftSend, createChatDraft, discardChatDraft, findReusableChatDraft, finishChatDraftSend,
-  getChatDraft, listChatDrafts, reopenClosedChatDraft, requestChatDraftComposerFocus, retainChatDraft, setChatDraftHasContent,
-  subscribeChatDraftComposerFocus, subscribeChatDrafts, updateChatDraft,
+  beginChatDraftSend,
+  createChatDraft,
+  discardChatDraft,
+  findReusableChatDraft,
+  finishChatDraftSend,
+  getChatDraft,
+  listChatDrafts,
+  reopenClosedChatDraft,
+  requestChatDraftComposerFocus,
+  retainChatDraft,
+  setChatDraftHasContent,
+  subscribeChatDraftComposerFocus,
+  subscribeChatDrafts,
+  updateChatDraft,
 } from "./chat-draft";
 
-const flush = async () => { await Promise.resolve(); };
+const flush = async () => {
+  await Promise.resolve();
+};
 
 test("new drafts can participate in privacy-filtered lifecycle events", (t) => {
   const accepted = "550e8400-e29b-41d4-a716-446655440000";
@@ -46,7 +59,11 @@ test("an empty draft left behind reopens blank at the same address; discarded, s
   assert.equal(reopenClosedChatDraft(left.chat.id), undefined);
   assert.equal(getChatDraft(left.chat.id), reopened);
   discardChatDraft(left.chat.id);
-  assert.equal(reopenClosedChatDraft(left.chat.id), undefined, "a draft closed on purpose stays closed");
+  assert.equal(
+    reopenClosedChatDraft(left.chat.id),
+    undefined,
+    "a draft closed on purpose stays closed",
+  );
 
   const sent = createChatDraft("workspace-a");
   const releaseSent = retainChatDraft(sent.chat.id);
@@ -128,7 +145,9 @@ test("successful promotion removes only the submitted draft and keeps its identi
 
 test("draft mutation subscriptions are removable and failed navigation can discard", () => {
   let changes = 0;
-  const unsubscribe = subscribeChatDrafts(() => { changes += 1; });
+  const unsubscribe = subscribeChatDrafts(() => {
+    changes += 1;
+  });
   const { chat } = createChatDraft("workspace-a");
   assert.equal(changes, 1);
   discardChatDraft(chat.id);
@@ -153,7 +172,6 @@ test("reopening an in-flight draft retains its busy state and unlocks on definit
   finishChatDraftSend(chat.id, true);
   reopenedRelease();
 });
-
 
 test("superseded new activations discard unowned drafts while preserving mounted and sending drafts", async () => {
   const mounted = createChatDraft("workspace-a");
@@ -204,7 +222,9 @@ test("a seeded draft starts with content, and content changes notify subscribers
   const releaseSeeded = retainChatDraft(seeded.chat.id);
   assert.equal(findReusableChatDraft("workspace-a"), undefined);
   let changes = 0;
-  const unsubscribe = subscribeChatDrafts(() => { changes += 1; });
+  const unsubscribe = subscribeChatDrafts(() => {
+    changes += 1;
+  });
   setChatDraftHasContent(seeded.chat.id, true);
   assert.equal(changes, 0, "unchanged content state is not a change");
   setChatDraftHasContent(seeded.chat.id, false);
@@ -218,7 +238,9 @@ test("a seeded draft starts with content, and content changes notify subscribers
 
 test("composer focus reaches a mounted draft now and a later-mounted draft once", () => {
   let mountedFocus = 0;
-  const unsubscribeMounted = subscribeChatDraftComposerFocus("mounted", () => { mountedFocus += 1; });
+  const unsubscribeMounted = subscribeChatDraftComposerFocus("mounted", () => {
+    mountedFocus += 1;
+  });
   requestChatDraftComposerFocus("mounted");
   requestChatDraftComposerFocus("mounted");
   assert.equal(mountedFocus, 2, "every request for an open draft focuses it, e.g. a reused draft");
@@ -226,10 +248,14 @@ test("composer focus reaches a mounted draft now and a later-mounted draft once"
 
   requestChatDraftComposerFocus("pending");
   let pendingFocus = 0;
-  const unsubscribePending = subscribeChatDraftComposerFocus("pending", () => { pendingFocus += 1; });
+  const unsubscribePending = subscribeChatDraftComposerFocus("pending", () => {
+    pendingFocus += 1;
+  });
   assert.equal(pendingFocus, 1, "a draft that mounts after navigation takes the request");
   unsubscribePending();
-  const resubscribe = subscribeChatDraftComposerFocus("pending", () => { pendingFocus += 1; });
+  const resubscribe = subscribeChatDraftComposerFocus("pending", () => {
+    pendingFocus += 1;
+  });
   assert.equal(pendingFocus, 1, "the pending request is consumed once");
   resubscribe();
 
@@ -237,7 +263,9 @@ test("composer focus reaches a mounted draft now and a later-mounted draft once"
   requestChatDraftComposerFocus(chat.id);
   discardChatDraft(chat.id);
   let discardedFocus = 0;
-  const unsubscribeDiscarded = subscribeChatDraftComposerFocus(chat.id, () => { discardedFocus += 1; });
+  const unsubscribeDiscarded = subscribeChatDraftComposerFocus(chat.id, () => {
+    discardedFocus += 1;
+  });
   assert.equal(discardedFocus, 0, "a discarded draft drops its pending focus");
   unsubscribeDiscarded();
 });
@@ -253,7 +281,10 @@ test("a draft with text outlives its view until it is sent or cleared; an empty 
   await flush();
   assert.equal(getChatDraft(empty.chat.id), undefined);
   assert.ok(getChatDraft(typed.chat.id), "leaving a draft with text keeps it");
-  assert.deepEqual(listChatDrafts().map(({ chat }) => chat.id), [typed.chat.id]);
+  assert.deepEqual(
+    listChatDrafts().map(({ chat }) => chat.id),
+    [typed.chat.id],
+  );
 
   // Another New activation does not sweep it either.
   const next = createChatDraft("workspace-b");
@@ -320,6 +351,10 @@ test("closing and reopening an empty temporary draft via Back preserves ephemera
   const reopened = reopenClosedChatDraft(draft.chat.id);
   assert.ok(reopened, "Back navigation should reopen the closed empty draft");
   assert.equal(reopened.chat.workspaceId, "default");
-  assert.equal(reopened.chat.ephemeral, true, "reopened temporary draft must retain ephemeral flag");
+  assert.equal(
+    reopened.chat.ephemeral,
+    true,
+    "reopened temporary draft must retain ephemeral flag",
+  );
   discardChatDraft(reopened.chat.id);
 });

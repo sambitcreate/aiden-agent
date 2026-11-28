@@ -125,7 +125,9 @@ test("a chat's queue survives remounts and keeps queued work, but an empty one i
   // A remount unsubscribes and resubscribes at once; the view must keep
   // hearing commands issued for this chat.
   queue.subscribe(() => undefined)();
-  const unsubscribe = queue.subscribe(() => { heard += 1; });
+  const unsubscribe = queue.subscribe(() => {
+    heard += 1;
+  });
   await nextTask();
   chatMessageQueue("chat-retention").pause();
   assert.equal(heard, 1);
@@ -140,7 +142,12 @@ test("a chat's queue survives remounts and keeps queued work, but an empty one i
   const leave = held.subscribe(() => undefined);
   leave();
   await nextTask();
-  assert.deepEqual(chatMessageQueue("chat-retention-held").getSnapshot().messages.map((item) => item.id), ["q1"]);
+  assert.deepEqual(
+    chatMessageQueue("chat-retention-held")
+      .getSnapshot()
+      .messages.map((item) => item.id),
+    ["q1"],
+  );
 });
 
 test("a send or compaction hold that settles after its view left releases the emptied queue", async () => {
@@ -402,13 +409,17 @@ test("a fork's follow-ups wait through a pending or failed summary and send in o
     ...(summary ? { summary } : {}),
   });
   const queue = new ChatMessageQueue();
-  queue.holdForForkSummary(forkSummaryHoldsSend(lineage({ state: "pending", afterMessageId: "f-a1" })));
+  queue.holdForForkSummary(
+    forkSummaryHoldsSend(lineage({ state: "pending", afterMessageId: "f-a1" })),
+  );
   ["one", "two"].forEach((id) => queue.add(message(id)));
   assert.deepEqual((await drain(queue)).sent, [], "nothing sends while the summary runs");
 
   // A failed summary still holds: main refuses the send until Retry or Continue.
   queue.holdForForkSummary(
-    forkSummaryHoldsSend(lineage({ state: "failed", afterMessageId: "f-a1", error: "Summary cancelled." })),
+    forkSummaryHoldsSend(
+      lineage({ state: "failed", afterMessageId: "f-a1", error: "Summary cancelled." }),
+    ),
   );
   // An unrelated compaction settling does not release the fork's hold.
   queue.holdForCompaction();
@@ -650,13 +661,15 @@ test("a steer into a run the person is stopping keeps the draft and sends nothin
   // Stop pressed with no stream left to steer.
   const ended = new ChatMessageQueue();
   assert.equal(
-    (await steerDraftOrQueue({
-      queue: ended,
-      message: lateSteer("late"),
-      streamId: undefined,
-      stopping: () => true,
-      admit: async () => unsavedNotActive,
-    })).kind,
+    (
+      await steerDraftOrQueue({
+        queue: ended,
+        message: lateSteer("late"),
+        streamId: undefined,
+        stopping: () => true,
+        admit: async () => unsavedNotActive,
+      })
+    ).kind,
     "rejected",
   );
   assert.deepEqual(ids(ended), []);
@@ -665,7 +678,12 @@ test("a steer into a run the person is stopping keeps the draft and sends nothin
 test("a late steer main already saved, or refused for another reason, is never queued", async () => {
   const cases = [
     {
-      receipt: { admitted: false, reason: "run_not_active" as const, committed: true, messageId: "m" },
+      receipt: {
+        admitted: false,
+        reason: "run_not_active" as const,
+        committed: true,
+        messageId: "m",
+      },
       expected: { kind: "committed", reason: "run_not_active" },
     },
     {
@@ -709,7 +727,11 @@ test("a late steer main already saved, or refused for another reason, is never q
 test("a queued row whose steer misses the run stays queued and sends once as the next turn", async () => {
   const queue = new ChatMessageQueue();
   queue.add(message("one"));
-  const outcome = await steerQueuedMessage({ queue, id: "one", admit: async () => unsavedNotActive });
+  const outcome = await steerQueuedMessage({
+    queue,
+    id: "one",
+    admit: async () => unsavedNotActive,
+  });
   assert.deepEqual(outcome, { kind: "rejected", reason: "run_not_active" });
   assert.equal(queue.getSnapshot().paused, false);
   assert.deepEqual((await drain(queue)).sent, ["one"]);
@@ -800,7 +822,11 @@ test("guidance for a run that ended, was stopped or never starts still reports i
   let attempts = 0;
   // The window's run settled: no retry.
   assert.deepEqual(
-    await admitRunInputOnceStarted({ admit: async () => (attempts++, notActive), live: () => false, delay: async () => {} }),
+    await admitRunInputOnceStarted({
+      admit: async () => (attempts++, notActive),
+      live: () => false,
+      delay: async () => {},
+    }),
     notActive,
   );
   assert.equal(attempts, 1);
@@ -823,7 +849,12 @@ test("guidance for a run that ended, was stopped or never starts still reports i
   // Waiting is bounded.
   attempts = 0;
   assert.deepEqual(
-    await admitRunInputOnceStarted({ admit: async () => (attempts++, notActive), live: () => true, delay: async () => {}, retryMs: [1, 1, 1] }),
+    await admitRunInputOnceStarted({
+      admit: async () => (attempts++, notActive),
+      live: () => true,
+      delay: async () => {},
+      retryMs: [1, 1, 1],
+    }),
     notActive,
   );
   assert.equal(attempts, 4);
@@ -837,7 +868,11 @@ test("only a run that has not started yet is waited for", async () => {
   ]) {
     let attempts = 0;
     assert.deepEqual(
-      await admitRunInputOnceStarted({ admit: async () => (attempts++, receipt), live: () => true, delay: async () => {} }),
+      await admitRunInputOnceStarted({
+        admit: async () => (attempts++, receipt),
+        live: () => true,
+        delay: async () => {},
+      }),
       receipt,
     );
     assert.equal(attempts, 1);

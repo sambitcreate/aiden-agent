@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  type SubagentRunSnapshotV2,
-} from "../../../renderer/shared/subagent-runs.js";
-import {
-  createSubagentAuthorityV2,
-  subagentAuthorityDigestV2,
-} from "./authority-v2.js";
+import { type SubagentRunSnapshotV2 } from "../../../renderer/shared/subagent-runs.js";
+import { createSubagentAuthorityV2, subagentAuthorityDigestV2 } from "./authority-v2.js";
 import { McpToolCallNotSentError, subagentEffectEvidenceDigestV2 } from "./subagent-effect-v2.js";
 import {
   parseBackgroundSubagentRunV2,
@@ -37,13 +32,21 @@ interface StorageState {
 
 function storage(state: StorageState): SubagentRunStoreStorage {
   return {
-    async cleanup() { return false; },
+    async cleanup() {
+      return false;
+    },
     async read() {
-      if (state.contents === undefined) return { status: "missing" as const, contents: undefined, generation: "missing" as const };
-      return { status: "data" as const, contents: Buffer.from(state.contents), generation: state.generation as string };
+      if (state.contents === undefined)
+        return { status: "missing" as const, contents: undefined, generation: "missing" as const };
+      return {
+        status: "data" as const,
+        contents: Buffer.from(state.contents),
+        generation: state.generation as string,
+      };
     },
     async write(expected, contents) {
-      if (expected !== state.generation) throw new SubagentRunStoreStorageError("destination_changed");
+      if (expected !== state.generation)
+        throw new SubagentRunStoreStorageError("destination_changed");
       if ((state.conflicts ?? 0) > 0) {
         state.conflicts = (state.conflicts ?? 1) - 1;
         state.onConflict?.();
@@ -62,7 +65,9 @@ function storage(state: StorageState): SubagentRunStoreStorage {
       return state.generation;
     },
     async syncDirectory() {},
-    async close() { state.closes = (state.closes ?? 0) + 1; },
+    async close() {
+      state.closes = (state.closes ?? 0) + 1;
+    },
   };
 }
 
@@ -196,7 +201,10 @@ function backgroundManifest(run: BackgroundSubagentRunV2): NativeSubagentPrivate
   };
 }
 
-function database(snapshots: SubagentRunSnapshotV2[] = [], manifests: NativeSubagentPrivateRunManifestV2[] = []): MutableSubagentRunDatabaseV2 {
+function database(
+  snapshots: SubagentRunSnapshotV2[] = [],
+  manifests: NativeSubagentPrivateRunManifestV2[] = [],
+): MutableSubagentRunDatabaseV2 {
   return {
     version: 2,
     storeRevision: 2,
@@ -258,10 +266,20 @@ function effectOwner(toolCallId = "tool-call-1") {
 
 test("strict V2 store persists a native authority manifest and monotonic lifecycle", async () => {
   const state = stateWith(database());
-  const store = createSubagentRunStoreV2(async () => "/private/v2", { storageFactory: () => storage(state), now: () => 20 });
+  const store = createSubagentRunStoreV2(async () => "/private/v2", {
+    storageFactory: () => storage(state),
+    now: () => 20,
+  });
   await store.initialize();
   await store.upsert(snapshot(), manifest());
-  const running = snapshot({ revision: 2, state: "running", updatedAt: 30, turns: 1, tools: 1, tokens: 10 });
+  const running = snapshot({
+    revision: 2,
+    state: "running",
+    updatedAt: 30,
+    turns: 1,
+    tools: 1,
+    tokens: 10,
+  });
   await store.upsert(running, manifest());
 
   assert.deepEqual(await store.get("run-1"), running);
@@ -318,7 +336,10 @@ test("V2 store preserves projection provenance until terminal additions", async 
     projectionNotices: ["task_truncated", "report_truncated", "display_filtered"],
   });
   await store.upsert(completed, manifest());
-  assert.deepEqual((await store.get(running.runId))?.projectionNotices, completed.projectionNotices);
+  assert.deepEqual(
+    (await store.get(running.runId))?.projectionNotices,
+    completed.projectionNotices,
+  );
 });
 
 test("run reservations reject an over-cap batch before any queued snapshot is written", async () => {
@@ -368,26 +389,39 @@ test("corrupt canonical V2 blocks every read without rewriting evidence", async 
     counter: 1,
     writes: 0,
   };
-  const store = createSubagentRunStoreV2(async () => "/private/v2", { storageFactory: () => storage(state) });
+  const store = createSubagentRunStoreV2(async () => "/private/v2", {
+    storageFactory: () => storage(state),
+  });
   await assert.rejects(store.initialize(), /unreadable evidence and was preserved/u);
   assert.equal(state.contents, corrupt);
   assert.equal(state.writes, 0);
 });
 
 test("startup reconciles active native runs once and preserves manifests", async () => {
-  const state = stateWith(database([snapshot({ state: "needs_attention", activity: "Needs attention." })], [manifest()]));
-  const store = createSubagentRunStoreV2(async () => "/private/v2", { storageFactory: () => storage(state), now: () => 50 });
+  const state = stateWith(
+    database([snapshot({ state: "needs_attention", activity: "Needs attention." })], [manifest()]),
+  );
+  const store = createSubagentRunStoreV2(async () => "/private/v2", {
+    storageFactory: () => storage(state),
+    now: () => 50,
+  });
   await store.initialize();
   const interrupted = await store.get("run-1");
   assert.equal(interrupted?.state, "interrupted");
   assert.equal(interrupted?.revision, 2);
   assert.equal(interrupted?.finishedAt, 50);
-  assert.equal(parseMutableSubagentRunDatabaseV2(JSON.parse(state.contents ?? "null"))?.manifests[0]?.provenance, "v2_native");
+  assert.equal(
+    parseMutableSubagentRunDatabaseV2(JSON.parse(state.contents ?? "null"))?.manifests[0]
+      ?.provenance,
+    "v2_native",
+  );
 });
 
 test("chat deletion is durable, blocks late writes, and clears only on completion", async () => {
   const state = stateWith(database());
-  const store = createSubagentRunStoreV2(async () => "/private/v2", { storageFactory: () => storage(state) });
+  const store = createSubagentRunStoreV2(async () => "/private/v2", {
+    storageFactory: () => storage(state),
+  });
   await store.initialize();
   await store.upsert(snapshot(), manifest());
   await store.deleteChat("chat-1");
@@ -401,7 +435,9 @@ test("chat deletion is durable, blocks late writes, and clears only on completio
 test("one stale native generation is re-read and merged before V2 acknowledgement", async () => {
   const state = stateWith(database());
   state.conflicts = 1;
-  const store = createSubagentRunStoreV2(async () => "/private/v2", { storageFactory: () => storage(state) });
+  const store = createSubagentRunStoreV2(async () => "/private/v2", {
+    storageFactory: () => storage(state),
+  });
   await store.initialize();
   await store.upsert(snapshot(), manifest());
   assert.deepEqual(await store.get("run-1"), snapshot());
@@ -411,7 +447,9 @@ test("one stale native generation is re-read and merged before V2 acknowledgemen
 
 test("intentional V1 rollback-journal writes advance the committed migration checkpoint", async () => {
   const state = stateWith(database());
-  const store = createSubagentRunStoreV2(async () => "/private/v2", { storageFactory: () => storage(state) });
+  const store = createSubagentRunStoreV2(async () => "/private/v2", {
+    storageFactory: () => storage(state),
+  });
   await store.initialize();
   await store.updateV1Checkpoint({
     source: "v1",
@@ -439,16 +477,24 @@ test("durable effects advance monotonically from preparation through terminal ev
   assert.equal((await store.markEffectDispatchStarted(effectOwner())).state, "dispatch_started");
   clock = 23;
   const terminalDigest = subagentEffectEvidenceDigestV2("remote_completed");
-  assert.equal((await store.finishEffect({ ...effectOwner(), state: "completed", terminalDigest })).state, "completed");
+  assert.equal(
+    (await store.finishEffect({ ...effectOwner(), state: "completed", terminalDigest })).state,
+    "completed",
+  );
   await assert.rejects(store.authorizeEffect(effectOwner()), /cannot move from completed/u);
-  assert.deepEqual((await store.listEffectsByChat("chat-1")).map(({ state }) => state), ["completed"]);
-  assert.deepEqual(await store.listEffectActivityForRun("run-1", "chat-1"), [{
-    version: 1,
-    kind: "mcp_mutation",
-    state: "completed",
-    label: "Remote change completed",
-    updatedAt: 23,
-  }]);
+  assert.deepEqual(
+    (await store.listEffectsByChat("chat-1")).map(({ state }) => state),
+    ["completed"],
+  );
+  assert.deepEqual(await store.listEffectActivityForRun("run-1", "chat-1"), [
+    {
+      version: 1,
+      kind: "mcp_mutation",
+      state: "completed",
+      label: "Remote change completed",
+      updatedAt: 23,
+    },
+  ]);
   const persisted = parseMutableSubagentRunDatabaseV2(JSON.parse(state.contents ?? "null"));
   assert.equal(persisted?.effects[0]?.terminalDigest, terminalDigest);
   assert.equal(persisted?.approvals[0]?.state, "consumed");
@@ -456,14 +502,21 @@ test("durable effects advance monotonically from preparation through terminal ev
 
 test("a dispatch-started MCP mutation needs local proof of no send to persist cancellation", async () => {
   const state = stateWith(database([snapshot()], [manifest()]));
-  const open = () => createSubagentRunStoreV2(async () => "/private/v2", { storageFactory: () => storage(state), now: () => 20 });
+  const open = () =>
+    createSubagentRunStoreV2(async () => "/private/v2", {
+      storageFactory: () => storage(state),
+      now: () => 20,
+    });
   const store = open();
   await store.initialize();
   await store.prepareEffect(effectInput());
   await store.authorizeEffect(effectOwner());
   await store.markEffectDispatchStarted(effectOwner());
   await assert.rejects(store.cancelEffectBeforeDispatch(effectOwner()), /after dispatch/u);
-  await store.cancelEffectBeforeDispatch(effectOwner(), new McpToolCallNotSentError("Inventory changed"));
+  await store.cancelEffectBeforeDispatch(
+    effectOwner(),
+    new McpToolCallNotSentError("Inventory changed"),
+  );
   const reopened = open();
   await reopened.initialize();
   assert.equal((await reopened.getEffect(effectOwner()))?.state, "cancelled_before_dispatch");
@@ -496,10 +549,7 @@ test("authorized approval expiring at dispatch is durably cancelled before reque
   await store.prepareEffect({ ...effectInput(), expiresAt: 21 });
   await store.authorizeEffect(effectOwner());
   clock = 21;
-  await assert.rejects(
-    store.markEffectDispatchStarted(effectOwner()),
-    /expired before dispatch/u,
-  );
+  await assert.rejects(store.markEffectDispatchStarted(effectOwner()), /expired before dispatch/u);
   assert.equal((await store.getEffect(effectOwner()))?.state, "cancelled_before_dispatch");
 });
 
@@ -516,29 +566,32 @@ test("effect preparation rejects imported runs and authority digest drift", asyn
   );
 
   const importedState = stateWith(database([snapshot({ authorityRevision: 0 })], []));
-  importedState.contents = `${JSON.stringify({
-    ...database([snapshot({ authorityRevision: 0 })], []),
-    manifests: [{
-      version: 2,
-      provenance: "v1_import",
-      runId: "run-1",
-      generationId: "generation-1",
-      childId: "child-1",
-      chatId: "chat-1",
-      workspaceId: "workspace-1",
-      task: "Review persistence",
-      reusableAuthority: false,
-    }],
-  }, null, 2)}\n`;
+  importedState.contents = `${JSON.stringify(
+    {
+      ...database([snapshot({ authorityRevision: 0 })], []),
+      manifests: [
+        {
+          version: 2,
+          provenance: "v1_import",
+          runId: "run-1",
+          generationId: "generation-1",
+          childId: "child-1",
+          chatId: "chat-1",
+          workspaceId: "workspace-1",
+          task: "Review persistence",
+          reusableAuthority: false,
+        },
+      ],
+    },
+    null,
+    2,
+  )}\n`;
   const importedStore = createSubagentRunStoreV2(async () => "/private/v2-imported", {
     storageFactory: () => storage(importedState),
     now: () => 20,
   });
   await importedStore.initialize();
-  await assert.rejects(
-    importedStore.prepareEffect(effectInput()),
-    /ownership does not match/u,
-  );
+  await assert.rejects(importedStore.prepareEffect(effectInput()), /ownership does not match/u);
 });
 
 test("startup cancels undispatched effects and marks dispatched outcomes unknown without retry", async () => {
@@ -561,8 +614,14 @@ test("startup cancels undispatched effects and marks dispatched outcomes unknown
   });
   await restarted.initialize();
   const effects = await restarted.listEffectsByChat("chat-1");
-  assert.equal(effects.find(({ toolCallId }) => toolCallId === "tool-call-prepared")?.state, "cancelled_before_dispatch");
-  assert.equal(effects.find(({ toolCallId }) => toolCallId === "tool-call-dispatched")?.state, "unknown");
+  assert.equal(
+    effects.find(({ toolCallId }) => toolCallId === "tool-call-prepared")?.state,
+    "cancelled_before_dispatch",
+  );
+  assert.equal(
+    effects.find(({ toolCallId }) => toolCallId === "tool-call-dispatched")?.state,
+    "unknown",
+  );
 });
 
 test("private background records atomically own their matching snapshot and reject stale CAS", async () => {
@@ -593,15 +652,10 @@ test("private background records atomically own their matching snapshot and reje
   assert.equal(await store.background.put(starting, 1), true);
   assert.equal(await store.background.put(starting, 1), false);
 
-  const persisted = parseMutableSubagentRunDatabaseV2(
-    JSON.parse(state.contents ?? "null"),
-  );
+  const persisted = parseMutableSubagentRunDatabaseV2(JSON.parse(state.contents ?? "null"));
   assert.equal(persisted?.backgroundRuns.length, 1);
   assert.deepEqual(persisted?.backgroundRuns[0]?.snapshot, persisted?.snapshots[0]);
-  assert.deepEqual(
-    persisted?.manifests[0],
-    backgroundManifest(persisted!.backgroundRuns[0]!),
-  );
+  assert.deepEqual(persisted?.manifests[0], backgroundManifest(persisted!.backgroundRuns[0]!));
 });
 
 test("startup reconciliation and chat deletion keep private background records synchronized", async () => {
@@ -620,17 +674,12 @@ test("startup reconciliation and chat deletion keep private background records s
   await restarted.initialize();
   const interrupted = await restarted.background.get("run-1");
   assert.equal(interrupted?.snapshot.state, "interrupted");
-  assert.equal(
-    interrupted?.events[interrupted.events.length - 1]?.kind,
-    "reconciled",
-  );
+  assert.equal(interrupted?.events[interrupted.events.length - 1]?.kind, "reconciled");
   assert.deepEqual(interrupted?.snapshot, await restarted.get("run-1"));
 
   await restarted.preflightChatDeletion("chat-1");
   await restarted.deleteChat("chat-1");
-  const deleted = parseMutableSubagentRunDatabaseV2(
-    JSON.parse(state.contents ?? "null"),
-  );
+  const deleted = parseMutableSubagentRunDatabaseV2(JSON.parse(state.contents ?? "null"));
   assert.equal(deleted?.backgroundRuns.length, 0);
   assert.equal(deleted?.snapshots.length, 0);
 });
@@ -644,7 +693,10 @@ test("pre-dispatch durability failure prevents a prepared acknowledgement", asyn
   await store.initialize();
   state.failWrites = 1;
   await assert.rejects(store.prepareEffect(effectInput()), /simulated durable write failure/u);
-  assert.equal(parseMutableSubagentRunDatabaseV2(JSON.parse(state.contents ?? "null"))?.effects.length, 0);
+  assert.equal(
+    parseMutableSubagentRunDatabaseV2(JSON.parse(state.contents ?? "null"))?.effects.length,
+    0,
+  );
 });
 
 test("failed terminal persistence stays locally visible as unknown", async () => {
@@ -670,14 +722,22 @@ test("failed terminal persistence stays locally visible as unknown", async () =>
   );
   assert.equal((await store.getEffect(effectOwner()))?.state, "unknown");
   assert.equal((await store.listEffectsByChat("chat-1"))[0]?.state, "unknown");
-  assert.equal((await store.finishEffect({
-    ...effectOwner(),
-    state: "completed",
-    terminalDigest: subagentEffectEvidenceDigestV2("late_completion"),
-  })).state, "unknown");
+  assert.equal(
+    (
+      await store.finishEffect({
+        ...effectOwner(),
+        state: "completed",
+        terminalDigest: subagentEffectEvidenceDigestV2("late_completion"),
+      })
+    ).state,
+    "unknown",
+  );
   await store.preflightChatDeletion("chat-1");
   await store.deleteChat("chat-1");
-  assert.equal(parseMutableSubagentRunDatabaseV2(JSON.parse(state.contents ?? "null"))?.effects.length, 0);
+  assert.equal(
+    parseMutableSubagentRunDatabaseV2(JSON.parse(state.contents ?? "null"))?.effects.length,
+    0,
+  );
 });
 
 test("a proven externally persisted terminal outcome supersedes conservative local unknown", async () => {
@@ -693,11 +753,13 @@ test("a proven externally persisted terminal outcome supersedes conservative loc
   await store.markEffectDispatchStarted(effectOwner());
   clock = 30;
   state.failWrites = 1;
-  await assert.rejects(store.finishEffect({
-    ...effectOwner(),
-    state: "completed",
-    terminalDigest: subagentEffectEvidenceDigestV2("first_completion"),
-  }));
+  await assert.rejects(
+    store.finishEffect({
+      ...effectOwner(),
+      state: "completed",
+      terminalDigest: subagentEffectEvidenceDigestV2("first_completion"),
+    }),
+  );
 
   const durable = parseMutableSubagentRunDatabaseV2(JSON.parse(state.contents ?? "null"))!;
   const terminalDigest = subagentEffectEvidenceDigestV2("external_completion");

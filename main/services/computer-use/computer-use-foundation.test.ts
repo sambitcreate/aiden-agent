@@ -2,7 +2,16 @@ import assert from "node:assert/strict";
 import childProcess, { type ChildProcess } from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { EventEmitter, getEventListeners } from "node:events";
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import { createConnection } from "node:net";
 import path from "node:path";
@@ -22,10 +31,7 @@ import {
   cuaDriverToolDeclaresSession,
   parseCuaDriverTools,
 } from "./contract.js";
-import {
-  TestCuaDriverHost,
-  type CuaDriverHostTestHooks,
-} from "./host.testing.js";
+import { TestCuaDriverHost, type CuaDriverHostTestHooks } from "./host.testing.js";
 import { CuaDriverHost, type CuaDriverHostOptions } from "./host.js";
 import { runCuaDriverCommand } from "./process.js";
 import {
@@ -51,7 +57,10 @@ test("Computer Use helper layout follows physical packaging, not the runtime pro
   assert.doesNotMatch(source, /isPackagedRuntime/);
 });
 
-function fragmentedImageBridge(imageBytes: number, fragmentBytes: number): {
+function fragmentedImageBridge(
+  imageBytes: number,
+  fragmentBytes: number,
+): {
   bridge: ChildProcess;
   destroy: () => void;
   fragmentWrites: () => number;
@@ -313,7 +322,14 @@ test("tool catalog parsing retains pinned versions, exact schemas, and capabilit
   ]) {
     assert.equal(catalog.tools.has(name), false, name);
   }
-  for (const name of ["click", "press_key", "scroll", "type_text", "get_window_state", "set_value"]) {
+  for (const name of [
+    "click",
+    "press_key",
+    "scroll",
+    "type_text",
+    "get_window_state",
+    "set_value",
+  ]) {
     assert.equal(
       catalog.tools.get(name)?.capabilities.has("accessibility.element_tokens"),
       true,
@@ -329,8 +345,7 @@ test("tool catalog parsing retains pinned versions, exact schemas, and capabilit
           ...listing,
           tools: tools.filter((tool) => tool.name !== name),
         }),
-      (error: unknown) =>
-        error instanceof CuaDriverError && error.code === "incompatible_driver",
+      (error: unknown) => error instanceof CuaDriverError && error.code === "incompatible_driver",
     );
   }
 
@@ -422,14 +437,22 @@ test("driver installation resolution rejects unsupported platforms and symlinked
 
 test("the driver a Bot computer's guest gets is only the vendored, pinned executable inside a real helper bundle", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-guest-copy-"));
-  const options = { appPath: root, isPackaged: false, platform: "darwin" as const, resourcesPath: root };
+  const options = {
+    appPath: root,
+    isPackaged: false,
+    platform: "darwin" as const,
+    resourcesPath: root,
+  };
   const helper = path.join(root, "build", "computer-use", "CuaDriver.app");
   const driver = path.join(helper, "Contents", "MacOS", "cua-driver");
   try {
     // Nothing vendored yet: the person is told how to vendor, and nothing is copied.
     await assert.rejects(
       resolveVendoredCuaDriverExecutable(options),
-      (error: unknown) => error instanceof CuaDriverError && error.code === "driver_missing" && /computer-use:vendor/u.test(error.message),
+      (error: unknown) =>
+        error instanceof CuaDriverError &&
+        error.code === "driver_missing" &&
+        /computer-use:vendor/u.test(error.message),
     );
     await assert.rejects(
       resolveVendoredCuaDriverExecutable({ ...options, platform: "linux" }),
@@ -442,7 +465,9 @@ test("the driver a Bot computer's guest gets is only the vendored, pinned execut
     await assert.rejects(
       resolveVendoredCuaDriverExecutable(options),
       (error: unknown) =>
-        error instanceof CuaDriverError && error.code === "driver_integrity_failed" && /pinned 0\.36\.0 release/u.test(error.message),
+        error instanceof CuaDriverError &&
+        error.code === "driver_integrity_failed" &&
+        /pinned 0\.36\.0 release/u.test(error.message),
     );
 
     // A helper bundle that is a symlink to another folder is never the vendored one.
@@ -461,9 +486,16 @@ test("the driver a Bot computer's guest gets is only the vendored, pinned execut
       (error: unknown) => error instanceof CuaDriverError && error.code === "cancelled",
     );
     // The licence notice travels with the copy, from inside the same helper bundle.
-    assert.equal(vendoredCuaDriverNoticePath(options), path.join(helper, "Contents", "Resources", "LICENSE.cua-driver.md"));
     assert.equal(
-      vendoredCuaDriverNoticePath({ ...options, isPackaged: true, resourcesPath: "/Applications/Aiden Agent.app/Contents/Resources" }),
+      vendoredCuaDriverNoticePath(options),
+      path.join(helper, "Contents", "Resources", "LICENSE.cua-driver.md"),
+    );
+    assert.equal(
+      vendoredCuaDriverNoticePath({
+        ...options,
+        isPackaged: true,
+        resourcesPath: "/Applications/Aiden Agent.app/Contents/Resources",
+      }),
       "/Applications/Aiden Agent.app/Contents/Helpers/CuaDriver.app/Contents/Resources/LICENSE.cua-driver.md",
     );
   } finally {
@@ -472,10 +504,7 @@ test("the driver a Bot computer's guest gets is only the vendored, pinned execut
 });
 
 test("live codesign verification avoids unsupported strict process requirements", () => {
-  assert.deepEqual(codesignVerifyArguments("+4242", "identifier test"), [
-    "--verify",
-    "+4242",
-  ]);
+  assert.deepEqual(codesignVerifyArguments("+4242", "identifier test"), ["--verify", "+4242"]);
   assert.deepEqual(codesignVerifyArguments("/tmp/Test.app", "identifier test"), [
     "--verify",
     "--strict",
@@ -598,7 +627,10 @@ test("each session owns an authenticated broker bridge and preserves MCP multimo
   );
   assert.equal(events.filter((event) => event.event === "broker-bridge-authenticated").length, 2);
   assert.equal(events.filter((event) => event.event === "broker-launch-lease-connected").length, 2);
-  assert.equal(events.every((event) => event.hadCallerAuth !== true), true);
+  assert.equal(
+    events.every((event) => event.hadCallerAuth !== true),
+    true,
+  );
   assert.equal(JSON.stringify(events).includes("authorizationToken"), false);
   await rm(root, { recursive: true, force: true });
 });
@@ -646,7 +678,9 @@ test("inbound MCP framing accepts the exact 64 MiB contract boundary and poisons
     await transport.start();
     const message = JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} });
     const output = fake.bridge.stdout as PassThrough;
-    const exactFrame = Buffer.from(`${message}${" ".repeat(testLimit - Buffer.byteLength(message))}\n`);
+    const exactFrame = Buffer.from(
+      `${message}${" ".repeat(testLimit - Buffer.byteLength(message))}\n`,
+    );
     assert.equal(exactFrame.byteLength - 1, testLimit);
     output.write(exactFrame);
     assert.equal(messages.length, 1);
@@ -871,7 +905,13 @@ test("schema-driven session injection binds every 0.36.0 tool call to Aiden's se
       // The 0.35 view options are part of the closed schema.
       [
         "get_window_state",
-        { pid: 42, window_id: 7, include_screenshot: false, tree_format: "elements", verbose: false },
+        {
+          pid: 42,
+          window_id: 7,
+          include_screenshot: false,
+          tree_format: "elements",
+          verbose: false,
+        },
       ],
       // A caller-supplied label never replaces Aiden's own session.
       ["list_apps", { session: "caller-controlled" }],
@@ -883,7 +923,8 @@ test("schema-driven session injection binds every 0.36.0 tool call to Aiden's se
   for (const result of results) assert.equal((result as { isError?: boolean }).isError, undefined);
   const events = await readEvents(logPath);
   const toolCalls = events.filter(
-    (event) => event.event === "tool-call" && event.name !== "start_session" && event.name !== "end_session",
+    (event) =>
+      event.event === "tool-call" && event.name !== "start_session" && event.name !== "end_session",
   );
   assert.equal(toolCalls.length, 8);
   for (const call of toolCalls) {
@@ -927,13 +968,17 @@ test("direct bridge and broker teardown returns promptly after child reap", asyn
   try {
     const session = await host.createSession();
     const processes = (await readEvents(logPath)).filter(
-      (event) => event.event === "spawn" &&
-        (event.command === "broker" || event.command === "bridge"),
+      (event) =>
+        event.event === "spawn" && (event.command === "broker" || event.command === "bridge"),
     );
     const startedAt = Date.now();
     await session.close();
     await host.shutdown();
-    assert.equal(Date.now() - startedAt < 750, true, "direct-child teardown should not wait to escalate a reaped child");
+    assert.equal(
+      Date.now() - startedAt < 750,
+      true,
+      "direct-child teardown should not wait to escalate a reaped child",
+    );
     for (const child of processes) assertProcessExited(child.pid as number);
   } finally {
     await host.shutdown();
@@ -1031,8 +1076,7 @@ test("bridge readiness fails closed when caller authentication is rejected", asy
     await assert.rejects(
       host.createSession(),
       (error: unknown) =>
-        error instanceof CuaDriverError &&
-        ["bridge_closed", "bridge_failed"].includes(error.code),
+        error instanceof CuaDriverError && ["bridge_closed", "bridge_failed"].includes(error.code),
     );
     await waitForEvent(logPath, (event) => event.event === "bridge-rejected-caller");
   } finally {
@@ -1072,7 +1116,9 @@ for (const phase of ["before fixture initialization", "during bridge verificatio
     const gated = phase === "before fixture initialization";
     const children: Array<{ child: ChildProcess; role: string }> = [];
     const originalSpawn = childProcess.spawn;
-    const spawnMock = t.mock.method(childProcess, "spawn", ((...args: Parameters<typeof originalSpawn>) => {
+    const spawnMock = t.mock.method(childProcess, "spawn", ((
+      ...args: Parameters<typeof originalSpawn>
+    ) => {
       const child = originalSpawn(...args);
       children.push({ child, role: args[1]?.includes("--bridge") ? "bridge" : "broker" });
       return child;
@@ -1081,23 +1127,28 @@ for (const phase of ["before fixture initialization", "during bridge verificatio
     let bridgePid: number | undefined;
     let verifierSignal: AbortSignal | undefined;
     let verifierObservedAbort = false;
-    const host = fakeHost(root, logPath, gated ? ["--initialization-gate", path.join(root, "gate")] : [], {
-      startupTimeoutMs: 120,
-      verifyBridgeProcess: async (pid, _expectedExecutable, signal) => {
-        bridgePid = pid;
-        verifierSignal = signal;
-        assert.ok(signal, "verification must receive the startup signal");
-        await new Promise<void>((_resolve, reject) => {
-          const aborted = () => {
-            verifierObservedAbort = true;
-            signal.removeEventListener("abort", aborted);
-            reject(signal.reason);
-          };
-          signal.addEventListener("abort", aborted, { once: true });
-          if (signal.aborted) aborted();
-        });
+    const host = fakeHost(
+      root,
+      logPath,
+      gated ? ["--initialization-gate", path.join(root, "gate")] : [],
+      {
+        startupTimeoutMs: 120,
+        verifyBridgeProcess: async (pid, _expectedExecutable, signal) => {
+          bridgePid = pid;
+          verifierSignal = signal;
+          assert.ok(signal, "verification must receive the startup signal");
+          await new Promise<void>((_resolve, reject) => {
+            const aborted = () => {
+              verifierObservedAbort = true;
+              signal.removeEventListener("abort", aborted);
+              reject(signal.reason);
+            };
+            signal.addEventListener("abort", aborted, { once: true });
+            if (signal.aborted) aborted();
+          });
+        },
       },
-    });
+    );
     let settled = false;
     let outcome: Promise<void> | undefined;
     try {
@@ -1108,9 +1159,19 @@ for (const phase of ["before fixture initialization", "during bridge verificatio
         creating,
         (error: unknown) => error instanceof CuaDriverError && error.code === "startup_timeout",
       );
-      void creating.then(() => { settled = true; }, () => { settled = true; });
+      void creating.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
       await waitForCondition(() => verifierSignal !== undefined);
-      assert.deepEqual(children.map(({ role }) => role), ["broker", "bridge"]);
+      assert.deepEqual(
+        children.map(({ role }) => role),
+        ["broker", "bridge"],
+      );
       assert.equal(bridgePid, children[1].child.pid);
       for (const { child } of children) {
         assert.ok(child.pid);
@@ -1121,8 +1182,10 @@ for (const phase of ["before fixture initialization", "during bridge verificatio
         await assert.rejects(readFile(logPath), { code: "ENOENT" });
       } else {
         for (const { child, role } of children) {
-          await waitForEvent(logPath, (event) =>
-            event.event === "spawn" && event.command === role && event.pid === child.pid);
+          await waitForEvent(
+            logPath,
+            (event) => event.event === "spawn" && event.command === role && event.pid === child.pid,
+          );
         }
       }
       assert.equal((await readdir(root)).filter((name) => name.startsWith("acu-")).length, 1);
@@ -1135,7 +1198,10 @@ for (const phase of ["before fixture initialization", "during bridge verificatio
       t.mock.timers.reset();
       await outcome;
       for (const { child } of children) {
-        assert.ok(child.exitCode !== null || child.signalCode !== null, "the parent must reap each child");
+        assert.ok(
+          child.exitCode !== null || child.signalCode !== null,
+          "the parent must reap each child",
+        );
         assertProcessExited(child.pid!);
       }
       if (gated) await assert.rejects(readFile(logPath), { code: "ENOENT" });
@@ -1186,7 +1252,10 @@ test("a bridge seen exiting late no longer fails shutdown, and its lease directo
     assert.equal((await readdir(root)).filter((name) => name.startsWith("acu-")).length, 1);
     exitSeen = true;
     await host.shutdown();
-    assert.deepEqual((await readdir(root)).filter((name) => name.startsWith("acu-")), []);
+    assert.deepEqual(
+      (await readdir(root)).filter((name) => name.startsWith("acu-")),
+      [],
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1258,7 +1327,10 @@ test("a session whose bridge exited normally still shuts down cleanly", async ()
     const session = await host.createSession();
     await session.close();
     await host.shutdown();
-    assert.deepEqual((await readdir(root)).filter((name) => name.startsWith("acu-")), []);
+    assert.deepEqual(
+      (await readdir(root)).filter((name) => name.startsWith("acu-")),
+      [],
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1320,7 +1392,10 @@ test("an MCP request timeout poisons one process session and the next session is
     events.some((event) => event.event === "tool-call" && event.name === "list_apps"),
     false,
   );
-  assert.equal(events.filter((event) => event.event === "spawn" && event.command === "broker").length, 2);
+  assert.equal(
+    events.filter((event) => event.event === "spawn" && event.command === "broker").length,
+    2,
+  );
   await rm(root, { recursive: true, force: true });
 });
 
@@ -1376,8 +1451,7 @@ test("aborting a queued MCP request rejects promptly, poisons the session, and n
     const active = session.callTool("health_report", { include: ["binary_version"] });
     const activeRejected = assert.rejects(
       active,
-      (error: unknown) =>
-        error instanceof CuaDriverError && error.code === "transport_closed",
+      (error: unknown) => error instanceof CuaDriverError && error.code === "transport_closed",
     );
     await waitForEvent(
       logPath,
@@ -1413,11 +1487,7 @@ test("aborting a queued MCP request rejects promptly, poisons the session, and n
 test("readiness fails closed when the pinned driver omits a required tool", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-tools-"));
   const logPath = path.join(root, "events.jsonl");
-  const host = fakeHost(root, logPath, [
-    "--omit-tool",
-    "health_report",
-    "--stderr-warning",
-  ]);
+  const host = fakeHost(root, logPath, ["--omit-tool", "health_report", "--stderr-warning"]);
   try {
     await assert.rejects(
       host.createSession(),
@@ -1494,7 +1564,10 @@ test("broker death invalidates its session and a later session launches a fresh 
     await host.shutdown();
   }
   const events = await readEvents(logPath);
-  assert.equal(events.filter((event) => event.event === "spawn" && event.command === "bridge").length, 2);
+  assert.equal(
+    events.filter((event) => event.event === "spawn" && event.command === "bridge").length,
+    2,
+  );
   await rm(root, { recursive: true, force: true });
 });
 

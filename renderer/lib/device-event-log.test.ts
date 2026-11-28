@@ -23,11 +23,19 @@ const entry = (id: number, summary = `Touch ${id}`, kind = "touch"): DeviceEvent
 });
 
 test("payloads seed or append, and malformed entries are dropped", () => {
-  assert.deepEqual(parseEventLogPayload({ events: [entry(1), { id: "x" }, { ...entry(2), summary: undefined, msg: "Home" }] }), {
-    entries: [entry(1), { ...entry(2), summary: "Home" }],
-    reset: true,
+  assert.deepEqual(
+    parseEventLogPayload({
+      events: [entry(1), { id: "x" }, { ...entry(2), summary: undefined, msg: "Home" }],
+    }),
+    {
+      entries: [entry(1), { ...entry(2), summary: "Home" }],
+      reset: true,
+    },
+  );
+  assert.deepEqual(parseEventLogPayload({ event: entry(3) }), {
+    entries: [entry(3)],
+    reset: false,
   });
-  assert.deepEqual(parseEventLogPayload({ event: entry(3) }), { entries: [entry(3)], reset: false });
   assert.equal(parseEventLogPayload({ event: { summary: "no id" } }), null);
   assert.equal(parseEventLogPayload("ping"), null);
 });
@@ -63,7 +71,11 @@ test("clearing hides entries already seen, even if the hub re-sends them", () =>
 });
 
 test("filtering matches summary or kind, and copying formats one line per entry", () => {
-  const entries = [entry(1, "Touch begin 10,20"), entry(2, "Button home", "button"), entry(3, "Key down A", "key")];
+  const entries = [
+    entry(1, "Touch begin 10,20"),
+    entry(2, "Button home", "button"),
+    entry(3, "Key down A", "key"),
+  ];
   assert.deepEqual(
     filterEventLog(entries, "BUTTON").map((item) => item.id),
     [2],
@@ -113,7 +125,9 @@ test("the feed reads SSE through the proxy until it is unsubscribed", async () =
       },
     },
   );
-  controller.enqueue(encoder.encode(`: hello\n\ndata: ${JSON.stringify({ events: [entry(1), entry(2)] })}\n\n`));
+  controller.enqueue(
+    encoder.encode(`: hello\n\ndata: ${JSON.stringify({ events: [entry(1), entry(2)] })}\n\n`),
+  );
   controller.enqueue(encoder.encode(`data: ${JSON.stringify({ event: entry(3) })}\n`));
   controller.enqueue(encoder.encode("\n"));
   for (let index = 0; index < 10; index++) await new Promise((resolve) => setImmediate(resolve));
@@ -133,16 +147,26 @@ test("the feed reads SSE through the proxy until it is unsubscribed", async () =
 });
 
 test("threadtime logcat lines parse into pid, tid, level, tag, and message", () => {
-  assert.deepEqual(parseLogcatLine("10-08 09:41:02.123  1234  1290 E AndroidRuntime: FATAL EXCEPTION: main"), {
-    pid: 1234,
-    tid: 1290,
-    level: "E",
-    tag: "AndroidRuntime",
-    message: "FATAL EXCEPTION: main",
-  });
+  assert.deepEqual(
+    parseLogcatLine("10-08 09:41:02.123  1234  1290 E AndroidRuntime: FATAL EXCEPTION: main"),
+    {
+      pid: 1234,
+      tid: 1290,
+      level: "E",
+      tag: "AndroidRuntime",
+      message: "FATAL EXCEPTION: main",
+    },
+  );
   // Short tags are padded before the colon; the message may itself contain colons, or be empty.
-  assert.deepEqual(parseLogcatLine("10-08 09:41:02.124   601   601 I ActivityTaskManager: START u0 {cmp=a/b}")?.tag, "ActivityTaskManager");
-  assert.deepEqual(parseLogcatLine("10-08 09:41:02.125  2000  2001 D Tag     : key: value")?.message, "key: value");
+  assert.deepEqual(
+    parseLogcatLine("10-08 09:41:02.124   601   601 I ActivityTaskManager: START u0 {cmp=a/b}")
+      ?.tag,
+    "ActivityTaskManager",
+  );
+  assert.deepEqual(
+    parseLogcatLine("10-08 09:41:02.125  2000  2001 D Tag     : key: value")?.message,
+    "key: value",
+  );
   assert.deepEqual(parseLogcatLine("10-08 09:41:02.126  2000  2001 W Tag     :")?.message, "");
   assert.equal(parseLogcatLine("--------- beginning of main"), null);
   assert.equal(parseLogcatLine("[logcat stderr] adb: device offline"), null);
@@ -172,11 +196,17 @@ test("logcat batches become log entries with rising ids, a note for dropped line
   assert.equal(eventLogTime(entries[0]!.timestamp), "09:41:02");
   assert.ok(entries[0]!.id < entries[1]!.id && entries[1]!.id < entries[2]!.id);
   // A later batch keeps counting up, so a cleared log stays cleared.
-  const later = parseLogcatPayload({ lines: [{ line: "x", at: "" }] }) as { entries: DeviceEventLogEntry[] };
+  const later = parseLogcatPayload({ lines: [{ line: "x", at: "" }] }) as {
+    entries: DeviceEventLogEntry[];
+  };
   assert.ok(later.entries[0]!.id > entries[2]!.id);
   assert.deepEqual(parseLogcatPayload({ error: "adb died", at: "now" }), { error: "adb died" });
   assert.deepEqual(parseLogcatPayload({ code: 0, signal: null }), { closed: true });
-  assert.equal(parseLogcatPayload({ serial: "emulator-5554", package: null }), null, "the ready event adds nothing");
+  assert.equal(
+    parseLogcatPayload({ serial: "emulator-5554", package: null }),
+    null,
+    "the ready event adds nothing",
+  );
 });
 
 test("an emulator's logcat streams from serve-emu for that serial, optionally one app, until unsubscribed", async () => {
@@ -204,8 +234,14 @@ test("an emulator's logcat streams from serve-emu for that serial, optionally on
     },
   );
   const line = "10-08 09:41:02.123  4321  4321 I Shop: opened cart";
-  controller.enqueue(encoder.encode(`event: ready\ndata: ${JSON.stringify({ serial: "emulator-5554" })}\n\n`));
-  controller.enqueue(encoder.encode(`event: logs\ndata: ${JSON.stringify({ lines: [{ line, at: "2026-10-08T09:41:02Z" }], dropped: 0 })}\n\n`));
+  controller.enqueue(
+    encoder.encode(`event: ready\ndata: ${JSON.stringify({ serial: "emulator-5554" })}\n\n`),
+  );
+  controller.enqueue(
+    encoder.encode(
+      `event: logs\ndata: ${JSON.stringify({ lines: [{ line, at: "2026-10-08T09:41:02Z" }], dropped: 0 })}\n\n`,
+    ),
+  );
   for (let index = 0; index < 10; index++) await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
     urls[0],
@@ -220,7 +256,12 @@ test("an emulator's logcat streams from serve-emu for that serial, optionally on
   // A package that is not an Android package name is never sent as a filter.
   const odd: string[] = [];
   subscribeAndroidLogcat(
-    { hostId: "local", deviceId: "emulator-5554", grant: GRANT, packageName: "x&device=emulator-5556" },
+    {
+      hostId: "local",
+      deviceId: "emulator-5554",
+      grant: GRANT,
+      packageName: "x&device=emulator-5556",
+    },
     () => undefined,
     () => undefined,
     { fetch: async (url) => (odd.push(url), new Response("", { status: 429 })) },
@@ -232,17 +273,27 @@ test("an emulator's logcat streams from serve-emu for that serial, optionally on
 
 test("an emulator logcat that serve-emu refuses or ends with an error reports why, once", async () => {
   const busy: Array<string | null> = [];
-  subscribeAndroidLogcat({ hostId: "local", deviceId: "emulator-5554", grant: GRANT }, () => undefined, (error) => busy.push(error), {
-    fetch: async () => new Response("{}", { status: 429 }),
-  });
+  subscribeAndroidLogcat(
+    { hostId: "local", deviceId: "emulator-5554", grant: GRANT },
+    () => undefined,
+    (error) => busy.push(error),
+    {
+      fetch: async () => new Response("{}", { status: 429 }),
+    },
+  );
   const failing: Array<string | null> = [];
   const payload = [
     `event: error\ndata: ${JSON.stringify({ error: "adb: device offline", at: "now" })}\n\n`,
     `event: close\ndata: ${JSON.stringify({ code: 1, signal: null })}\n\n`,
   ].join("");
-  subscribeAndroidLogcat({ hostId: "local", deviceId: "emulator-5554", grant: GRANT }, () => undefined, (error) => failing.push(error), {
-    fetch: async () => new Response(payload, { status: 200 }),
-  });
+  subscribeAndroidLogcat(
+    { hostId: "local", deviceId: "emulator-5554", grant: GRANT },
+    () => undefined,
+    (error) => failing.push(error),
+    {
+      fetch: async () => new Response(payload, { status: 200 }),
+    },
+  );
   for (let index = 0; index < 10; index++) await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(busy, ["Too many logcat readers are open for this emulator."]);
   assert.deepEqual(failing, ["Logcat stopped: adb: device offline"]);

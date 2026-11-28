@@ -83,7 +83,9 @@ export class LiveSpeechOnsets {
     if (level >= LIVE_SPEECH_ONSET_LEVEL) {
       this.quietFrom = null;
       if (!open) {
-        const mark = this.mayPrecedeFence(startedAt, durationMs, capturedUntil) ? this.guardMark : this.begin();
+        const mark = this.mayPrecedeFence(startedAt, durationMs, capturedUntil)
+          ? this.guardMark
+          : this.begin();
         this.stretches.push({ mark, startedAt, endedAt: null });
       }
     } else if (open) {
@@ -156,7 +158,8 @@ export class LiveSpeechOnsets {
 
   private mayPrecedeFence(startedAt: number, durationMs: number, capturedUntil?: number): boolean {
     // Without a capture time, only the handled-audio guard can tell.
-    if (typeof capturedUntil !== "number" || !Number.isFinite(capturedUntil)) return startedAt < this.guardUntil;
+    if (typeof capturedUntil !== "number" || !Number.isFinite(capturedUntil))
+      return startedAt < this.guardUntil;
     // The worklet may carry up to one chunk of earlier samples into a packet,
     // so its first sample can be up to two packets older than its end.
     return capturedUntil - (2 * Math.max(0, durationMs)) / 1_000 <= this.guardCapturedUntil;
@@ -169,7 +172,8 @@ export class LiveSpeechOnsets {
 
   private prune(): void {
     this.stretches = this.stretches.filter(
-      (stretch) => stretch.endedAt === null || this.audioMs - stretch.endedAt <= LIVE_SPEECH_CAPTION_LAG_MS,
+      (stretch) =>
+        stretch.endedAt === null || this.audioMs - stretch.endedAt <= LIVE_SPEECH_CAPTION_LAG_MS,
     );
   }
 }

@@ -32,7 +32,16 @@ const PHRASES: Record<string, Record<LiveVoicePhraseKind, readonly string[]>> = 
     allow: ["allow", "allow once", "allow it", "yes allow", "yes allow it", "allow this once"],
     deny: ["deny", "deny it", "don't allow", "do not allow", "no deny", "reject"],
     confirm: ["yes do it", "yes go ahead", "go ahead", "do it", "confirm", "yes confirm"],
-    end: ["bye", "bye bye", "goodbye", "good bye", "that's all", "that is all", "end live", "stop live"],
+    end: [
+      "bye",
+      "bye bye",
+      "goodbye",
+      "good bye",
+      "that's all",
+      "that is all",
+      "end live",
+      "stop live",
+    ],
   },
   es: {
     allow: ["permitir", "permitir una vez", "permítelo", "sí permitir"],

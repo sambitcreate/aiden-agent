@@ -19,7 +19,9 @@ export function installStudioAssetProtocol(deps: {
   registerProtocol: (handler: (request: Request) => Promise<Response>) => void;
 }): boolean {
   if (!deps.enabled) return false;
-  deps.registerProtocol(createStudioAssetRequestHandler({ store: deps.store, grants: deps.grants }));
+  deps.registerProtocol(
+    createStudioAssetRequestHandler({ store: deps.store, grants: deps.grants }),
+  );
   return true;
 }
 

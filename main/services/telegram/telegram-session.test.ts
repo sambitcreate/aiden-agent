@@ -5,7 +5,7 @@ import type { CompactChatResult } from "../context-lifecycle-service.js";
 import { telegramCompactionResult } from "./telegram-session.js";
 
 test("Telegram compaction presents every closed lifecycle result without owning policy", () => {
-  const reasons: Array<Exclude<CompactChatResult, { compacted: true }>['reason']> = [
+  const reasons: Array<Exclude<CompactChatResult, { compacted: true }>["reason"]> = [
     "already_compact",
     "busy",
     "archived",
@@ -30,10 +30,7 @@ test("Telegram compaction presents every closed lifecycle result without owning 
 test("Telegram manual compaction uses the production shared-lifecycle adapter", async () => {
   const service = await readFile(new URL("./telegram-service.ts", import.meta.url), "utf8");
 
-  assert.match(
-    service,
-    /createTelegramLifecycleAdapter\(contextLifecycleService, profile\)/u,
-  );
+  assert.match(service, /createTelegramLifecycleAdapter\(contextLifecycleService, profile\)/u);
   assert.match(service, /compactChat: lifecycle\.compactChat/u);
   assert.match(service, /lifecycle\.cancelChat\(chatId\)/u);
   assert.doesNotMatch(service, /openSession|resolveRuntime|PiCompactionCoordinator/u);

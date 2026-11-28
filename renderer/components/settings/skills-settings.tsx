@@ -197,7 +197,9 @@ export function SkillsSettings() {
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
               <Text variant="strong">Built-in and discovered skills</Text>
               <InfoHint topic="discovered skills">
-                Aiden includes the aiden-app skill. Others come from SKILL.md files in .agents, .claude/skills and .aiden/skill or .aiden/skills folders, plus enabled Claude Code plugins named plugin:name.
+                Aiden includes the aiden-app skill. Others come from SKILL.md files in .agents,
+                .claude/skills and .aiden/skill or .aiden/skills folders, plus enabled Claude Code
+                plugins named plugin:name.
               </InfoHint>
             </div>
             {showDiscoveredSearch ? (
@@ -213,32 +215,32 @@ export function SkillsSettings() {
               No skills match “{discoveredQuery.trim()}”.
             </Text>
           ) : (
-          <div className="settings-card rounded-card">
-            {visibleDiscovered.map((s, i) => (
-              <React.Fragment key={s.invocationId}>
-                {i > 0 ? <Separator /> : null}
-                <div className="flex items-center gap-3 px-3.5 py-3">
-                  <FolderGit2 className="size-4 shrink-0 text-tertiary" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <Text variant="strong" truncate>
-                        {s.name}
+            <div className="settings-card rounded-card">
+              {visibleDiscovered.map((s, i) => (
+                <React.Fragment key={s.invocationId}>
+                  {i > 0 ? <Separator /> : null}
+                  <div className="flex items-center gap-3 px-3.5 py-3">
+                    <FolderGit2 className="size-4 shrink-0 text-tertiary" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <Text variant="strong" truncate>
+                          {s.name}
+                        </Text>
+                        <Badge color={s.source === "workspace" ? "blue" : "gray"}>
+                          {s.source === "builtin" ? "Built-in" : s.source}
+                        </Badge>
+                        {!s.available ? <Badge color="red">Unavailable</Badge> : null}
+                      </div>
+                      <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
+                        {!s.available
+                          ? s.unavailableReason || "Unavailable"
+                          : s.description || "No description"}
                       </Text>
-                      <Badge color={s.source === "workspace" ? "blue" : "gray"}>
-                        {s.source === "builtin" ? "Built-in" : s.source}
-                      </Badge>
-                      {!s.available ? <Badge color="red">Unavailable</Badge> : null}
                     </div>
-                    <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-                      {!s.available
-                        ? s.unavailableReason || "Unavailable"
-                        : s.description || "No description"}
-                    </Text>
                   </div>
-                </div>
-              </React.Fragment>
-            ))}
-          </div>
+                </React.Fragment>
+              ))}
+            </div>
           )}
         </div>
       ) : null}

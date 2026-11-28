@@ -6,7 +6,9 @@ import { approvalCardTool, approvalSummary } from "../../main/services/acp/gener
 import type { AcpApprovalRequest } from "../../main/services/acp/host.js";
 import { ChatApprovalCard } from "./chat-approval-card.js";
 
-function heading(request: Omit<AcpApprovalRequest, "toolCallId" | "paths" | "offersAlways">): string {
+function heading(
+  request: Omit<AcpApprovalRequest, "toolCallId" | "paths" | "offersAlways">,
+): string {
   const full = { toolCallId: "1", paths: [], offersAlways: true, ...request };
   const html = renderToStaticMarkup(
     <ChatApprovalCard
@@ -30,10 +32,19 @@ test("each kind of agent approval names its action the way Aiden's own cards do"
   assert.equal(heading({ kind: "command", title: "npm test" }), "Run on your Mac?");
   assert.equal(heading({ kind: "file_change", title: "Edit a.ts" }), "Change files on your Mac?");
   // Removing or relocating files is not presented as an edit: the title says files change, and the summary says how.
-  assert.equal(heading({ kind: "file_change", fileChange: "delete", title: "Delete old.ts" }), "Change files on your Mac?");
-  assert.equal(heading({ kind: "file_change", fileChange: "move", title: "Move a.ts" }), "Change files on your Mac?");
+  assert.equal(
+    heading({ kind: "file_change", fileChange: "delete", title: "Delete old.ts" }),
+    "Change files on your Mac?",
+  );
+  assert.equal(
+    heading({ kind: "file_change", fileChange: "move", title: "Move a.ts" }),
+    "Change files on your Mac?",
+  );
   assert.equal(heading({ kind: "file_read", title: "Read .env" }), "Review before Read file");
-  assert.equal(heading({ kind: "fetch", title: "https://example.com/docs" }), "Review before Fetch web page → example.com");
+  assert.equal(
+    heading({ kind: "fetch", title: "https://example.com/docs" }),
+    "Review before Fetch web page → example.com",
+  );
   assert.equal(heading({ kind: "other", title: "Lookup" }), "Review before Agent tool");
 });
 
@@ -46,13 +57,21 @@ test("a delete approval says it deletes, in the summary too", () => {
     paths: ["old.ts"],
     offersAlways: false,
   });
-  assert.match(summary, /^Google Antigravity wants to delete files: Delete old\.ts\nFiles: old\.ts$/u);
+  assert.match(
+    summary,
+    /^Google Antigravity wants to delete files: Delete old\.ts\nFiles: old\.ts$/u,
+  );
 });
 
 test("an unknown tool's heading is sentence case, never a raw snake_case name", () => {
   const html = renderToStaticMarkup(
     <ChatApprovalCard
-      pending={{ approvalId: "x", toolCallId: "1", toolName: "future_agent_tool", summary: "Do a thing" }}
+      pending={{
+        approvalId: "x",
+        toolCallId: "1",
+        toolName: "future_agent_tool",
+        summary: "Do a thing",
+      }}
       deciding={false}
       onDecide={() => undefined}
     />,

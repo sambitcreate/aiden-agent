@@ -88,7 +88,12 @@ export function ChatTitleMenu({
   const [saving, setSaving] = React.useState(false);
 
   // A narrow column truncates the title, so hovering shows it in full.
-  if (!persisted) return <span className="block truncate" title={title}>{title}</span>;
+  if (!persisted)
+    return (
+      <span className="block truncate" title={title}>
+        {title}
+      </span>
+    );
 
   const commitRename = async () => {
     const next = renameValue.trim();
@@ -116,7 +121,9 @@ export function ChatTitleMenu({
             style={INSET_FOCUS_RING}
             className="no-drag max-w-full min-w-0 shrink gap-1 px-1.5 text-strong text-primary"
           >
-            <span className="min-w-0 truncate" title={title}>{title}</span>
+            <span className="min-w-0 truncate" title={title}>
+              {title}
+            </span>
             <ChevronDown aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
           </Button>
         </DropdownMenuTrigger>
@@ -135,7 +142,9 @@ export function ChatTitleMenu({
             title={duplicateDisabledReason ?? undefined}
             onSelect={() => {
               void onDuplicate().catch((error: unknown) => {
-                toast.error(error instanceof Error ? error.message : "Couldn't duplicate this chat.");
+                toast.error(
+                  error instanceof Error ? error.message : "Couldn't duplicate this chat.",
+                );
               });
             }}
           >
@@ -245,7 +254,8 @@ export function WorkspaceChip({
         setMenuOpen(open);
         // Opening the menu re-reads Git state, so a folder that just became a
         // repository (or switched branch) shows it without waiting for the poll.
-        if (open && accessible) void qc.invalidateQueries({ queryKey: queryKeys.git(workspace.id) });
+        if (open && accessible)
+          void qc.invalidateQueries({ queryKey: queryKeys.git(workspace.id) });
       }}
     >
       <DropdownMenuTrigger asChild>
@@ -268,7 +278,10 @@ export function WorkspaceChip({
             {folderPath}
           </span>
           {statusLine ? (
-            <span className="flex min-w-0 items-center gap-1 font-normal" data-workspace-chip-status>
+            <span
+              className="flex min-w-0 items-center gap-1 font-normal"
+              data-workspace-chip-status
+            >
               {branch ? <GitBranch aria-hidden="true" className="size-3 shrink-0" /> : null}
               <span className="truncate">{statusLine}</span>
             </span>
@@ -293,7 +306,9 @@ export function WorkspaceChip({
             <DropdownMenuItem
               onSelect={() => {
                 void workspacesApi.openFolder(workspace.id).catch((error: unknown) => {
-                  toast.error(error instanceof Error ? error.message : "Couldn't open this folder.");
+                  toast.error(
+                    error instanceof Error ? error.message : "Couldn't open this folder.",
+                  );
                 });
               }}
             >
@@ -537,14 +552,22 @@ export function WorkspaceToolButtons({
   useCommandHandler("tools.browser", () => panel.showTools("browser"), commandReady("browser"));
   useCommandHandler("tools.devices", () => panel.showTools("devices"), commandReady("devices"));
   useCommandHandler("tools.context", () => panel.showTools("context"), commandReady("context"));
-  useCommandHandler("tools.subagents", () => panel.showTools("subagents"), commandReady("subagents"));
+  useCommandHandler(
+    "tools.subagents",
+    () => panel.showTools("subagents"),
+    commandReady("subagents"),
+  );
   useCommandHandler(
     "tools.artifacts",
     () => panel.showTools("artifacts"),
     commandReady("artifacts") && panel.artifactsOffered,
   );
   const menuTools: EnvironmentPanelTab[] = hasWorkspace
-    ? [...(compact ? buttons : []), "context", ...(available("subagents") ? (["subagents"] as const) : [])]
+    ? [
+        ...(compact ? buttons : []),
+        "context",
+        ...(available("subagents") ? (["subagents"] as const) : []),
+      ]
     : [];
   const menuActions = tight ? foldable.filter((action) => action.available !== false) : [];
   const shownActions = (placement: "leading" | "tools") =>
@@ -573,7 +596,10 @@ export function WorkspaceToolButtons({
               {leading}
               {shownActions("leading")}
             </span>
-            <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-separator peer-empty/leading:hidden" />
+            <span
+              aria-hidden="true"
+              className="mx-1 h-4 w-px shrink-0 bg-separator peer-empty/leading:hidden"
+            />
           </>
         ) : null}
         {shownActions("tools")}

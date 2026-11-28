@@ -12,10 +12,22 @@ import { BotSpendingSection } from "./bot-spending-section";
 
 afterEach(cleanup);
 
-const FREE = [{ id: "ollama", models: ["llama"], baseUrl: "http://127.0.0.1:11434/v1", hasKey: true }];
-const METERED = [{ id: "openai", models: ["fast"], baseUrl: "https://api.openai.com/v1", hasKey: true, credentialType: "api_key" }];
+const FREE = [
+  { id: "ollama", models: ["llama"], baseUrl: "http://127.0.0.1:11434/v1", hasKey: true },
+];
+const METERED = [
+  {
+    id: "openai",
+    models: ["fast"],
+    baseUrl: "https://api.openai.com/v1",
+    hasKey: true,
+    credentialType: "api_key",
+  },
+];
 
-async function mount(options: { providers?: unknown[]; settingsFail?: true; limitFail?: true; choice?: unknown } = {}) {
+async function mount(
+  options: { providers?: unknown[]; settingsFail?: true; limitFail?: true; choice?: unknown } = {},
+) {
   installBotTestIpc({
     "settings:get": () => {
       if (options.settingsFail) throw new Error("unreadable");

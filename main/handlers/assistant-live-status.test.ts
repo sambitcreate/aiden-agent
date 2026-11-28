@@ -14,14 +14,10 @@ const owner = {
 test("Assistant Live status boundary normalizes sync and async service failures", async () => {
   for (const availability of [
     () => {
-      throw new Error(
-        "wss://provider.example KEY_SENTINEL SYNC_STATUS_SENTINEL",
-      );
+      throw new Error("wss://provider.example KEY_SENTINEL SYNC_STATUS_SENTINEL");
     },
     async () => {
-      throw new Error(
-        "wss://provider.example KEY_SENTINEL ASYNC_STATUS_SENTINEL",
-      );
+      throw new Error("wss://provider.example KEY_SENTINEL ASYNC_STATUS_SENTINEL");
     },
   ]) {
     const status = await invokeAssistantLiveStatus({ availability }, owner);
@@ -44,10 +40,7 @@ test("Assistant Live status boundary preserves a known safe status", async () =>
     state: "idle",
   } as const;
   assert.equal(
-    await invokeAssistantLiveStatus(
-      { availability: async () => expected },
-      owner,
-    ),
+    await invokeAssistantLiveStatus({ availability: async () => expected }, owner),
     expected,
   );
 });

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hookScopesFor, parseHooksConfig, parseHooksConfigText, validateHookHandler } from "./hook-config.js";
+import {
+  hookScopesFor,
+  parseHooksConfig,
+  parseHooksConfigText,
+  validateHookHandler,
+} from "./hook-config.js";
 import { aidenToolInput, aidenToolName, claudeToolInput, claudeToolName } from "./hook-aliases.js";
 import type { HookScope } from "./hook-types.js";
 
@@ -11,9 +16,20 @@ test("a Claude Code hooks file parses into one listing per handler", () => {
   const parsed = parseHooksConfig(
     {
       hooks: {
-        PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "~/.aiden/hooks/guard-shell.sh", timeout: 10 }] }],
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [{ type: "command", command: "~/.aiden/hooks/guard-shell.sh", timeout: 10 }],
+          },
+        ],
         PostToolUse: [
-          { matcher: "Write|Edit", hooks: [{ type: "command", command: "npx prettier --write \"$AIDEN_HOOK_FILE\"" }, { type: "command", command: "./lint.sh" }] },
+          {
+            matcher: "Write|Edit",
+            hooks: [
+              { type: "command", command: 'npx prettier --write "$AIDEN_HOOK_FILE"' },
+              { type: "command", command: "./lint.sh" },
+            ],
+          },
         ],
       },
     },
@@ -29,7 +45,11 @@ test("a Claude Code hooks file parses into one listing per handler", () => {
     ],
   );
   assert.equal(new Set(parsed.hooks.map((hook) => hook.id)).size, 3, "ids are unique");
-  assert.equal(new Set(parsed.hooks.map((hook) => hook.digest)).size, 3, "digests differ per handler");
+  assert.equal(
+    new Set(parsed.hooks.map((hook) => hook.digest)).size,
+    3,
+    "digests differ per handler",
+  );
 });
 
 test("ids and digests are stable across reparses and change with what the hook does", () => {
@@ -41,7 +61,11 @@ test("ids and digests are stable across reparses and change with what the hook d
   const edits = [
     { hooks: { Stop: [{ hooks: [{ type: "command", command: "./check.sh --strict" }] }] } },
     { hooks: { Stop: [{ hooks: [{ type: "command", command: "./check.sh", timeout: 5 }] }] } },
-    { hooks: { Stop: [{ hooks: [{ type: "command", command: "./check.sh", envAllow: ["GITHUB_TOKEN"] }] }] } },
+    {
+      hooks: {
+        Stop: [{ hooks: [{ type: "command", command: "./check.sh", envAllow: ["GITHUB_TOKEN"] }] }],
+      },
+    },
     { hooks: { Stop: [{ matcher: "x", hooks: [{ type: "command", command: "./check.sh" }] }] } },
   ];
   for (const edit of edits) {
@@ -49,8 +73,15 @@ test("ids and digests are stable across reparses and change with what the hook d
     assert.equal(edited?.id, first?.id);
     assert.notEqual(edited?.digest, first?.digest);
   }
-  const elsewhere = parseHooksConfig(document, { ...options, scope: { kind: "workspace", workspaceRoot: "/other" } }).hooks[0];
-  assert.notEqual(elsewhere?.digest, first?.digest, "the same file in another workspace needs its own approval");
+  const elsewhere = parseHooksConfig(document, {
+    ...options,
+    scope: { kind: "workspace", workspaceRoot: "/other" },
+  }).hooks[0];
+  assert.notEqual(
+    elsewhere?.digest,
+    first?.digest,
+    "the same file in another workspace needs its own approval",
+  );
 });
 
 test("unsupported entries are listed with a reason instead of dropped", () => {
@@ -70,7 +101,12 @@ test("unsupported entries are listed with a reason instead of dropped", () => {
     options,
   );
   assert.deepEqual(
-    parsed.hooks.map((hook) => [hook.configuredEvent, hook.event, hook.configuredType, hook.status]),
+    parsed.hooks.map((hook) => [
+      hook.configuredEvent,
+      hook.event,
+      hook.configuredType,
+      hook.status,
+    ]),
     [
       ["PreToolUse", "PreToolUse", "http", "unsupported"],
       ["PreToolUse", "PreToolUse", "prompt", "unsupported"],
@@ -82,13 +118,19 @@ test("unsupported entries are listed with a reason instead of dropped", () => {
   );
   for (const hook of parsed.hooks) assert.ok(hook.unsupportedReason, `${hook.id} explains why`);
   // A repo file is a workspace scope, where routines never run.
-  assert.match(parsed.hooks[parsed.hooks.length - 1]?.unsupportedReason ?? "", /RoutineRun hooks never run for a workspace; save it globally or for a Bot/u);
+  assert.match(
+    parsed.hooks[parsed.hooks.length - 1]?.unsupportedReason ?? "",
+    /RoutineRun hooks never run for a workspace; save it globally or for a Bot/u,
+  );
 });
 
 test("file-level problems are reported without throwing", () => {
   assert.match(parseHooksConfigText("{ not json", options).problems[0] ?? "", /not valid JSON/u);
   assert.match(parseHooksConfig([], options).problems[0] ?? "", /JSON object/u);
-  assert.match(parseHooksConfig({ hooks: { Stop: {} } }, options).problems[0] ?? "", /list of matcher groups/u);
+  assert.match(
+    parseHooksConfig({ hooks: { Stop: {} } }, options).problems[0] ?? "",
+    /list of matcher groups/u,
+  );
   assert.deepEqual(parseHooksConfig({ hooks: {} }, options).hooks, []);
 });
 
@@ -98,15 +140,30 @@ test("handler validation enforces the timeout, env and command rules", () => {
   assert.equal(lowered.handler.timeout, 120);
   assert.equal(lowered.warnings.length, 1);
 
-  const agent = validateHookHandler({ type: "command", command: "./x.sh", timeout: 31 }, { maxTimeoutSeconds: 30 });
+  const agent = validateHookHandler(
+    { type: "command", command: "./x.sh", timeout: 31 },
+    { maxTimeoutSeconds: 30 },
+  );
   assert.equal(agent.ok, false);
 
   assert.equal(validateHookHandler({ type: "command", command: "   " }).ok, false);
-  assert.equal(validateHookHandler({ type: "command", command: "./x.sh", envAllow: ["AIDEN_PROJECT_DIR"] }).ok, false);
-  assert.equal(validateHookHandler({ type: "command", command: "./x.sh", envAllow: ["not a name"] }).ok, false);
+  assert.equal(
+    validateHookHandler({ type: "command", command: "./x.sh", envAllow: ["AIDEN_PROJECT_DIR"] }).ok,
+    false,
+  );
+  assert.equal(
+    validateHookHandler({ type: "command", command: "./x.sh", envAllow: ["not a name"] }).ok,
+    false,
+  );
   assert.equal(validateHookHandler({ type: "command", command: "./x.sh", extra: 1 }).ok, false);
 
-  const accepted = validateHookHandler({ type: "command", command: "./x.sh", envAllow: ["B_TOKEN", "A_TOKEN", "A_TOKEN"], failClosed: true, statusMessage: "Checking" });
+  const accepted = validateHookHandler({
+    type: "command",
+    command: "./x.sh",
+    envAllow: ["B_TOKEN", "A_TOKEN", "A_TOKEN"],
+    failClosed: true,
+    statusMessage: "Checking",
+  });
   assert.ok(accepted.ok);
   assert.deepEqual(accepted.handler.envAllow, ["A_TOKEN", "B_TOKEN"]);
   assert.equal(accepted.handler.failClosed, true);
@@ -132,13 +189,23 @@ test("a repo hook whose command hides text with direction or control characters 
 });
 
 test("async handlers run in the background with a longer timeout and can't block", () => {
-  const background = validateHookHandler({ type: "command", command: "./setup.sh", async: true, timeout: 600 });
+  const background = validateHookHandler({
+    type: "command",
+    command: "./setup.sh",
+    async: true,
+    timeout: 600,
+  });
   assert.ok(background.ok);
   assert.equal(background.handler.async, true);
   assert.equal(background.handler.timeout, 600);
   assert.deepEqual(background.warnings, []);
 
-  const capped = validateHookHandler({ type: "command", command: "./setup.sh", async: true, timeout: 900 });
+  const capped = validateHookHandler({
+    type: "command",
+    command: "./setup.sh",
+    async: true,
+    timeout: 900,
+  });
   assert.ok(capped.ok);
   assert.equal(capped.handler.timeout, 600);
   assert.match(capped.warnings[0] ?? "", /600 seconds for async hooks/u);
@@ -148,7 +215,10 @@ test("async handlers run in the background with a longer timeout and can't block
   assert.ok(sync.ok);
   assert.equal(sync.handler.timeout, 120);
 
-  assert.equal(validateHookHandler({ type: "command", command: "./x.sh", async: true, failClosed: true }).ok, false);
+  assert.equal(
+    validateHookHandler({ type: "command", command: "./x.sh", async: true, failClosed: true }).ok,
+    false,
+  );
   assert.equal(validateHookHandler({ type: "command", command: "./x.sh", async: "yes" }).ok, false);
   // `async: false` is the default and leaves nothing behind.
   const explicitSync = validateHookHandler({ type: "command", command: "./x.sh", async: false });
@@ -157,7 +227,9 @@ test("async handlers run in the background with a longer timeout and can't block
 });
 
 test("making a hook async changes its digest; async: false does not", () => {
-  const document = (handler: Record<string, unknown>) => ({ hooks: { Stop: [{ hooks: [{ type: "command", command: "./check.sh", ...handler }] }] } });
+  const document = (handler: Record<string, unknown>) => ({
+    hooks: { Stop: [{ hooks: [{ type: "command", command: "./check.sh", ...handler }] }] },
+  });
   const plain = parseHooksConfig(document({}), options).hooks[0];
   const explicitSync = parseHooksConfig(document({ async: false }), options).hooks[0];
   const background = parseHooksConfig(document({ async: true }), options).hooks[0];
@@ -186,12 +258,23 @@ test("tool names and inputs translate between Aiden and Claude spellings", () =>
 
   const original = { path: "src/a.ts", old_string: "a", new_string: "b" };
   assert.deepEqual(claudeToolInput(original), { ...original, file_path: "src/a.ts" });
-  assert.deepEqual(original, { path: "src/a.ts", old_string: "a", new_string: "b" }, "the caller's input is not changed");
-  assert.deepEqual(aidenToolInput("edit_file", { file_path: "src/b.ts", path: "src/a.ts", old_string: "a", new_string: "c" }, original), {
-    path: "src/b.ts",
-    old_string: "a",
-    new_string: "c",
-  });
+  assert.deepEqual(
+    original,
+    { path: "src/a.ts", old_string: "a", new_string: "b" },
+    "the caller's input is not changed",
+  );
+  assert.deepEqual(
+    aidenToolInput(
+      "edit_file",
+      { file_path: "src/b.ts", path: "src/a.ts", old_string: "a", new_string: "c" },
+      original,
+    ),
+    {
+      path: "src/b.ts",
+      old_string: "a",
+      new_string: "c",
+    },
+  );
 
   // generate_image keeps its own name, and its savePath is the file a Write hook sees.
   assert.equal(claudeToolName("generate_image"), "generate_image");
@@ -202,16 +285,35 @@ test("tool names and inputs translate between Aiden and Claude spellings", () =>
   const spelled = { prompt: "a hero", savePath: "./design//assets\\hero.png" };
   assert.equal(claudeToolInput(spelled)?.file_path, "design/assets/hero.png");
   // A savePath the tool refuses names no file at all.
-  for (const savePath of ["../outside.png", ".git/hooks/pre-commit.png", "design/hero\u202egnp.png", "notes.txt"]) {
-    assert.equal(claudeToolInput({ prompt: "a hero", savePath })?.file_path, undefined, JSON.stringify(savePath));
+  for (const savePath of [
+    "../outside.png",
+    ".git/hooks/pre-commit.png",
+    "design/hero\u202egnp.png",
+    "notes.txt",
+  ]) {
+    assert.equal(
+      claudeToolInput({ prompt: "a hero", savePath })?.file_path,
+      undefined,
+      JSON.stringify(savePath),
+    );
   }
-  assert.deepEqual(aidenToolInput("generate_image", { ...image, file_path: "design/hero-2.png" }, image), {
-    prompt: "a hero",
-    savePath: "design/hero-2.png",
-  });
+  assert.deepEqual(
+    aidenToolInput("generate_image", { ...image, file_path: "design/hero-2.png" }, image),
+    {
+      prompt: "a hero",
+      savePath: "design/hero-2.png",
+    },
+  );
   // A hook that rewrites savePath itself keeps its own value.
-  assert.deepEqual(aidenToolInput("generate_image", { prompt: "a hero", savePath: "art/x.png", file_path: "design/hero.png" }, image), {
-    prompt: "a hero",
-    savePath: "art/x.png",
-  });
+  assert.deepEqual(
+    aidenToolInput(
+      "generate_image",
+      { prompt: "a hero", savePath: "art/x.png", file_path: "design/hero.png" },
+      image,
+    ),
+    {
+      prompt: "a hero",
+      savePath: "art/x.png",
+    },
+  );
 });

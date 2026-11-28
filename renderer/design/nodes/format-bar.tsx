@@ -32,7 +32,12 @@ import {
   PopoverTrigger,
 } from "../../components/ui";
 import { linkFromInput } from "../../shared/design-canvas/rich-text";
-import { DESIGN_COLORS, type DesignColor, type DesignFrame, type DesignTextSize } from "../../shared/design-canvas/schema";
+import {
+  DESIGN_COLORS,
+  type DesignColor,
+  type DesignFrame,
+  type DesignTextSize,
+} from "../../shared/design-canvas/schema";
 import { useDesignNodeContext } from "./design-node-context";
 import { designColorVar, designFillVar, DESIGN_COLOR_NAMES } from "./draw-style";
 import type { RichTextCommand, RichTextEditorHandle, RichTextState } from "./rich-text-editor";
@@ -45,7 +50,16 @@ export function focusInFormatBar(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest(`[${FORMAT_BAR_ATTRIBUTE}]`) !== null;
 }
 
-const NOTE_COLORS: readonly DesignColor[] = ["yellow", "green", "blue", "purple", "pink", "red", "teal", "gray"];
+const NOTE_COLORS: readonly DesignColor[] = [
+  "yellow",
+  "green",
+  "blue",
+  "purple",
+  "pink",
+  "red",
+  "teal",
+  "gray",
+];
 const SIZES: readonly { size: DesignTextSize; label: string }[] = [
   { size: "small", label: "Small" },
   { size: "medium", label: "Medium" },
@@ -121,7 +135,13 @@ export function FormatBar({
     if (editing) editor.current?.saveSelection();
   };
 
-  const mark = (label: string, key: string, command: RichTextCommand, on: boolean, Icon: typeof Bold) => (
+  const mark = (
+    label: string,
+    key: string,
+    command: RichTextCommand,
+    on: boolean,
+    Icon: typeof Bold,
+  ) => (
     <Button
       variant={on ? "muted" : "transparent"}
       iconOnly
@@ -154,22 +174,38 @@ export function FormatBar({
           if (focusInFormatBar(next)) return;
           if (next instanceof Node && editor.current?.element?.contains(next)) return;
           // A menu or the link field opening moves the focus into a portal that carries the attribute too.
-          if (next === null && (linkOpen || document.activeElement?.closest(`[${FORMAT_BAR_ATTRIBUTE}]`))) return;
+          if (
+            next === null &&
+            (linkOpen || document.activeElement?.closest(`[${FORMAT_BAR_ATTRIBUTE}]`))
+          )
+            return;
           onLeave();
         }}
       >
         <DropdownMenu onOpenChange={(open) => open && keepSelection()}>
           <DropdownMenuTrigger asChild>
-            <Button variant="transparent" size="small" aria-label={`Text size: ${size}`} title="Text size" className="gap-0.5 px-1.5">
+            <Button
+              variant="transparent"
+              size="small"
+              aria-label={`Text size: ${size}`}
+              title="Text size"
+              className="gap-0.5 px-1.5"
+            >
               <ALargeSmall />
               <ChevronDown aria-hidden className="size-3 text-secondary" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" {...{ [FORMAT_BAR_ATTRIBUTE]: "" }} onCloseAutoFocus={backToEditor}>
+          <DropdownMenuContent
+            align="start"
+            {...{ [FORMAT_BAR_ATTRIBUTE]: "" }}
+            onCloseAutoFocus={backToEditor}
+          >
             <DropdownMenuLabel>Text size</DropdownMenuLabel>
             <DropdownMenuRadioGroup
               value={size}
-              onValueChange={(value) => canvas.update(frame.id, { size: value as DesignTextSize }, { record: true })}
+              onValueChange={(value) =>
+                canvas.update(frame.id, { size: value as DesignTextSize }, { record: true })
+              }
             >
               {SIZES.map((entry) => (
                 <DropdownMenuRadioItem key={entry.size} value={entry.size}>
@@ -187,7 +223,11 @@ export function FormatBar({
           onOpen={keepSelection}
           onCloseAutoFocus={backToEditor}
           onChange={(color) =>
-            canvas.update(frame.id, { color: color === "ink" || color === "none" ? undefined : color }, { record: true })
+            canvas.update(
+              frame.id,
+              { color: color === "ink" || color === "none" ? undefined : color },
+              { record: true },
+            )
           }
           trigger={
             <span
@@ -223,7 +263,13 @@ export function FormatBar({
               withDefault
               onOpen={keepSelection}
               onCloseAutoFocus={backToEditor}
-              onChange={(color) => canvas.update(frame.id, { fill: color === "none" ? undefined : color }, { record: true })}
+              onChange={(color) =>
+                canvas.update(
+                  frame.id,
+                  { fill: color === "none" ? undefined : color },
+                  { record: true },
+                )
+              }
               trigger={<PaintBucket />}
             />
           </>
@@ -269,14 +315,28 @@ function ColorMenu({
   return (
     <DropdownMenu onOpenChange={(open) => open && onOpen()}>
       <DropdownMenuTrigger asChild>
-        <Button variant="transparent" size="small" aria-label={`${label}: ${shown}`} title={label} className="gap-0.5 px-1.5">
+        <Button
+          variant="transparent"
+          size="small"
+          aria-label={`${label}: ${shown}`}
+          title={label}
+          className="gap-0.5 px-1.5"
+        >
           {trigger}
           <ChevronDown aria-hidden className="size-3 text-secondary" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-40" {...{ [FORMAT_BAR_ATTRIBUTE]: "" }} onCloseAutoFocus={onCloseAutoFocus}>
+      <DropdownMenuContent
+        align="start"
+        className="min-w-40"
+        {...{ [FORMAT_BAR_ATTRIBUTE]: "" }}
+        onCloseAutoFocus={onCloseAutoFocus}
+      >
         <DropdownMenuLabel>{label}</DropdownMenuLabel>
-        <DropdownMenuRadioGroup value={value} onValueChange={(next) => onChange(next as DesignColor | "none")}>
+        <DropdownMenuRadioGroup
+          value={value}
+          onValueChange={(next) => onChange(next as DesignColor | "none")}
+        >
           {withDefault ? (
             <DropdownMenuRadioItem value="none">
               <span aria-hidden className="size-3.5 rounded-full bg-popover shadow-control" />
@@ -285,7 +345,11 @@ function ColorMenu({
           ) : null}
           {colors.map((color) => (
             <DropdownMenuRadioItem key={color} value={color}>
-              <span aria-hidden className="size-3.5 rounded-full" style={{ background: swatch(color) }} />
+              <span
+                aria-hidden
+                className="size-3.5 rounded-full"
+                style={{ background: swatch(color) }}
+              />
               {DESIGN_COLOR_NAMES[color]}
             </DropdownMenuRadioItem>
           ))}

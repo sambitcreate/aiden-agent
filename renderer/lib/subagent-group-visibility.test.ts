@@ -30,12 +30,15 @@ class FakeIntersectionObserver {
   /** Reports these elements as on or off screen, as the browser does after a scroll. */
   report(changes: Array<[Element, boolean]>) {
     this.callback(
-      changes.map(([target, isIntersecting]) => ({ target, isIntersecting }) as IntersectionObserverEntry),
+      changes.map(
+        ([target, isIntersecting]) => ({ target, isIntersecting }) as IntersectionObserverEntry,
+      ),
       this as unknown as IntersectionObserver,
     );
   }
   static latest(): FakeIntersectionObserver {
-    const latest = FakeIntersectionObserver.instances[FakeIntersectionObserver.instances.length - 1];
+    const latest =
+      FakeIntersectionObserver.instances[FakeIntersectionObserver.instances.length - 1];
     assert.ok(latest, "an observer was created");
     return latest;
   }
@@ -58,7 +61,11 @@ test("a batch counts as on screen while any of its cards is, through a live-to-s
   const stopSaved = observeSubagentGroup(saved, "gen-1");
   const io = FakeIntersectionObserver.latest();
 
-  assert.equal(isAnySubagentGroupOnScreen(["gen-1"]), false, "nothing is on screen until the observer says so");
+  assert.equal(
+    isAnySubagentGroupOnScreen(["gen-1"]),
+    false,
+    "nothing is on screen until the observer says so",
+  );
   io.report([[live, true]]);
   assert.equal(isAnySubagentGroupOnScreen(["gen-1"]), true);
   assert.equal(isAnySubagentGroupOnScreen(["gen-2"]), false, "another batch's card does not count");
@@ -67,7 +74,11 @@ test("a batch counts as on screen while any of its cards is, through a live-to-s
   // The saved card takes the live one's place while both are briefly mounted.
   io.report([[saved, true]]);
   stopLive();
-  assert.equal(isAnySubagentGroupOnScreen(["gen-1"]), true, "the saved card still stands for the batch");
+  assert.equal(
+    isAnySubagentGroupOnScreen(["gen-1"]),
+    true,
+    "the saved card still stands for the batch",
+  );
   io.report([[saved, false]]);
   assert.equal(isAnySubagentGroupOnScreen(["gen-1"]), false, "scrolled away");
   stopSaved();

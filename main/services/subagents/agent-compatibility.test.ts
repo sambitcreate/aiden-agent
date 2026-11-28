@@ -56,21 +56,30 @@ const EMPTY_USAGE = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-async function reportBudgetFixture(options: {
-  policy?: SubagentChildRunnerPolicy;
-  now?: () => number;
-  onEffect?: () => void;
-  report?: () => AssistantMessage;
-  signal?: AbortSignal;
-} = {}) {
+async function reportBudgetFixture(
+  options: {
+    policy?: SubagentChildRunnerPolicy;
+    now?: () => number;
+    onEffect?: () => void;
+    report?: () => AssistantMessage;
+    signal?: AbortSignal;
+  } = {},
+) {
   const core = createFauxCore({ provider: "child-report-budget", models: [{ id: "bounded" }] });
   let effects = 0;
-  core.setResponses(Array.from({ length: 5 }, () => (context) => {
-    if (!getCurrentTools(context.messages).length) {
-      return options.report?.() ?? fauxAssistantMessage("Partial checks: fixture reads settled. Blocker: acceptance checks remain unrun; no task verification.");
-    }
-    return fauxAssistantMessage(fauxToolCall("inspect_fixture", {}), { stopReason: "toolUse" });
-  }));
+  core.setResponses(
+    Array.from({ length: 5 }, () => (context) => {
+      if (!getCurrentTools(context.messages).length) {
+        return (
+          options.report?.() ??
+          fauxAssistantMessage(
+            "Partial checks: fixture reads settled. Blocker: acceptance checks remain unrun; no task verification.",
+          )
+        );
+      }
+      return fauxAssistantMessage(fauxToolCall("inspect_fixture", {}), { stopReason: "toolUse" });
+    }),
+  );
   const registry = new SubagentRuntimeRegistry();
   const result = await runSubagentChild({
     authority: { generationId: "budget", chatId: "chat-budget", workspaceId: "workspace-budget" },
@@ -81,20 +90,31 @@ async function reportBudgetFixture(options: {
     permission: "none",
     inheritedCeiling: [],
     context: { mode: "fresh", revisionHash: "0".repeat(64), messages: [] },
-    request: { role: "scout", label: "Inspect", task: "Inspect fixtures and report checks and blockers." },
+    request: {
+      role: "scout",
+      label: "Inspect",
+      task: "Inspect fixtures and report checks and blockers.",
+    },
     policy: { maxTurns: 3, deadlineMs: 10_000, ...options.policy },
     now: options.now,
     signal: options.signal,
     dependencies: {
-      buildTools: async () => [{
-        name: "inspect_fixture", label: "Inspect fixture", description: "Inspect one fixture.",
-        parameters: Type.Object({}),
-        execute: async () => {
-          effects += 1;
-          options.onEffect?.();
-          return { content: [{ type: "text", text: "Fixture inspected; acceptance checks unrun." }], details: {} };
+      buildTools: async () => [
+        {
+          name: "inspect_fixture",
+          label: "Inspect fixture",
+          description: "Inspect one fixture.",
+          parameters: Type.Object({}),
+          execute: async () => {
+            effects += 1;
+            options.onEffect?.();
+            return {
+              content: [{ type: "text", text: "Fixture inspected; acceptance checks unrun." }],
+              details: {},
+            };
+          },
         },
-      }],
+      ],
       createChild: (spec) => registry.create(spec),
     },
   });
@@ -117,7 +137,14 @@ test("reporting consumes remaining tool and wall-clock budgets without extending
   let clock = 0;
   for (const scenario of [
     { policy: { maxTurns: 5, maxToolCalls: 1 }, warning: /tool-call limit/u },
-    { policy: { maxTurns: 5, timeLimit: "bot" as const }, now: () => clock, onEffect: () => { clock = 9_500; }, warning: /remaining deadline/u },
+    {
+      policy: { maxTurns: 5, timeLimit: "bot" as const },
+      now: () => clock,
+      onEffect: () => {
+        clock = 9_500;
+      },
+      warning: /remaining deadline/u,
+    },
   ]) {
     clock = 0;
     const { result, effects, core } = await reportBudgetFixture(scenario);
@@ -132,7 +159,11 @@ test("reporting consumes remaining tool and wall-clock budgets without extending
 test("a chat helper near its safety net keeps working instead of reserving a report turn", async () => {
   let clock = 0;
   const { result, effects } = await reportBudgetFixture({
-    policy: { maxTurns: 5, timeLimit: "chat" }, now: () => clock, onEffect: () => { clock = 9_500; },
+    policy: { maxTurns: 5, timeLimit: "chat" },
+    now: () => clock,
+    onEffect: () => {
+      clock = 9_500;
+    },
   });
   assert.equal(effects, 4, "only the turn limit, not the clock, ends a chat helper's tool work");
   assert.doesNotMatch(result.warning ?? "", /remaining deadline/u);
@@ -141,7 +172,8 @@ test("a chat helper near its safety net keeps working instead of reserving a rep
 
 test("report-only turn cannot execute stale tool names or start another provider turn", async () => {
   const { result, effects, core } = await reportBudgetFixture({
-    report: () => fauxAssistantMessage(fauxToolCall("inspect_fixture", {}), { stopReason: "toolUse" }),
+    report: () =>
+      fauxAssistantMessage(fauxToolCall("inspect_fixture", {}), { stopReason: "toolUse" }),
   });
   assert.equal(effects, 2);
   assert.equal(core.state.callCount, 3);
@@ -160,18 +192,32 @@ test("single-turn child cannot send an extra request for its reporting reserve",
 
 test("aborted reports and parent cancellation never become partial verification claims", async () => {
   const aborted = await reportBudgetFixture({
-    report: () => fauxAssistantMessage("Draft result must stay private", { stopReason: "aborted", errorMessage: "aborted" }),
+    report: () =>
+      fauxAssistantMessage("Draft result must stay private", {
+        stopReason: "aborted",
+        errorMessage: "aborted",
+      }),
   });
-  assert.equal(aborted.result.status, "failed", "unsolicited provider abort retains the existing failure classification");
+  assert.equal(
+    aborted.result.status,
+    "failed",
+    "unsolicited provider abort retains the existing failure classification",
+  );
   assert.equal(aborted.result.summary, "");
   const cancellation = new AbortController();
-  await assert.rejects(reportBudgetFixture({
-    signal: cancellation.signal,
-    report: () => {
-      cancellation.abort(new Error("Parent stopped during report"));
-      return fauxAssistantMessage("Draft result must stay private", { stopReason: "aborted", errorMessage: "aborted" });
-    },
-  }), /Parent stopped during report/u);
+  await assert.rejects(
+    reportBudgetFixture({
+      signal: cancellation.signal,
+      report: () => {
+        cancellation.abort(new Error("Parent stopped during report"));
+        return fauxAssistantMessage("Draft result must stay private", {
+          stopReason: "aborted",
+          errorMessage: "aborted",
+        });
+      },
+    }),
+    /Parent stopped during report/u,
+  );
 });
 
 test("a Bot report that runs out of time is handed over as unverified partial work without extending the deadline", async () => {
@@ -322,11 +368,15 @@ for (const change of ["shared spending", "lowered cap", "allowed more"] as const
       const core = createFauxCore({ provider: "helper-cap-wait", models: [{ id: "bounded" }] });
       core.setResponses([
         async (_context, options) => {
-          await options?.onResponse?.({ status: 429, headers: { "retry-after": "60" } }, core.getModel() as Model<Api>);
+          await options?.onResponse?.(
+            { status: 429, headers: { "retry-after": "60" } },
+            core.getModel() as Model<Api>,
+          );
           return {
             ...fauxAssistantMessage("", {
               stopReason: "error",
-              errorMessage: '429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}',
+              errorMessage:
+                '429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}',
             }),
             content: [],
           };
@@ -346,22 +396,41 @@ for (const change of ["shared spending", "lowered cap", "allowed more"] as const
           onWait: () => waiting.resolve(),
         }),
       });
-      const running = child(registry, runtimeFrom(core.getModel() as Model<Api>, core.streamSimple));
+      const running = child(
+        registry,
+        runtimeFrom(core.getModel() as Model<Api>, core.streamSimple),
+      );
       try {
         const result = running.prompt("Finish the bounded task.");
         const beforeWait = await Promise.race([waiting.promise.then(() => undefined), result]);
-        assert.equal(beforeWait, undefined, `the provider rejection must enter the wait: ${JSON.stringify(beforeWait)}`);
-        assert.equal(core.state.callCount, 1, "the rejected request is the only provider call before Retry now");
+        assert.equal(
+          beforeWait,
+          undefined,
+          `the provider rejection must enter the wait: ${JSON.stringify(beforeWait)}`,
+        );
+        assert.equal(
+          core.state.callCount,
+          1,
+          "the rejected request is the only provider call before Retry now",
+        );
         if (change === "lowered cap") settings.chatUsd = 0.5;
         else await spending.record(owner, 1);
         if (change === "allowed more") await spending.allowMore("chat", owner.id);
-        assert.equal(gate.retryNow(owner), true, "the helper is actually held by the provider limit");
+        assert.equal(
+          gate.retryNow(owner),
+          true,
+          "the helper is actually held by the provider limit",
+        );
         const outcome = await result;
         if (change === "allowed more") {
           assert.equal(core.state.callCount, 2);
           assert.equal(outcome.kind, "completed");
         } else {
-          assert.equal(core.state.callCount, 1, "releasing the provider wait must not dispatch another request at the chat cap");
+          assert.equal(
+            core.state.callCount,
+            1,
+            "releasing the provider wait must not dispatch another request at the chat cap",
+          );
           assert.notEqual(outcome.kind, "completed");
         }
       } finally {
@@ -515,9 +584,9 @@ test("production tool assembly reaches the feature-gated lazy factory", async ()
     } as unknown as AgentTool;
   };
   const names = async (allowSubagents: boolean) =>
-    (await assembleAgentTools({ permission: "full", allowSubagents, createSubagentTool }, sources)).map(
-      (tool) => tool.name,
-    );
+    (
+      await assembleAgentTools({ permission: "full", allowSubagents, createSubagentTool }, sources)
+    ).map((tool) => tool.name);
 
   assert.ok((await names(true)).includes("subagent"));
   assert.equal(constructed, 1, "the factory runs once, only when delegation is offered");
@@ -536,12 +605,11 @@ test("production tool assembly reaches the feature-gated lazy factory", async ()
 });
 
 test("production generation carries parent exclusions and Bot Files authority into child reads", async () => {
-  const [generationSource, childRuntimeSource, assemblySource] =
-    await Promise.all([
-      readFile(new URL("../llm-client.ts", import.meta.url), "utf-8"),
-      readFile(new URL("./subagent-child-runtime.ts", import.meta.url), "utf-8"),
-      readFile(new URL("./subagent-tool-assembly.ts", import.meta.url), "utf-8"),
-    ]);
+  const [generationSource, childRuntimeSource, assemblySource] = await Promise.all([
+    readFile(new URL("../llm-client.ts", import.meta.url), "utf-8"),
+    readFile(new URL("./subagent-child-runtime.ts", import.meta.url), "utf-8"),
+    readFile(new URL("./subagent-tool-assembly.ts", import.meta.url), "utf-8"),
+  ]);
   assert.match(
     generationSource,
     /const subagentReadCeiling\s*=\s*botContext\s*&&\s*!botContext\.admission\.authority\.files\.botHome\s*\?\s*\[\]\s*:\s*inheritedSubagentReadToolCeiling\(options\.excludeToolNames\)/u,
@@ -829,7 +897,10 @@ test("child bounds an irreducible active tool output before the next provider ca
   assert.equal(core.state.callCount, 2, "bounded active output does not need a summary request");
   assert.equal(runningChild.agent.state.messages[0]?.role, "system");
   assert.equal(runningChild.agent.state.messages[1]?.role, "user");
-  assert.equal(runningChild.agent.state.messages.some((message) => message.role === "compactionSummary"), false);
+  assert.equal(
+    runningChild.agent.state.messages.some((message) => message.role === "compactionSummary"),
+    false,
+  );
   assert.equal(registry.activeCount, 0);
 });
 
@@ -897,7 +968,10 @@ for (const initialSpend of [0.8, 0.1]) {
       broadcast() {},
     });
     await spending.record(owner, initialSpend);
-    const model = createFauxCore({ provider: "priced-fork", models: [{ id: "small", contextWindow: 32_768 }] }).getModel();
+    const model = createFauxCore({
+      provider: "priced-fork",
+      models: [{ id: "small", contextWindow: 32_768 }],
+    }).getModel();
     const calls: string[] = [];
     const runtime = runtimeFrom(model as Model<Api>, (requested, context) => {
       const prompt = JSON.stringify(context);
@@ -905,9 +979,11 @@ for (const initialSpend of [0.8, 0.1]) {
       calls.push(summary ? "summary" : "reply");
       const content = prompt.includes("PREFIX of a turn")
         ? "## Original Request\nConclude.\n\n## Early Progress\n- Reviewed history.\n\n## Context for Suffix\n- Continue."
-        : summary ? semanticCheckpointSummary("Fork history") : "Done.";
+        : summary
+          ? semanticCheckpointSummary("Fork history")
+          : "Done.";
       const message = providerMessage(requested, "stop", content);
-      const usd = summary ? 0.30 : 0.01;
+      const usd = summary ? 0.3 : 0.01;
       message.usage = { ...message.usage, cost: { ...message.usage.cost, input: usd, total: usd } };
       const stream = createAssistantMessageEventStream();
       stream.push({ type: "done", reason: "stop", message });
@@ -917,23 +993,29 @@ for (const initialSpend of [0.8, 0.1]) {
     const usage: number[] = [];
     const registry = new SubagentRuntimeRegistry(undefined, undefined, {
       spending,
-      recordCompactionUsage: (message) => { usage.push(message.usage.cost.total); },
+      recordCompactionUsage: (message) => {
+        usage.push(message.usage.cost.total);
+      },
     });
     const running = registry.create({
       authority: { generationId: "g", chatId: owner.id, workspaceId: "workspace" },
-      groupId: "group", runtime, thinkingLevel: "high", systemPrompt: "Finish the task.",
-      tools: [], initialMessages: longForkHistory(),
+      groupId: "group",
+      runtime,
+      thinkingLevel: "high",
+      systemPrompt: "Finish the task.",
+      tools: [],
+      initialMessages: longForkHistory(),
     });
     const outcome = await running.prompt("Conclude from the forked conversation.");
     const spent = (await spending.status("chat", owner.id))!.spentUsd;
     if (initialSpend === 0.8) {
       assert.deepEqual(calls, ["summary"]);
-      assert.deepEqual(usage, [0.30]);
-      assert.equal(spent, 1.10);
+      assert.deepEqual(usage, [0.3]);
+      assert.equal(spent, 1.1);
       assert.notEqual(outcome.kind, "completed");
     } else {
       assert.deepEqual(calls, ["summary", "summary", "reply"]);
-      assert.deepEqual(usage, [0.30, 0.30]);
+      assert.deepEqual(usage, [0.3, 0.3]);
       assert.ok(Math.abs(spent - 0.71) < 1e-8);
       assert.equal(outcome.kind, "completed");
     }
@@ -941,62 +1023,67 @@ for (const initialSpend of [0.8, 0.1]) {
 }
 
 for (const recentBudget of [undefined, 0]) {
-test(`forked initial context respects ${recentBudget === undefined ? "default" : "zero recent"} model budget before the first provider request`, async () => {
-  const core = createFauxCore({
-    provider: "aiden-compat-initial-fork",
-    models: [{ id: "compat-initial-fork", contextWindow: 32_768 }],
-  });
-  let firstContext = "";
-  const requestKinds: Array<"provider" | "summary"> = [];
-  const respond = async (context: unknown) => {
-    const serialized = JSON.stringify(context);
-    if (/context summarization assistant/u.test(serialized)) {
-      requestKinds.push("summary");
-      if (/PREFIX of a turn/u.test(serialized)) {
-        return fauxAssistantMessage(
-          "## Original Request\nConclude from the forked conversation.\n\n## Early Progress\n- Preserved the forked context.\n\n## Context for Suffix\n- Continue from the bounded checkpoint.",
-        );
+  test(`forked initial context respects ${recentBudget === undefined ? "default" : "zero recent"} model budget before the first provider request`, async () => {
+    const core = createFauxCore({
+      provider: "aiden-compat-initial-fork",
+      models: [{ id: "compat-initial-fork", contextWindow: 32_768 }],
+    });
+    let firstContext = "";
+    const requestKinds: Array<"provider" | "summary"> = [];
+    const respond = async (context: unknown) => {
+      const serialized = JSON.stringify(context);
+      if (/context summarization assistant/u.test(serialized)) {
+        requestKinds.push("summary");
+        if (/PREFIX of a turn/u.test(serialized)) {
+          return fauxAssistantMessage(
+            "## Original Request\nConclude from the forked conversation.\n\n## Early Progress\n- Preserved the forked context.\n\n## Context for Suffix\n- Continue from the bounded checkpoint.",
+          );
+        }
+        return fauxAssistantMessage(semanticCheckpointSummary("semantic checkpoint"));
       }
-      return fauxAssistantMessage(semanticCheckpointSummary("semantic checkpoint"));
-    }
-    requestKinds.push("provider");
-    firstContext = JSON.stringify(context);
-    return fauxAssistantMessage("bounded");
-  };
-  core.setResponses(Array.from({ length: 64 }, () => respond));
-  const registry = new SubagentRuntimeRegistry();
-  const modelRuntime = runtimeFrom(core.getModel() as Model<Api>, core.streamSimple);
-  const overrides = { "aiden-compat-initial-fork/compat-initial-fork": { reserveTokens: 8_192, keepRecentTokens: recentBudget ?? 12_288 } };
-  const runningChild = registry.create({
-    compactionModelOverrides: recentBudget === undefined ? undefined : overrides,
-    authority: {
-      generationId: "compatibility-generation",
-      chatId: "compatibility-chat",
-      workspaceId: "compatibility-workspace",
-    },
-    groupId: "compatibility-fork",
-    runtime: modelRuntime,
-    thinkingLevel: "high",
-    systemPrompt: "Complete one bounded child task.",
-    tools: [],
-    initialMessages: longForkHistory(),
+      requestKinds.push("provider");
+      firstContext = JSON.stringify(context);
+      return fauxAssistantMessage("bounded");
+    };
+    core.setResponses(Array.from({ length: 64 }, () => respond));
+    const registry = new SubagentRuntimeRegistry();
+    const modelRuntime = runtimeFrom(core.getModel() as Model<Api>, core.streamSimple);
+    const overrides = {
+      "aiden-compat-initial-fork/compat-initial-fork": {
+        reserveTokens: 8_192,
+        keepRecentTokens: recentBudget ?? 12_288,
+      },
+    };
+    const runningChild = registry.create({
+      compactionModelOverrides: recentBudget === undefined ? undefined : overrides,
+      authority: {
+        generationId: "compatibility-generation",
+        chatId: "compatibility-chat",
+        workspaceId: "compatibility-workspace",
+      },
+      groupId: "compatibility-fork",
+      runtime: modelRuntime,
+      thinkingLevel: "high",
+      systemPrompt: "Complete one bounded child task.",
+      tools: [],
+      initialMessages: longForkHistory(),
+    });
+
+    // Already admitted children retain their captured budget even if settings change.
+    overrides["aiden-compat-initial-fork/compat-initial-fork"].keepRecentTokens = 20_000;
+    const outcome = await runningChild.prompt("Conclude from the forked conversation.");
+
+    assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
+    assert.ok(core.state.callCount >= 2);
+    assert.equal(requestKinds[0], "summary");
+    assert.ok(requestKinds.indexOf("provider") > 0);
+    assert.doesNotMatch(firstContext, /FORK-START-0/u);
+    if (recentBudget === undefined) assert.match(firstContext, /FORK-START-9/u);
+    else assert.doesNotMatch(firstContext, /FORK-START-9/u);
+    assert.match(firstContext, /Conclude from the forked conversation/u);
+    assert.ok(firstContext.length < 100_000);
+    assert.equal(registry.activeCount, 0);
   });
-
-  // Already admitted children retain their captured budget even if settings change.
-  overrides["aiden-compat-initial-fork/compat-initial-fork"].keepRecentTokens = 20_000;
-  const outcome = await runningChild.prompt("Conclude from the forked conversation.");
-
-  assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
-  assert.ok(core.state.callCount >= 2);
-  assert.equal(requestKinds[0], "summary");
-  assert.ok(requestKinds.indexOf("provider") > 0);
-  assert.doesNotMatch(firstContext, /FORK-START-0/u);
-  if (recentBudget === undefined) assert.match(firstContext, /FORK-START-9/u);
-  else assert.doesNotMatch(firstContext, /FORK-START-9/u);
-  assert.match(firstContext, /Conclude from the forked conversation/u);
-  assert.ok(firstContext.length < 100_000);
-  assert.equal(registry.activeCount, 0);
-});
 }
 
 test("runtime registry rejects app-wide child overflow before allocating another Agent", async () => {
@@ -1354,7 +1441,10 @@ test("registry shutdown aborts every child and leaves no active Agent state", as
       assert.equal(entry.agent.state.isStreaming, false);
       assert.equal(entry.agent.state.pendingToolCalls.size, 0);
       assert.equal(entry.agent.signal, undefined);
-      assert.deepEqual(entry.agent.state.messages.map((message) => message.role), ["system"]);
+      assert.deepEqual(
+        entry.agent.state.messages.map((message) => message.role),
+        ["system"],
+      );
     }
   });
 });
@@ -1497,9 +1587,7 @@ test("main-process shutdown continues to application quit after the subagent dea
     "llmClient.abortAll();",
     source.indexOf("async function runShutdownAndQuit"),
   );
-  const settlementStart = source.indexOf(
-    "subagentRuntimeRegistry.shutdown(),",
-  );
+  const settlementStart = source.indexOf("subagentRuntimeRegistry.shutdown(),");
   const parentSettlementStart = source.indexOf("llmClient.shutdown(),", parentAbortStart);
   const cleanupStart = source.indexOf("cleanupApplication();", settlementStart);
   const receiptFinalizationStart = source.indexOf(

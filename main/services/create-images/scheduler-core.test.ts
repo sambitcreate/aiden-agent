@@ -1,20 +1,72 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { OutputRef } from "../../../renderer/shared/images/run-types.js";
-import type { WorkflowDocV1, WorkflowEdge, WorkflowNode } from "../../../renderer/shared/images/schema.js";
-import { planDigest, planRun, runPlan, staleNodeIds, summarizeRunState, type PlanContext, type StepOutcome, type StepTransition } from "./scheduler-core.js";
+import type {
+  WorkflowDocV1,
+  WorkflowEdge,
+  WorkflowNode,
+} from "../../../renderer/shared/images/schema.js";
+import {
+  planDigest,
+  planRun,
+  runPlan,
+  staleNodeIds,
+  summarizeRunState,
+  type PlanContext,
+  type StepOutcome,
+  type StepTransition,
+} from "./scheduler-core.js";
 
 const MODEL = { provider: "openrouter", id: "google/gemini-3.1-flash-image" };
-const ref = (seed: string): OutputRef => ({ assetId: seed.repeat(64), width: 8, height: 8, mediaType: "image/png" });
+const ref = (seed: string): OutputRef => ({
+  assetId: seed.repeat(64),
+  width: 8,
+  height: 8,
+  mediaType: "image/png",
+});
 const at = { x: 0, y: 0 };
-const prompt = (id: string, text = `prompt ${id}`): WorkflowNode => ({ id, type: "prompt", position: at, data: { text } });
-const generate = (id: string): WorkflowNode => ({ id, type: "generate-image", position: at, data: { model: MODEL, count: 1 } });
-const input = (id: string, seed: string): WorkflowNode => ({ id, type: "image-input", position: at, data: { assetId: seed.repeat(64) } });
+const prompt = (id: string, text = `prompt ${id}`): WorkflowNode => ({
+  id,
+  type: "prompt",
+  position: at,
+  data: { text },
+});
+const generate = (id: string): WorkflowNode => ({
+  id,
+  type: "generate-image",
+  position: at,
+  data: { model: MODEL, count: 1 },
+});
+const input = (id: string, seed: string): WorkflowNode => ({
+  id,
+  type: "image-input",
+  position: at,
+  data: { assetId: seed.repeat(64) },
+});
 const output = (id: string): WorkflowNode => ({ id, type: "output", position: at, data: {} });
-const edge = (source: string, sourcePort: string, target: string, targetPort: string): WorkflowEdge =>
-  ({ id: `${source}-${target}-${targetPort}`, source, sourcePort, target, targetPort });
-const doc = (nodes: WorkflowNode[], edges: WorkflowEdge[]): WorkflowDocV1 =>
-  ({ schemaVersion: 1, id: "wf", title: "T", revision: 1, createdAt: 0, updatedAt: 0, nodes, edges, settings: { concurrency: 2 } });
+const edge = (
+  source: string,
+  sourcePort: string,
+  target: string,
+  targetPort: string,
+): WorkflowEdge => ({
+  id: `${source}-${target}-${targetPort}`,
+  source,
+  sourcePort,
+  target,
+  targetPort,
+});
+const doc = (nodes: WorkflowNode[], edges: WorkflowEdge[]): WorkflowDocV1 => ({
+  schemaVersion: 1,
+  id: "wf",
+  title: "T",
+  revision: 1,
+  createdAt: 0,
+  updatedAt: 0,
+  nodes,
+  edges,
+  settings: { concurrency: 2 },
+});
 const context = (overrides: Partial<PlanContext> = {}): PlanContext => ({
   priorOutputs: {},
   asset: (assetId) => ({ assetId, width: 8, height: 8, mediaType: "image/png" }),
@@ -24,7 +76,15 @@ const context = (overrides: Partial<PlanContext> = {}): PlanContext => ({
 
 // p1 → g1 → o1, image i → g1 refs, p2 → g2, g1 → g2 refs, g2 → o2
 const graph = doc(
-  [prompt("p1"), input("i", "a"), generate("g1"), output("o1"), prompt("p2"), generate("g2"), output("o2")],
+  [
+    prompt("p1"),
+    input("i", "a"),
+    generate("g1"),
+    output("o1"),
+    prompt("p2"),
+    generate("g2"),
+    output("o2"),
+  ],
   [
     edge("p1", "text", "g1", "prompt"),
     edge("i", "image", "g1", "references"),
@@ -38,46 +98,100 @@ const graph = doc(
 test("a run-all plan lists one request per Generate node with its references", () => {
   const result = planRun(graph, { kind: "all" }, context());
   assert.ok(result.ok);
-  assert.deepEqual(result.plan.steps.map((step) => step.nodeId), ["p1", "i", "g1", "o1", "p2", "g2", "o2"]);
   assert.deepEqual(
-    result.plan.requests.map((request) => [request.nodeId, request.provider, request.model, request.referenceCount, request.pendingReferenceCount]),
+    result.plan.steps.map((step) => step.nodeId),
+    ["p1", "i", "g1", "o1", "p2", "g2", "o2"],
+  );
+  assert.deepEqual(
+    result.plan.requests.map((request) => [
+      request.nodeId,
+      request.provider,
+      request.model,
+      request.referenceCount,
+      request.pendingReferenceCount,
+    ]),
     // g2's reference comes from g1 in this same run, which can return up to four images.
-    [["g1", "openrouter", MODEL.id, 1, 0], ["g2", "openrouter", MODEL.id, 4, 4]],
+    [
+      ["g1", "openrouter", MODEL.id, 1, 0],
+      ["g2", "openrouter", MODEL.id, 4, 4],
+    ],
   );
   assert.deepEqual(result.plan.requests[0]?.knownReferences, [ref("a")]);
 });
 
 test("run from here runs the node and its descendants and seeds upstream Generate output", () => {
   const missing = planRun(graph, { kind: "from-node", nodeId: "g2" }, context());
-  assert.deepEqual(missing.ok ? [] : missing.issues.map((issue) => [issue.code, issue.nodeId]), [["upstream_not_run", "g1"]]);
+  assert.deepEqual(missing.ok ? [] : missing.issues.map((issue) => [issue.code, issue.nodeId]), [
+    ["upstream_not_run", "g1"],
+  ]);
 
-  const seeded = planRun(graph, { kind: "from-node", nodeId: "g2" }, context({ priorOutputs: { g1: [ref("b")] } }));
+  const seeded = planRun(
+    graph,
+    { kind: "from-node", nodeId: "g2" },
+    context({ priorOutputs: { g1: [ref("b")] } }),
+  );
   assert.ok(seeded.ok);
-  assert.deepEqual(seeded.plan.steps.map((step) => step.nodeId), ["p2", "g2", "o2"]);
-  assert.deepEqual(seeded.plan.requests.map((request) => [request.nodeId, request.referenceCount, request.pendingReferenceCount]), [["g2", 1, 0]]);
+  assert.deepEqual(
+    seeded.plan.steps.map((step) => step.nodeId),
+    ["p2", "g2", "o2"],
+  );
+  assert.deepEqual(
+    seeded.plan.requests.map((request) => [
+      request.nodeId,
+      request.referenceCount,
+      request.pendingReferenceCount,
+    ]),
+    [["g2", 1, 0]],
+  );
   assert.deepEqual(seeded.plan.seeded.g1, { kind: "images", images: [ref("b")] });
 });
 
 test("node-only plans run one Generate node, and the cap counts each scope's own requests", () => {
   const missing = planRun(graph, { kind: "node-only", nodeId: "g2" }, context());
-  assert.deepEqual(missing.ok ? [] : missing.issues.map((issue) => [issue.code, issue.nodeId]), [["upstream_not_run", "g1"]]);
+  assert.deepEqual(missing.ok ? [] : missing.issues.map((issue) => [issue.code, issue.nodeId]), [
+    ["upstream_not_run", "g1"],
+  ]);
 
   // Free upstream nodes are recomputed; nothing after g1 is planned.
   const first = planRun(graph, { kind: "node-only", nodeId: "g1" }, context());
   assert.ok(first.ok);
-  assert.deepEqual(first.plan.steps.map((step) => step.nodeId), ["p1", "i", "g1"]);
-  assert.deepEqual(first.plan.requests.map((request) => request.nodeId), ["g1"]);
+  assert.deepEqual(
+    first.plan.steps.map((step) => step.nodeId),
+    ["p1", "i", "g1"],
+  );
+  assert.deepEqual(
+    first.plan.requests.map((request) => request.nodeId),
+    ["g1"],
+  );
 
-  const alone = planRun(graph, { kind: "node-only", nodeId: "g2" }, context({ priorOutputs: { g1: [ref("b")] } }));
+  const alone = planRun(
+    graph,
+    { kind: "node-only", nodeId: "g2" },
+    context({ priorOutputs: { g1: [ref("b")] } }),
+  );
   assert.ok(alone.ok);
-  assert.deepEqual(alone.plan.steps.map((step) => step.nodeId), ["p2", "g2"]);
+  assert.deepEqual(
+    alone.plan.steps.map((step) => step.nodeId),
+    ["p2", "g2"],
+  );
   assert.deepEqual(alone.plan.seeded.g1, { kind: "images", images: [ref("b")] });
   // The same node run from here also carries its Output node.
-  const fromHere = planRun(graph, { kind: "from-node", nodeId: "g2" }, context({ priorOutputs: { g1: [ref("b")] } }));
-  assert.deepEqual(fromHere.ok ? fromHere.plan.steps.map((step) => step.nodeId) : [], ["p2", "g2", "o2"]);
+  const fromHere = planRun(
+    graph,
+    { kind: "from-node", nodeId: "g2" },
+    context({ priorOutputs: { g1: [ref("b")] } }),
+  );
+  assert.deepEqual(fromHere.ok ? fromHere.plan.steps.map((step) => step.nodeId) : [], [
+    "p2",
+    "g2",
+    "o2",
+  ]);
 
   const notGenerate = planRun(graph, { kind: "node-only", nodeId: "o1" }, context());
-  assert.deepEqual(notGenerate.ok ? [] : notGenerate.issues.map((issue) => [issue.code, issue.nodeId]), [["node_only_requires_generate", "o1"]]);
+  assert.deepEqual(
+    notGenerate.ok ? [] : notGenerate.issues.map((issue) => [issue.code, issue.nodeId]),
+    [["node_only_requires_generate", "o1"]],
+  );
   const unknown = planRun(graph, { kind: "node-only", nodeId: "gone" }, context());
   assert.deepEqual(unknown.ok ? [] : unknown.issues.map((issue) => issue.code), ["unknown_scope"]);
 
@@ -95,7 +209,11 @@ test("node-only plans run one Generate node, and the cap counts each scope's own
   const single = planRun(chain, { kind: "node-only", nodeId: "a" }, context());
   assert.ok(single.ok);
   assert.equal(single.plan.requests.length, 1);
-  const tail = planRun(chain, { kind: "from-node", nodeId: "c" }, context({ priorOutputs: { b: [ref("b")] } }));
+  const tail = planRun(
+    chain,
+    { kind: "from-node", nodeId: "c" },
+    context({ priorOutputs: { b: [ref("b")] } }),
+  );
   assert.ok(tail.ok);
   assert.equal(tail.plan.requests.length, 3);
 });
@@ -103,29 +221,49 @@ test("node-only plans run one Generate node, and the cap counts each scope's own
 test("references a model cannot take are plan issues on that node, before any consent", () => {
   const textOnly = context({ model: () => ({ acceptsReferences: false }) });
   const refused = planRun(graph, { kind: "node-only", nodeId: "g1" }, textOnly);
-  assert.deepEqual(refused.ok ? [] : refused.issues.map((issue) => [issue.code, issue.nodeId]), [["references_unsupported", "g1"]]);
+  assert.deepEqual(refused.ok ? [] : refused.issues.map((issue) => [issue.code, issue.nodeId]), [
+    ["references_unsupported", "g1"],
+  ]);
   // Without references a text-only model is fine.
   const plain = doc([prompt("p"), generate("g")], [edge("p", "text", "g", "prompt")]);
   assert.ok(planRun(plain, { kind: "all" }, textOnly).ok);
 
   // A single-image editor takes one reference, not two.
   const single = context({ model: () => ({ acceptsReferences: true, maxReferences: 1 }) });
-  const one = doc([prompt("p"), input("i", "a"), generate("g")], [edge("p", "text", "g", "prompt"), edge("i", "image", "g", "references")]);
+  const one = doc(
+    [prompt("p"), input("i", "a"), generate("g")],
+    [edge("p", "text", "g", "prompt"), edge("i", "image", "g", "references")],
+  );
   assert.ok(planRun(one, { kind: "all" }, single).ok);
   const two = doc(
     [prompt("p"), input("i", "a"), input("j", "b"), generate("g")],
-    [edge("p", "text", "g", "prompt"), edge("i", "image", "g", "references"), edge("j", "image", "g", "references")],
+    [
+      edge("p", "text", "g", "prompt"),
+      edge("i", "image", "g", "references"),
+      edge("j", "image", "g", "references"),
+    ],
   );
   const tooMany = planRun(two, { kind: "all" }, single);
   assert.deepEqual(
     tooMany.ok ? [] : tooMany.issues.map((issue) => [issue.code, issue.nodeId, issue.message]),
-    [["too_many_references", "g", "This step could receive up to 2 reference images. This model accepts at most 1 reference image."]],
+    [
+      [
+        "too_many_references",
+        "g",
+        "This step could receive up to 2 reference images. This model accepts at most 1 reference image.",
+      ],
+    ],
   );
 });
 
 test("an upstream Generate in the same run counts as its worst case of four references", () => {
   // first can return four images; with the Image Input, second could receive five.
-  const nodes = [prompt("p"), { ...generate("first"), title: "Sketch" }, input("i", "a"), generate("second")];
+  const nodes = [
+    prompt("p"),
+    { ...generate("first"), title: "Sketch" },
+    input("i", "a"),
+    generate("second"),
+  ];
   const edges = [
     edge("p", "text", "first", "prompt"),
     edge("p", "text", "second", "prompt"),
@@ -135,23 +273,53 @@ test("an upstream Generate in the same run counts as its worst case of four refe
   const result = planRun(doc(nodes, edges), { kind: "all" }, context());
   assert.deepEqual(
     result.ok ? [] : result.issues.map((issue) => [issue.code, issue.nodeId, issue.message]),
-    [["too_many_references", "second", "This step could receive up to 5 reference images. “Sketch” can return up to 4 images. Aiden sends at most 4 reference images per request."]],
+    [
+      [
+        "too_many_references",
+        "second",
+        "This step could receive up to 5 reference images. “Sketch” can return up to 4 images. Aiden sends at most 4 reference images per request.",
+      ],
+    ],
   );
   // Once first has run, its real output is known and seeded instead.
-  const seeded = planRun(doc(nodes, edges), { kind: "node-only", nodeId: "second" }, context({ priorOutputs: { first: [ref("b")] } }));
-  assert.deepEqual(seeded.ok ? seeded.plan.requests.map((request) => request.referenceCount) : [], [2]);
+  const seeded = planRun(
+    doc(nodes, edges),
+    { kind: "node-only", nodeId: "second" },
+    context({ priorOutputs: { first: [ref("b")] } }),
+  );
+  assert.deepEqual(
+    seeded.ok ? seeded.plan.requests.map((request) => request.referenceCount) : [],
+    [2],
+  );
 });
 
 test("known references past 8 MiB or 40 megapixels in all are plan issues", () => {
   const two = doc(
     [prompt("p"), input("i", "a"), input("j", "b"), generate("g")],
-    [edge("p", "text", "g", "prompt"), edge("i", "image", "g", "references"), edge("j", "image", "g", "references")],
+    [
+      edge("p", "text", "g", "prompt"),
+      edge("i", "image", "g", "references"),
+      edge("j", "image", "g", "references"),
+    ],
   );
   const heavy = planRun(two, { kind: "all" }, context({ assetBytes: () => 5 * 1024 * 1024 }));
-  assert.deepEqual(heavy.ok ? [] : heavy.issues.map((issue) => [issue.code, issue.nodeId]), [["reference_bytes", "g"]]);
-  const huge = planRun(two, { kind: "all" }, context({ asset: (assetId) => ({ assetId, width: 5_000, height: 5_000, mediaType: "image/png" }) }));
-  assert.deepEqual(huge.ok ? [] : huge.issues.map((issue) => [issue.code, issue.nodeId]), [["reference_pixels", "g"]]);
-  assert.ok(planRun(two, { kind: "all" }, context({ assetBytes: () => 4 * 1024 * 1024 })).ok, "exactly 8 MiB is allowed");
+  assert.deepEqual(heavy.ok ? [] : heavy.issues.map((issue) => [issue.code, issue.nodeId]), [
+    ["reference_bytes", "g"],
+  ]);
+  const huge = planRun(
+    two,
+    { kind: "all" },
+    context({
+      asset: (assetId) => ({ assetId, width: 5_000, height: 5_000, mediaType: "image/png" }),
+    }),
+  );
+  assert.deepEqual(huge.ok ? [] : huge.issues.map((issue) => [issue.code, issue.nodeId]), [
+    ["reference_pixels", "g"],
+  ]);
+  assert.ok(
+    planRun(two, { kind: "all" }, context({ assetBytes: () => 4 * 1024 * 1024 })).ok,
+    "exactly 8 MiB is allowed",
+  );
 });
 
 test("staleNodeIds marks outputs older than a newer upstream Generate result and ignores local nodes", () => {
@@ -181,7 +349,9 @@ test("plans over the request cap, without requests, or with missing assets are r
   assert.deepEqual(none.ok ? [] : none.issues.map((issue) => issue.code), ["no_requests"]);
 
   const gone = planRun(graph, { kind: "all" }, context({ asset: () => undefined }));
-  assert.deepEqual(gone.ok ? [] : gone.issues.map((issue) => [issue.code, issue.nodeId]), [["missing_asset", "i"]]);
+  assert.deepEqual(gone.ok ? [] : gone.issues.map((issue) => [issue.code, issue.nodeId]), [
+    ["missing_asset", "i"],
+  ]);
 });
 
 function deferred<T>() {
@@ -189,7 +359,10 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => (resolve = done));
   return { promise, resolve };
 }
-const images = (seed: string): StepOutcome => ({ ok: true, value: { kind: "images", images: [ref(seed)] } });
+const images = (seed: string): StepOutcome => ({
+  ok: true,
+  value: { kind: "images", images: [ref(seed)] },
+});
 
 test("dispatch honors the concurrency limit and resolves local nodes inline", async () => {
   const four = doc(
@@ -216,7 +389,10 @@ test("dispatch honors the concurrency limit and resolves local nodes inline", as
   });
   assert.equal(peak, 2);
   assert.deepEqual(prompts, ["prompt p", "prompt p", "prompt p", "prompt p"]);
-  assert.deepEqual([...states.values()], ["succeeded", "succeeded", "succeeded", "succeeded", "succeeded"]);
+  assert.deepEqual(
+    [...states.values()],
+    ["succeeded", "succeeded", "succeeded", "succeeded", "succeeded"],
+  );
   assert.equal(summarizeRunState(planned.plan, states, false), "succeeded");
 });
 
@@ -227,10 +403,17 @@ test("a failure skips only its descendants and independent branches continue", a
     concurrency: 2,
     signal: new AbortController().signal,
     onSettled: () => undefined,
-    executeProvider: async (step) => (step.nodeId === "g1" ? { ok: false, state: "failed" } : images(step.nodeId)),
+    executeProvider: async (step) =>
+      step.nodeId === "g1" ? { ok: false, state: "failed" } : images(step.nodeId),
   });
   assert.deepEqual(Object.fromEntries(states), {
-    p1: "succeeded", i: "succeeded", p2: "succeeded", g1: "failed", o1: "skipped", g2: "skipped", o2: "skipped",
+    p1: "succeeded",
+    i: "succeeded",
+    p2: "succeeded",
+    g1: "failed",
+    o1: "skipped",
+    g2: "skipped",
+    o2: "skipped",
   });
   assert.equal(summarizeRunState(planned.plan, states, false), "failed");
 });
@@ -266,7 +449,11 @@ test("abort cancels steps that have not started and keeps a result that settles 
 test("transitions are coalesced: each scheduler tick reports once", async () => {
   const small = doc(
     [prompt("p"), input("i", "a"), generate("g"), output("o")],
-    [edge("p", "text", "g", "prompt"), edge("i", "image", "g", "references"), edge("g", "images", "o", "images")],
+    [
+      edge("p", "text", "g", "prompt"),
+      edge("i", "image", "g", "references"),
+      edge("g", "images", "o", "images"),
+    ],
   );
   const planned = planRun(small, { kind: "all" }, context());
   assert.ok(planned.ok);
@@ -281,10 +468,18 @@ test("transitions are coalesced: each scheduler tick reports once", async () => 
     },
   });
   assert.deepEqual(
-    batches.map((batch) => batch.map((transition) => [transition.nodeId, transition.state, transition.executed])),
+    batches.map((batch) =>
+      batch.map((transition) => [transition.nodeId, transition.state, transition.executed]),
+    ),
     [
-      [["p", "succeeded", false], ["i", "succeeded", false]],
-      [["g", "succeeded", true], ["o", "succeeded", false]],
+      [
+        ["p", "succeeded", false],
+        ["i", "succeeded", false],
+      ],
+      [
+        ["g", "succeeded", true],
+        ["o", "succeeded", false],
+      ],
     ],
   );
   assert.deepEqual(batches[1]?.[1]?.value, { kind: "images", images: [ref("g")] });
@@ -298,7 +493,11 @@ test("concurrency is clamped to 1 through 4, so 0 never stalls a run and 9 never
   );
   const planned = planRun(wide, { kind: "all" }, context({ maxRequests: 6 }));
   assert.ok(planned.ok);
-  for (const [requested, expectedPeak] of [[0, 1], [9, 4], [Number.NaN, 2]] as const) {
+  for (const [requested, expectedPeak] of [
+    [0, 1],
+    [9, 4],
+    [Number.NaN, 2],
+  ] as const) {
     let running = 0;
     let peak = 0;
     const states = await runPlan(planned.plan, {
@@ -314,12 +513,19 @@ test("concurrency is clamped to 1 through 4, so 0 never stalls a run and 9 never
       },
     });
     assert.equal(peak, expectedPeak, `concurrency ${requested}`);
-    assert.equal(summarizeRunState(planned.plan, states, false), "succeeded", `concurrency ${requested}`);
+    assert.equal(
+      summarizeRunState(planned.plan, states, false),
+      "succeeded",
+      `concurrency ${requested}`,
+    );
   }
 });
 
 test("a step whose executor throws settles as failed with the executor-fault code", async () => {
-  const one = doc([prompt("p"), generate("g"), output("o")], [edge("p", "text", "g", "prompt"), edge("g", "images", "o", "images")]);
+  const one = doc(
+    [prompt("p"), generate("g"), output("o")],
+    [edge("p", "text", "g", "prompt"), edge("g", "images", "o", "images")],
+  );
   const planned = planRun(one, { kind: "all" }, context());
   assert.ok(planned.ok);
   const transitions: StepTransition[] = [];
@@ -332,13 +538,19 @@ test("a step whose executor throws settles as failed with the executor-fault cod
     },
   });
   const byNode = new Map(transitions.map((transition) => [transition.nodeId, transition]));
-  assert.deepEqual([byNode.get("g")?.state, byNode.get("g")?.executed, byNode.get("g")?.errorCode], ["failed", false, "executor-fault"]);
+  assert.deepEqual(
+    [byNode.get("g")?.state, byNode.get("g")?.executed, byNode.get("g")?.errorCode],
+    ["failed", false, "executor-fault"],
+  );
   assert.deepEqual([byNode.get("o")?.state, byNode.get("o")?.errorCode], ["skipped", undefined]);
   assert.equal(byNode.get("p")?.errorCode, undefined);
 });
 
 test("the plan digest changes with the model, a reference asset or the scope, and an identical re-plan reproduces it", () => {
-  const digest = (document: WorkflowDocV1, scope: Parameters<typeof planRun>[1] = { kind: "all" }) => {
+  const digest = (
+    document: WorkflowDocV1,
+    scope: Parameters<typeof planRun>[1] = { kind: "all" },
+  ) => {
     const planned = planRun(document, scope, context({ priorOutputs: { g1: [ref("b")] } }));
     assert.ok(planned.ok);
     return planDigest(planned.plan);
@@ -347,11 +559,26 @@ test("the plan digest changes with the model, a reference asset or the scope, an
   assert.equal(digest(structuredClone(graph)), base);
 
   const otherModel = doc(
-    graph.nodes.map((node): WorkflowNode =>
-      node.id === "g2" ? { id: "g2", type: "generate-image", position: at, data: { model: { provider: "openrouter", id: "black-forest-labs/flux.2-pro" }, count: 1 } } : node),
+    graph.nodes.map(
+      (node): WorkflowNode =>
+        node.id === "g2"
+          ? {
+              id: "g2",
+              type: "generate-image",
+              position: at,
+              data: {
+                model: { provider: "openrouter", id: "black-forest-labs/flux.2-pro" },
+                count: 1,
+              },
+            }
+          : node,
+    ),
     graph.edges,
   );
-  const otherReference = doc(graph.nodes.map((node) => (node.id === "i" ? input("i", "c") : node)), graph.edges);
+  const otherReference = doc(
+    graph.nodes.map((node) => (node.id === "i" ? input("i", "c") : node)),
+    graph.edges,
+  );
   const variants = [
     digest(otherModel),
     digest(otherReference),

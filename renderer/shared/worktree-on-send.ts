@@ -123,9 +123,14 @@ export function resolveWorktreeDefaults(
 ): { baseRef: string; fromOrigin: boolean } | undefined {
   if (repository.unborn) return undefined;
   const exists = (ref: string | undefined): ref is string =>
-    ref !== undefined && (repository.branches.includes(ref) || (repository.remoteBranches ?? []).includes(ref));
-  const baseRef = [remembered.baseRef, repository.defaultBranch, repository.current, repository.branches[0]]
-    .find(exists);
+    ref !== undefined &&
+    (repository.branches.includes(ref) || (repository.remoteBranches ?? []).includes(ref));
+  const baseRef = [
+    remembered.baseRef,
+    repository.defaultBranch,
+    repository.current,
+    repository.branches[0],
+  ].find(exists);
   if (!baseRef) return undefined;
   const hasRemote = repository.hasRemote ?? (repository.remoteBranches?.length ?? 0) > 0;
   return { baseRef, fromOrigin: hasRemote && (remembered.fromOrigin ?? true) };
@@ -159,7 +164,10 @@ export function isValidBranchName(name: string): boolean {
 }
 
 /** `Fix the Login bug!` → `fix-the-login-bug`. Words are kept whole where possible. */
-export function worktreeBranchSlug(seed: string, maxLength = AUTO_WORKTREE_SLUG_MAX_LENGTH): string {
+export function worktreeBranchSlug(
+  seed: string,
+  maxLength = AUTO_WORKTREE_SLUG_MAX_LENGTH,
+): string {
   const words = seed
     .normalize("NFKD")
     .replace(/[̀-ͯ]/gu, "")
@@ -215,7 +223,13 @@ export function uniqueBranchName(
 }
 
 const WORKSPACE_ID = /^[A-Za-z0-9_-]{1,128}$/u;
-const REQUEST_KEYS = new Set(["sourceWorkspaceId", "baseRef", "fromOrigin", "branchName", "idempotencyKey"]);
+const REQUEST_KEYS = new Set([
+  "sourceWorkspaceId",
+  "baseRef",
+  "fromOrigin",
+  "branchName",
+  "idempotencyKey",
+]);
 
 /** Validate the untrusted `worktree` field of a first-message request. */
 export function parseFirstMessageWorktreeRequest(value: unknown): FirstMessageWorktreeRequest {
@@ -236,7 +250,10 @@ export function parseFirstMessageWorktreeRequest(value: unknown): FirstMessageWo
     throw new Error("Choose a valid base branch for the new worktree.");
   }
   if (typeof fromOrigin !== "boolean") throw new Error("Invalid worktree origin setting.");
-  if (branchName !== undefined && (typeof branchName !== "string" || !isValidBranchName(branchName))) {
+  if (
+    branchName !== undefined &&
+    (typeof branchName !== "string" || !isValidBranchName(branchName))
+  ) {
     throw new Error("Enter a valid Git branch name.");
   }
   if (!isDraftChatId(idempotencyKey)) {

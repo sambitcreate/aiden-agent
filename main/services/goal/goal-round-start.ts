@@ -10,7 +10,11 @@
  */
 import type { OwedTurnContext, OwedTurnStartRequest } from "../chat-owed-turn-start.js";
 
-export function goalRoundStartRequest(chatId: string, context: OwedTurnContext, streamId: string): OwedTurnStartRequest {
+export function goalRoundStartRequest(
+  chatId: string,
+  context: OwedTurnContext,
+  streamId: string,
+): OwedTurnStartRequest {
   return {
     params: {
       chatId,

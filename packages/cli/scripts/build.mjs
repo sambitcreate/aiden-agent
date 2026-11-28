@@ -15,13 +15,27 @@
  *    AIDEN_CODING_AGENT_DIR, project resources under .aiden/.
  */
 
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { isBuiltin } from "node:module";
 import { spawnSync } from "node:child_process";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { analyticsBuildConfigPlugin, resolveAnalyticsBuildConfig } from "../../../scripts/analytics-build-config.mjs";
+import {
+  analyticsBuildConfigPlugin,
+  resolveAnalyticsBuildConfig,
+} from "../../../scripts/analytics-build-config.mjs";
 import { patchPiOAuthBranding } from "../../../scripts/patch-pi-oauth-branding.mjs";
 import { vendorGenerativeUiLibraries } from "../../../scripts/vendor-generative-ui-libs.mjs";
 
@@ -32,56 +46,56 @@ const piAgentPkg = join(pkgDir, "node_modules", "@earendil-works", "pi-coding-ag
 // Branding must be re-applied on every build: npm operations can restore the
 // pristine package, and the bundle inherits whatever the dist contains.
 const patch = spawnSync(process.execPath, [join(pkgDir, "scripts", "patch-branding.mjs")], {
-	encoding: "utf-8",
+  encoding: "utf-8",
 });
 if (patch.status !== 0) {
-	process.stderr.write(patch.stderr);
-	throw new Error("Branding patch failed; refusing to bundle.");
+  process.stderr.write(patch.stderr);
+  throw new Error("Branding patch failed; refusing to bundle.");
 }
 process.stdout.write(patch.stdout);
 // pi-coding-agent ships an npm-shrinkwrap.json, so its dependency tree may be
 // nested under itself instead of hoisted next to it. Resolve both layouts.
 const piAiPkg = [
-	join(pkgDir, "node_modules", "@earendil-works", "pi-ai"),
-	join(piAgentPkg, "node_modules", "@earendil-works", "pi-ai"),
+  join(pkgDir, "node_modules", "@earendil-works", "pi-ai"),
+  join(piAgentPkg, "node_modules", "@earendil-works", "pi-ai"),
 ].find((candidate) => existsSync(join(candidate, "package.json")));
 if (piAiPkg === undefined) {
-	throw new Error("Could not locate @earendil-works/pi-ai. Run npm install in packages/cli first.");
+  throw new Error("Could not locate @earendil-works/pi-ai. Run npm install in packages/cli first.");
 }
 await patchPiOAuthBranding(resolve(pkgDir, "../.."), piAiPkg);
 const banner = {
-	js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
+  js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
 };
 // Durable Bots explicitly pin chord and pi-durable to the desktop 1.6.0 line.
 // Both are bundled; no Pi runtime package is allowed as an external.
 const allowedExternalPackages = new Set([
-	"@silvia-odwyer/photon-node",
-	"jiti",
-	// Optional native accelerators. Their callers fall back to JavaScript when absent.
-	"bufferutil",
-	"utf-8-validate",
-	// Optional debug output coloring.
-	"supports-color",
-	// Optional on-device speech engine (optionalDependencies); the local
-	// speech engine requires it lazily and reports a load failure.
-	"sherpa-onnx-node",
-	// Optional Negotiate proxy auth (pi 0.87 proxy-agent-negotiate). Imported
-	// lazily inside try/catch and only reached behind a Negotiate proxy.
-	"kerberos",
-	// posthog-node's optional peer, imported lazily inside a try/catch for trace
-	// IDs on `$exception`. Without it the SDK carries on, and none are sent.
-	"@opentelemetry/api",
+  "@silvia-odwyer/photon-node",
+  "jiti",
+  // Optional native accelerators. Their callers fall back to JavaScript when absent.
+  "bufferutil",
+  "utf-8-validate",
+  // Optional debug output coloring.
+  "supports-color",
+  // Optional on-device speech engine (optionalDependencies); the local
+  // speech engine requires it lazily and reports a load failure.
+  "sherpa-onnx-node",
+  // Optional Negotiate proxy auth (pi 0.87 proxy-agent-negotiate). Imported
+  // lazily inside try/catch and only reached behind a Negotiate proxy.
+  "kerberos",
+  // posthog-node's optional peer, imported lazily inside a try/catch for trace
+  // IDs on `$exception`. Without it the SDK carries on, and none are sent.
+  "@opentelemetry/api",
 ]);
 
 const lazyJitiPlugin = {
-	name: "lazy-jiti-transform",
-	setup(build) {
-		build.onResolve({ filter: /^jiti\/static$/ }, () => ({
-			namespace: "lazy-jiti",
-			path: "jiti/static",
-		}));
-		build.onLoad({ filter: /.*/, namespace: "lazy-jiti" }, () => ({
-			contents: `
+  name: "lazy-jiti-transform",
+  setup(build) {
+    build.onResolve({ filter: /^jiti\/static$/ }, () => ({
+      namespace: "lazy-jiti",
+      path: "jiti/static",
+    }));
+    build.onLoad({ filter: /.*/, namespace: "lazy-jiti" }, () => ({
+      contents: `
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -92,9 +106,9 @@ export function createJiti(...args) {
 	return createJitiImpl(...args);
 }
 `,
-			loader: "js",
-		}));
-	},
+      loader: "js",
+    }));
+  },
 };
 
 const credentialStorePlugin = {
@@ -103,8 +117,18 @@ const credentialStorePlugin = {
     build.onLoad({ filter: /pi-coding-agent\/dist\/core\/model-runtime\.js$/ }, (args) => {
       const source = readFileSync(args.path, "utf8");
       const original = "options.credentials ?? DefaultAuthStorage.create(options.authPath)";
-      if (!source.includes(original)) throw new Error("Pi credential integration changed; review the upstream upgrade.");
-      return { contents: `import { createCliProviderCredentials } from ${JSON.stringify(join(pkgDir, "src/provider-credentials.ts"))};\n` + source.replace(original, 'options.credentials ?? createCliProviderCredentials(options.authPath ?? join(getAgentDir(), "auth.json"))'), loader: "js", resolveDir: dirname(args.path) };
+      if (!source.includes(original))
+        throw new Error("Pi credential integration changed; review the upstream upgrade.");
+      return {
+        contents:
+          `import { createCliProviderCredentials } from ${JSON.stringify(join(pkgDir, "src/provider-credentials.ts"))};\n` +
+          source.replace(
+            original,
+            'options.credentials ?? createCliProviderCredentials(options.authPath ?? join(getAgentDir(), "auth.json"))',
+          ),
+        loader: "js",
+        resolveDir: dirname(args.path),
+      };
     });
   },
 };
@@ -116,86 +140,94 @@ const credentialStorePlugin = {
 // file-based extensions (every DefaultResourceLoader passes noExtensions), so
 // the map is empty. A Pi upgrade that renames the export fails the build here.
 const piVirtualModulesStubPlugin = {
-	name: "aiden-pi-virtual-modules-stub",
-	setup(build) {
-		build.onLoad({ filter: /pi-coding-agent\/dist\/core\/extensions\/virtual-modules\.js$/ }, (args) => {
-			const source = readFileSync(args.path, "utf8");
-			if (!/^export const VIRTUAL_MODULES = \{/mu.test(source)) {
-				throw new Error("Pi's extension virtual modules changed; review the Aiden stub in scripts/build.mjs.");
-			}
-			return { contents: "export const VIRTUAL_MODULES = Object.freeze({});\n", loader: "js" };
-		});
-	},
+  name: "aiden-pi-virtual-modules-stub",
+  setup(build) {
+    build.onLoad(
+      { filter: /pi-coding-agent\/dist\/core\/extensions\/virtual-modules\.js$/ },
+      (args) => {
+        const source = readFileSync(args.path, "utf8");
+        if (!/^export const VIRTUAL_MODULES = \{/mu.test(source)) {
+          throw new Error(
+            "Pi's extension virtual modules changed; review the Aiden stub in scripts/build.mjs.",
+          );
+        }
+        return { contents: "export const VIRTUAL_MODULES = Object.freeze({});\n", loader: "js" };
+      },
+    );
+  },
 };
 
 const aidenRelativeTsRewritePlugin = {
-	name: "aiden-relative-ts-rewrite",
-	setup(build) {
-		// The Aiden cores import siblings with NodeNext ".js" specifiers. esbuild
-		// normally remaps those to ".ts" sources, but some sibling imports (the
-		// advisor runtime's, historically) were left unresolved and marked
-		// external inside this graph. Finish the remap deterministically for repo
-		// sources, which is what lets the CLI bundle main/services originals
-		// directly instead of vendoring copies.
-		build.onResolve({ filter: /^\.{1,2}\/.+\.(js|ts)$/ }, (args) => {
-			if (!args.resolveDir) return undefined;
-			let candidate = resolve(args.resolveDir, args.path);
-			if (!existsSync(candidate) && candidate.endsWith(".js")) {
-				candidate = `${candidate.slice(0, -3)}.ts`;
-			}
-			return existsSync(candidate) ? { path: candidate } : undefined;
-		});
-	},
+  name: "aiden-relative-ts-rewrite",
+  setup(build) {
+    // The Aiden cores import siblings with NodeNext ".js" specifiers. esbuild
+    // normally remaps those to ".ts" sources, but some sibling imports (the
+    // advisor runtime's, historically) were left unresolved and marked
+    // external inside this graph. Finish the remap deterministically for repo
+    // sources, which is what lets the CLI bundle main/services originals
+    // directly instead of vendoring copies.
+    build.onResolve({ filter: /^\.{1,2}\/.+\.(js|ts)$/ }, (args) => {
+      if (!args.resolveDir) return undefined;
+      let candidate = resolve(args.resolveDir, args.path);
+      if (!existsSync(candidate) && candidate.endsWith(".js")) {
+        candidate = `${candidate.slice(0, -3)}.ts`;
+      }
+      return existsSync(candidate) ? { path: candidate } : undefined;
+    });
+  },
 };
 
 const httpsProxyAgentNamedExportPlugin = {
-	name: "https-proxy-agent-named-export",
-	setup(build) {
-		build.onResolve({ filter: /^https-proxy-agent$/ }, (args) => {
-			if (args.kind !== "dynamic-import") return undefined;
-			return {
-				namespace: "https-proxy-agent-named-export",
-				path: args.path,
-			};
-		});
-		build.onLoad(
-			{
-				filter: /^https-proxy-agent$/,
-				namespace: "https-proxy-agent-named-export",
-			},
-			() => ({
-				contents: 'export { HttpsProxyAgent } from "https-proxy-agent";',
-				loader: "js",
-				resolveDir: pkgDir,
-			}),
-		);
-	},
+  name: "https-proxy-agent-named-export",
+  setup(build) {
+    build.onResolve({ filter: /^https-proxy-agent$/ }, (args) => {
+      if (args.kind !== "dynamic-import") return undefined;
+      return {
+        namespace: "https-proxy-agent-named-export",
+        path: args.path,
+      };
+    });
+    build.onLoad(
+      {
+        filter: /^https-proxy-agent$/,
+        namespace: "https-proxy-agent-named-export",
+      },
+      () => ({
+        contents: 'export { HttpsProxyAgent } from "https-proxy-agent";',
+        loader: "js",
+        resolveDir: pkgDir,
+      }),
+    );
+  },
 };
 
 const packageIdentityCache = new Map();
 
 /** Name and version of the installed node_modules package that owns a file. */
 function owningPackage(file) {
-	for (let dir = dirname(file); dir !== dirname(dir); dir = dirname(dir)) {
-		if (packageIdentityCache.has(dir)) return packageIdentityCache.get(dir);
-		const manifest = join(dir, "package.json");
-		if (!existsSync(manifest)) continue;
-		let parsed;
-		try {
-			parsed = JSON.parse(readFileSync(manifest, "utf8"));
-		} catch {
-			continue;
-		}
-		// Nested manifests (dist/esm/package.json with only "type") are not the
-		// package root; the root is the directory installed as node_modules/<name>.
-		if (typeof parsed.name !== "string" || !dir.endsWith(`${sep}node_modules${sep}${parsed.name.replaceAll("/", sep)}`)) {
-			continue;
-		}
-		const identity = { name: parsed.name, version: parsed.version, dir };
-		packageIdentityCache.set(dir, identity);
-		return identity;
-	}
-	return undefined;
+  for (let dir = dirname(file); dir !== dirname(dir); dir = dirname(dir)) {
+    if (packageIdentityCache.has(dir)) return packageIdentityCache.get(dir);
+    const manifest = join(dir, "package.json");
+    if (!existsSync(manifest)) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(readFileSync(manifest, "utf8"));
+    } catch {
+      continue;
+    }
+    // Nested manifests (dist/esm/package.json with only "type") are not the
+    // package root; the root is the directory installed as node_modules/<name>.
+    if (
+      typeof parsed.name !== "string" ||
+      !dir.endsWith(`${sep}node_modules${sep}${parsed.name.replaceAll("/", sep)}`)
+    ) {
+      continue;
+    }
+    const identity = { name: parsed.name, version: parsed.version, dir };
+    packageIdentityCache.set(dir, identity);
+    return identity;
+  }
+  return undefined;
 }
 
 /**
@@ -205,35 +237,39 @@ function owningPackage(file) {
  * parents), and esbuild would bundle each one.
  */
 function indexCanonicalPackages(nodeModulesDir) {
-	const canonical = new Map();
-	const visit = (dir) => {
-		let entries;
-		try {
-			entries = readdirSync(dir, { withFileTypes: true });
-		} catch {
-			return;
-		}
-		for (const entry of entries) {
-			if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-			if (entry.name.startsWith("@")) {
-				visit(join(dir, entry.name));
-				continue;
-			}
-			const packageDir = join(dir, entry.name);
-			const identity = owningPackage(join(packageDir, "package.json"));
-			if (identity?.dir === packageDir) {
-				const key = `${identity.name}@${identity.version}`;
-				const current = canonical.get(key);
-				const depth = (path) => path.split(`${sep}node_modules${sep}`).length;
-				if (!current || depth(packageDir) < depth(current) || (depth(packageDir) === depth(current) && packageDir < current)) {
-					canonical.set(key, packageDir);
-				}
-			}
-			visit(join(packageDir, "node_modules"));
-		}
-	};
-	visit(nodeModulesDir);
-	return canonical;
+  const canonical = new Map();
+  const visit = (dir) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+      if (entry.name.startsWith("@")) {
+        visit(join(dir, entry.name));
+        continue;
+      }
+      const packageDir = join(dir, entry.name);
+      const identity = owningPackage(join(packageDir, "package.json"));
+      if (identity?.dir === packageDir) {
+        const key = `${identity.name}@${identity.version}`;
+        const current = canonical.get(key);
+        const depth = (path) => path.split(`${sep}node_modules${sep}`).length;
+        if (
+          !current ||
+          depth(packageDir) < depth(current) ||
+          (depth(packageDir) === depth(current) && packageDir < current)
+        ) {
+          canonical.set(key, packageDir);
+        }
+      }
+      visit(join(packageDir, "node_modules"));
+    }
+  };
+  visit(nodeModulesDir);
+  return canonical;
 }
 
 // Two sources of duplicate copies: the Aiden cores bundled from ../../../main
@@ -247,90 +283,108 @@ function indexCanonicalPackages(nodeModulesDir) {
 // difference keeps its own copy.
 let canonicalPackages;
 const dedupeRepoPackagesPlugin = {
-	name: "aiden-dedupe-repo-packages",
-	setup(build) {
-		build.onResolve({ filter: /^(?:@[^/]+\/)?[^./][^:]*$/ }, async (args) => {
-			if (args.pluginData?.aidenDedupe || args.namespace !== "file" || !args.importer || isBuiltin(args.path)) {
-				return undefined;
-			}
-			const resolved = await build.resolve(args.path, {
-				importer: args.importer,
-				kind: args.kind,
-				pluginData: { aidenDedupe: true },
-				resolveDir: args.resolveDir,
-			});
-			if (resolved.errors.length > 0 || resolved.external || !resolved.path.includes(`${sep}node_modules${sep}`)) {
-				return undefined;
-			}
-			const owner = owningPackage(resolved.path);
-			if (!owner) return undefined;
-			canonicalPackages ??= indexCanonicalPackages(realpathSync(resolve(pkgDir, "node_modules")));
-			const canonicalDir = canonicalPackages.get(`${owner.name}@${owner.version}`);
-			if (!canonicalDir || canonicalDir === owner.dir) return undefined;
-			return { path: join(canonicalDir, relative(owner.dir, resolved.path)), sideEffects: resolved.sideEffects };
-		});
-	},
+  name: "aiden-dedupe-repo-packages",
+  setup(build) {
+    build.onResolve({ filter: /^(?:@[^/]+\/)?[^./][^:]*$/ }, async (args) => {
+      if (
+        args.pluginData?.aidenDedupe ||
+        args.namespace !== "file" ||
+        !args.importer ||
+        isBuiltin(args.path)
+      ) {
+        return undefined;
+      }
+      const resolved = await build.resolve(args.path, {
+        importer: args.importer,
+        kind: args.kind,
+        pluginData: { aidenDedupe: true },
+        resolveDir: args.resolveDir,
+      });
+      if (
+        resolved.errors.length > 0 ||
+        resolved.external ||
+        !resolved.path.includes(`${sep}node_modules${sep}`)
+      ) {
+        return undefined;
+      }
+      const owner = owningPackage(resolved.path);
+      if (!owner) return undefined;
+      canonicalPackages ??= indexCanonicalPackages(realpathSync(resolve(pkgDir, "node_modules")));
+      const canonicalDir = canonicalPackages.get(`${owner.name}@${owner.version}`);
+      if (!canonicalDir || canonicalDir === owner.dir) return undefined;
+      return {
+        path: join(canonicalDir, relative(owner.dir, resolved.path)),
+        sideEffects: resolved.sideEffects,
+      };
+    });
+  },
 };
 
 const packageAlias = {
-	// Keep the desktop platform facade out of the bundle: cores that can reach
-	// for electron lazily resolve to a loud stub instead of the npm package.
-	// Alias values must be absolute so resolution does not depend on the
-	// importing file's location.
-	electron: resolve(join(pkgDir, "src", "vendor", "electron-stub.ts")),
+  // Keep the desktop platform facade out of the bundle: cores that can reach
+  // for electron lazily resolve to a loud stub instead of the npm package.
+  // Alias values must be absolute so resolution does not depend on the
+  // importing file's location.
+  electron: resolve(join(pkgDir, "src", "vendor", "electron-stub.ts")),
 };
 
 function commonBuildOptions() {
-	return {
-		absWorkingDir: resolve(pkgDir),
-		alias: packageAlias,
-		banner,
-		bundle: true,
-		define: { PI_BUNDLED_NODE: "true" },
-		external: ["@silvia-odwyer/photon-node", "@opentelemetry/api"],
-		format: "esm",
-		charset: "utf8",
-		legalComments: "none",
-		logLevel: "warning",
-		metafile: true,
-		minifySyntax: true,
-		minifyWhitespace: true,
-		platform: "node",
-		plugins: [
-			credentialStorePlugin,
-			piVirtualModulesStubPlugin,
-			aidenRelativeTsRewritePlugin,
-			lazyJitiPlugin,
-			httpsProxyAgentNamedExportPlugin,
-			dedupeRepoPackagesPlugin,
-		],
-		sourcemap: false,
-		target: "node22.19",
-		tsconfigRaw: { compilerOptions: {} },
-	};
+  return {
+    absWorkingDir: resolve(pkgDir),
+    alias: packageAlias,
+    banner,
+    bundle: true,
+    define: { PI_BUNDLED_NODE: "true" },
+    external: ["@silvia-odwyer/photon-node", "@opentelemetry/api"],
+    format: "esm",
+    charset: "utf8",
+    legalComments: "none",
+    logLevel: "warning",
+    metafile: true,
+    minifySyntax: true,
+    minifyWhitespace: true,
+    platform: "node",
+    plugins: [
+      credentialStorePlugin,
+      piVirtualModulesStubPlugin,
+      aidenRelativeTsRewritePlugin,
+      lazyJitiPlugin,
+      httpsProxyAgentNamedExportPlugin,
+      dedupeRepoPackagesPlugin,
+    ],
+    sourcemap: false,
+    target: "node22.19",
+    tsconfigRaw: { compilerOptions: {} },
+  };
 }
 
 function validateExternalImports(metafiles) {
-	const unexpected = new Set();
-	for (const metafile of metafiles) {
-		// Validate emitted imports. esbuild marks erased/unused source imports
-		// external in inputs even when no import survives in the output.
-		for (const [inputPath, output] of Object.entries(metafile.outputs)) {
-			for (const imported of output.imports) {
-				if (!imported.external || isBuiltin(imported.path) || allowedExternalPackages.has(imported.path)) {
-					continue;
-				}
-				if (imported.path === "<runtime>") {
-					// esbuild's bookkeeping for dynamic-import machinery.
-					continue;
-				}
-				unexpected.add(`${imported.path} (from ${inputPath})`);
-			}
-		}
-	}
-	if (unexpected.size > 0) {
-		throw new Error(`Bundle left unexpected external imports: ${Array.from(unexpected).sort().join(", ")}`);
-	}
+  const unexpected = new Set();
+  for (const metafile of metafiles) {
+    // Validate emitted imports. esbuild marks erased/unused source imports
+    // external in inputs even when no import survives in the output.
+    for (const [inputPath, output] of Object.entries(metafile.outputs)) {
+      for (const imported of output.imports) {
+        if (
+          !imported.external ||
+          isBuiltin(imported.path) ||
+          allowedExternalPackages.has(imported.path)
+        ) {
+          continue;
+        }
+        if (imported.path === "<runtime>") {
+          // esbuild's bookkeeping for dynamic-import machinery.
+          continue;
+        }
+        unexpected.add(`${imported.path} (from ${inputPath})`);
+      }
+    }
+  }
+  if (unexpected.size > 0) {
+    throw new Error(
+      `Bundle left unexpected external imports: ${Array.from(unexpected).sort().join(", ")}`,
+    );
+  }
 }
 
 /**
@@ -338,20 +392,24 @@ function validateExternalImports(metafiles) {
  * locations, which is what the dedupe plugin above exists to prevent.
  */
 function assertNoDuplicatePackages(metafile) {
-	const locations = new Map();
-	for (const inputPath of Object.keys(metafile.inputs)) {
-		if (!inputPath.includes("node_modules/")) continue;
-		const identity = owningPackage(resolve(pkgDir, inputPath));
-		if (!identity) continue;
-		const key = `${identity.name}@${identity.version}`;
-		const dirs = locations.get(key) ?? new Set();
-		dirs.add(identity.dir);
-		locations.set(key, dirs);
-	}
-	const duplicated = [...locations].filter(([, dirs]) => dirs.size > 1).map(([key, dirs]) => `${key} (${[...dirs].map((dir) => relative(pkgDir, dir)).join(", ")})`);
-	if (duplicated.length > 0) {
-		throw new Error(`Bundle contains the same package version from several install locations: ${duplicated.join("; ")}`);
-	}
+  const locations = new Map();
+  for (const inputPath of Object.keys(metafile.inputs)) {
+    if (!inputPath.includes("node_modules/")) continue;
+    const identity = owningPackage(resolve(pkgDir, inputPath));
+    if (!identity) continue;
+    const key = `${identity.name}@${identity.version}`;
+    const dirs = locations.get(key) ?? new Set();
+    dirs.add(identity.dir);
+    locations.set(key, dirs);
+  }
+  const duplicated = [...locations]
+    .filter(([, dirs]) => dirs.size > 1)
+    .map(([key, dirs]) => `${key} (${[...dirs].map((dir) => relative(pkgDir, dir)).join(", ")})`);
+  if (duplicated.length > 0) {
+    throw new Error(
+      `Bundle contains the same package version from several install locations: ${duplicated.join("; ")}`,
+    );
+  }
 }
 
 /**
@@ -360,32 +418,39 @@ function assertNoDuplicatePackages(metafile) {
  * (or its OAuth flow) is bundled again.
  */
 function assertNoMcpSdkClient(metafile) {
-	const offending = Object.keys(metafile.inputs)
-		.map((inputPath) => inputPath.replaceAll("\\", "/"))
-		.filter((inputPath) => /@modelcontextprotocol\/sdk\/dist\/[^/]+\/client\//u.test(inputPath));
-	if (offending.length > 0) {
-		throw new Error(`Bundle contains the MCP SDK client; use @earendil-works/pi-mcp through main/services instead: ${offending.slice(0, 5).join(", ")}`);
-	}
+  const offending = Object.keys(metafile.inputs)
+    .map((inputPath) => inputPath.replaceAll("\\", "/"))
+    .filter((inputPath) => /@modelcontextprotocol\/sdk\/dist\/[^/]+\/client\//u.test(inputPath));
+  if (offending.length > 0) {
+    throw new Error(
+      `Bundle contains the MCP SDK client; use @earendil-works/pi-mcp through main/services instead: ${offending.slice(0, 5).join(", ")}`,
+    );
+  }
 }
 
 function findContainingOutputs(metafile, inputSuffix) {
-	const normalizedSuffix = inputSuffix.replaceAll("\\", "/");
-	const outputs = Object.entries(metafile.outputs)
-		.filter(([, output]) => Object.keys(output.inputs).some((inputPath) => inputPath.replaceAll("\\", "/").endsWith(normalizedSuffix)))
-		.map(([outputPath]) => resolve(pkgDir, outputPath));
-	if (outputs.length === 0) throw new Error(`Could not locate bundled output containing ${inputSuffix}`);
-	return outputs;
+  const normalizedSuffix = inputSuffix.replaceAll("\\", "/");
+  const outputs = Object.entries(metafile.outputs)
+    .filter(([, output]) =>
+      Object.keys(output.inputs).some((inputPath) =>
+        inputPath.replaceAll("\\", "/").endsWith(normalizedSuffix),
+      ),
+    )
+    .map(([outputPath]) => resolve(pkgDir, outputPath));
+  if (outputs.length === 0)
+    throw new Error(`Could not locate bundled output containing ${inputSuffix}`);
+  return outputs;
 }
 
 for (const entry of [
-	join(piAiPkg, "dist", "auth", "oauth", "anthropic.js"),
-	join(piAgentPkg, "dist", "utils", "image-resize-worker.js"),
+  join(piAiPkg, "dist", "auth", "oauth", "anthropic.js"),
+  join(piAgentPkg, "dist", "utils", "image-resize-worker.js"),
 ]) {
-	if (!existsSync(entry)) {
-		throw new Error(
-			`Bundle input is missing: ${relative(pkgDir, entry)}. Run npm install in packages/cli and build the dependency tree first.`,
-		);
-	}
+  if (!existsSync(entry)) {
+    throw new Error(
+      `Bundle input is missing: ${relative(pkgDir, entry)}. Run npm install in packages/cli and build the dependency tree first.`,
+    );
+  }
 }
 
 rmSync(appDir, { force: true, recursive: true });
@@ -399,43 +464,47 @@ mkdirSync(appDir, { recursive: true });
 // instead of once per worker.
 const lazyChunkDir = "chunks";
 const lazyEntryPoints = {
-	meta: join(piAiPkg, "dist", "auth", "oauth", "meta.js"),
-	"openai-chatgpt": join(piAiPkg, "dist", "auth", "oauth", "openai-chatgpt.js"),
-	anthropic: join(piAiPkg, "dist", "auth", "oauth", "anthropic.js"),
-	"bedrock-converse-stream": join(piAiPkg, "dist", "api", "bedrock-converse-stream.js"),
-	"github-copilot": join(piAiPkg, "dist", "auth", "oauth", "github-copilot.js"),
-	"image-resize-worker": join(piAgentPkg, "dist", "utils", "image-resize-worker.js"),
-	"kimi-coding": join(piAiPkg, "dist", "auth", "oauth", "kimi-coding.js"),
-	"openai-codex": join(piAiPkg, "dist", "auth", "oauth", "openai-codex.js"),
-	openrouter: join(piAiPkg, "dist", "auth", "oauth", "openrouter.js"),
-	radius: join(piAiPkg, "dist", "auth", "oauth", "radius.js"),
-	xai: join(piAiPkg, "dist", "auth", "oauth", "xai.js"),
+  meta: join(piAiPkg, "dist", "auth", "oauth", "meta.js"),
+  "openai-chatgpt": join(piAiPkg, "dist", "auth", "oauth", "openai-chatgpt.js"),
+  anthropic: join(piAiPkg, "dist", "auth", "oauth", "anthropic.js"),
+  "bedrock-converse-stream": join(piAiPkg, "dist", "api", "bedrock-converse-stream.js"),
+  "github-copilot": join(piAiPkg, "dist", "auth", "oauth", "github-copilot.js"),
+  "image-resize-worker": join(piAgentPkg, "dist", "utils", "image-resize-worker.js"),
+  "kimi-coding": join(piAiPkg, "dist", "auth", "oauth", "kimi-coding.js"),
+  "openai-codex": join(piAiPkg, "dist", "auth", "oauth", "openai-codex.js"),
+  openrouter: join(piAiPkg, "dist", "auth", "oauth", "openrouter.js"),
+  radius: join(piAiPkg, "dist", "auth", "oauth", "radius.js"),
+  xai: join(piAiPkg, "dist", "auth", "oauth", "xai.js"),
 };
 
 // Only `npm run cli:dist` carries the project key. Every other build, the test
 // entry below included, keeps the committed keyless module and cannot send.
 const analytics = resolveAnalyticsBuildConfig({
-	env: process.env,
-	version: JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf-8")).version,
+  env: process.env,
+  version: JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf-8")).version,
 });
 if (analytics?.warning) console.warn(`warning: ${analytics.warning}`);
 
 const mainResult = await build({
-	...commonBuildOptions(),
-	...(analytics ? { plugins: [...commonBuildOptions().plugins, analyticsBuildConfigPlugin(analytics.config)] } : {}),
-	entryNames: "[dir]/[name]",
-	entryPoints: {
-		cli: join(pkgDir, "src", "cli.ts"),
-		// Spawned by path from AIDEN_CLI_ENTRY's directory.
-		"speech-worker": join(pkgDir, "src", "speech-worker.ts"),
-		"subagent-worker": join(pkgDir, "src", "subagent-worker.ts"),
-		"avatar-worker": join(pkgDir, "src", "avatar-worker.ts"),
-		...Object.fromEntries(Object.entries(lazyEntryPoints).map(([name, entry]) => [`${lazyChunkDir}/${name}`, entry])),
-	},
-	external: [...commonBuildOptions().external, "sherpa-onnx-node"],
-	outdir: appDir,
-	chunkNames: `${lazyChunkDir}/[name]-[hash]`,
-	splitting: true,
+  ...commonBuildOptions(),
+  ...(analytics
+    ? { plugins: [...commonBuildOptions().plugins, analyticsBuildConfigPlugin(analytics.config)] }
+    : {}),
+  entryNames: "[dir]/[name]",
+  entryPoints: {
+    cli: join(pkgDir, "src", "cli.ts"),
+    // Spawned by path from AIDEN_CLI_ENTRY's directory.
+    "speech-worker": join(pkgDir, "src", "speech-worker.ts"),
+    "subagent-worker": join(pkgDir, "src", "subagent-worker.ts"),
+    "avatar-worker": join(pkgDir, "src", "avatar-worker.ts"),
+    ...Object.fromEntries(
+      Object.entries(lazyEntryPoints).map(([name, entry]) => [`${lazyChunkDir}/${name}`, entry]),
+    ),
+  },
+  external: [...commonBuildOptions().external, "sherpa-onnx-node"],
+  outdir: appDir,
+  chunkNames: `${lazyChunkDir}/[name]-[hash]`,
+  splitting: true,
 });
 
 // Pi 1.0.3 snapshots this worker into a data: URL so running sessions survive
@@ -452,16 +521,18 @@ validateExternalImports([codemodeWorkerResult.metafile]);
 // Every output that carries one of the resolving modules must sit in the
 // lazy entries' directory, or a variable import resolves to a missing file.
 for (const resolver of [
-	"pi-coding-agent/dist/config.js",
-	"pi-ai/dist/api/bedrock-converse-stream.lazy.js",
-	"pi-ai/dist/auth/oauth/load.js",
-	"pi-coding-agent/dist/utils/image-resize.js",
+  "pi-coding-agent/dist/config.js",
+  "pi-ai/dist/api/bedrock-converse-stream.lazy.js",
+  "pi-ai/dist/auth/oauth/load.js",
+  "pi-coding-agent/dist/utils/image-resize.js",
 ]) {
-	for (const output of findContainingOutputs(mainResult.metafile, resolver)) {
-		if (dirname(output) !== join(appDir, lazyChunkDir)) {
-			throw new Error(`${resolver} was emitted into ${relative(pkgDir, output)}, away from the lazy entries it loads`);
-		}
-	}
+  for (const output of findContainingOutputs(mainResult.metafile, resolver)) {
+    if (dirname(output) !== join(appDir, lazyChunkDir)) {
+      throw new Error(
+        `${resolver} was emitted into ${relative(pkgDir, output)}, away from the lazy entries it loads`,
+      );
+    }
+  }
 }
 
 validateExternalImports([mainResult.metafile]);
@@ -470,7 +541,9 @@ assertNoMcpSdkClient(mainResult.metafile);
 // Audit the transitive Bot host graph independently of the legacy daemon's
 // intentionally stubbed desktop imports. Future shared-core changes must not
 // accidentally pull Electron state into durable CLI sessions.
-const botHostInput = Object.keys(mainResult.metafile.inputs).find((file) => file.endsWith("src/bot-durable.ts"));
+const botHostInput = Object.keys(mainResult.metafile.inputs).find((file) =>
+  file.endsWith("src/bot-durable.ts"),
+);
 if (!botHostInput) throw new Error("Durable Bot host is missing from the CLI bundle.");
 const botVisited = new Set();
 const botPending = [[botHostInput, []]];
@@ -478,74 +551,89 @@ while (botPending.length) {
   const [file, ancestors] = botPending.pop();
   if (botVisited.has(file)) continue;
   botVisited.add(file);
-  if (file.endsWith("main/platform.ts") || file.endsWith("vendor/electron-stub.ts") || file === "electron") {
+  if (
+    file.endsWith("main/platform.ts") ||
+    file.endsWith("vendor/electron-stub.ts") ||
+    file === "electron"
+  ) {
     throw new Error(`Durable Bot host imports Electron: ${[...ancestors, file].join(" -> ")}`);
   }
   for (const imported of mainResult.metafile.inputs[file]?.imports ?? []) {
     // DataStore's desktop default is a known lazy fallback. Every CLI store
     // supplies its explicit profile root; the Electron stub fails if that
     // invariant is broken. Permit only this exact guarded edge.
-    if (file.endsWith("main/services/data-store.ts") && imported.kind === "dynamic-import" && imported.path.endsWith("main/platform.ts")) continue;
+    if (
+      file.endsWith("main/services/data-store.ts") &&
+      imported.kind === "dynamic-import" &&
+      imported.path.endsWith("main/platform.ts")
+    )
+      continue;
     if (!imported.external) botPending.push([imported.path, [...ancestors, file]]);
   }
 }
-
 
 // Bundle externals resolve at runtime from the app root's node_modules
 // ancestry. Tree-shaking usually eliminates unreferenced ones (photon-node
 // today); verify every specifier that survived so a future pi
 // change fails the build here instead of crashing on a headless machine.
-const emittedFiles = Object.keys(mainResult.metafile.outputs).filter((path) => path.endsWith(".js"));
-const externalPattern = /(?:from\s*|import\s*\()\s*["'](@silvia-odwyer\/photon-node|jiti(?:\/static)?)["']/g;
+const emittedFiles = Object.keys(mainResult.metafile.outputs).filter((path) =>
+  path.endsWith(".js"),
+);
+const externalPattern =
+  /(?:from\s*|import\s*\()\s*["'](@silvia-odwyer\/photon-node|jiti(?:\/static)?)["']/g;
 const referencedExternals = new Set();
 for (const output of emittedFiles) {
-	const contents = readFileSync(resolve(pkgDir, output), "utf-8");
-	for (const match of contents.matchAll(externalPattern)) {
-		referencedExternals.add(match[1]);
-	}
+  const contents = readFileSync(resolve(pkgDir, output), "utf-8");
+  for (const match of contents.matchAll(externalPattern)) {
+    referencedExternals.add(match[1]);
+  }
 }
 const { createRequire } = await import("node:module");
 const runtimeRequire = createRequire(join(appDir, "cli.js"));
 const { execFileSync } = await import("node:child_process");
 function resolvesAsEsm(specifier) {
-	// Some packages export subpaths under the "import" condition only, which require.resolve cannot see. Resolve them the way the
-	// bundle's own `import` will, from the app directory.
-	try {
-		execFileSync(process.execPath, ["--input-type=module", "-e", `import.meta.resolve(${JSON.stringify(specifier)})`], {
-			cwd: appDir,
-			stdio: "ignore",
-		});
-		return true;
-	} catch {
-		return false;
-	}
+  // Some packages export subpaths under the "import" condition only, which require.resolve cannot see. Resolve them the way the
+  // bundle's own `import` will, from the app directory.
+  try {
+    execFileSync(
+      process.execPath,
+      ["--input-type=module", "-e", `import.meta.resolve(${JSON.stringify(specifier)})`],
+      {
+        cwd: appDir,
+        stdio: "ignore",
+      },
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 for (const specifier of referencedExternals) {
-	try {
-		runtimeRequire.resolve(specifier.startsWith("jiti") ? "jiti" : specifier);
-	} catch {
-		if (resolvesAsEsm(specifier)) continue;
-		throw new Error(
-			`Bundle references external "${specifier}" which does not resolve from dist/app. Add it as a dependency of packages/cli.`,
-		);
-	}
+  try {
+    runtimeRequire.resolve(specifier.startsWith("jiti") ? "jiti" : specifier);
+  } catch {
+    if (resolvesAsEsm(specifier)) continue;
+    throw new Error(
+      `Bundle references external "${specifier}" which does not resolve from dist/app. Add it as a dependency of packages/cli.`,
+    );
+  }
 }
 
 // Nearest package.json to the bundle drives pi's rebranding config resolution.
 const outerPackageJson = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf-8"));
 writeFileSync(
-	join(appDir, "package.json"),
-	`${JSON.stringify(
-		{
-			name: outerPackageJson.name,
-			version: outerPackageJson.version,
-			type: "module",
-			private: true,
-			piConfig: outerPackageJson.piConfig,
-		},
-		null,
-		"\t",
-	)}\n`,
+  join(appDir, "package.json"),
+  `${JSON.stringify(
+    {
+      name: outerPackageJson.name,
+      version: outerPackageJson.version,
+      type: "module",
+      private: true,
+      piConfig: outerPackageJson.piConfig,
+    },
+    null,
+    "\t",
+  )}\n`,
 );
 
 // Pi's dark/light theme JSON and session HTML export templates are not
@@ -558,8 +646,8 @@ writeFileSync(
 // the CLI.
 const piDocsImages = join(piAgentPkg, "docs", "images");
 cpSync(join(piAgentPkg, "docs"), join(appDir, "docs"), {
-	recursive: true,
-	filter: (source) => source !== piDocsImages && !source.startsWith(`${piDocsImages}${sep}`),
+  recursive: true,
+  filter: (source) => source !== piDocsImages && !source.startsWith(`${piDocsImages}${sep}`),
 });
 // Pi's built-in MCP extension is replaced by Aiden's (src/mcp.ts), so Pi's
 // MCP guide and the MCP parts of its CLI and configuration docs (which pi's
@@ -568,7 +656,9 @@ cpSync(join(piAgentPkg, "docs"), join(appDir, "docs"), {
 // that moves the text fails the build instead of shipping stale docs.
 const piSystemPrompt = readFileSync(join(piAgentPkg, "dist", "core", "system-prompt.js"), "utf8");
 if (!piSystemPrompt.includes("MCP servers (docs/mcp.md)")) {
-	throw new Error("Pi's system prompt no longer points MCP questions at docs/mcp.md; review the Aiden MCP doc replacement.");
+  throw new Error(
+    "Pi's system prompt no longer points MCP questions at docs/mcp.md; review the Aiden MCP doc replacement.",
+  );
 }
 const AIDEN_MCP_DOC = `# MCP servers in Aiden
 
@@ -584,25 +674,49 @@ Aiden's CLI connects MCP servers from \`aiden-mcp.json\` in the agent directory 
 `;
 writeFileSync(join(appDir, "docs", "mcp.md"), AIDEN_MCP_DOC);
 function patchPiDoc(name, patches) {
-	const file = join(appDir, "docs", name);
-	let text = readFileSync(file, "utf8");
-	for (const [from, to] of patches) {
-		const count = typeof from === "string" ? text.split(from).length - 1 : (text.match(new RegExp(from.source, `${from.flags.replace("g", "")}g`)) ?? []).length;
-		if (count !== 1) throw new Error(`Pi's docs/${name} changed (${count} matches for ${String(from).slice(0, 60)}); review the Aiden MCP doc patches.`);
-		text = text.replace(from, () => to);
-	}
-	writeFileSync(file, text);
+  const file = join(appDir, "docs", name);
+  let text = readFileSync(file, "utf8");
+  for (const [from, to] of patches) {
+    const count =
+      typeof from === "string"
+        ? text.split(from).length - 1
+        : (text.match(new RegExp(from.source, `${from.flags.replace("g", "")}g`)) ?? []).length;
+    if (count !== 1)
+      throw new Error(
+        `Pi's docs/${name} changed (${count} matches for ${String(from).slice(0, 60)}); review the Aiden MCP doc patches.`,
+      );
+    text = text.replace(from, () => to);
+  }
+  writeFileSync(file, text);
 }
 patchPiDoc("cli.md", [
-	["pi mcp <add|remove|list|login|logout> [options]\n", "aiden mcp <list|presets|add|preset|login|logout|remove>\n"],
-	["Loads an extension file or directory, or a built-in extension such as `builtin:mcp`, and is repeatable.", "Loads an extension file or directory, and is repeatable. Aiden turns Pi's built-in MCP extension off; see [MCP Servers](mcp.md)."],
-	["Disables discovered, configured, and built-in extensions. Explicit `-e` paths still load, so `pi -ne -e builtin:mcp` keeps only the built-in MCP support.", "Disables discovered, configured, and built-in extensions. Explicit `-e` paths still load."],
-	["Disables the built-in MCP support for this run: no servers connect, and there are no MCP tools or `/mcp`. It does not affect an extension that replaces the built-in MCP support.", "Pi's built-in MCP support is always off in Aiden. Aiden's own MCP servers (`aiden-mcp.json`) are not affected."],
-	[/\n## MCP commands\n[\s\S]*$/u, `\n## MCP commands\n\n${AIDEN_MCP_DOC.split("\n").slice(2).join("\n")}`],
+  [
+    "pi mcp <add|remove|list|login|logout> [options]\n",
+    "aiden mcp <list|presets|add|preset|login|logout|remove>\n",
+  ],
+  [
+    "Loads an extension file or directory, or a built-in extension such as `builtin:mcp`, and is repeatable.",
+    "Loads an extension file or directory, and is repeatable. Aiden turns Pi's built-in MCP extension off; see [MCP Servers](mcp.md).",
+  ],
+  [
+    "Disables discovered, configured, and built-in extensions. Explicit `-e` paths still load, so `pi -ne -e builtin:mcp` keeps only the built-in MCP support.",
+    "Disables discovered, configured, and built-in extensions. Explicit `-e` paths still load.",
+  ],
+  [
+    "Disables the built-in MCP support for this run: no servers connect, and there are no MCP tools or `/mcp`. It does not affect an extension that replaces the built-in MCP support.",
+    "Pi's built-in MCP support is always off in Aiden. Aiden's own MCP servers (`aiden-mcp.json`) are not affected.",
+  ],
+  [
+    /\n## MCP commands\n[\s\S]*$/u,
+    `\n## MCP commands\n\n${AIDEN_MCP_DOC.split("\n").slice(2).join("\n")}`,
+  ],
 ]);
 patchPiDoc("configuration.md", [
-	["| `<agent-dir>/mcp.json` | [MCP servers](mcp.md) available in every project. |", "| `<agent-dir>/aiden-mcp.json` | Aiden's [MCP servers](mcp.md); Pi's native `mcp.json` is not read. |"],
-	["| `.pi/mcp.json` | Project [MCP servers](mcp.md). |\n", ""],
+  [
+    "| `<agent-dir>/mcp.json` | [MCP servers](mcp.md) available in every project. |",
+    "| `<agent-dir>/aiden-mcp.json` | Aiden's [MCP servers](mcp.md); Pi's native `mcp.json` is not read. |",
+  ],
+  ["| `.pi/mcp.json` | Project [MCP servers](mcp.md). |\n", ""],
 ]);
 
 // Native helpers: prefer checksum-verified prebuilts (AIDEN_NATIVE_PREBUILT_DIR
@@ -620,7 +734,8 @@ const repositoryRoot = resolve(pkgDir, "../..");
 const helperTarget = nativeHelperTarget();
 const prebuiltOverride = process.env.AIDEN_NATIVE_PREBUILT_DIR;
 if (prebuiltOverride) console.log(`[build] Using AIDEN_NATIVE_PREBUILT_DIR=${prebuiltOverride}`);
-const prebuiltDir = prebuiltOverride ?? join(repositoryRoot, "prebuilt", "native", helperTarget ?? "none");
+const prebuiltDir =
+  prebuiltOverride ?? join(repositoryRoot, "prebuilt", "native", helperTarget ?? "none");
 // Verify, not just find: manifest target, architecture magic, and per-helper
 // sha256 must all agree before a prebuilt is trusted. A stale source hash
 // (main.c edited without rebuilding prebuilts) also fails closed.
@@ -634,19 +749,24 @@ const prebuiltFailure = (() => {
   }
   // JSON.parse succeeds for `null`/`"x"`/`5` — only an object can be trusted.
   if (!manifest || typeof manifest !== "object") return "manifest.json is not a JSON object";
-  if (manifest.target !== helperTarget) return `manifest target ${manifest.target} is not ${helperTarget}`;
+  if (manifest.target !== helperTarget)
+    return `manifest target ${manifest.target} is not ${helperTarget}`;
   for (const helper of NATIVE_HELPERS) {
     const file = join(prebuiltDir, `aiden-${helper}`);
     if (!existsSync(file)) return `aiden-${helper} is missing`;
     if (!verifyNativeHelper(file)) return `aiden-${helper} failed architecture verification`;
     try {
-      if (nativeHelperFileHash(file) !== manifest.helpers?.[helper]?.sha256) return `aiden-${helper} checksum mismatch`;
+      if (nativeHelperFileHash(file) !== manifest.helpers?.[helper]?.sha256)
+        return `aiden-${helper} checksum mismatch`;
     } catch {
       return `aiden-${helper} is unreadable`;
     }
     const expectedSource = manifest.helpers?.[helper]?.source;
-    if (expectedSource && existsSync(join(repositoryRoot, "native", helper))
-      && nativeHelperSourceHash(repositoryRoot, helper) !== expectedSource) {
+    if (
+      expectedSource &&
+      existsSync(join(repositoryRoot, "native", helper)) &&
+      nativeHelperSourceHash(repositoryRoot, helper) !== expectedSource
+    ) {
       return `aiden-${helper} is stale (sources changed since the prebuilt was made)`;
     }
   }
@@ -660,12 +780,21 @@ if (prebuiltFailure === undefined) {
   }
 } else if (!helperTarget) {
   // Helpers are optional at runtime — callers fall back to JavaScript.
-  console.warn(`[build] No native helper target for ${process.platform}/${process.arch}; skipping helpers.`);
+  console.warn(
+    `[build] No native helper target for ${process.platform}/${process.arch}; skipping helpers.`,
+  );
 } else {
   console.warn(`[build] Prebuilt helpers unusable (${prebuiltFailure}); compiling from source.`);
   for (const helper of NATIVE_HELPERS) {
-    const build = spawnSync(process.execPath, [resolve(pkgDir, `../../scripts/build-${helper}.mjs`)], { encoding: "utf8" });
-    if (build.status !== 0) throw new Error(`Native ${helper} build failed: ${build.stderr || build.error?.message || `exit ${build.status}`}`);
+    const build = spawnSync(
+      process.execPath,
+      [resolve(pkgDir, `../../scripts/build-${helper}.mjs`)],
+      { encoding: "utf8" },
+    );
+    if (build.status !== 0)
+      throw new Error(
+        `Native ${helper} build failed: ${build.stderr || build.error?.message || `exit ${build.status}`}`,
+      );
     const staged = join(appDir, `native/aiden-${helper}`);
     cpSync(resolve(pkgDir, `../../build/native/aiden-${helper}`), staged);
     chmodSync(staged, 0o755);
@@ -674,16 +803,25 @@ if (prebuiltFailure === undefined) {
 
 await vendorGenerativeUiLibraries(resolve(pkgDir, "../.."));
 cpSync(resolve(pkgDir, "../../THIRD_PARTY_NOTICES.md"), join(appDir, "THIRD_PARTY_NOTICES.md"));
-cpSync(resolve(pkgDir, "../../resources/generative-ui"), join(appDir, "generative-ui"), { recursive: true });
-cpSync(resolve(pkgDir, "../../resources/aiden-help"), join(appDir, "aiden-help"), { recursive: true });
+cpSync(resolve(pkgDir, "../../resources/generative-ui"), join(appDir, "generative-ui"), {
+  recursive: true,
+});
+cpSync(resolve(pkgDir, "../../resources/aiden-help"), join(appDir, "aiden-help"), {
+  recursive: true,
+});
 // Silero VAD model the speech worker uses to trim silence (see speech.ts).
 mkdirSync(join(appDir, "speech"), { recursive: true });
-cpSync(resolve(pkgDir, "../../resources/speech/silero_vad.onnx"), join(appDir, "speech", "silero_vad.onnx"));
+cpSync(
+  resolve(pkgDir, "../../resources/speech/silero_vad.onnx"),
+  join(appDir, "speech", "silero_vad.onnx"),
+);
 // Read with JSON.parse at runtime; the indentation in the checked-in copy is
 // a third of its size.
 writeFileSync(
-	join(appDir, "model-capabilities.json"),
-	JSON.stringify(JSON.parse(readFileSync(resolve(pkgDir, "../../resources/model-capabilities.json"), "utf8"))),
+  join(appDir, "model-capabilities.json"),
+  JSON.stringify(
+    JSON.parse(readFileSync(resolve(pkgDir, "../../resources/model-capabilities.json"), "utf8")),
+  ),
 );
 
 chmodSync(join(appDir, "cli.js"), 0o755);
@@ -691,10 +829,10 @@ chmodSync(join(appDir, "cli.js"), 0o755);
 // Test-only entry (outside the app root so it never ships in the package):
 // the modules the parity suite drives directly.
 const testEntriesResult = await build({
-	...commonBuildOptions(),
-	entryPoints: { "parity-test-api": join(pkgDir, "src", "parity-test-api.ts") },
-	outdir: resolve(pkgDir, "dist"),
-	splitting: false,
+  ...commonBuildOptions(),
+  entryPoints: { "parity-test-api": join(pkgDir, "src", "parity-test-api.ts") },
+  outdir: resolve(pkgDir, "dist"),
+  splitting: false,
 });
 assertNoMcpSdkClient(testEntriesResult.metafile);
 
@@ -704,9 +842,9 @@ assertNoMcpSdkClient(testEntriesResult.metafile);
 let files = 0;
 let bytes = 0;
 for (const entry of readdirSync(appDir, { recursive: true, withFileTypes: true })) {
-	if (!entry.isFile()) continue;
-	files += 1;
-	bytes += statSync(join(entry.parentPath, entry.name)).size;
+  if (!entry.isFile()) continue;
+  files += 1;
+  bytes += statSync(join(entry.parentPath, entry.name)).size;
 }
 const mib = bytes / (1024 * 1024);
 console.log(`Built ${relative(pkgDir, appDir)} (${files} files, ${mib.toFixed(1)} MiB)`);

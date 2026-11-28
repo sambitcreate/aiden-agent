@@ -47,8 +47,13 @@ function fileLines(content: string): string[] {
   return lines;
 }
 
-function bounded(lines: ToolApprovalPreviewLine[]): { lines: ToolApprovalPreviewLine[]; omittedLines: number } {
-  const shown = lines.slice(0, TOOL_APPROVAL_PREVIEW_MAX_LINES).map((line) => ({ ...line, text: previewText(line.text) }));
+function bounded(lines: ToolApprovalPreviewLine[]): {
+  lines: ToolApprovalPreviewLine[];
+  omittedLines: number;
+} {
+  const shown = lines
+    .slice(0, TOOL_APPROVAL_PREVIEW_MAX_LINES)
+    .map((line) => ({ ...line, text: previewText(line.text) }));
   return { lines: shown, omittedLines: lines.length - shown.length };
 }
 
@@ -57,7 +62,8 @@ function editPreview(path: string, oldText: string, newText: string): ToolApprov
   const before = splitLines(oldText);
   const after = splitLines(newText);
   let prefix = 0;
-  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix += 1;
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix])
+    prefix += 1;
   let suffix = 0;
   while (
     suffix < before.length - prefix &&
@@ -69,33 +75,59 @@ function editPreview(path: string, oldText: string, newText: string): ToolApprov
   const removed = before.slice(prefix, before.length - suffix);
   const added = after.slice(prefix, after.length - suffix);
   const lines: ToolApprovalPreviewLine[] = [
-    ...before.slice(Math.max(0, prefix - CONTEXT_LINES), prefix).map((text) => ({ type: "context" as const, text })),
+    ...before
+      .slice(Math.max(0, prefix - CONTEXT_LINES), prefix)
+      .map((text) => ({ type: "context" as const, text })),
     ...removed.map((text) => ({ type: "removed" as const, text })),
     ...added.map((text) => ({ type: "added" as const, text })),
     ...before
       .slice(before.length - suffix, before.length - suffix + CONTEXT_LINES)
       .map((text) => ({ type: "context" as const, text })),
   ];
-  return { kind: "file", operation: "edit", path, added: added.length, removed: removed.length, ...bounded(lines) };
+  return {
+    kind: "file",
+    operation: "edit",
+    path,
+    added: added.length,
+    removed: removed.length,
+    ...bounded(lines),
+  };
 }
 
 /**
  * The preview for a coding tool call that needs approval, or undefined when the
  * tool has none or its arguments are not the expected strings.
  */
-export function toolApprovalPreview(toolName: string, args: unknown): ToolApprovalPreview | undefined {
+export function toolApprovalPreview(
+  toolName: string,
+  args: unknown,
+): ToolApprovalPreview | undefined {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
   const a = args as Record<string, unknown>;
   if (toolName === "run_command") {
-    return typeof a.command === "string" && a.command.trim() ? { kind: "command", command: a.command } : undefined;
+    return typeof a.command === "string" && a.command.trim()
+      ? { kind: "command", command: a.command }
+      : undefined;
   }
-  if (typeof a.path !== "string" || !a.path.trim() || a.path.length > MAX_PATH_LENGTH) return undefined;
-  if (toolName === "edit_file" && typeof a.old_string === "string" && typeof a.new_string === "string") {
+  if (typeof a.path !== "string" || !a.path.trim() || a.path.length > MAX_PATH_LENGTH)
+    return undefined;
+  if (
+    toolName === "edit_file" &&
+    typeof a.old_string === "string" &&
+    typeof a.new_string === "string"
+  ) {
     return editPreview(a.path, a.old_string, a.new_string);
   }
   if (toolName === "write_file" && typeof a.content === "string") {
     const lines = fileLines(a.content).map((text) => ({ type: "added" as const, text }));
-    return { kind: "file", operation: "write", path: a.path, added: lines.length, removed: 0, ...bounded(lines) };
+    return {
+      kind: "file",
+      operation: "write",
+      path: a.path,
+      added: lines.length,
+      removed: 0,
+      ...bounded(lines),
+    };
   }
   return undefined;
 }
@@ -109,21 +141,33 @@ export function parseToolApprovalPreview(value: unknown): ToolApprovalPreview | 
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const v = value as Record<string, unknown>;
   if (v.kind === "command") {
-    return typeof v.command === "string" && v.command.trim() ? { kind: "command", command: v.command } : undefined;
+    return typeof v.command === "string" && v.command.trim()
+      ? { kind: "command", command: v.command }
+      : undefined;
   }
   if (v.kind !== "file" || (v.operation !== "edit" && v.operation !== "write")) return undefined;
-  if (typeof v.path !== "string" || !v.path.trim() || v.path.length > MAX_PATH_LENGTH) return undefined;
+  if (typeof v.path !== "string" || !v.path.trim() || v.path.length > MAX_PATH_LENGTH)
+    return undefined;
   if (!Array.isArray(v.lines) || v.lines.length > TOOL_APPROVAL_PREVIEW_MAX_LINES) return undefined;
   const lines: ToolApprovalPreviewLine[] = [];
   for (const entry of v.lines as unknown[]) {
     if (typeof entry !== "object" || entry === null) return undefined;
     const { type, text } = entry as Record<string, unknown>;
-    if ((type !== "context" && type !== "removed" && type !== "added") || typeof text !== "string") return undefined;
+    if ((type !== "context" && type !== "removed" && type !== "added") || typeof text !== "string")
+      return undefined;
     lines.push({ type, text: previewText(text) });
   }
   const added = count(v.added);
   const removed = count(v.removed);
   const omittedLines = count(v.omittedLines);
   if (added === undefined || removed === undefined || omittedLines === undefined) return undefined;
-  return { kind: "file", operation: v.operation, path: v.path, lines, added, removed, omittedLines };
+  return {
+    kind: "file",
+    operation: v.operation,
+    path: v.path,
+    lines,
+    added,
+    removed,
+    omittedLines,
+  };
 }

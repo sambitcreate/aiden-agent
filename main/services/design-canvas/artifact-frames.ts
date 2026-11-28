@@ -4,7 +4,10 @@
 
 import { canvasView } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import { placeFrame } from "../../../renderer/shared/design-canvas/placement.js";
-import { DESIGN_CANVAS_LIMITS, type DesignCanvas } from "../../../renderer/shared/design-canvas/schema.js";
+import {
+  DESIGN_CANVAS_LIMITS,
+  type DesignCanvas,
+} from "../../../renderer/shared/design-canvas/schema.js";
 import type { DesignCanvasStore } from "./store.js";
 
 /** An artifact frame's box when it first lands, in canvas units. */
@@ -33,7 +36,10 @@ export function placeArtifactFrames(
   // Frames this turn already filled, so a second visual never lands in the first one's frame.
   const filled = new Set<string>();
   for (const artifact of artifacts) {
-    if (next.frames.some((frame) => frame.kind === "artifact" && frame.mediaId === artifact.mediaId)) continue;
+    if (
+      next.frames.some((frame) => frame.kind === "artifact" && frame.mediaId === artifact.mediaId)
+    )
+      continue;
     const title = artifact.title.trim().slice(0, DESIGN_CANVAS_LIMITS.titleChars) || "Visual";
     let sameTitle = -1;
     next.frames.forEach((frame, index) => {
@@ -58,7 +64,13 @@ export function placeArtifactFrames(
     }
     const placed = placeFrame(
       next,
-      { kind: "artifact", title, mediaId: artifact.mediaId, createdBy: "aiden", ...ARTIFACT_FRAME_BOX },
+      {
+        kind: "artifact",
+        title,
+        mediaId: artifact.mediaId,
+        createdBy: "aiden",
+        ...ARTIFACT_FRAME_BOX,
+      },
       canvasView(next, viewSize),
       newId,
     );
@@ -124,7 +136,8 @@ export function placeImageFrames(
   const frameIds: string[] = [];
   for (const image of images) {
     const shown = next.frames.find(
-      (frame) => frame.kind === "image" && frame.path === image.path && frame.pageId === next.activePageId,
+      (frame) =>
+        frame.kind === "image" && frame.path === image.path && frame.pageId === next.activePageId,
     );
     if (shown) {
       frameIds.push(shown.id);

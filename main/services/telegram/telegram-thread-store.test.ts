@@ -6,7 +6,9 @@ import { afterEach, test } from "node:test";
 import { createTelegramThreadStore } from "./telegram-thread-store.js";
 
 const roots: string[] = [];
-afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
+afterEach(async () =>
+  Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))),
+);
 
 test("thread targets persist, reconcile by workspace, and stay profile-scoped", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-telegram-threads-"));
@@ -16,7 +18,10 @@ test("thread targets persist, reconcile by workspace, and stay profile-scoped", 
   await store.upsert({ threadId: 11, chatId: 7, name: "Two", workspaceId: "two", createdAt: 2 });
   assert.equal((await store.find(10))?.workspaceId, "one");
   await store.retainWorkspaces(new Set(["two"]), 7);
-  assert.deepEqual((await store.list()).map(({ workspaceId }) => workspaceId), ["two"]);
+  assert.deepEqual(
+    (await store.list()).map(({ workspaceId }) => workspaceId),
+    ["two"],
+  );
   const disk = JSON.parse(await readFile(path.join(root, "telegram-threads-work.json"), "utf8"));
   assert.equal(disk.targets[0].threadId, 11);
   await store.clear();

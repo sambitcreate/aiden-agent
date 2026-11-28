@@ -21,17 +21,9 @@ test("recent palette history keeps only unique command ids and no user text", ()
 });
 
 test("recording promotes a command and caps local history", () => {
-  let recent = normalizeRecentCommands([
-    "chat.new",
-    "settings.open",
-    "terminal.toggle",
-  ]);
+  let recent = normalizeRecentCommands(["chat.new", "settings.open", "terminal.toggle"]);
   recent = recordRecentCommand(recent, "settings.open");
-  assert.deepEqual(recent.slice(0, 3), [
-    "settings.open",
-    "chat.new",
-    "terminal.toggle",
-  ]);
+  assert.deepEqual(recent.slice(0, 3), ["settings.open", "chat.new", "terminal.toggle"]);
 
   for (let index = 1; index <= 9; index += 1) {
     recent = recordRecentCommand(recent, `chat.jump.${index}` as never);

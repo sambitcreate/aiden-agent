@@ -14,9 +14,11 @@ const SAMPLE_RATE = 16_000;
 export interface AidenRemoteSpeechStatus {
   engine: { ready: boolean; error: string | null };
   selectedModelId: string | null;
-  models: Array<LocalModel & {
-    download?: LocalModelDownloadState;
-  }>;
+  models: Array<
+    LocalModel & {
+      download?: LocalModelDownloadState;
+    }
+  >;
   input: {
     encoding: "pcm_s16le";
     sampleRate: typeof SAMPLE_RATE;
@@ -43,13 +45,20 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[], mess
 
 function modelId(value: unknown): string {
   if (typeof value !== "string" || !/^[A-Za-z0-9._-]{1,64}$/u.test(value)) {
-    throw new AidenRemoteServiceError("invalid_request", "The speech model identifier is invalid.", 400);
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The speech model identifier is invalid.",
+      400,
+    );
   }
   return value;
 }
 
 export interface AidenRemoteSpeechDependencies {
-  configStore: { getSettings(): Promise<AppSettings>; setSettings(patch: Partial<AppSettings>): Promise<unknown> };
+  configStore: {
+    getSettings(): Promise<AppSettings>;
+    setSettings(patch: Partial<AppSettings>): Promise<unknown>;
+  };
   listModels(): LocalModel[];
   localModelDownloadStates(): LocalModelDownloadState[];
   downloadModel(id: string): Promise<void>;
@@ -68,17 +77,22 @@ export class AidenRemoteSpeechServiceCore {
 
   async status(): Promise<AidenRemoteSpeechStatus> {
     const settings = await this.dependencies.configStore.getSettings();
-    const downloads = new Map(this.dependencies.localModelDownloadStates().map((value) => [value.id, value]));
+    const downloads = new Map(
+      this.dependencies.localModelDownloadStates().map((value) => [value.id, value]),
+    );
     const engine = await this.dependencies.engineStatus();
     const models = this.dependencies.listModels();
     const installed = models.filter((model) => model.installed).map((model) => model.id);
     return {
       engine: {
         ready: engine.ready,
-        error: engine.ready ? null : "Your computer's speech engine is unavailable. Restart Aiden Agent and try again.",
+        error: engine.ready
+          ? null
+          : "Your computer's speech engine is unavailable. Restart Aiden Agent and try again.",
       },
       // The model desktop dictation uses now, so Automatic still shows one.
-      selectedModelId: effectiveLocalModelId(settings.localVoiceModel || undefined, installed) ?? null,
+      selectedModelId:
+        effectiveLocalModelId(settings.localVoiceModel || undefined, installed) ?? null,
       models: models.map((model) => ({
         ...model,
         ...(downloads.get(model.id)
@@ -107,9 +121,15 @@ export class AidenRemoteSpeechServiceCore {
     exactKeys(value, ["modelId"], "A speech model selection must contain only modelId.");
     const id = modelId(value.modelId);
     const model = this.dependencies.listModels().find((candidate) => candidate.id === id);
-    if (!model) throw new AidenRemoteServiceError("not_found", "That speech model is unavailable.", 404);
+    if (!model)
+      throw new AidenRemoteServiceError("not_found", "That speech model is unavailable.", 404);
     if (!model.installed) {
-      throw new AidenRemoteServiceError("operation_stale", "Download the speech model before selecting it.", 409, true);
+      throw new AidenRemoteServiceError(
+        "operation_stale",
+        "Download the speech model before selecting it.",
+        409,
+        true,
+      );
     }
     await this.dependencies.configStore.setSettings({ localVoiceModel: id });
     return this.status();
@@ -118,8 +138,14 @@ export class AidenRemoteSpeechServiceCore {
   async startDownload(idValue: unknown): Promise<AidenRemoteSpeechStatus> {
     const id = modelId(idValue);
     const model = this.dependencies.listModels().find((candidate) => candidate.id === id);
-    if (!model) throw new AidenRemoteServiceError("not_found", "That speech model is unavailable.", 404);
-    if (!model.installed && !this.dependencies.localModelDownloadStates().some((state) => state.id === id && state.status === "downloading")) {
+    if (!model)
+      throw new AidenRemoteServiceError("not_found", "That speech model is unavailable.", 404);
+    if (
+      !model.installed &&
+      !this.dependencies
+        .localModelDownloadStates()
+        .some((state) => state.id === id && state.status === "downloading")
+    ) {
       void this.dependencies.downloadModel(id).catch(() => {
         // The bounded status projection exposes the failure for client polling.
       });
@@ -138,26 +164,49 @@ export class AidenRemoteSpeechServiceCore {
       await this.dependencies.releaseRecognizer(id);
       await this.dependencies.deleteModel(id);
       const settings = await this.dependencies.configStore.getSettings();
-      if (settings.localVoiceModel === id) await this.dependencies.configStore.setSettings({ localVoiceModel: "" });
+      if (settings.localVoiceModel === id)
+        await this.dependencies.configStore.setSettings({ localVoiceModel: "" });
       return this.status();
     });
   }
 
   async transcribe(input: unknown): Promise<{ text: string; modelId: string }> {
     const value = record(input, "A speech recording is required.");
-    exactKeys(value, ["encoding", "sampleRate", "channels", "pcmBase64", "modelId"], "The speech recording contract is invalid.");
-    if (value.encoding !== "pcm_s16le" || value.sampleRate !== SAMPLE_RATE || value.channels !== 1) {
-      throw new AidenRemoteServiceError("invalid_request", "Speech audio must be 16 kHz mono signed 16-bit little-endian PCM.", 400);
+    exactKeys(
+      value,
+      ["encoding", "sampleRate", "channels", "pcmBase64", "modelId"],
+      "The speech recording contract is invalid.",
+    );
+    if (
+      value.encoding !== "pcm_s16le" ||
+      value.sampleRate !== SAMPLE_RATE ||
+      value.channels !== 1
+    ) {
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "Speech audio must be 16 kHz mono signed 16-bit little-endian PCM.",
+        400,
+      );
     }
     const id = modelId(value.modelId);
-    const installed = this.dependencies.listModels().some((candidate) => candidate.id === id && candidate.installed);
-    if (!installed) throw new AidenRemoteServiceError("operation_stale", "The selected speech model is not installed on your computer.", 409, true);
+    const installed = this.dependencies
+      .listModels()
+      .some((candidate) => candidate.id === id && candidate.installed);
+    if (!installed)
+      throw new AidenRemoteServiceError(
+        "operation_stale",
+        "The selected speech model is not installed on your computer.",
+        409,
+        true,
+      );
     return this.transcriptionLane.run(async () => {
       // A queued request may wait while model management runs. Revalidate at
       // execution time so deletion cannot leave an admitted request pointing at
       // files that no longer exist. No await occurs between this fence and the
       // synchronous recognizer call below.
-      const stillInstalled = this.dependencies.listModels().some((candidate) => candidate.id === id && candidate.installed);
+      const stillInstalled = this.dependencies
+        .listModels()
+        .some((candidate) => candidate.id === id && candidate.installed);
       if (!stillInstalled) {
         throw new AidenRemoteServiceError(
           "operation_stale",
@@ -174,7 +223,8 @@ export class AidenRemoteSpeechServiceCore {
         transcribe: this.dependencies.transcribePcm16Base64,
         recordUsage: (usage) => this.dependencies.recordUsage(usage),
       });
-      if (transcript.text.trim()) reportAnalyticsEvent("voice_used", { mode: "dictation", engine: "local" });
+      if (transcript.text.trim())
+        reportAnalyticsEvent("voice_used", { mode: "dictation", engine: "local" });
       return transcript;
     });
   }

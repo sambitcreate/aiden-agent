@@ -14,7 +14,8 @@ async function remote() {
 
 export const childChatCompletions = new ChildChatCompletions({
   links: chatLinks,
-  post: async (post) => (await import("../follow-through/notice-delivery-main.js")).noticeDelivery.post(post),
+  post: async (post) =>
+    (await import("../follow-through/notice-delivery-main.js")).noticeDelivery.post(post),
   lastReply: async (chatId) => {
     const { chats } = await (await remote()).aidenChatOrchestrationServices();
     const window = await chats.messagesWindow(chatId, { limit: 5 });
@@ -27,7 +28,12 @@ export const childChatCompletions = new ChildChatCompletions({
   },
   clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   now: () => Date.now(),
-  onError: (error) => logger.warn("chat-orchestration", "Could not tell a lead chat that a started chat ended.", error),
+  onError: (error) =>
+    logger.warn(
+      "chat-orchestration",
+      "Could not tell a lead chat that a started chat ended.",
+      error,
+    ),
 });
 
 export const childChats = new ChildChats({
@@ -42,9 +48,15 @@ export const childChats = new ChildChats({
   },
   answerIn: async () => `Aiden on ${await (await remote()).aidenHostDisplayName()}`,
   discardWorktree: async (workspaceId) => {
-    const { workspaceWorktreeApplicationService } = await import("../workspace-worktree-application-service-main.js");
+    const { workspaceWorktreeApplicationService } =
+      await import("../workspace-worktree-application-service-main.js");
     // Main itself removes it: no window or device owns this operation, so nothing invalidates it.
-    await workspaceWorktreeApplicationService.remove({ isDestroyed: () => false, onInvalidated: () => () => undefined }, workspaceId, undefined, { force: false });
+    await workspaceWorktreeApplicationService.remove(
+      { isDestroyed: () => false, onInvalidated: () => () => undefined },
+      workspaceId,
+      undefined,
+      { force: false },
+    );
   },
   onRunEnded: (event) => void childChatCompletions.runEnded(event),
   onChanged: (leadChatId) => childChatsChanged(leadChatId),

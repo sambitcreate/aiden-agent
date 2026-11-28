@@ -37,9 +37,7 @@ import { firstMessageWorktrees } from "../services/first-message-worktree-main.j
 import type { Chat } from "../services/types.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
-import {
-  parseChatCreate,
-} from "./chat-create-params.js";
+import { parseChatCreate } from "./chat-create-params.js";
 import { isChatCreateReconciliationRequiredError } from "../services/chat-store-core.js";
 import { designModeEnabled } from "../services/studio/feature-flags.js";
 import {
@@ -47,10 +45,7 @@ import {
   parseChatCopyRequest,
   parseChatOnlyRequest,
 } from "./chat-session-params.js";
-import {
-  safeExportFileName,
-  writeAidenChatExportForRenderer,
-} from "../services/chat-export.js";
+import { safeExportFileName, writeAidenChatExportForRenderer } from "../services/chat-export.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
 import { chatReadMarkers, markChatRead } from "../services/chat-read-markers-main.js";
@@ -70,10 +65,7 @@ import { piRuntimeEffectStore } from "../services/pi-runtime-effect-store.js";
 import { chatReplyInterrupted, latestInterruptedRun } from "../services/interrupted-reply.js";
 import { interruptedWaits } from "../services/interrupted-waits-main.js";
 import { loadDurableTodoSnapshot } from "../services/rpiv-todo/snapshot.js";
-import {
-  chatContextPressure,
-  invalidateChatContextJournal,
-} from "../services/context-pressure.js";
+import { chatContextPressure, invalidateChatContextJournal } from "../services/context-pressure.js";
 import { todoSnapshotDiagnostic } from "../services/rpiv-todo/diagnostics.js";
 import { writeDiagnosticEvent } from "../services/diagnostic-journal.js";
 import {
@@ -116,7 +108,11 @@ export function registerChatHistoryHandlers(): void {
     admitWorkspace: (workspaceId, owner) => {
       const mutation = workspaceMutationGate.admit(workspaceId);
       try {
-        const operation = admitRendererOwnedWorkspaceOperation(workspaceOperationRegistry, owner, workspaceId);
+        const operation = admitRendererOwnedWorkspaceOperation(
+          workspaceOperationRegistry,
+          owner,
+          workspaceId,
+        );
         const abort = () => operation.cancel();
         mutation.signal.addEventListener("abort", abort, { once: true });
         if (mutation.signal.aborted) abort();
@@ -135,16 +131,19 @@ export function registerChatHistoryHandlers(): void {
       }
     },
     getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
-    resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
+    resolveSkill: (workspaceId, invocationId) =>
+      skillRegistry.resolveFresh(workspaceId, invocationId),
     prepareWorkspace: async (workspaceId) => {
       // Resolve after startup: the workspace service also depends on chat/LLM services.
-      const { workspaceApplicationService } = await import("../services/workspace-application-service-main.js");
+      const { workspaceApplicationService } =
+        await import("../services/workspace-application-service-main.js");
       const target = await workspaceApplicationService.reserveNoWorkspaceChat(workspaceId);
       if (target.workspaceId !== workspaceId) ipcMain.broadcast("workspaces:changed", {});
       return target;
     },
     releaseUnusedWorkspace: async (workspaceId) => {
-      const { workspaceApplicationService } = await import("../services/workspace-application-service-main.js");
+      const { workspaceApplicationService } =
+        await import("../services/workspace-application-service-main.js");
       await workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId);
       ipcMain.broadcast("workspaces:changed", {});
     },
@@ -153,7 +152,8 @@ export function registerChatHistoryHandlers(): void {
     commit: commitFirstMessage,
     ensureWorktree: (request, seed, owner, onProgress) =>
       firstMessageWorktrees.ensure(request, seed, owner, onProgress),
-    resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
+    resolveSkill: (workspaceId, invocationId) =>
+      skillRegistry.resolveFresh(workspaceId, invocationId),
   });
   const announceFirstMessage = (chat: Chat) => {
     if (chat.ephemeral === true) return;
@@ -166,7 +166,10 @@ export function registerChatHistoryHandlers(): void {
   };
   ipcMain.handle("chats:createWithFirstMessage", (event, input: unknown) => {
     const parsed = parseChatFirstMessage(input);
-    const owner = rendererDocumentOwner(event, () => new Error("Chats require the active application document."));
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Chats require the active application document."),
+    );
     const fromQuickChat = isCurrentQuickChatEvent(event);
     if (parsed.worktree) {
       // Warm global skill discovery (read-only, 5 s TTL) in parallel with worktree
@@ -209,18 +212,23 @@ export function registerChatHistoryHandlers(): void {
   ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
   ipcMain.handle("chats:readMarkers", () => chatReadMarkers.snapshot());
   ipcMain.handle("chats:triage", () => chatTriage.snapshot());
-  ipcMain.handle("chats:setTriage", async (_event, id: unknown, patch: unknown, ifRevision?: unknown) =>
-    setChatTriageFromRenderer(
-      // The reconciled list the Remote triage route classifies chats from.
-      { chats: () => chatApplicationService.list(), triage: chatTriage },
-      id,
-      patch,
-      ifRevision,
-    ),
+  ipcMain.handle(
+    "chats:setTriage",
+    async (_event, id: unknown, patch: unknown, ifRevision?: unknown) =>
+      setChatTriageFromRenderer(
+        // The reconciled list the Remote triage route classifies chats from.
+        { chats: () => chatApplicationService.list(), triage: chatTriage },
+        id,
+        patch,
+        ifRevision,
+      ),
   );
   ipcMain.handle("chats:markRead", async (_event, id: unknown, throughMessageId?: unknown) => {
     const chatId = asString(id, "id");
-    if (throughMessageId !== undefined && (typeof throughMessageId !== "string" || !throughMessageId)) {
+    if (
+      throughMessageId !== undefined &&
+      (typeof throughMessageId !== "string" || !throughMessageId)
+    ) {
       throw new Error('Expected a message id for "throughMessageId".');
     }
     return markChatRead(chatId, throughMessageId as string | undefined);
@@ -267,7 +275,8 @@ export function registerChatHistoryHandlers(): void {
 
   ipcMain.handle("chats:dismissInterruptedWait", async (_event, id: unknown, waitId: unknown) => {
     // The Inbox's Interrupted row and the Dock badge recount on a new activity revision.
-    if (await interruptedWaits.forget(asString(waitId, "waitId"), asString(id, "id"))) chatActivityRegistry.touch();
+    if (await interruptedWaits.forget(asString(waitId, "waitId"), asString(id, "id")))
+      chatActivityRegistry.touch();
   });
 
   ipcMain.handle("chats:todoSnapshot", async (event, id: unknown) => {
@@ -311,13 +320,19 @@ export function registerChatHistoryHandlers(): void {
   });
 
   ipcMain.handle("chats:compact", async (event, id: unknown, engine: unknown) => {
-    if (engine !== undefined && !isCompactionEngine(engine)) throw new Error("Invalid compaction engine.");
+    if (engine !== undefined && !isCompactionEngine(engine))
+      throw new Error("Invalid compaction engine.");
     const owner = rendererDocumentOwner(
       event,
       () => new Error("Compaction requires the active application document."),
     );
     const chatId = asString(id, "id");
-    const result = await compactDesktopChat(contextLifecycleService, chatId, owner.documentId, engine);
+    const result = await compactDesktopChat(
+      contextLifecycleService,
+      chatId,
+      owner.documentId,
+      engine,
+    );
     if (result.compacted) {
       // The meter must reflect the compaction immediately: drop the journaled
       // snapshot and push a fresh next-request projection to the requester.
@@ -338,11 +353,7 @@ export function registerChatHistoryHandlers(): void {
       event,
       () => new Error("Compaction cancellation requires the active application document."),
     );
-    return cancelDesktopCompaction(
-      contextLifecycleService,
-      asString(id, "id"),
-      owner.documentId,
-    );
+    return cancelDesktopCompaction(contextLifecycleService, asString(id, "id"), owner.documentId);
   });
 
   // The window moved away from a chat or closed it; a reply it left warming stops.
@@ -400,7 +411,12 @@ export function registerChatHistoryHandlers(): void {
     };
     try {
       const copied = await chatForkService.fork(
-        { chatId: parsed.chatId, forkAt: parsed.forkAt, summary: parsed.summary, continueIn: parsed.continueIn },
+        {
+          chatId: parsed.chatId,
+          forkAt: parsed.forkAt,
+          summary: parsed.summary,
+          continueIn: parsed.continueIn,
+        },
         {
           admitWorkspace: (workspaceId) => {
             const mutationAdmission = workspaceMutationGate.admit(workspaceId);
@@ -438,7 +454,9 @@ export function registerChatHistoryHandlers(): void {
               botId: source.botId!,
               sourceChatId: parsed.chatId,
               throughAssistantMessageId: parsed.forkAt?.messageId,
-              assertCurrent: assertOwnerCurrent("The application changed before the Bot chat was copied."),
+              assertCurrent: assertOwnerCurrent(
+                "The application changed before the Bot chat was copied.",
+              ),
             });
           },
         },
@@ -470,9 +488,7 @@ export function registerChatHistoryHandlers(): void {
     try {
       finishExport = llmClient.beginChatExport(chatId);
       if (!finishExport) {
-        throw new Error(
-          "Finish the current response or approval before exporting this chat.",
-        );
+        throw new Error("Finish the current response or approval before exporting this chat.");
       }
       const chat = await chatStore.get(chatId);
       if (!chat) throw new Error("The chat is no longer available.");
@@ -498,8 +514,7 @@ export function registerChatHistoryHandlers(): void {
         filters: [{ name: "Aiden chat", extensions: ["json"] }],
         properties: ["createDirectory", "showOverwriteConfirmation"],
       });
-      if (result.canceled || !result.filePath)
-        return { status: "cancelled" as const };
+      if (result.canceled || !result.filePath) return { status: "cancelled" as const };
       if (owner.isDestroyed()) {
         throw new Error("The renderer document is no longer active.");
       }
@@ -535,72 +550,63 @@ export function registerChatHistoryHandlers(): void {
     },
   );
 
-  ipcMain.handle(
-    "chats:promoteEphemeral",
-    async (event, id: unknown) => {
-      rendererDocumentOwner(
-        event,
-        () => new Error("Saving temporary chats requires the active application document."),
-      );
-      const chatId = asString(id, "id");
-      assertQuickChatConversationAccess(event, chatId);
-      const promoted = await chatApplicationService.promoteEphemeral(chatId, {
+  ipcMain.handle("chats:promoteEphemeral", async (event, id: unknown) => {
+    rendererDocumentOwner(
+      event,
+      () => new Error("Saving temporary chats requires the active application document."),
+    );
+    const chatId = asString(id, "id");
+    assertQuickChatConversationAccess(event, chatId);
+    const promoted = await chatApplicationService.promoteEphemeral(chatId, {
+      rejectFeatureOwned: true,
+    });
+    ipcMain.broadcast("chats:metadata-updated", {
+      chatId: promoted.id,
+      title: promoted.title,
+      workspaceId: persistedChatWorkspaceId(promoted.workspaceId),
+      updatedAt: promoted.updatedAt,
+      ephemeral: false,
+    });
+    ipcMain.broadcast("workspaces:changed", {});
+    return promoted;
+  });
+
+  ipcMain.handle("chats:inspectAttachFiles", async (event, id: unknown) => {
+    rendererDocumentOwner(
+      event,
+      () => new Error("Inspecting chat files requires the active application document."),
+    );
+    const chatId = asString(id, "id");
+    assertQuickChatConversationAccess(event, chatId);
+    return chatApplicationService.inspectAttachFiles(chatId);
+  });
+
+  ipcMain.handle("chats:attachToWorkspace", async (event, input: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Attaching a chat to a workspace requires the active application document."),
+    );
+    const parsed = parseAttachToWorkspaceRequest(input);
+    assertQuickChatConversationAccess(event, parsed.chatId);
+    const result = await chatApplicationService.attachToWorkspace(
+      parsed.chatId,
+      parsed.targetWorkspaceId,
+      {
+        fileAction: parsed.fileAction,
+        owner,
         rejectFeatureOwned: true,
-      });
-      ipcMain.broadcast("chats:metadata-updated", {
-        chatId: promoted.id,
-        title: promoted.title,
-        workspaceId: persistedChatWorkspaceId(promoted.workspaceId),
-        updatedAt: promoted.updatedAt,
-        ephemeral: false,
-      });
-      ipcMain.broadcast("workspaces:changed", {});
-      return promoted;
-    },
-  );
-
-  ipcMain.handle(
-    "chats:inspectAttachFiles",
-    async (event, id: unknown) => {
-      rendererDocumentOwner(
-        event,
-        () => new Error("Inspecting chat files requires the active application document."),
-      );
-      const chatId = asString(id, "id");
-      assertQuickChatConversationAccess(event, chatId);
-      return chatApplicationService.inspectAttachFiles(chatId);
-    },
-  );
-
-  ipcMain.handle(
-    "chats:attachToWorkspace",
-    async (event, input: unknown) => {
-      const owner = rendererDocumentOwner(
-        event,
-        () => new Error("Attaching a chat to a workspace requires the active application document."),
-      );
-      const parsed = parseAttachToWorkspaceRequest(input);
-      assertQuickChatConversationAccess(event, parsed.chatId);
-      const result = await chatApplicationService.attachToWorkspace(
-        parsed.chatId,
-        parsed.targetWorkspaceId,
-        {
-          fileAction: parsed.fileAction,
-          owner,
-          rejectFeatureOwned: true,
-        },
-      );
-      ipcMain.broadcast("chats:metadata-updated", {
-        chatId: result.chat.id,
-        title: result.chat.title,
-        workspaceId: persistedChatWorkspaceId(result.chat.workspaceId),
-        updatedAt: result.chat.updatedAt,
-        ephemeral: false,
-      });
-      ipcMain.broadcast("workspaces:changed", {});
-      return result;
-    },
-  );
+      },
+    );
+    ipcMain.broadcast("chats:metadata-updated", {
+      chatId: result.chat.id,
+      title: result.chat.title,
+      workspaceId: persistedChatWorkspaceId(result.chat.workspaceId),
+      updatedAt: result.chat.updatedAt,
+      ephemeral: false,
+    });
+    ipcMain.broadcast("workspaces:changed", {});
+    return result;
+  });
 
   ipcMain.handle("chats:dismissComputerUseContinue", rendererChats.dismissComputerUseContinue);
 
@@ -608,22 +614,19 @@ export function registerChatHistoryHandlers(): void {
 
   ipcMain.handle("chats:appendMessage", rendererChats.appendMessage);
 
-  ipcMain.handle(
-    "chats:htmlArtifactSrcdoc",
-    async (event, input: unknown) => {
-      rendererDocumentOwner(
-        event,
-        () => new Error("HTML artifact preview requires the active application document."),
-      );
-      if (!input || typeof input !== "object" || Array.isArray(input)) {
-        throw new Error("Invalid HTML artifact request.");
-      }
-      const record = input as Record<string, unknown>;
-      const chatId = asString(record.chatId, "chatId");
-      const mediaId = asString(record.mediaId, "mediaId");
-      return wrapStoredHtmlArtifact({ chatId, mediaId, theme: record.theme });
-    },
-  );
+  ipcMain.handle("chats:htmlArtifactSrcdoc", async (event, input: unknown) => {
+    rendererDocumentOwner(
+      event,
+      () => new Error("HTML artifact preview requires the active application document."),
+    );
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new Error("Invalid HTML artifact request.");
+    }
+    const record = input as Record<string, unknown>;
+    const chatId = asString(record.chatId, "chatId");
+    const mediaId = asString(record.mediaId, "mediaId");
+    return wrapStoredHtmlArtifact({ chatId, mediaId, theme: record.theme });
+  });
 
   ipcMain.handle("chats:updateUiVisualState", async (event, input: unknown) => {
     rendererDocumentOwner(
@@ -631,40 +634,42 @@ export function registerChatHistoryHandlers(): void {
       () => new Error("Saving a visual's state requires the active application document."),
     );
     const update = parseUiVisualStateUpdate(input);
-    return chatStore.updateUiVisualState(update.chatId, update.messageId, update.visualId, update.state);
+    return chatStore.updateUiVisualState(
+      update.chatId,
+      update.messageId,
+      update.visualId,
+      update.state,
+    );
   });
 
-  ipcMain.handle(
-    "chats:exportHtmlArtifact",
-    async (event, input: unknown) => {
-      const owner = rendererDocumentOwner(
-        event,
-        () => new Error("HTML artifact export requires the active application document."),
+  ipcMain.handle("chats:exportHtmlArtifact", async (event, input: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("HTML artifact export requires the active application document."),
+    );
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new Error("Invalid HTML artifact export request.");
+    }
+    const record = input as Record<string, unknown>;
+    const chatId = asString(record.chatId, "chatId");
+    const mediaId = asString(record.mediaId, "mediaId");
+    const unresolved = await unresolvedGuiArtifactMessage(chatId);
+    if (unresolved) {
+      throw new Error(
+        unresolved.includes("could not be recovered")
+          ? "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting."
+          : unresolved,
       );
-      if (!input || typeof input !== "object" || Array.isArray(input)) {
-        throw new Error("Invalid HTML artifact export request.");
-      }
-      const record = input as Record<string, unknown>;
-      const chatId = asString(record.chatId, "chatId");
-      const mediaId = asString(record.mediaId, "mediaId");
-      const unresolved = await unresolvedGuiArtifactMessage(chatId);
-      if (unresolved) {
-        throw new Error(
-          unresolved.includes("could not be recovered")
-            ? "A previous visual artifact could not be recovered. Delete this chat to discard it before exporting."
-            : unresolved,
-        );
-      }
-      if (owner.isDestroyed()) {
-        throw new Error("The renderer document is no longer active.");
-      }
-      const parent = BrowserWindow.fromWebContents(event.sender);
-      if (!parent || parent.isDestroyed()) {
-        throw new Error("The export window is unavailable.");
-      }
-      return exportStoredHtmlArtifact({ chatId, mediaId, parent });
-    },
-  );
+    }
+    if (owner.isDestroyed()) {
+      throw new Error("The renderer document is no longer active.");
+    }
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent || parent.isDestroyed()) {
+      throw new Error("The export window is unavailable.");
+    }
+    return exportStoredHtmlArtifact({ chatId, mediaId, parent });
+  });
 
   ipcMain.handle("chats:abandonTurn", (event, id: unknown, turnId: unknown) => {
     const owner = rendererDocumentOwner(
@@ -675,10 +680,6 @@ export function registerChatHistoryHandlers(): void {
     if (!isSafeSubagentIdentifier(parsedTurnId)) {
       throw new Error("Invalid chat message turn identifier.");
     }
-    return llmClient.abandonChatTurn(
-      asString(id, "id"),
-      parsedTurnId,
-      owner.documentId,
-    );
+    return llmClient.abandonChatTurn(asString(id, "id"), parsedTurnId, owner.documentId);
   });
 }

@@ -22,7 +22,10 @@ test("Linux with the system title bar uses compositor-owned opaque native chrome
   assert.equal(options.trafficLightPosition, undefined);
   assert.equal(options.webPreferences?.sandbox, true);
   assert.equal(windowChromeFromArgv(options.webPreferences?.additionalArguments ?? []), "system");
-  assert.equal(mainWindowOptions("/tmp/preload.cjs", "linux", true, "system").backgroundColor, "#181b21");
+  assert.equal(
+    mainWindowOptions("/tmp/preload.cjs", "linux", true, "system").backgroundColor,
+    "#181b21",
+  );
 });
 
 test("Linux with Aiden's title bar hides the desktop frame and tells the renderer", () => {

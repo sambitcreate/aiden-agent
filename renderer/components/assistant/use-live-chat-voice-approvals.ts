@@ -38,7 +38,10 @@ export function usePublishLiveChatApprovals(
   const owner = React.useMemo(() => Symbol("chat-approvals"), []);
   const renderedChatId = React.useRef(chatId);
   renderedChatId.current = chatId;
-  const lastPublished = React.useRef<{ chatId: string; approvals: readonly ApprovalPrompt[] } | null>(null);
+  const lastPublished = React.useRef<{
+    chatId: string;
+    approvals: readonly ApprovalPrompt[];
+  } | null>(null);
   React.useEffect(() => {
     const last = lastPublished.current;
     const carriedOver = last !== null && last.chatId !== chatId && last.approvals === approvals;

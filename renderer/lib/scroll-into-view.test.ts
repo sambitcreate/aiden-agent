@@ -65,8 +65,14 @@ test("glides from where the page is to where the row sits in the middle, then st
     seen.push(port.scrollTop);
   }
   assert.ok(seen.length > 2, "it takes several frames");
-  assert.ok(seen.every((offset, index) => index === 0 || offset >= seen[index - 1]!), "it never moves back");
-  assert.ok(seen.slice(0, -1).every((offset) => offset > 100 - 1 && offset < 600), "it passes through the offsets in between");
+  assert.ok(
+    seen.every((offset, index) => index === 0 || offset >= seen[index - 1]!),
+    "it never moves back",
+  );
+  assert.ok(
+    seen.slice(0, -1).every((offset) => offset > 100 - 1 && offset < 600),
+    "it passes through the offsets in between",
+  );
   assert.equal(port.scrollTop, 600);
   assert.equal(frames.pending(), 0);
 });

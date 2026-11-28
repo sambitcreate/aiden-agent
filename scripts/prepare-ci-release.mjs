@@ -28,9 +28,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === modulePath) {
     throw new Error("Declared tag existence must be provided as true or false");
   }
   console.log(
-    JSON.stringify(mainPushReleaseSelection(
-      packageJson.version,
-      baseTagExistsArgument === "true",
-    )),
+    JSON.stringify(mainPushReleaseSelection(packageJson.version, baseTagExistsArgument === "true")),
   );
 }

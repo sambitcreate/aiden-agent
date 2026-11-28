@@ -23,8 +23,8 @@ export function AskUserQuestionComposer({
 }) {
   const [activeIndex, setActiveIndex] = React.useState(0);
   // Options the agent recommends start selected, so Enter accepts them.
-  const [answers, setAnswers] = React.useState<ReadonlyMap<number, AskUserQuestionAnswerV1>>(
-    () => recommendedAskUserAnswers(prompt.questions),
+  const [answers, setAnswers] = React.useState<ReadonlyMap<number, AskUserQuestionAnswerV1>>(() =>
+    recommendedAskUserAnswers(prompt.questions),
   );
   const [customOpen, setCustomOpen] = React.useState(false);
   const [customDrafts, setCustomDrafts] = React.useState<ReadonlyMap<number, string>>(
@@ -130,7 +130,13 @@ export function AskUserQuestionComposer({
   };
 
   const selectOption = (label: string) => {
-    setAnswers(new Map(answers).set(activeIndex, { questionIndex: activeIndex, kind: "option", answer: label }));
+    setAnswers(
+      new Map(answers).set(activeIndex, {
+        questionIndex: activeIndex,
+        kind: "option",
+        answer: label,
+      }),
+    );
     const drafts = new Map(customDrafts);
     drafts.delete(activeIndex);
     setCustomDrafts(drafts);
@@ -180,9 +186,14 @@ export function AskUserQuestionComposer({
         onKeyDown={handleCardKeyDown}
       >
         <div className="flex shrink-0 items-center gap-2 px-1.5">
-          <div role="tablist" aria-label="Questions" className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
+          <div
+            role="tablist"
+            aria-label="Questions"
+            className="flex min-w-0 flex-1 gap-1 overflow-x-auto"
+          >
             {prompt.questions.map((item, index) => (
-              <Button variant="transparent"
+              <Button
+                variant="transparent"
                 // Question indexes are stable wire identities within this immutable prompt.
                 key={index}
                 id={`question-tab-${prompt.promptId}-${index}`}
@@ -192,107 +203,137 @@ export function AskUserQuestionComposer({
                 aria-controls={`question-panel-${prompt.promptId}`}
                 tabIndex={index === activeIndex ? 0 : -1}
                 disabled={submitting}
-                className={cn("ask-user-question-pill shrink-0", index === activeIndex && "bg-control text-primary")}
+                className={cn(
+                  "ask-user-question-pill shrink-0",
+                  index === activeIndex && "bg-control text-primary",
+                )}
                 onClick={() => moveTo(index)}
                 onKeyDown={(event) => {
-                  const next = event.key === "ArrowRight" ? (index + 1) % prompt.questions.length
-                    : event.key === "ArrowLeft" ? (index + prompt.questions.length - 1) % prompt.questions.length
-                    : event.key === "Home" ? 0 : event.key === "End" ? prompt.questions.length - 1 : null;
+                  const next =
+                    event.key === "ArrowRight"
+                      ? (index + 1) % prompt.questions.length
+                      : event.key === "ArrowLeft"
+                        ? (index + prompt.questions.length - 1) % prompt.questions.length
+                        : event.key === "Home"
+                          ? 0
+                          : event.key === "End"
+                            ? prompt.questions.length - 1
+                            : null;
                   if (next === null) return;
                   event.preventDefault();
                   event.stopPropagation();
                   moveTo(next);
-                  document.getElementById(`question-tab-${prompt.promptId}-${next}`)?.focus({ preventScroll: true });
+                  document
+                    .getElementById(`question-tab-${prompt.promptId}-${next}`)
+                    ?.focus({ preventScroll: true });
                 }}
               >
                 {index + 1}. {item.header}
-                {answers.has(index) ? <Check className="ml-1 size-3" aria-label="Has an answer" /> : null}
+                {answers.has(index) ? (
+                  <Check className="ml-1 size-3" aria-label="Has an answer" />
+                ) : null}
               </Button>
             ))}
           </div>
-          <Button variant="transparent" type="button" className="ask-user-question-icon" aria-label="Close questionnaire"
-            disabled={submitting} onClick={() => void onRespond(response(true))}><X /></Button>
+          <Button
+            variant="transparent"
+            type="button"
+            className="ask-user-question-icon"
+            aria-label="Close questionnaire"
+            disabled={submitting}
+            onClick={() => void onRespond(response(true))}
+          >
+            <X />
+          </Button>
         </div>
-        <div role="tabpanel" id={`question-panel-${prompt.promptId}`}
-          aria-labelledby={`question-tab-${prompt.promptId}-${activeIndex}`} className="min-h-0 min-w-0 overflow-y-auto overscroll-contain px-1.5">
-          <h2 id={`ask-user-question-title-${prompt.promptId}`} className="mt-3 text-strong font-medium text-primary">
+        <div
+          role="tabpanel"
+          id={`question-panel-${prompt.promptId}`}
+          aria-labelledby={`question-tab-${prompt.promptId}-${activeIndex}`}
+          className="min-h-0 min-w-0 overflow-y-auto overscroll-contain px-1.5"
+        >
+          <h2
+            id={`ask-user-question-title-${prompt.promptId}`}
+            className="mt-3 text-strong font-medium text-primary"
+          >
             {question.question}
           </h2>
-          <p className="mt-1 text-small text-secondary">{activeIndex + 1} of {prompt.questions.length}{question.multiSelect ? " · Select all that apply" : " · Choose an option or write an answer"}</p>
+          <p className="mt-1 text-small text-secondary">
+            {activeIndex + 1} of {prompt.questions.length}
+            {question.multiSelect
+              ? " · Select all that apply"
+              : " · Choose an option or write an answer"}
+          </p>
 
-        <div
-          className="mt-4 grid gap-1.5"
-          role="group"
-          aria-label={question.header}
-        >
-          {question.options.map((option, optionIndex) => {
-            const selected =
-              (answer?.kind === "option" && answer.answer === option.label) ||
-              (answer?.kind === "multi" && answer.selected.includes(option.label));
-            const label = parseRecommendedOptionLabel(option.label);
-            return (
-              <Button variant="transparent"
-                key={option.label}
-                ref={(element) => {
-                  optionRefs.current[optionIndex] = element;
-                }}
-                data-focus-region-entry={
-                  !customOpen && optionIndex === focusRow.current ? "true" : undefined
-                }
-                type="button"
-                aria-pressed={!question.multiSelect ? selected : undefined}
-                role={question.multiSelect ? "checkbox" : undefined}
-                aria-checked={question.multiSelect ? selected : undefined}
-                disabled={submitting}
-                className={cn(
-                  "ask-user-question-option group flex h-auto min-h-16 w-full items-center gap-3 whitespace-normal px-3 py-2.5 text-left",
-                  selected && "is-selected",
-                )}
-                onClick={() => {
-                  if (question.multiSelect) toggleMulti(option.label);
-                  else selectOption(option.label);
-                }}
-                onKeyDown={(event) => {
-                  // Enter on the chosen single answer moves on; on any other
-                  // row it activates that row as usual.
-                  if (
-                    event.key !== "Enter" ||
-                    event.metaKey ||
-                    event.ctrlKey ||
-                    event.shiftKey ||
-                    event.altKey ||
-                    question.multiSelect ||
-                    !selected ||
-                    !answer ||
-                    submitting
-                  ) {
-                    return;
+          <div className="mt-4 grid gap-1.5" role="group" aria-label={question.header}>
+            {question.options.map((option, optionIndex) => {
+              const selected =
+                (answer?.kind === "option" && answer.answer === option.label) ||
+                (answer?.kind === "multi" && answer.selected.includes(option.label));
+              const label = parseRecommendedOptionLabel(option.label);
+              return (
+                <Button
+                  variant="transparent"
+                  key={option.label}
+                  ref={(element) => {
+                    optionRefs.current[optionIndex] = element;
+                  }}
+                  data-focus-region-entry={
+                    !customOpen && optionIndex === focusRow.current ? "true" : undefined
                   }
-                  event.preventDefault();
-                  event.stopPropagation();
-                  commit(answer);
-                }}
-              >
-                <span className="grid size-9 shrink-0 place-items-center rounded-full bg-control/45 text-regular text-secondary">
-                  {selected ? <Check className="size-4" /> : optionIndex + 1}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="text-strong font-medium text-primary">{label.text}</span>
-                    {label.recommended ? <Badge color="blue">Recommended</Badge> : null}
+                  type="button"
+                  aria-pressed={!question.multiSelect ? selected : undefined}
+                  role={question.multiSelect ? "checkbox" : undefined}
+                  aria-checked={question.multiSelect ? selected : undefined}
+                  disabled={submitting}
+                  className={cn(
+                    "ask-user-question-option group flex h-auto min-h-16 w-full items-center gap-3 whitespace-normal px-3 py-2.5 text-left",
+                    selected && "is-selected",
+                  )}
+                  onClick={() => {
+                    if (question.multiSelect) toggleMulti(option.label);
+                    else selectOption(option.label);
+                  }}
+                  onKeyDown={(event) => {
+                    // Enter on the chosen single answer moves on; on any other
+                    // row it activates that row as usual.
+                    if (
+                      event.key !== "Enter" ||
+                      event.metaKey ||
+                      event.ctrlKey ||
+                      event.shiftKey ||
+                      event.altKey ||
+                      question.multiSelect ||
+                      !selected ||
+                      !answer ||
+                      submitting
+                    ) {
+                      return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    commit(answer);
+                  }}
+                >
+                  <span className="grid size-9 shrink-0 place-items-center rounded-full bg-control/45 text-regular text-secondary">
+                    {selected ? <Check className="size-4" /> : optionIndex + 1}
                   </span>
-                  {selected && !question.multiSelect ? (
-                    <span className="sr-only">, current answer</span>
-                  ) : null}
-                  <span className="mt-0.5 block text-regular leading-snug text-secondary">
-                    {option.description}
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="text-strong font-medium text-primary">{label.text}</span>
+                      {label.recommended ? <Badge color="blue">Recommended</Badge> : null}
+                    </span>
+                    {selected && !question.multiSelect ? (
+                      <span className="sr-only">, current answer</span>
+                    ) : null}
+                    <span className="mt-0.5 block text-regular leading-snug text-secondary">
+                      {option.description}
+                    </span>
                   </span>
-                </span>
-              </Button>
-            );
-          })}
-        </div>
-
+                </Button>
+              );
+            })}
+          </div>
         </div>
         <div className="mt-3 flex min-h-12 shrink-0 flex-wrap items-end justify-end gap-2 px-1.5">
           <div className="min-w-0 basis-full">
@@ -314,7 +355,12 @@ export function AskUserQuestionComposer({
                     next.set(activeIndex, event.target.value);
                     setCustomDrafts(next);
                     const resolved = new Map(answers);
-                    if (event.target.value.trim()) resolved.set(activeIndex, { questionIndex: activeIndex, kind: "custom", answer: event.target.value.trim() });
+                    if (event.target.value.trim())
+                      resolved.set(activeIndex, {
+                        questionIndex: activeIndex,
+                        kind: "custom",
+                        answer: event.target.value.trim(),
+                      });
                     else resolved.delete(activeIndex);
                     setAnswers(resolved);
                   }}
@@ -331,7 +377,8 @@ export function AskUserQuestionComposer({
                     }
                   }}
                 />
-                <Button variant="transparent"
+                <Button
+                  variant="transparent"
                   type="button"
                   className="ask-user-question-pill"
                   disabled={submitting || !customDraft.trim()}
@@ -341,7 +388,8 @@ export function AskUserQuestionComposer({
                 </Button>
               </div>
             ) : (
-              <Button variant="transparent"
+              <Button
+                variant="transparent"
                 type="button"
                 className="ask-user-question-custom flex h-auto min-h-11 max-w-full items-center gap-3 px-3 text-left text-secondary"
                 disabled={submitting}
@@ -358,7 +406,8 @@ export function AskUserQuestionComposer({
             )}
           </div>
           {!customOpen && answer ? (
-            <Button variant="transparent"
+            <Button
+              variant="transparent"
               type="button"
               className="ask-user-question-pill"
               aria-keyshortcuts="Meta+Enter Control+Enter"
@@ -368,7 +417,8 @@ export function AskUserQuestionComposer({
               {activeIndex === prompt.questions.length - 1 ? "Submit" : "Next"}
             </Button>
           ) : null}
-          <Button variant="transparent"
+          <Button
+            variant="transparent"
             type="button"
             className="ask-user-question-pill"
             aria-keyshortcuts="Escape"

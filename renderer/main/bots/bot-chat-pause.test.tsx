@@ -35,10 +35,19 @@ async function mountChat(handlers: Record<string, (...args: unknown[]) => unknow
   return calls;
 }
 
-const callsTo = (calls: BotTestIpcCall[], channel: string) => calls.filter((call) => call.channel === channel);
+const callsTo = (calls: BotTestIpcCall[], channel: string) =>
+  calls.filter((call) => call.channel === channel);
 
 function pushState(seq: number, state: BotSessionState) {
-  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq, type: "state", state }));
+  act(() =>
+    emitBotTestNotification("bots:live:event", {
+      botId: "bot-1",
+      epoch: "epoch-1",
+      seq,
+      type: "state",
+      state,
+    }),
+  );
 }
 
 test("a paused Bot's composer says so and won't send; Resume sends one unpause however often it is clicked", async () => {
@@ -48,7 +57,10 @@ test("a paused Bot's composer says so and won't send; Resume sends one unpause h
     "bots:unpause": () => new Promise((resolve) => (answer = resolve)),
   });
   const card = await screen.findByRole("group", { name: "Planner is paused." });
-  assert.ok(screen.getByText("Planner is paused.", { selector: "[role=status]" }), "the composer says why it can't send");
+  assert.ok(
+    screen.getByText("Planner is paused.", { selector: "[role=status]" }),
+    "the composer says why it can't send",
+  );
 
   const composer = screen.getByRole("textbox");
   fireEvent.change(composer, { target: { value: "are you there?" } });
@@ -66,7 +78,9 @@ test("a paused Bot's composer says so and won't send; Resume sends one unpause h
 
   answer({ kind: "idle" });
   pushState(1, { kind: "idle" });
-  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner is paused." }), null));
+  await waitFor(() =>
+    assert.equal(screen.queryByRole("group", { name: "Planner is paused." }), null),
+  );
   assert.equal(screen.queryByText("Planner is paused.", { selector: "[role=status]" }), null);
 });
 
@@ -77,7 +91,11 @@ test("a reply cut short by the pause shows the interrupted card once the pause i
     "bots:resume": () => ({ kind: "running", submissionId: "s1" }),
   });
   const paused = await screen.findByRole("group", { name: "Planner is paused." });
-  assert.equal(screen.queryByRole("group", { name: "Planner was interrupted" }), null, "Resume and Dismiss wait for the pause");
+  assert.equal(
+    screen.queryByRole("group", { name: "Planner was interrupted" }),
+    null,
+    "Resume and Dismiss wait for the pause",
+  );
 
   fireEvent.click(within(paused).getByRole("button", { name: "Resume" }));
   await waitFor(() => assert.equal(callsTo(calls, "bots:unpause").length, 1));
@@ -85,7 +103,11 @@ test("a reply cut short by the pause shows the interrupted card once the pause i
 
   const interrupted = await screen.findByRole("group", { name: "Planner was interrupted" });
   assert.equal(screen.queryByRole("group", { name: "Planner is paused." }), null);
-  assert.equal(callsTo(calls, "bots:resume").length, 0, "lifting the pause doesn't resume the reply by itself");
+  assert.equal(
+    callsTo(calls, "bots:resume").length,
+    0,
+    "lifting the pause doesn't resume the reply by itself",
+  );
   fireEvent.click(within(interrupted).getByRole("button", { name: "Resume" }));
   await waitFor(() => assert.equal(callsTo(calls, "bots:resume").length, 1));
 });
@@ -98,7 +120,12 @@ test("the chat's ••• menu pauses a running Bot and offers Resume Bot once 
   });
   fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
   fireEvent.click(await screen.findByRole("menuitem", { name: "Pause Bot" }));
-  await waitFor(() => assert.deepEqual(callsTo(calls, "bots:pause").map((call) => call.args), [["bot-1"]]));
+  await waitFor(() =>
+    assert.deepEqual(
+      callsTo(calls, "bots:pause").map((call) => call.args),
+      [["bot-1"]],
+    ),
+  );
 
   pushState(1, { ...PAUSED, interrupted: "s1" });
   await screen.findByRole("group", { name: "Planner is paused." });
@@ -124,7 +151,9 @@ test("routines skipped while paused are listed, and Run now runs that one routin
     "bots:routines:runNow": () => {
       if (fail) {
         fail = false;
-        throw new Error("Error invoking remote method 'bots:routines:runNow': Error: That routine no longer exists.");
+        throw new Error(
+          "Error invoking remote method 'bots:routines:runNow': Error: That routine no longer exists.",
+        );
       }
       return { runId: "run-1" };
     },
@@ -145,7 +174,10 @@ test("routines skipped while paused are listed, and Run now runs that one routin
   fireEvent.click(runBrief);
   await waitFor(() => assert.ok(within(card).getByText("Started: Morning brief")));
   assert.equal(within(card).queryByRole("button", { name: "Run now: Morning brief" }), null);
-  assert.ok(within(card).getByRole("button", { name: "Run now: Inbox sweep" }), "the other routine is untouched");
+  assert.ok(
+    within(card).getByRole("button", { name: "Run now: Inbox sweep" }),
+    "the other routine is untouched",
+  );
   assert.deepEqual(
     callsTo(calls, "bots:routines:runNow").map((call) => call.args[0]),
     [

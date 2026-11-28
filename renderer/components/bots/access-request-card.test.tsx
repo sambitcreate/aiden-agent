@@ -7,15 +7,31 @@ import { AccessRequestCard } from "./access-request-card";
 
 afterEach(cleanup);
 const REQUEST: BotPendingAccessRequest = {
-  botId: "bot:a", waitId: "attempt-1", toolCallId: "call-1", target: "folder",
-  label: "Taxes", place: "~/Documents/Taxes", why: "Prepare your return.", choices: ["not_now", "always", "once"],
+  botId: "bot:a",
+  waitId: "attempt-1",
+  toolCallId: "call-1",
+  target: "folder",
+  label: "Taxes",
+  place: "~/Documents/Taxes",
+  why: "Prepare your return.",
+  choices: ["not_now", "always", "once"],
 };
 function mount(request = REQUEST, busy = false) {
   const answers: BotAccessChoice[] = [];
-  render(<AccessRequestCard request={request} botName="Ada" busy={busy} onAnswer={(choice) => answers.push(choice)} />);
+  render(
+    <AccessRequestCard
+      request={request}
+      botName="Ada"
+      busy={busy}
+      onAnswer={(choice) => answers.push(choice)}
+    />,
+  );
   return answers;
 }
-const buttonNames = () => screen.getAllByRole("button").map((button) => button.getAttribute("aria-label") ?? button.textContent);
+const buttonNames = () =>
+  screen
+    .getAllByRole("button")
+    .map((button) => button.getAttribute("aria-label") ?? button.textContent);
 
 /** Radix opens its menu on a pointer press, or Enter from the keyboard. */
 function openMoreWays() {

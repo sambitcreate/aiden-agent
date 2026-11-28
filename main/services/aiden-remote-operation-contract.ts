@@ -141,13 +141,23 @@ function assertOperationId(value: unknown): asserts value is string {
   }
 }
 
-function boundedPositiveIntegerOption(value: number | undefined, fallback: number, maximum: number): number {
+function boundedPositiveIntegerOption(
+  value: number | undefined,
+  fallback: number,
+  maximum: number,
+): number {
   if (value === undefined) return fallback;
   if (!Number.isFinite(value)) throw new AidenOperationContractError("internal_error");
   return Math.min(maximum, Math.max(1, Math.floor(value)));
 }
 
-type DurableJsonValue = null | boolean | number | string | DurableJsonValue[] | { [key: string]: DurableJsonValue };
+type DurableJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | DurableJsonValue[]
+  | { [key: string]: DurableJsonValue };
 
 interface DurableJsonLimits {
   maxDepth: number;
@@ -232,7 +242,8 @@ function durableStringLength(value: string): number {
 }
 
 function assertDurableString(value: string, maxLength: number): void {
-  if (durableStringLength(value) > maxLength) throw new AidenOperationContractError("internal_error");
+  if (durableStringLength(value) > maxLength)
+    throw new AidenOperationContractError("internal_error");
 }
 
 /**
@@ -241,7 +252,10 @@ function assertDurableString(value: string, maxLength: number): void {
  * accepts values (for example Date, undefined, and non-finite numbers) that
  * either disappear or change when the idempotency snapshot is persisted.
  */
-function cloneDurableJson(value: unknown, limits: DurableJsonLimits = DURABLE_JSON_LIMITS): DurableJsonValue {
+function cloneDurableJson(
+  value: unknown,
+  limits: DurableJsonLimits = DURABLE_JSON_LIMITS,
+): DurableJsonValue {
   const state: DurableJsonValidationState = { seen: new Set<object>(), nodes: 0, keys: 0 };
 
   const visit = (candidate: unknown, depth: number): DurableJsonValue => {
@@ -267,7 +281,8 @@ function cloneDurableJson(value: unknown, limits: DurableJsonLimits = DURABLE_JS
     state.seen.add(candidate);
 
     if (Array.isArray(candidate)) {
-      if (candidate.length > limits.maxArrayLength) throw new AidenOperationContractError("internal_error");
+      if (candidate.length > limits.maxArrayLength)
+        throw new AidenOperationContractError("internal_error");
       const descriptors = Object.getOwnPropertyDescriptors(candidate);
       const keys = Reflect.ownKeys(descriptors);
       const lengthDescriptor = Object.getOwnPropertyDescriptor(candidate, "length");
@@ -277,7 +292,8 @@ function cloneDurableJson(value: unknown, limits: DurableJsonLimits = DURABLE_JS
           (key) =>
             key !== "length" &&
             (typeof key !== "string" || !isDenseArrayIndexKey(key, length as number)),
-        ) || Object.getPrototypeOf(candidate) !== Array.prototype
+        ) ||
+        Object.getPrototypeOf(candidate) !== Array.prototype
       ) {
         throw new AidenOperationContractError("internal_error");
       }
@@ -357,7 +373,8 @@ function durableJsonUtf8Bytes(value: DurableJsonValue): number {
   }
   if (typeof serialized !== "string") throw new AidenOperationContractError("internal_error");
   const bytes = Buffer.byteLength(serialized, "utf8");
-  if (bytes > MAX_DURABLE_JSON_RESULT_BYTES) throw new AidenOperationContractError("internal_error");
+  if (bytes > MAX_DURABLE_JSON_RESULT_BYTES)
+    throw new AidenOperationContractError("internal_error");
   return bytes;
 }
 
@@ -405,8 +422,14 @@ function assertFiniteTimestamp(value: unknown): asserts value is number {
   }
 }
 
-function assertSnapshotErrorCode(value: unknown): asserts value is AidenOperationContractErrorCode | undefined {
-  if (value !== undefined && (typeof value !== "string" || !operationContractErrorCodes.has(value as AidenOperationContractErrorCode))) {
+function assertSnapshotErrorCode(
+  value: unknown,
+): asserts value is AidenOperationContractErrorCode | undefined {
+  if (
+    value !== undefined &&
+    (typeof value !== "string" ||
+      !operationContractErrorCodes.has(value as AidenOperationContractErrorCode))
+  ) {
     throw new AidenOperationContractError("internal_error");
   }
 }
@@ -418,13 +441,30 @@ function assertSnapshotEntry(value: unknown): asserts value is AidenIdempotencyS
   cloneDurableJson(value);
   const entry = value as Partial<AidenIdempotencySnapshotEntry>;
   const state = entry.state;
-  const expectedKeys = state === "in_flight"
-    ? ["scopeDigest", "requestDigest", "operationId", "state", "createdAt", "expiresAt"]
-    : state === "fulfilled"
-      ? ["scopeDigest", "requestDigest", "operationId", "state", "result", "createdAt", "expiresAt"]
-      : state === "rejected"
-        ? ["scopeDigest", "requestDigest", "operationId", "state", "errorCode", "createdAt", "expiresAt"]
-        : [];
+  const expectedKeys =
+    state === "in_flight"
+      ? ["scopeDigest", "requestDigest", "operationId", "state", "createdAt", "expiresAt"]
+      : state === "fulfilled"
+        ? [
+            "scopeDigest",
+            "requestDigest",
+            "operationId",
+            "state",
+            "result",
+            "createdAt",
+            "expiresAt",
+          ]
+        : state === "rejected"
+          ? [
+              "scopeDigest",
+              "requestDigest",
+              "operationId",
+              "state",
+              "errorCode",
+              "createdAt",
+              "expiresAt",
+            ]
+          : [];
   if (expectedKeys.length === 0) throw new AidenOperationContractError("internal_error");
   assertExactOwnEnumerableDataKeys(value, expectedKeys);
   const hasResult = Object.prototype.hasOwnProperty.call(entry, "result");
@@ -481,7 +521,10 @@ function assertSnapshot(value: unknown): asserts value is AidenIdempotencySnapsh
   }
   assertFiniteTimestamp(snapshot.lastObservedAt);
   for (const entry of snapshot.entries) assertSnapshotEntry(entry);
-  if (serializedSnapshotBytes(snapshot as AidenIdempotencySnapshot) > MAX_DURABLE_LEDGER_SNAPSHOT_BYTES) {
+  if (
+    serializedSnapshotBytes(snapshot as AidenIdempotencySnapshot) >
+    MAX_DURABLE_LEDGER_SNAPSHOT_BYTES
+  ) {
     throw new AidenOperationContractError("internal_error");
   }
 }
@@ -507,27 +550,27 @@ export class AidenIdempotencyLedger {
     // persisted lastObservedAt value, so restoring it could reopen a key after
     // a forward clock jump followed by a rollback. Fresh initialization is
     // represented by an omitted/undefined snapshot instead.
-    const restoredSnapshot = snapshot === undefined ? undefined : (assertSnapshot(snapshot), snapshot);
-    if (
-      restoredSnapshot &&
-      serializedSnapshotBytes(restoredSnapshot) > this.maxSnapshotBytes
-    ) {
+    const restoredSnapshot =
+      snapshot === undefined ? undefined : (assertSnapshot(snapshot), snapshot);
+    if (restoredSnapshot && serializedSnapshotBytes(restoredSnapshot) > this.maxSnapshotBytes) {
       throw new AidenOperationContractError("internal_error");
     }
     this.lastObservedAt = restoredSnapshot?.lastObservedAt ?? now;
     if (now < this.lastObservedAt) this.clockRollbackDetected = true;
     else this.lastObservedAt = now;
-    const snapshotEntries: readonly AidenIdempotencySnapshotEntry[] = restoredSnapshot?.entries ?? [];
+    const snapshotEntries: readonly AidenIdempotencySnapshotEntry[] =
+      restoredSnapshot?.entries ?? [];
     const retained: AidenIdempotencySnapshotEntry[] = [];
     for (const candidate of snapshotEntries) {
       // In-flight work has no local expiration. A clock rollback or a writer
       // whose clock is ahead must never turn an unresolved operation into a
       // fresh execution opportunity.
       if (
-        candidate.state === "in_flight"
-        || this.clockRollbackDetected
-        || (typeof candidate.expiresAt === "number" && candidate.expiresAt > now)
-      ) retained.push(candidate);
+        candidate.state === "in_flight" ||
+        this.clockRollbackDetected ||
+        (typeof candidate.expiresAt === "number" && candidate.expiresAt > now)
+      )
+        retained.push(candidate);
     }
     if (retained.length > this.maxEntries) {
       throw new AidenOperationContractError("idempotency_capacity");
@@ -535,7 +578,9 @@ export class AidenIdempotencyLedger {
     for (const entry of retained) {
       const restoredOperationId = entry.operationId;
       assertOperationId(restoredOperationId);
-      if ([...this.entries.values()].some((existing) => existing.operationId === restoredOperationId)) {
+      if (
+        [...this.entries.values()].some((existing) => existing.operationId === restoredOperationId)
+      ) {
         throw new AidenOperationContractError("idempotency_conflict");
       }
       if (this.entries.has(entry.scopeDigest)) {
@@ -552,7 +597,9 @@ export class AidenIdempotencyLedger {
   }
 
   /** No owner survives a restart, so restored in-flight work is unknown, never executing. */
-  private restoredPhase(entry: AidenIdempotencySnapshotEntry): AidenOperationPhase<DurableJsonValue> {
+  private restoredPhase(
+    entry: AidenIdempotencySnapshotEntry,
+  ): AidenOperationPhase<DurableJsonValue> {
     if (entry.state === "in_flight") return { kind: "unknown" };
     const expiresAt = entry.expiresAt as number;
     return entry.state === "fulfilled"
@@ -609,7 +656,10 @@ export class AidenIdempotencyLedger {
     }
   }
 
-  private snapshotEntry(scopeDigest: string, entry: AidenIdempotencyEntry): AidenIdempotencySnapshotEntry {
+  private snapshotEntry(
+    scopeDigest: string,
+    entry: AidenIdempotencyEntry,
+  ): AidenIdempotencySnapshotEntry {
     const { phase } = entry;
     return {
       scopeDigest,
@@ -626,7 +676,10 @@ export class AidenIdempotencyLedger {
     };
   }
 
-  private buildSnapshot(candidate?: { scopeDigest: string; entry: AidenIdempotencyEntry }): AidenIdempotencySnapshot {
+  private buildSnapshot(candidate?: {
+    scopeDigest: string;
+    entry: AidenIdempotencyEntry;
+  }): AidenIdempotencySnapshot {
     let candidateIncluded = false;
     const entries = [...this.entries].map(([scopeDigest, entry]) => {
       if (candidate && scopeDigest === candidate.scopeDigest) {
@@ -680,7 +733,9 @@ export class AidenIdempotencyLedger {
   ): void {
     const phase = advanceAidenOperation(entry.phase, event);
     try {
-      this.assertPersistableSnapshot(this.buildSnapshot({ scopeDigest, entry: { ...entry, phase } }));
+      this.assertPersistableSnapshot(
+        this.buildSnapshot({ scopeDigest, entry: { ...entry, phase } }),
+      );
     } catch (error) {
       entry.phase = advanceAidenOperation(entry.phase, { type: "outcome_lost" });
       throw error;
@@ -732,7 +787,8 @@ export class AidenIdempotencyLedger {
     const requestDigest = createHash("sha256").update(canonical(input)).digest("base64url");
     const existing = this.entries.get(ledgerKey);
     if (existing) {
-      if (existing.requestDigest !== requestDigest) throw new AidenOperationContractError("idempotency_conflict");
+      if (existing.requestDigest !== requestDigest)
+        throw new AidenOperationContractError("idempotency_conflict");
       switch (existing.phase.kind) {
         case "rejected":
           throw new AidenOperationReplayedRejection(existing.phase.errorCode);
@@ -846,16 +902,20 @@ export class AidenIdempotencyLedger {
   reconcile<T>(operationIdToFinalize: string, outcome: AidenIdempotencyOutcome<T>): void {
     assertOperationId(operationIdToFinalize);
     this.prune(this.now());
-    const entryRecord = [...this.entries].find(([, candidate]) => candidate.operationId === operationIdToFinalize);
+    const entryRecord = [...this.entries].find(
+      ([, candidate]) => candidate.operationId === operationIdToFinalize,
+    );
     if (!entryRecord) throw new AidenOperationContractError("idempotency_in_flight");
     const [ledgerKey, entry] = entryRecord;
     const { phase } = entry;
     if (phase.kind === "fulfilled" || phase.kind === "rejected") {
-      const durableOutcomeResult = outcome.state === "fulfilled" ? cloneDurableResult(outcome.result) : undefined;
+      const durableOutcomeResult =
+        outcome.state === "fulfilled" ? cloneDurableResult(outcome.result) : undefined;
       if (outcome.state === "rejected") assertSnapshotErrorCode(outcome.errorCode);
-      const sameOutcome = outcome.state === "fulfilled"
-        ? phase.kind === "fulfilled" && canonical(phase.value) === canonical(durableOutcomeResult)
-        : phase.kind === "rejected" && phase.errorCode === outcome.errorCode;
+      const sameOutcome =
+        outcome.state === "fulfilled"
+          ? phase.kind === "fulfilled" && canonical(phase.value) === canonical(durableOutcomeResult)
+          : phase.kind === "rejected" && phase.errorCode === outcome.errorCode;
       if (!sameOutcome) throw new AidenOperationContractError("idempotency_conflict");
       return;
     }
@@ -927,7 +987,8 @@ export class AidenDurableOperationRegistry {
     assertOperationId(operationId);
     assertOperationId(deviceId);
     const existing = this.owners.get(operationId);
-    if (existing && existing !== deviceId) throw new AidenOperationContractError("capability_denied");
+    if (existing && existing !== deviceId)
+      throw new AidenOperationContractError("capability_denied");
     if (existing) return;
     if (this.owners.size >= MAX_DURABLE_OPERATION_ENTRIES) {
       throw new AidenOperationContractError("idempotency_capacity");
@@ -986,8 +1047,7 @@ function assertDurableOperationEntries(
       lengthDescriptor.value < 0 ||
       keys.some(
         (key) =>
-          key !== "length" &&
-          (typeof key !== "string" || !isDenseArrayIndexKey(key, value.length)),
+          key !== "length" && (typeof key !== "string" || !isDenseArrayIndexKey(key, value.length)),
       )
     ) {
       throw new AidenOperationContractError("internal_error");
@@ -1011,7 +1071,9 @@ function assertDurableOperationEntries(
   }
 }
 
-function assertDurableOperationEntry(value: unknown): asserts value is { operationId: string; deviceId: string } {
+function assertDurableOperationEntry(
+  value: unknown,
+): asserts value is { operationId: string; deviceId: string } {
   if (
     typeof value !== "object" ||
     value === null ||
@@ -1023,10 +1085,7 @@ function assertDurableOperationEntry(value: unknown): asserts value is { operati
   }
   const descriptors = Object.getOwnPropertyDescriptors(value);
   const keys = Reflect.ownKeys(descriptors);
-  if (
-    keys.length !== 2 ||
-    !keys.every((key) => key === "operationId" || key === "deviceId")
-  ) {
+  if (keys.length !== 2 || !keys.every((key) => key === "operationId" || key === "deviceId")) {
     throw new AidenOperationContractError("internal_error");
   }
   for (const key of ["operationId", "deviceId"] as const) {

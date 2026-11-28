@@ -4,17 +4,43 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { Chat, Workspace } from "../lib/types";
-import {
-  attachableProjectWorkspaces,
-  AttachWorkspaceDialog,
-} from "./attach-workspace-dialog";
+import { attachableProjectWorkspaces, AttachWorkspaceDialog } from "./attach-workspace-dialog";
 
 const WORKSPACES: Workspace[] = [
-  { id: "default", name: "No workspace", folderPath: "/tmp/nows", permission: "ask", noWorkspace: true, createdAt: 1, updatedAt: 50 },
-  { id: "assistant", name: "Assistant", folderPath: "/tmp/asst", permission: "ask", createdAt: 1, updatedAt: 40 },
+  {
+    id: "default",
+    name: "No workspace",
+    folderPath: "/tmp/nows",
+    permission: "ask",
+    noWorkspace: true,
+    createdAt: 1,
+    updatedAt: 50,
+  },
+  {
+    id: "assistant",
+    name: "Assistant",
+    folderPath: "/tmp/asst",
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 40,
+  },
   { id: "folderless", name: "Folderless", permission: "ask", createdAt: 1, updatedAt: 30 },
-  { id: "ws-alpha", name: "Alpha", folderPath: "/Users/me/alpha", permission: "ask", createdAt: 1, updatedAt: 20 },
-  { id: "ws-beta", name: "Beta", folderPath: "/Users/me/beta", permission: "ask", createdAt: 1, updatedAt: 100 },
+  {
+    id: "ws-alpha",
+    name: "Alpha",
+    folderPath: "/Users/me/alpha",
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 20,
+  },
+  {
+    id: "ws-beta",
+    name: "Beta",
+    folderPath: "/Users/me/beta",
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 100,
+  },
 ];
 
 afterEach(() => cleanup());
@@ -35,7 +61,14 @@ test("AttachWorkspaceDialog attaches immediately when scratch folder is empty", 
       entries: [],
     }),
     "chats:attachToWorkspace": () => ({
-      chat: { id: "chat-1", title: "Quick", workspaceId: "ws-beta", createdAt: 1, updatedAt: 2, messages: [] } satisfies Chat,
+      chat: {
+        id: "chat-1",
+        title: "Quick",
+        workspaceId: "ws-beta",
+        createdAt: 1,
+        updatedAt: 2,
+        messages: [],
+      } satisfies Chat,
       copiedPaths: [],
       oldWorkspaceId: "nows-1",
     }),
@@ -46,10 +79,14 @@ test("AttachWorkspaceDialog attaches immediately when scratch folder is empty", 
   render(
     <AttachWorkspaceDialog
       open
-      onOpenChange={(next) => { if (!next) closed = true; }}
+      onOpenChange={(next) => {
+        if (!next) closed = true;
+      }}
       chatId="chat-1"
       workspaces={WORKSPACES}
-      onAttached={(_result, target) => { attachedTo = target.id; }}
+      onAttached={(_result, target) => {
+        attachedTo = target.id;
+      }}
     />,
   );
 
@@ -64,7 +101,10 @@ test("AttachWorkspaceDialog attaches immediately when scratch folder is empty", 
 
   assert.deepEqual(calls, [
     { channel: "chats:inspectAttachFiles", args: ["chat-1"] },
-    { channel: "chats:attachToWorkspace", args: [{ chatId: "chat-1", targetWorkspaceId: "ws-beta" }] },
+    {
+      channel: "chats:attachToWorkspace",
+      args: [{ chatId: "chat-1", targetWorkspaceId: "ws-beta" }],
+    },
   ]);
   assert.equal(attachedTo, "ws-beta");
   assert.equal(closed, true);
@@ -82,7 +122,14 @@ test("AttachWorkspaceDialog shows scratch-file preflight and respects Trash vs C
     "chats:attachToWorkspace": (input) => {
       attachCalls.push(input);
       return {
-        chat: { id: "chat-1", title: "Quick", workspaceId: "ws-alpha", createdAt: 1, updatedAt: 2, messages: [] } satisfies Chat,
+        chat: {
+          id: "chat-1",
+          title: "Quick",
+          workspaceId: "ws-alpha",
+          createdAt: 1,
+          updatedAt: 2,
+          messages: [],
+        } satisfies Chat,
         copiedPaths: [],
         oldWorkspaceId: "nows-1",
       };

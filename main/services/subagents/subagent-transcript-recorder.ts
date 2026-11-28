@@ -38,7 +38,9 @@ const MAX_CACHED_STEP_TEXTS = 2_048;
 export type SubagentTranscriptFinishStatus = "completed" | "failed" | "cancelled";
 
 /** Where a message's tool and thinking steps sit in its settled text. */
-export type SubagentTranscriptActivityAnchors = NonNullable<ReturnType<typeof terminalAssistantActivityAnchors>>;
+export type SubagentTranscriptActivityAnchors = NonNullable<
+  ReturnType<typeof terminalAssistantActivityAnchors>
+>;
 
 export interface SubagentTranscriptSink {
   /**
@@ -148,7 +150,8 @@ export class SubagentTranscriptRecorder {
     this.maxBytes = options.maxBytes ?? MAX_SUBAGENT_TRANSCRIPT_BYTES;
     this.sanitize = options.sanitize ?? sanitizeSubagentWorkText;
     this.setTimer = options.setTimer ?? ((callback, ms) => setTimeout(callback, ms));
-    this.clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+    this.clearTimer =
+      options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
     this.onError = options.onError ?? (() => {});
     this.taskEntry = { kind: "task", text: clip(this.sanitize(options.task)) };
     this.taskJson = JSON.stringify(this.taskEntry);
@@ -175,7 +178,12 @@ export class SubagentTranscriptRecorder {
             // call as pending now, as the main chat does. Some providers send
             // an empty id first, so wait for a usable one.
             const block = update.partial.content[update.contentIndex];
-            if (block?.type === "toolCall" && typeof block.id === "string" && block.id && typeof block.name === "string") {
+            if (
+              block?.type === "toolCall" &&
+              typeof block.id === "string" &&
+              block.id &&
+              typeof block.name === "string"
+            ) {
               this.toolCalled(block.id, block.name);
             }
           }
@@ -183,7 +191,10 @@ export class SubagentTranscriptRecorder {
         }
         case "message_end":
           if (event.message.role === "assistant") {
-            this.messageEnded(terminalAssistantText(event.message), terminalAssistantActivityAnchors(event.message) ?? undefined);
+            this.messageEnded(
+              terminalAssistantText(event.message),
+              terminalAssistantActivityAnchors(event.message) ?? undefined,
+            );
           }
           return;
         case "tool_execution_start":
@@ -195,11 +206,19 @@ export class SubagentTranscriptRecorder {
         case "tool_execution_end": {
           // The main chat's order: a stop wins, then a refusal, then the error flag.
           const blocked = this.blockedTools.delete(event.toolCallId);
-          const status = this.cancelRequested ? "cancelled" : blocked ? "blocked" : event.isError ? "failed" : "completed";
+          const status = this.cancelRequested
+            ? "cancelled"
+            : blocked
+              ? "blocked"
+              : event.isError
+                ? "failed"
+                : "completed";
           this.toolFinished(
             event.toolCallId,
             status,
-            status === "completed" ? event.result?.details : safeToolIssueDetails(event.toolName, status, event.result),
+            status === "completed"
+              ? event.result?.details
+              : safeToolIssueDetails(event.toolName, status, event.result),
           );
           return;
         }
@@ -323,7 +342,11 @@ export class SubagentTranscriptRecorder {
   }
 
   /** `details` is the tool result's own details, or safe issue details for any other outcome. */
-  toolFinished(toolCallId: string, status: "completed" | "failed" | "blocked" | "cancelled", details?: unknown): void {
+  toolFinished(
+    toolCallId: string,
+    status: "completed" | "failed" | "blocked" | "cancelled",
+    details?: unknown,
+  ): void {
     const message = this.messageForTool(toolCallId);
     if (!message?.projector) return;
     message.projector.toolFinished(toolCallId, status, details);
@@ -359,11 +382,17 @@ export class SubagentTranscriptRecorder {
     // A failed final save is always reported once, even when an earlier run
     // of failed saves was already reported.
     this.failureReported = false;
-    for (let attempt = 0; attempt < SUBAGENT_TRANSCRIPT_FINAL_SAVE_ATTEMPTS && this.dirty; attempt += 1) {
+    for (
+      let attempt = 0;
+      attempt < SUBAGENT_TRANSCRIPT_FINAL_SAVE_ATTEMPTS && this.dirty;
+      attempt += 1
+    ) {
       if (attempt > 0) {
         await new Promise<void>((resolve) => {
           // The wait is bounded by flush(); it never holds the process open.
-          const handle = this.setTimer(resolve, this.intervalMs * attempt) as { unref?: () => void } | null;
+          const handle = this.setTimer(resolve, this.intervalMs * attempt) as {
+            unref?: () => void;
+          } | null;
           if (typeof handle?.unref === "function") handle.unref();
         });
       }
@@ -444,7 +473,12 @@ export class SubagentTranscriptRecorder {
       this.keepTrim(untrimmed.entries, transcript.entries);
     }
     const json = transcript.entries.map((entry, index) =>
-      index === 0 ? this.taskJson : entry === untrimmed.entries[index] ? cached[index - 1]!.json : JSON.stringify(entry));
+      index === 0
+        ? this.taskJson
+        : entry === untrimmed.entries[index]
+          ? cached[index - 1]!.json
+          : JSON.stringify(entry),
+    );
     const changes: SubagentTranscriptChange[] = [];
     for (const [index, entry] of transcript.entries.entries()) {
       if (json[index] !== this.publishedJson[index]) changes.push({ index, entry });
@@ -502,11 +536,21 @@ export class SubagentTranscriptRecorder {
    * id, a cut front of the newest text by length, and a closed message that
    * became a marker gives up its text and steps.
    */
-  private keepTrim(before: readonly SubagentTranscriptEntry[], after: readonly SubagentTranscriptEntry[]): void {
+  private keepTrim(
+    before: readonly SubagentTranscriptEntry[],
+    after: readonly SubagentTranscriptEntry[],
+  ): void {
     for (const [offset, message] of this.messages.entries()) {
       const previous = before[offset + 1];
       const next = after[offset + 1];
-      if (!previous || !next || previous === next || previous.kind !== "message" || next.kind !== "message") continue;
+      if (
+        !previous ||
+        !next ||
+        previous === next ||
+        previous.kind !== "message" ||
+        next.kind !== "message"
+      )
+        continue;
       if (next.text === SUBAGENT_TRANSCRIPT_TRIMMED_TEXT_MARKER && message !== this.current) {
         message.frozen = next;
         message.projector = null;
@@ -529,7 +573,12 @@ export class SubagentTranscriptRecorder {
     if (message.frozen) {
       if (!message.cache) {
         const json = JSON.stringify(message.frozen);
-        message.cache = { version: message.version, entry: message.frozen, json, bytes: utf8Bytes(json) };
+        message.cache = {
+          version: message.version,
+          entry: message.frozen,
+          json,
+          bytes: utf8Bytes(json),
+        };
       }
       return message.cache;
     }
@@ -549,7 +598,10 @@ export class SubagentTranscriptRecorder {
       message.safeFor = visible;
     }
     const cut = Math.min(message.droppedChars, message.safe.length);
-    const text = cut > 0 ? `${SUBAGENT_TRANSCRIPT_TRIMMED_TEXT_PREFIX}${message.safe.slice(cut)}` : message.safe;
+    const text =
+      cut > 0
+        ? `${SUBAGENT_TRANSCRIPT_TRIMMED_TEXT_PREFIX}${message.safe.slice(cut)}`
+        : message.safe;
     let floor = 0;
     let order = 0;
     const steps: AgentStep[] = [];
@@ -567,7 +619,9 @@ export class SubagentTranscriptRecorder {
       text,
       steps,
       startedAt: message.startedAt,
-      ...(message.finishedAt === undefined ? {} : { finishedAt: Math.max(message.startedAt, message.finishedAt) }),
+      ...(message.finishedAt === undefined
+        ? {}
+        : { finishedAt: Math.max(message.startedAt, message.finishedAt) }),
     };
   }
 
@@ -632,7 +686,9 @@ export function streamingVisibleText(raw: string): string {
 }
 
 function clip(text: string): string {
-  return text.length > MAX_SUBAGENT_TRANSCRIPT_TEXT_CHARS ? text.slice(0, MAX_SUBAGENT_TRANSCRIPT_TEXT_CHARS) : text;
+  return text.length > MAX_SUBAGENT_TRANSCRIPT_TEXT_CHARS
+    ? text.slice(0, MAX_SUBAGENT_TRANSCRIPT_TEXT_CHARS)
+    : text;
 }
 
 function utf8Bytes(text: string): number {

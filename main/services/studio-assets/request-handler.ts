@@ -43,7 +43,10 @@ export function createStudioAssetRequestHandler(deps: {
         const { record, bytes } = await deps.store.read(grant.assetId);
         body = { bytes, mediaType: record.mediaType };
       } else {
-        body = await deps.store.thumbnail(grant.assetId, grant.rendition === "thumb-256" ? 256 : 512);
+        body = await deps.store.thumbnail(
+          grant.assetId,
+          grant.rendition === "thumb-256" ? 256 : 512,
+        );
       }
     } catch (error) {
       return failureForError(error);

@@ -27,7 +27,12 @@ import { WORKSPACE_ARTIFACT_TOOL_NAME } from "../../renderer/shared/workspace-ar
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
 import { approvalAllowableAwayFromOwner } from "./chat-owed-turn-prompts.js";
 import { generativeUiUnavailableReason } from "./generative-ui-extension.js";
-import { HOOKS_TOOL_NAME, hooksToolUnavailableReason, offersHooksTool, type HooksToolSurface } from "./hooks-tool.js";
+import {
+  HOOKS_TOOL_NAME,
+  hooksToolUnavailableReason,
+  offersHooksTool,
+  type HooksToolSurface,
+} from "./hooks-tool.js";
 import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
 import { PROPOSE_GOAL_TOOL_NAME } from "../../renderer/shared/goal.js";
 
@@ -113,11 +118,17 @@ export function screenedPromptAnswersPerson(
   screenedPrompt: { messageId: string } | undefined,
 ): boolean {
   if (screenedPrompt === undefined) return false;
-  return messages.some((message) => message.id === screenedPrompt.messageId && message.role === "user" && !message.notice);
+  return messages.some(
+    (message) =>
+      message.id === screenedPrompt.messageId && message.role === "user" && !message.notice,
+  );
 }
 
 /** The turn's audience, from the generation's options and parameters. */
-export function chatTurnAudienceFor(options: ChatTurnAudienceOptions, params: ChatTurnAudienceParams): ChatTurnAudience {
+export function chatTurnAudienceFor(
+  options: ChatTurnAudienceOptions,
+  params: ChatTurnAudienceParams,
+): ChatTurnAudience {
   return {
     unattended: options.unattended === true,
     remoteAudience: options.visualAudience === "remote",
@@ -181,11 +192,13 @@ export function declaresAppTools(
   scope: ChatTurnOwnerScope,
   turn: { attendedAssistant: boolean; schedulingAllowed: boolean },
 ): boolean {
-  return !scope.botBound &&
+  return (
+    !scope.botBound &&
     (!scope.assistantMode || turn.attendedAssistant) &&
     scope.interactionSurface !== "telegram" &&
     turn.schedulingAllowed &&
-    (declaresWindowTools(scope) || scope.remote);
+    (declaresWindowTools(scope) || scope.remote)
+  );
 }
 
 /** The tools a windowless chat turn refuses by name, whatever its sources declared. */
@@ -276,7 +289,11 @@ export function chatTurnToolRefusal(
   surface: ChatToolSurface,
   turn: ChatTurnAudience,
 ): (name: string) => string | undefined {
-  const hooksSurface: HooksToolSurface = { ...surface, unattended: turn.unattended, remoteAudience: turn.remoteAudience };
+  const hooksSurface: HooksToolSurface = {
+    ...surface,
+    unattended: turn.unattended,
+    remoteAudience: turn.remoteAudience,
+  };
   const visuals = { onRequest: turn.inlineVisuals === "on_request", visualize: turn.visualize };
   return (name) => {
     const hooks = hooksToolUnavailableReason(name, hooksSurface);
@@ -324,7 +341,10 @@ export interface TurnArgsRefusalRule {
 }
 
 /** Matches a call whose `key` argument is one of `values`, e.g. `argIs("action", "set")`. */
-export function argIs(key: string, ...values: readonly unknown[]): (args: Record<string, unknown>) => boolean {
+export function argIs(
+  key: string,
+  ...values: readonly unknown[]
+): (args: Record<string, unknown>) => boolean {
   return (args) => values.includes(args[key]);
 }
 
@@ -350,7 +370,10 @@ export function aidenStartedTurn(turn: ChatTurnAudience): boolean {
  * its own audience even when it posts into a chat. Desktop and paired-device
  * turns leave `usageSource` unset; it means "chat".
  */
-export function personWroteChatTurn(usageSource: string | undefined, turn: ChatTurnAudience): boolean {
+export function personWroteChatTurn(
+  usageSource: string | undefined,
+  turn: ChatTurnAudience,
+): boolean {
   return (usageSource === undefined || usageSource === "chat") && !aidenStartedTurn(turn);
 }
 
@@ -358,7 +381,9 @@ export function personWroteChatTurn(usageSource: string | undefined, turn: ChatT
 const READ_ONLY_SUBAGENT_ROLES: ReadonlySet<string> = new Set(["scout", "planner", "reviewer"]);
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 /** Capabilities that change something or start more helpers: writes, shell, mutating connectors, nesting. */
@@ -386,7 +411,11 @@ export function subagentCallMayWrite(args: Record<string, unknown>): boolean {
   return tasks.some((entry) => {
     const task = asRecord(entry);
     if (!task) return false;
-    return typeof task.role !== "string" || !READ_ONLY_SUBAGENT_ROLES.has(task.role) || capabilitiesWrite(task.capabilities);
+    return (
+      typeof task.role !== "string" ||
+      !READ_ONLY_SUBAGENT_ROLES.has(task.role) ||
+      capabilitiesWrite(task.capabilities)
+    );
   });
 }
 
@@ -435,7 +464,10 @@ export function chatTurnArgsToolRefusal(
   rules: readonly TurnArgsRefusalRule[] = TURN_ARGS_REFUSAL_RULES,
 ): TurnToolRefusal {
   return (name, args) => {
-    const values = typeof args === "object" && args !== null && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
+    const values =
+      typeof args === "object" && args !== null && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : {};
     for (const rule of rules) {
       if (rule.tool === name && rule.turns(turn) && rule.args(values)) return rule.reason;
     }

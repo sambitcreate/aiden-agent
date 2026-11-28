@@ -42,7 +42,8 @@ test("navigation normalizes public and loopback hosts but refuses privileged sch
   }
 });
 test("guest user-agent drops Electron and Aiden product tokens and reduces Chrome to its major", () => {
-  const electron = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Aiden Agent/0.43.0 Chrome/142.0.7444.175 Electron/43.1.1 Safari/537.36";
+  const electron =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Aiden Agent/0.43.0 Chrome/142.0.7444.175 Electron/43.1.1 Safari/537.36";
   const guest = browserGuestUserAgent(electron);
   // Shipping Chrome's reduced User-Agent: the build number is never exposed.
   assert.equal(
@@ -83,13 +84,20 @@ test("guest identity headers rewrite Client Hints without dropping preview grant
   assert.equal(headers["sec-ch-ua-mobile"], "?0");
   // Stale or high-entropy hints are dropped, never forged or passed through.
   assert.deepEqual(
-    Object.keys(headers).filter((name) => /^sec-ch-ua/iu.test(name)).sort(),
+    Object.keys(headers)
+      .filter((name) => /^sec-ch-ua/iu.test(name))
+      .sort(),
     ["sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"],
   );
   const linux = applyBrowserGuestIdentityHeaders({}, ua, "http://localhost:3000/", "linux");
   assert.equal(linux["sec-ch-ua-platform"], '"Linux"');
   // Chromium never sends UA-CH to insecure origins.
-  const insecure = applyBrowserGuestIdentityHeaders({ "sec-ch-ua": "x" }, ua, "http://example.com/", "darwin");
+  const insecure = applyBrowserGuestIdentityHeaders(
+    { "sec-ch-ua": "x" },
+    ua,
+    "http://example.com/",
+    "darwin",
+  );
   assert.deepEqual(insecure, { "User-Agent": ua });
 });
 
@@ -107,7 +115,8 @@ test("Google's sign-in host alone gets a current Firefox identity with no Client
   );
   assert.deepEqual(signIn, {
     Cookie: "SID=1",
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:157.0) Gecko/20100101 Firefox/157.0",
+    "User-Agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:157.0) Gecko/20100101 Firefox/157.0",
   });
   // Every other host, including other Google hosts and look-alikes, stays Chromium.
   for (const url of [
@@ -121,22 +130,36 @@ test("Google's sign-in host alone gets a current Firefox identity with no Client
 
 test("Google sign-in Firefox version follows the four-week release train without running ahead", () => {
   // Firefox 144 shipped 2025-10-14 and 157 is due 2026-10-13 on the four-week train.
-  assert.match(browserGoogleSignInUserAgent("linux", Date.UTC(2025, 9, 20)), /^Mozilla\/5\.0 \(X11; Linux x86_64; rv:(\d+)\.0\) Gecko\/20100101 Firefox\/\1\.0$/u);
-  const version = (when: number) => Number(browserGoogleSignInUserAgent("win32", when).match(/Firefox\/(\d+)/u)?.[1]);
+  assert.match(
+    browserGoogleSignInUserAgent("linux", Date.UTC(2025, 9, 20)),
+    /^Mozilla\/5\.0 \(X11; Linux x86_64; rv:(\d+)\.0\) Gecko\/20100101 Firefox\/\1\.0$/u,
+  );
+  const version = (when: number) =>
+    Number(browserGoogleSignInUserAgent("win32", when).match(/Firefox\/(\d+)/u)?.[1]);
   assert.ok(version(Date.UTC(2025, 9, 20)) <= 144);
   assert.ok(version(Date.UTC(2025, 9, 20)) >= 142);
   assert.ok(version(Date.UTC(2026, 9, 20)) > version(Date.UTC(2025, 9, 20)));
-  assert.match(browserGoogleSignInUserAgent("win32", Date.UTC(2026, 9, 20)), /Windows NT 10\.0; Win64; x64/u);
+  assert.match(
+    browserGoogleSignInUserAgent("win32", Date.UTC(2026, 9, 20)),
+    /Windows NT 10\.0; Win64; x64/u,
+  );
 });
 
 test("guest brands follow Chromium's GREASE spelling and order for each major", () => {
-  const brands = (major: number) => browserGuestBrands(`Mozilla/5.0 (X11) Chrome/${major}.0.0.0 Safari/537.36`);
+  const brands = (major: number) =>
+    browserGuestBrands(`Mozilla/5.0 (X11) Chrome/${major}.0.0.0 Safari/537.36`);
   // Verified against Electron 43.1.1 (Chromium 150) navigator.userAgentData.brands.
-  assert.deepEqual(brands(150), [{ brand: "Not;A=Brand", version: "8" }, { brand: "Chromium", version: "150" }]);
+  assert.deepEqual(brands(150), [
+    { brand: "Not;A=Brand", version: "8" },
+    { brand: "Chromium", version: "150" },
+  ]);
   // Known Chrome releases: the GREASE brand of 120 and 124.
   assert.equal(brands(120)[0].brand, "Not_A Brand");
   assert.deepEqual(brands(124)[0], { brand: "Not-A.Brand", version: "99" });
-  assert.deepEqual(brands(151).map(({ brand }) => brand), ["Chromium", "Not=A?Brand"]);
+  assert.deepEqual(
+    brands(151).map(({ brand }) => brand),
+    ["Chromium", "Not=A?Brand"],
+  );
 });
 
 test("profile partitions isolate persistent, ephemeral, and unusual identity bytes", () => {
@@ -158,9 +181,27 @@ test("local preview capabilities are omitted from exported URLs without changing
 });
 test("viewport measurements reject unsafe dimensions and retain small fill slots", () => {
   assert.deepEqual(browserMeasuredViewport({ width: 120, height: 90 }), { width: 120, height: 90 });
-  assert.deepEqual(browserMeasuredViewport({ width: 3840, height: 2160 }), { width: 3840, height: 2160 });
-  assert.deepEqual(browserMeasuredViewport({ width: 7680, height: 4320 }), { width: 7680, height: 4320 });
-  for (const dimension of [0, -1, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1, 1e100, 1.5, "640", null, undefined]) {
+  assert.deepEqual(browserMeasuredViewport({ width: 3840, height: 2160 }), {
+    width: 3840,
+    height: 2160,
+  });
+  assert.deepEqual(browserMeasuredViewport({ width: 7680, height: 4320 }), {
+    width: 7680,
+    height: 4320,
+  });
+  for (const dimension of [
+    0,
+    -1,
+    NaN,
+    Infinity,
+    -Infinity,
+    Number.MAX_SAFE_INTEGER + 1,
+    1e100,
+    1.5,
+    "640",
+    null,
+    undefined,
+  ]) {
     assert.equal(browserMeasuredViewport({ width: dimension, height: 480 }), undefined);
     assert.equal(browserMeasuredViewport({ width: 640, height: dimension }), undefined);
   }
@@ -192,7 +233,19 @@ test("responsive captures exclude mismatched-aspect native slot letterboxing", (
 });
 
 test("nested accessibility and diagnostic URL properties do not expose preview capabilities", () => {
-  const source = { nodes: [{ properties: [{ name: "url", value: { value: "http://127.0.0.1:3000/doc.html?__aiden_preview=secret" } }] }], title: "Preview" };
+  const source = {
+    nodes: [
+      {
+        properties: [
+          {
+            name: "url",
+            value: { value: "http://127.0.0.1:3000/doc.html?__aiden_preview=secret" },
+          },
+        ],
+      },
+    ],
+    title: "Preview",
+  };
   const redacted = browserRedactPreviewUrls(source);
   assert.equal(redacted.nodes[0].properties[0].value.value, "http://127.0.0.1:3000/doc.html");
   assert.equal(redacted.title, "Preview");
@@ -221,13 +274,21 @@ test("physical input preserves the person's navigation but cancels agent work", 
   for (const source of ["user", "agent"] as const) {
     let release!: () => void;
     let started!: () => void;
-    const ready = new Promise<void>((resolve) => { started = resolve; });
-    const pending = queue.run(async (check) => {
-      started();
-      await new Promise<void>((resolve) => { release = resolve; });
-      check();
-      return "loaded";
-    }, undefined, source);
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const pending = queue.run(
+      async (check) => {
+        started();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        check();
+        return "loaded";
+      },
+      undefined,
+      source,
+    );
     await ready;
     queue.interruptForHumanInput();
     assert.equal(queue.signal?.aborted, source === "agent");
@@ -240,17 +301,28 @@ test("physical input while a person's command waits behind agent work cancels on
   const queue = new BrowserActionQueue();
   let releaseAgent!: () => void;
   let agentStarted!: () => void;
-  const started = new Promise<void>((resolve) => { agentStarted = resolve; });
+  const started = new Promise<void>((resolve) => {
+    agentStarted = resolve;
+  });
   const agent = queue.run(async (check) => {
     agentStarted();
-    await new Promise<void>((resolve) => { releaseAgent = resolve; });
+    await new Promise<void>((resolve) => {
+      releaseAgent = resolve;
+    });
     check();
     return "agent";
   });
   await started;
   // The person's command revokes the running agent action and queues behind it.
   queue.interrupt();
-  const person = queue.run(async (check) => { check(); return "loaded"; }, undefined, "user");
+  const person = queue.run(
+    async (check) => {
+      check();
+      return "loaded";
+    },
+    undefined,
+    "user",
+  );
   const laterAgent = queue.run(async () => "later agent");
   // A click in the page before the agent action has unwound.
   queue.interruptForHumanInput();
@@ -264,11 +336,19 @@ test("closing a tab still cancels a user-sourced navigation", async () => {
   const queue = new BrowserActionQueue();
   let release!: () => void;
   let started!: () => void;
-  const ready = new Promise<void>((resolve) => { started = resolve; });
-  const pending = queue.run(async () => {
-    started();
-    await new Promise<void>((resolve) => { release = resolve; });
-  }, undefined, "user");
+  const ready = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const pending = queue.run(
+    async () => {
+      started();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    },
+    undefined,
+    "user",
+  );
   await ready;
   queue.interrupt();
   release();
@@ -327,7 +407,11 @@ test("external URLs allow only web pages and mail", () => {
     null,
     `https://example.com/${"a".repeat(9000)}`,
   ])
-    assert.throws(() => externalUrl(bad), /can't be opened outside Aiden/, String(bad).slice(0, 40));
+    assert.throws(
+      () => externalUrl(bad),
+      /can't be opened outside Aiden/,
+      String(bad).slice(0, 40),
+    );
 });
 
 test("same browser page compares normalized URLs", () => {
@@ -341,18 +425,30 @@ test("human input while a user action runs keeps epoch stable and cancels only q
   const initialEpoch = queue.epoch;
   let userStarted!: () => void;
   let releaseUser!: () => void;
-  const started = new Promise<void>((resolve) => { userStarted = resolve; });
-  const userRun = queue.run(async (check) => {
-    userStarted();
-    await new Promise<void>((resolve) => { releaseUser = resolve; });
-    check();
-    return "user-ok";
-  }, undefined, "user");
+  const started = new Promise<void>((resolve) => {
+    userStarted = resolve;
+  });
+  const userRun = queue.run(
+    async (check) => {
+      userStarted();
+      await new Promise<void>((resolve) => {
+        releaseUser = resolve;
+      });
+      check();
+      return "user-ok";
+    },
+    undefined,
+    "user",
+  );
   let queuedAgentRan = false;
-  const queuedAgent = queue.run(async () => {
-    queuedAgentRan = true;
-    return "agent-ran";
-  }, undefined, "agent");
+  const queuedAgent = queue.run(
+    async () => {
+      queuedAgentRan = true;
+      return "agent-ran";
+    },
+    undefined,
+    "agent",
+  );
   await started;
 
   queue.interruptForHumanInput();

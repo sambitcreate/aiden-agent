@@ -41,6 +41,10 @@ test("anything that isn't a public https site is refused with one plain message"
     `https://${"a".repeat(2_100)}.com`,
   ];
   for (const site of refused) {
-    assert.throws(() => normalizeSignInOrigin(site), { message: "Use an https site name like github.com." }, site);
+    assert.throws(
+      () => normalizeSignInOrigin(site),
+      { message: "Use an https site name like github.com." },
+      site,
+    );
   }
 });

@@ -101,7 +101,9 @@ export function WorkspacePicker({
   const [cloning, setCloning] = React.useState(false);
   const blockedReasonId = React.useId();
   const cloneRef = React.useRef<CloneViewHandle | null>(null);
-  const noWorkspaceActive = isNoWorkspace(workspaces.find((entry) => entry.id === activeWorkspaceId));
+  const noWorkspaceActive = isNoWorkspace(
+    workspaces.find((entry) => entry.id === activeWorkspaceId),
+  );
 
   // A programmatic request (headline name, ⌘⇧O palette Clone) opens the menu.
   const handledRequest = React.useRef(openRequest?.nonce ?? 0);
@@ -226,7 +228,9 @@ export function WorkspacePicker({
                   if (workspace.id !== activeWorkspaceId) await onSelectWorkspace(workspace.id);
                 })
               }
-              onOpenFolder={onOpenFolder ? () => void perform("open-folder", onOpenFolder) : undefined}
+              onOpenFolder={
+                onOpenFolder ? () => void perform("open-folder", onOpenFolder) : undefined
+              }
               onClone={() => setView("clone")}
               onScratch={() => void perform("scratch", onCreateScratchWorkspace)}
               noWorkspaceActive={noWorkspaceActive}
@@ -294,7 +298,8 @@ function WorkspaceListView({
   const list = workspaceMenuList(choices, { query, expanded });
   const now = Date.now();
   const pathRow = intake.row;
-  const pathRowValue = pathRow && pathRow.action !== "invalid" ? `path:${pathRow.action}:${pathRow.input}` : "";
+  const pathRowValue =
+    pathRow && pathRow.action !== "invalid" ? `path:${pathRow.action}:${pathRow.input}` : "";
 
   // A checked path becomes the default choice as soon as its answer arrives.
   React.useEffect(() => {
@@ -309,7 +314,13 @@ function WorkspaceListView({
   };
 
   return (
-    <Command label="Search workspaces" shouldFilter={false} value={selected} onValueChange={setSelected} loop>
+    <Command
+      label="Search workspaces"
+      shouldFilter={false}
+      value={selected}
+      onValueChange={setSelected}
+      loop
+    >
       <CommandInput
         placeholder="Search or paste a path"
         aria-label="Search workspaces"
@@ -354,7 +365,10 @@ function WorkspaceListView({
                     {pending === workspace.id ? (
                       <PendingMark active />
                     ) : workspace.id === activeWorkspaceId ? (
-                      <Check className="size-4 shrink-0 text-secondary" aria-label="Current workspace" />
+                      <Check
+                        className="size-4 shrink-0 text-secondary"
+                        aria-label="Current workspace"
+                      />
                     ) : (
                       <span className="shrink-0 text-small text-tertiary">
                         {formatRelativeTime(lastActivityAt, now)}
@@ -394,15 +408,27 @@ function WorkspaceListView({
             {pending === "open-folder" ? (
               <PendingMark active />
             ) : openFolderShortcut ? (
-              <kbd className="shrink-0 font-sans text-small text-tertiary">{openFolderShortcut}</kbd>
+              <kbd className="shrink-0 font-sans text-small text-tertiary">
+                {openFolderShortcut}
+              </kbd>
             ) : null}
           </CommandItem>
         ) : null}
-        <CommandItem value="action:clone" disabled={disabled} onSelect={onClone} className={ROW_CLASS}>
+        <CommandItem
+          value="action:clone"
+          disabled={disabled}
+          onSelect={onClone}
+          className={ROW_CLASS}
+        >
           <FolderDown className="size-4.5 shrink-0 text-secondary" />
           <span className="flex-1">Clone repository…</span>
         </CommandItem>
-        <CommandItem value="action:scratch" disabled={disabled} onSelect={onScratch} className={ROW_CLASS}>
+        <CommandItem
+          value="action:scratch"
+          disabled={disabled}
+          onSelect={onScratch}
+          className={ROW_CLASS}
+        >
           <MessageSquare className="size-4.5 shrink-0 text-secondary" />
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="text-regular">Scratch chat</span>
@@ -420,7 +446,9 @@ function WorkspaceListView({
             <MessageCircle className="size-4.5 shrink-0 text-secondary" />
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="text-regular">{NO_WORKSPACE_LABEL}</span>
-              <span className="truncate text-small text-tertiary">Just chat, with your global settings</span>
+              <span className="truncate text-small text-tertiary">
+                Just chat, with your global settings
+              </span>
             </span>
             {pending === "no-workspace" ? (
               <PendingMark active />
@@ -459,7 +487,11 @@ function PathRowView({
   }
   if (row.action === "invalid") {
     return (
-      <p role="status" data-path-row="invalid" className="flex items-start gap-2 px-3 py-2.5 text-small text-secondary">
+      <p
+        role="status"
+        data-path-row="invalid"
+        className="flex items-start gap-2 px-3 py-2.5 text-small text-secondary"
+      >
         <CircleAlert className="mt-px size-4 shrink-0 text-tertiary" />
         <span className="min-w-0 flex-1">{row.message}</span>
       </p>
@@ -546,7 +578,10 @@ const CloneView = React.forwardRef<
           setPreview({
             state: "invalid",
             url: typedUrl,
-            reason: previewError instanceof Error ? previewError.message : "Aiden couldn't check that URL.",
+            reason:
+              previewError instanceof Error
+                ? previewError.message
+                : "Aiden couldn't check that URL.",
           });
         },
       );
@@ -557,12 +592,15 @@ const CloneView = React.forwardRef<
     };
   }, [typedUrl]);
 
-  const suggested = preview.state === "ready" && preview.url === typedUrl ? preview.destination : "";
+  const suggested =
+    preview.state === "ready" && preview.url === typedUrl ? preview.destination : "";
   const shownDestination = destinationEdited ? destination : suggested;
-  const invalidReason = preview.state === "invalid" && preview.url === typedUrl ? preview.reason : null;
+  const invalidReason =
+    preview.state === "invalid" && preview.url === typedUrl ? preview.reason : null;
   const running = cloneId !== null;
   const cloning = running || finishing;
-  const canClone = !cloning && Boolean(suggested) && (!destinationEdited || destination.trim().length > 0);
+  const canClone =
+    !cloning && Boolean(suggested) && (!destinationEdited || destination.trim().length > 0);
 
   React.useEffect(() => {
     onCloningChange(cloning);
@@ -586,10 +624,13 @@ const CloneView = React.forwardRef<
   }, []);
   React.useImperativeHandle(ref, () => ({ cancel }), [cancel]);
   // Leaving the view (or the menu unmounting) stops a running clone.
-  React.useEffect(() => () => {
-    const id = activeCloneRef.current;
-    if (id) void workspacesApi.cancelClone(id).catch(() => undefined);
-  }, []);
+  React.useEffect(
+    () => () => {
+      const id = activeCloneRef.current;
+      if (id) void workspacesApi.cancelClone(id).catch(() => undefined);
+    },
+    [],
+  );
 
   const startClone = async () => {
     if (!canClone) return;
@@ -609,7 +650,9 @@ const CloneView = React.forwardRef<
         // refresh the list. The draft stays where it is.
         if (result.ok) {
           await adoptWorkspace(queryClient, result.workspace);
-          toast.info(`${result.workspace.name} finished cloning before it could be cancelled. It is in your workspaces.`);
+          toast.info(
+            `${result.workspace.name} finished cloning before it could be cancelled. It is in your workspaces.`,
+          );
         }
         return;
       }
@@ -633,7 +676,9 @@ const CloneView = React.forwardRef<
       activeCloneRef.current = null;
       setCloneId(null);
       setProgress(null);
-      setError(cloneError instanceof Error ? cloneError.message : "Git couldn't clone that repository.");
+      setError(
+        cloneError instanceof Error ? cloneError.message : "Git couldn't clone that repository.",
+      );
     }
   };
 
@@ -722,7 +767,10 @@ const CloneView = React.forwardRef<
         </div>
       ) : null}
       {error ? (
-        <p role="alert" className="mx-1.5 mt-1 rounded-control bg-status-red-surface px-3 py-2 text-small text-status-red">
+        <p
+          role="alert"
+          className="mx-1.5 mt-1 rounded-control bg-status-red-surface px-3 py-2 text-small text-status-red"
+        >
           {error}
         </p>
       ) : null}
@@ -736,7 +784,12 @@ const CloneView = React.forwardRef<
             <Button variant="transparent" size="small" onClick={onBack}>
               Cancel
             </Button>
-            <Button variant="accent" size="small" disabled={!canClone} onClick={() => void startClone()}>
+            <Button
+              variant="accent"
+              size="small"
+              disabled={!canClone}
+              onClick={() => void startClone()}
+            >
               Clone
             </Button>
           </>

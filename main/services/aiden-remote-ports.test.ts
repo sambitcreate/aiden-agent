@@ -17,20 +17,17 @@ test("production and development reserve disjoint Aiden Remote port ranges", () 
   assert.equal(development[0], AIDEN_REMOTE_DEVELOPMENT_LAN_PORT);
   assert.equal(production.length, 64);
   assert.equal(development.length, 64);
-  assert.equal(production.some((port) => development.includes(port)), false);
+  assert.equal(
+    production.some((port) => development.includes(port)),
+    false,
+  );
   assert.equal(production[production.length - 1]! + 1 < development[0]!, true);
 });
 
 test("profile fallback candidates never enter the other profile's reserved range", () => {
   const customPreferredPort = 51_000;
-  const production = aidenRemotePortCandidatesForProfile(
-    "production",
-    customPreferredPort,
-  );
-  const development = aidenRemotePortCandidatesForProfile(
-    "development",
-    customPreferredPort,
-  );
+  const production = aidenRemotePortCandidatesForProfile("production", customPreferredPort);
+  const development = aidenRemotePortCandidatesForProfile("development", customPreferredPort);
 
   assert.equal(production[0], customPreferredPort);
   assert.equal(development[0], customPreferredPort);
@@ -39,17 +36,11 @@ test("profile fallback candidates never enter the other profile's reserved range
   assert.equal(production.includes(AIDEN_REMOTE_DEVELOPMENT_LAN_PORT), false);
   assert.equal(development.includes(AIDEN_REMOTE_PRODUCTION_LAN_PORT), false);
   assert.equal(
-    aidenRemotePortCandidatesForProfile(
-      "development",
-      AIDEN_REMOTE_PRODUCTION_LAN_PORT + 2,
-    )[0],
+    aidenRemotePortCandidatesForProfile("development", AIDEN_REMOTE_PRODUCTION_LAN_PORT + 2)[0],
     AIDEN_REMOTE_DEVELOPMENT_LAN_PORT,
   );
   assert.equal(
-    aidenRemotePortCandidatesForProfile(
-      "production",
-      AIDEN_REMOTE_DEVELOPMENT_LAN_PORT + 2,
-    )[0],
+    aidenRemotePortCandidatesForProfile("production", AIDEN_REMOTE_DEVELOPMENT_LAN_PORT + 2)[0],
     AIDEN_REMOTE_PRODUCTION_LAN_PORT,
   );
 });

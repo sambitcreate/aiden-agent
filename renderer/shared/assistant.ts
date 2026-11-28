@@ -246,7 +246,11 @@ function unsafeApprovalCodePoint(codePoint: number, multiline: boolean): boolean
 }
 
 /** Non-empty, trimmed, bounded text free of control and bidi characters (tabs and newlines only when multiline). */
-export function safeApprovalText(value: unknown, limit: number, multiline = false): value is string {
+export function safeApprovalText(
+  value: unknown,
+  limit: number,
+  multiline = false,
+): value is string {
   if (
     typeof value !== "string" ||
     value.length === 0 ||
@@ -529,13 +533,26 @@ export function isSubagentRunGrantApprovalDetails(
 ): value is SubagentRunGrantApprovalDetails {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const details = value as Record<string, unknown>;
-  if (!hasExactApprovalKeys(details, [
-    "kind", "lane", "runId", "childLabel", "workspaceLabel", "worktreeLabel",
-    "isManagedWorktree", "workspaceRevisionPrefix", "fullHostAccess", "noRollback",
-  ])) return false;
-  return details.kind === "subagent-run-grant" &&
+  if (
+    !hasExactApprovalKeys(details, [
+      "kind",
+      "lane",
+      "runId",
+      "childLabel",
+      "workspaceLabel",
+      "worktreeLabel",
+      "isManagedWorktree",
+      "workspaceRevisionPrefix",
+      "fullHostAccess",
+      "noRollback",
+    ])
+  )
+    return false;
+  return (
+    details.kind === "subagent-run-grant" &&
     (details.lane === "write" || details.lane === "shell") &&
-    typeof details.runId === "string" && /^[A-Za-z0-9._:-]{1,160}$/u.test(details.runId) &&
+    typeof details.runId === "string" &&
+    /^[A-Za-z0-9._:-]{1,160}$/u.test(details.runId) &&
     safeApprovalText(details.childLabel, SUBAGENT_WORKSPACE_WRITE_CHILD_LABEL_LIMIT) &&
     safeApprovalText(details.workspaceLabel, SUBAGENT_WORKSPACE_WRITE_WORKSPACE_LABEL_LIMIT) &&
     ((details.isManagedWorktree === false && details.worktreeLabel === null) ||
@@ -544,7 +561,8 @@ export function isSubagentRunGrantApprovalDetails(
     typeof details.workspaceRevisionPrefix === "string" &&
     /^[a-f0-9]{12}$/u.test(details.workspaceRevisionPrefix) &&
     details.fullHostAccess === (details.lane === "shell") &&
-    details.noRollback === (details.lane === "shell");
+    details.noRollback === (details.lane === "shell")
+  );
 }
 
 function safeByteCount(value: unknown): value is number {
@@ -616,8 +634,13 @@ export function isSubagentWorkspaceWriteApprovalDetails(
 /** Fail-closed renderer boundary for attended Assistant automation approvals. */
 /** A cron, or for a trigger task an empty cron with the trigger's label and no next run. */
 function scheduleWhenIsValid(details: Record<string, unknown>): boolean {
-  if (details.whenLabel === undefined) return safeApprovalText(details.cron, ASSISTANT_AUTOMATION_CRON_LIMIT);
-  return details.cron === "" && details.nextRunAt === 0 && safeApprovalText(details.whenLabel, ASSISTANT_AUTOMATION_CRON_LIMIT);
+  if (details.whenLabel === undefined)
+    return safeApprovalText(details.cron, ASSISTANT_AUTOMATION_CRON_LIMIT);
+  return (
+    details.cron === "" &&
+    details.nextRunAt === 0 &&
+    safeApprovalText(details.whenLabel, ASSISTANT_AUTOMATION_CRON_LIMIT)
+  );
 }
 
 export function isAssistantAutomationApprovalDetails(
@@ -740,7 +763,9 @@ export function isScheduledTaskApprovalDetails(
     (mcpServerIds.length === 0 || details.permission === "full") &&
     typeof details.legacyGlobalMcp === "boolean" &&
     typeof details.schedulerEnabled === "boolean" &&
-    (details.postsIn === undefined || details.postsIn === "this_chat" || details.postsIn === "own_chat")
+    (details.postsIn === undefined ||
+      details.postsIn === "this_chat" ||
+      details.postsIn === "own_chat")
   );
 }
 

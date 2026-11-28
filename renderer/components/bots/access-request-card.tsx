@@ -8,7 +8,11 @@ import { FolderOpen, Laptop } from "lucide-react";
 import { BotAvatar } from "../bot-avatar";
 import { AskCard, ApprovalActions, type ApprovalRememberOption } from "../approval-card-parts";
 import { DEFAULT_BOT_AVATAR, type BotAvatar as BotAvatarValue } from "../../shared/bots";
-import { botAccessCardTitle, type BotAccessChoice, type BotPendingAccessRequest } from "../../shared/bot-access-requests";
+import {
+  botAccessCardTitle,
+  type BotAccessChoice,
+  type BotPendingAccessRequest,
+} from "../../shared/bot-access-requests";
 
 export function AccessRequestCard({
   request,
@@ -38,7 +42,15 @@ export function AccessRequestCard({
   return (
     <AskCard
       label={title}
-      tile={<BotAvatar botId={request.botId} photoLoading="immediate" avatar={avatar} name={botName} size="large" />}
+      tile={
+        <BotAvatar
+          botId={request.botId}
+          photoLoading="immediate"
+          avatar={avatar}
+          name={botName}
+          size="large"
+        />
+      }
       title={
         <span className="inline-flex max-w-full items-center gap-1.5">
           <Icon aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
@@ -48,14 +60,18 @@ export function AccessRequestCard({
       actions={
         <ApprovalActions
           onDeny={() => onAnswer("not_now")}
-          {...(request.choices.includes("once") ? { allowLabel: "Allow once", onAllow: () => onAnswer("once") } : {})}
+          {...(request.choices.includes("once")
+            ? { allowLabel: "Allow once", onAllow: () => onAnswer("once") }
+            : {})}
           rememberOptions={remember}
           disabled={busy}
         />
       }
     >
       <div className="mt-2.5 text-center text-small text-secondary">
-        {request.target === "folder" && request.place ? <p className="text-tertiary">{request.place}</p> : null}
+        {request.target === "folder" && request.place ? (
+          <p className="text-tertiary">{request.place}</p>
+        ) : null}
         <p className="whitespace-pre-line">{request.why}</p>
         {request.target === "folder" && request.approvalCount !== undefined ? (
           <p className="mt-1 text-tertiary">{`You’ve allowed this folder ${request.approvalCount} times in the last 2 weeks.`}</p>

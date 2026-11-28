@@ -156,7 +156,11 @@ test("prepared migration commits across filesystem generation changes when V1 by
     v1.generation = "b-1-1-1-1-1-1-1-1";
   };
 
-  const migrated = await migrateSubagentRunStoreV2(memoryStorage(v1), memoryStorage(v2), () => 3_000);
+  const migrated = await migrateSubagentRunStoreV2(
+    memoryStorage(v1),
+    memoryStorage(v2),
+    () => 3_000,
+  );
   assert.equal(migrated.migration.status, "committed");
   assert.equal(v2.writes, 2);
 });
@@ -194,7 +198,9 @@ test("invalid V1 and corrupt V2 evidence fail closed without fallback or rewrite
     writes: 0,
   };
   const missingV2: MemoryStorageState = { generation: "missing", writes: 0 };
-  await assert.rejects(migrateSubagentRunStoreV2(memoryStorage(emptyFileV1), memoryStorage(missingV2)));
+  await assert.rejects(
+    migrateSubagentRunStoreV2(memoryStorage(emptyFileV1), memoryStorage(missingV2)),
+  );
   assert.equal(emptyFileV1.writes, 0);
   assert.equal(missingV2.writes, 0);
 

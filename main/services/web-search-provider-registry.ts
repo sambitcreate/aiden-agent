@@ -467,4 +467,3 @@ export function webSearchAdapterFactory(providerId: unknown): WebSearchAdapterFa
 export function webSearchAdapterAvailable(providerId: unknown): boolean {
   return webSearchAdapterFactory(providerId) !== undefined;
 }
-

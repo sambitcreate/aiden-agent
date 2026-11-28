@@ -178,10 +178,22 @@ test("session guards gate display-capture only and install exactly once", () => 
   assert.deepEqual(installed.opts, { useSystemPicker: true });
 
   const details = { isMainFrame: true, requestingUrl: frame.url } as Electron.PermissionRequest;
-  const audioCheckDetails = { ...details, mediaType: "audio" } as Electron.PermissionCheckHandlerHandlerDetails;
-  const videoCheckDetails = { ...details, mediaType: "video" } as Electron.PermissionCheckHandlerHandlerDetails;
-  const audioRequestDetails = { ...details, mediaTypes: ["audio"] } as Electron.MediaAccessPermissionRequest;
-  const videoRequestDetails = { ...details, mediaTypes: ["video"] } as Electron.MediaAccessPermissionRequest;
+  const audioCheckDetails = {
+    ...details,
+    mediaType: "audio",
+  } as Electron.PermissionCheckHandlerHandlerDetails;
+  const videoCheckDetails = {
+    ...details,
+    mediaType: "video",
+  } as Electron.PermissionCheckHandlerHandlerDetails;
+  const audioRequestDetails = {
+    ...details,
+    mediaTypes: ["audio"],
+  } as Electron.MediaAccessPermissionRequest;
+  const videoRequestDetails = {
+    ...details,
+    mediaTypes: ["video"],
+  } as Electron.MediaAccessPermissionRequest;
   // Without a Live binding every display-capture path denies.
   assert.equal(
     installed.check?.(
@@ -217,37 +229,75 @@ test("session guards gate display-capture only and install exactly once", () => 
     true,
   );
   assert.equal(
-    installed.check?.(sender as unknown as Electron.WebContents, "media", "file:///Aiden/", audioCheckDetails),
+    installed.check?.(
+      sender as unknown as Electron.WebContents,
+      "media",
+      "file:///Aiden/",
+      audioCheckDetails,
+    ),
     true,
     "the exact bound document keeps microphone access",
   );
   granted = null;
-  installed.request?.(sender as unknown as Electron.WebContents, "media", (next) => {
-    granted = next;
-  }, audioRequestDetails);
+  installed.request?.(
+    sender as unknown as Electron.WebContents,
+    "media",
+    (next) => {
+      granted = next;
+    },
+    audioRequestDetails,
+  );
   assert.equal(granted, true);
   assert.equal(
-    installed.check?.(sender as unknown as Electron.WebContents, "media", "file:///Aiden/", videoCheckDetails),
+    installed.check?.(
+      sender as unknown as Electron.WebContents,
+      "media",
+      "file:///Aiden/",
+      videoCheckDetails,
+    ),
     false,
   );
   granted = null;
-  installed.request?.(sender as unknown as Electron.WebContents, "media", (next) => {
-    granted = next;
-  }, videoRequestDetails);
+  installed.request?.(
+    sender as unknown as Electron.WebContents,
+    "media",
+    (next) => {
+      granted = next;
+    },
+    videoRequestDetails,
+  );
   assert.equal(granted, false);
   // Linux's getDisplayMedia asks for "media" with no camera or microphone types.
   granted = null;
-  installed.request?.(sender as unknown as Electron.WebContents, "media", (next) => {
-    granted = next;
-  }, { ...details, mediaTypes: [] } as unknown as Electron.MediaAccessPermissionRequest);
+  installed.request?.(
+    sender as unknown as Electron.WebContents,
+    "media",
+    (next) => {
+      granted = next;
+    },
+    { ...details, mediaTypes: [] } as unknown as Electron.MediaAccessPermissionRequest,
+  );
   assert.equal(granted, true);
   granted = null;
-  installed.request?.(sender as unknown as Electron.WebContents, "media", (next) => {
-    granted = next;
-  }, { ...details, mediaTypes: ["audio", "video"] } as unknown as Electron.MediaAccessPermissionRequest);
+  installed.request?.(
+    sender as unknown as Electron.WebContents,
+    "media",
+    (next) => {
+      granted = next;
+    },
+    {
+      ...details,
+      mediaTypes: ["audio", "video"],
+    } as unknown as Electron.MediaAccessPermissionRequest,
+  );
   assert.equal(granted, false, "a camera and microphone request stays denied");
   assert.equal(
-    installed.check?.(sender as unknown as Electron.WebContents, "notifications", "file:///Aiden/", details),
+    installed.check?.(
+      sender as unknown as Electron.WebContents,
+      "notifications",
+      "file:///Aiden/",
+      details,
+    ),
     false,
   );
   assert.equal(installed.check?.(null, "media", "file:///Aiden/", details), false);
@@ -295,13 +345,17 @@ test("with a source resolver (Linux) only a still-bound document's request gets 
   const chosen = { id: "window:9:0", name: "Editor" } as Electron.DesktopCapturerSource;
   const resolved: Array<string | null> = [];
   let releaseResolve: (() => void) | null = null;
-  const dispose = installGeminiLiveDisplayMediaGuards(electronSession, () => bindings, async (binding) => {
-    resolved.push(binding.sourceId);
-    await new Promise<void>((resolve) => {
-      releaseResolve = resolve;
-    });
-    return chosen;
-  });
+  const dispose = installGeminiLiveDisplayMediaGuards(
+    electronSession,
+    () => bindings,
+    async (binding) => {
+      resolved.push(binding.sourceId);
+      await new Promise<void>((resolve) => {
+        releaseResolve = resolve;
+      });
+      return chosen;
+    },
+  );
   const ask = () =>
     new Promise<Electron.Streams>((resolve) => display?.(displayRequest(frame), resolve));
 

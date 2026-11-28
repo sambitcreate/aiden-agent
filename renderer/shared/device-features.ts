@@ -72,7 +72,9 @@ export function deviceFeatureCapabilities(
     erase: local,
     clipboardPaste: local,
     clipboardCopy:
-      platform === "android" ? { available: false, reason: ANDROID_CLIPBOARD_COPY_REASON } : { available: true },
+      platform === "android"
+        ? { available: false, reason: ANDROID_CLIPBOARD_COPY_REASON }
+        : { available: true },
     recording: local,
     recordingMaxMs: deviceRecordingMaxMs(platform),
     screenshotSave: true,
@@ -113,11 +115,14 @@ export function isDeviceChatId(value: unknown): value is string {
 
 const CLIPBOARD_TOO_LARGE = `The clipboard text is larger than ${DEVICE_CLIPBOARD_MAX_BYTES / 1024} KB.`;
 
-export type DeviceClipboardCheck = { ok: true; text: string; bytes: number } | { ok: false; reason: string };
+export type DeviceClipboardCheck =
+  | { ok: true; text: string; bytes: number }
+  | { ok: false; reason: string };
 
 /** Only non-empty text up to `DEVICE_CLIPBOARD_MAX_BYTES` of UTF-8 crosses to or from a device. */
 export function checkDeviceClipboardText(value: unknown): DeviceClipboardCheck {
-  if (typeof value !== "string") return { ok: false, reason: "Only text can be pasted to the device." };
+  if (typeof value !== "string")
+    return { ok: false, reason: "Only text can be pasted to the device." };
   if (value.length === 0) return { ok: false, reason: "The clipboard has no text." };
   // A UTF-16 length over the cap is always over it in UTF-8 too; skip encoding huge strings.
   if (value.length > DEVICE_CLIPBOARD_MAX_BYTES) return { ok: false, reason: CLIPBOARD_TOO_LARGE };
@@ -159,7 +164,8 @@ export function parseDeviceRecordingInfo(value: unknown): DeviceRecordingInfo | 
   if (!(DEVICE_RECORDING_STATUSES as readonly unknown[]).includes(status)) return null;
   if (!finiteNumber(startedAt) || !finiteNumber(endsBy)) return null;
   if (stoppedAt !== undefined && !finiteNumber(stoppedAt)) return null;
-  if (reason !== undefined && reason !== "user" && reason !== "max-duration" && reason !== "exited") return null;
+  if (reason !== undefined && reason !== "user" && reason !== "max-duration" && reason !== "exited")
+    return null;
   if (error !== undefined && typeof error !== "string") return null;
   return {
     id,
@@ -198,7 +204,11 @@ export function parseDeviceSaveResult(value: unknown): DeviceSaveResult | null {
 }
 
 /** `Name-2026-10-08-142530.ext`: the device name kept readable and safe for every file system. */
-export function deviceCaptureFileName(deviceName: string, at: Date, extension: "png" | "mp4"): string {
+export function deviceCaptureFileName(
+  deviceName: string,
+  at: Date,
+  extension: "png" | "mp4",
+): string {
   const name =
     deviceName
       .normalize("NFKC")

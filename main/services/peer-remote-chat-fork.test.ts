@@ -6,7 +6,11 @@ import { FakeHost, FEATURES, UNHANDLED, setup } from "./peer-remote-chat-test-ho
 import { PeerTransportError, type PeerRequest } from "./peer-transport.js";
 import { ChatIntentLedger } from "../../renderer/lib/hosts/chat-intent-ledger.js";
 import { ChatSessionControl } from "../../renderer/lib/hosts/chat-session-control.js";
-import { HostChatControlError, hostResultValue, isOutcomeUnknown } from "../../renderer/lib/hosts/host-chat-adapter.js";
+import {
+  HostChatControlError,
+  hostResultValue,
+  isOutcomeUnknown,
+} from "../../renderer/lib/hosts/host-chat-adapter.js";
 import type { Chat, ChatMessage } from "../../renderer/lib/types.js";
 
 /**
@@ -28,7 +32,16 @@ function source(): ChatMessage[] {
       role: "user",
       content: "Fix it.",
       createdAt: 1_300,
-      attachments: [{ id: "stored-notes", name: "notes.txt", mimeType: "text/plain", kind: "text", size: 5, text: "notes" }],
+      attachments: [
+        {
+          id: "stored-notes",
+          name: "notes.txt",
+          mimeType: "text/plain",
+          kind: "text",
+          size: 5,
+          text: "notes",
+        },
+      ],
     },
     { id: "a2", role: "assistant", content: "Fixed.", createdAt: 1_400 },
   ];
@@ -49,7 +62,10 @@ function forkingHost(features = FORK_FEATURES) {
   const unused = {} as never;
   const chats = new AidenRemoteChatService({
     application: {
-      list: async () => [{ id: host.chat.id, title: host.chat.title }, ...[...forks.values()].map(({ id, title }) => ({ id, title }))],
+      list: async () => [
+        { id: host.chat.id, title: host.chat.title },
+        ...[...forks.values()].map(({ id, title }) => ({ id, title })),
+      ],
       get: async (id: string) => ({ chat: chatById(id) ?? null }),
     } as unknown as ConstructorParameters<typeof AidenRemoteChatService>[0]["application"],
     chatStore: unused,
@@ -71,7 +87,8 @@ function forkingHost(features = FORK_FEATURES) {
           caller.admitWorkspace(chat.workspaceId!).release();
           const { messageId, position } = request.forkAt!;
           const cut = chat.messages.findIndex((message) => message.id === messageId);
-          if (cut < 0) throw new ChatForkError("message_not_found", "That message is no longer in this chat.");
+          if (cut < 0)
+            throw new ChatForkError("message_not_found", "That message is no longer in this chat.");
           const id = `fork-${forks.size + 1}`;
           const kept = chat.messages
             .slice(0, position === "after" ? cut + 1 : cut)
@@ -91,7 +108,9 @@ function forkingHost(features = FORK_FEATURES) {
                     summary: {
                       state: "pending" as const,
                       afterMessageId: kept[kept.length - 1]!.id,
-                      ...(request.summary.instructions ? { instructions: request.summary.instructions } : {}),
+                      ...(request.summary.instructions
+                        ? { instructions: request.summary.instructions }
+                        : {}),
                     },
                   }
                 : {}),
@@ -103,11 +122,19 @@ function forkingHost(features = FORK_FEATURES) {
       },
       admitWorkspace: () => ({ isAborted: () => false, release: () => undefined }),
       summaries: {
-        retry: async (chatId) => settle(chatId, "failed", (lineage) => ({ ...lineage, summary: { ...lineage.summary!, state: "pending" } })),
-        skip: async (chatId) => settle(chatId, "failed", ({ summary: _summary, ...lineage }) => lineage),
+        retry: async (chatId) =>
+          settle(chatId, "failed", (lineage) => ({
+            ...lineage,
+            summary: { ...lineage.summary!, state: "pending" },
+          })),
+        skip: async (chatId) =>
+          settle(chatId, "failed", ({ summary: _summary, ...lineage }) => lineage),
         cancel: (chatId) => {
           if (forks.get(chatId)?.forkedFrom?.summary?.state !== "pending") return false;
-          void settle(chatId, "pending", (lineage) => ({ ...lineage, summary: { ...lineage.summary!, state: "failed", error: "Summary cancelled." } }));
+          void settle(chatId, "pending", (lineage) => ({
+            ...lineage,
+            summary: { ...lineage.summary!, state: "failed", error: "Summary cancelled." },
+          }));
           return true;
         },
       },
@@ -115,9 +142,14 @@ function forkingHost(features = FORK_FEATURES) {
   });
 
   /** Moves a fork's summary on from `from`, or refuses like the real summarizer. */
-  async function settle(chatId: string, from: "pending" | "failed", next: (lineage: NonNullable<Chat["forkedFrom"]>) => Chat["forkedFrom"]) {
+  async function settle(
+    chatId: string,
+    from: "pending" | "failed",
+    next: (lineage: NonNullable<Chat["forkedFrom"]>) => Chat["forkedFrom"],
+  ) {
     const fork = forks.get(chatId);
-    if (fork?.forkedFrom?.summary?.state !== from) throw new ForkSummaryStateError("The fork summary changed.");
+    if (fork?.forkedFrom?.summary?.state !== from)
+      throw new ForkSummaryStateError("The fork summary changed.");
     const updated = { ...fork, forkedFrom: next(fork.forkedFrom), updatedAt: fork.updatedAt + 1 };
     forks.set(chatId, updated);
     return updated;
@@ -129,7 +161,13 @@ function forkingHost(features = FORK_FEATURES) {
     const fork = /^\/chats\/([^/]+)\/fork$/u.exec(url.pathname);
     if (fork && input.method === "POST") {
       forkRequests.push(input);
-      const result = await chats.fork(deviceId, fork[1]!, input.revision ?? "", input.idempotencyKey ?? "", input.body);
+      const result = await chats.fork(
+        deviceId,
+        fork[1]!,
+        input.revision ?? "",
+        input.idempotencyKey ?? "",
+        input.body,
+      );
       if (dropForkAcks > 0) {
         dropForkAcks -= 1;
         throw new PeerTransportError("unavailable");
@@ -168,7 +206,11 @@ async function open(features?: string[]) {
   // One window: every pane opened on a chat shares its intent ledger.
   const ledger = new ChatIntentLedger();
   const control = (chatId = "chat-1") => {
-    const next = new ChatSessionControl(harness.adapter, { hostId: harness.adapter.hostId, chatId }, ledger);
+    const next = new ChatSessionControl(
+      harness.adapter,
+      { hostId: harness.adapter.hostId, chatId },
+      ledger,
+    );
     next.attach();
     return next;
   };
@@ -190,7 +232,10 @@ test("a fork whose answer is lost is retried under the same key and makes one co
   try {
     const first = control();
     dropNextForkAck();
-    await assert.rejects(first.fork({ messageId: "a1", position: "after" }, revision), isOutcomeUnknown);
+    await assert.rejects(
+      first.fork({ messageId: "a1", position: "after" }, revision),
+      isOutcomeUnknown,
+    );
     assert.equal(forks.size, 1, "the host made the fork before its answer was lost");
 
     // The user leaves the chat and comes back: the reopened pane gets a new control.
@@ -200,7 +245,12 @@ test("a fork whose answer is lost is retried under the same key and makes one co
     assert.equal(forks.size, 1, "the retry replayed the first fork instead of copying again");
     assert.equal(forked.id, "fork-1");
     assert.equal(forked.title, "Release notes (fork)");
-    assert.deepEqual(forked.forkedFrom, { chatId: "chat-1", messageId: "a1", position: "after", at: 5_000 });
+    assert.deepEqual(forked.forkedFrom, {
+      chatId: "chat-1",
+      messageId: "a1",
+      position: "after",
+      at: 5_000,
+    });
     assert.equal(forked.prefill, undefined, "a fork after a reply hands nothing back to edit");
     assert.equal(forkRequests.length, 2);
     assert.equal(forkRequests[1]!.idempotencyKey, forkRequests[0]!.idempotencyKey);
@@ -214,7 +264,11 @@ test("a fork whose answer is lost is retried under the same key and makes one co
     await pane.fork({ messageId: "a1", position: "after" }, revision);
     assert.equal(forks.size, 3);
     assert.notEqual(forkRequests[3]!.idempotencyKey, forkRequests[0]!.idempotencyKey);
-    assert.deepEqual(host.chat.messages.map((message) => message.id), ["u1", "a1", "u2", "a2"], "the source is untouched");
+    assert.deepEqual(
+      host.chat.messages.map((message) => message.id),
+      ["u1", "a1", "u2", "a2"],
+      "the source is untouched",
+    );
   } finally {
     harness.close();
   }
@@ -224,7 +278,10 @@ test("a fork against a chat that changed on the host is refused and copies nothi
   const { host, forks, harness, control, revision } = await open();
   try {
     host.append({ id: "u3", role: "user", content: "One more thing", createdAt: 1_500 });
-    await assert.rejects(control().fork({ messageId: "a1", position: "after" }, revision), remote("revision_conflict"));
+    await assert.rejects(
+      control().fork({ messageId: "a1", position: "after" }, revision),
+      remote("revision_conflict"),
+    );
     assert.equal(forks.size, 0);
   } finally {
     harness.close();
@@ -236,8 +293,17 @@ test("editing a prompt in a fork hands its text back and stages its files on the
   try {
     const forked = await control().fork({ messageId: "u2", position: "before" }, revision);
     assert.equal(forked.prefill?.text, "Fix it.");
-    assert.equal(forked.prefill?.attachmentIds.length, 1, "the prompt's file was staged for the fork");
-    assert.deepEqual(forked.forkedFrom, { chatId: "chat-1", messageId: "u2", position: "before", at: 5_000 });
+    assert.equal(
+      forked.prefill?.attachmentIds.length,
+      1,
+      "the prompt's file was staged for the fork",
+    );
+    assert.deepEqual(forked.forkedFrom, {
+      chatId: "chat-1",
+      messageId: "u2",
+      position: "before",
+      at: 5_000,
+    });
     assert.deepEqual(
       forks.get(forked.id)?.messages.map((message) => message.content),
       ["Why does the build fail?", "A missing token."],
@@ -252,7 +318,10 @@ test("a host without fork support refuses forks before anything is sent", async 
   const { forkRequests, harness, control, revision } = await open(FEATURES);
   try {
     assert.equal(harness.adapter.capabilities().has("fork"), false);
-    await assert.rejects(control().fork({ messageId: "a1", position: "after" }, revision), code("unsupported"));
+    await assert.rejects(
+      control().fork({ messageId: "a1", position: "after" }, revision),
+      code("unsupported"),
+    );
     assert.equal(forkRequests.length, 0);
   } finally {
     harness.close();
@@ -260,10 +329,16 @@ test("a host without fork support refuses forks before anything is sent", async 
 });
 
 test("a host that forks but cannot summarize refuses only the summary actions", async () => {
-  const { forks, forkRequests, harness, control, revision } = await open([...FEATURES, "chat-fork-v1"]);
+  const { forks, forkRequests, harness, control, revision } = await open([
+    ...FEATURES,
+    "chat-fork-v1",
+  ]);
   try {
     const pane = control();
-    await assert.rejects(pane.fork({ messageId: "a1", position: "after", summary: {} }, revision), code("unsupported"));
+    await assert.rejects(
+      pane.fork({ messageId: "a1", position: "after", summary: {} }, revision),
+      code("unsupported"),
+    );
     assert.equal(forkRequests.length, 0);
 
     const forked = await pane.fork({ messageId: "a1", position: "after" }, revision);
@@ -278,8 +353,15 @@ test("a host that forks but cannot summarize refuses only the summary actions", 
 test("a fork with a summary can be cancelled, retried and skipped from the paired Mac", async () => {
   const { forks, harness, control, revision } = await open();
   try {
-    const forked = await control().fork({ messageId: "a1", position: "after", summary: { instructions: "the token" } }, revision);
-    assert.deepEqual(forked.forkedFrom.summary, { state: "pending", afterMessageId: "fork-1-a1", instructions: "the token" });
+    const forked = await control().fork(
+      { messageId: "a1", position: "after", summary: { instructions: "the token" } },
+      revision,
+    );
+    assert.deepEqual(forked.forkedFrom.summary, {
+      state: "pending",
+      afterMessageId: "fork-1-a1",
+      instructions: "the token",
+    });
 
     const fork = control(forked.id);
     assert.equal(await fork.cancelForkSummary(), true);
@@ -296,7 +378,11 @@ test("a fork with a summary can be cancelled, retried and skipped from the paire
     assert.equal(retried.forkedFrom?.summary?.instructions, "the token", "a retry keeps the focus");
     assert.notEqual(retried.revision, read.revision);
 
-    await assert.rejects(fork.forkSummary("skip"), remote("revision_conflict"), "only a failed summary can be skipped");
+    await assert.rejects(
+      fork.forkSummary("skip"),
+      remote("revision_conflict"),
+      "only a failed summary can be skipped",
+    );
     await fork.cancelForkSummary();
     const skipped = await fork.forkSummary("skip");
     assert.equal(skipped.forkedFrom?.summary, undefined, "the fork continues as a plain fork");
@@ -312,19 +398,30 @@ test("the host's refusals reach the pane with their codes and whether waiting he
     failNextFork(new ChatForkError("busy", "A response is still running."));
     await assert.rejects(
       control().fork({ messageId: "a1", position: "after" }, revision),
-      (error: unknown) => remote("operation_in_progress")(error) && (error as HostChatControlError).retryable === true,
+      (error: unknown) =>
+        remote("operation_in_progress")(error) &&
+        (error as HostChatControlError).retryable === true,
     );
 
     failNextFork(new ChatForkError("unavailable", "Forking is turned off."));
     await assert.rejects(
       control().fork({ messageId: "a1", position: "after" }, revision),
-      (error: unknown) => remote("operation_in_progress")(error) && (error as HostChatControlError).retryable !== true,
+      (error: unknown) =>
+        remote("operation_in_progress")(error) &&
+        (error as HostChatControlError).retryable !== true,
     );
 
-    await assert.rejects(control().fork({ messageId: "gone", position: "after" }, revision), remote("not_found"));
+    await assert.rejects(
+      control().fork({ messageId: "gone", position: "after" }, revision),
+      remote("not_found"),
+    );
     assert.equal(forks.size, 0);
 
-    await assert.rejects(control().forkSummary("retry"), remote("not_found"), "a chat that isn't a summarized fork has no summary");
+    await assert.rejects(
+      control().forkSummary("retry"),
+      remote("not_found"),
+      "a chat that isn't a summarized fork has no summary",
+    );
   } finally {
     harness.close();
   }

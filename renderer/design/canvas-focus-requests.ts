@@ -12,11 +12,15 @@ const latest = new Map<string, CanvasFocusRequest>();
 let installed = false;
 
 /** Parses a `designCanvas:focus` payload; null for another shape. */
-export function canvasFocusFrom(payload: unknown): { chatId: string; request: CanvasFocusRequest } | null {
+export function canvasFocusFrom(
+  payload: unknown,
+): { chatId: string; request: CanvasFocusRequest } | null {
   if (!payload || typeof payload !== "object") return null;
   const { chatId, frameIds } = payload as { chatId?: unknown; frameIds?: unknown };
   if (typeof chatId !== "string") return null;
-  const ids = Array.isArray(frameIds) ? frameIds.filter((id): id is string => typeof id === "string") : [];
+  const ids = Array.isArray(frameIds)
+    ? frameIds.filter((id): id is string => typeof id === "string")
+    : [];
   return { chatId, request: { ids, at: Date.now() } };
 }
 

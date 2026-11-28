@@ -52,10 +52,20 @@ function invokeEvent(sender: FakeWebContents, frame: FakeFrame | null): IpcMainI
 }
 
 const BUNDLED = {
-  openai: { id: "openai", models: { "gpt-x": { id: "gpt-x", name: "GPT X (bundled)", limit: { context: 1_000, output: 100 } } } },
+  openai: {
+    id: "openai",
+    models: {
+      "gpt-x": { id: "gpt-x", name: "GPT X (bundled)", limit: { context: 1_000, output: 100 } },
+    },
+  },
 };
 const REMOTE = {
-  openai: { id: "openai", models: { "gpt-x": { id: "gpt-x", name: "GPT X (models.dev)", limit: { context: 9_000, output: 900 } } } },
+  openai: {
+    id: "openai",
+    models: {
+      "gpt-x": { id: "gpt-x", name: "GPT X (models.dev)", limit: { context: 9_000, output: 900 } },
+    },
+  },
 };
 
 interface RecordedRequest {

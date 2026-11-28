@@ -92,7 +92,11 @@ export function WorkspaceAgentArt() {
           <ArtComposer style={{ left: 9, right: 9, top: 150 }} />
         </div>
       </ArtWindow>
-      <ArtWindow raised className="oa-ws-queued oa-anim-float" style={{ left: 16, top: 62, width: 150 }}>
+      <ArtWindow
+        raised
+        className="oa-ws-queued oa-anim-float"
+        style={{ left: 16, top: 62, width: 150 }}
+      >
         <div className="oa-ws-queued-head">
           <ArtIcon icon={ListPlus} />
           Queued
@@ -149,14 +153,28 @@ export function ReviewDiffsArt() {
         <span className="oa-diff-sign">+</span>
         <Bar width="52%" />
       </div>
-      {["64%", "48%", "72%", "38%", "58%", "66%", "44%", "70%", "52%", "60%", "36%", "62%", "50%", "68%", "42%"].map(
-        (width, index) => (
-          <div key={index} className="oa-diff-line">
-            <i className="oa-diff-gutter" />
-            <Bar width={width} tone="soft" />
-          </div>
-        ),
-      )}
+      {[
+        "64%",
+        "48%",
+        "72%",
+        "38%",
+        "58%",
+        "66%",
+        "44%",
+        "70%",
+        "52%",
+        "60%",
+        "36%",
+        "62%",
+        "50%",
+        "68%",
+        "42%",
+      ].map((width, index) => (
+        <div key={index} className="oa-diff-line">
+          <i className="oa-diff-gutter" />
+          <Bar width={width} tone="soft" />
+        </div>
+      ))}
     </ArtWindow>
   );
 }
@@ -178,7 +196,9 @@ export function TerminalArt() {
           <div>
             <span className="oa-term-prompt">❯</span> npm test
           </div>
-          <div className="oa-add" style={{ fontWeight: 500 }}>✓ 128 passed</div>
+          <div className="oa-add" style={{ fontWeight: 500 }}>
+            ✓ 128 passed
+          </div>
           <div style={{ color: "var(--text-tertiary)" }}>2 skipped · 3.1s</div>
           <div>
             <span className="oa-term-prompt">❯</span> git status
@@ -188,7 +208,9 @@ export function TerminalArt() {
           <div>
             <span className="oa-term-prompt">❯</span> npm run build
           </div>
-          <div className="oa-add" style={{ fontWeight: 500 }}>✓ built in 4.2s</div>
+          <div className="oa-add" style={{ fontWeight: 500 }}>
+            ✓ built in 4.2s
+          </div>
           <div>
             <span className="oa-term-prompt">❯</span> <i className="oa-term-cursor oa-anim-blink" />
           </div>
@@ -215,16 +237,52 @@ export function GitWorkflowsArt() {
         viewBox="0 0 108 54"
         style={{ left: 10, top: 12, width: 108, height: 54 }}
       >
-        <path d="M4 42H104" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" />
-        <path d="M38 42C52 42 50 14 64 14H100" stroke="var(--accent)" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+        <path
+          d="M4 42H104"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          fill="none"
+          strokeLinecap="round"
+        />
+        <path
+          d="M38 42C52 42 50 14 64 14H100"
+          stroke="var(--accent)"
+          strokeWidth="1.5"
+          fill="none"
+          strokeLinecap="round"
+        />
         {[14, 38, 80].map((cx) => (
-          <circle key={cx} cx={cx} cy="42" r="3.4" fill="var(--oa-surface)" stroke="currentColor" strokeWidth="1.5" />
+          <circle
+            key={cx}
+            cx={cx}
+            cy="42"
+            r="3.4"
+            fill="var(--oa-surface)"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          />
         ))}
-        <circle cx="68" cy="14" r="3.4" fill="var(--oa-surface)" stroke="var(--accent)" strokeWidth="1.5" />
-        <circle className="oa-anim-pulse" cx="94" cy="14" r="5.5" fill="var(--surface-list-selection)" />
+        <circle
+          cx="68"
+          cy="14"
+          r="3.4"
+          fill="var(--oa-surface)"
+          stroke="var(--accent)"
+          strokeWidth="1.5"
+        />
+        <circle
+          className="oa-anim-pulse"
+          cx="94"
+          cy="14"
+          r="5.5"
+          fill="var(--surface-list-selection)"
+        />
         <circle cx="94" cy="14" r="3.4" fill="var(--accent)" />
       </svg>
-      <ArtWindow className="oa-stack" style={{ left: 126, top: 10, width: 168, padding: 7, gap: 6 }}>
+      <ArtWindow
+        className="oa-stack"
+        style={{ left: 126, top: 10, width: 168, padding: 7, gap: 6 }}
+      >
         <span className="oa-git-branch">
           <ArtIcon icon={GitBranch} />
           feature/art
@@ -243,7 +301,12 @@ export function GitWorkflowsArt() {
           <ArtButton variant="ghost" icon={Upload}>
             Push
           </ArtButton>
-          <ArtButton variant="primary" icon={GitPullRequest} className="oa-anim-press" style={{ animationDelay: "0.4s" }}>
+          <ArtButton
+            variant="primary"
+            icon={GitPullRequest}
+            className="oa-anim-press"
+            style={{ animationDelay: "0.4s" }}
+          >
             Open PR
           </ArtButton>
         </div>
@@ -251,7 +314,6 @@ export function GitWorkflowsArt() {
     </>
   );
 }
-
 
 export function ComputerUseArt() {
   return (
@@ -317,103 +379,125 @@ export function ComputerUseArt() {
 export function NativeSubagentsArt() {
   return (
     <div className="oa-sub-stage">
-    <ArtWindow className="oa-sub-window" style={{ left: 10, top: 10, width: 150, height: 250 }}>
-      <div className="oa-sub-heading">Active · 2</div>
-      <div className="oa-sub-row oa-selected">
-        <span className="oa-sub-twisty">
-          <ArtIcon icon={ChevronDown} />
-        </span>
-        <AidenActivityMark mark="quad-shuffle" size={10} className="oa-sub-mark" />
-        <span className="oa-sub-text">
-          <Bar width="70%" tone="ink" />
-          <span>Implementer</span>
-        </span>
-        <span className="oa-sub-state">Running</span>
-      </div>
-      <div className="oa-sub-row" data-level="2" data-dim="">
-        <span className="oa-sub-twisty" />
-        <AidenActivityMark mark="bounce" size={10} active={false} className="oa-sub-mark" />
-        <span className="oa-sub-text">
-          <Bar width="58%" tone="ink" />
-          <span>Scout</span>
-        </span>
-        <span className="oa-sub-state">Queued</span>
-      </div>
-      <div className="oa-sub-heading">Done · 3</div>
-      <div className="oa-sub-row">
-        <span className="oa-sub-twisty" />
-        <span className="oa-sub-done">
-          <ArtIcon icon={Check} />
-        </span>
-        <span className="oa-sub-text">
-          <Bar width="64%" tone="ink" />
-          <span>Reviewer</span>
-        </span>
-        <span className="oa-sub-state">Done</span>
-      </div>
-      <div className="oa-sub-row">
-        <span className="oa-sub-twisty" />
-        <span className="oa-sub-done">
-          <ArtIcon icon={Check} />
-        </span>
-        <span className="oa-sub-text">
-          <Bar width="52%" tone="ink" />
-          <span>Planner</span>
-        </span>
-        <span className="oa-sub-state">Done</span>
-      </div>
-      <div className="oa-sub-row">
-        <span className="oa-sub-twisty" />
-        <span className="oa-sub-done">
-          <ArtIcon icon={Check} />
-        </span>
-        <span className="oa-sub-text">
-          <Bar width="46%" tone="ink" />
-          <span>Scout</span>
-        </span>
-        <span className="oa-sub-state">Done</span>
-      </div>
-    </ArtWindow>
-    {/*
+      <ArtWindow className="oa-sub-window" style={{ left: 10, top: 10, width: 150, height: 250 }}>
+        <div className="oa-sub-heading">Active · 2</div>
+        <div className="oa-sub-row oa-selected">
+          <span className="oa-sub-twisty">
+            <ArtIcon icon={ChevronDown} />
+          </span>
+          <AidenActivityMark mark="quad-shuffle" size={10} className="oa-sub-mark" />
+          <span className="oa-sub-text">
+            <Bar width="70%" tone="ink" />
+            <span>Implementer</span>
+          </span>
+          <span className="oa-sub-state">Running</span>
+        </div>
+        <div className="oa-sub-row" data-level="2" data-dim="">
+          <span className="oa-sub-twisty" />
+          <AidenActivityMark mark="bounce" size={10} active={false} className="oa-sub-mark" />
+          <span className="oa-sub-text">
+            <Bar width="58%" tone="ink" />
+            <span>Scout</span>
+          </span>
+          <span className="oa-sub-state">Queued</span>
+        </div>
+        <div className="oa-sub-heading">Done · 3</div>
+        <div className="oa-sub-row">
+          <span className="oa-sub-twisty" />
+          <span className="oa-sub-done">
+            <ArtIcon icon={Check} />
+          </span>
+          <span className="oa-sub-text">
+            <Bar width="64%" tone="ink" />
+            <span>Reviewer</span>
+          </span>
+          <span className="oa-sub-state">Done</span>
+        </div>
+        <div className="oa-sub-row">
+          <span className="oa-sub-twisty" />
+          <span className="oa-sub-done">
+            <ArtIcon icon={Check} />
+          </span>
+          <span className="oa-sub-text">
+            <Bar width="52%" tone="ink" />
+            <span>Planner</span>
+          </span>
+          <span className="oa-sub-state">Done</span>
+        </div>
+        <div className="oa-sub-row">
+          <span className="oa-sub-twisty" />
+          <span className="oa-sub-done">
+            <ArtIcon icon={Check} />
+          </span>
+          <span className="oa-sub-text">
+            <Bar width="46%" tone="ink" />
+            <span>Scout</span>
+          </span>
+          <span className="oa-sub-state">Done</span>
+        </div>
+      </ArtWindow>
+      {/*
       The selected helper's own chat: its task, its steps, and its reply.
       Below the one-column width it opens under the selected row, across the
       list, and runs off the right edge (create-art.css), so the row it opens
       from stays readable and no list words are left cut off beside it.
     */}
-    <ArtWindow raised className="oa-sub-chat">
-      <div role="group" aria-label="Implementer's chat" className="oa-stack" style={{ gap: 5, padding: "6px 7px" }}>
-        <div className="oa-row" style={{ gap: 4, height: 10 }}>
-          <i className="oa-sub-live-dot" />
-          <span className="oa-strong">Implementer</span>
-          <span className="oa-grow" />
-          <span className="oa-sub-twisty oa-sub-more">
-            <ArtIcon icon={MoreHorizontal} />
-          </span>
-        </div>
-        <div role="group" aria-label="Task" className="oa-ws-bubble" style={{ gap: 3, padding: "4px 6px", borderRadius: 7 }}>
-          <Bar width="100%" style={{ height: 4 }} />
-          <Bar width="58%" style={{ height: 4 }} />
-        </div>
-        <ul aria-label="Steps" className="oa-stack" style={{ gap: 3, margin: 0, padding: 0, listStyle: "none" }}>
-          <li className="oa-row" style={{ height: 9 }}>
-            <span className="oa-sub-twisty">
-              <ArtIcon icon={FileText} />
+      <ArtWindow raised className="oa-sub-chat">
+        <div
+          role="group"
+          aria-label="Implementer's chat"
+          className="oa-stack"
+          style={{ gap: 5, padding: "6px 7px" }}
+        >
+          <div className="oa-row" style={{ gap: 4, height: 10 }}>
+            <i className="oa-sub-live-dot" />
+            <span className="oa-strong">Implementer</span>
+            <span className="oa-grow" />
+            <span className="oa-sub-twisty oa-sub-more">
+              <ArtIcon icon={MoreHorizontal} />
             </span>
-            <Bar width="56%" tone="soft" style={{ height: 4 }} />
-          </li>
-          <li className="oa-row oa-anim-pop" style={{ height: 9, animationDelay: "0.3s" }}>
-            <span className="oa-sub-twisty">
-              <ArtIcon icon={SquareTerminal} />
-            </span>
-            <Bar width="44%" tone="soft" style={{ height: 4 }} />
-          </li>
-        </ul>
-        <div role="group" aria-label="Reply" className="oa-stack" style={{ gap: 3 }}>
-          <Bar width="92%" className="oa-anim-type" style={{ height: 4, animationDelay: "0.6s" }} />
-          <Bar width="70%" className="oa-anim-type" style={{ height: 4, animationDelay: "0.78s" }} />
+          </div>
+          <div
+            role="group"
+            aria-label="Task"
+            className="oa-ws-bubble"
+            style={{ gap: 3, padding: "4px 6px", borderRadius: 7 }}
+          >
+            <Bar width="100%" style={{ height: 4 }} />
+            <Bar width="58%" style={{ height: 4 }} />
+          </div>
+          <ul
+            aria-label="Steps"
+            className="oa-stack"
+            style={{ gap: 3, margin: 0, padding: 0, listStyle: "none" }}
+          >
+            <li className="oa-row" style={{ height: 9 }}>
+              <span className="oa-sub-twisty">
+                <ArtIcon icon={FileText} />
+              </span>
+              <Bar width="56%" tone="soft" style={{ height: 4 }} />
+            </li>
+            <li className="oa-row oa-anim-pop" style={{ height: 9, animationDelay: "0.3s" }}>
+              <span className="oa-sub-twisty">
+                <ArtIcon icon={SquareTerminal} />
+              </span>
+              <Bar width="44%" tone="soft" style={{ height: 4 }} />
+            </li>
+          </ul>
+          <div role="group" aria-label="Reply" className="oa-stack" style={{ gap: 3 }}>
+            <Bar
+              width="92%"
+              className="oa-anim-type"
+              style={{ height: 4, animationDelay: "0.6s" }}
+            />
+            <Bar
+              width="70%"
+              className="oa-anim-type"
+              style={{ height: 4, animationDelay: "0.78s" }}
+            />
+          </div>
         </div>
-      </div>
-    </ArtWindow>
+      </ArtWindow>
     </div>
   );
 }
@@ -490,26 +574,74 @@ export function BrowserArt() {
 }
 
 const CODE_LINES: readonly (readonly [string, number][])[] = [
-  [["keyword", 16], ["variable", 22], ["string", 34]],
-  [["keyword", 16], ["variable", 18], ["string", 40]],
+  [
+    ["keyword", 16],
+    ["variable", 22],
+    ["string", 34],
+  ],
+  [
+    ["keyword", 16],
+    ["variable", 18],
+    ["string", 40],
+  ],
   [],
-  [["keyword", 22], ["title", 30], ["variable", 14]],
+  [
+    ["keyword", 22],
+    ["title", 30],
+    ["variable", 14],
+  ],
   [["comment", 46]],
-  [["keyword", 14], ["variable", 20], ["number", 8]],
-  [["variable", 26], ["string", 24]],
-  [["keyword", 18], ["variable", 30]],
+  [
+    ["keyword", 14],
+    ["variable", 20],
+    ["number", 8],
+  ],
+  [
+    ["variable", 26],
+    ["string", 24],
+  ],
+  [
+    ["keyword", 18],
+    ["variable", 30],
+  ],
   [],
-  [["keyword", 22], ["title", 26]],
-  [["variable", 18], ["number", 10], ["string", 20]],
+  [
+    ["keyword", 22],
+    ["title", 26],
+  ],
+  [
+    ["variable", 18],
+    ["number", 10],
+    ["string", 20],
+  ],
   [["comment", 38]],
-  [["keyword", 14], ["variable", 28]],
-  [["variable", 22], ["string", 30]],
-  [["keyword", 16], ["title", 24]],
+  [
+    ["keyword", 14],
+    ["variable", 28],
+  ],
+  [
+    ["variable", 22],
+    ["string", 30],
+  ],
+  [
+    ["keyword", 16],
+    ["title", 24],
+  ],
   [],
-  [["keyword", 20], ["variable", 24], ["string", 22]],
-  [["variable", 30], ["number", 8]],
+  [
+    ["keyword", 20],
+    ["variable", 24],
+    ["string", 22],
+  ],
+  [
+    ["variable", 30],
+    ["number", 8],
+  ],
   [["comment", 42]],
-  [["keyword", 14], ["title", 28]],
+  [
+    ["keyword", 14],
+    ["title", 28],
+  ],
 ];
 const INDENTS = [0, 0, 0, 0, 7, 7, 7, 14, 0, 7, 14, 14, 7, 14, 0, 0, 0, 7, 7, 0];
 
@@ -588,7 +720,10 @@ export function WorkspaceArtifactsArt() {
             {pull.draft ? (
               <i className="oa-artifacts-dot" />
             ) : (
-              <ArtButton variant={index === 0 ? "primary" : "ghost"} className={index === 0 ? "oa-anim-press" : undefined}>
+              <ArtButton
+                variant={index === 0 ? "primary" : "ghost"}
+                className={index === 0 ? "oa-anim-press" : undefined}
+              >
                 Merge
               </ArtButton>
             )}
@@ -609,7 +744,10 @@ export function DesignModeArt() {
     <ArtWindow className="oa-design-canvas" style={{ left: 12, top: 10, width: 214, height: 160 }}>
       <div className="oa-design-toolbar">
         {DESIGN_TOOLS.map((Icon, index) => (
-          <span key={index} className={index === 0 ? "oa-design-tool oa-selected" : "oa-design-tool"}>
+          <span
+            key={index}
+            className={index === 0 ? "oa-design-tool oa-selected" : "oa-design-tool"}
+          >
             <ArtIcon icon={Icon} />
           </span>
         ))}
@@ -621,7 +759,9 @@ export function DesignModeArt() {
           <Bar width="88%" tone="soft" />
           <span className="oa-design-cta" />
         </div>
-        <span className="oa-design-pin oa-anim-pop" style={{ left: 44, top: 25 }}>1</span>
+        <span className="oa-design-pin oa-anim-pop" style={{ left: 44, top: 25 }}>
+          1
+        </span>
       </div>
       <div className="oa-design-note oa-anim-float" style={{ left: 150, top: 38, width: 52 }}>
         <Bar width="90%" />
@@ -694,7 +834,11 @@ export function FilesEditorArt() {
               <span className="oa-files-number">{index + 1}</span>
               <span className="oa-row" style={{ gap: 3, paddingLeft: INDENTS[index] }}>
                 {tokens.map(([kind, width], token) => (
-                  <i key={token} className="oa-files-token" style={{ width, background: `var(--syntax-${kind})` }} />
+                  <i
+                    key={token}
+                    className="oa-files-token"
+                    style={{ width, background: `var(--syntax-${kind})` }}
+                  />
                 ))}
                 {index === 6 ? <span className="oa-caret" /> : null}
               </span>
@@ -709,43 +853,46 @@ export function FilesEditorArt() {
 export function WorkspacesArt() {
   return (
     <>
-    <div className="oa-stack" style={{ position: "absolute", left: 12, top: 12, gap: 5, justifyItems: "start" }}>
-      <ArtChip icon={GitBranch}>Isolated worktree</ArtChip>
-      <ArtChip icon={Folder}>Scratch space</ArtChip>
-    </div>
-    <ArtWindow className="oa-wsp-window" style={{ left: 128, top: 8, width: 172, height: 130 }}>
-      <div className="oa-wsp-heading">Workspaces</div>
-      <div className="oa-wsp-row">
-        <ArtIcon icon={ChevronDown} />
-        <ArtIcon icon={FolderGit2} />
-        <span className="oa-strong">aiden-macos</span>
+      <div
+        className="oa-stack"
+        style={{ position: "absolute", left: 12, top: 12, gap: 5, justifyItems: "start" }}
+      >
+        <ArtChip icon={GitBranch}>Isolated worktree</ArtChip>
+        <ArtChip icon={Folder}>Scratch space</ArtChip>
       </div>
-      <div className="oa-wsp-chat oa-selected">
-        <Bar width="62%" tone="ink" />
-      </div>
-      <div className="oa-wsp-chat">
-        <Bar width="48%" tone="soft" />
-      </div>
-      <div className="oa-wsp-row oa-anim-pop" data-two-line="" style={{ animationDelay: "0.4s" }}>
-        <ArtIcon icon={ChevronRight} />
-        <ArtIcon icon={FolderGit2} />
-        <span className="oa-stack" style={{ gap: 2 }}>
+      <ArtWindow className="oa-wsp-window" style={{ left: 128, top: 8, width: 172, height: 130 }}>
+        <div className="oa-wsp-heading">Workspaces</div>
+        <div className="oa-wsp-row">
+          <ArtIcon icon={ChevronDown} />
+          <ArtIcon icon={FolderGit2} />
           <span className="oa-strong">aiden-macos</span>
-          <span className="oa-wsp-branch">
-            <ArtIcon icon={GitBranch} />
-            <span className="oa-mono">feature/art</span>
+        </div>
+        <div className="oa-wsp-chat oa-selected">
+          <Bar width="62%" tone="ink" />
+        </div>
+        <div className="oa-wsp-chat">
+          <Bar width="48%" tone="soft" />
+        </div>
+        <div className="oa-wsp-row oa-anim-pop" data-two-line="" style={{ animationDelay: "0.4s" }}>
+          <ArtIcon icon={ChevronRight} />
+          <ArtIcon icon={FolderGit2} />
+          <span className="oa-stack" style={{ gap: 2 }}>
+            <span className="oa-strong">aiden-macos</span>
+            <span className="oa-wsp-branch">
+              <ArtIcon icon={GitBranch} />
+              <span className="oa-mono">feature/art</span>
+            </span>
           </span>
-        </span>
-      </div>
-      <div className="oa-wsp-row" data-two-line="">
-        <ArtIcon icon={ChevronRight} />
-        <ArtIcon icon={FolderGit2} />
-        <span className="oa-stack" style={{ gap: 2 }}>
-          <span className="oa-strong">calm-moon-sail</span>
-          <span className="oa-wsp-branch oa-mono">~/aiden</span>
-        </span>
-      </div>
-    </ArtWindow>
+        </div>
+        <div className="oa-wsp-row" data-two-line="">
+          <ArtIcon icon={ChevronRight} />
+          <ArtIcon icon={FolderGit2} />
+          <span className="oa-stack" style={{ gap: 2 }}>
+            <span className="oa-strong">calm-moon-sail</span>
+            <span className="oa-wsp-branch oa-mono">~/aiden</span>
+          </span>
+        </div>
+      </ArtWindow>
     </>
   );
 }

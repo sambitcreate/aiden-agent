@@ -9,7 +9,11 @@ import { AgentNoticeCard } from "./agent-notice-card";
 import { TooltipProvider } from "./ui";
 import { ExternalLinkOpenerProvider } from "../lib/link-opener";
 import type { BackgroundJobView } from "../shared/background-jobs";
-import { emptyChatFollowThrough, type ChatFollowThroughV1, type PullRequestFollowView } from "../shared/follow-through";
+import {
+  emptyChatFollowThrough,
+  type ChatFollowThroughV1,
+  type PullRequestFollowView,
+} from "../shared/follow-through";
 import { agentNotice, fenceAsData } from "../shared/agent-notices";
 
 const clients: QueryClient[] = [];
@@ -51,18 +55,27 @@ function follow(overrides: Partial<PullRequestFollowView> = {}): PullRequestFoll
   };
 }
 
-function mount(state: ChatFollowThroughV1 | undefined, handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
+function mount(
+  state: ChatFollowThroughV1 | undefined,
+  handlers: Record<string, (...args: unknown[]) => unknown> = {},
+) {
   const calls = installBotTestIpc({
     "chats:followThroughStopJob": () => undefined,
     "chats:followThroughStopFollow": () => undefined,
     "chats:followThroughNudgePullRequests": () => undefined,
-    "chats:followThroughJobOutput": () => ({ job: job(), output: "VITE ready on http://localhost:5173\n", truncated: false }),
+    "chats:followThroughJobOutput": () => ({
+      job: job(),
+      output: "VITE ready on http://localhost:5173\n",
+      truncated: false,
+    }),
     ...handlers,
   });
   const opened: string[] = [];
   let changed = 0;
   // No garbage-collection timers: they would keep the test process alive.
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+  });
   clients.push(queryClient);
   const view = render(
     <QueryClientProvider client={queryClient}>
@@ -80,7 +93,11 @@ function mount(state: ChatFollowThroughV1 | undefined, handlers: Record<string, 
 
 test("nothing shows while nothing is running, followed or checked", () => {
   const base = emptyChatFollowThrough("chat-1");
-  mount({ ...base, jobs: [job({ state: "exited", exitCode: 0 })], pullRequests: [follow({ state: "ended", endedReason: "merged" })] });
+  mount({
+    ...base,
+    jobs: [job({ state: "exited", exitCode: 0 })],
+    pullRequests: [follow({ state: "ended", endedReason: "merged" })],
+  });
   assert.equal(screen.getByTestId("bar").childElementCount, 0);
   cleanup();
   mount(undefined);
@@ -90,16 +107,38 @@ test("nothing shows while nothing is running, followed or checked", () => {
 test("the jobs chip counts running jobs and its list shows output and stops a job", async () => {
   const state = {
     ...emptyChatFollowThrough("chat-1"),
-    jobs: [job(), job({ id: "job_5e6f7a8b", description: undefined, command: "npm test -- --watch", startedAt: NOW - 5_000 }), job({ id: "job_00000001", description: "Build the app", state: "failed", exitCode: 1, endedAt: NOW })],
+    jobs: [
+      job(),
+      job({
+        id: "job_5e6f7a8b",
+        description: undefined,
+        command: "npm test -- --watch",
+        startedAt: NOW - 5_000,
+      }),
+      job({
+        id: "job_00000001",
+        description: "Build the app",
+        state: "failed",
+        exitCode: 1,
+        endedAt: NOW,
+      }),
+    ],
   };
   const { calls, changed } = mount(state);
   fireEvent.click(screen.getByRole("button", { name: "2 background jobs running" }));
   const dialog = await screen.findByRole("dialog", { name: "Background jobs" });
   assert.ok(within(dialog).getByText("Run the dev server"));
-  assert.ok(within(dialog).getByText("npm test -- --watch"), "a job without a label shows its command");
+  assert.ok(
+    within(dialog).getByText("npm test -- --watch"),
+    "a job without a label shows its command",
+  );
   assert.ok(within(dialog).getByText(/^Running for 2m$/u));
   assert.ok(within(dialog).getByText("Failed with code 1"));
-  assert.equal(within(dialog).getAllByRole("button", { name: "Stop" }).length, 2, "only running jobs can be stopped");
+  assert.equal(
+    within(dialog).getAllByRole("button", { name: "Stop" }).length,
+    2,
+    "only running jobs can be stopped",
+  );
 
   const [firstOutput] = within(dialog).getAllByRole("button", { name: "Output" });
   fireEvent.click(firstOutput!);
@@ -107,10 +146,9 @@ test("the jobs chip counts running jobs and its list shows output and stops a jo
 
   fireEvent.click(within(dialog).getAllByRole("button", { name: "Stop" })[0]!);
   await waitFor(() => assert.equal(changed(), 1));
-  assert.deepEqual(
-    calls.find((call) => call.channel === "chats:followThroughStopJob")?.args,
-    [{ chatId: "chat-1", jobId: "job_1a2b3c4d" }],
-  );
+  assert.deepEqual(calls.find((call) => call.channel === "chats:followThroughStopJob")?.args, [
+    { chatId: "chat-1", jobId: "job_1a2b3c4d" },
+  ]);
 });
 
 test("a running job lists the addresses it serves and opens one; a finished job lists none", async () => {
@@ -118,7 +156,14 @@ test("a running job lists the addresses it serves and opens one; a finished job 
     ...emptyChatFollowThrough("chat-1"),
     jobs: [
       job({ ports: [5173, 24678] }),
-      job({ id: "job_00000002", description: "Old server", state: "stopped", endReason: "person", endedAt: NOW, ports: [3000] }),
+      job({
+        id: "job_00000002",
+        description: "Old server",
+        state: "stopped",
+        endReason: "person",
+        endedAt: NOW,
+        ports: [3000],
+      }),
     ],
   };
   const { opened } = mount(state);
@@ -133,7 +178,16 @@ test("a running job lists the addresses it serves and opens one; a finished job 
 test("a server a command left running reads as ended, never as failed, once it stops", async () => {
   mount({
     ...emptyChatFollowThrough("chat-1"),
-    jobs: [job(), job({ id: "job_00000003", origin: "command", description: "Start the API", state: "exited", endedAt: NOW })],
+    jobs: [
+      job(),
+      job({
+        id: "job_00000003",
+        origin: "command",
+        description: "Start the API",
+        state: "exited",
+        endedAt: NOW,
+      }),
+    ],
   });
   fireEvent.click(screen.getByRole("button", { name: "1 background job running" }));
   const dialog = await screen.findByRole("dialog", { name: "Background jobs" });
@@ -146,15 +200,31 @@ test("a job Aiden stopped after the chat went quiet says so; one the person stop
     ...emptyChatFollowThrough("chat-1"),
     jobs: [
       job(),
-      job({ id: "job_00000004", description: "Run the preview", state: "stopped", endReason: "chat-settled", endedAt: NOW }),
-      job({ id: "job_00000005", description: "Run the old server", state: "stopped", endReason: "person", endedAt: NOW }),
+      job({
+        id: "job_00000004",
+        description: "Run the preview",
+        state: "stopped",
+        endReason: "chat-settled",
+        endedAt: NOW,
+      }),
+      job({
+        id: "job_00000005",
+        description: "Run the old server",
+        state: "stopped",
+        endReason: "person",
+        endedAt: NOW,
+      }),
     ],
   });
   fireEvent.click(screen.getByRole("button", { name: "1 background job running" }));
   const dialog = await screen.findByRole("dialog", { name: "Background jobs" });
   assert.ok(within(dialog).getByText("Stopped after the chat went quiet"));
   assert.ok(within(dialog).getByText("Stopped"));
-  assert.equal(within(dialog).getAllByRole("button", { name: "Stop" }).length, 1, "a stopped job cannot be stopped again");
+  assert.equal(
+    within(dialog).getAllByRole("button", { name: "Stop" }).length,
+    1,
+    "a stopped job cannot be stopped again",
+  );
 });
 
 test("a job's running time is current when its list opens, not when the chip appeared", async (t) => {
@@ -168,17 +238,34 @@ test("a job's running time is current when its list opens, not when the chip app
 });
 
 test("the follow chip names the pull request, opens it, and stops following", async () => {
-  const state = { ...emptyChatFollowThrough("chat-1"), pullRequests: [follow(), follow({ number: 7, state: "ended", endedReason: "merged", title: "Old" })] };
+  const state = {
+    ...emptyChatFollowThrough("chat-1"),
+    pullRequests: [
+      follow(),
+      follow({ number: 7, state: "ended", endedReason: "merged", title: "Old" }),
+    ],
+  };
   const { calls, opened, changed } = mount(state);
-  const nudges = () => calls.filter((call) => call.channel === "chats:followThroughNudgePullRequests").map((call) => call.args);
+  const nudges = () =>
+    calls
+      .filter((call) => call.channel === "chats:followThroughNudgePullRequests")
+      .map((call) => call.args);
   window.dispatchEvent(new Event("online"));
   assert.deepEqual(nudges(), [[{}]], "coming back online asks every follow to look again");
   fireEvent.click(screen.getByRole("button", { name: "Following pull request 42" }));
   const dialog = await screen.findByRole("dialog", { name: "Followed pull requests" });
-  assert.deepEqual(nudges().slice(-1)[0], [{ chatId: "chat-1" }], "opening the list asks this chat's follows to look again");
+  assert.deepEqual(
+    nudges().slice(-1)[0],
+    [{ chatId: "chat-1" }],
+    "opening the list asks this chat's follows to look again",
+  );
   assert.ok(within(dialog).getByText("1 check failing · 1 update sent"));
   assert.ok(within(dialog).getByText("Merged"));
-  assert.ok(within(dialog).getByText(/Only comments from people who can write to the repository and from review bots reach the agent/u));
+  assert.ok(
+    within(dialog).getByText(
+      /Only comments from people who can write to the repository and from review bots reach the agent/u,
+    ),
+  );
   fireEvent.click(within(dialog).getByRole("button", { name: "Open pull request 42" }));
   assert.deepEqual(opened, ["https://github.com/acme/app/pull/42"]);
   assert.equal(within(dialog).getAllByRole("button", { name: "Stop" }).length, 1);
@@ -194,13 +281,22 @@ test("a notice card shows its heading and opens to exactly what the agent was to
   const content = `[Aiden follow-up: done-when check]\n\n${fenceAsData("The check's output", output)}`;
   render(
     <AgentNoticeCard
-      notice={agentNotice({ source: "check", tone: "failure", title: "Check failed", summary: "npm test · exit code 1 · check 1 of 5" })}
+      notice={agentNotice({
+        source: "check",
+        tone: "failure",
+        title: "Check failed",
+        summary: "npm test · exit code 1 · check 1 of 5",
+      })}
       content={content}
     />,
   );
   const card = screen.getByRole("note", { name: "Done-when check: Check failed" });
   assert.ok(within(card).getByText("npm test · exit code 1 · check 1 of 5"));
-  assert.equal(within(card).queryByText(/expected 2, got 3/u), null, "the output stays folded away");
+  assert.equal(
+    within(card).queryByText(/expected 2, got 3/u),
+    null,
+    "the output stays folded away",
+  );
   const details = within(card).getByRole("button", { name: "Details" });
   assert.equal(details.getAttribute("aria-expanded"), "false");
   fireEvent.click(details);
@@ -213,14 +309,21 @@ test("the check-back chip names the next time, lists each note and cancels one a
   const state = {
     ...emptyChatFollowThrough("chat-1"),
     checkBacks: [
-      { id: "cb_1", fireAt: NOW + 20 * 60_000, note: "See whether the deploy finished", setAt: NOW },
+      {
+        id: "cb_1",
+        fireAt: NOW + 20 * 60_000,
+        note: "See whether the deploy finished",
+        setAt: NOW,
+      },
       { id: "cb_2", fireAt: NOW + 90 * 60_000, note: "Read the nightly report", setAt: NOW },
     ],
   };
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
   const { calls, changed } = mount(state, { "chats:followThroughCancelCheckBack": () => held });
-  const chip = screen.getByRole("button", { name: /^2 check-backs pending, next (at|tomorrow at) \d{1,2}:\d{2} [AP]M$/u });
+  const chip = screen.getByRole("button", {
+    name: /^2 check-backs pending, next (at|tomorrow at) \d{1,2}:\d{2} [AP]M$/u,
+  });
   assert.match(chip.textContent ?? "", /^Checking back (at|tomorrow at) \d{1,2}:\d{2} [AP]M \+1$/u);
   fireEvent.click(chip);
   const dialog = await screen.findByRole("dialog", { name: "Check-backs" });
@@ -229,8 +332,13 @@ test("the check-back chip names the next time, lists each note and cancels one a
   const [firstCancel] = within(dialog).getAllByRole("button", { name: /^Cancel check-back/u });
   fireEvent.click(firstCancel!);
   // Gone before main answers.
-  await waitFor(() => assert.equal(within(dialog).queryByText("See whether the deploy finished"), null));
-  assert.deepEqual(calls.find((call) => call.channel === "chats:followThroughCancelCheckBack")?.args, [{ chatId: "chat-1", id: "cb_1" }]);
+  await waitFor(() =>
+    assert.equal(within(dialog).queryByText("See whether the deploy finished"), null),
+  );
+  assert.deepEqual(
+    calls.find((call) => call.channel === "chats:followThroughCancelCheckBack")?.args,
+    [{ chatId: "chat-1", id: "cb_1" }],
+  );
   release();
   await waitFor(() => assert.equal(changed(), 1));
 });
@@ -238,7 +346,14 @@ test("the check-back chip names the next time, lists each note and cancels one a
 test("a check-back whose cancel fails comes back", async () => {
   const state = {
     ...emptyChatFollowThrough("chat-1"),
-    checkBacks: [{ id: "cb_1", fireAt: NOW + 20 * 60_000, note: "See whether the deploy finished", setAt: NOW }],
+    checkBacks: [
+      {
+        id: "cb_1",
+        fireAt: NOW + 20 * 60_000,
+        note: "See whether the deploy finished",
+        setAt: NOW,
+      },
+    ],
   };
   let fail!: (error: Error) => void;
   const held = new Promise<void>((_resolve, reject) => (fail = reject));
@@ -246,7 +361,9 @@ test("a check-back whose cancel fails comes back", async () => {
   fireEvent.click(screen.getByRole("button", { name: /^Checking back/u }));
   const dialog = await screen.findByRole("dialog", { name: "Check-backs" });
   fireEvent.click(within(dialog).getByRole("button", { name: /^Cancel check-back/u }));
-  await waitFor(() => assert.equal(screen.queryByRole("button", { name: /^Checking back/u }), null));
+  await waitFor(() =>
+    assert.equal(screen.queryByRole("button", { name: /^Checking back/u }), null),
+  );
   fail(new Error("That check-back already ran or was cancelled."));
   assert.ok(await screen.findByRole("button", { name: /^Checking back/u }));
 });
@@ -254,7 +371,12 @@ test("a check-back whose cancel fails comes back", async () => {
 test("a check-back notice card reads as the agent checking back", () => {
   render(
     <AgentNoticeCard
-      notice={agentNotice({ source: "check_back", tone: "info", title: "Checking back", summary: "See whether the deploy finished" })}
+      notice={agentNotice({
+        source: "check_back",
+        tone: "info",
+        title: "Checking back",
+        summary: "See whether the deploy finished",
+      })}
       content="[Aiden follow-up: check-back]"
     />,
   );
@@ -265,7 +387,12 @@ test("a check-back notice card reads as the agent checking back", () => {
 test("a started chat's notice card names it as a started chat", () => {
   render(
     <AgentNoticeCard
-      notice={agentNotice({ source: "chat", tone: "failure", title: "2 started chats ended", summary: "Docs: finished · Tests: stopped with an error" })}
+      notice={agentNotice({
+        source: "chat",
+        tone: "failure",
+        title: "2 started chats ended",
+        summary: "Docs: finished · Tests: stopped with an error",
+      })}
       content="Chats this chat started have ended."
     />,
   );

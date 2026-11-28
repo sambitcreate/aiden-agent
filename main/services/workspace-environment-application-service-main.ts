@@ -5,12 +5,11 @@ import { createWorkspaceEnvironmentApplicationService } from "./workspace-enviro
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 
-export const workspaceEnvironmentApplicationService =
-  createWorkspaceEnvironmentApplicationService({
-    configStore,
-    workspaceMutationGate,
-    workspaceOperationRegistry,
-    assertManagedWorktreeAdmission,
-    realpath: fs.realpath,
-    stat: fs.stat,
-  });
+export const workspaceEnvironmentApplicationService = createWorkspaceEnvironmentApplicationService({
+  configStore,
+  workspaceMutationGate,
+  workspaceOperationRegistry,
+  assertManagedWorktreeAdmission,
+  realpath: fs.realpath,
+  stat: fs.stat,
+});

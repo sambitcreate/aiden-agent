@@ -23,9 +23,19 @@
 
 import type { Attachment } from "./types";
 import type { AssistantPresentationRow } from "./assistant-message-presentation";
-import { isToolStep, type AgentToolStep, type GenerationTimeline } from "../shared/generation-timeline";
-import { placeholderAspectRatio, type ImageAspectRatio } from "../shared/image-generation/placeholder-spec";
-import { CURATED_FAL_IMAGE_MODELS, CURATED_REPLICATE_IMAGE_MODELS } from "../shared/image-generation/catalog";
+import {
+  isToolStep,
+  type AgentToolStep,
+  type GenerationTimeline,
+} from "../shared/generation-timeline";
+import {
+  placeholderAspectRatio,
+  type ImageAspectRatio,
+} from "../shared/image-generation/placeholder-spec";
+import {
+  CURATED_FAL_IMAGE_MODELS,
+  CURATED_REPLICATE_IMAGE_MODELS,
+} from "../shared/image-generation/catalog";
 import {
   IMAGE_GENERATION_PROVIDER_NAMES,
   isImageGenerationProviderId,
@@ -91,7 +101,9 @@ const CURATED_NAMES = new Map(
   ]),
 );
 
-function imageModelParts(target: string | undefined): { provider: string; name: string } | undefined {
+function imageModelParts(
+  target: string | undefined,
+): { provider: string; name: string } | undefined {
   if (!target) return undefined;
   const slash = target.indexOf("/");
   const provider = target.slice(0, slash);
@@ -126,7 +138,8 @@ export function reconcileImageGenerationSlots(
   const entries = new Map<string, ImageGenerationSlotEntry>();
   // An image a step already revealed (or is revealing) stays that step's.
   const claimedBy = new Map<string, string>();
-  for (const [stepId, entry] of previous) if (entry.arrived) claimedBy.set(entry.arrived.id, stepId);
+  for (const [stepId, entry] of previous)
+    if (entry.arrived) claimedBy.set(entry.arrived.id, stepId);
 
   const slots: ImageGenerationSlot[] = [];
   const hidden = new Set<string>();
@@ -153,7 +166,8 @@ export function reconcileImageGenerationSlots(
       claimedBy.set(own[0].id, step.id);
     }
     const arrived = entry.arrived;
-    const keep = step.status === "running" || (arrived !== undefined && step.status === "completed");
+    const keep =
+      step.status === "running" || (arrived !== undefined && step.status === "completed");
     if (!keep) continue;
     entries.set(step.id, entry);
     if (arrived) {
@@ -166,7 +180,8 @@ export function reconcileImageGenerationSlots(
       stepId: step.id,
       toolCallId: step.toolCallId,
       aspectRatio: placeholderAspectRatio(step.detail),
-      startedAt: Number.isFinite(step.startedAt) && step.startedAt > 0 ? step.startedAt : entry.firstSeenAt,
+      startedAt:
+        Number.isFinite(step.startedAt) && step.startedAt > 0 ? step.startedAt : entry.firstSeenAt,
       ...(modelLabel ? { modelLabel } : {}),
       ...(arrived ? { arrived } : {}),
     });

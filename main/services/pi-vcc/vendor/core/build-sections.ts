@@ -31,7 +31,8 @@ const extractOutstandingContext = (blocks: NormalizedBlock[]): string[] => {
         if (/^\s*\(/.test(line)) continue;
         // Require sentence-like start: capital letter, code identifier, or quote
         if (!/^\s*["'`*_]?[A-Z`]/.test(line)) continue;
-        const clipped = b.kind === "user" ? `[user] ${clipSentence(line, 150)}` : clipSentence(line, 150);
+        const clipped =
+          b.kind === "user" ? `[user] ${clipSentence(line, 150)}` : clipSentence(line, 150);
         if (!items.includes(clipped)) items.push(clipped);
         break;
       }
@@ -61,10 +62,7 @@ export const buildSections = (input: BuildSectionsInput): SectionData => {
   const { blocks } = input;
   const briefSections = buildBriefSections(input.briefBlocks ?? blocks);
   const sessionGoal = extractGoals(blocks);
-  const userPreferences = dedupPreferencesAgainstGoals(
-    extractPreferences(blocks),
-    sessionGoal,
-  );
+  const userPreferences = dedupPreferencesAgainstGoals(extractPreferences(blocks), sessionGoal);
   return {
     sessionGoal,
     outstandingContext: extractOutstandingContext(blocks),

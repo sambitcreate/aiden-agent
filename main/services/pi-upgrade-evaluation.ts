@@ -8,7 +8,7 @@ export const PI_UPGRADE_REPLAY_CASE_IDS = [
   "child_initial_fork",
 ] as const;
 
-export type PiUpgradeReplayCaseId = typeof PI_UPGRADE_REPLAY_CASE_IDS[number];
+export type PiUpgradeReplayCaseId = (typeof PI_UPGRADE_REPLAY_CASE_IDS)[number];
 
 export interface PiUpgradeReplayMeasurement {
   caseId: PiUpgradeReplayCaseId;
@@ -59,16 +59,34 @@ function finiteNonNegative(value: number, label: string): number {
 }
 
 const MEASUREMENT_KEYS = [
-  "caseId", "continuationCorrect", "pendingReferencesExpected", "pendingReferencesRetained",
-  "tokensBefore", "tokensAfter", "durationMs", "costMicros", "cacheReadTokens",
-  "cacheWriteTokens", "turnsUntilNextCompaction", "emergencyProjections", "noOpAttempts",
+  "caseId",
+  "continuationCorrect",
+  "pendingReferencesExpected",
+  "pendingReferencesRetained",
+  "tokensBefore",
+  "tokensAfter",
+  "durationMs",
+  "costMicros",
+  "cacheReadTokens",
+  "cacheWriteTokens",
+  "turnsUntilNextCompaction",
+  "emergencyProjections",
+  "noOpAttempts",
   "migrationFailures",
 ] as const;
 
 const INTEGER_MEASUREMENT_KEYS = [
-  "pendingReferencesExpected", "pendingReferencesRetained", "tokensBefore", "tokensAfter",
-  "costMicros", "cacheReadTokens", "cacheWriteTokens", "turnsUntilNextCompaction",
-  "emergencyProjections", "noOpAttempts", "migrationFailures",
+  "pendingReferencesExpected",
+  "pendingReferencesRetained",
+  "tokensBefore",
+  "tokensAfter",
+  "costMicros",
+  "cacheReadTokens",
+  "cacheWriteTokens",
+  "turnsUntilNextCompaction",
+  "emergencyProjections",
+  "noOpAttempts",
+  "migrationFailures",
 ] as const satisfies readonly (keyof PiUpgradeReplayMeasurement)[];
 
 function validateMeasurement(measurement: PiUpgradeReplayMeasurement): void {
@@ -77,7 +95,10 @@ function validateMeasurement(measurement: PiUpgradeReplayMeasurement): void {
   }
   const actualKeys = Object.keys(measurement).sort();
   const expectedKeys = [...MEASUREMENT_KEYS].sort();
-  if (actualKeys.length !== expectedKeys.length || actualKeys.some((key, index) => key !== expectedKeys[index])) {
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    actualKeys.some((key, index) => key !== expectedKeys[index])
+  ) {
     throw new Error("Replay measurement does not match the required schema.");
   }
   if (!PI_UPGRADE_REPLAY_CASE_IDS.includes(measurement.caseId)) {
@@ -99,7 +120,10 @@ function validateMeasurement(measurement: PiUpgradeReplayMeasurement): void {
   if (measurement.tokensBefore <= 0 || measurement.durationMs <= 0) {
     throw new Error(`Replay case ${measurement.caseId} lacks executable measurements.`);
   }
-  if (measurement.caseId !== "attachment_heavy_first_prompt" && measurement.pendingReferencesExpected < 1) {
+  if (
+    measurement.caseId !== "attachment_heavy_first_prompt" &&
+    measurement.pendingReferencesExpected < 1
+  ) {
     throw new Error(`Replay case ${measurement.caseId} lacks a pending-reference assertion.`);
   }
 }
@@ -110,7 +134,8 @@ export function evaluatePiUpgradeReplay(
   const byId = new Map<PiUpgradeReplayCaseId, PiUpgradeReplayMeasurement>();
   for (const measurement of measurements) {
     validateMeasurement(measurement);
-    if (byId.has(measurement.caseId)) throw new Error(`Duplicate replay case: ${measurement.caseId}.`);
+    if (byId.has(measurement.caseId))
+      throw new Error(`Duplicate replay case: ${measurement.caseId}.`);
     if (measurement.tokensAfter > measurement.tokensBefore) {
       throw new Error(`Replay case ${measurement.caseId} increased its token projection.`);
     }
@@ -130,19 +155,19 @@ export function evaluatePiUpgradeReplay(
   const tokensAfter = sum(({ tokensAfter }) => tokensAfter);
   const expectedReferences = sum(({ pendingReferencesExpected }) => pendingReferencesExpected);
   const retainedReferences = sum(({ pendingReferencesRetained }) => pendingReferencesRetained);
-  const continuationCorrectRatio = rows.length === 0
-    ? 0
-    : sum(({ continuationCorrect }) => continuationCorrect ? 1 : 0) / rows.length;
-  const pendingReferenceRetentionRatio = expectedReferences === 0
-    ? 1
-    : retainedReferences / expectedReferences;
+  const continuationCorrectRatio =
+    rows.length === 0
+      ? 0
+      : sum(({ continuationCorrect }) => (continuationCorrect ? 1 : 0)) / rows.length;
+  const pendingReferenceRetentionRatio =
+    expectedReferences === 0 ? 1 : retainedReferences / expectedReferences;
   const tokenReductionRatio = tokensBefore === 0 ? 0 : (tokensBefore - tokensAfter) / tokensBefore;
-  const emergencyProjectionRatio = rows.length === 0
-    ? 1
-    : sum(({ emergencyProjections }) => emergencyProjections) / rows.length;
-  const minimumTurnsUntilNextCompaction = rows.length === 0
-    ? 0
-    : Math.min(...rows.map(({ turnsUntilNextCompaction }) => turnsUntilNextCompaction));
+  const emergencyProjectionRatio =
+    rows.length === 0 ? 1 : sum(({ emergencyProjections }) => emergencyProjections) / rows.length;
+  const minimumTurnsUntilNextCompaction =
+    rows.length === 0
+      ? 0
+      : Math.min(...rows.map(({ turnsUntilNextCompaction }) => turnsUntilNextCompaction));
   const noOpAttempts = sum(({ noOpAttempts }) => noOpAttempts);
   const migrationFailures = sum(({ migrationFailures }) => migrationFailures);
   if (continuationCorrectRatio !== 1) failures.push("continuation_correctness");
@@ -150,18 +175,26 @@ export function evaluatePiUpgradeReplay(
   if (tokenReductionRatio < PI_UPGRADE_QUALITY_THRESHOLDS.minimumTokenReductionRatio) {
     failures.push("token_reduction");
   }
-  if (rows.some((row) =>
-    (row.tokensBefore - row.tokensAfter) / row.tokensBefore <
-      PI_UPGRADE_QUALITY_THRESHOLDS.minimumTokenReductionRatio
-  )) failures.push("per_case_token_reduction");
+  if (
+    rows.some(
+      (row) =>
+        (row.tokensBefore - row.tokensAfter) / row.tokensBefore <
+        PI_UPGRADE_QUALITY_THRESHOLDS.minimumTokenReductionRatio,
+    )
+  )
+    failures.push("per_case_token_reduction");
   if (emergencyProjectionRatio > PI_UPGRADE_QUALITY_THRESHOLDS.maximumEmergencyProjectionRatio) {
     failures.push("emergency_projection_frequency");
   }
-  if (minimumTurnsUntilNextCompaction < PI_UPGRADE_QUALITY_THRESHOLDS.minimumTurnsUntilNextCompaction) {
+  if (
+    minimumTurnsUntilNextCompaction < PI_UPGRADE_QUALITY_THRESHOLDS.minimumTurnsUntilNextCompaction
+  ) {
     failures.push("recompaction_interval");
   }
-  if (noOpAttempts > PI_UPGRADE_QUALITY_THRESHOLDS.maximumNoOpAttempts) failures.push("no_op_attempts");
-  if (migrationFailures > PI_UPGRADE_QUALITY_THRESHOLDS.maximumMigrationFailures) failures.push("migration_failures");
+  if (noOpAttempts > PI_UPGRADE_QUALITY_THRESHOLDS.maximumNoOpAttempts)
+    failures.push("no_op_attempts");
+  if (migrationFailures > PI_UPGRADE_QUALITY_THRESHOLDS.maximumMigrationFailures)
+    failures.push("migration_failures");
   return {
     version: 1,
     passed: failures.length === 0,

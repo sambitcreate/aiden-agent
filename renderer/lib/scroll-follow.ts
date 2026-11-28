@@ -17,10 +17,7 @@ export function isAtScrollBottom(
   return distanceFromBottom < thresholdPx;
 }
 
-export function shouldFollowScrollBottom(
-  autoScrollEnabled: boolean,
-  atBottom: boolean,
-): boolean {
+export function shouldFollowScrollBottom(autoScrollEnabled: boolean, atBottom: boolean): boolean {
   return Boolean(autoScrollEnabled) && atBottom;
 }
 
@@ -33,7 +30,9 @@ export function shouldPinAfterContentGrowth(wasFollowingLatest: boolean): boolea
 }
 
 /** Pin an overflow list so its latest rows are in view when the surface opens. */
-export function pinOverflowListToEnd(element: { scrollHeight: number; scrollTop: number } | null): void {
+export function pinOverflowListToEnd(
+  element: { scrollHeight: number; scrollTop: number } | null,
+): void {
   if (!element) return;
   element.scrollTop = element.scrollHeight;
 }
@@ -137,7 +136,8 @@ export const INITIAL_FOLLOW_STATE: FollowState = {
 /** Records where a following viewport sits at the bottom, or forgets it. */
 function withPinnedTop(state: FollowState, scrollTop: number | undefined): FollowState {
   if (!state.following) return state.pinnedTop === null ? state : { ...state, pinnedTop: null };
-  if (scrollTop === undefined || state.jumpPending || state.distance > FOLLOW_REARM_DISTANCE_PX) return state;
+  if (scrollTop === undefined || state.jumpPending || state.distance > FOLLOW_REARM_DISTANCE_PX)
+    return state;
   return { ...state, pinnedTop: scrollTop };
 }
 
@@ -245,7 +245,6 @@ export function followNeedsSnap(state: FollowState): boolean {
 export function shouldOfferJumpToBottom(state: FollowState, streaming: boolean): boolean {
   if (state.following || state.jumpPending) return false;
   return (
-    state.distance >
-    (streaming ? JUMP_BUTTON_STREAMING_DISTANCE_PX : JUMP_BUTTON_IDLE_DISTANCE_PX)
+    state.distance > (streaming ? JUMP_BUTTON_STREAMING_DISTANCE_PX : JUMP_BUTTON_IDLE_DISTANCE_PX)
   );
 }

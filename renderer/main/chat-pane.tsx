@@ -46,7 +46,10 @@ import type { GitBranchPickerDraft } from "../components/git-branch-picker";
 import { QueuedMessages } from "../components/queued-messages";
 import { NewChatHeadline } from "../components/new-chat-headline";
 import type { WorkspaceMenuRequest } from "../components/workspace-picker";
-import { registerDraftWorkspaceMenu, type DraftWorkspaceMenuView } from "../lib/draft-workspace-menu";
+import {
+  registerDraftWorkspaceMenu,
+  type DraftWorkspaceMenuView,
+} from "../lib/draft-workspace-menu";
 import { adoptWorkspace } from "../lib/use-workspace-path-intake";
 import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import {
@@ -68,7 +71,10 @@ import { attachmentsWithBytes } from "../lib/stored-attachments";
 import { reduceVisualDrafts, type VisualDrafts } from "../lib/html-artifact-transcript";
 import { reduceUiDrafts, reduceUiVisuals, type UiDrafts } from "../lib/ui-visual-transcript";
 import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
-import { primeInlineVisualPreview, type GuestPromptHandler } from "../components/html-artifact-frame";
+import {
+  primeInlineVisualPreview,
+  type GuestPromptHandler,
+} from "../components/html-artifact-frame";
 import { forkSummaryHoldsSend, type ChatForkPosition } from "../shared/chat-copy-contract";
 import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
 import {
@@ -90,7 +96,11 @@ import { useChatMessageQueue } from "../lib/use-chat-message-queue";
 
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../lib/use-usage-limit-wait";
+import {
+  retryUsageLimitNow,
+  useUsageLimitNow,
+  useUsageLimitWait,
+} from "../lib/use-usage-limit-wait";
 import { useSpendingStatus } from "../lib/use-spending-status";
 import { SpendingLimitNotice } from "../components/spending/spending-limit-notice";
 import { ChatGoalBar } from "../components/goal-bar";
@@ -130,12 +140,7 @@ import {
   chatReadinessMessage as chatReadinessMessageFor,
   DENIED_APPROVAL_COMPOSER_PLACEHOLDER,
 } from "../lib/composer-placeholder";
-import {
-  AppWindow,
-  GitFork,
-  TerminalSquare,
-  MessagesSquare,
-} from "lucide-react";
+import { AppWindow, GitFork, TerminalSquare, MessagesSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { KeepVisualChatContext } from "../lib/visual-menu-actions";
 import { useReadAloud } from "../lib/tts-client";
@@ -169,7 +174,11 @@ import {
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
 import { AgentModelPopover } from "../components/agent-model-popover";
-import { agentSliderComposerState, agentSliderStepTarget, agentSliderStopSetsEffort } from "../lib/agent-slider-view";
+import {
+  agentSliderComposerState,
+  agentSliderStepTarget,
+  agentSliderStopSetsEffort,
+} from "../lib/agent-slider-view";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
 import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
 import {
@@ -182,7 +191,12 @@ import {
 import { AttachWorkspaceDialog } from "../components/attach-workspace-dialog";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { DesignModeBannerSlot, useDesignChatBodyHidden } from "../design/design-layout";
-import { useCommandHandler, useCommandSystem, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
+import {
+  useCommandHandler,
+  useCommandSystem,
+  useShortcutBinding,
+  useShortcutLabel,
+} from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import {
   approvalShouldTakeFocus,
@@ -200,8 +214,16 @@ import { ContextMeter } from "../components/context-meter";
 import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
-import { ApprovalStatusLine, ChatApprovalCard, revealApprovalCard } from "../components/chat-approval-card";
-import { noteWorkspaceAllow, repeatableApproval, useWorkspaceRepeatNudge } from "../lib/switch-to-auto";
+import {
+  ApprovalStatusLine,
+  ChatApprovalCard,
+  revealApprovalCard,
+} from "../components/chat-approval-card";
+import {
+  noteWorkspaceAllow,
+  repeatableApproval,
+  useWorkspaceRepeatNudge,
+} from "../lib/switch-to-auto";
 import { useApprovalStatusLine } from "../lib/use-approval-status-line";
 import { isComputerUseAccessApprovalDetails } from "../shared/computer-use-access";
 import { liveOpenChat } from "../lib/live-open-chat";
@@ -230,10 +252,7 @@ import {
   type GenerationHandle,
   type StreamCallbacks,
 } from "../lib/ipc";
-import {
-  consumePendingChatHandoff,
-  subscribePendingChatHandoff,
-} from "../lib/chat-handoff-bridge";
+import { consumePendingChatHandoff, subscribePendingChatHandoff } from "../lib/chat-handoff-bridge";
 import { isNoWorkspace, noWorkspaceHome } from "../lib/no-workspace";
 import { continueInWorkspaceChoices } from "../lib/new-chat-workspaces";
 import { noWorkspaceFolderForFirstSend } from "../lib/no-workspace-send";
@@ -281,7 +300,10 @@ import {
 } from "../lib/types";
 import { COMPUTER_USE_CONTINUE_PROMPT } from "../shared/computer-use-access";
 import { userFacingErrorMessage } from "../lib/ipc-error";
-import { PROVIDER_FAILURE_FOLLOW_UPS, type ProviderFailureAction } from "../shared/provider-failure";
+import {
+  PROVIDER_FAILURE_FOLLOW_UPS,
+  type ProviderFailureAction,
+} from "../shared/provider-failure";
 import {
   formatRecoveredAskUserQuestionAnswers,
   INTERRUPTED_REPLY_FOLLOW_UP,
@@ -357,9 +379,7 @@ import {
   subscribeDetachedLifecycleStreams,
   visibleDetachedLifecycleProjection,
 } from "../lib/chat-terminal-sync";
-import {
-  ASSISTANT_WORKSPACE_ID,
-} from "../shared/assistant";
+import { ASSISTANT_WORKSPACE_ID } from "../shared/assistant";
 import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
@@ -415,7 +435,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const persistedChat = useChat(draft ? undefined : chatId);
   // Control (rename, stop, approvals, questions, steer) goes through the same
   // session the remote pane uses; local turns still stream through startGeneration.
-  const { control: chatControl } = useChatSession(localHostAdapter, { hostId: LOCAL_HOST_ID, chatId });
+  const { control: chatControl } = useChatSession(localHostAdapter, {
+    hostId: LOCAL_HOST_ID,
+    chatId,
+  });
   // Draft projection stays out of the query cache and every persisted chat list.
   const chat = draft
     ? { ...persistedChat, data: draft.chat, isLoading: false, isError: false }
@@ -452,7 +475,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
   // Settled native visuals here can be kept in this workspace's Artifacts.
   const keepVisualChatId =
-    chat.data && !chat.data.botId && !chat.data.owner && effectiveWorkspace && effectiveWorkspaceId !== ASSISTANT_WORKSPACE_ID
+    chat.data &&
+    !chat.data.botId &&
+    !chat.data.owner &&
+    effectiveWorkspace &&
+    effectiveWorkspaceId !== ASSISTANT_WORKSPACE_ID
       ? chatId
       : null;
   const effectiveWorkspaceIdRef = React.useRef(effectiveWorkspaceId);
@@ -460,7 +487,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // A moved or deleted folder is named above the composer, and a send is
   // refused before it reaches the agent (main refuses it again at start).
   const folderWorkspaceId =
-    effectiveWorkspace && workspaceFolderCheckApplies(effectiveWorkspace) ? effectiveWorkspace.id : undefined;
+    effectiveWorkspace && workspaceFolderCheckApplies(effectiveWorkspace)
+      ? effectiveWorkspace.id
+      : undefined;
   const folderPresenceQuery = useQuery({
     queryKey: queryKeys.workspaceFolderPresence(folderWorkspaceId ?? ""),
     queryFn: () => workspacesApi.folderPresence(folderWorkspaceId!),
@@ -508,10 +537,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
       // A send refused by the folder check may be waiting in the paused queue
       // with the composer already cleared.
       const initialText = (
-        loadComposerDraft(chatId).text.trim() || chatMessageQueue(chatId).getSnapshot().messages[0]?.text || ""
+        loadComposerDraft(chatId).text.trim() ||
+        chatMessageQueue(chatId).getSnapshot().messages[0]?.text ||
+        ""
       ).trim();
       void newChatActions
-        .openNewChatIn(mainWorkspaceId, { gitMode: "checkout", ...(initialText ? { initialText } : {}) })
+        .openNewChatIn(mainWorkspaceId, {
+          gitMode: "checkout",
+          ...(initialText ? { initialText } : {}),
+        })
         .catch((error: unknown) => {
           toast.error(error instanceof Error ? error.message : "Couldn't start a new chat.");
         });
@@ -519,17 +553,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [chatId, newChatActions],
   );
   const folderWorkspaceRef = React.useRef<{ id: string; name: string } | undefined>(undefined);
-  folderWorkspaceRef.current = folderWorkspaceId ? { id: folderWorkspaceId, name: effectiveWorkspace!.name } : undefined;
+  folderWorkspaceRef.current = folderWorkspaceId
+    ? { id: folderWorkspaceId, name: effectiveWorkspace!.name }
+    : undefined;
   // Agent-backed models need someone answering approvals in an ordinary chat.
-  const agentBlockedSurface: AcpHarnessBlockedSurface | undefined =
-    chat.data?.botId ? "bot" : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID ? "assistant" : undefined;
+  const agentBlockedSurface: AcpHarnessBlockedSurface | undefined = chat.data?.botId
+    ? "bot"
+    : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
+      ? "assistant"
+      : undefined;
   const sideQuestionBlockedReason = draft
     ? "Send the first message before asking a side question."
     : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
-        ? "Side questions are not available in Assistant chats."
-        : isAcpHarnessProvider(chat.data?.providerId ?? "")
-          ? "Side questions are not available with agent-backed models."
-          : undefined;
+      ? "Side questions are not available in Assistant chats."
+      : isAcpHarnessProvider(chat.data?.providerId ?? "")
+        ? "Side questions are not available with agent-backed models."
+        : undefined;
   const detachedGenerationDraining = React.useSyncExternalStore(
     subscribeDetachedLifecycleStreams,
     () => isDetachedLifecycleChatDraining(chatId, effectiveWorkspaceId),
@@ -540,7 +579,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => detachedLifecycleChatProjection(chatId, effectiveWorkspaceId),
     () => null,
   );
-  const visibleDetachedProjection = visibleDetachedLifecycleProjection(detachedProjection, chat.data?.messages);
+  const visibleDetachedProjection = visibleDetachedLifecycleProjection(
+    detachedProjection,
+    chat.data?.messages,
+  );
   // Run input is admitted only for the document that owns the run, so a
   // mirrored run (a phone's turn) offers Stop and queueing but not Steer.
   const observedRunVisible = visibleDetachedProjection?.observed === true;
@@ -567,11 +609,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // A chat with messages owns its model: picking one here changes this chat
   // only. An empty chat follows, and sets, the app's model for new chats.
   const chatOwnsModel = !draft && hasMessages && !chat.data?.botId;
-  const { providerId, model, thinkingLevel: selectionThinkingLevel } = chatModelSelection(
-    chat.data,
-    chatOwnsModel,
-    appModel,
-  );
+  const {
+    providerId,
+    model,
+    thinkingLevel: selectionThinkingLevel,
+  } = chatModelSelection(chat.data, chatOwnsModel, appModel);
   const selectAppModel = appModel.select;
   // The latest pick per chat, so an older pick's answer never replaces a newer one.
   const chatModelPicksRef = React.useRef(new Map<string, number>());
@@ -590,7 +632,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const isLatestPick = () => chatModelPicksRef.current.get(chatId) === pick;
       // A chat's own level belongs to its model, so it travels with the pair.
       const withModel =
-        (pair: Pick<Chat, "providerId" | "model" | "thinkingLevel">) => (current: Chat | null | undefined) => {
+        (pair: Pick<Chat, "providerId" | "model" | "thinkingLevel">) =>
+        (current: Chat | null | undefined) => {
           if (!current) return current;
           const { thinkingLevel: _replaced, ...rest } = current;
           return {
@@ -613,7 +656,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
             providerId: nextProviderId,
             model: nextModel,
             thinkingLevel:
-              level === undefined ? (sameModel ? current?.thinkingLevel : undefined) : (level ?? undefined),
+              level === undefined
+                ? sameModel
+                  ? current?.thinkingLevel
+                  : undefined
+                : (level ?? undefined),
           }),
         );
         try {
@@ -623,7 +670,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
           void qc.invalidateQueries({ queryKey: queryKeys.chats });
         } catch (error) {
           if (isLatestPick() && previous) qc.setQueryData<Chat | null>(key, withModel(previous));
-          toast.error(error instanceof Error ? error.message : "This chat's model could not be changed.");
+          toast.error(
+            error instanceof Error ? error.message : "This chat's model could not be changed.",
+          );
         }
       })();
     },
@@ -662,10 +711,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () =>
       agentSliderComposerState(
         agentSlider,
-        { providers: pickerProviders, hiddenModelsByProvider: settings.data?.hiddenModelsByProvider },
+        {
+          providers: pickerProviders,
+          hiddenModelsByProvider: settings.data?.hiddenModelsByProvider,
+        },
         { providerId, model, thinkingLevel: selectionThinkingLevel },
       ),
-    [agentSlider, pickerProviders, settings.data?.hiddenModelsByProvider, providerId, model, selectionThinkingLevel],
+    [
+      agentSlider,
+      pickerProviders,
+      settings.data?.hiddenModelsByProvider,
+      providerId,
+      model,
+      selectionThinkingLevel,
+    ],
   );
   const stopSetsEffort = agentSliderStopSetsEffort(agentSliderState);
   const modelReadinessMessage = React.useMemo(() => {
@@ -696,7 +755,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
       return "This model is hidden from new chats. Show a model in Settings → Providers before sending.";
     }
     return undefined;
-  }, [agentBlockedSurface, hasMessages, model, providerId, providers.isLoading, selectedProvider, settings.data]);
+  }, [
+    agentBlockedSurface,
+    hasMessages,
+    model,
+    providerId,
+    providers.isLoading,
+    selectedProvider,
+    settings.data,
+  ]);
   const chatReadinessMessage = chatReadinessMessageFor({
     loading: chat.isLoading,
     failed: chat.isError,
@@ -722,9 +789,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     : undefined;
   // A chat over its spending limit sends nothing until the person allows more.
   const spending = useSpendingStatus("chat", draft ? undefined : chatId);
-  const spendingReached = spending.status?.state === "reached" ? spendingNotice(spending.status)?.title : undefined;
+  const spendingReached =
+    spending.status?.state === "reached" ? spendingNotice(spending.status)?.title : undefined;
   const ready = modelReady && !chatReadinessMessage && !draftGitPending && !spendingReached;
-  const readinessMessage = chatReadinessMessage ?? draftGitPending ?? spendingReached ?? modelReadinessMessage;
+  const readinessMessage =
+    chatReadinessMessage ?? draftGitPending ?? spendingReached ?? modelReadinessMessage;
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -737,7 +806,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // on the ambient triggers (open, model change, settle, draft typing) and
   // pushed live during a generation via chat:context-pressure.
   const showComposerContextUsage = React.useSyncExternalStore(
-    React.useCallback((listener: () => void) => { window.addEventListener(APPEARANCE_CHANGE_EVENT, listener); return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, listener); }, []),
+    React.useCallback((listener: () => void) => {
+      window.addEventListener(APPEARANCE_CHANGE_EVENT, listener);
+      return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, listener);
+    }, []),
     () => readCachedAppearance()?.showComposerContextUsage ?? true,
     () => true,
   );
@@ -779,7 +851,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
   }, [contextFeed, chatId, draft]);
   React.useEffect(
-    () => chatsApi.onContextPressure((eventChatId, pressure) => contextFeed.pushed(eventChatId, pressure)),
+    () =>
+      chatsApi.onContextPressure((eventChatId, pressure) =>
+        contextFeed.pushed(eventChatId, pressure),
+      ),
     [contextFeed],
   );
   React.useEffect(
@@ -811,7 +886,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const attachments = draftAttachments.length ? draftAttachments : undefined;
       contextFeed.draftChanged(draftText || attachments ? { draftText, attachments } : undefined);
       // New-chat entry points reuse only a draft whose composer is empty.
-      setChatDraftHasContent(chatId, Boolean(draftText || attachments || draftGrabbedElements.length));
+      setChatDraftHasContent(
+        chatId,
+        Boolean(draftText || attachments || draftGrabbedElements.length),
+      );
     },
     [chatId, contextFeed],
   );
@@ -919,7 +997,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => new Set(),
   );
   const [visualDrafts, setVisualDrafts] = React.useState<VisualDrafts>(NO_VISUAL_DRAFTS);
-  const [streamingUiVisuals, setStreamingUiVisuals] = React.useState<readonly ChatUiVisualV1[]>(NO_UI_VISUALS);
+  const [streamingUiVisuals, setStreamingUiVisuals] =
+    React.useState<readonly ChatUiVisualV1[]>(NO_UI_VISUALS);
   const [uiDrafts, setUiDrafts] = React.useState<UiDrafts>(NO_UI_DRAFTS);
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [persistedHandoffMessageId, setPersistedHandoffMessageId] = React.useState<string | null>(
@@ -959,7 +1038,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [deniedApprovalChatId, setDeniedApprovalChatId] = React.useState<string | null>(null);
   const approvalStatus = useApprovalStatusLine(chatId);
   const showApprovalStatus = approvalStatus.show;
-  const [questionnaire, setQuestionnaire] = React.useState<(AskUserQuestionPromptV1 & { source?: "remote" }) | null>(null);
+  const [questionnaire, setQuestionnaire] = React.useState<
+    (AskUserQuestionPromptV1 & { source?: "remote" }) | null
+  >(null);
   const [questionnaireSubmitting, setQuestionnaireSubmitting] = React.useState(false);
   // Aiden's "Open design mode?" card for this chat, while one is waiting.
   const designModeConsent = useDesignModeConsent(capabilities.designMode ? chatId : undefined);
@@ -1087,7 +1168,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         )
           return;
         setApprovals((current) => mergeRemoteApproval(current, remote));
-        setQuestionnaire((current) => current && current.source !== "remote" ? current : remoteQuestion);
+        setQuestionnaire((current) =>
+          current && current.source !== "remote" ? current : remoteQuestion,
+        );
       } catch {
         // Remote chat infrastructure is lazy; absence before first pairing is expected.
       }
@@ -1242,7 +1325,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       ? streamingArtifacts
       : (visibleDetachedProjection?.artifacts ?? NO_STREAMING_ARTIFACTS);
   const displayedStreamingUiVisuals =
-    streamingUiVisuals.length > 0 ? streamingUiVisuals : (visibleDetachedProjection?.uiVisuals ?? NO_UI_VISUALS);
+    streamingUiVisuals.length > 0
+      ? streamingUiVisuals
+      : (visibleDetachedProjection?.uiVisuals ?? NO_UI_VISUALS);
   const displayedGenerationTimeline =
     generationTimeline ?? visibleDetachedProjection?.timeline ?? null;
   const displayedLiveSubagents = React.useMemo(
@@ -1308,14 +1393,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // pill steps aside, unless its tray is open.
   const subagentCardOnScreen = useSubagentGroupOnScreen(subagentPillGenerations);
   const subagentPillShown = subagentPillVisible && (!subagentCardOnScreen || subagentTrayOpen);
-  const floatingRowHeight = useHeldFloatingRowHeight(measuredFloatingRowHeight, subagentPillVisible);
+  const floatingRowHeight = useHeldFloatingRowHeight(
+    measuredFloatingRowHeight,
+    subagentPillVisible,
+  );
   React.useEffect(() => {
     if (!subagentPillVisible) setSubagentTrayOpen(false);
   }, [subagentPillVisible]);
   // A finished batch's summary is for someone who scrolled away; once its card
   // is back on screen it has been seen.
   const subagentBatchSettled =
-    subagentPill.model !== null && subagentPill.model.activeCount === 0 && !subagentPill.model.attention;
+    subagentPill.model !== null &&
+    subagentPill.model.activeCount === 0 &&
+    !subagentPill.model.attention;
   const dismissSubagentPill = subagentPill.dismiss;
   React.useEffect(() => {
     if (subagentBatchSettled && subagentCardOnScreen && !subagentTrayOpen) dismissSubagentPill();
@@ -1351,7 +1441,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
       busy: contextLiveGeneration,
       streamId: liveOpenChatStreamId,
     });
-  }, [chatId, chatWorkspaceId, contextLiveGeneration, liveOpenChatOwner, liveOpenChatStreamId, liveOpenChatTitle]);
+  }, [
+    chatId,
+    chatWorkspaceId,
+    contextLiveGeneration,
+    liveOpenChatOwner,
+    liveOpenChatStreamId,
+    liveOpenChatTitle,
+  ]);
   React.useEffect(() => () => liveOpenChat.clear(liveOpenChatOwner), [liveOpenChatOwner]);
   // A run this pane did not start (a paired phone's turn) streams in live
   // once main reports the chat busy, and stays until its saved reply lands.
@@ -1365,8 +1462,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const modelChangeBlocked = isGenerating || isStartingGeneration || thinkingSaving;
   // In Custom a chat can still carry its own level; the effort control shows
   // it while the model's family offers it, since that is what the turn sends.
-  const ownLevelIn = <Level extends GenerationThinkingLevel>(levels: readonly Level[]): Level | undefined =>
-    selectionThinkingLevel && (levels as readonly GenerationThinkingLevel[]).includes(selectionThinkingLevel)
+  const ownLevelIn = <Level extends GenerationThinkingLevel>(
+    levels: readonly Level[],
+  ): Level | undefined =>
+    selectionThinkingLevel &&
+    (levels as readonly GenerationThinkingLevel[]).includes(selectionThinkingLevel)
       ? (selectionThinkingLevel as Level)
       : undefined;
   const stepAgentSlider = (direction: 1 | -1) => {
@@ -1532,7 +1632,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const continueChoices = React.useMemo(
     () =>
       missingFolderWorkspaceId
-        ? continueInWorkspaceChoices(workspaces, missingFolderWorkspaceId, missingFolderMainWorkspaceId)
+        ? continueInWorkspaceChoices(
+            workspaces,
+            missingFolderWorkspaceId,
+            missingFolderMainWorkspaceId,
+          )
         : [],
     [missingFolderMainWorkspaceId, missingFolderWorkspaceId, workspaces],
   );
@@ -1577,10 +1681,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // A chat another chat started (Phase 5, D7). It wins over an outside app's provenance.
   const chatLineage = chat.data?.startedBy;
   const allChats = useAllRegularChats(Boolean(forkLineage) || Boolean(chatLineage));
-  const leadChat = chatLineage ? allChats.data?.find((candidate) => candidate.id === chatLineage.chatId) : undefined;
+  const leadChat = chatLineage
+    ? allChats.data?.find((candidate) => candidate.id === chatLineage.chatId)
+    : undefined;
   const leadChatLoading = Boolean(chatLineage) && allChats.isPending;
-  const startedByChat = chatLineage ? (leadChatLoading ? "Started by another chat" : startedByChatLabel(leadChat?.title)) : undefined;
-  const leadChatMessageLabel = chatLineage && !leadChatLoading ? fromLeadChatLabel(leadChat?.title) : undefined;
+  const startedByChat = chatLineage
+    ? leadChatLoading
+      ? "Started by another chat"
+      : startedByChatLabel(leadChat?.title)
+    : undefined;
+  const leadChatMessageLabel =
+    chatLineage && !leadChatLoading ? fromLeadChatLabel(leadChat?.title) : undefined;
   const forkSource = forkLineage
     ? allChats.data?.find((candidate) => candidate.id === forkLineage.chatId)
     : undefined;
@@ -1623,7 +1734,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       const prefill = {
         text: message.content,
-        attachments: await attachmentsWithBytes(chatId, message.attachments ?? [], chatsApi.imageData),
+        attachments: await attachmentsWithBytes(
+          chatId,
+          message.attachments ?? [],
+          chatsApi.imageData,
+        ),
         ...(message.grabbedElements?.length
           ? { grabbedElements: structuredClone(message.grabbedElements) }
           : {}),
@@ -1632,7 +1747,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         await copyChat({ messageId, position }, prefill, summary);
         return;
       }
-      if (summary) throw new Error("The first prompt has nothing before it to fork with a summary.");
+      if (summary)
+        throw new Error("The first prompt has nothing before it to fork with a summary.");
       if (forkDisabledReason) throw new Error(`${forkDisabledReason}.`);
       const workspaceId = persistedChatWorkspaceId(chat.data?.workspaceId);
       const created = createChatDraft(workspaceId, undefined, prefill.text).chat;
@@ -1655,7 +1771,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const forkFromTranscript = React.useCallback(
     (messageId: string, position: ChatForkPosition) => {
       void forkFromMessage(messageId, position).then(
-        () => toast.success(position === "before" ? "Forked — edit your message and send" : "Chat forked"),
+        () =>
+          toast.success(
+            position === "before" ? "Forked — edit your message and send" : "Chat forked",
+          ),
         (error: unknown) =>
           toast.error(error instanceof Error ? error.message : "Couldn't fork this chat."),
       );
@@ -1755,20 +1874,43 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   // A boolean, so a timeline update re-publishes the panel's details only when it flips.
   const timelineCompacting =
-    displayedGenerationTimeline?.steps.some((step) => isToolStep(step) && step.toolName === "compact_context" && (step.status === "pending" || step.status === "running")) ?? false;
+    displayedGenerationTimeline?.steps.some(
+      (step) =>
+        isToolStep(step) &&
+        step.toolName === "compact_context" &&
+        (step.status === "pending" || step.status === "running"),
+    ) ?? false;
   React.useEffect(() => {
-    environmentPanel.setContextDetails(!draft && chat.data ? {
-      chat: chat.data,
-      providerId,
-      providerLabel: selectedProvider?.label ?? providerId ?? "Unavailable",
-      providerArtwork: selectedProvider?.artwork,
-      modelId: model,
-      modelLabel: model ? resolveModelDisplay(model, modelInfo.data?.[model]).label : "Unavailable",
-      pressure: contextPressure,
-      compacting: contextCompactPending || timelineCompacting,
-    } : null);
+    environmentPanel.setContextDetails(
+      !draft && chat.data
+        ? {
+            chat: chat.data,
+            providerId,
+            providerLabel: selectedProvider?.label ?? providerId ?? "Unavailable",
+            providerArtwork: selectedProvider?.artwork,
+            modelId: model,
+            modelLabel: model
+              ? resolveModelDisplay(model, modelInfo.data?.[model]).label
+              : "Unavailable",
+            pressure: contextPressure,
+            compacting: contextCompactPending || timelineCompacting,
+          }
+        : null,
+    );
     return () => environmentPanel.setContextDetails(null);
-  }, [chat.data, draft, selectedProvider?.label, selectedProvider?.artwork, providerId, model, modelInfo.data, contextPressure, contextCompactPending, timelineCompacting, environmentPanel.setContextDetails]);
+  }, [
+    chat.data,
+    draft,
+    selectedProvider?.label,
+    selectedProvider?.artwork,
+    providerId,
+    model,
+    modelInfo.data,
+    contextPressure,
+    contextCompactPending,
+    timelineCompacting,
+    environmentPanel.setContextDetails,
+  ]);
 
   // The PR rail/push dialog read the presented chat even without subagents.
   React.useLayoutEffect(() => {
@@ -1891,7 +2033,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
           setModelCallRetry(null);
           // Seed main's ready preview before the frame mounts so the final
           // visual replaces its draft without a loading placeholder.
-          if (artifact.kind === "html" && event.src) primeInlineVisualPreview(chatId, artifact, event.src);
+          if (artifact.kind === "html" && event.src)
+            primeInlineVisualPreview(chatId, artifact, event.src);
           if (event.toolCallId) {
             const toolCallId = event.toolCallId;
             // Visuals key by mediaId, images by attachment id. Both
@@ -2011,7 +2154,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 ) {
                   return;
                 }
-                setLiveSubagentTranscripts((current) => foldLiveSubagentTranscript(current, update));
+                setLiveSubagentTranscripts((current) =>
+                  foldLiveSubagentTranscript(current, update),
+                );
               },
             }
           : {}),
@@ -2104,9 +2249,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             generationTimelineRef.current = null;
             setApprovals([]);
             // Timed-out prompts remain answerable after the agent continues with its default.
-            setQuestionnaire((current) =>
-              retainExpiredAskUserQuestionForLateAnswer(current),
-            );
+            setQuestionnaire((current) => retainExpiredAskUserQuestionForLateAnswer(current));
             setQuestionnaireSubmitting(false);
           }
         },
@@ -2192,9 +2335,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 generationTimelineRef.current = null;
               }
               setApprovals([]);
-              setQuestionnaire((current) =>
-                retainExpiredAskUserQuestionForLateAnswer(current),
-              );
+              setQuestionnaire((current) => retainExpiredAskUserQuestionForLateAnswer(current));
               setQuestionnaireSubmitting(false);
               const persistedFailure =
                 updatedChat?.messages[updatedChat.messages.length - 1]?.role === "assistant" &&
@@ -2352,7 +2493,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         const question = text.trim();
         // A refused follow-up must leave the earlier answer, and the card holding
         // the unsent text, on screen rather than unmounting it.
-        const previousView = btwViewRef.current?.requestId === "pending" ? null : btwViewRef.current;
+        const previousView =
+          btwViewRef.current?.requestId === "pending" ? null : btwViewRef.current;
         // The pane outlives navigation and a later start replaces this one, so a
         // settling start may touch the card only while it still owns it.
         const visit = chatVisitRef.current;
@@ -2441,7 +2583,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
           }
           // The notice above the composer names the folder; the toast stays short.
           if (presence?.presence === "missing") {
-            throw new Error(presence.worktree ? MANAGED_WORKTREE_MISSING_SEND_REFUSAL : WORKSPACE_FOLDER_MISSING_SEND_REFUSAL);
+            throw new Error(
+              presence.worktree
+                ? MANAGED_WORKTREE_MISSING_SEND_REFUSAL
+                : WORKSPACE_FOLDER_MISSING_SEND_REFUSAL,
+            );
           }
         }
       }
@@ -2647,9 +2793,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
         if (options?.goal) {
           // The chat exists now (a draft was just saved): set its goal before the answer
           // starts, so the kickoff note rides on it. A refusal leaves an ordinary answer.
-          await chatsApi.setGoal(updated.id, options.goal, options.goalSource ?? "slash").catch((error: unknown) => {
-            toast.error(error instanceof Error ? error.message : "The goal could not be set.");
-          });
+          await chatsApi
+            .setGoal(updated.id, options.goal, options.goalSource ?? "slash")
+            .catch((error: unknown) => {
+              toast.error(error instanceof Error ? error.message : "The goal could not be set.");
+            });
         }
         void runGeneration(messageTurnId).then((started) => {
           if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
@@ -2716,7 +2864,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       // visible user bubble all apply.
       void handleSend(text, []).catch((error: unknown) => {
         stageComposerText(chatId, text);
-        toast.error(error instanceof Error ? error.message : "Could not send the visual's follow-up.");
+        toast.error(
+          error instanceof Error ? error.message : "Could not send the visual's follow-up.",
+        );
       });
     },
     [chatId, handleSend],
@@ -2731,14 +2881,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (visibleDetachedProjection && !generationRef.current && !isStoppingGeneration) {
       const { streamId } = visibleDetachedProjection;
       setIsStoppingGeneration(true);
-      void chatControl.cancel(streamId).then((cancelled) => {
-        if (!cancelled && chatIdRef.current === chatId) setIsStoppingGeneration(false);
-      }).catch((error: unknown) => {
-        if (chatIdRef.current === chatId) {
-          setIsStoppingGeneration(false);
-          toast.error(error instanceof Error ? error.message : "Couldn't stop this response.");
-        }
-      });
+      void chatControl
+        .cancel(streamId)
+        .then((cancelled) => {
+          if (!cancelled && chatIdRef.current === chatId) setIsStoppingGeneration(false);
+        })
+        .catch((error: unknown) => {
+          if (chatIdRef.current === chatId) {
+            setIsStoppingGeneration(false);
+            toast.error(error instanceof Error ? error.message : "Couldn't stop this response.");
+          }
+        });
       return true;
     }
     if (!generationRef.current || !canStopGeneration) return false;
@@ -2795,12 +2948,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 : {}),
             }
           : undefined;
-      return handleSend(
-        message.text,
-        message.attachments,
-        message.skillInvocation,
-        sendOptions,
-      );
+      return handleSend(message.text, message.attachments, message.skillInvocation, sendOptions);
     },
   });
   // A visual's follow-up must never race a starting run, a detached run, or
@@ -2817,7 +2965,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   /** Start on the agent's suggested goal: the objective goes as the person's message, with the goal, as `/goal` does. */
   const startProposedGoal = React.useCallback(
     async (objective: string) => {
-      if (visualPromptBusyRef.current) throw new Error("Wait for the answer to finish, then press Start.");
+      if (visualPromptBusyRef.current)
+        throw new Error("Wait for the answer to finish, then press Start.");
       await handleSend(objective, [], undefined, { goal: objective, goalSource: "proposal" });
     },
     [handleSend],
@@ -2887,7 +3036,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     async (streamId: string, text: string, inputSource?: ChatInputSourceV1) => {
       const receipt = await admitRunInputOnceStarted({
         admit: () =>
-          chatControl.submitInput(streamId, "steer", text, inputSource ? { inputSource } : undefined),
+          chatControl.submitInput(
+            streamId,
+            "steer",
+            text,
+            inputSource ? { inputSource } : undefined,
+          ),
         // This pane's own run can still be starting; a detached one is not retried.
         live: () => generationRef.current?.streamId === streamId && !stopRequestedRef.current,
       });
@@ -2914,7 +3068,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
       skillInvocation?: SkillInvocationV1,
       options?: { grabbedElements?: GrabbedElementContextV1[] },
     ) => {
-      if (!text.trim() || attachments.length > 0 || options?.grabbedElements?.length || skillInvocation) {
+      if (
+        !text.trim() ||
+        attachments.length > 0 ||
+        options?.grabbedElements?.length ||
+        skillInvocation
+      ) {
         throw new Error("Steer requires text without attachments, browser elements, or a skill.");
       }
       if (text.length > MAX_RUN_INPUT_TEXT) {
@@ -2951,9 +3110,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const canSteerQueued =
-    !draft &&
-    (canStopGeneration || Boolean(steerableDetachedProjection)) &&
-    !isStoppingGeneration;
+    !draft && (canStopGeneration || Boolean(steerableDetachedProjection)) && !isStoppingGeneration;
 
   const steerQueued = React.useCallback(
     async (id: string) => {
@@ -2968,9 +3125,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         toast.info(lateSteerQueuedNotice(messageQueue.getSnapshot().paused));
         return;
       }
-      const queuedSource = messageQueue
-        .getSnapshot()
-        .messages.find((message) => message.id === id)?.options?.inputSource;
+      const queuedSource = messageQueue.getSnapshot().messages.find((message) => message.id === id)
+        ?.options?.inputSource;
       const outcome = await steerQueuedMessage({
         queue: messageQueue,
         id,
@@ -3023,7 +3179,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     steer: (text) => {
       const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
-      if (!streamId || isStoppingGeneration || stopRequestedRef.current) return Promise.resolve(null);
+      if (!streamId || isStoppingGeneration || stopRequestedRef.current)
+        return Promise.resolve(null);
       setDeniedApprovalChatId(null);
       return admitSteer(streamId, text, "voice");
     },
@@ -3106,7 +3263,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
         );
         setDeniedApprovalChatId(decision === "deny" ? decisionChatId : null);
         const workspaceId = effectiveWorkspaceIdRef.current;
-        if (decision === "allow" && options?.scope === undefined && workspaceId && repeatableApproval(prompt)) {
+        if (
+          decision === "allow" &&
+          options?.scope === undefined &&
+          workspaceId &&
+          repeatableApproval(prompt)
+        ) {
           noteWorkspaceAllow(workspaceId, prompt.toolName);
         }
         showApprovalStatus(
@@ -3116,7 +3278,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 decision: "allow",
                 ...(options?.scope ? { scope: options.scope } : {}),
                 // Computer Use's always covers every chat; elsewhere it is this workspace's list.
-                always: isComputerUseAccessApprovalDetails(prompt.details) ? "everywhere" : "workspace",
+                always: isComputerUseAccessApprovalDetails(prompt.details)
+                  ? "everywhere"
+                  : "workspace",
               },
         );
       } catch (approvalError) {
@@ -3155,7 +3319,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (!helperChatStore) return;
     // Leaving the chat closes its expanded helper chat.
     return () => {
-      if (helperChatStore.getState().chatId === chatId) helperChatStore.collapse({ restoreFocus: false });
+      if (helperChatStore.getState().chatId === chatId)
+        helperChatStore.collapse({ restoreFocus: false });
     };
   }, [chatId, helperChatStore]);
   // Only whether this chat's helper chat is expanded; streamed helper tokens do not redraw the pane.
@@ -3185,9 +3350,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
         const status =
           expiredQuestionnaireId === prompt.promptId
             ? "expired"
-            : (await chatControl.answerQuestion({ promptId: prompt.promptId, response, source: prompt.source }))?.status;
+            : (
+                await chatControl.answerQuestion({
+                  promptId: prompt.promptId,
+                  response,
+                  source: prompt.source,
+                })
+              )?.status;
         if (chatIdRef.current !== chatId) return;
-        setQuestionnaire((current) => current?.promptId === prompt.promptId ? null : current);
+        setQuestionnaire((current) => (current?.promptId === prompt.promptId ? null : current));
         if (status === "expired") {
           setLateQuestionnaireAnswer(
             response.cancelled
@@ -3237,7 +3408,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // marker on the chat; once ready, Continue resumes it as a normal turn.
   const computerUsePendingContinue =
     !draft && computerUseGloballyEnabled && chat.data?.computerUsePendingContinue === true;
-  const [computerUseContinueHiddenFor, setComputerUseContinueHiddenFor] = React.useState<string | null>(null);
+  const [computerUseContinueHiddenFor, setComputerUseContinueHiddenFor] = React.useState<
+    string | null
+  >(null);
   React.useEffect(() => {
     if (!computerUsePendingContinue) setComputerUseContinueHiddenFor(null);
   }, [computerUsePendingContinue]);
@@ -3271,13 +3444,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (getChatDraft(chatId)?.sending)
         throw new Error("Wait for the first message to finish saving.");
       if (environmentPanel.gitOperationBusy)
-        throw new Error(
-          "Wait for the current Git operation to finish before changing approvals.",
-        );
+        throw new Error("Wait for the current Git operation to finish before changing approvals.");
       if (environmentPanel.editorState.saving)
-        throw new Error(
-          "Wait for the open file to finish saving before changing approvals.",
-        );
+        throw new Error("Wait for the open file to finish saving before changing approvals.");
       if (environmentPanel.editorState.dirty)
         throw new Error("Save or discard the open file's edits before changing approvals.");
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
@@ -3349,7 +3518,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [clearOwnThinkingLevel, googleThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [
+      clearOwnThinkingLevel,
+      googleThinkingSupported,
+      isGenerating,
+      isStartingGeneration,
+      model,
+      qc,
+      thinkingSaving,
+    ],
   );
 
   const changeCodexThinking = React.useCallback(
@@ -3378,7 +3555,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [clearOwnThinkingLevel, codexThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [
+      clearOwnThinkingLevel,
+      codexThinkingSupported,
+      isGenerating,
+      isStartingGeneration,
+      model,
+      qc,
+      thinkingSaving,
+    ],
   );
 
   const changeAnthropicThinking = React.useCallback(
@@ -3407,7 +3592,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [anthropicThinkingSupported, clearOwnThinkingLevel, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [
+      anthropicThinkingSupported,
+      clearOwnThinkingLevel,
+      isGenerating,
+      isStartingGeneration,
+      model,
+      qc,
+      thinkingSaving,
+    ],
   );
 
   const changeProviderThinking = React.useCallback(
@@ -3515,7 +3708,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
           }
           return;
         }
-        if (claimed.draftText || (claimed.draftAttachments && claimed.draftAttachments.length > 0)) {
+        if (
+          claimed.draftText ||
+          (claimed.draftAttachments && claimed.draftAttachments.length > 0)
+        ) {
           restoreUnsentMessage(
             chatId,
             claimed.draftText ?? "",
@@ -3785,7 +3981,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (!workspace) return;
     await adoptWorkspace(qc, workspace);
     await moveNewChatToWorkspace(workspace.id);
-  }, [documentAppendReconciliationRequired, isNewChat, moveNewChatToWorkspace, qc, workspaceChangeBusy]);
+  }, [
+    documentAppendReconciliationRequired,
+    isNewChat,
+    moveNewChatToWorkspace,
+    qc,
+    workspaceChangeBusy,
+  ]);
 
   // The headline name and app-level entry points open the composer's menu.
   const [cloningProject, setCloningProject] = React.useState(false);
@@ -3934,7 +4136,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const name = branchName?.trim();
       if (name && !isValidBranchName(name)) throw new Error("Enter a valid Git branch name.");
       // `/worktree` reaches here without the menu's disabled row.
-      if (git.data?.unborn) throw new Error("Create the first commit before starting a new worktree.");
+      if (git.data?.unborn)
+        throw new Error("Create the first commit before starting a new worktree.");
       if (draftWorkIn?.selectedWorktreeId && !draftWorkIn.source) {
         throw new Error(
           "This worktree's repository isn't an Aiden workspace, so a new worktree can't start from it.",
@@ -3972,7 +4175,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
           queryFn: () => gitApi.branches(workspaceId),
           staleTime: 5_000,
         });
-        const defaults = resolveDraftWorktreeDefaults(readChatDraftGitMemory(workspaceId), branches);
+        const defaults = resolveDraftWorktreeDefaults(
+          readChatDraftGitMemory(workspaceId),
+          branches,
+        );
         if (!defaults) throw new Error("Create the first commit before starting a new worktree.");
         baseRef = defaults.baseRef;
         fromOrigin = defaults.fromOrigin;
@@ -4067,9 +4273,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const visualizingLive =
     (hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) ||
       hasActiveToolStep(displayedGenerationTimeline, RENDER_UI_TOOL_NAME)) &&
-    !streamComplete && !visibleDetachedProjection;
-  const timelineActivity = visualizingLive &&
-    agentActivity?.phase !== "waiting" && agentActivity?.phase !== "stopping"
+    !streamComplete &&
+    !visibleDetachedProjection;
+  const timelineActivity =
+    visualizingLive && agentActivity?.phase !== "waiting" && agentActivity?.phase !== "stopping"
       ? { phase: "visualizing" as const, label: "Visualizing", mark: "scan-grid" as const }
       : agentActivity;
   const chronologicalLiveRows = liveAssistantPresentationRows(
@@ -4080,15 +4287,30 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const visibleAgentActivity = resolveVisibleAgentActivity(timelineActivity, {
     reasoningVisible:
       hasActiveThinkingStep(displayedGenerationTimeline) &&
-      chronologicalLiveRows?.some((row) => row.kind === "reasoning" && row.step.finishedAt === undefined) === true,
+      chronologicalLiveRows?.some(
+        (row) => row.kind === "reasoning" && row.step.finishedAt === undefined,
+      ) === true,
     visualizingVisible:
-      visualizingLive && chronologicalLiveRows?.some((row) => row.kind === "activity" &&
-        row.steps.some((step) => step.kind === "tool" &&
-          (step.toolName === RENDER_ARTIFACT_TOOL_NAME || step.toolName === RENDER_UI_TOOL_NAME))) === true,
+      visualizingLive &&
+      chronologicalLiveRows?.some(
+        (row) =>
+          row.kind === "activity" &&
+          row.steps.some(
+            (step) =>
+              step.kind === "tool" &&
+              (step.toolName === RENDER_ARTIFACT_TOOL_NAME ||
+                step.toolName === RENDER_UI_TOOL_NAME),
+          ),
+      ) === true,
     toolVisible:
-      chronologicalLiveRows?.some((row) => row.kind === "activity" &&
-        row.steps.some((step) => step.kind === "tool" &&
-          (step.status === "pending" || step.status === "running"))) === true,
+      chronologicalLiveRows?.some(
+        (row) =>
+          row.kind === "activity" &&
+          row.steps.some(
+            (step) =>
+              step.kind === "tool" && (step.status === "pending" || step.status === "running"),
+          ),
+      ) === true,
   });
 
   React.useEffect(() => {
@@ -4096,8 +4318,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     const previousFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const takeFocus = approvalShouldTakeFocus({
-      typing:
-        isEditableTypingTarget(previousFocus) || isReservedTypingSurface(previousFocus),
+      typing: isEditableTypingTarget(previousFocus) || isReservedTypingSurface(previousFocus),
       overlayOpen: typingRedirectBlockedByOverlay(previousFocus),
     });
     if (!takeFocus) return;
@@ -4177,8 +4398,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (message.role === "assistant") {
         // Never scan past a newer failed or empty response.
         return message.providerFailure === undefined &&
-          (!message.timeline || message.timeline.status === "completed") && message.content.trim().length > 0
-          ? message.id : undefined;
+          (!message.timeline || message.timeline.status === "completed") &&
+          message.content.trim().length > 0
+          ? message.id
+          : undefined;
       }
     }
     return undefined;
@@ -4215,7 +4438,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
           if (chatIdRef.current !== chatId) return;
         }
         await handleSend(
-          action === "continue" ? PROVIDER_FAILURE_FOLLOW_UPS.continue : PROVIDER_FAILURE_FOLLOW_UPS.try_again,
+          action === "continue"
+            ? PROVIDER_FAILURE_FOLLOW_UPS.continue
+            : PROVIDER_FAILURE_FOLLOW_UPS.try_again,
           [],
         );
       } catch (actionError) {
@@ -4273,7 +4498,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       });
     }
   }, [chatId, handleSend]);
-  const replyInterrupted = transcriptIdle && !draft && !failedReplyId && replyInterruptedQuery.data === true;
+  const replyInterrupted =
+    transcriptIdle && !draft && !failedReplyId && replyInterruptedQuery.data === true;
   // What the interrupted reply was waiting on. A question is offered again in
   // place of Resume; an approval is only named on the Resume card.
   const interruptedWaitsQuery = useQuery({
@@ -4283,10 +4509,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
     staleTime: Infinity,
     retry: false,
   });
-  const [dismissedWaitIds, setDismissedWaitIds] = React.useState<ReadonlySet<string>>(() => new Set());
+  const [dismissedWaitIds, setDismissedWaitIds] = React.useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const interruptedWaits = React.useMemo(
     () =>
-      replyInterrupted ? (interruptedWaitsQuery.data ?? []).filter((wait) => !dismissedWaitIds.has(wait.waitId)) : [],
+      replyInterrupted
+        ? (interruptedWaitsQuery.data ?? []).filter((wait) => !dismissedWaitIds.has(wait.waitId))
+        : [],
     [dismissedWaitIds, interruptedWaitsQuery.data, replyInterrupted],
   );
   const recoveredQuestion = React.useMemo<AskUserQuestionPromptV1 | undefined>(() => {
@@ -4322,7 +4552,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [chatId, focusMainWaiting, helperChatStore, mainQuestionPending]);
   // Like Resume, sending a recovered answer is busy only in its own chat.
   const recoveredAnswerTokenRef = React.useRef(0);
-  const [recoveredAnswerOwners, setRecoveredAnswerOwners] = React.useState<Readonly<Record<string, number>>>({});
+  const [recoveredAnswerOwners, setRecoveredAnswerOwners] = React.useState<
+    Readonly<Record<string, number>>
+  >({});
   const recoveredAnswerSending = recoveredAnswerOwners[chatId] !== undefined;
   const answerRecoveredQuestion = React.useCallback(
     async (response: AskUserQuestionResponseV1) => {
@@ -4333,7 +4565,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       try {
         // Closing the card leaves the plain Resume card; Submit always sends, skipped questions included.
         if (!response.cancelled) {
-          await handleSend(formatRecoveredAskUserQuestionAnswers(recoveredQuestion.questions, response.answers), []);
+          await handleSend(
+            formatRecoveredAskUserQuestionAnswers(recoveredQuestion.questions, response.answers),
+            [],
+          );
         }
         setDismissedWaitIds((ids) => new Set(ids).add(waitId));
         // Once the host forgets the wait, drop it from the cached reads too, so
@@ -4341,8 +4576,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         void chatsApi
           .dismissInterruptedWait(chatId, waitId)
           .then(() =>
-            qc.setQueriesData<InterruptedWaitV1[]>({ queryKey: ["chat-interrupted-waits", chatId] }, (waits) =>
-              waits?.filter((wait) => wait.waitId !== waitId),
+            qc.setQueriesData<InterruptedWaitV1[]>(
+              { queryKey: ["chat-interrupted-waits", chatId] },
+              (waits) => waits?.filter((wait) => wait.waitId !== waitId),
             ),
           )
           .catch(() => undefined);
@@ -4363,13 +4599,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const interruptedWaitsRead = interruptedWaitsQuery.isFetched || interruptedWaitsQuery.isError;
   const interruptedReply = React.useMemo(() => {
     if (!replyInterrupted || !interruptedWaitsRead || recoveredQuestion) return undefined;
-    const approvalSummaries = interruptedWaits.flatMap((wait) => (wait.kind === "approval" ? [wait.summary] : []));
+    const approvalSummaries = interruptedWaits.flatMap((wait) =>
+      wait.kind === "approval" ? [wait.summary] : [],
+    );
     return {
       busy: resumeBusy,
       onResume: () => void resumeInterruptedReply(),
       ...(approvalSummaries.length ? { approvalSummaries } : {}),
     };
-  }, [interruptedWaits, interruptedWaitsRead, recoveredQuestion, replyInterrupted, resumeBusy, resumeInterruptedReply]);
+  }, [
+    interruptedWaits,
+    interruptedWaitsRead,
+    recoveredQuestion,
+    replyInterrupted,
+    resumeBusy,
+    resumeInterruptedReply,
+  ]);
 
   React.useEffect(() => {
     void readAloudController.refreshStatus(chatId);
@@ -4393,32 +4638,34 @@ export function ChatPane({ chatId }: { chatId: string }) {
         : readAloudState.error
           ? "error"
           : "ready";
-  const readAloudProps: ReadAloudActionProps | undefined = readAloudCandidateId &&
-    (!readAloudState.latestSource || readAloudState.latestSource.source?.messageId === readAloudCandidateId)
-    ? {
-        active: Boolean(readAloudActive || readAloudState.busy),
-        phase: readAloudPhase,
-        omissions: readAloudState.job?.omissions ?? [],
-        error: readAloudState.error?.message,
-        onActivate: () => {
-          const source = readAloudState.latestSource?.source;
-          if (!readAloudState.status?.synthesisReady) {
-            void navigate({ to: "/settings", search: { section: "tts" } });
-            return;
-          }
-          if (!source || source.messageId !== readAloudCandidateId) {
-            void readAloudController.refreshStatus(chatId);
-            return;
-          }
-          void readAloudController.start(source);
-        },
-        onStop: () => readAloudController.stop(),
-        onTogglePause: () => {
-          if (readAloudState.paused) void readAloudController.resume();
-          else void readAloudController.pause();
-        },
-      }
-    : undefined;
+  const readAloudProps: ReadAloudActionProps | undefined =
+    readAloudCandidateId &&
+    (!readAloudState.latestSource ||
+      readAloudState.latestSource.source?.messageId === readAloudCandidateId)
+      ? {
+          active: Boolean(readAloudActive || readAloudState.busy),
+          phase: readAloudPhase,
+          omissions: readAloudState.job?.omissions ?? [],
+          error: readAloudState.error?.message,
+          onActivate: () => {
+            const source = readAloudState.latestSource?.source;
+            if (!readAloudState.status?.synthesisReady) {
+              void navigate({ to: "/settings", search: { section: "tts" } });
+              return;
+            }
+            if (!source || source.messageId !== readAloudCandidateId) {
+              void readAloudController.refreshStatus(chatId);
+              return;
+            }
+            void readAloudController.start(source);
+          },
+          onStop: () => readAloudController.stop(),
+          onTogglePause: () => {
+            if (readAloudState.paused) void readAloudController.resume();
+            else void readAloudController.pause();
+          },
+        }
+      : undefined;
   const floatingChromeVisible = todoPanelHasVisibleChrome(todoSnapshot) || subagentPillVisible;
 
   // A Bot chat redirects to its Bot route above; render nothing while it leaves.
@@ -4474,7 +4721,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     <button
                       type="button"
                       className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                      onClick={() => void navigate({ to: "/chat/$chatId", params: { chatId: leadChat.id } })}
+                      onClick={() =>
+                        void navigate({ to: "/chat/$chatId", params: { chatId: leadChat.id } })
+                      }
                     >
                       {startedByChat}
                     </button>
@@ -4515,7 +4764,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         titleAccessory={
           effectiveWorkspace || chat.data?.ephemeral === true ? (
             <div className="no-drag flex min-w-0 items-center gap-1.5">
-              {effectiveWorkspace && !(chat.data?.ephemeral === true && isNoWorkspace(effectiveWorkspace)) ? (
+              {effectiveWorkspace &&
+              !(chat.data?.ephemeral === true && isNoWorkspace(effectiveWorkspace)) ? (
                 <WorkspaceChip
                   workspace={effectiveWorkspace}
                   git={effectiveWorkspace.folderPath ? git.data : undefined}
@@ -4613,7 +4863,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 active: terminal.open,
                 // Left out without a folder or with workspace access off (the
                 // workspace chip says why), unless a terminal is still open to close.
-                available: Boolean(effectiveWorkspace?.folderPath && (terminal.canOpen || terminal.open)),
+                available: Boolean(
+                  effectiveWorkspace?.folderPath && (terminal.canOpen || terminal.open),
+                ),
               },
             ]}
             trailing={
@@ -4692,7 +4944,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   stopPendingRunIds={environmentPanel.subagentStopPendingRunIds}
                   stopErrors={environmentPanel.subagentStopErrorsByRunId}
                   onOpenRun={environmentPanel.openSubagent}
-                  onOpenPanel={(returnTarget) => environmentPanel.showTools("subagents", returnTarget)}
+                  onOpenPanel={(returnTarget) =>
+                    environmentPanel.showTools("subagents", returnTarget)
+                  }
                   onStop={environmentPanel.stopSubagent}
                   onShowInChat={showSubagentsInChat}
                   shortcut={subagentTrayShortcut}
@@ -4702,9 +4956,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   }}
                   returnFocus={() =>
                     // Stepping aside for its card hands focus to that card.
-                    onScreenSubagentGroupElement(subagentPillGenerations)?.querySelector<HTMLElement>(
-                      "[data-subagent-chip-group-toggle]",
-                    ) ?? composerRef.current
+                    onScreenSubagentGroupElement(
+                      subagentPillGenerations,
+                    )?.querySelector<HTMLElement>("[data-subagent-chip-group-toggle]") ??
+                    composerRef.current
                   }
                 />
               ) : null}
@@ -4766,13 +5021,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
             ) : null}
             {recoveredQuestion ? <AskUserQuestionExpiryNotice state="restarted" /> : null}
             {designModeConsent && !questionnaire ? (
-              <DesignModeConsentCard key={designModeConsent.requestId} request={designModeConsent} />
+              <DesignModeConsentCard
+                key={designModeConsent.requestId}
+                request={designModeConsent}
+              />
             ) : null}
             {missingWorkspaceFolder && !questionnaire ? (
               <WorkspaceFolderMissingNotice
                 workspaceName={missingWorkspaceFolder.name}
                 folder={missingWorkspaceFolder.folder}
-                {...(missingWorkspaceFolder.worktree ? { worktree: missingWorkspaceFolder.worktree } : {})}
+                {...(missingWorkspaceFolder.worktree
+                  ? { worktree: missingWorkspaceFolder.worktree }
+                  : {})}
                 checking={folderPresenceQuery.isFetching}
                 restoring={restoringWorktree}
                 continuing={continuingInNewChat}
@@ -4780,10 +5040,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onContinueIn={(workspaceId) => void continueInNewChat(workspaceId)}
                 onCheckAgain={() => void folderPresenceQuery.refetch()}
                 onRestore={() => void restoreDeletedWorktree(missingWorkspaceFolder.id)}
-                onNewChatInMain={newChatActions ? () => {
-                  const mainWorkspaceId = missingWorkspaceFolder.worktree?.mainWorkspaceId;
-                  if (mainWorkspaceId) newChatInMainCheckout(mainWorkspaceId);
-                } : undefined}
+                onNewChatInMain={
+                  newChatActions
+                    ? () => {
+                        const mainWorkspaceId = missingWorkspaceFolder.worktree?.mainWorkspaceId;
+                        if (mainWorkspaceId) newChatInMainCheckout(mainWorkspaceId);
+                      }
+                    : undefined
+                }
               />
             ) : null}
             {questionnaire ? (
@@ -4807,7 +5071,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 // without a chatId reset of its own.
                 key={chatId}
                 ready={ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable}
-                readinessSettingsSection={!chatReadinessMessage && modelReadinessMessage ? "providers" : undefined}
+                readinessSettingsSection={
+                  !chatReadinessMessage && modelReadinessMessage ? "providers" : undefined
+                }
                 readinessMessage={
                   imageArtifactRecoveryUnavailable
                     ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
@@ -4874,8 +5140,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   messageQueue.pause();
                   if (handleStop()) stopRequestedRef.current = true;
                 }}
-                isGenerating={isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection)}
-                canStopGeneration={(canStopGeneration || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
+                isGenerating={
+                  isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection)
+                }
+                canStopGeneration={
+                  (canStopGeneration || Boolean(visibleDetachedProjection)) && !isStoppingGeneration
+                }
                 stoppingGeneration={isStoppingGeneration}
                 configurationBusy={thinkingSaving}
                 inputRef={composerRef}
@@ -4896,13 +5166,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       // Only a Git project can be cloned. A No workspace chat, a scratch
                       // folder or any other folder outside a repository has none to offer.
                       onAddProject={
-                        effectiveWorkspace?.folderPath && !isNoWorkspace(effectiveWorkspace) && git.data?.isRepo === true
+                        effectiveWorkspace?.folderPath &&
+                        !isNoWorkspace(effectiveWorkspace) &&
+                        git.data?.isRepo === true
                           ? () => setCloningProject(true)
                           : undefined
                       }
                       disabled={isGenerating || isStartingGeneration}
                       onSelect={(machine) => {
-                        if (machine !== "local") void navigate({ to: "/host/$hostId/new", params: { hostId: machine } });
+                        if (machine !== "local")
+                          void navigate({ to: "/host/$hostId/new", params: { hostId: machine } });
                       }}
                     />
                   ) : undefined
@@ -4965,7 +5238,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onCancelCompact={draft ? undefined : () => chatsApi.cancelCompact(chatId)}
                 onLogoutProvider={logoutProvider}
                 thinkingControl={
-                  stopSetsEffort && !localReasoningVisibilitySupported ? undefined : stopSetsEffort ? (
+                  stopSetsEffort &&
+                  !localReasoningVisibilitySupported ? undefined : stopSetsEffort ? (
                     <ReasoningVisibilityControl
                       visible={showLocalModelReasoning}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
@@ -5004,8 +5278,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       providerLabel={selectedProvider?.label ?? "Model"}
                       level={ownLevelIn(providerThinkingLevels) ?? providerThinkingLevel}
                       levels={providerThinkingLevels}
-                      canDisable={selectedProvider?.kind === "openai" && customModelThinkingLevels(thinkingMetadata?.overrides)
-                        ? providerThinkingLevels.includes("off") : thinkingMetadata?.thinkingCanDisable !== false}
+                      canDisable={
+                        selectedProvider?.kind === "openai" &&
+                        customModelThinkingLevels(thinkingMetadata?.overrides)
+                          ? providerThinkingLevels.includes("off")
+                          : thinkingMetadata?.thinkingCanDisable !== false
+                      }
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
                       disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeProviderThinking(level)}
@@ -5030,7 +5308,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                             isToolStep(step) &&
                             step.toolName === "compact_context" &&
                             (step.status === "pending" || step.status === "running"),
-                        ) ?? false)
+                        ) ??
+                          false)
                       }
                       recentlyCompacted={contextCompactedFlash}
                     />
@@ -5038,7 +5317,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
                 onDraftChange={onDraftContextChange}
                 contextHistoryPressure={
-                  draft ? undefined : contextHistory.chatId === chatId ? contextHistory.pressure : null
+                  draft
+                    ? undefined
+                    : contextHistory.chatId === chatId
+                      ? contextHistory.pressure
+                      : null
                 }
                 modelPicker={
                   chat.data?.botId ? (
@@ -5064,14 +5347,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       seedThinkingLevel={turnThinkingLevel(selectionThinkingLevel, {
                         google: { supported: googleThinkingSupported, level: googleThinkingLevel },
                         codex: { supported: codexThinkingSupported, level: codexThinkingLevel },
-                        anthropic: { supported: anthropicThinkingSupported, level: anthropicThinkingLevel },
-                        provider: { supported: providerThinkingSupported, level: providerThinkingLevel },
+                        anthropic: {
+                          supported: anthropicThinkingSupported,
+                          level: anthropicThinkingLevel,
+                        },
+                        provider: {
+                          supported: providerThinkingSupported,
+                          level: providerThinkingLevel,
+                        },
                       })}
                       onChange={(nextProviderId, nextModel) => {
                         if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
                       }}
                       onSelectStop={(nextProviderId, nextModel, level) => {
-                        if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel, level ?? null);
+                        if (!getChatDraft(chatId)?.sending)
+                          select(nextProviderId, nextModel, level ?? null);
                       }}
                       disabled={modelChangeBlocked}
                       settingsBlockedReason={settingsBlockedReason}
@@ -5097,11 +5387,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               title="This chat couldn’t be loaded"
               description="Your messages are still saved. Try loading the chat again."
               action={
-                <Button
-                  variant="filled"
-                  size="small"
-                  onClick={() => void persistedChat.refetch()}
-                >
+                <Button variant="filled" size="small" onClick={() => void persistedChat.refetch()}>
                   Try again
                 </Button>
               }
@@ -5161,7 +5447,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 streamingVisualDrafts={visualDrafts}
                 streamingUiVisuals={displayedStreamingUiVisuals}
                 streamingUiDrafts={uiDrafts}
-                streamComplete={streamComplete || detachedProjectionStreamComplete(visibleDetachedProjection)}
+                streamComplete={
+                  streamComplete || detachedProjectionStreamComplete(visibleDetachedProjection)
+                }
                 persistedHandoffMessageId={persistedHandoffMessageId}
                 onStreamHandoffComplete={() => streamHandoffRef.current?.()}
                 timeline={displayedGenerationTimeline}
@@ -5209,17 +5497,41 @@ export function ChatPane({ chatId }: { chatId: string }) {
           </KeepVisualChatContext.Provider>
         )}
       </ScrollArea>
-      {cloningProject && isNewChat && effectiveWorkspace ? <PeerProjectCloneDialog workspaceId={effectiveWorkspace.id} onClose={() => setCloningProject(false)} onCreated={(hostId, workspace) => {
-        const key = remoteNewChatDraftKey(hostId);
-        if (!loadComposerDraft(key).text) {
-          saveComposerDraftText(key, cloneDraftRef.current.text);
-          seedComposerAttachments(key, cloneDraftRef.current.attachments);
-        } else if (cloneDraftRef.current.text || cloneDraftRef.current.attachments.length) {
-          toast.info(`The paired computer already has a draft. Your current prompt remains saved on this ${localComputerNoun(capabilities.platform)}.`);
-        }
-        qc.setQueryData<import("../shared/peer-host").PeerHostFeedSnapshot | null>(hostQueryKeys.feed(hostId), current => current ? { ...current, workspaces: [...current.workspaces.filter(row => row.id !== workspace.id), workspace] } : current);
-        void navigate({ to: "/host/$hostId/new", params: { hostId }, search: { workspaceId: workspace.id } });
-      }} /> : null}
+      {cloningProject && isNewChat && effectiveWorkspace ? (
+        <PeerProjectCloneDialog
+          workspaceId={effectiveWorkspace.id}
+          onClose={() => setCloningProject(false)}
+          onCreated={(hostId, workspace) => {
+            const key = remoteNewChatDraftKey(hostId);
+            if (!loadComposerDraft(key).text) {
+              saveComposerDraftText(key, cloneDraftRef.current.text);
+              seedComposerAttachments(key, cloneDraftRef.current.attachments);
+            } else if (cloneDraftRef.current.text || cloneDraftRef.current.attachments.length) {
+              toast.info(
+                `The paired computer already has a draft. Your current prompt remains saved on this ${localComputerNoun(capabilities.platform)}.`,
+              );
+            }
+            qc.setQueryData<import("../shared/peer-host").PeerHostFeedSnapshot | null>(
+              hostQueryKeys.feed(hostId),
+              (current) =>
+                current
+                  ? {
+                      ...current,
+                      workspaces: [
+                        ...current.workspaces.filter((row) => row.id !== workspace.id),
+                        workspace,
+                      ],
+                    }
+                  : current,
+            );
+            void navigate({
+              to: "/host/$hostId/new",
+              params: { hostId },
+              search: { workspaceId: workspace.id },
+            });
+          }}
+        />
+      ) : null}
       <ForkSummaryDialog
         open={forkSummaryRequest !== null}
         kind={forkSummaryRequest?.position === "before" ? "edit" : "fork"}
@@ -5256,7 +5568,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
             qc.invalidateQueries({ queryKey: queryKeys.gitPushCapability(targetWorkspace.id) }),
             qc.invalidateQueries({ queryKey: queryKeys.skillCatalog(targetWorkspace.id) }),
             qc.invalidateQueries({ queryKey: queryKeys.workspaceFileIndex(targetWorkspace.id) }),
-            qc.invalidateQueries({ queryKey: queryKeys.workspaceFolderPresence(targetWorkspace.id) }),
+            qc.invalidateQueries({
+              queryKey: queryKeys.workspaceFolderPresence(targetWorkspace.id),
+            }),
           ]);
           const suffix =
             result.copiedPaths.length > 0

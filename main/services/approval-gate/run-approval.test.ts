@@ -11,13 +11,23 @@ import {
 } from "./run-approval.js";
 
 function workspace(fields: Partial<Workspace>): Workspace {
-  return { id: "worktree-1", name: "app", folderPath: "/tmp/app", permission: "ask", createdAt: 0, ...fields } as Workspace;
+  return {
+    id: "worktree-1",
+    name: "app",
+    folderPath: "/tmp/app",
+    permission: "ask",
+    createdAt: 0,
+    ...fields,
+  } as Workspace;
 }
 
 const ASK_LEAD: ApprovalCeiling = { mode: "ask", macGrants: [], chatOnly: false };
 
 test("a started chat in a Never-ask worktree under an Ask lead asks, and loses Full reach", async () => {
-  const never = workspace({ approvalMode: "never", macGrants: { shell: true, files: true } } as Partial<Workspace>);
+  const never = workspace({
+    approvalMode: "never",
+    macGrants: { shell: true, files: true },
+  } as Partial<Workspace>);
   const alone = await generationApprovalPolicy(
     { workspace: never, botBound: false, mode: undefined, permission: undefined },
     async () => ({ approvalMode: "auto" }),
@@ -25,7 +35,13 @@ test("a started chat in a Never-ask worktree under an Ask lead asks, and loses F
   assert.equal(alone?.mode, "never");
 
   const started = await generationApprovalPolicy(
-    { workspace: never, botBound: false, mode: undefined, permission: undefined, ceiling: ASK_LEAD },
+    {
+      workspace: never,
+      botBound: false,
+      mode: undefined,
+      permission: undefined,
+      ceiling: ASK_LEAD,
+    },
     async () => ({ approvalMode: "auto" }),
   );
   assert.equal(started?.mode, "ask");
@@ -50,7 +66,10 @@ test("a mode change in the middle of a started chat's turn still stays under the
 
 test("the ceiling keeps the stricter mode, only the Mac grants both allow, and Chat only from either", async () => {
   const settings = async () => ({ approvalMode: "auto" as const });
-  const child = workspace({ approvalMode: "auto", macGrants: { shell: true, "computer-use": true } } as Partial<Workspace>);
+  const child = workspace({
+    approvalMode: "auto",
+    macGrants: { shell: true, "computer-use": true },
+  } as Partial<Workspace>);
   const lead = approvalCeilingOf({
     mode: "never",
     customized: true,
@@ -68,7 +87,13 @@ test("the ceiling keeps the stricter mode, only the Mac grants both allow, and C
   assert.equal(policy?.chatOnly, false);
 
   const chatOnlyLead = await generationApprovalPolicy(
-    { workspace: child, botBound: false, mode: undefined, permission: undefined, ceiling: { ...lead, chatOnly: true } },
+    {
+      workspace: child,
+      botBound: false,
+      mode: undefined,
+      permission: undefined,
+      ceiling: { ...lead, chatOnly: true },
+    },
     settings,
   );
   assert.equal(chatOnlyLead?.chatOnly, true);

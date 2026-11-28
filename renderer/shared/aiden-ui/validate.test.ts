@@ -11,7 +11,10 @@ const fixtureNames = readdirSync(FIXTURES)
   .map((file) => file.slice(0, -4));
 
 /** A compiled page, as an imported file carries it. */
-function page(markup: string, options: { artifactActions?: boolean } = { artifactActions: true }): CompiledAumParts {
+function page(
+  markup: string,
+  options: { artifactActions?: boolean } = { artifactActions: true },
+): CompiledAumParts {
   const compiled = compileAum(markup, options);
   assert.deepEqual(compiled.diagnostics, [], markup);
   assert.ok(compiled.tree);
@@ -22,7 +25,11 @@ function page(markup: string, options: { artifactActions?: boolean } = { artifac
   };
 }
 
-function refused(parts: CompiledAumParts, pattern: RegExp, options = { artifactActions: true }): void {
+function refused(
+  parts: CompiledAumParts,
+  pattern: RegExp,
+  options = { artifactActions: true },
+): void {
   const result = validateCompiledAum(parts, options);
   assert.equal(result.ok, false, `expected ${JSON.stringify(parts.tree)} to be refused`);
   if (!result.ok) assert.match(result.error, pattern);
@@ -50,30 +57,78 @@ test("everything the compiler builds passes unchanged", () => {
 });
 
 test("a page made with run() and compose() passes only where artifact actions are allowed", () => {
-  const parts = page('<Visual><Button action={run("merge", 12)}>Merge</Button><Button action={compose("Hi")}>Draft</Button></Visual>');
+  const parts = page(
+    '<Visual><Button action={run("merge", 12)}>Merge</Button><Button action={compose("Hi")}>Draft</Button></Visual>',
+  );
   assert.ok(validateCompiledAum(parts, { artifactActions: true }).ok);
   refused(parts, /workspace artifacts/u, { artifactActions: false });
 });
 
 test("open links in a literal must be https", () => {
-  for (const url of ["javascript:alert(1)", "http://example.com", "file:///etc/passwd", " https://example.com"]) {
-    refused(withChild({ t: "Button", k: "", p: { action: { act: "open", url: lit(url) } }, c: [text("Go")] }), /https/u);
+  for (const url of [
+    "javascript:alert(1)",
+    "http://example.com",
+    "file:///etc/passwd",
+    " https://example.com",
+  ]) {
+    refused(
+      withChild({
+        t: "Button",
+        k: "",
+        p: { action: { act: "open", url: lit(url) } },
+        c: [text("Go")],
+      }),
+      /https/u,
+    );
   }
   assert.ok(
-    validateCompiledAum(withChild({ t: "Button", k: "", p: { action: { act: "open", url: lit("https://example.com") } }, c: [text("Go")] }))
-      .ok,
+    validateCompiledAum(
+      withChild({
+        t: "Button",
+        k: "",
+        p: { action: { act: "open", url: lit("https://example.com") } },
+        c: [text("Go")],
+      }),
+    ).ok,
   );
 });
 
 test("an action goes only where the catalog takes an action, and only a real one", () => {
-  refused(withChild({ t: "Text", k: "", p: { tone: { act: "send", text: lit("x") } }, c: [text("Hi")] }), /action where a value belongs/u);
-  refused(withChild({ t: "Button", k: "", p: { action: lit("send") }, c: [text("Go")] }), /action that isn’t one/u);
-  refused(withChild({ t: "Button", k: "", p: { action: { act: "send", op: "lit", text: lit("x") } }, c: [text("Go")] }), /action that isn’t one/u);
-  refused(withChild({ t: "Button", k: "", p: { action: { act: "exec", text: lit("x") } }, c: [text("Go")] }), /action Aiden doesn’t have/u);
+  refused(
+    withChild({ t: "Text", k: "", p: { tone: { act: "send", text: lit("x") } }, c: [text("Hi")] }),
+    /action where a value belongs/u,
+  );
+  refused(
+    withChild({ t: "Button", k: "", p: { action: lit("send") }, c: [text("Go")] }),
+    /action that isn’t one/u,
+  );
+  refused(
+    withChild({
+      t: "Button",
+      k: "",
+      p: { action: { act: "send", op: "lit", text: lit("x") } },
+      c: [text("Go")],
+    }),
+    /action that isn’t one/u,
+  );
+  refused(
+    withChild({
+      t: "Button",
+      k: "",
+      p: { action: { act: "exec", text: lit("x") } },
+      c: [text("Go")],
+    }),
+    /action Aiden doesn’t have/u,
+  );
 });
 
 test("setState and bound controls need a key the page declares", () => {
-  const set = { t: "Button", k: "", p: { action: { act: "set", key: "tab", value: lit("b") } }, c: [text("B")] };
+  const set = {
+    t: "Button",
+    k: "",
+    p: { action: { act: "set", key: "tab", value: lit("b") } },
+    c: [text("B")],
+  };
   refused(withChild(set), /doesn’t declare/u);
   assert.ok(validateCompiledAum(withChild(set, { tab: "a" })).ok);
   const bound = { t: "Switch", k: "", p: { bind: lit("on"), label: lit("On") } };
@@ -82,28 +137,67 @@ test("setState and bound controls need a key the page declares", () => {
 });
 
 test("run() needs a valid action name and at most the compiler's number of values", () => {
-  const run = (name: unknown, a: unknown) => withChild({ t: "Button", k: "", p: { action: { act: "run", name, a } }, c: [text("Go")] });
+  const run = (name: unknown, a: unknown) =>
+    withChild({ t: "Button", k: "", p: { action: { act: "run", name, a } }, c: [text("Go")] });
   refused(run("rm -rf", []), /name isn’t valid/u);
   refused(run("9lives", []), /name isn’t valid/u);
   refused(run("x".repeat(41), []), /name isn’t valid/u);
-  refused(run("merge", Array.from({ length: 9 }, (_, index) => lit(index))), /more than 8 values/u);
+  refused(
+    run(
+      "merge",
+      Array.from({ length: 9 }, (_, index) => lit(index)),
+    ),
+    /more than 8 values/u,
+  );
   refused(run("merge", "12"), /more than 8 values, or none in a list/u);
-  assert.ok(validateCompiledAum(run("merge", Array.from({ length: 8 }, (_, index) => lit(index))), { artifactActions: true }).ok);
+  assert.ok(
+    validateCompiledAum(
+      run(
+        "merge",
+        Array.from({ length: 8 }, (_, index) => lit(index)),
+      ),
+      { artifactActions: true },
+    ).ok,
+  );
 });
 
 test("text-only components hold text and inline elements, never blocks", () => {
-  refused(withChild({ t: "Text", k: "", c: [{ t: "Card", k: "", c: [text("x")] }] }), /<Card> cannot go inside <Text>/u);
-  refused(withChild({ t: "Button", k: "", p: { action: { act: "copy", text: lit("x") } }, c: [{ t: "Stack", k: "" }] }), /cannot go inside/u);
+  refused(
+    withChild({ t: "Text", k: "", c: [{ t: "Card", k: "", c: [text("x")] }] }),
+    /<Card> cannot go inside <Text>/u,
+  );
+  refused(
+    withChild({
+      t: "Button",
+      k: "",
+      p: { action: { act: "copy", text: lit("x") } },
+      c: [{ t: "Stack", k: "" }],
+    }),
+    /cannot go inside/u,
+  );
   refused(withChild({ t: "Separator", k: "", c: [text("x")] }), /cannot hold anything/u);
-  const inline = withChild({ t: "Text", k: "", c: [text("Press "), { t: "Kbd", k: "", c: [text("⌘K")] }] });
+  const inline = withChild({
+    t: "Text",
+    k: "",
+    c: [text("Press "), { t: "Kbd", k: "", c: [text("⌘K")] }],
+  });
   assert.ok(validateCompiledAum(inline).ok);
 });
 
 test("enum choices and icons must exist", () => {
-  refused(withChild({ t: "Text", k: "", p: { tone: lit("neon") }, c: [text("x")] }), /isn’t one of its options/u);
-  refused(withChild({ t: "Icon", k: "", p: { name: lit("not-an-icon") } }), /icon Aiden doesn’t have/u);
+  refused(
+    withChild({ t: "Text", k: "", p: { tone: lit("neon") }, c: [text("x")] }),
+    /isn’t one of its options/u,
+  );
+  refused(
+    withChild({ t: "Icon", k: "", p: { name: lit("not-an-icon") } }),
+    /icon Aiden doesn’t have/u,
+  );
   refused(withChild({ t: "Spacer", k: "", p: { size: lit("big") } }), /expects a number/u);
-  refused(withChild({ t: "Disclosure", k: "", p: { title: lit("T"), open: lit("yes") }, c: [text("x")] }), /true or false/u);
+  refused(
+    withChild({ t: "Disclosure", k: "", p: { title: lit("T"), open: lit("yes") }, c: [text("x")] }),
+    /true or false/u,
+  );
 });
 
 test("required props must be present", () => {
@@ -154,16 +248,29 @@ test("unknown keys on nodes, props and actions are dropped, not kept", () => {
   const expected: AidenUiNodeV1 = {
     t: "Visual",
     k: "0",
-    c: [{ t: "Button", k: "0.0", p: { action: { act: "send", text: { op: "lit", v: "Hi" } } }, c: [{ t: "#text", k: "0.0.0", s: "Go" }] }],
+    c: [
+      {
+        t: "Button",
+        k: "0.0",
+        p: { action: { act: "send", text: { op: "lit", v: "Hi" } } },
+        c: [{ t: "#text", k: "0.0.0", s: "Go" }],
+      },
+    ],
   };
   assert.deepEqual(result.tree, expected);
 });
 
 test("components outside the catalog, <Data>, nested <Visual> and an empty page are refused", () => {
   refused(withChild({ t: "Script", k: "" }), /isn’t one of Aiden’s components/u);
-  refused(withChild({ t: "Data", k: "", p: { name: lit("x") }, c: [text("{}")] }), /isn’t one of Aiden’s components/u);
+  refused(
+    withChild({ t: "Data", k: "", p: { name: lit("x") }, c: [text("{}")] }),
+    /isn’t one of Aiden’s components/u,
+  );
   refused(withChild({ t: "Visual", k: "", c: [text("x")] }), /isn’t one of Aiden’s components/u);
   refused({ tree: { t: "Stack", k: "0", c: [text("x")] } }, /must start with <Visual>/u);
   refused({ tree: { t: "Visual", k: "0" } }, /empty/u);
-  refused({ tree: { t: "Visual", k: "0", p: { state: { op: "json", v: {} } }, c: [text("x")] } }, /setting Aiden doesn’t know/u);
+  refused(
+    { tree: { t: "Visual", k: "0", p: { state: { op: "json", v: {} } }, c: [text("x")] } },
+    /setting Aiden doesn’t know/u,
+  );
 });

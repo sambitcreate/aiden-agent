@@ -36,7 +36,8 @@ export function botHealthStatus(input: {
 }): BotHealthStatus {
   if (input.paused || input.sessionState === "paused") return "paused";
   if (input.openIssues > 0) return "needs_you";
-  if (input.sessionState === "needs_model" || input.sessionState === "model_error") return "needs_you";
+  if (input.sessionState === "needs_model" || input.sessionState === "model_error")
+    return "needs_you";
   if (input.report?.results.some((result) => result.status === "needs_you")) return "needs_you";
   return "ok";
 }

@@ -15,14 +15,15 @@ export function hostIdentifier(value: unknown): string {
 }
 
 export function hostResourceKey(ref: HostResource): string {
-  return JSON.stringify([
-    hostIdentifier(ref.hostId),
-    hostIdentifier(ref.resourceId),
-  ]);
+  return JSON.stringify([hostIdentifier(ref.hostId), hostIdentifier(ref.resourceId)]);
 }
 
 export type PeerConnectionState =
-  "disabled" | "disconnected" | "connecting" | "connected" | "unavailable";
+  | "disabled"
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "unavailable";
 
 export interface PeerHostView {
   id: string;
@@ -32,7 +33,12 @@ export interface PeerHostView {
   features: string[];
   capabilities: string[];
   activeRouteKind?: "lan" | "tailscale";
-  routes?: { id: string; kind: "lan" | "tailscale"; origin: "paired" | "learned"; active: boolean }[];
+  routes?: {
+    id: string;
+    kind: "lan" | "tailscale";
+    origin: "paired" | "learned";
+    active: boolean;
+  }[];
   hasSuppressedRoutes?: boolean;
 }
 
@@ -225,7 +231,10 @@ export interface PeerDiscoveryState {
   scanning: boolean;
   devices: PeerDiscoveredDevice[];
   /** A status read failed during this scan; absent when Tailscale is missing or readable. */
-  tailscale?: { status: "unavailable"; reason: "invalid-response" | "timed-out" | "command-failed" };
+  tailscale?: {
+    status: "unavailable";
+    reason: "invalid-response" | "timed-out" | "command-failed";
+  };
 }
 
 /** Why a pairing attempt ended without a paired host. */

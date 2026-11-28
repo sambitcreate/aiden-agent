@@ -75,25 +75,38 @@ test("a key given to a Studio command shows only while that Studio is on", () =>
 
 test("⌘⇧L lists Toggle design mode only while design mode is available", () => {
   assert.equal(row(shortcutSheet(defaults(), { platform: "darwin" }), "Toggle design mode"), null);
-  const on = row(shortcutSheet(defaults(), { platform: "darwin", capabilities: { designMode: true } }), "Toggle design mode");
+  const on = row(
+    shortcutSheet(defaults(), { platform: "darwin", capabilities: { designMode: true } }),
+    "Toggle design mode",
+  );
   assert.deepEqual(on?.keys, ["Command+Shift+L"]);
   assert.equal(on?.section, "Workspace");
 });
 
 test("the design canvas keys get their own section only while design mode is available", () => {
   const off = shortcutSheet(defaults(), { platform: "darwin" });
-  assert.equal(off.some((section) => section.title === "Design canvas"), false);
+  assert.equal(
+    off.some((section) => section.title === "Design canvas"),
+    false,
+  );
   assert.equal(row(off, "Rename the selected frame"), null);
   const on = shortcutSheet(defaults(), { platform: "darwin", capabilities: { designMode: true } });
   assert.equal(on[on.length - 1]?.title, "Design canvas");
   assert.deepEqual(row(on, "Rename the selected frame")?.keys, ["F2"]);
   assert.deepEqual(row(on, "Add a note")?.keys, ["N"]);
-  const found = shortcutSheet(defaults(), { platform: "darwin", capabilities: { designMode: true }, query: "rename" });
+  const found = shortcutSheet(defaults(), {
+    platform: "darwin",
+    capabilities: { designMode: true },
+    query: "rename",
+  });
   assert.ok(row(found, "Rename the selected frame"));
 });
 
 test("⌘⇧D is not bound to anything", () => {
-  const sections = shortcutSheet(defaults(), { platform: "darwin", capabilities: { createImages: true } });
+  const sections = shortcutSheet(defaults(), {
+    platform: "darwin",
+    capabilities: { createImages: true },
+  });
   const keys = sections.flatMap((section) =>
     section.rows.flatMap((entry) => [...entry.keys, ...(entry.alsoKeys ?? [])]),
   );

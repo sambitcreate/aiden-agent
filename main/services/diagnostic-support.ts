@@ -86,7 +86,12 @@ export interface DiagnosticExportManifest {
   app: { name: string; version: string; runtimeProfile: "development" | "production" };
   platform: { name: NodeJS.Platform; arch: string; node: string; electron: string | null };
   timeRange: { oldestAt: string | null; newestAt: string | null };
-  included: { generalRecords: number; subagentRecords: number; healthDays: number; crashDumps: number };
+  included: {
+    generalRecords: number;
+    subagentRecords: number;
+    healthDays: number;
+    crashDumps: number;
+  };
   omitted: readonly string[];
 }
 
@@ -116,7 +121,10 @@ let crashMaintenanceQueue: Promise<void> = Promise.resolve();
 
 function withCrashMaintenance<T>(operation: () => Promise<T>): Promise<T> {
   const result = crashMaintenanceQueue.then(operation);
-  crashMaintenanceQueue = result.then(() => undefined, () => undefined);
+  crashMaintenanceQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
   return result;
 }
 
@@ -128,7 +136,12 @@ async function safeKnownFile(root: string, candidate: string): Promise<boolean> 
       fs.realpath(candidate),
       fs.lstat(candidate),
     ]);
-    return metadata.isFile() && !metadata.isSymbolicLink() && metadata.nlink === 1 && isPathInside(rootReal, candidateReal, { allowRoot: false });
+    return (
+      metadata.isFile() &&
+      !metadata.isSymbolicLink() &&
+      metadata.nlink === 1 &&
+      isPathInside(rootReal, candidateReal, { allowRoot: false })
+    );
   } catch {
     return false;
   }
@@ -137,14 +150,19 @@ async function safeKnownFile(root: string, candidate: string): Promise<boolean> 
 async function ensurePrivateDirectory(root: string): Promise<string> {
   try {
     const metadata = await fs.lstat(root);
-    if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error("Invalid diagnostic directory.");
+    if (!metadata.isDirectory() || metadata.isSymbolicLink())
+      throw new Error("Invalid diagnostic directory.");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     await fs.mkdir(root, { recursive: true, mode: 0o700 });
     const metadata = await fs.lstat(root);
-    if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error("Invalid diagnostic directory.");
+    if (!metadata.isDirectory() || metadata.isSymbolicLink())
+      throw new Error("Invalid diagnostic directory.");
   }
-  const handle = await fs.open(root, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+  const handle = await fs.open(
+    root,
+    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+  );
   try {
     const metadata = await handle.stat();
     if (!metadata.isDirectory()) throw new Error("Diagnostic directory changed during validation.");
@@ -159,7 +177,8 @@ function journalCandidateNames(): string[] {
   const names: string[] = ["aiden-fatal.log"];
   for (const base of ["aiden.log", "aiden-dev.log"]) {
     names.push(base);
-    for (let index = 1; index < MAX_DIAGNOSTIC_LOG_FILES; index += 1) names.push(`${base}.${index}`);
+    for (let index = 1; index < MAX_DIAGNOSTIC_LOG_FILES; index += 1)
+      names.push(`${base}.${index}`);
   }
   return names;
 }
@@ -215,12 +234,15 @@ function projectGeneralRecord(value: unknown): DiagnosticEventV1 | null {
     (record.outcome !== undefined && !DIAGNOSTIC_OUTCOMES.includes(record.outcome as never)) ||
     (record.code !== undefined && !DIAGNOSTIC_CODES.includes(record.code as never)) ||
     (record.durationMs !== undefined &&
-      (typeof record.durationMs !== "number" || !Number.isSafeInteger(record.durationMs) || record.durationMs < 0)) ||
+      (typeof record.durationMs !== "number" ||
+        !Number.isSafeInteger(record.durationMs) ||
+        record.durationMs < 0)) ||
     (record.operationId !== undefined &&
       (typeof record.operationId !== "string" || !/^op-[0-9a-f]{16}$/u.test(record.operationId))) ||
     (record.fields !== undefined &&
       (!record.fields || typeof record.fields !== "object" || Array.isArray(record.fields)))
-  ) return null;
+  )
+    return null;
   const inputFields = record.fields as DiagnosticSafeFields | undefined;
   const normalizedFields = normalizeDiagnosticFields(inputFields);
   if (inputFields) {
@@ -238,7 +260,9 @@ function projectGeneralRecord(value: unknown): DiagnosticEventV1 | null {
     event: record.event,
     ...(typeof record.operationId === "string" ? { operationId: record.operationId } : {}),
     ...(typeof record.durationMs === "number" ? { durationMs: record.durationMs } : {}),
-    ...(typeof record.outcome === "string" ? { outcome: record.outcome as DiagnosticEventV1["outcome"] } : {}),
+    ...(typeof record.outcome === "string"
+      ? { outcome: record.outcome as DiagnosticEventV1["outcome"] }
+      : {}),
     ...(typeof record.code === "string" ? { code: record.code as DiagnosticEventV1["code"] } : {}),
     ...(fields ? { fields } : {}),
   };
@@ -247,40 +271,77 @@ function projectGeneralRecord(value: unknown): DiagnosticEventV1 | null {
 function projectSubagentRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  const allowedKeys = new Set(["at", "diagnosticId", "runId", "generationId", "childId", "providerId", "modelId", "failure", "attempts", "diagnostics"]);
+  const allowedKeys = new Set([
+    "at",
+    "diagnosticId",
+    "runId",
+    "generationId",
+    "childId",
+    "providerId",
+    "modelId",
+    "failure",
+    "attempts",
+    "diagnostics",
+  ]);
   if (Object.keys(record).some((key) => !allowedKeys.has(key))) return null;
   if (
-    typeof record.at !== "string" || record.at.length > 32 || !Number.isFinite(Date.parse(record.at)) ||
-    typeof record.diagnosticId !== "string" || record.diagnosticId.length > 80 ||
-    typeof record.providerId !== "string" || record.providerId.length > 240 ||
-    typeof record.modelId !== "string" || record.modelId.length > 240 ||
+    typeof record.at !== "string" ||
+    record.at.length > 32 ||
+    !Number.isFinite(Date.parse(record.at)) ||
+    typeof record.diagnosticId !== "string" ||
+    record.diagnosticId.length > 80 ||
+    typeof record.providerId !== "string" ||
+    record.providerId.length > 240 ||
+    typeof record.modelId !== "string" ||
+    record.modelId.length > 240 ||
     !SUBAGENT_RUNTIME_FAILURES.includes(record.failure as never) ||
-    !Number.isSafeInteger(record.attempts) || Number(record.attempts) < 1 || Number(record.attempts) > 16 ||
-    !Array.isArray(record.diagnostics) || record.diagnostics.length > 4
-  ) return null;
+    !Number.isSafeInteger(record.attempts) ||
+    Number(record.attempts) < 1 ||
+    Number(record.attempts) > 16 ||
+    !Array.isArray(record.diagnostics) ||
+    record.diagnostics.length > 4
+  )
+    return null;
   for (const key of ["runId", "generationId", "childId"] as const) {
-    if (record[key] !== undefined && (typeof record[key] !== "string" || record[key].length > 240)) return null;
+    if (record[key] !== undefined && (typeof record[key] !== "string" || record[key].length > 240))
+      return null;
   }
   const diagnostics: Array<Record<string, unknown>> = [];
   for (const entry of record.diagnostics) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
     const item = entry as Record<string, unknown>;
-    const itemKeys = new Set(["stage", "code", "durationMs", "exitCode", "providerCategory", "detail"]);
+    const itemKeys = new Set([
+      "stage",
+      "code",
+      "durationMs",
+      "exitCode",
+      "providerCategory",
+      "detail",
+    ]);
     if (
       Object.keys(item).some((key) => !itemKeys.has(key)) ||
       !SUBAGENT_RUNTIME_DIAGNOSTIC_STAGES.includes(item.stage as never) ||
       !SUBAGENT_RUNTIME_DIAGNOSTIC_CODES.includes(item.code as never) ||
-      (item.durationMs !== undefined && (!Number.isSafeInteger(item.durationMs) || Number(item.durationMs) < 0)) ||
-      (item.exitCode !== undefined && item.exitCode !== null && !Number.isSafeInteger(item.exitCode)) ||
-      (item.providerCategory !== undefined && !PROVIDER_FAILURE_CATEGORIES.includes(item.providerCategory as never)) ||
+      (item.durationMs !== undefined &&
+        (!Number.isSafeInteger(item.durationMs) || Number(item.durationMs) < 0)) ||
+      (item.exitCode !== undefined &&
+        item.exitCode !== null &&
+        !Number.isSafeInteger(item.exitCode)) ||
+      (item.providerCategory !== undefined &&
+        !PROVIDER_FAILURE_CATEGORIES.includes(item.providerCategory as never)) ||
       (item.detail !== undefined && (typeof item.detail !== "string" || item.detail.length > 2_048))
-    ) return null;
+    )
+      return null;
     diagnostics.push({
       stage: item.stage,
       code: item.code,
       ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
-      ...(typeof item.exitCode === "number" || item.exitCode === null ? { exitCode: item.exitCode } : {}),
-      ...(typeof item.providerCategory === "string" ? { providerCategory: item.providerCategory } : {}),
+      ...(typeof item.exitCode === "number" || item.exitCode === null
+        ? { exitCode: item.exitCode }
+        : {}),
+      ...(typeof item.providerCategory === "string"
+        ? { providerCategory: item.providerCategory }
+        : {}),
     });
   }
   return {
@@ -318,7 +379,10 @@ async function crashDumpCandidatesUnsafe(
       throw error;
     }
     if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1) continue;
-    if (metadata.mtimeMs < now.getTime() - CRASH_DUMP_MAX_AGE_MS || metadata.size > MAX_CRASH_DUMP_BYTES) {
+    if (
+      metadata.mtimeMs < now.getTime() - CRASH_DUMP_MAX_AGE_MS ||
+      metadata.size > MAX_CRASH_DUMP_BYTES
+    ) {
       await fs.rm(candidate, { force: true });
       continue;
     }
@@ -328,7 +392,12 @@ async function crashDumpCandidatesUnsafe(
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
     }
-    candidates.push({ path: candidate, name: entry.name, bytes: metadata.size, mtimeMs: metadata.mtimeMs });
+    candidates.push({
+      path: candidate,
+      name: entry.name,
+      bytes: metadata.size,
+      mtimeMs: metadata.mtimeMs,
+    });
   }
   candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
   for (const stale of candidates.slice(MAX_CRASH_DUMPS)) await fs.rm(stale.path, { force: true });
@@ -346,13 +415,19 @@ export async function pruneExpiredDiagnosticCrashDumps(crashDumpsPath: string): 
   await crashDumpCandidates(crashDumpsPath, new Date());
 }
 
-export function diagnosticModeStatus(): { enabled: boolean; expiresAt: null; disablesOnRestart: true } {
+export function diagnosticModeStatus(): {
+  enabled: boolean;
+  expiresAt: null;
+  disablesOnRestart: true;
+} {
   return { enabled: diagnosticModeEnabled, expiresAt: null, disablesOnRestart: true };
 }
 
-export function enableLocalCrashCapture(
-  start: () => void,
-): { enabled: true; expiresAt: null; disablesOnRestart: true } {
+export function enableLocalCrashCapture(start: () => void): {
+  enabled: true;
+  expiresAt: null;
+  disablesOnRestart: true;
+} {
   if (!diagnosticModeEnabled) start();
   diagnosticModeEnabled = true;
   return { enabled: true, expiresAt: null, disablesOnRestart: true };
@@ -379,7 +454,8 @@ export async function diagnosticSupportStatus(
   for (const file of unique) {
     const metadata = await fs.stat(file);
     retainedBytes += metadata.size;
-    if (path.basename(file) === "diagnostic-health.json" || path.basename(file).includes(".legacy")) continue;
+    if (path.basename(file) === "diagnostic-health.json" || path.basename(file).includes(".legacy"))
+      continue;
     try {
       times.push(...recordTimes(await readJsonLines(file, 8 * 1024 * 1024)));
     } catch {
@@ -396,16 +472,24 @@ export async function diagnosticSupportStatus(
     fileCount: unique.length + dumps.length,
     oldestAt: times[0] ?? null,
     newestAt: times[times.length - 1] ?? null,
-    sinkFailed: journal.writeFailed || corruptEvidence || diagnosticHealthPersistenceFailed() || subagentRuntimeDiagnosticSinkFailed(),
+    sinkFailed:
+      journal.writeFailed ||
+      corruptEvidence ||
+      diagnosticHealthPersistenceFailed() ||
+      subagentRuntimeDiagnosticSinkFailed(),
     droppedWrites: journal.droppedWrites,
     diagnosticMode: { ...mode, crashDumpCount: dumps.length },
   };
 }
 
-export async function createDiagnosticExport(options: ExportOptions): Promise<DiagnosticExportManifest> {
+export async function createDiagnosticExport(
+  options: ExportOptions,
+): Promise<DiagnosticExportManifest> {
   const now = options.now?.() ?? new Date();
   await ensurePrivateDirectory(options.logsPath);
-  const stagingRoot = await fs.mkdtemp(path.join(options.tempRoot ?? os.tmpdir(), "aiden-diagnostics-"));
+  const stagingRoot = await fs.mkdtemp(
+    path.join(options.tempRoot ?? os.tmpdir(), "aiden-diagnostics-"),
+  );
   await fs.chmod(stagingRoot, 0o700);
   let destinationTemporary: string | null = null;
   try {
@@ -432,63 +516,85 @@ export async function createDiagnosticExport(options: ExportOptions): Promise<Di
     }
     const crashDumps = options.includeCrashDumps
       ? await Promise.all(
-        (await crashDumpCandidates(options.crashDumpsPath, now)).map(async (dump) => {
-          if (dump.bytes > MAX_CRASH_DUMP_BYTES) throw new Error("A crash dump exceeds the export budget.");
-          const handle = await fs.open(dump.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-          try {
-            const metadata = await handle.stat();
-            if (!metadata.isFile() || metadata.nlink !== 1 || metadata.size !== dump.bytes) {
-              throw new Error("A crash dump changed during export.");
+          (await crashDumpCandidates(options.crashDumpsPath, now)).map(async (dump) => {
+            if (dump.bytes > MAX_CRASH_DUMP_BYTES)
+              throw new Error("A crash dump exceeds the export budget.");
+            const handle = await fs.open(dump.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+            try {
+              const metadata = await handle.stat();
+              if (!metadata.isFile() || metadata.nlink !== 1 || metadata.size !== dump.bytes) {
+                throw new Error("A crash dump changed during export.");
+              }
+              return {
+                name: dump.name,
+                bytes: dump.bytes,
+                base64: (await handle.readFile()).toString("base64"),
+              };
+            } finally {
+              await handle.close();
             }
-            return { name: dump.name, bytes: dump.bytes, base64: (await handle.readFile()).toString("base64") };
-          } finally {
-            await handle.close();
-          }
-        }),
+          }),
         )
       : [];
     const health = diagnosticHealthSnapshot();
     const times = [...recordTimes(general), ...recordTimes(subagents)].sort();
     const manifest: DiagnosticExportManifest = {
-    exportVersion: EXPORT_VERSION,
-    diagnosticSchemaVersion: 1,
-    createdAt: now.toISOString(),
-    app: options.app,
-    platform: {
-      name: process.platform,
-      arch: process.arch,
-      node: process.version,
-      electron: process.versions.electron ?? null,
-    },
-    timeRange: { oldestAt: times[0] ?? null, newestAt: times[times.length - 1] ?? null },
-    included: { generalRecords: general.length, subagentRecords: subagents.length, healthDays: health.days.length, crashDumps: crashDumps.length },
-    omitted: [
-      "prompts and responses",
-      "reasoning and tool traffic",
-      "terminal and attachment contents",
-      "credentials, headers, URLs, and local paths",
-      "configuration, chats, caches, and authoritative application state",
-    ],
+      exportVersion: EXPORT_VERSION,
+      diagnosticSchemaVersion: 1,
+      createdAt: now.toISOString(),
+      app: options.app,
+      platform: {
+        name: process.platform,
+        arch: process.arch,
+        node: process.version,
+        electron: process.versions.electron ?? null,
+      },
+      timeRange: { oldestAt: times[0] ?? null, newestAt: times[times.length - 1] ?? null },
+      included: {
+        generalRecords: general.length,
+        subagentRecords: subagents.length,
+        healthDays: health.days.length,
+        crashDumps: crashDumps.length,
+      },
+      omitted: [
+        "prompts and responses",
+        "reasoning and tool traffic",
+        "terminal and attachment contents",
+        "credentials, headers, URLs, and local paths",
+        "configuration, chats, caches, and authoritative application state",
+      ],
     };
     const bundle: DiagnosticExportBundle = {
-    manifest,
-    general,
-    subagents,
-    health,
-    ...(crashDumps.length ? { crashDumps } : {}),
+      manifest,
+      general,
+      subagents,
+      health,
+      ...(crashDumps.length ? { crashDumps } : {}),
     };
     const scanTarget = JSON.stringify({ manifest, general, subagents, health });
-    if (PROHIBITED_TEXT.test(scanTarget)) throw new Error("Diagnostic export privacy validation failed.");
+    if (PROHIBITED_TEXT.test(scanTarget))
+      throw new Error("Diagnostic export privacy validation failed.");
     const serialized = Buffer.from(JSON.stringify(bundle, null, 2), "utf8");
-    if (serialized.length > MAX_EXPORT_BYTES) throw new Error("Diagnostic export exceeds its total budget.");
+    if (serialized.length > MAX_EXPORT_BYTES)
+      throw new Error("Diagnostic export exceeds its total budget.");
     const staged = path.join(stagingRoot, "diagnostics.json.gz");
     const compressed = await gzipAsync(serialized, { level: 9 });
     await fs.writeFile(staged, compressed, { mode: 0o600, flag: "wx" });
-    const roundTrip = JSON.parse((await gunzipAsync(await fs.readFile(staged))).toString("utf8")) as DiagnosticExportBundle;
-    if (roundTrip.manifest.exportVersion !== EXPORT_VERSION) throw new Error("Diagnostic export validation failed.");
+    const roundTrip = JSON.parse(
+      (await gunzipAsync(await fs.readFile(staged))).toString("utf8"),
+    ) as DiagnosticExportBundle;
+    if (roundTrip.manifest.exportVersion !== EXPORT_VERSION)
+      throw new Error("Diagnostic export validation failed.");
     const destinationDirectory = path.dirname(options.destination);
-    destinationTemporary = path.join(destinationDirectory, `.${path.basename(options.destination)}.aiden-${randomUUID()}.tmp`);
-    const destination = await fs.open(destinationTemporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, 0o600);
+    destinationTemporary = path.join(
+      destinationDirectory,
+      `.${path.basename(options.destination)}.aiden-${randomUUID()}.tmp`,
+    );
+    const destination = await fs.open(
+      destinationTemporary,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+      0o600,
+    );
     try {
       await destination.writeFile(await fs.readFile(staged));
       await destination.chmod(0o600);
@@ -519,11 +625,17 @@ export async function deleteAllDiagnosticData(roots: DiagnosticSupportRoots): Pr
   const journalPath = diagnosticJournalStatus().path;
   // The live journal owns deletion ordering. Its files may already contain new
   // records by the time the fallback sweep reaches them, including rotations.
-  const ownedJournalFiles = new Set(journalPath ? [
-    path.resolve(journalPath),
-    path.resolve(path.dirname(journalPath), "aiden-fatal.log"),
-    ...Array.from({ length: MAX_DIAGNOSTIC_LOG_FILES - 1 }, (_, index) => path.resolve(`${journalPath}.${index + 1}`)),
-  ] : []);
+  const ownedJournalFiles = new Set(
+    journalPath
+      ? [
+          path.resolve(journalPath),
+          path.resolve(path.dirname(journalPath), "aiden-fatal.log"),
+          ...Array.from({ length: MAX_DIAGNOSTIC_LOG_FILES - 1 }, (_, index) =>
+            path.resolve(`${journalPath}.${index + 1}`),
+          ),
+        ]
+      : [],
+  );
   await deleteDiagnosticJournalFiles();
   await deleteDiagnosticHealth();
   await deleteSubagentRuntimeDiagnostics();
@@ -538,7 +650,10 @@ export async function deleteAllDiagnosticData(roots: DiagnosticSupportRoots): Pr
     DIAGNOSTIC_REF_SALT_FILE,
   ]) {
     const candidate = path.join(roots.logsPath, name);
-    if (isPathInside(roots.logsPath, candidate, { allowRoot: false }) && !ownedJournalFiles.has(path.resolve(candidate))) {
+    if (
+      isPathInside(roots.logsPath, candidate, { allowRoot: false }) &&
+      !ownedJournalFiles.has(path.resolve(candidate))
+    ) {
       await fs.rm(candidate, { force: true });
     }
   }

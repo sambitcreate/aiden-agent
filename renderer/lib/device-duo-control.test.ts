@@ -129,9 +129,24 @@ test("a pinch drives only a hit device, accumulates past native readback, clamps
 
 // Screen configs as an iPhone Duo simulator reports them for each way of holding the device (recorded by T3).
 const held = [
-  ["vertical phone, closed", { screenId: 1, orientation: "portrait", hingeAngle: 0 }, "closed", true],
-  ["horizontal phone, closed", { screenId: 1, orientation: "landscape_right", hingeAngle: 0 }, "closed", false],
-  ["vertical phone opened as a book", { screenId: 3, orientation: "landscape_left", hingeAngle: 180 }, "open", true],
+  [
+    "vertical phone, closed",
+    { screenId: 1, orientation: "portrait", hingeAngle: 0 },
+    "closed",
+    true,
+  ],
+  [
+    "horizontal phone, closed",
+    { screenId: 1, orientation: "landscape_right", hingeAngle: 0 },
+    "closed",
+    false,
+  ],
+  [
+    "vertical phone opened as a book",
+    { screenId: 3, orientation: "landscape_left", hingeAngle: 180 },
+    "open",
+    true,
+  ],
   [
     "horizontal phone opened as a laptop",
     { screenId: 3, orientation: "portrait_upside_down", hingeAngle: 180 },
@@ -160,12 +175,15 @@ test("a display handoff is unsettled while the cover reports the inner display's
 });
 
 test("stands are marked so the fold group does not claim them, and missing fields fall back like the 3D view", () => {
-  assert.deepEqual(duoFoldState({ screenId: 3, orientation: "portrait", hingeAngle: 90, hingePose: "laptop" }), {
-    fold: "half",
-    stand: true,
-    phoneVertical: false,
-    settled: true,
-  });
+  assert.deepEqual(
+    duoFoldState({ screenId: 3, orientation: "portrait", hingeAngle: 90, hingePose: "laptop" }),
+    {
+      fold: "half",
+      stand: true,
+      phoneVertical: false,
+      settled: true,
+    },
+  );
   const closed = duoFoldState({ screenId: 1, orientation: "portrait" });
   assert.equal(closed.fold, "closed");
   assert.equal(closed.phoneVertical, true);
@@ -183,7 +201,11 @@ test("a stand rotates back to how the phone was held, in the frame of the displa
   // The rotation it asks for reads back as the hold it meant, on either display.
   for (const screenId of [1, 3]) {
     for (const vertical of [true, false]) {
-      assert.equal(duoFoldState({ screenId, orientation: duoHoldOrientation(vertical, screenId) }).phoneVertical, vertical);
+      assert.equal(
+        duoFoldState({ screenId, orientation: duoHoldOrientation(vertical, screenId) })
+          .phoneVertical,
+        vertical,
+      );
     }
   }
 });

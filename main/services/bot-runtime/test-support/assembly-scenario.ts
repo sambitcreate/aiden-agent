@@ -50,8 +50,12 @@ export async function run(args: AssemblyScenarioArgs, emit: Emit): Promise<void>
         });
   const firstResponse =
     args.kind === "share-approval"
-      ? fauxAssistantMessage([fauxToolCall("share_image", { path: "photo.png" })], { stopReason: "toolUse" })
-      : fauxAssistantMessage([fauxToolCall("subagent", { text: "delegate" })], { stopReason: "toolUse" });
+      ? fauxAssistantMessage([fauxToolCall("share_image", { path: "photo.png" })], {
+          stopReason: "toolUse",
+        })
+      : fauxAssistantMessage([fauxToolCall("subagent", { text: "delegate" })], {
+          stopReason: "toolUse",
+        });
   const { models } = createFauxModels([firstResponse]);
   const registries = new Map<string, ReturnType<typeof createBotRegistry>>();
   const host = await createBotHarnessHost({
@@ -67,6 +71,9 @@ export async function run(args: AssemblyScenarioArgs, emit: Emit): Promise<void>
   const { conversation } = await host.open(args.botId);
   await registries.get(args.botId)!.refresh();
   await conversation.configure({ model: FAUX_MODEL_REF }, ctx);
-  const submission = await conversation.submit({ type: "input", content: "go", requestId: "scenario" }, ctx);
+  const submission = await conversation.submit(
+    { type: "input", content: "go", requestId: "scenario" },
+    ctx,
+  );
   emit("SUBMITTED", String(submission.id));
 }

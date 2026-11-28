@@ -53,10 +53,15 @@ test("credential-aware inventory cache avoids repeat connections and invalidates
   assert.equal((await resolveBoundedSubagentMcpInventory(signal, dependencies)).length, 1);
   assert.equal((await resolveBoundedSubagentMcpInventory(signal, dependencies)).length, 1);
   assert.deepEqual(calls, ["list"]);
-  assert.equal((await resolveBoundedSubagentMcpInventory(signal, {
-    ...dependencies,
-    bypassCache: true,
-  })).length, 1);
+  assert.equal(
+    (
+      await resolveBoundedSubagentMcpInventory(signal, {
+        ...dependencies,
+        bypassCache: true,
+      })
+    ).length,
+    1,
+  );
   assert.deepEqual(calls, ["list", "list"]);
 
   revisions.current = "b".repeat(64);
@@ -75,44 +80,41 @@ test("discovery returns completed servers at one aggregate deadline and skips st
     command: "unsafe",
     enabled: true,
   };
-  const result = await resolveBoundedSubagentMcpInventory(
-    new AbortController().signal,
-    {
-      listServers: async () => [fast, slow, stdio],
-      withClient: async <T>(
-        current: McpServer,
-        signal: AbortSignal,
-        operation: (port: SubagentMcpClientPort) => Promise<T>,
-      ) => {
-        if (current.id === "slow") {
-          await new Promise<never>((_resolve, reject) =>
-            signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
-          );
-        }
-        return operation(client([]));
-      },
-      resolveCredentialRevision: async () => revisions.current,
-      cache: new SubagentMcpInventoryCache(),
-      discoveryDeadlineMs: 20,
+  const result = await resolveBoundedSubagentMcpInventory(new AbortController().signal, {
+    listServers: async () => [fast, slow, stdio],
+    withClient: async <T>(
+      current: McpServer,
+      signal: AbortSignal,
+      operation: (port: SubagentMcpClientPort) => Promise<T>,
+    ) => {
+      if (current.id === "slow") {
+        await new Promise<never>((_resolve, reject) =>
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
+        );
+      }
+      return operation(client([]));
     },
+    resolveCredentialRevision: async () => revisions.current,
+    cache: new SubagentMcpInventoryCache(),
+    discoveryDeadlineMs: 20,
+  });
+  assert.deepEqual(
+    result.map(({ serverId }) => serverId),
+    ["fast"],
   );
-  assert.deepEqual(result.map(({ serverId }) => serverId), ["fast"]);
 });
 
 test("configuration loading shares the aggregate deadline", async () => {
   const started = Date.now();
-  const result = await resolveBoundedSubagentMcpInventory(
-    new AbortController().signal,
-    {
-      listServers: async () => new Promise<never>(() => undefined),
-      withClient: async () => {
-        throw new Error("unreachable");
-      },
-      resolveCredentialRevision: async () => revisions.current,
-      cache: new SubagentMcpInventoryCache(),
-      discoveryDeadlineMs: 20,
+  const result = await resolveBoundedSubagentMcpInventory(new AbortController().signal, {
+    listServers: async () => new Promise<never>(() => undefined),
+    withClient: async () => {
+      throw new Error("unreachable");
     },
-  );
+    resolveCredentialRevision: async () => revisions.current,
+    cache: new SubagentMcpInventoryCache(),
+    discoveryDeadlineMs: 20,
+  });
   assert.deepEqual(result, []);
   assert.ok(Date.now() - started < 250);
 });
@@ -137,7 +139,11 @@ test("child inventories omit servers switched off for the model and their hidden
     ...client([]),
     listTools: async () => {
       listed.push(id);
-      return ["lookup", "search"].map((name) => ({ name, inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } }));
+      return ["lookup", "search"].map((name) => ({
+        name,
+        inputSchema: { type: "object", properties: {} },
+        annotations: { readOnlyHint: true },
+      }));
     },
   });
   const scopes = await resolveBoundedSubagentMcpInventory(new AbortController().signal, {
@@ -148,12 +154,22 @@ test("child inventories omit servers switched off for the model and their hidden
       { ...server, id: "all-hidden", hiddenTools: ["lookup", "search"] },
     ],
     disabledMcpServerIds: ["workspace-off"],
-    withClient: async <T>(target: McpServer, _signal: AbortSignal, operation: (value: SubagentMcpClientPort) => Promise<T>) => operation(port(target.id)),
-    resolveCredentialRevision: async (target) => { resolved.push(target.id); return revisions.current; },
+    withClient: async <T>(
+      target: McpServer,
+      _signal: AbortSignal,
+      operation: (value: SubagentMcpClientPort) => Promise<T>,
+    ) => operation(port(target.id)),
+    resolveCredentialRevision: async (target) => {
+      resolved.push(target.id);
+      return revisions.current;
+    },
     cache: new SubagentMcpInventoryCache(),
     now: () => 1_000,
   });
-  assert.deepEqual(scopes.map(({ serverId, tools }) => [serverId, tools.map(({ toolName }) => toolName)]), [["partly", ["lookup"]]]);
+  assert.deepEqual(
+    scopes.map(({ serverId, tools }) => [serverId, tools.map(({ toolName }) => toolName)]),
+    [["partly", ["lookup"]]],
+  );
   assert.deepEqual(listed.sort(), ["all-hidden", "partly"]);
   assert.deepEqual(resolved.sort(), ["all-hidden", "partly"]);
 });

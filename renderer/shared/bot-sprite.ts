@@ -53,7 +53,9 @@ export interface BotSpriteTones {
 }
 
 /** The tones each tint adds; `tint` and `markDark` are the tint itself (`BOT_AVATAR_COLOR_HEX`). */
-const BOT_SPRITE_SHADES: Readonly<Record<BotAvatarColor, Pick<BotSpriteTones, "shade" | "deep" | "light" | "markLight">>> = {
+const BOT_SPRITE_SHADES: Readonly<
+  Record<BotAvatarColor, Pick<BotSpriteTones, "shade" | "deep" | "light" | "markLight">>
+> = {
   lilac: { shade: "#A87EEE", deep: "#42246C", light: "#F8F5FE", markLight: "#8C58D8" },
   sky: { shade: "#2EB7EB", deep: "#003E54", light: "#EFF9FD", markLight: "#0686B0" },
   mint: { shade: "#35CB84", deep: "#004427", light: "#E8FDF0", markLight: "#0E915A" },
@@ -68,12 +70,13 @@ const BOT_SPRITE_SHADES: Readonly<Record<BotAvatarColor, Pick<BotSpriteTones, "s
   graphite: { shade: "#A2A1B3", deep: "#36354B", light: "#F6F6F9", markLight: "#797988" },
 };
 
-export const BOT_SPRITE_TONES: Readonly<Record<BotAvatarColor, BotSpriteTones>> = Object.fromEntries(
-  Object.entries(BOT_SPRITE_SHADES).map(([color, shades]) => {
-    const tint = BOT_AVATAR_COLOR_HEX[color as BotAvatarColor];
-    return [color, { tint, ...shades, markDark: tint }];
-  }),
-) as Record<BotAvatarColor, BotSpriteTones>;
+export const BOT_SPRITE_TONES: Readonly<Record<BotAvatarColor, BotSpriteTones>> =
+  Object.fromEntries(
+    Object.entries(BOT_SPRITE_SHADES).map(([color, shades]) => {
+      const tint = BOT_AVATAR_COLOR_HEX[color as BotAvatarColor];
+      return [color, { tint, ...shades, markDark: tint }];
+    }),
+  ) as Record<BotAvatarColor, BotSpriteTones>;
 
 /** One grid cell: `.` empty, `o` outline (shade), `b` body (tint), `h` highlight (light). */
 export type BotSpriteCell = "." | "o" | "b" | "h";
@@ -99,7 +102,12 @@ export function botSpriteGrid(shape: BotAvatarShape, small: boolean): string[] {
     });
   });
   const isBody = (y: number, x: number) => body[y]?.[x] === true;
-  const four = [[0, 1], [0, -1], [1, 0], [-1, 0]] as const;
+  const four = [
+    [0, 1],
+    [0, -1],
+    [1, 0],
+    [-1, 0],
+  ] as const;
   const eight = [...four, [1, 1], [1, -1], [-1, 1], [-1, -1]] as const;
   for (let y = 0; y < n; y++) {
     for (let x = 0; x < n; x++) {
@@ -108,7 +116,8 @@ export function botSpriteGrid(shape: BotAvatarShape, small: boolean): string[] {
   }
   for (let y = 0; y < n; y++) {
     for (let x = 0; x < n; x++) {
-      if (outline[y]![x] && !eight.some(([dy, dx]) => isBody(y + dy, x + dx))) outline[y]![x] = false;
+      if (outline[y]![x] && !eight.some(([dy, dx]) => isBody(y + dy, x + dx)))
+        outline[y]![x] = false;
     }
   }
   return body.map((row, y) =>
@@ -158,7 +167,12 @@ export function botSpriteRows(grid: readonly string[]): BotSpriteRow[] {
       const cell = line[x] as BotSpriteCell;
       if (cell === ".") continue;
       const previous = runs[runs.length - 1];
-      if (previous && previous.cell === cell && previous.column === x >> 1 && previous.x + previous.width === x * CELL) {
+      if (
+        previous &&
+        previous.cell === cell &&
+        previous.column === x >> 1 &&
+        previous.x + previous.width === x * CELL
+      ) {
         previous.width += CELL;
       } else {
         runs.push({ cell, column: x >> 1, x: x * CELL, y: y * CELL, width: CELL, height: CELL });
@@ -199,8 +213,9 @@ export function botSpriteFace(small: boolean): BotSpriteFace {
     const size = Math.min(eye.width, eye.height) * 0.42;
     return { x: eye.x, y: eye.y, width: size, height: size };
   }) as [BotSpriteRect, BotSpriteRect];
-  const happy = eyes.map(({ x, y, width: w, height: h }) =>
-    `M${fmt(x + sw / 2)} ${fmt(y + h * 0.78)}L${fmt(x + w / 2)} ${fmt(y + h * 0.2)}L${fmt(x + w - sw / 2)} ${fmt(y + h * 0.78)}`,
+  const happy = eyes.map(
+    ({ x, y, width: w, height: h }) =>
+      `M${fmt(x + sw / 2)} ${fmt(y + h * 0.78)}L${fmt(x + w / 2)} ${fmt(y + h * 0.2)}L${fmt(x + w - sw / 2)} ${fmt(y + h * 0.78)}`,
   ) as [string, string];
   const wince = eyes.map(({ x, y, width: w, height: h }, index) => {
     const near = x + sw / 2;
@@ -225,10 +240,20 @@ export function botSpriteProps(grid: readonly string[]): BotSpriteProps {
   const dotY = Math.max(0.5, botSpriteTop(grid) * CELL - 4);
   const arm = { x: 42, y: 27, width: 4.5, height: 3 };
   return {
-    thinkDots: [0, 1, 2].map((i) => ({ x: 36 + i * u * 1.5, y: dotY, width: u, height: u })) as BotSpriteProps["thinkDots"],
+    thinkDots: [0, 1, 2].map((i) => ({
+      x: 36 + i * u * 1.5,
+      y: dotY,
+      width: u,
+      height: u,
+    })) as BotSpriteProps["thinkDots"],
     plug: {
       arm,
-      head: { x: arm.x + arm.width - arm.height * 0.2, y: arm.y - arm.height * 0.35, width: arm.height * 1.1, height: arm.height * 1.7 },
+      head: {
+        x: arm.x + arm.width - arm.height * 0.2,
+        y: arm.y - arm.height * 0.35,
+        width: arm.height * 1.1,
+        height: arm.height * 1.7,
+      },
     },
     cursor: { x: 45, y: 16.5, width: 2, height: 8 },
   };
@@ -295,7 +320,12 @@ const FAILED_SESSIONS = new Set(["model_error", "interrupted", "needs_model"]);
  * indicator. `done` is not a target: the settler shows it when a working target turns idle.
  * A running turn without a phase (the sidebar only knows the session) reads as thinking.
  */
-export function botAvatarTarget({ session, phase, awaitingPerson, failed }: BotAvatarActivityInput): BotAvatarState {
+export function botAvatarTarget({
+  session,
+  phase,
+  awaitingPerson,
+  failed,
+}: BotAvatarActivityInput): BotAvatarState {
   if (awaitingPerson) return "waiting";
   if (session === "running") return phase ? PHASE_STATES[phase] : "thinking";
   return failed || (session !== undefined && FAILED_SESSIONS.has(session)) ? "error" : "idle";

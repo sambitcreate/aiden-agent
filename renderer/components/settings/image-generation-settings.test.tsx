@@ -29,7 +29,10 @@ function provider(
   };
 }
 
-function model(patch: Partial<ImageGenerationModelView> & Pick<ImageGenerationModelView, "provider" | "id" | "name">): ImageGenerationModelView {
+function model(
+  patch: Partial<ImageGenerationModelView> &
+    Pick<ImageGenerationModelView, "provider" | "id" | "name">,
+): ImageGenerationModelView {
   return { acceptsReferenceImages: false, enabled: true, origin: "curated", ...patch };
 }
 
@@ -41,10 +44,21 @@ function baseState(): ImageGenerationState {
       provider("fal", { key: { connected: true, source: "env" } }),
     ],
     models: [
-      model({ provider: "openrouter", id: "google/gemini-3.1-flash-image", name: "Nano Banana 2", acceptsReferenceImages: true }),
+      model({
+        provider: "openrouter",
+        id: "google/gemini-3.1-flash-image",
+        name: "Nano Banana 2",
+        acceptsReferenceImages: true,
+      }),
       model({ provider: "replicate", id: "black-forest-labs/flux-2-pro", name: "FLUX.2 Pro" }),
       model({ provider: "fal", id: "fal-ai/seedream/v4", name: "Seedream 4" }),
-      model({ provider: "fal", id: "fal-ai/obscure-model", name: "Obscure Fetched", enabled: false, origin: "fetched" }),
+      model({
+        provider: "fal",
+        id: "fal-ai/obscure-model",
+        name: "Obscure Fetched",
+        enabled: false,
+        origin: "fetched",
+      }),
     ],
     defaultModel: null,
   };
@@ -52,7 +66,10 @@ function baseState(): ImageGenerationState {
 
 const ok = (state: ImageGenerationState): ImageGenerationActionResult => ({ ok: true, state });
 
-function mount(handlers: Record<string, (...args: unknown[]) => unknown> = {}, state = baseState()) {
+function mount(
+  handlers: Record<string, (...args: unknown[]) => unknown> = {},
+  state = baseState(),
+) {
   const calls = installBotTestIpc({ "imageGeneration:state": () => state, ...handlers });
   render(<ImageGenerationSettings />);
   return calls;
@@ -78,13 +95,19 @@ test("provider rows show key status and offer Set up or Manage by connection", a
   // fal lists two models; the fetched one is off.
   assert.ok(screen.getByText("2 models · 1 on"));
   // Key and fetch controls live in the dialog, not inline on the page.
-  assert.equal(screen.queryByRole("button", { name: "Fetch latest OpenRouter models" }) === null, true);
+  assert.equal(
+    screen.queryByRole("button", { name: "Fetch latest OpenRouter models" }) === null,
+    true,
+  );
 });
 
 test("the Providers group says image and chat keys stay separate", async () => {
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "About separate image keys" }));
-  assert.match((await screen.findByRole("tooltip")).textContent ?? "", /Chat keys never make images, and image keys never run chats\./u);
+  assert.match(
+    (await screen.findByRole("tooltip")).textContent ?? "",
+    /Chat keys never make images, and image keys never run chats\./u,
+  );
 });
 
 test("Manage opens the provider dialog with its key and model list, and closing returns focus", async () => {
@@ -122,20 +145,31 @@ test("saving a key in the dialog sends it once, clears the field and shows the n
   fireEvent.change(field, { target: { value: "  r8_secret_token_value  " } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Save key" }));
   await waitFor(() => assert.ok(within(dialog).getByText("Key saved")));
-  assert.deepEqual(callsTo(calls, "imageGeneration:setKey"), [[{ provider: "replicate", key: "r8_secret_token_value" }]]);
+  assert.deepEqual(callsTo(calls, "imageGeneration:setKey"), [
+    [{ provider: "replicate", key: "r8_secret_token_value" }],
+  ]);
   assert.equal(within(dialog).queryByLabelText("Replicate image API key") === null, true);
   assert.equal(document.body.textContent?.includes("r8_secret_token_value"), false);
   // Replace opens an empty field again.
   fireEvent.click(within(dialog).getByRole("button", { name: "Replace Replicate key" }));
-  assert.equal((within(dialog).getByLabelText("Replicate image API key") as HTMLInputElement).value, "");
+  assert.equal(
+    (within(dialog).getByLabelText("Replicate image API key") as HTMLInputElement).value,
+    "",
+  );
 });
 
 test("a rejected key keeps the field open and shows the reason", async () => {
   mount({
-    "imageGeneration:setKey": () => ({ ok: false, code: "invalid_key", message: "That key looks too short." }),
+    "imageGeneration:setKey": () => ({
+      ok: false,
+      code: "invalid_key",
+      message: "That key looks too short.",
+    }),
   });
   const dialog = await openSetup("Set up Replicate");
-  fireEvent.change(within(dialog).getByLabelText("Replicate image API key"), { target: { value: "short-ish" } });
+  fireEvent.change(within(dialog).getByLabelText("Replicate image API key"), {
+    target: { value: "short-ish" },
+  });
   fireEvent.click(within(dialog).getByRole("button", { name: "Save key" }));
   assert.equal((await within(dialog).findByRole("alert")).textContent, "That key looks too short.");
   assert.ok(within(dialog).getByLabelText("Replicate image API key"));
@@ -187,7 +221,11 @@ test("Replicate's fetch needs a key; other providers fetch and report the count"
 
 test("a failed fetch shows the provider's message inline", async () => {
   mount({
-    "imageGeneration:fetchModels": () => ({ ok: false, code: "network_error", message: "fal didn’t respond." }),
+    "imageGeneration:fetchModels": () => ({
+      ok: false,
+      code: "network_error",
+      message: "fal didn’t respond.",
+    }),
   });
   const dialog = await openSetup("Manage fal");
   fireEvent.click(within(dialog).getByRole("button", { name: "Fetch latest fal models" }));
@@ -202,7 +240,10 @@ test("toggling a model calls setModelEnabled and adopts the returned state", asy
   assert.equal(toggle.getAttribute("aria-checked"), "true");
   fireEvent.click(toggle);
   await waitFor(() =>
-    assert.equal(screen.getByRole("switch", { name: "Use FLUX.2 Pro" }).getAttribute("aria-checked"), "false"),
+    assert.equal(
+      screen.getByRole("switch", { name: "Use FLUX.2 Pro" }).getAttribute("aria-checked"),
+      "false",
+    ),
   );
   assert.deepEqual(callsTo(calls, "imageGeneration:setModelEnabled"), [
     [{ provider: "replicate", id: "black-forest-labs/flux-2-pro", enabled: false }],
@@ -316,7 +357,9 @@ test("each provider offers its own fields, and an added model closes the dialog"
 
 test("custom models can be removed from their row", async () => {
   const state = baseState();
-  state.models.push(model({ provider: "openrouter", id: "acme/painter", name: "Painter", origin: "custom" }));
+  state.models.push(
+    model({ provider: "openrouter", id: "acme/painter", name: "Painter", origin: "custom" }),
+  );
   const calls = mount({ "imageGeneration:removeCustomModel": () => ok(baseState()) }, state);
   assert.ok(await screen.findByText(/Added by you/u));
   fireEvent.click(screen.getByRole("button", { name: "Remove Painter" }));
@@ -340,7 +383,8 @@ test("a running fetch locks only that provider's fetch, not its key controls or 
         : ok(baseState()),
   });
   const dialog = await openSetup("Manage OpenRouter");
-  const button = (name: string) => within(dialog).getByRole("button", { name }) as HTMLButtonElement;
+  const button = (name: string) =>
+    within(dialog).getByRole("button", { name }) as HTMLButtonElement;
   fireEvent.click(button("Fetch latest OpenRouter models"));
   await waitFor(() => assert.ok(within(dialog).getByText("Fetching…")));
   assert.equal(button("Fetch latest OpenRouter models").disabled, true);
@@ -352,7 +396,9 @@ test("a running fetch locks only that provider's fetch, not its key controls or 
   fireEvent.keyDown(dialog, { key: "Escape" });
   await waitFor(() => assert.equal(screen.queryByRole("dialog") === null, true));
   const fal = await openSetup("Manage fal");
-  const falFetch = within(fal).getByRole("button", { name: "Fetch latest fal models" }) as HTMLButtonElement;
+  const falFetch = within(fal).getByRole("button", {
+    name: "Fetch latest fal models",
+  }) as HTMLButtonElement;
   assert.equal(falFetch.disabled, false);
   fireEvent.click(falFetch);
   await waitFor(() =>
@@ -374,11 +420,28 @@ async function chooseBulk(label: RegExp) {
 test("Turn on all listed sends exactly the filtered rows that change, in one call", async () => {
   const state = baseState();
   state.models = [
-    model({ provider: "openrouter", id: "google/gemini-3.1-flash-image", name: "Nano Banana 2", enabled: false }),
+    model({
+      provider: "openrouter",
+      id: "google/gemini-3.1-flash-image",
+      name: "Nano Banana 2",
+      enabled: false,
+    }),
     model({ provider: "fal", id: "fal-ai/seedream/v4", name: "Seedream 4", enabled: false }),
     model({ provider: "fal", id: "fal-ai/flux/schnell", name: "FLUX Schnell", enabled: true }),
-    model({ provider: "fal", id: "fal-ai/recraft", name: "Recraft", enabled: false, origin: "custom" }),
-    model({ provider: "fal", id: "fal-ai/obscure-model", name: "Obscure Fetched", enabled: false, origin: "fetched" }),
+    model({
+      provider: "fal",
+      id: "fal-ai/recraft",
+      name: "Recraft",
+      enabled: false,
+      origin: "custom",
+    }),
+    model({
+      provider: "fal",
+      id: "fal-ai/obscure-model",
+      name: "Obscure Fetched",
+      enabled: false,
+      origin: "fetched",
+    }),
   ];
   const calls = mount({ "imageGeneration:setModelsEnabled": () => ok(state) }, state);
   fireEvent.click(await screen.findByRole("button", { name: "fal" }));
@@ -402,9 +465,24 @@ test("Turn on all listed sends exactly the filtered rows that change, in one cal
 test("Only providers with a key turns on connected providers' rows and turns off the rest", async () => {
   const state = baseState();
   state.models = [
-    model({ provider: "openrouter", id: "google/gemini-3.1-flash-image", name: "Nano Banana 2", enabled: false }),
-    model({ provider: "replicate", id: "black-forest-labs/flux-2-pro", name: "FLUX.2 Pro", enabled: true }),
-    model({ provider: "replicate", id: "google/imagen-4-fast", name: "Imagen 4 Fast", enabled: false }),
+    model({
+      provider: "openrouter",
+      id: "google/gemini-3.1-flash-image",
+      name: "Nano Banana 2",
+      enabled: false,
+    }),
+    model({
+      provider: "replicate",
+      id: "black-forest-labs/flux-2-pro",
+      name: "FLUX.2 Pro",
+      enabled: true,
+    }),
+    model({
+      provider: "replicate",
+      id: "google/imagen-4-fast",
+      name: "Imagen 4 Fast",
+      enabled: false,
+    }),
     model({ provider: "fal", id: "fal-ai/seedream/v4", name: "Seedream 4", enabled: true }),
   ];
   const calls = mount({ "imageGeneration:setModelsEnabled": () => ok(state) }, state);
@@ -433,7 +511,9 @@ test("bulk items that would change nothing are disabled", async () => {
   const item = await screen.findByRole("menuitem", { name: /^Turn on all listed/u });
   assert.equal(item.getAttribute("aria-disabled"), "true");
   assert.equal(
-    screen.getByRole("menuitem", { name: /^Turn off all listed/u }).getAttribute("aria-disabled") === "true",
+    screen
+      .getByRole("menuitem", { name: /^Turn off all listed/u })
+      .getAttribute("aria-disabled") === "true",
     false,
   );
 });

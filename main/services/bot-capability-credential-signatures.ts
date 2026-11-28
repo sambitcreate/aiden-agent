@@ -13,10 +13,7 @@ import { secrets } from "./secrets.js";
 const providerCredentialDependencies: BotProviderCredentialSignatureDependencies = {
   readBuiltinCredential: (providerId) => piCredentialStore.read(providerId),
   readCustomCredential: (provider) =>
-    secrets.getProviderKey(
-      provider.id,
-      JSON.stringify(providerConnectionSnapshot(provider)),
-    ),
+    secrets.getProviderKey(provider.id, JSON.stringify(providerConnectionSnapshot(provider))),
 };
 
 /** Main-only keyed signature; neither credential bytes nor a reusable plain digest is persisted. */
@@ -36,10 +33,7 @@ export const botMcpCredentialSignature = createBotMcpCredentialSignatureCore({
   readPresetKey: async (server) => {
     const preset = assertMcpPresetServer(server);
     return preset?.auth.kind === "apiKey"
-      ? secrets.getOrBindLegacyProviderKey(
-          presetSecretId(server.id),
-          mcpPresetKeyBinding(server),
-        )
+      ? secrets.getOrBindLegacyProviderKey(presetSecretId(server.id), mcpPresetKeyBinding(server))
       : null;
   },
   readOAuthSession: (serverId) => mcpOAuthStore.get(serverId),

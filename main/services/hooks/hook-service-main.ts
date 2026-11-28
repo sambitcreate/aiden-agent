@@ -20,7 +20,9 @@ export function getHookService(): HookService | undefined {
  * effect without a restart. On a host that can't run hooks (not macOS or
  * Linux) nothing is installed, so no hook ever runs there.
  */
-export async function initializeHookService(supported: boolean = hostPlatformCapabilities().hooks): Promise<HookService | undefined> {
+export async function initializeHookService(
+  supported: boolean = hostPlatformCapabilities().hooks,
+): Promise<HookService | undefined> {
   if (!supported) return undefined;
   const root = path.join(app.getPath("userData"), "hooks");
   // Agent file tools never write the hook store, whatever the workspace.

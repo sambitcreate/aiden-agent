@@ -3,7 +3,13 @@ import { RefreshCw } from "lucide-react";
 import { Button, Field, FieldSet, Text, toast } from "../../components/ui";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
-import { BOT_HEALTH_LABELS, botHealthStatus, type BotHealthCheckResult, type BotHealthReport, type BotHealthStatus } from "../../shared/bot-health";
+import {
+  BOT_HEALTH_LABELS,
+  botHealthStatus,
+  type BotHealthCheckResult,
+  type BotHealthReport,
+  type BotHealthStatus,
+} from "../../shared/bot-health";
 import { useBotLiveSummary } from "./bot-sidebar-rows";
 import type { BotDefinition } from "../../shared/bots";
 
@@ -14,7 +20,10 @@ const RESULT_WORDS: Record<BotHealthCheckResult["status"], string> = {
   skipped: "Not checked",
 };
 
-const RESULT_COLOR: Record<BotHealthCheckResult["status"], "secondary" | "tertiary" | "status-red"> = {
+const RESULT_COLOR: Record<
+  BotHealthCheckResult["status"],
+  "secondary" | "tertiary" | "status-red"
+> = {
   ok: "secondary",
   repaired: "secondary",
   needs_you: "status-red",
@@ -42,12 +51,19 @@ export function BotHealthGroup({
   checking: boolean;
   onCheck(): void;
 }) {
-  const shown = report?.results.filter((result) => result.status !== "skipped" || result.id !== "computer") ?? [];
+  const shown =
+    report?.results.filter((result) => result.status !== "skipped" || result.id !== "computer") ??
+    [];
   return (
     <FieldSet title="Health">
       {status ? (
         <Field label="Status">
-          <Text as="span" variant="small" color={status === "needs_you" ? "status-red" : "secondary"} className="justify-self-end">
+          <Text
+            as="span"
+            variant="small"
+            color={status === "needs_you" ? "status-red" : "secondary"}
+            className="justify-self-end"
+          >
             {BOT_HEALTH_LABELS[status]}
           </Text>
         </Field>
@@ -55,7 +71,12 @@ export function BotHealthGroup({
       {shown.length ? (
         shown.map((result) => (
           <Field key={result.id} label={result.label}>
-            <Text as="span" variant="small" color={RESULT_COLOR[result.status]} className="justify-self-end">
+            <Text
+              as="span"
+              variant="small"
+              color={RESULT_COLOR[result.status]}
+              className="justify-self-end"
+            >
               {RESULT_WORDS[result.status]}
             </Text>
           </Field>
@@ -67,7 +88,13 @@ export function BotHealthGroup({
         label="Check now"
         {...(report ? { description: `Last checked at ${checkedWhen(report.checkedAt)}.` } : {})}
       >
-        <Button size="small" variant="filled" className="justify-self-end" disabled={checking} onClick={onCheck}>
+        <Button
+          size="small"
+          variant="filled"
+          className="justify-self-end"
+          disabled={checking}
+          onClick={onCheck}
+        >
           <RefreshCw /> {checking ? "Checking…" : "Check now"}
         </Button>
       </Field>
@@ -81,9 +108,12 @@ export function BotHealthSection({ bot }: { bot: Pick<BotDefinition, "id" | "nam
   const [checking, setChecking] = React.useState(false);
   React.useEffect(() => {
     let live = true;
-    void botsApi.health.report(bot.id).then((next) => {
-      if (live) setReport(next);
-    }).catch(() => undefined);
+    void botsApi.health
+      .report(bot.id)
+      .then((next) => {
+        if (live) setReport(next);
+      })
+      .catch(() => undefined);
     return () => {
       live = false;
     };
@@ -107,5 +137,12 @@ export function BotHealthSection({ bot }: { bot: Pick<BotDefinition, "id" | "nam
         ...(report ? { report } : {}),
       })
     : undefined;
-  return <BotHealthGroup report={report} {...(status ? { status } : {})} checking={checking} onCheck={() => void check()} />;
+  return (
+    <BotHealthGroup
+      report={report}
+      {...(status ? { status } : {})}
+      checking={checking}
+      onCheck={() => void check()}
+    />
+  );
 }

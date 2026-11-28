@@ -347,7 +347,10 @@ function scopeToolGrantFacts(tool: BotMcpScopeTool): BotRuntimeMcpToolAuthority 
   };
 }
 
-function sameGrantFacts(grant: BotRuntimeMcpToolAuthority, facts: BotRuntimeMcpToolAuthority): boolean {
+function sameGrantFacts(
+  grant: BotRuntimeMcpToolAuthority,
+  facts: BotRuntimeMcpToolAuthority,
+): boolean {
   return (
     grant.toolId === facts.toolId &&
     grant.name === facts.name &&

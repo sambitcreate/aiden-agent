@@ -16,8 +16,16 @@ import {
   withPinnedBotProviderAuth,
   type ModelRuntimeDependencies,
 } from "./model-runtime-core.js";
-import { MAX_ANTHROPIC_CACHE_BREAKPOINTS, anthropicCacheBreakpoints, rememberStableHead } from "./prompt-cache-breakpoints.js";
-import { resolveProviderRuntimeLimits, CONSERVATIVE_RUNTIME_LIMITS, type RuntimeModelLimits } from "./models-catalog-core.js";
+import {
+  MAX_ANTHROPIC_CACHE_BREAKPOINTS,
+  anthropicCacheBreakpoints,
+  rememberStableHead,
+} from "./prompt-cache-breakpoints.js";
+import {
+  resolveProviderRuntimeLimits,
+  CONSERVATIVE_RUNTIME_LIMITS,
+  type RuntimeModelLimits,
+} from "./models-catalog-core.js";
 import type { StoredProvider } from "./types.js";
 
 const codexModel: Model<Api> = {
@@ -312,20 +320,27 @@ test("pins resolved Bot auth without asking Models to resolve ambient authority 
     },
     providerStream,
     {
-      fetchDeferred: (model, _handle, options) => { capturedModel = model; capturedOptions = options; const result = createAssistantMessageEventStream(); result.end({} as Awaited<ReturnType<typeof result.result>>); return result; },
-      cancelDeferred: async (model, _handle, options) => { capturedModel = model; capturedOptions = options; },
+      fetchDeferred: (model, _handle, options) => {
+        capturedModel = model;
+        capturedOptions = options;
+        const result = createAssistantMessageEventStream();
+        result.end({} as Awaited<ReturnType<typeof result.result>>);
+        return result;
+      },
+      cancelDeferred: async (model, _handle, options) => {
+        capturedModel = model;
+        capturedOptions = options;
+      },
     },
   );
 
-  await pinned.streams.streamSimple(
-    googleModel,
-    normalizeContext({ messages: [] }),
-    {
+  await pinned.streams
+    .streamSimple(googleModel, normalizeContext({ messages: [] }), {
       apiKey: "later-key",
       headers: { Authorization: "Later", "X-Request": "kept" },
       env: { GOOGLE_APPLICATION_CREDENTIALS: "/later/adc.json" },
-    },
-  ).result();
+    })
+    .result();
 
   assert.equal(capturedModel?.baseUrl, "https://pinned.example.test/v1");
   assert.equal(capturedOptions?.apiKey, "pinned-key");
@@ -334,22 +349,46 @@ test("pins resolved Bot auth without asking Models to resolve ambient authority 
     "X-Request": "kept",
   });
   assert.equal(capturedOptions?.env?.GOOGLE_APPLICATION_CREDENTIALS, "/pinned/adc.json");
-  const handle = { provider: googleModel.provider, modelId: googleModel.id, api: googleModel.api, id: "saved-request" };
-  for (const operation of [pinned.models.fetchDeferred.bind(pinned.models), pinned.models.cancelDeferred.bind(pinned.models)]) {
-    await operation(googleModel, handle, { apiKey: "ambient-new-key", headers: { Authorization: "Ambient" }, env: { GOOGLE_APPLICATION_CREDENTIALS: "/ambient/other-profile.json" } });
-    assert.equal(capturedModel?.baseUrl, "https://pinned.example.test/v1"); assert.equal(capturedOptions?.apiKey, "pinned-key"); assert.equal(capturedOptions?.headers?.Authorization, "Pinned"); assert.equal(capturedOptions?.env?.GOOGLE_APPLICATION_CREDENTIALS, "/pinned/adc.json");
-    await assert.rejects(operation({ ...googleModel, id: "different-model" }, handle), /another model/u);
+  const handle = {
+    provider: googleModel.provider,
+    modelId: googleModel.id,
+    api: googleModel.api,
+    id: "saved-request",
+  };
+  for (const operation of [
+    pinned.models.fetchDeferred.bind(pinned.models),
+    pinned.models.cancelDeferred.bind(pinned.models),
+  ]) {
+    await operation(googleModel, handle, {
+      apiKey: "ambient-new-key",
+      headers: { Authorization: "Ambient" },
+      env: { GOOGLE_APPLICATION_CREDENTIALS: "/ambient/other-profile.json" },
+    });
+    assert.equal(capturedModel?.baseUrl, "https://pinned.example.test/v1");
+    assert.equal(capturedOptions?.apiKey, "pinned-key");
+    assert.equal(capturedOptions?.headers?.Authorization, "Pinned");
+    assert.equal(capturedOptions?.env?.GOOGLE_APPLICATION_CREDENTIALS, "/pinned/adc.json");
+    await assert.rejects(
+      operation({ ...googleModel, id: "different-model" }, handle),
+      /another model/u,
+    );
   }
 });
 
 test("a pinned Bot runtime places the stable-head breakpoint on the wire", async () => {
-  const { anthropicMessagesApi } = await import("@earendil-works/pi-ai/api/anthropic-messages.lazy");
+  const { anthropicMessagesApi } =
+    await import("@earendil-works/pi-ai/api/anthropic-messages.lazy");
   const { getBuiltinModels } = await import("@earendil-works/pi-ai/providers/all");
   const native = getBuiltinModels("anthropic")[0] as Model<Api>;
   assert.ok(native, "the fixture uses one of Pi's own Anthropic model records");
   const provider: StoredProvider = {
-    id: "anthropic", kind: "anthropic", label: "Anthropic", baseUrl: native.baseUrl,
-    models: [native.id], needsKey: true, isPreset: true,
+    id: "anthropic",
+    kind: "anthropic",
+    label: "Anthropic",
+    baseUrl: native.baseUrl,
+    models: [native.id],
+    needsKey: true,
+    isPreset: true,
   };
   const runtime = await resolveModelRuntimeWith(
     dependencies({ provider, nativeProvider: provider, nativeModel: native }),
@@ -364,17 +403,29 @@ test("a pinned Bot runtime places the stable-head breakpoint on the wire", async
   const head = "You are the fixture Bot.";
   rememberStableHead("pinned-bot-chat", head);
   let body: Record<string, unknown> | undefined;
-  await pinned.streams.streamSimple(runtime.model, normalizeContext({
-    systemPrompt: `${head}\n\n<volatile_memory>fixture</volatile_memory>`,
-    tools: [{ name: "read_fixture", description: "Read a fixture.", parameters: { type: "object", properties: {} } as never }],
-    messages: [{ role: "user", content: "Synthetic pinned check", timestamp: 1 }],
-  }), {
-    sessionId: "pinned-bot-chat",
-    fetch: async (_url: unknown, init?: RequestInit) => {
-      body ??= JSON.parse(String(init?.body)) as Record<string, unknown>;
-      throw new Error("captured before network");
-    },
-  }).result();
+  await pinned.streams
+    .streamSimple(
+      runtime.model,
+      normalizeContext({
+        systemPrompt: `${head}\n\n<volatile_memory>fixture</volatile_memory>`,
+        tools: [
+          {
+            name: "read_fixture",
+            description: "Read a fixture.",
+            parameters: { type: "object", properties: {} } as never,
+          },
+        ],
+        messages: [{ role: "user", content: "Synthetic pinned check", timestamp: 1 }],
+      }),
+      {
+        sessionId: "pinned-bot-chat",
+        fetch: async (_url: unknown, init?: RequestInit) => {
+          body ??= JSON.parse(String(init?.body)) as Record<string, unknown>;
+          throw new Error("captured before network");
+        },
+      },
+    )
+    .result();
   assert.ok(body, "Pi built a request");
   assert.equal(anthropicCacheBreakpoints(body), MAX_ANTHROPIC_CACHE_BREAKPOINTS);
   assert.equal((body.system as Array<{ text: string }>)[0]?.text, `${head}\n\n`);
@@ -438,34 +489,47 @@ test("rejects stale legacy model selections before reading provider credentials"
   assert.equal(keyReads, 0);
 });
 
-
 /** One Anthropic request with a session, as a chat turn sends it; the first request body Pi would put on the wire. */
 async function sentAnthropicBody(model: Model<Api>, sessionId: string) {
-  const { anthropicMessagesApi } = await import("@earendil-works/pi-ai/api/anthropic-messages.lazy");
+  const { anthropicMessagesApi } =
+    await import("@earendil-works/pi-ai/api/anthropic-messages.lazy");
   let body: Record<string, unknown> | undefined;
   let beta: string | null = null;
-  await anthropicMessagesApi().streamSimple(model, normalizeContext({ messages: [
-    { role: "user", content: "Synthetic thread check", timestamp: 1 },
-  ] }), {
-    apiKey: "offline-fixture",
-    sessionId,
-    fetch: async (_url: unknown, init?: RequestInit) => {
-      body ??= JSON.parse(String(init?.body)) as Record<string, unknown>;
-      beta ??= new Headers(init?.headers).get("anthropic-beta");
-      throw new Error("captured before network");
-    },
-  }).result();
+  await anthropicMessagesApi()
+    .streamSimple(
+      model,
+      normalizeContext({
+        messages: [{ role: "user", content: "Synthetic thread check", timestamp: 1 }],
+      }),
+      {
+        apiKey: "offline-fixture",
+        sessionId,
+        fetch: async (_url: unknown, init?: RequestInit) => {
+          body ??= JSON.parse(String(init?.body)) as Record<string, unknown>;
+          beta ??= new Headers(init?.headers).get("anthropic-beta");
+          throw new Error("captured before network");
+        },
+      },
+    )
+    .result();
   assert.ok(body, "Pi built a request");
   return { body, beta: beta ?? "" };
 }
 
 test("Anthropic requests through a resolved runtime send the whole conversation, never a message thread", async () => {
   const { getBuiltinModels } = await import("@earendil-works/pi-ai/providers/all");
-  const native = getBuiltinModels("anthropic").find((model) => model.id === "claude-sonnet-4-5") as Model<Api>;
+  const native = getBuiltinModels("anthropic").find(
+    (model) => model.id === "claude-sonnet-4-5",
+  ) as Model<Api>;
   assert.ok(native, "the fixture uses Pi's own Anthropic model record");
   const provider: StoredProvider = {
-    id: "anthropic", kind: "anthropic", label: "Anthropic", baseUrl: native.baseUrl,
-    models: [native.id], needsKey: true, isPreset: true,
+    id: "anthropic",
+    kind: "anthropic",
+    label: "Anthropic",
+    baseUrl: native.baseUrl,
+    models: [native.id],
+    needsKey: true,
+    isPreset: true,
   };
   // Pi's own default for this model would open a thread.
   const piDefault = await sentAnthropicBody(native, "thread-check-pi");
@@ -484,8 +548,12 @@ test("Anthropic requests through a resolved runtime send the whole conversation,
 
 test("a custom Anthropic connection on api.anthropic.com never opens a message thread", async () => {
   const provider: StoredProvider = {
-    id: "custom:anthropic-direct", kind: "anthropic", label: "Anthropic direct",
-    baseUrl: "https://api.anthropic.com", models: ["claude-sonnet-4-5"], needsKey: true,
+    id: "custom:anthropic-direct",
+    kind: "anthropic",
+    label: "Anthropic direct",
+    baseUrl: "https://api.anthropic.com",
+    models: ["claude-sonnet-4-5"],
+    needsKey: true,
   };
   // Pi 1.6.0 turns threads on for any provider whose baseUrl is on api.anthropic.com.
   const piDefault = await sentAnthropicBody(
@@ -506,7 +574,8 @@ test("a custom Anthropic connection on api.anthropic.com never opens a message t
 });
 
 test("custom effort presets serialize explicit thinking controls through the real Pi transport", async () => {
-  const { openAICompletionsApi } = await import("@earendil-works/pi-ai/api/openai-completions.lazy");
+  const { openAICompletionsApi } =
+    await import("@earendil-works/pi-ai/api/openai-completions.lazy");
   const { piThinkingLevelsForModel } = await import("./pi-model-metadata.js");
   const { resolveGenerationThinkingLevel } = await import("./generation-runtime.js");
   const cases = [
@@ -520,32 +589,83 @@ test("custom effort presets serialize explicit thinking controls through the rea
     { preset: "openai", level: "high", effort: "high" },
     { preset: "openai", level: "xhigh", effort: "xhigh", selected: ["off", "xhigh", "max"] },
     { preset: "openai", level: "max", effort: "max", selected: ["off", "xhigh", "max"] },
-    { preset: "glm", level: "medium", nested: { enable_thinking: true, reasoning_effort: "medium" }, selected: ["medium", "xhigh"] },
-    { preset: "glm", level: "xhigh", nested: { enable_thinking: true, reasoning_effort: "xhigh" }, selected: ["medium", "xhigh"] },
+    {
+      preset: "glm",
+      level: "medium",
+      nested: { enable_thinking: true, reasoning_effort: "medium" },
+      selected: ["medium", "xhigh"],
+    },
+    {
+      preset: "glm",
+      level: "xhigh",
+      nested: { enable_thinking: true, reasoning_effort: "xhigh" },
+      selected: ["medium", "xhigh"],
+    },
   ] as const;
   for (const entry of cases) {
     const provider: StoredProvider = {
-      id: "custom:effort", kind: "openai", label: "Private server", baseUrl: "https://private.example.test/v1",
-      models: ["private-model"], needsKey: false,
-      modelMetadata: { "private-model": { source: "provider", overrides: { reasoning: true, effortControl: entry.preset, ...("selected" in entry ? { effortLevels: [...entry.selected] } : {}) } } },
+      id: "custom:effort",
+      kind: "openai",
+      label: "Private server",
+      baseUrl: "https://private.example.test/v1",
+      models: ["private-model"],
+      needsKey: false,
+      modelMetadata: {
+        "private-model": {
+          source: "provider",
+          overrides: {
+            reasoning: true,
+            effortControl: entry.preset,
+            ...("selected" in entry ? { effortLevels: [...entry.selected] } : {}),
+          },
+        },
+      },
     };
-    const model = buildModel(provider, "private-model", resolveProviderRuntimeLimits({}, provider, "private-model"));
-    assert.deepEqual(piThinkingLevelsForModel(model), "selected" in entry ? [...entry.selected] : entry.preset === "glm" ? ["off", "low", "high", "max"] : ["off", "low", "medium", "high"]);
+    const model = buildModel(
+      provider,
+      "private-model",
+      resolveProviderRuntimeLimits({}, provider, "private-model"),
+    );
+    assert.deepEqual(
+      piThinkingLevelsForModel(model),
+      "selected" in entry
+        ? [...entry.selected]
+        : entry.preset === "glm"
+          ? ["off", "low", "high", "max"]
+          : ["off", "low", "medium", "high"],
+    );
     assert.equal(resolveGenerationThinkingLevel(provider.id, model, entry.level), entry.level);
     let payload: Record<string, unknown> | undefined;
     let networkCalls = 0;
-    await openAICompletionsApi().streamSimple(model, normalizeContext({ messages: [
-      { role: "user", content: "Synthetic effort check", timestamp: 1 },
-    ] }), {
-      apiKey: "offline-fixture", reasoning: entry.level === "off" ? undefined : entry.level,
-      onPayload: (request) => { payload = request as Record<string, unknown>; throw new Error("captured before network"); },
-      fetch: async () => { networkCalls++; throw new Error("Unexpected network I/O"); },
-    }).result();
+    await openAICompletionsApi()
+      .streamSimple(
+        model,
+        normalizeContext({
+          messages: [{ role: "user", content: "Synthetic effort check", timestamp: 1 }],
+        }),
+        {
+          apiKey: "offline-fixture",
+          reasoning: entry.level === "off" ? undefined : entry.level,
+          onPayload: (request) => {
+            payload = request as Record<string, unknown>;
+            throw new Error("captured before network");
+          },
+          fetch: async () => {
+            networkCalls++;
+            throw new Error("Unexpected network I/O");
+          },
+        },
+      )
+      .result();
     assert.ok(payload, `${entry.preset}/${entry.level} must construct a request`);
     assert.equal(networkCalls, 0);
     if ("nested" in entry) {
       assert.deepEqual(payload.chat_template_kwargs, entry.nested);
-      assert.equal(payload.reasoning_effort, undefined, "Nested requests must not carry a conflicting top-level effort");
+      assert.equal(
+        payload.reasoning_effort,
+        undefined,
+        "Nested requests must not carry a conflicting top-level effort",
+      );
     } else {
       assert.equal(payload.reasoning_effort, entry.effort);
       assert.equal(payload.chat_template_kwargs, undefined);
@@ -553,52 +673,95 @@ test("custom effort presets serialize explicit thinking controls through the rea
   }
 });
 
-
 test("custom effort settings do not enable reasoning or alter other API formats implicitly", () => {
   const provider: StoredProvider = {
-    id: "custom:effort", kind: "openai", label: "Private", baseUrl: "https://private.example.test/v1",
-    models: ["private-model"], needsKey: false,
-    modelMetadata: { "private-model": { source: "provider", overrides: { reasoning: false, effortControl: "glm" } } },
+    id: "custom:effort",
+    kind: "openai",
+    label: "Private",
+    baseUrl: "https://private.example.test/v1",
+    models: ["private-model"],
+    needsKey: false,
+    modelMetadata: {
+      "private-model": {
+        source: "provider",
+        overrides: { reasoning: false, effortControl: "glm" },
+      },
+    },
   };
-  const disabled = buildModel(provider, "private-model", resolveProviderRuntimeLimits({}, provider, "private-model"));
+  const disabled = buildModel(
+    provider,
+    "private-model",
+    resolveProviderRuntimeLimits({}, provider, "private-model"),
+  );
   assert.equal(disabled.reasoning, false);
   assert.equal(disabled.compat, undefined);
   assert.equal(disabled.thinkingLevelMap, undefined);
-  provider.modelMetadata!["private-model"].overrides = { reasoning: true, effortControl: "glm", effortLevels: [] };
-  const cleared = buildModel(provider, "private-model", resolveProviderRuntimeLimits({}, provider, "private-model"));
+  provider.modelMetadata!["private-model"].overrides = {
+    reasoning: true,
+    effortControl: "glm",
+    effortLevels: [],
+  };
+  const cleared = buildModel(
+    provider,
+    "private-model",
+    resolveProviderRuntimeLimits({}, provider, "private-model"),
+  );
   assert.equal(cleared.compat, undefined);
   assert.equal(cleared.thinkingLevelMap, undefined);
   provider.kind = "anthropic";
   provider.modelMetadata!["private-model"].overrides!.reasoning = true;
-  const anthropic = buildModel(provider, "private-model", resolveProviderRuntimeLimits({}, provider, "private-model"));
+  const anthropic = buildModel(
+    provider,
+    "private-model",
+    resolveProviderRuntimeLimits({}, provider, "private-model"),
+  );
   assert.equal(anthropic.api, "anthropic-messages");
   assert.equal(anthropic.compat, undefined);
   assert.equal(anthropic.thinkingLevelMap, undefined);
 });
 
 test("a listed custom endpoint routes by the chat id and an unlisted one sends no cache key", async () => {
-  const { openAICompletionsApi } = await import("@earendil-works/pi-ai/api/openai-completions.lazy");
+  const { openAICompletionsApi } =
+    await import("@earendil-works/pi-ai/api/openai-completions.lazy");
   const sent = async (baseUrl: string, cacheRetention?: "none") => {
     const provider: StoredProvider = {
-      id: "custom:affinity", kind: "openai", label: "Private", baseUrl, models: ["private-model"], needsKey: false,
+      id: "custom:affinity",
+      kind: "openai",
+      label: "Private",
+      baseUrl,
+      models: ["private-model"],
+      needsKey: false,
     };
-    const model = buildModel(provider, "private-model", resolveProviderRuntimeLimits({}, provider, "private-model"));
+    const model = buildModel(
+      provider,
+      "private-model",
+      resolveProviderRuntimeLimits({}, provider, "private-model"),
+    );
     let payload: Record<string, unknown> | undefined;
     let headers: Headers | undefined;
     let networkCalls = 0;
-    await openAICompletionsApi().streamSimple(model, normalizeContext({ messages: [
-      { role: "user", content: "Synthetic affinity check", timestamp: 1 },
-    ] }), {
-      apiKey: "offline-fixture",
-      sessionId: "chat-affinity-1",
-      ...(cacheRetention ? { cacheRetention } : {}),
-      onPayload: (request) => { payload = request as Record<string, unknown>; return undefined; },
-      fetch: async (_url: unknown, init?: RequestInit) => {
-        networkCalls++;
-        headers = new Headers(init?.headers);
-        throw new Error("captured before network");
-      },
-    }).result();
+    await openAICompletionsApi()
+      .streamSimple(
+        model,
+        normalizeContext({
+          messages: [{ role: "user", content: "Synthetic affinity check", timestamp: 1 }],
+        }),
+        {
+          apiKey: "offline-fixture",
+          sessionId: "chat-affinity-1",
+          ...(cacheRetention ? { cacheRetention } : {}),
+          onPayload: (request) => {
+            payload = request as Record<string, unknown>;
+            return undefined;
+          },
+          fetch: async (_url: unknown, init?: RequestInit) => {
+            networkCalls++;
+            headers = new Headers(init?.headers);
+            throw new Error("captured before network");
+          },
+        },
+      )
+      .result();
     assert.ok(payload, `${baseUrl} must construct a request`);
     return { payload, headers: headers ?? new Headers(), networkCalls };
   };

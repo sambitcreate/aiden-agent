@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { scheduledJobs, type Cron } from "croner";
-import { createCatchUpQueue, createScheduleServiceCore, type ScheduledRunTrigger } from "./schedule-service-core.js";
+import {
+  createCatchUpQueue,
+  createScheduleServiceCore,
+  type ScheduledRunTrigger,
+} from "./schedule-service-core.js";
 import { createScheduleStore } from "./schedule-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
 
@@ -31,10 +35,7 @@ class MemoryPersistence<T> {
 function harness(globallyEnabled: () => Promise<boolean> = async () => true) {
   const taskPersistence = new MemoryPersistence<unknown[]>([]);
   const runPersistence = new MemoryPersistence<unknown[]>([]);
-  const store = createScheduleStore(
-    taskPersistence,
-    runPersistence,
-  );
+  const store = createScheduleStore(taskPersistence, runPersistence);
   const broadcasts: Array<Record<string, unknown>> = [];
   const errors: string[] = [];
   const pending = new Map<string, (run: ScheduledRun) => void>();
@@ -174,15 +175,23 @@ for (const action of ["pause", "remove"] as const) {
     await testbed.service.start();
     t.after(() => testbed.service.stopAndSettle());
     let signalStart!: () => void;
-    let admitted = new Promise<void>((resolve) => { signalStart = resolve; });
+    let admitted = new Promise<void>((resolve) => {
+      signalStart = resolve;
+    });
     const execute = testbed.execution.run;
-    testbed.execution.run = (current) => { const result = execute(current); signalStart(); return result; };
+    testbed.execution.run = (current) => {
+      const result = execute(current);
+      signalStart();
+      return result;
+    };
     const initialRun = testbed.service.runNow(task.id);
     await admitted;
     const previousRevision = (await testbed.store.get(task.id))!.updatedAt;
     let rejected = false;
     testbed.taskPersistence.beforeCommit = async (draft) => {
-      const next = (draft as Array<{ id: string; enabled: boolean }>).find((entry) => entry.id === task.id);
+      const next = (draft as Array<{ id: string; enabled: boolean }>).find(
+        (entry) => entry.id === task.id,
+      );
       if (!rejected && (!next || !next.enabled)) {
         rejected = true;
         throw new Error("Consent revoked before publication.");
@@ -191,11 +200,15 @@ for (const action of ["pause", "remove"] as const) {
     await assert.rejects(testbed.service[action](task.id), /Consent revoked/);
     assert.equal((await initialRun).result, "blocked");
     assert.equal((await testbed.store.get(task.id))?.enabled, true);
-    assert.ok((await testbed.store.get(task.id))!.updatedAt > previousRevision,
-      "settling the cancelled run advances the persisted runtime revision");
+    assert.ok(
+      (await testbed.store.get(task.id))!.updatedAt > previousRevision,
+      "settling the cancelled run advances the persisted runtime revision",
+    );
     const rearmed = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`);
     assert.ok(rearmed, "the rejected operation must leave a live Cron");
-    admitted = new Promise<void>((resolve) => { signalStart = resolve; });
+    admitted = new Promise<void>((resolve) => {
+      signalStart = resolve;
+    });
     const completion = fireWhenDue(t, rearmed);
     await admitted;
     assert.equal(testbed.hasPending(task.id), true, "the rearmed Cron must still execute");
@@ -476,7 +489,10 @@ test("aborted pause preserves an already-paused task", async () => {
   await testbed.store.setEnabled(task.id, false);
   const controller = new AbortController();
   testbed.taskPersistence.beforeCommit = async () => controller.abort();
-  await assert.rejects(testbed.service.pause(task.id, { signal: controller.signal }), /cancelled/iu);
+  await assert.rejects(
+    testbed.service.pause(task.id, { signal: controller.signal }),
+    /cancelled/iu,
+  );
   assert.equal((await testbed.store.get(task.id))?.enabled, false);
 });
 
@@ -492,7 +508,8 @@ test("rolling back a pause keeps the run that settled during cancellation", asyn
 
   const controller = new AbortController();
   h.taskPersistence.beforeCommit = async (draft) => {
-    if ((draft as ScheduledTask[]).some((row) => row.id === task.id && !row.enabled)) controller.abort();
+    if ((draft as ScheduledTask[]).some((row) => row.id === task.id && !row.enabled))
+      controller.abort();
   };
   await assert.rejects(h.service.pause(task.id, { signal: controller.signal }), /cancelled/iu);
   const settled = await running;
@@ -535,7 +552,10 @@ test("aborted resume preserves an already-enabled task", async () => {
       return result;
     },
   });
-  await assert.rejects(testbed.service.resume(task.id, { signal: controller.signal }), /cancelled/iu);
+  await assert.rejects(
+    testbed.service.resume(task.id, { signal: controller.signal }),
+    /cancelled/iu,
+  );
   assert.equal((await testbed.store.get(task.id))?.enabled, true);
 });
 
@@ -690,7 +710,6 @@ test("a current startup task-read failure still disables only the affected task"
   assert.equal((await originalGet(healthy.id))?.enabled, true);
 });
 
-
 for (const invalidation of ["restart", "disable"] as const) {
   test(`startup quarantine cannot commit after ${invalidation} or overwrite newer runtime state`, async (t) => {
     const testbed = harness();
@@ -767,7 +786,6 @@ test("stopping while startup stages a missed-run claim preserves its due time", 
   assert.equal(testbed.hasPending(task.id), false);
 });
 
-
 for (const boundary of ["lookup", "run publication", "runtime publication"] as const) {
   test(`obsolete Cron errors cannot publish after restart during ${boundary}`, async (t) => {
     const testbed = harness();
@@ -843,7 +861,6 @@ test("a current Cron error still records and broadcasts the failure", async (t) 
   assert.equal((await testbed.store.runs(task.id)).length, 1);
   assert.deepEqual(testbed.broadcasts[testbed.broadcasts.length - 1], { taskId: task.id });
 });
-
 
 test("an error from a replaced Cron job cannot update the current task", async (t) => {
   const testbed = harness();
@@ -1005,11 +1022,19 @@ for (const staleOnArrival of [true, false]) {
     const current = fireWhenDue(t, currentJob);
     await new Promise((resolve) => setImmediate(resolve));
 
-    assert.equal(testbed.hasPending(task.id), true, "obsolete lookup must not block replacement execution");
+    assert.equal(
+      testbed.hasPending(task.id),
+      true,
+      "obsolete lookup must not block replacement execution",
+    );
     release.resolve();
     await obsolete;
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(testbed.service.isRunning(task.id), true, "obsolete cleanup must preserve the replacement slot");
+    assert.equal(
+      testbed.service.isRunning(task.id),
+      true,
+      "obsolete cleanup must preserve the replacement slot",
+    );
     assert.throws(() => testbed.service.runNow(task.id), /already running/u);
     assert.deepEqual(testbed.errors, []);
     assert.deepEqual(await testbed.store.runs(task.id), []);
@@ -1057,7 +1082,11 @@ test("delayed workspace cancellation cannot cancel a replacement run through the
   release.resolve();
   await Promise.all([obsolete, cancelling]);
 
-  assert.equal(testbed.hasPending(task.id), true, "cancelling the obsolete snapshot must not cancel the new owner");
+  assert.equal(
+    testbed.hasPending(task.id),
+    true,
+    "cancelling the obsolete snapshot must not cancel the new owner",
+  );
   assert.equal(testbed.service.isRunning(task.id), true);
   assert.deepEqual(testbed.errors, []);
   assert.deepEqual(await testbed.store.runs(task.id), []);
@@ -1199,7 +1228,10 @@ for (const automaticSource of ["Cron", "startup catch-up"] as const) {
     assert.equal(runs.length, 1);
     assert.equal(runs[0]?.result, "error");
     assert.equal(runs[0]?.error, "This scheduled task is already running.");
-    assert.equal((await testbed.store.get(task.id))?.lastError, "This scheduled task is already running.");
+    assert.equal(
+      (await testbed.store.get(task.id))?.lastError,
+      "This scheduled task is already running.",
+    );
     assert.equal(testbed.errors.length, 1);
     assert.deepEqual(testbed.broadcasts, [{ taskId: task.id }]);
     assert.equal(testbed.service.isRunning(task.id), false);
@@ -1279,7 +1311,14 @@ test("a deferred startup catch-up does not re-run a fire the Cron already claime
     execution: {
       run: async (task, _runId, trigger) => {
         triggers.push({ trigger, at: Date.now() });
-        return { id: `run-${triggers.length}`, taskId: task.id, startedAt: Date.now(), finishedAt: Date.now(), result: "success", output: "" };
+        return {
+          id: `run-${triggers.length}`,
+          taskId: task.id,
+          startedAt: Date.now(),
+          finishedAt: Date.now(),
+          result: "success",
+          output: "",
+        };
       },
       cancel: () => false,
       cancelAll: () => undefined,
@@ -1313,7 +1352,9 @@ test("a deferred startup catch-up does not re-run a fire the Cron already claime
     [{ kind: "automatic", fireTime: missedAt }],
     "the superseded catch-up must not run again or claim tomorrow's fire",
   );
-  assert.ok(triggers.every(({ trigger, at }) => trigger?.kind !== "automatic" || trigger.fireTime <= at));
+  assert.ok(
+    triggers.every(({ trigger, at }) => trigger?.kind !== "automatic" || trigger.fireTime <= at),
+  );
   assert.equal((await store.get(task.id))!.nextRunAt, next);
   assert.deepEqual(await store.runs(task.id), []);
   assert.deepEqual(errors, []);
@@ -1322,7 +1363,11 @@ test("a deferred startup catch-up does not re-run a fire the Cron already claime
 const HOUR = 60 * 60_000;
 
 /** A service on a mocked clock whose runs record themselves the way the real execution does. */
-function lateHarness(t: TestContext, now: number, results: Array<ScheduledRun["result"] | "cancelled"> = []) {
+function lateHarness(
+  t: TestContext,
+  now: number,
+  results: Array<ScheduledRun["result"] | "cancelled"> = [],
+) {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now });
   const store = createScheduleStore(
     new MemoryPersistence<unknown[]>([]),
@@ -1345,7 +1390,9 @@ function lateHarness(t: TestContext, now: number, results: Array<ScheduledRun["r
           finishedAt: Date.now(),
           result,
           output: "",
-          ...(result === "error" || result === "blocked" ? { error: "The provider refused the key." } : {}),
+          ...(result === "error" || result === "blocked"
+            ? { error: "The provider refused the key." }
+            : {}),
           // As schedule-execution records them: a run started by hand, a stopped run.
           ...(trigger?.kind === "manual" ? { byHand: true as const } : {}),
           ...(planned === "cancelled" ? { cancelled: true as const } : {}),
@@ -1362,7 +1409,8 @@ function lateHarness(t: TestContext, now: number, results: Array<ScheduledRun["r
   });
   t.after(() => service.stop());
   const settle = async () => {
-    for (let index = 0; index < 20; index += 1) await new Promise((resolve) => setImmediate(resolve));
+    for (let index = 0; index < 20; index += 1)
+      await new Promise((resolve) => setImmediate(resolve));
   };
   const job = (taskId: string) => {
     const jobs = scheduledJobs.filter((entry) => entry.name === `scheduled:${taskId}`);
@@ -1386,7 +1434,10 @@ for (const [label, missedAt] of [
 
     assert.deepEqual(late.ran, [{ kind: "automatic", fireTime: missedAt }]);
     assert.equal((await late.store.get(task.id))?.nextRunAt, JAN_5_9AM + 24 * HOUR);
-    assert.deepEqual((await late.store.runs(task.id)).map((run) => run.result), ["success"]);
+    assert.deepEqual(
+      (await late.store.runs(task.id)).map((run) => run.result),
+      ["success"],
+    );
     assert.deepEqual(late.errors, []);
   });
 }
@@ -1415,7 +1466,10 @@ test("a chat task more than 12 hours late at startup records a skip and waits fo
   assert.deepEqual(late.ran, [{ kind: "automatic", fireTime: JAN_5_9AM + 24 * HOUR }]);
 });
 
-for (const [hoursAsleep, runs] of [[4, true], [13, false]] as const) {
+for (const [hoursAsleep, runs] of [
+  [4, true],
+  [13, false],
+] as const) {
   test(`a chat task's timer waking ${hoursAsleep} hours after its time ${runs ? "still runs" : "records a skip"}`, async (t) => {
     const late = lateHarness(t, JAN_5_9AM - 60_000);
     const task = await addTask(late.store);
@@ -1439,8 +1493,13 @@ for (const [hoursAsleep, runs] of [[4, true], [13, false]] as const) {
 test("a Bot routine still catches up a fire days late at startup", async (t) => {
   const late = lateHarness(t, JAN_5_9AM + 14 * HOUR);
   const task = await late.store.save({
-    botId: "bot-chef", name: "Daily check", mode: "llm", cron: "0 9 * * *", timezone: "UTC",
-    routineSchedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+    botId: "bot-chef",
+    name: "Daily check",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    routineSchedule: { kind: "daily", time: "09:00" },
+    prompt: "Check the inbox.",
   });
   await late.store.updateRuntime(task.id, { nextRunAt: JAN_5_9AM - 3 * 24 * HOUR });
   await late.service.start();
@@ -1452,7 +1511,15 @@ test("a Bot routine still catches up a fire days late at startup", async (t) => 
 });
 
 test("three failed scheduled runs in a row pause a chat task with one card; turning it back on starts a new count", async (t) => {
-  const late = lateHarness(t, JAN_5_9AM - 60_000, ["error", "error", "success", "error", "error", "error", "error"]);
+  const late = lateHarness(t, JAN_5_9AM - 60_000, [
+    "error",
+    "error",
+    "success",
+    "error",
+    "error",
+    "error",
+    "error",
+  ]);
   const task = await addTask(late.store);
   await late.service.start();
   const fireNext = async () => {
@@ -1470,7 +1537,10 @@ test("three failed scheduled runs in a row pause a chat task with one card; turn
   const paused = await late.store.get(task.id);
   assert.equal(paused?.enabled, false);
   assert.equal(paused?.nextRunAt, undefined);
-  assert.equal(paused?.lastError, "Paused after 3 failed runs in a row: The provider refused the key.");
+  assert.equal(
+    paused?.lastError,
+    "Paused after 3 failed runs in a row: The provider refused the key.",
+  );
   assert.deepEqual(late.cards, [{ taskId: task.id, error: "The provider refused the key." }]);
 
   // Back on: one more failure is the first of a new count.
@@ -1495,7 +1565,14 @@ test("runs you start by hand never pause a chat task", async (t) => {
 });
 
 test("failed runs you started by hand don't add to the count, but a refused run does and a stopped one doesn't", async (t) => {
-  const late = lateHarness(t, JAN_5_9AM - 60_000, ["error", "error", "error", "cancelled", "blocked", "blocked"]);
+  const late = lateHarness(t, JAN_5_9AM - 60_000, [
+    "error",
+    "error",
+    "error",
+    "cancelled",
+    "blocked",
+    "blocked",
+  ]);
   const task = await addTask(late.store);
   await late.service.start();
   const fireNext = async () => {
@@ -1508,7 +1585,11 @@ test("failed runs you started by hand don't add to the count, but a refused run 
     assert.equal((await late.service.runNow(task.id)).result, "error");
   }
   await fireNext();
-  assert.equal((await late.store.get(task.id))?.enabled, true, "two failures by hand and one scheduled failure stay on");
+  assert.equal(
+    (await late.store.get(task.id))?.enabled,
+    true,
+    "two failures by hand and one scheduled failure stay on",
+  );
 
   await fireNext(); // stopped: neither a failure nor a break
   await fireNext(); // refused
@@ -1534,7 +1615,11 @@ test("turning a chat task off and on by hand starts a new count of failed runs",
   t.mock.timers.setTime(Date.now() + 1_000);
   await late.service.resume(task.id);
   await fireNext();
-  assert.equal((await late.store.get(task.id))?.enabled, true, "the failure after turning it back on is the first of a new count");
+  assert.equal(
+    (await late.store.get(task.id))?.enabled,
+    true,
+    "the failure after turning it back on is the first of a new count",
+  );
   assert.deepEqual(late.cards, []);
 });
 
@@ -1561,7 +1646,9 @@ test("stopAndSettle cancels active runs and clears deferred catch-up so reevalua
   assert.equal(h.service.isRunning(task1.id), true);
 
   let settled = false;
-  const stopping = h.service.stopAndSettle().then(() => { settled = true; });
+  const stopping = h.service.stopAndSettle().then(() => {
+    settled = true;
+  });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(settled, false);
   assert.equal(h.hasDeferredCancellation(task1.id), true);

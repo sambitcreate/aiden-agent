@@ -3,9 +3,14 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { registerChatImageActionHandlers, safeImageFileStem, type ChatImageActionDeps } from "./chat-image-actions.js";
+import {
+  registerChatImageActionHandlers,
+  safeImageFileStem,
+  type ChatImageActionDeps,
+} from "./chat-image-actions.js";
 
-const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+const PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
 
 async function setup(t: test.TestContext) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-actions-"));
@@ -16,12 +21,35 @@ async function setup(t: test.TestContext) {
   const chats: Record<string, unknown> = {
     "chat-1": {
       messages: [
-        { id: "m1", role: "user", content: "", attachments: [{ id: "doc", name: "notes.txt", mimeType: "text/plain", kind: "text", size: 2, text: "hi" }] },
+        {
+          id: "m1",
+          role: "user",
+          content: "",
+          attachments: [
+            {
+              id: "doc",
+              name: "notes.txt",
+              mimeType: "text/plain",
+              kind: "text",
+              size: 2,
+              text: "hi",
+            },
+          ],
+        },
         {
           id: "m2",
           role: "assistant",
           content: "",
-          attachments: [{ id: "img", name: "../Generated image.png", mimeType: "image/png", kind: "image", size: 68, data: PNG }],
+          attachments: [
+            {
+              id: "img",
+              name: "../Generated image.png",
+              mimeType: "image/png",
+              kind: "image",
+              size: 68,
+              data: PNG,
+            },
+          ],
         },
       ],
     },
@@ -32,8 +60,12 @@ async function setup(t: test.TestContext) {
     writeClipboardImage: (bytes) => clipboard.push(bytes),
     showItemInFolder: (file) => revealed.push(file),
   };
-  registerChatImageActionHandlers({ handle: (channel, fn) => void handlers.set(channel, fn) }, deps);
-  const invoke = (channel: string, ...args: unknown[]) => Promise.resolve().then(() => handlers.get(channel)!({}, ...args));
+  registerChatImageActionHandlers(
+    { handle: (channel, fn) => void handlers.set(channel, fn) },
+    deps,
+  );
+  const invoke = (channel: string, ...args: unknown[]) =>
+    Promise.resolve().then(() => handlers.get(channel)!({}, ...args));
   return { dir, invoke, clipboard, revealed };
 }
 
@@ -41,17 +73,29 @@ test("saving writes the stored bytes to Downloads under a fresh, safe name and n
   const { dir, invoke, revealed } = await setup(t);
   await fs.writeFile(path.join(dir, "Generated image.png"), "keep me");
 
-  const first = (await invoke("chats:saveImageToDownloads", { chatId: "chat-1", attachmentId: "img" })) as { path: string };
-  const second = (await invoke("chats:saveImageToDownloads", { chatId: "chat-1", attachmentId: "img" })) as { path: string };
+  const first = (await invoke("chats:saveImageToDownloads", {
+    chatId: "chat-1",
+    attachmentId: "img",
+  })) as { path: string };
+  const second = (await invoke("chats:saveImageToDownloads", {
+    chatId: "chat-1",
+    attachmentId: "img",
+  })) as { path: string };
 
-  assert.deepEqual([path.basename(first.path), path.basename(second.path)], ["Generated image (1).png", "Generated image (2).png"]);
+  assert.deepEqual(
+    [path.basename(first.path), path.basename(second.path)],
+    ["Generated image (1).png", "Generated image (2).png"],
+  );
   assert.equal(path.dirname(first.path), dir);
   assert.equal(await fs.readFile(path.join(dir, "Generated image.png"), "utf8"), "keep me");
   assert.deepEqual(await fs.readFile(first.path), Buffer.from(PNG, "base64"));
 
   await invoke("chats:showSavedImage", first.path);
   assert.deepEqual(revealed, [first.path]);
-  await assert.rejects(invoke("chats:showSavedImage", path.join(dir, "Generated image.png")), /isn't available/);
+  await assert.rejects(
+    invoke("chats:showSavedImage", path.join(dir, "Generated image.png")),
+    /isn't available/,
+  );
 });
 
 test("only an image stored in that chat can be saved or copied", async (t) => {
@@ -72,7 +116,9 @@ test("only an image stored in that chat can be saved or copied", async (t) => {
   assert.equal(clipboard.length, 0);
   assert.equal(await invoke("chats:copyImage", { chatId: "chat-1", attachmentId: "img" }), true);
   assert.deepEqual(clipboard, [Buffer.from(PNG, "base64")]);
-  assert.deepEqual(await invoke("chats:imageData", { chatId: "chat-1", attachmentId: "img" }), { data: PNG });
+  assert.deepEqual(await invoke("chats:imageData", { chatId: "chat-1", attachmentId: "img" }), {
+    data: PNG,
+  });
 });
 
 test("an image kept as a file is read from that file alone", async (t) => {
@@ -81,32 +127,60 @@ test("an image kept as a file is read from that file alone", async (t) => {
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
   const reads: string[] = [];
   const sha256 = "c".repeat(64);
-  registerChatImageActionHandlers({ handle: (channel, fn) => void handlers.set(channel, fn) }, {
-    getChat: async () => ({
-      messages: [{
-        id: "m1",
-        role: "assistant",
-        content: "",
-        createdAt: 1,
-        attachments: [
-          { id: "img", name: "Chart.png", mimeType: "image/png", kind: "image", size: 68, sha256 },
-          { id: "gone", name: "Gone.png", mimeType: "image/png", kind: "image", size: 68, sha256: "d".repeat(64) },
+  registerChatImageActionHandlers(
+    { handle: (channel, fn) => void handlers.set(channel, fn) },
+    {
+      getChat: async () => ({
+        messages: [
+          {
+            id: "m1",
+            role: "assistant",
+            content: "",
+            createdAt: 1,
+            attachments: [
+              {
+                id: "img",
+                name: "Chart.png",
+                mimeType: "image/png",
+                kind: "image",
+                size: 68,
+                sha256,
+              },
+              {
+                id: "gone",
+                name: "Gone.png",
+                mimeType: "image/png",
+                kind: "image",
+                size: 68,
+                sha256: "d".repeat(64),
+              },
+            ],
+          },
         ],
-      }],
-    }),
-    readImage: async (hash, size) => {
-      reads.push(hash);
-      return hash === sha256 && size === 68 ? Buffer.from(PNG, "base64") : undefined;
+      }),
+      readImage: async (hash, size) => {
+        reads.push(hash);
+        return hash === sha256 && size === 68 ? Buffer.from(PNG, "base64") : undefined;
+      },
+      downloadsDir: () => dir,
+      writeClipboardImage: () => undefined,
+      showItemInFolder: () => undefined,
     },
-    downloadsDir: () => dir,
-    writeClipboardImage: () => undefined,
-    showItemInFolder: () => undefined,
+  );
+  const invoke = (channel: string, ...args: unknown[]) =>
+    Promise.resolve().then(() => handlers.get(channel)!({}, ...args));
+  assert.deepEqual(await invoke("chats:imageData", { chatId: "chat-1", attachmentId: "img" }), {
+    data: PNG,
   });
-  const invoke = (channel: string, ...args: unknown[]) => Promise.resolve().then(() => handlers.get(channel)!({}, ...args));
-  assert.deepEqual(await invoke("chats:imageData", { chatId: "chat-1", attachmentId: "img" }), { data: PNG });
-  const saved = (await invoke("chats:saveImageToDownloads", { chatId: "chat-1", attachmentId: "img" })) as { path: string };
+  const saved = (await invoke("chats:saveImageToDownloads", {
+    chatId: "chat-1",
+    attachmentId: "img",
+  })) as { path: string };
   assert.deepEqual(await fs.readFile(saved.path), Buffer.from(PNG, "base64"));
-  await assert.rejects(invoke("chats:imageData", { chatId: "chat-1", attachmentId: "gone" }), /isn't saved/);
+  await assert.rejects(
+    invoke("chats:imageData", { chatId: "chat-1", attachmentId: "gone" }),
+    /isn't saved/,
+  );
   assert.deepEqual(reads, [sha256, sha256, "d".repeat(64)]);
 });
 
@@ -120,13 +194,21 @@ test("file names lose separators, control characters and leading dots", () => {
 test("long names in 3- and 4-byte characters fit the 255-byte file name limit and are cut between characters", () => {
   const zwj = String.fromCodePoint(0x200d);
   const acute = String.fromCodePoint(0x0301);
-  for (const name of ["写真".repeat(100), "🌅".repeat(100), `👩🏽${zwj}🚀`.repeat(40), `e${acute}`.repeat(200)]) {
+  for (const name of [
+    "写真".repeat(100),
+    "🌅".repeat(100),
+    `👩🏽${zwj}🚀`.repeat(40),
+    `e${acute}`.repeat(200),
+  ]) {
     const stem = safeImageFileStem(`${name}.png`);
     // The longest name saving can produce: stem, the " (999)" suffix and the longest extension.
     assert.ok(Buffer.byteLength(`${stem} (999).heic`) <= 255, `${Buffer.byteLength(stem)} bytes`);
     assert.ok(stem.length > 0 && name.startsWith(stem), "a prefix of the original name");
     // The cut falls between whole graphemes: no lone surrogate, dangling joiner or bare letter.
-    const graphemes = (text: string) => [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map((part) => part.segment);
+    const graphemes = (text: string) =>
+      [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map(
+        (part) => part.segment,
+      );
     const kept = graphemes(stem);
     assert.deepEqual(kept, graphemes(name).slice(0, kept.length));
   }
@@ -164,7 +246,10 @@ test("a saved image keeps the extension of its stored type", async (t) => {
   registerChatImageActionHandlers(
     { handle: (channel, fn) => void handlers.set(channel, fn) },
     {
-      getChat: async () => ({ messages: [{ id: "m", role: "assistant", content: "", createdAt: 1, attachments }] }) as never,
+      getChat: async () =>
+        ({
+          messages: [{ id: "m", role: "assistant", content: "", createdAt: 1, attachments }],
+        }) as never,
       downloadsDir: () => dir,
       writeClipboardImage: () => undefined,
       showItemInFolder: () => undefined,
@@ -172,10 +257,16 @@ test("a saved image keeps the extension of its stored type", async (t) => {
   );
   const saved: string[] = [];
   for (const attachment of attachments) {
-    const result = (await handlers.get("chats:saveImageToDownloads")!({}, { chatId: "c", attachmentId: attachment.id })) as {
+    const result = (await handlers.get("chats:saveImageToDownloads")!(
+      {},
+      { chatId: "c", attachmentId: attachment.id },
+    )) as {
       path: string;
     };
     saved.push(path.basename(result.path));
   }
-  assert.deepEqual(saved, Object.values(types).map((extension, index) => `Picture ${index}.${extension}`));
+  assert.deepEqual(
+    saved,
+    Object.values(types).map((extension, index) => `Picture ${index}.${extension}`),
+  );
 });

@@ -190,7 +190,12 @@ for (const provider of ["openai", "gemini", "local"] as const) {
 }
 
 test("local transcription sends clamped, rounded PCM16 samples as binary", async (t) => {
-  const conversion = deferredConversion(t, "local", undefined, new Float32Array([0, 0.25, -0.25, 1.5, -1.5, 1, -1]));
+  const conversion = deferredConversion(
+    t,
+    "local",
+    undefined,
+    new Float32Array([0, 0.25, -0.25, 1.5, -1.5, 1, -1]),
+  );
   const local = t.mock.method(voiceApi, "transcribeLocal", async () => "text");
   const pending = transcribeBlob(new Blob(["audio"], { type: "audio/webm" }), {
     provider: "local",
@@ -264,7 +269,11 @@ for (const provider of ["openai", "gemini", "local"] as const) {
         wallClock += offset < 0 ? 86_400_000 : -86_400_000;
       };
       // Local work has no base64 step: its synchronous encoding follows decode.
-      const conversion = deferredConversion(t, provider, provider === "gemini" ? undefined : consumeBudget);
+      const conversion = deferredConversion(
+        t,
+        provider,
+        provider === "gemini" ? undefined : consumeBudget,
+      );
       if (provider === "gemini") {
         const encode = globalThis.btoa;
         t.mock.method(globalThis, "btoa", (input: string) => {
@@ -311,11 +320,15 @@ for (const provider of ["openai", "gemini", "local"] as const) {
 }
 
 test("captured on-device PCM reaches the model as is, with no decode step", async (t) => {
-  replaceGlobal(t, "AudioContext", class {
-    constructor() {
-      throw new Error("captured PCM must not be decoded again");
-    }
-  });
+  replaceGlobal(
+    t,
+    "AudioContext",
+    class {
+      constructor() {
+        throw new Error("captured PCM must not be decoded again");
+      }
+    },
+  );
   const local = t.mock.method(voiceApi, "transcribeLocal", async () => "  hello there  ");
   const pcm = Int16Array.from([0, 8192, -8192, 32767]);
   const text = await transcribePcm16(pcm, { localModel: "parakeet-v3", operationId: "captured" });

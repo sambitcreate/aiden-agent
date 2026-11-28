@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
-import {
-  LiveRendererToolBroker,
-  LiveToolRegistry,
-  type LiveToolProvider,
-} from "./live-tools.js";
+import { LiveRendererToolBroker, LiveToolRegistry, type LiveToolProvider } from "./live-tools.js";
 
 const owner = { id: 1, documentId: "doc" } as unknown as RendererDocumentOwner;
 
-function provider(names: string[], handle: LiveToolProvider["handle"], extra: Partial<LiveToolProvider> = {}): LiveToolProvider {
+function provider(
+  names: string[],
+  handle: LiveToolProvider["handle"],
+  extra: Partial<LiveToolProvider> = {},
+): LiveToolProvider {
   return { declarations: names.map((name) => ({ name, description: name })), handle, ...extra };
 }
 
@@ -28,7 +28,9 @@ test("a call reaches the provider that declared its name", async () => {
     ],
     { sessionId: "s1", owner },
   );
-  assert.deepEqual(await registry.dispatch({ id: "1", name: "end_session", args: {} }), { ok: true });
+  assert.deepEqual(await registry.dispatch({ id: "1", name: "end_session", args: {} }), {
+    ok: true,
+  });
   assert.deepEqual(seen, ["end:end_session"]);
   assert.deepEqual(
     registry.functionDeclarations().map((declaration) => declaration.name),
@@ -38,7 +40,11 @@ test("a call reaches the provider that declared its name", async () => {
 
 test("an unknown tool and a throwing provider answer with fixed errors, never the thrown text", async () => {
   const registry = new LiveToolRegistry(
-    [provider(["boom"], async () => { throw new Error("/Users/secret/path"); })],
+    [
+      provider(["boom"], async () => {
+        throw new Error("/Users/secret/path");
+      }),
+    ],
     { sessionId: "s1", owner },
   );
   const unknown = await registry.dispatch({ id: "1", name: "nope", args: {} });
@@ -50,21 +56,31 @@ test("an unknown tool and a throwing provider answer with fixed errors, never th
 
 test("two providers may not declare the same name, and names must be snake case", () => {
   const handle = async () => ({ ok: true });
-  assert.throws(() => new LiveToolRegistry([provider(["a_tool"], handle), provider(["a_tool"], handle)], { sessionId: "s", owner }));
-  assert.throws(() => new LiveToolRegistry([provider(["Bad-Name"], handle)], { sessionId: "s", owner }));
+  assert.throws(
+    () =>
+      new LiveToolRegistry([provider(["a_tool"], handle), provider(["a_tool"], handle)], {
+        sessionId: "s",
+        owner,
+      }),
+  );
+  assert.throws(
+    () => new LiveToolRegistry([provider(["Bad-Name"], handle)], { sessionId: "s", owner }),
+  );
 });
 
 test("cancelling a call aborts its signal and reports it as cancelled", async () => {
   let aborted = false;
   const registry = new LiveToolRegistry(
     [
-      provider(["slow"], (_call, context) =>
-        new Promise((resolve) => {
-          context.signal.addEventListener("abort", () => {
-            aborted = true;
-            resolve({ ok: true });
-          });
-        }),
+      provider(
+        ["slow"],
+        (_call, context) =>
+          new Promise((resolve) => {
+            context.signal.addEventListener("abort", () => {
+              aborted = true;
+              resolve({ ok: true });
+            });
+          }),
       ),
     ],
     { sessionId: "s1", owner },
@@ -82,8 +98,15 @@ test("closing the registry aborts in-flight calls, closes providers and refuses 
     [
       provider(
         ["wait"],
-        (_call, context) => new Promise((resolve) => context.signal.addEventListener("abort", () => resolve({ ok: true }))),
-        { close: () => { closed += 1; } },
+        (_call, context) =>
+          new Promise((resolve) =>
+            context.signal.addEventListener("abort", () => resolve({ ok: true })),
+          ),
+        {
+          close: () => {
+            closed += 1;
+          },
+        },
       ),
     ],
     { sessionId: "s1", owner },
@@ -129,7 +152,9 @@ test("the renderer broker times out, cancels on abort, and settles everything on
 
 test("a non-object renderer result becomes a fixed failure", async () => {
   const sent: Array<{ requestId: string }> = [];
-  const broker = new LiveRendererToolBroker("s1", (request) => sent.push(request as { requestId: string }));
+  const broker = new LiveRendererToolBroker("s1", (request) =>
+    sent.push(request as { requestId: string }),
+  );
   const pending = broker.request("x", {});
   broker.resolve(sent[0]!.requestId, ["not", "an", "object"]);
   assert.equal(((await pending).error as { code: string }).code, "tool_failed");
@@ -140,7 +165,10 @@ test("a timeout tells the window to cancel too, so a late request cannot still a
   const broker = new LiveRendererToolBroker("s1", (request) => sent.push(request), 20);
   const timedOut = await broker.request("read_open_chat", {});
   assert.equal((timedOut.error as { code: string }).code, "timeout");
-  assert.deepEqual(sent.map((entry) => entry.type), ["tool_request", "tool_cancel"]);
+  assert.deepEqual(
+    sent.map((entry) => entry.type),
+    ["tool_request", "tool_cancel"],
+  );
   assert.equal(sent[1]!.requestId, sent[0]!.requestId);
 });
 
@@ -148,14 +176,18 @@ test("a mutating request the window already has reports its real outcome, or out
   const sent: Array<{ type: string; requestId: string }> = [];
   const broker = new LiveRendererToolBroker("s1", (request) => sent.push(request), 20, 30);
   // Timed out, and the window never answers: it may have gone through.
-  const lost = await broker.request("send_to_open_chat", { text: "Hi" }, undefined, { mutating: true });
+  const lost = await broker.request("send_to_open_chat", { text: "Hi" }, undefined, {
+    mutating: true,
+  });
   assert.equal((lost.error as { code: string }).code, "outcome_unknown");
   assert.equal(lost.committed, true);
   assert.equal(sent.filter((entry) => entry.type === "tool_cancel").length, 1);
 
   // Cancelled while the window was sending: its answer after the cancel is the outcome.
   const abort = new AbortController();
-  const sending = broker.request("send_to_open_chat", { text: "Hi" }, abort.signal, { mutating: true });
+  const sending = broker.request("send_to_open_chat", { text: "Hi" }, abort.signal, {
+    mutating: true,
+  });
   abort.abort();
   const lastRequest = () => sent.filter((entry) => entry.type === "tool_request").reverse()[0]!;
   const request = lastRequest();
@@ -164,10 +196,15 @@ test("a mutating request the window already has reports its real outcome, or out
 
   // The window had not started it: its own "cancelled" stands.
   const early = new AbortController();
-  const notStarted = broker.request("send_to_open_chat", { text: "Hi" }, early.signal, { mutating: true });
+  const notStarted = broker.request("send_to_open_chat", { text: "Hi" }, early.signal, {
+    mutating: true,
+  });
   early.abort();
   const second = lastRequest();
-  broker.resolve(second.requestId, { ok: false, error: { code: "cancelled", message: "The request was cancelled." } });
+  broker.resolve(second.requestId, {
+    ok: false,
+    error: { code: "cancelled", message: "The request was cancelled." },
+  });
   assert.equal(((await notStarted).error as { code: string }).code, "cancelled");
 
   // Cancelled before it ever reached the window: plainly cancelled.
@@ -180,10 +217,14 @@ test("a mutating request the window already has reports its real outcome, or out
 test("the registry reports a committed result even when the call was cancelled meanwhile", async () => {
   const registry = new LiveToolRegistry(
     [
-      provider(["send"], (_call, context) =>
-        new Promise((resolve) => {
-          context.signal.addEventListener("abort", () => resolve({ ok: true, status: "sent", committed: true }));
-        }),
+      provider(
+        ["send"],
+        (_call, context) =>
+          new Promise((resolve) => {
+            context.signal.addEventListener("abort", () =>
+              resolve({ ok: true, status: "sent", committed: true }),
+            );
+          }),
       ),
     ],
     { sessionId: "s1", owner },

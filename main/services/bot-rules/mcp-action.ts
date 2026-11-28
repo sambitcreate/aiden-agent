@@ -14,7 +14,9 @@ import { composioCallShape, composioClassifiedOperations } from "../composio-ope
 const MAX_DESCRIPTION_CHARS = 2_000;
 const MAX_TITLE_CHARS = 200;
 
-type McpAnnotations = NonNullable<Extract<BotClassifiableAction, { surface: "mcp" }>["annotations"]>;
+type McpAnnotations = NonNullable<
+  Extract<BotClassifiableAction, { surface: "mcp" }>["annotations"]
+>;
 
 /** The plain, well-typed annotation hints only; anything else is dropped. */
 function annotationsOf(value: unknown): McpAnnotations | undefined {
@@ -26,7 +28,8 @@ function annotationsOf(value: unknown): McpAnnotations | undefined {
   };
   const annotations: McpAnnotations = {};
   const title = read("title");
-  if (typeof title === "string" && title.length > 0) annotations.title = title.slice(0, MAX_TITLE_CHARS);
+  if (typeof title === "string" && title.length > 0)
+    annotations.title = title.slice(0, MAX_TITLE_CHARS);
   for (const key of ["readOnlyHint", "destructiveHint", "openWorldHint"] as const) {
     const hint = read(key);
     if (typeof hint === "boolean") annotations[key] = hint;
@@ -51,7 +54,10 @@ export async function describeMcpAction(
   );
   const effect = classifySubagentMcpToolV2(live?.annotations, live?.execution);
   const annotations = annotationsOf(live?.annotations);
-  const description = typeof live?.description === "string" ? live.description.slice(0, MAX_DESCRIPTION_CHARS) : undefined;
+  const description =
+    typeof live?.description === "string"
+      ? live.description.slice(0, MAX_DESCRIPTION_CHARS)
+      : undefined;
   // One Composio tool runs any enabled app action: the classifier reads the
   // actions this call names, so "Gmail: Send email" meets the send rule.
   const composio = isComposioServiceToolDescriptor(live) ? composioCallShape(args) : undefined;

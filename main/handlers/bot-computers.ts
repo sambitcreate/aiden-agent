@@ -29,7 +29,11 @@ import {
   type BotComputerStatus,
   type BotComputerViewerGrant,
 } from "../../renderer/shared/bot-computers.js";
-import type { BotComputerControl, BotComputerHost, BotComputerSessions } from "../services/bot-computers/types.js";
+import type {
+  BotComputerControl,
+  BotComputerHost,
+  BotComputerSessions,
+} from "../services/bot-computers/types.js";
 import type { BotComputerViewer } from "../services/bot-computers/viewer-main.js";
 import { parseBotId } from "./bot-params.js";
 
@@ -121,23 +125,32 @@ export function registerBotComputerHandlers(deps: BotComputerHandlerDependencies
     deps.host.skipPermissions();
   });
 
-  deps.handle(BOT_COMPUTER_CHANNELS.baseViewerGrant, (): Promise<BotComputerViewerGrant> => deps.viewer.grantBase());
+  deps.handle(
+    BOT_COMPUTER_CHANNELS.baseViewerGrant,
+    (): Promise<BotComputerViewerGrant> => deps.viewer.grantBase(),
+  );
 
   deps.handle(BOT_COMPUTER_CHANNELS.removeEverything, async (): Promise<BotComputersStatus> => {
     await deps.host.removeEverything();
     return deps.host.status();
   });
 
-  deps.handle(BOT_COMPUTER_CHANNELS.updateSettings, async (_event, patch): Promise<BotComputersSettings> =>
-    deps.host.updateSettings(parseBotComputersSettingsPatch(patch)),
+  deps.handle(
+    BOT_COMPUTER_CHANNELS.updateSettings,
+    async (_event, patch): Promise<BotComputersSettings> =>
+      deps.host.updateSettings(parseBotComputersSettingsPatch(patch)),
   );
 
-  deps.handle(BOT_COMPUTER_CHANNELS.give, async (_event, rawBotId): Promise<BotComputerStatus> =>
-    deps.host.give(await knownBot(rawBotId)),
+  deps.handle(
+    BOT_COMPUTER_CHANNELS.give,
+    async (_event, rawBotId): Promise<BotComputerStatus> =>
+      deps.host.give(await knownBot(rawBotId)),
   );
 
-  deps.handle(BOT_COMPUTER_CHANNELS.reset, async (_event, rawBotId): Promise<BotComputerStatus> =>
-    deps.host.reset(await knownBot(rawBotId)),
+  deps.handle(
+    BOT_COMPUTER_CHANNELS.reset,
+    async (_event, rawBotId): Promise<BotComputerStatus> =>
+      deps.host.reset(await knownBot(rawBotId)),
   );
 
   // Removing a computer is allowed for a Bot that is already gone: it is the cleanup.
@@ -155,36 +168,48 @@ export function registerBotComputerHandlers(deps: BotComputerHandlerDependencies
     return computer;
   }
 
-  deps.handle(BOT_COMPUTER_CHANNELS.viewerGrant, async (event, rawBotId, rawOptions): Promise<BotComputerViewerGrant> => {
-    const botId = await knownBot(rawBotId);
-    const { start } = parseBotComputerViewerRequest(rawOptions);
-    // A start the asking window no longer waits for is cancelled, unless another caller still wants it.
-    const controller = new AbortController();
-    const unsubscribe = deps.onSenderGone?.(event, () => controller.abort());
-    try {
-      return await deps.viewer.grant(botId, { start, signal: controller.signal });
-    } finally {
-      unsubscribe?.();
-    }
-  });
+  deps.handle(
+    BOT_COMPUTER_CHANNELS.viewerGrant,
+    async (event, rawBotId, rawOptions): Promise<BotComputerViewerGrant> => {
+      const botId = await knownBot(rawBotId);
+      const { start } = parseBotComputerViewerRequest(rawOptions);
+      // A start the asking window no longer waits for is cancelled, unless another caller still wants it.
+      const controller = new AbortController();
+      const unsubscribe = deps.onSenderGone?.(event, () => controller.abort());
+      try {
+        return await deps.viewer.grant(botId, { start, signal: controller.signal });
+      } finally {
+        unsubscribe?.();
+      }
+    },
+  );
 
-  deps.handle(BOT_COMPUTER_CHANNELS.takeOver, async (_event, rawBotId): Promise<BotComputerStatus> => {
-    const botId = await knownBot(rawBotId);
-    // Only a running computer can be used. Control taken over a stopped one would keep the Bot
-    // waiting for a Give back the tab doesn't offer until the computer runs again.
-    if ((await computerOf(botId)).state !== "running") throw new Error("This Bot's computer isn't running.");
-    deps.control.takeOver(botId, "viewer");
-    return computerOf(botId);
-  });
+  deps.handle(
+    BOT_COMPUTER_CHANNELS.takeOver,
+    async (_event, rawBotId): Promise<BotComputerStatus> => {
+      const botId = await knownBot(rawBotId);
+      // Only a running computer can be used. Control taken over a stopped one would keep the Bot
+      // waiting for a Give back the tab doesn't offer until the computer runs again.
+      if ((await computerOf(botId)).state !== "running")
+        throw new Error("This Bot's computer isn't running.");
+      deps.control.takeOver(botId, "viewer");
+      return computerOf(botId);
+    },
+  );
 
-  deps.handle(BOT_COMPUTER_CHANNELS.giveBack, async (_event, rawBotId): Promise<BotComputerStatus> => {
-    const botId = await knownBot(rawBotId);
-    await computerOf(botId);
-    deps.control.giveBack(botId);
-    return computerOf(botId);
-  });
+  deps.handle(
+    BOT_COMPUTER_CHANNELS.giveBack,
+    async (_event, rawBotId): Promise<BotComputerStatus> => {
+      const botId = await knownBot(rawBotId);
+      await computerOf(botId);
+      deps.control.giveBack(botId);
+      return computerOf(botId);
+    },
+  );
 
-  deps.handle(BOT_COMPUTER_CHANNELS.pointer, async (_event, rawBotId): Promise<BotComputerPointer | null> =>
-    deps.sessions.lastPointer(parseBotId(rawBotId)) ?? null,
+  deps.handle(
+    BOT_COMPUTER_CHANNELS.pointer,
+    async (_event, rawBotId): Promise<BotComputerPointer | null> =>
+      deps.sessions.lastPointer(parseBotId(rawBotId)) ?? null,
   );
 }

@@ -282,14 +282,11 @@ export function isProtectedCredentialPath(
 
 /** Preserve the parent agent's established narrow `.env*` read/search exclusion. */
 export function isEnvironmentSecretPath(relativePath: string): boolean {
-  return relativePath
-    .split(/[\\/]/)
-    .some((segment) => {
-      const normalized = segment.toLocaleLowerCase("en-US");
-      return (
-        normalized === ".env" ||
-        (normalized.startsWith(".env.") && !isSafeEnvironmentExample(normalized))
-      );
-    });
+  return relativePath.split(/[\\/]/).some((segment) => {
+    const normalized = segment.toLocaleLowerCase("en-US");
+    return (
+      normalized === ".env" ||
+      (normalized.startsWith(".env.") && !isSafeEnvironmentExample(normalized))
+    );
+  });
 }
-

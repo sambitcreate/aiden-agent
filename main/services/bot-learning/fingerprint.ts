@@ -16,7 +16,9 @@ export function botBehaviorFingerprint(inputs: BotFingerprintInputs): string {
     botRevision: inputs.botRevision,
     memoryRevision: inputs.memoryRevision,
     lessonsRevision: inputs.lessonsRevision,
-    skills: [...inputs.skills].map(({ name, contentFingerprint }) => [name, contentFingerprint]).sort(),
+    skills: [...inputs.skills]
+      .map(({ name, contentFingerprint }) => [name, contentFingerprint])
+      .sort(),
     appVersion: inputs.appVersion,
   });
   return createHash("sha256").update(canonical).digest("hex");

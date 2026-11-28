@@ -3,7 +3,11 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { BOT_PAUSES_FILE, BotPauseStoreCorruptError, createBotPauseStore } from "./bot-pause-store.js";
+import {
+  BOT_PAUSES_FILE,
+  BotPauseStoreCorruptError,
+  createBotPauseStore,
+} from "./bot-pause-store.js";
 
 async function withDir(run: (dir: string) => Promise<void>) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-pauses-"));
@@ -104,9 +108,16 @@ test("a file from a newer shape is never trusted or overwritten", async () => {
 test("a record with an unknown origin or extra keys makes the file unreadable", async () => {
   await withDir(async (dir) => {
     const file = path.join(dir, BOT_PAUSES_FILE);
-    for (const record of [{ since: 1, by: "robot" }, { since: 1, by: "mac", note: "x" }, { since: -1, by: "mac" }]) {
+    for (const record of [
+      { since: 1, by: "robot" },
+      { since: 1, by: "mac", note: "x" },
+      { since: -1, by: "mac" },
+    ]) {
       await fs.writeFile(file, JSON.stringify({ version: 1, bots: { "bot-a": record } }));
-      await assert.rejects(createBotPauseStore({ root: () => dir }).get("bot-a"), BotPauseStoreCorruptError);
+      await assert.rejects(
+        createBotPauseStore({ root: () => dir }).get("bot-a"),
+        BotPauseStoreCorruptError,
+      );
     }
   });
 });
@@ -117,7 +128,10 @@ test("fixing an unreadable file takes effect without a restart", async () => {
     await fs.writeFile(file, "garbage");
     const store = createBotPauseStore({ root: () => dir, now: () => 3 });
     await assert.rejects(store.get("bot-a"), BotPauseStoreCorruptError);
-    await fs.writeFile(file, JSON.stringify({ version: 1, bots: { "bot-a": { since: 2, by: "phone" } } }));
+    await fs.writeFile(
+      file,
+      JSON.stringify({ version: 1, bots: { "bot-a": { since: 2, by: "phone" } } }),
+    );
     assert.deepEqual(await store.get("bot-a"), { since: 2, by: "phone" });
     assert.deepEqual(await store.pause("bot-b", "mac"), { since: 3, by: "mac" });
     assert.equal((await store.list()).size, 2);

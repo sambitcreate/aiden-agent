@@ -148,16 +148,11 @@ function management(
     authorityRevision: authority.authorityRevision,
     expectedRevision: run.snapshot.revision,
     ...(action === "wait" ? { timeoutMs } : {}),
-    ...(action === "steer"
-      ? { instruction: "Check the newest evidence." }
-      : {}),
+    ...(action === "steer" ? { instruction: "Check the newest evidence." } : {}),
   };
 }
 
-async function until(
-  description: string,
-  predicate: () => boolean,
-): Promise<void> {
+async function until(description: string, predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (predicate()) return;
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -175,10 +170,7 @@ function harness() {
   const order: string[] = [];
   const coordinator = new BackgroundSubagentCoordinatorV2(lifecycle, {
     createChild(run) {
-      assert.equal(
-        store.records.get(run.snapshot.runId)?.snapshot.state,
-        "queued",
-      );
+      assert.equal(store.records.get(run.snapshot.runId)?.snapshot.state, "queued");
       order.push(`create:${run.snapshot.runId}`);
       const child: FakeChild = {
         runId: run.snapshot.runId,
@@ -194,11 +186,7 @@ function harness() {
       await Promise.race([
         child.done.promise,
         new Promise<void>((_resolve, reject) => {
-          input.signal.addEventListener(
-            "abort",
-            () => reject(input.signal.reason),
-            { once: true },
-          );
+          input.signal.addEventListener("abort", () => reject(input.signal.reason), { once: true });
         }),
       ]);
     },
@@ -225,14 +213,8 @@ test("durable acceptance precedes unique child creation and detached work outliv
   assert.equal(children.size, 1);
   assert.equal(coordinator.activeCount, 1);
   input.snapshot.activity = "Caller mutated after launch";
-  await until(
-    "detached child start",
-    () => children.get("run-one")?.start !== undefined,
-  );
-  assert.equal(
-    store.records.get("run-one")?.snapshot.activity,
-    "Running in the background.",
-  );
+  await until("detached child start", () => children.get("run-one")?.start !== undefined);
+  assert.equal(store.records.get("run-one")?.snapshot.activity, "Running in the background.");
   children.get("run-one")!.done.resolve();
   await until(
     "detached completion",
@@ -315,9 +297,7 @@ test("a Stop during launch ends the run instead of acknowledging it as queued", 
   const launching = coordinator.launch(prepared("run-early-stop"));
   await reached.promise;
 
-  const stopping = coordinator.manage(
-    management(store.records.get("run-early-stop")!, "stop"),
-  );
+  const stopping = coordinator.manage(management(store.records.get("run-early-stop")!, "stop"));
   release.resolve();
   await launching;
   const stopped = await stopping;
@@ -342,7 +322,7 @@ test("a Stop sent the moment a run is accepted cannot pass the launch", async ()
     return saved;
   };
   await coordinator.launch(prepared("run-instant-stop"));
-  const stopped = await stopping as { snapshot: { state: string } };
+  const stopped = (await stopping) as { snapshot: { state: string } };
   assert.equal(stopped.snapshot.state, "stopped");
   await until("the launch to finish", () => coordinator.activeCount === 0);
   assert.equal(children.get("run-instant-stop")?.start, undefined);
@@ -437,10 +417,25 @@ test("a run accepted after an invalidation read the store is not left queued", a
 });
 
 const invalidations = [
-  ["chat deletion", "stopped", /chat was deleted/u, (c: Coordinator) => c.chatDeleted("chat-background")],
-  ["workspace revocation", "stopped", /workspace access was revoked/u, (c: Coordinator) => c.workspaceRevoked("workspace-background")],
+  [
+    "chat deletion",
+    "stopped",
+    /chat was deleted/u,
+    (c: Coordinator) => c.chatDeleted("chat-background"),
+  ],
+  [
+    "workspace revocation",
+    "stopped",
+    /workspace access was revoked/u,
+    (c: Coordinator) => c.workspaceRevoked("workspace-background"),
+  ],
   ["shutdown", "interrupted", /shutting down/u, (c: Coordinator) => c.shutdown()],
-  ["startup reconciliation", "interrupted", /interrupted at startup/u, (c: Coordinator) => c.reconcileStartup()],
+  [
+    "startup reconciliation",
+    "interrupted",
+    /interrupted at startup/u,
+    (c: Coordinator) => c.reconcileStartup(),
+  ],
 ] as const;
 
 test("a run already running when a stale invalidation scan resumes still ends durably", async () => {
@@ -454,7 +449,9 @@ test("a run already running when a stale invalidation scan resumes still ends du
     await scan.scanned.promise;
     acceptance.release.resolve();
     await launching;
-    await until(`${name}: the child to start`, () => Boolean(children.get("run-after-stale-scan")?.start));
+    await until(`${name}: the child to start`, () =>
+      Boolean(children.get("run-after-stale-scan")?.start),
+    );
     assert.equal(store.records.get("run-after-stale-scan")?.snapshot.state, "running", name);
     scan.release.resolve();
     await invalidating;
@@ -547,10 +544,17 @@ test("an invalidation that lands during launch still stops the created child", a
     await reached.promise;
     await invalidate(coordinator);
     // The install is still stalled, so this is the invalidation's own work.
-    assert.ok(children.get("run-invalidated")?.stopped, `${name} stops the child before it returns`);
+    assert.ok(
+      children.get("run-invalidated")?.stopped,
+      `${name} stops the child before it returns`,
+    );
     let stops = 0;
     const child = children.get("run-invalidated")!;
-    Object.defineProperty(child, "stopped", { set: () => { stops += 1; } });
+    Object.defineProperty(child, "stopped", {
+      set: () => {
+        stops += 1;
+      },
+    });
     release.resolve();
     await assert.rejects(launching);
     await until(`${name} to settle`, () => coordinator.activeCount === 0);
@@ -563,18 +567,13 @@ test("an invalidation that lands during launch still stops the created child", a
 test("wait observes terminal work or times out, and steering is delivered only at a safe boundary", async () => {
   const { store, children, coordinator } = harness();
   await coordinator.launch(prepared("run-wait"));
-  await until(
-    "running state",
-    () => store.records.get("run-wait")?.snapshot.state === "running",
-  );
+  await until("running state", () => store.records.get("run-wait")?.snapshot.state === "running");
 
   let current = store.records.get("run-wait")!;
   const steered = await coordinator.manage(management(current, "steer"));
   assert.equal(children.get("run-wait")?.delivered.length, 0);
   await children.get("run-wait")!.start!.safeBoundary();
-  assert.deepEqual(children.get("run-wait")?.delivered, [
-    "Check the newest evidence.",
-  ]);
+  assert.deepEqual(children.get("run-wait")?.delivered, ["Check the newest evidence."]);
 
   const terminalWait = coordinator.manage(management(steered, "wait", 500));
   children.get("run-wait")!.done.resolve();
@@ -594,24 +593,14 @@ test("wait observes terminal work or times out, and steering is delivered only a
 test("stop and bulk boundaries terminalize before abort, while startup never recreates work", async () => {
   const { store, lifecycle, children, coordinator } = harness();
   await coordinator.launch(prepared("run-stop", "chat-stop", "workspace-stop"));
-  await until(
-    "stop run",
-    () => store.records.get("run-stop")?.snapshot.state === "running",
-  );
-  const stopped = await coordinator.manage(
-    management(store.records.get("run-stop")!, "stop"),
-  );
+  await until("stop run", () => store.records.get("run-stop")?.snapshot.state === "running");
+  const stopped = await coordinator.manage(management(store.records.get("run-stop")!, "stop"));
   assert.equal(stopped.snapshot.state, "stopped");
   assert.ok(children.get("run-stop")?.start?.signal.aborted);
-  assert.match(
-    children.get("run-stop")?.stopped?.message ?? "",
-    /stopped by its owner/u,
-  );
+  assert.match(children.get("run-stop")?.stopped?.message ?? "", /stopped by its owner/u);
 
   await coordinator.launch(prepared("run-chat", "chat-bulk", "workspace-a"));
-  await coordinator.launch(
-    prepared("run-workspace", "chat-other", "workspace-bulk"),
-  );
+  await coordinator.launch(prepared("run-workspace", "chat-other", "workspace-bulk"));
   await until(
     "bulk runs",
     () =>
@@ -641,18 +630,13 @@ test("stop and bulk boundaries terminalize before abort, while startup never rec
   assert.equal(store.records.get("run-dormant")?.snapshot.state, "interrupted");
   assert.equal(children.size, createdBeforeRestart);
 
-  await coordinator.launch(
-    prepared("run-shutdown", "chat-shutdown", "workspace-shutdown"),
-  );
+  await coordinator.launch(prepared("run-shutdown", "chat-shutdown", "workspace-shutdown"));
   await until(
     "shutdown run",
     () => store.records.get("run-shutdown")?.snapshot.state === "running",
   );
   assert.equal(await coordinator.shutdown(), 1);
-  assert.equal(
-    store.records.get("run-shutdown")?.snapshot.state,
-    "interrupted",
-  );
+  assert.equal(store.records.get("run-shutdown")?.snapshot.state, "interrupted");
   assert.ok(children.get("run-shutdown")?.start?.signal.aborted);
 });
 

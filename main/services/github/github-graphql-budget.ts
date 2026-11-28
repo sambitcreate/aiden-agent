@@ -25,9 +25,7 @@ interface ScopeBudget {
   lastCost: Map<string, number>;
 }
 
-export type BudgetCheck =
-  | { ok: true; ticket: BudgetTicket }
-  | { ok: false; retryAt: number };
+export type BudgetCheck = { ok: true; ticket: BudgetTicket } | { ok: false; retryAt: number };
 
 export function isGraphQlMutation(query: string): boolean {
   return /^\s*(?:#[^\n]*\n\s*)*mutation\b/u.test(query);

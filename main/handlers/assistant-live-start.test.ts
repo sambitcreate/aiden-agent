@@ -19,9 +19,7 @@ test("Assistant Live handler boundary replaces unexpected service detail with on
     invokeAssistantLiveStart(
       {
         start: async () => {
-          throw new Error(
-            "wss://provider.example KEY_SENTINEL HANDLER_SENTINEL",
-          );
+          throw new Error("wss://provider.example KEY_SENTINEL HANDLER_SENTINEL");
         },
       },
       owner,
@@ -31,10 +29,7 @@ test("Assistant Live handler boundary replaces unexpected service detail with on
       assert.ok(error instanceof GeminiLiveStartError);
       assert.equal(error.reason, "live_start_failed");
       assert.equal(error.message, "The Live session could not start.");
-      assert.doesNotMatch(
-        error.message,
-        /provider\.example|KEY_SENTINEL|HANDLER_SENTINEL/u,
-      );
+      assert.doesNotMatch(error.message, /provider\.example|KEY_SENTINEL|HANDLER_SENTINEL/u);
       return true;
     },
   );
@@ -75,8 +70,7 @@ test("Assistant Live handler maps provider failures to fixed actionable messages
         owner,
         intent,
       ),
-      (error: unknown) =>
-        error instanceof GeminiLiveStartError && error.reason === reason,
+      (error: unknown) => error instanceof GeminiLiveStartError && error.reason === reason,
     );
   }
 });

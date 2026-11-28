@@ -18,7 +18,10 @@ test("Linux Wayland launches disable Chromium Vulkan before the main module load
   const bootstrap = readFileSync(new URL("./bootstrap.ts", import.meta.url), "utf8");
   const flags = readFileSync(new URL("./linux-graphics-flags.ts", import.meta.url), "utf8");
   assert.match(bootstrap, /applyLinuxGraphicsFlags\(\)/u);
-  assert.match(flags, /appendSwitch\("disable-features", disableVulkanFeature\(app\.commandLine\.getSwitchValue\("disable-features"\)\)\)/u);
+  assert.match(
+    flags,
+    /appendSwitch\(\s*"disable-features",\s*disableVulkanFeature\(app\.commandLine\.getSwitchValue\("disable-features"\)\)\s*,?\s*\)/u,
+  );
   assert.doesNotMatch(flags, /disableHardwareAcceleration/u);
 });
 
@@ -43,10 +46,7 @@ test("crash capture is off at bootstrap and only the explicit diagnostics handle
 });
 
 test("development shortcut registration is gated without removing in-app menu accelerators", () => {
-  const shortcut = readFileSync(
-    new URL("./services/shortcut.ts", import.meta.url),
-    "utf8",
-  );
+  const shortcut = readFileSync(new URL("./services/shortcut.ts", import.meta.url), "utf8");
   assert.match(shortcut, /currentRuntimeProfile\(\)\.globalShortcutsEnabled/u);
   assert.match(
     shortcut,
@@ -83,10 +83,7 @@ test("optional background services cannot close an already visible desktop windo
 
 test("Apple Foundation Models status probes remain behind the host capability policy", () => {
   const main = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-  const chatTitle = readFileSync(
-    new URL("./services/chat-title.ts", import.meta.url),
-    "utf8",
-  );
+  const chatTitle = readFileSync(new URL("./services/chat-title.ts", import.meta.url), "utf8");
   const titleProviders = readFileSync(
     new URL("./handlers/title-providers.ts", import.meta.url),
     "utf8",

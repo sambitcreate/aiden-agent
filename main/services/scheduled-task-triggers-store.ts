@@ -13,11 +13,29 @@
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { BotRoutineTrigger } from "../../renderer/shared/bot-routine-trigger.js";
-import { BOT_ROUTINE_EVENT_LIMITS, BOT_WATCH_LIMITS } from "../../renderer/shared/bot-routine-trigger.js";
-import { SCHEDULED_TASK_LINK_LIMITS, SCHEDULED_TASK_TRIGGER_LIMITS, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
+import {
+  BOT_ROUTINE_EVENT_LIMITS,
+  BOT_WATCH_LIMITS,
+} from "../../renderer/shared/bot-routine-trigger.js";
+import {
+  SCHEDULED_TASK_LINK_LIMITS,
+  SCHEDULED_TASK_TRIGGER_LIMITS,
+  type ScheduledTaskTrigger,
+} from "../../renderer/shared/scheduled-task-trigger.js";
 import type { EventRoutine, EventRoutineStore } from "./bot-routine-events/dispatcher.js";
-import { BOT_EVENT_RUNNING_MAX, BOT_WATCH_SNAPSHOT_CHARS, type BotEventDropNotice, type BotEventDropPart, type BotEventPublicationGuard, type BotEventReceipt, type BotWatchState } from "./bot-routine-events/store.js";
-import { parseConnectorBaseline, parseConnectorPrivate } from "./bot-routine-events/connector-types.js";
+import {
+  BOT_EVENT_RUNNING_MAX,
+  BOT_WATCH_SNAPSHOT_CHARS,
+  type BotEventDropNotice,
+  type BotEventDropPart,
+  type BotEventPublicationGuard,
+  type BotEventReceipt,
+  type BotWatchState,
+} from "./bot-routine-events/store.js";
+import {
+  parseConnectorBaseline,
+  parseConnectorPrivate,
+} from "./bot-routine-events/connector-types.js";
 import type { TaskConnectorSource } from "./scheduled-task-connector-trigger.js";
 import type { ScheduledTask } from "./types.js";
 
@@ -29,7 +47,16 @@ export const TASK_TRIGGER_PAYLOAD_CHARS = SCHEDULED_TASK_TRIGGER_LIMITS.eventTex
 /** What happened to one call of a task's link (newest last, 50 kept). */
 export interface TaskLinkLogEntry {
   at: number;
-  outcome: "ran" | "batched" | "duplicate" | "daily_limit" | "dropped" | "filtered" | "bad_signature" | "invalid" | "off";
+  outcome:
+    | "ran"
+    | "batched"
+    | "duplicate"
+    | "daily_limit"
+    | "dropped"
+    | "filtered"
+    | "bad_signature"
+    | "invalid"
+    | "off";
   /** The body, credentials withheld, cut to 2 KB. */
   preview: string;
   /** Refused calls within a minute share one entry: how many more came after the first. */
@@ -42,13 +69,31 @@ const DROP_NOTICES_MAX = 8;
 export const APPLIED_LOG_KEYS_MAX = 32;
 
 function appliedLogKeysOf(value: unknown): Pick<TaskTriggerBook, "appliedLogKeys"> {
-  const keys = Array.isArray(value) ? [...new Set(value.filter((key): key is string => typeof key === "string" && key.length > 0 && key.length <= 300))].slice(-APPLIED_LOG_KEYS_MAX) : [];
+  const keys = Array.isArray(value)
+    ? [
+        ...new Set(
+          value.filter(
+            (key): key is string => typeof key === "string" && key.length > 0 && key.length <= 300,
+          ),
+        ),
+      ].slice(-APPLIED_LOG_KEYS_MAX)
+    : [];
   return keys.length ? { appliedLogKeys: keys } : {};
 }
 
 /** A drop notice's log line is keyed `<notice id>:log`; its key is kept while the notice is. */
 const logKeyOf = (notice: BotEventDropNotice) => `${notice.id}:log`;
-const LOG_OUTCOMES = new Set<TaskLinkLogEntry["outcome"]>(["ran", "batched", "duplicate", "daily_limit", "dropped", "filtered", "bad_signature", "invalid", "off"]);
+const LOG_OUTCOMES = new Set<TaskLinkLogEntry["outcome"]>([
+  "ran",
+  "batched",
+  "duplicate",
+  "daily_limit",
+  "dropped",
+  "filtered",
+  "bad_signature",
+  "invalid",
+  "off",
+]);
 
 export function hashTaskLinkToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
@@ -127,68 +172,119 @@ function isTriggerTask(task: ScheduledTask): task is TriggerTask {
 }
 
 function fingerprintOf(task: TriggerTask): string {
-  return JSON.stringify({ trigger: task.trigger, prompt: task.prompt ?? "", enabled: task.enabled });
+  return JSON.stringify({
+    trigger: task.trigger,
+    prompt: task.prompt ?? "",
+    enabled: task.enabled,
+  });
 }
 
-function parseFingerprint(value: string): { trigger?: ScheduledTaskTrigger; prompt?: string; enabled?: boolean } {
+function parseFingerprint(value: string): {
+  trigger?: ScheduledTaskTrigger;
+  prompt?: string;
+  enabled?: boolean;
+} {
   try {
     const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" ? parsed as { trigger?: ScheduledTaskTrigger; prompt?: string; enabled?: boolean } : {};
+    return parsed && typeof parsed === "object"
+      ? (parsed as { trigger?: ScheduledTaskTrigger; prompt?: string; enabled?: boolean })
+      : {};
   } catch {
     return {};
   }
 }
 
 const sourceKey = (trigger: ScheduledTaskTrigger | undefined) =>
-  JSON.stringify(trigger
-    ? trigger.kind === "watch" ? [trigger.kind, trigger.source]
-      : trigger.kind === "connector" ? [trigger.kind, trigger.condition, trigger.source]
-        : [trigger.kind]
-    : null);
+  JSON.stringify(
+    trigger
+      ? trigger.kind === "watch"
+        ? [trigger.kind, trigger.source]
+        : trigger.kind === "connector"
+          ? [trigger.kind, trigger.condition, trigger.source]
+          : [trigger.kind]
+      : null,
+  );
 
 /** The shared core's trigger shape: a task's watch has the same fields as a Bot watch. */
 function coreTrigger(trigger: ScheduledTaskTrigger, taskId: string): BotRoutineTrigger {
   if (trigger.kind === "webhook") return { kind: "webhook" } as BotRoutineTrigger;
-  if (trigger.kind === "connector") return { kind: "watch", source: { type: "connector", watchId: taskId }, everyMinutes: trigger.everyMinutes };
-  return { kind: "watch", source: { ...trigger.source }, everyMinutes: trigger.everyMinutes } as BotRoutineTrigger;
+  if (trigger.kind === "connector")
+    return {
+      kind: "watch",
+      source: { type: "connector", watchId: taskId },
+      everyMinutes: trigger.everyMinutes,
+    };
+  return {
+    kind: "watch",
+    source: { ...trigger.source },
+    everyMinutes: trigger.everyMinutes,
+  } as BotRoutineTrigger;
 }
 
-const finite = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+const finite = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
 /** A held or pending payload within the event bound, counted in code points as the dispatcher cuts it. */
-const payloadFits = (text: string) => text.length <= TASK_TRIGGER_PAYLOAD_CHARS * 2 && [...text].length <= TASK_TRIGGER_PAYLOAD_CHARS;
+const payloadFits = (text: string) =>
+  text.length <= TASK_TRIGGER_PAYLOAD_CHARS * 2 && [...text].length <= TASK_TRIGGER_PAYLOAD_CHARS;
 
 function parseReceipt(value: unknown): BotEventReceipt | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
-  if (typeof row.eventId !== "string" || row.eventId.length > 200 || typeof row.payload !== "string" || !finite(row.at)) return undefined;
+  if (
+    typeof row.eventId !== "string" ||
+    row.eventId.length > 200 ||
+    typeof row.payload !== "string" ||
+    !finite(row.at)
+  )
+    return undefined;
   if (!payloadFits(row.payload)) return undefined;
   return {
     eventId: row.eventId,
     payload: row.payload,
     at: row.at,
     ...(finite(row.watchRevision) ? { watchRevision: row.watchRevision } : {}),
-    ...(finite(row.retries) && row.retries > 0 && row.retries <= 100 ? { retries: row.retries } : {}),
+    ...(finite(row.retries) && row.retries > 0 && row.retries <= 100
+      ? { retries: row.retries }
+      : {}),
   };
 }
 
 function parseWatch(value: unknown): BotWatchState | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
-  const pending = row.pending && typeof row.pending === "object" ? row.pending as Record<string, unknown> : undefined;
+  const pending =
+    row.pending && typeof row.pending === "object"
+      ? (row.pending as Record<string, unknown>)
+      : undefined;
   const results = new Set(["baseline", "no_change", "changed", "error"]);
   return {
     failures: finite(row.failures) ? row.failures : 0,
-    ...(pending && typeof pending.eventId === "string" && typeof pending.payload === "string" &&
-      payloadFits(pending.payload) && finite(pending.revision) && finite(pending.nextAttemptAt)
-      ? { pending: { eventId: pending.eventId, payload: pending.payload, revision: pending.revision, nextAttemptAt: pending.nextAttemptAt } }
+    ...(pending &&
+    typeof pending.eventId === "string" &&
+    typeof pending.payload === "string" &&
+    payloadFits(pending.payload) &&
+    finite(pending.revision) &&
+    finite(pending.nextAttemptAt)
+      ? {
+          pending: {
+            eventId: pending.eventId,
+            payload: pending.payload,
+            revision: pending.revision,
+            nextAttemptAt: pending.nextAttemptAt,
+          },
+        }
       : {}),
     ...(typeof row.hash === "string" && /^[a-f0-9]{64}$/u.test(row.hash) ? { hash: row.hash } : {}),
-    ...(typeof row.snapshot === "string" ? { snapshot: row.snapshot.slice(0, BOT_WATCH_SNAPSHOT_CHARS) } : {}),
+    ...(typeof row.snapshot === "string"
+      ? { snapshot: row.snapshot.slice(0, BOT_WATCH_SNAPSHOT_CHARS) }
+      : {}),
     ...(finite(row.sameSince) ? { sameSince: row.sameSince } : {}),
     ...(finite(row.lastCheckAt) ? { lastCheckAt: row.lastCheckAt } : {}),
     ...(finite(row.nextCheckAt) ? { nextCheckAt: row.nextCheckAt } : {}),
-    ...(typeof row.lastResult === "string" && results.has(row.lastResult) ? { lastResult: row.lastResult as BotWatchState["lastResult"] } : {}),
+    ...(typeof row.lastResult === "string" && results.has(row.lastResult)
+      ? { lastResult: row.lastResult as BotWatchState["lastResult"] }
+      : {}),
     ...(typeof row.lastError === "string" ? { lastError: row.lastError.slice(0, 200) } : {}),
     ...(row.unsettledFailure === true ? { unsettledFailure: true as const } : {}),
     ...connectorWatchFields(row),
@@ -196,10 +292,15 @@ function parseWatch(value: unknown): BotWatchState | undefined {
 }
 
 /** A connected-app check's saved comparison state; anything unreadable starts a new baseline. */
-function connectorWatchFields(row: Record<string, unknown>): Pick<BotWatchState, "connectorBaseline" | "connectorItemCount"> {
+function connectorWatchFields(
+  row: Record<string, unknown>,
+): Pick<BotWatchState, "connectorBaseline" | "connectorItemCount"> {
   let baseline: BotWatchState["connectorBaseline"];
   try {
-    baseline = row.connectorBaseline === undefined ? undefined : parseConnectorBaseline(row.connectorBaseline);
+    baseline =
+      row.connectorBaseline === undefined
+        ? undefined
+        : parseConnectorBaseline(row.connectorBaseline);
   } catch {
     baseline = undefined;
   }
@@ -212,13 +313,15 @@ function connectorWatchFields(row: Record<string, unknown>): Pick<BotWatchState,
 function parseConnectorSource(value: unknown): TaskConnectorSource | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
-  if (typeof row.serverFingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(row.serverFingerprint)) return undefined;
+  if (typeof row.serverFingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(row.serverFingerprint))
+    return undefined;
   const binding = row.binding as TaskConnectorSource["binding"] | undefined;
   if (!binding || typeof binding !== "object") return undefined;
   // The Bot watch validator checks the binding with a matching condition.
-  const condition = binding.adapter === "imcp-mail-v1"
-    ? { kind: "email" as const, unreadOnly: false }
-    : { kind: "calendar" as const, lookAheadMinutes: 60, timezone: "UTC" };
+  const condition =
+    binding.adapter === "imcp-mail-v1"
+      ? { kind: "email" as const, unreadOnly: false }
+      : { kind: "calendar" as const, lookAheadMinutes: 60, timezone: "UTC" };
   const parsed = parseConnectorPrivate({ binding, condition, createDigest: "task", mutations: [] });
   return parsed ? { binding: parsed.binding, serverFingerprint: row.serverFingerprint } : undefined;
 }
@@ -227,51 +330,100 @@ function parseBook(value: unknown): TaskTriggerBook | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
   if (typeof row.fingerprint !== "string" || !finite(row.revision)) return undefined;
-  const day = row.day && typeof row.day === "object" ? row.day as Record<string, unknown> : undefined;
+  const day =
+    row.day && typeof row.day === "object" ? (row.day as Record<string, unknown>) : undefined;
   const held = parseReceipt(row.held);
   const running = Array.isArray(row.running)
-    ? row.running.map(parseReceipt).filter((receipt): receipt is BotEventReceipt => receipt !== undefined).slice(-BOT_EVENT_RUNNING_MAX)
+    ? row.running
+        .map(parseReceipt)
+        .filter((receipt): receipt is BotEventReceipt => receipt !== undefined)
+        .slice(-BOT_EVENT_RUNNING_MAX)
     : [];
   const watch = parseWatch(row.watch);
   const dropNotices = Array.isArray(row.dropNotices)
-    ? row.dropNotices.flatMap((entry): BotEventDropNotice[] => {
-      if (!entry || typeof entry !== "object") return [];
-      const item = entry as Record<string, unknown>;
-      const held = parseReceipt(item.held);
-      if (typeof item.id !== "string" || item.id.length > 300 || item.reason !== "retries" || !held) return [];
-      const done = Array.isArray(item.done) ? [...new Set(item.done.filter((part): part is BotEventDropPart => part === "card" || part === "log"))] : [];
-      return [{ id: item.id, reason: "retries", held, ...(done.length ? { done } : {}),
-        ...(finite(item.failures) && item.failures > 0 && item.failures <= 100 ? { failures: item.failures } : {}) }];
-    }).slice(-DROP_NOTICES_MAX)
+    ? row.dropNotices
+        .flatMap((entry): BotEventDropNotice[] => {
+          if (!entry || typeof entry !== "object") return [];
+          const item = entry as Record<string, unknown>;
+          const held = parseReceipt(item.held);
+          if (
+            typeof item.id !== "string" ||
+            item.id.length > 300 ||
+            item.reason !== "retries" ||
+            !held
+          )
+            return [];
+          const done = Array.isArray(item.done)
+            ? [
+                ...new Set(
+                  item.done.filter(
+                    (part): part is BotEventDropPart => part === "card" || part === "log",
+                  ),
+                ),
+              ]
+            : [];
+          return [
+            {
+              id: item.id,
+              reason: "retries",
+              held,
+              ...(done.length ? { done } : {}),
+              ...(finite(item.failures) && item.failures > 0 && item.failures <= 100
+                ? { failures: item.failures }
+                : {}),
+            },
+          ];
+        })
+        .slice(-DROP_NOTICES_MAX)
     : [];
   const log = Array.isArray(row.log)
-    ? row.log.flatMap((entry): TaskLinkLogEntry[] => {
-      if (!entry || typeof entry !== "object") return [];
-      const item = entry as Record<string, unknown>;
-      return finite(item.at) && typeof item.outcome === "string" && LOG_OUTCOMES.has(item.outcome as TaskLinkLogEntry["outcome"]) &&
-        typeof item.preview === "string"
-        ? [{ at: item.at, outcome: item.outcome as TaskLinkLogEntry["outcome"], preview: item.preview.slice(0, SCHEDULED_TASK_LINK_LIMITS.previewBytes),
-          ...(finite(item.repeats) && item.repeats > 0 ? { repeats: item.repeats } : {}) }]
-        : [];
-    }).slice(-SCHEDULED_TASK_LINK_LIMITS.log)
+    ? row.log
+        .flatMap((entry): TaskLinkLogEntry[] => {
+          if (!entry || typeof entry !== "object") return [];
+          const item = entry as Record<string, unknown>;
+          return finite(item.at) &&
+            typeof item.outcome === "string" &&
+            LOG_OUTCOMES.has(item.outcome as TaskLinkLogEntry["outcome"]) &&
+            typeof item.preview === "string"
+            ? [
+                {
+                  at: item.at,
+                  outcome: item.outcome as TaskLinkLogEntry["outcome"],
+                  preview: item.preview.slice(0, SCHEDULED_TASK_LINK_LIMITS.previewBytes),
+                  ...(finite(item.repeats) && item.repeats > 0 ? { repeats: item.repeats } : {}),
+                },
+              ]
+            : [];
+        })
+        .slice(-SCHEDULED_TASK_LINK_LIMITS.log)
     : [];
   return {
     fingerprint: row.fingerprint,
     revision: row.revision,
     seenEventIds: Array.isArray(row.seenEventIds)
-      ? row.seenEventIds.filter((id): id is string => typeof id === "string").slice(-BOT_ROUTINE_EVENT_LIMITS.seenIds)
+      ? row.seenEventIds
+          .filter((id): id is string => typeof id === "string")
+          .slice(-BOT_ROUTINE_EVENT_LIMITS.seenIds)
       : [],
     ...(finite(row.lastRunAt) ? { lastRunAt: row.lastRunAt } : {}),
-    ...(day && typeof day.key === "string" && finite(day.count) ? { day: { key: day.key, count: day.count } } : {}),
+    ...(day && typeof day.key === "string" && finite(day.count)
+      ? { day: { key: day.key, count: day.count } }
+      : {}),
     ...(held ? { held } : {}),
     ...(running.length ? { running } : {}),
     ...(dropNotices.length ? { dropNotices } : {}),
     ...(watch ? { watch } : {}),
     checkRuns: finite(row.checkRuns) ? row.checkRuns : 0,
-    ...(typeof row.tokenHash === "string" && /^[a-f0-9]{64}$/u.test(row.tokenHash) ? { tokenHash: row.tokenHash } : {}),
+    ...(typeof row.tokenHash === "string" && /^[a-f0-9]{64}$/u.test(row.tokenHash)
+      ? { tokenHash: row.tokenHash }
+      : {}),
     ...(log.length ? { log } : {}),
-    ...(parseConnectorSource(row.connector) ? { connector: parseConnectorSource(row.connector)! } : {}),
-    ...(row.needsNewLink === true && typeof row.tokenHash === "string" ? { needsNewLink: true as const } : {}),
+    ...(parseConnectorSource(row.connector)
+      ? { connector: parseConnectorSource(row.connector)! }
+      : {}),
+    ...(row.needsNewLink === true && typeof row.tokenHash === "string"
+      ? { needsNewLink: true as const }
+      : {}),
     ...appliedLogKeysOf(row.appliedLogKeys),
   };
 }
@@ -279,7 +431,9 @@ function parseBook(value: unknown): TaskTriggerBook | undefined {
 function books(draft: unknown): Record<string, unknown> {
   if (!draft || typeof draft !== "object" || Array.isArray(draft)) return {};
   const tasks = (draft as Record<string, unknown>).tasks;
-  return tasks && typeof tasks === "object" && !Array.isArray(tasks) ? tasks as Record<string, unknown> : {};
+  return tasks && typeof tasks === "object" && !Array.isArray(tasks)
+    ? (tasks as Record<string, unknown>)
+    : {};
 }
 
 /**
@@ -289,23 +443,42 @@ function books(draft: unknown): Record<string, unknown> {
  * back on clears the failure count and checks soon; any other change keeps
  * queued work, re-stamped with the new revision.
  */
-export function reconcileTaskTriggerBook(book: TaskTriggerBook | undefined, task: TriggerTask, now: number): TaskTriggerBook {
+export function reconcileTaskTriggerBook(
+  book: TaskTriggerBook | undefined,
+  task: TriggerTask,
+  now: number,
+): TaskTriggerBook {
   const fingerprint = fingerprintOf(task);
   if (!book) {
-    return { fingerprint, revision: now, seenEventIds: [], watch: { failures: 0, nextCheckAt: now }, checkRuns: 0 };
+    return {
+      fingerprint,
+      revision: now,
+      seenEventIds: [],
+      watch: { failures: 0, nextCheckAt: now },
+      checkRuns: 0,
+    };
   }
   if (book.fingerprint === fingerprint) return book;
   const before = parseFingerprint(book.fingerprint);
   const revision = Math.max(now, book.revision + 1);
   const next: TaskTriggerBook = { ...book, fingerprint, revision };
   let watch: BotWatchState = book.watch ?? { failures: 0 };
-  if (before.trigger?.kind === "webhook" && task.trigger.kind === "webhook" && book.tokenHash !== undefined &&
-    task.trigger.signatureHeader !== undefined && task.trigger.signatureHeader !== before.trigger.signatureHeader) {
+  if (
+    before.trigger?.kind === "webhook" &&
+    task.trigger.kind === "webhook" &&
+    book.tokenHash !== undefined &&
+    task.trigger.signatureHeader !== undefined &&
+    task.trigger.signatureHeader !== before.trigger.signatureHeader
+  ) {
     next.needsNewLink = true;
   }
   if (sourceKey(before.trigger) !== sourceKey(task.trigger)) {
     const unsettled = watch.unsettledFailure || watch.failures > 0 || watch.lastResult === "error";
-    next.watch = { failures: 0, nextCheckAt: now, ...(unsettled ? { unsettledFailure: true as const } : {}) };
+    next.watch = {
+      failures: 0,
+      nextCheckAt: now,
+      ...(unsettled ? { unsettledFailure: true as const } : {}),
+    };
     next.checkRuns = 0;
     delete next.held;
     delete next.running;
@@ -317,13 +490,23 @@ export function reconcileTaskTriggerBook(book: TaskTriggerBook | undefined, task
     }
     // A connected-app source stays bound through filter edits; switching
     // between Mail and Calendar needs a new one from Find sources.
-    if (task.trigger.kind !== "connector" || before.trigger?.kind !== "connector" ||
-      before.trigger.condition.kind !== task.trigger.condition.kind) delete next.connector;
+    if (
+      task.trigger.kind !== "connector" ||
+      before.trigger?.kind !== "connector" ||
+      before.trigger.condition.kind !== task.trigger.condition.kind
+    )
+      delete next.connector;
     return next;
   }
-  if ((before.trigger?.kind === "watch" || before.trigger?.kind === "connector") && (task.trigger.kind === "watch" || task.trigger.kind === "connector") &&
-    before.trigger.everyMinutes !== task.trigger.everyMinutes) {
-    watch = { ...watch, nextCheckAt: (watch.lastCheckAt ?? now) + task.trigger.everyMinutes * 60_000 };
+  if (
+    (before.trigger?.kind === "watch" || before.trigger?.kind === "connector") &&
+    (task.trigger.kind === "watch" || task.trigger.kind === "connector") &&
+    before.trigger.everyMinutes !== task.trigger.everyMinutes
+  ) {
+    watch = {
+      ...watch,
+      nextCheckAt: (watch.lastCheckAt ?? now) + task.trigger.everyMinutes * 60_000,
+    };
   }
   if (before.enabled === false && task.enabled) watch = { ...watch, failures: 0, nextCheckAt: now };
   if ((before.prompt ?? "") !== (task.prompt ?? "")) {
@@ -332,10 +515,14 @@ export function reconcileTaskTriggerBook(book: TaskTriggerBook | undefined, task
     delete next.held;
     delete next.running;
   } else {
-    if (watch.pending?.revision === book.revision) watch = { ...watch, pending: { ...watch.pending, revision } };
-    if (next.held?.watchRevision === book.revision) next.held = { ...next.held, watchRevision: revision };
+    if (watch.pending?.revision === book.revision)
+      watch = { ...watch, pending: { ...watch.pending, revision } };
+    if (next.held?.watchRevision === book.revision)
+      next.held = { ...next.held, watchRevision: revision };
     if (next.running) {
-      next.running = next.running.map((receipt) => receipt.watchRevision === book.revision ? { ...receipt, watchRevision: revision } : receipt);
+      next.running = next.running.map((receipt) =>
+        receipt.watchRevision === book.revision ? { ...receipt, watchRevision: revision } : receipt,
+      );
     }
   }
   next.watch = watch;
@@ -375,7 +562,9 @@ function bookOf(routine: TaskTriggerRoutine, base: TaskTriggerBook): TaskTrigger
     ...(routine.day ? { day: routine.day } : {}),
     ...(routine.held ? { held: routine.held } : {}),
     ...(routine.running?.length ? { running: routine.running.slice(-BOT_EVENT_RUNNING_MAX) } : {}),
-    ...(routine.dropNotices?.length ? { dropNotices: routine.dropNotices.slice(-DROP_NOTICES_MAX) } : {}),
+    ...(routine.dropNotices?.length
+      ? { dropNotices: routine.dropNotices.slice(-DROP_NOTICES_MAX) }
+      : {}),
     ...(routine.watch ? { watch: routine.watch } : {}),
     checkRuns: routine.checkRuns,
     // The token and the call log change only through their own methods.
@@ -384,16 +573,25 @@ function bookOf(routine: TaskTriggerRoutine, base: TaskTriggerBook): TaskTrigger
     ...(base.connector ? { connector: base.connector } : {}),
     ...(base.needsNewLink ? { needsNewLink: true as const } : {}),
     // A key leaves with its notice: once the notice is cleared, nothing retries its line.
-    ...appliedLogKeysOf(base.appliedLogKeys?.filter((key) => routine.dropNotices?.some((notice) => logKeyOf(notice) === key))),
+    ...appliedLogKeysOf(
+      base.appliedLogKeys?.filter((key) =>
+        routine.dropNotices?.some((notice) => logKeyOf(notice) === key),
+      ),
+    ),
   };
 }
 
-export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTriggerStoreDependencies) {
+export function createScheduledTaskTriggerStore(
+  dependencies: ScheduledTaskTriggerStoreDependencies,
+) {
   let tail: Promise<unknown> = Promise.resolve();
   /** One change at a time across the file; every routine shares it. */
   function serial<T>(action: () => Promise<T>): Promise<T> {
     const run = tail.then(action, action);
-    tail = run.then(() => undefined, () => undefined);
+    tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
     return run;
   }
 
@@ -430,7 +628,10 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
     const tasks = (await dependencies.tasks()).filter(isTriggerTask);
     const released: string[] = [];
     const routines = await dependencies.persistence.update((draft) => {
-      const record = draft && typeof draft === "object" && !Array.isArray(draft) ? draft as Record<string, unknown> : {};
+      const record =
+        draft && typeof draft === "object" && !Array.isArray(draft)
+          ? (draft as Record<string, unknown>)
+          : {};
       const stored = books(record);
       const now = dependencies.now();
       const next: Record<string, TaskTriggerBook> = {};
@@ -441,7 +642,9 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
         if (previous && previous.fingerprint !== book.fingerprint) {
           const before = parseFingerprint(previous.fingerprint).trigger;
           const linkGone = before?.kind === "webhook" && task.trigger.kind !== "webhook";
-          const scriptGone = before?.kind === "watch" && before.source.type === "script" &&
+          const scriptGone =
+            before?.kind === "watch" &&
+            before.source.type === "script" &&
             !(task.trigger.kind === "watch" && task.trigger.source.type === "script");
           if (linkGone || scriptGone) released.push(task.id);
         }
@@ -450,7 +653,8 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
       }
       for (const [id, value] of Object.entries(stored)) {
         const book = parseBook(value);
-        if (!next[id] && book && leavesSomething(parseFingerprint(book.fingerprint).trigger)) released.push(id);
+        if (!next[id] && book && leavesSomething(parseFingerprint(book.fingerprint).trigger))
+          released.push(id);
       }
       record.version = 1;
       record.tasks = next;
@@ -483,7 +687,12 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
     mutate<T>(
       _ownerKey: string,
       id: string,
-      change: (routine: TaskTriggerRoutine, routines: readonly TaskTriggerRoutine[]) => { next?: TaskTriggerRoutine; result: T } | Promise<{ next?: TaskTriggerRoutine; result: T }>,
+      change: (
+        routine: TaskTriggerRoutine,
+        routines: readonly TaskTriggerRoutine[],
+      ) =>
+        | { next?: TaskTriggerRoutine; result: T }
+        | Promise<{ next?: TaskTriggerRoutine; result: T }>,
       guard?: BotEventPublicationGuard,
     ): Promise<T | undefined> {
       return serial(async () => {
@@ -491,19 +700,29 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
         const current = routines.get(id);
         if (!current) return undefined;
         guard?.assertCurrent();
-        const { next, result } = await change(structuredClone(current), structuredClone([...routines.values()]));
+        const { next, result } = await change(
+          structuredClone(current),
+          structuredClone([...routines.values()]),
+        );
         if (!next) return result;
         await guard?.beforePublish?.();
         guard?.assertCurrent();
         let fingerprint: string | undefined;
         if (!next.enabled && current.enabled) {
-          await dependencies.pauseTask(id, next.watch?.lastError ?? "", (next.watch?.failures ?? 0) >= BOT_WATCH_LIMITS.failuresBeforePause);
+          await dependencies.pauseTask(
+            id,
+            next.watch?.lastError ?? "",
+            (next.watch?.failures ?? 0) >= BOT_WATCH_LIMITS.failuresBeforePause,
+          );
           // The pause is part of this change: same revision, so the work it
           // held stays tied to it until the person turns the task back on.
           fingerprint = fingerprintOf({ ...current.task, enabled: false });
         }
         await dependencies.persistence.update((draft) => {
-          const record = draft && typeof draft === "object" && !Array.isArray(draft) ? draft as Record<string, unknown> : {};
+          const record =
+            draft && typeof draft === "object" && !Array.isArray(draft)
+              ? (draft as Record<string, unknown>)
+              : {};
           const stored = books(record);
           const base = parseBook(stored[id]);
           if (!base) return;
@@ -535,8 +754,14 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
       const hash = hashTaskLinkToken(token);
       const task = (await dependencies.tasks()).find((candidate) => candidate.id === id);
       if (!task || !isTriggerTask(task) || task.trigger.kind !== "webhook") return undefined;
-      const book = reconcileTaskTriggerBook(parseBook(books(await dependencies.persistence.load())[id]), task, dependencies.now());
-      return book.tokenHash !== undefined && sameHash(book.tokenHash, hash) ? routineOf(task, book) : undefined;
+      const book = reconcileTaskTriggerBook(
+        parseBook(books(await dependencies.persistence.load())[id]),
+        task,
+        dependencies.now(),
+      );
+      return book.tokenHash !== undefined && sameHash(book.tokenHash, hash)
+        ? routineOf(task, book)
+        : undefined;
     },
 
     /** A new link replaces the old one at once; undefined leaves the task with no link. */
@@ -569,7 +794,11 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
      * every key slot held by a pending notice, it refuses (throws) rather
      * than forget one, and the caller tries again later.
      */
-    appendLog(id: string, entry: TaskLinkLogEntry, options: { coalesce?: boolean; key?: string } = {}): Promise<void> {
+    appendLog(
+      id: string,
+      entry: TaskLinkLogEntry,
+      options: { coalesce?: boolean; key?: string } = {},
+    ): Promise<void> {
       return serial(async () => {
         await dependencies.persistence.update((draft) => {
           const stored = books(draft);
@@ -578,16 +807,27 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
           const keys = base.appliedLogKeys ?? [];
           if (options.key !== undefined && keys.includes(options.key)) return;
           if (options.key !== undefined && keys.length >= APPLIED_LOG_KEYS_MAX) {
-            throw new Error("Too many log lines are waiting to be confirmed; this one is tried again later.");
+            throw new Error(
+              "Too many log lines are waiting to be confirmed; this one is tried again later.",
+            );
           }
           const log = [...(base.log ?? [])];
           const last = log.length ? log[log.length - 1] : undefined;
-          if (options.coalesce && last && last.outcome === entry.outcome && entry.at - last.at < 60_000) {
+          if (
+            options.coalesce &&
+            last &&
+            last.outcome === entry.outcome &&
+            entry.at - last.at < 60_000
+          ) {
             log[log.length - 1] = { ...last, repeats: (last.repeats ?? 0) + 1 };
           } else {
             log.push(entry);
           }
-          stored[id] = { ...base, log: log.slice(-SCHEDULED_TASK_LINK_LIMITS.log), ...(options.key !== undefined ? { appliedLogKeys: [...keys, options.key] } : {}) };
+          stored[id] = {
+            ...base,
+            log: log.slice(-SCHEDULED_TASK_LINK_LIMITS.log),
+            ...(options.key !== undefined ? { appliedLogKeys: [...keys, options.key] } : {}),
+          };
         });
       });
     },
@@ -596,12 +836,18 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
      * The link's recent calls, newest first, whether it has a link at all and
      * whether it needs a new one. Read-only: an open task panel polls it.
      */
-    async linkState(id: string): Promise<{ hasLink: boolean; needsNewLink: boolean; log: TaskLinkLogEntry[] } | undefined> {
+    async linkState(
+      id: string,
+    ): Promise<{ hasLink: boolean; needsNewLink: boolean; log: TaskLinkLogEntry[] } | undefined> {
       const task = (await dependencies.tasks()).find((candidate) => candidate.id === id);
       if (!task || !isTriggerTask(task)) return undefined;
       const book = parseBook(books(await dependencies.persistence.load())[id]);
       const link = task.trigger.kind === "webhook" && book?.tokenHash !== undefined;
-      return { hasLink: link, needsNewLink: link && book?.needsNewLink === true, log: [...(book?.log ?? [])].reverse() };
+      return {
+        hasLink: link,
+        needsNewLink: link && book?.needsNewLink === true,
+        log: [...(book?.log ?? [])].reverse(),
+      };
     },
 
     /**
@@ -617,7 +863,11 @@ export function createScheduledTaskTriggerStore(dependencies: ScheduledTaskTrigg
           const base = parseBook(stored[id]);
           if (!base) return;
           const { held: _held, running: _running, ...rest } = base;
-          stored[id] = { ...rest, connector: structuredClone(source), watch: { failures: 0, nextCheckAt: dependencies.now() } };
+          stored[id] = {
+            ...rest,
+            connector: structuredClone(source),
+            watch: { failures: 0, nextCheckAt: dependencies.now() },
+          };
         });
         return true;
       });

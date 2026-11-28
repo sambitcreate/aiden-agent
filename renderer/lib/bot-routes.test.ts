@@ -15,8 +15,17 @@ import {
 } from "./bot-routes";
 
 test("Bots pages are /bots and everything under it, and nothing that only starts with the same letters", () => {
-  for (const path of ["/bots", "/bots/", "/bots/b1", "/bots/b1/chat", "/host/h1/bots/b1/chat"]) assert.equal(isBotsPath(path), true, path);
-  for (const path of ["/", "/botsy", "/chat/c1", "/host/h1/chat/c1", "/host/bots/chat/c1", "/settings"]) assert.equal(isBotsPath(path), false, path);
+  for (const path of ["/bots", "/bots/", "/bots/b1", "/bots/b1/chat", "/host/h1/bots/b1/chat"])
+    assert.equal(isBotsPath(path), true, path);
+  for (const path of [
+    "/",
+    "/botsy",
+    "/chat/c1",
+    "/host/h1/chat/c1",
+    "/host/bots/chat/c1",
+    "/settings",
+  ])
+    assert.equal(isBotsPath(path), false, path);
 });
 
 test("a Bot page names its Bot, and only the chat route counts as the Bot's chat", () => {
@@ -49,10 +58,22 @@ test("‹ goes back to the last page outside Bots, never to a Bots page", () => 
 
 test("with the Inbox as the view, only an entry that asked for the Bot list shows it; other views always do on Bots pages", () => {
   const asked = { aidenBotList: true };
-  assert.equal(sidebarShowsBotList({ pathname: "/bots/9f0c/chat", state: {} }, true), false, "a Bot opened from the Inbox keeps the Inbox");
-  assert.equal(sidebarShowsBotList({ pathname: "/bots", state: {} }, true), false, "a plain /bots, as after deleting a Bot, keeps the Inbox");
+  assert.equal(
+    sidebarShowsBotList({ pathname: "/bots/9f0c/chat", state: {} }, true),
+    false,
+    "a Bot opened from the Inbox keeps the Inbox",
+  );
+  assert.equal(
+    sidebarShowsBotList({ pathname: "/bots", state: {} }, true),
+    false,
+    "a plain /bots, as after deleting a Bot, keeps the Inbox",
+  );
   assert.equal(sidebarShowsBotList({ pathname: "/bots/9f0c/chat", state: asked }, true), true);
-  assert.equal(sidebarShowsBotList({ pathname: "/chat/c1", state: asked }, true), false, "outside Bots it's the workspace sidebar");
+  assert.equal(
+    sidebarShowsBotList({ pathname: "/chat/c1", state: asked }, true),
+    false,
+    "outside Bots it's the workspace sidebar",
+  );
   assert.equal(sidebarShowsBotList({ pathname: "/bots/9f0c/chat", state: {} }, false), true);
   assert.equal(sidebarShowsBotList({ pathname: "/scheduled", state: {} }, false), false);
 });
@@ -63,13 +84,23 @@ async function botsRouter(initialEntry: string) {
   const root = createRootRoute();
   const route = (path: string) => createRoute({ getParentRoute: () => root, path });
   const router = createAppRouter({
-    routeTree: root.addChildren([route("/bots"), route("/bots/$botId/chat"), route("/chat/$chatId"), route("/scheduled")]),
+    routeTree: root.addChildren([
+      route("/bots"),
+      route("/bots/$botId/chat"),
+      route("/chat/$chatId"),
+      route("/scheduled"),
+    ]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
   });
   router.history.subscribe(() => void router.load());
   await router.load();
-  const go = (options: { to: string; params?: Record<string, string>; search?: Record<string, string>; state?: object; replace?: boolean }) =>
-    router.navigate(options as never);
+  const go = (options: {
+    to: string;
+    params?: Record<string, string>;
+    search?: Record<string, string>;
+    state?: object;
+    replace?: boolean;
+  }) => router.navigate(options as never);
   const showsList = () => sidebarShowsBotList(router.state.location, true);
   return { router, history: router.history, go, showsList };
 }
@@ -103,7 +134,11 @@ test("an ask for the Bot list follows the person through Bots, ends when they le
   history.back();
   history.back();
   assert.equal(history.location.pathname, "/bots/9f0c/chat");
-  assert.equal(sidebarShowsBotList(history.location, true), false, "the Bot opened before the ask still keeps the Inbox");
+  assert.equal(
+    sidebarShowsBotList(history.location, true),
+    false,
+    "the Bot opened before the ask still keeps the Inbox",
+  );
   history.forward();
   assert.equal(sidebarShowsBotList(history.location, true), true);
 });

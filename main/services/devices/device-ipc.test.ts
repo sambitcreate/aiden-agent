@@ -42,7 +42,9 @@ function harness(options: { enabled: boolean; ownerError?: boolean }) {
   const calls: unknown[][] = [];
   const sent: unknown[][] = [];
   let stateListener: ((state: DeviceServiceState) => void) | null = null;
-  let revealListener: ((chatId: string, target?: { hostId: string; deviceId: string }) => void) | null = null;
+  let revealListener:
+    | ((chatId: string, target?: { hostId: string; deviceId: string }) => void)
+    | null = null;
   let serviceBuilt = 0;
   const invalidators: Array<() => void> = [];
   const owner: RendererDocumentOwner = {
@@ -86,7 +88,9 @@ function harness(options: { enabled: boolean; ownerError?: boolean }) {
       stateListener = listener;
       return () => undefined;
     },
-    onReveal: (listener: (chatId: string, target?: { hostId: string; deviceId: string }) => void) => {
+    onReveal: (
+      listener: (chatId: string, target?: { hostId: string; deviceId: string }) => void,
+    ) => {
       revealListener = listener;
       return () => undefined;
     },
@@ -95,7 +99,8 @@ function harness(options: { enabled: boolean; ownerError?: boolean }) {
     handle: (channel, listener) => handlers.set(channel, listener),
     enabled: () => options.enabled,
     owner: () => {
-      if (options.ownerError) throw new Error("Simulator access requires the active application document.");
+      if (options.ownerError)
+        throw new Error("Simulator access requires the active application document.");
       return owner;
     },
     service: () => {
@@ -112,7 +117,8 @@ function harness(options: { enabled: boolean; ownerError?: boolean }) {
     sent,
     serviceBuilt: () => serviceBuilt,
     emit: (state: DeviceServiceState) => stateListener?.(state),
-    reveal: (chatId: string, target?: { hostId: string; deviceId: string }) => revealListener?.(chatId, target),
+    reveal: (chatId: string, target?: { hostId: string; deviceId: string }) =>
+      revealListener?.(chatId, target),
     invalidate: () => invalidators.forEach((listener) => listener()),
   };
 }
@@ -136,13 +142,25 @@ test("calls from a stale document are refused before the service runs", async ()
 
 test("inputs are validated and user opens are always attributed to the user", async () => {
   const ipc = harness({ enabled: true });
-  await assert.rejects(ipc.invoke("devices:consent", "everything", true), /Unknown simulator consent/u);
-  await assert.rejects(ipc.invoke("devices:consent", "streaming", "yes"), /Invalid simulator consent/u);
+  await assert.rejects(
+    ipc.invoke("devices:consent", "everything", true),
+    /Unknown simulator consent/u,
+  );
+  await assert.rejects(
+    ipc.invoke("devices:consent", "streaming", "yes"),
+    /Invalid simulator consent/u,
+  );
   await assert.rejects(ipc.invoke("devices:open", null), /Invalid simulator request/u);
-  await assert.rejects(ipc.invoke("devices:open", { chatId: "c", deviceId: "../etc" }), /valid simulator/u);
+  await assert.rejects(
+    ipc.invoke("devices:open", { chatId: "c", deviceId: "../etc" }),
+    /valid simulator/u,
+  );
   await assert.rejects(ipc.invoke("devices:open", { chatId: "", deviceId: "ABC" }), /valid chat/u);
   // A leading dash could be read as an adb flag.
-  await assert.rejects(ipc.invoke("devices:open", { chatId: "c", deviceId: "-s" }), /valid simulator/u);
+  await assert.rejects(
+    ipc.invoke("devices:open", { chatId: "c", deviceId: "-s" }),
+    /valid simulator/u,
+  );
   await assert.rejects(
     ipc.invoke("devices:close", { chatId: "c", hostId: "local", deviceId: "ABC", shutdown: "yes" }),
     /Invalid simulator request/u,
@@ -177,7 +195,10 @@ test("state changes reach subscribed documents until they are invalidated", asyn
   assert.deepEqual(ipc.sent[1], ["devices:reveal", { chatId: "chat-1" }]);
   // An agent's device_open names the device, so the renderer floats or selects exactly that one.
   ipc.reveal("chat-1", { hostId: "local", deviceId: "ABC-123" });
-  assert.deepEqual(ipc.sent[2], ["devices:reveal", { chatId: "chat-1", hostId: "local", deviceId: "ABC-123" }]);
+  assert.deepEqual(ipc.sent[2], [
+    "devices:reveal",
+    { chatId: "chat-1", hostId: "local", deviceId: "ABC-123" },
+  ]);
   ipc.invalidate();
   ipc.emit({ ...STATE, hostStatus: "ready" });
   ipc.reveal("chat-1");
@@ -191,14 +212,28 @@ test("actions are parsed fail-closed and screenshots return plain bytes", async 
     /Unsupported simulator action/u,
   );
   await assert.rejects(
-    ipc.invoke("devices:action", { hostId: "local", deviceId: "ABC", type: "openUrl", url: "file:///etc" }),
+    ipc.invoke("devices:action", {
+      hostId: "local",
+      deviceId: "ABC",
+      type: "openUrl",
+      url: "file:///etc",
+    }),
     /Unsupported simulator action/u,
   );
-  await assert.rejects(ipc.invoke("devices:settings", { hostId: "local", deviceId: "a/b" }), /valid simulator/u);
+  await assert.rejects(
+    ipc.invoke("devices:settings", { hostId: "local", deviceId: "a/b" }),
+    /valid simulator/u,
+  );
   await assert.rejects(ipc.invoke("devices:screenshot", { deviceId: "ABC" }), /valid device host/u);
   assert.deepEqual(ipc.calls, []);
 
-  const action = { hostId: "local", deviceId: "ABC", type: "setAppearance", value: "dark", extra: 1 };
+  const action = {
+    hostId: "local",
+    deviceId: "ABC",
+    type: "setAppearance",
+    value: "dark",
+    extra: 1,
+  };
   assert.deepEqual(await ipc.invoke("devices:action", action), { appearance: "dark" });
   await ipc.invoke("devices:settings", { hostId: "local", deviceId: "ABC" });
   const png = await ipc.invoke("devices:screenshot", { hostId: "local", deviceId: "ABC" });
@@ -215,12 +250,24 @@ test("SSH host and tool-version channels refuse malformed input before the servi
   const ipc = harness({ enabled: true });
   const host = { id: "ssh-abc123", label: "Mac mini", target: "me@mini.local", port: 2222 };
   await assert.rejects(ipc.invoke("devices:start-host", "../local"), /valid device host/u);
-  await assert.rejects(ipc.invoke("devices:update-tool", { hostId: "local", tool: "npm" }), /Unknown simulator helper/u);
+  await assert.rejects(
+    ipc.invoke("devices:update-tool", { hostId: "local", tool: "npm" }),
+    /Unknown simulator helper/u,
+  );
   await assert.rejects(ipc.invoke("devices:update-tool", null), /Invalid simulator request/u);
   // A target that starts with a dash would become an ssh option, so it never reaches the service.
-  await assert.rejects(ipc.invoke("devices:ssh-save", { ...host, target: "-oProxyCommand=sh" }), /SSH host's details/u);
-  await assert.rejects(ipc.invoke("devices:ssh-save", { ...host, id: "local" }), /SSH host's details/u);
-  await assert.rejects(ipc.invoke("devices:ssh-test", { ...host, port: 70000 }), /SSH host's details/u);
+  await assert.rejects(
+    ipc.invoke("devices:ssh-save", { ...host, target: "-oProxyCommand=sh" }),
+    /SSH host's details/u,
+  );
+  await assert.rejects(
+    ipc.invoke("devices:ssh-save", { ...host, id: "local" }),
+    /SSH host's details/u,
+  );
+  await assert.rejects(
+    ipc.invoke("devices:ssh-test", { ...host, port: 70000 }),
+    /SSH host's details/u,
+  );
   await assert.rejects(ipc.invoke("devices:ssh-remove", "has space"), /valid device host/u);
   assert.deepEqual(ipc.calls, []);
 

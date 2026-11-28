@@ -16,10 +16,10 @@ Aiden offers three places a chat can run:
 
 Each No workspace chat gets its own folder in Aiden's app data, named like a scratch folder:
 
-| Platform | Folder |
-| --- | --- |
-| macOS | `~/Library/Application Support/Aiden Agent/chat-folders/<name>` |
-| Linux | `~/.config/Aiden Agent/chat-folders/<name>` |
+| Platform | Folder                                                          |
+| -------- | --------------------------------------------------------------- |
+| macOS    | `~/Library/Application Support/Aiden Agent/chat-folders/<name>` |
+| Linux    | `~/.config/Aiden Agent/chat-folders/<name>`                     |
 
 The folder is created when the chat is first sent, so a draft you abandon leaves nothing behind. If the folder goes missing (cleared app data, a manual delete), Aiden makes it again, empty, on the next message. The model is told the folder is private to the chat, so it can use it for downloads, clones and scratch files.
 

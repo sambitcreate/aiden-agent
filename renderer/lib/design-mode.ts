@@ -115,11 +115,19 @@ export function noteDesignCanvasView(chatId: string, view: DesignViewState | nul
 /** What this chat's canvas shows on this screen, for the next message; undefined with no canvas. */
 export function designCanvasViewFor(chatId: string): DesignViewState | undefined {
   const view = canvasViews.get(chatId);
-  return view ? { selection: [...view.selection], ...(view.viewSize ? { viewSize: { ...view.viewSize } } : {}) } : undefined;
+  return view
+    ? {
+        selection: [...view.selection],
+        ...(view.viewSize ? { viewSize: { ...view.viewSize } } : {}),
+      }
+    : undefined;
 }
 
 /** Apply another window's (or main's echo of our own) design mode change. */
-export function applyDesignModeBroadcast(qc: QueryClient, change: ChatDesignModeChanged | null | undefined): void {
+export function applyDesignModeBroadcast(
+  qc: QueryClient,
+  change: ChatDesignModeChanged | null | undefined,
+): void {
   if (typeof change?.chatId !== "string" || typeof change.designMode !== "boolean") return;
   // A change of ours still in flight wins for now; the broadcast lands once it settles.
   if (changesInFlight.has(change.chatId)) {
@@ -172,12 +180,17 @@ export function useDesignMode(chatId: string | undefined) {
   const on = available && chat?.designMode === true;
   // A finished read with no chat (a draft or a deleted chat) is settled too.
   const settled =
-    !capabilities.designMode || !chatId || chat !== undefined || chatQuery.isSuccess || chatQuery.isError;
+    !capabilities.designMode ||
+    !chatId ||
+    chat !== undefined ||
+    chatQuery.isSuccess ||
+    chatQuery.isError;
 
   const set = React.useCallback(
     (enabled: boolean, source: DesignModeSource) => {
       if (!chatId || !available) return;
-      const current = qc.getQueryData<Chat | null>(queryKeys.chat(chatId)) ?? listedChat(qc, chatId);
+      const current =
+        qc.getQueryData<Chat | null>(queryKeys.chat(chatId)) ?? listedChat(qc, chatId);
       const previous = current?.designMode === true;
       if (previous === enabled) return;
       if (enabled) pendingEntries.set(chatId, source);
@@ -199,7 +212,9 @@ export function useDesignMode(chatId: string | undefined) {
         } catch (error) {
           if (isLatest()) {
             applyDesignModeToCache(qc, chatId, previous);
-            toast.error(error instanceof Error && error.message ? error.message : DESIGN_MODE_FAILED);
+            toast.error(
+              error instanceof Error && error.message ? error.message : DESIGN_MODE_FAILED,
+            );
           }
         } finally {
           if (isLatest()) {
@@ -217,7 +232,8 @@ export function useDesignMode(chatId: string | undefined) {
   const toggle = React.useCallback(
     (source: DesignModeSource) => {
       if (!chatId) return;
-      const current = qc.getQueryData<Chat | null>(queryKeys.chat(chatId)) ?? listedChat(qc, chatId);
+      const current =
+        qc.getQueryData<Chat | null>(queryKeys.chat(chatId)) ?? listedChat(qc, chatId);
       set(current?.designMode !== true, source);
     },
     [chatId, qc, set],

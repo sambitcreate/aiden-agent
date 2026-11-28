@@ -1,9 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { BotTranscriptEntry, BotTranscriptToolCall } from "../../shared/bot-live";
-import { BOT_ACTIVITY_TITLE_CHARS, botActivityLog, formatBotActivityWhen } from "./bot-activity-log";
+import {
+  BOT_ACTIVITY_TITLE_CHARS,
+  botActivityLog,
+  formatBotActivityWhen,
+} from "./bot-activity-log";
 
-const call = (id: string, name: string, kind: BotTranscriptToolCall["kind"], label: string, detail?: string): BotTranscriptToolCall => ({
+const call = (
+  id: string,
+  name: string,
+  kind: BotTranscriptToolCall["kind"],
+  label: string,
+  detail?: string,
+): BotTranscriptToolCall => ({
   id,
   name,
   kind,
@@ -11,7 +21,10 @@ const call = (id: string, name: string, kind: BotTranscriptToolCall["kind"], lab
   ...(detail ? { detail } : {}),
 });
 
-const result = (callId: string, status: "ok" | "failed" | "blocked" | "stopped"): BotTranscriptEntry => ({
+const result = (
+  callId: string,
+  status: "ok" | "failed" | "blocked" | "stopped",
+): BotTranscriptEntry => ({
   id: `${callId}:result`,
   type: "tool_result",
   toolCallId: callId,
@@ -20,7 +33,12 @@ const result = (callId: string, status: "ok" | "failed" | "blocked" | "stopped")
   status,
 });
 
-const working = (id: string, calls: BotTranscriptToolCall[], at?: number, stopReason: "toolUse" | "aborted" = "toolUse"): BotTranscriptEntry => ({
+const working = (
+  id: string,
+  calls: BotTranscriptToolCall[],
+  at?: number,
+  stopReason: "toolUse" | "aborted" = "toolUse",
+): BotTranscriptEntry => ({
   id,
   type: "assistant",
   text: "",
@@ -29,8 +47,19 @@ const working = (id: string, calls: BotTranscriptToolCall[], at?: number, stopRe
   ...(at === undefined ? {} : { at }),
 });
 
-const answer = (id: string, text: string): BotTranscriptEntry => ({ id, type: "assistant", text, toolCalls: [], stopReason: "stop" });
-const message = (id: string, text: string): BotTranscriptEntry => ({ id, type: "user", text, imageCount: 0 });
+const answer = (id: string, text: string): BotTranscriptEntry => ({
+  id,
+  type: "assistant",
+  text,
+  toolCalls: [],
+  stopReason: "stop",
+});
+const message = (id: string, text: string): BotTranscriptEntry => ({
+  id,
+  type: "user",
+  text,
+  imageCount: 0,
+});
 
 const ENTRIES: BotTranscriptEntry[] = [
   { id: "r1", type: "routine", label: "Sunday plan", text: "Plan next week", at: 100 },
@@ -53,7 +82,10 @@ const ENTRIES: BotTranscriptEntry[] = [
 
 test("replies come newest first, each with its steps in the order they ran, and a reply with no steps is left out", () => {
   const log = botActivityLog(ENTRIES, { running: false });
-  assert.deepEqual(log.map((reply) => reply.title), ["Plan dinners for this week", "Sunday plan"]);
+  assert.deepEqual(
+    log.map((reply) => reply.title),
+    ["Plan dinners for this week", "Sunday plan"],
+  );
   assert.deepEqual(
     log[0]!.steps.map((step) => [step.label, step.detail ?? null, step.status]),
     [
@@ -70,67 +102,132 @@ test("a routine run carries the routine's name, shortened like a message, or Rou
   assert.equal(routine?.title, "Sunday plan");
   assert.equal(routine?.steps[0]?.detail, "pantry.md");
   const step = working("a1", [call("c1", "grep", "reading", "Read 1 file")]);
-  const [long] = botActivityLog([{ id: "r1", type: "routine", label: "Check ".repeat(30), text: "x" }, step], { running: false });
+  const [long] = botActivityLog(
+    [{ id: "r1", type: "routine", label: "Check ".repeat(30), text: "x" }, step],
+    { running: false },
+  );
   assert.ok([...long!.title].length <= BOT_ACTIVITY_TITLE_CHARS);
   assert.ok(long!.title.endsWith("…"));
-  const [blank] = botActivityLog([{ id: "r2", type: "routine", label: "  ", text: "x" }, step], { running: false });
+  const [blank] = botActivityLog([{ id: "r2", type: "routine", label: "  ", text: "x" }, step], {
+    running: false,
+  });
   assert.equal(blank!.title, "Routine");
 });
 
 test("a step still running reads as failed once the Bot stopped, but stays running in the live reply", () => {
-  const unfinished = [...ENTRIES.slice(0, 6), message("u3", "Next"), working("a7", [call("c5", "grep", "reading", "Read 1 file")])];
+  const unfinished = [
+    ...ENTRIES.slice(0, 6),
+    message("u3", "Next"),
+    working("a7", [call("c5", "grep", "reading", "Read 1 file")]),
+  ];
   assert.equal(botActivityLog(unfinished, { running: true })[0]!.steps[0]!.status, "running");
   assert.equal(botActivityLog(unfinished, { running: false })[0]!.steps[0]!.status, "failed");
   const older = [...unfinished, message("u4", "Again")];
-  assert.equal(botActivityLog(older, { running: true }).find((reply) => reply.id === "u3")?.steps[0]?.status, "failed");
+  assert.equal(
+    botActivityLog(older, { running: true }).find((reply) => reply.id === "u3")?.steps[0]?.status,
+    "failed",
+  );
 });
 
 test("a step the person stopped, or a restart cut short, reads as stopped, never as a failure", () => {
   const stoppedByResult = botActivityLog(
-    [message("u1", "Go"), working("a1", [call("c1", "grep", "reading", "Read 1 file"), call("c2", "grep", "searching", "Searched the web")]), result("c1", "stopped")],
+    [
+      message("u1", "Go"),
+      working("a1", [
+        call("c1", "grep", "reading", "Read 1 file"),
+        call("c2", "grep", "searching", "Searched the web"),
+      ]),
+      result("c1", "stopped"),
+    ],
     { running: false },
   );
-  assert.deepEqual(stoppedByResult[0]!.steps.map((step) => step.status), ["stopped", "stopped"]);
+  assert.deepEqual(
+    stoppedByResult[0]!.steps.map((step) => step.status),
+    ["stopped", "stopped"],
+  );
 
-  const aborted = botActivityLog([message("u1", "Go"), working("a1", [call("c1", "grep", "reading", "Read 1 file")], undefined, "aborted")], { running: false });
+  const aborted = botActivityLog(
+    [
+      message("u1", "Go"),
+      working("a1", [call("c1", "grep", "reading", "Read 1 file")], undefined, "aborted"),
+    ],
+    { running: false },
+  );
   assert.equal(aborted[0]!.steps[0]!.status, "stopped");
 
   const restarted = botActivityLog(
-    [message("u1", "Go"), working("a1", [call("c1", "grep", "reading", "Read 1 file")]), { id: "n1", type: "notice", notice: "interrupted" }],
+    [
+      message("u1", "Go"),
+      working("a1", [call("c1", "grep", "reading", "Read 1 file")]),
+      { id: "n1", type: "notice", notice: "interrupted" },
+    ],
     { running: false },
   );
   assert.equal(restarted[0]!.steps[0]!.status, "stopped");
 
   // A real failure in a reply that was not stopped stays a failure.
-  const failed = botActivityLog([message("u1", "Go"), working("a1", [call("c1", "grep", "reading", "Read 1 file")])], { running: false });
+  const failed = botActivityLog(
+    [message("u1", "Go"), working("a1", [call("c1", "grep", "reading", "Read 1 file")])],
+    { running: false },
+  );
   assert.equal(failed[0]!.steps[0]!.status, "failed");
 });
 
 test("a question the Bot asked is not an action and does not appear as a step", () => {
   const log = botActivityLog(
-    [message("u1", "Go"), working("a1", [call("c1", "ask_user_question", "waiting", "Asked you a question"), call("c2", "grep", "reading", "Read 1 file")]), result("c2", "ok")],
+    [
+      message("u1", "Go"),
+      working("a1", [
+        call("c1", "ask_user_question", "waiting", "Asked you a question"),
+        call("c2", "grep", "reading", "Read 1 file"),
+      ]),
+      result("c2", "ok"),
+    ],
     { running: false },
   );
-  assert.deepEqual(log[0]!.steps.map((step) => step.label), ["Read 1 file"]);
+  assert.deepEqual(
+    log[0]!.steps.map((step) => step.label),
+    ["Read 1 file"],
+  );
 });
 
 test("a step carries its call's detail and app as the transcript gave them, and none of the call's other fields", () => {
   const log = botActivityLog(
     [
       message("u1", "Go"),
-      working("a1", [{ id: "c1", name: "mail_search", kind: "app", label: "Used Mail", detail: "invoices from May", app: "Mail" }]),
+      working("a1", [
+        {
+          id: "c1",
+          name: "mail_search",
+          kind: "app",
+          label: "Used Mail",
+          detail: "invoices from May",
+          app: "Mail",
+        },
+      ]),
       result("c1", "ok"),
     ],
     { running: false },
   );
   assert.deepEqual(log[0]!.steps, [
-    { id: "c1", kind: "app", label: "Used Mail", detail: "invoices from May", app: "Mail", status: "ok" },
+    {
+      id: "c1",
+      kind: "app",
+      label: "Used Mail",
+      detail: "invoices from May",
+      app: "Mail",
+      status: "ok",
+    },
   ]);
 });
 
 test("a reply a restart closed is not live, even while the Bot runs again", () => {
   const log = botActivityLog(
-    [message("u1", "Go"), working("a1", [call("c1", "grep", "reading", "Read 1 file")]), { id: "n1", type: "notice", notice: "interrupted" }],
+    [
+      message("u1", "Go"),
+      working("a1", [call("c1", "grep", "reading", "Read 1 file")]),
+      { id: "n1", type: "notice", notice: "interrupted" },
+    ],
     { running: true },
   );
   assert.equal(log[0]!.steps[0]!.status, "stopped");
@@ -150,11 +247,23 @@ test("a long message makes a short title, and a photo-only message reads as Phot
   assert.equal(log[0]!.title, "Photo");
   assert.ok([...log[1]!.title].length <= BOT_ACTIVITY_TITLE_CHARS);
   assert.ok(log[1]!.title.endsWith("…"));
-  const [huge] = botActivityLog([message("u3", `${" ".repeat(500)}Plan ${"x".repeat(2_000_000)}`), working("a3", [call("c3", "grep", "reading", "Read 1 file")])], { running: false });
+  const [huge] = botActivityLog(
+    [
+      message("u3", `${" ".repeat(500)}Plan ${"x".repeat(2_000_000)}`),
+      working("a3", [call("c3", "grep", "reading", "Read 1 file")]),
+    ],
+    { running: false },
+  );
   assert.equal([...huge!.title].length, BOT_ACTIVITY_TITLE_CHARS);
   assert.ok(huge!.title.startsWith("Plan x"));
   assert.ok(huge!.title.endsWith("…"));
-  const [spaced] = botActivityLog([message("u4", `Plan${" ".repeat(400)}dinners`), working("a4", [call("c4", "grep", "reading", "Read 1 file")])], { running: false });
+  const [spaced] = botActivityLog(
+    [
+      message("u4", `Plan${" ".repeat(400)}dinners`),
+      working("a4", [call("c4", "grep", "reading", "Read 1 file")]),
+    ],
+    { running: false },
+  );
   assert.equal(spaced!.title, "Plan…", "a message cut before its end still says so");
 });
 
@@ -175,10 +284,18 @@ test("a long transcript projects every reply once, in order", () => {
 test("reply times read as today, yesterday, or a date, each with the time", () => {
   const now = new Date(2026, 9, 14, 18, 0).getTime();
   assert.match(formatBotActivityWhen(new Date(2026, 9, 14, 9, 5).getTime(), now), /^Today, \S/u);
-  assert.match(formatBotActivityWhen(new Date(2026, 9, 13, 23, 0).getTime(), now), /^Yesterday, \S/u);
+  assert.match(
+    formatBotActivityWhen(new Date(2026, 9, 13, 23, 0).getTime(), now),
+    /^Yesterday, \S/u,
+  );
   const older = new Date(2026, 9, 6, 19, 0);
-  const olderDay = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(older);
-  assert.ok(formatBotActivityWhen(older.getTime(), now).startsWith(`${olderDay}, `), "an older reply names its date");
+  const olderDay = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
+    older,
+  );
+  assert.ok(
+    formatBotActivityWhen(older.getTime(), now).startsWith(`${olderDay}, `),
+    "an older reply names its date",
+  );
   assert.equal(formatBotActivityWhen(undefined, now), "Earlier");
 });
 
@@ -186,9 +303,19 @@ test("a hand-off is the person's step, not the Bot's: the reply after it is titl
   const log = botActivityLog(
     [
       message("u1", "Move the savings"),
-      working("a1", [call("c1", "hand_off", "waiting", "Handed you a step"), call("c2", "grep", "reading", "Read 1 file")]),
+      working("a1", [
+        call("c1", "hand_off", "waiting", "Handed you a step"),
+        call("c2", "grep", "reading", "Read 1 file"),
+      ]),
       result("c2", "ok"),
-      { id: "handoff:c1", type: "handoff_result", kind: "action", outcome: "done", action: "Enter the 2FA code", at: 300 },
+      {
+        id: "handoff:c1",
+        type: "handoff_result",
+        kind: "action",
+        outcome: "done",
+        action: "Enter the 2FA code",
+        at: 300,
+      },
       working("a2", [call("c3", "web_search", "searching", "Searched the web", "transfer status")]),
       result("c3", "ok"),
       answer("a3", "The transfer is through."),
@@ -205,12 +332,21 @@ test("a hand-off is the person's step, not the Bot's: the reply after it is titl
   assert.equal(log[0]!.at, 300);
 });
 
-
 test("a Bot reply turn is titled COS replied and owns its own steps", () => {
-  const log = botActivityLog([
-    message("u", "Before"), working("a", [call("old", "read_file", "reading", "Read")]),
-    {id: "r", type: "bot_message", kind: "reply", botId: "c", botName: "COS", text: "Answer"},
-    working("b", [call("new", "read_file", "reading", "Read")]),
-  ], {running: false});
-  assert.deepEqual(log.map(r => [r.title, r.steps.map(s => s.id)]), [["COS replied", ["new"]], ["Before", ["old"]]]);
+  const log = botActivityLog(
+    [
+      message("u", "Before"),
+      working("a", [call("old", "read_file", "reading", "Read")]),
+      { id: "r", type: "bot_message", kind: "reply", botId: "c", botName: "COS", text: "Answer" },
+      working("b", [call("new", "read_file", "reading", "Read")]),
+    ],
+    { running: false },
+  );
+  assert.deepEqual(
+    log.map((r) => [r.title, r.steps.map((s) => s.id)]),
+    [
+      ["COS replied", ["new"]],
+      ["Before", ["old"]],
+    ],
+  );
 });

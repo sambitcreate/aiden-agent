@@ -25,7 +25,8 @@ export const MAX_SIDE_BY_SIDE_TOOL_CALLS = 4;
 export function runsSideBySide(tool: AgentTool): boolean {
   if (tool.executionMode === "sequential") return false;
   const remote = mcpAgentToolDescriptor(tool);
-  if (remote) return classifySubagentMcpToolV2(remote.annotations, remote.execution)?.effect === "read";
+  if (remote)
+    return classifySubagentMcpToolV2(remote.annotations, remote.execution)?.effect === "read";
   // A remote tool can never borrow a built-in read's name.
   if (mcpAgentToolIdentity(tool)) return false;
   return SIDE_BY_SIDE_BUILT_IN_TOOLS.has(tool.name);

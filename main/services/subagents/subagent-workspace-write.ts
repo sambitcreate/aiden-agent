@@ -29,11 +29,12 @@ import {
   type WorkspaceOperationAdmission,
   type WorkspaceOperationRegistry,
 } from "../workspace-operation-registry.js";
-import { SubagentApprovalLedgerV2, SubagentRunGrantV2, type PrepareSubagentApprovalV2Input } from "./approval-v2.js";
 import {
-  subagentAuthorityDigestV2,
-  type SubagentAuthorityV2,
-} from "./authority-v2.js";
+  SubagentApprovalLedgerV2,
+  SubagentRunGrantV2,
+  type PrepareSubagentApprovalV2Input,
+} from "./approval-v2.js";
+import { subagentAuthorityDigestV2, type SubagentAuthorityV2 } from "./authority-v2.js";
 import { sameSubagentAuthorityBindingV2 } from "./outbound-approval-v2.js";
 import {
   canonicalSubagentFileRelativePath,
@@ -291,9 +292,7 @@ function escapedPreviewLine(value: string): string {
   for (const character of value) {
     const point = character.codePointAt(0) ?? 0;
     result +=
-      unsafeApprovalCodePoint(point) && point !== 0x09
-        ? escapedCodePoint(point)
-        : character;
+      unsafeApprovalCodePoint(point) && point !== 0x09 ? escapedCodePoint(point) : character;
   }
   return result;
 }
@@ -474,8 +473,11 @@ export function createSubagentWorkspaceWriteApprovalBrokerV2(
   input: SubagentWorkspaceWriteApprovalBrokerV2Input,
 ): SubagentWorkspaceWriteApprovalGateV2 {
   const now = input.now ?? Date.now;
-  const grantPermission = input.workspace.permission === "full" &&
-    (input.parentPermission ?? input.workspace.permission) === "full" ? "full" : "ask";
+  const grantPermission =
+    input.workspace.permission === "full" &&
+    (input.parentPermission ?? input.workspace.permission) === "full"
+      ? "full"
+      : "ask";
   const runGrant = input.implementerRunGrant
     ? new SubagentRunGrantV2(input.authority, grantPermission, input.runSignal, now)
     : undefined;
@@ -687,15 +689,18 @@ export function createSubagentWorkspaceWriteApprovalBrokerV2(
         effect,
         before: inspection.currentContent ?? "",
       });
-      const requestExact = () => input.requestApproval(
-        {
-          streamId: authority.generationId,
-          toolCallId: context.toolCall.id,
-          toolName: context.toolCall.name,
-          summary: `${details.operation} ${JSON.stringify(details.path)} in ${JSON.stringify(details.workspaceLabel)}`,
-          details,
-        }, signal, authority.ownerDocumentId,
-      );
+      const requestExact = () =>
+        input.requestApproval(
+          {
+            streamId: authority.generationId,
+            toolCallId: context.toolCall.id,
+            toolName: context.toolCall.name,
+            summary: `${details.operation} ${JSON.stringify(details.path)} in ${JSON.stringify(details.workspaceLabel)}`,
+            details,
+          },
+          signal,
+          authority.ownerDocumentId,
+        );
       const requestRunGrant = () => {
         const grantDetails: SubagentRunGrantApprovalDetails = {
           kind: "subagent-run-grant",
@@ -712,13 +717,17 @@ export function createSubagentWorkspaceWriteApprovalBrokerV2(
         if (!isSubagentRunGrantApprovalDetails(grantDetails)) {
           throw new SubagentFilePreparationError("invalid_input");
         }
-        return input.requestApproval({
-          streamId: authority.generationId,
-          toolCallId: context.toolCall.id,
-          toolName: context.toolCall.name,
-          summary: `Allow writes for this subagent run: ${input.childLabel}`,
-          details: grantDetails,
-        }, signal, authority.ownerDocumentId);
+        return input.requestApproval(
+          {
+            streamId: authority.generationId,
+            toolCallId: context.toolCall.id,
+            toolName: context.toolCall.name,
+            summary: `Allow writes for this subagent run: ${input.childLabel}`,
+            details: grantDetails,
+          },
+          signal,
+          authority.ownerDocumentId,
+        );
       };
       const allowed = runGrant
         ? await runGrant.ensure(authority, grantPermission, requestRunGrant)
@@ -787,9 +796,7 @@ export function createSubagentWorkspaceWriteApprovalBrokerV2(
           ledgerInput(authority, pending, effect.toolCallId, effect.toolName),
         )
       ) {
-        throw new SubagentFilePreparationError(
-          pending.signal.aborted ? "cancelled" : "conflict",
-        );
+        throw new SubagentFilePreparationError(pending.signal.aborted ? "cancelled" : "conflict");
       }
       const outcome = await commitSubagentFileMutation(
         pending.client,
@@ -833,9 +840,7 @@ export function createSubagentWorkspaceWriteApprovalBrokerV2(
         authorized.delete(toolCallId);
         input.ledger.deny(pending.approvalId, input.authority.ownerDocumentId);
       }
-      await Promise.allSettled(
-        active.map(([, lifecycle]) => lifecycle.client?.close()),
-      );
+      await Promise.allSettled(active.map(([, lifecycle]) => lifecycle.client?.close()));
       for (const [, lifecycle] of active) lifecycle.release();
       await Promise.allSettled(settling);
     },

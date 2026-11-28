@@ -14,14 +14,19 @@ test("a window's suppressed summary waits a full window, even after an earlier w
           if (channel === "diagnostics:policy") {
             return { enabled: true, runtimeProfile: "development", windowMs: 1_000, maxPerKey: 1 };
           }
-          if (channel === "diagnostics:renderer-event") sent.push({ at: Date.now(), suppressed: report?.suppressed });
+          if (channel === "diagnostics:renderer-event")
+            sent.push({ at: Date.now(), suppressed: report?.suppressed });
           return { accepted: true, referenceId: "RD-test" };
         },
         onNotification: () => () => undefined,
       },
     },
   });
-  Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: fakeWindow });
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    writable: true,
+    value: fakeWindow,
+  });
   try {
     const { installRendererDiagnostics, reportRendererDiagnostic } = await import("./dev-log.js");
     await installRendererDiagnostics();
@@ -63,7 +68,13 @@ test("raw error fields leave the renderer only while main says so, and only for 
       ipc: {
         invoke: async (channel: string, report?: RendererDiagnosticReport) => {
           if (channel === "diagnostics:policy") {
-            return { enabled: true, runtimeProfile: "production", windowMs: 60_000, maxPerKey: 3, errorDetails: false };
+            return {
+              enabled: true,
+              runtimeProfile: "production",
+              windowMs: 60_000,
+              maxPerKey: 3,
+              errorDetails: false,
+            };
           }
           if (channel === "diagnostics:renderer-event" && report) sent.push(report);
           return { accepted: true, referenceId: "RD-test" };
@@ -75,10 +86,16 @@ test("raw error fields leave the renderer only while main says so, and only for 
       },
     },
   });
-  Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: fakeWindow });
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    writable: true,
+    value: fakeWindow,
+  });
   try {
     // A fresh module instance, independent of the test above.
-    const { installRendererDiagnostics, reportRendererDiagnostic } = (await import("./dev-log.js?details" as string)) as typeof import("./dev-log.js");
+    const { installRendererDiagnostics, reportRendererDiagnostic } = (await import(
+      "./dev-log.js?details" as string
+    )) as typeof import("./dev-log.js");
     await installRendererDiagnostics();
     const error = new RangeError("reply text");
     error.stack = "RangeError: reply text\n    at f (file:///x.js:1:1)";
@@ -88,13 +105,20 @@ test("raw error fields leave the renderer only while main says so, and only for 
 
     listeners.get("analytics:sending-changed")!({ sending: true });
     reportRendererDiagnostic("unhandled-rejection", error, "window");
-    assert.deepEqual(sent[1]!.error, { name: "RangeError", message: "reply text", stack: "\n    at f (file:///x.js:1:1)" });
+    assert.deepEqual(sent[1]!.error, {
+      name: "RangeError",
+      message: "reply text",
+      stack: "\n    at f (file:///x.js:1:1)",
+    });
 
     // Caught errors are local diagnostics, never crash reports.
     reportRendererDiagnostic("react-caught", error, "subtree");
     reportRendererDiagnostic("route-error", error, "router");
     reportRendererDiagnostic("react-recoverable", error, "root");
-    assert.equal(sent.slice(2).some((report) => "error" in report), false);
+    assert.equal(
+      sent.slice(2).some((report) => "error" in report),
+      false,
+    );
 
     reportRendererDiagnostic("react-uncaught", "thrown text", "root");
     assert.deepEqual(sent[5]!.error, { message: "thrown text" });

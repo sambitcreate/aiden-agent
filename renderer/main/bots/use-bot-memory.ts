@@ -19,7 +19,8 @@ export function useBotMemory(botId: string) {
     () =>
       botsApi.onMemoryChanged((event) => {
         if (event.botId !== botId) return;
-        if (qc.getQueryData<BotMemoryView>(botMemoryKey(botId))?.revision === event.revision) return;
+        if (qc.getQueryData<BotMemoryView>(botMemoryKey(botId))?.revision === event.revision)
+          return;
         void qc.invalidateQueries({ queryKey: botMemoryKey(botId) });
       }),
     [botId, qc],

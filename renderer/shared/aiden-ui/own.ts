@@ -17,7 +17,8 @@ export function ownEntry<V>(table: Readonly<Record<string, V>>, key: unknown): V
 
 /** The own field `key` of a value, or undefined. */
 export function ownField(value: unknown, key: unknown): unknown {
-  if (!value || typeof value !== "object" || typeof key !== "string" || !hasOwn(value, key)) return undefined;
+  if (!value || typeof value !== "object" || typeof key !== "string" || !hasOwn(value, key))
+    return undefined;
   return (value as Record<string, unknown>)[key];
 }
 

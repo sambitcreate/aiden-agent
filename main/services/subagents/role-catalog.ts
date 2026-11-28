@@ -40,11 +40,12 @@ export function subagentRoleSystemPrompt(
   const grantedLanes = [workspaceWrite ? "writes" : null, shell ? "shell commands" : null]
     .filter((lane): lane is string => lane !== null)
     .join(" and ");
-  const runGrantGuidance = role === "implementer" && grantedLanes && authority.permission === "full"
-    ? `The parent granted Full workspace permission. Authorized ${grantedLanes} proceed for this run without another approval card.`
-    : role === "implementer" && grantedLanes && authority.permission === "ask"
-      ? `Ask permission once for each available lane (${grantedLanes}) on first use. After a run grant is approved, later calls in that lane do not pause per file or command.`
-      : "";
+  const runGrantGuidance =
+    role === "implementer" && grantedLanes && authority.permission === "full"
+      ? `The parent granted Full workspace permission. Authorized ${grantedLanes} proceed for this run without another approval card.`
+      : role === "implementer" && grantedLanes && authority.permission === "ask"
+        ? `Ask permission once for each available lane (${grantedLanes}) on first use. After a run grant is approved, later calls in that lane do not pause per file or command.`
+        : "";
   const contextGuidance =
     contextMode === "fork"
       ? "Conversation context: Forked. You received a bounded, immutable projection of the persisted user-visible parent conversation."
@@ -53,13 +54,17 @@ export function subagentRoleSystemPrompt(
     ? workspaceWrite
       ? [
           "You have workspace read tools plus exact write_file and edit_file tools. Paths are relative to the authorized workspace.",
-          role === "implementer" ? "Every file mutation still checks its exact target and workspace for drift. Write tools cannot create directories, delete, or rename files." : "Every file mutation pauses for one exact user approval and is refused if the file or workspace changes. You cannot create directories, delete or rename files, run commands, or make any other mutation.",
+          role === "implementer"
+            ? "Every file mutation still checks its exact target and workspace for drift. Write tools cannot create directories, delete, or rename files."
+            : "Every file mutation pauses for one exact user approval and is refused if the file or workspace changes. You cannot create directories, delete or rename files, run commands, or make any other mutation.",
         ]
       : ["You have read-only workspace tools. Paths are relative to the authorized workspace."]
     : workspaceWrite
       ? [
           "You have no workspace read, list, or search tools. You have only exact write_file and edit_file mutation tools for workspace-relative paths.",
-          role === "implementer" ? "Every file mutation still checks its exact target and workspace for drift. Write tools cannot create directories, delete, or rename files." : "Every file mutation pauses for one exact user approval and is refused if the file or workspace changes. You cannot create directories, delete or rename files, run commands, or make any other mutation.",
+          role === "implementer"
+            ? "Every file mutation still checks its exact target and workspace for drift. Write tools cannot create directories, delete, or rename files."
+            : "Every file mutation pauses for one exact user approval and is refused if the file or workspace changes. You cannot create directories, delete or rename files, run commands, or make any other mutation.",
         ]
       : [
           "You have no workspace read or mutation tools. Use only the explicitly exposed non-workspace tools.",
@@ -83,7 +88,9 @@ export function subagentRoleSystemPrompt(
       : []),
     ...(shell
       ? [
-          role === "implementer" ? "You have run_command access with full host-user execution authority. Each command still has host-owned validation and lifecycle checks." : "You have exact run_command access with full host-user execution authority. Every command pauses for attended Allow once approval.",
+          role === "implementer"
+            ? "You have run_command access with full host-user execution authority. Each command still has host-owned validation and lifecycle checks."
+            : "You have exact run_command access with full host-user execution authority. Every command pauses for attended Allow once approval.",
           "The minimal environment reduces ambient secrets only. This is not an OS sandbox, there is no rollback, commands may use arbitrary network access, and deliberately detached processes may survive cancellation.",
         ]
       : []),

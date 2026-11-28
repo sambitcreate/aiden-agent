@@ -115,7 +115,12 @@ function streamBody() {
 type FetchHandler = (url: string, signal: AbortSignal) => Promise<Response>;
 
 function harness(
-  options: { webCodecs?: boolean; preferMjpeg?: boolean; android?: boolean; expiresAt?: number } = {},
+  options: {
+    webCodecs?: boolean;
+    preferMjpeg?: boolean;
+    android?: boolean;
+    expiresAt?: number;
+  } = {},
 ) {
   const clock = fakeClock();
   const sockets: FakeSocket[] = [];
@@ -137,7 +142,9 @@ function harness(
     decodeQueueSize = 0;
     decoded: Array<{ type: string; timestamp?: number }> = [];
     configs: VideoDecoderConfig[] = [];
-    constructor(readonly init: { output: (frame: VideoFrame) => void; error: (e: unknown) => void }) {
+    constructor(
+      readonly init: { output: (frame: VideoFrame) => void; error: (e: unknown) => void },
+    ) {
       decoders.push(this);
     }
     configure(config: VideoDecoderConfig) {
@@ -191,7 +198,8 @@ function harness(
     },
   };
   const events: DeviceStreamEvents = {
-    onStatus: (status, detail) => log.push(detail ? `status:${status}:${detail}` : `status:${status}`),
+    onStatus: (status, detail) =>
+      log.push(detail ? `status:${status}:${detail}` : `status:${status}`),
     onScreen: (screen) => log.push(`screen:${screen.width}x${screen.height}:${screen.orientation}`),
     onUnauthorized: () => log.push("unauthorized"),
     onMjpegFallback: (url) => log.push(`mjpeg:${url}`),
@@ -317,7 +325,11 @@ test("deviceHubUrl carries the grant token and host for http and ws", () => {
     "http://127.0.0.1:4100/vendor/serve-sim/helper/ABCD-1234/stream.mjpeg?t=tok&host=local",
   );
   assert.equal(
-    deviceHubUrl({ ...target, hostId: "ssh-1" }, "/vendor/serve-sim/helper/ws?device=ABCD-1234", "ws"),
+    deviceHubUrl(
+      { ...target, hostId: "ssh-1" },
+      "/vendor/serve-sim/helper/ws?device=ABCD-1234",
+      "ws",
+    ),
     "ws://127.0.0.1:4100/vendor/serve-sim/helper/ws?device=ABCD-1234&t=tok&host=ssh-1",
   );
 });
@@ -504,9 +516,7 @@ test("an MJPEG image error fails the stream", () => {
   h.client.setMjpegImage(image as unknown as HTMLImageElement);
   image.emit("error");
   assert.ok(
-    h.log.includes(
-      "status:error:Could not receive the simulator stream. Reconnect to try again.",
-    ),
+    h.log.includes("status:error:Could not receive the simulator stream. Reconnect to try again."),
   );
   assert.equal(image.src, "");
 });
@@ -630,7 +640,9 @@ test("a JPEG seed that resolves after stop is released without painting", async 
       VideoDecoder: class {
         static isConfigSupported = async () => ({ supported: true });
       } as unknown as NonNullable<DeviceStreamRuntime["VideoDecoder"]>,
-      EncodedVideoChunk: class {} as unknown as NonNullable<DeviceStreamRuntime["EncodedVideoChunk"]>,
+      EncodedVideoChunk: class {} as unknown as NonNullable<
+        DeviceStreamRuntime["EncodedVideoChunk"]
+      >,
       createImageBitmap: clientRuntimeBitmap,
       setTimeout: clock.setTimeout,
       clearTimeout: clock.clearTimeout,
@@ -707,27 +719,47 @@ test("an iPhone Duo queues hinge commands and rotation, acknowledged by reply an
   assert.equal(socket.sent.length, 1);
 
   const duo = { width: 460, height: 1000, orientation: "portrait", supportsHingeAngle: true };
-  socket.onmessage?.({ data: tagged(IOS_TAG_SCREEN_CONFIG, { ...duo, hingeAngle: 180, hingePose: "open", screenId: 1 }) });
-  socket.onmessage?.({ data: tagged(IOS_TAG_SCREEN_CONFIG, { ...duo, hingeAngle: 999, hingePose: "wobbly" }) });
+  socket.onmessage?.({
+    data: tagged(IOS_TAG_SCREEN_CONFIG, {
+      ...duo,
+      hingeAngle: 180,
+      hingePose: "open",
+      screenId: 1,
+    }),
+  });
+  socket.onmessage?.({
+    data: tagged(IOS_TAG_SCREEN_CONFIG, { ...duo, hingeAngle: 999, hingePose: "wobbly" }),
+  });
 
   h.client.controlDuo({ control: "pose", value: "book" });
   h.client.controlDuo({ control: "angle", value: 120 });
   assert.deepEqual(sentAfter(1), [
-    { tag: IOS_MSG_DUO_CONTROL, body: { requestId: 1, command: { control: "pose", value: "book" } } },
+    {
+      tag: IOS_MSG_DUO_CONTROL,
+      body: { requestId: 1, command: { control: "pose", value: "book" } },
+    },
   ]);
   socket.onmessage?.({ data: tagged(IOS_TAG_CONTROL_REPLY, { requestId: 1, ok: true }) });
   assert.deepEqual(sentAfter(2), [
     { tag: IOS_MSG_DUO_CONTROL, body: { requestId: 2, command: { control: "angle", value: 120 } } },
   ]);
-  socket.onmessage?.({ data: tagged(IOS_TAG_CONTROL_REPLY, { requestId: 2, ok: false, error: "native refused" }) });
+  socket.onmessage?.({
+    data: tagged(IOS_TAG_CONTROL_REPLY, { requestId: 2, ok: false, error: "native refused" }),
+  });
   assert.equal(h.log[h.log.length - 1], "duo:false:native refused");
 
   // Rotation goes through the queue, twice in a row, without waiting for the device to catch up.
   h.client.rotate();
   h.client.rotate();
-  assert.deepEqual(sentAfter(3), [{ tag: IOS_MSG_ORIENTATION, body: { orientation: "landscape_left" } }]);
-  socket.onmessage?.({ data: tagged(IOS_TAG_SCREEN_CONFIG, { ...duo, orientation: "landscape_left" }) });
-  assert.deepEqual(sentAfter(4), [{ tag: IOS_MSG_ORIENTATION, body: { orientation: "portrait_upside_down" } }]);
+  assert.deepEqual(sentAfter(3), [
+    { tag: IOS_MSG_ORIENTATION, body: { orientation: "landscape_left" } },
+  ]);
+  socket.onmessage?.({
+    data: tagged(IOS_TAG_SCREEN_CONFIG, { ...duo, orientation: "landscape_left" }),
+  });
+  assert.deepEqual(sentAfter(4), [
+    { tag: IOS_MSG_ORIENTATION, body: { orientation: "portrait_upside_down" } },
+  ]);
 
   // A dropped socket abandons the in-flight command.
   socket.drop(1011, "helper restarted");
@@ -742,7 +774,12 @@ test("an unanswered Duo command times out and reports that its position is unkno
   const socket = h.sockets[0]!;
   socket.open();
   socket.onmessage?.({
-    data: tagged(IOS_TAG_SCREEN_CONFIG, { width: 460, height: 1000, orientation: "portrait", supportsHingeAngle: true }),
+    data: tagged(IOS_TAG_SCREEN_CONFIG, {
+      width: 460,
+      height: 1000,
+      orientation: "portrait",
+      supportsHingeAngle: true,
+    }),
   });
   h.client.controlDuo({ control: "pose", value: "tent" });
   assert.equal(h.log[h.log.length - 1], "duo:true:");
@@ -763,7 +800,9 @@ test("two-finger input is one multi-touch packet, remapped like single touches o
     body: { type: "begin", x1: 0.25, y1: 0.5, x2: 0.75, y2: 0.5 },
   });
 
-  const config = new TextEncoder().encode(JSON.stringify({ width: 390, height: 844, orientation: "landscape_right" }));
+  const config = new TextEncoder().encode(
+    JSON.stringify({ width: 390, height: 844, orientation: "landscape_right" }),
+  );
   const message = new Uint8Array(config.length + 1);
   message[0] = IOS_TAG_SCREEN_CONFIG;
   message.set(config, 1);
@@ -774,8 +813,14 @@ test("two-finger input is one multi-touch packet, remapped like single touches o
   h.client.sendTouch("move", 0.8, 0.7);
   const [multi, first, second] = socket.sent.slice(-3).map(decodePacket);
   assert.equal(multi!.tag, IOS_MSG_MULTI_TOUCH);
-  assert.ok(Math.abs(multi!.body.x1 - first!.body.x) < 1e-9 && Math.abs(multi!.body.y1 - first!.body.y) < 1e-9);
-  assert.ok(Math.abs(multi!.body.x2 - second!.body.x) < 1e-9 && Math.abs(multi!.body.y2 - second!.body.y) < 1e-9);
+  assert.ok(
+    Math.abs(multi!.body.x1 - first!.body.x) < 1e-9 &&
+      Math.abs(multi!.body.y1 - first!.body.y) < 1e-9,
+  );
+  assert.ok(
+    Math.abs(multi!.body.x2 - second!.body.x) < 1e-9 &&
+      Math.abs(multi!.body.y2 - second!.body.y) < 1e-9,
+  );
   assert.ok(Math.abs(multi!.body.x1 - 0.7) < 1e-9 && Math.abs(multi!.body.y1 - 0.2) < 1e-9);
   h.client.stop();
 });
@@ -795,11 +840,15 @@ function semu(annexB: number[], options: { key: boolean; pts: number }): ArrayBu
 }
 
 /** SPS (High 4.0) + PPS + IDR slice, with 4- and 3-byte start codes. */
-const KEY_UNIT = [0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac, 0, 0, 1, 0x68, 0xee, 0, 0, 1, 0x65, 0x88];
+const KEY_UNIT = [
+  0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac, 0, 0, 1, 0x68, 0xee, 0, 0, 1, 0x65, 0x88,
+];
 const DELTA_UNIT = [0, 0, 0, 1, 0x41, 0x9a];
 
 const sentJson = (socket: FakeSocket) =>
-  socket.sent.filter((item): item is string => typeof item === "string").map((item) => JSON.parse(item) as Record<string, unknown>);
+  socket.sent
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => JSON.parse(item) as Record<string, unknown>);
 
 test("SEMU packets split into metadata and Annex-B, and unframed payloads pass through", () => {
   const framed = parseSemuPacket(semu(DELTA_UNIT, { key: false, pts: 33_333 }));
@@ -811,7 +860,11 @@ test("SEMU packets split into metadata and Annex-B, and unframed payloads pass t
   // A wrong version or a short message is treated as raw Annex-B.
   const versionTwo = new Uint8Array(semu(DELTA_UNIT, { key: true, pts: 1 }));
   versionTwo[4] = 2;
-  assert.deepEqual(parseSemuPacket(versionTwo.buffer), { data: versionTwo, isKey: null, timestamp: null });
+  assert.deepEqual(parseSemuPacket(versionTwo.buffer), {
+    data: versionTwo,
+    isKey: null,
+    timestamp: null,
+  });
   const raw = new Uint8Array(KEY_UNIT);
   assert.deepEqual(parseSemuPacket(raw.buffer).isKey, null);
 });
@@ -872,13 +925,20 @@ test("an Android stream is one serve-emu socket: video configures from the SPS a
 
   ws.onmessage?.({ data: semu(KEY_UNIT, { key: true, pts: 100 }) });
   ws.onmessage?.({ data: semu(DELTA_UNIT, { key: false, pts: 16_767 }) });
-  assert.deepEqual(decoder.decoded.map((chunk) => ({ type: chunk.type, timestamp: chunk.timestamp })), [
-    { type: "key", timestamp: 100 },
-    { type: "delta", timestamp: 16_767 },
-  ]);
+  assert.deepEqual(
+    decoder.decoded.map((chunk) => ({ type: chunk.type, timestamp: chunk.timestamp })),
+    [
+      { type: "key", timestamp: 100 },
+      { type: "delta", timestamp: 16_767 },
+    ],
+  );
 
   // The decoded frame's size is the screen; serve-emu sends no screen config.
-  decoder.init.output({ displayWidth: 1080, displayHeight: 2424, close() {} } as unknown as VideoFrame);
+  decoder.init.output({
+    displayWidth: 1080,
+    displayHeight: 2424,
+    close() {},
+  } as unknown as VideoFrame);
   assert.ok(h.log.includes("screen:1080x2424:portrait"));
   assert.ok(h.log.includes("status:streaming"));
   h.client.stop();
@@ -895,8 +955,17 @@ test("an Android pinch is two serve-emu touches with separate pointers; the seco
   h.client.sendMultiTouch("end", { x: 0.3, y: 0.5 }, { x: 0.9, y: 0.5 });
   const touches = sentJson(ws)
     .filter((message) => message.type === "touch")
-    .map((message) => `${String(message.action)}:${String(message.pointerId)}@${String(message.x)}`);
-  assert.deepEqual(touches, ["down:0@0.4", "down:1@0.6", "move:0@0.3", "move:1@1", "up:1@0.9", "up:0@0.3"]);
+    .map(
+      (message) => `${String(message.action)}:${String(message.pointerId)}@${String(message.x)}`,
+    );
+  assert.deepEqual(touches, [
+    "down:0@0.4",
+    "down:1@0.6",
+    "move:0@0.3",
+    "move:1@1",
+    "up:1@0.9",
+    "up:0@0.3",
+  ]);
   h.client.stop();
 });
 
@@ -907,7 +976,11 @@ test("an encoder restart keeps the stream, rebuilds the decoder, and reports the
   ws.open();
   ws.onmessage?.({ data: semu(KEY_UNIT, { key: true, pts: 0 }) });
   await settle();
-  h.decoders[0]!.init.output({ displayWidth: 1080, displayHeight: 2424, close() {} } as unknown as VideoFrame);
+  h.decoders[0]!.init.output({
+    displayWidth: 1080,
+    displayHeight: 2424,
+    close() {},
+  } as unknown as VideoFrame);
   h.log.length = 0;
 
   // Folding restarts serve-emu's encoder at the outer display's size.
@@ -922,7 +995,11 @@ test("an encoder restart keeps the stream, rebuilds the decoder, and reports the
   await settle();
   ws.onmessage?.({ data: semu(KEY_UNIT, { key: true, pts: 6 }) });
   const rebuilt = h.decoders[1]!;
-  rebuilt.init.output({ displayWidth: 2208, displayHeight: 1840, close() {} } as unknown as VideoFrame);
+  rebuilt.init.output({
+    displayWidth: 2208,
+    displayHeight: 1840,
+    close() {},
+  } as unknown as VideoFrame);
   assert.ok(h.log.includes("screen:2208x1840:landscape_left"));
   assert.ok(h.log.includes("status:streaming"));
   h.client.stop();
@@ -940,7 +1017,8 @@ test("Android touches, keys, and hardware buttons are JSON gestures on the same 
   h.client.sendKey("KeyA", "up", { key: "a" });
   h.client.sendKey("Escape", "down", { key: "Escape" });
   h.client.sendKey("KeyB", "down");
-  for (const button of ["home", "back", "recents", "power", "lock", "appSwitcher"] as const) h.client.pressButton(button);
+  for (const button of ["home", "back", "recents", "power", "lock", "appSwitcher"] as const)
+    h.client.pressButton(button);
   h.client.rotate();
   h.client.setOrientation("landscape_left");
   assert.deepEqual(sentJson(ws), [
@@ -956,7 +1034,11 @@ test("Android touches, keys, and hardware buttons are JSON gestures on the same 
     { type: "power" },
     { type: "recents" },
   ]);
-  assert.equal(ws.sent.filter((item) => typeof item !== "string").length, 0, "no serve-sim binary packets");
+  assert.equal(
+    ws.sent.filter((item) => typeof item !== "string").length,
+    0,
+    "no serve-sim binary packets",
+  );
   h.client.stop();
 });
 
@@ -984,7 +1066,11 @@ test("an Android socket retries after a drop, renews an expired grant, and fails
   const without = harness({ android: true });
   without.client.start();
   assert.equal(without.sockets.length, 0);
-  assert.ok(without.log.some((line) => line.startsWith("status:error:This Mac cannot decode the emulator stream")));
+  assert.ok(
+    without.log.some((line) =>
+      line.startsWith("status:error:This Mac cannot decode the emulator stream"),
+    ),
+  );
 });
 
 test("an undecodable Android profile stops with a reason instead of falling back to MJPEG", async () => {
@@ -994,6 +1080,8 @@ test("an undecodable Android profile stops with a reason instead of falling back
   h.sockets[0]!.open();
   h.sockets[0]!.onmessage?.({ data: semu(KEY_UNIT, { key: true, pts: 0 }) });
   await settle();
-  assert.ok(h.log.includes("status:error:This Mac cannot decode the emulator's avc1.640028 video."));
+  assert.ok(
+    h.log.includes("status:error:This Mac cannot decode the emulator's avc1.640028 video."),
+  );
   assert.ok(!h.log.some((line) => line.startsWith("mjpeg:")));
 });

@@ -326,9 +326,12 @@ function controlVariants(value: string): {
  */
 export function redactMultilineCredentialBlocks(value: string): string {
   let sanitized = value;
-  if (value.includes(":") && ASSIGNMENT_SECRET_HINT.test(value)) sanitized = sanitized.replace(BLOCK_SCALAR_ASSIGNED_SECRET, "$1[REDACTED]");
+  if (value.includes(":") && ASSIGNMENT_SECRET_HINT.test(value))
+    sanitized = sanitized.replace(BLOCK_SCALAR_ASSIGNED_SECRET, "$1[REDACTED]");
   if (STANDALONE_CREDENTIAL_HINT.test(value)) {
-    sanitized = sanitized.replace(PRIVATE_KEY_BLOCK, "[REDACTED PRIVATE KEY]").replace(PUTTY_PRIVATE_KEY, "[REDACTED PRIVATE KEY]");
+    sanitized = sanitized
+      .replace(PRIVATE_KEY_BLOCK, "[REDACTED PRIVATE KEY]")
+      .replace(PUTTY_PRIVATE_KEY, "[REDACTED PRIVATE KEY]");
   }
   return sanitized;
 }
@@ -351,7 +354,10 @@ export function sanitizeCredentialText(value: string): string {
       .replace(BASIC_SECRET, "Basic [REDACTED]")
       .replace(CREDENTIAL_URI, "$1[REDACTED]@");
   }
-  return redactBareCredentialTokens(sanitized, "[REDACTED CREDENTIAL]").replace(/(\[REDACTED(?: CREDENTIAL| ABSOLUTE PATH)?\])\]+/gu, "$1");
+  return redactBareCredentialTokens(sanitized, "[REDACTED CREDENTIAL]").replace(
+    /(\[REDACTED(?: CREDENTIAL| ABSOLUTE PATH)?\])\]+/gu,
+    "$1",
+  );
 }
 
 function directCredentialPolicyIsUnsafe(value: string): boolean {
@@ -987,17 +993,44 @@ const BLOCK_NAME_SECRET_ENDING =
  * (`keys`, `tokens`, `cookies`) stay out on purpose.
  */
 const BLOCK_NAME_SECRET_WORD: ReadonlySet<string> = new Set([
-  "key", "token", "secret", "secrets", "password", "passwd", "passphrase", "passcode", "pwd", "jwt",
-  "cred", "creds", "credential", "credentials", "cookie", "apikey", "authtoken", "accesstoken",
-  "otp", "totp", "cvv", "seed", "mnemonic", "private", "signature",
+  "key",
+  "token",
+  "secret",
+  "secrets",
+  "password",
+  "passwd",
+  "passphrase",
+  "passcode",
+  "pwd",
+  "jwt",
+  "cred",
+  "creds",
+  "credential",
+  "credentials",
+  "cookie",
+  "apikey",
+  "authtoken",
+  "accesstoken",
+  "otp",
+  "totp",
+  "cvv",
+  "seed",
+  "mnemonic",
+  "private",
+  "signature",
 ]);
 /** Whole names that are secrets without a secret ending. */
 const BLOCK_NAME_SECRET_EXACT: ReadonlySet<string> = new Set([
-  "authorization", "sessionid", "sessiontoken", "privatekey",
+  "authorization",
+  "sessionid",
+  "sessiontoken",
+  "privatekey",
 ]);
 
 function blockNameIsSettingShaped(name: string): boolean {
-  return /^[A-Z0-9_-]*[A-Z][A-Z0-9_-]*$/u.test(name) || /[_-]/u.test(name) || /[a-z0-9][A-Z]/u.test(name);
+  return (
+    /^[A-Z0-9_-]*[A-Z][A-Z0-9_-]*$/u.test(name) || /[_-]/u.test(name) || /[a-z0-9][A-Z]/u.test(name)
+  );
 }
 
 function blockNameHasSecretHint(name: string): boolean {
@@ -1029,7 +1062,10 @@ const OPAQUE_BLOCK_TOKEN = /^(?=[^\s]*\d)(?=[^\s]*[A-Za-z])[A-Za-z0-9+/_=.-]{12,
  * existing credential detectors flag it, or it is a single opaque token.
  */
 function labelBlockLooksLikeCredential(block: string): boolean {
-  const lines = block.split(/\r\n|[\r\n]/u).map((line) => line.trim()).filter(Boolean);
+  const lines = block
+    .split(/\r\n|[\r\n]/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
   return (
     containsHighConfidenceSecretIncludingEncodings(block) ||
     (lines.length === 1 && OPAQUE_BLOCK_TOKEN.test(lines[0]!)) ||
@@ -1048,7 +1084,10 @@ const RECOVERY_NUMBER_PREFIX = /^\d{1,2}[.):-](?=[A-Za-z])/u;
 
 /** The words of a possible recovery phrase, without list numbers. */
 function recoveryPhraseWords(text: string): string[] {
-  return text.trim().replace(/[.,;:!]+$/u, "").split(/[\s,]+/u)
+  return text
+    .trim()
+    .replace(/[.,;:!]+$/u, "")
+    .split(/[\s,]+/u)
     .map((word) => word.replace(RECOVERY_NUMBER_PREFIX, ""))
     .filter((word) => word && !RECOVERY_NUMBERING.test(word));
 }
@@ -1063,7 +1102,8 @@ function recoveryPhraseWords(text: string): string[] {
 function isRecoveryPhrase(text: string): boolean {
   const words = recoveryPhraseWords(text);
   if (words.length < 12) return false;
-  const oneCase = words.every((word) => /^[a-z]+$/u.test(word)) ||
+  const oneCase =
+    words.every((word) => /^[a-z]+$/u.test(word)) ||
     words.every((word) => /^[A-Z]+$/u.test(word)) ||
     words.every((word) => /^[A-Z][a-z]+$/u.test(word));
   return oneCase && words.every((word) => RECOVERY_WORD.test(word.toLowerCase()));
@@ -1100,17 +1140,83 @@ const WEAK_SECRET_NAME = /(?:seed|signature|otp|cvv|pin|private)s?$/u;
  * compared without `-` and `_`.
  */
 const PLAIN_WEAK_VALUE: ReadonlySet<string> = new Set([
-  "sha1", "sha224", "sha256", "sha384", "sha512", "sha3", "md5", "hmac", "hmacsha1", "hmacsha256",
-  "hmacsha512", "hs256", "hs384", "hs512", "rs256", "rs384", "rs512", "es256", "es384", "es512",
-  "ps256", "eddsa", "ed25519", "ecdsa", "rsa", "rsasha256", "dsa", "pss", "pkcs1", "pkcs8",
-  "base64", "base64url", "hex", "utf8", "string", "str", "number", "boolean", "bool", "int",
-  "integer", "float", "bytes", "buffer", "object", "array", "any", "unknown", "text", "sms",
-  "email", "voice", "app", "authenticator", "totp", "hotp", "push", "random", "auto", "default",
-  "fixed", "static", "disabled", "enabled", "pending", "unset", "empty", "hidden", "masked",
-  "public", "internal", "protected", "readonly",
+  "sha1",
+  "sha224",
+  "sha256",
+  "sha384",
+  "sha512",
+  "sha3",
+  "md5",
+  "hmac",
+  "hmacsha1",
+  "hmacsha256",
+  "hmacsha512",
+  "hs256",
+  "hs384",
+  "hs512",
+  "rs256",
+  "rs384",
+  "rs512",
+  "es256",
+  "es384",
+  "es512",
+  "ps256",
+  "eddsa",
+  "ed25519",
+  "ecdsa",
+  "rsa",
+  "rsasha256",
+  "dsa",
+  "pss",
+  "pkcs1",
+  "pkcs8",
+  "base64",
+  "base64url",
+  "hex",
+  "utf8",
+  "string",
+  "str",
+  "number",
+  "boolean",
+  "bool",
+  "int",
+  "integer",
+  "float",
+  "bytes",
+  "buffer",
+  "object",
+  "array",
+  "any",
+  "unknown",
+  "text",
+  "sms",
+  "email",
+  "voice",
+  "app",
+  "authenticator",
+  "totp",
+  "hotp",
+  "push",
+  "random",
+  "auto",
+  "default",
+  "fixed",
+  "static",
+  "disabled",
+  "enabled",
+  "pending",
+  "unset",
+  "empty",
+  "hidden",
+  "masked",
+  "public",
+  "internal",
+  "protected",
+  "readonly",
 ]);
 /** A count of tokens, such as `max_tokens` or `inputTokens`, not a credential. */
-const TOKEN_COUNT_NAME = /(?:tokens|^(?:max|min|num|total|input|output|prompt|completion|cached|reasoning)token)$/u;
+const TOKEN_COUNT_NAME =
+  /(?:tokens|^(?:max|min|num|total|input|output|prompt|completion|cached|reasoning)token)$/u;
 const PLAIN_INTEGER = /^\d{1,3}(?:[,_]\d{3})+[,;]?$|^\d+[,;]?$/u;
 /** A long opaque token, like a key or a wallet seed in hex or base64. */
 const OPAQUE_SEED_VALUE = /^(?!\d+$)[A-Za-z0-9+/=_.-]{16,}$/u;
@@ -1120,12 +1226,14 @@ const SAME_LINE_NAMED_VALUE =
   /(^|[^A-Za-z0-9_.$])((?:\*{1,2}|_{1,2}|~~)?(["'`]?)([A-Za-z_][A-Za-z0-9_-]{0,63})\3(?:\*{1,2}|_{1,2}|~~)?[ \t]*(?::(?!:)|=(?![=>~]))[ \t]*)(?=[^\s])/gu;
 const REFERENCE_VALUE =
   /^(?:\$|%[A-Za-z_]|(?:process|import\.meta)\.env\b|os\.environ\b|Deno\.env\b|getenv\(|env\(|\[REDACTED|<[^>]*>$|\*{3,}|x{3,}$|(?:\/|~\/|\.\.?\/)|(?:true|false|null|undefined|none|nil|yes|no|on|off|required|optional|n\/a)\b)/iu;
-const CALL_OR_MEMBER_VALUE = /^[A-Za-z_$][A-Za-z0-9_$]*(?:\??\.[A-Za-z_$][A-Za-z0-9_$]*)*(?:\(|\??\.[A-Za-z_$])/u;
-const PLAIN_NAME_PREFIX = /(?:^|[\r\n])[ \t]*(?:(?:[-*+\u2022]|\d{1,3}[.)])[ \t]+)?(?:\*{1,2}|_{1,2}|~~)?$/u;
+const CALL_OR_MEMBER_VALUE =
+  /^[A-Za-z_$][A-Za-z0-9_$]*(?:\??\.[A-Za-z_$][A-Za-z0-9_$]*)*(?:\(|\??\.[A-Za-z_$])/u;
+const PLAIN_NAME_PREFIX =
+  /(?:^|[\r\n])[ \t]*(?:(?:[-*+\u2022]|\d{1,3}[.)])[ \t]+)?(?:\*{1,2}|_{1,2}|~~)?$/u;
 
 function secretValueEnd(line: string, start: number, toEndOfLine: boolean): number {
   const quote = line[start];
-  if (quote === "\"" || quote === "'" || quote === "`") {
+  if (quote === '"' || quote === "'" || quote === "`") {
     const close = line.indexOf(quote, start + 1);
     return close === -1 ? line.length : close + 1;
   }
@@ -1142,9 +1250,7 @@ function secretValueEnd(line: string, start: number, toEndOfLine: boolean): numb
 function secretValueIsShown(value: string): boolean {
   const unquoted = value.replace(/^["'`]|["'`]$/gu, "").trim();
   return (
-    unquoted.length < 3 ||
-    REFERENCE_VALUE.test(unquoted) ||
-    CALL_OR_MEMBER_VALUE.test(unquoted)
+    unquoted.length < 3 || REFERENCE_VALUE.test(unquoted) || CALL_OR_MEMBER_VALUE.test(unquoted)
   );
 }
 
@@ -1174,11 +1280,14 @@ export function redactSecretNamedSameLineValues(value: string): string {
     const twoWordStart = quoted ? undefined : twoWordSecretNameStart(value, offset, name);
     if (twoWordStart === undefined && !blockNameHasSecretHint(name)) continue;
     const nameStart = twoWordStart ?? offset;
-    const firstWord = twoWordStart === undefined ? "" : value.slice(twoWordStart, offset).trim().toLowerCase();
+    const firstWord =
+      twoWordStart === undefined ? "" : value.slice(twoWordStart, offset).trim().toLowerCase();
     const normalized = name.toLowerCase().replace(/[_-]/gu, "");
     // `PIN code` and `PIN number` count anywhere, like `PIN`.
-    const shortCaps = !quoted && (twoWordStart === undefined ? /^[A-Z]{2,4}$/u.test(name) : firstWord === "pin");
-    const settingShaped = !shortCaps && twoWordStart === undefined && (quoted || blockNameIsSettingShaped(name));
+    const shortCaps =
+      !quoted && (twoWordStart === undefined ? /^[A-Z]{2,4}$/u.test(name) : firstWord === "pin");
+    const settingShaped =
+      !shortCaps && twoWordStart === undefined && (quoted || blockNameIsSettingShaped(name));
     const equals = match[2]!.trimEnd().endsWith("=");
     const valueStart = offset + match[2]!.length;
     const quotedValue = /["'`]/u.test(value[valueStart] ?? "");
@@ -1189,29 +1298,62 @@ export function redactSecretNamedSameLineValues(value: string): string {
     const phrase = isRecoveryPhrase(rest);
     // A whole recovery phrase under a secret name is never prose, so it hides
     // after a leading word too (`Secret recovery phrase:`, `My seed phrase:`).
-    if (!settingShaped && !shortCaps && !equals && !phrase &&
-      !PLAIN_NAME_PREFIX.test(value.slice(Math.max(0, nameStart - 64), nameStart))) continue;
+    if (
+      !settingShaped &&
+      !shortCaps &&
+      !equals &&
+      !phrase &&
+      !PLAIN_NAME_PREFIX.test(value.slice(Math.max(0, nameStart - 64), nameStart))
+    )
+      continue;
     // Code such as `const pin = readPin()` stays; a quoted literal still hides.
     if (!quotedValue && sourceCodeAssignmentContext(value, offset)) continue;
     // A token count such as `max_tokens: 4096` is a number, not a credential.
-    if (TOKEN_COUNT_NAME.test(normalized) && PLAIN_INTEGER.test(rest.replace(/^["'`]|["'`]$/gu, "").split(/\s/u)[0]!.replace(/["'`]/gu, ""))) continue;
+    if (
+      TOKEN_COUNT_NAME.test(normalized) &&
+      PLAIN_INTEGER.test(
+        rest
+          .replace(/^["'`]|["'`]$/gu, "")
+          .split(/\s/u)[0]!
+          .replace(/["'`]/gu, ""),
+      )
+    )
+      continue;
     // A list of recovery or backup codes hides as a whole once one has a digit.
-    const codeList = (firstWord === "recovery" || firstWord === "backup") && /^codes?$/iu.test(name) &&
+    const codeList =
+      (firstWord === "recovery" || firstWord === "backup") &&
+      /^codes?$/iu.test(name) &&
       /\d/u.test(rest.split(/\s/u)[0]!);
-    const valueEnd = secretValueEnd(line, valueStart, (settingShaped && !equals) || phrase || codeList);
+    const valueEnd = secretValueEnd(
+      line,
+      valueStart,
+      (settingShaped && !equals) || phrase || codeList,
+    );
     const secret = value.slice(valueStart, valueEnd);
     if (valueEnd <= valueStart || secretValueIsShown(secret)) continue;
     const unquotedSecret = secret.trim().replace(/^["'`]|["'`]$/gu, "");
     if (!phrase && twoWordStart === undefined && WEAK_SECRET_NAME.test(normalized)) {
       // A seed is a secret only as a recovery phrase or a long opaque token.
-      if (/seeds?$/u.test(normalized) && !/mnemonic|phrase/u.test(normalized) &&
-        !OPAQUE_SEED_VALUE.test(unquotedSecret)) continue;
+      if (
+        /seeds?$/u.test(normalized) &&
+        !/mnemonic|phrase/u.test(normalized) &&
+        !OPAQUE_SEED_VALUE.test(unquotedSecret)
+      )
+        continue;
       if (PLAIN_WEAK_VALUE.has(unquotedSecret.toLowerCase().replace(/[-_]/gu, ""))) continue;
     }
     // After a prose word, a value followed by more words is a sentence, such
     // as `Token: the parser emits it`, unless the word carries a digit.
-    if (!settingShaped && !equals && !phrase && !codeList && !quotedValue &&
-      secret.trim() !== rest && !/\d/u.test(secret)) continue;
+    if (
+      !settingShaped &&
+      !equals &&
+      !phrase &&
+      !codeList &&
+      !quotedValue &&
+      secret.trim() !== rest &&
+      !/\d/u.test(secret)
+    )
+      continue;
     redacted += `${value.slice(cursor, valueStart)}[REDACTED]`;
     cursor = valueEnd;
   }
@@ -1231,7 +1373,11 @@ const CODE_NAME = /(?:recovery|backup)codes?$/u;
 const RECOVERY_CODE = /^(?=[^\s]*\d)[A-Za-z0-9]{3,}(?:-[A-Za-z0-9]{3,})*[,;]?$/u;
 
 /** Whether a name owns a recovery phrase or a list of recovery codes. */
-function phraseOrCodeName(value: string, nameOffset: number, name: string): "phrase" | "code" | undefined {
+function phraseOrCodeName(
+  value: string,
+  nameOffset: number,
+  name: string,
+): "phrase" | "code" | undefined {
   const twoWordStart = twoWordSecretNameStart(value, nameOffset, name);
   if (twoWordStart !== undefined) {
     const first = value.slice(twoWordStart, nameOffset).trim().toLowerCase();
@@ -1251,7 +1397,10 @@ function isPhraseWordLine(line: string): boolean {
 
 /** A line of recovery codes, possibly numbered. */
 function isCodeLine(line: string): boolean {
-  const codes = line.trim().split(/\s+/u).filter((token) => !RECOVERY_CODE_NUMBERING.test(token));
+  const codes = line
+    .trim()
+    .split(/\s+/u)
+    .filter((token) => !RECOVERY_CODE_NUMBERING.test(token));
   return codes.length > 0 && codes.every((code) => RECOVERY_CODE.test(code));
 }
 const RECOVERY_CODE_NUMBERING = /^\d{1,2}[.)]$/u;
@@ -1275,7 +1424,8 @@ function redactUnindentedPhraseBlocks(value: string): string {
     const valueStart = offset + match[0].length;
     const lineTest = kind === "phrase" ? isPhraseWordLine : isCodeLine;
     let lineEnd = valueStart;
-    while (lineEnd < value.length && value[lineEnd] !== "\r" && value[lineEnd] !== "\n") lineEnd += 1;
+    while (lineEnd < value.length && value[lineEnd] !== "\r" && value[lineEnd] !== "\n")
+      lineEnd += 1;
     const sameLine = value.slice(valueStart, lineEnd);
     if (sameLine.trim() && !lineTest(sameLine)) continue;
     const parts = sameLine.trim() ? [sameLine] : [];
@@ -1306,7 +1456,8 @@ function redactUnindentedPhraseBlocks(value: string): string {
         const run = parts.slice(0, count).join(" ");
         if (!isRecoveryPhrase(run)) continue;
         longest ??= ends[count - 1];
-        if (STANDARD_PHRASE_LENGTHS.has(recoveryPhraseWords(run).length)) valueEnd = ends[count - 1];
+        if (STANDARD_PHRASE_LENGTHS.has(recoveryPhraseWords(run).length))
+          valueEnd = ends[count - 1];
       }
       valueEnd ??= longest;
     }
@@ -1314,7 +1465,8 @@ function redactUnindentedPhraseBlocks(value: string): string {
     if (sameLine.trim()) {
       redacted += `${value.slice(cursor, valueStart)}[REDACTED]`;
     } else {
-      const breakEnd = value[lineEnd] === "\r" && value[lineEnd + 1] === "\n" ? lineEnd + 2 : lineEnd + 1;
+      const breakEnd =
+        value[lineEnd] === "\r" && value[lineEnd + 1] === "\n" ? lineEnd + 2 : lineEnd + 1;
       redacted += `${value.slice(cursor, breakEnd)}[REDACTED]`;
     }
     cursor = valueEnd;
@@ -1339,11 +1491,16 @@ export function redactSensitiveNextLineBlocks(text: string): string {
     if (offset === undefined || offset < cursor) continue;
     const name = match[2]!;
     const nameOffset = offset + match[0].indexOf(name);
-    if (!blockNameHasSecretHint(name) && twoWordSecretNameStart(value, nameOffset, name) === undefined) continue;
+    if (
+      !blockNameHasSecretHint(name) &&
+      twoWordSecretNameStart(value, nameOffset, name) === undefined
+    )
+      continue;
     const blockStart = offset + match[0].length;
     const valueEnd = indentedEnvironmentValueEnd(value, blockStart);
     if (valueEnd <= blockStart) continue;
-    const lineBreak = value[blockStart] === "\r" && value[blockStart + 1] === "\n" ? "\r\n" : value[blockStart]!;
+    const lineBreak =
+      value[blockStart] === "\r" && value[blockStart + 1] === "\n" ? "\r\n" : value[blockStart]!;
     let indentEnd = blockStart + lineBreak.length;
     while (value[indentEnd] === " " || value[indentEnd] === "\t") indentEnd += 1;
     redacted += `${value.slice(cursor, blockStart)}${value.slice(blockStart, indentEnd)}[REDACTED]`;
@@ -1482,8 +1639,11 @@ function sanitizeVariant(value: string, includeEnvironment: boolean): string {
   // such as `Passcode: 482913`, as the saved helper conversation does.
   const environmentSafe = includeEnvironment
     ? redactSecretNamedSameLineValues(
-      redactEnvironmentAssignments(blockSafe).replace(/(\[REDACTED ENVIRONMENT VALUE\])\]+/gu, "$1"),
-    )
+        redactEnvironmentAssignments(blockSafe).replace(
+          /(\[REDACTED ENVIRONMENT VALUE\])\]+/gu,
+          "$1",
+        ),
+      )
     : blockSafe;
   const pathSafe = sanitizePaths(sanitizePaths(environmentSafe));
   return includeEnvironment ? redactWrappedSecretTails(pathSafe) : pathSafe;

@@ -17,7 +17,9 @@ test("a moved workspace folder is named above the composer and the message waits
   await composer.press("Enter");
   await expect(page.getByText(E2E_ASSISTANT_RESPONSE)).toHaveCount(1, { timeout: 15_000 });
   // Let the first response settle so the next Enter sends instead of queueing.
-  await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0, {
+    timeout: 15_000,
+  });
 
   const moved = `${workspaceDir}-moved`;
   await rename(workspaceDir, moved);
@@ -50,11 +52,15 @@ test("Continue in a new chat carries a chat whose folder is gone, and the unsent
   await composer.fill("Hello before the folder moves");
   await composer.press("Enter");
   await expect(page.getByText(E2E_ASSISTANT_RESPONSE)).toHaveCount(1, { timeout: 15_000 });
-  await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0, {
+    timeout: 15_000,
+  });
   // A second workspace to continue in, made after the chat so the chat stays in the seeded one.
   await page.evaluate(async () => {
     const bridge = (
-      window as unknown as { aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } } }
+      window as unknown as {
+        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+      }
     ).aidenAPI.ipc;
     await bridge.invoke("workspaces:create", { name: "Another workspace", permission: "ask" });
   });
@@ -69,7 +75,9 @@ test("Continue in a new chat carries a chat whose folder is gone, and the unsent
     const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
     const clipboard = new DataTransfer();
     clipboard.items.add(new File([bytes], "clipboard.png", { type: "image/png" }));
-    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }));
+    element.dispatchEvent(
+      new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }),
+    );
   }, ONE_PIXEL_PNG_BASE64);
   const removeImage = page.getByRole("button", { name: "Remove Pasted image.png" });
   await expect(removeImage).toBeVisible();

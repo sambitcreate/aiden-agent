@@ -63,11 +63,7 @@ test("switching chats clears the old reading and drops its in-flight response", 
   assert.deepEqual(h.published, [null, null]);
   h.requests[0].reply.resolve(reading(900));
   await settle();
-  assert.deepEqual(
-    h.published,
-    [null, null],
-    "chat a's reading must not paint chat b",
-  );
+  assert.deepEqual(h.published, [null, null], "chat a's reading must not paint chat b");
   void h.feed.refresh();
   assert.equal(h.requests[1].chatId, "b");
   h.requests[1].reply.resolve(reading(100));
@@ -89,7 +85,10 @@ test("the draft-free history follows every trigger except typing, even with a sa
   h.requests[1].reply.resolve(reading(120));
   await settle();
   assert.deepEqual(h.published, [null, 150]);
-  assert.deepEqual(h.histories, [{ chatId: "a", tokens: null }, { chatId: "a", tokens: 120 }]);
+  assert.deepEqual(h.histories, [
+    { chatId: "a", tokens: null },
+    { chatId: "a", tokens: 120 },
+  ]);
 
   // Typing re-prices only the meter.
   h.fireTimers();
@@ -104,7 +103,10 @@ test("the draft-free history follows every trigger except typing, even with a sa
   h.requests[3].reply.resolve(reading(121));
   await settle();
   h.feed.showChat("b");
-  assert.deepEqual(h.histories.slice(-2), [{ chatId: "a", tokens: 121 }, { chatId: "b", tokens: null }]);
+  assert.deepEqual(h.histories.slice(-2), [
+    { chatId: "a", tokens: 121 },
+    { chatId: "b", tokens: null },
+  ]);
 });
 
 test("an older draft-free history response never overwrites a newer one", async () => {
@@ -124,7 +126,10 @@ test("an older draft-free history response never overwrites a newer one", async 
   h.requests[1].reply.resolve(reading(140));
   h.requests[0].reply.resolve(reading(150));
   await settle();
-  assert.deepEqual(h.histories, [{ chatId: "a", tokens: null }, { chatId: "a", tokens: 90 }]);
+  assert.deepEqual(h.histories, [
+    { chatId: "a", tokens: null },
+    { chatId: "a", tokens: 90 },
+  ]);
   assert.deepEqual(h.published, [null, 90]);
 });
 
@@ -154,11 +159,7 @@ test("a live generation cancels the post-send draft refresh and ignores ambient 
   void h.feed.refresh();
   h.feed.draftChanged("");
   h.feed.setLive(true);
-  assert.equal(
-    h.timers.size,
-    0,
-    "the draft reset refresh must not fire mid-turn",
-  );
+  assert.equal(h.timers.size, 0, "the draft reset refresh must not fire mid-turn");
   h.requests[0].reply.resolve(reading(10));
   await settle();
   // Live stream readings still land.
@@ -241,22 +242,14 @@ test("a push outside a live turn re-reads with the live selection instead of pai
   await settle();
   // Manual compaction: main prices the persisted model with no draft.
   h.feed.pushed("a", reading(999));
-  assert.deepEqual(
-    h.published,
-    [null, 10],
-    "the persisted-model reading never paints",
-  );
+  assert.deepEqual(h.published, [null, 10], "the persisted-model reading never paints");
   assert.equal(h.requests.length, 2);
   assert.equal(h.requests[1].draft, "draft");
   h.requests[1].reply.resolve(reading(4));
   await settle();
   assert.deepEqual(h.published, [null, 10, 4]);
   h.feed.pushed("b", reading(1));
-  assert.equal(
-    h.requests.length,
-    2,
-    "another chat's push never triggers a read",
-  );
+  assert.equal(h.requests.length, 2, "another chat's push never triggers a read");
 });
 
 test("a workspace scope change clears the old reading even if the re-read fails", async () => {

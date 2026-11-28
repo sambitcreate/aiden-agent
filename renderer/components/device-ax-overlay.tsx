@@ -46,7 +46,10 @@ export function DeviceAxOverlay(props: {
 }) {
   const { hostId, deviceId, grants, poll, refreshKey, onStatus } = props;
   const platform = props.platform ?? "ios";
-  const [tree, setTree] = React.useState<{ elements: DeviceAxElement[]; root: { width: number; height: number } | null }>({
+  const [tree, setTree] = React.useState<{
+    elements: DeviceAxElement[];
+    root: { width: number; height: number } | null;
+  }>({
     elements: [],
     root: null,
   });
@@ -62,7 +65,10 @@ export function DeviceAxOverlay(props: {
       try {
         const grant = await grants.get();
         if (stopped) return;
-        const next = await fetchDeviceAxTree({ hostId, deviceId, grant, platform }, controller.signal);
+        const next = await fetchDeviceAxTree(
+          { hostId, deviceId, grant, platform },
+          controller.signal,
+        );
         if (stopped) return;
         setTree({ elements: next.elements, root: next.root });
         onStatus({ loading: false, count: next.elements.length, error: next.errors[0] ?? null });
@@ -74,7 +80,10 @@ export function DeviceAxOverlay(props: {
       }
       // The next read starts only after this one finished, so slow dumps never pile up.
       if (!stopped && poll) {
-        timer = setTimeout(() => void read(), platform === "android" ? ANDROID_AX_POLL_MS : DEVICE_AX_POLL_MS);
+        timer = setTimeout(
+          () => void read(),
+          platform === "android" ? ANDROID_AX_POLL_MS : DEVICE_AX_POLL_MS,
+        );
       }
     };
     void read();
@@ -94,7 +103,11 @@ export function DeviceAxOverlay(props: {
   );
 
   const elements = React.useMemo(
-    () => tree.elements.map((element) => ({ ...element, ...axRectToDisplay(element, tree.root, props.screen) })),
+    () =>
+      tree.elements.map((element) => ({
+        ...element,
+        ...axRectToDisplay(element, tree.root, props.screen),
+      })),
     [tree, props.screen],
   );
 
@@ -134,7 +147,9 @@ export function DeviceAxOverlay(props: {
           }}
         />
       ))}
-      {hovered ? <DeviceAxLabel element={elements.find((element) => element.id === hovered.id) ?? hovered} /> : null}
+      {hovered ? (
+        <DeviceAxLabel element={elements.find((element) => element.id === hovered.id) ?? hovered} />
+      ) : null}
     </div>
   );
 }

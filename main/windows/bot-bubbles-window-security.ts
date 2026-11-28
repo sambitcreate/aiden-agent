@@ -31,16 +31,28 @@ export function isTrustedBotBubbleSender(
 }
 
 /** Bot notifications that name one Bot; an overlay hears them only for its heads. */
-const BOT_SCOPED_NOTIFICATIONS = new Set(["bots:changed", "bots:approval", "bots:approval-settled", "bots:attention"]);
+const BOT_SCOPED_NOTIFICATIONS = new Set([
+  "bots:changed",
+  "bots:approval",
+  "bots:approval-settled",
+  "bots:attention",
+]);
 
 /**
  * Whether an overlay may receive this broadcast. Appearance, settings and
  * bubble notifications always pass; a Bot-scoped one passes only for a
  * bubbled Bot (or when it names no Bot, which means "re-read everything").
  */
-export function botBubbleOverlayHears(channel: string, payload: unknown, bubbledBotIds: ReadonlySet<string>): boolean {
+export function botBubbleOverlayHears(
+  channel: string,
+  payload: unknown,
+  bubbledBotIds: ReadonlySet<string>,
+): boolean {
   if (!BOT_SCOPED_NOTIFICATIONS.has(channel)) return true;
-  const botId = typeof payload === "object" && payload !== null ? (payload as { botId?: unknown }).botId : undefined;
+  const botId =
+    typeof payload === "object" && payload !== null
+      ? (payload as { botId?: unknown }).botId
+      : undefined;
   if (botId === undefined) return channel === "bots:changed";
   return typeof botId === "string" && bubbledBotIds.has(botId);
 }

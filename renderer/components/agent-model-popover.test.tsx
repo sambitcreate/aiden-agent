@@ -43,7 +43,13 @@ const slider: AgentSliderSettings = {
     { id: "fast", label: "Fast", providerId: "acme", model: "fast-model" },
     { id: "balanced", label: "Balanced", providerId: "acme", model: "mid-model" },
     { id: "locked", label: "Locked", providerId: "locked", model: "locked-model" },
-    { id: "smart", label: "Smart", providerId: "acme", model: "smart-model", thinkingLevel: "high" },
+    {
+      id: "smart",
+      label: "Smart",
+      providerId: "acme",
+      model: "smart-model",
+      thinkingLevel: "high",
+    },
     { id: "spare", label: "Spare" },
   ],
 };
@@ -161,7 +167,10 @@ test("on a stop the thumb reads the stop, its model and effort; it always has a 
   assert.equal(slide.getAttribute("aria-valuetext"), "Balanced, Mid Model");
   // The trigger shows the stop's name and still says which model runs.
   const trigger = screen.getByRole("button", { name: /^Selected model:/u });
-  assert.match(trigger.getAttribute("aria-label") ?? "", /Mid Model, Balanced on the Agent Slider/u);
+  assert.match(
+    trigger.getAttribute("aria-label") ?? "",
+    /Mid Model, Balanced on the Agent Slider/u,
+  );
   assert.match(trigger.textContent ?? "", /Balanced$/u);
 });
 
@@ -172,8 +181,14 @@ test("a chat on no stop is Custom: the thumb rests on the home stop and names th
   assert.equal(slide.getAttribute("aria-valuetext"), "Custom: Other Model");
   // The same model at an effort no stop names is Custom too.
   cleanup();
-  await openPopover({ agentSlider: slider }, { providerId: "acme", model: "mid-model", thinkingLevel: "low" });
-  assert.match((await screen.findByRole("slider")).getAttribute("aria-valuetext") ?? "", /^Custom: Mid Model/u);
+  await openPopover(
+    { agentSlider: slider },
+    { providerId: "acme", model: "mid-model", thinkingLevel: "low" },
+  );
+  assert.match(
+    (await screen.findByRole("slider")).getAttribute("aria-valuetext") ?? "",
+    /^Custom: Mid Model/u,
+  );
 });
 
 test("arrow keys, Home and End move only among stops that can run", async () => {
@@ -182,7 +197,11 @@ test("arrow keys, Home and End move only among stops that can run", async () => 
 
   // Right from Balanced skips the signed-out stop and lands on Smart, at its effort.
   fireEvent.keyDown(thumb(), { key: "ArrowRight" });
-  assert.deepEqual(stops[stops.length - 1], { providerId: "acme", model: "smart-model", thinkingLevel: "high" });
+  assert.deepEqual(stops[stops.length - 1], {
+    providerId: "acme",
+    model: "smart-model",
+    thinkingLevel: "high",
+  });
   assert.equal(thumb().getAttribute("aria-valuenow"), "4");
   assert.equal(thumb().getAttribute("aria-valuetext"), "Smart, Smart Model, High");
 
@@ -198,7 +217,10 @@ test("arrow keys, Home and End move only among stops that can run", async () => 
 });
 
 test("in Custom a step starts from the home stop", async () => {
-  const { stops } = await openPopover({ agentSlider: slider }, { providerId: "acme", model: "other-model" });
+  const { stops } = await openPopover(
+    { agentSlider: slider },
+    { providerId: "acme", model: "other-model" },
+  );
   await screen.findByRole("slider");
   fireEvent.keyDown(thumb(), { key: "ArrowLeft" });
   assert.deepEqual(stops, [{ providerId: "acme", model: "fast-model" }]);
@@ -235,7 +257,12 @@ test("choosing a model for an unavailable stop saves it on the stop and moves th
   assert.deepEqual(stops[0], { providerId: "acme", model: "other-model" });
   assert.equal(picks.length, 0, "a reassign is a stop pick, not a list pick");
   const saved = server.current().agentSlider;
-  assert.deepEqual(saved?.stops[4], { id: "spare", label: "Spare", providerId: "acme", model: "other-model" });
+  assert.deepEqual(saved?.stops[4], {
+    id: "spare",
+    label: "Spare",
+    providerId: "acme",
+    model: "other-model",
+  });
   // The other stops are untouched.
   assert.deepEqual(saved?.stops.slice(0, 4), slider.stops.slice(0, 4));
   await waitFor(() => assert.equal(screen.queryByRole("slider"), null));

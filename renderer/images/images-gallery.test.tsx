@@ -17,10 +17,28 @@ import type { ImageActions } from "./viewer/use-image-actions";
 afterEach(() => cleanup());
 
 const item = (seed: string, runId: string, patch: Partial<GalleryItem> = {}): GalleryItem => ({
-  assetId: seed.repeat(64), width: 1024, height: 1024, mediaType: "image/png", runId, runState: "succeeded", workflowId: "wf", nodeId: "g", variant: 0,
-  index: 0, provider: "openrouter", model: "m", createdAt: 1_000, saved: true, thumbUrl: `thumb-${seed}`, ...patch,
+  assetId: seed.repeat(64),
+  width: 1024,
+  height: 1024,
+  mediaType: "image/png",
+  runId,
+  runState: "succeeded",
+  workflowId: "wf",
+  nodeId: "g",
+  variant: 0,
+  index: 0,
+  provider: "openrouter",
+  model: "m",
+  createdAt: 1_000,
+  saved: true,
+  thumbUrl: `thumb-${seed}`,
+  ...patch,
 });
-const ITEMS = [item("a", "r2", { prompt: "A lighthouse at dusk" }), item("b", "r2"), item("c", "r1")];
+const ITEMS = [
+  item("a", "r2", { prompt: "A lighthouse at dusk" }),
+  item("b", "r2"),
+  item("c", "r1"),
+];
 
 function fakeActions(log: string[], originals: Record<string, string> = {}): ImageActions {
   return {
@@ -35,7 +53,17 @@ function fakeActions(log: string[], originals: Record<string, string> = {}): Ima
 }
 
 /** The viewer as a host mounts it: it owns the index and closes on request. */
-function Host({ items, start, actions, onUse }: { items: GalleryItem[]; start: number; actions: ImageActions; onUse?: (item: GalleryItem) => void }) {
+function Host({
+  items,
+  start,
+  actions,
+  onUse,
+}: {
+  items: GalleryItem[];
+  start: number;
+  actions: ImageActions;
+  onUse?: (item: GalleryItem) => void;
+}) {
   const [index, setIndex] = React.useState<number | null>(start);
   return (
     <ImageViewer
@@ -54,7 +82,13 @@ const stageImage = () => document.querySelector<HTMLImageElement>("[data-image-v
 
 test("the viewer shows the thumbnail first, then the decoded original, and steps with the arrow keys", async () => {
   const log: string[] = [];
-  render(<Host items={ITEMS} start={0} actions={fakeActions(log, { [ITEMS[0]!.assetId]: "original-a" })} />);
+  render(
+    <Host
+      items={ITEMS}
+      start={0}
+      actions={fakeActions(log, { [ITEMS[0]!.assetId]: "original-a" })}
+    />,
+  );
   const dialog = await screen.findByRole("dialog");
   assert.ok(within(dialog).getByText("1 of 3"));
   assert.ok(within(dialog).getByText("A lighthouse at dusk"));
@@ -74,15 +108,29 @@ test("the viewer shows the thumbnail first, then the decoded original, and steps
 
   // The filmstrip marks the active image and is a single tab stop.
   const strip = within(dialog).getByRole("list", { name: "Images" });
-  const current = within(strip).getAllByRole("button").filter((button) => button.getAttribute("aria-current") === "true");
-  assert.deepEqual(current.map((button) => button.getAttribute("aria-label")), ["Image 1 of 3"]);
-  assert.deepEqual(within(strip).getAllByRole("button").map((button) => button.tabIndex), [0, -1, -1]);
+  const current = within(strip)
+    .getAllByRole("button")
+    .filter((button) => button.getAttribute("aria-current") === "true");
+  assert.deepEqual(
+    current.map((button) => button.getAttribute("aria-label")),
+    ["Image 1 of 3"],
+  );
+  assert.deepEqual(
+    within(strip)
+      .getAllByRole("button")
+      .map((button) => button.tabIndex),
+    [0, -1, -1],
+  );
   fireEvent.click(within(strip).getByRole("button", { name: "Image 3 of 3" }));
   await waitFor(() => assert.ok(within(dialog).getByText("3 of 3")));
 });
 
 test("a filmstrip jump past the shown thumbnails keeps focus in the filmstrip, and never takes it from elsewhere", async () => {
-  const many = Array.from({ length: 30 }, (_, index) => item(String.fromCharCode(97 + (index % 26)) + String(index), "r1", { assetId: index.toString(16).padStart(64, "0") }));
+  const many = Array.from({ length: 30 }, (_, index) =>
+    item(String.fromCharCode(97 + (index % 26)) + String(index), "r1", {
+      assetId: index.toString(16).padStart(64, "0"),
+    }),
+  );
   render(<Host items={many} start={0} actions={fakeActions([])} />);
   const dialog = await screen.findByRole("dialog");
   const strip = within(dialog).getByRole("list", { name: "Images" });
@@ -104,7 +152,14 @@ test("a filmstrip jump past the shown thumbnails keeps focus in the filmstrip, a
 test("the viewer's actions act on the viewed image, a drag goes out natively, and Escape closes", async () => {
   const log: string[] = [];
   const used: string[] = [];
-  render(<Host items={ITEMS} start={1} actions={fakeActions(log)} onUse={(picked) => used.push(picked.assetId[0]!)} />);
+  render(
+    <Host
+      items={ITEMS}
+      start={1}
+      actions={fakeActions(log)}
+      onUse={(picked) => used.push(picked.assetId[0]!)}
+    />,
+  );
   const dialog = await screen.findByRole("dialog");
   fireEvent.click(within(dialog).getByRole("button", { name: "Save…" }));
   fireEvent.click(within(dialog).getByRole("button", { name: "Copy Image" }));
@@ -130,7 +185,9 @@ test("history groups images by run with each run's state and count, and Save All
   render(
     <HistoryPanel
       status="ready"
-      items={ITEMS.map((entry) => (entry.runId === "r2" ? { ...entry, runState: "partial" as const } : entry))}
+      items={ITEMS.map((entry) =>
+        entry.runId === "r2" ? { ...entry, runState: "partial" as const } : entry,
+      )}
       saveFolderLabel="Pictures › Aiden"
       now={1_000 + 5 * 60_000}
       onOpen={(index) => opened.push(index)}
@@ -140,7 +197,10 @@ test("history groups images by run with each run's state and count, and Save All
     />,
   );
   const headings = screen.getAllByRole("heading").map((heading) => heading.textContent);
-  assert.deepEqual(headings, ["5 min ago · Finished with errors · 2 images", "5 min ago · Finished · 1 image"]);
+  assert.deepEqual(headings, [
+    "5 min ago · Finished with errors · 2 images",
+    "5 min ago · Finished · 1 image",
+  ]);
   fireEvent.click(screen.getByRole("button", { name: "Save all 1 image from this run…" }));
   fireEvent.click(screen.getByRole("button", { name: "Save all 2 images from this run…" }));
   // Thumbnails open the viewer over the whole history, in its order.
@@ -155,7 +215,15 @@ test("history groups images by run with each run's state and count, and Save All
 
 test("an empty history explains where images will appear and that they are saved automatically", () => {
   render(
-    <HistoryPanel status="ready" items={[]} saveFolderLabel="Pictures › Aiden" onOpen={() => undefined} onSaveAll={() => undefined} onRevealFolder={() => undefined} onRetry={() => undefined} />,
+    <HistoryPanel
+      status="ready"
+      items={[]}
+      saveFolderLabel="Pictures › Aiden"
+      onOpen={() => undefined}
+      onSaveAll={() => undefined}
+      onRevealFolder={() => undefined}
+      onRetry={() => undefined}
+    />,
   );
   assert.ok(screen.getByText("No images yet"));
   assert.ok(screen.getByText(/saved to Pictures › Aiden/u));
@@ -164,7 +232,16 @@ test("an empty history explains where images will appear and that they are saved
 test("the side panel switches between Run and History, and only the run headline is a status region", async () => {
   const snapshot: RunSnapshot = {
     version: 1,
-    run: { runId: "r", workflowId: "wf", workflowRevision: 1, scope: { kind: "all" }, state: "succeeded", requestLimit: 1, requestsSent: 1, createdAt: 1 },
+    run: {
+      runId: "r",
+      workflowId: "wf",
+      workflowRevision: 1,
+      scope: { kind: "all" },
+      state: "succeeded",
+      requestLimit: 1,
+      requestsSent: 1,
+      createdAt: 1,
+    },
     attempts: [],
   };
   function Panel() {
@@ -173,14 +250,24 @@ test("the side panel switches between Run and History, and only the run headline
       <EditorSidePanel
         tab={tab}
         onTabChange={setTab}
-        run={<RunPanel snapshot={snapshot} nodeTitles={new Map()} onStop={() => undefined} onRetry={() => undefined} />}
+        run={
+          <RunPanel
+            snapshot={snapshot}
+            nodeTitles={new Map()}
+            onStop={() => undefined}
+            onRetry={() => undefined}
+          />
+        }
         history={<p>History body</p>}
       />
     );
   }
   render(<Panel />);
   assert.equal(screen.getByRole("tab", { name: "Run" }).getAttribute("aria-selected"), "true");
-  assert.deepEqual(screen.getAllByRole("status").map((node) => node.textContent), ["Finished"]);
+  assert.deepEqual(
+    screen.getAllByRole("status").map((node) => node.textContent),
+    ["Finished"],
+  );
   const history = screen.getByRole("tab", { name: "History" });
   fireEvent.mouseDown(history, { button: 0 });
   fireEvent.click(history);
@@ -200,15 +287,30 @@ test("before any run, the Run tab says how to start one", () => {
 test("Output thumbnails are buttons that open the viewer, with a +N tile past four", () => {
   const opened: number[] = [];
   const actions: OutputImageActions = {
-    open: (index) => opened.push(index), saveAs: () => undefined, copy: () => undefined, reveal: () => undefined, revealLabel: "Show in Finder",
+    open: (index) => opened.push(index),
+    saveAs: () => undefined,
+    copy: () => undefined,
+    reveal: () => undefined,
+    revealLabel: "Show in Finder",
   };
-  const refs = ["a", "b", "c", "d", "e", "f"].map((seed) => ({ assetId: seed.repeat(64), width: 8, height: 8, mediaType: "image/png" as const }));
+  const refs = ["a", "b", "c", "d", "e", "f"].map((seed) => ({
+    assetId: seed.repeat(64),
+    width: 8,
+    height: 8,
+    mediaType: "image/png" as const,
+  }));
   const urls = Object.fromEntries(refs.map((ref) => [ref.assetId, `thumb-${ref.assetId[0]}`]));
   render(<OutputNodeBody images={refs} urls={urls} actions={actions} />);
-  const buttons = within(screen.getByRole("list", { name: "Generated images" })).getAllByRole("button");
-  assert.deepEqual(buttons.map((button) => button.getAttribute("aria-label") ?? button.querySelector("img")?.getAttribute("alt")), [
-    "Generated image 1", "Generated image 2", "Generated image 3", "Generated image 4 and 2 more",
-  ]);
+  const buttons = within(screen.getByRole("list", { name: "Generated images" })).getAllByRole(
+    "button",
+  );
+  assert.deepEqual(
+    buttons.map(
+      (button) =>
+        button.getAttribute("aria-label") ?? button.querySelector("img")?.getAttribute("alt"),
+    ),
+    ["Generated image 1", "Generated image 2", "Generated image 3", "Generated image 4 and 2 more"],
+  );
   assert.ok(screen.getByText("+2"));
   fireEvent.click(buttons[1]!);
   fireEvent.click(buttons[3]!);
@@ -218,11 +320,22 @@ test("Output thumbnails are buttons that open the viewer, with a +N tile past fo
 test("Shift+F10 on a focused Output thumbnail opens its menu from the keyboard", async () => {
   const saved: string[] = [];
   const actions: OutputImageActions = {
-    open: () => undefined, saveAs: (assetId) => saved.push(assetId[0]!), copy: () => undefined, reveal: () => undefined, revealLabel: "Show in Finder",
+    open: () => undefined,
+    saveAs: (assetId) => saved.push(assetId[0]!),
+    copy: () => undefined,
+    reveal: () => undefined,
+    revealLabel: "Show in Finder",
   };
-  const refs = ["a", "b"].map((seed) => ({ assetId: seed.repeat(64), width: 8, height: 8, mediaType: "image/png" as const }));
+  const refs = ["a", "b"].map((seed) => ({
+    assetId: seed.repeat(64),
+    width: 8,
+    height: 8,
+    mediaType: "image/png" as const,
+  }));
   render(<OutputNodeBody images={refs} urls={{}} actions={actions} />);
-  const second = within(screen.getByRole("list", { name: "Generated images" })).getAllByRole("button")[1]!;
+  const second = within(screen.getByRole("list", { name: "Generated images" })).getAllByRole(
+    "button",
+  )[1]!;
   second.focus();
   fireEvent.keyDown(second, { key: "F10", shiftKey: true });
   fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Save…" }));
@@ -248,7 +361,16 @@ test("the gallery hook re-reads when a run of its workflow ends, and not while i
   assert.equal(latest!.items.length, 0);
   const snapshot = (state: RunSnapshot["run"]["state"], workflowId = "wf"): RunSnapshot => ({
     version: 2,
-    run: { runId: "r9", workflowId, workflowRevision: 1, scope: { kind: "all" }, state, requestLimit: 1, requestsSent: 1, createdAt: 1 },
+    run: {
+      runId: "r9",
+      workflowId,
+      workflowRevision: 1,
+      scope: { kind: "all" },
+      state,
+      requestLimit: 1,
+      requestsSent: 1,
+      createdAt: 1,
+    },
     attempts: [],
   });
   act(() => {

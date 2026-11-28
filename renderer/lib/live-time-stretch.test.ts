@@ -5,7 +5,10 @@ import { LiveTimeStretcher } from "./live-time-stretch.js";
 const RATE = 24_000;
 
 function tone(frequency: number, seconds: number, amplitude = 0.5): Float32Array {
-  return Float32Array.from({ length: Math.round(RATE * seconds) }, (_, n) => amplitude * Math.sin((2 * Math.PI * frequency * n) / RATE));
+  return Float32Array.from(
+    { length: Math.round(RATE * seconds) },
+    (_, n) => amplitude * Math.sin((2 * Math.PI * frequency * n) / RATE),
+  );
 }
 
 /** Streams `input` through the stretcher in Live-sized chunks, then drains it. */

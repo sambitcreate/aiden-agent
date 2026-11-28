@@ -34,11 +34,26 @@ test("focusAfterRemoval prefers the row after the removed ones, then the one bef
   };
   const [a, b, c, d] = [make("a"), make("b"), make("c"), make("d")];
   const rows = [a, b, c, d];
-  assert.equal(focusAfterRemoval(rows, new Set([b, c]), () => true), d);
-  assert.equal(focusAfterRemoval(rows, new Set([c, d]), () => true), b);
-  assert.equal(focusAfterRemoval(rows, new Set([b]), (row) => row !== c), d);
-  assert.equal(focusAfterRemoval(rows, new Set([a, b, c, d]), () => true), null);
-  assert.equal(focusAfterRemoval(rows, new Set(), () => true), null);
+  assert.equal(
+    focusAfterRemoval(rows, new Set([b, c]), () => true),
+    d,
+  );
+  assert.equal(
+    focusAfterRemoval(rows, new Set([c, d]), () => true),
+    b,
+  );
+  assert.equal(
+    focusAfterRemoval(rows, new Set([b]), (row) => row !== c),
+    d,
+  );
+  assert.equal(
+    focusAfterRemoval(rows, new Set([a, b, c, d]), () => true),
+    null,
+  );
+  assert.equal(
+    focusAfterRemoval(rows, new Set(), () => true),
+    null,
+  );
 });
 
 test("a removed focused row hands focus to the next row, then the previous, then the list", async () => {

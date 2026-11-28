@@ -21,7 +21,6 @@ export const FEATURED_PI_PROVIDER_IDS = [
 
 const featuredProviderIds = new Set<string>(FEATURED_PI_PROVIDER_IDS);
 
-
 export const PROVIDER_ICON_SLUGS = [
   "amazon-bedrock",
   "ant-ling",

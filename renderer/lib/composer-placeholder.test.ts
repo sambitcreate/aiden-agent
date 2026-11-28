@@ -96,7 +96,12 @@ test("a response running in the background reads as waiting, not as a second not
 test("a state that is still loading reads as a short wait, not as an error", () => {
   for (const readinessMessage of ["Loading chat…", "Loading chat models…"]) {
     assert.equal(
-      composerPlaceholder({ ready: false, readinessMessage, hasMessages: false, chatId: "chat-6ea3b" }),
+      composerPlaceholder({
+        ready: false,
+        readinessMessage,
+        hasMessages: false,
+        chatId: "chat-6ea3b",
+      }),
       PENDING_COMPOSER_PLACEHOLDER,
     );
   }
@@ -119,12 +124,21 @@ test("chat readiness reports the first blocking reason in priority order", () =>
   // An unknown save status outranks the background response: sending must stop
   // until the user reloads, whatever else is running.
   assert.match(
-    chatReadinessMessage({ ...clear, appendReconciliationRequired: true, drainingWithoutProjection: true }) ?? "",
+    chatReadinessMessage({
+      ...clear,
+      appendReconciliationRequired: true,
+      drainingWithoutProjection: true,
+    }) ?? "",
     /Reload Aiden/u,
   );
   // A chat that is still loading has no other state to report yet.
   assert.equal(
-    chatReadinessMessage({ ...clear, loading: true, missing: true, drainingWithoutProjection: true }),
+    chatReadinessMessage({
+      ...clear,
+      loading: true,
+      missing: true,
+      drainingWithoutProjection: true,
+    }),
     "Loading chat…",
   );
   assert.match(chatReadinessMessage({ ...clear, missing: true }) ?? "", /no longer available/u);

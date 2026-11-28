@@ -31,7 +31,10 @@ import {
   scheduledGenerationSurface,
   startSurfaceGeneration,
 } from "./conversation-surface-generation.js";
-import { acpHarnessUnavailableReason, isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
+import {
+  acpHarnessUnavailableReason,
+  isAcpHarnessProvider,
+} from "../../renderer/shared/acp-harness.js";
 import { createBotRoutineExecutor, type BotRoutineExecutor } from "./scheduled-bot-routines.js";
 import type { ScheduledRunTrigger } from "./schedule-service-core.js";
 import type { AgentNoticePost } from "./follow-through/notice-delivery.js";
@@ -161,10 +164,15 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       ports: async () => (await import("./scheduled-bot-routines-main.js")).botRoutinePorts(),
       // Everything a Bot says to the person leaves through one funnel: the
       // delivery log, the Mac banner, Telegram and the phone feed.
-      deliver: async (input) => (await import("./bot-delivery/funnel-main.js")).botDeliveryFunnel().deliver(input),
+      deliver: async (input) =>
+        (await import("./bot-delivery/funnel-main.js")).botDeliveryFunnel().deliver(input),
       broadcast: (payload) => ipcMain.broadcast("bots:changed", payload),
       afterRun: async (task, run, trigger) => {
-        const outcome = await (await import("./bot-routine-recovery-main.js")).botRoutineRecovery().afterRun(task, run, trigger);
+        const outcome = await (
+          await import("./bot-routine-recovery-main.js")
+        )
+          .botRoutineRecovery()
+          .afterRun(task, run, trigger);
         // Reflection runs on its own time; the routine's delivery never waits for it.
         void import("./bot-learning/learning-main.js")
           .then(({ afterRoutineRunForLearning }) => afterRoutineRunForLearning(task, run))
@@ -204,7 +212,10 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   }
 
   /** Runs the task's script; `output` is what it printed. Holds no chat. */
-  async function runTaskScript(task: ScheduledTask, signal: AbortSignal): Promise<TaskRunExecution> {
+  async function runTaskScript(
+    task: ScheduledTask,
+    signal: AbortSignal,
+  ): Promise<TaskRunExecution> {
     if (task.permission !== "full") {
       throw new Error(
         "Script tasks require Full permission because scripts can change the system.",
@@ -220,13 +231,25 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       signal,
     });
     if (processResult.aborted) {
-      return { result: "blocked", output: processResult.stdout, error: "Scheduled task was cancelled." };
+      return {
+        result: "blocked",
+        output: processResult.stdout,
+        error: "Scheduled task was cancelled.",
+      };
     }
     if (processResult.timedOut) {
-      return { result: "error", output: processResult.stdout, error: "Script timed out after 60 seconds." };
+      return {
+        result: "error",
+        output: processResult.stdout,
+        error: "Script timed out after 60 seconds.",
+      };
     }
     if (processResult.outputLimitExceeded) {
-      return { result: "error", output: processResult.stdout, error: "Script exceeded the 1 MB output limit." };
+      return {
+        result: "error",
+        output: processResult.stdout,
+        error: "Script exceeded the 1 MB output limit.",
+      };
     }
     if (processResult.exitCode !== 0) {
       const detail =
@@ -254,7 +277,10 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       if (execution.result === "blocked") {
         await appendClaimedChatMessage(chatId, execution.error ?? "Scheduled task was cancelled.");
       } else if (execution.result === "error") {
-        await appendClaimedChatMessage(chatId, `Scheduled task failed: ${execution.error ?? "unknown error"}`);
+        await appendClaimedChatMessage(
+          chatId,
+          `Scheduled task failed: ${execution.error ?? "unknown error"}`,
+        );
       } else if (execution.result === "success") {
         await appendClaimedChatMessage(chatId, execution.output);
       }
@@ -266,7 +292,12 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   }
 
   /** Everything a model run needs, checked before it takes the chat. */
-  async function prepareLlm(task: ScheduledTask, chatId: string, prompt: string, keepChatModel = false) {
+  async function prepareLlm(
+    task: ScheduledTask,
+    chatId: string,
+    prompt: string,
+    keepChatModel = false,
+  ) {
     assertAssistantScheduleExecutionBoundary(task);
     await assertTaskWorkspaceReady(task);
     const settings = await configStore.getSettings();
@@ -397,7 +428,12 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       // The person pressed Stop in the chat: the partial answer stays there,
       // and the run counts as stopped, never as a success or a failure.
       if (!("message" in terminal) && terminal.timeline?.status === "cancelled") {
-        return { result: "blocked", output: terminal.content, error: "Stopped before it finished.", cancelled: true };
+        return {
+          result: "blocked",
+          output: terminal.content,
+          error: "Stopped before it finished.",
+          cancelled: true,
+        };
       }
       if ("message" in terminal) {
         const error = terminal.message;
@@ -488,7 +524,9 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     },
     ensureOwnChat: ensureChat,
     runInOwnChat: (task, chatId, signal, eventText) =>
-      task.mode === "script" ? executeScript(task, chatId, signal) : executeLlm(task, chatId, signal, eventText),
+      task.mode === "script"
+        ? executeScript(task, chatId, signal)
+        : executeLlm(task, chatId, signal, eventText),
     reportOwnChatFailure: async (task, chatId, message) => {
       if (task.mode === "llm") await llmClient.waitForChatIdle(chatId);
       await appendSerializedChatMessage(chatId, message, scheduledTurnId(task.id, "error"));
@@ -498,9 +536,13 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     waitForIdle: (chatId, timeoutMs) => llmClient.waitForChatIdleWithin(chatId, timeoutMs),
     postNotice: (post) => noticeDelivery.post(post),
     inChatOrder: (chatId, work) => noticeDelivery.inOrder(chatId, work),
-    cadence: (task) => task.trigger ? formatScheduledTaskTriggerLabel(task.trigger) : formatScheduledTaskCadence(task.cron, task.timezone),
+    cadence: (task) =>
+      task.trigger
+        ? formatScheduledTaskTriggerLabel(task.trigger)
+        : formatScheduledTaskCadence(task.cron, task.timezone),
     now: Date.now,
-    onError: (error) => logger.warn("schedule", "A scheduled task's chat delivery step failed.", error),
+    onError: (error) =>
+      logger.warn("schedule", "A scheduled task's chat delivery step failed.", error),
   });
 
   /**
@@ -516,11 +558,16 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
 
   return {
     claimRoutineExecution: (task: ScheduledTask, trigger: ScheduledRunTrigger) =>
-      import("./scheduled-bot-routines-main.js").then(({ claimBotRoutineExecution }) => claimBotRoutineExecution(task, trigger)),
+      import("./scheduled-bot-routines-main.js").then(({ claimBotRoutineExecution }) =>
+        claimBotRoutineExecution(task, trigger),
+      ),
     deliverTaskRunToChat,
     /** A record-only card where the task's runs land (a trigger or the task was paused). */
-    recordInLandingChat: (task: ScheduledTask, card: Parameters<typeof chatDelivery.recordInLandingChat>[1], options?: Parameters<typeof chatDelivery.recordInLandingChat>[2]) =>
-      chatDelivery.recordInLandingChat(task, card, options),
+    recordInLandingChat: (
+      task: ScheduledTask,
+      card: Parameters<typeof chatDelivery.recordInLandingChat>[1],
+      options?: Parameters<typeof chatDelivery.recordInLandingChat>[2],
+    ) => chatDelivery.recordInLandingChat(task, card, options),
     /** The project folder a task's script runs in, after the same checks as a run. */
     async taskWorkspaceFolder(task: ScheduledTask): Promise<string | undefined> {
       return (await assertTaskWorkspaceReady(task))?.folderPath;
@@ -557,7 +604,11 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
         assertAssistantScheduleExecutionBoundary(task);
         // A trigger's event reaches the model only as fenced data after the prompt.
         const eventText = trigger?.kind === "event" ? trigger.payload : undefined;
-        const outcome = await deliverTaskRunToChat(task, { trigger, ...(eventText ? { eventText } : {}), signal: controller.signal });
+        const outcome = await deliverTaskRunToChat(task, {
+          trigger,
+          ...(eventText ? { eventText } : {}),
+          signal: controller.signal,
+        });
         chatId = outcome.chatId;
         output = outcome.output;
         if (outcome.kind === "skipped") {
@@ -589,7 +640,8 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           ...(result === "blocked" && cancelled ? { cancelled: true as const } : {}),
         });
         reportScheduledTaskRan(result, trigger, cancelled);
-        if (result !== "silent" && result !== "skipped" && !cancelled) notify(task, error ?? output, chatId);
+        if (result !== "silent" && result !== "skipped" && !cancelled)
+          notify(task, error ?? output, chatId);
         ipcMain.broadcast("schedule:updated", { taskId: task.id, run });
         return run;
       } finally {

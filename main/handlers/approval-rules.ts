@@ -27,14 +27,24 @@ export interface ApprovalRuleHandlerDependencies<Event> {
   broadcast(channel: typeof APPROVAL_RULE_CHANNELS.changed, payload: Record<string, never>): void;
 }
 
-export function registerApprovalRuleHandlers<Event = unknown>(deps: ApprovalRuleHandlerDependencies<Event>): () => void {
+export function registerApprovalRuleHandlers<Event = unknown>(
+  deps: ApprovalRuleHandlerDependencies<Event>,
+): () => void {
   deps.handle(APPROVAL_RULE_CHANNELS.list, async () => deps.page.list());
   deps.handle(APPROVAL_RULE_CHANNELS.picker, async () => deps.page.picker());
-  deps.handle(APPROVAL_RULE_CHANNELS.add, async (_event, input) => deps.page.add(parseApprovalRuleAddInput(input)));
-  deps.handle(APPROVAL_RULE_CHANNELS.change, async (_event, input) => deps.page.change(parseApprovalRuleChangeInput(input)));
+  deps.handle(APPROVAL_RULE_CHANNELS.add, async (_event, input) =>
+    deps.page.add(parseApprovalRuleAddInput(input)),
+  );
+  deps.handle(APPROVAL_RULE_CHANNELS.change, async (_event, input) =>
+    deps.page.change(parseApprovalRuleChangeInput(input)),
+  );
   deps.handle(APPROVAL_RULE_CHANNELS.remove, async (_event, input) => {
-    const record = input !== null && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined;
-    if (!record || Object.keys(record).some((key) => key !== "ref")) throw new Error("Invalid rule.");
+    const record =
+      input !== null && typeof input === "object" && !Array.isArray(input)
+        ? (input as Record<string, unknown>)
+        : undefined;
+    if (!record || Object.keys(record).some((key) => key !== "ref"))
+      throw new Error("Invalid rule.");
     return deps.page.remove(parseApprovalRuleRowRef(record.ref));
   });
   deps.handle(APPROVAL_RULE_CHANNELS.refresh, async () => deps.page.refresh());

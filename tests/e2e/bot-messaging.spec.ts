@@ -50,7 +50,14 @@ test("Bot messages name their sender and saved replies stay visible without star
           text: "Could you check the plan?",
           at: 1000,
         },
-        { id: "answer", type: "assistant", text: "I checked it.", toolCalls: [], stopReason: "stop", at: 1001 },
+        {
+          id: "answer",
+          type: "assistant",
+          text: "I checked it.",
+          toolCalls: [],
+          stopReason: "stop",
+          at: 1001,
+        },
         {
           id: "reply",
           type: "bot_message",
@@ -89,12 +96,16 @@ test("Bot messages name their sender and saved replies stay visible without star
     }));
   }, bot);
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  const conversation = page.getByLabel("Conversation", {exact: true});
+  const conversation = page.getByLabel("Conversation", { exact: true });
   await expect(conversation.getByText("Jester asked", { exact: true })).toBeVisible();
   await expect(conversation.getByText("Could you check the plan?", { exact: true })).toBeVisible();
   await expect(conversation.getByText("COS replied", { exact: true }).first()).toBeVisible();
-  await expect(conversation.getByText("The appointments are ready.", { exact: true })).toBeVisible();
-  await expect(conversation.getByText("COS is waiting for you to approve: Create 3 events", { exact: true })).toBeVisible();
+  await expect(
+    conversation.getByText("The appointments are ready.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    conversation.getByText("COS is waiting for you to approve: Create 3 events", { exact: true }),
+  ).toBeVisible();
   await expect(conversation.getByText("Saved answer while paused", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /^(Allow once|Approve|Retry)$/u })).toHaveCount(0);
   await expect(page.getByPlaceholder("Ask Planner")).toBeVisible();
@@ -105,14 +116,30 @@ test("Bot messages name their sender and saved replies stay visible without star
   ] as const) {
     await page.emulateMedia({ colorScheme: scheme, reducedMotion: "reduce" });
     await page.evaluate(async (mode) => {
-      const appearance = await window.aidenAPI.ipc.invoke("settings:getAppearance") as Record<string, unknown>;
-      await window.aidenAPI.ipc.invoke("settings:previewAppearance", { ...appearance, mode, reduceMotion: "on" });
+      const appearance = (await window.aidenAPI.ipc.invoke("settings:getAppearance")) as Record<
+        string,
+        unknown
+      >;
+      await window.aidenAPI.ipc.invoke("settings:previewAppearance", {
+        ...appearance,
+        mode,
+        reduceMotion: "on",
+      });
     }, scheme);
     await expect(page.locator("html")).toHaveAttribute("data-appearance-scheme", scheme);
-    await aiden.app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]!.setSize(size, 900), width);
-    await expect(conversation.getByText("Saved answer while paused", { exact: true })).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await aiden.app.evaluate(
+      ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]!.setSize(size, 900),
+      width,
+    );
+    await expect(
+      conversation.getByText("Saved answer while paused", { exact: true }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`bot-messaging-${scheme}.png`) });
   }
-  expect(aiden.lmStudio.requests.filter((request) => request.url === "/v1/chat/completions")).toHaveLength(0);
+  expect(
+    aiden.lmStudio.requests.filter((request) => request.url === "/v1/chat/completions"),
+  ).toHaveLength(0);
 });

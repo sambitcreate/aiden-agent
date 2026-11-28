@@ -35,18 +35,22 @@ const MODEL_ID = "model_opaque_1";
 function catalog(): BotCapabilityCatalog {
   return {
     revision: CATALOG_REVISION,
-    providers: [{
-      id: PROVIDER_ID,
-      label: "Configured provider",
-      available: true,
-      models: [{ id: MODEL_ID, label: "Configured model", available: true }],
-    }],
-    fileScopes: [{
-      id: "scope_bot_home",
-      label: "Bot folder",
-      available: true,
-      kind: "bot_home",
-    }],
+    providers: [
+      {
+        id: PROVIDER_ID,
+        label: "Configured provider",
+        available: true,
+        models: [{ id: MODEL_ID, label: "Configured model", available: true }],
+      },
+    ],
+    fileScopes: [
+      {
+        id: "scope_bot_home",
+        label: "Bot folder",
+        available: true,
+        kind: "bot_home",
+      },
+    ],
     shellAvailable: true,
     connections: [],
     skills: [],
@@ -92,9 +96,7 @@ function fixture(
     avatar?: AidenRemoteBotServiceOptions["avatar"];
     inbox?: AidenRemoteBotServiceOptions["inbox"];
     resolveProviderModel?: AidenRemoteBotServiceOptions["resolveProviderModel"];
-    withBotMutation?: NonNullable<
-      AidenRemoteBotServiceOptions["application"]["withBotMutation"]
-    >;
+    withBotMutation?: NonNullable<AidenRemoteBotServiceOptions["application"]["withBotMutation"]>;
     updateBotAccessError?: unknown;
     createBotError?: unknown;
     chatActivity?: boolean;
@@ -127,11 +129,7 @@ function fixture(
     async get(botId: string) {
       return structuredClone(bots.find(({ id }) => id === botId) ?? null);
     },
-    async createBot(input: {
-      audienceId: string;
-      bot: BotCreateInput;
-      access?: BotAccessUpdate;
-    }) {
+    async createBot(input: { audienceId: string; bot: BotCreateInput; access?: BotAccessUpdate }) {
       createCalls += 1;
       if (options.createBotError) throw options.createBotError;
       botSequence += 1;
@@ -199,10 +197,11 @@ function fixture(
     },
     async getCanonicalChat(botId: string) {
       const matching = [...chats.values()].filter((chat) => chat.botId === botId);
-      const selected = matching.sort((left, right) =>
-        right.updatedAt - left.updatedAt ||
-        right.createdAt - left.createdAt ||
-        left.id.localeCompare(right.id),
+      const selected = matching.sort(
+        (left, right) =>
+          right.updatedAt - left.updatedAt ||
+          right.createdAt - left.createdAt ||
+          left.id.localeCompare(right.id),
       )[0];
       return selected ? structuredClone(selected) : null;
     },
@@ -217,10 +216,11 @@ function fixture(
     async modelSelection(_audienceId: string, botId: string) {
       const matching = [...chats.values()]
         .filter((chat) => chat.botId === botId)
-        .sort((left, right) =>
-          right.updatedAt - left.updatedAt ||
-          right.createdAt - left.createdAt ||
-          left.id.localeCompare(right.id),
+        .sort(
+          (left, right) =>
+            right.updatedAt - left.updatedAt ||
+            right.createdAt - left.createdAt ||
+            left.id.localeCompare(right.id),
         );
       const selected = matching[0];
       return selected?.providerId === "source-provider" && selected.model === "source-model"
@@ -241,26 +241,22 @@ function fixture(
       if (current.revision !== input.expectedRevision) {
         throw new BotCapabilityRevisionConflictError(current.revision);
       }
-      const updated: BotAccessView = input.access.accessMode === "full"
-        ? { ...fullAccess(input.botId, `${current.revision}_next`) }
-        : {
-            botId: input.botId,
-            accessMode: "custom",
-            revision: `${current.revision}_next`,
-            policyEpoch: "policy_epoch_2",
-            summary: "Uses only the access you select. This chat can reduce it further.",
-            custom: structuredClone(input.access.custom),
-          };
+      const updated: BotAccessView =
+        input.access.accessMode === "full"
+          ? { ...fullAccess(input.botId, `${current.revision}_next`) }
+          : {
+              botId: input.botId,
+              accessMode: "custom",
+              revision: `${current.revision}_next`,
+              policyEpoch: "policy_epoch_2",
+              summary: "Uses only the access you select. This chat can reduce it further.",
+              custom: structuredClone(input.access.custom),
+            };
       policies.set(input.botId, updated);
       return structuredClone(updated);
     },
-    async withBotMutation<Result>(
-      botId: string,
-      action: () => Promise<Result>,
-    ): Promise<Result> {
-      return options.withBotMutation
-        ? options.withBotMutation(botId, action)
-        : action();
+    async withBotMutation<Result>(botId: string, action: () => Promise<Result>): Promise<Result> {
+      return options.withBotMutation ? options.withBotMutation(botId, action) : action();
     },
   };
 
@@ -320,28 +316,42 @@ test("a Bot summary carries issueCount only while it holds open issues, and an u
     },
   });
   const list = parseAidenRemoteBotList(await app.service.list());
-  assert.deepEqual(list.bots.map(({ id, issueCount }) => [id, issueCount]), [
-    ["bot_1", 2],
-    ["bot_2", undefined],
-    ["bot_3", undefined],
-  ]);
+  assert.deepEqual(
+    list.bots.map(({ id, issueCount }) => [id, issueCount]),
+    [
+      ["bot_1", 2],
+      ["bot_2", undefined],
+      ["bot_3", undefined],
+    ],
+  );
   assert.equal((await app.service.summaryOf("bot_1")).issueCount, 2);
 });
 
 test("one Bot the Remote contract can't carry is left out of the list, and the others still reach every device", async () => {
   // A clock that went back between creating and editing a Bot, and a name from before today's limit.
   const logged: string[] = [];
-  const app = fixture([
-    bot("bot_1"),
-    bot("bot_2", { createdAt: 5_000, updatedAt: 4_000 }),
-    bot("bot_3", { name: `Secret ${"N".repeat(200)}` }),
-    bot("bot_4"),
-  ], { log: (message) => logged.push(message) });
+  const app = fixture(
+    [
+      bot("bot_1"),
+      bot("bot_2", { createdAt: 5_000, updatedAt: 4_000 }),
+      bot("bot_3", { name: `Secret ${"N".repeat(200)}` }),
+      bot("bot_4"),
+    ],
+    { log: (message) => logged.push(message) },
+  );
   const list = parseAidenRemoteBotList(await app.service.list());
-  assert.deepEqual(list.bots.map(({ id }) => id), ["bot_1", "bot_4"]);
+  assert.deepEqual(
+    list.bots.map(({ id }) => id),
+    ["bot_1", "bot_4"],
+  );
   assert.equal(logged.length, 2, "each Bot left out is logged once");
-  assert.ok(logged.some((line) => line.includes("bot_2")) && logged.some((line) => line.includes("bot_3")));
-  assert.ok(logged.every((line) => !line.includes("Secret")), "the log names the Bot by id, never by its fields");
+  assert.ok(
+    logged.some((line) => line.includes("bot_2")) && logged.some((line) => line.includes("bot_3")),
+  );
+  assert.ok(
+    logged.every((line) => !line.includes("Secret")),
+    "the log names the Bot by id, never by its fields",
+  );
 });
 
 test("a Bot whose summary can't be read right now fails the list rather than leaving that Bot out", async () => {
@@ -357,38 +367,47 @@ test("a Bot whose summary can't be read right now fails the list rather than lea
       if (ids.length === 1 && ids[0] === "bot_2" && failing) {
         throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
       }
-      return new Map(ids.filter((id) => ids.length === 1 || id !== "bot_2").map((id) => [id, "idle"] as const));
+      return new Map(
+        ids.filter((id) => ids.length === 1 || id !== "bot_2").map((id) => [id, "idle"] as const),
+      );
     },
   });
   await assert.rejects(app.service.list(), /resource busy/u);
   assert.deepEqual(logged, [], "a read failure is not a contract problem");
   failing = false;
   const list = parseAidenRemoteBotList(await app.service.list());
-  assert.deepEqual(list.bots.map(({ id }) => id), ["bot_1", "bot_2", "bot_3"]);
+  assert.deepEqual(
+    list.bots.map(({ id }) => id),
+    ["bot_1", "bot_2", "bot_3"],
+  );
 });
 
 test("Remote Bot inbox and avatar adapter stay device-scoped, mutation-gated, and idempotent", async () => {
   const avatarCalls: string[] = [];
-  let asset: {
-    assetRevision: string;
-    mimeType: "image/png";
-    width: 512;
-    height: 512;
-    byteSize: number;
-  } | undefined;
+  let asset:
+    | {
+        assetRevision: string;
+        mimeType: "image/png";
+        width: 512;
+        height: 512;
+        byteSize: number;
+      }
+    | undefined;
   const app = fixture([bot("bot_1")], {
     inbox: {
       list: async (deviceId, input) => ({
-        conversations: [{
-          chatId: "chat_1",
-          botId: "bot_1",
-          title: input.query ?? "Inbox",
-          activityState: "waiting_for_approval",
-          canRespondToApproval: deviceId === "device_1",
-          createdAt: new Date(1_000).toISOString(),
-          updatedAt: new Date(2_000).toISOString(),
-          revision: "chat_revision_1",
-        }],
+        conversations: [
+          {
+            chatId: "chat_1",
+            botId: "bot_1",
+            title: input.query ?? "Inbox",
+            activityState: "waiting_for_approval",
+            canRespondToApproval: deviceId === "device_1",
+            createdAt: new Date(1_000).toISOString(),
+            updatedAt: new Date(2_000).toISOString(),
+            revision: "chat_revision_1",
+          },
+        ],
       }),
     },
     avatar: {
@@ -471,10 +490,7 @@ test("Remote Bot inbox and avatar adapter stay device-scoped, mutation-gated, an
     (await app.service.avatarContent("bot_1", first.assetRevision)).bytes.toString("utf8"),
     "hello",
   );
-  const fallback = await app.service.deleteAvatar(
-    "bot_1",
-    first.assetRevision,
-  );
+  const fallback = await app.service.deleteAvatar("bot_1", first.assetRevision);
   assert.equal(fallback.avatar.asset, undefined);
   assert.equal(avatarCalls.filter((call) => call.startsWith("delete:")).length, 1);
 
@@ -528,36 +544,30 @@ test("complete Remote Bot flow is exact, idempotent, revisioned, and Bot-classif
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
 
-  const chat = await app.service.createChat(
-    "device_1",
-    created.id,
-    "bot-chat-key-0001",
-    { providerId: PROVIDER_ID, modelId: MODEL_ID },
-  );
+  const chat = await app.service.createChat("device_1", created.id, "bot-chat-key-0001", {
+    providerId: PROVIDER_ID,
+    modelId: MODEL_ID,
+  });
   assert.equal(chat.botId, created.id);
   assert.equal(chat.providerId, "source-provider");
   assert.equal(chat.modelId, "source-model");
   assert.equal(app.resolvedSelections.length, 1);
-  const replayedChat = await app.service.createChat(
-    "device_1",
-    created.id,
-    "bot-chat-key-0001",
-    { providerId: PROVIDER_ID, modelId: MODEL_ID },
-  );
-  const reopenedChat = await app.service.createChat(
-    "device_1",
-    created.id,
-    "bot-chat-key-0002",
-    { providerId: "stale-provider", modelId: "stale-model" },
-  );
+  const replayedChat = await app.service.createChat("device_1", created.id, "bot-chat-key-0001", {
+    providerId: PROVIDER_ID,
+    modelId: MODEL_ID,
+  });
+  const reopenedChat = await app.service.createChat("device_1", created.id, "bot-chat-key-0002", {
+    providerId: "stale-provider",
+    modelId: "stale-model",
+  });
   assert.equal(replayedChat.id, chat.id);
   assert.equal(reopenedChat.id, chat.id);
   assert.equal(app.chats.size, 1);
   assert.equal(app.resolvedSelections.length, 1);
-  assert.deepEqual(
-    (await app.service.get(created.id, "device_1")).modelSelection,
-    { providerId: PROVIDER_ID, modelId: MODEL_ID },
-  );
+  assert.deepEqual((await app.service.get(created.id, "device_1")).modelSelection, {
+    providerId: PROVIDER_ID,
+    modelId: MODEL_ID,
+  });
 
   // Chat-scoped access routes are gone: a Bot's access changes only on the Bot.
   // Deleting erases the Bot; a stale If-Match is refused and changes nothing.
@@ -649,7 +659,9 @@ test("an invalidated provider inventory lease publishes neither Full nor Custom 
               true,
             );
           },
-          release: () => { released += 1; },
+          release: () => {
+            released += 1;
+          },
         };
       },
     });
@@ -674,19 +686,20 @@ test("an invalidated provider inventory lease publishes neither Full nor Custom 
     }
 
     await assert.rejects(
-      app.service.createChat(
-        "device_1",
-        botId,
-        `inventory-stale-${accessMode}-key`,
-        { providerId: PROVIDER_ID, modelId: MODEL_ID },
-      ),
+      app.service.createChat("device_1", botId, `inventory-stale-${accessMode}-key`, {
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+      }),
       (error: unknown) =>
         error instanceof AidenRemoteServiceError && error.code === "operation_stale",
     );
     assert.equal(app.chats.size, 0);
     assert.equal(app.chatPolicies.size, 0);
     assert.equal(released, 1);
-    assert.equal(app.notifications.some((entry) => entry.startsWith("chat:")), false);
+    assert.equal(
+      app.notifications.some((entry) => entry.startsWith("chat:")),
+      false,
+    );
   }
 });
 
@@ -712,7 +725,9 @@ test("a phone cannot set a Bot's chat activity through the identity patch, and t
   const app = fixture();
   const detail = await app.service.get("bot_1");
   await assert.rejects(
-    app.service.updateIdentity("bot_1", detail.revision, { chatActivity: { level: "summary", wording: "follows" } }),
+    app.service.updateIdentity("bot_1", detail.revision, {
+      chatActivity: { level: "summary", wording: "follows" },
+    }),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
   assert.equal("chatActivity" in detail, false);
@@ -725,7 +740,8 @@ test("stale identity and policy revisions return authoritative conflicts", async
     app.service.updateIdentity("bot_1", "stale_revision", { name: "Changed" }),
     (error: unknown) =>
       (error as { code?: string }).code === "revision_conflict" &&
-      (error as { details?: { currentRevision?: string } }).details?.currentRevision === detail.revision,
+      (error as { details?: { currentRevision?: string } }).details?.currentRevision ===
+        detail.revision,
   );
   await assert.rejects(
     app.service.updateAccess("device_1", "bot_1", "stale_policy", {
@@ -854,13 +870,25 @@ test("durable Bot idempotency publishes in-flight admission before mutation and 
 });
 
 test("Remote catalog preserves the strict optional global Skills gate", () => {
-  const saved = { ...catalog(), skills: [{ id: "skill:saved", label: "Saved skill", available: false }] };
+  const saved = {
+    ...catalog(),
+    skills: [{ id: "skill:saved", label: "Saved skill", available: false }],
+  };
   saved.providers[0]!.models[0]!.supportsImages = false;
   assert.equal(parseAidenRemoteBotCapabilityCatalog(saved).skillsEnabled, undefined);
-  assert.equal(parseAidenRemoteBotCapabilityCatalog({ ...saved, skillsEnabled: false }).skillsEnabled, false);
-  assert.equal(parseAidenRemoteBotCapabilityCatalog({ ...saved, skillsEnabled: true }).skillsEnabled, true);
+  assert.equal(
+    parseAidenRemoteBotCapabilityCatalog({ ...saved, skillsEnabled: false }).skillsEnabled,
+    false,
+  );
+  assert.equal(
+    parseAidenRemoteBotCapabilityCatalog({ ...saved, skillsEnabled: true }).skillsEnabled,
+    true,
+  );
   for (const invalid of [null, "false", 0, {}, []]) {
-    assert.throws(() => parseAidenRemoteBotCapabilityCatalog({ ...saved, skillsEnabled: invalid }), /skillsEnabled/u);
+    assert.throws(
+      () => parseAidenRemoteBotCapabilityCatalog({ ...saved, skillsEnabled: invalid }),
+      /skillsEnabled/u,
+    );
   }
 });
 
@@ -890,7 +918,11 @@ test("Remote targeted catalogs validate Bot ownership before forwarding the audi
 test("a phone saves Chat activity with PATCH only where bot-activity-v1 is wired", async () => {
   const wired = fixture([bot("bot_1")], { chatActivity: true });
   const before = await wired.service.get("bot_1");
-  assert.deepEqual(before.chatActivity, { level: "quiet", wording: "follows" }, "a Bot that never chose reads as the default");
+  assert.deepEqual(
+    before.chatActivity,
+    { level: "quiet", wording: "follows" },
+    "a Bot that never chose reads as the default",
+  );
 
   const saved = await wired.service.updateIdentity("bot_1", before.revision, {
     chatActivity: { level: "summary", wording: "thinking" },
@@ -898,10 +930,17 @@ test("a phone saves Chat activity with PATCH only where bot-activity-v1 is wired
   assert.deepEqual(saved.chatActivity, { level: "summary", wording: "thinking" });
   assert.notEqual(saved.revision, before.revision);
   assert.equal(saved.name, before.name, "only the choice changed");
-  assert.deepEqual((await wired.service.get("bot_1")).chatActivity, { level: "summary", wording: "thinking" });
+  assert.deepEqual((await wired.service.get("bot_1")).chatActivity, {
+    level: "summary",
+    wording: "thinking",
+  });
 
   const renamed = await wired.service.updateIdentity("bot_1", saved.revision, { name: "Renamed" });
-  assert.deepEqual(renamed.chatActivity, { level: "summary", wording: "thinking" }, "an absent value keeps the stored choice");
+  assert.deepEqual(
+    renamed.chatActivity,
+    { level: "summary", wording: "thinking" },
+    "an absent value keeps the stored choice",
+  );
 
   for (const invalid of [
     { level: "verbose", wording: "follows" },
@@ -917,11 +956,15 @@ test("a phone saves Chat activity with PATCH only where bot-activity-v1 is wired
 });
 
 test("a Mac without bot-activity-v1 neither shows nor accepts chatActivity", async () => {
-  const older = fixture([bot("bot_1", { chatActivity: { level: "detailed", wording: "follows" } })]);
+  const older = fixture([
+    bot("bot_1", { chatActivity: { level: "detailed", wording: "follows" } }),
+  ]);
   const detail = await older.service.get("bot_1");
   assert.equal("chatActivity" in detail, false);
   await assert.rejects(
-    older.service.updateIdentity("bot_1", detail.revision, { chatActivity: { level: "summary", wording: "follows" } }),
+    older.service.updateIdentity("bot_1", detail.revision, {
+      chatActivity: { level: "summary", wording: "follows" },
+    }),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
 });
@@ -929,37 +972,59 @@ test("a Mac without bot-activity-v1 neither shows nor accepts chatActivity", asy
 test("a Bot the person paused reads paused, with its flag, on every Bot read; other Bots carry neither", async () => {
   // The host builds the `bot:handoffs` view; the router projects it for other devices.
   const host = fixture([bot("bot_1"), bot("bot_2")], {
-    sessionStates: async (ids) => new Map(ids.map((id) => [id, id === "bot_1" ? "paused" : "idle"] as const)),
+    sessionStates: async (ids) =>
+      new Map(ids.map((id) => [id, id === "bot_1" ? "paused" : "idle"] as const)),
   });
   const list = parseAidenRemoteBotList(JSON.parse(JSON.stringify(await host.service.list())));
   assert.deepEqual(
     list.bots.map((summary) => [summary.id, summary.sessionState, summary.paused]),
-    [["bot_1", "paused", true], ["bot_2", "idle", undefined]],
+    [
+      ["bot_1", "paused", true],
+      ["bot_2", "idle", undefined],
+    ],
   );
-  const paused = parseAidenRemoteBotDetail(JSON.parse(JSON.stringify(await host.service.get("bot_1"))));
+  const paused = parseAidenRemoteBotDetail(
+    JSON.parse(JSON.stringify(await host.service.get("bot_1"))),
+  );
   assert.deepEqual([paused.sessionState, paused.paused], ["paused", true]);
   assert.equal("paused" in (await host.service.get("bot_2")), false);
-  assert.equal((await host.service.summaryOf("bot_1")).paused, true, "the preset and host-feed rows too");
+  assert.equal(
+    (await host.service.summaryOf("bot_1")).paused,
+    true,
+    "the preset and host-feed rows too",
+  );
 });
 
-
 test("a messaging patch changes only its selected switch and global setting writes once", async () => {
-  let enabled = true; const writes: boolean[] = [];
-  const h = fixture([bot("bot_1", {messagesOtherBots: false})], {messaging: {
-    enabled: async () => enabled,
-    setEnabled: async value => {writes.push(value); return enabled = value;},
-  }});
+  let enabled = true;
+  const writes: boolean[] = [];
+  const h = fixture([bot("bot_1", { messagesOtherBots: false })], {
+    messaging: {
+      enabled: async () => enabled,
+      setEnabled: async (value) => {
+        writes.push(value);
+        return (enabled = value);
+      },
+    },
+  });
   const before = await h.service.get("bot_1");
-  assert.deepEqual(before.botMessaging, {receive: true, send: false});
-  const updated = await h.service.updateIdentity("bot_1", before.revision, {botMessaging: {receive: false}});
-  assert.deepEqual(updated.botMessaging, {receive: false, send: false});
-  assert.equal(updated.name, before.name); assert.equal(updated.instructions, before.instructions);
+  assert.deepEqual(before.botMessaging, { receive: true, send: false });
+  const updated = await h.service.updateIdentity("bot_1", before.revision, {
+    botMessaging: { receive: false },
+  });
+  assert.deepEqual(updated.botMessaging, { receive: false, send: false });
+  assert.equal(updated.name, before.name);
+  assert.equal(updated.instructions, before.instructions);
   assert.equal(h.bots()[0]?.acceptsBotMessages, false);
-  assert.deepEqual((await h.service.list()).messaging, {enabled: true});
-  assert.deepEqual(await h.service.updateMessaging({enabled: false}), {enabled: false});
+  assert.deepEqual((await h.service.list()).messaging, { enabled: true });
+  assert.deepEqual(await h.service.updateMessaging({ enabled: false }), { enabled: false });
   assert.deepEqual(writes, [false]);
-  assert.deepEqual((await h.service.list()).messaging, {enabled: false});
-  await assert.rejects(h.service.updateMessaging({enabled: "false"}));
+  assert.deepEqual((await h.service.list()).messaging, { enabled: false });
+  await assert.rejects(h.service.updateMessaging({ enabled: "false" }));
   assert.deepEqual(writes, [false]);
-  await assert.rejects(fixture().service.updateIdentity("bot_1", "bot_revision_bot_1", {botMessaging: {send: false}}));
+  await assert.rejects(
+    fixture().service.updateIdentity("bot_1", "bot_revision_bot_1", {
+      botMessaging: { send: false },
+    }),
+  );
 });

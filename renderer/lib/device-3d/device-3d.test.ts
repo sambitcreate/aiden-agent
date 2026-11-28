@@ -8,8 +8,17 @@ import {
   readFramePreference,
   writeFramePreference,
 } from "./frame-mode.js";
-import { createPhoneInteraction, createRenderScheduler, phoneWheelNavigation } from "./interaction.js";
-import { createPhoneScene, phoneDisplayLayout, SCREEN_HEIGHT, updateDisplayUv } from "./phone-scene.js";
+import {
+  createPhoneInteraction,
+  createRenderScheduler,
+  phoneWheelNavigation,
+} from "./interaction.js";
+import {
+  createPhoneScene,
+  phoneDisplayLayout,
+  SCREEN_HEIGHT,
+  updateDisplayUv,
+} from "./phone-scene.js";
 import {
   ANDROID_PHONE_SHAPE,
   ANDROID_TABLET_SHAPE,
@@ -28,21 +37,35 @@ import {
 const last = <T>(items: readonly T[]): T | undefined => items[items.length - 1];
 
 const close = (actual: number, expected: number, epsilon = 1e-6) =>
-  assert.ok(Math.abs(actual - expected) <= epsilon, `${actual} is not within ${epsilon} of ${expected}`);
+  assert.ok(
+    Math.abs(actual - expected) <= epsilon,
+    `${actual} is not within ${epsilon} of ${expected}`,
+  );
 
 test("the display layout keeps a portrait aspect and maps each orientation to a rotation", () => {
-  const portrait = phoneDisplayLayout({ width: 1179, height: 2556, orientation: "portrait" }, 1179, 2556);
+  const portrait = phoneDisplayLayout(
+    { width: 1179, height: 2556, orientation: "portrait" },
+    1179,
+    2556,
+  );
   close(portrait.aspect, 1179 / 2556);
   assert.equal(portrait.rotation, 0);
   assert.equal(portrait.landscape, false);
   assert.equal(portrait.rawLandscape, false);
 
-  const left = phoneDisplayLayout({ width: 2556, height: 1179, orientation: "landscape_left" }, 2556, 1179);
+  const left = phoneDisplayLayout(
+    { width: 2556, height: 1179, orientation: "landscape_left" },
+    2556,
+    1179,
+  );
   close(left.aspect, 1179 / 2556);
   assert.equal(left.rotation, -Math.PI / 2);
   assert.equal(left.landscape, true);
   assert.equal(left.rawLandscape, true);
-  assert.equal(phoneDisplayLayout({ width: 1, height: 2, orientation: "landscape_right" }, 0, 0).rotation, Math.PI / 2);
+  assert.equal(
+    phoneDisplayLayout({ width: 1, height: 2, orientation: "landscape_right" }, 0, 0).rotation,
+    Math.PI / 2,
+  );
   assert.equal(
     phoneDisplayLayout({ width: 1, height: 2, orientation: "portrait_upside_down" }, 0, 0).rotation,
     Math.PI,
@@ -59,17 +82,29 @@ test("texture coordinates follow the raw framebuffer in every orientation", () =
     const position = geometry.getAttribute("position");
     const uv = geometry.getAttribute("uv");
     for (let index = 0; index < position.count; index += 1) {
-      if (position.getX(index) === -0.5 && position.getY(index) === 1) return [uv.getX(index), uv.getY(index)];
+      if (position.getX(index) === -0.5 && position.getY(index) === 1)
+        return [uv.getX(index), uv.getY(index)];
     }
     throw new Error("no top-left vertex");
   };
-  assert.deepEqual(uvAt(phoneDisplayLayout({ width: 1, height: 2, orientation: "portrait" }, 1, 2)), [0, 1]);
+  assert.deepEqual(
+    uvAt(phoneDisplayLayout({ width: 1, height: 2, orientation: "portrait" }, 1, 2)),
+    [0, 1],
+  );
   // Raw landscape buffers are rotated into the portrait body.
-  assert.deepEqual(uvAt(phoneDisplayLayout({ width: 2, height: 1, orientation: "landscape_left" }, 2, 1)), [1, 1]);
-  assert.deepEqual(uvAt(phoneDisplayLayout({ width: 2, height: 1, orientation: "landscape_right" }, 2, 1)), [0, 0]);
+  assert.deepEqual(
+    uvAt(phoneDisplayLayout({ width: 2, height: 1, orientation: "landscape_left" }, 2, 1)),
+    [1, 1],
+  );
+  assert.deepEqual(
+    uvAt(phoneDisplayLayout({ width: 2, height: 1, orientation: "landscape_right" }, 2, 1)),
+    [0, 0],
+  );
 });
 
-function sceneAndCamera(orientation: "portrait" | "landscape_left" | "landscape_right" | "portrait_upside_down") {
+function sceneAndCamera(
+  orientation: "portrait" | "landscape_left" | "landscape_right" | "portrait_upside_down",
+) {
   const raw = orientation.startsWith("landscape") ? [2556, 1179] : [1179, 2556];
   const layout = phoneDisplayLayout({ width: raw[0], height: raw[1], orientation }, raw[0], raw[1]);
   const phone = createPhoneScene(new Texture(), layout, IOS_PHONE_SHAPE);
@@ -100,12 +135,23 @@ test("a touch on the display maps to the device point, and the bezel and backgro
 });
 
 test("touches land in the frame the viewer sees, whichever way the display is turned", () => {
-  for (const orientation of ["portrait", "portrait_upside_down", "landscape_left", "landscape_right"] as const) {
+  for (const orientation of [
+    "portrait",
+    "portrait_upside_down",
+    "landscape_left",
+    "landscape_right",
+  ] as const) {
     const { phone, camera } = sceneAndCamera(orientation);
     const up = phone.screenPoint(0.5, 0.45, camera);
     const right = phone.screenPoint(0.55, 0.5, camera);
-    assert.ok(up && up.y < 0.5 && Math.abs(up.x - 0.5) < 1e-3, `${orientation} up: ${JSON.stringify(up)}`);
-    assert.ok(right && right.x > 0.5 && Math.abs(right.y - 0.5) < 1e-3, `${orientation} right: ${JSON.stringify(right)}`);
+    assert.ok(
+      up && up.y < 0.5 && Math.abs(up.x - 0.5) < 1e-3,
+      `${orientation} up: ${JSON.stringify(up)}`,
+    );
+    assert.ok(
+      right && right.x > 0.5 && Math.abs(right.y - 0.5) < 1e-3,
+      `${orientation} right: ${JSON.stringify(right)}`,
+    );
     phone.dispose();
   }
 });
@@ -136,7 +182,14 @@ test("the render scheduler coalesces invalidations and stops when disposed", () 
 
 // Adapted from t3code phoneInteraction.test.ts @ a6ec88f7 (MIT).
 test("wheel navigation normalizes units, bounds coarse jumps, and turns Ctrl-wheel into a log zoom", () => {
-  const wheelInput = { width: 400, height: 800, deltaX: 16, deltaY: 32, deltaMode: 0, ctrlKey: false };
+  const wheelInput = {
+    width: 400,
+    height: 800,
+    deltaX: 16,
+    deltaY: 32,
+    deltaMode: 0,
+    ctrlKey: false,
+  };
   assert.deepEqual(phoneWheelNavigation(wheelInput), { type: "orbit", x: -0.04, y: -0.04 });
   // Line mode is 16 px per line, so the same swipe in lines turns the same amount.
   assert.deepEqual(
@@ -148,8 +201,14 @@ test("wheel navigation normalizes units, bounds coarse jumps, and turns Ctrl-whe
     x: -0.25,
     y: -0.25,
   });
-  assert.deepEqual(phoneWheelNavigation({ ...wheelInput, ctrlKey: true }), { type: "zoom", delta: -0.32 });
-  assert.deepEqual(phoneWheelNavigation({ ...wheelInput, deltaY: -10_000, ctrlKey: true }), { type: "zoom", delta: 1 });
+  assert.deepEqual(phoneWheelNavigation({ ...wheelInput, ctrlKey: true }), {
+    type: "zoom",
+    delta: -0.32,
+  });
+  assert.deepEqual(phoneWheelNavigation({ ...wheelInput, deltaY: -10_000, ctrlKey: true }), {
+    type: "zoom",
+    delta: 1,
+  });
   assert.equal(phoneWheelNavigation({ ...wheelInput, width: 0 }), null);
   assert.equal(phoneWheelNavigation({ ...wheelInput, deltaY: Number.NaN }), null);
   assert.equal(phoneWheelNavigation({ ...wheelInput, deltaMode: 9 }), null);
@@ -227,8 +286,15 @@ function manualTimers() {
 }
 
 const wheel = (ctrlKey = false, extra: Record<string, unknown> = {}) =>
-  Object.assign(new Event("wheel", { cancelable: true }), { deltaX: 16, deltaY: -20, deltaMode: 0, ctrlKey, ...extra });
-const gesture = (type: string, scale: number) => Object.assign(new Event(type, { cancelable: true }), { scale });
+  Object.assign(new Event("wheel", { cancelable: true }), {
+    deltaX: 16,
+    deltaY: -20,
+    deltaMode: 0,
+    ctrlKey,
+    ...extra,
+  });
+const gesture = (type: string, scale: number) =>
+  Object.assign(new Event(type, { cancelable: true }), { scale });
 
 // Adapted from t3code phoneTrackpad.test.ts @ a6ec88f7 (MIT).
 test("the trackpad consumes scrolling and page zoom only on the bound canvas, and pinch zooms the device", () => {
@@ -300,7 +366,12 @@ test("a paused trackpad orbit stays held until the native release or the browser
   const canvas = new FakeCanvas();
   let ended = 0;
   const { timers, advance } = manualTimers();
-  const binding = bindPhoneTrackpad(canvas, { navigate: () => true, endWheel: () => void ended++ }, undefined, timers);
+  const binding = bindPhoneTrackpad(
+    canvas,
+    { navigate: () => true, endWheel: () => void ended++ },
+    undefined,
+    timers,
+  );
   canvas.dispatchEvent(wheel());
   advance(500);
   assert.equal(ended, 0);
@@ -347,10 +418,14 @@ test("MJPEG, a failed 3D view, and a Duo without hinge readback keep the flat sc
   assert.equal(frameBlocker({ mjpeg: false, duoWithoutHinge: false, frameFailed: false }), null);
   assert.equal(frameBlocker({ mjpeg: true, duoWithoutHinge: true, frameFailed: true }), "failed");
   assert.equal(frameBlocker({ mjpeg: true, duoWithoutHinge: true, frameFailed: false }), "mjpeg");
-  assert.equal(frameBlocker({ mjpeg: false, duoWithoutHinge: true, frameFailed: false }), "duo-hub");
+  assert.equal(
+    frameBlocker({ mjpeg: false, duoWithoutHinge: true, frameFailed: false }),
+    "duo-hub",
+  );
   assert.equal(frameBlockerLabel(null), "3D view");
   assert.equal(frameBlockerLabel("duo-hub"), "iPhone Duo 3D requires Device Hub 0.11.0 or newer");
-  for (const blocker of ["failed", "mjpeg"] as const) assert.match(frameBlockerLabel(blocker), /unavailable/u);
+  for (const blocker of ["failed", "mjpeg"] as const)
+    assert.match(frameBlockerLabel(blocker), /unavailable/u);
 });
 
 // Adapted from t3code shapeProfile.test.ts @ a6ec88f7 (MIT).
@@ -359,13 +434,22 @@ test("names and kinds pick a family without mistaking display rotation for devic
     resolveDeviceShape({ platform: "ios", name: "iPad Pro 11-inch (M5)", portraitAspect: 0.75 }),
     IOS_TABLET_SHAPE,
   );
-  assert.equal(resolveDeviceShape({ platform: "ios", name: "iPhone 18 Pro", portraitAspect: 0.46 }), IOS_PHONE_SHAPE);
+  assert.equal(
+    resolveDeviceShape({ platform: "ios", name: "iPhone 18 Pro", portraitAspect: 0.46 }),
+    IOS_PHONE_SHAPE,
+  );
   assert.equal(
     resolveDeviceShape({ platform: "ios", kind: "ipad", name: "Julius", portraitAspect: 0.46 }),
     IOS_TABLET_SHAPE,
   );
-  assert.equal(resolveDeviceShape({ platform: "ios", kind: "iphone", portraitAspect: 0.75 }), IOS_PHONE_SHAPE);
-  assert.equal(resolveDeviceShape({ platform: "android", name: "Pixel 9", portraitAspect: 0.45 }), ANDROID_PHONE_SHAPE);
+  assert.equal(
+    resolveDeviceShape({ platform: "ios", kind: "iphone", portraitAspect: 0.75 }),
+    IOS_PHONE_SHAPE,
+  );
+  assert.equal(
+    resolveDeviceShape({ platform: "android", name: "Pixel 9", portraitAspect: 0.45 }),
+    ANDROID_PHONE_SHAPE,
+  );
   assert.equal(
     resolveDeviceShape({ platform: "android", name: "Pixel Tablet", portraitAspect: 0.625 }),
     ANDROID_TABLET_SHAPE,
@@ -377,8 +461,17 @@ test("renamed devices use the screen shape, with a phone before metadata arrives
     resolveDeviceShape({ platform: "ios", kind: "other", name: "Julius", portraitAspect: 0.75 }),
     IOS_TABLET_SHAPE,
   );
-  assert.equal(resolveDeviceShape({ platform: "ios", kind: "other", portraitAspect: 0.46 }), IOS_PHONE_SHAPE);
-  assert.equal(resolveDeviceShape({ platform: "android", portraitAspect: 0.45 }), ANDROID_PHONE_SHAPE);
-  assert.equal(resolveDeviceShape({ platform: "ios", portraitAspect: Number.NaN }), IOS_PHONE_SHAPE);
+  assert.equal(
+    resolveDeviceShape({ platform: "ios", kind: "other", portraitAspect: 0.46 }),
+    IOS_PHONE_SHAPE,
+  );
+  assert.equal(
+    resolveDeviceShape({ platform: "android", portraitAspect: 0.45 }),
+    ANDROID_PHONE_SHAPE,
+  );
+  assert.equal(
+    resolveDeviceShape({ platform: "ios", portraitAspect: Number.NaN }),
+    IOS_PHONE_SHAPE,
+  );
   assert.ok(SCREEN_HEIGHT > 0);
 });

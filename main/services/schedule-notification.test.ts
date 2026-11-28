@@ -206,7 +206,12 @@ async function executionHarness(
   let profile: string | undefined;
   const peerOwnershipChecks: Array<{ botId: string; requestId: string }> = [];
   const syntheticSinks: string[] = [];
-  const telegramDeliveries: Array<{ botId: string; requestId: string; routineName: string; text: string }> = [];
+  const telegramDeliveries: Array<{
+    botId: string;
+    requestId: string;
+    routineName: string;
+    text: string;
+  }> = [];
   const ports: Record<string, unknown> = {
     "node:path": path,
     "node:crypto": crypto,
@@ -214,7 +219,10 @@ async function executionHarness(
     "node:fs/promises": fsPromises,
     "../platform.js": {
       // The delivery log lives under the app's userData, as in production.
-      app: { getPath: () => (profile ??= mkdtempSync(path.join(os.tmpdir(), "aiden-schedule-notification-"))) },
+      app: {
+        getPath: () =>
+          (profile ??= mkdtempSync(path.join(os.tmpdir(), "aiden-schedule-notification-"))),
+      },
       Notification: class {
         static isSupported() {
           return true;
@@ -247,7 +255,9 @@ async function executionHarness(
       },
     },
     "./schedule-guard.js": { assertAssistantScheduleExecutionBoundary() {} },
-    "./app-navigation.js": { requestAppPath: async (target: string) => void navigations.push(target) },
+    "./app-navigation.js": {
+      requestAppPath: async (target: string) => void navigations.push(target),
+    },
 
     "./schedule-script.js": {
       resolveScheduledScript: async () => "/synthetic/script.sh",
@@ -268,7 +278,13 @@ async function executionHarness(
   // and a high limit keep these tests independent of the time of day.
   ports["../bot-store.js"] = {
     botStore: {
-      get: async () => ({ name: "Planner", interruptions: { quietHours: { enabled: false, start: "22:00", end: "07:00" }, dailyLimit: 20 } }),
+      get: async () => ({
+        name: "Planner",
+        interruptions: {
+          quietHours: { enabled: false, start: "22:00", end: "07:00" },
+          dailyLimit: 20,
+        },
+      }),
     },
   };
   ports["./schedule-chat-delivery.js"] = scheduleChatDelivery;
@@ -307,7 +323,10 @@ async function executionHarness(
           // Electron application/runtime graph merely to answer this read.
           const peerSink = `__aidenPeerOwnership_${crypto.randomUUID().replace(/-/gu, "")}`;
           syntheticSinks.push(peerSink);
-          (globalThis as Record<string, unknown>)[peerSink] = (botId: string, requestId: string) => {
+          (globalThis as Record<string, unknown>)[peerSink] = (
+            botId: string,
+            requestId: string,
+          ) => {
             peerOwnershipChecks.push({ botId, requestId });
             return options.peerOwnsFinal === true;
           };
@@ -410,9 +429,15 @@ test("clicking a Bot routine's notification opens that Bot's chat", async (t) =>
   const [telegram] = h.telegramDeliveries;
   assert.equal(telegram?.botId, "bot:planner");
   assert.equal(telegram?.routineName, "Daily brief");
-  assert.match(telegram?.requestId ?? "", /^routine:task-1:manual-/u, "Telegram dedupes by the routine fire");
+  assert.match(
+    telegram?.requestId ?? "",
+    /^routine:task-1:manual-/u,
+    "Telegram dedupes by the routine fire",
+  );
   assert.equal(telegram?.text, "Your week looks calm.");
-  assert.deepEqual(h.peerOwnershipChecks, [{ botId: "bot:planner", requestId: telegram!.requestId }]);
+  assert.deepEqual(h.peerOwnershipChecks, [
+    { botId: "bot:planner", requestId: telegram!.requestId },
+  ]);
   h.clicks[0]!();
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(h.navigations, ["/bots/bot%3Aplanner/chat"]);
@@ -468,23 +493,32 @@ test("a peer-owned routine final preserves run completion without an initial not
   assert.equal(run.result, "success", run.error);
   assert.equal(run.output, "Your week looks calm.");
   assert.equal(h.records.length, 1);
-  assert.deepEqual(h.broadcasts.filter(({ channel }) => channel === "bots:changed"), [
-    { channel: "bots:changed", payload: { taskId: "task-1", botId: "bot:planner", run } },
-  ]);
+  assert.deepEqual(
+    h.broadcasts.filter(({ channel }) => channel === "bots:changed"),
+    [{ channel: "bots:changed", payload: { taskId: "task-1", botId: "bot:planner", run } }],
+  );
   assert.equal(h.peerOwnershipChecks.length, 1);
   assert.equal(h.peerOwnershipChecks[0]!.botId, "bot:planner");
   assert.match(h.peerOwnershipChecks[0]!.requestId, /^routine:task-1:manual-/u);
   assert.deepEqual(h.telegramDeliveries, []);
   assert.deepEqual(h.clicks, []);
-  assert.equal(h.profile(), undefined, "the reserved peer final suppresses delivery before reading its log");
+  assert.equal(
+    h.profile(),
+    undefined,
+    "the reserved peer final suppresses delivery before reading its log",
+  );
 });
 
 test("a finished task run counts once by its result and what started it", async (t) => {
   const sent = captureAnalyticsEvents(t);
   const script = task({ mode: "script", permission: "full", script: "/synthetic/script.sh" });
   await (await executionHarness({})).execution.run(script);
-  await (await executionHarness({ scriptFailure: true })).execution.run(script, undefined, { kind: "automatic", fireTime: 1 });
-  await (await executionHarness({ output: "" })).execution.run(script, undefined, { kind: "manual", key: "run-3" });
+  await (
+    await executionHarness({ scriptFailure: true })
+  ).execution.run(script, undefined, { kind: "automatic", fireTime: 1 });
+  await (
+    await executionHarness({ output: "" })
+  ).execution.run(script, undefined, { kind: "manual", key: "run-3" });
   assert.deepEqual(sent, [
     { event: "scheduled_task_ran", props: { trigger: "manual", result: "success" } },
     { event: "scheduled_task_ran", props: { trigger: "automatic", result: "failed" } },

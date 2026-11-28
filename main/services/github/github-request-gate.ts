@@ -22,7 +22,8 @@ interface GateTicket {
   budget?: BudgetTicket;
 }
 
-const PAUSED_MESSAGE = "GitHub's API rate limit was reached; Aiden paused GitHub reads until it resets.";
+const PAUSED_MESSAGE =
+  "GitHub's API rate limit was reached; Aiden paused GitHub reads until it resets.";
 
 export class GitHubRateLimitGate implements GitHubRequestGate {
   readonly governor: GitHubRateLimitGovernor;
@@ -52,10 +53,22 @@ export class GitHubRateLimitGate implements GitHubRequestGate {
     const check = this.governor.check(request.scope);
     if (!check.ok) {
       this.ledger.recordRefusal(request.operation, request.kind, "paused");
-      return { ok: false, result: { kind: "rate-limited", retryAt: check.retryAt, message: PAUSED_MESSAGE, sent: false } };
+      return {
+        ok: false,
+        result: {
+          kind: "rate-limited",
+          retryAt: check.retryAt,
+          message: PAUSED_MESSAGE,
+          sent: false,
+        },
+      };
     }
     const ticket: GateTicket = { lease: check.lease };
-    if (request.kind === "graphql" && request.query !== undefined && !isGraphQlMutation(request.query)) {
+    if (
+      request.kind === "graphql" &&
+      request.query !== undefined &&
+      !isGraphQlMutation(request.query)
+    ) {
       const reserved = this.budget.reserve(request.scope, request.operation, interactive);
       if (!reserved.ok) {
         this.ledger.recordRefusal(request.operation, request.kind, "budget");
@@ -64,7 +77,8 @@ export class GitHubRateLimitGate implements GitHubRequestGate {
           result: {
             kind: "rate-limited",
             retryAt: reserved.retryAt,
-            message: "GitHub's GraphQL budget is nearly spent; Aiden is saving the rest for actions you take.",
+            message:
+              "GitHub's GraphQL budget is nearly spent; Aiden is saving the rest for actions you take.",
             sent: false,
           },
         };
@@ -86,14 +100,20 @@ export class GitHubRateLimitGate implements GitHubRequestGate {
     let pausedUntil: number | undefined;
     if (observation.outcome === "rate-limited") {
       pausedUntil = this.governor.recordRateLimit(observation.scope, observation.retryAt);
-      if (observation.kind === "graphql") this.budget.exhaust(observation.scope, observation.retryAt);
+      if (observation.kind === "graphql")
+        this.budget.exhaust(observation.scope, observation.retryAt);
     } else if (ticket && observation.status !== undefined && observation.status < 500) {
       this.governor.recordSuccess(ticket.lease);
     }
     this.ledger.record(observation, reading?.cost ?? 0);
-    const remaining = reading?.remaining ?? (observation.kind === "graphql" ? observation.headers?.remaining : undefined);
-    const limit = reading?.limit ?? (observation.kind === "graphql" ? observation.headers?.limit : undefined);
-    const resetAt = reading?.resetAt ?? (observation.kind === "graphql" ? observation.headers?.resetAt : undefined);
+    const remaining =
+      reading?.remaining ??
+      (observation.kind === "graphql" ? observation.headers?.remaining : undefined);
+    const limit =
+      reading?.limit ?? (observation.kind === "graphql" ? observation.headers?.limit : undefined);
+    const resetAt =
+      reading?.resetAt ??
+      (observation.kind === "graphql" ? observation.headers?.resetAt : undefined);
     this.ledger.updateScope(observation.scope, observation.host, {
       ...(remaining !== undefined ? { remaining } : {}),
       ...(limit !== undefined ? { limit } : {}),

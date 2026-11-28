@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import * as path from "node:path";
-import type { BotCapabilityBootstrapMarker, BotCapabilityBootstrapMarkerState, BotCapabilityRollbackAnchor } from "./bot-capability-state-checkpoint.js";
+import type {
+  BotCapabilityBootstrapMarker,
+  BotCapabilityBootstrapMarkerState,
+  BotCapabilityRollbackAnchor,
+} from "./bot-capability-state-checkpoint.js";
 import { BotCapabilityUnavailableError } from "./bot-capability-store-core.js";
 export const ROLLBACK_SERVICE = "com.aiden.bot-capability.rollback-authority.v1";
 export const BOOTSTRAP_SERVICE = "com.aiden.bot-capability.bootstrap-consumed.v1";
@@ -14,9 +18,7 @@ export interface AuthorityTransport {
   read(account: string): Promise<string | null>;
   write(account: string, value: string): Promise<void>;
 }
-export function botCapabilityAuthorityAccountForCanonicalRoot(
-  root: string,
-): string {
+export function botCapabilityAuthorityAccountForCanonicalRoot(root: string): string {
   if (!path.isAbsolute(root) || path.resolve(root) === path.parse(root).root) {
     throw new BotCapabilityUnavailableError(
       "Bot rollback authority requires a canonical private user-data root.",
@@ -31,9 +33,7 @@ export function validateAccount(value: string): string {
     value.length !== ACCOUNT_PREFIX.length + 64 ||
     !/^[a-f0-9]+$/u.test(value.slice(ACCOUNT_PREFIX.length))
   ) {
-    throw new BotCapabilityUnavailableError(
-      "Bot rollback authority account is invalid.",
-    );
+    throw new BotCapabilityUnavailableError("Bot rollback authority account is invalid.");
   }
   return value;
 }
@@ -46,9 +46,7 @@ export function validateValue(value: string): string {
     value.includes("\n") ||
     value.includes("\r")
   ) {
-    throw new BotCapabilityUnavailableError(
-      "Bot rollback authority value is invalid.",
-    );
+    throw new BotCapabilityUnavailableError("Bot rollback authority value is invalid.");
   }
   return value;
 }
@@ -65,9 +63,7 @@ export function createAuthorityItem(
   let accountPromise: Promise<string> | undefined;
   const account = (): Promise<string> => {
     accountPromise ??= Promise.resolve(
-      typeof options.account === "function"
-        ? options.account()
-        : options.account,
+      typeof options.account === "function" ? options.account() : options.account,
     )
       .then(validateAccount)
       .catch((error) => {
@@ -94,9 +90,7 @@ export function createAuthorityItem(
       const safeValue = validateValue(value);
       const accountValue = await account();
       if ((await read()) !== expected) {
-        throw new BotCapabilityUnavailableError(
-          `${label} changed outside the active transaction.`,
-        );
+        throw new BotCapabilityUnavailableError(`${label} changed outside the active transaction.`);
       }
       try {
         await transport.write(accountValue, safeValue);
@@ -104,9 +98,7 @@ export function createAuthorityItem(
         throw new BotCapabilityUnavailableError(`${label} could not be updated.`);
       }
       if ((await read()) !== safeValue) {
-        throw new BotCapabilityUnavailableError(
-          `${label} could not be verified.`,
-        );
+        throw new BotCapabilityUnavailableError(`${label} could not be verified.`);
       }
     },
   };
@@ -117,9 +109,7 @@ function markerValue(state: BotCapabilityBootstrapMarkerState): string {
     (state.phase !== "pending" && state.phase !== "consumed") ||
     !/^[a-f0-9]{64}$/u.test(state.keyProof)
   ) {
-    throw new BotCapabilityUnavailableError(
-      "Bot bootstrap marker key proof is invalid.",
-    );
+    throw new BotCapabilityUnavailableError("Bot bootstrap marker key proof is invalid.");
   }
   return `${state.phase}:${state.keyProof}`;
 }
@@ -147,17 +137,11 @@ export function createAuthorityBootstrapMarker(
       if (
         (next.phase === "pending" && expected !== null) ||
         (next.phase === "consumed" &&
-          (expected?.phase !== "pending" ||
-            expected.keyProof !== next.keyProof))
+          (expected?.phase !== "pending" || expected.keyProof !== next.keyProof))
       ) {
-        throw new BotCapabilityUnavailableError(
-          "Bot bootstrap marker transition is invalid.",
-        );
+        throw new BotCapabilityUnavailableError("Bot bootstrap marker transition is invalid.");
       }
-      await item.store(
-        markerValue(next),
-        expected === null ? null : markerValue(expected),
-      );
+      await item.store(markerValue(next), expected === null ? null : markerValue(expected));
     },
   };
 }

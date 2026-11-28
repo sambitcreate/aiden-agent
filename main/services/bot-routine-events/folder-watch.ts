@@ -14,7 +14,10 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { BOT_ROUTINE_EVENT_LIMITS, matchesTriggerPattern } from "../../../renderer/shared/bot-routine-trigger.js";
+import {
+  BOT_ROUTINE_EVENT_LIMITS,
+  matchesTriggerPattern,
+} from "../../../renderer/shared/bot-routine-trigger.js";
 import type { BotRoutineEventDispatcher } from "./dispatcher.js";
 import type { BotFileFingerprint } from "./own-writes.js";
 import type { BotEventRoutine } from "./store.js";
@@ -31,10 +34,18 @@ export interface BotFolderWatchDependencies {
   routines(): Promise<BotEventRoutine[]>;
   homePath(botId: string): Promise<string>;
   /** `onError`: the watch died (folder deleted or replaced); it is re-armed on the next rearm. */
-  watch(folder: string, listener: (file: string | null) => void, onError: () => void): { close(): void };
+  watch(
+    folder: string,
+    listener: (file: string | null) => void,
+    onError: () => void,
+  ): { close(): void };
   dispatcher: Pick<BotRoutineEventDispatcher, "emit">;
   /** The version this routine's Bot last wrote at `absolutePath` with its file tools, when at or after `since`. */
-  ownWrite?(routine: BotEventRoutine, absolutePath: string, since: number): BotFileFingerprint | undefined;
+  ownWrite?(
+    routine: BotEventRoutine,
+    absolutePath: string,
+    since: number,
+  ): BotFileFingerprint | undefined;
   /** Size and modified time, or undefined when the file is gone. */
   stat?(absolutePath: string): Promise<Fingerprint>;
   /** A routine whose folder is outside the Bot's home, or can't be watched: tell the person once. */
@@ -58,12 +69,18 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
   const realpath = dependencies.realpath ?? ((target: string) => fs.realpath(target));
   const watches = new Map<string, { key: string; folder: string; close(): void }>();
   /** Runs in progress per routine (refcounted), and the changes held meanwhile. */
-  const runs = new Map<string, { count: number; since: number; held: Set<string>; settle?: { cancel(): void } }>();
+  const runs = new Map<
+    string,
+    { count: number; since: number; held: Set<string>; settle?: { cancel(): void } }
+  >();
   /** Files the Bot wrote, as it left them: a late notice for one is not a new event. */
   const echoes = new Map<string, { fingerprint: Fingerprint; until: number }>();
   const releasing = new Set<Promise<void>>();
   const stat = dependencies.stat;
-  const windows = new Map<string, { paths: Set<string>; startedAt: number; timer: { cancel(): void } }>();
+  const windows = new Map<
+    string,
+    { paths: Set<string>; startedAt: number; timer: { cancel(): void } }
+  >();
 
   function flush(routine: BotEventRoutine): void {
     const window = windows.get(routine.id);
@@ -71,8 +88,13 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
     windows.delete(routine.id);
     const paths = [...window.paths];
     if (!paths.length) return;
-    const eventId = createHash("sha256").update(`${window.startedAt}\0${[...paths].sort().join("\0")}`).digest("hex").slice(0, 32);
-    void dependencies.dispatcher.emit(routine.botId, routine.id, { eventId, payload: folderEventPayload(paths) }).catch(() => undefined);
+    const eventId = createHash("sha256")
+      .update(`${window.startedAt}\0${[...paths].sort().join("\0")}`)
+      .digest("hex")
+      .slice(0, 32);
+    void dependencies.dispatcher
+      .emit(routine.botId, routine.id, { eventId, payload: folderEventPayload(paths) })
+      .catch(() => undefined);
   }
 
   function add(routine: BotEventRoutine, relative: string): void {
@@ -112,11 +134,15 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
       add(routine, relative);
       return;
     }
-    track(stat(path.join(folder, relative)).catch(() => undefined).then((current) => {
-      if (sameFile(current, echo.fingerprint)) return;
-      echoes.delete(echoKey);
-      add(routine, relative);
-    }));
+    track(
+      stat(path.join(folder, relative))
+        .catch(() => undefined)
+        .then((current) => {
+          if (sameFile(current, echo.fingerprint)) return;
+          echoes.delete(echoKey);
+          add(routine, relative);
+        }),
+    );
   }
 
   /**
@@ -124,7 +150,10 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
    * still the version it wrote, pass on the rest (a file the person changed or
    * deleted after the Bot wrote it included).
    */
-  async function release(routine: BotEventRoutine, run: { since: number; held: Set<string> }): Promise<void> {
+  async function release(
+    routine: BotEventRoutine,
+    run: { since: number; held: Set<string> },
+  ): Promise<void> {
     const folder = watches.get(routine.id)?.folder;
     if (!folder) return;
     for (const relative of run.held) {
@@ -133,7 +162,10 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
       if (written) {
         const current = stat ? await stat(absolute).catch(() => undefined) : written;
         if (sameFile(current, written)) {
-          echoes.set(`${routine.id}\0${absolute}`, { fingerprint: written, until: dependencies.now() + OWN_WRITE_ECHO_MS });
+          echoes.set(`${routine.id}\0${absolute}`, {
+            fingerprint: written,
+            until: dependencies.now() + OWN_WRITE_ECHO_MS,
+          });
           continue;
         }
       }
@@ -157,42 +189,47 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
   let generation = 0;
 
   async function rearmOnce(armedFor: number): Promise<void> {
-      const wanted = new Map<string, BotEventRoutine>();
-      for (const routine of await dependencies.routines()) {
-        if (routine.enabled && routine.trigger.kind === "file_change") wanted.set(routine.id, routine);
+    const wanted = new Map<string, BotEventRoutine>();
+    for (const routine of await dependencies.routines()) {
+      if (routine.enabled && routine.trigger.kind === "file_change")
+        wanted.set(routine.id, routine);
+    }
+    for (const [id, watch] of watches) {
+      const routine = wanted.get(id);
+      if (!routine || watch.key !== JSON.stringify(routine.trigger)) {
+        watch.close();
+        watches.delete(id);
       }
-      for (const [id, watch] of watches) {
-        const routine = wanted.get(id);
-        if (!routine || watch.key !== JSON.stringify(routine.trigger)) {
-          watch.close();
-          watches.delete(id);
-        }
+    }
+    for (const [id, routine] of wanted) {
+      if (watches.has(id)) continue;
+      const folder = await folderOf(routine).catch(() => undefined);
+      if (armedFor !== generation) return;
+      if (!folder) {
+        dependencies.refused(routine);
+        continue;
       }
-      for (const [id, routine] of wanted) {
-        if (watches.has(id)) continue;
-        const folder = await folderOf(routine).catch(() => undefined);
-        if (armedFor !== generation) return;
-        if (!folder) {
-          dependencies.refused(routine);
-          continue;
-        }
-        const key = JSON.stringify(routine.trigger);
-        let handle: { close(): void };
-        try {
-          handle = dependencies.watch(folder, (file) => noticed(routine, folder, file), () => {
+      const key = JSON.stringify(routine.trigger);
+      let handle: { close(): void };
+      try {
+        handle = dependencies.watch(
+          folder,
+          (file) => noticed(routine, folder, file),
+          () => {
             // A dead watch leaves the map, so the next rearm makes a fresh one.
             if (watches.get(id)?.key === key) watches.delete(id);
             handle.close();
-          });
-        } catch {
-          // Removed between the check and the watch, or out of watch handles:
-          // this routine is reported, and the others still get their watches.
-          dependencies.refused(routine);
-          continue;
-        }
-        watches.set(id, { key, folder, close: () => handle.close() });
-        dependencies.accepted?.(routine);
+          },
+        );
+      } catch {
+        // Removed between the check and the watch, or out of watch handles:
+        // this routine is reported, and the others still get their watches.
+        dependencies.refused(routine);
+        continue;
       }
+      watches.set(id, { key, folder, close: () => handle.close() });
+      dependencies.accepted?.(routine);
+    }
   }
 
   return {

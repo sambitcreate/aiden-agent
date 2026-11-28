@@ -26,7 +26,8 @@ import { secrets } from "./secrets.js";
 import { configStore } from "./config-store.js";
 
 /** Durable record that a built-in was signed out while its pre-Pi key was kept for a custom alias. */
-const legacySignedOutMarker = (legacyId: string) => `aiden-internal:legacy-pi-signed-out:${legacyId}`;
+const legacySignedOutMarker = (legacyId: string) =>
+  `aiden-internal:legacy-pi-signed-out:${legacyId}`;
 import {
   deleteLegacyApiKeysForPiProvider,
   migrateLegacyApiKeysToPi,
@@ -38,10 +39,7 @@ import { validateOnboardingProviderCredential } from "./onboarding-provider-vali
 import { providerDisplayLabel } from "./provider-list-core.js";
 import { withPiRemoteCatalog } from "./pi-remote-catalog.js";
 import { refreshPiCatalogs, staleCatalogProviderIds } from "./pi-catalog-refresh.js";
-import {
-  additionalAidenPiApis,
-  withAidenPiCompatibility,
-} from "./pi-provider-compatibility.js";
+import { additionalAidenPiApis, withAidenPiCompatibility } from "./pi-provider-compatibility.js";
 import { piModelMetadataFor } from "./pi-model-metadata.js";
 import { piDefaultModelFor } from "./pi-default-models.js";
 import { withBotProviderInventoryMutation } from "./bot-runtime-inventory-publication.js";
@@ -50,7 +48,11 @@ import { app } from "../platform.js";
 import { join } from "node:path";
 import { createProviderLoginDeviceId } from "./provider-login-identity.js";
 import { ANTIGRAVITY_PROVIDER_ID } from "./antigravity/models.js";
-import { antigravityEnabled, antigravityProvider, antigravityService } from "./antigravity/index.js";
+import {
+  antigravityEnabled,
+  antigravityProvider,
+  antigravityService,
+} from "./antigravity/index.js";
 
 /** Desktop-only ACP harness providers (they need Electron paths and process supervision). */
 function registerDesktopHarnessProviders(models: MutableModels): MutableModels {
@@ -58,8 +60,8 @@ function registerDesktopHarnessProviders(models: MutableModels): MutableModels {
   return models;
 }
 
-const getProviderLoginDeviceId = createProviderLoginDeviceId(
-  () => join(app.getPath("userData"), "provider-login-device-id"),
+const getProviderLoginDeviceId = createProviderLoginDeviceId(() =>
+  join(app.getPath("userData"), "provider-login-device-id"),
 );
 
 function catalogRefreshWarning(errors: ReadonlyMap<string, Error>): string | undefined {
@@ -110,8 +112,9 @@ export class ProviderRegistry {
   constructor(
     readonly models: Models,
     private readonly credentials: CredentialStore,
-    private readonly providerModelsStore: (providerId: string) => ProviderModelsStore =
-      piProviderModelsStore,
+    private readonly providerModelsStore: (
+      providerId: string,
+    ) => ProviderModelsStore = piProviderModelsStore,
   ) {
     this.codex = new CodexProviderService(models, credentials);
   }
@@ -185,11 +188,16 @@ export class ProviderRegistry {
    * The credential Aiden stores for a built-in provider, read once: its type
    * and, for an API key, the key. Main-process only (custom connector sharing).
    */
-  async storedCredential(providerId: string): Promise<{ type: "api_key" | "oauth"; key?: string } | undefined> {
-    if (!this.isBuiltinProvider(providerId) || providerId === OPENAI_CODEX_PROVIDER_ID) return undefined;
+  async storedCredential(
+    providerId: string,
+  ): Promise<{ type: "api_key" | "oauth"; key?: string } | undefined> {
+    if (!this.isBuiltinProvider(providerId) || providerId === OPENAI_CODEX_PROVIDER_ID)
+      return undefined;
     const credential = await this.credentials.read(providerId);
     if (!credential) return undefined;
-    return credential.type === "api_key" ? { type: "api_key", ...(credential.key ? { key: credential.key } : {}) } : { type: "oauth" };
+    return credential.type === "api_key"
+      ? { type: "api_key", ...(credential.key ? { key: credential.key } : {}) }
+      : { type: "oauth" };
   }
 
   /** Main-process-only auth for explicit non-chat Pi capabilities such as voice. */
@@ -227,10 +235,13 @@ export class ProviderRegistry {
       snapshot: async () =>
         (await this.listBuiltinProviders()).find((item) => item.id === providerId),
       authenticate: (interaction: AuthInteraction) =>
-        auth.login!({
-          ...interaction,
-          signal: interaction.signal ?? new AbortController().signal,
-        }, { getDeviceId: getProviderLoginDeviceId }),
+        auth.login!(
+          {
+            ...interaction,
+            signal: interaction.signal ?? new AbortController().signal,
+          },
+          { getDeviceId: getProviderLoginDeviceId },
+        ),
       commitCredential: async (credential: unknown) => {
         // An explicit sign-in is a new grant even when it looks like the old
         // one: the fresh grant id changes the Bot credential signature, so a
@@ -266,7 +277,8 @@ export class ProviderRegistry {
       await deleteLegacyApiKeysForPiProvider(providerId, {
         ownedByBuiltin: (legacyId) => configStore.legacyProviderKeyOwnedByBuiltin(legacyId),
         deleteLegacy: (legacyId) => secrets.deleteKey(legacyId),
-        markSignedOut: (legacyId) => secrets.setInternalKey(legacySignedOutMarker(legacyId), "1", 1),
+        markSignedOut: (legacyId) =>
+          secrets.setInternalKey(legacySignedOutMarker(legacyId), "1", 1),
       });
     }
   }
@@ -379,9 +391,14 @@ export class ProviderRegistry {
           // Launch revalidation is a stale-only pass over Aiden's cached Pi
           // overlays. Do not invoke Radius' separate gateway discovery on every
           // renderer launch. An explicit force refresh retains Pi's full behavior.
-          providerIds: providerIds ?? (force
-            ? undefined
-            : await staleCatalogProviderIds(this.models.getProviders(), this.providerModelsStore)),
+          providerIds:
+            providerIds ??
+            (force
+              ? undefined
+              : await staleCatalogProviderIds(
+                  this.models.getProviders(),
+                  this.providerModelsStore,
+                )),
           force,
           signal: controller.signal,
         });
@@ -414,7 +431,9 @@ export class ProviderRegistry {
   async listBuiltinProviders(): Promise<Provider[]> {
     await this.ensureBuiltinCatalogs();
     const storedCredentials = new Map(
-      (await this.credentials.list()).map((credential) => [credential.providerId, credential.type] as const),
+      (await this.credentials.list()).map(
+        (credential) => [credential.providerId, credential.type] as const,
+      ),
     );
     return Promise.all(
       this.builtinProviders().map(async (provider) => {
@@ -451,7 +470,9 @@ export class ProviderRegistry {
           ...record,
           hasKey: configured,
           canLogout: storedCredentials.has(provider.id),
-          ...(storedCredentials.has(provider.id) ? { credentialType: storedCredentials.get(provider.id) } : {}),
+          ...(storedCredentials.has(provider.id)
+            ? { credentialType: storedCredentials.get(provider.id) }
+            : {}),
           authMethods,
         };
       }),
@@ -471,36 +492,38 @@ export class ProviderRegistry {
       this.legacyCredentialMigration = migrateLegacyApiKeysToPi({
         readLegacy: (legacyId) => secrets.getKey(legacyId),
         deleteLegacy: (legacyId) => secrets.deleteKey(legacyId),
-        signedOut: async (legacyId) => (await secrets.getKeyStrict(legacySignedOutMarker(legacyId))) !== null,
+        signedOut: async (legacyId) =>
+          (await secrets.getKeyStrict(legacySignedOutMarker(legacyId))) !== null,
         credentials: this.credentials,
-      })
-        .catch((error) => {
-          // A transient keychain error must not permanently poison future
-          // migration attempts in this process.
-          this.legacyCredentialMigration = null;
-          throw error;
-        });
+      }).catch((error) => {
+        // A transient keychain error must not permanently poison future
+        // migration attempts in this process.
+        this.legacyCredentialMigration = null;
+        throw error;
+      });
     }
     return this.legacyCredentialMigration;
   }
 }
 
 export const providerRegistry = new ProviderRegistry(
-  registerDesktopHarnessProviders(registerAidenBuiltinProviders(
-    (() => {
-      const models = createModels({ credentials: piCredentialStore, modelsStore: piModelsStore });
-      for (const provider of builtinProviders()) {
-        const compatible = withAidenPiCompatibility(provider);
-        models.setProvider(
-          provider.id === "radius"
-            ? provider
-            : withPiRemoteCatalog(compatible, {
-                supportedApis: additionalAidenPiApis(provider.id),
-              }),
-        );
-      }
-      return models;
-    })(),
-  )),
+  registerDesktopHarnessProviders(
+    registerAidenBuiltinProviders(
+      (() => {
+        const models = createModels({ credentials: piCredentialStore, modelsStore: piModelsStore });
+        for (const provider of builtinProviders()) {
+          const compatible = withAidenPiCompatibility(provider);
+          models.setProvider(
+            provider.id === "radius"
+              ? provider
+              : withPiRemoteCatalog(compatible, {
+                  supportedApis: additionalAidenPiApis(provider.id),
+                }),
+          );
+        }
+        return models;
+      })(),
+    ),
+  ),
   piCredentialStore,
 );

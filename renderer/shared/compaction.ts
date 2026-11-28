@@ -30,20 +30,42 @@ export interface CompactionModelBudget {
 export type CompactionModelOverrides = Readonly<Record<string, Readonly<CompactionModelBudget>>>;
 
 export function parseCompactionModelOverrides(value: unknown): CompactionModelOverrides {
-  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length > 256) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).length > 256
+  ) {
     throw new Error("Model compaction budgets must be an object with at most 256 models.");
   }
   const entries = Object.entries(value).map(([key, raw]) => {
     const slash = key.indexOf("/");
-    if (slash <= 0 || slash === key.length - 1 || key.length > 512 || key !== key.trim() || Array.from(key).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) {
+    if (
+      slash <= 0 ||
+      slash === key.length - 1 ||
+      key.length > 512 ||
+      key !== key.trim() ||
+      Array.from(key).some(
+        (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+      )
+    ) {
       throw new Error("Choose an exact provider/model for the compaction budget.");
     }
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid model compaction budget.");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw))
+      throw new Error("Invalid model compaction budget.");
     const budget: CompactionModelBudget = {};
     for (const [field, tokens] of Object.entries(raw)) {
-      if (field !== "reserveTokens" && field !== "keepRecentTokens") throw new Error("Unknown compaction budget field.");
-      if (typeof tokens !== "number" || !Number.isSafeInteger(tokens) || tokens < (field === "reserveTokens" ? 2 : 0) || tokens > 10_000_000) {
-        throw new Error("Compaction token budgets must be whole numbers (reserve: 2–10000000; recent: 0–10000000).");
+      if (field !== "reserveTokens" && field !== "keepRecentTokens")
+        throw new Error("Unknown compaction budget field.");
+      if (
+        typeof tokens !== "number" ||
+        !Number.isSafeInteger(tokens) ||
+        tokens < (field === "reserveTokens" ? 2 : 0) ||
+        tokens > 10_000_000
+      ) {
+        throw new Error(
+          "Compaction token budgets must be whole numbers (reserve: 2–10000000; recent: 0–10000000).",
+        );
       }
       budget[field] = tokens;
     }
@@ -59,13 +81,25 @@ export function resolveCompactionModelBudget(
   engine: CompactionEngine = "llm",
 ): Required<CompactionModelBudget> | undefined {
   const key = `${model.provider}/${model.id}`;
-  const configured = overrides && Object.prototype.hasOwnProperty.call(overrides, key) ? overrides[key] : undefined;
-  if (!configured || (configured.reserveTokens === undefined && configured.keepRecentTokens === undefined)) return undefined;
+  const configured =
+    overrides && Object.prototype.hasOwnProperty.call(overrides, key) ? overrides[key] : undefined;
+  if (
+    !configured ||
+    (configured.reserveTokens === undefined && configured.keepRecentTokens === undefined)
+  )
+    return undefined;
   let reserveTokens = configured.reserveTokens ?? DEFAULT_COMPACTION_RESERVE_TOKENS;
   let keepRecentTokens = configured.keepRecentTokens ?? DEFAULT_COMPACTION_KEEP_RECENT_TOKENS;
-  if (engine === "vcc" || reserveTokens >= model.contextWindow || keepRecentTokens > model.contextWindow - reserveTokens) {
+  if (
+    engine === "vcc" ||
+    reserveTokens >= model.contextWindow ||
+    keepRecentTokens > model.contextWindow - reserveTokens
+  ) {
     reserveTokens = Math.min(reserveTokens, Math.floor(model.contextWindow / 4));
-    keepRecentTokens = Math.min(keepRecentTokens, Math.floor((model.contextWindow - reserveTokens) / 2));
+    keepRecentTokens = Math.min(
+      keepRecentTokens,
+      Math.floor((model.contextWindow - reserveTokens) / 2),
+    );
   }
   return Object.freeze({ reserveTokens, keepRecentTokens });
 }
@@ -82,6 +116,11 @@ export function configuredCompactionReserveTokens(
   engine: CompactionEngine = "llm",
 ): number | undefined {
   const key = `${model.provider}/${model.id}`;
-  if (!overrides || !Object.prototype.hasOwnProperty.call(overrides, key) || overrides[key]?.reserveTokens === undefined) return undefined;
+  if (
+    !overrides ||
+    !Object.prototype.hasOwnProperty.call(overrides, key) ||
+    overrides[key]?.reserveTokens === undefined
+  )
+    return undefined;
   return resolveCompactionModelBudget(overrides, model, engine)?.reserveTokens;
 }

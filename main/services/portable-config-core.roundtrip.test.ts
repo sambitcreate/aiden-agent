@@ -67,13 +67,19 @@ test("a save round-trips through disk unchanged", async (t) => {
 test("portable publication fences observe the previous and next MCP configuration", async (t) => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-roundtrip-fence-"));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
-  const observations: Array<{ source: "app" | "external"; previous: PortableConfigShape | null; next: PortableConfigShape }> = [];
+  const observations: Array<{
+    source: "app" | "external";
+    previous: PortableConfigShape | null;
+    next: PortableConfigShape;
+  }> = [];
   const stores = createPortableConfigStores(
     () => path.join(base, "dot-aiden"),
     () => path.join(base, "userData"),
     {
-      beforePortableWritePublish: (previous, next) => observations.push({ source: "app", previous, next }),
-      beforePortableExternalCacheCommit: (previous, next) => observations.push({ source: "external", previous, next }),
+      beforePortableWritePublish: (previous, next) =>
+        observations.push({ source: "app", previous, next }),
+      beforePortableExternalCacheCommit: (previous, next) =>
+        observations.push({ source: "external", previous, next }),
     },
   );
   await stores.ensureMigrated();
@@ -87,9 +93,9 @@ test("portable publication fences observe the previous and next MCP configuratio
   );
   await stores.portable.reload();
 
-  const changedMcpObservations = observations.filter(({ previous, next }) =>
-    previous !== null &&
-    JSON.stringify(previous.mcpServers) !== JSON.stringify(next.mcpServers)
+  const changedMcpObservations = observations.filter(
+    ({ previous, next }) =>
+      previous !== null && JSON.stringify(previous.mcpServers) !== JSON.stringify(next.mcpServers),
   );
   assert.deepEqual(changedMcpObservations, [
     { source: "app", previous: initial, next: populated },

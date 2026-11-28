@@ -30,8 +30,18 @@ test("a fresh worker is needed only when a different model is loaded, or a Sense
     expected: boolean;
   }> = [
     { name: "nothing loaded", loaded: null, request: target(parakeet), expected: false },
-    { name: "same model", loaded: { modelId: parakeet.id, languageKey: null }, request: target(parakeet), expected: false },
-    { name: "another model", loaded: { modelId: parakeet.id, languageKey: null }, request: target(canary), expected: true },
+    {
+      name: "same model",
+      loaded: { modelId: parakeet.id, languageKey: null },
+      request: target(parakeet),
+      expected: false,
+    },
+    {
+      name: "another model",
+      loaded: { modelId: parakeet.id, languageKey: null },
+      request: target(canary),
+      expected: true,
+    },
     {
       name: "SenseVoice, same language",
       loaded: { modelId: senseVoice.id, languageKey: "en" },
@@ -84,7 +94,13 @@ interface FakeWorker {
  * A stand-in for an Electron utility process. It answers every request, and
  * exits a few milliseconds after a kill. A stubborn worker ignores its first kill.
  */
-function fakeWorker(id: string, log: string[], stubborn: boolean, failing: boolean, pid: number | undefined): FakeWorker {
+function fakeWorker(
+  id: string,
+  log: string[],
+  stubborn: boolean,
+  failing: boolean,
+  pid: number | undefined,
+): FakeWorker {
   const listeners = {
     message: new Set<(value: unknown) => void>(),
     exit: new Set<(code: number) => void>(),
@@ -105,7 +121,13 @@ function fakeWorker(id: string, log: string[], stubborn: boolean, failing: boole
       setImmediate(() => {
         if (exited) return;
         const reply: LocalSpeechWorkerMessage = failing
-          ? { version: LOCAL_SPEECH_PROTOCOL_VERSION, kind: "failure", requestId: message.requestId, message: "model rejected", code: "decode-failed" }
+          ? {
+              version: LOCAL_SPEECH_PROTOCOL_VERSION,
+              kind: "failure",
+              requestId: message.requestId,
+              message: "model rejected",
+              code: "decode-failed",
+            }
           : {
               version: LOCAL_SPEECH_PROTOCOL_VERSION,
               kind: "result",
@@ -146,7 +168,12 @@ function fakeWorker(id: string, log: string[], stubborn: boolean, failing: boole
 }
 
 function harness(
-  options: { stubbornWorkers?: number[]; failingWorkers?: number[]; pidless?: number[]; exitWaitMs?: number } = {},
+  options: {
+    stubbornWorkers?: number[];
+    failingWorkers?: number[];
+    pidless?: number[];
+    exitWaitMs?: number;
+  } = {},
 ) {
   const log: string[] = [];
   const spawned: FakeWorker[] = [];
@@ -204,7 +231,15 @@ test("switching models kills the old worker and waits for its exit before the ne
   const second = await host.prepare(target(canary));
   await second.load(canary.id, "/models/canary", canary);
 
-  assert.deepEqual(log, ["w1 spawn", "w1 load", "w1 kill", "unloaded", "w1 exit", "w2 spawn", "w2 load"]);
+  assert.deepEqual(log, [
+    "w1 spawn",
+    "w1 load",
+    "w1 kill",
+    "unloaded",
+    "w1 exit",
+    "w2 spawn",
+    "w2 load",
+  ]);
   assert.equal(spawned.length, 2);
   assert.equal(spawned[0]!.kills(), 1);
 });
@@ -243,7 +278,10 @@ test("a SenseVoice language change replaces the worker, and the same language ke
 
   await host.prepare(target(senseVoice, "de"));
   assert.equal(spawned.length, 2);
-  assert.ok(log.indexOf("w1 exit") < log.indexOf("w2 spawn"), "the old worker exits before the replacement forks");
+  assert.ok(
+    log.indexOf("w1 exit") < log.indexOf("w2 spawn"),
+    "the old worker exits before the replacement forks",
+  );
 });
 
 test("a worker that ignores its first kill is escalated to SIGKILL by pid before the replacement starts", async () => {
@@ -258,7 +296,11 @@ test("a worker that ignores its first kill is escalated to SIGKILL by pid before
 });
 
 test("a worker without a pid is killed again through its handle when SIGKILL cannot be sent", async () => {
-  const { host, spawned, signals } = harness({ stubbornWorkers: [1], pidless: [1], exitWaitMs: 20 });
+  const { host, spawned, signals } = harness({
+    stubbornWorkers: [1],
+    pidless: [1],
+    exitWaitMs: 20,
+  });
   await host.prepare(target(parakeet));
   await host.prepare(target(canary));
 
@@ -309,7 +351,10 @@ test("a worker disposed after a hang or cancel must exit, or be SIGKILLed, befor
 
   assert.deepEqual(signals, [{ pid: 50_001, signal: "SIGKILL" }]);
   assert.ok(log.indexOf("w1 exit") >= 0, "the hung worker is gone");
-  assert.ok(log.indexOf("w1 exit") < log.indexOf("w2 spawn"), "the replacement forks only after the old worker exited");
+  assert.ok(
+    log.indexOf("w1 exit") < log.indexOf("w2 spawn"),
+    "the replacement forks only after the old worker exited",
+  );
 });
 
 test("a worker that finishes forking after the host was retired still exits before the next fork", async () => {

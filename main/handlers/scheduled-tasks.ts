@@ -37,14 +37,21 @@ export function registerScheduledTaskHandlers(): void {
   ipcMain.handle("schedule:save", async (_event, input: unknown, updatedAt?: unknown) => {
     const parsed = parseScheduledTaskInput(input);
     const revision = parsed.id ? await revisionFor(parsed.id, updatedAt) : undefined;
-    if (parsed.trigger?.kind !== "connector") return scheduledTaskApplicationService.save(parsed, { expectedRevision: revision });
+    if (parsed.trigger?.kind !== "connector")
+      return scheduledTaskApplicationService.save(parsed, { expectedRevision: revision });
     // A connected-app task: its Find sources choice becomes its exact source,
     // which stays in main and is bound once the task is saved.
     const triggers = await import("../services/scheduled-task-triggers-main.js");
-    const existing = parsed.id ? (await scheduledTaskApplicationService.get(parsed.id)).trigger : undefined;
+    const existing = parsed.id
+      ? (await scheduledTaskApplicationService.get(parsed.id)).trigger
+      : undefined;
     return saveConnectorTask(parsed.trigger, existing, {
       connector: triggers.taskConnectorChoices,
-      save: (trigger) => scheduledTaskApplicationService.save({ ...parsed, trigger }, { expectedRevision: revision }),
+      save: (trigger) =>
+        scheduledTaskApplicationService.save(
+          { ...parsed, trigger },
+          { expectedRevision: revision },
+        ),
       bind: triggers.bindTaskConnectorSource,
       needsSource: triggers.markTaskNeedsSource,
     });
@@ -69,14 +76,20 @@ export function registerScheduledTaskHandlers(): void {
   );
   // A link task's link is shown once, when made or rotated; reads never include it.
   ipcMain.handle("schedule:trigger-link:rotate", async (_event, id: unknown) =>
-    (await import("../services/scheduled-task-triggers-main.js")).rotateTaskTriggerLink(requiredString(id, "id")),
+    (await import("../services/scheduled-task-triggers-main.js")).rotateTaskTriggerLink(
+      requiredString(id, "id"),
+    ),
   );
   // Find sources for a connected-app task: foreground, through connections that are already open.
   ipcMain.handle("schedule:trigger-connector:find-sources", async () =>
-    (await import("../services/scheduled-task-triggers-main.js")).findTaskConnectorSources(AbortSignal.timeout(60_000)),
+    (await import("../services/scheduled-task-triggers-main.js")).findTaskConnectorSources(
+      AbortSignal.timeout(60_000),
+    ),
   );
   ipcMain.handle("schedule:trigger-link:state", async (_event, id: unknown) =>
-    (await import("../services/scheduled-task-triggers-main.js")).taskTriggerLinkState(requiredString(id, "id")),
+    (await import("../services/scheduled-task-triggers-main.js")).taskTriggerLinkState(
+      requiredString(id, "id"),
+    ),
   );
   ipcMain.handle("schedule:use-own-chat", async (_event, id: unknown, updatedAt: unknown) =>
     scheduledTaskApplicationService.useOwnChat(
@@ -99,7 +112,8 @@ export function registerScheduledTaskHandlers(): void {
     ),
   );
   ipcMain.handle("schedule:scripts", (_event, workspaceId?: unknown) =>
-    scheduledTaskApplicationService.scripts(optionalString(workspaceId)));
+    scheduledTaskApplicationService.scripts(optionalString(workspaceId)),
+  );
   ipcMain.handle("schedule:keepAwakeStatus", () => keepAwakeStatus());
   ipcMain.handle("schedule:settings", async (_event, patch?: unknown) => {
     const current = await scheduledTaskApplicationService.settings();

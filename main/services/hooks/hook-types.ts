@@ -222,7 +222,11 @@ export interface HookDispatchContext {
 }
 
 export interface HookDispatcher {
-  dispatch(event: HookEvent, payload: HookPayload, context: HookDispatchContext): Promise<HookOutcome>;
+  dispatch(
+    event: HookEvent,
+    payload: HookPayload,
+    context: HookDispatchContext,
+  ): Promise<HookOutcome>;
   /** True when at least one active hook could match; lets callers skip building payloads. */
   hasHooks(event: HookEvent, scopes: HookScope[], toolName?: string): boolean;
 }

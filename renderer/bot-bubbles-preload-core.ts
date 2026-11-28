@@ -1,7 +1,10 @@
 // Pure bridge builder for the Bot bubble overlay preload, so the runtime
 // allowlists are checked by behavioural tests without Electron.
 
-import { BOT_BUBBLES_INVOKE_CHANNELS, BOT_BUBBLES_NOTIFICATION_CHANNELS } from "./bot-bubbles-preload-channels.js";
+import {
+  BOT_BUBBLES_INVOKE_CHANNELS,
+  BOT_BUBBLES_NOTIFICATION_CHANNELS,
+} from "./bot-bubbles-preload-channels.js";
 
 export interface BotBubblesPreloadTransport {
   invoke: <T>(channel: string, ...args: unknown[]) => Promise<T>;

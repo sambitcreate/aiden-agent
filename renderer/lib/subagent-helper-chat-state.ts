@@ -1,5 +1,9 @@
 import type { ApprovalPrompt } from "./ipc";
-import { isExtractionStep, isQuestionnaireStep, isRecordingStep } from "./assistant-message-presentation";
+import {
+  isExtractionStep,
+  isQuestionnaireStep,
+  isRecordingStep,
+} from "./assistant-message-presentation";
 import {
   isSubagentMcpMutationApprovalDetails,
   isSubagentRunGrantApprovalDetails,
@@ -150,7 +154,11 @@ const GENERIC_FAILURES = new Set([
  * whole text, so a reason cut short upstream still maps by its start.
  */
 const RUNNER_REASONS: ReadonlyArray<readonly [string, RegExp, string]> = [
-  ["The child reached its turn limit.", /the child reached its turn limit\./giu, "It ran out of turns."],
+  [
+    "The child reached its turn limit.",
+    /the child reached its turn limit\./giu,
+    "It ran out of turns.",
+  ],
   [
     "The child reached its tool-call limit.",
     /the child reached its tool-call limit\./giu,
@@ -161,7 +169,11 @@ const RUNNER_REASONS: ReadonlyArray<readonly [string, RegExp, string]> = [
     /the child reserved its remaining deadline for reporting\./giu,
     "It ran short of time and stopped to write its report.",
   ],
-  ["The child reached its output limit.", /the child reached its output limit\./giu, "Its reply grew too long."],
+  [
+    "The child reached its output limit.",
+    /the child reached its output limit\./giu,
+    "Its reply grew too long.",
+  ],
   [
     "The child reached its event limit.",
     /the child reached its event limit\./giu,
@@ -207,7 +219,11 @@ const RUNNER_REASONS: ReadonlyArray<readonly [string, RegExp, string]> = [
     /these are incomplete, unverified partial findings\./giu,
     "Its findings so far may be incomplete.",
   ],
-  ["The child could not complete this task.", /the child (?:model )?could not complete this task\./giu, ""],
+  [
+    "The child could not complete this task.",
+    /the child (?:model )?could not complete this task\./giu,
+    "",
+  ],
   ["This helper couldn't finish.", /this helper couldn't finish\./giu, ""],
 ];
 
@@ -338,8 +354,10 @@ export function subagentHelperApprovalsFor(
   const labelOwned =
     subagentHelperIsActive(run.state) &&
     !helpers.some(
-    (other) =>
-      other.runId !== run.runId && other.label === run.label && subagentHelperIsActive(other.state),
+      (other) =>
+        other.runId !== run.runId &&
+        other.label === run.label &&
+        subagentHelperIsActive(other.state),
     );
   const owned: ApprovalPrompt[] = [];
   for (const approval of approvals) {
@@ -414,8 +432,7 @@ export function subagentHelperHasActiveHelpers(
   views: ReadonlyArray<{ terminal: boolean; snapshot?: SubagentRunSnapshot }>,
 ): boolean {
   return views.some(
-    (view) =>
-      !view.terminal && view.snapshot?.version === 2 && view.snapshot.parentRunId === runId,
+    (view) => !view.terminal && view.snapshot?.version === 2 && view.snapshot.parentRunId === runId,
   );
 }
 
@@ -490,7 +507,9 @@ export function subagentTranscriptIsFinal(transcript: SubagentTranscriptV1): boo
         entry.steps.every(
           (step) =>
             !("status" in step) ||
-            (step.status !== "pending" && step.status !== "awaiting_approval" && step.status !== "running"),
+            (step.status !== "pending" &&
+              step.status !== "awaiting_approval" &&
+              step.status !== "running"),
         )),
   );
 }
@@ -535,7 +554,9 @@ function isToolOnlyMessage(entry: SubagentTranscriptMessageEntry): boolean {
   const tools = entry.steps.filter(isToolStep);
   return (
     tools.length > 0 &&
-    !tools.some((step) => isExtractionStep(step) || isRecordingStep(step) || isQuestionnaireStep(step))
+    !tools.some(
+      (step) => isExtractionStep(step) || isRecordingStep(step) || isQuestionnaireStep(step),
+    )
   );
 }
 

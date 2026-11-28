@@ -26,7 +26,6 @@ test("downloaded updates appear immediately above Profile in the sidebar footer"
   assert.ok(profileIndex < settingsIndex, "Profile and Settings should keep their stable order");
 });
 
-
 test("update banner reports progress, failure recovery, and a guarded restart action", () => {
   const sidebar = source("./chat-sidebar.tsx");
   const banner = between(
@@ -126,7 +125,10 @@ test("workspace actions and destructive confirmations disambiguate duplicate nam
     sidebar,
     /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(workspace, pathPreferences, workspaces\)\}`\}/u,
   );
-  assert.match(sidebar, /Target: \{deletingWorktree\.folderPath \?\? deletingWorktree\.name\}/u);
+  assert.match(
+    sidebar,
+    /Target:(?:\{" "\}|\s+)+\{deletingWorktree\.folderPath \?\? deletingWorktree\.name\}/u,
+  );
   assert.match(sidebar, /removingWorkspace\.folderPath \?\? removingWorkspace\.name/u);
 });
 

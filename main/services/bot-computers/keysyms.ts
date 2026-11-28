@@ -176,14 +176,17 @@ export interface KeyStroke {
 /** One character as a US key and whether Shift is held for it. */
 export function characterKey(character: string): { keysym: number; shift: boolean } {
   const codePoint = character.codePointAt(0);
-  if (codePoint === undefined || [...character].length !== 1) throw new RangeError("Pass exactly one character.");
+  if (codePoint === undefined || [...character].length !== 1)
+    throw new RangeError("Pass exactly one character.");
   if (character === "\n" || character === "\r") return { keysym: XK.Return, shift: false };
   if (character === "\t") return { keysym: XK.Tab, shift: false };
-  if (character >= "A" && character <= "Z") return { keysym: character.toLowerCase().charCodeAt(0), shift: true };
+  if (character >= "A" && character <= "Z")
+    return { keysym: character.toLowerCase().charCodeAt(0), shift: true };
   const base = SHIFTED[character];
   if (base !== undefined) return { keysym: base.charCodeAt(0), shift: true };
   if (codePoint >= 0x20 && codePoint <= 0x7e) return { keysym: codePoint, shift: false };
-  if (codePoint < 0x20 || (codePoint >= 0x7f && codePoint < 0xa0)) throw new RangeError("Control characters can't be typed.");
+  if (codePoint < 0x20 || (codePoint >= 0x7f && codePoint < 0xa0))
+    throw new RangeError("Control characters can't be typed.");
   return { keysym: 0x0100_0000 + codePoint, shift: false };
 }
 
@@ -222,7 +225,8 @@ export function chordKeyStrokes(chord: string): KeyStroke[] {
   const parsed = parseComputerUseKeyChord(chord);
   const modifiers = parsed.modifiers.map((modifier) => {
     const keysym = CHORD_MODIFIERS[modifier];
-    if (keysym === undefined) throw new RangeError(`The ${modifier} key can't be sent to a Bot computer.`);
+    if (keysym === undefined)
+      throw new RangeError(`The ${modifier} key can't be sent to a Bot computer.`);
     return keysym;
   });
   const key = keyNameKeysym(parsed.key);

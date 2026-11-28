@@ -9,287 +9,448 @@ const root = process.env.AIDEN_BROWSER_THROTTLING_ROOT!;
 await mkdir(path.join(root, "user-data"), { recursive: true });
 app.setPath("userData", path.join(root, "user-data"));
 const deadline = setTimeout(() => app.exit(2), 45_000);
-void app.whenReady().then(async () => {
-  const { BrowserService } = await import("../../main/services/browser/service");
-  const { configStore } = await import("../../main/services/config-store");
-  // Isolate native scheduling from workspace persistence/admission, covered elsewhere.
-  configStore.getWorkspace = async () => ({ id: "throttle" }) as Awaited<ReturnType<typeof configStore.getWorkspace>>;
-  const browser = new BrowserService();
-  const owner = new BrowserWindow({ show: false });
-  browser.attachOwner("throttle", {
-    id: owner.webContents.id, documentId: "native-throttle-test",
-    isDestroyed: () => owner.isDestroyed(), send: () => {}, onInvalidated: () => () => {},
-  });
-  type Tab = { state: BrowserTab; view: WebContentsView; initialLoad: Promise<void>; backgroundThrottling: BrowserBackgroundThrottling; recording?: { recorder: BrowserWindow; stopTimer: ReturnType<typeof setTimeout> } };
-  const native = browser as unknown as {
-    create(workspace: string, url: string, profile: undefined, show: boolean): Promise<Tab>;
-    capture(tab: Tab): Promise<BrowserImage>;
-    close(tab: Tab): void;
-    present(tab: Tab, visible: boolean, bounds?: { x: number; y: number; width: number; height: number }): void;
-    startRecording(tab: Tab, fps: number, signal?: AbortSignal): Promise<void>;
-    stopRecording(tab: Tab): Promise<{ sizeBytes: number }>;
-  };
-  // about:blank avoids external network and permits the existing URL policy.
-  const tab = await native.create("throttle", "about:blank", undefined, false);
-  const wc = tab.view.webContents;
-  await tab.initialLoad;
-  const idlePolicy = wc.getBackgroundThrottling();
-  assert.equal(idlePolicy, true, "an ordinary hidden guest must use normal scheduling");
-  owner.show();
-  native.present(tab, true, { x: 0, y: 0, width: 600, height: 400 });
-  await wc.executeJavaScript("document.body.style.background = 'rgb(30, 90, 160)'; document.body.textContent = 'Local scheduling fixture'");
-  const screenshot = await native.capture(tab);
-  native.present(tab, false);
-  assert.ok(screenshot.data.length > 0);
-  assert.equal(wc.getBackgroundThrottling(), true, "capture must restore the idle policy");
-  const hiddenScreenshot = await native.capture(tab);
-  assert.ok(hiddenScreenshot.data.length > 0);
-  assert.equal(wc.getBackgroundThrottling(), true);
-  const command = (expression: string, signal?: AbortSignal) => browser.command("throttle", {
-    action: "evaluate", tabId: tab.state.id, expression,
-  }, { source: "user", signal });
-  console.error("[throttling] awaiting hidden timer");
-  const value = await command("new Promise(resolve => setTimeout(() => resolve('timer'), 10))");
-  assert.equal(value.value, "timer", "hidden automation must receive timer callbacks");
-  assert.equal(wc.getBackgroundThrottling(), true);
-  await assert.rejects(command("throw new Error('fixture failure')"), /fixture failure/);
-  assert.equal(wc.getBackgroundThrottling(), true, "failed action must restore scheduling");
-  const abort = new AbortController();
-  const pending = command("new Promise(() => {})", abort.signal);
-  // Observe actual acquisition, rather than guessing the queue's start time.
-  while (wc.getBackgroundThrottling()) await new Promise(resolve => setImmediate(resolve));
-  abort.abort(new Error("fixture cancelled"));
-  await assert.rejects(pending, /fixture cancelled/);
-  assert.equal(wc.getBackgroundThrottling(), true);
-  console.error("[throttling] starting recording");
-  await native.startRecording(tab, 10);
-  assert.equal(wc.getBackgroundThrottling(), false, "recording owns scheduling beyond start");
-  const video = await native.stopRecording(tab);
-  assert.ok(video.sizeBytes > 16);
-  assert.equal(wc.getBackgroundThrottling(), true, "recording stop releases its owner");
-  const cancelledStart = new AbortController();
-  cancelledStart.abort(new Error("cancel recorder startup"));
-  await assert.rejects(native.startRecording(tab, 10, cancelledStart.signal), /cancel recorder startup/);
-  assert.equal(wc.getBackgroundThrottling(), true);
-  // Electron aggregates compositor throttling across an attached window. Exercise
-  // the real host's minimized lifecycle, including a sibling that owns no lease.
-  native.present(tab, true, { x: 0, y: 0, width: 600, height: 400 });
-  const sibling = await native.create("throttle", "about:blank", undefined, false);
-  await sibling.initialLoad;
-  owner.contentView.addChildView(sibling.view);
-  sibling.view.setBounds({ x: 610, y: 0, width: 100, height: 100 });
-  sibling.view.setVisible(true);
-  await owner.loadURL("about:blank");
-  const attachment = () => {
-    assert.ok(owner.contentView.children.includes(tab.view), "recorded guest stays in its host");
-    assert.ok(owner.contentView.children.includes(sibling.view), "sibling stays attached");
-  };
-  const policies = () => [owner.webContents, sibling.view.webContents, wc]
-    .map(contents => contents.getBackgroundThrottling());
-  assert.deepEqual(policies(), [true, true, true]);
-  const observedContents = [owner.webContents, sibling.view.webContents];
-  await Promise.all(observedContents.map(contents => contents.executeJavaScript(
-    "globalThis.fixtureFrames = 0; requestAnimationFrame(function tick() { globalThis.fixtureFrames++; requestAnimationFrame(tick); });",
-  )));
-  const frameSamples: Array<{ phase: string; elapsedMs: number; host: number; sibling: number; visibility: string[] }> = [];
-  const sampleFrames = async (phase: string) => {
-    const read = () => Promise.all(observedContents.map(contents => contents.executeJavaScript(
-      "({frames: globalThis.fixtureFrames, visibility: document.visibilityState})",
-    ))) as Promise<Array<{ frames: number; visibility: string }>>;
-    const before = await read();
-    const started = Date.now();
-    await new Promise(resolve => setTimeout(resolve, 500));
-    const after = await read();
-    frameSamples.push({ phase, elapsedMs: Date.now() - started,
-      host: after[0].frames - before[0].frames, sibling: after[1].frames - before[1].frames,
-      visibility: after.map(value => value.visibility),
+void app
+  .whenReady()
+  .then(async () => {
+    const { BrowserService } = await import("../../main/services/browser/service");
+    const { configStore } = await import("../../main/services/config-store");
+    // Isolate native scheduling from workspace persistence/admission, covered elsewhere.
+    configStore.getWorkspace = async () =>
+      ({ id: "throttle" }) as Awaited<ReturnType<typeof configStore.getWorkspace>>;
+    const browser = new BrowserService();
+    const owner = new BrowserWindow({ show: false });
+    browser.attachOwner("throttle", {
+      id: owner.webContents.id,
+      documentId: "native-throttle-test",
+      isDestroyed: () => owner.isDestroyed(),
+      send: () => {},
+      onInvalidated: () => () => {},
     });
-  };
-  // Linux CI runs bare Xvfb without a window manager to acknowledge minimization.
-  // Use native hide/show there; macOS/Windows exercise real minimize/restore.
-  const backgroundMode = process.platform === "linux" ? "hidden" : "minimized";
-  const isBackgrounded = () => backgroundMode === "hidden" ? !owner.isVisible() : owner.isMinimized();
-  const backgrounded = new Promise<void>(resolve => {
-    if (backgroundMode === "hidden") owner.once("hide", () => resolve());
-    else owner.once("minimize", () => resolve());
-  });
-  if (backgroundMode === "hidden") owner.hide();
-  else owner.minimize();
-  await backgrounded;
-  assert.equal(isBackgrounded(), true);
-  attachment();
-  await sampleFrames(`${backgroundMode} idle`);
-  await native.startRecording(tab, 10);
-  await sampleFrames(`${backgroundMode} recording`);
-  const duringRecordingPolicies = policies();
-  assert.deepEqual(duringRecordingPolicies, [true, true, false]);
-  // The host/sibling getters describe their own scheduler preference, NOT the
-  // window compositor: Electron's native aggregator allows window-wide drawing.
-  const minimizedTimer = await command("new Promise(resolve => setTimeout(() => resolve('minimized timer'), 10))");
-  assert.equal(minimizedTimer.value, "minimized timer");
-  const concurrentAbort = new AbortController();
-  let enteredAction!: () => void;
-  const entered = new Promise<void>(resolve => { enteredAction = resolve; });
-  const concurrent = browser.command("throttle", {
-    action: "evaluate", tabId: tab.state.id, expression: "new Promise(() => {})",
-  }, { source: "user", signal: concurrentAbort.signal, beforeEffect: enteredAction });
-  await entered;
-  concurrentAbort.abort(new Error("cancel attached action"));
-  await assert.rejects(concurrent, /cancel attached action/);
-  assert.equal(wc.getBackgroundThrottling(), false, "recording survives another owner's cancellation");
-  const minimizedVideo = await native.stopRecording(tab);
-  assert.ok(minimizedVideo.sizeBytes > 16);
-  assert.equal(isBackgrounded(), true, "stopping capture must not restore the host window");
-  attachment();
-  const afterRecordingPolicies = policies();
-  assert.deepEqual(afterRecordingPolicies, [true, true, true]);
-  await sampleFrames(`${backgroundMode} after stop`);
-  // Exercise the production five-minute expiry without a five-minute sleep.
-  // Keep real timers/native encoder startup; retain the actual stop timer callback.
-  const schedule = globalThis.setTimeout;
-  const timers = new Map<ReturnType<typeof setTimeout>, { callback: () => void; delay?: number }>();
-  globalThis.setTimeout = ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
-    const timer = schedule(callback, delay, ...args);
-    timers.set(timer, { callback: () => callback(...args), delay });
-    return timer;
-  }) as typeof setTimeout;
-  try {
-    await native.startRecording(tab, 10);
-  } finally {
-    globalThis.setTimeout = schedule;
-  }
-  const expiring = tab.recording!;
-  const expiry = timers.get(expiring.stopTimer)!;
-  assert.equal(expiry.delay, 5 * 60_000, "active recording has a five-minute capture limit");
-  const autoStopped = new Promise<void>(resolve => expiring.recorder.once("closed", () => resolve()));
-  clearTimeout(expiring.stopTimer);
-  expiry.callback();
-  await autoStopped;
-  assert.equal(tab.state.recording, false);
-  const autoStoppedVideo = await native.stopRecording(tab);
-  assert.ok(autoStoppedVideo.sizeBytes > 0, "the next stop returns the video the limit saved");
-  await assert.rejects(native.stopRecording(tab), /not recording/, "an automatic stop is returned once");
-  assert.deepEqual(policies(), [true, true, true], "automatic stop releases the window's last exception");
-  assert.equal(isBackgrounded(), true);
-  attachment();
-  // Picture in Picture of a hidden tab behind the minimized host paints from the
-  // page's screencast: no main-process capture, paused while the preview itself
-  // is minimized, kept through a recording, and released on close. Linux keeps
-  // its capture loop (unchanged), so this runs where the host really minimizes.
-  let pictureInPicture: Record<string, unknown> | undefined;
-  if (backgroundMode === "minimized") {
-    native.present(tab, false);
-    await wc.executeJavaScript("globalThis.fixtureTicks = 0; (function tick() { document.body.textContent = 'Frame ' + globalThis.fixtureTicks++; requestAnimationFrame(tick); })()");
-    const pipCommand = (enabled: boolean) => browser.command("throttle", {
-      action: "picture_in_picture", tabId: tab.state.id, enabled,
-    }, { source: "user" });
-    console.error("[throttling] opening picture in picture");
-    await pipCommand(true);
-    console.error("[throttling] picture in picture open");
-    const pipWindow = BrowserWindow.getAllWindows().find(window => window.getTitle() === "Browser Picture in Picture");
-    assert.ok(pipWindow, "Picture in Picture opens its window");
-    await pipWindow.webContents.executeJavaScript("globalThis.paints = 0; new MutationObserver(() => globalThis.paints++).observe(document.querySelector('img'), { attributes: true }); 0");
-    const nativeCapture = wc.capturePage.bind(wc);
-    let captures = 0;
-    wc.capturePage = ((...args: Parameters<typeof wc.capturePage>) => {
-      captures += 1;
-      return nativeCapture(...args);
-    }) as typeof wc.capturePage;
-    const paintsOver = async (ms: number) => {
-      const before = await pipWindow.webContents.executeJavaScript("globalThis.paints") as number;
-      await new Promise(resolve => setTimeout(resolve, ms));
-      return (await pipWindow.webContents.executeJavaScript("globalThis.paints") as number) - before;
+    type Tab = {
+      state: BrowserTab;
+      view: WebContentsView;
+      initialLoad: Promise<void>;
+      backgroundThrottling: BrowserBackgroundThrottling;
+      recording?: { recorder: BrowserWindow; stopTimer: ReturnType<typeof setTimeout> };
     };
-    try {
-      const paintedWhileBackgrounded = await paintsOver(1_500);
-      assert.ok(paintedWhileBackgrounded >= 2, `the preview keeps painting a hidden tab behind a minimized host (${paintedWhileBackgrounded})`);
-      assert.ok(paintedWhileBackgrounded <= 8, `the preview paints at most 4 frames a second (${paintedWhileBackgrounded})`);
-      assert.equal(wc.getBackgroundThrottling(), false, "the open preview keeps the page rendering");
-      const minimizedPip = new Promise<void>(resolve => pipWindow.once("minimize", () => resolve()));
-      pipWindow.minimize();
-      await minimizedPip;
-      await new Promise(resolve => setTimeout(resolve, 300));
-      const paintedWhileMinimized = await paintsOver(1_000);
-      assert.equal(paintedWhileMinimized, 0, "a minimized preview paints nothing");
-      const restoredPip = new Promise<void>(resolve => pipWindow.once("restore", () => resolve()));
-      pipWindow.restore();
-      await restoredPip;
-      console.error("[throttling] recording beside picture in picture");
-      await native.startRecording(tab, 10);
-      const paintedWhileRecording = await paintsOver(1_000);
-      const pipVideo = await native.stopRecording(tab);
-      assert.ok(pipVideo.sizeBytes > 16, "a recording beside the preview still produces video");
-      const paintedAfterRecording = await paintsOver(1_000);
-      assert.ok(paintedWhileRecording >= 1 && paintedAfterRecording >= 1, `the preview keeps painting through a recording (${paintedWhileRecording}, ${paintedAfterRecording})`);
-      assert.equal(captures, 1, "only the recording's opening frame is captured; the preview captures nothing");
-      pictureInPicture = { paintedWhileBackgrounded, paintedWhileMinimized, paintedWhileRecording, paintedAfterRecording, captures };
-    } finally {
-      wc.capturePage = nativeCapture;
-    }
-    await pipCommand(false);
-    assert.equal(wc.getBackgroundThrottling(), true, "closing the preview releases the page");
-    assert.equal(pipWindow.isDestroyed(), true);
-    // A crash ends the preview: its screencast dies with the renderer, and the
-    // replacement starts hidden, so a kept window would hold a frozen frame.
-    console.error("[throttling] crashing beside picture in picture");
-    await pipCommand(true);
-    const crashedPip = BrowserWindow.getAllWindows().find(window => window.getTitle() === "Browser Picture in Picture");
-    assert.ok(crashedPip, "Picture in Picture reopens");
-    const pipCrashed = new Promise<void>(resolve => wc.once("render-process-gone", () => resolve()));
-    const pipClosed = new Promise<void>(resolve => crashedPip.once("closed", () => resolve()));
-    const pipRecovered = new Promise<void>(resolve => wc.once("did-navigate", () => wc.once("did-stop-loading", () => resolve())));
-    wc.forcefullyCrashRenderer();
-    await pipCrashed;
-    assert.equal(tab.state.pictureInPicture, false, "a crash closes the preview");
-    assert.equal(wc.getBackgroundThrottling(), true, "a crash releases the preview's lease");
-    await pipClosed;
-    await pipRecovered;
-    await wc.executeJavaScript("document.body.textContent = 'Local scheduling fixture'");
+    const native = browser as unknown as {
+      create(workspace: string, url: string, profile: undefined, show: boolean): Promise<Tab>;
+      capture(tab: Tab): Promise<BrowserImage>;
+      close(tab: Tab): void;
+      present(
+        tab: Tab,
+        visible: boolean,
+        bounds?: { x: number; y: number; width: number; height: number },
+      ): void;
+      startRecording(tab: Tab, fps: number, signal?: AbortSignal): Promise<void>;
+      stopRecording(tab: Tab): Promise<{ sizeBytes: number }>;
+    };
+    // about:blank avoids external network and permits the existing URL policy.
+    const tab = await native.create("throttle", "about:blank", undefined, false);
+    const wc = tab.view.webContents;
+    await tab.initialLoad;
+    const idlePolicy = wc.getBackgroundThrottling();
+    assert.equal(idlePolicy, true, "an ordinary hidden guest must use normal scheduling");
+    owner.show();
     native.present(tab, true, { x: 0, y: 0, width: 600, height: 400 });
+    await wc.executeJavaScript(
+      "document.body.style.background = 'rgb(30, 90, 160)'; document.body.textContent = 'Local scheduling fixture'",
+    );
+    const screenshot = await native.capture(tab);
+    native.present(tab, false);
+    assert.ok(screenshot.data.length > 0);
+    assert.equal(wc.getBackgroundThrottling(), true, "capture must restore the idle policy");
+    const hiddenScreenshot = await native.capture(tab);
+    assert.ok(hiddenScreenshot.data.length > 0);
+    assert.equal(wc.getBackgroundThrottling(), true);
+    const command = (expression: string, signal?: AbortSignal) =>
+      browser.command(
+        "throttle",
+        {
+          action: "evaluate",
+          tabId: tab.state.id,
+          expression,
+        },
+        { source: "user", signal },
+      );
+    console.error("[throttling] awaiting hidden timer");
+    const value = await command("new Promise(resolve => setTimeout(() => resolve('timer'), 10))");
+    assert.equal(value.value, "timer", "hidden automation must receive timer callbacks");
+    assert.equal(wc.getBackgroundThrottling(), true);
+    await assert.rejects(command("throw new Error('fixture failure')"), /fixture failure/);
+    assert.equal(wc.getBackgroundThrottling(), true, "failed action must restore scheduling");
+    const abort = new AbortController();
+    const pending = command("new Promise(() => {})", abort.signal);
+    // Observe actual acquisition, rather than guessing the queue's start time.
+    while (wc.getBackgroundThrottling()) await new Promise((resolve) => setImmediate(resolve));
+    abort.abort(new Error("fixture cancelled"));
+    await assert.rejects(pending, /fixture cancelled/);
+    assert.equal(wc.getBackgroundThrottling(), true);
+    console.error("[throttling] starting recording");
+    await native.startRecording(tab, 10);
+    assert.equal(wc.getBackgroundThrottling(), false, "recording owns scheduling beyond start");
+    const video = await native.stopRecording(tab);
+    assert.ok(video.sizeBytes > 16);
+    assert.equal(wc.getBackgroundThrottling(), true, "recording stop releases its owner");
+    const cancelledStart = new AbortController();
+    cancelledStart.abort(new Error("cancel recorder startup"));
+    await assert.rejects(
+      native.startRecording(tab, 10, cancelledStart.signal),
+      /cancel recorder startup/,
+    );
+    assert.equal(wc.getBackgroundThrottling(), true);
+    // Electron aggregates compositor throttling across an attached window. Exercise
+    // the real host's minimized lifecycle, including a sibling that owns no lease.
+    native.present(tab, true, { x: 0, y: 0, width: 600, height: 400 });
+    const sibling = await native.create("throttle", "about:blank", undefined, false);
+    await sibling.initialLoad;
+    owner.contentView.addChildView(sibling.view);
+    sibling.view.setBounds({ x: 610, y: 0, width: 100, height: 100 });
+    sibling.view.setVisible(true);
+    await owner.loadURL("about:blank");
+    const attachment = () => {
+      assert.ok(owner.contentView.children.includes(tab.view), "recorded guest stays in its host");
+      assert.ok(owner.contentView.children.includes(sibling.view), "sibling stays attached");
+    };
+    const policies = () =>
+      [owner.webContents, sibling.view.webContents, wc].map((contents) =>
+        contents.getBackgroundThrottling(),
+      );
+    assert.deepEqual(policies(), [true, true, true]);
+    const observedContents = [owner.webContents, sibling.view.webContents];
+    await Promise.all(
+      observedContents.map((contents) =>
+        contents.executeJavaScript(
+          "globalThis.fixtureFrames = 0; requestAnimationFrame(function tick() { globalThis.fixtureFrames++; requestAnimationFrame(tick); });",
+        ),
+      ),
+    );
+    const frameSamples: Array<{
+      phase: string;
+      elapsedMs: number;
+      host: number;
+      sibling: number;
+      visibility: string[];
+    }> = [];
+    const sampleFrames = async (phase: string) => {
+      const read = () =>
+        Promise.all(
+          observedContents.map((contents) =>
+            contents.executeJavaScript(
+              "({frames: globalThis.fixtureFrames, visibility: document.visibilityState})",
+            ),
+          ),
+        ) as Promise<Array<{ frames: number; visibility: string }>>;
+      const before = await read();
+      const started = Date.now();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const after = await read();
+      frameSamples.push({
+        phase,
+        elapsedMs: Date.now() - started,
+        host: after[0].frames - before[0].frames,
+        sibling: after[1].frames - before[1].frames,
+        visibility: after.map((value) => value.visibility),
+      });
+    };
+    // Linux CI runs bare Xvfb without a window manager to acknowledge minimization.
+    // Use native hide/show there; macOS/Windows exercise real minimize/restore.
+    const backgroundMode = process.platform === "linux" ? "hidden" : "minimized";
+    const isBackgrounded = () =>
+      backgroundMode === "hidden" ? !owner.isVisible() : owner.isMinimized();
+    const backgrounded = new Promise<void>((resolve) => {
+      if (backgroundMode === "hidden") owner.once("hide", () => resolve());
+      else owner.once("minimize", () => resolve());
+    });
+    if (backgroundMode === "hidden") owner.hide();
+    else owner.minimize();
+    await backgrounded;
+    assert.equal(isBackgrounded(), true);
     attachment();
-  }
-  owner.contentView.removeChildView(sibling.view);
-  native.close(sibling);
-  const restored = new Promise<void>(resolve => {
-    if (backgroundMode === "hidden") owner.once("show", () => resolve());
-    else owner.once("restore", () => resolve());
+    await sampleFrames(`${backgroundMode} idle`);
+    await native.startRecording(tab, 10);
+    await sampleFrames(`${backgroundMode} recording`);
+    const duringRecordingPolicies = policies();
+    assert.deepEqual(duringRecordingPolicies, [true, true, false]);
+    // The host/sibling getters describe their own scheduler preference, NOT the
+    // window compositor: Electron's native aggregator allows window-wide drawing.
+    const minimizedTimer = await command(
+      "new Promise(resolve => setTimeout(() => resolve('minimized timer'), 10))",
+    );
+    assert.equal(minimizedTimer.value, "minimized timer");
+    const concurrentAbort = new AbortController();
+    let enteredAction!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enteredAction = resolve;
+    });
+    const concurrent = browser.command(
+      "throttle",
+      {
+        action: "evaluate",
+        tabId: tab.state.id,
+        expression: "new Promise(() => {})",
+      },
+      { source: "user", signal: concurrentAbort.signal, beforeEffect: enteredAction },
+    );
+    await entered;
+    concurrentAbort.abort(new Error("cancel attached action"));
+    await assert.rejects(concurrent, /cancel attached action/);
+    assert.equal(
+      wc.getBackgroundThrottling(),
+      false,
+      "recording survives another owner's cancellation",
+    );
+    const minimizedVideo = await native.stopRecording(tab);
+    assert.ok(minimizedVideo.sizeBytes > 16);
+    assert.equal(isBackgrounded(), true, "stopping capture must not restore the host window");
+    attachment();
+    const afterRecordingPolicies = policies();
+    assert.deepEqual(afterRecordingPolicies, [true, true, true]);
+    await sampleFrames(`${backgroundMode} after stop`);
+    // Exercise the production five-minute expiry without a five-minute sleep.
+    // Keep real timers/native encoder startup; retain the actual stop timer callback.
+    const schedule = globalThis.setTimeout;
+    const timers = new Map<
+      ReturnType<typeof setTimeout>,
+      { callback: () => void; delay?: number }
+    >();
+    globalThis.setTimeout = ((
+      callback: (...args: unknown[]) => void,
+      delay?: number,
+      ...args: unknown[]
+    ) => {
+      const timer = schedule(callback, delay, ...args);
+      timers.set(timer, { callback: () => callback(...args), delay });
+      return timer;
+    }) as typeof setTimeout;
+    try {
+      await native.startRecording(tab, 10);
+    } finally {
+      globalThis.setTimeout = schedule;
+    }
+    const expiring = tab.recording!;
+    const expiry = timers.get(expiring.stopTimer)!;
+    assert.equal(expiry.delay, 5 * 60_000, "active recording has a five-minute capture limit");
+    const autoStopped = new Promise<void>((resolve) =>
+      expiring.recorder.once("closed", () => resolve()),
+    );
+    clearTimeout(expiring.stopTimer);
+    expiry.callback();
+    await autoStopped;
+    assert.equal(tab.state.recording, false);
+    const autoStoppedVideo = await native.stopRecording(tab);
+    assert.ok(autoStoppedVideo.sizeBytes > 0, "the next stop returns the video the limit saved");
+    await assert.rejects(
+      native.stopRecording(tab),
+      /not recording/,
+      "an automatic stop is returned once",
+    );
+    assert.deepEqual(
+      policies(),
+      [true, true, true],
+      "automatic stop releases the window's last exception",
+    );
+    assert.equal(isBackgrounded(), true);
+    attachment();
+    // Picture in Picture of a hidden tab behind the minimized host paints from the
+    // page's screencast: no main-process capture, paused while the preview itself
+    // is minimized, kept through a recording, and released on close. Linux keeps
+    // its capture loop (unchanged), so this runs where the host really minimizes.
+    let pictureInPicture: Record<string, unknown> | undefined;
+    if (backgroundMode === "minimized") {
+      native.present(tab, false);
+      await wc.executeJavaScript(
+        "globalThis.fixtureTicks = 0; (function tick() { document.body.textContent = 'Frame ' + globalThis.fixtureTicks++; requestAnimationFrame(tick); })()",
+      );
+      const pipCommand = (enabled: boolean) =>
+        browser.command(
+          "throttle",
+          {
+            action: "picture_in_picture",
+            tabId: tab.state.id,
+            enabled,
+          },
+          { source: "user" },
+        );
+      console.error("[throttling] opening picture in picture");
+      await pipCommand(true);
+      console.error("[throttling] picture in picture open");
+      const pipWindow = BrowserWindow.getAllWindows().find(
+        (window) => window.getTitle() === "Browser Picture in Picture",
+      );
+      assert.ok(pipWindow, "Picture in Picture opens its window");
+      await pipWindow.webContents.executeJavaScript(
+        "globalThis.paints = 0; new MutationObserver(() => globalThis.paints++).observe(document.querySelector('img'), { attributes: true }); 0",
+      );
+      const nativeCapture = wc.capturePage.bind(wc);
+      let captures = 0;
+      wc.capturePage = ((...args: Parameters<typeof wc.capturePage>) => {
+        captures += 1;
+        return nativeCapture(...args);
+      }) as typeof wc.capturePage;
+      const paintsOver = async (ms: number) => {
+        const before = (await pipWindow.webContents.executeJavaScript(
+          "globalThis.paints",
+        )) as number;
+        await new Promise((resolve) => setTimeout(resolve, ms));
+        return (
+          ((await pipWindow.webContents.executeJavaScript("globalThis.paints")) as number) - before
+        );
+      };
+      try {
+        const paintedWhileBackgrounded = await paintsOver(1_500);
+        assert.ok(
+          paintedWhileBackgrounded >= 2,
+          `the preview keeps painting a hidden tab behind a minimized host (${paintedWhileBackgrounded})`,
+        );
+        assert.ok(
+          paintedWhileBackgrounded <= 8,
+          `the preview paints at most 4 frames a second (${paintedWhileBackgrounded})`,
+        );
+        assert.equal(
+          wc.getBackgroundThrottling(),
+          false,
+          "the open preview keeps the page rendering",
+        );
+        const minimizedPip = new Promise<void>((resolve) =>
+          pipWindow.once("minimize", () => resolve()),
+        );
+        pipWindow.minimize();
+        await minimizedPip;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const paintedWhileMinimized = await paintsOver(1_000);
+        assert.equal(paintedWhileMinimized, 0, "a minimized preview paints nothing");
+        const restoredPip = new Promise<void>((resolve) =>
+          pipWindow.once("restore", () => resolve()),
+        );
+        pipWindow.restore();
+        await restoredPip;
+        console.error("[throttling] recording beside picture in picture");
+        await native.startRecording(tab, 10);
+        const paintedWhileRecording = await paintsOver(1_000);
+        const pipVideo = await native.stopRecording(tab);
+        assert.ok(pipVideo.sizeBytes > 16, "a recording beside the preview still produces video");
+        const paintedAfterRecording = await paintsOver(1_000);
+        assert.ok(
+          paintedWhileRecording >= 1 && paintedAfterRecording >= 1,
+          `the preview keeps painting through a recording (${paintedWhileRecording}, ${paintedAfterRecording})`,
+        );
+        assert.equal(
+          captures,
+          1,
+          "only the recording's opening frame is captured; the preview captures nothing",
+        );
+        pictureInPicture = {
+          paintedWhileBackgrounded,
+          paintedWhileMinimized,
+          paintedWhileRecording,
+          paintedAfterRecording,
+          captures,
+        };
+      } finally {
+        wc.capturePage = nativeCapture;
+      }
+      await pipCommand(false);
+      assert.equal(wc.getBackgroundThrottling(), true, "closing the preview releases the page");
+      assert.equal(pipWindow.isDestroyed(), true);
+      // A crash ends the preview: its screencast dies with the renderer, and the
+      // replacement starts hidden, so a kept window would hold a frozen frame.
+      console.error("[throttling] crashing beside picture in picture");
+      await pipCommand(true);
+      const crashedPip = BrowserWindow.getAllWindows().find(
+        (window) => window.getTitle() === "Browser Picture in Picture",
+      );
+      assert.ok(crashedPip, "Picture in Picture reopens");
+      const pipCrashed = new Promise<void>((resolve) =>
+        wc.once("render-process-gone", () => resolve()),
+      );
+      const pipClosed = new Promise<void>((resolve) => crashedPip.once("closed", () => resolve()));
+      const pipRecovered = new Promise<void>((resolve) =>
+        wc.once("did-navigate", () => wc.once("did-stop-loading", () => resolve())),
+      );
+      wc.forcefullyCrashRenderer();
+      await pipCrashed;
+      assert.equal(tab.state.pictureInPicture, false, "a crash closes the preview");
+      assert.equal(wc.getBackgroundThrottling(), true, "a crash releases the preview's lease");
+      await pipClosed;
+      await pipRecovered;
+      await wc.executeJavaScript("document.body.textContent = 'Local scheduling fixture'");
+      native.present(tab, true, { x: 0, y: 0, width: 600, height: 400 });
+      attachment();
+    }
+    owner.contentView.removeChildView(sibling.view);
+    native.close(sibling);
+    const restored = new Promise<void>((resolve) => {
+      if (backgroundMode === "hidden") owner.once("show", () => resolve());
+      else owner.once("restore", () => resolve());
+    });
+    if (backgroundMode === "hidden") owner.show();
+    else owner.restore();
+    await restored;
+    assert.equal(isBackgrounded(), false);
+    const attachedWindow = {
+      duringRecordingPolicies,
+      afterRecordingPolicies,
+      frameSamples,
+      minimizedTimer: minimizedTimer.value,
+      recordingBytes: minimizedVideo.sizeBytes,
+      backgroundMode,
+      stayedBackgrounded: true,
+      preservedAttachments: true,
+      automaticStopDelayMs: expiry.delay,
+    };
+    const extraTabs = await Promise.all(
+      [1, 2].map(() => native.create("throttle", "about:blank", undefined, false)),
+    );
+    await Promise.all(extraTabs.map((extra) => extra.initialLoad));
+    const idlePolicies = [tab, ...extraTabs].map((extra) =>
+      extra.view.webContents.getBackgroundThrottling(),
+    );
+    assert.deepEqual(idlePolicies, [true, true, true]);
+    for (const extra of extraTabs) native.close(extra);
+    // Crash an actual recording: production cleanup must retire both owners.
+    await native.startRecording(tab, 10);
+    const recorderClosed = new Promise<void>((resolve) =>
+      tab.recording!.recorder.once("closed", () => resolve()),
+    );
+    const release = tab.backgroundThrottling.acquire();
+    const crashed = new Promise<void>((resolve) => wc.once("render-process-gone", () => resolve()));
+    wc.forcefullyCrashRenderer();
+    await crashed;
+    assert.equal(wc.getBackgroundThrottling(), true, "crash resets scheduling");
+    assert.equal(tab.state.recording, false, "crash ends the unusable recording");
+    release();
+    await recorderClosed;
+    const destroyed = new Promise<void>((resolve) => wc.once("destroyed", () => resolve()));
+    native.close(tab);
+    await destroyed;
+    assert.equal(wc.isDestroyed(), true);
+    await writeFile(
+      path.join(root, "result.json"),
+      JSON.stringify(
+        {
+          electron: process.versions.electron,
+          platform: process.platform,
+          idlePolicy,
+          idlePolicies,
+          screenshotBytes: Buffer.from(screenshot.data, "base64").length,
+          timerResult: value.value,
+          recordingBytes: video.sizeBytes,
+          cancellationRestored: true,
+          failureRestored: true,
+          crashRestored: true,
+          attachedWindow,
+          pictureInPicture,
+        },
+        null,
+        2,
+      ),
+    );
+    owner.destroy();
+    clearTimeout(deadline);
+    app.exit(0);
+  })
+  .catch((error) => {
+    console.error(error);
+    app.exit(1);
   });
-  if (backgroundMode === "hidden") owner.show();
-  else owner.restore();
-  await restored;
-  assert.equal(isBackgrounded(), false);
-  const attachedWindow = {
-    duringRecordingPolicies, afterRecordingPolicies, frameSamples,
-    minimizedTimer: minimizedTimer.value, recordingBytes: minimizedVideo.sizeBytes,
-    backgroundMode, stayedBackgrounded: true, preservedAttachments: true, automaticStopDelayMs: expiry.delay,
-  };
-  const extraTabs = await Promise.all([1, 2].map(() => native.create("throttle", "about:blank", undefined, false)));
-  await Promise.all(extraTabs.map(extra => extra.initialLoad));
-  const idlePolicies = [tab, ...extraTabs].map(extra => extra.view.webContents.getBackgroundThrottling());
-  assert.deepEqual(idlePolicies, [true, true, true]);
-  for (const extra of extraTabs) native.close(extra);
-  // Crash an actual recording: production cleanup must retire both owners.
-  await native.startRecording(tab, 10);
-  const recorderClosed = new Promise<void>(resolve => tab.recording!.recorder.once("closed", () => resolve()));
-  const release = tab.backgroundThrottling.acquire();
-  const crashed = new Promise<void>(resolve => wc.once("render-process-gone", () => resolve()));
-  wc.forcefullyCrashRenderer();
-  await crashed;
-  assert.equal(wc.getBackgroundThrottling(), true, "crash resets scheduling");
-  assert.equal(tab.state.recording, false, "crash ends the unusable recording");
-  release();
-  await recorderClosed;
-  const destroyed = new Promise<void>(resolve => wc.once("destroyed", () => resolve()));
-  native.close(tab);
-  await destroyed;
-  assert.equal(wc.isDestroyed(), true);
-  await writeFile(path.join(root, "result.json"), JSON.stringify({
-    electron: process.versions.electron, platform: process.platform, idlePolicy, idlePolicies,
-    screenshotBytes: Buffer.from(screenshot.data, "base64").length,
-    timerResult: value.value, recordingBytes: video.sizeBytes,
-    cancellationRestored: true, failureRestored: true, crashRestored: true, attachedWindow, pictureInPicture,
-  }, null, 2));
-  owner.destroy();
-  clearTimeout(deadline);
-  app.exit(0);
-}).catch(error => { console.error(error); app.exit(1); });

@@ -15,38 +15,38 @@ one starts unassigned.
 
 ## Everywhere
 
-| Key | Does |
-| --- | --- |
-| `⌘K` | Command palette: commands, chats, models, providers, Settings, appearance, Bots |
-| `⇧⌘Space` | Toggle Floating Quick Chat (global hotkey — works from any app while Aiden is running) |
-| `⌘/` | Keyboard shortcuts: every key as set in Settings plus the built-in ones, searchable |
-| `⌘N` / `⇧⌘N` | New chat / New chat in… |
-| `⇧⌘F` | Search chats |
-| `⌘1`–`⌘9` | Open the chat with that number (hold `⌘` to see the numbers); on the Bots page, the Bot on that row |
-| `⇧⌘[` / `⇧⌘]` | Previous / next chat, or Bot on the Bots page |
-| `⌘[` / `⌘]` | Go back / go forward |
-| `⇧⌘M` | Change model |
-| `⌘,` | Open Settings |
-| `⇧⌘,` | Workspace settings for the workspace in use (also from the message box) |
-| `⌘B` | Toggle sidebar |
-| `⌘O` / `⇧⌘O` | Open workspace in preferred editor / Open folder… |
-| `⌘J` / `⇧⌘E` | Toggle terminal / Toggle Environment |
-| `⌥⌘B` | Bubble this Bot: shrink the open Bot chat into a floating head ([Bot bubbles](bot-bubbles.md)); does nothing elsewhere, while that Bot is already bubbled or with bubbles turned off |
-| `⌘S` | Save file (Files editor) |
+| Key           | Does                                                                                                                                                                                 |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `⌘K`          | Command palette: commands, chats, models, providers, Settings, appearance, Bots                                                                                                      |
+| `⇧⌘Space`     | Toggle Floating Quick Chat (global hotkey — works from any app while Aiden is running)                                                                                               |
+| `⌘/`          | Keyboard shortcuts: every key as set in Settings plus the built-in ones, searchable                                                                                                  |
+| `⌘N` / `⇧⌘N`  | New chat / New chat in…                                                                                                                                                              |
+| `⇧⌘F`         | Search chats                                                                                                                                                                         |
+| `⌘1`–`⌘9`     | Open the chat with that number (hold `⌘` to see the numbers); on the Bots page, the Bot on that row                                                                                  |
+| `⇧⌘[` / `⇧⌘]` | Previous / next chat, or Bot on the Bots page                                                                                                                                        |
+| `⌘[` / `⌘]`   | Go back / go forward                                                                                                                                                                 |
+| `⇧⌘M`         | Change model                                                                                                                                                                         |
+| `⌘,`          | Open Settings                                                                                                                                                                        |
+| `⇧⌘,`         | Workspace settings for the workspace in use (also from the message box)                                                                                                              |
+| `⌘B`          | Toggle sidebar                                                                                                                                                                       |
+| `⌘O` / `⇧⌘O`  | Open workspace in preferred editor / Open folder…                                                                                                                                    |
+| `⌘J` / `⇧⌘E`  | Toggle terminal / Toggle Environment                                                                                                                                                 |
+| `⌥⌘B`         | Bubble this Bot: shrink the open Bot chat into a floating head ([Bot bubbles](bot-bubbles.md)); does nothing elsewhere, while that Bot is already bubbled or with bubbles turned off |
+| `⌘S`          | Save file (Files editor)                                                                                                                                                             |
 
 ## Moving around the window
 
-| Key | Does |
-| --- | --- |
-| `F6` / `⇧F6` | Move to the next / previous area: sidebar, conversation, message box, side panel |
-| `↑` `↓` | Move between chats or Bots in the sidebar |
-| `Home` / `End` | First / last row in the sidebar |
-| `←` / `→` | In the sidebar, close / open a project folder; `←` on a chat goes to its folder (swapped in a right-to-left layout) |
-| Letters | In the sidebar, go to the next row whose title starts with what you type |
-| `⇧↑` / `⇧↓` | Select a run of chats in the sidebar from the focused one; `Esc` clears the selection |
+| Key               | Does                                                                                                                                                                                           |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `F6` / `⇧F6`      | Move to the next / previous area: sidebar, conversation, message box, side panel                                                                                                               |
+| `↑` `↓`           | Move between chats or Bots in the sidebar                                                                                                                                                      |
+| `Home` / `End`    | First / last row in the sidebar                                                                                                                                                                |
+| `←` / `→`         | In the sidebar, close / open a project folder; `←` on a chat goes to its folder (swapped in a right-to-left layout)                                                                            |
+| Letters           | In the sidebar, go to the next row whose title starts with what you type                                                                                                                       |
+| `⇧↑` / `⇧↓`       | Select a run of chats in the sidebar from the focused one; `Esc` clears the selection                                                                                                          |
 | `←` `→` / `↑` `↓` | On a focused divider (the sidebar's, the Environment or Bot panel's, the design chat's, the terminal drawer's), move it 16 px; with `⇧`, 40 px (left and right swap in a right-to-left layout) |
-| `Home` / `End` | On a focused divider, make the panel as small / as large as it goes |
-| `↩` | On a focused divider, hide the sidebar or close the Environment panel, Bot panel or terminal |
+| `Home` / `End`    | On a focused divider, make the panel as small / as large as it goes                                                                                                                            |
+| `↩`               | On a focused divider, hide the sidebar or close the Environment panel, Bot panel or terminal                                                                                                   |
 
 `F6` lands on the sidebar's open chat, on the conversation itself (scroll it
 with the arrow keys, Page Up and Page Down), in the message box, or on the
@@ -81,23 +81,23 @@ work while Aiden is in the background.
 
 ## In a chat
 
-| Key | Does |
-| --- | --- |
-| `⌘.` | Stop the reply (`Esc` also works from the message box) |
-| `⌘U` | Attach files |
-| `⌘F` | Find in this chat: `↩` / `⇧↩` (or `⌘G` / `⇧⌘G`) next / previous match, `Esc` closes |
-| `↑` / `↓` | In an empty message box, browse your earlier prompts with each paired reply (`↩` keeps it in the box, `Esc` restores, `⌥↩` edits a settled turn in a fork) |
-| `⌥↑` / `⌥↓` | Step to the previous / next reply and its Copy and Fork buttons |
-| `⌘↩` | Allow once, while an approval is waiting and the message box is empty |
-| `⌘⌫` | Deny, under the same conditions |
-| `/` | Slash commands in the message box |
-| `@` | Mention a file or folder of the chat's workspace: `↑` / `↓` choose, `↩` or `⇥` adds it as a chip, `Esc` closes; `⌫` at the start of the text removes the last chip |
-| `⌥⌘[` / `⌥⌘]` | Move this chat one Agent Slider stop down / up, skipping stops that can't run. Rebindable in Settings → Keyboard; does nothing in a Bot's chat or while a reply is running. Works in Quick Chat too |
-| `←` / `→`, `Home` / `End` | On the Agent Slider (the composer's model button opens it), move between stops that can run, or to the first / last one. Typing a letter opens the full model list filtered by it |
-| `⌘L` | In the composer's model popover, open **Other models…** (the full, searchable list). `Esc` in the list goes back to the slider; `Esc` again closes it |
-| `⇧⌘P` | In a model list, pin the highlighted model (again to undo). The row's pin icon does the same with the mouse |
-| `⇧⌘L` | Design mode on / off for this chat (`/design` and `/design off` do the same; gone while `AIDEN_DESIGN_MODE=0` turns design mode off). `Esc` never leaves design mode |
-| `⇧⌘\` | In design mode, expand the canvas (the sidebar folds away and the chat stays on the left) or minimize it again; the same as the **Expand canvas** / **Minimize canvas** button beside Present. Not offered in a window too narrow to keep the sidebar beside the chat |
+| Key                       | Does                                                                                                                                                                                                                                                                  |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `⌘.`                      | Stop the reply (`Esc` also works from the message box)                                                                                                                                                                                                                |
+| `⌘U`                      | Attach files                                                                                                                                                                                                                                                          |
+| `⌘F`                      | Find in this chat: `↩` / `⇧↩` (or `⌘G` / `⇧⌘G`) next / previous match, `Esc` closes                                                                                                                                                                                   |
+| `↑` / `↓`                 | In an empty message box, browse your earlier prompts with each paired reply (`↩` keeps it in the box, `Esc` restores, `⌥↩` edits a settled turn in a fork)                                                                                                            |
+| `⌥↑` / `⌥↓`               | Step to the previous / next reply and its Copy and Fork buttons                                                                                                                                                                                                       |
+| `⌘↩`                      | Allow once, while an approval is waiting and the message box is empty                                                                                                                                                                                                 |
+| `⌘⌫`                      | Deny, under the same conditions                                                                                                                                                                                                                                       |
+| `/`                       | Slash commands in the message box                                                                                                                                                                                                                                     |
+| `@`                       | Mention a file or folder of the chat's workspace: `↑` / `↓` choose, `↩` or `⇥` adds it as a chip, `Esc` closes; `⌫` at the start of the text removes the last chip                                                                                                    |
+| `⌥⌘[` / `⌥⌘]`             | Move this chat one Agent Slider stop down / up, skipping stops that can't run. Rebindable in Settings → Keyboard; does nothing in a Bot's chat or while a reply is running. Works in Quick Chat too                                                                   |
+| `←` / `→`, `Home` / `End` | On the Agent Slider (the composer's model button opens it), move between stops that can run, or to the first / last one. Typing a letter opens the full model list filtered by it                                                                                     |
+| `⌘L`                      | In the composer's model popover, open **Other models…** (the full, searchable list). `Esc` in the list goes back to the slider; `Esc` again closes it                                                                                                                 |
+| `⇧⌘P`                     | In a model list, pin the highlighted model (again to undo). The row's pin icon does the same with the mouse                                                                                                                                                           |
+| `⇧⌘L`                     | Design mode on / off for this chat (`/design` and `/design off` do the same; gone while `AIDEN_DESIGN_MODE=0` turns design mode off). `Esc` never leaves design mode                                                                                                  |
+| `⇧⌘\`                     | In design mode, expand the canvas (the sidebar folds away and the chat stays on the left) or minimize it again; the same as the **Expand canvas** / **Minimize canvas** button beside Present. Not offered in a window too narrow to keep the sidebar beside the chat |
 
 On the design canvas (with the canvas focused, not a note or an entered
 page): `⌘Z` / `⇧⌘Z` undo and redo, `⌘D` duplicates the selection, `⌫` or
@@ -222,11 +222,11 @@ image viewer; thumbnails are buttons, so `Tab` reaches them and `↩` or `Space`
 opens one. `⇧F10` (or the Menu key) on an Output thumbnail opens its menu:
 Save…, Copy Image and Show in Finder (Show in folder on Linux).
 
-| Key | Does |
-| --- | --- |
-| `←` / `→` | Previous / next image (stops at the first and last) |
-| `Home` / `End` | First / last image |
-| `Esc` | Close the viewer |
+| Key            | Does                                                |
+| -------------- | --------------------------------------------------- |
+| `←` / `→`      | Previous / next image (stops at the first and last) |
+| `Home` / `End` | First / last image                                  |
+| `Esc`          | Close the viewer                                    |
 
 These keys act only inside the viewer, can't be changed in Settings, and are
 not listed under **Built-in keys** while Create Images is experimental. They

@@ -12,7 +12,8 @@ import { createBotBrowser } from "./bot-browser-tools.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
 
 const browserService = async () => (await import("../browser/service.js")).browserService;
-const applicationService = async () => (await import("../bot-application-service-main.js")).botApplicationService;
+const applicationService = async () =>
+  (await import("../bot-application-service-main.js")).botApplicationService;
 
 /** The focused or most recent main window's document, or `undefined` with no window. */
 export function mintBotBrowserOwner(): RendererDocumentOwner | undefined {
@@ -25,7 +26,10 @@ export function mintBotBrowserOwner(): RendererDocumentOwner | undefined {
   }
 }
 
-export const botBrowser = createBotBrowser({ service: browserService, mintOwner: mintBotBrowserOwner });
+export const botBrowser = createBotBrowser({
+  service: browserService,
+  mintOwner: mintBotBrowserOwner,
+});
 
 /**
  * The Bot's managed workspace, admitted to the browser service. `null` when
@@ -47,8 +51,13 @@ async function hasBrowserAccess(botId: string): Promise<boolean> {
   try {
     const chat = await (await applicationService()).getCanonicalChat(botId);
     if (!chat) return false;
-    const { botRuntimeAuthority, BOT_DESKTOP_AUDIENCE_ID } = await import("../bot-runtime-authority-main.js");
-    const admission = await botRuntimeAuthority.admit({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, chatId: chat.id });
+    const { botRuntimeAuthority, BOT_DESKTOP_AUDIENCE_ID } =
+      await import("../bot-runtime-authority-main.js");
+    const admission = await botRuntimeAuthority.admit({
+      audienceId: BOT_DESKTOP_AUDIENCE_ID,
+      botId,
+      chatId: chat.id,
+    });
     try {
       return admission.authority.otherCapabilities.some((grant) => grant.kind === "browser");
     } finally {

@@ -29,7 +29,10 @@ const LOCAL_CONTENT_PRIVILEGES: CustomSchemeDefinition["privileges"] = Object.fr
 });
 
 /** Every custom scheme Aiden registers. Electron accepts exactly one call, before app ready. */
-export function customSchemePrivileges(options: { studioAssets: boolean; designMode?: boolean }): CustomSchemeDefinition[] {
+export function customSchemePrivileges(options: {
+  studioAssets: boolean;
+  designMode?: boolean;
+}): CustomSchemeDefinition[] {
   return [
     { scheme: GENERATIVE_UI_PROTOCOL_SCHEME, privileges: { ...LOCAL_CONTENT_PRIVILEGES } },
     { scheme: CHAT_ATTACHMENT_SCHEME, privileges: { ...LOCAL_CONTENT_PRIVILEGES } },

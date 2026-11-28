@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  secureStorageIsSafe,
-  secureStorageUnavailableMessage,
-} from "./secure-storage-core.js";
+import { secureStorageIsSafe, secureStorageUnavailableMessage } from "./secure-storage-core.js";
 
 test("Linux secure storage fails closed for Electron basic_text and unknown backends", () => {
   assert.equal(secureStorageIsSafe("linux", true, "basic_text"), false);

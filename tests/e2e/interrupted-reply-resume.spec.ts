@@ -3,7 +3,9 @@ import { expect, finishLmStudioOnboarding, test, E2E_ASSISTANT_RESPONSE } from "
 const RESUME_TURN = "Continue where you left off.";
 
 for (const ending of ["crash", "quit"] as const) {
-  test(`a reply cut short by a ${ending} offers Resume after relaunch and never resumes on its own`, async ({ aiden }) => {
+  test(`a reply cut short by a ${ending} offers Resume after relaunch and never resumes on its own`, async ({
+    aiden,
+  }) => {
     test.setTimeout(120_000);
     const { lmStudio } = aiden;
     let page = aiden.page;
@@ -14,11 +16,17 @@ for (const ending of ["crash", "quit"] as const) {
     await composer.fill(prompt);
     await composer.press("Enter");
     reply.push("The first section of the report");
-    await expect(page.getByText("The first section of the report")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("The first section of the report")).toBeVisible({
+      timeout: 15_000,
+    });
 
     if (ending === "crash") aiden.app.process().kill("SIGKILL");
     page = await aiden.relaunch();
-    await page.getByText(prompt).first().click().catch(() => undefined);
+    await page
+      .getByText(prompt)
+      .first()
+      .click()
+      .catch(() => undefined);
     await expect(page.getByText(prompt).first()).toBeVisible({ timeout: 15_000 });
 
     const card = page.locator("[data-interrupted-reply]");
@@ -48,7 +56,9 @@ test("a reply stopped with Stop does not offer Resume after relaunch", async ({ 
   reply.push("A start that gets stopped");
   await expect(page.getByText("A start that gets stopped")).toBeVisible({ timeout: 15_000 });
   await page.getByRole("button", { name: "Stop generating" }).click();
-  await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0, {
+    timeout: 15_000,
+  });
 
   page = await aiden.relaunch();
   await expect(page.getByText(prompt).first()).toBeVisible({ timeout: 15_000 });

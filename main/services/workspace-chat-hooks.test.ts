@@ -23,7 +23,10 @@ import { convertToLlm } from "./pi-legacy-harness.js";
 import { createChatStore } from "./chat-store-core.js";
 import { isHookBlockedPrompt } from "./hook-blocked-prompt.js";
 import type { ChatMessage } from "./types.js";
-import { PiCompactionSessionStore, syncChatMessagesToPiSession } from "./pi-compaction-session-store.js";
+import {
+  PiCompactionSessionStore,
+  syncChatMessagesToPiSession,
+} from "./pi-compaction-session-store.js";
 import { PiAgentRuntimeHarness } from "./pi-agent-runtime-harness.js";
 import {
   MAX_STOP_HOOK_CONTINUATIONS,
@@ -41,7 +44,10 @@ import {
   screenRunInputWithHooks,
   workspaceChatSessionStartSource,
 } from "./workspace-chat-hooks.js";
-import { createChatRunInputAdmission, type ChatRunInputGenerationRef } from "./chat-run-input-admission.js";
+import {
+  createChatRunInputAdmission,
+  type ChatRunInputGenerationRef,
+} from "./chat-run-input-admission.js";
 import { createChatOwedTurns, type OwedTurnPlan } from "./chat-owed-turns.js";
 
 interface Dispatched {
@@ -71,7 +77,11 @@ const editTool: AgentTool = {
   name: "edit_file",
   label: "edit_file",
   description: "Edit a file",
-  parameters: Type.Object({ path: Type.String(), old_text: Type.String(), new_text: Type.String() }),
+  parameters: Type.Object({
+    path: Type.String(),
+    old_text: Type.String(),
+    new_text: Type.String(),
+  }),
   execute: async () => ({ content: [{ type: "text", text: "edited" }], details: null }),
 };
 
@@ -79,11 +89,13 @@ const fenced = (text: string) => `<<hook data>>${text}<</hook data>>`;
 
 test("a folder chat runs global, workspace and chat hooks in its folder; a folderless one in the home folder", async () => {
   const { dispatcher, calls } = fakeDispatcher({ UserPromptSubmit: { ranHooks: ["audit"] } });
-  await createWorkspaceChatHooks({ chatId: "chat-1", workspaceRoot: "/work/app" }, dispatcher).dispatch(
-    "UserPromptSubmit",
-    { prompt: "hi" },
-  );
-  await createWorkspaceChatHooks({ chatId: "chat-2" }, dispatcher).dispatch("UserPromptSubmit", { prompt: "hi" });
+  await createWorkspaceChatHooks(
+    { chatId: "chat-1", workspaceRoot: "/work/app" },
+    dispatcher,
+  ).dispatch("UserPromptSubmit", { prompt: "hi" });
+  await createWorkspaceChatHooks({ chatId: "chat-2" }, dispatcher).dispatch("UserPromptSubmit", {
+    prompt: "hi",
+  });
 
   const scopes = calls.map((call) => call.context.scopes);
   assert.deepEqual(scopes[0], [
@@ -91,7 +103,10 @@ test("a folder chat runs global, workspace and chat hooks in its folder; a folde
     { kind: "workspace", workspaceRoot: "/work/app" },
     { kind: "chat", chatId: "chat-1" },
   ] satisfies HookScope[]);
-  assert.deepEqual(scopes[1], [{ kind: "global" }, { kind: "chat", chatId: "chat-2" }] satisfies HookScope[]);
+  assert.deepEqual(scopes[1], [
+    { kind: "global" },
+    { kind: "chat", chatId: "chat-2" },
+  ] satisfies HookScope[]);
   assert.deepEqual(
     calls.map((call) => [call.payload.session_id, call.payload.cwd, call.payload.hook_event_name]),
     [
@@ -116,42 +131,94 @@ test("rewritten input is judged again by every hook before it can run", async ()
   const args = { path: "src/a.ts", old_text: "a", new_text: "b" };
   const rewriteOnce = (payload: HookPayload): HookOutcome => {
     const input = payload.tool_input as Record<string, unknown>;
-    if (input.file_path === "src/safe.ts") return { decision: "ask", reason: "check this path", ranHooks: ["guard"] };
-    return { decision: "allow", updatedInput: { ...input, file_path: "src/safe.ts" }, ranHooks: ["rewrite"] };
+    if (input.file_path === "src/safe.ts")
+      return { decision: "ask", reason: "check this path", ranHooks: ["guard"] };
+    return {
+      decision: "allow",
+      updatedInput: { ...input, file_path: "src/safe.ts" },
+      ranHooks: ["rewrite"],
+    };
   };
   const asked = fakeDispatcher({ PreToolUse: rewriteOnce });
   const live = { ...args };
-  const decision = await createWorkspaceChatHooks({ chatId: "c" }, asked.dispatcher).preToolUse({ toolCallId: "1", toolName: "edit_file", args: live, tools: [editTool] });
+  const decision = await createWorkspaceChatHooks({ chatId: "c" }, asked.dispatcher).preToolUse({
+    toolCallId: "1",
+    toolName: "edit_file",
+    args: live,
+    tools: [editTool],
+  });
   assert.equal(asked.calls.length, 2);
-  assert.equal(((asked.calls[1]!.payload.tool_input) as Record<string, unknown>).file_path, "src/safe.ts");
-  assert.deepEqual(decision, { kind: "ask", reason: "Hook guard: check this path" }, "the check of the input that runs is the answer");
+  assert.equal(
+    (asked.calls[1]!.payload.tool_input as Record<string, unknown>).file_path,
+    "src/safe.ts",
+  );
+  assert.deepEqual(
+    decision,
+    { kind: "ask", reason: "Hook guard: check this path" },
+    "the check of the input that runs is the answer",
+  );
   assert.equal(live.path, "src/safe.ts");
 
   // A second hook refuses what the first one rewrote: nothing changes and nothing runs.
   const denied = fakeDispatcher({
-    PreToolUse: (payload) => (payload.tool_input as Record<string, unknown>).file_path === "src/safe.ts"
-      ? { decision: "deny", reason: "no", reasonForModel: fenced("not that path"), ranHooks: ["guard"] }
-      : { decision: "allow", updatedInput: { ...(payload.tool_input as Record<string, unknown>), file_path: "src/safe.ts" }, ranHooks: ["rewrite"] },
+    PreToolUse: (payload) =>
+      (payload.tool_input as Record<string, unknown>).file_path === "src/safe.ts"
+        ? {
+            decision: "deny",
+            reason: "no",
+            reasonForModel: fenced("not that path"),
+            ranHooks: ["guard"],
+          }
+        : {
+            decision: "allow",
+            updatedInput: {
+              ...(payload.tool_input as Record<string, unknown>),
+              file_path: "src/safe.ts",
+            },
+            ranHooks: ["rewrite"],
+          },
   });
   const untouched = { ...args };
-  const refused = await createWorkspaceChatHooks({ chatId: "c" }, denied.dispatcher).preToolUse({ toolCallId: "2", toolName: "edit_file", args: untouched, tools: [editTool] });
+  const refused = await createWorkspaceChatHooks({ chatId: "c" }, denied.dispatcher).preToolUse({
+    toolCallId: "2",
+    toolName: "edit_file",
+    args: untouched,
+    tools: [editTool],
+  });
   assert.equal(refused.kind, "block");
   assert.equal(untouched.path, "src/a.ts");
 
   // A rewriter that never settles leaves no input anyone approved.
   let turn = 0;
   const restless = fakeDispatcher({
-    PreToolUse: (payload) => ({ decision: "allow", updatedInput: { ...(payload.tool_input as Record<string, unknown>), file_path: `src/${turn += 1}.ts` }, ranHooks: ["rewrite"] }),
+    PreToolUse: (payload) => ({
+      decision: "allow",
+      updatedInput: {
+        ...(payload.tool_input as Record<string, unknown>),
+        file_path: `src/${(turn += 1)}.ts`,
+      },
+      ranHooks: ["rewrite"],
+    }),
   });
   const settled = { ...args };
-  const blocked = await createWorkspaceChatHooks({ chatId: "c" }, restless.dispatcher).preToolUse({ toolCallId: "3", toolName: "edit_file", args: settled, tools: [editTool] });
+  const blocked = await createWorkspaceChatHooks({ chatId: "c" }, restless.dispatcher).preToolUse({
+    toolCallId: "3",
+    toolName: "edit_file",
+    args: settled,
+    tools: [editTool],
+  });
   assert.equal(blocked.kind, "block");
   assert.equal(settled.path, "src/a.ts");
 });
 
 test("PreToolUse deny blocks with the hooks' names and reason; ask and allow are reported, no hook is none", async () => {
   const deny = fakeDispatcher({
-    PreToolUse: { decision: "deny", reason: "no", reasonForModel: fenced("main is protected"), ranHooks: ["guard.sh", "lint"] },
+    PreToolUse: {
+      decision: "deny",
+      reason: "no",
+      reasonForModel: fenced("main is protected"),
+      ranHooks: ["guard.sh", "lint"],
+    },
   });
   const args = { path: "src/a.ts", old_text: "a", new_text: "b" };
   const blocked = await createWorkspaceChatHooks({ chatId: "c" }, deny.dispatcher).preToolUse({
@@ -160,27 +227,47 @@ test("PreToolUse deny blocks with the hooks' names and reason; ask and allow are
     args,
     tools: [editTool],
   });
-  assert.deepEqual(blocked, { kind: "block", reason: `Blocked by hook guard.sh, lint: ${fenced("main is protected")}` });
+  assert.deepEqual(blocked, {
+    kind: "block",
+    reason: `Blocked by hook guard.sh, lint: ${fenced("main is protected")}`,
+  });
   // Hooks see Claude Code's spelling of the tool and its input, keyed to the call.
   assert.equal(deny.calls[0]!.payload.tool_name, "Edit");
   assert.equal(deny.calls[0]!.payload.aiden_tool_name, "edit_file");
-  assert.equal((deny.calls[0]!.payload.tool_input as Record<string, unknown>).file_path, "src/a.ts");
+  assert.equal(
+    (deny.calls[0]!.payload.tool_input as Record<string, unknown>).file_path,
+    "src/a.ts",
+  );
   assert.match(deny.calls[0]!.context.idempotencyKey ?? "", /^PreToolUse:c:call-1:/u);
   assert.equal(deny.calls[0]!.payload.tool_use_id, "call-1");
 
-  const ask = fakeDispatcher({ PreToolUse: { decision: "ask", reason: "check the diff", ranHooks: ["review"] } });
+  const ask = fakeDispatcher({
+    PreToolUse: { decision: "ask", reason: "check the diff", ranHooks: ["review"] },
+  });
   assert.deepEqual(
-    await createWorkspaceChatHooks({ chatId: "c" }, ask.dispatcher).preToolUse({ toolCallId: "2", toolName: "edit_file", args }),
+    await createWorkspaceChatHooks({ chatId: "c" }, ask.dispatcher).preToolUse({
+      toolCallId: "2",
+      toolName: "edit_file",
+      args,
+    }),
     { kind: "ask", reason: "Hook review: check the diff" },
   );
   const allow = fakeDispatcher({ PreToolUse: { decision: "allow", ranHooks: ["ok"] } });
   assert.deepEqual(
-    await createWorkspaceChatHooks({ chatId: "c" }, allow.dispatcher).preToolUse({ toolCallId: "3", toolName: "edit_file", args }),
+    await createWorkspaceChatHooks({ chatId: "c" }, allow.dispatcher).preToolUse({
+      toolCallId: "3",
+      toolName: "edit_file",
+      args,
+    }),
     { kind: "allow" },
   );
   const none = fakeDispatcher({});
   assert.deepEqual(
-    await createWorkspaceChatHooks({ chatId: "c" }, none.dispatcher).preToolUse({ toolCallId: "4", toolName: "edit_file", args }),
+    await createWorkspaceChatHooks({ chatId: "c" }, none.dispatcher).preToolUse({
+      toolCallId: "4",
+      toolName: "edit_file",
+      args,
+    }),
     { kind: "none" },
   );
   assert.equal(none.calls.length, 0);
@@ -188,7 +275,10 @@ test("PreToolUse deny blocks with the hooks' names and reason; ask and allow are
 
 test("a hook's updated input replaces the call's arguments after validation, but never a shell command's", async () => {
   const rewrite = fakeDispatcher({
-    PreToolUse: { updatedInput: { file_path: "src/b.ts", old_text: "a", new_text: "c" }, ranHooks: ["redirect"] },
+    PreToolUse: {
+      updatedInput: { file_path: "src/b.ts", old_text: "a", new_text: "c" },
+      ranHooks: ["redirect"],
+    },
   });
   const hooks = createWorkspaceChatHooks({ chatId: "c" }, rewrite.dispatcher);
   const args: Record<string, unknown> = { path: "src/a.ts", old_text: "a", new_text: "b" };
@@ -198,7 +288,9 @@ test("a hook's updated input replaces the call's arguments after validation, but
   );
   assert.deepEqual(args, { path: "src/b.ts", old_text: "a", new_text: "c" });
 
-  const invalid = fakeDispatcher({ PreToolUse: { updatedInput: { file_path: 42 }, ranHooks: ["broken"] } });
+  const invalid = fakeDispatcher({
+    PreToolUse: { updatedInput: { file_path: 42 }, ranHooks: ["broken"] },
+  });
   const original = { path: "src/a.ts", old_text: "a", new_text: "b" };
   const kept = { ...original };
   const result = await createWorkspaceChatHooks({ chatId: "c" }, invalid.dispatcher).preToolUse({
@@ -208,10 +300,15 @@ test("a hook's updated input replaces the call's arguments after validation, but
     tools: [editTool],
   });
   assert.equal(result.kind, "block");
-  assert.match(result.kind === "block" ? result.reason : "", /^Blocked by hook broken: .*edit_file/);
+  assert.match(
+    result.kind === "block" ? result.reason : "",
+    /^Blocked by hook broken: .*edit_file/,
+  );
   assert.deepEqual(kept, original);
 
-  const shell = fakeDispatcher({ PreToolUse: { updatedInput: { command: "rm -rf /" }, ranHooks: ["sneaky"] } });
+  const shell = fakeDispatcher({
+    PreToolUse: { updatedInput: { command: "rm -rf /" }, ranHooks: ["sneaky"] },
+  });
   const command = { command: "npm test" };
   assert.deepEqual(
     await createWorkspaceChatHooks({ chatId: "c" }, shell.dispatcher).preToolUse({
@@ -237,7 +334,12 @@ test("a dispatcher that throws blocks a tool call, and every other event carries
   assert.match(refused.kind === "block" ? refused.reason : "", /could not run your hooks/u);
   assert.equal(await hooks.dispatch("UserPromptSubmit", { prompt: "hi" }), undefined);
   assert.equal(
-    await hooks.onStop({ finalMessage: {} as never, continuations: 0, maxContinuations: 8, signal: new AbortController().signal }),
+    await hooks.onStop({
+      finalMessage: {} as never,
+      continuations: 0,
+      maxContinuations: 8,
+      signal: new AbortController().signal,
+    }),
     undefined,
   );
   const brokenLookup: HookDispatcher = {
@@ -247,13 +349,23 @@ test("a dispatcher that throws blocks a tool call, and every other event carries
     dispatch: async () => ({ ranHooks: [] }),
   };
   assert.deepEqual(
-    await createWorkspaceChatHooks({ chatId: "c" }, () => brokenLookup).preToolUse({ toolCallId: "1", toolName: "edit_file", args: {} }),
+    await createWorkspaceChatHooks({ chatId: "c" }, () => brokenLookup).preToolUse({
+      toolCallId: "1",
+      toolName: "edit_file",
+      args: {},
+    }),
     { kind: "none" },
     "a lookup that fails still asks the dispatcher, whose answer stands",
   );
   const brokenThroughout: HookDispatcher = { ...brokenLookup, dispatch: throwing.dispatch };
   assert.equal(
-    (await createWorkspaceChatHooks({ chatId: "c" }, () => brokenThroughout).preToolUse({ toolCallId: "1", toolName: "edit_file", args: {} })).kind,
+    (
+      await createWorkspaceChatHooks({ chatId: "c" }, () => brokenThroughout).preToolUse({
+        toolCallId: "1",
+        toolName: "edit_file",
+        args: {},
+      })
+    ).kind,
     "block",
   );
 });
@@ -261,7 +373,12 @@ test("a dispatcher that throws blocks a tool call, and every other event carries
 function afterToolContext(text: string): AfterToolCallContext {
   return {
     assistantMessage: {} as never,
-    toolCall: { type: "toolCall", id: "call-9", name: "run_command", arguments: { command: "npm test" } },
+    toolCall: {
+      type: "toolCall",
+      id: "call-9",
+      name: "run_command",
+      arguments: { command: "npm test" },
+    },
     args: { command: "npm test" },
     result: { content: [{ type: "text", text }], details: null },
     isError: false,
@@ -293,15 +410,22 @@ test("PostToolUse feedback and context are appended to the tool result the model
   assert.equal(calls[0]!.context.idempotencyKey, "PostToolUse:c:call-9");
   assert.equal(calls[0]!.payload.tool_use_id, "call-9");
 
-  const quiet = createWorkspaceChatHooks({ chatId: "c" }, fakeDispatcher({ PostToolUse: { ranHooks: ["log"] } }).dispatcher);
-  const unchanged = await quiet
-    .extension({ promptTimestamp: () => undefined, turnContext: () => undefined })
-    .afterToolCall!(afterToolContext("ok"), undefined);
+  const quiet = createWorkspaceChatHooks(
+    { chatId: "c" },
+    fakeDispatcher({ PostToolUse: { ranHooks: ["log"] } }).dispatcher,
+  );
+  const unchanged = await quiet.extension({
+    promptTimestamp: () => undefined,
+    turnContext: () => undefined,
+  }).afterToolCall!(afterToolContext("ok"), undefined);
   assert.equal(unchanged, undefined);
 });
 
 test("turn context rides after the current prompt only, never replacing the person's words", async () => {
-  const extension = createWorkspaceChatHooks({ chatId: "c" }, fakeDispatcher({}).dispatcher).extension({
+  const extension = createWorkspaceChatHooks(
+    { chatId: "c" },
+    fakeDispatcher({}).dispatcher,
+  ).extension({
     promptTimestamp: () => 200,
     turnContext: () => hookTurnContextText([fenced("branch: main"), undefined, " "]),
   });
@@ -324,16 +448,23 @@ test("turn context rides after the current prompt only, never replacing the pers
   // The journal's copy is untouched.
   assert.equal(messages[1]!.role === "user" ? messages[1]!.content : undefined, "fix the bug");
 
-  const silent = createWorkspaceChatHooks({ chatId: "c" }, fakeDispatcher({}).dispatcher).extension({
-    promptTimestamp: () => 200,
-    turnContext: () => hookTurnContextText([undefined]),
-  });
+  const silent = createWorkspaceChatHooks({ chatId: "c" }, fakeDispatcher({}).dispatcher).extension(
+    {
+      promptTimestamp: () => 200,
+      turnContext: () => hookTurnContextText([undefined]),
+    },
+  );
   assert.equal(await silent.transformContext!(messages, undefined), messages);
 });
 
 test("a Stop hook keeps the turn going with its reason, marks continued turns, and respects the cap and stopTurn", async () => {
   const { dispatcher, calls } = fakeDispatcher({
-    Stop: { continueTurn: true, reason: "run tests", reasonForModel: fenced("run tests"), ranHooks: ["verify"] },
+    Stop: {
+      continueTurn: true,
+      reason: "run tests",
+      reasonForModel: fenced("run tests"),
+      ranHooks: ["verify"],
+    },
   });
   const hooks = createWorkspaceChatHooks({ chatId: "c" }, dispatcher);
   const event = (continuations: number) => ({
@@ -346,14 +477,25 @@ test("a Stop hook keeps the turn going with its reason, marks continued turns, a
   assert.ok(first?.continueWith?.includes(fenced("run tests")));
   assert.match(first?.continueWith ?? "", /Stop hook verify/);
   await hooks.onStop(event(1));
-  assert.deepEqual(calls.map((call) => call.payload.stop_hook_active), [false, true]);
+  assert.deepEqual(
+    calls.map((call) => call.payload.stop_hook_active),
+    [false, true],
+  );
   assert.equal(await hooks.onStop(event(MAX_STOP_HOOK_CONTINUATIONS)), undefined);
   assert.equal(calls.length, 2);
 
-  const ended = fakeDispatcher({ Stop: { continueTurn: true, stopTurn: true, reason: "x", ranHooks: ["h"] } });
-  assert.equal(await createWorkspaceChatHooks({ chatId: "c" }, ended.dispatcher).onStop(event(0)), undefined);
+  const ended = fakeDispatcher({
+    Stop: { continueTurn: true, stopTurn: true, reason: "x", ranHooks: ["h"] },
+  });
+  assert.equal(
+    await createWorkspaceChatHooks({ chatId: "c" }, ended.dispatcher).onStop(event(0)),
+    undefined,
+  );
   const done = fakeDispatcher({ Stop: { ranHooks: ["h"] } });
-  assert.equal(await createWorkspaceChatHooks({ chatId: "c" }, done.dispatcher).onStop(event(0)), undefined);
+  assert.equal(
+    await createWorkspaceChatHooks({ chatId: "c" }, done.dispatcher).onStop(event(0)),
+    undefined,
+  );
 });
 
 test("SessionStart sources follow the chat's life in this process, and deleting it ends the session once", async () => {
@@ -379,7 +521,13 @@ test("SessionStart sources follow the chat's life in this process, and deleting 
   endWorkspaceChatSession("never-started", dispatcher);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(
-    calls.map((call) => [call.event, call.payload.session_id, call.payload.cwd, call.payload.reason, call.payload.aiden_reason]),
+    calls.map((call) => [
+      call.event,
+      call.payload.session_id,
+      call.payload.cwd,
+      call.payload.reason,
+      call.payload.aiden_reason,
+    ]),
     [["SessionEnd", "life", "/work/app", "other", "chat_deleted"]],
   );
   // The chat is gone, so its hook's message goes where the caller says, once.
@@ -393,24 +541,46 @@ test("a refused prompt names the hooks and their reason", () => {
     "Blocked by hook scan: secrets in prompt",
   );
   assert.equal(
-    promptBlockedMessage({ stopTurn: true, stopReason: "quiet hours", reason: "ignored", ranHooks: [] }),
+    promptBlockedMessage({
+      stopTurn: true,
+      stopReason: "quiet hours",
+      reason: "ignored",
+      ranHooks: [],
+    }),
     "Blocked by a hook: quiet hours",
   );
 });
 
 test("PreCompact tells hooks the trigger and turns their context into summary instructions", async () => {
   const { dispatcher, calls } = fakeDispatcher({
-    PreCompact: { ranHooks: ["keep-plan"], additionalContext: fenced("the migration plan"), systemMessages: ["saved"] },
+    PreCompact: {
+      ranHooks: ["keep-plan"],
+      additionalContext: fenced("the migration plan"),
+      systemMessages: ["saved"],
+    },
   });
-  const hooks = createWorkspaceChatHooks({ chatId: "long", workspaceRoot: "/work/app" }, dispatcher);
+  const hooks = createWorkspaceChatHooks(
+    { chatId: "long", workspaceRoot: "/work/app" },
+    dispatcher,
+  );
   const signal = new AbortController().signal;
 
-  const instructions = await preCompactSummaryInstructions(hooks, { trigger: "auto", reason: "overflow", signal });
+  const instructions = await preCompactSummaryInstructions(hooks, {
+    trigger: "auto",
+    reason: "overflow",
+    signal,
+  });
 
   assert.ok(instructions?.includes(fenced("the migration plan")));
   assert.equal(instructions?.includes("saved"), false);
   assert.deepEqual(
-    calls.map((call) => [call.event, call.payload.trigger, call.payload.aiden_reason, call.payload.session_id, call.context.signal]),
+    calls.map((call) => [
+      call.event,
+      call.payload.trigger,
+      call.payload.aiden_reason,
+      call.payload.session_id,
+      call.context.signal,
+    ]),
     [["PreCompact", "auto", "overflow", "long", signal]],
   );
 });
@@ -418,14 +588,20 @@ test("PreCompact tells hooks the trigger and turns their context into summary in
 test("PreCompact adds no instructions without hooks, without context, or when the dispatcher fails", async () => {
   const none = fakeDispatcher({});
   assert.equal(
-    await preCompactSummaryInstructions(createWorkspaceChatHooks({ chatId: "c" }, none.dispatcher), { trigger: "manual", reason: "manual" }),
+    await preCompactSummaryInstructions(
+      createWorkspaceChatHooks({ chatId: "c" }, none.dispatcher),
+      { trigger: "manual", reason: "manual" },
+    ),
     undefined,
   );
   assert.equal(none.calls.length, 0);
 
   const quiet = fakeDispatcher({ PreCompact: { ranHooks: ["log"] } });
   assert.equal(
-    await preCompactSummaryInstructions(createWorkspaceChatHooks({ chatId: "c" }, quiet.dispatcher), { trigger: "manual", reason: "manual" }),
+    await preCompactSummaryInstructions(
+      createWorkspaceChatHooks({ chatId: "c" }, quiet.dispatcher),
+      { trigger: "manual", reason: "manual" },
+    ),
     undefined,
   );
   assert.equal(quiet.calls[0]?.payload.trigger, "manual");
@@ -437,7 +613,10 @@ test("PreCompact adds no instructions without hooks, without context, or when th
     },
   };
   assert.equal(
-    await preCompactSummaryInstructions(createWorkspaceChatHooks({ chatId: "c" }, () => throwing), { trigger: "auto", reason: "threshold" }),
+    await preCompactSummaryInstructions(
+      createWorkspaceChatHooks({ chatId: "c" }, () => throwing),
+      { trigger: "auto", reason: "threshold" },
+    ),
     undefined,
   );
 });
@@ -460,7 +639,13 @@ async function runHookedTurn(hooks: ReturnType<typeof createWorkspaceChatHooks>)
   const harness = new PiAgentRuntimeHarness({
     convertToLlm,
     streamFn: core.streamSimple,
-    initialState: { systemPrompt: "Base", thinkingLevel: "off", tools: [echoTool], messages: [], model: core.getModel() },
+    initialState: {
+      systemPrompt: "Base",
+      thinkingLevel: "off",
+      tools: [echoTool],
+      messages: [],
+      model: core.getModel(),
+    },
     beforeToolCall: async (context, signal) => {
       const hook = await hooks.preToolUse({
         toolCallId: context.toolCall.id,
@@ -471,7 +656,9 @@ async function runHookedTurn(hooks: ReturnType<typeof createWorkspaceChatHooks>)
       });
       return hook.kind === "block" ? { block: true, reason: hook.reason } : undefined;
     },
-    extensions: [hooks.extension({ promptTimestamp: () => undefined, turnContext: () => undefined })],
+    extensions: [
+      hooks.extension({ promptTimestamp: () => undefined, turnContext: () => undefined }),
+    ],
   });
   await harness.prompt("go");
   const toolResult = harness.state.messages.find((message) => message.role === "toolResult");
@@ -497,7 +684,8 @@ test("PreToolUse context reaches the model on its tool's result, together with P
   // With no PostToolUse hook at all, the PreToolUse context still arrives.
   const preOnly = createWorkspaceChatHooks(
     { chatId: "c" },
-    fakeDispatcher({ PreToolUse: { additionalContext: fenced("read only"), ranHooks: ["p"] } }).dispatcher,
+    fakeDispatcher({ PreToolUse: { additionalContext: fenced("read only"), ranHooks: ["p"] } })
+      .dispatcher,
   );
   assert.ok((await runHookedTurn(preOnly)).toolText.includes(fenced("read only")));
 });
@@ -519,7 +707,12 @@ test("continue: false from PreToolUse or PostToolUse lets the tool finish, then 
     assert.equal(hooks.stopRequested(), "Stopped by hook gate: deploy window closed");
     // Stop hooks never revive a turn a hook stopped.
     assert.equal(
-      await hooks.onStop({ finalMessage: {} as never, continuations: 0, maxContinuations: 8, signal: new AbortController().signal }),
+      await hooks.onStop({
+        finalMessage: {} as never,
+        continuations: 0,
+        maxContinuations: 8,
+        signal: new AbortController().signal,
+      }),
       undefined,
     );
     assert.ok(!calls.some((call) => call.event === "Stop"));
@@ -527,22 +720,29 @@ test("continue: false from PreToolUse or PostToolUse lets the tool finish, then 
 });
 
 test("after a rewrite only the check of the new input can end the turn or add context", async () => {
-  const rewritten = (payload: HookPayload) => (payload.tool_input as Record<string, unknown>).note === "safe";
-  const rewrite = (payload: HookPayload) => ({ ...(payload.tool_input as Record<string, unknown>), note: "safe" });
+  const rewritten = (payload: HookPayload) =>
+    (payload.tool_input as Record<string, unknown>).note === "safe";
+  const rewrite = (payload: HookPayload) => ({
+    ...(payload.tool_input as Record<string, unknown>),
+    note: "safe",
+  });
   const messages: string[][] = [];
   const staleFirst = fakeDispatcher({
-    PreToolUse: (payload): HookOutcome => rewritten(payload)
-      ? { additionalContext: fenced("about the new input"), ranHooks: ["rewrite"] }
-      : {
-          decision: "allow",
-          updatedInput: rewrite(payload),
-          stopTurn: true,
-          stopReason: "that input is frozen",
-          additionalContext: fenced("about the old input"),
-          ranHooks: ["rewrite"],
-        },
+    PreToolUse: (payload): HookOutcome =>
+      rewritten(payload)
+        ? { additionalContext: fenced("about the new input"), ranHooks: ["rewrite"] }
+        : {
+            decision: "allow",
+            updatedInput: rewrite(payload),
+            stopTurn: true,
+            stopReason: "that input is frozen",
+            additionalContext: fenced("about the old input"),
+            ranHooks: ["rewrite"],
+          },
   });
-  const hooks = createWorkspaceChatHooks({ chatId: "c" }, staleFirst.dispatcher, { onMessages: (lines) => messages.push(lines) });
+  const hooks = createWorkspaceChatHooks({ chatId: "c" }, staleFirst.dispatcher, {
+    onMessages: (lines) => messages.push(lines),
+  });
   const { modelRequests, toolText } = await runHookedTurn(hooks);
   assert.equal(staleFirst.calls.filter((call) => call.event === "PreToolUse").length, 2);
   assert.equal(modelRequests, 2, "what stopped the turn was not what ran");
@@ -553,30 +753,48 @@ test("after a rewrite only the check of the new input can end the turn or add co
 
   // The check can still end the turn.
   const checkedStops = fakeDispatcher({
-    PreToolUse: (payload): HookOutcome => rewritten(payload)
-      ? { stopTurn: true, stopReason: "this one is frozen too", ranHooks: ["gate"] }
-      : { decision: "allow", updatedInput: rewrite(payload), ranHooks: ["rewrite"] },
+    PreToolUse: (payload): HookOutcome =>
+      rewritten(payload)
+        ? { stopTurn: true, stopReason: "this one is frozen too", ranHooks: ["gate"] }
+        : { decision: "allow", updatedInput: rewrite(payload), ranHooks: ["rewrite"] },
   });
   const stopped = createWorkspaceChatHooks({ chatId: "c" }, checkedStops.dispatcher);
   assert.equal((await runHookedTurn(stopped)).modelRequests, 1);
   assert.match(stopped.stopRequested() ?? "", /this one is frozen too/u);
 
   // A rewrite that never ran leaves the first answer standing, stop included.
-  const invalid = fakeDispatcher({ PreToolUse: { updatedInput: { file_path: 42 }, stopTurn: true, stopReason: "stop here", ranHooks: ["broken"] } });
+  const invalid = fakeDispatcher({
+    PreToolUse: {
+      updatedInput: { file_path: 42 },
+      stopTurn: true,
+      stopReason: "stop here",
+      ranHooks: ["broken"],
+    },
+  });
   const blocked = createWorkspaceChatHooks({ chatId: "c" }, invalid.dispatcher);
   const args = { path: "src/a.ts", old_text: "a", new_text: "b" };
-  assert.equal((await blocked.preToolUse({ toolCallId: "3", toolName: "edit_file", args, tools: [editTool] })).kind, "block");
+  assert.equal(
+    (await blocked.preToolUse({ toolCallId: "3", toolName: "edit_file", args, tools: [editTool] }))
+      .kind,
+    "block",
+  );
   assert.match(blocked.stopRequested() ?? "", /stop here/u);
 });
 
 test("hook messages and Aiden's notices go to the person, never into the tool result", async () => {
   const messages: string[][] = [];
   const { dispatcher } = fakeDispatcher({
-    PostToolUse: { systemMessages: ["formatted 3 files"], notices: ["A hook timed out and was skipped."], ranHooks: ["fmt"] },
+    PostToolUse: {
+      systemMessages: ["formatted 3 files"],
+      notices: ["A hook timed out and was skipped."],
+      ranHooks: ["fmt"],
+    },
     UserPromptSubmit: { systemMessages: ["prompt logged"], ranHooks: ["audit"] },
     Notification: { systemMessages: ["pinged your phone"], ranHooks: ["ping"] },
   });
-  const hooks = createWorkspaceChatHooks({ chatId: "c" }, dispatcher, { onMessages: (lines) => messages.push(lines) });
+  const hooks = createWorkspaceChatHooks({ chatId: "c" }, dispatcher, {
+    onMessages: (lines) => messages.push(lines),
+  });
   await hooks.dispatch("UserPromptSubmit", { prompt: "hi" });
   const { toolText } = await runHookedTurn(hooks);
   // An approval card's Notification (fire-and-forget) reports the same way.
@@ -608,9 +826,16 @@ test("this process forgets the least recently started chat once it tracks too ma
   for (let index = 0; index < MAX_TRACKED_HOOK_SESSIONS - 1; index += 1) {
     markWorkspaceChatSessionStarted({ chatId: `chat-${index}` });
   }
-  assert.equal(workspaceChatSessionStartSource("second", true), "resume", "the oldest chat was forgotten, compaction too");
+  assert.equal(
+    workspaceChatSessionStartSource("second", true),
+    "resume",
+    "the oldest chat was forgotten, compaction too",
+  );
   assert.equal(workspaceChatSessionStartSource("first", true), undefined);
-  assert.equal(workspaceChatSessionStartSource(`chat-${MAX_TRACKED_HOOK_SESSIONS - 2}`, true), undefined);
+  assert.equal(
+    workspaceChatSessionStartSource(`chat-${MAX_TRACKED_HOOK_SESSIONS - 2}`, true),
+    undefined,
+  );
   resetWorkspaceChatSessionsForTests();
 });
 
@@ -635,10 +860,17 @@ test("a blocked prompt the person retries once the hook lets it through reaches 
   const chatsRoot = await tempDir(t, "aiden-hook-intake-chats-");
   const store = createChatStore(async () => chatsRoot);
   const chat = await store.create({ workspaceId: "workspace" });
-  const appended = await store.appendMessage(chat.id, { role: "user", content: "Deploy the staging branch" });
+  const appended = await store.appendMessage(chat.id, {
+    role: "user",
+    content: "Deploy the staging branch",
+  });
   const promptId = appended.messages.slice(-1)[0]!.id;
   const errors: string[] = [];
-  const intake = (dispatcher: () => HookDispatcher, prompt: Parameters<typeof runPromptIntakeHooks>[0]["prompt"], turn: string) =>
+  const intake = (
+    dispatcher: () => HookDispatcher,
+    prompt: Parameters<typeof runPromptIntakeHooks>[0]["prompt"],
+    turn: string,
+  ) =>
     runPromptIntakeHooks({
       target: { chatId: chat.id },
       dispatch: createWorkspaceChatHooks({ chatId: chat.id }, dispatcher).dispatch,
@@ -649,16 +881,34 @@ test("a blocked prompt the person retries once the hook lets it through reaches 
       onStoreError: (message) => errors.push(message),
     });
 
-  const refusing = fakeDispatcher({ UserPromptSubmit: { blockPrompt: true, reason: "deploys are frozen", ranHooks: ["freeze"] } });
-  await assert.rejects(intake(refusing.dispatcher, appended.messages.slice(-1)[0]!, "1"), /Blocked by hook freeze: deploys are frozen/u);
-  assert.equal((await store.get(chat.id))!.messages.slice(-1)[0]!.hookBlocked?.reason, "Blocked by hook freeze: deploys are frozen");
+  const refusing = fakeDispatcher({
+    UserPromptSubmit: { blockPrompt: true, reason: "deploys are frozen", ranHooks: ["freeze"] },
+  });
+  await assert.rejects(
+    intake(refusing.dispatcher, appended.messages.slice(-1)[0]!, "1"),
+    /Blocked by hook freeze: deploys are frozen/u,
+  );
+  assert.equal(
+    (await store.get(chat.id))!.messages.slice(-1)[0]!.hookBlocked?.reason,
+    "Blocked by hook freeze: deploys are frozen",
+  );
 
   // The retry turn loads the stored prompt, mark and all, and the hook now passes it.
-  const currentUser = (await store.get(chat.id))!.messages.find((message) => message.id === promptId)!;
+  const currentUser = (await store.get(chat.id))!.messages.find(
+    (message) => message.id === promptId,
+  )!;
   const passing = fakeDispatcher({ UserPromptSubmit: { ranHooks: ["freeze"] } });
   await intake(passing.dispatcher, currentUser, "2");
-  assert.equal(currentUser.hookBlocked, undefined, "the turn's own copy is unmarked before the journal takes it");
-  assert.equal((await store.get(chat.id))!.messages.slice(-1)[0]!.hookBlocked, undefined, "the stored mark is cleared");
+  assert.equal(
+    currentUser.hookBlocked,
+    undefined,
+    "the turn's own copy is unmarked before the journal takes it",
+  );
+  assert.equal(
+    (await store.get(chat.id))!.messages.slice(-1)[0]!.hookBlocked,
+    undefined,
+    "the stored mark is cleared",
+  );
   assert.deepEqual(errors, []);
 
   // The turn journals its prompt, then the reply, in that order.
@@ -667,12 +917,18 @@ test("a blocked prompt the person retries once the hook lets it through reaches 
   const sessions = new PiCompactionSessionStore({ root: async () => piRoot });
   const session = await sessions.openChat(chat.id);
   await syncChatMessagesToPiSession(session, [currentUser], model, false);
-  const replied = await store.appendMessage(chat.id, { role: "assistant", content: "Staging is deploying now." });
+  const replied = await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Staging is deploying now.",
+  });
   await syncChatMessagesToPiSession(session, replied.messages, model, false);
   const context = JSON.stringify(await session.buildContext());
   const promptAt = context.indexOf("Deploy the staging branch");
   assert.ok(promptAt >= 0, "the retried prompt reaches the model");
-  assert.ok(context.indexOf("Staging is deploying now.") > promptAt, "and it comes before its reply");
+  assert.ok(
+    context.indexOf("Staging is deploying now.") > promptAt,
+    "and it comes before its reply",
+  );
 });
 
 test("a follow-up turn that starts from Aiden's own notice runs SessionStart but never screens the notice", async () => {
@@ -692,12 +948,19 @@ test("a follow-up turn that starts from Aiden's own notice runs SessionStart but
     target: { chatId: "follow-up-notice" },
     dispatch: createWorkspaceChatHooks({ chatId: "follow-up-notice" }, dispatcher).dispatch,
     hasPriorMessages: false,
-    prompt: { id: "notice-1", content: "The background task finished.", notice: { version: 1, kind: "task" } },
+    prompt: {
+      id: "notice-1",
+      content: "The background task finished.",
+      notice: { version: 1, kind: "task" },
+    },
     store,
     idempotencyKeys: { userPromptSubmit: "UserPromptSubmit:follow-up-notice:1" },
     onStoreError: () => assert.fail("nothing is written"),
   });
-  assert.deepEqual(calls.map((call) => call.event), ["SessionStart"]);
+  assert.deepEqual(
+    calls.map((call) => call.event),
+    ["SessionStart"],
+  );
   assert.match(context ?? "", /branch: main/u);
   assert.equal(writes, 0, "the notice is never marked blocked");
 });
@@ -712,8 +975,13 @@ test("a prompt stays out of the model's context when writing its blocked mark fa
     },
   };
   const errors: string[] = [];
-  const prompt = { id: `prompt-${Math.random().toString(36).slice(2)}`, content: "ship it with key sk-live-FAILCLOSED" };
-  const { dispatcher } = fakeDispatcher({ UserPromptSubmit: { blockPrompt: true, reason: "secret in prompt", ranHooks: ["scan"] } });
+  const prompt = {
+    id: `prompt-${Math.random().toString(36).slice(2)}`,
+    content: "ship it with key sk-live-FAILCLOSED",
+  };
+  const { dispatcher } = fakeDispatcher({
+    UserPromptSubmit: { blockPrompt: true, reason: "secret in prompt", ranHooks: ["scan"] },
+  });
   await assert.rejects(
     runPromptIntakeHooks({
       target: { chatId: "fail-closed" },
@@ -763,13 +1031,21 @@ test("a steer or follow-up sent mid-run is screened by UserPromptSubmit: refused
     cancelRequested: false,
     inputHooks: {
       screen: ({ text, messageId }) =>
-        screenRunInputWithHooks({ dispatch: hooks.dispatch, text, idempotencyKey: `UserPromptSubmit:${messageId}` }),
+        screenRunInputWithHooks({
+          dispatch: hooks.dispatch,
+          text,
+          idempotencyKey: `UserPromptSubmit:${messageId}`,
+        }),
       attachContext: contexts.attach,
     },
     agent: {
       queueAdmissionBlocked: () => undefined,
-      queueSteer: (message: AgentMessage) => (queued.push(message), { accepted: true, queue: "steer" }),
-      queueFollowUp: (message: AgentMessage) => (queued.push(message), { accepted: true, queue: "follow-up" }),
+      queueSteer: (message: AgentMessage) => (
+        queued.push(message), { accepted: true, queue: "steer" }
+      ),
+      queueFollowUp: (message: AgentMessage) => (
+        queued.push(message), { accepted: true, queue: "follow-up" }
+      ),
     } as unknown as ChatRunInputGenerationRef["agent"],
   };
   const admission = createChatRunInputAdmission({
@@ -787,9 +1063,22 @@ test("a steer or follow-up sent mid-run is screened by UserPromptSubmit: refused
     newMessageId: () => `message_run_input_${(ids += 1)}`,
   });
 
-  const refused = await admission.admit({ streamId: "stream", mode: "steer", text: "use key sk-live-STEERED" });
-  assert.deepEqual(refused, { admitted: false, reason: "invalid", committed: true, messageId: "message_run_input_1" });
-  const passed = await admission.admit({ streamId: "stream", mode: "queue", text: "then run the tests" });
+  const refused = await admission.admit({
+    streamId: "stream",
+    mode: "steer",
+    text: "use key sk-live-STEERED",
+  });
+  assert.deepEqual(refused, {
+    admitted: false,
+    reason: "invalid",
+    committed: true,
+    messageId: "message_run_input_1",
+  });
+  const passed = await admission.admit({
+    streamId: "stream",
+    mode: "queue",
+    text: "then run the tests",
+  });
   assert.equal(passed.admitted, true);
   assert.deepEqual(
     calls.map((call) => call.payload.prompt),
@@ -814,13 +1103,15 @@ test("a steer or follow-up sent mid-run is screened by UserPromptSubmit: refused
   const stored = (await store.get(chat.id))!.messages;
   const blocked = stored.find((message) => message.content === "use key sk-live-STEERED")!;
   assert.equal(blocked.hookBlocked?.reason, "Blocked by hook scan: secret in prompt");
-  assert.deepEqual(queued.map((message) => (message.role === "user" ? message.content : undefined)), [
-    "then run the tests",
-    "A background task finished.",
-  ]);
+  assert.deepEqual(
+    queued.map((message) => (message.role === "user" ? message.content : undefined)),
+    ["then run the tests", "A background task finished."],
+  );
   const model = fauxModel();
   const piRoot = await tempDir(t, "aiden-hook-run-input-pi-");
-  const session = await new PiCompactionSessionStore({ root: async () => piRoot }).openChat(chat.id);
+  const session = await new PiCompactionSessionStore({ root: async () => piRoot }).openChat(
+    chat.id,
+  );
   await syncChatMessagesToPiSession(session, stored, model, false);
   assert.doesNotMatch(JSON.stringify(await session.buildContext()), /sk-live-STEERED/u);
 
@@ -835,10 +1126,17 @@ test("a steer or follow-up sent mid-run is screened by UserPromptSubmit: refused
   assert.deepEqual(transformed[0], prompt);
   assert.deepEqual((transformed[1] as Extract<AgentMessage, { role: "user" }>).content, [
     { type: "text", text: "then run the tests" },
-    { type: "text", text: `[Aiden hook] Context from the person's hooks for this message:\n\n${fenced("ticket: OPS-12")}` },
+    {
+      type: "text",
+      text: `[Aiden hook] Context from the person's hooks for this message:\n\n${fenced("ticket: OPS-12")}`,
+    },
   ]);
   assert.deepEqual(transformed[2], queued[1]);
-  assert.equal(queued[0]!.role === "user" ? queued[0]!.content : undefined, "then run the tests", "the queued copy is untouched");
+  assert.equal(
+    queued[0]!.role === "user" ? queued[0]!.content : undefined,
+    "then run the tests",
+    "the queued copy is untouched",
+  );
 });
 
 test("SessionStart continue: false ends the turn before the prompt is checked, and the next message starts the session again", async () => {
@@ -855,23 +1153,47 @@ test("SessionStart continue: false ends the turn before the prompt is checked, a
       dispatch: hooks.dispatch,
       hasPriorMessages: false,
       prompt: { id: "locked-prompt", content: "hello" },
-      store: { setPromptHookBlock: async () => { writes += 1; return true; } },
+      store: {
+        setPromptHookBlock: async () => {
+          writes += 1;
+          return true;
+        },
+      },
       idempotencyKeys: { userPromptSubmit: "UserPromptSubmit:locked:1" },
       onStoreError: () => {},
     }),
     (error: Error) => error.message === "Stopped by hook gate: the repo is locked",
   );
-  assert.deepEqual(calls.map((call) => call.event), ["SessionStart"], "UserPromptSubmit never runs");
+  assert.deepEqual(
+    calls.map((call) => call.event),
+    ["SessionStart"],
+    "UserPromptSubmit never runs",
+  );
   assert.equal(writes, 0, "the prompt is not marked blocked");
   assert.equal(isHookBlockedPrompt({ id: "locked-prompt", role: "user" }), false);
-  assert.equal(workspaceChatSessionStartSource("locked", false), "startup", "the session did not start");
+  assert.equal(
+    workspaceChatSessionStartSource("locked", false),
+    "startup",
+    "the session did not start",
+  );
   resetWorkspaceChatSessionsForTests();
 });
 
 test("a blocked prompt sent on a turn where hooks don't run stays blocked; with hooks and none matching it goes through", async () => {
   const cleared: Array<string | undefined> = [];
-  const store = { setPromptHookBlock: async (_chat: string, _id: string, reason: string | undefined) => { cleared.push(reason); return true; } };
-  const base = { target: { chatId: "c" }, hasPriorMessages: true, store, idempotencyKeys: { userPromptSubmit: "k" }, onStoreError: () => undefined };
+  const store = {
+    setPromptHookBlock: async (_chat: string, _id: string, reason: string | undefined) => {
+      cleared.push(reason);
+      return true;
+    },
+  };
+  const base = {
+    target: { chatId: "c" },
+    hasPriorMessages: true,
+    store,
+    idempotencyKeys: { userPromptSubmit: "k" },
+    onStoreError: () => undefined,
+  };
   const prompt = { id: "m1", content: "send the keys", hookBlocked: { reason: "No secrets." } };
 
   await assert.rejects(runPromptIntakeHooks({ ...base, prompt }), /No secrets\./u);
@@ -894,7 +1216,10 @@ test("input the run ended before reading is screened once, and its hook context 
   const hooks = createWorkspaceChatHooks({ chatId }, dispatcher);
   const contexts = createRunInputContexts();
   const plans: OwedTurnPlan<null, "user_stop">[] = [];
-  const owedTurns = createChatOwedTurns<null, "user_stop">({ refuses: () => false, start: (plan) => plans.push(plan) });
+  const owedTurns = createChatOwedTurns<null, "user_stop">({
+    refuses: () => false,
+    start: (plan) => plans.push(plan),
+  });
   owedTurns.open("stream", { chatId, ownerDocumentId: "doc", context: null });
   const saved: ChatMessage[] = [];
   const generation: ChatRunInputGenerationRef = {
@@ -904,7 +1229,11 @@ test("input the run ended before reading is screened once, and its hook context 
     owedTurn: { hold: () => owedTurns.hold("stream") },
     inputHooks: {
       screen: ({ text, messageId }) =>
-        screenRunInputWithHooks({ dispatch: hooks.dispatch, text, idempotencyKey: `UserPromptSubmit:${messageId}` }),
+        screenRunInputWithHooks({
+          dispatch: hooks.dispatch,
+          text,
+          idempotencyKey: `UserPromptSubmit:${messageId}`,
+        }),
       attachContext: contexts.attach,
     },
     agent: {
@@ -926,8 +1255,17 @@ test("input the run ended before reading is screened once, and its hook context 
     newMessageId: () => "owed-message",
   });
 
-  const receipt = await admission.admit({ streamId: "stream", mode: "queue", text: "then run the tests" });
-  assert.deepEqual(receipt, { admitted: true, queue: "follow-up", committed: true, messageId: "owed-message" });
+  const receipt = await admission.admit({
+    streamId: "stream",
+    mode: "queue",
+    text: "then run the tests",
+  });
+  assert.deepEqual(receipt, {
+    admitted: true,
+    queue: "follow-up",
+    committed: true,
+    messageId: "owed-message",
+  });
   active.delete("stream");
   owedTurns.settle("stream", { committed: [], recordedStop: false });
   assert.equal(plans.length, 1);
@@ -939,7 +1277,10 @@ test("input the run ended before reading is screened once, and its hook context 
     dispatch: hooks.dispatch,
     hasPriorMessages: true,
     prompt: { id: saved[0]!.id, content: saved[0]!.content },
-    screenedPrompt: { messageId: owed.messageId, ...(owed.hookContext ? { context: owed.hookContext } : {}) },
+    screenedPrompt: {
+      messageId: owed.messageId,
+      ...(owed.hookContext ? { context: owed.hookContext } : {}),
+    },
     store: { setPromptHookBlock: async () => true },
     idempotencyKeys: { userPromptSubmit: `UserPromptSubmit:${chatId}:owed` },
     onStoreError: () => assert.fail("nothing is written"),
@@ -951,10 +1292,16 @@ test("input the run ended before reading is screened once, and its hook context 
   );
 
   const prompt: AgentMessage = { role: "user", content: "then run the tests", timestamp: 2 };
-  const transformed = await hooks
-    .extension({ promptTimestamp: () => 2, turnContext: () => turnContext, inputContext: contexts.lookup })
-    .transformContext!([prompt], undefined);
+  const transformed = await hooks.extension({
+    promptTimestamp: () => 2,
+    turnContext: () => turnContext,
+    inputContext: contexts.lookup,
+  }).transformContext!([prompt], undefined);
   const sent = JSON.stringify(transformed);
-  assert.equal(sent.split("ticket: OPS-12").length - 1, 1, "the hook context reaches the model exactly once");
+  assert.equal(
+    sent.split("ticket: OPS-12").length - 1,
+    1,
+    "the hook context reaches the model exactly once",
+  );
   assert.match(sent, /then run the tests/u);
 });

@@ -58,7 +58,10 @@ test("a partial update says which half kept its cached data", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Update model catalogs" }));
   const row = await screen.findByRole("group", { name: "Model catalog" });
   await waitFor(() =>
-    assert.match(row.textContent ?? "", /Provider inventory kept cached data; model details updated\./u),
+    assert.match(
+      row.textContent ?? "",
+      /Provider inventory kept cached data; model details updated\./u,
+    ),
   );
 });
 
@@ -80,7 +83,10 @@ test("the row says what the update contacts and sends, and the hint what the dat
   assert.match(row.textContent ?? "", /contacts built-in catalog services and models\.dev/u);
   assert.match(row.textContent ?? "", /sends no prompts, chats or device identifier/u);
   // A provider's own catalog service can use that provider's sign-in, so keys are not ruled out.
-  assert.match(row.textContent ?? "", /may use your sign-in for that provider; models\.dev gets no credentials/u);
+  assert.match(
+    row.textContent ?? "",
+    /may use your sign-in for that provider; models\.dev gets no credentials/u,
+  );
   fireEvent.click(await screen.findByRole("button", { name: "About model catalogs" }));
   const hint = (await screen.findByRole("tooltip")).textContent ?? "";
   assert.match(hint, /display details only, never which models can run/u);

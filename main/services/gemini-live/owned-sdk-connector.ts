@@ -19,15 +19,9 @@ interface NodeWebSocketLike {
   on(event: "message", listener: (data: { toString(): string }) => void): this;
   on(
     event: "unexpected-response",
-    listener: (
-      request: unknown,
-      response: { statusCode?: number; resume(): void },
-    ) => void,
+    listener: (request: unknown, response: { statusCode?: number; resume(): void }) => void,
   ): this;
-  on(
-    event: "close",
-    listener: (code: number, reason: Uint8Array) => void,
-  ): this;
+  on(event: "close", listener: (code: number, reason: Uint8Array) => void): this;
   send(message: string): void;
 }
 
@@ -87,13 +81,8 @@ export function classifyGeminiLiveConnectionFailure(
     (closeCode === 1008 && /access|authoriz/u.test(normalized))
   )
     return "authentication";
-  if (/quota|resource.?exhausted|rate.?limit|billing/u.test(normalized))
-    return "quota";
-  if (
-    /model[^.]{0,80}(?:not found|unavailable|unsupported)|not found/u.test(
-      normalized,
-    )
-  )
+  if (/quota|resource.?exhausted|rate.?limit|billing/u.test(normalized)) return "quota";
+  if (/model[^.]{0,80}(?:not found|unavailable|unsupported)|not found/u.test(normalized))
     return "model_unavailable";
   if (
     /not implemented|not supported|not enabled|invalid[ _]argument|failed[ _]precondition/u.test(
@@ -101,10 +90,7 @@ export function classifyGeminiLiveConnectionFailure(
     )
   )
     return "unsupported_configuration";
-  if (
-    /service.?unavailable|internal|deadline|temporar/u.test(normalized) ||
-    closeCode === 1011
-  )
+  if (/service.?unavailable|internal|deadline|temporar/u.test(normalized) || closeCode === 1011)
     return "service_unavailable";
   return "network";
 }
@@ -114,8 +100,7 @@ export function classifyGeminiLiveUpgradeFailure(
 ): GeminiLiveConnectionFailureCode {
   if (statusCode === 401 || statusCode === 403) return "authentication";
   if (statusCode === 429) return "quota";
-  if (statusCode !== undefined && statusCode >= 500)
-    return "service_unavailable";
+  if (statusCode !== undefined && statusCode >= 500) return "service_unavailable";
   if (statusCode === 400) return "unsupported_configuration";
   return "network";
 }
@@ -124,9 +109,7 @@ function providerErrorClassificationText(error: unknown): string {
   if (!error || typeof error !== "object" || Array.isArray(error)) return "";
   const record = error as Record<string, unknown>;
   return [record.code, record.status, record.message]
-    .filter((value): value is string | number =>
-      ["string", "number"].includes(typeof value),
-    )
+    .filter((value): value is string | number => ["string", "number"].includes(typeof value))
     .map((value) => String(value).slice(0, 1_024))
     .join(" ");
 }
@@ -147,8 +130,7 @@ class AbortOwnedWebSocket implements SdkOwnedSocket {
   ) {}
 
   connect(): void {
-    if (this.socket)
-      throw new Error("The Live WebSocket is already connected.");
+    if (this.socket) throw new Error("The Live WebSocket is already connected.");
     if (this.signal?.aborted) {
       this.finish();
       return;
@@ -182,17 +164,9 @@ class AbortOwnedWebSocket implements SdkOwnedSocket {
         this.terminate();
         return;
       }
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        !Array.isArray(parsed) &&
-        "error" in parsed
-      ) {
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && "error" in parsed) {
         const safeError = new GeminiLiveConnectionError(
-          classifyGeminiLiveConnectionFailure(
-            null,
-            providerErrorClassificationText(parsed.error),
-          ),
+          classifyGeminiLiveConnectionFailure(null, providerErrorClassificationText(parsed.error)),
         );
         this.onTransportFailure(safeError);
         this.callbacks.onerror({ error: safeError });
@@ -203,10 +177,7 @@ class AbortOwnedWebSocket implements SdkOwnedSocket {
     });
     socket.on("error", (error) => {
       const safeError = new GeminiLiveConnectionError(
-        classifyGeminiLiveConnectionFailure(
-          null,
-          error instanceof Error ? error.message : "",
-        ),
+        classifyGeminiLiveConnectionFailure(null, error instanceof Error ? error.message : ""),
       );
       this.onTransportFailure(safeError);
       this.callbacks.onerror({ error: safeError });
@@ -392,8 +363,6 @@ export function createOwnedGoogleLiveConnector(
   };
 }
 
-export function createOwnedGoogleGenAIConnector(
-  options: GoogleGenAIOptions,
-): GeminiLiveConnector {
+export function createOwnedGoogleGenAIConnector(options: GoogleGenAIOptions): GeminiLiveConnector {
   return createOwnedGoogleLiveConnector(() => new GoogleGenAI(options));
 }

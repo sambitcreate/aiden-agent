@@ -8,11 +8,20 @@ import { daysBetween, localDate, type BotCommitment, type BotCommitmentStore } f
 export const BOT_COMMITMENT_DEFAULT_TIME = "09:00";
 export const BOT_COMMITMENT_REASON = "You asked me to follow up on this.";
 
-export function commitmentProposal(commitment: BotCommitment): Omit<BotRoutineCreateInput, "botId" | "timezone"> & { reason: string } {
-  const short = [...commitment.text].length > 40 ? `${[...commitment.text].slice(0, 39).join("").trimEnd()}…` : commitment.text;
+export function commitmentProposal(
+  commitment: BotCommitment,
+): Omit<BotRoutineCreateInput, "botId" | "timezone"> & { reason: string } {
+  const short =
+    [...commitment.text].length > 40
+      ? `${[...commitment.text].slice(0, 39).join("").trimEnd()}…`
+      : commitment.text;
   return {
     name: `Follow up: ${short}`,
-    schedule: { kind: "once", date: commitment.dueDate, time: commitment.dueTime ?? BOT_COMMITMENT_DEFAULT_TIME },
+    schedule: {
+      kind: "once",
+      date: commitment.dueDate,
+      time: commitment.dueTime ?? BOT_COMMITMENT_DEFAULT_TIME,
+    },
     prompt: `Follow up on: ${commitment.text}. Check whether it is done and tell the person briefly. If there is nothing to say, reply [SILENT].`,
     reason: BOT_COMMITMENT_REASON,
   };
@@ -29,8 +38,16 @@ export interface BotCommitmentProposerDependencies {
   proposals: {
     propose(
       botId: string,
-      input: { name: string; schedule: unknown; prompt: string; reason?: string; hostFollowUp?: boolean },
-    ): Promise<{ ok: true; proposal: { proposalId: string } } | { ok: false; code: string; error: string }>;
+      input: {
+        name: string;
+        schedule: unknown;
+        prompt: string;
+        reason?: string;
+        hostFollowUp?: boolean;
+      },
+    ): Promise<
+      { ok: true; proposal: { proposalId: string } } | { ok: false; code: string; error: string }
+    >;
     pendingCount(botId: string): Promise<number>;
     /** Settle a still-open follow-up card whose day has passed. */
     dismiss?(botId: string, proposalId: string): Promise<void>;
@@ -49,10 +66,12 @@ export function createBotCommitmentProposer(dependencies: BotCommitmentProposerD
     for (const record of records) {
       // A card revised into a repeating schedule or a trigger has no day to pass.
       if (record.status === "proposed" && record.openEnded) continue;
-      const overdue = daysBetween(today, record.dueDate) < 0 ||
+      const overdue =
+        daysBetween(today, record.dueDate) < 0 ||
         (daysBetween(today, record.dueDate) === 0 && record.status === "waiting");
       if (!overdue) continue;
-      if (record.status === "waiting") await dependencies.commitments.update(botId, record.id, { status: "expired" });
+      if (record.status === "waiting")
+        await dependencies.commitments.update(botId, record.id, { status: "expired" });
       // A follow-up card nobody answered by its day: settle it so it neither
       // fires late nor holds a pending slot.
       if (record.status === "proposed" && record.proposalId) {
@@ -66,9 +85,15 @@ export function createBotCommitmentProposer(dependencies: BotCommitmentProposerD
       .sort((a, b) => a.createdAt - b.createdAt);
     for (const record of waiting) {
       if (free <= 0) break;
-      const outcome = await dependencies.proposals.propose(botId, { ...commitmentProposal(record), hostFollowUp: true });
+      const outcome = await dependencies.proposals.propose(botId, {
+        ...commitmentProposal(record),
+        hostFollowUp: true,
+      });
       if (outcome.ok) {
-        await dependencies.commitments.update(botId, record.id, { status: "proposed", proposalId: outcome.proposal.proposalId });
+        await dependencies.commitments.update(botId, record.id, {
+          status: "proposed",
+          proposalId: outcome.proposal.proposalId,
+        });
         free -= 1;
       } else if (outcome.code === "too_many_pending") {
         break;
@@ -89,8 +114,14 @@ export function createBotCommitmentProposer(dependencies: BotCommitmentProposerD
         if (pumping.get(botId) === next) pumping.delete(botId);
       });
     },
-    async onProposalSettled(botId: string, proposalId: string, status: "accepted" | "dismissed"): Promise<void> {
-      const record = (await dependencies.commitments.list(botId)).find((entry) => entry.proposalId === proposalId);
+    async onProposalSettled(
+      botId: string,
+      proposalId: string,
+      status: "accepted" | "dismissed",
+    ): Promise<void> {
+      const record = (await dependencies.commitments.list(botId)).find(
+        (entry) => entry.proposalId === proposalId,
+      );
       if (record) await dependencies.commitments.update(botId, record.id, { status });
       await this.pump(botId);
     },
@@ -99,16 +130,32 @@ export function createBotCommitmentProposer(dependencies: BotCommitmentProposerD
      * card, and expires on that card's day. A card revised into a repeating
      * schedule or a trigger no longer expires; it waits for the answer.
      */
-    async onProposalRevised(botId: string, replacedId: string, replacement: BotCommitmentRevisedCard): Promise<void> {
-      const record = (await dependencies.commitments.list(botId)).find((entry) => entry.proposalId === replacedId);
+    async onProposalRevised(
+      botId: string,
+      replacedId: string,
+      replacement: BotCommitmentRevisedCard,
+    ): Promise<void> {
+      const record = (await dependencies.commitments.list(botId)).find(
+        (entry) => entry.proposalId === replacedId,
+      );
       if (!record) return;
       const schedule = replacement.schedule;
-      const once = schedule && typeof schedule === "object" && (schedule as { kind?: unknown }).kind === "once"
-        ? (schedule as { date: string; time: string })
-        : undefined;
-      await dependencies.commitments.update(botId, record.id, once
-        ? { proposalId: replacement.proposalId, dueDate: once.date, dueTime: once.time, openEnded: undefined }
-        : { proposalId: replacement.proposalId, openEnded: true });
+      const once =
+        schedule && typeof schedule === "object" && (schedule as { kind?: unknown }).kind === "once"
+          ? (schedule as { date: string; time: string })
+          : undefined;
+      await dependencies.commitments.update(
+        botId,
+        record.id,
+        once
+          ? {
+              proposalId: replacement.proposalId,
+              dueDate: once.date,
+              dueTime: once.time,
+              openEnded: undefined,
+            }
+          : { proposalId: replacement.proposalId, openEnded: true },
+      );
     },
   };
 }

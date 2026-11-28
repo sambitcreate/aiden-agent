@@ -8,7 +8,11 @@
 
 import { focusRegionEntry, type FocusRegion } from "./focus-regions";
 
-export type FocusCandidate = HTMLElement | null | undefined | (() => HTMLElement | null | undefined);
+export type FocusCandidate =
+  | HTMLElement
+  | null
+  | undefined
+  | (() => HTMLElement | null | undefined);
 
 export interface ReturnFocusOptions {
   /** The area whose entry point is the fallback; null for none. Default: the message box. */
@@ -28,7 +32,8 @@ export function isRestoringFocus(): boolean {
 
 function usable(element: HTMLElement): boolean {
   if (!element.isConnected || element === element.ownerDocument.body) return false;
-  if (element.closest("[hidden], [inert], [aria-hidden='true']") || element.matches(":disabled")) return false;
+  if (element.closest("[hidden], [inert], [aria-hidden='true']") || element.matches(":disabled"))
+    return false;
   // display: none on it or an ancestor.
   return typeof element.checkVisibility !== "function" || element.checkVisibility();
 }
@@ -38,7 +43,10 @@ function usable(element: HTMLElement): boolean {
  * and actually takes focus, then the fallbacks. Returns the element that holds
  * focus, or null when nothing would take it (focus is left where it was).
  */
-export function returnFocus(candidates: readonly FocusCandidate[], options: ReturnFocusOptions = {}): HTMLElement | null {
+export function returnFocus(
+  candidates: readonly FocusCandidate[],
+  options: ReturnFocusOptions = {},
+): HTMLElement | null {
   const { region = "composer", preventScroll = false, closing } = options;
   const take = (candidate: FocusCandidate): HTMLElement | null => {
     const element = typeof candidate === "function" ? candidate() : candidate;
@@ -56,7 +64,11 @@ export function returnFocus(candidates: readonly FocusCandidate[], options: Retu
     if (landed) return landed;
   }
   const active = document.activeElement;
-  const lost = !active || active === document.body || !active.isConnected || closing?.contains(active) === true;
+  const lost =
+    !active ||
+    active === document.body ||
+    !active.isConnected ||
+    closing?.contains(active) === true;
   if (!lost) return null;
   return (
     take(() => (region ? focusRegionEntry(region) : null)) ??

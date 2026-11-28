@@ -14,7 +14,12 @@
 import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { boundedToolOutput } from "../tool-output-context.js";
-import { BOT_COMPUTER_UNATTENDED_WAIT_MS, botComputerUnattendedGaveUp, waitForBotWithin, type BotComputerGiveBackBudget } from "./control.js";
+import {
+  BOT_COMPUTER_UNATTENDED_WAIT_MS,
+  botComputerUnattendedGaveUp,
+  waitForBotWithin,
+  type BotComputerGiveBackBudget,
+} from "./control.js";
 import {
   BOT_COMPUTER_SHELL_TOOL_NAME,
   BotComputerError,
@@ -36,12 +41,14 @@ export const BotComputerShellParameters = Type.Object(
     command: Type.String({
       minLength: 1,
       maxLength: BOT_COMPUTER_SHELL_COMMAND_MAX_CHARS,
-      description: "The command to run in your computer, with /bin/sh as its user, in its home folder.",
+      description:
+        "The command to run in your computer, with /bin/sh as its user, in its home folder.",
     }),
     description: Type.Optional(
       Type.String({
         maxLength: 200,
-        description: 'A short present-tense description of what the command does, in 5-10 words, e.g. "Install the project\'s dependencies".',
+        description:
+          'A short present-tense description of what the command does, in 5-10 words, e.g. "Install the project\'s dependencies".',
       }),
     ),
   },
@@ -70,20 +77,39 @@ export interface BotComputerShellTurn {
 }
 
 function textResult(value: string, isError = false): AgentToolResult<null> {
-  return { content: [{ type: "text", text: value }], details: null, ...(isError ? { isError: true } : {}) };
+  return {
+    content: [{ type: "text", text: value }],
+    details: null,
+    ...(isError ? { isError: true } : {}),
+  };
 }
 
 /** The guest command's result as the model reads it, `run_command`'s way. */
-export async function formatBotComputerShellResult(result: BotComputerGuestCommandResult): Promise<AgentToolResult<null>> {
+export async function formatBotComputerShellResult(
+  result: BotComputerGuestCommandResult,
+): Promise<AgentToolResult<null>> {
   const combined = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
-  const cut = result.truncated ? `\n[Output cut at ${BOT_COMPUTER_SHELL_OUTPUT_BYTES / 1024} KiB.]` : "";
+  const cut = result.truncated
+    ? `\n[Output cut at ${BOT_COMPUTER_SHELL_OUTPUT_BYTES / 1024} KiB.]`
+    : "";
   if (result.exitCode === 0 && !result.timedOut) {
-    return textResult(await boundedToolOutput(`${combined || "[no output]"}${cut}`, BOT_COMPUTER_SHELL_RESULT_CHARS));
+    return textResult(
+      await boundedToolOutput(
+        `${combined || "[no output]"}${cut}`,
+        BOT_COMPUTER_SHELL_RESULT_CHARS,
+      ),
+    );
   }
   const reason = result.timedOut
     ? `Command timed out after ${BOT_COMPUTER_SHELL_TIMEOUT_MS / 1000} seconds.`
     : `Command exited with error (code ${result.exitCode ?? "?"}).`;
-  return textResult(await boundedToolOutput(`${reason}${combined ? `\n${combined}` : ""}${cut}`, BOT_COMPUTER_SHELL_RESULT_CHARS), true);
+  return textResult(
+    await boundedToolOutput(
+      `${reason}${combined ? `\n${combined}` : ""}${cut}`,
+      BOT_COMPUTER_SHELL_RESULT_CHARS,
+    ),
+    true,
+  );
 }
 
 export function createBotComputerShellTool(
@@ -95,7 +121,9 @@ export function createBotComputerShellTool(
   // Nobody can give the computer back on behalf of a routine or Telegram run: it waits only so long, in all.
   const giveBackBudget =
     (turn.unattended ?? turn.routine)
-      ? (turn.giveBackBudget ?? { remainingMs: deps.unattendedWaitMs ?? BOT_COMPUTER_UNATTENDED_WAIT_MS })
+      ? (turn.giveBackBudget ?? {
+          remainingMs: deps.unattendedWaitMs ?? BOT_COMPUTER_UNATTENDED_WAIT_MS,
+        })
       : undefined;
   return {
     name: BOT_COMPUTER_SHELL_TOOL_NAME,
@@ -107,7 +135,8 @@ export function createBotComputerShellTool(
       const command = typeof params?.command === "string" ? params.command : "";
       if (!command.trim()) return textResult("computer_shell needs a command.", true);
       const owner = (await deps.botName(botId).catch(() => undefined)) || "The Bot";
-      const progress = (line: string) => onUpdate?.({ content: [{ type: "text", text: line }], details: null });
+      const progress = (line: string) =>
+        onUpdate?.({ content: [{ type: "text", text: line }], details: null });
       /** False when an unattended turn stopped waiting; the person still has the computer. */
       const waitForGiveBack = async (): Promise<boolean> => {
         progress(`Waiting for the person to give ${owner}'s computer back.`);
@@ -131,11 +160,17 @@ export function createBotComputerShellTool(
           const back = await waitForGiveBack();
           const stopped =
             "The person took over the computer, so Aiden stopped waiting for the command. It may have partly run, or still be running in the computer: check before running it again.";
-          return textResult(back ? stopped : `${stopped} ${botComputerUnattendedGaveUp(`${owner}'s`)}`, true);
+          return textResult(
+            back ? stopped : `${stopped} ${botComputerUnattendedGaveUp(`${owner}'s`)}`,
+            true,
+          );
         }
         if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : error;
         if (error instanceof BotComputerError) return textResult(error.message, true);
-        return textResult(`Aiden couldn't run the command in ${owner}'s computer. Try again.`, true);
+        return textResult(
+          `Aiden couldn't run the command in ${owner}'s computer. Try again.`,
+          true,
+        );
       } finally {
         deps.host.touch(botId);
       }

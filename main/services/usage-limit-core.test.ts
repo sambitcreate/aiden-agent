@@ -61,7 +61,10 @@ test("rejections that wait read their reset time from headers before text", () =
   assert.deepEqual(overloaded, { kind: "wait", scope: "model" });
 
   // pi-ai's message when a provider asks for a longer delay than it retries itself.
-  const longDelay = classifyUsageLimit({ errorMessage: "Server requested 140s retry delay (max: 60s)", now: NOW });
+  const longDelay = classifyUsageLimit({
+    errorMessage: "Server requested 140s retry delay (max: 60s)",
+    now: NOW,
+  });
   assert.deepEqual(longDelay, { kind: "wait", scope: "model", resetAt: NOW + 140_000 });
 
   const google = classifyUsageLimit({
@@ -105,7 +108,11 @@ test("subscription windows wait for the whole account, and windows of days do no
     },
     now: NOW,
   });
-  assert.deepEqual(claudeWeek, { kind: "stop", reason: "long-window", resetAt: NOW + 4 * 86_400_000 });
+  assert.deepEqual(claudeWeek, {
+    kind: "stop",
+    reason: "long-window",
+    resetAt: NOW + 4 * 86_400_000,
+  });
 
   const codexWeekly = classifyUsageLimit({
     errorMessage: "429 usage_limit_reached",
@@ -121,11 +128,15 @@ test("subscription windows wait for the whole account, and windows of days do no
   });
   assert.deepEqual(codexWeekly, { kind: "stop", reason: "long-window", resetAt: NOW + 86_400_000 });
 
-  const plan = classifyUsageLimit({ errorMessage: "usage_limit_reached: The usage limit has been reached", now: NOW });
+  const plan = classifyUsageLimit({
+    errorMessage: "usage_limit_reached: The usage limit has been reached",
+    now: NOW,
+  });
   assert.deepEqual(plan, { kind: "wait", scope: "account", plan: true });
 
   const daily = classifyUsageLimit({
-    errorMessage: "429 Quota exceeded for quota metric GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+    errorMessage:
+      "429 Quota exceeded for quota metric GenerateRequestsPerDayPerProjectPerModel-FreeTier",
     now: NOW,
   });
   assert.equal(daily.kind, "stop");
@@ -134,33 +145,65 @@ test("subscription windows wait for the whole account, and windows of days do no
 test("billing, bad requests and other failures never wait", () => {
   assert.deepEqual(
     classifyUsageLimit({
-      errorMessage: "429 You exceeded your current quota, please check your plan and billing details.",
+      errorMessage:
+        "429 You exceeded your current quota, please check your plan and billing details.",
       observation: { status: 429, headers: { "x-ratelimit-reset-requests": "120ms" } },
       now: NOW,
     }),
     { kind: "stop", reason: "billing" },
   );
-  assert.deepEqual(classifyUsageLimit({ errorMessage: "402 Payment Required", now: NOW }), { kind: "stop", reason: "billing" });
+  assert.deepEqual(classifyUsageLimit({ errorMessage: "402 Payment Required", now: NOW }), {
+    kind: "stop",
+    reason: "billing",
+  });
   assert.deepEqual(
-    classifyUsageLimit({ errorMessage: '400 {"error":{"message":"prompt is too long: 210000 tokens > 200000 maximum"}}', now: NOW }),
+    classifyUsageLimit({
+      errorMessage:
+        '400 {"error":{"message":"prompt is too long: 210000 tokens > 200000 maximum"}}',
+      now: NOW,
+    }),
     { kind: "none" },
   );
-  assert.deepEqual(classifyUsageLimit({ errorMessage: "401 invalid x-api-key", now: NOW }), { kind: "none" });
-  assert.deepEqual(classifyUsageLimit({ errorMessage: "500 Internal server error", now: NOW }), { kind: "none" });
+  assert.deepEqual(classifyUsageLimit({ errorMessage: "401 invalid x-api-key", now: NOW }), {
+    kind: "none",
+  });
+  assert.deepEqual(classifyUsageLimit({ errorMessage: "500 Internal server error", now: NOW }), {
+    kind: "none",
+  });
   // A bare 503 or 408 is a passing server failure, retried as one; an overloaded 503 waits.
-  assert.deepEqual(classifyUsageLimit({ errorMessage: "503 Service Unavailable", observation: { status: 503, headers: {} }, now: NOW }), { kind: "none" });
-  assert.deepEqual(classifyUsageLimit({ errorMessage: "408 Request Timeout", now: NOW }), { kind: "none" });
   assert.deepEqual(
-    classifyUsageLimit({ errorMessage: "503 The model is overloaded. Please try again later.", now: NOW }),
+    classifyUsageLimit({
+      errorMessage: "503 Service Unavailable",
+      observation: { status: 503, headers: {} },
+      now: NOW,
+    }),
+    { kind: "none" },
+  );
+  assert.deepEqual(classifyUsageLimit({ errorMessage: "408 Request Timeout", now: NOW }), {
+    kind: "none",
+  });
+  assert.deepEqual(
+    classifyUsageLimit({
+      errorMessage: "503 The model is overloaded. Please try again later.",
+      now: NOW,
+    }),
     { kind: "wait", scope: "model" },
   );
   assert.deepEqual(
-    classifyUsageLimit({ errorMessage: "503 Service Unavailable", observation: { status: 503, headers: { "retry-after": "30" } }, now: NOW }),
+    classifyUsageLimit({
+      errorMessage: "503 Service Unavailable",
+      observation: { status: 503, headers: { "retry-after": "30" } },
+      now: NOW,
+    }),
     { kind: "wait", scope: "model", resetAt: NOW + 30_000 },
   );
-  assert.deepEqual(classifyUsageLimit({ errorMessage: "fetch failed", now: NOW }), { kind: "none" });
+  assert.deepEqual(classifyUsageLimit({ errorMessage: "fetch failed", now: NOW }), {
+    kind: "none",
+  });
   // A reset time with nothing that reads as a limit is not a limit.
-  assert.deepEqual(classifyUsageLimit({ errorMessage: "Please try again in 5s", now: NOW }), { kind: "none" });
+  assert.deepEqual(classifyUsageLimit({ errorMessage: "Please try again in 5s", now: NOW }), {
+    kind: "none",
+  });
 });
 
 test("the provider-free text an isolated helper sends reads back as the same verdict", () => {
@@ -202,7 +245,11 @@ test("waits follow the reset, back off without one, and give up past the longest
     maxWaitMs,
     now: NOW,
   });
-  assert.deepEqual(beyond, { kind: "give-up", reason: "beyond-max-wait", resetAt: NOW + 7 * 3_600_000 });
+  assert.deepEqual(beyond, {
+    kind: "give-up",
+    reason: "beyond-max-wait",
+    resetAt: NOW + 7 * 3_600_000,
+  });
 
   // Without a time: 15 s, 30 s, 1 min, 2 min, 5 min, then 10 min, for at most 30 minutes.
   let existing: UsageLimitEntry | undefined;
@@ -230,14 +277,26 @@ test("waits follow the reset, back off without one, and give up past the longest
   assert.ok(at - NOW <= 30 * 60_000);
 
   assert.deepEqual(
-    decideUsageLimitWait({ verdict: { kind: "wait", scope: "model" }, key, providerId: "x", maxWaitMs: usageLimitMaxWaitMs(0), now: NOW }),
+    decideUsageLimitWait({
+      verdict: { kind: "wait", scope: "model" },
+      key,
+      providerId: "x",
+      maxWaitMs: usageLimitMaxWaitMs(0),
+      now: NOW,
+    }),
     { kind: "give-up", reason: "off" },
   );
 
   // A limit nobody tried for a while starts over instead of counting the old wait.
   const stale = decideUsageLimitWait({
     verdict: { kind: "wait", scope: "model" },
-    existing: { key, providerId: "openai", since: NOW - 5 * 3_600_000, nextTryAt: NOW - 3_600_000, attempts: 6 },
+    existing: {
+      key,
+      providerId: "openai",
+      since: NOW - 5 * 3_600_000,
+      nextTryAt: NOW - 3_600_000,
+      attempts: 6,
+    },
     key,
     providerId: "openai",
     maxWaitMs,
@@ -251,38 +310,77 @@ test("give-up notes say when the limit resets", () => {
     { kind: "give-up", reason: "beyond-max-wait", resetAt: NOW + 7 * 3_600_000 },
     { maxWaitMs: usageLimitMaxWaitMs(6), now: NOW, locale: "en-US", timeZone: "UTC" },
   );
-  assert.equal(note, "Aiden stopped waiting: the limit resets at 10:00 PM, after the longest wait you set (6 hours).");
+  assert.equal(
+    note,
+    "Aiden stopped waiting: the limit resets at 10:00 PM, after the longest wait you set (6 hours).",
+  );
   assert.equal(
     formatUsageLimitTime(NOW + 2 * 86_400_000, NOW, { locale: "en-US", timeZone: "UTC" }),
     "Wednesday at 3:00 PM",
   );
-  assert.equal(formatUsageLimitTime(NOW + 9 * 86_400_000, NOW, { locale: "en-US", timeZone: "UTC" }), "Nov 4 at 3:00 PM");
-  assert.equal(usageLimitGiveUpNote({ kind: "give-up", reason: "billing" }, { maxWaitMs: 1, now: NOW }), "");
+  assert.equal(
+    formatUsageLimitTime(NOW + 9 * 86_400_000, NOW, { locale: "en-US", timeZone: "UTC" }),
+    "Nov 4 at 3:00 PM",
+  );
+  assert.equal(
+    usageLimitGiveUpNote({ kind: "give-up", reason: "billing" }, { maxWaitMs: 1, now: NOW }),
+    "",
+  );
 });
 
 test("only a reply that waited and ran out of time notifies", () => {
-  const ranOut = { kind: "give-up", reason: "beyond-max-wait", resetAt: NOW + 7 * 3_600_000 } as const;
-  const input = { providerLabel: "Claude", waited: true, maxWaitMs: usageLimitMaxWaitMs(6), now: NOW, locale: "en-US", timeZone: "UTC" };
+  const ranOut = {
+    kind: "give-up",
+    reason: "beyond-max-wait",
+    resetAt: NOW + 7 * 3_600_000,
+  } as const;
+  const input = {
+    providerLabel: "Claude",
+    waited: true,
+    maxWaitMs: usageLimitMaxWaitMs(6),
+    now: NOW,
+    locale: "en-US",
+    timeZone: "UTC",
+  };
   assert.deepEqual(usageLimitGiveUpNotification({ ...input, decision: ranOut }), {
     title: "Stopped waiting for Claude",
     body: "Aiden stopped waiting: the limit resets at 10:00 PM, after the longest wait you set (6 hours).",
   });
   assert.match(
-    usageLimitGiveUpNotification({ ...input, decision: { kind: "give-up", reason: "backoff-exhausted" } })?.body ?? "",
+    usageLimitGiveUpNotification({
+      ...input,
+      decision: { kind: "give-up", reason: "backoff-exhausted" },
+    })?.body ?? "",
     /tried again for 30 minutes/u,
   );
   // A limit that was never waited for already fails in the chat.
-  assert.equal(usageLimitGiveUpNotification({ ...input, waited: false, decision: ranOut }), undefined);
   assert.equal(
-    usageLimitGiveUpNotification({ ...input, decision: { kind: "give-up", reason: "long-window", resetAt: NOW + 3 * 86_400_000 } }),
+    usageLimitGiveUpNotification({ ...input, waited: false, decision: ranOut }),
+    undefined,
+  );
+  assert.equal(
+    usageLimitGiveUpNotification({
+      ...input,
+      decision: { kind: "give-up", reason: "long-window", resetAt: NOW + 3 * 86_400_000 },
+    }),
     undefined,
   );
   // Turning waiting off is the owner's own choice.
-  assert.equal(usageLimitGiveUpNotification({ ...input, decision: { kind: "give-up", reason: "off" } }), undefined);
+  assert.equal(
+    usageLimitGiveUpNotification({ ...input, decision: { kind: "give-up", reason: "off" } }),
+    undefined,
+  );
 });
 
 test("the saved limits keep only well-formed, recent entries", () => {
-  const good = { key: "anthropic", providerId: "anthropic", since: NOW - 60_000, nextTryAt: NOW + 60_000, attempts: 1, resetAt: NOW + 50_000 };
+  const good = {
+    key: "anthropic",
+    providerId: "anthropic",
+    since: NOW - 60_000,
+    nextTryAt: NOW + 60_000,
+    attempts: 1,
+    resetAt: NOW + 50_000,
+  };
   const parsed = parseUsageLimitEntries(
     {
       version: 1,
@@ -318,7 +416,9 @@ class FakeClock implements UsageLimitGateClock {
   async advance(ms: number): Promise<void> {
     const end = this.time + ms;
     for (;;) {
-      const due = [...this.timers].filter(([, timer]) => timer.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+      const due = [...this.timers]
+        .filter(([, timer]) => timer.at <= end)
+        .sort((a, b) => a[1].at - b[1].at)[0];
       if (!due) break;
       this.timers.delete(due[0]);
       this.time = Math.max(this.time, due[1].at);
@@ -334,7 +434,11 @@ async function settle(): Promise<void> {
   for (let index = 0; index < 10; index++) await Promise.resolve();
 }
 
-function entry(key: string, nextTryAt: number, extra: Partial<UsageLimitEntry> = {}): UsageLimitEntry {
+function entry(
+  key: string,
+  nextTryAt: number,
+  extra: Partial<UsageLimitEntry> = {},
+): UsageLimitEntry {
   return { key, providerId: "anthropic", since: NOW, nextTryAt, attempts: 1, ...extra };
 }
 
@@ -348,7 +452,11 @@ test("one waiting request tests the limit; the rest leave one at a time after it
   const order: string[] = [];
   for (const id of ["a", "b", "c"]) {
     void gate
-      .acquire([keys.account, keys.model], { owner: { kind: "chat", id }, providerLabel: "Claude", modelId: "opus" })
+      .acquire([keys.account, keys.model], {
+        owner: { kind: "chat", id },
+        providerLabel: "Claude",
+        modelId: "opus",
+      })
       .then((ticket) => {
         tickets[id] = ticket;
         order.push(id);
@@ -366,7 +474,12 @@ test("one waiting request tests the limit; the rest leave one at a time after it
 
   await clock.advance(60_000);
   assert.deepEqual(order, ["a"]);
-  assert.deepEqual(tickets.a, { kind: "send", id: (tickets.a as { id: number }).id, key: keys.account, testing: true });
+  assert.deepEqual(tickets.a, {
+    kind: "send",
+    id: (tickets.a as { id: number }).id,
+    key: keys.account,
+    testing: true,
+  });
   assert.equal(gate.waits().find((wait) => wait.owner.id === "a")?.trying, true);
 
   // Nobody else sends while the test is out.
@@ -400,7 +513,9 @@ test("a test that meets the limit again keeps its place, and a stopped test hand
   let first: UsageLimitTicket | undefined;
   void gate.acquire(keys, options("a", stopA.signal)).then((ticket) => (first = ticket));
   let second: UsageLimitTicket | undefined;
-  void gate.acquire(keys, options("b", new AbortController().signal)).then((ticket) => (second = ticket));
+  void gate
+    .acquire(keys, options("b", new AbortController().signal))
+    .then((ticket) => (second = ticket));
   await clock.advance(15_000);
   assert.equal(isTest(first), true);
   assert.equal(second, undefined);
@@ -408,7 +523,9 @@ test("a test that meets the limit again keeps its place, and a stopped test hand
   // The test met the limit again: it waits as the test once more, b stays in line.
   gate.hold(entry(model, clock.now() + 30_000, { attempts: 2 }));
   let again: UsageLimitTicket | undefined;
-  void gate.acquire(keys, { ...options("a", stopA.signal), previous: first }).then((ticket) => (again = ticket));
+  void gate
+    .acquire(keys, { ...options("a", stopA.signal), previous: first })
+    .then((ticket) => (again = ticket));
   await settle();
   assert.deepEqual(
     gate
@@ -438,7 +555,11 @@ test("Retry now tests at once, at most every 30 seconds", async () => {
   gate.hold(entry("anthropic", NOW + 3_600_000));
   let ticket: UsageLimitTicket | undefined;
   void gate
-    .acquire(["anthropic"], { owner: { kind: "bot", id: "bot-1" }, providerLabel: "Claude", modelId: "opus" })
+    .acquire(["anthropic"], {
+      owner: { kind: "bot", id: "bot-1" },
+      providerLabel: "Claude",
+      modelId: "opus",
+    })
     .then((value) => (ticket = value));
   await settle();
   assert.equal(gate.retryNow({ kind: "chat", id: "bot-1" }), false);
@@ -449,7 +570,12 @@ test("Retry now tests at once, at most every 30 seconds", async () => {
   gate.hold(entry("anthropic", clock.now() + 3_600_000, { attempts: 2 }));
   let next: UsageLimitTicket | undefined;
   void gate
-    .acquire(["anthropic"], { owner: { kind: "bot", id: "bot-1" }, providerLabel: "Claude", modelId: "opus", previous: ticket })
+    .acquire(["anthropic"], {
+      owner: { kind: "bot", id: "bot-1" },
+      providerLabel: "Claude",
+      modelId: "opus",
+      previous: ticket,
+    })
     .then((value) => (next = value));
   await settle();
   assert.equal(gate.retryNow({ kind: "bot", id: "bot-1" }), false);
@@ -463,7 +589,11 @@ test("a given-up limit turns its line and new requests away for a while", async 
   const clock = new FakeClock();
   const gate = new UsageLimitGate(clock);
   gate.hold(entry("anthropic", NOW + 60_000));
-  const options = (id: string) => ({ owner: { kind: "chat" as const, id }, providerLabel: "Claude", modelId: "opus" });
+  const options = (id: string) => ({
+    owner: { kind: "chat" as const, id },
+    providerLabel: "Claude",
+    modelId: "opus",
+  });
   let tester: UsageLimitTicket | undefined;
   let waiting: UsageLimitTicket | undefined;
   void gate.acquire(["anthropic"], options("a")).then((value) => (tester = value));
@@ -472,7 +602,10 @@ test("a given-up limit turns its line and new requests away for a while", async 
   gate.refuse({ key: "anthropic", providerId: "anthropic" }, NOW + 9 * 3_600_000, tester);
   await settle();
   assert.deepEqual(waiting, { kind: "refused", resetAt: NOW + 9 * 3_600_000 });
-  assert.deepEqual(await gate.acquire(["anthropic"], options("c")), { kind: "refused", resetAt: NOW + 9 * 3_600_000 });
+  assert.deepEqual(await gate.acquire(["anthropic"], options("c")), {
+    kind: "refused",
+    resetAt: NOW + 9 * 3_600_000,
+  });
 
   // After the refusal runs out, the next request tests the limit again.
   await clock.advance(USAGE_LIMIT_REFUSE_MS);
@@ -491,7 +624,11 @@ test("held limits survive a restart through their saved entries", async () => {
   after.load(parseUsageLimitEntries(saved, clock.now()));
   let ticket: UsageLimitTicket | undefined;
   void after
-    .acquire(["anthropic"], { owner: { kind: "bot", id: "b" }, providerLabel: "Claude", modelId: "opus" })
+    .acquire(["anthropic"], {
+      owner: { kind: "bot", id: "b" },
+      providerLabel: "Claude",
+      modelId: "opus",
+    })
     .then((value) => (ticket = value));
   await clock.advance(14 * 60_000);
   assert.equal(ticket, undefined);

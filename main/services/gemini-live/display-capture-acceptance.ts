@@ -108,15 +108,14 @@ export async function runDisplayCaptureAcceptance(profile: RuntimeProfile): Prom
     userDataPath: profile.userDataPath,
   });
   if (!launch.requested || !launch.accepted) {
-    process.stderr.write(`Gemini Live display capture acceptance refused: ${launch.requested ? launch.error : "acceptance_flags_missing"}\n`);
+    process.stderr.write(
+      `Gemini Live display capture acceptance refused: ${launch.requested ? launch.error : "acceptance_flags_missing"}\n`,
+    );
     return 1;
   }
 
   const startedAt = new Date();
-  const receiptPath = path.join(
-    launch.profilePath,
-    GEMINI_LIVE_CAPTURE_ACCEPTANCE_RECEIPT,
-  );
+  const receiptPath = path.join(launch.profilePath, GEMINI_LIVE_CAPTURE_ACCEPTANCE_RECEIPT);
   let browser: BrowserWindow | undefined;
   let server: Server | undefined;
   let permissionChecks = 0;
@@ -129,7 +128,8 @@ export async function runDisplayCaptureAcceptance(profile: RuntimeProfile): Prom
     server = createServer((request, response) => {
       response.writeHead(200, {
         "cache-control": "no-store",
-        "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+        "content-security-policy":
+          "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
         "content-type": "text/html; charset=utf-8",
       });
       response.end(request.url === "/replacement" ? replacementHtml : html);
@@ -150,32 +150,30 @@ export async function runDisplayCaptureAcceptance(profile: RuntimeProfile): Prom
     let boundDocument: string | null = null;
     let boundUrl: string | null = null;
     const acceptanceWindow = browser;
-    const allowedDocument = (
-      webContents: Electron.WebContents | null,
-      permission: string,
-    ) =>
+    const allowedDocument = (webContents: Electron.WebContents | null, permission: string) =>
       webContents === acceptanceWindow.webContents &&
       permission === "display-capture" &&
       boundDocument !== null &&
       acceptanceWindow.webContents.mainFrame.frameToken === boundDocument &&
       acceptanceWindow.webContents.mainFrame.url === boundUrl;
 
-    electronSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
-      const permissionName = String(permission);
-      const allowed =
-        allowedDocument(webContents, permissionName) &&
-        new URL(requestingOrigin).origin === origin &&
-        details.isMainFrame === true;
-      if (permissionName === "display-capture") permissionChecks += 1;
-      if (permissionName === "display-capture" && testingReplacement && !allowed) {
-        replacementPermissionDenials += 1;
-      }
-      return allowed;
-    });
+    electronSession.setPermissionCheckHandler(
+      (webContents, permission, requestingOrigin, details) => {
+        const permissionName = String(permission);
+        const allowed =
+          allowedDocument(webContents, permissionName) &&
+          new URL(requestingOrigin).origin === origin &&
+          details.isMainFrame === true;
+        if (permissionName === "display-capture") permissionChecks += 1;
+        if (permissionName === "display-capture" && testingReplacement && !allowed) {
+          replacementPermissionDenials += 1;
+        }
+        return allowed;
+      },
+    );
     electronSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
       const permissionName = String(permission);
-      const allowed =
-        allowedDocument(webContents, permissionName) && details.isMainFrame === true;
+      const allowed = allowedDocument(webContents, permissionName) && details.isMainFrame === true;
       if (permissionName === "display-capture") permissionRequests += 1;
       if (permissionName === "display-capture" && testingReplacement && !allowed) {
         replacementPermissionDenials += 1;
@@ -217,8 +215,7 @@ export async function runDisplayCaptureAcceptance(profile: RuntimeProfile): Prom
     } finally {
       testingReplacement = false;
     }
-    const replacementChooserFallbackRequests =
-      nativeFallbackRequests - fallbackBeforeReplacement;
+    const replacementChooserFallbackRequests = nativeFallbackRequests - fallbackBeforeReplacement;
     const evaluated = evaluateDisplayCaptureAcceptance({
       displayPermissionPath: permissionChecks + permissionRequests > 0,
       externalSourceEnded: renderer.externalSourceEnded === true,
@@ -227,8 +224,7 @@ export async function runDisplayCaptureAcceptance(profile: RuntimeProfile): Prom
       pickerCancellationErrorName: renderer.pickerCancellationErrorName ?? null,
       pickerCancelled: renderer.pickerCancelled === true,
       replacementChooserFallbackRequests,
-      replacementDocumentDenied:
-        navigationRejected && replacementPermissionDenials > 0,
+      replacementDocumentDenied: navigationRejected && replacementPermissionDenials > 0,
     });
     if (!evaluated.accepted) throw new Error("acceptance_contract_incomplete");
 

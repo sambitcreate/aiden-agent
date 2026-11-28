@@ -56,7 +56,11 @@ interface Stream {
 const MAX_SUBSCRIPTIONS_PER_OWNER = 32;
 
 function refused(error: unknown, status: number): boolean {
-  return error instanceof PeerTransportError && error.code === "request_failed" && error.status === status;
+  return (
+    error instanceof PeerTransportError &&
+    error.code === "request_failed" &&
+    error.status === status
+  );
 }
 
 /**
@@ -83,7 +87,14 @@ export class PeerBotSessionStreams {
     let stream = this.streams.get(key);
     const created = !stream;
     if (!stream) {
-      stream = { key, hostId: host, botId: bot, holders: new Set(), state: "waiting", stopped: false };
+      stream = {
+        key,
+        hostId: host,
+        botId: bot,
+        holders: new Set(),
+        state: "waiting",
+        stopped: false,
+      };
       this.streams.set(key, stream);
     }
     const subscriptionId = `bot_${randomUUID()}`;
@@ -224,7 +235,10 @@ export class PeerBotSessionStreams {
                 event,
               });
             } catch (error) {
-              failure = error instanceof PeerTransportError ? error : new PeerTransportError("invalid_response");
+              failure =
+                error instanceof PeerTransportError
+                  ? error
+                  : new PeerTransportError("invalid_response");
               controller.abort();
             }
           },

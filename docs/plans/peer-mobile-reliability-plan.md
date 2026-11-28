@@ -3,11 +3,11 @@
 Status: Active — mobile agent ancestry and connection reliability are implemented; physical-network acceptance, idle measurements, and background delivery slices remain open.
 
 The reviewed decisions below supersede the historical research recommendations where they differ.
+
 > Research snapshot: 2026-10-05 ~2 PM ET. Aiden `origin/main` = `43d8adb0` (past v0.53.0 `7e339cf1`; includes #343–#347). Upstream refs: t3code `3e6b45028`, pi-subagents tag `v0.76.0` = `99ccd391` (main `6826b054`), Pi `v1.0.3`.
 > **Sequencing:** this series lands **after** the Pi 0.87.1 → 1.0.3 upgrade (separate prompt: `pi-1.0.3-upgrade-prompt-2026-10-05.md`, built on PR stack #299–#307). See §2.
 
 ---
-
 
 ## Approved implementation decisions (2026-10-05)
 
@@ -128,18 +128,21 @@ Ship four upgrades as a sequence of small, reviewable PRs. Adapt the upstream id
 4. **Subagent results keep the session alive until they reach the parent, and wake an idle parent** (adapted from pi-subagents v0.76.0, plus the related post-tag fix #2689). Build this into Aiden's native host-managed subagent implementation. **Do not** add the pi-subagents plugin.
 
 ### Aiden stance (non-negotiable)
+
 - The Mac is the authority for Remote / On The Go. Clients render host projections and never invent state or endpoints.
 - Subagents are host-managed Pi `Agent` children inside Electron main. OpenCode is a provider, not a child runtime.
 - Hermex is UX inspiration only. No Hermes gateway.
 - Private child transcripts stay on the Mac. Mobile shows bounded public agent projections only.
 
 ### Before you start (required reading)
+
 - `AGENTS.md` (root), `ios/AGENTS.md`, `android/` notes if present, and `.memory/` (especially `.memory/multi-host-control.md` and the subagent notes). Update `.memory/` notes as you go.
 - `docs/aiden-remote-api-v1.md` (§5 `GET /server` ~L182, §7 idempotency, §9 Transport identity ~L469, "Operating multiple devices" ~L477, §10 Contract change process).
 - `docs/plans/README.md`, `docs/plans/subagent-orchestration-expansion-plan.md` (Phase 7B and the verification matrix ~L779+), `docs/plans/mobile-task-progress-and-subagents-plan.md`, `docs/plans/completed/desktop-multi-host-control-plan.md` (efficiency budgets ~L259), `docs/plans/completed/aiden-native-subagents-plan.md`.
 - UI: `docs/design-guide.md`, `docs/chatgpt-desktop-ui-inspiration.md`, `docs/chatgpt-ui-element-specimen.html`, and the settings design system. No decorative colored borders. Keep focus-visible rings. Use soft semantic status fills.
 
 ### Upstream references (read-only; clone or use `gh`)
+
 - T3 Code `pingdotgg/t3code`:
   - #15467 (`979ca66ce`), multi-route: `packages/client-runtime/src/connection/routes.ts`, `driver.ts` (`connectOverRoutes`, `preflight`), `supervisor.ts` (better-route checks, `BetterRouteAvailable`, cooldown), and the settings route list.
   - #15468 (`745c225f9`), learned routes: server `DirectEndpoints.ts` (`resolveBoundEndpoints`, virtual-interface filter, Tailscale Serve probe), `packages/contracts/src/server.ts` (`ServerConfig.directEndpoints`), and client `mergeLearnedRoutes` / `routesAfterRemoving`.
@@ -166,14 +169,14 @@ gh pr list --state open --limit 50
 
 Overlapping open work (as of research; re-check):
 
-| PR / issue | What | Impact on this series |
-|---|---|---|
-| **#299–#307** (`codex/pi-1-*`) | Pi 1.0 stack, being reconciled and bumped to 1.0.3 by the parallel prompt. Touches `main/services/pi-agent-runtime-harness.ts`, `main/services/subagents/child-agent-runtime.ts`, `generation-context.ts`, `llm-client.ts`, subagent env, CLI | **Item 4 depends on it.** Start item 4b only after it merges. Item 4a (pure core) can be written earlier but must merge after it |
-| **#346** `feature/unified-send-control` | Unifies the busy Steer/Queue pill and removes Redirect. Touches iOS `AidenChatFeature.swift` (`runInputPill`, `offersRunInput`, `canSubmitRunInput`), `Models/AidenChat.swift`, Android `AidenComposerView.kt` (`AidenRunInputPill`), `AidenChatViewModel.kt` (`runInputMode`), `AidenChatDetailScreen.kt` | **Item 2 conflicts.** Build item 2 on top of #346 (after it merges, or merge its branch in) |
-| **#349** chat fork from paired devices | Claims contract **rev 21** (`chat-fork-v1`, `chat-fork-summary-v1`) | Item 1a claims the **next revision after main at merge time** (likely 22, or higher if #312 or #349 merge first) |
-| **#312** app controls | Changes the iOS and Android contract plus `AidenChatFeature.swift`, `AidenChatViewModel.kt`, `AidenChatDetailScreen.kt`, both coordinators, revision-assertion tests | Possible revision race and textual conflicts with items 1a and 2. Merge `origin/main` before claiming a revision |
-| #341, #348, #340 | Compaction and others | No direct overlap found. Re-check files |
-| Issues #87 (TLS endpoint verification timeout in `remote:beginPairing`), #86 (`tailscale_permission_denied`), #88, #118 | Pairing/Tailscale reliability | Not duplicates. Item 1 must not make #87/#86 worse. Mention them in PR bodies if the route probe touches the same code |
+| PR / issue                                                                                                              | What                                                                                                                                                                                                                                                                                                       | Impact on this series                                                                                                            |
+| ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **#299–#307** (`codex/pi-1-*`)                                                                                          | Pi 1.0 stack, being reconciled and bumped to 1.0.3 by the parallel prompt. Touches `main/services/pi-agent-runtime-harness.ts`, `main/services/subagents/child-agent-runtime.ts`, `generation-context.ts`, `llm-client.ts`, subagent env, CLI                                                              | **Item 4 depends on it.** Start item 4b only after it merges. Item 4a (pure core) can be written earlier but must merge after it |
+| **#346** `feature/unified-send-control`                                                                                 | Unifies the busy Steer/Queue pill and removes Redirect. Touches iOS `AidenChatFeature.swift` (`runInputPill`, `offersRunInput`, `canSubmitRunInput`), `Models/AidenChat.swift`, Android `AidenComposerView.kt` (`AidenRunInputPill`), `AidenChatViewModel.kt` (`runInputMode`), `AidenChatDetailScreen.kt` | **Item 2 conflicts.** Build item 2 on top of #346 (after it merges, or merge its branch in)                                      |
+| **#349** chat fork from paired devices                                                                                  | Claims contract **rev 21** (`chat-fork-v1`, `chat-fork-summary-v1`)                                                                                                                                                                                                                                        | Item 1a claims the **next revision after main at merge time** (likely 22, or higher if #312 or #349 merge first)                 |
+| **#312** app controls                                                                                                   | Changes the iOS and Android contract plus `AidenChatFeature.swift`, `AidenChatViewModel.kt`, `AidenChatDetailScreen.kt`, both coordinators, revision-assertion tests                                                                                                                                       | Possible revision race and textual conflicts with items 1a and 2. Merge `origin/main` before claiming a revision                 |
+| #341, #348, #340                                                                                                        | Compaction and others                                                                                                                                                                                                                                                                                      | No direct overlap found. Re-check files                                                                                          |
+| Issues #87 (TLS endpoint verification timeout in `remote:beginPairing`), #86 (`tailscale_permission_denied`), #88, #118 | Pairing/Tailscale reliability                                                                                                                                                                                                                                                                              | Not duplicates. Item 1 must not make #87/#86 worse. Mention them in PR bodies if the route probe touches the same code           |
 
 None of the open PRs or issues implement any of the four items.
 
@@ -181,23 +184,25 @@ None of the open PRs or issues implement any of the four items.
 
 ## 2. Ordering and PR split
 
-| # | PR | Depends on | Contract bump |
-|---|---|---|---|
-| 1 | **4a. Subagent owed-result ledger + wake planner (core, production-inert)** | Pi 1.0.3 merged (merge after it; write it anytime) | No |
-| 2 | **4b. Host wiring: liveness, quit guard, idle/busy parent wake** | 4a, and the Pi 1.0.3 stack merged | No (Remote projection unchanged) |
-| 3 | **3. Mobile agent-detail ancestry + back stack (iOS + Android)** | None (client-only) | No |
-| 4 | **2. Mobile in-thread send-failure notice + Retry (iOS + Android)** | #346 merged | No |
-| 5 | **1a. Host advertises routes on authenticated `GET /server`** | main at merge time | **Yes: next revision** |
-| 6 | **1b. Desktop route store, selection, failover, come-home** | 1a | No (consumes 1a) |
-| 7 | **1c. Connections settings route UI + docs + `.memory`** | 1b | No |
+| #   | PR                                                                          | Depends on                                         | Contract bump                    |
+| --- | --------------------------------------------------------------------------- | -------------------------------------------------- | -------------------------------- |
+| 1   | **4a. Subagent owed-result ledger + wake planner (core, production-inert)** | Pi 1.0.3 merged (merge after it; write it anytime) | No                               |
+| 2   | **4b. Host wiring: liveness, quit guard, idle/busy parent wake**            | 4a, and the Pi 1.0.3 stack merged                  | No (Remote projection unchanged) |
+| 3   | **3. Mobile agent-detail ancestry + back stack (iOS + Android)**            | None (client-only)                                 | No                               |
+| 4   | **2. Mobile in-thread send-failure notice + Retry (iOS + Android)**         | #346 merged                                        | No                               |
+| 5   | **1a. Host advertises routes on authenticated `GET /server`**               | main at merge time                                 | **Yes: next revision**           |
+| 6   | **1b. Desktop route store, selection, failover, come-home**                 | 1a                                                 | No (consumes 1a)                 |
+| 7   | **1c. Connections settings route UI + docs + `.memory`**                    | 1b                                                 | No                               |
 
 Why this order:
+
 - Item 4 risks the most correctness problems (lost or duplicate results, stale agent state) and is entangled with the Pi upgrade's harness changes. Land it right after that upgrade, while the harness is fresh in reviewers' minds.
 - Items 3 and 2 are client-only and independent of Pi. Item 3 is smallest. Item 2 waits for #346.
 - Item 1 is the largest and is security-sensitive (TLS trust and pinning). It also needs a contract revision, which should be claimed after #349 / #312 settle.
 - Items 2 and 3 may be developed in parallel branches. Keep each PR focused and never stack unrelated items.
 
 Branch and PR hygiene (from `AGENTS.md`):
+
 - On shared branches, merge `origin/main`. Never rebase or force-push.
 - Register every new test file in the right `package.json` script, and union-merge conflicts in the root test chain.
 - A PR is mergeable only with green CI at the exact head. Run the narrow local suites before requesting bot reviews.
@@ -205,6 +210,7 @@ Branch and PR hygiene (from `AGENTS.md`):
 - Shared server contract or transcript changes must be checked against both native clients, with their suites run.
 
 ### Interaction with the Pi 0.87.1 → 1.0.3 upgrade
+
 - **Same files:** `pi-agent-runtime-harness.ts` (`queueSteer`, `queueFollowUp`, `queueAdmissionBlocked`, `takeUndeliveredQueuedMessages`, `waitForIdle`), `subagents/child-agent-runtime.ts`, `generation-context.ts`, the `package.json` test chain, and `docs/plans/README.md`. Expect textual conflicts if both are in flight, so do not start 4b until the upgrade is on main.
 - **Semantics to recheck on 1.0.3:** `Agent.steer()`, `Agent.followUp()`, `followUpMode` (`PendingMessageQueue`, default `"one-at-a-time"`), and idle detection still exist in `packages/agent/src/agent.ts` at v1.0.3. Confirm their delivery timing against Aiden's harness before relying on them for the busy-parent path.
 - **CLI:** pi#5581 is still open, so a CLI-side wake must **never** use `sendMessage({triggerTurn:true})`. It would skip Aiden's `before_agent_start` hooks (`packages/cli/src/extensions/subagents.ts`, memory, advisor, session-parity, `daemon-chats.ts`).
@@ -216,11 +222,13 @@ Branch and PR hygiene (from `AGENTS.md`):
 ## 3. Item 4: subagent results keep the session alive and wake an idle parent
 
 ### 3.1 What upstream does
+
 - **v0.76.0 #2683:** each background job whose result is owed to the parent goes into an owed set (`owedResultRunIds`). Session liveness (the "don't exit / still working" signal) stays true while any result is owed **or** a wake has been queued but not started (`unstartedWakes`). A result counts as delivered only when Pi emits `message_start` for the turn that carries it (`messageStarted()` → `onResultDelivered`). Job cleanup does not drop an owed result.
 - **v0.76.0 #2666:** when a headless/print turn ends, finished results are drained into the parent (`deliverPendingResults`, notifier `flush`) before the session settles, so a CLI `-p` run doesn't exit with results stranded.
 - **Post-tag #2689/#2687 (adopt the idea, not the code):** waking an idle parent with `sendMessage(triggerTurn)` skipped `before_agent_start` (prompt, tool and memory injection). The fix is to append the notice without triggering, then start a real user-path turn, keep a 10 s pending reservation per session, and survive reloads. A busy parent gets a steer.
 
 ### 3.2 What Aiden has today (verify)
+
 - Production children are **foreground-only**:
   - `main/services/subagents/subagent-tool-assembly.ts` throws `"Background subagent tool assembly is unavailable."`
   - `subagent-supervisor-core.ts` `SubagentSupervisor.execute` awaits children, and descendants drain before their ancestor completes.
@@ -248,9 +256,11 @@ Branch and PR hygiene (from `AGENTS.md`):
   - `pi-agent-runtime-harness.ts` queue APIs
 
 ### 3.3 Design
+
 This is the "result delivery + parent wake" slice of Phase 7B, built so that activating background launches later is safe. **Do not** expose a model-facing background launch tool in this series unless Sambit explicitly approves turning on Phase 7B (see §11). With the launch hidden, 4b's wiring is reached only through tests and an internal or dev path. Say so plainly in the PR body.
 
 **4a: core (pure, injected clock/IO, no Electron):**
+
 - Add an owed-delivery state to `BackgroundSubagentRunV2`: `delivery: "none" | "owed" | "waking" | "delivered" | "discarded"`. Include `owedAt`, `wakeReservation?: {id, chatId, reservedAt, expiresAt}`, and `deliveredTurnId?`.
 - Add event kinds (`result_owed`, `wake_reserved`, `wake_started`, `result_delivered`, `result_discarded`). Keep the strict parser backward-compatible: an old record with no delivery fields parses as `"none"`.
 - The terminal transition and the owed result commit **atomically** in one CAS-guarded write, before any terminal publication or notification (this matches the plan's matrix).
@@ -269,6 +279,7 @@ This is the "result delivery + parent wake" slice of Phase 7B, built so that act
   - runs still executing at quit → `interrupted` (per plan), and the parent is told on its next turn
 
 **4b: host wiring (after the Pi upgrade):**
+
 - Liveness: chat `rowState` "working", `HostRunRegistry` presence, the before-quit guard (`requestApplicationQuit`), and the headless paths (Bot/Telegram, scheduled, CLI daemon chats) treat `owed` and `waking` as live. Quit while results are owed: follow the existing quit-confirmation pattern, preserve completed child outcomes and owed delivery, and interrupt only active execution.
 - **Busy parent:** deliver through the shared run-input admission (`createChatRunInputAdmission` / harness `queueFollowUp`) at a safe boundary. Don't call `agent.followUp()` directly.
 - **Idle or closed parent:** start a new host-started turn through `ChatTurnAdmission` with a new generation surface (modelled on `scheduledGenerationSurface`, e.g. `subagentResultGenerationSurface`). That turn rebuilds the system prompt, tools, skills, MCP and model catalog like any turn. **Never** resume a stale `Agent` instance with `continue()` or `followUp()`. Insert the result as a **host-authored** message (the subagent-result kind), never as a user message, and keep it bounded (summary plus reference, not a raw child transcript).
@@ -278,6 +289,7 @@ This is the "result delivery + parent wake" slice of Phase 7B, built so that act
 - Remote / mobile projection stays **parent-only**: no child transcript, no new contract fields. The parent row simply shows working while results are owed.
 
 ### 3.4 Edge cases to cover
+
 - Parent idle, then closed (window or chat closed), then the app relaunches: the result is delivered once, on the next turn, with no duplicate.
 - Two children finish within milliseconds: one batched wake with both results.
 - A wake is reserved but the turn fails to start (provider error or admission rejection): back to owed, retried on the next idle signal, liveness kept.
@@ -289,6 +301,7 @@ This is the "result delivery + parent wake" slice of Phase 7B, built so that act
 - The model changed in the parent between child start and finish: the wake turn uses the parent's current settings.
 
 ### 3.5 Files (expected)
+
 - `main/services/subagents/background-lifecycle-v2.ts` (+ `.test.ts`), `background-subagent-coordinator-v2.ts` (+ `.test.ts`), and a new `subagents/subagent-result-delivery-core.ts` (+ test) if the planner is cleaner as its own module.
 - 4b: `conversation-surface-generation.ts`, `chat-turn-admission.ts`, `chat-run-input-admission.ts`, `host-run-registry.ts`, `chat-generation-owner.ts`, `renderer/shared/chat-row-state.ts`, `main/index.ts` (quit guard), the Bot/Telegram turn path, and `subagents/feature-flag.ts` (gate).
 - Tests go into `test:subagents:phase7a` (or a new `test:subagents:phase7b` lane included in `test:subagents` and in the root chain).
@@ -298,9 +311,11 @@ This is the "result delivery + parent wake" slice of Phase 7B, built so that act
 ## 4. Item 3: mobile subagent back-navigation (iOS + Android)
 
 ### 4.1 What upstream does
+
 In T3 mobile, tapping a subagent card or a "Subagent finished" work-log row used `navigate("Thread")`, which replaced the parent thread. Back then skipped the parent. They now `push`, so back returns to the parent at its scroll position. The Agents sheet still uses `replace` on purpose.
 
 ### 4.2 What Aiden has (big adaptation)
+
 - Mobile has **no subagent threads**. Per `docs/plans/mobile-task-progress-and-subagents-plan.md`, "Private child transcripts stay on the Mac". Agent rows open a bounded public detail view.
 - **iOS** `ios/AidenOnTheGo/Models/AidenChatProgress.swift`:
   - The agents sheet `agentList` is a `NavigationStack` with `NavigationLink(value: agent.agentId)` and `.navigationDestination(for: String.self)` → `AidenAgentDetailView` (~L575: Stop agent, Assignment/Run/Usage sections).
@@ -313,6 +328,7 @@ In T3 mobile, tapping a subagent card or a "Subagent finished" work-log row used
 - Both clients already decode `parentAgentId` (depth ≥ 2; iOS `AidenRemoteContract.swift` ~L1739, Android `models/AidenChatProgress.kt` ~L109), but **no UI uses it**.
 
 ### 4.3 Design (client-only, no contract change)
+
 - Agent detail gains:
   - a "Started by <parent label>" row when `parentAgentId` resolves in the current progress snapshot
   - a "Sub-agents" section listing direct children (same `AidenAgentRosterRow` / Compose row style)
@@ -335,6 +351,7 @@ In T3 mobile, tapping a subagent card or a "Subagent finished" work-log row used
 - Accessibility: "Started by" is a button with a label like "Open parent agent <name>". VoiceOver and TalkBack announce depth ("Sub-agent of <parent>").
 
 ### 4.4 Files (expected)
+
 - iOS: `Models/AidenChatProgress.swift` (`AidenAgentDetailView`, `AidenAgentRosterRow`, `AidenProgressPresentation` — add a pure `ancestorPath(for:in:)` / `children(of:)` helper), `Features/Remote/AidenChatFeature.swift` (sheet host only if needed). Tests: `ios/AidenOnTheGoTests/AidenChatTests.swift`, or the existing progress tests there.
 - Android: `features/chat/AidenChatDetailScreen.kt`, `features/chat/AidenChatProgressControls.kt`, and a pure helper in `models/AidenChatProgress.kt`. Tests: `app/src/test/.../AidenChatProgressTest.kt` plus `androidTest/.../features/chat/AidenChatProgressUiTest.kt` (back from child → parent, then roster).
 
@@ -343,9 +360,11 @@ In T3 mobile, tapping a subagent card or a "Subagent finished" work-log row used
 ## 5. Item 2: mobile in-thread send-failure reasons + Retry (iOS + Android)
 
 ### 5.1 What upstream does
+
 T3 keeps a per-thread composer error map `{message, messageId}`, filled by the outbox drain instead of a global pairing error. It is cleared on resend, dismiss, delivery of that message id, or environment removal. `ComposerErrorNotice` shows the error above the composer with Dismiss and a screen-reader announcement, and the text goes back into the composer. It is mobile-only with no contract change.
 
 ### 5.2 What Aiden has
+
 - **iOS** `ios/AidenOnTheGo/Features/Remote/AidenChatFeature.swift`:
   - `send()` (~L2153) inserts an optimistic `local-` message and calls `coordinator.remoteClient(for:).startTurn(chatId:request:idempotencyKey:)`.
   - On failure it removes the optimistic message, restores the text and attachments through `AidenDraftSendReconciliation.failedDraft/failedAttachments`, and sets `presentedError = error.localizedDescription`, shown as a **modal alert** (~L4225).
@@ -364,6 +383,7 @@ T3 keeps a per-thread composer error map `{message, messageId}`, filled by the o
 - Mobile has **no outbox**; an offline outbox is a separate backlog item. `ios/AGENTS.md`: "TCP/SSE loss never retries a turn creation."
 
 ### 5.3 Design (client-only; no contract bump)
+
 - Replace the modal alert (iOS) and the generic banner (Android) **for send and run-input failures** with a per-chat **in-thread failure notice** at the transcript tail, just above the composer. Other errors keep their current surfaces.
 - Notice content:
   - a short mapped reason title
@@ -383,24 +403,25 @@ T3 keeps a per-thread composer error map `{message, messageId}`, filled by the o
 - **Retry** for an ambiguous attempt sends the **same request with the same idempotency key**, subject to the correlation and replay-window gate above (`AidenTurnAttemptTracker` / `turnAttempts`). For transport-level or ambiguous failures (timeout, connection reset, no response), first **reconcile once** with the existing chat fetch (`GET /chats/{id}` / `reconcileChat`). If the turn actually landed, clear the notice and the restored draft. Only otherwise resend with the same key. **Never auto-retry.** Retry is always a user tap.
 - Reason mapping (one table shared in spirit across both clients; strings in each platform's localization):
 
-| Code / condition | Notice | Retry |
-|---|---|---|
-| network unreachable / offline / timeout | "Couldn't confirm delivery to <Mac name>." | Yes, after reconcile |
-| `server_interrupted`, `internal_error` (`retryable:true`) | "<Mac> hit a problem sending this." | Yes |
-| `rate_limited` | "Too many requests. Try again in Ns." | Disabled until `retryAfterSeconds` elapses (countdown) |
-| `turn_already_active` | "A reply is already running." | Offer **Queue** when run input is supported (post-#346 unified control). Otherwise Retry |
-| `payload_too_large` | "This message or attachment is too large." | No; edit first |
-| `handle_expired` / `handle_invalid` | "An attachment expired. Re-attach it." | No; re-attach |
-| `workspace_unavailable` / `workspace_changing` / `skill_unavailable` / `capability_denied` | Specific reason | Only if `retryable` |
-| `idempotency_in_flight` | "Still sending…" | Reconcile, no resend |
-| `idempotency_conflict` | "This retry no longer matches; send again." | New key on the next send |
-| `credential_revoked` | Existing revocation flow (no in-thread notice) | — |
-| run-input rejection with `committed:true` | "Saved but not delivered to the running reply." | No |
+| Code / condition                                                                           | Notice                                          | Retry                                                                                    |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| network unreachable / offline / timeout                                                    | "Couldn't confirm delivery to <Mac name>."      | Yes, after reconcile                                                                     |
+| `server_interrupted`, `internal_error` (`retryable:true`)                                  | "<Mac> hit a problem sending this."             | Yes                                                                                      |
+| `rate_limited`                                                                             | "Too many requests. Try again in Ns."           | Disabled until `retryAfterSeconds` elapses (countdown)                                   |
+| `turn_already_active`                                                                      | "A reply is already running."                   | Offer **Queue** when run input is supported (post-#346 unified control). Otherwise Retry |
+| `payload_too_large`                                                                        | "This message or attachment is too large."      | No; edit first                                                                           |
+| `handle_expired` / `handle_invalid`                                                        | "An attachment expired. Re-attach it."          | No; re-attach                                                                            |
+| `workspace_unavailable` / `workspace_changing` / `skill_unavailable` / `capability_denied` | Specific reason                                 | Only if `retryable`                                                                      |
+| `idempotency_in_flight`                                                                    | "Still sending…"                                | Reconcile, no resend                                                                     |
+| `idempotency_conflict`                                                                     | "This retry no longer matches; send again."     | New key on the next send                                                                 |
+| `credential_revoked`                                                                       | Existing revocation flow (no in-thread notice)  | —                                                                                        |
+| run-input rejection with `committed:true`                                                  | "Saved but not delivered to the running reply." | No                                                                                       |
 
 - Accessibility: post a VoiceOver announcement (`AccessibilityNotification.Announcement`) when the notice appears. Use a TalkBack `liveRegion = Polite`. Retry and Dismiss get labels and are reachable by focus order. Keep focus-visible rings. Use a soft semantic danger fill, not a colored border.
 - Offline: show the reason with Retry. Never queue for automatic send.
 
 ### 5.4 Files (expected)
+
 - iOS: `Features/Remote/AidenChatFeature.swift` (`send`, `submitRunInput`, the alert host), a new `Models/AidenSendFailure.swift` (pure mapping + store), `Features/Remote/AidenRemoteCoordinator.swift` (store ownership and clearing on revoke or switch). Tests: `AidenChatTests.swift`, `AidenRemoteClientTests.swift` (envelope → reason mapping from fixtures).
 - Android: `features/chat/AidenChatViewModel.kt`, `features/chat/AidenChatDetailScreen.kt` (notice composable replaces the send-error use of the banner), a new `models/AidenSendFailure.kt`, `features/remote/AidenRemoteCoordinator.kt`. Tests: `AidenChatTest.kt`, `AidenRunInputTest.kt`, `androidTest/.../AidenComposerUiTest.kt` (notice renders, Retry fires once with the same key, Dismiss clears it).
 - Use the shared error fixtures in `protocol/aiden-remote/v1/fixtures/contract.json` as test input. Don't invent new JSON shapes.
@@ -410,6 +431,7 @@ T3 keeps a per-thread composer error map `{message, messageId}`, filled by the o
 ## 6. Item 1: multi-route reachability for paired peer Macs
 
 ### 6.1 What upstream does
+
 - **T3 #15467:** each environment has an ordered route list ranked loopback < lan < tailnet < public < ssh < relay (`routes.ts`: `insertRoute`, `upsertRoute`, `findRouteToSameAddress`).
   - `connectOverRoutes` runs parallel **unauthenticated** descriptor checks (2.5 s, no credential sent). Silent routes are tried last. Only an "unsupported" result stops the walk. Transient errors are reported over blocked ones.
   - The supervisor checks for a better route only while on a fallback: every 60 s, on network change, and on foreground. `BetterRouteAvailable` swaps the session and moves durable subscriptions.
@@ -421,6 +443,7 @@ T3 keeps a per-thread composer error map `{message, messageId}`, filled by the o
   - T3's learned routes are **plain HTTP**. **Aiden must not copy that.**
 
 ### 6.2 What Aiden has (verify)
+
 - `main/services/peer-host-registry.ts`:
   - `StoredPeerHost extends PeerTrust { endpoint, serverSpkiSha256, caCertificateDerBase64? }` plus `id`, `credential`, `enabled`, `capabilities`, `features`, parsed by `parseStoredPeerHosts`. **One endpoint per host.**
   - One keep-alive `https.Agent` per hostId (`agents` map). `client()` passes `lookup: lanAddresses.lookupFor(instanceId)` for `.local` endpoints.
@@ -447,8 +470,10 @@ T3 keeps a per-thread composer error map `{message, messageId}`, filled by the o
 ### 6.3 Design
 
 **1a: host advertises its routes (contract revision bump)**
+
 - Add an additive field on authenticated `GET /server`, e.g. `peerRoutes`, gated by a new feature string `peer-routes-v1`. Emit it **only** to desktop peer devices (mac/linux device kinds, like the existing desktop-only features). Never put it on unauthenticated `/health`, Bonjour TXT (which stays `v=1` + instanceId), or the QR.
 - Shape (finalize in the doc first, then OpenAPI, fixture, TS and mobile tolerance):
+
   ```jsonc
   "peerRoutes": [
     { "kind": "lan", "endpoint": "https://<name>.local:<port>/api/aiden/v1",
@@ -458,15 +483,18 @@ T3 keeps a per-thread composer error map `{message, messageId}`, filled by the o
       "trust": "system", "serverSpkiSha256": "sha256/…" }
   ]
   ```
+
   - Bounded to ≤ 4 routes and ≤ 4 IPv4 hints. https only.
   - LAN hints come from bound interfaces, using T3 `resolveBoundEndpoints`-style filtering: skip loopback, link-local (169.254/16), and virtual interfaces (docker*, br-*, veth*, bridge1xx, utun used by VPNs if identifiable, vmnet*).
   - Include the Tailscale route only when Serve ownership is verified (reuse the existing Serve verification state). Never probe synchronously inside the request; serve the cached state.
   - Leave out a route whose listener is disabled by `connectionMode`.
   - LAN-paired clients hold the private CA; Tailscale-paired clients do not. Finalize the authenticated CA bootstrap described in the approved decisions before freezing this shape.
+
 - Bump `AIDEN_REMOTE_CONTRACT_REVISION` to **main's revision + 1 at merge time**. Update together: `docs/aiden-remote-api-v1.md` (§5 `/server`, §9 Transport identity, §10), `protocol/aiden-remote/v1/openapi.json`, `protocol/aiden-remote/v1/fixtures/contract.json`, and the Android test copy `app/src/test/resources/contract.json` if it mirrors it, `aiden-remote-protocol.ts` (+ test), and the iOS/Android revision assertions (`AidenRemotePhase0Tests.swift`, `AidenBotContractTest.kt` / `AidenRemotePhase0Test.kt`). Mobile ignores the field. Verify Android's decoder tolerates unknown `/server` keys. iOS looked tolerant; Android wasn't checked.
 - `features` is capped at 32 by the peer client's parser. Count the current list before adding. (After 0.59.0 the desktop parser accepts up to 64, but hosts still send at most 32 per device; see the `/server` notes in `docs/aiden-remote-api-v1.md`.)
 
 **1b: desktop route store, selection, failover**
+
 - `StoredPeerHost` gets an optional bounded `routes?: PeerRoute[]` (≤ 4): `{id, kind: "lan"|"tailscale", endpoint, trust: "private-ca"|"system", serverSpkiSha256, origin: "paired"|"learned", addressHints: {address, lastOkAt?, lastFailAt?}[] (≤ 4), lastOkAt?, lastFailAt?, cooldownUntil?}`.
   - The legacy `endpoint` / `serverSpkiSha256` / `caCertificateDerBase64` stays the **paired route**, and its `kind` is inferred from `PeerPairingTarget.route`.
   - `parseStoredPeerHosts` must accept old records unchanged (no migration step) and reject malformed or oversized route lists without dropping the host.
@@ -496,12 +524,14 @@ T3 keeps a per-thread composer error map `{message, messageId}`, filled by the o
 - Renderer projection (`PeerHostView`): add `activeRouteKind`, `routeCount`, maybe `routes: {id, kind, origin, state}`. **Never endpoints, IPs, pins or credentials.**
 
 **1c: settings UI + docs**
+
 - `connections-settings.tsx`: the status line reads "Connected via LAN · 2 routes". A disclosure lists routes by kind and origin (Paired / Learned) with state, and offers **Remove** for learned routes only.
   - No drag-reorder and no manual "Add route" in v1. Pairing a second transport stays the existing pairing flow; if Sambit wants manual adds later, they go through the pairing trust path.
   - Show a soft semantic status (connected / standby / cooling down / unreachable).
 - Docs and `.memory` per §10.
 
 ### 6.4 Edge cases
+
 - Route flapping (Wi-Fi roaming, sleep or wake): hysteresis and cooldown stop ping-pong. Test with fake timers and `dropConnections()`.
 - Stale DHCP address now owned by another device or another Aiden: the pin or instanceId mismatch drops that hint. The host must not block. Test with `impersonate()`.
 - Leaf rotation on LAN (`rotateLeaf()` keeps key and pin per §9): the LAN route stays valid. An explicit key rotation fails every private-CA route, so recovery or re-pairing follows the existing flow.
@@ -514,6 +544,7 @@ T3 keeps a per-thread composer error map `{message, messageId}`, filled by the o
 ---
 
 ## 7. What not to do
+
 - Don't copy T3 Code or pi-subagents code wholesale; adapt the patterns.
 - No plain-HTTP routes. No routes on unauthenticated `/health`, Bonjour TXT or QR. No IP SANs or `https://<ip>` hack. Never send a credential before the pin and identity check passes.
 - No mobile multi-route in this series. No mobile outbox or auto-resend. Never auto-retry a turn creation (`ios/AGENTS.md`).
@@ -533,12 +564,14 @@ T3 keeps a per-thread composer error map `{message, messageId}`, filled by the o
 ## 8. Tests and verification
 
 Follow `AGENTS.md` test guidance:
+
 - Behavioral tests through fixtures, rendering, and register-and-invoke.
 - Bug-fix regression tests must reproduce a user- or API-visible failure.
 - House examples: `renderer/lib/chat-message-queue.test.ts`, `main/services/portable-config-core.test.ts`, `main/services/data-store.resilience.test.ts`.
 - Register every new test file in the matching `package.json` script, and in the root chain where the lane is included.
 
 ### Required test scenarios
+
 - **4a/4b:**
   - result committed with terminal state, crash-injected at each step, still owed after restart
   - two children finishing at once → one wake
@@ -577,6 +610,7 @@ Follow `AGENTS.md` test guidance:
 - **1c:** `connections-settings.test.tsx` renders route kind and count, Remove works for learned routes only, and no endpoint text appears.
 
 ### Commands
+
 ```bash
 # Node 22.23.4 (see .github/workflows/ci.yml; this checkout has no .nvmrc)
 npm run type-check
@@ -616,6 +650,7 @@ cd android
 ```
 
 ### Manual verification
+
 - **Item 1:**
   - two Macs paired over LAN with `connectionMode: both`
   - confirm "via LAN · 2 routes"
@@ -631,6 +666,7 @@ cd android
 ---
 
 ## 9. Acceptance criteria
+
 - [ ] Each PR is small and single-item, merges `origin/main` (no rebase), and is green on CI at the exact head. The narrow suites listed are run locally and named in the PR body.
 - [ ] **4a:** owed-delivery state, events and planner are covered by behavioral tests, including crash points. Old records parse. Production stays inert.
 - [ ] **4b:** owed or waking results keep the chat live (row state, HostRunRegistry, quit guard). An idle or closed parent wakes once through a fresh admitted turn with a rebuilt prompt and tools. A busy parent gets a boundary follow-up. No lost or duplicate results across restart. No model-facing background launch unless approved.
@@ -642,6 +678,7 @@ cd android
 - [ ] Docs, plans, `.memory` and the changelog are updated (§10).
 
 ## 10. Docs to update
+
 - `docs/aiden-remote-api-v1.md`: §5 `/server` (`peerRoutes`, `peer-routes-v1`), §9 Transport identity (multi-route trust rules, LAN IP hints via servername), "Operating multiple devices", and the revision history.
 - `protocol/aiden-remote/v1/openapi.json`, `protocol/aiden-remote/v1/fixtures/contract.json` (+ Android test resource copy).
 - `docs/plans/README.md`. Add `docs/plans/peer-multi-route-plan.md` (budget table, trust rules, flapping policy) and move it to `completed/` when 1c lands. Update the efficiency budgets in `docs/plans/completed/desktop-multi-host-control-plan.md` or reference the new plan.
@@ -651,6 +688,7 @@ cd android
 - Onboarding and the bento tour: no change (none of these is a new durable core feature).
 
 ## 11. Deferred product decisions (defaults approved above; do not block item 3)
+
 1. **Phase 7B activation:** should this series turn on model-facing background subagents (behind `subagentBackgroundEnabled()`), or ship delivery and wake inert (recommended)?
 2. **Restart wake:** after a relaunch, should owed results start a turn automatically, or only ride along on the next user or scheduled turn (recommended)?
 3. **Manual routes:** allow a user-added endpoint in Settings later? (v1: no. Learned + paired only.)
@@ -658,6 +696,7 @@ cd android
 5. **Agent deep link** (`aiden-otg://chat?…&agent=`) for notifications: wanted now or later?
 
 ## 12. Facts not verified during research (check while implementing)
+
 - Whether Pi 1.0.3's `Agent.followUp`/`steer` delivery timing differs from 0.87.1 in ways that affect the busy-parent path (the APIs still exist at v1.0.3).
 - Whether the parallel Pi upgrade lands by extending #299 or by a replacement branch (its prompt prefers extending #299).
 - The exact point in `peer-transport.ts` where the pin is checked relative to sending request headers (relied on the registry comment that TLS identity failure comes before any request byte). Prove it with a test.

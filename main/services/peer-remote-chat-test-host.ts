@@ -1,8 +1,17 @@
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
-import { registerPeerHostLiveHandlers, type PeerHostLiveOwner } from "../handlers/peer-host-live.js";
-import { AidenRemoteHostFeedService, type AidenRemoteHostFeedState } from "./aiden-remote-host-feed.js";
-import { AidenRemoteHostRunService, type AidenRemoteHostRunControls } from "./aiden-remote-host-runs.js";
+import {
+  registerPeerHostLiveHandlers,
+  type PeerHostLiveOwner,
+} from "../handlers/peer-host-live.js";
+import {
+  AidenRemoteHostFeedService,
+  type AidenRemoteHostFeedState,
+} from "./aiden-remote-host-feed.js";
+import {
+  AidenRemoteHostRunService,
+  type AidenRemoteHostRunControls,
+} from "./aiden-remote-host-runs.js";
 import { AidenRemoteChatService } from "./aiden-remote-chats.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenIdempotencyLedger } from "./aiden-remote-operation-contract.js";
@@ -14,11 +23,24 @@ import {
 } from "./aiden-remote-chats.js";
 import { HostRunRegistry } from "./host-run-registry.js";
 import { PeerHostRegistry, type PeerClient, type StoredPeerHost } from "./peer-host-registry.js";
-import { PEER_HOST_STATE_CHANNEL, PEER_RUN_FRAME_CHANNEL, PeerHostManager } from "./peer-host-manager.js";
-import { PeerEventFrames, PeerTransportError, parsePeerErrorEnvelope, type PeerRequest, type PeerStreamEnd } from "./peer-transport.js";
+import {
+  PEER_HOST_STATE_CHANNEL,
+  PEER_RUN_FRAME_CHANNEL,
+  PeerHostManager,
+} from "./peer-host-manager.js";
+import {
+  PeerEventFrames,
+  PeerTransportError,
+  parsePeerErrorEnvelope,
+  type PeerRequest,
+  type PeerStreamEnd,
+} from "./peer-transport.js";
 import type { PeerHostStatus, PeerRunFrameMessage } from "../../renderer/shared/peer-host.js";
 import type { Chat, ChatMessage } from "../../renderer/lib/types.js";
-import { RemoteHostAdapter, type PeerHostTransport } from "../../renderer/lib/hosts/remote-host-adapter.js";
+import {
+  RemoteHostAdapter,
+  type PeerHostTransport,
+} from "../../renderer/lib/hosts/remote-host-adapter.js";
 import type { FrameScheduler } from "../../renderer/lib/hosts/frame-scheduler.js";
 import { RemoteChatSession } from "../../renderer/lib/hosts/remote-chat-session.js";
 import { remoteRunTranscript } from "../../renderer/lib/hosts/remote-stream-translator.js";
@@ -31,7 +53,13 @@ import { remoteRunTranscript } from "../../renderer/lib/hosts/remote-stream-tran
  * generation itself are stand-ins.
  */
 
-export const CAPABILITIES = ["chat:read", "chat:write", "host:events", "runs:observe", "runs:control"];
+export const CAPABILITIES = [
+  "chat:read",
+  "chat:write",
+  "host:events",
+  "runs:observe",
+  "runs:control",
+];
 export const FEATURES = [
   "host-events-v1",
   "run-streams-v1",
@@ -80,7 +108,9 @@ export async function settle(): Promise<void> {
 class Wire extends EventEmitter {
   destroyed = false;
   writableEnded = false;
-  constructor(private readonly hooks: { write(chunk: string): void; end(): void; destroy(): void }) {
+  constructor(
+    private readonly hooks: { write(chunk: string): void; end(): void; destroy(): void },
+  ) {
     super();
   }
   writeHead(): this {
@@ -113,8 +143,14 @@ function peerError(error: unknown): unknown {
     if ((error.status === 401 || error.status === 403) && error.code !== "capability_denied")
       return new PeerTransportError("authentication_required", error.status);
     // The error envelope crosses the wire and is read back by the real parser.
-    const envelope = { error: { code: error.code, retryable: error.retryable, details: error.details } };
-    return new PeerTransportError("request_failed", error.status, parsePeerErrorEnvelope(JSON.stringify(envelope)));
+    const envelope = {
+      error: { code: error.code, retryable: error.retryable, details: error.details },
+    };
+    return new PeerTransportError(
+      "request_failed",
+      error.status,
+      parsePeerErrorEnvelope(JSON.stringify(envelope)),
+    );
   }
   return new PeerTransportError("unavailable");
 }
@@ -141,11 +177,20 @@ export interface FakeHostEffects {
  * settlement wins and later ones report false. A cancel ends the run the way a
  * stopped generation does.
  */
-export function hostControls(runs: HostRunRegistry, effects: FakeHostEffects): AidenRemoteHostRunControls {
+export function hostControls(
+  runs: HostRunRegistry,
+  effects: FakeHostEffects,
+): AidenRemoteHostRunControls {
   return {
     cancel(runId) {
       const summary = runs.summary(runId);
-      if (!summary || summary.state === "done" || summary.state === "failed" || summary.state === "cancelled") return false;
+      if (
+        !summary ||
+        summary.state === "done" ||
+        summary.state === "failed" ||
+        summary.state === "cancelled"
+      )
+        return false;
       effects.cancels.push(runId);
       runs.publish(runId, "chat:done", { cancelled: true });
       return true;
@@ -164,10 +209,20 @@ export function hostControls(runs: HostRunRegistry, effects: FakeHostEffects): A
     },
     async admitInput({ streamId, mode, text }) {
       const summary = runs.summary(streamId);
-      if (!summary || summary.state === "done" || summary.state === "failed" || summary.state === "cancelled")
+      if (
+        !summary ||
+        summary.state === "done" ||
+        summary.state === "failed" ||
+        summary.state === "cancelled"
+      )
         return { admitted: false, reason: "run_not_active", committed: false };
       effects.inputs.push(`${streamId}:${mode}:${text}`);
-      return { admitted: true, queue: mode === "steer" ? "steer" : "follow-up", committed: true, messageId: `input-${effects.inputs.length}` };
+      return {
+        admitted: true,
+        queue: mode === "steer" ? "steer" : "follow-up",
+        committed: true,
+        messageId: `input-${effects.inputs.length}`,
+      };
     },
   };
 }
@@ -212,12 +267,28 @@ export class FakeHost {
   private readonly ledger: AidenIdempotencyLedger;
   private readonly devices = new Map<string, Device>();
 
-  constructor(readonly id: string, messages: ChatMessage[], maxEventsPerRun?: number) {
+  constructor(
+    readonly id: string,
+    messages: ChatMessage[],
+    maxEventsPerRun?: number,
+  ) {
     const now = () => 5_000;
-    this.chat = { id: "chat-1", title: "Release notes", createdAt: 1, updatedAt: 2, workspaceId: "ws", messages };
+    this.chat = {
+      id: "chat-1",
+      title: "Release notes",
+      createdAt: 1,
+      updatedAt: 2,
+      workspaceId: "ws",
+      messages,
+    };
     // Every delta stays its own journal event, so a long reply can outgrow the
     // journal the way a real token stream does under this frozen clock.
-    this.runs = new HostRunRegistry({ now, epoch: `runs_${id}`, maxEventsPerRun, deltaCoalesceMs: 0 });
+    this.runs = new HostRunRegistry({
+      now,
+      epoch: `runs_${id}`,
+      maxEventsPerRun,
+      deltaCoalesceMs: 0,
+    });
     this.service = new AidenRemoteHostRunService({
       registry: this.runs,
       controls: hostControls(this.runs, this.effects),
@@ -229,7 +300,11 @@ export class FakeHost {
     this.chats = new AidenRemoteChatService({
       application: {
         list: async () => (this.removed ? [] : [{ id: this.chat.id, title: this.chat.title }]),
-        rename: async (_chatId: string, title: string, options: { assertCurrent?: (chat: Chat) => void } = {}) => {
+        rename: async (
+          _chatId: string,
+          title: string,
+          options: { assertCurrent?: (chat: Chat) => void } = {},
+        ) => {
           options.assertCurrent?.(this.chat);
           this.chat = { ...this.chat, title, updatedAt: this.chat.updatedAt + 1 };
           return this.chat;
@@ -275,7 +350,10 @@ export class FakeHost {
   client(deviceId = "desktop"): PeerClient {
     let device = this.devices.get(deviceId);
     if (!device) {
-      device = { id: deviceId, capabilities: new Set<AidenRemoteCapability>(this.capabilities as AidenRemoteCapability[]) };
+      device = {
+        id: deviceId,
+        capabilities: new Set<AidenRemoteCapability>(this.capabilities as AidenRemoteCapability[]),
+      };
       this.devices.set(deviceId, device);
     }
     const caller = device;
@@ -284,7 +362,12 @@ export class FakeHost {
         if (this.down) throw new PeerTransportError("unavailable");
         this.calls.push(`${input.method ?? "GET"} ${input.path}`);
         if (input.path === "/server")
-          return { protocolVersion: 1, instanceId: this.id, capabilities: this.capabilities, features: this.features };
+          return {
+            protocolVersion: 1,
+            instanceId: this.id,
+            capabilities: this.capabilities,
+            features: this.features,
+          };
         if (input.path === "/device/capabilities") return { capabilities: this.capabilities };
         try {
           return await this.answer(input, caller);
@@ -293,13 +376,19 @@ export class FakeHost {
         }
       },
       events: (input, onFrame) =>
-        this.down ? Promise.reject(new PeerTransportError("unavailable")) : this.events(input, onFrame, caller),
+        this.down
+          ? Promise.reject(new PeerTransportError("unavailable"))
+          : this.events(input, onFrame, caller),
     };
   }
 
   /** Persists a turn the way the host does before announcing `done`. */
   append(...messages: ChatMessage[]): void {
-    this.chat = { ...this.chat, messages: [...this.chat.messages, ...messages], updatedAt: this.chat.updatedAt + 1 };
+    this.chat = {
+      ...this.chat,
+      messages: [...this.chat.messages, ...messages],
+      updatedAt: this.chat.updatedAt + 1,
+    };
   }
 
   /** A run started on the host itself (its own window, not a paired device). */
@@ -310,7 +399,11 @@ export class FakeHost {
   }
 
   /** Runs `action` once per device, route, resource and key, replaying its answer for a repeated key. */
-  idempotent<T>(scope: { deviceId: string; route: string; resourceId: string; key: string }, body: unknown, action: () => Promise<T>): Promise<T> {
+  idempotent<T>(
+    scope: { deviceId: string; route: string; resourceId: string; key: string },
+    body: unknown,
+    action: () => Promise<T>,
+  ): Promise<T> {
     return this.ledger.execute(scope, body, action);
   }
 
@@ -347,7 +440,9 @@ export class FakeHost {
       return JSON.parse(JSON.stringify(window));
     }
     if (url.pathname === "/chats/chat-1" && method === "PATCH") {
-      return JSON.parse(JSON.stringify(await this.chats.rename("chat-1", input.revision ?? "", input.body)));
+      return JSON.parse(
+        JSON.stringify(await this.chats.rename("chat-1", input.revision ?? "", input.body)),
+      );
     }
     if (url.pathname === "/chats/chat-1" && method === "DELETE") {
       await this.chats.remove("chat-1", input.revision ?? "");
@@ -364,14 +459,23 @@ export class FakeHost {
       const text = String((input.body as { text?: unknown } | undefined)?.text ?? "");
       if (this.unresolvedTurns > 0) {
         this.unresolvedTurns -= 1;
-        throw new AidenRemoteServiceError("idempotency_in_flight", "This request's outcome is unknown.", 409);
+        throw new AidenRemoteServiceError(
+          "idempotency_in_flight",
+          "This request's outcome is unknown.",
+          409,
+        );
       }
       const receipt = await this.ledger.execute(
         { deviceId: device.id, route: "POST /chats/{id}/turns", resourceId: "chat-1", key },
         { text },
         async () => {
           const turn = this.turns.push(text);
-          const message: ChatMessage = { id: `sent-${turn}`, role: "user", content: text, createdAt: 3_000 + turn };
+          const message: ChatMessage = {
+            id: `sent-${turn}`,
+            role: "user",
+            content: text,
+            createdAt: 3_000 + turn,
+          };
           this.append(message);
           const runId = `run-turn-${turn}`;
           this.runs.begin({ runId, chatId: "chat-1", origin: "remote" });
@@ -394,24 +498,30 @@ export class FakeHost {
     const run = /^\/runs\/([^/]+)\/(cancel|inputs)$/u.exec(url.pathname);
     if (run && method === "POST") {
       const runId = decodeURIComponent(run[1]!);
-      const result = run[2] === "cancel"
-        ? await this.service.cancel(device.id, runId, key, access)
-        : await this.service.submitInput(device.id, runId, input.body, key, access);
+      const result =
+        run[2] === "cancel"
+          ? await this.service.cancel(device.id, runId, key, access)
+          : await this.service.submitInput(device.id, runId, input.body, key, access);
       return JSON.parse(JSON.stringify(result));
     }
     const prompt = /^\/runs\/([^/]+)\/(approvals|questions)\/([^/]+)\/respond$/u.exec(url.pathname);
     if (prompt && method === "POST") {
       const runId = decodeURIComponent(prompt[1]!);
       const promptId = decodeURIComponent(prompt[3]!);
-      const result = prompt[2] === "approvals"
-        ? await this.service.respondApproval(device.id, runId, promptId, input.body, key, access)
-        : await this.service.respondQuestion(device.id, runId, promptId, input.body, key, access);
+      const result =
+        prompt[2] === "approvals"
+          ? await this.service.respondApproval(device.id, runId, promptId, input.body, key, access)
+          : await this.service.respondQuestion(device.id, runId, promptId, input.body, key, access);
       return JSON.parse(JSON.stringify(result));
     }
     throw new AidenRemoteServiceError("run_gone", "Not found.", 404);
   }
 
-  private events(input: PeerRequest, onFrame: (frame: string) => void, device: Device): Promise<PeerStreamEnd> {
+  private events(
+    input: PeerRequest,
+    onFrame: (frame: string) => void,
+    device: Device,
+  ): Promise<PeerStreamEnd> {
     this.calls.push(`EVENTS ${input.path}`);
     return new Promise<PeerStreamEnd>((resolve, reject) => {
       const reader = new PeerEventFrames();
@@ -464,7 +574,14 @@ export class FakeHost {
     }
     const run = /^\/runs\/([^/]+)\/events$/u.exec(input.path);
     if (run) {
-      this.service.openRunEvents(device, decodeURIComponent(run[1]!), Number(input.lastEventId ?? 0), wire, undefined, input.runCheckpoint);
+      this.service.openRunEvents(
+        device,
+        decodeURIComponent(run[1]!),
+        Number(input.lastEventId ?? 0),
+        wire,
+        undefined,
+        input.runCheckpoint,
+      );
       return;
     }
     const chat = /^\/chats\/([^/]+)\/runs\/current\/events$/u.exec(input.path);
@@ -547,7 +664,11 @@ export function rendererIpc() {
  * host's chat. Two calls with different device IDs are two Macs controlling
  * the same host.
  */
-export async function setup(host: FakeHost, deviceId = "desktop", options: { frame?: FrameScheduler } = {}) {
+export async function setup(
+  host: FakeHost,
+  deviceId = "desktop",
+  options: { frame?: FrameScheduler } = {},
+) {
   const timers = new FakeTimers();
   let saved: StoredPeerHost[] = [
     {
@@ -629,5 +750,16 @@ export async function setup(host: FakeHost, deviceId = "desktop", options: { fra
     await next.ready();
     return next;
   };
-  return { timers, manager, adapter, adapterFor, session, open, openAnother, transcript, delivered, close };
+  return {
+    timers,
+    manager,
+    adapter,
+    adapterFor,
+    session,
+    open,
+    openAnother,
+    transcript,
+    delivered,
+    close,
+  };
 }

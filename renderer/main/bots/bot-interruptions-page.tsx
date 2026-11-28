@@ -9,7 +9,10 @@ import { BOT_INTERRUPTIONS_MAX_DAILY_LIMIT, type BotInterruptions } from "../../
 /** "10:00 PM" for "22:00", in the person's own clock style. */
 export function clockLabel(time: string): string {
   const [hours, minutes] = time.split(":").map(Number);
-  return new Date(2000, 0, 1, hours, minutes).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return new Date(2000, 0, 1, hours, minutes).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 /** The editable part of the page, separate from saving so it can be tested alone. */
@@ -23,11 +26,17 @@ export function BotInterruptionsFields({
   const setQuiet = (patch: Partial<BotInterruptions["quietHours"]>) =>
     onChange({ ...value, quietHours: { ...value.quietHours, ...patch } });
   const setLimit = (dailyLimit: number) =>
-    onChange({ ...value, dailyLimit: Math.max(0, Math.min(BOT_INTERRUPTIONS_MAX_DAILY_LIMIT, dailyLimit)) });
+    onChange({
+      ...value,
+      dailyLimit: Math.max(0, Math.min(BOT_INTERRUPTIONS_MAX_DAILY_LIMIT, dailyLimit)),
+    });
   return (
     <>
       <FieldSet title="Quiet hours">
-        <Field label="Quiet hours" description="Messages wait until quiet hours end, then arrive together.">
+        <Field
+          label="Quiet hours"
+          description="Messages wait until quiet hours end, then arrive together."
+        >
           <Switch
             aria-label="Quiet hours"
             className="justify-self-end"
@@ -74,7 +83,10 @@ export function BotInterruptionsFields({
             >
               <Minus />
             </Button>
-            <output aria-label="Notifications a day" className="min-w-6 text-center text-strong text-primary">
+            <output
+              aria-label="Notifications a day"
+              className="min-w-6 text-center text-strong text-primary"
+            >
               {value.dailyLimit}
             </output>
             <Button

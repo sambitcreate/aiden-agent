@@ -3,8 +3,12 @@ import { test } from "node:test";
 import { checkAidenRules } from "./check-aiden-rules.mjs";
 
 const check = (files, allowlist = []) =>
-  checkAidenRules({ files: Object.entries(files).map(([path, text]) => ({ path, text })), allowlist }).problems;
-const summary = (problems) => problems.map((problem) => `${problem.file}:${problem.line} ${problem.rule}`);
+  checkAidenRules({
+    files: Object.entries(files).map(([path, text]) => ({ path, text })),
+    allowlist,
+  }).problems;
+const summary = (problems) =>
+  problems.map((problem) => `${problem.file}:${problem.line} ${problem.rule}`);
 
 test("brain icon imports, tags, icon names and brain-named files are reported in the renderer", () => {
   const problems = check({
@@ -35,7 +39,7 @@ test("brain icon imports, tags, icon names and brain-named files are reported in
 test("text inputs may not add a focus ring, outline or accent border; non-text inputs may", () => {
   const problems = check({
     "renderer/components/form.tsx": [
-      'export const F = ({ on }) => (<>',
+      "export const F = ({ on }) => (<>",
       '  <input className="h-9 focus:ring-2" />',
       '  <textarea className={cn("p-2", on && "focus-visible:outline-2")} />',
       '  <Input className="focus:border-accent" />',
@@ -65,16 +69,24 @@ test("overlay DOM sniffs are reported, JSX slot attributes and non-overlay selec
     "renderer/components/sheet.tsx": 'export const S = () => <div data-slot="dialog-content" />;',
     "renderer/lib/keys.test.ts": `document.querySelector('[data-slot="dialog-content"]');`,
   });
-  assert.deepEqual(summary(problems), ["renderer/lib/keys.ts:1 no-dialog-dom-sniff", "renderer/lib/keys.ts:2 no-dialog-dom-sniff"]);
+  assert.deepEqual(summary(problems), [
+    "renderer/lib/keys.ts:1 no-dialog-dom-sniff",
+    "renderer/lib/keys.ts:2 no-dialog-dom-sniff",
+  ]);
 });
 
 test("governed endpoints are reported outside tests; plain mentions are not", () => {
   const problems = check({
-    "main/services/eu.ts": 'const host = "https://eu.i.posthog.com";\nconst mcp = "https://mcp.posthog.com/mcp";',
-    "main/services/router-catalog.ts": 'const BASE = "https://openrouter.ai/api/v1";\nfetch(`${BASE}` + "/models");',
-    "main/services/router-template.ts": 'const base = "https://openrouter.ai/api/v1";\nfetch(`${base}/benchmarks`);',
-    "main/services/router-chat.ts": 'const BASE = "https://openrouter.ai/api/v1";\nfetch(`${BASE}/chat/completions`);',
-    "main/services/new-fetcher.ts": 'const url = "https://models.dev/api.json";\n// data from models.dev',
+    "main/services/eu.ts":
+      'const host = "https://eu.i.posthog.com";\nconst mcp = "https://mcp.posthog.com/mcp";',
+    "main/services/router-catalog.ts":
+      'const BASE = "https://openrouter.ai/api/v1";\nfetch(`${BASE}` + "/models");',
+    "main/services/router-template.ts":
+      'const base = "https://openrouter.ai/api/v1";\nfetch(`${base}/benchmarks`);',
+    "main/services/router-chat.ts":
+      'const BASE = "https://openrouter.ai/api/v1";\nfetch(`${BASE}/chat/completions`);',
+    "main/services/new-fetcher.ts":
+      'const url = "https://models.dev/api.json";\n// data from models.dev',
     "renderer/lib/thing.ts": 'fetch("https://openrouter.ai/api/v1/models?x=1");',
     "main/services/new-fetcher.test.ts": 'assert.equal(url, "https://models.dev/api.json");',
   });
@@ -102,9 +114,13 @@ test("tests that read production source and grep it are reported, including thro
       'const out = readFileSync(join(dir, "output.json"), "utf8");',
       "assert.match(out, /ok/u);",
     ].join("\n"),
-    "main/fixture.test.ts": 'const t = readFileSync("tests/fixtures/sample.ts", "utf8");\nassert.ok(t.includes("a"));',
+    "main/fixture.test.ts":
+      'const t = readFileSync("tests/fixtures/sample.ts", "utf8");\nassert.ok(t.includes("a"));',
   });
-  assert.deepEqual(summary(problems), ["main/helper.test.ts:1 no-source-grep-test", "renderer/lib/direct.test.ts:2 no-source-grep-test"]);
+  assert.deepEqual(summary(problems), [
+    "main/helper.test.ts:1 no-source-grep-test",
+    "renderer/lib/direct.test.ts:2 no-source-grep-test",
+  ]);
 });
 
 test("literal curves are reported outside token definitions and comments", () => {
@@ -145,7 +161,10 @@ test("a /* inside strings, regexes or line comments does not hide later curves",
       ".b { transition: opacity 1s cubic-bezier(0, 0, 1, 1); }",
     ].join("\n"),
   });
-  assert.deepEqual(summary(problems), ["renderer/components/y.tsx:5 literal-motion", "renderer/y.css:2 literal-motion"]);
+  assert.deepEqual(summary(problems), [
+    "renderer/components/y.tsx:5 literal-motion",
+    "renderer/y.css:2 literal-motion",
+  ]);
 });
 
 test("inline allowances need a reason", () => {
@@ -178,7 +197,12 @@ test("inline allowances work as JSX comments, above the className line, and with
   assert.deepEqual(summary(problems), ["renderer/components/f.tsx:9 text-input-focus-ring"]);
 });
 
-const motion = (count) => ({ "renderer/m.css": Array.from({ length: count }, () => ".a { transition: all 1s cubic-bezier(0, 0, 1, 1); }").join("\n") });
+const motion = (count) => ({
+  "renderer/m.css": Array.from(
+    { length: count },
+    () => ".a { transition: all 1s cubic-bezier(0, 0, 1, 1); }",
+  ).join("\n"),
+});
 
 test("an allowlist budget covers hits up to max and reports every hit once it is exceeded", () => {
   const entry = { rule: "literal-motion", file: "renderer/m.css", reason: "legacy", max: 2 };
@@ -189,7 +213,9 @@ test("an allowlist budget covers hits up to max and reports every hit once it is
 });
 
 test("the allowlist only shrinks: unused entries and loose budgets fail", () => {
-  const loose = check(motion(1), [{ rule: "literal-motion", file: "renderer/m.css", reason: "legacy", max: 3 }]);
+  const loose = check(motion(1), [
+    { rule: "literal-motion", file: "renderer/m.css", reason: "legacy", max: 3 },
+  ]);
   assert.deepEqual(summary(loose), ["scripts/aiden-rules-allowlist.json:2 allowlist"]);
   assert.match(loose[0].message, /lower max to 1/u);
 
@@ -197,7 +223,10 @@ test("the allowlist only shrinks: unused entries and loose budgets fail", () => 
     { rule: "literal-motion", file: "renderer/m.css", reason: "legacy", max: 1 },
     { rule: "no-source-grep-test", file: "gone.test.ts", reason: "legacy" },
   ]);
-  assert.deepEqual(summary(unused), ["scripts/aiden-rules-allowlist.json:2 allowlist", "scripts/aiden-rules-allowlist.json:3 allowlist"]);
+  assert.deepEqual(summary(unused), [
+    "scripts/aiden-rules-allowlist.json:2 allowlist",
+    "scripts/aiden-rules-allowlist.json:3 allowlist",
+  ]);
   assert.ok(unused.every((problem) => /stale allowlist entry — remove it/u.test(problem.message)));
 });
 
@@ -208,5 +237,8 @@ test("allowlist entries need a known rule and a reason, and a file-level entry c
   ]);
   assert.ok(problems.some((problem) => /has no reason/u.test(problem.message)));
   assert.ok(problems.some((problem) => /unknown rule "made-up"/u.test(problem.message)));
-  assert.deepEqual(check(motion(4), [{ rule: "literal-motion", file: "renderer/m.css", reason: "legacy" }]), []);
+  assert.deepEqual(
+    check(motion(4), [{ rule: "literal-motion", file: "renderer/m.css", reason: "legacy" }]),
+    [],
+  );
 });

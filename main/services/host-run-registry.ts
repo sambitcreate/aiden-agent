@@ -20,7 +20,12 @@ import {
 
 export type HostRunOrigin = "renderer" | "remote" | "headless";
 export type HostRunState =
-  | "working" | "needs_approval" | "needs_input" | "done" | "failed" | "cancelled";
+  | "working"
+  | "needs_approval"
+  | "needs_input"
+  | "done"
+  | "failed"
+  | "cancelled";
 
 export interface HostRunEvent {
   runId: string;
@@ -204,8 +209,14 @@ function approvalEvent(
   // A generic command approval carries the whole command in its summary. A
   // shortened summary hides part of what would be allowed, so it is withheld
   // like oversized details: a controller can deny it but not allow it.
-  const summaryShortened = typeof payload.summary === "string" && summary.length < payload.summary.length;
-  if (summaryShortened) return { type: "approval_required", payload: { ...prompt, detailsOmitted: true }, terminal: false };
+  const summaryShortened =
+    typeof payload.summary === "string" && summary.length < payload.summary.length;
+  if (summaryShortened)
+    return {
+      type: "approval_required",
+      payload: { ...prompt, detailsOmitted: true },
+      terminal: false,
+    };
   // Details pass the same allowlist as Remote approvals: unrecognized kinds and
   // undeclared fields (such as classifier state) are never journaled, so no
   // observer of this host can read them.
@@ -236,7 +247,8 @@ function questionEvent(payload: Record<string, unknown>, id: string): PendingEve
   const questions = parseAskUserQuestions(payload.questions);
   const toolCallId = boundedText(payload.toolCallId, 128);
   if (!questions || !toolCallId) return undefined;
-  const deadline = typeof payload.expiresAt === "string" ? Date.parse(payload.expiresAt) : Number.NaN;
+  const deadline =
+    typeof payload.expiresAt === "string" ? Date.parse(payload.expiresAt) : Number.NaN;
   return {
     type: "question_required",
     payload: {
@@ -392,11 +404,15 @@ export class HostRunRegistry {
       run.pendingApprovalIds.splice(approvalIndex, 1);
       const decision = resolution?.kind === "approval" ? resolution.decision : undefined;
       this.remember(runId, id, decision ? { kind: "approval", decision } : undefined);
-      this.commit(run, {
-        type: "approval_resolved",
-        payload: { approvalId: id, ...(decision ? { decision } : {}) },
-        terminal: false,
-      }, true);
+      this.commit(
+        run,
+        {
+          type: "approval_resolved",
+          payload: { approvalId: id, ...(decision ? { decision } : {}) },
+          terminal: false,
+        },
+        true,
+      );
       return;
     }
     const questionIndex = run.pendingQuestionIds.indexOf(id);
@@ -404,11 +420,15 @@ export class HostRunRegistry {
       run.pendingQuestionIds.splice(questionIndex, 1);
       const outcome = resolution?.kind === "question" ? resolution.outcome : undefined;
       this.remember(runId, id, outcome ? { kind: "question", outcome } : undefined);
-      this.commit(run, {
-        type: "question_resolved",
-        payload: { promptId: id, ...(outcome ? { outcome } : {}) },
-        terminal: false,
-      }, true);
+      this.commit(
+        run,
+        {
+          type: "question_resolved",
+          payload: { promptId: id, ...(outcome ? { outcome } : {}) },
+          terminal: false,
+        },
+        true,
+      );
     }
   }
 
@@ -443,15 +463,19 @@ export class HostRunRegistry {
   settle(runId: string): void {
     const run = this.runs.get(runId);
     if (!run || isTerminalState(run.state)) return;
-    this.commit(run, {
-      type: "error",
-      payload: {
-        code: "run_ended_without_outcome",
-        message: "The run ended without reporting an outcome.",
+    this.commit(
+      run,
+      {
+        type: "error",
+        payload: {
+          code: "run_ended_without_outcome",
+          message: "The run ended without reporting an outcome.",
+        },
+        terminal: true,
+        outcome: "failed",
       },
-      terminal: true,
-      outcome: "failed",
-    }, true);
+      true,
+    );
   }
 
   summary(runId: string): HostRunSummary | undefined {
@@ -486,11 +510,20 @@ export class HostRunRegistry {
    * cursor older than retention returns `snapshot_required` with the pending
    * prompts so the observer can rebuild its attention state.
    */
-  read(runId: string, afterSequence: number, limit = Number.POSITIVE_INFINITY, checkpoint = false): HostRunRead {
+  read(
+    runId: string,
+    afterSequence: number,
+    limit = Number.POSITIVE_INFINITY,
+    checkpoint = false,
+  ): HostRunRead {
     this.pruneExpired();
     const run = this.runs.get(runId);
     if (!run) throw new RangeError("Unknown host run.");
-    if (!Number.isSafeInteger(afterSequence) || afterSequence < 0 || afterSequence > run.lastSequence) {
+    if (
+      !Number.isSafeInteger(afterSequence) ||
+      afterSequence < 0 ||
+      afterSequence > run.lastSequence
+    ) {
       throw new RangeError("The run cursor is outside its journal.");
     }
     const summary = this.summarize(run);
@@ -499,10 +532,15 @@ export class HostRunRegistry {
     // A long running turn can be joined in one frame. Keep short replays and
     // terminal outcomes on their ordinary path. Reading the head seals its
     // delta: subsequent tokens must receive a sequence after this snapshot.
-    const atHead = checkpoint && !isTerminalState(run.state) && (
-      missed || (afterSequence === 0 && run.lastSequence >= 64 && run.transcript.timeline &&
-        run.transcript.text !== undefined && run.transcript.reasoning !== undefined)
-    );
+    const atHead =
+      checkpoint &&
+      !isTerminalState(run.state) &&
+      (missed ||
+        (afterSequence === 0 &&
+          run.lastSequence >= 64 &&
+          run.transcript.timeline &&
+          run.transcript.text !== undefined &&
+          run.transcript.reasoning !== undefined));
     if (missed || atHead) {
       if (atHead) run.openDelta = undefined;
       return {
@@ -517,9 +555,7 @@ export class HostRunRegistry {
     // Sequences are contiguous, so the first unread event sits at a fixed offset.
     const start = afterSequence - (firstRetained - 1);
     const end = Number.isFinite(limit) ? start + Math.max(1, Math.floor(limit)) : run.events.length;
-    const events = run.events
-      .slice(start, end)
-      .map((event) => structuredClone(event));
+    const events = run.events.slice(start, end).map((event) => structuredClone(event));
     // A returned event is final: the reader's cursor now covers it, so
     // later deltas must take a new sequence rather than extend it.
     if (events.length > 0) run.openDelta = undefined;
@@ -542,7 +578,11 @@ export class HostRunRegistry {
     };
   }
 
-  private remember(runId: string, promptId: string, resolution: HostRunPromptResolution | undefined): void {
+  private remember(
+    runId: string,
+    promptId: string,
+    resolution: HostRunPromptResolution | undefined,
+  ): void {
     if (!resolution) return;
     const at = this.options.now();
     this.resolutions.delete(promptId);
@@ -558,7 +598,8 @@ export class HostRunRegistry {
 
   private pruneResolutions(): void {
     const maximum = this.options.maxResolutions ?? DEFAULT_MAX_RESOLUTIONS;
-    const cutoff = this.options.now() - (this.options.resolutionRetentionMs ?? DEFAULT_RESOLUTION_RETENTION_MS);
+    const cutoff =
+      this.options.now() - (this.options.resolutionRetentionMs ?? DEFAULT_RESOLUTION_RETENTION_MS);
     for (const [id, entry] of this.resolutions) {
       if (this.resolutions.size > maximum || entry.at < cutoff) this.resolutions.delete(id);
       else break;
@@ -580,11 +621,12 @@ export class HostRunRegistry {
       run.pendingQuestionIds = [];
       run.state = pending.outcome ?? "failed";
     } else {
-      run.state = run.pendingApprovalIds.length > 0
-        ? "needs_approval"
-        : run.pendingQuestionIds.length > 0
-          ? "needs_input"
-          : "working";
+      run.state =
+        run.pendingApprovalIds.length > 0
+          ? "needs_approval"
+          : run.pendingQuestionIds.length > 0
+            ? "needs_input"
+            : "working";
     }
     if (pending.type === "timeline") this.noteRecordings(run, pending.payload.timeline);
     this.append(run, pending);
@@ -593,7 +635,8 @@ export class HostRunRegistry {
 
   private noteRecordings(run: RunRecord, value: unknown): void {
     for (const step of parseGenerationTimeline(value)?.steps ?? []) {
-      if (isToolStep(step) && step.recording) (run.recordingIds ??= new Set()).add(step.recording.id);
+      if (isToolStep(step) && step.recording)
+        (run.recordingIds ??= new Set()).add(step.recording.id);
     }
   }
 
@@ -621,7 +664,9 @@ export class HostRunRegistry {
     run.events.push(event);
     run.lastSequence = event.sequence;
     run.updatedAt = now;
-    run.openDelta = isCoalescibleDelta(event.type) ? { sequence: event.sequence, openedAt: now } : undefined;
+    run.openDelta = isCoalescibleDelta(event.type)
+      ? { sequence: event.sequence, openedAt: now }
+      : undefined;
     this.addBytes(run, this.eventSize(event));
     this.trimRun(run);
   }
@@ -635,7 +680,8 @@ export class HostRunRegistry {
   private extendOpenDelta(run: RunRecord, pending: PendingEvent, now: number): boolean {
     const open = run.openDelta;
     const tail = run.events[run.events.length - 1];
-    if (!open || !tail || tail.sequence !== open.sequence || tail.type !== pending.type) return false;
+    if (!open || !tail || tail.sequence !== open.sequence || tail.type !== pending.type)
+      return false;
     if (now - open.openedAt >= this.deltaCoalesceMs) return false;
     const merged = mergeDeltaPayload(pending.type, tail.payload, pending.payload);
     if (!merged) return false;
@@ -673,8 +719,9 @@ export class HostRunRegistry {
     while (this.totalEventBytes > this.maxTotalEventBytes) {
       const trimmable = [...this.runs.values()].filter((run) => run.events.length > 1);
       const live = trimmable.filter((run) => !isTerminalState(run.state));
-      const candidate = (live.length > 0 ? live : trimmable)
-        .sort((left, right) => right.eventBytes - left.eventBytes)[0];
+      const candidate = (live.length > 0 ? live : trimmable).sort(
+        (left, right) => right.eventBytes - left.eventBytes,
+      )[0];
       if (!candidate) return;
       this.dropOldest(candidate);
     }

@@ -23,7 +23,9 @@ export function parseMonitorOptions(argv, env = process.env) {
   for (let index = 0; index < argv.length; index += 1) {
     const name = argv[index];
     if (!known.has(name)) {
-      throw new Error(name.startsWith("--") ? `unknown option: ${name}` : `unexpected argument: ${name}`);
+      throw new Error(
+        name.startsWith("--") ? `unknown option: ${name}` : `unexpected argument: ${name}`,
+      );
     }
     const value = argv[index + 1];
     if (!value || value.startsWith("--")) {
@@ -51,7 +53,10 @@ export function parseMonitorOptions(argv, env = process.env) {
   if (!APP_ID_PATTERN.test(appId ?? "")) {
     throw new Error("an exact numeric --app-id (or AIDEN_ASC_APP_ID) is required");
   }
-  if ((mode === "processing" || mode === "testflight") && !RESOURCE_ID_PATTERN.test(buildId ?? "")) {
+  if (
+    (mode === "processing" || mode === "testflight") &&
+    !RESOURCE_ID_PATTERN.test(buildId ?? "")
+  ) {
     throw new Error(`an exact --build-id (or AIDEN_ASC_BUILD_ID) is required for ${mode}`);
   }
   if (version !== undefined && !VERSION_PATTERN.test(version)) {
@@ -144,7 +149,9 @@ export function summarizeTestFlightSubmissions(payload) {
       id: typeof resource?.id === "string" ? resource.id : "",
       createdDate: resourceDate(resource) ?? "",
     }))
-    .sort((left, right) => `${left.createdDate}:${left.id}`.localeCompare(`${right.createdDate}:${right.id}`));
+    .sort((left, right) =>
+      `${left.createdDate}:${left.id}`.localeCompare(`${right.createdDate}:${right.id}`),
+    );
   const newestCreatedDate = records.reduce(
     (newest, record) => (record.createdDate > newest ? record.createdDate : newest),
     "",

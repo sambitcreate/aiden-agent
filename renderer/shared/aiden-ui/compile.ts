@@ -1,4 +1,10 @@
-import { AIDEN_UI_CATALOG, isAidenUiIcon, PRESERVE_WHITESPACE, type CatalogEntry, type PropKind } from "./catalog.js";
+import {
+  AIDEN_UI_CATALOG,
+  isAidenUiIcon,
+  PRESERVE_WHITESPACE,
+  type CatalogEntry,
+  type PropKind,
+} from "./catalog.js";
 import { AIDEN_UI_NAME, parseExpression } from "./expression.js";
 import { fallbackTextFor, type FallbackTextOptions } from "./fallback-text.js";
 import { hasOwn, ownEntry } from "./own.js";
@@ -30,7 +36,11 @@ export interface CompiledAum {
 /** Elements that may sit inside text-only components (`<Text>Press <Kbd>⌘</Kbd></Text>`). */
 export const INLINE_ELEMENTS: ReadonlySet<string> = new Set(["Kbd", "Badge", "Icon", "Math"]);
 const EVENT_OR_STYLE_PROP = /^(on[A-Z]|className$|style$|class$)/u;
-export const RESERVED_DATA_NAMES: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+export const RESERVED_DATA_NAMES: ReadonlySet<string> = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
 export const MAX_TEXT_CHARS = 8000;
 
 interface Context {
@@ -72,7 +82,9 @@ function reportLimit(context: Context, message: string): void {
 function keysAreWireSafe(value: unknown): boolean {
   if (Array.isArray(value)) return value.every(keysAreWireSafe);
   if (!value || typeof value !== "object") return true;
-  return Object.entries(value).every(([key, inner]) => isWireSafeKey(key) && keysAreWireSafe(inner));
+  return Object.entries(value).every(
+    ([key, inner]) => isWireSafeKey(key) && keysAreWireSafe(inner),
+  );
 }
 
 function collapseText(text: string): string {
@@ -86,12 +98,19 @@ function compileProp(
   context: Context,
 ): AidenUiPropValueV1 | undefined {
   const invalid = (message: string) => {
-    report(context, { code: "invalid_literal", message: `${element}.${attr.name}: ${message}`, at: element });
+    report(context, {
+      code: "invalid_literal",
+      message: `${element}.${attr.name}: ${message}`,
+      at: element,
+    });
     return undefined;
   };
   const { value } = attr;
   if (kind === "action") {
-    if (value.kind !== "expr") return invalid('actions are written as {sendPrompt("…")}, {setState("key", value)}, {openUrl("https://…")} or {copy(…)}');
+    if (value.kind !== "expr")
+      return invalid(
+        'actions are written as {sendPrompt("…")}, {setState("key", value)}, {openUrl("https://…")} or {copy(…)}',
+      );
     const parsed = parseExpression(value.source);
     if (!parsed.action) {
       report(context, {
@@ -102,17 +121,30 @@ function compileProp(
       return undefined;
     }
     const action = parsed.action;
-    if (action.act === "open" && action.url.op === "lit" && !(typeof action.url.v === "string" && action.url.v.startsWith("https://"))) {
+    if (
+      action.act === "open" &&
+      action.url.op === "lit" &&
+      !(typeof action.url.v === "string" && action.url.v.startsWith("https://"))
+    ) {
       return invalid("openUrl only accepts https:// links");
     }
     if ((action.act === "compose" || action.act === "run") && !context.artifactActions) {
-      return invalid(`${action.act === "run" ? "run" : "compose"}() works only in workspace artifacts; use sendPrompt("…") here`);
+      return invalid(
+        `${action.act === "run" ? "run" : "compose"}() works only in workspace artifacts; use sendPrompt("…") here`,
+      );
     }
-    if (action.act === "run" && (!RUN_ACTION_NAME.test(action.name) || action.a.length > MAX_RUN_ARGUMENTS)) {
-      return invalid(`run("${action.name.slice(0, 40)}") needs an action name from the artifact's actions and at most ${MAX_RUN_ARGUMENTS} values`);
+    if (
+      action.act === "run" &&
+      (!RUN_ACTION_NAME.test(action.name) || action.a.length > MAX_RUN_ARGUMENTS)
+    ) {
+      return invalid(
+        `run("${action.name.slice(0, 40)}") needs an action name from the artifact's actions and at most ${MAX_RUN_ARGUMENTS} values`,
+      );
     }
     if (action.act === "set" && !context.stateKeys.has(action.key)) {
-      return invalid(`setState("${action.key}") needs "${action.key}" declared in <Visual state={{…}}>`);
+      return invalid(
+        `setState("${action.key}") needs "${action.key}" declared in <Visual state={{…}}>`,
+      );
     }
     return action;
   }
@@ -130,14 +162,19 @@ function compileProp(
   if (value.kind === "string") {
     if (kind === "number") {
       const number = Number(value.text);
-      return value.text.trim() !== "" && Number.isFinite(number) ? { op: "lit", v: number } : invalid(`"${value.text}" is not a number`);
+      return value.text.trim() !== "" && Number.isFinite(number)
+        ? { op: "lit", v: number }
+        : invalid(`"${value.text}" is not a number`);
     }
     if (kind === "boolean") {
-      if (value.text === "true" || value.text === "false") return { op: "lit", v: value.text === "true" };
+      if (value.text === "true" || value.text === "false")
+        return { op: "lit", v: value.text === "true" };
       return invalid(`"${value.text}" is not true or false`);
     }
     if (kind === "icon") {
-      return isAidenUiIcon(value.text) ? { op: "lit", v: value.text } : invalid(`unknown icon "${value.text}"`);
+      return isAidenUiIcon(value.text)
+        ? { op: "lit", v: value.text }
+        : invalid(`unknown icon "${value.text}"`);
     }
     if (typeof kind === "object" && !kind.enum.includes(value.text)) {
       return invalid(`"${value.text}" is not one of ${kind.enum.join(", ")}`);
@@ -159,7 +196,8 @@ function compileProp(
   if (expr.op === "lit") {
     if (kind === "number" && typeof expr.v !== "number") return invalid("expected a number");
     if (kind === "boolean" && typeof expr.v !== "boolean") return invalid("expected true or false");
-    if (kind === "icon" && !isAidenUiIcon(expr.v)) return invalid(`unknown icon "${String(expr.v)}"`);
+    if (kind === "icon" && !isAidenUiIcon(expr.v))
+      return invalid(`unknown icon "${String(expr.v)}"`);
     if (typeof kind === "object" && !(typeof expr.v === "string" && kind.enum.includes(expr.v))) {
       return invalid(`${JSON.stringify(expr.v)} is not one of ${kind.enum.join(", ")}`);
     }
@@ -167,13 +205,23 @@ function compileProp(
   return expr;
 }
 
-function compileProps(element: AumElement, entry: CatalogEntry, context: Context): Record<string, AidenUiPropValueV1> | undefined {
+function compileProps(
+  element: AumElement,
+  entry: CatalogEntry,
+  context: Context,
+): Record<string, AidenUiPropValueV1> | undefined {
   const props: Record<string, AidenUiPropValueV1> = {};
   for (const attr of element.attrs) {
     const kind = ownEntry(entry.props, attr.name);
     if (!kind) {
-      const hint = EVENT_OR_STYLE_PROP.test(attr.name) ? " (use catalog props and actions; styling and handlers are not supported)" : "";
-      report(context, { code: "unknown_prop", message: `${element.name}.${attr.name} is not a known prop${hint}`, at: element.name });
+      const hint = EVENT_OR_STYLE_PROP.test(attr.name)
+        ? " (use catalog props and actions; styling and handlers are not supported)"
+        : "";
+      report(context, {
+        code: "unknown_prop",
+        message: `${element.name}.${attr.name} is not a known prop${hint}`,
+        at: element.name,
+      });
       continue;
     }
     if (element.name === "Visual" && attr.name === "state") continue;
@@ -183,7 +231,11 @@ function compileProps(element: AumElement, entry: CatalogEntry, context: Context
   if (!context.draft && entry.required) {
     for (const name of entry.required) {
       if (!hasOwn(props, name)) {
-        report(context, { code: "invalid_literal", message: `${element.name} needs the ${name} prop`, at: element.name });
+        report(context, {
+          code: "invalid_literal",
+          message: `${element.name} needs the ${name} prop`,
+          at: element.name,
+        });
       }
     }
   }
@@ -196,11 +248,22 @@ function readState(visual: AumElement, context: Context): Record<string, unknown
   const parsed = attr.value.kind === "expr" ? parseExpression(attr.value.source) : undefined;
   const state = parsed?.expr?.op === "json" ? parsed.expr.v : undefined;
   if (!state || typeof state !== "object" || Array.isArray(state)) {
-    report(context, { code: "invalid_literal", message: "Visual.state must be a constant object like state={{tab: \"a\"}}", at: "Visual" });
+    report(context, {
+      code: "invalid_literal",
+      message: 'Visual.state must be a constant object like state={{tab: "a"}}',
+      at: "Visual",
+    });
     return undefined;
   }
-  if (!keysAreWireSafe(state) || new TextEncoder().encode(JSON.stringify(state)).length > AIDEN_UI_LIMITS.stateBytes) {
-    report(context, { code: "invalid_literal", message: "Visual.state is too large or uses a reserved key name", at: "Visual" });
+  if (
+    !keysAreWireSafe(state) ||
+    new TextEncoder().encode(JSON.stringify(state)).length > AIDEN_UI_LIMITS.stateBytes
+  ) {
+    report(context, {
+      code: "invalid_literal",
+      message: "Visual.state is too large or uses a reserved key name",
+      at: "Visual",
+    });
     return undefined;
   }
   for (const key of Object.keys(state)) context.stateKeys.add(key);
@@ -208,14 +271,22 @@ function readState(visual: AumElement, context: Context): Record<string, unknown
 }
 
 function textOf(nodes: readonly AumNode[]): string {
-  return nodes.map((node) => (node.kind === "text" ? node.text : node.kind === "element" ? textOf(node.children) : "")).join("");
+  return nodes
+    .map((node) =>
+      node.kind === "text" ? node.text : node.kind === "element" ? textOf(node.children) : "",
+    )
+    .join("");
 }
 
 function collectData(element: AumElement, context: Context): void {
   const nameAttr = element.attrs.find((attr) => attr.name === "name");
   const name = nameAttr?.value.kind === "string" ? nameAttr.value.text : undefined;
   if (!name || !AIDEN_UI_NAME.test(name) || RESERVED_DATA_NAMES.has(name)) {
-    report(context, { code: "data_invalid", message: 'Data needs a name like <Data name="data">', at: "Data" });
+    report(context, {
+      code: "data_invalid",
+      message: 'Data needs a name like <Data name="data">',
+      at: "Data",
+    });
     return;
   }
   const body = textOf(element.children).trim();
@@ -224,7 +295,11 @@ function collectData(element: AumElement, context: Context): void {
   } catch {
     context.data[name] = null;
     if (!context.draft || element.closed) {
-      report(context, { code: "data_invalid", message: `Data "${name}" is not valid JSON`, at: "Data" });
+      report(context, {
+        code: "data_invalid",
+        message: `Data "${name}" is not valid JSON`,
+        at: "Data",
+      });
     }
   }
 }
@@ -241,11 +316,17 @@ function compileChildren(
   const preserve = PRESERVE_WHITESPACE.has(parent);
   const push = (node: AidenUiNodeV1) => {
     if (depth > AIDEN_UI_LIMITS.depth) {
-      reportLimit(context, `Visuals nest at most ${AIDEN_UI_LIMITS.depth} levels deep; deeper content was dropped`);
+      reportLimit(
+        context,
+        `Visuals nest at most ${AIDEN_UI_LIMITS.depth} levels deep; deeper content was dropped`,
+      );
       return;
     }
     if (context.nodes >= AIDEN_UI_LIMITS.nodes) {
-      reportLimit(context, `Visuals hold at most ${AIDEN_UI_LIMITS.nodes} components; the rest were dropped`);
+      reportLimit(
+        context,
+        `Visuals hold at most ${AIDEN_UI_LIMITS.nodes} components; the rest were dropped`,
+      );
       return;
     }
     context.nodes += 1;
@@ -254,7 +335,11 @@ function compileChildren(
   /** Text and `{expr}` children go in directly, or wrapped in Text under a layout parent. */
   const pushInline = (node: AidenUiNodeV1) => {
     if (policy === "none") {
-      report(context, { code: "bad_child", message: `${parent} does not take content`, at: parent });
+      report(context, {
+        code: "bad_child",
+        message: `${parent} does not take content`,
+        at: parent,
+      });
       return;
     }
     if (policy === "text") {
@@ -309,8 +394,13 @@ function compileChildren(
       continue;
     }
     if (policy === "none" || (policy === "text" && !INLINE_ELEMENTS.has(node.name))) {
-      report(context, { code: "bad_child", message: `<${node.name}> cannot go inside ${parent}`, at: node.name });
-      if (policy === "text") children.push(...compileChildren(node.children, policy, parent, depth + 1, context));
+      report(context, {
+        code: "bad_child",
+        message: `<${node.name}> cannot go inside ${parent}`,
+        at: node.name,
+      });
+      if (policy === "text")
+        children.push(...compileChildren(node.children, policy, parent, depth + 1, context));
       continue;
     }
     const props = compileProps(node, entry, context);
@@ -318,7 +408,13 @@ function compileChildren(
     const before = children.length;
     push(compiled);
     if (children.length === before) continue;
-    const grandchildren = compileChildren(node.children, entry.children, node.name, depth + 1, context);
+    const grandchildren = compileChildren(
+      node.children,
+      entry.children,
+      node.name,
+      depth + 1,
+      context,
+    );
     if (grandchildren.length) compiled.c = grandchildren;
   }
   return children;
@@ -335,7 +431,12 @@ export function compileAum(markup: string, options: CompileAumOptions = {}): Com
     return compileUnchecked(markup, options);
   } catch {
     return {
-      diagnostics: [{ code: "limit", message: "This markup is too deeply nested or too large to compile; simplify it" }],
+      diagnostics: [
+        {
+          code: "limit",
+          message: "This markup is too deeply nested or too large to compile; simplify it",
+        },
+      ],
       fallbackText: "",
     };
   }
@@ -359,20 +460,37 @@ function compileUnchecked(markup: string, options: CompileAumOptions): CompiledA
       ? meaningful[0]!
       : undefined;
   if (!rootElement && meaningful.length > 0 && !options.draft) {
-    report(context, { code: "recovered", message: "The markup was wrapped in <Visual>; start visuals with <Visual title=\"…\">" });
+    report(context, {
+      code: "recovered",
+      message: 'The markup was wrapped in <Visual>; start visuals with <Visual title="…">',
+    });
   }
   const state = rootElement ? readState(rootElement, context) : undefined;
-  const rootProps = rootElement ? compileProps(rootElement, AIDEN_UI_CATALOG.Visual!, context) : undefined;
+  const rootProps = rootElement
+    ? compileProps(rootElement, AIDEN_UI_CATALOG.Visual!, context)
+    : undefined;
   context.nodes = 1;
-  const children = compileChildren(rootElement ? rootElement.children : parsed.nodes, "nodes", "Visual", 1, context);
+  const children = compileChildren(
+    rootElement ? rootElement.children : parsed.nodes,
+    "nodes",
+    "Visual",
+    1,
+    context,
+  );
   const titleProp = rootProps?.title;
-  const title = titleProp && "op" in titleProp && titleProp.op === "lit" && typeof titleProp.v === "string" ? titleProp.v : undefined;
+  const title =
+    titleProp && "op" in titleProp && titleProp.op === "lit" && typeof titleProp.v === "string"
+      ? titleProp.v
+      : undefined;
 
   let dataJson: string | undefined;
   if (Object.keys(context.data).length > 0) {
     const serialized = JSON.stringify(context.data);
     if (new TextEncoder().encode(serialized).length > AIDEN_UI_LIMITS.dataBytes) {
-      report(context, { code: "limit", message: `Data is limited to ${AIDEN_UI_LIMITS.dataBytes / 1024} KiB per visual; it was dropped` });
+      report(context, {
+        code: "limit",
+        message: `Data is limited to ${AIDEN_UI_LIMITS.dataBytes / 1024} KiB per visual; it was dropped`,
+      });
     } else {
       dataJson = serialized;
     }
@@ -380,13 +498,24 @@ function compileUnchecked(markup: string, options: CompileAumOptions): CompiledA
   if (children.length === 0) {
     return { diagnostics: context.diagnostics, fallbackText: "", ...(title ? { title } : {}) };
   }
-  const tree: AidenUiNodeV1 = { t: "Visual", k: "0", ...(rootProps ? { p: rootProps } : {}), c: children };
+  const tree: AidenUiNodeV1 = {
+    t: "Visual",
+    k: "0",
+    ...(rootProps ? { p: rootProps } : {}),
+    c: children,
+  };
   assignKeys(tree, "0");
   if (new TextEncoder().encode(JSON.stringify(tree)).length > AIDEN_UI_LIMITS.treeBytes) {
-    report(context, { code: "limit", message: `The visual exceeds ${AIDEN_UI_LIMITS.treeBytes / 1024} KiB; simplify it or move rows into <Data>` });
+    report(context, {
+      code: "limit",
+      message: `The visual exceeds ${AIDEN_UI_LIMITS.treeBytes / 1024} KiB; simplify it or move rows into <Data>`,
+    });
     return { diagnostics: context.diagnostics, fallbackText: "", ...(title ? { title } : {}) };
   }
-  const vars: Record<string, unknown> = { ...(dataJson ? (JSON.parse(dataJson) as Record<string, unknown>) : {}), ...(state ?? {}) };
+  const vars: Record<string, unknown> = {
+    ...(dataJson ? (JSON.parse(dataJson) as Record<string, unknown>) : {}),
+    ...(state ?? {}),
+  };
   return {
     tree,
     ...(dataJson ? { dataJson } : {}),
@@ -396,4 +525,3 @@ function compileUnchecked(markup: string, options: CompileAumOptions): CompiledA
     fallbackText: fallbackTextFor(tree, { vars }, options.fallback),
   };
 }
-

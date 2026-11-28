@@ -7,7 +7,10 @@
 // provider/model never see each other's runtime.
 
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
-import { streamSimpleWaitingOutUsageLimits, type UsageLimitStreamOptions } from "../usage-limit-stream.js";
+import {
+  streamSimpleWaitingOutUsageLimits,
+  type UsageLimitStreamOptions,
+} from "../usage-limit-stream.js";
 import { withBotReplySilenceLimit, type BotReplySilenceOptions } from "./bot-reply-silence.js";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 
@@ -53,27 +56,45 @@ function botModels(
     return runtime;
   };
 
-  const stream = (model: Model<Api>, context: Parameters<Models["streamSimple"]>[1], options?: Parameters<Models["streamSimple"]>[2]) => {
+  const stream = (
+    model: Model<Api>,
+    context: Parameters<Models["streamSimple"]>[1],
+    options?: Parameters<Models["streamSimple"]>[2],
+  ) => {
     const runtime = runtimeFor(model);
     const limits = limitsFor?.(runtime);
     const send = (sent: typeof options) =>
       limits
-        ? streamSimpleWaitingOutUsageLimits(model, sent, (next) => runtime.streams.streamSimple(model, context, next), limits)
+        ? streamSimpleWaitingOutUsageLimits(
+            model,
+            sent,
+            (next) => runtime.streams.streamSimple(model, context, next),
+            limits,
+          )
         : runtime.streams.streamSimple(model, context, sent);
     // An agent harness runs its own tools inside one stream, so its quiet stretches are work.
     const harness = runtime.provider !== undefined && isAcpHarnessProvider(runtime.provider.id);
     const silence = harness ? false : silenceFor ? silenceFor(runtime) : {};
     if (silence === false) return send(options);
     // A reply that goes silent after its words ends as finished (bot-reply-silence.ts).
-    return withBotReplySilenceLimit(options?.signal, (signal) => send({ ...options, signal }), silence);
+    return withBotReplySilenceLimit(
+      options?.signal,
+      (signal) => send({ ...options, signal }),
+      silence,
+    );
   };
 
   const overrides: Partial<Models> = {
-    getModel: ((provider: string, modelId: string) => runtimes.get(key(provider, modelId))?.model) as Models["getModel"],
-    streamSimple: ((model, context, options) => stream(model, context, options)) as Models["streamSimple"],
-    completeSimple: ((model, context, options) => stream(model, context, options).result()) as Models["completeSimple"],
-    fetchDeferred: ((model, handle, options) => runtimeFor(model).models.fetchDeferred(model, handle, options)) as Models["fetchDeferred"],
-    cancelDeferred: ((model, handle, options) => runtimeFor(model).models.cancelDeferred(model, handle, options)) as Models["cancelDeferred"],
+    getModel: ((provider: string, modelId: string) =>
+      runtimes.get(key(provider, modelId))?.model) as Models["getModel"],
+    streamSimple: ((model, context, options) =>
+      stream(model, context, options)) as Models["streamSimple"],
+    completeSimple: ((model, context, options) =>
+      stream(model, context, options).result()) as Models["completeSimple"],
+    fetchDeferred: ((model, handle, options) =>
+      runtimeFor(model).models.fetchDeferred(model, handle, options)) as Models["fetchDeferred"],
+    cancelDeferred: ((model, handle, options) =>
+      runtimeFor(model).models.cancelDeferred(model, handle, options)) as Models["cancelDeferred"],
   };
 
   return new Proxy({} as Models, {
@@ -87,7 +108,10 @@ function botModels(
 }
 
 export function createBotRuntimeModels(options: BotRuntimeModelsOptions = {}): BotRuntimeModels {
-  const perBot = new Map<string, { runtimes: Map<string, BotModelRuntime>; models: Models; background: Models }>();
+  const perBot = new Map<
+    string,
+    { runtimes: Map<string, BotModelRuntime>; models: Models; background: Models }
+  >();
   const entry = (botId: string) => {
     let found = perBot.get(botId);
     if (found === undefined) {
@@ -95,7 +119,11 @@ export function createBotRuntimeModels(options: BotRuntimeModelsOptions = {}): B
       const limitsFor = options.usageLimits;
       found = {
         runtimes,
-        models: botModels(runtimes, limitsFor ? (runtime) => limitsFor(botId, runtime) : undefined, options.replySilence),
+        models: botModels(
+          runtimes,
+          limitsFor ? (runtime) => limitsFor(botId, runtime) : undefined,
+          options.replySilence,
+        ),
         background: botModels(runtimes, undefined, options.replySilence),
       };
       perBot.set(botId, found);

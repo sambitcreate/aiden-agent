@@ -62,13 +62,18 @@ export async function readGenerativeUiHostLibrary(
   const allowed = GENERATIVE_UI_HOST_LIBS.find((item) => item === name);
   if (!allowed) return undefined;
   if (allowed === GENERATIVE_UI_KIT_LIB) {
-    return { bytes: Buffer.from(generativeUiKitCss(), "utf8"), mimeType: "text/css; charset=utf-8" };
+    return {
+      bytes: Buffer.from(generativeUiKitCss(), "utf8"),
+      mimeType: "text/css; charset=utf-8",
+    };
   }
   try {
     const bytes = await fs.readFile(generativeUiLibraryPath(allowed));
     return {
       bytes,
-      mimeType: allowed.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8",
+      mimeType: allowed.endsWith(".css")
+        ? "text/css; charset=utf-8"
+        : "text/javascript; charset=utf-8",
     };
   } catch {
     return undefined;

@@ -16,7 +16,11 @@ import {
   stepComposerHistoryUp,
 } from "./composer-history";
 import type { ChatMessage } from "./types";
-import { BOT_FAILED_TURN_TEXT, BOT_SILENT_REPLY, type BotTranscriptEntry } from "../shared/bot-live";
+import {
+  BOT_FAILED_TURN_TEXT,
+  BOT_SILENT_REPLY,
+  type BotTranscriptEntry,
+} from "../shared/bot-live";
 
 function msg(
   id: string,
@@ -32,19 +36,23 @@ test("composerHistoryFromMessages filters non-person turns, preserves order, and
     msg("s0", "system", "System prompt"),
     msg("u1", "user", "Plan the release\nwith milestones", {
       createdAt: 100,
-      attachments: [
-        { id: "a1", name: "spec.md", mimeType: "text/plain", kind: "text", size: 20 },
-      ],
+      attachments: [{ id: "a1", name: "spec.md", mimeType: "text/plain", kind: "text", size: 20 }],
     }),
     msg(
       "a1",
       "assistant",
-      "## Release Plan\n> - Ship **v2.0** via [checklist](https://example.com)\n```c++ title=\"demo\"\nconst ok = true;\n```\n~~~sh\necho done\n~~~",
+      '## Release Plan\n> - Ship **v2.0** via [checklist](https://example.com)\n```c++ title="demo"\nconst ok = true;\n```\n~~~sh\necho done\n~~~',
       { createdAt: 200 },
     ),
     // Follow-up agent notice stored with role "user" — must be excluded.
     msg("n1", "user", "CI failed on PR #12", {
-      notice: { version: 1, source: "pull_request", tone: "failure", title: "CI failed", summary: "lint" },
+      notice: {
+        version: 1,
+        source: "pull_request",
+        tone: "failure",
+        title: "CI failed",
+        summary: "lint",
+      },
     }),
     msg("a-notice", "assistant", "I looked at the CI failure."),
     // Message from a lead chat — must be excluded.
@@ -52,7 +60,9 @@ test("composerHistoryFromMessages filters non-person turns, preserves order, and
     msg("a-lead", "assistant", "Checked."),
     // Empty attachment-only user message — skipped for text recall.
     msg("u-empty", "user", "   \n  ", {
-      attachments: [{ id: "img1", name: "shot.png", mimeType: "image/png", kind: "image", size: 10 }],
+      attachments: [
+        { id: "img1", name: "shot.png", mimeType: "image/png", kind: "image", size: 10 },
+      ],
     }),
     msg("a-empty", "assistant", "Nice screenshot."),
     // Voice user prompt with failed reply.
@@ -109,16 +119,26 @@ test("composerHistoryFromMessages distinguishes non-latest unanswered ('none'), 
   const messages: ChatMessage[] = [
     msg("u1", "user", "Wait for tests"),
     msg("n1", "user", "Tests finished", {
-      notice: { version: 1, source: "check", tone: "success", title: "Tests passed", summary: "ok" },
+      notice: {
+        version: 1,
+        source: "check",
+        tone: "success",
+        title: "Tests passed",
+        summary: "ok",
+      },
     }),
     msg("a-notice", "assistant", "Notice reply should not belong to u1"),
     msg("u2", "user", "Draw a chart"),
     msg("a2", "assistant", "", {
-      htmlArtifacts: [{ id: "art-1", title: "Chart", kind: "html", status: "ready" }] as unknown as ChatMessage["htmlArtifacts"],
+      htmlArtifacts: [
+        { id: "art-1", title: "Chart", kind: "html", status: "ready" },
+      ] as unknown as ChatMessage["htmlArtifacts"],
     }),
     msg("u3", "user", "Send screenshot"),
     msg("a3", "assistant", "", {
-      attachments: [{ id: "img-1", name: "out.png", mimeType: "image/png", kind: "image", size: 12 }],
+      attachments: [
+        { id: "img-1", name: "out.png", mimeType: "image/png", kind: "image", size: 12 },
+      ],
     }),
     msg("u4", "user", "Still running"),
   ];
@@ -136,7 +156,13 @@ test("composerHistoryFromMessages distinguishes non-latest unanswered ('none'), 
 
 test("composerHistoryFromMessages reports timeline-only cancelled turns as stopped and failed turns as failed", () => {
   const timeline = (status: string) =>
-    ({ version: 1, generationId: `g-${status}`, status, startedAt: 1000, steps: [] }) as unknown as ChatMessage["timeline"];
+    ({
+      version: 1,
+      generationId: `g-${status}`,
+      status,
+      startedAt: 1000,
+      steps: [],
+    }) as unknown as ChatMessage["timeline"];
   const messages: ChatMessage[] = [
     msg("u1", "user", "Write the summary"),
     msg("a1", "assistant", "Partial **summary** so", { timeline: timeline("cancelled") }),
@@ -161,22 +187,72 @@ test("composerHistoryFromMessages reports timeline-only cancelled turns as stopp
 test("composerHistoryFromBotEntries handles failed_turn, silent replies, stopped turns, non-text outputs, and turn boundaries", () => {
   const botEntries: BotTranscriptEntry[] = [
     { id: "r1", type: "routine", label: "Morning check", text: "Check inbox", at: 10 },
-    { id: "a0", type: "assistant", text: "Inbox clear.", toolCalls: [], stopReason: "stop", at: 11 },
+    {
+      id: "a0",
+      type: "assistant",
+      text: "Inbox clear.",
+      toolCalls: [],
+      stopReason: "stop",
+      at: 11,
+    },
     // Answered turn with tool call + silent marker ignored
     { id: "u1", type: "user", text: "Draft the update", imageCount: 2, at: 20 },
-    { id: "a1-silent", type: "assistant", text: BOT_SILENT_REPLY, toolCalls: [], stopReason: "stop", at: 21 },
-    { id: "a1", type: "assistant", text: "Here is **the update**.", toolCalls: [], stopReason: "stop", at: 22 },
+    {
+      id: "a1-silent",
+      type: "assistant",
+      text: BOT_SILENT_REPLY,
+      toolCalls: [],
+      stopReason: "stop",
+      at: 21,
+    },
+    {
+      id: "a1",
+      type: "assistant",
+      text: "Here is **the update**.",
+      toolCalls: [],
+      stopReason: "stop",
+      at: 22,
+    },
     // Notice breaks boundary so later reply doesn't bleed back into u2
     { id: "u2", type: "user", text: "Check before reset", imageCount: 0, at: 23 },
     { id: "n1", type: "notice", notice: "session_reset" },
-    { id: "a-after-reset", type: "assistant", text: "Fresh session greeting.", toolCalls: [], stopReason: "stop", at: 24 },
+    {
+      id: "a-after-reset",
+      type: "assistant",
+      text: "Fresh session greeting.",
+      toolCalls: [],
+      stopReason: "stop",
+      at: 24,
+    },
     // Incoming peer request breaks boundary too
     { id: "u3", type: "user", text: "Idle check", imageCount: 0, at: 25 },
-    { id: "p1", type: "peer", exchangeId: "ex-1", direction: "received", peerBotId: "b2", peerName: "Ops", messageKind: "request", at: 26 },
-    { id: "a-peer", type: "assistant", text: "Answering Ops.", toolCalls: [], stopReason: "stop", at: 27 },
+    {
+      id: "p1",
+      type: "peer",
+      exchangeId: "ex-1",
+      direction: "received",
+      peerBotId: "b2",
+      peerName: "Ops",
+      messageKind: "request",
+      at: 26,
+    },
+    {
+      id: "a-peer",
+      type: "assistant",
+      text: "Answering Ops.",
+      toolCalls: [],
+      stopReason: "stop",
+      at: 27,
+    },
     // failed_turn entry
     { id: "u4", type: "user", text: "Retry deployment", imageCount: 0, at: 30 },
-    { id: "f1", type: "failed_turn", retryText: "Retry deployment", errorMessage: "Gateway 503", at: 31 },
+    {
+      id: "f1",
+      type: "failed_turn",
+      retryText: "Retry deployment",
+      errorMessage: "Gateway 503",
+      at: 31,
+    },
     // failed_turn without errorMessage falls back to BOT_FAILED_TURN_TEXT
     { id: "u5", type: "user", text: "Second try", imageCount: 0, at: 32 },
     { id: "f2", type: "failed_turn", retryText: "Second try", at: 33 },
@@ -185,8 +261,22 @@ test("composerHistoryFromBotEntries handles failed_turn, silent replies, stopped
     { id: "a6", type: "assistant", text: "", toolCalls: [], stopReason: "aborted", at: 35 },
     // Non-text shared image output (with silent assistant text)
     { id: "u7", type: "user", text: "Take a photo", imageCount: 0, at: 36 },
-    { id: "a7", type: "assistant", text: BOT_SILENT_REPLY, toolCalls: [], stopReason: "stop", at: 37 },
-    { id: "img1", type: "shared_image", name: "snap.png", mimeType: "image/png", size: 100, data: "abc" },
+    {
+      id: "a7",
+      type: "assistant",
+      text: BOT_SILENT_REPLY,
+      toolCalls: [],
+      stopReason: "stop",
+      at: 37,
+    },
+    {
+      id: "img1",
+      type: "shared_image",
+      name: "snap.png",
+      mimeType: "image/png",
+      size: 100,
+      data: "abc",
+    },
     // Non-text file edit output
     { id: "u8", type: "user", text: "Update notes", imageCount: 0, at: 38 },
     { id: "file1", type: "file", path: "notes.md", operation: "edited", at: 39 },

@@ -73,7 +73,9 @@ test.describe("Quick View rows", () => {
           }
           await expect(tools).toBeVisible();
           await expect(
-            tools.getByRole("tablist", { name: "Environment views" }).getByRole("tab", { name: index === 0 ? "Files" : "Changes", exact: true }),
+            tools
+              .getByRole("tablist", { name: "Environment views" })
+              .getByRole("tab", { name: index === 0 ? "Files" : "Changes", exact: true }),
           ).toBeFocused();
           await expect(page.locator("[data-environment-stacked]")).toHaveAttribute(
             "data-environment-stacked",
@@ -82,7 +84,9 @@ test.describe("Quick View rows", () => {
           await expect(tools).not.toHaveAttribute("inert", "");
           if (index > 0) {
             await expect(
-              tools.locator("#environment-review-panel").getByRole("tab", { name: index === 1 ? "Changes" : "Compare", exact: true }),
+              tools
+                .locator("#environment-review-panel")
+                .getByRole("tab", { name: index === 1 ? "Changes" : "Compare", exact: true }),
             ).toHaveAttribute("aria-selected", "true");
           }
           if (width === 900) await expect(quickView).toBeHidden();
@@ -112,7 +116,9 @@ test.describe("Quick View rows", () => {
     await expect(page.locator("[data-quick-view-toggle]")).toBeFocused();
   });
 
-  test("Quick View rows still open tools after Quick View unmounts for Settings", async ({ aiden }) => {
+  test("Quick View rows still open tools after Quick View unmounts for Settings", async ({
+    aiden,
+  }) => {
     const { page } = aiden;
     await finishLmStudioOnboarding(page);
     await page.locator("[data-quick-view-toggle]").click();
@@ -122,7 +128,9 @@ test.describe("Quick View rows", () => {
     await expect(page.getByRole("navigation", { name: "Settings" })).toBeVisible();
     await expect(page.locator('[data-environment-surface="quick-view"]')).toHaveCount(0);
     await page.getByRole("button", { name: "Back to app", exact: true }).click();
-    await expect(page.getByRole("complementary", { name: "Environment work surface" })).toBeHidden();
+    await expect(
+      page.getByRole("complementary", { name: "Environment work surface" }),
+    ).toBeHidden();
     await quickView.getByRole("button", { name: /^Browse files in / }).click();
     await expect(page.getByRole("tab", { name: "Files", exact: true })).toBeFocused();
   });

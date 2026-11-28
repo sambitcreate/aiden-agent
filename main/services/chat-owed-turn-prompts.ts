@@ -1,5 +1,8 @@
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
-import type { AskUserQuestionPromptV1, AskUserQuestionV1 } from "../../renderer/shared/ask-user-question.js";
+import type {
+  AskUserQuestionPromptV1,
+  AskUserQuestionV1,
+} from "../../renderer/shared/ask-user-question.js";
 import type { ToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 import type { AidenRemotePendingQuestion } from "./aiden-remote-protocol.js";
 import type { AidenRemotePendingApproval } from "./aiden-remote-streams.js";
@@ -83,7 +86,10 @@ export function createOwedTurnPrompts(deps: OwedTurnPromptsDeps) {
     deps.notifyChanged(card.chatId);
   }
 
-  function firstFor<T extends Card>(cards: Map<string, T>, chatId: string): [string, T] | undefined {
+  function firstFor<T extends Card>(
+    cards: Map<string, T>,
+    chatId: string,
+  ): [string, T] | undefined {
     const now = deps.now();
     for (const entry of cards) {
       if (entry[1].chatId === chatId && entry[1].expiresAt > now) return entry;
@@ -108,7 +114,13 @@ export function createOwedTurnPrompts(deps: OwedTurnPromptsDeps) {
           deps.expireApproval(prompt.approvalId);
           lifetime.expired?.(chatId, "approval");
         }, lifetime.ms);
-        approvals.set(prompt.approvalId, { chatId, streamId: prompt.streamId, prompt, expiresAt, timer });
+        approvals.set(prompt.approvalId, {
+          chatId,
+          streamId: prompt.streamId,
+          prompt,
+          expiresAt,
+          timer,
+        });
         deps.notifyChanged(chatId);
         return;
       }
@@ -157,7 +169,9 @@ export function createOwedTurnPrompts(deps: OwedTurnPromptsDeps) {
       if (!found) return null;
       const [approvalId, card] = found;
       const canAllow = approvalAllowableAwayFromOwner(card.prompt.toolName);
-      const scopes: ToolApprovalScope[] = (card.prompt.scopes ?? []).filter((scope) => scope !== "once");
+      const scopes: ToolApprovalScope[] = (card.prompt.scopes ?? []).filter(
+        (scope) => scope !== "once",
+      );
       return {
         approvalId,
         streamId: card.streamId,
@@ -237,7 +251,12 @@ export function withPromptLifetime(
     deps.clearTimer(timer.handle);
     timers.delete(id);
   };
-  const arm = (id: string, streamId: string, expire: (id: string) => boolean, kind: "approval" | "question") => {
+  const arm = (
+    id: string,
+    streamId: string,
+    expire: (id: string) => boolean,
+    kind: "approval" | "question",
+  ) => {
     clear(id);
     const handle = deps.setTimer(() => {
       timers.delete(id);

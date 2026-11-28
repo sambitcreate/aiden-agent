@@ -43,7 +43,10 @@ function fakeReady(
 
 test("each simctl action is one argv with the UDID after the verb", () => {
   const cases: Array<[DeviceActionInput, string[]]> = [
-    [{ ...target, type: "setAppearance", value: "dark" }, ["simctl", "ui", "UDID-1", "appearance", "dark"]],
+    [
+      { ...target, type: "setAppearance", value: "dark" },
+      ["simctl", "ui", "UDID-1", "appearance", "dark"],
+    ],
     [
       { ...target, type: "setTextSize", value: "large" },
       ["simctl", "ui", "UDID-1", "content_size", "extra-extra-large"],
@@ -52,11 +55,23 @@ test("each simctl action is one argv with the UDID after the verb", () => {
       { ...target, type: "setToggle", setting: "increaseContrast", value: false },
       ["simctl", "ui", "UDID-1", "increase_contrast", "disabled"],
     ],
-    [{ ...target, type: "openUrl", url: "myapp://x" }, ["simctl", "openurl", "UDID-1", "myapp://x"]],
-    [{ ...target, type: "launchApp", appId: "com.a.b" }, ["simctl", "launch", "UDID-1", "com.a.b"]],
-    [{ ...target, type: "terminateApp", appId: "com.a.b" }, ["simctl", "terminate", "UDID-1", "com.a.b"]],
     [
-      { ...target, type: "setPermission", permission: "photos", decision: "revoke", appId: "com.a.b" },
+      { ...target, type: "openUrl", url: "myapp://x" },
+      ["simctl", "openurl", "UDID-1", "myapp://x"],
+    ],
+    [{ ...target, type: "launchApp", appId: "com.a.b" }, ["simctl", "launch", "UDID-1", "com.a.b"]],
+    [
+      { ...target, type: "terminateApp", appId: "com.a.b" },
+      ["simctl", "terminate", "UDID-1", "com.a.b"],
+    ],
+    [
+      {
+        ...target,
+        type: "setPermission",
+        permission: "photos",
+        decision: "revoke",
+        appId: "com.a.b",
+      },
       ["simctl", "privacy", "UDID-1", "revoke", "photos", "com.a.b"],
     ],
     [
@@ -66,30 +81,51 @@ test("each simctl action is one argv with the UDID after the verb", () => {
     [{ ...target, type: "clearLocation" }, ["simctl", "location", "UDID-1", "clear"]],
   ];
   for (const [input, argv] of cases) {
-    assert.deepEqual(iosActionCommand({ nodePath: "/node", helpers }, input), { command: "xcrun", args: argv });
+    assert.deepEqual(iosActionCommand({ nodePath: "/node", helpers }, input), {
+      command: "xcrun",
+      args: argv,
+    });
   }
 });
 
 test("accessibility switches spawn serve-sim's helper inside the simulator", () => {
   const ready = { nodePath: "/node", helpers };
-  const spawn = (...rest: string[]) => ({ command: "xcrun", args: ["simctl", "spawn", "UDID-1", AX, ...rest] });
+  const spawn = (...rest: string[]) => ({
+    command: "xcrun",
+    args: ["simctl", "spawn", "UDID-1", AX, ...rest],
+  });
   assert.deepEqual(
     iosActionCommand(ready, { ...target, type: "setToggle", setting: "voiceOver", value: true }),
     spawn("set", "voiceover", "on"),
   );
   assert.deepEqual(
-    iosActionCommand(ready, { ...target, type: "setToggle", setting: "reduceMotion", value: false }),
-    spawn("set", "reduce-motion", "off"),
-  );
-  assert.deepEqual(iosActionCommand(ready, { ...target, type: "setLiquidGlass", value: "tinted" }), spawn("set", "liquid-glass", "tinted"));
-  assert.deepEqual(iosActionCommand(ready, { ...target, type: "setColorFilter", value: "grayscale" }), spawn("set", "color-filter", "grayscale"));
-  assert.throws(
-    () => iosActionCommand({ nodePath: "/node", helpers: { axSettings: null, serveSimCli: CLI } }, {
+    iosActionCommand(ready, {
       ...target,
       type: "setToggle",
-      setting: "showBorders",
-      value: true,
+      setting: "reduceMotion",
+      value: false,
     }),
+    spawn("set", "reduce-motion", "off"),
+  );
+  assert.deepEqual(
+    iosActionCommand(ready, { ...target, type: "setLiquidGlass", value: "tinted" }),
+    spawn("set", "liquid-glass", "tinted"),
+  );
+  assert.deepEqual(
+    iosActionCommand(ready, { ...target, type: "setColorFilter", value: "grayscale" }),
+    spawn("set", "color-filter", "grayscale"),
+  );
+  assert.throws(
+    () =>
+      iosActionCommand(
+        { nodePath: "/node", helpers: { axSettings: null, serveSimCli: CLI } },
+        {
+          ...target,
+          type: "setToggle",
+          setting: "showBorders",
+          value: true,
+        },
+      ),
     DeviceActionUnavailableError,
   );
 });
@@ -98,7 +134,13 @@ test("notification permission runs serve-sim's CLI as Node", () => {
   assert.deepEqual(
     iosActionCommand(
       { nodePath: "/node", helpers },
-      { ...target, type: "setPermission", permission: "notifications", decision: "grant", appId: "com.a.b" },
+      {
+        ...target,
+        type: "setPermission",
+        permission: "notifications",
+        decision: "grant",
+        appId: "com.a.b",
+      },
     ),
     {
       command: "/node",
@@ -106,13 +148,17 @@ test("notification permission runs serve-sim's CLI as Node", () => {
     },
   );
   assert.throws(
-    () => iosActionCommand({ nodePath: "/node", helpers: { axSettings: AX, serveSimCli: null } }, {
-      ...target,
-      type: "setPermission",
-      permission: "notifications",
-      decision: "grant",
-      appId: "com.a.b",
-    }),
+    () =>
+      iosActionCommand(
+        { nodePath: "/node", helpers: { axSettings: AX, serveSimCli: null } },
+        {
+          ...target,
+          type: "setPermission",
+          permission: "notifications",
+          decision: "grant",
+          appId: "com.a.b",
+        },
+      ),
     DeviceActionUnavailableError,
   );
 });
@@ -120,7 +166,12 @@ test("notification permission runs serve-sim's CLI as Node", () => {
 test("a push sends its APNs payload on stdin; a bare string becomes the alert", async () => {
   const ready = fakeReady(() => ({}));
   await runDeviceAction(ready, { ...target, type: "sendPush", appId: "com.a.b", payload: "Hi" });
-  await runDeviceAction(ready, { ...target, type: "sendPush", appId: "com.a.b", payload: { aps: { badge: 2 } } });
+  await runDeviceAction(ready, {
+    ...target,
+    type: "sendPush",
+    appId: "com.a.b",
+    payload: { aps: { badge: 2 } },
+  });
   assert.deepEqual(ready.calls[0]!.args, ["simctl", "push", "UDID-1", "com.a.b", "-"]);
   assert.equal(ready.calls[0]!.options?.stdin, JSON.stringify({ aps: { alert: "Hi" } }));
   assert.equal(ready.calls[1]!.options?.stdin, JSON.stringify({ aps: { badge: 2 } }));
@@ -169,7 +220,9 @@ test("the settings read maps simctl and helper values and degrades failures to u
     colorFilter: "none",
   });
 
-  const unknown = fakeReady((args) => (args[1] === "spawn" ? { stdout: "not json" } : { stdout: "unsupported" }));
+  const unknown = fakeReady((args) =>
+    args[1] === "spawn" ? { stdout: "not json" } : { stdout: "unsupported" },
+  );
   assert.deepEqual(await readDeviceSettings(unknown, "UDID-1"), { textSize: "default" });
 
   const failed = fakeReady(() => ({ code: 2 }));

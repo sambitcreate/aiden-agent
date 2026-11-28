@@ -74,7 +74,8 @@ export function DeviceMultiTouchLayer(props: {
         return;
       }
       const mode = multiTouchMode(event);
-      if (!pinch.active()) setDots(mode && event.buttons === 0 ? gesture.preview(point(event), mode) : null);
+      if (!pinch.active())
+        setDots(mode && event.buttons === 0 ? gesture.preview(point(event), mode) : null);
     };
     const up = (event: PointerEvent) => {
       if (pointerId !== event.pointerId) return;
@@ -82,8 +83,11 @@ export function DeviceMultiTouchLayer(props: {
       gesture.end();
       pointerId = null;
       setPressed(false);
-      if (surface.hasPointerCapture(event.pointerId)) surface.releasePointerCapture(event.pointerId);
-      setDots(event.altKey ? gesture.preview(point(event), multiTouchMode(event) ?? "pinch") : null);
+      if (surface.hasPointerCapture(event.pointerId))
+        surface.releasePointerCapture(event.pointerId);
+      setDots(
+        event.altKey ? gesture.preview(point(event), multiTouchMode(event) ?? "pinch") : null,
+      );
     };
     const leave = () => {
       if (pointerId === null && !pinch.active()) setDots(null);
@@ -94,7 +98,8 @@ export function DeviceMultiTouchLayer(props: {
       setDots(pinch.wheel({ deltaY: event.deltaY, point: point(event) }));
     };
     const keyDown = (event: KeyboardEvent) => {
-      if (event.target !== surface || !onPaste || !isDevicePasteShortcut(event) || event.repeat) return;
+      if (event.target !== surface || !onPaste || !isDevicePasteShortcut(event) || event.repeat)
+        return;
       claim(event);
       onPaste();
     };
@@ -130,7 +135,11 @@ export function DeviceMultiTouchLayer(props: {
   return (
     <div className="device-touch-dots" aria-hidden data-pressed={pressed || undefined}>
       {dots.map((dot, index) => (
-        <span key={index} className="device-touch-dot" style={{ left: `${dot.x * 100}%`, top: `${dot.y * 100}%` }} />
+        <span
+          key={index}
+          className="device-touch-dot"
+          style={{ left: `${dot.x * 100}%`, top: `${dot.y * 100}%` }}
+        />
       ))}
     </div>
   );

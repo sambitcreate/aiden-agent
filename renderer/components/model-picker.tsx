@@ -58,9 +58,12 @@ export function ModelPicker({
   const [search, setSearch] = React.useState("");
   const [previewValue, setPreviewValue] = React.useState<string>();
   const [showing, setShowing] = React.useState(0);
-  React.useEffect(() => () => {
-    openRequestRef.current += 1;
-  }, []);
+  React.useEffect(
+    () => () => {
+      openRequestRef.current += 1;
+    },
+    [],
+  );
   React.useEffect(() => {
     if (closeSignal === prevCloseSignalRef.current) return;
     prevCloseSignalRef.current = closeSignal;

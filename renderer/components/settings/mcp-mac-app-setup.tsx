@@ -109,7 +109,9 @@ export function MacAppSetupDialog({
       const result = await mcpApi.testDraft(build());
       setFailed(!result.connected);
       if (result.connected) {
-        toast.success(`Connected — ${result.toolCount} tool${result.toolCount === 1 ? "" : "s"} available.`);
+        toast.success(
+          `Connected — ${result.toolCount} tool${result.toolCount === 1 ? "" : "s"} available.`,
+        );
       } else {
         toast.error(`Connection failed: ${result.error ?? "unknown error"}`);
       }
@@ -147,7 +149,10 @@ export function MacAppSetupDialog({
       await refresh();
       if (record.enabled) {
         const result = await mcpApi.status(record);
-        if (!result.connected) throw new Error(result.error ?? "Saved, but the connection is not ready. Try connecting again.");
+        if (!result.connected)
+          throw new Error(
+            result.error ?? "Saved, but the connection is not ready. Try connecting again.",
+          );
         toast.success(`Connected — ${result.toolCount} tools available.`);
       }
       onOpenChange(false);
@@ -170,7 +175,10 @@ export function MacAppSetupDialog({
       onOpenChange={onOpenChange}
       title={
         <span className="flex items-center gap-2.5">
-          <span aria-hidden className="flex size-7 shrink-0 items-center justify-center rounded-md bg-well text-strong">
+          <span
+            aria-hidden
+            className="flex size-7 shrink-0 items-center justify-center rounded-md bg-well text-strong"
+          >
             <McpPresetIcon presetId={preset.id} name={preset.name} className="size-3.5" />
           </span>
           {server ? `Manage ${preset.name}` : `Set up ${preset.name}`}
@@ -191,7 +199,9 @@ export function MacAppSetupDialog({
       ) : state.error ? (
         <Callout color="red" role="alert" className="mb-3">
           <Text variant="small-strong">This saved connection needs repair</Text>
-          <Text variant="small">{state.error} Saving here points it at the {preset.name} app on this Mac.</Text>
+          <Text variant="small">
+            {state.error} Saving here points it at the {preset.name} app on this Mac.
+          </Text>
         </Callout>
       ) : null}
       <FieldSet>
@@ -236,7 +246,12 @@ export function MacAppSetupDialog({
                   </a>
                 </Button>
               ) : null}
-              <Button variant="transparent" size="small" disabled={status.isFetching} onClick={() => void status.refetch()}>
+              <Button
+                variant="transparent"
+                size="small"
+                disabled={status.isFetching}
+                onClick={() => void status.refetch()}
+              >
                 {status.isFetching ? "Checking…" : "Check again"}
               </Button>
             </div>
@@ -277,17 +292,32 @@ export function MacAppSetupDialog({
             Connection details
           </summary>
           <Field label="Name">
-            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder={preset.name} />
+            <Input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder={preset.name}
+            />
           </Field>
-          <Field label="Runs" description={`The server inside ${app.bundleName}. Aiden runs nothing else for this connector.`}>
+          <Field
+            label="Runs"
+            description={`The server inside ${app.bundleName}. Aiden runs nothing else for this connector.`}
+          >
             <code className="block max-w-full whitespace-pre-wrap break-all rounded-control bg-well px-2 py-1 font-mono text-small text-primary">
               {command || `Found once ${preset.name} is installed`}
             </code>
           </Field>
         </details>
 
-        <Field label="Test" description={failed ? `Still not connecting? ${app.troubleshooting}` : undefined}>
-          <Button size="small" variant="filled" disabled={working || !supported || !command || !name.trim()} onClick={() => void test()}>
+        <Field
+          label="Test"
+          description={failed ? `Still not connecting? ${app.troubleshooting}` : undefined}
+        >
+          <Button
+            size="small"
+            variant="filled"
+            disabled={working || !supported || !command || !name.trim()}
+            onClick={() => void test()}
+          >
             {busy === "test" ? "Connecting…" : "Test connection"}
           </Button>
         </Field>
@@ -305,7 +335,8 @@ export function MacAppSetupDialog({
         </a>
         {app.homebrewCask ? (
           <>
-            , or install it with Homebrew: <code className="font-mono">brew install --cask {app.homebrewCask}</code>
+            , or install it with Homebrew:{" "}
+            <code className="font-mono">brew install --cask {app.homebrewCask}</code>
           </>
         ) : null}
         .

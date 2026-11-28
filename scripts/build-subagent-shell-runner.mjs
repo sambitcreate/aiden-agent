@@ -33,12 +33,7 @@ if (testing) {
     executeFile,
     repositoryRoot,
     source: path.join(repositoryRoot, "native", "subagent-shell-runner", "setsid-fixture.c"),
-    output: path.join(
-      repositoryRoot,
-      "build",
-      "native",
-      "aiden-subagent-shell-setsid-fixture",
-    ),
+    output: path.join(repositoryRoot, "build", "native", "aiden-subagent-shell-setsid-fixture"),
     testing: true,
     universalMac: false,
   });

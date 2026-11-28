@@ -117,11 +117,21 @@ export function registerBotBubbleHandlers<Event>(deps: BotBubbleHandlerDependenc
     const side = optionalSide(value.side);
     // Capture before the bubble exists: the chat swaps to its "in a bubble" card on the change.
     const before = await service.state();
-    const image = sourceRect && before.host === "overlay" ? await windows.capture(event, sourceRect).catch(() => null) : null;
+    const image =
+      sourceRect && before.host === "overlay"
+        ? await windows.capture(event, sourceRect).catch(() => null)
+        : null;
     // Then the picture goes over the chat first, so the swap to the card is never seen.
-    const covered = sourceRect && image ? await windows.coverChat(event, botId, sourceRect, image).catch(() => false) : false;
-    const state = await service.bubble(botId, { ...(side ? { side } : {}), displayId: windows.displayIdFor(event) });
-    if (sourceRect && state.host === "overlay" && !covered) windows.playShrink(event, botId, sourceRect, image);
+    const covered =
+      sourceRect && image
+        ? await windows.coverChat(event, botId, sourceRect, image).catch(() => false)
+        : false;
+    const state = await service.bubble(botId, {
+      ...(side ? { side } : {}),
+      displayId: windows.displayIdFor(event),
+    });
+    if (sourceRect && state.host === "overlay" && !covered)
+      windows.playShrink(event, botId, sourceRect, image);
     return state;
   });
 

@@ -64,7 +64,11 @@ test("the optimistic entry is the one the host's store writes", async (t) => {
     const before = await store.get("chat-1");
     const result = await store.set("chat-1", patch);
     assert.equal(result.ok, true);
-    assert.deepEqual(predictTriage(before, patch, now), result.ok ? result.entry : null, JSON.stringify(patch));
+    assert.deepEqual(
+      predictTriage(before, patch, now),
+      result.ok ? result.entry : null,
+      JSON.stringify(patch),
+    );
   }
 });
 
@@ -80,18 +84,36 @@ test("a write shows until its host reports that revision", () => {
 
 test("each action moves its row the moment it is predicted", () => {
   const placed = (patch: ChatTriagePatch, base: Partial<InboxSignals> = {}) =>
-    inboxState(signals({ ...base, ...triageSignals(predictTriage(null, patch, NOW)) }), NOW, 24 * HOUR).shelf;
+    inboxState(
+      signals({ ...base, ...triageSignals(predictTriage(null, patch, NOW)) }),
+      NOW,
+      24 * HOUR,
+    ).shelf;
   assert.equal(placed(inboxTriagePatch("pin")), "pinned");
-  assert.equal(placed(inboxTriagePatch("done"), { unread: true, lastAssistantAt: NOW - HOUR }), "hidden");
+  assert.equal(
+    placed(inboxTriagePatch("done"), { unread: true, lastAssistantAt: NOW - HOUR }),
+    "hidden",
+  );
   assert.equal(placed(inboxTriagePatch("snooze", NOW + HOUR), { unread: true }), "hidden");
   // Mark not done and Unsnooze put a Done or snoozed row back.
   const done = predictTriage(null, { done: true }, NOW - HOUR);
   const back = (patch: ChatTriagePatch) =>
-    inboxState(signals({ unread: true, ...triageSignals(predictTriage(done, patch, NOW)) }), NOW, 24 * HOUR).shelf;
+    inboxState(
+      signals({ unread: true, ...triageSignals(predictTriage(done, patch, NOW)) }),
+      NOW,
+      24 * HOUR,
+    ).shelf;
   assert.equal(back(inboxTriagePatch("undone")), "updates");
   const snoozed = predictTriage(null, { snoozeUntil: NOW + HOUR }, NOW - HOUR);
   assert.equal(
-    inboxState(signals({ unread: true, ...triageSignals(predictTriage(snoozed, inboxTriagePatch("unsnooze"), NOW)) }), NOW, 24 * HOUR).shelf,
+    inboxState(
+      signals({
+        unread: true,
+        ...triageSignals(predictTriage(snoozed, inboxTriagePatch("unsnooze"), NOW)),
+      }),
+      NOW,
+      24 * HOUR,
+    ).shelf,
     "updates",
   );
 });
@@ -117,14 +139,24 @@ test("a row offers Mark done and Snooze only where they move it", () => {
         ...triageSignals(predictTriage(null, patch, NOW)),
       });
       const shelf = inboxState(after, NOW, 24 * HOUR).shelf;
-      if (offer.doneAndSnooze) assert.equal(shelf, "hidden", `${name}: ${JSON.stringify(patch)} hides the row`);
-      else assert.notEqual(shelf, "hidden", `${name}: the action would leave the row in place, so it isn't offered`);
+      if (offer.doneAndSnooze)
+        assert.equal(shelf, "hidden", `${name}: ${JSON.stringify(patch)} hides the row`);
+      else
+        assert.notEqual(
+          shelf,
+          "hidden",
+          `${name}: the action would leave the row in place, so it isn't offered`,
+        );
     }
   }
   // Only an unseen failure needs the read too; without it the row stays in Needs you.
   const failure = signals(rows["unread failure"]);
   assert.equal(inboxTriageOffer(failure, NOW).alsoMarkRead, true);
-  assert.equal(inboxState({ ...failure, ...triageSignals(predictTriage(null, { done: true }, NOW)) }, NOW).shelf, "needs_you");
+  assert.equal(
+    inboxState({ ...failure, ...triageSignals(predictTriage(null, { done: true }, NOW)) }, NOW)
+      .shelf,
+    "needs_you",
+  );
   assert.equal(inboxTriageOffer(signals(rows.update), NOW).alsoMarkRead, false);
   assert.equal(inboxTriageOffer(signals(rows["open failure"]), NOW).alsoMarkRead, false);
 });
@@ -139,18 +171,33 @@ test("a Done or snoozed row's menu reads Mark not done or Unsnooze", () => {
   const snoozed = predictTriage(null, { snoozeUntil: NOW + HOUR }, NOW - HOUR);
   assert.deepEqual([offer(snoozed).done, offer(snoozed).snoozed], [false, true]);
   const woke = predictTriage(null, { snoozeUntil: NOW - 1 + HOUR }, NOW - 2 * HOUR);
-  assert.equal(inboxTriageOffer(signals(triageSignals(woke)), NOW + HOUR).snoozed, false, "a passed snooze no longer holds");
+  assert.equal(
+    inboxTriageOffer(signals(triageSignals(woke)), NOW + HOUR).snoozed,
+    false,
+    "a passed snooze no longer holds",
+  );
 });
 
 test("a row held by a wait or a run still offers Unsnooze, so it stays once the wait ends", () => {
   const snoozed = predictTriage(null, { snoozeUntil: NOW + 3 * HOUR }, NOW - HOUR);
-  for (const held of [{ rowState: "needs_approval" }, { rowState: "working" }, { attention: "detached" }] as const) {
-    const offer = inboxTriageOffer(signals({ ...held, unread: true, ...triageSignals(snoozed) }), NOW);
+  for (const held of [
+    { rowState: "needs_approval" },
+    { rowState: "working" },
+    { attention: "detached" },
+  ] as const) {
+    const offer = inboxTriageOffer(
+      signals({ ...held, unread: true, ...triageSignals(snoozed) }),
+      NOW,
+    );
     assert.deepEqual([offer.doneAndSnooze, offer.snoozed], [false, true], JSON.stringify(held));
   }
   // The approval is answered and the run ends: kept snoozed, the row would drop out.
   const later = (entry: ChatTriageEntry) =>
-    inboxState(signals({ unread: true, lastAssistantAt: NOW, ...triageSignals(entry) }), NOW + HOUR, 24 * HOUR).shelf;
+    inboxState(
+      signals({ unread: true, lastAssistantAt: NOW, ...triageSignals(entry) }),
+      NOW + HOUR,
+      24 * HOUR,
+    ).shelf;
   assert.equal(later(snoozed), "hidden");
   assert.equal(later(predictTriage(snoozed, inboxTriagePatch("unsnooze"), NOW)), "updates");
 });
@@ -163,7 +210,14 @@ test("actions of one kind inside the Undo window merge into one batch", () => {
   };
   const second: InboxTriageUndoBatch = {
     kind: "done",
-    items: [{ target: target("b", "studio"), before: { revision: 4, updatedAt: 0 }, patch: { done: true }, revision: 5 }],
+    items: [
+      {
+        target: target("b", "studio"),
+        before: { revision: 4, updatedAt: 0 },
+        patch: { done: true },
+        revision: 5,
+      },
+    ],
     at: NOW + 2_000,
   };
   const third: InboxTriageUndoBatch = {
@@ -172,12 +226,18 @@ test("actions of one kind inside the Undo window merge into one batch", () => {
     at: NOW + 4_000,
   };
   const merged = mergeInboxTriageUndo(mergeInboxTriageUndo(first, second), third);
-  assert.deepEqual(merged.items.map((item) => item.target.chatId), ["a", "b", "c"]);
+  assert.deepEqual(
+    merged.items.map((item) => item.target.chatId),
+    ["a", "b", "c"],
+  );
   assert.equal(inboxTriageToastTitle(merged, String), "3 chats marked done");
 
   // Another kind, or a gap of the whole window, starts afresh.
   assert.equal(mergeInboxTriageUndo(first, { ...second, kind: "pin" }).items.length, 1);
-  assert.equal(mergeInboxTriageUndo(first, { ...second, at: NOW + INBOX_TRIAGE_UNDO_MS }).items.length, 1);
+  assert.equal(
+    mergeInboxTriageUndo(first, { ...second, at: NOW + INBOX_TRIAGE_UNDO_MS }).items.length,
+    1,
+  );
 });
 
 test("Undo restores a chat acted on twice to how it was before both", () => {
@@ -190,13 +250,23 @@ test("Undo restores a chat acted on twice to how it was before both", () => {
   };
   const second: InboxTriageUndoBatch = {
     kind: "snooze",
-    items: [{ target: target("a"), before: { revision: 3, updatedAt: NOW }, patch: { snoozeUntil: NOW + 3 * HOUR }, revision: 4 }],
+    items: [
+      {
+        target: target("a"),
+        before: { revision: 3, updatedAt: NOW },
+        patch: { snoozeUntil: NOW + 3 * HOUR },
+        revision: 4,
+      },
+    ],
     at: NOW + 1_000,
     until: NOW + 3 * HOUR,
   };
   const merged = mergeInboxTriageUndo(first, second);
   assert.equal(merged.items.length, 1);
-  assert.equal(inboxTriageToastTitle(merged, (at) => (at === NOW + 3 * HOUR ? "3 PM" : "?")), "Snoozed until 3 PM");
+  assert.equal(
+    inboxTriageToastTitle(merged, (at) => (at === NOW + 3 * HOUR ? "3 PM" : "?")),
+    "Snoozed until 3 PM",
+  );
   const [write] = inboxTriageUndoWrites(merged);
   assert.deepEqual(write?.patch, { snoozeUntil: NOW + 2 * HOUR });
   assert.equal(write?.ifRevision, 4);
@@ -210,10 +280,16 @@ test("the Undo toast names a snooze time only when every merged chat wakes then"
     until,
   });
   const label = (at: number) => (at === NOW + HOUR ? "1 PM" : "4 PM");
-  const same = mergeInboxTriageUndo(snooze("a", NOW + HOUR, NOW), snooze("b", NOW + HOUR, NOW + 1_000));
+  const same = mergeInboxTriageUndo(
+    snooze("a", NOW + HOUR, NOW),
+    snooze("b", NOW + HOUR, NOW + 1_000),
+  );
   assert.equal(inboxTriageToastTitle(same, label), "2 chats snoozed");
   assert.equal(same.until, NOW + HOUR);
-  const mixed = mergeInboxTriageUndo(snooze("a", NOW + HOUR, NOW), snooze("b", NOW + 4 * HOUR, NOW + 1_000));
+  const mixed = mergeInboxTriageUndo(
+    snooze("a", NOW + HOUR, NOW),
+    snooze("b", NOW + 4 * HOUR, NOW + 1_000),
+  );
   assert.equal(mixed.until, undefined);
   // Moving the first chat to the second's time makes them agree again.
   const aligned = mergeInboxTriageUndo(mixed, snooze("a", NOW + 4 * HOUR, NOW + 2_000));
@@ -233,18 +309,31 @@ test("Undo lands only where nothing changed since, by the store's ifRevision", a
     kind: "done",
     items: [
       { target: target("a"), before: null, patch: { done: true }, revision: done.entry.revision },
-      { target: target("b"), before: null, patch: { pinned: true }, revision: pinned.entry.revision },
+      {
+        target: target("b"),
+        before: null,
+        patch: { pinned: true },
+        revision: pinned.entry.revision,
+      },
     ],
     at: NOW,
   };
   const results = [];
   for (const write of inboxTriageUndoWrites(batch)) {
-    results.push(await store.set(write.target.chatId, write.patch, { ifRevision: write.ifRevision }));
+    results.push(
+      await store.set(write.target.chatId, write.patch, { ifRevision: write.ifRevision }),
+    );
   }
-  assert.deepEqual(results.map((result) => (result.ok ? "ok" : result.code)), ["revision_conflict", "ok"]);
+  assert.deepEqual(
+    results.map((result) => (result.ok ? "ok" : result.code)),
+    ["revision_conflict", "ok"],
+  );
   assert.notEqual((await store.get("a"))?.doneAt, undefined);
   assert.equal((await store.get("b"))?.pinnedAt, undefined);
-  assert.equal(inboxTriageUndoConflictText(1, 2), "1 chat changed since, so Undo left it as it is.");
+  assert.equal(
+    inboxTriageUndoConflictText(1, 2),
+    "1 chat changed since, so Undo left it as it is.",
+  );
 });
 
 test("Undo of Done on a chat newer output had reopened puts it back where it was, not hidden again", async (t) => {
@@ -253,7 +342,11 @@ test("Undo of Done on a chat newer output had reopened puts it back where it was
   let now = 1_000;
   const store = new ChatTriageStore(() => root, { now: () => now });
   const shelf = (entry: ChatTriageEntry | null | undefined, lastAssistantAt: number) =>
-    inboxState(signals({ unread: true, lastAssistantAt, ...triageSignals(entry ?? undefined) }), now, 24 * HOUR).shelf;
+    inboxState(
+      signals({ unread: true, lastAssistantAt, ...triageSignals(entry ?? undefined) }),
+      now,
+      24 * HOUR,
+    ).shelf;
   assert.ok((await store.set("a", { done: true })).ok);
   // A reply at 2000 ends that Done; the chat is back in Updates.
   const reply = 2_000;
@@ -267,7 +360,15 @@ test("Undo of Done on a chat newer output had reopened puts it back where it was
   now = 4_000;
   const [write] = inboxTriageUndoWrites({
     kind: "done",
-    items: [{ target: target("a"), before, lastAssistantAt: reply, patch: { done: true }, revision: done.entry.revision }],
+    items: [
+      {
+        target: target("a"),
+        before,
+        lastAssistantAt: reply,
+        patch: { done: true },
+        revision: done.entry.revision,
+      },
+    ],
     at: 3_000,
   });
   assert.ok(write);
@@ -284,7 +385,15 @@ test("Undo of Done on a chat newer output had reopened puts it back where it was
   assert.ok(reopened.ok);
   const [held] = inboxTriageUndoWrites({
     kind: "undone",
-    items: [{ target: target("b"), before: original.entry, lastAssistantAt: 4_500, patch: { done: false }, revision: reopened.entry.revision }],
+    items: [
+      {
+        target: target("b"),
+        before: original.entry,
+        lastAssistantAt: 4_500,
+        patch: { done: false },
+        revision: reopened.entry.revision,
+      },
+    ],
     at: now,
   });
   assert.ok(held);
@@ -296,10 +405,15 @@ test("Undo of Done on a chat newer output had reopened puts it back where it was
 });
 
 test("writes group by host in first-seen order", () => {
-  const writes = [target("a"), target("b", "studio"), target("c"), target("d", "studio")].map((entry) => ({ target: entry }));
+  const writes = [target("a"), target("b", "studio"), target("c"), target("d", "studio")].map(
+    (entry) => ({ target: entry }),
+  );
   const groups = groupByHost(writes);
   assert.deepEqual([...groups.keys()], ["local", "studio"]);
-  assert.deepEqual(groups.get("studio")?.map((write) => write.target.chatId), ["b", "d"]);
+  assert.deepEqual(
+    groups.get("studio")?.map((write) => write.target.chatId),
+    ["b", "d"],
+  );
 });
 
 test("the toast names a snooze's end by day", () => {
@@ -320,7 +434,8 @@ test("the Snooze menu's trailing time never repeats the preset's day", () => {
 });
 
 test("a snoozed row's status is short beside its workspace", () => {
-  const at = (days: number, hour: number, minute = 0) => new Date(2026, 9, 31 + days, hour, minute).getTime();
+  const at = (days: number, hour: number, minute = 0) =>
+    new Date(2026, 9, 31 + days, hour, minute).getTime();
   // Today: the time, without ":00" on the hour. Within the week: the short weekday too. Further: the date.
   assert.match(formatSnoozeStatus(at(0, 13, 42), NOW, "en-US"), /^1:42\sPM$/u);
   assert.match(formatSnoozeStatus(at(0, 18), NOW, "en-US"), /^6\sPM$/u);
@@ -338,11 +453,19 @@ test("no two Snooze presets read the same time, whatever the day", () => {
   for (let day = 0; day < 7; day += 1) {
     // This evening (18:00) shows only while it is more than an hour away:
     // still there at 16:59, gone from 17:00.
-    const cases = [[8, 0, true], [16, 0, true], [16, 59, true], [17, 0, false], [17, 30, false]] as const;
+    const cases = [
+      [8, 0, true],
+      [16, 0, true],
+      [16, 59, true],
+      [17, 0, false],
+      [17, 30, false],
+    ] as const;
     for (const [hour, minute, eveningShown] of cases) {
       const now = new Date(2026, 10, 1 + day, hour, minute);
       const options = snoozeOptions(now);
-      const times = options.map((option) => formatSnoozeMenuTime(option.until, now.getTime(), "en-US"));
+      const times = options.map((option) =>
+        formatSnoozeMenuTime(option.until, now.getTime(), "en-US"),
+      );
       const label = `${now.toDateString()} ${hour}:${String(minute).padStart(2, "0")}`;
       assert.equal(new Set(times).size, times.length, `${label} reads ${times.join(" | ")}`);
       assert.equal(
@@ -356,17 +479,41 @@ test("no two Snooze presets read the same time, whatever the day", () => {
 
 test("the toast's titles and conflict notes read naturally", () => {
   const items = (count: number) =>
-    Array.from({ length: count }, (_, index) => ({ target: target(`c${index}`), before: null, patch: {}, revision: 1 }));
+    Array.from({ length: count }, (_, index) => ({
+      target: target(`c${index}`),
+      before: null,
+      patch: {},
+      revision: 1,
+    }));
   assert.equal(inboxTriageToastTitle({ kind: "pin", items: items(1) }, String), "Pinned");
-  assert.equal(inboxTriageToastTitle({ kind: "unpin", items: items(2) }, String), "2 chats unpinned");
-  assert.equal(inboxTriageToastTitle({ kind: "snooze", items: items(4) }, String), "4 chats snoozed");
-  assert.equal(inboxTriageUndoConflictText(1, 1), "That chat changed since, so Undo left it as it is.");
-  assert.equal(inboxTriageUndoConflictText(3, 3), "Those chats changed since, so Undo left them as they are.");
-  assert.equal(inboxTriageUndoConflictText(2, 3), "2 chats changed since, so Undo left them as they are.");
+  assert.equal(
+    inboxTriageToastTitle({ kind: "unpin", items: items(2) }, String),
+    "2 chats unpinned",
+  );
+  assert.equal(
+    inboxTriageToastTitle({ kind: "snooze", items: items(4) }, String),
+    "4 chats snoozed",
+  );
+  assert.equal(
+    inboxTriageUndoConflictText(1, 1),
+    "That chat changed since, so Undo left it as it is.",
+  );
+  assert.equal(
+    inboxTriageUndoConflictText(3, 3),
+    "Those chats changed since, so Undo left them as they are.",
+  );
+  assert.equal(
+    inboxTriageUndoConflictText(2, 3),
+    "2 chats changed since, so Undo left them as they are.",
+  );
 });
 
 test("an overlay entry goes once its host reports that revision or a newer one, and stays while a host reports nothing", () => {
-  const entry = (revision: number): ChatTriageEntry => ({ revision, updatedAt: 1_000, pinnedAt: 1_000 });
+  const entry = (revision: number): ChatTriageEntry => ({
+    revision,
+    updatedAt: 1_000,
+    pinnedAt: 1_000,
+  });
   const overlay = new Map([
     [projectOrderKey("local", "a"), entry(3)],
     [projectOrderKey("local", "b"), entry(3)],
@@ -385,5 +532,9 @@ test("an overlay entry goes once its host reports that revision or a newer one, 
     settledTriageOverlayKeys(overlay, local, reported).sort(),
     [projectOrderKey("local", "a"), projectOrderKey("studio", "c")].sort(),
   );
-  assert.deepEqual(settledTriageOverlayKeys(overlay, undefined, undefined), [], "nothing reported yet keeps every entry");
+  assert.deepEqual(
+    settledTriageOverlayKeys(overlay, undefined, undefined),
+    [],
+    "nothing reported yet keeps every entry",
+  );
 });

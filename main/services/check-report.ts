@@ -60,7 +60,8 @@ export function formatCheckReport(report: CheckReport): string {
   const shown = report.findings.slice(0, CHECK_REPORT_MAX_FINDINGS);
   if (count > 0) {
     head.push(`${report.label}: ${count} problem${count === 1 ? "" : "s"} found. ${report.fix}`);
-    if (count > CHECK_REPORT_MAX_FINDINGS) tail.push(`- …and ${count - CHECK_REPORT_MAX_FINDINGS} more`);
+    if (count > CHECK_REPORT_MAX_FINDINGS)
+      tail.push(`- …and ${count - CHECK_REPORT_MAX_FINDINGS} more`);
   } else {
     head.push(`${report.label}: no problems found${report.clean ? `; ${report.clean}` : ""}.`);
   }
@@ -68,7 +69,8 @@ export function formatCheckReport(report: CheckReport): string {
     tail.push(clippedUnicode(`Not checked: ${report.unchecked.join("; ")}.`, MAX_UNCHECKED_CHARS));
   }
   // Each line costs its newline; each finding also its "- ".
-  const fixed = [...head, ...tail].reduce((total, line) => total + line.length + 1, 0) + shown.length * 3;
+  const fixed =
+    [...head, ...tail].reduce((total, line) => total + line.length + 1, 0) + shown.length * 3;
   const cap = findingCap(
     shown.map((finding) => finding.length),
     CHECK_REPORT_MAX_CHARS - fixed,

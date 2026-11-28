@@ -9,16 +9,20 @@ import { build } from "esbuild";
 import { test, expect, isolatedAppEnvironment } from "./fixtures";
 import { fetchTranscriptImage } from "../../main/services/transcript-image-fetch";
 
-const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+const PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
 
 // Real renderer components in Chromium. The only transport exception is the
 // fixture's injected Node adapter, never a production env flag or app channel.
 test("transcript images make zero network requests before consent through streaming and reload", async () => {
   const rootDir = await mkdtemp(path.join(tmpdir(), "aiden-image-consent-"));
   const entry = path.join(rootDir, "main.cjs");
-  await writeFile(entry, `const { app, BrowserWindow } = require("electron");
+  await writeFile(
+    entry,
+    `const { app, BrowserWindow } = require("electron");
     app.setPath("userData", ${JSON.stringify(path.join(rootDir, "user-data"))});
-    app.whenReady().then(() => { const window = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false } }); window.loadURL("about:blank"); });`);
+    app.whenReady().then(() => { const window = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false } }); window.loadURL("about:blank"); });`,
+  );
   const electron = (playwright as unknown as typeof PlaywrightModule)._electron;
   // The shared allowlist adds the Linux display variables (DISPLAY, WAYLAND_DISPLAY) CI needs.
   const app = await electron.launch({ args: [entry], env: isolatedAppEnvironment() });
@@ -26,16 +30,23 @@ test("transcript images make zero network requests before consent through stream
   const paths: string[] = [];
   const headers: http.IncomingHttpHeaders[] = [];
   const server = http.createServer((request, response) => {
-    paths.push(request.url!); headers.push(request.headers);
+    paths.push(request.url!);
+    headers.push(request.headers);
     response.writeHead(200, { "content-type": "image/png" }).end(Buffer.from(PNG, "base64"));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const browserRequests: string[] = [];
-  page.on("request", (request) => { if (/^https?:/u.test(request.url())) browserRequests.push(request.url()); });
+  page.on("request", (request) => {
+    if (/^https?:/u.test(request.url())) browserRequests.push(request.url());
+  });
   try {
-    await page.exposeFunction("loadFixtureTranscriptImage", (url: string) => fetchTranscriptImage(url, { allowAddress: (address) => address === "127.0.0.1" }));
-    const bundle = await build({ stdin: { contents: `
+    await page.exposeFunction("loadFixtureTranscriptImage", (url: string) =>
+      fetchTranscriptImage(url, { allowAddress: (address) => address === "127.0.0.1" }),
+    );
+    const bundle = await build({
+      stdin: {
+        contents: `
       import React from "react";
       import { createRoot } from "react-dom/client";
       import { Markdown } from "./renderer/components/markdown";
@@ -48,27 +59,59 @@ test("transcript images make zero network requests before consent through stream
       window.showFixtureTranscript = (content, scope, streaming) => root.render(
         streaming ? <StreamingMarkdownReveal content={content} imageScope={scope} /> : <Markdown content={content} imageScope={scope} />
       );
-    `, resolveDir: process.cwd(), loader: "tsx" }, loader: { ".css": "empty" }, bundle: true, write: false, format: "iife", platform: "browser", define: { "process.env.NODE_ENV": '"production"' }, absWorkingDir: path.resolve(process.cwd()) });
+    `,
+        resolveDir: process.cwd(),
+        loader: "tsx",
+      },
+      loader: { ".css": "empty" },
+      bundle: true,
+      write: false,
+      format: "iife",
+      platform: "browser",
+      define: { "process.env.NODE_ENV": '"production"' },
+      absWorkingDir: path.resolve(process.cwd()),
+    });
     const script = bundle.outputFiles[0]!.text;
     const initialize = async () => {
-      await page.setContent('<html data-reduce-motion="true"><body><div id="root"></div></body></html>');
+      await page.setContent(
+        '<html data-reduce-motion="true"><body><div id="root"></div></body></html>',
+      );
       await page.addScriptTag({ content: script });
     };
-    const show = (content: string, scope: string, streaming: boolean) => page.evaluate(({ content, scope, streaming }) => {
-      (window as unknown as { showFixtureTranscript(content: string, scope: string, streaming: boolean): void }).showFixtureTranscript(content, scope, streaming);
-    }, { content, scope, streaming });
+    const show = (content: string, scope: string, streaming: boolean) =>
+      page.evaluate(
+        ({ content, scope, streaming }) => {
+          (
+            window as unknown as {
+              showFixtureTranscript(content: string, scope: string, streaming: boolean): void;
+            }
+          ).showFixtureTranscript(content, scope, streaming);
+        },
+        { content, scope, streaming },
+      );
     const content = `![Chart](${origin}/first)\n\n![Other](${origin}/other)`;
     await initialize();
     await show(content, "message-1", true);
     await expect(page.getByRole("button", { name: "Load image" })).toHaveCount(2);
     await show(content + "\n\nMore streamed text.", "message-1", true);
     await expect(page.getByText("More streamed text.", { exact: true })).toBeVisible();
-    expect(paths).toEqual([]); expect(browserRequests).toEqual([]);
+    expect(paths).toEqual([]);
+    expect(browserRequests).toEqual([]);
     await page.getByRole("button", { name: "Load image" }).first().focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("img", { name: "Chart" })).toHaveAttribute("src", `data:image/png;base64,${PNG}`);
-    await expect.poll(() => page.getByRole("img", { name: "Chart" }).evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 1)).toBe(true);
-    expect(paths).toEqual(["/first"]); expect(browserRequests).toEqual([]);
+    await expect(page.getByRole("img", { name: "Chart" })).toHaveAttribute(
+      "src",
+      `data:image/png;base64,${PNG}`,
+    );
+    await expect
+      .poll(() =>
+        page
+          .getByRole("img", { name: "Chart" })
+          .evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 1),
+      )
+      .toBe(true);
+    expect(paths).toEqual(["/first"]);
+    expect(browserRequests).toEqual([]);
     await show(`![Chart](${origin}/changed)`, "message-1", true);
     await expect(page.getByRole("button", { name: "Load image" })).toHaveCount(1);
     expect(paths).toEqual(["/first"]);
@@ -78,8 +121,11 @@ test("transcript images make zero network requests before consent through stream
     await initialize();
     await show(content, "message-1", false);
     await expect(page.getByRole("button", { name: "Load image" })).toHaveCount(2);
-    expect(paths).toEqual(["/first"]); expect(browserRequests).toEqual([]);
-    expect(headers[0]?.cookie).toBeUndefined(); expect(headers[0]?.referer).toBeUndefined(); expect(headers[0]?.authorization).toBeUndefined();
+    expect(paths).toEqual(["/first"]);
+    expect(browserRequests).toEqual([]);
+    expect(headers[0]?.cookie).toBeUndefined();
+    expect(headers[0]?.referer).toBeUndefined();
+    expect(headers[0]?.authorization).toBeUndefined();
   } finally {
     await app.close();
     await rm(rootDir, { recursive: true, force: true });

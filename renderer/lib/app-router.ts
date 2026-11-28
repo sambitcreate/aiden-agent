@@ -1,4 +1,9 @@
-import { createRouter, type AnyRoute, type RouterConstructorOptions, type RouterHistory } from "@tanstack/react-router";
+import {
+  createRouter,
+  type AnyRoute,
+  type RouterConstructorOptions,
+  type RouterHistory,
+} from "@tanstack/react-router";
 import { carryBotListRequest } from "./bot-routes";
 import { guardHistoryTraversal } from "./guarded-history";
 
@@ -9,9 +14,17 @@ import { guardHistoryTraversal } from "./guarded-history";
  * the router commits (`carryBotListRequest`).
  */
 export function createAppRouter<TRouteTree extends AnyRoute>(
-  options: RouterConstructorOptions<TRouteTree, "never", false, RouterHistory, Record<string, unknown>> & {
+  options: RouterConstructorOptions<
+    TRouteTree,
+    "never",
+    false,
+    RouterHistory,
+    Record<string, unknown>
+  > & {
     history: RouterHistory;
   },
 ) {
-  return carryBotListRequest(createRouter({ ...options, history: guardHistoryTraversal(options.history) }));
+  return carryBotListRequest(
+    createRouter({ ...options, history: guardHistoryTraversal(options.history) }),
+  );
 }

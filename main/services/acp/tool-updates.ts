@@ -8,11 +8,19 @@ export function shouldReportToolUpdate(
   reportedStatus: ToolCallStatus | null | undefined,
   skipped: number,
 ): boolean {
-  if (!previous || reportedStatus === "completed" || reportedStatus === "failed" ||
-      previous.status !== next.status || previous.title !== next.title ||
-      previous.detail !== next.detail || previous.kind !== next.kind ||
-      previous.mcp !== next.mcp || previous.subagent !== next.subagent ||
-      skipped + 1 >= 10) return true;
+  if (
+    !previous ||
+    reportedStatus === "completed" ||
+    reportedStatus === "failed" ||
+    previous.status !== next.status ||
+    previous.title !== next.title ||
+    previous.detail !== next.detail ||
+    previous.kind !== next.kind ||
+    previous.mcp !== next.mcp ||
+    previous.subagent !== next.subagent ||
+    skipped + 1 >= 10
+  )
+    return true;
 
   return previous.textOutput !== next.textOutput || previous.rawOutput !== next.rawOutput;
 }

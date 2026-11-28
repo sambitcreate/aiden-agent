@@ -32,10 +32,7 @@ export async function resolveBotInboundAttachmentHome(
     throw new Error("This Bot attachment is missing its managed home workspace.");
   }
   const managed = await input.resolveManagedWorkspace(input.botId);
-  if (
-    managed.botId !== input.botId ||
-    managed.workspaceId !== input.workspaceId
-  ) {
+  if (managed.botId !== input.botId || managed.workspaceId !== input.workspaceId) {
     throw new Error("This Bot attachment does not match its managed home workspace.");
   }
   if (

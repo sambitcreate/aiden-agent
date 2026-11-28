@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LIVE_VOICE_LANGUAGES, liveVoicePhrases, matchLiveVoicePhrase } from "./live-voice-phrases.js";
+import {
+  LIVE_VOICE_LANGUAGES,
+  liveVoicePhrases,
+  matchLiveVoicePhrase,
+} from "./live-voice-phrases.js";
 
 test("each supported language answers allow, deny, confirm and end", () => {
   for (const { code } of LIVE_VOICE_LANGUAGES) {

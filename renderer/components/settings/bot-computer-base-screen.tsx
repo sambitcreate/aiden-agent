@@ -9,7 +9,10 @@ import * as React from "react";
 import { RefreshCw } from "lucide-react";
 import { Button, Text } from "../ui";
 import { useDocumentVisible } from "../device-mini-player";
-import { DEVICE_SCREEN_CONTAINER_STYLE, fittedScreenStyle } from "../../lib/device-display-rotation";
+import {
+  DEVICE_SCREEN_CONTAINER_STYLE,
+  fittedScreenStyle,
+} from "../../lib/device-display-rotation";
 import { botComputersApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { useDeviceScreenWheel } from "../../lib/use-device-screen-wheel";
@@ -22,7 +25,10 @@ const DEFAULT_ASPECT = 1440 / 900;
 function BaseStream({ deviceId }: { deviceId: string }) {
   const visible = useDocumentVisible();
   // Each connection asks main for a fresh grant, which it lends only while setup waits for the person.
-  const requestGrant = React.useCallback(async () => (await botComputersApi.baseViewerGrant()).grant, []);
+  const requestGrant = React.useCallback(
+    async () => (await botComputersApi.baseViewerGrant()).grant,
+    [],
+  );
   const stream = useDeviceStream({
     hostId: BOT_COMPUTER_VIEWER_HOST_ID,
     deviceId,
@@ -33,10 +39,15 @@ function BaseStream({ deviceId }: { deviceId: string }) {
   });
   const screenRef = React.useRef<HTMLDivElement | null>(null);
   useDeviceScreenWheel(screenRef, stream.client);
-  const size = stream.screen && stream.screen.width > 0 && stream.screen.height > 0 ? stream.screen : null;
+  const size =
+    stream.screen && stream.screen.width > 0 && stream.screen.height > 0 ? stream.screen : null;
   const aspect = size ? size.width / size.height : DEFAULT_ASPECT;
   return (
-    <div className="relative flex h-80 min-h-0 items-center justify-center" style={DEVICE_SCREEN_CONTAINER_STYLE} data-bot-computer-base-view>
+    <div
+      className="relative flex h-80 min-h-0 items-center justify-center"
+      style={DEVICE_SCREEN_CONTAINER_STYLE}
+      data-bot-computer-base-view
+    >
       <div
         ref={screenRef}
         className="device-viewer-screen bot-computer-screen"
@@ -69,7 +80,11 @@ function BaseStream({ deviceId }: { deviceId: string }) {
         ) : null}
       </div>
       <span className="sr-only" role="status" aria-live="polite">
-        {stream.status === "streaming" ? "Showing the base computer" : stream.status === "error" ? "Disconnected" : "Connecting…"}
+        {stream.status === "streaming"
+          ? "Showing the base computer"
+          : stream.status === "error"
+            ? "Disconnected"
+            : "Connecting…"}
       </span>
     </div>
   );
@@ -87,7 +102,10 @@ export function BotComputerBaseScreen() {
         if (current) setDeviceId(lent.deviceId);
       },
       (failure: unknown) => {
-        if (current) setError(userFacingErrorMessage(failure, "Aiden couldn't show the base computer's screen."));
+        if (current)
+          setError(
+            userFacingErrorMessage(failure, "Aiden couldn't show the base computer's screen."),
+          );
       },
     );
     return () => {

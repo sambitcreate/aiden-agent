@@ -19,17 +19,44 @@ await symlink(workspace, linkedWorkspace);
 
 test("workspace HTML resolves from relative and absolute links, including through a symlinked folder", async () => {
   const expected = path.join(workspace, "thermostat", "index.html");
-  assert.equal(await resolveExternalWorkspaceDocument(workspace, "thermostat/index.html"), expected);
-  assert.equal(await resolveExternalWorkspaceDocument(workspace, "./thermostat/../thermostat/index.html"), expected);
+  assert.equal(
+    await resolveExternalWorkspaceDocument(workspace, "thermostat/index.html"),
+    expected,
+  );
+  assert.equal(
+    await resolveExternalWorkspaceDocument(workspace, "./thermostat/../thermostat/index.html"),
+    expected,
+  );
   assert.equal(await resolveExternalWorkspaceDocument(workspace, expected), expected);
-  assert.equal(await resolveExternalWorkspaceDocument(linkedWorkspace, path.join(linkedWorkspace, "thermostat/index.html")), expected);
+  assert.equal(
+    await resolveExternalWorkspaceDocument(
+      linkedWorkspace,
+      path.join(linkedWorkspace, "thermostat/index.html"),
+    ),
+    expected,
+  );
 });
 
 test("paths outside the workspace, symlink escapes, other types and folders are refused", async () => {
-  await assert.rejects(resolveExternalWorkspaceDocument(workspace, "../outside.html"), /inside this workspace/u);
-  await assert.rejects(resolveExternalWorkspaceDocument(workspace, path.join(base, "outside.html")), /inside this workspace/u);
-  await assert.rejects(resolveExternalWorkspaceDocument(workspace, "escape.html"), /inside this workspace/u);
-  await assert.rejects(resolveExternalWorkspaceDocument(workspace, "thermostat/style.css"), /HTML and PDF/u);
+  await assert.rejects(
+    resolveExternalWorkspaceDocument(workspace, "../outside.html"),
+    /inside this workspace/u,
+  );
+  await assert.rejects(
+    resolveExternalWorkspaceDocument(workspace, path.join(base, "outside.html")),
+    /inside this workspace/u,
+  );
+  await assert.rejects(
+    resolveExternalWorkspaceDocument(workspace, "escape.html"),
+    /inside this workspace/u,
+  );
+  await assert.rejects(
+    resolveExternalWorkspaceDocument(workspace, "thermostat/style.css"),
+    /HTML and PDF/u,
+  );
   await assert.rejects(resolveExternalWorkspaceDocument(workspace, "folder.html"), /Only files/u);
-  await assert.rejects(resolveExternalWorkspaceDocument(workspace, "missing.html"), /no longer exists/u);
+  await assert.rejects(
+    resolveExternalWorkspaceDocument(workspace, "missing.html"),
+    /no longer exists/u,
+  );
 });

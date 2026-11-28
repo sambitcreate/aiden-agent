@@ -15,25 +15,59 @@ import {
 import type { AppControlPanel } from "../../renderer/shared/app-controls.js";
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
-import { adoptChatCacheWarmer, canWarmForegroundChat, PiCacheWarmer, settleReplyCacheWarmer, stopAllPiCacheWarmers, withPiCacheWarming } from "./pi-cache-warming.js";
+import {
+  adoptChatCacheWarmer,
+  canWarmForegroundChat,
+  PiCacheWarmer,
+  settleReplyCacheWarmer,
+  stopAllPiCacheWarmers,
+  withPiCacheWarming,
+} from "./pi-cache-warming.js";
 import { usageLimits } from "./usage-limit-main.js";
 import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { spending } from "./spending-main.js";
 import { createSpendingMeter, spendCounts } from "./spending-service.js";
 import { parseApprovalModel, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
-import { currentWorkspaceApproval, generationApprovalPolicy, legacyAccessOf, runJudgeAvailable } from "./approval-gate/run-approval.js";
+import {
+  currentWorkspaceApproval,
+  generationApprovalPolicy,
+  legacyAccessOf,
+  runJudgeAvailable,
+} from "./approval-gate/run-approval.js";
 import { CHAT_AUDIENCE_PROMPT_LIFETIME_MS } from "./chat-orchestration/audience.js";
-import { ownerRequestText, RunTaint, runTaintHistoryOfRun, runTaintPersonText, toolResultSaysOutside } from "./approval-gate/run-taint.js";
+import {
+  ownerRequestText,
+  RunTaint,
+  runTaintHistoryOfRun,
+  runTaintPersonText,
+  toolResultSaysOutside,
+} from "./approval-gate/run-taint.js";
 import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
-import { approvalJudgeAction, createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
+import {
+  approvalJudgeAction,
+  createApprovalJudge,
+  type ApprovalJudge,
+} from "./approval-judge/judge.js";
 import { approvalJudgeComplete } from "./approval-judge/model-complete.js";
 import type { SpendingOwner } from "./spending-core.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
-import { createChatAgentsInstructions, createChatMcpServersSection, journaledMcpServersSection } from "./chat-prompt-sections.js";
+import {
+  createChatAgentsInstructions,
+  createChatMcpServersSection,
+  journaledMcpServersSection,
+} from "./chat-prompt-sections.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
-import { assertCustomModelImageLimit, customModelThinkingLevels, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
-import { compactionEngineFrom, configuredCompactionReserveTokens, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
+import {
+  assertCustomModelImageLimit,
+  customModelThinkingLevels,
+  prepareCustomModelToolContext,
+} from "../../renderer/shared/custom-model-options.js";
+import {
+  compactionEngineFrom,
+  configuredCompactionReserveTokens,
+  resolveCompactionModelBudget,
+} from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
@@ -46,9 +80,17 @@ import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // before any mutating tool (write/edit/run_command) via pi's `beforeToolCall`
 // hook and waits for the user to Allow or Deny in the UI.
 
-import { type AgentContext, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import {
+  type AgentContext,
+  type AgentMessage,
+  type AgentTool,
+} from "@earendil-works/pi-agent-core";
 import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
-import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
+import {
+  createInitialSystemMessage,
+  toToolDeclaration,
+  type AssistantMessage,
+} from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { app, ipcMain, logger } from "../platform.js";
@@ -83,7 +125,11 @@ import { WEB_FETCH_TOOL_NAME } from "../../renderer/shared/web-extract.js";
 import { CHECK_BACK_TOOL_NAME } from "../../renderer/shared/check-backs.js";
 import { goalLoopEnabled, PROPOSE_GOAL_TOOL_NAME } from "../../renderer/shared/goal.js";
 import { createProposeGoalTool } from "./goal/propose-goal-tool.js";
-import { CHILD_CHATS_TOOL_NAME, SUBMIT_RESULT_TOOL_NAME, childChatsEnabled } from "../../renderer/shared/child-chats.js";
+import {
+  CHILD_CHATS_TOOL_NAME,
+  SUBMIT_RESULT_TOOL_NAME,
+  childChatsEnabled,
+} from "../../renderer/shared/child-chats.js";
 import { webFetchService } from "./web-fetch-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
@@ -102,10 +148,7 @@ import { chatStore } from "./chat-store.js";
 import { reconcileTurnThinkingLevel } from "./chat-thinking-level-reconcile.js";
 import { generationModelMeta } from "./chat-model-selection-meta.js";
 import { botStore } from "./bot-store.js";
-import {
-  resolveBotForGeneration,
-  type BotWorkspacePromptAuthority,
-} from "./bot-system-prompt.js";
+import { resolveBotForGeneration, type BotWorkspacePromptAuthority } from "./bot-system-prompt.js";
 import {
   assertExactBotProviderDispatch,
   prepareBotGeneration,
@@ -129,7 +172,11 @@ import {
   workspaceToolApproval,
 } from "./approval-gate/workspace-tool-approval.js";
 import { pageRuleFor } from "./approval-rules/resolve-main.js";
-import { ApprovalAnalytics, approvalAnalyticsMode, type ApprovalAnalyticsMode } from "./approval-gate/approval-analytics.js";
+import {
+  ApprovalAnalytics,
+  approvalAnalyticsMode,
+  type ApprovalAnalyticsMode,
+} from "./approval-gate/approval-analytics.js";
 import {
   hostRunRegistry,
   recordRunAttentionResolved,
@@ -252,7 +299,10 @@ import {
 } from "./form-fill/service.js";
 import { formFillTurnNote } from "./form-fill/tool.js";
 import { FORM_FILL_MUTATION_AVAILABLE } from "../../renderer/shared/form-fill-availability.js";
-import { toolApprovalPreview, type ToolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
+import {
+  toolApprovalPreview,
+  type ToolApprovalPreview,
+} from "../../renderer/shared/tool-approval-preview.js";
 import { commandReadingForCall } from "../../renderer/shared/command-reading.js";
 import { homedir } from "node:os";
 import { formFillArtifacts, formFillRuntime } from "./form-fill/artifacts.js";
@@ -306,9 +356,16 @@ import { captureRootIdentity } from "./acp/client-files.js";
 import { createAcpScratchDirectories } from "./acp/scratch-directory.js";
 import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 import { advisorRuntime } from "./advisor-runtime-main.js";
-import { ADVISOR_NO_CHOOSER_TURN_NOTE, ADVISOR_TOOL_NAME, type AdvisorExtensionInput } from "./advisor-runtime.js";
+import {
+  ADVISOR_NO_CHOOSER_TURN_NOTE,
+  ADVISOR_TOOL_NAME,
+  type AdvisorExtensionInput,
+} from "./advisor-runtime.js";
 import { snapshotAdvisorRuntimeMessages } from "./advisor-context.js";
-import { chatStoreInitializationTerminalAppend, persistGenerationInitializationTerminal } from "./generation-initialization-terminal.js";
+import {
+  chatStoreInitializationTerminalAppend,
+  persistGenerationInitializationTerminal,
+} from "./generation-initialization-terminal.js";
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
   assertGenerationContextCapacity,
@@ -318,8 +375,15 @@ import {
   modelRetainsSystemUpdates,
 } from "./generation-context.js";
 import { chatTurnPromptCache, promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
-import { chatPromptCacheTelemetry, chatPromptGenerationStopped, chatPromptPrefixCompacted } from "./chat-prompt-cache-state.js";
-import { chatCompactionPrecomputes, precomputeWithinSpendingLimit } from "./compaction-precompute.js";
+import {
+  chatPromptCacheTelemetry,
+  chatPromptGenerationStopped,
+  chatPromptPrefixCompacted,
+} from "./chat-prompt-cache-state.js";
+import {
+  chatCompactionPrecomputes,
+  precomputeWithinSpendingLimit,
+} from "./compaction-precompute.js";
 import {
   invalidateChatContextJournal,
   lastPromptCacheMiss,
@@ -336,7 +400,10 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
 } from "../../renderer/shared/attachment-contract.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
-import { assertWorkspaceFolderPresent, restoreNoWorkspaceFolder } from "./workspace-folder-presence.js";
+import {
+  assertWorkspaceFolderPresent,
+  restoreNoWorkspaceFolder,
+} from "./workspace-folder-presence.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
@@ -364,7 +431,10 @@ import { endRunAfterIgnoredToolRecovery } from "./assistant/tool-loop-guard.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
 import { assistantSettingsPages } from "../../renderer/lib/settings-section.js";
-import { SUBAGENT_TRANSCRIPT_TURN_END_WAIT_MS, SubagentSupervisor } from "./subagents/subagent-supervisor.js";
+import {
+  SUBAGENT_TRANSCRIPT_TURN_END_WAIT_MS,
+  SubagentSupervisor,
+} from "./subagents/subagent-supervisor.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { interruptedWaits } from "./interrupted-waits-main.js";
 import { clipInterruptedWaitSummary } from "./interrupted-reply.js";
@@ -439,7 +509,11 @@ import {
 import { createChatOwedTurns, type OwedTurnPlan } from "./chat-owed-turns.js";
 import { owedTurnStartRequest, type OwedTurnContext } from "./chat-owed-turn-start.js";
 import { goalTurnHooks } from "./goal/goal-turn-hooks.js";
-import { createOwedTurnPrompts, withPromptLifetime, type OwedTurnPromptLifetime } from "./chat-owed-turn-prompts.js";
+import {
+  createOwedTurnPrompts,
+  withPromptLifetime,
+  type OwedTurnPromptLifetime,
+} from "./chat-owed-turn-prompts.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
@@ -523,7 +597,10 @@ import {
   CHAT_ARTIFACT_VERSION,
   type ChatHtmlArtifactV1,
 } from "../../renderer/shared/chat-artifacts.js";
-import { MAX_HTML_ARTIFACTS_PER_RESPONSE, RENDER_UI_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
+import {
+  MAX_HTML_ARTIFACTS_PER_RESPONSE,
+  RENDER_UI_TOOL_NAME,
+} from "../../renderer/shared/generative-ui.js";
 import { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import {
   createGenerativeUiExtensionRuntime,
@@ -536,7 +613,22 @@ import {
   VISUALIZE_GUIDE_TOOL_NAME,
 } from "./generative-ui-extension.js";
 import { agentNoticeRun } from "./follow-through/notice-delivery.js";
-import { chatToolOffers, personWroteChatTurn, offersChildChats, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, screenedPromptAnswersPerson, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, refusedForWantOfWindow, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
+import {
+  chatToolOffers,
+  personWroteChatTurn,
+  offersChildChats,
+  chatTurnArgsToolRefusal,
+  chatTurnAudienceFor,
+  chatTurnToolRefusal,
+  screenedPromptAnswersPerson,
+  declaresAppTools,
+  declaresWindowTools,
+  firstTurnToolRefusal,
+  refusedForWantOfWindow,
+  windowlessChatTurn,
+  type ChatToolSurface,
+  type TurnToolRefusal,
+} from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -547,7 +639,11 @@ import { enqueueVisualSnapshots } from "./visual-snapshot-service.js";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
 import { registerGenerativeUiPreviewDocument } from "./generative-ui-preview-store.js";
-import { createArtifactPlacementLedger, imageAttachmentPlacements, presentPlacedImage } from "./generative-ui-placements.js";
+import {
+  createArtifactPlacementLedger,
+  imageAttachmentPlacements,
+  presentPlacedImage,
+} from "./generative-ui-placements.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
 import {
@@ -559,7 +655,10 @@ import {
   AskUserQuestionCoordinator,
   type AskUserQuestionRespondOutcome,
 } from "./ask-user-question-coordinator.js";
-import { ASK_USER_QUESTION_TOOL_NAME, ASK_USER_QUESTION_VERSION } from "../../renderer/shared/ask-user-question.js";
+import {
+  ASK_USER_QUESTION_TOOL_NAME,
+  ASK_USER_QUESTION_VERSION,
+} from "../../renderer/shared/ask-user-question.js";
 import { createTodoExtension, shouldEnableTodoExtension } from "./rpiv-todo/extension.js";
 import {
   createWorkspaceArtifactTool,
@@ -584,7 +683,14 @@ import { desktopHandoffTickets } from "./desktop-stream-handoff-main.js";
 import type { DesktopHandoffLiveStreamSnapshot } from "../../renderer/shared/chat-handoff.js";
 import { randomUUID } from "node:crypto";
 import { designModeEnabled } from "./studio/feature-flags.js";
-import { designCanvasSnapshots, designCanvasStore, designGrants, designModeConsent, designSystemOffers, recentWrittenPages } from "./design-canvas/main.js";
+import {
+  designCanvasSnapshots,
+  designCanvasStore,
+  designGrants,
+  designModeConsent,
+  designSystemOffers,
+  recentWrittenPages,
+} from "./design-canvas/main.js";
 import {
   createDesignCanvasTools,
   DESIGN_MODE_PROMPT_SECTION,
@@ -593,10 +699,22 @@ import {
 } from "./design-canvas/canvas-tools.js";
 import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/design-mode-tool.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
-import { CANVAS_STATUS_SECTION, canvasPromptLine, withCanvasStatusNote } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import {
+  CANVAS_STATUS_SECTION,
+  canvasPromptLine,
+  withCanvasStatusNote,
+} from "../../renderer/shared/design-canvas/canvas-summary.js";
 import { withJournaledCanvasStatusNote } from "./design-canvas/status-note.js";
-import { placeArtifactsOnCanvas, placeImagesOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
-import { createDesignPageScanner, placeWrittenPagesOnCanvas, writtenPagePath } from "./design-canvas/written-pages.js";
+import {
+  placeArtifactsOnCanvas,
+  placeImagesOnCanvas,
+  type CanvasArtifact,
+} from "./design-canvas/artifact-frames.js";
+import {
+  createDesignPageScanner,
+  placeWrittenPagesOnCanvas,
+  writtenPagePath,
+} from "./design-canvas/written-pages.js";
 import { inspectDesignFrame } from "./design-canvas/frame-render.js";
 import { inspectDesignPage } from "./design-canvas/inspect.js";
 import {
@@ -607,11 +725,15 @@ import {
 } from "./design-canvas/inspect-note.js";
 import { designUrl } from "../../renderer/shared/design-canvas/url.js";
 import { frameShowingDesignPage } from "../../renderer/shared/design-canvas/schema.js";
-import { DESIGN_CANVAS_UPDATED_CHANNEL, type DesignCanvasUpdated } from "../handlers/design-canvas.js";
+import {
+  DESIGN_CANVAS_UPDATED_CHANNEL,
+  type DesignCanvasUpdated,
+} from "../handlers/design-canvas.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setLimits({
-  usageLimits: (owner, providerLabel, extra) => usageLimits.streamOptions(owner, providerLabel, extra),
+  usageLimits: (owner, providerLabel, extra) =>
+    usageLimits.streamOptions(owner, providerLabel, extra),
   spending,
 });
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
@@ -621,7 +743,11 @@ subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
 type GenerationPermission = WorkspacePermission | "read-only";
 
 /** The inline visual tools, declared from the start on /visualize turns and in design mode. */
-const VISUAL_TOOL_NAMES: readonly string[] = [RENDER_UI_TOOL_NAME, GENERATIVE_UI_TOOL_NAME, VISUALIZE_GUIDE_TOOL_NAME];
+const VISUAL_TOOL_NAMES: readonly string[] = [
+  RENDER_UI_TOOL_NAME,
+  GENERATIVE_UI_TOOL_NAME,
+  VISUALIZE_GUIDE_TOOL_NAME,
+];
 
 /** Tools whose writes are not reported file by file, so design/ is looked at after each one ends. */
 const DESIGN_PAGE_COMMAND_TOOLS: ReadonlySet<string> = new Set(["run_command", "codemode"]);
@@ -660,7 +786,10 @@ interface EnteredCanvasTools {
  */
 const approvedWorkspaceArtifactCalls = new Map<string, Map<string, string>>();
 
-function takeApprovedWorkspaceArtifactCall(streamId: string, toolCallId: string): string | undefined {
+function takeApprovedWorkspaceArtifactCall(
+  streamId: string,
+  toolCallId: string,
+): string | undefined {
   const calls = approvedWorkspaceArtifactCalls.get(streamId);
   const digest = calls?.get(toolCallId);
   calls?.delete(toolCallId);
@@ -680,7 +809,6 @@ function uniqueResponseImages(
   }
   return images;
 }
-
 
 /** What a turn read when it started: the portable Agent Slider and its chat's own level. */
 export interface TurnSettingsSnapshot {
@@ -849,7 +977,9 @@ async function personSteeredStartedChat(chatId: string): Promise<void> {
   const { chatLinks } = await import("./chat-orchestration/links-main.js");
   await chatLinks.restore();
   if (!chatLinks.get(chatId)) return;
-  await (await import("./chat-orchestration/child-chats-main.js")).personTookOverStartedChat(chatId);
+  await (
+    await import("./chat-orchestration/child-chats-main.js")
+  ).personTookOverStartedChat(chatId);
 }
 
 const runInputAdmission = createChatRunInputAdmission({
@@ -864,7 +994,11 @@ const runInputAdmission = createChatRunInputAdmission({
       logger.warn("inbox", "Could not end the chat's snooze after its steer or follow-up.", error);
     });
     void personSteeredStartedChat(chatId).catch((error: unknown) => {
-      logger.warn("chat-orchestration", "Could not record that the person took over a started chat.", error);
+      logger.warn(
+        "chat-orchestration",
+        "Could not record that the person took over a started chat.",
+        error,
+      );
     });
   },
 });
@@ -922,13 +1056,20 @@ function startOwedTurn(plan: OwedTurnPlan<OwedTurnContext, GenerationCancellatio
     (error: unknown) => {
       lease.release();
       lease.settleAsyncWork();
-      logger.warn("pi", `The chat's owed turn after stream ${plan.settledStreamId} failed to start.`, error);
+      logger.warn(
+        "pi",
+        `The chat's owed turn after stream ${plan.settledStreamId} failed to start.`,
+        error,
+      );
     },
   );
 }
 
 /** What a run that can owe its chat a turn ran with: an owed turn or a goal round starts with the same. */
-function owedTurnContextOf(params: ChatStartParams, options: GenerationExecutionOptions): OwedTurnContext {
+function owedTurnContextOf(
+  params: ChatStartParams,
+  options: GenerationExecutionOptions,
+): OwedTurnContext {
   return {
     ...(params.workspaceId !== undefined ? { workspaceId: params.workspaceId } : {}),
     providerId: params.providerId,
@@ -936,7 +1077,9 @@ function owedTurnContextOf(params: ChatStartParams, options: GenerationExecution
     ...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
     ...(params.inlineVisuals !== undefined ? { inlineVisuals: params.inlineVisuals } : {}),
     ...(options.visualAudience !== undefined ? { visualAudience: options.visualAudience } : {}),
-    ...(options.excludeToolNames !== undefined ? { excludeToolNames: options.excludeToolNames } : {}),
+    ...(options.excludeToolNames !== undefined
+      ? { excludeToolNames: options.excludeToolNames }
+      : {}),
   };
 }
 
@@ -1264,7 +1407,10 @@ function forgetInterruptedWait(waitId: string): void {
  * it for the Inbox's Unavailable row, unless nobody was ever going to attend
  * the run or Aiden is quitting.
  */
-function recordShortCircuitedPrompt(streamId: string, prompt: HostRunPendingPrompt & { id: string }): void {
+function recordShortCircuitedPrompt(
+  streamId: string,
+  prompt: HostRunPendingPrompt & { id: string },
+): void {
   if (quitInProgress) return;
   const runtime = active.get(streamId) ?? initializing.get(streamId);
   if (!runtime?.rendererDetached || runtime.promptsUnattended) return;
@@ -1289,7 +1435,10 @@ const approvals = new ToolApprovalCoordinator(
   },
   (approvalId, outcome) => {
     if (
-      interruptedWaitSettled({ byPerson: outcome === "allowed" || outcome === "denied", quitting: quitInProgress })
+      interruptedWaitSettled({
+        byPerson: outcome === "allowed" || outcome === "denied",
+        quitting: quitInProgress,
+      })
     ) {
       forgetInterruptedWait(approvalId);
     }
@@ -1306,7 +1455,10 @@ const approvals = new ToolApprovalCoordinator(
       type: "approval_required",
       payload: { summary: prompt.summary },
     }),
-  new ApprovalAnalytics({ surface: "workspace", mode: (streamId) => approvalModes.get(streamId) ?? "ask" }),
+  new ApprovalAnalytics({
+    surface: "workspace",
+    mode: (streamId) => approvalModes.get(streamId) ?? "ask",
+  }),
 );
 const questionnaires = new AskUserQuestionCoordinator(
   (prompt) => {
@@ -1324,7 +1476,11 @@ const questionnaires = new AskUserQuestionCoordinator(
   },
   (promptId, response, settledBy) => {
     if (
-      interruptedWaitSettled({ byPerson: settledBy === "owner", timedOut: response.timedOut, quitting: quitInProgress })
+      interruptedWaitSettled({
+        byPerson: settledBy === "owner",
+        timedOut: response.timedOut,
+        quitting: quitInProgress,
+      })
     ) {
       forgetInterruptedWait(promptId);
     }
@@ -1433,8 +1589,13 @@ function workspaceCodemodeEnabled(input: {
   permission: GenerationPermission;
   excludeToolNames: ReadonlySet<string> | undefined;
 }): boolean {
-  return Boolean(input.workspaceId && input.folderPath) && !input.bot && input.mode === undefined &&
-    input.permission !== "none" && !input.excludeToolNames?.has("codemode");
+  return (
+    Boolean(input.workspaceId && input.folderPath) &&
+    !input.bot &&
+    input.mode === undefined &&
+    input.permission !== "none" &&
+    !input.excludeToolNames?.has("codemode")
+  );
 }
 
 async function prepareGeneration(
@@ -1476,7 +1637,12 @@ async function prepareGeneration(
       const current = await chatStore.get(params.chatId);
       signal.throwIfAborted();
       referenceSignal?.throwIfAborted();
-      if (!current || persistedChatWorkspaceId(current.workspaceId) !== persistedChatWorkspaceId(params.workspaceId)) throw new Error("The reference image chat is no longer available in this workspace.");
+      if (
+        !current ||
+        persistedChatWorkspaceId(current.workspaceId) !==
+          persistedChatWorkspaceId(params.workspaceId)
+      )
+        throw new Error("The reference image chat is no longer available in this workspace.");
       return current.messages.flatMap((message) =>
         withoutGrabbedElementThumbnails(withoutVisualSnapshots(message.attachments ?? [])),
       );
@@ -1503,7 +1669,11 @@ async function prepareGeneration(
     const { id, name, mimeType, size, data } = attachment;
     presentPlacedImage(
       imagePlacements,
-      { version: CHAT_ARTIFACT_VERSION, kind: "image", attachment: { id, name, mimeType, kind: "image", size, data } },
+      {
+        version: CHAT_ARTIFACT_VERSION,
+        kind: "image",
+        attachment: { id, name, mimeType, kind: "image", size, data },
+      },
       toolCallId,
       (event) => {
         sendGeneration(streamId, "chat:artifact", { streamId, event });
@@ -1564,7 +1734,9 @@ async function prepareGeneration(
               questions,
               timeoutMs: resolveAskUserQuestionTimeoutMs(timeoutSeconds, {
                 unattended: liveOwner.kind === "remote",
-                ...(options.leadChatTurn === true ? { maxSeconds: CHAT_AUDIENCE_PROMPT_LIFETIME_MS / 1_000 } : {}),
+                ...(options.leadChatTurn === true
+                  ? { maxSeconds: CHAT_AUDIENCE_PROMPT_LIFETIME_MS / 1_000 }
+                  : {}),
               }),
             },
             liveOwner.documentId,
@@ -1593,46 +1765,70 @@ async function prepareGeneration(
   // (scheduled runs), Bot-bound turns and the Assistant keep their access.
   // A chat another chat started never gets more than its lead allowed (Phase 5, D2).
   // `undefined` when the chat's record can't be read: such a chat is not offered `child_chats`.
-  const chatLineage = workspace && !botBound && params.chatId
-    ? await chatStore.getMeta(params.chatId).then((meta) => ({ startedBy: meta?.startedBy }), () => undefined)
-    : undefined;
-  const approvalCeiling = workspace && !botBound && params.chatId && params.mode === undefined
-    ? await (await import("./chat-orchestration/links-main.js")).startedChatApprovalCeiling(
-        params.chatId,
-        chatLineage?.startedBy,
-      )
-    : undefined;
+  const chatLineage =
+    workspace && !botBound && params.chatId
+      ? await chatStore.getMeta(params.chatId).then(
+          (meta) => ({ startedBy: meta?.startedBy }),
+          () => undefined,
+        )
+      : undefined;
+  const approvalCeiling =
+    workspace && !botBound && params.chatId && params.mode === undefined
+      ? await (
+          await import("./chat-orchestration/links-main.js")
+        ).startedChatApprovalCeiling(params.chatId, chatLineage?.startedBy)
+      : undefined;
   const approvalPolicy = await generationApprovalPolicy(
-    { workspace, botBound, mode: params.mode, permission: options.permission, ceiling: approvalCeiling },
+    {
+      workspace,
+      botBound,
+      mode: params.mode,
+      permission: options.permission,
+      ceiling: approvalCeiling,
+    },
     () => configStore.getSettings(),
   );
   const permission: GenerationPermission =
-    options.permission ?? (approvalPolicy ? legacyAccessOf(approvalPolicy) : workspace?.permission ?? "ask");
-  approvalModes.set(streamId, approvalPolicy ? approvalPolicy.mode : approvalAnalyticsMode(permission));
+    options.permission ??
+    (approvalPolicy ? legacyAccessOf(approvalPolicy) : (workspace?.permission ?? "ask"));
+  approvalModes.set(
+    streamId,
+    approvalPolicy ? approvalPolicy.mode : approvalAnalyticsMode(permission),
+  );
   const folderPath = workspace?.folderPath;
   // Connectors this workspace switched off. Bots keep their own grants.
   const workspaceDisabledMcpServerIds = botBound ? undefined : workspace?.disabledMcpServerIds;
   // Bot and Assistant prompts retain their exact, separately granted sources.
-  const agentsInstructionRoots = !botBound && !assistantMode
-    ? {
-        globalRoot: aidenConfigDir(),
-        workspaceRoot: permission !== "none" && workspace?.permission !== "none" ? folderPath : undefined,
-      }
-    : undefined;
+  const agentsInstructionRoots =
+    !botBound && !assistantMode
+      ? {
+          globalRoot: aidenConfigDir(),
+          workspaceRoot:
+            permission !== "none" && workspace?.permission !== "none" ? folderPath : undefined,
+        }
+      : undefined;
   const agentsInstructions = agentsInstructionRoots
     ? await createChatAgentsInstructions({
         ...agentsInstructionRoots,
         userDataDir: app.getPath("userData"),
         chatId: params.chatId,
         onNotices: (notices) => {
-          sendGeneration(streamId, "chat:status", { streamId, phase: "agents_instructions_limited", notices });
+          sendGeneration(streamId, "chat:status", {
+            streamId,
+            phase: "agents_instructions_limited",
+            notices,
+          });
         },
         revalidate: async (requestSignal) => {
           signal.throwIfAborted();
           requestSignal?.throwIfAborted();
           if (!workspace) return;
           const current = await configStore.getWorkspace(workspace.id);
-          if (!current || current.folderPath !== workspace.folderPath || current.permission !== workspace.permission) {
+          if (
+            !current ||
+            current.folderPath !== workspace.folderPath ||
+            current.permission !== workspace.permission
+          ) {
             throw new Error("Workspace instruction access changed. Start a new response.");
           }
           await assertManagedWorktreeAdmission(current);
@@ -1682,7 +1878,12 @@ async function prepareGeneration(
   } catch (error) {
     logger.debug("chat", "Could not record the settings this turn started with.", error);
   }
-  const savedThinkingLevel = savedGenerationThinkingLevel(settings, params.providerId, params.model, runtime.provider);
+  const savedThinkingLevel = savedGenerationThinkingLevel(
+    settings,
+    params.providerId,
+    params.model,
+    runtime.provider,
+  );
   const thinkingLevel = resolveGenerationThinkingLevel(
     params.providerId,
     model,
@@ -1730,11 +1931,18 @@ async function prepareGeneration(
   let formFill: FormFillService | undefined;
   const sourceAttachments = currentFormFillAttachments(chat.messages);
   // A windowless turn skips the readiness probe: it could not run the specialist anyway.
-  if (FORM_FILL_MUTATION_AVAILABLE && computerUse && settings.formFillSpecialistEnabled === true && !windowless && sourceAttachments.length) {
+  if (
+    FORM_FILL_MUTATION_AVAILABLE &&
+    computerUse &&
+    settings.formFillSpecialistEnabled === true &&
+    !windowless &&
+    sourceAttachments.length
+  ) {
     const status = await computerUseStatus.status({ signal });
-    const artifact = status.ready && computerUseGenerationGate.isCurrent(computerUseGateSnapshot)
-      ? await formFillArtifacts.refresh()
-      : undefined;
+    const artifact =
+      status.ready && computerUseGenerationGate.isCurrent(computerUseGateSnapshot)
+        ? await formFillArtifacts.refresh()
+        : undefined;
     if (artifact?.state === "ready") {
       formFill = new FormFillService({
         controller: computerUse,
@@ -1782,8 +1990,13 @@ async function prepareGeneration(
   // An unattended follow-up declares the subagent tool but refuses its call,
   // so it never connects the servers a child could use.
   const discoveredSubagentMcpInventory =
-    allowSubagents && childMcpRollout && subagentRunStore.selection === "v2" && options.unattended !== true
-      ? await resolveProductionSubagentMcpInventory(signal, { disabledMcpServerIds: workspaceDisabledMcpServerIds })
+    allowSubagents &&
+    childMcpRollout &&
+    subagentRunStore.selection === "v2" &&
+    options.unattended !== true
+      ? await resolveProductionSubagentMcpInventory(signal, {
+          disabledMcpServerIds: workspaceDisabledMcpServerIds,
+        })
       : [];
   const botSubagentMcpConnectionIdentities =
     botContext && discoveredSubagentMcpInventory.length > 0
@@ -1842,12 +2055,24 @@ async function prepareGeneration(
               // Shown in the chat while its turn is live, else logged; never the model's.
               onMessages: (messages) => {
                 const live = active.has(streamId) || initializing.has(streamId);
-                if (live && sendGeneration(streamId, "chat:status", { streamId, phase: "hook_messages", messages })) return;
-                logger.warn("hooks", `Notification hooks for chat ${params.chatId}: ${messages.join("\n")}`);
+                if (
+                  live &&
+                  sendGeneration(streamId, "chat:status", {
+                    streamId,
+                    phase: "hook_messages",
+                    messages,
+                  })
+                )
+                  return;
+                logger.warn(
+                  "hooks",
+                  `Notification hooks for chat ${params.chatId}: ${messages.join("\n")}`,
+                );
               },
             },
           );
-          return () => hooks.notify("Aiden needs your permission for a subagent", "permission_prompt");
+          return () =>
+            hooks.notify("Aiden needs your permission for a subagent", "permission_prompt");
         })()
       : undefined;
   let subagentProjector: SubagentEventProjector | undefined;
@@ -1981,7 +2206,8 @@ async function prepareGeneration(
           compactionModelOverrides: settings.compactionModelOverrides,
           transcripts: createSubagentTranscriptFactory(subagentTranscriptStore, {
             publish: (update) => sendSubagentTranscript(streamId, update),
-            onError: (error) => logger.warn("subagents", "Could not save a helper conversation.", error),
+            onError: (error) =>
+              logger.warn("subagents", "Could not save a helper conversation.", error),
           }),
           generationId: streamId,
           chatId: params.chatId,
@@ -2042,8 +2268,19 @@ async function prepareGeneration(
                     // Shown in the chat while its turn is live, else logged; never the model's.
                     report: (messages) => {
                       const live = active.has(streamId) || initializing.has(streamId);
-                      if (live && sendGeneration(streamId, "chat:status", { streamId, phase: "hook_messages", messages })) return;
-                      logger.warn("hooks", `SubagentStop hooks for chat ${params.chatId}: ${messages.join("\n")}`);
+                      if (
+                        live &&
+                        sendGeneration(streamId, "chat:status", {
+                          streamId,
+                          phase: "hook_messages",
+                          messages,
+                        })
+                      )
+                        return;
+                      logger.warn(
+                        "hooks",
+                        `SubagentStop hooks for chat ${params.chatId}: ${messages.join("\n")}`,
+                      );
                     },
                   },
                 ),
@@ -2071,7 +2308,11 @@ async function prepareGeneration(
   // Offered whether design mode is on (to leave) or off (to ask to enter).
   const designModeToolOffered =
     !options.excludeToolNames?.has(DESIGN_MODE_TOOL_NAME) &&
-    designModeToolAllowed({ ...designTurn, regularChat: chatSurface(chat) === "regular", inlineVisuals: params.inlineVisuals });
+    designModeToolAllowed({
+      ...designTurn,
+      regularChat: chatSurface(chat) === "regular",
+      inlineVisuals: params.inlineVisuals,
+    });
   // Even when the design_mode card is not offered (for example while Inline
   // visuals is not automatic), the person can switch design mode on mid-reply.
   const canvasHoldable =
@@ -2106,7 +2347,8 @@ async function prepareGeneration(
     excludedToolNames: options.excludeToolNames,
   };
   // The owed turn for the person's queued message is theirs; one answering a notice is not.
-  const answersPerson = windowless && screenedPromptAnswersPerson(chat.messages, options.screenedPrompt);
+  const answersPerson =
+    windowless && screenedPromptAnswersPerson(chat.messages, options.screenedPrompt);
   const turnAudience = {
     ...chatTurnAudienceFor({ ...options, windowless, answersPerson }, params),
     ...(windowless ? { windowOnlyToolNames } : {}),
@@ -2123,9 +2365,17 @@ async function prepareGeneration(
   // and the lead's `send` and Stop leave it alone (Phase 5, D3).
   if (params.chatId && chatLineage?.startedBy && options.leadChatTurn !== true && personWroteTurn) {
     const tookOverChatId = params.chatId;
-    await (await import("./chat-orchestration/child-chats-main.js")).personTookOverStartedChat(tookOverChatId).catch((error: unknown) => {
-      logger.warn("chat-orchestration", "Could not record that the person took over a started chat.", error);
-    });
+    await (
+      await import("./chat-orchestration/child-chats-main.js")
+    )
+      .personTookOverStartedChat(tookOverChatId)
+      .catch((error: unknown) => {
+        logger.warn(
+          "chat-orchestration",
+          "Could not record that the person took over a started chat.",
+          error,
+        );
+      });
   }
   // Offered by the chat's surface alone; a turn nobody watches, or one a paired
   // device sent, keeps the declaration and refuses the call.
@@ -2163,7 +2413,12 @@ async function prepareGeneration(
   const temporaryChat = chat.ephemeral === true;
   // An ordinary workspace chat: a task made here posts its runs back into it.
   const scheduleOriginChatId =
-    schedulingAllowed && !botContext && !assistantMode && !chat.botId && chat.owner === undefined && !temporaryChat
+    schedulingAllowed &&
+    !botContext &&
+    !assistantMode &&
+    !chat.botId &&
+    chat.owner === undefined &&
+    !temporaryChat
       ? params.chatId
       : undefined;
   const botScheduleToolNames =
@@ -2186,7 +2441,12 @@ async function prepareGeneration(
   // turns, through `bot-runtime/bot-browser-tools.ts`.
   const browserEligible =
     workspace &&
-    canUseBrowserTools({ permission, rendererOwner: declaresWindow, assistantMode, bot: Boolean(botContext) });
+    canUseBrowserTools({
+      permission,
+      rendererOwner: declaresWindow,
+      assistantMode,
+      bot: Boolean(botContext),
+    });
   const browserState = browserEligible
     ? await (await import("./browser/service.js")).browserService.getState(workspace.id)
     : undefined;
@@ -2249,18 +2509,28 @@ async function prepareGeneration(
           },
         })
       : [];
-  const disclosedBrowserTools = browserTools.filter(({ name }) => !options.excludeToolNames?.has(name));
-  const browserDiscovery = disclosedBrowserTools.length ? createBrowserDiscovery(
-    disclosedBrowserTools,
-    async () => {
-      signal.throwIfAborted();
-      if (!active.has(streamId) || !workspace) throw new Error("This browser generation is no longer active.");
-      const current = await configStore.getWorkspace(workspace.id);
-      if (!current || current.permission !== workspace.permission || current.folderPath !== workspace.folderPath) throw new Error("Browser workspace access changed. Start a new response.");
-      const state = await (await import("./browser/service.js")).browserService.getState(workspace.id);
-      if (!resolveBrowserAgentAccess(state.defaults.agentAccess, state.agentAccessOverride)) throw new Error("Browser agent access is disabled for this workspace.");
-    },
-  ) : undefined;
+  const disclosedBrowserTools = browserTools.filter(
+    ({ name }) => !options.excludeToolNames?.has(name),
+  );
+  const browserDiscovery = disclosedBrowserTools.length
+    ? createBrowserDiscovery(disclosedBrowserTools, async () => {
+        signal.throwIfAborted();
+        if (!active.has(streamId) || !workspace)
+          throw new Error("This browser generation is no longer active.");
+        const current = await configStore.getWorkspace(workspace.id);
+        if (
+          !current ||
+          current.permission !== workspace.permission ||
+          current.folderPath !== workspace.folderPath
+        )
+          throw new Error("Browser workspace access changed. Start a new response.");
+        const state = await (
+          await import("./browser/service.js")
+        ).browserService.getState(workspace.id);
+        if (!resolveBrowserAgentAccess(state.defaults.agentAccess, state.agentAccessOverride))
+          throw new Error("Browser agent access is disabled for this workspace.");
+      })
+    : undefined;
   if (windowless && browserDiscovery) {
     windowOnlyToolNames.add(browserDiscovery.tool.name);
     for (const { name } of disclosedBrowserTools) windowOnlyToolNames.add(name);
@@ -2274,9 +2544,10 @@ async function prepareGeneration(
     assistantMode,
     bot: Boolean(botContext),
   });
-  const deviceService = deviceStaticGate && params.chatId
-    ? await (await import("../handlers/devices.js")).deviceServiceForAgents()
-    : null;
+  const deviceService =
+    deviceStaticGate && params.chatId
+      ? await (await import("../handlers/devices.js")).deviceServiceForAgents()
+      : null;
   const deviceGate = Boolean(deviceService?.state().consent.agentAccess);
   const deviceTools =
     deviceService && deviceGate
@@ -2297,7 +2568,9 @@ async function prepareGeneration(
                 currentWorkspace.permission !== workspace.permission ||
                 currentWorkspace.folderPath !== workspace.folderPath
               ) {
-                throw new Error("Workspace access changed. Start a new response to use simulators.");
+                throw new Error(
+                  "Workspace access changed. Start a new response to use simulators.",
+                );
               }
             }
           },
@@ -2313,7 +2586,9 @@ async function prepareGeneration(
   // loses it on the next command once agent access is revoked.
   for (const { name } of windowless ? deviceTools : []) windowOnlyToolNames.add(name);
   const deviceShimDir =
-    !windowless && deviceTools.length && deviceService ? () => deviceService.agentShimDir() : undefined;
+    !windowless && deviceTools.length && deviceService
+      ? () => deviceService.agentShimDir()
+      : undefined;
   // In the codemode lane a slow MCP server joins the turn late instead of
   // holding its start; elsewhere tools are declared and discovery blocks.
   let lateMcpDiscovery: McpLateDiscovery = NO_LATE_MCP_DISCOVERY;
@@ -2325,7 +2600,11 @@ async function prepareGeneration(
     permission,
     excludeToolNames: options.excludeToolNames,
   })
-    ? { onLate: (late: McpLateDiscovery) => { lateMcpDiscovery = late; } }
+    ? {
+        onLate: (late: McpLateDiscovery) => {
+          lateMcpDiscovery = late;
+        },
+      }
     : undefined;
   // Background jobs and pull request follows: workspace chats with folder
   // access, on the Mac and Linux desktop. Their news reaches the chat later.
@@ -2357,10 +2636,24 @@ async function prepareGeneration(
         onInvalidated: (listener) => subscribeStreamOwnerInvalidation(streamId, listener),
         isCurrent: () => {
           const generation = active.get(streamId) ?? initializing.get(streamId);
-          return !signal.aborted && !!generation && !generation.cancelRequested && !generation.rendererDetached && !generation.owner.isDestroyed();
+          return (
+            !signal.aborted &&
+            !!generation &&
+            !generation.cancelRequested &&
+            !generation.rendererDetached &&
+            !generation.owner.isDestroyed()
+          );
         },
       },
-      allowMcpProviderAuth: canUseProviderAuthenticatedMcp({ rendererOwner, permission, workspace: Boolean(workspace?.folderPath), assistant: assistantMode, bot: Boolean(botContext), usageSource: options.usageSource, interactionSurface: options.interactionSurface }),
+      allowMcpProviderAuth: canUseProviderAuthenticatedMcp({
+        rendererOwner,
+        permission,
+        workspace: Boolean(workspace?.folderPath),
+        assistant: assistantMode,
+        bot: Boolean(botContext),
+        usageSource: options.usageSource,
+        interactionSurface: options.interactionSurface,
+      }),
       workspaceId: workspace?.id,
       workspaceRoot: folderPath,
       skillSnapshot,
@@ -2417,7 +2710,9 @@ async function prepareGeneration(
           ? createVisionAnalysisTool(
               {
                 attachments: chat.messages.flatMap((message) =>
-                  withoutGrabbedElementThumbnails(withoutVisualSnapshots(message.attachments ?? [])),
+                  withoutGrabbedElementThumbnails(
+                    withoutVisualSnapshots(message.attachments ?? []),
+                  ),
                 ),
                 authority: {
                   providerId: botContext.admission.authority.visionProvider.sourceProviderId,
@@ -2447,7 +2742,8 @@ async function prepareGeneration(
     if (webFetchTool) tools.push(webFetchTool);
   }
   if (followThroughAvailable && params.chatId && workspace && folderPath) {
-    const { createFollowThroughTools } = await import("./follow-through/follow-through-tools-main.js");
+    const { createFollowThroughTools } =
+      await import("./follow-through/follow-through-tools-main.js");
     tools.push(
       ...createFollowThroughTools({
         chatId: params.chatId,
@@ -2474,7 +2770,8 @@ async function prepareGeneration(
     hostPlatformCapabilities().chatCheckBacks &&
     !options.excludeToolNames?.has(CHECK_BACK_TOOL_NAME)
   ) {
-    const { createChatCheckBackTool } = await import("./follow-through/follow-through-tools-main.js");
+    const { createChatCheckBackTool } =
+      await import("./follow-through/follow-through-tools-main.js");
     tools.push(
       createChatCheckBackTool({
         chatId: params.chatId,
@@ -2539,13 +2836,14 @@ async function prepareGeneration(
     );
   }
   // A started chat's link: its result schema (D6) and whether a tainted lead wrote in it.
-  const startedChatLink = params.chatId && chatLineage?.startedBy
-    ? await (async () => {
-        const { chatLinks } = await import("./chat-orchestration/links-main.js");
-        await chatLinks.restore();
-        return chatLinks.get(params.chatId!);
-      })()
-    : undefined;
+  const startedChatLink =
+    params.chatId && chatLineage?.startedBy
+      ? await (async () => {
+          const { chatLinks } = await import("./chat-orchestration/links-main.js");
+          await chatLinks.restore();
+          return chatLinks.get(params.chatId!);
+        })()
+      : undefined;
   // A started chat whose lead asked for a structured result (Phase 5, D6).
   if (params.chatId && startedChatLink && !options.excludeToolNames?.has(SUBMIT_RESULT_TOOL_NAME)) {
     const resultSchema = startedChatLink.resultSchema;
@@ -2554,7 +2852,9 @@ async function prepareGeneration(
         import("./chat-orchestration/submit-result-tool.js"),
         import("./chat-orchestration/child-chats-main.js"),
       ]);
-      tools.push(createSubmitResultTool({ chatId: params.chatId, schema: resultSchema, childChats }));
+      tools.push(
+        createSubmitResultTool({ chatId: params.chatId, schema: resultSchema, childChats }),
+      );
     }
   }
   const botMutatingToolNames = new Set<string>();
@@ -2610,7 +2910,11 @@ async function prepareGeneration(
     if (!botRuntimeCatalog) throw new Error("Bot runtime catalog was not prepared.");
     // Joined to the built tools by MCP identity, so their real names (from the
     // full live inventory) are the ones granted.
-    const mcpToolNames = exactBotMcpToolNames(authority, botRuntimeCatalog.resources.connections, tools);
+    const mcpToolNames = exactBotMcpToolNames(
+      authority,
+      botRuntimeCatalog.resources.connections,
+      tools,
+    );
     for (const [modelToolName, grant] of mcpToolNames) {
       if (grant.effect === "mutating") botMutatingToolNames.add(modelToolName);
     }
@@ -2657,7 +2961,11 @@ async function prepareGeneration(
   // it never uses chat provider credentials. The snapshot is cached and offline.
   const imageSnapshot: ImageGenerationSnapshot = modelOperationsEnabled
     ? await imageGeneration.snapshot().catch((error: unknown) => {
-        logger.warn("image-generation", "Could not load image generation settings for this chat.", error);
+        logger.warn(
+          "image-generation",
+          "Could not load image generation settings for this chat.",
+          error,
+        );
         return { available: false };
       })
     : { available: false };
@@ -2742,7 +3050,8 @@ async function prepareGeneration(
       models: providerRegistry.models,
       providers: savedOperationProviders,
       getProvider: (id) => configStore.getProvider(id),
-      resolveRuntime: (providerId, modelId, requestSignal) => resolveModelRuntime(providerId, modelId, requestSignal, chat.id),
+      resolveRuntime: (providerId, modelId, requestSignal) =>
+        resolveModelRuntime(providerId, modelId, requestSignal, chat.id),
     });
     const operationProviders = [runtime.provider, ...savedOperationProviders];
     // generate_image may keep its image as a workspace file where this chat
@@ -2751,7 +3060,9 @@ async function prepareGeneration(
     const imageRoot = folderPath;
     const imageWorkspaceUnchanged = async () => {
       const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
-      return current !== undefined && current.folderPath === imageRoot && current.permission !== "none";
+      return (
+        current !== undefined && current.folderPath === imageRoot && current.permission !== "none"
+      );
     };
     const imageSaving =
       imageRoot &&
@@ -2767,23 +3078,34 @@ async function prepareGeneration(
               saveSignal?: AbortSignal,
               saveOptions?: { replace: boolean },
             ) => {
-              if (!(await imageWorkspaceUnchanged())) throw new Error("This chat's workspace folder changed or lost file access.");
-              return await writeWorkspaceBinaryFile(imageRoot, relativePath, Buffer.from(image.data, "base64"), {
-                ...(saveSignal ? { signal: saveSignal } : {}),
-                // Only the file the approval named may be replaced.
-                replace: saveOptions?.replace === true,
-              });
+              if (!(await imageWorkspaceUnchanged()))
+                throw new Error("This chat's workspace folder changed or lost file access.");
+              return await writeWorkspaceBinaryFile(
+                imageRoot,
+                relativePath,
+                Buffer.from(image.data, "base64"),
+                {
+                  ...(saveSignal ? { signal: saveSignal } : {}),
+                  // Only the file the approval named may be replaced.
+                  replace: saveOptions?.replace === true,
+                },
+              );
             },
             ...(!options.excludeToolNames?.has("canvas_place_frame") &&
             designCanvasToolsAllowed({ ...designTurn, designMode: true })
               ? {
-                  placeImages: async (images: readonly { path: string; width: number; height: number }[]) => {
-                    const allowed = async () => (await designModeOn()) && (await imageWorkspaceUnchanged());
+                  placeImages: async (
+                    images: readonly { path: string; width: number; height: number }[],
+                  ) => {
+                    const allowed = async () =>
+                      (await designModeOn()) && (await imageWorkspaceUnchanged());
                     if (!(await allowed())) return null;
                     const frameIds = await placeImagesOnCanvas({
                       chatId: params.chatId,
                       images,
-                      ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
+                      ...(params.designView?.viewSize
+                        ? { viewSize: params.designView.viewSize }
+                        : {}),
                       shouldSave: allowed,
                       store: designCanvasStore,
                       broadcast: announceCanvasChange,
@@ -2811,8 +3133,14 @@ async function prepareGeneration(
         ...(modelOperationsPlan.classify ? { classifierModels: localClassifierModels.models } : {}),
         providerLabel: (id, type) =>
           type === "image"
-            ? isImageGenerationProviderId(id) ? IMAGE_GENERATION_PROVIDER_NAMES[id] : id
-            : piModelOperationProviderLabel(id, operationProviders, providerRegistry.builtinProvider(id)?.label),
+            ? isImageGenerationProviderId(id)
+              ? IMAGE_GENERATION_PROVIDER_NAMES[id]
+              : id
+            : piModelOperationProviderLabel(
+                id,
+                operationProviders,
+                providerRegistry.builtinProvider(id)?.label,
+              ),
         listImages: modelImageReferences.listImages,
         resolveImage: modelImageReferences.resolveImage,
         resolveImages: modelImageReferences.resolveImages,
@@ -2822,13 +3150,16 @@ async function prepareGeneration(
         onUsage: async (record) => {
           // Image providers are always hosted; chat provider deployments never apply to them.
           const imageOperation = record.operation === "image";
-          await usageStore.record(modelOperationUsageRecord(
-            record, imageOperation ? [] : operationProviders, options.usageSource ?? "chat",
-            !imageOperation && localClassifierModels.isLocalProvider(record.provider),
-          ));
+          await usageStore.record(
+            modelOperationUsageRecord(
+              record,
+              imageOperation ? [] : operationProviders,
+              options.usageSource ?? "chat",
+              !imageOperation && localClassifierModels.isLocalProvider(record.provider),
+            ),
+          );
         },
-      })
-        .filter((tool) => !options.excludeToolNames?.has(tool.name)),
+      }).filter((tool) => !options.excludeToolNames?.has(tool.name)),
     });
   }
   let visualizeGuideOffered = false;
@@ -2850,7 +3181,11 @@ async function prepareGeneration(
     // without /visualize refuses the drawing tools, so its plain reply runs.
     const visualize = params.visualize === true;
     const existingHtmlUsage = displayedAssistantHtmlUsage(chat.messages);
-    const { pending: pendingHtmlAfterReconcile, unavailableReason: htmlStoreProblem, reconcileError: htmlReconcileError } = await prepareGenerativeUiTurnStore(
+    const {
+      pending: pendingHtmlAfterReconcile,
+      unavailableReason: htmlStoreProblem,
+      reconcileError: htmlReconcileError,
+    } = await prepareGenerativeUiTurnStore(
       generativeUiArtifactStore,
       { id: params.chatId, messages: chat.messages },
       { onRequest: params.inlineVisuals === "on_request", visualize },
@@ -2919,8 +3254,10 @@ async function prepareGeneration(
             operation: "present",
             artifact,
             ...(placedToolCallId ? { toolCallId: placedToolCallId } : {}),
-            ...(readyPreviewSrc(artifact.title, html)),
-            ...(htmlArtifactPlacements.layoutFor(artifact.mediaId) === "wide" ? { layout: "wide" as const } : {}),
+            ...readyPreviewSrc(artifact.title, html),
+            ...(htmlArtifactPlacements.layoutFor(artifact.mediaId) === "wide"
+              ? { layout: "wide" as const }
+              : {}),
           },
         });
         return true;
@@ -2938,36 +3275,62 @@ async function prepareGeneration(
       id: "aiden.workspace-artifacts",
       tools: [
         ...(visualizeGuideOffered ? [] : [createVisualizeGuideTool({ inlineVisuals: false })]),
-        declareOnDemandLoadNotes(createWorkspaceArtifactTool({
-          workspaceId: workspace.id,
-          chatId: params.chatId,
-          permission,
-          hasFolder: Boolean(folderPath),
-          store: workspaceArtifactStore,
-          takeApprovedDigest: (toolCallId) => takeApprovedWorkspaceArtifactCall(streamId, toolCallId),
-          refresh: (artifact, refreshSignal, reuseFrom) =>
-            workspaceArtifactRunner.refresh(workspace.id, artifact.id, { folderPath, permission }, refreshSignal, { reuseFrom }),
-          check: (sources, approved, checkSignal) =>
-            workspaceArtifactRunner.check(sources, approved, { folderPath, permission }, checkSignal),
-          runAction: (artifactId, actionName, args, expectedDigest, runSignal) =>
-            workspaceArtifactRunner.runAction(
-              workspace.id,
-              artifactId,
-              actionName,
-              args,
-              { folderPath, permission },
-              runSignal,
-              expectedDigest,
-            ),
-          workspaceExists: async () => Boolean(await configStore.getWorkspace(workspace.id)),
-          onChanged: notifyWorkspaceArtifactsChanged,
-        }), visualizeGuideLoadNotes(["catalog"], { inlineVisuals: visualizeGuideOffered })),
+        declareOnDemandLoadNotes(
+          createWorkspaceArtifactTool({
+            workspaceId: workspace.id,
+            chatId: params.chatId,
+            permission,
+            hasFolder: Boolean(folderPath),
+            store: workspaceArtifactStore,
+            takeApprovedDigest: (toolCallId) =>
+              takeApprovedWorkspaceArtifactCall(streamId, toolCallId),
+            refresh: (artifact, refreshSignal, reuseFrom) =>
+              workspaceArtifactRunner.refresh(
+                workspace.id,
+                artifact.id,
+                { folderPath, permission },
+                refreshSignal,
+                { reuseFrom },
+              ),
+            check: (sources, approved, checkSignal) =>
+              workspaceArtifactRunner.check(
+                sources,
+                approved,
+                { folderPath, permission },
+                checkSignal,
+              ),
+            runAction: (artifactId, actionName, args, expectedDigest, runSignal) =>
+              workspaceArtifactRunner.runAction(
+                workspace.id,
+                artifactId,
+                actionName,
+                args,
+                { folderPath, permission },
+                runSignal,
+                expectedDigest,
+              ),
+            workspaceExists: async () => Boolean(await configStore.getWorkspace(workspace.id)),
+            onChanged: notifyWorkspaceArtifactsChanged,
+          }),
+          visualizeGuideLoadNotes(["catalog"], { inlineVisuals: visualizeGuideOffered }),
+        ),
       ],
     });
   }
-  if (!botContext && !assistantMode && workspace && permission !== "none" && !options.excludeToolNames?.has("read_tool_output")) {
-    const outputs = await attachWorkspaceToolOutputs(tools, params.chatId, workspace.id,
-      () => !signal.aborted && (active.has(streamId) || initializing.has(streamId)), workspace);
+  if (
+    !botContext &&
+    !assistantMode &&
+    workspace &&
+    permission !== "none" &&
+    !options.excludeToolNames?.has("read_tool_output")
+  ) {
+    const outputs = await attachWorkspaceToolOutputs(
+      tools,
+      params.chatId,
+      workspace.id,
+      () => !signal.aborted && (active.has(streamId) || initializing.has(streamId)),
+      workspace,
+    );
     tools = outputs.tools;
     // Servers that finish discovery after the turn starts get the same
     // retained-output handling, and read_tool_output accepts their handles.
@@ -2991,7 +3354,8 @@ async function prepareGeneration(
       ? (name) => {
           // A goal round off screen that needs the window: the goal bar offers Continue here.
           const reason = audienceRefusal(name);
-          if (reason && refusedForWantOfWindow(turnAudience, name)) goalTurnHooks().windowToolRefused(params.chatId);
+          if (reason && refusedForWantOfWindow(turnAudience, name))
+            goalTurnHooks().windowToolRefused(params.chatId);
           return reason;
         }
       : audienceRefusal,
@@ -3004,13 +3368,29 @@ async function prepareGeneration(
     const appToolTurn = { liveState: onThisComputer, canOpen: onThisComputer };
     turnToolRefusals.push((name, args) => aidenAppToolUnavailableReason(name, args, appToolTurn));
     const appTools = createAidenAppTools({
-      service: appControlsService, liveState: onThisComputer,
-      runtime: { interaction: "attended-workspace", workspacePermission: permission, providerId: params.providerId, modelId: params.model, availableTools: tools.map((tool) => tool.name) },
-      open: onThisComputer ? (destination, toolSignal) => aidenAppNavigation.open(destination, getOwner(), toolSignal) : undefined,
-      context: { actor: `agent:${params.chatId}`, target: initialOwner.kind === "remote" ? "Paired computer" : thisComputerLabel(process.platform), workspaceId: workspace?.id,
-        humanGesture: false, isCurrent: () => !signal.aborted && !getOwner().isDestroyed() },
+      service: appControlsService,
+      liveState: onThisComputer,
+      runtime: {
+        interaction: "attended-workspace",
+        workspacePermission: permission,
+        providerId: params.providerId,
+        modelId: params.model,
+        availableTools: tools.map((tool) => tool.name),
+      },
+      open: onThisComputer
+        ? (destination, toolSignal) => aidenAppNavigation.open(destination, getOwner(), toolSignal)
+        : undefined,
+      context: {
+        actor: `agent:${params.chatId}`,
+        target:
+          initialOwner.kind === "remote" ? "Paired computer" : thisComputerLabel(process.platform),
+        workspaceId: workspace?.id,
+        humanGesture: false,
+        isCurrent: () => !signal.aborted && !getOwner().isDestroyed(),
+      },
       present: (panel) => {
-        if (appPanels.length >= 4) throw new Error("This response already has four settings panels.");
+        if (appPanels.length >= 4)
+          throw new Error("This response already has four settings panels.");
         appPanels.push(panel);
       },
     }).filter((tool) => !options.excludeToolNames?.has(tool.name));
@@ -3023,7 +3403,10 @@ async function prepareGeneration(
    */
   const aidenCanvasTurn = randomUUID();
   const announceCanvasChange = (update: { chatId: string; revision: number }) =>
-    ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, { ...update, aidenTurn: aidenCanvasTurn } satisfies DesignCanvasUpdated);
+    ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, {
+      ...update,
+      aidenTurn: aidenCanvasTurn,
+    } satisfies DesignCanvasUpdated);
   /** Set while this turn may use the canvas: puts its committed visuals there. */
   let placeCanvasArtifacts: ((artifacts: readonly CanvasArtifact[]) => Promise<void>) | undefined;
   /**
@@ -3047,11 +3430,16 @@ async function prepareGeneration(
       broadcast: announceCanvasChange,
       focus: (frameIds) => {
         const liveOwner = getOwner();
-        if (!liveOwner.isDestroyed()) liveOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
+        if (!liveOwner.isDestroyed())
+          liveOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
       },
       snapshot: async (toolSignal) =>
         supportsImages
-          ? designCanvasSnapshots.request({ chatId: params.chatId, owner: getOwner(), signal: toolSignal ?? signal })
+          ? designCanvasSnapshots.request({
+              chatId: params.chatId,
+              owner: getOwner(),
+              signal: toolSignal ?? signal,
+            })
           : null,
       seesImages: supportsImages,
       ...(params.designView ? { viewState: params.designView } : {}),
@@ -3060,7 +3448,8 @@ async function prepareGeneration(
         inspectDesignPage({
           workspaceRoot: canvasRoot,
           frame,
-          pageUrl: (relativePath) => designUrl(designGrants.issue(params.chatId, canvasRoot), relativePath),
+          pageUrl: (relativePath) =>
+            designUrl(designGrants.issue(params.chatId, canvasRoot), relativePath),
           render: inspectDesignFrame,
           picture: inspectOptions.picture ? { top: inspectOptions.top } : null,
           seesImages: supportsImages,
@@ -3070,7 +3459,11 @@ async function prepareGeneration(
       stillAvailable: async () => {
         if (signal.aborted) return false;
         const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
-        return (await designModeOn()) && current?.folderPath === canvasRoot && current.permission !== "none";
+        return (
+          (await designModeOn()) &&
+          current?.folderPath === canvasRoot &&
+          current.permission !== "none"
+        );
       },
     }).filter((tool) => !options.excludeToolNames?.has(tool.name));
     if (canvasTools.length > 0 && !windowless) {
@@ -3104,7 +3497,10 @@ async function prepareGeneration(
             exit: async () => {
               await chatStore.setDesignMode(params.chatId, false);
               designGrants.revokeChat(params.chatId);
-              ipcMain.broadcast("chats:design-mode-changed", { chatId: params.chatId, designMode: false });
+              ipcMain.broadcast("chats:design-mode-changed", {
+                chatId: params.chatId,
+                designMode: false,
+              });
             },
           }),
         ]
@@ -3121,7 +3517,8 @@ async function prepareGeneration(
       });
     } else {
       heldCanvasTools = canvasTools;
-      if (designModeTool.length > 0) generationExtensions.push({ id: "aiden.design-mode", tools: designModeTool });
+      if (designModeTool.length > 0)
+        generationExtensions.push({ id: "aiden.design-mode", tools: designModeTool });
     }
   }
   /**
@@ -3168,39 +3565,49 @@ async function prepareGeneration(
         return { frameId: frame.id, findings: inspected.findings };
       },
       onError: (relativePath, error) => {
-        if (!signal.aborted) logger.warn("pi", `Could not inspect the design page ${relativePath} after it was written.`, error);
+        if (!signal.aborted)
+          logger.warn(
+            "pi",
+            `Could not inspect the design page ${relativePath} after it was written.`,
+            error,
+          );
       },
     });
     writtenPageInspector = inspector;
     placeWrittenPage = (relativePath) => {
       recentWrittenPages.note(params.chatId, relativePath);
-      pagesPlaced = pagesPlaced.then(async () => {
-        // The write already happened, so Stop does not drop it; design mode
-        // and the chat's workspace folder are checked as they are now.
-        if (!(await canSaveWrittenPage())) return;
-        let leftOff = false;
-        const placedIds = await placeWrittenPagesOnCanvas({
-          chatId: params.chatId,
-          workspaceRoot: pageRoot,
-          paths: [relativePath],
-          ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
-          shouldSave: canSaveWrittenPage,
-          store: designCanvasStore,
-          broadcast: announceCanvasChange,
-          newId: randomUUID,
-          onRemoved: () => {
-            leftOff = true;
-          },
+      pagesPlaced = pagesPlaced
+        .then(async () => {
+          // The write already happened, so Stop does not drop it; design mode
+          // and the chat's workspace folder are checked as they are now.
+          if (!(await canSaveWrittenPage())) return;
+          let leftOff = false;
+          const placedIds = await placeWrittenPagesOnCanvas({
+            chatId: params.chatId,
+            workspaceRoot: pageRoot,
+            paths: [relativePath],
+            ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
+            shouldSave: canSaveWrittenPage,
+            store: designCanvasStore,
+            broadcast: announceCanvasChange,
+            newId: randomUUID,
+            onRemoved: () => {
+              leftOff = true;
+            },
+          });
+          const liveCanvasOwner = getOwner();
+          if (placedIds.length > 0 && !liveCanvasOwner.isDestroyed()) {
+            liveCanvasOwner.send("designCanvas:focus", {
+              chatId: params.chatId,
+              frameIds: placedIds,
+            });
+          }
+          if (leftOff) inspector.removed(relativePath);
+          else inspector.written(relativePath);
+        })
+        .catch((error) => {
+          logger.warn("pi", "Could not put a written page on the design canvas.", error);
         });
-        const liveCanvasOwner = getOwner();
-        if (placedIds.length > 0 && !liveCanvasOwner.isDestroyed()) {
-          liveCanvasOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds: placedIds });
-        }
-        if (leftOff) inspector.removed(relativePath);
-        else inspector.written(relativePath);
-      }).catch((error) => {
-        logger.warn("pi", "Could not put a written page on the design canvas.", error);
-      });
     };
     // A design turn notes design/ before its first command; a turn that
     // enters design mode later notes it when its next command starts.
@@ -3214,7 +3621,8 @@ async function prepareGeneration(
           (pages) => {
             for (const page of pages) placeWrittenPage?.(page);
           },
-          (error) => logger.warn("pi", "Could not look for pages a command wrote in design/.", error),
+          (error) =>
+            logger.warn("pi", "Could not look for pages a command wrote in design/.", error),
         );
       },
     };
@@ -3247,17 +3655,30 @@ async function prepareGeneration(
   // this chat could write them, and Aiden writes them only once the person
   // says yes in chat.
   const designSystemOfferable =
-    !botContext && !assistantMode && !windowless && permission !== "none" && permission !== "read-only" && !options.excludeToolNames?.has("write_file");
+    !botContext &&
+    !assistantMode &&
+    !windowless &&
+    permission !== "none" &&
+    permission !== "read-only" &&
+    !options.excludeToolNames?.has("write_file");
   let offeredDesignSystemFolder: string | undefined;
   const canvasStatusLine = async (): Promise<string> => {
-    const line = canvasPromptLine(await designCanvasStore.get(params.chatId), params.designView?.selection);
+    const line = canvasPromptLine(
+      await designCanvasStore.get(params.chatId),
+      params.designView?.selection,
+    );
     if (!folderPath || !designSystemOfferable) return line;
     try {
       const offer = await designSystemOffers.offerFor(folderPath, signal);
       if (offer) offeredDesignSystemFolder = folderPath;
       return offer ? `${line} ${offer}` : line;
     } catch (error) {
-      if (!signal.aborted) logger.warn("pi", "Could not read the workspace's colours and fonts for a design-system offer.", error);
+      if (!signal.aborted)
+        logger.warn(
+          "pi",
+          "Could not read the workspace's colours and fonts for a design-system offer.",
+          error,
+        );
       return line;
     }
   };
@@ -3272,9 +3693,16 @@ async function prepareGeneration(
     }
   };
   // Pages written in the last step come back inspected before the next request.
-  const withWrittenPageReports = async (context: AgentContext, requestSignal?: AbortSignal): Promise<AgentContext> =>
+  const withWrittenPageReports = async (
+    context: AgentContext,
+    requestSignal?: AbortSignal,
+  ): Promise<AgentContext> =>
     writtenPageInspector
-      ? withDesignInspectNote(context, await writtenPageInspector.take(undefined, requestSignal), Date.now())
+      ? withDesignInspectNote(
+          context,
+          await writtenPageInspector.take(undefined, requestSignal),
+          Date.now(),
+        )
       : context;
   const prepareCanvasTools = async (context: AgentContext): Promise<AgentContext> => {
     if (!(await canvasToolsEnteredNow())) return withCanvasStatus(context);
@@ -3285,7 +3713,9 @@ async function prepareGeneration(
     const sectionPresent = context.messages.some(
       (message) =>
         message.role === "system" &&
-        typeof (message as { sections?: Record<string, unknown> }).sections?.[DESIGN_MODE_SECTION] === "string",
+        typeof (message as { sections?: Record<string, unknown> }).sections?.[
+          DESIGN_MODE_SECTION
+        ] === "string",
     );
     if (additions.length === 0 && sectionPresent) return withCanvasStatus(context);
     return withCanvasStatus({
@@ -3305,7 +3735,8 @@ async function prepareGeneration(
     });
   };
   const enteredCanvasTools: EnteredCanvasTools = {
-    prepare: async (context, requestSignal) => withWrittenPageReports(await prepareCanvasTools(context), requestSignal),
+    prepare: async (context, requestSignal) =>
+      withWrittenPageReports(await prepareCanvasTools(context), requestSignal),
     initialStatusLine: async () => {
       if (canvasStatusNoted || !canvasStatusOffered) return undefined;
       canvasStatusNoted = true;
@@ -3352,7 +3783,8 @@ async function prepareGeneration(
     // On a /visualize turn and in design mode the visual tools are declared
     // from the start, so the first visual needs no load step. Design mode
     // preloads them every turn, so its tool list stays one list.
-    preloadedOnDemandTools: params.visualize === true || designCanvasOffered ? VISUAL_TOOL_NAMES : [],
+    preloadedOnDemandTools:
+      params.visualize === true || designCanvasOffered ? VISUAL_TOOL_NAMES : [],
     appPanels,
     htmlArtifactPlacements,
     imagePlacements,
@@ -3389,7 +3821,8 @@ async function prepareGeneration(
 
 const acpScratch = createAcpScratchDirectories({
   root: () => join(app.getPath("userData"), "acp", "scratch"),
-  onPrepareError: (error) => logger.warn("acp", "Could not prepare the agent scratch directory.", error),
+  onPrepareError: (error) =>
+    logger.warn("acp", "Could not prepare the agent scratch directory.", error),
 });
 
 /** Keeps the admitted half of `start` out of reach of anything but `start`. */
@@ -3489,15 +3922,16 @@ export const llmClient = {
       },
     };
     return runAdmittedGeneration(
-      () => llmClient[runAdmittedStart](
-        streamId,
-        params,
-        owner,
-        options,
-        initialization,
-        computerUseGateSnapshot,
-        escape,
-      ),
+      () =>
+        llmClient[runAdmittedStart](
+          streamId,
+          params,
+          owner,
+          options,
+          initialization,
+          computerUseGateSnapshot,
+          escape,
+        ),
       () => escape.settle(),
       (error) => logger.error("pi", `Could not settle failed start of stream ${streamId}.`, error),
     );
@@ -3547,8 +3981,13 @@ export const llmClient = {
         cancellationOrigin,
         isCurrent: () =>
           initializing.get(streamId) === initialization ||
-          (active.get(streamId)?.chatId === params.chatId && active.get(streamId)?.owner === currentOwner()),
-        append: chatStoreInitializationTerminalAppend(chatStore, params.chatId, options.keepChatModel),
+          (active.get(streamId)?.chatId === params.chatId &&
+            active.get(streamId)?.owner === currentOwner()),
+        append: chatStoreInitializationTerminalAppend(
+          chatStore,
+          params.chatId,
+          options.keepChatModel,
+        ),
         onUnknownOutcome: (terminalError) =>
           logger.error(
             "pi",
@@ -3801,8 +4240,10 @@ export const llmClient = {
     } = setup;
     // Claim checks tell connector failures by the tools' real MCP identity.
     const claimCheckOptions = {
-      isConnectorTool: (name: string) => [...tools, ...lateMcpDiscovery.tools()]
-        .some((tool) => tool.name === name && mcpAgentToolIdentity(tool) !== undefined),
+      isConnectorTool: (name: string) =>
+        [...tools, ...lateMcpDiscovery.tools()].some(
+          (tool) => tool.name === name && mcpAgentToolIdentity(tool) !== undefined,
+        ),
     };
     const attendedAssistant = authoritativeMode === "assistant";
     initialization.computerUse = computerUse;
@@ -3816,27 +4257,30 @@ export const llmClient = {
     // "chat") and ACP harness providers (the agent runs its own tools) start
     // none; title generation, probes, catalogs and subagents never come
     // through here.
-    const chatHooks =
-      runsWorkspaceChatHooks({
-        usageSource: options.usageSource,
-        bot: Boolean(preparedBotContext || authoritativeBot),
-        assistant: attendedAssistant,
-        harnessProvider,
-      })
-        ? createWorkspaceChatHooks(
-            {
-              chatId: params.chatId,
-              ...(folderPath && !noWorkspace ? { workspaceRoot: folderPath } : {}),
+    const chatHooks = runsWorkspaceChatHooks({
+      usageSource: options.usageSource,
+      bot: Boolean(preparedBotContext || authoritativeBot),
+      assistant: attendedAssistant,
+      harnessProvider,
+    })
+      ? createWorkspaceChatHooks(
+          {
+            chatId: params.chatId,
+            ...(folderPath && !noWorkspace ? { workspaceRoot: folderPath } : {}),
+          },
+          undefined,
+          {
+            // Hook messages reach the person as notices, never the model.
+            onMessages: (messages) => {
+              sendGeneration(streamId, "chat:status", {
+                streamId,
+                phase: "hook_messages",
+                messages,
+              });
             },
-            undefined,
-            {
-              // Hook messages reach the person as notices, never the model.
-              onMessages: (messages) => {
-                sendGeneration(streamId, "chat:status", { streamId, phase: "hook_messages", messages });
-              },
-            },
-          )
-        : undefined;
+          },
+        )
+      : undefined;
     // The agent's hooks tool (plan §9) where chat hooks run on an attended
     // turn. A proposal waits for the owner's card on this Mac, raised from
     // inside the tool so Full access and remembered approvals never answer it.
@@ -3871,7 +4315,9 @@ export const llmClient = {
         : undefined;
     const tools = hooksTool ? [...setupTools, hooksTool] : setupTools;
     const skillSnapshot =
-      hooksTool || !setupSkillSnapshot ? setupSkillSnapshot : withoutSkills(setupSkillSnapshot, DESKTOP_HOOK_SKILLS);
+      hooksTool || !setupSkillSnapshot
+        ? setupSkillSnapshot
+        : withoutSkills(setupSkillSnapshot, DESKTOP_HOOK_SKILLS);
     let hookTurnContext: string | undefined;
     /** Outside content in this run, for the gate's new destinations (plan §3.2). */
     let runTaint: RunTaint | undefined;
@@ -3897,7 +4343,12 @@ export const llmClient = {
     const spendingMeter = createSpendingMeter({
       spending,
       owner: spendingOwner,
-      counts: () => spendCounts({ local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models }),
+      counts: () =>
+        spendCounts({
+          local: isLocalModelProvider(runtime.provider),
+          provider: runtime.provider,
+          models: runtime.models,
+        }),
     });
     // The Auto judge (plan §3.2): the chat's own model, or the approval model
     // the person named in Advanced. Built on first use; with no model that
@@ -3910,16 +4361,35 @@ export const llmClient = {
         try {
           const configured = parseApprovalModel((await configStore.getSettings()).approvalModel);
           const judgeRuntime = configured
-            ? await resolveModelRuntime(configured.providerId, configured.model, initialization.controller.signal, params.chatId)
+            ? await resolveModelRuntime(
+                configured.providerId,
+                configured.model,
+                initialization.controller.signal,
+                params.chatId,
+              )
             : runtime;
           const judgeMeter = createSpendingMeter({
             spending,
             owner: spendingOwner,
-            counts: () => spendCounts({ local: isLocalModelProvider(judgeRuntime.provider), provider: judgeRuntime.provider, models: judgeRuntime.models }),
+            counts: () =>
+              spendCounts({
+                local: isLocalModelProvider(judgeRuntime.provider),
+                provider: judgeRuntime.provider,
+                models: judgeRuntime.models,
+              }),
           });
           complete = approvalJudgeComplete(
-            { model: judgeRuntime.model, provider: judgeRuntime.provider, apiKey: judgeRuntime.apiKey, ...(judgeRuntime.headers ? { headers: judgeRuntime.headers } : {}), streams: judgeRuntime.streams },
-            { recordUsage: (record) => usageStore.record(record), countSpend: (message) => judgeMeter.count(message) },
+            {
+              model: judgeRuntime.model,
+              provider: judgeRuntime.provider,
+              apiKey: judgeRuntime.apiKey,
+              ...(judgeRuntime.headers ? { headers: judgeRuntime.headers } : {}),
+              streams: judgeRuntime.streams,
+            },
+            {
+              recordUsage: (record) => usageStore.record(record),
+              countSpend: (message) => judgeMeter.count(message),
+            },
           );
         } catch (error) {
           logger.warn("pi", "The approval model is unavailable; Auto will ask instead.", error);
@@ -3980,7 +4450,10 @@ export const llmClient = {
           status: (statusOptions) => computerUseStatus.status(statusOptions),
           requestAccess: async (toolCallId, approvalSignal) => {
             timeline.toolAwaitingApproval(toolCallId);
-            chatHooks?.notify("Aiden needs your permission to use Computer Use", "permission_prompt");
+            chatHooks?.notify(
+              "Aiden needs your permission to use Computer Use",
+              "permission_prompt",
+            );
             const publicToolCallId = timeline.publicToolCallId(toolCallId);
             if (!publicToolCallId) throw new Error("The tool approval step was not initialized.");
             const outcome = await approvals.request(
@@ -4045,9 +4518,9 @@ export const llmClient = {
     // Drafts only stream when render_artifact can run this turn (not when
     // visuals are Off, for surfaces that never get the tool, or in an On
     // request turn without /visualize, which refuses the call).
-    const visualsRegistered = generationExtensions.some(
-      (extension) => extension.id === GENERATIVE_UI_EXTENSION_ID,
-    ) && !(params.inlineVisuals === "on_request" && params.visualize !== true);
+    const visualsRegistered =
+      generationExtensions.some((extension) => extension.id === GENERATIVE_UI_EXTENSION_ID) &&
+      !(params.inlineVisuals === "on_request" && params.visualize !== true);
     const htmlVisualDrafts = createGenerativeUiDraftSession({
       enabled: visualsRegistered,
       publicToolCallId: (rawToolCallId) => timeline.publicToolCallId(rawToolCallId),
@@ -4085,7 +4558,8 @@ export const llmClient = {
     // not failed. Any other cancellation keeps the issue treatment.
     const generationStoppedByUser = () =>
       generationCancelRequested() &&
-      (active.get(streamId)?.cancellationOrigin ?? initialization.cancellationOrigin) === "user_stop";
+      (active.get(streamId)?.cancellationOrigin ?? initialization.cancellationOrigin) ===
+        "user_stop";
     const persistAssistant = async (
       content: string,
       reasoning: string,
@@ -4120,11 +4594,7 @@ export const llmClient = {
             content,
             model: params.model,
             reasoning: reasoning.trim() ? reasoning : undefined,
-            pi: lastAssistantMessage
-              ? storedPiAssistantMessage(
-                  lastAssistantMessage,
-                )
-              : undefined,
+            pi: lastAssistantMessage ? storedPiAssistantMessage(lastAssistantMessage) : undefined,
             providerFailure,
             timeline:
               // A failed status is kept so a partial reply still reads as Failed in the chat list.
@@ -4191,7 +4661,11 @@ export const llmClient = {
               displayedHtmlArtifacts.map(({ mediaId, title }) => ({ mediaId, title })),
             );
           } catch (error) {
-            logger.warn("pi", `Could not place visuals on the design canvas for stream ${streamId}.`, error);
+            logger.warn(
+              "pi",
+              `Could not place visuals on the design canvas for stream ${streamId}.`,
+              error,
+            );
           }
         }
         if (messageId && (displayedHtmlArtifacts.length > 0 || displayedUiVisuals.length > 0)) {
@@ -4204,7 +4678,9 @@ export const llmClient = {
                 kind: "html" as const,
                 visualId: artifact.mediaId,
                 title: artifact.title,
-                ...(htmlArtifactPlacements.layoutFor(artifact.mediaId) === "wide" ? { layout: "wide" as const } : {}),
+                ...(htmlArtifactPlacements.layoutFor(artifact.mediaId) === "wide"
+                  ? { layout: "wide" as const }
+                  : {}),
               })),
               ...displayedUiVisuals.map((visual) => ({
                 kind: "ui" as const,
@@ -4257,7 +4733,9 @@ export const llmClient = {
     let piUpgradeCompactionEnabled = false;
     // The on-demand list this run recorded (or found recorded) at its start,
     // and the live list, so the run's end records what it loaded mid-run.
-    let onDemandDeclaredRecord: { recorded: readonly string[]; current: () => string[] } | undefined;
+    let onDemandDeclaredRecord:
+      | { recorded: readonly string[]; current: () => string[] }
+      | undefined;
     let memoryApprovalContext: { scope: MemoryScope; provenance: MemoryProvenance } | undefined;
     try {
       const piUpgradePolicy = await piUpgradeRolloutStore.load();
@@ -4291,7 +4769,8 @@ export const llmClient = {
             development: !isPackagedRuntime(),
             behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
           });
-          if (!memoryEligible) throw new Error("Durable memory is outside the active rollout stage.");
+          if (!memoryEligible)
+            throw new Error("Durable memory is outside the active rollout stage.");
           if (!(await memoryEnabledForChat(configStore, generationChat))) {
             throw new Error("Durable memory is disabled by the current memory policy.");
           }
@@ -4308,10 +4787,19 @@ export const llmClient = {
             generationChat.id,
             memoryMetadataForChat(generationChat),
           );
-          if (indexing.rejected || indexing.evicted) writeDiagnosticEvent({
-            level: "info", area: "persistence", event: "memory-indexed", outcome: "completed",
-            fields: { accepted: indexing.accepted, rejected: indexing.rejected, evicted: indexing.evicted, truncated: indexing.atCapacity },
-          });
+          if (indexing.rejected || indexing.evicted)
+            writeDiagnosticEvent({
+              level: "info",
+              area: "persistence",
+              event: "memory-indexed",
+              outcome: "completed",
+              fields: {
+                accepted: indexing.accepted,
+                rejected: indexing.rejected,
+                evicted: indexing.evicted,
+                truncated: indexing.atCapacity,
+              },
+            });
           const provenance = memoryProvenanceForGeneration(
             generationChat,
             options.turnId,
@@ -4386,8 +4874,7 @@ export const llmClient = {
       // Arbitrary runtime extensions remain outside the exact Bot catalog.
       // Only the explicitly admitted task extension and history recall enter
       // Bot prompts and schemas.
-      const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] =
-        preparedBotContext
+      const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] = preparedBotContext
         ? [
             ...(todoRuntimeExtension ? [todoRuntimeExtension] : []),
             // Journalless runs must not offer VCC recall over an empty
@@ -4438,41 +4925,42 @@ export const llmClient = {
         tools,
         baseRuntimeExtensions,
       ).tools;
-      const advisorChooser: Pick<AdvisorExtensionInput, "requestQuestionnaire"> = shouldEnableAskUserQuestionExtension({
-        usageSource: options.usageSource,
-        interactionSurface: options.interactionSurface,
-        assistantMode: authoritativeMode !== undefined,
-        botBound: preparedBotContext !== undefined,
-        rendererOwner: owner.id !== 0,
-        remoteOwner: owner.kind === "remote",
-        // The advisor's model chooser asks through the same prompt, so a
-        // device that cannot show one gets no chooser.
-        excluded:
-          (options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false) ||
-          options.questionPromptsUnavailable === true,
-      })
-        ? {
-            requestQuestionnaire: (
-              toolCallId: string,
-              questions: Parameters<typeof questionnaires.request>[0]["questions"],
-              requestSignal?: AbortSignal,
-            ) =>
-              questionnaires.request(
-                {
-                  streamId,
-                  toolCallId,
-                  questions,
-                  // The advisor picker falls back to its default model on
-                  // timeout; only unattended owners get a deadline here.
-                  timeoutMs: resolveAskUserQuestionTimeoutMs(undefined, {
-                    unattended: owner.kind === "remote",
-                  }),
-                },
-                currentOwnerDocumentId(),
-                requestSignal,
-              ),
-          }
-        : {};
+      const advisorChooser: Pick<AdvisorExtensionInput, "requestQuestionnaire"> =
+        shouldEnableAskUserQuestionExtension({
+          usageSource: options.usageSource,
+          interactionSurface: options.interactionSurface,
+          assistantMode: authoritativeMode !== undefined,
+          botBound: preparedBotContext !== undefined,
+          rendererOwner: owner.id !== 0,
+          remoteOwner: owner.kind === "remote",
+          // The advisor's model chooser asks through the same prompt, so a
+          // device that cannot show one gets no chooser.
+          excluded:
+            (options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false) ||
+            options.questionPromptsUnavailable === true,
+        })
+          ? {
+              requestQuestionnaire: (
+                toolCallId: string,
+                questions: Parameters<typeof questionnaires.request>[0]["questions"],
+                requestSignal?: AbortSignal,
+              ) =>
+                questionnaires.request(
+                  {
+                    streamId,
+                    toolCallId,
+                    questions,
+                    // The advisor picker falls back to its default model on
+                    // timeout; only unattended owners get a deadline here.
+                    timeoutMs: resolveAskUserQuestionTimeoutMs(undefined, {
+                      unattended: owner.kind === "remote",
+                    }),
+                  },
+                  currentOwnerDocumentId(),
+                  requestSignal,
+                ),
+            }
+          : {};
       const advisorExtension = await advisorRuntime.extensionForGeneration({
         scope: {
           usageSource: options.usageSource,
@@ -4499,33 +4987,42 @@ export const llmClient = {
         sideCallPrefix: () => chatSideCallPrefixes.latest(params.chatId),
         ...advisorChooser,
       });
-      const advisorTurnNote = advisorExtension && !advisorChooser.requestQuestionnaire ? ADVISOR_NO_CHOOSER_TURN_NOTE : "";
+      const advisorTurnNote =
+        advisorExtension && !advisorChooser.requestQuestionnaire
+          ? ADVISOR_NO_CHOOSER_TURN_NOTE
+          : "";
       const formFillNote = formFill ? formFillTurnNote(formFill) : "";
-      const codemodeExtension: PiAgentRuntimeExtension | undefined =
-        workspaceCodemodeEnabled({
-            workspaceId,
-            folderPath,
-            bot: Boolean(preparedBotContext),
-            mode: authoritativeMode,
-            permission,
-            excludeToolNames: options.excludeToolNames,
-          })
-          ? {
-              id: "aiden.workspace-codemode",
-              tools: [createPiCodemodeTool({
+      const codemodeExtension: PiAgentRuntimeExtension | undefined = workspaceCodemodeEnabled({
+        workspaceId,
+        folderPath,
+        bot: Boolean(preparedBotContext),
+        mode: authoritativeMode,
+        permission,
+        excludeToolNames: options.excludeToolNames,
+      })
+        ? {
+            id: "aiden.workspace-codemode",
+            tools: [
+              createPiCodemodeTool({
                 tools: () => candidate?.getCallableTools() ?? [],
                 executeTool: (parentId, name, args, requestSignal) => {
                   if (!candidate) throw new Error("The workspace runtime is not ready.");
                   return candidate.executeNestedToolCall(parentId, name, args, requestSignal);
                 },
                 settled: (requestSignal) => lateMcpDiscovery.settled(requestSignal),
-              }), ...(!options.excludeToolNames?.has("tool_search") ? [createPiToolDiscovery({
-                tools: () => candidate?.getCallableTools() ?? [],
-                isCallable: isPiCodemodeCallable,
-                settled: (requestSignal) => lateMcpDiscovery.settled(requestSignal),
-              }).toolSearch] : [])],
-            }
-          : undefined;
+              }),
+              ...(!options.excludeToolNames?.has("tool_search")
+                ? [
+                    createPiToolDiscovery({
+                      tools: () => candidate?.getCallableTools() ?? [],
+                      isCallable: isPiCodemodeCallable,
+                      settled: (requestSignal) => lateMcpDiscovery.settled(requestSignal),
+                    }).toolSearch,
+                  ]
+                : []),
+            ],
+          }
+        : undefined;
       const runtimeExtensions: readonly PiAgentRuntimeExtension[] = [
         ...baseRuntimeExtensions,
         ...(advisorExtension ? [advisorExtension] : []),
@@ -4566,14 +5063,20 @@ export const llmClient = {
       // a removal: the store is read for it only when the journal states a
       // fact the block lacks. A store that cannot be read confirms none of
       // them, so they are treated as removed.
-      const currentChatState: ChatTurnState = await withApprovedMemoryFacts({
-        branch: git.branch ?? null,
-        permission,
-        ...extensionChatState(runtimeExtensions),
-      }, stateBranch, runtimeExtensions, (error) => logger.warn(
-        "memory",
-        `Could not confirm approved memory facts for chat ${params.chatId} (${error instanceof Error ? error.name : "unknown error"}); facts outside the always-on block are treated as removed.`,
-      ));
+      const currentChatState: ChatTurnState = await withApprovedMemoryFacts(
+        {
+          branch: git.branch ?? null,
+          permission,
+          ...extensionChatState(runtimeExtensions),
+        },
+        stateBranch,
+        runtimeExtensions,
+        (error) =>
+          logger.warn(
+            "memory",
+            `Could not confirm approved memory facts for chat ${params.chatId} (${error instanceof Error ? error.name : "unknown error"}); facts outside the always-on block are treated as removed.`,
+          ),
+      );
       const chatStatePlan = planChatTurnState({
         journaled: skillsEnabledForTurn ? journaledChatState(stateBranch) : undefined,
         current: currentChatState,
@@ -4601,7 +5104,9 @@ export const llmClient = {
                 geminiLive: geminiLiveEnabled(),
               }),
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
-              mcpToolNames: tools.filter((tool) => mcpAgentToolIdentity(tool) !== undefined).map((tool) => tool.name),
+              mcpToolNames: tools
+                .filter((tool) => mcpAgentToolIdentity(tool) !== undefined)
+                .map((tool) => tool.name),
               mcpServers: assistantMcpInventory.servers,
               mcpServerTotal: assistantMcpInventory.totalEnabledServers,
               mcpInventoryTruncated: assistantMcpInventory.truncated,
@@ -4629,7 +5134,8 @@ export const llmClient = {
                 hostPromptSkills = skills;
                 return systemPrompt;
               });
-      if (authoritativeBot && !preparedBotContext) throw new Error("Bot runtime authority was not prepared.");
+      if (authoritativeBot && !preparedBotContext)
+        throw new Error("Bot runtime authority was not prepared.");
       const assembly = assembleChatPrompt({
         basePrompt: baseSystemPrompt,
         ...(hostPromptSkills ? { baseSkills: hostPromptSkills } : {}),
@@ -4675,12 +5181,23 @@ export const llmClient = {
         declared: new Set(runtimeTools.map(({ name }) => name)),
         latePending: () => lateMcpDiscovery.pending(),
         journaled: journaledMcpServersSection(await mcpSectionJournal.getBranch()),
-        connectorsWithheld: !preparedBotContext && options.unattended === true && options.allowMcpTools === false,
+        connectorsWithheld:
+          !preparedBotContext && options.unattended === true && options.allowMcpTools === false,
       });
       // Activity shows MCP tools by their `server/tool` label, not the generated name.
-      timeline.setToolLabels((toolName) => mcpToolActivityLabel(candidate?.getCallableTools() ?? modelContributions.tools, toolName));
-      const compactionBudget = resolveCompactionModelBudget(compactionModelOverrides, model, compactionEngine);
-      const compactionInputReserveTokens = configuredCompactionReserveTokens(compactionModelOverrides, model, compactionEngine);
+      timeline.setToolLabels((toolName) =>
+        mcpToolActivityLabel(candidate?.getCallableTools() ?? modelContributions.tools, toolName),
+      );
+      const compactionBudget = resolveCompactionModelBudget(
+        compactionModelOverrides,
+        model,
+        compactionEngine,
+      );
+      const compactionInputReserveTokens = configuredCompactionReserveTokens(
+        compactionModelOverrides,
+        model,
+        compactionEngine,
+      );
       const generationContextOptions = {
         compactionReserveTokens: compactionInputReserveTokens,
         contextWindow: model.contextWindow,
@@ -4696,7 +5213,11 @@ export const llmClient = {
         // inside the turn, states the current state again.
         // While the chat has a goal (until it is done or cleared), its
         // byte-stable reminder sits right after a compaction summary.
-        prepareMessages: chatStateRequestMessages(chatStatePlan.head, currentChatState, goalTurnHooks().reminder(params.chatId)),
+        prepareMessages: chatStateRequestMessages(
+          chatStatePlan.head,
+          currentChatState,
+          goalTurnHooks().reminder(params.chatId),
+        ),
       };
       assertGenerationContextCapacity(generationContextOptions);
       const onCompactionEvent = (event: PiCompactionEvent) => {
@@ -4742,8 +5263,13 @@ export const llmClient = {
       const generationAttended = () => {
         const generation = active.get(streamId) ?? initializing.get(streamId);
         const liveOwner = currentOwner();
-        return !!generation && generation.owner === liveOwner && !generation.cancelRequested &&
-          !generation.rendererDetached && !liveOwner.isDestroyed();
+        return (
+          !!generation &&
+          generation.owner === liveOwner &&
+          !generation.cancelRequested &&
+          !generation.rendererDetached &&
+          !liveOwner.isDestroyed()
+        );
       };
       const approvedChatMemoryFacts = async () =>
         memoryExtension && (await memoryEnabledForChat(configStore, generationChat))
@@ -4767,7 +5293,8 @@ export const llmClient = {
         }),
         model,
         thinkingLevel,
-        journalMemoryFacts: async () => memoryFactLinesInBranch(await journalWithForgottenFacts.getBranch()),
+        journalMemoryFacts: async () =>
+          memoryFactLinesInBranch(await journalWithForgottenFacts.getBranch()),
         settings: {
           ...DEFAULT_COMPACTION_SETTINGS,
           ...compactionBudget,
@@ -4797,7 +5324,9 @@ export const llmClient = {
                     interactionSurface: options.interactionSurface,
                     mode: authoritativeMode,
                   }) &&
-                  (await precomputeWithinSpendingLimit(spending, spendingOwner, () => spendingMeter.settled())),
+                  (await precomputeWithinSpendingLimit(spending, spendingOwner, () =>
+                    spendingMeter.settled(),
+                  )),
               },
             }
           : {}),
@@ -4843,7 +5372,13 @@ export const llmClient = {
           forkSummary,
         );
       } else {
-        await ensurePiForkSummary(piSession, priorVisibleMessages, forkSummary, model, supportsImages);
+        await ensurePiForkSummary(
+          piSession,
+          priorVisibleMessages,
+          forkSummary,
+          model,
+          supportsImages,
+        );
       }
       const promptJournal = piSession;
       const contentOverrides = new Map<string, string>();
@@ -4894,7 +5429,9 @@ export const llmClient = {
         // A `child_chats` start Aiden quit in the middle of names the chats it
         // already made, so Resume finds them instead of starting more.
         await recordPiEffectRecoveryBoundary(promptJournal, recoveryEffects, async (pending) => {
-          const starts = pending.filter((effect) => effect.toolName === CHILD_CHATS_TOOL_NAME).map((effect) => effect.toolCallId);
+          const starts = pending
+            .filter((effect) => effect.toolName === CHILD_CHATS_TOOL_NAME)
+            .map((effect) => effect.toolCallId);
           if (starts.length === 0) return undefined;
           const { childChats } = await import("./chat-orchestration/child-chats-main.js");
           return childChats.interruptedStarts(params.chatId, starts);
@@ -4920,16 +5457,28 @@ export const llmClient = {
         : undefined;
       // A keep-going goal the person just set: its kickoff note follows their
       // objective, once. A notice (a round's continuation) never carries it.
-      const goalKickoffNote = currentPromptMessage && currentUser?.notice === undefined
-        ? goalTurnHooks().kickoff(params.chatId) ?? ""
-        : "";
+      const goalKickoffNote =
+        currentPromptMessage && currentUser?.notice === undefined
+          ? (goalTurnHooks().kickoff(params.chatId) ?? "")
+          : "";
       turnFollowingMessages = currentPromptMessage
         ? [
-            ...(hookTurnContext ? [hookContextMessage(hookTurnContext, currentPromptMessage.timestamp)] : []),
+            ...(hookTurnContext
+              ? [hookContextMessage(hookTurnContext, currentPromptMessage.timestamp)]
+              : []),
             ...(chatStatePlan.update ? [chatStatePlan.update(currentPromptMessage.timestamp)] : []),
-            ...[turnNoteMessage([goalKickoffNote, generativeUiTurnNote, advisorTurnNote, formFillNote, mcpServersSection.turnNote], currentPromptMessage.timestamp)].filter(
-              (note): note is AgentMessage => note !== undefined,
-            ),
+            ...[
+              turnNoteMessage(
+                [
+                  goalKickoffNote,
+                  generativeUiTurnNote,
+                  advisorTurnNote,
+                  formFillNote,
+                  mcpServersSection.turnNote,
+                ],
+                currentPromptMessage.timestamp,
+              ),
+            ].filter((note): note is AgentMessage => note !== undefined),
           ]
         : [];
       // One read of the journal's whole branch gives both the model context
@@ -4945,7 +5494,8 @@ export const llmClient = {
         journaled: skillsEnabledForTurn,
         prompt: currentPromptMessage !== undefined,
       });
-      for (const entry of headJournaling.alone) await promptJournal.appendCustomEntry(entry.customType, entry.data);
+      for (const entry of headJournaling.alone)
+        await promptJournal.appendCustomEntry(entry.customType, entry.data);
       let initialMessages = (await promptJournal.buildContext(journalBranch)).messages;
       if (onDemandTools) {
         // Tools this chat already loaded, called or was given stay declared
@@ -4960,25 +5510,45 @@ export const llmClient = {
         if (declaredNow.join("\n") !== declaredBefore.join("\n")) {
           await promptJournal.appendCustomEntry(ON_DEMAND_DECLARED_ENTRY, { names: declaredNow });
         }
-        onDemandDeclaredRecord = { recorded: declaredNow, current: () => onDemandTools.declaredNames() };
+        onDemandDeclaredRecord = {
+          recorded: declaredNow,
+          current: () => onDemandTools.declaredNames(),
+        };
       }
       runTaint = new RunTaint({
         // A tainted lead's own words are not the person naming a site.
-        personText: runTaintPersonText(generationChat.messages, { leadWordsTrusted: judgeTrusted() }),
-        history: runTaintHistoryOfRun({ initialMessages, branch: journalBranch, messages: generationChat.messages }),
+        personText: runTaintPersonText(generationChat.messages, {
+          leadWordsTrusted: judgeTrusted(),
+        }),
+        history: runTaintHistoryOfRun({
+          initialMessages,
+          branch: journalBranch,
+          messages: generationChat.messages,
+        }),
         isConnectorTool: (name) => claimCheckOptions.isConnectorTool(name),
         // In a started chat, the lead's notice of this run's ending will quote outside content.
         onOutside: () => {
           void import("./chat-orchestration/links-main.js")
             .then(({ chatLinks }) => chatLinks.markChildTainted(params.chatId))
-            .catch((error: unknown) => logger.warn("chat-orchestration", "Could not record that a started chat read outside content.", error));
+            .catch((error: unknown) =>
+              logger.warn(
+                "chat-orchestration",
+                "Could not record that a started chat read outside content.",
+                error,
+              ),
+            );
         },
       });
       if (leadTaintedRun) runTaint.markOutside();
       leadRunTaint.tainted = () => runTaint?.tainted === true;
       // A goal round works toward the objective the person set.
-      const goalObjective = options.goalRound === true ? goalTurnHooks().objective(params.chatId) : undefined;
-      approvalRequestText = ownerRequestText(generationChat.messages, currentUser, goalObjective ? { goalObjective } : {});
+      const goalObjective =
+        options.goalRound === true ? goalTurnHooks().objective(params.chatId) : undefined;
+      approvalRequestText = ownerRequestText(
+        generationChat.messages,
+        currentUser,
+        goalObjective ? { goalObjective } : {},
+      );
       // A design turn's first request carries the canvas counts, journaled
       // after the history they follow (see `withJournaledCanvasStatusNote`).
       const canvasStatusLine = await enteredCanvasTools.initialStatusLine();
@@ -4993,11 +5563,17 @@ export const llmClient = {
       }
       // The head declares the chat's fixed tools; loaded tools are declared by
       // the system messages the journal kept, or appended before this prompt.
-      const head = createInitialSystemMessage(systemPrompt, (onDemandTools ? assembly.headTools : runtimeTools).map(toToolDeclaration));
+      const head = createInitialSystemMessage(
+        systemPrompt,
+        (onDemandTools ? assembly.headTools : runtimeTools).map(toToolDeclaration),
+      );
       if (browserDiscovery) {
         // A discovery the journal holds keeps the browser tools from the first
         // step, outside the head, so the next response asks for nothing again.
-        const prepared = await browserDiscovery.prepare({ messages: initialMessages, tools: [...runtimeTools] });
+        const prepared = await browserDiscovery.prepare({
+          messages: initialMessages,
+          tools: [...runtimeTools],
+        });
         if (prepared.tools && prepared.tools.length !== runtimeTools.length) {
           runtimeTools = prepared.tools;
           generationContextOptions.tools = runtimeTools;
@@ -5006,15 +5582,21 @@ export const llmClient = {
       }
       if (head) initialMessages = [head, ...initialMessages];
       if (agentsInstructions) {
-        const prepared = await agentsInstructions.apply({
-          messages: initialMessages,
-          tools: [...runtimeTools],
-        }, initialization.controller.signal);
+        const prepared = await agentsInstructions.apply(
+          {
+            messages: initialMessages,
+            tools: [...runtimeTools],
+          },
+          initialization.controller.signal,
+        );
         initialMessages = prepared.messages;
         updateGenerationContextOptions(generationContextOptions, prepared);
       }
       {
-        const prepared = mcpServersSection.apply({ messages: initialMessages, tools: [...runtimeTools] });
+        const prepared = mcpServersSection.apply({
+          messages: initialMessages,
+          tools: [...runtimeTools],
+        });
         if (prepared.messages !== initialMessages) {
           initialMessages = prepared.messages;
           updateGenerationContextOptions(generationContextOptions, prepared);
@@ -5032,45 +5614,71 @@ export const llmClient = {
       initialization.skillPrompt = undefined;
       const agentRuntimeOptions = buildAgentRuntimeOptions(params.chatId, runtime);
       let attendedToolRecoveryRequested = false;
-      if (canWarmForegroundChat({
-        enabled: cacheWarmingEnabled,
-        local: isLocalModelProvider(runtime.provider),
-        bot: Boolean(preparedBotContext),
-        owner,
-        usageSource: options.usageSource,
-        interactionSurface: options.interactionSurface,
-        mode: authoritativeMode,
-      })) {
+      if (
+        canWarmForegroundChat({
+          enabled: cacheWarmingEnabled,
+          local: isLocalModelProvider(runtime.provider),
+          bot: Boolean(preparedBotContext),
+          owner,
+          usageSource: options.usageSource,
+          interactionSurface: options.interactionSurface,
+          mode: authoritativeMode,
+        })
+      ) {
         cacheWarmer = new PiCacheWarmer({
           signal: initialization.controller.signal,
           documentId: owner.documentId,
           enabled: async () => (await configStore.getSettings()).cacheWarmingEnabled === true,
           isCurrent: generationAttended,
-          resolveRuntime: (signal) => resolveModelRuntime(params.providerId, params.model, signal, params.chatId),
+          resolveRuntime: (signal) =>
+            resolveModelRuntime(params.providerId, params.model, signal, params.chatId),
           recordUsage: async (message, freshRuntime) => {
             chatPromptCacheTelemetry.observeWarm(params.chatId, message);
             spendingMeter.count(message);
-            await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" }));
+            await usageStore.record(
+              assistantUsageRecord({
+                message,
+                provider: freshRuntime.provider,
+                model: freshRuntime.model,
+                source: "cache-warm",
+              }),
+            );
           },
           // The same gate as compaction precompute: a reply that took the
           // chat or Bot past its limit leaves nothing more to send.
-          withinSpendingLimit: () => precomputeWithinSpendingLimit(spending, spendingOwner, () => spendingMeter.settled()),
+          withinSpendingLimit: () =>
+            precomputeWithinSpendingLimit(spending, spendingOwner, () => spendingMeter.settled()),
           // Forgetting a fact or turning memory off writes nothing to the
           // chat, so each refresh confirms the facts its request states.
           approvedMemoryFacts: approvedChatMemoryFacts,
           // A warming read restarts the provider's cache lifetime without a
           // new projection, so the countdown is re-sent from that request.
           onCacheRefreshed: (requestStartedAt) => {
-            rememberPromptCacheRefresh(params.chatId, { provider: model.provider, model: model.id, requestStartedAt });
+            rememberPromptCacheRefresh(params.chatId, {
+              provider: model.provider,
+              model: model.id,
+              requestStartedAt,
+            });
             const pressure = lastContextPressure;
             if (!pressure?.promptCache) return;
-            lastContextPressure = { ...pressure, promptCache: { ...pressure.promptCache, lastRequestAt: requestStartedAt } };
+            lastContextPressure = {
+              ...pressure,
+              promptCache: { ...pressure.promptCache, lastRequestAt: requestStartedAt },
+            };
             // Once the reply has settled the stream is gone; the window that
             // still shows the chat gets the countdown directly.
             if (active.has(streamId) || initializing.has(streamId)) {
-              sendGeneration(streamId, "chat:context-pressure", { streamId, chatId: params.chatId, pressure: lastContextPressure });
+              sendGeneration(streamId, "chat:context-pressure", {
+                streamId,
+                chatId: params.chatId,
+                pressure: lastContextPressure,
+              });
             } else if (!owner.isDestroyed()) {
-              owner.send("chat:context-pressure", { streamId, chatId: params.chatId, pressure: lastContextPressure });
+              owner.send("chat:context-pressure", {
+                streamId,
+                chatId: params.chatId,
+                pressure: lastContextPressure,
+              });
             }
           },
         });
@@ -5091,17 +5699,33 @@ export const llmClient = {
           logger.debug("prompt-cache", `${formatPromptCacheMissLog(report)} stream=${streamId}`);
           const pressure = lastContextPressure;
           if (!pressure) return;
-          lastContextPressure = { ...pressure, lastCacheMiss: { source: report.source, at: report.at } };
-          sendGeneration(streamId, "chat:context-pressure", { streamId, chatId: params.chatId, pressure: lastContextPressure });
+          lastContextPressure = {
+            ...pressure,
+            lastCacheMiss: { source: report.source, at: report.at },
+          };
+          sendGeneration(streamId, "chat:context-pressure", {
+            streamId,
+            chatId: params.chatId,
+            pressure: lastContextPressure,
+          });
         },
         onMissCleared: () => {
           const pressure = lastContextPressure;
           if (!pressure?.lastCacheMiss) return;
           const { lastCacheMiss: _cleared, ...rest } = pressure;
           lastContextPressure = rest;
-          sendGeneration(streamId, "chat:context-pressure", { streamId, chatId: params.chatId, pressure: lastContextPressure });
+          sendGeneration(streamId, "chat:context-pressure", {
+            streamId,
+            chatId: params.chatId,
+            pressure: lastContextPressure,
+          });
         },
-        onError: (error) => logger.debug("prompt-cache", `Could not attribute a prompt-cache miss for stream ${streamId}.`, error),
+        onError: (error) =>
+          logger.debug(
+            "prompt-cache",
+            `Could not attribute a prompt-cache miss for stream ${streamId}.`,
+            error,
+          ),
       });
       // btw and the same-model advisor continue the chat's last request, so
       // they read the cache this request writes. Agent harnesses and Bot
@@ -5115,14 +5739,19 @@ export const llmClient = {
             approvedMemoryFacts: approvedChatMemoryFacts,
           })
         : measuredStream;
-      const warmedStream = cacheWarmer ? withPiCacheWarming(prefixedStream, cacheWarmer) : prefixedStream;
+      const warmedStream = cacheWarmer
+        ? withPiCacheWarming(prefixedStream, cacheWarmer)
+        : prefixedStream;
       // A retry can wait while the chat's balance or limit changes. Check it
       // again at dispatch, after waiting and before starting the provider call.
       const observedStream: typeof realStream = harnessProvider
         ? warmedStream
         : spendingMeter.wrap(
             withUsageLimitWait(warmedStream, {
-              ...usageLimits.streamOptions({ kind: "chat", id: params.chatId }, runtime.provider.label),
+              ...usageLimits.streamOptions(
+                { kind: "chat", id: params.chatId },
+                runtime.provider.label,
+              ),
               beforeSendRefusal: async () => {
                 await spendingMeter.settled();
                 dispatchSpendingRefusal = await spending.refusal(spendingOwner);
@@ -5130,15 +5759,23 @@ export const llmClient = {
               },
             }),
           );
-      const { streamFn: requestStream, retention: promptCacheRetention } = chatTurnPromptCache({
-        longPromptCacheRetention,
-        agentHarness: Boolean(harnessProvider),
-        bot: Boolean(preparedBotContext),
-        usageSource: options.usageSource,
-        mode: authoritativeMode,
-        ownerKind: owner.kind,
-      }, observedStream, model);
-      rememberPromptCacheRetention(params.chatId, { provider: model.provider, model: model.id, retention: promptCacheRetention });
+      const { streamFn: requestStream, retention: promptCacheRetention } = chatTurnPromptCache(
+        {
+          longPromptCacheRetention,
+          agentHarness: Boolean(harnessProvider),
+          bot: Boolean(preparedBotContext),
+          usageSource: options.usageSource,
+          mode: authoritativeMode,
+          ownerKind: owner.kind,
+        },
+        observedStream,
+        model,
+      );
+      rememberPromptCacheRetention(params.chatId, {
+        provider: model.provider,
+        model: model.id,
+        retention: promptCacheRetention,
+      });
       const promptCacheTtl = promptCacheTtlMs(model, promptCacheRetention);
       candidate = new PiAgentRuntimeHarness({
         contributions: { ...runtimeContributions, tools: runtimeTools },
@@ -5149,7 +5786,9 @@ export const llmClient = {
         ...(runtimeTools.some((tool) => tool.name === "codemode")
           ? {
               lateDeferredTools: () => [
-                ...lateMcpDiscovery.tools().filter((tool) => !options.excludeToolNames?.has(tool.name)),
+                ...lateMcpDiscovery
+                  .tools()
+                  .filter((tool) => !options.excludeToolNames?.has(tool.name)),
                 ...onDemandCallable,
                 // Canvas tools held until the person entered design mode mid-reply.
                 ...enteredCanvasTools.deferred(),
@@ -5174,7 +5813,8 @@ export const llmClient = {
           rememberChatContextProfile(params.chatId, projectionOptions, {
             instructionRoots: agentsInstructionRoots,
             permission,
-            toolsDisabled: runtime.provider.modelMetadata?.[model.id]?.overrides?.toolCall === false,
+            toolsDisabled:
+              runtime.provider.modelMetadata?.[model.id]?.overrides?.toolCall === false,
           });
           const lastCacheMiss = lastPromptCacheMiss(params.chatId);
           lastContextPressure = {
@@ -5182,7 +5822,9 @@ export const llmClient = {
             ...(lastCacheMiss ? { lastCacheMiss } : {}),
             // Projections are emitted as each request is prepared, so the
             // cache window restarts now for models that declare one.
-            ...(promptCacheTtl > 0 ? { promptCache: { ttlMs: promptCacheTtl, lastRequestAt: Date.now() } } : {}),
+            ...(promptCacheTtl > 0
+              ? { promptCache: { ttlMs: promptCacheTtl, lastRequestAt: Date.now() } }
+              : {}),
           };
           sendGeneration(streamId, "chat:context-pressure", {
             streamId,
@@ -5196,19 +5838,22 @@ export const llmClient = {
         ...(harnessProvider
           ? {}
           : {
-              transformContext: createGenerationContextTransform(generationContextOptions, (result) => {
-                logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
-                  model: model.id,
-                  estimatedTokensBefore: result.estimatedTokensBefore,
-                  estimatedTokensAfter: result.estimatedTokensAfter,
-                  inputBudgetTokens: result.inputBudgetTokens,
-                  truncatedToolResults: result.truncatedToolResults,
-                  compactedToolResults: result.compactedToolResults,
-                  removedHistoryMessages: result.removedHistoryMessages,
-                  removedCurrentTurnMessages: result.removedCurrentTurnMessages,
-                  usedContextFallback: result.usedContextFallback,
-                });
-              }),
+              transformContext: createGenerationContextTransform(
+                generationContextOptions,
+                (result) => {
+                  logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
+                    model: model.id,
+                    estimatedTokensBefore: result.estimatedTokensBefore,
+                    estimatedTokensAfter: result.estimatedTokensAfter,
+                    inputBudgetTokens: result.inputBudgetTokens,
+                    truncatedToolResults: result.truncatedToolResults,
+                    compactedToolResults: result.compactedToolResults,
+                    removedHistoryMessages: result.removedHistoryMessages,
+                    removedCurrentTurnMessages: result.removedCurrentTurnMessages,
+                    usedContextFallback: result.usedContextFallback,
+                  });
+                },
+              ),
             }),
         durability: {
           session: promptJournal,
@@ -5218,7 +5863,11 @@ export const llmClient = {
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
           beforeQueuedUser: async (message, signal) => {
-            if (message.role !== "user" || typeof message.content !== "string" || !message.content.trim()) {
+            if (
+              message.role !== "user" ||
+              typeof message.content !== "string" ||
+              !message.content.trim()
+            ) {
               throw new Error("Queued guidance must contain text.");
             }
             // ChatStore writes are not abortable; never start one after Stop.
@@ -5283,10 +5932,12 @@ export const llmClient = {
         finishTurn: attendedAssistant
           ? endRunAfterIgnoredToolRecovery(() => attendedToolRecoveryRequested)
           : undefined,
-        spendingLimitReached: harnessProvider ? undefined : async () => {
-          await spendingMeter.settled();
-          return Boolean(await spending.block(spendingOwner).catch(() => undefined));
-        },
+        spendingLimitReached: harnessProvider
+          ? undefined
+          : async () => {
+              await spendingMeter.settled();
+              return Boolean(await spending.block(spendingOwner).catch(() => undefined));
+            },
         prepareNextTurnWithContext: createPiTurnContextPreparation({
           generationOptions: generationContextOptions,
           attended: attendedAssistant,
@@ -5295,14 +5946,17 @@ export const llmClient = {
               context,
               browserDiscovery || onDemandTools
                 ? async (current) => {
-                    const withBrowser = browserDiscovery ? await browserDiscovery.prepare(current) : current;
+                    const withBrowser = browserDiscovery
+                      ? await browserDiscovery.prepare(current)
+                      : current;
                     return onDemandTools ? onDemandTools.prepare(withBrowser) : withBrowser;
                   }
                 : undefined,
               runtime.provider.modelMetadata?.[model.id]?.overrides,
             );
             prepared = await enteredCanvasTools.prepare(prepared, requestSignal);
-            if (agentsInstructions) prepared = await agentsInstructions.apply(prepared, requestSignal);
+            if (agentsInstructions)
+              prepared = await agentsInstructions.apply(prepared, requestSignal);
             return mcpServersSection.apply(prepared);
           },
           onRecovery: () => {
@@ -5334,13 +5988,24 @@ export const llmClient = {
           // The approval mode and Mac grants now, and what this call reaches
           // (plan §3.2): a connector's real name and declared hint, and
           // whether it is a new destination after outside content.
-          const runApproval = usesApprovalModes && workspaceId
-            ? await currentWorkspaceApproval(configStore, workspaceId, approvalCeiling).catch((error: unknown) => {
-                logger.warn("pi", "Could not read the approval mode; asking as in Ask.", error);
-                return { mode: "ask" as const, macGrants: new Set<MacGrantClass>(), customized: false, chatOnly: false, legacyFull: false };
-              })
-            : undefined;
-          const calledTool = context.context.tools?.find((tool) => tool.name === context.toolCall.name);
+          const runApproval =
+            usesApprovalModes && workspaceId
+              ? await currentWorkspaceApproval(configStore, workspaceId, approvalCeiling).catch(
+                  (error: unknown) => {
+                    logger.warn("pi", "Could not read the approval mode; asking as in Ask.", error);
+                    return {
+                      mode: "ask" as const,
+                      macGrants: new Set<MacGrantClass>(),
+                      customized: false,
+                      chatOnly: false,
+                      legacyFull: false,
+                    };
+                  },
+                )
+              : undefined;
+          const calledTool = context.context.tools?.find(
+            (tool) => tool.name === context.toolCall.name,
+          );
           const calledMcp = calledTool ? mcpAgentToolIdentity(calledTool) : undefined;
           const taintCall = {
             toolName: context.toolCall.name,
@@ -5449,7 +6114,8 @@ export const llmClient = {
             if (computerUseDecision.outcome === "ask") {
               // A hook asked: this one action needs its own card.
               const toolCallId = timeline.publicToolCallId(context.toolCall.id);
-              if (!toolCallId) return blockComputerUse("The tool approval step was not initialized.");
+              if (!toolCallId)
+                return blockComputerUse("The tool approval step was not initialized.");
               timeline.toolAwaitingApproval(context.toolCall.id);
               notifyApprovalWaiting();
               const hookOutcome = await approvals.request(
@@ -5540,7 +6206,10 @@ export const llmClient = {
                 timeline.toolFinished(context.toolCall.id, "blocked");
                 return {
                   block: true,
-                  reason: error instanceof Error ? error.message : "The artifact could not be read for approval.",
+                  reason:
+                    error instanceof Error
+                      ? error.message
+                      : "The artifact could not be read for approval.",
                 };
               }
             }
@@ -5554,17 +6223,27 @@ export const llmClient = {
             // site. Every run reads it, since a Block applies wherever this
             // gate runs; the gate input keeps Allow and Ask to runs with a
             // mode that aren't Bot-bound (a Bot-bound turn answers to its Bot).
-            const pageHost = await workspaceRuleHost(context.toolCall.name, context.args, async () => {
-              if (!workspaceId) return undefined;
-              const { browserService } = await import("./browser/service.js");
-              const args = context.args as Record<string, unknown>;
-              const tabId = typeof args.tabId === "string" ? args.tabId
-                : browserSelection.initialized ? browserSelection.tabId : (await browserService.getState(workspaceId)).activeTabId ?? undefined;
-              return tabId ? browserService.getApprovalTarget(workspaceId, tabId).url : undefined;
-            });
+            const pageHost = await workspaceRuleHost(
+              context.toolCall.name,
+              context.args,
+              async () => {
+                if (!workspaceId) return undefined;
+                const { browserService } = await import("./browser/service.js");
+                const args = context.args as Record<string, unknown>;
+                const tabId =
+                  typeof args.tabId === "string"
+                    ? args.tabId
+                    : browserSelection.initialized
+                      ? browserSelection.tabId
+                      : ((await browserService.getState(workspaceId)).activeTabId ?? undefined);
+                return tabId ? browserService.getApprovalTarget(workspaceId, tabId).url : undefined;
+              },
+            );
             const pageRuleOwner = {
               ...(workspaceId ? { workspaceId } : {}),
-              ...(preparedBotContext ? { botId: preparedBotContext.admission.authority.botId } : {}),
+              ...(preparedBotContext
+                ? { botId: preparedBotContext.admission.authority.botId }
+                : {}),
             };
             const ownPageRule = await pageRuleFor({
               ...(calledMcp
@@ -5575,9 +6254,14 @@ export const llmClient = {
             });
             // A call that also writes a workspace file (generate_image with
             // savePath) answers to write_file's Block or Ask as well.
-            const fileWriteTool = calledMcp ? undefined : fileWriteRuleTool(context.toolCall.name, context.args);
+            const fileWriteTool = calledMcp
+              ? undefined
+              : fileWriteRuleTool(context.toolCall.name, context.args);
             const pageRule = fileWriteTool
-              ? stricterPageRule(ownPageRule, await pageRuleFor({ tool: fileWriteTool, ...pageRuleOwner }))
+              ? stricterPageRule(
+                  ownPageRule,
+                  await pageRuleFor({ tool: fileWriteTool, ...pageRuleOwner }),
+                )
               : ownPageRule;
             const workspaceGateInput = {
               toolName: context.toolCall.name,
@@ -5599,7 +6283,11 @@ export const llmClient = {
                       ? {
                           connector: {
                             remoteName: calledMcp.toolName,
-                            ...declaredReadOnlyHint(calledTool ? mcpAgentToolDescriptor(calledTool)?.annotations : undefined),
+                            ...declaredReadOnlyHint(
+                              calledTool
+                                ? mcpAgentToolDescriptor(calledTool)?.annotations
+                                : undefined,
+                            ),
                           },
                         }
                       : {}),
@@ -5615,16 +6303,26 @@ export const llmClient = {
             if (workspaceGate.readsRemembered) {
               let remembered: "chat" | "always" | undefined;
               try {
-                remembered = await toolApprovalRules.match(params.chatId, workspaceGate.readsRemembered);
+                remembered = await toolApprovalRules.match(
+                  params.chatId,
+                  workspaceGate.readsRemembered,
+                );
               } catch (error) {
-                logger.warn("pi", "Could not read remembered tool approvals; asking instead.", error);
+                logger.warn(
+                  "pi",
+                  "Could not read remembered tool approvals; asking instead.",
+                  error,
+                );
               }
-              if (remembered) workspaceGate = workspaceToolApproval({ ...workspaceGateInput, remembered });
+              if (remembered)
+                workspaceGate = workspaceToolApproval({ ...workspaceGateInput, remembered });
             }
             if (workspaceGate.readsJudge) {
               // Auto: one short call on the chat's model. It passes or defers;
               // anything but a clear pass shows the card.
-              const verdict = await (await runApprovalJudge()).judge(
+              const verdict = await (
+                await runApprovalJudge()
+              ).judge(
                 {
                   effect:
                     toolCallApprovalEffect(context.toolCall.name, context.args) ??
@@ -5638,22 +6336,40 @@ export const llmClient = {
                 },
                 signal,
               );
-              workspaceGate = workspaceToolApproval({ ...workspaceGateInput, judge: verdict.verdict });
+              workspaceGate = workspaceToolApproval({
+                ...workspaceGateInput,
+                judge: verdict.verdict,
+              });
               if (workspaceGate.readsRemembered) {
                 let remembered: "chat" | "always" | undefined;
                 try {
-                  remembered = await toolApprovalRules.match(params.chatId, workspaceGate.readsRemembered);
+                  remembered = await toolApprovalRules.match(
+                    params.chatId,
+                    workspaceGate.readsRemembered,
+                  );
                 } catch (error) {
-                  logger.warn("pi", "Could not read remembered tool approvals; asking instead.", error);
+                  logger.warn(
+                    "pi",
+                    "Could not read remembered tool approvals; asking instead.",
+                    error,
+                  );
                 }
-                workspaceGate = workspaceToolApproval({ ...workspaceGateInput, judge: verdict.verdict, ...(remembered ? { remembered } : {}) });
+                workspaceGate = workspaceToolApproval({
+                  ...workspaceGateInput,
+                  judge: verdict.verdict,
+                  ...(remembered ? { remembered } : {}),
+                });
               }
             }
             const workspaceDecision = workspaceGate.decision;
             if (workspaceDecision.outcome === "block" && workspaceDecision.reason === "rule") {
               deniedToolCalls.add(context.toolCall.id);
               timeline.toolFinished(context.toolCall.id, "blocked");
-              return { block: true, reason: "A Block rule in Settings → Approvals stops this. Do not try it another way." };
+              return {
+                block: true,
+                reason:
+                  "A Block rule in Settings → Approvals stops this. Do not try it another way.",
+              };
             }
             if (workspaceDecision.outcome === "allow") {
               runTaint?.observeRunning(taintCall);
@@ -5685,7 +6401,8 @@ export const llmClient = {
                   : await repairAssistantScheduleMcpTarget(context.args);
                 if (createScheduleApproval) {
                   const canonicalArgs = context.args as Record<string, unknown>;
-                  if (proposal.input.workspaceId) canonicalArgs.workspaceId = proposal.input.workspaceId;
+                  if (proposal.input.workspaceId)
+                    canonicalArgs.workspaceId = proposal.input.workspaceId;
                   else delete canonicalArgs.workspaceId;
                   canonicalArgs.permission = proposal.input.permission;
                   canonicalArgs.mcpServerIds = proposal.input.mcpServerIds;
@@ -5830,21 +6547,44 @@ export const llmClient = {
           if (context.toolCall.name === "classify") {
             try {
               const providerId = (context.args as { provider?: unknown }).provider;
-              const provider = typeof providerId === "string" ? await configStore.getProvider(providerId) : undefined;
-              approvalDetails = classifierApprovalFor(context.args, provider?.label ?? (typeof providerId === "string" ? providerRegistry.builtinProvider(providerId)?.label : undefined));
-              summary += ". Review the complete state and questions in Aiden Agent on your computer before allowing. Full classification inputs are available only there.";
+              const provider =
+                typeof providerId === "string"
+                  ? await configStore.getProvider(providerId)
+                  : undefined;
+              approvalDetails = classifierApprovalFor(
+                context.args,
+                provider?.label ??
+                  (typeof providerId === "string"
+                    ? providerRegistry.builtinProvider(providerId)?.label
+                    : undefined),
+              );
+              summary +=
+                ". Review the complete state and questions in Aiden Agent on your computer before allowing. Full classification inputs are available only there.";
             } catch (error) {
               deniedToolCalls.add(context.toolCall.id);
               timeline.toolFinished(context.toolCall.id, "blocked");
-              return { block: true, reason: error instanceof Error ? error.message : "Classification inputs could not be reviewed." };
+              return {
+                block: true,
+                reason:
+                  error instanceof Error
+                    ? error.message
+                    : "Classification inputs could not be reviewed.",
+              };
             }
           }
           if (context.toolCall.name === "generate_image") {
-            try { summary += await modelImageReferences.disclosure(context.args, signal); }
-            catch (error) {
+            try {
+              summary += await modelImageReferences.disclosure(context.args, signal);
+            } catch (error) {
               deniedToolCalls.add(context.toolCall.id);
               timeline.toolFinished(context.toolCall.id, "blocked");
-              return { block: true, reason: error instanceof Error ? error.message : "Reference images could not be verified." };
+              return {
+                block: true,
+                reason:
+                  error instanceof Error
+                    ? error.message
+                    : "Reference images could not be verified.",
+              };
             }
           }
           if (browserFileApproval?.requiresApproval) {
@@ -5906,7 +6646,8 @@ export const llmClient = {
                 ...(() => {
                   const preview = approvalDetails
                     ? undefined
-                    : (artifactApprovalPreview ?? toolApprovalPreview(context.toolCall.name, context.args));
+                    : (artifactApprovalPreview ??
+                      toolApprovalPreview(context.toolCall.name, context.args));
                   return preview ? { preview } : {};
                 })(),
                 // A command in plain words, with Aiden's own tags (plain cards only).
@@ -5928,7 +6669,11 @@ export const llmClient = {
             currentOwnerDocumentId(),
           );
           const allowed = approvalOutcome === "allowed";
-          if (allowed && context.toolCall.name === WORKSPACE_ARTIFACT_TOOL_NAME && artifactApprovalDigest) {
+          if (
+            allowed &&
+            context.toolCall.name === WORKSPACE_ARTIFACT_TOOL_NAME &&
+            artifactApprovalDigest
+          ) {
             const calls = approvedWorkspaceArtifactCalls.get(streamId) ?? new Map<string, string>();
             calls.set(context.toolCall.id, artifactApprovalDigest);
             approvedWorkspaceArtifactCalls.set(streamId, calls);
@@ -5944,7 +6689,12 @@ export const llmClient = {
                   scope === "always"
                     ? (await configStore.getWorkspace(scopedRuleTarget.workspaceId))?.name
                     : undefined;
-                await toolApprovalRules.grant(scope, params.chatId, scopedRuleTarget, workspaceLabel);
+                await toolApprovalRules.grant(
+                  scope,
+                  params.chatId,
+                  scopedRuleTarget,
+                  workspaceLabel,
+                );
               } catch (error) {
                 // The user already allowed this call; a failed remember only
                 // means the next identical call asks again.
@@ -5954,12 +6704,15 @@ export const llmClient = {
           }
           if (allowed && macGrantOffer && workspaceId) {
             const toolCallId = timeline.publicToolCallId(context.toolCall.id);
-            const scope = toolCallId ? approvals.takeDecisionPayload(streamId, toolCallId)?.scope : undefined;
+            const scope = toolCallId
+              ? approvals.takeDecisionPayload(streamId, toolCallId)?.scope
+              : undefined;
             if (scope === "workspace") {
               try {
                 // Through the application, so the save can't cross a settings
                 // change and the sidebar and Workspace settings refresh.
-                const { workspaceApplicationService } = await import("./workspace-application-service-main.js");
+                const { workspaceApplicationService } =
+                  await import("./workspace-application-service-main.js");
                 await workspaceApplicationService.grantMac(workspaceId, macGrantOffer);
               } catch (error) {
                 // Allowed once already; the next call asks again.
@@ -6095,9 +6848,10 @@ export const llmClient = {
               }
             }
             if (e.type === "text_delta") {
-              const separator = !currentAssistantTurnHadVisibleText && !currentAssistantTurnContinuesCutOff
-                ? assistantTurnTextSeparator(full, e.delta)
-                : "";
+              const separator =
+                !currentAssistantTurnHadVisibleText && !currentAssistantTurnContinuesCutOff
+                  ? assistantTurnTextSeparator(full, e.delta)
+                  : "";
               const delta = `${separator}${e.delta}`;
               full += delta;
               if (e.delta.trim()) currentAssistantTurnHadVisibleText = true;
@@ -6192,11 +6946,13 @@ export const llmClient = {
               currentAssistantTurnStart.full,
               streamedTurn,
               canonicalTurn,
-              anchors ? {
-                stepStart: currentAssistantTurnStart.steps,
-                textStart: canonicalTurn.length - terminalAssistantText(event.message).length,
-                ...anchors,
-              } : undefined,
+              anchors
+                ? {
+                    stepStart: currentAssistantTurnStart.steps,
+                    textStart: canonicalTurn.length - terminalAssistantText(event.message).length,
+                    ...anchors,
+                  }
+                : undefined,
             );
             if (exposeReasoning) {
               const segments = terminalAssistantThinkingSegments(event.message);
@@ -6227,7 +6983,10 @@ export const llmClient = {
           case "tool_execution_end": {
             // Nested calls emit their own events; the enclosing codemode usage
             // includes these again, so only the actual paid operation counts.
-            turnUsage = addTurnUsage(turnUsage, reportedTokens(piModelOperationUsage(event.toolName, event.result)));
+            turnUsage = addTurnUsage(
+              turnUsage,
+              reportedTokens(piModelOperationUsage(event.toolName, event.result)),
+            );
             const denied = deniedToolCalls.delete(event.toolCallId);
             const terminalStatus = generationCancelRequested()
               ? "cancelled"
@@ -6737,22 +7496,33 @@ export const llmClient = {
               // Bind file access to this exact directory for the whole turn.
               ...(folderPath
                 ? {
-                    folderIdentity: await captureRootIdentity(folderPath).catch((error: unknown) => {
-                      // No identity means no agent file access this turn.
-                      logger.warn("acp", "Could not capture the chat folder identity; agent file access is off.", error);
-                      return undefined;
-                    }),
+                    folderIdentity: await captureRootIdentity(folderPath).catch(
+                      (error: unknown) => {
+                        // No identity means no agent file access this turn.
+                        logger.warn(
+                          "acp",
+                          "Could not capture the chat folder identity; agent file access is off.",
+                          error,
+                        );
+                        return undefined;
+                      },
+                    ),
                   }
                 : {}),
               scratchDir: await acpScratch.directoryFor(params.chatId),
               permission: () => permission,
               timeline,
               stoppedByUser: generationStoppedByUser,
-              requestApproval: (prompt, approvalSignal) => approvals.request(prompt, approvalSignal, currentOwnerDocumentId()),
+              requestApproval: (prompt, approvalSignal) =>
+                approvals.request(prompt, approvalSignal, currentOwnerDocumentId()),
               takeApprovalScope: (approvalStreamId, toolCallId) =>
                 approvals.takeDecisionPayload(approvalStreamId, toolCallId)?.scope,
               requestQuestion: (toolCallId, questions, questionSignal) =>
-                questionnaires.request({ streamId, toolCallId, questions }, currentOwnerDocumentId(), questionSignal),
+                questionnaires.request(
+                  { streamId, toolCallId, questions },
+                  currentOwnerDocumentId(),
+                  questionSignal,
+                ),
               onFileWrite: (producedFile) => {
                 const toolName = producedFile.operation === "written" ? "write_file" : "edit_file";
                 notifyWorkspaceFilesTouched(workspaceId, toolName);
@@ -6774,7 +7544,11 @@ export const llmClient = {
         const reasoningLengthBeforeAttempt = reasoning.length;
         const runtimeOutcome = await agent.runManaged(
           currentPromptMessage
-            ? { kind: "append-and-run", message: currentPromptMessage, following: turnFollowingMessages }
+            ? {
+                kind: "append-and-run",
+                message: currentPromptMessage,
+                following: turnFollowingMessages,
+              }
             : { kind: "continue-durable-tail" },
           {
             beforeDurableTurn: async (signal) => {
@@ -6800,7 +7574,10 @@ export const llmClient = {
               // Otherwise only the failed turn's text goes: earlier turns of
               // this run stay in the model's context, so they stay visible too.
               if (!retry.keepsPartial) {
-                full = full.slice(0, Math.max(fullLengthBeforeAttempt, failedAssistantTurnStart?.full ?? 0));
+                full = full.slice(
+                  0,
+                  Math.max(fullLengthBeforeAttempt, failedAssistantTurnStart?.full ?? 0),
+                );
                 reasoning = reasoning.slice(
                   0,
                   Math.max(reasoningLengthBeforeAttempt, failedAssistantTurnStart?.reasoning ?? 0),
@@ -6813,7 +7590,8 @@ export const llmClient = {
                   reset: true,
                 });
                 if (full) sendGeneration(streamId, "chat:delta", { streamId, delta: full });
-                if (reasoning) sendGeneration(streamId, "chat:reasoning-delta", { streamId, delta: reasoning });
+                if (reasoning)
+                  sendGeneration(streamId, "chat:reasoning-delta", { streamId, delta: reasoning });
               }
               // The working row counts down to the next try; Stop cancels the wait.
               if (retry.reason === "provider") {
@@ -6839,7 +7617,8 @@ export const llmClient = {
               ? {
                   onStop: async (event: PiRuntimeStopEvent) => {
                     await spendingMeter.settled();
-                    if (await spending.block(spendingOwner).catch(() => undefined)) return undefined;
+                    if (await spending.block(spendingOwner).catch(() => undefined))
+                      return undefined;
                     return chatHooks.onStop(event);
                   },
                   maxStopContinuations: MAX_STOP_HOOK_CONTINUATIONS,
@@ -6884,15 +7663,20 @@ export const llmClient = {
           emergencyError,
           spendingRefusal: dispatchSpendingRefusal,
           wasCancelled,
-          hasVisibleOutput: () => generationHasVisibleOutput(
-            full,
-            uniqueResponseImages(sharedImages, displayedImages).length +
-              displayedHtmlArtifacts.length +
-              displayedUiVisuals.length,
-          ),
+          hasVisibleOutput: () =>
+            generationHasVisibleOutput(
+              full,
+              uniqueResponseImages(sharedImages, displayedImages).length +
+                displayedHtmlArtifacts.length +
+                displayedUiVisuals.length,
+            ),
         });
         if (terminal.kind === "failed") {
-          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
+          const finalTimeline = attachClaimCheck(
+            timeline.finish("failed"),
+            full,
+            claimCheckOptions,
+          );
           const persisted = await persistAssistant(
             full,
             reasoning,
@@ -6902,29 +7686,41 @@ export const llmClient = {
               : undefined,
           );
           await finalizePiTurnPersistence(persisted);
-          sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
+          sendGeneration(
             streamId,
-            message: persisted.error
-              ? `${terminal.message} The partial response could not be saved: ${persisted.error}`
-              : terminal.message,
-            content: full || undefined,
-            reasoning: reasoning || undefined,
-            timeline: finalTimeline,
-            chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-          }));
+            "chat:error",
+            withUndeliveredGuidance({
+              streamId,
+              message: persisted.error
+                ? `${terminal.message} The partial response could not be saved: ${persisted.error}`
+                : terminal.message,
+              content: full || undefined,
+              reasoning: reasoning || undefined,
+              timeline: finalTimeline,
+              chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
+            }),
+          );
         } else if (terminal.kind === "empty") {
-          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
+          const finalTimeline = attachClaimCheck(
+            timeline.finish("failed"),
+            full,
+            claimCheckOptions,
+          );
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
-          sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
+          sendGeneration(
             streamId,
-            message: persisted.error
-              ? `The model returned an empty response, and its steps could not be saved: ${persisted.error}`
-              : "The model returned an empty response. Try again.",
-            reasoning: reasoning || undefined,
-            timeline: finalTimeline,
-            chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-          }));
+            "chat:error",
+            withUndeliveredGuidance({
+              streamId,
+              message: persisted.error
+                ? `The model returned an empty response, and its steps could not be saved: ${persisted.error}`
+                : "The model returned an empty response. Try again.",
+              reasoning: reasoning || undefined,
+              timeline: finalTimeline,
+              chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
+            }),
+          );
         } else {
           // Covers both normal completion and user abort (partial `full`).
           const finalTimeline = attachClaimCheck(
@@ -6938,22 +7734,30 @@ export const llmClient = {
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
           if (persisted.error) {
-            sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
+            sendGeneration(
               streamId,
-              message: `The response completed but could not be saved: ${persisted.error}`,
-              content: full || undefined,
-              reasoning: reasoning || undefined,
-              timeline: finalTimeline,
-            }));
+              "chat:error",
+              withUndeliveredGuidance({
+                streamId,
+                message: `The response completed but could not be saved: ${persisted.error}`,
+                content: full || undefined,
+                reasoning: reasoning || undefined,
+                timeline: finalTimeline,
+              }),
+            );
           } else {
             designSystemOfferDelivered = !wasCancelled;
-            sendGeneration(streamId, "chat:done", withUndeliveredGuidance({
+            sendGeneration(
               streamId,
-              content: full,
-              reasoning: reasoning || undefined,
-              timeline: finalTimeline,
-              chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-            }));
+              "chat:done",
+              withUndeliveredGuidance({
+                streamId,
+                content: full,
+                reasoning: reasoning || undefined,
+                timeline: finalTimeline,
+                chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
+              }),
+            );
             replyDelivered = !wasCancelled;
           }
         }
@@ -6967,16 +7771,20 @@ export const llmClient = {
         const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
         const persisted = await persistAssistant(full, reasoning, finalTimeline);
         await finalizePiTurnPersistence(persisted);
-        sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
+        sendGeneration(
           streamId,
-          message: persisted.error
-            ? `The local agent runtime failed, and the partial response could not be saved: ${persisted.error}`
-            : "The local agent runtime failed.",
-          content: full || undefined,
-          reasoning: reasoning || undefined,
-          timeline: finalTimeline,
-          chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
-        }));
+          "chat:error",
+          withUndeliveredGuidance({
+            streamId,
+            message: persisted.error
+              ? `The local agent runtime failed, and the partial response could not be saved: ${persisted.error}`
+              : "The local agent runtime failed.",
+            content: full || undefined,
+            reasoning: reasoning || undefined,
+            timeline: finalTimeline,
+            chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
+          }),
+        );
       } finally {
         try {
           enteredCanvasTools.settleDesignSystemOffer(designSystemOfferDelivered);
@@ -6984,7 +7792,10 @@ export const llmClient = {
           await settleReplyCacheWarmer(cacheWarmer, {
             owner,
             chat: () => chatStore.getMeta(params.chatId),
-            delivered: replyDelivered && !activeGeneration.cancelRequested && !activeGeneration.rendererDetached,
+            delivered:
+              replyDelivered &&
+              !activeGeneration.cancelRequested &&
+              !activeGeneration.rendererDetached,
           });
           visualDrafts.dispose();
           resetGenerationAgent(agent, streamId);
@@ -7055,7 +7866,11 @@ export const llmClient = {
    * `lifetime` sets how long its cards wait (an owed turn's five minutes by
    * default) and who hears when one expires unanswered.
    */
-  attendedTurnOwner(chatId: string, documentId: string, lifetime?: OwedTurnPromptLifetime): ChatGenerationOwner {
+  attendedTurnOwner(
+    chatId: string,
+    documentId: string,
+    lifetime?: OwedTurnPromptLifetime,
+  ): ChatGenerationOwner {
     return {
       id: 0,
       documentId,
@@ -7070,7 +7885,11 @@ export const llmClient = {
    * round on screen): the window's own owner, except that a card nobody
    * answers within `lifetime` is denied or closed, as an attended turn's is.
    */
-  attendedWindowOwner(owner: ChatGenerationOwner, chatId: string, lifetime: OwedTurnPromptLifetime): ChatGenerationOwner {
+  attendedWindowOwner(
+    owner: ChatGenerationOwner,
+    chatId: string,
+    lifetime: OwedTurnPromptLifetime,
+  ): ChatGenerationOwner {
     return withPromptLifetime(owner, chatId, lifetime, {
       now: Date.now,
       setTimer: (callback, ms) => {
@@ -7081,7 +7900,12 @@ export const llmClient = {
       clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
       expireApproval: (approvalId) => approvals.decideAsHost(approvalId, false, undefined, false),
       expireQuestion: (promptId) =>
-        questionnaires.respondAsHost(promptId, { version: ASK_USER_QUESTION_VERSION, promptId, cancelled: true, answers: [] }) !== "rejected",
+        questionnaires.respondAsHost(promptId, {
+          version: ASK_USER_QUESTION_VERSION,
+          promptId,
+          cancelled: true,
+          answers: [],
+        }) !== "rejected",
     });
   },
 
@@ -7163,7 +7987,11 @@ export const llmClient = {
     let streamId: string | null = null;
     let entry: ActiveGeneration | InitializingGeneration | null = null;
     for (const [id, candidate] of active) {
-      if (candidate.chatId === chatId && candidate.owner.documentId === fromDocumentId && !candidate.rendererDetached) {
+      if (
+        candidate.chatId === chatId &&
+        candidate.owner.documentId === fromDocumentId &&
+        !candidate.rendererDetached
+      ) {
         streamId = id;
         entry = candidate;
         break;
@@ -7171,7 +7999,11 @@ export const llmClient = {
     }
     if (!entry) {
       for (const [id, candidate] of initializing) {
-        if (candidate.chatId === chatId && candidate.owner.documentId === fromDocumentId && !candidate.rendererDetached) {
+        if (
+          candidate.chatId === chatId &&
+          candidate.owner.documentId === fromDocumentId &&
+          !candidate.rendererDetached
+        ) {
           streamId = id;
           entry = candidate;
           break;
@@ -7193,8 +8025,16 @@ export const llmClient = {
       this.detachRenderer(targetStreamId, newOwner.documentId);
     });
 
-    const pendingApprovals = approvals.rebindStreamOwner(streamId, fromDocumentId, newOwner.documentId);
-    const pendingQuestions = questionnaires.rebindStreamOwner(streamId, fromDocumentId, newOwner.documentId);
+    const pendingApprovals = approvals.rebindStreamOwner(
+      streamId,
+      fromDocumentId,
+      newOwner.documentId,
+    );
+    const pendingQuestions = questionnaires.rebindStreamOwner(
+      streamId,
+      fromDocumentId,
+      newOwner.documentId,
+    );
     owedTurns.rebindOwner(streamId, fromDocumentId, newOwner.documentId);
     subagentControlMainV2.rebindChatOwner(chatId, fromDocumentId, newOwner.documentId);
 
@@ -7204,7 +8044,10 @@ export const llmClient = {
       pendingQuestions,
       entry.workspaceId,
     );
-    logger.info("pi", `Transferred generation ${streamId} ownership from ${fromDocumentId} to ${newOwner.documentId}.`);
+    logger.info(
+      "pi",
+      `Transferred generation ${streamId} ownership from ${fromDocumentId} to ${newOwner.documentId}.`,
+    );
     return snapshot;
   },
 
@@ -7226,13 +8069,9 @@ export const llmClient = {
     const runtimeOwner = generation ?? initialization;
     if (!runtimeOwner) return false;
     if (
-      desktopHandoffTickets.deferDetachIfPending(
-        runtimeOwner.chatId,
-        owner.documentId,
-        () => {
-          this.detachRenderer(streamId, owner.documentId);
-        },
-      )
+      desktopHandoffTickets.deferDetachIfPending(runtimeOwner.chatId, owner.documentId, () => {
+        this.detachRenderer(streamId, owner.documentId);
+      })
     ) {
       return false;
     }
@@ -7310,7 +8149,9 @@ export const llmClient = {
     if (origin === "user_stop" && stoppedChatId) {
       void import("./chat-orchestration/child-chats-main.js")
         .then(({ leadChatStopped }) => leadChatStopped(stoppedChatId))
-        .catch((error: unknown) => logger.warn("chat-orchestration", "Could not stop a lead chat's started chats.", error));
+        .catch((error: unknown) =>
+          logger.warn("chat-orchestration", "Could not stop a lead chat's started chats.", error),
+        );
     }
     return true;
   },
@@ -7321,9 +8162,7 @@ export const llmClient = {
    * runtime queues through this boundary so transcript persistence and
    * owner/cancel validation stay main-owned.
    */
-  admitChatRunInput(
-    input: ChatRunInputAdmissionRequest,
-  ): Promise<ChatRunInputAdmissionResult> {
+  admitChatRunInput(input: ChatRunInputAdmissionRequest): Promise<ChatRunInputAdmissionResult> {
     return runInputAdmission.admit(input);
   },
 
@@ -7338,7 +8177,17 @@ export const llmClient = {
   ): Promise<ChatRunInputAdmissionResult | { busyWith: string } | null> {
     // Only the chat's own turns open an owed turn (`owesItsChatTurns`).
     const target = agentNoticeRun(
-      [...active.entries()].map(([id, entry]) => [id, { chatId: entry.chatId, cancelRequested: entry.cancelRequested, chatTurn: entry.owedTurn !== undefined }] as const),
+      [...active.entries()].map(
+        ([id, entry]) =>
+          [
+            id,
+            {
+              chatId: entry.chatId,
+              cancelRequested: entry.cancelRequested,
+              chatTurn: entry.owedTurn !== undefined,
+            },
+          ] as const,
+      ),
       chatId,
     );
     if (!target) return null;
@@ -7418,7 +8267,8 @@ export const llmClient = {
   forgetDeletedChat(chatId: string): Promise<void> {
     // SessionEnd for a chat whose hooks ran in this process; never awaited.
     endWorkspaceChatSession(chatId, undefined, {
-      onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a deleted chat: ${lines.join("\n")}`),
+      onMessages: (lines) =>
+        logger.warn("hooks", `SessionEnd hooks for a deleted chat: ${lines.join("\n")}`),
     });
     return acpScratch.forget(chatId);
   },
@@ -7426,7 +8276,8 @@ export const llmClient = {
   /** Reset workspace-bound hook/ACP scratch state after attaching a chat to a new workspace. */
   resetChatWorkspaceSession(chatId: string): Promise<void> {
     endWorkspaceChatSession(chatId, undefined, {
-      onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a reattached chat: ${lines.join("\n")}`),
+      onMessages: (lines) =>
+        logger.warn("hooks", `SessionEnd hooks for a reattached chat: ${lines.join("\n")}`),
     });
     return acpScratch.forget(chatId);
   },
@@ -7508,7 +8359,9 @@ export const llmClient = {
       gate: computerUseGenerationGate,
       initializations: () => initializing,
       active: () => active,
-      cancel: (streamId) => { this.cancel(streamId, "computer_use_disabled"); },
+      cancel: (streamId) => {
+        this.cancel(streamId, "computer_use_disabled");
+      },
       timeoutMs: WORKSPACE_CANCEL_SETTLEMENT_GRACE_MS,
     });
   },

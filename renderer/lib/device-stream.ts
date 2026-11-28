@@ -30,7 +30,12 @@ import {
   type DuoControlState,
   type DuoPose,
 } from "./device-duo-control";
-import { createDuoPanelFeeds, type DuoFeed, type DuoFeedEvents, type DuoPanelSinks } from "./device-duo-stream";
+import {
+  createDuoPanelFeeds,
+  type DuoFeed,
+  type DuoFeedEvents,
+  type DuoPanelSinks,
+} from "./device-duo-stream";
 import type { DeviceGrantSource } from "./device-grant";
 
 export type { DuoPanelSinks } from "./device-duo-stream";
@@ -540,7 +545,8 @@ export function createDeviceStreamClient(
   const device = encodeURIComponent(target.deviceId);
   // Connections opened later (a resumed video read) may carry a newer grant from `target.grants`.
   let grant = target.grant;
-  const grantExpiring = () => grant.expiresAt - (runtime.now?.() ?? Date.now()) <= DEVICE_STREAM_GRANT_EXPIRY_MARGIN_MS;
+  const grantExpiring = () =>
+    grant.expiresAt - (runtime.now?.() ?? Date.now()) <= DEVICE_STREAM_GRANT_EXPIRY_MARGIN_MS;
   /**
    * The proxy refuses an expired grant during the HTTP upgrade, which the browser
    * reports only as 1006. A 1006 with a live grant is a dropped or refused
@@ -548,8 +554,10 @@ export function createDeviceStreamClient(
    */
   const refusedGrant = (code: number) =>
     code === 1008 || code === 4401 || (code === 1006 && grantExpiring());
-  const httpUrl = (path: string) => deviceHubUrl({ hostId: target.hostId, grant }, `${vendor}${path}`, "http");
-  const wsUrl = (path: string) => deviceHubUrl({ hostId: target.hostId, grant }, `${vendor}${path}`, "ws");
+  const httpUrl = (path: string) =>
+    deviceHubUrl({ hostId: target.hostId, grant }, `${vendor}${path}`, "http");
+  const wsUrl = (path: string) =>
+    deviceHubUrl({ hostId: target.hostId, grant }, `${vendor}${path}`, "ws");
   const useWebCodecs =
     Boolean(runtime.VideoDecoder && runtime.EncodedVideoChunk) && !target.preferMjpeg;
   const videoPath = `/helper/${device}${target.panelId ? `/panel/${target.panelId}` : ""}/stream.avcc`;
@@ -750,7 +758,8 @@ export function createDeviceStreamClient(
   };
 
   const requestKeyframe = () => {
-    if (android && socket?.readyState === SOCKET_OPEN) socket.send(JSON.stringify({ type: "reset-video", ack: false }));
+    if (android && socket?.readyState === SOCKET_OPEN)
+      socket.send(JSON.stringify({ type: "reset-video", ack: false }));
   };
 
   /** Returns false when this H.264 profile cannot be decoded; the caller falls back to MJPEG. */
@@ -773,7 +782,10 @@ export function createDeviceStreamClient(
       videoDecoder.configure(full);
       return true;
     } catch (cause) {
-      if (android) fail(`The emulator video could not be decoded: ${cause instanceof Error ? cause.message : String(cause)}`);
+      if (android)
+        fail(
+          `The emulator video could not be decoded: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
       return false;
     }
   };
@@ -790,7 +802,9 @@ export function createDeviceStreamClient(
       return;
     }
     try {
-      videoDecoder.decode(new Chunk({ type: isKey ? "key" : "delta", timestamp: pts ?? timestamp, data }));
+      videoDecoder.decode(
+        new Chunk({ type: isKey ? "key" : "delta", timestamp: pts ?? timestamp, data }),
+      );
       timestamp += FRAME_DURATION_US;
     } catch {
       recoverDecoder();
@@ -845,7 +859,8 @@ export function createDeviceStreamClient(
       for (;;) {
         // An AVCC body can stay open after its helper stops producing frames.
         const timer = runtime.setTimeout(() => {
-          if (isCurrent()) fail("The simulator stream stopped receiving video. Reconnect to try again.");
+          if (isCurrent())
+            fail("The simulator stream stopped receiving video. Reconnect to try again.");
         }, DEVICE_STREAM_FIRST_FRAME_TIMEOUT_MS);
         videoReadTimer = timer;
         let result: ReadableStreamReadResult<Uint8Array>;
@@ -885,7 +900,9 @@ export function createDeviceStreamClient(
                 await reader.cancel().catch(() => undefined);
                 if (!isCurrent()) return;
                 if (target.videoOnly) {
-                  fail(`This browser cannot decode the Duo display's ${avcCodecString(chunk.payload)} stream.`);
+                  fail(
+                    `This browser cannot decode the Duo display's ${avcCodecString(chunk.payload)} stream.`,
+                  );
                 } else fallBackToMjpeg();
                 return;
               }
@@ -921,7 +938,10 @@ export function createDeviceStreamClient(
     primeController = prime;
     const timeout = runtime.setTimeout(() => prime.abort(), DEVICE_STREAM_PRIME_TIMEOUT_MS);
     try {
-      const response = await runtime.fetch(mjpegUrl(), { signal: prime.signal, credentials: "omit" });
+      const response = await runtime.fetch(mjpegUrl(), {
+        signal: prime.signal,
+        credentials: "omit",
+      });
       if (stopped || generation !== session) return;
       if (response.status === 401 || response.status === 403) return handleUnauthorized();
       await response.body?.getReader().read();
@@ -1020,19 +1040,24 @@ export function createDeviceStreamClient(
       if (!(event.data instanceof ArrayBuffer)) return;
       const packet = parseSemuPacket(event.data);
       const unconfigured = !videoDecoder || videoDecoder.state !== "configured";
-      const scanned = packet.isKey === null || (packet.isKey && unconfigured) ? scanAccessUnit(packet.data) : null;
+      const scanned =
+        packet.isKey === null || (packet.isKey && unconfigured)
+          ? scanAccessUnit(packet.data)
+          : null;
       const isKey = packet.isKey ?? scanned?.isKey ?? false;
       if (scanned?.sps && unconfigured) {
         if (configuring) return;
         configuring = true;
         const epoch = decoderEpoch;
         const isCurrent = () => !stopped && socket === ws;
-        void configureDecoder({ codec: avcCodecString(scanned.sps) }, isCurrent).then((configured) => {
-          if (!isCurrent() || epoch !== decoderEpoch) return;
-          configuring = false;
-          awaitingKeyframe = true;
-          if (configured) requestKeyframe();
-        });
+        void configureDecoder({ codec: avcCodecString(scanned.sps) }, isCurrent).then(
+          (configured) => {
+            if (!isCurrent() || epoch !== decoderEpoch) return;
+            configuring = false;
+            awaitingKeyframe = true;
+            if (configured) requestKeyframe();
+          },
+        );
         return;
       }
       if (unconfigured) {
@@ -1142,7 +1167,8 @@ export function createDeviceStreamClient(
     openFeed: (panelId, feedSink, feedEvents) => openPanelFeed(panelId, feedSink, feedEvents),
     onUnavailable: (detail) => events.onDuoUnavailable?.(detail),
     // A refused display feed returns the viewer to the flat view; the parent's session stays.
-    onUnauthorized: () => events.onDuoUnavailable?.("The iPhone Duo display stream refused access."),
+    onUnauthorized: () =>
+      events.onDuoUnavailable?.("The iPhone Duo display stream refused access."),
   });
 
   /**
@@ -1191,7 +1217,8 @@ export function createDeviceStreamClient(
           feed.start();
         },
         (error: unknown) => {
-          if (!closed) feedEvents.onStatus("error", error instanceof Error ? error.message : undefined);
+          if (!closed)
+            feedEvents.onStatus("error", error instanceof Error ? error.message : undefined);
         },
       );
     };
@@ -1232,7 +1259,14 @@ export function createDeviceStreamClient(
     setMjpegImage,
     sendTouch: (phase, x, y) => {
       if (android) {
-        send(JSON.stringify({ type: "touch", action: phase === "begin" ? "down" : phase === "move" ? "move" : "up", x, y }));
+        send(
+          JSON.stringify({
+            type: "touch",
+            action: phase === "begin" ? "down" : phase === "move" ? "move" : "up",
+            x,
+            y,
+          }),
+        );
         return;
       }
       send(taggedJson(IOS_MSG_TOUCH, { type: phase, ...rawPoint(x, y) }));
@@ -1262,11 +1296,14 @@ export function createDeviceStreamClient(
     pressButton: (button) => {
       if (android) {
         const type = button === "appSwitcher" ? "recents" : button === "lock" ? "power" : button;
-        if (type === "home" || type === "back" || type === "recents" || type === "power") send(JSON.stringify({ type }));
+        if (type === "home" || type === "back" || type === "recents" || type === "power")
+          send(JSON.stringify({ type }));
         return;
       }
       if (button !== "home" && button !== "lock" && button !== "appSwitcher") return;
-      send(taggedJson(IOS_MSG_BUTTON, { button: button === "appSwitcher" ? "app_switcher" : button }));
+      send(
+        taggedJson(IOS_MSG_BUTTON, { button: button === "appSwitcher" ? "app_switcher" : button }),
+      );
     },
     rotate: () => {
       // Android rotates through the setOrientation action, which tilts the emulator's sensor.

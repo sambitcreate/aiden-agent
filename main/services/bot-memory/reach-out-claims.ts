@@ -33,7 +33,10 @@ const ABILITIES = [
 ];
 
 const claim = (subject: string) =>
-  new RegExp(String.raw`${subject}(?:really |actually |still |simply |just )?${NEGATION} (?:${ABILITIES.join("|")})`, "u");
+  new RegExp(
+    String.raw`${subject}(?:really |actually |still |simply |just )?${NEGATION} (?:${ABILITIES.join("|")})`,
+    "u",
+  );
 const NOTE_CLAIM = claim(NOTE_SUBJECT);
 const USER_CLAIM = claim(BOT_SUBJECT);
 
@@ -42,7 +45,10 @@ const USER_CLAIM = claim(BOT_SUBJECT);
  * message first. Entries about the person ('user') are written about them
  * ("Can't start conversations at work."), so there it takes the Bot as subject.
  */
-export function botMemoryClaimsNoReachOut(text: string, target: BotMemoryTarget = "memory"): boolean {
+export function botMemoryClaimsNoReachOut(
+  text: string,
+  target: BotMemoryTarget = "memory",
+): boolean {
   const normalized = text
     .normalize("NFKC")
     .toLowerCase()

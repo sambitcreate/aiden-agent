@@ -94,11 +94,7 @@ export function GeminiVoiceSetupDialog({
                   selected ? "bg-list-selection" : ""
                 } ${busy ? "opacity-50" : ""}`}
               >
-                <RadioGroupItem
-                  value={choice.scope}
-                  disabled={busy}
-                  className="mt-2 shrink-0"
-                />
+                <RadioGroupItem value={choice.scope} disabled={busy} className="mt-2 shrink-0" />
                 <span className="grid size-8 shrink-0 place-items-center rounded-control bg-popover text-secondary shadow-control">
                   <Icon className="size-4" aria-hidden="true" />
                 </span>
@@ -152,14 +148,16 @@ export function GeminiVoiceSetupDialog({
               <KeyRound className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
               <span>
                 <strong className="font-medium text-primary">API key.</strong> Stored encrypted on
-                this device and used for Gemini voice plus any existing chat already pinned to Google.
+                this device and used for Gemini voice plus any existing chat already pinned to
+                Google.
               </span>
             </li>
             <li className="flex items-start gap-2">
               <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
               <span>
-                <strong className="font-medium text-primary">System permissions.</strong> Microphone is
-                required to record. {capabilities.accessibilityPaste
+                <strong className="font-medium text-primary">System permissions.</strong> Microphone
+                is required to record.{" "}
+                {capabilities.accessibilityPaste
                   ? "Accessibility is optional and used only to paste into another app; without it Aiden copies the transcript. Gemini does not need Screen Recording."
                   : "Aiden copies the transcript to the clipboard so you can paste it into another app."}
               </span>

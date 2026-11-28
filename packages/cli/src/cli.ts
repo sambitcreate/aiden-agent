@@ -41,34 +41,41 @@ process.env.PI_TELEMETRY = "0";
  * command list.
  */
 function staticAnswer(argv: string[], appDir: string): string | undefined {
-	if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v")) {
-		const pkg = JSON.parse(readFileSync(join(appDir, "package.json"), "utf-8")) as { version?: string };
-		return `${pkg.version || "0.0.0"}\n`;
-	}
-	if (argv.length === 0 || argv[0] === "help" || (argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h"))) return CLI_COMMAND_HELP;
-	return undefined;
+  if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v")) {
+    const pkg = JSON.parse(readFileSync(join(appDir, "package.json"), "utf-8")) as {
+      version?: string;
+    };
+    return `${pkg.version || "0.0.0"}\n`;
+  }
+  if (
+    argv.length === 0 ||
+    argv[0] === "help" ||
+    (argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h"))
+  )
+    return CLI_COMMAND_HELP;
+  return undefined;
 }
 
 const entry = fileURLToPath(import.meta.url);
 const invokedAsCli = (() => {
-	try {
-		return process.argv[1] !== undefined && realpathSync(process.argv[1]) === entry;
-	} catch {
-		return false;
-	}
+  try {
+    return process.argv[1] !== undefined && realpathSync(process.argv[1]) === entry;
+  } catch {
+    return false;
+  }
 })();
 
 if (invokedAsCli) {
-	suppressSqliteExperimentalWarning();
-	const argv = process.argv.slice(2);
-	const appDir = dirname(entry);
-	process.env.AIDEN_CLI_ENTRY = entry;
-	exitQuietlyOnClosedStdout();
-	const answer = staticAnswer(argv, appDir);
-	if (answer !== undefined) {
-		process.stdout.write(answer);
-	} else {
-		const { runCli } = await import("./cli-runtime.ts");
-		await runCli(argv, appDir);
-	}
+  suppressSqliteExperimentalWarning();
+  const argv = process.argv.slice(2);
+  const appDir = dirname(entry);
+  process.env.AIDEN_CLI_ENTRY = entry;
+  exitQuietlyOnClosedStdout();
+  const answer = staticAnswer(argv, appDir);
+  if (answer !== undefined) {
+    process.stdout.write(answer);
+  } else {
+    const { runCli } = await import("./cli-runtime.ts");
+    await runCli(argv, appDir);
+  }
 }

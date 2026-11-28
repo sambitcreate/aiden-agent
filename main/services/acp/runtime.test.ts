@@ -3,7 +3,12 @@ import { promises as fs, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import type { ToolCallUpdate } from "@agentclientprotocol/sdk";
-import { getCurrentSystemPrompt, type AssistantMessage, type Message, type ToolResultMessage } from "@earendil-works/pi-ai";
+import {
+  getCurrentSystemPrompt,
+  type AssistantMessage,
+  type Message,
+  type ToolResultMessage,
+} from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 
 import { createAgentsInstructionRefresher } from "../agents-instructions.js";
@@ -50,13 +55,24 @@ function harness(dir = tempDir(), env = fakeAgentEnv(dir), options = {}): Harnes
 async function turn(
   h: Harness,
   messages: Message[],
-  options: { chatId?: string; signal?: AbortSignal; reasoning?: "low" | "high"; model?: typeof FAKE_FLASH; tools?: Parameters<typeof transcript>[2]; systemPrompt?: string } = {},
+  options: {
+    chatId?: string;
+    signal?: AbortSignal;
+    reasoning?: "low" | "high";
+    model?: typeof FAKE_FLASH;
+    tools?: Parameters<typeof transcript>[2];
+    systemPrompt?: string;
+  } = {},
 ): Promise<AssistantMessage> {
-  const stream = h.runtime.stream(options.model ?? FAKE_FLASH, transcript(messages, options.systemPrompt ?? "Be helpful.", options.tools ?? []), {
-    sessionId: options.chatId ?? "chat-1",
-    ...(options.signal ? { signal: options.signal } : {}),
-    ...(options.reasoning ? { reasoning: options.reasoning } : {}),
-  });
+  const stream = h.runtime.stream(
+    options.model ?? FAKE_FLASH,
+    transcript(messages, options.systemPrompt ?? "Be helpful.", options.tools ?? []),
+    {
+      sessionId: options.chatId ?? "chat-1",
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.reasoning ? { reasoning: options.reasoning } : {}),
+    },
+  );
   return stream.result();
 }
 
@@ -89,7 +105,11 @@ test("300 growing diff updates keep timeline and Remote journal publications bou
   const h = harness();
   t.after(() => h.runtime.close());
   const host = new RecordingHost("chat-1", h.dir);
-  const remote = new AidenRemoteStreamService({ now: Date.now, cancel: () => true, approve: () => true });
+  const remote = new AidenRemoteStreamService({
+    now: Date.now,
+    cancel: () => true,
+    approve: () => true,
+  });
   const owner = remote.create("device-1", "stream-1", "chat-1", "turn-1");
   let publishes = 0;
   let running = 0;
@@ -99,15 +119,22 @@ test("300 growing diff updates keep timeline and Remote journal publications bou
   });
   host.activity = {
     started: (id, name, args) => timeline.toolStarted(id, name, args),
-    running: (id) => { running += 1; timeline.toolRunning(id); },
-    finished: (id, status, details) => timeline.toolFinished(id, status as "completed" | "failed", details),
+    running: (id) => {
+      running += 1;
+      timeline.toolRunning(id);
+    },
+    finished: (id, status, details) =>
+      timeline.toolFinished(id, status as "completed" | "failed", details),
   };
   h.hosts.register(host);
   const result = await turn(h, [userMessage("stream-diff")]);
   assert.equal(result.stopReason, "stop");
   assert.equal(publishes, 3);
   assert.equal(running, 31, "initial running update plus 30 checkpoints");
-  assert.equal(remote.snapshot().streams[0]?.events.filter((event) => event.type === "timeline").length, 3);
+  assert.equal(
+    remote.snapshot().streams[0]?.events.filter((event) => event.type === "timeline").length,
+    3,
+  );
   const step = timeline.snapshot().steps[0];
   assert.ok(step?.kind === "tool");
   assert.equal(step.status, "completed");
@@ -128,19 +155,40 @@ test("two interleaved tools checkpoint independently and never skip completed or
   const host = new RecordingHost("chat-1", h.dir);
   h.hosts.register(host);
   const entries: ScriptEntry[] = [
-    { sessionUpdate: "tool_call", toolCallId: "a", title: "Edit A", kind: "edit", status: "in_progress" },
-    { sessionUpdate: "tool_call", toolCallId: "b", title: "Edit B", kind: "edit", status: "in_progress" },
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "a",
+      title: "Edit A",
+      kind: "edit",
+      status: "in_progress",
+    },
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "b",
+      title: "Edit B",
+      kind: "edit",
+      status: "in_progress",
+    },
   ];
   for (let chunk = 1; chunk <= 11; chunk += 1) {
-    for (const id of ["a", "b"]) entries.push({ sessionUpdate: "tool_call_update", toolCallId: id, rawInput: { chunk } });
+    for (const id of ["a", "b"])
+      entries.push({ sessionUpdate: "tool_call_update", toolCallId: id, rawInput: { chunk } });
   }
   entries.push(
     { sessionUpdate: "tool_call_update", toolCallId: "a", status: "completed" },
     { sessionUpdate: "tool_call_update", toolCallId: "b", status: "failed" },
   );
   assert.equal((await turn(h, [toolScript(entries)])).stopReason, "stop");
-  assert.deepEqual(host.activities.filter((event) => event.event === "running").map((event) => event.id.split(":").pop()), ["a", "b", "a", "b"]);
-  assert.deepEqual(host.activities.filter((event) => event.event === "finished").map((event) => event.status), ["completed", "failed"]);
+  assert.deepEqual(
+    host.activities
+      .filter((event) => event.event === "running")
+      .map((event) => event.id.split(":").pop()),
+    ["a", "b", "a", "b"],
+  );
+  assert.deepEqual(
+    host.activities.filter((event) => event.event === "finished").map((event) => event.status),
+    ["completed", "failed"],
+  );
 });
 
 test("status, title, text output, and raw output changes report before the next checkpoint", async (t) => {
@@ -148,19 +196,34 @@ test("status, title, text output, and raw output changes report before the next 
   t.after(() => h.runtime.close());
   const host = new RecordingHost("chat-1", h.dir);
   h.hosts.register(host);
-  const update = (fields: ToolCallUpdate): ScriptEntry => ({ sessionUpdate: "tool_call_update", ...fields });
+  const update = (fields: ToolCallUpdate): ScriptEntry => ({
+    sessionUpdate: "tool_call_update",
+    ...fields,
+  });
   const message = toolScript([
-    { sessionUpdate: "tool_call", toolCallId: "a", title: "Command", kind: "execute", status: "pending" },
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "a",
+      title: "Command",
+      kind: "execute",
+      status: "pending",
+    },
     update({ toolCallId: "a", rawInput: { chunk: 1 } }),
     update({ toolCallId: "a", status: "in_progress" }),
     update({ toolCallId: "a", rawInput: { chunk: 2 } }),
     update({ toolCallId: "a", title: "Command progressing" }),
-    update({ toolCallId: "a", content: [{ type: "content", content: { type: "text", text: "stdout" } }] }),
+    update({
+      toolCallId: "a",
+      content: [{ type: "content", content: { type: "text", text: "stdout" } }],
+    }),
     update({ toolCallId: "a", rawOutput: { stdout: "result" } }),
     update({ toolCallId: "a", status: "completed" }),
   ]);
   assert.equal((await turn(h, [message])).stopReason, "stop");
-  assert.deepEqual(host.activities.map((event) => event.event), ["started", "running", "running", "running", "running", "finished"]);
+  assert.deepEqual(
+    host.activities.map((event) => event.event),
+    ["started", "running", "running", "running", "running", "finished"],
+  );
 });
 
 test("a permission after a skipped update still presents its card; subagent and MCP classification are preserved", async (t) => {
@@ -169,9 +232,22 @@ test("a permission after a skipped update still presents its card; subagent and 
   const host = new RecordingHost("chat-1", h.dir);
   h.hosts.register(host);
   const approval = toolScript([
-    { sessionUpdate: "tool_call", toolCallId: "edit", title: "Edit", kind: "edit", status: "pending" },
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "edit",
+      title: "Edit",
+      kind: "edit",
+      status: "pending",
+    },
     { sessionUpdate: "tool_call_update", toolCallId: "edit", rawInput: { text: "partial" } },
-    { permission: { toolCallId: "edit", title: "Edit", kind: "edit", locations: [{ path: path.join(h.dir, "notes.txt") }] } },
+    {
+      permission: {
+        toolCallId: "edit",
+        title: "Edit",
+        kind: "edit",
+        locations: [{ path: path.join(h.dir, "notes.txt") }],
+      },
+    },
     { sessionUpdate: "tool_call_update", toolCallId: "edit", status: "completed" },
   ]);
   const reply = await turn(h, [approval]);
@@ -181,29 +257,65 @@ test("a permission after a skipped update still presents its card; subagent and 
   assert.equal(host.activities[host.activities.length - 1]?.status, "completed");
   // Reuse a tool id on the following turn. Its checkpoint counter starts fresh.
   const next = toolScript([
-    { sessionUpdate: "tool_call", toolCallId: "edit", title: "Edit", kind: "edit", status: "in_progress" },
-    ...Array.from({ length: 9 }, (_, chunk): ScriptEntry => ({ sessionUpdate: "tool_call_update", toolCallId: "edit", rawInput: { chunk } })),
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "edit",
+      title: "Edit",
+      kind: "edit",
+      status: "in_progress",
+    },
+    ...Array.from(
+      { length: 9 },
+      (_, chunk): ScriptEntry => ({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "edit",
+        rawInput: { chunk },
+      }),
+    ),
     { sessionUpdate: "tool_call_update", toolCallId: "edit", status: "completed" },
   ]);
   const start = host.activities.length;
   await turn(h, [approval, reply, next]);
-  assert.deepEqual(host.activities.slice(start).map((event) => event.event), ["started", "running", "finished"]);
+  assert.deepEqual(
+    host.activities.slice(start).map((event) => event.event),
+    ["started", "running", "finished"],
+  );
 
-  const definition = { ...fakeDefinition, isSubagentCall: (update: ToolCallUpdate) => update._meta?.subagent === true };
+  const definition = {
+    ...fakeDefinition,
+    isSubagentCall: (update: ToolCallUpdate) => update._meta?.subagent === true,
+  };
   const runtime = new AcpHarnessRuntime(definition, h.launcher, h.hosts, h.store);
   t.after(() => runtime.close());
   const classified = toolScript([
-    { sessionUpdate: "tool_call", toolCallId: "child", title: "Research", kind: "other", status: "in_progress", _meta: { subagent: true } },
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "child",
+      title: "Research",
+      kind: "other",
+      status: "in_progress",
+      _meta: { subagent: true },
+    },
     { sessionUpdate: "tool_call_update", toolCallId: "child", rawInput: { chunk: 1 } },
     { sessionUpdate: "tool_call_update", toolCallId: "child", status: "completed" },
-    { sessionUpdate: "tool_call", toolCallId: "mcp", title: "MCP", kind: "other", status: "in_progress", _meta: { is_mcp_tool_call: true } },
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "mcp",
+      title: "MCP",
+      kind: "other",
+      status: "in_progress",
+      _meta: { is_mcp_tool_call: true },
+    },
     { sessionUpdate: "tool_call_update", toolCallId: "mcp", status: "failed" },
   ]);
   const boundary = host.activities.length;
   await turn({ ...h, runtime }, [classified]);
   const events = host.activities.slice(boundary);
   assert.equal(events[0]?.toolName, "agent_subagents");
-  assert.deepEqual(events.map((event) => event.event), ["started", "running", "finished"]);
+  assert.deepEqual(
+    events.map((event) => event.event),
+    ["started", "running", "finished"],
+  );
   assert.equal(events[2]?.status, "completed");
 });
 
@@ -240,19 +352,52 @@ test("host instructions reconcile on every turn, including A to B to A, while un
   const host = new RecordingHost("chat-1", h.dir);
   h.hosts.register(host);
   const first = await turn(h, [userMessage("echo:one")], { systemPrompt: "INSTRUCTION_A" });
-  const unchanged = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump")], { systemPrompt: "INSTRUCTION_A" });
+  const unchanged = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump")], {
+    systemPrompt: "INSTRUCTION_A",
+  });
   assert.deepEqual(JSON.parse(text(unchanged)), [{ type: "text", text: "prompt-dump" }]);
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 1);
 
-  const changed = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump"), unchanged, userMessage("prompt-dump")], { systemPrompt: "INSTRUCTION_B" });
+  const changed = await turn(
+    h,
+    [
+      userMessage("echo:one"),
+      first,
+      userMessage("prompt-dump"),
+      unchanged,
+      userMessage("prompt-dump"),
+    ],
+    { systemPrompt: "INSTRUCTION_B" },
+  );
   const changedPrompt = JSON.parse(text(changed)) as Array<{ resource?: { text: string } }>;
-  assert.match(changedPrompt[0]?.resource?.text ?? "", /^# Instructions from Aiden\n\nINSTRUCTION_B/u);
-  assert.doesNotMatch(changedPrompt[0]?.resource?.text ?? "", /# Instructions from Aiden\n\nINSTRUCTION_A/u);
+  assert.match(
+    changedPrompt[0]?.resource?.text ?? "",
+    /^# Instructions from Aiden\n\nINSTRUCTION_B/u,
+  );
+  assert.doesNotMatch(
+    changedPrompt[0]?.resource?.text ?? "",
+    /# Instructions from Aiden\n\nINSTRUCTION_A/u,
+  );
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 2);
 
-  const reverted = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump"), unchanged, userMessage("prompt-dump"), changed, userMessage("prompt-dump")], { systemPrompt: "INSTRUCTION_A" });
+  const reverted = await turn(
+    h,
+    [
+      userMessage("echo:one"),
+      first,
+      userMessage("prompt-dump"),
+      unchanged,
+      userMessage("prompt-dump"),
+      changed,
+      userMessage("prompt-dump"),
+    ],
+    { systemPrompt: "INSTRUCTION_A" },
+  );
   const revertedPrompt = JSON.parse(text(reverted)) as Array<{ resource?: { text: string } }>;
-  assert.match(revertedPrompt[0]?.resource?.text ?? "", /^# Instructions from Aiden\n\nINSTRUCTION_A/u);
+  assert.match(
+    revertedPrompt[0]?.resource?.text ?? "",
+    /^# Instructions from Aiden\n\nINSTRUCTION_A/u,
+  );
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 3);
   assert.equal(host.notices.length, 2);
 });
@@ -271,23 +416,41 @@ test("separate AGENTS refreshers reuse a warm ACP session for the same guidance 
   const first = await turn(h, [userMessage("echo:one")], { systemPrompt: firstPrompt });
   const samePrompt = await refreshedAgentsPrompt(globalRoot, h.dir);
   assert.equal(samePrompt, firstPrompt, "a chat's generations send the same AGENTS block");
-  const same = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump")], { systemPrompt: samePrompt });
+  const same = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump")], {
+    systemPrompt: samePrompt,
+  });
   assert.deepEqual(JSON.parse(text(same)), [{ type: "text", text: "prompt-dump" }]);
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 1);
   assert.equal(host.notices.length, 0);
 
   await fs.writeFile(file, "INSTRUCTION_B");
-  const changed = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump"), same, userMessage("prompt-dump")], {
-    systemPrompt: await refreshedAgentsPrompt(globalRoot, h.dir),
-  });
+  const changed = await turn(
+    h,
+    [userMessage("echo:one"), first, userMessage("prompt-dump"), same, userMessage("prompt-dump")],
+    {
+      systemPrompt: await refreshedAgentsPrompt(globalRoot, h.dir),
+    },
+  );
   const changedBlocks = JSON.parse(text(changed)) as Array<{ resource?: { text: string } }>;
   assert.match(changedBlocks[0]?.resource?.text ?? "", /INSTRUCTION_B/u);
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 2);
 
   await fs.writeFile(file, "INSTRUCTION_A");
-  const reverted = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump"), same, userMessage("prompt-dump"), changed, userMessage("prompt-dump")], {
-    systemPrompt: await refreshedAgentsPrompt(globalRoot, h.dir),
-  });
+  const reverted = await turn(
+    h,
+    [
+      userMessage("echo:one"),
+      first,
+      userMessage("prompt-dump"),
+      same,
+      userMessage("prompt-dump"),
+      changed,
+      userMessage("prompt-dump"),
+    ],
+    {
+      systemPrompt: await refreshedAgentsPrompt(globalRoot, h.dir),
+    },
+  );
   const revertedBlocks = JSON.parse(text(reverted)) as Array<{ resource?: { text: string } }>;
   assert.match(revertedBlocks[0]?.resource?.text ?? "", /INSTRUCTION_A/u);
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 3);
@@ -309,20 +472,28 @@ test("an AGENTS edit beyond the delivered instruction limit keeps the native ACP
     revalidate: async () => {},
     read: (root) => fs.readFile(path.join(root.canonicalPath, "AGENTS.md"), "utf8"),
   });
-  const base = { messages: [{ role: "system" as const, content: "H".repeat(63_000), timestamp: 0 }], tools: [] };
+  const base = {
+    messages: [{ role: "system" as const, content: "H".repeat(63_000), timestamp: 0 }],
+    tools: [],
+  };
   const firstPrompt = getCurrentSystemPrompt((await refresher.apply(base)).messages);
   const first = await turn(h, [userMessage("echo:one")], { systemPrompt: firstPrompt });
 
   const target = 64_010;
   const bodyStart = firstPrompt.indexOf('"instructions":"') + '"instructions":"'.length;
   assert.ok(bodyStart >= 63_000 && target >= bodyStart && target < bodyStart + body.length);
-  await fs.writeFile(file, `${body.slice(0, target - bodyStart)}y${body.slice(target - bodyStart + 1)}`);
+  await fs.writeFile(
+    file,
+    `${body.slice(0, target - bodyStart)}y${body.slice(target - bodyStart + 1)}`,
+  );
   const secondPrompt = getCurrentSystemPrompt((await refresher.apply(base)).messages);
   assert.equal(firstPrompt.slice(0, 64_000), secondPrompt.slice(0, 64_000));
   assert.equal(firstPrompt[target], "x");
   assert.equal(secondPrompt[target], "y");
 
-  const next = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump")], { systemPrompt: secondPrompt });
+  const next = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump")], {
+    systemPrompt: secondPrompt,
+  });
   assert.deepEqual(JSON.parse(text(next)), [{ type: "text", text: "prompt-dump" }]);
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 1);
 
@@ -335,11 +506,19 @@ test("an AGENTS edit beyond the delivered instruction limit keeps the native ACP
   const resumed = harness(h.dir, h.env);
   t.after(() => resumed.runtime.close());
   resumed.hosts.register(new RecordingHost("chat-1", h.dir));
-  const afterRestart = await turn(resumed, [userMessage("echo:one"), first, userMessage("prompt-dump"), next, userMessage("prompt-dump")], {
-    systemPrompt: thirdPrompt,
-  });
+  const afterRestart = await turn(
+    resumed,
+    [userMessage("echo:one"), first, userMessage("prompt-dump"), next, userMessage("prompt-dump")],
+    {
+      systemPrompt: thirdPrompt,
+    },
+  );
   assert.deepEqual(JSON.parse(text(afterRestart)), [{ type: "text", text: "prompt-dump" }]);
-  assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "resumeSession" && entry.known === true).length, 1);
+  assert.equal(
+    readAgentLog(h.env).filter((entry) => entry.method === "resumeSession" && entry.known === true)
+      .length,
+    1,
+  );
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 1);
 });
 
@@ -366,7 +545,10 @@ test("a saved ACP session resumes across separate AGENTS refreshers when file gu
   });
   assert.deepEqual(JSON.parse(text(result)), [{ type: "text", text: "prompt-dump" }]);
   const log = readAgentLog(env);
-  assert.equal(log.filter((entry) => entry.method === "resumeSession" && entry.known === true).length, 1);
+  assert.equal(
+    log.filter((entry) => entry.method === "resumeSession" && entry.known === true).length,
+    1,
+  );
   assert.equal(log.filter((entry) => entry.method === "newSession").length, 1);
   assert.equal(host.notices.length, 0);
 });
@@ -383,7 +565,9 @@ test("a resumed ACP session rebuilds before prompting when saved host instructio
   const second = harness(dir, env);
   t.after(() => second.runtime.close());
   second.hosts.register(new RecordingHost("chat-1", dir));
-  const result = await turn(second, [userMessage("echo:one"), reply, userMessage("prompt-dump")], { systemPrompt: "INSTRUCTION_B" });
+  const result = await turn(second, [userMessage("echo:one"), reply, userMessage("prompt-dump")], {
+    systemPrompt: "INSTRUCTION_B",
+  });
   const prompt = JSON.parse(text(result)) as Array<{ resource?: { text: string } }>;
   assert.match(prompt[0]?.resource?.text ?? "", /^# Instructions from Aiden\n\nINSTRUCTION_B/u);
   const log = readAgentLog(env);
@@ -439,7 +623,10 @@ test("native edits go through Aiden's file callback, after Aiden's approval in A
   assert.equal(host.approvals[0]?.warning, "Prompt injection risk");
   assert.equal(host.approvals[0]?.offersAlways, true);
   // The approval names the activity row it belongs to.
-  assert.equal(host.approvals[0]?.activityId, host.activities.find((activity) => activity.event === "started")?.id);
+  assert.equal(
+    host.approvals[0]?.activityId,
+    host.activities.find((activity) => activity.event === "started")?.id,
+  );
   assert.equal(host.writes.length, 1);
   const started = host.activities.find((activity) => activity.event === "started");
   assert.equal(started?.toolName, "edit_file");
@@ -568,12 +755,30 @@ test(
     const finishedTimeline = timeline.finish("completed");
     const toolSteps = finishedTimeline.steps.filter((step) => step.kind === "tool");
     assert.deepEqual(
-      toolSteps.map((step) => step.kind === "tool" && [step.toolName, step.status, step.producedFile ?? null]),
+      toolSteps.map(
+        (step) => step.kind === "tool" && [step.toolName, step.status, step.producedFile ?? null],
+      ),
       [
-        ["write_file", "completed", { relativePath: "design/home.html", operation: "written", bytes: 14 }],
-        ["edit_file", "completed", { relativePath: "design/home.html", operation: "edited", bytes: 17 }],
-        ["edit_file", "completed", { relativePath: "design/home.html", operation: "edited", bytes: 18 }],
-        ["edit_file", "completed", { relativePath: "design/about.html", operation: "edited", bytes: 15 }],
+        [
+          "write_file",
+          "completed",
+          { relativePath: "design/home.html", operation: "written", bytes: 14 },
+        ],
+        [
+          "edit_file",
+          "completed",
+          { relativePath: "design/home.html", operation: "edited", bytes: 17 },
+        ],
+        [
+          "edit_file",
+          "completed",
+          { relativePath: "design/home.html", operation: "edited", bytes: 18 },
+        ],
+        [
+          "edit_file",
+          "completed",
+          { relativePath: "design/about.html", operation: "edited", bytes: 15 },
+        ],
         ["edit_file", "failed", null],
         ["edit_file", "completed", null],
       ],
@@ -607,8 +812,22 @@ test("a failed edit forgets only its own write, so a later edit to the same page
   const page = path.join(workspace, "design", "page.html");
   const result = await turn(h, [
     toolScript([
-      { sessionUpdate: "tool_call", toolCallId: "edit-a", title: "Edit A", kind: "edit", status: "in_progress", locations: [{ path: page }] },
-      { sessionUpdate: "tool_call", toolCallId: "edit-b", title: "Edit B", kind: "edit", status: "in_progress", locations: [{ path: page }] },
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "edit-a",
+        title: "Edit A",
+        kind: "edit",
+        status: "in_progress",
+        locations: [{ path: page }],
+      },
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "edit-b",
+        title: "Edit B",
+        kind: "edit",
+        status: "in_progress",
+        locations: [{ path: page }],
+      },
       { write: { path: page, content: "<h1>A</h1>\n" } },
       { write: { path: page, content: "<h1>Page B</h1>\n" } },
       { sessionUpdate: "tool_call_update", toolCallId: "edit-a", status: "failed" },
@@ -649,9 +868,30 @@ test("a refused edit claims no later write, so the next allowed edit to the same
   const page = path.join(workspace, "design", "page.html");
   const result = await turn(h, [
     toolScript([
-      { permission: { toolCallId: "refused", title: "Edit page", kind: "edit", locations: [{ path: page }] } },
-      { sessionUpdate: "tool_call", toolCallId: "allowed", title: "Edit page", kind: "edit", status: "in_progress", locations: [{ path: page }] },
-      { permission: { toolCallId: "allowed", title: "Edit page", kind: "edit", locations: [{ path: page }] } },
+      {
+        permission: {
+          toolCallId: "refused",
+          title: "Edit page",
+          kind: "edit",
+          locations: [{ path: page }],
+        },
+      },
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "allowed",
+        title: "Edit page",
+        kind: "edit",
+        status: "in_progress",
+        locations: [{ path: page }],
+      },
+      {
+        permission: {
+          toolCallId: "allowed",
+          title: "Edit page",
+          kind: "edit",
+          locations: [{ path: page }],
+        },
+      },
       { write: { path: page, content: "<h1>Page</h1>\n" } },
       { sessionUpdate: "tool_call_update", toolCallId: "allowed", status: "completed" },
     ]),
@@ -677,7 +917,11 @@ test("a denied approval leaves the file untouched and marks the activity blocked
   const result = await turn(h, [userMessage(`edit:${file}`)]);
   assert.equal(text(result), "edit denied");
   assert.equal(readFileSync(file, "utf8"), "old line\n");
-  assert.ok(host.activities.some((activity) => activity.event === "finished" && activity.status === "blocked"));
+  assert.ok(
+    host.activities.some(
+      (activity) => activity.event === "finished" && activity.status === "blocked",
+    ),
+  );
   await h.runtime.close();
 });
 
@@ -712,7 +956,10 @@ test("agent questions delivered as permission requests reach Aiden's question pr
   const result = await turn(h, [userMessage("question")]);
   assert.equal(text(result), "answer:blue");
   assert.equal(host.questions[0]?.title, "Which color?");
-  assert.deepEqual(host.questions[0]?.options.map((option) => option.label), ["Red", "Blue"]);
+  assert.deepEqual(
+    host.questions[0]?.options.map((option) => option.label),
+    ["Red", "Blue"],
+  );
   assert.equal(host.approvals.length, 0);
   await h.runtime.close();
 });
@@ -721,7 +968,13 @@ test("bridged Aiden tools run through the Pi tool loop and the same ACP prompt r
   const h = harness();
   const host = new RecordingHost("chat-1", h.dir);
   h.hosts.register(host);
-  const tools = [{ name: "lookup", description: "Look something up", parameters: Type.Object({ value: Type.String() }) }];
+  const tools = [
+    {
+      name: "lookup",
+      description: "Look something up",
+      parameters: Type.Object({ value: Type.String() }),
+    },
+  ];
   const first = await turn(h, [userMessage("bridge:aiden_lookup")], { tools });
   assert.equal(first.stopReason, "toolUse");
   const call = first.content.find((block) => block.type === "toolCall");
@@ -752,12 +1005,19 @@ test("a host instruction refresh during a bridged tool rebuilds before its resul
   const h = harness();
   t.after(() => h.runtime.close());
   h.hosts.register(new RecordingHost("chat-1", h.dir));
-  const first = await turn(h, [userMessage("bridge:aiden_lookup")], { tools: lookupTools, systemPrompt: "INSTRUCTION_A" });
-  assert.equal(first.stopReason, "toolUse");
-  const result = await turn(h, [userMessage("bridge:aiden_lookup"), first, toolResultFor(first, "found it")], {
+  const first = await turn(h, [userMessage("bridge:aiden_lookup")], {
     tools: lookupTools,
-    systemPrompt: "INSTRUCTION_B",
+    systemPrompt: "INSTRUCTION_A",
   });
+  assert.equal(first.stopReason, "toolUse");
+  const result = await turn(
+    h,
+    [userMessage("bridge:aiden_lookup"), first, toolResultFor(first, "found it")],
+    {
+      tools: lookupTools,
+      systemPrompt: "INSTRUCTION_B",
+    },
+  );
   assert.equal(result.stopReason, "stop");
   const prompts = readAgentLog(h.env).filter((entry) => entry.method === "prompt");
   assert.equal(prompts.length, 2);
@@ -807,7 +1067,9 @@ test("after a restart the chat resumes its saved agent session instead of rebuil
   second.hosts.register(host);
   const result = await turn(second, [userMessage("echo:one"), reply, userMessage("history")]);
   assert.equal(text(result), "prompts:2");
-  assert.ok(readAgentLog(env).some((entry) => entry.method === "resumeSession" && entry.known === true));
+  assert.ok(
+    readAgentLog(env).some((entry) => entry.method === "resumeSession" && entry.known === true),
+  );
   assert.equal(host.notices.length, 0);
   await second.runtime.close();
 });
@@ -823,7 +1085,11 @@ test("sessions closed mid-turn are not resumed, so the interrupted prompt is nev
   // Quit, sign-out and runtime removal close sessions while keeping idle ones resumable.
   await h.runtime.closeSessions();
   assert.notEqual((await interrupted).stopReason, "stop");
-  assert.equal(h.store.get("chat-1"), undefined, "the record predates the prompt the agent already received");
+  assert.equal(
+    h.store.get("chat-1"),
+    undefined,
+    "the record predates the prompt the agent already received",
+  );
 
   await turn(h, [userMessage("echo:one"), reply, userMessage("slow"), userMessage("history")]);
   const log = readAgentLog(h.env);
@@ -858,7 +1124,13 @@ function toolResultFor(message: AssistantMessage, textValue: string): ToolResult
   };
 }
 
-const lookupTools = [{ name: "lookup", description: "Look something up", parameters: Type.Object({ value: Type.String() }) }];
+const lookupTools = [
+  {
+    name: "lookup",
+    description: "Look something up",
+    parameters: Type.Object({ value: Type.String() }),
+  },
+];
 
 test("a message sent mid-turn is answered in the same turn, then not repeated", async () => {
   const h = harness();
@@ -866,7 +1138,9 @@ test("a message sent mid-turn is answered in the same turn, then not repeated", 
   const first = await turn(h, [userMessage("bridge:aiden_lookup")], { tools: lookupTools });
   const result = toolResultFor(first, "found it");
   const steer = userMessage("echo:steer this way");
-  const second = await turn(h, [userMessage("bridge:aiden_lookup"), first, result, steer], { tools: lookupTools });
+  const second = await turn(h, [userMessage("bridge:aiden_lookup"), first, result, steer], {
+    tools: lookupTools,
+  });
   assert.equal(text(second), "bridge:found itsteer this way");
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "prompt").length, 2);
   const third = await turn(
@@ -874,7 +1148,11 @@ test("a message sent mid-turn is answered in the same turn, then not repeated", 
     [userMessage("bridge:aiden_lookup"), first, result, steer, second, userMessage("prompt-dump")],
     { tools: lookupTools },
   );
-  assert.doesNotMatch(text(third), /steer this way/u, "the agent already answered it; nothing is replayed");
+  assert.doesNotMatch(
+    text(third),
+    /steer this way/u,
+    "the agent already answered it; nothing is replayed",
+  );
   await h.runtime.close();
 });
 
@@ -887,19 +1165,39 @@ test("a continuation stops when the folder's permission can no longer be enforce
     // An agent whose only approval mode Aiden cannot select.
     nativeModeFor: (permission: string) => (permission === "full" ? "yolo" : "unsupported-mode"),
   };
-  const runtime = new AcpHarnessRuntime(definition, new FakeLauncher(env), hosts, new AcpSessionStore(path.join(dir, "s.json")));
+  const runtime = new AcpHarnessRuntime(
+    definition,
+    new FakeLauncher(env),
+    hosts,
+    new AcpSessionStore(path.join(dir, "s.json")),
+  );
   const host = new RecordingHost("chat-1", dir);
   host.currentPermission = "full";
   hosts.register(host);
-  const h = { runtime, hosts, launcher: new FakeLauncher(env), env, store: new AcpSessionStore(path.join(dir, "x.json")), dir };
+  const h = {
+    runtime,
+    hosts,
+    launcher: new FakeLauncher(env),
+    env,
+    store: new AcpSessionStore(path.join(dir, "x.json")),
+    dir,
+  };
   const first = await turn(h, [userMessage("bridge:aiden_lookup")], { tools: lookupTools });
   assert.equal(first.stopReason, "toolUse");
   host.currentPermission = "ask";
-  const second = await turn(h, [userMessage("bridge:aiden_lookup"), first, toolResultFor(first, "x")], { tools: lookupTools });
+  const second = await turn(
+    h,
+    [userMessage("bridge:aiden_lookup"), first, toolResultFor(first, "x")],
+    { tools: lookupTools },
+  );
   assert.equal(second.stopReason, "error");
   assert.match(second.errorMessage ?? "", /approval mode/u);
   // session/cancel is a notification; give it a moment to reach the agent.
-  for (let attempt = 0; attempt < 50 && !readAgentLog(env).some((entry) => entry.method === "cancel"); attempt += 1) {
+  for (
+    let attempt = 0;
+    attempt < 50 && !readAgentLog(env).some((entry) => entry.method === "cancel");
+    attempt += 1
+  ) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.ok(readAgentLog(env).some((entry) => entry.method === "cancel"));
@@ -914,7 +1212,11 @@ test("a bridged call that arrives after the stream ended is shown on the next st
   assert.equal(first.stopReason, "toolUse");
   messages.push(first, toolResultFor(first, "one"));
   const second = await turn(h, messages, { tools: lookupTools });
-  assert.equal(second.stopReason, "toolUse", "the late call is announced instead of killing the session");
+  assert.equal(
+    second.stopReason,
+    "toolUse",
+    "the late call is announced instead of killing the session",
+  );
   messages.push(second, toolResultFor(second, "two"));
   const third = await turn(h, messages, { tools: lookupTools });
   assert.equal(text(third), "bridge-late:one,two");
@@ -953,7 +1255,8 @@ test("after a clean Stop the same agent session continues", async () => {
 test("sessions started at the same time evict an idle one instead of exceeding the limit", async (t) => {
   const h = harness(undefined, undefined, { maxLiveSessions: 2 });
   t.after(() => h.runtime.close());
-  for (const chat of ["chat-a", "chat-b", "chat-c"]) h.hosts.register(new RecordingHost(chat, h.dir));
+  for (const chat of ["chat-a", "chat-b", "chat-c"])
+    h.hosts.register(new RecordingHost(chat, h.dir));
   await turn(h, [userMessage("echo:a")], { chatId: "chat-a" });
   await Promise.all([
     turn(h, [userMessage("echo:b")], { chatId: "chat-b" }),
@@ -986,11 +1289,21 @@ test("writes the user did not approve are refused in Ask, and every write is ref
   const asked = await turn(h, [userMessage(`write:${file}`)]);
   assert.match(text(asked), /^write refused:/u);
   host.currentPermission = "read-only";
-  const readOnly = await turn(h, [userMessage(`write:${file}`), asked, userMessage(`write:${file}`)]);
+  const readOnly = await turn(h, [
+    userMessage(`write:${file}`),
+    asked,
+    userMessage(`write:${file}`),
+  ]);
   assert.match(text(readOnly), /^write refused:/u);
   assert.equal(readFileSync(file, "utf8"), "old line\n");
   host.currentPermission = "full";
-  const full = await turn(h, [userMessage(`write:${file}`), asked, userMessage(`write:${file}`), readOnly, userMessage(`write:${file}`)]);
+  const full = await turn(h, [
+    userMessage(`write:${file}`),
+    asked,
+    userMessage(`write:${file}`),
+    readOnly,
+    userMessage(`write:${file}`),
+  ]);
   assert.equal(text(full), "wrote");
   await h.runtime.close();
 });
@@ -1068,7 +1381,11 @@ test("a bridged tool that outlives its timeout ends the agent's turn cleanly; it
   messages.push(first, toolResultFor(first, "late result"));
   const second = await turn(h, messages, { tools: lookupTools });
   assert.equal(second.stopReason, "stop", second.errorMessage);
-  assert.doesNotMatch(text(second), /did not finish in time/u, "the abandoned turn's text is not mixed in");
+  assert.doesNotMatch(
+    text(second),
+    /did not finish in time/u,
+    "the abandoned turn's text is not mixed in",
+  );
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "prompt").length, 2);
   await h.runtime.close();
 });
@@ -1087,14 +1404,22 @@ test("sign-out waits for a catalog launch that was still starting and stops it",
       return inner.launch(purpose, cwd);
     },
   };
-  const runtime = new AcpHarnessRuntime(fakeDefinition, slowLauncher, new AcpHostRegistry(), new AcpSessionStore(path.join(dir, "s.json")));
+  const runtime = new AcpHarnessRuntime(
+    fakeDefinition,
+    slowLauncher,
+    new AcpHostRegistry(),
+    new AcpSessionStore(path.join(dir, "s.json")),
+  );
   const discovery = runtime.discoverModels(dir).catch((error: unknown) => error);
   await new Promise((resolve) => setTimeout(resolve, 20));
   const closing = runtime.closeAdmission();
   release();
   const reopen = await closing;
   assert.ok(inner.processes.length <= 1);
-  assert.ok(inner.processes.every((process) => !process.alive), "no process from before sign-out survives");
+  assert.ok(
+    inner.processes.every((process) => !process.alive),
+    "no process from before sign-out survives",
+  );
   assert.match(String(await discovery), /signing out/u);
   reopen();
   await runtime.close();
@@ -1116,7 +1441,12 @@ test("closing the runtime at quit stops a catalog run whose agent never answers"
       return { process, dispose: () => process.close() };
     },
   };
-  const runtime = new AcpHarnessRuntime(fakeDefinition, silentLauncher, new AcpHostRegistry(), new AcpSessionStore(path.join(dir, "s.json")));
+  const runtime = new AcpHarnessRuntime(
+    fakeDefinition,
+    silentLauncher,
+    new AcpHostRegistry(),
+    new AcpSessionStore(path.join(dir, "s.json")),
+  );
   const discovery = runtime.discoverModels(dir).then(
     () => "resolved",
     (error: unknown) => error,
@@ -1124,7 +1454,10 @@ test("closing the runtime at quit stops a catalog run whose agent never answers"
   // Let the launch finish so the catalog run is waiting on the agent.
   await new Promise((resolve) => setTimeout(resolve, 100));
   await runtime.close();
-  assert.ok(processes.length === 1 && !processes[0]!.alive, "the catalog agent stopped with the runtime");
+  assert.ok(
+    processes.length === 1 && !processes[0]!.alive,
+    "the catalog agent stopped with the runtime",
+  );
   let timer: NodeJS.Timeout | undefined;
   const settled = await Promise.race([
     discovery,

@@ -49,15 +49,21 @@ export function cssRectsToImageRects(
     const top = Math.max(0, Math.floor((rect.y - padding) * scaleY));
     const right = Math.min(image.width, Math.ceil((rect.x + rect.width + padding) * scaleX));
     const bottom = Math.min(image.height, Math.ceil((rect.y + rect.height + padding) * scaleY));
-    if (right > left && bottom > top) out.push({ x: left, y: top, width: right - left, height: bottom - top });
+    if (right > left && bottom > top)
+      out.push({ x: left, y: top, width: right - left, height: bottom - top });
   }
   return out;
 }
 
 /** Fill every rectangle with opaque neutral gray, in place. */
-export function paintRects(bitmap: RawBitmap, rects: readonly PixelRect[], gray = CREDENTIAL_MASK_GRAY): void {
+export function paintRects(
+  bitmap: RawBitmap,
+  rects: readonly PixelRect[],
+  gray = CREDENTIAL_MASK_GRAY,
+): void {
   const { width, height, data } = bitmap;
-  if (data.length !== width * height * 4) throw new Error("The page image has an unexpected pixel layout.");
+  if (data.length !== width * height * 4)
+    throw new Error("The page image has an unexpected pixel layout.");
   for (const rect of rects) {
     const x0 = Math.max(0, Math.floor(rect.x));
     const y0 = Math.max(0, Math.floor(rect.y));

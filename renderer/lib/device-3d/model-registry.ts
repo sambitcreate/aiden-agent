@@ -25,8 +25,8 @@ const MODEL_NAMES: Readonly<Record<DeviceModelId, readonly string[]>> = {
 };
 
 const BY_NAME = new Map<string, DeviceModelId>(
-  (Object.entries(MODEL_NAMES) as Array<[DeviceModelId, readonly string[]]>).flatMap(([id, names]) =>
-    names.map((name) => [name.toLowerCase(), id] as const),
+  (Object.entries(MODEL_NAMES) as Array<[DeviceModelId, readonly string[]]>).flatMap(
+    ([id, names]) => names.map((name) => [name.toLowerCase(), id] as const),
   ),
 );
 
@@ -37,6 +37,13 @@ export function resolveDeviceModelId(platform: string, name: string): DeviceMode
 }
 
 /** The hinged iPhone Duo is the only iOS simulator that reports hinge fields. */
-export function isDuoDevice(platform: string, name: string, screen: { supportsHingeAngle?: boolean } | null): boolean {
-  return resolveDeviceModelId(platform, name) === "iphone-duo" || (platform === "ios" && screen?.supportsHingeAngle === true);
+export function isDuoDevice(
+  platform: string,
+  name: string,
+  screen: { supportsHingeAngle?: boolean } | null,
+): boolean {
+  return (
+    resolveDeviceModelId(platform, name) === "iphone-duo" ||
+    (platform === "ios" && screen?.supportsHingeAngle === true)
+  );
 }

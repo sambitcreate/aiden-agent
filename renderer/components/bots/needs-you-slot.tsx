@@ -14,7 +14,14 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button, Text } from "../ui";
 
 /** What an item is, which fixes its place in the slot. */
-export type NeedsYouKind = "take_control" | "approval" | "access" | "plan" | "change" | "issue" | "question";
+export type NeedsYouKind =
+  | "take_control"
+  | "approval"
+  | "access"
+  | "plan"
+  | "change"
+  | "issue"
+  | "question";
 
 /** Take control, then the ask cards (approval, folder or Mac request, plan, a held settings change), then issues, then the question. */
 const NEEDS_YOU_ORDER: Record<NeedsYouKind, number> = {
@@ -37,7 +44,9 @@ export interface NeedsYouItem {
 export function orderNeedsYouItems<Item extends NeedsYouItem>(items: readonly Item[]): Item[] {
   return items
     .map((item, index) => ({ item, index }))
-    .sort((a, b) => NEEDS_YOU_ORDER[a.item.kind] - NEEDS_YOU_ORDER[b.item.kind] || a.index - b.index)
+    .sort(
+      (a, b) => NEEDS_YOU_ORDER[a.item.kind] - NEEDS_YOU_ORDER[b.item.kind] || a.index - b.index,
+    )
     .map(({ item }) => item);
 }
 
@@ -87,7 +96,9 @@ export function needsYouSlotState<Item extends NeedsYouItem>(
 }
 
 /** `needsYouSlotState` with its own choice. */
-export function useNeedsYouSlot<Item extends NeedsYouItem>(items: readonly Item[]): NeedsYouSlotState<Item> {
+export function useNeedsYouSlot<Item extends NeedsYouItem>(
+  items: readonly Item[],
+): NeedsYouSlotState<Item> {
   const [chosen, setChosen] = React.useState<string | null>(null);
   return needsYouSlotState(items, chosen, setChosen);
 }
@@ -100,14 +111,20 @@ export function useNeedsYouSlot<Item extends NeedsYouItem>(items: readonly Item[
  * slot, or an answer bringing the next one up), never because another item
  * arrived behind it.
  */
-export function NeedsYouAnnouncer<Item extends NeedsYouItem>({ slot }: { slot: NeedsYouSlotState<Item> }) {
+export function NeedsYouAnnouncer<Item extends NeedsYouItem>({
+  slot,
+}: {
+  slot: NeedsYouSlotState<Item>;
+}) {
   const [announcement, setAnnouncement] = React.useState("");
   const spokenFor = React.useRef<string | undefined>(undefined);
   const key = slot.current?.key;
   React.useEffect(() => {
     if (key === spokenFor.current) return;
     spokenFor.current = key;
-    setAnnouncement(key !== undefined && slot.count > 1 ? `Needs you, ${slot.index + 1} of ${slot.count}` : "");
+    setAnnouncement(
+      key !== undefined && slot.count > 1 ? `Needs you, ${slot.index + 1} of ${slot.count}` : "",
+    );
   }, [key, slot.count, slot.index]);
   return (
     <p className="sr-only" role="status" aria-live="polite" data-needs-you-announcement>
@@ -172,8 +189,9 @@ export function NeedsYouFocusScope({
     if (active && active !== element.ownerDocument.body && active.isConnected) return;
     const card = element.querySelector("[data-needs-you-card]");
     const target =
-      card?.querySelector<HTMLElement>('[role="group"][aria-label], [role="region"][aria-label], h1, h2, h3, h4') ??
-      (card ? null : element.querySelector<HTMLElement>("textarea:not(:disabled)"));
+      card?.querySelector<HTMLElement>(
+        '[role="group"][aria-label], [role="region"][aria-label], h1, h2, h3, h4',
+      ) ?? (card ? null : element.querySelector<HTMLElement>("textarea:not(:disabled)"));
     if (!target) return;
     if (card && !target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
     target.focus();
@@ -187,25 +205,48 @@ export function NeedsYouFocusScope({
 }
 
 function withinSlot(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest("[data-needs-you-card], [data-needs-you-slot]") !== null;
+  return (
+    target instanceof Element &&
+    target.closest("[data-needs-you-card], [data-needs-you-slot]") !== null
+  );
 }
 
 /** The slot's header when more than one item waits: "Needs you · 2 of 3" with Previous and Next. */
-export function NeedsYouHeader<Item extends NeedsYouItem>({ slot }: { slot: NeedsYouSlotState<Item> }) {
+export function NeedsYouHeader<Item extends NeedsYouItem>({
+  slot,
+}: {
+  slot: NeedsYouSlotState<Item>;
+}) {
   return (
     <>
       {slot.count > 1 ? (
-        <nav aria-label="Needs you" className="flex items-center justify-between gap-2 px-2" data-needs-you-header>
+        <nav
+          aria-label="Needs you"
+          className="flex items-center justify-between gap-2 px-2"
+          data-needs-you-header
+        >
           <Text as="p" variant="small" color="secondary">
             <span className="font-semibold text-primary">Needs you</span>
             <span aria-hidden="true"> · </span>
             <span data-needs-you-position>{`${slot.index + 1} of ${slot.count}`}</span>
           </Text>
           <div className="flex items-center gap-1">
-            <Button variant="transparent" size="small" iconOnly aria-label="Previous" onClick={slot.previous}>
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              aria-label="Previous"
+              onClick={slot.previous}
+            >
               <ChevronLeft aria-hidden="true" />
             </Button>
-            <Button variant="transparent" size="small" iconOnly aria-label="Next" onClick={slot.next}>
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              aria-label="Next"
+              onClick={slot.next}
+            >
               <ChevronRight aria-hidden="true" />
             </Button>
           </div>

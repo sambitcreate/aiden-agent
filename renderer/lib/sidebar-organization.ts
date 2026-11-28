@@ -75,7 +75,10 @@ export interface SidebarChatSummary {
   lastActivityAt?: number;
 }
 
-export interface SidebarProjectGroup<P extends SidebarProjectSummary, C extends SidebarChatSummary> {
+export interface SidebarProjectGroup<
+  P extends SidebarProjectSummary,
+  C extends SidebarChatSummary,
+> {
   project: P;
   chats: C[];
   /** Newest of the project's own and its chats' activity, or null when undated. */
@@ -88,7 +91,10 @@ export interface SidebarChatSection<C extends SidebarChatSummary> {
   chats: C[];
 }
 
-export interface SidebarOrganizeInput<P extends SidebarProjectSummary, C extends SidebarChatSummary> {
+export interface SidebarOrganizeInput<
+  P extends SidebarProjectSummary,
+  C extends SidebarChatSummary,
+> {
   projects: readonly P[];
   chats: readonly C[];
   search: string;
@@ -101,7 +107,10 @@ export interface SidebarOrganizeInput<P extends SidebarProjectSummary, C extends
   now: number;
 }
 
-export interface SidebarOrganization<P extends SidebarProjectSummary, C extends SidebarChatSummary> {
+export interface SidebarOrganization<
+  P extends SidebarProjectSummary,
+  C extends SidebarChatSummary,
+> {
   /** Project groups in display order, filtered by search. */
   projectGroups: SidebarProjectGroup<P, C>[];
   /** Every supplied project key in display order, ignoring search. */
@@ -240,14 +249,17 @@ export function organizeSidebar<P extends SidebarProjectSummary, C extends Sideb
     left.project.name.localeCompare(right.project.name) ||
     compareKeys(left.project.key, right.project.key);
   const byActivity = [...allGroups].sort(
-    (left, right) => compareNewest(left.lastActivityAt, right.lastActivityAt) || byName(left, right),
+    (left, right) =>
+      compareNewest(left.lastActivityAt, right.lastActivityAt) || byName(left, right),
   );
   const ordered =
     input.projectSort === "created"
       ? [...allGroups].sort(
           (left, right) =>
-            compareNewest(usableTime(left.project.createdAt), usableTime(right.project.createdAt)) ||
-            byName(left, right),
+            compareNewest(
+              usableTime(left.project.createdAt),
+              usableTime(right.project.createdAt),
+            ) || byName(left, right),
         )
       : input.projectSort === "manual"
         ? applyManualOrder(
@@ -320,7 +332,10 @@ export function latestProjectChat<P extends SidebarProjectSummary, C extends Sid
  * Chat rows exactly as the active view displays them, section by section, so
  * jump shortcuts and previous/next navigation follow what is on screen.
  */
-export function displayedSidebarChats<P extends SidebarProjectSummary, C extends SidebarChatSummary>(
+export function displayedSidebarChats<
+  P extends SidebarProjectSummary,
+  C extends SidebarChatSummary,
+>(
   organization: SidebarOrganization<P, C>,
   view: SidebarView,
   options: SidebarDisplayOptions<P>,
@@ -333,11 +348,7 @@ export function displayedSidebarChats<P extends SidebarProjectSummary, C extends
   ];
 }
 
-export function canMoveProjectKey(
-  order: readonly string[],
-  key: string,
-  offset: -1 | 1,
-): boolean {
+export function canMoveProjectKey(order: readonly string[], key: string, offset: -1 | 1): boolean {
   const index = order.indexOf(key);
   return index >= 0 && index + offset >= 0 && index + offset < order.length;
 }
@@ -486,7 +497,9 @@ export function parseSidebarPreferences(
         ? record.workingShelfCollapsed
         : DEFAULT_SIDEBAR_PREFERENCES.workingShelfCollapsed,
     dockBadge:
-      typeof record.dockBadge === "boolean" ? record.dockBadge : DEFAULT_SIDEBAR_PREFERENCES.dockBadge,
+      typeof record.dockBadge === "boolean"
+        ? record.dockBadge
+        : DEFAULT_SIDEBAR_PREFERENCES.dockBadge,
   };
 }
 

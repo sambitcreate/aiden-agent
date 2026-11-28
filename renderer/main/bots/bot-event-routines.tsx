@@ -52,13 +52,34 @@ type Draft = {
   script: string;
   everyMinutes: number;
 };
-const EMPTY: Draft = { name: "", prompt: "", kind: "file_change", folder: "", watchType: "url", url: "", script: "", everyMinutes: 60 };
+const EMPTY: Draft = {
+  name: "",
+  prompt: "",
+  kind: "file_change",
+  folder: "",
+  watchType: "url",
+  url: "",
+  script: "",
+  everyMinutes: 60,
+};
 const WATCH_INTERVALS: readonly number[] = [5, 15, 30, 60, 360, 1_440];
 
 export interface BotEventRoutinesApi {
   list(botId: string): Promise<BotEventRoutineView[]>;
-  create(input: { botId: string; name: string; prompt: string; trigger: BotRoutineTrigger }): Promise<{ routine: BotEventRoutineView; link?: string | null }>;
-  update(input: { botId: string; id: string; enabled?: boolean; name?: string; prompt?: string; trigger?: BotRoutineTrigger }): Promise<BotEventRoutineView>;
+  create(input: {
+    botId: string;
+    name: string;
+    prompt: string;
+    trigger: BotRoutineTrigger;
+  }): Promise<{ routine: BotEventRoutineView; link?: string | null }>;
+  update(input: {
+    botId: string;
+    id: string;
+    enabled?: boolean;
+    name?: string;
+    prompt?: string;
+    trigger?: BotRoutineTrigger;
+  }): Promise<BotEventRoutineView>;
   remove(input: { botId: string; id: string }): Promise<{ removed: boolean }>;
   rotateLink(input: { botId: string; id: string }): Promise<{ link: string | null }>;
   /** Subscribes to changes made elsewhere (a watch's check, a Bot's own pause); returns the unsubscribe. */
@@ -66,7 +87,13 @@ export interface BotEventRoutinesApi {
 }
 
 function draftOf(routine: BotEventRoutineView): Draft {
-  const draft: Draft = { ...EMPTY, id: routine.id, name: routine.name, prompt: routine.prompt, kind: routine.trigger.kind };
+  const draft: Draft = {
+    ...EMPTY,
+    id: routine.id,
+    name: routine.name,
+    prompt: routine.prompt,
+    kind: routine.trigger.kind,
+  };
   if (routine.trigger.kind === "file_change") return { ...draft, folder: routine.trigger.folder };
   if (routine.trigger.kind !== "watch") return draft;
   const { source, everyMinutes } = routine.trigger;
@@ -81,7 +108,10 @@ function triggerOf(draft: Draft): BotRoutineTrigger {
   if (draft.kind === "file_change") return { kind: "file_change", folder: draft.folder.trim() };
   return {
     kind: "watch",
-    source: draft.watchType === "url" ? { type: "url", url: draft.url.trim() } : { type: "script", script: draft.script.trim() },
+    source:
+      draft.watchType === "url"
+        ? { type: "url", url: draft.url.trim() }
+        : { type: "script", script: draft.script.trim() },
     everyMinutes: draft.everyMinutes,
   };
 }
@@ -93,7 +123,11 @@ function draftProblem(draft: Draft, platform: string): { hint?: string } | null 
   if (draft.kind !== "watch") return null;
   if (draft.watchType === "script") return draft.script.trim() ? null : {};
   if (!draft.url.trim()) return {};
-  return parseBotWatchUrl(draft.url.trim()) ? null : { hint: `Use an https address, or http only for this ${localComputerNoun(platform)} (localhost).` };
+  return parseBotWatchUrl(draft.url.trim())
+    ? null
+    : {
+        hint: `Use an https address, or http only for this ${localComputerNoun(platform)} (localhost).`,
+      };
 }
 
 /** An interval as the picker lists it: "15 minutes", "1 hour", "6 hours", "1 day". */
@@ -104,7 +138,12 @@ function intervalOption(minutes: number): string {
   return unit(minutes, "minute");
 }
 
-const sameSinceFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+const sameSinceFormat = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
 
 /** The status under a watch's row: its last check, or why it isn't checking. */
 export function botWatchStatusLine(
@@ -113,19 +152,30 @@ export function botWatchStatusLine(
   botName: string,
   now = Date.now(),
 ): { text: string; tone: "secondary" | "error" } {
-  if (!watch?.lastCheckAt) return { text: enabled ? "First check soon." : "Not checked yet.", tone: "secondary" };
+  if (!watch?.lastCheckAt)
+    return { text: enabled ? "First check soon." : "Not checked yet.", tone: "secondary" };
   if (!enabled && watch.failures >= BOT_WATCH_LIMITS.failuresBeforePause) {
     const why = watch.lastError ? ` ${watch.lastError}` : "";
-    return { text: `Turned off after ${watch.failures} failed checks in a row.${why} Turn it on to try again.`, tone: "error" };
+    return {
+      text: `Turned off after ${watch.failures} failed checks in a row.${why} Turn it on to try again.`,
+      tone: "error",
+    };
   }
   if (watch.lastResult === "error") {
     const streak = watch.failures > 1 ? ` (${watch.failures} in a row)` : "";
-    return { text: `Couldn’t check ${formatRelativeTime(watch.lastCheckAt, now)}${streak}: ${watch.lastError ?? "the check failed."}`, tone: "error" };
+    return {
+      text: `Couldn’t check ${formatRelativeTime(watch.lastCheckAt, now)}${streak}: ${watch.lastError ?? "the check failed."}`,
+      tone: "error",
+    };
   }
   const checked = `Checked ${formatRelativeTime(watch.lastCheckAt, now)}`;
-  if (watch.lastResult === "changed") return { text: `${checked} · Changed, so ${botName} took a look`, tone: "secondary" };
-  if (watch.lastResult === "baseline") return { text: `${checked} · Watching for changes from here`, tone: "secondary" };
-  const since = watch.sameSince ? ` · No change since ${sameSinceFormat.format(new Date(watch.sameSince))}` : " · No change";
+  if (watch.lastResult === "changed")
+    return { text: `${checked} · Changed, so ${botName} took a look`, tone: "secondary" };
+  if (watch.lastResult === "baseline")
+    return { text: `${checked} · Watching for changes from here`, tone: "secondary" };
+  const since = watch.sameSince
+    ? ` · No change since ${sameSinceFormat.format(new Date(watch.sameSince))}`
+    : " · No change";
   return { text: `${checked}${since}`, tone: "secondary" };
 }
 
@@ -163,29 +213,49 @@ export function BotEventRoutines({
     setSaving(true);
     try {
       if (draft.id) {
-        await api.update({ botId: bot.id, id: draft.id, name: draft.name, prompt: draft.prompt, trigger });
+        await api.update({
+          botId: bot.id,
+          id: draft.id,
+          name: draft.name,
+          prompt: draft.prompt,
+          trigger,
+        });
       } else {
-        const created = await api.create({ botId: bot.id, name: draft.name, prompt: draft.prompt, trigger });
+        const created = await api.create({
+          botId: bot.id,
+          name: draft.name,
+          prompt: draft.prompt,
+          trigger,
+        });
         if (created.link !== undefined) setLink({ name: created.routine.name, link: created.link });
       }
       setDraft(null);
       await reload();
     } catch (error) {
-      toast.error(userFacingErrorMessage(error, draft.id ? "Aiden couldn’t save that routine." : "Aiden couldn’t add that routine."));
+      toast.error(
+        userFacingErrorMessage(
+          error,
+          draft.id ? "Aiden couldn’t save that routine." : "Aiden couldn’t add that routine.",
+        ),
+      );
     } finally {
       setSaving(false);
     }
   };
 
   const problem = draft ? draftProblem(draft, platform) : null;
-  const intervals = draft && !WATCH_INTERVALS.includes(draft.everyMinutes)
-    ? [...WATCH_INTERVALS, draft.everyMinutes].sort((a, b) => a - b)
-    : WATCH_INTERVALS;
+  const intervals =
+    draft && !WATCH_INTERVALS.includes(draft.everyMinutes)
+      ? [...WATCH_INTERVALS, draft.everyMinutes].sort((a, b) => a - b)
+      : WATCH_INTERVALS;
 
   return (
     <FieldSet title="When something happens">
       {(routines ?? []).map((routine) => {
-        const status = routine.trigger.kind === "watch" ? botWatchStatusLine(routine.watch, routine.enabled, bot.name, now) : null;
+        const status =
+          routine.trigger.kind === "watch"
+            ? botWatchStatusLine(routine.watch, routine.enabled, bot.name, now)
+            : null;
         return (
           <Field
             key={routine.id}
@@ -194,7 +264,15 @@ export function BotEventRoutines({
               <>
                 {formatBotRoutineTriggerLabel(routine.trigger)}
                 {status ? (
-                  <span className={status.tone === "error" ? "mt-0.5 block text-red" : "mt-0.5 block text-tertiary"}>{status.text}</span>
+                  <span
+                    className={
+                      status.tone === "error"
+                        ? "mt-0.5 block text-red"
+                        : "mt-0.5 block text-tertiary"
+                    }
+                  >
+                    {status.text}
+                  </span>
                 ) : null}
               </>
             }
@@ -204,8 +282,14 @@ export function BotEventRoutines({
                 aria-label={`${routine.name} on`}
                 checked={routine.enabled}
                 onCheckedChange={(enabled) =>
-                  void api.update({ botId: bot.id, id: routine.id, enabled }).then(reload, (error: unknown) =>
-                    toast.error(userFacingErrorMessage(error, "Aiden couldn’t change that routine.")))}
+                  void api
+                    .update({ botId: bot.id, id: routine.id, enabled })
+                    .then(reload, (error: unknown) =>
+                      toast.error(
+                        userFacingErrorMessage(error, "Aiden couldn’t change that routine."),
+                      ),
+                    )
+                }
               />
               {routine.trigger.kind === "webhook" ? (
                 <Button
@@ -215,26 +299,46 @@ export function BotEventRoutines({
                   onClick={() =>
                     void api.rotateLink({ botId: bot.id, id: routine.id }).then(
                       ({ link: next }) => setLink({ name: routine.name, link: next }),
-                      (error: unknown) => toast.error(userFacingErrorMessage(error, "Aiden couldn’t make a new link.")),
-                    )}
+                      (error: unknown) =>
+                        toast.error(
+                          userFacingErrorMessage(error, "Aiden couldn’t make a new link."),
+                        ),
+                    )
+                  }
                 >
                   New link
                 </Button>
               ) : null}
               {routine.trigger.kind === "watch" ? (
-                <Button iconOnly size="small" variant="transparent" aria-label={`Edit ${routine.name}`} onClick={() => setDraft(draftOf(routine))}>
+                <Button
+                  iconOnly
+                  size="small"
+                  variant="transparent"
+                  aria-label={`Edit ${routine.name}`}
+                  onClick={() => setDraft(draftOf(routine))}
+                >
                   <Pencil />
                 </Button>
               ) : null}
-              <BotRoutineModelButton botId={bot.id} routineId={routine.id} routineName={routine.name} />
+              <BotRoutineModelButton
+                botId={bot.id}
+                routineId={routine.id}
+                routineName={routine.name}
+              />
               <Button
                 iconOnly
                 size="small"
                 variant="transparent"
                 aria-label={`Remove ${routine.name}`}
                 onClick={() =>
-                  void api.remove({ botId: bot.id, id: routine.id }).then(reload, (error: unknown) =>
-                    toast.error(userFacingErrorMessage(error, "Aiden couldn’t remove that routine.")))}
+                  void api
+                    .remove({ botId: bot.id, id: routine.id })
+                    .then(reload, (error: unknown) =>
+                      toast.error(
+                        userFacingErrorMessage(error, "Aiden couldn’t remove that routine."),
+                      ),
+                    )
+                }
               >
                 <Trash2 />
               </Button>
@@ -245,16 +349,22 @@ export function BotEventRoutines({
       {link ? (
         <Field
           label={`${link.name}'s link`}
-          description={link.link
-            ? routineLinkDescription(platform)
-            : "Turn on remote access in Settings → Connections to use this routine's link."}
+          description={
+            link.link
+              ? routineLinkDescription(platform)
+              : "Turn on remote access in Settings → Connections to use this routine's link."
+          }
         >
           {link.link ? (
             <Button
               size="small"
               variant="filled"
               className="justify-self-end"
-              onClick={() => void navigator.clipboard?.writeText(link.link!).then(() => toast.success("Link copied."))}
+              onClick={() =>
+                void navigator.clipboard
+                  ?.writeText(link.link!)
+                  .then(() => toast.success("Link copied."))
+              }
             >
               <Copy /> Copy link
             </Button>
@@ -264,7 +374,12 @@ export function BotEventRoutines({
       {draft ? (
         <Field orientation="vertical" label={draft.id ? "Edit routine" : "New routine"}>
           <div className="flex flex-col gap-3">
-            <Input aria-label="Routine name" placeholder="Name" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+            <Input
+              aria-label="Routine name"
+              placeholder="Name"
+              value={draft.name}
+              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+            />
             <Textarea
               aria-label="What to do"
               placeholder={`What ${bot.name} should do`}
@@ -287,7 +402,9 @@ export function BotEventRoutines({
                 </div>
                 <div className="flex items-center gap-2">
                   <RadioGroupItem id={`${bot.id}-event-watch`} value="watch" />
-                  <Label htmlFor={`${bot.id}-event-watch`}>A page or script gives a new answer</Label>
+                  <Label htmlFor={`${bot.id}-event-watch`}>
+                    A page or script gives a new answer
+                  </Label>
                 </div>
               </RadioGroup>
             )}
@@ -305,7 +422,9 @@ export function BotEventRoutines({
                   aria-label="What to check"
                   className="flex flex-wrap gap-x-5 gap-y-2"
                   value={draft.watchType}
-                  onValueChange={(watchType) => setDraft({ ...draft, watchType: watchType as Draft["watchType"] })}
+                  onValueChange={(watchType) =>
+                    setDraft({ ...draft, watchType: watchType as Draft["watchType"] })
+                  }
                 >
                   <div className="flex items-center gap-2">
                     <RadioGroupItem id={`${formId}-watch-url`} value="url" />
@@ -326,8 +445,13 @@ export function BotEventRoutines({
                       value={draft.url}
                       onChange={(event) => setDraft({ ...draft, url: event.target.value })}
                     />
-                    <Text id={`${formId}-watch-hint`} variant="small" color={problem?.hint ? "red" : "tertiary"}>
-                      {problem?.hint ?? "Read with no sign-in or cookies, and never redirected: use the address the page ends up at."}
+                    <Text
+                      id={`${formId}-watch-hint`}
+                      variant="small"
+                      color={problem?.hint ? "red" : "tertiary"}
+                    >
+                      {problem?.hint ??
+                        "Read with no sign-in or cookies, and never redirected: use the address the page ends up at."}
                     </Text>
                   </div>
                 ) : (
@@ -340,14 +464,24 @@ export function BotEventRoutines({
                       onChange={(event) => setDraft({ ...draft, script: event.target.value })}
                     />
                     <Text id={`${formId}-watch-hint`} variant="small" color="tertiary">
-                      Runs in the Bot’s folder for up to a minute. What it prints is compared with last time.
+                      Runs in the Bot’s folder for up to a minute. What it prints is compared with
+                      last time.
                     </Text>
                   </div>
                 )}
                 <div className="flex items-center justify-between gap-3">
-                  <Text id={`${formId}-every`} variant="small-strong">Check every</Text>
-                  <Select value={String(draft.everyMinutes)} onValueChange={(value) => setDraft({ ...draft, everyMinutes: Number(value) })}>
-                    <SelectTrigger aria-labelledby={`${formId}-every`} size="small" className="w-36">
+                  <Text id={`${formId}-every`} variant="small-strong">
+                    Check every
+                  </Text>
+                  <Select
+                    value={String(draft.everyMinutes)}
+                    onValueChange={(value) => setDraft({ ...draft, everyMinutes: Number(value) })}
+                  >
+                    <SelectTrigger
+                      aria-labelledby={`${formId}-every`}
+                      size="small"
+                      className="w-36"
+                    >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -360,21 +494,40 @@ export function BotEventRoutines({
                   </Select>
                 </div>
                 <Text variant="small" color="tertiary">
-                  A check doesn’t use the model. {bot.name} runs only when the answer differs from the last check.
+                  A check doesn’t use the model. {bot.name} runs only when the answer differs from
+                  the last check.
                 </Text>
               </div>
             ) : null}
             <span className="flex justify-end gap-2">
-              <Button size="small" variant="transparent" onClick={() => setDraft(null)}>Cancel</Button>
-              <Button size="small" variant="accent" disabled={saving || problem !== null} onClick={() => void save()}>
+              <Button size="small" variant="transparent" onClick={() => setDraft(null)}>
+                Cancel
+              </Button>
+              <Button
+                size="small"
+                variant="accent"
+                disabled={saving || problem !== null}
+                onClick={() => void save()}
+              >
                 {draft.id ? (saving ? "Saving…" : "Save") : saving ? "Adding…" : "Add routine"}
               </Button>
             </span>
           </div>
         </Field>
       ) : (
-        <Field label={routines?.length ? "Add another" : "Run a routine when a file changes, a link is called or a page changes"}>
-          <Button size="small" variant="filled" className="justify-self-end" onClick={() => setDraft({ ...EMPTY })}>
+        <Field
+          label={
+            routines?.length
+              ? "Add another"
+              : "Run a routine when a file changes, a link is called or a page changes"
+          }
+        >
+          <Button
+            size="small"
+            variant="filled"
+            className="justify-self-end"
+            onClick={() => setDraft({ ...EMPTY })}
+          >
             <Plus /> Add
           </Button>
         </Field>

@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { types as utilTypes } from "node:util";
-import { botConnectionCapabilityIdentity, parseBotConnectionAccessIdentity, type BotConnectionAccessIdentity } from "./bot-connection-capability-identity.js";
+import {
+  botConnectionCapabilityIdentity,
+  parseBotConnectionAccessIdentity,
+  type BotConnectionAccessIdentity,
+} from "./bot-connection-capability-identity.js";
 import {
   BOT_CAPABILITY_LIMITS,
   BOT_FULL_ACCESS_NOTICE_VERSION,
@@ -728,7 +732,12 @@ function parseConnections(
       "connectionFingerprint",
       "tools",
     ]);
-    if (Object.keys(connection).length !== 5 + Number(connection.description !== undefined) + Number(connection.accessIdentity !== undefined)) {
+    if (
+      Object.keys(connection).length !==
+      5 +
+        Number(connection.description !== undefined) +
+        Number(connection.accessIdentity !== undefined)
+    ) {
       throw new Error(`Bot connection ${connectionIndex} is incomplete.`);
     }
     const sourceId = privateIdentity(connection.sourceId, `Bot connection ${connectionIndex}`);
@@ -799,7 +808,10 @@ function parseConnections(
     const toolsetFingerprint = botCapabilityFactsFingerprint(
       tools.map(({ name, exactFingerprint }) => ({ name, exactFingerprint })),
     );
-    const accessIdentity = parseBotConnectionAccessIdentity(connection.accessIdentity, { sourceId, tools });
+    const accessIdentity = parseBotConnectionAccessIdentity(connection.accessIdentity, {
+      sourceId,
+      tools,
+    });
     const exactFingerprint = botCapabilityFactsFingerprint({
       connectionFingerprint,
       toolsetFingerprint,
@@ -820,7 +832,12 @@ function parseConnections(
       exactFingerprint,
       tools,
       option: optionFrom(
-        safeOpaqueId(mint, "connection", botConnectionCapabilityIdentity({ sourceId, accessIdentity }), exactFingerprint),
+        safeOpaqueId(
+          mint,
+          "connection",
+          botConnectionCapabilityIdentity({ sourceId, accessIdentity }),
+          exactFingerprint,
+        ),
         connection.label as string,
         available,
         connection.description as string | undefined,
@@ -1188,7 +1205,9 @@ export function assertSafeBotCapabilityCatalogProjection(
     shellAvailable: catalog.shellAvailable,
     connections: catalog.connections as BotCapabilityOption[],
     skills: catalog.skills as BotCapabilityOption[],
-    ...(catalog.skillsEnabled === undefined ? {} : { skillsEnabled: catalog.skillsEnabled as boolean }),
+    ...(catalog.skillsEnabled === undefined
+      ? {}
+      : { skillsEnabled: catalog.skillsEnabled as boolean }),
     otherCapabilities: catalog.otherCapabilities as BotCapabilityOption[],
   });
   if (catalog.revision !== expectedRevision) {

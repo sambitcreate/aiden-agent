@@ -9,7 +9,10 @@ import { isUsable } from "./model-picker-data";
 import type { AppSettings, Provider } from "./types";
 import { onNotification, settingsApi, telegramApi } from "./ipc";
 import { firstVisibleModelForProvider, isModelHidden } from "../shared/model-visibility";
-import { isGenerationThinkingLevel, type GenerationThinkingLevel } from "../shared/generation-thinking";
+import {
+  isGenerationThinkingLevel,
+  type GenerationThinkingLevel,
+} from "../shared/generation-thinking";
 
 const PROVIDER_KEY = "aiden-agent.providerId";
 const MODEL_KEY = "aiden-agent.model";
@@ -140,7 +143,10 @@ export function subscribeModelSelection(listener: (selection: ModelSelection) =>
  * for new chats.
  */
 export function chatModelSelection(
-  chat: { providerId?: string; model?: string; thinkingLevel?: GenerationThinkingLevel } | null | undefined,
+  chat:
+    | { providerId?: string; model?: string; thinkingLevel?: GenerationThinkingLevel }
+    | null
+    | undefined,
   chatOwnsModel: boolean,
   appSelection: ModelSelection,
 ): ModelSelection {
@@ -266,13 +272,12 @@ export async function mirrorNewChatModelToHost(api: {
 }
 
 /** Follow a new-chat model the host changed (Aiden's chat control). */
-export function subscribeHostNewChatModel(
-  subscribe: typeof onNotification,
-): () => void {
+export function subscribeHostNewChatModel(subscribe: typeof onNotification): () => void {
   return subscribe("settings:new-chat-model-changed", (payload: unknown) => {
     if (!payload || typeof payload !== "object") return;
     const { providerId, model } = payload as Record<string, unknown>;
-    if (typeof providerId !== "string" || typeof model !== "string" || !providerId || !model) return;
+    if (typeof providerId !== "string" || typeof model !== "string" || !providerId || !model)
+      return;
     const current = readModelSelection();
     if (current.providerId === providerId && current.model === model) return;
     persistModelSelection(providerId, model);

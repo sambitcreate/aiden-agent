@@ -441,8 +441,10 @@ function MountedLiveAnnouncerHarness({
   );
 }
 
-
-function renderApprovalCard(details: unknown, prompt: Partial<ApprovalPrompt> = {}): { markup: string; buttons: string[] } {
+function renderApprovalCard(
+  details: unknown,
+  prompt: Partial<ApprovalPrompt> = {},
+): { markup: string; buttons: string[] } {
   const markup = renderToStaticMarkup(
     <ChatApprovalCard
       pending={{
@@ -573,7 +575,10 @@ test("a waiting child shows its pending question in chips, roster, detail, and l
     roster,
     /aria-label="Fixture cleaner, scout, Waiting on you: Should I delete the generated fixtures in tests\/tmp\?"/u,
   );
-  assert.match(roster, /data-subagent-pending-question="true"[^>]*>Should I delete the generated fixtures/u);
+  assert.match(
+    roster,
+    /data-subagent-pending-question="true"[^>]*>Should I delete the generated fixtures/u,
+  );
   assert.equal((roster.match(/data-subagent-pending-question/gu) ?? []).length, 1);
   // Without a question the row keeps its task preview instead of generic copy.
   assert.match(roster, /aria-label="Silent scout, scout, Waiting on you"/u);
@@ -617,7 +622,10 @@ test("chips, roster, and detail show each child's recorded model and effort only
     chips,
     /aria-label="Open Cheap scout\. Status: Reading component boundaries\. Model Claude Haiku · Extra high\."/u,
   );
-  assert.match(chips, /aria-label="Open Parent-model scout\. Status: Reading component boundaries\. Model GPT Main · High\."/u);
+  assert.match(
+    chips,
+    /aria-label="Open Parent-model scout\. Status: Reading component boundaries\. Model GPT Main · High\."/u,
+  );
   assert.match(chips, /aria-label="Open Older scout\. Status: Reading component boundaries\."/u);
 
   const roster = renderToStaticMarkup(
@@ -627,7 +635,10 @@ test("chips, roster, and detail show each child's recorded model and effort only
       onSelect={() => undefined}
     />,
   );
-  assert.match(roster, /aria-label="Cheap scout, scout, Running, Model anthropic\/claude-haiku, effort extra high"/u);
+  assert.match(
+    roster,
+    /aria-label="Cheap scout, scout, Running, Model anthropic\/claude-haiku, effort extra high"/u,
+  );
   assert.match(roster, /data-subagent-model="chosen"[^>]*>anthropic\/claude-haiku · Extra high</u);
   // Inherited and legacy rows keep their compact layout; only a child-specific choice adds a line.
   assert.equal((roster.match(/data-subagent-model=/gu) ?? []).length, 1);
@@ -710,7 +721,10 @@ test("fallback shows the saved task and result with copy controls and no saved-v
 });
 
 test("fallback names the role in words, leaves out raw counts, and words the report step by state", () => {
-  const writing = v2Run({ milestones: ["reading", "composing"], activity: "Writing a bounded report" });
+  const writing = v2Run({
+    milestones: ["reading", "composing"],
+    activity: "Writing a bounded report",
+  });
   const writingHtml = renderToStaticMarkup(<SubagentDetail run={writing} now={4_000} />);
   assert.match(writingHtml, />Scout · Running · /u);
   assert.doesNotMatch(writingHtml, /\bscout ·/u);
@@ -1113,7 +1127,11 @@ test("workspace-write approvals render exact bounded safety facts and stay wired
   const card = renderApprovalCard(details, { toolName: "edit_file" });
   assert.match(card.markup, /Correct parser wants to /u);
   assert.match(card.markup, /data-subagent-write-approval="true"/u);
-  assert.deepEqual(card.buttons, ["Deny", "Allow once"], "Deny remains the first and default-focused approval action");
+  assert.deepEqual(
+    card.buttons,
+    ["Deny", "Allow once"],
+    "Deny remains the first and default-focused approval action",
+  );
 
   const malformed = renderApprovalCard({ ...details, extra: true });
   assert.match(malformed.markup, /Invalid privileged approval blocked/u);
@@ -1252,7 +1270,10 @@ test("subagents reuse Aiden's activity marks and freeze terminal motion", () => 
 
   assert.equal(subagentActivityMark("queued", "reviewer"), "bounce");
   assert.equal(subagentActivityMark("needs_attention", "scout", "Which file?"), "glance");
-  assert.equal(subagentActivityMark("running", "reviewer", "Searching workspace text"), "scan-grid");
+  assert.equal(
+    subagentActivityMark("running", "reviewer", "Searching workspace text"),
+    "scan-grid",
+  );
   assert.equal(subagentActivityMark("running", "scout", "Reviewing workspace context"), "tri-step");
   assert.equal(subagentActivityMark("running", "scout", "Writing a bounded report"), "compose");
   assert.equal(subagentActivityMark("running", "planner"), "tri-step");
@@ -1264,7 +1285,12 @@ test("subagents reuse Aiden's activity marks and freeze terminal motion", () => 
   assert.match(markup, /width:64px/u);
 
   const terminal = renderToStaticMarkup(
-    <SubagentMark role="reviewer" state="completed" activity="Writing a bounded report" size={20} />,
+    <SubagentMark
+      role="reviewer"
+      state="completed"
+      activity="Writing a bounded report"
+      size={20}
+    />,
   );
   assert.match(terminal, /data-subagent-mark-state="terminal"/u);
   assert.match(terminal, /data-aiden-mark="compose"/u);
@@ -1308,7 +1334,7 @@ test("the roster separates active and terminal runs without color-only status", 
   assert.match(rosterSource, /aria-level=\{node\.level\}/u);
   assert.match(rosterSource, /aria-posinset=\{node\.position\}/u);
   assert.match(rosterSource, /aria-setsize=\{node\.setSize\}/u);
-  assert.match(rosterSource, /treeRef\.current\?\.querySelector/u);
+  assert.match(rosterSource, /treeRef\.current\s*\?\.querySelector/u);
   assert.doesNotMatch(rosterSource, /document\.querySelector/u);
 });
 
@@ -1468,9 +1494,7 @@ test("a stopped helper without a report shows its warning once, with no Result o
 
   // A stopped helper that did report keeps that report as its Result.
   const partial = renderToStaticMarkup(
-    <SubagentDetail
-      run={{ ...snapshot, terminalMarkdown: "Surveyed the first two packages." }}
-    />,
+    <SubagentDetail run={{ ...snapshot, terminalMarkdown: "Surveyed the first two packages." }} />,
   );
   assert.match(partial, />Result</u);
   assert.match(partial, /Surveyed the first two packages\./u);
@@ -2152,10 +2176,7 @@ test("overview and terminal summaries preserve attention and exact outcomes", ()
     finishedAt: 3_000,
   });
 
-  assert.equal(
-    subagentSnapshotLiveSummary([completed]),
-    "0 active subagents; 1 done.",
-  );
+  assert.equal(subagentSnapshotLiveSummary([completed]), "0 active subagents; 1 done.");
   assert.equal(subagentSnapshotLiveSummary([failed]), "0 active subagents; 1 failed.");
   assert.equal(subagentSnapshotLiveSummary([timedOut]), "0 active subagents; 1 failed.");
   assert.equal(subagentSnapshotLiveSummary([interrupted]), "0 active subagents; 1 stopped.");
@@ -2169,10 +2190,7 @@ test("overview and terminal summaries preserve attention and exact outcomes", ()
     stopped,
     unknown,
   ]);
-  assert.equal(
-    mixed,
-    "0 active subagents; 2 failed; 3 stopped; 1 done.",
-  );
+  assert.equal(mixed, "0 active subagents; 2 failed; 3 stopped; 1 done.");
   assert.equal(subagentLiveSummary([view(failed)]), "0 active subagents; 1 failed.");
   const needsAttention = view(
     v2Run({
@@ -2210,7 +2228,10 @@ test("overview and terminal summaries preserve attention and exact outcomes", ()
     true,
   );
   // Only a helper that completed counts as done; failures and stops never do.
-  assert.doesNotMatch(subagentSnapshotLiveSummary([failed, timedOut, interrupted, stopped, unknown]), /\bdone\b/u);
+  assert.doesNotMatch(
+    subagentSnapshotLiveSummary([failed, timedOut, interrupted, stopped, unknown]),
+    /\bdone\b/u,
+  );
   assert.doesNotMatch(mixed, /Private|error|Users/u);
 });
 
@@ -2721,10 +2742,7 @@ test("mounted live announcer stays singular and active in floating and pinned su
     }
     flushSync(() => {
       root.render(
-        <MountedLiveAnnouncerHarness
-          detailRequest={detailRequest}
-          runs={[terminalRun]}
-        />,
+        <MountedLiveAnnouncerHarness detailRequest={detailRequest} runs={[terminalRun]} />,
       );
     });
   };
@@ -2783,7 +2801,11 @@ test("mounted live announcer stays singular and active in floating and pinned su
     );
     assert.equal(regions.length, 1);
     assert.equal(regions[0], originalRegion, "panel changes preserve the live DOM node");
-    assert.equal(regions[0].parentNode, mounted.container, "announcements stay outside the covered panel");
+    assert.equal(
+      regions[0].parentNode,
+      mounted.container,
+      "announcements stay outside the covered panel",
+    );
     assert.equal(regions[0].textContent, "Loading saved activity for Code scout.");
   } finally {
     flushSync(() => root.unmount());
@@ -2987,5 +3009,8 @@ test("an inherited model names what it was inherited from: the main chat at the 
   assert.ok(nested);
   assert.notEqual(nested, "Same as main chat");
   assert.doesNotMatch(nested, /parent/u);
-  assert.equal(subagentModelDisplay({ modelId: "m", depth: 1, modelSelection: "requested" }).selection, "Chosen by the agent");
+  assert.equal(
+    subagentModelDisplay({ modelId: "m", depth: 1, modelSelection: "requested" }).selection,
+    "Chosen by the agent",
+  );
 });

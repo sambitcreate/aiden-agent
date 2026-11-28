@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import type { AidenUiNodeV1, ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { MAX_ATTACHMENT_INLINE_BYTES } from "../../renderer/shared/attachment-contract.js";
-import { VISUAL_SNAPSHOT_ID_PREFIX, withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import {
+  VISUAL_SNAPSHOT_ID_PREFIX,
+  withoutVisualSnapshots,
+} from "../../renderer/shared/visual-snapshots.js";
 import type { Attachment } from "./types.js";
 
 /**
@@ -74,12 +77,20 @@ function literalImageReferences(tree: AidenUiNodeV1): Set<string> | null {
  * capture resolves the same ids the desktop does. Snapshot pictures and
  * non-raster or data-less attachments are never included.
  */
-export function visualSnapshotImages(visual: ChatUiVisualV1, attachments: readonly Attachment[] | undefined): Attachment[] {
+export function visualSnapshotImages(
+  visual: ChatUiVisualV1,
+  attachments: readonly Attachment[] | undefined,
+): Attachment[] {
   const referenced = literalImageReferences(visual.tree);
   const images: Attachment[] = [];
   let bytes = 0;
   for (const attachment of withoutVisualSnapshots(attachments ?? [])) {
-    if (attachment.kind !== "image" || !attachment.data || !SNAPSHOT_IMAGE_MIME_TYPE.test(attachment.mimeType)) continue;
+    if (
+      attachment.kind !== "image" ||
+      !attachment.data ||
+      !SNAPSHOT_IMAGE_MIME_TYPE.test(attachment.mimeType)
+    )
+      continue;
     if (referenced && !referenced.has(attachment.id)) continue;
     if (bytes + attachment.size > MAX_ATTACHMENT_INLINE_BYTES) continue;
     bytes += attachment.size;
@@ -106,12 +117,26 @@ export interface CapturedSnapshot extends CapturedImage {
 
 export const VISUAL_SNAPSHOT_TIMEOUT_MS = 6000;
 
-export function visualSnapshotAttachmentId(chatId: string, messageId: string, visualId: string): string {
-  const digest = createHash("sha256").update(chatId).update("\0").update(messageId).update("\0").update(visualId).digest("hex");
+export function visualSnapshotAttachmentId(
+  chatId: string,
+  messageId: string,
+  visualId: string,
+): string {
+  const digest = createHash("sha256")
+    .update(chatId)
+    .update("\0")
+    .update(messageId)
+    .update("\0")
+    .update(visualId)
+    .digest("hex");
   return `${VISUAL_SNAPSHOT_ID_PREFIX}${digest}`;
 }
 
-export function snapshotAttachment(chatId: string, messageId: string, snapshot: CapturedSnapshot): Attachment {
+export function snapshotAttachment(
+  chatId: string,
+  messageId: string,
+  snapshot: CapturedSnapshot,
+): Attachment {
   const safe = Array.from(snapshot.title)
     .filter((character) => character.charCodeAt(0) >= 32 && !'\\/:*?"<>|'.includes(character))
     .join("");
@@ -127,7 +152,11 @@ export function snapshotAttachment(chatId: string, messageId: string, snapshot: 
 }
 
 export interface VisualSnapshotQueueOptions {
-  capture: (visual: SnapshotVisual, signal: AbortSignal, job: VisualSnapshotJob) => Promise<CapturedImage | null>;
+  capture: (
+    visual: SnapshotVisual,
+    signal: AbortSignal,
+    job: VisualSnapshotJob,
+  ) => Promise<CapturedImage | null>;
   store: (chatId: string, messageId: string, snapshots: CapturedSnapshot[]) => Promise<unknown>;
   timeoutMs?: number;
   onError?: (error: unknown) => void;
@@ -141,7 +170,10 @@ export function createVisualSnapshotQueue(options: VisualSnapshotQueueOptions) {
   let disposed = false;
   let current: { job: VisualSnapshotJob; abort: AbortController } | null = null;
 
-  const captureOne = async (job: VisualSnapshotJob, visual: SnapshotVisual): Promise<CapturedImage | null> => {
+  const captureOne = async (
+    job: VisualSnapshotJob,
+    visual: SnapshotVisual,
+  ): Promise<CapturedImage | null> => {
     const abort = new AbortController();
     current = { job, abort };
     let timer: ReturnType<typeof setTimeout> | undefined;

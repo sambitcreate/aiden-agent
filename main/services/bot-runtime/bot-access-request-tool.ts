@@ -46,7 +46,7 @@ export async function botSavedLocationForCall(
   expectedRevision?: string,
 ): Promise<BotFileToolLocation | undefined> {
   await call.assertRunActive?.();
-  const ids = await call.runRequestIds?.() ?? [];
+  const ids = (await call.runRequestIds?.()) ?? [];
   if (call.signal.aborted || botRunUnattended(ids)) return undefined;
   const revision = await deps.policyRevision(botId);
   if (expectedRevision !== undefined && expectedRevision !== revision) return undefined;
@@ -54,9 +54,12 @@ export async function botSavedLocationForCall(
     signal: call.signal,
     validate: async () => {
       await call.assertRunActive?.();
-      const currentIds = await call.runRequestIds?.() ?? [];
-      if (botRunUnattended(currentIds) || !ids.some(id => id !== undefined && currentIds.includes(id)) ||
-        await deps.policyRevision(botId) !== revision)
+      const currentIds = (await call.runRequestIds?.()) ?? [];
+      if (
+        botRunUnattended(currentIds) ||
+        !ids.some((id) => id !== undefined && currentIds.includes(id)) ||
+        (await deps.policyRevision(botId)) !== revision
+      )
         throw new BotAccessRequestStaleError("This task's access changed. Ask again.");
     },
   });
@@ -138,9 +141,13 @@ export function botAccessRequestCandidate(
         await call.assertRunActive?.();
         const key = target.kind === "whole_mac" ? "whole_mac" : target.root;
         const issueKey = `access:${key}`;
-        const dedupeKey = Array.from(issueKey).length <= 400 ? issueKey : `access:${createHash("sha256").update(key).digest("hex")}`;
+        const dedupeKey =
+          Array.from(issueKey).length <= 400
+            ? issueKey
+            : `access:${createHash("sha256").update(key).digest("hex")}`;
         const root = target.kind === "whole_mac" ? "/" : target.root;
-        const label = target.kind === "whole_mac" ? botWholeComputerLabel(process.platform) : target.label;
+        const label =
+          target.kind === "whole_mac" ? botWholeComputerLabel(process.platform) : target.label;
         const result = (
           outcome: BotAccessResultDetails["outcome"],
           text: string,
@@ -152,20 +159,39 @@ export function botAccessRequestCandidate(
         if (coveredByBotLocations(root, [...fixed, ...(run ? [run] : [])], "write")) {
           await deps.resolveIssue?.(botId, dedupeKey, "fixed");
           if (coveredByBotLocations(root, run ? [run] : [], "write"))
-            return result("already_allowed", `You can already read and change ${label}. Use file tools with location "run.access" to reach it.`);
-          const bound = deps.boundLocations.find(location =>
-            coveredByBotLocations(root, [location], "write") && fixed.some(current =>
-              current.id === location.id && current.root === location.root &&
-              JSON.stringify(current.expectedIdentity) === JSON.stringify(location.expectedIdentity) &&
-              coveredByBotLocations(root, [current], "write")));
+            return result(
+              "already_allowed",
+              `You can already read and change ${label}. Use file tools with location "run.access" to reach it.`,
+            );
+          const bound = deps.boundLocations.find(
+            (location) =>
+              coveredByBotLocations(root, [location], "write") &&
+              fixed.some(
+                (current) =>
+                  current.id === location.id &&
+                  current.root === location.root &&
+                  JSON.stringify(current.expectedIdentity) ===
+                    JSON.stringify(location.expectedIdentity) &&
+                  coveredByBotLocations(root, [current], "write"),
+              ),
+          );
           if (bound)
-            return result("already_allowed", `You can already read and change ${label}. Use file tools with location ${JSON.stringify(bound.id)} to reach it.`);
+            return result(
+              "already_allowed",
+              `You can already read and change ${label}. Use file tools with location ${JSON.stringify(bound.id)} to reach it.`,
+            );
           // Only this task's own attended Always publication can supply the
           // second alias. Fresh Settings/issue approvals are future authority.
           const saved = await botSavedLocationForCall(botId, deps, call, revision);
           if (saved && coveredByBotLocations(root, [saved], "write"))
-            return result("already_allowed", `You can already read and change ${label}. Use file tools with location "run.saved" to reach it. Your separate "run.access" folder is unchanged.`);
-          return result("already_allowed", `${label} is approved for future tasks. This task's bound file tools cannot reach that new fixed location. Start a new task to use it.`);
+            return result(
+              "already_allowed",
+              `You can already read and change ${label}. Use file tools with location "run.saved" to reach it. Your separate "run.access" folder is unchanged.`,
+            );
+          return result(
+            "already_allowed",
+            `${label} is approved for future tasks. This task's bound file tools cannot reach that new fixed location. Start a new task to use it.`,
+          );
         }
         if (deps.runAccess.declined(botId, ids, key))
           return result(
@@ -231,29 +257,36 @@ export function botAccessRequestCandidate(
               botRunUnattended(currentIds) ||
               !authorization.requestIds.some((id) => currentIds.includes(id))
             )
-              throw new BotAccessRequestStaleError("This access request is no longer part of an attended task.");
+              throw new BotAccessRequestStaleError(
+                "This access request is no longer part of an attended task.",
+              );
             if (call.signal.aborted) throw call.signal.reason;
           },
         };
         await owner.validate();
         let answer;
-        try { answer = await deps.requests.request({
-          botId,
-          logicalRequestId: memo.requestId,
-          toolCallId: call.callId,
-          target: target.kind,
-          label,
-          ...(target.kind === "folder" ? { place: target.place } : {}),
-          why: params.why,
-          choices,
-          ...(offer ? { approvalCount: offer.count } : {}),
-          authorization,
-          ...(grant ? { grant } : {}),
-          owner,
-          signal: call.signal,
-        }); } catch (error) {
+        try {
+          answer = await deps.requests.request({
+            botId,
+            logicalRequestId: memo.requestId,
+            toolCallId: call.callId,
+            target: target.kind,
+            label,
+            ...(target.kind === "folder" ? { place: target.place } : {}),
+            why: params.why,
+            choices,
+            ...(offer ? { approvalCount: offer.count } : {}),
+            authorization,
+            ...(grant ? { grant } : {}),
+            owner,
+            signal: call.signal,
+          });
+        } catch (error) {
           if (!(error instanceof BotAccessRequestStaleError)) throw error;
-          return result("access_changed", "Access changed while this request was waiting. Ask for access again if it is still needed.");
+          return result(
+            "access_changed",
+            "Access changed while this request was waiting. Ask for access again if it is still needed.",
+          );
         }
         if (answer.choice === "not_now") {
           deps.runAccess.decline(botId, requestIds, key);
@@ -266,9 +299,16 @@ export function botAccessRequestCandidate(
         // boundary. Never issue a second grant or adopt another policy revision.
         const allowed = result(
           answer.choice,
-          answer.savedForFuture ? `The person approved ${label} for future tasks. This acknowledgement records that earlier approval and does not grant temporary access or restore removed access. Check current access on a new task.` : `The person allowed ${label} for this task. Use the file tools with location "run.access" to reach it.${answer.choice === "always" ? " It stays allowed from your next task." : ""}`,
+          answer.savedForFuture
+            ? `The person approved ${label} for future tasks. This acknowledgement records that earlier approval and does not grant temporary access or restore removed access. Check current access on a new task.`
+            : `The person allowed ${label} for this task. Use the file tools with location "run.access" to reach it.${answer.choice === "always" ? " It stays allowed from your next task." : ""}`,
         );
-        return answer.hint ? { ...allowed, content: [...allowed.content, { type: "text", text: "\n\n" + answer.hint }] } : allowed;
+        return answer.hint
+          ? {
+              ...allowed,
+              content: [...allowed.content, { type: "text", text: "\n\n" + answer.hint }],
+            }
+          : allowed;
       },
     }),
   };

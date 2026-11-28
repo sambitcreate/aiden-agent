@@ -4,10 +4,20 @@ import test from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { BOT_COMPUTER_GIVE_BACK_NOTE, createBotComputerControl } from "../bot-computers/control.js";
 import type { BotComputerArgs } from "../bot-computers/computer-schema.js";
-import { createBotComputerTool, createBotComputerToolState } from "../bot-computers/computer-tool.js";
+import {
+  createBotComputerTool,
+  createBotComputerToolState,
+} from "../bot-computers/computer-tool.js";
 import { guestDriverSuspendScript } from "../bot-computers/guest-driver-install.js";
-import type { BotComputerConnection, BotComputerGuestCommandResult, BotComputerScreen } from "../bot-computers/types.js";
-import { botComputerSignInOpenScript, createBotComputerHandoffOpener } from "./bot-computer-handoff.js";
+import type {
+  BotComputerConnection,
+  BotComputerGuestCommandResult,
+  BotComputerScreen,
+} from "../bot-computers/types.js";
+import {
+  botComputerSignInOpenScript,
+  createBotComputerHandoffOpener,
+} from "./bot-computer-handoff.js";
 import { createBotHandoffs } from "./bot-handoffs.js";
 
 const BOT = "bot:ada";
@@ -24,7 +34,9 @@ function ok(): BotComputerGuestCommandResult {
   return { exitCode: 0, stdout: "", stderr: "", truncated: false, timedOut: false };
 }
 
-function setup(options: { enabled?: boolean; hasComputer?: boolean; failOn?: "suspend" | "open" } = {}) {
+function setup(
+  options: { enabled?: boolean; hasComputer?: boolean; failOn?: "suspend" | "open" } = {},
+) {
   const control = createBotComputerControl();
   const handoffs = createBotHandoffs();
   const commands: string[] = [];
@@ -35,7 +47,8 @@ function setup(options: { enabled?: boolean; hasComputer?: boolean; failOn?: "su
   let beforeOpen: (() => void) | undefined;
   const open = createBotComputerHandoffOpener({
     host: {
-      computer: async () => (options.hasComputer === false ? undefined : ({ state: "stopped" } as never)),
+      computer: async () =>
+        options.hasComputer === false ? undefined : ({ state: "stopped" } as never),
       ensureRunning: async (_botId, { reason }) => {
         starts.push(reason);
         return CONNECTION;
@@ -43,7 +56,8 @@ function setup(options: { enabled?: boolean; hasComputer?: boolean; failOn?: "su
       runGuestCommand: async (_botId, command) => {
         commands.push(command);
         heldDuring.push(control.controller(BOT));
-        if (command === guestDriverSuspendScript()) return options.failOn === "suspend" ? { ...ok(), exitCode: 255 } : ok();
+        if (command === guestDriverSuspendScript())
+          return options.failOn === "suspend" ? { ...ok(), exitCode: 255 } : ok();
         beforeOpen?.();
         return options.failOn === "open" ? { ...ok(), exitCode: 1 } : ok();
       },
@@ -90,9 +104,17 @@ test("Open takes the computer over, stops the screen helper, then opens the site
   const h = setup();
   h.ask("wait-1");
   assert.equal(await h.open(BOT, "wait-1", ORIGIN), true);
-  assert.deepEqual(h.starts, ["viewer"], "the person's Open starts the computer, as opening its Computer tab does");
+  assert.deepEqual(
+    h.starts,
+    ["viewer"],
+    "the person's Open starts the computer, as opening its Computer tab does",
+  );
   assert.deepEqual(h.commands, [guestDriverSuspendScript(), botComputerSignInOpenScript(ORIGIN)]);
-  assert.deepEqual(h.heldDuring, ["person", "person"], "the person holds the computer before anything opens on it");
+  assert.deepEqual(
+    h.heldDuring,
+    ["person", "person"],
+    "the person holds the computer before anything opens on it",
+  );
   assert.equal(h.control.controller(BOT), "person");
   assert.equal(h.control.takenOverBy(BOT), "sign_in");
 });
@@ -148,7 +170,12 @@ test("if the helper can't be stopped or the page can't open, nothing opens and t
     assert.equal(await h.open(BOT, "wait-1", ORIGIN), false, failOn);
     assert.equal(h.control.controller(BOT), "bot", failOn);
     assert.equal(h.errors.length, 1);
-    if (failOn === "suspend") assert.deepEqual(h.commands, [guestDriverSuspendScript()], "the page never opens on a computer whose helper still runs");
+    if (failOn === "suspend")
+      assert.deepEqual(
+        h.commands,
+        [guestDriverSuspendScript()],
+        "the page never opens on a computer whose helper still runs",
+      );
   }
 });
 
@@ -181,7 +208,14 @@ test("while the person signs in, the Bot's computer call waits and sees nothing;
   const screen: BotComputerScreen = {
     capture: async ({ maxWidth }) => {
       captures += 1;
-      return { image: Buffer.from("jpeg"), mimeType: "image/jpeg", width: maxWidth, height: 800, framebufferWidth: 2560, framebufferHeight: 1600 };
+      return {
+        image: Buffer.from("jpeg"),
+        mimeType: "image/jpeg",
+        width: maxWidth,
+        height: 800,
+        framebufferWidth: 2560,
+        framebufferHeight: 1600,
+      };
     },
     pointer: async () => undefined,
     key: async () => undefined,
@@ -191,7 +225,11 @@ test("while the person signs in, the Bot's computer call waits and sees nothing;
     BOT,
     {
       host: { ensureRunning: async () => CONNECTION, touch: () => undefined },
-      sessions: { screen: async () => screen, recordPointer: () => undefined, setActivity: () => undefined },
+      sessions: {
+        screen: async () => screen,
+        recordPointer: () => undefined,
+        setActivity: () => undefined,
+      },
       control: h.control,
       state,
       botName: async () => "Ada",
@@ -201,7 +239,9 @@ test("while the person signs in, the Bot's computer call waits and sees nothing;
   );
   const card = h.ask("wait-1");
   await h.open(BOT, "wait-1", ORIGIN);
-  const call = tool.execute("c1", { action: "capture" } as unknown as BotComputerArgs) as Promise<AgentToolResult<unknown>>;
+  const call = tool.execute("c1", { action: "capture" } as unknown as BotComputerArgs) as Promise<
+    AgentToolResult<unknown>
+  >;
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(captures, 0, "no capture while the person signs in");
   h.handoffs.answer(BOT, "wait-1", { outcome: "done" });

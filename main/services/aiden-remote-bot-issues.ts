@@ -17,7 +17,10 @@ import {
 } from "./aiden-remote-protocol.js";
 
 /** One stored issue as the wire carries it, or null when it is not the current shape. */
-export function toRemoteBotIssue(issue: BotIssue, accessRequests = false): AidenRemoteBotIssue | null {
+export function toRemoteBotIssue(
+  issue: BotIssue,
+  accessRequests = false,
+): AidenRemoteBotIssue | null {
   // Shipped bot:issues clients decode a closed kind set. Access issues need
   // the separate access-request opt-in.
   if (issue.kind === "access_needed" && !accessRequests) return null;
@@ -32,7 +35,14 @@ export function toRemoteBotIssue(issue: BotIssue, accessRequests = false): Aiden
       // Settings live on the Mac: the phone may not open them, so the action
       // is left out and the card still shows its title and body. A settled
       // card offers nothing at all, as the store keeps its old actions.
-      actions: resolved ? [] : issue.actions.filter((action) => action.kind !== "open_settings" && (accessRequests || (action.kind !== "allow_folder" && action.kind !== "dismiss_access"))),
+      actions: resolved
+        ? []
+        : issue.actions.filter(
+            (action) =>
+              action.kind !== "open_settings" &&
+              (accessRequests ||
+                (action.kind !== "allow_folder" && action.kind !== "dismiss_access")),
+          ),
       createdAt: new Date(issue.createdAt).toISOString(),
       resolved,
     });
@@ -48,7 +58,10 @@ export function toRemoteBotIssue(issue: BotIssue, accessRequests = false): Aiden
  * newest), at most `AIDEN_REMOTE_BOT_ISSUE_MAX`. The store holds them newest
  * first.
  */
-export function toRemoteBotIssues(issues: readonly BotIssue[], accessRequests = false): AidenRemoteBotIssue[] {
+export function toRemoteBotIssues(
+  issues: readonly BotIssue[],
+  accessRequests = false,
+): AidenRemoteBotIssue[] {
   return issues
     .filter((issue) => accessRequests || issue.kind !== "access_needed")
     .slice(0, AIDEN_REMOTE_BOT_ISSUE_MAX)

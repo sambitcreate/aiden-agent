@@ -20,10 +20,7 @@ export function recordRecentCommand(
   current: readonly CommandId[],
   commandId: CommandId,
 ): CommandId[] {
-  return normalizeRecentCommands([
-    commandId,
-    ...current.filter((item) => item !== commandId),
-  ]);
+  return normalizeRecentCommands([commandId, ...current.filter((item) => item !== commandId)]);
 }
 
 export function persistRecentCommands(

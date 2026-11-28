@@ -18,7 +18,7 @@ One-line product fit: keep conversation primary (`PRODUCT.md`); make tool work l
 After this plan ships in stages, Aiden should:
 
 1. Keep the chat transcript readable while tool progress, approvals, and verification live in a clear **Activity** surface.
-2. Refuse to *imply* tool success when the trace says otherwise (**honesty / claim check**).
+2. Refuse to _imply_ tool success when the trace says otherwise (**honesty / claim check**).
 3. Compress long contexts at real catalog limits without breaking tool-call chains.
 4. Narrow or profile the tool menu so large MCP + skills sets do not bloat every turn.
 5. Let the user **queue or redirect** while a generation is running, with truthful busy/interrupted states.
@@ -29,16 +29,16 @@ It should **not** become a personal multi-messenger AI OS, a Windows computer-us
 
 ## Source comparison (compressed)
 
-| Area | taracodlab-aiden | Our Aiden | Takeaway |
-| --- | --- | --- | --- |
-| Loop owner | First-party `AidenAgent` + TCE | Pi `Agent` per generation | Keep Pi; add recovery/honesty *around* it |
-| Desktop | Windows-first Electron + system Node + Next dashboard | macOS Electron, sandboxed renderer, in-process agent | Do not copy their shell |
-| Safety | `moat/` (honesty, autonomy dial, approvals, scanners) | Workspace Full/Ask/None + path confinement + Ask approvals | Extend existing permission model; no parallel `moat/` package |
-| Memory | `SOUL.md` / `USER.md` / `MEMORY.md` + FTS/semantic | Chat JSON + workspace binding | Optional identity files later; not phase 1 |
-| Tools | ~100+ tools, profiles, planner narrowing | Coding tools + Exa + skills + MCP | Profiles / per-turn narrowing |
-| Streaming UX | Activity ≠ chat; structured `ui_*` events | Persisted generation timeline over `chat:timeline` | Keep the inline Activity trail compact and progressive |
-| Providers | 19 adapters + billing-aware fallback | Compat presets + Pi Codex OAuth | Catalog limits + no silent paid fallback |
-| License | AGPL-3.0 core | Private app | Study ideas only; do not vendor AGPL code |
+| Area         | taracodlab-aiden                                      | Our Aiden                                                  | Takeaway                                                      |
+| ------------ | ----------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------- |
+| Loop owner   | First-party `AidenAgent` + TCE                        | Pi `Agent` per generation                                  | Keep Pi; add recovery/honesty _around_ it                     |
+| Desktop      | Windows-first Electron + system Node + Next dashboard | macOS Electron, sandboxed renderer, in-process agent       | Do not copy their shell                                       |
+| Safety       | `moat/` (honesty, autonomy dial, approvals, scanners) | Workspace Full/Ask/None + path confinement + Ask approvals | Extend existing permission model; no parallel `moat/` package |
+| Memory       | `SOUL.md` / `USER.md` / `MEMORY.md` + FTS/semantic    | Chat JSON + workspace binding                              | Optional identity files later; not phase 1                    |
+| Tools        | ~100+ tools, profiles, planner narrowing              | Coding tools + Exa + skills + MCP                          | Profiles / per-turn narrowing                                 |
+| Streaming UX | Activity ≠ chat; structured `ui_*` events             | Persisted generation timeline over `chat:timeline`         | Keep the inline Activity trail compact and progressive        |
+| Providers    | 19 adapters + billing-aware fallback                  | Compat presets + Pi Codex OAuth                            | Catalog limits + no silent paid fallback                      |
+| License      | AGPL-3.0 core                                         | Private app                                                | Study ideas only; do not vendor AGPL code                     |
 
 Related plans (do not duplicate):
 
@@ -176,11 +176,11 @@ Principles:
 
 **Options (pick one in implementation spike):**
 
-| Option | Description | Prefer when |
-| --- | --- | --- |
-| A. Profiles | User setting: minimal (coding only) / standard (+ search/skills) / full (+ all MCP) | Simple mental model |
-| B. Per-turn narrow | Heuristic or cheap classifier shrinks tool list by user intent | Power users with many MCP tools |
-| C. Hybrid | Profile caps the ceiling; optional narrow inside the profile | Best long-term |
+| Option             | Description                                                                         | Prefer when                     |
+| ------------------ | ----------------------------------------------------------------------------------- | ------------------------------- |
+| A. Profiles        | User setting: minimal (coding only) / standard (+ search/skills) / full (+ all MCP) | Simple mental model             |
+| B. Per-turn narrow | Heuristic or cheap classifier shrinks tool list by user intent                      | Power users with many MCP tools |
+| C. Hybrid          | Profile caps the ceiling; optional narrow inside the profile                        | Best long-term                  |
 
 **Likely touchpoints:**
 
@@ -229,13 +229,13 @@ Principles:
 
 Ship only if P0–P2 pay off and product still wants more “agent OS” depth without leaving the workspace thesis.
 
-| Item | Notes |
-| --- | --- |
-| Workspace identity files | Optional `SOUL.md` / `USER.md` / `MEMORY.md` under workspace or `~/aiden/...`; user-editable; hot-reload on dirty bit; never invent a second hidden persona store |
-| Connection probe onboarding | Key → list models → tiny tools probe; not just paste-and-pray |
-| Artifacts / trace view | Provenance for files touched this turn; deep link into Review |
-| Skill teacher | After repeated successful multi-step flows, *propose* a SKILL.md (user approves) |
-| Model picker badges | Auth healthy / local / recommended markers — polish only after Pi provider plan lands |
+| Item                        | Notes                                                                                                                                                             |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace identity files    | Optional `SOUL.md` / `USER.md` / `MEMORY.md` under workspace or `~/aiden/...`; user-editable; hot-reload on dirty bit; never invent a second hidden persona store |
+| Connection probe onboarding | Key → list models → tiny tools probe; not just paste-and-pray                                                                                                     |
+| Artifacts / trace view      | Provenance for files touched this turn; deep link into Review                                                                                                     |
+| Skill teacher               | After repeated successful multi-step flows, _propose_ a SKILL.md (user approves)                                                                                  |
+| Model picker badges         | Auth healthy / local / recommended markers — polish only after Pi provider plan lands                                                                             |
 
 ## Suggested implementation order
 
@@ -255,16 +255,16 @@ Do not start Phase I until A–C are validated in daily use. Phases D and the co
 
 ## Mapping “moat” without cargo-culting
 
-taracodlab’s `moat/` is a useful *checklist*, not a folder to recreate.
+taracodlab’s `moat/` is a useful _checklist_, not a folder to recreate.
 
-| taracodlab idea | Aiden translation |
-| --- | --- |
-| Honesty enforcement | Implemented post-turn claim check + Activity outcome (Phase B) |
-| Approval engine | Existing Ask `beforeToolCall`; add risk labels later if needed |
-| Autonomy dial | Keep Full / Ask / None; document mapping in settings copy |
-| MemoryGuard | Only after durable MEMORY writes exist |
+| taracodlab idea        | Aiden translation                                                            |
+| ---------------------- | ---------------------------------------------------------------------------- |
+| Honesty enforcement    | Implemented post-turn claim check + Activity outcome (Phase B)               |
+| Approval engine        | Existing Ask `beforeToolCall`; add risk labels later if needed               |
+| Autonomy dial          | Keep Full / Ask / None; document mapping in settings copy                    |
+| MemoryGuard            | Only after durable MEMORY writes exist                                       |
 | SSRF / Tirith scanners | Consider for web_fetch/MCP URLs and write paths in a dedicated security pass |
-| Yolo ≠ Partner | If we add a bypass, hard-blocks (e.g. path escape) always remain |
+| Yolo ≠ Partner         | If we add a bypass, hard-blocks (e.g. path escape) always remain             |
 
 ## Explicitly skip from taracodlab
 
@@ -288,13 +288,13 @@ taracodlab’s `moat/` is a useful *checklist*, not a folder to recreate.
 
 ## Risks
 
-| Risk | Mitigation |
-| --- | --- |
+| Risk                                    | Mitigation                                                                |
+| --------------------------------------- | ------------------------------------------------------------------------- |
 | Activity trail becomes a busy dashboard | Progressive disclosure; omit empty state; conversation-first layout tests |
-| Claim check false positives | Pure functions + golden fixtures; warn, don’t block send |
-| Compression breaks tool history | Invariant tests; abort compress if pairs would split |
-| Tool narrowing hides needed MCP tools | Easy “use all tools” escape; per-chat override |
-| Scope creep into agent-OS features | P3 gated; this doc’s non-goals are binding until revised |
+| Claim check false positives             | Pure functions + golden fixtures; warn, don’t block send                  |
+| Compression breaks tool history         | Invariant tests; abort compress if pairs would split                      |
+| Tool narrowing hides needed MCP tools   | Easy “use all tools” escape; per-chat override                            |
+| Scope creep into agent-OS features      | P3 gated; this doc’s non-goals are binding until revised                  |
 
 ## Success metrics (qualitative)
 

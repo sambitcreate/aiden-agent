@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { BOT_MESSAGE_LIMITS as L, BOT_MESSAGE_TOOL_NAME } from "../../../renderer/shared/bot-messages.js";
+import {
+  BOT_MESSAGE_LIMITS as L,
+  BOT_MESSAGE_TOOL_NAME,
+} from "../../../renderer/shared/bot-messages.js";
 import type { BotToolCall } from "../bot-runtime/tool-adapter.js";
 import type { BotMessageCourier, BotRosterEntry } from "./courier.js";
 export const BOT_MESSAGE_MEMO = "aiden.bot-message";
@@ -13,10 +16,13 @@ const parameters = Type.Object(
   {
     action: Type.Optional(
       Type.Union([Type.Literal("send"), Type.Literal("list")], {
-        description: '"list" returns the Bots you can message; "send" (the default) sends one a message.',
+        description:
+          '"list" returns the Bots you can message; "send" (the default) sends one a message.',
       }),
     ),
-    bot: Type.Optional(Type.String({ minLength: 1, description: "The Bot's id or name, from the list." })),
+    bot: Type.Optional(
+      Type.String({ minLength: 1, description: "The Bot's id or name, from the list." }),
+    ),
     message: Type.Optional(Type.String({ minLength: 1, maxLength: L.messageChars })),
   },
   { additionalProperties: false },
@@ -49,7 +55,11 @@ export function createMessageBotTool(
     parameters,
     description: MESSAGE_BOT_DESCRIPTION,
     async execute(_id, args) {
-      const { action, bot, message } = args as { action?: "send" | "list"; bot?: string; message?: string };
+      const { action, bot, message } = args as {
+        action?: "send" | "list";
+        bot?: string;
+        message?: string;
+      };
       if (action === "list") {
         // Reads the roster only; nothing is sent, so there is nothing to journal.
         const bots = await messageBotPeers(botId, deps);
@@ -67,7 +77,10 @@ export function createMessageBotTool(
           details,
         };
       }
-      if (!bot || !message) throw new Error('Sending needs both "bot" and "message". Call with action "list" to see the Bots.');
+      if (!bot || !message)
+        throw new Error(
+          'Sending needs both "bot" and "message". Call with action "list" to see the Bots.',
+        );
       if (!call?.runRequestIds) throw new Error("The owning Bot run is unavailable.");
       const memo = await call.memo(BOT_MESSAGE_MEMO, {
         deliveryId: randomUUID(),
@@ -84,7 +97,9 @@ export function createMessageBotTool(
         signal: call.signal,
       });
       const details =
-        result.status === "sent" ? { status: "sent", deliveryId: result.deliveryId, to: result.to.name } : result;
+        result.status === "sent"
+          ? { status: "sent", deliveryId: result.deliveryId, to: result.to.name }
+          : result;
       return {
         content: [
           {

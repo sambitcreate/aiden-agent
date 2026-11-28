@@ -294,7 +294,8 @@ class AdbChild implements RecorderChild {
   once(event: "error", listener: (error: Error) => void): this;
   once(event: "exit" | "error", listener: unknown) {
     // This child always spawns, so it only ever reports `exit`.
-    if (event === "exit") this.listeners.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
+    if (event === "exit")
+      this.listeners.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
     return this;
   }
   exit(code: number | null, signal: NodeJS.Signals | null = null) {
@@ -306,7 +307,13 @@ class AdbChild implements RecorderChild {
 }
 
 function androidHarness(
-  options: { booted?: boolean; hostText?: string; ignoreStop?: boolean; pullFails?: boolean; stopFails?: boolean } = {},
+  options: {
+    booted?: boolean;
+    hostText?: string;
+    ignoreStop?: boolean;
+    pullFails?: boolean;
+    stopFails?: boolean;
+  } = {},
 ) {
   const device: DeviceSummary = {
     hostId: "local",

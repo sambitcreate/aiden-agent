@@ -25,7 +25,12 @@ export type LumeCommand =
   | { op: "ssh"; name: string; command: string; timeoutSeconds?: number };
 
 function requireAbsolute(value: string, what: string): string {
-  if (typeof value !== "string" || value.length === 0 || value.includes("\0") || !path.isAbsolute(value)) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.includes("\0") ||
+    !path.isAbsolute(value)
+  ) {
     throw new BotComputerError("invalid", `${what} must be an absolute path.`);
   }
   return value;
@@ -34,7 +39,8 @@ function requireAbsolute(value: string, what: string): string {
 function requireName(name: string): string {
   // `lume run name:tag` pulls from a registry when no local VM matches, so
   // only Aiden's own fixed-shape names may reach argv.
-  if (!isLumeVmNameSafe(name)) throw new BotComputerError("invalid", "That is not one of Aiden's computers.");
+  if (!isLumeVmNameSafe(name))
+    throw new BotComputerError("invalid", "That is not one of Aiden's computers.");
   return name;
 }
 
@@ -56,7 +62,8 @@ export function lumeArgs(command: LumeCommand, storage: string): string[] {
   switch (command.op) {
     case "create": {
       const ipsw = requireAbsolute(command.ipsw, "The restore image");
-      if (command.unattended !== "tahoe") throw new BotComputerError("invalid", "Unknown unattended preset.");
+      if (command.unattended !== "tahoe")
+        throw new BotComputerError("invalid", "Unknown unattended preset.");
       return [
         "create",
         requireName(command.name),
@@ -102,7 +109,8 @@ export function lumeArgs(command: LumeCommand, storage: string): string[] {
         "--storage",
         storage,
       ];
-      if (command.logFile !== undefined) args.push("--log-file", requireAbsolute(command.logFile, "The Lume log"));
+      if (command.logFile !== undefined)
+        args.push("--log-file", requireAbsolute(command.logFile, "The Lume log"));
       return args;
     }
     case "get":
@@ -110,7 +118,14 @@ export function lumeArgs(command: LumeCommand, storage: string): string[] {
     case "list":
       return ["ls", "--format", "json", "--storage", storage];
     case "stop": {
-      const args = ["stop", requireName(command.name), "--storage", storage, "--timeout", requireSeconds(command.timeoutSeconds, 30)];
+      const args = [
+        "stop",
+        requireName(command.name),
+        "--storage",
+        storage,
+        "--timeout",
+        requireSeconds(command.timeoutSeconds, 30),
+      ];
       if (command.force) args.push("--force");
       return args;
     }
@@ -118,7 +133,11 @@ export function lumeArgs(command: LumeCommand, storage: string): string[] {
       // Without --force Lume asks on stdin, which Aiden never answers.
       return ["delete", requireName(command.name), "--force", "--storage", storage];
     case "ssh":
-      if (typeof command.command !== "string" || command.command.length === 0 || command.command.includes("\0")) {
+      if (
+        typeof command.command !== "string" ||
+        command.command.length === 0 ||
+        command.command.includes("\0")
+      ) {
         throw new BotComputerError("invalid", "A guest command is required.");
       }
       // Options precede the name: everything after it is the remote command.
@@ -133,7 +152,10 @@ export function lumeArgs(command: LumeCommand, storage: string): string[] {
       ];
     default: {
       const unknown: never = command;
-      throw new BotComputerError("invalid", `Unknown Lume operation: ${String((unknown as { op?: unknown }).op)}`);
+      throw new BotComputerError(
+        "invalid",
+        `Unknown Lume operation: ${String((unknown as { op?: unknown }).op)}`,
+      );
     }
   }
 }

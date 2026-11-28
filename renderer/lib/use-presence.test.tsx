@@ -28,13 +28,18 @@ const originalMatchMedia = window.matchMedia;
 
 function systemReducesMotion(reduce: boolean): void {
   window.matchMedia = ((query: string) =>
-    ({ matches: reduce && query === "(prefers-reduced-motion: reduce)", media: query }) as MediaQueryList) as typeof window.matchMedia;
+    ({
+      matches: reduce && query === "(prefers-reduced-motion: reduce)",
+      media: query,
+    }) as MediaQueryList) as typeof window.matchMedia;
 }
 
 beforeEach(() => {
   exitAnimations = [];
   Element.prototype.getAnimations = function (this: Element) {
-    return (this.getAttribute("data-presence") === "exiting" ? exitAnimations : []) as unknown as Animation[];
+    return (this.getAttribute("data-presence") === "exiting"
+      ? exitAnimations
+      : []) as unknown as Animation[];
   };
   document.documentElement.dataset.reduceMotion = "false";
   systemReducesMotion(false);
@@ -59,9 +64,10 @@ function Panel({ present }: { present: boolean }) {
   );
 }
 
-const settle = () => act(async () => {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-});
+const settle = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 
 test("a closing element stays mounted, marked exiting, until its exit animations settle", async () => {
   const fade = fakeAnimation(10_000);

@@ -341,7 +341,8 @@ async function readJsonRequest(request) {
   let bytes = 0;
   for await (const chunk of request) {
     bytes += chunk.length;
-    if (bytes > MAX_REQUEST_BYTES) throw new Error("Packaged subagent soak request exceeded 4 MiB.");
+    if (bytes > MAX_REQUEST_BYTES)
+      throw new Error("Packaged subagent soak request exceeded 4 MiB.");
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));

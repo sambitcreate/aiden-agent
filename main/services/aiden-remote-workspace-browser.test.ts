@@ -44,8 +44,12 @@ async function fixture() {
     service,
     root,
     rootPath,
-    setRoots: (value: AidenRemoteApprovedRoot[]) => { approvedRoots = value; },
-    advance: (milliseconds: number) => { now += milliseconds; },
+    setRoots: (value: AidenRemoteApprovedRoot[]) => {
+      approvedRoots = value;
+    },
+    advance: (milliseconds: number) => {
+      now += milliseconds;
+    },
     cleanup: () => fs.rm(temporary, { recursive: true, force: true }),
   };
 }
@@ -56,8 +60,13 @@ test("a Bot-only root is absent from listings and previously issued handles stop
     const handle = (await app.service.listRoots("phone")).roots[0]!.location;
     app.setRoots([{ ...app.root, botsOnly: true }]);
     assert.deepEqual((await app.service.listRoots("phone")).roots, []);
-    await assert.rejects(app.service.listChildren("phone", handle), (error: unknown) => (error as { code?: string }).code === "root_policy_changed");
-  } finally { await app.cleanup(); }
+    await assert.rejects(
+      app.service.listChildren("phone", handle),
+      (error: unknown) => (error as { code?: string }).code === "root_policy_changed",
+    );
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("approved-root browsing exposes only opaque directory entries and consumes selections once", async () => {
@@ -68,18 +77,18 @@ test("approved-root browsing exposes only opaque directory entries and consumes 
     assert.match(roots.roots[0]!.location, /^loc_[A-Za-z0-9_-]{43}$/u);
     assert.equal(JSON.stringify(roots).includes(app.rootPath), false);
 
-    const page = await app.service.listChildren(
-      "device-1",
-      roots.roots[0]!.location,
+    const page = await app.service.listChildren("device-1", roots.roots[0]!.location);
+    assert.deepEqual(
+      page.entries.map((entry) => entry.name),
+      ["Alpha", "Beta"],
     );
-    assert.deepEqual(page.entries.map((entry) => entry.name), ["Alpha", "Beta"]);
-    assert.equal(page.entries.every((entry) => /^loc_[A-Za-z0-9_-]{43}$/u.test(entry.location)), true);
+    assert.equal(
+      page.entries.every((entry) => /^loc_[A-Za-z0-9_-]{43}$/u.test(entry.location)),
+      true,
+    );
     assert.equal(JSON.stringify(page).includes(app.rootPath), false);
 
-    const selection = await app.service.createSelection(
-      "device-1",
-      page.entries[0]!.location,
-    );
+    const selection = await app.service.createSelection("device-1", page.entries[0]!.location);
     const claims = await app.service.consumeSelection("device-1", selection.selection);
     assert.equal(claims.canonicalPath, path.join(app.rootPath, "Alpha"));
     await assert.rejects(
@@ -150,17 +159,33 @@ test("an unavailable approved root does not hide the other approved roots", asyn
     const gonePath = path.join(path.dirname(app.rootPath), "Gone");
     await fs.mkdir(gonePath);
     const goneIdentity = await fs.stat(gonePath, { bigint: true });
-    const gone = { ...app.root, id: "root-gone", label: "Unplugged", folderPath: gonePath,
-      device: goneIdentity.dev.toString(), inode: goneIdentity.ino.toString() };
-    const replaced = { ...app.root, id: "root-replaced", label: "Replaced",
-      inode: (BigInt(app.root.inode) + 1n).toString() };
+    const gone = {
+      ...app.root,
+      id: "root-gone",
+      label: "Unplugged",
+      folderPath: gonePath,
+      device: goneIdentity.dev.toString(),
+      inode: goneIdentity.ino.toString(),
+    };
+    const replaced = {
+      ...app.root,
+      id: "root-replaced",
+      label: "Replaced",
+      inode: (BigInt(app.root.inode) + 1n).toString(),
+    };
     app.setRoots([gone, app.root, replaced]);
     await fs.rm(gonePath, { recursive: true });
 
     const { roots } = await app.service.listRoots("device-1");
-    assert.deepEqual(roots.map((root) => root.id), [app.root.id]);
+    assert.deepEqual(
+      roots.map((root) => root.id),
+      [app.root.id],
+    );
     const page = await app.service.listChildren("device-1", roots[0]!.location);
-    assert.deepEqual(page.entries.map((entry) => entry.name), ["Alpha", "Beta"]);
+    assert.deepEqual(
+      page.entries.map((entry) => entry.name),
+      ["Alpha", "Beta"],
+    );
   } finally {
     await app.cleanup();
   }
@@ -178,11 +203,7 @@ test("directory pagination binds cursors to the exact location and snapshot", as
     const first = await app.service.listChildren("device-1", rootLocation);
     assert.equal(first.entries.length, 200);
     assert.match(first.nextCursor ?? "", /^cur_[A-Za-z0-9_-]{43}$/u);
-    const second = await app.service.listChildren(
-      "device-1",
-      rootLocation,
-      first.nextCursor,
-    );
+    const second = await app.service.listChildren("device-1", rootLocation, first.nextCursor);
     assert.equal(second.entries.length, 7);
 
     await fs.mkdir(path.join(app.rootPath, "Snapshot-Changed"));

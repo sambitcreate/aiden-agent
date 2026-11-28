@@ -110,7 +110,8 @@ export class LiveChatNoteWatcher {
       .then((turn) => {
         if (generation !== this.generation || !this.watched.has(chatId) || !turn?.byVoice) return;
         if (kind !== "ending") this.send(kind, title);
-        else if (turn.ending === "finished" || turn.ending === "failed") this.send(turn.ending, title);
+        else if (turn.ending === "finished" || turn.ending === "failed")
+          this.send(turn.ending, title);
       });
   }
 

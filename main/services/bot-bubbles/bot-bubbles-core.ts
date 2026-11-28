@@ -59,7 +59,10 @@ export function freeBubbleShare(
   displayId: number | null,
 ): number {
   const taken = bubbles
-    .filter((bubble) => bubble.placement.side === side && sameDisplay(bubble.placement.displayId, displayId))
+    .filter(
+      (bubble) =>
+        bubble.placement.side === side && sameDisplay(bubble.placement.displayId, displayId),
+    )
     .map((bubble) => bubble.placement.y);
   if (taken.length === 0) return BOT_BUBBLE_FIRST_SHARE;
   const below = Math.max(...taken) + BOT_BUBBLE_SHARE_STEP;
@@ -79,11 +82,19 @@ function round(share: number): number {
  * Add a head at the end. A Bot already out keeps its place. Past the limit the
  * oldest head goes back to recents.
  */
-export function bubbleBot(list: BotBubbleList, botId: string, options: BubbleOptions = {}): BotBubbleList {
+export function bubbleBot(
+  list: BotBubbleList,
+  botId: string,
+  options: BubbleOptions = {},
+): BotBubbleList {
   if (isBubbled(list, botId)) return list;
   const side = options.side ?? "right";
   const displayId = options.displayId ?? null;
-  const placement: BotBubblePlacement = { side, y: freeBubbleShare(list.bubbles, side, displayId), displayId };
+  const placement: BotBubblePlacement = {
+    side,
+    y: freeBubbleShare(list.bubbles, side, displayId),
+    displayId,
+  };
   let bubbles = [...list.bubbles, { botId, placement }];
   let recents = list.recents.filter((id) => id !== botId);
   let openBotId = list.openBotId;
@@ -110,14 +121,22 @@ export function closeBubble(list: BotBubbleList, botId: string): BotBubbleList {
  * Which head's mini chat is open. Only a bubbled Bot can open; null tucks it
  * away. With `ifOpen`, nothing changes unless that head's chat is the open one.
  */
-export function openBubble(list: BotBubbleList, botId: string | null, ifOpen?: string): BotBubbleList {
+export function openBubble(
+  list: BotBubbleList,
+  botId: string | null,
+  ifOpen?: string,
+): BotBubbleList {
   if (ifOpen !== undefined && list.openBotId !== ifOpen) return list;
   if (botId !== null && !isBubbled(list, botId)) return list;
   if (list.openBotId === botId) return list;
   return { ...list, openBotId: botId };
 }
 
-export function moveBubble(list: BotBubbleList, botId: string, placement: BotBubblePlacement): BotBubbleList {
+export function moveBubble(
+  list: BotBubbleList,
+  botId: string,
+  placement: BotBubblePlacement,
+): BotBubbleList {
   if (!isBubbled(list, botId)) return list;
   return {
     ...list,
@@ -131,11 +150,15 @@ export function forgetRecentBubble(list: BotBubbleList, botId: string): BotBubbl
 }
 
 /** Drop heads and recents for Bots that no longer exist. */
-export function pruneBubbles(list: BotBubbleList, existingBotIds: ReadonlySet<string>): BotBubbleList {
+export function pruneBubbles(
+  list: BotBubbleList,
+  existingBotIds: ReadonlySet<string>,
+): BotBubbleList {
   const bubbles = list.bubbles.filter((bubble) => existingBotIds.has(bubble.botId));
   const recents = list.recents.filter((id) => existingBotIds.has(id));
   if (bubbles.length === list.bubbles.length && recents.length === list.recents.length) return list;
-  const openBotId = list.openBotId !== null && existingBotIds.has(list.openBotId) ? list.openBotId : null;
+  const openBotId =
+    list.openBotId !== null && existingBotIds.has(list.openBotId) ? list.openBotId : null;
   return { bubbles, openBotId, recents };
 }
 
@@ -177,7 +200,10 @@ export function canFloatBotBubblesOverApps(platform: NodeJS.Platform): boolean {
   return platform === "darwin";
 }
 
-export function resolveBotBubbleHost(settings: BotBubbleSettings, platform: NodeJS.Platform): BotBubbleHost {
+export function resolveBotBubbleHost(
+  settings: BotBubbleSettings,
+  platform: NodeJS.Platform,
+): BotBubbleHost {
   if (!settings.enabled) return "off";
   return settings.floatOverApps && canFloatBotBubblesOverApps(platform) ? "overlay" : "window";
 }
@@ -217,7 +243,8 @@ export function parseBotBubbleFile(raw: unknown): BotBubbleList {
   const value = raw as Record<string, unknown>;
   if (value.version !== BOT_BUBBLE_FILE_VERSION) return EMPTY_BOT_BUBBLE_LIST;
   if (!Array.isArray(value.bubbles) || !Array.isArray(value.recents)) return EMPTY_BOT_BUBBLE_LIST;
-  if (value.bubbles.length > BOT_BUBBLE_LIMIT || value.recents.length > BOT_BUBBLE_RECENT_LIMIT) return EMPTY_BOT_BUBBLE_LIST;
+  if (value.bubbles.length > BOT_BUBBLE_LIMIT || value.recents.length > BOT_BUBBLE_RECENT_LIMIT)
+    return EMPTY_BOT_BUBBLE_LIST;
   const bubbles: BotBubble[] = [];
   const seen = new Set<string>();
   for (const item of value.bubbles) {

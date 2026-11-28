@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
-import { createAidenRemoteNewWorktrees, phoneChatWorktreeKey } from "./aiden-remote-new-worktree.js";
-import { FirstMessageWorktreeError, FirstMessageWorktreeSettingsChangedError } from "./first-message-worktree.js";
+import {
+  createAidenRemoteNewWorktrees,
+  phoneChatWorktreeKey,
+} from "./aiden-remote-new-worktree.js";
+import {
+  FirstMessageWorktreeError,
+  FirstMessageWorktreeSettingsChangedError,
+} from "./first-message-worktree.js";
 import { InsufficientDiskSpaceError } from "./managed-worktree-capacity.js";
 import type { GitBranches, Workspace } from "./types.js";
 import type { FirstMessageWorktreeRequest } from "../../renderer/shared/worktree-on-send.js";
@@ -27,15 +33,23 @@ const repository: GitBranches = {
   uncommitted: 0,
 };
 
-const owner: WorkspaceOperationDocumentOwner = { isDestroyed: () => false, onInvalidated: () => () => undefined };
+const owner: WorkspaceOperationDocumentOwner = {
+  isDestroyed: () => false,
+  onInvalidated: () => () => undefined,
+};
 
-function harness(options: {
-  workspace?: Workspace | undefined;
-  branches?: GitBranches | Error;
-  ensure?: (request: FirstMessageWorktreeRequest, seed: string) => Promise<{ workspaceId: string; branch: string }>;
-  records?: Record<string, { state: "pending" | "failed" | "ready"; workspaceId: string }>;
-  workspaces?: Workspace[];
-} = {}) {
+function harness(
+  options: {
+    workspace?: Workspace | undefined;
+    branches?: GitBranches | Error;
+    ensure?: (
+      request: FirstMessageWorktreeRequest,
+      seed: string,
+    ) => Promise<{ workspaceId: string; branch: string }>;
+    records?: Record<string, { state: "pending" | "failed" | "ready"; workspaceId: string }>;
+    workspaces?: Workspace[];
+  } = {},
+) {
   const requests: Array<{ request: FirstMessageWorktreeRequest; seed: string }> = [];
   const owners: string[] = [];
   const service = createAidenRemoteNewWorktrees({
@@ -47,7 +61,10 @@ function harness(options: {
     },
     ensure: async (request, seed) => {
       requests.push({ request, seed });
-      const made = await (options.ensure ?? (async () => ({ workspaceId: "site-worktree", branch: "aiden/fix-the-login-bug" })))(request, seed);
+      const made = await (
+        options.ensure ??
+        (async () => ({ workspaceId: "site-worktree", branch: "aiden/fix-the-login-bug" }))
+      )(request, seed);
       return {
         ...made,
         baseRef: request.baseRef,
@@ -64,19 +81,21 @@ function harness(options: {
     listWorkspaces: async () => options.workspaces ?? [site],
     record: async (key) => {
       const entry = options.records?.[key];
-      return entry && {
-        key,
-        sourceWorkspaceId: "site",
-        ...entry,
-        baseRef: "main",
-        fromOrigin: true,
-        branch: "aiden/fix",
-        ownershipToken: "token",
-        baseCommit: "abc123",
-        startPoint: "main",
-        baseSource: "local" as const,
-        updatedAt: 0,
-      };
+      return (
+        entry && {
+          key,
+          sourceWorkspaceId: "site",
+          ...entry,
+          baseRef: "main",
+          fromOrigin: true,
+          branch: "aiden/fix",
+          ownershipToken: "token",
+          baseCommit: "abc123",
+          startPoint: "main",
+          baseSource: "local" as const,
+          updatedAt: 0,
+        }
+      );
     },
   });
   return { service, requests, owners };
@@ -97,14 +116,21 @@ test("a phone's worktree starts where a desktop draft's would, named from the me
   assert.deepEqual(requests, [
     {
       // The default branch from its remote, not the branch the checkout is on.
-      request: { sourceWorkspaceId: "site", baseRef: "main", fromOrigin: true, idempotencyKey: phoneChatWorktreeKey("chat-1") },
+      request: {
+        sourceWorkspaceId: "site",
+        baseRef: "main",
+        fromOrigin: true,
+        idempotencyKey: phoneChatWorktreeKey("chat-1"),
+      },
       seed: "Fix the login bug",
     },
   ]);
   assert.deepEqual(owners, ["phone-1"]);
   assert.notEqual(phoneChatWorktreeKey("chat-1"), phoneChatWorktreeKey("chat-2"));
 
-  const local = harness({ branches: { ...repository, remoteBranches: [], hasRemote: false, defaultBranch: undefined } });
+  const local = harness({
+    branches: { ...repository, remoteBranches: [], hasRemote: false, defaultBranch: undefined },
+  });
   await local.service.create("phone-1", "site", "Fix", "chat-1");
   assert.deepEqual(
     [local.requests[0]!.request.baseRef, local.requests[0]!.request.fromOrigin],
@@ -115,28 +141,62 @@ test("a phone's worktree starts where a desktop draft's would, named from the me
 
 test("a workspace that can't have a worktree is refused before anything is made", async () => {
   const cases: Array<[string, Parameters<typeof harness>[0], string, RegExp]> = [
-    ["no folder", { workspace: { ...site, folderPath: undefined } }, "workspace_unavailable", /no folder/u],
+    [
+      "no folder",
+      { workspace: { ...site, folderPath: undefined } },
+      "workspace_unavailable",
+      /no folder/u,
+    ],
     ["scratch", { workspace: { ...site, scratch: true } }, "workspace_unavailable", /no folder/u],
-    ["no access", { workspace: { ...site, permission: "none" } }, "workspace_unavailable", /no folder access/u],
+    [
+      "no access",
+      { workspace: { ...site, permission: "none" } },
+      "workspace_unavailable",
+      /no folder access/u,
+    ],
     ["gone", { workspace: undefined }, "workspace_unavailable", /no folder/u],
     [
       "already a worktree",
       {
         workspace: {
           ...site,
-          managedWorktree: { repositoryPath: "/r", worktreePath: "/w", branch: "aiden/x", createdFromHead: "abc" },
+          managedWorktree: {
+            repositoryPath: "/r",
+            worktreePath: "/w",
+            branch: "aiden/x",
+            createdFromHead: "abc",
+          },
         },
       },
       "git_capability_denied",
       /already in a worktree/u,
     ],
-    ["not a repository", { branches: { ...repository, isRepo: false } }, "git_capability_denied", /isn't a Git repository/u],
-    ["no commits", { branches: { ...repository, unborn: true } }, "git_capability_denied", /no commits yet/u],
-    ["unreadable", { branches: new Error("fatal: /Users/sam/projects/site: not a git repository") }, "git_capability_denied", /branches/u],
+    [
+      "not a repository",
+      { branches: { ...repository, isRepo: false } },
+      "git_capability_denied",
+      /isn't a Git repository/u,
+    ],
+    [
+      "no commits",
+      { branches: { ...repository, unborn: true } },
+      "git_capability_denied",
+      /no commits yet/u,
+    ],
+    [
+      "unreadable",
+      { branches: new Error("fatal: /Users/sam/projects/site: not a git repository") },
+      "git_capability_denied",
+      /branches/u,
+    ],
   ];
   for (const [name, options, code, pattern] of cases) {
     const { service, requests } = harness(options);
-    await assert.rejects(service.create("phone-1", "site", "Fix", "chat-1"), refusedWith(code, pattern), name);
+    await assert.rejects(
+      service.create("phone-1", "site", "Fix", "chat-1"),
+      refusedWith(code, pattern),
+      name,
+    );
     assert.equal(requests.length, 0, name);
   }
 });
@@ -150,31 +210,60 @@ test("a chat's finished setup is only the worktree New worktree made for that ch
     ownershipToken: "token",
   };
   const inWorktree = { workspace: { ...site, id: "site-worktree", managedWorktree } };
-  const made = { [phoneChatWorktreeKey("chat-1")]: { state: "ready" as const, workspaceId: "site-worktree" } };
-  assert.equal(await harness({ ...inWorktree, records: made }).service.worktreeBranch("chat-1", "site-worktree"), "aiden/fix");
+  const made = {
+    [phoneChatWorktreeKey("chat-1")]: { state: "ready" as const, workspaceId: "site-worktree" },
+  };
   assert.equal(
-    await harness({ ...inWorktree, records: made }).service.worktreeBranch("chat-2", "site-worktree"),
+    await harness({ ...inWorktree, records: made }).service.worktreeBranch(
+      "chat-1",
+      "site-worktree",
+    ),
+    "aiden/fix",
+  );
+  assert.equal(
+    await harness({ ...inWorktree, records: made }).service.worktreeBranch(
+      "chat-2",
+      "site-worktree",
+    ),
     undefined,
     "another chat's worktree",
   );
-  assert.equal(await harness(inWorktree).service.worktreeBranch("chat-1", "site-worktree"), undefined, "a worktree this chat never made");
   assert.equal(
-    await harness({ ...inWorktree, records: { [phoneChatWorktreeKey("chat-1")]: { state: "pending", workspaceId: "site-worktree" } } })
-      .service.worktreeBranch("chat-1", "site-worktree"),
+    await harness(inWorktree).service.worktreeBranch("chat-1", "site-worktree"),
+    undefined,
+    "a worktree this chat never made",
+  );
+  assert.equal(
+    await harness({
+      ...inWorktree,
+      records: {
+        [phoneChatWorktreeKey("chat-1")]: { state: "pending", workspaceId: "site-worktree" },
+      },
+    }).service.worktreeBranch("chat-1", "site-worktree"),
     "aiden/fix",
     "saved, though its last ledger write failed",
   );
   assert.equal(
     await harness({
-      workspace: { ...site, id: "site-worktree", managedWorktree: { ...managedWorktree, ownershipToken: "another" } },
-      records: { [phoneChatWorktreeKey("chat-1")]: { state: "pending", workspaceId: "site-worktree" } },
+      workspace: {
+        ...site,
+        id: "site-worktree",
+        managedWorktree: { ...managedWorktree, ownershipToken: "another" },
+      },
+      records: {
+        [phoneChatWorktreeKey("chat-1")]: { state: "pending", workspaceId: "site-worktree" },
+      },
     }).service.worktreeBranch("chat-1", "site-worktree"),
     undefined,
     "a worktree at that id that this attempt did not save",
   );
   assert.equal(
-    await harness({ ...inWorktree, records: { [phoneChatWorktreeKey("chat-1")]: { state: "failed", workspaceId: "site-worktree" } } })
-      .service.worktreeBranch("chat-1", "site-worktree"),
+    await harness({
+      ...inWorktree,
+      records: {
+        [phoneChatWorktreeKey("chat-1")]: { state: "failed", workspaceId: "site-worktree" },
+      },
+    }).service.worktreeBranch("chat-1", "site-worktree"),
     undefined,
     "a failed attempt",
   );
@@ -186,17 +275,44 @@ test("a chat's finished setup is only the worktree New worktree made for that ch
 });
 
 test("Git failures reach the phone as fixed sentences, never Git's own words", async () => {
-  const fail = (error: Error) => harness({ ensure: async () => Promise.reject(error) }).service.create("phone-1", "site", "Fix", "chat-1");
+  const fail = (error: Error) =>
+    harness({ ensure: async () => Promise.reject(error) }).service.create(
+      "phone-1",
+      "site",
+      "Fix",
+      "chat-1",
+    );
   await assert.rejects(
-    fail(new FirstMessageWorktreeError("fatal: unable to access 'https://sam:token@github.com/x': /Users/sam", "fetching")),
+    fail(
+      new FirstMessageWorktreeError(
+        "fatal: unable to access 'https://sam:token@github.com/x': /Users/sam",
+        "fetching",
+      ),
+    ),
     refusedWith("git_capability_denied", /couldn't fetch main from its remote/u),
   );
   await assert.rejects(
-    fail(new FirstMessageWorktreeError("disk", "creating", new InsufficientDiskSpaceError({ availableBytes: 1, requiredBytes: 2, reserveBytes: 1, estimatedBytes: 1 }))),
+    fail(
+      new FirstMessageWorktreeError(
+        "disk",
+        "creating",
+        new InsufficientDiskSpaceError({
+          availableBytes: 1,
+          requiredBytes: 2,
+          reserveBytes: 1,
+          estimatedBytes: 1,
+        }),
+      ),
+    ),
     refusedWith("git_capability_denied", /free disk space/u),
   );
   await assert.rejects(
-    fail(new FirstMessageWorktreeError("fatal: '/Users/sam/.aiden/worktrees/site-1' already exists", "creating")),
+    fail(
+      new FirstMessageWorktreeError(
+        "fatal: '/Users/sam/.aiden/worktrees/site-1' already exists",
+        "creating",
+      ),
+    ),
     refusedWith("git_capability_denied", /couldn't make the worktree/u),
   );
 });
@@ -216,10 +332,16 @@ test("when the default branch moved since an earlier attempt, the chat's existin
       return { workspaceId: "site-worktree", branch: "aiden/fix" };
     },
   });
-  assert.deepEqual(await service.create("phone-1", "site", "Fix", "chat-1"), { workspaceId: "site-worktree", branch: "aiden/fix" });
+  assert.deepEqual(await service.create("phone-1", "site", "Fix", "chat-1"), {
+    workspaceId: "site-worktree",
+    branch: "aiden/fix",
+  });
   assert.deepEqual(
     requests.map(({ request }) => [request.baseRef, request.idempotencyKey]),
-    [["main", "phone-chat:chat-1"], ["develop", "phone-chat:chat-1"]],
+    [
+      ["main", "phone-chat:chat-1"],
+      ["develop", "phone-chat:chat-1"],
+    ],
   );
 });
 
@@ -227,7 +349,12 @@ const siteWorktree: Workspace = {
   ...site,
   id: "site-wt",
   folderPath: "/Users/sam/.aiden/worktrees/site-1",
-  managedWorktree: { repositoryPath: "/Users/sam/projects/site", worktreePath: "/Users/sam/.aiden/worktrees/site-1", branch: "aiden/release-prep", createdFromHead: "abc" },
+  managedWorktree: {
+    repositoryPath: "/Users/sam/projects/site",
+    worktreePath: "/Users/sam/.aiden/worktrees/site-1",
+    branch: "aiden/release-prep",
+    createdFromHead: "abc",
+  },
 };
 
 test("a started chat's worktree uses the key, base and branch name its lead asked for", async () => {
@@ -257,7 +384,10 @@ test("a lead in a worktree stacks its started chat's worktree on its own branch,
     // The worktree's branch lives in the same repository.
     branches: { ...repository, branches: [...repository.branches, "aiden/release-prep"] },
   });
-  await service.create("chat:lead-1", "site-wt", "Split the tests", "chat-9", { key: "k", stackOnWorktree: true });
+  await service.create("chat:lead-1", "site-wt", "Split the tests", "chat-9", {
+    key: "k",
+    stackOnWorktree: true,
+  });
   assert.deepEqual(requests[0]!.request, {
     sourceWorkspaceId: "site",
     baseRef: "aiden/release-prep",
@@ -265,19 +395,58 @@ test("a lead in a worktree stacks its started chat's worktree on its own branch,
     idempotencyKey: "k",
   });
   // Without the stacking option (a phone's New worktree) it is still refused.
-  await assert.rejects(service.create("phone-1", "site-wt", "x", "chat-1"), refusedWith("git_capability_denied", /already in a worktree/u));
+  await assert.rejects(
+    service.create("phone-1", "site-wt", "x", "chat-1"),
+    refusedWith("git_capability_denied", /already in a worktree/u),
+  );
 });
 
 test("a started chat's worktree request that can't be met is refused with a fixed sentence before anything is made", async () => {
-  const cases: Array<[string, Parameters<typeof harness>[0], Parameters<ReturnType<typeof harness>["service"]["create"]>[4], string, RegExp]> = [
-    ["unknown base", {}, { baseRef: "release/9" }, "git_capability_denied", /couldn't find the branch release\/9/u],
-    ["invalid base", {}, { baseRef: "bad..name" }, "git_capability_denied", /base branch name isn't valid/u],
-    ["invalid branch name", {}, { branchName: "has space" }, "git_capability_denied", /branch name isn't valid/u],
-    ["worktree with no source", { workspace: siteWorktree, workspaces: [siteWorktree] }, { stackOnWorktree: true }, "workspace_unavailable", /couldn't find the workspace this worktree came from/u],
+  const cases: Array<
+    [
+      string,
+      Parameters<typeof harness>[0],
+      Parameters<ReturnType<typeof harness>["service"]["create"]>[4],
+      string,
+      RegExp,
+    ]
+  > = [
+    [
+      "unknown base",
+      {},
+      { baseRef: "release/9" },
+      "git_capability_denied",
+      /couldn't find the branch release\/9/u,
+    ],
+    [
+      "invalid base",
+      {},
+      { baseRef: "bad..name" },
+      "git_capability_denied",
+      /base branch name isn't valid/u,
+    ],
+    [
+      "invalid branch name",
+      {},
+      { branchName: "has space" },
+      "git_capability_denied",
+      /branch name isn't valid/u,
+    ],
+    [
+      "worktree with no source",
+      { workspace: siteWorktree, workspaces: [siteWorktree] },
+      { stackOnWorktree: true },
+      "workspace_unavailable",
+      /couldn't find the workspace this worktree came from/u,
+    ],
   ];
   for (const [name, options, request, code, pattern] of cases) {
     const { service, requests } = harness(options);
-    await assert.rejects(service.create("chat:lead-1", "site", "Fix", "chat-1", request), refusedWith(code, pattern), name);
+    await assert.rejects(
+      service.create("chat:lead-1", "site", "Fix", "chat-1", request),
+      refusedWith(code, pattern),
+      name,
+    );
     assert.equal(requests.length, 0, name);
   }
 });

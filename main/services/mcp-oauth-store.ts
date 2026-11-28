@@ -127,7 +127,8 @@ async function writeMap(
 // after a mutation always reflects the file as that mutation left it.
 const sessions = createMcpOAuthSessionCache({
   readMap,
-  decrypt: (b64) => parseMcpOAuthSession(JSON.parse(secureStorage.decryptString(Buffer.from(b64, "base64")))),
+  decrypt: (b64) =>
+    parseMcpOAuthSession(JSON.parse(secureStorage.decryptString(Buffer.from(b64, "base64")))),
 });
 
 function mutate(operation: () => Promise<void>): Promise<void> {
@@ -162,7 +163,11 @@ export const mcpOAuthStore = {
     } catch (error) {
       // A saved sign-in that cannot be read is not "never authorized": the
       // McpOAuthCredentialStorageError tells callers which one happened.
-      logger.error("mcp-oauth", `Could not read the encrypted OAuth session for ${serverId}`, error);
+      logger.error(
+        "mcp-oauth",
+        `Could not read the encrypted OAuth session for ${serverId}`,
+        error,
+      );
       assertMutationCurrent(isCurrent);
       throw error;
     }

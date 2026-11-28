@@ -3,6 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task by task, with a fresh implementer subagent per task plus a spec-compliance and a code-quality reviewer before the next task starts. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Land the shared Studio Foundation that Design Studio and Create Images build on:
+
 - **Flags.** `designStudio` and `createImages` capabilities, both default off.
 - **Shell.** Lazy `/design` and `/images` routes under the chat shell, two sidebar rows and two palette commands.
 - **Hidden chats.** One central classifier for feature-owned chats.
@@ -13,6 +14,7 @@
 With both flags off, the app behaves exactly like `main`.
 
 **Architecture:** Two PRs.
+
 - **PR A, `feature/studio-chat-visibility`** (tasks F-3.1 – F-3.5): adds `chat.owner` and the `chatSurface()` classifier, and applies them at every listing and Remote projection. `chatStore.list()` stays unfiltered so startup reconciliation keeps hidden chats' state.
 - **PR B, `feature/studio-foundation`** (tasks F-1.1 – F-6): flags, routes, sidebar, commands, asset store and protocol, canvas kit, Playwright, docs.
 
@@ -21,11 +23,13 @@ PR A and PR B can be reviewed in parallel. Merge PR A first, because both touch 
 **Tech Stack:** Electron 43, React 19, TanStack Router 1.131 (`lazyRouteComponent`), `@xyflow/react` 12.11.6 (exact), `node:sqlite` (`DatabaseSync`), `main/services/durable-fs.ts`, Electron `protocol.handle` + `nativeImage`, `node:test` via `tsx --test`, `react-dom/server` + `@xmldom/xmldom` render tests, and Playwright Electron (`tests/e2e/fixtures.ts`).
 
 **Spec:**
+
 - [ADR-F, Studio Foundation](studio-foundation-adr.md): every decision referenced here as F-D1 … F-D10.
 - [Umbrella plan](design-studio-create-images-rebuild-plan.md) §2, §3, §6 ADR-F and §7 Track F.
 - Consumers: [ADR-DS](design-studio-adr.md) and [ADR-CI](create-images-adr.md).
 
 **Global constraints** (from umbrella §2 and AGENTS.md, as they apply to Track F):
+
 - Port from the `ref-*` worktrees by reading them. Never merge or cherry-pick the old tips.
 - Both capabilities default **off**. There is no onboarding tile and no Settings section in Track F.
 - Every feature route uses `lazyRouteComponent`, and feature CSS is imported only by the lazy route. `npm run check:bundle-budget` stays ≤ 3,520,000 B raw / 1,075,000 B gzip.
@@ -49,14 +53,15 @@ PR A and PR B can be reviewed in parallel. Merge PR A first, because both touch 
 
 **Review focus (umbrella §3), and the test that pins each item:**
 
-| # | Failure mode | Pinned by |
-|---|---|---|
-| 2 | A hidden chat leaks into the sidebar, search, Remote summaries, the host feed, peers, fork, BTW or native clients | F-3.2 `chat-store-core.test.ts` "feature-owned chats leave regular listings…" (sidebar, search, palette, Remote `list()`); F-3.3 `aiden-remote-chat-summaries.test.ts` "feature-owned chats never reach summaries or the host feed" (summaries, host feed, peers, native); F-3.3 `aiden-remote-chats.test.ts` "Remote classification refuses feature-owned chats" (every per-chat Remote route); F-3.3 progress test; F-3.4 fork, BTW and empty-chat tests; F-3.5 iOS/Android suites |
-| 2b | Startup reconciliation drops a hidden chat's state | F-3.2 `startup-chat-reconciliation.test.ts` "hidden feature chats stay in the startup reconciliation set" |
-| 3 | Flags off is not identical to main | F-1.2 `app-capabilities.test.ts`; F-2.3 `command-system-core.test.ts` "palette omits studio commands while their capability is off"; F-2.4 `sidebar-primary-nav.test.tsx` "with both flags off the nav is exactly New Agent, Scheduled, Bots"; F-2.2 `studio-capability-route.test.tsx`; F-4.1 `custom-schemes-core.test.ts` "only aiden-genui is privileged with both flags off"; F-5.4 Playwright "flags off: no studio rows, commands or routes"; F-6 `check:bundle-budget` before/after |
-| 1, 4, 5 | Restart mid-run, consent/cost, scale | Owned by the DS and CI tracks. Track F only provides the primitives: the store's crash-window sweep is pinned by F-4.3 "a blob written without its row is swept on restart". |
+| #       | Failure mode                                                                                                      | Pinned by                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2       | A hidden chat leaks into the sidebar, search, Remote summaries, the host feed, peers, fork, BTW or native clients | F-3.2 `chat-store-core.test.ts` "feature-owned chats leave regular listings…" (sidebar, search, palette, Remote `list()`); F-3.3 `aiden-remote-chat-summaries.test.ts` "feature-owned chats never reach summaries or the host feed" (summaries, host feed, peers, native); F-3.3 `aiden-remote-chats.test.ts` "Remote classification refuses feature-owned chats" (every per-chat Remote route); F-3.3 progress test; F-3.4 fork, BTW and empty-chat tests; F-3.5 iOS/Android suites        |
+| 2b      | Startup reconciliation drops a hidden chat's state                                                                | F-3.2 `startup-chat-reconciliation.test.ts` "hidden feature chats stay in the startup reconciliation set"                                                                                                                                                                                                                                                                                                                                                                                   |
+| 3       | Flags off is not identical to main                                                                                | F-1.2 `app-capabilities.test.ts`; F-2.3 `command-system-core.test.ts` "palette omits studio commands while their capability is off"; F-2.4 `sidebar-primary-nav.test.tsx` "with both flags off the nav is exactly New Agent, Scheduled, Bots"; F-2.2 `studio-capability-route.test.tsx`; F-4.1 `custom-schemes-core.test.ts` "only aiden-genui is privileged with both flags off"; F-5.4 Playwright "flags off: no studio rows, commands or routes"; F-6 `check:bundle-budget` before/after |
+| 1, 4, 5 | Restart mid-run, consent/cost, scale                                                                              | Owned by the DS and CI tracks. Track F only provides the primitives: the store's crash-window sweep is pinned by F-4.3 "a blob written without its row is swept on restart".                                                                                                                                                                                                                                                                                                                |
 
 **Conventions used below:**
+
 - Worktree: `/Users/sambitbiswas/projects/aiden-macos/.claude/worktrees/studio-foundation` for PR B and `/Users/sambitbiswas/projects/aiden-macos/.claude/worktrees/studio-chat-visibility` for PR A. Both are created from `origin/main`.
 - Run one test file: `npx tsx --test <file>`.
 - Registry check after every registration: `npm run test:ci:registry`.
@@ -69,17 +74,27 @@ PR A and PR B can be reviewed in parallel. Merge PR A first, because both touch 
 ## Task F-3.1: Chat surface classifier and owner parser
 
 **Files:**
+
 - Create: `renderer/shared/chat-visibility.ts`
 - Test: `renderer/shared/chat-visibility.test.ts`
 - Modify: `package.json` (new `test:chat-visibility` script, appended to `test:serial`), `scripts/ci-test-registry.json` (`renderer-other`)
 
 **Interfaces:**
+
 - Consumes: `ASSISTANT_WORKSPACE_ID` (`renderer/shared/assistant.ts:6`), `persistedChatWorkspaceId(workspaceId: string | undefined): string` (`renderer/shared/chat-workspace.ts:4`).
 - Produces:
+
   ```ts
-  export interface ChatOwnerV1 { kind: "design-project"; projectId: string }
+  export interface ChatOwnerV1 {
+    kind: "design-project";
+    projectId: string;
+  }
   export type ChatSurface = "regular" | "assistant" | "bot" | "feature";
-  export interface ChatSurfaceInput { workspaceId?: string; botId?: string; owner?: ChatOwnerV1 }
+  export interface ChatSurfaceInput {
+    workspaceId?: string;
+    botId?: string;
+    owner?: ChatOwnerV1;
+  }
   export function parseChatOwnerV1(value: unknown): ChatOwnerV1 | undefined;
   export function chatSurface(chat: ChatSurfaceInput): ChatSurface;
   export function isUserVisibleChat(chat: ChatSurfaceInput): boolean;
@@ -131,7 +146,7 @@ test("the owner parser accepts only the exact design-project shape", () => {
 ```
 
 - [ ] **Step 2: Run it and watch it fail.**
-  Run `npx tsx --test renderer/shared/chat-visibility.test.ts`. Expected: FAIL, `Cannot find module './chat-visibility.js'`.
+      Run `npx tsx --test renderer/shared/chat-visibility.test.ts`. Expected: FAIL, `Cannot find module './chat-visibility.js'`.
 
 - [ ] **Step 3: Implement** `renderer/shared/chat-visibility.ts`.
 
@@ -186,7 +201,7 @@ export function isUserVisibleChat(chat: ChatSurfaceInput): boolean {
 ```
 
 - [ ] **Step 4: Run it and watch it pass.**
-  Run `npx tsx --test renderer/shared/chat-visibility.test.ts`. Expected: 3 tests pass.
+      Run `npx tsx --test renderer/shared/chat-visibility.test.ts`. Expected: 3 tests pass.
 
 - [ ] **Step 5: Register the test.**
   1. In `package.json` `scripts`, add the line below. Then append ` && npm run test:chat-visibility` to the **end** of `test:serial`, and keep every existing segment.
@@ -210,12 +225,14 @@ EOF
 ## Task F-3.2: Persist `owner`, filter regular listings, extract startup reconciliation
 
 **Files:**
+
 - Modify: `main/services/types.ts` (`ChatMeta`, line 416), `renderer/lib/types.ts` (`ChatMeta`, line 628), `main/services/chat-store-core.ts` (`isValidMeta` :355, `metaOf` :924, `listRegular` :1076, `create` :1175, `copyVisibleHistory` :1219), `main/index.ts` (:1899-1905)
 - Create: `main/services/startup-chat-reconciliation.ts`
 - Test: `main/services/chat-store-core.test.ts` (extend), `main/services/startup-chat-reconciliation.test.ts` (new)
 - Modify: `package.json` (`test:chat-visibility`), `scripts/ci-test-registry.json` (`core-git`)
 
 **Interfaces:**
+
 - Consumes: `ChatOwnerV1`, `parseChatOwnerV1` and `chatSurface` from F-3.1; `createChatStore(resolveDir)`; `ChatForkError` (`main/services/chat-fork-error.ts`).
 - Produces:
   - `chatStore.create({ …, owner?: ChatOwnerV1 })`
@@ -240,7 +257,10 @@ test("feature-owned chats leave regular listings but stay in the full index acro
     new Set((await store.listRegular()).map(({ id }) => id)),
     new Set([regular.id, assistant.id]),
   );
-  assert.deepEqual((await store.listRegular("default")).map(({ id }) => id), [regular.id]);
+  assert.deepEqual(
+    (await store.listRegular("default")).map(({ id }) => id),
+    [regular.id],
+  );
 
   const restarted = createChatStore(async () => directory);
   assert.deepEqual(
@@ -252,7 +272,10 @@ test("feature-owned chats leave regular listings but stay in the full index acro
     owner,
   );
   assert.deepEqual((await restarted.get(owned.id))?.owner, owner);
-  assert.deepEqual((await restarted.listRegular("default")).map(({ id }) => id), [regular.id]);
+  assert.deepEqual(
+    (await restarted.listRegular("default")).map(({ id }) => id),
+    [regular.id],
+  );
 });
 
 test("an owner is main-only, exclusive with Bots, and never copied", async (t) => {
@@ -298,7 +321,10 @@ test("hidden feature chats stay in the startup reconciliation set", async (t) =>
       seen.push([...ids].sort());
     },
   };
-  const ids = await reconcileChatScopedStores(createChatStore(async () => directory), [recorder, recorder]);
+  const ids = await reconcileChatScopedStores(
+    createChatStore(async () => directory),
+    [recorder, recorder],
+  );
 
   const expected = [regular.id, bot.id, owned.id].sort();
   assert.deepEqual([...ids].sort(), expected);
@@ -308,8 +334,8 @@ test("hidden feature chats stay in the startup reconciliation set", async (t) =>
 ```
 
 - [ ] **Step 2: Run them and watch them fail.**
-  Run `npx tsx --test main/services/chat-store-core.test.ts main/services/startup-chat-reconciliation.test.ts`.
-  Expected: FAIL.
+      Run `npx tsx --test main/services/chat-store-core.test.ts main/services/startup-chat-reconciliation.test.ts`.
+      Expected: FAIL.
   - `tsx` does not type-check, so `create` silently drops `owner`. As a result, `listRegular()` still returns the owned chat, and `create({ botId, owner })` does not reject.
   - `Cannot find module './startup-chat-reconciliation.js'`.
 
@@ -329,7 +355,11 @@ import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
 `main/services/chat-store-core.ts`:
 
 ```ts
-import { chatSurface, parseChatOwnerV1, type ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
+import {
+  chatSurface,
+  parseChatOwnerV1,
+  type ChatOwnerV1,
+} from "../../renderer/shared/chat-visibility.js";
 ```
 
 In `isValidMeta`, add one more conjunct before the `forkedFrom` check:
@@ -358,25 +388,26 @@ Replace `listRegular`:
 ```
 
 In `create`:
+
 1. Add `owner?: ChatOwnerV1;` to the input type.
 2. Right after `input.assertCurrent?.();`, add:
    ```ts
-        const owner = input.owner === undefined ? undefined : parseChatOwnerV1(input.owner);
-        if (input.owner !== undefined && (owner === undefined || input.botId !== undefined)) {
-          throw new Error("Invalid chat owner.");
-        }
+   const owner = input.owner === undefined ? undefined : parseChatOwnerV1(input.owner);
+   if (input.owner !== undefined && (owner === undefined || input.botId !== undefined)) {
+     throw new Error("Invalid chat owner.");
+   }
    ```
 3. In the `chat` literal, after the `botId` spread, add `...(owner ? { owner } : {}),`.
 
 In `copyVisibleHistory`, right after the `if (!source) throw …` line, add:
 
 ```ts
-        if (source.owner !== undefined) {
-          throw new ChatForkError(
-            "ineligible",
-            "This chat belongs to another Aiden feature and cannot be copied.",
-          );
-        }
+if (source.owner !== undefined) {
+  throw new ChatForkError(
+    "ineligible",
+    "This chat belongs to another Aiden feature and cannot be copied.",
+  );
+}
 ```
 
 Create `main/services/startup-chat-reconciliation.ts`:
@@ -406,16 +437,13 @@ export async function reconcileChatScopedStores(
 In `main/index.ts`, replace lines 1899-1905 (the `visibleChatIds` set and its `Promise.all`):
 
 ```ts
-      await reconcileChatScopedStores(chatStore, [
-        piRuntimeEffectStore,
-        piCompactionSessionStore,
-      ]);
+await reconcileChatScopedStores(chatStore, [piRuntimeEffectStore, piCompactionSessionStore]);
 ```
 
 Then add `import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";` to the imports. `visibleChatIds` has no other use in `main/index.ts` (it appears only at :1899, :1903 and :1904).
 
 - [ ] **Step 4: Run them and watch them pass.**
-  Run `npx tsx --test main/services/chat-store-core.test.ts main/services/startup-chat-reconciliation.test.ts`. Expected: all pass, including every existing `chat-store-core` test. Then run `npm run type-check`. Expected: no errors.
+      Run `npx tsx --test main/services/chat-store-core.test.ts main/services/startup-chat-reconciliation.test.ts`. Expected: all pass, including every existing `chat-store-core` test. Then run `npm run type-check`. Expected: no errors.
 
 - [ ] **Step 5: Register the tests.**
   1. In `package.json`, extend `test:chat-visibility` to:
@@ -442,11 +470,13 @@ EOF
 ## Task F-3.3: Remote projections (summaries, host feed, per-chat routes, progress)
 
 **Files:**
+
 - Modify: `main/services/aiden-remote-chats.ts` (`safeSummaryMetadata` :460-466, `classify` :1431-1450), `main/services/aiden-remote-chat-progress-authorize.ts` (:76-85)
 - Test (extend): `main/services/aiden-remote-chat-summaries.test.ts`, `main/services/aiden-remote-chats.test.ts`, `main/services/aiden-remote-chat-progress-authorize.test.ts`
 - Modify: `package.json` (`test:chat-visibility`)
 
 **Interfaces:**
+
 - Consumes: `chatSurface` (F-3.1); the existing helpers `summaryService(initial, options)` and `metadata(id, updatedAt, overrides)` in the summaries test, `fixture(initial, options)` and `chat(overrides)` in `aiden-remote-chats.test.ts`, and `fixture({ metadata })` / `meta` in the progress test.
 - Produces:
   - Summaries and `hostFeedChats().summaries` omit `feature` chats.
@@ -461,18 +491,27 @@ Append to `main/services/aiden-remote-chat-summaries.test.ts`:
 ```ts
 test("feature-owned chats never reach summaries or the host feed", async () => {
   const owner = { kind: "design-project" as const, projectId: "project-1" };
-  const fixture = summaryService([
-    metadata("chat-a", 3_000),
-    metadata("design-chat", 4_000, { workspaceId: "default", owner }),
-    metadata("assistant-chat", 5_000, { workspaceId: "assistant" }),
-  ], { active: new Set(["design-chat"]) });
+  const fixture = summaryService(
+    [
+      metadata("chat-a", 3_000),
+      metadata("design-chat", 4_000, { workspaceId: "default", owner }),
+      metadata("assistant-chat", 5_000, { workspaceId: "assistant" }),
+    ],
+    { active: new Set(["design-chat"]) },
+  );
 
   const page = await fixture.service.listSummaries();
-  assert.deepEqual(page.summaries.map(({ id }) => id), ["chat-a"]);
+  assert.deepEqual(
+    page.summaries.map(({ id }) => id),
+    ["chat-a"],
+  );
   assert.equal(JSON.stringify(page).includes("design-chat"), false);
 
   const feed = await fixture.service.hostFeedChats();
-  assert.deepEqual(feed.summaries.map(({ id }) => id), ["chat-a"]);
+  assert.deepEqual(
+    feed.summaries.map(({ id }) => id),
+    ["chat-a"],
+  );
   assert.equal(feed.botChatIds.has("design-chat"), false);
 });
 ```
@@ -482,10 +521,11 @@ Append to `main/services/aiden-remote-chats.test.ts`:
 ```ts
 test("Remote classification refuses feature-owned chats before any payload read", async () => {
   let payloadReads = 0;
-  const { service } = fixture(
-    chat({ owner: { kind: "design-project", projectId: "project-1" } }),
-    { onPayloadGet: () => { payloadReads += 1; } },
-  );
+  const { service } = fixture(chat({ owner: { kind: "design-project", projectId: "project-1" } }), {
+    onPayloadGet: () => {
+      payloadReads += 1;
+    },
+  });
 
   await assert.rejects(
     service.classify("chat-1"),
@@ -507,7 +547,10 @@ test("feature-owned chats report not found to progress readers", async () => {
   let chatsRead = 0;
   const owned = fixture({
     metadata: [{ ...meta, owner: { kind: "design-project", projectId: "project-1" } }],
-    readChat: async () => { chatsRead += 1; return chat; },
+    readChat: async () => {
+      chatsRead += 1;
+      return chat;
+    },
   });
   await assert.rejects(owned.authorize("device-1", "chat-1", "tasks:read"), /unavailable/);
   await assert.rejects(owned.authorize("device-1", "chat-1", "agents:read"), /unavailable/);
@@ -517,8 +560,8 @@ test("feature-owned chats report not found to progress readers", async () => {
 ```
 
 - [ ] **Step 2: Run them and watch them fail.**
-  First run `npm run build:worktree-file-io`, which the Remote suites need. Then run `npx tsx --test main/services/aiden-remote-chat-summaries.test.ts main/services/aiden-remote-chats.test.ts main/services/aiden-remote-chat-progress-authorize.test.ts`.
-  Expected: the three new tests FAIL.
+      First run `npm run build:worktree-file-io`, which the Remote suites need. Then run `npx tsx --test main/services/aiden-remote-chat-summaries.test.ts main/services/aiden-remote-chats.test.ts main/services/aiden-remote-chat-progress-authorize.test.ts`.
+      Expected: the three new tests FAIL.
   - Summaries: `"design-chat"` is present.
   - `classify`: it resolves `{}`.
   - Progress: it resolves.
@@ -526,6 +569,7 @@ test("feature-owned chats report not found to progress readers", async () => {
 - [ ] **Step 3: Implement.**
 
 `main/services/aiden-remote-chats.ts`:
+
 1. Add `import { chatSurface } from "../../renderer/shared/chat-visibility.js";`.
 2. In `safeSummaryMetadata`, replace the `meta.botId !== undefined || workspaceId === ASSISTANT_WORKSPACE_ID ||` pair with:
    ```ts
@@ -533,13 +577,14 @@ test("feature-owned chats report not found to progress readers", async () => {
    ```
 3. In `classify`, right after the `if (!metadata) { throw … }` block, add:
    ```ts
-    if (chatSurface(metadata) === "feature") {
-      throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
-    }
+   if (chatSurface(metadata) === "feature") {
+     throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+   }
    ```
 4. `ASSISTANT_WORKSPACE_ID` is still used at `:1856`. Keep that import.
 
 `main/services/aiden-remote-chat-progress-authorize.ts`:
+
 1. Replace the `ASSISTANT_WORKSPACE_ID` / `persistedChatWorkspaceId` imports with `import { chatSurface } from "../../renderer/shared/chat-visibility.js";`.
 2. Change the condition to:
    ```ts
@@ -548,7 +593,7 @@ test("feature-owned chats report not found to progress readers", async () => {
    ```
 
 - [ ] **Step 4: Run them and watch them pass.**
-  Run the same command. Expected: all pass, including "summary pages are transcript-free, deterministic, and exclude reserved chats" and "missing chats and the Assistant workspace report not found" (Assistant behavior is unchanged). Then run `npm run test:aiden-remote`. Expected: pass.
+      Run the same command. Expected: all pass, including "summary pages are transcript-free, deterministic, and exclude reserved chats" and "missing chats and the Assistant workspace report not found" (Assistant behavior is unchanged). Then run `npm run test:aiden-remote`. Expected: pass.
 
 - [ ] **Step 5: Register the tests.**
   1. Append `main/services/aiden-remote-chat-summaries.test.ts main/services/aiden-remote-chats.test.ts main/services/aiden-remote-chat-progress-authorize.test.ts` to `test:chat-visibility`.
@@ -569,11 +614,13 @@ EOF
 ## Task F-3.4: Desktop projections (fork, BTW, empty-chat migration)
 
 **Files:**
+
 - Modify: `main/services/chat-fork-service.ts` (:130-135), `main/services/rpiv-btw/service-core.ts` (:108), `main/services/empty-chat-migration.ts` (:38-47)
 - Test (extend): `main/services/chat-fork-service.test.ts`, `main/services/rpiv-btw/service.test.ts`, `main/services/empty-chat-migration.test.ts`
 - Modify: `package.json` (`test:chat-visibility`)
 
 **Interfaces:**
+
 - Consumes: `chatSurface` (F-3.1); `createChatForkService`, `ChatForkError`, `BtwService`, `isLegacyEmptyWorkspaceChat`.
 - Produces:
   - Fork of a feature chat → `ChatForkError("ineligible")` with no published copy.
@@ -600,7 +647,10 @@ test("feature-owned chats are ineligible for copy and fork", async (t) => {
       return { isAborted: () => false, release: () => undefined };
     },
   };
-  const forks = service(store, { published: (chat) => published.push(chat), startSummary: () => undefined });
+  const forks = service(store, {
+    published: (chat) => published.push(chat),
+    startSummary: () => undefined,
+  });
 
   await rejectsWith(forks.fork({ chatId: owned.id }, recordingCaller), "ineligible");
   await rejectsWith(
@@ -619,6 +669,7 @@ test("feature-owned chats are ineligible for copy and fork", async (t) => {
 ```
 
 In `main/services/rpiv-btw/service.test.ts`:
+
 1. Change the `fixture` signature to `fixture(options: { busy?: boolean; streamDelayMs?: number; chat?: Partial<Chat> } = {})`.
 2. Spread `...options.chat` at the end of the `getChat` result object, and add `import type { Chat } from "../types.js";`.
 3. Append:
@@ -650,8 +701,8 @@ test("the empty-chat sweep never deletes a feature-owned chat", async () => {
 ```
 
 - [ ] **Step 2: Run them and watch them fail.**
-  Run `npx tsx --test main/services/chat-fork-service.test.ts main/services/rpiv-btw/service.test.ts main/services/empty-chat-migration.test.ts`.
-  Expected: the three new tests FAIL.
+      Run `npx tsx --test main/services/chat-fork-service.test.ts main/services/rpiv-btw/service.test.ts main/services/empty-chat-migration.test.ts`.
+      Expected: the three new tests FAIL.
   - Fork: the F-3.2 store guard makes the `ineligible` assertions pass, but `admitted` equals `["default", "default"]`, because the service admits the workspace before copying.
   - BTW: it resolves.
   - Migration: `"design"` is removed.
@@ -661,12 +712,12 @@ test("the empty-chat sweep never deletes a feature-owned chat", async () => {
 `main/services/chat-fork-service.ts`: add `import { chatSurface } from "../../renderer/shared/chat-visibility.js";`. Then insert the following **before** the `if (source.botId)` branch, so a feature chat is refused before any Bot copy path:
 
 ```ts
-        if (chatSurface(source) === "feature") {
-          throw new ChatForkError(
-            "ineligible",
-            "This chat belongs to another Aiden feature and cannot be copied.",
-          );
-        }
+if (chatSurface(source) === "feature") {
+  throw new ChatForkError(
+    "ineligible",
+    "This chat belongs to another Aiden feature and cannot be copied.",
+  );
+}
 ```
 
 The Assistant check below it stays as it is.
@@ -682,17 +733,21 @@ export function isLegacyEmptyWorkspaceChat(
   reservedChatIds: ReadonlySet<string>,
 ): boolean {
   const workspaceId = persistedChatWorkspaceId(chat.workspaceId);
-  return chat.messages.length === 0 && chatSurface(chat) === "regular" &&
+  return (
+    chat.messages.length === 0 &&
+    chatSurface(chat) === "regular" &&
     workspaceIds.has(workspaceId) &&
-    !chat.id.startsWith("telegram-") && !chat.id.startsWith("assistant-") &&
-    !reservedChatIds.has(chat.id);
+    !chat.id.startsWith("telegram-") &&
+    !chat.id.startsWith("assistant-") &&
+    !reservedChatIds.has(chat.id)
+  );
 }
 ```
 
 Replace the `ASSISTANT_WORKSPACE_ID` import with `import { chatSurface } from "../../renderer/shared/chat-visibility.js";`.
 
 - [ ] **Step 4: Run them and watch them pass.**
-  Run the same command. Expected: all pass, including "only zero-message ordinary workspace chats qualify, regardless of title".
+      Run the same command. Expected: all pass, including "only zero-message ordinary workspace chats qualify, regardless of title".
 
 - [ ] **Step 5: Register the tests.**
   1. Append `main/services/chat-fork-service.test.ts main/services/rpiv-btw/service.test.ts main/services/empty-chat-migration.test.ts` to `test:chat-visibility`. They are already assigned to lanes.
@@ -712,6 +767,7 @@ EOF
 ## Task F-3.5: PR A gates
 
 - [ ] **Step 1: Run the narrow and adjacent suites.**
+
   ```bash
   npm run test:chat-visibility
   npm run test:aiden-remote
@@ -720,24 +776,29 @@ EOF
   npm run test:ci:registry
   npm run test:ci-policy
   ```
+
   Expected: every command passes.
 
 - [ ] **Step 2: Run the full lanes for the touched files.**
+
   ```bash
   node scripts/run-ci-tests.mjs --lane core-git --summary
   node scripts/run-ci-tests.mjs --lane runtime-subagents --summary
   node scripts/run-ci-tests.mjs --lane renderer-other --summary
   ```
+
   Expected: green.
 
 - [ ] **Step 3: Run static checks.**
-  `npm run type-check && npm run lint`. Expected: clean.
+      `npm run type-check && npm run lint`. Expected: clean.
 
 - [ ] **Step 4: Run the native contract suites as regression evidence.** There is no wire change, but AGENTS.md requires these when a shared server projection changes.
+
   ```bash
   xcodebuild test -quiet -project ios/AidenOnTheGo.xcodeproj -scheme AidenOnTheGo -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
   (cd android && ./gradlew :app:testDebugUnitTest --stacktrace)
   ```
+
   Expected: pass. Record the counts in the PR description. If a different simulator is installed, list one with `xcrun simctl list devices available`.
 
 - [ ] **Step 5: Write the memory note and open the PR.**
@@ -752,6 +813,7 @@ EOF
      ```
 
 ---
+
 # PR B: Studio Foundation (`feature/studio-foundation`)
 
 Task order inside PR B matters. Routes (F-2.2) must exist before commands (F-2.3) and the sidebar (F-2.4), because TanStack's typed `navigate({ to: "/design" })` requires the route.
@@ -759,20 +821,32 @@ Task order inside PR B matters. Routes (F-2.2) must exist before commands (F-2.3
 ## Task F-1.1: Studio feature flags
 
 **Files:**
+
 - Create: `main/services/studio/feature-flags.ts`
 - Test: `main/services/studio/feature-flags.test.ts`
 - Modify: `package.json` (new `test:studio-foundation`, appended to `test:serial`), `scripts/ci-test-registry.json` (`core-git`)
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces:
+
   ```ts
   export const DESIGN_STUDIO_FEATURE_FLAG = "AIDEN_EXPERIMENTAL_DESIGN_STUDIO";
   export const CREATE_IMAGES_FEATURE_FLAG = "AIDEN_EXPERIMENTAL_CREATE_IMAGES";
-  export function designStudioEnabled(environment?: Readonly<Record<string, string | undefined>>): boolean;
-  export function createImagesEnabled(environment?: Readonly<Record<string, string | undefined>>): boolean;
-  export function studioAssetsEnabled(environment?: Readonly<Record<string, string | undefined>>): boolean;
-  export function studioCapabilities(environment?: Readonly<Record<string, string | undefined>>): { designStudio: boolean; createImages: boolean };
+  export function designStudioEnabled(
+    environment?: Readonly<Record<string, string | undefined>>,
+  ): boolean;
+  export function createImagesEnabled(
+    environment?: Readonly<Record<string, string | undefined>>,
+  ): boolean;
+  export function studioAssetsEnabled(
+    environment?: Readonly<Record<string, string | undefined>>,
+  ): boolean;
+  export function studioCapabilities(environment?: Readonly<Record<string, string | undefined>>): {
+    designStudio: boolean;
+    createImages: boolean;
+  };
   ```
 
 - [ ] **Step 1: Write the failing test** in `main/services/studio/feature-flags.test.ts`. It follows the style of `main/services/devices/feature-flag.test.ts`.
@@ -799,7 +873,10 @@ test("studio features stay off unless their own experimental flag is set", () =>
   });
   for (const value of ["0", "", "yes", "on", "false"]) {
     assert.deepEqual(
-      studioCapabilities({ [DESIGN_STUDIO_FEATURE_FLAG]: value, [CREATE_IMAGES_FEATURE_FLAG]: value }),
+      studioCapabilities({
+        [DESIGN_STUDIO_FEATURE_FLAG]: value,
+        [CREATE_IMAGES_FEATURE_FLAG]: value,
+      }),
       { designStudio: false, createImages: false },
       value,
     );
@@ -814,7 +891,7 @@ test("the shared asset store opens when either studio feature is on", () => {
 ```
 
 - [ ] **Step 2: Run it and watch it fail.**
-  Run `npx tsx --test main/services/studio/feature-flags.test.ts`. Expected: FAIL, `Cannot find module './feature-flags.js'`.
+      Run `npx tsx --test main/services/studio/feature-flags.test.ts`. Expected: FAIL, `Cannot find module './feature-flags.js'`.
 
 - [ ] **Step 3: Implement** `main/services/studio/feature-flags.ts`.
 
@@ -876,10 +953,12 @@ EOF
 ## Task F-1.2: Expose the capabilities to the renderer
 
 **Files:**
+
 - Modify: `main/handlers/app.ts` (:38-53), `renderer/lib/app-capabilities.tsx` (:4-60)
 - Test: `renderer/lib/app-capabilities.test.ts` (new; `renderer-other`)
 
 **Interfaces:**
+
 - Consumes: `studioCapabilities()` (F-1.1).
 - Produces: `AppCapabilities.designStudio: boolean` and `AppCapabilities.createImages: boolean`. Both are `false` in `DISABLED_APP_CAPABILITIES`, and `parseAppCapabilities` accepts only literal `true`.
 
@@ -915,7 +994,7 @@ test("each studio capability is independent of the others", () => {
 ```
 
 - [ ] **Step 2: Run it and watch it fail.**
-  Run `npx tsx --test renderer/lib/app-capabilities.test.ts`. Expected: FAIL. The first assertion sees `undefined !== false` (TypeScript also reports the missing properties).
+      Run `npx tsx --test renderer/lib/app-capabilities.test.ts`. Expected: FAIL. The first assertion sees `undefined !== false` (TypeScript also reports the missing properties).
 
 - [ ] **Step 3: Implement.**
   1. In `renderer/lib/app-capabilities.tsx`, add `designStudio: boolean;` and `createImages: boolean;` to the interface, `designStudio: false,` and `createImages: false,` to `DISABLED_APP_CAPABILITIES`, and `designStudio: record.designStudio === true,` and `createImages: record.createImages === true,` to `parseAppCapabilities`.
@@ -924,7 +1003,7 @@ test("each studio capability is independent of the others", () => {
   `getInfo` imports Electron through `platform.js`, so it is not unit-tested. The end-to-end path is pinned by Playwright in F-5.4.
 
 - [ ] **Step 4: Run it and watch it pass.**
-  Run `npx tsx --test renderer/lib/app-capabilities.test.ts renderer/components/environment-subagents-contract.test.ts`. Expected: pass. The existing contract test builds on `DISABLED_APP_CAPABILITIES`, so it still holds. Then run `npm run type-check`.
+      Run `npx tsx --test renderer/lib/app-capabilities.test.ts renderer/components/environment-subagents-contract.test.ts`. Expected: pass. The existing contract test builds on `DISABLED_APP_CAPABILITIES`, so it still holds. Then run `npm run type-check`.
 
 - [ ] **Step 5: Register the test.**
   1. Append `renderer/lib/app-capabilities.test.ts` to `test:studio-foundation`.
@@ -945,18 +1024,22 @@ EOF
 ## Task F-2.1: Studio path helper and workspace command visibility
 
 **Files:**
+
 - Create: `renderer/shared/studio-routes.ts`
 - Test: `renderer/shared/studio-routes.test.ts` (new; `renderer-other`), `renderer/lib/command-system-core.test.ts` (extend)
 - Modify: `renderer/lib/command-system-core.ts` (`workspaceCommandVisibility`, :41-52)
 
 **Interfaces:**
+
 - Produces:
+
   ```ts
   export type StudioFeature = "designStudio" | "createImages";
   export const STUDIO_ROUTE_ROOTS: Readonly<Record<StudioFeature, "/design" | "/images">>;
   export function studioFeatureForPath(pathname: string): StudioFeature | null;
   export function isStudioPath(pathname: string): boolean;
   ```
+
   `workspaceCommandVisibility(pathname)` returns `{ environment: false, terminal: false }` on studio paths.
 
 - [ ] **Step 1: Write the failing tests.** Create `renderer/shared/studio-routes.test.ts`:
@@ -971,7 +1054,14 @@ test("studio routes match their root and nested paths only", () => {
   assert.equal(studioFeatureForPath("/design/project-1"), "designStudio");
   assert.equal(studioFeatureForPath("/images"), "createImages");
   assert.equal(studioFeatureForPath("/images/workflow-1"), "createImages");
-  for (const pathname of ["/", "/designs", "/imagesx", "/chat/design", "/settings", "/bots/images"]) {
+  for (const pathname of [
+    "/",
+    "/designs",
+    "/imagesx",
+    "/chat/design",
+    "/settings",
+    "/bots/images",
+  ]) {
     assert.equal(studioFeatureForPath(pathname), null, pathname);
     assert.equal(isStudioPath(pathname), false, pathname);
   }
@@ -983,17 +1073,30 @@ Append to `renderer/lib/command-system-core.test.ts`:
 ```ts
 test("studio surfaces hide the Environment and terminal commands", () => {
   for (const pathname of ["/design", "/design/project-1", "/images", "/images/workflow-1"]) {
-    assert.deepEqual(workspaceCommandVisibility(pathname), { environment: false, terminal: false }, pathname);
+    assert.deepEqual(
+      workspaceCommandVisibility(pathname),
+      { environment: false, terminal: false },
+      pathname,
+    );
   }
-  assert.deepEqual(workspaceCommandVisibility("/chat/chat-1"), { environment: true, terminal: true });
-  assert.deepEqual(workspaceCommandVisibility("/settings"), { environment: false, terminal: false });
-  assert.deepEqual(workspaceCommandVisibility("/scheduled"), { environment: true, terminal: false });
+  assert.deepEqual(workspaceCommandVisibility("/chat/chat-1"), {
+    environment: true,
+    terminal: true,
+  });
+  assert.deepEqual(workspaceCommandVisibility("/settings"), {
+    environment: false,
+    terminal: false,
+  });
+  assert.deepEqual(workspaceCommandVisibility("/scheduled"), {
+    environment: true,
+    terminal: false,
+  });
 });
 ```
 
 - [ ] **Step 2: Run them and watch them fail.**
-  Run `npx tsx --test renderer/shared/studio-routes.test.ts renderer/lib/command-system-core.test.ts`.
-  Expected: FAIL.
+      Run `npx tsx --test renderer/shared/studio-routes.test.ts renderer/lib/command-system-core.test.ts`.
+      Expected: FAIL.
   - The module is missing.
   - The new core test fails with `environment: true` for `/design`.
 
@@ -1052,11 +1155,13 @@ EOF
 ## Task F-2.2: Capability-gated lazy routes, chat-layout suppression, placeholder views
 
 **Files:**
+
 - Create: `renderer/main/studio-capability-route.tsx`, `renderer/design/design-route.tsx`, `renderer/images/images-route.tsx`
 - Modify: `renderer/main/router.tsx` (lazy views after :33; routes after :171; tree :185-198), `renderer/main/chat-layout.tsx` (:104, :109-114)
 - Test: `renderer/main/studio-capability-route.test.tsx` (new; `renderer-other`)
 
 **Interfaces:**
+
 - Consumes: `useAppCapabilities` and `AppCapabilitiesProvider` (`renderer/lib/app-capabilities.tsx`), `StudioFeature` and `isStudioPath` (F-2.1), `lazyRouteComponent`, `preloadsWith` (`router.tsx:36-43`), `ScrollArea` and `EmptyState` (`renderer/components/ui.tsx`).
 - Produces:
   - `StudioCapabilityRoute({ feature, children })`.
@@ -1121,17 +1226,23 @@ test("studio routes render none of their feature while its capability is off", a
 });
 
 test("each studio route renders only under its own capability", async () => {
-  assert.match(await render("/design", { designStudio: true, createImages: false }), /design body/u);
+  assert.match(
+    await render("/design", { designStudio: true, createImages: false }),
+    /design body/u,
+  );
   assert.equal(
     (await render("/images", { designStudio: true, createImages: false })).includes("images body"),
     false,
   );
-  assert.match(await render("/images", { designStudio: false, createImages: true }), /images body/u);
+  assert.match(
+    await render("/images", { designStudio: false, createImages: true }),
+    /images body/u,
+  );
 });
 ```
 
 - [ ] **Step 2: Run it and watch it fail.**
-  Run `npx tsx --test renderer/main/studio-capability-route.test.tsx`. Expected: FAIL, `Cannot find module './studio-capability-route'`.
+      Run `npx tsx --test renderer/main/studio-capability-route.test.tsx`. Expected: FAIL, `Cannot find module './studio-capability-route'`.
 
 - [ ] **Step 3: Implement.**
 
@@ -1182,6 +1293,7 @@ export function ImagesRoute(_props: { workflowId?: string }) {
 ```
 
 `renderer/main/router.tsx`:
+
 1. After `BotChatRouteView` (:33), add:
    ```tsx
    const DesignView = lazyRouteComponent(() => import("../design/design-route"), "DesignRoute");
@@ -1251,13 +1363,14 @@ const imagesWorkflowRoute = createRoute({
 4. Add `designRoute, designProjectRoute, imagesRoute, imagesWorkflowRoute,` to the `chatLayoutRoute.addChildren([...])` list, after `hostNewChatRoute`.
 
 `renderer/main/chat-layout.tsx`:
+
 1. Import `isStudioPath` from `../shared/studio-routes`.
 2. After `const onRemoteHost = …` (:36), add `const studioSurface = isStudioPath(pathname);`.
 3. Change `<EnvironmentWorkbench suppressed={onRemoteHost}>` to `<EnvironmentWorkbench suppressed={onRemoteHost || studioSurface}>`.
 4. Add `studioSurface ||` to the `TerminalDrawer` exclusion, after `onRemoteHost ||`.
 
 - [ ] **Step 4: Run it and watch it pass.**
-  Run `npx tsx --test renderer/main/studio-capability-route.test.tsx`. Expected: 2 tests pass. Then run `npm run type-check && npm run build && npm run check:bundle-budget`.
+      Run `npx tsx --test renderer/main/studio-capability-route.test.tsx`. Expected: 2 tests pass. Then run `npm run type-check && npm run build && npm run check:bundle-budget`.
   - Expected: green.
   - Expected: `build/renderer/assets/` contains separate `design-route-*.js` and `images-route-*.js` chunks. Check with `ls build/renderer/assets | grep -E "design-route|images-route"`.
   - Record the bundle-budget numbers in the PR.
@@ -1284,10 +1397,12 @@ EOF
 ## Task F-2.3: Palette commands `design.open` and `images.open`
 
 **Files:**
+
 - Modify: `renderer/shared/keybindings.ts` (`COMMAND_IDS` :5-33, `CommandDefinition` :39-54, `COMMANDS` :58-301), `renderer/lib/command-system-core.ts` (new `paletteCommands`), `renderer/components/command-palette.tsx` (`rootCommands`, :162-169), `renderer/main/root-view.tsx` (`RootContent`, next to `settings.open` at :159)
 - Test: `renderer/lib/command-system-core.test.ts` (extend)
 
 **Interfaces:**
+
 - Consumes: `StudioFeature` (F-2.1) and `AppCapabilities` (F-1.2).
 - Produces:
   - `CommandDefinition.requiresCapability?: StudioFeature`
@@ -1306,7 +1421,10 @@ test("palette omits studio commands while their capability is off", () => {
   assert.deepEqual(studio({ designStudio: false, createImages: false }), []);
   assert.deepEqual(studio({ designStudio: true, createImages: false }), ["design.open"]);
   assert.deepEqual(studio({ designStudio: false, createImages: true }), ["images.open"]);
-  assert.deepEqual(studio({ designStudio: true, createImages: true }), ["design.open", "images.open"]);
+  assert.deepEqual(studio({ designStudio: true, createImages: true }), [
+    "design.open",
+    "images.open",
+  ]);
   // With both flags off, nothing capability-gated remains in the palette.
   assert.ok(
     paletteCommands({ designStudio: false, createImages: false }).every(
@@ -1325,11 +1443,12 @@ test("studio commands never reserve a shortcut", () => {
 `effectiveBindings(overrides: unknown, legacy?)` (`keybindings.ts:751`) is already imported by this file and called the same way at `:70`.
 
 - [ ] **Step 2: Run it and watch it fail.**
-  Run `npx tsx --test renderer/lib/command-system-core.test.ts`. Expected: FAIL, because `paletteCommands` is not exported yet (`is not a function` / missing export).
+      Run `npx tsx --test renderer/lib/command-system-core.test.ts`. Expected: FAIL, because `paletteCommands` is not exported yet (`is not a function` / missing export).
 
 - [ ] **Step 3: Implement.**
 
 `renderer/shared/keybindings.ts`:
+
 1. Add `import type { StudioFeature } from "./studio-routes.js";`.
 2. Append `"design.open",` and `"images.open",` to `COMMAND_IDS` after `"settings.open",`.
 3. Add this optional field to `CommandDefinition`:
@@ -1386,35 +1505,35 @@ export function paletteCommands(
 `renderer/components/command-palette.tsx`: import `paletteCommands` from `../lib/command-system-core`, and change `rootCommands` to:
 
 ```tsx
-  const rootCommands = React.useMemo(() => {
-    const order = new Map(recentCommands.map((id, index) => [id, index]));
-    return paletteCommands(capabilities).sort(
-      (left, right) =>
-        (order.get(left.id) ?? Number.POSITIVE_INFINITY) -
-        (order.get(right.id) ?? Number.POSITIVE_INFINITY),
-    );
-  }, [capabilities, recentCommands]);
+const rootCommands = React.useMemo(() => {
+  const order = new Map(recentCommands.map((id, index) => [id, index]));
+  return paletteCommands(capabilities).sort(
+    (left, right) =>
+      (order.get(left.id) ?? Number.POSITIVE_INFINITY) -
+      (order.get(right.id) ?? Number.POSITIVE_INFINITY),
+  );
+}, [capabilities, recentCommands]);
 ```
 
 `renderer/main/root-view.tsx`: import `useAppCapabilities` from `../lib/app-capabilities`. In `RootContent`, add `const capabilities = useAppCapabilities();` near the other hooks. Then, after the `settings.open` handler, add:
 
 ```tsx
-  const openStudio = React.useCallback(
-    (to: "/design" | "/images") => {
-      if (navigationBlockedReason) {
-        toast.info(navigationBlockedReason);
-        return;
-      }
-      void navigate({ to });
-    },
-    [navigate, navigationBlockedReason],
-  );
-  useCommandHandler("design.open", () => openStudio("/design"), capabilities.designStudio);
-  useCommandHandler("images.open", () => openStudio("/images"), capabilities.createImages);
+const openStudio = React.useCallback(
+  (to: "/design" | "/images") => {
+    if (navigationBlockedReason) {
+      toast.info(navigationBlockedReason);
+      return;
+    }
+    void navigate({ to });
+  },
+  [navigate, navigationBlockedReason],
+);
+useCommandHandler("design.open", () => openStudio("/design"), capabilities.designStudio);
+useCommandHandler("images.open", () => openStudio("/images"), capabilities.createImages);
 ```
 
 - [ ] **Step 4: Run it and watch it pass.**
-  Run `npx tsx --test renderer/lib/command-system-core.test.ts renderer/shared/keybindings.test.ts main/services/native-menu-command-contract.test.ts`. Expected: pass. Then run `npm run test:command-system && npm run type-check`.
+      Run `npx tsx --test renderer/lib/command-system-core.test.ts renderer/shared/keybindings.test.ts main/services/native-menu-command-contract.test.ts`. Expected: pass. Then run `npm run test:command-system && npm run type-check`.
 
 - [ ] **Step 5: Register.** The test files are already registered (`renderer/lib/command-system-core.test.ts` was added to `test:studio-foundation` in F-2.1). Run `npm run test:ci:registry`.
 
@@ -1432,13 +1551,16 @@ EOF
 ## Task F-2.4: Sidebar primary nav with Design and Images rows
 
 **Files:**
+
 - Create: `renderer/components/sidebar-primary-nav.tsx`
 - Modify: `renderer/components/chat-sidebar.tsx` (replace the block at :1662-1684, add the import), `renderer/components/chat-sidebar.test.tsx` (**delete** the source-grep tests "sidebar places primary actions above the unified workspace outline" (:17-31) and "new agent uses the same sidebar row style as scheduled" (:33-39). Their behavior moves to the render test below and to Playwright F-5.4.)
 - Test: `renderer/components/sidebar-primary-nav.test.tsx` (new; `renderer-other`)
 
 **Interfaces:**
+
 - Consumes: `SidebarListItem` (`ui.tsx:801`), `BotSidebarIcon` (`bot-avatar.tsx:230`), `studioFeatureForPath` (F-2.1), and `AppCapabilities` (F-1.2).
 - Produces:
+
   ```ts
   export type SidebarPrimaryDestination = "/scheduled" | "/bots" | "/design" | "/images";
   export interface SidebarPrimaryNavProps {
@@ -1490,9 +1612,14 @@ test("with both flags off the nav is exactly New Agent, Scheduled, Bots", () => 
   const { label, navCount, rows } = render();
   assert.equal(navCount, 1);
   assert.equal(label, "Primary");
-  assert.deepEqual(rows.map(({ title }) => title), ["New Agent", "Scheduled", "Bots"]);
   assert.deepEqual(
-    render({ capabilities: { bots: false, designStudio: false, createImages: false } }).rows.map(({ title }) => title),
+    rows.map(({ title }) => title),
+    ["New Agent", "Scheduled", "Bots"],
+  );
+  assert.deepEqual(
+    render({ capabilities: { bots: false, designStudio: false, createImages: false } }).rows.map(
+      ({ title }) => title,
+    ),
     ["New Agent", "Scheduled"],
   );
 });
@@ -1516,7 +1643,9 @@ test("each studio row appears only with its own capability, after the existing r
 
 test("the current row follows the path, including nested studio routes", () => {
   const current = (pathname: string) =>
-    render({ pathname, capabilities: ALL }).rows.filter(({ current }) => current === "page").map(({ title }) => title);
+    render({ pathname, capabilities: ALL })
+      .rows.filter(({ current }) => current === "page")
+      .map(({ title }) => title);
   assert.deepEqual(current("/design"), ["Design"]);
   assert.deepEqual(current("/design/project-1"), ["Design"]);
   assert.deepEqual(current("/images/workflow-1"), ["Images"]);
@@ -1527,12 +1656,15 @@ test("the current row follows the path, including nested studio routes", () => {
 
 test("New Agent reflects its disabled state and nothing else is disabled", () => {
   const { rows } = render({ newAgentDisabled: true, capabilities: ALL });
-  assert.deepEqual(rows.filter(({ disabled }) => disabled).map(({ title }) => title), ["New Agent"]);
+  assert.deepEqual(
+    rows.filter(({ disabled }) => disabled).map(({ title }) => title),
+    ["New Agent"],
+  );
 });
 ```
 
 - [ ] **Step 3: Run it and watch it fail.**
-  Run `npx tsx --test renderer/components/sidebar-primary-nav.test.tsx`. Expected: FAIL, `Cannot find module './sidebar-primary-nav'`.
+      Run `npx tsx --test renderer/components/sidebar-primary-nav.test.tsx`. Expected: FAIL, `Cannot find module './sidebar-primary-nav'`.
 
 - [ ] **Step 4: Implement** `renderer/components/sidebar-primary-nav.tsx`.
 
@@ -1606,24 +1738,25 @@ export function SidebarPrimaryNav({
 ```
 
 In `renderer/components/chat-sidebar.tsx`:
+
 1. Import `SidebarPrimaryNav`.
 2. Replace the `<div className="flex flex-col gap-0.5 px-2.5 pb-2">…</div>` block (:1662-1684) with:
 
 ```tsx
-        <SidebarPrimaryNav
-          pathname={pathname}
-          capabilities={capabilities}
-          newAgentDisabled={!activeId || appendReconciliationRequired}
-          onNewAgent={() => void newAgent()}
-          onNavigate={(to) => void navigate({ to })}
-        />
+<SidebarPrimaryNav
+  pathname={pathname}
+  capabilities={capabilities}
+  newAgentDisabled={!activeId || appendReconciliationRequired}
+  onNewAgent={() => void newAgent()}
+  onNavigate={(to) => void navigate({ to })}
+/>
 ```
 
 3. Remove `Clock3`, `SquarePen` and `BotSidebarIcon` from the `chat-sidebar.tsx` imports only if `npm run lint` reports them unused.
 4. Delete the two source-grep tests named above from `chat-sidebar.test.tsx`.
 
 - [ ] **Step 5: Run it and watch it pass.**
-  Run `npx tsx --test renderer/components/sidebar-primary-nav.test.tsx renderer/components/chat-sidebar.test.tsx`. Expected: pass. Then run `npm run test:sidebar && npm run type-check && npm run lint`.
+      Run `npx tsx --test renderer/components/sidebar-primary-nav.test.tsx renderer/components/chat-sidebar.test.tsx`. Expected: pass. Then run `npm run test:sidebar && npm run type-check && npm run lint`.
 
 - [ ] **Step 6: Register the test.**
   1. Append `renderer/components/sidebar-primary-nav.test.tsx` to `test:studio-foundation`.
@@ -1647,18 +1780,36 @@ EOF
 ## Task F-4.1: One privileged-scheme registration for `aiden-genui` and `aiden-asset`
 
 **Files:**
+
 - Create: `main/services/custom-schemes-core.ts` (pure), `main/services/custom-schemes.ts` (Electron)
 - Modify: `main/services/generative-ui-protocol.ts` (delete `registerGenerativeUiScheme` and `schemesRegistered`, :12, :31-46), `main/index.ts` (imports at :99-102; the call at :162)
 - Test: `main/services/custom-schemes-core.test.ts` (new; `core-git`)
 
 **Interfaces:**
+
 - Consumes: `GENERATIVE_UI_PROTOCOL_SCHEME` (`renderer/shared/generative-ui.ts:39`) and `studioAssetsEnabled()` (F-1.1).
 - Produces:
+
   ```ts
   export const STUDIO_ASSET_SCHEME = "aiden-asset";
-  export interface CustomSchemeDefinition { scheme: string; privileges: { standard: boolean; secure: boolean; bypassCSP: boolean; allowServiceWorkers: boolean; supportFetchAPI: boolean; corsEnabled: boolean; stream: boolean } }
-  export function customSchemePrivileges(options: { studioAssets: boolean }): CustomSchemeDefinition[];
-  export function createCustomSchemeRegistrar(target: { registerSchemesAsPrivileged(schemes: CustomSchemeDefinition[]): void }): (options: { studioAssets: boolean }) => boolean;
+  export interface CustomSchemeDefinition {
+    scheme: string;
+    privileges: {
+      standard: boolean;
+      secure: boolean;
+      bypassCSP: boolean;
+      allowServiceWorkers: boolean;
+      supportFetchAPI: boolean;
+      corsEnabled: boolean;
+      stream: boolean;
+    };
+  }
+  export function customSchemePrivileges(options: {
+    studioAssets: boolean;
+  }): CustomSchemeDefinition[];
+  export function createCustomSchemeRegistrar(target: {
+    registerSchemesAsPrivileged(schemes: CustomSchemeDefinition[]): void;
+  }): (options: { studioAssets: boolean }) => boolean;
   export const registerCustomSchemes: (options: { studioAssets: boolean }) => boolean; // custom-schemes.ts
   ```
 
@@ -1674,7 +1825,10 @@ import {
 } from "./custom-schemes-core.js";
 
 test("only aiden-genui is privileged with both flags off", () => {
-  assert.deepEqual(customSchemePrivileges({ studioAssets: false }).map(({ scheme }) => scheme), ["aiden-genui"]);
+  assert.deepEqual(
+    customSchemePrivileges({ studioAssets: false }).map(({ scheme }) => scheme),
+    ["aiden-genui"],
+  );
 });
 
 test("one registration call covers both schemes and later calls are ignored", () => {
@@ -1702,7 +1856,7 @@ test("no custom scheme can bypass CSP, run service workers, or be fetched cross-
 ```
 
 - [ ] **Step 2: Run it and watch it fail.**
-  Run `npx tsx --test main/services/custom-schemes-core.test.ts`. Expected: FAIL, the module is missing.
+      Run `npx tsx --test main/services/custom-schemes-core.test.ts`. Expected: FAIL, the module is missing.
 
 - [ ] **Step 3: Implement.**
 
@@ -1737,7 +1891,9 @@ const LOCAL_CONTENT_PRIVILEGES: CustomSchemeDefinition["privileges"] = Object.fr
 });
 
 /** Every custom scheme Aiden registers. Electron accepts exactly one call, before app ready. */
-export function customSchemePrivileges(options: { studioAssets: boolean }): CustomSchemeDefinition[] {
+export function customSchemePrivileges(options: {
+  studioAssets: boolean;
+}): CustomSchemeDefinition[] {
   return [
     { scheme: GENERATIVE_UI_PROTOCOL_SCHEME, privileges: { ...LOCAL_CONTENT_PRIVILEGES } },
     ...(options.studioAssets
@@ -1772,6 +1928,7 @@ export const registerCustomSchemes = createCustomSchemeRegistrar(protocol);
 `main/services/generative-ui-protocol.ts`: delete `let schemesRegistered = false;` and the whole `registerGenerativeUiScheme` function. `registerGenerativeUiProtocol` is unchanged.
 
 `main/index.ts`:
+
 1. Remove `registerGenerativeUiScheme` from the `generative-ui-protocol.js` import.
 2. Add `import { registerCustomSchemes } from "./services/custom-schemes.js";` and `import { studioAssetsEnabled } from "./services/studio/feature-flags.js";`.
 3. Replace line 162 `registerGenerativeUiScheme();` with `registerCustomSchemes({ studioAssets: studioAssetsEnabled() });`.
@@ -1779,7 +1936,7 @@ export const registerCustomSchemes = createCustomSchemeRegistrar(protocol);
 The privileges for `aiden-genui` are unchanged. The previously omitted `bypassCSP` and `allowServiceWorkers` default to `false` in Electron.
 
 - [ ] **Step 4: Run it and watch it pass.**
-  Run `npx tsx --test main/services/custom-schemes-core.test.ts main/services/generative-ui-protocol.test.ts`. Expected: pass. Then run `grep -rn "registerSchemesAsPrivileged" main --include=*.ts | grep -v test`. Expected: exactly one hit, in `custom-schemes-core.ts`. Finally run `npm run type-check`.
+      Run `npx tsx --test main/services/custom-schemes-core.test.ts main/services/generative-ui-protocol.test.ts`. Expected: pass. Then run `grep -rn "registerSchemesAsPrivileged" main --include=*.ts | grep -v test`. Expected: exactly one hit, in `custom-schemes-core.ts`. Finally run `npm run type-check`.
 
 - [ ] **Step 5: Register the test.**
   1. Append `main/services/custom-schemes-core.test.ts` to `test:studio-foundation`.
@@ -1802,31 +1959,65 @@ EOF
 ## Task F-4.2: Studio asset contract and image validation
 
 **Files:**
+
 - Create: `main/services/studio-assets/contract.ts`, `main/services/studio-assets/image-validation-core.ts`, `main/services/studio-assets/test-fixture.ts` (test helper, not a test file)
 - Test: `main/services/studio-assets/image-validation-core.test.ts` (new; `core-git`)
 
 **Interfaces:**
+
 - Consumes: `displayImageDimensions(bytes: Buffer, mimeType: string)`, `validateDisplayImageDimensions(bytes: Buffer, mimeType: string, name: string)`, `MAX_DISPLAY_IMAGE_DIMENSION` and `MAX_DISPLAY_IMAGE_PIXELS` (`main/services/display-image-extension.ts:17-18, 326, 364`).
 - Produces (`contract.ts`):
+
   ```ts
   export type StudioAssetMediaType = "image/png" | "image/jpeg" | "image/webp";
   export type StudioAssetThumbnailEdge = 256 | 512;
   export type StudioAssetRendition = "original" | "thumb-256" | "thumb-512";
   export const STUDIO_ASSET_HOLDER_KINDS: readonly ["design", "images-workflow", "images-run"];
-  export interface StudioAssetHolder { kind: (typeof STUDIO_ASSET_HOLDER_KINDS)[number]; id: string }
-  export interface StudioAssetRecord { assetId: string; mediaType: StudioAssetMediaType; bytes: number; width: number; height: number; createdAt: number }
-  export interface StudioAssetLimits { maxAssetBytes: number; maxTotalBytes: number; maxAssets: number; maxEdge: number; maxPixels: number; gcGraceMs: number }
+  export interface StudioAssetHolder {
+    kind: (typeof STUDIO_ASSET_HOLDER_KINDS)[number];
+    id: string;
+  }
+  export interface StudioAssetRecord {
+    assetId: string;
+    mediaType: StudioAssetMediaType;
+    bytes: number;
+    width: number;
+    height: number;
+    createdAt: number;
+  }
+  export interface StudioAssetLimits {
+    maxAssetBytes: number;
+    maxTotalBytes: number;
+    maxAssets: number;
+    maxEdge: number;
+    maxPixels: number;
+    gcGraceMs: number;
+  }
   export const STUDIO_ASSET_LIMITS: Readonly<StudioAssetLimits>;
-  export type StudioAssetErrorCode = "invalid_image" | "too_large" | "quota" | "not_found" | "invalid_holder" | "unavailable";
-  export class StudioAssetError extends Error { readonly code: StudioAssetErrorCode }
+  export type StudioAssetErrorCode =
+    | "invalid_image"
+    | "too_large"
+    | "quota"
+    | "not_found"
+    | "invalid_holder"
+    | "unavailable";
+  export class StudioAssetError extends Error {
+    readonly code: StudioAssetErrorCode;
+  }
   export function isStudioAssetId(value: unknown): value is string;
-  export function holderKey(holder: StudioAssetHolder): string;      // "design:<id>"
+  export function holderKey(holder: StudioAssetHolder): string; // "design:<id>"
   export function parseHolderKey(key: string): StudioAssetHolder;
   ```
+
   `image-validation-core.ts` exports:
+
   ```ts
   export function sniffStudioImageType(bytes: Uint8Array): StudioAssetMediaType | undefined;
-  export function validateStudioImage(bytes: Uint8Array, declaredMimeType: string | undefined, limits?: Pick<StudioAssetLimits, "maxEdge" | "maxPixels">): { mediaType: StudioAssetMediaType; width: number; height: number };
+  export function validateStudioImage(
+    bytes: Uint8Array,
+    declaredMimeType: string | undefined,
+    limits?: Pick<StudioAssetLimits, "maxEdge" | "maxPixels">,
+  ): { mediaType: StudioAssetMediaType; width: number; height: number };
   ```
 
 - [ ] **Step 1: Create the test fixture helper** `main/services/studio-assets/test-fixture.ts`.
@@ -1895,17 +2086,38 @@ const code = (expected: StudioAssetError["code"]) => (error: unknown) =>
 test("magic bytes decide the type; a mismatched declaration is rejected", () => {
   const png = pngBytes(640, 480);
   assert.equal(sniffStudioImageType(png), "image/png");
-  assert.deepEqual(validateStudioImage(png, "image/png"), { mediaType: "image/png", width: 640, height: 480 });
-  assert.deepEqual(validateStudioImage(png, undefined), { mediaType: "image/png", width: 640, height: 480 });
+  assert.deepEqual(validateStudioImage(png, "image/png"), {
+    mediaType: "image/png",
+    width: 640,
+    height: 480,
+  });
+  assert.deepEqual(validateStudioImage(png, undefined), {
+    mediaType: "image/png",
+    width: 640,
+    height: 480,
+  });
   assert.throws(() => validateStudioImage(png, "image/jpeg"), code("invalid_image"));
-  assert.equal(sniffStudioImageType(new TextEncoder().encode("<svg xmlns='http://www.w3.org/2000/svg'/>")), undefined);
-  assert.throws(() => validateStudioImage(new TextEncoder().encode("GIF89a"), "image/gif"), code("invalid_image"));
+  assert.equal(
+    sniffStudioImageType(new TextEncoder().encode("<svg xmlns='http://www.w3.org/2000/svg'/>")),
+    undefined,
+  );
+  assert.throws(
+    () => validateStudioImage(new TextEncoder().encode("GIF89a"), "image/gif"),
+    code("invalid_image"),
+  );
 });
 
 test("a recognized signature with broken structure is rejected", () => {
   const truncated = pngBytes(10, 10).slice(0, 40);
   assert.throws(() => validateStudioImage(truncated, "image/png"), code("invalid_image"));
-  const fakeWebp = new Uint8Array([...new TextEncoder().encode("RIFF"), 4, 0, 0, 0, ...new TextEncoder().encode("WEBPVP8 ")]);
+  const fakeWebp = new Uint8Array([
+    ...new TextEncoder().encode("RIFF"),
+    4,
+    0,
+    0,
+    0,
+    ...new TextEncoder().encode("WEBPVP8 "),
+  ]);
   assert.equal(sniffStudioImageType(fakeWebp), "image/webp");
   assert.throws(() => validateStudioImage(fakeWebp, "image/webp"), code("invalid_image"));
 });
@@ -1914,7 +2126,8 @@ test("oversize dimensions are rejected before any decode", () => {
   assert.throws(() => validateStudioImage(pngBytes(20_000, 2), "image/png"), code("too_large"));
   assert.throws(() => validateStudioImage(pngBytes(5_000, 5_000), "image/png"), code("too_large"));
   assert.throws(
-    () => validateStudioImage(pngBytes(300, 300), "image/png", { maxEdge: 256, maxPixels: 1_000_000 }),
+    () =>
+      validateStudioImage(pngBytes(300, 300), "image/png", { maxEdge: 256, maxPixels: 1_000_000 }),
     code("too_large"),
   );
 });
@@ -1935,14 +2148,17 @@ test("holder keys round-trip the ADR strings and reject unsafe holders", () => {
 ```
 
 - [ ] **Step 3: Run it and watch it fail.**
-  Run `npx tsx --test main/services/studio-assets/image-validation-core.test.ts`. Expected: FAIL, the modules are missing.
+      Run `npx tsx --test main/services/studio-assets/image-validation-core.test.ts`. Expected: FAIL, the modules are missing.
 
 - [ ] **Step 4: Implement.**
 
 `main/services/studio-assets/contract.ts`:
 
 ```ts
-import { MAX_DISPLAY_IMAGE_DIMENSION, MAX_DISPLAY_IMAGE_PIXELS } from "../display-image-extension.js";
+import {
+  MAX_DISPLAY_IMAGE_DIMENSION,
+  MAX_DISPLAY_IMAGE_PIXELS,
+} from "../display-image-extension.js";
 
 export type StudioAssetMediaType = "image/png" | "image/jpeg" | "image/webp";
 export type StudioAssetThumbnailEdge = 256 | 512;
@@ -2023,7 +2239,10 @@ export function holderKey(holder: StudioAssetHolder): string {
 
 export function parseHolderKey(key: string): StudioAssetHolder {
   const separator = key.indexOf(":");
-  const holder = { kind: key.slice(0, separator), id: key.slice(separator + 1) } as StudioAssetHolder;
+  const holder = {
+    kind: key.slice(0, separator),
+    id: key.slice(separator + 1),
+  } as StudioAssetHolder;
   holderKey(holder);
   return holder;
 }
@@ -2032,7 +2251,10 @@ export function parseHolderKey(key: string): StudioAssetHolder {
 `main/services/studio-assets/image-validation-core.ts`:
 
 ```ts
-import { displayImageDimensions, validateDisplayImageDimensions } from "../display-image-extension.js";
+import {
+  displayImageDimensions,
+  validateDisplayImageDimensions,
+} from "../display-image-extension.js";
 import {
   STUDIO_ASSET_LIMITS,
   StudioAssetError,
@@ -2048,9 +2270,12 @@ function ascii(bytes: Uint8Array, start: number, end: number): string {
 
 /** Content decides the type; extensions and declared MIME types never do. */
 export function sniffStudioImageType(bytes: Uint8Array): StudioAssetMediaType | undefined {
-  if (bytes.length >= 8 && PNG_SIGNATURE.every((byte, index) => bytes[index] === byte)) return "image/png";
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
-  if (bytes.length >= 12 && ascii(bytes, 0, 4) === "RIFF" && ascii(bytes, 8, 12) === "WEBP") return "image/webp";
+  if (bytes.length >= 8 && PNG_SIGNATURE.every((byte, index) => bytes[index] === byte))
+    return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
+    return "image/jpeg";
+  if (bytes.length >= 12 && ascii(bytes, 0, 4) === "RIFF" && ascii(bytes, 8, 12) === "WEBP")
+    return "image/webp";
   return undefined;
 }
 
@@ -2064,8 +2289,15 @@ export function validateStudioImage(
     throw new StudioAssetError("invalid_image", "Only PNG, JPEG and WebP images are supported.");
   }
   const declared = declaredMimeType?.split(";", 1)[0]?.trim().toLowerCase();
-  if (declared !== undefined && declared !== mediaType && !(declared === "image/jpg" && mediaType === "image/jpeg")) {
-    throw new StudioAssetError("invalid_image", "The declared image type does not match its contents.");
+  if (
+    declared !== undefined &&
+    declared !== mediaType &&
+    !(declared === "image/jpg" && mediaType === "image/jpeg")
+  ) {
+    throw new StudioAssetError(
+      "invalid_image",
+      "The declared image type does not match its contents.",
+    );
   }
   const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const dimensions = displayImageDimensions(buffer, mediaType);
@@ -2112,17 +2344,29 @@ EOF
 ## Task F-4.3: Content-addressed store with holder retention and GC
 
 **Files:**
+
 - Create: `main/services/studio-assets/store.ts`
 - Test: `main/services/studio-assets/store.test.ts` (new; `core-git`)
 
 **Interfaces:**
+
 - Consumes: `writeFileAtomic` (`main/services/durable-fs.ts:77`), `DatabaseSync` (`node:sqlite`), and F-4.2's contract and validation.
 - Produces:
+
   ```ts
   export interface StudioAssetThumbnailer {
-    render(input: { bytes: Uint8Array; mediaType: StudioAssetMediaType; edge: StudioAssetThumbnailEdge }): Promise<{ bytes: Uint8Array; width: number; height: number }>;
+    render(input: {
+      bytes: Uint8Array;
+      mediaType: StudioAssetMediaType;
+      edge: StudioAssetThumbnailEdge;
+    }): Promise<{ bytes: Uint8Array; width: number; height: number }>;
   }
-  export interface StudioAssetStoreOptions { root: () => string; thumbnailer: StudioAssetThumbnailer; now?: () => number; limits?: Partial<StudioAssetLimits> }
+  export interface StudioAssetStoreOptions {
+    root: () => string;
+    thumbnailer: StudioAssetThumbnailer;
+    now?: () => number;
+    limits?: Partial<StudioAssetLimits>;
+  }
   export class StudioAssetStore {
     constructor(options: StudioAssetStoreOptions);
     initialize(): Promise<void>;
@@ -2130,7 +2374,10 @@ EOF
     put(input: { bytes: Uint8Array; declaredMimeType?: string }): Promise<StudioAssetRecord>;
     get(assetId: string): StudioAssetRecord | undefined;
     read(assetId: string): Promise<{ record: StudioAssetRecord; bytes: Uint8Array }>;
-    thumbnail(assetId: string, edge: StudioAssetThumbnailEdge): Promise<{ bytes: Uint8Array; mediaType: StudioAssetMediaType }>;
+    thumbnail(
+      assetId: string,
+      edge: StudioAssetThumbnailEdge,
+    ): Promise<{ bytes: Uint8Array; mediaType: StudioAssetMediaType }>;
     retain(holder: StudioAssetHolder, assetIds: readonly string[]): void;
     release(holder: StudioAssetHolder, assetIds: readonly string[]): void;
     releaseAllForHolder(holder: StudioAssetHolder): number;
@@ -2162,7 +2409,12 @@ async function fixture(t: TestContext, limits: Partial<StudioAssetLimits> = {}) 
   let now = 1_000_000;
   const thumbs = fakeThumbnailer();
   const open = async () => {
-    const store = new StudioAssetStore({ root: () => root, thumbnailer: thumbs.thumbnailer, now: () => now, limits });
+    const store = new StudioAssetStore({
+      root: () => root,
+      thumbnailer: thumbs.thumbnailer,
+      now: () => now,
+      limits,
+    });
     await store.initialize();
     t.after(() => store.close());
     return store;
@@ -2178,7 +2430,9 @@ async function fixture(t: TestContext, limits: Partial<StudioAssetLimits> = {}) 
     },
     async blobFiles() {
       const shards = await fs.readdir(path.join(root, "blobs"));
-      return (await Promise.all(shards.map((shard) => fs.readdir(path.join(root, "blobs", shard))))).flat();
+      return (
+        await Promise.all(shards.map((shard) => fs.readdir(path.join(root, "blobs", shard))))
+      ).flat();
     },
   };
 }
@@ -2201,7 +2455,10 @@ test("put stores validated bytes once and deduplicates identical content", async
 
 test("rejected images write nothing", async (t) => {
   const f = await fixture(t, { maxAssetBytes: 1_000 });
-  await assert.rejects(f.store.put({ bytes: new TextEncoder().encode("not an image") }), code("invalid_image"));
+  await assert.rejects(
+    f.store.put({ bytes: new TextEncoder().encode("not an image") }),
+    code("invalid_image"),
+  );
   await assert.rejects(f.store.put({ bytes: pngBytes(20_000, 2) }), code("too_large"));
   await assert.rejects(f.store.put({ bytes: new Uint8Array(1_001) }), code("too_large"));
   assert.deepEqual(f.store.usage(), { assets: 0, bytes: 0 });
@@ -2223,7 +2480,11 @@ test("only unheld assets past the grace period are collected, across a restart",
   assert.deepEqual(restarted.holders(held.assetId), [{ kind: "design", id: "project-1" }]);
 
   restarted.release({ kind: "design", id: "project-1" }, [held.assetId]);
-  assert.equal((await restarted.collectGarbage()).deletedAssets, 0, "a fresh release is still within grace");
+  assert.equal(
+    (await restarted.collectGarbage()).deletedAssets,
+    0,
+    "a fresh release is still within grace",
+  );
   f.advance(2 * HOUR);
   assert.equal((await restarted.collectGarbage()).deletedAssets, 1);
   assert.deepEqual(await f.blobFiles(), []);
@@ -2231,7 +2492,9 @@ test("only unheld assets past the grace period are collected, across a restart",
 
 test("holders are independent; releaseAll and replace change only their own holds", async (t) => {
   const f = await fixture(t);
-  const [a, b, c] = await Promise.all([1, 2, 3].map((seed) => f.store.put({ bytes: pngBytes(10, 10, seed) })));
+  const [a, b, c] = await Promise.all(
+    [1, 2, 3].map((seed) => f.store.put({ bytes: pngBytes(10, 10, seed) })),
+  );
   const workflow = { kind: "images-workflow", id: "wf-1" } as const;
   const run = { kind: "images-run", id: "run-1" } as const;
   f.store.retain(workflow, [a!.assetId, b!.assetId]);
@@ -2255,7 +2518,10 @@ test("retain is atomic and refuses unknown assets and unsafe holders", async (t)
     code("not_found"),
   );
   assert.deepEqual(f.store.holders(a.assetId), []);
-  assert.throws(() => f.store.retain({ kind: "design", id: "../x" }, [a.assetId]), code("invalid_holder"));
+  assert.throws(
+    () => f.store.retain({ kind: "design", id: "../x" }, [a.assetId]),
+    code("invalid_holder"),
+  );
 });
 
 test("a blob written without its row is swept on restart", async (t) => {
@@ -2295,14 +2561,17 @@ test("thumbnails render once, are cached, and fall back to the original", async 
 
   f.thumbs.failNext();
   const fallback = await f.store.thumbnail(large.assetId, 512);
-  assert.deepEqual(Buffer.from(fallback.bytes), Buffer.from((await f.store.read(large.assetId)).bytes));
+  assert.deepEqual(
+    Buffer.from(fallback.bytes),
+    Buffer.from((await f.store.read(large.assetId)).bytes),
+  );
   await f.store.thumbnail(large.assetId, 512);
   assert.deepEqual(f.thumbs.calls, [256, 512, 512], "a failed render is not cached");
 });
 ```
 
 - [ ] **Step 2: Run it and watch it fail.**
-  Run `npx tsx --test main/services/studio-assets/store.test.ts`. Expected: FAIL, `Cannot find module './store.js'`.
+      Run `npx tsx --test main/services/studio-assets/store.test.ts`. Expected: FAIL, `Cannot find module './store.js'`.
 
 - [ ] **Step 3: Implement** `main/services/studio-assets/store.ts`, at about 280 lines.
 
@@ -2396,12 +2665,19 @@ export class StudioAssetStore {
     await fs.mkdir(path.join(root, "thumbs"), { recursive: true, mode: 0o700 });
     const db = new DatabaseSync(path.join(root, "assets-v1.sqlite"));
     try {
-      db.exec("PRAGMA busy_timeout=100; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
-      const { user_version: version } = db.prepare("PRAGMA user_version").get() as { user_version: number };
+      db.exec(
+        "PRAGMA busy_timeout=100; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;",
+      );
+      const { user_version: version } = db.prepare("PRAGMA user_version").get() as {
+        user_version: number;
+      };
       if (Number(version) === 0) {
         db.exec(`BEGIN IMMEDIATE; ${SCHEMA} COMMIT;`);
       } else if (Number(version) !== 1) {
-        throw new StudioAssetError("unavailable", "The studio asset database uses an unsupported schema.");
+        throw new StudioAssetError(
+          "unavailable",
+          "The studio asset database uses an unsupported schema.",
+        );
       }
     } catch (error) {
       db.close();
@@ -2458,7 +2734,11 @@ export class StudioAssetStore {
     }
     const target = this.blobPath(id);
     try {
-      await writeFileAtomic(target, input.bytes, { exclusive: true, mode: 0o600, mkdirMode: 0o700 });
+      await writeFileAtomic(target, input.bytes, {
+        exclusive: true,
+        mode: 0o600,
+        mkdirMode: 0o700,
+      });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       // Same name means same content unless the file was damaged.
@@ -2495,14 +2775,20 @@ export class StudioAssetStore {
     const original = await fs.readFile(this.blobPath(row.id));
     let rendered: { bytes: Uint8Array };
     try {
-      rendered = await this.options.thumbnailer.render({ bytes: original, mediaType: row.media_type, edge });
+      rendered = await this.options.thumbnailer.render({
+        bytes: original,
+        mediaType: row.media_type,
+        edge,
+      });
     } catch {
       // nativeImage cannot decode every accepted format (for example WebP on
       // Linux). The original is within the validated pixel limit.
       return { bytes: original, mediaType: row.media_type };
     }
     // The cache is regenerable; a failed write only costs a re-render.
-    await writeFileAtomic(cached, rendered.bytes, { fsync: false, mode: 0o600 }).catch(() => undefined);
+    await writeFileAtomic(cached, rendered.bytes, { fsync: false, mode: 0o600 }).catch(
+      () => undefined,
+    );
     return { bytes: rendered.bytes, mediaType: "image/png" };
   }
 
@@ -2650,14 +2936,15 @@ export class StudioAssetStore {
     const thumbs = path.join(this.root, "thumbs");
     for (const entry of await fs.readdir(thumbs)) {
       const id = entry.slice(0, 64);
-      if (!isStudioAssetId(id) || !this.row(id)) await fs.rm(path.join(thumbs, entry), { force: true });
+      if (!isStudioAssetId(id) || !this.row(id))
+        await fs.rm(path.join(thumbs, entry), { force: true });
     }
   }
 }
 ```
 
 - [ ] **Step 4: Run it and watch it pass.**
-  Run `npx tsx --test main/services/studio-assets/store.test.ts`. Expected: 8 tests pass. Then run `npm run type-check`.
+      Run `npx tsx --test main/services/studio-assets/store.test.ts`. Expected: 8 tests pass. Then run `npm run type-check`.
 
 - [ ] **Step 5: Register the test.**
   1. Append `main/services/studio-assets/store.test.ts` to `test:studio-foundation`.
@@ -2678,14 +2965,20 @@ EOF
 ## Task F-4.4: Document-bound delivery grants
 
 **Files:**
+
 - Create: `main/services/studio-assets/delivery-core.ts`
 - Test: `main/services/studio-assets/delivery-core.test.ts` (new; `core-git`)
 
 **Interfaces:**
+
 - Consumes: `RendererDocumentOwner` (`main/services/renderer-document-owner.ts:4-10`), `STUDIO_ASSET_SCHEME` (F-4.1), and `isStudioAssetId` and `StudioAssetRendition` (F-4.2).
 - Produces:
+
   ```ts
-  export type StudioAssetGrantOwner = Pick<RendererDocumentOwner, "id" | "documentId" | "isDestroyed" | "onInvalidated">;
+  export type StudioAssetGrantOwner = Pick<
+    RendererDocumentOwner,
+    "id" | "documentId" | "isDestroyed" | "onInvalidated"
+  >;
   export class StudioAssetGrants {
     constructor(options?: { maxGrants?: number; token?: () => string });
     issue(owner: StudioAssetGrantOwner, assetId: string, rendition: StudioAssetRendition): string; // "aiden-asset://grant/<token>"
@@ -2731,7 +3024,10 @@ test("issued URLs carry only an opaque token that resolves to the asset", () => 
   const url = grants.issue(owner(), ASSET, "original");
   assert.match(url, /^aiden-asset:\/\/grant\/[A-Za-z0-9_-]{43}$/u);
   assert.equal(url.includes(ASSET), false);
-  assert.deepEqual(grants.resolve(studioAssetGrantToken(url)!), { assetId: ASSET, rendition: "original" });
+  assert.deepEqual(grants.resolve(studioAssetGrantToken(url)!), {
+    assetId: ASSET,
+    rendition: "original",
+  });
 });
 
 test("grants deduplicate per document, asset and rendition", () => {
@@ -2754,7 +3050,10 @@ test("navigation revokes every grant of that document and only that document", (
 
   a.navigate();
   for (const url of aUrls) assert.equal(grants.resolve(studioAssetGrantToken(url)!), undefined);
-  assert.deepEqual(grants.resolve(studioAssetGrantToken(bUrl)!), { assetId: ASSET, rendition: "original" });
+  assert.deepEqual(grants.resolve(studioAssetGrantToken(bUrl)!), {
+    assetId: ASSET,
+    rendition: "original",
+  });
   assert.equal(a.listeners(), 0);
   assert.equal(grants.size(), 1);
 });
@@ -2805,7 +3104,7 @@ test("only exact grant URLs yield a token", () => {
 ```
 
 - [ ] **Step 2: Run it and watch it fail.**
-  Run `npx tsx --test main/services/studio-assets/delivery-core.test.ts`. Expected: FAIL, the module is missing.
+      Run `npx tsx --test main/services/studio-assets/delivery-core.test.ts`. Expected: FAIL, the module is missing.
 
 - [ ] **Step 3: Implement** `main/services/studio-assets/delivery-core.ts`.
 
@@ -2892,7 +3191,10 @@ export class StudioAssetGrants {
       return grantUrl(existing);
     }
     if (!this.documentListeners.has(documentKey)) {
-      this.documentListeners.set(documentKey, owner.onInvalidated(() => this.revokeDocument(documentKey)));
+      this.documentListeners.set(
+        documentKey,
+        owner.onInvalidated(() => this.revokeDocument(documentKey)),
+      );
     }
     const token = this.token();
     this.grants.set(token, { assetId, rendition, documentKey, dedupeKey, owner });
@@ -2959,22 +3261,27 @@ EOF
 ## Task F-4.5: Protocol handler, startup wiring and the CSP token
 
 **Files:**
+
 - Create: `main/services/studio-assets/request-handler.ts` (pure), `main/services/studio-assets/protocol.ts`, `main/services/studio-assets/thumbnailer-main.ts`, `main/services/studio-assets/main.ts`
 - Modify: `main/index.ts` (after `registerGenerativeUiProtocol();` at :1760), `main-window.html` (:8, `img-src` only)
 - Test: `main/services/studio-assets/request-handler.test.ts` (new; `core-git`)
 
 **Interfaces:**
+
 - Consumes: `StudioAssetStore` (F-4.3), `StudioAssetGrants` and `studioAssetGrantToken` (F-4.4), `nativeImage` and `app` (`main/platform.ts:179-192`), `studioAssetsEnabled` (F-1.1), and `logger` (`main/platform.ts:54`).
 - Produces:
+
   ```ts
   export function createStudioAssetRequestHandler(deps: {
     store: Pick<StudioAssetStore, "read" | "thumbnail">;
     grants: Pick<StudioAssetGrants, "resolve">;
   }): (request: Request) => Promise<Response>;
-  export function registerStudioAssetProtocol(handler: (request: Request) => Promise<Response>): void; // protocol.ts
-  export function createNativeStudioThumbnailer(): StudioAssetThumbnailer;                              // thumbnailer-main.ts
-  export const studioAssetStore: StudioAssetStore;                                                       // main.ts
-  export const studioAssetGrants: StudioAssetGrants;                                                     // main.ts
+  export function registerStudioAssetProtocol(
+    handler: (request: Request) => Promise<Response>,
+  ): void; // protocol.ts
+  export function createNativeStudioThumbnailer(): StudioAssetThumbnailer; // thumbnailer-main.ts
+  export const studioAssetStore: StudioAssetStore; // main.ts
+  export const studioAssetGrants: StudioAssetGrants; // main.ts
   ```
 
 - [ ] **Step 1: Write the failing test** in `main/services/studio-assets/request-handler.test.ts`.
@@ -3052,7 +3359,11 @@ test("unknown, malformed and revoked URLs are not found", async (t) => {
   const f = await fixture(t);
   const asset = await f.store.put({ bytes: pngBytes(8, 8, 3) });
   const url = f.grants.issue(f.owner, asset.assetId, "original");
-  for (const candidate of [`aiden-asset://grant/${"Z".repeat(43)}`, `${url}?download=1`, url.replace("grant", "other")]) {
+  for (const candidate of [
+    `aiden-asset://grant/${"Z".repeat(43)}`,
+    `${url}?download=1`,
+    url.replace("grant", "other"),
+  ]) {
     assert.equal((await f.handle(new Request(candidate))).status, 404, candidate);
   }
   f.navigate();
@@ -3086,7 +3397,7 @@ test("a collected asset is not found and a closed store is unavailable", async (
 ```
 
 - [ ] **Step 2: Run it and watch it fail.**
-  Run `npx tsx --test main/services/studio-assets/request-handler.test.ts`. Expected: FAIL, the module is missing.
+      Run `npx tsx --test main/services/studio-assets/request-handler.test.ts`. Expected: FAIL, the module is missing.
 
 - [ ] **Step 3: Implement.**
 
@@ -3099,7 +3410,10 @@ import type { StudioAssetStore } from "./store.js";
 
 function status(code: 404 | 405 | 503): Response {
   const text = code === 404 ? "Not found" : code === 405 ? "Method not allowed" : "Unavailable";
-  return new Response(text, { status: code, headers: { "content-type": "text/plain; charset=utf-8" } });
+  return new Response(text, {
+    status: code,
+    headers: { "content-type": "text/plain; charset=utf-8" },
+  });
 }
 
 /** Pure `aiden-asset:` handler; `protocol.ts` installs it once. */
@@ -3116,7 +3430,9 @@ export function createStudioAssetRequestHandler(deps: {
     try {
       body =
         grant.rendition === "original"
-          ? await deps.store.read(grant.assetId).then(({ record, bytes }) => ({ bytes, mediaType: record.mediaType }))
+          ? await deps.store
+              .read(grant.assetId)
+              .then(({ record, bytes }) => ({ bytes, mediaType: record.mediaType }))
           : await deps.store.thumbnail(grant.assetId, grant.rendition === "thumb-256" ? 256 : 512);
     } catch (error) {
       return status(error instanceof StudioAssetError && error.code === "not_found" ? 404 : 503);
@@ -3143,7 +3459,9 @@ import { STUDIO_ASSET_SCHEME } from "../custom-schemes-core.js";
 let installed = false;
 
 /** Install the `aiden-asset:` handler once, after the store has initialized. */
-export function registerStudioAssetProtocol(handler: (request: Request) => Promise<Response>): void {
+export function registerStudioAssetProtocol(
+  handler: (request: Request) => Promise<Response>,
+): void {
   if (installed) return;
   protocol.handle(STUDIO_ASSET_SCHEME, handler);
   installed = true;
@@ -3209,28 +3527,28 @@ import { studioAssetGrants, studioAssetStore } from "./services/studio-assets/ma
 `studioAssetsEnabled` was already imported in F-4.1. Directly after `registerGenerativeUiProtocol();` (:1760), add:
 
 ```ts
-      if (studioAssetsEnabled()) {
-        try {
-          await studioAssetStore.initialize();
-          registerStudioAssetProtocol(
-            createStudioAssetRequestHandler({ store: studioAssetStore, grants: studioAssetGrants }),
-          );
-        } catch (error) {
-          logger.warn(
-            "studio",
-            "Studio assets are unavailable; Design and Images will report a storage error.",
-            error,
-          );
-        }
-      }
+if (studioAssetsEnabled()) {
+  try {
+    await studioAssetStore.initialize();
+    registerStudioAssetProtocol(
+      createStudioAssetRequestHandler({ store: studioAssetStore, grants: studioAssetGrants }),
+    );
+  } catch (error) {
+    logger.warn(
+      "studio",
+      "Studio assets are unavailable; Design and Images will report a storage error.",
+      error,
+    );
+  }
+}
 ```
 
 `main-window.html` line 8: change `img-src 'self' data: blob: file: https: http:` to `img-src 'self' data: blob: file: https: http: aiden-asset:`. Change no other directive.
 
 - [ ] **Step 4: Run it and watch it pass.**
-  Run `npx tsx --test main/services/studio-assets/request-handler.test.ts main/services/generative-ui-html.test.ts`. Expected: pass, and the existing `frame-src` and `script-src` CSP assertions still hold.
-  Then run `npm run type-check && npm run build`.
-  Then launch the app with no flags (`npm run dev`) and confirm that `~/Library/Application Support/<dev profile>/studio-assets` was **not** created. This is the flag-off no-trace check.
+      Run `npx tsx --test main/services/studio-assets/request-handler.test.ts main/services/generative-ui-html.test.ts`. Expected: pass, and the existing `frame-src` and `script-src` CSP assertions still hold.
+      Then run `npm run type-check && npm run build`.
+      Then launch the app with no flags (`npm run dev`) and confirm that `~/Library/Application Support/<dev profile>/studio-assets` was **not** created. This is the flag-off no-trace check.
 
 - [ ] **Step 5: Register the test.**
   1. Append `main/services/studio-assets/request-handler.test.ts` to `test:studio-foundation`.
@@ -3254,19 +3572,38 @@ EOF
 ## Task F-5.1: Canvas keymap core
 
 **Files:**
+
 - Create: `renderer/canvas/canvas-keymap-core.ts`, `renderer/canvas/canvas-viewport-core.ts`
 - Test: `renderer/canvas/canvas-keymap-core.test.ts` (new; `renderer-other`)
 
 **Interfaces:**
+
 - Produces:
+
   ```ts
   export type CanvasTool = "select" | "hand";
   export type CanvasCommand =
     | { type: "tool"; tool: CanvasTool }
-    | { type: "zoomIn" } | { type: "zoomOut" } | { type: "zoomReset" } | { type: "fitView" } | { type: "toggleMinimap" };
-  export interface CanvasKeyEvent { key: string; code: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; repeat: boolean; isComposing: boolean }
+    | { type: "zoomIn" }
+    | { type: "zoomOut" }
+    | { type: "zoomReset" }
+    | { type: "fitView" }
+    | { type: "toggleMinimap" };
+  export interface CanvasKeyEvent {
+    key: string;
+    code: string;
+    metaKey: boolean;
+    ctrlKey: boolean;
+    altKey: boolean;
+    shiftKey: boolean;
+    repeat: boolean;
+    isComposing: boolean;
+  }
   export const CANVAS_TOOL_SHORTCUTS: Readonly<Record<CanvasTool, "V" | "H">>;
-  export function resolveCanvasKey(event: CanvasKeyEvent, context: { editable: boolean }): CanvasCommand | null;
+  export function resolveCanvasKey(
+    event: CanvasKeyEvent,
+    context: { editable: boolean },
+  ): CanvasCommand | null;
   // canvas-viewport-core.ts
   export const CANVAS_MIN_ZOOM = 0.1;
   export const CANVAS_MAX_ZOOM = 4;
@@ -3297,15 +3634,23 @@ const idle = { editable: false };
 test("single letters switch tools and Shift digits fit or reset the zoom", () => {
   assert.deepEqual(resolveCanvasKey(key("KeyV"), idle), { type: "tool", tool: "select" });
   assert.deepEqual(resolveCanvasKey(key("KeyH"), idle), { type: "tool", tool: "hand" });
-  assert.deepEqual(resolveCanvasKey(key("Digit1", { shiftKey: true, key: "!" }), idle), { type: "fitView" });
-  assert.deepEqual(resolveCanvasKey(key("Digit0", { shiftKey: true, key: ")" }), idle), { type: "zoomReset" });
+  assert.deepEqual(resolveCanvasKey(key("Digit1", { shiftKey: true, key: "!" }), idle), {
+    type: "fitView",
+  });
+  assert.deepEqual(resolveCanvasKey(key("Digit0", { shiftKey: true, key: ")" }), idle), {
+    type: "zoomReset",
+  });
   assert.deepEqual(resolveCanvasKey(key("KeyM"), idle), { type: "toggleMinimap" });
 });
 
 test("plus and minus zoom, including the shifted plus and held repeats", () => {
   assert.deepEqual(resolveCanvasKey(key("Equal", { key: "=" }), idle), { type: "zoomIn" });
-  assert.deepEqual(resolveCanvasKey(key("Equal", { key: "+", shiftKey: true }), idle), { type: "zoomIn" });
-  assert.deepEqual(resolveCanvasKey(key("Minus", { key: "-", repeat: true }), idle), { type: "zoomOut" });
+  assert.deepEqual(resolveCanvasKey(key("Equal", { key: "+", shiftKey: true }), idle), {
+    type: "zoomIn",
+  });
+  assert.deepEqual(resolveCanvasKey(key("Minus", { key: "-", repeat: true }), idle), {
+    type: "zoomOut",
+  });
 });
 
 test("text entry, modifiers, IME and repeated tool keys never trigger canvas commands", () => {
@@ -3329,7 +3674,7 @@ test("zoom percentages round to whole numbers", () => {
 ```
 
 - [ ] **Step 2: Run it and watch it fail.**
-  Run `npx tsx --test renderer/canvas/canvas-keymap-core.test.ts`. Expected: FAIL, the modules are missing.
+      Run `npx tsx --test renderer/canvas/canvas-keymap-core.test.ts`. Expected: FAIL, the modules are missing.
 
 - [ ] **Step 3: Implement.**
 
@@ -3416,17 +3761,38 @@ EOF
 ## Task F-5.2: Tool rail, zoom controls and node chrome
 
 **Files:**
+
 - Create: `renderer/canvas/canvas-tool-rail.tsx`, `renderer/canvas/canvas-zoom-controls.tsx`, `renderer/canvas/canvas-node-chrome.tsx`
 - Test: `renderer/canvas/canvas-controls.test.tsx` (new; `renderer-other`)
 
 **Interfaces:**
+
 - Consumes: `Button` (`renderer/components/ui.tsx:61`; variants `transparent` and `muted`, `iconOnly`), lucide icons (`MousePointer2`, `Hand`, `ZoomIn`, `ZoomOut`, `Maximize`, `Map as MapIcon`), and F-5.1.
 - Produces:
+
   ```ts
-  export function CanvasToolRail(props: { tool: CanvasTool; onToolChange: (tool: CanvasTool) => void }): JSX.Element;
-  export interface CanvasZoomControlsProps { zoom: number; minimapVisible: boolean; onZoomIn(): void; onZoomOut(): void; onResetZoom(): void; onFitView(): void; onToggleMinimap(): void }
+  export function CanvasToolRail(props: {
+    tool: CanvasTool;
+    onToolChange: (tool: CanvasTool) => void;
+  }): JSX.Element;
+  export interface CanvasZoomControlsProps {
+    zoom: number;
+    minimapVisible: boolean;
+    onZoomIn(): void;
+    onZoomOut(): void;
+    onResetZoom(): void;
+    onFitView(): void;
+    onToggleMinimap(): void;
+  }
   export function CanvasZoomControls(props: CanvasZoomControlsProps): JSX.Element;
-  export function CanvasNodeChrome(props: React.PropsWithChildren<{ title: string; selected: boolean; status?: string; toolbar?: React.ReactNode }>): JSX.Element;
+  export function CanvasNodeChrome(
+    props: React.PropsWithChildren<{
+      title: string;
+      selected: boolean;
+      status?: string;
+      toolbar?: React.ReactNode;
+    }>,
+  ): JSX.Element;
   ```
 
 - [ ] **Step 1: Review the UI references.** Read `docs/design-guide.md` (squircle `Button`, fills not borders, neutral focus), `docs/chatgpt-desktop-ui-inspiration.md` (floating toolbars) and `docs/chatgpt-ui-element-specimen.html` (icon buttons, pressed states). A pressed tool is shown with the `muted` fill and `aria-pressed`, with no border. Status text is visible text, not only color.
@@ -3447,7 +3813,10 @@ import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "./canvas-viewport-core";
 const noop = () => undefined;
 
 function parse(element: ReactElement) {
-  const document = new DOMParser().parseFromString(`<root>${renderToStaticMarkup(element)}</root>`, "text/xml");
+  const document = new DOMParser().parseFromString(
+    `<root>${renderToStaticMarkup(element)}</root>`,
+    "text/xml",
+  );
   const all = Array.from(document.getElementsByTagName("*"));
   return {
     all,
@@ -3495,9 +3864,9 @@ test("zoom controls read out the zoom and disable at the limits", () => {
 
 test("the overview map toggle reports its state", () => {
   const toggle = (minimapVisible: boolean) =>
-    parse(<CanvasZoomControls zoom={1} {...zoomProps} minimapVisible={minimapVisible} />).buttons.find(
-      (button) => button.getAttribute("aria-label") === "Overview map",
-    );
+    parse(
+      <CanvasZoomControls zoom={1} {...zoomProps} minimapVisible={minimapVisible} />,
+    ).buttons.find((button) => button.getAttribute("aria-label") === "Overview map");
   assert.equal(toggle(false)?.getAttribute("aria-pressed"), "false");
   assert.equal(toggle(true)?.getAttribute("aria-pressed"), "true");
 });
@@ -3513,14 +3882,20 @@ test("node chrome names the node, exposes selection, and shows status as text", 
   assert.equal(group?.getAttribute("data-selected"), "true");
   assert.ok(all.some((node) => node.textContent === "Generating"));
   assert.equal(
-    parse(<CanvasNodeChrome title="Idle" selected={false}><p /></CanvasNodeChrome>).byRole("group")[0]?.getAttribute("data-selected"),
+    parse(
+      <CanvasNodeChrome title="Idle" selected={false}>
+        <p />
+      </CanvasNodeChrome>,
+    )
+      .byRole("group")[0]
+      ?.getAttribute("data-selected"),
     "false",
   );
 });
 ```
 
 - [ ] **Step 3: Run it and watch it fail.**
-  Run `npx tsx --test renderer/canvas/canvas-controls.test.tsx`. Expected: FAIL, the modules are missing.
+      Run `npx tsx --test renderer/canvas/canvas-controls.test.tsx`. Expected: FAIL, the modules are missing.
 
 - [ ] **Step 4: Implement.**
 
@@ -3636,7 +4011,13 @@ export function CanvasZoomControls({
       >
         <ZoomIn />
       </Button>
-      <Button variant="transparent" iconOnly aria-label="Fit to screen" aria-keyshortcuts="Shift+1" onClick={onFitView}>
+      <Button
+        variant="transparent"
+        iconOnly
+        aria-label="Fit to screen"
+        aria-keyshortcuts="Shift+1"
+        onClick={onFitView}
+      >
         <Maximize />
       </Button>
       <Button
@@ -3695,7 +4076,7 @@ export function CanvasNodeChrome({
 ```
 
 - [ ] **Step 5: Run it and watch it pass.**
-  Run `npx tsx --test renderer/canvas/canvas-controls.test.tsx`. Expected: 4 tests pass. Then run `npm run lint`.
+      Run `npx tsx --test renderer/canvas/canvas-controls.test.tsx`. Expected: 4 tests pass. Then run `npm run lint`.
 
 - [ ] **Step 6: Register the test.**
   1. Append `renderer/canvas/canvas-controls.test.tsx` to `test:studio-foundation`.
@@ -3716,23 +4097,37 @@ EOF
 ## Task F-5.3: Pin `@xyflow/react`, build `<StudioCanvas>` and `<StudioSurface>`, mount them in the placeholder routes
 
 **Files:**
+
 - Modify: `package.json` + `package-lock.json` (`@xyflow/react` 12.11.6 in `devDependencies`), `THIRD_PARTY_NOTICES.md`, `renderer/components/ui.tsx` (export `useSplitViewCollapsed`), `renderer/design/design-route.tsx`, `renderer/images/images-route.tsx`
 - Create: `renderer/canvas/studio-canvas.tsx`, `renderer/canvas/studio-surface.tsx`, `renderer/canvas/studio-canvas.css`, `renderer/canvas/styles.ts`, `renderer/canvas/index.ts`
 - Test: verified by build, bundle budget and the Playwright spec in F-5.4. xyflow needs a real DOM, and its behavior is user-visible.
 
 **Interfaces:**
+
 - Consumes: F-5.1, F-5.2, the `SplitContext` value `{ collapsed }` (`ui.tsx:387`), and xyflow 12's `ReactFlow`, `ReactFlowProvider`, `useReactFlow` (`zoomIn`, `zoomOut`, `zoomTo`, `fitView`), `useViewport`, `Background`, `BackgroundVariant` and `MiniMap`.
 - Produces:
+
   ```ts
-  export type StudioCanvasProps<N extends Node = Node, E extends Edge = Edge> =
-    Omit<ReactFlowProps<N, E>, "panOnDrag" | "selectionOnDrag" | "minZoom" | "maxZoom" | "proOptions"> & {
-      label: string; tool: CanvasTool; onToolChange(tool: CanvasTool): void;
-      minimap: boolean; onMinimapChange(visible: boolean): void; emptyState?: React.ReactNode;
-    };
-  export function StudioCanvas<N extends Node = Node, E extends Edge = Edge>(props: StudioCanvasProps<N, E>): JSX.Element;
-  export function StudioSurface(props: React.PropsWithChildren<{ title: string; actions?: React.ReactNode }>): JSX.Element;
+  export type StudioCanvasProps<N extends Node = Node, E extends Edge = Edge> = Omit<
+    ReactFlowProps<N, E>,
+    "panOnDrag" | "selectionOnDrag" | "minZoom" | "maxZoom" | "proOptions"
+  > & {
+    label: string;
+    tool: CanvasTool;
+    onToolChange(tool: CanvasTool): void;
+    minimap: boolean;
+    onMinimapChange(visible: boolean): void;
+    emptyState?: React.ReactNode;
+  };
+  export function StudioCanvas<N extends Node = Node, E extends Edge = Edge>(
+    props: StudioCanvasProps<N, E>,
+  ): JSX.Element;
+  export function StudioSurface(
+    props: React.PropsWithChildren<{ title: string; actions?: React.ReactNode }>,
+  ): JSX.Element;
   export function useSplitViewCollapsed(): boolean; // ui.tsx
   ```
+
   `renderer/canvas/index.ts` re-exports `StudioCanvas`, `StudioSurface`, `CanvasToolRail`, `CanvasZoomControls`, `CanvasNodeChrome`, `resolveCanvasKey` and the types. It does **not** re-export `styles.ts`.
 
 - [ ] **Step 1: Pin the dependency.**
@@ -4003,7 +4398,11 @@ export function DesignRoute(_props: { projectId?: string }) {
         minimap={minimap}
         onMinimapChange={setMinimap}
         emptyState={
-          <EmptyState placement="inline" title="No design projects yet" description="Design projects will appear here." />
+          <EmptyState
+            placement="inline"
+            title="No design projects yet"
+            description="Design projects will appear here."
+          />
         }
       />
     </StudioSurface>
@@ -4012,12 +4411,14 @@ export function DesignRoute(_props: { projectId?: string }) {
 ```
 
 Replace `renderer/images/images-route.tsx` in the same way. The differences are:
+
 - export `ImagesRoute(_props: { workflowId?: string })`
 - title `"Images"`
 - `label="Images canvas"`
 - empty state "No image workflows yet" / "Image workflows will appear here."
 
 - [ ] **Step 4: Verify.**
+
   ```bash
   npm run type-check
   npm run lint
@@ -4026,6 +4427,7 @@ Replace `renderer/images/images-route.tsx` in the same way. The differences are:
   ls build/renderer/assets | grep -E "design-route|images-route"
   grep -l "react-flow__" build/renderer/assets/*.js
   ```
+
   Expected:
   - Type-check, lint and build pass.
   - The budget passes, and the raw/gzip numbers stay within a few KB of the F-2.2 numbers. Record both in the PR.
@@ -4049,9 +4451,11 @@ EOF
 ## Task F-5.4: Playwright flags-off and flags-on smoke
 
 **Files:**
+
 - Create: `tests/e2e/studio-foundation.spec.ts`. It is discovered automatically by `scripts/ci-e2e-shards.mjs` `discoverSpecs()`, so no registry entry is needed. Optionally add `"studio-foundation.spec.ts": 45` to `FILE_SECONDS` in `scripts/ci-e2e-shards.mjs` after the first hosted timing.
 
 **Interfaces:**
+
 - Consumes: `test`, `expect` and `finishLmStudioOnboarding` from `tests/e2e/fixtures.ts`; the fixture options `appEnvironment` and `workspaceSeed`; and `aiden.relaunch(afterClose?, appEnvironment?)`.
 
 - [ ] **Step 1: Write the spec** in `tests/e2e/studio-foundation.spec.ts`.
@@ -4099,7 +4503,10 @@ test.describe("Studio foundation with both flags on", () => {
     const nav = page.getByRole("navigation", { name: "Primary" });
     const designRow = nav.getByRole("button", { name: "Design", exact: true });
     const workspaces = page.getByText("Workspaces", { exact: true }).first();
-    const [rowBox, workspacesBox] = await Promise.all([designRow.boundingBox(), workspaces.boundingBox()]);
+    const [rowBox, workspacesBox] = await Promise.all([
+      designRow.boundingBox(),
+      workspaces.boundingBox(),
+    ]);
     expect(rowBox!.y).toBeLessThan(workspacesBox!.y); // studio rows sit above the workspace outline
 
     await designRow.click();
@@ -4114,9 +4521,15 @@ test.describe("Studio foundation with both flags on", () => {
     await canvas.focus();
     const rail = canvas.getByRole("toolbar", { name: "Canvas tools" });
     const zoom = canvas.getByRole("toolbar", { name: "Zoom" });
-    await expect(rail.getByRole("button", { name: "Select" })).toHaveAttribute("aria-pressed", "true");
+    await expect(rail.getByRole("button", { name: "Select" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await page.keyboard.press("h");
-    await expect(rail.getByRole("button", { name: "Hand" })).toHaveAttribute("aria-pressed", "true");
+    await expect(rail.getByRole("button", { name: "Hand" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await expect(zoom.getByRole("button", { name: /^Zoom 100%/ })).toBeVisible();
     await page.keyboard.press("=");
     await expect(zoom.getByRole("button", { name: /^Zoom 120%/ })).toBeVisible();
@@ -4146,12 +4559,17 @@ test.describe("Studio foundation with both flags on", () => {
     await page.getByLabel("Search commands").fill("Open Create Images");
     await page.getByRole("option", { name: /Open Create Images/ }).click();
     await expect(page.getByRole("region", { name: "Images canvas" })).toBeVisible();
-    await expect(nav.getByRole("button", { name: "Images", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(nav.getByRole("button", { name: "Images", exact: true })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
 
     // Relaunching without the flags removes every trace.
     page = await aiden.relaunch(undefined, {});
     const relaunchedNav = page.getByRole("navigation", { name: "Primary" });
-    await expect(relaunchedNav.getByRole("button", { name: "Scheduled", exact: true })).toBeVisible();
+    await expect(
+      relaunchedNav.getByRole("button", { name: "Scheduled", exact: true }),
+    ).toBeVisible();
     await expect(relaunchedNav.getByRole("button", { name: "Design", exact: true })).toHaveCount(0);
     await expect(relaunchedNav.getByRole("button", { name: "Images", exact: true })).toHaveCount(0);
   });
@@ -4159,7 +4577,7 @@ test.describe("Studio foundation with both flags on", () => {
 ```
 
 - [ ] **Step 2: Run it.**
-  `npm run type-check:e2e && npm run build && npx playwright test --config=playwright.config.ts tests/e2e/studio-foundation.spec.ts --fail-on-flaky-tests`. Expected: 2 tests pass.
+      `npm run type-check:e2e && npm run build && npx playwright test --config=playwright.config.ts tests/e2e/studio-foundation.spec.ts --fail-on-flaky-tests`. Expected: 2 tests pass.
   - If a selector fails, fix the product (labels, roles) rather than weakening the assertion.
   - On Linux, run the same command under `xvfb-run -a`, or rely on the hosted Linux e2e shard.
 
@@ -4179,10 +4597,12 @@ EOF
 ## Task F-6: Local gates, memory and plan index
 
 **Files:**
+
 - Create: `.memory/studio-foundation.md`
 - Modify: `docs/plans/README.md` (the Design Studio + Create Images row), `docs/plans/design-studio-create-images-rebuild-plan.md` (tick §6 ADR-F and the Track F rows)
 
 - [ ] **Step 1: Run the narrow suites.**
+
   ```bash
   npm run test:studio-foundation
   npm run test:command-system
@@ -4191,18 +4611,22 @@ EOF
   npm run test:ci:registry
   npm run test:ci-policy
   ```
+
   Expected: all pass.
 
 - [ ] **Step 2: Run the CI lanes and preserved modes that PR B touches.**
+
   ```bash
   node scripts/run-ci-tests.mjs --lane core-git --summary
   node scripts/run-ci-tests.mjs --lane renderer-other --summary
   node scripts/run-ci-tests.mjs --lane runtime-subagents --summary
   node scripts/run-ci-tests.mjs --preserved=generative-ui-chromium
   ```
+
   Expected: green.
 
 - [ ] **Step 3: Run static checks, build and budget.**
+
   ```bash
   npm run type-check
   npm run type-check:e2e
@@ -4210,9 +4634,11 @@ EOF
   npm run build
   npm run check:bundle-budget
   ```
+
   Expected: green. Paste the budget output for `main` and for the branch into the PR.
 
 - [ ] **Step 4: Run Playwright.**
+
   ```bash
   npx playwright test --config=playwright.config.ts tests/e2e/studio-foundation.spec.ts tests/e2e/chat-shell-interactions.spec.ts tests/e2e/environment-focus.spec.ts --fail-on-flaky-tests
   ```
@@ -4248,6 +4674,7 @@ git push -u origin feature/studio-foundation
 ```
 
 Open the PR against `main`.
+
 - The body links ADR-F, lists the flags-off evidence (sidebar render test, palette test, scheme test, Playwright flags-off spec, bundle numbers), and records any flake that needed its one allowed rerun.
 - The body ends with:
   ```

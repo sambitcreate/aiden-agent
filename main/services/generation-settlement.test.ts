@@ -59,11 +59,12 @@ test("a failing step leaves nothing held and still surfaces the first failure", 
     throw new Error("skill release failed");
   };
   assert.throws(
-    () => settle({
-      releaseApprovals: () => {
-        throw new Error("approvals failed");
-      },
-    }),
+    () =>
+      settle({
+        releaseApprovals: () => {
+          throw new Error("approvals failed");
+        },
+      }),
     /skill release failed/u,
   );
   assert.deepEqual([...held].sort(), ["approvals", "skill"]);
@@ -154,18 +155,19 @@ test("a run that starts normally is left to its completion task", async () => {
 test("every teardown step runs and the first failure surfaces after them", () => {
   const ran: string[] = [];
   assert.throws(
-    () => runEveryStep([
-      () => ran.push("a"),
-      () => {
-        ran.push("b");
-        throw new Error("first");
-      },
-      () => {
-        ran.push("c");
-        throw new Error("second");
-      },
-      () => ran.push("d"),
-    ]),
+    () =>
+      runEveryStep([
+        () => ran.push("a"),
+        () => {
+          ran.push("b");
+          throw new Error("first");
+        },
+        () => {
+          ran.push("c");
+          throw new Error("second");
+        },
+        () => ran.push("d"),
+      ]),
     /first/u,
   );
   assert.deepEqual(ran, ["a", "b", "c", "d"]);
@@ -182,7 +184,12 @@ const clean: GenerationTerminalInput = {
 test("a completed or stopped reply finishes with the matching timeline", () => {
   assert.deepEqual(decideGenerationTerminal(clean), { kind: "finished", timeline: "completed" });
   assert.deepEqual(
-    decideGenerationTerminal({ ...clean, runtime: { kind: "app_cancelled" }, wasCancelled: true, hasVisibleOutput: () => false }),
+    decideGenerationTerminal({
+      ...clean,
+      runtime: { kind: "app_cancelled" },
+      wasCancelled: true,
+      hasVisibleOutput: () => false,
+    }),
     { kind: "finished", timeline: "cancelled" },
     "A Stop before any output is not an empty response",
   );
@@ -196,16 +203,24 @@ test("a failure is reported even if visible output cannot be read", () => {
       throw new Error("visible output unavailable");
     },
   });
-  assert.equal(decision.kind === "failed" && decision.message, "The model reached its output limit.");
+  assert.equal(
+    decision.kind === "failed" && decision.message,
+    "The model reached its output limit.",
+  );
 });
 
 test("an empty reply is its own failure only when nobody stopped it", () => {
-  assert.deepEqual(decideGenerationTerminal({ ...clean, hasVisibleOutput: () => false }), { kind: "empty" });
+  assert.deepEqual(decideGenerationTerminal({ ...clean, hasVisibleOutput: () => false }), {
+    kind: "empty",
+  });
 });
 
 test("provider failures name their reason, and unknown reasons stay generic", () => {
   const message = (reason?: string) => {
-    const decision = decideGenerationTerminal({ ...clean, runtime: { kind: "provider_failed", reason } });
+    const decision = decideGenerationTerminal({
+      ...clean,
+      runtime: { kind: "provider_failed", reason },
+    });
     assert.equal(decision.kind, "failed");
     return decision.kind === "failed" ? decision.message : "";
   };
@@ -218,7 +233,11 @@ test("provider failures name their reason, and unknown reasons stay generic", ()
 });
 
 test("a failure beats a Stop that arrived during it", () => {
-  const decision = decideGenerationTerminal({ ...clean, runtime: { kind: "host_failed" }, wasCancelled: true });
+  const decision = decideGenerationTerminal({
+    ...clean,
+    runtime: { kind: "host_failed" },
+    wasCancelled: true,
+  });
   assert.equal(decision.kind, "failed");
 });
 

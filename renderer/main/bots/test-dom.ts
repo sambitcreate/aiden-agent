@@ -101,7 +101,12 @@ export function installBotTestDom(): Window {
 const BOT_TEST_IPC_DEFAULTS: Record<string, (...args: unknown[]) => unknown> = {
   "bots:pendingChanges:retired": () => [],
   "bots:routineModels:resumeStatus": () => ({ requiresUnknownCostAcknowledgement: false }),
-  "bots:openWork:snapshot": (input) => ({ botId: String((input as { botId?: unknown })?.botId ?? "bot-test"), revision: "empty", items: [], undo: [] }),
+  "bots:openWork:snapshot": (input) => ({
+    botId: String((input as { botId?: unknown })?.botId ?? "bot-test"),
+    revision: "empty",
+    items: [],
+    undo: [],
+  }),
   "bots:connectorWatches:list": () => ({ supported: true, templates: [], watches: [] }),
   "bots:getCanonicalPhoto": () => null,
   // The model picker reads custom connection artwork from the providers list.

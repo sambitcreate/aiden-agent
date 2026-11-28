@@ -282,87 +282,205 @@ test("read grants block real direct and nested codemode mutations while reads an
   }
 });
 
-test("saved publication slot survives Once replacement and revokes only its real owner",async()=>{
-  const store=createBotRunAccess({now:()=>1}),signal=new AbortController().signal;
-  const current={signal,validate:async()=>{}};
-  const published={...grant,policyRevision:"published",expiresAt:100};
-  store.recordPublication("ada",published,{signal,deadline:100});
-  store.grant("ada",{...published,key:"/Other",root:"/Other",owner:{kind:"plan",id:"plan"},access:"read"});
-  assert.equal(store.location("ada",["r1"],"published")?.root,"/Other");
-  assert.equal((await store.savedLocation("ada",["r1"],"published",current))?.root,"/Taxes");
-  store.revokeOwner("ada",{kind:"plan",id:"plan"});
-  assert.equal(store.location("ada",["r1"],"published"),undefined,"the plan really existed and is removed");
-  assert.equal((await store.savedLocation("ada",["r1"],"published",current))?.root,"/Taxes","independent access publication remains");
-  store.grant("ada",{...published,key:"/Once",root:"/Once",owner:{kind:"access",id:"once"}});
-  store.revokeOwner("ada",published.owner);
-  assert.equal(await store.savedLocation("ada",["r1"],"published",current),undefined);
-  assert.equal(store.location("ada",["r1"],"published")?.root,"/Once","removing saved owner preserves a different Once owner");
+test("saved publication slot survives Once replacement and revokes only its real owner", async () => {
+  const store = createBotRunAccess({ now: () => 1 }),
+    signal = new AbortController().signal;
+  const current = { signal, validate: async () => {} };
+  const published = { ...grant, policyRevision: "published", expiresAt: 100 };
+  store.recordPublication("ada", published, { signal, deadline: 100 });
+  store.grant("ada", {
+    ...published,
+    key: "/Other",
+    root: "/Other",
+    owner: { kind: "plan", id: "plan" },
+    access: "read",
+  });
+  assert.equal(store.location("ada", ["r1"], "published")?.root, "/Other");
+  assert.equal((await store.savedLocation("ada", ["r1"], "published", current))?.root, "/Taxes");
+  store.revokeOwner("ada", { kind: "plan", id: "plan" });
+  assert.equal(
+    store.location("ada", ["r1"], "published"),
+    undefined,
+    "the plan really existed and is removed",
+  );
+  assert.equal(
+    (await store.savedLocation("ada", ["r1"], "published", current))?.root,
+    "/Taxes",
+    "independent access publication remains",
+  );
+  store.grant("ada", {
+    ...published,
+    key: "/Once",
+    root: "/Once",
+    owner: { kind: "access", id: "once" },
+  });
+  store.revokeOwner("ada", published.owner);
+  assert.equal(await store.savedLocation("ada", ["r1"], "published", current), undefined);
+  assert.equal(
+    store.location("ada", ["r1"], "published")?.root,
+    "/Once",
+    "removing saved owner preserves a different Once owner",
+  );
 });
 
 test("a transient current-call validation failure preserves the live saved publication for retry", async () => {
   const store = createBotRunAccess({ now: () => 1 });
   const owner = new AbortController();
-  store.recordPublication("ada", { ...grant, expiresAt: 100 }, { signal: owner.signal, deadline: 100 });
-  const unavailable = Object.assign(new Error("policy store temporarily unreadable"), { code: "EIO" });
-  await assert.rejects(store.savedLocation("ada", ["r1"], "rev1", {
-    signal: new AbortController().signal, validate: async () => { throw unavailable; },
-  }), error => error === unavailable);
-  assert.equal((await store.savedLocation("ada", ["r1"], "rev1", {
-    signal: new AbortController().signal, validate: async () => {},
-  }))?.root, "/Taxes", "the next healthy call keeps the original exact publication");
+  store.recordPublication(
+    "ada",
+    { ...grant, expiresAt: 100 },
+    { signal: owner.signal, deadline: 100 },
+  );
+  const unavailable = Object.assign(new Error("policy store temporarily unreadable"), {
+    code: "EIO",
+  });
+  await assert.rejects(
+    store.savedLocation("ada", ["r1"], "rev1", {
+      signal: new AbortController().signal,
+      validate: async () => {
+        throw unavailable;
+      },
+    }),
+    (error) => error === unavailable,
+  );
+  assert.equal(
+    (
+      await store.savedLocation("ada", ["r1"], "rev1", {
+        signal: new AbortController().signal,
+        validate: async () => {},
+      })
+    )?.root,
+    "/Taxes",
+    "the next healthy call keeps the original exact publication",
+  );
   owner.abort();
-  assert.equal(await store.savedLocation("ada", ["r1"], "rev1", {
-    signal: new AbortController().signal, validate: async () => {},
-  }), undefined, "preserving a transient failure cannot preserve ended ownership");
+  assert.equal(
+    await store.savedLocation("ada", ["r1"], "rev1", {
+      signal: new AbortController().signal,
+      validate: async () => {},
+    }),
+    undefined,
+    "preserving a transient failure cannot preserve ended ownership",
+  );
 });
 
 test("only a genuine stale validation permanently revokes a saved publication", async () => {
   for (const classified of [true, false]) {
     const store = createBotRunAccess({ now: () => 1 });
-    store.recordPublication("ada", { ...grant, expiresAt: 100 }, { signal: new AbortController().signal, deadline: 100 });
-    const error = classified ? new BotAccessRequestStaleError("owning input changed")
-      : Object.assign(new Error("temporary validation failure"), { name: "BotAccessRequestStaleError" });
+    store.recordPublication(
+      "ada",
+      { ...grant, expiresAt: 100 },
+      { signal: new AbortController().signal, deadline: 100 },
+    );
+    const error = classified
+      ? new BotAccessRequestStaleError("owning input changed")
+      : Object.assign(new Error("temporary validation failure"), {
+          name: "BotAccessRequestStaleError",
+        });
     const first = store.savedLocation("ada", ["r1"], "rev1", {
-      signal: new AbortController().signal, validate: async () => { throw error; },
+      signal: new AbortController().signal,
+      validate: async () => {
+        throw error;
+      },
     });
     if (classified) assert.equal(await first, undefined);
-    else await assert.rejects(first, value => value === error);
+    else await assert.rejects(first, (value) => value === error);
     const retry = await store.savedLocation("ada", ["r1"], "rev1", {
-      signal: new AbortController().signal, validate: async () => {},
+      signal: new AbortController().signal,
+      validate: async () => {},
     });
     assert.equal(retry?.root, classified ? undefined : "/Taxes");
   }
 });
 
-test("saved slot rejects stale policy, changed owner, postawait abort, expiration, restart and lifecycle clear",async()=>{
-  for(const reason of ["policy","owner","abort","original_abort","expiry","clearBot","clearAll","restart"] as const){
-    let now=1;const store=createBotRunAccess({now:()=>now}),original=new AbortController(),current=new AbortController();
-    const published={...grant,expiresAt:100};
-    store.grant("ada",published);store.recordPublication("ada",published,{signal:original.signal,deadline:10});
-    assert.equal((await store.savedLocation("ada",["r1"],"rev1",{signal:current.signal,validate:async()=>{}}))?.id,"run.saved");
-    assert.equal(await store.savedLocation("ada",["queued"],"rev1",{signal:current.signal,validate:async()=>{throw new Error("must not query old owner for another run");}}),undefined);
-    if(reason==="expiry") now=10;
-    if(reason==="original_abort") original.abort();
-    if(reason==="clearBot") store.clearBot("ada");
-    if(reason==="clearAll") store.clearAll();
-    const actual=reason==="restart"?createBotRunAccess({now:()=>now}):store;
-    const resolved=await actual.savedLocation("ada",["r1"],reason==="policy"?"rev2":"rev1",{signal:current.signal,validate:async()=>{
-      if(reason==="owner") { original.abort(); throw new Error("owning task ended"); }
-      if(reason==="abort") current.abort();
-    }});
-    assert.equal(resolved,undefined,reason);
-    assert.equal(await actual.savedLocation("ada",["r1"],"rev1",{signal:new AbortController().signal,validate:async()=>{}}),undefined,`${reason} cannot revive an old slot`);
-    if(reason==="clearBot"||reason==="clearAll") assert.equal(store.location("ada",["r1"],"rev1"),undefined,"the lifecycle fanout clears both slots");
+test("saved slot rejects stale policy, changed owner, postawait abort, expiration, restart and lifecycle clear", async () => {
+  for (const reason of [
+    "policy",
+    "owner",
+    "abort",
+    "original_abort",
+    "expiry",
+    "clearBot",
+    "clearAll",
+    "restart",
+  ] as const) {
+    let now = 1;
+    const store = createBotRunAccess({ now: () => now }),
+      original = new AbortController(),
+      current = new AbortController();
+    const published = { ...grant, expiresAt: 100 };
+    store.grant("ada", published);
+    store.recordPublication("ada", published, { signal: original.signal, deadline: 10 });
+    assert.equal(
+      (
+        await store.savedLocation("ada", ["r1"], "rev1", {
+          signal: current.signal,
+          validate: async () => {},
+        })
+      )?.id,
+      "run.saved",
+    );
+    assert.equal(
+      await store.savedLocation("ada", ["queued"], "rev1", {
+        signal: current.signal,
+        validate: async () => {
+          throw new Error("must not query old owner for another run");
+        },
+      }),
+      undefined,
+    );
+    if (reason === "expiry") now = 10;
+    if (reason === "original_abort") original.abort();
+    if (reason === "clearBot") store.clearBot("ada");
+    if (reason === "clearAll") store.clearAll();
+    const actual = reason === "restart" ? createBotRunAccess({ now: () => now }) : store;
+    const resolved = await actual.savedLocation(
+      "ada",
+      ["r1"],
+      reason === "policy" ? "rev2" : "rev1",
+      {
+        signal: current.signal,
+        validate: async () => {
+          if (reason === "owner") {
+            original.abort();
+            throw new Error("owning task ended");
+          }
+          if (reason === "abort") current.abort();
+        },
+      },
+    );
+    assert.equal(resolved, undefined, reason);
+    assert.equal(
+      await actual.savedLocation("ada", ["r1"], "rev1", {
+        signal: new AbortController().signal,
+        validate: async () => {},
+      }),
+      undefined,
+      `${reason} cannot revive an old slot`,
+    );
+    if (reason === "clearBot" || reason === "clearAll")
+      assert.equal(
+        store.location("ada", ["r1"], "rev1"),
+        undefined,
+        "the lifecycle fanout clears both slots",
+      );
   }
 });
-
 
 test("plan-owned unattended grants still require their own Bot, joined input, current policy and deadline", () => {
   let now = 1;
   const store = createBotRunAccess({ now: () => now });
-  const plan: BotRunAccessGrant = { ...grant, requestIds: ["bot:approved:1"], owner: { kind: "plan", id: "plan1" }, expiresAt: 10 };
+  const plan: BotRunAccessGrant = {
+    ...grant,
+    requestIds: ["bot:approved:1"],
+    owner: { kind: "plan", id: "plan1" },
+    expiresAt: 10,
+  };
   store.grant("ada", plan);
-  assert.equal(store.location("ada", ["bot:approved:1", "routine:joined:1"], "rev1")?.root, "/Taxes");
+  assert.equal(
+    store.location("ada", ["bot:approved:1", "routine:joined:1"], "rev1")?.root,
+    "/Taxes",
+  );
   assert.equal(store.location("other", ["bot:approved:1"], "rev1"), undefined);
   assert.equal(store.location("ada", ["bot:other:1"], "rev1"), undefined);
   now = 10;

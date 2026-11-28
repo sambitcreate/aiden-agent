@@ -9,12 +9,7 @@ import {
   typeSlashCommand,
   WORKSPACE_NAME,
 } from "./design-mode-helpers";
-import {
-  expect,
-  finishLmStudioOnboarding,
-  test,
-  waitForToastsToClear,
-} from "./fixtures";
+import { expect, finishLmStudioOnboarding, test, waitForToastsToClear } from "./fixtures";
 
 test.use({
   workspaceSeed: true,
@@ -79,9 +74,7 @@ test("a workspace page on the design canvas cannot reach the network or the app'
   await sendFirstMessage(page, "Check the probe page");
   await typeSlashCommand(page, "/design");
   await expect(
-    designCanvas(page).getByText(
-      "Ask Aiden to design something, or add a note.",
-    ),
+    designCanvas(page).getByText("Ask Aiden to design something, or add a note."),
   ).toBeVisible();
 
   const windowUrl = page.url();
@@ -93,8 +86,7 @@ test("a workspace page on the design canvas cannot reach the network or the app'
   // example.com is also cancelled, so a failure never reaches the internet.
   await app.evaluate(({ session }) => {
     const seen: SeenRequest[] = [];
-    (globalThis as { __designRequests?: SeenRequest[] }).__designRequests =
-      seen;
+    (globalThis as { __designRequests?: SeenRequest[] }).__designRequests = seen;
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
       let frameUrl: string | null = null;
       try {
@@ -120,12 +112,8 @@ test("a workspace page on the design canvas cannot reach the network or the app'
   await expect(fileItem).toBeEnabled();
   await fileItem.click();
 
-  const body = designCanvas(page)
-    .frameLocator('iframe[title="probe.html"]')
-    .locator("body");
-  await expect(
-    body.getByRole("heading", { name: "Containment probe" }),
-  ).toBeVisible();
+  const body = designCanvas(page).frameLocator('iframe[title="probe.html"]').locator("body");
+  await expect(body.getByRole("heading", { name: "Containment probe" })).toBeVisible();
   await expect(body).toHaveAttribute("data-probe", /.+/u, { timeout: 10_000 });
   const result = JSON.parse((await body.getAttribute("data-probe"))!) as {
     violations: string[];
@@ -143,18 +131,13 @@ test("a workspace page on the design canvas cannot reach the network or the app'
   // Nothing left the app: no request to example.com, and nothing at all from the
   // page except its own aiden-design files.
   const seen = await app.evaluate(
-    () =>
-      (globalThis as { __designRequests?: SeenRequest[] }).__designRequests ??
-      [],
+    () => (globalThis as { __designRequests?: SeenRequest[] }).__designRequests ?? [],
   );
-  expect(seen.filter((request) => /example\.com/iu.test(request.url))).toEqual(
-    [],
-  );
+  expect(seen.filter((request) => /example\.com/iu.test(request.url))).toEqual([]);
   expect(
     seen.filter(
       (request) =>
-        request.frameUrl?.startsWith("aiden-design:") &&
-        !request.url.startsWith("aiden-design:"),
+        request.frameUrl?.startsWith("aiden-design:") && !request.url.startsWith("aiden-design:"),
     ),
   ).toEqual([]);
 
@@ -162,16 +145,12 @@ test("a workspace page on the design canvas cannot reach the network or the app'
   expect(page.url()).toBe(windowUrl);
   expect(
     await app.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows().map((window) =>
-        window.webContents.getURL(),
-      ),
+      BrowserWindow.getAllWindows().map((window) => window.webContents.getURL()),
     ),
   ).toContain(windowUrl);
-  expect(
-    await app.evaluate(
-      ({ BrowserWindow }) => BrowserWindow.getAllWindows().length,
-    ),
-  ).toBe(windowCount);
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(
+    windowCount,
+  );
   await expect(designCanvas(page)).toBeVisible();
 });
 
@@ -214,9 +193,7 @@ test("a workspace page on the design canvas cannot navigate its own frame away",
   await sendFirstMessage(page, "Check the wandering page");
   await typeSlashCommand(page, "/design");
   await expect(
-    designCanvas(page).getByText(
-      "Ask Aiden to design something, or add a note.",
-    ),
+    designCanvas(page).getByText("Ask Aiden to design something, or add a note."),
   ).toBeVisible();
 
   // Any request to example.com is recorded and cancelled, so nothing reaches the internet.
@@ -240,9 +217,7 @@ test("a workspace page on the design canvas cannot navigate its own frame away",
   await expect(fileItem).toBeEnabled();
   await fileItem.click();
 
-  const body = designCanvas(page)
-    .frameLocator('iframe[title="wanderer.html"]')
-    .locator("body");
+  const body = designCanvas(page).frameLocator('iframe[title="wanderer.html"]').locator("body");
   await expect(body.getByRole("heading", { name: "Navigation probe" })).toBeVisible();
   // Both attempts were stopped before they left: the page is still there to mark itself.
   await expect(body).toHaveAttribute("data-stayed", "1", { timeout: 10_000 });

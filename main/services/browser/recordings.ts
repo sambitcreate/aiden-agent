@@ -19,7 +19,10 @@ export function browserRecordingsFolder(userData: string): string {
 }
 
 /** WebM opens with the EBML header; MP4 with a `ftyp` box. */
-export function browserRecordingBytesMatch(bytes: Uint8Array, mimeType: BrowserRecordingMimeType): boolean {
+export function browserRecordingBytesMatch(
+  bytes: Uint8Array,
+  mimeType: BrowserRecordingMimeType,
+): boolean {
   const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (buffer.length < 12) return false;
   return mimeType === "video/mp4"
@@ -35,7 +38,10 @@ export interface StoredBrowserRecording {
 }
 
 /** The recording saved under [id], or undefined when the id is malformed or the file is gone. */
-export async function findBrowserRecording(userData: string, id: string): Promise<StoredBrowserRecording | undefined> {
+export async function findBrowserRecording(
+  userData: string,
+  id: string,
+): Promise<StoredBrowserRecording | undefined> {
   if (!isBrowserRecordingId(id)) return undefined;
   const folder = browserRecordingsFolder(userData);
   for (const mimeType of ["video/mp4", "video/webm"] as const) {
@@ -64,6 +70,10 @@ export async function readBrowserRecording(
   } catch {
     return undefined;
   }
-  if (data.length > BROWSER_RECORDING_MAX_BYTES || !browserRecordingBytesMatch(data, stored.mimeType)) return undefined;
+  if (
+    data.length > BROWSER_RECORDING_MAX_BYTES ||
+    !browserRecordingBytesMatch(data, stored.mimeType)
+  )
+    return undefined;
   return { mimeType: stored.mimeType, data };
 }

@@ -27,7 +27,9 @@ const GIT_ROUTING_ENV = [
 ] as const;
 
 /** Parse one `git clone --progress` line into a phase and optional percentage. */
-export function parseGitCloneProgress(line: string): { phase: string; percent?: number } | undefined {
+export function parseGitCloneProgress(
+  line: string,
+): { phase: string; percent?: number } | undefined {
   const text = line.replace(/^remote:\s*/u, "").trim();
   if (/^Cloning into /u.test(text)) return { phase: "Cloning" };
   const match = /^([A-Za-z][A-Za-z ]*?):\s+(\d{1,3})%/u.exec(text);
@@ -94,23 +96,35 @@ export function createGitCloneRunner(options: GitCloneRunnerOptions = {}) {
       binary = await resolveGit(gitBinary, request.cwd, env, request.signal);
     } catch (error) {
       if (request.signal.aborted) return { ok: false, reason: "cancelled", stderrTail: "" };
-      return { ok: false, reason: "spawn-failed", stderrTail: error instanceof Error ? error.message : "" };
+      return {
+        ok: false,
+        reason: "spawn-failed",
+        stderrTail: error instanceof Error ? error.message : "",
+      };
     }
     if (request.signal.aborted) return { ok: false, reason: "cancelled", stderrTail: "" };
 
     return new Promise<GitCloneOutcome>((resolve) => {
       let child: ChildProcess;
       try {
-        child = spawn(binary, gitCloneArguments(request.url, request.destination, options.extraConfig), {
-          cwd: request.cwd,
-          // A new session has no controlling terminal, so ssh cannot prompt either.
-          detached: process.platform !== "win32",
-          env,
-          stdio: ["ignore", "ignore", "pipe"],
-          windowsHide: true,
-        });
+        child = spawn(
+          binary,
+          gitCloneArguments(request.url, request.destination, options.extraConfig),
+          {
+            cwd: request.cwd,
+            // A new session has no controlling terminal, so ssh cannot prompt either.
+            detached: process.platform !== "win32",
+            env,
+            stdio: ["ignore", "ignore", "pipe"],
+            windowsHide: true,
+          },
+        );
       } catch (error) {
-        resolve({ ok: false, reason: "spawn-failed", stderrTail: error instanceof Error ? error.message : "" });
+        resolve({
+          ok: false,
+          reason: "spawn-failed",
+          stderrTail: error instanceof Error ? error.message : "",
+        });
         return;
       }
 

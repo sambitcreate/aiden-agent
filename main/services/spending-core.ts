@@ -69,7 +69,10 @@ export function emptySpendingDocument(): SpendingDocument {
 }
 
 /** The Bot month `now` falls in: it starts on `startDay` at local midnight. */
-export function spendingMonth(now: number, startDay = DEFAULT_SPENDING_MONTH_START_DAY): { key: string; start: number; end: number } {
+export function spendingMonth(
+  now: number,
+  startDay = DEFAULT_SPENDING_MONTH_START_DAY,
+): { key: string; start: number; end: number } {
   const day = isSpendingMonthStartDay(startDay) ? startDay : DEFAULT_SPENDING_MONTH_START_DAY;
   const at = new Date(now);
   let year = at.getFullYear();
@@ -93,11 +96,19 @@ function own(record: object, key: string): boolean {
 
 /** Ids key plain objects: never one that names a prototype. */
 function safeId(id: string): boolean {
-  return id.length > 0 && id.length <= 200 && id !== "__proto__" && id !== "constructor" && id !== "prototype";
+  return (
+    id.length > 0 &&
+    id.length <= 200 &&
+    id !== "__proto__" &&
+    id !== "constructor" &&
+    id !== "prototype"
+  );
 }
 
 function spent(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.min(value, 1e9) : 0;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.min(value, 1e9)
+    : 0;
 }
 
 /** Strict parse of the saved document; a bad entry is dropped, never the file. */
@@ -119,7 +130,11 @@ export function parseSpendingDocument(value: unknown): SpendingDocument {
     if (!safeId(id) || !entry || typeof entry !== "object") continue;
     const bot = entry as Record<string, unknown>;
     if (typeof bot.period !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(bot.period)) continue;
-    document.bots[id] = { period: bot.period, spentUsd: spent(bot.spentUsd), extraUsd: spent(bot.extraUsd) };
+    document.bots[id] = {
+      period: bot.period,
+      spentUsd: spent(bot.spentUsd),
+      extraUsd: spent(bot.extraUsd),
+    };
   }
   for (const [id, limit] of entries(input.botLimits)) {
     if (!safeId(id)) continue;
@@ -129,7 +144,9 @@ export function parseSpendingDocument(value: unknown): SpendingDocument {
       if (amount !== undefined) document.botLimits[id] = amount;
     }
   }
-  for (const [id, usd] of entries(input.runs).slice(input.version === 1 ? -RUNS_KEPT : -MAX_OWNERS)) {
+  for (const [id, usd] of entries(input.runs).slice(
+    input.version === 1 ? -RUNS_KEPT : -MAX_OWNERS,
+  )) {
     if (safeId(id) && spent(usd) > 0) document.runs[id] = spent(usd);
   }
   return document;
@@ -193,7 +210,13 @@ export class SpendingLedger {
   }
 
   /** Count a request's cost. Zero or less changes nothing. */
-  record(owner: SpendingOwner, usd: number, settings: SpendingLimitsSettings, now: number, billingPeriods?: Readonly<Record<string, string>>): boolean {
+  record(
+    owner: SpendingOwner,
+    usd: number,
+    settings: SpendingLimitsSettings,
+    now: number,
+    billingPeriods?: Readonly<Record<string, string>>,
+  ): boolean {
     const cost = spent(usd);
     if (cost === 0 || !safeId(owner.id)) return false;
     if (owner.budgetScopes?.length) {
@@ -206,7 +229,12 @@ export class SpendingLedger {
           owners.add(key);
           this.record({ kind: scope.kind, id: scope.id }, cost, settings, now, billingPeriods);
         }
-        if (scope.kind === "bot" && scope.run !== undefined && safeId(scope.run) && !runs.has(scope.run)) {
+        if (
+          scope.kind === "bot" &&
+          scope.run !== undefined &&
+          safeId(scope.run) &&
+          !runs.has(scope.run)
+        ) {
           runs.add(scope.run);
           this.document.runs[scope.run] = (this.document.runs[scope.run] ?? 0) + cost;
         }
@@ -219,10 +247,17 @@ export class SpendingLedger {
       return true;
     }
     const frozenPeriod = billingPeriods?.[owner.id];
-    const bot = frozenPeriod === undefined ? this.botSpend(owner.id, settings, now) : this.botSpendInPeriod(owner.id, frozenPeriod);
+    const bot =
+      frozenPeriod === undefined
+        ? this.botSpend(owner.id, settings, now)
+        : this.botSpendInPeriod(owner.id, frozenPeriod);
     if (this.document.version === 2) {
       this.document.botPeriods ??= {};
-      this.document.botPeriods[JSON.stringify([owner.id, bot.period])] = { ...bot, botId: owner.id, spentUsd: bot.spentUsd + cost };
+      this.document.botPeriods[JSON.stringify([owner.id, bot.period])] = {
+        ...bot,
+        botId: owner.id,
+        spentUsd: bot.spentUsd + cost,
+      };
     } else this.document.bots[owner.id] = { ...bot, spentUsd: bot.spentUsd + cost };
     if (owner.run !== undefined && safeId(owner.run)) {
       const runs = this.document.runs;
@@ -238,10 +273,22 @@ export class SpendingLedger {
   }
 
   /** The limit the next request would break, if any. A routine run checks its Bot's month first. */
-  block(owner: SpendingOwner, settings: SpendingLimitsSettings, now: number): SpendingBlock | undefined {
+  block(
+    owner: SpendingOwner,
+    settings: SpendingLimitsSettings,
+    now: number,
+  ): SpendingBlock | undefined {
     if (owner.budgetScopes?.length) {
       for (const scope of [owner, ...owner.budgetScopes]) {
-        const block = this.block({ kind: scope.kind, id: scope.id, ...(scope.kind === "bot" && scope.run !== undefined ? { run: scope.run } : {}) }, settings, now);
+        const block = this.block(
+          {
+            kind: scope.kind,
+            id: scope.id,
+            ...(scope.kind === "bot" && scope.run !== undefined ? { run: scope.run } : {}),
+          },
+          settings,
+          now,
+        );
         if (block) return block;
       }
       return undefined;
@@ -251,23 +298,32 @@ export class SpendingLedger {
       if (limit === undefined) return undefined;
       const chat = this.document.chats[owner.id] ?? { spentUsd: 0, extraUsd: 0 };
       const allowedUsd = limit + chat.extraUsd;
-      return chat.spentUsd >= allowedUsd ? { kind: "chat", allowedUsd, spentUsd: chat.spentUsd } : undefined;
+      return chat.spentUsd >= allowedUsd
+        ? { kind: "chat", allowedUsd, spentUsd: chat.spentUsd }
+        : undefined;
     }
     const limit = this.botLimit(owner.id, settings);
     if (limit !== undefined) {
       const bot = this.botSpend(owner.id, settings, now);
       const allowedUsd = limit + bot.extraUsd;
-      if (bot.spentUsd >= allowedUsd) return { kind: "bot-month", allowedUsd, spentUsd: bot.spentUsd };
+      if (bot.spentUsd >= allowedUsd)
+        return { kind: "bot-month", allowedUsd, spentUsd: bot.spentUsd };
     }
     if (owner.run !== undefined && settings.routineRunUsd !== undefined) {
       const run = own(this.document.runs, owner.run) ? this.document.runs[owner.run] : 0;
-      if (run >= settings.routineRunUsd) return { kind: "run", allowedUsd: settings.routineRunUsd, spentUsd: run };
+      if (run >= settings.routineRunUsd)
+        return { kind: "run", allowedUsd: settings.routineRunUsd, spentUsd: run };
     }
     return undefined;
   }
 
   /** What a chat or Bot shows. Undefined when no limit applies to it. */
-  status(kind: "chat" | "bot", id: string, settings: SpendingLimitsSettings, now: number): SpendingStatusView | undefined {
+  status(
+    kind: "chat" | "bot",
+    id: string,
+    settings: SpendingLimitsSettings,
+    now: number,
+  ): SpendingStatusView | undefined {
     if (kind === "chat") {
       const limitUsd = settings.chatUsd;
       if (limitUsd === undefined) return undefined;
@@ -304,7 +360,12 @@ export class SpendingLedger {
    * limit once more. Only while it is reached or nearing; undefined when no
    * limit applies.
    */
-  allowMore(kind: "chat" | "bot", id: string, settings: SpendingLimitsSettings, now: number): SpendingStatusView | undefined {
+  allowMore(
+    kind: "chat" | "bot",
+    id: string,
+    settings: SpendingLimitsSettings,
+    now: number,
+  ): SpendingStatusView | undefined {
     const view = this.status(kind, id, settings, now);
     if (view === undefined || view.state === "under" || !safeId(id)) return view;
     const extraUsd = view.extraUsd + view.limitUsd;
@@ -314,7 +375,11 @@ export class SpendingLedger {
       const bot = this.botSpend(id, settings, now);
       if (this.document.version === 2) {
         this.document.botPeriods ??= {};
-        this.document.botPeriods[JSON.stringify([id, bot.period])] = { ...bot, botId: id, extraUsd };
+        this.document.botPeriods[JSON.stringify([id, bot.period])] = {
+          ...bot,
+          botId: id,
+          extraUsd,
+        };
       } else this.document.bots[id] = { ...bot, extraUsd };
     }
     return this.status(kind, id, settings, now);
@@ -327,8 +392,11 @@ export class SpendingLedger {
   }
 
   forgetBot(id: string): boolean {
-    const periods = Object.entries(this.document.botPeriods ?? {}).filter(([, entry]) => entry.botId === id);
-    const had = own(this.document.bots, id) || own(this.document.botLimits, id) || periods.length > 0;
+    const periods = Object.entries(this.document.botPeriods ?? {}).filter(
+      ([, entry]) => entry.botId === id,
+    );
+    const had =
+      own(this.document.bots, id) || own(this.document.botLimits, id) || periods.length > 0;
     delete this.document.bots[id];
     delete this.document.botLimits[id];
     for (const [key] of periods) delete this.document.botPeriods![key];

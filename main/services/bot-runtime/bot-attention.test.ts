@@ -14,10 +14,7 @@ import { createBotQuestions } from "./bot-questions.js";
 import { createBotIssueService } from "../bot-issues/service.js";
 import type { BotIssueStore } from "../bot-issues/store.js";
 import type { BotIssue } from "../../../renderer/shared/bot-issues.js";
-import {
-  optionAnswer,
-  QUESTION_ARGS,
-} from "./test-support/question-fixtures.js";
+import { optionAnswer, QUESTION_ARGS } from "./test-support/question-fixtures.js";
 
 /** An in-memory issue store; the real service still owns dedupe and settlement. */
 function memoryIssueStore(): BotIssueStore {
@@ -37,7 +34,9 @@ function memoryIssueStore(): BotIssueStore {
   };
 }
 
-function setup(plans: Pick<ReturnType<typeof createBotPlans>, "onChange"> = { onChange: () => () => {} }) {
+function setup(
+  plans: Pick<ReturnType<typeof createBotPlans>, "onChange"> = { onChange: () => () => {} },
+) {
   const questions = createBotQuestions();
   const approvals = createBotApprovals({ publish() {}, withdraw() {} });
   const handoffs = createBotHandoffs();
@@ -67,7 +66,12 @@ function setup(plans: Pick<ReturnType<typeof createBotPlans>, "onChange"> = { on
   return { questions, approvals, handoffs, accessRequests, issues, sent, stop };
 }
 
-function handOff(handoffs: ReturnType<typeof createBotHandoffs>, botId: string, waitId: string, signal?: AbortSignal) {
+function handOff(
+  handoffs: ReturnType<typeof createBotHandoffs>,
+  botId: string,
+  waitId: string,
+  signal?: AbortSignal,
+) {
   return handoffs.request({
     botId,
     waitId,
@@ -118,24 +122,15 @@ function approve(
 test("a question appearing and being answered each tell the sidebar, with only the Bot id", async () => {
   const { questions, sent } = setup();
   const answered = ask(questions, "bot-a", "w1");
-  assert.deepEqual(sent, [
-    { channel: "bots:attention", payload: { botId: "bot-a" } },
-  ]);
-  assert.equal(
-    questions.answer("bot-a", "w1", optionAnswer("w1", "Blue")),
-    "answered",
-  );
+  assert.deepEqual(sent, [{ channel: "bots:attention", payload: { botId: "bot-a" } }]);
+  assert.equal(questions.answer("bot-a", "w1", optionAnswer("w1", "Blue")), "answered");
   await answered;
   assert.equal(sent.length, 2);
   assert.deepEqual(sent[1], {
     channel: "bots:attention",
     payload: { botId: "bot-a" },
   });
-  assert.equal(
-    JSON.stringify(sent).includes("banner"),
-    false,
-    "no question text is broadcast",
-  );
+  assert.equal(JSON.stringify(sent).includes("banner"), false, "no question text is broadcast");
 });
 
 test("a question that is aborted tells the sidebar again", async () => {
@@ -151,11 +146,14 @@ test("a question that is aborted tells the sidebar again", async () => {
 test("an approval being asked and decided each tell the sidebar, with only the Bot id", async () => {
   const { approvals, sent } = setup();
   const decided = approve(approvals, "bot-a", "a1");
-  assert.deepEqual(sent, [
-    { channel: "bots:attention", payload: { botId: "bot-a" } },
-  ]);
+  assert.deepEqual(sent, [{ channel: "bots:attention", payload: { botId: "bot-a" } }]);
   assert.equal(approvals.decide("a1", "allow"), true);
-  assert.deepEqual(await decided, { id: "a1", authorizationFingerprint: "attention-a1", answer: "allow", source: "person" });
+  assert.deepEqual(await decided, {
+    id: "a1",
+    authorizationFingerprint: "attention-a1",
+    answer: "allow",
+    source: "person",
+  });
   assert.equal(sent.length, 2);
   assert.equal(
     JSON.stringify(sent).includes("secret-notes"),
@@ -243,27 +241,60 @@ test("an access request opening, answer and withdrawal broadcast only the Bot id
   assert.equal(sent.length, 4);
   stop();
   const later = accessRequests.request(accessRequestPrompt());
-  await accessRequests.answer("bot:a", accessRequests.pending()[0]!.waitId, "not_now", async () => {});
+  await accessRequests.answer(
+    "bot:a",
+    accessRequests.pending()[0]!.waitId,
+    "not_now",
+    async () => {},
+  );
   await later;
   assert.equal(sent.length, 4);
 });
 
-
 test("plan opening and settlement broadcast only the Bot id, and teardown silences plan changes", async () => {
   const profileDir = await mkdtemp(path.join(tmpdir(), "bot-plan-attention-"));
-  const plans = createBotPlans({ profileDir, knownBot: async () => true, revalidate: async () => {}, revokeAccess() {} });
+  const plans = createBotPlans({
+    profileDir,
+    knownBot: async () => true,
+    revalidate: async () => {},
+    revokeAccess() {},
+  });
   const { sent, stop } = setup(plans);
-  const proposal: BotPlanProposal = { title: "Private calendar task", why: "Private reason", steps: ["Private step"], items: [{ id: "i1", kind: "shell" }], authorization: { policyRevision: "p", bindingRevision: "b", proposalFingerprint: "", rules: [] } };
+  const proposal: BotPlanProposal = {
+    title: "Private calendar task",
+    why: "Private reason",
+    steps: ["Private step"],
+    items: [{ id: "i1", kind: "shell" }],
+    authorization: {
+      policyRevision: "p",
+      bindingRevision: "b",
+      proposalFingerprint: "",
+      rules: [],
+    },
+  };
   proposal.authorization.proposalFingerprint = botPlanProposalFingerprint(proposal);
   try {
-    const waiting = plans.request({ botId: "bot:a", planId: "p1", toolCallId: "call1", proposal, requestIds: ["private-request"], signal: undefined });
+    const waiting = plans.request({
+      botId: "bot:a",
+      planId: "p1",
+      toolCallId: "call1",
+      proposal,
+      requestIds: ["private-request"],
+      signal: undefined,
+    });
     assert.equal((await plans.current("bot:a"))?.status, "pending");
     assert.deepEqual(sent, [{ channel: "bots:attention", payload: { botId: "bot:a" } }]);
     await plans.respond("bot:a", "p1", "approve");
     await waiting;
-    assert.deepEqual(sent, Array.from({ length: 2 }, () => ({ channel: "bots:attention", payload: { botId: "bot:a" } })));
+    assert.deepEqual(
+      sent,
+      Array.from({ length: 2 }, () => ({ channel: "bots:attention", payload: { botId: "bot:a" } })),
+    );
     stop();
     await plans.endRuns("bot:a", "stopped");
     assert.equal(sent.length, 2);
-  } finally { stop(); await rm(profileDir, { recursive: true, force: true }); }
+  } finally {
+    stop();
+    await rm(profileDir, { recursive: true, force: true });
+  }
 });

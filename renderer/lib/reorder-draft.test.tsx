@@ -17,7 +17,11 @@ import {
 
 afterEach(cleanup);
 
-const key = (k: string, extra: Record<string, unknown> = {}) => ({ key: k, defaultPrevented: false, ...extra });
+const key = (k: string, extra: Record<string, unknown> = {}) => ({
+  key: k,
+  defaultPrevented: false,
+  ...extra,
+});
 const vertical = { orientation: "vertical" as const, rtl: false };
 
 test("a picked-up item moves in its draft, stops at the ends and jumps with Home and End", () => {
@@ -37,21 +41,43 @@ test("a picked-up item moves in its draft, stops at the ends and jumps with Home
 
 test("keys: Space and Enter pick up and drop, arrows follow the orientation and reading direction", () => {
   assert.equal(reorderKeyAction(key(" "), { ...vertical, held: false }), "pick");
-  assert.equal(reorderKeyAction(key("ArrowDown"), { ...vertical, held: false }), null, "arrows wait for a pick-up");
+  assert.equal(
+    reorderKeyAction(key("ArrowDown"), { ...vertical, held: false }),
+    null,
+    "arrows wait for a pick-up",
+  );
   assert.equal(reorderKeyAction(key("Enter"), { ...vertical, held: true }), "drop");
   assert.equal(reorderKeyAction(key("Escape"), { ...vertical, held: true }), "cancel");
-  assert.equal(reorderKeyAction(key("Escape", { isComposing: true }), { ...vertical, held: true }), null);
-  assert.equal(reorderKeyAction(key("ArrowUp", { altKey: true }), { ...vertical, held: true }), null);
+  assert.equal(
+    reorderKeyAction(key("Escape", { isComposing: true }), { ...vertical, held: true }),
+    null,
+  );
+  assert.equal(
+    reorderKeyAction(key("ArrowUp", { altKey: true }), { ...vertical, held: true }),
+    null,
+  );
   assert.equal(reorderKeyAction(key("ArrowLeft"), { ...vertical, held: true }), null);
-  assert.equal(reorderKeyAction(key("ArrowLeft"), { orientation: "horizontal", rtl: false, held: true }), "previous");
-  assert.equal(reorderKeyAction(key("ArrowLeft"), { orientation: "horizontal", rtl: true, held: true }), "next");
+  assert.equal(
+    reorderKeyAction(key("ArrowLeft"), { orientation: "horizontal", rtl: false, held: true }),
+    "previous",
+  );
+  assert.equal(
+    reorderKeyAction(key("ArrowLeft"), { orientation: "horizontal", rtl: true, held: true }),
+    "next",
+  );
   assert.equal(reorderKeyAction(key("End"), { ...vertical, held: true }), "last");
 });
 
 test("arrangeByDraft reorders only the draft's members and leaves the rest in place", () => {
   const draft = stepDraft(pickUp(["a", "c"], "c")!, "first");
-  assert.deepEqual(arrangeByDraft(["a", "b", "c"], (id) => id, draft), ["c", "b", "a"]);
-  assert.deepEqual(arrangeByDraft(["x", "y"], (id) => id, draft), ["x", "y"]);
+  assert.deepEqual(
+    arrangeByDraft(["a", "b", "c"], (id) => id, draft),
+    ["c", "b", "a"],
+  );
+  assert.deepEqual(
+    arrangeByDraft(["x", "y"], (id) => id, draft),
+    ["x", "y"],
+  );
 });
 
 test("pointer targets and edge scrolling", () => {
@@ -61,9 +87,17 @@ test("pointer targets and edge scrolling", () => {
   ];
   assert.deepEqual(pointerDropTarget(10, rows), { id: "a", place: "before" });
   assert.deepEqual(pointerDropTarget(50, rows), { id: "b", place: "after" });
-  assert.deepEqual(pointerDropTarget(500, rows), { id: "b", place: "after" }, "past the end lands after the last row");
+  assert.deepEqual(
+    pointerDropTarget(500, rows),
+    { id: "b", place: "after" },
+    "past the end lands after the last row",
+  );
   assert.equal(pointerDropTarget(10, []), null);
-  assert.equal(pointerDropTarget(10, rows, "a"), null, "over the dragged row itself it lands nowhere");
+  assert.equal(
+    pointerDropTarget(10, rows, "a"),
+    null,
+    "over the dragged row itself it lands nowhere",
+  );
   assert.deepEqual(pointerDropTarget(40, rows, "a"), { id: "b", place: "before" });
   assert.equal(edgeScrollVelocity(200, 0, 400), 0);
   assert.equal(edgeScrollVelocity(0, 0, 400), -18);
@@ -97,7 +131,10 @@ function List({ commits }: { commits: string[][] }) {
   );
 }
 
-const order = () => screen.getAllByRole("button", { name: /^Move / }).map((button) => button.getAttribute("aria-label")!.slice(5));
+const order = () =>
+  screen
+    .getAllByRole("button", { name: /^Move / })
+    .map((button) => button.getAttribute("aria-label")!.slice(5));
 
 test("a drop commits once, and only when the order changed", () => {
   const commits: string[][] = [];
@@ -132,5 +169,9 @@ test("leaving the handle cancels the draft and restores the order", async () => 
   assert.deepEqual(order(), ["Alpha", "Beta", "Gamma"]);
   assert.deepEqual(commits, []);
   assert.equal(screen.getByRole("status").textContent, "Moved Gamma back to position 3 of 3.");
-  assert.equal(document.activeElement, screen.getByRole("button", { name: "Elsewhere" }), "focus stays where the person took it");
+  assert.equal(
+    document.activeElement,
+    screen.getByRole("button", { name: "Elsewhere" }),
+    "focus stays where the person took it",
+  );
 });

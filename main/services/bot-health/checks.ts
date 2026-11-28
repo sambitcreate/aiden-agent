@@ -10,10 +10,19 @@ import type { BotHealthCheckResult, BotHealthReport } from "../../../renderer/sh
 export interface BotHealthCheckDeps {
   sessionState(botId: string): Promise<string>;
   /** Admission repairs a model setting that only went stale; "drifted" needs the person. */
-  refreshModelBinding(botId: string, signal: AbortSignal): Promise<"current" | "repaired" | "drifted" | "unknown">;
+  refreshModelBinding(
+    botId: string,
+    signal: AbortSignal,
+  ): Promise<"current" | "repaired" | "drifted" | "unknown">;
   /** May refresh an expired sign-in, which is the point of checking early. "unknown": couldn't tell (offline). */
-  providerAuth(botId: string, signal: AbortSignal): Promise<"ok" | "refreshed" | "signed_out" | "unknown">;
-  connections(botId: string, signal: AbortSignal): Promise<{ degraded: Array<{ id: string; label: string }> }>;
+  providerAuth(
+    botId: string,
+    signal: AbortSignal,
+  ): Promise<"ok" | "refreshed" | "signed_out" | "unknown">;
+  connections(
+    botId: string,
+    signal: AbortSignal,
+  ): Promise<{ degraded: Array<{ id: string; label: string }> }>;
   /** Store reads only: a check never starts, clones or downloads a Bot computer. */
   computer(botId: string): Promise<"none" | "ready" | "stale">;
 }
@@ -23,7 +32,12 @@ const BLOCKING_STATES = new Set(["needs_model", "model_error", "unavailable"]);
 export async function runBotHealthChecks(
   botId: string,
   deps: BotHealthCheckDeps,
-  options: { trigger: BotHealthReport["trigger"]; routineId?: string; signal: AbortSignal; now(): number },
+  options: {
+    trigger: BotHealthReport["trigger"];
+    routineId?: string;
+    signal: AbortSignal;
+    now(): number;
+  },
 ): Promise<BotHealthReport> {
   const results: BotHealthCheckResult[] = [];
   const report = (): BotHealthReport => ({
@@ -48,7 +62,9 @@ export async function runBotHealthChecks(
       id: "bot_state",
       status: state === "unavailable" ? "skipped" : "needs_you",
       label: state === "unavailable" ? "Bots are open in another window" : "AI model",
-      ...(state === "unavailable" ? {} : { failure: { kind: "model_setup" as const, code: state } }),
+      ...(state === "unavailable"
+        ? {}
+        : { failure: { kind: "model_setup" as const, code: state } }),
     });
     skipRest(["model", "provider_auth", "connections", "computer"]);
     return report();
@@ -63,11 +79,20 @@ export async function runBotHealthChecks(
     return report();
   }
   if (model === "drifted") {
-    results.push({ id: "model", status: "needs_you", label: LABELS.model, failure: { kind: "access_changed", code: "model_changed" } });
+    results.push({
+      id: "model",
+      status: "needs_you",
+      label: LABELS.model,
+      failure: { kind: "access_changed", code: "model_changed" },
+    });
     skipRest(["provider_auth", "connections", "computer"]);
     return report();
   }
-  results.push({ id: "model", status: model === "repaired" ? "repaired" : "ok", label: LABELS.model });
+  results.push({
+    id: "model",
+    status: model === "repaired" ? "repaired" : "ok",
+    label: LABELS.model,
+  });
 
   const auth = await settle(() => deps.providerAuth(botId, options.signal));
   if (auth === "unknown" || auth instanceof Error) {
@@ -76,11 +101,20 @@ export async function runBotHealthChecks(
     return report();
   }
   if (auth === "signed_out") {
-    results.push({ id: "provider_auth", status: "needs_you", label: LABELS.provider_auth, failure: { kind: "sign_in", code: "signed_out" } });
+    results.push({
+      id: "provider_auth",
+      status: "needs_you",
+      label: LABELS.provider_auth,
+      failure: { kind: "sign_in", code: "signed_out" },
+    });
     skipRest(["connections", "computer"]);
     return report();
   }
-  results.push({ id: "provider_auth", status: auth === "refreshed" ? "repaired" : "ok", label: LABELS.provider_auth });
+  results.push({
+    id: "provider_auth",
+    status: auth === "refreshed" ? "repaired" : "ok",
+    label: LABELS.provider_auth,
+  });
 
   const connections = await settle(() => deps.connections(botId, options.signal));
   if (connections instanceof Error) {
@@ -99,7 +133,12 @@ export async function runBotHealthChecks(
 
   const computer = await settle(() => deps.computer(botId));
   if (computer === "stale") {
-    results.push({ id: "computer", status: "needs_you", label: "Bot computer needs attention", failure: { kind: "other", code: "computer_stale" } });
+    results.push({
+      id: "computer",
+      status: "needs_you",
+      label: "Bot computer needs attention",
+      failure: { kind: "other", code: "computer_stale" },
+    });
   } else if (computer === "ready") {
     results.push({ id: "computer", status: "ok", label: LABELS.computer });
   } else {

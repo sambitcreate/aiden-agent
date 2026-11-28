@@ -11,7 +11,11 @@ import type { DeviceScreenSize } from "./device-stream";
 /** Native hinge presets. Each one also sets the device's physical orientation. */
 export const DUO_POSE_IDS = ["closed", "book", "open", "laptop", "tent"] as const;
 export type DuoPose = (typeof DUO_POSE_IDS)[number];
-export type DuoOrientation = "portrait" | "landscape_left" | "portrait_upside_down" | "landscape_right";
+export type DuoOrientation =
+  | "portrait"
+  | "landscape_left"
+  | "portrait_upside_down"
+  | "landscape_right";
 export type DuoCommand =
   | { control: "angle"; value: number }
   | { control: "pose"; value: DuoPose }
@@ -70,7 +74,10 @@ export function duoFoldState(screen: Pick<DuoScreen, "orientation"> & Partial<Du
  * read in the frame of the display active when it arrives, and the inner panel
  * is mounted a quarter turn from the cover.
  */
-export function duoHoldOrientation(vertical: boolean, screenId: number | undefined): DuoOrientation {
+export function duoHoldOrientation(
+  vertical: boolean,
+  screenId: number | undefined,
+): DuoOrientation {
   if (screenId === 1) return vertical ? "portrait" : "landscape_left";
   return vertical ? "landscape_left" : "portrait_upside_down";
 }
@@ -90,7 +97,11 @@ export function createDuoControl(options: {
   let queued: DuoCommand | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const publish = (error: string | null = null) =>
-    options.onChange({ pending: Boolean(active), requested: queued ?? active?.command ?? null, error });
+    options.onChange({
+      pending: Boolean(active),
+      requested: queued ?? active?.command ?? null,
+      error,
+    });
   const clear = (error: string | null = null) => {
     if (timer !== null) cancel(timer);
     timer = null;
@@ -111,7 +122,10 @@ export function createDuoControl(options: {
   };
   return {
     enqueue(command) {
-      if (command.control === "angle" && (!Number.isFinite(command.value) || command.value < 0 || command.value > 180)) {
+      if (
+        command.control === "angle" &&
+        (!Number.isFinite(command.value) || command.value < 0 || command.value > 180)
+      ) {
         return;
       }
       queued = command;

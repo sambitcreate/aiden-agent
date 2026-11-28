@@ -61,13 +61,13 @@ import { reduceUiDrafts, reduceUiVisuals, type UiDrafts } from "../lib/ui-visual
 import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import type { GenerationTimeline } from "../shared/generation-timeline";
-import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../shared/ask-user-question";
+import type {
+  AskUserQuestionPromptV1,
+  AskUserQuestionResponseV1,
+} from "../shared/ask-user-question";
 import type { HandoffQueuedMessage } from "../shared/chat-handoff";
 import type { Attachment, Chat, Workspace } from "../lib/types";
-import {
-  FloatingComposer,
-  type QuickChatTargetMode,
-} from "./floating-composer";
+import { FloatingComposer, type QuickChatTargetMode } from "./floating-composer";
 
 const NO_VISUAL_DRAFTS: VisualDrafts = new Map();
 const NO_UI_DRAFTS: UiDrafts = new Map();
@@ -192,7 +192,8 @@ export function FloatingChatApp() {
   const [timeline, setTimeline] = React.useState<GenerationTimeline | null>(null);
   const [streamingArtifacts, setStreamingArtifacts] = React.useState<ChatArtifactV1[]>([]);
   const [visualDrafts, setVisualDrafts] = React.useState<VisualDrafts>(NO_VISUAL_DRAFTS);
-  const [streamingUiVisuals, setStreamingUiVisuals] = React.useState<readonly ChatUiVisualV1[]>(NO_UI_VISUALS);
+  const [streamingUiVisuals, setStreamingUiVisuals] =
+    React.useState<readonly ChatUiVisualV1[]>(NO_UI_VISUALS);
   const [uiDrafts, setUiDrafts] = React.useState<UiDrafts>(NO_UI_DRAFTS);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
   const [approvalDeciding, setApprovalDeciding] = React.useState(false);
@@ -310,35 +311,35 @@ export function FloatingChatApp() {
       updatedAt?: number;
       ephemeral?: boolean;
       thinkingLevel?: GenerationThinkingLevel | null;
-    }>(
-      "chats:metadata-updated",
-      (payload) => {
-        if (!payload?.chatId || chatRef.current?.id !== payload.chatId) return;
-        // Main reconciled the chat's own level (a clamp): the slider follows the
-        // level that actually ran while this window still has the chat's model.
-        const reconciled = payload.thinkingLevel;
-        if (reconciled !== undefined) {
-          const owned = chatRef.current;
-          setSelectedModel((prev) => {
-            if (!owned || prev.providerId !== owned.providerId || prev.model !== owned.model) return prev;
-            const { thinkingLevel: _previous, ...rest } = prev;
-            return reconciled ? { ...rest, thinkingLevel: reconciled } : rest;
-          });
-        }
-        setChat((prev) =>
-          prev && prev.id === payload.chatId
-            ? applyChatMetadataUpdate(prev, {
-                chatId: payload.chatId,
-                title: payload.title ?? prev.title,
-                ...(payload.workspaceId !== undefined ? { workspaceId: payload.workspaceId } : {}),
-                updatedAt: payload.updatedAt ?? prev.updatedAt,
-                ...(payload.ephemeral !== undefined ? { ephemeral: payload.ephemeral } : {}),
-                ...(payload.thinkingLevel !== undefined ? { thinkingLevel: payload.thinkingLevel } : {}),
-              })
-            : prev,
-        );
-      },
-    );
+    }>("chats:metadata-updated", (payload) => {
+      if (!payload?.chatId || chatRef.current?.id !== payload.chatId) return;
+      // Main reconciled the chat's own level (a clamp): the slider follows the
+      // level that actually ran while this window still has the chat's model.
+      const reconciled = payload.thinkingLevel;
+      if (reconciled !== undefined) {
+        const owned = chatRef.current;
+        setSelectedModel((prev) => {
+          if (!owned || prev.providerId !== owned.providerId || prev.model !== owned.model)
+            return prev;
+          const { thinkingLevel: _previous, ...rest } = prev;
+          return reconciled ? { ...rest, thinkingLevel: reconciled } : rest;
+        });
+      }
+      setChat((prev) =>
+        prev && prev.id === payload.chatId
+          ? applyChatMetadataUpdate(prev, {
+              chatId: payload.chatId,
+              title: payload.title ?? prev.title,
+              ...(payload.workspaceId !== undefined ? { workspaceId: payload.workspaceId } : {}),
+              updatedAt: payload.updatedAt ?? prev.updatedAt,
+              ...(payload.ephemeral !== undefined ? { ephemeral: payload.ephemeral } : {}),
+              ...(payload.thinkingLevel !== undefined
+                ? { thinkingLevel: payload.thinkingLevel }
+                : {}),
+            })
+          : prev,
+      );
+    });
     const offControls = onNotification("settings:controls-changed", () => {
       void qc.invalidateQueries({ queryKey: queryKeys.settings });
     });
@@ -358,7 +359,9 @@ export function FloatingChatApp() {
 
   // The Agent Slider step shortcuts (⌥⌘[ / ⌥⌘] unless rebound). Quick Chat has
   // no command system, so it reads the bindings when the window opens.
-  const [shortcutBindings, setShortcutBindings] = React.useState<KeybindingSnapshot["effective"] | null>(null);
+  const [shortcutBindings, setShortcutBindings] = React.useState<
+    KeybindingSnapshot["effective"] | null
+  >(null);
   React.useEffect(() => {
     let live = true;
     const load = () =>
@@ -400,7 +403,11 @@ export function FloatingChatApp() {
       // the turn and the chat's saved model and effort disagree.
       if (sendingRef.current) return;
       modelTouchedRef.current = true;
-      const picked: QuickChatSelection = { providerId, model, ...(level ? { thinkingLevel: level } : {}) };
+      const picked: QuickChatSelection = {
+        providerId,
+        model,
+        ...(level ? { thinkingLevel: level } : {}),
+      };
       setSelectedModel(picked);
       const owned = chatRef.current;
       if (!owned) return;
@@ -424,7 +431,9 @@ export function FloatingChatApp() {
           return selection ?? picked;
         },
         (error: unknown) => {
-          toast.error(error instanceof Error ? error.message : "Couldn’t change this chat’s model.");
+          toast.error(
+            error instanceof Error ? error.message : "Couldn’t change this chat’s model.",
+          );
           // Main kept the chat's own selection: show that again, not the refused pick.
           const kept = authoritative(chatRef.current ?? owned) ?? picked;
           if (isLatest()) setSelectedModel(kept);
@@ -451,7 +460,11 @@ export function FloatingChatApp() {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || isComposingKey(event)) return;
       const direction =
-        next && matchesAccelerator(event, next) ? 1 : previous && matchesAccelerator(event, previous) ? -1 : 0;
+        next && matchesAccelerator(event, next)
+          ? 1
+          : previous && matchesAccelerator(event, previous)
+            ? -1
+            : 0;
       if (direction === 0) return;
       event.preventDefault();
       if (isGenerating || sending) return;
@@ -550,9 +563,7 @@ export function FloatingChatApp() {
                     : [...curr, artifact];
                 }
                 if (
-                  curr.some(
-                    (c) => c.kind === "image" && c.attachment.id === artifact.attachment.id,
-                  )
+                  curr.some((c) => c.kind === "image" && c.attachment.id === artifact.attachment.id)
                 ) {
                   return curr;
                 }
@@ -616,7 +627,8 @@ export function FloatingChatApp() {
   // Drain next queued follow-up automatically once idle and without errors.
   const drainingQueueRef = React.useRef(false);
   React.useEffect(() => {
-    if (isGenerating || sending || selectionSaving || error || !chat || queuedMessages.length === 0) return;
+    if (isGenerating || sending || selectionSaving || error || !chat || queuedMessages.length === 0)
+      return;
     if (drainingQueueRef.current) return;
     drainingQueueRef.current = true;
     const drainIntent = generationIntentRef.current;
@@ -656,7 +668,16 @@ export function FloatingChatApp() {
       .finally(() => {
         drainingQueueRef.current = false;
       });
-  }, [chat, error, isGenerating, queuedMessages, selectedModel, selectionSaving, sending, startTurnStream]);
+  }, [
+    chat,
+    error,
+    isGenerating,
+    queuedMessages,
+    selectedModel,
+    selectionSaving,
+    sending,
+    startTurnStream,
+  ]);
 
   const handleSend = async () => {
     const content = text.trim();
@@ -760,7 +781,8 @@ export function FloatingChatApp() {
         // and the chat's stored model and effort agree.
         const pendingSelection = pendingSelectionRef.current;
         const choice = pendingSelection ? await pendingSelection : selectedModel;
-        if (generationIntentRef.current !== sendIntent || chatRef.current?.id !== activeChatId) return;
+        if (generationIntentRef.current !== sendIntent || chatRef.current?.id !== activeChatId)
+          return;
         const turnId = createChatTurnId();
         const updated = await chatsApi.appendMessage(
           activeChatId,
@@ -904,7 +926,10 @@ export function FloatingChatApp() {
 
   const handleApprovalDecision = async (
     decision: "allow" | "deny",
-    options?: { formFillExcludedOrders?: number[]; scope?: "once" | "chat" | "always" | "workspace" },
+    options?: {
+      formFillExcludedOrders?: number[];
+      scope?: "once" | "chat" | "always" | "workspace";
+    },
   ) => {
     const current = approvals[0];
     if (!current || approvalDeciding) return;
@@ -1082,11 +1107,7 @@ export function FloatingChatApp() {
                           ? "bg-status-warning-surface text-status-warning hover:brightness-95 dark:hover:brightness-110"
                           : "bg-control/70 text-secondary hover:bg-control hover:text-primary",
                       )}
-                      aria-label={
-                        chat.ephemeral
-                          ? "Temporary chat options"
-                          : "Chats options"
-                      }
+                      aria-label={chat.ephemeral ? "Temporary chat options" : "Chats options"}
                       title={chat.title || (chat.ephemeral ? "Temporary chat" : "Saved to Chats")}
                       data-testid="quick-chat-status-pill"
                     >
@@ -1201,7 +1222,12 @@ export function FloatingChatApp() {
         <ScrollArea
           className="min-h-0 flex-1 bg-transparent"
           autoScrollToBottom
-          autoScrollDeps={[chat?.messages.length, streamingText, approvals.length, questionnaire?.promptId]}
+          autoScrollDeps={[
+            chat?.messages.length,
+            streamingText,
+            approvals.length,
+            questionnaire?.promptId,
+          ]}
           streaming={isGenerating}
           showScrollToBottomButton
         >

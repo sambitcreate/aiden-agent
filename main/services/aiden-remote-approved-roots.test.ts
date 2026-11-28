@@ -15,7 +15,9 @@ async function fixture() {
   let document = createDefaultAidenRemoteState();
   const state = new AidenRemoteStateRegistry({
     load: async () => structuredClone(document),
-    save: async (next) => { document = structuredClone(next); },
+    save: async (next) => {
+      document = structuredClone(next);
+    },
   });
   const service = new AidenRemoteApprovedRootService(state, {
     now: () => 12_345,
@@ -28,18 +30,33 @@ async function fixture() {
 test("Bot-only approvals remain in inventory but invisible to browsing until an ordinary phone approval", async () => {
   const app = await fixture();
   try {
-    const folder = path.join(app.directory, "Taxes"); await fs.mkdir(folder);
-    const root = await app.service.addLocalFolder(folder, { botsOnly: true, operationId: "bot-attempt" });
-    const browser = new AidenRemoteWorkspaceBrowserService({ instanceId: "test-instance", state: app.state, approvalStore: app.directory });
+    const folder = path.join(app.directory, "Taxes");
+    await fs.mkdir(folder);
+    const root = await app.service.addLocalFolder(folder, {
+      botsOnly: true,
+      operationId: "bot-attempt",
+    });
+    const browser = new AidenRemoteWorkspaceBrowserService({
+      instanceId: "test-instance",
+      state: app.state,
+      approvalStore: app.directory,
+    });
     assert.equal((await app.state.snapshot()).approvedRoots[0]!.botsOnly, true);
     assert.deepEqual((await browser.listRoots("phone")).roots, []);
     assert.equal((await app.service.addLocalFolder(folder, { botsOnly: true })).id, root.id);
     const ordinary = await app.service.addLocalFolder(folder);
-    assert.equal(ordinary.id, root.id); assert.equal(ordinary.botsOnly, undefined);
+    assert.equal(ordinary.id, root.id);
+    assert.equal(ordinary.botsOnly, undefined);
     assert.equal(ordinary.botGrantOperationId, undefined);
     assert.equal((await browser.listRoots("phone")).roots[0]!.id, root.id);
-    assert.equal(await app.service.removeLocalRoot(root.id, "bot-attempt"), false, "compensation never removes a root shared with phones");
-  } finally { await fs.rm(app.directory, { recursive: true, force: true }); }
+    assert.equal(
+      await app.service.removeLocalRoot(root.id, "bot-attempt"),
+      false,
+      "compensation never removes a root shared with phones",
+    );
+  } finally {
+    await fs.rm(app.directory, { recursive: true, force: true });
+  }
 });
 
 test("approved roots canonicalize symlinks and persist filesystem identity without exposing it remotely", async () => {
@@ -67,23 +84,43 @@ test("ordinary phone roots coexist with hidden overlapping Bot roots without exp
     const taxes = path.join(app.directory, "Documents", "Taxes");
     const year = path.join(taxes, "2025");
     await fs.mkdir(year, { recursive: true });
-    const hidden = await app.service.addLocalFolder(taxes, { botsOnly: true, operationId: "bot-grant" });
+    const hidden = await app.service.addLocalFolder(taxes, {
+      botsOnly: true,
+      operationId: "bot-grant",
+    });
     const visiblePath = relation === "parent" ? path.dirname(taxes) : year;
-    const visible = await app.service.addLocalFolder(visiblePath, { rootId: `root_phone_${relation}` });
+    const visible = await app.service.addLocalFolder(visiblePath, {
+      rootId: `root_phone_${relation}`,
+    });
     assert.notEqual(visible.id, hidden.id);
     const inventory = (await app.state.snapshot()).approvedRoots;
     assert.equal(inventory.length, 2);
-    assert.deepEqual(inventory.find((root) => root.id === hidden.id), hidden, "the exact Bot root and ownership receipt stay unchanged");
-    const browser = new AidenRemoteWorkspaceBrowserService({ instanceId: "test-instance", state: app.state, approvalStore: app.directory });
+    assert.deepEqual(
+      inventory.find((root) => root.id === hidden.id),
+      hidden,
+      "the exact Bot root and ownership receipt stay unchanged",
+    );
+    const browser = new AidenRemoteWorkspaceBrowserService({
+      instanceId: "test-instance",
+      state: app.state,
+      approvalStore: app.directory,
+    });
     const roots = (await browser.listRoots("phone")).roots;
-    assert.deepEqual(roots.map((root) => root.id), [visible.id]);
+    assert.deepEqual(
+      roots.map((root) => root.id),
+      [visible.id],
+    );
     assert.equal(JSON.stringify(roots).includes(hidden.id), false);
     assert.equal(JSON.stringify(roots).includes("bot-grant"), false);
-    const nested = path.join(visiblePath, "nested"); await fs.mkdir(nested);
+    const nested = path.join(visiblePath, "nested");
+    await fs.mkdir(nested);
     await assert.rejects(app.service.addLocalFolder(nested), /already covered/u);
     assert.equal(await app.service.removeLocalRoot(visible.id, "bot-grant"), false);
     assert.equal(await app.service.removeLocalRoot(hidden.id, "bot-grant"), true);
-    assert.deepEqual((await browser.listRoots("phone")).roots.map((root) => root.id), [visible.id]);
+    assert.deepEqual(
+      (await browser.listRoots("phone")).roots.map((root) => root.id),
+      [visible.id],
+    );
   }
 });
 
@@ -99,7 +136,10 @@ test("approved roots reuse exact folders and reject nested overlap, files, and f
     assert.equal((await app.service.addLocalFolder(parent)).id, root.id);
     await assert.rejects(app.service.addLocalFolder(child), /already covered/u);
     await assert.rejects(app.service.addLocalFolder(file), /must be a directory/u);
-    await assert.rejects(app.service.addLocalFolder(path.parse(app.directory).root), /filesystem root/u);
+    await assert.rejects(
+      app.service.addLocalFolder(path.parse(app.directory).root),
+      /filesystem root/u,
+    );
   } finally {
     await fs.rm(app.directory, { force: true, recursive: true });
   }
@@ -108,10 +148,7 @@ test("approved roots reuse exact folders and reject nested overlap, files, and f
 test("approving an entire home folder requires a separate local confirmation", async () => {
   const app = await fixture();
   try {
-    await assert.rejects(
-      app.service.addLocalFolder(app.directory),
-      /requires local confirmation/u,
-    );
+    await assert.rejects(app.service.addLocalFolder(app.directory), /requires local confirmation/u);
     const root = await app.service.addLocalFolder(app.directory, { confirmHomeDirectory: true });
     assert.equal(root.folderPath, await fs.realpath(app.directory));
     assert.equal(await app.service.removeLocalRoot(root.id), true);
@@ -123,7 +160,12 @@ test("approving an entire home folder requires a separate local confirmation", a
 async function storedRoot(directory: string) {
   const folderPath = await fs.realpath(directory);
   const live = await fs.stat(folderPath, { bigint: true });
-  return { folderPath, device: live.dev.toString(), inode: live.ino.toString(), liveDevice: live.dev };
+  return {
+    folderPath,
+    device: live.dev.toString(),
+    inode: live.ino.toString(),
+    liveDevice: live.dev,
+  };
 }
 
 // The approval records live on the same volume as the temporary folders.
@@ -152,14 +194,20 @@ test("an approved root fails closed when its folder, path, or volume is replaced
     const stored = await storedRoot(directory);
     const renumbered = { ...stored, device: (stored.liveDevice + 3n).toString() };
     assert.equal(
-      await verifyApprovedRootIdentity({ ...stored, inode: (BigInt(stored.inode) + 1n).toString() }, approvalStore),
+      await verifyApprovedRootIdentity(
+        { ...stored, inode: (BigInt(stored.inode) + 1n).toString() },
+        approvalStore,
+      ),
       null,
     );
 
     const alias = `${directory}-alias`;
     await fs.symlink(stored.folderPath, alias);
     try {
-      assert.equal(await verifyApprovedRootIdentity({ ...stored, folderPath: alias }, approvalStore), null);
+      assert.equal(
+        await verifyApprovedRootIdentity({ ...stored, folderPath: alias }, approvalStore),
+        null,
+      );
     } finally {
       await fs.rm(alias, { force: true });
     }
@@ -171,7 +219,9 @@ test("an approved root fails closed when its folder, path, or volume is replaced
     const otherVolume = {
       realpath: fs.realpath,
       stat: async (target: string) =>
-        target === approvalStore ? { ...live, dev: live.dev + 1n } : fs.stat(target, { bigint: true }),
+        target === approvalStore
+          ? { ...live, dev: live.dev + 1n }
+          : fs.stat(target, { bigint: true }),
     };
     assert.equal(await verifyApprovedRootIdentity(renumbered, approvalStore, otherVolume), null);
     assert.notEqual(await verifyApprovedRootIdentity(stored, approvalStore, otherVolume), null);

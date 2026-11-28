@@ -29,7 +29,9 @@ const root = createRoot(container);
 document.documentElement.style.background = "#f6f7f9";
 
 function frames(): Promise<void> {
-  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  return new Promise((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+  );
 }
 
 async function chartsDrawn(): Promise<void> {
@@ -47,7 +49,10 @@ window.__aidenSnapshot = async (json, width, padding) => {
   if (!visual) return null;
   flushSync(() => {
     root.render(
-      <div id="snapshot" style={{ width, padding, boxSizing: "content-box", background: "#f6f7f9" }}>
+      <div
+        id="snapshot"
+        style={{ width, padding, boxSizing: "content-box", background: "#f6f7f9" }}
+      >
         <AidenUiBlock visual={visual} attachments={payload.attachments} hideCaption />
       </div>,
     );
@@ -58,7 +63,9 @@ window.__aidenSnapshot = async (json, width, padding) => {
   const element = document.getElementById("snapshot");
   if (!element) return null;
   // Measure only once every picture has decoded, so their space is final.
-  await Promise.all(Array.from(element.querySelectorAll("img"), (image) => image.decode().catch(() => undefined)));
+  await Promise.all(
+    Array.from(element.querySelectorAll("img"), (image) => image.decode().catch(() => undefined)),
+  );
   await frames();
   // The capture adds the padding back on each side.
   return Math.ceil(element.getBoundingClientRect().height - padding * 2);

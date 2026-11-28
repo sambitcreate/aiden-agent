@@ -32,9 +32,9 @@ A chat starts with its everyday tools: files, commands, web search and page read
 
 Measured on 2026-10-28 with the end-to-end LM Studio fixture (a fresh workspace chat with Full access, the two built-in skills, codemode on), counting a quarter token per character of each tool definition as the context meter does:
 
-| | Before | After |
-| --- | --- | --- |
-| Tools declared | 45 | 22 |
-| Built-in tools in the Context tab | 9.7K | 3.6K |
+|                                   | Before | After |
+| --------------------------------- | ------ | ----- |
+| Tools declared                    | 45     | 22    |
+| Built-in tools in the Context tab | 9.7K   | 3.6K  |
 
 Each installed skill now costs one prompt line instead of a tool definition plus a line. Computer Use (about 1.8K) and the device tools (about 0.8K) are held back too when those features are on, so a Mac with them enabled saves more. A Full Access Bot with subagents, routines, image sharing and Computer Use declares about 3.7K fewer tokens per request.

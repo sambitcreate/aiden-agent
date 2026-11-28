@@ -11,7 +11,15 @@ import { useBotLive } from "../../lib/use-bot-live";
 import type { BotAvatar as BotAvatarValue } from "../../shared/bots";
 import { useBotHandoffActions } from "./use-bot-handoff-actions";
 
-export function BotPanelHandoff({ botId, name, avatar }: { botId: string; name: string; avatar: BotAvatarValue }) {
+export function BotPanelHandoff({
+  botId,
+  name,
+  avatar,
+}: {
+  botId: string;
+  name: string;
+  avatar: BotAvatarValue;
+}) {
   const handoff = useBotLive(botId).snapshot?.handoff ?? null;
   const actions = useBotHandoffActions(botId, handoff?.waitId);
   if (!handoff) return null;
@@ -20,7 +28,15 @@ export function BotPanelHandoff({ botId, name, avatar }: { botId: string; name: 
       <BotNoticeCard
         key={handoff.waitId}
         label={`${name} needs you`}
-        iconTile={<BotAvatar botId={botId} photoLoading="immediate" avatar={avatar} name={name} size="small" />}
+        iconTile={
+          <BotAvatar
+            botId={botId}
+            photoLoading="immediate"
+            avatar={avatar}
+            name={name}
+            size="small"
+          />
+        }
         title={handoffCardTitle(name, handoff)}
         actions={
           <HandoffActions

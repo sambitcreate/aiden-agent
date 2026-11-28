@@ -6,10 +6,7 @@ import type {
   AttachToWorkspaceResult,
   InspectAttachFilesResult,
 } from "../shared/chat-attach-workspace";
-import type {
-  ClaimedDesktopHandoff,
-  ClaimHandoffRequest,
-} from "../shared/chat-handoff";
+import type { ClaimedDesktopHandoff, ClaimHandoffRequest } from "../shared/chat-handoff";
 import type {
   QuickChatExpandRequest,
   QuickChatExpandResult,
@@ -23,13 +20,30 @@ import type {
 } from "./generation-stream";
 import { createBotPeerApi } from "./bot-peers-api";
 import { parseBotExecutionResumeStatus } from "../shared/bot-execution-resume";
-import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, type BotRoutineModelSave, type BotRoutineThinkingLevel } from "../shared/bot-routine-models";
+import {
+  parseBotRoutineModelSettings,
+  parseBotRoutineModelCatalog,
+  parseBotRoutineModelResult,
+  parseBotRoutineModelRuns,
+  type BotRoutineModelSave,
+  type BotRoutineThinkingLevel,
+} from "../shared/bot-routine-models";
 import type { PeerProjectSource } from "../shared/peer-project-clone";
 import { BOT_CONNECTOR_WATCH_CHANNELS as watchChannels } from "../shared/bot-connector-watches";
 import type * as ConnectorWatch from "../shared/bot-connector-watches";
-import { BOT_OPEN_WORK_CHANNELS as openWorkChannels, parseBotOpenWorkSnapshot, parseBotOpenWorkResult, parseBotOpenWorkEvidence, type BotOpenWorkMutation } from "../shared/bot-open-work";
+import {
+  BOT_OPEN_WORK_CHANNELS as openWorkChannels,
+  parseBotOpenWorkSnapshot,
+  parseBotOpenWorkResult,
+  parseBotOpenWorkEvidence,
+  type BotOpenWorkMutation,
+} from "../shared/bot-open-work";
 import { BOT_PLAN_CHANNELS, type BotPlanDecision } from "../shared/bot-plans.js";
-import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
+import type {
+  AppControlSnapshot,
+  AppControlOperation,
+  AppControlReceipt,
+} from "../shared/app-controls";
 import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import {
@@ -40,7 +54,11 @@ import {
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
-import { KEEP_AWAKE_CHANGED_CHANNEL, parseKeepAwakeStatus, type KeepAwakeStatus } from "../shared/keep-awake";
+import {
+  KEEP_AWAKE_CHANGED_CHANNEL,
+  parseKeepAwakeStatus,
+  type KeepAwakeStatus,
+} from "../shared/keep-awake";
 import { parseWindowControlsState, type WindowControlsState } from "../shared/window-chrome";
 import {
   parseUsageLimitWaits,
@@ -55,7 +73,11 @@ import {
   type SpendingChangedEvent,
   type SpendingStatusView,
 } from "../shared/spending";
-import type { AnalyticsNoticeChoice, AnalyticsRegistryView, AnalyticsStatusView } from "../shared/analytics";
+import type {
+  AnalyticsNoticeChoice,
+  AnalyticsRegistryView,
+  AnalyticsStatusView,
+} from "../shared/analytics";
 import {
   HOOKS_CHANGED_CHANNEL,
   isHooksOverview,
@@ -78,7 +100,11 @@ import type {
   FirstMessageWorktreeRequest,
   FirstMessageWorktreeResult,
 } from "../shared/worktree-on-send";
-import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatus } from "../shared/acp-harness.js";
+import {
+  ACP_HARNESS_STATUS_CHANNEL,
+  parseAcpHarnessStatus,
+  type AcpHarnessStatus,
+} from "../shared/acp-harness.js";
 import {
   BOT_COMPUTER_CHANNELS,
   BOT_COMPUTERS_CHANGED_CHANNEL,
@@ -102,7 +128,7 @@ import type {
   TtsSourceRef,
 } from "../shared/tts";
 
-type TtsSettings = TtsSettingsV1;// Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
+type TtsSettings = TtsSettingsV1; // Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
 
 import type {
   ApprovalDecision,
@@ -225,10 +251,7 @@ export interface BotAccessState {
   webSearchEnabled?: boolean;
 }
 import type { GenerationTimeline } from "../shared/generation-timeline";
-import type {
-  ChatRunInputAdmissionResult,
-  ChatRunInputMode,
-} from "../shared/chat-run-input";
+import type { ChatRunInputAdmissionResult, ChatRunInputMode } from "../shared/chat-run-input";
 import type { ToolApprovalDetails } from "../shared/assistant";
 import type { ToolApprovalRuleView, ToolApprovalScope } from "../shared/tool-approval-scope";
 import type { ToolApprovalPreview } from "../shared/tool-approval-preview";
@@ -299,7 +322,12 @@ import type {
 } from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
 import { parseChatFollowThrough, type ChatFollowThroughV1 } from "../shared/follow-through";
-import { parseGoalProposal, parseGoalView, type GoalProposalView, type GoalView } from "../shared/goal";
+import {
+  parseGoalProposal,
+  parseGoalView,
+  type GoalProposalView,
+  type GoalView,
+} from "../shared/goal";
 import type { BackgroundJobOutput } from "../shared/background-jobs";
 import {
   parseDeviceHostCheck,
@@ -380,7 +408,6 @@ export interface AppInfo {
   capabilities: AppCapabilities;
 }
 
-
 /**
  * Runs this Mac hosts but this window did not start (a paired phone's turn,
  * another window's). Frames arrive batched, only for this window's own
@@ -399,11 +426,14 @@ export const localRunsApi = {
 };
 
 export const peerHostsApi = {
-  removeRoute: (hostId: string, routeId: string) => invoke<void>("remote:peerRouteRemove", hostId, routeId),
+  removeRoute: (hostId: string, routeId: string) =>
+    invoke<void>("remote:peerRouteRemove", hostId, routeId),
   restoreRoutes: (hostId: string) => invoke<void>("remote:peerRoutesRestore", hostId),
-  pendingIntents: (hostId: string, chatId: string) => invoke<SavedChatIntent[]>("remote:peerIntentsList", hostId, chatId),
+  pendingIntents: (hostId: string, chatId: string) =>
+    invoke<SavedChatIntent[]>("remote:peerIntentsList", hostId, chatId),
   saveIntent: (intent: SavedChatIntent) => invoke<void>("remote:peerIntentsPut", intent),
-  removeIntent: (hostId: string, chatId: string, key: string) => invoke<void>("remote:peerIntentsRemove", hostId, chatId, key),
+  removeIntent: (hostId: string, chatId: string, key: string) =>
+    invoke<void>("remote:peerIntentsRemove", hostId, chatId, key),
   list: () => invoke<PeerHostView[]>("remote:peersList"),
   pair: (payload: string) => invoke<PeerHostView>("remote:peersPair", payload),
   setEnabled: (id: string, enabled: boolean) => invoke<void>("remote:peersSetEnabled", id, enabled),
@@ -557,7 +587,11 @@ export const providersApi = {
   logout: (providerId: string) => invoke<unknown>("providers:logout", providerId),
   /** Settings → Providers: let custom connectors use this provider's saved API key. */
   setConnectorKeySharing: (providerId: string, allowed: boolean) =>
-    invoke<{ connectorKeySharing: boolean }>("providers:setConnectorKeySharing", providerId, allowed),
+    invoke<{ connectorKeySharing: boolean }>(
+      "providers:setConnectorKeySharing",
+      providerId,
+      allowed,
+    ),
   onAuthPrompt: (handler: (prompt: ProviderAuthPrompt) => void) =>
     onNotification("providers:auth:prompt", handler),
   onAuthEvent: (handler: (event: ProviderAuthEvent) => void) =>
@@ -571,9 +605,12 @@ export const providersApi = {
 };
 
 export const appControlsApi = {
-  acknowledgeNavigation: (requestId: string, status: "opened" | "blocked") => invoke<boolean>("settings:controls:navigation-ack", requestId, status),
-  get: (chatId: string, panelId: string) => invoke<AppControlSnapshot>("settings:controls:get", chatId, panelId),
-  apply: (chatId: string, panelId: string, operation: AppControlOperation) => invoke<AppControlReceipt>("settings:controls:apply", chatId, panelId, operation),
+  acknowledgeNavigation: (requestId: string, status: "opened" | "blocked") =>
+    invoke<boolean>("settings:controls:navigation-ack", requestId, status),
+  get: (chatId: string, panelId: string) =>
+    invoke<AppControlSnapshot>("settings:controls:get", chatId, panelId),
+  apply: (chatId: string, panelId: string, operation: AppControlOperation) =>
+    invoke<AppControlReceipt>("settings:controls:apply", chatId, panelId, operation),
   onChanged: (handler: () => void) => onNotification("settings:controls-changed", handler),
 };
 
@@ -595,7 +632,6 @@ export const harnessApi = {
       if (status) handler(status);
     }),
 };
-
 
 export const assistantLiveApi = {
   status: () => invoke<AssistantLiveSnapshot>("assistant-live:status"),
@@ -631,7 +667,11 @@ export const imageGenerationApi = {
   removeKey: (provider: ImageGenerationProviderId) =>
     invoke<ImageGenerationActionResult>("imageGeneration:removeKey", { provider }),
   setModelEnabled: (provider: ImageGenerationProviderId, id: string, enabled: boolean) =>
-    invoke<ImageGenerationActionResult>("imageGeneration:setModelEnabled", { provider, id, enabled }),
+    invoke<ImageGenerationActionResult>("imageGeneration:setModelEnabled", {
+      provider,
+      id,
+      enabled,
+    }),
   /** One write for many enable choices (Settings' bulk actions). */
   setModelsEnabled: (changes: ImageGenerationSetModelEnabledRequest[]) =>
     invoke<ImageGenerationActionResult>("imageGeneration:setModelsEnabled", { changes }),
@@ -653,10 +693,15 @@ export const usageLimitsApi = {
   retryNow: (ownerKind: UsageLimitWaitView["ownerKind"], ownerId: string) =>
     invoke<boolean>("usageLimits:retryNow", ownerKind, ownerId),
   onChanged: (handler: (waits: UsageLimitWaitView[]) => void) =>
-    onNotification<UsageLimitsChangedEvent>(USAGE_LIMITS_CHANGED_CHANNEL, (event) => handler(parseUsageLimitWaits(event?.waits))),
+    onNotification<UsageLimitsChangedEvent>(USAGE_LIMITS_CHANGED_CHANNEL, (event) =>
+      handler(parseUsageLimitWaits(event?.waits)),
+    ),
 };
 
-export type BotSpendingLimitChoice = { kind: "default" } | { kind: "none" } | { kind: "amount"; usd: number };
+export type BotSpendingLimitChoice =
+  | { kind: "default" }
+  | { kind: "none" }
+  | { kind: "amount"; usd: number };
 
 function parseBotSpendingLimitChoice(value: unknown): BotSpendingLimitChoice {
   const choice = value as { kind?: unknown; usd?: unknown } | null;
@@ -678,7 +723,8 @@ function parseAnalyticsStatus(value: unknown): AnalyticsStatusView {
 /** Usage-data consent (Settings → About, onboarding and the one-time notice). */
 export const analyticsApi = {
   status: async () => parseAnalyticsStatus(await invoke<unknown>("analytics:status")),
-  setEnabled: async (enabled: boolean) => parseAnalyticsStatus(await invoke<unknown>("analytics:setEnabled", enabled)),
+  setEnabled: async (enabled: boolean) =>
+    parseAnalyticsStatus(await invoke<unknown>("analytics:setEnabled", enabled)),
   markNoticeShown: async (choice: AnalyticsNoticeChoice) =>
     parseAnalyticsStatus(await invoke<unknown>("analytics:markNoticeShown", choice)),
   registry: () => invoke<AnalyticsRegistryView>("analytics:registry"),
@@ -689,15 +735,22 @@ export const spendingApi = {
     parseSpendingStatusView(await invoke<unknown>("spending:status", ownerKind, ownerId)),
   /** Raise the chat's limit, or the Bot's month, by the limit once more. */
   allowMore: async (notice: SpendingStatusView) =>
-    parseSpendingStatusView(await invoke<unknown>("spending:allowMore", notice.ownerKind, notice.ownerId, notice)),
-  botLimit: async (botId: string) => parseBotSpendingLimitChoice(await invoke<unknown>("spending:botLimit", botId)),
+    parseSpendingStatusView(
+      await invoke<unknown>("spending:allowMore", notice.ownerKind, notice.ownerId, notice),
+    ),
+  botLimit: async (botId: string) =>
+    parseBotSpendingLimitChoice(await invoke<unknown>("spending:botLimit", botId)),
   /** "default" follows Settings, null is no limit, a number is the Bot's own. */
   setBotLimit: async (botId: string, choice: "default" | null | number) =>
     parseBotSpendingLimitChoice(await invoke<unknown>("spending:setBotLimit", botId, choice)),
   /** `ownerId` "*" means every chat or every Bot (the limits in Settings changed). */
   onChanged: (handler: (event: SpendingChangedEvent) => void) =>
     onNotification<SpendingChangedEvent>(SPENDING_CHANGED_CHANNEL, (event) => {
-      if ((event?.ownerKind === "chat" || event?.ownerKind === "bot") && typeof event.ownerId === "string") handler(event);
+      if (
+        (event?.ownerKind === "chat" || event?.ownerKind === "bot") &&
+        typeof event.ownerId === "string"
+      )
+        handler(event);
     }),
 };
 
@@ -715,15 +768,21 @@ export const hooksApi = {
     return overview;
   },
   approveProposal: async (proposalId: string) =>
-    unwrapHookResult(await invoke<HookIpcResult<HookListing | undefined>>("hooks:approveProposal", proposalId)),
+    unwrapHookResult(
+      await invoke<HookIpcResult<HookListing | undefined>>("hooks:approveProposal", proposalId),
+    ),
   rejectProposal: (proposalId: string) => invoke<boolean>("hooks:rejectProposal", proposalId),
   save: async (request: HookSaveRequest) =>
     unwrapHookResult(await invoke<HookIpcResult<HookListing | undefined>>("hooks:save", request)),
   /** Approve exactly the digest the owner saw; a hook that changed since is refused. */
   approveDigest: async (hookId: string, digest: string) =>
-    unwrapHookResult(await invoke<HookIpcResult<HookListing>>("hooks:approveDigest", hookId, digest)),
-  setEnabled: (hookId: string, enabled: boolean) => invoke<boolean>("hooks:setEnabled", hookId, enabled),
-  delete: async (hookId: string) => unwrapHookResult(await invoke<HookIpcResult<void>>("hooks:delete", hookId)),
+    unwrapHookResult(
+      await invoke<HookIpcResult<HookListing>>("hooks:approveDigest", hookId, digest),
+    ),
+  setEnabled: (hookId: string, enabled: boolean) =>
+    invoke<boolean>("hooks:setEnabled", hookId, enabled),
+  delete: async (hookId: string) =>
+    unwrapHookResult(await invoke<HookIpcResult<void>>("hooks:delete", hookId)),
   setPaused: (paused: boolean) => invoke<boolean>("hooks:setPaused", paused),
   /**
    * Runs the hook's command against a sample payload. Only from an explicit Test press,
@@ -743,11 +802,14 @@ export const approvalRulesApi = {
   list: () => invoke<ApprovalRulesView>(APPROVAL_RULE_CHANNELS.list),
   picker: () => invoke<ApprovalRulePickerOption[]>(APPROVAL_RULE_CHANNELS.picker),
   add: (input: ApprovalRuleAddInput) => invoke<ApprovalRule>(APPROVAL_RULE_CHANNELS.add, input),
-  change: (input: ApprovalRuleChangeInput) => invoke<{ changed: boolean }>(APPROVAL_RULE_CHANNELS.change, input),
-  remove: (ref: ApprovalRuleRowRef) => invoke<{ removed: boolean }>(APPROVAL_RULE_CHANNELS.remove, { ref }),
+  change: (input: ApprovalRuleChangeInput) =>
+    invoke<{ changed: boolean }>(APPROVAL_RULE_CHANNELS.change, input),
+  remove: (ref: ApprovalRuleRowRef) =>
+    invoke<{ removed: boolean }>(APPROVAL_RULE_CHANNELS.remove, { ref }),
   refresh: () => invoke<ApprovalRulesView>(APPROVAL_RULE_CHANNELS.refresh),
   setAside: () => invoke<ApprovalRulesView>(APPROVAL_RULE_CHANNELS.setAside),
-  onChanged: (handler: () => void) => onNotification(APPROVAL_RULE_CHANNELS.changed, () => handler()),
+  onChanged: (handler: () => void) =>
+    onNotification(APPROVAL_RULE_CHANNELS.changed, () => handler()),
 };
 
 export const computerUseApi = {
@@ -797,7 +859,12 @@ export const scheduleApi = {
     invoke<{ url: string; secret?: string }>("schedule:trigger-link:rotate", id),
   /** Whether the task has a link and its recent calls; never the link itself. */
   triggerLinkState: (id: string) =>
-    invoke<{ hasLink: boolean; needsNewLink?: boolean; listenerOn: boolean; log: Array<{ at: number; outcome: string; preview: string; repeats?: number }> }>("schedule:trigger-link:state", id),
+    invoke<{
+      hasLink: boolean;
+      needsNewLink?: boolean;
+      listenerOn: boolean;
+      log: Array<{ at: number; outcome: string; preview: string; repeats?: number }>;
+    }>("schedule:trigger-link:state", id),
   /** Find sources for a task that runs when a connected app has news: opaque choices, valid for 15 minutes. */
   findTriggerConnectorSources: () =>
     invoke<ConnectorWatch.BotConnectorWatchSourceList>("schedule:trigger-connector:find-sources"),
@@ -807,9 +874,12 @@ export const scheduleApi = {
   settings: (patch?: Partial<ScheduledTaskSettings>) =>
     invoke<ScheduledTaskSettings>("schedule:settings", patch),
   /** What keeps this computer awake right now (Settings → Scheduled tasks → While you're away). */
-  keepAwakeStatus: async () => parseKeepAwakeStatus(await invoke<unknown>("schedule:keepAwakeStatus")),
+  keepAwakeStatus: async () =>
+    parseKeepAwakeStatus(await invoke<unknown>("schedule:keepAwakeStatus")),
   onKeepAwakeChanged: (handler: (status: KeepAwakeStatus) => void) =>
-    onNotification<unknown>(KEEP_AWAKE_CHANGED_CHANNEL, (status) => handler(parseKeepAwakeStatus(status))),
+    onNotification<unknown>(KEEP_AWAKE_CHANGED_CHANNEL, (status) =>
+      handler(parseKeepAwakeStatus(status)),
+    ),
 };
 
 export const profileApi = {
@@ -839,9 +909,13 @@ export const skillsApi = {
 // ── MCP servers ───────────────────────────────────────────────────────
 export const mcpApi = {
   /** Explicit Settings metadata check; never changes a Bot's grants. */
-  inspectComposioWatch: () => invoke<import("../../main/services/bot-routine-events/connector-watch-composio-probe").ComposioWatchProbePublicResult>("mcp:composioWatch:inspect"),
+  inspectComposioWatch: () =>
+    invoke<
+      import("../../main/services/bot-routine-events/connector-watch-composio-probe").ComposioWatchProbePublicResult
+    >("mcp:composioWatch:inspect"),
   /** Explicit foreground Calendar read acceptance, separate from metadata inspection. */
-  checkComposioCalendarReads: () => invoke<{ message: string }>("mcp:composioWatch:inspect", { calendarRead: true }),
+  checkComposioCalendarReads: () =>
+    invoke<{ message: string }>("mcp:composioWatch:inspect", { calendarRead: true }),
   list: () => invoke<McpServer[]>("mcp:list"),
   /** Built-in provider catalog plus per-preset connection state. */
   presets: () => invoke<McpPresetState[]>("mcp:presets"),
@@ -849,21 +923,25 @@ export const mcpApi = {
   setPresetKey: (serverId: string, key: string) =>
     invoke<{ hasKey: boolean }>("mcp:setPresetKey", serverId, key),
   /** Resolves to the stored record (env/header values replaced by markers). `approveLaunch`: the editor, which shows the command, approves a local server to run. `fromEditor`: an editor save (sign-in and provider consent included), so kept values may follow an address it changed. */
-  save: (server: McpServer, options?: { approveLaunch?: boolean; fromEditor?: boolean }) => invoke<McpServer>("mcp:save", server, options),
+  save: (server: McpServer, options?: { approveLaunch?: boolean; fromEditor?: boolean }) =>
+    invoke<McpServer>("mcp:save", server, options),
   /** Local servers not approved to run on this device (added or changed outside Aiden). */
   launchApprovals: () => invoke<McpPendingLaunchApproval[]>("mcp:launchApprovals"),
-  approveLaunch: (id: string, fingerprint: string) => invoke<{ approved: true }>("mcp:approveLaunch", id, fingerprint),
+  approveLaunch: (id: string, fingerprint: string) =>
+    invoke<{ approved: true }>("mcp:approveLaunch", id, fingerprint),
   remove: (id: string) => invoke<void>("mcp:remove", id),
   status: (server: McpServer) => invoke<McpStatus>("mcp:status", server),
   /** Browser OAuth sign-in for a remote server. Resolves once tokens are stored. */
   /** `connectionError`: signed in and stored, but the follow-up connection failed for another reason. */
-  authorize: (server: McpServer) => invoke<{ authorized: boolean; connectionError?: string }>("mcp:authorize", server),
+  authorize: (server: McpServer) =>
+    invoke<{ authorized: boolean; connectionError?: string }>("mcp:authorize", server),
   /** Stop a sign-in waiting in the browser; frees the loopback port at once. */
   cancelAuthorize: (id: string) => invoke<{ cancelled: boolean }>("mcp:cancelAuthorize", id),
   /** Forget this server's OAuth session and disconnect it. */
   signOut: (id: string) => invoke<{ authorized: false }>("mcp:signOut", id),
   /** Connect to an unsaved draft without persisting it. `apiKey` is a pasted, unsaved preset key. */
-  testDraft: (server: McpServer, apiKey?: string) => invoke<McpStatus>("mcp:testDraft", server, apiKey),
+  testDraft: (server: McpServer, apiKey?: string) =>
+    invoke<McpStatus>("mcp:testDraft", server, apiKey),
   /** Schedules and Bots that rely on this server. */
   dependents: (id: string) => invoke<McpServerDependents>("mcp:dependents", id),
   /** Current per-server live status; changes arrive on `mcp:statusChanged`. */
@@ -877,8 +955,14 @@ export const mcpApi = {
   onStatusChanged: (handler: (status: McpLiveStatus) => void) =>
     onNotification<McpLiveStatus>("mcp:statusChanged", handler),
   oauthStatus: (id: string) =>
-    invoke<{ authorized: boolean; needsSignIn?: boolean; hasSession?: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
-  providerAuth: (server: McpServer, allowed: boolean) => invoke<{ authorized: boolean }>("mcp:providerAuth", server, allowed),
+    invoke<{
+      authorized: boolean;
+      needsSignIn?: boolean;
+      hasSession?: boolean;
+      providerAuthorized?: boolean;
+    }>("mcp:oauthStatus", id),
+  providerAuth: (server: McpServer, allowed: boolean) =>
+    invoke<{ authorized: boolean }>("mcp:providerAuth", server, allowed),
   /** Drop cached connections so the next message reconnects with current config. */
   reconnect: () => invoke<void>("mcp:reconnect"),
 };
@@ -1081,9 +1165,17 @@ export const aidenRemoteApi = {
   pendingApproval: (chatId: string) =>
     invoke<RemoteApprovalPrompt | null>("remote:getPendingApproval", chatId),
   pendingQuestion: (chatId: string) =>
-    invoke<(AskUserQuestionPromptV1 & { source: "remote" }) | null>("remote:getPendingQuestion", chatId),
+    invoke<(AskUserQuestionPromptV1 & { source: "remote" }) | null>(
+      "remote:getPendingQuestion",
+      chatId,
+    ),
   respondQuestion: (chatId: string, promptId: string, response: AskUserQuestionResponseV1) =>
-    invoke<{ status: "answered" | "elsewhere" }>("remote:respondQuestionFromHost", chatId, promptId, response),
+    invoke<{ status: "answered" | "elsewhere" }>(
+      "remote:respondQuestionFromHost",
+      chatId,
+      promptId,
+      response,
+    ),
   respondApproval: (
     chatId: string,
     approvalId: string,
@@ -1091,7 +1183,13 @@ export const aidenRemoteApi = {
     scope?: ToolApprovalScope,
   ) =>
     scope && scope !== "once"
-      ? invoke<{ resolved: true }>("remote:respondApprovalFromHost", chatId, approvalId, decision, scope)
+      ? invoke<{ resolved: true }>(
+          "remote:respondApprovalFromHost",
+          chatId,
+          approvalId,
+          decision,
+          scope,
+        )
       : invoke<{ resolved: true }>("remote:respondApprovalFromHost", chatId, approvalId, decision),
   onChanged: (handler: () => void) => onNotification("remote:changed", handler),
   onApprovalChanged: (handler: (payload: { chatId: string }) => void) =>
@@ -1142,7 +1240,6 @@ export const shortcutApi = {
     onNotification("shortcut:changed", handler),
 };
 
-
 // ── Attachments & model catalog ───────────────────────────────────────
 export const attachmentsApi = {
   pickAndRead: (remainingSlots: number, includeImages: boolean, remainingInlineBytes: number) =>
@@ -1179,8 +1276,15 @@ export const modelsApi = {
 
 // ── Workspaces ────────────────────────────────────────────────────────
 export const workspacesApi = {
-  peerClonePreview: (workspaceId: string) => invoke<PeerProjectSource>("workspaces:peerClonePreview", workspaceId),
-  peerClone: (input: { cloneId: string; hostId: string; workspaceId: string; selection: string; files: string[] }) => invoke<PeerOperationOutcome>("workspaces:peerClone", input),
+  peerClonePreview: (workspaceId: string) =>
+    invoke<PeerProjectSource>("workspaces:peerClonePreview", workspaceId),
+  peerClone: (input: {
+    cloneId: string;
+    hostId: string;
+    workspaceId: string;
+    selection: string;
+    files: string[];
+  }) => invoke<PeerOperationOutcome>("workspaces:peerClone", input),
   cancelPeerClone: (cloneId: string) => invoke<boolean>("workspaces:peerCloneCancel", cloneId),
   list: () => invoke<Workspace[]>("workspaces:list"),
   memoryFacts: (workspaceId: string) =>
@@ -1280,8 +1384,17 @@ export interface TerminalSnapshot {
 }
 
 export const browserApi = {
-  popupMenu: (id: string, point: { x: number; y: number }, items: import("../shared/browser").BrowserMenuItem[]) =>
-    invoke<import("../shared/browser").BrowserMenuChoice | null>("browser:popup-menu", id, point, items),
+  popupMenu: (
+    id: string,
+    point: { x: number; y: number },
+    items: import("../shared/browser").BrowserMenuItem[],
+  ) =>
+    invoke<import("../shared/browser").BrowserMenuChoice | null>(
+      "browser:popup-menu",
+      id,
+      point,
+      items,
+    ),
   dismissMenu: (id: string) => invoke<void>("browser:dismiss-menu", id),
   getState: (workspaceId: string) =>
     invoke<import("../shared/browser").BrowserState>("browser:get-state", workspaceId),
@@ -1298,7 +1411,8 @@ export const browserApi = {
   setLinkPreference: (value: import("../shared/browser").BrowserLinkOpening) =>
     invoke<import("../shared/browser").BrowserLinkOpening>("browser:set-link-preference", value),
   openExternal: (url: string) => invoke<void>("browser:open-external", url),
-  openFileExternal: (workspaceId: string, path: string) => invoke<void>("browser:open-file-external", workspaceId, path),
+  openFileExternal: (workspaceId: string, path: string) =>
+    invoke<void>("browser:open-file-external", workspaceId, path),
   /** A video the agent recorded, by the id its chat step names; null once it is gone. */
   recording: (recordingId: string) =>
     invoke<{ mimeType: string; data: Uint8Array } | null>("browser:recording", recordingId),
@@ -1331,8 +1445,13 @@ export const botComputersApi = {
   remove: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.remove, botId),
   stop: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.stop, botId),
   /** The Computer tab's stream target. `start` boots a stopped computer; only a person's switch to the tab passes it. */
-  viewerGrant: async (botId: string, options: { start: boolean }): Promise<BotComputerViewerGrant> => {
-    const grant = parseBotComputerViewerGrant(await invoke<unknown>(BOT_COMPUTER_CHANNELS.viewerGrant, botId, options));
+  viewerGrant: async (
+    botId: string,
+    options: { start: boolean },
+  ): Promise<BotComputerViewerGrant> => {
+    const grant = parseBotComputerViewerGrant(
+      await invoke<unknown>(BOT_COMPUTER_CHANNELS.viewerGrant, botId, options),
+    );
     if (!grant) throw new Error("Aiden returned an invalid viewer grant.");
     return grant;
   },
@@ -1346,7 +1465,9 @@ export const botComputersApi = {
   skipPermissions: () => invoke<void>(BOT_COMPUTER_CHANNELS.skipPermissions),
   /** The base computer's screen while setup waits for the person's grants. */
   baseViewerGrant: async (): Promise<BotComputerViewerGrant> => {
-    const grant = parseBotComputerViewerGrant(await invoke<unknown>(BOT_COMPUTER_CHANNELS.baseViewerGrant));
+    const grant = parseBotComputerViewerGrant(
+      await invoke<unknown>(BOT_COMPUTER_CHANNELS.baseViewerGrant),
+    );
     if (!grant) throw new Error("Aiden returned an invalid viewer grant.");
     return grant;
   },
@@ -1411,7 +1532,8 @@ export const devicesApi = {
   /** An explicit Start, Connect, or Retry for one host; approved outdated helpers update here. */
   startHost: (hostId: string) => invokeDeviceState("devices:start-host", hostId),
   /** Installs or updates one pinned helper on a host after the user confirmed it. */
-  updateTool: (input: { hostId: string; tool: "hub" | "agent" }) => invokeDeviceState("devices:update-tool", input),
+  updateTool: (input: { hostId: string; tool: "hub" | "agent" }) =>
+    invokeDeviceState("devices:update-tool", input),
   /** Reads helper versions; contacts SSH hosts but never installs or starts anything. */
   inspectTools: () => invokeDeviceState("devices:inspect-tools"),
   saveSshHost: (config: SshDeviceHostConfig) => invokeDeviceState("devices:ssh-save", config),
@@ -1428,30 +1550,39 @@ export const devicesApi = {
       if (state) handler(state);
     }),
   /** The native trackpad gesture ended (Electron's `gestureScrollEnd`), so a 3D orbit can settle. */
-  onTrackpadScrollEnd: (handler: () => void) => onNotification<unknown>("devices:trackpad-scroll-end", () => handler()),
+  onTrackpadScrollEnd: (handler: () => void) =>
+    onNotification<unknown>("devices:trackpad-scroll-end", () => handler()),
   /** An agent opened a device for this chat; it floats over the chat or its tab comes forward. */
   onReveal: (handler: (chatId: string, target?: { hostId: string; deviceId: string }) => void) =>
     onNotification<unknown>("devices:reveal", (payload) => {
       const value = (payload ?? {}) as { chatId?: unknown; hostId?: unknown; deviceId?: unknown };
       if (typeof value.chatId !== "string" || !value.chatId) return;
       const target =
-        typeof value.hostId === "string" && value.hostId && typeof value.deviceId === "string" && value.deviceId
+        typeof value.hostId === "string" &&
+        value.hostId &&
+        typeof value.deviceId === "string" &&
+        value.deviceId
           ? { hostId: value.hostId, deviceId: value.deviceId }
           : undefined;
       handler(value.chatId, target);
     }),
   /** Shuts the device down if it is booted, then erases it. `deviceId` is its id now (an emulator goes back to its AVD name). */
-  erase: (target: DeviceFeatureTarget) => invoke<{ wasBooted: boolean; deviceId: string }>("devices:erase", target),
+  erase: (target: DeviceFeatureTarget) =>
+    invoke<{ wasBooted: boolean; deviceId: string }>("devices:erase", target),
   /** Host clipboard text to the device: the simulator pasteboard (send Cmd+V afterwards), or typed into the emulator. */
-  pasteClipboard: (target: DeviceFeatureTarget) => invoke<{ bytes: number }>("devices:clipboard-paste", target),
+  pasteClipboard: (target: DeviceFeatureTarget) =>
+    invoke<{ bytes: number }>("devices:clipboard-paste", target),
   /** The simulator's pasteboard text onto the host clipboard. */
-  copyClipboard: (target: DeviceFeatureTarget) => invoke<{ bytes: number }>("devices:clipboard-copy", target),
+  copyClipboard: (target: DeviceFeatureTarget) =>
+    invoke<{ bytes: number }>("devices:clipboard-copy", target),
   recordings: async (): Promise<DeviceRecordingInfo[]> => {
     const list = parseDeviceRecordingList(await invoke<unknown>("devices:recordings-list"));
     if (!list) throw new Error("The simulator recordings response was invalid.");
     return list;
   },
-  startRecording: async (input: DeviceFeatureTarget & { chatId: string }): Promise<DeviceRecordingInfo> => {
+  startRecording: async (
+    input: DeviceFeatureTarget & { chatId: string },
+  ): Promise<DeviceRecordingInfo> => {
     const info = parseDeviceRecordingInfo(await invoke<unknown>("devices:recording-start", input));
     if (!info) throw new Error("The simulator recording response was invalid.");
     return info;
@@ -1464,7 +1595,8 @@ export const devicesApi = {
   /** Shows the save dialog; a cancelled dialog deletes the recording. */
   saveRecording: (id: string) => invokeDeviceSave("devices:recording-save", { id }),
   discardRecording: (id: string) => invoke<void>("devices:recording-discard", { id }),
-  saveScreenshot: (input: { hostId: string; deviceId: string }) => invokeDeviceSave("devices:screenshot-save", input),
+  saveScreenshot: (input: { hostId: string; deviceId: string }) =>
+    invokeDeviceSave("devices:screenshot-save", input),
   /** Saves the 3D view's framed-device PNG through the same save dialog. */
   saveFramedScreenshot: (input: { hostId: string; deviceId: string; png: Uint8Array }) =>
     invokeDeviceSave("devices:framed-screenshot-save", input),
@@ -1535,10 +1667,12 @@ export const gitApi = {
 export const pullRequestsApi = {
   list: (chatId: string) => invoke<ChatPullRequestListResult>("pullRequests:list", chatId),
   current: (chatId: string) =>
-    invoke<{ pullRequest: ChatPullRequestView | undefined; reason: string; message?: string; rateLimitedUntil?: number }>(
-      "pullRequests:current",
-      chatId,
-    ),
+    invoke<{
+      pullRequest: ChatPullRequestView | undefined;
+      reason: string;
+      message?: string;
+      rateLimitedUntil?: number;
+    }>("pullRequests:current", chatId),
   /** Cache-only: each listed chat's best linked PR and dismissed refs, for sidebar rows. */
   sidebar: (chatIds: readonly string[]) =>
     invoke<Record<string, ChatSidebarPullRequests>>("pullRequests:sidebar", chatIds),
@@ -1554,7 +1688,12 @@ export const pullRequestsApi = {
     invoke<ChatPullRequestListResult>("pullRequests:refresh", chatId, ref),
   detectAfterPush: (
     chatId: string,
-    input: { workspaceId: string; headBranch: string; expectedHeadSha?: string; repository?: string },
+    input: {
+      workspaceId: string;
+      headBranch: string;
+      expectedHeadSha?: string;
+      repository?: string;
+    },
   ) => invoke<ChatPullRequestDetectResult>("pullRequests:detectAfterPush", chatId, input),
   create: (
     chatId: string,
@@ -1581,31 +1720,55 @@ export const pullRequestsApi = {
 // Pages a workspace keeps in the Tools panel's Artifacts tab. Main owns the
 // files and runs every source; the renderer only names ids.
 export const workspaceArtifactsApi = {
-  list: (workspaceId: string) => invoke<WorkspaceArtifactView[]>("workspaces:artifacts:list", workspaceId),
+  list: (workspaceId: string) =>
+    invoke<WorkspaceArtifactView[]>("workspaces:artifacts:list", workspaceId),
   rename: (workspaceId: string, artifactId: string, title: string) =>
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:rename", workspaceId, artifactId, title),
   delete: (workspaceId: string, artifactId: string) =>
     invoke<{ removed: boolean }>("workspaces:artifacts:delete", workspaceId, artifactId),
   /** `revision` is the one the person was looking at; state from a page since replaced is dropped. */
-  saveState: (workspaceId: string, artifactId: string, revision: number, state: Record<string, unknown>) =>
-    invoke<void>("workspaces:artifacts:saveState", workspaceId, artifactId, revision, state),
+  saveState: (
+    workspaceId: string,
+    artifactId: string,
+    revision: number,
+    state: Record<string, unknown>,
+  ) => invoke<void>("workspaces:artifacts:saveState", workspaceId, artifactId, revision, state),
   approve: (workspaceId: string, artifactId: string, digest: string) =>
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:approve", workspaceId, artifactId, digest),
   /** Re-reads the page's sources in the workspace folder; every window gets a "refreshed" change. */
   refresh: (workspaceId: string, artifactId: string) =>
-    invoke<Record<string, WorkspaceArtifactSourceResultV1>>("workspaces:artifacts:refresh", workspaceId, artifactId),
+    invoke<Record<string, WorkspaceArtifactSourceResultV1>>(
+      "workspaces:artifacts:refresh",
+      workspaceId,
+      artifactId,
+    ),
   /** Runs one of the page's buttons; main fills in the saved command. */
   run: (workspaceId: string, artifactId: string, action: string, args: unknown[], digest: string) =>
-    invoke<{ ok: boolean; output: string }>("workspaces:artifacts:run", workspaceId, artifactId, action, args, digest),
+    invoke<{ ok: boolean; output: string }>(
+      "workspaces:artifacts:run",
+      workspaceId,
+      artifactId,
+      action,
+      args,
+      digest,
+    ),
   /** The page's kept earlier versions, newest first. */
   history: (workspaceId: string, artifactId: string) =>
-    invoke<WorkspaceArtifactRevisionSummary[]>("workspaces:artifacts:history", workspaceId, artifactId),
+    invoke<WorkspaceArtifactRevisionSummary[]>(
+      "workspaces:artifacts:history",
+      workspaceId,
+      artifactId,
+    ),
   /** Brings back an earlier version; commands that differ from the approved ones need allowing again. */
   restore: (workspaceId: string, artifactId: string, revision: number) =>
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:restore", workspaceId, artifactId, revision),
   /** Saves the page as a file the person picks; main reads the page and leaves out approval, ids and data. */
   exportPage: (workspaceId: string, artifactId: string) =>
-    invoke<{ status: "saved" | "cancelled" }>("workspaces:artifacts:export", workspaceId, artifactId),
+    invoke<{ status: "saved" | "cancelled" }>(
+      "workspaces:artifacts:export",
+      workspaceId,
+      artifactId,
+    ),
   /** Reads a page file the person picks and holds it in main until confirmed or discarded. */
   importPreview: (workspaceId: string) =>
     invoke<WorkspaceArtifactImportPreview>("workspaces:artifacts:importPreview", workspaceId),
@@ -1735,20 +1898,25 @@ export const chatsApi = {
   // Follow-through: background jobs, followed pull requests and check-backs.
   followThrough: async (chatId: string): Promise<ChatFollowThroughV1> => {
     const value = parseChatFollowThrough(await invoke<unknown>("chats:followThrough", chatId));
-    if (!value || value.chatId !== chatId) throw new Error("The follow-through response was invalid.");
+    if (!value || value.chatId !== chatId)
+      throw new Error("The follow-through response was invalid.");
     return value;
   },
   backgroundJobOutput: (chatId: string, jobId: string) =>
     invoke<BackgroundJobOutput>("chats:followThroughJobOutput", { chatId, jobId }),
   stopBackgroundJob: (chatId: string, jobId: string) =>
     invoke<void>("chats:followThroughStopJob", { chatId, jobId }),
-  followPullRequest: (chatId: string) => invoke<void>("chats:followThroughFollowPullRequest", { chatId }),
-  stopFollowingPullRequest: (chatId: string, ref: { host: string; repository: string; number: number }) =>
-    invoke<void>("chats:followThroughStopFollow", { chatId, ...ref }),
+  followPullRequest: (chatId: string) =>
+    invoke<void>("chats:followThroughFollowPullRequest", { chatId }),
+  stopFollowingPullRequest: (
+    chatId: string,
+    ref: { host: string; repository: string; number: number },
+  ) => invoke<void>("chats:followThroughStopFollow", { chatId, ...ref }),
   /** Read this chat's followed pull requests soon, or every chat's when `chatId` is omitted. */
   nudgeFollowedPullRequests: (chatId?: string) =>
     invoke<void>("chats:followThroughNudgePullRequests", chatId === undefined ? {} : { chatId }),
-  cancelCheckBack: (chatId: string, id: string) => invoke<void>("chats:followThroughCancelCheckBack", { chatId, id }),
+  cancelCheckBack: (chatId: string, id: string) =>
+    invoke<void>("chats:followThroughCancelCheckBack", { chatId, id }),
   // Keep-going goals: one per chat; `chats:goal-changed` carries every change.
   goal: async (chatId: string): Promise<GoalView | null> => {
     const value = await invoke<unknown>("chats:goal:get", chatId);
@@ -1758,24 +1926,37 @@ export const chatsApi = {
     return goal;
   },
   /** Sets the chat's goal (replacing any earlier one); send the objective as the next message after it. */
-  setGoal: async (chatId: string, objective: string, source: "slash" | "menu" | "proposal"): Promise<GoalView> => {
-    const goal = parseGoalView(await invoke<unknown>("chats:goal:set", { chatId, objective, source }));
+  setGoal: async (
+    chatId: string,
+    objective: string,
+    source: "slash" | "menu" | "proposal",
+  ): Promise<GoalView> => {
+    const goal = parseGoalView(
+      await invoke<unknown>("chats:goal:set", { chatId, objective, source }),
+    );
     if (!goal) throw new Error("The goal response was invalid.");
     return goal;
   },
   /** `/until <command>`: a goal that is done when the command exits 0, checked after each answer, 5 checks at most. */
   setGoalCheck: async (chatId: string, command: string): Promise<GoalView> => {
-    const goal = parseGoalView(await invoke<unknown>("chats:goal:set", { chatId, source: "until", check: command }));
+    const goal = parseGoalView(
+      await invoke<unknown>("chats:goal:set", { chatId, source: "until", check: command }),
+    );
     if (!goal) throw new Error("The goal response was invalid.");
     return goal;
   },
-  pauseGoal: async (chatId: string): Promise<GoalView | null> => parseGoalView(await invoke<unknown>("chats:goal:pause", { chatId })),
+  pauseGoal: async (chatId: string): Promise<GoalView | null> =>
+    parseGoalView(await invoke<unknown>("chats:goal:pause", { chatId })),
   /** Resume, or Keep going: round 1 again, and a round starts now if the chat is idle. */
-  resumeGoal: async (chatId: string): Promise<GoalView | null> => parseGoalView(await invoke<unknown>("chats:goal:resume", { chatId })),
+  resumeGoal: async (chatId: string): Promise<GoalView | null> =>
+    parseGoalView(await invoke<unknown>("chats:goal:resume", { chatId })),
   clearGoal: (chatId: string) => invoke<void>("chats:goal:clear", { chatId }),
   onGoalChanged: (handler: (chatId: string, goal: GoalView | null) => void) =>
     onNotification<unknown>("chats:goal-changed", (payload) => {
-      const update = payload && typeof payload === "object" ? (payload as { chatId?: unknown; goal?: unknown }) : {};
+      const update =
+        payload && typeof payload === "object"
+          ? (payload as { chatId?: unknown; goal?: unknown })
+          : {};
       if (typeof update.chatId !== "string" || !update.chatId) return;
       const goal = update.goal === null ? null : parseGoalView(update.goal);
       if (update.goal !== null && !goal) return;
@@ -1786,34 +1967,51 @@ export const chatsApi = {
     const value = await invoke<unknown>("chats:goal:proposal", chatId);
     if (value === null) return null;
     const proposal = parseGoalProposal(value);
-    if (!proposal || proposal.chatId !== chatId) throw new Error("The goal suggestion response was invalid.");
+    if (!proposal || proposal.chatId !== chatId)
+      throw new Error("The goal suggestion response was invalid.");
     return proposal;
   },
   /** Not now: the suggestion goes. */
   dismissGoalProposal: (chatId: string) => invoke<void>("chats:goal:dismissProposal", { chatId }),
   onGoalProposalChanged: (handler: (chatId: string, proposal: GoalProposalView | null) => void) =>
     onNotification<unknown>("chats:goal-proposal-changed", (payload) => {
-      const update = payload && typeof payload === "object" ? (payload as { chatId?: unknown; proposal?: unknown }) : {};
+      const update =
+        payload && typeof payload === "object"
+          ? (payload as { chatId?: unknown; proposal?: unknown })
+          : {};
       if (typeof update.chatId !== "string" || !update.chatId) return;
       const proposal = update.proposal === null ? null : parseGoalProposal(update.proposal);
       if (update.proposal !== null && !proposal) return;
       handler(update.chatId, proposal);
     }),
   /** This window's pane shows `chatId` (or no chat), with or without focus: where a due goal round can start. */
-  reportGoalView: (chatId: string | null, focused: boolean) => invoke<void>("chats:goal:view", { chatId, focused }),
+  reportGoalView: (chatId: string | null, focused: boolean) =>
+    invoke<void>("chats:goal:view", { chatId, focused }),
   /** A goal round main offered this window is due: start it here, or decline it so it runs without the window. */
   onGoalWindowRound: (handler: (request: { chatId: string; token: string }) => void) =>
     onNotification<unknown>("chats:goal-window-round", (payload) => {
-      const request = payload && typeof payload === "object" ? (payload as { chatId?: unknown; token?: unknown }) : {};
-      if (typeof request.chatId !== "string" || !request.chatId || typeof request.token !== "string" || !request.token) return;
+      const request =
+        payload && typeof payload === "object"
+          ? (payload as { chatId?: unknown; token?: unknown })
+          : {};
+      if (
+        typeof request.chatId !== "string" ||
+        !request.chatId ||
+        typeof request.token !== "string" ||
+        !request.token
+      )
+        return;
       handler({ chatId: request.chatId, token: request.token });
     }),
-  declineGoalWindowRound: (token: string) => invoke<void>("chats:goal:declineWindowRound", { token }),
+  declineGoalWindowRound: (token: string) =>
+    invoke<void>("chats:goal:declineWindowRound", { token }),
   // Chats a lead chat started (Phase 5).
   startedChats: async (leadChatId: string): Promise<StartedChatView[]> =>
     parseStartedChatViews(await invoke<unknown>("chats:childChats", leadChatId)),
-  stopStartedChat: (leadChatId: string, chatId: string) => invoke<unknown>("chats:childChatsStop", { leadChatId, chatId }),
-  stopAllStartedChats: (leadChatId: string) => invoke<void>("chats:childChatsStopAll", { leadChatId }),
+  stopStartedChat: (leadChatId: string, chatId: string) =>
+    invoke<unknown>("chats:childChatsStop", { leadChatId, chatId }),
+  stopAllStartedChats: (leadChatId: string) =>
+    invoke<void>("chats:childChatsStopAll", { leadChatId }),
   onBtwEvent: (handler: (event: BtwEventV1) => void) =>
     onNotification<unknown>("chats:btw-event", (payload) => {
       const event = parseBtwEvent(payload);
@@ -1867,7 +2065,11 @@ export const chatsApi = {
     skillInvocation?: SkillInvocationV1;
     inputSource?: ChatInputSourceV1;
     worktree: FirstMessageWorktreeRequest;
-  }) => invokeChatMutation<FirstMessageWorktreeResult<Chat, Workspace>>("chats:createWithFirstMessage", input),
+  }) =>
+    invokeChatMutation<FirstMessageWorktreeResult<Chat, Workspace>>(
+      "chats:createWithFirstMessage",
+      input,
+    ),
   /** Progress of the caller's own first-send worktree (fetching → creating → ready). */
   onFirstMessageWorktreeProgress: (handler: (progress: FirstMessageWorktreeProgress) => void) =>
     onNotification<FirstMessageWorktreeProgress>("chats:first-message-worktree-progress", handler),
@@ -1889,8 +2091,11 @@ export const chatsApi = {
       ? invoke<Chat | null>("chats:setModel", id, providerId, model)
       : invoke<Chat | null>("chats:setModel", id, providerId, model, thinkingLevel),
   /** Turn design mode on or off for this chat; every window hears `chats:design-mode-changed`. */
-  setDesignMode: (id: string, enabled: boolean, source?: "toggle" | "shortcut" | "slash" | "card") =>
-    invoke<Chat | null>("chats:setDesignMode", id, enabled, source),
+  setDesignMode: (
+    id: string,
+    enabled: boolean,
+    source?: "toggle" | "shortcut" | "slash" | "card",
+  ) => invoke<Chat | null>("chats:setDesignMode", id, enabled, source),
   /**
    * Clone the whole visible chat, or fork it at `forkAt`. A fork with
    * `summary` also summarizes what the source did after the fork point.
@@ -1910,7 +2115,10 @@ export const chatsApi = {
    * another workspace (or No workspace). The original chat is left as it is.
    */
   continueInNewChat: (chatId: string, workspaceId: string) =>
-    invokeChatMutation<Chat>("chats:copyVisibleHistory", { chatId, continueInWorkspaceId: workspaceId }),
+    invokeChatMutation<Chat>("chats:copyVisibleHistory", {
+      chatId,
+      continueInWorkspaceId: workspaceId,
+    }),
   retryForkSummary: (chatId: string) => invoke<Chat>("chats:retryForkSummary", { chatId }),
   cancelForkSummary: (chatId: string) => invoke<boolean>("chats:cancelForkSummary", { chatId }),
   skipForkSummary: (chatId: string) => invoke<Chat>("chats:skipForkSummary", { chatId }),
@@ -1928,8 +2136,7 @@ export const chatsApi = {
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
   /** Save a temporary floating chat so it appears in Chats (No workspace). */
-  promoteEphemeral: (id: string) =>
-    invoke<Chat>("chats:promoteEphemeral", id),
+  promoteEphemeral: (id: string) => invoke<Chat>("chats:promoteEphemeral", id),
   /** Inspect scratch files inside a No workspace or temporary chat's private folder. */
   inspectAttachFiles: (id: string) =>
     invoke<InspectAttachFilesResult>("chats:inspectAttachFiles", id),
@@ -1948,9 +2155,11 @@ export const chatsApi = {
   replyInterrupted: (id: string) => invoke<boolean>("chats:replyInterrupted", id),
   /** The questions and approvals the interrupted reply was waiting on, questions first. */
   interruptedWaits: (id: string) => invoke<InterruptedWaitV1[]>("chats:interruptedWaits", id),
-  dismissInterruptedWait: (id: string, waitId: string) => invoke<void>("chats:dismissInterruptedWait", id, waitId),
+  dismissInterruptedWait: (id: string, waitId: string) =>
+    invoke<void>("chats:dismissInterruptedWait", id, waitId),
   /** What each listed local chat is waiting on, for the Inbox; unknown chats and idle ones are left out. */
-  pendingAttention: (ids: readonly string[]) => invoke<ChatPendingAttention[]>("chats:pendingAttention", [...ids]),
+  pendingAttention: (ids: readonly string[]) =>
+    invoke<ChatPendingAttention[]>("chats:pendingAttention", [...ids]),
   /** Dismiss a chat's Unavailable prompts (those settled when its window left). */
   dismissDetachedAttention: (id: string) => invoke<void>("chats:dismissDetachedAttention", id),
   htmlArtifactSrcdoc: (
@@ -1972,8 +2181,12 @@ export const chatsApi = {
       theme,
     }),
   /** Remember a native visual's local state (tabs, filters, sliders) on its message. */
-  updateUiVisualState: (chatId: string, messageId: string, visualId: string, state: Record<string, unknown>) =>
-    invoke<boolean>("chats:updateUiVisualState", { chatId, messageId, visualId, state }),
+  updateUiVisualState: (
+    chatId: string,
+    messageId: string,
+    visualId: string,
+    state: Record<string, unknown>,
+  ) => invoke<boolean>("chats:updateUiVisualState", { chatId, messageId, visualId, state }),
   exportHtmlArtifact: (chatId: string, mediaId: string) =>
     invoke<{ saved: boolean; canceled: boolean }>("chats:exportHtmlArtifact", {
       chatId,
@@ -2005,10 +2218,8 @@ export const chatsApi = {
   ) => invoke<void>("chat:approve", approvalId, decision, options),
   /** Persisted "always allow" rules, newest first. */
   listApprovalRules: () => invoke<ToolApprovalRuleView[]>("chat:listApprovalRules"),
-  revokeApprovalRule: (id: string) =>
-    invoke<{ revoked: boolean }>("chat:revokeApprovalRule", id),
-  revokeAllApprovalRules: () =>
-    invoke<{ revoked: number }>("chat:revokeAllApprovalRules"),
+  revokeApprovalRule: (id: string) => invoke<{ revoked: boolean }>("chat:revokeApprovalRule", id),
+  revokeAllApprovalRules: () => invoke<{ revoked: number }>("chat:revokeAllApprovalRules"),
   answerQuestionnaire: (promptId: string, response: AskUserQuestionResponseV1) =>
     invoke<{ status: AskUserQuestionAnswerStatus } | undefined>(
       "chat:answerQuestionnaire",
@@ -2057,8 +2268,26 @@ export const botsApi = {
     whenBusy?: "steer" | "followUp";
     attachments?: Array<{ type: "image"; mimeType: string; data: string }>;
   }) => invoke<{ submissionId: string; deduped: boolean }>("bots:send", input),
-  resume: (botId: string, requestId: string, options?: { acknowledgeUnknownCost?: true; expectedSubmissionId?: string; expectedCostReceiptId?: string }) =>
-    invoke<BotSessionState>("bots:resume", { botId, requestId, ...(options?.acknowledgeUnknownCost ? { acknowledgeUnknownCost: true, expectedSubmissionId: options.expectedSubmissionId, expectedCostReceiptId: options.expectedCostReceiptId } : {}) }),
+  resume: (
+    botId: string,
+    requestId: string,
+    options?: {
+      acknowledgeUnknownCost?: true;
+      expectedSubmissionId?: string;
+      expectedCostReceiptId?: string;
+    },
+  ) =>
+    invoke<BotSessionState>("bots:resume", {
+      botId,
+      requestId,
+      ...(options?.acknowledgeUnknownCost
+        ? {
+            acknowledgeUnknownCost: true,
+            expectedSubmissionId: options.expectedSubmissionId,
+            expectedCostReceiptId: options.expectedCostReceiptId,
+          }
+        : {}),
+    }),
   dismiss: (botId: string, requestId: string) =>
     invoke<BotSessionState>("bots:dismiss", { botId, requestId }),
   /** Stop the reply that is running now. */
@@ -2069,15 +2298,25 @@ export const botsApi = {
   unpause: (botId: string) => invoke<BotSessionState>("bots:unpause", botId),
   /** Remove a queued message before its turn starts. */
   withdraw: (botId: string, submissionId: string) =>
-    invoke<import("../../main/services/bot-runtime/bot-session-service").BotWithdrawResult>("bots:withdraw", {
-      botId,
-      submissionId,
-    }),
+    invoke<import("../../main/services/bot-runtime/bot-session-service").BotWithdrawResult>(
+      "bots:withdraw",
+      {
+        botId,
+        submissionId,
+      },
+    ),
   /** Answer a Bot tool approval by its wait id; the first answer wins. */
   approve: (waitId: string, decision: "allow" | "deny", scope?: "always") =>
-    invoke<{ decided: boolean }>("bots:approve", { waitId, decision, ...(scope === undefined ? {} : { scope }) }),
+    invoke<{ decided: boolean }>("bots:approve", {
+      waitId,
+      decision,
+      ...(scope === undefined ? {} : { scope }),
+    }),
   allowedList: (botId?: string) =>
-    invoke<import("../shared/tool-approval-scope").BotAllowedEntry[]>("bots:allowed:list", botId === undefined ? {} : { botId }),
+    invoke<import("../shared/tool-approval-scope").BotAllowedEntry[]>(
+      "bots:allowed:list",
+      botId === undefined ? {} : { botId },
+    ),
   removeAllowed: (botId: string, entryId: string) =>
     invoke<{ removed: boolean }>("bots:allowed:remove", { botId, entryId }),
   onAllowedChanged: (handler: (payload: { botId: string }) => void) =>
@@ -2086,11 +2325,22 @@ export const botsApi = {
    * Answer the Bot's A–E question by its wait id; `answered` is false once the
    * question is no longer waiting (answered elsewhere or withdrawn).
    */
-  answerQuestion: (botId: string, waitId: string, answer: import("../shared/ask-user-question").AskUserQuestionResponseV1) =>
-    invoke<{ answered: boolean }>("bots:answerQuestion", { botId, waitId, answer }),
+  answerQuestion: (
+    botId: string,
+    waitId: string,
+    answer: import("../shared/ask-user-question").AskUserQuestionResponseV1,
+  ) => invoke<{ answered: boolean }>("bots:answerQuestion", { botId, waitId, answer }),
   /** Answer only the offered choice for this live authorization attempt. */
-  answerAccessRequest: (botId: string, waitId: string, choice: import("../shared/bot-access-requests").BotAccessChoice) =>
-    invoke<{ answered: boolean; savedForFuture?: true }>("bots:answerAccessRequest", { botId, waitId, choice }),
+  answerAccessRequest: (
+    botId: string,
+    waitId: string,
+    choice: import("../shared/bot-access-requests").BotAccessChoice,
+  ) =>
+    invoke<{ answered: boolean; savedForFuture?: true }>("bots:answerAccessRequest", {
+      botId,
+      waitId,
+      choice,
+    }),
   /** Answer or stop the exact plan shown by the host. */
   respondPlan: (input: { botId: string; planId: string; decision: BotPlanDecision }) =>
     invoke<{ result: "done" | "not_waiting" }>(BOT_PLAN_CHANNELS.respond, input),
@@ -2112,19 +2362,26 @@ export const botsApi = {
     }),
   /** Open on a hand-off card: its page in the Bot's browser or the system browser. */
   openHandoff: (botId: string, waitId: string) =>
-    invoke<{ opened: import("../../main/services/bot-runtime/bot-handoff-open").BotHandoffOpened }>("bots:openHandoff", {
-      botId,
-      waitId,
-    }),
+    invoke<{ opened: import("../../main/services/bot-runtime/bot-handoff-open").BotHandoffOpened }>(
+      "bots:openHandoff",
+      {
+        botId,
+        waitId,
+      },
+    ),
   pendingApprovals: (botId: string) =>
     invoke<import("../../main/services/bot-runtime/bot-approvals").BotApprovalPrompt[]>(
       "bots:pendingApprovals",
       botId,
     ),
-  onApproval: (handler: (prompt: import("../../main/services/bot-runtime/bot-approvals").BotApprovalPrompt) => void) =>
-    onNotification("bots:approval", handler),
-  onApprovalSettled: (handler: (settled: { botId: string; waitId: string; outcome: string }) => void) =>
-    onNotification("bots:approval-settled", handler),
+  onApproval: (
+    handler: (
+      prompt: import("../../main/services/bot-runtime/bot-approvals").BotApprovalPrompt,
+    ) => void,
+  ) => onNotification("bots:approval", handler),
+  onApprovalSettled: (
+    handler: (settled: { botId: string; waitId: string; outcome: string }) => void,
+  ) => onNotification("bots:approval-settled", handler),
   liveSubscribe: (botId: string) =>
     invoke<import("../shared/bot-live").BotLiveSnapshot>("bots:live:subscribe", botId),
   liveUnsubscribe: (botId: string) => invoke<void>("bots:live:unsubscribe", botId),
@@ -2159,11 +2416,20 @@ export const botsApi = {
   removePhoto: (botId: string) => invoke<void>("bots:photo:remove", botId),
   routines: {
     list: (botId: string) =>
-      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine[]>("bots:routines:list", botId),
+      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine[]>(
+        "bots:routines:list",
+        botId,
+      ),
     create: (input: import("../../main/services/scheduled-bot-routines").BotRoutineCreateInput) =>
-      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine>("bots:routines:create", input),
+      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine>(
+        "bots:routines:create",
+        input,
+      ),
     update: (input: import("../../main/services/scheduled-bot-routines").BotRoutineUpdateInput) =>
-      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine>("bots:routines:update", input),
+      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine>(
+        "bots:routines:update",
+        input,
+      ),
     delete: (input: import("../../main/services/scheduled-bot-routines").BotRoutineDeleteInput) =>
       invoke<void>("bots:routines:delete", input),
     /** Start one run now (Run now on the "skipped while paused" notice). */
@@ -2176,25 +2442,33 @@ export const botsApi = {
   },
   /** What a Bot remembers (USER.md and MEMORY.md), and the person's edits to it. */
   memory: {
-    get: (botId: string) => invoke<import("../shared/bot-memory").BotMemoryView>("bots:memory:get", botId),
+    get: (botId: string) =>
+      invoke<import("../shared/bot-memory").BotMemoryView>("bots:memory:get", botId),
     /** A replace, remove or clear; a stale entry id answers `entry_not_found` with the fresh view. */
     edit: (input: import("../shared/bot-memory").BotMemoryEditInput) =>
       invoke<import("../shared/bot-memory").BotMemoryEditResult>("bots:memory:edit", input),
   },
   /** A Bot's rules: what it must ask about first or hand to the person. */
   rules: {
-    get: (botId: string) => invoke<import("../shared/bot-rules").BotRulesView>("bots:rules:get", botId),
+    get: (botId: string) =>
+      invoke<import("../shared/bot-rules").BotRulesView>("bots:rules:get", botId),
     /** One change against the view's revision; a refused change answers its reason with the fresh view. */
     update: (input: import("../shared/bot-rules").BotRulesUpdateInput) =>
       invoke<import("../shared/bot-rules").BotRulesUpdateResult>("bots:rules:update", input),
   },
   /** A Bot's own browser: its workspace for the `browser:*` channels, or null when the Bot is gone. */
   browser: {
-    workspace: (botId: string) => invoke<{ workspaceId: string } | null>("bots:browser:workspace", botId),
+    workspace: (botId: string) =>
+      invoke<{ workspaceId: string } | null>("bots:browser:workspace", botId),
   },
   /** Any write to a Bot's memory: the person's, the Bot's own, a review or a compaction flush. */
-  onMemoryChanged: (handler: (event: import("../shared/bot-memory").BotMemoryChangedEvent) => void) =>
-    onNotification<import("../shared/bot-memory").BotMemoryChangedEvent>("bots:memory:changed", handler),
+  onMemoryChanged: (
+    handler: (event: import("../shared/bot-memory").BotMemoryChangedEvent) => void,
+  ) =>
+    onNotification<import("../shared/bot-memory").BotMemoryChangedEvent>(
+      "bots:memory:changed",
+      handler,
+    ),
   routineProposals: {
     /** Add routine or Not now on a Bot's proposal card; a repeated answer returns the settled status. */
     respond: (input: import("../shared/bot-routine-proposals").BotRoutineProposalRespondInput) =>
@@ -2205,12 +2479,36 @@ export const botsApi = {
   },
   /** Routines that run when something happens: a file change or the routine's link. */
   eventRoutines: {
-    list: (botId: string) => invoke<import("../shared/bot-event-routines").BotEventRoutineView[]>("bots:eventRoutines:list", { botId }),
-    create: (input: { botId: string; name: string; prompt: string; trigger: import("../shared/bot-routine-trigger").BotRoutineTrigger }) =>
-      invoke<{ routine: import("../shared/bot-event-routines").BotEventRoutineView; link?: string | null; token?: string }>("bots:eventRoutines:create", input),
-    update: (input: { botId: string; id: string; enabled?: boolean; name?: string; prompt?: string; trigger?: import("../shared/bot-routine-trigger").BotRoutineTrigger }) =>
-      invoke<import("../shared/bot-event-routines").BotEventRoutineView>("bots:eventRoutines:update", input),
-    remove: (input: { botId: string; id: string }) => invoke<{ removed: boolean }>("bots:eventRoutines:remove", input),
+    list: (botId: string) =>
+      invoke<import("../shared/bot-event-routines").BotEventRoutineView[]>(
+        "bots:eventRoutines:list",
+        { botId },
+      ),
+    create: (input: {
+      botId: string;
+      name: string;
+      prompt: string;
+      trigger: import("../shared/bot-routine-trigger").BotRoutineTrigger;
+    }) =>
+      invoke<{
+        routine: import("../shared/bot-event-routines").BotEventRoutineView;
+        link?: string | null;
+        token?: string;
+      }>("bots:eventRoutines:create", input),
+    update: (input: {
+      botId: string;
+      id: string;
+      enabled?: boolean;
+      name?: string;
+      prompt?: string;
+      trigger?: import("../shared/bot-routine-trigger").BotRoutineTrigger;
+    }) =>
+      invoke<import("../shared/bot-event-routines").BotEventRoutineView>(
+        "bots:eventRoutines:update",
+        input,
+      ),
+    remove: (input: { botId: string; id: string }) =>
+      invoke<{ removed: boolean }>("bots:eventRoutines:remove", input),
     rotateLink: (input: { botId: string; id: string }) =>
       invoke<{ link: string | null; token: string }>("bots:eventRoutines:rotateLink", input),
     /** Calls `listener` with the Bot's id when its routines change or a watch saves a check. */
@@ -2221,26 +2519,50 @@ export const botsApi = {
   },
   confirmedRetiredPendingBots: async (ids: string[]) => {
     const result = await invoke<unknown>("bots:pendingChanges:retired", ids);
-    if (!Array.isArray(result) || result.some((id) => typeof id !== "string" || !ids.includes(id)) || new Set(result).size !== result.length) throw new Error("Invalid saved-change retirement proof.");
+    if (
+      !Array.isArray(result) ||
+      result.some((id) => typeof id !== "string" || !ids.includes(id)) ||
+      new Set(result).size !== result.length
+    )
+      throw new Error("Invalid saved-change retirement proof.");
     return result as string[];
   },
   peers: {
     ...createBotPeerApi(invoke),
-    onChanged: (listener: (botId: string) => void) => onNotification<{ botId?: unknown }>("bots:peers:changed", (payload) => {
-      if (typeof payload?.botId === "string") listener(payload.botId);
-    }),
+    onChanged: (listener: (botId: string) => void) =>
+      onNotification<{ botId?: unknown }>("bots:peers:changed", (payload) => {
+        if (typeof payload?.botId === "string") listener(payload.botId);
+      }),
   },
   routineModels: {
-    directory: async (botId: string) => parseBotRoutineModelDirectory(await invoke<unknown>("bots:routineModels:directory", { botId })),
-    resumeStatus: async (botId: string) => parseBotExecutionResumeStatus(await invoke<unknown>("bots:routineModels:resumeStatus", { botId })),
-    read: async (botId: string, routineId: string) => parseBotRoutineModelSettings(await invoke<unknown>("bots:routineModels:read", { botId, routineId })),
-    catalog: async (botId: string, routineId: string) => parseBotRoutineModelCatalog(await invoke<unknown>("bots:routineModels:catalog", { botId, routineId })),
-    save: async (input: BotRoutineModelSave) => parseBotRoutineModelResult(await invoke<unknown>("bots:routineModels:save", input)),
-    readRuns: async (botId: string, routineId: string) => parseBotRoutineModelRuns(await invoke<unknown>("bots:routineModels:runs", { botId, routineId })),
+    directory: async (botId: string) =>
+      parseBotRoutineModelDirectory(
+        await invoke<unknown>("bots:routineModels:directory", { botId }),
+      ),
+    resumeStatus: async (botId: string) =>
+      parseBotExecutionResumeStatus(
+        await invoke<unknown>("bots:routineModels:resumeStatus", { botId }),
+      ),
+    read: async (botId: string, routineId: string) =>
+      parseBotRoutineModelSettings(
+        await invoke<unknown>("bots:routineModels:read", { botId, routineId }),
+      ),
+    catalog: async (botId: string, routineId: string) =>
+      parseBotRoutineModelCatalog(
+        await invoke<unknown>("bots:routineModels:catalog", { botId, routineId }),
+      ),
+    save: async (input: BotRoutineModelSave) =>
+      parseBotRoutineModelResult(await invoke<unknown>("bots:routineModels:save", input)),
+    readRuns: async (botId: string, routineId: string) =>
+      parseBotRoutineModelRuns(
+        await invoke<unknown>("bots:routineModels:runs", { botId, routineId }),
+      ),
   },
   openWork: {
-    snapshot: async (botId: string) => parseBotOpenWorkSnapshot(await invoke<unknown>(openWorkChannels.snapshot, { botId })),
-    mutate: async (botId: string, mutation: BotOpenWorkMutation) => parseBotOpenWorkResult(await invoke<unknown>(openWorkChannels.mutate, { botId, mutation })),
+    snapshot: async (botId: string) =>
+      parseBotOpenWorkSnapshot(await invoke<unknown>(openWorkChannels.snapshot, { botId })),
+    mutate: async (botId: string, mutation: BotOpenWorkMutation) =>
+      parseBotOpenWorkResult(await invoke<unknown>(openWorkChannels.mutate, { botId, mutation })),
     evidence: async (botId: string, id: string, kind: "source" | "result") => {
       const result = await invoke<unknown>(openWorkChannels.evidence, { botId, id, kind });
       return result === null ? null : parseBotOpenWorkEvidence(result);
@@ -2251,14 +2573,46 @@ export const botsApi = {
       }),
   },
   connectorWatches: {
-    list: (botId: string) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchList>>(watchChannels.list, { botId }),
-    discoverSources: (botId: string) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchSourceList>>(watchChannels.discoverSources, { botId }),
-    create: (input: ConnectorWatch.BotConnectorWatchCreateInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchView>>(watchChannels.create, input),
-    update: (input: ConnectorWatch.BotConnectorWatchUpdateInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchView>>(watchChannels.update, input),
-    setEnabled: (input: ConnectorWatch.BotConnectorWatchEnableInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchView>>(watchChannels.setEnabled, input),
-    remove: (input: ConnectorWatch.BotConnectorWatchIdentityInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchRemoval>>(watchChannels.remove, input),
-    testCheck: (input: ConnectorWatch.BotConnectorWatchTestInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchTestResult>>(watchChannels.testCheck, input),
-    runNow: (input: ConnectorWatch.BotConnectorWatchIdentityInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchRunResult>>(watchChannels.runNow, input),
+    list: (botId: string) =>
+      invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchList>>(
+        watchChannels.list,
+        { botId },
+      ),
+    discoverSources: (botId: string) =>
+      invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchSourceList>>(
+        watchChannels.discoverSources,
+        { botId },
+      ),
+    create: (input: ConnectorWatch.BotConnectorWatchCreateInput) =>
+      invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchView>>(
+        watchChannels.create,
+        input,
+      ),
+    update: (input: ConnectorWatch.BotConnectorWatchUpdateInput) =>
+      invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchView>>(
+        watchChannels.update,
+        input,
+      ),
+    setEnabled: (input: ConnectorWatch.BotConnectorWatchEnableInput) =>
+      invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchView>>(
+        watchChannels.setEnabled,
+        input,
+      ),
+    remove: (input: ConnectorWatch.BotConnectorWatchIdentityInput) =>
+      invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchRemoval>>(
+        watchChannels.remove,
+        input,
+      ),
+    testCheck: (input: ConnectorWatch.BotConnectorWatchTestInput) =>
+      invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchTestResult>>(
+        watchChannels.testCheck,
+        input,
+      ),
+    runNow: (input: ConnectorWatch.BotConnectorWatchIdentityInput) =>
+      invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchRunResult>>(
+        watchChannels.runNow,
+        input,
+      ),
     onChanged: (listener: (botId: string) => void) =>
       onNotification<{ botId?: unknown }>(watchChannels.changed, (payload) => {
         if (typeof payload?.botId === "string") listener(payload.botId);
@@ -2266,13 +2620,20 @@ export const botsApi = {
   },
   /** What a Bot learned: the page's overview, Undo, and lesson answers. */
   learning: {
-    get: (botId: string) => invoke<import("../shared/bot-learning-overview").BotLearningOverview>("bots:learning:get", { botId }),
-    undo: (input: { botId: string; changeId: string }) => invoke<{ ok: true } | { ok: false; code: string }>("bots:learning:undo", input),
-    undoInChat: (input: { botId: string; target: { kind: "lesson"; lessonId: string } | { kind: "change"; changeId: string } }) =>
-      invoke<{ ok: true } | { ok: false; code: string }>("bots:learning:undoInChat", input),
+    get: (botId: string) =>
+      invoke<import("../shared/bot-learning-overview").BotLearningOverview>("bots:learning:get", {
+        botId,
+      }),
+    undo: (input: { botId: string; changeId: string }) =>
+      invoke<{ ok: true } | { ok: false; code: string }>("bots:learning:undo", input),
+    undoInChat: (input: {
+      botId: string;
+      target: { kind: "lesson"; lessonId: string } | { kind: "change"; changeId: string };
+    }) => invoke<{ ok: true } | { ok: false; code: string }>("bots:learning:undoInChat", input),
     respondLesson: (input: { botId: string; lessonId: string; decision: "keep" | "dismiss" }) =>
       invoke<{ status: "active" | "dismissed" }>("bots:lessons:respond", input),
-    removeLesson: (input: { botId: string; lessonId: string }) => invoke<void>("bots:lessons:remove", input),
+    removeLesson: (input: { botId: string; lessonId: string }) =>
+      invoke<void>("bots:lessons:remove", input),
   },
   /** Skills a Bot proposed (or found in its folder) and the person's answer. */
   skillProposals: {
@@ -2281,16 +2642,26 @@ export const botsApi = {
   },
   /** Changes a Bot made to its own settings from chat, and the person's answer. */
   settingsChanges: {
-    respond: (input: { botId: string; changeId: string; decision: import("../shared/bot-settings-changes").BotSettingsChangeDecision }) =>
-      invoke<{ ok: true; status: import("../shared/bot-settings-changes").BotSettingsChangeStatus; message?: string } | { ok: false; message: string }>(
-        "bots:settingsChanges:respond",
-        input,
-      ),
+    respond: (input: {
+      botId: string;
+      changeId: string;
+      decision: import("../shared/bot-settings-changes").BotSettingsChangeDecision;
+    }) =>
+      invoke<
+        | {
+            ok: true;
+            status: import("../shared/bot-settings-changes").BotSettingsChangeStatus;
+            message?: string;
+          }
+        | { ok: false; message: string }
+      >("bots:settingsChanges:respond", input),
   },
   /** A Bot's health checks: the newest report, and Check now. */
   health: {
     report: (botId: string) =>
-      invoke<import("../shared/bot-health").BotHealthReport | null>("bots:health:report", { botId }),
+      invoke<import("../shared/bot-health").BotHealthReport | null>("bots:health:report", {
+        botId,
+      }),
     check: (botId: string) =>
       invoke<import("../shared/bot-health").BotHealthReport>("bots:health:check", { botId }),
   },
@@ -2299,8 +2670,11 @@ export const botsApi = {
     list: (input: { botId: string; open?: boolean }) =>
       invoke<import("../shared/bot-issues").BotIssue[]>("bots:issues:list", input),
     /** One of the card's actions; a settled issue answers `not_open`. */
-    act: (input: { botId: string; issueId: string; action: import("../shared/bot-issues").BotIssueAction }) =>
-      invoke<{ result: "done" | "not_open" }>("bots:issues:act", input),
+    act: (input: {
+      botId: string;
+      issueId: string;
+      action: import("../shared/bot-issues").BotIssueAction;
+    }) => invoke<{ result: "done" | "not_open" }>("bots:issues:act", input),
   },
   getTelegramBinding: (id: string) =>
     invoke<import("../shared/bots").TelegramBotBindingView | null>("bots:getTelegramBinding", id),
@@ -2313,8 +2687,13 @@ export const botsApi = {
 };
 
 export const subagentsApi = {
-  get: async (chatId: string, runId: string): Promise<SubagentHistoryDetailWithTranscriptV1 | null> =>
-    parseSubagentHistoryDetailWithTranscript(await invoke<unknown>("subagents:get", chatId, runId)) ?? null,
+  get: async (
+    chatId: string,
+    runId: string,
+  ): Promise<SubagentHistoryDetailWithTranscriptV1 | null> =>
+    parseSubagentHistoryDetailWithTranscript(
+      await invoke<unknown>("subagents:get", chatId, runId),
+    ) ?? null,
   manage: async (
     chatId: string,
     request: SubagentManagementRequestV2,
@@ -2471,7 +2850,8 @@ interface GenerationStartReply {
  * own run, instead of answering a message the person sent.
  */
 export function goalRoundStart(token: string): (streamId: string) => Promise<GenerationStartReply> {
-  return (streamId) => invoke<GenerationStartReply>("chats:goal:startWindowRound", { token, streamId });
+  return (streamId) =>
+    invoke<GenerationStartReply>("chats:goal:startWindowRound", { token, streamId });
 }
 
 export function startGeneration(
@@ -2491,7 +2871,9 @@ export function startGeneration(
   const dispose = stream.dispose;
 
   const started: Promise<GenerationStartResult> = (
-    start ? start(streamId) : invoke<GenerationStartReply>("chat:start", streamId, params, messageTurnId)
+    start
+      ? start(streamId)
+      : invoke<GenerationStartReply>("chat:start", streamId, params, messageTurnId)
   ).then(
     (result) => {
       if (result.accepted) {
@@ -2597,12 +2979,7 @@ export function attachGenerationStream(
   onBeforeReplay?: (handle: GenerationHandle) => void,
 ): GenerationHandle {
   rememberOwnGenerationStream(streamId);
-  const stream = subscribeGenerationStream(
-    streamId,
-    scope,
-    callbacks,
-    initialProjection,
-  );
+  const stream = subscribeGenerationStream(streamId, scope, callbacks, initialProjection);
   const dispose = stream.dispose;
   let lifecycleDetached = false;
   let userStopRequested = false;
@@ -2701,10 +3078,10 @@ export const ttsApi = {
   getSettings: () =>
     invoke<{ settings: TtsSettings; settingsRevision: string }>("tts:settings:get"),
   updateSettings: (expectedRevision: string, patch: unknown) =>
-    invoke<{ settings: TtsSettings; settingsRevision: string }>(
-      "tts:settings:update",
-      { expectedRevision, patch },
-    ),
+    invoke<{ settings: TtsSettings; settingsRevision: string }>("tts:settings:update", {
+      expectedRevision,
+      patch,
+    }),
   setDedicatedCredential: (apiKey: string) =>
     invoke<{ ok: true }>("tts:credential:set", { apiKey }),
   clearDedicatedCredential: () => invoke<{ ok: true }>("tts:credential:clear"),
@@ -2714,19 +3091,22 @@ export const ttsApi = {
     ),
   listVoices: (pageToken?: string) =>
     invoke<{
-      voices: Array<{ providerVoiceId: string; name: string; kind: "prebuilt" | "prompted" | "replicated" }>;
+      voices: Array<{
+        providerVoiceId: string;
+        name: string;
+        kind: "prebuilt" | "prompted" | "replicated";
+      }>;
       nextPageToken: string | null;
     }>("tts:voices:list", pageToken ? { pageToken } : undefined),
   preview: () =>
-    invoke<
-      | { ok: true; snapshot: TtsJobSnapshot }
-      | { ok: false; error: TtsSafeError }
-    >("tts:preview"),
+    invoke<{ ok: true; snapshot: TtsJobSnapshot } | { ok: false; error: TtsSafeError }>(
+      "tts:preview",
+    ),
   start: (request: { requestId: string; source: TtsSourceRef; settingsRevision: string }) =>
-    invoke<
-      | { ok: true; snapshot: TtsJobSnapshot }
-      | { ok: false; error: TtsSafeError }
-    >("tts:start", request),
+    invoke<{ ok: true; snapshot: TtsJobSnapshot } | { ok: false; error: TtsSafeError }>(
+      "tts:start",
+      request,
+    ),
   readAudio: (jobId: string, segment: number, offset: number, maxBytes: number) =>
     invoke<TtsAudioReadResult | null>("tts:audio:read", {
       jobId,
@@ -2753,27 +3133,77 @@ export const designCanvasApi = {
   getDesignCanvas: (chatId: string) => invoke<DesignCanvas>("designCanvas:get", chatId),
   /** A page's file or an artifact's HTML, for the side panel's Code and Tweaks tabs. */
   designFrameSource: (chatId: string, frameId: string) =>
-    invoke<{ text: string; truncated: boolean } | { error: "unavailable" | "missing" }>("designCanvas:source", chatId, frameId),
+    invoke<{ text: string; truncated: boolean } | { error: "unavailable" | "missing" }>(
+      "designCanvas:source",
+      chatId,
+      frameId,
+    ),
   /** Writes a plain text change into a page's file, where its old words are found once. */
-  editDesignText: (chatId: string, frameId: string, changes: { before: string; after: string }[], stamp?: string) =>
+  editDesignText: (
+    chatId: string,
+    frameId: string,
+    changes: { before: string; after: string }[],
+    stamp?: string,
+  ) =>
     invoke<
       | { ok: true }
-      | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" | "changed" }
+      | {
+          ok: false;
+          reason:
+            | "unavailable"
+            | "missing"
+            | "not-found"
+            | "ambiguous"
+            | "unchanged"
+            | "too-long"
+            | "changed";
+        }
     >("designCanvas:editText", chatId, frameId, changes, stamp),
   /** Tweaks' Make default: writes the frame's values into the page's file. `kept` lists targets the frame keeps. */
   bakeDesignTweaks: (chatId: string, frameId: string, values: Record<string, string> | undefined) =>
     invoke<
-      | { ok: true; written: Record<string, string>; previous: Record<string, string>; kept: string[]; undoId: string }
-      | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" | "changed" }
+      | {
+          ok: true;
+          written: Record<string, string>;
+          previous: Record<string, string>;
+          kept: string[];
+          undoId: string;
+        }
+      | {
+          ok: false;
+          reason:
+            | "unavailable"
+            | "missing"
+            | "not-found"
+            | "ambiguous"
+            | "unchanged"
+            | "too-long"
+            | "changed";
+        }
     >("designCanvas:bakeTweaks", chatId, frameId, values ?? null),
   /** Puts back the file as it was before the frame's last Make default, while nothing else changed it. */
   undoBakeDesignTweaks: (chatId: string, frameId: string, undoId: string) =>
     invoke<
       | { ok: true }
-      | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" | "changed" }
+      | {
+          ok: false;
+          reason:
+            | "unavailable"
+            | "missing"
+            | "not-found"
+            | "ambiguous"
+            | "unchanged"
+            | "too-long"
+            | "changed";
+        }
     >("designCanvas:undoBakeTweaks", chatId, frameId, undoId),
   /** Saves one frame as a PNG, a PDF or its original file, through the save dialog. `theme` draws a dark artifact. */
-  exportDesignFrame: (chatId: string, frameId: string, format: "png" | "pdf" | "source", theme?: unknown) =>
+  exportDesignFrame: (
+    chatId: string,
+    frameId: string,
+    format: "png" | "pdf" | "source",
+    theme?: unknown,
+  ) =>
     invoke<{ saved: true } | { canceled: true } | { error: "unavailable" | "missing" | "failed" }>(
       "designCanvas:export",
       chatId,
@@ -2783,7 +3213,12 @@ export const designCanvasApi = {
     ),
   /** Compare-and-swap: lands only if `baseRevision` is still the stored revision. */
   /** `undone` names pages the person's undo took off, which are not remembered as removed. */
-  saveDesignCanvas: (chatId: string, doc: DesignCanvas, baseRevision: number, options?: { undone?: string[] }) =>
+  saveDesignCanvas: (
+    chatId: string,
+    doc: DesignCanvas,
+    baseRevision: number,
+    options?: { undone?: string[] },
+  ) =>
     options === undefined
       ? invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision)
       : invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision, options),
@@ -2802,8 +3237,18 @@ export const designCanvasApi = {
    * `aidenTurn` names the reply that made the change, when Aiden made it;
    * `step` marks the person's own change made through main (Send to canvas).
    */
-  onDesignCanvasUpdated: (handler: (update: { chatId: string; revision: number; aidenTurn?: string; step?: string }) => void) =>
-    onNotification<{ chatId: string; revision: number; aidenTurn?: string; step?: string }>("designCanvas:updated", handler),
+  onDesignCanvasUpdated: (
+    handler: (update: {
+      chatId: string;
+      revision: number;
+      aidenTurn?: string;
+      step?: string;
+    }) => void,
+  ) =>
+    onNotification<{ chatId: string; revision: number; aidenTurn?: string; step?: string }>(
+      "designCanvas:updated",
+      handler,
+    ),
   /** The chat's `aiden-design://<grant>/` host for framing its workspace files. */
   getDesignCanvasGrant: (chatId: string) =>
     invoke<{ grant: string } | { error: "unavailable" }>("designCanvas:grant", chatId),
@@ -2823,8 +3268,13 @@ export const designCanvasApi = {
       | { error: "outside-workspace" | "unsupported" | "unavailable" }
     >("designCanvas:pickFile", chatId, kind),
   /** Aiden asked to enter design mode; this window shows the card. */
-  onDesignModeConsent: (handler: (request: { requestId: string; chatId: string; reason: string }) => void) =>
-    onNotification<{ requestId: string; chatId: string; reason: string }>("designCanvas:consent", handler),
+  onDesignModeConsent: (
+    handler: (request: { requestId: string; chatId: string; reason: string }) => void,
+  ) =>
+    onNotification<{ requestId: string; chatId: string; reason: string }>(
+      "designCanvas:consent",
+      handler,
+    ),
   /** A card stopped waiting: answered, the reply stopped, or it timed out. */
   onDesignModeConsentClosed: (handler: (closed: { requestId: string }) => void) =>
     onNotification<{ requestId: string }>("designCanvas:consentClosed", handler),

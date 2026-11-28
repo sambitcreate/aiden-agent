@@ -1,4 +1,10 @@
-import { connectOnboardingLmStudio, E2E_ASSISTANT_RESPONSE, E2E_PROFILE_NAME, expect, test } from "./fixtures";
+import {
+  connectOnboardingLmStudio,
+  E2E_ASSISTANT_RESPONSE,
+  E2E_PROFILE_NAME,
+  expect,
+  test,
+} from "./fixtures";
 
 // Unlike the other Bot specs, nothing here substitutes Bot IPC: the real Bot
 // store, durable runtime and live projection answer the renderer. The fixture
@@ -7,10 +13,16 @@ import { connectOnboardingLmStudio, E2E_ASSISTANT_RESPONSE, E2E_PROFILE_NAME, ex
 test.use({ isolatedKeychain: true });
 test.skip(process.platform !== "darwin", "The isolated keychain fixture is macOS-only.");
 
-test("onboarding's first Bot greets the person, and a Bot made with New bot answers through the real runtime and keeps its transcript across a relaunch", async ({ aiden }) => {
+test("onboarding's first Bot greets the person, and a Bot made with New bot answers through the real runtime and keeps its transcript across a relaunch", async ({
+  aiden,
+}) => {
   const question = "Which errand comes first on Saturday?";
   const answer = "Collect the dry cleaning before the farmers market.";
-  const turn = aiden.lmStudio.enqueueToolScenario!({ prompt: question, calls: [], finalText: answer });
+  const turn = aiden.lmStudio.enqueueToolScenario!({
+    prompt: question,
+    calls: [],
+    finalText: answer,
+  });
 
   let page = aiden.page;
   const transcript = () => page.getByRole("main");
@@ -21,7 +33,9 @@ test("onboarding's first Bot greets the person, and a Bot made with New bot answ
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   await onboarding.getByRole("button", { name: /^Next/u }).click();
   await connectOnboardingLmStudio(onboarding);
-  await expect(onboarding.getByRole("region", { name: "Your first Bot" }).getByRole("status")).toHaveText("Chief is ready");
+  await expect(
+    onboarding.getByRole("region", { name: "Your first Bot" }).getByRole("status"),
+  ).toHaveText("Chief is ready");
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
   await expect(page.getByPlaceholder("Ask Chief")).toBeVisible();
@@ -44,7 +58,8 @@ test("onboarding's first Bot greets the person, and a Bot made with New bot answ
   await expect(transcript().getByText(answer, { exact: true })).toBeVisible();
   await expect(transcript().getByText(question, { exact: true })).toBeVisible();
   expect(turn.completed).toBe(true);
-  const completions = () => aiden.lmStudio.requests.filter(({ url }) => url === "/v1/chat/completions").length;
+  const completions = () =>
+    aiden.lmStudio.requests.filter(({ url }) => url === "/v1/chat/completions").length;
   const completionsBeforeRelaunch = completions();
 
   page = await aiden.relaunch();

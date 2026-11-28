@@ -70,7 +70,10 @@ test("opposite direction quota admission at 29 is atomic across ledger instances
   }
   const results = await Promise.all([f.ledger.reserve(f.row()), f.open().reserve(f.row("B", "A"))]);
   assert.equal(results.filter((r) => "row" in r).length, 1);
-  assert.equal(results.filter((r) => "refused" in r && r.refused.reason === "pair_daily").length, 1);
+  assert.equal(
+    results.filter((r) => "refused" in r && r.refused.reason === "pair_daily").length,
+    1,
+  );
   assert.equal((await stat(f.file)).mode & 0o777, 0o600);
 });
 test("one child reservation and three in-flight slots are atomic", async (t) => {
@@ -84,7 +87,10 @@ test("one child reservation and three in-flight slots are atomic", async (t) => 
   }));
   const result = await Promise.all(children.map((r) => f.ledger.reserve(r)));
   assert.equal(result.filter((r) => "row" in r).length, 1);
-  assert.equal(result.filter((r) => "refused" in r && r.refused.reason === "once_per_turn").length, 1);
+  assert.equal(
+    result.filter((r) => "refused" in r && r.refused.reason === "once_per_turn").length,
+    1,
+  );
   await f.ledger.reserve(f.row("A", "C"));
   await f.ledger.reserve(f.row("A", "D"));
   assert.deepEqual(await f.ledger.reserve(f.row("A", "E")), {
@@ -211,13 +217,19 @@ test("damaged purge markers preserve evidence without blocking durable concurren
   // A repeated deletion must also preserve its own damaged earlier marker.
   assert.deepEqual(await Promise.all([f.ledger.forgetBot("D"), f.open().forgetBot("B")]), [[], []]);
   assert.equal(await readFile(marker, "utf8"), "{damaged purge intent");
-  assert.equal(await readFile(f.file, "utf8"), good, "unreadable bookkeeping never partially rewrites the ledger");
+  assert.equal(
+    await readFile(f.file, "utf8"),
+    good,
+    "unreadable bookkeeping never partially rewrites the ledger",
+  );
   const markers = await readdir(directory);
   assert.equal(markers.length, 3);
   for (const name of markers) {
     assert.equal((await stat(path.join(directory, name))).mode & 0o777, 0o600);
   }
-  assert.ok(markers.some((name) => name.startsWith(createHash("sha256").update("D").digest("hex"))));
+  assert.ok(
+    markers.some((name) => name.startsWith(createHash("sha256").update("D").digest("hex"))),
+  );
 
   // A fresh process has none of this module's in-memory tombstones.
   const checkRestart = async (repaired: boolean) => {

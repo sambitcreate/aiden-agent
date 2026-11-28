@@ -17,28 +17,28 @@ The owner could not sign in to the built-in Figma connector and suspected the MC
 
 Probe results (authorization-server metadata):
 
-| Preset | Accepts public client (`none`) | Supports CIMD |
-|---|---|---|
-| Figma, Vercel, Supabase | **No** (secret required) | No |
-| Stripe, Datadog, ClickUp | Yes, only `none` | No |
-| Consensus, Dropbox | Yes | No |
-| Linear, Atlassian, Canva, Notion, Cloudflare, Sentry, Granola, monday.com, Airtable, PostHog, Higgsfield | Yes | Yes |
+| Preset                                                                                                   | Accepts public client (`none`) | Supports CIMD |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------ | ------------- |
+| Figma, Vercel, Supabase                                                                                  | **No** (secret required)       | No            |
+| Stripe, Datadog, ClickUp                                                                                 | Yes, only `none`               | No            |
+| Consensus, Dropbox                                                                                       | Yes                            | No            |
+| Linear, Atlassian, Canva, Notion, Cloudflare, Sentry, Granola, monday.com, Airtable, PostHog, Higgsfield | Yes                            | Yes           |
 
 ### OAuth runtime (`main/services/mcp-oauth*.ts`)
 
-| Severity | Finding | Where |
-|---|---|---|
-| High | A stale client registration is never replaced. Authorize reuses the stored `client_id`. A server that dropped it shows an error page and never calls back, so Settings waits on "Waiting for browser…" for 5 minutes. The CLI already drops the client on interactive sign-in. | `mcp-oauth-session.ts:112-122`, `mcp-oauth.ts:491` |
-| High | Sign out is hidden unless the server is authorized or flagged, and that flag lives only in memory. After a restart, the only way out of a broken registration is to delete the server. | `renderer/components/settings/mcp-sign-in-controls.tsx:49` |
-| Medium | Metadata redirects are refused with `redirect: "error"`. Node raises a `TypeError`, which the SDK treats as CORS and silently skips, so discovery falls back to the wrong auth server. Network outages get the same treatment. | `mcp-fetch-policy.ts:332` |
-| Medium | Every callback `error=` becomes "Authorization was denied by the provider." `error_description` is dropped, and the browser page says "Connected" before the exchange runs, even on `access_denied`. | `mcp-oauth-session.ts:365`, `mcp-oauth-loopback.ts:80-83` |
-| Medium | "Authorized" can be committed with no tokens when a server allows anonymous `initialize`. | `mcp-oauth.ts:532-547` |
-| Medium | A temporary refresh failure (5xx or timeout) is reported as "sign-in expired or was revoked". | `mcp-oauth.ts:251-256` |
-| Medium | The issuer check is stricter than the SDK's. A risk, not a confirmed failure: check it per preset in live acceptance. | `mcp-oauth-session.ts:317` |
-| Low | Verification can open a second consent tab, and a 5xx during verify throws away a good sign-in. | `mcp-oauth.ts:567-581` |
-| Low | Startup prewarm and status checks run discovery and registration for OAuth servers that were never signed in. | `mcp.ts:829-840`, `mcp-status-events.ts:141` |
-| Low | Preset `clientName` is not part of the session binding, so changing it keeps the old `client_id`. | `mcp-oauth.ts:330,473` |
-| Low | The desktop and CLI keep two OAuth providers with different behavior (fixed vs random port, reuse vs re-register, secret dropped vs kept). The CLI also loads Pi's own MCP extension, which stores credentials in plaintext `mcp-auth.json`. | `packages/cli/src/mcp.ts` |
+| Severity | Finding                                                                                                                                                                                                                                                                        | Where                                                      |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| High     | A stale client registration is never replaced. Authorize reuses the stored `client_id`. A server that dropped it shows an error page and never calls back, so Settings waits on "Waiting for browser…" for 5 minutes. The CLI already drops the client on interactive sign-in. | `mcp-oauth-session.ts:112-122`, `mcp-oauth.ts:491`         |
+| High     | Sign out is hidden unless the server is authorized or flagged, and that flag lives only in memory. After a restart, the only way out of a broken registration is to delete the server.                                                                                         | `renderer/components/settings/mcp-sign-in-controls.tsx:49` |
+| Medium   | Metadata redirects are refused with `redirect: "error"`. Node raises a `TypeError`, which the SDK treats as CORS and silently skips, so discovery falls back to the wrong auth server. Network outages get the same treatment.                                                 | `mcp-fetch-policy.ts:332`                                  |
+| Medium   | Every callback `error=` becomes "Authorization was denied by the provider." `error_description` is dropped, and the browser page says "Connected" before the exchange runs, even on `access_denied`.                                                                           | `mcp-oauth-session.ts:365`, `mcp-oauth-loopback.ts:80-83`  |
+| Medium   | "Authorized" can be committed with no tokens when a server allows anonymous `initialize`.                                                                                                                                                                                      | `mcp-oauth.ts:532-547`                                     |
+| Medium   | A temporary refresh failure (5xx or timeout) is reported as "sign-in expired or was revoked".                                                                                                                                                                                  | `mcp-oauth.ts:251-256`                                     |
+| Medium   | The issuer check is stricter than the SDK's. A risk, not a confirmed failure: check it per preset in live acceptance.                                                                                                                                                          | `mcp-oauth-session.ts:317`                                 |
+| Low      | Verification can open a second consent tab, and a 5xx during verify throws away a good sign-in.                                                                                                                                                                                | `mcp-oauth.ts:567-581`                                     |
+| Low      | Startup prewarm and status checks run discovery and registration for OAuth servers that were never signed in.                                                                                                                                                                  | `mcp.ts:829-840`, `mcp-status-events.ts:141`               |
+| Low      | Preset `clientName` is not part of the session binding, so changing it keeps the old `client_id`.                                                                                                                                                                              | `mcp-oauth.ts:330,473`                                     |
+| Low      | The desktop and CLI keep two OAuth providers with different behavior (fixed vs random port, reuse vs re-register, secret dropped vs kept). The CLI also loads Pi's own MCP extension, which stores credentials in plaintext `mcp-auth.json`.                                   | `packages/cli/src/mcp.ts`                                  |
 
 ### Diagnostics
 
@@ -49,13 +49,13 @@ Probe results (authorization-server metadata):
 
 `renderer/shared/plugin-catalog.ts` mirrors `github.com/openai/plugins`. It has 66 entries, of which **only 21 can be set up** (20 from upstream plus Composio):
 
-| Kind | Count | What Aiden can do |
-|---|---|---|
-| `skills` (Codex skill bundles) | 24 | Nothing. |
-| `chatgpt-app` | 7 | Nothing. |
-| `mcp-auth-unsupported` | 6 | Nothing (Google, Slack, Zoom, Shopify). |
-| `local-stdio` | 5 | Nothing. |
-| `git-marketplace` | 3 | Nothing. |
+| Kind                           | Count | What Aiden can do                       |
+| ------------------------------ | ----- | --------------------------------------- |
+| `skills` (Codex skill bundles) | 24    | Nothing.                                |
+| `chatgpt-app`                  | 7     | Nothing.                                |
+| `mcp-auth-unsupported`         | 6     | Nothing (Google, Slack, Zoom, Shopify). |
+| `local-stdio`                  | 5     | Nothing.                                |
+| `git-marketplace`              | 3     | Nothing.                                |
 
 Codex and OpenAI wording users can see:
 
@@ -89,7 +89,7 @@ Things that do not belong in Plugins settings:
 
 - **Protocol:** `2025-11-25`, plus the older revisions the SDK negotiates. Streamable HTTP with session resumption. stdio with process-group shutdown. Paginated tools, resources, resource templates and `resources/read`. Server `instructions`. Progress and cancellation.
 - **OAuth** (`pi-mcp/oauth`): discovery, PKCE, dynamic registration that **keeps `client_secret`** and picks the right token auth method, CIMD (`clientMetadataDocument`), and pre-registered `clientId`/`clientSecret`. It also does one shared refresh for concurrent 401s, step-up for `insufficient_scope`, re-registration after `invalid_client`/`unauthorized_client`, and an injectable `McpOAuthStateStore`. The pieces Aiden is missing (or got wrong) come for free.
-- **Not covered:** legacy HTTP+SSE, sampling and MCP servers. Aiden's ACP bridge and computer-use module host MCP *servers*, so they keep `@modelcontextprotocol/sdk`. Legacy SSE goes away (pre-1.0, no migration).
+- **Not covered:** legacy HTTP+SSE, sampling and MCP servers. Aiden's ACP bridge and computer-use module host MCP _servers_, so they keep `@modelcontextprotocol/sdk`. Legacy SSE goes away (pre-1.0, no migration).
 
 Pi's `coding-agent` MCP extension (`extensions/mcp/oauth.ts`) is a reference for per-server `clientId`/`clientSecret`/`callbackPort`/`clientName`/`clientRegistration: "dcr" | "cimd"` settings. Aiden adopts the same knobs, but stores credentials in its encrypted store rather than plaintext `mcp-auth.json`.
 
@@ -229,13 +229,13 @@ Implemented 2026-10-21. Outcome:
 
 **Discovery acceptance (2026-10-21, automated, no accounts).** `pi-mcp`'s `discoverOAuthServerInfo` ran against the live server of every hosted OAuth connector. All 18 discover without error and all offer dynamic registration. Vercel and Supabase accept only confidential clients, which the kept client secret now covers.
 
-| Connectors | Registration | CIMD | Token auth | Result |
-|---|---|---|---|---|
-| Linear, Atlassian Rovo, Canva, Notion, Cloudflare, Sentry, Granola, monday.com, Airtable, PostHog, Higgsfield | DCR | yes | public | OK |
-| Stripe, Datadog, Dropbox, ClickUp, Consensus | DCR | no | public | OK |
-| Vercel, Supabase | DCR | no | confidential | OK |
-| Figma (hosted) | — | — | — | Not run: marked unavailable until Figma approves "Aiden Agent" |
-| Figma Desktop, Composio, GitHub | — | — | — | Not run: no OAuth (local, or API key) |
+| Connectors                                                                                                    | Registration | CIMD | Token auth   | Result                                                         |
+| ------------------------------------------------------------------------------------------------------------- | ------------ | ---- | ------------ | -------------------------------------------------------------- |
+| Linear, Atlassian Rovo, Canva, Notion, Cloudflare, Sentry, Granola, monday.com, Airtable, PostHog, Higgsfield | DCR          | yes  | public       | OK                                                             |
+| Stripe, Datadog, Dropbox, ClickUp, Consensus                                                                  | DCR          | no   | public       | OK                                                             |
+| Vercel, Supabase                                                                                              | DCR          | no   | confidential | OK                                                             |
+| Figma (hosted)                                                                                                | —            | —    | —            | Not run: marked unavailable until Figma approves "Aiden Agent" |
+| Figma Desktop, Composio, GitHub                                                                               | —            | —    | —            | Not run: no OAuth (local, or API key)                          |
 
 **Still owner-only:** a real sign-in, a tool call and a refresh after restart for each connector, plus a real key for Composio and GitHub. These need the owner's accounts and are tracked in the plans index row.
 

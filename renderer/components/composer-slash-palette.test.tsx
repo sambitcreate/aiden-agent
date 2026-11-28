@@ -58,26 +58,26 @@ function ComposerHarness({
 }) {
   return (
     <DesignModeControlsContext.Provider value={designControls}>
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <CommandSystemProvider>
-          <Composer
-            ready
-            hasMessages={false}
-            chatId="chat-1"
-            sessionChat={SESSION_CHAT}
-            onRenameChat={() => undefined}
-            slashPaletteBlocked={slashPaletteBlocked}
-            contextMeter={contextMeter}
-            onSend={async (text) => {
-              sends.push(text);
-            }}
-            onStop={() => undefined}
-            isGenerating={false}
-          />
-        </CommandSystemProvider>
-      </TooltipProvider>
-    </QueryClientProvider>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <CommandSystemProvider>
+            <Composer
+              ready
+              hasMessages={false}
+              chatId="chat-1"
+              sessionChat={SESSION_CHAT}
+              onRenameChat={() => undefined}
+              slashPaletteBlocked={slashPaletteBlocked}
+              contextMeter={contextMeter}
+              onSend={async (text) => {
+                sends.push(text);
+              }}
+              onStop={() => undefined}
+              isGenerating={false}
+            />
+          </CommandSystemProvider>
+        </TooltipProvider>
+      </QueryClientProvider>
     </DesignModeControlsContext.Provider>
   );
 }
@@ -249,7 +249,10 @@ test("a blocked slash palette closes while the draft stays", async () => {
 });
 
 /** Design mode controls for chat-1 that record each change instead of saving it. */
-function recordingDesignControls(changes: Array<[boolean, string]>, chatId = "chat-1"): DesignModeControls {
+function recordingDesignControls(
+  changes: Array<[boolean, string]>,
+  chatId = "chat-1",
+): DesignModeControls {
   return {
     chatId,
     on: false,
@@ -258,14 +261,18 @@ function recordingDesignControls(changes: Array<[boolean, string]>, chatId = "ch
   };
 }
 
-const optionTitles = () => screen.queryAllByRole("option").map((option) => option.textContent ?? "");
+const optionTitles = () =>
+  screen.queryAllByRole("option").map((option) => option.textContent ?? "");
 
 test("/design is offered only in a chat that can use design mode", async () => {
   const changes: Array<[boolean, string]> = [];
   for (const controls of [null, recordingDesignControls(changes, "another-chat")]) {
     const { view, textbox } = await mountComposer(controls);
     await type(textbox, "/des");
-    assert.ok(!optionTitles().some((title) => title.includes("Design mode")), `controls for ${controls?.chatId ?? "no chat"}`);
+    assert.ok(
+      !optionTitles().some((title) => title.includes("Design mode")),
+      `controls for ${controls?.chatId ?? "no chat"}`,
+    );
     view.unmount();
   }
   const { textbox } = await mountComposer(recordingDesignControls(changes));
@@ -314,31 +321,58 @@ test("the context meter shows in a chat and hides while that chat is in design m
       view = render(<ComposerHarness designControls={controls} contextMeter={meter} />);
     });
     const present = screen.queryByRole("meter", { name: "Context used" }) !== null;
-    assert.ok(present === shown, `design mode ${controls?.on ? "on" : "off"}: meter ${present ? "shown" : "hidden"}`);
+    assert.ok(
+      present === shown,
+      `design mode ${controls?.on ? "on" : "off"}: meter ${present ? "shown" : "hidden"}`,
+    );
     view.unmount();
   }
 });
 
 test("an immediate close unmounts the palette in the same commit, while a normal close plays its exit", () => {
   // Stands in for the palette's CSS: an exiting root runs an exit that has not finished yet.
-  const exit = { finished: new Promise(() => {}), effect: { getComputedTiming: () => ({ endTime: 10_000, localTime: 0 }) } };
+  const exit = {
+    finished: new Promise(() => {}),
+    effect: { getComputedTiming: () => ({ endTime: 10_000, localTime: 0 }) },
+  };
   const original = Element.prototype.getAnimations;
   Element.prototype.getAnimations = function (this: Element) {
-    return (this.getAttribute("data-presence") === "exiting" ? [exit] : []) as unknown as Animation[];
+    return (this.getAttribute("data-presence") === "exiting"
+      ? [exit]
+      : []) as unknown as Animation[];
   };
   document.documentElement.dataset.reduceMotion = "false";
   try {
-    const Palette = ({ presenceState, presenceRef }: { presenceState?: string; presenceRef?: React.Ref<HTMLDivElement> }) => (
+    const Palette = ({
+      presenceState,
+      presenceRef,
+    }: {
+      presenceState?: string;
+      presenceRef?: React.Ref<HTMLDivElement>;
+    }) => (
       <div ref={presenceRef} role="listbox" aria-label="Commands" data-presence={presenceState} />
     );
-    const palette = <Palette /> as unknown as React.ComponentProps<typeof ComposerSlashPalettePresence>["children"];
-    const view = render(<ComposerSlashPalettePresence present>{palette}</ComposerSlashPalettePresence>);
+    const palette = (<Palette />) as unknown as React.ComponentProps<
+      typeof ComposerSlashPalettePresence
+    >["children"];
+    const view = render(
+      <ComposerSlashPalettePresence present>{palette}</ComposerSlashPalettePresence>,
+    );
 
-    view.rerender(<ComposerSlashPalettePresence present={false}>{palette}</ComposerSlashPalettePresence>);
-    assert.ok(screen.queryByRole("listbox", { name: "Commands" })?.getAttribute("data-presence") === "exiting");
+    view.rerender(
+      <ComposerSlashPalettePresence present={false}>{palette}</ComposerSlashPalettePresence>,
+    );
+    assert.ok(
+      screen.queryByRole("listbox", { name: "Commands" })?.getAttribute("data-presence") ===
+        "exiting",
+    );
 
     view.rerender(<ComposerSlashPalettePresence present>{palette}</ComposerSlashPalettePresence>);
-    view.rerender(<ComposerSlashPalettePresence present={false} immediate>{palette}</ComposerSlashPalettePresence>);
+    view.rerender(
+      <ComposerSlashPalettePresence present={false} immediate>
+        {palette}
+      </ComposerSlashPalettePresence>,
+    );
     assert.ok(screen.queryByRole("listbox", { name: "Commands" }) === null);
   } finally {
     if (original) Element.prototype.getAnimations = original;

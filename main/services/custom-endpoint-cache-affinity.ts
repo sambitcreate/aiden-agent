@@ -23,7 +23,10 @@ const CACHE_AFFINITY_ENDPOINTS: readonly CacheAffinityEntry[] = [
   // Azure OpenAI routes Chat Completions by prompt_cache_key, as OpenAI does.
   { host: ".openai.azure.com", compat: { promptCacheKeyMode: "enabled" } },
   // Fireworks keeps a session on one replica with the session-affinity header.
-  { host: "api.fireworks.ai", compat: { sendSessionAffinityHeaders: true, sessionAffinityFormat: "openai-nosession" } },
+  {
+    host: "api.fireworks.ai",
+    compat: { sendSessionAffinityHeaders: true, sessionAffinityFormat: "openai-nosession" },
+  },
 ];
 
 function hostOf(baseUrl: string): string | undefined {
@@ -42,6 +45,7 @@ export function customEndpointCacheAffinity(baseUrl: string): CacheAffinityCompa
   const entry = CACHE_AFFINITY_ENDPOINTS.find((candidate) =>
     candidate.host.startsWith(".")
       ? host.endsWith(candidate.host) && host.length > candidate.host.length
-      : host === candidate.host);
+      : host === candidate.host,
+  );
   return entry ? { ...entry.compat } : undefined;
 }

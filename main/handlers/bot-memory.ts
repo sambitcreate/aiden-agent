@@ -7,7 +7,11 @@
 // - `bots:memory:changed` is pushed to every window by the memory service on
 //   any write (`bot-memory-main.ts`).
 
-import { BOT_MEMORY_CHANNELS, type BotMemoryEditResult, type BotMemoryView } from "../../renderer/shared/bot-memory.js";
+import {
+  BOT_MEMORY_CHANNELS,
+  type BotMemoryEditResult,
+  type BotMemoryView,
+} from "../../renderer/shared/bot-memory.js";
 import type { BotMemoryService } from "../services/bot-memory/service.js";
 import { parseBotId, parseBotMemoryEdit } from "./bot-params.js";
 
@@ -22,7 +26,9 @@ export interface BotMemoryHandlerDependencies {
  * `botExists` for a Bot lookup, such as the Bot application service, that
  * answers `null` (or `undefined`) for a Bot it doesn't have.
  */
-export function botExistsIn(bots: { get(botId: string): Promise<unknown> }): (botId: string) => Promise<boolean> {
+export function botExistsIn(bots: {
+  get(botId: string): Promise<unknown>;
+}): (botId: string) => Promise<boolean> {
   return async (botId) => (await bots.get(botId)) != null;
 }
 
@@ -37,9 +43,12 @@ export function registerBotMemoryHandlers(dependencies: BotMemoryHandlerDependen
     return dependencies.memory.view(await knownBot(rawBotId));
   });
 
-  dependencies.handle(BOT_MEMORY_CHANNELS.edit, async (_event, input): Promise<BotMemoryEditResult> => {
-    const parsed = parseBotMemoryEdit(input);
-    await knownBot(parsed.botId);
-    return dependencies.memory.edit(parsed);
-  });
+  dependencies.handle(
+    BOT_MEMORY_CHANNELS.edit,
+    async (_event, input): Promise<BotMemoryEditResult> => {
+      const parsed = parseBotMemoryEdit(input);
+      await knownBot(parsed.botId);
+      return dependencies.memory.edit(parsed);
+    },
+  );
 }

@@ -50,86 +50,142 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
 
   try {
     if (process.platform === "darwin") {
-    // Lazy pages do not read descendants, and directory handles remain device-bound.
-    const alias = path.join(temporary, "alias");
-    await fs.symlink(temporary, alias);
-    workspace.folderPath = path.join(alias, "workspace");
-    await assert.rejects(() => service.children("device-1", workspace.id),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "filesystem_identity_changed");
-    workspace.folderPath = root;
-    await fs.rm(alias);
-    const originalRoot = path.join(temporary, "original-root");
-    await fs.rename(root, originalRoot);
-    await fs.symlink(temporary, root);
-    await assert.rejects(() => service.children("device-1", workspace.id),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "filesystem_identity_changed");
-    await fs.rm(root);
-    await fs.rename(originalRoot, root);
-    const rootPage = await service.children("device-1", workspace.id);
-    assert.deepEqual(rootPage.entries.map(entry => entry.displayPath), ["Sources"]);
-    assert.equal(rootPage.directoryPath, "");
-    // A replacement root lists afresh, but handles issued under the old root stay refused.
-    await fs.rename(root, originalRoot);
-    await fs.mkdir(path.join(root, "Sources"), { recursive: true });
-    await fs.writeFile(path.join(root, "replacement.txt"), "outside replacement");
-    assert.deepEqual((await service.children("device-1", workspace.id)).entries.map(entry => entry.displayPath),
-      ["Sources", "replacement.txt"]);
-    await assert.rejects(() => service.children("device-1", workspace.id, rootPage.entries[0]!.id),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "filesystem_identity_changed");
-    await fs.rm(root, { recursive: true });
-    await fs.rename(originalRoot, root);
-    const sources = rootPage.entries[0]!;
-    const children = await service.children("device-1", workspace.id, sources.id);
-    assert.deepEqual(children.entries.map(entry => entry.displayPath), ["Sources/App.swift"]);
-    const lazyDocument = await service.read("device-1", workspace.id, children.entries[0]!.id);
-    assert.equal(lazyDocument.content, "let value = 1\n");
-    const outsideLink = path.join(temporary, "outside-hardlink");
-    await fs.link(path.join(root, "Sources", "App.swift"), outsideLink);
-    assert.equal((await service.children("device-1", workspace.id, sources.id)).entries.length, 0);
-    await assert.rejects(() => service.read("device-1", workspace.id, lazyDocument.id));
-    await assert.rejects(() => service.write("device-1", workspace.id, lazyDocument.id,
-      { content: "must not save", expectedVersion: lazyDocument.version }));
-    assert.equal(await fs.readFile(outsideLink, "utf8"), "let value = 1\n");
-    await fs.unlink(outsideLink);
-    const savedLazyDocument = await service.write("device-1", workspace.id, lazyDocument.id,
-      { content: "let value = 2\n", expectedVersion: lazyDocument.version });
-    assert.notEqual(savedLazyDocument.id, lazyDocument.id);
-    assert.match(savedLazyDocument.warning ?? "", /previous version/);
-    assert.equal((await service.read("device-1", workspace.id, savedLazyDocument.id)).content, "let value = 2\n");
-    await assert.rejects(() => service.read("device-1", workspace.id, lazyDocument.id));
-    await service.write("device-1", workspace.id, savedLazyDocument.id,
-      { content: "let value = 1\n", expectedVersion: savedLazyDocument.version });
-    for (const name of await fs.readdir(path.join(root, "Sources"))) {
-      if (name.includes("aiden-recovery")) await fs.rm(path.join(root, "Sources", name));
-    }
-    await assert.rejects(() => service.children("device-2", workspace.id, sources.id));
-    await assert.rejects(() => service.children("device-1", workspace.id, children.entries[0]!.id));
-    await fs.mkdir(path.join(root, "Many"));
-    for (let number = 0; number < 205; number++) await fs.writeFile(path.join(root, "Many", `file${number}.txt`), "ok");
-    const many = (await service.children("device-1", workspace.id)).entries.find(entry => entry.name === "Many")!;
-    const firstPage = await service.children("device-1", workspace.id, many.id);
-    assert.equal(firstPage.entries.length, 200);
-    assert.ok(firstPage.nextCursor);
-    assert.equal(firstPage.entries[2]!.name, "file2.txt");
-    await assert.rejects(() => service.children("device-2", workspace.id, many.id, firstPage.nextCursor));
-    await assert.rejects(() => service.children("device-1", workspace.id, sources.id, firstPage.nextCursor));
-    await assert.rejects(() => service.children("device-1", workspace.id, undefined, firstPage.nextCursor));
-    // Mutation between pages cannot shuffle offsets in the server-held snapshot.
-    await fs.writeFile(path.join(root, "Many", "file-new.txt"), "new");
-    const lastPage = await service.children("device-1", workspace.id, many.id, firstPage.nextCursor);
-    assert.equal(lastPage.entries.length, 5);
-    assert.equal(lastPage.nextCursor, undefined);
-    assert.equal(new Set([...firstPage.entries, ...lastPage.entries].map(entry => entry.displayPath)).size, 205);
-    await fs.symlink(temporary, path.join(root, "escape"));
-    assert.equal((await service.children("device-1", workspace.id)).entries.some(entry => entry.name === "escape"), false);
-    await fs.rm(path.join(root, "escape"));
-    // Abandoned inventories evict oldest pages instead of blocking unrelated browsing.
-    for (let request = 0; request < 17; request++) {
-      assert.ok((await service.children("device-1", workspace.id, many.id)).nextCursor);
-    }
-    assert.equal((await service.children("device-1", workspace.id)).directoryPath, "");
-    await fs.rm(path.join(root, "Many"), { recursive: true });
-
+      // Lazy pages do not read descendants, and directory handles remain device-bound.
+      const alias = path.join(temporary, "alias");
+      await fs.symlink(temporary, alias);
+      workspace.folderPath = path.join(alias, "workspace");
+      await assert.rejects(
+        () => service.children("device-1", workspace.id),
+        (error: unknown) =>
+          error instanceof AidenRemoteServiceError && error.code === "filesystem_identity_changed",
+      );
+      workspace.folderPath = root;
+      await fs.rm(alias);
+      const originalRoot = path.join(temporary, "original-root");
+      await fs.rename(root, originalRoot);
+      await fs.symlink(temporary, root);
+      await assert.rejects(
+        () => service.children("device-1", workspace.id),
+        (error: unknown) =>
+          error instanceof AidenRemoteServiceError && error.code === "filesystem_identity_changed",
+      );
+      await fs.rm(root);
+      await fs.rename(originalRoot, root);
+      const rootPage = await service.children("device-1", workspace.id);
+      assert.deepEqual(
+        rootPage.entries.map((entry) => entry.displayPath),
+        ["Sources"],
+      );
+      assert.equal(rootPage.directoryPath, "");
+      // A replacement root lists afresh, but handles issued under the old root stay refused.
+      await fs.rename(root, originalRoot);
+      await fs.mkdir(path.join(root, "Sources"), { recursive: true });
+      await fs.writeFile(path.join(root, "replacement.txt"), "outside replacement");
+      assert.deepEqual(
+        (await service.children("device-1", workspace.id)).entries.map(
+          (entry) => entry.displayPath,
+        ),
+        ["Sources", "replacement.txt"],
+      );
+      await assert.rejects(
+        () => service.children("device-1", workspace.id, rootPage.entries[0]!.id),
+        (error: unknown) =>
+          error instanceof AidenRemoteServiceError && error.code === "filesystem_identity_changed",
+      );
+      await fs.rm(root, { recursive: true });
+      await fs.rename(originalRoot, root);
+      const sources = rootPage.entries[0]!;
+      const children = await service.children("device-1", workspace.id, sources.id);
+      assert.deepEqual(
+        children.entries.map((entry) => entry.displayPath),
+        ["Sources/App.swift"],
+      );
+      const lazyDocument = await service.read("device-1", workspace.id, children.entries[0]!.id);
+      assert.equal(lazyDocument.content, "let value = 1\n");
+      const outsideLink = path.join(temporary, "outside-hardlink");
+      await fs.link(path.join(root, "Sources", "App.swift"), outsideLink);
+      assert.equal(
+        (await service.children("device-1", workspace.id, sources.id)).entries.length,
+        0,
+      );
+      await assert.rejects(() => service.read("device-1", workspace.id, lazyDocument.id));
+      await assert.rejects(() =>
+        service.write("device-1", workspace.id, lazyDocument.id, {
+          content: "must not save",
+          expectedVersion: lazyDocument.version,
+        }),
+      );
+      assert.equal(await fs.readFile(outsideLink, "utf8"), "let value = 1\n");
+      await fs.unlink(outsideLink);
+      const savedLazyDocument = await service.write("device-1", workspace.id, lazyDocument.id, {
+        content: "let value = 2\n",
+        expectedVersion: lazyDocument.version,
+      });
+      assert.notEqual(savedLazyDocument.id, lazyDocument.id);
+      assert.match(savedLazyDocument.warning ?? "", /previous version/);
+      assert.equal(
+        (await service.read("device-1", workspace.id, savedLazyDocument.id)).content,
+        "let value = 2\n",
+      );
+      await assert.rejects(() => service.read("device-1", workspace.id, lazyDocument.id));
+      await service.write("device-1", workspace.id, savedLazyDocument.id, {
+        content: "let value = 1\n",
+        expectedVersion: savedLazyDocument.version,
+      });
+      for (const name of await fs.readdir(path.join(root, "Sources"))) {
+        if (name.includes("aiden-recovery")) await fs.rm(path.join(root, "Sources", name));
+      }
+      await assert.rejects(() => service.children("device-2", workspace.id, sources.id));
+      await assert.rejects(() =>
+        service.children("device-1", workspace.id, children.entries[0]!.id),
+      );
+      await fs.mkdir(path.join(root, "Many"));
+      for (let number = 0; number < 205; number++)
+        await fs.writeFile(path.join(root, "Many", `file${number}.txt`), "ok");
+      const many = (await service.children("device-1", workspace.id)).entries.find(
+        (entry) => entry.name === "Many",
+      )!;
+      const firstPage = await service.children("device-1", workspace.id, many.id);
+      assert.equal(firstPage.entries.length, 200);
+      assert.ok(firstPage.nextCursor);
+      assert.equal(firstPage.entries[2]!.name, "file2.txt");
+      await assert.rejects(() =>
+        service.children("device-2", workspace.id, many.id, firstPage.nextCursor),
+      );
+      await assert.rejects(() =>
+        service.children("device-1", workspace.id, sources.id, firstPage.nextCursor),
+      );
+      await assert.rejects(() =>
+        service.children("device-1", workspace.id, undefined, firstPage.nextCursor),
+      );
+      // Mutation between pages cannot shuffle offsets in the server-held snapshot.
+      await fs.writeFile(path.join(root, "Many", "file-new.txt"), "new");
+      const lastPage = await service.children(
+        "device-1",
+        workspace.id,
+        many.id,
+        firstPage.nextCursor,
+      );
+      assert.equal(lastPage.entries.length, 5);
+      assert.equal(lastPage.nextCursor, undefined);
+      assert.equal(
+        new Set([...firstPage.entries, ...lastPage.entries].map((entry) => entry.displayPath)).size,
+        205,
+      );
+      await fs.symlink(temporary, path.join(root, "escape"));
+      assert.equal(
+        (await service.children("device-1", workspace.id)).entries.some(
+          (entry) => entry.name === "escape",
+        ),
+        false,
+      );
+      await fs.rm(path.join(root, "escape"));
+      // Abandoned inventories evict oldest pages instead of blocking unrelated browsing.
+      for (let request = 0; request < 17; request++) {
+        assert.ok((await service.children("device-1", workspace.id, many.id)).nextCursor);
+      }
+      assert.equal((await service.children("device-1", workspace.id)).directoryPath, "");
+      await fs.rm(path.join(root, "Many"), { recursive: true });
     }
     const index = await service.list("device-1", workspace.id);
     assert.equal(index.maxEntries, 4_000);
@@ -140,7 +196,10 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     assert.match(file.id, /^file_[A-Za-z0-9_-]{43}$/u);
     assert.equal(file.language, "Swift");
     assert.equal(JSON.stringify(index).includes(root), false);
-    assert.equal(handles.storedTokenMaterialForTesting().some((value) => value.includes("App.swift")), false);
+    assert.equal(
+      handles.storedTokenMaterialForTesting().some((value) => value.includes("App.swift")),
+      false,
+    );
 
     const first = await service.read("device-1", workspace.id, file.id);
     assert.equal(first.content, "let value = 1\n");
@@ -148,21 +207,25 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
 
     await assert.rejects(
       () => service.read("device-2", workspace.id, file.id),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "handle_wrong_device",
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "handle_wrong_device",
     );
     workspaces.set("workspace-2", { ...workspace, id: "workspace-2" });
     await assert.rejects(
       () => service.read("device-1", "workspace-2", file.id),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "handle_wrong_device",
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "handle_wrong_device",
     );
 
     await fs.writeFile(path.join(root, "Sources", "App.swift"), "let value = 2\n", "utf8");
     await assert.rejects(
-      () => service.write("device-1", workspace.id, file.id, {
-        content: "let value = 3\n",
-        expectedVersion: first.version,
-      }),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "revision_conflict",
+      () =>
+        service.write("device-1", workspace.id, file.id, {
+          content: "let value = 3\n",
+          expectedVersion: first.version,
+        }),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "revision_conflict",
     );
 
     const refreshed = await service.read("device-1", workspace.id, file.id);
@@ -171,7 +234,10 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
       expectedVersion: refreshed.version,
     });
     assert.equal(saved.content, "let value = 3\n");
-    assert.equal(await fs.readFile(path.join(root, "Sources", "App.swift"), "utf8"), "let value = 3\n");
+    assert.equal(
+      await fs.readFile(path.join(root, "Sources", "App.swift"), "utf8"),
+      "let value = 3\n",
+    );
     // A save installs a new inode. The returned handle and the listed entry must
     // keep reading and saving the file without reopening Files.
     const reread = await service.read("device-1", workspace.id, saved.id);
@@ -180,18 +246,25 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
       content: "let value = 4\n",
       expectedVersion: reread.version,
     });
-    assert.equal((await service.read("device-1", workspace.id, file.id)).content, "let value = 4\n");
+    assert.equal(
+      (await service.read("device-1", workspace.id, file.id)).content,
+      "let value = 4\n",
+    );
     await service.write("device-1", workspace.id, resaved.id, {
       content: "let value = 3\n",
       expectedVersion: resaved.version,
     });
-    assert.equal(await fs.readFile(path.join(root, "Sources", "App.swift"), "utf8"), "let value = 3\n");
+    assert.equal(
+      await fs.readFile(path.join(root, "Sources", "App.swift"), "utf8"),
+      "let value = 3\n",
+    );
 
     // Another app replaces the file after the writer verified its save: the handle
     // must not adopt the replacement, only the inode the save installed.
     const swapPath = path.join(root, "Sources", "App.swift");
-    const swapping = (await service.list("device-1", workspace.id)).entries
-      .find((entry) => entry.displayPath === "Sources/App.swift")!;
+    const swapping = (await service.list("device-1", workspace.id)).entries.find(
+      (entry) => entry.displayPath === "Sources/App.swift",
+    )!;
     const beforeSwap = await service.read("device-1", workspace.id, swapping.id);
     // This test later shadows the module-level import, so take it from the module here.
     const syncExports = (await import("node:module")).syncBuiltinESMExports;
@@ -232,18 +305,27 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     // inode may live outside the workspace.
     await fs.link(outside, path.join(root, "linked-secret.txt"));
     const linkedIndex = await service.list("device-1", workspace.id);
-    assert.equal(linkedIndex.entries.some((entry) => entry.displayPath === "linked-secret.txt"), false);
+    assert.equal(
+      linkedIndex.entries.some((entry) => entry.displayPath === "linked-secret.txt"),
+      false,
+    );
     assert.equal(linkedIndex.truncated, true);
     await fs.rm(path.join(root, "linked-secret.txt"));
     const outsideAlias = path.join(temporary, "outside-alias.swift");
     await fs.link(path.join(root, "Sources", "App.swift"), outsideAlias);
     await assert.rejects(
       () => service.read("device-1", workspace.id, file.id),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "path_outside_root",
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "path_outside_root",
     );
     await assert.rejects(
-      () => service.write("device-1", workspace.id, file.id, { content: "must not save\n", expectedVersion: saved.version }),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "path_outside_root",
+      () =>
+        service.write("device-1", workspace.id, file.id, {
+          content: "must not save\n",
+          expectedVersion: saved.version,
+        }),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "path_outside_root",
     );
     assert.equal(await fs.readFile(outsideAlias, "utf8"), "let value = 3\n");
     await fs.rm(outsideAlias);
@@ -251,15 +333,19 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     // Race: the name passes pathname validation, then changes before the read
     // opens it. The opened descriptor must still be the issued single-link inode.
     const appPath = path.join(root, "Sources", "App.swift");
-    const racing = (await service.list("device-1", workspace.id)).entries
-      .find((entry) => entry.displayPath === "Sources/App.swift")!;
+    const racing = (await service.list("device-1", workspace.id)).entries.find(
+      (entry) => entry.displayPath === "Sources/App.swift",
+    )!;
     const { default: promises } = await import("node:fs/promises");
     const { syncBuiltinESMExports } = await import("node:module");
     const originalOpen = promises.open;
     const raceBeforeOpen = async (swap: () => Promise<void>) => {
       let armed = true;
       promises.open = (async (...args: Parameters<typeof promises.open>) => {
-        if (armed && String(args[0]).endsWith(`${path.sep}workspace${path.sep}Sources${path.sep}App.swift`)) {
+        if (
+          armed &&
+          String(args[0]).endsWith(`${path.sep}workspace${path.sep}Sources${path.sep}App.swift`)
+        ) {
           armed = false;
           await swap();
         }
@@ -269,7 +355,8 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
       try {
         await assert.rejects(
           () => service.read("device-1", workspace.id, racing.id),
-          (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "workspace_unavailable",
+          (error: unknown) =>
+            error instanceof AidenRemoteServiceError && error.code === "workspace_unavailable",
         );
         assert.equal(armed, false);
       } finally {
@@ -288,13 +375,17 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     const lateAlias = path.join(temporary, "late-alias.swift");
     await raceBeforeOpen(() => fs.link(appPath, lateAlias));
     await fs.rm(lateAlias);
-    assert.equal((await service.read("device-1", workspace.id, racing.id)).content, "let value = 3\n");
+    assert.equal(
+      (await service.read("device-1", workspace.id, racing.id)).content,
+      "let value = 3\n",
+    );
 
     await fs.rm(path.join(root, "Sources", "App.swift"));
     await fs.symlink(outside, path.join(root, "Sources", "App.swift"));
     await assert.rejects(
       () => service.read("device-1", workspace.id, file.id),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "path_outside_root",
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "path_outside_root",
     );
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
@@ -306,50 +397,93 @@ test("remote workspace owners survive disconnect-shaped reuse and revoke active 
   const first = registry.owner("device-1");
   assert.equal(first, registry.owner("device-1"));
   let invalidations = 0;
-  first.onInvalidated(() => { invalidations += 1; });
+  first.onInvalidated(() => {
+    invalidations += 1;
+  });
   registry.revokeDevice("device-1");
   assert.equal(first.isDestroyed(), true);
   assert.equal(invalidations, 1);
   assert.notEqual(first, registry.owner("device-1"));
 });
 
-test("lazy save reserves capacity before mutation and renews the returned handle", { skip: process.platform !== "darwin" }, async (t) => {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-lazy-save-"));
-  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
-  const root = await fs.realpath(temporary);
-  await fs.writeFile(path.join(root, "note.txt"), "old");
-  const workspace: Workspace = { id: "save", name: "Save", folderPath: root, permission: "ask", createdAt: 1, updatedAt: 2 };
-  let now = Date.now();
-  const handles = new AidenOpaqueHandleStore({ now: () => now, maxEntries: 2 });
-  const service = new AidenRemoteFileService({ instanceId: "instance", now: () => now, handles,
-    owners: new AidenRemoteWorkspaceOwnerRegistry(),
-    application: createWorkspaceEnvironmentApplicationService({
-      configStore: { getWorkspace: async () => workspace }, workspaceMutationGate: new WorkspaceMutationGate(),
-      workspaceOperationRegistry: new WorkspaceOperationRegistry(), assertManagedWorktreeAdmission: async () => undefined,
-      realpath: fs.realpath, stat: fs.stat,
-    }),
-  });
-  const file = (await service.children("device", workspace.id)).entries[0]!;
-  const opened = await service.read("device", workspace.id, file.id);
-  const blocker = handles.issue("file", handles.claimsFor(file.id, "file"));
-  await assert.rejects(service.write("device", workspace.id, file.id, { content: "new", expectedVersion: opened.version }));
-  assert.equal(await fs.readFile(path.join(root, "note.txt"), "utf8"), "old");
-  handles.discard(blocker);
-  now += 599_999;
-  const saved = await service.write("device", workspace.id, file.id, { content: "new", expectedVersion: opened.version });
-  now += 2;
-  assert.equal((await service.read("device", workspace.id, saved.id)).content, "new");
-});
+test(
+  "lazy save reserves capacity before mutation and renews the returned handle",
+  { skip: process.platform !== "darwin" },
+  async (t) => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-lazy-save-"));
+    t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+    const root = await fs.realpath(temporary);
+    await fs.writeFile(path.join(root, "note.txt"), "old");
+    const workspace: Workspace = {
+      id: "save",
+      name: "Save",
+      folderPath: root,
+      permission: "ask",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    let now = Date.now();
+    const handles = new AidenOpaqueHandleStore({ now: () => now, maxEntries: 2 });
+    const service = new AidenRemoteFileService({
+      instanceId: "instance",
+      now: () => now,
+      handles,
+      owners: new AidenRemoteWorkspaceOwnerRegistry(),
+      application: createWorkspaceEnvironmentApplicationService({
+        configStore: { getWorkspace: async () => workspace },
+        workspaceMutationGate: new WorkspaceMutationGate(),
+        workspaceOperationRegistry: new WorkspaceOperationRegistry(),
+        assertManagedWorktreeAdmission: async () => undefined,
+        realpath: fs.realpath,
+        stat: fs.stat,
+      }),
+    });
+    const file = (await service.children("device", workspace.id)).entries[0]!;
+    const opened = await service.read("device", workspace.id, file.id);
+    const blocker = handles.issue("file", handles.claimsFor(file.id, "file"));
+    await assert.rejects(
+      service.write("device", workspace.id, file.id, {
+        content: "new",
+        expectedVersion: opened.version,
+      }),
+    );
+    assert.equal(await fs.readFile(path.join(root, "note.txt"), "utf8"), "old");
+    handles.discard(blocker);
+    now += 599_999;
+    const saved = await service.write("device", workspace.id, file.id, {
+      content: "new",
+      expectedVersion: opened.version,
+    });
+    now += 2;
+    assert.equal((await service.read("device", workspace.id, saved.id)).content, "new");
+  },
+);
 
-function lazyFixture(root: string, options: { maxEntries?: number; maxEntriesPerDevice?: number; now?: () => number } = {}) {
-  const workspace: Workspace = { id: "lazy", name: "Lazy", folderPath: root, permission: "ask", createdAt: 1, updatedAt: 2 };
+function lazyFixture(
+  root: string,
+  options: { maxEntries?: number; maxEntriesPerDevice?: number; now?: () => number } = {},
+) {
+  const workspace: Workspace = {
+    id: "lazy",
+    name: "Lazy",
+    folderPath: root,
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 2,
+  };
   const handles = new AidenOpaqueHandleStore(options);
-  const service = new AidenRemoteFileService({ instanceId: "instance", handles, now: options.now,
+  const service = new AidenRemoteFileService({
+    instanceId: "instance",
+    handles,
+    now: options.now,
     owners: new AidenRemoteWorkspaceOwnerRegistry(),
     application: createWorkspaceEnvironmentApplicationService({
-      configStore: { getWorkspace: async () => workspace }, workspaceMutationGate: new WorkspaceMutationGate(),
-      workspaceOperationRegistry: new WorkspaceOperationRegistry(), assertManagedWorktreeAdmission: async () => undefined,
-      realpath: fs.realpath, stat: fs.stat,
+      configStore: { getWorkspace: async () => workspace },
+      workspaceMutationGate: new WorkspaceMutationGate(),
+      workspaceOperationRegistry: new WorkspaceOperationRegistry(),
+      assertManagedWorktreeAdmission: async () => undefined,
+      realpath: fs.realpath,
+      stat: fs.stat,
     }),
   });
   return { workspace, service, handles };
@@ -358,154 +492,325 @@ function lazyFixture(root: string, options: { maxEntries?: number; maxEntriesPer
 const identityChanged = (error: unknown) =>
   error instanceof AidenRemoteServiceError && error.code === "filesystem_identity_changed";
 
-test("a workspace folder re-created at the same path lists again without a restart", { skip: process.platform !== "darwin" }, async (t) => {
-  const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-recreated-root-")));
-  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
-  const root = path.join(temporary, "workspace");
-  const populate = async (content: string) => {
-    await fs.mkdir(path.join(root, "Sources"), { recursive: true });
-    await fs.writeFile(path.join(root, "Sources", "App.swift"), content);
-  };
-  await populate("let value = 1\n");
-  const { workspace, service } = lazyFixture(root);
-  const sources = (await service.children("device", workspace.id)).entries[0]!;
-  const file = (await service.children("device", workspace.id, sources.id)).entries[0]!;
-  assert.equal((await service.read("device", workspace.id, file.id)).content, "let value = 1\n");
+test(
+  "a workspace folder re-created at the same path lists again without a restart",
+  { skip: process.platform !== "darwin" },
+  async (t) => {
+    const temporary = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "aiden-recreated-root-")),
+    );
+    t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+    const root = path.join(temporary, "workspace");
+    const populate = async (content: string) => {
+      await fs.mkdir(path.join(root, "Sources"), { recursive: true });
+      await fs.writeFile(path.join(root, "Sources", "App.swift"), content);
+    };
+    await populate("let value = 1\n");
+    const { workspace, service } = lazyFixture(root);
+    const sources = (await service.children("device", workspace.id)).entries[0]!;
+    const file = (await service.children("device", workspace.id, sources.id)).entries[0]!;
+    assert.equal((await service.read("device", workspace.id, file.id)).content, "let value = 1\n");
 
-  // Deleting and re-cloning the project: the same path and layout, with new inodes.
-  await fs.rm(root, { recursive: true });
-  await populate("let value = 2\n");
-  await assert.rejects(service.children("device", workspace.id, sources.id), identityChanged);
-  await assert.rejects(service.read("device", workspace.id, file.id), identityChanged);
+    // Deleting and re-cloning the project: the same path and layout, with new inodes.
+    await fs.rm(root, { recursive: true });
+    await populate("let value = 2\n");
+    await assert.rejects(service.children("device", workspace.id, sources.id), identityChanged);
+    await assert.rejects(service.read("device", workspace.id, file.id), identityChanged);
 
-  const recreated = await service.children("device", workspace.id);
-  assert.deepEqual(recreated.entries.map(entry => entry.displayPath), ["Sources"]);
-  const recreatedFile = (await service.children("device", workspace.id, recreated.entries[0]!.id)).entries[0]!;
-  assert.equal((await service.read("device", workspace.id, recreatedFile.id)).content, "let value = 2\n");
-});
+    const recreated = await service.children("device", workspace.id);
+    assert.deepEqual(
+      recreated.entries.map((entry) => entry.displayPath),
+      ["Sources"],
+    );
+    const recreatedFile = (await service.children("device", workspace.id, recreated.entries[0]!.id))
+      .entries[0]!;
+    assert.equal(
+      (await service.read("device", workspace.id, recreatedFile.id)).content,
+      "let value = 2\n",
+    );
+  },
+);
 
-test("a lazy page fails closed when the root is replaced while the page is prepared", { skip: process.platform !== "darwin" }, async (t) => {
-  const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-swapped-root-")));
-  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
-  const root = path.join(temporary, "workspace");
-  await fs.mkdir(root);
-  await fs.writeFile(path.join(root, "a.txt"), "a");
-  const { workspace, service, handles } = lazyFixture(root);
-  const original = fsPromises.lstat;
-  let rootChecks = 0;
-  fsPromises.lstat = (async (...args: Parameters<typeof fsPromises.lstat>) => {
-    // The second root check runs after the page's handles are issued.
-    if (String(args[0]) === root && ++rootChecks === 2) {
-      await fs.rename(root, path.join(temporary, "original"));
-      await fs.mkdir(root);
-    }
-    return original(...args);
-  }) as typeof fsPromises.lstat;
-  syncBuiltinESMExports();
-  t.after(() => { fsPromises.lstat = original; syncBuiltinESMExports(); });
-  await assert.rejects(service.children("device", workspace.id), identityChanged);
-  assert.equal(rootChecks, 2);
-  assert.equal(handles.storedTokenMaterialForTesting().length, 0, "failed page assembly must roll back issued handles");
-});
+test(
+  "a lazy page fails closed when the root is replaced while the page is prepared",
+  { skip: process.platform !== "darwin" },
+  async (t) => {
+    const temporary = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "aiden-swapped-root-")),
+    );
+    t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+    const root = path.join(temporary, "workspace");
+    await fs.mkdir(root);
+    await fs.writeFile(path.join(root, "a.txt"), "a");
+    const { workspace, service, handles } = lazyFixture(root);
+    const original = fsPromises.lstat;
+    let rootChecks = 0;
+    fsPromises.lstat = (async (...args: Parameters<typeof fsPromises.lstat>) => {
+      // The second root check runs after the page's handles are issued.
+      if (String(args[0]) === root && ++rootChecks === 2) {
+        await fs.rename(root, path.join(temporary, "original"));
+        await fs.mkdir(root);
+      }
+      return original(...args);
+    }) as typeof fsPromises.lstat;
+    syncBuiltinESMExports();
+    t.after(() => {
+      fsPromises.lstat = original;
+      syncBuiltinESMExports();
+    });
+    await assert.rejects(service.children("device", workspace.id), identityChanged);
+    assert.equal(rootChecks, 2);
+    assert.equal(
+      handles.storedTokenMaterialForTesting().length,
+      0,
+      "failed page assembly must roll back issued handles",
+    );
+  },
+);
 
-test("lazy folder browsing, continuation paging, and reopening past capacity keep opened and other-device handles working", { skip: process.platform !== "darwin" }, async (t) => {
-  const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-lazy-capacity-")));
-  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
-  const root = path.join(temporary, "workspace");
-  await fs.mkdir(path.join(root, "Pinned"), { recursive: true });
-  await fs.writeFile(path.join(root, "Pinned", "Open.swift"), "let pinned = 1\n", "utf8");
-  for (let folder = 0; folder < 5; folder++) {
-    const dir = path.join(root, `Folder${folder}`);
-    await fs.mkdir(dir, { recursive: true });
-    for (let file = 0; file < 4; file++) {
-      await fs.writeFile(path.join(dir, `item${file}.txt`), `f${folder}-${file}`, "utf8");
-    }
-  }
-  const pagedDir = path.join(root, "Paged");
-  await fs.mkdir(pagedDir, { recursive: true });
-  await Promise.all(
-    Array.from({ length: 205 }, (_, index) => fs.writeFile(path.join(pagedDir, `p${index}.txt`), `page-${index}`, "utf8")),
-  );
-
-  // Frozen clock within a single TTL; device-1 gets 230 slots while paging/reopening issues >1,000 handles.
-  const now = 10_000;
-  const { workspace, service, handles } = lazyFixture(root, {
-    maxEntries: 250,
-    maxEntriesPerDevice: 230,
-    now: () => now,
-  });
-
-  // Device 2 lists root, expands Folder0, and opens a file: none of device-2's handles may be reclaimed by device-1.
-  const device2Root = await service.children("device-2", workspace.id);
-  const device2Folder0 = device2Root.entries.find((entry) => entry.name === "Folder0")!;
-  const device2Children = await service.children("device-2", workspace.id, device2Folder0.id);
-  const device2Opened = await service.read("device-2", workspace.id, device2Children.entries[0]!.id);
-  assert.equal(device2Opened.content, "f0-0");
-
-  // Device 1 opens Pinned/Open.swift before applying heavy lazy-browsing pressure.
-  let rootPage = await service.children("device-1", workspace.id);
-  const pinnedDir = rootPage.entries.find((entry) => entry.name === "Pinned")!;
-  const pinnedEntry = (await service.children("device-1", workspace.id, pinnedDir.id)).entries[0]!;
-  const openedPinned = await service.read("device-1", workspace.id, pinnedEntry.id);
-  assert.equal(openedPinned.content, "let pinned = 1\n");
-
-  // Browse all sibling folders, follow continuation pages in Paged, and reopen folders repeatedly (>1,200 handles issued).
-  for (let round = 0; round < 5; round++) {
-    rootPage = await service.children("device-1", workspace.id);
+test(
+  "lazy folder browsing, continuation paging, and reopening past capacity keep opened and other-device handles working",
+  { skip: process.platform !== "darwin" },
+  async (t) => {
+    const temporary = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "aiden-lazy-capacity-")),
+    );
+    t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+    const root = path.join(temporary, "workspace");
+    await fs.mkdir(path.join(root, "Pinned"), { recursive: true });
+    await fs.writeFile(path.join(root, "Pinned", "Open.swift"), "let pinned = 1\n", "utf8");
     for (let folder = 0; folder < 5; folder++) {
-      const dir = rootPage.entries.find((entry) => entry.name === `Folder${folder}`)!;
-      const page = await service.children("device-1", workspace.id, dir.id);
-      assert.equal(page.entries.length, 4);
+      const dir = path.join(root, `Folder${folder}`);
+      await fs.mkdir(dir, { recursive: true });
+      for (let file = 0; file < 4; file++) {
+        await fs.writeFile(path.join(dir, `item${file}.txt`), `f${folder}-${file}`, "utf8");
+      }
     }
-    const paged = rootPage.entries.find((entry) => entry.name === "Paged")!;
-    const firstPage = await service.children("device-1", workspace.id, paged.id);
-    assert.equal(firstPage.entries.length, 200);
-    assert.ok(firstPage.nextCursor);
-    const secondPage = await service.children("device-1", workspace.id, paged.id, firstPage.nextCursor);
-    assert.equal(secondPage.entries.length, 5);
-    assert.equal(secondPage.nextCursor, undefined);
-    // Continuation stayed in the same generation: both the final page and recent entries from page 1 still resolve.
-    assert.match((await service.read("device-1", workspace.id, secondPage.entries[0]!.id)).content, /^page-/u);
-    assert.equal(handles.storedTokenMaterialForTesting().length <= 250, true);
+    const pagedDir = path.join(root, "Paged");
+    await fs.mkdir(pagedDir, { recursive: true });
+    await Promise.all(
+      Array.from({ length: 205 }, (_, index) =>
+        fs.writeFile(path.join(pagedDir, `p${index}.txt`), `page-${index}`, "utf8"),
+      ),
+    );
+
+    // Frozen clock within a single TTL; device-1 gets 230 slots while paging/reopening issues >1,000 handles.
+    const now = 10_000;
+    const { workspace, service, handles } = lazyFixture(root, {
+      maxEntries: 250,
+      maxEntriesPerDevice: 230,
+      now: () => now,
+    });
+
+    // Device 2 lists root, expands Folder0, and opens a file: none of device-2's handles may be reclaimed by device-1.
+    const device2Root = await service.children("device-2", workspace.id);
+    const device2Folder0 = device2Root.entries.find((entry) => entry.name === "Folder0")!;
+    const device2Children = await service.children("device-2", workspace.id, device2Folder0.id);
+    const device2Opened = await service.read(
+      "device-2",
+      workspace.id,
+      device2Children.entries[0]!.id,
+    );
+    assert.equal(device2Opened.content, "f0-0");
+
+    // Device 1 opens Pinned/Open.swift before applying heavy lazy-browsing pressure.
+    let rootPage = await service.children("device-1", workspace.id);
+    const pinnedDir = rootPage.entries.find((entry) => entry.name === "Pinned")!;
+    const pinnedEntry = (await service.children("device-1", workspace.id, pinnedDir.id))
+      .entries[0]!;
+    const openedPinned = await service.read("device-1", workspace.id, pinnedEntry.id);
+    assert.equal(openedPinned.content, "let pinned = 1\n");
+
+    // Browse all sibling folders, follow continuation pages in Paged, and reopen folders repeatedly (>1,200 handles issued).
+    for (let round = 0; round < 5; round++) {
+      rootPage = await service.children("device-1", workspace.id);
+      for (let folder = 0; folder < 5; folder++) {
+        const dir = rootPage.entries.find((entry) => entry.name === `Folder${folder}`)!;
+        const page = await service.children("device-1", workspace.id, dir.id);
+        assert.equal(page.entries.length, 4);
+      }
+      const paged = rootPage.entries.find((entry) => entry.name === "Paged")!;
+      const firstPage = await service.children("device-1", workspace.id, paged.id);
+      assert.equal(firstPage.entries.length, 200);
+      assert.ok(firstPage.nextCursor);
+      const secondPage = await service.children(
+        "device-1",
+        workspace.id,
+        paged.id,
+        firstPage.nextCursor,
+      );
+      assert.equal(secondPage.entries.length, 5);
+      assert.equal(secondPage.nextCursor, undefined);
+      // Continuation stayed in the same generation: both the final page and recent entries from page 1 still resolve.
+      assert.match(
+        (await service.read("device-1", workspace.id, secondPage.entries[0]!.id)).content,
+        /^page-/u,
+      );
+      assert.equal(handles.storedTokenMaterialForTesting().length <= 250, true);
+    }
+
+    // Previously opened file handle still reads and saves, and the rotated save handle survives further pressure.
+    assert.equal(
+      (await service.read("device-1", workspace.id, pinnedEntry.id)).content,
+      "let pinned = 1\n",
+    );
+    const savedPinned = await service.write("device-1", workspace.id, pinnedEntry.id, {
+      content: "let pinned = 2\n",
+      expectedVersion: openedPinned.version,
+    });
+    rootPage = await service.children("device-1", workspace.id);
+    const pagedAgain = rootPage.entries.find((entry) => entry.name === "Paged")!;
+    await service.children("device-1", workspace.id, pagedAgain.id);
+    assert.equal(
+      (await service.read("device-1", workspace.id, savedPinned.id)).content,
+      "let pinned = 2\n",
+    );
+
+    // Device 2's live unopened handles, directory handle, and opened file handle remain untouched.
+    assert.equal((await service.read("device-2", workspace.id, device2Opened.id)).content, "f0-0");
+    assert.equal(
+      (await service.read("device-2", workspace.id, device2Children.entries[1]!.id)).content,
+      "f0-1",
+    );
+    assert.equal(
+      (await service.children("device-2", workspace.id, device2Folder0.id)).entries.length,
+      4,
+    );
+  },
+);
+
+test(
+  "in-flight file reads stay pinned under concurrent lazy browsing and genuine protected exhaustion returns 429 cleanly",
+  { skip: process.platform !== "darwin" },
+  async (t) => {
+    const temporary = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "aiden-lazy-inflight-")),
+    );
+    t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+    const root = path.join(temporary, "workspace");
+    await fs.mkdir(path.join(root, "A"), { recursive: true });
+    await fs.mkdir(path.join(root, "B"), { recursive: true });
+    await fs.writeFile(path.join(root, "root-note.txt"), "root-note", "utf8");
+    await fs.writeFile(path.join(root, "A", "target.txt"), "target", "utf8");
+    for (let i = 0; i < 5; i++) {
+      await fs.writeFile(path.join(root, "B", `b${i}.txt`), `b-${i}`, "utf8");
+    }
+
+    const now = 5_000;
+    let holdReadGate: Promise<void> | undefined;
+    let releaseReadGate!: () => void;
+    let notifyReadEntered!: () => void;
+    const readEntered = new Promise<void>((resolve) => {
+      notifyReadEntered = resolve;
+    });
+    const workspace: Workspace = {
+      id: "lazy",
+      name: "Lazy",
+      folderPath: root,
+      permission: "ask",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const handles = new AidenOpaqueHandleStore({
+      maxEntries: 6,
+      maxEntriesPerDevice: 6,
+      now: () => now,
+    });
+    const realApp = createWorkspaceEnvironmentApplicationService({
+      configStore: { getWorkspace: async () => workspace },
+      workspaceMutationGate: new WorkspaceMutationGate(),
+      workspaceOperationRegistry: new WorkspaceOperationRegistry(),
+      assertManagedWorktreeAdmission: async () => undefined,
+      realpath: fs.realpath,
+      stat: fs.stat,
+    });
+    let gatedCalls = 0;
+    const service = new AidenRemoteFileService({
+      instanceId: "instance",
+      handles,
+      now: () => now,
+      owners: new AidenRemoteWorkspaceOwnerRegistry(),
+      application: {
+        run: async (owner, workspaceId, action) => {
+          if (holdReadGate && ++gatedCalls === 1) {
+            notifyReadEntered();
+            await holdReadGate;
+          }
+          return realApp.run(owner, workspaceId, action);
+        },
+      },
+    });
+
+    const rootEntries = (await service.children("device-1", workspace.id)).entries;
+    const dirA = rootEntries.find((entry) => entry.name === "A")!;
+    const dirB = rootEntries.find((entry) => entry.name === "B")!;
+    const rootNote = rootEntries.find((entry) => entry.name === "root-note.txt")!;
+    await service.read("device-1", workspace.id, rootNote.id);
+    const targetEntry = (await service.children("device-1", workspace.id, dirA.id)).entries[0]!;
+
+    // Start read(targetEntry.id) and pause it BEFORE handle.resolve() marks it protectedDocument.
+    // Without in-flight pinning on targetEntry.id, dirB (1) + 4 more files would evict targetEntry.id;
+    // with pinning, rootNote (1 protected) + targetEntry (1 pinned) + dirB (1 pinned) + B (5 files) = 8 > 6 -> 429 and rollback!
+    holdReadGate = new Promise<void>((resolve) => {
+      releaseReadGate = resolve;
+    });
+    const pendingRead = service.read("device-1", workspace.id, targetEntry.id);
+    await readEntered;
+
+    await assert.rejects(
+      () => service.children("device-1", workspace.id, dirB.id),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError &&
+        error.code === "handle_capacity" &&
+        error.status === 429,
+    );
+    releaseReadGate();
+    assert.equal((await pendingRead).content, "target");
+
+    // Fill 5 of the 6 slots with protected opened documents (rootNote + targetEntry + 3 files in B).
+    holdReadGate = undefined;
+    await fs.rm(path.join(root, "B", "b3.txt"));
+    await fs.rm(path.join(root, "B", "b4.txt"));
+    const freshRoot = await service.children("device-1", workspace.id);
+    const freshDirB = freshRoot.entries.find((entry) => entry.name === "B")!;
+    const bFiles = (await service.children("device-1", workspace.id, freshDirB.id)).entries;
+    assert.equal(bFiles.length, 3);
+    for (const entry of bFiles) {
+      await service.read("device-1", workspace.id, entry.id);
+    }
+    // Root has 3 entries while only 1 slot remains free (5 protected): listing rejects with 429 and rolls back partial handles.
+    await assert.rejects(
+      () => service.children("device-1", workspace.id),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError &&
+        error.code === "handle_capacity" &&
+        error.status === 429,
+    );
+    assert.equal(handles.storedTokenMaterialForTesting().length, 5);
+    assert.equal((await service.read("device-1", workspace.id, rootNote.id)).content, "root-note");
+    assert.equal((await service.read("device-1", workspace.id, targetEntry.id)).content, "target");
+  },
+);
+
+async function legacyFixture(t: test.TestContext, count: number, capacity = 10_000) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-legacy-metadata-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  for (let start = 0; start < count; start += 100) {
+    await Promise.all(
+      Array.from({ length: Math.min(100, count - start) }, (_, offset) =>
+        fs.writeFile(path.join(root, `file${start + offset}.txt`), "data"),
+      ),
+    );
   }
-
-  // Previously opened file handle still reads and saves, and the rotated save handle survives further pressure.
-  assert.equal((await service.read("device-1", workspace.id, pinnedEntry.id)).content, "let pinned = 1\n");
-  const savedPinned = await service.write("device-1", workspace.id, pinnedEntry.id, {
-    content: "let pinned = 2\n",
-    expectedVersion: openedPinned.version,
-  });
-  rootPage = await service.children("device-1", workspace.id);
-  const pagedAgain = rootPage.entries.find((entry) => entry.name === "Paged")!;
-  await service.children("device-1", workspace.id, pagedAgain.id);
-  assert.equal((await service.read("device-1", workspace.id, savedPinned.id)).content, "let pinned = 2\n");
-
-  // Device 2's live unopened handles, directory handle, and opened file handle remain untouched.
-  assert.equal((await service.read("device-2", workspace.id, device2Opened.id)).content, "f0-0");
-  assert.equal((await service.read("device-2", workspace.id, device2Children.entries[1]!.id)).content, "f0-1");
-  assert.equal((await service.children("device-2", workspace.id, device2Folder0.id)).entries.length, 4);
-});
-
-test("in-flight file reads stay pinned under concurrent lazy browsing and genuine protected exhaustion returns 429 cleanly", { skip: process.platform !== "darwin" }, async (t) => {
-  const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-lazy-inflight-")));
-  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
-  const root = path.join(temporary, "workspace");
-  await fs.mkdir(path.join(root, "A"), { recursive: true });
-  await fs.mkdir(path.join(root, "B"), { recursive: true });
-  await fs.writeFile(path.join(root, "root-note.txt"), "root-note", "utf8");
-  await fs.writeFile(path.join(root, "A", "target.txt"), "target", "utf8");
-  for (let i = 0; i < 5; i++) {
-    await fs.writeFile(path.join(root, "B", `b${i}.txt`), `b-${i}`, "utf8");
-  }
-
-  const now = 5_000;
-  let holdReadGate: Promise<void> | undefined;
-  let releaseReadGate!: () => void;
-  let notifyReadEntered!: () => void;
-  const readEntered = new Promise<void>((resolve) => { notifyReadEntered = resolve; });
-  const workspace: Workspace = { id: "lazy", name: "Lazy", folderPath: root, permission: "ask", createdAt: 1, updatedAt: 2 };
-  const handles = new AidenOpaqueHandleStore({ maxEntries: 6, maxEntriesPerDevice: 6, now: () => now });
-  const realApp = createWorkspaceEnvironmentApplicationService({
+  const workspace: Workspace = {
+    id: "workspace",
+    name: "Project",
+    folderPath: root,
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 2,
+  };
+  const application = createWorkspaceEnvironmentApplicationService({
     configStore: { getWorkspace: async () => workspace },
     workspaceMutationGate: new WorkspaceMutationGate(),
     workspaceOperationRegistry: new WorkspaceOperationRegistry(),
@@ -513,83 +818,14 @@ test("in-flight file reads stay pinned under concurrent lazy browsing and genuin
     realpath: fs.realpath,
     stat: fs.stat,
   });
-  let gatedCalls = 0;
-  const service = new AidenRemoteFileService({
-    instanceId: "instance",
-    handles,
-    now: () => now,
-    owners: new AidenRemoteWorkspaceOwnerRegistry(),
-    application: {
-      run: async (owner, workspaceId, action) => {
-        if (holdReadGate && ++gatedCalls === 1) {
-          notifyReadEntered();
-          await holdReadGate;
-        }
-        return realApp.run(owner, workspaceId, action);
-      },
-    },
-  });
-
-  const rootEntries = (await service.children("device-1", workspace.id)).entries;
-  const dirA = rootEntries.find((entry) => entry.name === "A")!;
-  const dirB = rootEntries.find((entry) => entry.name === "B")!;
-  const rootNote = rootEntries.find((entry) => entry.name === "root-note.txt")!;
-  await service.read("device-1", workspace.id, rootNote.id);
-  const targetEntry = (await service.children("device-1", workspace.id, dirA.id)).entries[0]!;
-
-  // Start read(targetEntry.id) and pause it BEFORE handle.resolve() marks it protectedDocument.
-  // Without in-flight pinning on targetEntry.id, dirB (1) + 4 more files would evict targetEntry.id;
-  // with pinning, rootNote (1 protected) + targetEntry (1 pinned) + dirB (1 pinned) + B (5 files) = 8 > 6 -> 429 and rollback!
-  holdReadGate = new Promise<void>((resolve) => { releaseReadGate = resolve; });
-  const pendingRead = service.read("device-1", workspace.id, targetEntry.id);
-  await readEntered;
-
-  await assert.rejects(
-    () => service.children("device-1", workspace.id, dirB.id),
-    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "handle_capacity" && error.status === 429,
-  );
-  releaseReadGate();
-  assert.equal((await pendingRead).content, "target");
-
-  // Fill 5 of the 6 slots with protected opened documents (rootNote + targetEntry + 3 files in B).
-  holdReadGate = undefined;
-  await fs.rm(path.join(root, "B", "b3.txt"));
-  await fs.rm(path.join(root, "B", "b4.txt"));
-  const freshRoot = await service.children("device-1", workspace.id);
-  const freshDirB = freshRoot.entries.find((entry) => entry.name === "B")!;
-  const bFiles = (await service.children("device-1", workspace.id, freshDirB.id)).entries;
-  assert.equal(bFiles.length, 3);
-  for (const entry of bFiles) {
-    await service.read("device-1", workspace.id, entry.id);
-  }
-  // Root has 3 entries while only 1 slot remains free (5 protected): listing rejects with 429 and rolls back partial handles.
-  await assert.rejects(
-    () => service.children("device-1", workspace.id),
-    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "handle_capacity" && error.status === 429,
-  );
-  assert.equal(handles.storedTokenMaterialForTesting().length, 5);
-  assert.equal((await service.read("device-1", workspace.id, rootNote.id)).content, "root-note");
-  assert.equal((await service.read("device-1", workspace.id, targetEntry.id)).content, "target");
-});
-
-async function legacyFixture(t: test.TestContext, count: number, capacity = 10_000) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-legacy-metadata-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  for (let start = 0; start < count; start += 100) {
-    await Promise.all(Array.from({ length: Math.min(100, count - start) }, (_, offset) =>
-      fs.writeFile(path.join(root, `file${start + offset}.txt`), "data")));
-  }
-  const workspace: Workspace = { id: "workspace", name: "Project", folderPath: root, permission: "ask", createdAt: 1, updatedAt: 2 };
-  const application = createWorkspaceEnvironmentApplicationService({
-    configStore: { getWorkspace: async () => workspace },
-    workspaceMutationGate: new WorkspaceMutationGate(),
-    workspaceOperationRegistry: new WorkspaceOperationRegistry(),
-    assertManagedWorktreeAdmission: async () => undefined,
-    realpath: fs.realpath, stat: fs.stat,
-  });
   const owners = new AidenRemoteWorkspaceOwnerRegistry();
   const handles = new AidenOpaqueHandleStore({ maxEntries: capacity });
-  const service = new AidenRemoteFileService({ instanceId: "instance", application, owners, handles });
+  const service = new AidenRemoteFileService({
+    instanceId: "instance",
+    application,
+    owners,
+    handles,
+  });
   return { root, service, owners, handles };
 }
 
@@ -611,15 +847,23 @@ test("legacy Remote listing overlaps bounded identity checks and keeps 4,000 ord
     try {
       await new Promise<void>((resolve) => setImmediate(resolve));
       return await original(...args);
-    } finally { active -= 1; }
+    } finally {
+      active -= 1;
+    }
   }) as typeof fsPromises.stat;
   syncBuiltinESMExports();
-  t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
+  t.after(() => {
+    fsPromises.stat = original;
+    syncBuiltinESMExports();
+  });
   const index = await service.list("device", "workspace");
   assert.equal(index.truncated, true);
   assert.equal(index.entries.length, 4_000);
-  assert.deepEqual(index.entries.map(entry => entry.displayPath), Array.from({ length: 4_000 }, (_, i) => `file${i}.txt`));
-  assert.equal(new Set(index.entries.map(entry => entry.id)).size, 4_000);
+  assert.deepEqual(
+    index.entries.map((entry) => entry.displayPath),
+    Array.from({ length: 4_000 }, (_, i) => `file${i}.txt`),
+  );
+  assert.equal(new Set(index.entries.map((entry) => entry.id)).size, 4_000);
   assert.equal(handles.storedTokenMaterialForTesting().length, 4_000);
   assert.equal(identities, 4_000, "fresh identity checks must not be replaced by index metadata");
   assert.ok(peak > 1 && peak <= 4, `peak identity concurrency: ${peak}`);
@@ -644,12 +888,20 @@ test("legacy Remote revocation drains identity work without issuing cancelled ha
       await new Promise<void>((resolve) => setImmediate(resolve));
       if (ordinal === 1) owners.revokeDevice("device");
       return await original(...args);
-    } finally { active -= 1; }
+    } finally {
+      active -= 1;
+    }
   }) as typeof fsPromises.stat;
   syncBuiltinESMExports();
-  t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
-  await assert.rejects(service.list("device", "workspace"), (error: unknown) =>
-    error instanceof AidenRemoteServiceError && error.code === "workspace_unavailable");
+  t.after(() => {
+    fsPromises.stat = original;
+    syncBuiltinESMExports();
+  });
+  await assert.rejects(
+    service.list("device", "workspace"),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError && error.code === "workspace_unavailable",
+  );
   assert.equal(active, 0);
   assert.ok(identities <= 4);
   assert.equal(handles.storedTokenMaterialForTesting().length, 0);
@@ -657,8 +909,13 @@ test("legacy Remote revocation drains identity work without issuing cancelled ha
 
 test("legacy Remote bounded issuance preserves capacity errors", async (t) => {
   const { service, handles } = await legacyFixture(t, 12, 2);
-  await assert.rejects(service.list("device", "workspace"), (error: unknown) =>
-    error instanceof AidenRemoteServiceError && error.code === "handle_capacity" && error.status === 429);
+  await assert.rejects(
+    service.list("device", "workspace"),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError &&
+      error.code === "handle_capacity" &&
+      error.status === 429,
+  );
   assert.equal(handles.storedTokenMaterialForTesting().length, 2);
 });
 
@@ -675,15 +932,28 @@ test("overlapping Remote and desktop listings share one four-operation metadata 
     try {
       await new Promise<void>((resolve) => setImmediate(resolve));
       return await original(...args);
-    } finally { active -= 1; }
+    } finally {
+      active -= 1;
+    }
   }) as typeof fsPromises.stat;
   syncBuiltinESMExports();
-  t.after(() => { fsPromises.stat = original; syncBuiltinESMExports(); });
+  t.after(() => {
+    fsPromises.stat = original;
+    syncBuiltinESMExports();
+  });
   const [remote, secondRemote, desktop] = await Promise.all([
-    service.list("device", "workspace"), service.list("second-device", "workspace"), listWorkspaceFiles(root),
+    service.list("device", "workspace"),
+    service.list("second-device", "workspace"),
+    listWorkspaceFiles(root),
   ]);
-  assert.deepEqual(remote.entries.map(entry => entry.displayPath), desktop.entries.map(entry => entry.path));
-  assert.deepEqual(secondRemote.entries.map(entry => entry.displayPath), desktop.entries.map(entry => entry.path));
+  assert.deepEqual(
+    remote.entries.map((entry) => entry.displayPath),
+    desktop.entries.map((entry) => entry.path),
+  );
+  assert.deepEqual(
+    secondRemote.entries.map((entry) => entry.displayPath),
+    desktop.entries.map((entry) => entry.path),
+  );
   assert.equal(calls, 120, "every listing stays fresh and every Remote identity is inspected");
   assert.ok(peak > 1 && peak <= 4, `aggregate metadata concurrency: ${peak}`);
   assert.equal(active, 0);
@@ -706,6 +976,8 @@ test("re-listing reclaims a superseded listing's unopened handles instead of loc
   for (const entry of other.entries) {
     assert.equal((await service.read("device-2", "workspace", entry.id)).content, "data");
   }
-  await assert.rejects(service.read("device-1", "workspace", first.entries[1]!.id), (error: unknown) =>
-    error instanceof AidenRemoteServiceError && error.code === "handle_invalid");
+  await assert.rejects(
+    service.read("device-1", "workspace", first.entries[1]!.id),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "handle_invalid",
+  );
 });

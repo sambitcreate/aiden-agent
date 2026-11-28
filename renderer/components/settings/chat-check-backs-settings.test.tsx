@@ -29,13 +29,25 @@ async function mount(initial: ScheduledTaskSettings = stored) {
   const calls = installBotTestIpc({
     "schedule:list": () => [],
     "mcp:list": () => [],
-    "schedule:keepAwakeStatus": () => ({ supported: true, enabled: true, holding: false, pausedWhileIdle: false, counts: {} }),
-    "schedule:settings": (patch?: unknown) => (current = patch ? { ...current, ...(patch as object) } : current),
+    "schedule:keepAwakeStatus": () => ({
+      supported: true,
+      enabled: true,
+      holding: false,
+      pausedWhileIdle: false,
+      counts: {},
+    }),
+    "schedule:settings": (patch?: unknown) =>
+      (current = patch ? { ...current, ...(patch as object) } : current),
   });
   await mountWithBotRouter(<ScheduledTasksSettings />, { initialPath: "/settings" });
-  const toggle = (await screen.findByRole("switch", { name: "Let chats check back later" })) as HTMLButtonElement;
+  const toggle = (await screen.findByRole("switch", {
+    name: "Let chats check back later",
+  })) as HTMLButtonElement;
   await waitFor(() => assert.equal(toggle.disabled, false));
-  const patches = () => calls.filter((call) => call.channel === "schedule:settings" && call.args[0]).map((call) => call.args[0]);
+  const patches = () =>
+    calls
+      .filter((call) => call.channel === "schedule:settings" && call.args[0])
+      .map((call) => call.args[0]);
   return { toggle, patches };
 }
 
@@ -49,7 +61,9 @@ test("check-backs sit in a While you're away group after Background execution, o
   assert.ok(away.compareDocumentPosition(current) & Node.DOCUMENT_POSITION_FOLLOWING);
   assert.ok(screen.getByText(/Turning this off cancels every pending check-back/u));
   // One group holds both rows: keep awake first, then check-backs.
-  const keepAwake = await screen.findByRole("switch", { name: "Keep this computer awake while Aiden works" });
+  const keepAwake = await screen.findByRole("switch", {
+    name: "Keep this computer awake while Aiden works",
+  });
   assert.ok(keepAwake.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING);
   assert.equal(screen.getAllByText("While you're away").length, 1);
 });

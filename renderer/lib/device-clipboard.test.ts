@@ -73,7 +73,11 @@ test("an emulator paste is typed by main, so no Cmd+V follows, but it still need
   assert.deepEqual(result, { bytes: 700 });
   assert.deepEqual(events, ["copy:emulator-5554"]);
   await assert.rejects(
-    pasteHostClipboardToDevice({ target: android, copy: async () => ({ bytes: 1 }), sendKey: null }),
+    pasteHostClipboardToDevice({
+      target: android,
+      copy: async () => ({ bytes: 1 }),
+      sendKey: null,
+    }),
     /emulator is not accepting input/u,
   );
 });

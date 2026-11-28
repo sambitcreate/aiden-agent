@@ -95,7 +95,13 @@ afterEach(() => {
 });
 
 /** The composer's wiring in miniature: the menu edits the real draft. */
-function DraftHarness({ workspaces, uncommitted = 0 }: { workspaces: Workspace[]; uncommitted?: number }) {
+function DraftHarness({
+  workspaces,
+  uncommitted = 0,
+}: {
+  workspaces: Workspace[];
+  uncommitted?: number;
+}) {
   const draft = React.useSyncExternalStore(subscribeChatDrafts, () => getChatDraft(draftId));
   if (!draft) return null;
   const workspaceId = draft.chat.workspaceId!;
@@ -105,11 +111,13 @@ function DraftHarness({ workspaces, uncommitted = 0 }: { workspaces: Workspace[]
     ...(draft.worktree ? { worktree: draft.worktree } : {}),
     workIn,
     onSelectCheckout: () => {
-      if (workIn.source && workIn.source.id !== workspaceId) updateChatDraft(draftId, { workspaceId: workIn.source.id });
+      if (workIn.source && workIn.source.id !== workspaceId)
+        updateChatDraft(draftId, { workspaceId: workIn.source.id });
       setChatDraftGitMode(draftId, "checkout");
     },
     onSelectNewWorktree: () => {
-      if (workIn.source && workIn.source.id !== workspaceId) updateChatDraft(draftId, { workspaceId: workIn.source.id });
+      if (workIn.source && workIn.source.id !== workspaceId)
+        updateChatDraft(draftId, { workspaceId: workIn.source.id });
       setChatDraftGitMode(draftId, "worktree");
     },
     onSelectWorktree: (id) => updateChatDraft(draftId, { workspaceId: id }),
@@ -196,7 +204,10 @@ test("the new-branch form ignores the Enter that confirms an IME composition", a
     fireEvent.keyDown(input, { key: "Enter", isComposing: true });
   });
   await settle();
-  assert.ok(!calls.some((call) => call.channel === "git:createBranch"), "a composing Enter created the branch");
+  assert.ok(
+    !calls.some((call) => call.channel === "git:createBranch"),
+    "a composing Enter created the branch",
+  );
 
   await act(async () => {
     fireEvent.keyDown(input, { key: "Enter" });
@@ -215,20 +226,27 @@ test("a draft chooses where to run; existing worktrees are listed only when the 
   assert.ok(radio(/^This checkout/u)?.getAttribute("aria-checked") === "true");
   assert.ok(radio(/^New worktree/u)?.getAttribute("aria-checked") === "false");
   assert.equal(document.querySelectorAll('[data-work-in-row^="worktree:"]').length, 0);
-  assert.ok(screen.queryByText("New isolated worktree…") === null, "a draft creates its worktree on send");
+  assert.ok(
+    screen.queryByText("New isolated worktree…") === null,
+    "a draft creates its worktree on send",
+  );
   cleanup();
 
   const older = worktreeWorkspace("wt-old", "aiden/old-idea", 10);
   const newer = worktreeWorkspace("wt-new", "aiden/new-idea", 20);
   await mount(<DraftHarness workspaces={[REPO, older, newer]} />);
   await openMenu(screen.getByRole("button", { name: "main" }));
-  const rows = [...document.querySelectorAll('[data-work-in-row^="worktree:"]')].map(
-    (row) => row.getAttribute("data-work-in-row"),
+  const rows = [...document.querySelectorAll('[data-work-in-row^="worktree:"]')].map((row) =>
+    row.getAttribute("data-work-in-row"),
   );
   assert.deepEqual(rows, ["worktree:wt-new", "worktree:wt-old"], "most recent first");
 
   await click(radio(/^aiden\/old-idea/u)!);
-  assert.equal(getChatDraft(draftId)?.chat.workspaceId, "wt-old", "the draft moved to that worktree");
+  assert.equal(
+    getChatDraft(draftId)?.chat.workspaceId,
+    "wt-old",
+    "the draft moved to that worktree",
+  );
   const chip = screen.getByRole("button", { name: "aiden/old-idea, worktree" });
   await openMenu(chip);
   assert.ok(radio(/^aiden\/old-idea/u)?.getAttribute("aria-checked") === "true");
@@ -284,14 +302,23 @@ test("New worktree offers Start from, the origin toggle only with a remote, and 
     fireEvent.change(input, { target: { value: "feature/login" } });
     fireEvent.keyDown(input, { key: "Enter", isComposing: true });
   });
-  assert.equal(getChatDraft(draftId)?.worktree?.branchName, undefined, "a composing Enter saved the name");
-  assert.ok(screen.queryByRole("textbox", { name: /Branch name/u }) !== null, "the field stays open");
+  assert.equal(
+    getChatDraft(draftId)?.worktree?.branchName,
+    undefined,
+    "a composing Enter saved the name",
+  );
+  assert.ok(
+    screen.queryByRole("textbox", { name: /Branch name/u }) !== null,
+    "the field stays open",
+  );
   await act(async () => {
     fireEvent.keyDown(input, { key: "Enter" });
   });
   await settle();
   assert.equal(getChatDraft(draftId)?.worktree?.branchName, "feature/login");
-  assert.ok(document.querySelector("[data-branch-name-row]")?.textContent?.includes("feature/login"));
+  assert.ok(
+    document.querySelector("[data-branch-name-row]")?.textContent?.includes("feature/login"),
+  );
   cleanup();
 
   // Without a remote there is nothing to start from.
@@ -361,14 +388,12 @@ test("Escape restores focus to the branch trigger, or to the programmatic origin
   await settle();
   await nextFrame();
   assert.equal(screen.queryByRole("menu"), null);
-  assert.equal(
-    document.activeElement === screen.getByRole("textbox", { name: "Composer" }),
-    true,
-  );
+  assert.equal(document.activeElement === screen.getByRole("textbox", { name: "Composer" }), true);
 });
 
 test("focus moved to the composer after Escape is not stolen back when close auto-focus or its frame runs", async (t) => {
-  const keyTarget = () => (document.activeElement?.isConnected ? document.activeElement : document.body);
+  const keyTarget = () =>
+    document.activeElement?.isConnected ? document.activeElement : document.body;
 
   // 1. Focus moves to the composer immediately on Escape, before Radix's deferred unmount auto-focus runs.
   await mount(
@@ -410,17 +435,25 @@ test("focus moved to the composer after Escape is not stolen back when close aut
   const secondComposer = screen.getByRole("textbox", { name: "Composer" });
   await openMenu(screen.getByRole("button", { name: "Branch: new worktree from main" }));
   const queuedFrames: FrameRequestCallback[] = [];
-  const rafMock = t.mock.method(globalThis, "requestAnimationFrame", (callback: FrameRequestCallback) => {
-    queuedFrames.push(callback);
-    return queuedFrames.length;
-  });
+  const rafMock = t.mock.method(
+    globalThis,
+    "requestAnimationFrame",
+    (callback: FrameRequestCallback) => {
+      queuedFrames.push(callback);
+      return queuedFrames.length;
+    },
+  );
   await act(async () => {
     fireEvent.keyDown(keyTarget(), { key: "Escape" });
   });
   // Flush Radix FocusScope's setTimeout(0) so onCloseAutoFocus runs and queues its restoring frame.
   await settle();
   rafMock.mock.restore();
-  assert.equal(queuedFrames.length > 0, true, "onCloseAutoFocus queued a restoring animation frame");
+  assert.equal(
+    queuedFrames.length > 0,
+    true,
+    "onCloseAutoFocus queued a restoring animation frame",
+  );
   secondComposer.focus();
   for (const frame of queuedFrames) frame(0);
   assert.equal(document.activeElement === secondComposer, true);

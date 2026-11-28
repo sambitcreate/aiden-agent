@@ -40,7 +40,9 @@ test("an invalid answer leaves the question waiting, and only the first valid an
   assert.equal(registry.pending("bot-one").length, 1);
   assert.equal(registry.answer("bot-one", "wait-one", pick("Guided")), "answered");
   assert.equal(registry.answer("bot-one", "wait-one", pick("Direct")), "not_waiting");
-  assert.deepEqual((await waiting).answers, [{ questionIndex: 0, kind: "option", answer: "Guided" }]);
+  assert.deepEqual((await waiting).answers, [
+    { questionIndex: 0, kind: "option", answer: "Guided" },
+  ]);
   assert.deepEqual(registry.pending(), []);
 });
 
@@ -62,7 +64,9 @@ test("asking again withdraws the stale wait, whose late abort cannot end the new
   stale.abort(new Error("the old turn ended"));
   assert.equal(registry.pending("bot-one").length, 1);
   assert.equal(registry.answer("bot-one", "wait-one", pick("Direct")), "answered");
-  assert.deepEqual((await second).answers, [{ questionIndex: 0, kind: "option", answer: "Direct" }]);
+  assert.deepEqual((await second).answers, [
+    { questionIndex: 0, kind: "option", answer: "Direct" },
+  ]);
 });
 
 test("abort rejects with its reason and records no answer, and a late answer is refused", async () => {
@@ -82,5 +86,7 @@ test("a throwing listener cannot change how a question settles", async () => {
   });
   const waiting = registry.request(ask());
   assert.equal(registry.answer("bot-one", "wait-one", pick("Direct")), "answered");
-  assert.deepEqual((await waiting).answers, [{ questionIndex: 0, kind: "option", answer: "Direct" }]);
+  assert.deepEqual((await waiting).answers, [
+    { questionIndex: 0, kind: "option", answer: "Direct" },
+  ]);
 });

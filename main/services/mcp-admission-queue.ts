@@ -11,7 +11,10 @@
 // interleave with a mutation.
 
 const settle = (operation: Promise<unknown>): Promise<void> =>
-  operation.then(() => undefined, () => undefined);
+  operation.then(
+    () => undefined,
+    () => undefined,
+  );
 
 export function createMcpAdmissionQueue() {
   let exclusiveTail: Promise<void> = Promise.resolve();
@@ -24,7 +27,9 @@ export function createMcpAdmissionQueue() {
       const prior = Promise.all([exclusiveTail, ...sharedInFlight]);
       exclusiveQueued += 1;
       const result = prior.then(operation);
-      const done = settle(result).then(() => { exclusiveQueued -= 1; });
+      const done = settle(result).then(() => {
+        exclusiveQueued -= 1;
+      });
       exclusiveTail = done;
       return result;
     },
@@ -82,7 +87,9 @@ export class McpPendingJournalState {
 export function singleFlight(run: () => Promise<void>): () => Promise<void> {
   let inFlight: Promise<void> | undefined;
   return () => {
-    inFlight ??= run().finally(() => { inFlight = undefined; });
+    inFlight ??= run().finally(() => {
+      inFlight = undefined;
+    });
     return inFlight;
   };
 }

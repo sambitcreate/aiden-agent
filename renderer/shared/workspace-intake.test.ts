@@ -6,10 +6,18 @@ test("clone URLs accept network sources and name the repository", () => {
   const accepted: Array<[string, string, string]> = [
     ["https://github.com/acme/widget.git", "https://github.com/acme/widget.git", "widget"],
     ["  https://GitHub.com/acme/widget  ", "https://github.com/acme/widget", "widget"],
-    ["https://gitlab.example.com/group/sub/tool.git", "https://gitlab.example.com/group/sub/tool.git", "tool"],
+    [
+      "https://gitlab.example.com/group/sub/tool.git",
+      "https://gitlab.example.com/group/sub/tool.git",
+      "tool",
+    ],
     ["git@github.com:acme/widget.git", "git@github.com:acme/widget.git", "widget"],
     ["git@example.com:widget", "git@example.com:widget", "widget"],
-    ["ssh://git@example.com:2222/srv/widget.git", "ssh://git@example.com:2222/srv/widget.git", "widget"],
+    [
+      "ssh://git@example.com:2222/srv/widget.git",
+      "ssh://git@example.com:2222/srv/widget.git",
+      "widget",
+    ],
     ["acme/widget", "https://github.com/acme/widget.git", "widget"],
     ["acme/widget.git", "https://github.com/acme/widget.git", "widget"],
     ["acme-co/my.repo_2", "https://github.com/acme-co/my.repo_2.git", "my.repo_2"],

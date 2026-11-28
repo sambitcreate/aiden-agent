@@ -3,13 +3,12 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { COMPOSIO_APPS, CONNECTOR_CATALOG } from "../../shared/connector-catalog.js";
-import {
-  McpPresetIcon,
-  PLUGIN_ICON_CATALOG_IDS,
-  pluginIconInitial,
-} from "./mcp-preset-icons.js";
+import { McpPresetIcon, PLUGIN_ICON_CATALOG_IDS, pluginIconInitial } from "./mcp-preset-icons.js";
 
-const knownIds = new Set([...CONNECTOR_CATALOG.map((entry) => entry.id), ...COMPOSIO_APPS.map((app) => app.id)]);
+const knownIds = new Set([
+  ...CONNECTOR_CATALOG.map((entry) => entry.id),
+  ...COMPOSIO_APPS.map((app) => app.id),
+]);
 const renderIcon = (presetId: string, name: string) =>
   renderToStaticMarkup(createElement(McpPresetIcon, { presetId, name, className: "size-4" }));
 

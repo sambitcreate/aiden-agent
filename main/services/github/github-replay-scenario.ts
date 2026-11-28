@@ -35,11 +35,41 @@ export interface ReplayChat {
 }
 
 export const REPLAY_WORKSPACES: readonly ReplayWorkspace[] = [
-  { id: "ws1", folder: "/work/ws1", repository: "acme/app1", branch: "feature/one", pullRequest: 101 },
-  { id: "ws2", folder: "/work/ws2", repository: "acme/app2", branch: "feature/two", pullRequest: 102 },
-  { id: "ws3", folder: "/work/ws3", repository: "acme/app3", branch: "feature/three", pullRequest: 103 },
-  { id: "ws4", folder: "/work/ws4", repository: "acme/shared", branch: "feature/four", pullRequest: 104 },
-  { id: "ws5", folder: "/work/ws5", repository: "acme/shared", branch: "feature/five", pullRequest: 105 },
+  {
+    id: "ws1",
+    folder: "/work/ws1",
+    repository: "acme/app1",
+    branch: "feature/one",
+    pullRequest: 101,
+  },
+  {
+    id: "ws2",
+    folder: "/work/ws2",
+    repository: "acme/app2",
+    branch: "feature/two",
+    pullRequest: 102,
+  },
+  {
+    id: "ws3",
+    folder: "/work/ws3",
+    repository: "acme/app3",
+    branch: "feature/three",
+    pullRequest: 103,
+  },
+  {
+    id: "ws4",
+    folder: "/work/ws4",
+    repository: "acme/shared",
+    branch: "feature/four",
+    pullRequest: 104,
+  },
+  {
+    id: "ws5",
+    folder: "/work/ws5",
+    repository: "acme/shared",
+    branch: "feature/five",
+    pullRequest: 105,
+  },
 ];
 
 export const REPLAY_CHATS: readonly ReplayChat[] = [
@@ -237,7 +267,11 @@ export async function runReplaySession(input: {
   const sidebar = new Map(
     REPLAY_WORKSPACES.map((workspace) => [
       workspace.id,
-      new ReplayQuery(() => backend.sidebarStatus(workspace.folder), SIDEBAR_STALE_MS, SIDEBAR_POLL_MS),
+      new ReplayQuery(
+        () => backend.sidebarStatus(workspace.folder),
+        SIDEBAR_STALE_MS,
+        SIDEBAR_POLL_MS,
+      ),
     ]),
   );
   const current = new Map(

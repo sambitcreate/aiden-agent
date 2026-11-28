@@ -19,44 +19,44 @@ autocomplete, themes, hidden `/debug`.
 
 ## CLI-now — pure cores ready to port
 
-| Feature | Desktop cores (portable) | CLI vehicle |
-| --- | --- | --- |
-| Auto session titles | `chat-title-policy.ts`, `chat-title-routing.ts` (pure); `chat-store-core.ts:1139` | extension: first user message → background title via model-runtime adapter → pi session name |
-| Cross-session title/preview search | `chat-store-core.ts:723` (`listSummaryMetadata`), `sidebar-organization.ts` (pure) | `/search <query>` extension command |
-| Portable `.aiden-chat.json` export | `chat-export.ts` (pure, schema v1, atomic) | `/export --aiden` writing to cwd (Phase 3 interop format) |
-| Workspace registry + scratch workspaces | `workspace-application-service.ts` (pure DI), `scratch-workspace.ts` (pure) | `aiden workspace` / `/scratch` commands |
-| Per-workspace access tiers (full/ask/none) | enforced in `llm-client.ts:572-908` (portable logic) | extension mapping persisted tier → tool approval |
-| Managed git worktrees | `git.ts` (pure), `managed-worktree-*-core.ts`, worktree-remover C helper | `/git` + `/worktree` commands |
-| Attachments batch caps | `attachments.ts` + `attachment-contract.ts` (pure) | optional `/attach <paths…>` honoring contract caps |
-| Pi remote catalog overlay (hardened) | `pi-remote-catalog.ts`, `pi-models-store.ts` (pure; 4h freshness, ETag, stale pass) | startup revalidation + `/catalog refresh` — stronger than stock pi refresh |
-| models.dev snapshot + model info | `models-catalog-core.ts`, `models-dev-cache-core.ts`, `provider-model-info-core.ts` (pure) | `/model info <id>` |
-| ~~AA + OpenRouter benchmark insights~~ | Retired 2026-11-23 by the [Agent Slider](agent-slider-plan.md) (PR 4): the modules and `aiden insights` were deleted, and `aiden serve` deletes the keys and caches it left | — |
-| Provider auth flow coordinator | `provider-auth-flow-core.ts` (pure; only injects `shell.openExternal`) | `aiden auth login <provider>` — URL-print or device-code TUI |
-| Codex subscription provider | `codex-provider.ts`, `codex-auth-failure.ts` (pure) | `registerProvider` Phase 2 |
-| Concentrate + custom providers (LM Studio/Ollama/compat) | `concentrate-provider.ts`, `provider-config-migration-core.ts`, `provider-key-policy.ts` (pure) | `registerProvider` custom branch (the CLI's model-runtime bridge covers only the built-in branch today) |
-| Onboarding key validation + state machine | `onboarding-provider-validation.ts`, `onboarding-state-core.ts`, `onboarding-reset-core.ts` (pure) | first-run extension + `aiden reset` |
-| Credential store core (cipher injected) | `pi-credential-store-core.ts` (pure; desktop injects safeStorage) | backs `aiden auth` with a file cipher |
-| Web-search provider zoo + routing | `web-search-provider-registry-core.ts` (pure; 20+ providers) | extend `/voice`-style settings command + env keys |
-| Custom theme variants | `appearance.ts` (`parseThemeVariantJson`, safety checks — pure) | `aiden theme import/export` through the generate-themes pipeline |
-| Thinking-level metadata (Google/Anthropic) | `google-thinking.ts`, `anthropic-thinking.ts` (pure) | `/models` metadata |
-| Subagent delegation tool | `subagents/subagent-tool.ts`, `capability-profile.ts`, `subagent-supervisor.ts`, `forked-context.ts` (pure cores) | `subagent` tool (advisor-port pattern); `child_process` replaces UtilityProcess |
-| Subagent approvals (one-shot digests) | `approval-v2.ts`, `outbound-approval-v2.ts`, `subagent-shell.ts` gates (pure) | RPC extension-UI prompts (ask-user-question pattern) |
-| Subagent run store + history | `subagent-run-store*.ts` (pure + portable C helper) | roster widget or `/subagents` |
-| Generative UI export | `generative-ui-html.ts`, `generative-ui-artifact-store.ts` (pure), vendored Chart.js/Plotly/KaTeX | export standalone HTML + open (plan Phase 4) |
-| Schedule CRUD + preview (authoring) | `schedule-tool.ts`, `schedule-guard.ts`, `schedule-store.ts` (pure croner) | extension tools + `aiden schedule` |
-| Usage ledger (source-attributed) | `usage-store-core.ts` (pure DataStore) | merge desktop store format into `/usage` |
+| Feature                                                  | Desktop cores (portable)                                                                                                                                                    | CLI vehicle                                                                                             |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Auto session titles                                      | `chat-title-policy.ts`, `chat-title-routing.ts` (pure); `chat-store-core.ts:1139`                                                                                           | extension: first user message → background title via model-runtime adapter → pi session name            |
+| Cross-session title/preview search                       | `chat-store-core.ts:723` (`listSummaryMetadata`), `sidebar-organization.ts` (pure)                                                                                          | `/search <query>` extension command                                                                     |
+| Portable `.aiden-chat.json` export                       | `chat-export.ts` (pure, schema v1, atomic)                                                                                                                                  | `/export --aiden` writing to cwd (Phase 3 interop format)                                               |
+| Workspace registry + scratch workspaces                  | `workspace-application-service.ts` (pure DI), `scratch-workspace.ts` (pure)                                                                                                 | `aiden workspace` / `/scratch` commands                                                                 |
+| Per-workspace access tiers (full/ask/none)               | enforced in `llm-client.ts:572-908` (portable logic)                                                                                                                        | extension mapping persisted tier → tool approval                                                        |
+| Managed git worktrees                                    | `git.ts` (pure), `managed-worktree-*-core.ts`, worktree-remover C helper                                                                                                    | `/git` + `/worktree` commands                                                                           |
+| Attachments batch caps                                   | `attachments.ts` + `attachment-contract.ts` (pure)                                                                                                                          | optional `/attach <paths…>` honoring contract caps                                                      |
+| Pi remote catalog overlay (hardened)                     | `pi-remote-catalog.ts`, `pi-models-store.ts` (pure; 4h freshness, ETag, stale pass)                                                                                         | startup revalidation + `/catalog refresh` — stronger than stock pi refresh                              |
+| models.dev snapshot + model info                         | `models-catalog-core.ts`, `models-dev-cache-core.ts`, `provider-model-info-core.ts` (pure)                                                                                  | `/model info <id>`                                                                                      |
+| ~~AA + OpenRouter benchmark insights~~                   | Retired 2026-11-23 by the [Agent Slider](agent-slider-plan.md) (PR 4): the modules and `aiden insights` were deleted, and `aiden serve` deletes the keys and caches it left | —                                                                                                       |
+| Provider auth flow coordinator                           | `provider-auth-flow-core.ts` (pure; only injects `shell.openExternal`)                                                                                                      | `aiden auth login <provider>` — URL-print or device-code TUI                                            |
+| Codex subscription provider                              | `codex-provider.ts`, `codex-auth-failure.ts` (pure)                                                                                                                         | `registerProvider` Phase 2                                                                              |
+| Concentrate + custom providers (LM Studio/Ollama/compat) | `concentrate-provider.ts`, `provider-config-migration-core.ts`, `provider-key-policy.ts` (pure)                                                                             | `registerProvider` custom branch (the CLI's model-runtime bridge covers only the built-in branch today) |
+| Onboarding key validation + state machine                | `onboarding-provider-validation.ts`, `onboarding-state-core.ts`, `onboarding-reset-core.ts` (pure)                                                                          | first-run extension + `aiden reset`                                                                     |
+| Credential store core (cipher injected)                  | `pi-credential-store-core.ts` (pure; desktop injects safeStorage)                                                                                                           | backs `aiden auth` with a file cipher                                                                   |
+| Web-search provider zoo + routing                        | `web-search-provider-registry-core.ts` (pure; 20+ providers)                                                                                                                | extend `/voice`-style settings command + env keys                                                       |
+| Custom theme variants                                    | `appearance.ts` (`parseThemeVariantJson`, safety checks — pure)                                                                                                             | `aiden theme import/export` through the generate-themes pipeline                                        |
+| Thinking-level metadata (Google/Anthropic)               | `google-thinking.ts`, `anthropic-thinking.ts` (pure)                                                                                                                        | `/models` metadata                                                                                      |
+| Subagent delegation tool                                 | `subagents/subagent-tool.ts`, `capability-profile.ts`, `subagent-supervisor.ts`, `forked-context.ts` (pure cores)                                                           | `subagent` tool (advisor-port pattern); `child_process` replaces UtilityProcess                         |
+| Subagent approvals (one-shot digests)                    | `approval-v2.ts`, `outbound-approval-v2.ts`, `subagent-shell.ts` gates (pure)                                                                                               | RPC extension-UI prompts (ask-user-question pattern)                                                    |
+| Subagent run store + history                             | `subagent-run-store*.ts` (pure + portable C helper)                                                                                                                         | roster widget or `/subagents`                                                                           |
+| Generative UI export                                     | `generative-ui-html.ts`, `generative-ui-artifact-store.ts` (pure), vendored Chart.js/Plotly/KaTeX                                                                           | export standalone HTML + open (plan Phase 4)                                                            |
+| Schedule CRUD + preview (authoring)                      | `schedule-tool.ts`, `schedule-guard.ts`, `schedule-store.ts` (pure croner)                                                                                                  | extension tools + `aiden schedule`                                                                      |
+| Usage ledger (source-attributed)                         | `usage-store-core.ts` (pure DataStore)                                                                                                                                      | merge desktop store format into `/usage`                                                                |
 
 ## Needs glue (Electron touch is small)
 
-| Feature | Glue needed | Files |
-| --- | --- | --- |
-| MCP preset catalog + OAuth | printed-URL OAuth + file credential store replace keychain/session glue | `mcp-presets.ts`, `connector-catalog.ts` (pure), `mcp-oauth-store-core.ts` |
-| Provider auth browser handoff | `shell.openExternal` injected (pure coordinator) | `provider-auth-flow.ts` |
-| Catalog refresh on credential commit | drop bot-inventory hooks | `provider-registry.ts::refreshBuiltinCatalogs` |
-| Telegram control | token source swap (env/auth.json vs safeStorage) | `telegram/*` (pure pipeline), Phase 4 serve |
-| Scheduled task firing | platform notification seam swap | `schedule-execution.ts` |
-| Bots runtime | file-based capability-key fallback for Keychain anchor | `bot-*` (mostly pure) |
-| Remote speech | Parakeet engine host → worker_threads/child | `aiden-remote-speech*.ts`, `parakeet-process-core.ts` (transport-agnostic protocol) |
+| Feature                              | Glue needed                                                             | Files                                                                               |
+| ------------------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| MCP preset catalog + OAuth           | printed-URL OAuth + file credential store replace keychain/session glue | `mcp-presets.ts`, `connector-catalog.ts` (pure), `mcp-oauth-store-core.ts`          |
+| Provider auth browser handoff        | `shell.openExternal` injected (pure coordinator)                        | `provider-auth-flow.ts`                                                             |
+| Catalog refresh on credential commit | drop bot-inventory hooks                                                | `provider-registry.ts::refreshBuiltinCatalogs`                                      |
+| Telegram control                     | token source swap (env/auth.json vs safeStorage)                        | `telegram/*` (pure pipeline), Phase 4 serve                                         |
+| Scheduled task firing                | platform notification seam swap                                         | `schedule-execution.ts`                                                             |
+| Bots runtime                         | file-based capability-key fallback for Keychain anchor                  | `bot-*` (mostly pure)                                                               |
+| Remote speech                        | Parakeet engine host → worker_threads/child                             | `aiden-remote-speech*.ts`, `parakeet-process-core.ts` (transport-agnostic protocol) |
 
 ## Serve-phase (`aiden serve`)
 
@@ -87,26 +87,25 @@ update-install flow. (Terminal/serve equivalents noted in the plan where they ex
 - Native C helpers (worktree-remover, run-store, shell-runner, file-mutator) are POSIX-portable;
   need Linux build targets when they enter the CLI.
 
-
 ## Implementation and acceptance — 2026-09-05
 
 The tables above preserve the original inventory. The implementation is in `packages/cli`;
 this plan remains active until the final acceptance checks below are complete.
 
-| Area | Implemented delivery |
-| --- | --- |
-| Sessions | Automatic/manual titles, active-branch search/export, bounded attachment batches, portable/desktop journal snapshot import into independent journals |
-| Workspace authority | Registry, scratch directories, full/ask/none gates, daemon-routed mutations and cancellation, shared Git/files/worktree services and native removal |
-| Providers and setup | Native Pi provider APIs including Codex OAuth, Concentrate/custom providers, auth coordinator and key validation, encrypted credential migration, shared onboarding state, thinking metadata |
-| Catalogs | Hardened inference catalog overlay; fixed-endpoint manual models.dev; display-only offline reads (the AA/OpenRouter benchmark credentials were retired 2026-11-23) |
-| MCP | Explicit SDK adapter (not provided by Pi), stdio/Streamable HTTP (legacy HTTP+SSE removed 2026-10-20; the desktop client moved to Pi's `@earendil-works/pi-mcp`), presets/OAuth, pagination and response/schema budgets, exact schema/configuration checks before effects |
-| Subagents | Shared supervisor, fresh/fork projection, parent-owned tool execution, native private history, one-shot write/shell/outbound/mutation gates and nested capability ceilings |
-| Automation | Shared schedule CRUD, previews, durable runs, selected MCP/web inference and script execution; explicit-owner Telegram polling; settled shutdown |
-| Bots | Shared notice/catalog/access/incarnation/rollback anchors, managed homes, scoped file/shell/MCP/skill/web tools, companion image analysis, worker-normalized photos, scoped read-only child investigations |
-| Remote | Shared TLS/pairing/device revocation, REST/SSE service adapters, workspaces/files/Git/worktrees/schedules/Bots/models/chats/speech, idempotent turns and replay |
-| Speech | Portable local-model manager and worker-hosted Parakeet protocol; explicit model downloads; status and setup remain offline |
-| Presentation | Generated theme variants, terminal feature tour, offline generative HTML libraries, source-attributed usage ledger |
-| Distribution | Four native helpers build on macOS/Linux; Docker image runs without Electron; Linux container CI job |
+| Area                | Implemented delivery                                                                                                                                                                                                                                                      |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sessions            | Automatic/manual titles, active-branch search/export, bounded attachment batches, portable/desktop journal snapshot import into independent journals                                                                                                                      |
+| Workspace authority | Registry, scratch directories, full/ask/none gates, daemon-routed mutations and cancellation, shared Git/files/worktree services and native removal                                                                                                                       |
+| Providers and setup | Native Pi provider APIs including Codex OAuth, Concentrate/custom providers, auth coordinator and key validation, encrypted credential migration, shared onboarding state, thinking metadata                                                                              |
+| Catalogs            | Hardened inference catalog overlay; fixed-endpoint manual models.dev; display-only offline reads (the AA/OpenRouter benchmark credentials were retired 2026-11-23)                                                                                                        |
+| MCP                 | Explicit SDK adapter (not provided by Pi), stdio/Streamable HTTP (legacy HTTP+SSE removed 2026-10-20; the desktop client moved to Pi's `@earendil-works/pi-mcp`), presets/OAuth, pagination and response/schema budgets, exact schema/configuration checks before effects |
+| Subagents           | Shared supervisor, fresh/fork projection, parent-owned tool execution, native private history, one-shot write/shell/outbound/mutation gates and nested capability ceilings                                                                                                |
+| Automation          | Shared schedule CRUD, previews, durable runs, selected MCP/web inference and script execution; explicit-owner Telegram polling; settled shutdown                                                                                                                          |
+| Bots                | Shared notice/catalog/access/incarnation/rollback anchors, managed homes, scoped file/shell/MCP/skill/web tools, companion image analysis, worker-normalized photos, scoped read-only child investigations                                                                |
+| Remote              | Shared TLS/pairing/device revocation, REST/SSE service adapters, workspaces/files/Git/worktrees/schedules/Bots/models/chats/speech, idempotent turns and replay                                                                                                           |
+| Speech              | Portable local-model manager and worker-hosted Parakeet protocol; explicit model downloads; status and setup remain offline                                                                                                                                               |
+| Presentation        | Generated theme variants, terminal feature tour, offline generative HTML libraries, source-attributed usage ledger                                                                                                                                                        |
+| Distribution        | Four native helpers build on macOS/Linux; Docker image runs without Electron; Linux container CI job                                                                                                                                                                      |
 
 Final automated validation:
 

@@ -25,7 +25,8 @@ export function safeLinkHref(value: string): string | null {
   if (!trimmed || /\s/.test(trimmed)) return null;
   try {
     const url = new URL(trimmed);
-    if (url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:") return url.href;
+    if (url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:")
+      return url.href;
   } catch {
     // Not an address.
   }
@@ -179,7 +180,10 @@ export function parseRichText(source: string): RichBlock[] {
 }
 
 const escapeText = (text: string) =>
-  text.replace(/[\\*_[\]<>`]/g, (char) => `\\${char}`).replace(/^(\d{1,3})([.)] )/, "$1\\$2").replace(/^([-*]) /, "\\$1 ");
+  text
+    .replace(/[\\*_[\]<>`]/g, (char) => `\\${char}`)
+    .replace(/^(\d{1,3})([.)] )/, "$1\\$2")
+    .replace(/^([-*]) /, "\\$1 ");
 
 function serializeLine(line: RichLine): string {
   let out = "";
@@ -190,7 +194,9 @@ function serializeLine(line: RichLine): string {
     if (href) {
       let end = index;
       while (end < line.length && line[end]!.marks.href === href) end += 1;
-      const inner = line.slice(index, end).map((span) => ({ text: span.text, marks: { ...span.marks, href: undefined } }));
+      const inner = line
+        .slice(index, end)
+        .map((span) => ({ text: span.text, marks: { ...span.marks, href: undefined } }));
       out += `[${serializeMarks(inner)}](${href.replace(/[()\s]/g, encodeURIComponent)})`;
       index = end;
     } else {
@@ -242,7 +248,8 @@ export function serializeRichText(blocks: readonly RichBlock[]): string {
   const lines: string[] = [];
   for (const block of blocks) {
     if (block.type === "paragraph") lines.push(serializeLine(block.spans));
-    else if (block.type === "bullets") for (const item of block.items) lines.push(`- ${serializeLine(item)}`);
+    else if (block.type === "bullets")
+      for (const item of block.items) lines.push(`- ${serializeLine(item)}`);
     else block.items.forEach((item, index) => lines.push(`${index + 1}. ${serializeLine(item)}`));
   }
   return lines.join("\n");
@@ -253,7 +260,9 @@ const lineText = (line: RichLine) => line.map((span) => span.text).join("");
 /** The words alone, one line per paragraph or item, for labels and search. */
 export function richTextPlain(source: string): string {
   return parseRichText(source)
-    .flatMap((block) => (block.type === "paragraph" ? [lineText(block.spans)] : block.items.map(lineText)))
+    .flatMap((block) =>
+      block.type === "paragraph" ? [lineText(block.spans)] : block.items.map(lineText),
+    )
     .join("\n");
 }
 

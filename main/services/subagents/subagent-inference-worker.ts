@@ -4,7 +4,11 @@ import { normalizeContext } from "@earendil-works/pi-ai";
 import { isCodexAuthenticationFailure } from "../codex-auth-failure.js";
 import { withAidenPiCompatibility } from "../pi-provider-compatibility.js";
 import { providerFailureFromTerminalOutcome } from "../provider-failure.js";
-import { classifyUsageLimit, usageLimitSafeErrorText, type ProviderResponseObservation } from "../usage-limit-core.js";
+import {
+  classifyUsageLimit,
+  usageLimitSafeErrorText,
+  type ProviderResponseObservation,
+} from "../usage-limit-core.js";
 import { usageLimitObservedOptions } from "../usage-limit-stream.js";
 import {
   isSubagentInferenceParentMessage,
@@ -156,7 +160,11 @@ parentPort.on("message", (messageEvent) => {
                     event.reason === "aborted"
                       ? "The isolated provider request was cancelled."
                       : (usageLimitSafeErrorText(
-                          classifyUsageLimit({ errorMessage: event.error.errorMessage, observation, now: Date.now() }),
+                          classifyUsageLimit({
+                            errorMessage: event.error.errorMessage,
+                            observation,
+                            now: Date.now(),
+                          }),
                           Date.now(),
                         ) ?? "The isolated provider request failed."),
                 },

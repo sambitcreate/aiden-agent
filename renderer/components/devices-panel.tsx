@@ -69,8 +69,15 @@ export interface DevicesPanelViewProps {
   selected?: { hostId: string; deviceId: string } | null;
 }
 
-
-function Empty({ icon, title, children }: { icon: React.ReactNode; title: string; children?: React.ReactNode }) {
+function Empty({
+  icon,
+  title,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  children?: React.ReactNode;
+}) {
   return (
     <section aria-labelledby="devices-empty-title" className="browser-empty h-full min-h-0">
       {icon}
@@ -107,7 +114,12 @@ function ConsentRow({
         <Text id={`${id}-label`} variant="small-strong" className="block">
           {label}
         </Text>
-        <Text id={`${id}-description`} variant="small" color="secondary" className={compact ? "sr-only" : "block"}>
+        <Text
+          id={`${id}-description`}
+          variant="small"
+          color="secondary"
+          className={compact ? "sr-only" : "block"}
+        >
           {description}
         </Text>
       </span>
@@ -176,7 +188,9 @@ function DeviceRows({
               aria-label={`${device.booted ? "Open" : "Boot and open"} ${device.name}`}
               onClick={() => onOpen(device)}
             >
-              {opening ? <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
+              {opening ? (
+                <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden />
+              ) : null}
               {device.booted ? "Open" : "Boot & open"}
             </Button>
           </li>
@@ -222,11 +236,14 @@ function PlatformSections({
   if (platforms.length === 0) {
     return (
       <Text variant="small" color="secondary" className="devices-list-note">
-        {host.kind === "local" ? PLATFORM_EMPTY.ios : `No simulators or emulators found on ${host.name}.`}
+        {host.kind === "local"
+          ? PLATFORM_EMPTY.ios
+          : `No simulators or emulators found on ${host.name}.`}
       </Text>
     );
   }
-  const sectionId = (platform: DevicePlatform) => `devices-${host.id.replace(/[^A-Za-z0-9_-]/gu, "-")}-${platform}`;
+  const sectionId = (platform: DevicePlatform) =>
+    `devices-${host.id.replace(/[^A-Za-z0-9_-]/gu, "-")}-${platform}`;
   return (
     <>
       {platforms.map((availability) => {
@@ -252,7 +269,8 @@ function PlatformSections({
               <Text variant="small" color="secondary" className="devices-list-note">
                 {availability.available
                   ? PLATFORM_EMPTY[availability.platform]
-                  : (availability.reason ?? `${label} devices are unavailable on ${host.kind === "local" ? "this Mac" : host.name}.`)}
+                  : (availability.reason ??
+                    `${label} devices are unavailable on ${host.kind === "local" ? "this Mac" : host.name}.`)}
               </Text>
             )}
           </section>
@@ -293,8 +311,15 @@ function HostGroup({
           {host.name}
         </Text>
         {host.kind === "peer" && host.status !== "ready" ? (
-          <Button variant="transparent" size="small" disabled={pending !== null} onClick={onRefreshPeers}>
-            {pending === "peers" ? <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
+          <Button
+            variant="transparent"
+            size="small"
+            disabled={pending !== null}
+            onClick={onRefreshPeers}
+          >
+            {pending === "peers" ? (
+              <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden />
+            ) : null}
             Try again
           </Button>
         ) : null}
@@ -306,7 +331,9 @@ function HostGroup({
             aria-label={`${host.status === "stopped" ? (host.kind === "ssh" ? "Connect" : "Start") : "Try again"} ${host.name}`}
             onClick={() => onStartHost(host.id)}
           >
-            {pending === `host:${host.id}` ? <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
+            {pending === `host:${host.id}` ? (
+              <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden />
+            ) : null}
             {host.status === "stopped" ? (host.kind === "ssh" ? "Connect" : "Start") : "Try again"}
           </Button>
         ) : null}
@@ -316,7 +343,13 @@ function HostGroup({
           {note}
         </Text>
       ) : (
-        <PlatformSections host={host} devices={devices} chatId={chatId} pending={pending} onOpen={onOpen} />
+        <PlatformSections
+          host={host}
+          devices={devices}
+          chatId={chatId}
+          pending={pending}
+          onOpen={onOpen}
+        />
       )}
     </section>
   );
@@ -380,7 +413,13 @@ function DeviceList({
           />
         ))
       ) : local ? (
-        <PlatformSections host={local} devices={devices} chatId={chatId} pending={pending} onOpen={onOpen} />
+        <PlatformSections
+          host={local}
+          devices={devices}
+          chatId={chatId}
+          pending={pending}
+          onOpen={onOpen}
+        />
       ) : null}
     </section>
   );
@@ -434,7 +473,9 @@ export function DevicesPanelView({
   // SSH hosts are listed (with Connect) even then, since the user reaches them from here.
   const peerReady =
     state.consent.streaming &&
-    state.hosts.some((host) => (host.kind === "peer" && host.status === "ready") || host.kind === "ssh");
+    state.hosts.some(
+      (host) => (host.kind === "peer" && host.status === "ready") || host.kind === "ssh",
+    );
   const status = peerReady ? "ready" : state.hostStatus;
   const errorLine = error ? (
     <Text variant="small" className="text-red" role="alert">
@@ -450,8 +491,8 @@ export function DevicesPanelView({
         <LiveGuard guard="you">
           <Empty icon={<Smartphone aria-hidden />} title="Simulators">
             <p className={explain}>
-              Watch and control iOS Simulators from Xcode and Android Emulators from Android Studio here, and let
-              Aiden drive them while you watch.
+              Watch and control iOS Simulators from Xcode and Android Emulators from Android Studio
+              here, and let Aiden drive them while you watch.
             </p>
             <p className={explain}>{detail ?? DEVICE_SETUP_NOTICE}</p>
             {errorLine}
@@ -472,7 +513,11 @@ export function DevicesPanelView({
       return (
         <Empty
           icon={spinner}
-          title={state.hostStatus === "installing" ? "Installing simulator helpers…" : "Starting simulator helpers…"}
+          title={
+            state.hostStatus === "installing"
+              ? "Installing simulator helpers…"
+              : "Starting simulator helpers…"
+          }
         >
           <p role="status">{detail ?? "This usually takes a few seconds."}</p>
           <DeviceHostDiagnostics variant="panel" />
@@ -494,10 +539,16 @@ export function DevicesPanelView({
       return (
         <Empty
           icon={<TriangleAlert aria-hidden />}
-          title={state.hostStatus === "unavailable" ? "Simulators unavailable" : "Simulator helpers stopped"}
+          title={
+            state.hostStatus === "unavailable"
+              ? "Simulators unavailable"
+              : "Simulator helpers stopped"
+          }
         >
           <p>
-            {state.unavailableReason ?? detail ?? "Something went wrong starting the simulator helpers."}
+            {state.unavailableReason ??
+              detail ??
+              "Something went wrong starting the simulator helpers."}
           </p>
           {errorLine}
           <Button variant="muted" size="small" disabled={pending !== null} onClick={onStart}>
@@ -514,7 +565,8 @@ export function DevicesPanelView({
               (candidate) =>
                 candidate.chatId === chatId &&
                 (selected === undefined ||
-                  (candidate.hostId === selected.hostId && candidate.deviceId === selected.deviceId)),
+                  (candidate.hostId === selected.hostId &&
+                    candidate.deviceId === selected.deviceId)),
             )
           : undefined;
       const device = session
@@ -612,7 +664,8 @@ export function DevicesPanel({
         }
       })
       .catch((reason: unknown) => {
-        if (current) setError(reason instanceof Error ? reason.message : "Could not read simulator state.");
+        if (current)
+          setError(reason instanceof Error ? reason.message : "Could not read simulator state.");
       });
     return () => {
       current = false;
@@ -636,7 +689,12 @@ export function DevicesPanel({
   const close = (session: DeviceSession, shutdown: boolean) => {
     onClosed?.(session);
     void devicesApi
-      .close({ chatId: session.chatId, hostId: session.hostId, deviceId: session.deviceId, shutdown })
+      .close({
+        chatId: session.chatId,
+        hostId: session.hostId,
+        deviceId: session.deviceId,
+        shutdown,
+      })
       .catch((reason: unknown) =>
         toast.error(reason instanceof Error ? reason.message : "Could not close the simulator."),
       );
@@ -659,12 +717,20 @@ export function DevicesPanel({
       onStartHost={(hostId) => void run(`host:${hostId}`, () => devicesApi.startHost(hostId))}
       onRefresh={() => void run("refresh", () => devicesApi.refresh())}
       onRefreshPeers={() => void run("peers", () => devicesApi.refreshPeers())}
-      onAgentAccess={(granted) => void run("agent", () => devicesApi.setConsent("agentAccess", granted))}
-      onPeerSharing={(granted) => void run("peerSharing", () => devicesApi.setConsent("peerSharing", granted))}
+      onAgentAccess={(granted) =>
+        void run("agent", () => devicesApi.setConsent("agentAccess", granted))
+      }
+      onPeerSharing={(granted) =>
+        void run("peerSharing", () => devicesApi.setConsent("peerSharing", granted))
+      }
       onOpen={(device) =>
         chatId
           ? void run(`${device.hostId}:${device.id}`, async () => {
-              const session = await devicesApi.open({ chatId, hostId: device.hostId, deviceId: device.id });
+              const session = await devicesApi.open({
+                chatId,
+                hostId: device.hostId,
+                deviceId: device.id,
+              });
               onOpened?.(session);
             })
           : undefined

@@ -26,7 +26,8 @@ export function lifecycleRecords(devLog, limit = 40) {
     }
     const scope = record?.fields?.legacyScope;
     if (!LIFECYCLE_SCOPES.has(scope)) continue;
-    const message = typeof record.fields.message === "string" ? record.fields.message.slice(0, MAX_MESSAGE) : "";
+    const message =
+      typeof record.fields.message === "string" ? record.fields.message.slice(0, MAX_MESSAGE) : "";
     lines.push(`  ${String(record.at)} ${String(record.level)} ${scope} ${message}`.trimEnd());
   }
   return lines.slice(-limit);
@@ -86,7 +87,10 @@ export function sampleOtherThreads(output, frames = 4, limit = 80) {
     if (/^ {4}\d+ Thread_/u.test(line)) {
       if (current) settleLeaf();
       current = {
-        header: line.trim().replace(/^\d+\s+/u, "").replace(/\s{2,}/gu, " "),
+        header: line
+          .trim()
+          .replace(/^\d+\s+/u, "")
+          .replace(/\s{2,}/gu, " "),
         stack: [],
         best: [],
         bestCount: -1,
@@ -96,10 +100,12 @@ export function sampleOtherThreads(output, frames = 4, limit = 80) {
       continue;
     }
     if (!current) continue;
-    const depth = (line.match(SAMPLE_TREE_GLYPHS)?.[0].length) ?? 0;
+    const depth = line.match(SAMPLE_TREE_GLYPHS)?.[0].length ?? 0;
     const count = Number(line.slice(depth).match(/^\d+/u)?.[0] ?? 0);
-    if (current.stack.length > 0 && depth <= current.stack[current.stack.length - 1].depth) settleLeaf();
-    while (current.stack.length > 0 && current.stack[current.stack.length - 1].depth >= depth) current.stack.pop();
+    if (current.stack.length > 0 && depth <= current.stack[current.stack.length - 1].depth)
+      settleLeaf();
+    while (current.stack.length > 0 && current.stack[current.stack.length - 1].depth >= depth)
+      current.stack.pop();
     current.stack.push({ depth, count, frame: sampleFrame(line) });
     current.lastWasPush = true;
   }
@@ -107,7 +113,9 @@ export function sampleOtherThreads(output, frames = 4, limit = 80) {
   return threads
     .filter((thread) => !/com\.apple\.main-thread/u.test(thread.header))
     .slice(0, limit)
-    .map((thread) => `  ${thread.header}: ${thread.best.slice(-frames).reverse().join(" < ") || "?"}`);
+    .map(
+      (thread) => `  ${thread.header}: ${thread.best.slice(-frames).reverse().join(" < ") || "?"}`,
+    );
 }
 
 /** One `/proc/<pid>/task/<tid>` thread as "name state wchan". */
@@ -123,9 +131,14 @@ export function procThreadLine(tid, stat, wchan) {
 
 function run(command, args, timeoutMs) {
   return new Promise((resolve) => {
-    execFile(command, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
-      resolve(error && !stdout ? null : String(stdout));
-    });
+    execFile(
+      command,
+      args,
+      { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
+      (error, stdout) => {
+        resolve(error && !stdout ? null : String(stdout));
+      },
+    );
   });
 }
 
@@ -159,7 +172,9 @@ export async function describeStuckShutdown({ pid, devLogPath, platform = proces
   if (devLogPath) {
     const devLog = await readFile(devLogPath, "utf8").catch(() => null);
     const records = devLog === null ? [] : lifecycleRecords(devLog);
-    sections.push(`Quit and shutdown records:\n${records.length ? records.join("\n") : "  (none)"}`);
+    sections.push(
+      `Quit and shutdown records:\n${records.length ? records.join("\n") : "  (none)"}`,
+    );
   } else {
     // The production journal keeps no legacy info records, so it has none to give.
     sections.push("Quit and shutdown records:\n  (only a development-profile dev log keeps them)");
@@ -167,12 +182,18 @@ export async function describeStuckShutdown({ pid, devLogPath, platform = proces
   if (platform === "darwin") {
     const output = await run("/usr/bin/sample", [String(pid), "1", "-mayDie"], 20_000);
     const thread = output === null ? [] : sampleMainThread(output);
-    sections.push(`Main thread (sample):\n${thread.length ? thread.join("\n") : "  (unavailable)"}`);
+    sections.push(
+      `Main thread (sample):\n${thread.length ? thread.join("\n") : "  (unavailable)"}`,
+    );
     const others = output === null ? [] : sampleOtherThreads(output);
-    sections.push(`Other threads, innermost frame first (sample):\n${others.length ? others.join("\n") : "  (unavailable)"}`);
+    sections.push(
+      `Other threads, innermost frame first (sample):\n${others.length ? others.join("\n") : "  (unavailable)"}`,
+    );
   } else if (platform === "linux") {
     const threads = await linuxThreads(pid);
-    sections.push(`Threads (tid name state wchan):\n${threads.length ? threads.join("\n") : "  (unavailable)"}`);
+    sections.push(
+      `Threads (tid name state wchan):\n${threads.length ? threads.join("\n") : "  (unavailable)"}`,
+    );
   }
   return sections.join("\n");
 }

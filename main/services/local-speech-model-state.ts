@@ -53,7 +53,11 @@ export class LocalSpeechModelState {
       fail: (error, { aborted }) => {
         if (!pending) return;
         pending = false;
-        this.emit(aborted ? { modelId, state: "unloaded" } : { modelId, state: "failed", error: errorMessage(error) });
+        this.emit(
+          aborted
+            ? { modelId, state: "unloaded" }
+            : { modelId, state: "failed", error: errorMessage(error) },
+        );
       },
     };
   }

@@ -240,8 +240,7 @@ const WINDOWS_PATH = /(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\r\n"'`<>;,]+/gu;
 const UNC_PATH = /(?<![A-Za-z0-9])\\\\[^\r\n"'`<>;,]+/gu;
 const POSIX_PATH =
   /(^|[\s("'`=:])\/(?:Applications|Library|System|Users|Volumes|bin|dev|etc|home|mnt|opt|private|root|sbin|srv|tmp|usr|var)(?:\/[^\r\n)"'`<>;,]*)?/gmu;
-const GENERIC_POSIX_PATH =
-  /(^|[\s("'`=:])\/(?!\/)(?:[^/\s"'`<>;,]+\/)+[^\s)"'`<>;,]*/gmu;
+const GENERIC_POSIX_PATH = /(^|[\s("'`=:])\/(?!\/)(?:[^/\s"'`<>;,]+\/)+[^\s)"'`<>;,]*/gmu;
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/gu; // eslint-disable-line no-control-regex
 const LONG_IDENTIFIER = /\b[0-9a-f]{32,}\b/giu;
 const UUID_VALUE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/giu;
@@ -251,7 +250,9 @@ const SAFE_REFERENCE = /^RD-[A-Za-z0-9-]{8,80}$/u;
 const SAFE_FINGERPRINT = /^[0-9a-f]{16}$/u;
 
 const NUMBER_FIELDS = new Set([
-  "accepted", "rejected", "evicted",
+  "accepted",
+  "rejected",
+  "evicted",
   "attempt",
   "attempts",
   "backoffMs",
@@ -271,30 +272,112 @@ const NUMBER_FIELDS = new Set([
   "suppressed",
   "uptimeSeconds",
 ]);
-const BOOLEAN_FIELDS = new Set(["isMainFrame", "keptLastGood", "retryable", "snapshotFailed", "truncated"]);
+const BOOLEAN_FIELDS = new Set([
+  "isMainFrame",
+  "keptLastGood",
+  "retryable",
+  "snapshotFailed",
+  "truncated",
+]);
 /** A hostname or bracketed IPv6 literal: never a URL, path, port, query or userinfo. */
-const SAFE_HOSTNAME = /^(?:(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[[0-9a-f:.]{2,45}\])$/u;
+const SAFE_HOSTNAME =
+  /^(?:(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[[0-9a-f:.]{2,45}\])$/u;
 /** Node and undici error codes (ECONNREFUSED, UND_ERR_SOCKET, CERT_HAS_EXPIRED, …). */
 const SAFE_ERRNO = /^[A-Z][A-Z0-9_]{1,47}$/u;
 const EXPORT_OMITTED_FIELDS = new Set(["legacyScope", "message"]);
 const ENUM_STRING_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
   causeCode: new Set(DIAGNOSTIC_CODES),
-  compactionFailure: new Set(["summary-budget", "summary-provider", "budget-recovery", "journal", "host-inference", "host-policy", "local-compiler", "other"]),
+  compactionFailure: new Set([
+    "summary-budget",
+    "summary-provider",
+    "budget-recovery",
+    "journal",
+    "host-inference",
+    "host-policy",
+    "local-compiler",
+    "other",
+  ]),
   compactionReason: new Set(["threshold", "overflow", "manual"]),
   recoveryStage: new Set(["local-compiler", "semantic-summary", "checkpoint"]),
-  localCompilerCause: new Set(["history_limit", "unsafe_boundary", "empty_summary", "insufficient_reduction", "busy", "cancelled", "timeout", "worker_failed", "worker_exited", "cleanup_failed"]),
-  failurePhase: new Set(["renderer-script", "renderer-promise", "renderer-react", "renderer-route", "mcp-tool-discovery", "mcp-recent-failure", "mcp-prewarm", "mcp-stdio-approval", "mcp-bot-inventory", "mcp-sign-in", "provider-request", "provider-compaction"]),
+  localCompilerCause: new Set([
+    "history_limit",
+    "unsafe_boundary",
+    "empty_summary",
+    "insufficient_reduction",
+    "busy",
+    "cancelled",
+    "timeout",
+    "worker_failed",
+    "worker_exited",
+    "cleanup_failed",
+  ]),
+  failurePhase: new Set([
+    "renderer-script",
+    "renderer-promise",
+    "renderer-react",
+    "renderer-route",
+    "mcp-tool-discovery",
+    "mcp-recent-failure",
+    "mcp-prewarm",
+    "mcp-stdio-approval",
+    "mcp-bot-inventory",
+    "mcp-sign-in",
+    "provider-request",
+    "provider-compaction",
+  ]),
   mcpFailure: new Set(MCP_FAILURE_CODES),
   oauthError: new Set(MCP_OAUTH_ERROR_CODES),
   transport: new Set(["http", "stdio"]),
   serverHostKind: new Set(MCP_SERVER_HOST_KINDS),
-  providerCategory: new Set(["authentication", "quota", "rate_limit", "context_window", "context_management", "output_limit", "interrupted", "timeout", "service_unavailable", "model_unavailable", "network", "invalid_request", "unknown"]),
-  transportCause: new Set(["connection-error", "dns", "connection-reset", "connection-refused", "socket-closed", "websocket-closed", "fetch-failed", "network-unknown"]),
+  providerCategory: new Set([
+    "authentication",
+    "quota",
+    "rate_limit",
+    "context_window",
+    "context_management",
+    "output_limit",
+    "interrupted",
+    "timeout",
+    "service_unavailable",
+    "model_unavailable",
+    "network",
+    "invalid_request",
+    "unknown",
+  ]),
+  transportCause: new Set([
+    "connection-error",
+    "dns",
+    "connection-reset",
+    "connection-refused",
+    "socket-closed",
+    "websocket-closed",
+    "fetch-failed",
+    "network-unknown",
+  ]),
   arch: new Set(["arm64", "ia32", "universal", "unknown", "x64"]),
   failureCategory: new Set(["command-failed", "invalid-response", "timed-out"]),
   origin: new Set(["uncaughtException", "unhandledRejection", "unknown"]),
-  platform: new Set(["aix", "android", "darwin", "freebsd", "haiku", "linux", "openbsd", "sunos", "unknown", "win32"]),
-  processType: new Set(["Browser", "GPU", "Pepper Plugin", "Renderer", "Utility", "Zygote", "unknown"]),
+  platform: new Set([
+    "aix",
+    "android",
+    "darwin",
+    "freebsd",
+    "haiku",
+    "linux",
+    "openbsd",
+    "sunos",
+    "unknown",
+    "win32",
+  ]),
+  processType: new Set([
+    "Browser",
+    "GPU",
+    "Pepper Plugin",
+    "Renderer",
+    "Utility",
+    "Zygote",
+    "unknown",
+  ]),
   reason: new Set([
     "abnormal-exit",
     "busy",
@@ -343,7 +426,17 @@ const ENUM_STRING_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
   runtimeProfile: new Set(["development", "production"]),
   signal: new Set(["SIGHUP", "SIGINT", "SIGTERM"]),
   statusClass: new Set(["2xx", "4xx", "5xx"]),
-  storeClass: new Set(["cache", "chat", "config", "health", "journal", "settings", "subagent", "unknown", "usage"]),
+  storeClass: new Set([
+    "cache",
+    "chat",
+    "config",
+    "health",
+    "journal",
+    "settings",
+    "subagent",
+    "unknown",
+    "usage",
+  ]),
   tailscalePhase: new Set(["node", "serve"]),
 };
 
@@ -357,14 +450,20 @@ function normalizedStringField(key: string, value: string): string | undefined {
   if (key === "route") return normalizedDiagnosticRoute(value);
   // Main-generated renderer references are opaque UUIDs, not content identifiers.
   // Admit the exact UUID grammar before the generic ID redactor removes it.
-  if (key === "referenceId" && /^RD-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value)) return value;
+  if (
+    key === "referenceId" &&
+    /^RD-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value)
+  )
+    return value;
   const sanitized = sanitizeDiagnosticText(value);
   if (!sanitized) return undefined;
   const enumerated = ENUM_STRING_FIELDS[key];
   if (enumerated) return enumerated.has(sanitized) ? sanitized : undefined;
   if (key === "errorType") return normalizeDiagnosticErrorType(sanitized);
-  if (key === "fingerprint" || key === "serverRef") return SAFE_FINGERPRINT.test(sanitized) ? sanitized : undefined;
-  if (key === "serverHost") return sanitized.length <= 253 && SAFE_HOSTNAME.test(sanitized) ? sanitized : undefined;
+  if (key === "fingerprint" || key === "serverRef")
+    return SAFE_FINGERPRINT.test(sanitized) ? sanitized : undefined;
+  if (key === "serverHost")
+    return sanitized.length <= 253 && SAFE_HOSTNAME.test(sanitized) ? sanitized : undefined;
   if (key === "errno") return SAFE_ERRNO.test(sanitized) ? sanitized : undefined;
   if (key === "referenceId") return SAFE_REFERENCE.test(sanitized) ? sanitized : undefined;
   if (["appVersion", "chromeVersion", "electronVersion", "nodeVersion"].includes(key)) {
@@ -379,11 +478,7 @@ function normalizedDiagnosticRoute(value: string): string | undefined {
   if (value.length === 0 || [...value].length > MAX_DIAGNOSTIC_FIELD_LENGTH) {
     return undefined;
   }
-  if (
-    value[0] !== "/" ||
-    value.includes("//") ||
-    /[?%#@\\\s]/u.test(value)
-  ) {
+  if (value[0] !== "/" || value.includes("//") || /[?%#@\\\s]/u.test(value)) {
     return undefined;
   }
   for (const segment of value.split("/")) {
@@ -415,7 +510,10 @@ export function redactCredentialText(value: string, replacement = "[withheld]"):
     .replace(CREDENTIAL_URL, `$1${replacement}@`);
 }
 
-export function sanitizeDiagnosticText(value: string, maxLength = MAX_DIAGNOSTIC_FIELD_LENGTH): string {
+export function sanitizeDiagnosticText(
+  value: string,
+  maxLength = MAX_DIAGNOSTIC_FIELD_LENGTH,
+): string {
   return value
     .normalize("NFKC")
     .replace(CONTROL_CHARACTERS, " ")
@@ -446,13 +544,19 @@ const DIAGNOSTIC_EVENT_NAME_SET: ReadonlySet<string> = new Set([
 ]);
 
 function safeEventName(value: string): DiagnosticEventName {
-  const candidate = value.trim().toLowerCase().replace(/[^a-z0-9-]+/gu, "-").replace(/^-+|-+$/gu, "");
+  const candidate = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/gu, "-")
+    .replace(/^-+|-+$/gu, "");
   return SAFE_NAME.test(candidate) && DIAGNOSTIC_EVENT_NAME_SET.has(candidate)
     ? (candidate as DiagnosticEventName)
     : "unknown";
 }
 
-export function normalizeDiagnosticFields(fields: DiagnosticSafeFields | undefined): DiagnosticSafeFields | undefined {
+export function normalizeDiagnosticFields(
+  fields: DiagnosticSafeFields | undefined,
+): DiagnosticSafeFields | undefined {
   if (!fields) return undefined;
   const normalized: Record<string, DiagnosticSafeFieldValue> = {};
   for (const [key, value] of Object.entries(fields)) {
@@ -466,7 +570,10 @@ export function normalizeDiagnosticFields(fields: DiagnosticSafeFields | undefin
       normalized[key] = boundedNumber(value);
     } else if (typeof value === "boolean" && BOOLEAN_FIELDS.has(key)) {
       normalized[key] = value;
-    } else if (value === null && (key === "errorType" || key === "fingerprint" || key === "remoteCode")) {
+    } else if (
+      value === null &&
+      (key === "errorType" || key === "fingerprint" || key === "remoteCode")
+    ) {
       normalized[key] = null;
     }
   }
@@ -514,7 +621,9 @@ export function createDiagnosticEvent(
     ...(input.durationMs === undefined
       ? {}
       : { durationMs: Math.max(0, Math.round(boundedNumber(input.durationMs))) }),
-    ...(input.outcome && DIAGNOSTIC_OUTCOMES.includes(input.outcome) ? { outcome: input.outcome } : {}),
+    ...(input.outcome && DIAGNOSTIC_OUTCOMES.includes(input.outcome)
+      ? { outcome: input.outcome }
+      : {}),
     ...(input.code && DIAGNOSTIC_CODES.includes(input.code) ? { code: input.code } : {}),
     ...(fields ? { fields } : {}),
   };
@@ -537,7 +646,9 @@ export function createDiagnosticEvent(
 
 function errorCode(error: unknown): string | undefined {
   const candidate = diagnosticProperty(error, "code");
-  return typeof candidate === "string" && candidate.length <= 64 ? candidate.toUpperCase() : undefined;
+  return typeof candidate === "string" && candidate.length <= 64
+    ? candidate.toUpperCase()
+    : undefined;
 }
 
 /** Never invoke error getters or stringify untrusted error/request payloads. */
@@ -596,7 +707,17 @@ function diagnosticCodeFor(error: unknown): DiagnosticCode {
   if (code === "EACCES" || code === "EPERM") return "permission-denied";
   if (code === "ENOSPC" || code === "EDQUOT") return "disk-full";
   if (code === "ETIMEDOUT" || code === "ESOCKETTIMEDOUT") return "timed-out";
-  if (["ECONNREFUSED", "ECONNRESET", "ENETUNREACH", "EHOSTUNREACH", "EAI_AGAIN", "ENOTFOUND", "UND_ERR_SOCKET"].includes(code ?? "")) {
+  if (
+    [
+      "ECONNREFUSED",
+      "ECONNRESET",
+      "ENETUNREACH",
+      "EHOSTUNREACH",
+      "EAI_AGAIN",
+      "ENOTFOUND",
+      "UND_ERR_SOCKET",
+    ].includes(code ?? "")
+  ) {
     return "network-failed";
   }
   const status = structuralHttpStatus(error);
@@ -620,7 +741,7 @@ export function projectDiagnosticError(error: unknown): DiagnosticErrorProjectio
   const outerCode = diagnosticCodeFor(error);
   const classifiedCause = chain.slice(1).find((cause) => diagnosticCodeFor(cause) !== "unknown");
   const causeCode = classifiedCause === undefined ? undefined : diagnosticCodeFor(classifiedCause);
-  const code = outerCode === "unknown" ? causeCode ?? outerCode : outerCode;
+  const code = outerCode === "unknown" ? (causeCode ?? outerCode) : outerCode;
   // Keep status evidence on the same envelope as the selected classification.
   // A wrapper's unrelated 200 must not accompany its cause's 503 failure.
   const source = outerCode === "unknown" && classifiedCause !== undefined ? classifiedCause : error;

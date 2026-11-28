@@ -12,7 +12,10 @@ import { createTestRuntime, testCanvas } from "./viewer-test-support.js";
 const last = <T>(items: readonly T[]): T | undefined => items[items.length - 1];
 
 const close = (actual: number, expected: number, epsilon = 1e-6) =>
-  assert.ok(Math.abs(actual - expected) <= epsilon, `${actual} is not within ${epsilon} of ${expected}`);
+  assert.ok(
+    Math.abs(actual - expected) <= epsilon,
+    `${actual} is not within ${epsilon} of ${expected}`,
+  );
 
 /** T3's minimal rig: two leaves, three displays, nothing else. */
 function asset() {
@@ -26,7 +29,11 @@ function asset() {
     for (const display of names) {
       const mesh = new Mesh(new PlaneGeometry(1, 2), new MeshBasicMaterial());
       if (display === "cover-display") mesh.geometry.rotateY(Math.PI);
-      mesh.geometry.translate(display === "inner-display-right" ? 0.5 : -0.5, 0, display === "cover-display" ? -0.05 : 0.05);
+      mesh.geometry.translate(
+        display === "inner-display-right" ? 0.5 : -0.5,
+        0,
+        display === "cover-display" ? -0.05 : 0.05,
+      );
       mesh.name = display;
       leaf.add(mesh);
     }
@@ -43,7 +50,10 @@ function fixture(
     procedural?: boolean;
   } = {},
 ) {
-  const harness = createTestRuntime({ reduced: options.reduced ?? true, blankProbe: options.blankProbe ?? false });
+  const harness = createTestRuntime({
+    reduced: options.reduced ?? true,
+    blankProbe: options.blankProbe ?? false,
+  });
   const orientations: DeviceScreenSize["orientation"][] = [];
   let unavailable = 0;
   const loaded = asset();
@@ -74,11 +84,14 @@ function fixture(
 const cover = { width: 1398, height: 2034, screenId: 1 } as const;
 const inner = { width: 2007, height: 2853, screenId: 3 } as const;
 const normalOf = (mesh: Mesh) =>
-  new Vector3().fromBufferAttribute(mesh.geometry.getAttribute("normal"), 0).transformDirection(mesh.matrixWorld);
+  new Vector3()
+    .fromBufferAttribute(mesh.geometry.getAttribute("normal"), 0)
+    .transformDirection(mesh.matrixWorld);
 const upright = new Quaternion().setFromEuler(new Euler(0, Math.PI / 2, 0, "YXZ"));
 
 test("resize coalesces with the redraw, the renderer and scene persist, and an idle view schedules nothing", () => {
-  const { viewer, draw, pendingFrames, state, renderers, wait, loaded, environmentsDisposed } = fixture();
+  const { viewer, draw, pendingFrames, state, renderers, wait, loaded, environmentsDisposed } =
+    fixture();
   viewer.setScreen({ ...cover, orientation: "portrait", hingeAngle: 0 });
   viewer.resize(500, 700, 2);
   draw();
@@ -182,10 +195,18 @@ test("a display handed off by native rotation is faced without another sensor ro
 test("fold buttons present a book, a tablet and an upright closed phone, centred on the hinge", () => {
   const { viewer, draw, state, orientations, loaded, wait } = fixture({ reduced: false });
   viewer.resize(500, 700, 2);
-  const press = (angle: number, configs: ReadonlyArray<{ orientation: "portrait" | "landscape_left"; screenId: 1 | 3 }>) => {
+  const press = (
+    angle: number,
+    configs: ReadonlyArray<{ orientation: "portrait" | "landscape_left"; screenId: 1 | 3 }>,
+  ) => {
     viewer.setHingePreview(angle);
     configs.forEach((config, index) => {
-      viewer.setScreen({ ...(config.screenId === 1 ? cover : inner), hingePose: null, ...config, hingeAngle: angle });
+      viewer.setScreen({
+        ...(config.screenId === 1 ? cover : inner),
+        hingePose: null,
+        ...config,
+        hingeAngle: angle,
+      });
       // The command reply follows the first configuration.
       if (index === 0) viewer.setHingePreview(null);
       draw();
@@ -250,7 +271,12 @@ for (const hingePose of ["book", "laptop", "open"] as const) {
   test(`native cover readback for ${hingePose} faces the cover`, () => {
     const { viewer, draw, loaded } = fixture();
     viewer.resize(500, 700, 2);
-    viewer.setScreen({ ...cover, orientation: "landscape_left", hingeAngle: hingePose === "open" ? 180 : 90, hingePose });
+    viewer.setScreen({
+      ...cover,
+      orientation: "landscape_left",
+      hingeAngle: hingePose === "open" ? 180 : 90,
+      hingePose,
+    });
     draw();
     draw();
     assert.ok(normalOf(loaded.getObjectByName("cover-display") as Mesh).z > 0.45);
@@ -277,7 +303,10 @@ test("orbits stay framed across folds and the fit follows the current assembly",
         if (!(object instanceof Mesh)) return;
         const positions = object.geometry.getAttribute("position");
         for (let index = 0; index < positions.count; index++) {
-          const point = new Vector3().fromBufferAttribute(positions, index).applyMatrix4(object.matrixWorld).project(camera);
+          const point = new Vector3()
+            .fromBufferAttribute(positions, index)
+            .applyMatrix4(object.matrixWorld)
+            .project(camera);
           assert.ok(Math.abs(point.x) < 1 && Math.abs(point.y) < 1, "every vertex stays in view");
         }
       });
@@ -292,7 +321,14 @@ test("orbits stay framed across folds and the fit follows the current assembly",
 test("a pinch on a laptop keeps the lid still and blocks input until the device confirms", () => {
   const { viewer, draw, pendingFrames, loaded } = fixture();
   viewer.resize(500, 700, 2);
-  viewer.setScreen({ width: 2853, height: 2007, orientation: "landscape_left", screenId: 3, hingeAngle: 90, hingePose: "laptop" });
+  viewer.setScreen({
+    width: 2853,
+    height: 2007,
+    orientation: "landscape_left",
+    screenId: 3,
+    hingeAngle: 90,
+    hingePose: "laptop",
+  });
   draw();
   const lid = loaded.getObjectByName("right-half")!;
   const presentation = lid.getWorldQuaternion(new Quaternion());
@@ -318,7 +354,12 @@ test("duplicate native configurations do not restart an animated preset", () => 
   viewer.resize(400, 700, 2);
   viewer.setScreen({ ...cover, orientation: "portrait", hingeAngle: 0, hingePose: "closed" });
   draw();
-  const next = { ...inner, orientation: "portrait" as const, hingeAngle: 180, hingePose: "open" as const };
+  const next = {
+    ...inner,
+    orientation: "portrait" as const,
+    hingeAngle: 180,
+    hingePose: "open" as const,
+  };
   viewer.setScreen(next);
   wait(1000);
   viewer.setScreen(next);
@@ -342,7 +383,9 @@ test("Tent stands on both edges when the cover reads it back", () => {
     ["right-half", 1],
   ] as const) {
     const leaf = loaded.getObjectByName(name)!;
-    const down = new Vector3(outward, 0, 0).applyQuaternion(leaf.getWorldQuaternion(new Quaternion()));
+    const down = new Vector3(outward, 0, 0).applyQuaternion(
+      leaf.getWorldQuaternion(new Quaternion()),
+    );
     assert.ok(down.y < -0.4, name);
   }
   viewer.dispose();
@@ -372,9 +415,16 @@ test("a separate rotation leaves Laptop and Tent and stands a closed device upri
 
 test("snapping onto the other display asks the device to flip once and keeps the chosen view on readback", () => {
   const panels: Array<1 | 3> = [];
-  const { viewer, draw, state, pendingFrames, orientations, advanceTimers } = fixture({ onPanelRequested: (panel) => void panels.push(panel) });
+  const { viewer, draw, state, pendingFrames, orientations, advanceTimers } = fixture({
+    onPanelRequested: (panel) => void panels.push(panel),
+  });
   viewer.resize(500, 700, 2);
-  const open = { ...inner, orientation: "portrait" as const, hingeAngle: 90, supportsPhysicalOrientation: true };
+  const open = {
+    ...inner,
+    orientation: "portrait" as const,
+    hingeAngle: 90,
+    supportsPhysicalOrientation: true,
+  };
   viewer.setScreen(open);
   draw();
   viewer.setInteractionActive(true, "orbit");
@@ -420,7 +470,12 @@ test("an unconfirmed flip rolls back to the native active display after five sec
     onPanelRequested: (panel) => void panels.push(panel),
   });
   viewer.resize(500, 700, 2);
-  viewer.setScreen({ ...inner, orientation: "portrait", hingeAngle: 90, supportsPhysicalOrientation: true });
+  viewer.setScreen({
+    ...inner,
+    orientation: "portrait",
+    hingeAngle: 90,
+    supportsPhysicalOrientation: true,
+  });
   draw();
   viewer.setInteractionActive(true, "orbit");
   viewer.orbit(Math.PI / 3, 0);
@@ -468,7 +523,9 @@ test("a fixed panel's shutdown blank is ignored only while its display is activa
   const { viewer, drawn, wait } = fixture({ blankProbe: true });
   viewer.setScreen({ ...cover, orientation: "portrait", hingeAngle: 0 });
   const source = { width: 1398, height: 2034 };
-  const uploads = () => drawn.filter((entry) => entry === source || (entry as { width?: number }).width === 1398).length;
+  const uploads = () =>
+    drawn.filter((entry) => entry === source || (entry as { width?: number }).width === 1398)
+      .length;
   viewer.frameUpdated(1);
   // Only the 8×8 probe touched the blank frame; the display kept its last image.
   const probed = uploads();
@@ -485,7 +542,12 @@ for (const face of ["left", "right"] as const) {
   test(`a pinch over the ${face} half keeps the primary surface still through closure and reopening`, () => {
     const { viewer, draw, state, pendingFrames, orientations, loaded } = fixture();
     viewer.resize(500, 700, 2);
-    const open = { ...inner, orientation: "portrait" as const, hingeAngle: 180, hingePose: "open" as const };
+    const open = {
+      ...inner,
+      orientation: "portrait" as const,
+      hingeAngle: 180,
+      hingePose: "open" as const,
+    };
     viewer.setScreen(open);
     draw();
     assert.equal(viewer.beginHinge(-1, -1), false);
@@ -501,7 +563,8 @@ for (const face of ["left", "right"] as const) {
       viewer.setHingePreview(value, true);
       draw();
       assert.ok(leaf.getWorldQuaternion(new Quaternion()).angleTo(orientation) < 1e-6);
-      if (value === 90) assert.ok(partner.getWorldQuaternion(new Quaternion()).angleTo(partnerStart) > 1);
+      if (value === 90)
+        assert.ok(partner.getWorldQuaternion(new Quaternion()).angleTo(partnerStart) > 1);
       const next =
         value === 0
           ? { ...open, width: 1398, height: 2034, screenId: 1, hingeAngle: value, hingePose: null }
@@ -517,7 +580,9 @@ for (const face of ["left", "right"] as const) {
       assert.equal(viewer.screenPoint(0.5, 0.5), null);
       if (value === 0) {
         const coverMesh = loaded.getObjectByName("cover-display") as Mesh;
-        const hit = coverMesh.localToWorld(coverMesh.geometry.boundingBox!.getCenter(new Vector3())).project(last(state.frames)!.camera);
+        const hit = coverMesh
+          .localToWorld(coverMesh.geometry.boundingBox!.getCenter(new Vector3()))
+          .project(last(state.frames)!.camera);
         assert.equal(viewer.beginHinge((hit.x + 1) / 2, (1 - hit.y) / 2), true);
       }
     }
@@ -545,7 +610,10 @@ test("the procedural Duo opens, closes and accepts a touch once its display has 
   viewer.setScreen({ ...cover, orientation: "portrait", hingeAngle: 0 });
   draw();
   const bounds = last(state.frames)!.bounds!;
-  assert.ok(bounds.max.y - bounds.min.y > bounds.max.x - bounds.min.x, "a closed Duo stands like a phone");
+  assert.ok(
+    bounds.max.y - bounds.min.y > bounds.max.x - bounds.min.x,
+    "a closed Duo stands like a phone",
+  );
   assert.equal(unavailable(), 0);
   viewer.dispose();
 });

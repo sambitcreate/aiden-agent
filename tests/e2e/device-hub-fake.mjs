@@ -86,7 +86,11 @@ function readBody(request) {
   });
 }
 
-const foldState = () => ({ supported: true, posture: folded ? "closed" : "opened", hingeAngle: folded ? 0 : 180 });
+const foldState = () => ({
+  supported: true,
+  posture: folded ? "closed" : "opened",
+  hingeAngle: folded ? 0 : 180,
+});
 
 function requestEntry(kind, request) {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
@@ -109,11 +113,15 @@ const server = createServer((request, response) => {
   const entry = requestEntry("http", request);
   if (entry.path !== "/readyz") log(entry);
   if (entry.path === "/readyz") return json(response, { ok: true });
-  if (request.method === "POST" && (entry.path === "/api/devices/boot" || entry.path === "/vendor/serve-sim/grid/api/start")) {
+  if (
+    request.method === "POST" &&
+    (entry.path === "/api/devices/boot" || entry.path === "/vendor/serve-sim/grid/api/start")
+  ) {
     request.resume();
     return json(response, { ok: true });
   }
-  if (entry.path === "/api/devices") return json(response, { simulators: [], emulators: [EMULATOR], errors: [] });
+  if (entry.path === "/api/devices")
+    return json(response, { simulators: [], emulators: [EMULATOR], errors: [] });
   if (request.method === "POST" && entry.path === "/api/devices/shutdown") {
     void readBody(request).then((text) => {
       log({ kind: "shutdown", body: JSON.parse(text || "null") });
@@ -128,21 +136,53 @@ const server = createServer((request, response) => {
       capturedAt: "2026-10-08T09:41:00.000Z",
       screen: { width: 1080, height: 2160 },
       nodes: [
-        { id: "0", text: "", contentDescription: "", resourceId: "", className: "android.widget.FrameLayout", bounds: { left: 0, top: 0, right: 1080, bottom: 2160 } },
-        { id: "1", text: "Add to cart", contentDescription: "", resourceId: "com.example.shop:id/add", className: "android.widget.Button", bounds: { left: 90, top: 1500, right: 990, bottom: 1650 } },
-        { id: "2", text: "", contentDescription: "Cart", resourceId: "", className: "android.widget.ImageButton", bounds: { left: 900, top: 100, right: 1020, bottom: 220 } },
+        {
+          id: "0",
+          text: "",
+          contentDescription: "",
+          resourceId: "",
+          className: "android.widget.FrameLayout",
+          bounds: { left: 0, top: 0, right: 1080, bottom: 2160 },
+        },
+        {
+          id: "1",
+          text: "Add to cart",
+          contentDescription: "",
+          resourceId: "com.example.shop:id/add",
+          className: "android.widget.Button",
+          bounds: { left: 90, top: 1500, right: 990, bottom: 1650 },
+        },
+        {
+          id: "2",
+          text: "",
+          contentDescription: "Cart",
+          resourceId: "",
+          className: "android.widget.ImageButton",
+          bounds: { left: 900, top: 100, right: 1020, bottom: 220 },
+        },
       ],
     });
   }
   // serve-emu's logcat: a ready event, one batch of threadtime lines, then the stream stays open.
   if (request.method === "GET" && entry.path === "/vendor/serve-emu/api/logcat") {
-    response.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache",
+    });
     const lines = [
-      { line: "10-08 09:41:02.100   612   640 I ActivityTaskManager: START u0 {cmp=com.example.shop/.MainActivity}", at: "2026-10-08T09:41:02.100Z" },
-      { line: "10-08 09:41:02.300  4321  4321 E Shop    : Cart failed to load", at: "2026-10-08T09:41:02.300Z" },
+      {
+        line: "10-08 09:41:02.100   612   640 I ActivityTaskManager: START u0 {cmp=com.example.shop/.MainActivity}",
+        at: "2026-10-08T09:41:02.100Z",
+      },
+      {
+        line: "10-08 09:41:02.300  4321  4321 E Shop    : Cart failed to load",
+        at: "2026-10-08T09:41:02.300Z",
+      },
     ];
     response.write(`event: ready\ndata: ${JSON.stringify({ serial: EMULATOR.id })}\n\n`);
-    response.write(`event: logs\ndata: ${JSON.stringify({ lines, dropped: 0, totalDropped: 0, sourceDropped: 0 })}\n\n`);
+    response.write(
+      `event: logs\ndata: ${JSON.stringify({ lines, dropped: 0, totalDropped: 0, sourceDropped: 0 })}\n\n`,
+    );
     const timer = setInterval(() => response.write(": keep-alive\n\n"), 1_000);
     response.once("close", () => {
       clearInterval(timer);
@@ -180,15 +220,27 @@ const server = createServer((request, response) => {
     return response.end(PNG);
   }
   // serve-sim's accessibility tree: the root application plus one button and one label.
-  if (request.method === "GET" && /^\/vendor\/serve-sim\/helper\/[A-Za-z0-9-]+\/ax$/u.test(entry.path)) {
+  if (
+    request.method === "GET" &&
+    /^\/vendor\/serve-sim\/helper\/[A-Za-z0-9-]+\/ax$/u.test(entry.path)
+  ) {
     return json(response, [
       {
         type: "Application",
         AXLabel: "Settings",
         frame: { x: 0, y: 0, width: 400, height: 800 },
         children: [
-          { type: "Button", AXLabel: "General", AXUniqueId: "general", frame: { x: 40, y: 200, width: 320, height: 40 } },
-          { type: "StaticText", AXLabel: "Wi-Fi", frame: { x: 40, y: 320, width: 120, height: 30 } },
+          {
+            type: "Button",
+            AXLabel: "General",
+            AXUniqueId: "general",
+            frame: { x: 40, y: 200, width: 320, height: 40 },
+          },
+          {
+            type: "StaticText",
+            AXLabel: "Wi-Fi",
+            frame: { x: 40, y: 320, width: 120, height: 30 },
+          },
         ],
       },
     ]);
@@ -198,7 +250,12 @@ const server = createServer((request, response) => {
     response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     const events = [
       { id: 1, timestamp: "2026-10-08T09:41:00.000Z", kind: "button", summary: "Button home" },
-      { id: 2, timestamp: "2026-10-08T09:41:02.000Z", kind: "touch", summary: "Touch begin 0.50,0.50" },
+      {
+        id: 2,
+        timestamp: "2026-10-08T09:41:02.000Z",
+        kind: "touch",
+        summary: "Touch begin 0.50,0.50",
+      },
     ];
     response.write(`: connected\n\ndata: ${JSON.stringify({ events })}\n\n`);
     const timer = setInterval(() => response.write(": keep-alive\n\n"), 1_000);
@@ -219,7 +276,9 @@ const server = createServer((request, response) => {
     const send = () =>
       response.write(
         Buffer.concat([
-          Buffer.from(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${JPEG.length}\r\n\r\n`),
+          Buffer.from(
+            `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${JPEG.length}\r\n\r\n`,
+          ),
           JPEG,
           Buffer.from("\r\n"),
         ]),
@@ -280,7 +339,9 @@ server.on("upgrade", (request, socket) => {
   }
   const connection = ++inputConnections;
   log({ ...entry, connection });
-  const accept = createHash("sha1").update(key + WS_GUID).digest("base64");
+  const accept = createHash("sha1")
+    .update(key + WS_GUID)
+    .digest("base64");
   socket.write(
     `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
   );
@@ -326,7 +387,9 @@ server.on("upgrade", (request, socket) => {
 function acceptEmuSocket(entry, key, socket) {
   const connection = ++inputConnections;
   log({ ...entry, connection });
-  const accept = createHash("sha1").update(key + WS_GUID).digest("base64");
+  const accept = createHash("sha1")
+    .update(key + WS_GUID)
+    .digest("base64");
   socket.write(
     `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
   );
